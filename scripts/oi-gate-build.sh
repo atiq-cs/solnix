@@ -33,12 +33,15 @@ fi
 
 echo "=== launching nightly (multi-hour; nohup) ==="
 pkill -9 -f "nightly solnix" 2>/dev/null || true
-# CRITICAL: interrupted prior nightly runs leave stale objects that cause bogus
-# "multiply-defined symbol" / "undefined stkptr/_curthread" link failures in
-# libc. NIGHTLY_OPTIONS includes -C (clobber), but if a run was killed mid-build
-# the tree can still be dirty. Ensure a clean tree first: `git status` should
-# show only solnix.sh + test setup scripts; if libc fails, `bldenv solnix.sh`
-# then `cd usr/src/lib/libc && dmake clobber` and re-run.
+# CRITICAL: interrupted prior nightly runs leave stale objects/proto that cause
+# bogus link failures (libc "multiply-defined *64 symbols", or -zfatal-warnings
+# turning "dynamic library found on default search path (/lib)" into an error).
+# NIGHTLY_OPTIONS -C is NOT enough after an interrupted run. The reliable reset
+# is a full git clean (preserving our env file):
+cp solnix.sh /root/solnix.sh.bak 2>/dev/null || true
+git clean -dfx >/dev/null 2>&1 || true
+cp /root/solnix.sh.bak solnix.sh 2>/dev/null || true
+rm -f nightly.lock log/latest 2>/dev/null || true
 nohup /opt/onbld/bin/nightly solnix.sh > /var/log/solnix-nightly-wrap.log 2>&1 &
 echo "nightly pid $!"
 echo "watch: tail -F $GATE/log/latest/nightly.log"
