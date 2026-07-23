@@ -14,7 +14,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
       → AMI built + boots on Nitro (`ami-042e009635e7af4b7`); blocked on
         login/network (OI cloudimage doesn't consume EC2 IMDS). See
         `docs/progress.md`.
-- [ ] **T0.2** Build illumos-gate via `nightly.sh`; capture env file + commit;
+- [~] **T0.2** Build illumos-gate via `nightly.sh`; capture env file + commit;
       produce a proto area. *(R1.2, D1)*
 - [ ] **T0.3** Identify + extract seed artifacts (libc, headers, illumos-gcc,
       Solaris `ld`, CTF tools) into a hashed tarball + manifest. *(R1.3, D1)*
