@@ -101,3 +101,19 @@ availability) · fork feature parity (OmniOS/OpenIndiana/SmartOS/Tribblix).
 
 One architecture, one init backend, one image type, fully working end-to-end
 beats four half-wired ones. Breadth after depth.
+
+---
+
+## Phase 1 de-risking update (2026-07-23)
+
+Design research (docs/design-nixpkgs-illumos.md) found nixpkgs **already ships
+Solaris scaffolding** — `kernels.solaris`, `isSunOS`, `x86_64-solaris` double,
+`illumos` doubles group, `ld-solaris-wrapper.sh`, and gcc solaris configure
+flags. So P1.1 (platform tuple) is a *small diff extending existing code*, not
+greenfield. Canonical tuple decided: **`x86_64-solaris`** (triple
+`x86_64-unknown-solaris2.11`), "illumos" branded at the attribute layer.
+
+The main Phase-1 novel work is therefore: (a) a *pure* stdenv path from our seed
+(stock nixpkgs selects impure-native `stagesNix` for x86_64-solaris today),
+(b) the `pkgs.illumos.*` world, (c) RUNPATH-via-`elfedit`, (d) the SMF init
+module (docs/design-smf-init.md).
