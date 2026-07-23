@@ -111,3 +111,22 @@ R4 runs as normal Nix, cross from Linux.
 P0.1 (stage0) and P0.3 (RUNPATH) are the kill-risks — prototype both before
 writing any nixpkgs-fork platform code. If stage0 can't produce usable seeds, the
 whole approach needs rethinking before further investment.
+
+## D1a — OpenIndiana AMI creation (T0.1, researched)
+
+No first-party OI AMI exists. Path (see `scripts/oi-make-ami.sh`):
+- OI ships an official raw CloudImage (`OI-hipster-cloudimage.img.zst`, ZFS-root,
+  boots via the illumos `loader`).
+- Lazy import: a throwaway AL2023 helper `dd`s the decompressed image onto a blank
+  EBS volume → snapshot → `register-image`. Avoids the `vmimport` IAM role + S3
+  that VM Import/Export needs.
+- Register with the proven **OmniOS** values (same illumos loader, published AMIs):
+  `--boot-mode uefi`, `--root-device-name /dev/xvda` (a label; guest sees NVMe),
+  `--ena-support`, `--virtualization-type hvm`. Helper runs `sgdisk -p` to confirm
+  the GPT/ESP before we trust `uefi`; fall back `uefi-preferred`→`legacy-bios` if
+  it won't boot.
+- Run on **Nitro m5/c5/m6i-class** instances. **Avoid Nitro v5/v6** until illumos
+  gate fix 17939 (ENA attach) is in the build.
+- Build prereqs on the booted OI host: `pkg install build-essential` (ships
+  gcc10 primary + gcc14 shadow); closed-bins already at `/opt/onbld/closed`;
+  then `nightly.sh`. Docs: illumos.org "Building illumos".
