@@ -116,3 +116,33 @@ echo "  5. Launch the AMI on an m5/c5/m6i (NOT Nitro v5/v6) and SSH as the OI us
 echo "  6. Terminate the helper:  aws ec2 terminate-instances --region $REGION --instance-ids $IID"
 echo
 echo "INSTANCE_ID=$IID"
+
+# =============================================================================
+# LEARNINGS (2026-07-23, first successful run)
+# -----------------------------------------------------------------------------
+# The AMI boots, but two things bite:
+#
+# 1. IMDSv2 is ENFORCED at the org level on the numa account (can't disable).
+#    The OI cloud image's metadata-agent is an IMDSv1 client -> it hangs to its
+#    300s timeout gating svc:/milestone/network -> no network, no ssh login.
+#    FIX: pre-seed the ZFS root (see oi-preseed-be.sh) replacing /usr/lib/metadata
+#    with scripts/metadata-shim.sh (DHCP + ssh, no IMDS).
+#
+# 2. The OI cloud image has NO `ena` driver -> gets no NIC on Nitro (c5/m5/...).
+#    It DOES have `xnf` (Xen). FIX: run the seeded host on a Xen-HVM instance
+#    type (m4/c4/t2). Register that AMI with --boot-mode uefi-preferred and
+#    WITHOUT --ena-support.
+#
+# Pre-seeding requires reading an illumos ZFS root, which a Linux box can do with
+# packaged OpenZFS: use an UBUNTU 24.04 helper (`apt install zfsutils-linux`),
+# NOT Amazon Linux 2023 (its 6.18 kernel is newer than any OpenZFS release
+# supports, so the module won't build).
+#
+# SSH in with scripts/oi-ssh.sh (IdentitiesOnly + IdentityAgent=none + BatchMode
+# so the agent doesn't offer the wrong key first / no password popup).
+#
+# Working build host as of first run:
+#   base AMI (boots, no login):     ami-042e009635e7af4b7
+#   seeded Xen AMI (loginnable):    ami-0d36d9529e928f931
+#   instance type:                  m4.large (Xen HVM, xnf0 NIC)
+# =============================================================================
