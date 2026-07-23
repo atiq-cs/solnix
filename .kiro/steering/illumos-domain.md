@@ -4,6 +4,20 @@ Required reading before touching build/toolchain/boot/service code. These are th
 illumos facts that shape every design decision and the places solnix diverges
 from both NixOS and nixbsd.
 
+## Chosen upstream (decided)
+
+solnix's initial upstream is **OpenIndiana Hipster** — specifically the release
+the maintainer runs at home:
+
+- **OpenIndiana Hipster 2025.06**, **illumos-31d3d510d0**, 64-bit.
+
+OpenIndiana (not OmniOS) is the reference distro: Hipster rolling release, the
+broadest IPS package set, closest to the old OpenSolaris userland. Stage0 builds
+and the seed toolchain track this. Pin this exact illumos commit as the source
+input until we have reason to move. The maintainer also runs it on a **Sun
+UltraSPARC** at home — real SPARCv9 boot-test hardware exists for Phase 4, but
+does not change the amd64-first ordering.
+
 ## Build system (illumos-gate)
 
 - Source = the **ON consolidation** ("OS/Networking"), `illumos-gate`, code under

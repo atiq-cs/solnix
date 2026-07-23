@@ -25,8 +25,10 @@ R4 runs as normal Nix, cross from Linux.
 
 ## D1 — Stage0 (R1, R2)
 
-- Provision the illumos host with a scripted, versioned recipe (pin the OmniOS/OI
-  release). Prefer a zone or VM image we can rebuild, not a pet.
+- Provision the illumos host with a scripted, versioned recipe. **Upstream is
+  OpenIndiana Hipster 2025.06 / illumos-31d3d510d0** (see `illumos-domain.md`),
+  on EC2 in the `numa` account (us-east-2). Prefer an AMI or importable image we
+  can rebuild, not a pet. Tag + terminate when idle.
 - Build illumos-gate per upstream docs; capture the env file and exact commit.
 - Extract seed artifacts into a tarball with a manifest (paths + hashes) that the
   nixpkgs-fork bootstrap consumes. Treat this like nixpkgs' bootstrap-tools seed.
