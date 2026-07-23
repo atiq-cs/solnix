@@ -47,6 +47,12 @@ Details and the rule against over-claiming: `.kiro/steering/architectures.md`.
 
 ## Repo map
 
+- `flake.nix` — entry; `lib.solnixSystem`, `solnixConfigurations.*`, image
+  `packages`. Parses today; full eval needs the nixpkgs fork (not yet).
+- `lib/eval-config.nix` — solnix's forked NixOS evaluator entrypoint (skeleton).
+- `modules/` — the module tree: `system/boot/init/smf.nix` (SMF init),
+  `nixos-compat.nix` (systemd.* stubs), `module-list.nix`.
+- `configurations/base.nix` — the Phase-1 target sample config (skeleton).
 - `.kiro/steering/` — always-on project rules (product, architectures, illumos
   domain knowledge, Nix conventions). **Read these first.**
 - `.kiro/specs/solnix-foundation/` — requirements / design / tasks for Phase 0–1.

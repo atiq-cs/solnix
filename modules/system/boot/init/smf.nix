@@ -1,0 +1,279 @@
+# modules/system/boot/init/smf.nix — THE init module.
+#
+# solnix analog of nixbsd's modules/system/boot/init/freebsd-rc.nix. Where nixbsd
+# renders rc.conf + /etc/rc.d, solnix renders SMF XML manifests + method scripts
+# and drives them through svc.startd/svc.configd via svccfg/svcadm.
+#
+# Design of record: docs/design-smf-init.md. This file implements §1 (the option
+# surface, complete and correct) and folds `requires` into `dependencies` in the
+# config section. The manifest/method GENERATION (§2) and ACTIVATION (§3) are
+# deferred with clear TODOs — they need pkgs (writeText/writeScript/runCommand)
+# from the nixpkgs fork and the pure helpers in lib/smf/xml.nix (design §6 file
+# #1), neither of which exists yet.
+
+{ config, lib, ... }:
+
+let
+  inherit (lib)
+    mkOption
+    mkEnableOption
+    types
+    literalExpression
+    ;
+
+  # A single dependency group (SMF <dependency>). §1.1.
+  depType = types.submodule {
+    options = {
+      name = mkOption {
+        type = types.str;
+        description = "Dependency group name (unique within the service).";
+      };
+      grouping = mkOption {
+        type = types.enum [
+          "require_all"
+          "require_any"
+          "optional_all"
+          "exclude_all"
+        ];
+        default = "require_all";
+        description = "SMF dependency grouping.";
+      };
+      restartOn = mkOption {
+        type = types.enum [
+          "none"
+          "error"
+          "restart"
+          "refresh"
+        ];
+        default = "none";
+        description = "SMF restart_on: when this dep changes, what happens to us.";
+      };
+      fmris = mkOption {
+        type = types.listOf types.str;
+        example = literalExpression ''[ "svc:/milestone/network:default" ]'';
+        description = ''
+          Target FMRIs (or file:// paths) this group depends on.
+          Milestones and files are both valid SMF dependency targets.
+        '';
+      };
+    };
+  };
+
+  # SMF exec_method. §1.1.
+  methodType = types.submodule {
+    options = {
+      exec = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        description = ''
+          Command line for the method. Either a literal shell fragment, or the
+          SMF tokens ":true"/":kill"/":kill -SIGNAL" for stop. Rendered verbatim
+          into exec_method/@exec (XML-escaped).
+        '';
+      };
+      timeoutSeconds = mkOption {
+        type = types.ints.unsigned;
+        default = 60;
+        description = "Method timeout. 0 = infinite (SMF convention).";
+      };
+    };
+  };
+
+  serviceType = types.submodule (
+    { name, config, ... }:
+    {
+      options = {
+        enable = mkEnableOption "this SMF service (sets the enabled property)";
+
+        category = mkOption {
+          type = types.str;
+          default = "system";
+          description = ''
+            FMRI category segment: svc:/<category>/<name>. Common: system,
+            network, application, milestone, site.
+          '';
+        };
+
+        instance = mkOption {
+          type = types.str;
+          default = "default";
+          description = "Instance name (the :<instance> part of the FMRI).";
+        };
+
+        description = mkOption {
+          type = types.str;
+          default = name;
+          description = "Human-readable template/common_name.";
+        };
+
+        # --- service model -> startd/duration -------------------------------
+        model = mkOption {
+          type = types.enum [
+            "contract"
+            "transient"
+            "wait"
+          ];
+          default = "contract";
+          description = ''
+            SMF service model, written as the startd/duration property:
+              contract  = long-running daemon under a process contract (default);
+              transient = run-once, no lingering process (oneshots);
+              wait      = svc.startd waits on a child in the foreground.
+          '';
+        };
+
+        # --- methods --------------------------------------------------------
+        start = mkOption {
+          type = methodType;
+          description = "Start method (exec_method name=start).";
+        };
+        stop = mkOption {
+          type = methodType;
+          default = {
+            exec = ":kill";
+          };
+          description = ''
+            Stop method. Default ":kill" lets svc.startd tear down the contract.
+            Set exec = ":true" for transient services that need no explicit stop.
+          '';
+        };
+        refresh = mkOption {
+          type = types.nullOr methodType;
+          default = null;
+          description = "Optional refresh method (SIGHUP-style reconfigure).";
+        };
+
+        # --- credentials (SMF method_credential) ----------------------------
+        user = mkOption {
+          type = types.str;
+          default = "root";
+          description = "method_credential/user.";
+        };
+        group = mkOption {
+          type = types.nullOr types.str;
+          default = null;
+          description = "method_credential/group.";
+        };
+
+        # --- environment & cwd (method_context) -----------------------------
+        environment = mkOption {
+          type = types.attrsOf types.str;
+          default = { };
+          example = {
+            PATH = "/nix/store/.../bin";
+            TZ = "UTC";
+          };
+          description = "method_environment name=value pairs.";
+        };
+        workingDirectory = mkOption {
+          type = types.nullOr types.str;
+          default = null;
+          description = "method_context/@working_directory.";
+        };
+
+        # --- dependencies ---------------------------------------------------
+        dependencies = mkOption {
+          type = types.listOf depType;
+          default = [ ];
+          description = "SMF <dependency> groups this service declares.";
+        };
+
+        # Sugar: fold into one require_all group in config. Not a new concept.
+        requires = mkOption {
+          type = types.listOf types.str;
+          default = [ ];
+          description = ''
+            Convenience: FMRIs folded into one require_all/restart_on=none
+            dependency group named "solnix-requires".
+          '';
+        };
+
+        # --- application config ---------------------------------------------
+        properties = mkOption {
+          type = types.attrsOf (types.attrsOf types.str);
+          default = { };
+          example = {
+            config = {
+              port = "22";
+              listen = "0.0.0.0";
+            };
+          };
+          description = ''
+            Property groups of type "application". Outer key = pg name, inner
+            attrs = property name->value (all rendered as astring).
+          '';
+          # ponytail: values are all astring; typed props (count/boolean/time)
+          # deferred until an actual service needs a non-string typed property.
+        };
+
+        # --- escape hatch ---------------------------------------------------
+        extraManifestXML = mkOption {
+          type = types.lines;
+          default = "";
+          description = ''
+            Raw XML spliced into <instance> before </instance>. Escape hatch for
+            SMF features the typed interface does not cover yet.
+          '';
+        };
+
+        # --- computed (read-only) -------------------------------------------
+        fmri = mkOption {
+          type = types.str;
+          readOnly = true;
+          default = "svc:/${config.category}/${name}:${config.instance}";
+          description = "Full FMRI, computed.";
+        };
+
+        # `dependencies` with the `requires` sugar folded in (§1.3). Computed
+        # per-service via config.<name> so it does NOT re-read the top-level
+        # smf.services option (that self-reference is infinite recursion). The
+        # generator (§2, deferred) consumes this, not raw `dependencies`.
+        allDependencies = mkOption {
+          type = types.listOf depType;
+          readOnly = true;
+          default =
+            config.dependencies
+            ++ lib.optional (config.requires != [ ]) {
+              name = "solnix-requires";
+              grouping = "require_all";
+              restartOn = "none";
+              fmris = config.requires;
+            };
+          description = "dependencies + folded `requires`. Computed. Read by the generator.";
+        };
+      };
+    }
+  );
+in
+{
+  options.smf.services = mkOption {
+    type = types.attrsOf serviceType;
+    default = { };
+    description = "SMF services managed by solnix.";
+  };
+
+  config = {
+    # `requires` sugar is folded per-service into the read-only `allDependencies`
+    # option above (§1.3), not by reassigning smf.services here — reassigning the
+    # option you're inside of is infinite recursion. This is pure option logic,
+    # no pkgs needed, and is the one FUNCTIONAL bit of the config section today.
+
+    # TODO(T1.11) manifest + method-script generation. See docs/design-smf-init.md
+    # §2. The pure renderers (xmlEscape, mkMethod, mkManifest, mkManifestDir) live
+    # in lib/smf/xml.nix (design §6 file #1); this config section will:
+    #   1. import lib/smf/xml.nix with `pkgs`,
+    #   2. build `smfManifests` = mkManifestDir (filterAttrs enable services),
+    #   3. wrap in `checkedManifests` (xmllint --dtdvalid against the pinned
+    #      service_bundle.dtd.1, design §2.6),
+    #   4. stage checkedManifests at /lib/svc/manifest/solnix via the etc/path
+    #      module (design §5.3),
+    #   5. render system/activation/smf-activate.sh: svccfg import, enable/disable
+    #      deltas, svcadm milestone multi-user-server (design §3.1, T1.12).
+    # ponytail: removal-on-switch (disable+delete) deferred to P2.1 when the
+    # generation diff exists; a stale enabled service does not block the gate.
+    #
+    # All of the above needs `pkgs` (writeText/writeScript/runCommand) from the
+    # nixpkgs fork, so it is intentionally NOT wired here yet — faking it would
+    # produce a derivation that can't build. Wire it with the fork (P1.1).
+  };
+}
