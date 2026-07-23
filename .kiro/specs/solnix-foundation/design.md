@@ -81,7 +81,7 @@ R4 runs as normal Nix, cross from Linux.
   (`pkgs.illumos.*`).
 - **Open question:** manifest import at activation vs. baking `repository.db` at
   build time. Start with import-at-activation (simpler, matches illumos norms);
-  optimize later only if boot time demands it. `ponytail:` naive import first,
+  optimize later only if boot time demands it. Naive import first,
   precompiled repo only if measured too slow.
 
 ## D6 — Image + boot (R7)

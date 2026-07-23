@@ -316,7 +316,7 @@ config.smf.services = lib.mapAttrs (_: svc: svc // {
 }) config.smf.services;
 ```
 
-`ponytail:` `properties` values are all `astring`; typed props (count/boolean/
+The `properties` values are all `astring`; typed props (count/boolean/
 time) deferred until an actual service needs a non-string typed property.
 
 ---
@@ -599,7 +599,7 @@ XML on-target: we know each service's `fmri` (§1.1, read-only option), so the
 `(oldConfig.smf.services keys) − (newConfig.smf.services keys)`. But
 `switch-to-configuration` compares against the *previously booted* generation,
 which solnix already tracks via the boot-environment/generation model
-(roadmap P2.1). For Phase 1, the delete path can be a no-op (`ponytail:` only
+(roadmap P2.1). For Phase 1, the delete path can be a no-op (only
 add/enable handled; removal-on-switch deferred to P2.1 when generation diff
 exists) — a stale service left enabled does not block the milestone gate.
 
@@ -631,7 +631,7 @@ in the image. Boot skips import entirely.
 **Recommendation:** ship **(a)** for Phase 1. It is the smaller diff and the
 only one that cleanly satisfies "cross-build from Linux" (R8) without an
 in-sandbox illumos. Revisit **(b)** only if boot-time import is measured too
-slow on real configs — matching design note D5 (`ponytail:` naive import first,
+slow on real configs — matching design note D5 (naive import first,
 precompiled repo only if measured too slow). If we do (b) later, do the repo
 build in a `make-be`-adjacent on-target step, not in the generic cross sandbox.
 
@@ -723,7 +723,7 @@ Some services we *want* running are only defined upstream as
    (`smf.translateSystemd = true`) covering only `ExecStart`/`Type`/`after`,
    loudly warning (`lib.warn`) on any field it drops. Do **not** enable it by
    default. This is the pragmatic middle: cheap wins for trivial units, no
-   silent breakage for complex ones. `ponytail:` translator is opt-in and
+   silent breakage for complex ones. The translator is opt-in and
    partial by design; the honest path for a nontrivial service is a hand-port.
 
 ---

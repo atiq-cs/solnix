@@ -202,7 +202,7 @@ let
             Property groups of type "application". Outer key = pg name, inner
             attrs = property name->value (all rendered as astring).
           '';
-          # ponytail: values are all astring; typed props (count/boolean/time)
+          # Values are all astring; typed props (count/boolean/time)
           # deferred until an actual service needs a non-string typed property.
         };
 
@@ -269,7 +269,7 @@ in
     #      module (design §5.3),
     #   5. render system/activation/smf-activate.sh: svccfg import, enable/disable
     #      deltas, svcadm milestone multi-user-server (design §3.1, T1.12).
-    # ponytail: removal-on-switch (disable+delete) deferred to P2.1 when the
+    # Removal-on-switch (disable+delete) deferred to P2.1 when the
     # generation diff exists; a stale enabled service does not block the gate.
     #
     # All of the above needs `pkgs` (writeText/writeScript/runCommand) from the

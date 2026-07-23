@@ -24,7 +24,7 @@
   modules ? [ ],
   # Passed as specialArgs to every module (NixOS convention).
   specialArgs ? { },
-  # ponytail: pkgs is threaded in but not resolved here yet — the fork's
+  # pkgs is threaded in but not resolved here yet — the fork's
   # instantiated package set for `system` gets wired in P1.1/P1.3. Leaving it as
   # an arg keeps the signature stable so callers don't change when it lands.
   pkgs ? null,

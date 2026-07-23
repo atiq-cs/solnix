@@ -69,7 +69,7 @@ Future arches follow the same pattern: `aarch64-solaris`, `sparcv9-solaris`,
 - Formatter: `nixfmt` (match nix-config's `nix-formatter-pack`/`nixfmt-tree`).
 - Boot testing: QEMU for amd64/aarch64; SPARC needs an emulator or real T-series.
 
-## Reuse discipline (ponytail)
+## Reuse discipline
 
 - Before writing a module, check whether an unmodified nixos module can be pulled
   by reference (nixbsd's `extPath`). Fork only the delta.
@@ -77,6 +77,13 @@ Future arches follow the same pattern: `aarch64-solaris`, `sparcv9-solaris`,
   eval-config, activation). Attribute per their MIT license.
 - No speculative abstraction. One arch, one init backend, one image type working
   end-to-end beats four half-wired ones.
+
+## Comment style
+
+- Do **not** use `ponytail:`-prefixed comments (or the word "ponytail") anywhere
+  in the repo — code, docs, steering, or commit messages. Write deferrals as
+  plain `TODO(<phase>):` notes or ordinary prose explaining what's deferred and
+  why. Keep the substance, drop the label.
 
 ## Commit / PR conventions
 

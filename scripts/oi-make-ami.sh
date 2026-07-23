@@ -14,7 +14,7 @@
 # Idempotent-ish: re-running relaunches the helper. Clean up with the printed
 # terminate command when the AMI is registered.
 #
-# ponytail: dd+snapshot instead of VM Import/Export — fewer moving parts, no new
+# dd+snapshot instead of VM Import/Export — fewer moving parts, no new
 # IAM role. Switch to VM Import only if we need OVA/multi-disk or checks fail.
 set -euo pipefail
 

@@ -7,7 +7,7 @@
 #
 # Grow lazily (design note D4, T1.9): stub only what an actually-evaluated module
 # touches. The list below is the minimum Tier-1 set. Add a leaf here only when a
-# newly-pulled module hard-fails on it — ponytail, no speculative stubs.
+# newly-pulled module hard-fails on it — no speculative stubs.
 
 { lib, ... }:
 
@@ -77,7 +77,7 @@ in
     };
   };
 
-  # ponytail: Tier-2 (translate systemd.services -> smf.services) is deferred and
+  # Tier-2 (translate systemd.services -> smf.services) is deferred and
   # opt-in by design (docs/design-smf-init.md §4.1). The honest path for a
   # nontrivial service is a hand-port to smf.services.*, not auto-translation.
 }

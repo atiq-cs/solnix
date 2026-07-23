@@ -2,8 +2,8 @@
   description = "solnix — a Nix distribution of illumos (illumos analog of nixbsd)";
 
   inputs = {
-    # ponytail: for now this points at plain upstream nixpkgs so the flake parses
-    # and lib.evalModules is reachable. Phase 1 (T1.1) swaps this to the solnix
+    # For now this points at plain upstream nixpkgs so the flake parses and
+    # lib.evalModules is reachable. Phase 1 (T1.1) swaps this to the solnix
     # nixpkgs fork branch that carries the x86_64-solaris pure stdenv +
     # pkgs.illumos.* world (see docs/design-nixpkgs-illumos.md §5). Repin here and
     # in .kiro/steering/nix-conventions.md when the fork branch exists.
@@ -48,8 +48,8 @@
       # Per-build-system image packages. Stubbed: the image builders
       # (lib/make-be.nix, lib/make-disk-image.nix — roadmap P1.5) do not exist yet,
       # so we expose nothing buildable rather than fake a derivation.
-      # ponytail: add real image outputs when make-be.nix lands (P1.5). Until then
-      # this is intentionally empty — no speculative packages.
+      # Add real image outputs when make-be.nix lands (P1.5). Until then this is
+      # intentionally empty — no speculative packages.
       packages = lib.genAttrs buildSystems (_buildSystem: {
         # TODO(P1.5): baseImage = self.solnixConfigurations.base.config.system.build.image;
       });

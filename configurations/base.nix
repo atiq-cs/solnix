@@ -16,7 +16,7 @@
 {
   # Target platform. Canonical Nix system is x86_64-solaris; "illumos" is
   # branding at the attribute layer. See docs/design-nixpkgs-illumos.md §1.
-  # ponytail: this is currently informational — the real nixpkgs.system/pkgs
+  # This is currently informational — the real nixpkgs.system/pkgs
   # wiring lands with the fork (P1.3). Recorded so the config is self-describing.
   # nixpkgs.system = "x86_64-solaris";
 
@@ -46,7 +46,7 @@
     };
   };
 
-  # ponytail: no users/networking/fs config here yet — those modules (P2.3) don't
+  # No users/networking/fs config here yet — those modules (P2.3) don't
   # exist. This is deliberately the smallest config that names the platform and
   # one service. Grow it as the modules it needs land.
 }

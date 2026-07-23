@@ -217,7 +217,7 @@ biggest divergence from the nixbsd model.
 libs in `.../lib/amd64` (or `lib/64` symlink) and 32-bit in `.../lib`. Since we
 are 64-bit-only (i386 removed from illumos ~2018), set nothing special here
 initially; store paths carry their own layout. Revisit only if a package hunts
-for `lib64`. `ponytail:` deferred — add a Solaris `libDir` only when a package
+for `lib64`. Deferred — add a Solaris `libDir` only when a package
 demonstrably needs it.
 
 ### 1.5 `examples.nix` — the ergonomic cross target
@@ -421,7 +421,7 @@ Copy `pkgs/stdenv/freebsd/default.nix` and adapt. Concretely:
      gate has `/usr/gnu/bin`), OR use illumos native tools. Prefer GNU coreutils in
      the seed to keep the setup.sh assumptions (GNU `install`, `readlink -f`,
      `cp --preserve`) intact — the generic stdenv setup.sh expects GNU behavior.
-     `ponytail:` this is a real fork point; ship GNU userland in the seed, revisit
+     This is a real fork point; ship GNU userland in the seed, revisit
      only if closure size forces native tools.
 5. `mkStdenv` — same shape. Key deltas from FreeBSD:
    - Wrap **GCC** not clang: `cc = lib.makeOverridable (import ../../build-support/cc-wrapper) { ... isClang = false; cc = prevStage.gcc-unwrapped; ... }`.
@@ -476,7 +476,7 @@ This is the single most novel piece. nixpkgs' Linux/FreeBSD bootstrap leans on
    `extraNativeBuildInputs` running `_FreeBSDPatchelfShrink`. On illumos we write
    `illumos/always-elfedit.sh` (or simply *skip shrink* — it's an optimization,
    not correctness). **Recommendation: skip rpath-shrinking initially.**
-   `ponytail:` shrink-rpath is a closure-size optimization; add an elfedit-based
+   Shrink-rpath is a closure-size optimization; add an elfedit-based
    shrinker only if RUNPATH bloat measurably hurts. The correctness-critical part
    is *setting* RUNPATH at link time (§4), not shrinking it in fixup.
 
@@ -591,7 +591,7 @@ then in the wrapper's dynamic-linker section, skip writing
 
 **(B) A fully separate `ld-illumos-wrapper.sh`** replacing the generic
 `ld-wrapper.sh` for solaris. More control, more code, more drift from upstream.
-Reject unless (A)'s translation proves too leaky. `ponytail:` prefer (A); escalate
+Reject unless (A)'s translation proves too leaky. Prefer (A); escalate
 to (B) only if the generic ld-wrapper's rpath loop can't be made to emit
 Solaris-consumable flags.
 
