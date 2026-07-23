@@ -30,7 +30,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
 ## Phase 1 — Minimal bootable amd64
 
 ### Platform & world (nixpkgs fork)
-- [ ] **T1.1** Decide + document canonical platform tuple; add `x86_64-illumos`
+- [ ] **T1.1** Add `x86_64-solaris` support (tuple decided: reuse `solaris` kernel, see docs/design-nixpkgs-illumos.md)
       to `lib/systems`. *(R4.1, D3)*
 - [ ] **T1.2** Bootstrap stdenv from the T0.3 seed; compile a C program against
       store libc on `x86_64-illumos`. *(R4.3, D3)*

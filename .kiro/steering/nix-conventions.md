@@ -46,11 +46,17 @@ solnix/
 
 ## Platform tuples
 
-Design multi-arch from day one; wire only amd64 to a real toolchain in Phase 1:
-`x86_64-illumos`, `aarch64-illumos`, `sparcv9-illumos`, `riscv64-illumos`.
-(Confirm the canonical tuple spelling against the nixpkgs `lib.systems` parser —
-illumos may want `-solaris` kernel + `illumos` variant; decide once, in the
-nixpkgs fork, and document it here.)
+Design multi-arch from day one; wire only amd64 to a real toolchain in Phase 1.
+
+**Decided (see `docs/design-nixpkgs-illumos.md`):** the canonical Nix system is
+**`x86_64-solaris`** (GNU triple `x86_64-unknown-solaris2.11`), NOT a new
+`x86_64-illumos` kernel. Rationale: nixpkgs *already* ships `kernels.solaris`,
+`isSunOS`, the `x86_64-solaris` double, an `illumos` doubles group, and
+`ld-solaris-wrapper.sh` — so this is a small diff, and autotools/gcc demand the
+`solaris2.11` triple. We brand "illumos" only at the Nix-attribute layer
+(`pkgs.illumos.*`, and an `examples.x86_64-illumos` alias with the same config).
+Future arches follow the same pattern: `aarch64-solaris`, `sparcv9-solaris`,
+`riscv64-solaris` (wired in Phase 3/4/5).
 
 ## Build & test
 
