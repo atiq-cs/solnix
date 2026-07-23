@@ -26,6 +26,9 @@ echo "waited ${i}x2s; NIC='$NIC'"
 if [ -n "$NIC" ]; then
   ipadm create-if "$NIC" 2>&1 || true
   ipadm create-addr -T dhcp -w 30 "$NIC/dhcp" 2>&1 || ipadm create-addr -T dhcp "$NIC/v4" 2>&1 || true
+  # Clamp MTU: the AWS->OI-mirror (Hetzner) path black-holes/shapes large
+  # packets over xnf, stalling pkg. 1400 keeps pkg fetches alive.
+  dladm set-linkprop -p mtu=1400 "$NIC" 2>&1 || true
 fi
 # DNS (DHCP on illumos here doesn't seed resolv.conf reliably)
 [ -s /etc/resolv.conf ] || printf 'nameserver 169.254.169.253\nnameserver 8.8.8.8\n' > /etc/resolv.conf
