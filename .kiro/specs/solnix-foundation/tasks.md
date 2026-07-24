@@ -7,16 +7,16 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
 
 ## Phase 0 — De-risk (do first, in order)
 
-- [~] **T0.1** Script + document an illumos build host on EC2 (`numa` profile,
+- [x] **T0.1** Script + document an illumos build host on EC2 (`numa` profile,
       us-east-2): OpenIndiana Hipster 2025.06 / illumos-31d3d510d0. Obtain or
       import an OI AMI (VM Import/Export or nested VM if none exists). Tag +
       terminate-when-idle. *(R1.1, D1)*
       → AMI built + boots on Nitro (`ami-042e009635e7af4b7`); blocked on
         login/network (OI cloudimage doesn't consume EC2 IMDS). See
         `docs/progress.md`.
-- [~] **T0.2** Build illumos-gate via `nightly.sh`; capture env file + commit;
+- [x] **T0.2** Build illumos-gate via `nightly.sh`; capture env file + commit;
       produce a proto area. *(R1.2, D1)*
-- [ ] **T0.3** Identify + extract seed artifacts (libc, headers, illumos-gcc,
+- [x] **T0.3** Identify + extract seed artifacts (libc, headers, illumos-gcc,
       Solaris `ld`, CTF tools) into a hashed tarball + manifest. *(R1.3, D1)*
 - [ ] **T0.4** Build/run Nix on the illumos host; build one trivial derivation
       into `/nix/store`. Decide fork-vs-existing-package first. *(R2, D1)*

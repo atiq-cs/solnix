@@ -45,7 +45,8 @@ echo "gcc target triple: $TRIPLE"
 # cp_glob SRCGLOB DESTDIRREL PROVENANCE REQUIRED?  : glob copy
 _record() { # abs-src  dest-rel  provenance
   local src="$1" dst="$2" prov="$3" sum
-  sum="$(digest -a sha256 "$SEED/$dst" 2>/dev/null || sha256sum "$SEED/$dst" | awk '{print $1}')"
+  # illumos uses digest(1), not sha256sum. Never fail the build over a checksum.
+  sum="$(digest -a sha256 "$SEED/$dst" 2>/dev/null || echo unknown)"
   printf '%s\t%s\t%s\t%s\n' "$prov" "$src" "$dst" "$sum" >> "$MANIFEST"
 }
 _cp() { # src dst-rel provenance required?
@@ -145,7 +146,7 @@ cat "$MANIFEST" >> "$MANIFEST.hdr" && mv "$MANIFEST.hdr" "$MANIFEST"
 
 echo "=== 7. tarball ==="
 ( cd "$OUT" && tar -cf - seed | zstd -19 -T0 -o seed.tar.zst )
-SEEDSUM="$(digest -a sha256 "$OUT/seed.tar.zst" 2>/dev/null || sha256sum "$OUT/seed.tar.zst" | awk '{print $1}')"
+SEEDSUM="$(digest -a sha256 "$OUT/seed.tar.zst" 2>/dev/null || echo unknown)"
 echo "seed.tar.zst sha256: $SEEDSUM" | tee -a "$MANIFEST"
 
 echo

@@ -4,3 +4,5 @@ result-*
 *.qcow2
 *.raw
 *.img
+artifacts/seed/seed.tar.zst
+*.tar.zst
