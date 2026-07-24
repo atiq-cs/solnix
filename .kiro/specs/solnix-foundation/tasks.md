@@ -39,7 +39,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
       (moves to the solnix.io S3 endpoint when live). *(R4.1, D1a/D3)*
 - [x] **T1.2** Bootstrap stdenv from the T0.3 seed; compile a C program against
       store libc on `x86_64-solaris`. *(R4.3, D3)*
-- [ ] **T1.3** `pkgs.illumos.libc` derivation. *(R4.2, D3)*
+- [x] **T1.3** `pkgs.illumos.libc` derivation. *(R4.2, D3)*
 - [ ] **T1.4** `pkgs.illumos.ld` + `illumos.rtld` (`ld.so.1`). *(R4.2, D3)*
 - [ ] **T1.5** `pkgs.illumos.sys` (kernel + genunix); reproduce CTF build. *(R4.2, D3)*
 - [ ] **T1.6** Minimum base tools to reach multi-user (`svc.startd`,
