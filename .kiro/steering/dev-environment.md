@@ -24,6 +24,20 @@ but the current `numa` profile uses static keys and works directly.
 the launch → tune → terminate workflow (we reuse its EC2 substrate, not its
 benchmark specifics).
 
+**Scope of the `numa` account: EC2 dev/build COMPUTE only.** Do NOT use the
+`numa` AWS account for **asset storage** — no AWS S3 buckets for the seed,
+packages, or images. `numa` is a burner for spinning up build hosts; nothing
+durable is stored there (it also lacks S3/create-bucket perms by org policy).
+
+**Asset storage = solnix.io's S3-compatible endpoint (when available).** solnix.io
+will provide an **S3-protocol endpoint** for durable assets — the seed toolchain,
+the binary cache (`pkgs.illumos.*`, images), etc. This is the standard Nix
+binary-cache pattern: publish with `nix copy --to 's3://<bucket>?endpoint=<solnix.io endpoint>&region=...'`
+and serve as a substituter. It speaks S3 but is **not** AWS S3 — point the
+endpoint at solnix.io, use solnix.io credentials, never the `numa` profile.
+Until the endpoint exists, assets stay on the EC2 build host and are
+re-extractable via the committed scripts.
+
 ## Two kinds of EC2 host we need
 
 1. **illumos build host (stage0).** An OpenIndiana Hipster instance to build
@@ -53,19 +67,22 @@ from the start:
 - **Channel model:** `unstable` is the only channel for now (rolling, like
   nixos-unstable), until we can qualify a tagged release. Name flake outputs and
   docs so a future `stable`/release channel slots in without renaming.
-- **Substituter:** e.g. `https://cache.solnix.io` with a signing key. Bake the
-  substituter URL + trusted public key into the base configuration's
-  `nix.settings` so installed systems pull binaries by default.
+- **Substituter + S3 endpoint:** solnix.io provides an **S3-compatible endpoint**
+  for the store, fronted by a substituter (e.g. `https://cache.solnix.io`) with a
+  signing key. Publish with `nix copy --to 's3://<bucket>?endpoint=<solnix.io>&...'`
+  (solnix.io credentials, NOT the AWS `numa` profile), consume via the
+  substituter. Bake the substituter URL + trusted public key into the base
+  configuration's `nix.settings` so installed systems pull binaries by default.
 - **What gets cached:** the `pkgs.illumos.*` world, stdenv/bootstrap, and image
   closures — the expensive-to-build artifacts. The seed toolchain (T0.3) and the
   gate-derived derivations are the first worth caching.
 - **Reproducibility is the contract:** cache hits require deterministic
   derivations — keep builds pure/pinned (fixed nixpkgs-fork rev, pinned illumos
   source commit) so a cached artifact is byte-identical to a local rebuild.
-- **CI publishes to the cache:** the eventual build farm signs + pushes to
-  solnix.io on `unstable`. Until it exists, builds are local on the EC2 host;
-  design outputs so switching to a `nix copy`/post-build-hook push is a config
-  change, not a rearchitecture.
+- **CI publishes to the cache:** the eventual build farm signs + pushes to the
+  solnix.io S3 endpoint on `unstable`. Until it exists, assets stay on the EC2
+  build host (re-extractable via committed scripts); design outputs so switching
+  to a `nix copy`/post-build-hook push is a config change, not a rearchitecture.
 
 ## Reproducibility rule
 
