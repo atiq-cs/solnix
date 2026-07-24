@@ -117,3 +117,12 @@ The main Phase-1 novel work is therefore: (a) a *pure* stdenv path from our seed
 (stock nixpkgs selects impure-native `stagesNix` for x86_64-solaris today),
 (b) the `pkgs.illumos.*` world, (c) RUNPATH-via-`elfedit`, (d) the SMF init
 module (docs/design-smf-init.md).
+
+---
+
+## Post-stable backlog
+
+Once Phase 1 (bootable) + Phase 2 (usable/self-hosting/cache) are done, see
+**docs/post-stable-backlog.md** for the deferred work: recompile-with-clang,
+Rust toolchain, libumem-as-default-allocator, latest GCC/GDB, lldb, and
+desktop+server feature/fork parity.

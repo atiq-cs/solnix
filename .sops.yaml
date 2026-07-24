@@ -1,0 +1,17 @@
+# sops config for the solnix repo.
+# Secrets (S3 cache credentials, signing keys) are encrypted to the maintainer's
+# age key — the one whose PRIVATE key lives in ~/.config/sops/age/keys.txt on the
+# dev machine (public key age1cgvvdnt8...; backed up in 1Password). Decrypt/edit:
+# `SOPS_AGE_KEY_FILE=~/.config/sops/age/keys.txt sops secrets/<file>.yaml`.
+#
+# NOTE: this is intentionally a DIFFERENT key than nix-config's `gburd-user`
+# (age1u09jlepa...). solnix standardizes on the key actually present here so
+# secrets always decrypt on the dev machine.
+keys:
+  - &gburd age1cgvvdnt8xp4gqn4mqwrzpl4e3sw3pgf4dr064cwglgguzntrvcnq2e6npz
+
+creation_rules:
+  - path_regex: secrets/[^/]+\.ya?ml$
+    key_groups:
+      - age:
+          - *gburd
