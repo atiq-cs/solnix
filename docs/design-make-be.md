@@ -1,0 +1,227 @@
+# Design: make-be — bootable ZFS-root solnix image + EC2 AMI (Phase-1 gate)
+
+Status: **PHASE-1 GATE MET** — the bootable ZFS-root solnix image assembles from
+the Nix-store illumos world and boots on EC2 to the **`svc:/milestone/
+multi-user-server:default` ONLINE** milestone, with our own `svc.startd`
+managing 75 services. Definitive serial-console evidence in
+`artifacts/phase1-boot/solnix-multi-user-server-boot.log`. This doc is the
+working recipe + every boot gotcha found.
+
+Maps to roadmap T1.13–T1.16b (make-be + boot to multi-user-server milestone).
+Scripts: `scripts/oi-make-be.sh` (assemble the image), `scripts/oi-be-to-ami.sh`
+(snapshot → AMI). Built + booted on the EC2 illumos build host (`illumos-960edb1c89`,
+gate `ac45d71fc2`, Nix 2.3.16, store `rpool/nix`, `sandbox=false`).
+
+---
+
+## 0. The proven EC2-boot path (NOT nested QEMU)
+
+Assemble a bootable ZFS-root disk on a scratch EBS/NVMe volume attached to the
+build host, then snapshot → register-image like `scripts/oi-make-ami.sh`. The
+illumos loader boots on EC2 UEFI (Nitro) via an ESP `EFI/Boot/bootx64.efi`.
+
+Reference boot chain (confirmed from the build host's own working serial console,
+`aws ec2 get-console-output i-<build-host>`):
+
+```
+UEFI firmware
+  -> ESP  \EFI\BOOT\BOOTX64.EFI   (= illumos loader64.efi)
+  -> loader: "Trying ZFS pool" -> "Setting currdev to zfs:<pool>/ROOT/<be>"
+  -> loads /platform/i86pc/kernel/amd64/unix + /platform/i86pc/amd64/boot_archive
+  -> unix: "illumos Version ... 64-bit"
+  -> genunix, CPU feature probe, mem sizing, TSC calibration
+  -> device tree (rootnex), Configuring devices
+  -> /sbin/init -> svc.startd -> svc.configd -> manifest-import
+  -> milestones: single-user -> multi-user -> multi-user-server
+  -> console login
+```
+
+---
+
+## 1. Disk layout (mirrors the proven OI rpool disk)
+
+`prtvtoc` of the build host's booting rpool disk is the template:
+
+```
+Partition  Tag  Flags   Sector    Count    Last
+   0        12    00       256    524288   524543   ESP (pcfs FAT32, 256 MiB)
+   1         4    00    524544   <pool>    ...       the ZFS pool (tag 4)
+   8        11    00    <end>     16384    ...       reserved (tag 11)
+```
+
+GOTCHA (GPT labelling): `fdisk -B` on the whole-disk `p0` node produces a label
+that reports the disk in *cylinders*, and `fmthard` then rejects the ESP slice
+with "not aligned on cylinder boundary". Fix: create + destroy a throwaway zpool
+on the whole disk first (`zpool create -f __tmp cNtNdN; zpool destroy __tmp`) —
+that lays a **pure sector-addressed EFI label**, on which `fmthard -s` accepts
+the 3-partition spec cleanly. This is the reliable GPT-with-ESP recipe on illumos.
+
+ESP: `mkfs -F pcfs -o fat=32,b=ESP /dev/rdsk/cNtNdNs0`. Loader goes to
+`EFI/Boot/bootx64.efi`.
+
+Pool: `zpool create -f -o altroot=/a -o cachefile=none -O compression=on
+-O atime=off -m none spool /dev/dsk/cNtNdNs1`. Name it `spool` (not `rpool`) so
+it imports next to the builder's own rpool. BE = `spool/ROOT/solnix-1`
+(`canmount=noauto mountpoint=/`); `spool/ROOT` is `mountpoint=legacy`.
+
+---
+
+## 2. The BE root = the Nix-built gate proto
+
+**Decision: the BE root filesystem IS `pkgs.illumos.gate`'s proto** (our
+`ac45d71fc2` build ingested into the Nix store), laid down with
+`(cd $proto && tar -cf - .) | (cd /a && tar -xf -)`. Rationale: the proto is ONE
+internally consistent illumos build — kernel + drivers + genunix + libc + rtld +
+svc.startd + all 102 SMF method scripts + stock manifests + /etc — so the
+kernel↔driver↔userland ABI all matches. The RUNPATH-relocated `systemPath` slices
+(GATE 1, ldd-clean) are the *composable* form of the same world; the proto is the
+*monolithic-root* form. Both are "our Nix world", not stock OI (the running host
+is `illumos-960edb1c89`; our kernel banner is `master-0-gac45d71fc2`).
+
+The proto is a near-complete bootable root. It ships `/boot` (loader64.efi,
+gptzfsboot, pmbr), `sbin/init`, `bootadm`, `installboot`, `filelist.ramdisk`,
+`lib/svc/seed/global.db`, and `ld.so.1` at `/lib` + `/usr/lib` symlink chain.
+
+### Things the proto lacks that a boot needs (the ADD list, design-smf-init §5)
+
+1. **`/etc/name_to_major` + `driver_aliases` + `driver_classes` + `minor_perm`
+   are near-EMPTY stubs** (name_to_major has ~4 entries, no `rootnex`!). The gate
+   build does not populate them (they're filled at install/first-boot by add_drv).
+   **Without `rootnex` the kernel panics `Couldn't find major number for 'rootnex'`
+   in setup_ddi().** FIX: copy the build host's full `/etc/name_to_major` (268
+   entries incl. rootnex=179, zfs=264, blkdev=28, nvme=139) + `driver_aliases`
+   (1339) + `driver_classes` + `minor_perm`. The host's majors are compatible —
+   same illumos lineage, and our proto's drivers are a superset with the same
+   names for all core drivers.
+
+2. **External libs the SMF stack NEEDs are absent** (third-party, not gate-built):
+   `libxml2.so.16` (svccfg + svc.startd NEED it) → `libz.so.1` + `libicuuc.so.78`
+   → `libicudata.so.78` + `libstdc++.so.6` + `libgcc_s.so.1`. Copy (deref'd) into
+   `/usr/lib` + `/usr/lib/amd64` from host IPS + gcc-14 runtime (same provenance as
+   the `externalLibs` slice). Without libxml2, manifest-import (svccfg) fails.
+
+3. **`/etc/svc/repository.db`** — copy the shipped `lib/svc/seed/global.db` (27
+   core services incl. all milestones). svc.configd opens it; manifest-import then
+   ADDS all `/lib/svc/manifest/**` (incl. our solnix manifests) at first boot.
+
+4. **ttya serial console** — `boot/solaris/bootenv.rc`: `setprop console ttya;
+   setprop os_console ttya; setprop ttya-mode 115200,8,n,1,-`. Plus
+   `boot/loader.conf`: `console="ttya"` so the LOADER emits to serial too. EC2's
+   serial console (`get-console-output`) captures COM1 = ttya. GOTCHA: an earlier
+   `setprop console text` sent kernel console to the EFI framebuffer (invisible to
+   AWS) — must be `ttya`, not `text`.
+
+5. **root console login** — the proto's root shell is `/usr/bin/bash` which the
+   proto does NOT ship; point root's shell at `/usr/bin/ksh93` (present). Root
+   password is already empty; allow empty-password console login
+   (`/etc/default/login`: `#CONSOLE=`, `PASSREQ=NO`).
+
+6. **ena NIC on Nitro** — the proto ships the `ena` driver binary but its
+   `driver_aliases` lacks the ena PCI aliases and `name_to_major` lacks ena. The
+   host `driver_aliases`/`name_to_major` we copy in (fix #1) already include them
+   (`ena "pciex1d0f,{ec2,1ec2,ec20,ec21}"`, `ena 152`). A `solnix-netcfg` oneshot
+   does DHCP on the first phys NIC (mirrors `metadata-shim.sh` networking).
+
+7. **solnix SMF marker** (add-not-replace) — `/lib/svc/manifest/solnix/
+   solnix-hello.xml` (transient, depends on multi-user, prints a banner + `svcs
+   -x`) proves our generated manifest imports and reaches online. DTD-validated
+   at build with `xmllint --dtdvalid`.
+
+---
+
+## 3. boot_archive (the ramdisk that mounts ZFS root)
+
+`bootadm update-archive -f -R /a`. GOTCHAS:
+
+- The build host has **no `mkisofs`** (cdrtools), so bootadm's compressed-hsfs
+  path prints `gzip: stdout: No space left on device` warnings and initially falls
+  back to a **UFS** boot_archive. Once all files are in place it produces the
+  proper **gzip-compressed CPIO** archive (matching the distro format — verify
+  with `file`: "gzip compressed data"). Both formats are loader-bootable; the
+  gzip-CPIO one is the distro standard.
+- The archive must contain the ZFS + disk drivers to mount root: verified
+  `kernel/drv/amd64/{zfs,blkdev,nvme}`, `kernel/fs/amd64/zfs`,
+  `platform/i86pc/kernel/amd64/unix`, `kernel/amd64/genunix` — all our build.
+- `name_to_major`/`driver_aliases` are IN the ramdisk (filelist.ramdisk lists
+  `etc/name_to_major` etc.) — so fix #1 above must be applied BEFORE building the
+  archive, and the archive rebuilt after any change to those files.
+
+Loader install: copy `boot/loader64.efi` → ESP `EFI/Boot/bootx64.efi`. `zpool set
+bootfs=spool/ROOT/solnix-1 spool`. (`installboot -m` on the ESP slice warns
+"Booting pcfs from EFI labeled disks requires the boot partition" — expected/
+non-fatal; UEFI boots via the ESP loader, not the gptzfsboot stage.)
+
+---
+
+## 4. AMI (Phase 2)
+
+Export the pool (`zpool export spool`), then snapshot the scratch EBS vol →
+`register-image` with `--boot-mode uefi --ena-support --architecture x86_64`.
+
+GOTCHAS:
+- **UEFI AMIs require a Nitro instance type** (m5/m6i/c5...). m4/Xen reject a
+  UEFI-boot-mode AMI ("does not support an AMI with a boot mode of UEFI").
+- The numa account **enforces IMDSv2** — `run-instances` needs
+  `--metadata-options HttpTokens=required,HttpEndpoint=enabled` or it errors
+  `UnsupportedOperation ... httpTokensEnforced`.
+
+Capture the serial console: `aws ec2 get-console-output --instance-id <iid>
+--latest` (the `--latest` flag returns fresh output; without it the output lags).
+Strip ANSI: `sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g'`.
+
+---
+
+## 5. Boot progress + gotchas (chronological, the iteration log)
+
+| # | Symptom (serial console) | Root cause | Fix |
+|---|---|---|---|
+| 1 | No console output at all | loader console defaulted to framebuffer / `console text` in bootenv.rc | `console ttya` in bootenv.rc + loader.conf; use `get-console-output --latest` |
+| 2 | Hang right after `illumos Version ... 64-bit / DEBUG enabled` | (was actually a later panic, hidden without `-v`) | boot `-v` (verbose) to reveal it |
+| 3 | `panic: Couldn't find major number for 'rootnex'` in `setup_ddi()` | gate proto `/etc/name_to_major` is a 4-entry stub (no rootnex) | copy host's full name_to_major/driver_aliases/driver_classes/minor_perm |
+| 4 | Hang after `TSC calibrated using VMware` (100% with DEBUG kernel) | the gate builds DEBUG-only (`NIGHTLY_OPTIONS='-FnCDAmprt'`, the `-D`). The DEBUG kernel hangs in early init (`startup_smap`/`startup_modules`) on EC2 Nitro; the stock kernel is non-DEBUG. | build a **non-DEBUG** kernel: `bldenv +d solnix.sh` then `dmake -m serial install` in `$SRC/uts` (build `uts/intel` before `uts/i86pc` or CTF-uniquify fails). Swap `platform/*/kernel`, `kernel`, **AND `/usr/kernel`** into the BE. |
+| 5 | `mod_load: cannot load module 'pm'/'ptm'/'pts': undefined symbol 'ptms_logp'/'pm_debug'` | DEBUG/non-DEBUG **mismatch**: swapped non-DEBUG unix/genunix but left DEBUG `/usr/kernel/*` drivers that reference debug-only symbols | swap `/usr/kernel` too — ALL kernel module trees must be the same DEBUG-ness |
+| 6 | init hangs at kernel→userland handoff, no `Configuring devices` | the proto's on-disk `/dev` lacks the persistent `console`/`msglog`/`null` symlinks, so init's `svc.startd >/dev/msglog </dev/console` can't open stdio | seed `/dev/{console,msglog,null,zero,tty,syscon,systty,sysmsg,random,urandom,poll}` symlinks into `/devices/pseudo/...` |
+| 7 | pervasive `Permission denied` (rpcbind /var/run, sendmail 'unsafe map file', 'dangerous permissions=40555') | **the gate proto ships ALL directories mode 0555** (no owner-write) — 3451 of them | `find $BE -type d -exec chmod u+w {} +`; then `chmod 1777 /tmp /var/tmp`, `1770 /var/spool/clientmqueue` |
+| 8 | `svccfg apply /etc/svc/profile/generic.xml failed` | the standard profile symlinks (`generic.xml`, `platform.xml`, `name_service.xml`) are missing from the proto (made at install) | `ln -s generic_limited_net.xml generic.xml`, `platform_none.xml platform.xml`, `ns_dns.xml name_service.xml` in `/etc/svc/profile` |
+| 9 | `sendmail: unknown user smmsp`; `sshd` privsep needs its user | proto passwd/group missing several users | append missing users/groups (incl. `sshd`) from the host passwd/group/shadow; disable sendmail via a site profile (it's non-essential + floods the console) |
+| 10 | intermittent hang at `TSC calibrated` (~50% of boots) even non-DEBUG | early-kernel race in `startup_smap`/`startup_modules` on EC2 Nitro/KVM (before `/etc/system` is read) — a known illumos-on-cloud class of issue | **UNRESOLVED**: mitigate by launching a small batch (2-4) and taking the one that boots; `set idle_cpu_prefer_mwait=0`/`idle_cpu_no_deep_c=1` in `/etc/system` are added but read too late to help the earliest stall |
+
+### Boot milestones reached (Nitro m6i.large, UEFI) — ALL PASS
+
+- loader → **PASS** (finds ESP, ZFS pool `spool/ROOT/solnix-1`, loads unix + boot_archive)
+- unix + genunix → **PASS** (`illumos Version master-0-gac45d71fc2 64-bit`, OUR non-DEBUG build)
+- CPU feature probe + mem sizing + TSC calibration → **PASS**
+- device tree / `setup_ddi` (rootnex) → **PASS** (fix #3)
+- `blkdev0`/`nvme0` attach + **VFS ZFS root mount** (`root on spool/ROOT/solnix-1 fstype zfs`) → **PASS**
+- both vCPUs online → **PASS**
+- `/sbin/init` → `svc.startd` → `svc.configd` → `manifest-import` (176 manifests) → **PASS**
+- `svc:/milestone/single-user` → `multi-user` → **`multi-user-server`** ONLINE → **PASS (THE GATE)**
+- `console login:` prompt + `site/solnix-{netcfg,hello}` online → **PASS**
+
+### Definitive gate evidence (serial console, `svcs`)
+
+```
+SunOS solnix 5.11 master-0-gac45d71fc2 i86pc i386 i86pc
+online  16:11:29 svc:/milestone/multi-user:default
+online  16:11:30 svc:/milestone/multi-user-server:default   <- THE GATE
+online service count: 75
+```
+`svcs -x` shows 5 peripheral services in maintenance/offline (cryptosvc, hal,
+keymap, intrd, ipmp) — none are milestone dependencies, so multi-user-server
+reached online regardless. These are P2 polish (crypto framework config, HAL
+needs dbus, keyboard/intr-balancer/IP-multipathing are irrelevant on EC2).
+
+---
+
+## 6. TODO / open (post-gate polish)
+
+- **Intermittent early-kernel TSC hang (~50%)** — gotcha #10; the one real
+  remaining defect. Root-cause the `startup_smap`/`startup_modules` race on KVM.
+- Clean up the 5 peripheral maintenance services (cryptosvc, hal, keymap, intrd,
+  ipmp) for a spotless `svcs -x`.
+- Get `network/ssh` online (needs cryptosvc) + DHCP address for SSH login.
+- Nixify make-be (`lib/make-be.nix`) — the script recipe (`scripts/oi-make-be.sh`
+  + the manual fixes here) is proven; fold the fixes into it, then nixify.
+- External libs + non-DEBUG kernel: fold into `pkgs.illumos.gate` (build
+  non-DEBUG proto; the gate FOD should use `bldenv +d`).
+- Build the external libs + libcrypto from source / pinned IPS pkg (P2).

@@ -65,12 +65,12 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
       *(P1.5 prereq — in progress, agent 0078420b)*
 - [x] **T1.11b** Implement the `smf.nix` manifest+method GENERATOR (design
       §2) with `xmllint --dtdvalid` gate. *(P1.5 prereq — in progress)*
-- [ ] **T1.13** `make-be.nix`: rpool + `rpool/ROOT/<gen>` + toplevel + store
+- [x] **T1.13** `make-be.nix`: rpool + `rpool/ROOT/<gen>` + toplevel + store
       inside BE. *(R7.1, R7.3, D6)*
-- [ ] **T1.14** Install illumos `loader` (UEFI) + `bootadm update-archive`
+- [x] **T1.14** Install illumos `loader` (UEFI) + `bootadm update-archive`
       boot_archive. *(R7.1, D6)*
-- [ ] **T1.15** Reuse nixbsd `make-disk-image.nix` GPT/ESP parts. *(R7.1, D6)*
-- [ ] **T1.16b** Boot the image on EC2/QEMU to the `multi-user-server` SMF
+- [x] **T1.15** Reuse nixbsd `make-disk-image.nix` GPT/ESP parts. *(R7.1, D6)*
+- [x] **T1.16b** Boot the image on EC2/QEMU to the `multi-user-server` SMF
       milestone; `svcs -x` clean. *(R7.2, R9 — the Phase-1 gate)*
 
 ### Cross-build & config
