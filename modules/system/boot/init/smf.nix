@@ -11,7 +11,7 @@
 # from the nixpkgs fork and the pure helpers in lib/smf/xml.nix (design §6 file
 # #1), neither of which exists yet.
 
-{ config, lib, ... }:
+{ config, lib, pkgs, ... }:
 
 let
   inherit (lib)
@@ -19,6 +19,9 @@ let
     mkEnableOption
     types
     literalExpression
+    filterAttrs
+    mapAttrsToList
+    concatStringsSep
     ;
 
   # A single dependency group (SMF <dependency>). §1.1.
@@ -252,28 +255,77 @@ in
     description = "SMF services managed by solnix.";
   };
 
-  config = {
-    # `requires` sugar is folded per-service into the read-only `allDependencies`
-    # option above (§1.3), not by reassigning smf.services here — reassigning the
-    # option you're inside of is infinite recursion. This is pure option logic,
-    # no pkgs needed, and is the one FUNCTIONAL bit of the config section today.
+  config =
+    let
+      # The pure SMF renderers (design §2, lib/smf/xml.nix). pkgs-agnostic by
+      # injection — we hand it the fork's writers. Bound INSIDE config (not the
+      # top-level let) so a bare/options-only import of this module does not force
+      # `pkgs`; only realising the config touches the writers/runCommand.
+      smfXml = import ../../../../lib/smf/xml.nix {
+        inherit lib;
+        inherit (pkgs) writeText writeScript runtimeShell;
+      };
 
-    # TODO(T1.11) manifest + method-script generation. See docs/design-smf-init.md
-    # §2. The pure renderers (xmlEscape, mkMethod, mkManifest, mkManifestDir) live
-    # in lib/smf/xml.nix (design §6 file #1); this config section will:
-    #   1. import lib/smf/xml.nix with `pkgs`,
-    #   2. build `smfManifests` = mkManifestDir (filterAttrs enable services),
-    #   3. wrap in `checkedManifests` (xmllint --dtdvalid against the pinned
-    #      service_bundle.dtd.1, design §2.6),
-    #   4. stage checkedManifests at /lib/svc/manifest/solnix via the etc/path
-    #      module (design §5.3),
-    #   5. render system/activation/smf-activate.sh: svccfg import, enable/disable
-    #      deltas, svcadm milestone multi-user-server (design §3.1, T1.12).
-    # Removal-on-switch (disable+delete) deferred to P2.1 when the
-    # generation diff exists; a stale enabled service does not block the gate.
-    #
-    # All of the above needs `pkgs` (writeText/writeScript/runCommand) from the
-    # nixpkgs fork, so it is intentionally NOT wired here yet — faking it would
-    # produce a derivation that can't build. Wire it with the fork (P1.1).
-  };
+      # The illumos service_bundle DTD, for the build-time validation gate (§2.6).
+      # It ships in the world's proto area (pkgs.illumos.gate) at
+      # usr/share/lib/xml/dtd/service_bundle.dtd.1; the on-target <!DOCTYPE> still
+      # references the standard /usr/share path (correct on the running system).
+      # VERIFY(§5.4): the exact pkgs.illumos attr that should expose it — for now
+      # read it out of the gate proto store path.
+      dtdFile = "${pkgs.illumos.gate}/usr/share/lib/xml/dtd/service_bundle.dtd.1";
+
+      # only enabled services get manifests + methods generated.
+      enabledServices = filterAttrs (_: s: s.enable) config.smf.services;
+
+      # per-service manifest XML store path (design §2.4). mkManifest consumes
+      # `allDependencies` (the read-only option that folds `requires`) via
+      # svc.allDependencies, and emits the method scripts as a side effect
+      # (referenced by absolute store path from the XML).
+      manifestOf = name: svc: smfXml.mkManifest name svc;
+
+      # the manifest DIRECTORY (design §2.5): copy each service's XML under
+      # $out/manifest/solnix/<name>.xml. This is what the etc/path module stages
+      # at /lib/svc/manifest/solnix (design §5.3) and activation imports (§3).
+      smfManifests = pkgs.runCommand "solnix-smf-manifests" { } ''
+        mkdir -p $out/manifest/solnix
+        ${concatStringsSep "\n" (mapAttrsToList
+          (name: svc: "cp ${manifestOf name svc} $out/manifest/solnix/${name}.xml")
+          enabledServices)}
+      '';
+
+      # build-time DTD validation gate (design §2.6): every generated manifest
+      # must pass xmllint --dtdvalid against the illumos service_bundle.dtd.1, so
+      # a malformed manifest fails the BUILD, not the boot. Proven on the host:
+      # lib/smf/tests.nix builds the sshd+oneshot manifests and this exact
+      # xmllint invocation PASSES (GATE 2).
+      checkedManifests = pkgs.runCommand "solnix-smf-manifests-checked"
+        { nativeBuildInputs = [ pkgs.buildPackages.libxml2 ]; } ''
+        cp -r ${smfManifests} $out
+        chmod -R u+w $out
+        for m in $out/manifest/solnix/*.xml; do
+          echo "validating $m" >&2
+          xmllint --noout --dtdvalid ${dtdFile} "$m"
+        done
+      '';
+    in
+    {
+      # `requires` sugar is folded per-service into the read-only `allDependencies`
+      # option above (§1.3); the generator reads that, not raw `dependencies`.
+
+      # Manifest + method generation (design §2), wired via lib/smf/xml.nix.
+      # Exposed under an internal attr the etc/path module (design §5.3, T1.11
+      # file #3) and the SMF activation snippet (design §3.1, T1.12 file #5)
+      # consume. Kept out of a user-facing option — it is a computed artifact.
+      system.build.smfManifests = checkedManifests;
+
+      # TODO(T1.11 file #3): stage `checkedManifests` at /lib/svc/manifest/solnix
+      # via the etc/path module (design §5.3). Reuse that module; don't invent one.
+      # TODO(T1.12 file #5): render system/activation/smf-activate.sh — svccfg
+      # import each manifest, apply enable/disable deltas, svcadm milestone
+      # multi-user-server (design §3.1). Removal-on-switch deferred to P2.1.
+      #
+      # Both need the fork's module set (system.build.*, the etc module) to be
+      # present; the GENERATION above (the T1.11 core) is complete and its output
+      # is DTD-validated at build time.
+    };
 }

@@ -28,8 +28,26 @@
 { gate                      # store path of illumos.gate proto (GATE A $out)
 , name                      # component name -> illumos-<name>
 , files                     # list of proto-relative paths (files/dirs) to copy
+, srcRoot ? null            # copy `files` from here instead of the gate proto.
+                            #   null = the gate proto (the common case). Set to
+                            #   "/" to slice host absolute paths (externalLibs:
+                            #   non-proto IPS/gcc libs; legal under sandbox=false).
+, extraFiles ? [ ]          # [{ src = <abs host path>; dst = <component-rel>; }]
+                            #   copy from an arbitrary source to a chosen dest
+                            #   (e.g. gcc runtime libs under /usr/gcc/14 -> usr/lib)
 , selfLibDirs ? [ ]         # component-relative lib dirs to bake as $out-absolute
                             #   RUNPATH entries (for cross-subdir intra-component refs)
+, originParts ? [ "$ORIGIN" "$ORIGIN/../lib/amd64" "$ORIGIN/../../lib/amd64" ]
+                            # $ORIGIN-relative RUNPATH parts. Default covers a
+                            #   64-bit lib/amd64 layout. A 32-bit-only component
+                            #   can pass [ "$ORIGIN" ] to save RUNPATH chars
+                            #   (the amd64 parts are dead weight for 32-bit ELF).
+, flattenLibsInto ? null    # if set (e.g. "lib-all"), symlink every *.so* this
+                            #   component ships into $out/<dir> and bake ONLY
+                            #   that one $out-absolute dir into the RUNPATH. Keeps
+                            #   the RUNPATH short (design's "single shared store
+                            #   lib root") when libs are spread across many
+                            #   subdirs that would otherwise each need an entry.
 , depRunpaths ? [ ]         # absolute store lib/amd64 dirs of cross-component deps
 , elfedit ? "/usr/bin/elfedit"  # host elfedit (has its dyn.so module; seed's lacks it)
 , elfdump ? "/usr/bin/elfdump"
@@ -38,12 +56,16 @@
 let
   # $ORIGIN for the loader is written literally into the ELF; single-quote it in
   # the shell so neither Nix's `''` nor bash expand it — ld.so.1 expands at load.
-  originParts = [ "$ORIGIN" "$ORIGIN/../lib/amd64" "$ORIGIN/../../lib/amd64" ];
   # $ORIGIN parts + cross-component dep store paths are known now.
   staticRunpath = builtins.concatStringsSep ":" (originParts ++ depRunpaths);
   filesArg = builtins.concatStringsSep " " files;
   # selfLibDirs are joined with a marker the builder turns into $out/<dir>.
   selfDirsArg = builtins.concatStringsSep " " selfLibDirs;
+  # copy root for `files`: the gate proto by default, or an explicit host root.
+  srcRootResolved = if srcRoot == null then gate else srcRoot;
+  # extraFiles flattened to "src>dst src>dst ..." for the builder to split.
+  extraFilesArg = builtins.concatStringsSep " "
+    (map (e: "${e.src}>${e.dst}") extraFiles);
 in
 derivation {
   name = "illumos-${name}";
@@ -52,19 +74,34 @@ derivation {
   PATH = "/usr/gnu/bin:/usr/bin:/usr/sbin";
 
   inherit gate elfedit elfdump filesArg selfDirsArg;
+  srcRoot = srcRootResolved;
+  extraFilesArg = extraFilesArg;
+  flattenLibsInto = if flattenLibsInto == null then "" else flattenLibsInto;
   staticRunpath = staticRunpath;
 
   args = [ "-c" ''
     set -eu
     mkdir -p "$out"
-    # copy each requested file/dir, preserving its proto-relative layout.
+    # copy each requested file/dir, preserving its layout, from $srcRoot (the
+    # gate proto by default, or a host root for non-proto libs like externalLibs).
     for f in $filesArg; do
-      src="$gate/$f"
+      src="$srcRoot/$f"
       if [ ! -e "$src" ] && [ ! -L "$src" ]; then
-        echo "FATAL: $f not in gate proto ($src)" >&2; exit 1
+        echo "FATAL: $f not under srcRoot ($src)" >&2; exit 1
       fi
       mkdir -p "$out/$(dirname "$f")"
       cp -a "$src" "$out/$f"
+    done
+    # extraFiles: copy from an arbitrary host source to a chosen dest (e.g. gcc
+    # runtime libs). Each token is "src>dst"; deref the .so (cp -aL) since the
+    # host path may be a versioned symlink and we want the real object in-store.
+    for pair in $extraFilesArg; do
+      esrc="''${pair%%>*}"; edst="''${pair##*>}"
+      if [ ! -e "$esrc" ] && [ ! -L "$esrc" ]; then
+        echo "FATAL: extraFile src missing ($esrc)" >&2; exit 1
+      fi
+      mkdir -p "$out/$(dirname "$edst")"
+      cp -aL "$esrc" "$out/$edst"
     done
 
     # build the final RUNPATH: static ($ORIGIN + cross-component dep store paths)
@@ -73,6 +110,23 @@ derivation {
     for d in $selfDirsArg; do
       runpath="$runpath:$out/$d"
     done
+
+    # flattenLibsInto: symlink every shared object into ONE dir and make it the
+    # sole $out-absolute RUNPATH lib entry (design's "single shared store lib
+    # root"). Keeps the RUNPATH short when libs sprawl across many subdirs (each
+    # of which would otherwise cost a full store-path entry and risk the .dynstr
+    # grow ceiling, correction #6). The real objects stay where they were copied;
+    # these are just resolution symlinks the loader follows.
+    if [ -n "$flattenLibsInto" ]; then
+      mkdir -p "$out/$flattenLibsInto"
+      find "$out" -type f -name '*.so*' | while read -r so; do
+        base=$(basename "$so")
+        # don't self-link (skip files already in the flat dir)
+        [ "$(dirname "$so")" = "$out/$flattenLibsInto" ] && continue
+        ln -sf "$so" "$out/$flattenLibsInto/$base"
+      done
+      runpath="$runpath:$out/$flattenLibsInto"
+    fi
 
     # relocate RUNPATH on every dynamic ELF we copied (single-quoted $ORIGIN is
     # already literal). Only touch objects that carry a .dynamic section (shared

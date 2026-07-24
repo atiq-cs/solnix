@@ -18,11 +18,13 @@ x86_64-solaris`, `sandbox = false`). They map 1:1 onto the fork's
 |---|---|---|
 | `gate.nix` | GATE A: ingest `/code/illumos-gate/proto/root_i386` into the store via `builtins.path` | §1 (ingest variant; full build-FOD is a TODO) |
 | `mk-illumos-component.nix` | slice N proto files into `$out`, relocate DT_RUNPATH+DT_RPATH with host `elfedit` ($ORIGIN + `selfLibDirs` `$out`-absolute + `depRunpaths` cross-component) | §2.3 |
-| `default.nix` | wires `gate` + `libc` + `rtld` + `ld` + `sys` + `base-tools` + `systemPath` | §2.4 / §2.5 / §4.2 |
+| `default.nix` | wires `gate` + `libc` + `rtld` + `ld` + `sys` + `base-tools` + `externalLibs` + `systemPath` | §2.4 / §2.5 / §4.2 |
+| `mk-illumos-component.nix` | slice N proto files into `$out`, relocate DT_RUNPATH+DT_RPATH with host `elfedit` ($ORIGIN + `selfLibDirs`/`flattenLibsInto` `$out`-absolute + `depRunpaths` cross-component); `srcRoot`/`extraFiles` slice non-proto host libs | §2.3 |
 | `../../scripts/gate-c-hello.sh` | GATE C: compile+link+run hello vs the sliced libc; LD_DEBUG proof | §5 Step D |
 | `../../scripts/oi-gate-slices.sh` | host driver for GATES A/B/C (gate + libc + hello) | §5 |
 | `../../scripts/oi-world-slices.sh` | host driver for the core world slices (rtld, ld, sys, base-tools, systemPath) | §5 C–G |
 | `../../scripts/oi-closure.sh` | ABI-aware transitive NEEDED-closure computer for `base-tools`' `baseToolLibs` | §2.4 / risk #5 |
+| `../../scripts/oi-smf-gates.sh` | P1.5 host driver: build `externalLibs`, prove the SMF stack is ldd-clean (GATE 1), generate + DTD-validate SMF manifests (GATE 2) | design-smf-init.md §2 |
 
 ## Run it (on the host)
 
@@ -111,6 +113,82 @@ a `relocfail` marker checked after the loop) so a too-long RUNPATH can never
 silently ship an unrelocated, host-leaking binary. Upgrade path if a future
 component needs a longer RUNPATH: relink the object with a longer `-R`, or (for
 the image) a single shared store lib root so paths are short.
+
+## P1.5 SMF prerequisites — external-lib slices + full store-purity (host, gate ac45d71fc2)
+
+Two P1.5 prerequisites landed here: (1) the non-proto external libs the SMF
+daemons NEED, sliced into a store derivation, and (2) closing the base-tools
+"10/12 ldd-clean" gap so the ENTIRE SMF stack is store-pure. (The SMF
+manifest+method GENERATOR lives in `../../lib/smf/xml.nix` + `../../modules/
+system/boot/init/smf.nix`; see design-smf-init.md §2 and `oi-smf-gates.sh`.)
+
+- **externalLibs PASS** — `illumos-external-libs` = the six libs NOT in the gate
+  proto that svc.startd/svcs/svc.configd reach: **libxml2.so.16, libz.so.1,
+  libicuuc.so.78, libicudata.so.78** (IPS) + **libstdc++.so.6, libgcc_s.so.1**
+  (gcc-14 runtime). BOTH ABIs sliced (32-bit `usr/lib`, 64-bit `usr/lib/amd64`).
+  `ldd` of every one is 100% `/nix/store`: siblings (libz/libicuuc/libicudata/
+  libstdc++/libgcc_s) resolve within the slice via `$ORIGIN`; libm/libc/
+  libpthread come cross-component from the libc slice. The host RUNPATH leak
+  `/usr/gcc/14/lib` baked into these libs is SCRUBBED by `elfedit dyn:runpath`.
+  **Provenance** (design risk #3, TODO(P2) to build-from-source or slice from a
+  pinned IPS pkg): libxml2 = IPS `library/libxml2`; libz = IPS `library/zlib`;
+  libicu{uc,data} = IPS `library/icu-78`; libstdc++/libgcc_s = gcc-14 runtime
+  (gcc-14 chosen because the host libxml2/icu were built against it — their
+  original RUNPATH is `/usr/gcc/14/lib`; a mismatched gcc runtime risks a
+  missing symbol). Sliced from the host copies for now (legal under
+  `sandbox=false`).
+
+- **GATE 1 PASS — the SMF stack is fully ldd-clean.** `base-tools` now bakes
+  `externalLibs` (+ the libc slice) into its RUNPATH, so `svc.startd` (and
+  `svcs`, the newly-added `svc.configd`, `init`, and all coreutils — **13/13**)
+  resolve **every** NEEDED to `/nix/store`, **zero** host `/usr/lib`, `/lib`, or
+  `/usr/gcc` leaks. This closes the prior "10/12" gap (svcs + svc.startd were the
+  two that leaked). `svc.configd` joined base-tools with its proto-shipped
+  private sqlite `lib/libsqlite-sys.so.2.8.15` (32-bit, NEEDs only libc).
+
+  ```
+  # ldd $out/lib/svc/bin/svc.startd (excerpt — the formerly-leaking libs):
+    libxml2.so.16   => /nix/store/…-illumos-external-libs/usr/lib/libxml2.so.16
+    libz.so.1       => /nix/store/…-illumos-external-libs/usr/lib/libz.so.1
+    libicuuc.so.78  => /nix/store/…-illumos-external-libs/usr/lib/libicuuc.so.78
+    libicudata.so.78=> /nix/store/…-illumos-external-libs/usr/lib/libicudata.so.78
+    libstdc++.so.6  => /nix/store/…-illumos-external-libs/usr/lib/libstdc++.so.6
+    libgcc_s.so.1   => /nix/store/…-illumos-external-libs/usr/lib/libgcc_s.so.1
+    libc.so.1       => /nix/store/…-illumos-libc/lib/libc.so.1
+    libm.so.2       => /nix/store/…-illumos-libc/lib/libm.so.2
+    libpthread.so.1 => /nix/store/…-illumos-libc/lib/libpthread.so.1
+  # LEAK CHECK: zero => lines outside /nix/store, all 13 SMF-stack binaries.
+  ```
+
+### RUNPATH ceiling hit + fix (correction #6 in practice)
+
+Adding `externalLibs` to base-tools' RUNPATH blew the ~500–520-char `.dynstr`
+grow ceiling: the four `$out`-absolute `selfLibDirs` (lib/usr/lib/lib/fm/
+usr/lib/fm) + libc + externalLibs came to **616 chars** and `elfedit` FATAL'd
+(`String table does not have room to add string`) — exactly the failure mode
+`mk-illumos-component.nix` now makes fatal-not-silent. Fix (the design's stated
+"single shared store lib root"): a new `flattenLibsInto = "lib-all"` option
+symlinks every `*.so*` base-tools ships into ONE dir and bakes only that dir
+(plus `$ORIGIN`, libc/lib, externalLibs/usr/lib) into the RUNPATH — **213
+chars**, comfortable margin. base-tools is 32-bit-only, so `originParts` was
+trimmed to just `[ "$ORIGIN" ]` (the amd64 parts are dead weight for 32-bit
+ELF) and the 64-bit libc dir dropped. Real objects stay where copied; the flat
+dir is only resolution symlinks.
+
+## New store paths + NAR hashes (P1.5 SMF prerequisites)
+
+| slice / artifact | store path | NAR (sha256) |
+|---|---|---|
+| externalLibs | `/nix/store/ylkx5p1lz5vq2wnyvda0pd58cs3fqjcl-illumos-external-libs` | `1mwfvhplynmdlkx1pnhg3ky1w8iqfcl54fb4bkj3zyhw48gsn0xq` |
+| base-tools (re-RUNPATH'd, +svc.configd) | `/nix/store/hyy2nqdyxmiy9b5jcmf226gg71qimpjh-illumos-base-tools` | `141kbanm0ipm39p62ckzvnaxcwq2k7y394gql34m0xl3ms2qv6wr` |
+| SMF sshd manifest (generated, GATE 2) | `/nix/store/215s1vrbj6w1n4a7bnfckhikw3vy0a3a-sshd.xml` | `1ggaqf35dqsdg4kfjiznmz6lfd7jgnjvpv8x0chzp7smqm6z74ys` |
+| SMF oneshot manifest (generated, GATE 2) | `/nix/store/as6gwasd7idazps3316rd5d15mwg8k0n-cleantmp.xml` | `0shhgj3i4xayjpv2q33w7cks4xdp2bvn5p1hidb9ylp705mdyycs` |
+
+(libc content NAR is unchanged from the earlier iteration —
+`0k5xfk8xwndlj306qxb40dhinfcy4g4h95vmkklp8p28p76hvqxv`; only its store-path
+prefix moved because `mk-illumos-component.nix`'s builder text changed.) The SMF
+DTD used for GATE 2 lives at `/usr/share/lib/xml/dtd/service_bundle.dtd.1` on the
+host (also in the gate proto at `usr/share/lib/xml/dtd/service_bundle.dtd.1`).
 
 ## New store paths + NAR hashes (this iteration)
 
@@ -203,16 +281,14 @@ Provenance (design risk #3): OpenIndiana gcc 10.5.0-oi-2, gate HEAD
 
 ## Known gaps toward a bootable image (P1.5)
 
-- **External non-proto libs block full store-purity for `svcs`/`svc.startd`.**
-  Their closure pulls `libxml2.so.16` (via `libzonecfg`/`libtopo`/`libpool`/
-  `libbrand`), which drags **ICU** (`libicuuc.so.78`, `libicudata.so.78`),
-  `libz.so.1`, and `libstdc++`/`libgcc_s`. **None are in the gate proto** —
-  they are third-party IPS libraries. `svccfg` (libxml2) and `svc.configd`
-  (`libsqlite-sys.so.2.8.15`) were EXCLUDED from base-tools for the same reason.
-  The make-be image (P1.5) must supply libxml2 + icu + zlib + a C++ runtime as
-  their own store packages (fork derivations, or sliced from the matching IPS
-  package) and wire base-tools' RUNPATH to them, before the SMF stack is
-  fully store-pure.
+- **External non-proto libs — RESOLVED (this iteration).** The SMF stack's
+  external closure (`libxml2` + `libz` + `libicuuc`/`libicudata` +
+  `libstdc++`/`libgcc_s`) is now the `externalLibs` slice, baked into base-tools'
+  RUNPATH; **`svc.startd`/`svcs`/`svc.configd` are fully store-pure** (GATE 1
+  above). Still TODO(P2): build these from source or slice from a pinned IPS
+  pkg/gate instead of the host copies (provenance recorded above).
+  `svccfg` also NEEDs `libl.so.1`/`libtecla.so.1` (check proto) if it's ever
+  added to base-tools — not needed for the P1.5 gate.
 - **`.interp` still points at the standard `/usr/lib/ld.so.1`** for the proto
   binaries (baked at their original link time). The sliced `rtld` is proven to
   work as the interpreter when `.interp` is rewritten to it (rtld gate), but the
@@ -222,11 +298,20 @@ Provenance (design risk #3): OpenIndiana gcc 10.5.0-oi-2, gate HEAD
 
 ## Remaining work
 
+- Package the external libs from SOURCE (or a pinned IPS pkg/gate) instead of
+  slicing the host copies — the slice works and is store-pure, but its
+  provenance is the host's IPS/gcc-14 install (TODO(P2), provenance recorded).
+- SMF activation (design-smf-init.md §3, T1.12): render
+  `system/activation/smf-activate.sh` (svccfg import + enable/disable deltas +
+  svcadm milestone) and stage `checkedManifests` at `/lib/svc/manifest/solnix`
+  via the etc/path module (§5.3). The GENERATOR (§2) is done + DTD-validated;
+  activation is the next SMF step.
 - Full gate-in-a-derivation FOD (design §1.5): run `oi-gate-build.sh` inside Nix
   (~90 min, host-impure inputs). The ingest here proves the store-path model;
   the FOD is the reproducible-from-source upgrade.
 - Package the external libs (libxml2/icu/zlib/libstdc++) so the SMF stack is
   fully store-pure (P1.5 prerequisite for `svcs`/`svc.startd`/`svccfg`).
+  **DONE** — `externalLibs` slice (GATE 1 above); source-build is the P2 upgrade.
 - `systemPath` → make-be ZFS-root boot environment + illumos `loader` (P1.5),
   plus generated SMF manifests from `smf.nix` (T1.11).
 - Flip the stdenv's `libc`/`binutils-unwrapped` from the seed slices to these

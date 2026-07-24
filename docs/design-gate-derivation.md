@@ -93,7 +93,7 @@ it). Any change to the recipe or the pinned rev → recompute. This is the same
 one-time dance the seed already does.
 
 ```
-# ponytail: proto pinned by outputHash (FOD), not bit-reproducible.
+# NOTE: proto pinned by outputHash (FOD), not bit-reproducible.
 #           Upgrade to a normal derivation when the gate build is made
 #           deterministic (SOURCE_DATE_EPOCH + build-host scrub) — deferred.
 ```
@@ -114,7 +114,7 @@ for bootstrap-only tooling) and the seed's own reliance on host `/usr/gcc/10` an
 `/usr/bin/{ld,elfdump,elfedit}` (`design-seed-extraction.md` §1.2–§1.3).
 
 ```
-# ponytail: host-impure build inputs (/opt/onbld, /usr/gcc/10, JDK, IPS header
+# NOTE: host-impure build inputs (/opt/onbld, /usr/gcc/10, JDK, IPS header
 #           prereqs). FOD sandbox relaxation permits it. TODO(P2): nixify onbld
 #           + gcc-10 + header prereqs so gate builds in a pure sandbox.
 ```
@@ -438,7 +438,7 @@ existing `rec` block already self-references, e.g. `bintools` uses `libc`, so
 recursive set as `self`, thread it explicitly as shown.)
 
 ```
-# ponytail: slices added to the existing rec{} block, not a full
+# NOTE: slices added to the existing rec{} block, not a full
 #           packagesFromDirectoryRecursive scope refactor. Migrate to the
 #           FreeBSD-style pkgs/ dir + explicit callPackage when the set grows
 #           past a handful (design-nixpkgs-illumos.md §2.2). YAGNI until then.
@@ -489,7 +489,7 @@ on illumos). The self-host rebuild (step 5) and the gcc nixify are later purity
 upgrades, explicitly deferred.
 
 ```
-# ponytail: Phase-1 stops at seed-built gate proto (step 4). Self-host rebuild
+# NOTE: Phase-1 stops at seed-built gate proto (step 4). Self-host rebuild
 #           (step 5) + gcc nixify = later purity, add when seed-independence is
 #           actually required (Phase 2), not before. Booting doesn't need it.
 ```
@@ -539,7 +539,7 @@ environment with the illumos `loader`. That is P1.5's concern; T1.7 just has to
 produce the composed path.
 
 ```
-# ponytail: system-path = buildEnv union, not a bespoke merger. Add conflict
+# NOTE: system-path = buildEnv union, not a bespoke merger. Add conflict
 #           resolution / priority only if two components collide on a path.
 ```
 

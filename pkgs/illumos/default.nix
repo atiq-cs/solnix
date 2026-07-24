@@ -167,6 +167,70 @@ let
     # deps=[] : the kernel does not link userland libc. Nothing to relocate.
   };
 
+  # externalLibs — the non-proto third-party libs the SMF stack NEEDs but the
+  # gate proto does NOT ship: libxml2, zlib, ICU (uc+data), and the gcc C++/unwind
+  # runtime (libstdc++, libgcc_s). Sliced from the HOST's IPS/gcc install (see
+  # provenance below) since sandbox=false permits host-impure inputs for Phase 1.
+  #
+  # WHY these six, and ONLY these six: svc.startd/svcs/svccfg/svc.configd reach
+  # libxml2 (via libzonecfg/libtopo/libpool/libbrand); libxml2 NEEDs libz +
+  # libicuuc; libicuuc NEEDs libicudata + libstdc++ + libgcc_s; libstdc++ NEEDs
+  # libgcc_s. Every OTHER NEEDED of these six (libm, libc, libpthread) comes from
+  # the libc slice. So the closure is exactly closed at these six + libc. Verified
+  # on the host with elfdump -d (32-bit variants), gate ac45d71fc2.
+  #
+  # ABI: sliced BOTH classes (lib = 32-bit for the 32-bit SMF stack, lib/amd64 =
+  # 64-bit for future 64-bit consumers). Like libc, the loader picks the matching
+  # class, so carrying both is safe. Siblings resolve via $ORIGIN (they all live
+  # in one lib dir per ABI); libm/libc/libpthread come cross-component from the
+  # libc slice via depRunpaths. The host RUNPATH leak (/usr/gcc/14/lib) baked into
+  # these libs is SCRUBBED by elfedit dyn:runpath (overwrites DT_RUNPATH+DT_RPATH).
+  #
+  # PROVENANCE (design risk #3 — TODO(P2): build from source or slice from a
+  # pinned IPS pkg / gate, not the host copies):
+  #   libxml2.so.16   IPS  library/libxml2      (/usr/lib[/amd64]/libxml2.so.16)
+  #   libz.so.1       IPS  library/zlib         (/usr/lib[/amd64]/libz.so.1)
+  #   libicuuc.so.78  IPS  library/icu-78       (/usr/lib[/amd64]/libicuuc.so.78)
+  #   libicudata.so.78 IPS library/icu-78       (/usr/lib[/amd64]/libicudata.so.78)
+  #   libstdc++.so.6  gcc-14 runtime            (/usr/gcc/14/lib[/amd64]/libstdc++.so.6)
+  #   libgcc_s.so.1   gcc-14 runtime            (/usr/gcc/14/lib[/amd64]/libgcc_s.so.1)
+  # gcc-14 chosen because the host libxml2/icu were built against it (their
+  # RUNPATH is /usr/gcc/14/lib); a mismatched gcc runtime risks a missing symbol.
+  #
+  # NOTE: mkIllumosComponent copies from $gate/<path>. These libs are NOT in the
+  # gate proto, so externalLibs uses `extraFiles` (a src->dst remap with cp -aL)
+  # to copy the real objects from their host absolute paths under the SONAME name.
+  externalLibs = mkIllumosComponent {
+    name = "external-libs";
+    files = [ ]; # everything is a symlink on the host; deref via extraFiles below
+    # extraFiles does `cp -aL`, dereferencing the host's versioned symlinks
+    # (libxml2.so.16 -> libxml2.so.16.1.3) so the in-store file IS the SONAME the
+    # loader looks up, with real content — not a dangling link to a version we
+    # didn't copy. `files` (plain cp -a) would preserve the symlink and break.
+    extraFiles = [
+      # --- 32-bit (the SMF stack is 32-bit) ---
+      { src = "/usr/lib/libxml2.so.16";              dst = "usr/lib/libxml2.so.16"; }
+      { src = "/usr/lib/libz.so.1";                  dst = "usr/lib/libz.so.1"; }
+      { src = "/usr/lib/libicuuc.so.78";             dst = "usr/lib/libicuuc.so.78"; }
+      { src = "/usr/lib/libicudata.so.78";           dst = "usr/lib/libicudata.so.78"; }
+      { src = "/usr/gcc/14/lib/libstdc++.so.6";      dst = "usr/lib/libstdc++.so.6"; }
+      { src = "/usr/gcc/14/lib/libgcc_s.so.1";       dst = "usr/lib/libgcc_s.so.1"; }
+      # --- 64-bit (future 64-bit consumers) ---
+      { src = "/usr/lib/amd64/libxml2.so.16";        dst = "usr/lib/amd64/libxml2.so.16"; }
+      { src = "/usr/lib/amd64/libz.so.1";            dst = "usr/lib/amd64/libz.so.1"; }
+      { src = "/usr/lib/amd64/libicuuc.so.78";       dst = "usr/lib/amd64/libicuuc.so.78"; }
+      { src = "/usr/lib/amd64/libicudata.so.78";     dst = "usr/lib/amd64/libicudata.so.78"; }
+      { src = "/usr/gcc/14/lib/amd64/libstdc++.so.6"; dst = "usr/lib/amd64/libstdc++.so.6"; }
+      { src = "/usr/gcc/14/lib/amd64/libgcc_s.so.1";  dst = "usr/lib/amd64/libgcc_s.so.1"; }
+    ];
+    # $ORIGIN reaches siblings in the same dir; but a 32-bit lib in usr/lib and a
+    # 64-bit lib in usr/lib/amd64 don't see each other via one $ORIGIN rule, and
+    # mkIllumosComponent's default $ORIGIN parts assume lib/amd64. Bake both
+    # dirs as $out-absolute so every intra-slice ref resolves regardless of ABI.
+    selfLibDirs = [ "usr/lib" "usr/lib/amd64" ];
+    depRunpaths = libcLibDirs; # libm/libc/libpthread from the libc slice
+  };
+
   # base-tools — MINIMAL userland toward multi-user, ALL 32-bit. illumos ships
   # SMF (svc.startd/svcs/svcadm/init) as 32-bit ONLY, and keeping the whole
   # component single-ABI means ONE RUNPATH string (≤ the .dynstr grow limit,
@@ -179,8 +243,15 @@ let
   base-tools = mkIllumosComponent {
     name = "base-tools";
     files = baseToolBins ++ baseToolLibs;
-    selfLibDirs = [ "lib" "usr/lib" "lib/fm" "usr/lib/fm" ];
-    depRunpaths = libcLibDirs;
+    # base-tools is 32-bit ONLY, so the amd64 $ORIGIN parts are dead weight and
+    # the 64-bit libc dir is never consulted. Drop both to save RUNPATH chars.
+    originParts = [ "$ORIGIN" ];
+    # its libs sprawl across lib/usr/lib/lib/fm/usr/lib/fm — four $out-absolute
+    # entries blew the .dynstr ceiling once externalLibs joined the RUNPATH
+    # (616 chars, correction #6). Flatten them into ONE dir so the RUNPATH is
+    # $ORIGIN + libc/lib + externalLibs/usr/lib + $out/lib-all (~230 chars).
+    flattenLibsInto = "lib-all";
+    depRunpaths = [ "${libc}/lib" ] ++ [ "${externalLibs}/usr/lib" ];
   };
 
   # picked binaries: SMF core (minus svccfg/svc.configd), the 32-bit shell, and
@@ -193,6 +264,7 @@ let
     "usr/bin/svcs"
     "usr/sbin/svcadm"
     "lib/svc/bin/svc.startd"
+    "lib/svc/bin/svc.configd"
     "sbin/init"
     "sbin/sh"
     "usr/bin/ls"
@@ -269,6 +341,8 @@ let
     "usr/lib/libsum.so.1"
     "usr/lib/libzfsbootenv.so.1"
     "usr/lib/libzonecfg.so.1"
+    # svc.configd's private sqlite (proto-shipped, 32-bit, NEEDs only libc)
+    "lib/libsqlite-sys.so.2.8.15"
   ];
 
   # systemPath — compose the minimal world into one symlink-farm tree (design
@@ -281,7 +355,7 @@ let
     system = builtins.currentSystem;
     builder = "/usr/bin/bash";
     PATH = "/usr/gnu/bin:/usr/bin:/usr/sbin";
-    paths = [ sys rtld libc ld base-tools ];
+    paths = [ sys rtld libc ld base-tools externalLibs ];
     args = [ "-c" ''
       set -eu
       mkdir -p "$out"
@@ -310,5 +384,5 @@ let
   };
 in
 {
-  inherit gate libc rtld ld sys base-tools systemPath;
+  inherit gate libc rtld ld sys base-tools systemPath externalLibs;
 }

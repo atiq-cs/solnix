@@ -364,6 +364,12 @@ re-scan replacements, so this is safe).
 
 ### 2.3 Method script template
 
+> **IMPLEMENTED (lib/smf/xml.nix) with two corrections — see §8.** `mkMethod`
+> takes the whole `svc` (not just `method`) so it can reach
+> `svc.workingDirectory`; and the returned value may be a *derivation* (the
+> `writeScript` store path), so callers stringify it (`"${exec}"`) before
+> `xmlEscape`. Signature shipped: `mkMethod = svcName: svc: kind: method:`.
+
 ```nix
 mkMethod = svcName: kind: method:
   # SMF :tokens pass straight through as the exec attr; no script needed.
@@ -846,3 +852,63 @@ Green gate = T1.11 + T1.12 done and R6.1–R6.3 satisfied.
 - Where the DTD is exposed in `pkgs.illumos.*` (§5.4).
 - `startd/duration` accepts `wait` as we expect for foreground-child services
   (§1.2); confirm the property name/values against `smf(7)`/`svc.startd(8)`.
+
+---
+
+## 8. Implementation notes + §2 corrections (T1.11 generator, DONE)
+
+The generator (§2) is implemented in `lib/smf/xml.nix` (pure renderers) and
+wired into `modules/system/boot/init/smf.nix` (`config.system.build.smfManifests`
+= `checkedManifests`). Built + validated on the illumos host
+(`illumos-960edb1c89`, gate `ac45d71fc2`) via `scripts/oi-smf-gates.sh`.
+
+**GATE result:** the `sshd` (§1.3) and a `cleantmp` transient oneshot (§1.4)
+manifests both **PASS `xmllint --noout --dtdvalid service_bundle.dtd.1`** AND
+**`svccfg validate`** (the on-target authority — stronger than xmllint, and it
+resolves the §7 open item / §2.6 `VERIFY`: the illumos DTD *does* validate under
+GNU xmllint, no fallback needed). A negative test confirms the gate rejects a
+manifest with an undeclared element.
+
+### Corrections to §2 found during implementation
+
+1. **§2.3 `mkMethod` scope bug.** The template `mkMethod = svcName: kind:
+   method:` referenced `svc.workingDirectory` in its body, but `svc` was not a
+   parameter. Shipped signature: **`mkMethod = svcName: svc: kind: method:`**
+   (takes the whole service for `workingDirectory`, plus the specific method).
+
+2. **§2.4 `exec` may be a derivation, not a string.** `mkMethod` returns either
+   an SMF `:token` (a string) OR a `writeScript` result (a *derivation*). The
+   `renderMethod` template does `esc exec`, and `xmlEscape` (`replaceStrings`)
+   requires a string — so callers must stringify: **`esc "${exec}"`**. `"${drv}"`
+   coerces a derivation to its out-path and leaves a plain string unchanged.
+   (Without this, eval fails: "value is a set while a string was expected".)
+
+3. **§2.6 DTD is in the gate proto.** Resolves the §5.4 `VERIFY`: the DTD ships
+   at `usr/share/lib/xml/dtd/service_bundle.dtd.1` inside `pkgs.illumos.gate`
+   (the proto). The module reads `dtdFile =
+   "${pkgs.illumos.gate}/usr/share/lib/xml/dtd/service_bundle.dtd.1"`. A
+   dedicated `pkgs.illumos.smf-dtd` component is optional polish; the proto
+   path is already a store path.
+
+4. **`<service>` element ORDER is DTD-enforced.** `service_bundle.dtd.1`'s
+   content model is `create_default_instance?, single_instance?, restarter?,
+   dependency*, dependent*, method_context?, exec_method*,
+   notification_parameters*, property_group*, instance*, stability?, template?`.
+   The §2.4 template's emission order (single_instance → dependency* →
+   exec_method* → property_group[startd] → instance → template) already respects
+   this; the implementation preserves it and the DTD check confirms it.
+
+5. **`pkgs` is forced only inside `config`.** The module's `smfXml`/`dtdFile`
+   bindings are in the `config` `let`, not the top-level `let`, so a
+   bare/options-only import does not require `pkgs` to carry
+   `writeText`/`writeScript`/`runtimeShell`/`illumos`. Only realising the
+   generated manifests touches them.
+
+### Standalone testability (no nixpkgs on the build host)
+
+`lib/smf/xml.nix` captures **no `pkgs`, no `config`** — it takes `{ lib,
+writeText, writeScript, runtimeShell }` by injection. The fork passes
+`pkgs.writeText` etc.; `lib/smf/tests.nix` passes tiny plain-`derivation`
+stand-ins + a minimal `lib` subset, so the renderer is unit-testable on the
+illumos host that has NO nixpkgs (the same constraint `pkgs/illumos/*.nix` works
+around). This is why the GATE could be met before the nixpkgs fork exists.

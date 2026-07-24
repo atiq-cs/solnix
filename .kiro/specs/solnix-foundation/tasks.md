@@ -60,10 +60,10 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
       *(R6.2, D5)*
 
 ### Image & boot
-- [~] **T1.12b** External-lib slices (`libxml2/libz/libicu*/libstdc++/libgcc_s`)
+- [x] **T1.12b** External-lib slices (`libxml2/libz/libicu*/libstdc++/libgcc_s`)
       so the SMF stack (`svc.startd`/`svcs`/`svc.configd`) is fully ldd-clean.
       *(P1.5 prereq — in progress, agent 0078420b)*
-- [~] **T1.11b** Implement the `smf.nix` manifest+method GENERATOR (design
+- [x] **T1.11b** Implement the `smf.nix` manifest+method GENERATOR (design
       §2) with `xmllint --dtdvalid` gate. *(P1.5 prereq — in progress)*
 - [ ] **T1.13** `make-be.nix`: rpool + `rpool/ROOT/<gen>` + toplevel + store
       inside BE. *(R7.1, R7.3, D6)*
