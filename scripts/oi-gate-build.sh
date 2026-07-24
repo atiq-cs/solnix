@@ -36,6 +36,13 @@ if [ ! -f solnix.sh ]; then
   # fully-open build: no closed bins
   sed -i '/^export ON_CLOSED_BINS=/d' solnix.sh
   echo 'unset ON_CLOSED_BINS' >> solnix.sh
+  # Perl: the gate defaults to an old Perl (5.10.0); OI Hipster ships 5.42.
+  # Without this, cmd/perl/contrib modules (Sun::Solaris::Intrs/Kstat/...) fail
+  # with "/usr/perl5/5.10.0/bin/.../perl: not found" and packaging is skipped.
+  # archname on this host is i86pc-solaris-thread-multi-64 -> variant -thread-multi.
+  printf 'export PERL_VERSION=5.42\nexport PERL_VARIANT=-thread-multi\n' >> solnix.sh
+  # Python default (3.9) matches the host; override here if that changes:
+  # printf 'export PYTHON3_VERSION=3.9\nexport PYTHON3_PKGVERS=-39\n' >> solnix.sh
 fi
 
 # ensure JDK (build tools need javac)
