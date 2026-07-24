@@ -14,6 +14,16 @@
 #    per-tool version probes are NON-FATAL if openjdk8 is installed — nightly
 #    proceeds into the real build.
 #  - The sendmail "cannot exec" line is cosmetic (mail notification only).
+#  - libc DMAKE contamination: libc's Makefile uses `.PARALLEL: $(SUBDIRS)` and
+#    nightly re-enters libc/i386 ~5x with .KEEP_STATE. Under dmake's parallel
+#    engine, the target-specific conditional CPPFLAGS for the `_c89`/`64` object
+#    variants (e.g. -D_C89_INTMAX32 meant for vsprintf_c89.o, -D_FILE_OFFSET_BITS=64
+#    meant for truncate64.o) LEAK onto the base objects (vsprintf.o, walkstack.o)
+#    that share the same source file. Result: `_sprintf_c89 multiply-defined` at
+#    link, or `pointer-to-int-cast` in walkstack.c. DMAKE_MAX_JOBS=1 is NOT enough
+#    (that only limits jobs within the parallel engine). The reliable fix is
+#    DMAKE_MODE=serial, which disables the parallel engine outright. Seed build
+#    only; a subsequent incremental build can raise concurrency once proto is seeded.
 set -euo pipefail
 GATE=/code/illumos-gate
 cd "$GATE"
@@ -41,6 +51,19 @@ pkill -9 -f "nightly solnix" 2>/dev/null || true
 cp solnix.sh /root/solnix.sh.bak 2>/dev/null || true
 git clean -dfx >/dev/null 2>&1 || true
 cp /root/solnix.sh.bak solnix.sh 2>/dev/null || true
+# solnix: recreate the serial dmake wrapper (git clean removes untracked files).
+# nightly hardcodes DMAKE_MODE=parallel (nightly line ~887), which triggers a
+# target-specific-CPPFLAGS leak in the parallel libc build: -D_C89_INTMAX32
+# (meant for vsprintf_c89.o) bleeds onto the base pics/vsprintf.o, producing
+# `_sprintf_c89 multiply-defined` at libc.so.1 link and aborting the build.
+# Pointing $MAKE at a wrapper that runs `dmake -m serial` overrides the env
+# DMAKE_MODE for every (recursive) make and builds libc correctly. solnix.sh
+# sets `export MAKE=/code/illumos-gate/wrapmake`.
+cat > /code/illumos-gate/wrapmake <<'WRAP'
+#!/bin/sh
+exec /opt/onbld/bin/i386/dmake -m serial "$@"
+WRAP
+chmod +x /code/illumos-gate/wrapmake
 rm -f nightly.lock log/latest 2>/dev/null || true
 nohup /opt/onbld/bin/nightly solnix.sh > /var/log/solnix-nightly-wrap.log 2>&1 &
 echo "nightly pid $!"

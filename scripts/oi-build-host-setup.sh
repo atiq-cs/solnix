@@ -31,6 +31,21 @@ env PKG_CLIENT_CONNECT_TIMEOUT=60 \
     developer/parser/bison-38 \
     developer/versioning/git
 
+# JDK for the gate's build tools (provides /usr/java/bin/javac)
+[ -x /usr/java/bin/javac ] || pkg install -v developer/java/openjdk8
+
+# Build-dependency headers the gate needs but the cloud image lacks. Missing
+# these causes late link failures (fatal: <header>.h: No such file) that cascade
+# into a collect2 storm. Install ALL of these up front:
+#   - idnkit headers      -> usr/src/lib/libc utf-8 iconv (idn/api.h)
+#   - mozilla-nss/nspr    -> mps/{nss,ssl,cert}.h for lib/ldap/ssldap, nsswitch
+#   - cups (full pkg)     -> cups/cups.h for smbsrv smbd_spool
+env PKG_CLIENT_CONNECT_TIMEOUT=60 PKG_CLIENT_LOWSPEED_TIMEOUT=180 \
+  pkg install -v \
+    library/idnkit library/idnkit/header-idnkit \
+    system/library/mozilla-nss/header-nss library/nspr/header-nspr \
+    print/cups
+
 echo "=== verify ==="
 /usr/gcc/10/bin/gcc --version | head -1
 ls /opt/onbld/bin/nightly /opt/onbld/bin/bldenv
