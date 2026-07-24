@@ -1,0 +1,12 @@
+--- a/src/libutil/util.cc	Thu Jan  1 00:00:01 1970
++++ b/src/libutil/util.cc	Fri Jul 24 17:00:02 2026
+@@ -20,6 +20,9 @@
+ #include <limits.h>
+ #include <pwd.h>
+ #include <sys/ioctl.h>
++#ifdef __sun
++#include <sys/termios.h>
++#endif
+ #include <sys/types.h>
+ #include <sys/wait.h>
+ #include <unistd.h>

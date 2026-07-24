@@ -1,0 +1,40 @@
+--- a/src/libstore/build.cc	Thu Jan  1 00:00:01 1970
++++ b/src/libstore/build.cc	Fri Jul 24 17:28:25 2026
+@@ -39,6 +39,21 @@
+ #include <cstring>
+ #include <termios.h>
+ 
++#ifdef __sun
++#include <stropts.h>
++/* illumos libc lacks cfmakeraw(); provide the standard BSD/glibc body. */
++static void cfmakeraw(struct termios *t)
++{
++    t->c_iflag &= ~(IMAXBEL|IGNBRK|BRKINT|PARMRK|ISTRIP|INLCR|IGNCR|ICRNL|IXON);
++    t->c_oflag &= ~OPOST;
++    t->c_lflag &= ~(ECHO|ECHONL|ICANON|ISIG|IEXTEN);
++    t->c_cflag &= ~(CSIZE|PARENB);
++    t->c_cflag |= CS8;
++    t->c_cc[VMIN] = 1;
++    t->c_cc[VTIME] = 0;
++}
++#endif
++
+ #include <pwd.h>
+ #include <grp.h>
+ 
+@@ -2258,6 +2273,15 @@
+     if (!builderOut.writeSide)
+         throw SysError("opening pseudoterminal slave");
+ 
++#ifdef __sun
++    // illumos pty slaves are STREAMS devices; push the terminal modules so
++    // that tcgetattr/tcsetattr work (otherwise they fail with EINVAL).
++    if (ioctl(builderOut.writeSide.get(), I_PUSH, "ptem") < 0)
++        throw SysError("pushing ptem module on pseudoterminal slave");
++    if (ioctl(builderOut.writeSide.get(), I_PUSH, "ldterm") < 0)
++        throw SysError("pushing ldterm module on pseudoterminal slave");
++#endif
++
+     // Put the pt into raw mode to prevent \n -> \r\n translation.
+     struct termios term;
+     if (tcgetattr(builderOut.writeSide.get(), &term))

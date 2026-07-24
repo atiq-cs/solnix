@@ -18,7 +18,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
       produce a proto area. *(R1.2, D1)*
 - [x] **T0.3** Identify + extract seed artifacts (libc, headers, illumos-gcc,
       Solaris `ld`, CTF tools) into a hashed tarball + manifest. *(R1.3, D1)*
-- [ ] **T0.4** Build/run Nix on the illumos host; build one trivial derivation
+- [x] **T0.4** Build/run Nix on the illumos host; build one trivial derivation
       into `/nix/store`. Decide fork-vs-existing-package first. *(R2, D1)*
 - [ ] **T0.5** RUNPATH spike: link a binary with Solaris `ld -R` into store paths;
       verify with `elfdump -d`; confirm `ld.so.1` resolves at runtime; test

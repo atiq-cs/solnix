@@ -171,7 +171,13 @@ Run the Nix daemon on the OI EC2 host, do a real native stdenv bootstrap from
 the seed (the seed binaries *do* run on illumos), and build `pkgs.illumos.*`
 natively — matching how illumos-gate actually builds.
 
-### B.1 Is there a working Nix port for illumos/Solaris?
+### B.1 Is there a working Nix port for illumos/Solaris? (RESOLVED — P0.2 done)
+
+**Update 2026-07-24:** yes, now — we built one. Nix 2.3.16 from source, three
+small illumos patches, runs natively and passes the trivial-derivation gate.
+See `scripts/oi-nix-setup.sh`. The research below (no prebuilt exists; expect a
+small from-source patch set like nixbsd's cppnix) held up exactly.
+
 
 - **nixpkgs does not build `nix` for `x86_64-solaris` today.** `stdenv` for
   x86_64-solaris is still `stagesNix` (impure native), so there is no pure stdenv
@@ -316,11 +322,17 @@ quality upgrade (pure stdenv, fine-grained caching), not a Phase-1 blocker.
 
 Ranked by likelihood of biting Phase 1:
 
-1. **Nix-on-illumos (P0.2) is unstarted and gating.** *Verify:* can `nix` build
-   and `nix-daemon` run on the OI host? Sandbox behaviour on illumos (no Linux
-   namespaces — expect to relax the sandbox initially). This is the single open
-   Phase-0 kill-risk for Option B. Prior art: nixbsd `cppnix`, historical
-   Nix-on-SmartOS. **Do this first.**
+1. **Nix-on-illumos (P0.2) — DONE (2026-07-24).** Nix **2.3.16** builds and runs
+   natively on the OI host and realises a trivial derivation into `/nix/store`
+   (gate passed). Built from source with **gcc-14** (required: IPS boost 1.78
+   needs CXXABI_1.3.15, which only gcc-14's libstdc++ provides — gcc-10 links
+   fail). Three illumos fixes: `<sys/termios.h>` for `winsize`, an inline
+   `cfmakeraw()`, and pushing STREAMS `ptem`+`ldterm` on the build pty slave
+   (else `tcgetattr` → EINVAL kills every build). REPL built against GNU readline
+   (`-DREADLINE`) since illumos libedit lacks the editline symbols. Single-user,
+   `sandbox = false` (no Linux namespaces). Reproducible in
+   `scripts/oi-nix-setup.sh` + `scripts/nix-illumos-patches/`. **`nix-daemon`
+   under SMF is a later task — not needed for this gate.**
 2. **elfedit RUNPATH grow-in-place** on large objects (`libstdc++.so.6`,
    `cc1plus`) — if the dynamic section can't hold a longer RUNPATH, relink
    instead of edit. Partially de-risked by T0.3 (hello.c worked); *verify* on the
