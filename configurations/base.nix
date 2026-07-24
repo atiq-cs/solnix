@@ -49,4 +49,12 @@
   # No users/networking/fs config here yet — those modules (P2.3) don't
   # exist. This is deliberately the smallest config that names the platform and
   # one service. Grow it as the modules it needs land.
+
+  # Binary cache: pull prebuilt pkgs.illumos.* / image closures from solnix.io
+  # instead of rebuilding (see .kiro/steering/dev-environment.md). The cache and
+  # its signing key don't exist yet, so this is the intended shape, commented
+  # until the substituter is live and we have the real public key.
+  # TODO(cache): enable once cache.solnix.io is serving the unstable channel.
+  # nix.settings.substituters = [ "https://cache.solnix.io" ];
+  # nix.settings.trusted-public-keys = [ "cache.solnix.io-1:<PUBKEY>" ];
 }
