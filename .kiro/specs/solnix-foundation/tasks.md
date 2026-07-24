@@ -30,7 +30,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
 ## Phase 1 — Minimal bootable amd64
 
 ### Platform & world (nixpkgs fork)
-- [~] **T1.1** Add `x86_64-solaris` support (tuple decided: reuse `solaris` kernel, see docs/design-nixpkgs-illumos.md)
+- [x] **T1.1** Add `x86_64-solaris` support (tuple decided: reuse `solaris` kernel, see docs/design-nixpkgs-illumos.md)
       to `lib/systems`. *(R4.1, D3)*  — in progress (subagent); fork at
       `~/ws/nixpkgs-solnix`, branch `solnix-x86_64-solaris`.
 - [ ] **T1.1b** Package the T0.3 seed as a fixed-output derivation (the

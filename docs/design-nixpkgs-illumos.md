@@ -753,3 +753,29 @@ testable before the next. Roadmap task tags in brackets.
 - **package set:** `pkgs.illumos.*` copies the `pkgs/os-specific/bsd/freebsd`
   scope/splicing pattern; foundational members (`include`, `csu`, `libc`, `ld`,
   `rtld`, `sys`) get explicit `callPackage` wiring to break the bootstrap cycle.
+
+---
+
+## Addendum (2026-07-24): P1.1 implemented — corrections vs this nixpkgs rev
+
+Implemented against nixpkgs `7f81d69cbd67` (nixos-unstable). Fork:
+`~/ws/nixpkgs-solnix`, branch `solnix-x86_64-solaris`, commit `18218269f`
+(+33 lines across parse.nix/default.nix/examples.nix). Verified via `nix eval`:
+`x86_64-illumos` example elaborates to `config=x86_64-unknown-solaris2.11`,
+`isSunOS=true`, `libc=illumos-libc`, `linker=solaris`, `unameSystem=SunOS`; no
+regression to linux/freebsd/darwin.
+
+Corrections to §1 for this rev (the shape is right; these details drifted):
+1. `parse.nix` uses `secondComponent`/`thirdComponent` locals, not
+   `elemAt l 1/2`. The added clause accepts `hasPrefix "solaris" thirdComponent`.
+2. The `2.11` version is NOT captured into `parsed.kernel.version` — it survives
+   only in the `config` string (autotools/gcc read `config`, so this is fine).
+3. The bare double `x86_64-solaris` elaborates to `config=x86_64-unknown-solaris`
+   (no version); the `2.11` triple comes via the `examples` entry / explicit
+   config. Matches BSD-double behavior.
+
+Still needed (next tasks, need the seed/stdenv):
+- `bintools-wrapper` solaris gating (`-rpath`→`-R`, `-dynamic-linker`→`-I`) — §4.
+- Seed fixed-output derivation (T1.1b) + `pkgs/stdenv/illumos/*` + `pkgs.illumos.*`.
+- `pkgs/stdenv/default.nix`: `x86_64-solaris` → an illumos stages set (still
+  `stagesNix`). `flake-systems.nix`: add `x86_64-solaris` once stdenv builds.
