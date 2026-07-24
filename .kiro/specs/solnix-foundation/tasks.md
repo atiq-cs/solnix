@@ -30,10 +30,15 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
 ## Phase 1 — Minimal bootable amd64
 
 ### Platform & world (nixpkgs fork)
-- [ ] **T1.1** Add `x86_64-solaris` support (tuple decided: reuse `solaris` kernel, see docs/design-nixpkgs-illumos.md)
-      to `lib/systems`. *(R4.1, D3)*
+- [~] **T1.1** Add `x86_64-solaris` support (tuple decided: reuse `solaris` kernel, see docs/design-nixpkgs-illumos.md)
+      to `lib/systems`. *(R4.1, D3)*  — in progress (subagent); fork at
+      `~/ws/nixpkgs-solnix`, branch `solnix-x86_64-solaris`.
+- [ ] **T1.1b** Package the T0.3 seed as a fixed-output derivation (the
+      `bootstrap-tools` equivalent). Seed staged at `~/ws/solnix-seed-store/
+      seed.tar.zst`, `sha256-I9jBIGrFC5veU0N+V/fHCyOI4s0NG4SfQB3kuA3a/c8=`
+      (moves to the solnix.io S3 endpoint when live). *(R4.1, D1a/D3)*
 - [ ] **T1.2** Bootstrap stdenv from the T0.3 seed; compile a C program against
-      store libc on `x86_64-illumos`. *(R4.3, D3)*
+      store libc on `x86_64-solaris`. *(R4.3, D3)*
 - [ ] **T1.3** `pkgs.illumos.libc` derivation. *(R4.2, D3)*
 - [ ] **T1.4** `pkgs.illumos.ld` + `illumos.rtld` (`ld.so.1`). *(R4.2, D3)*
 - [ ] **T1.5** `pkgs.illumos.sys` (kernel + genunix); reproduce CTF build. *(R4.2, D3)*
