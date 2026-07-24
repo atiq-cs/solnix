@@ -69,6 +69,11 @@ does not change the amd64-first ordering.
   module equivalents; they are not just "copy a file".
 - IPS derives deps via ELF `NEEDED` (`pkgdepend`); Nix derives them via RUNPATH
   closure instead.
+- **IPS is bootstrap-only for solnix.** The finished solnix system has no `pkg`/
+  IPS at all (see `product.md`, "No IPS/`pkg` in the end product"). We consume the
+  gate's **proto area**, not IPS packages, so a failing IPS *packaging* step in
+  the gate build is out of scope — do not fix it. We only use the upstream OI
+  host's `pkg` to install build prerequisites.
 
 ## SMF (Service Management Facility) — the init system
 

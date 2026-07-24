@@ -21,6 +21,39 @@ forks (bhyve, LX-branded zones, zones, OpenZFS feature flags) — is available a
 declaratively configurable on solnix. A user describes a machine in a Nix module
 and gets a bootable, upgradeable, rollback-capable illumos system.
 
+## No IPS/`pkg` in the end product (non-goal to keep it)
+
+solnix **replaces** illumos's Image Packaging System (IPS — the `pkg` command,
+`pkg.depotd`, publishers, FMRIs) with Nix. The finished solnix system has **no
+`pkg`, no IPS, no `pkg.depotd`, no publishers** — every package is a Nix
+derivation in `/nix/store`, resolved by the Nix dependency graph and served from
+the solnix.io binary cache. What IPS does maps onto Nix:
+
+| IPS does | solnix uses instead |
+|----------|---------------------|
+| `pkg install` into a live `/` | immutable `/nix/store` + symlink farms |
+| IPS manifests + SAT solver | Nix derivations + dependency graph |
+| publishers / `pkg.depotd` | solnix.io substituters (binary cache) |
+| `pkgdepend` (ELF NEEDED scan) | RUNPATH closure |
+| atomic upgrade + rollback | Nix generations ↔ ZFS boot environments |
+
+**Bootstrap exception (fine, unavoidable):** we *use* the upstream OpenIndiana
+host's `pkg` to install build prerequisites (gcc, onbld, headers) when standing
+up a build host — exactly as NixOS uses a Debian/other builder's package manager
+to bootstrap. That does not make IPS part of solnix, and it disappears entirely
+once the nixpkgs fork can build the world.
+
+**Consequences for the work:**
+- We consume the illumos-gate **proto area** (staged filesystem), NOT IPS
+  packages, to build `pkgs.illumos.*` and the seed. A failing IPS *packaging*
+  step in the gate build is **out of scope / a non-goal to fix** — do not spend
+  effort on it (e.g. the Perl per-arch-path / msgcc packaging failures).
+- The IPS **`driver`/`user`/`group` "actions"** (device-driver registration via
+  `name_to_major`/`driver_aliases`, account creation) are the one hard,
+  least-NixOS-like thing IPS does. solnix must **reimplement** these as Nix
+  modules (a driver-registration module, the users module) — this is replacing
+  IPS, not keeping it.
+
 ## Non-negotiable design pillars
 
 1. **Reuse NixOS, don't reinvent it.** Copy `lib/eval-config.nix` and the module
