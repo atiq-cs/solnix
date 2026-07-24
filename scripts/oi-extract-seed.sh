@@ -98,9 +98,11 @@ echo "=== 2. proto: system headers (whole tree) ==="
 cp_req "$ROOT/usr/include" usr/include proto
 
 echo "=== 3. proto: link-editor shared objects + mapfiles ==="
-cp_glob "$ROOT/usr/lib/amd64/libld.so.*"     usr/lib/amd64 proto req
+# libld lives in /lib/amd64; libldstab/liblddbg in /usr/lib/amd64. Copy from both.
+cp_glob "$ROOT/lib/amd64/libld.so.*"         lib/amd64     proto req
 cp_glob "$ROOT/usr/lib/amd64/libldstab.so.*" usr/lib/amd64 proto req
 cp_glob "$ROOT/usr/lib/amd64/liblddbg.so.*"  usr/lib/amd64 proto opt
+cp_glob "$ROOT/lib/amd64/liblddbg.so.*"      lib/amd64     proto opt
 if [ -d "$ROOT/usr/lib/ld" ]; then
   cp_req "$ROOT/usr/lib/ld" usr/lib/ld proto
 else
