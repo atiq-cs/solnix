@@ -1,12 +1,18 @@
 # solnix illumos world — standalone Nix expression for the illumos build host.
 #
-# GATES A/B of docs/design-gate-derivation.md, self-contained (no nixpkgs).
-# Build on the host with Nix 2.3.16:
+# GATES A/B/C + the core world slices of docs/design-gate-derivation.md,
+# self-contained (no nixpkgs). Build on the host with Nix 2.3.16:
 #   nix-build /var/tmp/solnix-nix/default.nix -A gate
 #   nix-build /var/tmp/solnix-nix/default.nix -A libc
+#   nix-build /var/tmp/solnix-nix/default.nix -A rtld
+#   nix-build /var/tmp/solnix-nix/default.nix -A ld
+#   nix-build /var/tmp/solnix-nix/default.nix -A sys
+#   nix-build /var/tmp/solnix-nix/default.nix -A base-tools
+#   nix-build /var/tmp/solnix-nix/default.nix -A systemPath
 #
 # Fork mapping: `gate` -> pkgs/os-specific/illumos/pkgs/gate.nix (as FOD),
-# `libc`/`rtld`/... -> mkIllumosComponent calls in default.nix's rec block.
+# `libc`/`rtld`/`ld`/`sys`/`base-tools` -> mkIllumosComponent calls in
+# default.nix's rec block; `systemPath` -> buildEnv (design §4.2).
 
 let
   # GATE A: the gate proto as a store path (ingest variant; full build FOD later).
@@ -14,12 +20,24 @@ let
 
   mkIllumosComponent = args: import ./mk-illumos-component.nix ({ gate = gate; } // args);
 
-  # GATE B: libc slice. Files per design §2.4. All siblings live inside this
-  # component, so RUNPATH needs only $ORIGIN (deps = []).
+  # store libdirs of the libc slice, for cross-component RUNPATH baking. Both
+  # ABIs: 64-bit libs in lib/amd64, 32-bit in lib. The loader is ABI-aware (a
+  # 32-bit binary won't load a 64-bit .so), so a consumer can safely carry BOTH
+  # in its RUNPATH — it resolves the matching-class lib. This is what lets the
+  # 32-bit SMF stack AND the 64-bit tools share one libc slice (design §2.2).
+  # Interpolating the derivation forces its realisation and yields the concrete
+  # /nix/store/...-illumos-libc path.
+  libcLibDirs = [ "${libc}/lib/amd64" "${libc}/lib" ];
+
+  # GATE B: libc slice — ABI-complete (64-bit in lib/amd64, 32-bit in lib).
+  # illumos ships SMF (svc.startd/svcs/init) as 32-bit ONLY, so base-tools needs
+  # the 32-bit libc; the 64-bit tools (ld, amd64/ls, ksh93) need the 64-bit one.
+  # All siblings live inside this component, so intra-component resolution is
+  # $ORIGIN (no deps, no selfLibDirs).
   libc = mkIllumosComponent {
     name = "libc";
     files = [
-      # runtime libc + historically-split siblings (versioned .so.N)
+      # --- 64-bit runtime libc + historically-split siblings ---
       "lib/amd64/libc.so.1"
       "lib/amd64/libm.so.1"
       "lib/amd64/libm.so.2"
@@ -30,7 +48,30 @@ let
       "lib/amd64/libpthread.so.1"
       "lib/amd64/librt.so.1"
       "lib/amd64/libdl.so.1"
-      # crt + values startup objects
+      # libmd: libnsl/libresolv NEED it, so it belongs in the libc slice to keep
+      # the slice self-contained ($ORIGIN-resolvable, no host /lib fallback).
+      "lib/amd64/libmd.so.1"
+      # --- 32-bit runtime libc + siblings (SMF and the 32-bit coreutils) ---
+      "lib/libc.so.1"
+      "lib/libm.so.1"
+      "lib/libm.so.2"
+      "lib/libsocket.so.1"
+      "lib/libnsl.so.1"
+      "lib/libresolv.so.2"
+      "lib/libelf.so.1"
+      "lib/libpthread.so.1"
+      "lib/librt.so.1"
+      "lib/libdl.so.1"
+      "lib/libmd.so.1"
+      # extra 32-bit libc-adjacent siblings the coreutils pull (libmp/libcustr/
+      # libofmt live beside libc; they are part of the core C runtime surface).
+      "lib/libmp.so.2"
+      "lib/amd64/libmp.so.2"
+      "lib/libcustr.so.1"
+      "lib/amd64/libcustr.so.1"
+      "lib/libofmt.so.1"
+      "lib/amd64/libofmt.so.1"
+      # --- 64-bit crt + values startup objects ---
       "usr/lib/amd64/crt1.o"
       "usr/lib/amd64/crti.o"
       "usr/lib/amd64/crtn.o"
@@ -40,20 +81,234 @@ let
       "usr/lib/amd64/values-Xt.o"
       "usr/lib/amd64/values-xpg4.o"
       "usr/lib/amd64/values-xpg6.o"
-      # link-editor symlinks (.so -> ../../../lib/amd64/.so.N)
+      # --- 32-bit crt + values startup objects ---
+      "usr/lib/crt1.o"
+      "usr/lib/crti.o"
+      "usr/lib/crtn.o"
+      "usr/lib/values-Xa.o"
+      "usr/lib/values-Xc.o"
+      "usr/lib/values-Xs.o"
+      "usr/lib/values-Xt.o"
+      "usr/lib/values-xpg4.o"
+      "usr/lib/values-xpg6.o"
+      # link-editor symlinks (.so -> ../../../lib/amd64/.so.N and ../../lib/.so.N)
       "usr/lib/amd64/libc.so"
       "usr/lib/amd64/libm.so"
       "usr/lib/amd64/libsocket.so"
       "usr/lib/amd64/libnsl.so"
       "usr/lib/amd64/libresolv.so"
       "usr/lib/amd64/libelf.so"
+      "usr/lib/libc.so"
+      "usr/lib/libm.so"
+      "usr/lib/libsocket.so"
+      "usr/lib/libnsl.so"
+      "usr/lib/libresolv.so"
+      "usr/lib/libelf.so"
       # full system header tree
       "usr/include"
     ];
     # passthru-equivalent (consumed by cc-wrapper later): incdir=/usr/include,
     # libdir=/usr/lib/amd64. Plain derivation has no passthru; the fork sets it.
   };
+
+  # rtld — the runtime linker (ld.so.1) + the libs IT NEEDs (librtld/libld/
+  # liblddbg live in lib/amd64). ld.so.1 IS the interpreter (.interp points here);
+  # its own RUNPATH is $ORIGIN and covers its siblings inside lib/amd64. Its NEEDED
+  # libld/liblddbg also NEED libc/libelf, so add the libc slice as a cross-dep.
+  # Consumers point -I at ${rtld}/lib/amd64/ld.so.1 (design §2.4).
+  rtld = mkIllumosComponent {
+    name = "rtld";
+    files = [
+      "lib/amd64/ld.so.1"       # 64-bit runtime linker (.interp target)
+      "lib/ld.so.1"             # 32-bit runtime linker
+      "lib/amd64/librtld.so.1"  # NEEDED by ld.so.1
+      "lib/amd64/libld.so.4"    # NEEDED by ld.so.1
+      "lib/amd64/liblddbg.so.4" # NEEDED by libld/ld.so.1
+      "lib/librtld.so.1"
+      "lib/libld.so.4"
+      "lib/liblddbg.so.4"
+    ];
+    depRunpaths = libcLibDirs; # librtld/libld -> libc/libelf from the libc slice
+  };
+
+  # ld — the Solaris link-editor. usr/bin/ld + its 64-bit alias symlink, plus the
+  # support libs it (and libld) NEED: libld/liblddbg/libumem in lib/amd64, and
+  # libldstab (mapfile stabbing, loaded on demand) in usr/lib/amd64. libelf + libc
+  # come from the libc slice (CROSS-component RUNPATH — the first real store-path
+  # cross-dep test; grow-in-place verified OK on this bigger binary).
+  # usr/bin/ld reaches lib/amd64 via $ORIGIN/../../lib/amd64 (originParts);
+  # libldstab in usr/lib/amd64 is reached via $out/usr/lib/amd64 (selfLibDirs).
+  ld = mkIllumosComponent {
+    name = "ld";
+    files = [
+      "usr/bin/ld"
+      "usr/bin/amd64/ld"          # symlink -> ../../bin/ld
+      "lib/amd64/libld.so.4"
+      "lib/amd64/liblddbg.so.4"
+      "lib/amd64/libumem.so.1"
+      "usr/lib/amd64/libldstab.so.1"
+    ];
+    selfLibDirs = [ "usr/lib/amd64" ]; # libldstab isn't reachable via $ORIGIN
+    depRunpaths = libcLibDirs;         # libelf + libc from the libc slice
+  };
+
+  # sys — the kernel. i86pc platform unix + amd64 genunix + the amd64 kernel
+  # module tree. Kernel objects are NOT userland ELF (no SONAME/NEEDED/RUNPATH),
+  # so the relocation loop skips them and CTF (.SUNW_ctf) survives cp -a verbatim.
+  # PREMISE CORRECTION: `unix` IS in this proto, at platform/i86pc/kernel/amd64/
+  # unix (the platform-specific location; it is NOT under kernel/). The task said
+  # unix was missing — that was wrong for this proto. Sliced here.
+  sys = mkIllumosComponent {
+    name = "sys";
+    files = [
+      "platform/i86pc/kernel"     # unix + platform kernel modules (mach, drv, ...)
+      "kernel"                    # genunix + shared kernel module tree
+    ];
+    # deps=[] : the kernel does not link userland libc. Nothing to relocate.
+  };
+
+  # base-tools — MINIMAL userland toward multi-user, ALL 32-bit. illumos ships
+  # SMF (svc.startd/svcs/svcadm/init) as 32-bit ONLY, and keeping the whole
+  # component single-ABI means ONE RUNPATH string (≤ the .dynstr grow limit,
+  # design risk #1) resolves every ELF. The picked tools have a COMPLETE,
+  # proto-satisfiable NEEDED closure (svccfg/svc.configd EXCLUDED: external
+  # libxml2 / libsqlite-sys; ksh93 EXCLUDED: 64-bit, would overflow .dynstr).
+  # The closure spans lib + usr/lib + lib/fm + usr/lib/fm (all 32-bit). $ORIGIN
+  # can't bridge those subdirs, so selfLibDirs bakes each as an $out-absolute
+  # RUNPATH entry; libc (both ABIs) comes from the libc slice.
+  base-tools = mkIllumosComponent {
+    name = "base-tools";
+    files = baseToolBins ++ baseToolLibs;
+    selfLibDirs = [ "lib" "usr/lib" "lib/fm" "usr/lib/fm" ];
+    depRunpaths = libcLibDirs;
+  };
+
+  # picked binaries: SMF core (minus svccfg/svc.configd), the 32-bit shell, and
+  # a coreutils-equiv set. ALL 32-bit — illumos ships SMF 32-bit only, and this
+  # keeps base-tools single-ABI so one RUNPATH string fits every ELF's .dynstr
+  # (see the ksh93 note below). ksh93 (the only 64-bit tool) is DROPPED: its
+  # 64-bit closure would push the shared RUNPATH past the .dynstr grow limit
+  # (design risk #1). sbin/sh is the shell for method scripts.
+  baseToolBins = [
+    "usr/bin/svcs"
+    "usr/sbin/svcadm"
+    "lib/svc/bin/svc.startd"
+    "sbin/init"
+    "sbin/sh"
+    "usr/bin/ls"
+    "usr/bin/cp"
+    "usr/bin/mv"
+    "usr/bin/cat"
+    "usr/bin/rm"
+    "usr/bin/mkdir"
+    "usr/bin/ln"
+  ];
+
+  # transitive, ABI-AWARE non-libc NEEDED closure of baseToolBins, computed on
+  # the host with scripts/oi-closure.sh (BFS over elfdump NEEDED, tracking each
+  # object's ELF class, minus the libc-slice sonames). base-tools is 32-bit-only
+  # now, so all libs resolve from lib/ + usr/lib/ (+ the fm/ variants). Re-run
+  # that script if the tool set changes; paste the result here.
+  baseToolLibs = [
+    "lib/fm/libfmevent.so.1"
+    "lib/libadm.so.1"
+    "lib/libavl.so.1"
+    "lib/libbsm.so.1"
+    "lib/libcmdutils.so.1"
+    "lib/libcontract.so.1"
+    "lib/libcryptoutil.so.1"
+    "lib/libctf.so.1"
+    "lib/libcurses.so.1"
+    "lib/libdevid.so.1"
+    "lib/libdevinfo.so.1"
+    "lib/libdladm.so.1"
+    "lib/libdlpi.so.1"
+    "lib/libdwarf.so.1"
+    "lib/libefi.so.1"
+    "lib/libgen.so.1"
+    "lib/libinetutil.so.1"
+    "lib/libkstat.so.1"
+    "lib/libmd5.so.1"
+    "lib/libnvpair.so.1"
+    "lib/libpam.so.1"
+    "lib/libproc.so.1"
+    "lib/librcm.so.1"
+    "lib/librestart.so.1"
+    "lib/librtld_db.so.1"
+    "lib/libscf.so.1"
+    "lib/libsec.so.1"
+    "lib/libsecdb.so.1"
+    "lib/libsysevent.so.1"
+    "lib/libtsol.so.2"
+    "lib/libumem.so.1"
+    "lib/libuuid.so.1"
+    "lib/libuutil.so.1"
+    "lib/libvarpd.so.1"
+    "lib/libzfs.so.1"
+    "lib/libzfs_core.so.1"
+    "lib/libzutil.so.1"
+    "usr/lib/fm/libtopo.so.1"
+    "usr/lib/libast.so.1"
+    "usr/lib/libbe.so.1"
+    "usr/lib/libbrand.so.1"
+    "usr/lib/libcmd.so.1"
+    "usr/lib/libdll.so.1"
+    "usr/lib/libexacct.so.1"
+    "usr/lib/libficl-sys.so.4.1.0"
+    "usr/lib/libidmap.so.1"
+    "usr/lib/libidspace.so.1"
+    "usr/lib/libinstzones.so.1"
+    "usr/lib/libipmi.so.1"
+    "usr/lib/libpcidb.so.1"
+    "usr/lib/libpkcs11.so.1"
+    "usr/lib/libpool.so.1"
+    "usr/lib/libproject.so.1"
+    "usr/lib/librename.so.1"
+    "usr/lib/libshell.so.1"
+    "usr/lib/libsmbios.so.1"
+    "usr/lib/libsum.so.1"
+    "usr/lib/libzfsbootenv.so.1"
+    "usr/lib/libzonecfg.so.1"
+  ];
+
+  # systemPath — compose the minimal world into one symlink-farm tree (design
+  # §4.2). buildEnv isn't available standalone (no nixpkgs), so this is a plain
+  # derivation that symlink-merges the component store paths into $out with the
+  # runtime /usr,/lib,/sbin,/kernel,/platform layout the image expects. SMF
+  # manifests come from smf.nix (T1.11), merged by the image builder, not here.
+  systemPath = derivation {
+    name = "illumos-system-path";
+    system = builtins.currentSystem;
+    builder = "/usr/bin/bash";
+    PATH = "/usr/gnu/bin:/usr/bin:/usr/sbin";
+    paths = [ sys rtld libc ld base-tools ];
+    args = [ "-c" ''
+      set -eu
+      mkdir -p "$out"
+      # symlink-merge each component into $out, preserving its subtree layout.
+      # A later component's entry wins on a path collision (rare; components are
+      # disjoint by design). Each leaf is a symlink INTO the component's store
+      # path, so the composed tree stays a thin farm over the real slices.
+      for p in $paths; do
+        (cd "$p" && find . -type d) | while read -r d; do
+          mkdir -p "$out/$d"
+        done
+        (cd "$p" && find . \( -type f -o -type l \)) | while read -r f; do
+          rel="''${f#./}"
+          # link to the real component file in its store path.
+          ln -sf "$p/$rel" "$out/$rel"
+        done
+      done
+      # sanity: the composed tree must have bin+lib+kernel populated.
+      [ -e "$out/lib/amd64/libc.so.1" ]                    || { echo "FATAL: no libc in systemPath" >&2; exit 1; }
+      [ -e "$out/lib/amd64/ld.so.1" ]                      || { echo "FATAL: no rtld in systemPath" >&2; exit 1; }
+      [ -e "$out/usr/bin/ld" ]                             || { echo "FATAL: no ld in systemPath" >&2; exit 1; }
+      [ -e "$out/lib/svc/bin/svc.startd" ]                 || { echo "FATAL: no svc.startd in systemPath" >&2; exit 1; }
+      [ -e "$out/platform/i86pc/kernel/amd64/unix" ]       || { echo "FATAL: no unix in systemPath" >&2; exit 1; }
+      [ -e "$out/kernel/amd64/genunix" ]                   || { echo "FATAL: no genunix in systemPath" >&2; exit 1; }
+    '' ];
+  };
 in
 {
-  inherit gate libc;
+  inherit gate libc rtld ld sys base-tools systemPath;
 }
