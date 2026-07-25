@@ -267,9 +267,10 @@ let
     ln -s system-1-link "$BEROOT/nix/var/nix/profiles/system"
     printf '1\n' > "$BEROOT/nix/var/nix/profiles/system.gen"
     if [ -e "$TOPLEVEL/bin/switch-to-configuration" ]; then
-      rm -f "$BEROOT/usr/bin/switch-to-configuration" "$BEROOT/usr/bin/solnix-rebuild"
+      rm -f "$BEROOT/usr/bin/switch-to-configuration" "$BEROOT/usr/bin/solnix-rebuild" "$BEROOT/usr/bin/solnix-install"
       ln -s "$TOPLEVEL/bin/switch-to-configuration" "$BEROOT/usr/bin/switch-to-configuration"
       ln -s "$TOPLEVEL/bin/solnix-rebuild"          "$BEROOT/usr/bin/solnix-rebuild"
+      [ -e "$TOPLEVEL/bin/solnix-install" ] && ln -s "$TOPLEVEL/bin/solnix-install" "$BEROOT/usr/bin/solnix-install"
     fi
 
     log "installing solnix-generated SMF manifests + site profile (add-not-replace)"

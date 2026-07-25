@@ -357,13 +357,48 @@ let
     esac
   '';
 
-  # /etc generation: the minimal, config-driven /etc bits. Grows lazily. For now:
-  # the hostname + a release stamp. The bulk of /etc comes from the proto (make-be
-  # lays it down); this is the solnix-owned overlay staged by make-be.
+  # solnix-install (T2.7) — the nixos-install analog. Lays THIS toplevel (or any
+  # given one) onto a BLANK target disk's ZFS root, run from a booted solnix
+  # "installer environment". Pure /sbin/sh + illumos tools (no nix at runtime),
+  # base world = the running root (a proven-booting proto-derived world). The
+  # script body lives in scripts/solnix-install (also usable standalone on the
+  # build host); embedded here so it ships in the toplevel + on /usr/bin.
+  solnixInstall = pkgs.writeScript "solnix-install"
+    (builtins.readFile ../../../scripts/solnix-install);
+
+  # /etc generation: the config-driven /etc bits, ALL derived from module options
+  # (T2.9). The bulk of /etc still comes from the proto (make-be lays it down);
+  # this is the solnix-owned overlay staged by make-be, which now includes the
+  # networking + users modules' generated files:
+  #   nodename        <- networking.hostName
+  #   resolv.conf     <- networking.nameservers
+  #   defaultrouter   <- networking.defaultGateway
+  #   passwd/group    <- users.users / users.groups
+  #   shadow          <- users.users.*.hashedPassword (0400, root-only)
+  # networking.generatedEtc / users.generatedEtc are the internal carriers the
+  # config-surface modules populate; folded in here so the toplevel /etc is a
+  # pure function of the options, not hardcoded.
+  configEtc = (config.networking.generatedEtc or { }) // (config.users.generatedEtc or { });
   etc = pkgs.runCommand "solnix-etc" { } ''
     mkdir -p $out/etc
     printf '%s\n' '${config.networking.hostName}' > $out/etc/nodename
     printf 'solnix system toplevel\nhostname: %s\n' '${config.networking.hostName}' > $out/etc/solnix-release
+    ${concatStringsSep "\n    " (mapAttrsToList (fname: content:
+      "cp ${pkgs.writeText "solnix-etc-${fname}" content} $out/etc/${fname}")
+      configEtc)}
+    # /etc/shadow must be root-only (0400) or login refuses it.
+    [ -e $out/etc/shadow ] && chmod 0400 $out/etc/shadow || true
+  '';
+
+  # users.users.*.openssh.authorizedKeys seed script (T2.9): a store-path shell
+  # snippet make-be sources to write each user's authorized_keys under $ROOT.
+  # Driven by the users module option, not a hand-written ROOT_AUTHKEY copy.
+  authKeysSetupScript = pkgs.writeScript "solnix-seed-authorized-keys" ''
+    #!/usr/bin/env bash
+    # solnix authorized_keys seed (T2.9). ROOT = the BE root (default /).
+    set -eu
+    ROOT="''${ROOT:-/}"
+    ${config.users.authorizedKeysSetup or ""}
   '';
 
   # THE TOPLEVEL — the derivation whose closure is the bootable world.
@@ -384,10 +419,15 @@ let
     ln -s ${activate}                                 $out/activate
     ln -s ${siteProfile}                              $out/site-profile.xml
     ln -s ${etc}/etc                                  $out/etc
+    # users.users.*.openssh.authorizedKeys seed script (T2.9). make-be runs it
+    # against the BE root ($ROOT) to seed ~/.ssh/authorized_keys per user, from
+    # the OPTIONS (replacing the ad-hoc ROOT_AUTHKEY path).
+    ln -s ${authKeysSetupScript}                      $out/seed-authorized-keys
     # bin/: the switch-to-configuration + solnix-rebuild runtime tools (T2.5).
     mkdir -p $out/bin
     ln -s ${switchToConfiguration}                    $out/bin/switch-to-configuration
     ln -s ${solnixRebuild}                            $out/bin/solnix-rebuild
+    ln -s ${solnixInstall}                            $out/bin/solnix-install
     # kernel + platform: stable-named entrypoints into systemPath (the closure
     # walker / make-be reads $out/kernel + $out/platform to find unix/genunix).
     ln -s ${pkgs.illumos.systemPath}/kernel           $out/kernel
@@ -407,6 +447,7 @@ let
     [ -e $out/activate ]                                    || { echo "FATAL: no activate script" >&2; exit 1; }
     [ -e $out/bin/switch-to-configuration ]                 || { echo "FATAL: no switch-to-configuration" >&2; exit 1; }
     [ -e $out/bin/solnix-rebuild ]                          || { echo "FATAL: no solnix-rebuild" >&2; exit 1; }
+    [ -e $out/bin/solnix-install ]                          || { echo "FATAL: no solnix-install" >&2; exit 1; }
   '';
 in
 {
@@ -446,10 +487,14 @@ in
       type = types.package;
       description = "The solnix-rebuild convenience wrapper (switch|boot|test|rollback).";
     };
+    solnixInstall = mkOption {
+      type = types.package;
+      description = "The solnix-install tool (nixos-install analog; install to a blank disk).";
+    };
   };
 
   config.system.build = {
-    inherit toplevel activate etc switchToConfiguration solnixRebuild;
+    inherit toplevel activate etc switchToConfiguration solnixRebuild solnixInstall;
     smfSiteProfile = siteProfile;
   };
 }
