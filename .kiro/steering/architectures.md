@@ -10,7 +10,7 @@ promise parity across all four — they are not equal.
 | Arch        | illumos status today                                     | solnix phase | Risk |
 |-------------|----------------------------------------------------------|--------------|------|
 | **x86_64 (amd64)** | Primary, only maintained x86 target. 64-bit only (i386 removed ~2018). | Phase 1 | Low |
-| **aarch64** | Real **out-of-tree** port (Hayashi Naoyuki); runs on RPi/QEMU, cross-built from amd64 illumos. **Not in illumos-gate.** | Phase 3 | Medium — tracks an unmerged fork |
+| **aarch64** | Real **out-of-tree** port (**Rich Lowe's `richlowe/arm64-gate`**, actively maintained, backed by illumos IPD 24); QEMU `virt`/RPi4/Odroid-C2, cross-built from amd64 illumos. **Not in illumos-gate.** | Phase 3 | Medium — tracks an unmerged but active fork |
 | **SPARC v9 (sun4v)** | Bit-rotting in-gate; kept alive by **Tribblix/DilOS**. sun4u effectively dead. | Phase 4 | High — fragile, no CI upstream |
 | **RISC-V**  | **No known illumos port exists.** Would require writing one first. | Phase 5 (research/upstream) | Very high — multi-year kernel work, not a packaging task |
 
@@ -23,7 +23,10 @@ promise parity across all four — they are not equal.
   (`x86_64-illumos`, `aarch64-illumos`, `sparcv9-illumos`, `riscv64-illumos`) so
   the plumbing doesn't need reworking later — but only amd64 is wired to a real
   toolchain in Phase 1.
-- **aarch64 (Phase 3)** means integrating Hayashi Naoyuki's port as an illumos
+- **aarch64 (Phase 3)** means integrating **Rich Lowe's `richlowe/arm64-gate`**
+  port (the canonical, actively-maintained aarch64 illumos, backed by illumos
+  IPD 24 — NOT the stale `alhazred/illumos-arm`/Hayashi lineage, last touched
+  2021) as an illumos
   source input and getting its cross-build to run under Nix. It does **not** mean
   waiting for upstream merge. Contribute upstream where possible.
 - **SPARC v9 (Phase 4)** means reviving the in-gate sun4v path, likely leaning on

@@ -109,7 +109,7 @@ services `rbac`, `inetd-upgrade`, `update-man-index` "almost always time out";
 From `arm64-gate/README.md` + `Makefile`. Three phases:
 
 1. `make download` — clones the arm64 gate, `richlowe/gcc`
-   (`il-14_3_0-arm64`, a gcc-10.4.0 base), `richlowe/binutils-gdb`
+   (`il-14_3_0-arm64`, a gcc-14.3.0 base), `richlowe/binutils-gdb`
    (`illumos-arm64-2-43-1`), `u-boot` v2025.10, ARM Trusted Firmware
    `lts-v2.10.11`, `dtc` 1.7.2, RPi firmware, perl 5.42 + perl-cross 1.6.2, and
    **pkgrecv's an OmniOS aarch64 sysroot** from `https://pkg.omnios.org/bloody/braich`.
@@ -124,9 +124,10 @@ From `arm64-gate/README.md` + `Makefile`. Three phases:
      `$CROSS` and aarch64 headers into the sysroot. **This is the Solaris `ld`
      for aarch64** — the analog of the piece our x86_64 seed carries.
    - `boot-gcc` — a bootstrap cross gcc (`--disable-shared --disable-libstdcxx`).
-   - `gcc` — the full cross gcc (`aarch64-unknown-solaris2.11`, `--with-abi=lp64`,
-     `--with-gnu-as`, `--without-gnu-ld` + `--with-ld=$(CROSS)/opt/onbld/bin/amd64/ld`
-     i.e. the Solaris link-editor, LP64-only no-multilib).
+   - `gcc` — the full cross gcc (`aarch64-unknown-solaris2.11`, GCC 14.3.0,
+     `--with-abi=lp64`, `--with-gnu-as`, `--without-gnu-ld` +
+     `--with-ld=$(CROSS)/opt/onbld/bin/amd64/ld` i.e. the Solaris link-editor,
+     LP64-only no-multilib).
    - `perl` — cross miniperl (gate build tools need it).
    - `u-boot`, `u-boot-qemu`, `u-boot-rpi4`, `arm-trusted-firmware`, `dtc`,
      `barn` (an OmniOS/kayak image helper).
@@ -134,12 +135,10 @@ From `arm64-gate/README.md` + `Makefile`. Three phases:
    (ZFS send stream), `make qemu-disk` / `make rpi4-disk` (bootable disk).
 
 Toolchain, precisely:
-- **Cross GCC 10.4.0** from `richlowe/gcc` (the aarch64 primary compiler is
-  `gcc14` per `env/aarch64` — wait: the env sets `aarch64_PRIMARY_CC=gcc14,...$triple-gcc`;
-  the *host* primary is gcc10, host shadow gcc14; the *cross* prefix is one gcc
-  built at 10.4.0 sources but labelled gcc14 in the env for makefile guards.
-  Verify exact rev during A2). GNU `as`, **Solaris `ld`** (not GNU ld) —
-  `--without-gnu-ld` + `--with-ld=.../onbld/bin/amd64/ld`.
+- **Cross GCC 14.3.0** from `richlowe/gcc` (branch `il-14_3_0-arm64`). GNU `as`,
+  **Solaris `ld`** (not GNU ld) — `--without-gnu-ld` +
+  `--with-ld=.../onbld/bin/amd64/ld`. (Verified during A2: the installed cross
+  compiler reports `aarch64-unknown-solaris2.11-gcc (GCC) 14.3.0`.)
 - **`aarch64-unknown-solaris2.11`** GNU triple, **LP64 only, no multilib**
   (matches IPD 24: "LP64 only, no-multilib").
 
@@ -416,8 +415,12 @@ Done:
   - **aarch64 system headers in the sysroot** —
     `build/sysroot/usr/include/sys/` populated from `proto/root_aarch64`.
   - u-boot host tools + dtc.
-  - In flight at handoff: **the cross GCC** (`boot-gcc` then full `gcc`, the two
-    long-pole targets), then perl / u-boot-qemu / u-boot-rpi4 / arm-trusted-firmware.
+  - **The cross GCC** — `boot-gcc-stamp` done; `$CROSS/bin/aarch64-unknown-solaris2.11-gcc`
+    installed, **`(GCC) 14.3.0`**. **A2 gate check PASSED:** it compiles a `.c`
+    to `ELF 64-bit LSB relocatable aarch64` and `-dumpmachine` =
+    `aarch64-unknown-solaris2.11`. The full `gcc` target (libstdc++ etc.) was
+    still building on top of boot-gcc at handoff, then perl / u-boot-qemu /
+    u-boot-rpi4 / arm-trusted-firmware.
 
 Build break hit and fixed (the expected unmerged-fork friction):
 - **`sgs` aborted:** "The detected Python version 3.13 in the sysroot is not

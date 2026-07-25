@@ -1,14 +1,14 @@
 # solnix aarch64 bootstrap
 
 Bring up solnix on aarch64, mirroring the x86_64 path. Per the architecture
-steering: aarch64 illumos is a REAL but OUT-OF-TREE port (Hayashi Naoyuki), not
+steering: aarch64 illumos is a REAL but OUT-OF-TREE port (Rich Lowe's richlowe/arm64-gate, backed by illumos IPD 24), not
 in illumos-gate. So this is fundamentally harder than x86_64 — it's not just a
 rebuild, it's integrating an unmerged illumos fork. Start the bootstrap now,
 in parallel with x86_64 breadth; expect it to be a long track.
 
 ## Reality (from .kiro/steering/architectures.md)
 
-- aarch64 illumos = Hayashi Naoyuki's out-of-tree port; runs on RPi/QEMU,
+- aarch64 illumos = Rich Lowe's richlowe/arm64-gate (+ illumos-gate@arm64-gate), actively maintained (IPD 24); QEMU virt/RPi4/Odroid-C2,
   cross-built from an amd64 illumos host. NOT upstream. Real code, not
   production, not merged.
 - So the x86_64 recipe (build OI gate → seed → Nix world) does NOT directly
@@ -16,7 +16,7 @@ in parallel with x86_64 breadth; expect it to be a long track.
 
 ## A1 — Assess the aarch64 illumos port (research)
 
-- Locate Hayashi Naoyuki's aarch64 illumos-gate fork (github). Determine: build
+- DONE (A1): the port is richlowe/arm64-gate + richlowe/illumos-gate@arm64-gate. Build
   method (cross from amd64 illumos per the port's docs), what boots (QEMU virt?
   RPi?), toolchain (its gcc), how complete the userland/world is, license/state.
 - Decide the solnix substrate: an aarch64 EC2 instance (Graviton, ARM Nitro) as
