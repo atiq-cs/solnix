@@ -37,11 +37,14 @@ live GitHub API queries.
   presents GICv3 + ACPI. So Graviton buys nothing over an x86 host for *booting*;
   it would only be a faster *build* host, and even that is not needed — the cross
   build runs on our amd64 illumos host and QEMU-TCG runs the guest anywhere.
-- **A2 started** on `solnix-oi-build` (idle at the time; x86_64 gate untouched in
-  a separate `/aarch64` tree). Harness cloned, bootstrap deps installed,
-  `make download` running (gate 1.15 GB + gcc 1.68 GB + u-boot + ATF + dtc + rpi
-  fw + OmniOS aarch64 sysroot all fetched). `make setup` (the cross toolchain
-  build) is the next step. See §5 for how far it got.
+- **A2 started AND progressing** on `solnix-oi-build` (idle at the time; x86_64
+  gate untouched in a separate `/aarch64` tree). Harness cloned, bootstrap deps
+  installed, **`make download` complete** (gate 1.15 GB + gcc 1.68 GB + u-boot +
+  ATF + dtc + rpi fw + OmniOS aarch64 sysroot). **`make setup` well underway:**
+  cross **binutils**, the illumos **Solaris `ld`** (sgs), aarch64 **sysroot
+  headers**, dtc, and u-boot host tools are BUILT and verified on disk; the
+  cross **GCC** is compiling. One expected fork-friction break hit and fixed
+  (host Python 3.13 vs sysroot). See §5.
 - **Honest timeline:** proto build is plausibly days-to-weeks of iteration
   (unmerged fork, will hit build breaks); a QEMU boot to multi-user is the real
   milestone and is weeks out, not days. Do NOT claim "aarch64 supported" until it
@@ -396,27 +399,52 @@ Done:
 - Cloned `richlowe/arm64-gate` harness → `/aarch64/arm64-gate`.
 - Installed missing bootstrap deps: texinfo, astdev, swig, bison, mpc,
   perl xml-parser, cdrtools, sudo, pipe-viewer, zones/internal, openssl-11
-  (with `pkg set-mediator -V 1.1 openssl`), illumos-closed. (gcc-10/14, onbld,
-  gnu-make, gnu-coreutils, openjdk8, pkg-config, gnutls-3, rsync already present.)
-- Started `make download` (via illumos `dmake`, since the harness Makefile is
-  deliberately not GNU-make-parseable). Fetched: arm64 gate 1.15 GB,
-  `richlowe/gcc` 1.68 GB, binutils-gdb 189 MB, u-boot 444 MB, ARM Trusted
-  Firmware 46 MB, dtc, RPi firmware 155 MB, and the OmniOS `braich` aarch64
-  sysroot recv (~240 MB, in progress at handoff).
+  (with `pkg set-mediator -V 1.1 openssl`), illumos-closed, and later
+  `runtime/python-313` (see build break below). (gcc-10/14, onbld, gnu-make,
+  gnu-coreutils, openjdk8, pkg-config, gnutls-3, rsync already present.)
+- **`make download` COMPLETE.** Fetched: arm64 gate 1.15 GB, `richlowe/gcc`
+  1.68 GB, binutils-gdb 189 MB, u-boot 444 MB, ARM Trusted Firmware 46 MB, dtc,
+  RPi firmware 155 MB, and the **OmniOS `braich` aarch64 sysroot** (501 MB,
+  both `omnios` + `extra.omnios` publishers).
+- **`make setup` well underway; cross toolchain building.** Stamps completed:
+  `sysroot`, `binutils-gdb`, `barn`, `dtc`, `u-boot`, **`sgs`**. Concretely
+  produced and verified on disk:
+  - **Cross binutils** — `$CROSS/bin/aarch64-unknown-solaris2.11-{as,ld,gdb,ar,
+    elfedit,addr2line,...}` (the aarch64 GNU as + a cross gdb).
+  - **The illumos Solaris link-editor** — `$CROSS/opt/onbld/bin/amd64/ld` (the
+    `sgs` build; this is the non-GNU link-editor gcc links through).
+  - **aarch64 system headers in the sysroot** —
+    `build/sysroot/usr/include/sys/` populated from `proto/root_aarch64`.
+  - u-boot host tools + dtc.
+  - In flight at handoff: **the cross GCC** (`boot-gcc` then full `gcc`, the two
+    long-pole targets), then perl / u-boot-qemu / u-boot-rpi4 / arm-trusted-firmware.
 
-Next (documented, to resume): let `make download` finish, then `make setup`
-(cross toolchain — the real A2 milestone), then `make illumos`. `make setup` is
-multi-hour and the first place an unmerged fork typically breaks; triage there.
+Build break hit and fixed (the expected unmerged-fork friction):
+- **`sgs` aborted:** "The detected Python version 3.13 in the sysroot is not
+  installed on the host!" — `env/aarch64` matches the OmniOS braich sysroot's
+  Python (3.13) against `/usr/bin/python3.$v` on the host; our OI host had only
+  3.9 and 3.14. **Fix:** `pkg install runtime/python-313`. Re-running `make
+  setup` then passed `sgs` and proceeded. (Bake this into the A2 recipe: the host
+  Python minor MUST match the sysroot's — pin both, or install the matching
+  host python.)
+
+Next (to resume): let `make setup` finish the cross gcc + remaining targets,
+then `make illumos` (`nightly -T aarch64 env/aarch64`) → `proto/root_aarch64`,
+then `make image` / `make qemu-disk`. `make illumos` is multi-hour and the next
+likely place the fork breaks on our exact OI rev; triage/contribute upstream.
 
 Resume commands (on the host, as root):
 ```
 cd /aarch64/arm64-gate
+# setup (resumes from stamps; safe to re-run):
+nohup /aarch64/run-setup.sh > /var/log/arm64-setup2.log 2>&1 </dev/null &
+tail -F /var/log/arm64-setup2.log
+# then the gate proper:
 env PATH=/usr/gnu/bin:/opt/onbld/bin:/usr/bin:/usr/sbin:/bin \
-  /opt/onbld/bin/i386/dmake download   # if not already complete
-env PATH=/usr/gnu/bin:/opt/onbld/bin:/usr/bin:/usr/sbin:/bin \
-  nohup /opt/onbld/bin/i386/dmake setup > /var/log/arm64-setup.log 2>&1 &
-tail -F /var/log/arm64-setup.log
+  nohup /opt/onbld/bin/i386/dmake illumos > /var/log/arm64-illumos.log 2>&1 &
+tail -F /var/log/arm64-illumos.log
 ```
+(`/aarch64/run-setup.sh` = `cd /aarch64/arm64-gate && env PATH=/usr/gnu/bin:/opt/onbld/bin:/usr/bin:/usr/sbin:/bin /opt/onbld/bin/i386/dmake setup`.)
 
 ---
 
