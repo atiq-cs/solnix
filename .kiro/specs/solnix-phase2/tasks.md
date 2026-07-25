@@ -31,7 +31,7 @@ pull from the solnix.io cache instead of rebuilding.
       Generate a cache signing key (store in sops), sign + `nix copy` the store
       paths, expose the substituter. Bake the substituter + public key into the
       base config. Verify a clean host pulls a path from the cache. *(cache)*
-- [ ] **T2.4** Repoint the seed FOD + gate derivation `url`/`src` at the
+- [x] **T2.4** Repoint the seed FOD + gate derivation `url`/`src` at the
       solnix.io cache/object store (was local `file://`). *(cache)*
 
 ### Generations & install

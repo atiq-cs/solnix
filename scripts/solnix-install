@@ -1,0 +1,295 @@
+#!/sbin/sh
+# solnix-install — lay a solnix toplevel onto a BLANK target disk's ZFS root,
+# from a running solnix system (the "installer environment"). T2.7.
+#
+# The illumos analog of nixos-install. Unlike make-be (which runs on the OI
+# BUILD host and lays the gate PROTO down onto a scratch disk), solnix-install
+# runs INSIDE a booted solnix proto-root world and installs onto a SECOND
+# (target) disk — the real "install to a fresh disk" flow, not a re-dd of a
+# prebaked image.
+#
+#   solnix-install <target-disk> [toplevel]
+#     <target-disk>  e.g. c1t1d0  (the BLANK disk; NOT the running rpool disk)
+#     [toplevel]     store path of the system to install (default: the running
+#                    /run-current-system). Its closure must exist in the local
+#                    /nix/store (the installer env is self-contained).
+#
+# What it does (mirrors make-be steps, but base = the RUNNING root, which is a
+# proven-booting proto-derived world with all 16 boot gotchas already applied):
+#   1. GPT-label the target (ESP + ZFS + reserved), like the OI rpool layout
+#   2. mkfs pcfs on the ESP; zpool create <POOL> on the ZFS slice
+#   3. rpool/ROOT/<be> = the boot environment (canmount=noauto mountpoint=/)
+#   4. copy the running root FS onto the target BE (tar | tar, minus pseudo fs +
+#      /nix, which is copied by closure below) — carries every gotcha fix
+#   5. copy the toplevel closure into the target's /nix/store (self-contained)
+#   6. seed the SMF repository + stage the toplevel's manifests/site/activate
+#   7. register generation 1 + switch tools on the target's PATH
+#   8. loader on ESP + bootfs + menu.lst (beadm-ready) + boot_archive
+#
+# Pure /sbin/sh + illumos tools (no nix, no GNU cp) — runs in the minimal proto.
+# Reuses the illumos gotchas learned in switch-to-configuration: ln -sfn follows
+# (use rm+ln), no readlink(1) (use ls -l|sed), cp dir tree = `cp -R -P` no slash.
+set -u
+PATH=/usr/sbin:/usr/bin:/sbin
+export PATH
+
+TARGET="${1:-}"
+TOPLEVEL="${2:-}"
+POOL="${SOLNIX_POOL:-rpool}"       # target pool name; rpool for a real install
+BE="${SOLNIX_BE:-solnix-1}"
+BEDS="$POOL/ROOT/$BE"
+ALTROOT="${SOLNIX_ALTROOT:-/a}"
+SRCROOT="${SOLNIX_SRCROOT:-/}"     # the running root we copy as the base world
+
+die() { echo "FATAL: $*" >&2; exit 1; }
+log() { printf '\n=== %s ===\n' "$*" >&2; }
+
+# illumos ln -sfn FOLLOWS an existing symlink-to-dir (rc=0, no-op); always rm+ln.
+relink() { rm -f "$2" 2>/dev/null; ln -s "$1" "$2"; }
+# minimal proto has no readlink(1); derive symlink target from ls -l.
+_readlink() { [ -h "$1" ] || return 1; ls -ld "$1" 2>/dev/null | sed -n 's/.* -> //p'; }
+# copy a store path into the target (illumos cp -R -P, parent dir no trailing /).
+copy_path() { [ -e "$ALTROOT$1" ] && return 0; d="$ALTROOT$(dirname "$1")"; mkdir -p "$d"; cp -R -P "$1" "$d" 2>/dev/null || true; }
+
+[ "$(id -u)" = 0 ] || die "run as root"
+[ -n "$TARGET" ] || die "usage: solnix-install <target-disk> [toplevel]"
+[ -e "/dev/rdsk/${TARGET}s0" ] || die "target disk $TARGET not present (attach + reboot so illumos enumerates it)"
+
+# refuse to touch the disk the running rpool is on (find it from mounted /).
+RPOOL_DISK=$(zpool status 2>/dev/null | awk '/[0-9]d[0-9]/{gsub(/s[0-9]+$/,"",$1); print $1; exit}')
+[ "$TARGET" != "$RPOOL_DISK" ] || die "refusing to install onto the running rpool disk $TARGET"
+
+# default toplevel: the running system.
+if [ -z "$TOPLEVEL" ]; then
+  TOPLEVEL=$(_readlink /run-current-system 2>/dev/null || true)
+  [ -n "$TOPLEVEL" ] || die "no toplevel given and /run-current-system not set"
+fi
+[ -d "$TOPLEVEL" ] || die "toplevel $TOPLEVEL not found"
+[ -e "$TOPLEVEL/activate" ] || die "$TOPLEVEL has no activate script (not a solnix toplevel)"
+
+log "installing toplevel $TOPLEVEL onto $TARGET (pool $POOL, BE $BEDS)"
+log "base world = the running root ($SRCROOT), rpool disk = ${RPOOL_DISK:-unknown}"
+
+# ---------------------------------------------------------------------------
+# 0. tear down any prior attempt on the target
+# ---------------------------------------------------------------------------
+log "cleaning prior $POOL / $ALTROOT"
+umount "$ALTROOT/esp" 2>/dev/null || true
+zfs unmount "$BEDS" 2>/dev/null || true
+zpool destroy "$POOL" 2>/dev/null || true
+zpool export "$POOL" 2>/dev/null || true
+rm -rf "$ALTROOT" 2>/dev/null || true
+mkdir -p "$ALTROOT"
+
+# ---------------------------------------------------------------------------
+# 1. GPT label: clean EFI label via a throwaway pool, then fmthard 3-part spec.
+#    (make-be gotcha: fmthard on a fdisk label complains cylinder alignment; a
+#    zpool-created EFI label is sector-addressed and takes fmthard.)
+# ---------------------------------------------------------------------------
+log "GPT-labelling $TARGET"
+zpool create -f solnixtmp "/dev/dsk/${TARGET}" >/dev/null 2>&1 || die "clean EFI label failed"
+zpool destroy solnixtmp 2>/dev/null || true
+RESV_START=$(prtvtoc -h "/dev/rdsk/${TARGET}" 2>/dev/null | awk '$1==8{print $4}')
+RESV_SIZE=$(prtvtoc -h "/dev/rdsk/${TARGET}" 2>/dev/null | awk '$1==8{print $5}')
+[ -n "$RESV_START" ] || die "could not read EFI label reserved slice"
+ESP_START=256; ESP_SIZE=524288                 # 256 MiB ESP
+POOL_START=$((ESP_START + ESP_SIZE)); POOL_SIZE=$((RESV_START - POOL_START))
+[ "$POOL_SIZE" -gt 0 ] || die "computed pool size <= 0 (RESV_START=$RESV_START)"
+log "fmthard: s0 ESP @${ESP_START}+${ESP_SIZE}, s1 pool @${POOL_START}+${POOL_SIZE}, s8 resv @${RESV_START}+${RESV_SIZE}"
+cat > /tmp/solnix-install.vtoc <<EOF
+0 12 00 ${ESP_START} ${ESP_SIZE}
+1 4 00 ${POOL_START} ${POOL_SIZE}
+8 11 00 ${RESV_START} ${RESV_SIZE}
+EOF
+fmthard -s /tmp/solnix-install.vtoc "/dev/rdsk/${TARGET}" 2>&1 || die "fmthard failed"
+prtvtoc -h "/dev/rdsk/${TARGET}"
+
+# ---------------------------------------------------------------------------
+# 2. ESP FAT32 + the pool + BE dataset
+# ---------------------------------------------------------------------------
+log "mkfs pcfs ESP on ${TARGET}s0"
+yes | mkfs -F pcfs -o fat=32,b=ESP "/dev/rdsk/${TARGET}s0" >/dev/null 2>&1 || true
+
+log "creating pool $POOL on ${TARGET}s1 + BE dataset $BEDS"
+zpool create -f -o altroot="$ALTROOT" -o cachefile=none \
+  -O compression=on -O atime=off -m none "$POOL" "/dev/dsk/${TARGET}s1" || die "zpool create failed"
+zfs create -o canmount=off -o mountpoint=legacy "$POOL/ROOT"
+zfs create -o canmount=noauto -o mountpoint=/ "$BEDS"
+zfs mount "$BEDS"
+[ -d "$ALTROOT/." ] || die "BE root not mounted at $ALTROOT"
+
+# ---------------------------------------------------------------------------
+# 3. copy the running root FS onto the target BE (the base world).
+#    The running root is a proven-booting proto-derived world (all 16 gotchas
+#    already applied: driver files, /dev symlinks, dir perms, external libs,
+#    OpenSSH, cryptosvc race fix, ttya console, DHCP netcfg, non-DEBUG kernel).
+#    Copying it is the install analog of `beadm create` cloning the running BE,
+#    but onto a fresh pool. Exclude pseudo filesystems + /nix (closure below) +
+#    the altroot itself + the target's own mount.
+# ---------------------------------------------------------------------------
+log "copying running root -> target BE (tar | tar, minus pseudo fs + /nix)"
+# tar from / with X exclude-list. Excludes are path prefixes relative to /.
+cat > /tmp/solnix-install.exclude <<EOF
+./nix
+./proc
+./dev/fd
+./devices
+./system/contract
+./system/object
+./system/volatile
+./etc/svc/volatile
+./tmp
+./var/run
+./var/tmp
+./a
+./mnt
+.$ALTROOT
+EOF
+# illumos tar pairs key-letters to positional args IN ORDER: `tar cEfX -
+# <excludefile> .` means c(reate) E(xt-hdr) f(ile)=- X(exclude)=<file> then the
+# paths. The GNU `-cEf - -X file` form is NOT parsed correctly by illumos tar.
+( cd "$SRCROOT" && tar cEfX - /tmp/solnix-install.exclude . ) | ( cd "$ALTROOT" && tar xf - ) \
+  || die "root copy failed"
+# recreate the pseudo-fs mountpoints + writable dirs the exclude skipped.
+for d in proc dev devices system/contract system/object system/volatile \
+         etc/svc/volatile var/run var/tmp tmp mnt export export/home root nix; do
+  mkdir -p "$ALTROOT/$d"
+done
+chmod 1777 "$ALTROOT/tmp" "$ALTROOT/var/tmp" "$ALTROOT/system/volatile" 2>/dev/null || true
+
+# essential /dev symlinks (gotcha #6): tar may not carry them from a live /dev.
+log "seeding essential /dev symlinks"
+for n in console msglog null zero tty syscon systty sysmsg random urandom poll; do
+  [ -L "/dev/$n" ] && relink "$(_readlink /dev/$n)" "$ALTROOT/dev/$n" 2>/dev/null || true
+done
+
+# ---------------------------------------------------------------------------
+# 4. copy the toplevel closure into the target's /nix/store (self-contained).
+#    Walk the toplevel's own store symlinks (no nix binary in the proto env);
+#    if nix-store IS present (build host), use it for a complete closure.
+# ---------------------------------------------------------------------------
+log "copying toplevel closure into target /nix/store"
+mkdir -p "$ALTROOT/nix/store"
+if command -v nix-store >/dev/null 2>&1; then
+  for p in $(nix-store -qR "$TOPLEVEL"); do copy_path "$p"; done
+else
+  copy_path "$TOPLEVEL"
+  for dep in $(find "$TOPLEVEL/" -type l 2>/dev/null | while read L; do ls -ld "$L" 2>/dev/null | sed -n 's/.* -> //p'; done | grep '^/nix/store/' | sort -u); do
+    copy_path "$(echo "$dep" | sed 's,\(/nix/store/[^/]*\).*,\1,')"
+  done
+fi
+relink "$TOPLEVEL" "$ALTROOT/run-current-system"
+
+# ---------------------------------------------------------------------------
+# 5. seed the SMF repository fresh from the seed (so the target boots the stock
+#    milestone set + manifest-import ADDS all /lib/svc/manifest/** on first boot,
+#    incl. our solnix manifests). Do NOT copy the running repository.db — a fresh
+#    seed avoids carrying the installer env's live service state onto the target.
+# ---------------------------------------------------------------------------
+log "seeding SMF repository from seed/global.db"
+mkdir -p "$ALTROOT/etc/svc"
+if [ -e "$ALTROOT/lib/svc/seed/global.db" ]; then
+  cp "$ALTROOT/lib/svc/seed/global.db" "$ALTROOT/etc/svc/repository.db"
+  chmod 0600 "$ALTROOT/etc/svc/repository.db"
+fi
+
+# ---------------------------------------------------------------------------
+# 6. stage the toplevel's SMF manifests + site profile + activate (add-not-
+#    replace; design-smf-init §5). The boot-plumbing hello/netcfg + cryptosvc
+#    race fix already came from the copied root; here we install THIS toplevel's
+#    config-generated manifests so first boot imports them.
+# ---------------------------------------------------------------------------
+log "staging toplevel SMF manifests + site profile + activate"
+mkdir -p "$ALTROOT/lib/svc/manifest/solnix" "$ALTROOT/lib/svc/method" "$ALTROOT/etc/svc/profile/site"
+if [ -d "$TOPLEVEL/manifest/solnix" ]; then
+  cp "$TOPLEVEL/manifest/solnix/"*.xml "$ALTROOT/lib/svc/manifest/solnix/" 2>/dev/null || true
+fi
+[ -e "$TOPLEVEL/site-profile.xml" ] && cp -L "$TOPLEVEL/site-profile.xml" "$ALTROOT/etc/svc/profile/site/solnix.xml"
+[ -e "$TOPLEVEL/activate" ] && { cp -L "$TOPLEVEL/activate" "$ALTROOT/lib/svc/method/solnix-activate"; chmod 0555 "$ALTROOT/lib/svc/method/solnix-activate"; }
+
+# ---------------------------------------------------------------------------
+# 7. register generation 1 + switch tools on the target's PATH (T2.5 layout).
+# ---------------------------------------------------------------------------
+log "registering generation 1 + installing switch tools"
+mkdir -p "$ALTROOT/nix/var/nix/profiles"
+relink "$TOPLEVEL" "$ALTROOT/nix/var/nix/profiles/system-1-link"
+relink "system-1-link" "$ALTROOT/nix/var/nix/profiles/system"
+printf '1\n' > "$ALTROOT/nix/var/nix/profiles/system.gen"
+if [ -e "$TOPLEVEL/bin/switch-to-configuration" ]; then
+  relink "$TOPLEVEL/bin/switch-to-configuration" "$ALTROOT/usr/bin/switch-to-configuration"
+  relink "$TOPLEVEL/bin/solnix-rebuild"          "$ALTROOT/usr/bin/solnix-rebuild"
+fi
+
+# ---------------------------------------------------------------------------
+# 8. ttya console + release stamp (make-be gotcha #1/#4). The copied root
+#    already has bootenv.rc/loader.conf, but re-assert (idempotent, cheap).
+# ---------------------------------------------------------------------------
+log "ttya console + release stamp"
+mkdir -p "$ALTROOT/boot/solaris"
+cat > "$ALTROOT/boot/solaris/bootenv.rc" <<'EOF'
+setprop console ttya
+setprop os_console ttya
+setprop ttya-mode 115200,8,n,1,-
+setprop ttya-ignore-cd true
+setprop ttya-rts-dtr-off false
+EOF
+cat > "$ALTROOT/boot/loader.conf" <<'EOF'
+console="ttya"
+os_console="ttya"
+boot-args="-v"
+loader_logo="illumos"
+EOF
+cat > "$ALTROOT/etc/solnix-release" <<EOF
+solnix system (installed by solnix-install)
+installed: $(date -u +%FT%TZ 2>/dev/null || date)
+toplevel:  $TOPLEVEL
+installer: $(uname -a)
+target:    $TARGET pool $POOL BE $BEDS
+EOF
+[ -f "$ALTROOT/etc/hostid" ] || printf '0x1b0b57ec\n' > "$ALTROOT/etc/hostid"
+
+# ---------------------------------------------------------------------------
+# 9. boot_archive (the ramdisk that mounts ZFS root) for the target BE.
+# ---------------------------------------------------------------------------
+log "building boot_archive on the target BE"
+[ -f "$ALTROOT/etc/path_to_inst" ] || : > "$ALTROOT/etc/path_to_inst"
+bootadm update-archive -f -R "$ALTROOT" 2>&1 | grep -vE '^gzip:|cannot find' | tail -6 || true
+[ -f "$ALTROOT/platform/i86pc/amd64/boot_archive" ] || die "boot_archive not built"
+log "boot_archive: $(file "$ALTROOT/platform/i86pc/amd64/boot_archive" 2>/dev/null)"
+
+# ---------------------------------------------------------------------------
+# 10. loader on ESP + bootfs + menu.lst (beadm-ready; T2.5 gotcha #1).
+# ---------------------------------------------------------------------------
+log "installing loader on ESP + setting bootfs + menu.lst"
+mkdir -p "$ALTROOT/esp"
+mount -F pcfs "/dev/dsk/${TARGET}s0" "$ALTROOT/esp" || die "ESP mount failed"
+mkdir -p "$ALTROOT/esp/EFI/Boot"
+cp "$ALTROOT/boot/loader64.efi" "$ALTROOT/esp/EFI/Boot/bootx64.efi" || die "loader copy failed"
+umount "$ALTROOT/esp"
+installboot -fm "$ALTROOT/boot/pmbr" "$ALTROOT/boot/gptzfsboot" "/dev/rdsk/${TARGET}s0" 2>&1 || \
+  echo "NOTE: installboot -m warning is expected on EFI-labelled disks (UEFI uses the ESP loader)"
+zpool set bootfs="$BEDS" "$POOL"
+# beadm needs the pool mounted + a menu.lst under the pool root (libbe "Invalid
+# path for menu.lst" otherwise); give the pool a mountpoint + seed menu.lst.
+zfs set mountpoint="/$POOL" "$POOL" 2>/dev/null || true
+mkdir -p "$ALTROOT/$POOL/boot" 2>/dev/null || true
+printf 'title %s\nbootfs %s\n' "$BE" "$BEDS" > "$ALTROOT/$POOL/boot/menu.lst"
+cat > "$ALTROOT/boot/menu.lst" <<EOF
+title $BE
+bootfs $BEDS
+EOF
+
+# ---------------------------------------------------------------------------
+# 11. finalize: export the pool so it's importable on the target machine.
+# ---------------------------------------------------------------------------
+log "finalizing (export pool)"
+sync
+zfs set canmount=noauto "$BEDS"
+umount "$ALTROOT/esp" 2>/dev/null || true
+zfs unmount "$BEDS" 2>/dev/null || zfs unmount -f "$BEDS" 2>/dev/null || true
+zpool export "$POOL" || die "zpool export failed"
+
+log "DONE: solnix installed on $TARGET (pool $POOL, BE $BEDS, generation 1 = $TOPLEVEL)"
+echo "Detach $TARGET, snapshot it, register an AMI (boot-mode uefi, ena) and boot it,"
+echo "or attach it as the root disk of a new instance. It should boot to"
+echo "multi-user-server with /run-current-system -> $TOPLEVEL."
