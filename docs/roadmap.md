@@ -142,3 +142,24 @@ After the Phase-2 gate (installable/usable), see
   signed to the unstable channel).
 - **T2.13** Build the install **.iso**, smoke-test install-from-ISO, drop it in
   `../solnix.io/` for the site team to publish + advertise.
+
+---
+
+## Phase 3 — Breadth (parallel) + aarch64
+
+Two big parallel tracks (specs added):
+- **.kiro/specs/solnix-phase3-breadth/** — mirror the OpenIndiana Hipster package
+  set for x86_64 (the master registry target), then cloud drivers (EC2/Azure/
+  GCP), AI/LLM enablement (CPU-inference first; GPU is a hard long-horizon gap),
+  OmniOS+SmartOS packages/features (bhyve/KVM/LX zones), core Solaris features
+  packaged+configurable (Crossbow/Zones/LX-zones/bhyve/ZFS/DTrace), language
+  runtimes (Perl/Python/TCL-TK/LuaJIT/Rust-via-official-or-crustc), and Wayland+
+  desktop. All built with gcc-14 AND clang, signed to the cache. Massively
+  parallel: fan out package batches across agents.
+- **.kiro/specs/solnix-aarch64/** — bootstrap solnix on aarch64 by integrating
+  the out-of-tree Hayashi Naoyuki illumos-aarch64 port (harder than x86_64; QEMU
+  boot first). Runs in parallel; long track.
+
+Honesty rule holds: GPU/Azure/GCP drivers, torch, full Wayland are real illumos
+gaps — inventory realistically, build tractable paths first, flag multi-quarter
+porting as tracked sub-projects.

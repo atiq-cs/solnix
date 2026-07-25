@@ -51,13 +51,59 @@ _readlink() { [ -h "$1" ] || return 1; ls -ld "$1" 2>/dev/null | sed -n 's/.* ->
 # copy a store path into the target (illumos cp -R -P, parent dir no trailing /).
 copy_path() { [ -e "$ALTROOT$1" ] && return 0; d="$ALTROOT$(dirname "$1")"; mkdir -p "$d"; cp -R -P "$1" "$d" 2>/dev/null || true; }
 
+# run a command with a hard wall-clock timeout so no privileged step (a busy
+# zpool import, a wedged bootadm, a mkfs) hangs the install forever (the T2.7
+# hang was a re-run wedged on a target pool left imported). Uses a background
+# watchdog since the minimal illumos installer env has no timeout(1).
+run_to() {  # run_to <seconds> <cmd...>
+  _to=$1; shift
+  "$@" &
+  _pid=$!
+  ( sleep "$_to"; kill -TERM "$_pid" 2>/dev/null; sleep 3; kill -KILL "$_pid" 2>/dev/null ) &
+  _watch=$!
+  wait "$_pid" 2>/dev/null; _rc=$?
+  kill "$_watch" 2>/dev/null; wait "$_watch" 2>/dev/null
+  return $_rc
+}
+
+# ALWAYS leave the host clean: on ANY exit (success, error, ^C) unmount the ESP
+# + the BE and EXPORT the target pool so it is not left imported (the exact
+# state that wedged the prior re-run). Idempotent + best-effort.
+# ROOTPOOL is the RUNNING root pool (never touch it). Detect it NOW, before the
+# trap, so an early die() cleanup can still protect it (empty -> protect rpool +
+# every currently-imported pool, since nothing of ours is imported yet).
+ROOTDS=$(zfs list -H -o name,mountpoint 2>/dev/null | awk '$2=="/"{print $1; exit}')
+ROOTPOOL="${ROOTDS%%/*}"; [ -n "$ROOTPOOL" ] || ROOTPOOL=rpool
+# snapshot the pools imported at start; cleanup only exports pools NOT in this
+# set (i.e. only ones this run imported), so an early failure never touches a
+# pre-existing pool (e.g. the running root).
+PREEXISTING_POOLS=" $(zpool list -H -o name 2>/dev/null | tr '\n' ' ') "
+cleanup() {
+  umount "$ALTROOT/esp" 2>/dev/null || true
+  zfs unmount "$BEDS" 2>/dev/null || zfs unmount -f "$BEDS" 2>/dev/null || true
+  for _p in "$POOL" $(zpool list -H -o name 2>/dev/null); do
+    case "$_p" in "$ROOTPOOL"|rpool|"") continue;; esac
+    # only export a pool this run created (not one imported before we started).
+    case "$PREEXISTING_POOLS" in *" $_p "*) continue;; esac
+    zpool export "$_p" 2>/dev/null || true
+  done
+}
+trap cleanup EXIT INT TERM
+
 [ "$(id -u)" = 0 ] || die "run as root"
 [ -n "$TARGET" ] || die "usage: solnix-install <target-disk> [toplevel]"
 [ -e "/dev/rdsk/${TARGET}s0" ] || die "target disk $TARGET not present (attach + reboot so illumos enumerates it)"
 
-# refuse to touch the disk the running rpool is on (find it from mounted /).
-RPOOL_DISK=$(zpool status 2>/dev/null | awk '/[0-9]d[0-9]/{gsub(/s[0-9]+$/,"",$1); print $1; exit}')
-[ "$TARGET" != "$RPOOL_DISK" ] || die "refusing to install onto the running rpool disk $TARGET"
+# guards derived from the RUNNING root pool: never touch it or its disk.
+ROOTDISK=$(zpool status "$ROOTPOOL" 2>/dev/null | awk '/[0-9]d[0-9]/{gsub(/s[0-9]+$/,"",$1); print $1; exit}')
+[ -n "$ROOTDISK" ] && [ "$TARGET" = "$ROOTDISK" ] && die "refusing to install onto the running root disk $TARGET (pool $ROOTPOOL)"
+[ "$POOL" = "$ROOTPOOL" ] && die "target pool '$POOL' == the RUNNING root pool; choose a different SOLNIX_POOL (the installed disk gets its own pool)"
+# refuse to install into a pool literally named 'rpool' unless explicitly allowed
+# (guards a fat-finger on a host whose root pool is NOT rpool but a stale rpool
+# label sits on some other disk). A real root install sets SOLNIX_ALLOW_RPOOL=1.
+if [ "$POOL" = "rpool" ] && [ -z "${SOLNIX_ALLOW_RPOOL:-}" ]; then
+  die "POOL=rpool but SOLNIX_ALLOW_RPOOL not set (refusing to clobber a pool named rpool). Set SOLNIX_POOL=spool for the gate, or SOLNIX_ALLOW_RPOOL=1 for a real root install."
+fi
 
 # default toplevel: the running system.
 if [ -z "$TOPLEVEL" ]; then
@@ -68,16 +114,43 @@ fi
 [ -e "$TOPLEVEL/activate" ] || die "$TOPLEVEL has no activate script (not a solnix toplevel)"
 
 log "installing toplevel $TOPLEVEL onto $TARGET (pool $POOL, BE $BEDS)"
-log "base world = the running root ($SRCROOT), rpool disk = ${RPOOL_DISK:-unknown}"
+log "base world = the running root ($SRCROOT); running root pool=$ROOTPOOL disk=${ROOTDISK:-unknown}"
 
 # ---------------------------------------------------------------------------
-# 0. tear down any prior attempt on the target
+# 0. tear down any prior attempt on the target (idempotent; the hang fix).
+#    A prior run may have left a pool IMPORTED + mounted on the target disk
+#    (that wedged the re-run). Find and destroy/export ANY pool sitting on the
+#    target disk's slices, not just one named $POOL, then unmount /a.
 # ---------------------------------------------------------------------------
-log "cleaning prior $POOL / $ALTROOT"
-umount "$ALTROOT/esp" 2>/dev/null || true
-zfs unmount "$BEDS" 2>/dev/null || true
-zpool destroy "$POOL" 2>/dev/null || true
-zpool export "$POOL" 2>/dev/null || true
+log "cleaning prior attempt on $TARGET (any pool, imported or not)"
+run_to 30 umount "$ALTROOT/esp" 2>/dev/null || true
+# 0a. any IMPORTED pool whose vdev is on the target disk -> destroy it (frees
+#     the slice so the GPT relabel below can create the throwaway EFI pool).
+for _p in $(zpool list -H -o name 2>/dev/null); do
+  case "$_p" in "$ROOTPOOL"|rpool) continue;; esac
+  if zpool status "$_p" 2>/dev/null | grep -q "$TARGET"; then
+    log "target disk holds imported pool $_p -> destroy"
+    run_to 30 zpool destroy -f "$_p" 2>/dev/null || run_to 30 zpool export -f "$_p" 2>/dev/null || true
+  fi
+done
+# 0b. by our own names (belt-and-braces) + any EXPORTABLE pool on the disk.
+run_to 30 zfs unmount "$BEDS" 2>/dev/null || true
+run_to 30 zpool destroy -f "$POOL" 2>/dev/null || true
+run_to 30 zpool export -f "$POOL" 2>/dev/null || true
+# an exported (not-imported) pool on the disk still owns the slice label; import
+# it read-only-less then destroy so the slice is truly free for a fresh label.
+_stale=$(run_to 30 zpool import -d "/dev/dsk" 2>/dev/null | awk '/pool:/{print $2}')
+for _p in $_stale; do
+  case "$_p" in "$ROOTPOOL"|rpool) continue;; esac
+  if run_to 30 zpool import -N -f "$_p" 2>/dev/null; then
+    if zpool status "$_p" 2>/dev/null | grep -q "$TARGET"; then
+      log "destroying stale exported pool $_p on $TARGET"
+      run_to 30 zpool destroy -f "$_p" 2>/dev/null || run_to 30 zpool export -f "$_p" 2>/dev/null || true
+    else
+      run_to 30 zpool export -f "$_p" 2>/dev/null || true
+    fi
+  fi
+done
 rm -rf "$ALTROOT" 2>/dev/null || true
 mkdir -p "$ALTROOT"
 
@@ -87,8 +160,8 @@ mkdir -p "$ALTROOT"
 #    zpool-created EFI label is sector-addressed and takes fmthard.)
 # ---------------------------------------------------------------------------
 log "GPT-labelling $TARGET"
-zpool create -f solnixtmp "/dev/dsk/${TARGET}" >/dev/null 2>&1 || die "clean EFI label failed"
-zpool destroy solnixtmp 2>/dev/null || true
+run_to 60 zpool create -f solnixtmp "/dev/dsk/${TARGET}" >/dev/null 2>&1 || die "clean EFI label failed"
+run_to 30 zpool destroy solnixtmp 2>/dev/null || true
 RESV_START=$(prtvtoc -h "/dev/rdsk/${TARGET}" 2>/dev/null | awk '$1==8{print $4}')
 RESV_SIZE=$(prtvtoc -h "/dev/rdsk/${TARGET}" 2>/dev/null | awk '$1==8{print $5}')
 [ -n "$RESV_START" ] || die "could not read EFI label reserved slice"
@@ -108,14 +181,14 @@ prtvtoc -h "/dev/rdsk/${TARGET}"
 # 2. ESP FAT32 + the pool + BE dataset
 # ---------------------------------------------------------------------------
 log "mkfs pcfs ESP on ${TARGET}s0"
-yes | mkfs -F pcfs -o fat=32,b=ESP "/dev/rdsk/${TARGET}s0" >/dev/null 2>&1 || true
+yes | run_to 60 mkfs -F pcfs -o fat=32,b=ESP "/dev/rdsk/${TARGET}s0" >/dev/null 2>&1 || true
 
 log "creating pool $POOL on ${TARGET}s1 + BE dataset $BEDS"
-zpool create -f -o altroot="$ALTROOT" -o cachefile=none \
+run_to 60 zpool create -f -o altroot="$ALTROOT" -o cachefile=none \
   -O compression=on -O atime=off -m none "$POOL" "/dev/dsk/${TARGET}s1" || die "zpool create failed"
 zfs create -o canmount=off -o mountpoint=legacy "$POOL/ROOT"
 zfs create -o canmount=noauto -o mountpoint=/ "$BEDS"
-zfs mount "$BEDS"
+run_to 30 zfs mount "$BEDS"
 [ -d "$ALTROOT/." ] || die "BE root not mounted at $ALTROOT"
 
 # ---------------------------------------------------------------------------
@@ -174,8 +247,10 @@ done
 # ---------------------------------------------------------------------------
 log "copying toplevel closure into target /nix/store"
 mkdir -p "$ALTROOT/nix/store"
+CLOSURE=""
 if command -v nix-store >/dev/null 2>&1; then
-  for p in $(nix-store -qR "$TOPLEVEL"); do copy_path "$p"; done
+  CLOSURE=$(nix-store -qR "$TOPLEVEL")
+  for p in $CLOSURE; do copy_path "$p"; done
 else
   # closure_refs <store-path>: emit every /nix/store/<hash>-name referenced by
   # that path (symlink targets via ls -l, plus any string in regular files).
@@ -199,8 +274,30 @@ else
       case "$seen $queue" in *"$r"*) : ;; *) queue="$queue $r";; esac
     done
   done
+  CLOSURE=$(echo "$seen" | tr ' ' '\n' | grep '^/nix/store/')
 fi
 relink "$TOPLEVEL" "$ALTROOT/run-current-system"
+
+# 4v. VERIFY every closure path landed on the target (the T2.7 gate: prove all
+#     ~17-20 store paths are self-contained on the installed disk). Fail loudly
+#     rather than boot a system missing a slice (kernel/libc/rtld/system-path).
+log "verifying closure on target /nix/store"
+_missing=0; _count=0
+for p in $CLOSURE; do
+  _count=$((_count + 1))
+  if [ ! -e "$ALTROOT$p" ]; then echo "MISSING on target: $p" >&2; _missing=$((_missing + 1)); fi
+done
+echo "closure: $_count paths, $_missing missing" >&2
+[ "$_missing" = 0 ] || die "closure incomplete: $_missing/$_count store paths did not land on target"
+# the load-bearing slices must specifically be present + non-empty.
+for must in systemPath/platform/i86pc/kernel/amd64/unix \
+            systemPath/kernel/amd64/genunix \
+            systemPath/lib/svc/bin/svc.startd \
+            systemPath/lib/amd64/libc.so.1; do
+  t="$ALTROOT$TOPLEVEL/$must"
+  [ -s "$t" ] || [ -e "$t" ] || die "toplevel slice missing on target: $must"
+done
+echo "closure OK: $_count store paths self-contained on $TARGET" >&2
 
 # ---------------------------------------------------------------------------
 # 5. seed the SMF repository fresh from the seed (so the target boots the stock
@@ -228,6 +325,31 @@ if [ -d "$TOPLEVEL/manifest/solnix" ]; then
 fi
 [ -e "$TOPLEVEL/site-profile.xml" ] && cp "$TOPLEVEL/site-profile.xml" "$ALTROOT/etc/svc/profile/site/solnix.xml"
 [ -e "$TOPLEVEL/activate" ] && { cp "$TOPLEVEL/activate" "$ALTROOT/lib/svc/method/solnix-activate"; chmod 0555 "$ALTROOT/lib/svc/method/solnix-activate"; }
+
+# 6b. stage the toplevel's config-generated /etc overlay (T2.9: networking +
+#     users -> nodename/resolv.conf/defaultrouter/passwd/shadow/group) OVER the
+#     copied base /etc, so the installed system reflects THIS toplevel's config,
+#     not merely the installer env's. Merge declared users/groups (append any
+#     the base lacks); overwrite the pure-config files.
+if [ -d "$TOPLEVEL/etc" ]; then
+  for f in nodename resolv.conf defaultrouter solnix-release; do
+    [ -f "$TOPLEVEL/etc/$f" ] && cp "$TOPLEVEL/etc/$f" "$ALTROOT/etc/$f" 2>/dev/null || true
+  done
+  for f in passwd shadow group; do
+    [ -f "$TOPLEVEL/etc/$f" ] || continue
+    while IFS=: read -r nm rest; do
+      [ -n "$nm" ] || continue
+      grep -q "^$nm:" "$ALTROOT/etc/$f" 2>/dev/null || echo "$nm:$rest" >> "$ALTROOT/etc/$f"
+    done < "$TOPLEVEL/etc/$f"
+  done
+  [ -f "$ALTROOT/etc/shadow" ] && chmod 0400 "$ALTROOT/etc/shadow"
+fi
+# 6c. seed each declared user's authorized_keys from the users module (T2.9),
+#     against the target BE root, so SSH login works on the installed disk.
+if [ -e "$TOPLEVEL/seed-authorized-keys" ] && [ -x /usr/bin/bash ]; then
+  ROOT="$ALTROOT" /usr/bin/bash "$TOPLEVEL/seed-authorized-keys" 2>/dev/null \
+    || echo "NOTE: authorized_keys seed had non-fatal errors" >&2
+fi
 
 # ---------------------------------------------------------------------------
 # 7. register generation 1 + switch tools on the target's PATH (T2.5 layout).
@@ -276,7 +398,7 @@ EOF
 # ---------------------------------------------------------------------------
 log "building boot_archive on the target BE"
 [ -f "$ALTROOT/etc/path_to_inst" ] || : > "$ALTROOT/etc/path_to_inst"
-bootadm update-archive -f -R "$ALTROOT" 2>&1 | grep -vE '^gzip:|cannot find' | tail -6 || true
+run_to 300 sh -c 'bootadm update-archive -f -R "$1" 2>&1 | grep -vE "^gzip:|cannot find" | tail -6' _ "$ALTROOT" || true
 [ -f "$ALTROOT/platform/i86pc/amd64/boot_archive" ] || die "boot_archive not built"
 log "boot_archive: $(file "$ALTROOT/platform/i86pc/amd64/boot_archive" 2>/dev/null)"
 
@@ -308,9 +430,12 @@ EOF
 log "finalizing (export pool)"
 sync
 zfs set canmount=noauto "$BEDS"
-umount "$ALTROOT/esp" 2>/dev/null || true
-zfs unmount "$BEDS" 2>/dev/null || zfs unmount -f "$BEDS" 2>/dev/null || true
-zpool export "$POOL" || die "zpool export failed"
+run_to 30 umount "$ALTROOT/esp" 2>/dev/null || true
+# unmount the pool's own mountpoint (/a/$POOL from the menu.lst step) + the BE.
+run_to 30 zfs unmount "$POOL" 2>/dev/null || true
+run_to 30 zfs unmount "$BEDS" 2>/dev/null || run_to 30 zfs unmount -f "$BEDS" 2>/dev/null || true
+run_to 60 zpool export "$POOL" || run_to 60 zpool export -f "$POOL" || die "zpool export failed"
+trap - EXIT INT TERM   # clean exit: pool exported, nothing to clean up
 
 log "DONE: solnix installed on $TARGET (pool $POOL, BE $BEDS, generation 1 = $TOPLEVEL)"
 echo "Detach $TARGET, snapshot it, register an AMI (boot-mode uefi, ena) and boot it,"

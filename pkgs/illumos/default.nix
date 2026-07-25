@@ -382,7 +382,14 @@ let
       [ -e "$out/kernel/amd64/genunix" ]                   || { echo "FATAL: no genunix in systemPath" >&2; exit 1; }
     '' ];
   };
+
+  # Modern compiler toolchains (backlog PS-1 clang / PS-4 latest-GCC/GDB, pulled
+  # forward): gcc14 + clang + gdb sliced from the OI host IPS install and RUNPATH-
+  # relocated into the store, the foundation the package-batch work builds on.
+  # See ./toolchains.nix + docs/design-toolchains.md.
+  toolchains = import ./toolchains.nix { inherit mkIllumosComponent libc; };
 in
 {
   inherit gate libc rtld ld sys base-tools systemPath externalLibs;
+  inherit (toolchains) gcc14 clang gdb;
 }
