@@ -35,9 +35,11 @@ pull from the solnix.io cache instead of rebuilding.
       solnix.io cache/object store (was local `file://`). *(cache)*
 
 ### Generations & install
-- [ ] **T2.5** Map Nix generations onto ZFS boot environments: `beadm`
+- [x] **T2.5** Map Nix generations onto ZFS boot environments: `beadm`
       create/activate a BE per generation; `switch-to-configuration` activates
       within a BE; rollback = `beadm activate` the previous. *(generations)*
+      DONE + gate-verified on EC2 (GATE A live switch, GATE B new-BE +
+      reboot-into-new-gen + rollback). See docs/design-generations.md.
 - [x] **T2.6** Nixify `make-be` into `lib/make-be.nix` (from the working
       `scripts/oi-make-be.sh`), consuming `system.build.toplevel` +
       `system.build.smfManifests`. *(build system)*

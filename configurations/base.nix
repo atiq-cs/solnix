@@ -68,6 +68,23 @@
     stop.exec = ":true";
   };
 
+  # T2.5 GATE A witness: a SECOND transient oneshot, added by the config change
+  # under test. Its presence live (svcs shows site/solnix-switch-witness online)
+  # after `switch-to-configuration switch <newtop>` — with no reboot — is the
+  # proof that the live SMF reconcile (svccfg import + svcadm) took effect.
+  # Toggle via SOLNIX_WITNESS at eval; enabled by default so the built toplevel
+  # carries it. Harmless if it stays (transient oneshot, no port, proto tools).
+  smf.services.solnix-switch-witness = {
+    enable = true;
+    category = "site";
+    description = "solnix T2.5 live-switch witness oneshot";
+    model = "transient";
+    requires = [ "svc:/system/filesystem/local:default" ];
+    start.exec = "/usr/bin/echo solnix switch-to-configuration live-switch witness online";
+    start.timeoutSeconds = 30;
+    stop.exec = ":true";
+  };
+
   # No users/networking/fs config here yet — those modules (P2.3) don't
   # exist. This is deliberately the smallest config that names the platform and
   # one service. Grow it as the modules it needs land.

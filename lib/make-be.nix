@@ -253,7 +253,24 @@ let
       [ -e "$BEROOT$p" ] || $GCP -a "$p" "$BEROOT$(dirname "$p")/" 2>/dev/null || \
         ( mkdir -p "$BEROOT$(dirname "$p")" && $GCP -a "$p" "$BEROOT$(dirname "$p")/" )
     done
-    ln -sfn "$TOPLEVEL" "$BEROOT/run-current-system" 2>/dev/null || true
+    rm -f "$BEROOT/run-current-system" 2>/dev/null || true
+    ln -s "$TOPLEVEL" "$BEROOT/run-current-system" 2>/dev/null || true
+
+    # 8a. generation registry + switch tools on PATH (T2.5). Register this
+    #     toplevel as generation 1, and symlink the switch-to-configuration +
+    #     solnix-rebuild tools into /usr/bin so an admin can `solnix-rebuild ...`.
+    log "registering generation 1 + installing switch tools"
+    mkdir -p "$BEROOT/nix/var/nix/profiles"
+    # illumos `ln -sfn` follows an existing symlink-to-dir; rm -f first to be safe.
+    rm -f "$BEROOT/nix/var/nix/profiles/system-1-link" "$BEROOT/nix/var/nix/profiles/system"
+    ln -s "$TOPLEVEL" "$BEROOT/nix/var/nix/profiles/system-1-link"
+    ln -s system-1-link "$BEROOT/nix/var/nix/profiles/system"
+    printf '1\n' > "$BEROOT/nix/var/nix/profiles/system.gen"
+    if [ -e "$TOPLEVEL/bin/switch-to-configuration" ]; then
+      rm -f "$BEROOT/usr/bin/switch-to-configuration" "$BEROOT/usr/bin/solnix-rebuild"
+      ln -s "$TOPLEVEL/bin/switch-to-configuration" "$BEROOT/usr/bin/switch-to-configuration"
+      ln -s "$TOPLEVEL/bin/solnix-rebuild"          "$BEROOT/usr/bin/solnix-rebuild"
+    fi
 
     log "installing solnix-generated SMF manifests + site profile (add-not-replace)"
     mkdir -p "$BEROOT/lib/svc/manifest/solnix" "$BEROOT/lib/svc/method" "$BEROOT/etc/svc/profile/site"
@@ -402,6 +419,12 @@ let
     installboot -fm "$BEROOT/boot/pmbr" "$BEROOT/boot/gptzfsboot" "/dev/rdsk/''${DISK}s0" 2>&1 || \
       echo "NOTE: installboot -m warning expected on EFI-labelled disks"
     zpool set bootfs="$BEDS" "$POOL"
+    # T2.5: beadm needs the pool mounted + a menu.lst present (libbe "Invalid
+    # path for menu.lst" otherwise). Give the pool a mountpoint under the altroot
+    # and seed the grub-legacy menu.lst libbe rewrites on beadm create/activate.
+    zfs set mountpoint="/$POOL" "$POOL" 2>/dev/null || true
+    mkdir -p "$ALTROOT/$POOL/boot" 2>/dev/null || true
+    printf 'title %s\nbootfs %s\n' "$BE" "$BEDS" > "$ALTROOT/$POOL/boot/menu.lst"
     cat > "$BEROOT/boot/menu.lst" <<EOF
     title solnix-1
     bootfs $BEDS
