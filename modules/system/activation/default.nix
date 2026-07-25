@@ -491,10 +491,15 @@ in
       type = types.package;
       description = "The solnix-install tool (nixos-install analog; install to a blank disk).";
     };
+    seedAuthorizedKeys = mkOption {
+      type = types.package;
+      description = "The users.users.*.openssh.authorizedKeys seed script (T2.9).";
+    };
   };
 
   config.system.build = {
     inherit toplevel activate etc switchToConfiguration solnixRebuild solnixInstall;
     smfSiteProfile = siteProfile;
+    seedAuthorizedKeys = authKeysSetupScript;
   };
 }

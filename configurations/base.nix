@@ -22,6 +22,33 @@
 
   networking.hostName = lib.mkDefault "solnix";
 
+  # Declarative networking (T2.9): the primary NIC via DHCP. This GENERATES the
+  # illumos bringup (ipadm create-if/create-addr with the legacy-ifconfig
+  # fallback the gate ena driver needs, gotcha #15) as an SMF transient oneshot,
+  # plus /etc/resolv.conf from nameservers — replacing the ad-hoc solnix-netcfg
+  # in oi-make-be.sh. "ena0" is the EC2 Nitro NIC; on other hardware set the
+  # matching datalink name (dladm show-phys).
+  networking.interfaces.ena0.dhcp = true;
+  networking.nameservers = [ "169.254.169.253" "8.8.8.8" ];
+
+  # Declarative users (T2.9): a login user + root, both with the maintainer's
+  # ssh key. This GENERATES /etc/{passwd,shadow,group} entries (illumos format)
+  # merged over the base system accounts, and seeds ~/.ssh/authorized_keys —
+  # replacing the metadata-shim / ROOT_AUTHKEY key injection.
+  users.users.root.openssh.authorizedKeys.keys = [
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKCqHOIyYwbp42C7MxnRFxOcy+ZE8cNOWdsdvCgVFm1L Greg Burd <greg@burd.me>"
+  ];
+  users.users.greg = {
+    uid = 1000;
+    group = "staff";
+    description = "Greg Burd";
+    shell = "/usr/bin/ksh93";
+    extraGroups = [ "adm" ];
+    openssh.authorizedKeys.keys = [
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKCqHOIyYwbp42C7MxnRFxOcy+ZE8cNOWdsdvCgVFm1L Greg Burd <greg@burd.me>"
+    ];
+  };
+
   # Two example SMF services exercise the generator (T1.11) end-to-end: each
   # renders to a DTD-valid manifest in system.build.toplevel, which make-be
   # stages at /lib/svc/manifest/solnix and activation imports via svccfg.
@@ -85,9 +112,8 @@
     stop.exec = ":true";
   };
 
-  # No users/networking/fs config here yet — those modules (P2.3) don't
-  # exist. This is deliberately the smallest config that names the platform and
-  # one service. Grow it as the modules it needs land.
+  # Networking + users are now declarative (T2.9, above). Remaining config-
+  # surface (filesystems, more services) grows as those modules land.
 
   # Binary cache: pull prebuilt pkgs.illumos.* / image closures from solnix.io
   # instead of rebuilding (see .kiro/steering/dev-environment.md + docs/cache.md).

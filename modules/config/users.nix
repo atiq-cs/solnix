@@ -28,18 +28,12 @@
 let
   inherit (lib)
     mkOption
-    mkEnableOption
     types
     mkIf
-    mkMerge
-    optionalString
     concatStringsSep
-    concatMapStringsSep
     mapAttrsToList
-    attrValues
     filterAttrs
     literalExpression
-    flatten
     unique
     ;
 
@@ -66,8 +60,13 @@ let
         };
         home = mkOption {
           type = types.str;
-          default = "/home/${name}";
-          description = "Home directory.";
+          default = "/export/home/${name}";
+          description = ''
+            Home directory. Defaults to /export/home/<name>: on illumos /home is
+            autofs-managed (automountd), so a real on-disk home lives under
+            /export/home (autofs maps /home/<name> -> there). Using /home/<name>
+            directly fails — mkdir /home/<name> is "Operation not applicable".
+          '';
         };
         shell = mkOption {
           type = types.str;
@@ -80,8 +79,10 @@ let
           example = "$6$rounds=...$...";
           description = ''
             crypt(3) password hash written to /etc/shadow. null = no password set
-            (locked login, "*LK*" — ssh-key login still works). "" = empty
-            password (console login without one; matches the root default).
+            ("NP": passwordless, account NOT locked — ssh-key login still works,
+            which is the common case for a key-only login user). "" = empty
+            password (console login without one; matches the root default). Use
+            "*LK*" explicitly to fully lock an account (PAM denies even key login).
           '';
         };
         isRoot = mkOption {
@@ -146,11 +147,13 @@ let
     name: u:
     "${name}:x:${toString u.uid}:${toString (gidOf u.group)}:${u.description}:${u.home}:${u.shell}";
 
-  # shadow: null hash -> locked ("*LK*"), "" -> empty password, else the hash.
+  # shadow: null hash -> "NP" (no password, account NOT locked — key login works;
+  # illumos GATE B finding: "*LK*" LOCKS the account and PAM denies even a valid
+  # ssh key). "" -> empty password. Anything else -> the literal hash/token.
   shadowLine =
     name: u:
     let
-      h = if u.hashedPassword == null then "*LK*" else u.hashedPassword;
+      h = if u.hashedPassword == null then "NP" else u.hashedPassword;
     in
     "${name}:${h}:::::::";
 
@@ -163,17 +166,21 @@ let
   # authorized_keys: only for users that declare keys. Emitted as a shell snippet
   # the activation/make-be side runs to seed ~<home>/.ssh/authorized_keys with
   # the right perms (0700 dir, 0600 file) — mirrors the ROOT_AUTHKEY path but
-  # driven by the option, for any user.
+  # driven by the option, for any user. Keys are written with `printf` (one per
+  # line) rather than a heredoc so Nix string indentation cannot corrupt them.
   usersWithKeys = filterAttrs (_: u: u.openssh.authorizedKeys.keys != [ ]) cfg.users;
   authKeysSetup = concatStringsSep "\n" (
     mapAttrsToList (
-      name: u: ''
-        # ${name}: seed authorized_keys under ${u.home}
-        mkdir -p "$ROOT/${u.home}/.ssh" && chmod 700 "$ROOT/${u.home}/.ssh"
-        cat > "$ROOT/${u.home}/.ssh/authorized_keys" <<'SOLNIX_AK_EOF'
-        ${concatStringsSep "\n" u.openssh.authorizedKeys.keys}
-        SOLNIX_AK_EOF
-        chmod 600 "$ROOT/${u.home}/.ssh/authorized_keys"''
+      name: u:
+      let
+        keysArg = lib.escapeShellArg (concatStringsSep "\n" u.openssh.authorizedKeys.keys + "\n");
+      in
+      concatStringsSep "\n" [
+        "# ${name}: seed authorized_keys under ${u.home}"
+        ''mkdir -p "$ROOT/${u.home}/.ssh" && chmod 700 "$ROOT/${u.home}/.ssh"''
+        ''printf '%s' ${keysArg} > "$ROOT/${u.home}/.ssh/authorized_keys"''
+        ''chmod 600 "$ROOT/${u.home}/.ssh/authorized_keys"''
+      ]
     ) usersWithKeys
   );
 in

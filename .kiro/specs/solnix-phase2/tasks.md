@@ -50,8 +50,13 @@ pull from the solnix.io cache instead of rebuilding.
       is a real store path, image built via the cross/native flow. *(integration)*
 
 ### Breadth (grows continuously)
-- [ ] **T2.9** Networking (`dladm`/`ipadm`) module, users/groups module, the
+- [x] **T2.9** Networking (`dladm`/`ipadm`) module, users/groups module, the
       common nixos service modules pulled via `extPath`. *(config surface)*
+      DONE + gate-verified: modules/config/{networking,users}.nix generate
+      /etc/{nodename,resolv.conf,passwd,shadow,group,defaultrouter} + a
+      config-generated `site/solnix-net` bringup, all from options. GATE A eval
+      on the host; GATE B module-generated user+key ssh login + DHCP bringup
+      verified on a running ena instance. See docs/design-config-modules.md.
 - [ ] **T2.10** Package breadth: a meaningful slice of illumos userland +
       common third-party software building as `pkgs.illumos.*` / overlays.
 

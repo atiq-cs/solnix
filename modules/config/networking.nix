@@ -35,7 +35,6 @@
 let
   inherit (lib)
     mkOption
-    mkEnableOption
     types
     mkIf
     mkMerge
@@ -44,8 +43,6 @@ let
     concatMapStringsSep
     mapAttrsToList
     filterAttrs
-    optional
-    optionals
     literalExpression
     ;
 
@@ -125,9 +122,11 @@ let
       '') i.ipv4.addresses;
 
   # The complete first-boot bringup body: every active interface, then the
-  # default route + /etc/resolv.conf refresh (resolv.conf itself is generated
-  # into /etc statically below; this only re-asserts it if empty). Logged to
+  # default route + hostname + the dns/client nudge (gotcha #16). Logged to
   # /dev/console so a failed bringup is VISIBLE (the old netcfg silenced errors).
+  # resolv.conf itself is generated into /etc statically below; network/location
+  # (enabled in the site profile) drives dns/client online — we nudge it here in
+  # case its refresh-dep on location missed the boot-time state change.
   netBringup = ''
     echo "=== solnix networking bringup $(date) ==="
     ${concatStringsSep "\n" (mapAttrsToList ifBringup activeIfs)}
@@ -137,6 +136,11 @@ let
         /usr/sbin/route add default ${cfg.defaultGateway} 2>&1 || true
     ''}
     /usr/bin/hostname ${cfg.hostName} 2>/dev/null || true
+    # nudge dns/client online (its refresh-dep on network/location may miss the
+    # boot-time state change on our image); harmless if already online.
+    /usr/sbin/svcadm enable svc:/network/location:default 2>/dev/null || true
+    ( sleep 5; /usr/sbin/svcadm refresh svc:/network/dns/client:default 2>/dev/null; \
+      /usr/sbin/svcadm enable svc:/network/dns/client:default 2>/dev/null ) &
     echo "-- ipadm show-addr:"; /usr/sbin/ipadm show-addr 2>&1
     echo "-- default route:"; /usr/bin/netstat -rn 2>&1 | grep default | head -2
     echo "=== solnix networking bringup done ==="
@@ -181,14 +185,17 @@ in
 
   config = mkMerge [
     {
-      # resolv.conf + defaultrouter + nodename land in the solnix /etc overlay
-      # (activation reads networking.* for nodename; these extend it). Exposed
-      # as an internal attr the activation module folds into its `etc` derivation.
-      networking.generatedEtc = {
-        "resolv.conf" = mkIf (cfg.nameservers != [ ])
-          (concatMapStringsSep "" (ns: "nameserver ${ns}\n") cfg.nameservers);
-        "defaultrouter" = mkIf (cfg.defaultGateway != null) "${cfg.defaultGateway}\n";
-      };
+      # resolv.conf + defaultrouter land in the solnix /etc overlay (activation
+      # reads networking.* for nodename; these extend it). Exposed as an internal
+      # attr the activation module folds into its `etc` derivation. Built in Nix
+      # (not mkIf-per-leaf) so an unset option simply omits the file.
+      networking.generatedEtc =
+        (lib.optionalAttrs (cfg.nameservers != [ ]) {
+          "resolv.conf" = concatMapStringsSep "" (ns: "nameserver ${ns}\n") cfg.nameservers;
+        })
+        // (lib.optionalAttrs (cfg.defaultGateway != null) {
+          "defaultrouter" = "${cfg.defaultGateway}\n";
+        });
     }
 
     # The DHCP/static bringup runs as an SMF transient oneshot built through the

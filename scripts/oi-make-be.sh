@@ -178,6 +178,13 @@ log "creating SMF profile symlinks"
 # --- 4e. missing users/groups (gotcha #9) -------------------------------------
 # proto passwd/group lack several accounts (sshd for privsep, etc.). Append the
 # ones the host has that the BE lacks.
+#
+# SUPERSEDED (T2.9): declarative users now come from modules/config/users.nix
+# (users.users.<name> -> /etc/{passwd,shadow,group} + seed-authorized-keys). The
+# nixified build lib/make-be.nix merges the toplevel's generated user files over
+# these stock proto accounts and runs the generated authorized_keys seed instead
+# of the ROOT_AUTHKEY copy. This block is the standalone-path fallback that keeps
+# only the stock-account merge (which the module also preserves as defaults).
 log "adding missing users/groups from host"
 for u in $(comm -23 <(cut -d: -f1 /etc/passwd | sort) <(cut -d: -f1 "$BEROOT/etc/passwd" | sort) 2>/dev/null); do
   grep "^$u:" /etc/passwd >> "$BEROOT/etc/passwd" 2>/dev/null || true
@@ -374,6 +381,15 @@ EOF
 chmod 0755 "$BEROOT/lib/svc/method/solnix-hello"
 
 # solnix-netcfg oneshot: DHCP on the first phys NIC (mirrors metadata-shim.sh).
+#
+# SUPERSEDED (T2.9): this hand-written netcfg is REPLACED by the config-generated
+# `site/solnix-net` service from modules/config/networking.nix (driven by
+# networking.interfaces.<nic>.dhcp / .ipv4.addresses). The nixified build
+# lib/make-be.nix stages that generated manifest from the toplevel instead of
+# writing this block; see docs/design-config-modules.md. Kept here only for the
+# standalone (no-toplevel) legacy path this script still supports. The generated
+# bringup carries the SAME ipadm->ifconfig-fallback logic proven below (gotcha
+# #15) — verified on a running ena instance in T2.9 GATE B.
 # Logs to /dev/console so a failed NIC bringup is VISIBLE in the serial log
 # (the original silenced all errors + exited OK, masking a no-network boot).
 cat > "$BEROOT/lib/svc/method/solnix-netcfg" <<'EOF'

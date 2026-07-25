@@ -165,17 +165,39 @@ done
 
 # ---------------------------------------------------------------------------
 # 4. copy the toplevel closure into the target's /nix/store (self-contained).
-#    Walk the toplevel's own store symlinks (no nix binary in the proto env);
-#    if nix-store IS present (build host), use it for a complete closure.
+#    Walk the toplevel's closure. If nix-store IS present (build host), use it.
+#    Else (the minimal proto installer env has no nix) compute the closure by a
+#    fixpoint scan: for each store path found, grep its symlink targets AND file
+#    contents for /nix/store/<hash>-... references, add any new ones, repeat.
+#    (A shallow one-level symlink walk MISSES transitive deps like illumos-sys
+#    that are referenced only through illumos-system-path.)
 # ---------------------------------------------------------------------------
 log "copying toplevel closure into target /nix/store"
 mkdir -p "$ALTROOT/nix/store"
 if command -v nix-store >/dev/null 2>&1; then
   for p in $(nix-store -qR "$TOPLEVEL"); do copy_path "$p"; done
 else
-  copy_path "$TOPLEVEL"
-  for dep in $(find "$TOPLEVEL/" -type l 2>/dev/null | while read L; do ls -ld "$L" 2>/dev/null | sed -n 's/.* -> //p'; done | grep '^/nix/store/' | sort -u); do
-    copy_path "$(echo "$dep" | sed 's,\(/nix/store/[^/]*\).*,\1,')"
+  # closure_refs <store-path>: emit every /nix/store/<hash>-name referenced by
+  # that path (symlink targets via ls -l, plus any string in regular files).
+  closure_refs() {
+    find "$1" 2>/dev/null | while read f; do
+      if [ -h "$f" ]; then ls -ld "$f" 2>/dev/null | sed -n 's/.* -> //p'
+      elif [ -f "$f" ]; then strings "$f" 2>/dev/null || cat "$f" 2>/dev/null
+      fi
+    done | grep -o '/nix/store/[a-z0-9]\{32\}-[^/" ]*' | sed 's,\(/nix/store/[^/]*\).*,\1,' | sort -u
+  }
+  # BFS fixpoint: seed with the toplevel, expand until no new paths appear.
+  seen=" "; queue="$TOPLEVEL"
+  while [ -n "$queue" ]; do
+    p=$(echo "$queue" | awk '{print $1}')
+    queue=$(echo "$queue" | cut -d' ' -f2-)
+    [ -n "$p" ] || continue
+    case "$seen" in *" $p "*) continue;; esac
+    seen="$seen$p "
+    copy_path "$p"
+    for r in $(closure_refs "$p"); do
+      case "$seen $queue" in *"$r"*) : ;; *) queue="$queue $r";; esac
+    done
   done
 fi
 relink "$TOPLEVEL" "$ALTROOT/run-current-system"
@@ -204,8 +226,8 @@ mkdir -p "$ALTROOT/lib/svc/manifest/solnix" "$ALTROOT/lib/svc/method" "$ALTROOT/
 if [ -d "$TOPLEVEL/manifest/solnix" ]; then
   cp "$TOPLEVEL/manifest/solnix/"*.xml "$ALTROOT/lib/svc/manifest/solnix/" 2>/dev/null || true
 fi
-[ -e "$TOPLEVEL/site-profile.xml" ] && cp -L "$TOPLEVEL/site-profile.xml" "$ALTROOT/etc/svc/profile/site/solnix.xml"
-[ -e "$TOPLEVEL/activate" ] && { cp -L "$TOPLEVEL/activate" "$ALTROOT/lib/svc/method/solnix-activate"; chmod 0555 "$ALTROOT/lib/svc/method/solnix-activate"; }
+[ -e "$TOPLEVEL/site-profile.xml" ] && cp "$TOPLEVEL/site-profile.xml" "$ALTROOT/etc/svc/profile/site/solnix.xml"
+[ -e "$TOPLEVEL/activate" ] && { cp "$TOPLEVEL/activate" "$ALTROOT/lib/svc/method/solnix-activate"; chmod 0555 "$ALTROOT/lib/svc/method/solnix-activate"; }
 
 # ---------------------------------------------------------------------------
 # 7. register generation 1 + switch tools on the target's PATH (T2.5 layout).
@@ -218,6 +240,7 @@ printf '1\n' > "$ALTROOT/nix/var/nix/profiles/system.gen"
 if [ -e "$TOPLEVEL/bin/switch-to-configuration" ]; then
   relink "$TOPLEVEL/bin/switch-to-configuration" "$ALTROOT/usr/bin/switch-to-configuration"
   relink "$TOPLEVEL/bin/solnix-rebuild"          "$ALTROOT/usr/bin/solnix-rebuild"
+  [ -e "$TOPLEVEL/bin/solnix-install" ] && relink "$TOPLEVEL/bin/solnix-install" "$ALTROOT/usr/bin/solnix-install"
 fi
 
 # ---------------------------------------------------------------------------

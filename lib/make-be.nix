@@ -19,7 +19,11 @@
 #   - the toplevel's activate script (available at /lib/svc/method for switch)
 #   - the toplevel closure copied into the store ON the BE (self-contained /nix)
 #   - every gotcha fix from oi-make-be.sh (driver files, /dev symlinks, dir perms,
-#     external libs, OpenSSH, DHCP netcfg, cryptosvc race, ttya console, ...)
+#     external libs, OpenSSH, cryptosvc race, ttya console, ...)
+#     Networking (DHCP/static) + users/authorized_keys are NOW config-generated
+#     (T2.9): the toplevel ships site/solnix-net + /etc/{passwd,shadow,group,
+#     resolv.conf} + seed-authorized-keys, so make-be stages those instead of
+#     hand-writing a netcfg method / copying ROOT_AUTHKEY.
 #   - the NON-DEBUG kernel with pit_is_broken=1 (NDPROTO), for 100% boot.
 
 { pkgs
@@ -38,6 +42,7 @@ let
   manifestsDir = "${toplevel}/manifest/solnix";
   activate = "${toplevel}/activate";
   systemPath = "${toplevel}/systemPath";
+  seedAuthKeys = "${toplevel}/seed-authorized-keys";
 
   # The assembly script: oi-make-be.sh's proven flow, with the hand-written site
   # profile + solnix manifests REPLACED by the toplevel's config-generated ones,
@@ -65,6 +70,7 @@ let
     SMF_MANIFESTS="${manifestsDir}"
     ACTIVATE="${activate}"
     SYSTEMPATH="${systemPath}"
+    SEED_AUTHKEYS="${seedAuthKeys}"  # T2.9: users.users.*.openssh.authorizedKeys seed
 
     die()  { echo "FATAL: $*" >&2; exit 1; }
     log()  { printf '\n=== %s ===\n' "$*" >&2; }
@@ -151,8 +157,14 @@ let
       ln -sf platform_none.xml platform.xml && \
       ln -sf ns_dns.xml name_service.xml ) 2>/dev/null || true
 
-    # 4e. missing users/groups (gotcha #9)
-    log "adding missing users/groups from host"
+    # 4e. users/groups: preserve the stock proto accounts (gotcha #9 — the SMF
+    #     stack + sshd privsep need them), then MERGE the config-generated
+    #     declared users/groups from the toplevel's /etc overlay (T2.9: users
+    #     module). Proto accounts stay; module-declared users (greg, ...) are
+    #     appended if not already present. This makes accounts declarative
+    #     (users.users.<name>) instead of "copy the host's whole passwd".
+    log "merging stock proto accounts + config-generated users (T2.9)"
+    # stock accounts the proto lacks but the host has (privsep etc.) — unchanged.
     for u in $(comm -23 <(cut -d: -f1 /etc/passwd | sort) <(cut -d: -f1 "$BEROOT/etc/passwd" | sort) 2>/dev/null); do
       grep "^$u:" /etc/passwd >> "$BEROOT/etc/passwd" 2>/dev/null || true
       grep "^$u:" /etc/shadow >> "$BEROOT/etc/shadow" 2>/dev/null || true
@@ -160,6 +172,27 @@ let
     for g in $(comm -23 <(cut -d: -f1 /etc/group | sort) <(cut -d: -f1 "$BEROOT/etc/group" | sort) 2>/dev/null); do
       grep "^$g:" /etc/group >> "$BEROOT/etc/group" 2>/dev/null || true
     done
+    # config-generated declared users from the users module (T2.9). Append any
+    # not already in the proto/host set; module lines take precedence for the
+    # accounts it owns (e.g. root's shell) via the passwd rewrite in step 9.
+    if [ -f "$TOPLEVEL/etc/passwd" ]; then
+      while IFS=: read -r un rest; do
+        [ -n "$un" ] || continue
+        grep -q "^$un:" "$BEROOT/etc/passwd" 2>/dev/null || echo "$un:$rest" >> "$BEROOT/etc/passwd"
+      done < "$TOPLEVEL/etc/passwd"
+    fi
+    if [ -f "$TOPLEVEL/etc/shadow" ]; then
+      while IFS=: read -r un rest; do
+        [ -n "$un" ] || continue
+        grep -q "^$un:" "$BEROOT/etc/shadow" 2>/dev/null || echo "$un:$rest" >> "$BEROOT/etc/shadow"
+      done < "$TOPLEVEL/etc/shadow"
+    fi
+    if [ -f "$TOPLEVEL/etc/group" ]; then
+      while IFS=: read -r gn rest; do
+        [ -n "$gn" ] || continue
+        grep -q "^$gn:" "$BEROOT/etc/group" 2>/dev/null || echo "$gn:$rest" >> "$BEROOT/etc/group"
+      done < "$TOPLEVEL/etc/group"
+    fi
     chmod 1777 "$BEROOT/tmp"
 
     # 5. /etc essentials + driver files (gotcha #3) + ttya console
@@ -178,8 +211,11 @@ let
     swap	-	/tmp		tmpfs	-	yes	-
     EOF
     [ -f "$BEROOT/etc/hostid" ] || printf '0x1b0b57ec\n' > "$BEROOT/etc/hostid"
-    # hostname from the toplevel's /etc overlay
+    # hostname + resolv.conf + defaultrouter from the toplevel's /etc overlay
+    # (T2.9: generated from networking.hostName / .nameservers / .defaultGateway).
     [ -f "$TOPLEVEL/etc/nodename" ] && $GCP "$TOPLEVEL/etc/nodename" "$BEROOT/etc/nodename" 2>/dev/null || true
+    [ -f "$TOPLEVEL/etc/resolv.conf" ] && $GCP "$TOPLEVEL/etc/resolv.conf" "$BEROOT/etc/resolv.conf" 2>/dev/null || true
+    [ -f "$TOPLEVEL/etc/defaultrouter" ] && $GCP "$TOPLEVEL/etc/defaultrouter" "$BEROOT/etc/defaultrouter" 2>/dev/null || true
     mkdir -p "$BEROOT/boot/solaris"
     cat > "$BEROOT/boot/solaris/bootenv.rc" <<'EOF'
     setprop console ttya
@@ -234,7 +270,15 @@ let
       done
     fi
     mkdir -p "$BEROOT/var/empty"; chown root:sys "$BEROOT/var/empty" 2>/dev/null || true; chmod 0755 "$BEROOT/var/empty"
-    if [ -n "''${ROOT_AUTHKEY:-}" ] && [ -f "''${ROOT_AUTHKEY}" ]; then
+    # authorized_keys: DECLARATIVE via the users module (T2.9). Run the toplevel's
+    # generated seed script against the BE root; it writes each declared user's
+    # ~/.ssh/authorized_keys from users.users.<name>.openssh.authorizedKeys.keys.
+    # (Replaces the ad-hoc ROOT_AUTHKEY copy; ROOT_AUTHKEY still honoured as a
+    # fallback for a config that declares no keys.)
+    if [ -f "$SEED_AUTHKEYS" ]; then
+      log "seeding authorized_keys from users module (T2.9)"
+      ROOT="$BEROOT" /usr/bin/bash "$SEED_AUTHKEYS" || echo "NOTE: authorized_keys seed had non-fatal errors"
+    elif [ -n "''${ROOT_AUTHKEY:-}" ] && [ -f "''${ROOT_AUTHKEY}" ]; then
       mkdir -p "$BEROOT/root/.ssh"; chmod 700 "$BEROOT/root/.ssh"
       $GCP "$ROOT_AUTHKEY" "$BEROOT/root/.ssh/authorized_keys"; chmod 600 "$BEROOT/root/.ssh/authorized_keys"
     fi
@@ -281,8 +325,12 @@ let
     [ -e "$SITE_PROFILE" ] && $GCP -L "$SITE_PROFILE" "$BEROOT/etc/svc/profile/site/solnix.xml"
     [ -e "$ACTIVATE" ] && { $GCP -L "$ACTIVATE" "$BEROOT/lib/svc/method/solnix-activate"; chmod 0555 "$BEROOT/lib/svc/method/solnix-activate"; }
 
-    # 8b. the solnix-hello + netcfg oneshots (boot evidence + DHCP; gotchas #6,#15,#16)
-    #     Kept verbatim from the proven recipe: they are boot-plumbing, not config.
+    # 8b. the solnix-hello oneshot (boot evidence). Kept verbatim: pure
+    #     boot-plumbing, not config. The DHCP/networking oneshot is NO LONGER
+    #     hand-written here — it is the config-generated `site/solnix-net`
+    #     service (T2.9, from networking.interfaces.*), staged above via
+    #     `cp "$SMF_MANIFESTS"/*.xml`, whose method script is an absolute
+    #     /nix/store path copied into the BE with the toplevel closure.
     cat > "$BEROOT/lib/svc/manifest/solnix/solnix-hello.xml" <<'EOF'
     <?xml version="1.0"?>
     <!DOCTYPE service_bundle SYSTEM "/usr/share/lib/xml/dtd/service_bundle.dtd.1">
@@ -326,59 +374,6 @@ let
     exit $SMF_EXIT_OK
     EOF
     chmod 0755 "$BEROOT/lib/svc/method/solnix-hello"
-    cat > "$BEROOT/lib/svc/method/solnix-netcfg" <<'EOF'
-    #!/sbin/sh
-    . /lib/svc/share/smf_include.sh
-    {
-      echo "=== solnix-netcfg $(date) ==="
-      NIC=""; i=0
-      while [ $i -lt 30 ]; do
-        NIC=$(/usr/sbin/dladm show-phys -p -o LINK 2>/dev/null | head -1)
-        [ -n "$NIC" ] && break; i=$((i+1)); sleep 2
-      done
-      echo "picked NIC='$NIC'"
-      if [ -n "$NIC" ]; then
-        /usr/sbin/ipadm create-if "$NIC" 2>/dev/null && \
-          /usr/sbin/ipadm create-addr -T dhcp -w 60 "$NIC/dhcp" 2>/dev/null
-        if ! /usr/sbin/ipadm show-addr "$NIC/dhcp" 2>/dev/null | grep -q ok; then
-          echo "ipadm failed (ena link unknown); using ifconfig"
-          /usr/sbin/ifconfig "$NIC" plumb 2>&1
-          /usr/sbin/ifconfig "$NIC" dhcp start wait 60 2>&1
-        fi
-      fi
-      /usr/sbin/ipadm show-addr 2>&1
-    } > /dev/console 2>&1
-    [ -s /etc/resolv.conf ] || printf 'nameserver 169.254.169.253\nnameserver 8.8.8.8\n' > /etc/resolv.conf
-    /usr/sbin/svcadm enable svc:/network/location:default 2>/dev/null || true
-    ( sleep 5; /usr/sbin/svcadm refresh svc:/network/dns/client:default 2>/dev/null; \
-      /usr/sbin/svcadm enable svc:/network/dns/client:default 2>/dev/null ) &
-    /usr/bin/hostname solnix 2>/dev/null || true
-    exit $SMF_EXIT_OK
-    EOF
-    chmod 0755 "$BEROOT/lib/svc/method/solnix-netcfg"
-    cat > "$BEROOT/lib/svc/manifest/solnix/solnix-netcfg.xml" <<'EOF'
-    <?xml version="1.0"?>
-    <!DOCTYPE service_bundle SYSTEM "/usr/share/lib/xml/dtd/service_bundle.dtd.1">
-    <service_bundle type="manifest" name="solnix:netcfg">
-      <service name="site/solnix-netcfg" type="service" version="1">
-        <single_instance/>
-        <dependency name="devices" grouping="require_all" restart_on="none" type="service">
-          <service_fmri value="svc:/milestone/devices:default"/>
-        </dependency>
-        <exec_method type="method" name="start" exec="/lib/svc/method/solnix-netcfg" timeout_seconds="60">
-          <method_context><method_credential user="root"/></method_context>
-        </exec_method>
-        <exec_method type="method" name="stop" exec=":true" timeout_seconds="60">
-          <method_context><method_credential user="root"/></method_context>
-        </exec_method>
-        <property_group name="startd" type="framework">
-          <propval name="duration" type="astring" value="transient"/>
-        </property_group>
-        <instance name="default" enabled="true"/>
-        <template><common_name><loctext xml:lang="C">solnix DHCP bringup</loctext></common_name></template>
-      </service>
-    </service_bundle>
-    EOF
 
     # 8c. cryptosvc race fix (gotcha #11): inject milestone/devices dependency
     CRYPTOMF="$BEROOT/lib/svc/manifest/system/cryptosvc.xml"

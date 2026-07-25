@@ -10,6 +10,8 @@
 
 [
   ./nixos-compat.nix
+  ./config/networking.nix
+  ./config/users.nix
   ./system/boot/init/smf.nix
   ./system/activation
 ]

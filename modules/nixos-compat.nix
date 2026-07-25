@@ -24,15 +24,9 @@ let
   };
 in
 {
-  # networking.hostName: a real option (activation + /etc/nodename read it).
-  # Minimal for now — the full networking module is P2.3. Declared here (not a
-  # stub) because configurations/base.nix sets it and the activation module
-  # reads config.networking.hostName.
-  options.networking.hostName = mkOption {
-    type = types.str;
-    default = "solnix";
-    description = "System hostname (written to /etc/nodename by activation).";
-  };
+  # networking.hostName now lives in modules/config/networking.nix (T2.9), which
+  # owns the full networking option surface. Removed from here to avoid a
+  # double-declaration; the compat stub below is only for systemd.* + nix.*.
 
   options.systemd = {
     # The big one: swallow whole systemd.services.* without modelling it.
