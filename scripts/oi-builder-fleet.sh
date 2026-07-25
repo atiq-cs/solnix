@@ -22,7 +22,7 @@ export AWS_PROFILE="${AWS_PROFILE:-numa}"
 REGION="${REGION:-us-east-2}"
 # The solnix-builder AMI: a snapshot of solnix-build WITH Nix + world + gcc-14 +
 # clang, taken AFTER the toolchains land. Set this once it exists:
-BUILDER_AMI="${BUILDER_AMI:-}"      # e.g. ami-xxxx (solnix-builder-YYYYMMDD)
+BUILDER_AMI="${BUILDER_AMI:-ami-0f0c1ed4f15bef71f}"      # e.g. ami-xxxx (solnix-builder-YYYYMMDD)
 ITYPE="${2:-m6i.8xlarge}"           # 32 vCPU/host; bump count for more parallelism
 KEY="${KEY:-solnix-oi}"
 
