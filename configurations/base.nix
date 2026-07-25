@@ -22,28 +22,50 @@
 
   networking.hostName = lib.mkDefault "solnix";
 
-  # One example SMF service to exercise the generator once it's wired (T1.11).
-  # sshd is a contract daemon (docs/design-smf-init.md §1.3). The start.exec
-  # references pkgs.openssh, which resolves only against the fork — so this whole
-  # attr set is a documented stub until then.
+  # Two example SMF services exercise the generator (T1.11) end-to-end: each
+  # renders to a DTD-valid manifest in system.build.toplevel, which make-be
+  # stages at /lib/svc/manifest/solnix and activation imports via svccfg.
+  #
+  # sshd: a contract daemon (design-smf-init §1.3). Kept DISABLED because the
+  # image's real SSH is the stock modern-OpenSSH network/ssh make-be stages
+  # (gotchas #12-#15) which already owns port 22 — enabling this too would
+  # collide on :22. It is the canonical generator example; once pkgs.openssh
+  # lands in the fork (P1) this becomes the pure-closure sshd and network/ssh
+  # is dropped. enable=false keeps `svcs -x` clean while still generating the
+  # manifest into the toplevel (proves generation without a port clash).
   smf.services.sshd = {
-    enable = true;
+    enable = false;
     category = "network";
-    description = "OpenSSH server";
+    description = "OpenSSH server (generator example; stock network/ssh serves :22)";
     model = "contract";
     requires = [
       "svc:/milestone/network:default"
       "svc:/system/filesystem/local:default"
     ];
-    # TODO(P1): ${pkgs.openssh}/sbin/sshd — pkgs.openssh needs the nixpkgs fork.
-    # Left as a literal path placeholder so the option type-checks without pkgs.
-    start.exec = "/run/current-system/sw/sbin/sshd -f /etc/ssh/sshd_config";
+    # TODO(P1): ${pkgs.openssh}/sbin/sshd once the fork ships openssh.
+    start.exec = "/usr/sbin/sshd -f /etc/ssh/sshd_config";
     stop.exec = ":kill"; # svc.startd kills the contract
     refresh.exec = ":kill -HUP"; # reload config
     properties.config = {
       listen_addr = "0.0.0.0";
       port = "22";
     };
+  };
+
+  # A transient oneshot (design-smf-init §1.4): the smallest ENABLED
+  # config-generated service that actually runs on-target and reaches online
+  # (transient = start method returning OK means done). Proves the whole path:
+  # generate -> toplevel -> make-be stage -> manifest-import -> svc.startd runs
+  # it -> online. Uses only proto-shipped tools so it has no external dep.
+  smf.services.solnix-marker = {
+    enable = true;
+    category = "site";
+    description = "solnix config-generated marker (T2.8 toplevel proof)";
+    model = "transient";
+    requires = [ "svc:/system/filesystem/local:default" ];
+    start.exec = "/usr/bin/echo solnix config-generated service online";
+    start.timeoutSeconds = 30;
+    stop.exec = ":true";
   };
 
   # No users/networking/fs config here yet — those modules (P2.3) don't

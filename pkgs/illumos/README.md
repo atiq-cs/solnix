@@ -316,3 +316,41 @@ Provenance (design risk #3): OpenIndiana gcc 10.5.0-oi-2, gate HEAD
   plus generated SMF manifests from `smf.nix` (T1.11).
 - Flip the stdenv's `libc`/`binutils-unwrapped` from the seed slices to these
   gate slices (design §3.1 step 4); wrapper flags unchanged, only store paths.
+
+## T2.8 toplevel + T2.6 nixified make-be (host, gate ac45d71fc2)
+
+`configurations/base.nix` now evaluates end-to-end to a real
+`config.system.build.toplevel`, and `lib/make-be.nix` consumes it to produce a
+bootable image. Eval + build both on the host (the eval-split, docs/design-make-be.md
+§7): the fork's patched nixpkgs `lib/` is copied to the host so
+`lib.evalModules` runs under Nix 2.3.16; `pkgs` is the minimal shim in
+`lib/host-pkgs.nix` (writers = plain `derivation`s + `pkgs.illumos.*` from
+`default.nix` here).
+
+Build on the host from a repo mirror (lib/ modules/ configurations/ pkgs/ +
+the copied nixpkgs `lib` at `lib/nixpkgs-lib/lib`):
+
+```sh
+nix-build lib/eval-host.nix -A toplevel        # GATE T2.8: the system closure
+nix-build lib/eval-host.nix -A makeBeScript    # GATE T2.6: the root-run assembler
+# then, as root, against a scratch disk:
+ROOT_AUTHKEY=/root/.ssh/authorized_keys DISK=c1t1d0 <makeBeScript>
+```
+
+| artifact | store path | NAR (sha256) |
+|---|---|---|
+| toplevel (T2.8) | `/nix/store/p57x56m4plq57z20idff5qjdssp40qm1-solnix-system-solnix` | `07ma3wzrgkmw7kf667jdhazlq9my7rba8dznnglwjj8z82mccqlk` |
+| make-be script (T2.6) | `/nix/store/y1zvkv92mizkr437jpm5zdkj1nysb65d-solnix-make-be` | `0f75z4nsivjgj9lx0y4z9mywnsclric8rs9z1scyn3kppp7nv1ai` |
+
+- **GATE T2.8 PASS** — the toplevel is a 13-path closure over the sliced illumos
+  world (`illumos-{sys,libc,rtld,ld,base-tools,external-libs}` via
+  `illumos-system-path`) + the DTD-validated generated SMF manifest
+  (`solnix-marker.xml`) + the activation script + the site profile + `/etc`.
+  `nix-store -q --tree` shows the whole graph; the builder asserts unix/genunix/
+  svc.startd/libc/activate are all present.
+- **GATE T2.6 PASS** — the nixified make-be built an image → AMI
+  `ami-0f451a7429629ab46` → **5/5 booted to `svc:/milestone/multi-user-server`**
+  on m6i.large (`svcs -x` CLEAN; `/run-current-system` → the toplevel store
+  path; DHCP + default route; cryptosvc + network/ssh online). Same bootable
+  result as the hand recipe, from a config-driven builder. An earlier v1 AMI
+  `ami-0639fb184f218a519` also booted 5/5 (before the sshd→marker config tweak).

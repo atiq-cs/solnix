@@ -2,56 +2,74 @@
   description = "solnix — a Nix distribution of illumos (illumos analog of nixbsd)";
 
   inputs = {
-    # For now this points at plain upstream nixpkgs so the flake parses and
-    # lib.evalModules is reachable. Phase 1 (T1.1) swaps this to the solnix
-    # nixpkgs fork branch that carries the x86_64-solaris pure stdenv +
-    # pkgs.illumos.* world (see docs/design-nixpkgs-illumos.md §5). Repin here and
-    # in .kiro/steering/nix-conventions.md when the fork branch exists.
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    # The solnix nixpkgs fork: pins nixpkgs 7f81d69 + applyPatches (x86_64-solaris
+    # stdenv wiring) + overlays.default exposing pkgs.illumos.*. See
+    # docs/design-nixpkgs-illumos.md §5. This is the flake-native path (dev boxes
+    # with flake-capable Nix). The BUILD path (illumos host, Nix 2.3.16 classic,
+    # no flakes) uses lib/eval-host.nix — see the eval-split note below.
+    solnix-pkgs.url = "git+file:///home/gburd/ws/solnix-pkgs";
   };
 
   outputs =
-    { self, nixpkgs, ... }:
+    { self, solnix-pkgs, ... }:
     let
-      inherit (nixpkgs) lib;
+      # nixpkgs lib comes from the fork's patched source (carries x86_64-solaris).
+      nixpkgs = solnix-pkgs.lib.nixpkgsSrc;
+      lib = import "${nixpkgs}/lib";
 
       # The canonical Nix system for illumos is x86_64-solaris (GNU triple
       # x86_64-unknown-solaris2.11); "illumos" is branding at the attribute layer.
       # See docs/design-nixpkgs-illumos.md §1.
       solnixSystems = [ "x86_64-solaris" ];
 
-      # The systems a solnix image can be *built from* (cross from Linux, T1.6).
-      # Native illumos building is added once the fork's stdenv is green.
+      # The systems a solnix image can be *built from*. Native illumos building
+      # (the only place pkgs.illumos.* realise) is the host; cross-from-Linux is
+      # roadmap T1.6.
       buildSystems = [ "x86_64-linux" ];
 
       # solnixSystem: the nixosSystem analog. Thin wrapper over lib/eval-config.nix
       # (a fork of NixOS's nixos/lib/eval-config.nix). Kept out here so both the
       # flake and out-of-tree callers use one entrypoint.
       solnixSystem = import ./lib/eval-config.nix { inherit lib; };
+
+      # pkgs for a solnix system: the pinned nixpkgs instantiated for
+      # x86_64-solaris with the fork's illumos overlay (exposes pkgs.illumos.*).
+      pkgsFor = system: import nixpkgs {
+        inherit system;
+        overlays = [ solnix-pkgs.overlays.default ];
+      };
     in
     {
       # lib.solnixSystem — build a solnix system from modules. Analog of
       # nixpkgs' lib.nixosSystem.
       lib = { inherit solnixSystem; };
 
-      # solnixConfigurations.<name> — the nixosConfigurations analog. These do NOT
-      # evaluate yet: they need the nixpkgs fork (pkgs.illumos.*) and the seed
-      # toolchain, neither of which exists. Wired now so the shape is fixed and
-      # `configurations/` has a home.
+      # solnixConfigurations.<name> — the nixosConfigurations analog.
+      #
+      # EVAL-SPLIT (docs/design-make-be.md §7): this flake output EVALUATES the
+      # system on a flake-capable Nix. It targets x86_64-solaris, so
+      # config.system.build.* are x86_64-solaris derivations that only BUILD on
+      # the illumos host. On the host (classic Nix 2.3.16, no flakes, no nixpkgs)
+      # use lib/eval-host.nix instead — it imports a copied nixpkgs lib + the
+      # standalone pkgs/illumos slices and produces the SAME toplevel there, where
+      # it can be realised. Both entrypoints share lib/eval-config.nix + the
+      # module tree; the split is only about WHERE eval vs build happen.
       solnixConfigurations = {
         base = solnixSystem {
           system = "x86_64-solaris";
+          pkgs = pkgsFor "x86_64-solaris";
           modules = [ ./configurations/base.nix ];
         };
       };
 
-      # Per-build-system image packages. Stubbed: the image builders
-      # (lib/make-be.nix, lib/make-disk-image.nix — roadmap P1.5) do not exist yet,
-      # so we expose nothing buildable rather than fake a derivation.
-      # Add real image outputs when make-be.nix lands (P1.5). Until then this is
-      # intentionally empty — no speculative packages.
+      # Per-build-system image packages. The image builder (lib/make-be.nix)
+      # emits a root-run assembly SCRIPT (the privileged ZFS/loader steps can't
+      # run in a Nix sandbox — see lib/make-be.nix header + design-make-be.md §7),
+      # so what we expose here is that script + the toplevel it consumes. Realise
+      # on the illumos host; run the script as root against a scratch disk.
       packages = lib.genAttrs buildSystems (_buildSystem: {
-        # TODO(P1.5): baseImage = self.solnixConfigurations.base.config.system.build.image;
+        # the full system closure (T2.8); realise on the illumos host.
+        baseToplevel = self.solnixConfigurations.base.config.system.build.toplevel;
       });
     };
 }

@@ -779,3 +779,31 @@ Still needed (next tasks, need the seed/stdenv):
 - Seed fixed-output derivation (T1.1b) + `pkgs/stdenv/illumos/*` + `pkgs.illumos.*`.
 - `pkgs/stdenv/default.nix`: `x86_64-solaris` → an illumos stages set (still
   `stagesNix`). `flake-systems.nix`: add `x86_64-solaris` once stdenv builds.
+
+## Addendum (T2.8/T2.6): the eval-split + the two illumos layers
+
+Two layers of `pkgs.illumos.*` exist and are reconciled:
+
+1. **Toolchain (fork overlay, `pkgs/os-specific/illumos/default.nix`):** the
+   seed-backed `libc`/`binutils-unwrapped`/`gcc-unwrapped`/`cc`/`bintools`
+   wrappers (§3.3) that BUILD illumos-gate from source. The stdenv-bootstrap
+   layer. This is what the overlay exposes today.
+2. **Runtime world (solnix repo `pkgs/illumos/*.nix`):** the gate-derived,
+   RUNPATH-relocated slices `illumos.{gate,libc,rtld,ld,sys,base-tools,
+   externalLibs,systemPath}` (docs/design-gate-derivation.md). These are what a
+   solnix SYSTEM is composed of — `system.build.toplevel` consumes `systemPath`.
+   They live as standalone `derivation` expressions (host `builtins.path` gate
+   ingest) and are PROVEN: T2.6 booted an image from them 5/5 to
+   multi-user-server. Folding them into the fork overlay as
+   `stdenvNoCC.mkDerivation` is deferred to P2 (needs the gate FOD, §1.5, to
+   remove the host-local `builtins.path`).
+
+**Eval-split (docs/design-make-be.md §7):** `system.build.toplevel` is
+EVALUATED and BUILT on the illumos host — the only place `x86_64-solaris`
+derivations realise and the only place the gate proto `builtins.path` exists.
+`lib.evalModules` needs nixpkgs' `lib`, so the fork's patched nixpkgs `lib/`
+(pure Nix) is copied to the host; it runs under Nix 2.3.16. The flake
+(`solnixConfigurations.base`) is the dev-box eval entry point (fixes the shape,
+shares `lib/eval-config.nix` + the module tree); it evaluates fully off-host
+only once the gate FOD replaces the host-local ingest. Host entry point:
+`lib/eval-host.nix`; host `pkgs` shim: `lib/host-pkgs.nix`.

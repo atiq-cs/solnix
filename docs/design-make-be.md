@@ -247,8 +247,134 @@ reached online regardless. **T2.2 UPDATE: all now resolved — `svcs -x` is CLEA
   (`/usr/sbin/sshd` + `/usr/libexec/sshd-session` et al) + `/var/empty` privsep
   dir + reference `ssh.xml`/method + `PermitRootLogin yes` + root authorized_keys
   (gotchas #12–#14). ena NIC needs legacy `ifconfig` DHCP, not ipadm (gotcha #15).
-- Nixify make-be (`lib/make-be.nix`) — the script recipe (`scripts/oi-make-be.sh`
-  + the manual fixes here) is proven; fold the fixes into it, then nixify.
+- ~~Nixify make-be (`lib/make-be.nix`)~~ **DONE (T2.6):** the recipe is nixified
+  — `lib/make-be.nix` emits a store-resident assembly script parameterized by a
+  T2.8 `system.build.toplevel`; run as root on the host it produces the same
+  bootable BE. Batch-booted 5/5 to multi-user-server from the nixified builder
+  (AMI `ami-0f451a7429629ab46`); `svcs -x` clean; the running system's
+  `/run-current-system` points at the toplevel store path. See §7 (eval-split).
 - External libs + non-DEBUG kernel: fold into `pkgs.illumos.gate` (build
   non-DEBUG proto; the gate FOD should use `bldenv +d`).
 - Build the external libs + libcrypto from source / pinned IPS pkg (P2).
+
+---
+
+## 7. Nixification (T2.8 toplevel + T2.6 make-be) — the eval-split
+
+Status: **DONE.** `configurations/base.nix` evaluates end-to-end to a real
+`config.system.build.toplevel` store path (T2.8), and `lib/make-be.nix` consumes
+that toplevel to produce the bootable image (T2.6). Both proven on the host.
+
+### 7.1 The eval-split decision
+
+The friction is Nix versions and platforms:
+
+- The **illumos build host** runs **Nix 2.3.16 (classic, no flakes)** and has **no
+  nixpkgs**. It is the ONLY machine where `x86_64-solaris` derivations
+  (`pkgs.illumos.*`) BUILD, because the gate proto is ingested there via a
+  host-local `builtins.path /code/illumos-gate/proto/root_i386`.
+- The **dev box** has flake-capable Nix but is `x86_64-linux`; it can EVALUATE
+  the fork's patched nixpkgs but cannot BUILD the illumos derivations, and cannot
+  even fully EVALUATE `toplevel` because the gate-proto `builtins.path` does not
+  exist there.
+
+**Decision: EVALUATE and BUILD both on the illumos host.** The module system
+(`lib.evalModules`) needs nixpkgs' `lib`, so the fork's patched nixpkgs `lib/`
+(pure Nix, ~2.2 MB, no ELF) is copied to the host; `evalModules` runs fine under
+Nix 2.3.16 (verified). This avoids a `.drv` transfer across Nix versions and the
+`builtins.path` platform mismatch — one machine does both. Entry point:
+`lib/eval-host.nix` (classic `import`). The flake (`solnixConfigurations.base`)
+is the dev-box eval entry point that fixes the shape; it targets the same
+`x86_64-solaris` and shares `lib/eval-config.nix` + the module tree, so once the
+gate FOD (design-nixpkgs-illumos §1.5) removes the host-local `builtins.path`,
+the flake path evaluates fully off-host too.
+
+### 7.2 `system.build.toplevel` (T2.8) — `modules/system/activation/`
+
+The NixOS `system.build.toplevel` analog: a derivation whose closure IS the
+bootable world (a 13-path closure, 25 KB of symlinks over ~the sliced illumos
+store paths):
+
+- `systemPath` → `pkgs.illumos.systemPath` (kernel `unix`+`genunix`, `rtld`,
+  `libc`, `ld`, `base-tools`, `externalLibs` — the RUNPATH-relocated slices).
+- `manifest/solnix/` → the DTD-validated generated SMF manifests (from
+  `smf.nix`'s `checkedManifests`; `xmllint --dtdvalid` runs at build).
+- `activate` → the SMF activation script (design-smf-init §3.1: `svccfg apply`
+  the site profile, `svccfg import` each manifest, `svcadm enable/disable` per
+  service, `svcadm milestone multi-user-server`). Idempotent; runs on-target
+  where `svc.startd`/`configd` are already up.
+- `site-profile.xml` → the config-generated enable/disable site profile.
+- `etc` → the solnix-owned `/etc` overlay (`/etc/nodename`, release stamp).
+
+GATE T2.8 result: `nix-build lib/eval-host.nix -A toplevel` →
+`/nix/store/…-solnix-system-solnix` whose contents include
+`systemPath/platform/i86pc/kernel/amd64/unix`, `…/kernel/amd64/genunix`,
+`…/lib/svc/bin/svc.startd`, `…/lib/amd64/libc.so.1`, `manifest/solnix/*.xml`,
+and `activate` (sanity-asserted in the builder). `nix-store -q --tree` shows the
+closure resolving to `illumos-{sys,libc,rtld,ld,base-tools,external-libs}` via
+`illumos-system-path`.
+
+### 7.3 `lib/make-be.nix` (T2.6) — the nixified recipe + the privilege boundary
+
+`lib/make-be.nix` is a derivation that EMITS a self-contained assembly SCRIPT
+(a store path) parameterized by the toplevel. Run as root on the host, the
+script lays the toplevel closure into a bootable ZFS-root BE.
+
+**The boundary (documented, deliberate):** the image build needs **root + live
+ZFS** (`zpool`/`zfs create`, `mkfs pcfs`, `bootadm`, `installboot`, `mount`) —
+none of which run inside a Nix build sandbox. So the REPRODUCIBLE part (which
+toplevel/proto/manifests to lay down, encoded from the config) is a store path;
+the PRIVILEGED part runs on the host from that script. The script's Nix closure
+references the toplevel, so "which system" is content-addressed even though the
+disk touch is imperative. This mirrors how NixOS's `make-disk-image` ultimately
+shells out to privileged tooling.
+
+What make-be adds to the proto root (add-not-replace, design-smf-init §5), all
+carried verbatim from the proven `scripts/oi-make-be.sh` (the 16 gotchas + the
+`pit_is_broken` non-DEBUG kernel swap): driver-config files (gotcha #3), the
+non-DEBUG kernel trees (gotchas #4/#5/#10), dir perms (#7), `/dev` symlinks (#6),
+SMF profile symlinks (#8), missing users/groups (#9), external libs, modern
+OpenSSH + `/var/empty` (gotchas #12–#15), the cryptosvc `milestone/devices` race
+fix (#11), ttya console (#1/#4), DHCP netcfg via `ifconfig` (#15), and
+`network/location`→dns/client (#16). ON TOP of that it now ALSO copies the
+**toplevel closure into the BE's `/nix/store`** (self-contained), stages the
+**config-generated** `manifest/solnix/*.xml` + `site/solnix.xml` (replacing the
+hand-written ones where the toplevel provides them), symlinks
+`/run-current-system` → the toplevel, and DTD-validates every staged manifest.
+
+GATE T2.6 result: image built by the nixified script → AMI
+`ami-0f451a7429629ab46` → **5/5 booted to `multi-user-server` on m6i.large**
+(two batches, 10/10 total across `ami-0639fb184f218a519` + the v2 AMI); serial
+console shows `svcs -x` CLEAN, the toplevel store path at `/run-current-system`,
+DHCP address + default route, `cryptosvc`+`network/ssh` online. The
+config-generated `site/solnix-marker` transient service imports and reaches
+online (absent from `svcs -x`), proving the full path: generate → toplevel →
+make-be stage → `manifest-import` → `svc.startd` runs it.
+
+### 7.4 The host pkgs shim (`lib/host-pkgs.nix`)
+
+The host has no nixpkgs stdenv, so `pkgs.writeText`/`writeScript`/`runCommand`
+are **plain-`derivation` stand-ins** (bash builder, `currentSystem =
+x86_64-solaris`) — the same trick `pkgs/illumos/*.nix` and `lib/smf/tests.nix`
+use. `runCommand` ignores `nativeBuildInputs` and puts `/usr/bin` on PATH, so the
+smf.nix DTD gate's `xmllint` resolves to the host's `/usr/bin/xmllint`.
+`pkgs.illumos.*` come from the standalone `pkgs/illumos/default.nix`. This is the
+minimal `pkgs` the solnix modules actually touch — no full stdenv needed for the
+toplevel (it is symlink-farms + generated XML + shell scripts, not compiled code).
+
+### 7.5 What's deferred
+
+- **Flake full-eval off-host** — blocked until the gate FOD (design-nixpkgs-illumos
+  §1.5) replaces the host-local `builtins.path` gate ingest, so `toplevel`
+  evaluates on a flake box. Shape is wired; only the gate source pin is missing.
+- **Pure config-driven sshd** — `smf.services.sshd` is the generator example but
+  is `enable = false` (the image's real SSH is the stock modern-OpenSSH
+  `network/ssh` on :22; two sshds would collide). Becomes the pure-closure sshd
+  once `pkgs.openssh` exists in the fork (P1).
+- **Activation removal-on-switch** — the activate script handles add/enable; the
+  remove path (generation diff) is P2.1.
+- **Fork stdenvNoCC rewrite of the runtime slices** — `pkgs/illumos/*.nix` are
+  plain `derivation`s; folding them into the fork overlay as
+  `stdenvNoCC.mkDerivation` is the P2 "Fork mapping" (needs the gate FOD).
+- **/etc generation is minimal** — nodename + release stamp; the full etc module
+  is P2.3. The bulk of /etc still comes from the proto (make-be lays it down).

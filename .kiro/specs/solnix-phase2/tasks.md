@@ -38,12 +38,12 @@ pull from the solnix.io cache instead of rebuilding.
 - [ ] **T2.5** Map Nix generations onto ZFS boot environments: `beadm`
       create/activate a BE per generation; `switch-to-configuration` activates
       within a BE; rollback = `beadm activate` the previous. *(generations)*
-- [ ] **T2.6** Nixify `make-be` into `lib/make-be.nix` (from the working
+- [x] **T2.6** Nixify `make-be` into `lib/make-be.nix` (from the working
       `scripts/oi-make-be.sh`), consuming `system.build.toplevel` +
       `system.build.smfManifests`. *(build system)*
 - [ ] **T2.7** Installer + live media: an install ISO/image + a `nixos-install`
       analog that lays a solnix config onto a target disk's ZFS root. *(install)*
-- [ ] **T2.8** Full `configurations/base.nix` evaluation through the fork
+- [x] **T2.8** Full `configurations/base.nix` evaluation through the fork
       (`eval-config` + `pkgs.illumos` + the module tree) → `system.build.toplevel`
       is a real store path, image built via the cross/native flow. *(integration)*
 

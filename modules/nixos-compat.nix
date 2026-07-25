@@ -24,6 +24,16 @@ let
   };
 in
 {
+  # networking.hostName: a real option (activation + /etc/nodename read it).
+  # Minimal for now — the full networking module is P2.3. Declared here (not a
+  # stub) because configurations/base.nix sets it and the activation module
+  # reads config.networking.hostName.
+  options.networking.hostName = mkOption {
+    type = types.str;
+    default = "solnix";
+    description = "System hostname (written to /etc/nodename by activation).";
+  };
+
   options.systemd = {
     # The big one: swallow whole systemd.services.* without modelling it.
     services = mkOption {
@@ -75,6 +85,15 @@ in
       default = { };
       description = "IGNORED compat stub. See nixos-compat.nix.";
     };
+  };
+
+  # nix.settings.*: configurations/base.nix records the binary-cache substituter
+  # + signing key. These are consumed by the image/cache tooling, not the module
+  # eval, so accept-and-ignore (freeform) is enough for evaluation.
+  options.nix.settings = mkOption {
+    type = types.submodule { freeformType = types.attrs; };
+    default = { };
+    description = "Nix settings (substituters, trusted keys). Recorded; see docs/cache.md.";
   };
 
   # Tier-2 (translate systemd.services -> smf.services) is deferred and

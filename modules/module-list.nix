@@ -11,4 +11,5 @@
 [
   ./nixos-compat.nix
   ./system/boot/init/smf.nix
+  ./system/activation
 ]
