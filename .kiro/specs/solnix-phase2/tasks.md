@@ -26,7 +26,7 @@ pull from the solnix.io cache instead of rebuilding.
       clean + `ssh root@solnix`. *(login)*
 
 ### Binary cache (solnix.io — NOW LIVE)
-- [ ] **T2.3** Publish `pkgs.illumos.*` closures + the seed to the solnix.io S3
+- [x] **T2.3** Publish `pkgs.illumos.*` closures + the seed to the solnix.io S3
       cache (`s3://solnix-cache`, endpoint https://s3.solnix.io, path-style).
       Generate a cache signing key (store in sops), sign + `nix copy` the store
       paths, expose the substituter. Bake the substituter + public key into the

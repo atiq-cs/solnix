@@ -51,10 +51,15 @@
   # one service. Grow it as the modules it needs land.
 
   # Binary cache: pull prebuilt pkgs.illumos.* / image closures from solnix.io
-  # instead of rebuilding (see .kiro/steering/dev-environment.md). The cache and
-  # its signing key don't exist yet, so this is the intended shape, commented
-  # until the substituter is live and we have the real public key.
-  # TODO(cache): enable once cache.solnix.io is serving the unstable channel.
-  # nix.settings.substituters = [ "https://cache.solnix.io" ];
-  # nix.settings.trusted-public-keys = [ "cache.solnix.io-1:<PUBKEY>" ];
+  # instead of rebuilding (see .kiro/steering/dev-environment.md + docs/cache.md).
+  # The cache is the solnix-cache bucket on solnix.io's S3-compatible endpoint,
+  # served path-style over plain HTTPS (no credentials needed for reads) as a
+  # standard Nix binary cache: nix-cache-info + <hash>.narinfo + nar/*.nar.xz.
+  # Signed with cache.solnix.io-1 (secret in secrets/cache-signing.yaml, sops).
+  # Publish side: scripts/oi-cache-publish.sh. Verified: T2.3 gate fetched the
+  # system-path closure through this URL into a fresh store with require-sigs.
+  nix.settings.substituters = [ "https://s3.solnix.io/solnix-cache" ];
+  nix.settings.trusted-public-keys = [
+    "cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk="
+  ];
 }

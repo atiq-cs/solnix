@@ -58,31 +58,38 @@ re-extractable via the committed scripts.
   repos without cause. (This is the maintainer's own repo — normal push to main
   is fine here.)
 
-## Binary cache & channels (planned: solnix.io)
+## Binary cache & channels (solnix.io — LIVE)
 
-A binary cache / substituter is coming at **solnix.io** (the solnix analog of
-`cache.nixos.org`) so users and CI don't rebuild the world. Design toward this
-from the start:
+The binary cache / substituter is **live** at solnix.io's S3-compatible endpoint
+(the solnix analog of `cache.nixos.org`) so users and CI don't rebuild the world.
+
+- **Substituter URL (consumers):** `https://s3.solnix.io/solnix-cache`
+  (path-style, plain HTTPS, no credentials for reads — a standard Nix binary
+  cache: `nix-cache-info` + `<hash>.narinfo` + `nar/*.nar.xz`).
+- **Trusted public key:** `cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk=`
+  (secret half in `secrets/cache-signing.yaml`, sops-encrypted to the repo age key).
+- **Baked into `configurations/base.nix`** (`nix.settings.substituters` +
+  `trusted-public-keys`) so installed systems pull binaries by default.
+- **Publish side:** `scripts/oi-cache-publish.sh` — signs + copies illumos store
+  closures to the cache. Reads S3 creds (`secrets/s3-cache.yaml`) + the signing
+  key from sops **in-shell**; never writes creds/secret to disk. See
+  `docs/cache.md` for the layout, URL form, and the Nix-2.3.16 S3 gotcha.
 
 - **Channel model:** `unstable` is the only channel for now (rolling, like
   nixos-unstable), until we can qualify a tagged release. Name flake outputs and
   docs so a future `stable`/release channel slots in without renaming.
-- **Substituter + S3 endpoint:** solnix.io provides an **S3-compatible endpoint**
-  for the store, fronted by a substituter (e.g. `https://cache.solnix.io`) with a
-  signing key. Publish with `nix copy --to 's3://<bucket>?endpoint=<solnix.io>&...'`
-  (solnix.io credentials, NOT the AWS `numa` profile), consume via the
-  substituter. Bake the substituter URL + trusted public key into the base
-  configuration's `nix.settings` so installed systems pull binaries by default.
+- **Publish (asset side):** the store lives on solnix.io's S3 endpoint
+  (`s3://solnix-cache`, endpoint `https://s3.solnix.io`, `us-east-1`, path-style).
+  Publish with solnix.io credentials, **NOT** the AWS `numa` profile.
 - **What gets cached:** the `pkgs.illumos.*` world, stdenv/bootstrap, and image
-  closures — the expensive-to-build artifacts. The seed toolchain (T0.3) and the
-  gate-derived derivations are the first worth caching.
+  closures — the expensive-to-build artifacts. Published so far (T2.3): the
+  bootable `illumos-system-path` closure (libc/rtld/ld/external-libs/base-tools/
+  sys/system-path) and the `illumos-gate-proto` seed FOD.
 - **Reproducibility is the contract:** cache hits require deterministic
   derivations — keep builds pure/pinned (fixed nixpkgs-fork rev, pinned illumos
   source commit) so a cached artifact is byte-identical to a local rebuild.
-- **CI publishes to the cache:** the eventual build farm signs + pushes to the
-  solnix.io S3 endpoint on `unstable`. Until it exists, assets stay on the EC2
-  build host (re-extractable via committed scripts); design outputs so switching
-  to a `nix copy`/post-build-hook push is a config change, not a rearchitecture.
+- **CI publishes to the cache:** the eventual build farm signs + pushes on
+  `unstable`. Today `scripts/oi-cache-publish.sh` does it from the dev box.
 
 ## Reproducibility rule
 

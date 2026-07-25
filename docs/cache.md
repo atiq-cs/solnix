@@ -1,0 +1,104 @@
+# Binary cache (solnix.io) — layout, URL form, publishing
+
+The solnix binary cache is the S3 analog of `cache.nixos.org`: prebuilt
+`pkgs.illumos.*` and image closures so systems and CI don't rebuild the world.
+It lives on solnix.io's S3-compatible endpoint and is served as a standard Nix
+binary cache. (T2.3.)
+
+## Coordinates
+
+| | |
+|---|---|
+| **S3 bucket** | `s3://solnix-cache` |
+| **S3 endpoint** | `https://s3.solnix.io` (S3-compatible, **not** AWS S3), region `us-east-1`, **path-style** |
+| **Substituter URL (consumers)** | `https://s3.solnix.io/solnix-cache` |
+| **Signing key** | `cache.solnix.io-1` |
+| **Public key** | `cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk=` |
+| **Secret key** | `secrets/cache-signing.yaml` (sops, repo age key) |
+| **S3 creds** | `secrets/s3-cache.yaml` (sops) — read in-shell, never written to disk |
+
+The public key + substituter are baked into `configurations/base.nix`
+(`nix.settings.substituters` / `trusted-public-keys`), so a solnix system pulls
+signed binaries by default — no credentials needed for **reads** (the bucket is
+publicly readable over path-style HTTPS).
+
+## Two URL forms
+
+- **Consumers (systems, CI reads):** the plain HTTPS URL of the bucket,
+  `https://s3.solnix.io/solnix-cache`. Nix's `HttpBinaryCacheStore` fetches
+  `nix-cache-info`, `<hash>.narinfo`, and `nar/<filehash>.nar.xz` by GET. No
+  creds.
+- **Publishers (writes):** the `s3://` store URL with the endpoint baked in:
+  `s3://solnix-cache?endpoint=s3.solnix.io&region=us-east-1&scheme=https`.
+  `scheme=https` is required (path-style S3-compatible endpoint), and creds come
+  from `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` + `AWS_EC2_METADATA_DISABLED=true`
+  (never hit EC2 IMDS) + `AWS_DEFAULT_REGION=us-east-1`.
+
+## Cache layout (standard Nix binary cache)
+
+```
+s3://solnix-cache/
+  nix-cache-info                      # "StoreDir: /nix/store"
+  <storehash>.narinfo                 # one per store path (signed)
+  nar/<filehash>.nar.xz               # xz-compressed NAR per path
+```
+
+## Publishing
+
+`scripts/oi-cache-publish.sh [store-path ...]` — idempotent (skips paths whose
+narinfo already exists). Reads S3 creds + the signing key from sops in-shell.
+
+### The Nix-2.3.16 S3 gotcha (why the script bridges through a local store)
+
+The illumos build host runs **Nix 2.3.16, which has NO S3 store support**
+(`error: don't know how to open Nix store 's3://...'`), and its
+`LocalBinaryCacheStore` (`nix copy --to file://`) is also broken on illumos
+(`getting status of .../foo.nar.xz: Error 0`). So the publish path can't run on
+the host directly. Instead the script bridges:
+
+1. On the host (2.3.16, rock-solid): `nix-store --export $(nix-store -qR PATH)`
+   — streams the whole closure in topological order.
+2. Pipe to the **dev box** (Nix 2.4+ with working S3): `nix-store --store $TMP
+   --import` into a throwaway local store.
+3. `nix store sign --store $TMP -k <key> --recursive PATH` — sign with
+   `cache.solnix.io-1`.
+4. `nix copy --store $TMP --to 's3://solnix-cache?endpoint=s3.solnix.io&region=us-east-1&scheme=https' PATH`.
+
+The dev box needs no illumos toolchain to do this — `--import`/`sign`/`copy`
+only touch NAR bytes, hashes, references, and signatures; they never execute the
+foreign-platform binaries.
+
+## Published so far (T2.3)
+
+The bootable world (`illumos-system-path` closure) + the gate/seed FOD.
+Store hash → NAR size (uncompressed) / xz size:
+
+| store path | NAR | xz |
+|---|---:|---:|
+| `illumos-libc` | 38.4 MB | 6.0 MB |
+| `illumos-rtld` | 3.5 MB | 0.9 MB |
+| `illumos-ld` | 2.2 MB | 0.4 MB |
+| `illumos-external-libs` | 83.7 MB | 20.8 MB |
+| `illumos-base-tools` | 10.2 MB | 3.2 MB |
+| `illumos-sys` | 102.6 MB | 25.9 MB |
+| `illumos-system-path` | 0.8 MB | 0.03 MB |
+| `illumos-gate-proto` (seed) | 650.1 MB | 114.3 MB |
+
+Bucket total: ~171 MB compressed across 18 objects.
+
+## Verify a fetch (the T2.3 gate)
+
+Prove the cache serves *our signed* paths — fetch into a fresh, empty store with
+only the public key trusted and `require-sigs` on:
+
+```sh
+nix copy --from https://s3.solnix.io/solnix-cache \
+  --to /tmp/freshstore \
+  --option trusted-public-keys 'cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk=' \
+  --option require-sigs true \
+  /nix/store/dcbzz4hc4w87s43a4bala014gb7xja7k-illumos-system-path
+```
+
+Fetching with a *wrong* trusted key + `require-sigs true` must fail with
+"lacks a signature by a trusted key" — that's the real proof the signature gate
+works, not just that bytes downloaded.
