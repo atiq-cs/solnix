@@ -23,14 +23,14 @@ REGION="${REGION:-us-east-2}"
 # The solnix-builder AMI: a snapshot of solnix-build WITH Nix + world + gcc-14 +
 # clang, taken AFTER the toolchains land. Set this once it exists:
 BUILDER_AMI="${BUILDER_AMI:-ami-0f0c1ed4f15bef71f}"      # e.g. ami-xxxx (solnix-builder-YYYYMMDD)
-ITYPE="${2:-m6i.8xlarge}"           # 32 vCPU/host; bump count for more parallelism
+ITYPE="${2:-m6i.4xlarge}"           # 32 vCPU/host; bump count for more parallelism
 KEY="${KEY:-solnix-oi}"
 
 sg() { aws ec2 describe-security-groups --region "$REGION" --filters Name=group-name,Values=solnix-ssh --query 'SecurityGroups[0].GroupId' --output text; }
 
 case "${1:-}" in
   up)
-    N="${2:-4}"; ITYPE="${3:-m6i.8xlarge}"
+    N="${2:-4}"; ITYPE="${3:-m6i.4xlarge}"
     [ -n "$BUILDER_AMI" ] || { echo "set BUILDER_AMI first (snapshot solnix-build after toolchains land)"; exit 1; }
     SG=$(sg)
     echo "launching $N x $ITYPE builders from $BUILDER_AMI"

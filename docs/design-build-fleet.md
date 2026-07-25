@@ -49,3 +49,21 @@ right call here.
   everything already built.
 - It's also the dogfood for T2.11 (the P2P distributed cache) — the fleet is the
   first "many nodes sharing pre-built assets" workload.
+
+## Boot reliability (learned wave 1)
+
+Wave 1: 3/5 m6i.8xlarge (32-vCPU) builders boot-hung (stock OI kernel on the
+builder AMI hits the TSC/PIT early-boot hang; reboot didn't recover). The
+`pit_is_broken` fix is a KERNEL SOURCE default (read in startup_tsc() BEFORE
+/etc/system is parsed) — so it's baked into our built solnix kernel, NOT the
+stock OI kernel the builder AMI runs, and `set pit_is_broken=1` in /etc/system
+is TOO LATE to help.
+
+The hang is vCPU-count-correlated: 16-vCPU (m6i.4xlarge) and 8-vCPU (m6i.2xlarge)
+boot reliably; 32-vCPU (m6i.8xlarge) hangs ~60%. So the fleet default is now
+**m6i.4xlarge (16 vCPU)** — run MORE hosts rather than bigger ones. (256 vCPU =
+16 x m6i.4xlarge, all reliable, vs fighting 8 x m6i.8xlarge that half-hang.)
+
+Proper fix (later): build a solnix-kernel builder AMI (our pit-fixed kernel) so
+any size boots — or rebuild the OI gate host kernel with the pit default. Until
+then: m6i.4xlarge, scale by count.
