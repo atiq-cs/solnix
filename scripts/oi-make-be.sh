@@ -64,6 +64,7 @@ umount "$ALTROOT/esp" 2>/dev/null || true
 zfs unmount "$BEDS" 2>/dev/null || true
 zpool destroy "$POOL" 2>/dev/null || true
 zpool export "$POOL" 2>/dev/null || true
+rm -rf "$ALTROOT" 2>/dev/null || true
 mkdir -p "$ALTROOT"
 
 # ---------------------------------------------------------------------------
@@ -73,8 +74,8 @@ mkdir -p "$ALTROOT"
 #    alignment; a zpool-created EFI label is sector-addressed and takes fmthard.
 # ---------------------------------------------------------------------------
 log "GPT-labelling $DISK (clean EFI label via throwaway pool)"
-zpool create -f __solnix_tmp "/dev/dsk/${DISK}" >/dev/null 2>&1 || die "could not create clean EFI label"
-zpool destroy __solnix_tmp 2>/dev/null || true
+zpool create -f solnixtmp "/dev/dsk/${DISK}" >/dev/null 2>&1 || die "could not create clean EFI label"
+zpool destroy solnixtmp 2>/dev/null || true
 
 SECTORS="$(prtvtoc -h "/dev/rdsk/${DISK}" 2>/dev/null | awk '$1==8{print $4}')"
 # s8 (reserved) start from the EFI label = last usable region; total accessible:
@@ -101,8 +102,9 @@ prtvtoc -h "/dev/rdsk/${DISK}"
 # ---------------------------------------------------------------------------
 log "mkfs pcfs ESP on ${DISK}s0"
 yes | mkfs -F pcfs -o fat=32,b=ESP "/dev/rdsk/${DISK}s0" >/dev/null 2>&1 || true
-mkdir -p "$ALTROOT/esp"
-mount -F pcfs "/dev/dsk/${DISK}s0" "$ALTROOT/esp" 2>/dev/null && umount "$ALTROOT/esp" || die "ESP unusable"
+mkdir -p /tmp/solnix-esp-probe
+mount -F pcfs "/dev/dsk/${DISK}s0" /tmp/solnix-esp-probe 2>/dev/null && umount /tmp/solnix-esp-probe || die "ESP unusable"
+rmdir /tmp/solnix-esp-probe 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
 # 3. the pool + BE dataset
@@ -242,13 +244,31 @@ $GCP -L /usr/gcc/14/lib/amd64/libstdc++.so.6  "$BEROOT/usr/lib/amd64/libstdc++.s
 $GCP -L /usr/gcc/14/lib/amd64/libgcc_s.so.1   "$BEROOT/usr/lib/amd64/libgcc_s.so.1"
 
 # --- sshd (for login evidence): sshd is NOT in the gate proto (separate IPS pkg).
-#     Copy it (64-bit) + libcrypto/libssl + ssh-keygen, generate host keys, allow
-#     root pubkey login, seed root's authorized_keys with the operator's key.
-#     NOTE: sshd needs cryptosvc online (a known peripheral failure), so ssh may
-#     not come up until that's fixed; the console svcs dump is the gate evidence.
-log "adding sshd + openssl (64-bit) for login"
+#     T2.2 CRUX: the proto ships the OLD Sun_SSH manifest+method that invokes
+#     /usr/lib/ssh/sshd, but the reference OI host runs MODERN OpenSSH at
+#     /usr/sbin/sshd with a DIFFERENT ssh.xml + method. Copying just the binary
+#     to /usr/sbin left the proto's method calling the wrong path -> ssh went to
+#     maintenance. Fix: copy the reference host's WHOLE OpenSSH: ssh.xml manifest
+#     + sshd method (both use /usr/sbin/sshd + `ssh-keygen -A` for host keys) +
+#     the sshd/ssh-keygen/ssh binaries + libcrypto/libssl. ssh depends on
+#     cryptosvc (now fixed) so it comes online after the crypto framework.
+log "adding modern OpenSSH (manifest+method+binaries+libs) for login"
 $GCP /usr/sbin/sshd "$BEROOT/usr/sbin/sshd" 2>/dev/null || true
 $GCP /usr/bin/ssh-keygen "$BEROOT/usr/bin/ssh-keygen" 2>/dev/null || true
+$GCP /usr/bin/ssh "$BEROOT/usr/bin/ssh" 2>/dev/null || true
+# Modern OpenSSH (9.8+) splits sshd into a listener + per-connection helpers in
+# /usr/libexec: sshd-session (REQUIRED -- without it sshd exits status 95
+# "sshd-session does not exist or is not executable"), sshd-auth, plus
+# sftp-server + keysign/pkcs11/sk helpers. Copy the whole set.
+mkdir -p "$BEROOT/usr/libexec"
+for h in sshd-session sshd-auth sftp-server ssh-keysign ssh-pkcs11-helper ssh-sk-helper; do
+  [ -e "/usr/libexec/$h" ] && $GCP /usr/libexec/$h "$BEROOT/usr/libexec/$h" 2>/dev/null || true
+done
+# reference manifest + method match /usr/sbin/sshd (proto's expect /usr/lib/ssh)
+$GCP /lib/svc/manifest/network/ssh.xml "$BEROOT/lib/svc/manifest/network/ssh.xml" 2>/dev/null || true
+$GCP /lib/svc/method/sshd "$BEROOT/lib/svc/method/sshd" 2>/dev/null || true
+chmod 0444 "$BEROOT/lib/svc/manifest/network/ssh.xml" 2>/dev/null || true
+chmod 0555 "$BEROOT/lib/svc/method/sshd" 2>/dev/null || true
 for l in libcrypto.so.3 libssl.so.3; do
   s=$(ls /usr/lib/amd64/$l 2>/dev/null || ls /lib/amd64/$l 2>/dev/null)
   [ -n "$s" ] && $GCP -L "$s" "$BEROOT/usr/lib/amd64/$l" 2>/dev/null || true
@@ -257,10 +277,18 @@ if [ -f /etc/ssh/sshd_config ]; then
   mkdir -p "$BEROOT/etc/ssh"
   $GCP /etc/ssh/sshd_config "$BEROOT/etc/ssh/sshd_config"
   sed -i 's/^#*PermitRootLogin.*/PermitRootLogin yes/; s/^#*PubkeyAuthentication.*/PubkeyAuthentication yes/' "$BEROOT/etc/ssh/sshd_config" 2>/dev/null || true
+  # host keys are generated at first boot by the method's `ssh-keygen -A`; also
+  # pre-seed them here (belt-and-suspenders, in case first-boot keygen is slow).
   for t in rsa ecdsa ed25519; do
     [ -f "$BEROOT/etc/ssh/ssh_host_${t}_key" ] || /usr/bin/ssh-keygen -q -t $t -f "$BEROOT/etc/ssh/ssh_host_${t}_key" -N "" 2>/dev/null || true
   done
 fi
+# sshd privsep: /var/empty (the privsep chroot) is NOT in the proto; sshd FAILS
+# FATALLY to start without it (this was the ssh-in-maintenance root cause after
+# cryptosvc was fixed). Must be root-owned, 0755, not group/world-writable.
+mkdir -p "$BEROOT/var/empty"
+chown root:sys "$BEROOT/var/empty" 2>/dev/null || true
+chmod 0755 "$BEROOT/var/empty"
 if [ -n "${ROOT_AUTHKEY:-}" ] && [ -f "$ROOT_AUTHKEY" ]; then
   mkdir -p "$BEROOT/root/.ssh"; chmod 700 "$BEROOT/root/.ssh"
   $GCP "$ROOT_AUTHKEY" "$BEROOT/root/.ssh/authorized_keys"; chmod 600 "$BEROOT/root/.ssh/authorized_keys"
@@ -326,6 +354,9 @@ cat > "$BEROOT/lib/svc/method/solnix-hello" <<'EOF'
     echo "## svcs -x (should be clean if healthy):"; /usr/bin/svcs -x 2>&1
     echo "## online service count:"; /usr/bin/svcs -a 2>/dev/null | grep -c online
     echo "## svcs -a (online only):"; /usr/bin/svcs -a 2>/dev/null | grep online | head -60
+    echo "## crypto/ssh status:"; /usr/bin/svcs -H system/cryptosvc network/ssh 2>&1
+    echo "## /dev/cryptoadm:"; ls -lL /dev/cryptoadm 2>&1
+    echo "## ip addr + default route:"; /usr/sbin/ipadm show-addr 2>&1; /usr/bin/netstat -rn 2>&1 | grep -E 'default|172|10\.' | head -3
     echo "########## END SOLNIX GATE EVIDENCE ##########"
     echo ""
   } > /dev/console 2>&1
@@ -334,17 +365,52 @@ exit $SMF_EXIT_OK
 EOF
 chmod 0755 "$BEROOT/lib/svc/method/solnix-hello"
 
-# solnix-netcfg oneshot: DHCP on the first phys NIC (mirrors metadata-shim.sh)
+# solnix-netcfg oneshot: DHCP on the first phys NIC (mirrors metadata-shim.sh).
+# Logs to /dev/console so a failed NIC bringup is VISIBLE in the serial log
+# (the original silenced all errors + exited OK, masking a no-network boot).
 cat > "$BEROOT/lib/svc/method/solnix-netcfg" <<'EOF'
 #!/sbin/sh
 . /lib/svc/share/smf_include.sh
-NIC=$(/usr/sbin/dladm show-phys -p -o LINK 2>/dev/null | head -1)
-if [ -n "$NIC" ]; then
-  /usr/sbin/ipadm create-if "$NIC" 2>/dev/null || true
-  /usr/sbin/ipadm create-addr -T dhcp -w 30 "$NIC/dhcp" 2>/dev/null || \
-    /usr/sbin/ipadm create-addr -T dhcp "$NIC/v4" 2>/dev/null || true
-fi
+{
+  echo "=== solnix-netcfg $(date) ==="
+  # ena NVMe/Nitro NIC can take a moment to attach; wait for a phys link.
+  NIC=""; i=0
+  while [ $i -lt 30 ]; do
+    NIC=$(/usr/sbin/dladm show-phys -p -o LINK 2>/dev/null | head -1)
+    [ -n "$NIC" ] && break
+    i=$((i+1)); sleep 2
+  done
+  echo "dladm show-phys:"; /usr/sbin/dladm show-phys 2>&1
+  echo "picked NIC='$NIC' (waited ${i}x2s)"
+  if [ -n "$NIC" ]; then
+    # KEY FIX (T2.2): the gate ena driver leaves the link STATE 'unknown' (it
+    # never posts link-up), and `ipadm create-if` REFUSES to plumb an
+    # unknown-state link ("Operation failed"). Legacy `ifconfig plumb` +
+    # `ifconfig dhcp start` does NOT care about link state and works -- yields a
+    # real DHCP addr + default route. Use ipadm first (clean path if it ever
+    # works), fall back to ifconfig (the path that actually succeeds on ena).
+    /usr/sbin/ipadm create-if "$NIC" 2>/dev/null && \
+      /usr/sbin/ipadm create-addr -T dhcp -w 60 "$NIC/dhcp" 2>/dev/null
+    if ! /usr/sbin/ipadm show-addr "$NIC/dhcp" 2>/dev/null | grep -q ok; then
+      echo "ipadm plumb failed (ena link STATE unknown); using ifconfig"
+      /usr/sbin/ifconfig "$NIC" plumb 2>&1
+      /usr/sbin/ifconfig "$NIC" dhcp start wait 60 2>&1
+    fi
+  else
+    echo "NO PHYS NIC FOUND -- ena not attached?"
+  fi
+  echo "ipadm show-addr:"; /usr/sbin/ipadm show-addr 2>&1
+  echo "netstat -rn (default route?):"; /usr/bin/netstat -rn 2>&1 | grep -E 'default|172|10\.' | head -3
+  echo "=== solnix-netcfg done ==="
+} > /dev/console 2>&1
 [ -s /etc/resolv.conf ] || printf 'nameserver 169.254.169.253\nnameserver 8.8.8.8\n' > /etc/resolv.conf
+# network/location drives dns/client online; enable it now that resolv.conf
+# exists, then refresh dns/client so it re-evaluates and reaches online (its
+# refresh-dep on location only fires on a state change it may have already
+# missed at boot -> nudge it explicitly for a clean `svcs -x`).
+/usr/sbin/svcadm enable svc:/network/location:default 2>/dev/null || true
+( sleep 5; /usr/sbin/svcadm refresh svc:/network/dns/client:default 2>/dev/null; \
+  /usr/sbin/svcadm enable svc:/network/dns/client:default 2>/dev/null ) &
 /usr/bin/hostname solnix 2>/dev/null || true
 exit $SMF_EXIT_OK
 EOF
@@ -373,7 +439,11 @@ cat > "$BEROOT/lib/svc/manifest/solnix/solnix-netcfg.xml" <<'EOF'
 </service_bundle>
 EOF
 # site profile: enable our services (manifests default disabled) + disable the
-# noisy non-essential sendmail (floods the console, blocks nothing).
+# noisy non-essential sendmail (floods the console, blocks nothing) + the
+# peripheral services that fail on a headless EC2 server (T2.2): hal (needs
+# dbus/desktop HAL), keymap (physical keyboard), intrd (interrupt balancer,
+# needs kstat topology absent on KVM), ipmp (IP multipathing, single-NIC DHCP).
+# None are milestone deps; disabling them makes `svcs -x` clean.
 mkdir -p "$BEROOT/etc/svc/profile/site"
 cat > "$BEROOT/etc/svc/profile/site/solnix.xml" <<'EOF'
 <?xml version="1.0"?>
@@ -384,8 +454,46 @@ cat > "$BEROOT/etc/svc/profile/site/solnix.xml" <<'EOF'
   <service name="site/solnix-hello" version="1" type="service"><instance name="default" enabled="true"/></service>
   <service name="network/smtp" version="1" type="service"><instance name="sendmail" enabled="false"/></service>
   <service name="network/sendmail-client" version="1" type="service"><instance name="default" enabled="false"/></service>
+  <service name="system/hal" version="1" type="service"><instance name="default" enabled="false"/></service>
+  <service name="system/keymap" version="1" type="service"><instance name="default" enabled="false"/></service>
+  <service name="system/intrd" version="1" type="service"><instance name="default" enabled="false"/></service>
+  <service name="network/ipmp" version="1" type="service"><instance name="default" enabled="false"/></service>
+  <service name="network/ipsec/ipsecalgs" version="1" type="service"><instance name="default" enabled="false"/></service>
+  <!-- dependents of the disabled services above: disable them too so no
+       "1 dependent not running" impact keeps them in `svcs -x` -->
+  <service name="network/ipsec/policy" version="1" type="service"><instance name="default" enabled="false"/></service>
+  <service name="system/filesystem/rmvolmgr" version="1" type="service"><instance name="default" enabled="false"/></service>
+  <!-- network/location drives network/dns/client online (via its refresh dep);
+       it ships disabled by default -> dns/client would stay offline in svcs -x.
+       Enabling location makes dns/client reach online. -->
+  <service name="network/location" version="1" type="service"><instance name="default" enabled="true"/></service>
 </service_bundle>
 EOF
+# cryptosvc RACE FIX (T2.2 root cause): the stock cryptosvc manifest depends only
+# on svc:/system/filesystem/root, so its start method (`cryptoadm start`, which
+# opens /dev/cryptoadm) races svc:/system/device/local (devfsadm) that CREATES
+# /dev/cryptoadm on our image -- and loses, going to maintenance. On real hw the
+# crypto pseudo node exists early; on our Nix image devfsadm makes it late.
+# Inject a require_all dependency on svc:/milestone/devices so cryptosvc waits
+# for devfsadm. This unblocks the crypto framework -> network/ssh. Editing the
+# stock manifest on disk (we own the image); manifest-import re-reads it.
+CRYPTOMF="$BEROOT/lib/svc/manifest/system/cryptosvc.xml"
+if [ -f "$CRYPTOMF" ] && ! grep -q 'milestone/devices' "$CRYPTOMF"; then
+  log "injecting milestone/devices dependency into cryptosvc (race fix)"
+  awk '
+    /<single_instance/ && !done {
+      print;
+      print "\t<dependency name=\x27solnix-devices\x27 grouping=\x27require_all\x27 restart_on=\x27none\x27 type=\x27service\x27>";
+      print "\t\t<service_fmri value=\x27svc:/milestone/devices\x27/>";
+      print "\t</dependency>";
+      done=1;
+      next
+    }
+    { print }
+  ' "$CRYPTOMF" > "$CRYPTOMF.new" && mv "$CRYPTOMF.new" "$CRYPTOMF"
+  xmllint --noout --dtdvalid "$BEROOT/usr/share/lib/xml/dtd/service_bundle.dtd.1" "$CRYPTOMF" 2>&1 \
+    && echo "DTD-valid: cryptosvc.xml (devices dep injected)" || die "cryptosvc.xml invalid after dep injection"
+fi
 # validate against the DTD (build-time gate, design-smf-init §2.6)
 for m in "$BEROOT/lib/svc/manifest/solnix/solnix-hello.xml" \
          "$BEROOT/lib/svc/manifest/solnix/solnix-netcfg.xml" \
@@ -421,6 +529,7 @@ log "boot_archive: $(file "$BEROOT/platform/i86pc/amd64/boot_archive")"
 # 11. install the loader on the ESP + bootfs + menu.lst
 # ---------------------------------------------------------------------------
 log "installing loader on ESP + setting bootfs"
+mkdir -p "$BEROOT/esp"
 mount -F pcfs "/dev/dsk/${DISK}s0" "$BEROOT/esp"
 mkdir -p "$BEROOT/esp/EFI/Boot"
 cp "$BEROOT/boot/loader64.efi" "$BEROOT/esp/EFI/Boot/bootx64.efi"

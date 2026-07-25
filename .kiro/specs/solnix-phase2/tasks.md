@@ -18,7 +18,7 @@ pull from the solnix.io cache instead of rebuilding.
       (`startup_smap`/`startup_modules` race). Kernel-level: bisect what differs
       on the hanging boots; may be a known illumos KVM/Nitro TSC issue. Until
       fixed, document the retry-to-boot workaround. *(reliability)*
-- [ ] **T2.2** Get interactive SSH login working: fix `cryptosvc`
+- [x] **T2.2** Get interactive SSH login working: fix `cryptosvc`
       (`cryptoadm start` fails opening `/dev/cryptoadm` — missing device/driver
       in boot_archive or /dev) so the crypto framework comes up; then sshd +
       a login user. Also fix the other 4 peripheral svcs in maintenance
