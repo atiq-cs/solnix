@@ -42,26 +42,26 @@
 
 let
   libcLibDirs = [ "${libcStore}/lib/amd64" "${libcStore}/lib" ];
-  # dep lib dirs: each dep exposes lib/amd64, lib, usr/lib/amd64, usr/lib
-  depLibDirs = builtins.concatLists (map (d: [
-    "${d}/lib/amd64" "${d}/lib" "${d}/usr/lib/amd64" "${d}/usr/lib"
-  ]) deps);
+  # dep lib dirs: cover every layout a build might install into (amd64/64/lib64).
+  libSubdirs = [ "lib/amd64" "lib/64" "lib64" "lib" "usr/lib/amd64" "usr/lib/64" "usr/lib" ];
+  depLibDirs = builtins.concatLists (map (d: map (s: "${d}/${s}") libSubdirs) deps);
   depIncDirs = builtins.concatLists (map (d: [ "${d}/include" "${d}/usr/include" ]) deps);
   depBinDirs = builtins.concatLists (map (d: [ "${d}/bin" "${d}/usr/bin" ]) deps);
 
   # -L / -I flags handed to configure via CPPFLAGS/LDFLAGS so deps are found.
-  depL = builtins.concatStringsSep " " (map (d: "-L${d}/lib -L${d}/lib/amd64 -L${d}/usr/lib -L${d}/usr/lib/amd64") deps);
+  depL = builtins.concatStringsSep " " (map (d: "-L${d}/lib -L${d}/lib/amd64 -L${d}/lib/64 -L${d}/lib64 -L${d}/usr/lib -L${d}/usr/lib/amd64") deps);
   depI = builtins.concatStringsSep " " (map (d: "-I${d}/include -I${d}/usr/include") deps);
-  depRpath = builtins.concatStringsSep " " (map (d: "-Wl,-R,${d}/lib -Wl,-R,${d}/lib/amd64 -Wl,-R,${d}/usr/lib -Wl,-R,${d}/usr/lib/amd64") deps);
+  depRpath = builtins.concatStringsSep " " (map (d: "-Wl,-R,${d}/lib -Wl,-R,${d}/lib/amd64 -Wl,-R,${d}/lib/64 -Wl,-R,${d}/lib64 -Wl,-R,${d}/usr/lib -Wl,-R,${d}/usr/lib/amd64") deps);
 
-  # final RUNPATH baked into every produced ELF.
+  # final RUNPATH baked into every produced ELF. The OUTLIB placeholder is
+  # replaced with the real $out in the builder (Nix doesn't know $out yet).
   finalRunpath = builtins.concatStringsSep ":" (
-    [ "$out/lib/amd64" "$out/lib" "$out/usr/lib/amd64" "$out/usr/lib" ]
+    (map (s: "@OUTLIB@/${s}") libSubdirs)
     ++ depLibDirs ++ libcLibDirs
   );
 
   envExports = builtins.concatStringsSep "\n"
-    (builtins.map (n: "export ${n}=${builtins.getAttr n env}") (builtins.attrNames env));
+    (builtins.map (n: "export ${n}=\"${builtins.getAttr n env}\"") (builtins.attrNames env));
 
   wrapper = builtins.path { path = wrapperSrc; name = "oi-cc-wrapper.sh"; };
 in
@@ -80,6 +80,7 @@ derivation {
   installFlagsStr = builtins.concatStringsSep " " installFlags;
   inherit preConfigure postInstall customBuild unpackSubdir envExports;
   inherit depL depI depRpath finalRunpath;
+  depStorePaths = builtins.concatStringsSep " " deps;
   depBinPath = builtins.concatStringsSep ":" depBinDirs;
   stripBins = if stripBins then "1" else "";
 
@@ -98,13 +99,24 @@ derivation {
 
     echo "=== unpack ===" >&2
     mkdir s && cd s
-    /usr/bin/gtar xf ../src.tar 2>/dev/null || /usr/bin/tar xf ../src.tar
+    # GNU tar (/usr/gnu/bin/tar) handles pax 'g' global headers; Solaris
+    # /usr/bin/tar chokes on GitHub tarballs. Prefer GNU tar; tolerate its
+    # nonzero exit on benign warnings (set +e around it).
+    set +e
+    /usr/gnu/bin/tar xf ../src.tar 2>/dev/null
+    if [ ! "$(find . -maxdepth 1 -mindepth 1 | head -1)" ]; then
+      /usr/bin/tar xf ../src.tar 2>/dev/null
+    fi
+    set -e
+    # GNU tar can leave a stray pax_global_header regular file; drop it.
+    rm -f pax_global_header 2>/dev/null || true
     if [ -n "$unpackSubdir" ]; then
       cd "$unpackSubdir"
     else
-      # descend into the single top-level dir if that's the layout
-      n=$(ls -1 | wc -l | tr -d ' ')
-      if [ "$n" = "1" ] && [ -d "$(ls -1)" ]; then cd "$(ls -1)"; fi
+      # descend into the single top-level DIRECTORY (ignore stray files).
+      dirs=$(find . -maxdepth 1 -mindepth 1 -type d)
+      ndirs=$(printf '%s\n' "$dirs" | grep -c . || true)
+      if [ "$ndirs" = "1" ]; then cd "$dirs"; fi
     fi
     SRCDIR=$(pwd)
 
@@ -145,13 +157,28 @@ derivation {
     ${postInstall}
 
     echo "=== RUNPATH relocate + host-leak scrub ===" >&2
-    # relocate every dynamic ELF under $out to the store RUNPATH.
+    # Build a MINIMAL RUNPATH from directories that ACTUALLY exist (under $out,
+    # each dep, and libc). A long RUNPATH with many nonexistent subdirs can
+    # exceed the .dynstr grow limit (design risk #1) and make elfedit fail,
+    # leaving a host leak. Keep it tight: real dirs only, deduped.
+    rp_parts=""
+    add_dir() { if [ -d "$1" ]; then case ":$rp_parts:" in *":$1:"*) ;; *) rp_parts="$rp_parts''${rp_parts:+:}$1";; esac; fi; return 0; }
+    for d in "$out/lib/amd64" "$out/lib/64" "$out/lib64" "$out/lib" "$out/usr/lib/amd64" "$out/usr/lib"; do add_dir "$d"; done
+    for base in $depStorePaths; do
+      for s in lib/amd64 lib/64 lib64 lib usr/lib/amd64 usr/lib; do add_dir "$base/$s"; done
+    done
+    # gcc14 C++/unwind runtime (libstdc++.so.6, libgcc_s.so.1) — every C++
+    # binary NEEDs these; the relocate replaces the link-time -R so add it back.
+    add_dir "$gccStore/usr/gcc/14/lib/amd64"; add_dir "$gccStore/usr/gcc/14/lib"
+    add_dir "$libcStore/lib/amd64"; add_dir "$libcStore/lib"
+    RP="$rp_parts"
+    echo "RUNPATH -> $RP" >&2
+    # illumos elfedit is /usr/bin/elfedit (has the dyn:runpath module).
+    # /usr/gnu/bin/elfedit is GNU binutils' header-only elfedit -> WRONG tool.
     find "$out" -type f 2>/dev/null | while read -r f; do
       if /usr/bin/elfdump -d "$f" 2>/dev/null | grep -Eq 'SONAME|NEEDED|RUNPATH|RPATH'; then
         chmod u+w "$f" 2>/dev/null || true
-        # replace RUNPATH wholesale with the store runpath (drops any host leak)
-        /usr/gnu/bin/elfedit -e "dyn:runpath $finalRunpath" "$f" 2>/dev/null || \
-          /usr/bin/elfedit -e "dyn:runpath $finalRunpath" "$f" 2>/dev/null || true
+        /usr/bin/elfedit -e "dyn:runpath $RP" "$f" 2>/dev/null || echo "WARN: relocate failed on $f (RUNPATH len ''${#RP})" >&2
       fi
     done
 
