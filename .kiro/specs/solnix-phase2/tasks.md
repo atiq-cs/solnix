@@ -14,7 +14,7 @@ pull from the solnix.io cache instead of rebuilding.
 ## Tasks
 
 ### Reliability & login (the two gaps from the Phase-1 gate)
-- [ ] **T2.1** Fix the ~50% intermittent early-kernel TSC hang on Nitro/KVM
+- [x] **T2.1** Fix the ~50% intermittent early-kernel TSC hang on Nitro/KVM
       (`startup_smap`/`startup_modules` race). Kernel-level: bisect what differs
       on the hanging boots; may be a known illumos KVM/Nitro TSC issue. Until
       fixed, document the retry-to-boot workaround. *(reliability)*

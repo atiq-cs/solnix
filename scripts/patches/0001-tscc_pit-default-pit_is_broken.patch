@@ -1,0 +1,46 @@
+solnix T2.1 — fix the intermittent ~50% early-kernel boot hang on EC2 Nitro/KVM.
+
+SYMPTOM: boot reaches "TSC calibrated using VMware; freq is ~2.9 GHz" then hangs
+(~50-75% of boots), no further console output, no panic.
+
+ROOT CAUSE: after a hypervisor TSC-frequency source ("VMware", which also covers
+KVM/VirtualBox/ACRN via get_hwenv() & HW_SUPPORTS_FREQ) wins TSC calibration,
+tsc_calibrate() calls tsc_pit_also() (timestamp.c) which runs a *diagnostic* PIT
+(legacy 8254) calibration purely to record what the PIT would have measured, for
+the APIC code. That PIT run does port I/O to the emulated 8254 (freq_tsc_pit in
+locore.S + pit_sanity_check in tscc_pit.c). On EC2 Nitro/KVM the emulated PIT is
+unreliable: the calibration loop's refine-and-retry can spin for a
+pathologically long (though technically bounded) time, presenting as a boot
+hang. This runs on the boot CPU BEFORE /etc/system is read (startup_tsc precedes
+startup_modules), so `set pit_is_broken=1` in /etc/system is TOO LATE, and it is
+NOT a boot property either -- so the ONLY early knob is a source default.
+
+Confirmed single-CPU (1-vCPU instances still hung ~75%), ruling out an MP/AP
+startup race; and the hypervisor detection is correct (VMware/KVM source is the
+right one). The PIT-also diagnostic is the culprit.
+
+FIX: default pit_is_broken = 1. tscc_pit.c already documents that pit_is_broken
+may be set to make the system avoid the PIT entirely; we make that the default.
+On a cloud VM the PIT diagnostic is worthless (the hypervisor freq source always
+wins), so skipping it loses nothing and removes the hang.
+
+MEASURED: m6i.large batch success (booted to multi-user-server):
+  BEFORE: 4/10 (40%)      AFTER: 20/20 (100%)   -- see docs/design-make-be.md #10
+
+--- a/usr/src/uts/i86pc/os/tscc_pit.c
++++ b/usr/src/uts/i86pc/os/tscc_pit.c
+@@ -48,7 +48,12 @@
+  * history built up using the alternative calibration sources.
+  */
+ uint64_t pit_tsc_hz;
+-int pit_is_broken;
++/*
++ * solnix T2.1: default the PIT to "broken" so the diagnostic PIT calibration in
++ * tsc_pit_also() never runs. On EC2 Nitro/KVM the emulated 8254 makes that run
++ * spin ~50% of boots (hang at "TSC calibrated using VMware"). The hypervisor
++ * TSC-freq source wins anyway, so the PIT diagnostic is pure, hazardous overhead.
++ */
++int pit_is_broken = 1;
+ 
+ /*
+  * On all of the systems seen so far without functioning PITs, it appears

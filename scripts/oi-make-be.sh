@@ -44,6 +44,14 @@ GCP="${GCP:-/usr/gnu/bin/cp}"          # GNU cp (illumos cp -L differs)
 # install` in $SRC/uts, then point NDPROTO at the proto that install populated
 # (bldenv installs into proto/root_i386, over the DEBUG kernel). If NDPROTO is
 # set we swap its kernel trees into the BE after laying down $PROTO.
+#
+# T2.1 BOOT-HANG FIX (gotcha #10) IS ALSO IN THIS NON-DEBUG KERNEL: the source
+# patch `int pit_is_broken = 1;` in usr/src/uts/i86pc/os/tscc_pit.c (applied by
+# scripts/oi-gate-build.sh; scripts/patches/0001-tscc_pit-*.patch) disables the
+# diagnostic PIT calibration that hangs ~50% of boots on KVM. So a correctly
+# rebuilt NDPROTO carries the fix automatically -- no /etc/system or loader knob
+# (the PIT diag runs in startup_tsc, BEFORE /etc/system is read). Batch-measured
+# boot success: 40% (stock non-DEBUG) -> 100% (with the pit_is_broken fix).
 NDPROTO="${NDPROTO:-/code/illumos-gate/proto/root_i386}"
 
 die()  { echo "FATAL: $*" >&2; exit 1; }

@@ -189,7 +189,7 @@ Strip ANSI: `sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g'`.
 | 7 | pervasive `Permission denied` (rpcbind /var/run, sendmail 'unsafe map file', 'dangerous permissions=40555') | **the gate proto ships ALL directories mode 0555** (no owner-write) — 3451 of them | `find $BE -type d -exec chmod u+w {} +`; then `chmod 1777 /tmp /var/tmp`, `1770 /var/spool/clientmqueue` |
 | 8 | `svccfg apply /etc/svc/profile/generic.xml failed` | the standard profile symlinks (`generic.xml`, `platform.xml`, `name_service.xml`) are missing from the proto (made at install) | `ln -s generic_limited_net.xml generic.xml`, `platform_none.xml platform.xml`, `ns_dns.xml name_service.xml` in `/etc/svc/profile` |
 | 9 | `sendmail: unknown user smmsp`; `sshd` privsep needs its user | proto passwd/group missing several users | append missing users/groups (incl. `sshd`) from the host passwd/group/shadow; disable sendmail via a site profile (it's non-essential + floods the console) |
-| 10 | intermittent hang at `TSC calibrated` (~50% of boots) even non-DEBUG | early-kernel race in `startup_smap`/`startup_modules` on EC2 Nitro/KVM (before `/etc/system` is read) — a known illumos-on-cloud class of issue | **UNRESOLVED** (T2.1): mitigate by launching a small batch (4-8) and taking the one that boots. NOTE: the `idle_cpu_*` mitigations are NOT actually added by `oi-make-be.sh` (the script never touches `/etc/system`); the doc's earlier claim was aspirational. |
+| 10 | intermittent hang at `TSC calibrated` (~50% of boots) even non-DEBUG | **RESOLVED (T2.1).** After a hypervisor TSC-freq source ("VMware", which via `get_hwenv() & HW_SUPPORTS_FREQ` also covers **KVM**/VirtualBox/ACRN — EC2 Nitro is KVM) wins TSC calibration, `tsc_calibrate()` calls `tsc_pit_also()` (timestamp.c) which runs a **diagnostic** PIT (legacy 8254) calibration purely to record what the PIT *would* have measured (for the APIC code). That run does port I/O to the emulated 8254 (`freq_tsc_pit` in locore.S + `pit_sanity_check` in tscc_pit.c); on EC2 Nitro/KVM the emulated PIT is unreliable and the calibration loop's refine-and-retry spins pathologically long, presenting as a boot hang. It is single-CPU (a **1-vCPU** batch still hung ~75% — rules out an MP/AP race) and the hypervisor detect is correct (VMware/KVM source is right). It runs in `startup_tsc()` which precedes `startup_modules()` — so it is BEFORE `/etc/system` is read, and `pit_is_broken` is not a boot property, so the ONLY early knob is a source default. | **FIX:** default `int pit_is_broken = 1;` in `usr/src/uts/i86pc/os/tscc_pit.c` (the file already documents this global as the "avoid the PIT entirely" switch). On a cloud VM the PIT diagnostic is worthless (the hypervisor freq source always wins), so this loses nothing. Applied by `scripts/oi-gate-build.sh` (also `scripts/patches/0001-tscc_pit-default-pit_is_broken.patch`), baked into the non-DEBUG kernel that `oi-make-be.sh` swaps in via NDPROTO. **Batch-measured on m6i.large: 4/10 (40%) BEFORE → 20/20 (100%) AFTER** (two 10-boot batches). Runtime confirmed via `mdb -k`: `pit_is_broken=1`, `pit_tsc_hz=0` (PIT never ran), `tsc_calibration_source="VMware"`. |
 | 11 | (T2.2) `cryptosvc` → maintenance: `/sbin/cryptoadm start` exits 1 (can't open `/dev/cryptoadm`) → blocks `network/ssh` (require_all dep on cryptosvc) | **RACE, not missing driver.** The crypto/cryptoadm/kcf drivers, `.conf`, `/kernel/crypto/*` providers, `libcryptoutil.so.1`, `/etc/crypto/*` are ALL in the proto and load fine. The `/dev/cryptoadm` pseudo node IS created — but by `svc:/system/device/local` (devfsadm), which runs LATE on our image (~device milestone). Stock `cryptosvc` depends only on `svc:/system/filesystem/root`, so it starts BEFORE devfsadm makes the node and loses the race. (On real hw the crypto node exists early in the device tree.) FIX: inject a `require_all` dependency on `svc:/milestone/devices` into the stock `cryptosvc.xml` (awk, DTD-revalidated) so cryptosvc waits for devfsadm. Confirmed by a diag marker: at +45s `ls /dev/cryptoadm` succeeds and `cryptoadm start` returns 0. |
 | 12 | (T2.2) `network/ssh` → maintenance "exited $SMF_EXIT_ERR_FATAL" AFTER crypto fixed | The gate proto ships the OLD Sun_SSH `ssh.xml`+method that runs `/usr/lib/ssh/sshd`; the reference OI host runs MODERN OpenSSH at `/usr/sbin/sshd` with a different manifest/method. Copying only the binary left the proto method calling the wrong path. FIX: copy the reference host's WHOLE OpenSSH — `ssh.xml` manifest + `sshd` method + `sshd`/`ssh-keygen`/`ssh` binaries. |
 | 13 | (T2.2) ssh still fatal: `/usr/libexec/sshd-session does not exist or is not executable` (status 95) | Modern OpenSSH (9.8+) splits sshd into a listener + per-connection helper binaries in `/usr/libexec`. Copying `sshd` alone is insufficient. FIX: copy `/usr/libexec/{sshd-session,sshd-auth,sftp-server,ssh-keysign,ssh-pkcs11-helper,ssh-sk-helper}`. |
@@ -201,7 +201,7 @@ Strip ANSI: `sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g'`.
 
 - loader → **PASS** (finds ESP, ZFS pool `spool/ROOT/solnix-1`, loads unix + boot_archive)
 - unix + genunix → **PASS** (`illumos Version master-0-gac45d71fc2 64-bit`, OUR non-DEBUG build)
-- CPU feature probe + mem sizing + TSC calibration → **PASS**
+- CPU feature probe + mem sizing + TSC calibration → **PASS** (T2.1 fix: `pit_is_broken=1` in the non-DEBUG kernel makes this reliable, no more ~50% hang after "TSC calibrated using VMware")
 - device tree / `setup_ddi` (rootnex) → **PASS** (fix #3)
 - `blkdev0`/`nvme0` attach + **VFS ZFS root mount** (`root on spool/ROOT/solnix-1 fstype zfs`) → **PASS**
 - both vCPUs online → **PASS**
@@ -233,10 +233,12 @@ reached online regardless. **T2.2 UPDATE: all now resolved — `svcs -x` is CLEA
 
 ## 6. TODO / open (post-gate polish)
 
-- **Intermittent early-kernel TSC hang (~50%)** — gotcha #10; the one real
-  remaining defect (T2.1). Root-cause the `startup_smap`/`startup_modules` race
-  on KVM. NOTE: `oi-make-be.sh` does NOT add the `idle_cpu_*` mitigations to
-  `/etc/system` (never touches it); an earlier claim it did was wrong.
+- ~~**Intermittent early-kernel TSC hang (~50%)**~~ **RESOLVED (T2.1):** the
+  diagnostic PIT run (`tsc_pit_also` → `freq_tsc_pit`) spun on the KVM-emulated
+  8254; fixed by defaulting `pit_is_broken=1` in `tscc_pit.c` (gotcha #10).
+  Batch-measured 40% → 100% on m6i.large. AMI `ami-0e215d9b018112964`.
+  Boot-hang batch-test helper: `scripts/oi-boot-batch.sh` (launch N, parse
+  console for the multi-user-server milestone, report N/M, terminate).
 - ~~Clean up the 5 peripheral maintenance services~~ **DONE (T2.2):** `svcs -x`
   is clean. cryptosvc = `milestone/devices` dep (gotcha #11); hal/keymap/intrd/
   ipmp/ipsecalgs = disabled in the site profile (+ their dependents rmvolmgr/

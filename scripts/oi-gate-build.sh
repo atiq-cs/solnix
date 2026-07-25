@@ -57,7 +57,23 @@ pkill -9 -f "nightly solnix" 2>/dev/null || true
 # is a full git clean (preserving our env file):
 cp solnix.sh /root/solnix.sh.bak 2>/dev/null || true
 git clean -dfx >/dev/null 2>&1 || true
+git checkout -- usr/src/uts/i86pc/os/tscc_pit.c 2>/dev/null || true
 cp /root/solnix.sh.bak solnix.sh 2>/dev/null || true
+# solnix T2.1 boot-hang fix: default pit_is_broken=1 so the diagnostic PIT
+# calibration (tsc_pit_also -> freq_tsc_pit port I/O on the emulated 8254) never
+# runs. On EC2 Nitro/KVM that run spins ~50% of boots, hanging at "TSC
+# calibrated using VMware". The hypervisor TSC-freq source wins anyway, so the
+# PIT diagnostic is pure hazardous overhead. This is an early-boot source knob
+# (startup_tsc runs BEFORE /etc/system is read, so set pit_is_broken in
+# /etc/system is too late). Batch-measured: 40% -> 100% boot success.
+# (docs/design-make-be.md gotcha #10; scripts/patches/0001-tscc_pit-*.patch)
+if ! grep -q 'pit_is_broken = 1' usr/src/uts/i86pc/os/tscc_pit.c; then
+  sed -i 's/^int pit_is_broken;/int pit_is_broken = 1;\t\/* solnix T2.1: skip PIT diag on KVM (boot-hang fix) *\//' \
+    usr/src/uts/i86pc/os/tscc_pit.c
+  grep -q 'pit_is_broken = 1' usr/src/uts/i86pc/os/tscc_pit.c \
+    && echo "applied T2.1 pit_is_broken fix to tscc_pit.c" \
+    || echo "WARN: T2.1 pit_is_broken fix did NOT apply (check tscc_pit.c)"
+fi
 # solnix: recreate the serial dmake wrapper (git clean removes untracked files).
 # nightly hardcodes DMAKE_MODE=parallel (nightly line ~887), which triggers a
 # target-specific-CPPFLAGS leak in the parallel libc build: -D_C89_INTMAX32
