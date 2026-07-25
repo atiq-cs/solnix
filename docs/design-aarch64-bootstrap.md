@@ -1,0 +1,452 @@
+# Design: solnix on aarch64 — port assessment, substrate, and bootstrap plan (A1)
+
+Status: research + substrate decision + A2 started. This is the deliverable for
+task **A1** in `.kiro/specs/solnix-aarch64/tasks.md`. It (1) assesses the
+out-of-tree aarch64 illumos port, (2) fixes the build/test substrate with a
+QEMU-boot analysis, and (3) gives a concrete A2/A3/A4 plan mapped to our proven
+x86_64 recipes. Sources are cited inline (repos, IPD, commit dates). Honest
+about what is unmerged, unproven, and hard.
+
+Verified on 2026-07-25 against: the OI amd64 build host `solnix-oi-build`
+(illumos-960edb1c89, 16 cores / 64 GB, us-east-2 `i-01a55d152d2e59beb`), and
+live GitHub API queries.
+
+---
+
+## TL;DR
+
+- **The port to target is `richlowe/arm64-gate` + `richlowe/illumos-gate@arm64-gate`**,
+  NOT Hayashi Naoyuki's `alhazred/illumos-arm`. The steering doc names Hayashi;
+  that port is real but **stale (last push 2021-11)**. Rich Lowe's is the live,
+  canonical effort: last commit **2026-07-19**, merges illumos/master, and is
+  backed by the official **illumos IPD 24** (authors: Toomas Soome, Richard
+  Lowe, Michael van der Westhuizen). Retarget the track to `arm64-gate`.
+- **It boots.** QEMU `virt` (GICv2), Raspberry Pi 4, Odroid C2. There is an
+  automated QEMU test harness that runs real illumos test suites (os-tests,
+  libc-tests, etc.) across eight CPU models. No prebuilt image exists (0
+  releases on either repo) — you build the disk yourself.
+- **Build method = cross from an amd64 illumos host** (OmniOS or OpenIndiana),
+  exactly the shape of our x86_64 work. It builds a cross GCC 10.4 (`richlowe/gcc`
+  `il-14_3_0-arm64`) + cross binutils (`richlowe/binutils-gdb`), pulls an
+  **OmniOS `braich` aarch64 sysroot**, then runs illumos `nightly -T aarch64`.
+  Triple: **`aarch64-unknown-solaris2.11`** — exactly what `design-nixpkgs-illumos.md`
+  predicted.
+- **Substrate: QEMU `virt` guest, host = our existing amd64 illumos build host
+  (or any Linux/Graviton host).** illumos-aarch64 **cannot boot on AWS Graviton**
+  today: the port has GICv2 only (**GICv3 = "No"** in IPD 24), and Graviton/Nitro
+  presents GICv3 + ACPI. So Graviton buys nothing over an x86 host for *booting*;
+  it would only be a faster *build* host, and even that is not needed — the cross
+  build runs on our amd64 illumos host and QEMU-TCG runs the guest anywhere.
+- **A2 started** on `solnix-oi-build` (idle at the time; x86_64 gate untouched in
+  a separate `/aarch64` tree). Harness cloned, bootstrap deps installed,
+  `make download` running (gate 1.15 GB + gcc 1.68 GB + u-boot + ATF + dtc + rpi
+  fw + OmniOS aarch64 sysroot all fetched). `make setup` (the cross toolchain
+  build) is the next step. See §5 for how far it got.
+- **Honest timeline:** proto build is plausibly days-to-weeks of iteration
+  (unmerged fork, will hit build breaks); a QEMU boot to multi-user is the real
+  milestone and is weeks out, not days. Do NOT claim "aarch64 supported" until it
+  boots to multi-user SMF in QEMU (steering rule).
+
+---
+
+## 1. Port assessment
+
+### 1.1 Which port (and correcting the steering doc)
+
+The steering (`architectures.md`, `solnix-aarch64/tasks.md`) names **Hayashi
+Naoyuki** as the aarch64 illumos port author. Verified reality:
+
+| Port | Repo | Last push | State |
+|------|------|-----------|-------|
+| Hayashi Naoyuki (`alhazred`) | `github.com/alhazred/illumos-arm` (fork) + `alhazred/illumos-arm-wiki` | **2021-11-16** | Real historical port; **stale ~4.5 yr**. The original 32/64-bit ARM effort ("onarm" lineage). |
+| **Rich Lowe (`richlowe`)** | **`github.com/richlowe/arm64-gate`** (harness) + **`richlowe/illumos-gate` branch `arm64-gate`** (the gate) | **2026-07-19** (gate), 2026-06-22 (harness) | **Live, canonical.** Backed by official **IPD 24**. |
+
+`richlowe/arm64-gate` search-ranks first for "illumos aarch64" and describes
+itself "bootstrap illumos on AArch64." The gate branch merges illumos/master
+regularly (last merge commit `2026-07-19`). **Retarget the solnix aarch64 track
+from Hayashi to Rich Lowe's port.** (Note it for a steering-doc correction.)
+
+Sources:
+- `https://github.com/richlowe/arm64-gate` (README, Makefile, env/aarch64,
+  qemu-setup/, tools/)
+- `https://github.com/richlowe/illumos-gate/tree/arm64-gate`
+- `https://github.com/richlowe/gcc/tree/il-14_3_0-arm64`,
+  `https://github.com/richlowe/binutils-gdb` (branch `illumos-arm64-2-43-1`)
+- IPD 24: `https://github.com/illumos/ipd/blob/master/ipd/0024/README.md`
+  (state: predraft; authors Soome/Lowe/van der Westhuizen)
+- Hayashi: `https://github.com/alhazred/illumos-arm`,
+  `https://github.com/alhazred/illumos-arm-wiki`, `github.com/alhazred/onarm`
+
+### 1.2 What boots
+
+Per IPD 24 "Target Hardware" and the harness `Makefile`/`qemu-setup`:
+
+- **QEMU `virt`** (SystemReady IR profile) — the primary dev target. `make
+  qemu-disk` builds `illumos-disk.img`; boot with `qemu-system-aarch64 -machine
+  virt -bios u-boot.bin -drive .../illumos-disk.img`.
+- **Raspberry Pi 4** (BCM2711) — `make rpi4-disk`, real hardware.
+- **Odroid C2 / Meson GXBB** (Amlogic S905) — listed, "obsolete."
+- **QEMU `sbsa-ref`** — mentioned as the only cost-effective way to test
+  SystemReady **SR** bringup; needs GICv3, which the port does **not** yet do.
+
+The harness ships `qemu-setup/testsuite.exp`: an `expect(1)` driver that boots
+QEMU in semi-random CPU/machine configs and runs real illumos test suites
+(`/opt/os-tests/bin/ostest`, `libc-tests`, `libproc-tests`, `libsec-tests`,
+`tz-tests`, `nvme-tests`, `elf-tests`, `i2c-tests`, `util-tests`, `crypto-tests`)
+across CPUs `cortex-a53/a57/a72/a76/a710`, `neoverse-n1/n2/v1`. That a working
+test harness exists is strong evidence the port genuinely boots to a usable
+userland — not just a kernel banner.
+
+The README is candid about brokenness: no `mdb`/`kmdb`/`dtrace` yet; SMF
+services `rbac`, `inetd-upgrade`, `update-man-index` "almost always time out";
+`root` has no password. So: **boots to multi-user-ish, with rough edges.**
+
+### 1.3 Build method (cross from amd64 illumos)
+
+From `arm64-gate/README.md` + `Makefile`. Three phases:
+
+1. `make download` — clones the arm64 gate, `richlowe/gcc`
+   (`il-14_3_0-arm64`, a gcc-10.4.0 base), `richlowe/binutils-gdb`
+   (`illumos-arm64-2-43-1`), `u-boot` v2025.10, ARM Trusted Firmware
+   `lts-v2.10.11`, `dtc` 1.7.2, RPi firmware, perl 5.42 + perl-cross 1.6.2, and
+   **pkgrecv's an OmniOS aarch64 sysroot** from `https://pkg.omnios.org/bloody/braich`.
+2. `make setup` — builds the prerequisites, in dependency order (from the
+   Makefile `SETUP_TARGETS`):
+   - `sysroot` — `pkg image-create --variant variant.arch=aarch64` populated from
+     the OmniOS braich repo (glibc-equivalent runtime: c-runtime, openssl-3,
+     libxml2, nspr, nss, zlib, glib2, dbus, bash, xorriso, net-snmp).
+   - `binutils-gdb` — cross binutils, `--target=aarch64-unknown-solaris2.11`.
+   - `sgs` — builds the illumos link-editor + headers via
+     `bldenv -T aarch64 env/aarch64 'make bldtools sgs'`, rsyncs tools proto into
+     `$CROSS` and aarch64 headers into the sysroot. **This is the Solaris `ld`
+     for aarch64** — the analog of the piece our x86_64 seed carries.
+   - `boot-gcc` — a bootstrap cross gcc (`--disable-shared --disable-libstdcxx`).
+   - `gcc` — the full cross gcc (`aarch64-unknown-solaris2.11`, `--with-abi=lp64`,
+     `--with-gnu-as`, `--without-gnu-ld` + `--with-ld=$(CROSS)/opt/onbld/bin/amd64/ld`
+     i.e. the Solaris link-editor, LP64-only no-multilib).
+   - `perl` — cross miniperl (gate build tools need it).
+   - `u-boot`, `u-boot-qemu`, `u-boot-rpi4`, `arm-trusted-firmware`, `dtc`,
+     `barn` (an OmniOS/kayak image helper).
+3. `make illumos` — `nightly -T aarch64 env/aarch64`. Then `make image`
+   (ZFS send stream), `make qemu-disk` / `make rpi4-disk` (bootable disk).
+
+Toolchain, precisely:
+- **Cross GCC 10.4.0** from `richlowe/gcc` (the aarch64 primary compiler is
+  `gcc14` per `env/aarch64` — wait: the env sets `aarch64_PRIMARY_CC=gcc14,...$triple-gcc`;
+  the *host* primary is gcc10, host shadow gcc14; the *cross* prefix is one gcc
+  built at 10.4.0 sources but labelled gcc14 in the env for makefile guards.
+  Verify exact rev during A2). GNU `as`, **Solaris `ld`** (not GNU ld) —
+  `--without-gnu-ld` + `--with-ld=.../onbld/bin/amd64/ld`.
+- **`aarch64-unknown-solaris2.11`** GNU triple, **LP64 only, no multilib**
+  (matches IPD 24: "LP64 only, no-multilib").
+
+Host requirement: an illumos system with GCC 10 **and** GCC 14 (OmniOS
+`/opt/gcc-10`,`/opt/gcc-14`; OI `/usr/gcc/10`,`/usr/gcc/14`), onbld, astdev,
+swig, bison, gnu-make, gnu-coreutils, openjdk8, openssl-11, cdrtools, sudo,
+zones/internal. Our OI host has all of these (installed during A2, §5).
+
+### 1.4 Completeness (honest)
+
+- **Kernel:** boots on `virt`/RPi4; `unix` is per-platform (IPD 24: no coherent
+  boot services). GICv2/GICv2m only; **GICv3/ITS = No**; SMMU = No; PSCI-based
+  reset. NS16550 + PL011 UART.
+- **World/userland:** enough to run the test suites above and reach a shell.
+  Missing: `mdb`, `kmdb`, `dtrace`. A cross `gdb` is built as a stand-in.
+- **Boot path:** u-boot → (ATF on RPi) → illumos EFI loader (`loader64.efi` →
+  `EFI/BOOT/bootaa64.efi`) → `unix`. On QEMU today a "temporary booter" path is
+  used (`inetboot.bin` in the older README variant; `-bios u-boot.bin` + EFI
+  loader in the current `run.sh`) with known-weird `boot_archive`/`vdev_probe`
+  warnings. Boot is slow under TCG and deliberately verbose.
+- **SMF:** comes up but several services time out (rbac, inetd-upgrade,
+  update-man-index). `svccfg apply` pauses without output — patience required.
+
+### 1.5 License / merge status
+
+- CDDL (illumos), same as the rest of the gate. The `env/aarch64` file carries
+  the standard CDDL header. No license blocker for solnix (we already build CDDL
+  illumos).
+- **Unmerged.** IPD 24 is **predraft**. This is an out-of-tree branch that tracks
+  master. Implication for solnix: we pin a specific `arm64-gate` commit and carry
+  it as an input, exactly as `design-build-strategy.md` anticipated ("integrating
+  an unmerged illumos fork"). Contribute fixes upstream where we hit them.
+
+### 1.6 Prebuilt image?
+
+**No.** `richlowe/arm64-gate` and `richlowe/illumos-gate` both have **0
+releases** (GitHub API). You must run the cross build to get a disk image.
+There is no aarch64 OI/OmniOS cloud image either. This is the core reason the
+aarch64 track is harder than x86_64: there is no seed cloud image to extract
+from — the seed must come from *our own* first cross build (§4, A3).
+
+---
+
+## 2. Substrate decision
+
+### 2.1 Can illumos-aarch64 run natively on AWS Graviton? — No (today)
+
+Graviton (Nitro) exposes to guests: **GICv3**, **ACPI** (SBBR/server-class),
+SMBIOS. The port per IPD 24 "Hardware Support Summary":
+
+| Feature | Port support |
+|---------|--------------|
+| GICv2/GICv2m | Partial |
+| **GICv3/GICv3-ITS** | **No** |
+| ACPI system description | port targets **devicetree (EBBR/IR)**, not ACPI |
+| SMMUv2/v3 | No |
+
+So on Graviton the port has no interrupt controller it understands and no
+devicetree. **It will not boot on Graviton bare-metal or as a Nitro guest**
+until GICv3 + ACPI land (SystemReady SR work, explicitly "in its infancy" in IPD
+24). Even the port's own SR-testing story is *QEMU `sbsa-ref`*, not real cloud
+ARM. Graviton therefore buys solnix nothing for *booting* aarch64 illumos.
+
+### 2.2 The realistic substrate: cross-build on amd64 illumos, boot in QEMU `virt`
+
+Mirror the x86_64 split exactly:
+
+- **Build host = amd64 illumos** (our existing `solnix-oi-build`, or a dedicated
+  clone). The cross build is amd64-illumos-native — the same "native-anchored"
+  reason from `design-build-strategy.md`: dmake/CTF/Solaris-ld are illumos
+  binaries; only the *target* is aarch64. A Linux host cannot run this build.
+- **Test host = QEMU `virt` (GICv2, TCG)**, which runs anywhere: on the amd64
+  illumos build host itself (OI ships `system/qemu` 11.0.2), or on any Linux box.
+  A Graviton Linux host *could* run the QEMU guest faster than TCG-on-x86 **iff**
+  QEMU's `virt` machine is configured GICv2 and KVM can back it — but that is an
+  optimization, not a requirement, and Graviton native-illumos remains off the
+  table. **Default: QEMU on the amd64 build host** (fewest moving parts, no
+  extra instance, no cross-host image copy).
+
+Concretely, no new instance is strictly required for A2–A4: the amd64 illumos
+host both cross-builds AND runs the QEMU guest. (Optionally spin a throwaway
+Graviton Linux box later only to measure KVM-GICv2 boot speed; not on the
+critical path. Tag `Owner=gregburd Purpose=solnix-dev Expiry=+7d`; terminate.)
+
+### 2.3 QEMU-aarch64 boot verification
+
+The port's own boot recipe (verbatim from the two documented forms):
+
+**Current harness (`qemu-setup/run.sh`) — u-boot + EFI loader:**
+```
+qemu-system-aarch64 -nographic -machine virt -accel tcg,thread=multi \
+  -m 6g -smp cores=2 -cpu cortex-a53 \
+  -bios u-boot.bin \
+  -netdev vnic,ifname=braich0,id=net0 \
+  -device virtio-net-device,netdev=net0,mac=$mac \
+  -device virtio-blk-device,drive=hd0 \
+  -drive file=illumos-disk.img,format=raw,id=hd0,if=none
+```
+`build_qemu.sh` builds `illumos-disk.img`: GPT with an ESP (pcfs FAT32) holding
+`loader64.efi` → `EFI/BOOT/bootaa64.efi`, plus a ZFS pool `armpool` with
+`ROOT/braich` received from `out/illumos.zfs`, `bootfs` set, `swap`+`dump`
+zvols, `org.opensolaris.libbe:uuid` set. u-boot (`build/u-boot-qemu/u-boot.bin`)
+is the `-bios`.
+
+**NOTE — networking:** `run.sh` uses `-netdev vnic,ifname=braich0` (an illumos
+VNIC). That assumes **QEMU-on-illumos**. On a **Linux/Graviton** QEMU host,
+substitute user networking: `-netdev user,id=net0`. The README says as much:
+"in the worst case user networking `-netdev user,id=net0`." The port *requires a
+NIC to exist* (device-tree shape assumption), so you cannot drop `-netdev`
+entirely — swap the type, keep the device.
+
+Verification status (honest): I have **read and confirmed the boot recipe from
+the port's own scripts** (machine `virt`, GICv2 CPUs, `-bios u-boot.bin`, EFI
+loader on an ESP, virtio-blk ZFS root). I have **not yet produced a disk and
+booted it** — that requires `make setup` + `make illumos` + `make qemu-disk` to
+finish first (A2→A4). The boot recipe is not speculative; it is the maintainer's
+documented, test-harnessed procedure. The remaining risk is entirely in getting
+*our* cross build to complete, not in whether QEMU can run the result (the
+maintainer's CI proves it can).
+
+### 2.4 Storage note
+
+Per task constraint: **no AWS S3 / no numa datasets for storage.** aarch64
+artifacts (proto, seed, disk image) live on the build host's local ZFS
+(`/aarch64`, 100 GB free) and, when we have a cache story, the solnix.io cache —
+not S3/numa. The `numa-arm` r8g instance in the account is **off-limits** (not
+ours; NUMA-benchmark box).
+
+---
+
+## 3. Mapping x86_64 recipes → aarch64 (what transfers, what differs)
+
+Our x86_64 bootstrap is: build OI gate → extract seed → wire `x86_64-solaris`
+into lib.systems → native stdenv → slice world → make-be → boot. The aarch64
+path reuses the *mechanisms* but swaps the source of truth from "OI gate on an OI
+host" to "richlowe arm64-gate cross-built on an amd64 illumos host."
+
+| x86_64 recipe | Transfers? | aarch64 equivalent / difference |
+|---------------|-----------|--------------------------------|
+| `scripts/oi-gate-build.sh` (nightly on OI) | **Rewrite** | The arm64-gate `Makefile` **is** the gate-build recipe. Wrap it (`make download/setup/illumos`) instead of our nightly-on-native. Cross, `-T aarch64`, `env/aarch64`. New script `scripts/arm64-gate-build.sh` that drives the harness. |
+| DMAKE serial / pit_is_broken / Perl-version hacks in `oi-gate-build.sh` | Partial | The harness already encodes its own env quirks (`env/aarch64`: gcc10+gcc14, perl 5.42, SUPPRESSPKGDEP, DMAKE_MAX_JOBS via `maxjobs`). Our x86-specific hacks (tscc_pit KVM boot-hang) are **x86-only** — do NOT port. aarch64 boot-hang issues, if any, are different (GIC/timer). |
+| `scripts/oi-extract-seed.sh` (proto → seed.tar.zst) | **Yes, adapt paths** | Extract from `proto/root_aarch64` (not `root_i386`); libs under `lib/` and `usr/lib/` **without** an `amd64/` ISA subdir (IPD 24: userland search paths `/lib /usr/lib`, `.../lib/64 -> .`). The seed's toolchain half is the **cross** gcc+Solaris-ld from `$CROSS` (runs on amd64!) — a key difference: the x86 seed's compiler runs on the target; the aarch64 seed's compiler is a *cross* compiler that runs on amd64 and emits aarch64. So the aarch64 "seed" is really a cross-SDK + target sysroot. |
+| lib.systems `x86_64-solaris` wiring (`design-nixpkgs-illumos.md`, fork commit `18218269f`) | **Yes, mirror** | Add `aarch64-solaris` double + `examples.aarch64-illumos = { config = "aarch64-unknown-solaris2.11"; }`. The `parse.nix` `hasPrefix "solaris"` fix already covers it. `elaborate` gaps (`uname=SunOS`, `libc=illumos-libc`, `linker=solaris`, `useLLVM=false`) are kernel-keyed, not arch-keyed → already correct for aarch64. Only the cpu (`aarch64`, already in nixpkgs `cpuTypes`) + double are new. **Small diff.** |
+| bintools-wrapper `ld-solaris-wrapper.sh` (`-rpath`→`-R`, `-dynamic-linker`→`-I`) | **Yes, unchanged** | Same Solaris link-editor, same flag translation. Arch-independent. |
+| `pkgs.illumos.*` slice + `elfedit` RUNPATH relocation (`design-gate-derivation.md`) | **Yes, adapt** | Slice `proto/root_aarch64`; `elfedit` works on aarch64 ELF. No `amd64/` subdir. `ld.so.1` at `/lib/ld.so.1` (+ `/lib/64 -> .` compat symlink). |
+| `mk-illumos-component` proto slicing | **Yes** | Same, aarch64 proto. |
+| `scripts/oi-make-be.sh` (bootable ZFS image) | **Rewrite** | The harness `tools/build_image.sh` + `build_qemu.sh` already do this for aarch64 (ZFS send + ESP + u-boot + `loader64.efi`). Wrap those instead of our x86 GPT/pcfs/loader logic. Boot path differs: **u-boot + EFI aarch64 loader**, not x86 multiboot/bootx64.efi. No tscc_pit patch. |
+| `scripts/oi-make-ami.sh` / `oi-be-to-ami.sh` (register AMI) | **Skip** | No aarch64 AMI path — Graviton can't boot it (§2.1). Test target is QEMU disk image, not an AMI. |
+| `scripts/oi-nix-setup.sh` (Nix on illumos) | **Reuse as-is** | Nix-on-illumos runs on the **amd64 build host** and evaluates/builds `x86_64-solaris` derivations; the aarch64 world is cross-produced. The eval-split (`design-make-be.md §7`) is unchanged. |
+
+Where aarch64 fundamentally differs from x86_64:
+1. **No cloud seed image.** x86 seeded from an OI cloud image's proto; aarch64
+   must seed from *our own first cross build*. Chicken-and-egg is broken by the
+   OmniOS `braich` sysroot (a prebuilt aarch64 userland to link against during
+   the cross build) — that sysroot is the closest thing to a seed, but it is a
+   *runtime* sysroot, not a toolchain.
+2. **Cross, not native.** The toolchain runs on amd64, targets aarch64. Our
+   x86 stdenv is native-on-illumos; the aarch64 stdenv is `pkgsCross` from an
+   amd64-illumos build host (the legit Nix cross scenario `design-nixpkgs-illumos.md §3.5`
+   describes, just hosted on illumos-amd64 instead of Linux).
+3. **Boot path:** u-boot / ATF / EFI-aarch64-loader / devicetree, not x86
+   multiboot. GICv2. No `amd64/` ISA dir; `/lib/64 -> .`.
+4. **Triple:** `aarch64-unknown-solaris2.11`, `uname -p aarch64`, `uname -m
+   armv8`, TLS variant 1, unsigned char, `__aarch64__`.
+
+---
+
+## 4. A2 / A3 / A4 plan (concrete, mapped to our recipes)
+
+### A2 — Build the aarch64 illumos port (cross, on amd64 illumos)
+
+Gate: an `proto/root_aarch64` exists; the cross gcc compiles a hello `.o` for
+aarch64 (`file` says `ELF 64-bit ... ARM aarch64`).
+
+Steps (all on the amd64 illumos host, in `/aarch64/arm64-gate`, x86 gate
+untouched):
+1. Install host bootstrap deps (gcc10, gcc14, onbld, astdev, swig, bison,
+   gnu-make, gnu-coreutils, openjdk8, openssl-11, texinfo, mpc,
+   perl xml-parser, cdrtools, sudo, zones/internal). **Done in §5.**
+2. `make download` — clone gate/gcc/binutils/u-boot/ATF/dtc/perl + OmniOS braich
+   sysroot recv. **Running in §5.**
+3. `make setup` — build sysroot, binutils, sgs (Solaris ld + headers), boot-gcc,
+   gcc, perl, u-boot(+qemu+rpi4), ATF, dtc, barn. **This is the bulk of A2.**
+   Expect breakage on an unmerged fork; fix, or pin an older known-good rev.
+4. `make illumos` — `nightly -T aarch64 env/aarch64`. Produces
+   `proto/root_aarch64` + packages. **Long, will hit build errors** — triage,
+   contribute upstream.
+5. Capture as a reproducible recipe: `scripts/arm64-gate-build.sh` (the analog
+   of `oi-gate-build.sh`) that pins commits and runs 1–4.
+- **Gate check:** `$CROSS/bin/aarch64-unknown-solaris2.11-gcc -c hello.c` →
+  aarch64 ELF; `proto/root_aarch64/lib/libc.so.1` exists.
+
+### A3 — aarch64 seed + Nix world
+
+Gate: a hello compiled by the aarch64 Nix cross toolchain runs on the aarch64
+QEMU guest, resolving libc from `/nix/store`.
+
+1. **Seed extraction** — `scripts/arm64-extract-seed.sh` (fork of
+   `oi-extract-seed.sh`): package the **cross SDK** (`$CROSS` gcc + Solaris ld +
+   elfedit/elfdump + `aarch64-unknown-solaris2.11-*` tools) plus the **target
+   sysroot** (proto `root_aarch64` libc/crt/headers/ld.so.1 + OmniOS braich
+   runtime libs). Note: no `amd64/` subdir; `/lib/64 -> .`. This seed's compiler
+   runs on **amd64** (cross), unlike the x86 seed.
+2. **lib.systems** — mirror the x86_64-solaris wiring
+   (`design-nixpkgs-illumos.md`): add `"aarch64-solaris"` to `doubles.nix` and
+   `examples.aarch64-illumos = { config = "aarch64-unknown-solaris2.11"; }`. The
+   `parse.nix` `hasPrefix "solaris"` fix and the kernel-keyed `elaborate` gaps
+   (`uname/libc/linker/useLLVM`) already cover aarch64 — verify with `nix eval`
+   that `examples.aarch64-illumos` elaborates to `config=aarch64-unknown-solaris2.11`,
+   `isSunOS=true`, `libc=illumos-libc`, `linker=solaris`, `cpu=aarch64`.
+3. **Cross stdenv** — this is `pkgsCross.aarch64-solaris` hosted on the amd64
+   illumos builder: `crossSystem = examples.aarch64-illumos`, `libcCross =
+   pkgs.illumos.aarch64.libc` (the seed sysroot), cross-gcc = the seed's
+   `$CROSS` gcc wrapped by cc-wrapper. This is the *legit* Nix cross path
+   (`design-nixpkgs-illumos.md §3.5`) — the aarch64 world genuinely cross-builds
+   because the target is aarch64 and the host toolchain (the richlowe cross gcc)
+   already exists. The `design-build-strategy.md` "gate doesn't cross" caveat is
+   about cross-*OS from Linux*; here the gate is cross-built *by its own
+   maintainer's harness on illumos*, and we re-express only the *outputs* as Nix
+   slices (Tier 1a), same as x86.
+4. **Slice the world** — `pkgs.illumos.aarch64.{libc,ld,rtld,sys,base-tools}`
+   from `proto/root_aarch64`, `elfedit` RUNPATH into the store (arch-independent
+   mechanism). Reuse `design-gate-derivation.md` slicing, aarch64 paths.
+- **Gate check:** cross-build `hello.c` → aarch64 ELF with a store `-R` RUNPATH;
+  scp into the QEMU guest; runs; `LD_DEBUG` shows libc from `/nix/store`.
+
+### A4 — aarch64 boot + image
+
+Gate: aarch64 solnix boots to multi-user SMF in QEMU (RPi/Graviton later, if
+ever).
+
+1. **make-be for aarch64** — `scripts/arm64-make-be.sh` wrapping the harness
+   `tools/build_image.sh` + `build_qemu.sh` (ZFS send stream → GPT ESP with
+   `loader64.efi`→`bootaa64.efi` + ZFS `armpool/ROOT/...` + swap/dump zvols +
+   libbe uuid). Boot path = **u-boot + EFI aarch64 loader + devicetree**, not x86
+   multiboot. Layer solnix SMF manifests on top exactly as `oi-make-be.sh` does
+   for x86 (add-not-replace, `design-smf-init.md §5`).
+2. **QEMU boot** — `qemu-system-aarch64 -machine virt -bios u-boot.bin
+   -device virtio-blk-device,drive=hd0 -drive file=solnix-aarch64.img,...`.
+   On the amd64 illumos host use `-netdev vnic,ifname=...`; on a Linux host use
+   `-netdev user,id=net0`. Keep a NIC device present (port assumes one).
+3. **Bring up to multi-user** — expect the documented SMF timeouts (rbac,
+   inetd-upgrade, update-man-index). Patience; fix upstream where feasible.
+- **Gate check:** boots to `svc:/milestone/multi-user-server`; smoke test
+  (`uname -a` → aarch64, a solnix-built binary runs). Only then may any doc say
+  "aarch64 supported" (steering rule).
+
+---
+
+## 5. A2 progress (this task)
+
+Started A2 on `solnix-oi-build` (idle at the time: load ~0.6, no nightly
+running, 100 GB free; x86_64 gate at `/code/illumos-gate` left untouched — all
+aarch64 work isolated under `/aarch64`).
+
+Done:
+- Cloned `richlowe/arm64-gate` harness → `/aarch64/arm64-gate`.
+- Installed missing bootstrap deps: texinfo, astdev, swig, bison, mpc,
+  perl xml-parser, cdrtools, sudo, pipe-viewer, zones/internal, openssl-11
+  (with `pkg set-mediator -V 1.1 openssl`), illumos-closed. (gcc-10/14, onbld,
+  gnu-make, gnu-coreutils, openjdk8, pkg-config, gnutls-3, rsync already present.)
+- Started `make download` (via illumos `dmake`, since the harness Makefile is
+  deliberately not GNU-make-parseable). Fetched: arm64 gate 1.15 GB,
+  `richlowe/gcc` 1.68 GB, binutils-gdb 189 MB, u-boot 444 MB, ARM Trusted
+  Firmware 46 MB, dtc, RPi firmware 155 MB, and the OmniOS `braich` aarch64
+  sysroot recv (~240 MB, in progress at handoff).
+
+Next (documented, to resume): let `make download` finish, then `make setup`
+(cross toolchain — the real A2 milestone), then `make illumos`. `make setup` is
+multi-hour and the first place an unmerged fork typically breaks; triage there.
+
+Resume commands (on the host, as root):
+```
+cd /aarch64/arm64-gate
+env PATH=/usr/gnu/bin:/opt/onbld/bin:/usr/bin:/usr/sbin:/bin \
+  /opt/onbld/bin/i386/dmake download   # if not already complete
+env PATH=/usr/gnu/bin:/opt/onbld/bin:/usr/bin:/usr/sbin:/bin \
+  nohup /opt/onbld/bin/i386/dmake setup > /var/log/arm64-setup.log 2>&1 &
+tail -F /var/log/arm64-setup.log
+```
+
+---
+
+## 6. Honest assessment: hardness + timeline
+
+- **Not a repackage; an integration of an unmerged, actively-moving fork.** The
+  gate branch merges master weekly, so pin a commit and expect to rebase. IPD 24
+  is predraft — ABI details "subject to change."
+- **`make setup` and `make illumos` will break** on a first run on our exact OI
+  rev; the maintainer builds primarily on OmniOS. Expect env/version-skew fixes
+  (perl, python minor, pkgdepend, gcc shadow). Budget iteration.
+- **QEMU-only, and slow.** TCG boot is deliberately verbose and slow; SMF
+  services time out; no mdb/dtrace. A "boots to multi-user" milestone is real but
+  rough. Realistic: **days to get proto building, weeks to a reliable QEMU boot**,
+  assuming steady effort — dominated by build-break triage, not by our Nix
+  plumbing (which is a small, well-understood diff off the x86 work).
+- **No Graviton payoff for booting.** GICv3/ACPI gap (IPD 24) blocks cloud ARM
+  native boot indefinitely; do not plan an aarch64 AMI. QEMU `virt` is the
+  target. A Graviton Linux host could only *speed the QEMU guest* (KVM+GICv2),
+  and only marginally vs running QEMU on the amd64 build host — skip unless boot
+  time becomes the bottleneck.
+- **Steering correction owed:** the track names Hayashi Naoyuki; the live port is
+  Rich Lowe's `arm64-gate`. Update `architectures.md` / `solnix-aarch64/tasks.md`
+  to point at `richlowe/arm64-gate` + IPD 24, and note the Hayashi port as the
+  stale historical predecessor.
+
+The good news: the *substrate is settled* (cross on amd64 illumos → QEMU virt),
+the *build method is documented and test-harnessed by the maintainer*, the
+*triple and toolchain are exactly what our x86 lib.systems work anticipated*, and
+the Nix-side diff (lib.systems double + examples entry + aarch64 proto slices) is
+small and mostly kernel-keyed code that already works for x86. The risk is
+concentrated in one place: getting the maintainer's cross build to complete on
+our host. A2 is underway.

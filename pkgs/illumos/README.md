@@ -18,13 +18,16 @@ x86_64-solaris`, `sandbox = false`). They map 1:1 onto the fork's
 |---|---|---|
 | `gate.nix` | GATE A: ingest `/code/illumos-gate/proto/root_i386` into the store via `builtins.path` | §1 (ingest variant; full build-FOD is a TODO) |
 | `mk-illumos-component.nix` | slice N proto files into `$out`, relocate DT_RUNPATH+DT_RPATH with host `elfedit` ($ORIGIN + `selfLibDirs` `$out`-absolute + `depRunpaths` cross-component) | §2.3 |
-| `default.nix` | wires `gate` + `libc` + `rtld` + `ld` + `sys` + `base-tools` + `externalLibs` + `systemPath` | §2.4 / §2.5 / §4.2 |
+| `default.nix` | wires `gate` + `libc` + `rtld` + `ld` + `sys` + `base-tools` + `externalLibs` + `systemPath` + `gcc14`/`clang`/`gdb` toolchains | §2.4 / §2.5 / §4.2 + design-toolchains.md |
 | `mk-illumos-component.nix` | slice N proto files into `$out`, relocate DT_RUNPATH+DT_RPATH with host `elfedit` ($ORIGIN + `selfLibDirs`/`flattenLibsInto` `$out`-absolute + `depRunpaths` cross-component); `srcRoot`/`extraFiles` slice non-proto host libs | §2.3 |
 | `../../scripts/gate-c-hello.sh` | GATE C: compile+link+run hello vs the sliced libc; LD_DEBUG proof | §5 Step D |
 | `../../scripts/oi-gate-slices.sh` | host driver for GATES A/B/C (gate + libc + hello) | §5 |
 | `../../scripts/oi-world-slices.sh` | host driver for the core world slices (rtld, ld, sys, base-tools, systemPath) | §5 C–G |
 | `../../scripts/oi-closure.sh` | ABI-aware transitive NEEDED-closure computer for `base-tools`' `baseToolLibs` | §2.4 / risk #5 |
 | `../../scripts/oi-smf-gates.sh` | P1.5 host driver: build `externalLibs`, prove the SMF stack is ldd-clean (GATE 1), generate + DTD-validate SMF manifests (GATE 2) | design-smf-init.md §2 |
+| `toolchains.nix` | `gcc14`/`clang`/`gdb` slices from the OI IPS install (RUNPATH-relocated store toolchains) | design-toolchains.md |
+| `../../scripts/oi-cc-wrapper.sh` | emit `solnix-{gcc,g++,clang,clang++}` cc-wrappers (sliced-libc flags + RUNPATH scrub) | design-toolchains.md |
+| `../../scripts/gate-{gcc14,clang,dual}.sh` | GATE GCC / GATE CLANG / dual-compile bonus drivers | design-toolchains.md |
 
 ## Run it (on the host)
 
@@ -354,3 +357,55 @@ ROOT_AUTHKEY=/root/.ssh/authorized_keys DISK=c1t1d0 <makeBeScript>
   path; DHCP + default route; cryptosvc + network/ssh online). Same bootable
   result as the hand recipe, from a config-driven builder. An earlier v1 AMI
   `ami-0639fb184f218a519` also booted 5/5 (before the sshd→marker config tweak).
+
+## Modern compiler toolchains — GCC-14 + Clang-21 + GDB (host, gate ac45d71fc2)
+
+`pkgs.illumos.{gcc14,clang,gdb}` package the latest illumos GCC **and**
+Clang/LLVM as relocatable store toolchains so the package registry can be built
+with **both** compilers (maintainer rule: "at least GCC and Clang, latest
+versions"). Pulls forward backlog PS-1 (clang) / PS-4 (latest GCC+GDB); PS-5
+(lldb) is partial (OI ships no lldb — see design-toolchains.md). Full design +
+gotchas: `docs/design-toolchains.md`.
+
+**Sliced, not built-from-source:** OI already ships gcc-14 (14.3.0, `/usr/gcc/14`)
+and clang-21 (21.1.8, `/usr/clang/21`), both targeting `x86_64-pc-solaris2.11`.
+`toolchains.nix` re-expresses them as `/nix/store` toolchains via the same
+`mkIllumosComponent` + `elfedit` relocation as the world slices.
+
+- **GATE GCC PASS** — `gcc --version` = `14.3.0`, `-dumpmachine` =
+  `x86_64-pc-solaris2.11`; driver + `cc1plus` ldd-clean; a C hello compiled+
+  linked with the store gcc14 (sliced libc, Solaris ld) **runs** (libc binds
+  from the store); a C++ hello (libstdc++) **runs** (store-clean after the
+  cc-wrapper RUNPATH scrub). **GDB present** = `GNU gdb (GDB) 16.3`, ldd-clean,
+  **debugs** a real threaded binary (breakpoints/run/threads/backtrace).
+- **GATE CLANG PASS** — `clang --version` = `21.1.8`, target
+  `x86_64-pc-solaris2.11`; driver + 211 MB `libLLVM.so.21.1` ldd-clean; a C
+  hello **runs** with a 100%-store RUNPATH; a C++ hello
+  (`--gcc-toolchain=<store gcc14>`, libstdc++) **runs** store-clean.
+- **BONUS dual-compile PASS** — the SAME 4-thread pthreads+printf program built
+  by BOTH gcc14 and clang; both run (sum=30, exit 0), both ldd-clean.
+
+**RUNPATH gotchas** (design-toolchains.md §gotchas): (1) `elfedit` grows RUNPATH
+even on the 211 MB libLLVM; (2) gcc's driver bakes an absolute host
+`-R /usr/gcc/14/lib/amd64` into C++ links → the cc-wrapper scrubs it post-link
+(clang doesn't have this problem); (3) gcc's `collect2` calls host `/usr/bin/ld`
+via a baked `--with-ld` (same illumos ld; `-B <ld-slice>/usr/bin` for hermetic).
+
+**Select the compiler for a package build** with the wrappers from
+`scripts/oi-cc-wrapper.sh`:
+```sh
+CC=$OUT/solnix-gcc   CXX=$OUT/solnix-g++       # build with GCC-14
+CC=$OUT/solnix-clang CXX=$OUT/solnix-clang++   # build the SAME package with Clang-21
+```
+C++ stdlib = **libstdc++** (gcc-14's), not libc++ (OI clang is configured that way).
+
+| slice | store path | NAR (sha256) | NAR / xz |
+|---|---|---|---:|
+| gcc14 | `/nix/store/1sif429w2gpwzxcjqljb481anq0y7wh2-illumos-gcc14` | `0zrsgpwwa7q8dcxi5qzfhb0nspq36nmhd8agx0d87wb98ql0dlvq` | 921.8 MB / 141.8 MB |
+| clang | `/nix/store/b824mvhkdd4hh0vdi828x1nppkpqwm1y-illumos-clang` | `1w5qg50jwwqks85a7smhcdddr14zv3qw21h9vwav1vycjcvxw7ga` | 1399.1 MB / 240.4 MB |
+| gdb | `/nix/store/lv49gydird6mh1488hd2wdm9i20imrl1-illumos-gdb` | `1gj58rrjzkpc8cq66wc5lq285nzq6gwds5wjzk89vbwj85zl6ivx` | 79.5 MB / 20.5 MB |
+
+All three signed + published to `https://s3.solnix.io/solnix-cache`. Making
+either the DEFAULT **world** compiler = re-pin the gate build to gcc-14 (or
+clang-21) and re-slice — a full-world rebuild, deferred (design-toolchains.md
+§default).
