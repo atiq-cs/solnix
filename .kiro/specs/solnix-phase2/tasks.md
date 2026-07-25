@@ -67,3 +67,19 @@ highest-value — do first, in parallel. T2.5-T2.8 (generations, nixify, install
 full eval) form the "installable + upgradeable" core. T2.9-T2.10 (breadth) run
 continuously. The post-stable backlog (clang/Rust/libumem/latest-GCC/lldb/fork
 parity, docs/post-stable-backlog.md) rides on top once the P2 gate is green.
+
+## T2.10 expanded — package breadth with dual toolchains (GCC + Clang)
+
+Per the maintainer: build the registry's packages with BOTH GCC (latest, 14+)
+and Clang (latest), preferably newest versions. Sequencing:
+- FIRST: modern toolchains as packages (pkgs.illumos.{gcc14,clang,gdb,lldb}) —
+  in progress (agent 8e61e00a). Foundation for everything below.
+- THEN: build a meaningful batch of common packages (libs + tools) as
+  pkgs.illumos.* / overlays, compiled against the sliced libc + Solaris ld,
+  using gcc14 and clang. Publish each to the solnix.io cache (signed). This is
+  massively parallelizable — fan out batches of packages across agents once the
+  toolchains are proven. Prioritize: build deps (make/autoconf/pkg-config/
+  cmake/ninja), common libs (zlib/openssl/libffi/ncurses/readline/pcre), and
+  headline tools, then breadth.
+- Track which packages build clean under gcc vs clang; the registry records both
+  where useful (the maintainer wants the comparison, esp. for libumem PS-3).
