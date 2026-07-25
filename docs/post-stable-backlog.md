@@ -42,6 +42,31 @@ boots, self-hosts, and pulls from the solnix.io cache.
   Produce a prioritized catalog (desktop vs server tracks) and feed it into the
   package-build pipeline once the base distro is stable.
 
+## Platform qualification
+
+- **[PS-7] Qualify solnix on ALL EC2 instance types.** Not a priority now, but a
+  real eventual requirement. So far we've only proven a narrow slice, and have
+  already hit real gaps:
+  - **TSC/PIT boot hang is instance-type/vCPU-correlated** — our built kernel
+    needs `pit_is_broken=1`; even then, reliability varies by vCPU count. Proven
+    reliable: m6i (Nitro, EBS) at ≤16 vCPU. Known-bad/untested: 32+ vCPU (hung
+    ~60% before the fix), **c6id / instance-store NVMe** (didn't boot), **Nitro
+    v5/v6** (ENA attach needs gate fix 17939 — verify it's in our kernel),
+    Xen-era types (t2/m4 — booted early on via xnf), bare-metal `.metal`, and the
+    high-core `.24xlarge`/`.48xlarge` sizes.
+  - **What qualification means:** for each family/size, verify boot-to-multi-user
+    reliability (a batch success rate, via `oi-boot-batch.sh`), correct NIC
+    driver attach (ena/xnf/virtio as applicable), NVMe/EBS + instance-store disk,
+    and console/serial. Build a per-instance-type support matrix (like the
+    architecture matrix in `.kiro/steering/architectures.md`).
+  - **Root causes to chase:** the TSC/PIT early-boot path at high vCPU counts;
+    instance-store NVMe device support; ENA generations (17939 and later);
+    IMDSv2 (org-enforced here) vs the metadata path. Several are kernel-level
+    illumos work, not packaging.
+  - **Deliverable:** a qualified-instance-types matrix + the fixes that widen it,
+    so "solnix runs on EC2" means *any* type, not just m6i≤16vCPU. Track which
+    types are certified per release.
+
 ## Sequencing note
 
 These slot in **after** the roadmap's Phase 1 (bootable amd64) and Phase 2
