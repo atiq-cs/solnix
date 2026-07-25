@@ -126,3 +126,19 @@ Once Phase 1 (bootable) + Phase 2 (usable/self-hosting/cache) are done, see
 **docs/post-stable-backlog.md** for the deferred work: recompile-with-clang,
 Rust toolchain, libumem-as-default-allocator, latest GCC/GDB, lldb, and
 desktop+server feature/fork parity.
+
+---
+
+## Phase 2.5 — Distributed cache, release 2026.08, published ISO
+
+After the Phase-2 gate (installable/usable), see
+**.kiro/specs/solnix-phase2.5-release/tasks.md**:
+- **T2.11** Opt-in BitTorrent-backed distributed package cache: every solnix
+  system can seed the store paths it holds + fetch missing ones from a secure
+  peer swarm, signature-verified, falling back to solnix.io. Integrated into the
+  installer (opt-in prompt), the packages (P2P daemon + SMF service), and a
+  config module. Trust stays with cache signatures; peers only move bytes.
+- **T2.12** Cut release **2026.08** (date-tagged; pin fork/gate/closure; publish
+  signed to the unstable channel).
+- **T2.13** Build the install **.iso**, smoke-test install-from-ISO, drop it in
+  `../solnix.io/` for the site team to publish + advertise.
