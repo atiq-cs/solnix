@@ -774,6 +774,106 @@ EOF
     # wrapper, so C-ext / XS builds MUST force CC or they fall back / fail.
     # ======================================================================
 
+    # ---- WAVE 6 heavy tier-3 tools (deferred from wave 5) ------------------
+    libevent = pkg {
+      pname = "libevent"; version = "2.1.12";
+      src = { url = "https://github.com/libevent/libevent/releases/download/release-2.1.12-stable/libevent-2.1.12-stable.tar.gz";
+              sha256 = "92e6de1be9ec176428fd2367677e61ceffc2ee1cb119035037a27d346b0403bb"; };
+      preConfigure = illumosExt;
+      configureFlags = [ "--disable-samples" "--disable-openssl" ];
+    };
+
+    tmux = pkg {
+      pname = "tmux"; version = "3.4";
+      src = { url = "https://github.com/tmux/tmux/releases/download/3.4/tmux-3.4.tar.gz";
+              sha256 = "551ab8dea0bf505c0ad6b7bb35ef567cdde0ccb84357df142c254f35a23e19aa"; };
+      deps = [ self.libevent.gcc self.ncurses.gcc ];
+      # tmux configure probes libevent via CPPFLAGS/LDFLAGS (set from deps by
+      # mk-userland). Point pkg-config at libevent's .pc and force the STORE
+      # ncurses (widec) include so it does not grab host /usr/include/ncurses.
+      preConfigure = illumosExt + ''
+        export PKG_CONFIG_PATH="${self.libevent.gcc}/lib/pkgconfig:${self.ncurses.gcc}/lib/pkgconfig:''${PKG_CONFIG_PATH:-}"
+        export CPPFLAGS="-I${self.ncurses.gcc}/include/ncursesw -I${self.ncurses.gcc}/include ''${CPPFLAGS:-}"
+      '';
+    };
+
+    zsh = pkg {
+      pname = "zsh"; version = "5.9";
+      src = { url = "https://sourceforge.net/projects/zsh/files/zsh/5.9/zsh-5.9.tar.xz/download";
+              sha256 = "9b8d1ecedd5b5e81fbf1918e876752a7dd948e05c1a0dba10ab863842d45acd5"; };
+      deps = [ self.ncurses.gcc self.pcre2.gcc ];
+      preConfigure = illumosExt;
+      configureFlags = [ "--disable-gdbm" "--enable-multibyte" "--with-tcsetpgrp" ];
+    };
+
+    curl = pkg {
+      pname = "curl"; version = "8.9.1";
+      src = { url = "https://curl.se/download/curl-8.9.1.tar.xz";
+              sha256 = "291124a007ee5111997825940b3876b3048f7d31e73e9caa681b80fe48b2dcc5"; };
+      deps = [ self.openssl3.gcc self.zlib.gcc ];
+      preConfigure = illumosExt;
+      configureFlags = [
+        "--with-openssl=${self.openssl3.gcc}"
+        "--with-zlib=${self.zlib.gcc}"
+        "--without-libpsl" "--disable-ldap" "--disable-manual"
+      ];
+    };
+
+    libxslt = pkg {
+      pname = "libxslt"; version = "1.1.39";
+      src = { url = "https://download.gnome.org/sources/libxslt/1.1/libxslt-1.1.39.tar.xz";
+              sha256 = "2a20ad621148339b0759c4d4e96719362dee64c9a096dbba625ba053846349f0"; };
+      deps = [ self.libxml2.gcc self.zlib.gcc ];
+      configureFlags = [
+        "--without-python"
+        "--with-libxml-prefix=${self.libxml2.gcc}"
+        "--without-crypto"
+      ];
+    };
+
+    oniguruma = pkg {
+      pname = "oniguruma"; version = "6.9.9";
+      src = { url = "https://github.com/kkos/oniguruma/releases/download/v6.9.9/onig-6.9.9.tar.gz";
+              sha256 = "60162bd3b9fc6f4886d4c7a07925ffd374167732f55dce8c491bfd9cd818a6cf"; };
+      # illumos: alloca needs <alloca.h>; map to the gcc builtin so regint.h compiles.
+      preConfigure = illumosExt + ''
+        export CFLAGS="''${CFLAGS:-} -Dalloca=__builtin_alloca"
+      '';
+    };
+
+    cmake = pkg {
+      pname = "cmake"; version = "3.29.6";
+      src = { url = "https://github.com/Kitware/CMake/releases/download/v3.29.6/cmake-3.29.6.tar.gz";
+              sha256 = "1391313003b83d48e2ab115a8b525a557f78d8c1544618b48d1d90184a10f0af"; };
+      deps = [ self.openssl3.gcc self.zlib.gcc self.expat.gcc self.bzip2.gcc self.xz.gcc self.zstd.gcc self.ncurses.gcc ];
+      buildSystem = "custom";
+      # cmake bootstraps itself; use bundled libs to avoid a system-lib hunt.
+      customBuild = ''
+        ${illumosExt}
+        ./bootstrap --prefix="$out" --parallel="$(nproc)" --no-qt-gui \
+          -- -DCMAKE_USE_OPENSSL=ON -DOPENSSL_ROOT_DIR=${self.openssl3.gcc}
+        gmake -j"$(nproc)"
+        gmake install
+      '';
+    };
+
+    git = pkg {
+      pname = "git"; version = "2.45.2";
+      src = { url = "https://mirrors.edge.kernel.org/pub/software/scm/git/git-2.45.2.tar.xz";
+              sha256 = "98b26090ed667099a3691b93698d1e213e1ded73d36a2fde7e9125fce28ba234"; };
+      deps = [ self.openssl3.gcc self.zlib.gcc self.curl.gcc self.expat.gcc self.pcre2.gcc ];
+      preConfigure = illumosExt;
+      configureFlags = [
+        "--with-openssl=${self.openssl3.gcc}"
+        "--with-zlib=${self.zlib.gcc}"
+        "--with-curl=${self.curl.gcc}"
+        "--with-expat=${self.expat.gcc}"
+        "--with-libpcre2=${self.pcre2.gcc}"
+        "--without-tcltk" "--without-iconv"
+        "ac_cv_fread_reads_directories=no" "ac_cv_snprintf_returns_bogus=no"
+      ];
+    };
+
     # A Python module built by pip against cached python-3.9 (add python313
     # variant by swapping the interpreter). Freeze order (compile before the
     # store path is fixed) is handled by mk-userland-pkg's install step; here we

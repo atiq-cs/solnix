@@ -37,7 +37,7 @@ for h in "${order[@]}"; do
   for i in 1 2 3 4 5; do
     if nix-store --realise "$full" --option substituters "$CACHE" \
          --option trusted-public-keys "$KEY" --option require-sigs true \
-         --max-jobs 0 >/dev/null 2>&1; then ok=1; break; fi
+         --add-root /var/tmp/gcroots/"$h" --indirect >/dev/null 2>&1; then ok=1; break; fi
     sleep 2
   done
   if [ "$ok" = 1 ]; then echo "OK   $(basename "$full")"; else echo "FAIL $(basename "$full")"; fail=$((fail+1)); fi
