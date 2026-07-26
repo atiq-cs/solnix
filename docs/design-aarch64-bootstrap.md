@@ -481,3 +481,147 @@ the Nix-side diff (lib.systems double + examples entry + aarch64 proto slices) i
 small and mostly kernel-keyed code that already works for x86. The risk is
 concentrated in one place: getting the maintainer's cross build to complete on
 our host. A2 is underway.
+
+---
+
+## 7. A3 progress (aarch64 seed + lib.systems wiring + world slices)
+
+Status: **A3 DONE** (seed extracted, lib.systems wired + eval-verified, all
+aarch64 world slices built + signed + published + fetch-verified from
+solnix.io). Done on ouch (persistent account, us-east-2), host **ouch-w7-8**
+(3.142.68.35, i-02d180655d42f2d41; secondary hosts ouch-w7-6/w7-7 claimed but
+were still SSH-warming — a single host sufficed for the exploratory integration).
+Every long host op ran DETACHED via `scripts/oi-job.sh` (no blocking SSH).
+Assets: solnix.io cache + local seed store ONLY — no AWS S3/ouch storage.
+
+### 7.1 Proto restore (step 1) — DONE, kernel present
+
+Restored the archived aarch64 proto onto ouch-w7-8 by fetching it directly from
+the solnix.io cache (host has read access; no scp needed):
+`https://s3.solnix.io/solnix-cache/archive/aarch64/aarch64-proto-73466454.tar.zst`
+→ sha256 `b4c89fadde66db90936b98f403cb293358551590b2a9afbd61a75a684b23e3db`
+**verified** → untarred to `/aarch64/arm64-gate/illumos-gate/proto/root_aarch64`.
+
+Untar gotcha (recorded): Solaris `tar -x -C dir` defaults to `/dev/rmt/0`; there
+is NO GNU `gtar` on the OI builder. Use `tar xpf -` (Solaris tar reads stdin with
+an explicit `f -`). Baked into `scripts/aa-extract-seed.sh`'s companion restore.
+
+Confirmed in the restored proto (LP64, NO amd64/ ISA subdir — as IPD 24 / §3
+predicted):
+- `platform/armv8/kernel/aarch64/unix` — **PRESENT** (2088872 bytes). Kernel: yes.
+- `kernel/aarch64/genunix` — present.
+- `lib/libc.so.1`, `lib/ld.so.1`, `lib/libm.so.0` (aarch64 libm soname is `.0`),
+  full `lib/` sibling set (libsocket/libnsl/libresolv/libelf/libmd/libpthread/
+  librt/libdl/libmp/libcustr/libofmt/libumem), `lib/64 -> .` compat symlink.
+- `usr/lib/{crt1,crti,crtn}.o` + `values-*.o` (no amd64 subdir), `usr/lib/64 -> .`.
+- `usr/include` headers; `usr/bin/{ld,elfdump,elfedit}` aarch64-native.
+- SMF core present: svcs/svcadm/svc.startd/svc.configd/init/sh + coreutils.
+
+### 7.2 aarch64 seed (step 2) — DONE
+
+`scripts/aa-extract-seed.sh` (adapted from `oi-extract-seed.sh`) staged the
+**target-sysroot seed** from the proto: libc + siblings, crt + values, full
+headers, ld.so.1 + link-editor .so's (librtld/libld/liblddbg/libldstab), and the
+aarch64-native Solaris ld + elfdump/elfedit (with the elfedit modules the x86
+seed omitted). No amd64 subdir; `lib/64`+`usr/lib/64 -> .` compat links carried.
+
+- **tarball**: `aarch64-seed.tar.zst`, **5958734 bytes**
+- **sha256**: `3a9fd645b5168d2cdf05779f3b89438d94e33b924281d0f590bbad57d75f9e02`
+- **SRI (for the FOD)**: `sha256-Op/WRbUWjSzfBXefO4lDjZTjO5JCgdD1kLutV9dfngI=`
+- **local copy**: `~/ws/solnix-seed-store/aarch64-seed.tar.zst` (+ manifest),
+  sha-verified identical.
+- **published**: `https://s3.solnix.io/solnix-cache/archive/aarch64/aarch64-seed.tar.zst`
+  (+ `aarch64-seed-manifest.txt`). solnix.io only.
+
+KEY DIFFERENCE from the x86 seed (§3, "cross, not native"): this seed is the
+**target-sysroot half ONLY**. The COMPILER half (the richlowe cross gcc / `$CROSS`)
+was NOT in the archived proto — only `illumos-gate/proto` was archived, and
+`$CROSS`/`opt/onbld` died with numa. So `libcCross` for `pkgsCross.aarch64-solaris`
+points at this sysroot; a cross-gcc rebuild via arm64-gate `make setup` is the
+A4 dependency (see §7.5 blockers).
+
+### 7.3 lib.systems wiring (step 3) — DONE, eval-verified
+
+Extended the fork (solnix-pkgs) `patches/0001-lib-systems-x86_64-solaris.patch`,
+mirroring x86_64-solaris exactly. The delta is SMALL, as §3 predicted, because
+almost everything is KERNEL-keyed (isSunOS) not arch-keyed:
+- `lib/systems/doubles.nix`: added `"aarch64-solaris"` beside `"x86_64-solaris"`
+  in the hardcoded `all` list (the double list is NOT auto-derived — a new
+  illumos arch must be registered; `parse.doubleFromSystem` → `aarch64-solaris`).
+- `lib/systems/examples.nix`: added
+  `aarch64-illumos = { config = "aarch64-unknown-solaris2.11"; };`.
+- `parse.nix` (`hasPrefix "solaris"`) + `default.nix` (isSunOS → `illumos-libc`,
+  `solaris` linker, `SunOS` uname): ALREADY covered aarch64 — no change needed.
+- bintools-wrapper patch (0002): gates on `linker == "solaris"` (kernel-keyed) →
+  ALREADY covers aarch64.
+
+Verified by building the patched nixpkgs and `lib.systems.elaborate
+examples.aarch64-illumos`:
+```
+config      = aarch64-unknown-solaris2.11
+cpuName     = aarch64        isAarch64 = true
+double      = aarch64-solaris   (present in doubles.illumos, beside x86_64-solaris)
+isSunOS     = true    kernelName = solaris    uname = SunOS
+libc        = illumos-libc      linker = solaris      useLLVM = false
+```
+(Incidental: patch 0003-all-packages had a pre-existing malformed hunk header —
+`@@ -11078,6 +11078,11 @@` should be `+11078,12` for 6 added lines — that blocked
+the whole `applyPatches`; corrected so the fork evaluates against the pinned base
+rev 7f81d69. NOTE: this base nixpkgs (26.11) already ships `x86_64-solaris` in
+doubles.nix + `isSunOS` upstream, so parts of 0001 now overlap upstream — a
+future rebase should thin 0001 to just the illumos-libc/linker/example bits.)
+
+### 7.4 aarch64 world slices (step 4) — DONE, built + published + fetch-verified
+
+New aarch64 slice expressions, MIRRORING `pkgs/illumos/{gate,default}.nix`:
+- `pkgs/illumos/aarch64/gate.nix` — proto ingest of `proto/root_aarch64`
+  (builtins.path), aarch64 sanity (armv8 unix + aarch64 genunix, no amd64).
+- `pkgs/illumos/aarch64/default.nix` — `libc/rtld/ld/sys/systemPath` via the
+  shared `mk-illumos-component.nix`, adapted for LP64/no-amd64: `originParts =
+  [ "$ORIGIN" ]` (no lib/amd64), lib dirs `lib/` + `usr/lib/`, libm.so.0,
+  kernel at `platform/armv8/kernel` + `kernel`.
+- fork `pkgs/os-specific/illumos/seed-aarch64/default.nix` — the aarch64 seed
+  FOD (fetchurl from solnix.io + SRI above). Built + content-verified: unpacks to
+  aarch64 `libc.so.1` (`ELF 64-bit ARM aarch64 (Solaris)`), ld.so.1, headers.
+
+Built on ouch-w7-8 (host Nix 2.3.16; the slicing/relocation runs on the amd64
+host, editing the aarch64 ELF's DT_RUNPATH via the HOST elfedit — mechanism is
+arch-independent). Store paths + RUNPATH relocation (all into the store, no host
+leak):
+
+| slice | store path | RUNPATH |
+|---|---|---|
+| gate (proto) | `apkpl07d1wmyx9d47mpsn9x0pna2y4in-illumos-aarch64-gate-proto` | (n/a) |
+| libc | `ca59gffniypk0yxin055ql0vi2192ffs-libc` | `$ORIGIN` |
+| rtld | `0yms8gv57xa97y4brd9djk07glnfkbzh-rtld` | `$ORIGIN:<libc>/lib` |
+| ld | `k04qv31hfxzgpwfdmly7ik6idhn9575q-ld` | `$ORIGIN:$ORIGIN/../../lib:<libc>/lib:<ld>/usr/lib` |
+| sys (kernel) | `biiq598vzmhylfrjb4cwy8nw13vvn3d1-sys` | (kernel ELF, no RUNPATH — skipped) |
+| systemPath | `cxi11b9s92wjs85zz52fpcvmamn1xq93-system-path` | (symlink farm) |
+
+`libc.so.1` = `EM_AARCH64 ELFCLASS64`; rtld NEEDED libelf/libc resolve
+cross-component; ld has NO host `/lib` leak; systemPath sanity passed (armv8 unix
++ aarch64 genunix present).
+
+Signed (`cache.solnix.io-1`) + published to `https://s3.solnix.io/solnix-cache`
+under PLAIN store names (hash disambiguates, matching x86 convention). All 6
+narinfos live (HTTP 200). **Fetch-back-verified** into a fresh store from the
+cache: `libc` → aarch64 ELF; `system-path` → pulled with SIGNATURE VERIFIED
+against the trusted pubkey, its 4-path closure (sys/rtld/ld/libc) resolves.
+
+### 7.5 A4 blockers (recorded, do NOT attempt A4 = QEMU boot here)
+
+1. **No cross gcc / `$CROSS`.** Only `illumos-gate/proto` was archived off the
+   dying numa host — the richlowe cross gcc (`aarch64-unknown-solaris2.11-gcc`),
+   Solaris ld under `$CROSS/opt/onbld`, and the OmniOS braich sysroot were NOT
+   archived. To actually COMPILE aarch64 objects (the compiler half of the seed /
+   a `pkgsCross.aarch64-solaris` stdenv) the arm64-gate `make download` +
+   `make setup` must be re-run on an ouch builder (multi-hour, the §5 A2 recipe:
+   host python-313 to match the braich sysroot, gcc10+gcc14, etc.). The proto
+   itself (runtime world) is restored and does NOT need a rebuild.
+2. **A4 image/boot** needs the harness `tools/build_image.sh` + `build_qemu.sh`
+   (u-boot + EFI aarch64 loader + ZFS armpool) + QEMU virt (GICv2). Not started.
+3. The `pkgsCross.aarch64-solaris` cc/bintools wiring (fork
+   `seed-aarch64` → cc-wrapper/bintools-wrapper, mirroring `seed/default.nix`)
+   is NOT wired yet — it needs the compiler half (blocker 1). The seed FOD +
+   world slices + lib.systems are the pieces that DON'T need the cross gcc, and
+   those are all done and cached.
