@@ -1,0 +1,8 @@
+{:pkg/store-path "/nix/store/g7pjcr8wgjs5s9ybdhx50gfpxkcz950v-py313-virtualenv-0"
+ :pkg/name "py313-virtualenv" :pkg/version "0"
+ :pkg/narinfo-hash "g7pjcr8wgjs5s9ybdhx50gfpxkcz950v"
+ :pkg/system "x86_64-solaris"
+ :pkg/compiler "gcc"
+ :pkg/compiler-ver "14.3.0"
+ :pkg/libc-ver "illumos-960edb1c89"
+ :pkg/cached-at "2026-07-26T18:27:43Z" :pkg/cache-sig "cache.solnix.io-1"}

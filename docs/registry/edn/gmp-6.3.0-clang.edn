@@ -1,0 +1,8 @@
+{:pkg/store-path "/nix/store/sjqg6swdxvhbmpbvwkgij5jjjf6akfql-gmp-6.3.0"
+ :pkg/name "gmp" :pkg/version "6.3.0"
+ :pkg/narinfo-hash "sjqg6swdxvhbmpbvwkgij5jjjf6akfql"
+ :pkg/system "x86_64-solaris"
+ :pkg/compiler "clang"
+ :pkg/compiler-ver "21.1.0"
+ :pkg/libc-ver "illumos-960edb1c89"
+ :pkg/cached-at "2026-07-26T18:27:29Z" :pkg/cache-sig "cache.solnix.io-1"}

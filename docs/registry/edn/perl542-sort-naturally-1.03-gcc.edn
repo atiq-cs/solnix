@@ -1,0 +1,8 @@
+{:pkg/store-path "/nix/store/faamx7qdq49k9ix57h26s48b6ag85zmd-perl542-sort-naturally-1.03"
+ :pkg/name "perl542-sort-naturally" :pkg/version "1.03"
+ :pkg/narinfo-hash "faamx7qdq49k9ix57h26s48b6ag85zmd"
+ :pkg/system "x86_64-solaris"
+ :pkg/compiler "gcc"
+ :pkg/compiler-ver "14.3.0"
+ :pkg/libc-ver "illumos-960edb1c89"
+ :pkg/cached-at "2026-07-26T18:27:38Z" :pkg/cache-sig "cache.solnix.io-1"}

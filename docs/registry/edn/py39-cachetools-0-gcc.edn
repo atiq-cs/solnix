@@ -1,0 +1,8 @@
+{:pkg/store-path "/nix/store/bajn7y93w1j578cb33s0jhfrn384xf06-py39-cachetools-0"
+ :pkg/name "py39-cachetools" :pkg/version "0"
+ :pkg/narinfo-hash "bajn7y93w1j578cb33s0jhfrn384xf06"
+ :pkg/system "x86_64-solaris"
+ :pkg/compiler "gcc"
+ :pkg/compiler-ver "14.3.0"
+ :pkg/libc-ver "illumos-960edb1c89"
+ :pkg/cached-at "2026-07-26T18:27:44Z" :pkg/cache-sig "cache.solnix.io-1"}

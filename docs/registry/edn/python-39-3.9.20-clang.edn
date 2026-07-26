@@ -1,0 +1,8 @@
+{:pkg/store-path "/nix/store/hxnp1j9z64canyq3n0sc64apvjvy40qw-python-39-3.9.20"
+ :pkg/name "python-39" :pkg/version "3.9.20"
+ :pkg/narinfo-hash "hxnp1j9z64canyq3n0sc64apvjvy40qw"
+ :pkg/system "x86_64-solaris"
+ :pkg/compiler "clang"
+ :pkg/compiler-ver "21.1.0"
+ :pkg/libc-ver "illumos-960edb1c89"
+ :pkg/cached-at "2026-07-26T18:27:31Z" :pkg/cache-sig "cache.solnix.io-1"}

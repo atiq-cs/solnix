@@ -1,0 +1,8 @@
+{:pkg/store-path "/nix/store/ks8ga6j82fxwld429qj27qd5ba346qg0-bison-3.8.2"
+ :pkg/name "bison" :pkg/version "3.8.2"
+ :pkg/narinfo-hash "ks8ga6j82fxwld429qj27qd5ba346qg0"
+ :pkg/system "x86_64-solaris"
+ :pkg/compiler "clang"
+ :pkg/compiler-ver "21.1.0"
+ :pkg/libc-ver "illumos-960edb1c89"
+ :pkg/cached-at "2026-07-26T18:27:28Z" :pkg/cache-sig "cache.solnix.io-1"}

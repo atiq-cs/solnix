@@ -1,0 +1,8 @@
+{:pkg/store-path "/nix/store/0l97k830s40vb4prsk7kzlpj8nma6k33-xz-5.6.3"
+ :pkg/name "xz" :pkg/version "5.6.3"
+ :pkg/narinfo-hash "0l97k830s40vb4prsk7kzlpj8nma6k33"
+ :pkg/system "x86_64-solaris"
+ :pkg/compiler "clang"
+ :pkg/compiler-ver "21.1.0"
+ :pkg/libc-ver "illumos-960edb1c89"
+ :pkg/cached-at "2026-07-26T18:27:31Z" :pkg/cache-sig "cache.solnix.io-1"}

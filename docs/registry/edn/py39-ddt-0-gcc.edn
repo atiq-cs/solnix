@@ -1,0 +1,8 @@
+{:pkg/store-path "/nix/store/l65li566jyzximr4g2gxyks23zfgrcza-py39-ddt-0"
+ :pkg/name "py39-ddt" :pkg/version "0"
+ :pkg/narinfo-hash "l65li566jyzximr4g2gxyks23zfgrcza"
+ :pkg/system "x86_64-solaris"
+ :pkg/compiler "gcc"
+ :pkg/compiler-ver "14.3.0"
+ :pkg/libc-ver "illumos-960edb1c89"
+ :pkg/cached-at "2026-07-26T18:27:45Z" :pkg/cache-sig "cache.solnix.io-1"}

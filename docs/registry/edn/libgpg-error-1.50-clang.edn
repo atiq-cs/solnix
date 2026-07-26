@@ -1,0 +1,8 @@
+{:pkg/store-path "/nix/store/81z3g86kdjlvmyfsjxk9r347v9mar3sl-libgpg-error-1.50"
+ :pkg/name "libgpg-error" :pkg/version "1.50"
+ :pkg/narinfo-hash "81z3g86kdjlvmyfsjxk9r347v9mar3sl"
+ :pkg/system "x86_64-solaris"
+ :pkg/compiler "clang"
+ :pkg/compiler-ver "21.1.0"
+ :pkg/libc-ver "illumos-960edb1c89"
+ :pkg/cached-at "2026-07-26T18:27:30Z" :pkg/cache-sig "cache.solnix.io-1"}

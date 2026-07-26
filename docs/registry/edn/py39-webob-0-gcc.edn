@@ -1,0 +1,8 @@
+{:pkg/store-path "/nix/store/gd9648zm70g8x31vsxg77qvxxfw79l5l-py39-webob-0"
+ :pkg/name "py39-webob" :pkg/version "0"
+ :pkg/narinfo-hash "gd9648zm70g8x31vsxg77qvxxfw79l5l"
+ :pkg/system "x86_64-solaris"
+ :pkg/compiler "gcc"
+ :pkg/compiler-ver "14.3.0"
+ :pkg/libc-ver "illumos-960edb1c89"
+ :pkg/cached-at "2026-07-26T18:27:50Z" :pkg/cache-sig "cache.solnix.io-1"}

@@ -1,0 +1,8 @@
+{:pkg/store-path "/nix/store/4rfc5zjhlarb2z07g1kax4bvwpj1jr4j-ninja-1.12.1"
+ :pkg/name "ninja" :pkg/version "1.12.1"
+ :pkg/narinfo-hash "4rfc5zjhlarb2z07g1kax4bvwpj1jr4j"
+ :pkg/system "x86_64-solaris"
+ :pkg/compiler "clang"
+ :pkg/compiler-ver "21.1.0"
+ :pkg/libc-ver "illumos-960edb1c89"
+ :pkg/cached-at "2026-07-26T18:27:30Z" :pkg/cache-sig "cache.solnix.io-1"}

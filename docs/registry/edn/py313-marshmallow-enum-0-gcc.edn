@@ -1,0 +1,8 @@
+{:pkg/store-path "/nix/store/346dzlkqkkq6579aww1za5mmm1nz4sw4-py313-marshmallow-enum-0"
+ :pkg/name "py313-marshmallow-enum" :pkg/version "0"
+ :pkg/narinfo-hash "346dzlkqkkq6579aww1za5mmm1nz4sw4"
+ :pkg/system "x86_64-solaris"
+ :pkg/compiler "gcc"
+ :pkg/compiler-ver "14.3.0"
+ :pkg/libc-ver "illumos-960edb1c89"
+ :pkg/cached-at "2026-07-26T18:27:41Z" :pkg/cache-sig "cache.solnix.io-1"}

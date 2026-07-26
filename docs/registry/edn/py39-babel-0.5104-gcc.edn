@@ -1,0 +1,8 @@
+{:pkg/store-path "/nix/store/wm5zlnv9sa1db5f9c9wf24hkzffmfz0q-py39-babel-0.5104"
+ :pkg/name "py39-babel" :pkg/version "0.5104"
+ :pkg/narinfo-hash "wm5zlnv9sa1db5f9c9wf24hkzffmfz0q"
+ :pkg/system "x86_64-solaris"
+ :pkg/compiler "gcc"
+ :pkg/compiler-ver "14.3.0"
+ :pkg/libc-ver "illumos-960edb1c89"
+ :pkg/cached-at "2026-07-26T18:27:44Z" :pkg/cache-sig "cache.solnix.io-1"}

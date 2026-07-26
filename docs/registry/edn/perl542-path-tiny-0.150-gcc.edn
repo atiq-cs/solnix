@@ -1,0 +1,8 @@
+{:pkg/store-path "/nix/store/p8fylz7vykwsv0n78lf794wayy5j07lp-perl542-path-tiny-0.150"
+ :pkg/name "perl542-path-tiny" :pkg/version "0.150"
+ :pkg/narinfo-hash "p8fylz7vykwsv0n78lf794wayy5j07lp"
+ :pkg/system "x86_64-solaris"
+ :pkg/compiler "gcc"
+ :pkg/compiler-ver "14.3.0"
+ :pkg/libc-ver "illumos-960edb1c89"
+ :pkg/cached-at "2026-07-26T18:27:37Z" :pkg/cache-sig "cache.solnix.io-1"}

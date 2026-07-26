@@ -1,0 +1,8 @@
+{:pkg/store-path "/nix/store/nja7d2j6fh3aq44mw6ah4hah1xsvzydy-py39-furl-0"
+ :pkg/name "py39-furl" :pkg/version "0"
+ :pkg/narinfo-hash "nja7d2j6fh3aq44mw6ah4hah1xsvzydy"
+ :pkg/system "x86_64-solaris"
+ :pkg/compiler "gcc"
+ :pkg/compiler-ver "14.3.0"
+ :pkg/libc-ver "illumos-960edb1c89"
+ :pkg/cached-at "2026-07-26T18:27:46Z" :pkg/cache-sig "cache.solnix.io-1"}

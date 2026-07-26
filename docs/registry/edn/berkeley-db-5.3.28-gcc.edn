@@ -1,0 +1,8 @@
+{:pkg/store-path "/nix/store/q1nshf7zvv85c9v25pxgdx001y2py8gz-berkeley-db-5.3.28"
+ :pkg/name "berkeley-db" :pkg/version "5.3.28"
+ :pkg/narinfo-hash "q1nshf7zvv85c9v25pxgdx001y2py8gz"
+ :pkg/system "x86_64-solaris"
+ :pkg/compiler "gcc"
+ :pkg/compiler-ver "14.3.0"
+ :pkg/libc-ver "illumos-960edb1c89"
+ :pkg/cached-at "2026-07-26T18:27:28Z" :pkg/cache-sig "cache.solnix.io-1"}

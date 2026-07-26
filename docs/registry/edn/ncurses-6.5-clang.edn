@@ -1,0 +1,8 @@
+{:pkg/store-path "/nix/store/vyp445gfbhahic4wyf1qqkpznkia75k2-ncurses-6.5"
+ :pkg/name "ncurses" :pkg/version "6.5"
+ :pkg/narinfo-hash "vyp445gfbhahic4wyf1qqkpznkia75k2"
+ :pkg/system "x86_64-solaris"
+ :pkg/compiler "clang"
+ :pkg/compiler-ver "21.1.0"
+ :pkg/libc-ver "illumos-960edb1c89"
+ :pkg/cached-at "2026-07-26T18:27:30Z" :pkg/cache-sig "cache.solnix.io-1"}

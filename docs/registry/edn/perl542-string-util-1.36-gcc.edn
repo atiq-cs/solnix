@@ -1,0 +1,8 @@
+{:pkg/store-path "/nix/store/4hq4fm44v45zgjbmix4acjbjmyvf2mjs-perl542-string-util-1.36"
+ :pkg/name "perl542-string-util" :pkg/version "1.36"
+ :pkg/narinfo-hash "4hq4fm44v45zgjbmix4acjbjmyvf2mjs"
+ :pkg/system "x86_64-solaris"
+ :pkg/compiler "gcc"
+ :pkg/compiler-ver "14.3.0"
+ :pkg/libc-ver "illumos-960edb1c89"
+ :pkg/cached-at "2026-07-26T18:27:38Z" :pkg/cache-sig "cache.solnix.io-1"}

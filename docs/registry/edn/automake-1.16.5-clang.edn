@@ -1,0 +1,8 @@
+{:pkg/store-path "/nix/store/g9lq3i3bgm9ppvx1hnsx1x7l7q1xq6f4-automake-1.16.5"
+ :pkg/name "automake" :pkg/version "1.16.5"
+ :pkg/narinfo-hash "g9lq3i3bgm9ppvx1hnsx1x7l7q1xq6f4"
+ :pkg/system "x86_64-solaris"
+ :pkg/compiler "clang"
+ :pkg/compiler-ver "21.1.0"
+ :pkg/libc-ver "illumos-960edb1c89"
+ :pkg/cached-at "2026-07-26T18:27:28Z" :pkg/cache-sig "cache.solnix.io-1"}

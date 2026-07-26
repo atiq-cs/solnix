@@ -1,0 +1,8 @@
+{:pkg/store-path "/nix/store/090b86z2pds4cyg2frc8vj41x9cczx14-py313-simplejson-0"
+ :pkg/name "py313-simplejson" :pkg/version "0"
+ :pkg/narinfo-hash "090b86z2pds4cyg2frc8vj41x9cczx14"
+ :pkg/system "x86_64-solaris"
+ :pkg/compiler "gcc"
+ :pkg/compiler-ver "14.3.0"
+ :pkg/libc-ver "illumos-960edb1c89"
+ :pkg/cached-at "2026-07-26T18:27:43Z" :pkg/cache-sig "cache.solnix.io-1"}

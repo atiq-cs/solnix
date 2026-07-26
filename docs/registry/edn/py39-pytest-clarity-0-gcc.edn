@@ -1,0 +1,8 @@
+{:pkg/store-path "/nix/store/7jx0f7safm1vk3hjvy6hzp0wxpm6bn91-py39-pytest-clarity-0"
+ :pkg/name "py39-pytest-clarity" :pkg/version "0"
+ :pkg/narinfo-hash "7jx0f7safm1vk3hjvy6hzp0wxpm6bn91"
+ :pkg/system "x86_64-solaris"
+ :pkg/compiler "gcc"
+ :pkg/compiler-ver "14.3.0"
+ :pkg/libc-ver "illumos-960edb1c89"
+ :pkg/cached-at "2026-07-26T18:27:48Z" :pkg/cache-sig "cache.solnix.io-1"}

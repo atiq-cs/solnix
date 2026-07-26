@@ -1,0 +1,8 @@
+{:pkg/store-path "/nix/store/g5f5cyl6is05h4ak5qh65fnria92575r-libunistring-1.2"
+ :pkg/name "libunistring" :pkg/version "1.2"
+ :pkg/narinfo-hash "g5f5cyl6is05h4ak5qh65fnria92575r"
+ :pkg/system "x86_64-solaris"
+ :pkg/compiler "clang"
+ :pkg/compiler-ver "21.1.0"
+ :pkg/libc-ver "illumos-960edb1c89"
+ :pkg/cached-at "2026-07-26T18:27:30Z" :pkg/cache-sig "cache.solnix.io-1"}

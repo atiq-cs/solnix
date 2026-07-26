@@ -1,0 +1,8 @@
+{:pkg/store-path "/nix/store/7l7w4hm2kfwz5pgcbpds3c47zk5z88ci-py39-flask-smorest-0"
+ :pkg/name "py39-flask-smorest" :pkg/version "0"
+ :pkg/narinfo-hash "7l7w4hm2kfwz5pgcbpds3c47zk5z88ci"
+ :pkg/system "x86_64-solaris"
+ :pkg/compiler "gcc"
+ :pkg/compiler-ver "14.3.0"
+ :pkg/libc-ver "illumos-960edb1c89"
+ :pkg/cached-at "2026-07-26T18:27:46Z" :pkg/cache-sig "cache.solnix.io-1"}

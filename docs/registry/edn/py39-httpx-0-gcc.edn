@@ -1,0 +1,8 @@
+{:pkg/store-path "/nix/store/47bsyslcc9dyd92fhjs3f116z61yfl84-py39-httpx-0"
+ :pkg/name "py39-httpx" :pkg/version "0"
+ :pkg/narinfo-hash "47bsyslcc9dyd92fhjs3f116z61yfl84"
+ :pkg/system "x86_64-solaris"
+ :pkg/compiler "gcc"
+ :pkg/compiler-ver "14.3.0"
+ :pkg/libc-ver "illumos-960edb1c89"
+ :pkg/cached-at "2026-07-26T18:27:46Z" :pkg/cache-sig "cache.solnix.io-1"}

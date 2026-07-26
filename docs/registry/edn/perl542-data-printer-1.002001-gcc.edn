@@ -1,0 +1,8 @@
+{:pkg/store-path "/nix/store/ddksiixw966s5vwvp1k5i4gr64rk1j6a-perl542-data-printer-1.002001"
+ :pkg/name "perl542-data-printer" :pkg/version "1.002001"
+ :pkg/narinfo-hash "ddksiixw966s5vwvp1k5i4gr64rk1j6a"
+ :pkg/system "x86_64-solaris"
+ :pkg/compiler "gcc"
+ :pkg/compiler-ver "14.3.0"
+ :pkg/libc-ver "illumos-960edb1c89"
+ :pkg/cached-at "2026-07-26T18:27:36Z" :pkg/cache-sig "cache.solnix.io-1"}

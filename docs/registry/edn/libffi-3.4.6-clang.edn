@@ -1,0 +1,8 @@
+{:pkg/store-path "/nix/store/g6l7dn0bc16328h2w86fbssi53hb49ns-libffi-3.4.6"
+ :pkg/name "libffi" :pkg/version "3.4.6"
+ :pkg/narinfo-hash "g6l7dn0bc16328h2w86fbssi53hb49ns"
+ :pkg/system "x86_64-solaris"
+ :pkg/compiler "clang"
+ :pkg/compiler-ver "21.1.0"
+ :pkg/libc-ver "illumos-960edb1c89"
+ :pkg/cached-at "2026-07-26T18:27:30Z" :pkg/cache-sig "cache.solnix.io-1"}

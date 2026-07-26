@@ -1,0 +1,8 @@
+{:pkg/store-path "/nix/store/wq68k5jg6aqrzk1q7knpdm6knk3q3i7r-solnix-py313-docutils-0"
+ :pkg/name "solnix-py313-docutils" :pkg/version "0"
+ :pkg/narinfo-hash "wq68k5jg6aqrzk1q7knpdm6knk3q3i7r"
+ :pkg/system "x86_64-solaris"
+ :pkg/compiler "gcc"
+ :pkg/compiler-ver "14.3.0"
+ :pkg/libc-ver "illumos-960edb1c89"
+ :pkg/cached-at "2026-07-26T18:27:32Z" :pkg/cache-sig "cache.solnix.io-1"}

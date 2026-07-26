@@ -1,0 +1,8 @@
+{:pkg/store-path "/nix/store/42363h5826p0lvmv6swcipws4f7vq5cd-bzip2-1.0.8"
+ :pkg/name "bzip2" :pkg/version "1.0.8"
+ :pkg/narinfo-hash "42363h5826p0lvmv6swcipws4f7vq5cd"
+ :pkg/system "x86_64-solaris"
+ :pkg/compiler "clang"
+ :pkg/compiler-ver "21.1.0"
+ :pkg/libc-ver "illumos-960edb1c89"
+ :pkg/cached-at "2026-07-26T18:27:28Z" :pkg/cache-sig "cache.solnix.io-1"}

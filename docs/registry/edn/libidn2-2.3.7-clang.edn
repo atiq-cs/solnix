@@ -1,0 +1,8 @@
+{:pkg/store-path "/nix/store/az5ky1jsqh60kl576sdx6fd7z4sh3wlv-libidn2-2.3.7"
+ :pkg/name "libidn2" :pkg/version "2.3.7"
+ :pkg/narinfo-hash "az5ky1jsqh60kl576sdx6fd7z4sh3wlv"
+ :pkg/system "x86_64-solaris"
+ :pkg/compiler "clang"
+ :pkg/compiler-ver "21.1.0"
+ :pkg/libc-ver "illumos-960edb1c89"
+ :pkg/cached-at "2026-07-26T18:27:30Z" :pkg/cache-sig "cache.solnix.io-1"}

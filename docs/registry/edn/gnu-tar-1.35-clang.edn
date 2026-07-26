@@ -1,0 +1,8 @@
+{:pkg/store-path "/nix/store/pghgg4ia5s0npx3f1l5vfim31bglfmcz-gnu-tar-1.35"
+ :pkg/name "gnu-tar" :pkg/version "1.35"
+ :pkg/narinfo-hash "pghgg4ia5s0npx3f1l5vfim31bglfmcz"
+ :pkg/system "x86_64-solaris"
+ :pkg/compiler "clang"
+ :pkg/compiler-ver "21.1.0"
+ :pkg/libc-ver "illumos-960edb1c89"
+ :pkg/cached-at "2026-07-26T18:27:29Z" :pkg/cache-sig "cache.solnix.io-1"}

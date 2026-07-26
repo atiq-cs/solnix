@@ -1,0 +1,8 @@
+{:pkg/store-path "/nix/store/njvgvppzipaci9k79s48kr1dyyrlfk0k-gawk-5.3.1"
+ :pkg/name "gawk" :pkg/version "5.3.1"
+ :pkg/narinfo-hash "njvgvppzipaci9k79s48kr1dyyrlfk0k"
+ :pkg/system "x86_64-solaris"
+ :pkg/compiler "gcc"
+ :pkg/compiler-ver "14.3.0"
+ :pkg/libc-ver "illumos-960edb1c89"
+ :pkg/cached-at "2026-07-26T18:27:29Z" :pkg/cache-sig "cache.solnix.io-1"}

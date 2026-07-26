@@ -1,0 +1,8 @@
+{:pkg/store-path "/nix/store/vfhznhf6qvxb8gsxandwx7l5hf9kgkpx-zstd-1.5.6"
+ :pkg/name "zstd" :pkg/version "1.5.6"
+ :pkg/narinfo-hash "vfhznhf6qvxb8gsxandwx7l5hf9kgkpx"
+ :pkg/system "x86_64-solaris"
+ :pkg/compiler "clang"
+ :pkg/compiler-ver "21.1.0"
+ :pkg/libc-ver "illumos-960edb1c89"
+ :pkg/cached-at "2026-07-26T18:27:31Z" :pkg/cache-sig "cache.solnix.io-1"}

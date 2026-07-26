@@ -1,0 +1,8 @@
+{:pkg/store-path "/nix/store/znhi0d7dxyxgafzfg3i0ra50zmcqcmba-perl542-mro-compat-0.15"
+ :pkg/name "perl542-mro-compat" :pkg/version "0.15"
+ :pkg/narinfo-hash "znhi0d7dxyxgafzfg3i0ra50zmcqcmba"
+ :pkg/system "x86_64-solaris"
+ :pkg/compiler "gcc"
+ :pkg/compiler-ver "14.3.0"
+ :pkg/libc-ver "illumos-960edb1c89"
+ :pkg/cached-at "2026-07-26T18:27:37Z" :pkg/cache-sig "cache.solnix.io-1"}

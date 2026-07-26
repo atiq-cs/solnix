@@ -1,0 +1,8 @@
+{:pkg/store-path "/nix/store/l7rvkqph8jyb31dlm8lpc24j0101zdzl-perl542-proc-processtable-0.637"
+ :pkg/name "perl542-proc-processtable" :pkg/version "0.637"
+ :pkg/narinfo-hash "l7rvkqph8jyb31dlm8lpc24j0101zdzl"
+ :pkg/system "x86_64-solaris"
+ :pkg/compiler "gcc"
+ :pkg/compiler-ver "14.3.0"
+ :pkg/libc-ver "illumos-960edb1c89"
+ :pkg/cached-at "2026-07-26T18:27:38Z" :pkg/cache-sig "cache.solnix.io-1"}
