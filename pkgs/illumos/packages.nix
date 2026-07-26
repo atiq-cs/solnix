@@ -622,7 +622,7 @@ EOF
     # python 3.13 — the newer OI runtime python.
     # NOTE: bzip2 dropped from deps — wave-1 bzip2 ships only static libbz2.a
     # (no PIC .so), so linking _bz2.so fails. python39 silently skips _bz2 for
-    # the same reason. ponytail: rebuild wave-1 bzip2 with a shared libbz2.so
+    # the same reason. TODO(wave-3): rebuild wave-1 bzip2 with a shared libbz2.so
     # in wave-3, then re-add here + to python39 to get the _bz2 stdlib module.
     python313 = pkg {
       pname = "python-313"; version = "3.13.1";
