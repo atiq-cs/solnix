@@ -8,7 +8,7 @@ patterns (and, where possible, its code) transfer directly.
 solnix, like nixbsd, cannot live in one repo:
 
 1. **`nixpkgs` fork** — adds the `*-illumos` platform(s) to the stdenv bootstrap
-   and the `pkgs.illumos.*` fine-grained world (kernel, libc, Solaris `ld`, base
+   and the `pkgs.solnix.*` fine-grained world (kernel, libc, Solaris `ld`, base
    tools). Based on a `staging`-like branch (stdenv changes force a full rebuild).
 2. **`nix` fork (if needed)** — fixes to the Nix daemon/build for running natively
    on illumos (nixbsd needed a `cppnix` fork for FreeBSD; assume we will too).
@@ -53,10 +53,27 @@ Design multi-arch from day one; wire only amd64 to a real toolchain in Phase 1.
 `x86_64-illumos` kernel. Rationale: nixpkgs *already* ships `kernels.solaris`,
 `isSunOS`, the `x86_64-solaris` double, an `illumos` doubles group, and
 `ld-solaris-wrapper.sh` — so this is a small diff, and autotools/gcc demand the
-`solaris2.11` triple. We brand "illumos" only at the Nix-attribute layer
-(`pkgs.illumos.*`, and an `examples.x86_64-illumos` alias with the same config).
-Future arches follow the same pattern: `aarch64-solaris`, `sparcv9-solaris`,
-`riscv64-solaris` (wired in Phase 3/4/5).
+`solaris2.11` triple. The distro-level Nix package namespace is **`pkgs.solnix.*`**
+(see "Package namespace" below), and an `examples.x86_64-illumos` alias carries
+the same config. Future arches follow the same pattern: `aarch64-solaris`,
+`sparcv9-solaris`, `riscv64-solaris` (wired in Phase 3/4/5).
+
+## Package namespace (canonical)
+
+- **All solnix packages live under `pkgs.solnix.<name>`** — both the OS "world"
+  (`pkgs.solnix.libc`, `.sys`, `.ld`, `.rtld`, `.systemPath`, `.gcc14`, `.clang`)
+  and userland (`pkgs.solnix.perl`, `.python313`, `.zlib`, `.cmake`, …). One
+  namespace = the distro's name. Do NOT use `pkgs.illumos.*` (it conflates the
+  OS internals with the distro; the *platform* is `x86_64-solaris`, but the
+  *packages* are solnix's).
+- **Store-path names are plain `<pname>-<version>`** (e.g. `perl-5.42.0`,
+  `libc-...`) — NO `solnix-`/`illumos-` prefix. The store hash already
+  disambiguates; prefixes are noise (nixpkgs doesn't prefix `nixos-`). `pname`
+  stays the upstream name.
+- Optional sub-grouping is fine (`pkgs.solnix.world.libc`) if the set grows, but
+  the top namespace is always `solnix`.
+- (Historical note: early work used `pkgs.illumos.*` + `solnix-`/`illumos-` store
+  prefixes — renamed to this convention; a cache republish followed.)
 
 ## Build & test
 
