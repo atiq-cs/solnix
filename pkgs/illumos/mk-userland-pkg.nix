@@ -66,7 +66,10 @@ let
   wrapper = builtins.path { path = wrapperSrc; name = "oi-cc-wrapper.sh"; };
 in
 derivation {
-  name = "solnix-${pname}-${version}";
+  # Store name is plain <pname>-<version> (no solnix-/illumos- prefix); the
+  # store hash disambiguates. Canonical namespace is pkgs.solnix.* (see
+  # .kiro/steering/nix-conventions.md "Package namespace").
+  name = "${pname}-${version}";
   system = builtins.currentSystem;
   builder = "/usr/bin/bash";
   PATH = "/usr/gnu/bin:/usr/bin:/usr/sbin";
@@ -184,6 +187,6 @@ derivation {
 
     # sanity: $out is non-empty
     [ -n "$(ls -A "$out" 2>/dev/null)" ] || { echo "FATAL: empty \$out" >&2; exit 1; }
-    echo "=== built solnix-$pname-$version ($compiler) -> $out ===" >&2
+    echo "=== built $pname-$version ($compiler) -> $out ===" >&2
   '' ];
 }

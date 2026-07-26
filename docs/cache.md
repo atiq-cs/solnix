@@ -1,7 +1,7 @@
 # Binary cache (solnix.io) — layout, URL form, publishing
 
 The solnix binary cache is the S3 analog of `cache.nixos.org`: prebuilt
-`pkgs.illumos.*` and image closures so systems and CI don't rebuild the world.
+`pkgs.solnix.*` and image closures so systems and CI don't rebuild the world.
 It lives on solnix.io's S3-compatible endpoint and is served as a standard Nix
 binary cache. (T2.3.)
 
@@ -68,21 +68,25 @@ The dev box needs no illumos toolchain to do this — `--import`/`sign`/`copy`
 only touch NAR bytes, hashes, references, and signatures; they never execute the
 foreign-platform binaries.
 
-## Published so far (T2.3)
+## Published so far (T2.3, renamed to plain `<pname>-<version>` per T-RENAME)
 
-The bootable world (`illumos-system-path` closure) + the gate/seed FOD.
+The bootable world (`system-path` closure) + the gate/seed FOD.
 Store hash → NAR size (uncompressed) / xz size:
 
 | store path | NAR | xz |
 |---|---:|---:|
-| `illumos-libc` | 38.4 MB | 6.0 MB |
-| `illumos-rtld` | 3.5 MB | 0.9 MB |
-| `illumos-ld` | 2.2 MB | 0.4 MB |
-| `illumos-external-libs` | 83.7 MB | 20.8 MB |
-| `illumos-base-tools` | 10.2 MB | 3.2 MB |
-| `illumos-sys` | 102.6 MB | 25.9 MB |
-| `illumos-system-path` | 0.8 MB | 0.03 MB |
-| `illumos-gate-proto` (seed) | 650.1 MB | 114.3 MB |
+| `libc` | 38.4 MB | 6.0 MB |
+| `rtld` | 3.5 MB | 0.9 MB |
+| `ld` | 2.2 MB | 0.4 MB |
+| `external-libs` | 83.7 MB | 20.8 MB |
+| `base-tools` | 10.2 MB | 3.2 MB |
+| `sys` | 102.6 MB | 25.9 MB |
+| `system-path` | 0.8 MB | 0.03 MB |
+| `illumos-gate-proto` (seed, FOD name unchanged) | 650.1 MB | 114.3 MB |
+
+Store names are now plain `<pname>-<version>` / `<slice>` (no `solnix-`/`illumos-`
+prefix); the store hash disambiguates. Rename republished the world slices +
+the 51 core packages under these names (T-RENAME, 2026-07-26).
 
 Bucket total: ~171 MB compressed across 18 objects.
 
@@ -96,7 +100,7 @@ nix copy --from https://s3.solnix.io/solnix-cache \
   --to /tmp/freshstore \
   --option trusted-public-keys 'cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk=' \
   --option require-sigs true \
-  /nix/store/dcbzz4hc4w87s43a4bala014gb7xja7k-illumos-system-path
+  /nix/store/b1q9mlpjpy9k31j0q6mjmc1h7l99ha2s-system-path
 ```
 
 Fetching with a *wrong* trusted key + `require-sigs true` must fail with

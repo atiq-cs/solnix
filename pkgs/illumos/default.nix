@@ -26,7 +26,7 @@ let
   # in its RUNPATH — it resolves the matching-class lib. This is what lets the
   # 32-bit SMF stack AND the 64-bit tools share one libc slice (design §2.2).
   # Interpolating the derivation forces its realisation and yields the concrete
-  # /nix/store/...-illumos-libc path.
+  # /nix/store/...-libc path.
   libcLibDirs = [ "${libc}/lib/amd64" "${libc}/lib" ];
 
   # GATE B: libc slice — ABI-complete (64-bit in lib/amd64, 32-bit in lib).
@@ -351,7 +351,7 @@ let
   # runtime /usr,/lib,/sbin,/kernel,/platform layout the image expects. SMF
   # manifests come from smf.nix (T1.11), merged by the image builder, not here.
   systemPath = derivation {
-    name = "illumos-system-path";
+    name = "system-path";
     system = builtins.currentSystem;
     builder = "/usr/bin/bash";
     PATH = "/usr/gnu/bin:/usr/bin:/usr/sbin";

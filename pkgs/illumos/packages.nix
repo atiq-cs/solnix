@@ -13,10 +13,10 @@
 # The driver script (oi-fleet-build.sh) fans these out across the fleet.
 
 let
-  gccStore   = "/nix/store/1sif429w2gpwzxcjqljb481anq0y7wh2-illumos-gcc14";
-  clangStore = "/nix/store/b824mvhkdd4hh0vdi828x1nppkpqwm1y-illumos-clang";
-  libcStore  = "/nix/store/acpbjdc4l4n20nmlasqgrizkvycsanmc-illumos-libc";
-  ldStore    = "/nix/store/9cldpn929s3vrbajqvvla8szhy51bnd8-illumos-ld";
+  gccStore   = "/nix/store/p01s2ssdblk0sfwck8cjyhv2j6l31aq0-gcc14";
+  clangStore = "/nix/store/wfak3vr0n022gdk7j8c9ca5l20a6z0zv-clang";
+  libcStore  = "/nix/store/mxarmh176whch3gf8bin54z97nbrass9-libc";
+  ldStore    = "/nix/store/00xm2wgdcg6nv7lwlia7i93nmamahg5k-ld";
   wrapperSrc = ./../../scripts/oi-cc-wrapper.sh;
 
   mkPkg = import ./mk-userland-pkg.nix {

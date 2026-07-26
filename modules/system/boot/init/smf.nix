@@ -267,12 +267,12 @@ in
       };
 
       # The illumos service_bundle DTD, for the build-time validation gate (§2.6).
-      # It ships in the world's proto area (pkgs.illumos.gate) at
+      # It ships in the world's proto area (pkgs.solnix.gate) at
       # usr/share/lib/xml/dtd/service_bundle.dtd.1; the on-target <!DOCTYPE> still
       # references the standard /usr/share path (correct on the running system).
-      # VERIFY(§5.4): the exact pkgs.illumos attr that should expose it — for now
+      # VERIFY(§5.4): the exact pkgs.solnix attr that should expose it — for now
       # read it out of the gate proto store path.
-      dtdFile = "${pkgs.illumos.gate}/usr/share/lib/xml/dtd/service_bundle.dtd.1";
+      dtdFile = "${pkgs.solnix.gate}/usr/share/lib/xml/dtd/service_bundle.dtd.1";
 
       # only enabled services get manifests + methods generated.
       enabledServices = filterAttrs (_: s: s.enable) config.smf.services;

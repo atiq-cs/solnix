@@ -2,7 +2,7 @@
 #
 # solnix analog of NixOS's system/activation (activatable-system.nix +
 # top-level.nix). The toplevel is the derivation whose closure IS the bootable
-# world: the composed illumos systemPath + the solnix-generated SMF manifests +
+# world: the composed solnix systemPath + the solnix-generated SMF manifests +
 # an SMF activation script (design-smf-init.md §3.1: svccfg import each manifest,
 # apply enable/disable, svcadm to the target milestone) + a small /etc generation.
 #
@@ -413,7 +413,7 @@ let
   #                           (mirrors NixOS's system/toplevel exposing `kernel`).
   toplevel = pkgs.runCommand "solnix-system-${config.networking.hostName}" { } ''
     mkdir -p $out
-    ln -s ${pkgs.illumos.systemPath}                 $out/systemPath
+    ln -s ${pkgs.solnix.systemPath}                 $out/systemPath
     ln -s ${config.system.build.smfManifests}/manifest/solnix $out/manifest/solnix 2>/dev/null || \
       { mkdir -p $out/manifest; ln -s ${config.system.build.smfManifests}/manifest/solnix $out/manifest/solnix; }
     ln -s ${activate}                                 $out/activate
@@ -430,13 +430,13 @@ let
     ln -s ${solnixInstall}                            $out/bin/solnix-install
     # kernel + platform: stable-named entrypoints into systemPath (the closure
     # walker / make-be reads $out/kernel + $out/platform to find unix/genunix).
-    ln -s ${pkgs.illumos.systemPath}/kernel           $out/kernel
-    ln -s ${pkgs.illumos.systemPath}/platform         $out/platform
+    ln -s ${pkgs.solnix.systemPath}/kernel           $out/kernel
+    ln -s ${pkgs.solnix.systemPath}/platform         $out/platform
     # a manifest of what this system is (for `nix-store -q --tree` legibility).
     cat > $out/system-manifest <<EOF
     hostName=${config.networking.hostName}
     milestone=${targetMilestone}
-    systemPath=${pkgs.illumos.systemPath}
+    systemPath=${pkgs.solnix.systemPath}
     smfManifests=${config.system.build.smfManifests}
     EOF
     # sanity: the closure must have the kernel + a service manager + libc.

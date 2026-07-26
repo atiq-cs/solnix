@@ -2,7 +2,7 @@
 # the illumos build host WITHOUT a nixpkgs stdenv.
 #
 # EVAL-SPLIT (T2.8): the module system (lib.evalModules) needs nixpkgs' `lib`,
-# and the illumos derivations (pkgs.illumos.*) only BUILD on x86_64-solaris. Both
+# and the solnix derivations (pkgs.solnix.*) only BUILD on x86_64-solaris. Both
 # live on the host: nixpkgs `lib/` is copied there (pure Nix, no ELF) and the
 # gate proto is a host-local `builtins.path`. So eval AND build run on the host —
 # no .drv transfer, no cross-nix-version drift. See docs/design-make-be.md §7.
@@ -13,10 +13,10 @@
 # nixpkgs stdenv (which does not exist on the host). buildPackages.libxml2 is a
 # no-op marker: the host ships xmllint at /usr/bin, put on PATH by runCommand.
 
-{ illumosDir ? ../pkgs/illumos }:
+{ solnixDir ? ../pkgs/illumos }:
 
 let
-  illumos = import illumosDir;
+  solnix = import solnixDir;
 
   # writeText / writeScript: write $text to $out (executable if asked). Matches
   # nixpkgs' writeText/writeScript surface (name -> text -> store path).
@@ -44,7 +44,9 @@ let
   } // builtins.removeAttrs env [ "nativeBuildInputs" "buildInputs" ]);
 in
 {
-  inherit illumos runCommand;
+  # Canonical namespace is pkgs.solnix.*; `illumos` kept as a one-cycle alias.
+  inherit solnix runCommand;
+  illumos = solnix;
   writeText = mkWriter false;
   writeScript = mkWriter true;
   runtimeShell = "/sbin/sh"; # the shell method scripts run under on-target

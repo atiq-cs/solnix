@@ -40,7 +40,7 @@ HOST_NIX='export PATH=/nix-tools/bin:/usr/gnu/bin:/usr/bin:/usr/sbin:$PATH; expo
 # proto FOD. These are the concrete, currently-built store paths on the host.
 if [ "$#" -eq 0 ]; then
   set -- \
-    /nix/store/dcbzz4hc4w87s43a4bala014gb7xja7k-illumos-system-path \
+    /nix/store/b1q9mlpjpy9k31j0q6mjmc1h7l99ha2s-system-path \
     /nix/store/y9d8x07cnxp9pyhb75v8bsd50cv6h98w-illumos-gate-proto
 fi
 PATHS=("$@")

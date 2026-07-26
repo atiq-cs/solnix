@@ -25,8 +25,8 @@
 # tool, host-path, legal under sandbox=false and the design's Phase-1 host-impure
 # stance (§1.3). TODO(P2): ship elfedit + its modules in the seed, or nixify.
 
-{ gate                      # store path of illumos.gate proto (GATE A $out)
-, name                      # component name -> illumos-<name>
+{ gate                      # store path of solnix.gate proto (GATE A $out)
+, name                      # component name -> store name is plain <name>
 , files                     # list of proto-relative paths (files/dirs) to copy
 , srcRoot ? null            # copy `files` from here instead of the gate proto.
                             #   null = the gate proto (the common case). Set to
@@ -68,7 +68,10 @@ let
     (map (e: "${e.src}>${e.dst}") extraFiles);
 in
 derivation {
-  name = "illumos-${name}";
+  # Store name is plain <name> (no illumos-/solnix- prefix); the store hash
+  # disambiguates. Canonical namespace is pkgs.solnix.* (see
+  # .kiro/steering/nix-conventions.md "Package namespace").
+  name = name;
   system = builtins.currentSystem; # relocation runs on illumos.
   builder = "/usr/bin/bash";
   PATH = "/usr/gnu/bin:/usr/bin:/usr/sbin";
