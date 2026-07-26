@@ -121,6 +121,12 @@ bash ./configure \
   --disable-gc \
   --with-boost=/usr
 
+# Stock Nix 2.3.16 has AC_CONFIG_FILES([]) — configure computes every @VAR@ into
+# config.status's subst table but never instantiates Makefile.config from
+# Makefile.config.in. Drive it explicitly (config.status --file=OUT:IN works
+# with the full subst table even though it's not in AC_CONFIG_FILES).
+CONFIG_SHELL=/usr/bin/bash bash ./config.status --file=Makefile.config:Makefile.config.in
+
 # configure writes Makefile.config from the environment; force the two final
 # tweaks in case they were not picked up (idempotent):
 #   -DREADLINE : make repl.cc use <readline/readline.h> instead of <editline.h>

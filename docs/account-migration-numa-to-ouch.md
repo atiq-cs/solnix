@@ -72,3 +72,75 @@ Everything rebuilds from PUBLIC resources + our git + the surviving cache:
   (16 vCPU), NOT 32-vCPU (boot-hang), NOT c6id/Nitro-v5+.
 - Cache pubkey cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk=
   Creds: sops -d secrets/{s3-cache,cache-signing}.yaml.
+
+## ouch cold-start DONE (2026-07-26 ~20:30 UTC — well before the 22:20 deadline)
+
+ouch is WARM: a working illumos builder AMI exists, built entirely from public
+resources + git + the surviving solnix.io cache (no numa AMI copy, no AWS S3).
+
+### AMI ids (record these)
+
+| what | id | notes |
+|---|---|---|
+| **BUILDER AMI (fleet launches from THIS)** | **`ami-0c005f030cc010b43`** | `solnix-builder-ouch-20260726`. OI hipster + Nix 2.3.16 + gcc10/14 + onbld + git + world closure + seed. ena, uefi. |
+| base OI AMI (cold-start root) | `ami-097beb4de83dc9129` | `openindiana-hipster-20251026-ouch-20260726`. Stock OI + ena driver + metadata-shim + root key. ena, uefi. |
+| snapshots | builder `snap-0a26d4247c8092aa9`, base `snap-013a6a443fa133f30` | |
+
+### Fleet launch (uses the builder AMI)
+
+```sh
+aws ec2 run-instances --profile ouch --region us-east-2 \
+  --image-id ami-0c005f030cc010b43 --instance-type m6i.4xlarge \
+  --key-name solnix-oi --security-group-ids sg-0da52f6d0000cb9c7 \
+  --metadata-options 'HttpTokens=required,HttpEndpoint=enabled' \
+  --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=solnix-build-ouch},{Key=Owner,Value=gregburd},{Key=Purpose,Value=solnix-dev},{Key=Expiry,Value=2026-08-02}]'
+```
+Boots in ~45s (ena0 up, shim DHCPs + enables ssh). ssh as `root` with the
+ed25519 key (scripts/oi-ssh.sh). m6i.4xlarge (16 vCPU) ONLY — the AMI runs the
+STOCK OI kernel (no pit_is_broken fix), so 32-vCPU still boot-hangs.
+
+### Smoke test (PASSED on a fresh instance from the builder AMI)
+- `nix --version` -> 2.3.16.
+- cache reachable from ouch: `nix path-info --store https://s3.solnix.io/solnix-cache
+  --option trusted-public-keys <pubkey> /nix/store/b1q9...-system-path` resolves.
+- gcc-14 (`/usr/gcc/14/bin/gcc`) compiles + runs a hello.c.
+
+### Pull from cache on the builder (the working recipe)
+`scripts/oi-pull.sh <store-path> ...` — NOT `nix copy` / `nix-store -r` on the
+whole closure. Nix 2.3.16 on illumos flakes with `getting status of '...':
+Error 0` on whole-closure http substitution; oi-pull BFS's the closure via
+narinfo and realises ONE path at a time with retries. (Same class of bug the
+cache.md publish note describes.)
+
+### Gotchas hit during the ouch cold-start (all handled)
+1. **oi-make-ami.sh had a hard `:user/numa` guard** — relaxed to accept ouch.
+   It also only does the dd stage; the full base-AMI build (dd -> ubuntu-zfs
+   seed -> register) is now one non-blocking orchestrator: `scripts/ouch-make-base-ami.sh`.
+2. **OI mirror throttles the dd-helper to ~0.5-1 MB/s** (930 MB compressed ->
+   2 GB image = hopeless in-line). FIX: download the .img.zst to the dev box
+   (~6 MB/s), scp it to the helper, then dd from the LOCAL file (network out of
+   the dd path). The dd itself is seconds.
+3. **Base image incorporations lag the catalog** — `pkg install ... git` rejected
+   by `userland-incorporation@0.5.11-2025...`. FIX (as the setup script's own
+   comment warns): `pkg update` FIRST (new BE `openindiana-2026:07:26`), REBOOT,
+   then oi-build-host-setup.sh. The reboot's boot_archive rebuild also picks up
+   the injected ena driver.
+4. **rpool didn't auto-grow to the 120 GB root vol** (stuck at 1.6 GB, 220 MB
+   free). FIX on first boot: `zpool set autoexpand=on rpool; zpool online -e
+   rpool c1t1d0` -> 115 GB free. Bake this into the builder-host setup or do it
+   once per fresh launch before installing Nix.
+5. **Nix 2.3.16 configure never instantiates Makefile.config** — stock
+   `configure.ac` has `AC_CONFIG_FILES([])`, so `oi-nix-setup.sh`'s post-configure
+   grep/gsed on Makefile.config aborted. FIX (added to oi-nix-setup.sh):
+   `./config.status --file=Makefile.config:Makefile.config.in` (config.status has
+   the full subst table even though the file isn't in AC_CONFIG_FILES). Do NOT
+   `autoreconf` — it needs autoconf-archive (AX_BOOST_BASE) and produces a broken
+   configure; the shipped configure is correct, only the instantiation was missing.
+
+### Execution hygiene
+Every long host op (dd, pkg update/install, Nix compile, cache pull) ran DETACHED
+via scripts/oi-job.sh (or a nohup runner on the linux helpers) with short
+non-blocking polls — no SSH held across a multi-minute op. Assets: solnix.io
+cache + local seed only; no AWS S3/ouch used for storage. Helpers reaped; only
+the builder AMI + one smoke-test instance (solnix-smoke-ouch,
+i-03907222e00ec4d04) left running.

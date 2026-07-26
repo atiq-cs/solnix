@@ -32,7 +32,7 @@ log() { printf '\n=== %s ===\n' "$*" >&2; }
 
 log "identity"
 aws sts get-caller-identity --region "$REGION" --output text \
-  --query 'Arn' | grep -q ':user/numa' || { echo "wrong account/profile"; exit 1; }
+  --query 'Arn' | grep -Eq ':user/(numa|ouch)' || { echo "wrong account/profile"; exit 1; }
 
 # --- key pair -----------------------------------------------------------------
 KEY_NAME="solnix-oi"
