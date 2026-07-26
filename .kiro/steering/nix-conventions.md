@@ -120,12 +120,16 @@ path, cached+signed alongside `out`; consumers pull it only when debugging.
 This is the "separate packages that combine to debug" requirement. Toolchain:
 GNU binutils objcopy from gcc14 (Solaris objcopy lacks the flags).
 
-## Package metadata index (EDN / Mentat)
+## Package metadata index (EDN / pg_mentat) — OWNED BY THE solnix.io TEAM
 
-After publish, emit a Mentat/Datomic-ready EDN datom per package via
-scripts/oi-emit-edn.sh into docs/registry/edn/ (schema in edn/schema.edn):
-:pkg/{store-path,name,version,system,compiler,compiler-ver,libc-store,libc-ver,
-debug-path,dep,cached-at,cache-sig}. These files ARE the index until a writable
-pg_mentat/Mentat endpoint for solnix exists (then transact schema.edn + datoms).
-NOTE: the currently-exposed pg_mentat MCP is the read-only PostgreSQL research
-corpus, not a solnix write target.
+Package metadata + relationships (deps, arch coverage, build provenance) are the
+solnix.io team's domain: pg_mentat (a Datomic-compatible Datalog engine in
+Postgres on the solnix.io hub) ingests facts from the narinfos the build farm
+pushes. See ~/ws/solnix.io/infra/docs/package-facts-edn.md (their canonical
+schema) — do NOT generate EDN in this repo.
+
+Build team's only responsibility: ensure the cache narinfos are complete and,
+if the provenance handoff is adopted (~/ws/solnix.io/infra/docs/handoff/
+build-provenance-facts.md), stamp compiler/compilerVer/libcVer/debugPath at
+publish time in the sidecar format their ingester wants. No per-package EDN
+files here.

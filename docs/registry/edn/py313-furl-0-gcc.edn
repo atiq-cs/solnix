@@ -1,8 +1,0 @@
-{:pkg/store-path "/nix/store/ccfhdhy24s4rqqcb036qf0a0pn1r4qpd-py313-furl-0"
- :pkg/name "py313-furl" :pkg/version "0"
- :pkg/narinfo-hash "ccfhdhy24s4rqqcb036qf0a0pn1r4qpd"
- :pkg/system "x86_64-solaris"
- :pkg/compiler "gcc"
- :pkg/compiler-ver "14.3.0"
- :pkg/libc-ver "illumos-960edb1c89"
- :pkg/cached-at "2026-07-26T18:27:40Z" :pkg/cache-sig "cache.solnix.io-1"}

@@ -1,8 +1,0 @@
-{:pkg/store-path "/nix/store/mcx7pmbrj3nmm6jr770yvpdxf8l3kqhm-libtasn1-4.19.0"
- :pkg/name "libtasn1" :pkg/version "4.19.0"
- :pkg/narinfo-hash "mcx7pmbrj3nmm6jr770yvpdxf8l3kqhm"
- :pkg/system "x86_64-solaris"
- :pkg/compiler "clang"
- :pkg/compiler-ver "21.1.0"
- :pkg/libc-ver "illumos-960edb1c89"
- :pkg/cached-at "2026-07-26T18:27:30Z" :pkg/cache-sig "cache.solnix.io-1"}

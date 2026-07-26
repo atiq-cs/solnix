@@ -1,8 +1,0 @@
-{:pkg/store-path "/nix/store/llk61g9ppdfjv0rva0apqckhh65d1svw-libxml2-2.12.9"
- :pkg/name "libxml2" :pkg/version "2.12.9"
- :pkg/narinfo-hash "llk61g9ppdfjv0rva0apqckhh65d1svw"
- :pkg/system "x86_64-solaris"
- :pkg/compiler "clang"
- :pkg/compiler-ver "21.1.0"
- :pkg/libc-ver "illumos-960edb1c89"
- :pkg/cached-at "2026-07-26T18:27:30Z" :pkg/cache-sig "cache.solnix.io-1"}

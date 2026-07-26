@@ -1,8 +1,0 @@
-{:pkg/store-path "/nix/store/kqv427akr7s93bwg2yklc79y0g7wv26a-perl542-text-unidecode-1.30"
- :pkg/name "perl542-text-unidecode" :pkg/version "1.30"
- :pkg/narinfo-hash "kqv427akr7s93bwg2yklc79y0g7wv26a"
- :pkg/system "x86_64-solaris"
- :pkg/compiler "gcc"
- :pkg/compiler-ver "14.3.0"
- :pkg/libc-ver "illumos-960edb1c89"
- :pkg/cached-at "2026-07-26T18:27:38Z" :pkg/cache-sig "cache.solnix.io-1"}

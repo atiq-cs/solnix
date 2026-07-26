@@ -1,8 +1,0 @@
-{:pkg/store-path "/nix/store/krsd6lqrnmdk14is2c0w9qfdlkldpdxq-sqlite-3-3.47.2"
- :pkg/name "sqlite-3" :pkg/version "3.47.2"
- :pkg/narinfo-hash "krsd6lqrnmdk14is2c0w9qfdlkldpdxq"
- :pkg/system "x86_64-solaris"
- :pkg/compiler "clang"
- :pkg/compiler-ver "21.1.0"
- :pkg/libc-ver "illumos-960edb1c89"
- :pkg/cached-at "2026-07-26T18:27:31Z" :pkg/cache-sig "cache.solnix.io-1"}

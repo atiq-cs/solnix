@@ -1,8 +1,0 @@
-{:pkg/store-path "/nix/store/1ys41bz8ci5x6qw4m80zly2svnawmlhg-solnix-py39-iniconfig-0.1439"
- :pkg/name "solnix-py39-iniconfig" :pkg/version "0.1439"
- :pkg/narinfo-hash "1ys41bz8ci5x6qw4m80zly2svnawmlhg"
- :pkg/system "x86_64-solaris"
- :pkg/compiler "gcc"
- :pkg/compiler-ver "14.3.0"
- :pkg/libc-ver "illumos-960edb1c89"
- :pkg/cached-at "2026-07-26T18:27:34Z" :pkg/cache-sig "cache.solnix.io-1"}

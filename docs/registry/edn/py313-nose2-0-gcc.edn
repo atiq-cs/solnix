@@ -1,8 +1,0 @@
-{:pkg/store-path "/nix/store/2m8l1bhfcddn1hm2mdibmn5906sb8xjd-py313-nose2-0"
- :pkg/name "py313-nose2" :pkg/version "0"
- :pkg/narinfo-hash "2m8l1bhfcddn1hm2mdibmn5906sb8xjd"
- :pkg/system "x86_64-solaris"
- :pkg/compiler "gcc"
- :pkg/compiler-ver "14.3.0"
- :pkg/libc-ver "illumos-960edb1c89"
- :pkg/cached-at "2026-07-26T18:27:41Z" :pkg/cache-sig "cache.solnix.io-1"}

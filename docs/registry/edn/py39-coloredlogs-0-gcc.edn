@@ -1,8 +1,0 @@
-{:pkg/store-path "/nix/store/xighgjpycn7i8x62z4f6b9hskdn0m88z-py39-coloredlogs-0"
- :pkg/name "py39-coloredlogs" :pkg/version "0"
- :pkg/narinfo-hash "xighgjpycn7i8x62z4f6b9hskdn0m88z"
- :pkg/system "x86_64-solaris"
- :pkg/compiler "gcc"
- :pkg/compiler-ver "14.3.0"
- :pkg/libc-ver "illumos-960edb1c89"
- :pkg/cached-at "2026-07-26T18:27:45Z" :pkg/cache-sig "cache.solnix.io-1"}

@@ -1,8 +1,0 @@
-{:pkg/store-path "/nix/store/61f5nknp1m989hcq0dqscsmb87xa45qy-py313-async-generator-0"
- :pkg/name "py313-async-generator" :pkg/version "0"
- :pkg/narinfo-hash "61f5nknp1m989hcq0dqscsmb87xa45qy"
- :pkg/system "x86_64-solaris"
- :pkg/compiler "gcc"
- :pkg/compiler-ver "14.3.0"
- :pkg/libc-ver "illumos-960edb1c89"
- :pkg/cached-at "2026-07-26T18:27:39Z" :pkg/cache-sig "cache.solnix.io-1"}

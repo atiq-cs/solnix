@@ -1,8 +1,0 @@
-{:pkg/store-path "/nix/store/n93473ghh7vbj6158w0h8gwcn57nnq4z-zlib-1.3.1"
- :pkg/name "zlib" :pkg/version "1.3.1"
- :pkg/narinfo-hash "n93473ghh7vbj6158w0h8gwcn57nnq4z"
- :pkg/system "x86_64-solaris"
- :pkg/compiler "clang"
- :pkg/compiler-ver "21.1.0"
- :pkg/libc-ver "illumos-960edb1c89"
- :pkg/cached-at "2026-07-26T18:27:31Z" :pkg/cache-sig "cache.solnix.io-1"}

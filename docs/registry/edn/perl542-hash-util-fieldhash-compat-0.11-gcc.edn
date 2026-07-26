@@ -1,8 +1,0 @@
-{:pkg/store-path "/nix/store/d64yigixhnvj73is38v8g9cj06lmzl4m-perl542-hash-util-fieldhash-compat-0.11"
- :pkg/name "perl542-hash-util-fieldhash-compat" :pkg/version "0.11"
- :pkg/narinfo-hash "d64yigixhnvj73is38v8g9cj06lmzl4m"
- :pkg/system "x86_64-solaris"
- :pkg/compiler "gcc"
- :pkg/compiler-ver "14.3.0"
- :pkg/libc-ver "illumos-960edb1c89"
- :pkg/cached-at "2026-07-26T18:27:37Z" :pkg/cache-sig "cache.solnix.io-1"}

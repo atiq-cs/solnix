@@ -1,8 +1,0 @@
-{:pkg/store-path "/nix/store/wfafnqxasf5l2f1rmv4ry6l8gclf15np-py313-babel-0"
- :pkg/name "py313-babel" :pkg/version "0"
- :pkg/narinfo-hash "wfafnqxasf5l2f1rmv4ry6l8gclf15np"
- :pkg/system "x86_64-solaris"
- :pkg/compiler "gcc"
- :pkg/compiler-ver "14.3.0"
- :pkg/libc-ver "illumos-960edb1c89"
- :pkg/cached-at "2026-07-26T18:27:39Z" :pkg/cache-sig "cache.solnix.io-1"}

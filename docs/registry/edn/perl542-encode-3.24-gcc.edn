@@ -1,8 +1,0 @@
-{:pkg/store-path "/nix/store/r4zns5zq2nm17d8q8xbhc07838yl6aws-perl542-encode-3.24"
- :pkg/name "perl542-encode" :pkg/version "3.24"
- :pkg/narinfo-hash "r4zns5zq2nm17d8q8xbhc07838yl6aws"
- :pkg/system "x86_64-solaris"
- :pkg/compiler "gcc"
- :pkg/compiler-ver "14.3.0"
- :pkg/libc-ver "illumos-960edb1c89"
- :pkg/cached-at "2026-07-26T18:27:36Z" :pkg/cache-sig "cache.solnix.io-1"}

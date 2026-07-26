@@ -1,8 +1,0 @@
-{:pkg/store-path "/nix/store/qf65h2gc6v23laykwwizsp3bq087yvyj-perl542-guard-1.023"
- :pkg/name "perl542-guard" :pkg/version "1.023"
- :pkg/narinfo-hash "qf65h2gc6v23laykwwizsp3bq087yvyj"
- :pkg/system "x86_64-solaris"
- :pkg/compiler "gcc"
- :pkg/compiler-ver "14.3.0"
- :pkg/libc-ver "illumos-960edb1c89"
- :pkg/cached-at "2026-07-26T18:27:37Z" :pkg/cache-sig "cache.solnix.io-1"}

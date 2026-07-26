@@ -1,8 +1,0 @@
-{:pkg/store-path "/nix/store/vdi1q1xjfh4vjzb2dpvrbd0pn56qj4l1-perl542-log-message-0.08"
- :pkg/name "perl542-log-message" :pkg/version "0.08"
- :pkg/narinfo-hash "vdi1q1xjfh4vjzb2dpvrbd0pn56qj4l1"
- :pkg/system "x86_64-solaris"
- :pkg/compiler "gcc"
- :pkg/compiler-ver "14.3.0"
- :pkg/libc-ver "illumos-960edb1c89"
- :pkg/cached-at "2026-07-26T18:27:37Z" :pkg/cache-sig "cache.solnix.io-1"}

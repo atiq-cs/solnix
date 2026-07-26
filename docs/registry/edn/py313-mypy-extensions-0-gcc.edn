@@ -1,8 +1,0 @@
-{:pkg/store-path "/nix/store/905pvrw06a7z32xf3a9jpvj1fp6x7c97-py313-mypy-extensions-0"
- :pkg/name "py313-mypy-extensions" :pkg/version "0"
- :pkg/narinfo-hash "905pvrw06a7z32xf3a9jpvj1fp6x7c97"
- :pkg/system "x86_64-solaris"
- :pkg/compiler "gcc"
- :pkg/compiler-ver "14.3.0"
- :pkg/libc-ver "illumos-960edb1c89"
- :pkg/cached-at "2026-07-26T18:27:41Z" :pkg/cache-sig "cache.solnix.io-1"}

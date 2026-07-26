@@ -1,8 +1,0 @@
-{:pkg/store-path "/nix/store/a0wv97bbgxb8nkn7swpipm4xmfrpvmf7-py313-aiofiles-0"
- :pkg/name "py313-aiofiles" :pkg/version "0"
- :pkg/narinfo-hash "a0wv97bbgxb8nkn7swpipm4xmfrpvmf7"
- :pkg/system "x86_64-solaris"
- :pkg/compiler "gcc"
- :pkg/compiler-ver "14.3.0"
- :pkg/libc-ver "illumos-960edb1c89"
- :pkg/cached-at "2026-07-26T18:27:39Z" :pkg/cache-sig "cache.solnix.io-1"}

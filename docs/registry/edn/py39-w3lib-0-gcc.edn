@@ -1,8 +1,0 @@
-{:pkg/store-path "/nix/store/q0vfag3w70s41g7i4k0jn11a58g716si-py39-w3lib-0"
- :pkg/name "py39-w3lib" :pkg/version "0"
- :pkg/narinfo-hash "q0vfag3w70s41g7i4k0jn11a58g716si"
- :pkg/system "x86_64-solaris"
- :pkg/compiler "gcc"
- :pkg/compiler-ver "14.3.0"
- :pkg/libc-ver "illumos-960edb1c89"
- :pkg/cached-at "2026-07-26T18:27:50Z" :pkg/cache-sig "cache.solnix.io-1"}

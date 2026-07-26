@@ -1,8 +1,0 @@
-{:pkg/store-path "/nix/store/3w5ajjpkz7g6i7b0qzgdkwypcqmarpv4-grep-3.11"
- :pkg/name "grep" :pkg/version "3.11"
- :pkg/narinfo-hash "3w5ajjpkz7g6i7b0qzgdkwypcqmarpv4"
- :pkg/system "x86_64-solaris"
- :pkg/compiler "clang"
- :pkg/compiler-ver "21.1.0"
- :pkg/libc-ver "illumos-960edb1c89"
- :pkg/cached-at "2026-07-26T18:27:29Z" :pkg/cache-sig "cache.solnix.io-1"}

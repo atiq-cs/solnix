@@ -1,8 +1,0 @@
-{:pkg/store-path "/nix/store/spfks7xf6micj1m24cwj1kmd4pjcxhs8-py39-semver-0"
- :pkg/name "py39-semver" :pkg/version "0"
- :pkg/narinfo-hash "spfks7xf6micj1m24cwj1kmd4pjcxhs8"
- :pkg/system "x86_64-solaris"
- :pkg/compiler "gcc"
- :pkg/compiler-ver "14.3.0"
- :pkg/libc-ver "illumos-960edb1c89"
- :pkg/cached-at "2026-07-26T18:27:49Z" :pkg/cache-sig "cache.solnix.io-1"}

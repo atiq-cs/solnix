@@ -1,8 +1,0 @@
-{:pkg/store-path "/nix/store/j94f1s909jmwq9my2944dr6kj6ry37ki-perl542-pod-simple-3.48"
- :pkg/name "perl542-pod-simple" :pkg/version "3.48"
- :pkg/narinfo-hash "j94f1s909jmwq9my2944dr6kj6ry37ki"
- :pkg/system "x86_64-solaris"
- :pkg/compiler "gcc"
- :pkg/compiler-ver "14.3.0"
- :pkg/libc-ver "illumos-960edb1c89"
- :pkg/cached-at "2026-07-26T18:27:37Z" :pkg/cache-sig "cache.solnix.io-1"}

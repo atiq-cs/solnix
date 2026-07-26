@@ -1,8 +1,0 @@
-{:pkg/store-path "/nix/store/yqhsc7h6qqglhvz62d09krw6q269kmj2-py39-factory-0"
- :pkg/name "py39-factory" :pkg/version "0"
- :pkg/narinfo-hash "yqhsc7h6qqglhvz62d09krw6q269kmj2"
- :pkg/system "x86_64-solaris"
- :pkg/compiler "gcc"
- :pkg/compiler-ver "14.3.0"
- :pkg/libc-ver "illumos-960edb1c89"
- :pkg/cached-at "2026-07-26T18:27:45Z" :pkg/cache-sig "cache.solnix.io-1"}

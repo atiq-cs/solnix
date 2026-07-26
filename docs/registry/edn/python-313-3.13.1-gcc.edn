@@ -1,8 +1,0 @@
-{:pkg/store-path "/nix/store/cr6pjjdrbbnwxlhkl9r1i2b5iy4gjikz-python-313-3.13.1"
- :pkg/name "python-313" :pkg/version "3.13.1"
- :pkg/narinfo-hash "cr6pjjdrbbnwxlhkl9r1i2b5iy4gjikz"
- :pkg/system "x86_64-solaris"
- :pkg/compiler "gcc"
- :pkg/compiler-ver "14.3.0"
- :pkg/libc-ver "illumos-960edb1c89"
- :pkg/cached-at "2026-07-26T18:27:31Z" :pkg/cache-sig "cache.solnix.io-1"}

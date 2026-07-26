@@ -1,8 +1,0 @@
-{:pkg/store-path "/nix/store/y7df95gksf7f71xjkgd4sxi9lwj4kxvv-perl542-text-levenshtein-0.15"
- :pkg/name "perl542-text-levenshtein" :pkg/version "0.15"
- :pkg/narinfo-hash "y7df95gksf7f71xjkgd4sxi9lwj4kxvv"
- :pkg/system "x86_64-solaris"
- :pkg/compiler "gcc"
- :pkg/compiler-ver "14.3.0"
- :pkg/libc-ver "illumos-960edb1c89"
- :pkg/cached-at "2026-07-26T18:27:38Z" :pkg/cache-sig "cache.solnix.io-1"}

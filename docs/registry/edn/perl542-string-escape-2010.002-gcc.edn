@@ -1,8 +1,0 @@
-{:pkg/store-path "/nix/store/w6si9vw1rmsxh2nh1l7xs230v4sz22zz-perl542-string-escape-2010.002"
- :pkg/name "perl542-string-escape" :pkg/version "2010.002"
- :pkg/narinfo-hash "w6si9vw1rmsxh2nh1l7xs230v4sz22zz"
- :pkg/system "x86_64-solaris"
- :pkg/compiler "gcc"
- :pkg/compiler-ver "14.3.0"
- :pkg/libc-ver "illumos-960edb1c89"
- :pkg/cached-at "2026-07-26T18:27:38Z" :pkg/cache-sig "cache.solnix.io-1"}

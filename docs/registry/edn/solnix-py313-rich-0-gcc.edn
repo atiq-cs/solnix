@@ -1,8 +1,0 @@
-{:pkg/store-path "/nix/store/y96a99aj3g9zin3f5l77w90gync8m0as-solnix-py313-rich-0"
- :pkg/name "solnix-py313-rich" :pkg/version "0"
- :pkg/narinfo-hash "y96a99aj3g9zin3f5l77w90gync8m0as"
- :pkg/system "x86_64-solaris"
- :pkg/compiler "gcc"
- :pkg/compiler-ver "14.3.0"
- :pkg/libc-ver "illumos-960edb1c89"
- :pkg/cached-at "2026-07-26T18:27:33Z" :pkg/cache-sig "cache.solnix.io-1"}

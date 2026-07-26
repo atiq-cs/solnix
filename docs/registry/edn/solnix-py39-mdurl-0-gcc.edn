@@ -1,8 +1,0 @@
-{:pkg/store-path "/nix/store/vk74g2r9k2ajkpxcjwdgws2nrv44f2gg-solnix-py39-mdurl-0"
- :pkg/name "solnix-py39-mdurl" :pkg/version "0"
- :pkg/narinfo-hash "vk74g2r9k2ajkpxcjwdgws2nrv44f2gg"
- :pkg/system "x86_64-solaris"
- :pkg/compiler "gcc"
- :pkg/compiler-ver "14.3.0"
- :pkg/libc-ver "illumos-960edb1c89"
- :pkg/cached-at "2026-07-26T18:27:34Z" :pkg/cache-sig "cache.solnix.io-1"}

@@ -1,8 +1,0 @@
-{:pkg/store-path "/nix/store/5zf4y16lcxj8lpj8l2ing48vs8fmd674-help2man-1.49.3"
- :pkg/name "help2man" :pkg/version "1.49.3"
- :pkg/narinfo-hash "5zf4y16lcxj8lpj8l2ing48vs8fmd674"
- :pkg/system "x86_64-solaris"
- :pkg/compiler "clang"
- :pkg/compiler-ver "21.1.0"
- :pkg/libc-ver "illumos-960edb1c89"
- :pkg/cached-at "2026-07-26T18:27:29Z" :pkg/cache-sig "cache.solnix.io-1"}

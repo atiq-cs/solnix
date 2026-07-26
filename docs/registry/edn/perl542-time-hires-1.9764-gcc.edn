@@ -1,8 +1,0 @@
-{:pkg/store-path "/nix/store/3rwrmk8pqcvibyy0pw72jpf2saa5s6j5-perl542-time-hires-1.9764"
- :pkg/name "perl542-time-hires" :pkg/version "1.9764"
- :pkg/narinfo-hash "3rwrmk8pqcvibyy0pw72jpf2saa5s6j5"
- :pkg/system "x86_64-solaris"
- :pkg/compiler "gcc"
- :pkg/compiler-ver "14.3.0"
- :pkg/libc-ver "illumos-960edb1c89"
- :pkg/cached-at "2026-07-26T18:27:39Z" :pkg/cache-sig "cache.solnix.io-1"}

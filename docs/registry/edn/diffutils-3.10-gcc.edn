@@ -1,8 +1,0 @@
-{:pkg/store-path "/nix/store/ib753jymil8ds0iykcm5p9vmn5adnrvg-diffutils-3.10"
- :pkg/name "diffutils" :pkg/version "3.10"
- :pkg/narinfo-hash "ib753jymil8ds0iykcm5p9vmn5adnrvg"
- :pkg/system "x86_64-solaris"
- :pkg/compiler "gcc"
- :pkg/compiler-ver "14.3.0"
- :pkg/libc-ver "illumos-960edb1c89"
- :pkg/cached-at "2026-07-26T18:27:29Z" :pkg/cache-sig "cache.solnix.io-1"}

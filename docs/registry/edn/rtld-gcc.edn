@@ -1,8 +1,0 @@
-{:pkg/store-path "/nix/store/il8pcs40iny09pq4d3pk0k0jb61xp7vf-rtld"
- :pkg/name "rtld" :pkg/version "rtld"
- :pkg/narinfo-hash "il8pcs40iny09pq4d3pk0k0jb61xp7vf"
- :pkg/system "x86_64-solaris"
- :pkg/compiler "gcc"
- :pkg/compiler-ver "14.3.0"
- :pkg/libc-ver "illumos-960edb1c89"
- :pkg/cached-at "2026-07-26T18:27:28Z" :pkg/cache-sig "cache.solnix.io-1"}

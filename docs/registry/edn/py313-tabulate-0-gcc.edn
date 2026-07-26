@@ -1,8 +1,0 @@
-{:pkg/store-path "/nix/store/k8g5hq54lq6jn89bgcp6r6pj7iyhsjys-py313-tabulate-0"
- :pkg/name "py313-tabulate" :pkg/version "0"
- :pkg/narinfo-hash "k8g5hq54lq6jn89bgcp6r6pj7iyhsjys"
- :pkg/system "x86_64-solaris"
- :pkg/compiler "gcc"
- :pkg/compiler-ver "14.3.0"
- :pkg/libc-ver "illumos-960edb1c89"
- :pkg/cached-at "2026-07-26T18:27:43Z" :pkg/cache-sig "cache.solnix.io-1"}

@@ -1,8 +1,0 @@
-{:pkg/store-path "/nix/store/rzii169rllwnr1j57qahll3imxyn72rv-py313-annotated-types-0"
- :pkg/name "py313-annotated-types" :pkg/version "0"
- :pkg/narinfo-hash "rzii169rllwnr1j57qahll3imxyn72rv"
- :pkg/system "x86_64-solaris"
- :pkg/compiler "gcc"
- :pkg/compiler-ver "14.3.0"
- :pkg/libc-ver "illumos-960edb1c89"
- :pkg/cached-at "2026-07-26T18:27:39Z" :pkg/cache-sig "cache.solnix.io-1"}

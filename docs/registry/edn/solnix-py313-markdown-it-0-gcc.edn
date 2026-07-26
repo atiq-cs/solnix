@@ -1,8 +1,0 @@
-{:pkg/store-path "/nix/store/knwg2j1wvisbif2315hqrh1gvzv1phmi-solnix-py313-markdown-it-0"
- :pkg/name "solnix-py313-markdown-it" :pkg/version "0"
- :pkg/narinfo-hash "knwg2j1wvisbif2315hqrh1gvzv1phmi"
- :pkg/system "x86_64-solaris"
- :pkg/compiler "gcc"
- :pkg/compiler-ver "14.3.0"
- :pkg/libc-ver "illumos-960edb1c89"
- :pkg/cached-at "2026-07-26T18:27:32Z" :pkg/cache-sig "cache.solnix.io-1"}

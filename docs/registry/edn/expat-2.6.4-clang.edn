@@ -1,8 +1,0 @@
-{:pkg/store-path "/nix/store/cv7qgyybqmafcfmwzckkspjli4nzwwnc-expat-2.6.4"
- :pkg/name "expat" :pkg/version "2.6.4"
- :pkg/narinfo-hash "cv7qgyybqmafcfmwzckkspjli4nzwwnc"
- :pkg/system "x86_64-solaris"
- :pkg/compiler "clang"
- :pkg/compiler-ver "21.1.0"
- :pkg/libc-ver "illumos-960edb1c89"
- :pkg/cached-at "2026-07-26T18:27:29Z" :pkg/cache-sig "cache.solnix.io-1"}

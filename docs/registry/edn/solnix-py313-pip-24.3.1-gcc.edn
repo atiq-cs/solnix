@@ -1,8 +1,0 @@
-{:pkg/store-path "/nix/store/ys7fjgvphixp19z5w6whdfh1n9qvcag7-solnix-py313-pip-24.3.1"
- :pkg/name "solnix-py313-pip" :pkg/version "24.3.1"
- :pkg/narinfo-hash "ys7fjgvphixp19z5w6whdfh1n9qvcag7"
- :pkg/system "x86_64-solaris"
- :pkg/compiler "gcc"
- :pkg/compiler-ver "14.3.0"
- :pkg/libc-ver "illumos-960edb1c89"
- :pkg/cached-at "2026-07-26T18:27:32Z" :pkg/cache-sig "cache.solnix.io-1"}

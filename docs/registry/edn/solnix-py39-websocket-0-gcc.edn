@@ -1,8 +1,0 @@
-{:pkg/store-path "/nix/store/i2pcwfgc6hn8mf6gzyng5cz7r7sr9ygk-solnix-py39-websocket-0"
- :pkg/name "solnix-py39-websocket" :pkg/version "0"
- :pkg/narinfo-hash "i2pcwfgc6hn8mf6gzyng5cz7r7sr9ygk"
- :pkg/system "x86_64-solaris"
- :pkg/compiler "gcc"
- :pkg/compiler-ver "14.3.0"
- :pkg/libc-ver "illumos-960edb1c89"
- :pkg/cached-at "2026-07-26T18:27:35Z" :pkg/cache-sig "cache.solnix.io-1"}
