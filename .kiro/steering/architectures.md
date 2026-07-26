@@ -42,3 +42,15 @@ promise parity across all four — they are not equal.
 Any doc, commit message, or status update that lists supported architectures
 must reflect this matrix. "Planned" ≠ "supported". Supported means: builds a
 world, boots to multi-user SMF milestone, and passes the smoke test on that arch.
+
+## SPARCv9 & RISC-V via QEMU-on-EC2 (feasibility)
+
+See docs/design-sparc-riscv-qemu.md. Summary: QEMU-on-EC2 is a fine SUBSTRATE
+for both (same pattern as aarch64), but the substrate is not the hard part —
+whether an illumos PORT exists is:
+- **SPARCv9 (sun4u/sun4v):** port EXISTS in-gate (bit-rotting; Tribblix/DilOS keep
+  it). `qemu-system-sparc64 -machine sun4u` boots it. A startable Phase-4 REVIVAL
+  track reusing the aarch64 QEMU machinery. Medium hardness (build-triage).
+- **RISC-V:** NO illumos port exists. QEMU `virt` is ready but there's nothing to
+  boot. "Bootstrap via QEMU" = write a RISC-V illumos port first (multi-year
+  kernel effort). Phase-5 research/upstream track, NOT a QEMU/package task.
