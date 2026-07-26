@@ -38,7 +38,17 @@
 , env ? { }         # extra env vars (name->value) exported before build
 , unpackSubdir ? "" # if the tarball has a nonstandard top dir, set it; else auto
 , stripBins ? false # illumos strip can break; default off
+, separateDebugInfo ? true # split .debug into the `debug` output (see below)
 }:
+
+# Debug symbols: when separateDebugInfo (default), every ELF's DWARF is split
+# into a SEPARATE store path (the `debug` output) via GNU binutils objcopy
+# --only-keep-debug + --add-gnu-debuglink, mirroring nixpkgs' separateDebugInfo.
+# The main output ships stripped-of-debug (but keeps CTF, which illumos mdb/dtrace
+# use); the `debug` output holds the .debug files under
+# lib/debug/.build-id/<xx>/<rest>.debug so gdb finds them by build-id. Both are
+# cached+signed; a consumer pulls `debug` only when actually debugging. This is
+# the "separate packages that combine to debug" the maintainer asked for.
 
 let
   libcLibDirs = [ "${libcStore}/lib/amd64" "${libcStore}/lib" ];
@@ -76,6 +86,9 @@ derivation {
 
   inherit pname version compiler buildSystem installTargets;
   inherit gccStore clangStore libcStore ldStore wrapper;
+  # multi-output: `out` (the package) + `debug` (separate DWARF store path).
+  outputs = if separateDebugInfo then [ "out" "debug" ] else [ "out" ];
+  sepDebug = if separateDebugInfo then "1" else "";
   srcUrl = src.url;
   srcSha256 = src.sha256;
   configureFlagsStr = builtins.concatStringsSep " " configureFlags;
@@ -187,6 +200,37 @@ derivation {
 
     # sanity: $out is non-empty
     [ -n "$(ls -A "$out" 2>/dev/null)" ] || { echo "FATAL: empty \$out" >&2; exit 1; }
+
+    if [ -n "$sepDebug" ]; then
+      echo "=== split debug info -> \$debug ($debug) ===" >&2
+      # GNU binutils objcopy from the gcc14 toolchain (illumos /usr/bin/objcopy
+      # is Solaris' and lacks --only-keep-debug/--add-gnu-debuglink).
+      OBJCOPY="$gccStore/usr/gcc/14/bin/gobjcopy"
+      [ -x "$OBJCOPY" ] || OBJCOPY="$gccStore/usr/bin/gobjcopy"
+      [ -x "$OBJCOPY" ] || OBJCOPY=/usr/gnu/bin/objcopy
+      OBJDUMP="$gccStore/usr/gcc/14/bin/gobjdump"; [ -x "$OBJDUMP" ] || OBJDUMP=/usr/gnu/bin/objdump
+      mkdir -p "$debug/lib/debug/.build-id"
+      find "$out" -type f 2>/dev/null | while read -r f; do
+        # only ELF with a .debug_info section
+        "$OBJDUMP" -h "$f" 2>/dev/null | grep -q '\.debug_info' || continue
+        # locate by GNU build-id if present, else by a content hash fallback.
+        bid=$("$OBJDUMP" -s -j .note.gnu.build-id "$f" 2>/dev/null | awk '/^ /{for(i=2;i<=5;i++)printf $i}' | tail -c +33 2>/dev/null)
+        if [ -z "$bid" ]; then bid=$(/usr/bin/sha256sum "$f" | awk '{print $1}'); fi
+        pre=$(printf '%s' "$bid" | cut -c1-2); rest=$(printf '%s' "$bid" | cut -c3-)
+        dst="$debug/lib/debug/.build-id/$pre"
+        mkdir -p "$dst"
+        chmod u+w "$f" 2>/dev/null || true
+        # 1) copy DWARF out, 2) strip it from the binary (KEEP CTF/.SUNW_ctf for
+        #    mdb/dtrace), 3) link binary->debug by build-id.
+        "$OBJCOPY" --only-keep-debug "$f" "$dst/$rest.debug" 2>/dev/null || continue
+        "$OBJCOPY" --strip-debug "$f" 2>/dev/null || true
+        "$OBJCOPY" --add-gnu-debuglink="$dst/$rest.debug" "$f" 2>/dev/null || true
+      done
+      # never leave an empty debug output (breaks the multi-output contract)
+      [ -n "$(ls -A "$debug/lib/debug/.build-id" 2>/dev/null)" ] || \
+        { mkdir -p "$debug/lib/debug"; echo "no split debug info for $pname-$version" > "$debug/lib/debug/.empty"; }
+    fi
+
     echo "=== built $pname-$version ($compiler) -> $out ===" >&2
   '' ];
 }

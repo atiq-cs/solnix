@@ -109,3 +109,23 @@ the same config. Future arches follow the same pattern: `aarch64-solaris`,
 - Releases: date-based tags per the `release-tagging` skill when we get there.
 - Keep changes to the nixpkgs fork on a clearly named branch; document the pin in
   `flake.nix` and here.
+
+## Debug symbols (separate output, cached)
+
+Every userland package (mk-userland-pkg.nix) splits DWARF into a separate
+`debug` output (separateDebugInfo default true): objcopy --only-keep-debug ->
+$debug/lib/debug/.build-id/<xx>/<rest>.debug, --strip-debug the binary (KEEP CTF
+for mdb/dtrace), --add-gnu-debuglink. The `debug` output is a distinct store
+path, cached+signed alongside `out`; consumers pull it only when debugging.
+This is the "separate packages that combine to debug" requirement. Toolchain:
+GNU binutils objcopy from gcc14 (Solaris objcopy lacks the flags).
+
+## Package metadata index (EDN / Mentat)
+
+After publish, emit a Mentat/Datomic-ready EDN datom per package via
+scripts/oi-emit-edn.sh into docs/registry/edn/ (schema in edn/schema.edn):
+:pkg/{store-path,name,version,system,compiler,compiler-ver,libc-store,libc-ver,
+debug-path,dep,cached-at,cache-sig}. These files ARE the index until a writable
+pg_mentat/Mentat endpoint for solnix exists (then transact schema.edn + datoms).
+NOTE: the currently-exposed pg_mentat MCP is the read-only PostgreSQL research
+corpus, not a solnix write target.
