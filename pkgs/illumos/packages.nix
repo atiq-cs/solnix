@@ -690,6 +690,51 @@ EOF
         "$PY" -m pip install --no-build-isolation --no-index --prefix="$out" . 2>&1 | tail -20
       '';
     };
+
+    # ======================================================================
+    # WAVE 3 module fan-out helpers (135 modules built+cached with these,
+    # scripts/oi-{pymod,plmod}.sh is the imperative form; these are the
+    # declarative pkg{} form for wave-4). gcc-14 is the REAL compiler: the
+    # cached interpreters' sysconfig/Config cc points at a dead build-time
+    # wrapper, so C-ext / XS builds MUST force CC or they fall back / fail.
+    # ======================================================================
+
+    # A Python module built by pip against cached python-3.9 (add python313
+    # variant by swapping the interpreter). Freeze order (compile before the
+    # store path is fixed) is handled by mk-userland-pkg's install step; here we
+    # just install into $out and precompile so the store path stays stable.
+    pyModule = { pname, version, src, extraDeps ? [ ], py ? self.python39.gcc, pymm ? "python3.9" }:
+      pkg {
+        inherit pname version src;
+        deps = [ py ] ++ extraDeps;
+        buildSystem = "custom";
+        customBuild = ''
+          PY=${py}/bin/${pymm}
+          # force the real gcc-14 (sysconfig CC is a dead /tmp build wrapper)
+          export CC="$CC" LDSHARED="$CC -shared -m64" CFLAGS="-m64 -fPIC -O2" LDFLAGS="-m64"
+          "$PY" -m pip install --no-cache-dir --no-warn-script-location --prefix="$out" . 2>&1 | tail -20
+          "$PY" -m compileall -q -f "$out/lib/${pymm}/site-packages" 2>/dev/null || true
+        '';
+      };
+
+    # A Perl module (MakeMaker or Build.PL) against cached perl-5.42. Pass CC
+    # explicitly ($Config{cc} in the cached perl is the unexpanded template).
+    perlModule = { pname, version, src, extraDeps ? [ ], perl ? self.perl.gcc }:
+      pkg {
+        inherit pname version src;
+        deps = [ perl ] ++ extraDeps;
+        buildSystem = "custom";
+        customBuild = ''
+          PERL=${perl}/bin/perl
+          if [ -f Makefile.PL ]; then
+            "$PERL" Makefile.PL INSTALL_BASE="$out" CC="$CC" LD="$CC" OPTIMIZE="-m64 -fPIC -O2"
+            gmake -j"$(nproc)" CC="$CC"; gmake install
+          else
+            "$PERL" Build.PL --install_base "$out" --config cc="$CC" --config ld="$CC"
+            "$PERL" ./Build; "$PERL" ./Build install
+          fi
+        '';
+      };
   };
 in
 self
