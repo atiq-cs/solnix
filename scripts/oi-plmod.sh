@@ -65,7 +65,9 @@ for spec in "$@"; do
   fi
   ver=$(find "$srcd" -maxdepth 1 -name META.json -o -maxdepth 1 -name META.yml 2>/dev/null | head -1)
   v=$(basename "$srcd" | sed 's/^[A-Za-z:_-]*-//')
-  named="/var/tmp/solnix-perl542-${safe}-${v:-0}"
+  # Plain store name <pname>-<version>, NO solnix-/illumos- prefix (perl542 tag
+  # is part of pname to disambiguate the per-interpreter build).
+  named="/var/tmp/perl542-${safe}-${v:-0}"
   [ -e "$named" ] && named="$named.$$"
   cp -a "$pfx" "$named"
   sp=$(nix-store --add "$named" 2>/dev/null)

@@ -39,6 +39,15 @@ let
     done
   '';
 
+  # illumos feature-test macro fix: many portable C tools use strcasecmp/
+  # strncasecmp (<strings.h>) or POSIX symbols that Solaris libc hides behind
+  # __EXTENSIONS__ / _XOPEN_SOURCE. Append (not clobber) the search-path CFLAGS
+  # set by mk-userland. Use in preConfigure.
+  illumosExt = ''
+    export CFLAGS="''${CFLAGS:-} -D__EXTENSIONS__ -D_XOPEN_SOURCE=600 -D_XOPEN_SOURCE_EXTENDED=1"
+    export CPPFLAGS="''${CPPFLAGS:-} -D__EXTENSIONS__ -D_XOPEN_SOURCE=600"
+  '';
+
   # convenience: refer to a dep's gcc-built store path for RUNPATH/search.
   # We link deps built with gcc (ABI-compatible: OI clang uses gcc's libstdc++).
   self = rec {
@@ -558,6 +567,72 @@ exec python3 "$out/lib/scons/scripts/scons.py" "\$@"
 EOF
         chmod +x "$out/bin/scons"
       '';
+    };
+
+    # ---- WAVE 4 tier-3 TOOLS (autotools/make against cached deps) ----------
+    # NOTE: plain <pname>-<version> store names (mk-userland-pkg). Built via
+    # nix-build on a builder that has pulled the renamed toolchain + deps.
+    jq = pkg {
+      pname = "jq"; version = "1.7.1";
+      src = { url = "https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-1.7.1.tar.gz";
+              sha256 = "478c9ca129fd2e3443fe27314b455e211e0d8c60bc8ff7df703873deeee580c2"; };
+      # bundled oniguruma; no external regex lib needed.
+      preConfigure = illumosExt;
+      configureFlags = [ "--with-oniguruma=builtin" "--disable-maintainer-mode" ];
+    };
+
+    tree = pkg {
+      pname = "tree"; version = "2.1.3";
+      src = { url = "https://gitlab.com/OldManProgrammer/unix-tree/-/archive/2.1.3/unix-tree-2.1.3.tar.gz";
+              sha256 = "f554a1b62233b96fa8eaa2d85e91bc62cad80ee441fd591380f16cdfbe3e8868"; };
+      buildSystem = "custom";
+      # only __EXTENSIONS__ (for strcasecmp); NOT _XOPEN_SOURCE which pulls a
+      # conflicting system `struct comment` into tree.h.
+      customBuild = ''
+        gmake -j"$(nproc)" CC="$CC" CFLAGS="-D__EXTENSIONS__ -O2 -m64" MANDIR="$out/share/man" PREFIX="$out"
+        gmake install PREFIX="$out" MANDIR="$out/share/man"
+      '';
+    };
+
+    nano = pkg {
+      pname = "nano"; version = "8.2";
+      src = { url = "https://www.nano-editor.org/dist/v8/nano-8.2.tar.xz";
+              sha256 = "d5ad07dd862facae03051c54c6535e54c7ed7407318783fcad1ad2d7076fffeb"; };
+      deps = [ self.ncurses.gcc ];
+      preConfigure = illumosExt;
+      configureFlags = [ "--disable-nls" "--enable-utf8" ];
+    };
+
+    wget = pkg {
+      pname = "wget"; version = "1.24.5";
+      src = { url = "https://mirrors.kernel.org/gnu/wget/wget-1.24.5.tar.gz";
+              sha256 = "fa2dc35bab5184ecbc46a9ef83def2aaaa3f4c9f3c97d4bd19dcb07d4da637de"; };
+      deps = [ self.openssl3.gcc self.zlib.gcc self.pcre2.gcc ];
+      preConfigure = gnulibFix + illumosExt;
+      configureFlags = [ "--with-ssl=openssl" "--disable-nls" "--without-libpsl" ];
+    };
+
+    rsync = pkg {
+      pname = "rsync"; version = "3.3.0";
+      src = { url = "https://download.samba.org/pub/rsync/src/rsync-3.3.0.tar.gz";
+              sha256 = "7399e9a6708c32d678a72a63219e96f23be0be2336e50fd1348498d07041df90"; };
+      deps = [ self.zlib.gcc self.zstd.gcc self.lz4.gcc self.openssl3.gcc ];
+      # bundled popt; skip external xxhash.
+      preConfigure = illumosExt;
+      configureFlags = [ "--disable-md2man" "--disable-xxhash" "--with-included-popt" ];
+    };
+
+    htop = pkg {
+      pname = "htop"; version = "3.3.0";
+      src = { url = "https://github.com/htop-dev/htop/releases/download/3.3.0/htop-3.3.0.tar.xz";
+              sha256 = "a69acf9b42ff592c4861010fce7d8006805f0d6ef0e8ee647a6ee6e59b743d5c"; };
+      deps = [ self.ncurses.gcc ];
+      # illumos math.h hides NAN/isgreater behind __C99FEATURES__.
+      preConfigure = ''
+        export CFLAGS="''${CFLAGS:-} -D__EXTENSIONS__ -D__C99FEATURES__"
+        export CPPFLAGS="''${CPPFLAGS:-} -D__EXTENSIONS__ -D__C99FEATURES__"
+      '';
+      configureFlags = [ "--disable-unicode" "--enable-static" ];
     };
 
     # ---- INTERPRETERS (highest leverage) -----------------------------------

@@ -46,7 +46,10 @@ try: print(m.version(sys.argv[1]))
 except Exception: print("0")
 EOF
 )
-  named="/var/tmp/solnix-${TAG}-${safe}-${ver:-0}"
+  # Plain store name <pname>-<version>, NO solnix-/illumos- prefix (corrected
+  # convention: pkgs.solnix.* -> store name has no distro prefix; the interpreter
+  # tag py39/py313 IS part of pname to disambiguate per-interpreter builds).
+  named="/var/tmp/${TAG}-${safe}-${ver:-0}"
   [ -e "$named" ] && named="$named.$$"
   cp -a "$d" "$named"
   # Precompile .pyc IN the dir first, and verify import here — BEFORE nix-store
