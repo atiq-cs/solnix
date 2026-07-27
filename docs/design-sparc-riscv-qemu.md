@@ -1022,3 +1022,165 @@ progress — it eliminates the entire OpenBIOS-side solution space (flushw AND
 trap-isolation) and localizes the fix to a narrow, regression-sensitive QEMU
 target/sparc spill-accounting change. DETERMINISTIC SMF 95/95 = 0/4; the enabler
 loop (toolchain + swappable blob) remains DONE and reproducible.
+
+## S3 attempt 4 — PATH B (QEMU target/sparc window fix) — the "narrow accounting bug" is REFUTED by boot-trace evidence: QEMU's v9 window model is spec-correct; the failure is a timing race in the CIF/kernel-trap-table interaction (2026-07-27)
+
+Status: **QEMU window-register emulation AUDITED end-to-end and INSTRUMENTED
+with a boot-trace; the S3-1/2/3 hypothesis of a "narrow off-by-one / wrong-
+direction spill/fill accounting bug" is DISPROVEN.** Every window-accounting
+path in `target/sparc/win_helper.c` + `int64_helper.c` matches the SPARC v9
+spec exactly (proven by a 100k-op model check AND a 29.8M-op boot-trace). The
+real defect is a **timing-sensitive register-CONTENTS corruption** on the
+OpenBIOS CIF-return path, not a wrong accounting field. A single-line surgical
+accounting patch therefore does NOT exist. DETERMINISTIC SMF 95/95 = **0 of 10**
+(stock qemu, pristine blob) — still 0, but now with a decisive, evidence-backed
+re-diagnosis that closes the "just fix the off-by-one" avenue.
+
+All work on the dev-box (floki), DETACHED (nohup -> per-run log, timeboxed,
+polled, killed — never an interactive console held). Assets: solnix.io
+`archive/sparc/` + local `~/ws/solnix-archive/sparc/` ONLY (no AWS S3/ouch).
+Not git-committed. No "ponytail". Append-only.
+
+### S3-4.1 QEMU source obtained
+nixpkgs `qemu.src` = qemu 10.1.5 (matches the working sun4u qemu; host 11.0.2
+is worse per prior passes). Already realised in the store at
+`/nix/store/5cp2l2c344w5qf8b31fqnysscg1l2ylc-qemu-10.1.5.tar.xz`. Extracted
+`target/sparc/{win_helper,int64_helper,ldst_helper,mmu_helper,translate}.c` +
+`cpu.{c,h}` into `artifacts/sparc-s3/qemu-src/`.
+
+### S3-4.2 Full audit of the window-register model — SPEC-CORRECT on every path
+QEMU keeps `env->cwp` in **V8 order**; guest `%cwp`(V9) = `nwindows-1-cwp8`
+(`cpu_get_cwp64`). Checked against SPARC v9 §6.4 / §7.5.2.1 / §6.4.3:
+- **cwp arithmetic** (`helper_save`/`helper_restore`, and the spill/fill trap
+  targets in `sparc_cpu_do_interrupt`): the V8-internal transforms are the
+  exact reverse of the V9 spec, so guest-visible `%cwp` is correct.
+  `analysis/cwp_model_check.py` runs 100k random {save,restore,spill,fill} ops
+  through BOTH a pure-V9 reference and QEMU's V8-internal formulas and asserts
+  the guest `%cwp` is identical — **NO DIVERGENCE**.
+- **spill/fill trap-TYPE** (`TT_SPILL|...(wstate)` for otherwin==0 and the
+  `TT_WOTHER|((wstate&0x38)>>1)` other-window case): matches v9 exactly;
+  verified against a live trap (wstate=0x76 otherwin=6 -> tt=0xB8).
+- **SAVED/RESTORED accounting** (`helper_saved`/`helper_restored`): matches v9
+  §6.4.3 exactly.
+- **`cleanwin`**: varies (2/5/6/7; <6 half a million times in the trace) ->
+  clean-window traps fire; not stuck.
+- **`cpu_set_cwp` wrap-register memcpy** (the %o/%i register-file overlap at
+  the top window): symmetric, round-trips for adjacent save/restore AND for
+  arbitrary `wrpr %cwp` jumps.
+- **`cpu_change_pstate` global-bank switch** (AG/MG/IG; sun4u `TI-UltraSparc-IIi`
+  has neither `CPU_FEATURE_GL` nor `HYPV`): saves old bank / loads new only on
+  selector change; nested spills (both -> AG) correctly share AG.
+- The window-COUNT invariant `cansave+canrestore+otherwin = nwindows-2 = 6`
+  HOLDS through the entire 29.8M-op trace, including at the panic.
+
+There is no wrong accounting field to patch. This overturns the S3-1/2/3
+"reversed-%cwp / off-by-one" hypothesis (the OpenBIOS `CWP_DIRECTION` macro
+"papering over" a QEMU bug): QEMU's model is not reversed and not off-by-one.
+
+### S3-4.3 Instrumented qemu + boot-trace (the evidence)
+Built an instrumented `qemu-system-sparc64` 10.1.5 via a nix override
+(`build-qemu-sparc64.nix` + `instrument-win-trace.patch`, minimal +
+sparc64-only, ~12 min) that logs every accounting op
+(TRAP_SPILL/TRAP_FILL/SAVED/RESTORED/WRCWP) with
+`tl/cwp8/cwp9/cansave/canrestore/otherwin/cleanwin/wstate/%sp/%fp/pc` when
+`SPARC_WIN_TRACE=1`. Boot-traced the pristine blob to the panic (29.8M ops;
+raw 3.7G elided, `trace-slices/` kept). Cross-checked with a stock-qemu
+`-d int` register-dump trace. Findings:
+- **The failure is TIMING-dependent, not accounting-dependent.** The SAME
+  pristine blob under stock qemu panics with VARYING trap types run-to-run
+  (see S3-4.5 tally: type=34 unaligned / type=4e / type=1 / TL2 / "bad register
+  window" / "kern_postprom: not owner", and SMF progress scattered 14..22/95).
+  Under `-d int` timing it reached **SMF 2/95** — PAST the usual panic point.
+  This is a race, confirming the S3-1 read.
+- **The corruption is in register CONTENTS, not counts.** The panic backtrace
+  is in the CIF (`unix:prom_getproplen+40` <- `promif_postprom` <-
+  `kern_postprom`). After the CIF return a kernel window holds a garbage/zero
+  `%fp` or a pointer that faults (`addr=0x99`), while all window COUNTS remain
+  spec-consistent.
+- **Fatal signature (`trace-slices/S3-4-key-trace.txt`):** after the CIF the
+  kernel reaches `cansave=0 canrestore=0 otherwin=6` with a corrupted register;
+  `die()`'s spill re-faults -> `ptl1_panic` -> the handler's own save re-spills
+  -> an INFINITE spill loop (`WRCWP 0x100732c` <-> `TRAP_SPILL 0x1007474`,
+  13.8M iterations) climbing TL to MAXTL. The frozen state is the RESULT of the
+  upstream contents corruption, not its cause. (PCs resolved with the S3-2
+  sparc64 objdump against `sun4u_unix`; `.text`=0x1000000, OBP CIF=0xffdxxxxx.)
+- **In a surviving run** the SAME handlers spill/fill perfectly through SMF
+  (`trace-slices/S3-4-mmu-trap-tail.txt`: healthy cansave/canrestore cycling).
+
+### S3-4.4 Why a QEMU accounting patch can't land the fix (and what the bug really is)
+S3-3 proved OBP cannot own trap handling while touching kernel memory (the TLB
+wall). S3-4 now proves the complement: QEMU's window accounting is already
+correct, so there is no accounting field to flip. The nondeterminism is a
+genuine **race between the OpenBIOS CIF's manual window walk (raw `wrpr %cwp`
+save/restore of window CONTENTS) and window spill/fill traps that fire on the
+kernel's biased stack during the CIF.** Because the CIF runs with the kernel's
+`%tba` and the kernel's stack (both mandatory — S3-3), a spill/fill that fires
+at the wrong instant during the CIF stores/loads a window to a kernel stack
+slot that is momentarily inconsistent, leaving stale CONTENTS in a window the
+kernel later trusts. Real Sun OBP + real HW have deterministic timing and a
+CIF that is effectively atomic w.r.t. the kernel table; QEMU+OpenBIOS
+approximate it but the race survives. A blind accounting change would risk
+REGRESSING the working (SMF-reaching) path without addressing the race.
+
+Also tested (no rebuild): `-icount shift=auto,sleep=off` to make timing
+deterministic — 0/3 boot (still races on I/O timing). Not a fix.
+
+### S3-4.5 Baseline determinism measurement (stock qemu 10.1.5, pristine blob)
+`s3-boot-pristine-multi.sh baseline-stock 10 300`, `boot cdrom -v`, detached:
+
+| runs | 95/95 boots | outcomes (distinct = 8/10) |
+|------|-------------|----------------------------|
+| 10   | **0**       | PANIC-other x3, type=4e, type=34, "bad register window", SMF 14/95, 22/95, 15/95, 19/95 |
+
+Pure nondeterminism, 0 full boots — the honest current state. (icount-auto: 0/3.)
+
+### S3-4.6 Artifacts (all in `artifacts/sparc-s3/`, archived to solnix.io + local)
+- `instrument-win-trace.patch` — the window-op tracer (applies -p1 to qemu
+  10.1.5; gated by env `SPARC_WIN_TRACE`, zero-cost otherwise). sha256 5d501c00…
+- `build-qemu-sparc64.nix` + `patches-active` — nix override to rebuild
+  qemu-system-sparc64 10.1.5 with target/sparc patches (minimal, sparc64-only,
+  ~12 min). This is the PATH B build harness — a future real fix drops its
+  patch into `patches-active`. sha256 53edb293…
+- instrumented qemu (gcrooted): `result-qemu-trace` ->
+  `/nix/store/g9vzlkbk424nyrmf36g93g4bbmlbv6w5-qemu-10.1.5`.
+- `analysis/cwp_model_check.py` — the 100k-op v9-vs-QEMU model proof (passes).
+- `analysis/S3-4-findings.txt` — the full audit write-up.
+- `trace-slices/S3-4-key-trace.txt` — the CIF-return -> fatal spill-loop slice.
+- `trace-slices/S3-4-mmu-trap-tail.txt` — a healthy SMF-phase trap trace.
+- `trace-slices/trace-pristine-win.sample.zst` — sampled 29.8M-op trace.
+- `s3-trace-boot.sh` / `s3-boot-pristine-multi.sh` / `s3-icount-try.sh` /
+  `s3-mmu-trace.sh` — the detached harnesses. `REBUILD-S3-4.md` — resume recipe.
+- `logs/baseline-stock-det.log`, `logs/icount-auto.log`, `logs/mmu-console.log`.
+- **solnix.io** `archive/sparc/sparc-s3-4-qemu-winfix.tar.zst` (90 KiB, sha256
+  `2e91d33df5db2df4f761023ea5717780e24b233d19f4adaf82a365a6b865cdb1`) + `.sha256`
+  — fetch-back verified (sha matches, valid zst). **local**:
+  `~/ws/solnix-archive/sparc/`. solnix.io ONLY, no S3/ouch.
+
+### S3-4.7 Next step (precise, for S3-5)
+The "narrow accounting bug" premise is closed; the remaining PATH B work is
+harder and different:
+1. **Make the CIF window walk atomic w.r.t. traps.** The race is the OBP manual
+   `wrpr %cwp` walk interleaving with kernel spill/fill. A candidate QEMU
+   change: detect the CIF's RESET_CPU_WINDOW_STATE->C->RESTORE bracket and
+   ensure window spill/fill during it is replayed atomically (hard; needs a
+   marker QEMU can see — e.g. a magic ASI or a %tba/%pc range gate). This is
+   speculative and regression-sensitive; instrument first with the S3-4 tracer
+   to catch the exact interleaving that diverges between a booting and a
+   panicking run (diff two full traces at the first divergent op).
+2. **Or accept nondeterminism for interim CI** and boot from a Sun-VTOC DISK
+   image (bypasses more of the CIF/FCode path than the CD) — the S1b alternative
+   never tried; may sidestep the racy getprop-heavy CD path.
+3. **Or upstream it**: this is a real, reproducible qemu target/sparc + OpenBIOS
+   sun4u interaction bug (contents race on CIF return). The S3-4 tracer patch +
+   the two trace slices + the 0/10 determinism data are a complete,
+   upstream-contributable bug report for qemu-devel / OpenBIOS.
+4. Keep the getproplen guard (#3, S3-2) — real latent bug in any OpenBIOS blob.
+
+Honest bottom line: S3-4 did NOT achieve a deterministic boot (0/10, unchanged),
+but it produced a decisive re-diagnosis backed by a 100k-op model proof and a
+29.8M-op boot-trace: QEMU's SPARC v9 window model is spec-correct, so the
+originally-scoped "surgical off-by-one accounting patch" cannot exist. The true
+bug is a timing race in the OBP-CIF/kernel-trap interaction — deeper than a
+patch to a single win_helper.c field, and now precisely characterized with
+runnable evidence + a ready PATH B rebuild harness for the real (atomicity/
+race) fix or an upstream report.
