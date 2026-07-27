@@ -970,3 +970,150 @@ x86_64 boot AMI.
 - **Method:** service-config fix (path a) — inject libxml2 (the real root cause)
   + disable the maintenance-prone services. No `make illumos` needed to hit the
   gate, though the cross gcc is ready for the pkg-assembled polish route.
+
+---
+
+## 10. A6 progress (full nightly build + pkg-style image + SSH into the guest)
+
+Status: **A6 SUCCESS — SSHed from the host into a running aarch64 illumos guest
+at `svc:/milestone/multi-user-server:default`.** This is the aarch64 equivalent
+of the x86_64 boot-AMI + ssh login: the point aarch64 becomes a USABLE target.
+The image is built from a FULL `make illumos` nightly world proto + the genuinely
+EXTERNAL libs (libxml2/openssl from braich) + a full aarch64 OpenSSH — no A5
+load-bearing hand-injection into a restored proto.
+
+Done on ouch (persistent, us-east-2), host **ouch-w7-8** (3.142.68.35,
+`solnix-oi-build`, i86pc). Every long host op DETACHED (nohup -> logfile, poll);
+never blocked SSH across the multi-hour build or a qemu boot (console -> socket/
+logfile, polled). Assets: solnix.io cache + local host disk ONLY — no AWS S3/ouch
+storage. Artifacts under `artifacts/aarch64-a6/`.
+
+### 10.1 `make illumos` — world CLEAN, IPS packaging blocked
+
+Ran the arm64-gate nightly directly (`nightly -T aarch64 env/aarch64`,
+`NIGHTLY_OPTIONS=-FnCDAmprt`) via `artifacts/aarch64-a6/aa-run-nightly.sh`, using
+the cross gcc (`build/cross/bin/aarch64-unknown-solaris2.11-gcc`, GCC 14.3.0) and
+the completed `make setup` (all stamps: sysroot, binutils-gdb, sgs, boot-gcc,
+gcc, ATF, dtc, barn). Bypassed the u-boot host-tool setup stamps: `make illumos`
+depends on `u-boot`/`u-boot-qemu`/`u-boot-rpi4` stamps, but u-boot's HOST mkimage
+fails to compile on the host's **OpenSSL 3** (`EVP_MD_CTX_create/free` deprecated
+-> `image-host.c` error). The nightly OS build does NOT need u-boot, and QEMU boot
+uses the proven A4 `/aarch64/out/u-boot-qemu.bin` (Debian u-boot-qemu 2025.01), so
+running nightly directly is correct.
+
+Result (`artifacts/aarch64-a6/nightly-mail_msg.txt`):
+- **World build CLEAN** — "Build errors (aarch64/DEBUG)" section EMPTY. Produced
+  a FULL aarch64 world proto (gate rev `a808613930`): the aarch64 kernel + full
+  userland, and crucially `usr/sbin/svccfg`, `lib/svc/bin/svc.configd`, svc.startd,
+  init, manifest-import, 163 SMF manifests, `network/ssh.xml` manifest.
+- **IPS packaging phase FAILED**: `ModuleNotFoundError: No module named 'pkg'`.
+  The packaging step's `validate_pkg`/`protocmp` run under `python3.13 -Es`, but
+  OI's IPS `pkg` python module ships for python3.9 only (`/usr/lib/python3.9/
+  vendor-packages/pkg`), not 3.13 (the version the gate/braich sysroot pins). So
+  NO nightly IPS repo (`packages/aarch64/nightly/repo.redist`) was produced, and
+  `pkg image-create` from a nightly repo was not possible on this host. This is a
+  host-toolchain skew (OI IPS not ported to py3.13), not a gate/arch failure — the
+  world proto itself is complete and clean.
+
+### 10.2 Image assembly — full proto + external libs + OpenSSH (brief path b)
+
+Since the IPS repo phase was blocked, assembled the image the equivalent way that
+`pkg image-create` from nightly+braich would (`aa-make-image-a6.sh` +
+`aa-a6-resume.sh` + `aa-a6-relay.sh`): the root FS is the FRESH nightly world
+proto, and ONLY the genuinely-external (non-gate) pieces are added:
+
+1. **External libs** into `/lib`: `libxml2.so.16` (the A5 root cause — svccfg
+   NEEDs it), `libcrypto.so.3` + `libssl.so.3` + `libz.so.1` + `libgcc_s.so.1` +
+   `liblzma.so.5` (OpenSSH's NEEDED closure) — from the OmniOS braich sysroot /
+   the braich aarch64 openssh image.
+2. **Full aarch64 OpenSSH** (OpenSSH_10.3, from braich `network/openssh-server`
+   pkgrecv'd into an aarch64-variant image): `sshd`, the OpenSSH-10 split helpers
+   `sshd-session`/`sshd-auth`, `ssh`, `ssh-keygen`, `sftp-server`, `ssh-keysign`,
+   ... + the MATCHING `/lib/svc/method/sshd` + `network/ssh.xml` manifest +
+   `sshd_config` (the gate proto ships a stub method calling `/usr/lib/ssh/sshd`;
+   the braich method calls `/usr/sbin/sshd` where the OmniOS binary lives).
+3. **Config**: root password (`solnix`) via py3.9 `crypt` (host openssl 1.0.2 has
+   no `passwd -6`; py3.13 dropped `crypt`); `PermitRootLogin yes` +
+   `PasswordAuthentication yes` (dev image); `/var/empty` (OpenSSH privsep dir —
+   without it sshd dies `Missing privilege separation directory: /var/empty`);
+   persistent NIC autoconfig `/etc/hostname.vioif0` = `dhcp`.
+4. **A5 service-config carried**: full `name_to_major` (235) + `driver_aliases`
+   (17) tables (the proto ships a 4-entry stub); a site profile enabling
+   `network/ssh` and disabling rpc/bind + the maintenance-prone peripherals.
+
+Laid as a GPT disk (`/aarch64/out/illumos-a6.img`): ESP (pcfs) with
+`loader64.efi -> bootaa64.efi` + ZFS `armpool/ROOT/braich` + swap/dump zvols +
+libbe uuid — the proven A4/A5 recipe. **svccfg/manifest-import/OpenSSH all work
+WITHOUT A5's load-bearing hand-hacks** — the world is a clean nightly proto; only
+the external libs + OpenSSH are added, exactly as the pkg path would assemble them.
+
+### 10.3 The fixes found during boot (root-caused via a console-socket driver)
+
+Booted under `qemu-system-aarch64 -machine virt -bios u-boot-qemu.bin` with
+`-netdev user,hostfwd=tcp::<p>-:22`. Console driven non-interactively over a unix
+socket (`-serial unix:...`, `aa-console*.py`) so the console was never held. Two
+config gaps surfaced and were root-caused + fixed:
+
+1. **sshd `Missing privilege separation directory: /var/empty`** — the gate proto
+   ships no `/var/empty`. FIXED: `mkdir /var/empty` (0755). sshd then starts.
+2. **No route from the hostfwd** — `ifconfig -a` showed only `lo0`; the virtio NIC
+   (`vioif0`) had no IP, so QEMU user-net's hostfwd could not reach sshd (which
+   listens on `0.0.0.0:22`). FIXED: `ifconfig vioif0 plumb; ifconfig vioif0 dhcp
+   start` -> `inet 10.0.2.15` (QEMU user-net DHCP). Baked in persistently as
+   `/etc/hostname.vioif0` = `dhcp` so `network/physical:default` plumbs+DHCPs it
+   at boot.
+
+### 10.4 THE GATE — SSH into the aarch64 guest
+
+From the HOST, `ssh -p <hostfwd> root@127.0.0.1` (pw solnix) reaches the guest's
+OpenSSH_10.3 (`aa-ssh-login.py` pty-drives the host ssh client + password).
+Quoted from the guest (`artifacts/aarch64-a6/a6-ssh-proof-final.log`):
+
+```
+SunOS solnix-aa 5.11 arm64-gate-0-ga808613930 armv8 aarch64 QEMU,virt
+---SVCS-MILESTONES---
+online          9:24:23 svc:/milestone/multi-user-server:default
+---WHOAMI---
+uid=0(root) gid=0(root)
+```
+
+`svcs -x` on the SSH session lists only peripheral non-gating services (rpc/bind
+disabled by profile; dumpadm/sendmail/intrd/hal — the same class as x86_64's
+pre-cleanup remainder). The banner probe returns `SSH-2.0-OpenSSH_10.3` from
+`127.0.0.1:<hostfwd>` = the guest's sshd via the QEMU user-net forward.
+
+### 10.5 Archive (aarch64 boot-AMI equivalent)
+
+`aarch64-a6-sshable-a808613930.img.zst` (116 MB, gate rev `a808613930`), sha256
+`00194b73d321cd9ca44fe46206912c12131f5719e526bd7a4470ee19258d0dc0`:
+- solnix.io: `https://s3.solnix.io/solnix-cache/archive/aarch64/aarch64-a6-sshable-a808613930.img.zst`
+  (+ `.sha256`) — **fetch-verified** from the public URL (sha matches).
+- local: `~/ws/solnix-archive/aarch64/aarch64-a6-sshable-a808613930.img.zst`.
+
+### 10.6 Honest status
+
+- **make illumos:** world build CLEAN — full aarch64 proto (kernel + userland +
+  svccfg/svc.configd + 163 manifests). IPS packaging phase blocked by OI's
+  py3.9-only `pkg` module vs the gate's py3.13; NO nightly IPS repo. So the image
+  was assembled from the full proto + external libs + OpenSSH (brief path b), the
+  pkg-image-create equivalent.
+- **Image with real libxml2 + OpenSSH:** YES — clean nightly world + braich
+  libxml2/openssl + braich aarch64 OpenSSH_10.3. svccfg/manifest-import/OpenSSH
+  work without A5's hand-injection being load-bearing.
+- **Boot to multi-user-server:** YES — u-boot + devicetree + vioblk + ZFS ->
+  `milestone/multi-user-server:default` ONLINE.
+- **SSH into aarch64 solnix:** YES — `ssh -p <fwd> root@127.0.0.1` -> `uname -a`
+  = aarch64, `svcs milestone/multi-user-server` = online, `id` = root. ✅
+- **First-boot note:** the archived image self-reboots once on first boot
+  (boot_archive regen); on the next boot vioif0 auto-DHCPs and sshd comes online.
+  sshd's SMF start can race the NIC DHCP on a cold boot; `svcadm clear network/ssh`
+  brings it online if it lands in maintenance (a boot-ordering polish item, not a
+  build/arch gap). The `/var/empty` + NIC-dhcp fixes are baked into the archive.
+- **The RIGHT completion note (from A5 §9.6):** the ideal is `make illumos` ->
+  nightly IPS repo -> `pkg image-create`. The world build is there; the only
+  remaining blocker to the pure pkg path is porting OI's IPS `pkg` module to
+  python3.13 (or running the packaging phase against a py3.13 with the pkg module).
+  The A6 image is functionally the pkg-assembled result (clean world + external
+  libs + OpenSSH), reached by direct assembly because the IPS repo phase was
+  blocked on that host-python skew.
+
