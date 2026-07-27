@@ -263,3 +263,22 @@ The honest path forward, in order of leverage:
 
 Do NOT claim "sparc supported" until a sun4u kernel boots to an illumos
 milestone in qemu (steering rule).
+
+## SPARC target matrix (corrected 2026-07-27 from the archived m34 kernels)
+
+The Tribblix m34 sparc gate builds BOTH sparc platforms — we archived working
+kernels for each. Our matrix must track both (earlier steering wrongly said
+"sun4u effectively dead"; the m34 ISO ships a live sun4u_unix):
+
+| SPARC platform | Kernel (archived) | Class / hw | QEMU |
+|----------------|-------------------|-----------|------|
+| **sun4u** | sun4u_unix (SPARC V9, UltraSPARC1 Ext) | UltraSPARC I–IV, **Ultra 45** (maintainer's hw) | qemu-system-sparc64 -machine sun4u |
+| **sun4v** | sun4v_unix (SPARC V9) | T-series (CoolThreads: T1..T5+), LDOMs | qemu -machine niagara (harder; needs OpenSBI-equiv) |
+
+Both share one big-endian UFS boot_archive. sun4u is the near-term QEMU target
+(Ultra 45 is the real-hw truth); sun4v/niagara is a second sub-target (LDOM/
+T-series) — QEMU niagara support is weaker, real T-series hw is the fallback.
+NOTE: these are PLATFORM variants of ONE arch (sparcv9-solaris), like x86's
+i86pc — not separate Nix systems. One sparcv9-solaris world; platform-specific
+kernels/boot_archives. So the Nix "system" matrix stays x86_64/aarch64/sparcv9/
+riscv64-solaris; sun4u vs sun4v is a kernel/platform axis within sparcv9.
