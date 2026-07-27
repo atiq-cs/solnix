@@ -625,3 +625,168 @@ against the trusted pubkey, its 4-path closure (sys/rtld/ld/libc) resolves.
    is NOT wired yet — it needs the compiler half (blocker 1). The seed FOD +
    world slices + lib.systems are the pieces that DON'T need the cross gcc, and
    those are all done and cached.
+
+---
+
+## 8. A4 progress (bootable aarch64 illumos guest under QEMU virt)
+
+Status: **A4 SUCCESS — a booting aarch64 illumos guest.** From the A3-restored
+proto (kernel + world, gate rev 73466454) we assembled a bootable ZFS-root QEMU
+disk and booted it under `qemu-system-aarch64 -machine virt`. It boots the
+aarch64 kernel all the way through **krtld → genunix → SMP (2 cpu online) →
+virtio-mmio/vioblk attach → ZFS root mount → devfsadm → SMF manifest-import →
+milestone/single-user → an interactive console maintenance prompt.** This far
+exceeds the A4 bar ("krtld / any recognizable milestone / a panic after krtld").
+
+Done on ouch (persistent, us-east-2), host **ouch-w7-8** (3.142.68.35,
+i-02d180655d42f2d41) — the host that already had the A3 proto restored. Every
+long host op ran DETACHED via `scripts/oi-job.sh` (no blocking SSH). Assets:
+solnix.io cache + local host disk ONLY — no AWS S3/ouch storage. Artifacts under
+`artifacts/aarch64-a4/`.
+
+### 8.1 Image assembly (`scripts/aa-make-image.sh`) — DONE
+
+The harness `tools/build_image.sh` populates the root via `pkg image-create`
+from the nightly pkg repo + OmniOS braich repo — NEITHER was archived (only
+`proto/root_aarch64`). So we source the root **directly from the proto** and
+adapt only the disk-laying half of `build_qemu.sh`:
+- `cp -a proto/root_aarch64` into a scratch ZFS dataset (`rpool/braich_image`).
+- skeleton `/dev` from the harness `tools/dev.tar`; `reconfigure`; nodename
+  `solnix-aa`; SMF profile symlinks (generic/platform/name_service/inetd).
+- SMF repository seeded from the proto's `lib/svc/seed/global.db` (a fresh
+  `svccfg import` needs the onbld `svc.configd`, which is not in the restored
+  proto; the seed DB + first-boot manifest-import is enough to reach a milestone).
+- boot config `/boot/conf.d/00-aarch64-defaults.conf`: serial console, verbose,
+  impl-arch bootfile — verbatim from the harness.
+- `boot/solaris/bin/create_ramdisk -R $ROOT -p aarch64 -f cpio` → the CPIO
+  `boot_archive` the loader loads.
+- `zfs send` the staged root → `zfs receive` into `armpool/ROOT/braich` on a
+  `lofiadm`-attached 8 GB GPT disk (`zpool create -B` = ESP+pool), `bootfs` set,
+  libbe uuid, swap+dump zvols — the `build_qemu.sh` recipe.
+- ESP (pcfs FAT32): `loader64.efi` → `EFI/BOOT/bootaa64.efi`.
+Result: `/aarch64/out/illumos-disk.img` (248 MiB actual, 8 GiB sparse).
+
+### 8.2 QEMU boot — the firmware/devicetree lesson
+
+**EDK2/AAVMF (first attempt) FAILS at ACPI.** `-bios edk2-aarch64-code.fd`
+presents ACPI firmware tables + an SBBR platform (`ARMH,sbbr`). The port targets
+devicetree (IPD 24), so `dboot` stalled: `Firmware Tables: ACPI` → `dboot: ACPI
+kernel support is a work in progress`. (`artifacts/.../qemu-boot-edk2-milestones.txt`.)
+
+**U-BOOT (winning path) provides devicetree.** `-bios u-boot-qemu.bin` (the
+harness's own approach, `qemu-setup/run.sh`) forwards QEMU virt's DTB to the
+illumos loader → platform `QEMU,virt`, `Firmware Tables: FDT` → dboot proceeds.
+u-boot for `qemu_arm64` was fetched from the Debian `u-boot-qemu` 2025.01 package
+(same version the harness pins) to decouple the boot from the still-building
+cross toolchain; the cross build's own `u-boot-qemu` target produces the
+equivalent. Boot command (GICv2 = virt default; do NOT set gic-version=3):
+```
+qemu-system-aarch64 -nographic -machine virt -accel tcg,thread=multi \
+  -m 4096 -smp 2 -cpu cortex-a72 -bios u-boot-qemu.bin \
+  -netdev user,id=net0 -device virtio-net-device,netdev=net0 \
+  -device virtio-blk-device,drive=hd0 \
+  -drive file=illumos-disk.img,format=raw,id=hd0,if=none
+```
+(`scripts/aa-qemu-boot-uboot.sh`; QEMU 11.0.2 installed on the host via `pkg`.)
+
+### 8.3 The name_to_major + driver_aliases fix (`scripts/aa-fix-ntm.sh`)
+
+The proto-only image hit two device panics that the harness's `pkg install` path
+avoids (pkg assembles `/etc/name_to_major` + `/etc/driver_aliases` from the
+driver packages; the gate proto ships a 4-entry `name_to_major` stub + 1-entry
+`driver_aliases`):
+
+1. `panic: Couldn't find major number for 'rootnex'` — FIXED by generating a
+   full `name_to_major` covering all **235** proto driver binaries, reusing the
+   (arch-independent) major numbers from the amd64 host's own `/etc/name_to_major`
+   and assigning fresh majors to the arm-only drivers (rootnex, gictwo, arm_gtmr,
+   ns16550a, simple-bus, devfdt, efifb, ...).
+2. `Cannot mount root on /pseudo/lofi@1:b ... panic: vfs_mountroot` — the
+   `vioblk` virtio-blk driver wasn't attaching, so ZFS couldn't see the disk and
+   fell back to a lofi default. FIXED by adding the virtio-mmio `driver_aliases`:
+   `viommionex "virtio,mmio"` (the DT compatible), plus the child bindings
+   `vioblk "virtio-mmio,1,blk"` / `vioif "virtio-mmio,1,net"` (from
+   `viommionex.conf`'s `device-N-compat`). With those, all 32 `viommionex` nodes
+   enumerate, `vioblk`/`blkdev` attaches, and ZFS finds `armpool` on
+   `/virtio_mmio@a003c00/vioblk@a003c00/blkdev@0,0:b`.
+
+These are IMAGE-CONFIG gaps, not kernel/arch gaps — the real fix is to build the
+image the harness way (`pkg image-create` from the nightly repo that the cross
+build's `make illumos` produces). The manual tables are a valid boot probe that
+proved the kernel + drivers + ZFS root all work on aarch64.
+
+### 8.4 How far it boots (the milestones, in order)
+
+`artifacts/aarch64-a4/qemu-boot-full.log` (cleaned console) +
+`qemu-boot-uboot-milestones.txt` (annotated):
+
+    U-Boot 2025.01 -> efi_mgr -> loader64.efi -> unix + boot_archive
+    Firmware Tables: FDT  (devicetree)   PSCI 1.1, Timer 62.5MHz, EL1
+    module /kernel/aarch64/genunix ...   (krtld linked genunix)
+    illumos Version arm64-gate-0-g73466454e9 64-bit   (kernel banner)
+    mem = 4194304K (4 GB)
+    viommionex0..31 at root              (all 32 virtio-mmio nexus nodes)
+    blkdev0 is /virtio_mmio@a003c00/vioblk@a003c00/blkdev@0,0 online
+    cpu1 initialization complete - online   (SMP: 2 cpu)
+    root on armpool/ROOT/braich fstype zfs  (ZFS ROOT MOUNTED on virtio-blk)
+    Configuring devices.   Hostname: solnix-aa
+    [ svc.startd graph: network/*, system/filesystem/*, milestone/*,
+      system/manifest-import, system/device/local, ... ]
+    "The system has updated the cache of files (boot archive)"
+    network/rpc/bind:default -> maintenance (proto-only image, expected)
+    [ milestone/single-user:default starting ]
+    Enter user name for system maintenance (control-d to bypass):  <-- LOGIN PROMPT
+
+### 8.5 Exact stop point + next step
+
+**Stop point:** the boot reaches the **single-user milestone + an interactive
+console maintenance login prompt**. It stops short of multi-user-server because
+`network/rpc/bind` (and `inetd-upgrade`) go to *maintenance* — a known rough
+edge for this port (the README/§1.4: rbac/inetd-upgrade/update-man-index "almost
+always time out"), aggravated by our proto-only image lacking the pkg-assembled
+service config. This is a service-config gap, NOT a kernel/arch failure: the
+kernel, SMP, virtio drivers, ZFS root, devfsadm, and the SMF graph engine all
+work on aarch64.
+
+**Next step to multi-user:** build the disk the harness way — run the cross
+build's `make illumos` to produce `illumos-gate/packages/aarch64/nightly/repo.redist`,
+then `pkg image-create` from that repo (+ OmniOS braich) so rpc-bind/config
+services get their full config and `/etc/name_to_major`+`driver_aliases` are
+assembled by pkg (not by our probe). Alternatively, disable/patch the
+maintenance-bound services for a minimal single-user dev image. Either way the
+boot path (u-boot + devicetree + loader64.efi + vioblk + ZFS) is proven.
+
+### 8.6 Cross toolchain (`scripts/aa-cross-build.sh`) — IN-FLIGHT
+
+The cross gcc / `$CROSS` (the A4-blocker-1 from §7.5) is being rebuilt from the
+richlowe/arm64-gate harness (cloned fresh; the numa proto archive had only
+`proto/`, not the harness/`$CROSS`). Progress on ouch-w7-8, detached job
+`aa-cross`:
+- `make download` COMPLETE (gate 1.21 GB, gcc, binutils-gdb, u-boot, ATF, dtc,
+  perl, OmniOS braich sysroot).
+- `make setup`: **`sysroot-stamp`, `binutils-gdb-stamp`, `sgs-stamp` DONE** — the
+  cross binutils (`aarch64-unknown-solaris2.11-{as,ld,gdb,ar,elfedit,...}`), the
+  Solaris link-editor (sgs), and the aarch64 sysroot are BUILT and on disk at
+  `/aarch64/gate/arm64-gate/build/cross/bin/`. **boot-gcc is compiling now**
+  (then the full `gcc` — the multi-hour GCC compile).
+- Host-skew fixes baked into the recipe (the expected unmerged-fork friction):
+  Sun `make` (not gmake — the Makefile is deliberately GNU-make-hostile); host
+  `python-313` to match the braich sysroot; `library/mpfr`+`library/mpc` +
+  `GMPINCDIR=/usr/include` (OI puts gmp.h in /usr/include, not /usr/include/gmp
+  like OmniOS — fixed gdb's "requires GMP 4.2+, MPFR 3.1.0+"); `text/texinfo`
+  for `makeinfo` (binutils/gdb .info docs); swig/bison/astdev/illumos-closed.
+- Time-boxed per the brief: the GCC compile is multi-hour; the detached job
+  keeps running. Once `gcc-stamp` lands, `$CROSS/bin/aarch64-unknown-solaris2.11-gcc`
+  gives the compiler half of the seed (unblocking `pkgsCross.aarch64-solaris`)
+  and lets `make illumos` produce a full proto + the nightly pkg repo for a
+  harness-style multi-user image (§8.5).
+
+### 8.7 Honest status
+
+- **Cross toolchain:** IN-FLIGHT — binutils/sgs/sysroot built, boot-gcc/gcc
+  compiling (detached). Not yet a working `aarch64-unknown-solaris2.11-gcc`.
+- **Image assembled:** YES — bootable ZFS-root QEMU-virt disk from the proto.
+- **QEMU boot:** kernel loads → krtld → genunix banner → SMP → vioblk/ZFS root
+  mount → SMF → **single-user milestone + console login prompt.**
+- **Remaining to multi-user:** pkg-assembled service config (needs `make illumos`
+  output) OR patch the maintenance-bound services. Boot path proven.
