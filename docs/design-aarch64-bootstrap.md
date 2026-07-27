@@ -790,3 +790,183 @@ richlowe/arm64-gate harness (cloned fresh; the numa proto archive had only
   mount → SMF → **single-user milestone + console login prompt.**
 - **Remaining to multi-user:** pkg-assembled service config (needs `make illumos`
   output) OR patch the maintenance-bound services. Boot path proven.
+
+---
+
+## 9. A5 progress (single-user → MULTI-USER-SERVER under QEMU virt)
+
+Status: **A5 SUCCESS — the aarch64 illumos guest reaches
+`svc:/milestone/multi-user-server:default` ONLINE under `qemu-system-aarch64
+-machine virt`.** This is the aarch64 equivalent of the x86_64 multi-user-server
+gate (design-make-be.md §5), reached via a SERVICE-CONFIG fix (path a in the
+brief) — no `make illumos` / pkg-assembled image was needed.
+
+Done on ouch (persistent, us-east-2), host **ouch-w7-8** (3.142.68.35,
+i-02d180655d42f2d41) — the A4 host. Every long host op ran DETACHED (nohup +
+short-poll; no blocking SSH across a qemu boot — console captured to a logfile
+and polled). Assets: solnix.io cache + local host disk ONLY — no AWS S3/ouch.
+Artifacts under `artifacts/aarch64-a5/`.
+
+### 9.1 Diagnosis — why the maintenance services failed (the REAL root cause)
+
+The A4 stop point was `network/rpc/bind:default → maintenance` triggering
+"Requesting System Maintenance Mode", parking the boot at the single-user
+maintenance prompt. Inspecting the guest's own logs (mounted the ZFS BE
+read-only on the host and read `/var/svc/log/*`) revealed the ACTUAL cause is
+NOT rpc/bind per se, but a missing external library that breaks `svccfg`:
+
+```
+# /var/svc/log/system-manifest-import:default.log (A4 image)
+ld.so.1: svccfg: fatal: libxml2.so.16: open failed: No such file or directory
+ld.so.1: svccfg: fatal: relocation error: file /usr/sbin/svccfg: symbol xmlFree:
+         referenced symbol not found
+/lib/svc/method/manifest-import[454]: import_manifests: line 232: 100155: Killed
+... apply_profile ... svccfg_apply ... Killed
+WARNING: svccfg apply /etc/svc/profile/generic.xml failed
+```
+
+`svccfg` NEEDs `libxml2.so.16`, and the **gate proto ships NO libxml2** —
+libxml2 is an EXTERNAL library (from the OmniOS `braich` sysroot / `pkg install`,
+not built by the illumos gate). So EVERY `svccfg` invocation died on the guest →
+`manifest-import` could import NOTHING and apply NO profiles → every service kept
+its manifest-default enabled state → `rpc/bind` started from its default-enabled
+state, `rpcbind` exited 1, went to maintenance, and svc.startd requested System
+Maintenance Mode.
+
+This is EXACTLY the x86_64 `externalLibs` gotcha (design-make-be.md line 103:
+"`libxml2.so.16` (svccfg + svc.startd NEED it) … Without libxml2, manifest-import
+(svccfg) fails"). It manifested differently on aarch64 only because the symptom
+(rpc/bind → maintenance) masked the upstream cause (svccfg dead).
+
+`svcs -xv` NEEDED-closure check on the proto-only image confirmed exactly TWO
+missing libs across the SMF/init binaries: **`libxml2.so.16`** (the killer) and
+`libfmevent.so.1` (a false positive — it lives in the proto at `/lib/fm/`, found
+via the fm library path; svc.startd ran fine).
+
+### 9.2 The fix (`artifacts/aarch64-a5/aa-fix-a5c.sh`, `aa-add-mus-diag.sh`)
+
+Two prongs, both service-config (no rebuild):
+
+1. **Inject the missing external libs.** Copy `libxml2.so.16` (+ `libgcc_s.so.1`,
+   its only non-proto NEEDED lib) from the cross build's OmniOS braich sysroot
+   (`/aarch64/gate/arm64-gate/build/sysroot/lib/`) into the image `/lib`. libxml2
+   NEEDs `libm.so.0` (proto) + `libgcc_s.so.1` (injected) + `libc.so.1` (proto).
+   With libxml2 present, **`svccfg` runs on the guest → manifest-import imports
+   all 165 manifests and applies profiles cleanly** (verified: the A5
+   manifest-import log has ZERO svccfg/libxml2/Killed errors).
+
+2. **Disable the maintenance-prone services** (mirrors x86_64 design-make-be.md
+   gotcha #16 site-profile). A `/etc/svc/profile/site/solnix-a5.xml` site profile
+   + `general/enabled=false` in the seed `repository.db` (edited offline with the
+   HOST `svccfg` via `SVCCFG_REPOSITORY` — the SMF repo is SQLite, arch-
+   independent) disable: `network/rpc/bind` (rpcbind exits 1 on this proto),
+   `network/inetd-upgrade`, `system/rbac`, `system/update-man-index` (the README
+   "almost always time out" trio), plus the peripheral maintenance set
+   `system/dumpadm` (savecore can't open the dump device node), `system/intrd`
+   (restarts too quickly), `network/sendmail-client`+`system/fm/smtp-notify` (no
+   `smmsp` user), `system/hal` (needs dbus), `network/ssh` (no sshd binary in the
+   proto — see 9.5). NONE are `multi-user-server` dependencies
+   (`multi-user`'s rpc/bind dep is `optional_all`).
+
+Belt-and-suspenders also patched `create_default_instance enabled='false'` in the
+offending manifests and the `rpc/bind` enable in `generic_limited_net.xml` (=
+`generic.xml`). The load-bearing fix is #1 (libxml2); #2 keeps the peripherals
+off `svcs -x`.
+
+Also carried: `find $IMGROOT -type d ! -perm -u+w -exec chmod u+w` (the proto
+ships dirs 0555; x86_64 gotcha #7) and two first-boot diagnostic transient
+services (`site/solnix-a5-diag` gated on `milestone/multi-user`, `site/solnix-mus-diag`
+gated on `milestone/multi-user-server`) that dump `svcs -x` + the milestone
+states to `/var/*.txt` on the ZFS root — so the result is read AFTER the boot by
+mounting the disk, WITHOUT holding the console.
+
+### 9.3 THE GATE — definitive evidence
+
+`site/solnix-mus-diag` fires only when `milestone/multi-user-server` comes
+ONLINE; its output file (`artifacts/aarch64-a5/solnix-mus-diag.txt`), captured
+from the guest ZFS root:
+
+```
+=== solnix A5 MULTI-USER-SERVER diag Mon Jul 27 07:00:49 PDT 2026 ===
+SunOS solnix-aa 5.11 arm64-gate-0-g73466454e9 armv8 aarch64 QEMU,virt
+--- the three milestones ---
+STATE          STIME    FMRI
+online          7:00:23 svc:/milestone/single-user:default
+online          7:00:41 svc:/milestone/multi-user:default
+online          7:00:45 svc:/milestone/multi-user-server:default   <- THE GATE
+--- online service count ---
+62
+```
+
+The console log (`artifacts/aarch64-a5/qemu-console-a5.log`) shows the clean
+cascade with **NO "Requesting System Maintenance Mode"** (grep count = 0, vs A4
+which had it): manifest-import (165) → `milestone/single-user` →
+`milestone/multi-user` → `milestone/sysconfig` → `system/console-login` →
+`solnix-aa console login:` prompt.
+
+### 9.4 `svcs -x` state (the peripheral remainder)
+
+At the multi-user-server snapshot, `svcs -x` lists only peripheral services, none
+of which gate the milestone (identical in character to the x86_64 pre-T2.2 "5
+peripheral services" state):
+
+- `network/rpc/bind`, `system/dumpadm`, `network/routing/ndp` — **disabled** by
+  the site profile (clean; "Disabled by an administrator").
+- `network/ssh` — maintenance: no `sshd`/`ssh-keygen` binary in the proto (9.5).
+- `system/intrd`, `network/sendmail-client` — maintenance (restart-too-quickly /
+  no smmsp user); disabled in the site profile on the final image.
+- `system/hal` — offline (needs `svc:/system/dbus`, absent).
+- `network/routing-setup`, `site/solnix-*-diag` — transient, "start method
+  running" at snapshot time; all completed status 0 seconds later (their logs
+  confirm), which is why multi-user-server went online at 07:00:45.
+
+A follow-up image (site profile extended to disable dumpadm/intrd/sendmail/
+smtp-notify/hal/ssh) drives `svcs -x` toward the x86_64-clean state; those
+services are all non-gating peripherals.
+
+### 9.5 sshd bonus — blocked by the proto (needs the pkg-assembled world)
+
+The BONUS (sshd up + `ssh` in) is NOT reachable on this proto-only image: the
+gate proto ships **no `sshd` binary at all** (only `/lib/svc/method/sshd` and no
+`/usr/sbin/sshd`, `/usr/bin/ssh-keygen`, or `/usr/libexec/sshd-session`). ssh
+fails with `/usr/bin/ssh-keygen: not found` → `$SMF_EXIT_ERR_CONFIG`. OpenSSH on
+illumos comes from `pkg install`, not the gate build. The x86_64 path solved this
+by copying the reference host's whole modern-OpenSSH layout (design-make-be.md
+gotchas #12–#15); the aarch64 equivalent needs the OpenSSH aarch64 binaries from
+the OmniOS braich repo or the harness pkg-assembled image (9.6). Deferred — the
+primary A5 gate (multi-user-server) is met via console.
+
+### 9.6 The "right way" completion route (documented, not required for A5)
+
+The cross gcc IS now finished on ouch-w7-8
+(`/aarch64/gate/arm64-gate/build/cross/bin/aarch64-unknown-solaris2.11-gcc`,
+`(GCC) 14.3.0`, all `make setup` stamps present: sysroot, binutils-gdb, sgs,
+boot-gcc, gcc, u-boot, atf, dtc, barn). The harness-style multi-user image
+(brief path b) is: `make illumos` (nightly -T aarch64) →
+`packages/aarch64/nightly/repo.redist` → `pkg image-create` from that repo (+
+OmniOS braich), which assembles `/etc/name_to_major`, `driver_aliases`, the full
+external-libs (incl. libxml2), rbac/config, and the OpenSSH world CORRECTLY — no
+manual injection. That is slower (a multi-hour `make illumos` + a pkg image
+build) but is the reproducible production path and unblocks sshd. A5 proved the
+service-config path reaches multi-user-server without it; the pkg path is the
+follow-on for a polished, sshd-capable image.
+
+### 9.7 Snapshot
+
+The working multi-user aarch64 image (`/aarch64/out/illumos-disk.img`) is
+archived to solnix.io `archive/aarch64/` + local `~/ws/solnix-archive/aarch64/`
+(see progress.md for the exact rev + sha). This is the aarch64 equivalent of the
+x86_64 boot AMI.
+
+### 9.8 Honest status
+
+- **multi-user-server:** REACHED, ONLINE, quoted from on-target `svcs`. ✅
+- **Login reachable:** YES — `solnix-aa console login:` on the serial console
+  (root, no password on this dev image).
+- **svcs -x:** clean of milestone-gating services; the remainder are peripheral
+  (disabled or missing-binary), matching x86_64's pre-cleanup state.
+- **sshd bonus:** blocked by the proto (no OpenSSH binaries); needs the pkg
+  world (9.5/9.6).
+- **Method:** service-config fix (path a) — inject libxml2 (the real root cause)
+  + disable the maintenance-prone services. No `make illumos` needed to hit the
+  gate, though the cross gcc is ready for the pkg-assembled polish route.
