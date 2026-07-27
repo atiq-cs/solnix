@@ -67,3 +67,14 @@ boot reliably; 32-vCPU (m6i.8xlarge) hangs ~60%. So the fleet default is now
 Proper fix (later): build a solnix-kernel builder AMI (our pit-fixed kernel) so
 any size boots — or rebuild the OI gate host kernel with the pit default. Until
 then: m6i.4xlarge, scale by count.
+
+## Fleet first-boot reliability (observed 2026-07-27)
+
+~37% of freshly-launched builders (17/46 in one batch) come up port-22-filtered /
+SSH-dead — the OI cloud-image first-boot flakiness at scale (metadata-agent IMDSv1
+hang and/or ENA/DHCP race on Nitro). Impact: wasted instances + capacity
+miscount. Handling: (1) launch +30-40% over target and reap the dead (interim);
+(2) fleet capacity = SSH-able count, not launched count; (3) DURABLE: rebuild the
+builder AMI with a hardened first-boot (metadata-shim baked in + a boot settle/
+retry + ENA/DHCP ordering) so first-boot is reliable. Agents MUST skip unreachable
+hosts without blocking (they do). TODO: harden the AMI first-boot (PS-7-adjacent).
