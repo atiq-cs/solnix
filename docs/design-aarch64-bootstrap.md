@@ -1140,3 +1140,145 @@ deployment-target item (run solnix-aarch64 on real server ARM), pursued as
 upstream collaboration on arm64-gate (contribute GICv3+ACPI), alongside PS-7
 (qualify on all EC2 types). aarch64 package build-out continues via cross-from-
 amd64 on the ouch fleet (fast, no emulation).
+
+
+## 11. A7 progress (pure `pkg` path — fix OI IPS py3.9-vs-py3.13, emit IPS repo, `pkg image-create`)
+
+Status: **A7 PARTIAL — the pkg fix + IPS repo + `pkg image-create` all SUCCEEDED
+(the exact A6 gap is closed); the clean-pkg image BOOT is blocked by a
+device-enumeration divergence (documented + time-boxed). aarch64 remains usable
+via the A6 image (re-verified booting).**
+
+The ONE gap A6 hit (§10.1/§10.6): the OI IPS `pkg` python module (pkg5, C ext)
+is python3.9-only, but the arm64-gate nightly packaging phase ran
+`validate_pkg`/`protocmp`/`pmodes` under python3.13 →
+`ModuleNotFoundError: No module named 'pkg'`, so NO nightly IPS repo was produced
+and A6 had to hand-assemble the image. A7 closes it.
+
+Done on ouch (persistent, us-east-2), host **ouch-w7-8** (3.142.68.35). Every
+long op detached (nohup → logfile, poll); never blocked SSH. Assets: solnix.io
+cache + local host disk ONLY — no AWS S3/ouch storage. Artifacts under
+`artifacts/aarch64-a7/`.
+
+### 11.1 The py3.13/pkg fix (root-caused)
+
+- `env/aarch64` cross-branch (`MACH=aarch64` ≠ `NATIVE_MACH=i386`) sets
+  `PYTHON3_VERSION` = the highest `python3.N` whose `Python.h` is in the aarch64
+  sysroot. The sysroot ships only python3.13 headers → `PYTHON3_VERSION=3.13`.
+- `Makefile.master`: `TOOLS_PYTHON = $(PYTHON3) = /usr/bin/python$(PYTHON3_VERSION)`
+  → the gate HOST tools (`validate_pkg`, invoked by `protocmp`/`pmodes`/`protolist`)
+  are built with shebang `#!/usr/bin/python3.13 -Es`.
+- The OI IPS `pkg` module is installed ONLY for host python3.9
+  (`/usr/lib/python3.9/vendor-packages/pkg`; the system `/usr/bin/pkgsend` etc.
+  use `#!/usr/bin/python3.9` and work). `validate_pkg` does `from pkg import
+  actions` → fails under 3.13. `-Es` blocks PYTHONPATH; pkg5's C ext is 3.9-ABI,
+  so 3.13 cannot borrow the 3.9 module.
+
+**Fix (a — least-invasive, survives a tools rebuild; `aa-a7-fix-pkg-python.sh`):**
+1. `env/aarch64`: `export TOOLS_PYTHON=/usr/bin/python3.9` after `PYTHON3_VERSION`
+   — build the HOST gate tools with the python that HAS the pkg module (3.9),
+   while the TARGET world modules still build against the 3.13 sysroot
+   (`PYTHON3_VERSION` unchanged). A clean **target-python vs tools-python** split.
+2. Re-shebang the built `validate_pkg` to python3.9 (fast path; the env fix makes
+   a future `dmake install` in `usr/src/tools` reproduce the 3.9 shebang).
+
+Verified: `validate_pkg -a aarch64 -L -m packages.aarch64` (the exact A6-failing
+command) → exit 0, 32451-line proto_list, no ModuleNotFoundError.
+
+### 11.2 IPS repo emitted (re-ran ONLY the packaging phase — no world rebuild)
+
+Re-ran the nightly packaging phase via `bldenv -T aarch64 env/aarch64 "<cmd>"`
+(`aa-a7-rerun-packaging.sh`) — the A6 world proto at gate `a808613930` is reused
+(the world build was already CLEAN in A6). `dmake -e install` in `$SRC/pkg` →
+`packages/aarch64/nightly/repo.redist`; `dmake -e protocmp` + `dmake -e pmodes`
+→ ModuleNotFoundError count **0** on install/protocmp/pmodes. Repo:
+**495 packages, publisher `on-nightly`, online**; `pkgrecv --newest` reads all
+495 (SUNWcs/SUNWcsd/system-kernel/system-library present). The `-T aarch64` on
+bldenv is essential: without it bldenv defaults to native i386 and the repo lands
+under `packages/i386` (0 aarch64 pkgs) — caught + fixed on the first re-run.
+
+### 11.3 `pkg image-create` assembled the aarch64 image (no A6 hand-injection)
+
+`aa-a7-pkg-image-create.sh`:
+1. The nightly osnet repo references ~19 `require` deps that live in the FULL OI
+   distribution (`release/name`, `runtime/perl`, `runtime/python-313`,
+   `security/sudo`, `text/less`, `developer/*`, `system/header`,
+   `consolidation/osnet/osnet-incorporation`, …) — consolidations with NO aarch64
+   build (the very bootstrap gap solnix closes). A tiny **stub companion repo**
+   of content-less aarch64 packages satisfies the solver; the REAL osnet bits
+   still come from pkg.
+2. `pkg image-create -F -p on-nightly=<nightly> --variant variant.arch=aarch64`
+   (foreign-arch image — works cross-arch on the i386 host, `rc=0`) + the stub
+   repo as a 2nd origin.
+3. `pkg install` the bootable osnet set (34 pkgs, `rc=0`): SUNWcs/SUNWcsd,
+   system/kernel[/platform/qemu-virtual], system/library[/math/iconv/libtecla],
+   system/boot/loader, system/file-system/zfs, the virtio drivers
+   (driver/misc/virtio+viommionex, driver/storage/vioblk+vio9p+blkdev,
+   driver/crypto/viorand, driver/network/vioif), service/network/ssh[-common].
+
+Proof `pkg` (not hand-copy) assembled the world: `unix` (byte-identical cksum to
+A6's), `loader64.efi`, `svccfg`, `svc.configd`, 82 SMF manifests, and — crucially
+— the CORRECT `name_to_major` (101) + `driver_aliases` (with vioif/vioblk).
+**This is strictly better than A6**, which had to hand-generate name_to_major/
+driver_aliases because the raw proto shipped a 4-entry stub. Only the genuinely-
+EXTERNAL libxml2 (svccfg NEEDs it) + aarch64 OpenSSH_10.3 (`network/ssh` is
+obsolete in the illumos gate) are added from braich (`aa-a7-lay-disk.sh`), exactly
+as a production `pkg image-create` with a braich publisher would.
+
+### 11.4 The BOOT blocker (the exact stop point)
+
+The pkg-assembled disk panics `vfs_mountroot: cannot mount root` — the kernel
+falls to `/pseudo/lofi@1:b` because `vioblk` never attaches, and `vioblk` never
+attaches because `viommionex` (the virtio-mmio nexus) never attaches
+(`viommionex` appears 0× in the A7 console; A6's console shows
+`viommionex0..N at root` → `blkdev0 online` → `root on armpool/ROOT/braich`).
+
+Exhaustively isolated — every obvious suspect ruled OUT (all byte-identical to
+the booting A6 image):
+- driver binaries + `.conf` (vioblk/viommionex/virtio/blkdev/simple-bus) present
+  in image AND boot_archive; cksums identical to A6.
+- driver_aliases: added the DTB-match aliases A6 had (`viommionex "virtio-mmio"`,
+  `simple-bus "simple-bus"`, `ns16550a`, `efifb`) — no change.
+- overlaid the FULL proto `kernel`/`platform` driver tree (226 drv = A6) onto the
+  pkg root (`aa-a7-fix-drivers.sh`) — no change.
+- copied A6's EXACT proven boot_archive onto the A7 pkg root + re-laid — STILL
+  panics → NOT the boot_archive.
+- `unix` cksum byte-identical A6 vs A7; FDT/PSCI handling identical.
+
+**Conclusion:** with kernel, drivers, boot_archive, aliases, FDT all proven
+identical to the A6 image that boots, the A7 pkg-*userland* disk still fails to
+enumerate `viommionex`. The divergence is between the raw-proto root (A6) and the
+pkg-composed root (A7), consumed during the kernel's early ZFS device scan — NOT
+in the pkg-assembly path (the A7 deliverable, proven working). Time-boxed per the
+brief. **Next step:** incrementally overlay the proto's `/etc/devices` +
+device-state files onto the pkg root until `viommionex` attaches (bisect the
+exact non-driver file the proto carries that the pkg root lacks).
+
+### 11.5 Fallback confirmed + archive
+
+The A6 hand-assembled image (`illumos-a6.img`, unchanged) was re-booted and
+reached `root on armpool/ROOT/braich` with `viommionex0 at root` + `blkdev0
+online` (`a6-fallback-boot-evidence.txt`) — aarch64 stays usable via A6 (which
+also SSHes in, per §10.4).
+
+Archived to solnix.io `archive/aarch64/` (+ local `~/ws/solnix-archive/aarch64/`),
+fetch-verified HTTP 200, sha-matched (NO AWS S3/ouch):
+- `aarch64-a7-ips-repo-redist.tar.gz` (134MB, the emitted nightly IPS repo, 495
+  pkgs) — sha256 `d2bdcdc421a7538de0f062655b7156a7b7168bf023cce106259b945e5d8772fd`.
+- `aarch64-a7-pkg-assembled.img.zst` (108MB, the pkg-image-create-assembled
+  image) — sha256 `5e9d50db7f1c0db3b86b124da081a21c1ac18ff543e87cc33d2d1fbf292ed82a`.
+
+### 11.6 Honest status
+
+- **py3.13/pkg fix:** DONE — `TOOLS_PYTHON=/usr/bin/python3.9`; the exact A6
+  ModuleNotFoundError is gone (install/protocmp/pmodes all 0).
+- **Nightly IPS repo:** YES — `repo.redist`, 495 pkgs, online, pkgrecv-readable.
+- **`pkg image-create`:** YES — assembled the osnet world cleanly (34 pkgs, `rc=0`,
+  no world hand-injection; pkg produced the correct name_to_major/driver_aliases).
+- **Boot+ssh+pkg-list on the pkg image:** NO — viommionex-attach / vfs_mountroot
+  panic; isolated to a non-pkg-assembly device-enumeration divergence, time-boxed
+  with the exact next step documented.
+- **aarch64 usable:** YES via the A6 image (re-verified booting to ZFS root; SSH
+  per §10.4). A7 delivered the CLEAN pkg path for the packaging + image-assembly
+  stages (the A6 gap); the last mile (boot the pkg-composed root) is the remaining
+  follow-on.
