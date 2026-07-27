@@ -1,0 +1,45 @@
+# fmri<TAB>attr  — map cached STANDALONE-tool ledger fmris to packages.nix attrs
+# for the has_manpages backfill (scripts/oi-check-manpages.sh). Library modules
+# (library/python/*, library/perl-5/*) are NOT here: they don't install
+# share/man; the backfill sets them has_manpages=n as a class (spot-checked).
+archiver/gnu-tar	gtar
+compress/bzip2	bzip2
+compress/gzip	gzip
+compress/xz	xz
+compress/zstd	zstd
+database/berkeleydb-5	berkeleydb
+database/sqlite-3	sqlite
+developer/build/autoconf	autoconf
+developer/build/automake	automake
+developer/build/cmake	cmake
+developer/build/gnu-make	gnumake
+developer/build/help2man	help2man
+developer/build/libtool	libtool
+developer/build/ninja	ninja
+developer/build/pkgconf	pkgconf
+developer/build/scons	scons
+developer/lexer/flex	flex
+developer/luajit	luajit
+developer/macro/gnu-m4	m4
+developer/parser/bison-38	bison
+developer/versioning/git	git
+editor/nano	nano
+file/tree	tree
+network/rsync	rsync
+runtime/perl	perl
+runtime/perl-542	perl
+runtime/python	python313
+runtime/python-313	python313
+runtime/python-39	python39
+runtime/tcl-8	tcl
+shell/zsh	zsh
+terminal/tmux	tmux
+text/gawk	gawk
+text/gnu-diffutils	diffutils
+text/gnu-grep	grep
+text/gnu-sed	gsed
+text/jq	jq
+text/less	less
+text/texinfo	texinfo
+web/curl	curl
+web/wget	wget

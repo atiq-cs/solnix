@@ -179,6 +179,12 @@ let
       src = { url = "https://github.com/openssl/openssl/releases/download/openssl-3.4.0/openssl-3.4.0.tar.gz";
               sha256 = "e15dda82fe2fe8139dc2ac21a36d4ca01d5313c75f99f46c4e8a27709b7294bf"; };
       deps = [ self.zlib.gcc ];
+      # openssl installs into solaris64 lib/64 with many large shared objects;
+      # the generic split-debug pass aborts on them (objcopy/build-id extraction
+      # under the strict builder shell), which blocked every consumer
+      # (curl/git/cmake) from rebuilding openssl3. openssl keeps CTF for mdb, so
+      # skip the separate DWARF `debug` output for openssl3 only.
+      separateDebugInfo = false;
       buildSystem = "custom";
       customBuild = ''
         ./Configure solaris64-x86_64-gcc --prefix="$out" --openssldir="$out/ssl" \
@@ -576,9 +582,13 @@ EOF
       pname = "jq"; version = "1.7.1";
       src = { url = "https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-1.7.1.tar.gz";
               sha256 = "478c9ca129fd2e3443fe27314b455e211e0d8c60bc8ff7df703873deeee580c2"; };
-      # bundled oniguruma; no external regex lib needed.
+      # Link the CACHED external oniguruma (wave-6) instead of the bundled copy:
+      # jq's vendored oniguruma hits an illumos regcomp portability wall. The
+      # external lib is already ported (alloca fix) + cached. deps supply
+      # -I/-L/-R oniguruma; --with-oniguruma=<prefix> points configure at it.
+      deps = [ self.oniguruma.gcc ];
       preConfigure = illumosExt;
-      configureFlags = [ "--with-oniguruma=builtin" "--disable-maintainer-mode" ];
+      configureFlags = [ "--with-oniguruma=${self.oniguruma.gcc}" "--disable-maintainer-mode" ];
     };
 
     tree = pkg {
@@ -586,9 +596,15 @@ EOF
       src = { url = "https://gitlab.com/OldManProgrammer/unix-tree/-/archive/2.1.3/unix-tree-2.1.3.tar.gz";
               sha256 = "f554a1b62233b96fa8eaa2d85e91bc62cad80ee441fd591380f16cdfbe3e8868"; };
       buildSystem = "custom";
-      # only __EXTENSIONS__ (for strcasecmp); NOT _XOPEN_SOURCE which pulls a
-      # conflicting system `struct comment` into tree.h.
+      # illumos declares `struct comment` in a system header pulled in via
+      # tree's includes; tree.h defines its own `struct comment` -> redefinition
+      # error. Rename tree's struct (and its uses) to `tree_comment` throughout
+      # the sources so it can't collide. Keep __EXTENSIONS__ for strcasecmp.
       customBuild = ''
+        for f in *.c *.h; do
+          [ -f "$f" ] || continue
+          sed -i 's/struct comment/struct tree_comment/g' "$f"
+        done
         gmake -j"$(nproc)" CC="$CC" CFLAGS="-D__EXTENSIONS__ -O2 -m64" MANDIR="$out/share/man" PREFIX="$out"
         gmake install PREFIX="$out" MANDIR="$out/share/man"
       '';
@@ -617,9 +633,12 @@ EOF
       src = { url = "https://download.samba.org/pub/rsync/src/rsync-3.3.0.tar.gz";
               sha256 = "7399e9a6708c32d678a72a63219e96f23be0be2336e50fd1348498d07041df90"; };
       deps = [ self.zlib.gcc self.zstd.gcc self.lz4.gcc self.openssl3.gcc ];
-      # bundled popt; skip external xxhash.
+      # bundled popt; skip external xxhash. Man pages: rsync ships pre-built
+      # *.1 in the tarball; DON'T pass --disable-md2man (it zeroes MAKE_MAN and
+      # skips installing even the shipped man). commonmark isn't needed to
+      # install the pre-generated pages.
       preConfigure = illumosExt;
-      configureFlags = [ "--disable-md2man" "--disable-xxhash" "--with-included-popt" ];
+      configureFlags = [ "--disable-xxhash" "--with-included-popt" ];
     };
 
     htop = pkg {
@@ -788,13 +807,38 @@ EOF
       src = { url = "https://github.com/tmux/tmux/releases/download/3.4/tmux-3.4.tar.gz";
               sha256 = "551ab8dea0bf505c0ad6b7bb35ef567cdde0ccb84357df142c254f35a23e19aa"; };
       deps = [ self.libevent.gcc self.ncurses.gcc ];
-      # tmux configure probes libevent via CPPFLAGS/LDFLAGS (set from deps by
-      # mk-userland). Point pkg-config at libevent's .pc and force the STORE
-      # ncurses (widec) include so it does not grab host /usr/include/ncurses.
+      # The STORE ncurses ships widec headers ONLY under include/ncursesw/
+      # (curses.h, term.h, ...), no bare include/ncurses.h. tmux's configure
+      # otherwise finds the HOST /usr/include/ncurses/ncurses.h and emits
+      # `#include <ncurses/ncurses.h>`, which then fails on the sliced include
+      # path (host ncurses_dll.h not reachable). Force the header probes:
+      # reject the host <ncurses/ncurses.h> and <ncurses.h>, accept the store's
+      # <curses.h> (from include/ncursesw, put FIRST on CPPFLAGS). Point
+      # pkg-config at libevent + ncursesw too.
+      # The STORE ncurses ships widec headers ONLY under include/ncursesw/
+      # and a pkg-config file named ncursesw.pc (no bare ncurses.pc). tmux's
+      # configure does PKG_CHECK_MODULES([ncurses]) (bare name) -> misses the
+      # store, falls back to a manual probe that finds HOST
+      # /usr/include/ncurses and hardcodes -I/usr/include/ncurses into the
+      # Makefile (before our store -I), so <ncurses.h> resolves to the host
+      # header whose ncurses_dll.h is unreachable on the sliced include path.
+      # Fix: expose an ncurses.pc -> ncursesw.pc alias in a private
+      # PKG_CONFIG_PATH dir so tmux's pkg-config check hits the STORE ncurses.
       preConfigure = illumosExt + ''
-        export PKG_CONFIG_PATH="${self.libevent.gcc}/lib/pkgconfig:${self.ncurses.gcc}/lib/pkgconfig:''${PKG_CONFIG_PATH:-}"
-        export CPPFLAGS="-I${self.ncurses.gcc}/include/ncursesw -I${self.ncurses.gcc}/include ''${CPPFLAGS:-}"
+        mkdir -p "$WORK/pc"
+        for p in ${self.ncurses.gcc}/lib/pkgconfig/*.pc; do
+          b=$(basename "$p"); ln -sf "$p" "$WORK/pc/$b"
+        done
+        ln -sf ${self.ncurses.gcc}/lib/pkgconfig/ncursesw.pc "$WORK/pc/ncurses.pc"
+        export PKG_CONFIG_PATH="$WORK/pc:${self.libevent.gcc}/lib/pkgconfig:''${PKG_CONFIG_PATH:-}"
+        export CPPFLAGS="-I${self.ncurses.gcc}/include/ncursesw ''${CPPFLAGS:-}"
+        export CFLAGS="-I${self.ncurses.gcc}/include/ncursesw ''${CFLAGS:-}"
       '';
+      configureFlags = [
+        "ac_cv_header_ncurses_ncurses_h=no"
+        "ac_cv_header_ncurses_h=no"
+        "ac_cv_header_curses_h=yes"
+      ];
     };
 
     zsh = pkg {
@@ -802,20 +846,37 @@ EOF
       src = { url = "https://sourceforge.net/projects/zsh/files/zsh/5.9/zsh-5.9.tar.xz/download";
               sha256 = "9b8d1ecedd5b5e81fbf1918e876752a7dd948e05c1a0dba10ab863842d45acd5"; };
       deps = [ self.ncurses.gcc self.pcre2.gcc ];
-      preConfigure = illumosExt;
-      configureFlags = [ "--disable-gdbm" "--enable-multibyte" "--with-tcsetpgrp" ];
+      # zsh's termcap.c defines its OWN boolcodes/numcodes/strcodes arrays
+      # (`char *[]`) guarded by #ifndef HAVE_{BOOL,NUM,STR}CODES. Configure's
+      # probe (`char **test = boolcodes`) fails to COMPILE against the store
+      # ncurses term.h (which declares them `const char * const[]`), so it
+      # leaves the macros undefined and zsh emits its conflicting copies ->
+      # "conflicting types for 'boolcodes'". Since the store term.h DOES provide
+      # them, define the HAVE_* macros directly so zsh uses ncurses' arrays.
+      preConfigure = illumosExt + ''
+        export CPPFLAGS="-DHAVE_BOOLCODES=1 -DHAVE_NUMCODES=1 -DHAVE_STRCODES=1 ''${CPPFLAGS:-}"
+        export CFLAGS="-DHAVE_BOOLCODES=1 -DHAVE_NUMCODES=1 -DHAVE_STRCODES=1 -Wno-implicit-function-declaration -Wno-error=implicit-function-declaration ''${CFLAGS:-}"
+      '';
+      configureFlags = [
+        "--disable-gdbm" "--enable-multibyte" "--with-tcsetpgrp"
+      ];
     };
 
     curl = pkg {
       pname = "curl"; version = "8.9.1";
       src = { url = "https://curl.se/download/curl-8.9.1.tar.xz";
-              sha256 = "291124a007ee5111997825940b3876b3048f7d31e73e9caa681b80fe48b2dcc5"; };
+              sha256 = "f292f6cc051d5bbabf725ef85d432dfeacc8711dd717ea97612ae590643801e5"; };
       deps = [ self.openssl3.gcc self.zlib.gcc ];
       preConfigure = illumosExt;
       configureFlags = [
         "--with-openssl=${self.openssl3.gcc}"
         "--with-zlib=${self.zlib.gcc}"
-        "--without-libpsl" "--disable-ldap" "--disable-manual"
+        "--without-libpsl" "--disable-ldap"
+        "--without-libidn2" "--without-nghttp2" "--without-brotli" "--without-zstd"
+        # curl auto-detects host -lgsasl but we lack gsasl.h in the sandbox.
+        # The flag is --without-libgsasl (NOT --without-gsasl); belt-and-braces
+        # also pin the search-cache var so the probe can't re-enable it.
+        "--without-libgsasl" "ac_cv_search_gsasl_init=no"
       ];
     };
 
@@ -860,9 +921,15 @@ EOF
     git = pkg {
       pname = "git"; version = "2.45.2";
       src = { url = "https://mirrors.edge.kernel.org/pub/software/scm/git/git-2.45.2.tar.xz";
-              sha256 = "98b26090ed667099a3691b93698d1e213e1ded73d36a2fde7e9125fce28ba234"; };
+              sha256 = "51bfe87eb1c02fed1484051875365eeab229831d30d0cec5d89a14f9e40e9adb"; };
       deps = [ self.openssl3.gcc self.zlib.gcc self.curl.gcc self.expat.gcc self.pcre2.gcc ];
       preConfigure = illumosExt;
+      # git's gitweb install shells out to /usr/ucb/install (absent here) and
+      # its Makefiles otherwise assume a BSD/GNU install(1). Disable gitweb and
+      # point INSTALL at GNU install (git honours the INSTALL make var). NO_TCLTK
+      # for the (already-disabled) gui. Threaded through make + install phases.
+      makeFlags = [ "NO_GITWEB=1" "NO_TCLTK=1" "INSTALL=/usr/gnu/bin/install" ];
+      installFlags = [ "NO_GITWEB=1" "NO_TCLTK=1" "INSTALL=/usr/gnu/bin/install" ];
       configureFlags = [
         "--with-openssl=${self.openssl3.gcc}"
         "--with-zlib=${self.zlib.gcc}"

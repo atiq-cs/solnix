@@ -35,6 +35,8 @@
 , preConfigure ? ""
 , postInstall ? ""
 , customBuild ? ""   # for buildSystem="custom": full build+install shell, uses $CC/$CXX/$out/$src
+, mandir ? "share/man"   # man install dir under $out (autotools --mandir); see "Man pages" below
+, manInstallTargets ? "" # extra install target(s) to force man install (e.g. "install-man"); "" = none
 , env ? { }         # extra env vars (name->value) exported before build
 , unpackSubdir ? "" # if the tarball has a nonstandard top dir, set it; else auto
 , stripBins ? false # illumos strip can break; default off
@@ -49,6 +51,17 @@
 # lib/debug/.build-id/<xx>/<rest>.debug so gdb finds them by build-id. Both are
 # cached+signed; a consumer pulls `debug` only when actually debugging. This is
 # the "separate packages that combine to debug" the maintainer asked for.
+#
+# Man pages (systematic; docs/design-manpages.md): man pages ride WITH the main
+# output ($out/share/man), never stripped, never split. autotools/configure gets
+# --mandir=$out/${mandir} so packages that key off it install man there (default
+# for most GNU autotools is already $prefix/share/man, so the flag is a no-op for
+# them and a fix for the ones that don't). A package can force a man-only install
+# target (`make install-man`) via manInstallTargets. AFTER install we COUNT the
+# man files under $out/share/man and $out/man and record the total in
+# $out/.manifest-man so the ledger backfill (scripts/oi-check-manpages.sh) reads a
+# real number instead of guessing. Man pages are small -> no separate `man`
+# output; keeping them in $out is simpler and they travel with the tool.
 
 let
   libcLibDirs = [ "${libcStore}/lib/amd64" "${libcStore}/lib" ];
@@ -95,6 +108,7 @@ derivation {
   makeFlagsStr = builtins.concatStringsSep " " makeFlags;
   installFlagsStr = builtins.concatStringsSep " " installFlags;
   inherit preConfigure postInstall customBuild unpackSubdir envExports;
+  inherit mandir manInstallTargets;
   inherit depL depI depRpath finalRunpath;
   depStorePaths = builtins.concatStringsSep " " deps;
   depBinPath = builtins.concatStringsSep ":" depBinDirs;
@@ -156,13 +170,23 @@ derivation {
     ${preConfigure}
     case "$buildSystem" in
       autotools|configure)
-        ./configure --prefix="$out" $configureFlagsStr
+        # Pass --mandir only if this configure understands it: zlib and other
+        # hand-rolled configures ABORT on unknown flags. Most GNU autotools
+        # already default mandir to $prefix/share/man, so the probe-guarded flag
+        # is a no-op for them and a fix for the ones that key off --mandir.
+        MANDIR_FLAG=""
+        if ./configure --help 2>&1 | grep -q -- '--mandir'; then
+          MANDIR_FLAG="--mandir=$out/$mandir"
+        fi
+        ./configure --prefix="$out" $MANDIR_FLAG $configureFlagsStr
         gmake -j"$(nproc)" $makeFlagsStr
         gmake $installFlagsStr $installTargets
+        [ -n "$manInstallTargets" ] && gmake $installFlagsStr $manInstallTargets 2>/dev/null || true
         ;;
       make)
         gmake -j"$(nproc)" PREFIX="$out" prefix="$out" $makeFlagsStr
         gmake PREFIX="$out" prefix="$out" DESTDIR="" $installFlagsStr $installTargets
+        [ -n "$manInstallTargets" ] && gmake PREFIX="$out" prefix="$out" DESTDIR="" $installFlagsStr $manInstallTargets 2>/dev/null || true
         ;;
       custom)
         ${customBuild}
@@ -172,6 +196,22 @@ derivation {
     esac
     ${postInstall}
 
+    echo "=== man pages: verify + count (systematic, NOT stripped) ===" >&2
+    # Man pages ride with $out. Count what upstream installed under the standard
+    # dirs; a real number (incl. 0) lands in $out/.manifest-man so the ledger
+    # backfill reads truth, not a guess. Count regular files (any section, incl.
+    # .gz), skipping directories. illumos ships both share/man and man layouts;
+    # count both. Never fail the build on a zero count -- some tools genuinely
+    # ship no man pages; the ledger records has_manpages=n for those.
+    mancount=0
+    for md in "$out/share/man" "$out/man" "$out/usr/share/man" "$out/usr/man"; do
+      if [ -d "$md" ]; then
+        c=$(find "$md" -type f 2>/dev/null | grep -Ev '/(whatis|windex|man\.cf)$' | wc -l | tr -d ' ')
+        mancount=$((mancount + c))
+      fi
+    done
+    printf '%s\n' "$mancount" > "$out/.manifest-man"
+    echo "man files installed: $mancount (-> \$out/.manifest-man)" >&2
     echo "=== RUNPATH relocate + host-leak scrub ===" >&2
     # Build a MINIMAL RUNPATH from directories that ACTUALLY exist (under $out,
     # each dep, and libc). A long RUNPATH with many nonexistent subdirs can
@@ -203,6 +243,12 @@ derivation {
 
     if [ -n "$sepDebug" ]; then
       echo "=== split debug info -> \$debug ($debug) ===" >&2
+      # Best-effort: DWARF split must NEVER fail the build (out is already
+      # complete). A `find | while` subshell or objcopy edge on an oddly-linked
+      # binary (bzip2's hand-rolled .so, static bins) can return non-zero and
+      # trip `set -e`, which previously killed openssl3/bzip2 and every tool
+      # depending on them. Run the split under `set +e`; restore after.
+      set +e
       # GNU binutils objcopy from the gcc14 toolchain (illumos /usr/bin/objcopy
       # is Solaris' and lacks --only-keep-debug/--add-gnu-debuglink).
       OBJCOPY="$gccStore/usr/gcc/14/bin/gobjcopy"
@@ -229,6 +275,7 @@ derivation {
       # never leave an empty debug output (breaks the multi-output contract)
       [ -n "$(ls -A "$debug/lib/debug/.build-id" 2>/dev/null)" ] || \
         { mkdir -p "$debug/lib/debug"; echo "no split debug info for $pname-$version" > "$debug/lib/debug/.empty"; }
+      set -e
     fi
 
     echo "=== built $pname-$version ($compiler) -> $out ===" >&2
