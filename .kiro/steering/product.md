@@ -79,3 +79,13 @@ once the nixpkgs fork can build the world.
   `illumos-domain.md`.
 - When a plan step depends on an unmerged upstream (aarch64 port, SPARC revival),
   say so and cite it. No hand-waving over multi-year kernel work.
+
+## Cloud & platform priority (2026-07-27, maintainer directive)
+
+FINISH AWS/EC2 FIRST. solnix must be fully built, tested, and QUALIFIED on the
+four primary platforms (x86_64, aarch64, sparcv9, riscv64 — as each reaches
+viability) on AWS/EC2 BEFORE any Azure or GCP work begins. The cloud-hardware
+spec's CH-3 (Azure/Hyper-V) and CH-4 (GCP) are DEFERRED until AWS/EC2 + the four
+platforms are complete. Order: (1) x86_64 packages -> 100% of Hipster-current,
+(2) each platform boots+runs+qualified on EC2, (3) THEN other clouds.
+Do NOT start Azure/GCP driver work now.
