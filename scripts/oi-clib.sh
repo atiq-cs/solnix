@@ -74,6 +74,15 @@ log="$w/.build.log"
       && gmake -j"$(nproc)" && gmake install
       ;;
     autotools|configure)
+      # github archives often ship no ./configure; regenerate it (root-cause fix,
+      # benefits every wave). autogen.sh/bootstrap preferred, else autoreconf -fi.
+      if [ ! -x ./configure ]; then
+        if [ -x ./autogen.sh ]; then NOCONFIGURE=1 ./autogen.sh || ./autogen.sh || true
+        elif [ -x ./bootstrap ]; then ./bootstrap || true
+        elif [ -x ./buildconf.sh ]; then ./buildconf.sh || true
+        fi
+        [ -x ./configure ] || autoreconf -fi 2>/dev/null || true
+      fi
       MANF=""
       ./configure --help 2>&1 | grep -q -- '--mandir' && MANF="--mandir=$out/share/man"
       ./configure --prefix="$out" $MANF $flags \
