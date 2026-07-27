@@ -12,12 +12,15 @@ set -u
 export PATH=/nix-tools/bin:/usr/gnu/bin:/usr/bin:$PATH
 export NIX_CONF_DIR=/nix-tools/etc/nix
 GCC=/nix/store/1sif429w2gpwzxcjqljb481anq0y7wh2-illumos-gcc14
+# Fall back to OI's own /usr/gcc/14 when the store gcc14 slice isn't present
+# (it's absent from the current cache; perl links fine against system gcc libs).
+[ -x "$GCC/usr/gcc/14/bin/gcc" ] || GCC=""
 CCBIN="$GCC/usr/gcc/14/bin/gcc"
 export CC="$CCBIN"
 # A python is handy for clean pax tar extraction (illumos /usr/bin/tar mangles
 # pax 'x' typeflags into PaxHeaders/ junk that breaks Makefile.PL globbing).
-PYX=/nix/store/63f9kp8ixyw0mq18fhmk4zj2j0lv6fcw-solnix-python-39-3.9.20/bin/python3.9
-[ -x "$PYX" ] || PYX=/nix/store/kvl140jbk20aqiq9qqrr79vvwv7hnsaf-solnix-python-313-3.13.1/bin/python3.13
+PYX=/nix/store/fsxvnibndp040zaqkvdcsk68s05yivv4-python-39-3.9.20/bin/python3.9
+[ -x "$PYX" ] || PYX=/nix/store/cr6pjjdrbbnwxlhkl9r1i2b5iy4gjikz-python-313-3.13.1/bin/python3.13
 
 PERL="$1"; shift
 # perl was built with -Duseshrplib: the perl binary NEEDs libperl.so (in its
@@ -57,6 +60,11 @@ for spec in "$@"; do
   (
     cd "$srcd"
     export PERL5LIB="$BATCHLIB${BATCHLIB:+:}${PERL5LIB:-}"
+    # The cached perl's $Config{cc}/{ld} point at a DEAD build-time wrapper. %Config
+    # is read-only, so override via the toolchain env the build tools honor:
+    # ExtUtils::MakeMaker reads PERL_MM_OPT, Module::Build reads PERL_MB_OPT.
+    export PERL_MM_OPT="CC=$CCBIN LD=$CCBIN OPTIMIZE=-m64 -fPIC -O2"
+    export PERL_MB_OPT="--config cc=$CCBIN --config ld=$CCBIN"
     if [ -f Makefile.PL ]; then
       "$PERL" Makefile.PL INSTALL_BASE="$pfx" CC="$CCBIN" LD="$CCBIN" \
         OPTIMIZE="-m64 -fPIC -O2" \

@@ -15,6 +15,8 @@ export PATH=/nix-tools/bin:/usr/gnu/bin:/usr/bin:$PATH
 export NIX_CONF_DIR=/nix-tools/etc/nix
 # solnix toolchain: make the cc wrapper the compiler for C-ext builds
 GCC=/nix/store/1sif429w2gpwzxcjqljb481anq0y7wh2-illumos-gcc14
+# Fall back to OI's own /usr/gcc/14 when the store gcc14 slice isn't present.
+[ -x "$GCC/usr/gcc/14/bin/gcc" ] || GCC=""
 CCBIN="$GCC/usr/gcc/14/bin/gcc"
 CXXBIN="$GCC/usr/gcc/14/bin/g++"
 # Force the REAL gcc onto every C-ext build. The cached interpreters' sysconfig

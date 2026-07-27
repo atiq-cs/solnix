@@ -12,6 +12,7 @@ set -u
 export PATH=/nix-tools/bin:/usr/gnu/bin:/usr/bin:$PATH
 export NIX_CONF_DIR=/nix-tools/etc/nix
 GCC=/nix/store/1sif429w2gpwzxcjqljb481anq0y7wh2-illumos-gcc14
+[ -x "$GCC/usr/gcc/14/bin/gcc" ] || GCC=""
 CCBIN="$GCC/usr/gcc/14/bin/gcc"; CXXBIN="$GCC/usr/gcc/14/bin/g++"
 export CC="$CCBIN" CXX="$CXXBIN"
 export LDSHARED="$CCBIN -shared -m64" LDCXXSHARED="$CXXBIN -shared -m64"

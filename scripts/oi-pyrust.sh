@@ -10,6 +10,7 @@ export PATH=/nix-tools/bin:/usr/gnu/bin:/usr/bin:$PATH
 export NIX_CONF_DIR=/nix-tools/etc/nix
 
 GCC=$(ls -d /nix/store/*illumos-gcc14 2>/dev/null | head -1)
+[ -n "$GCC" ] && [ -x "$GCC/usr/gcc/14/bin/gcc" ] || GCC=""  # fall back to /usr/gcc/14
 RUST=$(ls -d /nix/store/*rust-1.84.0 2>/dev/null | head -1)
 MATURIN=$(ls -d /nix/store/*maturin* 2>/dev/null | head -1)
 OSSL=$(ls -d /nix/store/*openssl-3-3.4.0 2>/dev/null | head -1)
