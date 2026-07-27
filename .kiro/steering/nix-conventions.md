@@ -133,3 +133,12 @@ if the provenance handoff is adopted (~/ws/solnix.io/infra/docs/handoff/
 build-provenance-facts.md), stamp compiler/compilerVer/libcVer/debugPath at
 publish time in the sidecar format their ingester wants. No per-package EDN
 files here.
+
+## Shared-file concurrency (agents)
+
+Multiple build agents run concurrently. NEVER rewrite/overwrite a shared file —
+only APPEND. Especially docs/progress.md (append your dated section; do NOT
+rewrite it — wave-13b clobbered 2168 lines to 93; recovered from git). The
+orchestrator owns commits; agents leave working-tree changes. For registry TSVs,
+append rows (don't rewrite). If you need scratch space, use artifacts/<your-wave>/
+or /tmp, never a shared doc.
