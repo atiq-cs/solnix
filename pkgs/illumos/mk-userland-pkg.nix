@@ -28,6 +28,8 @@
 , compiler ? "gcc" # "gcc" | "clang"
 , deps ? [ ]       # list of store paths (built solnix pkgs) this one links
 , buildSystem ? "autotools"  # "autotools" | "configure" | "make" | "custom" | "cmake-less"
+, patches ? [ ]     # list of store-path patch files (pkgsrc illumos patches etc.)
+, patchFlags ? "-p0" # pkgsrc patches are -p0 (they carry the full orig path); GNU tarball patches often -p1
 , configureFlags ? [ ]
 , makeFlags ? [ ]
 , installFlags ? [ ]
@@ -107,7 +109,9 @@ derivation {
   configureFlagsStr = builtins.concatStringsSep " " configureFlags;
   makeFlagsStr = builtins.concatStringsSep " " makeFlags;
   installFlagsStr = builtins.concatStringsSep " " installFlags;
-  inherit preConfigure postInstall customBuild unpackSubdir envExports;
+  inherit preConfigure postInstall customBuild unpackSubdir envExports patchFlags;
+  # copy each patch into the store so the builder can `patch < it` deterministically.
+  patchPaths = builtins.concatStringsSep " " (map (p: "${builtins.path { path = p; }}") patches);
   inherit mandir manInstallTargets;
   inherit depL depI depRpath finalRunpath;
   depStorePaths = builtins.concatStringsSep " " deps;
@@ -149,6 +153,14 @@ derivation {
       if [ "$ndirs" = "1" ]; then cd "$dirs"; fi
     fi
     SRCDIR=$(pwd)
+
+    # Apply harvested patches (pkgsrc illumos fixes) BEFORE configure. pkgsrc
+    # patches are -p0 unified diffs carrying the full orig path + a $NetBSD$
+    # header (GNU `patch` skips the header cleanly). Order = list order.
+    for _p in $patchPaths; do
+      echo "=== apply patch $_p ($patchFlags) ===" >&2
+      /usr/gnu/bin/patch $patchFlags < "$_p" || { echo "FATAL: patch $_p failed" >&2; exit 1; }
+    done
 
     echo "=== generate cc-wrappers ===" >&2
     bash "$wrapper" "$WORK/ccw" "$gccStore" "$clangStore" "$libcStore" "$ldStore" >&2
