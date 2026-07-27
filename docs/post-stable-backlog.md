@@ -83,3 +83,9 @@ cross-from-amd64 already handles builds — but as a DEPLOYMENT target). Require
 upstream arm64-gate work: GICv3/GICv3-ITS driver + ACPI/SBBR parser + SystemReady-SR
 bringup (IPD 24 marks these nascent). Collaborate upstream (Rich Lowe/illumos).
 Pairs with PS-7 (qualify all EC2 types). Multi-month; low priority vs package/boot goals.
+
+> NOTE: PS-8 is now the headline of a full spec — .kiro/specs/solnix-cloud-hardware/
+> (CH-1 ARM server kernel port GICv3+ACPI+SystemReady-SR; CH-2 AWS/Nitro; CH-3 Azure/
+> Hyper-V; CH-4 GCP/gVNIC; CH-5 accelerators; CH-6 declarative cloud modules; CH-7
+> per-instance device-audit CI; CH-8 upstream). Boot + run + expose ALL hardware on
+> every cloud instance type, every arch. Pairs with PS-7.

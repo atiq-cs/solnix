@@ -52,6 +52,11 @@ because solnix diverges from stock illumos and stale docs would mislead:
 
 ## T3.2 — Cloud device drivers (EC2 / Azure / GCP)
 
+> NOTE: T3.2 is the guest-driver STARTER; the FULL cloud-hardware effort (boot +
+> ALL hardware across AWS/Azure/GCP + the ARM server kernel port GICv3/ACPI/SBBR)
+> is now its own spec: .kiro/specs/solnix-cloud-hardware/ (CH-1..CH-8). T3.2
+> feeds into CH-2/3/4.
+
 Ensure solnix has the drivers + libraries to run as a first-class guest on the
 big three clouds. Identify missing pieces vs illumos-gate, build them.
 - **EC2/Nitro:** ena (have it) — verify + ENA v5/v6 (gate fix 17939), NVMe/EBS,

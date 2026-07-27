@@ -163,3 +163,19 @@ Two big parallel tracks (specs added):
 Honesty rule holds: GPU/Azure/GCP drivers, torch, full Wayland are real illumos
 gaps — inventory realistically, build tractable paths first, flag multi-quarter
 porting as tracked sub-projects.
+
+## Cloud Hardware Enablement (spec: .kiro/specs/solnix-cloud-hardware)
+
+Boot + run + expose ALL hardware on AWS/EC2, Azure, GCP across all architectures.
+- **CH-1 ARM server kernel port** (GICv3/GICv3-ITS driver + aarch64 ACPI/SBBR
+  parser + SystemReady-SR UEFI boot + SMMUv3) — prereq for ALL cloud ARM
+  (Graviton/Cobalt/Axion). Upstream-first to arm64-gate/IPD 24. Long pole.
+- **CH-2 AWS/Nitro** (ENA v5/v6, EFA, local NVMe, vIOMMU; + Graviton after CH-1)
+- **CH-3 Azure/Hyper-V** (VMBus/hv_*/netvsc/storvsc/MANA; + Cobalt ARM) — biggest gap
+- **CH-4 GCP/KVM** (gVNIC/IDPF/virtio; + Axion ARM)
+- **CH-5 accelerators** (GPU/NPU enumeration; compute libs in T3.3)
+- **CH-6** declarative cloud/hardware modules + per-cloud image builders
+- **CH-7** per-instance device-audit CI matrix (pairs with PS-7)
+- **CH-8** upstream collaboration (drivers land in illumos, not a solnix fork)
+Mostly post-stable; x86 Azure/GCP driver work can start pre-stable to make solnix
+a first-class guest on all three clouds' x86 before the ARM port lands.
