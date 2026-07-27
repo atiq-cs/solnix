@@ -486,3 +486,200 @@ sparcv9-solaris FROM it. QEMU sun4u remains the CI/test substrate (once the
 OpenBIOS getprop fix lands); the Ultra 45 is the reference + fallback build host.
 Keep the Tribblix m34 kernels only as the QEMU-boot PROOF artifact, not the
 shipping source.
+
+## SPARC progress (S2 — seed extract + sparcv9-solaris lib.systems + world slices)
+
+Status: **DONE — mirrors aarch64 A3 end to end.** The OI-Hipster-source open
+question is RESOLVED (evidence below); a sparcv9 target-sysroot seed is extracted
++ published + fetch-verified; `sparcv9-solaris` is wired into the fork lib.systems
+(big-endian, verified via the real `applyPatches`); the sparc world slices
+(libc/rtld/ld/sys/systemPath + gate) are built, RUNPATH-relocated, signed +
+published, and the libc is fetch-back-verified as EM_SPARCV9. Assets: solnix.io
+cache + local seed/archive stores ONLY (no AWS S3/ouch). Every long host op ran
+DETACHED via `scripts/oi-job.sh` (zero blocking SSH). Host ouch-n21
+(3.131.93.186). Not git-committed; hosts not terminated.
+
+### S2.0 RESOLVED: where does OI Hipster-on-sparc come from? — SELF-BUILT, no public OI sparc repo (evidence-based)
+
+**Answer: option (b) — Hipster-on-sparc is SELF-BUILT natively on sparc. There
+is NO public OpenIndiana sparc IPS repo and NO OI sparc install image.** The
+Ultra 45's Hipster is a native-sparc build (like Tribblix/DilOS do), so the
+Ultra 45 itself is the eventual golden native build host + package source. For
+S2 the immediate WORLD SOURCE is the archived Tribblix m34 sun4v_boot_archive
+(same illumos-gate lineage), sliced now (the Ultra 45 isn't reachable from EC2).
+
+EVIDENCE (probes run 2026-07-27, all reproducible):
+- **OI IPS repo publishers** — `https://pkg.openindiana.org/hipster/publisher/0/`
+  lists exactly two publishers: `openindiana.org` and `userland`. No sparc
+  publisher, no sparc branch.
+- **No sparc repo endpoint** — `https://pkg.openindiana.org/hipster/sparc/versions/0/`
+  -> HTTP 400; `.../hipster-sparc/...` -> 400; `sparc.openindiana.org` -> no route.
+  The only working ISO dir `https://dlc.openindiana.org/isos/hipster/` lists only
+  `current` (x86_64), no sparc image.
+- **The x86 catalog has ZERO sparc** — `hipster/catalog/1/catalog.base.C`
+  (10607 packages, 53392 versions) contains the substring `sparc` **0 times**;
+  the `system/kernel` manifest carries no `variant.arch=sparc`. OI Hipster builds
+  x86_64 only.
+- **OI docs + download page** — `docs.openindiana.org` and
+  `openindiana.org/download` mention sparc 0 times.
+- **Upstream root cause** — illumos-gate `master` still has the *source* dirs
+  `usr/src/uts/{sun4u,sun4v,sparc,sun4}` (30 entries under sun4u: boston,
+  cherrystone, cpu, ...), but the **build glue is gone**: `uts/sun4u/Makefile`,
+  `uts/sun4u/os/Makefile`, `uts/sun4u/unix/Makefile` all -> HTTP 404 on master.
+  This is the "13707/13708 removed sparc build support" state Tribblix's
+  `illumos/sparc/README.md` documents ("m26 onward: Upstream gate cannot be used
+  as SPARC support has been removed"). So NO upstream distro (OI included)
+  publishes a buildable sparc; the live keepers (Tribblix, DilOS) build sparc
+  NATIVELY from a fixed pre-removal base commit + cherry-picks.
+  Tribblix's `pkgs.tribblix.org/` serves `m34`/`sparc` (the live sparc keeper).
+
+CONSEQUENCE for sourcing (this is the S2 decision):
+- Not (a): there is no OI sparc IPS repo to mirror like x86 Hipster.
+- (b)/(c): the Ultra 45's Hipster-on-sparc is self-built native (same model as
+  Tribblix/DilOS). The Ultra 45 is the AUTHORITATIVE shipping source once its
+  native gate build is reachable (it isn't from EC2).
+- IMMEDIATE S2 SOURCE = the archived Tribblix m34 sun4v_boot_archive userland —
+  same illumos-gate lineage as the Ultra 45's Hipster, accessible now. S3+
+  re-slices from the Ultra 45 when reachable. (This exactly matches the doc's
+  earlier ACTION-for-S2 note and the top-of-doc steering.)
+
+### S2.1 The big-endian UFS reader (the S1.5-deferred blocker) — SOLVED with the Linux stdlib
+
+S1.5 deferred seed extraction because the sun4v_boot_archive is a BIG-ENDIAN
+SPARC UFS and the amd64 illumos host's ufs is little-endian-native. The lazy
+answer needed no custom reader: **Linux's in-tree `ufs` kernel module reads Sun
+(big-endian) UFS read-only via `-o ufstype=sun`.** On the dev-box:
+```
+losetup -f --show -r sun4v_boot_archive          # /dev/loop0
+mount -t ufs -o ufstype=sun,ro /dev/loop0 /mnt/sparc-ba
+```
+mounts cleanly (`file` confirms "Unix Fast File system [v1] (big-endian)", magic
+0x00011954 at superblock offset 8192+1372). Inside: the full sparc userland.
+
+### S2.2 Seed extracted — `scripts/sparc-extract-seed.sh` (adapted from aa-extract-seed.sh)
+
+The sparc seed is the TARGET-SYSROOT half (like aarch64's), sliced from the
+mounted big-endian UFS. Layout note: SPARC keeps the classic x86-style ISA split
+(NOT aarch64's LP64-flat) — the 64-bit **SPARC V9** objects live under the
+`sparcv9/` subdir (the analog of x86's `amd64/`). The sparcv9-solaris TARGET is
+64-bit (cpu=sparc64), so the seed carries the `lib/sparcv9/` + `usr/lib/sparcv9/`
+objects:
+- `lib/sparcv9/{libc,libm.so.2,libsocket,libnsl,libresolv.so.2,libelf,libpthread,
+  librt,libdl,libmd,libmp.so.2,libcustr,libofmt,libumem}.so.*` — runtime libc +
+  historical siblings.
+- `lib/sparcv9/ld.so.1` (runtime linker), `lib/sparcv9/{librtld,libld.so.4,
+  liblddbg.so.4}` (link-editor .so), `usr/lib/sparcv9/libldstab.so.1`.
+- `usr/bin/ld` (Solaris link-editor, sparc-native), `usr/lib/ld/` mapfiles.
+- `usr/include` — PARTIAL header set (321 files: math.h, complex.h, sys/, net/,
+  openssl/, ... but NO core libc headers like stdio.h — the boot_archive is a
+  runtime ramdisk, not a build sysroot).
+
+DELIBERATE CEILINGS (same class as aarch64's "target-sysroot only"):
+- NO compile-time crt*.o/values-*.o (runtime ramdisk has none).
+- NO elfdump/elfedit binaries (the world-slice RUNPATH relocation uses the HOST
+  illumos elfedit cross-arch, so shipping sparc elfedit is unnecessary).
+- Partial headers. All three are filled by a native Ultra-45 Hipster gate build
+  (S3+); this Tribblix m34 sysroot is the same lineage and is what we slice now.
+
+Seed staged + published (solnix.io + local, belt-and-suspenders):
+- `sparc-seed.tar.zst` — 2.29 MiB, **sha256
+  6115cfdfc6a34901112a33475d0a77766d4b3562680ccee6ead08d5f2164a2bc**,
+  SRI `sha256-YRXP38ajSQERKjNHXQp3dm1LNWJoDM7m6tCNXyFkorw=`.
+- **solnix.io**: `https://s3.solnix.io/solnix-cache/archive/sparc/sparc-seed.tar.zst`
+  (+ `.sha256` + `sparc-seed-manifest.txt`) — fetch-verified (sha matches;
+  unpacks to `lib/sparcv9/libc.so.1` = ELF64 MSB **Sparc v9**). solnix.io ONLY,
+  no AWS S3/ouch.
+- **local**: `~/ws/solnix-seed-store/sparc-seed.tar.zst` + `-manifest.txt`.
+
+### S2.3 sparcv9-solaris wired into the fork lib.systems (BIG-ENDIAN correct — verified)
+
+Extended `solnix-pkgs/patches/0001-lib-systems-x86_64-solaris.patch` (the same
+patch that carries x86_64 + aarch64), mirroring the aarch64-solaris double:
+- **parse.nix aliases**: `sparcv9 = cpuTypes.sparc64;` beside `arm64 =
+  cpuTypes.aarch64;`. The Solaris/GNU-canonical SPARC V9 cpu token is `sparcv9`
+  (triple `sparcv9-unknown-solaris2.11`), but nixpkgs' cpu type is **`sparc64`**
+  (there is no `sparcv9` cpuType — `getCpu` would throw). The alias maps the
+  canonical token to the existing **big-endian** 64-bit sparc64 cpu.
+- **doubles.nix**: registered `"sparc64-solaris"` (the double
+  `parse.doubleFromSystem` yields from the sparc64 cpu — NOT "sparcv9-solaris").
+- **examples.nix**: `sparcv9-illumos = { config = "sparcv9-unknown-solaris2.11"; };`.
+- The solaris parse/kernel/libc/linker/uname clauses (isSunOS-keyed) are
+  arch-independent and were already present from x86_64 — no sparc-specific edit
+  needed there.
+
+ENDIANNESS — the real sparc-specific correctness point: nixpkgs already defines
+`sparc64` as `significantByte = bigEndian`. So aliasing sparcv9 -> sparc64 gives
+the CORRECT big-endian marking for free (unlike x86/aarch64/riscv, all
+little-endian). VERIFIED by building the real patched fork
+(`applyPatches` -> `lib.systems.elaborate`):
+```
+sparcv9-unknown-solaris2.11  -> cpu=sparc64 bits=64 double=sparc64-solaris
+                                bigEndian=y isSunOS=y libc=illumos-libc
+                                linker=solaris uname=SunOS
+x86_64-unknown-solaris2.11   -> cpu=x86_64  double=x86_64-solaris  bigEndian=n  (no regression)
+aarch64-unknown-solaris2.11  -> cpu=aarch64 double=aarch64-solaris bigEndian=n  (no regression)
+sparc64-solaris in doubles.all -> true
+```
+(Patch gotcha for the record: GNU `patch` under the build sandbox's C locale
+mis-located a hunk whose context contained the multibyte `≥` in the `# LLVM ≥ 20`
+comment; anchoring the alias hunk on the ASCII `arm64 = cpuTypes.aarch64;` line
+instead makes `applyPatches`' `patch -p1` land it cleanly.)
+
+Seed FOD: `solnix-pkgs/pkgs/os-specific/illumos/seed-sparc/default.nix` (mirrors
+seed-aarch64), fetches the seed from solnix.io by SRI hash — built + verified
+(unpacks to EM_SPARCV9 big-endian libc, ld.so.1, libldstab, Solaris ld present).
+
+### S2.4 World slices built + RUNPATH-relocated + published + fetch-verified
+
+`pkgs/illumos/sparc/{gate,default}.nix` (mirrors pkgs/illumos/aarch64/) ingest
+the sparc proto and slice the world. The proto (sparcv9 userland + sun4u kernel,
+183 MB) was extracted from the big-endian UFS, staged on ouch-n21 at
+`/sparc/proto/root_sparc`. All six attrs built on the host (Nix 2.3.16,
+currentSystem x86_64-solaris; the slices are BIG-ENDIAN SPARC V9 ELF but the
+slicing + RUNPATH relocation runs cross on the amd64 host — the host illumos
+`elfedit` edits the SPARC ELF's DT_RUNPATH string offset regardless of
+endianness, exactly as for aarch64):
+
+| slice | store path (host) | check |
+|-------|-------------------|-------|
+| gate  | ...-illumos-sparc-gate-proto | proto ingest (sparcv9 libc + sun4u unix/genunix) |
+| libc  | ...-libc   | lib/sparcv9/libc.so.1 = **EM_SPARCV9 ELFCLASS64 ELFDATA2MSB** |
+| rtld  | ...-rtld   | librtld RUNPATH = `$ORIGIN:<libc>/lib/sparcv9` (relocated) |
+| ld    | ...-ld     | usr/bin/ld RUNPATH = `$ORIGIN:$ORIGIN/../../lib/sparcv9:<libc>/lib/sparcv9:<ld>/usr/lib/sparcv9` |
+| sys   | ...-sys    | platform/sun4u/kernel/sparcv9/{unix,genunix} (Ultra 45 = sun4u) |
+| systemPath | ...-system-path | symlink-farm of sys+rtld+libc+ld; sanity gates pass |
+
+Kernel path note: sun4u `unix` is at `platform/sun4u/kernel/sparcv9/unix`
+(symlink `platform/sun4u/kernel/unix -> sparcv9/unix`), genunix at
+`platform/sun4u/kernel/sparcv9/genunix` — the SPARC analog of x86's
+`platform/i86pc/kernel/amd64/`. libm soname is `libm.so.2` (sparc, like x86_64),
+not aarch64's `libm.so.0`.
+
+Signed (cache.solnix.io-1) + published under plain names to
+`https://s3.solnix.io/solnix-cache` (all six closures). **FETCH-BACK-VERIFIED**:
+`nix copy --from https://s3.solnix.io/solnix-cache` of the libc slice into a
+fresh store, then `readelf -h` -> `Class ELF64 / Data 2's complement, big endian
+/ Machine Sparc v9` = **EM_SPARCV9 confirmed from the cache**. solnix.io ONLY, no
+AWS S3/ouch.
+
+### S2.5 Blockers / ceilings
+
+- **crt objects + full headers + cross gcc**: not in the runtime boot_archive.
+  The world slices (runtime libraries + kernel) are complete WITHOUT them; a
+  working `cc`/`libcCross` for pkgsCross.sparcv9-solaris needs them and comes
+  from the native Ultra-45 Hipster gate build (S3+). Marked in the slice headers.
+- **Authoritative re-slice**: the Ultra 45's Hipster world is the eventual
+  shipping source (S2.0). This S2 uses the Tribblix m34 userland (same
+  illumos-gate lineage) as the accessible stand-in; S3+ re-slices from the Ultra
+  45 under the SAME sparcv9-solaris plumbing (unchanged — only the proto source
+  differs), then can drop the Tribblix stand-in.
+- **QEMU clean boot**: still gated on the OpenBIOS `getprop` fix (S1b), unrelated
+  to S2 (S2 slices for the target; it does not need a running guest).
+
+### S2.6 Constraints honored
+
+- `oi-job.sh` detached+poll for every long host op (proto unpack, slice builds);
+  publish ran backgrounded+polled locally. Zero blocking SSH held across a long op.
+- solnix.io cache + local seed/archive stores ONLY; no AWS S3/ouch storage.
+- No git commit. Hosts not terminated. ouch-n21 left running with
+  `/sparc/proto/root_sparc` + the built+published slices in its store.
