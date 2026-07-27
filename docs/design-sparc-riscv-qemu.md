@@ -726,3 +726,143 @@ Tribblix sparc guest itself. Then: patch call-client.S -> build blob -> qemu
 Alternative if the window fix is too deep: boot from a Sun-VTOC DISK image
 (bypasses more of the FCode/client path than CD) + accept the current
 ~partially-reproducible boot for interim CI.
+
+## S3 attempt 2 — cross toolchain BUILT + OpenBIOS PATCHED/REBUILT; fix validated-in-progress (2026-07-27)
+
+Status: **enabler cleared + firmware rebuild loop working; fix NOT yet
+deterministic.** The sparc64 cross toolchain is built (the S1b/S3-1 blocker),
+OpenBIOS is patched + cross-built into a swappable `-bios` blob that faithfully
+reproduces the baseline firmware, and all three diagnosed fix candidates were
+tested empirically. NONE boots to SMF 95/95 deterministically yet. Root cause
+is now confirmed *at the register level* (corrupt %sp on CIF return), and fix #1
+(flushw) is ruled OUT by data + OpenBIOS's own design. This is an honest
+fix-in-progress: the hard enabler is done and the next step is precise.
+
+All qemu boots ran on the dev-box (floki, qemu 10.1.5 / OpenBIOS v1.1 Sep-2024
+bundled) DETACHED via `artifacts/sparc-s3/s3-boot-multi.sh` (nohup -> per-run
+console log, time-boxed 900s, killed; never an interactive console held).
+Assets: solnix.io cache (`archive/sparc/`) + local `~/ws/solnix-archive/sparc/`
+ONLY — no AWS S3/ouch. Not git-committed. No "ponytail".
+
+### S3-2.1 Cross toolchain — BUILT (the S1b/S3-1 blocker, cleared)
+
+nixpkgs `pkgsCross.sparc64` does NOT exist in the pinned tree; the working
+recipe is an explicit **crossSystem** with `allowUnsupportedSystem`:
+```
+import <nixpkgs> { crossSystem = { config = "sparc64-none-elf"; libc = null; };
+                   config = { allowUnsupportedSystem = true; }; }
+  -> buildPackages.gccWithoutTargetLibc (14.3.0) + buildPackages.binutils (2.44)
+```
+Chose the **bare-metal `sparc64-none-elf` nolibc** target over
+`sparc64-unknown-linux-gnu` (OpenBIOS is freestanding, never links libc): 4
+derivations vs a full glibc bootstrap, ~20 min. Both were built + GC-rooted
+(`artifacts/sparc-s3/toolchain/result-elf{,-2}` = elf; `result-cross{,-2}` =
+linux-gnu backup). Verified: `sparc64-none-elf-gcc -dumpmachine` = sparc64-none-elf;
+a test `.o` = `ELF 64-bit MSB relocatable, SPARC V9`. OpenBIOS also needs
+`toke`/`detok` (FCode tokenizer, github.com/openbios/fcode-utils — built native
+with host gcc) and `xsltproc` (libxslt, from the nix store). OpenBIOS's
+`select_prefix` only probes `sparc64-{unknown-linux-gnu,linux-gnu,linux,elf,
+eabi}-`; `sparc64-none-elf-` is matched by exporting `CROSS_COMPILE=sparc64-none-elf-`.
+
+### S3-2.2 OpenBIOS patched + cross-built — the -bios swap loop WORKS
+
+`config/scripts/switch-arch builtin-sparc64 && make` produces
+`obj-sparc64/openbios-builtin.elf` = **ELF64 MSB SPARC V9, UltraSPARC1
+Extensions, loads 0xffd00000, ~1.56 MB stripped**. Smoke-tested: swapped in via
+`-bios` it reaches the `0 >` OBP prompt (banner "built on Jul 27 2026"), and the
+**unpatched rebuild reproduces the exact bundled-blob failure class** (kernel
+starts -> `unix-tte va>tte-data -13` -> CIF panic), proving the toolchain+build
+faithfully reproduce the firmware. So the fix loop is real: edit OpenBIOS ->
+cross-build blob -> `qemu -bios <blob>` -> boot m34 CD, no qemu rebuild.
+
+### S3-2.3 Three fix candidates tested — failure census
+
+Boots of the m34 CD (`boot cdrom -v`), 900s timebox, dev-box qemu 10.1.5:
+
+| blob | fix | observed (per run) |
+|------|-----|--------------------|
+| baseline (bundled) | none | PANIC "bad stack overflow at TL 2" (nested spill) |
+| pristine (rebuild) | none | kernel starts -> BAD TRAP **type=1** / **type=34 alignment (addr=0x99, %sp=0x..fe1 MISALIGNED)** — nondeterministic |
+| guard | #3 getproplen phandle -1/0 guard (ciface.fs) | kernel starts -> BAD TRAP **type=4e** in prom_getproplen; one run reached **SMF 15/95** before panicking |
+| flushw | #1 `flushw` on CIF entry (+#3) | kernel starts -> **OpenBIOS-internal Unhandled Exception**, deterministic, PC 0xffd27a20 = `stb %g2,[%i0+%g1]` in `memmove` (getprop copying property data into the kernel's buffer) |
+
+### S3-2.4 What the data proves (root cause at register level)
+
+- **The nondeterminism is register-window/%sp corruption on CIF return.** The
+  pristine `type=34` panic is an *alignment error* with `%sp=0x2a100076fe1` — a
+  biased stack pointer that is NOT 16-byte aligned. The kernel's %o6/%sp is being
+  restored to garbage after a PROM (CIF) call, then the kernel faults using it.
+  Every failure follows `unix-tte va>tte-data -13` (a benign, caught OBP miss)
+  and then the *next* CIF call. The trap type varies run-to-run (TL2 spill,
+  type=1, type=4e, type=34) = the classic signature of a corrupt window/%sp,
+  exactly the diagnosed reversed-%cwp accounting bug.
+- **Fix #1 (flushw) is RULED OUT** — twice, deterministically. It converts the
+  kernel-side panic into an *OpenBIOS-side* `memmove` fault: the store into the
+  kernel's getprop destination buffer (`%i0`) faults. cpustate.h's own comment
+  explains why: the CIF path deliberately AVOIDS flushw because "the memory areas
+  used by each window's stack pointer may not be in the TLB, causing recursive
+  TLB miss traps" — flushw's spills evict/miss the very TLB entries the CIF then
+  needs to reach the client buffer. So flushw is architecturally contraindicated
+  here; it makes things worse, not better.
+- **Fix #3 (getproplen guard) is correct hardening but does NOT fix the boot** —
+  it mirrors getprop's phandle -1/0 handling (getproplen was calling `?phandle`
+  which throws on 0 and never guarded -1), and the panic caller was
+  `prom_getproplen`, but the fault is the *window* corruption, not the phandle
+  value. Worth keeping (it's a real latent bug), insufficient alone.
+- **Fix #2 (window accounting) is the remaining real fix, and it is deeper than
+  a 3-line patch.** Analysis of `SAVE/RESTORE_CPU_WINDOW_STATE`: the manual
+  window walk is *symmetric* (SAVE and RESTORE start at the same saved %cwp and
+  step the same `CWP_DIRECTION`, so slot k <-> the same physical window in both;
+  contents round-trip). `RESET_CPU_WINDOW_STATE` sets a valid fresh state
+  (cwp=0, cansave=NWIN-1, canrestore=otherwin=cleanwin=0). There is no obvious
+  accounting bug in the macros themselves. The genuine problem is the
+  *interaction*: illumos calls the CIF with **its own trap table installed**, so
+  any window spill/fill that fires inside OpenBIOS's CIF (during the manual walk
+  or the C code's save/restore) vectors into the **kernel's** spill/fill handler
+  — which mis-handles it under QEMU's reversed %cwp and returns a corrupt %sp.
+  Fixing this properly needs either (a) a QEMU SPARCv9 %cwp-emulation fix (the
+  actual upstream bug the CWP_DIRECTION macro only papers over), or (b) an
+  OpenBIOS CIF change that installs OBP's OWN spill/fill trap handlers for the
+  duration of the CIF call (so kernel-table window traps can't fire), then
+  restores the kernel's. Both are real work, not this pass.
+
+### S3-2.5 Artifacts (all in `artifacts/sparc-s3/` + archived to solnix.io)
+
+- `openbios-sun4u-fix.patch` — fix #1 (flushw) + #3 (getproplen guard).
+- `openbios-getproplen-guard.patch` — fix #3 only.
+- `blobs/openbios-sun4u-{pristine,guard,flushw}.elf` + `SHA256SUMS` — the three
+  cross-built SPARC V9 firmware blobs (swap via `-bios`).
+- `logs/*.log` — per-run console logs incl. the milestone/panic KEEP set
+  (baseline TL2, pristine type=1/type=34-alignment, guard type=4e + SMF 15/95,
+  flushw memmove exception).
+- `s3-boot-multi.sh` — detached determinism harness (N runs, per-run log, tally).
+- `REBUILD.md` — exact resume recipe (toolchain gcroots + build + boot-test).
+- `toolchain/result-{elf,elf-2,cross,cross-2,xslt-bin}` — GC-rooted toolchains
+  (store path `cmx305...-sparc64-none-elf-nolibc-gcc-wrapper-14.3.0`).
+- **solnix.io** `archive/sparc/`: `sparc-s3-2-openbios.tar.zst` (105 KiB, sha256
+  `90ff818f68d8aa7878d04b59f037aca22188fe6b7668007248749c9162a55598`) + `.sha256`
+  + `MANIFEST-s3-2.txt` — fetch-back verified (sha matches, unpacks to valid
+  SPARC V9 blob). **local**: `~/ws/solnix-archive/sparc/`. solnix.io ONLY, no S3.
+
+### S3-2.6 Next step (precise, for S3-3)
+
+The blob rebuild loop + toolchain are done, so S3-3 goes straight to fix #2's
+real form (do NOT re-try flushw, do NOT re-diagnose):
+1. **Preferred — QEMU %cwp fix:** the CWP_DIRECTION macro documents that QEMU's
+   SPARCv9 %cwp save/restore direction is reversed vs hardware. Fix it in QEMU's
+   `target/sparc` window-register emulation (the true bug) so real OBP/OpenBIOS
+   window accounting works unmodified. Requires a qemu rebuild (dev-box has the
+   qemu source path for 10.1.5), heavier than a -bios swap but fixes the root.
+2. **Or — OpenBIOS CIF trap isolation:** in `sparc64_of_client_interface`, save
+   the kernel's %tba and install OpenBIOS's own spill/fill window trap handlers
+   (client_tba) for the duration of the CIF C call, restore on exit — so a window
+   trap inside the CIF is handled by OBP conventions, not the kernel's table. The
+   `-v -v: undefined word` at the `0 >` prompt after each panic hints the CIF
+   exit path is already fragile; this is the OpenBIOS-only route (no qemu rebuild).
+3. Keep the getproplen guard (#3) in whichever lands — it's a real latent bug.
+
+Honest bottom line: the enabler (cross toolchain + swappable patched-blob loop)
+is DONE and reproducible; the diagnosed "flushw" fix is empirically wrong (ruled
+out); the real fix is the reversed-%cwp interaction, which needs a qemu %cwp fix
+or a CIF trap-table isolation — landed next pass. A validated fix-in-progress
+with the toolchain built, per the task's own success criterion.
