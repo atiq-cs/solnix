@@ -1117,3 +1117,26 @@ pre-cleanup remainder). The banner probe returns `SSH-2.0-OpenSSH_10.3` from
   libs + OpenSSH), reached by direct assembly because the IPS repo phase was
   blocked on that host-python skew.
 
+
+## Graviton boot vs package-build speed (2026-07-27, evaluated)
+
+Q: does aarch64 solnix boot on Graviton now, to speed up package building?
+A: NO to booting, and it WOULDN'T speed up builds anyway.
+
+- **Boot: no.** All Graviton (1-4, Nitro) present GICv3/GICv3-ITS + ACPI (SBBR
+  server-class). The port supports only GICv2 + devicetree (EBBR). No interrupt
+  controller it understands, no DTB -> won't boot. Fix = GICv3 driver + ACPI
+  parser + SystemReady-SR bringup (IPD 24: "in its infancy") = multi-month
+  UPSTREAM kernel port. Not a bug; a hardware-support gap.
+- **Speed: Graviton buys ~nothing for package builds.** We build aarch64 pkgs by
+  CROSS-COMPILING from amd64 illumos hosts (cross gcc aarch64-unknown-solaris2.11)
+  — exactly how A3-A6 worked. QEMU is only for boot-TESTING a few images, NOT the
+  hot build path. So the aarch64 package tail already runs at full x86_64 fleet
+  speed; a native aarch64 host would be marginal at best and still needs the
+  cross path for bootstrap. Emulation overhead is not in the package-build loop.
+
+DECISION: do NOT pursue Graviton boot for build speed. It's a POST-STABLE
+deployment-target item (run solnix-aarch64 on real server ARM), pursued as
+upstream collaboration on arm64-gate (contribute GICv3+ACPI), alongside PS-7
+(qualify on all EC2 types). aarch64 package build-out continues via cross-from-
+amd64 on the ouch fleet (fast, no emulation).

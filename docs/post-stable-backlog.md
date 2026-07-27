@@ -75,3 +75,11 @@ start as soon as the world self-hosts; PS-1/PS-4/PS-5 (clang/latest-GCC/lldb)
 are larger world-rebuilds best done once the GCC world + cache are proven; PS-6
 is ongoing breadth work that rides on a stable base. Revisit this file when
 Phase 2's gate is green.
+
+## PS-8: aarch64 on server-class ARM (Graviton/SBBR) — deployment target
+
+Make solnix-aarch64 boot on AWS Graviton + other server ARM (not for build speed —
+cross-from-amd64 already handles builds — but as a DEPLOYMENT target). Requires
+upstream arm64-gate work: GICv3/GICv3-ITS driver + ACPI/SBBR parser + SystemReady-SR
+bringup (IPD 24 marks these nascent). Collaborate upstream (Rich Lowe/illumos).
+Pairs with PS-7 (qualify all EC2 types). Multi-month; low priority vs package/boot goals.
