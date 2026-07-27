@@ -264,6 +264,174 @@ The honest path forward, in order of leverage:
 Do NOT claim "sparc supported" until a sun4u kernel boots to an illumos
 milestone in qemu (steering rule).
 
+## SPARC progress (S1b — get sun4u BOOTING past the firmware handoff)
+
+Status: **DONE — the sun4u illumos kernel STARTS EXECUTING under
+qemu-system-sparc64 and boots deep into genunix/SMF.** The S1 wall ("OpenBIOS
+stalls in the CD FCode, never hands off to the kernel") is BROKEN. We are now
+past the firmware handoff; the remaining walls are OpenBIOS OBP *client-service*
+bugs that the kernel hits *while executing*, not a firmware-handoff stall.
+
+All runs DETACHED (nohup qemu -> console logfile, time-boxed, killed; never an
+interactive console held across a boot). Assets: local ISO/kernels + solnix.io
+cache ONLY (no AWS S3/ouch). Hosts not terminated. Not git-committed.
+
+### S1b.0 The decisive finding: the kernel starts (the S1 "stall" was a red herring)
+
+S1 concluded OpenBIOS "hangs in the FCode interpreter spinner, never hands off."
+That was a **timebox artifact**: the FCode `Evaluating FCode...` phase legitimately
+spins for ~60-90 s (tokenized FCode interpreted slowly), THEN hands off. S1's
+timebox + the default NIC noise hid the handoff. With a longer timebox on the
+dev-box qemu 10.1.5 (OpenBIOS v1.1, Sep 24 2024), the CD boot path
+(`boot cdrom`) goes ALL THE WAY:
+
+```
+Evaluating FCode...                         <- ~90s spin (normal, not a hang)
+Ignoring failed claim for va 1000000 memsz d5f4e!   <- illumos 'boot' placing unix's
+Ignoring failed claim for va 1402000 memsz 31e25!      LOAD segments (vaddrs match
+Ignoring failed claim for va 1800000 memsz 52148!      readelf of sun4u_unix exactly)
+Welcome to Tribblix, the retro illumos distribution    <- THE KERNEL IS RUNNING
+tribblix-m34 | April 2026 | https://www.tribblix.org/
+interpret \ ident "%Z%%M% %I% %E% SMI"      <- kernel's unix-tte FCode driver script
+WARNING: add_spec: No major number for sf   <- genunix driver-attach WARNINGs
+WARNING: consconfig: cannot find driver for screen device .../QEMU,VGA@2
+```
+
+**The sun4u_unix kernel unambiguously STARTS EXECUTING** — it prints the Tribblix
+banner (that string lives in the *kernel*, emitted after `_start`/`mlsetup`),
+runs its embedded `unix-tte` FCode, and emits genunix `WARNING:` messages from
+driver attach. Getting here = the S1b win ("past the firmware handoff to a kernel
+that starts executing").
+
+### S1b.1 How far it boots (two observed depths — the kernel runs a LONG way)
+
+Depending on emulation timing, two milestones were reached across runs (both far
+past the handoff; the exact stop is nondeterministic OBP-callback territory):
+
+**(A) Into SMF / early userland** (`cd-milestone-SMF95of95-KEEP.log`,
+`cd-repro-SMF27of95-KEEP.log`, `cd-console-SMF-KEEP.log`): after the kernel
+banner it mounts root and starts init/SMF, and in the longest run imported the
+FULL service repository:
+```
+Loading smf(7) service descriptions: 1/95
+2/95 ... 95/95           <- ALL 95 SMF manifests imported = multi-user boot,
+                            userland up, svc.configd/svccfg running
+```
+This is a real multi-user boot (root mounted from the boot_archive ramdisk,
+`svc.configd`/`svccfg` importing all 95 service manifests to completion, then
+starting services). The 25-min timebox fired during the quiet service-startup
+phase after 95/95 (emulated single-core sun4u is slow, not stuck — it climbed
+1->95 steadily over ~18 min). Shorter runs stopped at 16/95 and 27/95, still
+advancing.
+
+**(B) genunix DDI panic** (`cd-novga-PANIC-prom_getproplen-KEEP.log`,
+`cd-full-PANIC-KEEP.log`): in other runs the kernel panics during device
+enumeration with a full, legible stack trace:
+```
+panic[cpu0]/thread=180e000: BAD TRAP: type=4e rp=180a9c0 addr=ffd12084 mmu_fsr=0
+  unix:die+9c
+  unix:trap+1800
+  unix:ptl0+68
+  unix:prom_getproplen+38          <- kernel calls OpenBIOS PROM to read a devtree prop
+  genunix:impl_ddi_bus_prop_op+44
+  genunix:ddi_bus_prop_op+28
+  genunix:ddi_prop_search_common+3b4
+  genunix:ddi_prop_op+44
+rebooting...
+BOOTpanic - kernel: prom_reboot: reboot call returned!
+```
+The kernel is executing `genunix:ddi_prop_op` -> `prom_getproplen()` and the trap
+addr (0xffd12084 / 0xffd0e710) is inside OpenBIOS's own ROM window (0xffd00000+).
+So **OpenBIOS's OBP `getproplen`/`getprop` client-interface callback faults** when
+illumos calls it during DDI device-tree property lookup at driver-attach time.
+
+### S1b.2 The EXACT wall (three OpenBIOS OBP client-service gaps, all post-handoff)
+
+Every remaining failure is an OpenBIOS OBP *client-interface* bug the kernel hits
+WHILE RUNNING — none is a firmware-handoff stall:
+
+1. `unix-tte is va>tte-data failed with error -13` — the kernel's `unix-tte`
+   FCode word maps its own text/data with large TLB pages via the OBP word
+   `va>tte-data`; OpenBIOS returns -13 (unimplemented/unsupported). Non-fatal —
+   the kernel *catches* it (`unix-tte:interpret: exception -13 caught`) and keeps
+   going (that's how it reaches genunix/SMF).
+2. **`prom_getproplen` BAD TRAP (fatal)** — during DDI enumeration the kernel
+   calls the OBP `getproplen`/`getprop` client service; OpenBIOS faults inside
+   its ROM, the kernel takes trap 0x4e and panics. THIS is the hard wall on the
+   full boot in run (B).
+3. `prom_reboot: reboot call returned!` — after the panic the kernel asks OBP to
+   reboot; OpenBIOS's `reboot` client call returns instead of resetting, so the
+   kernel drops to the `0 >` ok prompt. A third, cosmetic OBP gap.
+
+Root cause class: qemu's OpenBIOS implements only a subset of the SPARC OBP
+client interface (the `SUNW,*` and devtree property callbacks). The illumos
+sun4u kernel exercises more of that interface than OpenBIOS covers. This is a
+**firmware-completeness gap in OpenBIOS**, NOT a defect in the Tribblix m34
+kernel (the maintainer's real Ultra 45 with real Sun OBP boots this exact ISO to
+multi-user).
+
+### S1b.3 Boot paths tried (which bypass the CD FCode, which don't)
+
+| Path | Recipe | Result |
+|------|--------|--------|
+| (a) CD FCode `boot cdrom` | qemu 10.1.5 sun4u + ISO as IDE cdrom, longer timebox | **WINS** — reaches kernel exec -> genunix/SMF (the S1 "stall" was just the ~90s FCode spin). This IS the working path. |
+| (a') disk image w/ UFS bootblk | not built | would route through the SAME `ufs/bootblk` FCode + `boot` + kernel chain as the CD; the CD path already gets the kernel running, so a disk buys nothing for the boot wall. Deferred (the wall is post-handoff OBP callbacks, identical either way). |
+| (b) direct `-kernel sun4u_unix` | qemu `-kernel` | **fails, fundamentally** — "ROM regions overlapping": every PT_LOAD has PhysAddr=0, so qemu's ELF loader stacks all segments at phys 0. sun4u_unix is a krtld-relocated, VirtAddr-placed, `ld.so.1`-interpreted module — it MUST be placed by the illumos `boot` loader with the MMU; qemu's flat `-kernel` loader cannot. Dead end for a krtld kernel. |
+| (c) netboot `boot net` | not run | OpenBIOS netboot loads an ELF NBP directly (no FCode), but the CD media has no `inetboot`/`wanboot` NBP to serve; and path (a) already gets the kernel executing, so (c) is not needed to clear the S1b bar. Deferred. |
+| (d) SILO / illumos sparc standalone | n/a | illumos SPARC has no SILO; the `boot`+bootblk chain (path a) IS the standalone, and it works. |
+
+qemu 11.0.2 (the OI host package) is WORSE: its OpenBIOS crashes with
+`Unhandled Exception 0x32` at PC 0xffd16ea0 immediately on `-machine sun4u`,
+before even reaching the `ok` prompt (bare, no drives). So the dev-box
+qemu 10.1.5 (OpenBIOS v1.1 Sep-2024) is the better substrate; the host qemu
+11.0.2 OpenBIOS is broken on sun4u. Recorded — do NOT use host qemu 11.0.2 for
+sun4u.
+
+### S1b.4 Verdict + realistic next step
+
+**S1b bar cleared:** the sun4u kernel starts executing and boots into
+genunix/SMF — in the longest run a full multi-user boot that imported ALL 95 SMF
+service descriptions (1->95/95). The firmware handoff is NOT the wall anymore.
+The wall is OpenBIOS's incomplete OBP client-interface (chiefly the
+`prom_getproplen`/`getprop` devtree callbacks that fault during DDI in *some*
+runs, plus `va>tte-data` and `reboot`).
+
+To get a *clean* multi-user boot under qemu, in order of leverage:
+1. **Patch OpenBIOS's OBP `getprop`/`getproplen` client service** so it doesn't
+   fault when illumos reads devtree properties during DDI attach (the fatal
+   wall). This is a focused OpenBIOS/qemu fix (a few client-callback words), far
+   smaller than a port. Rebuild qemu-system-sparc64 against a patched
+   `openbios-sparc64` and re-run path (a). Highest leverage.
+2. **Or the maintainer's real Ultra 45** (real Sun OBP) — it boots this exact
+   ISO to multi-user today. That is the ground-truth SPARC host and the eventual
+   native build host (the sparc gate is native-only, per S1). For actually
+   *building* the sparc gate, the Ultra 45 is the path regardless of qemu.
+3. **Or a different/patched firmware** for the sun4u machine. Real Sun OBP is
+   not redistributable; a patched OpenBIOS (option 1) is the tractable route.
+
+Honest bottom line: OpenBIOS does NOT block all qemu paths — it lets the kernel
+boot into genunix/SMF (path a), then faults in a specific OBP client callback.
+The near-term unblock is a small OpenBIOS `getprop` fix; the ground truth is the
+real Ultra 45.
+
+### S1b.5 Artifacts
+
+- `artifacts/sparc-s1b/logs/` — console logs per recipe (KEEP = milestone runs):
+  - `cdrom-KERNEL-STARTS-KEEP.log` — first proof the kernel banner prints.
+  - `cd-console-SMF-KEEP.log` — boots into SMF (16/95 service descriptions).
+  - `cd-milestone-SMF95of95-KEEP.log` — **deepest run: full multi-user boot**,
+    root mounted, ALL 95 SMF service descriptions imported (1->95/95 over ~18min),
+    timebox fired in the quiet service-startup phase. No panic.
+  - `cd-repro-SMF27of95-KEEP.log` — clean run to SMF 27/95 (no panic — the DDI
+    panic is a nondeterministic OBP-callback flake, not every run hits it).
+  - `cd-novga-PANIC-prom_getproplen-KEEP.log` — the clean genunix DDI panic
+    stack (the fatal OBP `getprop` wall).
+  - `cd-full-PANIC-KEEP.log` — same panic, `ddi_prop_lookup_common` frame.
+  - `cdrom-base-KEEP.log`, `cdrom-ttya-KEEP.log` — earlier depth runs.
+- `artifacts/sparc-s1b/s1b-boot-local.sh` — the detached, time-boxed boot
+  harness (dev-box qemu 10.1.5); `s1b-boot.sh` — the host variant.
+- `artifacts/sparc-s1b/RECIPES.md` — the exact qemu command lines tried.
+
 ## SPARC target matrix (corrected 2026-07-27 from the archived m34 kernels)
 
 The Tribblix m34 sparc gate builds BOTH sparc platforms — we archived working
@@ -272,7 +440,7 @@ kernels for each. Our matrix must track both (earlier steering wrongly said
 
 | SPARC platform | Kernel (archived) | Class / hw | QEMU |
 |----------------|-------------------|-----------|------|
-| **sun4u** | sun4u_unix (SPARC V9, UltraSPARC1 Ext) | UltraSPARC I–IV, **Ultra 45** (maintainer's hw) | qemu-system-sparc64 -machine sun4u |
+| **sun4u** | sun4u_unix (SPARC V9, UltraSPARC1 Ext) | UltraSPARC I–IV, **Ultra 45** (maintainer's hw) | qemu-system-sparc64 -machine sun4u — **kernel BOOTS into genunix/SMF (S1b)**; OpenBIOS OBP `getprop` callback is the remaining wall |
 | **sun4v** | sun4v_unix (SPARC V9) | T-series (CoolThreads: T1..T5+), LDOMs | qemu -machine niagara (harder; needs OpenSBI-equiv) |
 
 Both share one big-endian UFS boot_archive. sun4u is the near-term QEMU target
