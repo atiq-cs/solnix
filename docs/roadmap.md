@@ -164,6 +164,14 @@ Honesty rule holds: GPU/Azure/GCP drivers, torch, full Wayland are real illumos
 gaps — inventory realistically, build tractable paths first, flag multi-quarter
 porting as tracked sub-projects.
 
+## Community telemetry (opt-out-off, default-private) 2014 T2.14, LOWER PRIORITY
+
+Client reporter feeding the live search.solnix.io/telemetry (aggregates at
+solnix.io/pulse). Default `solnix.privacy.enable=true` = install nothing / send
+nothing. Shares the privacy switch with T2.11 P2P seed. No PII; per-day rotating
+nonce; SMF timer; best-effort. Land LATE in the publication run; never gates the
+release. Full spec: docs/design-telemetry-client.md; task: solnix-phase2.5 T2.14.
+
 ## Cloud Hardware Enablement (spec: .kiro/specs/solnix-cloud-hardware)
 
 Boot + run + expose ALL hardware on AWS/EC2, Azure, GCP across all architectures.

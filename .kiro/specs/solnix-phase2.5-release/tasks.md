@@ -59,8 +59,57 @@ Once the Phase-2 gate + T2.11 are green and stable:
   publish + advertise for download. Include the sha256 + a short "how to install"
   alongside it.
 
+## T2.14 — Opt-OUT-off (default-private) community telemetry client (LOWER PRIORITY)
+
+Client-side reporter feeding the ALREADY-LIVE server at
+`https://search.solnix.io/telemetry` (aggregates shown at solnix.io/pulse). Full
+client spec archived at docs/design-telemetry-client.md. Lower priority — land
+late, as we finish the distro for publication. Ground rule: **no PII, ever**;
+default fully private.
+
+- **Unify the privacy switch with T2.11.** One `solnix.privacy.enable = true`
+  (DEFAULT true = fully private, nothing phones home / nothing installed). The
+  P2P seed opt-in (T2.11's `solnix.cache.seed.enable`) and telemetry share this
+  framework. Effective rule (implement EXACTLY):
+  `send(feature) = (not solnix.privacy.enable) && solnix.telemetry.enable
+                   && solnix.telemetry.<feature>.enable`.
+  Master switch always wins; a user who never edits config sends nothing. Also
+  honor a global kill: `DO_NOT_TRACK=1` env OR `/etc/solnix/telemetry-off` file
+  → send nothing regardless (defense in depth).
+- **Module:** `modules/config/telemetry.nix` (options in the spec §1) that, ONLY
+  when the effective rule is true, installs a ~50-line reporter + an SMF timer
+  (illumos has no systemd — SMF periodic service, the daily/`RandomizedDelaySec`-
+  equivalent via a jittered schedule; `Persistent=false`). In the default private
+  state install NOTHING (not just disable). Reporter uses the base-closure curl
+  (no new dep).
+- **Events (once/day, coalesced, best-effort):** `platform_census` (system,
+  host-kind∈{bare-metal,vm,zone}, illumos-flavor, day, nonce), `packages_in_use`
+  (attrs from the SYSTEM/PROFILE CLOSURE — never scan processes/open files),
+  `package_installed` (per-install or daily batch), `package_seeding` (only if
+  cache.seed on). Wire = one EDN map per POST, `:kind` required, endpoint reads
+  raw body. Prefer one event per attr with `:attr` (shows in /pulse immediately).
+- **Anonymity nonce (get right):** per-day, per-device, NON-persisted nonce for
+  same-day dedup only: `base64(HMAC-SHA256(key=random-per-day secret,
+  msg="solnix-telemetry"+day))[:16]`. Secret = fresh getrandom() in tmpfs/memory,
+  rotates ≥daily, NEVER a machine-id/MAC/hostname/serial. Never send the secret,
+  IP, geo, timezone, locale, uptime, or free-form strings (region derived server-
+  side from IP, IP dropped). Closed vocab for host-kind/flavor.
+- **Good citizen:** ≤5s timeout, non-blocking (never block a rebuild/boot/pkg op),
+  no aggressive retry (drop + next scheduled run), jittered schedule, verify TLS
+  (Let's Encrypt, no pinning), offline → silently skip (NO disk queue — avoids
+  accumulating identifiable history).
+- **Docs:** a handbook page "Privacy, telemetry & the community pulse" (server
+  team drafts site copy); link from the module description.
+- **Gate:** default config installs no reporter + sends nothing (verify: no SMF
+  unit, no POST). Opt in (`solnix.privacy.enable=false`) → a `package_installed`
+  test POST returns `200 ok` and appears in /pulse once k-anon threshold met;
+  missing `:kind` → 400; `DO_NOT_TRACK=1` / `/etc/solnix/telemetry-off` → silent.
+  Nonce verified rotating + non-identifying. No PII in any payload (audit the EDN).
+
 ## Sequencing
 
 T2.11 (P2P cache) → T2.12 (release 2026.08) → T2.13 (ISO + publish). T2.11's
 installer/config hooks depend on T2.7 (installer) landing first. The release and
-ISO are the public-facing payoff once the distributed cache is proven.
+ISO are the public-facing payoff once the distributed cache is proven. **T2.14
+(telemetry) is LOWER PRIORITY — land it late in the publication run, sharing
+T2.11's `solnix.privacy` switch; it must never gate the release.**
