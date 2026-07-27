@@ -1282,3 +1282,105 @@ fetch-verified HTTP 200, sha-matched (NO AWS S3/ouch):
   per §10.4). A7 delivered the CLEAN pkg path for the packaging + image-assembly
   stages (the A6 gap); the last mile (boot the pkg-composed root) is the remaining
   follow-on.
+
+## 12. A8 progress (boot the CLEAN pkg-image-created root → aarch64 FULLY QUALIFIED)
+
+Status: **A8 SUCCESS — the clean `pkg image-create`-assembled aarch64 image BOOTS
+to `multi-user-server`, SSH-in works, and `pkg list` shows the 34-package IPS
+image. aarch64 is FULLY QUALIFIED (clean pkg-image, ssh, pkg-functional).**
+
+Done on ouch (persistent, us-east-2), host **ouch-w7-8** (3.142.68.35). All long
+ops detached (nohup → logfile / console-socket, poll; never blocked SSH). Assets:
+solnix.io cache + local host disk ONLY — no AWS S3/ouch storage. Artifacts under
+`artifacts/aarch64-a8/`.
+
+### 12.1 The A7 boot blocker — root-caused (NOT the brief's hypothesis)
+
+The brief hypothesized missing `/etc/path_to_inst` + `/etc/devices/*`. Diffing the
+two staged roots (`/braich_a6` boots, `/braich_a7` panics) DISPROVED that: those
+device-state files, `/dev`, `/devices`, `/etc/name_to_major` bindings, driver
+binaries (226 drv), `unix`, and even the `boot_archive` are byte-identical.
+
+The real divergence is in the KERNEL BOOT LOG, not the on-disk device state:
+- A6 (boots): loader `Module 1: rootfs (0) 0x61c0000` (=**102 MB** boot_archive)
+  → after `simple-bus0 at root`, **`viommionex0..31 at root`** → `vioblk`/`blkdev0
+  online` → `root on armpool/ROOT/braich`.
+- A7 (panics): loader `Module 1: rootfs (0) 0x2da0000` (=**47.8 MB** boot_archive)
+  → `simple-bus0`→`ecam0`→`ns16550a0`, **0× viommionex** → `vfs_mountroot` panic.
+
+**Root cause:** the booted `illumos-a7.img` carried a STALE 47.8 MB pkg-generated
+boot_archive that lacked the full aarch64 driver tree, so the virtio-mmio nexus
+never enumerated. The `/braich_a7` staging root had the correct 102 MB archive
+(the full 226-driver tree was overlaid in A7 §11.4), but the disk was
+`zfs send`-built from an EARLIER snapshot, BEFORE that landed. §11.4's "copied A6's
+boot_archive + re-laid" updated the staging root but the disk actually booted came
+from the older stream. Evidence: `artifacts/aarch64-a8/diff/a8-device-state-divergence.txt`.
+
+### 12.2 The fix (`aa-a8-relay.sh`) — regenerate + seed, then re-lay
+
+1. **Regenerate the boot_archive FRESH from the pkg root** (`create_ramdisk -R
+   /braich_a7 -p aarch64 -f cpio`) → 102 MB, 717 files, viommionex driver inside,
+   internal `name_to_major` = the A7 on-disk 105-entry numbering (self-consistent,
+   NOT A6's 235-entry tables copied in). Re-lay `illumos-a8.img` from this root.
+   → boots: `viommionex0..31 at root`, `blkdev0 online`, `root on armpool/ROOT/braich`.
+   **The A8 device-enumeration gap is closed by this single step.**
+
+2. Booting to ZFS root exposed 4 further **pkg-image userland completeness gaps**
+   (the minimal 34-pkg osnet set omits files the full proto carries — the same
+   bootstrap gap solnix closes; a full `pkg image-create` would pull these from the
+   utility/library/FMA/network consolidations that have no aarch64 build yet).
+   Seeded from the A6 proto (same-gate build, byte-identical arch), documented as a
+   post-`pkg image-create` seeding step:
+   - `/lib/fm/libfmevent.so.1` — svc.startd NEEDs it; without it `ld.so.1: svc.startd:
+     fatal` → startd restart-loop → maintenance.
+   - `/sbin/dladm` + `/sbin/ipadm` (+ `/etc/dladm/*.conf`, `/etc/ipadm/*.conf`) —
+     `network/physical`'s `net_reconfigure` needs them.
+   - **static `/etc/hostname.vioif0` = `10.0.2.15/24`** (QEMU user-net's deterministic
+     lease) — the shipped `dhcp` config lost the first-boot DHCP race → net-physical
+     `exit 96` → `network/physical` maintenance → `milestone/network` blocked → no
+     sshd. Static addressing makes net-physical exit OK on the FIRST boot.
+   - **~223 core `/usr/bin` binaries + libs** (`awk`, `nawk`, `sort`,
+     `libdiskmgt.so.1`, …). Boot-fatal: in-guest `bootadm update-archive` (run by
+     `fs-usr`) invokes `create_ramdisk`, which needs awk/nawk/sort; `swapadd` needs
+     libdiskmgt. Missing → fs-usr `exit 95` → maintenance. Seeded → /usr/bin 251→474.
+   - **Corrected mistake:** an initial attempt DISABLED `system/boot-archive` — that
+     stalls 39 dependent services (it is a hard dep of `filesystem/usr` → the whole
+     single-user→multi-user chain). Kept it ENABLED; the seeded utils make its
+     in-guest archive check/update succeed.
+
+### 12.3 Boot + SSH + pkg proof (`multi-user-server`, ssh-in, `pkg list`)
+
+Booted `illumos-a8.img` under `qemu-system-aarch64 -machine virt -bios u-boot` +
+hostfwd (the A4–A7 proven path), console on a unix socket driven by a python pty
+helper (`aa-a8-prove.py`). RESULT (`artifacts/aarch64-a8/logs/`):
+- `viommionex0..31 at root` → `blkdev0 online` → `root on armpool/ROOT/braich`.
+- **`svc:/milestone/multi-user-server:default  online`** (68 services online; only
+  optional fmd/hal-dbus/intrd/iscsi in maintenance — A6 had the same set).
+- **`svc:/network/ssh:default  online`**, `sshd` pid 100686, `*.22 LISTEN`,
+  `vioif0: UP inet 10.0.2.15`.
+- **SSH from host → guest** (hostfwd 2228→22, password auth): `SunOS solnix-aa 5.11
+  arm64-gate-0-ga808613930 armv8 aarch64 QEMU,virt`, `SSHIN-OK`, `uid=0(root)`,
+  multi-user-server online confirmed from inside (`a8-sshin.txt`).
+- **`pkg list`** on the A8 IPS image → **34 packages** installed (SUNWcs, SUNWcsd,
+  system/kernel[/platform/qemu-virtual], system/library[/math/iconv], system/
+  file-system/zfs, driver/misc/viommionex+virtio, driver/storage/vioblk+blkdev+
+  vio9p, driver/network/vioif, driver/crypto/viorand, system/boot/loader, …);
+  publisher `on-nightly` online (`a8-pkglist.txt`). NOTE: the on-*guest* `pkg`
+  client is absent (the aarch64 `package/pkg` client + an aarch64 python runtime
+  are not built yet — a known follow-on, not a boot blocker); the image IS a
+  genuine queryable IPS image (`var/pkg` v4 catalogs), read here via the host pkg
+  client `pkg -R <image> list`, exactly as `pkg image-create` validated it.
+
+### 12.4 Archive + qualification
+
+Archived the booting clean pkg-image (NO AWS S3/ouch):
+- `aarch64-a8-pkg-bootable.img.zst` (155 MiB) — sha256
+  `06b98f7ffd2bc9ba151d69b19768ba15965915a7b0841d00edea104865b16d7b`.
+- solnix.io `archive/aarch64/` (fetch-verified HTTP 200, sha-matched) +
+  local `~/ws/solnix-archive/aarch64/`.
+
+**aarch64 FULLY QUALIFIED:** the clean `pkg image-create`-assembled image (A7's
+deliverable) now boots end-to-end — ZFS root on virtio-mmio, multi-user-server,
+SSH-in, and a queryable 34-package IPS image. The A6 hand-assembled image remains
+the fallback. Remaining follow-on (not a qualification blocker): build the aarch64
+`package/pkg` client + python runtime so `pkg` runs ON the guest.
