@@ -29,14 +29,63 @@ let
     clang = mkPkg (spec // { compiler = "clang"; });
   };
 
-  # gnulib-on-illumos fix: newer illumos libc declares getlocalename_l as
-  # `const char *`, but gnulib bundled in GNU tarballs (m4/grep/sed/diffutils/
-  # gettext/coreutils/...) redeclares it `char *` -> conflicting-types error.
-  # const-qualify gnulib's prototype to match libc. Idempotent, safe if absent.
+  # gnulib-on-illumos fix: illumos /usr/include/locale.h:98 declares
+  #   extern const char *getlocalename_l(int, locale_t);
+  # but the gnulib bundled in GNU tarballs (m4/grep/sed/diffutils/gettext/
+  # coreutils/datamash/recode/libunistring/...) redeclares it `char *` under its
+  # `#if defined __sun && HAVE_GETLOCALENAME_L` block -> conflicting-types error.
+  # const-qualify gnulib's prototype to match libc across EVERY gnulib file that
+  # carries the decl. gnulib has moved this decl across vintages
+  # (localename.c -> localename-unsafe.c -> getlocalename_l-unsafe.c) and also
+  # ships it in the matching *.h; sweep all of lib/ so the fix is vintage-proof.
+  # Idempotent, safe if absent. (Family 1, wave 19 — docs/design-pkgsrc-patches.md)
   gnulibFix = ''
-    for f in $(find . -name 'localename.c' -o -name 'localename-unsafe.c' -o -name 'localename-table.c' 2>/dev/null); do
+    for f in $(find . \( -name 'localename*.c' -o -name 'localename*.h' \
+                       -o -name 'getlocalename_l*.c' -o -name 'getlocalename_l*.h' \
+                       -o -name 'setlocale_null*.c' \) 2>/dev/null); do
       sed -i 's/extern char \* *getlocalename_l/extern const char *getlocalename_l/;s/^char \* *getlocalename_l/const char *getlocalename_l/' "$f" || true
     done
+  '';
+
+  # tputs-on-illumos fix (Family 2): illumos <term.h> declares
+  #   tputs(char *, int, int (*)(char))
+  # (the putc callback takes `char`), but ncurses/portable code passes
+  # int(*)(int). gcc-14 promotes the incompatible-pointer mismatch to a hard
+  # ERROR. Downgrade it to a warning. -fcommon also placates the multiple-def of
+  # ospeed/UP/BC/PC that terminfo tools carry (gcc-10+ default -fno-common).
+  # Used by texinfo (already), hwloc/lstopo, wdiff, and any terminfo consumer.
+  tputsFix = "-Wno-error=incompatible-pointer-types -fcommon";
+
+  # endian.h-on-illumos fix (Family 3): Linux code #include <endian.h> and uses
+  # htobe64/htole64/be64toh/... which illumos lacks; illumos ships the same
+  # primitives as BE_64/LE_64/... in <sys/byteorder.h>. Force-include a compat
+  # shim (endian_illumos.h, staged into every build root by endianShimStage)
+  # that maps the glibc names onto the illumos ones. -include it via CFLAGS so
+  # the macros exist regardless of the source's #ifdef __linux__ guards.
+  endianShimStage = ''
+    cat > endian_illumos.h <<'ENDIANEOF'
+    #ifndef SOLNIX_ENDIAN_ILLUMOS_H
+    #define SOLNIX_ENDIAN_ILLUMOS_H
+    /* solnix compat shim: glibc <endian.h> names on illumos <sys/byteorder.h>. */
+    #include <sys/byteorder.h>
+    #ifndef htobe16
+    #define htobe16(x) BE_16(x)
+    #define htole16(x) LE_16(x)
+    #define be16toh(x) BE_16(x)
+    #define le16toh(x) LE_16(x)
+    #define htobe32(x) BE_32(x)
+    #define htole32(x) LE_32(x)
+    #define be32toh(x) BE_32(x)
+    #define le32toh(x) LE_32(x)
+    #define htobe64(x) BE_64(x)
+    #define htole64(x) LE_64(x)
+    #define be64toh(x) BE_64(x)
+    #define le64toh(x) LE_64(x)
+    #endif
+    #endif
+    ENDIANEOF
+    export CFLAGS="''${CFLAGS:-} -include $PWD/endian_illumos.h"
+    export CPPFLAGS="''${CPPFLAGS:-} -include $PWD/endian_illumos.h"
   '';
 
   # illumos feature-test macro fix: many portable C tools use strcasecmp/
@@ -51,6 +100,19 @@ let
   # convenience: refer to a dep's gcc-built store path for RUNPATH/search.
   # We link deps built with gcc (ABI-compatible: OI clang uses gcc's libstdc++).
   self = rec {
+
+    # ---- cached imaging/security libs (wave10, published to the cache) -----
+    # Referenced by wave-14 pkgs as raw store paths (they're not packages.nix
+    # attrs). mk-userland-pkg treats a dep as a store-path string for -L/-I/-R +
+    # RUNPATH; oi-tool.sh pulls any referenced store path from the cache.
+    libpngCached = "/nix/store/6xj178rds6hxacanq0wvi7lxw90vk5xv-libpng-1.6.44";
+    caresCached  = "/nix/store/kw0zwqy0kqnvrzax4mw44haxw6zc4gpw-c-ares-1.34.4";
+    pcre1Cached  = "/nix/store/4mgr68kazbylx2imvwsg022k97maqxz2-pcre-8.45";
+    jpegCached     = "/nix/store/6xlixn6x697y6izlymrkwdph6rzxkqgs-libjpeg-turbo-3.0.4";
+    freetypeCached = "/nix/store/li0kv2ik8aaydw9qplc9a68a6jrmjaky-freetype-2.13.3";
+    lcms2Cached    = "/nix/store/m261cgrlq9xs4q94ibj130mi1xxiy0lm-lcms2-2.16";
+    tiffCached     = "/nix/store/xa5d79ck4vw76jk5vsfjpipj40h8p4zg-libtiff-4.7.0";
+    webpCached     = "/nix/store/6pdw7d3b9ww89icflalj56jg59ldwasy-libwebp-1.4.0";
 
     # ---- Tier 0/1 leaf libs (no userland deps) -----------------------------
     zlib = pkg {
@@ -107,6 +169,27 @@ let
       src = { url = "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.47/pcre2-10.47.tar.gz";
               sha256 = "c08ae2388ef333e8403e670ad70c0a11f1eed021fd88308d7e02f596fcd9dc16"; };
       configureFlags = [ "--enable-pcre2-16" "--enable-pcre2-32" ];
+    };
+
+    # pcre (pcre1): still wanted by tools that predate pcre2 (the_silver_searcher
+    # 2.2.0). Autotools; ships libpcre.pc. illumos-clean.
+    pcre = pkg {
+      pname = "pcre"; version = "8.45";
+      src = { url = "https://sourceforge.net/projects/pcre/files/pcre/8.45/pcre-8.45.tar.bz2/download";
+              sha256 = "4dae6fdcd2bb0bb6c37b5f97c33c2be954da743985369cddac3546e3218bffb8"; };
+      preConfigure = illumosExt;
+      configureFlags = [ "--enable-pcre8" "--enable-utf" "--enable-unicode-properties" "--disable-static" ];
+    };
+
+    # boehm-gc (bdwgc): conservative garbage collector; w3m links it. Autotools;
+    # needs libatomic_ops bundled (the release tarball ships it). illumos-clean
+    # with the feature-test macros.
+    boehmgc = pkg {
+      pname = "gc"; version = "8.2.6";
+      src = { url = "https://github.com/ivmai/bdwgc/releases/download/v8.2.6/gc-8.2.6.tar.gz";
+              sha256 = "b9183fe49d4c44c7327992f626f8eaa1d8b14de140f243edb1c9dcff7719a7fc"; };
+      preConfigure = illumosExt;
+      configureFlags = [ "--enable-threads=posix" "--enable-cplusplus" "--disable-static" ];
     };
 
     expat = pkg {
@@ -939,6 +1022,583 @@ EOF
         "--without-tcltk" "--without-iconv"
         "ac_cv_fread_reads_directories=no" "ac_cv_snprintf_returns_bogus=no"
       ];
+    };
+
+    # ---- pkgsrc illumos-patch mining (see docs/design-pkgsrc-patches.md) ----
+    # Each of these was stuck/unbuilt in prior waves; NetBSD pkgsrc's per-package
+    # patches/ + Makefile SunOS conditionals carry the illumos portability fix.
+    # Harvested via scripts/pkgsrc-harvest.sh; patch files live in
+    # pkgs/illumos/patches/pkgsrc/. This is the wave-8 pattern generalised.
+
+    # aspell: Solaris /usr/include/locale.h pulls in libintl.h which #defines
+    # printf/vprintf -> collides with common/ostream.hpp method names (a
+    # "macro/redefinition" class illumos build break). pkgsrc's patch-an #undefs
+    # them after <libintl.h>; patch-prog_aspell.cpp reorders errors.hpp before
+    # aspell.h so the C++ compile succeeds. Needs ncurses.
+    aspell = pkg {
+      pname = "aspell"; version = "0.60.8.2";
+      src = { url = "https://ftpmirror.gnu.org/aspell/aspell-0.60.8.2.tar.gz";
+              sha256 = "57fe4863eae6048f72245a8575b44b718fb85ca14b9f8c0afc41b254dfd76919"; };
+      deps = [ self.ncurses.gcc ];
+      patches = [ ./patches/pkgsrc/aspell-libintl-macros.patch
+                  ./patches/pkgsrc/aspell-errors-hpp-order.patch ];
+      preConfigure = illumosExt;
+      configureFlags = [ "--disable-static" ];
+    };
+
+    # socat: needs the illumos feature-test macros (__EXTENSIONS__/_XOPEN_SOURCE)
+    # for the POSIX network + termios symbols Solaris libc hides. pkgsrc builds it
+    # with no source patch once OPSYS=SunOS sets the right defines; illumosExt is
+    # our equivalent. Unbuilt Hipster-current tail (net/socat).
+    socat = pkg {
+      pname = "socat"; version = "1.8.0.3";
+      src = { url = "http://www.dest-unreach.org/socat/download/socat-1.8.0.3.tar.gz";
+              sha256 = "a9f9eb6cfb9aa6b1b4b8fe260edbac3f2c743f294db1e362b932eb3feca37ba4"; };
+      preConfigure = illumosExt;
+      # socat's configure auto-probes optional libs; keep the surface to base libc
+      # + openssl off (no readline/openssl in the sandbox include path here).
+      configureFlags = [ "--disable-openssl" "--disable-readline" ];
+    };
+
+    # file / libmagic: portable C, but Solaris libc needs __EXTENSIONS__ for
+    # some str* + the fts/getopt_long symbols. pkgsrc sysutils/file builds clean
+    # with the feature-test macros; illumosExt supplies them. High-value base
+    # (libmagic is a common dependency). Unbuilt.
+    file = pkg {
+      pname = "file"; version = "5.46";
+      src = { url = "https://astron.com/pub/file/file-5.46.tar.gz";
+              sha256 = "c9cc77c7c560c543135edc555af609d5619dbef011997e988ce40a3d75d86088"; };
+      deps = [ self.zlib.gcc ];
+      preConfigure = illumosExt;
+      configureFlags = [ "--disable-static" "--enable-zlib" ];
+    };
+
+    # GNU libiconv: on Solaris the linker errors if libintl.so refers to a
+    # libiconv.so in $prefix/lib while we also link ../lib/.libs (two libiconv.so).
+    # pkgsrc's patch-src_Makefile.in avoids ../lib/libiconv.la at install; we build
+    # standalone (no libintl in the sandbox) so the plain configure suffices +
+    # illumosExt. A base charset lib many tools want. Not in the Hipster ledger
+    # under this name (illumos ships its own iconv), but a clean pkgsrc-informed
+    # build proves the workflow on a GNU-libtool package.
+    libiconv = pkg {
+      pname = "libiconv"; version = "1.18";
+      src = { url = "https://ftpmirror.gnu.org/libiconv/libiconv-1.18.tar.gz";
+              sha256 = "3b08f5f4f9b4eb82f151a7040bfd6fe6c6fb922efe4b1659c66ea933276965e8"; };
+      preConfigure = illumosExt;
+      configureFlags = [ "--disable-static" "--enable-shared" ];
+    };
+
+    # apr (Apache Portable Runtime): on illumos the network resolver symbols are
+    # in libnsl, split out of libc. pkgsrc devel/apr sets LIBS.SunOS+=-lnsl (plus
+    # its .if OPSYS==SunOS block). Thread -lnsl -lsocket into LDFLAGS + the
+    # feature-test macros. Base dep for httpd/subversion/log4cxx/many. Unbuilt.
+    apr = pkg {
+      pname = "apr"; version = "1.7.6";
+      src = { url = "https://archive.apache.org/dist/apr/apr-1.7.6.tar.gz";
+              sha256 = "6a10e7f7430510600af25fabf466e1df61aaae910bf1dc5d10c44a4433ccc81d"; };
+      preConfigure = illumosExt + ''
+        export LDFLAGS="-lnsl -lsocket ''${LDFLAGS:-}"
+      '';
+      # apr's configure caches a few probes wrong on illumos; keep defaults + let
+      # it detect. --disable-static keeps the shared libapr-1.so.
+      configureFlags = [ "--disable-static" ];
+    };
+
+    # hunspell (spell-check library + tool; complements aspell): Solaris libc
+    # gates some wide-char/locale symbols behind _XPG6. pkgsrc textproc/hunspell
+    # sets CPPFLAGS.SunOS+=-D_XPG6; add it + illumosExt. Uses the 1.7.2 release
+    # tarball (ships a generated ./configure; the github tag needs autogen). C++,
+    # so exercises the gcc-14 C++ toolchain like aspell. Needs ncurses (readline
+    # UI probe) — keep it minimal. Unbuilt.
+    hunspell = pkg {
+      pname = "hunspell"; version = "1.7.2";
+      src = { url = "https://github.com/hunspell/hunspell/releases/download/v1.7.2/hunspell-1.7.2.tar.gz";
+              sha256 = "11ddfa39afe28c28539fe65fc4f1592d410c1e9b6dd7d8a91ca25d85e9ec65b8"; };
+      deps = [ self.ncurses.gcc ];
+      preConfigure = illumosExt + ''
+        export CPPFLAGS="-D_XPG6 ''${CPPFLAGS:-}"
+        export CXXFLAGS="-D_XPG6 ''${CXXFLAGS:-}"
+      '';
+      configureFlags = [ "--disable-static" "--without-readline" ];
+    };
+
+    # ---- wave-14 pkgsrc illumos-patch mining (scale-up; see docs/design-pkgsrc-patches.md) ----
+    # Hard-tail Hipster-current userland stuck on plain builds. NetBSD pkgsrc's
+    # per-package Makefile SunOS conditionals (feature-test macros, -lnsl/-lsocket,
+    # configure knobs) carry the illumos fix. Versions + knobs harvested via a
+    # blobless sparse pkgsrc clone; SunOS blocks recorded in artifacts/wave14/.
+    # Cached imaging/security libs (wave10) referenced by raw store path.
+
+    # lynx: Solaris curses text browser. pkgsrc www/lynx sets
+    # CONFIGURE_ENV.SunOS+=cf_cv_xopen_source=no (lynx's own xopen probe misfires
+    # on illumos); we pass it + illumosExt. ncurses + zlib + gettext deps.
+    lynx = pkg {
+      pname = "lynx"; version = "2.9.2";
+      src = { url = "https://invisible-mirror.net/archives/lynx/tarballs/lynx2.9.2.tar.bz2";
+              sha256 = "7374b89936d991669e101f4e97f2c9592036e1e8cdaa7bafc259a77ab6fb07ce"; };
+      deps = [ self.ncurses.gcc self.zlib.gcc ];
+      preConfigure = illumosExt + ''
+        # ncurses ships headers under include/ncursesw + ncursesw6-config; point
+        # lynx's curses probe at them so it doesn't fall back to a host
+        # ncurses5-config leak.
+        for d in ${self.ncurses.gcc}/include/ncursesw ${self.ncurses.gcc}/include; do
+          [ -d "$d" ] && export CPPFLAGS="-I$d ''${CPPFLAGS:-}"
+        done
+        export PATH="${self.ncurses.gcc}/bin:$PATH"
+      '';
+      configureFlags = [ "--with-screen=ncursesw" "--with-zlib" "--disable-nls" "--without-bzlib" "--without-brotli" ];
+      env = { cf_cv_xopen_source = "no"; };
+    };
+
+    # links: twibright text-mode WWW browser (no X). pkgsrc www/links builds
+    # clean on SunOS with the feature-test macros; disable graphics/X to keep it
+    # text-only. libevent + openssl3 + zlib.
+    links = pkg {
+      pname = "links"; version = "2.30";
+      src = { url = "http://links.twibright.com/download/links-2.30.tar.bz2";
+              sha256 = "c4631c6b5a11527cdc3cb7872fc23b7f2b25c2b021d596be410dadb40315f166"; };
+      deps = [ self.zlib.gcc self.openssl3.gcc self.libevent.gcc ];
+      preConfigure = illumosExt;
+      configureFlags = [ "--enable-graphics=no" "--without-x" ];
+    };
+
+    # screen: terminal multiplexer. screen 5.0.0's configure hard-requires
+    # openpty() which illumos lacks; 4.9.1 detects the SVR4 /dev/ptmx path and
+    # builds. pkgsrc sets CPPFLAGS+=-D_XOPEN_SOURCE=600 -D__EXTENSIONS__ under
+    # SunOS (illumosExt). termcap from ncurses.
+    screen = pkg {
+      pname = "screen"; version = "4.9.1";
+      src = { url = "https://mirror.csclub.uwaterloo.ca/gnu/screen/screen-4.9.1.tar.gz";
+              sha256 = "26cef3e3c42571c0d484ad6faf110c5c15091fbf872b06fa7aa4766c7405ac69"; };
+      deps = [ self.ncurses.gcc ];
+      preConfigure = illumosExt + ''
+        # screen 4.9.1 bundles a putenv.c that omits <string.h>; gcc-14 makes the
+        # implicit strlen/strcpy a hard error. Force the header + downgrade to a
+        # warning so the bundled fallback compiles (illumos has libc putenv).
+        export CFLAGS="-include string.h -Wno-error=implicit-function-declaration ''${CFLAGS:-}"
+      '';
+      configureFlags = [ "--enable-telnet" "--enable-colors256" ];
+      env = { ac_cv_func_putenv = "yes"; };
+    };
+
+    # the_silver_searcher (ag): fast code search. pcre2 + xz(lzma) + zlib + pthread.
+    # Portable C; Solaris libc needs __EXTENSIONS__ for the fts/strn* symbols
+    # (illumosExt). Autotools via ./configure (release tarball ships it).
+    # the_silver_searcher (ag): fast code search. ag 2.2.0 uses the pcre1 API
+    # (libpcre.pc), not pcre2 -> link the cached pcre-8.45 (wave10) + xz(lzma) +
+    # zlib. Point pkg-config at the cached pcre's .pc. Solaris libc needs
+    # __EXTENSIONS__ for fts/strn*. Autotools via ./configure.
+    the_silver_searcher = pkg {
+      pname = "the_silver_searcher"; version = "2.2.0";
+      src = { url = "https://geoff.greer.fm/ag/releases/the_silver_searcher-2.2.0.tar.gz";
+              sha256 = "d9621a878542f3733b5c6e71c849b9d1a830ed77cb1a1f6c2ea441d4b0643170"; };
+      deps = [ self.pcre.gcc self.xz.gcc self.zlib.gcc ];
+      preConfigure = illumosExt + ''
+        export PKG_CONFIG_PATH="${self.pcre.gcc}/lib/pkgconfig:''${PKG_CONFIG_PATH:-}"
+        # ag 2.2.0 has tentative-definition globals in headers; gcc-14 defaults to
+        # -fno-common -> multiply-defined symbols. -fcommon restores the old ABI.
+        export CFLAGS="-fcommon ''${CFLAGS:-}"
+      '';
+    };
+
+    # cvs: classic version control. pkgsrc devel/scmcvs (cvs-1.12.13) — old GNU
+    # autotools source; needs __EXTENSIONS__/_XOPEN_SOURCE for the getline/rpc
+    # symbols. zlib. --disable-nls sidesteps the bundled-gettext gnulib break.
+    cvs = pkg {
+      pname = "cvs"; version = "1.12.13";
+      src = { url = "https://ftp.halifax.rwth-aachen.de/gnu/non-gnu/cvs/source/feature/1.12.13/cvs-1.12.13.tar.bz2";
+              sha256 = "78853613b9a6873a30e1cc2417f738c330e75f887afdaf7b3d0800cb19ca515e"; };
+      deps = [ self.zlib.gcc ];
+      preConfigure = illumosExt + gnulibFix;
+      configureFlags = [ "--disable-nls" "--with-external-zlib" ];
+    };
+
+    # ncdu: ncurses disk-usage analyzer. pkgsrc sysutils/ncdu (1.19, C) needs only
+    # curses; illumosExt for the feature-test macros. Autotools.
+    ncdu = pkg {
+      pname = "ncdu"; version = "1.19";
+      src = { url = "https://dev.yorhel.nl/download/ncdu-1.19.tar.gz";
+              sha256 = "30363019180cde0752c7fb006c12e154920412f4e1b5dc3090654698496bb17d"; };
+      deps = [ self.ncurses.gcc ];
+      preConfigure = illumosExt + ''
+        for d in ${self.ncurses.gcc}/include/ncursesw ${self.ncurses.gcc}/include; do
+          [ -d "$d" ] && export CPPFLAGS="-I$d ''${CPPFLAGS:-}"
+        done
+      '';
+    };
+
+    # tcsh: C shell with completion. Portable C; Solaris libc needs the feature
+    # test macros for the termios/tty symbols. ncurses for termcap. illumos-clean.
+    tcsh = pkg {
+      pname = "tcsh"; version = "6.24.14";
+      src = { url = "https://astron.com/pub/tcsh/tcsh-6.24.14.tar.gz";
+              sha256 = "36880f258a63fc11fe72a65098b585ebc4ecdee24388b8ebec97e6ae8e485318"; };
+      deps = [ self.ncurses.gcc ];
+      preConfigure = illumosExt;
+    };
+
+    # nnn: fast ncurses file manager (Makefile build). ncurses + readline;
+    # illumos needs the feature-test macros + ncursesw include path. O_2 make.
+    nnn = pkg {
+      pname = "nnn"; version = "5.0";
+      src = { url = "https://github.com/jarun/nnn/releases/download/v5.0/nnn-v5.0.tar.gz";
+              sha256 = "ba82d6c685bb3687521de2f576244f82558a4af9afeeedda434d5ecb1c029520"; };
+      deps = [ self.ncurses.gcc self.readline.gcc ];
+      buildSystem = "make";
+      unpackSubdir = "nnn-v5.0";
+      preConfigure = illumosExt + ''
+        for d in ${self.ncurses.gcc}/include/ncursesw ${self.ncurses.gcc}/include; do
+          [ -d "$d" ] && export CPPFLAGS="-I$d ''${CPPFLAGS:-}"
+        done
+        export PKG_CONFIG_PATH="${self.ncurses.gcc}/lib/pkgconfig:''${PKG_CONFIG_PATH:-}"
+        export LDFLAGS="-lnsl -lsocket ''${LDFLAGS:-}"
+      '';
+      makeFlags = [ "O_NORL=0" ];
+    };
+    # (libpng/jpeg-turbo/freetype/lcms2/libtiff/libwebp) by raw store path +
+    # zlib/xz/bzip2. pkgsrc graphics/ImageMagick sets LDFLAGS.SunOS+=-lsendfile
+    # (illumos sendfile lives in libsendfile). Feature-test macros. No X/GTK.
+    imagemagick = pkg {
+      pname = "ImageMagick"; version = "7.1.2-21";
+      src = { url = "https://imagemagick.org/archive/releases/ImageMagick-7.1.2-21.tar.xz";
+              sha256 = "SKIP"; };
+      deps = [ self.zlib.gcc self.xz.gcc self.bzip2.gcc self.libiconv.gcc
+               libpngCached jpegCached freetypeCached lcms2Cached tiffCached webpCached ];
+      preConfigure = illumosExt + ''
+        export LDFLAGS="-lsendfile -lnsl -lsocket ''${LDFLAGS:-}"
+      '';
+      configureFlags = [ "--without-x" "--disable-static" "--without-modules"
+                         "--with-png" "--with-jpeg" "--with-freetype" "--with-lcms"
+                         "--with-tiff" "--with-webp" "--without-gvc" "--without-rsvg"
+                         "--without-gslib" "--without-fontconfig" "--without-wmf"
+                         "--without-magick-plus-plus" ];
+    };
+
+    # GraphicsMagick: ImageMagick fork. Same cached imaging libs + -lsendfile knob.
+    graphicsmagick = pkg {
+      pname = "GraphicsMagick"; version = "1.3.47";
+      src = { url = "https://sourceforge.net/projects/graphicsmagick/files/graphicsmagick/1.3.47/GraphicsMagick-1.3.47.tar.xz/download";
+              sha256 = "SKIP"; };
+      deps = [ self.zlib.gcc self.xz.gcc self.bzip2.gcc self.libiconv.gcc
+               libpngCached jpegCached freetypeCached lcms2Cached tiffCached webpCached ];
+      preConfigure = illumosExt + ''
+        export LDFLAGS="-lsendfile -lnsl -lsocket ''${LDFLAGS:-}"
+      '';
+      configureFlags = [ "--without-x" "--disable-static" "--with-png" "--with-jpeg"
+                         "--with-ttf" "--with-lcms2" "--with-tiff" "--with-webp"
+                         "--without-wmf" "--without-magick-plus-plus" ];
+    };
+
+    # groff: GNU roff document formatter (C++). No external deps beyond the C++
+    # runtime; Solaris libc needs the feature-test macros for the wide-char
+    # symbols. 1.23.0 (latest GNU release). Exercises gcc-14 C++.
+    groff = pkg {
+      pname = "groff"; version = "1.23.0";
+      src = { url = "https://ftpmirror.gnu.org/groff/groff-1.23.0.tar.gz";
+              sha256 = "6b9757f592b7518b4902eb6af7e54570bdccba37a871fddb2d30ae3863511c13"; };
+      preConfigure = illumosExt + gnulibFix;
+      configureFlags = [ "--without-x" ];
+    };
+
+    # plotutils: GNU vector-graphics utilities (libplot). pkgsrc graphics/plotutils
+    # links libpng (cached wave10) + libiconv; build --without-x (no X11 libplotter).
+    # Solaris libc needs __EXTENSIONS__. C++ libplotter too.
+    plotutils = pkg {
+      pname = "plotutils"; version = "2.6";
+      src = { url = "https://ftpmirror.gnu.org/plotutils/plotutils-2.6.tar.gz";
+              sha256 = "4f4222820f97ca08c7ea707e4c53e5a3556af4d8f1ab51e0da6ff1627ff433ab"; };
+      deps = [ self.libiconv.gcc libpngCached ];
+      preConfigure = illumosExt + gnulibFix;
+      configureFlags = [ "--without-x" "--enable-libplotter" "--disable-static" ];
+    };
+
+    # neon: HTTP/WebDAV client library. pkgsrc www/neon links openssl + expat +
+    # zlib + gettext. Base for cadaver/subversion. Solaris resolver in libnsl
+    # -> thread -lnsl -lsocket. Feature-test macros via illumosExt.
+    neon = pkg {
+      pname = "neon"; version = "0.33.0";
+      src = { url = "https://notroj.github.io/neon/neon-0.33.0.tar.gz";
+              sha256 = "659a5cc9cea05e6e7864094f1e13a77abbbdbab452f04d751a8c16a9447cf4b8"; };
+      deps = [ self.openssl3.gcc self.expat.gcc self.zlib.gcc ];
+      preConfigure = illumosExt + ''
+        export LDFLAGS="-lnsl -lsocket ''${LDFLAGS:-}"
+      '';
+      configureFlags = [ "--with-ssl=openssl" "--with-expat" "--enable-shared" "--disable-static" "--disable-nls" ];
+    };
+
+    # cadaver: WebDAV client. cadaver 0.23.3 only accepts neon 0.27-0.29, not
+    # our 0.33 -> build its BUNDLED neon (--with-included-neon). readline UI +
+    # expat + openssl + zlib. -lnsl -lsocket + feature-test macros.
+    cadaver = pkg {
+      pname = "cadaver"; version = "0.23.3";
+      src = { url = "https://notroj.github.io/cadaver/cadaver-0.23.3.tar.gz";
+              sha256 = "fd4ce68a3230ba459a92bcb747fc6afa91e46d803c1d5ffe964b661793c13fca"; };
+      deps = [ self.readline.gcc self.ncurses.gcc self.expat.gcc self.openssl3.gcc self.zlib.gcc ];
+      preConfigure = illumosExt + ''
+        # illumos: socket/nsl are separate libs; configure's link probe needs them
+        # in LIBS (not just LDFLAGS) so its AC_SEARCH_LIBS(socket) test links.
+        export LIBS="-lsocket -lnsl ''${LIBS:-}"
+        export LDFLAGS="-lnsl -lsocket ''${LDFLAGS:-}"
+      '';
+      configureFlags = [ "--with-included-neon" "--with-ssl=openssl" "--disable-nls" ];
+      # illumos socket/nsl split: force the AC_SEARCH_LIBS(socket) cache result
+      # so cadaver's bundled-neon configure stops rejecting the platform.
+      env = { ac_cv_search_socket = "-lsocket"; ac_cv_search_gethostbyname = "-lnsl"; };
+    };
+
+    # aria2: multi-protocol download utility (C++). pkgsrc net/aria2 sets
+    # --disable-epoll + ac_cv_func_getaddrinfo=yes under SunOS (illumos lacks
+    # Linux epoll; its getaddrinfo probe misfires). c-ares (cached wave10) +
+    # openssl3 + expat + zlib + libiconv. -lnsl -lsocket for the resolver.
+    aria2 = pkg {
+      pname = "aria2"; version = "1.37.0";
+      src = { url = "https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0.tar.xz";
+              sha256 = "60a420ad7085eb616cb6e2bdf0a7206d68ff3d37fb5a956dc44242eb2f79b66b"; };
+      deps = [ self.openssl3.gcc self.expat.gcc self.zlib.gcc self.libiconv.gcc caresCached ];
+      preConfigure = illumosExt + ''
+        # illumos resolver in libnsl/libsocket; aria2's openssl link needs the
+        # libs named explicitly (configure detects headers but omits -lssl/-lcrypto).
+        export LDFLAGS="-lssl -lcrypto -lnsl -lsocket ''${LDFLAGS:-}"
+      '';
+      configureFlags = [ "--disable-epoll" "--with-openssl" "--without-gnutls"
+                         "--with-libexpat" "--with-libcares" "--without-libssh2"
+                         "--disable-static" ];
+      env = { ac_cv_func_getaddrinfo = "yes"; };
+    };
+
+    # gnuplot: plotting program. pkgsrc graphics/gnuplot with readline + curses;
+    # build --without-x (no X11 term) to avoid the GTK/X wall. libiconv. Feature
+    # test macros for the terminal symbols.
+    gnuplot = pkg {
+      pname = "gnuplot"; version = "6.0.4";
+      src = { url = "https://sourceforge.net/projects/gnuplot/files/gnuplot/6.0.4/gnuplot-6.0.4.tar.gz/download";
+              sha256 = "458d94769625e73d5f6232500f49cbadcb2b183380d43d2266a0f9701aeb9c5b"; };
+      deps = [ self.readline.gcc self.ncurses.gcc self.libiconv.gcc ];
+      preConfigure = illumosExt + ''
+        export LDFLAGS="-liconv ''${LDFLAGS:-}"
+      '';
+      configureFlags = [ "--without-x" "--with-readline=builtin" "--disable-wxwidgets"
+                         "--without-qt" "--without-cairo" ];
+    };
+
+    # mutt: text mail client. pkgsrc mail/mutt (2.4.1) sets
+    # CONFIGURE_ARGS.SunOS+=--disable-filemonitor (illumos lacks the
+    # inotify/kqueue file monitor) + a patch-configure fixing the Kerberos/setgid
+    # build under Solaris (repo mutt-solaris-gssapi.patch, -p0). ncurses + iconv +
+    # zlib + openssl (IMAP/POP TLS). Feature-test macros via illumosExt.
+    mutt = pkg {
+      pname = "mutt"; version = "2.4.1";
+      src = { url = "http://ftp.mutt.org/pub/mutt/mutt-2.4.1.tar.gz";
+              sha256 = "5624321f0b1cc1eff6cab9ef08f25954ff64c51b33d4bf3b99484cf1edd8cfff"; };
+      deps = [ self.ncurses.gcc self.libiconv.gcc self.zlib.gcc self.openssl3.gcc ];
+      patches = [ ./patches/pkgsrc/mutt-solaris-gssapi.patch ];
+      preConfigure = illumosExt + ''
+        # force OUR ncurses headers first; the libc slice ships a stub
+        # /usr/include/curses.h that lacks cchar_t and breaks mutt_curses.h.
+        for d in ${self.ncurses.gcc}/include/ncursesw ${self.ncurses.gcc}/include; do
+          [ -d "$d" ] && export CPPFLAGS="-I$d ''${CPPFLAGS:-}"
+        done
+        export LDFLAGS="-lnsl -lsocket ''${LDFLAGS:-}"
+      '';
+      configureFlags = [ "--disable-filemonitor" "--enable-pop" "--enable-imap"
+                         "--with-ssl" "--with-curses=${self.ncurses.gcc}"
+                         "--enable-external-dotlock" "--disable-nls" ];
+      # mutt 2.4 auto-probes system libidn (a host /usr/lib leak) but its header
+      # is absent -> HAVE_LIBIDN half-set -> main.c fails on stringprep. Force the
+      # link probe to find nothing so IDN stays off.
+      env = { ac_cv_search_stringprep_check_version = "no";
+              ac_cv_search_idna_to_ascii_8z = "no"; };
+    };
+
+    # w3m: pager/text WWW browser. pkgsrc www/w3m links boehm-gc + ncurses +
+    # openssl + zlib; Solaris resolver in libnsl/libsocket/libresolv. Feature-test
+    # macros. Uses the rkta fork 0.5.6 (ships ./configure). GC include dir passed
+    # explicitly (w3m probes for gc.h).
+    w3m = pkg {
+      pname = "w3m"; version = "0.5.6";
+      src = { url = "https://git.sr.ht/~rkta/w3m/archive/v0.5.6.tar.gz";
+              sha256 = "8dd652cd3f31817d68c7263c34eeffb50118c80be19e1159bf8cbf763037095e"; };
+      deps = [ self.boehmgc.gcc self.ncurses.gcc self.openssl3.gcc self.zlib.gcc ];
+      unpackSubdir = "w3m-v0.5.6";
+      preConfigure = illumosExt + ''
+        export CPPFLAGS="-I${self.boehmgc.gcc}/include ''${CPPFLAGS:-}"
+        export LDFLAGS="-lnsl -lsocket -lresolv ''${LDFLAGS:-}"
+      '';
+      configureFlags = [ "--with-ssl" "--disable-nls" "--disable-image" "--disable-w3mimg"
+                         "--with-gc=${self.boehmgc.gcc}" ];
+    };
+
+    # ===================================================================
+    # Wave 19 — recurring pkgsrc-patch FAMILY fixes (docs/design-pkgsrc-patches.md).
+    # ONE fix per family unblocks MANY packages. Fixes are the shared helpers
+    # above: gnulibFix (F1), tputsFix (F2), endianShimStage (F3).
+    # ===================================================================
+
+    # --- Family 1: gnulib getlocalename_l redeclaration ----------------------
+    # datamash: statistical CLI over text; bundles gnulib. The getlocalename_l
+    # redecl is fixed by gnulibFix. 1.9 is hipster-current.
+    datamash = pkg {
+      pname = "datamash"; version = "1.9";
+      src = { url = "https://ftp.gnu.org/gnu/datamash/datamash-1.9.tar.gz";
+              sha256 = "f382ebda03650dd679161f758f9c0a6cc9293213438d4a77a8eda325aacb87d2"; };
+      preConfigure = gnulibFix;
+    };
+
+    # recode: charset converter; bundles OLD gnulib whose `manywarnings` module
+    # defaults gl_gcc_warnings=yes -> -Werror wall on illumos. --disable-gcc-
+    # warnings turns the wall off; gnulibFix covers the localename decl too.
+    recode = pkg {
+      pname = "recode"; version = "3.7.14";
+      src = { url = "https://github.com/rrthomas/recode/releases/download/v3.7.14/recode-3.7.14.tar.gz";
+              sha256 = "786aafd544851a2b13b0a377eac1500f820ce62615ccc2e630b501e7743b9f33"; };
+      deps = [ self.libiconv.gcc ];
+      preConfigure = gnulibFix;
+      configureFlags = [ "--disable-gcc-warnings" "--disable-nls" ];
+    };
+
+    # dwdiff: word-level diff; autotools + gnulib. Needs the gnulib fix + the
+    # feature-test macros for its POSIX symbols.
+    dwdiff = pkg {
+      pname = "dwdiff"; version = "2.1.4";
+      src = { url = "https://os.ghalkes.nl/dist/dwdiff-2.1.4.tar.bz2";
+              sha256 = "df16fec44dcb467d65a4246a43628f93741996c1773e930b90c6dde22dd58e0a"; };
+      # dwdiff's hand-rolled configure probes icu-uc via pkg-config for unicode
+      # support. icu4c is cached (wave18); point pkg-config at it. gnulib fix +
+      # feature-test macros for its POSIX symbols.
+      deps = [ self.libiconv.gcc "/nix/store/q778azk1sv04wkbaljyxp8wg5dnvv2jn-icu4c-74.2" ];
+      preConfigure = gnulibFix + illumosExt + ''
+        export PKG_CONFIG_PATH="/nix/store/q778azk1sv04wkbaljyxp8wg5dnvv2jn-icu4c-74.2/lib/pkgconfig:''${PKG_CONFIG_PATH:-}"
+      '';
+      # dwdiff compiles clean with unicode(icu); its po/ lingua-install rule
+      # calls a ./install.sh that isn't shipped -> --without-gettext drops the
+      # locale install (the binary itself needs no .mo files).
+      configureFlags = [ "--without-gettext" ];
+    };
+
+    # --- Family 2: tputs prototype mismatch (terminfo) -----------------------
+    # wdiff: front-end to diff, word-by-word; uses terminfo (tputs) + gnulib.
+    # tputsFix downgrades the illumos int(*)(char) mismatch; gnulibFix covers
+    # its bundled gnulib.
+    wdiff = pkg {
+      pname = "wdiff"; version = "1.2.2";
+      src = { url = "https://ftp.gnu.org/gnu/wdiff/wdiff-1.2.2.tar.gz";
+              sha256 = "34ff698c870c87e6e47a838eeaaae729fa73349139fc8db12211d2a22b78af6b"; };
+      deps = [ self.ncurses.gcc ];
+      preConfigure = gnulibFix;
+      env = { CFLAGS = tputsFix;
+              # no texinfo/makeinfo in the toolchain -> stub it so the doc/
+              # wdiff.info rule is a no-op (the binary builds fine without it).
+              MAKEINFO = "true"; };
+      configureFlags = [ "--disable-nls" ];
+    };
+
+    # hwloc: portable hardware locality; lstopo links terminfo (tputs). The LIB
+    # builds clean; lstopo hit the tputs error (wave17). tputsFix fixes it.
+    hwloc = pkg {
+      pname = "hwloc"; version = "2.11.2";
+      src = { url = "https://download.open-mpi.org/release/hwloc/v2.11/hwloc-2.11.2.tar.gz";
+              sha256 = "866ac8ef07b350a6a2ba0c6826c37d78e8994dcbcd443bdd2b436350de19d540"; };
+      deps = [ self.ncurses.gcc ];
+      preConfigure = illumosExt;
+      env = { CFLAGS = tputsFix; };
+      configureFlags = [ "--enable-shared" "--disable-cairo" "--disable-libxml2"
+                         "--with-hwloc-symbol-prefix=hwloc_" ];
+    };
+
+    # --- Family 3: Linux <endian.h> htobe64/htole64 --------------------------
+    # paho-mqtt-c: Eclipse MQTT C client. SHA1.c/WebSocket.c use htobe*/be*toh
+    # with no illumos #else branch. endianShimStage force-includes a compat
+    # header mapping them onto illumos <sys/byteorder.h> BE_*/LE_*. Built via
+    # its plain Makefile (CMake unavailable) with OSTYPE forced off-Linux and
+    # illumos socket libs.
+    pahomqttc = pkg {
+      pname = "paho-mqtt-c"; version = "1.3.13";
+      src = { url = "https://github.com/eclipse/paho.mqtt.c/archive/refs/tags/v1.3.13.tar.gz";
+              sha256 = "47c77e95609812da82feee30db435c3b7c720d4fd3147d466ead126e657b6d9c"; };
+      buildSystem = "custom";
+      customBuild = ''
+        ${endianShimStage}
+        export CFLAGS="$CFLAGS -D_XOPEN_SOURCE=600 -D__EXTENSIONS__"
+        mkdir -p "$out/lib" "$out/include"
+        # generate VersionInfo.h (normally the Makefile does this from *.in).
+        cv="$(cat version.major).$(cat version.minor).$(cat version.patch)"
+        sed -e "s/@BUILD_TIMESTAMP@/solnix/" -e "s/@CLIENT_VERSION@/$cv/" \
+            src/VersionInfo.h.in > src/VersionInfo.h
+        # paho's Makefile only knows Linux/Darwin and uses GNU-ld-only flags;
+        # build the two core client shared libs directly with our cc, deriving
+        # the source sets exactly as the Makefile does (filter-out per client).
+        ALL=$(ls src/*.c)
+        # sync client (libpaho-mqtt3c): all minus async/version/ssl.
+        SYNC=$(printf '%s\n' $ALL | grep -vE 'src/(MQTTAsync|MQTTAsyncUtils|MQTTVersion|SSLSocket)\.c$' | tr '\n' ' ')
+        # async client (libpaho-mqtt3a): all minus sync-client/version/ssl.
+        ASYNC=$(printf '%s\n' $ALL | grep -vE 'src/(MQTTClient|MQTTVersion|SSLSocket)\.c$' | tr '\n' ' ')
+        $CC -shared -fPIC -Isrc $CFLAGS -o "$out/lib/libpaho-mqtt3c.so.1" \
+          $SYNC -lpthread -lsocket -lnsl 2>&1 | tail -30
+        $CC -shared -fPIC -Isrc $CFLAGS -o "$out/lib/libpaho-mqtt3a.so.1" \
+          $ASYNC -lpthread -lsocket -lnsl 2>&1 | tail -30
+        ( cd "$out/lib" && ln -sf libpaho-mqtt3c.so.1 libpaho-mqtt3c.so && ln -sf libpaho-mqtt3a.so.1 libpaho-mqtt3a.so )
+        cp src/MQTTClient.h src/MQTTAsync.h src/MQTTProperties.h src/MQTTReasonCodes.h \
+           src/MQTTSubscribeOpts.h src/MQTTExportDeclarations.h "$out/include/" 2>/dev/null || true
+        [ -e "$out/lib/libpaho-mqtt3c.so.1" ] || { echo FATAL: paho lib not built >&2; exit 1; }
+      '';
+    };
+
+    # --- Family 1 (widen): more gnulib-heavy GNU tools the getlocalename_l +
+    # gnulibFix path unblocks. All bundle gnulib; the const-qualify + feature-
+    # test macros are the shared fix. ---------------------------------------
+    coreutils = pkg {
+      pname = "coreutils"; version = "9.7";
+      src = { url = "https://ftp.gnu.org/gnu/coreutils/coreutils-9.7.tar.xz";
+              sha256 = "e8bb26ad0293f9b5a1fc43fb42ba970e312c66ce92c1b0b16713d7500db251bf"; };
+      preConfigure = gnulibFix + illumosExt;
+      # coreutils' gnulib is large; --disable-gcc-warnings avoids any -Werror
+      # wall on illumos, --without-selinux/--disable-nls trim Linux-only bits.
+      # FORCE_UNSAFE_CONFIGURE=1: gnulib's mknod probe refuses to run as root
+      # (our builder runs as root); the flag bypasses that guard.
+      env = { FORCE_UNSAFE_CONFIGURE = "1"; };
+      configureFlags = [ "--disable-gcc-warnings" "--disable-nls" "--without-selinux" ];
+    };
+
+    gnuindent = pkg {
+      pname = "indent"; version = "2.2.13";
+      src = { url = "https://ftp.gnu.org/gnu/indent/indent-2.2.13.tar.xz";
+              sha256 = "1b81ba4e9a006ca8e6eb5cbbe4cf4f75dfc1fc9301b459aa0d40393e85590a0b"; };
+      buildSystem = "custom";
+      # indent compiles clean with gnulibFix; only its doc/ dir needs makeinfo
+      # (absent). Build everything, then install only src/ (the binary) + man/
+      # + intl/, skipping doc/ entirely so no makeinfo/html rule fires.
+      customBuild = ''
+        ${gnulibFix}
+        ${illumosExt}
+        export MAKEINFO=true
+        ./configure --prefix="$out" --mandir="$out/share/man" --disable-nls
+        gmake -j"$(nproc)" -C src
+        gmake -C src install
+        gmake -C man install 2>/dev/null || true
+        [ -x "$out/bin/indent" ] || { echo FATAL: indent not installed >&2; exit 1; }
+      '';
+    };
+
+    gnuunits = pkg {
+      pname = "units"; version = "2.24";
+      src = { url = "https://ftp.gnu.org/gnu/units/units-2.24.tar.gz";
+              sha256 = "1e502c4edfacf20b29284716c72e5ddb51a495a2365d7b03e7960494c4a0c902"; };
+      deps = [ self.readline.gcc self.ncurses.gcc ];
+      preConfigure = gnulibFix + illumosExt;
+      configureFlags = [ "--disable-nls" ];
+    };
+
+    sharutils = pkg {
+      pname = "sharutils"; version = "4.15.2";
+      src = { url = "https://ftp.gnu.org/gnu/sharutils/sharutils-4.15.2.tar.xz";
+              sha256 = "2b05cff7de5d7b646dc1669bc36c35fdac02ac6ae4b6c19cb3340d87ec553a9a"; };
+      # sharutils bundles old gnulib whose manywarnings -Werror + a printf
+      # redefinition break on illumos; disable warnings + feature-test macros.
+      # -fcommon: gcc-10+ -fno-common default makes gnulib's tentative
+      # `program_name` def multiply-defined at link (uuencode/uudecode).
+      preConfigure = gnulibFix + illumosExt;
+      env = { CFLAGS = "-fcommon"; };
+      configureFlags = [ "--disable-gcc-warnings" "--disable-nls" ];
     };
 
     # A Python module built by pip against cached python-3.9 (add python313

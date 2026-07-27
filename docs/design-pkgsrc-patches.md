@@ -191,3 +191,79 @@ BIP=<host> scripts/oi-job.sh poll aspell
   copy — a Rust-build problem, not a library-patch one; out of this scope.
 - **lsof/htop-class tools** carry their illumos support in their own per-OS
   source tree; pkgsrc patches for them are NetBSD-dialect, not illumos — skip.
+
+---
+
+## 8. Wave-19 recurring-FAMILY fixes (reusable — future waves inherit these)
+
+Four failure FAMILIES recurred across waves 14-18, each blocking MANY packages.
+ONE fix per family unblocks the whole set. All are shared helpers in
+`pkgs/illumos/packages.nix` (top of the `let`), applied via `preConfigure` /
+`env` / `customBuild` — NO per-package patch file needed. Reach for these before
+harvesting a pkgsrc patch; they are the illumos-specific fixes pkgsrc itself
+does not carry (they are newer-illumos-libc / gcc-14-default regressions).
+
+### Family 1 — gnulib `getlocalename_l` redeclaration  (`gnulibFix`)
+- **Symptom:** `error: conflicting types for 'getlocalename_l'` when a GNU tarball
+  bundles gnulib. illumos `/usr/include/locale.h` declares
+  `extern const char *getlocalename_l(int, locale_t);` but gnulib's
+  `#if defined __sun && HAVE_GETLOCALENAME_L` block redeclares it `char *`.
+- **Fix:** const-qualify gnulib's prototype to match libc. gnulib moved this decl
+  across vintages (`localename.c` → `localename-unsafe.c` →
+  `getlocalename_l-unsafe.c`, plus the matching `*.h`), so `gnulibFix` sweeps
+  ALL of `lib/` (`localename*.{c,h}`, `getlocalename_l*.{c,h}`,
+  `setlocale_null*.c`) with an idempotent, safe-if-absent sed. Vintage-proof.
+- **Companion knobs** for gnulib-bundling tools:
+  - `--disable-gcc-warnings` — old gnulib `manywarnings` defaults
+    `gl_gcc_warnings=yes` → a `-Werror` wall on illumos (recode, sharutils,
+    coreutils). This, NOT the const decl, is what actually blocked recode.
+  - `FORCE_UNSAFE_CONFIGURE=1` — coreutils' gnulib mknod/fifo probe refuses to
+    run as root; our builder is root. Bypass it.
+  - `-fcommon` (CFLAGS) — gcc-10+ `-fno-common` default makes gnulib's tentative
+    `program_name` def multiply-defined at link (sharutils uuencode/uudecode).
+  - `MAKEINFO=true` / build only `src`+`man` — no texinfo in the toolchain, so
+    the `doc/*.info|*.html` rules 127-fail; stub or skip them.
+- **Unblocked (wave 19):** recode 3.7.14, datamash 1.9, coreutils 9.7 (106 bins),
+  sharutils 4.15.2, dwdiff 2.1.4, GNU units 2.24, indent 2.2.13 — plus the
+  already-cached m4/libunistring confirm the same fix. The whole gnulib-using
+  GNU-tool tail now has a known recipe.
+
+### Family 2 — `tputs` prototype mismatch  (`tputsFix`)
+- **Symptom:** `error: passing argument 3 of 'tputs' from incompatible pointer
+  type` (gcc-14 promotes it to a hard error). illumos `<term.h>` declares
+  `tputs(char *, int, int (*)(char))` — the putc callback takes `char`; ncurses/
+  portable code passes `int(*)(int)`.
+- **Fix:** `tputsFix = "-Wno-error=incompatible-pointer-types -fcommon"` in CFLAGS.
+  Downgrades the mismatch to a warning; `-fcommon` also placates the
+  `ospeed`/`UP`/`BC`/`PC` multiple-def that terminfo tools carry.
+- **Unblocked (wave 19):** hwloc 2.11.2 (lstopo + all hwloc-* tools), wdiff 1.2.2.
+  (texinfo 7.1 already used this in an earlier wave.)
+
+### Family 3 — Linux `<endian.h>` `htobe64`/`htole64`  (`endianShimStage`)
+- **Symptom:** `htobe16/htobe32/htobe64/be16toh/be64toh` undeclared; a source does
+  `#include <endian.h>` (only under `#ifdef __linux__`, so on illumos the include
+  is skipped AND the macros are never defined — no illumos `#else` branch).
+- **Fix:** `endianShimStage` writes a compat `endian_illumos.h` into the build
+  root mapping every glibc name onto illumos `<sys/byteorder.h>` `BE_*/LE_*`, and
+  force-includes it via `-include $PWD/endian_illumos.h` in CFLAGS/CPPFLAGS so the
+  macros exist regardless of the source's `#ifdef` guards.
+- **Unblocked (wave 19):** paho-mqtt-c 1.3.13 (libpaho-mqtt3c/3a.so built from the
+  plain Makefile — CMake unavailable — deriving the sync/async source sets the
+  same way the Makefile's `filter-out` does, linking `-lsocket -lnsl`).
+
+### Family 4 — `__sun_attr__` / `_MAX_`/`_ULTRA_` namespace clashes  (deferred)
+- lrzip 0.651 (`extern int errno;` where illumos `errno` is a macro; libzpaq C++
+  + lzma + `autogen.sh`) and libcpuid 0.7.1 (enum members `_MAX_`/`_ULTRA_`) —
+  **only 2 packages, low leverage**, and the wave-17 diagnoses did not reproduce
+  cleanly (no illumos header defines `_MAX_`/`_ULTRA_` as macros; the real lrzip
+  wall is `errno` + a complex multi-language build). Deferred as NOT a
+  high-leverage recurring family. If revisited: guard lrzip's `extern int errno;`
+  behind `#ifndef errno`, and rename libcpuid's enum tokens if a real collision
+  surfaces on a specific header include order.
+
+**Takeaway for future waves:** the gnulib GNU-tool tail is now mechanical — add a
+spec with `preConfigure = gnulibFix` (+ `--disable-gcc-warnings` if it bundles
+old gnulib, `FORCE_UNSAFE_CONFIGURE=1` for coreutils-family, `-fcommon` for
+`program_name`, `MAKEINFO=true` if it builds .info/.html docs). Terminfo tools →
+`env = { CFLAGS = tputsFix; }`. Linux endian users → `endianShimStage` in a
+`customBuild`.
