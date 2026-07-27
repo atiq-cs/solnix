@@ -450,3 +450,39 @@ NOTE: these are PLATFORM variants of ONE arch (sparcv9-solaris), like x86's
 i86pc — not separate Nix systems. One sparcv9-solaris world; platform-specific
 kernels/boot_archives. So the Nix "system" matrix stays x86_64/aarch64/sparcv9/
 riscv64-solaris; sun4u vs sun4v is a kernel/platform axis within sparcv9.
+
+## SPARCv9 reference distro correction (2026-07-27, from the maintainer)
+
+CRITICAL: the SPARCv9 target hardware is the maintainer's **Sun Ultra 45 running
+OpenIndiana Hipster on SPARC** — a machine they boot and run today. So the
+reference distro for solnix SPARCv9 is **Hipster (OI)**, NOT Tribblix.
+
+Why S1/S1b used Tribblix: it was the readily-available LIVE sparc illumos ISO to
+PROVE the kernel boots under QEMU (it did — sun4u -> SMF 95/95). That proof
+stands and is distro-agnostic (both are illumos-gate-derived). But the important
+PIECES for the solnix SPARCv9 target should come from the Ultra 45's Hipster:
+- its sparc kernel + world (what the maintainer actually runs),
+- its IPS package set for sparc (the userland we mirror, per the same 5920-current
+  Hipster inventory model we use for x86_64),
+- its boot path / OBP config as the real-hardware truth (the Ultra 45's Sun OBP
+  boots cleanly where QEMU's OpenBIOS faults in getproplen).
+
+OPEN QUESTION (resolve before S2): where does the Ultra 45's Hipster come from?
+- (a) OpenIndiana publishes/published a sparc build the maintainer installed, OR
+- (b) it's a self-built Hipster-on-sparc (OI userland recipes built natively on
+      sparc, akin to how Tribblix/DilOS build sparc), OR
+- (c) a Hipster/DilOS hybrid.
+This determines sourcing: if (a), pull the OI sparc IPS repo directly (mirror it
+like x86 Hipster); if (b)/(c), the Ultra 45 itself is the golden native build
+host + package source. Either way the ARCHITECTURE work (kernel boots, world
+slices, sparcv9-solaris lib.systems) is unchanged — only the userland SOURCE repo
+differs (OI-sparc vs Tribblix vs the Ultra 45's own repo).
+
+ACTION for S2: mirror the SPARC-target sourcing on HIPSTER. Best path — treat the
+maintainer's Ultra 45 (real OBP, boots Hipster, native sparc) as the golden build
+host + package source: extract its sparc seed/proto/world (like we did x86 from
+OI), pull its Hipster sparc IPS inventory, and build solnix pkgs.solnix.* for
+sparcv9-solaris FROM it. QEMU sun4u remains the CI/test substrate (once the
+OpenBIOS getprop fix lands); the Ultra 45 is the reference + fallback build host.
+Keep the Tribblix m34 kernels only as the QEMU-boot PROOF artifact, not the
+shipping source.
