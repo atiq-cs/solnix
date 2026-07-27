@@ -20,6 +20,14 @@ PYX=/nix/store/63f9kp8ixyw0mq18fhmk4zj2j0lv6fcw-solnix-python-39-3.9.20/bin/pyth
 [ -x "$PYX" ] || PYX=/nix/store/kvl140jbk20aqiq9qqrr79vvwv7hnsaf-solnix-python-313-3.13.1/bin/python3.13
 
 PERL="$1"; shift
+# perl was built with -Duseshrplib: the perl binary NEEDs libperl.so (in its
+# CORE dir) + gcc14's libgcc_s/libstdc++ at runtime. Nothing else adds these to
+# the loader path, so set LD_LIBRARY_PATH from the perl prefix's CORE dir(s) +
+# the gcc14 amd64 runtime, or every `perl Makefile.PL` dies with
+# "libperl.so: open failed".
+PERLROOT=$(dirname "$(dirname "$PERL")")
+CORE=$(find "$PERLROOT/lib" -type d -name CORE 2>/dev/null | head -1)
+export LD_LIBRARY_PATH="${CORE:-$PERLROOT/lib}:$GCC/usr/gcc/14/lib/amd64:$GCC/usr/gcc/14/lib:${LD_LIBRARY_PATH:-}"
 # Shared @INC across this batch: each module we install is prepended to
 # PERL5LIB so later modules in the batch see it at build+test time (lightweight
 # fixpoint for intra-batch deps like JSON::XS->common::sense). Order your specs
