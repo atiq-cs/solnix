@@ -866,3 +866,159 @@ is DONE and reproducible; the diagnosed "flushw" fix is empirically wrong (ruled
 out); the real fix is the reversed-%cwp interaction, which needs a qemu %cwp fix
 or a CIF trap-table isolation — landed next pass. A validated fix-in-progress
 with the toolchain built, per the task's own success criterion.
+
+## S3 attempt 3 — PATH A (OpenBIOS CIF trap-table isolation) BUILT + tested; empirically BLOCKED by TLB wall; root narrowed to QEMU-only fix (2026-07-27)
+
+Status: **PATH A implemented, cross-built, and boot-tested 4/4 — deterministically
+blocked, NOT a boot.** The CIF trap-table isolation patch works as designed (it
+redirects CIF-time traps into OpenBIOS's own trap table) but hits the exact TLB
+wall documented in `cpustate.h` — the same wall that rules out flushw (#1). This
+converts the nondeterministic *kernel-side* panic into a deterministic
+*OpenBIOS-side* fault, which is diagnostically decisive: it proves the fix belongs
+in QEMU (PATH B), not in OpenBIOS. Honest fix-in-progress; DETERMINISTIC boot to
+SMF 95/95 = **0 of 4 runs** (all 4 = identical OBP-side MAXTL fault).
+
+All boots ran on the dev-box (floki, qemu 10.1.5 / OpenBIOS v1.1 Sep-2024 bundled)
+DETACHED via `artifacts/sparc-s3/s3-boot-multi.sh` (nohup -> per-run console log,
+900s timebox, killed; never an interactive console held). Assets: solnix.io cache
+(`archive/sparc/`) + local `~/ws/solnix-archive/sparc/` ONLY — no AWS S3/ouch. Not
+git-committed. No "ponytail". Did NOT re-diagnose, did NOT re-try flushw.
+
+### S3-3.1 PATH A patch — built (openbios-cif-trap-isolation.patch)
+
+Chose **PATH A** (OpenBIOS-side, no qemu rebuild, reuses the S3-2 toolchain +
+`-bios` swap loop) over PATH B, per the task's "prefer the more tractable path."
+
+Mechanism verified in the source: illumos installs its OWN trap table (via the
+`SUNW,set-trap-table` CIF service — `arch/sparc64/openbios.c:set_trap_table`,
+which only stores the kernel's `%tba` into `ctx->tba` for restore-on-exit, and
+does NOT change the live `%tba`). So during the CIF C code, `%tba` is the
+kernel's, and any register-window spill/fill vectors into the KERNEL's handler —
+mis-handled under QEMU's reversed %cwp. `SAVE_CPU_STATE(cif)` already saves the
+kernel's `%tba` at `[%g1 + 0x4e0]`; `RESTORE_CPU_STATE(cif)` already restores it
+on exit. The patch adds exactly two instructions in `call-client.S`, right after
+`RESET_CPU_WINDOW_STATE(cif)` and before the C call:
+```
+    setx    trap_table, %g5, %g7
+    wrpr    %g7, %tba
+```
+so the CIF runs under OpenBIOS's OWN trap_table (`vectors.S`, 16 KiB-aligned at
+the ELF base 0xffd00000, with correct SPILL_WINDOW/FILL_WINDOW/reload_?MMU_tlb
+handlers). Kept the getproplen guard (#3) in the same patch (latent hardening).
+
+Cross-built cleanly with the S3-2 toolchain (`toolchain/result-elf` +
+`result-elf-2`, fcode-utils toke/detok rebuilt native, xsltproc from the store,
+`CROSS_COMPILE=sparc64-none-elf-`). Blob:
+`blobs/openbios-sun4u-cif-trap.elf` (ELF64 MSB SPARC V9, loads 0xffd00000, 1.56
+MB, sha256 `3bebfeed76fb85dc07efc805bbf5ef26321acfa9fa70b804c23478eb9f7eb104`).
+Disassembly confirms the two new instructions land between `wrpr %g0,%cwp`
+(RESET) and `call of_client_interface`, and `setx trap_table` resolves to
+0xffd00000 (= ELF entry = start of `.text.vectors` = `trap_table`).
+
+### S3-3.2 Boot result — 4/4 identical, deterministically blocked
+
+`s3-boot-multi.sh cif-validate 1 900` + `cif-confirm 3 900` (blob swapped via
+`-bios`), boot the m34 CD `boot cdrom -v`:
+
+| run | outcome |
+|-----|---------|
+| cif-validate-1 | KERNEL-STARTED -> **Unhandled Exception PC=0xffd0f320, Trap 0x10 while TL(5)>=MAXTL(5)** |
+| cif-confirm-1  | identical (PC=0xffd0f320, Trap 0x10 MAXTL) |
+| cif-confirm-2  | identical |
+| cif-confirm-3  | identical |
+
+Every run reaches "Welcome to Tribblix", gets deep into boot (`add_spec`,
+`unix-tte`), throws the benign caught `unix-tte va>tte-data -13`, then dies the
+**same way every time** — unlike the nondeterministic kernel-side panics of the
+pristine/guard blobs (type=34/type=1/type=4e/TL2). The determinism is itself the
+finding: the failure is now structural, not window-count-dependent.
+
+### S3-3.3 Why PATH A is blocked (the TLB wall — decisive)
+
+The fatal fault: `PC=0xffd0f320` is `ldub [%o0], %i0` inside OBP C code, with
+`%o0=0x1fe020003f8` (an UltraSPARC-IIi PCI/firmware I/O address that `va>tte-data`
+reads). It vectors to `0xffd04200` = trap_table offset 0x4200 = **TL1 tt 0x10
+(data_access_MMU_miss)**, which in OpenBIOS's TL1 table (`sparc64_ttable_tl1`) is
+`BTRAP` (unhandled) — because OpenBIOS only handles MMU miss at TL0
+(`reload_DMMU_tlb`, tt 0x68), not at TL1. The miss nests to TL5 -> `sparc_cpu_do_
+interrupt` sees `tl >= maxtl` -> "Error state" -> qemu fatal.
+
+Root reason (identical to why flushw #1 is ruled out): **OpenBIOS's trap table
+cannot service the kernel's TLB.** With OBP's table active during the CIF, a
+window spill writes to the kernel's biased `%sp` stack, or a CIF data access
+touches a kernel/device mapping — neither is in OpenBIOS's ofmem page tables, so
+OBP's DMMU-miss handler can't reload it, and at TL>0 there is no handler at all.
+cpustate.h says this explicitly: the CIF path deliberately avoids flushw because
+"the memory areas used by each window's stack pointer may not be in the TLB,
+causing recursive TLB miss traps." Installing OBP's whole trap table for the CIF
+hits the same wall from the other direction — OBP must NOT own trap handling
+while touching kernel memory. A `%tba` is all-or-nothing; you cannot route only
+window spill/fill to OBP while leaving MMU-miss with the kernel.
+
+**Therefore PATH A (OpenBIOS CIF trap-table isolation) cannot land the fix.** The
+CIF genuinely needs the kernel's MMU-miss handler active (illumos maps the device
+page; OBP does not), while the window corruption on CIF return is a QEMU %cwp
+emulation defect. These cannot both be satisfied from firmware. The fix must be
+in QEMU (PATH B).
+
+### S3-3.4 PATH B recon — the QEMU %cwp model (for S3-4)
+
+Read `target/sparc/win_helper.c` (qemu 10.1.5, the dev-box source at
+`/nix/store/5cp2l2c344w5qf8b31fqnysscg1l2ylc-qemu-10.1.5.tar.xz`, extractable;
+nixpkgs `qemu.version` = 10.1.5, matches). QEMU stores `env->cwp` in **V8 order**
+and translates to/from the guest's V9 `%cwp` via `cpu_get_cwp64 = nwindows-1-cwp`
+/ `cpu_put_cwp64 = set_cwp(nwindows-1-cwp)` (the comment: "CWP handling is
+reversed in V9, but we still use the V8 register order"). `helper_save/restore`
+step the internal V8 cwp (`cpu_cwp_dec`/`inc`); spill-window entry computes
+`cwp = cpu_cwp_dec(env->cwp - env->cansave - 2)` (int64_helper.c:243).
+
+CRITICAL CAVEAT for S3-4 (do NOT naively "reverse the direction"): illumos
+**reaches SMF 15/95** on the STOCK qemu (guard blob), i.e. it executes thousands
+of save/restore/spill/fill correctly first. The maintainer's real Ultra 45 OBP
+boots this same ISO. So QEMU's %cwp model is NOT globally reversed-wrong — a
+blanket `cpu_get_cwp64`/`helper_save` reversal would REGRESS the working path.
+The bug is a NARROW corner in the CIF interaction (some CIF calls corrupt %sp,
+most don't — the "depends on live window count" nondeterminism). PATH B must be
+a surgical fix to the spill/fill accounting on the specific CIF window-rotation
+path, guarded so it does not change behaviour for the (working) common case, and
+regression-checked against a known-booting sparc64 guest. This is the true fix
+but it is a qemu rebuild (~30-60 min on 8 cores) + careful, regression-tested
+change — more than fit this pass.
+
+### S3-3.5 Artifacts (all in `artifacts/sparc-s3/` + archived to solnix.io)
+
+- `openbios-cif-trap-isolation.patch` — PATH A: CIF `%tba <- trap_table` (2 insns
+  in call-client.S) + getproplen guard (#3). git-format, applies to upstream
+  OpenBIOS master (e5ac46d).
+- `blobs/openbios-sun4u-cif-trap.elf` + updated `SHA256SUMS` — the cross-built
+  PATH A SPARC V9 firmware blob (swap via `-bios`).
+- `logs/cif-validate-run1.log`, `logs/cif-confirm-run{1,2,3}.log` — the 4 identical
+  OBP-side MAXTL boot logs (+ `.nohup` harness logs).
+- Toolchain gcroots (`toolchain/result-*`) unchanged from S3-2, still valid.
+- solnix.io `archive/sparc/`: `sparc-s3-2-openbios.tar.zst` refreshed to include
+  the PATH A patch + blob + logs (see MANIFEST). solnix.io ONLY, no S3/ouch.
+
+### S3-3.6 Next step (precise, for S3-4)
+
+S3-3 has EXCLUDED the OpenBIOS-side fix entirely: both flushw (#1) and full
+trap-table isolation (PATH A) hit the same TLB wall — OBP cannot own trap handling
+while touching kernel memory. The remaining path is QEMU-only (PATH B):
+1. Rebuild qemu-system-sparc64 10.1.5 from the dev-box source (nixpkgs qemu.version
+   matches; `nix build` an override of `target/sparc/win_helper.c` +
+   `int64_helper.c`, or a local `--prefix` autotools/meson build of just the
+   sparc64 target).
+2. Surgically fix the spill/fill window accounting on the CIF window-rotation path
+   (the corrupt-%sp-on-CIF-return). Instrument first: add a trace/assert in
+   `helper_save`/`helper_restore`/`sparc_cpu_do_interrupt` spill path to catch the
+   run where `%sp` restore diverges from real HW, keyed on the CIF's
+   RESET->C->RESTORE sequence. Do NOT blanket-reverse `cpu_get_cwp64`.
+3. Regression-gate: the patched qemu must still boot a known-good sparc64 guest
+   (Debian sparc64 or the guard blob to SMF 15/95) unchanged.
+4. Keep the getproplen guard (#3) — real latent bug, applies in any OpenBIOS blob.
+
+Honest bottom line: S3-3 built + tested PATH A end-to-end and proved it cannot
+work (4/4 deterministic OBP-MAXTL, the documented TLB wall), which is real
+progress — it eliminates the entire OpenBIOS-side solution space (flushw AND
+trap-isolation) and localizes the fix to a narrow, regression-sensitive QEMU
+target/sparc spill-accounting change. DETERMINISTIC SMF 95/95 = 0/4; the enabler
+loop (toolchain + swappable blob) remains DONE and reproducible.
