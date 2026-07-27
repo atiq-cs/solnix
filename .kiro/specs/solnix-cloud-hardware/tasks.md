@@ -116,3 +116,15 @@ and full ARM-cloud (CH-2/3/4 aarch64) follow CH-1. CH-6/7 productionize; CH-8 ru
 throughout. This is a MAJOR multi-quarter effort — largely post-stable, but the
 x86 driver pieces (Azure Hyper-V, GCP gVNIC) can start now to make solnix a
 first-class guest on Azure/GCP x86 before the ARM port lands.
+
+## CH-0 (build-infra, do EARLY) — harden builder-AMI first boot
+
+NOT a deploy target — a BUILD-FLEET reliability fix, but it belongs with the
+cloud-hardware/Nitro work. Observed: 37-60% of freshly-launched builders come up
+port-22-dead with ENA DHCP "Cannot assign requested address" at boot (Nitro ENA/
+DHCP race + OI metadata-agent IMDSv1 hang). Cost: wasted instances every wave +
+throughput loss (wave 14 got 4/16). FIX: rebuild the builder AMI with (a) the
+metadata-shim baked into first-boot SMF (not added post-boot), (b) an ENA/dlmgmtd/
+DHCP ordering + retry (dladm/ipadm settle loop before sshd), (c) a first-boot
+health gate. Target: >90% first-boot SSH success. Interim workaround (works):
+launch +40%, reap dead, count SSH-able as capacity. Do this EARLY — it compounds.
