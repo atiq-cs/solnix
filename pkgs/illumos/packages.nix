@@ -97,6 +97,84 @@ let
     export CPPFLAGS="''${CPPFLAGS:-} -D__EXTENSIONS__ -D_XOPEN_SOURCE=600"
   '';
 
+  # GNU-linker version-script fix (Family 5, wave 22): Solaris ld does NOT accept
+  # GNU's `--version-script <file>`; it uses a different `-M <mapfile>` syntax
+  # entirely -> `ld: fatal: unrecognized option '--version-script'`. Many libs
+  # (zlib-ng, and any lib doing GNU symbol versioning via a .map/.sym file) pass
+  # `-Wl,--version-script,zlib.map` on EVERY platform. Translating the map to a
+  # Solaris mapfile is per-file and fragile; the reusable fix DROPS the version
+  # script on illumos. Consequence: symbols keep their default global scope
+  # (no per-version symbol scoping) — harmless for a userland library on illumos
+  # where nothing consumes the GNU version tags. Interposes a CC/CXX wrapper that
+  # filters `-Wl,--version-script,*` / `--version-script <f>` out of the link.
+  # In preConfigure it installs $PWD/.ldshim/{cc,c++} and points CC/CXX at them;
+  # for the native oi-clib.sh path set LDVERSCRIPT_STRIP=1 (clib installs the
+  # same shim). Idempotent.
+  ldVersionScriptFix = ''
+    mkdir -p .ldshim
+    _REALCC="''${CC:-cc}"; _REALCXX="''${CXX:-c++}"
+    for _pair in "cc:$_REALCC" "c++:$_REALCXX"; do
+      _nm="''${_pair%%:*}"; _real="''${_pair#*:}"
+      cat > .ldshim/$_nm <<LDSHIMEOF
+    #!/bin/sh
+    # solnix ldVersionScriptFix: strip GNU --version-script (Solaris ld rejects it).
+    _a=""; _skip=0
+    for x in "\$@"; do
+      if [ "\$_skip" = 1 ]; then _skip=0; continue; fi
+      case "\$x" in
+        -Wl,--version-script,*|-Wl,--version-script) continue ;;
+        --version-script=*) continue ;;
+        --version-script) _skip=1; continue ;;
+      esac
+      _a="\$_a \$x"
+    done
+    exec $_real \$_a
+    LDSHIMEOF
+      chmod +x .ldshim/$_nm
+    done
+    export CC="$PWD/.ldshim/cc"; export CXX="$PWD/.ldshim/c++"
+  '';
+
+  # C++ global-namespace C-math-name fix (Family 6, wave 22): modern C++ code
+  # (catch2, and libs that #include <math.h> then call bare isnan/isinf/signbit)
+  # assumes the C math names are also visible in the GLOBAL namespace. illumos
+  # libstdc++ (<cmath>) only exposes them in `std::`, NOT `::` -> errors like
+  # "'isnan' is not a member of 'Catch'" / "'::isnan' has not been declared".
+  # Fix: force-include <cmath> and pull the three names into the global ns with a
+  # `using std::...;` compat header, so ::isnan/::isinf/::signbit resolve. Applied
+  # via CXXFLAGS `-include`; harmless when the names are already global. For the
+  # native oi-clib.sh path set CXXMATHNS=1 (clib stages the same header).
+  cxxMathNsStage = ''
+    cat > cxx_mathns_illumos.h <<'MATHNSEOF'
+    #ifndef SOLNIX_CXX_MATHNS_ILLUMOS_H
+    #define SOLNIX_CXX_MATHNS_ILLUMOS_H
+    /* solnix compat: bring C math names into the global ns for C++ that assumes
+       ::isnan/::isinf/::signbit (illumos libstdc++ only exposes them in std::). */
+    #ifdef __cplusplus
+    #include <cmath>
+    using std::isnan; using std::isinf; using std::signbit;
+    using std::isfinite; using std::isnormal; using std::fpclassify;
+    #endif
+    #endif
+    MATHNSEOF
+    export CXXFLAGS="''${CXXFLAGS:-} -include $PWD/cxx_mathns_illumos.h"
+  '';
+
+  # pre-C99 GNU libc-fallback fix (Family 7, wave 22): ancient GNU tools ship
+  # their own K&R replacement memcpy.c/memmove.c/strcasecmp.c etc. guarded by
+  # `#ifndef HAVE_MEMCPY`. Their K&R signatures (`char *memcpy()`) conflict with
+  # <string.h> once we force-include it (or gcc-14 rejects the pre-C99 defs).
+  # illumos libc HAS all of these, so configure should just DETECT them and skip
+  # the bundled fallbacks. Fix: pre-seed the autoconf cache so configure records
+  # the libc functions as present (ac_cv_func_<fn>=yes) — the bundled .c is then
+  # #ifndef-compiled out. Reusable across pre-C99 GNU tools (enscript, ...).
+  libcFallbackFix = ''
+    export ac_cv_func_memcpy=yes ac_cv_func_memmove=yes ac_cv_func_memset=yes
+    export ac_cv_func_strcasecmp=yes ac_cv_func_strncasecmp=yes
+    export ac_cv_func_strchr=yes ac_cv_func_strrchr=yes ac_cv_func_strdup=yes
+    export ac_cv_func_strstr=yes ac_cv_func_strerror=yes ac_cv_func_bcopy=yes
+  '';
+
   # convenience: refer to a dep's gcc-built store path for RUNPATH/search.
   # We link deps built with gcc (ABI-compatible: OI clang uses gcc's libstdc++).
   self = rec {
@@ -1599,6 +1677,137 @@ EOF
       preConfigure = gnulibFix + illumosExt;
       env = { CFLAGS = "-fcommon"; };
       configureFlags = [ "--disable-gcc-warnings" "--disable-nls" ];
+    };
+
+    # ---- Wave 21: GNU/gnulib tool tail (family fixes clear these) ---------
+    # All bundle gnulib -> gnulibFix. Companion knobs per §8: --disable-nls
+    # (no gettext runtime needed / avoids po install snags), MAKEINFO=true
+    # (no texinfo in toolchain -> .info rules 127-fail), -fcommon
+    # (program_name tentative-def multiple-def), FORCE_UNSAFE_CONFIGURE=1
+    # (gnulib mknod/fifo probe refuses root; our builder is root).
+
+    findutils = pkg {
+      pname = "findutils"; version = "4.10.0";
+      src = { url = "https://mirrors.kernel.org/gnu/findutils/findutils-4.10.0.tar.xz";
+              sha256 = "1387e0b67ff247d2abde998f90dfbf70c1491391a59ddfecb8ae698789f0a4f5"; };
+      preConfigure = gnulibFix + illumosExt;
+      env = { CFLAGS = "-fcommon"; FORCE_UNSAFE_CONFIGURE = "1"; MAKEINFO = "true"; };
+      configureFlags = [ "--disable-nls" ];
+    };
+
+    gnupatch = pkg {
+      pname = "patch"; version = "2.7.6";
+      src = { url = "https://mirrors.kernel.org/gnu/patch/patch-2.7.6.tar.xz";
+              sha256 = "ac610bda97abe0d9f6b7c963255a11dcb196c25e337c61f94e4778d632f1d8fd"; };
+      preConfigure = gnulibFix + illumosExt;
+      env = { CFLAGS = "-fcommon"; MAKEINFO = "true"; };
+      configureFlags = [ "--disable-nls" ];
+    };
+
+    cpio = pkg {
+      pname = "cpio"; version = "2.15";
+      src = { url = "https://mirrors.kernel.org/gnu/cpio/cpio-2.15.tar.bz2";
+              sha256 = "937610b97c329a1ec9268553fb780037bcfff0dcffe9725ebc4fd9c1aa9075db"; };
+      preConfigure = gnulibFix + illumosExt;
+      env = { CFLAGS = "-fcommon"; FORCE_UNSAFE_CONFIGURE = "1"; MAKEINFO = "true"; };
+      configureFlags = [ "--disable-nls" ];
+    };
+
+    # gengetopt: compiles clean (lib+binary); only its doc/ HTML rule needs
+    # texi2html/makeinfo (absent) -> fails on gengetopt.html. Build the whole
+    # tree EXCEPT doc/, then install skipping doc so no html rule fires.
+    gengetopt = pkg {
+      pname = "gengetopt"; version = "2.23";
+      src = { url = "https://mirrors.kernel.org/gnu/gengetopt/gengetopt-2.23.tar.xz";
+              sha256 = "b941aec9011864978dd7fdeb052b1943535824169d2aa2b0e7eae9ab807584ac"; };
+      buildSystem = "custom";
+      customBuild = ''
+        ${gnulibFix}
+        ${illumosExt}
+        export CFLAGS="''${CFLAGS:-} -fcommon"
+        export MAKEINFO=true
+        ./configure --prefix="$out" --disable-nls
+        # SUBDIRS in the top Makefile is 'gl doc src tests'; build/install gl+src
+        # only (doc needs texi2html; tests optional). gl is a convenience lib src
+        # links against.
+        gmake -j"$(nproc)" -C gl
+        gmake -j"$(nproc)" -C src
+        gmake -C src install
+        [ -x "$out/bin/gengetopt" ] || { echo FATAL: gengetopt not installed >&2; exit 1; }
+      '';
+    };
+
+    # which 2.21: tiny GNU tool, bundles no gnulib but uses readline-free tilde;
+    # illumosExt for POSIX getopt. Distinct from the already-cached shell/which.
+    gnuwhich = pkg {
+      pname = "gnu-which"; version = "2.21";
+      src = { url = "https://ftp.gnu.org/gnu/which/which-2.21.tar.gz";
+              sha256 = "f4a245b94124b377d8b49646bf421f9155d36aa7614b6ebf83705d3ffc76eaad"; };
+      preConfigure = illumosExt;
+      env = { CFLAGS = "-fcommon"; MAKEINFO = "true"; };
+    };
+
+    # ddrescue: C++ data recovery, bundles no gnulib but needs __EXTENSIONS__ +
+    # -fcommon; MAKEINFO stubs its texinfo doc. .lz tarball -> lzip; the builder
+    # untar path handles xz/gz/bz2 but not lzip, so fetch a .tar.gz mirror? GNU
+    # only ships .lz. Use custom to lzip-decompress.
+    ddrescue = pkg {
+      pname = "ddrescue"; version = "1.28";
+      src = { url = "https://mirrors.kernel.org/gnu/ddrescue/ddrescue-1.28.tar.lz";
+              sha256 = "6626c07a7ca1cc1d03cad0958522c5279b156222d32c342e81117cfefaeb10c1"; };
+      buildSystem = "custom";
+      customBuild = ''
+        ${illumosExt}
+        export CXXFLAGS="''${CXXFLAGS:-} -D__EXTENSIONS__ -fcommon"
+        export MAKEINFO=true
+        ./configure --prefix="$out" --mandir="$out/share/man" CXX="$CXX" \
+          CXXFLAGS="$CXXFLAGS -O2 -m64"
+        gmake -j"$(nproc)"
+        gmake install-bin install-man 2>/dev/null || gmake install
+        [ -x "$out/bin/ddrescue" ] || { echo FATAL: ddrescue not installed >&2; exit 1; }
+      '';
+    };
+
+    # enscript: text->PostScript. gnulib + makeinfo-blocked; --disable-nls,
+    # MAKEINFO=true, -fcommon for its states/ scanner globals. Its bundled
+    # getopt.c calls str*() without <string.h> -> gcc-14 implicit-decl ERROR;
+    # force-include string.h + downgrade the diagnostic. The bundled K&R
+    # compat/memcpy.c|memmove.c conflict with <string.h> once force-included;
+    # libcFallbackFix (Family 7) pre-seeds ac_cv_func_*=yes so configure skips
+    # them (illumos libc has them). UNBLOCKED wave 22.
+    enscript = pkg {
+      pname = "enscript"; version = "1.6.6";
+      src = { url = "https://mirrors.kernel.org/gnu/enscript/enscript-1.6.6.tar.gz";
+              sha256 = "6d56bada6934d055b34b6c90399aa85975e66457ac5bf513427ae7fc77f5c0bb"; };
+      preConfigure = gnulibFix + illumosExt + libcFallbackFix;
+      env = { CFLAGS = "-fcommon -include string.h -Wno-error=implicit-function-declaration"; MAKEINFO = "true"; };
+      configureFlags = [ "--disable-nls" ];
+    };
+
+    # a2ps: 'anything to PostScript'. Heavy gnulib bundle; --disable-gcc-warnings
+    # (old manywarnings -Werror wall) + gnulibFix + MAKEINFO. Needs a working
+    # gperf/psutils at runtime but builds standalone.
+    a2ps = pkg {
+      pname = "a2ps"; version = "4.15.6";
+      src = { url = "https://mirrors.kernel.org/gnu/a2ps/a2ps-4.15.6.tar.gz";
+              sha256 = "87ff9d801cb11969181d5b8cf8b65e65e5b24bb0c76a1b825e8098f2906fbdf4"; };
+      preConfigure = gnulibFix + illumosExt;
+      env = { CFLAGS = "-fcommon"; MAKEINFO = "true"; };
+      configureFlags = [ "--disable-gcc-warnings" "--disable-nls" ];
+    };
+
+    # parted: GNU partition editor. illumos lacks libblkid/device-mapper; build
+    # libparted core only (no fs-resize, no dmraid) and expect it may still hit
+    # a Linux ioctl. gnulibFix + illumosExt; pkgsrc-candidate if it walls on
+    # <linux/*.h>.
+    parted = pkg {
+      pname = "parted"; version = "3.6";
+      src = { url = "https://ftp.gnu.org/gnu/parted/parted-3.6.tar.xz";
+              sha256 = "3b43dbe33cca0f9a18601ebab56b7852b128ec1a3df3a9b30ccde5e73359e612"; };
+      deps = [ self.readline.gcc self.ncurses.gcc ];
+      preConfigure = gnulibFix + illumosExt;
+      env = { CFLAGS = "-fcommon"; MAKEINFO = "true"; };
+      configureFlags = [ "--disable-nls" "--disable-device-mapper" ];
     };
 
     # A Python module built by pip against cached python-3.9 (add python313

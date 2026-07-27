@@ -267,3 +267,70 @@ old gnulib, `FORCE_UNSAFE_CONFIGURE=1` for coreutils-family, `-fcommon` for
 `program_name`, `MAKEINFO=true` if it builds .info/.html docs). Terminfo tools →
 `env = { CFLAGS = tputsFix; }`. Linux endian users → `endianShimStage` in a
 `customBuild`.
+
+## 9. Wave-22 recurring-FAMILY fixes (reusable — future waves inherit these)
+
+Wave 21 diagnosed three new recurring illumos-portability classes while retrying
+the GNU-tool tail + probing modern C/C++ libs. Wave 22 turned each into a
+reusable helper (top of the `let` in `pkgs/illumos/packages.nix`) with a matching
+opt-in env knob in `scripts/oi-clib.sh` (the native-build path most breadth pkgs
+use). Each fix was validated end-to-end on the fleet (build + cache + signed).
+
+### Family 5 — GNU linker `--version-script`  (`ldVersionScriptFix`, `LDVERSCRIPT_STRIP=1`)
+- **Symptom:** `ld: fatal: unrecognized option '--version-script'`. Many libs
+  doing GNU symbol versioning pass `-Wl,--version-script,<file>` on EVERY
+  platform (zlib-ng's CMake links `libz.so` with `-Wl,--version-script,zlib.map`).
+  Solaris `ld` does NOT accept `--version-script`; it uses a different `-M
+  <mapfile>` syntax with an incompatible grammar.
+- **Fix:** translating the `.map`/`.sym` to a Solaris mapfile is per-file and
+  fragile, so the reusable fix DROPS the version script on illumos. Interpose a
+  tiny CC/CXX shim that filters `-Wl,--version-script,*` and `--version-script
+  <f>` out of the link line, then execs the real compiler. Consequence: symbols
+  keep their default global scope (no per-version symbol tags) — harmless for a
+  userland library on illumos where nothing consumes the GNU version nodes.
+  `packages.nix`: `preConfigure = ldVersionScriptFix` (installs `.ldshim/{cc,c++}`
+  and points CC/CXX at them). `oi-clib.sh`: set env `LDVERSCRIPT_STRIP=1`.
+- **Unblocked (wave 22):** zlib-ng 2.2.2 (`-DZLIB_COMPAT=ON` links libz.so via
+  the version script). Any future lib using a GNU version script is now one env
+  knob away.
+
+### Family 6 — C++ global-namespace C-math names  (`cxxMathNsStage`, `CXXMATHNS=1`)
+- **Symptom:** `'isnan' is not a member of 'Catch'` / `'::isnan' has not been
+  declared`. Modern C++ (catch2, and any lib that `#include <math.h>` then calls
+  bare `isnan`/`isinf`/`signbit`) assumes the C math names are ALSO visible in
+  the GLOBAL namespace. illumos libstdc++ (`<cmath>`) only exposes them in
+  `std::`, NOT `::` — the classic BSD/Solaris libstdc++ difference from glibc.
+- **Fix:** force-include a compat header that does `#include <cmath>` then
+  `using std::isnan; using std::isinf; using std::signbit;` (plus isfinite/
+  isnormal/fpclassify) at global scope, so `::isnan` etc. resolve and unqualified
+  lookups inside other namespaces find them. Applied via CXXFLAGS `-include`;
+  harmless when the names are already global. `packages.nix`: `preConfigure =
+  cxxMathNsStage`. `oi-clib.sh`: set env `CXXMATHNS=1`.
+- **Unblocked (wave 22):** catch2 3.7.1 (`Catch::isnan` shim now resolves).
+  Applies to any modern C++ header lib assuming C math in the global ns.
+
+### Family 7 — pre-C99 GNU libc-fallback `.c` files  (`libcFallbackFix`)
+- **Symptom:** bundled K&R replacement `compat/memcpy.c`/`memmove.c`/`strcasecmp.c`
+  (`char *memcpy (destaddr, srcaddr, len) char *destaddr; ...`) conflict with
+  `<string.h>` (or gcc-14 rejects the pre-C99 defs) once we force-include
+  `<string.h>` to fix a sibling file's implicit str*() decls. The bundled `.c`
+  is guarded by `#ifndef HAVE_MEMCPY` etc. — illumos libc HAS all of these, so
+  configure should DETECT them and compile the fallbacks out.
+- **Fix:** pre-seed the autoconf cache so configure records the libc functions as
+  present: `export ac_cv_func_memcpy=yes ac_cv_func_memmove=yes
+  ac_cv_func_strcasecmp=yes ...` (memset/strchr/strrchr/strdup/strstr/strerror/
+  bcopy too). The `@LIBOBJS@` list then omits the bundled `.c`. `packages.nix`:
+  `preConfigure = ... + libcFallbackFix`. `oi-clib.sh`: pass the `ac_cv_func_*=yes`
+  vars in the env (they are read by the pkg's own `./configure`).
+- **Unblocked (wave 22):** enscript 1.6.6 (its bundled getopt.c needed
+  `-include string.h`, which then tripped the K&R `compat/memcpy.c`; the ac_cv
+  seed makes configure skip the fallback). Feeds a2ps (needs enscript-class
+  fixes). Reusable across pre-C99 GNU tools shipping libc-fallback `.c` files.
+
+**Takeaway (wave 22):** GNU-version-script libs → `ldVersionScriptFix` /
+`LDVERSCRIPT_STRIP=1`. C++ that calls bare `isnan`/`isinf`/`signbit` →
+`cxxMathNsStage` / `CXXMATHNS=1`. Pre-C99 GNU tools with bundled `memcpy.c`-style
+fallbacks → `libcFallbackFix` (seed `ac_cv_func_*=yes`). Still deferred as
+low-leverage: libcpuid (`_BRONZE_`/`_MAX_` enum-token clash, still only itself),
+Linux-only libs (libmnl "Linux only, dude!", libunwind x86_64 backend), and libs
+requiring Python 2 to generate sources (libgraphqlparser).

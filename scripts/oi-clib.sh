@@ -24,20 +24,65 @@ for a in "$@"; do
   if [ "$sawdd" = 1 ]; then flags="$flags $a"; else deps="$deps $a"; fi
 done
 
-# dep include/lib/rpath + cmake prefix
-DEPI=""; DEPL=""; DEPR=""; CMPREFIX=""
+# dep include/lib/rpath + cmake prefix + pkg-config path (deps ship .pc files;
+# autotools/cmake/meson all consult pkg-config, so point it at the dep libdirs).
+DEPI=""; DEPL=""; DEPR=""; CMPREFIX=""; PCP=""
 for d in $deps; do
   [ -d "$d/include" ] && DEPI="$DEPI -I$d/include"
   for L in "$d/lib" "$d/lib/64"; do
     [ -d "$L" ] && { DEPL="$DEPL -L$L"; DEPR="$DEPR -R$L"; }
+    [ -d "$L/pkgconfig" ] && PCP="$PCP${PCP:+:}$L/pkgconfig"
   done
+  [ -d "$d/share/pkgconfig" ] && PCP="$PCP${PCP:+:}$d/share/pkgconfig"
   CMPREFIX="$CMPREFIX${CMPREFIX:+;}$d"
 done
+export PKG_CONFIG_PATH="$PCP${PKG_CONFIG_PATH:+:}${PKG_CONFIG_PATH:-}"
 export CFLAGS="-m64 -fPIC -O2 -D__EXTENSIONS__ $DEPI ${EXTRA_CFLAGS:-}"
-export CXXFLAGS="$CFLAGS"
+export CXXFLAGS="$CFLAGS ${EXTRA_CXXFLAGS:-}"
 export CPPFLAGS="$DEPI"
 export LDFLAGS="-m64 $DEPL $DEPR"
 export LD_LIBRARY_PATH="$GCC/lib/amd64:$GCC/lib:${LD_LIBRARY_PATH:-}"
+
+# --- wave22 reusable family-fix knobs (see pkgs/illumos/packages.nix) ---
+# CXXMATHNS=1: bring C math names into the global ns for C++ that assumes
+#   ::isnan/::isinf/::signbit (illumos libstdc++ only exposes them in std::).
+if [ "${CXXMATHNS:-}" = 1 ]; then
+  cat > /var/tmp/cxx_mathns_illumos.$$.h <<'MATHNSEOF'
+#ifndef SOLNIX_CXX_MATHNS_ILLUMOS_H
+#define SOLNIX_CXX_MATHNS_ILLUMOS_H
+#ifdef __cplusplus
+#include <cmath>
+using std::isnan; using std::isinf; using std::signbit;
+using std::isfinite; using std::isnormal; using std::fpclassify;
+#endif
+#endif
+MATHNSEOF
+  export CXXFLAGS="$CXXFLAGS -include /var/tmp/cxx_mathns_illumos.$$.h"
+fi
+# LDVERSCRIPT_STRIP=1: interpose a CC/CXX shim that filters GNU --version-script
+#   out of the link (Solaris ld rejects it; symbols keep default global scope).
+if [ "${LDVERSCRIPT_STRIP:-}" = 1 ]; then
+  _shim=/var/tmp/ldshim.$$; mkdir -p "$_shim"
+  for _pair in "cc:$CC" "cxx:$CXX"; do
+    _nm="${_pair%%:*}"; _real="${_pair#*:}"
+    cat > "$_shim/$_nm" <<LDSHIMEOF
+#!/bin/sh
+_a=""; _skip=0
+for x in "\$@"; do
+  if [ "\$_skip" = 1 ]; then _skip=0; continue; fi
+  case "\$x" in
+    -Wl,--version-script,*|-Wl,--version-script) continue ;;
+    --version-script=*) continue ;;
+    --version-script) _skip=1; continue ;;
+  esac
+  _a="\$_a \$x"
+done
+exec $_real \$_a
+LDSHIMEOF
+    chmod +x "$_shim/$_nm"
+  done
+  CC="$_shim/cc"; CXX="$_shim/cxx"; export CC CXX
+fi
 
 w=$(mktemp -d "/var/tmp/clib.$pname.XXXXXX")
 tb="$w/src.tar"
