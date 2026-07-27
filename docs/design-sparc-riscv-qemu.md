@@ -683,3 +683,46 @@ AWS S3/ouch.
 - solnix.io cache + local seed/archive stores ONLY; no AWS S3/ouch storage.
 - No git commit. Hosts not terminated. ouch-n21 left running with
   `/sparc/proto/root_sparc` + the built+published slices in its store.
+
+## S3 attempt 1 — QEMU sun4u boot ROOT CAUSE diagnosed (2026-07-27)
+
+The S3 agent exited mid-work but produced the key DIAGNOSIS (captured here so
+it's not lost — was in-conversation, uncommitted):
+
+**Root cause of the nondeterministic sun4u boot failure:** NOT a kernel bug and
+NOT the earlier "OpenBIOS FCode stall" (that was a timebox artifact). It is a
+**nested register-window spill trap** — illumos panics "bad stack overflow at
+TL 2" with callers prom_getproplen+38 / bop_getprop+3c. When the kernel calls
+into OpenBIOS's client interface (getproplen/getprop), OpenBIOS's sparc64
+`call-client.S` manually rotates the register windows (SAVE/RESET/RESTORE_CPU_
+WINDOW_STATE) to "minimise fill/spill traps" — and QEMU's SPARCv9 emulation has
+a **reversed %cwp save/restore direction vs real hardware** (OpenBIOS has a
+CWP_DIRECTION macro acknowledging this). If window accounting (%cansave/
+%canrestore/%otherwin) is left inconsistent for the live-window count at call
+time, the next kernel save/restore triggers a spurious spill trap -> nested trap
+-> TL2 -> panic. NONDETERMINISTIC because it depends on how many windows are live
+when the kernel calls the PROM (some runs reach SMF 95/95, others panic early).
+Real Sun OBP handles this correctly; QEMU's OpenBIOS does not. OpenBIOS sparc64
+has had ~no changes since the qemu-10.1.5-bundled version (Sep 2024), so a newer
+OpenBIOS won't help.
+
+**KEY ENABLER found:** `qemu-system-sparc64 -machine sun4u -bios <blob>` WORKS —
+a patched OpenBIOS blob can be swapped in WITHOUT rebuilding qemu. openbios-sparc64
+is a separate firmware blob (ELF, loads at 0xffd00000). Upstream OpenBIOS is at
+github.com/openbios/openbios.
+
+**Candidate fixes (for S3 attempt 2), test empirically via -bios swap:**
+1. Add a proper `flushw` on client-interface entry in call-client.S so NO stale
+   windows exist when OBP manipulates %cwp (most likely real fix).
+2. Fix the window-accounting (%cansave etc.) restore in RESET/RESTORE_CPU_WINDOW_
+   STATE for the QEMU reversed-CWP_DIRECTION case.
+3. Guard getproplen for -1/0 phandle (ciface.fs) — matches getprop; secondary.
+BLOCKER to building the patched blob: need a **sparc64-elf cross toolchain**
+(gcc+binutils). Dev-box nixpkgs has pkgsCross for sparc64 — build it there
+(pkgsCross.sparc64-* or crossSystem sparc64-none-elf); OR build OpenBIOS on the
+Tribblix sparc guest itself. Then: patch call-client.S -> build blob -> qemu
+-bios <blob> -> boot the m34 CD -> confirm DETERMINISTIC boot to SMF 95/95.
+
+Alternative if the window fix is too deep: boot from a Sun-VTOC DISK image
+(bypasses more of the FCode/client path than CD) + accept the current
+~partially-reproducible boot for interim CI.
