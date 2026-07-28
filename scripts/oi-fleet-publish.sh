@@ -5,11 +5,17 @@
 #
 #   BUILDER_IP=<ip> ./scripts/oi-fleet-publish.sh <paths-file>
 #     paths-file: one /nix/store/... path per line (extra cols after TAB ignored)
+#   SYSTEM=<x86_64-solaris|aarch64-solaris|sparcv9-solaris> (default x86_64-solaris)
+#     tags each newly-published hash in the arch manifest so the site can
+#     classify by arch (narinfos carry no system field). See
+#     ~/ws/solnix.io/infra/docs/handoff/arch-metadata.md.
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"; cd "$REPO"
 
 PATHS_FILE="${1:?usage: BUILDER_IP=<ip> oi-fleet-publish.sh <paths-file>}"
 IP="${BUILDER_IP:?set BUILDER_IP to the builder that holds these paths}"
+SYSTEM="${SYSTEM:-x86_64-solaris}"
+ARCH_MANIFEST="$REPO/docs/registry/arch-manifest.tsv"; touch "$ARCH_MANIFEST"
 
 SOPS_AGE_KEY_FILE="${SOPS_AGE_KEY_FILE:-$HOME/.config/sops/age/keys.txt}"
 export SOPS_AGE_KEY_FILE
@@ -48,8 +54,22 @@ while IFS=$'\t' read -r first rest <&3; do
   fi
   nix store sign --store "$TS" -k "$WORK/sign.key" --recursive "$SP" 2>>"$WORK/err" || { echo "  FAIL sign"; fail=$((fail+1)); continue; }
   nix copy --store "$TS" --to "$S3" "$SP" 2>>"$WORK/err" || { echo "  FAIL copy"; fail=$((fail+1)); continue; }
+  # arch manifest: tag this hash with its system so the site can classify by arch
+  grep -q "^$hash	" "$ARCH_MANIFEST" || printf '%s\t%s\t%s\n' "$hash" "$SP" "$SYSTEM" >> "$ARCH_MANIFEST"
   pub=$((pub+1))
 done 3< "$PATHS_FILE"
+
+# publish the updated arch manifest so the site can fetch it (needs awscli2 in PATH;
+# if absent, upload manually: nix-shell -p awscli2 --run 'aws --endpoint-url https://s3.solnix.io s3 cp docs/registry/arch-manifest.tsv s3://solnix-cache/arch-manifest.tsv')
+if [ "$pub" -gt 0 ]; then
+  LC_ALL=C sort -u -o "$ARCH_MANIFEST" "$ARCH_MANIFEST"
+  if command -v aws >/dev/null 2>&1; then
+    aws --endpoint-url https://s3.solnix.io s3 cp "$ARCH_MANIFEST" s3://solnix-cache/arch-manifest.tsv \
+      --content-type text/tab-separated-values 2>>"$WORK/err" || echo "  WARN: arch-manifest upload failed"
+  else
+    echo "  NOTE: aws not in PATH; arch-manifest.tsv updated locally, upload it manually (see comment above)"
+  fi
+fi
 
 echo "=== published=$pub skipped=$skip failed=$fail ==="
 [ "$fail" = 0 ] || { echo "--- errors ---"; tail -20 "$WORK/err" 2>/dev/null; }
