@@ -411,3 +411,23 @@ kernel-keyed diff already validated (§6), and QEMU virt is the best emulation
 target of the four ISAs. The entire risk is concentrated in one place — writing
 the kernel port — which is exactly where it should be, and is honestly a
 multi-year effort.
+
+## 7. EXECUTION — we write the port (mandate 2026-07-28)
+
+Reframed from "wait for upstream" to "solnix WRITES the first illumos RISC-V port."
+Reference stack:
+- **RISC-V Privileged Spec + SBI Spec** = the authority (ISA, CSRs, trap model, SBI ABI).
+- **NetBSD sys/arch/riscv** = the closest BSD-licensed "how a real kernel wires
+  riscv" reference (locore/pmap/trap/sbi/PLIC/CLINT). BSD-2-clause: study the
+  design + riscv gotchas (Sv39 layout, CSR encodings, SBI convention), REIMPLEMENT
+  in illumos idiom against the spec (don't copy incompatibly). Files to mine:
+  riscv/{locore.S,cpu_switch.S,pmap_machdep.c,trap.c,riscv_machdep.c,sbi.c},
+  include/{pte,sysreg,frame,pcb}.h, dev PLIC/CLINT.
+- **richlowe/arm64-gate + IPD 24** = the "how illumos adds a new arch" precedent
+  (uts/<arch> layout, gate/nightly, CTF, mapfiles, the toolchain-target dance).
+- **Linux arch/riscv** = secondary cross-check for driver/DT specifics (K1/K3).
+
+Phasing R-P1..R-P7 in .kiro/specs/solnix-riscv/. Each phase has a runnable QEMU
+gate. R-P1 (toolchain target + riscv-gate scaffold) starts NOW; R-P2 is the first
+`unix` banner in S-mode under OpenSBI on qemu virt (the real "first illumos riscv
+kernel instruction" milestone).
