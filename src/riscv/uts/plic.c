@@ -42,8 +42,21 @@
 #define	PLIC_THRESHOLD(ctx)	(PLIC_BASE + 0x200000UL + (ctx) * 0x1000UL)
 #define	PLIC_CLAIM(ctx)		(PLIC_BASE + 0x200004UL + (ctx) * 0x1000UL)
 
-/* Our S-mode context on the boot hart (hart 0). */
-#define	PLIC_S_CONTEXT		1UL
+/*
+ * Our S-mode context. On qemu virt, hart H has M-mode context 2*H and S-mode
+ * context 2*H+1. R-P4 hardcoded 1 (hart 0), which stalls when the SMP boot-hart
+ * election picks a hart != 0 (the interrupt targets context 1 = hart 0, which
+ * is a parked secondary, so it is never claimed on the running boot hart).
+ * R-P5 computes it from the real boot hartid via plic_set_context().
+ */
+static unsigned long plic_s_context = 1UL;
+
+void
+plic_set_context(unsigned long boot_hartid)
+{
+	plic_s_context = 2UL * boot_hartid + 1UL;
+}
+#define	PLIC_S_CONTEXT		(plic_s_context)
 
 /* MMIO accessors (VA==PA via the R-P3 low-MMIO identity gigapage). */
 static inline unsigned int
@@ -115,7 +128,9 @@ plic_init(void)
 
 	sbi_console_puts("[plic] init: base=");
 	puthex(PLIC_BASE);
-	sbi_console_puts(" S-context=1 threshold=0\n");
+	sbi_console_puts(" S-context=");
+	puthex(PLIC_S_CONTEXT);
+	sbi_console_puts(" threshold=0\n");
 }
 
 /*
@@ -175,21 +190,23 @@ plic_extintr(void)
 		plic_last_irq = src;
 		plic_claimed_count++;
 
-		sbi_console_puts("[plic] IRQ ");
-		puthex(src);
-		sbi_console_puts(" claimed (S-mode external interrupt "
-		    "delivered via PLIC)\n");
-
 		/*
-		 * Device dispatch. For our UART self-test source, quiet it by
-		 * disabling its interrupts so it does not immediately re-raise
-		 * the line (THRE stays asserted while the transmitter is idle).
-		 * A real console driver would read RBR / drain the FIFO here.
+		 * Quiet the device FIRST, before any console output. For our
+		 * UART self-test source, mask its interrupts immediately so it
+		 * cannot re-assert the line while we print the claim: legacy
+		 * putchar drives the UART TX, which would otherwise re-raise
+		 * THRE and storm this handler (SMP-sensitive livelock). A real
+		 * driver drains the FIFO here.
 		 */
 		if (src == UART0_IRQ) {
 			uart_wr8(UART_IER, 0);		/* mask UART ints */
 			(void) uart_rd8(UART_IIR);	/* clear IIR */
 		}
+
+		sbi_console_puts("[plic] IRQ ");
+		puthex(src);
+		sbi_console_puts(" claimed (S-mode external interrupt "
+		    "delivered via PLIC)\n");
 
 		plic_complete(src);
 		serviced++;
@@ -234,9 +251,15 @@ plic_selftest(void)
 	uart_wr8(UART_LCR, uart_rd8(UART_LCR) & ~0x80);	/* DLAB = 0 */
 	uart_wr8(UART_IER, UART_IER_THRE);
 
-	/* Wait (bounded) for the external interrupt to be claimed. */
-	for (spin = 0; spin < 1000000 && plic_claimed_count == 0; spin++)
-		__asm__ __volatile__("wfi");
+	/*
+	 * Wait (bounded) for the external interrupt to be claimed. Use a plain
+	 * spin, NOT wfi: at this point no timer is armed, so a wfi would block
+	 * this hart indefinitely if the interrupt failed to route to our context
+	 * (there would be no other interrupt to wake it). A bounded spin can
+	 * never wedge the boot regardless of hart/context routing.
+	 */
+	for (spin = 0; spin < 20000000 && plic_claimed_count == 0; spin++)
+		__asm__ __volatile__("nop");
 
 	if (plic_claimed_count > 0) {
 		sbi_console_puts("[plic] self-test OK: external IRQ ");
@@ -247,5 +270,13 @@ plic_selftest(void)
 		    "observed (SEIP path)\n");
 	}
 
-	/* Leave SEIE enabled (real console/device IRQs continue via PLIC). */
+	/*
+	 * Quiesce the UART self-test source: mask its IER and disable it at the
+	 * PLIC (priority 0) so ongoing console TX (legacy putchar drives the
+	 * UART) can never re-raise the line and storm the external-IRQ path
+	 * during the rest of boot. SEIE stays enabled so genuine device IRQs
+	 * (R-P6 virtio) still deliver; only this proving source is retired.
+	 */
+	uart_wr8(UART_IER, 0);
+	mmio_wr32(PLIC_PRIORITY(UART0_IRQ), 0);
 }

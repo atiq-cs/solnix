@@ -37,6 +37,52 @@ volatile unsigned long timer_ticks = 0;		/* total periodic ticks */
 static volatile unsigned long timer_deadline = 0;	/* next fire (`time`) */
 static volatile int timer_periodic = 0;		/* 1 = rearm each tick */
 
+/*
+ * ---------------------------------------------------------------------------
+ * Callout wheel (R-P5) — the seed of the illumos cyclic/callout subsystem.
+ * ---------------------------------------------------------------------------
+ * A minimal timer-tick-driven callout facility: callout_schedule() registers a
+ * function to fire after a delay; the periodic clock ISR (timer_intr) walks the
+ * table each tick and fires any callout whose deadline (in ticks) has arrived.
+ *
+ * illumos has a per-cpu callout wheel hashed by expiry + the cyclic subsystem
+ * under it. This is one flat table walked O(n) per tick — fine for a handful of
+ * callouts at bring-up.
+ *
+ * ponytail: O(n) table scan per tick, fixed CALLOUT_MAX slots. Replace with the
+ * hashed callout wheel when callout count grows.
+ */
+#define	CALLOUT_MAX	16
+
+typedef void (*callout_fn_t)(void *);
+
+struct callout {
+	int		c_active;
+	unsigned long	c_expire_tick;	/* fire when timer_ticks >= this */
+	callout_fn_t	c_func;
+	void		*c_arg;
+};
+
+static struct callout callouts[CALLOUT_MAX];
+static volatile int callout_lock;
+
+static void
+callout_lock_enter(void)
+{
+	int old;
+	do {
+		__asm__ __volatile__("amoswap.w.aq %0, %2, (%1)"
+		    : "=&r"(old) : "r"(&callout_lock), "r"(1) : "memory");
+	} while (old != 0);
+}
+
+static void
+callout_lock_exit(void)
+{
+	__asm__ __volatile__("amoswap.w.rl zero, zero, (%0)"
+	    :: "r"(&callout_lock) : "memory");
+}
+
 static void
 putdec(unsigned long v)
 {
@@ -90,6 +136,28 @@ void
 timer_intr(void)
 {
 	timer_ticks++;
+
+	/*
+	 * Run the callout wheel: fire any callout whose deadline (in ticks) has
+	 * arrived. Deactivate it before calling so a callout can reschedule
+	 * itself. Runs in the clock ISR context (interrupts off on this hart).
+	 */
+	{
+		int i;
+		callout_lock_enter();
+		for (i = 0; i < CALLOUT_MAX; i++) {
+			if (callouts[i].c_active &&
+			    timer_ticks >= callouts[i].c_expire_tick) {
+				callout_fn_t f = callouts[i].c_func;
+				void *a = callouts[i].c_arg;
+				callouts[i].c_active = 0;
+				callout_lock_exit();
+				f(a);
+				callout_lock_enter();
+			}
+		}
+		callout_lock_exit();
+	}
 
 	if (timer_periodic) {
 		/*
@@ -162,4 +230,93 @@ clock_prove(unsigned long nticks)
 	sbi_console_puts(" ns (elapsed ");
 	putdec(hr1 - hr0);
 	sbi_console_puts(" ns) -> periodic clock running.\n");
+}
+
+/*
+ * ---------------------------------------------------------------------------
+ * Callout API (R-P5)
+ * ---------------------------------------------------------------------------
+ */
+
+/*
+ * callout_schedule — fire func(arg) after `ms` milliseconds (rounded up to the
+ * clock tick, HZ=100 => 10 ms granularity). Returns 0 on success, -1 if the
+ * callout table is full. Requires the periodic clock to be running.
+ */
+int
+callout_schedule(unsigned long ms, callout_fn_t func, void *arg)
+{
+	unsigned long delay_ticks = (ms * HZ + 999) / 1000;
+	int i;
+
+	if (delay_ticks == 0)
+		delay_ticks = 1;
+
+	callout_lock_enter();
+	for (i = 0; i < CALLOUT_MAX; i++) {
+		if (!callouts[i].c_active) {
+			callouts[i].c_expire_tick = timer_ticks + delay_ticks;
+			callouts[i].c_func = func;
+			callouts[i].c_arg = arg;
+			callouts[i].c_active = 1;
+			callout_lock_exit();
+			return (0);
+		}
+	}
+	callout_lock_exit();
+	return (-1);
+}
+
+/* Self-test state: set by the fired callout so callout_selftest can observe. */
+static volatile int callout_fired = 0;
+static volatile unsigned long callout_fire_tick = 0;
+
+static void
+callout_test_fn(void *arg)
+{
+	callout_fired = 1;
+	callout_fire_tick = timer_ticks;
+	(void) arg;
+}
+
+/*
+ * callout_selftest — R-P5 gate 3 proof. Schedule a callout +50 ms out, then
+ * spin (wfi) until the clock ISR fires it, and report the tick it fired at.
+ * Assumes the periodic clock is already running (clock_prove ran).
+ */
+void
+callout_selftest(void)
+{
+	unsigned long start_tick = timer_ticks;
+	unsigned long spins = 0;
+
+	callout_fired = 0;
+	if (callout_schedule(50, callout_test_fn, 0) != 0) {
+		sbi_console_puts("[callout] self-test FAILED: table full\n");
+		return;
+	}
+
+	sbi_console_puts("[callout] scheduled callout for +50 ms (");
+	putdec((50 * HZ + 999) / 1000);
+	sbi_console_puts(" ticks) at tick ");
+	putdec(start_tick);
+	sbi_console_puts("\n");
+
+	/* Wait for the ISR to fire it (bounded so we never wedge). */
+	while (!callout_fired && spins < 100) {
+		__asm__ __volatile__("wfi");
+		spins++;
+	}
+
+	if (callout_fired) {
+		unsigned long dms = (callout_fire_tick - start_tick) *
+		    (1000 / HZ);
+		sbi_console_puts("[callout] callout fired at +");
+		putdec(dms);
+		sbi_console_puts("ms (tick ");
+		putdec(callout_fire_tick);
+		sbi_console_puts(") -> callout wheel OK\n");
+	} else {
+		sbi_console_puts("[callout] self-test FAILED: never fired\n");
+	}
 }

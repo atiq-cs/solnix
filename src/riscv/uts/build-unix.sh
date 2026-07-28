@@ -30,16 +30,22 @@ CFLAGS="-march=rv64imac_zicsr -mabi=lp64 -mcmodel=medany \
 echo "== compile (freestanding, $TC) =="
 "$CC" $CFLAGS -c locore.S    -o locore.o
 "$CC" $CFLAGS -c trap.S      -o trap_asm.o
+"$CC" $CFLAGS -c swtch.S     -o swtch.o
 "$CC" $CFLAGS -c sbi.c       -o sbi.o
 "$CC" $CFLAGS -c trap.c      -o trap.o
 "$CC" $CFLAGS -c hat_riscv.c -o hat_riscv.o
 "$CC" $CFLAGS -c timer.c     -o timer.o
 "$CC" $CFLAGS -c plic.c      -o plic.o
+"$CC" $CFLAGS -c fdt.c       -o fdt.o
+"$CC" $CFLAGS -c vm_page.c   -o vm_page.o
+"$CC" $CFLAGS -c kmem.c      -o kmem.o
+"$CC" $CFLAGS -c proc.c      -o proc.o
+"$CC" $CFLAGS -c startup.c   -o startup.o
 "$CC" $CFLAGS -c main.c      -o main.o
 
 echo "== link (riscv.ld @ 0x80200000) =="
-"$LD" -T riscv.ld -o "$OUT" locore.o trap_asm.o sbi.o trap.o \
-	hat_riscv.o timer.o plic.o main.o
+"$LD" -T riscv.ld -o "$OUT" locore.o trap_asm.o swtch.o sbi.o trap.o \
+	hat_riscv.o timer.o plic.o fdt.o vm_page.o kmem.o proc.o startup.o main.o
 
 echo "== image info =="
 file "$OUT" || true

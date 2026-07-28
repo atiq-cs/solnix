@@ -815,3 +815,187 @@ gone after each run.
 - **Console:** a PLIC-driven NS16550A console driver replacing SBI DBCN polling.
 - **genunix link:** grow `mlsetup`'s boot `cpu_t` into the real `cpu_t[]`; have
   `main()` call MI startup (`startup()`, `main()` MI) toward mounting root.
+
+---
+
+## R-P5 — genunix seam: page_t/freelist + kmem + callout wheel + dispatcher/idle threads (DONE, 2026-07-28)
+
+**Milestone R-P5 — DONE, all five gates verified on `qemu-system-riscv64
+-machine virt` (`-smp 1` and `-smp 4`) under OpenSBI v1.5.1.** This is the
+bridge from the machine-dependent (MD) kernel to the machine-independent (MI)
+kernel: `main()` now calls a `startup()`-analog that brings genunix's
+foundation online. Building on the R-P4 SMP/clock/PLIC/high-VA-hat foundation,
+the first illumos RISC-V kernel now has:
+
+1. **Physical page management** — a real `page_t[]` array + free list built
+   over the RAM the DTB reports (replacing the R-P4 hardcoded 128 MiB bump).
+2. **kmem/VA allocator** — a kernel VA arena over the `KERNELBASE` high range +
+   a power-of-two-class slab `kmem_alloc`/`kmem_free`.
+3. **Callout wheel** — a timer-tick-driven callout facility on the R-P4 100 Hz
+   periodic clock (`callout_schedule`).
+4. **Context switch + kernel threads + dispatcher** — a real RISC-V
+   callee-saved context switch (`rv_swtch`), `kthread_t`, a round-robin run
+   queue, cooperative `swtch`/`thread_yield`, and per-cpu idle threads.
+5. **`startup()`-analog** — `main()` → `startup()` brings the above up in
+   illumos order and the boot cpu becomes cpu0's idle thread.
+
+New MI/MD sources in `src/riscv/uts/`:
+
+| File | R-P5 role |
+| --- | --- |
+| `fdt.c` | **New.** Minimal flattened-devicetree reader. Parses the DTB (`a1`, big-endian) walking the struct block to the `/memory` node's `reg = <base size>`, honoring root `#address-cells`/`#size-cells` (riscv virt 2/2). Returns the real RAM extent. Verified against a live qemu `virt.dtb` (128 MiB) and by booting `-m 256M` → correctly reports 256 MiB (not a coincidence: the kernel reads the DTB). |
+| `vm_page.c` | **New.** `page_t` (pfn + free link + state), a self-hosted `page_t[]` at the front of the RAM above the boot watermark, and a LIFO free list with `page_alloc`/`page_free` under a global spinlock. `physmem` exports the managed page count. |
+| `kmem.c` | **New.** `heap_vmem` (a bump VA arena at `KERNELBASE+16 MiB`, 64 MiB VA window, page-backed on demand via `page_alloc`+`hat_kmap_page`), and power-of-two size classes (16..2048 B) with embedded-free-list single-page slabs. `kmem_alloc`/`kmem_free`; large (>2048 B) requests get page-multiple VA runs. |
+| `swtch.S` | **New.** `rv_swtch(old, new)` saves/restores the RISC-V callee-saved set (`ra`, `sp`, `tp`, `s0-s11`) — the only state a cooperative switch must preserve, since caller-saved regs are already spilled around the C call. `rv_thread_start` trampoline launches a brand-new thread's `entry(arg)`. |
+| `proc.c` | **New.** `kthread_t`, `thread_create` (kmem stack + seeded context so the first switch lands on `rv_thread_start`), a global FIFO run queue, `swtch`/`thread_yield`/`thread_exit`, `idle_body`, `dispatch_init_cpu` (the current context becomes cpu N's idle thread), and the A/B two-thread ping-pong proof. |
+| `startup.c` | **New.** The `startup()`-analog: `startup_memlist` (FDT parse → `page_init`), `startup_vm` (`kmem_init`), `startup_cyclic` (callout proof), `startup_dispatch` (`dispatch_init_cpu(0)` + A/B proof). Hosts the shared `kputdec`/`kputhex` console helpers. |
+| `timer.c` | Grew a **callout wheel**: a flat table walked O(n) each tick in `timer_intr`, firing any callout whose deadline (in ticks) has arrived; `callout_schedule(ms, fn, arg)` + the +50 ms self-test. |
+| `hat_riscv.c` | `alloc_table()` now draws page-table pages from `page_alloc` once the R-P5 page layer is up (via `hat_page_layer_online()`), so the `KERNELBASE` VA allocator can map many pages beyond the 6-entry static boot pool. Added `hat_phys_watermark()` so `page_init` places the `page_t[]` above everything the boot allocator consumed. |
+| `sbi.c` | Console `putchar` switched from **DBCN** (passes a buffer *address* OpenSBI reads back through the caller's address space) to **legacy putchar** (EID 0x01, char in a register). DBCN worked only while everything ran on the identity-mapped boot stack (VA==PA); R-P5 threads run on high-canonical kmem-VA stacks, where a DBCN char buffer is a VA OpenSBI's read path faults on. Legacy putchar is correct from any stack. |
+| `plic.c` | Two fixes: (1) The self-test ISR now **masks the UART source before printing** the claim (and disables it at the PLIC + masks IER after the proof). With legacy putchar every console byte drives the UART TX, re-asserting THRE; printing *before* masking created a self-inflicted interrupt storm that livelocked under `-smp 4`. (2) The S-mode PLIC **context is now computed from the boot hartid** (`2*hartid+1`) via `plic_set_context()`, not hardcoded to 1 (hart 0) — and the claim-wait spins instead of `wfi`. R-P4's hardcoded context 1 + `wfi` wait stalled forever whenever the SMP boot-hart election picked a hart != 0 (the interrupt targeted a parked secondary's context, and `wfi` had no timer to wake it). Now deterministic for any boot hart (8/8 clean `-smp 4` runs across boot harts 0..3). |
+| `main.c` | After the R-P4 status banner, `main()` sets `startup_ncpu` and calls `startup(dtb)` — the MD→MI seam — then reports the R-P5 status and parks the boot cpu (now cpu0's idle thread). |
+
+### R-P5.1 Physical page management — the contract
+
+- **Input:** the DTB RAM extent from `fdt_get_memory` and the boot watermark
+  from `hat_phys_watermark()` (first PA above the kernel image + any boot
+  `hat_palloc` pages). The two never overlap: boot page tables came from the
+  static pool / below the watermark; every `page_alloc` page is above it.
+- **Layout:** `page_t[]` is self-hosted at the front of the managed region
+  (`arraypages` reserved), the rest goes on the free list.
+- **API:** `page_alloc()` → zeroed PA (== identity VA), `page_free(pa)` (range +
+  double-free checked), `page_freecount()`, `physmem`.
+- **PROVE:** `physmem: 32172 pages (125 MB) managed` (128 MiB DTB) /
+  `64940 pages (253 MB)` (`-m 256M`); `page_alloc/free self-test OK`.
+
+### R-P5.2 kmem / VA allocator — the contract
+
+- **VA arena:** bump over `[KERNELBASE+16 MiB, +80 MiB)`; each page handed out
+  is backed by a `page_alloc` frame mapped R/W via `hat_kmap_page` (full 3-level
+  Sv39 walk, per-VA `sfence.vma`).
+- **Slab:** power-of-two classes 16..2048 B, one-page slabs, embedded free list.
+  `> 2048 B` → page-multiple VA runs (their VA currently leaks on free —
+  documented ceiling). `kmem_free` takes the size (illumos convention).
+- **PROVE:** `kmem] alloc/free self-test OK (16/64/256/1500 B ... 64 B recycled)`.
+
+### R-P5.3 Callout wheel — the contract
+
+- A flat `callouts[16]` table; `timer_intr` fires any active callout with
+  `timer_ticks >= c_expire_tick` (deactivate-before-call so a callout may
+  reschedule). `callout_schedule(ms, fn, arg)` rounds ms up to ticks (HZ=100,
+  10 ms granularity). Runs in the clock-ISR context.
+- **PROVE:** `callout fired at +50ms (tick N) -> callout wheel OK`.
+
+### R-P5.4 Context switch + dispatcher — the contract (the marquee)
+
+- **`rv_context`:** `ra, sp, tp, s0-s11` (15 × 8 = 120 B) — exactly the RISC-V
+  callee-saved set. Caller-saved regs need no save (the C call already spilled
+  live ones). `rv_swtch` saves `*old`, loads `*new`, `ret`s into the new
+  thread's `ra` (a fresh thread's `ra` = `rv_thread_start`, which calls
+  `entry(arg)` with `s0`/`s1` seeded).
+- **Dispatcher:** one global FIFO run queue + lock; `swtch()` picks the head (or
+  the idle thread if empty); `thread_yield()` re-enqueues self and switches;
+  `thread_exit()` switches away for good. `dispatch_init_cpu` makes the current
+  context cpu N's idle thread.
+- **CRITICAL BUG FOUND + FIXED:** GCC tail-call-optimized the
+  `rv_swtch(&old, &new)` call in `swtch()` (last statement) into a `jr`, so
+  `rv_swtch` saved the *caller's* `ra`/`sp` and silently wedged. Fix: a
+  `__asm__ __volatile__("" ::: "memory")` barrier after the call forces a real
+  `jalr` (frame kept, resume-here semantics correct). Verified in the disasm.
+- **PROVE:** `thread A/B context-switch OK (A ran 3x, B ran 3x, yielded to each
+  other via swtch)` — two kernel threads ping-ponging through `swtch` is real
+  scheduling (stacks + PC + callee-saved state switch and resume correctly).
+
+### R-P5.5 startup()-analog — the contract
+
+- `main()` → `startup(dtb)`: `startup_memlist` → `startup_vm` → `startup_cyclic`
+  → `startup_dispatch`, each running its gate self-test, then the completion
+  banner. The boot cpu ends as cpu0's idle thread.
+- **PROVE:** `startup complete: 4 cpus, physmem 32172 pages (125 MB), kmem
+  online (8 heap pages), cyclic online, dispatch online.`
+
+### R-P5.6 Result — SUCCESS (verbatim console, the five gates, `-smp 4`)
+
+```
+[startup] MI kernel bring-up (genunix seam, R-P5)
+[startup] startup_memlist: physical memory
+[startup] FDT /memory: base 0x0000000080000000 size 0x0000000008000000 (128 MiB) [from DTB]
+[page] page_t array at PA 0x0000000080254000 (189 pages reserved), managing 32172 frames [0x0000000080254000..0x0000000088000000)
+[page] free list: 31983 pages available
+[startup] physmem: 32172 pages (125 MB) managed
+[page] page_alloc/free self-test OK (4 pages alloc'd, zeroed, written, freed; freecount restored)
+[startup] startup_vm: kernel VA + kmem
+[kmem] heap VA arena 0xffffffc001000000 .. 0xffffffc005000000 (64 MiB VA, page-backed on demand); 8 size classes (16..2048 B)
+[kmem] alloc/free self-test OK (16/64/256/1500 B alloc'd, written+verified, freed; 64 B recycled)
+[startup] startup_cyclic: callout wheel on the 100 Hz clock
+[callout] scheduled callout for +50 ms (5 ticks) at tick 11
+[callout] callout fired at +50ms (tick 16) -> callout wheel OK
+[startup] startup_dispatch: threads + swtch
+[startup] boot cpu is now cpu0 idle thread; dispatcher online
+[disp] creating kernel threads A + B, cooperative round-robin via swtch:
+thread A: round 1 (ctx-switch to B)
+thread B: round 1 (ctx-switch to A)
+thread A: round 2 (ctx-switch to B)
+thread B: round 2 (ctx-switch to A)
+thread A: round 3 (ctx-switch to B)
+thread B: round 3 (ctx-switch to A)
+[disp] thread A/B context-switch OK (A ran 3x, B ran 3x, yielded to each other via swtch)
+[startup] startup complete: 4 cpus, physmem 32172 pages (125 MB), kmem online (8 heap pages), cyclic online, dispatch online.
+[R-P5] genunix seam online: page_t + kmem + callout wheel + dispatcher/idle threads.
+```
+
+All five gates PASS on `-smp 1` (deterministic) and `-smp 4` (8/8 clean runs
+across boot harts 0..3 after the PLIC context + storm fixes). Full artifacts:
+`artifacts/riscv-port/rp5/`
+(`rp5-boot.log`, `unix`, `unix.disasm`, `unix.sections`, and every R-P5 source).
+Build: nixpkgs `pkgsCross.riscv64-embedded` (riscv64-none-elf gcc 14.3.0,
+binutils 2.44), freestanding `-mcmodel=medany`. Every qemu run was
+`timeout`-wrapped + detached (nohup→log, sleep+check+kill); no foreground-wait,
+no wedge; stray qemu confirmed gone after each run.
+
+**Deliberate R-P5 scope (documented ceilings, each an R-P6 upgrade path):**
+- **page:** LIFO free list + one global lock, no per-cpu magazines / NUMA
+  freelists, no `page_t` vnode/offset/hash (frame descriptor only).
+- **kmem:** power-of-two classes + single-page slabs + one global lock; no
+  arbitrary object sizes, no per-cpu magazines/depot, no slab coloring; large
+  (>2048 B) frees leak their VA (no vmem span free list yet).
+- **callout:** O(n) flat-table scan per tick, fixed 16 slots, no hashed wheel,
+  no time-of-day, no per-cpu cyclics.
+- **dispatch:** ONE global runq + one lock, cooperative (yield-driven, not
+  preemptive off the clock), **boot-cpu dispatch only** — secondaries still park
+  in `wfi` (the A/B proof + idle threads run on cpu0). No priorities, no load
+  balancing, no per-cpu runq, no `curthread` via `tp` in the trap path yet.
+- **console:** legacy SBI putchar (polled); no NS16550A interrupt-driven driver.
+
+### R-P5.7 The MD→MI interface contracts for R-P6
+
+R-P6 links real genunix + device drivers + mounts root. The stable seams R-P5
+establishes for it:
+
+- **Memory:** `page_alloc()`/`page_free()`/`physmem` (the `page_t` layer) and
+  `kmem_alloc()`/`kmem_free()` (the slab). genunix's `page_create_va` and
+  `kmem_cache` grow on top of these; `hat_kmap_page`/`hat_phys_watermark` are
+  the segkmem hooks.
+- **Time:** `gethrtime()` (ns), the 100 Hz `timer_intr`, and
+  `callout_schedule()` — the `timeout(9F)`/cyclic substrate.
+- **Dispatch:** `thread_create()`, `swtch()`, `thread_yield()`, `thread_exit()`,
+  `dispatch_init_cpu()`, and the `rv_context`/`rv_swtch` ABI — the `disp`/`swtch`
+  substrate. R-P6: per-cpu runqs, clock-driven preemption, `curthread` via `tp`,
+  secondaries running their idle threads + a scheduler tick.
+- **Console:** `sbi_console_puts` (polled) is the `cn`/`putchar` seam; R-P6
+  replaces it with a PLIC-driven NS16550A `console` driver (the PLIC
+  claim/complete path is proven and quiesced-after-use).
+
+### R-P5.8 Next: R-P6 (link genunix + drivers + root)
+
+- **Link real genunix:** replace the bespoke `page`/`kmem`/`disp` seeds with the
+  upstream MI subsystems, adapting them to these interface contracts; grow the
+  boot `cpu_t` into the real `cpu_t[]` + per-cpu areas.
+- **Device drivers:** a PLIC-driven **NS16550A console**, then **virtio-blk**
+  and **virtio-net** on the qemu virt virtio-mmio transport (the PLIC external-
+  IRQ path is ready).
+- **Root filesystem:** DDI/DKI enough to attach virtio-blk, a root vfs, and
+  mount root — the path to a usable userland.
+- **SMP dispatch:** per-cpu run queues + clock-tick preemption + SBI IPI
+  (`sbi_send_ipi`) for cross-hart reschedule / `sfence` broadcast; secondaries
+  run their own idle threads and take the scheduler tick.

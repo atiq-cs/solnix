@@ -94,14 +94,30 @@ puthex(unsigned long v)
 		sbi_console_putchar(hex_al[(v >> i) & 0xf]);
 }
 
-/* Allocate a zeroed page table from the boot pool. Returns kernel/phys ptr
- * (identity: VA==PA in the 0x80000000 gigapage, so the pointer's address IS
- * the physical address usable in a PTE PPN). */
+/* From vm_page.c: real page allocator, available after page_init(). Weak-linked
+ * via a global flag so early boot (before page_init) uses the static pool. */
+extern unsigned long page_alloc(void);
+static int page_layer_up = 0;
+void hat_page_layer_online(void) { page_layer_up = 1; }
+
+/* Allocate a zeroed page table. Before the R-P5 page layer is up, draw from the
+ * static boot pool; after, draw a real page from page_alloc (identity VA==PA,
+ * already zeroed) so the KERNELBASE VA allocator can map many pages. */
 static unsigned long *
 alloc_table(void)
 {
 	unsigned long *t;
 	int i;
+
+	if (page_layer_up) {
+		unsigned long pa = page_alloc();
+		if (pa == 0) {
+			sbi_console_puts("[hat] PANIC: page_alloc failed for PT\n");
+			for (;;)
+				__asm__ __volatile__("wfi");
+		}
+		return ((unsigned long *)pa);	/* page_alloc zeroes it */
+	}
 
 	if (boot_pt_next >= NBOOT_TABLES) {
 		sbi_console_puts("[hat] PANIC: out of boot page tables\n");
@@ -309,6 +325,19 @@ hat_palloc(void)
 	for (i = 0; i < (int)(PAGESIZE / sizeof (unsigned long)); i++)
 		p[i] = 0;
 	return (pa);
+}
+
+/*
+ * hat_phys_watermark — the first physical address ABOVE everything the boot
+ * allocator has consumed (kernel image + any hat_palloc pages). R-P5's page
+ * layer (vm_page.c) builds its page_t array + free list starting here, so the
+ * bump region and the page-managed region never overlap. After page_init the
+ * bump allocator is retired; hat page-table allocs route through page_alloc.
+ */
+unsigned long
+hat_phys_watermark(void)
+{
+	return (phys_bump);
 }
 
 /*

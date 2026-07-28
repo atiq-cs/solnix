@@ -123,27 +123,23 @@ sbi_probe_dbcn(void)
 }
 
 /*
- * sbi_console_putchar — public single-char console output. Prefers DBCN
- * (writing one byte), falls back to legacy putchar. Used by sbi_console_puts.
+ * sbi_console_putchar — public single-char console output.
+ *
+ * R-P5 change: use LEGACY putchar (EID 0x01), which passes the character in a
+ * register (a0) with NO buffer pointer. The DBCN path passes the ADDRESS of a
+ * byte to OpenSBI, which reads it back through the caller's address space —
+ * that worked in R-P2..R-P4 only because everything ran on the identity-mapped
+ * boot stack (VA==PA in the 0x80000000 gigapage). R-P5 introduces kernel
+ * threads whose stacks live in the high canonical kmem VA range
+ * (0xffffffc0...); a DBCN char buffer there is a VA OpenSBI's read path faults
+ * on. Legacy putchar has no such buffer, so it is correct from ANY stack —
+ * boot, secondary, or thread. (DBCN with a properly pinned/identity buffer is a
+ * later console-driver concern; the NS16550A PLIC console replaces this in R-P6.)
  */
 void
 sbi_console_putchar(int ch)
 {
-	if (sbi_probe_dbcn()) {
-		/*
-		 * DBCN console_write of a 1-byte buffer. Address split
-		 * lo/hi for RV32 ABI compatibility; on RV64 the high half is 0
-		 * and the physical address fits in the low arg (satp=0, so VA
-		 * == PA during R-P2 bring-up).
-		 */
-		unsigned char c = (unsigned char)ch;
-		unsigned long addr = (unsigned long)&c;
-
-		(void) sbi_ecall(SBI_EXT_DBCN, SBI_DBCN_CONSOLE_WRITE,
-		    1UL, addr, 0UL);
-	} else {
-		sbi_legacy_putchar(ch);
-	}
+	sbi_legacy_putchar(ch);
 }
 
 /*
@@ -221,6 +217,9 @@ sbi_hart_get_status(unsigned long hartid)
 const char *
 sbi_console_kind(void)
 {
-	return (sbi_probe_dbcn() ? "SBI DBCN (0x4442434E)" :
+	/* R-P5: legacy putchar is the active path (no buffer-pointer issue on
+	 * high-VA thread stacks); DBCN presence is still reported for info. */
+	return (sbi_probe_dbcn() ?
+	    "SBI legacy putchar (DBCN present)" :
 	    "SBI legacy putchar (EID 0x01)");
 }

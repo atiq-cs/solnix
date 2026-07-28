@@ -41,6 +41,7 @@ extern void hat_highva_prove(void);
 extern void clock_prove(unsigned long nticks);
 extern unsigned long gethrtime(void);
 extern void plic_selftest(void);
+extern void plic_set_context(unsigned long boot_hartid);
 extern volatile unsigned long timer_ticks;
 
 /* SMP: secondary-hart entry (locore.S) + its per-cpu stack pool. */
@@ -131,6 +132,10 @@ putdec(unsigned long v)
 	while (n-- > 0)
 		sbi_console_putchar(buf[n]);
 }
+
+/* From startup.c: the MI startup()-analog + its cpu count input. */
+extern void startup(unsigned long dtb);
+extern int startup_ncpu;
 
 /* Forward decl: the MI entry, called at the end of mlsetup. */
 static void main(void);
@@ -325,6 +330,7 @@ mlsetup(unsigned long hartid, unsigned long dtb)
 	 * the UART source, enable SEIE, trigger + claim + complete one external
 	 * interrupt. Proves the wired-interrupt path device drivers will use.
 	 */
+	plic_set_context(hartid);
 	plic_selftest();
 	boot_cpu.bc_plic_online = 1;
 
@@ -355,7 +361,7 @@ main(void)
 	sbi_console_puts("SunOS Release " SOLNIX_RELEASE " Version "
 	    SOLNIX_VERSION " (first illumos on RISC-V)\n");
 	sbi_console_puts("Copyright (c) solnix -- the first illumos RISC-V "
-	    "port (R-P4 bring-up)\n");
+	    "port (R-P5 genunix bring-up)\n");
 	sbi_console_puts("\n");
 
 	sbi_console_puts("riscv64 kernel: mlsetup complete, entering main:\n");
@@ -418,10 +424,25 @@ main(void)
 	sbi_console_puts("\n");
 	sbi_console_puts("[R-P4] SMP + periodic clock + PLIC external IRQ + "
 	    "high-VA hat online.\n");
-	sbi_console_puts("[R-P4] next: R-P5 genunix (page_t/kmem, cyclic wheel, "
-	    "per-cpu dispatch/idle, real console driver).\n");
-	sbi_console_puts("[R-P4] parking boot hart (future idle thread); "
-	    "clock still ticking.\n");
+
+	/*
+	 * R-P5: cross the MD->MI seam. main() calls the startup()-analog, which
+	 * brings genunix's foundation online (page_t/freelist over DTB RAM,
+	 * kmem VA+slab, the callout wheel on the 100 Hz clock, and the
+	 * dispatcher: the boot cpu becomes cpu0's idle thread and we prove
+	 * scheduling with a 2-thread context-switch). This is the bridge from
+	 * the machine-dependent kernel to the machine-independent kernel.
+	 */
+	startup_ncpu = ncpu_online + 1;
+	startup(boot_cpu.bc_dtb);
+
+	sbi_console_puts("\n");
+	sbi_console_puts("[R-P5] genunix seam online: page_t + kmem + callout "
+	    "wheel + dispatcher/idle threads.\n");
+	sbi_console_puts("[R-P5] next: R-P6 link real genunix + virtio-blk/net "
+	    "drivers + mount root.\n");
+	sbi_console_puts("[R-P5] boot cpu is cpu0 idle thread; parking in idle "
+	    "(wfi); clock still ticking.\n");
 
 	for (;;)
 		__asm__ __volatile__("wfi");
