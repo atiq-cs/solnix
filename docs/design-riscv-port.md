@@ -999,3 +999,174 @@ establishes for it:
 - **SMP dispatch:** per-cpu run queues + clock-tick preemption + SBI IPI
   (`sbi_send_ipi`) for cross-hart reschedule / `sfence` broadcast; secondaries
   run their own idle threads and take the scheduler tick.
+
+---
+
+## R-P6 — the kernel becomes a running OS: virtio + root mount + single-user
+
+R-P6 is the milestone where the first illumos RISC-V kernel stops being "just a
+kernel" and becomes a running operating system: it discovers devices, drives
+real DMA-backed device I/O, mounts a root filesystem, and reaches the
+single-user seam. Built on the R-P5 MD->MI seam (page_t/kmem/callout/dispatcher)
+with zero regressions (SMP 4/4 harts, all R-P5 gates still pass).
+
+### R-P6.0 New sources (`src/riscv/uts/`)
+
+| File | Role |
+|------|------|
+| `virtio.c` / `virtio.h` | virtio-mmio transport: device discovery over the qemu-virt MMIO window (8 slots @ 0x10001000, stride 0x1000, PLIC IRQ = slot+1), the modern (v2) init handshake (reset/ACK/DRIVER/FEATURES_OK/DRIVER_OK), 64-bit feature negotiation, and the split virtqueue (desc/avail/used rings in one `page_alloc`'d DMA page) with alloc/submit/notify/poll primitives. |
+| `vioblk.c` | virtio-blk driver: negotiate v1, set up the single request queue, build the 3-descriptor request chain (header/data/status), submit + notify, poll the used ring, verify the status byte. The R-P6 crux: a real sector read off a qemu `-drive`. |
+| `vionet.c` | virtio-net driver (optional gate): RX (q0) + TX (q1) queues, read the device MAC from config space, post an RX buffer, build + transmit a broadcast ARP frame, take the TX used-ring completion. |
+| `rootfs.c` | minimal vnode/vfs + mount-root + the single-user seam: an in-memory read-only root vfs (root dir with /etc /dev /sbin /var /tmp), `mountroot()`, and a first "user" kernel-thread context (the init/sulogin analog) that prints the single-user prompt. |
+| `startup.c` (extended) | new `startup_root()` stage after `startup_dispatch`: virtio discovery -> vioblk attach + test read -> vionet attach + TX -> mount root -> single-user. |
+
+### R-P6.1 virtio-mmio discovery — the contract
+
+- **Window:** the qemu `virt` machine exposes 8 virtio-mmio device slots at PA
+  `0x10001000 .. 0x10008000`, stride `0x1000`, with PLIC IRQ line = slot index
+  + 1 (from the DTB; confirmed by dumping `-machine virt,dumpdtb`). qemu
+  populates them in REVERSE: the first `-device` lands in the highest slot
+  (`0x10008000`, IRQ 8). Empty slots read `DeviceID == 0`.
+- **Probe:** at each slot read `MagicValue` (must be `0x74726976` = "virt"),
+  `Version` (2 = modern, 1 = legacy), `DeviceID` (1=net, 2=blk, 3=console,
+  4=rng). The window is identity-mapped (VA==PA) by the R-P3 low-MMIO gigapage,
+  so the bases are directly dereferenceable.
+- **Modern transport required:** qemu virtio-mmio defaults to the **legacy (v1)**
+  transport, whose ring-programming ABI (QueuePFN + guest page size) differs
+  entirely from modern (v2, independent DESC/AVAIL/USED physical addresses).
+  We implement modern only and force it at the qemu boundary with
+  `-global virtio-mmio.force-legacy=false`; `virtq_setup` refuses a v1 device
+  rather than silently writing non-legacy registers it ignores.
+- **PROVE:** `virtio-mmio: found 2 devices (net@0x...10007000, blk@0x...10008000)`
+
+### R-P6.2 virtio-blk — the DMA crux — the contract
+
+- **DMA is trivial here:** the whole `0x80000000` RAM GiB is identity-mapped
+  (VA==PA) by the boot HAT, and `page_alloc()` returns a zeroed PA usable
+  directly as a kernel pointer AND reachable by the device at that same
+  physical address. So a virtqueue and request buffers built in `page_alloc`'d
+  frames need no IOMMU, no bounce buffers, no separate DMA map.
+- **Split virtqueue:** one 4 KiB DMA page holds all three rings — `desc[8]` at
+  offset 0, the avail ring packed after it, the used ring at offset 2048 (well
+  clear). Queue size 8. The three ring physical addresses are programmed into
+  the device via the `QueueDesc/Driver/Device{Low,High}` registers, then
+  `QueueReady=1`.
+- **Request:** a virtio-blk read is a 3-descriptor chain (spec §5.2):
+  `[0]` header (`type=VIRTIO_BLK_T_IN`, `sector`) the device reads; `[1]` a
+  512-byte data buffer the device WRITES (`DESC_F_WRITE`); `[2]` a 1-byte
+  status the device WRITES. Publish the head into the avail ring (with an
+  `ow,ow` fence before bumping `avail->idx`), write `QueueNotify`, then poll the
+  used ring (`ir,ir` fence) for `used->idx` to advance. Check `status == 0`.
+- **PROVE:** against a 1 MiB `disk.img` seeded with `"SOLNIX-RISCV-ROOTFS-R-P6"`
+  at sector 0 + the `0x55 0xaa` MBR signature at offset 510:
+  `vioblk: read sector 0 OK (512 bytes, MBR/magic=0x0000...aa55, first8=534f4c4e49582d52)`
+  — `magic=0xaa55` and `first8` = ASCII "SOLNIX-R" prove DMA + device I/O
+  end-to-end (the device really wrote our buffer with the disk's bytes).
+
+### R-P6.3 root filesystem + mount root — the contract
+
+- **Minimal vfs/vnode:** a `vnode` (type + name + children) and a `vfs`
+  (root vnode + type + backing device). The root vnode is a directory holding
+  the conventional illumos top level (`/etc /dev /sbin /var /tmp`) — the seed of
+  `uts/common/fs/vnode.c` + the vfs layer, pared to what mount-root + a
+  directory listing need.
+- **mountroot():** point `rootvfs` at the in-memory root; record the root device
+  as the virtio-blk disk when vioblk attached (the R-P7 real-root source),
+  else "ramdisk". The vfs served in R-P6 is the in-memory one (read-only).
+- **PROVE:** `root mounted (type=ramdisk, / has 5 entries)`
+
+### R-P6.4 single-user reach — the milestone seam
+
+- **init-analog:** after mount-root, `single_user()` creates a kernel thread
+  (the init/sulogin analog) via the R-P5 `thread_create` + `thread_yield`
+  dispatcher and yields to it. The thread prints the classic illumos
+  single-user banner + `# ` prompt, sets a "reached" flag, and yields back.
+  Full userland (U-mode, an ELF exec of `/sbin/init`) is R-P7; this proves the
+  kernel mounts root and reaches the single-user milestone.
+- **PROVE:** `[R-P6] root on /dev/dsk/c0t0d0 (virtio-blk), single-user reached`
+
+### R-P6.5 virtio-net (optional gate) — the contract
+
+- **RX (q0) + TX (q1):** each buffer is prefixed by a 10-byte
+  `virtio_net_hdr` (no-offload layout; we negotiate only `VIRTIO_NET_F_MAC`).
+  Read the device MAC from config space, post one RX buffer, build a 60-byte
+  broadcast ARP request (dst ff:ff..., our MAC as src, ethertype 0x0806), TX it,
+  and take the TX used-ring completion. RX is best-effort: qemu `-netdev user`
+  (slirp) only answers frames it understands, so a not-seen RX in the headless
+  poll window is not a driver failure.
+- **PROVE:** `vionet: TX OK` (MAC `52:54:00:12:34:56` read, ARP TX'd, TX
+  completion taken). RX not observed in the timebox (honest).
+
+### R-P6.6 Result — SUCCESS (verbatim console excerpt, `-smp 4`)
+
+```
+[startup] startup_root: virtio devices + mount root + single-user
+
+[virtio] scanning virtio-mmio window 0x0000000010001000 .. 0x0000000010009000 (8 slots)
+[virtio]   slot 6 @0x0000000010007000: device-id 1 (net), v2, irq 7
+[virtio]   slot 7 @0x0000000010008000: device-id 2 (blk), v2, irq 8
+virtio-mmio: found 2 devices (net@0x0000000010007000, blk@0x0000000010008000)
+
+[vioblk] attaching virtio-blk @0x0000000010008000 (irq 8)
+[vioblk] device features 0x0000010130006e54
+[vioblk] request queue online (QSIZE 8), DRIVER_OK set
+vioblk: read sector 0 OK (512 bytes, MBR/magic=0x000000000000aa55, first8=534f4c4e49582d52)
+
+[vionet] attaching virtio-net @0x0000000010007000 (irq 7)
+[vionet] MAC 52:54:00:12:34:56, RX+TX queues online, DRIVER_OK set
+[vionet] TX broadcast ARP (60 bytes): completed (used ring)
+[vionet] RX: no frame within poll window (slirp may not reply; TX path proven)
+vionet: TX OK
+
+[rootfs] mounting root filesystem
+[rootfs] rootvfs -> /dev/dsk/c0t0d0 (virtio-blk), root vnode '/'
+[rootfs] / contents: /etc /dev /sbin /var /tmp
+root mounted (type=ramdisk, / has 5 entries)
+
+[init] starting single-user context (kernel thread stub, R-P6 init-analog)
+
+SINGLE USER MODE
+Type control-d to proceed with normal startup,
+(or give root password for system maintenance):
+
+#
+[R-P6] root on /dev/dsk/c0t0d0 (virtio-blk), single-user reached
+```
+
+All gates PASS deterministically on `-smp 1` and `-smp 4`; zero PANIC/MISMATCH,
+SMP still 4/4 harts, all R-P5 gates intact. Every qemu run was `timeout`-wrapped
++ detached (`nohup`->log, sleep+check+kill); no foreground-wait, no wedge; stray
+qemu confirmed gone after each run. Artifacts: `artifacts/riscv-port/rp6/`
+(`rp6-boot.log`, `rp6-boot-smp1.log`, `unix`, `unix.disasm`, `unix.sections`,
+and every R-P6 source). Boot cmd adds:
+`-global virtio-mmio.force-legacy=false -drive file=disk.img,if=none,id=hd0,format=raw -device virtio-blk-device,drive=hd0 -netdev user,id=n0 -device virtio-net-device,netdev=n0`.
+
+**Deliberate R-P6 scope (documented ceilings, each an R-P7 upgrade path):**
+- **virtio completions are POLLED**, not IRQ-driven. The PLIC external-IRQ path
+  (plic.c, virtio IRQ lines 1..8) is proven + ready; routing virtio completions
+  through `plic_extintr` is the R-P7 upgrade when async/overlapped I/O matters.
+- **virtqueue** is one small (size 8) split ring per queue, one DMA page, no
+  indirect descriptors, no event-idx, no mergeable-rx.
+- **vioblk** reads only (no write path yet), one request at a time, no
+  disk-geometry/capacity read, no partition/label parse.
+- **vionet** TX proven; RX best-effort (no slirp reply guaranteed in-timebox),
+  no GLDv3/mac9F binding, one static RX/TX buffer.
+- **rootfs** is an in-memory READ-ONLY root, fixed directory, no
+  lookup/read/write/create/unlink, no on-disk FS parse. Root is NOT yet read
+  off vioblk (the disk is attached + proven readable, but the served vfs is the
+  ramdisk).
+- **single-user** is a kernel-thread stub (S-mode), not a real U-mode `init`
+  exec; no console input wired (no interactive shell yet).
+
+### R-P6.7 Next: R-P7 (real VFS + userland/init)
+
+- **Real VFS + on-disk root:** grow the vnode/vfs into a real lookup/read path
+  and read a root image (a simple FS: bootfs/UFS/tmpfs-image) off vioblk into
+  the mounted root, so `/` is backed by the disk, not the ramdisk.
+- **Userland:** U-mode entry (sstatus.SPP=0), an ELF loader, per-process address
+  spaces (grow the hat into user page tables + `curproc`), the syscall path
+  (`ecall` from U-mode -> trap -> syscall dispatch), and `exec` of `/sbin/init`.
+- **Console input + interactive shell:** wire NS16550A RX (or virtio-console)
+  through the PLIC so the single-user prompt is interactive.
+- **IRQ-driven virtio:** route virtio completions through `plic_extintr` for
+  async I/O; per-cpu dispatch + clock-tick preemption (the K1/K3 kernel work).

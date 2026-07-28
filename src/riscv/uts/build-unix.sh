@@ -40,12 +40,17 @@ echo "== compile (freestanding, $TC) =="
 "$CC" $CFLAGS -c vm_page.c   -o vm_page.o
 "$CC" $CFLAGS -c kmem.c      -o kmem.o
 "$CC" $CFLAGS -c proc.c      -o proc.o
+"$CC" $CFLAGS -c virtio.c    -o virtio.o
+"$CC" $CFLAGS -c vioblk.c    -o vioblk.o
+"$CC" $CFLAGS -c vionet.c    -o vionet.o
+"$CC" $CFLAGS -c rootfs.c    -o rootfs.o
 "$CC" $CFLAGS -c startup.c   -o startup.o
 "$CC" $CFLAGS -c main.c      -o main.o
 
 echo "== link (riscv.ld @ 0x80200000) =="
 "$LD" -T riscv.ld -o "$OUT" locore.o trap_asm.o swtch.o sbi.o trap.o \
-	hat_riscv.o timer.o plic.o fdt.o vm_page.o kmem.o proc.o startup.o main.o
+	hat_riscv.o timer.o plic.o fdt.o vm_page.o kmem.o proc.o \
+	virtio.o vioblk.o vionet.o rootfs.o startup.o main.o
 
 echo "== image info =="
 file "$OUT" || true
@@ -57,7 +62,22 @@ echo "== boot under OpenSBI (qemu virt, -smp 4, default -bios, 120s timeout) =="
 # -bios default => qemu's bundled OpenSBI (fw_dynamic); -kernel loads our ELF
 # as the S-mode payload (OpenSBI jumps to 0x80200000 = _start). -smp 4 gives
 # the R-P4 SMP bring-up 3 secondary harts to start via SBI HSM.
+#
+# R-P6: attach a virtio-blk disk (disk.img) so vioblk can read sector 0, and a
+# virtio-net device so discovery finds it. qemu populates virtio-mmio slots in
+# REVERSE (first -device -> highest slot 0x10008000 / IRQ 8).
+DISK="${DISK:-disk.img}"
+if [ ! -f "$DISK" ]; then
+	echo "== creating a 1 MiB test disk with an MBR 0x55aa signature =="
+	dd if=/dev/zero of="$DISK" bs=512 count=2048 2>/dev/null
+	printf 'SOLNIX-RISCV-ROOTFS-R-P6\0' | dd of="$DISK" bs=1 seek=0 conv=notrunc 2>/dev/null
+	printf '\x55\xaa' | dd of="$DISK" bs=1 seek=510 conv=notrunc 2>/dev/null
+fi
+VIRTIO_ARGS="-global virtio-mmio.force-legacy=false \
+	-drive file=$DISK,if=none,id=hd0,format=raw \
+	-device virtio-blk-device,drive=hd0 \
+	-netdev user,id=n0 -device virtio-net-device,netdev=n0"
 : > "$LOG"
 timeout 120 "$QEMU" -machine virt -smp "${SMP:-4}" -nographic -bios default \
-	-kernel "$OUT" 2>&1 | tee "$LOG" || true
+	-kernel "$OUT" $VIRTIO_ARGS 2>&1 | tee "$LOG" || true
 echo "== done; console captured to $LOG =="

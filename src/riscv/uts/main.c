@@ -439,9 +439,11 @@ main(void)
 	sbi_console_puts("\n");
 	sbi_console_puts("[R-P5] genunix seam online: page_t + kmem + callout "
 	    "wheel + dispatcher/idle threads.\n");
-	sbi_console_puts("[R-P5] next: R-P6 link real genunix + virtio-blk/net "
-	    "drivers + mount root.\n");
-	sbi_console_puts("[R-P5] boot cpu is cpu0 idle thread; parking in idle "
+	sbi_console_puts("[R-P6] virtio-mmio + virtio-blk + root vfs + "
+	    "single-user seam reached (see [R-P6] lines above).\n");
+	sbi_console_puts("[R-P6] next: R-P7 real VFS + read root image off "
+	    "vioblk + userland/init exec.\n");
+	sbi_console_puts("[R-P6] boot cpu is cpu0 idle thread; parking in idle "
 	    "(wfi); clock still ticking.\n");
 
 	for (;;)

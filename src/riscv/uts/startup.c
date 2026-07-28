@@ -41,6 +41,14 @@ extern void callout_selftest(void);
 extern void dispatch_init_cpu(int cpu);
 extern void thread_ab_selftest(void);
 
+/* R-P6 device + root bring-up (virtio.c, vioblk.c, rootfs.c). */
+extern int virtio_discover(void);
+extern int vioblk_attach(void);
+extern int vionet_attach(void);
+extern int mountroot(void);
+extern int single_user(const char *rootdev);
+extern const char *rootdev_name(void);
+
 /* FDT /memory parse (fdt.c). */
 extern int fdt_get_memory(unsigned long dtb, unsigned long *base,
     unsigned long *size);
@@ -172,6 +180,25 @@ startup_dispatch(void)
 }
 
 /*
+ * startup_root — R-P6 device + root stage. Discover virtio-mmio devices,
+ * attach virtio-blk (test-read sector 0 = the DMA/device-I/O crux), mount the
+ * root vfs, then dispatch the single-user context. This is the seam where the
+ * kernel becomes a running OS.
+ */
+static void
+startup_root(void)
+{
+	sbi_console_puts("\n[startup] startup_root: virtio devices + mount "
+	    "root + single-user\n");
+
+	(void) virtio_discover();
+	(void) vioblk_attach();
+	(void) vionet_attach();
+	(void) mountroot();
+	(void) single_user(rootdev_name());
+}
+
+/*
  * startup — the MI startup()-analog. Called from main() after mlsetup. Brings
  * the MI subsystems online in illumos order and prints the completion banner.
  */
@@ -179,13 +206,14 @@ void
 startup(unsigned long dtb)
 {
 	sbi_console_puts("\n========================================\n");
-	sbi_console_puts("[startup] MI kernel bring-up (genunix seam, R-P5)\n");
+	sbi_console_puts("[startup] MI kernel bring-up (genunix seam, R-P5/R-P6)\n");
 	sbi_console_puts("========================================\n");
 
 	startup_memlist(dtb);
 	startup_vm();
 	startup_cyclic();
 	startup_dispatch();
+	startup_root();
 
 	sbi_console_puts("\n[startup] startup complete: ");
 	kputdec((unsigned long)startup_ncpu);
