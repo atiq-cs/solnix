@@ -97,6 +97,9 @@ puthex(unsigned long v)
 /* From vm_page.c: real page allocator, available after page_init(). Weak-linked
  * via a global flag so early boot (before page_init) uses the static pool. */
 extern unsigned long page_alloc(void);
+extern void page_free(unsigned long pa);
+extern void page_incref(unsigned long pa);
+extern unsigned int page_refcount(unsigned long pa);
 static int page_layer_up = 0;
 void hat_page_layer_online(void) { page_layer_up = 1; }
 
@@ -435,6 +438,270 @@ unsigned long
 hat_as_satp(unsigned long root)
 {
 	return (SATP_MAKE(SATP_MODE_SV39, 0, root >> PAGESHIFT));
+}
+
+/*
+ * hat_as_va2pa — walk `root` (a physical/identity root PA) for the 4 KiB leaf
+ * mapping page-aligned VA `va` and return its physical base, or 0 if unmapped.
+ * Used by as_copyto to plant the exec argv/env/auxv image on the user stack
+ * before the process satp is loaded (the pages are identity-mapped VA==PA in
+ * the kernel, so the returned PA is directly writable).
+ */
+unsigned long
+hat_as_va2pa(unsigned long root, unsigned long va)
+{
+	unsigned long *tbl = (unsigned long *)root;
+	int level;
+
+	for (level = 2; level > 0; level--) {
+		unsigned long pte = tbl[VPN(va, level)];
+
+		if ((pte & PTE_V) == 0)
+			return (0);
+		if (pte & PTE_RWX)
+			return (0);	/* mega/gigapage: not a 4 KiB user leaf */
+		tbl = (unsigned long *)PTE_TO_PA(pte);
+	}
+	{
+		unsigned long pte = tbl[VPN(va, 0)];
+
+		if ((pte & PTE_V) == 0)
+			return (0);
+		return (PTE_TO_PA(pte));
+	}
+}
+
+/*
+ * hat_as_walk_leaves — walk `root` and invoke cb(arg, va, pa, perm) for every
+ * USER leaf (PTE_U set). Used by as_copy (fork) to duplicate a parent AS and by
+ * as_free to reclaim its pages. `perm` passed back is the RWXU bits of the leaf
+ * (so the copy re-maps with the same protection). Only the user slots (1..255)
+ * are walked; the shared kernel slots (0,2,256..511) are never touched — they
+ * are aliases of the boot root, not owned by this AS.
+ */
+void
+hat_as_walk_leaves(unsigned long root,
+    void (*cb)(void *arg, unsigned long va, unsigned long pa,
+    unsigned long perm), void *arg)
+{
+	unsigned long *l2 = (unsigned long *)root;
+	int i2;
+
+	for (i2 = 0; i2 < PTES_PER_TABLE; i2++) {
+		unsigned long *l1;
+		int i1;
+
+		/* Only user slots: skip kernel slot 0 (MMIO), 2 (RAM), 256+. */
+		if (i2 == 0 || i2 == 2 || i2 >= 256)
+			continue;
+		if ((l2[i2] & PTE_V) == 0 || (l2[i2] & PTE_RWX))
+			continue;	/* empty or (unexpected) megapage */
+		l1 = (unsigned long *)PTE_TO_PA(l2[i2]);
+		for (i1 = 0; i1 < PTES_PER_TABLE; i1++) {
+			unsigned long *l0;
+			int i0;
+
+			if ((l1[i1] & PTE_V) == 0 || (l1[i1] & PTE_RWX))
+				continue;
+			l0 = (unsigned long *)PTE_TO_PA(l1[i1]);
+			for (i0 = 0; i0 < PTES_PER_TABLE; i0++) {
+				unsigned long pte = l0[i0];
+				unsigned long va, pa, perm;
+
+				if ((pte & PTE_V) == 0 || (pte & PTE_U) == 0)
+					continue;
+				va = ((unsigned long)i2 << 30) |
+				    ((unsigned long)i1 << 21) |
+				    ((unsigned long)i0 << 12);
+				pa = PTE_TO_PA(pte);
+				perm = pte & PTE_RWX;
+				cb(arg, va, pa, perm);
+			}
+		}
+	}
+}
+
+/*
+ * hat_pte_ptr — walk `root` for the 4 KiB leaf PTE slot of VA `va` and return a
+ * pointer to the PTE (or NULL if no leaf table exists on the path). Used by the
+ * COW fault handler to flip a single leaf in place. va need not be page-aligned.
+ */
+static unsigned long *
+hat_pte_ptr(unsigned long root, unsigned long va)
+{
+	unsigned long *tbl = (unsigned long *)root;
+	int level;
+
+	for (level = 2; level > 0; level--) {
+		unsigned long pte = tbl[VPN(va, level)];
+
+		if ((pte & PTE_V) == 0 || (pte & PTE_RWX))
+			return (0);
+		tbl = (unsigned long *)PTE_TO_PA(pte);
+	}
+	return (&tbl[VPN(va, 0)]);
+}
+
+/*
+ * hat_as_cow_share — the COW fork primitive. For every USER leaf of `srcroot`
+ * (the parent), map the SAME physical page into `dstroot` (the child) at the
+ * same VA, and mark BOTH copies read-only + COW (clear PTE_W, set PTE_COW),
+ * bumping the shared page's refcount. Read-only/execute-only leaves that were
+ * never writable are shared verbatim (no COW needed — a read never faults).
+ * Returns the number of leaves shared. The caller sfence's both AS TLBs.
+ *
+ * This is the RISC-V analog of illumos hat_dup with HAT_DUP_COW: pages are
+ * shared read-only and split lazily on the first write fault.
+ */
+unsigned long
+hat_as_cow_share(unsigned long dstroot, unsigned long srcroot)
+{
+	unsigned long *l2 = (unsigned long *)srcroot;
+	unsigned long shared = 0;
+	int i2;
+
+	for (i2 = 0; i2 < PTES_PER_TABLE; i2++) {
+		unsigned long *l1;
+		int i1;
+
+		if (i2 == 0 || i2 == 2 || i2 >= 256)
+			continue;
+		if ((l2[i2] & PTE_V) == 0 || (l2[i2] & PTE_RWX))
+			continue;
+		l1 = (unsigned long *)PTE_TO_PA(l2[i2]);
+		for (i1 = 0; i1 < PTES_PER_TABLE; i1++) {
+			unsigned long *l0;
+			int i0;
+
+			if ((l1[i1] & PTE_V) == 0 || (l1[i1] & PTE_RWX))
+				continue;
+			l0 = (unsigned long *)PTE_TO_PA(l1[i1]);
+			for (i0 = 0; i0 < PTES_PER_TABLE; i0++) {
+				unsigned long pte = l0[i0];
+				unsigned long va, pa, perm;
+
+				if ((pte & PTE_V) == 0 || (pte & PTE_U) == 0)
+					continue;
+				va = ((unsigned long)i2 << 30) |
+				    ((unsigned long)i1 << 21) |
+				    ((unsigned long)i0 << 12);
+				pa = PTE_TO_PA(pte);
+				perm = pte & PTE_RWX;
+
+				if (perm & PTE_W) {
+					/* Writable leaf: share read-only + COW
+					 * in both AS. Drop W, keep R (and X),
+					 * set the COW software bit. */
+					unsigned long cowperm =
+					    (perm & ~PTE_W);
+					unsigned long newpte =
+					    PA_TO_PTE(pa) | cowperm |
+					    PTE_COW | PTE_U | PTE_V |
+					    PTE_A | PTE_D;
+					l0[i0] = newpte;	/* parent RO+COW */
+					hat_as_map(dstroot, va, pa, cowperm);
+					/* mark child COW too */
+					{
+						unsigned long *cp =
+						    hat_pte_ptr(dstroot, va);
+						if (cp != 0)
+							*cp |= PTE_COW;
+					}
+					page_incref(pa);
+				} else {
+					/* Read/exec-only: share verbatim. */
+					hat_as_map(dstroot, va, pa, perm);
+					page_incref(pa);
+				}
+				shared++;
+			}
+		}
+	}
+	return (shared);
+}
+
+/*
+ * hat_as_cow_fault — the store-page-fault COW handler. If VA `va` in `root`
+ * maps a COW leaf, split it: allocate a fresh private page, copy the shared
+ * page's bytes into it, remap `va` writable (clear COW, restore W) to the new
+ * page, drop this AS's reference to the old shared page (page_free decrements),
+ * and sfence the VA. Returns 1 if it handled a COW fault, 0 otherwise (the
+ * caller then treats the store fault as a genuine fault).
+ *
+ * NOTE: the ceiling (a copy on every write fault, even if this AS is
+ * the sole remaining owner) is documented; an owner-optimization (re-map in
+ * place when refcount==1) is a cheap future win, noted in the design doc.
+ */
+int
+hat_as_cow_fault(unsigned long root, unsigned long va)
+{
+	unsigned long *pte = hat_pte_ptr(root, va & ~(PAGESIZE - 1));
+	unsigned long oldpa, newpa, perm;
+	unsigned long i;
+	const unsigned char *src;
+	unsigned char *dst;
+
+	if (pte == 0)
+		return (0);
+	if ((*pte & PTE_V) == 0 || (*pte & PTE_COW) == 0)
+		return (0);		/* not a COW leaf */
+
+	oldpa = PTE_TO_PA(*pte);
+	perm = (*pte & PTE_RWX) | PTE_W;	/* restore writability */
+
+	if (page_refcount(oldpa) <= 1) {
+		/* Sole remaining owner: no copy needed, just re-map writable. */
+		*pte = PA_TO_PTE(oldpa) | perm | PTE_U | PTE_V | PTE_A | PTE_D;
+		__asm__ __volatile__("sfence.vma %0, zero" :: "r"(va) : "memory");
+		return (1);
+	}
+
+	newpa = page_alloc();		/* zeroed private page */
+	if (newpa == 0)
+		return (0);		/* OOM: let it fault (honest) */
+
+	src = (const unsigned char *)oldpa;
+	dst = (unsigned char *)newpa;
+	for (i = 0; i < PAGESIZE; i++)
+		dst[i] = src[i];
+
+	*pte = PA_TO_PTE(newpa) | perm | PTE_U | PTE_V | PTE_A | PTE_D;
+	__asm__ __volatile__("sfence.vma %0, zero" :: "r"(va) : "memory");
+
+	page_free(oldpa);		/* drop this AS's share of the old page */
+	return (1);
+}
+
+/*
+ * hat_as_freeuser — free every intermediate USER page table (slots 1..255) of
+ * `root` back to the page allocator, then free the root table itself. The leaf
+ * data pages are freed separately by as_free (via hat_as_walk_leaves) before
+ * this is called; here we reclaim only the page-table pages + root. Kernel
+ * slots are aliases and are NOT freed.
+ */
+void
+hat_as_freeuser(unsigned long root)
+{
+	unsigned long *l2 = (unsigned long *)root;
+	int i2;
+
+	for (i2 = 1; i2 < 256; i2++) {
+		unsigned long *l1;
+		int i1;
+
+		if (i2 == 2)
+			continue;
+		if ((l2[i2] & PTE_V) == 0 || (l2[i2] & PTE_RWX))
+			continue;
+		l1 = (unsigned long *)PTE_TO_PA(l2[i2]);
+		for (i1 = 0; i1 < PTES_PER_TABLE; i1++) {
+			if ((l1[i1] & PTE_V) == 0 || (l1[i1] & PTE_RWX))
+				continue;
+			page_free(PTE_TO_PA(l1[i1]));	/* level-0 table */
+		}
+		page_free((unsigned long)l1);			/* level-1 table */
+	}
+	page_free(root);					/* root table */
 }
 
 /* Switch the current hart to address space `satp` and flush the TLB. */

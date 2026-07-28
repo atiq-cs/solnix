@@ -38,6 +38,11 @@ extern void kputdec(unsigned long v);
 /* hat: the shared kernel satp (kernel threads run on it). */
 extern unsigned long hat_kernel_satp(void);
 
+/* uproc.c: save/restore the global curproc so it follows the thread across a
+ * context switch (R-P9 preemption safety). */
+extern void *proc_get_current(void);
+extern void proc_set_current(void *p);
+
 /* The asm context switch + new-thread trampoline (swtch.S). */
 struct rv_context {
 	unsigned long c_ra;
@@ -49,12 +54,17 @@ struct rv_context {
 extern void rv_swtch(struct rv_context *old, struct rv_context *new);
 extern void rv_thread_start(void);
 
+/* forward decls (thread_preempt uses thread_yield defined lower). */
+void thread_yield(void);
+void swtch(void);
+
 #define	THREAD_STACK_SIZE	8192UL
 
 typedef enum {
 	TS_RUN,		/* on the run queue, runnable */
 	TS_ONPROC,	/* currently executing */
 	TS_IDLE,	/* idle thread (only runs when runq empty) */
+	TS_SLEEP,	/* blocked on a wait channel (R-P9 sleepq) */
 	TS_DEAD		/* exited */
 } tstate_t;
 
@@ -66,7 +76,9 @@ typedef struct kthread {
 	void		*t_arg;
 	tstate_t	t_state;
 	int		t_id;
-	struct kthread	*t_link;	/* run-queue link */
+	void		*t_wchan;	/* sleep channel (R-P9), NULL if runnable */
+	void		*t_curproc;	/* this thread's user proc (R-P9 preempt) */
+	struct kthread	*t_link;	/* run-queue / sleepq link */
 } kthread_t;
 
 /* Global run queue (FIFO) + lock. */
@@ -103,6 +115,29 @@ static int
 this_cpu(void)
 {
 	return (0);
+}
+
+/*
+ * thread_preempt — the clock-tick preemption entry (R-P9). Called from the
+ * timer ISR when a thread has run long enough. If another thread is runnable
+ * (the runq is non-empty), yield the cpu to it (round-robin); otherwise do
+ * nothing (nothing else to run). Returns 1 if it preempted (switched), 0 if
+ * not. Safe to call from the timer trap on the kernel stack: thread_yield's
+ * swtch saves/restores this thread's kernel context + satp + curproc, and when
+ * we are switched back the timer trap returns and sret's to the interrupted PC.
+ */
+int
+thread_preempt(void)
+{
+	int cpu = this_cpu();
+	kthread_t *self = curthread[cpu];
+
+	if (self->t_state == TS_IDLE)
+		return (0);		/* idle thread never preempts */
+	if (runq_head == 0)
+		return (0);		/* nothing else runnable */
+	thread_yield();			/* round-robin to the next thread */
+	return (1);
 }
 
 /*
@@ -180,6 +215,8 @@ thread_create(void (*entry)(void *), void *arg)
 	t->t_arg = arg;
 	t->t_id = ++next_tid;
 	t->t_link = 0;
+	t->t_wchan = 0;
+	t->t_curproc = 0;
 
 	/* Stack grows down: top = base + size, 16-byte aligned. */
 	sp = ((unsigned long)t->t_stack + THREAD_STACK_SIZE) & ~15UL;
@@ -228,7 +265,15 @@ swtch(void)
 
 	new->t_state = TS_ONPROC;
 	curthread[cpu] = new;
+	/*
+	 * curproc follows the thread (R-P9 preempt safety): save the outgoing
+	 * thread's user proc, restore the incoming thread's. Without this a
+	 * clock-preempted user thread would resume with the preempter's curproc
+	 * and corrupt the next syscall.
+	 */
+	old->t_curproc = proc_get_current();
 	rv_swtch(&old->t_ctx, &new->t_ctx);
+	proc_set_current(curthread[cpu]->t_curproc);
 	/*
 	 * When we are switched back to, execution resumes here. The barrier
 	 * also prevents the compiler from tail-call-optimizing rv_swtch (which
@@ -250,6 +295,84 @@ thread_yield(void)
 	if (self->t_state != TS_IDLE)
 		runq_enqueue(self);		/* back of the line */
 	swtch();
+}
+
+/*
+ * ---------------------------------------------------------------------------
+ * R-P9 sleep queue: a real block/wakeup channel replacing the R-P8 wait
+ * spin-yield. A thread that must block (wait4 with a live-but-not-yet-exited
+ * child) calls sleep_on(chan): it is taken OFF the run queue (state TS_SLEEP,
+ * t_wchan=chan) and swtch()es away, consuming no cpu until woken. wakeup(chan)
+ * moves every thread sleeping on chan back onto the run queue. This is the seed
+ * of the illumos sleepq_t / turnstile + CV (cv_wait/cv_signal): a hashed sleep
+ * queue keyed by a channel address. One global sleepq list here (cooperative,
+ * boot-cpu dispatch); a hashed per-bucket sleepq is the SMP upgrade.
+ * ---------------------------------------------------------------------------
+ */
+static kthread_t *sleepq_head;		/* singly-linked list of TS_SLEEP threads */
+
+/*
+ * sleep_on — block the current thread on wait channel `chan`. The caller must
+ * have already arranged that a wakeup(chan) will come (e.g. the child will exit
+ * and call wakeup). Removes self from the run queue (it is running, so it is not
+ * on the runq) and switches away; returns when woken (re-enqueued by wakeup and
+ * dispatched). Cooperative: safe because interrupts are not driving preemption.
+ */
+void
+sleep_on(void *chan)
+{
+	int cpu = this_cpu();
+	kthread_t *self = curthread[cpu];
+
+	self->t_state = TS_SLEEP;
+	self->t_wchan = chan;
+	/* Push onto the sleepq list. */
+	runq_lock_enter();
+	self->t_link = sleepq_head;
+	sleepq_head = self;
+	runq_lock_exit();
+
+	swtch();			/* off-cpu until wakeup re-enqueues us */
+	/* Woken: we are ONPROC again; t_wchan cleared by wakeup. */
+}
+
+/*
+ * wakeup — make every thread sleeping on `chan` runnable again (move it from
+ * the sleepq back onto the run queue). A no-op if none are sleeping on chan.
+ * Called by proc_exit's parent-wakeup so a parent blocked in wait4 resumes.
+ */
+void
+wakeup(void *chan)
+{
+	kthread_t *prev = 0, *t, *next;
+
+	runq_lock_enter();
+	t = sleepq_head;
+	while (t != 0) {
+		next = t->t_link;
+		if (t->t_wchan == chan) {
+			/* Unlink from sleepq. */
+			if (prev == 0)
+				sleepq_head = next;
+			else
+				prev->t_link = next;
+			t->t_wchan = 0;
+			/* Re-enqueue runnable (inline; we hold the lock). */
+			t->t_state = TS_RUN;
+			t->t_link = 0;
+			if (runq_tail != 0)
+				runq_tail->t_link = t;
+			else
+				runq_head = t;
+			runq_tail = t;
+			/* prev stays (we removed t). */
+			t = next;
+		} else {
+			prev = t;
+			t = next;
+		}
+	}
+	runq_lock_exit();
 }
 
 /*
@@ -333,6 +456,8 @@ dispatch_init_cpu(int cpu)
 	idle->t_id = -cpu - 1;		/* idle threads: negative ids */
 	idle->t_state = TS_ONPROC;
 	idle->t_link = 0;
+	idle->t_wchan = 0;
+	idle->t_curproc = 0;
 
 	idlethread[cpu] = idle;
 	curthread[cpu] = idle;		/* we ARE the idle thread now */

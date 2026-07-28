@@ -32,6 +32,14 @@ extern void kputhex(unsigned long v);
 /* From vioblk.c: is a block device attached + readable? */
 extern int vioblk_present(void);
 
+/* From vioblk.c: the on-disk root FS disk (second virtio-blk) — R-P9 gate 4. */
+extern int vioblk_fs_attach(void);
+extern int vioblk_fs_present(void);
+extern int vioblk_fs_read_sector(unsigned long sector, void *buf);
+
+/* kmem.c: allocate the tar staging buffer. */
+extern void *kmem_alloc(unsigned long size);
+
 /* From proc.c: create + dispatch a kernel thread; yield. */
 extern void *thread_create(void (*entry)(void *), void *arg);
 extern void thread_yield(void);
@@ -39,6 +47,11 @@ extern void thread_yield(void);
 /* From uproc.c: the R-P8 process model. */
 extern int proc_first(const char *path, const void *img, unsigned long len);
 extern int proc_waitpid(int pid, int *statusp);
+
+/* Defined below: on-disk ustar root FS mount + query (R-P9 gate 4). */
+int rootfs_mount_ondisk(void);
+int rootfs_is_ondisk(void);
+int vfs_lookup(const char *path, const void **datap, unsigned long *lenp);
 
 /*
  * ---------------------------------------------------------------------------
@@ -107,6 +120,17 @@ mountroot(void)
 		rootvfs.vfs_dev = "ramdisk";
 	rootvfs.vfs_mounted = 1;
 
+	/*
+	 * R-P9 gate 4: try to mount a REAL on-disk root FS (a ustar archive on a
+	 * second virtio-blk). If present, /sbin/init + /bin/* are served off it
+	 * (vfs_lookup consults the disk FS first); otherwise the embedded ELFs
+	 * are used. This is the seed of a blk-backed rootvfs.
+	 */
+	if (rootfs_mount_ondisk()) {
+		rootvfs.vfs_type = "ustar";
+		rootvfs.vfs_dev = "/dev/dsk/c1t0d0 (virtio-blk, ustar)";
+	}
+
 	sbi_console_puts("[rootfs] rootvfs -> ");
 	sbi_console_puts(rootvfs.vfs_dev);
 	sbi_console_puts(", root vnode '/'\n");
@@ -155,15 +179,32 @@ single_user_thread(void *arg)
 	 * dispatched, then reaps init. This is the R-P8 milestone: userland is
 	 * interactive + multi-process.
 	 *
-	 * NOTE: the userland ELFs (init/sh/hello/echo/cat) are embedded in the
-	 * kernel image (user/build-user.sh -> user_elfs.h) and served by the vfs
-	 * file registry. Reading them off a real on-disk FS on vioblk is R-P9.
+	 * NOTE (R-P9): if a ustar root FS is mounted off a second virtio-blk
+	 * (rootfs_mount_ondisk), /sbin/init + /bin/* are read off the DISK; the
+	 * embedded ELFs (user_elfs.h) are only the fallback when no disk FS is
+	 * present. proc_waitpid now blocks on a real sleep queue, not a spin.
 	 */
 	single_user_reached = 1;
 
 	{
-		int pid = proc_first("/sbin/init", init_elf, init_elf_len);
+		const void *img;
+		unsigned long len;
+		int pid;
 		int st = 0, rpid;
+
+		/*
+		 * R-P9 gate 4: if a real on-disk (ustar) root FS is mounted,
+		 * exec /sbin/init off the DISK (vfs_lookup serves it from the
+		 * disk table); else fall back to the embedded ELF.
+		 */
+		if (rootfs_is_ondisk() &&
+		    vfs_lookup("/sbin/init", &img, &len)) {
+			sbi_console_puts("root: exec'd /sbin/init from vioblk "
+			    "(FS type=ustar)\n");
+			pid = proc_first("/sbin/init", img, len);
+		} else {
+			pid = proc_first("/sbin/init", init_elf, init_elf_len);
+		}
 
 		if (pid < 0) {
 			sbi_console_puts("[init] proc_first(/sbin/init) "
@@ -278,14 +319,185 @@ str_eq(const char *a, const char *b)
 }
 
 /*
- * vfs_lookup — resolve `path` to its bytes. Returns 1 and fills datap/lenp on
- * a hit, 0 on miss. Used by the open/read syscall path (regular files) and the
- * exec syscall path (ELF images).
+ * ---------------------------------------------------------------------------
+ * R-P9 gate 4: an on-disk root filesystem read off a second virtio-blk.
+ *
+ * The FS image is a POSIX ustar (tar) archive — the simplest real on-disk FS a
+ * bootstrap needs: a sequence of 512-byte header+data blocks. We read the whole
+ * archive off the disk into a kmem staging buffer at mount, parse the ustar
+ * headers, and register each regular file's (name, data pointer, length) in an
+ * on-disk file table. vfs_lookup then serves /sbin/init + /bin/* from THIS
+ * table (falling back to the embedded ELFs only if the disk FS is absent), so
+ * exec loads the userland off a real FS on vioblk, not from the kernel image.
+ *
+ * ustar header (512 bytes, the fields we use):
+ *   [0]   name        (NUL-terminated, up to 100 bytes)
+ *   [124] size        (11-octal digits + NUL/space)
+ *   [156] typeflag    ('0' or '\0' = regular file)
+ *   [257] magic       "ustar" (proves it is a ustar archive)
+ * Data follows the header, padded up to the next 512-byte boundary. Two all-
+ * zero blocks mark end of archive.
+ * ---------------------------------------------------------------------------
+ */
+#define	TAR_BLOCK	512
+#define	ROOTFS_MAX_BYTES (2UL * 1024 * 1024)	/* 2 MiB staging cap */
+#define	NDISKFILE	16
+
+struct diskfile {
+	char		df_path[100];
+	const unsigned char *df_data;
+	unsigned long	df_len;
+};
+static struct diskfile diskfiles[NDISKFILE];
+static int ndiskfile;
+static int rootfs_ondisk;		/* 1 once the tar FS is mounted */
+static unsigned char *rootfs_buf;	/* kmem staging of the whole archive */
+
+/* Parse an octal ASCII field of `n` bytes into an unsigned long. */
+static unsigned long
+tar_octal(const unsigned char *p, int n)
+{
+	unsigned long v = 0;
+	int i;
+	for (i = 0; i < n; i++) {
+		if (p[i] < '0' || p[i] > '7')
+			break;
+		v = (v << 3) | (unsigned long)(p[i] - '0');
+	}
+	return (v);
+}
+
+/*
+ * rootfs_mount_ondisk — attach the second virtio-blk, read the ustar archive
+ * off it into a kmem buffer, parse the headers, and populate the on-disk file
+ * table. Returns 1 if a valid ustar root FS was mounted, 0 otherwise (no disk /
+ * not a tar / read error — the kernel then serves the embedded ELFs). PROVE:
+ * "root: exec'd /sbin/init from vioblk (FS type=ustar)".
+ */
+int
+rootfs_mount_ondisk(void)
+{
+	unsigned long off = 0;
+	unsigned long sector = 0;
+
+	if (!vioblk_fs_attach())
+		return (0);		/* no second disk */
+
+	rootfs_buf = kmem_alloc(ROOTFS_MAX_BYTES);
+	if (rootfs_buf == 0)
+		return (0);
+
+	/*
+	 * Read the whole archive into rootfs_buf, sector by sector, until a read
+	 * fails (past the end of the raw image) or the staging cap is reached.
+	 * We deliberately do NOT stop on an all-zero block: an ELF payload can
+	 * contain long runs of zero bytes, and a 2-zero-block heuristic would
+	 * truncate the image mid-file. Reading to end-of-disk is correct and the
+	 * images are small (bounded by ROOTFS_MAX_BYTES).
+	 */
+	while (off + TAR_BLOCK <= ROOTFS_MAX_BYTES) {
+		if (!vioblk_fs_read_sector(sector, rootfs_buf + off))
+			break;		/* end of disk / read error */
+		off += TAR_BLOCK;
+		sector++;
+	}
+
+	/* Parse ustar headers. */
+	ndiskfile = 0;
+	off = 0;
+	while (off + TAR_BLOCK <= ROOTFS_MAX_BYTES && ndiskfile < NDISKFILE) {
+		const unsigned char *h = rootfs_buf + off;
+		unsigned long size, datablocks;
+		int j;
+
+		/* End of archive: empty name. */
+		if (h[0] == 0)
+			break;
+		/* Validate ustar magic at offset 257. */
+		if (!(h[257] == 'u' && h[258] == 's' && h[259] == 't' &&
+		    h[260] == 'a' && h[261] == 'r'))
+			break;		/* not ustar */
+
+		size = tar_octal(h + 124, 11);
+
+		/* Regular file (typeflag '0' or NUL). Register it with a leading
+		 * '/' so lookup paths like "/sbin/init" match tar names like
+		 * "sbin/init" or "./sbin/init". */
+		if (h[156] == '0' || h[156] == 0) {
+			struct diskfile *df = &diskfiles[ndiskfile];
+			const char *name = (const char *)h;
+			int pi = 0;
+
+			if (name[0] == '.' && name[1] == '/')
+				name += 2;
+			df->df_path[pi++] = '/';
+			for (j = 0; name[j] != 0 && j < 98; j++)
+				df->df_path[pi++] = name[j];
+			df->df_path[pi] = 0;
+			df->df_data = h + TAR_BLOCK;
+			df->df_len = size;
+			ndiskfile++;
+		}
+
+		datablocks = (size + TAR_BLOCK - 1) / TAR_BLOCK;
+		off += TAR_BLOCK + datablocks * TAR_BLOCK;
+	}
+
+	if (ndiskfile == 0)
+		return (0);		/* no files parsed: not a usable FS */
+
+	rootfs_ondisk = 1;
+	sbi_console_puts("[rootfs] on-disk ustar root FS: ");
+	kputdec((unsigned long)ndiskfile);
+	sbi_console_puts(" files off vioblk:");
+	{
+		int i;
+		for (i = 0; i < ndiskfile; i++) {
+			sbi_console_puts(" ");
+			sbi_console_puts(diskfiles[i].df_path);
+		}
+	}
+	sbi_console_puts("\n");
+	return (1);
+}
+
+/* Is the root served off a real on-disk FS? (used by single_user banner.) */
+int
+rootfs_is_ondisk(void)
+{
+	return (rootfs_ondisk);
+}
+
+/* Look up a path in the on-disk file table (R-P9). Returns 1 on hit. */
+static int
+diskfs_lookup(const char *path, const void **datap, unsigned long *lenp)
+{
+	int i;
+	if (!rootfs_ondisk)
+		return (0);
+	for (i = 0; i < ndiskfile; i++) {
+		if (str_eq(path, diskfiles[i].df_path)) {
+			*datap = diskfiles[i].df_data;
+			*lenp = diskfiles[i].df_len;
+			return (1);
+		}
+	}
+	return (0);
+}
+
+/*
+ * vfs_lookup — resolve `path` to its bytes. Consults the on-disk ustar root FS
+ * FIRST (R-P9 gate 4), falling back to the embedded ELFs / motd if the disk FS
+ * is absent or lacks the file. Returns 1 and fills datap/lenp on a hit, 0 on
+ * miss. Used by the open/read syscall path and the exec syscall path.
  */
 int
 vfs_lookup(const char *path, const void **datap, unsigned long *lenp)
 {
 	int i;
+
+	if (diskfs_lookup(path, datap, lenp))
+		return (1);		/* served off the on-disk FS */
 
 	vfiles_init();
 	for (i = 0; i < NVFILES; i++) {

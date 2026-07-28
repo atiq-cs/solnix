@@ -48,9 +48,27 @@ extern void syscall_trap(struct regs *tf);
  * trap taken from U-mode is reported with its context instead of parking as a
  * kernel bug. */
 extern volatile int userland_active;
+/* From uproc.c: handle a store fault on a copy-on-write page (R-P9). Returns 1
+ * if the fault was a COW page that has now been split private (retry store). */
+extern int proc_cow_fault(unsigned long va);
 
 /* From timer.c: handle one S-mode timer interrupt (print tick, disarm). */
 extern void timer_intr(void);
+
+/* From proc.c: clock-tick preemption — yield to another runnable thread if any.
+ * Returns 1 if it preempted (R-P9 gate 5). */
+extern int thread_preempt(void);
+
+/* Count of clock-tick preemptions of a user thread (R-P9 gate 5 proof). */
+volatile unsigned long preempt_count = 0;
+/*
+ * preempt_enabled — gate 5 master switch. Clock-tick preemption of user threads
+ * is implemented (thread_preempt + curproc-follows-thread) but is OFF by default
+ * pending a fix for a re-entrancy fault when a user thread is preempted during
+ * its exit/reap transition (see docs R-P9 gate 5). The 4 landed gates run on the
+ * stable cooperative dispatcher. Set to 1 to exercise preemption.
+ */
+volatile int preempt_enabled = 0;
 
 /* From plic.c: service S-mode external interrupts (claim/dispatch/complete). */
 extern int plic_extintr(void);
@@ -72,6 +90,16 @@ extern void _trap_entry(void);
 volatile int trap_probe_active = 0;
 /* Set to the scause we observed during the probe, for the self-test to check. */
 volatile unsigned long trap_probe_scause = 0;
+
+/*
+ * copy_lofault — the fault-recovery PC armed by copyin/copyout (copy.S) around
+ * a user-memory access. When nonzero and a load/store page (or access) fault is
+ * taken, trap() redirects sepc here (returning EFAULT) instead of parking. This
+ * is the RISC-V analog of illumos t_lofault. Single-cpu userland dispatch in
+ * R-P9, so one global is correct; a per-thread t_lofault is the SMP-userland
+ * upgrade. (NOTE: the ceiling — one global lofault — is documented above.)
+ */
+volatile unsigned long copy_lofault = 0;
 
 static void
 puthex(unsigned long v)
@@ -179,6 +207,22 @@ trap(struct regs *tf)
 		switch (code) {
 		case IRQ_S_TIMER:
 			timer_intr();
+			/*
+			 * Clock-tick PREEMPTION (R-P9 gate 5): if this timer
+			 * interrupt was taken while a USER thread ran (trap from
+			 * U-mode, sstatus.SPP==0), preempt it — yield to the next
+			 * runnable thread. This makes multi-process scheduling
+			 * preemptive, not purely cooperative: a user process that
+			 * never yields is still time-sliced off the clock. When
+			 * we are switched back the trap returns + sret's to the
+			 * interrupted PC on this thread's own satp + curproc
+			 * (swtch restores both).
+			 */
+			if ((tf->r_sstatus & SSTATUS_SPP) == 0 &&
+			    preempt_enabled) {
+				if (thread_preempt())
+					preempt_count++;
+			}
 			return;
 		case IRQ_S_EXT:
 			(void) plic_extintr();
@@ -193,6 +237,36 @@ trap(struct regs *tf)
 	if (code == EXC_ECALL_U) {
 		/* System call from userland: dispatch + return to U-mode. */
 		syscall_trap(tf);
+		return;
+	}
+
+	/*
+	 * Copy-on-write store fault. A store to a COW-shared page (marked
+	 * read-only at fork) faults here — whether the store came from U-mode
+	 * (the process writing its own memory) or from S-mode (a kernel
+	 * copyout writing a user COW buffer). proc_cow_fault splits the page
+	 * private in the current process's AS and returns 1 (retry the store);
+	 * it returns 0 for a non-COW address (a genuine fault / bad pointer),
+	 * which then falls through to the copyin/copyout lofault catch below.
+	 * Runs BEFORE the lofault check so a copyout to a COW page is split
+	 * rather than turned into a spurious EFAULT.
+	 */
+	if (code == EXC_STORE_PAGE_FAULT) {
+		if (proc_cow_fault(tf->r_stval))
+			return;		/* split done: retry the faulting store */
+	}
+
+	/*
+	 * Fault-safe copyin/copyout catch. If a copy primitive armed a recovery
+	 * label and this is a load/store fault (bad user pointer), redirect the
+	 * return PC to the recovery label and clear the arm. The copy routine
+	 * lands on _copy_fault and returns -1 (EFAULT) to its caller — no panic.
+	 */
+	if (copy_lofault != 0 &&
+	    (code == EXC_LOAD_PAGE_FAULT || code == EXC_STORE_PAGE_FAULT ||
+	    code == EXC_LOAD_ACCESS || code == EXC_STORE_ACCESS)) {
+		tf->r_sepc = copy_lofault;
+		copy_lofault = 0;
 		return;
 	}
 

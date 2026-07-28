@@ -61,6 +61,45 @@ run(const char *path)
 	}
 }
 
+/*
+ * run_argv - fork+exec `path` with up to two space-split args from `arg`
+ * (proves argv delivery across execve on the interactive path, R-P9). Splits
+ * `arg` in place on the first space into arg1 + arg2.
+ */
+static void
+run_argv(const char *path, char *arg)
+{
+	int pid;
+	char *a1 = arg, *a2 = 0;
+	unsigned long i = 0;
+
+	while (arg[i] && arg[i] != ' ')
+		i++;
+	if (arg[i] == ' ') {
+		arg[i] = '\0';
+		a2 = &arg[i + 1];
+	}
+	pid = ufork();
+	if (pid == 0) {
+		char *av[4];
+		int n = 0;
+		av[n++] = (char *)path;
+		if (a1 && a1[0])
+			av[n++] = a1;
+		if (a2 && a2[0])
+			av[n++] = a2;
+		av[n] = 0;
+		uexecve(path, av, 0);
+		uputs("sh: exec failed\n");
+		uexit(127);
+	} else if (pid > 0) {
+		int st;
+		(void) uwaitpid(pid, &st, 0);
+	} else {
+		uputs("sh: fork failed\n");
+	}
+}
+
 int
 main(int argc, char **argv)
 {
@@ -102,10 +141,12 @@ main(int argc, char **argv)
 			uputs("sh: exit\n");
 			uexit(0);
 		} else if (ustreq(cmd, "help")) {
-			uputs("commands: echo <text>, hello, cat, help, exit\n");
+			uputs("commands: echo <text>, xecho <text>, hello, cat, help, exit\n");
 		} else if (ustreq(cmd, "echo")) {
 			uputs(arg);
 			uputs("\n");
+		} else if (ustreq(cmd, "xecho")) {
+			run_argv("/bin/echo", arg);
 		} else if (ustreq(cmd, "hello")) {
 			run("/bin/hello");
 		} else if (ustreq(cmd, "cat")) {

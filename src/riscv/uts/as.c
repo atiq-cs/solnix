@@ -14,11 +14,10 @@
  *   - as_map_stack():    map a user stack region.
  *   - as_switch():       load this address space's satp on the current hart.
  *
- * NOTE: no segment list / page-fault-driven demand paging / copy-on-write /
- * mmap / munmap / teardown-and-free. Every page is eagerly allocated and
- * mapped at exec time; there is exactly one live user address space at a time
- * (the first process). Upgrade path (R-P8): seg_vn/seg_kmem-style segments,
- * demand paging off the store-page-fault handler, and as_free reclaiming pages.
+ * NOTE (R-P9): copy-on-write fork IS implemented (as_cow_copy shares pages
+ * read-only + splits them on the store fault); as_free reclaims all user leaves
+ * + page tables + root. Still no segment list / demand paging / mmap. Upgrade
+ * path: seg_vn/seg_kmem-style segments + demand paging.
  */
 
 #include "sbi.h"
@@ -34,6 +33,7 @@ extern void hat_as_walk_leaves(unsigned long root,
     void (*cb)(void *arg, unsigned long va, unsigned long pa,
     unsigned long perm), void *arg);
 extern void hat_as_freeuser(unsigned long root);
+extern unsigned long hat_as_va2pa(unsigned long root, unsigned long va);
 
 /* vm_page.c */
 extern void page_free(unsigned long pa);
@@ -146,9 +146,9 @@ as_switch(as_t *as)
  * the same VA + protection (a full eager copy — no copy-on-write in R-P8). The
  * program break is inherited. Returns the child as_t or NULL on failure.
  *
- * NOTE: full copy, not COW. Simple + correct for R-P8's small processes; COW
- * off the store-page-fault handler is the R-P9 upgrade (fork of a big AS is
- * O(pages) copies today).
+ * NOTE: full eager copy (as_copy). R-P9 adds as_cow_copy (copy-on-write): the
+ * default fork path now shares pages read-only and splits on write. as_copy is
+ * retained for callers that want an eager duplicate.
  */
 struct as_copy_ctx {
 	as_t	*dst;
@@ -196,6 +196,62 @@ as_copy(as_t *src)
 	}
 	c.dst->a_brk = src->a_brk;
 	return (c.dst);
+}
+
+/* hat_riscv.c: COW share (fork) + COW store-fault split (R-P9). */
+extern unsigned long hat_as_cow_share(unsigned long dstroot,
+    unsigned long srcroot);
+extern int hat_as_cow_fault(unsigned long root, unsigned long va);
+
+/* R-P9 COW fork stats (for the gate banner): pages shared read-only at fork,
+ * and pages actually copied on a later write fault. */
+unsigned long as_cow_shared_total;
+unsigned long as_cow_copied_total;
+
+/*
+ * as_cow_copy — copy-on-write fork of `src`. Instead of eagerly copying every
+ * leaf (as_copy), share the parent's pages read-only into the child and mark
+ * both COW; the first write in either process store-faults and splits the page
+ * private (as_cow_fault). Returns the child as_t or NULL on failure. This is
+ * the R-P9 replacement for the R-P8 full-AS-copy fork.
+ */
+as_t *
+as_cow_copy(as_t *src)
+{
+	as_t *dst = as_alloc();
+	unsigned long shared;
+
+	if (dst == 0)
+		return (0);
+	shared = hat_as_cow_share(dst->a_root, src->a_root);
+	dst->a_npages = shared;
+	dst->a_brk = src->a_brk;
+	as_cow_shared_total += shared;
+
+	/* Both AS TLBs must be flushed: the parent's writable leaves became
+	 * read-only. sfence.vma (all) on the current hart covers the active
+	 * (parent) satp; the child has not run yet so its TLB is cold. */
+	__asm__ __volatile__("sfence.vma" ::: "memory");
+	return (dst);
+}
+
+/*
+ * as_cow_fault — handle a store page fault at user VA `va` in address space
+ * `as`. Returns 1 if it was a COW page that was successfully split (the store
+ * can be retried), 0 if `va` is not a COW leaf (a genuine fault). Called from
+ * the trap dispatcher's store-page-fault path.
+ */
+int
+as_cow_fault(as_t *as, unsigned long va)
+{
+	int r;
+
+	if (as == 0)
+		return (0);
+	r = hat_as_cow_fault(as->a_root, va);
+	if (r)
+		as_cow_copied_total++;
+	return (r);
 }
 
 /*
@@ -268,3 +324,37 @@ as_free(as_t *as)
 unsigned long as_satp(as_t *as)   { return (as->a_satp); }
 unsigned long as_root(as_t *as)   { return (as->a_root); }
 unsigned long as_npages(as_t *as) { return (as->a_npages); }
+
+/*
+ * as_copyto — copy `n` bytes from a kernel buffer into user VA `va` of `as`,
+ * WITHOUT switching satp. Walks the AS page table per page to find the backing
+ * physical page (identity-mapped VA==PA in the kernel) and writes into it. Used
+ * by the exec path to plant the argv/env/auxv image on the fresh user stack
+ * before the process's satp is ever loaded. Returns 1 on success, 0 if any page
+ * of the range is unmapped in `as`.
+ */
+int
+as_copyto(as_t *as, unsigned long va, const void *src, unsigned long n)
+{
+	const unsigned char *s = (const unsigned char *)src;
+	unsigned long done = 0;
+
+	while (done < n) {
+		unsigned long uva = va + done;
+		unsigned long pa = hat_as_va2pa(as->a_root, uva & ~(PAGESIZE - 1));
+		unsigned long off = uva & (PAGESIZE - 1);
+		unsigned long chunk = PAGESIZE - off;
+		unsigned char *dst;
+		unsigned long i;
+
+		if (pa == 0)
+			return (0);		/* unmapped user page */
+		if (chunk > n - done)
+			chunk = n - done;
+		dst = (unsigned char *)(pa + off);
+		for (i = 0; i < chunk; i++)
+			dst[i] = s[done + i];
+		done += chunk;
+	}
+	return (1);
+}

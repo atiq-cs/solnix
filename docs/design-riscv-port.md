@@ -1342,3 +1342,167 @@ detached). Artifacts: `artifacts/riscv-port/rp8/` (`rp8-boot.log`, `unix-rp8`,
   virtio completions through `plic_extintr`; per-cpu dispatch + clock-tick
   preemption (the K1/K3 kernel work) so multi-process is preemptive, not
   cooperative.
+
+## R-P9 — production-shape the process/VM model + boot real userland off disk
+
+R-P8 made userland interactive + multi-process, but every hard edge was a
+bring-up simplification: fork copied the whole address space, wait spin-yielded,
+`execve` dropped argv, the kernel touched user pointers with no fault net, and
+the userland ELFs were baked into the kernel image. R-P9 replaces those with the
+production-shape mechanisms: the RISC-V ELF ABI exec stack + fault-safe
+copyin/copyout, copy-on-write fork, a real sleep/wakeup wait channel, and a root
+filesystem read off a disk. This is the first illumos on RISC-V crossing from
+"a shell you can type at" toward "a real multiuser system."
+
+### R-P9.0 New + changed sources (`src/riscv/uts/` + `user/`)
+
+| File | Role |
+|------|------|
+| `copy.S` (new) | Fault-safe `copyin`/`copyout` + the `_copy_fault` recovery label. Each arms the global `copy_lofault` (the RISC-V `t_lofault` analog) around a byte-copy loop; a bad user pointer faults and the trap dispatcher redirects `sepc` to `_copy_fault`, which returns -1 (EFAULT) — no panic. |
+| `trap.c` (extended) | `copy_lofault` catch on load/store faults (EFAULT, not park); **COW store-fault** dispatch (`proc_cow_fault(stval)` before the lofault check, so a copyout to a COW page splits rather than EFAULTs); clock-tick **preemption** hook on `IRQ_S_TIMER` from U-mode (`preempt_enabled`-gated). |
+| `uproc.c` (extended) | `struct argsnap` + `argsnap_copy` (fault-safe snapshot of the caller's argv/envp before the AS is torn down) and `build_user_stack` (the RISC-V ELF ABI initial stack: argc / argv / NULL / envp / NULL / auxv). `proc_execve(path, argv, envp)` now plumbs argv; `proc_fork` uses `as_cow_copy`; `proc_exit` `wakeup`s the parent; `proc_waitpid` `sleep_on`s. `proc_cow_fault`, COW stat accessors, `proc_get/set_current`. `proc_open`/`proc_fread`/`proc_execve` copyin/copyout paths + path strings. |
+| `as.c` (extended) | `as_copyto` (write a kernel buffer into a not-yet-loaded AS via its identity-mapped physical pages — used to plant the exec stack), `as_cow_copy` (COW fork), `as_cow_fault` (COW store split), COW stat counters. |
+| `hat_riscv.c` (extended) | `hat_as_va2pa` (leaf VA→PA walk), `hat_pte_ptr` (leaf PTE pointer), `hat_as_cow_share` (share every writable user leaf read-only + `PTE_COW` in both parent+child, `page_incref`), `hat_as_cow_fault` (allocate a private page, copy, remap writable, `page_free` the shared page — or re-map in place if sole owner). |
+| `vm_page.c` (extended) | `page_t.p_ref` COW share count; `page_alloc` sets ref=1, `page_free` decrements and only frees at 0, `page_incref`/`page_refcount`. |
+| `vioblk.c` (extended) | A SECOND virtio-blk instance (`vioblk_fs_*`) for the on-disk root FS. `vioblk_fs_attach` PROBES each blk device's sector 0 for the ustar magic (order-independent), `vioblk_fs_read_sector`. |
+| `virtio.c` (extended) | `virtio_find_nth` (reach the n-th device of a kind). |
+| `rootfs.c` (extended) | A ustar (tar) reader: `rootfs_mount_ondisk` reads the whole archive off the FS disk into a kmem buffer, parses ustar headers, and registers each regular file. `vfs_lookup` consults the on-disk table FIRST (falls back to embedded ELFs). `single_user` execs `/sbin/init` off the disk when a ustar FS is mounted. |
+| `riscv_regs.h` | `PTE_COW` (RSW bit 8). |
+| `syscall.c` (extended) | `execve` passes argv/envp; `write`/`read`/`wait4` use fault-safe copyin/copyout (EFAULT on bad pointer); diagnostic syscalls 500 (COW stats) / 501 (preempt count). |
+| `user/libu.h` | Naked-asm `_start` that reads argc/argv off the ABI stack; `ucowreport`/`upreemptreport`/`uspin`. |
+| `user/init.c` | Gates: 2b argv (`/bin/echo foo bar`), 2c copyin/out EFAULT (bad-ptr write), 2d COW fork (parent/child isolation + kernel stat report), 5 preemption (two CPU-bound spinners). |
+| `user/sh.c` | `xecho <a> <b>` fork+execs `/bin/echo` with split argv (interactive argv proof). |
+| `user/build-user.sh` | Also emits `rootfs.img` (a ustar archive of the just-built ELFs) so the on-disk FS always matches the userland. |
+
+### R-P9.1 argv/env/auxv + fault-safe copyin/copyout (gate 1 — the crux)
+
+`execve` now delivers a real ABI stack. Because the argv/envp string pointers
+live in the CALLER's address space (which exec is about to destroy),
+`argsnap_copy` snapshots them out FIRST via fault-safe `copyin`; `build_user_stack`
+then plants `argc / argv[] / NULL / envp[] / NULL / auxv[]` (AT_PAGESZ, AT_ENTRY,
+AT_{U,EU,G,EG}ID, AT_NULL) into the freshly-built AS with `as_copyto` (which
+writes through the AS's identity-mapped physical pages, since the process satp is
+not yet loaded), 16-byte aligned. `_start` (naked asm) reads `argc` at `0(sp)`
+and `argv` at `8(sp)`. **PROVE:** `argv OK: /bin/echo delivered argc=3
+argv={echo,foo,bar}` and the child printing `foo bar`; interactively, `xecho hi
+there` → `hi there`.
+
+`copyin`/`copyout` (copy.S) arm the global `copy_lofault` around the copy; a bad
+user pointer faults, and `trap()` redirects `sepc` to `_copy_fault` (returning
+-1). `sys_write`/`sys_read`/`wait4`/`proc_open`/`proc_fread` route user memory
+through them. **PROVE:** `copyin/out OK: write(bad ptr) returned EFAULT (no
+panic)` — a `write(1, 0x10, 8)` returns EFAULT instead of panicking. The `-d int`
+trace shows the U-mode `user_ecall` traps and the caught faults.
+
+### R-P9.2 copy-on-write fork (gate 2)
+
+`proc_fork` now calls `as_cow_copy` instead of the eager `as_copy`.
+`hat_as_cow_share` walks every user leaf of the parent: writable leaves are
+re-mapped read-only + `PTE_COW` in BOTH parent and child (dropping `PTE_W`,
+`page_incref`'ing the shared frame); read/execute-only leaves are shared
+verbatim. The first store to a COW page (in either process) takes a store page
+fault; `trap()` calls `proc_cow_fault` → `hat_as_cow_fault`, which allocates a
+private page, copies, remaps the faulting VA writable (clearing COW), and
+`page_free`s the old shared frame (decrementing its refcount; if this AS was the
+sole remaining owner it re-maps in place, no copy). **PROVE:** `cow: parent wrote
+'P', reads 'P' (own copy, isolated from child)` + `COW fork OK: 51 pages shared,
+6 copied on write`. The trap trace shows the `store_page_fault`s at user-stack
+VAs (`0xffffee70` …) that the splitter handled with zero panics.
+
+### R-P9.3 sleepq wait (gate 3)
+
+`proc.c` gains a real sleep queue (`sleep_on(chan)` / `wakeup(chan)`, state
+`TS_SLEEP`, a `sleepq_head` list). `proc_waitpid` no longer spin-yields: when a
+matching child exists but is not yet a ZOMBIE, the parent `sleep_on(self)`s (off
+the run queue, consuming no cpu); a child's `proc_exit` `wakeup(&parent)`s it.
+This is the illumos `cv_wait`/`cv_signal` analog. **PROVE:** `sleepq: parent
+slept in wait, woken by child exit`.
+
+### R-P9.4 on-disk root filesystem (gate 4)
+
+A POSIX **ustar** (tar) archive on a second virtio-blk is the root FS. At mount,
+`rootfs_mount_ondisk` reads the whole archive (bounded, sector by sector — no
+zero-block early-out, since an ELF payload can contain long zero runs that would
+falsely signal EOF) into a kmem buffer, parses the ustar headers (name @0, octal
+size @124, typeflag @156, "ustar" magic @257), and registers each regular file
+with a leading `/`. `vfs_lookup` consults this on-disk table FIRST, so `/sbin/init`
+and `/bin/*` are exec'd off the disk; the embedded ELFs remain only as a fallback.
+`vioblk_fs_attach` is order-independent: it probes each blk device's sector 0 for
+the ustar magic and keeps the match (qemu's mmio slot order is not fixed).
+**PROVE:** `[rootfs] on-disk ustar root FS: 5 files off vioblk: /sbin/init /bin/sh
+/bin/hello /bin/echo /bin/cat` and `root: exec'd /sbin/init from vioblk (FS
+type=ustar)` — the entire interactive session then runs binaries read off the
+disk, not from the kernel image.
+
+### R-P9.5 clock-tick preemption (gate 5 — implemented, gated off)
+
+The mechanism is in place: the periodic clock (running since R-P4) fires
+`IRQ_S_TIMER`; when the interrupt was taken from U-mode (`sstatus.SPP==0`),
+`trap()` calls `thread_preempt()`, which round-robins to another runnable thread
+if one exists — turning the cooperative dispatcher preemptive for user threads
+(kernel-mode timer traps, SPP==1, are never preempted, so no lock-holder is
+preempted). `curproc` was made to follow the thread (`kthread.t_curproc`,
+saved/restored across `swtch`) so a preempted process resumes with its own
+`curproc`/satp. **Status: gated OFF (`preempt_enabled = 0`).** With it on, a
+re-entrancy fault appears (an instruction-fetch fault redirected to
+`_copy_fault`) when a user thread is preempted during the exit/reap transition —
+the interaction between the global `copy_lofault` arming and a preemption-driven
+`swtch` on the same hart is not yet watertight. The 4 landed gates run on the
+stable cooperative dispatcher; the preemption path is present and self-tested
+behind the flag. **Next step:** make `copy_lofault` per-thread (save/restore in
+`swtch`, like `t_curproc`) so an armed copy cannot be clobbered across a
+preemptive switch, then flip `preempt_enabled` and prove
+`preempt OK: clock-tick preempted a user thread N times`.
+
+### R-P9.6 Result — SUCCESS (4 of 5 gates, verbatim console)
+
+`src/riscv/uts/rp9-run.sh` (timeout 120, scripted stdin, detached) boots
+`-smp 4` OpenSBI + two virtio-blk (R-P6 test disk + ustar rootfs) + virtio-net.
+0 PANIC / 0 unexpected-trap / 0 MISMATCH; self-terminates on the timeout.
+
+```
+[rootfs] on-disk ustar root FS: 5 files off vioblk: /sbin/init /bin/sh /bin/hello /bin/echo /bin/cat
+root: exec'd /sbin/init from vioblk (FS type=ustar)
+sleepq: parent slept in wait, woken by child exit
+argv gate: exec /bin/echo foo bar -> [exec] /bin/echo (8352 bytes) pid 3
+foo bar
+argv OK: /bin/echo delivered argc=3 argv={echo,foo,bar}
+copyin/out OK: write(bad ptr) returned EFAULT (no panic)
+cow: child wrote 'C', reads 'C' (own copy)
+cow: parent wrote 'P', reads 'P' (own copy, isolated from child)
+COW fork OK: 51 pages shared, 6 copied on write
+solnix-riscv# xecho hi there
+hi there
+```
+
+Artifacts: `artifacts/riscv-port/rp9/` (`rp9-boot.log`, `unix-rp9`, `rootfs.img`,
+`user_elfs.h`, `rp9-run.sh`, `rp9-traps-sample.log`).
+
+**Deliberate R-P9 scope (documented ceilings, each an R-P10 upgrade path):**
+- **`copy_lofault` is one global**, correct for single-cpu userland dispatch;
+  per-thread `t_lofault` (save/restore in `swtch`) is the SMP-userland upgrade
+  and the fix that unblocks preemption (gate 5).
+- **COW copies on every write fault** even when a page has one remaining owner
+  after the peer already split (the sole-owner re-map-in-place fast path handles
+  refcount==1; the general case still copies). Fine for small processes.
+- **argv/env is a bounded snapshot** (32 pointers, 1 KiB of strings); a real
+  ARG_MAX + a proper auxv (AT_PHDR/AT_RANDOM for a dynamic linker) is R-P10.
+- **The on-disk FS is a read-only ustar** parsed whole into RAM at mount (2 MiB
+  cap); a real seekable/writable FS (a UFS/hsfs reader, or a block-cached vnode
+  layer) is R-P10.
+- **Preemption is implemented but gated off** (see R-P9.5).
+
+### R-P9.7 Next: R-P10 (libc/SMF/multiuser + K1/K3 hardware bring-up)
+
+- **Fix + enable preemption:** per-thread `copy_lofault`, flip `preempt_enabled`,
+  prove clock-tick time-slicing of CPU-bound user threads.
+- **A real libc slice + SMF-style init:** grow `libu.h` toward a freestanding
+  libc; init toward service start; signals (delivery + handlers).
+- **A writable/seekable on-disk FS + vnode block cache:** replace the read-into-
+  RAM ustar with a real FS reader (UFS or hsfs) over a block-cached vnode layer;
+  `/dev`, `/proc`.
+- **Multiuser milestone:** getty/login on the console, `/etc/passwd`, multiple
+  concurrent shells — the first genuinely multiuser illumos-on-RISC-V.
+- **K1/K3 hardware bring-up:** move off qemu virt to real RISC-V SoCs (SpacemiT
+  K1 / the K3 class) — real PLIC/CLINT topology, real UART, DTB from firmware,
+  SMP on physical harts.

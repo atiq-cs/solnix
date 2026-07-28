@@ -64,6 +64,21 @@ static int  uwaitpid(int pid, int *status, int opt)
 static void uexit(int status)
 { __sys(SYS_exit, status, 0, 0, 0); for (;;) ; }
 
+/* solnix-private: ask the kernel to print its COW-fork stats line (R-P9). */
+#define SYS_cowreport 500
+static void ucowreport(void)
+{ __sys(SYS_cowreport, 0, 0, 0, 0); }
+
+/* solnix-private: print clock-tick preemption count (R-P9 gate 5). */
+#define SYS_preemptreport 501
+static long upreemptreport(void)
+{ return __sys(SYS_preemptreport, 0, 0, 0, 0); }
+
+/* A CPU burn loop that does NO syscalls, so only the clock can take the cpu
+ * away (used to prove preemption). volatile so the compiler keeps the loop. */
+static void uspin(unsigned long n)
+{ volatile unsigned long i; for (i = 0; i < n; i++) { __asm__ __volatile__(""); } }
+
 static unsigned long ustrlen(const char *s)
 { unsigned long n = 0; while (s[n]) n++; return n; }
 static void uputs(const char *s)
@@ -83,13 +98,24 @@ static void uputdec(unsigned long v)
 
 int main(int argc, char **argv);
 
-void
+/*
+ * _start — the process entry. The kernel (R-P9) builds an ELF-ABI initial
+ * stack: at sp is argc, then argv[0..argc-1], a NULL, then envp, NULL, auxv.
+ * We read argc at 0(sp) and argv at 8(sp) and call main(argc, argv). This is
+ * naked asm so sp is untouched before we capture it. a0/a1 also carry
+ * argc/argv (psABI hint) but the stack is authoritative.
+ */
+__attribute__((naked, used)) void
 _start(void)
 {
-	/* The kernel enters with a0=argc=0 (no argv passed in R-P8). We build a
-	 * NULL argv so main sees argc=0, argv={NULL}. */
-	static char *argv0[1] = { 0 };
-	uexit(main(0, argv0));
+	__asm__ __volatile__(
+	    "ld a0, 0(sp)\n"		/* argc */
+	    "addi a1, sp, 8\n"		/* argv (&argv[0]) */
+	    "call main\n"
+	    "mv a0, a0\n"		/* main's return in a0 */
+	    "li a7, 93\n"		/* SYS_exit */
+	    "ecall\n"
+	    "1: j 1b\n");
 }
 
 #endif /* _LIBU_H */

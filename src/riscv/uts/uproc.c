@@ -33,10 +33,11 @@
  * two runnable contexts, and the cooperative dispatcher time-shares them across
  * their yields/syscalls — genuine multi-process.
  *
- * NOTE: full-copy fork (no COW), cooperative spin-yield wait (no real sleep/
- * wakeup channel), a fixed 16-slot proc table, no signals, no session/pgrp.
- * Upgrade path (R-P9): COW fork off the store fault, sleepq-based wait, a real
- * proc_t/lwp_t, signals.
+ * NOTE (R-P9): fork is now COW (as_cow_copy); wait is now a real sleepq
+ * (sleep_on/wakeup, not spin-yield); execve delivers argv/env/auxv on the user
+ * stack; copyin/copyout are fault-safe. Still a fixed 16-slot proc table, no
+ * signals, no session/pgrp. Upgrade path: a real proc_t/lwp_t, signals,
+ * per-thread curproc (partly done: t_curproc follows the thread).
  */
 
 #include "sbi.h"
@@ -50,6 +51,8 @@ extern void kputdec(unsigned long v);
 typedef struct as as_t;
 extern as_t *as_alloc(void);
 extern as_t *as_copy(as_t *src);
+extern as_t *as_cow_copy(as_t *src);
+extern int as_cow_fault(as_t *as, unsigned long va);
 extern void as_free(as_t *as);
 extern int as_map(as_t *as, unsigned long va, unsigned long len,
     const void *data, unsigned long copylen, unsigned long perm);
@@ -59,6 +62,8 @@ extern unsigned long as_npages(as_t *as);
 extern void as_setbrk(as_t *as, unsigned long brk);
 extern unsigned long as_getbrk(as_t *as);
 extern unsigned long as_grow(as_t *as, unsigned long newbrk);
+extern int as_copyto(as_t *as, unsigned long va, const void *src,
+    unsigned long n);
 
 /* elf.c */
 extern int elf_load(as_t *as, const void *img, unsigned long len,
@@ -72,6 +77,8 @@ extern void thread_exit(void) __attribute__((noreturn));
 extern unsigned long curthread_kstacktop(void);
 extern int curthread_id(void);
 extern void thread_reap(struct kthread *t);
+extern void sleep_on(void *chan);
+extern void wakeup(void *chan);
 
 /* hat: switch back to the kernel address space. */
 extern unsigned long hat_kernel_satp(void);
@@ -86,6 +93,222 @@ extern void usermode_entry(struct regs *tf, unsigned long kstacktop);
 
 /* rootfs.c: resolve a path to file bytes (regular files + exec images). */
 extern int vfs_lookup(const char *path, const void **datap, unsigned long *lenp);
+
+/* copy.S: fault-safe user-memory access (R-P9). */
+extern long copyin(const void *uaddr, void *kaddr, unsigned long n);
+extern long copyout(const void *kaddr, void *uaddr, unsigned long n);
+
+/*
+ * ELF auxiliary-vector entries (a_type) the RISC-V ELF ABI puts on the initial
+ * stack. We supply the small useful subset a static freestanding _start reads;
+ * a full auxv (AT_PHDR/AT_BASE/AT_RANDOM ...) is the dynamic-linker upgrade.
+ */
+#define	AT_NULL		0
+#define	AT_PAGESZ	6
+#define	AT_ENTRY	9
+#define	AT_UID		11
+#define	AT_EUID		12
+#define	AT_GID		13
+#define	AT_EGID		14
+
+/*
+ * Bounded snapshot of an exec argv/envp: at most ARG_MAX_N pointers and
+ * ARG_STRBUF bytes of string data. Big enough for a shell command line; a
+ * larger/unbounded ARG_MAX is the upgrade. Copied out of the CALLER's user AS
+ * (via copyin, which is fault-safe) BEFORE the new AS is built, then planted
+ * onto the new user stack by build_user_stack.
+ */
+#define	ARG_MAX_N	32
+#define	ARG_STRBUF	1024
+
+struct argsnap {
+	int		argc;
+	int		envc;
+	char		str[ARG_STRBUF];	/* packed NUL-terminated strings */
+	unsigned long	aoff[ARG_MAX_N];	/* byte offset of argv[i] in str */
+	unsigned long	eoff[ARG_MAX_N];	/* byte offset of envp[i] in str */
+};
+
+/* Kernel-side strlen over an already-copied string block. */
+static unsigned long
+ustrlen_k(const char *s)
+{
+	unsigned long n = 0;
+	while (s[n] != 0)
+		n++;
+	return (n);
+}
+
+/*
+ * argsnap_copy — snapshot a user argv[]/envp[] (NULL-terminated arrays of user
+ * char* pointers) into `snap`, using fault-safe copyin so a bad pointer yields
+ * a truncated/empty snapshot rather than a panic. envp may be NULL. Returns 1
+ * always (best-effort; a faulting entry just stops that vector).
+ */
+static int
+argsnap_copy(struct argsnap *snap, char *const uargv[], char *const uenvp[])
+{
+	unsigned long pos = 0;
+	int i;
+
+	snap->argc = 0;
+	snap->envc = 0;
+
+	for (i = 0; uargv != 0 && i < ARG_MAX_N; i++) {
+		unsigned long uptr = 0;
+		unsigned long j;
+
+		if (copyin(&uargv[i], &uptr, sizeof (uptr)) != 0)
+			break;			/* bad argv array page */
+		if (uptr == 0)
+			break;			/* NULL terminator */
+		snap->aoff[i] = pos;
+		/* Copy the string byte-by-byte (fault-safe) up to NUL. */
+		for (j = 0; pos < ARG_STRBUF - 1; j++, pos++) {
+			char ch = 0;
+			if (copyin((const char *)uptr + j, &ch, 1) != 0) {
+				ch = 0;		/* fault: terminate here */
+			}
+			snap->str[pos] = ch;
+			if (ch == 0) {
+				pos++;
+				break;
+			}
+		}
+		snap->argc++;
+	}
+
+	for (i = 0; uenvp != 0 && i < ARG_MAX_N; i++) {
+		unsigned long uptr = 0;
+		unsigned long j;
+
+		if (copyin(&uenvp[i], &uptr, sizeof (uptr)) != 0)
+			break;
+		if (uptr == 0)
+			break;
+		snap->eoff[i] = pos;
+		for (j = 0; pos < ARG_STRBUF - 1; j++, pos++) {
+			char ch = 0;
+			if (copyin((const char *)uptr + j, &ch, 1) != 0)
+				ch = 0;
+			snap->str[pos] = ch;
+			if (ch == 0) {
+				pos++;
+				break;
+			}
+		}
+		snap->envc++;
+	}
+	return (1);
+}
+
+/*
+ * build_user_stack — lay out the initial process stack per the RISC-V ELF ABI
+ * in the freshly-built AS `as` and return the sp value the process must enter
+ * with (a0 also = argc, a1 = argv per the psABI hint). Layout, growing DOWN
+ * from ustack_top (all pushed onto the stack, low-to-high in memory):
+ *
+ *   [strings]                (argv + envp string bytes, copied from snap)
+ *   ... alignment pad ...
+ *   argc                     <- sp (lowest)
+ *   argv[0..argc-1], NULL
+ *   envp[0..envc-1], NULL
+ *   auxv pairs .. AT_NULL
+ *
+ * The string block is placed at the top; the pointer array + argc go at the
+ * bottom (== sp) so `_start` reads argc at 0(sp), argv at 8(sp). Everything is
+ * planted with as_copyto (writes into the AS's physical pages without loading
+ * its satp). Returns the final sp (16-byte aligned), or 0 on layout overflow.
+ */
+static unsigned long
+build_user_stack(as_t *as, unsigned long ustack_top, unsigned long entry,
+    const struct argsnap *snap)
+{
+	unsigned long sp;
+	unsigned long strbase;
+	unsigned long uargv[ARG_MAX_N];
+	unsigned long uenvp[ARG_MAX_N];
+	unsigned long aux[16];
+	int naux = 0;
+	int i;
+	unsigned long strbytes;
+	unsigned long nptrs;
+	unsigned long words;
+
+	/* String block sits just below the top of stack. */
+	strbytes = 0;
+	{
+		/* total packed string bytes = sum of both vectors (already NUL-
+		 * terminated in snap->str, contiguous from offset 0). */
+		int lasti;
+		unsigned long endoff = 0;
+		lasti = snap->argc + snap->envc;
+		if (lasti == 0) {
+			endoff = 0;
+		} else if (snap->envc > 0) {
+			endoff = snap->eoff[snap->envc - 1];
+			endoff += ustrlen_k(&snap->str[endoff]) + 1;
+		} else {
+			endoff = snap->aoff[snap->argc - 1];
+			endoff += ustrlen_k(&snap->str[endoff]) + 1;
+		}
+		strbytes = endoff;
+	}
+
+	sp = ustack_top;
+	sp -= strbytes;
+	sp &= ~15UL;			/* keep 16-byte alignment */
+	strbase = sp;
+	if (strbytes > 0) {
+		if (!as_copyto(as, strbase, snap->str, strbytes))
+			return (0);
+	}
+
+	/* Resolve each argv/envp pointer to its planted user address. */
+	for (i = 0; i < snap->argc; i++)
+		uargv[i] = strbase + snap->aoff[i];
+	for (i = 0; i < snap->envc; i++)
+		uenvp[i] = strbase + snap->eoff[i];
+
+	/* Auxiliary vector (type,value pairs), AT_NULL-terminated. */
+	aux[naux++] = AT_PAGESZ; aux[naux++] = PAGESIZE;
+	aux[naux++] = AT_ENTRY;  aux[naux++] = entry;
+	aux[naux++] = AT_UID;    aux[naux++] = 0;
+	aux[naux++] = AT_EUID;   aux[naux++] = 0;
+	aux[naux++] = AT_GID;    aux[naux++] = 0;
+	aux[naux++] = AT_EGID;   aux[naux++] = 0;
+	aux[naux++] = AT_NULL;   aux[naux++] = 0;
+
+	/*
+	 * Compute the size of the pointer block so we can align sp such that the
+	 * FINAL sp (pointing at argc) is 16-byte aligned. Block words (8 bytes):
+	 *   1 (argc) + (argc+1) (argv+NULL) + (envc+1) (envp+NULL) + naux (auxv).
+	 */
+	nptrs = 1 + (unsigned long)(snap->argc + 1) +
+	    (unsigned long)(snap->envc + 1) + (unsigned long)naux;
+	words = nptrs;
+	sp -= words * 8;
+	sp &= ~15UL;
+
+	{
+		unsigned long block[1 + 2 * (ARG_MAX_N + 1) + 16];
+		unsigned long w = 0;
+
+		block[w++] = (unsigned long)snap->argc;		/* argc */
+		for (i = 0; i < snap->argc; i++)
+			block[w++] = uargv[i];
+		block[w++] = 0;					/* argv NULL */
+		for (i = 0; i < snap->envc; i++)
+			block[w++] = uenvp[i];
+		block[w++] = 0;					/* envp NULL */
+		for (i = 0; i < naux; i++)
+			block[w++] = aux[i];			/* auxv */
+
+		if (!as_copyto(as, sp, block, w * 8))
+			return (0);
+	}
+	return (sp);
+}
 
 /*
  * User address-space layout. The ELF's segments sit at their p_vaddr (our
@@ -166,6 +389,45 @@ proc_current(void)
 	return (curproc);
 }
 
+/*
+ * proc_cow_fault — called from the trap dispatcher on a store page fault taken
+ * from U-mode. If the faulting VA is a copy-on-write page in the current
+ * process's AS, split it private and return 1 (retry the store); otherwise
+ * return 0 (a genuine fault). This is the R-P9 COW store-fault path.
+ */
+int
+proc_cow_fault(unsigned long va)
+{
+	if (curproc == 0 || curproc->p_as == 0)
+		return (0);
+	return (as_cow_fault(curproc->p_as, va));
+}
+
+/*
+ * proc_get_current / proc_set_current — opaque save/restore of the global
+ * curproc, so the dispatcher can make curproc follow the thread across a
+ * context switch (needed once the clock preempts a user thread: the preempted
+ * thread must resume with ITS curproc, not the preempter's). Returns/takes a
+ * void* cookie (the proc_t pointer).
+ */
+void *
+proc_get_current(void)
+{
+	return (curproc);
+}
+
+void
+proc_set_current(void *p)
+{
+	curproc = (proc_t *)p;
+}
+
+/* COW fork stats (as.c) for the gate banner. */
+extern unsigned long as_cow_shared_total;
+extern unsigned long as_cow_copied_total;
+unsigned long proc_cow_shared(void) { return (as_cow_shared_total); }
+unsigned long proc_cow_copied(void) { return (as_cow_copied_total); }
+
 int
 proc_getpid(void)
 {
@@ -184,11 +446,21 @@ proc_open(const char *path)
 	proc_t *p = curproc;
 	const void *data;
 	unsigned long len;
+	char kpath[128];
+	unsigned long i;
 	int fd;
 
 	if (p == 0 || path == 0)
 		return (-1);
-	if (!vfs_lookup(path, &data, &len))
+	/* Fault-safe copy of the path string from user space. */
+	for (i = 0; i < sizeof (kpath) - 1; i++) {
+		if (copyin(path + i, &kpath[i], 1) != 0)
+			return (-14);		/* EFAULT: bad path pointer */
+		if (kpath[i] == 0)
+			break;
+	}
+	kpath[i] = 0;
+	if (!vfs_lookup(kpath, &data, &len))
 		return (-1);
 	for (fd = 3; fd < 8; fd++) {
 		if (!p->p_fd[fd].fd_used) {
@@ -211,15 +483,17 @@ long
 proc_fread(int fd, char *ubuf, unsigned long n)
 {
 	proc_t *p = curproc;
-	unsigned long avail, i;
+	unsigned long avail;
 
 	if (p == 0 || fd < 3 || fd >= 8 || !p->p_fd[fd].fd_used)
 		return (-1);
 	avail = p->p_fd[fd].fd_len - p->p_fd[fd].fd_pos;
 	if (n > avail)
 		n = avail;
-	for (i = 0; i < n; i++)
-		ubuf[i] = (char)p->p_fd[fd].fd_data[p->p_fd[fd].fd_pos + i];
+	/* Fault-safe copy into the user buffer. */
+	if (n > 0 && copyout(&p->p_fd[fd].fd_data[p->p_fd[fd].fd_pos],
+	    ubuf, n) != 0)
+		return (-14);			/* EFAULT */
 	p->p_fd[fd].fd_pos += n;
 	return ((long)n);
 }
@@ -241,15 +515,19 @@ proc_close(int fd)
 /*
  * load_elf_into — build/replace `p`'s address space from the ELF image, map a
  * fresh user stack, set the initial break, and fill p->p_uframe (entry PC + a
- * clean argc=0 user stack). Shared by proc_first/proc_fork(child-exec)/exec.
- * Returns 1 on success, 0 on failure (p->p_as is left NULL on failure).
+ * user stack carrying argc/argv/envp/auxv per the RISC-V ELF ABI). `snap` may
+ * be NULL (no args: argc=0). Shared by proc_first/exec. Returns 1 on success,
+ * 0 on failure (p->p_as is left NULL on failure).
  */
 static int
-load_elf_into(proc_t *p, const char *path, const void *img, unsigned long len)
+load_elf_into(proc_t *p, const char *path, const void *img, unsigned long len,
+    const struct argsnap *snap)
 {
 	as_t *as;
 	unsigned long entry, brk = 0;
+	unsigned long sp;
 	int nseg, i;
+	struct argsnap empty;
 
 	sbi_console_puts("[exec] ");
 	sbi_console_puts(path);
@@ -278,16 +556,31 @@ load_elf_into(proc_t *p, const char *path, const void *img, unsigned long len)
 
 	p->p_as = as;
 
-	/* Fresh user frame: entry PC, top-of-stack sp with argc=0. */
+	if (snap == 0) {
+		empty.argc = 0;
+		empty.envc = 0;
+		snap = &empty;
+	}
+
+	/* Build the initial stack (argc/argv/envp/auxv) in the new AS. */
+	sp = build_user_stack(as, USTACK_TOP, entry, snap);
+	if (sp == 0) {
+		p->p_as = 0;
+		as_free(as);
+		return (0);
+	}
+
+	/* Fresh user frame: entry PC + the ABI stack. a0=argc, a1=argv per the
+	 * RISC-V psABI hint (the true source of truth is the stack at 0(sp)). */
 	{
 		unsigned char *fp = (unsigned char *)&p->p_uframe;
 		for (i = 0; i < (int)sizeof (p->p_uframe); i++)
 			fp[i] = 0;
 	}
 	p->p_uframe.r_sepc = entry;
-	p->p_uframe.r_sp = (USTACK_TOP - 16) & ~15UL;
-	p->p_uframe.r_a0 = 0;		/* argc */
-	p->p_uframe.r_a1 = 0;		/* argv */
+	p->p_uframe.r_sp = sp;
+	p->p_uframe.r_a0 = (unsigned long)snap->argc;	/* argc */
+	p->p_uframe.r_a1 = sp + 8;			/* argv (past argc) */
 
 	/* exec starts with a clean fd table (only console fds 0/1/2 implicit). */
 	for (i = 0; i < 8; i++)
@@ -340,11 +633,27 @@ int
 proc_first(const char *path, const void *img, unsigned long len)
 {
 	proc_t *p = proc_alloc();
+	struct argsnap snap;
 
 	if (p == 0)
 		return (-1);
 	p->p_ppid = 0;			/* init has no user parent */
-	if (!load_elf_into(p, path, img, len)) {
+
+	/* init's argv is just its path (argv[0]=path, no env). Build the snap
+	 * kernel-side (no user AS to copyin from yet). */
+	{
+		unsigned long l = 0;
+		while (path[l] != 0 && l < ARG_STRBUF - 1) {
+			snap.str[l] = path[l];
+			l++;
+		}
+		snap.str[l] = 0;
+		snap.aoff[0] = 0;
+		snap.argc = 1;
+		snap.envc = 0;
+	}
+
+	if (!load_elf_into(p, path, img, len, &snap)) {
 		p->p_inuse = 0;
 		return (-1);
 	}
@@ -404,7 +713,7 @@ proc_fork(struct regs *tf)
 		return (-1);
 	child->p_ppid = parent->p_pid;
 
-	child->p_as = as_copy(parent->p_as);
+	child->p_as = as_cow_copy(parent->p_as);
 	if (child->p_as == 0) {
 		child->p_inuse = 0;
 		return (-1);
@@ -443,7 +752,8 @@ proc_fork(struct regs *tf)
  * still live and it continues.
  */
 int
-proc_exec(const char *path, const void *img, unsigned long len)
+proc_exec(const char *path, const void *img, unsigned long len,
+    const struct argsnap *snap)
 {
 	proc_t *p = curproc;
 	as_t *oldas;
@@ -454,7 +764,7 @@ proc_exec(const char *path, const void *img, unsigned long len)
 	oldas = p->p_as;
 
 	/* Build the new AS into the process (load_elf_into sets p->p_as). */
-	if (!load_elf_into(p, path, img, len)) {
+	if (!load_elf_into(p, path, img, len, snap)) {
 		p->p_as = oldas;	/* restore; new load failed */
 		return (-1);
 	}
@@ -472,21 +782,61 @@ proc_exec(const char *path, const void *img, unsigned long len)
 }
 
 /*
- * proc_execve — the execve(path) syscall backing: resolve `path` to an ELF
- * image via the vfs, then proc_exec it (replace the current AS + re-enter
- * U-mode). Returns -1 (into a0) only on failure; on success it does not return
- * to the caller's U context (the new image runs). argv/envp are accepted but
- * not yet plumbed onto the user stack (R-P9).
+ * proc_execve — the execve(path, argv, envp) syscall backing: snapshot the
+ * caller's argv/envp out of its (still-loaded) user AS via fault-safe copyin,
+ * resolve `path` to an ELF image via the vfs, then proc_exec it (replace the
+ * current AS + re-enter U-mode with the argv/env/auxv stack). Returns -1 (into
+ * a0) only on failure; on success it does not return to the caller's U context
+ * (the new image runs). This is the RISC-V ELF ABI exec: argv/env/auxv on the
+ * initial user stack (R-P9).
  */
 int
-proc_execve(const char *path)
+proc_execve(const char *path, char *const uargv[], char *const uenvp[])
 {
 	const void *img;
 	unsigned long len;
+	struct argsnap snap;
+	char kpath[128];
+	unsigned long i;
 
-	if (path == 0 || !vfs_lookup(path, &img, &len))
+	if (path == 0)
 		return (-1);
-	return (proc_exec(path, img, len));
+	/* Fault-safe copy of the path from user space. */
+	for (i = 0; i < sizeof (kpath) - 1; i++) {
+		if (copyin(path + i, &kpath[i], 1) != 0)
+			return (-14);		/* EFAULT */
+		if (kpath[i] == 0)
+			break;
+	}
+	kpath[i] = 0;
+	if (!vfs_lookup(kpath, &img, &len))
+		return (-1);
+
+	/* Snapshot argv/envp from the CALLER's AS before it is torn down. If
+	 * uargv is NULL, fall back to argv[0]=path so the new image still sees
+	 * its own name. */
+	if (uargv != 0) {
+		argsnap_copy(&snap, uargv, uenvp);
+		if (snap.argc == 0) {
+			unsigned long l = 0;
+			while (kpath[l] != 0 && l < ARG_STRBUF - 1) {
+				snap.str[l] = kpath[l]; l++;
+			}
+			snap.str[l] = 0;
+			snap.aoff[0] = 0;
+			snap.argc = 1;
+		}
+	} else {
+		unsigned long l = 0;
+		while (kpath[l] != 0 && l < ARG_STRBUF - 1) {
+			snap.str[l] = kpath[l]; l++;
+		}
+		snap.str[l] = 0;
+		snap.aoff[0] = 0;
+		snap.argc = 1;
+		snap.envc = 0;
+	}
+	return (proc_exec(kpath, img, len, &snap));
 }
 
 /*
@@ -498,6 +848,7 @@ void
 proc_exit(int status)
 {
 	proc_t *p = curproc;
+	int ppid = (p != 0) ? p->p_ppid : 0;
 
 	sbi_console_puts("\n[exit] pid ");
 	kputdec((unsigned long)(p != 0 ? p->p_pid : 0));
@@ -516,22 +867,39 @@ proc_exit(int status)
 	curproc = 0;
 	userland_active = 0;
 
+	/*
+	 * Wake the parent if it is blocked in wait4 (R-P9 sleepq). The wait
+	 * channel is the parent's proc_t address; proc_waitpid slept on `self`.
+	 * wakeup before thread_exit so the parent becomes runnable and is
+	 * dispatched once we switch away.
+	 */
+	{
+		int i;
+		for (i = 0; i < NPROC; i++) {
+			if (proctab[i].p_inuse && proctab[i].p_pid == ppid) {
+				wakeup(&proctab[i]);
+				break;
+			}
+		}
+	}
+
 	thread_exit();		/* off the cpu for good; parent reaps */
 	for (;;)
 		__asm__ __volatile__("wfi");	/* NOTREACHED */
 }
 
 /*
- * proc_waitpid — block (cooperative yield) until a child of the current process
- * becomes ZOMBIE, reap it (free its AS + kthread, free the proc slot), and
+ * proc_waitpid — block on a real sleep queue (R-P9) until a child of the
+ * current process becomes ZOMBIE, reap it (free its AS + kthread + slot), and
  * return its pid; write the exit status through *statusp (if non-NULL). If the
  * caller has no children, returns -1. pid == -1 waits for any child.
  *
- * NOTE: cooperative spin-yield, not a sleepq. Correct because the child runs on
- * its own dispatched thread and WILL reach exit on a yield; a real sleep/wakeup
- * channel is R-P9. Bounded only by "a child eventually exits" \u2014 unbounded by
- * design (like real wait), but every iteration yields the cpu so the child runs.
+ * The parent sleeps on its own proc_t address; a child's proc_exit calls
+ * wakeup(&parent), so the parent is re-dispatched exactly when a child exits —
+ * no cpu spin. This is the illumos cv_wait/cv_signal analog (sleep_on/wakeup).
  */
+static int waitq_slept_once;
+
 int
 proc_waitpid(int pid, int *statusp)
 {
@@ -568,11 +936,21 @@ proc_waitpid(int pid, int *statusp)
 			curproc = self;
 			return (-1);		/* no matching child */
 		}
-		thread_yield();			/* let the child run */
 		/*
-		 * A child (or any other user thread) that ran while we were
-		 * yielded clobbered the global curproc; restore ours before the
-		 * next iteration touches proctab / self.
+		 * A matching child exists but is not yet a ZOMBIE: block on the
+		 * sleep queue (R-P9) until a child's proc_exit wakes us — no cpu
+		 * spin. sleep_on takes us off the run queue; we resume here when
+		 * woken.
+		 */
+		if (!waitq_slept_once) {
+			waitq_slept_once = 1;
+			sbi_console_puts("sleepq: parent slept in wait, "
+			    "woken by child exit\n");
+		}
+		sleep_on(self);
+		/*
+		 * Woken. A child (or other user thread) that ran while we slept
+		 * clobbered the global curproc; restore ours before the next scan.
 		 */
 		curproc = self;
 	}

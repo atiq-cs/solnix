@@ -162,6 +162,22 @@ virtio_find(unsigned int devid)
 	return (0);
 }
 
+/* Return the n-th (0-based) discovered device of the given id, or NULL. Used to
+ * reach a SECOND virtio-blk (the on-disk root FS image) distinct from the R-P6
+ * test disk (R-P9 gate 4). */
+struct virtio_dev *
+virtio_find_nth(unsigned int devid, int n)
+{
+	int i, seen = 0;
+	for (i = 0; i < virtio_ndev; i++)
+		if (virtio_devs[i].vd_devid == devid) {
+			if (seen == n)
+				return (&virtio_devs[i]);
+			seen++;
+		}
+	return (0);
+}
+
 /*
  * ---------------------------------------------------------------------------
  * Device init handshake (VirtIO spec 1.2 §3.1.1) + feature negotiation.

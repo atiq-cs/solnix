@@ -52,3 +52,26 @@ echo "== emit user_elfs.h =="
 
 echo "== user_elfs.h written =="
 ls -l ../user_elfs.h
+
+# --- R-P9 gate 4: build the on-disk root FS image (ustar) from the SAME ELFs,
+# so the disk always matches the just-built userland. tar in POSIX ustar form;
+# the kernel's rootfs.c ustar reader parses it off a second virtio-blk. ---
+echo "== build rootfs.img (ustar root FS for vioblk) =="
+STAGE="$(mktemp -d)"
+mkdir -p "$STAGE/sbin" "$STAGE/bin"
+cp init.elf  "$STAGE/sbin/init"
+cp sh.elf    "$STAGE/bin/sh"
+cp hello.elf "$STAGE/bin/hello"
+cp echo.elf  "$STAGE/bin/echo"
+cp cat.elf   "$STAGE/bin/cat"
+( cd "$STAGE" && tar --format=ustar -cf rootfs.tar \
+    sbin/init bin/sh bin/hello bin/echo bin/cat )
+cp "$STAGE/rootfs.tar" ../rootfs.img
+# pad to a 512-byte multiple (tar already blocks to 512, but be safe).
+sz=$(wc -c < ../rootfs.img)
+pad=$(( (512 - (sz % 512)) % 512 ))
+if [ "$pad" -ne 0 ]; then
+	dd if=/dev/zero bs=1 count="$pad" >> ../rootfs.img 2>/dev/null
+fi
+rm -rf "$STAGE"
+echo "  rootfs.img: $(wc -c < ../rootfs.img) bytes (ustar)"

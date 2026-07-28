@@ -51,6 +51,15 @@ static int vioblk_ready;
 static unsigned long vioblk_dma;
 
 /*
+ * A SECOND virtio-blk instance for the on-disk root FS image (R-P9 gate 4).
+ * Kept separate from the R-P6 test disk above so both can be read.
+ */
+static struct virtio_dev *vioblk_fs_dev;
+static struct virtq vioblk_fs_vq;
+static int vioblk_fs_ready;
+static unsigned long vioblk_fs_dma;
+
+/*
  * vioblk_read_sector — read one 512-byte sector into `buf` (a kernel pointer).
  * Returns 1 on success. Blocking (polls the used ring).
  */
@@ -220,4 +229,128 @@ int
 vioblk_present(void)
 {
 	return (vioblk_ready);
+}
+
+/* virtio.c: find the n-th block device (R-P9 gate 4 needs the second one). */
+extern struct virtio_dev *virtio_find_nth(unsigned int devid, int n);
+
+/*
+ * vioblk_fs_read_sector — read one 512-byte sector from the SECOND virtio-blk
+ * (the on-disk root FS image) into `buf`. Mirrors vioblk_read_sector but drives
+ * the vioblk_fs_* instance. Returns 1 on success.
+ */
+int
+vioblk_fs_read_sector(unsigned long sector, void *buf)
+{
+	struct virtio_blk_req_hdr *hdr;
+	volatile unsigned char *status;
+	unsigned char *data;
+	int dh, dd, ds, used, i;
+
+	if (!vioblk_fs_ready)
+		return (0);
+
+	hdr = (struct virtio_blk_req_hdr *)(vioblk_fs_dma + 0);
+	status = (volatile unsigned char *)(vioblk_fs_dma + 256);
+	data = (unsigned char *)(vioblk_fs_dma + 512);
+
+	hdr->type = VIRTIO_BLK_T_IN;
+	hdr->reserved = 0;
+	hdr->sector = sector;
+	*status = 0xff;
+
+	dh = virtq_alloc_desc(&vioblk_fs_vq);
+	dd = virtq_alloc_desc(&vioblk_fs_vq);
+	ds = virtq_alloc_desc(&vioblk_fs_vq);
+	if (dh < 0 || dd < 0 || ds < 0)
+		return (0);
+
+	vioblk_fs_vq.vq_desc[dh].addr = (unsigned long)hdr;
+	vioblk_fs_vq.vq_desc[dh].len = sizeof (*hdr);
+	vioblk_fs_vq.vq_desc[dh].flags = VIRTQ_DESC_F_NEXT;
+	vioblk_fs_vq.vq_desc[dh].next = (unsigned short)dd;
+
+	vioblk_fs_vq.vq_desc[dd].addr = (unsigned long)data;
+	vioblk_fs_vq.vq_desc[dd].len = VIOBLK_SECTOR_SIZE;
+	vioblk_fs_vq.vq_desc[dd].flags = VIRTQ_DESC_F_NEXT | VIRTQ_DESC_F_WRITE;
+	vioblk_fs_vq.vq_desc[dd].next = (unsigned short)ds;
+
+	vioblk_fs_vq.vq_desc[ds].addr = (unsigned long)status;
+	vioblk_fs_vq.vq_desc[ds].len = 1;
+	vioblk_fs_vq.vq_desc[ds].flags = VIRTQ_DESC_F_WRITE;
+	vioblk_fs_vq.vq_desc[ds].next = 0;
+
+	virtq_submit(&vioblk_fs_vq, dh);
+	used = virtq_poll_used(&vioblk_fs_vq);
+	virtq_free_desc(&vioblk_fs_vq, dh);
+	virtq_free_desc(&vioblk_fs_vq, dd);
+	virtq_free_desc(&vioblk_fs_vq, ds);
+
+	if (used < 0 || *status != VIRTIO_BLK_S_OK)
+		return (0);
+	if (buf != 0) {
+		unsigned char *out = buf;
+		for (i = 0; i < VIOBLK_SECTOR_SIZE; i++)
+			out[i] = data[i];
+	}
+	return (1);
+}
+
+/*
+ * vioblk_fs_attach — find and attach the virtio-blk device that carries the
+ * ustar root FS image (R-P9 gate 4). qemu's slot ordering is not fixed, so we
+ * do NOT assume "the second blk device": we probe EACH blk device's sector 0
+ * for the ustar magic ("ustar" at byte offset 257) and keep the one that
+ * matches. Returns 1 if a ustar disk was found + its queue is online. If none
+ * matches (no FS image attached), returns 0 and the kernel serves the embedded
+ * ELFs.
+ */
+int
+vioblk_fs_attach(void)
+{
+	int n;
+
+	for (n = 0; ; n++) {
+		struct virtio_dev *vd = virtio_find_nth(VIRTIO_ID_BLOCK, n);
+		unsigned char sec0[VIOBLK_SECTOR_SIZE];
+
+		if (vd == 0)
+			break;		/* no more blk devices */
+
+		/* Bring this candidate online in the fs slot. */
+		virtio_reset_ack(vd);
+		(void) virtio_get_features(vd);
+		if (!virtio_set_features(vd, 0))
+			continue;
+		if (!virtq_setup(vd, 0, &vioblk_fs_vq))
+			continue;
+		virtio_driver_ok(vd);
+		if (vioblk_fs_dma == 0) {
+			vioblk_fs_dma = page_alloc();
+			if (vioblk_fs_dma == 0)
+				return (0);
+		}
+		vioblk_fs_dev = vd;
+		vioblk_fs_ready = 1;
+
+		/* Probe sector 0 for the ustar magic. */
+		if (vioblk_fs_read_sector(0, sec0) &&
+		    sec0[257] == 'u' && sec0[258] == 's' && sec0[259] == 't' &&
+		    sec0[260] == 'a' && sec0[261] == 'r') {
+			sbi_console_puts("\n[vioblk-fs] root-FS (ustar) disk @");
+			kputhex(vd->vd_base);
+			sbi_console_puts(" online\n");
+			return (1);
+		}
+		/* Not the FS disk: leave it initialized but keep scanning. */
+		vioblk_fs_ready = 0;
+	}
+	vioblk_fs_ready = 0;
+	return (0);
+}
+
+int
+vioblk_fs_present(void)
+{
+	return (vioblk_fs_ready);
 }

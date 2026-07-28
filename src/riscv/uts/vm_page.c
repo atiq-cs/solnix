@@ -47,6 +47,7 @@ typedef struct page {
 	unsigned long	p_pfn;		/* physical frame number (PA >> PAGESHIFT) */
 	struct page	*p_next;	/* free-list link (NULL when allocated) */
 	unsigned int	p_state;	/* PAGE_FREE | PAGE_ALLOC */
+	unsigned int	p_ref;		/* COW share count (R-P9): 1 = sole owner */
 } page_t;
 
 #define	PAGE_FREE	0
@@ -119,6 +120,7 @@ page_init(unsigned long rambase, unsigned long ramsize)
 		pages[i].p_pfn = page_base_pfn + i;
 		pages[i].p_next = 0;
 		pages[i].p_state = PAGE_ALLOC;
+		pages[i].p_ref = 0;
 	}
 
 	/* Free every page after the reserved array region onto the list. */
@@ -169,6 +171,7 @@ page_alloc(void)
 	page_freelist = pp->p_next;
 	pp->p_next = 0;
 	pp->p_state = PAGE_ALLOC;
+	pp->p_ref = 1;			/* sole owner (R-P9 COW) */
 	nfree--;
 	page_lock_exit();
 
@@ -182,8 +185,10 @@ page_alloc(void)
 }
 
 /*
- * page_free — return a page (by physical address) to the free list. Validates
- * the pfn is in the managed range and not double-freed.
+ * page_free — release a reference to a page (by physical address). With COW
+ * sharing (R-P9) a page may be mapped in several address spaces; the page is
+ * only returned to the free list when the LAST reference drops. Validates the
+ * pfn is in the managed range and not already free.
  */
 void
 page_free(unsigned long pa)
@@ -205,11 +210,54 @@ page_free(unsigned long pa)
 		sbi_console_puts("[page] page_free: double free\n");
 		return;
 	}
+	if (pp->p_ref > 1) {
+		pp->p_ref--;		/* still shared: keep the frame mapped */
+		page_lock_exit();
+		return;
+	}
+	pp->p_ref = 0;
 	pp->p_state = PAGE_FREE;
 	pp->p_next = page_freelist;
 	page_freelist = pp;
 	nfree++;
 	page_lock_exit();
+}
+
+/*
+ * page_incref / page_decref / page_refcount — COW share-count API (R-P9). fork
+ * marks a shared leaf read-only in both AS and page_increfs it; the store-fault
+ * COW handler page_decrefs (dropping its share) after copying to a private
+ * page, or, if it was the sole owner, just re-maps it writable in place.
+ */
+void
+page_incref(unsigned long pa)
+{
+	unsigned long pfn = pa >> PAGESHIFT;
+	unsigned long idx;
+
+	if (pfn < page_base_pfn || pfn >= page_base_pfn + npages)
+		return;
+	idx = pfn - page_base_pfn;
+	page_lock_enter();
+	if (pages[idx].p_state == PAGE_ALLOC)
+		pages[idx].p_ref++;
+	page_lock_exit();
+}
+
+unsigned int
+page_refcount(unsigned long pa)
+{
+	unsigned long pfn = pa >> PAGESHIFT;
+	unsigned long idx;
+	unsigned int r;
+
+	if (pfn < page_base_pfn || pfn >= page_base_pfn + npages)
+		return (0);
+	idx = pfn - page_base_pfn;
+	page_lock_enter();
+	r = pages[idx].p_ref;
+	page_lock_exit();
+	return (r);
 }
 
 unsigned long

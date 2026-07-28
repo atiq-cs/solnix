@@ -25,6 +25,7 @@ extern "C" {
 #define	SSTATUS_SIE	(1UL << 1)	/* S-mode interrupt enable */
 #define	SSTATUS_SPIE	(1UL << 5)	/* prior SIE, saved on trap */
 #define	SSTATUS_SPP	(1UL << 8)	/* prior privilege (0=U,1=S) */
+#define	SSTATUS_SUM	(1UL << 18)	/* permit S-mode to access U pages */
 
 /*
  * ---------------------------------------------------------------------------
@@ -118,6 +119,14 @@ extern "C" {
 #define	PTE_D	(1UL << 7)	/* dirty */
 
 #define	PTE_RWX	(PTE_R | PTE_W | PTE_X)
+
+/*
+ * Software-reserved PTE bits (RSW, PTE[9:8]) — ignored by hardware, free for OS
+ * use. R-P9 uses bit 8 to mark a copy-on-write leaf: the page is mapped R (and
+ * X if it was executable) but NOT W, shared read-only between parent + child
+ * after fork; a store faults and the COW handler copies it private.
+ */
+#define	PTE_COW	(1UL << 8)	/* RSW bit: copy-on-write leaf */
 
 /* Convert a physical address to the PPN field of a PTE (bits [53:10]). */
 #define	PA_TO_PTE(pa)	((((unsigned long)(pa) >> 12) << 10))

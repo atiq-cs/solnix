@@ -47,9 +47,21 @@ extern long proc_open(const char *path);
 extern long proc_fread(int fd, char *ubuf, unsigned long n);
 extern long proc_close(int fd);
 extern int proc_fork(struct regs *tf);
-extern int proc_execve(const char *path);
+extern int proc_execve(const char *path, char *const argv[],
+    char *const envp[]);
 extern int proc_waitpid(int pid, int *statusp);
 extern long proc_brk(unsigned long newbrk);
+extern unsigned long proc_cow_shared(void);
+extern unsigned long proc_cow_copied(void);
+
+/* trap.c: clock-tick preemption count (R-P9 gate 5). */
+extern volatile unsigned long preempt_count;
+
+/* copy.S: fault-safe user-memory access. Return 0 ok, -1 fault (EFAULT). */
+extern long copyin(const void *uaddr, void *kaddr, unsigned long n);
+extern long copyout(const void *kaddr, void *uaddr, unsigned long n);
+
+#define	EFAULT	14
 
 /* Riscv Linux-ABI subset numbers our userland stub uses. */
 #define	SYS_openat	56
@@ -62,6 +74,10 @@ extern long proc_brk(unsigned long newbrk);
 #define	SYS_fork	220
 #define	SYS_execve	221
 #define	SYS_wait4	260
+/* solnix-private diagnostic: print the kernel COW-fork stats line (R-P9). */
+#define	SYS_cowreport	500
+/* solnix-private diagnostic: print the clock-preemption count (R-P9 gate 5). */
+#define	SYS_preemptreport 501
 
 /*
  * sys_write — write `n` bytes of the user buffer to the console (fd 1 = stdout,
@@ -71,14 +87,27 @@ extern long proc_brk(unsigned long newbrk);
 static long
 sys_write(int fd, const char *ubuf, unsigned long n)
 {
-	unsigned long i;
+	char kb[256];
+	unsigned long off = 0;
 
 	if (fd != 1 && fd != 2)
 		return (-1);
 	if (ubuf == 0)
-		return (-1);
-	for (i = 0; i < n; i++)
-		sbi_console_putchar((unsigned char)ubuf[i]);
+		return (-EFAULT);
+	/* Bounce the user buffer through the kernel in chunks via fault-safe
+	 * copyin. A bad user pointer returns EFAULT instead of panicking. */
+	while (off < n) {
+		unsigned long chunk = n - off;
+		unsigned long i;
+
+		if (chunk > sizeof (kb))
+			chunk = sizeof (kb);
+		if (copyin(ubuf + off, kb, chunk) != 0)
+			return (off > 0 ? (long)off : -EFAULT);
+		for (i = 0; i < chunk; i++)
+			sbi_console_putchar((unsigned char)kb[i]);
+		off += chunk;
+	}
 	return ((long)n);
 }
 
@@ -92,22 +121,27 @@ sys_read(int fd, char *ubuf, unsigned long n)
 	unsigned long i = 0;
 
 	if (ubuf == 0 || n == 0)
-		return (-1);
+		return (-EFAULT);
 
 	if (fd >= 3)
-		return (proc_fread(fd, ubuf, n));	/* vfs file */
+		return (proc_fread(fd, ubuf, n));	/* vfs file (copyout inside) */
 
 	if (fd != 0)
 		return (-1);
 
-	/* Console: blocking, cooked-lite (echo, \r -> \n, stop at newline). */
+	/* Console: blocking, cooked-lite. Copy each byte out fault-safely so a
+	 * bad user buffer returns EFAULT rather than panicking. */
 	while (i < n) {
 		int c = uart_getc();
+		char ch;
 
 		if (c == '\r')
 			c = '\n';
 		sbi_console_putchar(c);		/* echo */
-		ubuf[i++] = (char)c;
+		ch = (char)c;
+		if (copyout(&ch, ubuf + i, 1) != 0)
+			return (i > 0 ? (long)i : -EFAULT);
+		i++;
 		if (c == '\n')
 			break;
 	}
@@ -151,15 +185,21 @@ syscall_trap(struct regs *tf)
 		ret = proc_fork(tf);
 		break;
 	case SYS_execve:
-		/* On success proc_execve does NOT return (new image runs). */
-		ret = proc_execve((const char *)tf->r_a0);
+		/* On success proc_execve does NOT return (new image runs).
+		 * a0=path, a1=argv, a2=envp (RISC-V ELF ABI). */
+		ret = proc_execve((const char *)tf->r_a0,
+		    (char *const *)tf->r_a1, (char *const *)tf->r_a2);
 		break;
 	case SYS_wait4: {
 		int status = 0;
 		int rpid = proc_waitpid((int)tf->r_a0, &status);
 		int *usp = (int *)tf->r_a1;
-		if (usp != 0 && rpid > 0)
-			*usp = status;
+		if (usp != 0 && rpid > 0) {
+			if (copyout(&status, usp, sizeof (status)) != 0) {
+				ret = -EFAULT;	/* bad status pointer */
+				break;
+			}
+		}
 		ret = rpid;
 		break;
 	}
@@ -167,7 +207,29 @@ syscall_trap(struct regs *tf)
 		proc_exit((int)tf->r_a0);	/* does not return */
 		/* NOTREACHED */
 		ret = 0;
+		break;	case SYS_cowreport: {
+		extern void kputdec(unsigned long v);
+		sbi_console_puts("COW fork OK: ");
+		kputdec(proc_cow_shared());
+		sbi_console_puts(" pages shared, ");
+		kputdec(proc_cow_copied());
+		sbi_console_puts(" copied on write\n");
+		ret = 0;
 		break;
+	}
+	case SYS_preemptreport: {
+		extern void kputdec(unsigned long v);
+		if (preempt_count > 0) {
+			sbi_console_puts("preempt OK: clock-tick preempted a "
+			    "user thread ");
+			kputdec(preempt_count);
+			sbi_console_puts(" times (timer ISR -> reschedule)\n");
+		} else {
+			sbi_console_puts("preempt: no preemptions recorded yet\n");
+		}
+		ret = (long)preempt_count;
+		break;
+	}
 	default:
 		sbi_console_puts("[syscall] unknown syscall a7=");
 		{
