@@ -1184,3 +1184,73 @@ bug is a timing race in the OBP-CIF/kernel-trap interaction — deeper than a
 patch to a single win_helper.c field, and now precisely characterized with
 runnable evidence + a ready PATH B rebuild harness for the real (atomicity/
 race) fix or an upstream report.
+
+## S3 attempt 5 — sun4v/niagara QEMU probe: does it dodge the sun4u CIF window race? NO — blocked earlier, by missing OpenSPARC-T1 firmware (2026-07-28)
+
+**Bounded, time-boxed side-probe (not a continuation of PATH A/B).** Hypothesis
+(from S3-4 next-steps note "boot from a Sun-VTOC disk / niagara reset image
+bypasses the CIF/FCode path"): the T-series **sun4v** kernel under
+`qemu-system-sparc64 -M niagara` boots via a hypervisor/OBP-in-hyperprivileged
+reset image, not OpenBIOS's FCode CD path, so it might sidestep the sun4u CIF
+register-window contents-race entirely. Tested with the archived Tribblix m34
+`sun4v_unix` (ELF64 MSB SPARC V9 EXEC, T-series; sha `701d8590...`).
+
+### S3-5.1 What `-M niagara` requires (qemu 10.1.5)
+Discovered by iterative missing-file demand order (create a dummy, rerun, see
+the next demanded name). niagara hard-requires **six** firmware blobs in CWD,
+loaded in this order:
+
+    nvram1  openboot.bin  reset.bin  q.bin  1up-hv.bin  1up-md.bin
+
+These are the **Sun OpenSPARC T1 simulation `S10image/` blobs** (reset vector +
+OBP `q.bin` + hypervisor `1up-hv.bin` + machine descriptor `1up-md.bin`).
+`qemu-system-sparc64` does NOT bundle them (only `openbios-sparc64` for sun4u
+ships in `share/qemu`). They are **not in the Tribblix ISO** (`strings` scan:
+none of the six names present) and **not anywhere local** (`find / -xdev` for
+`reset.bin`/`1up-hv.bin`/`1up-md.bin`/`q.bin`/`openboot.bin`: only our dummies).
+
+### S3-5.2 Behaviour with dummy firmware (the decisive evidence)
+With all six present as 1 KiB zero-filled dummies, niagara **starts executing**
+and immediately faults at the reset vector:
+
+    qemu: fatal: Trap 0x0010 while trap level (6) >= MAXTL (6), Error state
+    pc: 000000fff0000020  npc: 000000fff0000024   (all regs zero)
+
+`pc=0xfff0000020` = the `reset.bin` load region (`0xfff0000000`). The CPU is
+executing the dummy zero bytes as instructions → instant TL-overflow trap.
+Crucially, adding `-kernel sun4v_unix` does **NOT** change this: the niagara
+machine ALWAYS begins in the reset firmware, so a real `reset.bin` +
+`1up-hv.bin` (hyperprivileged HV) + `q.bin` (OBP) must run first to set up the
+sun4v machine-descriptor and hand off to the kernel. Console log:
+`artifacts/sparc-sun4v/niagara-dummy-fw-trap.log`.
+
+### S3-5.3 Verdict — niagara is LESS promising than sun4u for QEMU-CI
+| target | how far under QEMU | blocker |
+|--------|-------------------|---------|
+| **sun4u** (OpenBIOS) | illumos **kernel executes** (krtld/unix start; reaches SMF 15/95 in one run) then dies in the CIF window race | QEMU %cwp vs OpenBIOS CIF manual-window-walk **timing race** on CIF return (S3-1..S3-4) — a fixable/upstreamable interaction bug |
+| **sun4v** (niagara) | kernel **never loads** — CPU stuck in reset firmware | **missing proprietary OpenSPARC-T1 firmware** (reset.bin/1up-hv.bin/q.bin) not in ISO, not local, not in qemu |
+
+sun4v does NOT dodge the race — it fails *earlier*, at firmware, and its blocker
+(proprietary T1 HV/OBP blobs) is arguably harder to satisfy than sun4u's (a
+QEMU/OpenBIOS source fix or an upstream bug report). The niagara reset/FCode
+bypass hypothesis is refuted for our artifact set: we cannot even reach the
+FCode/CIF path because we lack the pre-OBP hypervisor stage.
+
+**Bottom line:** SPARC remains hardware-qualified on the real Ultra 45 (OBP
+boots the ISO fine). QEMU-CI via sun4v/niagara is **not viable** without the
+OpenSPARC T1 `S10image` firmware bundle (would need to source Sun's OpenSPARC
+T1 download and verify its licence for CI redistribution — out of scope here).
+If pursuing QEMU-CI, sun4u (fix the CIF window race / upstream it) is the better
+bet; sun4v would additionally require obtaining + licence-clearing the T1 HV.
+
+### Artifacts (S3-5, `artifacts/sparc-sun4v/`)
+- `README.txt` — the required-firmware set, dummy-fw method, reset-vector finding.
+- `niagara-dummy-fw-trap.log` — the definitive `-M niagara -kernel sun4v_unix`
+  reset-vector trap console output.
+- `{nvram1,openboot.bin,reset.bin,q.bin,1up-hv.bin,1up-md.bin}` — 1 KiB DUMMY
+  zeros (probe scaffolding only; NOT real firmware — do not archive as such).
+
+Method note: every qemu invocation was `timeout`-wrapped and detached; each was
+killed after a single short sleep+log-check (no foreground poll, no wedge).
+Core dumps disabled (`ulimit -c 0`) after the first run left a 1.1 GB core.
+No git commit.
