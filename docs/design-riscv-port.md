@@ -1170,3 +1170,175 @@ and every R-P6 source). Boot cmd adds:
   through the PLIC so the single-user prompt is interactive.
 - **IRQ-driven virtio:** route virtio completions through `plic_extintr` for
   async I/O; per-cpu dispatch + clock-tick preemption (the K1/K3 kernel work).
+
+---
+
+## R-P8 — userland becomes interactive + multi-process: fork/exec/wait + a shell
+
+R-P7 ran exactly one user process (`/sbin/init`) "inline" on the single-user
+kernel thread: exec built one address space, dropped to U-mode, and a
+hand-rolled `rv_swtch` returned to the exec caller when the process exited.
+There was one syscall (write) plus read/exit, no process table, no fork. R-P8
+turns that seed into a genuine, interactive, multi-process userland — the
+milestone where the first illumos on RISC-V stops being "one program in U-mode"
+and becomes a system you can type commands into.
+
+### R-P8.0 New + changed sources (`src/riscv/uts/` + `src/riscv/uts/user/`)
+
+| File | Role |
+|------|------|
+| `uproc.c` (rewritten) | The R-P8 process model: a 16-slot `proc_t` table (pid/ppid/state/status/AS/kthread/saved-user-frame/fd-table), and `proc_first` / `proc_fork` / `proc_execve` / `proc_exit` / `proc_waitpid` / `proc_open` / `proc_fread` / `proc_close` / `proc_brk`. Each user process runs on its OWN kernel thread (proc.c dispatcher), so parent + forked child are two runnable contexts. |
+| `syscall.c` (extended) | Full R-P8 syscall set: `read`(63) `write`(64) `openat`(56) `close`(57) `exit`(93) `getpid`(172) `brk`(214) `fork`(220) `execve`(221) `wait4`(260), riscv Linux-ABI numbers, wired to the vfs (open/read a file) + proc (fork/exec/exit/wait/brk). |
+| `as.c` (extended) | `as_copy` (full-copy fork of an address space), `as_grow`/`as_setbrk`/`as_getbrk` (heap/brk), `as_free` (reclaim all user leaves + page tables + root). |
+| `hat_riscv.c` (extended) | `hat_as_walk_leaves` (visit every user leaf for copy/free) + `hat_as_freeuser` (reclaim user page-table pages). |
+| `elf.c` (extended) | `elf_load` now also returns the initial program break (top of the loaded image, page-rounded) so exec can seed the heap. |
+| `proc.c` (extended) | `thread_exit` no longer frees its own stack; `thread_reap` frees a DEAD thread's kthread+stack (called by the parent reaper); `curthread_id`; **per-thread `satp` in `rv_context`** (see R-P8.3). |
+| `swtch.S` (extended) | Saves/restores `satp` across a context switch (the R-P8 multi-AS fix — R-P8.3). |
+| `main.c` (changed) | After startup the boot cpu enters the dispatcher (a `thread_yield()` loop) instead of `wfi`-parking, so the cooperative scheduler keeps running init + its children + the shell (R-P8.4). |
+| `rootfs.c` (extended) | A vfs file registry (`vfs_lookup`) serving `/etc/motd` (a regular file) and the embedded userland ELFs (`/sbin/init`, `/bin/sh`, `/bin/hello`, `/bin/echo`, `/bin/cat`); `single_user` now `proc_first`s init and `proc_waitpid`s (reaps) it. |
+| `user/libu.h` | Tiny freestanding syscall-stub "libc": ecall wrappers (read/write/open/close/getpid/brk/fork/execve/wait4/exit) + string helpers + the shared `_start`. |
+| `user/init.c` (rewritten) | `/sbin/init`: gate 1 (open/read/write/close `/etc/motd`), gate 2 (fork a child that execs `/bin/hello`, wait+reap), gate 3 (exec `/bin/sh`). |
+| `user/sh.c` | `/bin/sh`, the interactive shell: reads a line (`read(0)`), parses a command, runs builtins (`echo`,`help`,`exit`) or fork/execs `/bin/hello` / `/bin/cat`. |
+| `user/hello.c`, `user/echo.c`, `user/cat.c` | R-P8 utils (fork/exec proof + a couple real execed programs). |
+| `user/build-user.sh` | Builds all five userland ELFs (static, freestanding, `init.ld` @ 0xC0010000) and emits one embeddable `user_elfs.h` byte-array header. |
+
+### R-P8.1 The process model — a proc on a kernel thread
+
+The key structural change: **every user process is a real dispatched kernel
+thread**. `proc_first`/`proc_fork` allocate a `proc_t`, build/copy an address
+space, and `thread_create` a kernel thread whose body (`user_thread_body` /
+`child_thread_body`) sets `curproc`, switches to the process satp, and calls
+`usermode_entry` to sret into U-mode. Because the process lives on the
+cooperative run queue, parent and child are two schedulable contexts — genuine
+multi-process, time-shared across their syscalls/yields.
+
+This is the seed of the illumos proc/lwp model (`proc_t`/`kthread_t`,
+`exec_common` → `elfexec` → `setregs` → `lwp_rtt`, `fork1`/`cfork`, `proc_exit`,
+`waitid`), pared to a single-lwp-per-proc, cooperative-dispatch subset.
+
+### R-P8.2 fork — full address-space copy
+
+`proc_fork(tf)` (tf = the parent's syscall trap frame) copies the parent AS
+leaf-by-leaf into a fresh child AS (`as_copy` → `hat_as_walk_leaves` → a new
+zeroed page per parent leaf, byte-copied, mapped with the same protection),
+clones the parent's user frame into `child->p_uframe` with `a0 = 0` (the child's
+`fork()` returns 0) and `sepc` advanced past the ecall, spawns the child kernel
+thread, and returns the child pid to the parent. **Full copy, not
+copy-on-write** — simple + correct for R-P8's small processes; COW off the store
+page-fault handler is the R-P9 upgrade.
+
+### R-P8.3 The multi-AS context-switch fix (satp per thread)
+
+The subtle correctness bug R-P8 had to solve: `satp` is a single global CSR, but
+each user process has its own address space, and a kernel thread can yield
+mid-syscall (the parent blocked in `wait`). When a child ran and switched satp
+to its own AS, the parent resumed on the *child's* satp. **Fix (root cause):**
+`rv_context` gained a `c_satp` field and `swtch.S` now `csrr`s the outgoing
+thread's satp on save and `csrw`+`sfence.vma`s the incoming thread's satp on
+load. A thread that yields mid-syscall on its process satp resumes on that same
+satp. Kernel threads carry the kernel satp (seeded at `thread_create`). This is
+the analog of illumos `resume()` reloading the address space on a thread switch.
+(A companion global — `curproc` — is likewise restored by the reaper after each
+yield, since it is not yet per-thread; a per-thread `curproc`/`curproc via tp`
+is R-P9.)
+
+### R-P8.4 The dispatcher must stay alive
+
+R-P7's `main()` `wfi`-parked after startup because the one user process ran
+inline. R-P8's processes run on the run queue, so `main()` now enters the
+dispatcher — `for(;;) thread_yield();` — which runs the single-user reaper
+thread, init (U-mode), its forked children, and the shell. `thread_yield`
+wfi-idles when nothing is runnable, so this is not a busy spin while userland
+blocks on console input.
+
+### R-P8.5 The syscall set + vfs
+
+The syscall table (riscv Linux-ABI numbers, so a freestanding stub links
+unchanged) is dispatched in `syscall_trap`: `read` reads the console (fd 0,
+blocking+echo) or an open vfs file (fd ≥ 3); `write` goes to the SBI console
+(fd 1/2); `openat`/`close` use a tiny per-process 8-slot fd table over the vfs
+file registry; `getpid`/`brk`/`fork`/`execve`/`wait4`/`exit` back onto the proc
+model. The vfs (`vfs_lookup`) serves `/etc/motd` (a regular text file, proving
+open/read of a real file) and the embedded userland ELFs (the exec images).
+
+### R-P8.6 Result — SUCCESS (verbatim console excerpt, `-smp 4`)
+
+All three R-P8 gates PASS deterministically; 0 PANIC / 0 MISMATCH; the qemu run
+self-terminates on the `timeout` (no wedge).
+
+```
+[R-P8] /sbin/init running in U-mode (pid 1)
+solnix riscv64 - the first illumos on RISC-V. R-P8: interactive, multi-process.
+syscall set OK: open/read/write/close
+[fork] pid 1 -> child pid 2
+[exec] /bin/hello (10176 bytes) pid 2
+hello from child: /bin/hello running in U-mode (pid 2)
+[exit] pid 2 exit(0)
+fork/exec/wait OK: child pid 2 exited status 0
+[R-P8] init: exec /bin/sh (interactive shell)
+[R-P8] interactive shell: /bin/sh (pid 1)
+type 'help' for commands; 'exit' to leave.
+solnix-riscv# help
+commands: echo <text>, hello, cat, help, exit
+solnix-riscv# echo hello world
+hello world
+solnix-riscv# hello
+[fork] pid 1 -> child pid 3
+hello from child: /bin/hello running in U-mode (pid 3)
+[exit] pid 3 exit(0)
+solnix-riscv# cat
+[fork] pid 1 -> child pid 4
+solnix riscv64 - the first illumos on RISC-V. R-P8: interactive, multi-process.
+[exit] pid 4 exit(0)
+solnix-riscv# exit
+sh: exit
+[exit] pid 1 exit(0)
+[init] reaped /sbin/init pid 1 status 0
+```
+
+- **Gate 1 (syscall set):** `syscall set OK: open/read/write/close`
+- **Gate 2 (fork/exec/wait):** `fork/exec/wait OK: child pid 2 exited status 0`
+- **Gate 3 (interactive shell):** `solnix-riscv#` prompt reads scripted console
+  input (help / echo / hello / cat / exit), runs builtins, and fork/execs the
+  `/bin/hello` + `/bin/cat` utils — a real shell driving multiple processes.
+
+Build: `src/riscv/uts/run-build.sh` (userland ELFs → `user_elfs.h`, then kernel
+`unix`); boot: `src/riscv/uts/rp8-run.sh` (timeout-wrapped, scripted input pipe,
+detached). Artifacts: `artifacts/riscv-port/rp8/` (`rp8-boot.log`, `unix-rp8`,
+`user_elfs.h`, `rp8-run.sh`, `rp8-traps-sample.log`).
+
+**Deliberate R-P8 scope (documented ceilings, each an R-P9 upgrade path):**
+- **fork is a full copy, not COW.** Correct + simple; O(pages) copies. COW off
+  the store page-fault handler is R-P9.
+- **wait is a cooperative spin-yield**, not a sleepq/wakeup channel. Correct
+  because the child runs on its own dispatched thread and reaches exit on a
+  yield; a real `sleep`/`wakeup` (turnstile/CV) is R-P9.
+- **No argv/envp across `execve`** (argc=0 in U-mode). The shell's `echo` is a
+  builtin that prints the line remainder; execed utils run with no args. Argv/
+  env/auxv on the user stack is R-P9.
+- **`curproc` is a global restored by the reaper** after each yield (not yet
+  per-thread). `satp` IS per-thread now (R-P8.3); a per-thread `curproc` (via
+  `tp`) is R-P9.
+- **No copyin/copyout fault handling.** SUM=1 lets the kernel touch user
+  pointers directly; fault-safe copyin/out (with a trap-catch) is R-P9.
+- **No signals, no session/pgrp/tty line discipline**; console read is
+  polled+blocking (no PLIC-driven RX yet, though the path is proven). fd table
+  is 8 slots; no dup/pipe/redirection.
+- **Userland ELFs are embedded in the kernel image** (`user_elfs.h`) and served
+  by the in-memory vfs registry. Reading them off a real on-disk FS on vioblk is
+  R-P9.
+
+### R-P8.7 Next: R-P9 (real libc/init/multiuser milestone + K1/K3 hardware)
+
+- **Real libc + a real init/multiuser:** replace the syscall-stub `libu.h` with
+  a freestanding libc slice; grow init toward SMF-style service start; argv/env/
+  auxv on the user stack; copyin/copyout with fault trap.
+- **COW fork + sleepq wait + signals:** copy-on-write off the store fault, a
+  `sleep`/`wakeup` channel for wait/blocking I/O, basic signal delivery.
+- **On-disk root + real exec-from-disk:** read `/sbin/init` and the utils off a
+  real FS on vioblk (grow the R-P7/R-P8 vfs into lookup/read on a disk image)
+  instead of embedding them.
+- **PLIC-driven console RX + async virtio + preemption:** route console RX and
+  virtio completions through `plic_extintr`; per-cpu dispatch + clock-tick
+  preemption (the K1/K3 kernel work) so multi-process is preemptive, not
+  cooperative.

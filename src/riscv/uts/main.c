@@ -137,6 +137,9 @@ putdec(unsigned long v)
 extern void startup(unsigned long dtb);
 extern int startup_ncpu;
 
+/* From proc.c: drive the cooperative dispatcher (R-P8 keeps userland running). */
+extern void thread_yield(void);
+
 /* Forward decl: the MI entry, called at the end of mlsetup. */
 static void main(void);
 
@@ -443,9 +446,18 @@ main(void)
 	    "single-user seam reached (see [R-P6] lines above).\n");
 	sbi_console_puts("[R-P6] next: R-P7 real VFS + read root image off "
 	    "vioblk + userland/init exec.\n");
-	sbi_console_puts("[R-P6] boot cpu is cpu0 idle thread; parking in idle "
-	    "(wfi); clock still ticking.\n");
+	sbi_console_puts("[R-P8] boot cpu is cpu0 idle thread; entering the "
+	    "dispatcher (yield loop) so userland runs.\n");
 
+	/*
+	 * R-P8: the boot cpu is cpu0's idle thread. Drive the cooperative
+	 * dispatcher by yielding forever — this runs the single-user reaper
+	 * thread, /sbin/init (U-mode), its forked children, and the interactive
+	 * shell. (R-P7 ran the single user process inline; R-P8's multi-process
+	 * model needs the scheduler kept alive here.) thread_yield wfi-idles when
+	 * nothing is runnable, so this is not a busy spin when userland blocks on
+	 * console input.
+	 */
 	for (;;)
-		__asm__ __volatile__("wfi");
+		thread_yield();
 }

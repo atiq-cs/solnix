@@ -20,6 +20,8 @@
  *   0:  ra   8:  sp   16: tp
  *   24: s0   32: s1   40: s2   48: s3   56: s4   64: s5
  *   72: s6   80: s7   88: s8   96: s9  104: s10 112: s11
+ *   120: satp  (R-P8: per-thread address space; restored on switch so a
+ *              kernel thread that yields mid-syscall resumes on its own AS)
  *
  * void rv_swtch(struct rv_context *old, struct rv_context *new);
  *   Save the current callee-saved context into *old, load *new, and return.
@@ -47,6 +49,7 @@
 #define	C_S9	96
 #define	C_S10	104
 #define	C_S11	112
+#define	C_SATP	120
 
 	.globl rv_swtch
 	.type rv_swtch, @function
@@ -67,6 +70,9 @@ rv_swtch:
 	sd	s9, C_S9(a0)
 	sd	s10, C_S10(a0)
 	sd	s11, C_S11(a0)
+	/* Save the current satp (R-P8 per-thread AS). */
+	csrr	t0, satp
+	sd	t0, C_SATP(a0)
 
 	/* Load new context from *new (a1). */
 	ld	ra, C_RA(a1)
@@ -84,6 +90,19 @@ rv_swtch:
 	ld	s9, C_S9(a1)
 	ld	s10, C_S10(a1)
 	ld	s11, C_S11(a1)
+
+	/*
+	 * Load the new thread's satp and flush the TLB. A satp of 0 means the
+	 * thread has no recorded AS yet (a freshly created thread before it runs
+	 * its body); skip the write so we keep the current (kernel) satp until
+	 * the body sets its own. All live threads carry a real satp (the kernel
+	 * satp for kernel threads, seeded at thread_create).
+	 */
+	ld	t0, C_SATP(a1)
+	beqz	t0, 1f
+	csrw	satp, t0
+	sfence.vma
+1:
 
 	/* Return into the new thread's ra. */
 	ret

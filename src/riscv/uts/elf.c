@@ -73,16 +73,19 @@ typedef struct {
 
 /*
  * elf_load — parse the ELF image at `img` (length `len`) and map its PT_LOAD
- * segments into `as`. On success writes the entry PC to *entryp and returns
- * the number of PT_LOAD segments mapped (>0). Returns -1 on a malformed or
- * unsupported image.
+ * segments into `as`. On success writes the entry PC to *entryp, the initial
+ * program break (highest mapped vaddr+memsz, page-rounded) to *brkp (if
+ * non-NULL — the exec/heap path uses it), and returns the number of PT_LOAD
+ * segments mapped (>0). Returns -1 on a malformed or unsupported image.
  */
 int
-elf_load(as_t *as, const void *img, unsigned long len, unsigned long *entryp)
+elf_load(as_t *as, const void *img, unsigned long len, unsigned long *entryp,
+    unsigned long *brkp)
 {
 	const Elf64_Ehdr *eh = (const Elf64_Ehdr *)img;
 	const unsigned char *base = (const unsigned char *)img;
 	int i, nload = 0;
+	unsigned long top = 0;
 
 	if (len < sizeof (Elf64_Ehdr)) {
 		sbi_console_puts("[elf] image too small\n");
@@ -157,6 +160,8 @@ elf_load(as_t *as, const void *img, unsigned long len, unsigned long *entryp)
 		sbi_console_putchar((perm & PTE_X) ? 'x' : '-');
 		sbi_console_puts("\n");
 		nload++;
+		if (ph->p_vaddr + ph->p_memsz > top)
+			top = ph->p_vaddr + ph->p_memsz;
 	}
 
 	if (nload == 0) {
@@ -164,5 +169,7 @@ elf_load(as_t *as, const void *img, unsigned long len, unsigned long *entryp)
 		return (-1);
 	}
 	*entryp = eh->e_entry;
+	if (brkp != 0)
+		*brkp = (top + PAGESIZE - 1) & ~(PAGESIZE - 1);
 	return (nload);
 }

@@ -262,17 +262,8 @@ usermode_entry:
 	.size usermode_entry, . - usermode_entry
 
 /*
- * uproc_enter_trampoline — landing pad for the rv_swtch INTO the userland
- * launch (uproc.c). rv_swtch restores s0=&uframe, s1=kstacktop (callee-saved),
- * then "returns" here. Move them into the a0/a1 usermode_entry expects and
- * tail-call it. usermode_entry does not return (it srets into U-mode).
+ * (R-P7's uproc_enter_trampoline was removed in R-P8: the multi-process model
+ * launches each user process on a normal kernel thread via thread_create ->
+ * rv_thread_start -> user_thread_body, which calls usermode_entry directly. No
+ * dedicated rv_swtch trampoline is needed anymore.)
  */
-	.globl uproc_enter_trampoline
-	.type uproc_enter_trampoline, @function
-uproc_enter_trampoline:
-	mv	a0, s0			/* &uframe */
-	mv	a1, s1			/* kstacktop */
-	call	usermode_entry
-1:	wfi
-	j	1b
-	.size uproc_enter_trampoline, . - uproc_enter_trampoline

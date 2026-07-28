@@ -24,7 +24,7 @@
 
 #include "sbi.h"
 #include "riscv_regs.h"
-#include "init_elf.h"
+#include "user_elfs.h"
 
 extern void kputdec(unsigned long v);
 extern void kputhex(unsigned long v);
@@ -36,8 +36,9 @@ extern int vioblk_present(void);
 extern void *thread_create(void (*entry)(void *), void *arg);
 extern void thread_yield(void);
 
-/* From uproc.c: exec a static ELF image as the first userland process. */
-extern int proc_exec_user(const char *path, const void *img, unsigned long len);
+/* From uproc.c: the R-P8 process model. */
+extern int proc_first(const char *path, const void *img, unsigned long len);
+extern int proc_waitpid(int pid, int *statusp);
 
 /*
  * ---------------------------------------------------------------------------
@@ -146,26 +147,41 @@ single_user_thread(void *arg)
 	sbi_console_puts("\nSINGLE USER MODE\n");
 
 	/*
-	 * R-P7: exec the real /sbin/init as a U-mode process. rootfs serves the
-	 * embedded static riscv64 ELF (init_elf[]); proc_exec_user builds a
-	 * fresh address space, loads the ELF, and drops to U-mode. It returns
-	 * when init exits (the interactive loop exits on 'q'). This is the
-	 * milestone: userland runs.
+	 * R-P8: spawn the real /sbin/init as a U-mode process on its OWN kernel
+	 * thread (proc_first), then wait for it (proc_waitpid). init runs the
+	 * syscall-set + fork/exec/wait gates, then execs the interactive shell;
+	 * it exits only when the shell exits. This kernel thread is the reaper:
+	 * proc_waitpid yields cooperatively so init + its children get
+	 * dispatched, then reaps init. This is the R-P8 milestone: userland is
+	 * interactive + multi-process.
 	 *
-	 * NOTE: init_elf[] is embedded in the kernel image (built by
-	 * user/build-init.sh). The disk is attached + proven readable (R-P6),
-	 * but the ramdisk root serves no file bytes yet, so R-P7 embeds init;
-	 * reading /sbin/init off vioblk into this buffer is the R-P8 upgrade.
+	 * NOTE: the userland ELFs (init/sh/hello/echo/cat) are embedded in the
+	 * kernel image (user/build-user.sh -> user_elfs.h) and served by the vfs
+	 * file registry. Reading them off a real on-disk FS on vioblk is R-P9.
 	 */
 	single_user_reached = 1;
 
-	(void) proc_exec_user("/sbin/init", init_elf, init_elf_len);
+	{
+		int pid = proc_first("/sbin/init", init_elf, init_elf_len);
+		int st = 0, rpid;
 
-	sbi_console_puts("\n[init] /sbin/init returned to kernel; dropping to "
-	    "single-user shell stub\n");
+		if (pid < 0) {
+			sbi_console_puts("[init] proc_first(/sbin/init) "
+			    "FAILED\n");
+		} else {
+			rpid = proc_waitpid(-1, &st);
+			sbi_console_puts("\n[init] reaped /sbin/init pid ");
+			kputdec((unsigned long)rpid);
+			sbi_console_puts(" status ");
+			kputdec((unsigned long)st);
+			sbi_console_puts("\n");
+		}
+	}
+
+	sbi_console_puts("\n[init] /sbin/init exited; single-user shell stub\n");
 	sbi_console_puts("\n# ");	/* the single-user shell prompt */
 
-	/* No further console loop wired in the kernel (R-P8): yield forever. */
+	/* No further console loop wired in the kernel: yield forever. */
 	thread_yield();
 	for (;;)
 		thread_yield();
@@ -204,4 +220,80 @@ const char *
 rootdev_name(void)
 {
 	return (rootvfs.vfs_mounted ? rootvfs.vfs_dev : "(none)");
+}
+
+/*
+ * ---------------------------------------------------------------------------
+ * R-P8 file registry: a fixed table mapping a path to file bytes. It serves
+ * two roles: (1) regular files userland can open()+read() (e.g. /etc/motd),
+ * and (2) executable images exec() loads (the embedded userland ELFs). This is
+ * the pared vfs "namei/lookup + read" the R-P8 syscalls need; a real on-disk FS
+ * read off vioblk is the R-P9 upgrade.
+ * ---------------------------------------------------------------------------
+ */
+static const char motd[] =
+    "solnix riscv64 - the first illumos on RISC-V. R-P8: interactive, "
+    "multi-process.\n";
+
+struct vfile {
+	const char	*f_path;
+	const void	*f_data;
+	unsigned long	f_len;
+};
+
+static const struct vfile vfiles[] = {
+	{ "/etc/motd",  motd,      sizeof (motd) - 1 },
+	{ "/sbin/init", init_elf,  0 },		/* f_len filled at init */
+	{ "/bin/sh",    sh_elf,    0 },
+	{ "/bin/hello", hello_elf, 0 },
+	{ "/bin/echo",  echo_elf,  0 },
+	{ "/bin/cat",   cat_elf,   0 },
+};
+#define NVFILES (int)(sizeof (vfiles) / sizeof (vfiles[0]))
+
+/* The ELF lengths are sizeof() of generated arrays; fill a parallel table
+ * (can't use sizeof in a static initializer of a const void*). */
+static unsigned long vfile_len[NVFILES];
+static int vfiles_ready;
+
+static void
+vfiles_init(void)
+{
+	if (vfiles_ready)
+		return;
+	vfile_len[0] = vfiles[0].f_len;		/* motd: real length above */
+	vfile_len[1] = init_elf_len;
+	vfile_len[2] = sh_elf_len;
+	vfile_len[3] = hello_elf_len;
+	vfile_len[4] = echo_elf_len;
+	vfile_len[5] = cat_elf_len;
+	vfiles_ready = 1;
+}
+
+static int
+str_eq(const char *a, const char *b)
+{
+	while (*a && *a == *b) { a++; b++; }
+	return (*a == *b);
+}
+
+/*
+ * vfs_lookup — resolve `path` to its bytes. Returns 1 and fills datap/lenp on
+ * a hit, 0 on miss. Used by the open/read syscall path (regular files) and the
+ * exec syscall path (ELF images).
+ */
+int
+vfs_lookup(const char *path, const void **datap, unsigned long *lenp)
+{
+	int i;
+
+	vfiles_init();
+	for (i = 0; i < NVFILES; i++) {
+		if (str_eq(path, vfiles[i].f_path)) {
+			*datap = vfiles[i].f_data;
+			*lenp = vfile_len[i];
+			return (1);
+		}
+	}
+	return (0);
 }

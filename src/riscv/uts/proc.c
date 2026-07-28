@@ -35,12 +35,16 @@ extern void kmem_free(void *buf, unsigned long size);
 /* Shared console helpers (startup.c). */
 extern void kputdec(unsigned long v);
 
+/* hat: the shared kernel satp (kernel threads run on it). */
+extern unsigned long hat_kernel_satp(void);
+
 /* The asm context switch + new-thread trampoline (swtch.S). */
 struct rv_context {
 	unsigned long c_ra;
 	unsigned long c_sp;
 	unsigned long c_tp;
 	unsigned long c_s[12];		/* s0..s11 */
+	unsigned long c_satp;		/* per-thread satp (R-P8 multi-AS) */
 };
 extern void rv_swtch(struct rv_context *old, struct rv_context *new);
 extern void rv_thread_start(void);
@@ -188,6 +192,12 @@ thread_create(void (*entry)(void *), void *arg)
 	t->t_ctx.c_ra = (unsigned long)rv_thread_start;	/* first "return" */
 	t->t_ctx.c_sp = sp;
 	t->t_ctx.c_tp = (unsigned long)t;		/* tp = curthread hook */
+	/*
+	 * New threads start on the kernel address space (the creator's, which is
+	 * the kernel satp). A user-process thread body switches to its own AS as
+	 * its first act; the saved satp then follows it across future switches.
+	 */
+	t->t_ctx.c_satp = hat_kernel_satp();
 
 	runq_enqueue(t);
 	return (t);
@@ -244,7 +254,10 @@ thread_yield(void)
 
 /*
  * thread_exit — terminate the current thread and switch away for good. Called
- * from rv_thread_start if a thread's entry returns.
+ * from rv_thread_start if a thread's entry returns, and from proc_exit when a
+ * user process exits. The DEAD thread's kthread_t + stack are NOT freed here
+ * (we are still running on that stack); thread_reap frees them later, once the
+ * thread is no longer current (a parent reaps its exited child in wait).
  */
 void
 thread_exit(void)
@@ -258,6 +271,34 @@ thread_exit(void)
 	/* Never reached. */
 	for (;;)
 		__asm__ __volatile__("wfi");
+}
+
+/*
+ * curthread_id — the current thread's id (for proc bookkeeping / diagnostics).
+ */
+int
+curthread_id(void)
+{
+	kthread_t *self = curthread[this_cpu()];
+	return (self != 0 ? self->t_id : 0);
+}
+
+/*
+ * thread_reap — free a DEAD thread's kthread_t + kernel stack. Called by the
+ * reaper (proc_waitpid) after the thread has exited (TS_DEAD) and is no longer
+ * running on any cpu, so its stack is safe to reclaim. A no-op for a NULL or
+ * not-yet-dead thread (defensive).
+ */
+void
+thread_reap(kthread_t *t)
+{
+	if (t == 0)
+		return;
+	if (t->t_state != TS_DEAD)
+		return;		/* still runnable/onproc: not safe to free */
+	if (t->t_stack != 0)
+		kmem_free(t->t_stack, t->t_stacksize);
+	kmem_free(t, sizeof (kthread_t));
 }
 
 /*
