@@ -59,8 +59,11 @@ using std::isfinite; using std::isnormal; using std::fpclassify;
 MATHNSEOF
   export CXXFLAGS="$CXXFLAGS -include /var/tmp/cxx_mathns_illumos.$$.h"
 fi
-# LDVERSCRIPT_STRIP=1: interpose a CC/CXX shim that filters GNU --version-script
-#   out of the link (Solaris ld rejects it; symbols keep default global scope).
+# LDVERSCRIPT_STRIP=1: interpose a CC/CXX shim that filters GNU link options
+#   Solaris ld rejects out of the link. Handles --version-script (symbols keep
+#   default global scope) AND GNU --as-needed/--no-as-needed (Solaris ld links
+#   needed-only by default, so dropping them is harmless). Python's libpython3.so
+#   compat rule and many autotools libtool links pass --no-as-needed.
 if [ "${LDVERSCRIPT_STRIP:-}" = 1 ]; then
   _shim=/var/tmp/ldshim.$$; mkdir -p "$_shim"
   for _pair in "cc:$CC" "cxx:$CXX"; do
@@ -72,8 +75,12 @@ for x in "\$@"; do
   if [ "\$_skip" = 1 ]; then _skip=0; continue; fi
   case "\$x" in
     -Wl,--version-script,*|-Wl,--version-script) continue ;;
+    -Wl,--version-script=*) continue ;;
+    -Wl,-M,*|-Wl,-M) continue ;;
     --version-script=*) continue ;;
     --version-script) _skip=1; continue ;;
+    -Wl,--no-as-needed|-Wl,--as-needed) continue ;;
+    --no-as-needed|--as-needed) continue ;;
   esac
   _a="\$_a \$x"
 done
