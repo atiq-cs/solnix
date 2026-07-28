@@ -6,3 +6,6 @@ result-*
 *.img
 artifacts/seed/seed.tar.zst
 *.tar.zst
+*.iso
+src/riscv/uts/*.o
+src/riscv/uts/unix

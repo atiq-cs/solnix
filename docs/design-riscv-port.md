@@ -431,3 +431,93 @@ Phasing R-P1..R-P7 in .kiro/specs/solnix-riscv/. Each phase has a runnable QEMU
 gate. R-P1 (toolchain target + riscv-gate scaffold) starts NOW; R-P2 is the first
 `unix` banner in S-mode under OpenSBI on qemu virt (the real "first illumos riscv
 kernel instruction" milestone).
+
+---
+
+## R-P2 — first illumos RISC-V kernel banner in S-mode under OpenSBI (DONE, 2026-07-28)
+
+**MILESTONE MET.** The first illumos RISC-V kernel instruction has executed. A
+minimal `unix` S-mode payload boots under OpenSBI on
+`qemu-system-riscv64 -machine virt` and prints an illumos SunOS banner via the
+SBI console. This is the historic "first illumos on RISC-V" gate and the
+foundation for R-P3 (trap/MMU/interrupts).
+
+Sources (`src/riscv/uts/`, archived to `solnix.io archive/riscv/` +
+`~/ws/solnix-archive/riscv/`):
+- `locore.S` — S-mode MD kernel entry (illumos locore idiom, adapted for riscv S-mode).
+- `sbi.c` / `sbi.h` — SBI console layer (DBCN + legacy putchar, ecall ABI).
+- `main.c` — C kernel entry; prints the banner (freestanding, no libc).
+- `riscv.ld` — links `_start` at 0x80200000 (OpenSBI's default S-mode payload addr).
+- `build-unix.sh` — freestanding build + timeout-wrapped OpenSBI boot.
+
+### R-P2.1 The S-mode entry contract (established here — reusable for R-P3+)
+
+OpenSBI (M-mode firmware / SBI runtime), after firmware init, jumps the S-mode
+payload (our `unix`) per the OpenSBI/SBI boot convention:
+
+| Item | Value | Notes |
+|------|-------|-------|
+| Privilege | **Supervisor (S-mode)** | M-mode is OpenSBI's; all firmware services via SBI ecall. We never touch mhartid/mstatus. |
+| Load / jump addr | **0x80200000** | OpenSBI default S-mode payload address on qemu virt. OpenSBI firmware itself lives at 0x80000000..~0x80080000. Confirmed by OpenSBI's own `Domain0 Next Address: 0x80200000`. |
+| `a0` | **boot hartid** | The boot hart's ID (0 on single-hart virt). |
+| `a1` | **DTB phys addr** | Flattened devicetree blob. Confirmed: OpenSBI `Next Arg1: 0x87e00000` == the value our banner printed. |
+| `satp` | **0 (bare)** | MMU off; VA == PA until the Sv39 HAT (R-P3). |
+| `sstatus.SIE` | **clear** | S-mode interrupts off; we also mask `sie` and set a defensive `stvec` in locore. |
+
+C entry prototype: `void main(unsigned long hartid, unsigned long dtb);`
+locore preserves a0/a1 across stack+BSS setup (mirrors how uts/aarch64 preserves
+the x0 DTB pointer into mlsetup).
+
+### R-P2.2 The SBI console recipe (the illumos-correct S-mode path)
+
+SBI ecall ABI: `a7 = EID`, `a6 = FID`, `a0..a5 = args`, `ecall` traps to M-mode,
+returns `a0 = error`, `a1 = value`. Two console paths, DBCN preferred:
+
+1. **DBCN debug console** (EID `0x4442434E`, FID 0 = console_write of
+   `(len, addr_lo, addr_hi)`). The modern, non-deprecated path. We probe it via
+   **SBI Base** (EID `0x10`, FID 3 = probe_extension); OpenSBI v1.5.1 on qemu
+   virt reports it present, so this is the live path (banner shows
+   `console path: SBI DBCN (0x4442434E)`).
+2. **Legacy putchar** (EID `0x01`, char in a0, no FID) — universal fallback if
+   DBCN is absent.
+
+Raw NS16550A MMIO at 0x10000000 (as in `hello.S`) was NOT needed — the SBI path
+worked first try, which is the correct S-mode idiom (the kernel asks firmware,
+it does not poke the UART directly once under OpenSBI).
+
+### R-P2.3 Result — SUCCESS (verbatim console)
+
+```
+SunOS Release 5.11 Version solnix-riscv64 (first illumos on RISC-V)
+Copyright (c) solnix -- the first illumos RISC-V port (R-P2 bring-up)
+
+riscv64 S-mode kernel entry reached under OpenSBI:
+  boot hart id (a0) : 0
+  devicetree  (a1)  : 0x0000000087e00000
+  console path      : SBI DBCN (0x4442434E)
+
+[R-P2] first illumos RISC-V kernel instruction executed. Parking boot hart.
+[R-P2] next: R-P3 trap vector (stvec) + Sv39 HAT + timer -> mlsetup/main.
+```
+
+Full log: `artifacts/riscv-port/unix-qemu-boot.log` (also `solnix.io
+archive/riscv/unix-qemu-boot.log`, fetch-verified HTTP 200, sha-matched).
+Environment: dev box, qemu 10.1.5, OpenSBI v1.5.1 (qemu's bundled fw_dynamic),
+riscv64-none-elf gcc 14.3.0 / binutils 2.44 (nixpkgs pkgsCross.riscv64-embedded).
+Every qemu run was `timeout`-wrapped and detached (no wedge).
+
+### R-P2.4 Next: R-P3 (trap + MMU + timer)
+
+The R-P2 `locore.S` already installs a defensive `stvec` (Direct mode, points at
+a `trap_park` halt). R-P3 replaces `trap_park` with a real trap vector:
+- **Trap frame + dispatch:** save GPRs + `sstatus`/`sepc`/`scause`/`stval` on
+  entry, decode `scause` (interrupt vs exception, cause code), call a C
+  `trap()`; restore + `sret`. (NetBSD `riscv/locore.S` exception path + illumos
+  `trap()` idiom.)
+- **Sv39 HAT:** build a 3-level Sv39 page table, identity/kernel map, load
+  `satp` (MODE=8 Sv39 + ASID + root PPN), `sfence.vma`. First real `hat_riscv`.
+- **Timer:** read the `time` CSR (`rdtime`) for `gethrtime`; arm the next tick
+  via SBI timer (EID `0x54494D45` "TIME", FID 0 = set_timer) — the SBI layer in
+  `sbi.c` extends here.
+- Together these let bring-up progress from the banner to a real
+  `mlsetup`/`main` with traps handled and VM online (the R-P3 gate).
