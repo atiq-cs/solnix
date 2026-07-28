@@ -23,7 +23,7 @@
  *   KERNELBASE + HEAP_VA_OFFSET .. +SIZE    : the kmem heap VA arena (this file)
  * The proof page and the heap do not overlap.
  *
- * ponytail: power-of-two classes + single-page slabs + one global lock. The
+ * NOTE: power-of-two classes + single-page slabs + one global lock. The
  * real kmem_cache (arbitrary object sizes, per-cpu magazines, slab coloring)
  * is R-P6+. Upgrade when allocation pressure or fragmentation shows.
  */
@@ -242,7 +242,7 @@ kmem_free(void *buf, unsigned long size)
 
 	cls = size_to_class(size);
 	if (cls < 0) {
-		/* ponytail: large page-run frees leak VA in R-P5 (no vmem free
+		/* NOTE: large page-run frees leak VA in R-P5 (no vmem free
 		 * list yet). Add a vmem span free list when large allocs churn. */
 		return;
 	}

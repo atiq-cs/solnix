@@ -17,7 +17,7 @@
  * works. This file also hosts the shared decimal/hex console helpers used by
  * the R-P5 subsystems (kputdec/kputhex), so each .c does not duplicate them.
  *
- * ponytail: startup here is a linear "bring up + prove" sequence, not the full
+ * NOTE: startup here is a linear "bring up + prove" sequence, not the full
  * illumos multi-phase startup (kvseg/segkmem/mod_setup/vfs). It is the honest
  * MD->MI seam for R-P5; R-P6 grows it toward mounting root + module load.
  */

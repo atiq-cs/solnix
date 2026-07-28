@@ -49,7 +49,7 @@ static volatile int timer_periodic = 0;		/* 1 = rearm each tick */
  * under it. This is one flat table walked O(n) per tick — fine for a handful of
  * callouts at bring-up.
  *
- * ponytail: O(n) table scan per tick, fixed CALLOUT_MAX slots. Replace with the
+ * NOTE: O(n) table scan per tick, fixed CALLOUT_MAX slots. Replace with the
  * hashed callout wheel when callout count grows.
  */
 #define	CALLOUT_MAX	16

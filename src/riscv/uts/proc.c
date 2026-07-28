@@ -19,7 +19,7 @@
  * yield to the other several times through swtch — proving genuine scheduling
  * (stacks + PC + callee-saved state switch and resume correctly).
  *
- * ponytail: ONE global runq + one global lock, cooperative (yield-driven, not
+ * NOTE: ONE global runq + one global lock, cooperative (yield-driven, not
  * preemptive), boot-cpu dispatch only. illumos has per-cpu dispatch queues,
  * priorities, preemption off the clock tick, and load balancing. Upgrade path:
  * per-cpu runq + clock-driven preempt + priority bands (R-P6).

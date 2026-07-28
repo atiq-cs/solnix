@@ -25,7 +25,7 @@
  * overlap: boot pages (page tables) came from below the watermark; every page
  * page_alloc hands out is above it and tracked by a page_t.
  *
- * ponytail: LIFO free list + one global lock — fine for bring-up; illumos uses
+ * NOTE: LIFO free list + one global lock — fine for bring-up; illumos uses
  * per-cpu magazines + NUMA freelists. Upgrade when contention shows.
  */
 
