@@ -101,6 +101,21 @@ sd=$(find "$w" -maxdepth 1 -mindepth 1 -type d ! -name 'PaxHeaders*' ! -name '@P
 [ -d "$sd" ] || { echo "RESULT	$pname	FAIL	untar"; exit 1; }
 out="$w/out"; mkdir -p "$out"
 
+# GNULIBFIX=1 (wave23): apply Family-1 gnulib getlocalename_l const-qualify sweep
+#   to the native oi-clib path (mirrors packages.nix gnulibFix). illumos libc
+#   declares `const char *getlocalename_l(...)`; gnulib redeclares it non-const.
+#   Idempotent, safe-if-absent; sweeps every vintage of the file across lib/.
+if [ "${GNULIBFIX:-}" = 1 ]; then
+  find "$sd" -type f \( -name 'localename*.c' -o -name 'localename*.h' \
+      -o -name 'getlocalename_l*.c' -o -name 'getlocalename_l*.h' \
+      -o -name 'setlocale_null*.c' \) 2>/dev/null | while read -r gf; do
+    # match `char *getlocalename_l` and `char * getlocalename_l`, with/without extern
+    sed -i 's/\(char[[:space:]]*\*[[:space:]]*\)getlocalename_l/const \1getlocalename_l/g' "$gf" 2>/dev/null || true
+    # collapse an accidental double-const from re-runs (idempotent)
+    sed -i 's/const const /const /g' "$gf" 2>/dev/null || true
+  done
+fi
+
 log="$w/.build.log"
 (
   cd "$sd"
