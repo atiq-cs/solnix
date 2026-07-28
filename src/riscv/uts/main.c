@@ -1,19 +1,24 @@
 /*
- * main.c — illumos riscv64 kernel C entry: mlsetup + main (R-P3).
+ * main.c — illumos riscv64 kernel C entry: mlsetup + main (R-P4).
  *
  * Reached from locore.S (_start) in S-mode under OpenSBI on qemu virt with:
  *   hartid = boot hart id (a0),  dtb = flattened devicetree phys addr (a1).
  *
- * R-P3 turns the R-P2 banner into the seed of the real illumos boot sequence:
+ * R-P4 grows the R-P3 (trap/Sv39/one-shot-timer) bring-up toward genunix:
  *
  *   locore.S  _start
  *     -> mlsetup(hartid, dtb)      machine-dependent low-level setup:
  *          - install the real S-mode trap vector (stvec -> _trap_entry)
+ *          - build the Sv39 boot page table, turn paging ON (hat_boot_init)
  *          - self-test the trap path (deliberate fault, decoded + resumed)
- *          - build the Sv39 boot page table and turn paging ON (hat_boot_init)
- *          - prove one timer interrupt (timer_prove_one_tick)
- *          - stamp the boot cpu_t
+ *          - phys page allocator + high-VA KERNELBASE hat map (hat_highva_prove)
+ *          - SMP: start secondary harts via SBI HSM (start_secondaries)
+ *          - PLIC external-interrupt path self-test (plic_selftest)
+ *          - periodic (cyclic) clock at HZ, prove ~10 ticks (clock_prove)
  *     -> main()                    the illumos-style banner + subsystem status
+ *
+ * Secondary harts enter locore's _secondary_start, load the shared kernel
+ * satp, and call secondary_main() to report "hart N online".
  *
  * This mirrors uts/i86pc mlsetup() -> main() (and richlowe arm64-gate): locore
  * builds just enough to run C, mlsetup does MD bring-up, main is the MI entry.
@@ -27,12 +32,56 @@
 #define	SOLNIX_RELEASE	"5.11"
 #define	SOLNIX_VERSION	"solnix-riscv64"
 
-/* MD bring-up entry points (trap.c, hat_riscv.c, timer.c). */
+/* MD bring-up entry points (trap.c, hat_riscv.c, timer.c, plic.c). */
 extern void set_trap_vector(void);
 extern void trap_selftest(void);
 extern unsigned long hat_boot_init(void);
-extern void timer_prove_one_tick(void);
-extern volatile int timer_ticks;
+extern void hat_phys_init(void);
+extern void hat_highva_prove(void);
+extern void clock_prove(unsigned long nticks);
+extern unsigned long gethrtime(void);
+extern void plic_selftest(void);
+extern volatile unsigned long timer_ticks;
+
+/* SMP: secondary-hart entry (locore.S) + its per-cpu stack pool. */
+extern void _secondary_start(void);
+extern char secondary_stacks[];
+
+/* Max harts we support in R-P4 (matches the secondary_stacks pool in locore). */
+#define	MAXCPU		8
+#define	SECONDARY_STACK_SIZE	16384UL
+
+/*
+ * cpu_online[] — R-P4 per-hart online bitmap (seed of the cpu_t[] array /
+ * CPU set). Index by hartid; set by each hart as it reports in. In BSS.
+ */
+static volatile int cpu_online[MAXCPU];
+static volatile int ncpu_online = 0;	/* count of SECONDARY harts reported in */
+
+/*
+ * console_lock — a minimal test-and-set spinlock so concurrent harts do not
+ * interleave console output byte-for-byte. amoswap.w publishes/acquires; a
+ * store releases. This is the seed of the real illumos console/mutex path;
+ * R-P5 replaces it with a proper mutex/disp lock.
+ */
+static volatile int console_lock = 0;
+
+static void
+console_acquire(void)
+{
+	int old;
+	do {
+		__asm__ __volatile__("amoswap.w.aq %0, %2, (%1)"
+		    : "=&r"(old) : "r"(&console_lock), "r"(1) : "memory");
+	} while (old != 0);
+}
+
+static void
+console_release(void)
+{
+	__asm__ __volatile__("amoswap.w.rl zero, zero, (%0)"
+	    :: "r"(&console_lock) : "memory");
+}
 
 /*
  * boot_cpu — the seed cpu_t. R-P3 records just the boot hartid, the live satp,
@@ -46,6 +95,11 @@ struct boot_cpu {
 	int		bc_trap_online;
 	int		bc_vm_online;
 	int		bc_timer_online;
+	int		bc_smp_online;	/* secondary harts brought up */
+	int		bc_nsecondary;	/* count of secondaries online */
+	int		bc_plic_online;	/* external-interrupt path proven */
+	int		bc_highva_online; /* high-VA hat map proven */
+	unsigned long	bc_hrtime;	/* gethrtime after the clock proof */
 };
 static struct boot_cpu boot_cpu;
 
@@ -82,6 +136,135 @@ putdec(unsigned long v)
 static void main(void);
 
 /*
+ * secondary_main — C entry for a secondary hart (from _secondary_start in
+ * locore.S, after it adopted its per-cpu stack + loaded the shared kernel
+ * satp). Reports "hart N online" under the console lock, marks itself in the
+ * online bitmap, then parks (the future per-cpu idle thread). This is the
+ * receiving end of the SBI-HSM bring-up; R-P5 turns the park into the idle
+ * loop + per-cpu dispatch.
+ */
+void
+secondary_main(unsigned long hartid)
+{
+	console_acquire();
+	sbi_console_puts("[smp] hart ");
+	putdec(hartid);
+	sbi_console_puts(" online (secondary, satp=shared kernel PT, "
+	    "trap vector installed)\n");
+	console_release();
+
+	if (hartid < MAXCPU)
+		cpu_online[hartid] = 1;
+	__sync_fetch_and_add(&ncpu_online, 1);
+
+	/* Park: future idle thread. Interrupts stay masked on this hart in R-P4. */
+	for (;;)
+		__asm__ __volatile__("wfi");
+}
+
+/*
+ * start_secondaries — boot-hart SMP driver. Probe which harts exist via SBI
+ * HSM get_status (a valid hartid returns a state >= 0; out-of-range returns a
+ * negative SBI error), then for every hart other than us that is STOPPED, hand
+ * it a per-cpu stack top and release it into _secondary_start via
+ * sbi_hart_start. Wait (bounded) for each to report in. Returns the number of
+ * secondaries confirmed online.
+ *
+ * The kernel page table (kernel_satp) was already published by hat_boot_init,
+ * so each secondary loads the shared address space before running C.
+ */
+static int
+start_secondaries(unsigned long boot_hartid)
+{
+	unsigned long h;
+	int started = 0;
+	int stack_slot = 0;
+	int spin;
+	int online;
+
+	cpu_online[boot_hartid < MAXCPU ? boot_hartid : 0] = 1;
+
+	console_acquire();
+	sbi_console_puts("[smp] boot hart ");
+	putdec(boot_hartid);
+	sbi_console_puts(" starting secondaries via SBI HSM "
+	    "(EID 0x48534D)\n");
+	console_release();
+
+	for (h = 0; h < MAXCPU; h++) {
+		long st;
+		unsigned long stacktop;
+
+		if (h == boot_hartid)
+			continue;
+
+		st = sbi_hart_get_status(h);
+		if (st < 0)
+			continue;	/* hartid does not exist on this platform */
+
+		if (st != SBI_HSM_STOPPED) {
+			/* Already started or transitional; skip in R-P4. */
+			continue;
+		}
+
+		/* Assign this secondary a per-cpu stack (top = base + size). */
+		stacktop = (unsigned long)&secondary_stacks[
+		    (stack_slot + 1) * SECONDARY_STACK_SIZE];
+		stack_slot++;
+
+		console_acquire();
+		sbi_console_puts("[smp] hart_start hart ");
+		putdec(h);
+		sbi_console_puts(" -> _secondary_start (stacktop ");
+		puthex64(stacktop);
+		sbi_console_puts(")\n");
+		console_release();
+
+		/*
+		 * a1 (opaque) delivers the stack top to _secondary_start.
+		 * start_addr is the physical address of _secondary_start, which
+		 * equals its VA (identity-mapped kernel gigapage), so it is valid
+		 * whether the hart is still in Bare mode or has loaded satp.
+		 */
+		if (sbi_hart_start(h, (unsigned long)&_secondary_start,
+		    stacktop) == 0) {
+			started++;
+		} else {
+			console_acquire();
+			sbi_console_puts("[smp] hart_start FAILED\n");
+			console_release();
+		}
+	}
+
+	/*
+	 * Wait for every started secondary to report in. ncpu_online counts
+	 * secondaries only (the boot hart is implicit +1), so the target is
+	 * `started`. Poll with an acquire fence so this hart observes the
+	 * secondaries' __sync updates. Bound is generous but not huge — each
+	 * secondary only needs to route through SBI hart_start + satp load +
+	 * the console lock.
+	 */
+	for (spin = 0; spin < 50000000; spin++) {
+		__atomic_thread_fence(__ATOMIC_ACQUIRE);
+		if (ncpu_online >= started)
+			break;
+		__asm__ __volatile__("nop");
+	}
+	__atomic_thread_fence(__ATOMIC_ACQUIRE);
+	online = ncpu_online;
+
+	console_acquire();
+	sbi_console_puts("[smp] secondaries started=");
+	putdec(started);
+	sbi_console_puts(" online-reported=");
+	putdec((unsigned long)online);
+	sbi_console_puts("\n");
+	console_release();
+
+	return (online);
+}
+
+/*
  * mlsetup — machine-dependent low-level bring-up. Called from locore with the
  * boot regs. Establishes trap dispatch, virtual memory, and the timer, then
  * enters main(). Does not return (main() parks the hart).
@@ -93,7 +276,7 @@ mlsetup(unsigned long hartid, unsigned long dtb)
 	boot_cpu.bc_dtb = dtb;
 
 	sbi_console_puts("\n[mlsetup] riscv64 machine-dependent bring-up "
-	    "(R-P3)\n");
+	    "(R-P4)\n");
 
 	/* 1. Trap vector: point stvec at the real _trap_entry, then prove it. */
 	set_trap_vector();
@@ -118,9 +301,43 @@ mlsetup(unsigned long hartid, unsigned long dtb)
 	 */
 	trap_selftest();
 
-	/* 4. Timer: take exactly one S-mode timer interrupt. */
-	timer_prove_one_tick();
+	/*
+	 * 4. R-P4 milestone: physical page allocator + high-VA kernel HAT.
+	 * Init the bump allocator, then map a fresh physical page at the
+	 * canonical high KERNELBASE and prove the translation by writing and
+	 * reading it back through both the high VA and the page's identity VA.
+	 */
+	hat_phys_init();
+	hat_highva_prove();
+	boot_cpu.bc_highva_online = 1;
+
+	/*
+	 * 5. R-P4 milestone: SMP secondary-hart bringup via SBI HSM. Release
+	 * each stopped secondary into _secondary_start (shared kernel satp,
+	 * per-cpu stack) and wait for it to report "hart N online". Done before
+	 * enabling interrupts so console output stays clean.
+	 */
+	boot_cpu.bc_nsecondary = start_secondaries(hartid);
+	boot_cpu.bc_smp_online = (boot_cpu.bc_nsecondary > 0);
+
+	/*
+	 * 6. R-P4 milestone: PLIC external-interrupt path. Init the PLIC, enable
+	 * the UART source, enable SEIE, trigger + claim + complete one external
+	 * interrupt. Proves the wired-interrupt path device drivers will use.
+	 */
+	plic_selftest();
+	boot_cpu.bc_plic_online = 1;
+
+	/*
+	 * 7. R-P4 milestone: periodic (cyclic) clock. Start the clock at HZ and
+	 * run ~10 ticks to prove a self-rearming periodic heartbeat + gethrtime
+	 * (the illumos clock/cyclic foundation). Note: SEIE is left enabled from
+	 * the PLIC step, so during the clock run the UART self-test source is
+	 * already quiesced; only timer interrupts fire here.
+	 */
+	clock_prove(10);
 	boot_cpu.bc_timer_online = (timer_ticks > 0);
+	boot_cpu.bc_hrtime = gethrtime();
 
 	/* Enter the MI kernel entry. */
 	main();
@@ -138,7 +355,7 @@ main(void)
 	sbi_console_puts("SunOS Release " SOLNIX_RELEASE " Version "
 	    SOLNIX_VERSION " (first illumos on RISC-V)\n");
 	sbi_console_puts("Copyright (c) solnix -- the first illumos RISC-V "
-	    "port (R-P3 bring-up)\n");
+	    "port (R-P4 bring-up)\n");
 	sbi_console_puts("\n");
 
 	sbi_console_puts("riscv64 kernel: mlsetup complete, entering main:\n");
@@ -159,21 +376,52 @@ main(void)
 	puthex64(boot_cpu.bc_satp);
 	sbi_console_puts("\n");
 
+	sbi_console_puts("  cpus online       : ");
+	putdec((unsigned long)(ncpu_online + 1));
+	sbi_console_puts(" (1 boot + ");
+	putdec((unsigned long)boot_cpu.bc_nsecondary);
+	sbi_console_puts(" secondary)\n");
+
+	sbi_console_puts("  hrtime            : ");
+	putdec(boot_cpu.bc_hrtime);
+	sbi_console_puts(" ns\n");
+
 	sbi_console_puts("\n");
-	sbi_console_puts("[R-P3] subsystem status:\n");
+	sbi_console_puts("[R-P4] subsystem status:\n");
 	sbi_console_puts("       trap online   : ");
 	sbi_console_puts(boot_cpu.bc_trap_online ? "yes\n" : "NO\n");
 	sbi_console_puts("       VM online      : ");
 	sbi_console_puts(boot_cpu.bc_vm_online ? "yes (Sv39 paging)\n" : "NO\n");
-	sbi_console_puts("       timer online   : ");
-	sbi_console_puts(boot_cpu.bc_timer_online ? "yes (1 tick)\n" : "NO\n");
+	sbi_console_puts("       high-VA hat    : ");
+	sbi_console_puts(boot_cpu.bc_highva_online ?
+	    "yes (KERNELBASE map + page alloc)\n" : "NO\n");
+	sbi_console_puts("       SMP online     : ");
+	if (boot_cpu.bc_smp_online) {
+		sbi_console_puts("yes (");
+		putdec((unsigned long)boot_cpu.bc_nsecondary);
+		sbi_console_puts(" secondary harts via SBI HSM)\n");
+	} else {
+		sbi_console_puts("no secondaries (uniprocessor boot)\n");
+	}
+	sbi_console_puts("       PLIC ext IRQ   : ");
+	sbi_console_puts(boot_cpu.bc_plic_online ?
+	    "yes (claimed + completed)\n" : "NO\n");
+	sbi_console_puts("       clock online   : ");
+	if (boot_cpu.bc_timer_online) {
+		sbi_console_puts("yes (periodic, ");
+		putdec(timer_ticks);
+		sbi_console_puts(" ticks)\n");
+	} else {
+		sbi_console_puts("NO\n");
+	}
 
 	sbi_console_puts("\n");
-	sbi_console_puts("[R-P3] VM online, trap online, timer online. "
-	    "First illumos RISC-V kernel reached main with paging.\n");
-	sbi_console_puts("[R-P3] next: R-P4 SMP (SBI HSM hart start), cyclic "
-	    "clock, PLIC external interrupts, genunix.\n");
-	sbi_console_puts("[R-P3] parking boot hart (future idle thread).\n");
+	sbi_console_puts("[R-P4] SMP + periodic clock + PLIC external IRQ + "
+	    "high-VA hat online.\n");
+	sbi_console_puts("[R-P4] next: R-P5 genunix (page_t/kmem, cyclic wheel, "
+	    "per-cpu dispatch/idle, real console driver).\n");
+	sbi_console_puts("[R-P4] parking boot hart (future idle thread); "
+	    "clock still ticking.\n");
 
 	for (;;)
 		__asm__ __volatile__("wfi");

@@ -521,3 +521,297 @@ a `trap_park` halt). R-P3 replaces `trap_park` with a real trap vector:
   `sbi.c` extends here.
 - Together these let bring-up progress from the banner to a real
   `mlsetup`/`main` with traps handled and VM online (the R-P3 gate).
+
+---
+
+## R-P3 — trap vector + Sv39 paging + timer → mlsetup/main (DONE, 2026-07-28)
+
+**Milestone R-P3 — DONE, all three gates verified on `qemu-system-riscv64
+-machine virt` under OpenSBI (fw v2.0).** The first illumos RISC-V kernel now
+takes S-mode traps, runs with **Sv39 virtual memory on**, delivers a timer
+interrupt, and reaches an `mlsetup` → `main` split with VM/trap/timer online.
+This is the seed of the real illumos boot sequence on riscv64.
+
+New MD sources in `src/riscv/uts/`:
+
+| File | What |
+|------|------|
+| `riscv_regs.h` | S-mode CSR + Sv39 definitions from the Priv Spec: `sstatus`/`sie`/`sip` bits, `scause` interrupt/exception codes, `satp` (MODE/ASID/PPN) encode macro, the Sv39 PTE bit layout (`V/R/W/X/U/G/A/D`), `PA_TO_PTE`/`PTE_TO_PA`, `VPN(va,level)`. The illumos-idiom analog of NetBSD `include/{sysreg.h,pte.h}`, reimplemented from the spec. |
+| `asm_frame.h` | Trap-frame byte offsets shared by `trap.S`/`trap.c` (31 GPRs + `sepc`/`sstatus`/`scause`/`stval`; `TF_SIZE`=288, 16-aligned). |
+| `trap.S` | `_trap_entry` (the `stvec` target, Direct mode, 4-aligned): saves x1..x31 + the four trap CSRs into a frame on the current stack, calls C `trap(tf)`, restores (writing back possibly-advanced `sepc`/`sstatus`), `sret`. |
+| `trap.c` | `set_trap_vector()` (installs `stvec`), `trap()` dispatcher (decodes `scause`, prints `scause`/`sepc`/`stval`, names the cause; timer IRQ → `timer_intr`; expected probe fault → report+advance+resume; else park), and `trap_selftest()` (deliberate load-page-fault proof). |
+| `hat_riscv.c` | `hat_boot_init()`: builds the Sv39 boot page table (real 3-level walk in `map_page`; gigapage leaves in `map_gigapage`), composes `satp`, `csrw satp`+`sfence.vma`, continues executing translated, and proves translation via a non-identity alias readback. First `hat_riscv`. |
+| `timer.c` | `timer_prove_one_tick()` arms a one-shot via SBI `set_timer`, enables `STIE`+`SIE`, `wfi`s; `timer_intr()` prints the tick and disarms. Takes exactly one S-mode timer interrupt. |
+| `main.c` | Reworked into `mlsetup(hartid,dtb)` (MD bring-up: trap vector → paging → self-test → timer → boot `cpu_t`) → `main()` (SunOS banner + subsystem-online status). |
+| `sbi.c`/`sbi.h` | Extended with the SBI **TIME** extension (EID `0x54494D45`, FID 0 = `set_timer`) → `sbi_set_timer()`. |
+
+### R-P3.1 The trap contract (established here — reusable for R-P4+)
+
+On any S-mode trap the hardware writes `scause` (bit 63 = interrupt vs
+exception; low bits = cause code), `sepc` (faulting/return PC), `stval` (aux,
+e.g. faulting address), saves prior `SIE`/privilege into `sstatus.SPIE`/`SPP`,
+clears `sstatus.SIE`, and jumps to `stvec` (Direct mode → `_trap_entry`).
+`_trap_entry` builds a 288-byte frame (`asm_frame.h` = `struct regs`), calls
+`trap(tf)`, then `sret` returns to `sepc`. **Instruction-length note:** RISC-V
+faulting instructions do not auto-advance `sepc`; to resume past a fault the
+handler decodes the length from the low opcode bits at `sepc`
+(`(insn & 0x3) != 0x3` ⇒ 2-byte compressed, else 4-byte) — a hardcoded `+4`
+lands mid-instruction when the faulting op is compressed (this was the one bug
+found and fixed during bring-up).
+
+### R-P3.2 The Sv39 boot map (established here — the VM foundation)
+
+`satp` MODE=8 (Sv39), 39-bit VA, 3 levels, PTE `PPN = PA>>12` in bits [53:10].
+The boot map installed before turning paging on:
+
+1. **Identity gigapage** VA `0x0` → PA `0x0` (R/W): all qemu-virt low MMIO —
+   CLINT `0x02000000`, PLIC `0x0c000000`, UART `0x10000000`.
+2. **Identity gigapage** VA `0x80000000` → PA `0x80000000` (R/W/X): OpenSBI +
+   the whole kernel image (loads at `0x80200000`). Because PC/sp/data live here
+   VA==PA, enabling Sv39 does **not** move the kernel — it just starts
+   translating, so execution continues seamlessly.
+3. **Non-identity 4 KiB alias** VA `0x40000000` → PA of the kernel's first text
+   page (R/X), built through a full 3-level walk. After paging is on the kernel
+   reads a known byte through both the identity VA and this alias VA; a **MATCH**
+   proves Sv39 really walks the tables (a satp=0 passthrough would fault at the
+   alias VA, which has nothing physical behind it).
+
+`sfence.vma` follows the `satp` write to flush stale TLB entries. The live boot
+`satp` observed = `0x8000000000080224` (MODE=8, ASID=0, root PT PPN=`0x80224`,
+i.e. root table PA `0x80224000` in the kernel BSS pool).
+
+### R-P3.3 The timer contract (established here — seed of the clock)
+
+The `time` CSR is the monotonic counter. One-shot arm = SBI `set_timer(now +
+Δ)` (Δ≈100000 ticks ≈10 ms at qemu-virt's 10 MHz CLINT); OpenSBI programs
+`mtimecmp` and pends the S-mode timer interrupt (STIP) at the deadline. Enable
+`SIE.STIE` + `sstatus.SIE`, `wfi`; the trap fires `IRQ_S_TIMER` (code 5) →
+`timer_intr()`. `MIDELEG=0x1666` confirms the S-mode timer interrupt is
+delegated to us by OpenSBI. Disarm = `set_timer(~0)` (clears STIP per the SBI
+spec) + mask `STIE`, giving exactly one tick. (The `sstc` extension is present
+on this hart — direct `stimecmp` writes are an R-P4 optimization.)
+
+### R-P3.4 Result — SUCCESS (verbatim console, the three gates)
+
+```
+[mlsetup] trap vector installed (stvec -> _trap_entry, Direct mode)
+[hat] PAGING ON: Sv39 live, executing translated. satp=0x8000000000080224
+[hat] alias readback: *(ident VA 0x0000000080200000)=0x0000000000000073 *(alias VA 0x0000000040000000)=0x0000000000000073  MATCH -> Sv39 translation verified
+[trap] probe (expected): scause=0x000000000000000d (load page fault)
+       sepc=0x00000000802005b0 stval=0x0000000040001000 sstatus=0x8000000200006100
+[trap] self-test OK: trap taken, decoded, resumed.
+[timer] tick #1 at time=0x00000000000ac332  (S-mode timer interrupt delivered)
+[timer] one tick observed -> timer + interrupt path OK.
+...
+[R-P3] subsystem status:
+       trap online   : yes
+       VM online      : yes (Sv39 paging)
+       timer online   : yes (1 tick)
+[R-P3] VM online, trap online, timer online. First illumos RISC-V kernel reached main with paging.
+```
+
+- **Trap vector: YES.** Deliberate load from unmapped VA `0x40001000` →
+  `scause=0xd` (load page fault) decoded with `sepc`/`stval`, resumed cleanly.
+- **Sv39 paging on + executing: YES.** `PAGING ON ... satp=0x8000000000080224`
+  printed *after* the `satp` write, and the alias-readback **MATCH** proves real
+  multi-level translation (not passthrough).
+- **Timer tick: YES.** One `IRQ_S_TIMER` delivered and handled (`tick #1`).
+- **mlsetup/main: YES.** `locore → mlsetup → main`, banner + all-online status.
+
+Full artifacts: `artifacts/riscv-port/rp3/` (`rp3-boot.log`, `unix`,
+`unix.disasm`, `unix.sections`).
+
+### R-P3.5 Next: R-P4
+
+- **SMP:** release secondary harts via SBI **HSM** `sbi_hart_start` (the
+  `hart_claimed` park loop in `locore.S` is already the receiving side); per-cpu
+  stacks + `cpu_t`.
+- **Cyclic clock:** turn the one-shot into a periodic clock (rearm each tick),
+  wire `gethrtime` to the `time` CSR, start `hz` ticking.
+- **External interrupts:** PLIC driver (claim/complete) + `SIE.SEIE`; the UART
+  as a real interrupt-driven console instead of SBI DBCN polling.
+- **Real HAT:** a proper `hat_riscv` (page alloc, `hat_memload`/`hat_unload`,
+  ASIDs, a kernel VA split at a canonical high `KERNELBASE` instead of the
+  identity map), and a physical page allocator.
+- **Toward genunix:** `mlsetup` grows the boot `cpu_t` into the real dispatch
+  seed; `main` starts calling MI startup.
+
+## R-P4 — SMP (SBI HSM) + cyclic clock + PLIC + high-VA hat (DONE, 2026-07-28)
+
+**Milestone R-P4 — DONE, all four sub-gates verified on `qemu-system-riscv64
+-machine virt -smp 4` under OpenSBI (fw v1.5.1 / SBI v2.0).** Building on the
+R-P3 trap/Sv39/timer foundation, the first illumos RISC-V kernel now:
+
+1. brings up **secondary harts via SBI HSM** (SMP),
+2. runs a **periodic (cyclic) clock** at 100 Hz with a `gethrtime` wired to the
+   `time` CSR,
+3. takes **external interrupts through the PLIC** (claim/complete), and
+4. installs a **real high-VA kernel map** at a canonical `KERNELBASE`
+   (`0xffffffc000000000`) backed by a physical page allocator.
+
+These are the MD pieces genunix (R-P5) needs. New/updated MD sources in
+`src/riscv/uts/`:
+
+| File | R-P4 change |
+|------|-------------|
+| `sbi.c`/`sbi.h` | Added the SBI **HSM** extension (EID `0x48534D`): `sbi_hart_start(hartid, start_addr, opaque)` (FID 0) and `sbi_hart_get_status(hartid)` (FID 2), with the `SBI_HSM_STARTED/STOPPED/*_PENDING` state constants. |
+| `locore.S` | Added `_secondary_start` (the SBI-HSM secondary entry): masks interrupts, adopts the per-cpu stack handed in `a1`, installs `stvec`→`_trap_entry`, loads the **shared** `kernel_satp`, `sfence.vma`, calls C `secondary_main(hartid)`. Added `kernel_satp` (`.data`, published by `hat_boot_init`) and a `secondary_stacks` BSS pool (7 × 16 KiB = MAXCPU−1). |
+| `riscv_regs.h` | Added `KERNELBASE` (`0xffffffc000000000`, the base of the high canonical Sv39 hole, VPN[2]=256) and the qemu-virt MMIO bases `CLINT_BASE`/`PLIC_BASE`/`UART0_BASE` + `UART0_IRQ`=10. |
+| `hat_riscv.c` | `hat_boot_init()` now publishes `kernel_satp` for secondaries. Added the R-P4 physical bump allocator (`hat_phys_init`/`hat_palloc`) over RAM above the kernel image, `hat_kmap_page()` (the hat_memload-analog: a 4 KiB map through the full 3-level walk + per-VA `sfence.vma`), and `hat_highva_prove()` (allocate a fresh page, map it at `KERNELBASE`, write a signature through the high VA, read it back through both the high VA and the page's identity VA). Boot table pool grown 4→6 (the high-VA walk needs a fresh L1+L0). |
+| `timer.c` | Reworked from R-P3's one-shot into a **periodic** clock: `clock_start()` arms a self-rearming timer at `HZ`=100 (`TIMER_PERIOD` = timebase/HZ = 100000 `time`-ticks = 10 ms), `timer_intr()` bumps the tick counter and rearms one period ahead (drift-free from the last deadline), `gethrtime()` scales the `time` CSR (10 MHz timebase) to nanoseconds, `clock_prove(n)` runs ≥ n ticks and reports count + hrtime. |
+| `plic.c` | **New.** The PLIC driver + external-interrupt path (see §R-P4.3). |
+| `trap.c` | The `trap()` dispatcher now routes `IRQ_S_EXT` (scause code 9) → `plic_extintr()` (claim/dispatch/complete) alongside the existing `IRQ_S_TIMER` → `timer_intr()`. |
+| `main.c` | `mlsetup` grew the R-P4 sequence (phys alloc + high-VA hat → SMP secondaries → PLIC → periodic clock). Added `secondary_main()` (secondary report-in), `start_secondaries()` (the SBI-HSM boot driver), the `cpu_online[]` bitmap + `ncpu_online` counter, and a test-and-set `console_lock` (amoswap acquire/release) to serialize multi-hart console output. `main()` prints the R-P4 subsystem status. |
+
+### R-P4.1 SMP secondary-hart bringup (SBI HSM) — the contract
+
+Under OpenSBI's default boot only the boot hart is released to the S-mode
+payload; secondaries sit in the HSM **STOPPED** state in firmware. The boot
+hart:
+
+1. **probes** which harts exist with `sbi_hart_get_status(h)` for `h` in
+   `0..MAXCPU` — a valid hartid returns a non-negative state, an out-of-range
+   one returns a negative SBI error;
+2. for each STOPPED hart other than itself, assigns a per-cpu 16 KiB stack and
+   calls `sbi_hart_start(h, PA(_secondary_start), stacktop)`. The `opaque` arg
+   (`a1`) delivers the stack top; `start_addr` is `_secondary_start`'s physical
+   address, which equals its VA (identity-mapped kernel gigapage), so it is
+   valid whether the hart is still in Bare mode or has loaded `satp`.
+
+OpenSBI releases each secondary into `_secondary_start` in S-mode with
+`a0`=hartid, `a1`=opaque, `satp`=0, `sstatus.SIE`=0. The secondary masks
+interrupts, adopts its stack, installs `stvec`, loads the **shared**
+`kernel_satp` (published by `hat_boot_init` before any secondary is started, so
+every hart translates through the one root page table), `sfence.vma`, and calls
+`secondary_main(hartid)` which reports "hart N online" under the `console_lock`
+and increments `ncpu_online`. The boot hart waits (acquire-fenced poll on
+`ncpu_online`) until all `started` secondaries report, then continues.
+
+**Result (verbatim, `-smp 4`, boot hart 0):**
+```
+[smp] boot hart 0 starting secondaries via SBI HSM (EID 0x48534D)
+[smp] hart_start hart 1 -> _secondary_start (stacktop 0x0000000080234000)
+[smp] hart 1 online (secondary, satp=shared kernel PT, trap vector installed)
+[smp] hart_start hart 2 -> _secondary_start (stacktop 0x0000000080238000)
+[smp] hart 2 online (secondary, satp=shared kernel PT, trap vector installed)
+[smp] hart_start hart 3 -> _secondary_start (stacktop 0x000000008023c000)
+[smp] hart 3 online (secondary, satp=shared kernel PT, trap vector installed)
+[smp] secondaries started=3 online-reported=3
+```
+`cpus online: 4 (1 boot + 3 secondary)`. **SMP: YES, 3 secondary harts.**
+(qemu picks the boot hart nondeterministically across runs — 0 or 1 observed;
+the driver probes/starts by HSM state, so it is boot-hart-agnostic.)
+
+### R-P4.2 Periodic (cyclic) clock — the contract
+
+The `time` CSR is the monotonic counter; qemu virt's CLINT runs at
+`TIMEBASE_HZ` = 10 MHz (1 `time`-tick = 100 ns). The clock ticks at `HZ`=100, a
+`TIMER_PERIOD` = `TIMEBASE_HZ/HZ` = 100000 `time`-ticks = 10 ms period. Arm =
+`sbi_set_timer(deadline)`; on the timer trap `timer_intr()` bumps the counter
+and advances `deadline += TIMER_PERIOD` (from the *last* deadline, not `now`, so
+ticks do not drift with interrupt latency; if we fall behind, catch the deadline
+up to `now + period`) and re-arms — `set_timer` clears the pending STIP as a
+side effect, so the rearm is also the acknowledgement. `gethrtime()` = `time`
+scaled to ns (split as `sec*1e9 + (rem*1e9)/freq` to avoid 64-bit overflow).
+
+**Result:** `[clock] 10 ticks, hrtime=239057900 ns (elapsed 100235800 ns) ->
+periodic clock running.` — 10 ticks in ~100.24 ms is exactly 100 Hz; the final
+status line reads `11 ticks` because the clock kept ticking while the banner
+printed, which is the proof it is genuinely periodic/self-rearming, not
+one-shot. **Cyclic clock: YES.**
+
+### R-P4.3 PLIC external interrupts — the contract
+
+PLIC base `0x0c000000` (qemu virt). Register map: `priority[src]` = base+`src*4`;
+`enable[ctx]` bitmap = base+`0x2000 + ctx*0x80`; `threshold[ctx]` =
+base+`0x200000 + ctx*0x1000`; `claim/complete[ctx]` = base+`0x200004 +
+ctx*0x1000`. Context numbering on qemu virt: hart H → M-mode ctx `2H`, S-mode
+ctx `2H+1`; we run S-mode on the boot hart so **our context is 1**.
+
+Init sets every source priority to 0 (disabled) and threshold 0 (accept any
+priority > 0). `plic_enable(src, prio)` sets the source priority and its enable
+bit. On an external interrupt the hart traps (`scause` = `IRQ_S_EXT`, code 9) →
+`trap()` → `plic_extintr()`: read CLAIM (returns the pending source id and
+de-asserts `sip.SEIP`), dispatch, write the id back to COMPLETE, loop until
+CLAIM returns 0.
+
+The self-test proves delivery **without interactive input**: enable the
+NS16550A UART source (`UART0_IRQ`=10) at priority 1, enable `SIE.SEIE` +
+`sstatus.SIE`, then enable the UART's transmit-holding-empty (THRE) interrupt —
+the transmitter is idle at boot, so the UART raises its PLIC line immediately.
+
+**Result:**
+```
+[plic] init: base=0x000000000c000000 S-context=1 threshold=0
+[plic] enabled source 0x000000000000000a prio 0x0000000000000001
+[plic] IRQ 0x000000000000000a claimed (S-mode external interrupt delivered via PLIC)
+[plic] self-test OK: external IRQ 0x000000000000000a claimed + completed via PLIC.
+```
+**PLIC external IRQ: YES** (source 10 claimed + completed). This is the exact
+path virtio/console/net drivers will use.
+
+### R-P4.4 High-VA kernel HAT — the contract
+
+Sv39 gives a 39-bit VA with a sign-extension rule (bits [63:39] = bit 38),
+splitting valid VAs into a low half (`0x0..0x3f_ffffffff`) and a high half
+(`0xffffffc0_00000000..`). illumos puts the kernel in the high half:
+`KERNELBASE` = `0xffffffc000000000` (VPN[2]=256, first entry of the root
+table's high half). A bump allocator (`hat_phys_init`/`hat_palloc`) hands out
+zeroed 4 KiB physical pages from RAM above the kernel image (VA==PA in the
+identity gigapage, so a phys address is directly usable to zero the page).
+`hat_kmap_page(va, pa, perm)` installs a 4 KiB leaf through the shared root
+table's full 3-level walk (allocating the intermediate L1/L0 tables) and
+`sfence.vma`s the single VA.
+
+`hat_highva_prove()`: `pa = hat_palloc()`; `hat_kmap_page(KERNELBASE, pa, RW)`;
+write a signature through the high VA; read it back through both the high VA and
+the page's identity VA.
+
+**Result:**
+```
+[hat] phys page allocator: free RAM 0x0000000080253000 .. 0x0000000088000000 (0x0000000000007dad pages)
+[hat] high-VA map: KERNELBASE 0xffffffc000000000 -> PA 0x0000000080253000 (RW)
+[hat] wrote 0x5041474544554d50 via high VA; readback high=0x5041474544554d50 ident=0x5041474544554d50  MATCH -> high-VA translation verified
+```
+**High-VA hat map: YES** (fresh page mapped at `KERNELBASE` and verified through
+the translation).
+
+### R-P4.5 Result summary + honest scope
+
+All four sub-gates PASS on `-smp 4`:
+- SMP secondary harts online: **YES — 3** (via SBI HSM).
+- Cyclic clock ticking: **YES** (periodic 100 Hz, `gethrtime` in ns).
+- PLIC external IRQ claimed: **YES** (UART source 10 claimed + completed).
+- High-VA hat map working: **YES** (`KERNELBASE` map + bump page allocator).
+
+Full artifacts: `artifacts/riscv-port/rp4/` (`rp4-boot.log`, `unix`,
+`unix.disasm`, `unix.sections`). Build: nixpkgs
+`pkgsCross.riscv64-embedded` (riscv64-none-elf gcc 14.3.0, binutils 2.44),
+freestanding `-mcmodel=medany`. Every qemu run was `timeout`-wrapped + detached
+(nohup→log, sleep+check+kill); no foreground-wait, no wedge; stray-qemu checked
+gone after each run.
+
+**Deliberate R-P4 scope (documented ceilings, each an R-P5 upgrade path):**
+- **phys allocator** is a one-way bump with a conservative RAM cap (qemu-virt
+  128 MiB constant), not a DTB-probed `page_t`/freelist — R-P5 parses the FDT
+  `/memory` node and builds the real page allocator with free.
+- **clock** is the bare periodic heartbeat + `gethrtime`; no cyclic wheel,
+  callout dispatch, or time-of-day — R-P5 adds the cyclic subsystem on top.
+- **PLIC** self-test quiesces the UART source after the proof; the console is
+  still SBI DBCN (polled). R-P5 makes the UART a real interrupt-driven console.
+- **SMP** secondaries park in `wfi` with interrupts masked (no per-cpu dispatch
+  or idle thread, no IPI use yet — the SBI IPI/`sfence` broadcast path is R-P5).
+- **hat** has no ASIDs, no `hat_unload`, no VA allocator — one proving map.
+
+### R-P4.6 Next: R-P5 (genunix)
+
+- **Physical/virtual memory:** FDT `/memory` parse → real `page_t`/freelists;
+  a kernel VA allocator over the `KERNELBASE` high range; `kmem` (slab) on top;
+  `hat_memload`/`hat_unload`/ASIDs.
+- **Cyclic subsystem:** the cyclic wheel + callout dispatch driven by the R-P4
+  periodic clock; time-of-day.
+- **Per-cpu dispatch:** turn the secondary `wfi` park into per-cpu idle threads
+  + the dispatcher; SBI IPI (`sbi_send_ipi`) for cross-hart `sfence`/reschedule.
+- **Console:** a PLIC-driven NS16550A console driver replacing SBI DBCN polling.
+- **genunix link:** grow `mlsetup`'s boot `cpu_t` into the real `cpu_t[]`; have
+  `main()` call MI startup (`startup()`, `main()` MI) toward mounting root.

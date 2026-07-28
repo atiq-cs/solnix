@@ -34,11 +34,12 @@ echo "== compile (freestanding, $TC) =="
 "$CC" $CFLAGS -c trap.c      -o trap.o
 "$CC" $CFLAGS -c hat_riscv.c -o hat_riscv.o
 "$CC" $CFLAGS -c timer.c     -o timer.o
+"$CC" $CFLAGS -c plic.c      -o plic.o
 "$CC" $CFLAGS -c main.c      -o main.o
 
 echo "== link (riscv.ld @ 0x80200000) =="
 "$LD" -T riscv.ld -o "$OUT" locore.o trap_asm.o sbi.o trap.o \
-	hat_riscv.o timer.o main.o
+	hat_riscv.o timer.o plic.o main.o
 
 echo "== image info =="
 file "$OUT" || true
@@ -46,10 +47,11 @@ file "$OUT" || true
 echo "-- entry / first instrs --"
 "$OBJDUMP" -d "$OUT" 2>/dev/null | sed -n '/<_start>:/,/ret/p' | head -30 || true
 
-echo "== boot under OpenSBI (qemu virt, default -bios, 120s timeout) =="
+echo "== boot under OpenSBI (qemu virt, -smp 4, default -bios, 120s timeout) =="
 # -bios default => qemu's bundled OpenSBI (fw_dynamic); -kernel loads our ELF
-# as the S-mode payload (OpenSBI jumps to 0x80200000 = _start).
+# as the S-mode payload (OpenSBI jumps to 0x80200000 = _start). -smp 4 gives
+# the R-P4 SMP bring-up 3 secondary harts to start via SBI HSM.
 : > "$LOG"
-timeout 120 "$QEMU" -machine virt -nographic -bios default \
+timeout 120 "$QEMU" -machine virt -smp "${SMP:-4}" -nographic -bios default \
 	-kernel "$OUT" 2>&1 | tee "$LOG" || true
 echo "== done; console captured to $LOG =="

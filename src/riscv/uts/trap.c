@@ -79,6 +79,9 @@ _Static_assert(sizeof (struct regs) <= TF_SIZE, "TF_SIZE too small");
 /* From timer.c: handle one S-mode timer interrupt (print tick, disarm). */
 extern void timer_intr(void);
 
+/* From plic.c: service S-mode external interrupts (claim/dispatch/complete). */
+extern int plic_extintr(void);
+
 /* The asm trap vector target (trap.S). Installed into stvec by set_trap_vector. */
 extern void _trap_entry(void);
 
@@ -203,6 +206,9 @@ trap(struct regs *tf)
 		switch (code) {
 		case IRQ_S_TIMER:
 			timer_intr();
+			return;
+		case IRQ_S_EXT:
+			(void) plic_extintr();
 			return;
 		default:
 			trap_report(tf, "interrupt");

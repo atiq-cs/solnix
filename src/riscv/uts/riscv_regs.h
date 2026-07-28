@@ -136,6 +136,35 @@ extern "C" {
 /* Extract the level-L VPN index from a virtual address. */
 #define	VPN(va, level)	(((unsigned long)(va) >> (PAGESHIFT + 9 * (level))) & 0x1ff)
 
+/*
+ * ---------------------------------------------------------------------------
+ * Canonical Sv39 kernel VA split (R-P4).
+ *
+ * Sv39 gives a 39-bit VA space. The architectural rule is that bits [63:39]
+ * must all equal bit 38 (sign-extension), so valid VAs are two disjoint
+ * ranges: low  0x0000000000000000 .. 0x0000003fffffffff  (bit38=0)
+ *          high 0xffffffc000000000 .. 0xffffffffffffffff  (bit38=1).
+ *
+ * illumos puts the kernel in the high range (like KERNELBASE on other arches).
+ * We choose KERNELBASE at the base of the high canonical hole, 0xffffffc000...,
+ * which is VPN[2]=256 (the first entry of the high half of the root table).
+ * The R-P4 hat maps fresh physical pages here to prove a real high-VA regime,
+ * distinct from the R-P3 identity boot map.
+ * ---------------------------------------------------------------------------
+ */
+#define	KERNELBASE	0xffffffc000000000UL	/* high canonical, VPN2=256 */
+
+/*
+ * ---------------------------------------------------------------------------
+ * qemu virt platform MMIO (from the qemu 'virt' machine + its devicetree).
+ * These are physical addresses, identity-mapped by the R-P3 low-MMIO gigapage.
+ * ---------------------------------------------------------------------------
+ */
+#define	CLINT_BASE	0x02000000UL	/* core-local interruptor */
+#define	PLIC_BASE	0x0c000000UL	/* platform-level interrupt ctrl */
+#define	UART0_BASE	0x10000000UL	/* NS16550A UART */
+#define	UART0_IRQ	10UL		/* qemu virt: UART0 PLIC source = 10 */
+
 #ifdef __cplusplus
 }
 #endif

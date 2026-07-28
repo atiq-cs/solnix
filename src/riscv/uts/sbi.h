@@ -17,6 +17,22 @@ extern void sbi_console_puts(const char *s);
 extern const char *sbi_console_kind(void);
 extern long sbi_set_timer(unsigned long deadline);
 
+/*
+ * SBI HSM (Hart State Management) extension, EID 0x48534D ("HSM") — R-P4 SMP.
+ *   sbi_hart_start(hartid, start_addr, opaque): release a stopped hart; it
+ *     begins executing in S-mode at start_addr with a0=hartid, a1=opaque.
+ *   sbi_hart_get_status(hartid): returns the HSM state (>=0) or a negative
+ *     SBI error. State 0=STARTED, 1=STOPPED, others are transitional.
+ */
+#define	SBI_HSM_STARTED		0L
+#define	SBI_HSM_STOPPED		1L
+#define	SBI_HSM_START_PENDING	2L
+#define	SBI_HSM_STOP_PENDING	3L
+
+extern long sbi_hart_start(unsigned long hartid, unsigned long start_addr,
+    unsigned long opaque);
+extern long sbi_hart_get_status(unsigned long hartid);
+
 #ifdef __cplusplus
 }
 #endif

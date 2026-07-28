@@ -36,6 +36,7 @@
 #define	SBI_EXT_LEGACY_PUTCHAR	0x01UL		/* legacy console putchar */
 #define	SBI_EXT_BASE		0x10UL		/* SBI Base extension */
 #define	SBI_EXT_TIME		0x54494D45UL	/* "TIME" timer extension */
+#define	SBI_EXT_HSM		0x48534DUL	/* "HSM" hart state mgmt */
 #define	SBI_EXT_DBCN		0x4442434EUL	/* "DBCN" debug console */
 
 /* SBI Base (0x10) function IDs. */
@@ -43,6 +44,10 @@
 
 /* SBI TIME (0x54494D45) function IDs. */
 #define	SBI_TIME_SET_TIMER		0UL
+
+/* SBI HSM (0x48534D) function IDs. */
+#define	SBI_HSM_HART_START		0UL
+#define	SBI_HSM_HART_GET_STATUS		2UL
 
 /* DBCN (0x4442434E) function IDs. */
 #define	SBI_DBCN_CONSOLE_WRITE		0UL
@@ -170,6 +175,43 @@ sbi_set_timer(unsigned long deadline)
 
 	ret = sbi_ecall(SBI_EXT_TIME, SBI_TIME_SET_TIMER, deadline, 0, 0);
 	return (ret.error);
+}
+
+/*
+ * sbi_hart_start — SBI HSM (EID 0x48534D, FID 0). Ask OpenSBI to release the
+ * hart `hartid` (which is in the STOPPED state, parked in firmware) and start
+ * it executing in S-mode at `start_addr` with a0=hartid, a1=opaque, satp=0.
+ * This is how the R-P4 SMP bring-up wakes the secondary harts. Returns the
+ * SBI error (0 == success; SBI_ERR_INVALID_PARAM if hartid can't be started).
+ */
+long
+sbi_hart_start(unsigned long hartid, unsigned long start_addr,
+    unsigned long opaque)
+{
+	sbiret_t ret;
+
+	ret = sbi_ecall(SBI_EXT_HSM, SBI_HSM_HART_START, hartid, start_addr,
+	    opaque);
+	return (ret.error);
+}
+
+/*
+ * sbi_hart_get_status — SBI HSM (EID 0x48534D, FID 2). Query the HSM state of
+ * `hartid`. On success returns the non-negative state (SBI_HSM_STARTED=0,
+ * STOPPED=1, START_PENDING=2, STOP_PENDING=3); on error returns the negative
+ * SBI error. Used both to probe how many harts exist (a valid hartid returns a
+ * state; an out-of-range one returns SBI_ERR_INVALID_PARAM) and to confirm a
+ * secondary reached STARTED.
+ */
+long
+sbi_hart_get_status(unsigned long hartid)
+{
+	sbiret_t ret;
+
+	ret = sbi_ecall(SBI_EXT_HSM, SBI_HSM_HART_GET_STATUS, hartid, 0, 0);
+	if (ret.error != 0)
+		return (ret.error);
+	return (ret.value);
 }
 
 /*

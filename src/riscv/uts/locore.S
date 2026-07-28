@@ -126,6 +126,63 @@ trap_park:
 	.size _start, . - _start
 
 	/*
+	 * ---------------------------------------------------------------------
+	 * _secondary_start — SBI HSM secondary-hart entry (R-P4 SMP).
+	 * ---------------------------------------------------------------------
+	 * The boot hart calls sbi_hart_start(hartid, PA(_secondary_start),
+	 * opaque) for each secondary. OpenSBI releases that hart into S-mode
+	 * here with:
+	 *   a0 = hartid   (this hart's id)
+	 *   a1 = opaque   (we pass the hart's assigned per-cpu stack TOP)
+	 *   satp = 0      (bare; VA==PA — and _secondary_start's PA is inside the
+	 *                 identity-mapped kernel gigapage, so this label resolves
+	 *                 the same before and after we load the shared satp)
+	 *   sstatus.SIE clear
+	 *
+	 * Each secondary: masks interrupts, adopts the assigned stack, loads the
+	 * SHARED kernel page table (the boot hart published its satp in
+	 * kernel_satp before starting us), sfence.vma, then calls C
+	 * secondary_main(hartid). It must not return; if it does, park.
+	 *
+	 * NOTE: BSS is already cleared by the boot hart; secondaries must NOT
+	 * clear it again (that would wipe live kernel state).
+	 */
+	.section .text
+	.align 2
+	.globl _secondary_start
+	.type _secondary_start, @function
+_secondary_start:
+	csrci	sstatus, 0x2		/* clear sstatus.SIE */
+	csrw	sie, zero		/* mask all S-mode interrupt sources */
+
+	/* Adopt the per-cpu stack top handed to us in a1 (opaque). */
+	mv	sp, a1
+	andi	sp, sp, ~15		/* enforce 16-byte alignment */
+
+	/* Install the real trap vector on this hart too (Direct mode). */
+	la	t0, _trap_entry
+	csrw	stvec, t0
+
+	/*
+	 * Load the SHARED kernel page table. The boot hart stored its live
+	 * satp (MODE=Sv39, root PT PPN) into kernel_satp before starting us, so
+	 * every hart walks the same tables. sfence.vma flushes this hart's TLB.
+	 */
+	la	t0, kernel_satp
+	ld	t1, 0(t0)
+	csrw	satp, t1
+	sfence.vma
+
+	/* Hand off to C: void secondary_main(uint64_t hartid). a0=hartid live. */
+	call	secondary_main
+
+	/* secondary_main must not return. Park if it does. */
+1:	wfi
+	j	1b
+
+	.size _secondary_start, . - _secondary_start
+
+	/*
 	 * hart_claimed: boot-hart election flag. In .data (initialized to 0) so
 	 * the BSS clear above does not reset it after a hart has claimed. .word
 	 * (32-bit) to match amoswap.w.
@@ -135,6 +192,17 @@ trap_park:
 	.globl hart_claimed
 hart_claimed:
 	.word 0
+
+	/*
+	 * kernel_satp: the shared kernel page-table satp, published by the boot
+	 * hart (hat_boot_init) before it starts secondaries. Each secondary
+	 * loads this so all harts translate through the one root table. In
+	 * .data (survives the BSS clear); 8 bytes for a 64-bit satp.
+	 */
+	.align 3
+	.globl kernel_satp
+kernel_satp:
+	.dword 0
 
 	/*
 	 * Boot stack: 16 KiB in BSS. Ample for the R-P2 banner path; grows into
@@ -147,3 +215,14 @@ boot_stack:
 	.skip 16384
 	.globl boot_stack_top
 boot_stack_top:
+
+	/*
+	 * Per-secondary-hart boot stacks (R-P4 SMP). One 16 KiB stack per
+	 * possible secondary hart (MAXCPU-1). The boot hart uses boot_stack;
+	 * secondaries are handed secondary_stacks[i]+16384 as their sp via the
+	 * SBI hart_start opaque arg. Sized for qemu virt -smp up to 8.
+	 */
+	.align 16
+	.globl secondary_stacks
+secondary_stacks:
+	.skip 16384 * 7			/* MAXCPU(8) - 1 boot hart */

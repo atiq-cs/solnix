@@ -39,17 +39,47 @@
 extern char _start[];
 extern char __bss_end[];
 
+/* Shared kernel satp, published for secondary harts (locore.S kernel_satp). */
+extern unsigned long kernel_satp;
+
 /*
  * Static page-table pool. Each table is 4 KiB (512 * 8-byte PTEs), 4 KiB
  * aligned as Sv39 requires (a table's PA must be page-aligned; its PPN is
- * PA>>12). We need: 1 root (level 2) + 1 level-1 + 1 level-0 for the alias.
- * The two identity gigapages are leaves in the root, needing no sub-tables.
- * Pool of 4 tables is ample and leaves headroom.
+ * PA>>12). We need: 1 root (level 2) + 1 level-1 + 1 level-0 for the alias +
+ * 1 level-1 + 1 level-0 for the high-VA (KERNELBASE) kernel map (R-P4). The
+ * identity gigapages are leaves in the root, needing no sub-tables. Pool of 6
+ * tables covers both walks with headroom.
  */
-#define	NBOOT_TABLES	4
+#define	NBOOT_TABLES	6
 static unsigned long boot_pt[NBOOT_TABLES][PTES_PER_TABLE]
     __attribute__((aligned(PAGESIZE)));
 static int boot_pt_next = 0;
+
+/*
+ * ---------------------------------------------------------------------------
+ * R-P4 physical page allocator (bump) + high-VA kernel map.
+ * ---------------------------------------------------------------------------
+ * A minimal watermark ('bump') allocator over the physical RAM that lies
+ * above the loaded kernel image. This is the seed of the real illumos page
+ * allocator (page_t / freelists) — enough to hand out fresh 4 KiB physical
+ * pages for the high-VA hat and for allocating page-table pages once the
+ * static boot pool is exhausted.
+ *
+ * RAM base/size: on qemu virt the DTB /memory node reports base 0x80000000
+ * and size (default) 128 MiB. Full FDT parsing is R-P5 work; here we take the
+ * conservative, provable path: start the bump watermark just above the kernel
+ * BSS end (page-aligned) and cap it at a DTB-independent floor of RAM we know
+ * qemu virt always has. Because the whole 0x80000000 GiB is identity-mapped
+ * (VA==PA) by the R-P3 boot map, a bump-allocated physical address is directly
+ * usable as a kernel pointer to zero/fill the page.
+ */
+#define	PHYS_RAM_BASE	0x80000000UL
+/* Conservative: qemu virt default is 128 MiB; we only ever nibble a few pages. */
+#define	PHYS_RAM_END	(PHYS_RAM_BASE + 0x08000000UL)	/* 128 MiB */
+
+static unsigned long phys_bump;		/* next free physical address */
+static unsigned long phys_bump_end;	/* one past the last usable byte */
+static unsigned long phys_alloc_count;	/* pages handed out (diagnostics) */
 
 /* The root table (set once alloc'd) and its PA, exported for satp. */
 static unsigned long *root_pt;
@@ -156,6 +186,14 @@ hat_boot_init(void)
 	ppn = (unsigned long)root_pt >> PAGESHIFT;
 	satp = SATP_MAKE(SATP_MODE_SV39, 0, ppn);
 
+	/*
+	 * Publish the satp for secondary harts (R-P4 SMP). Every hart loads
+	 * this same root table so the whole kernel shares one address space.
+	 * Written before we start any secondary (main() starts them after
+	 * hat_boot_init returns).
+	 */
+	kernel_satp = satp;
+
 	sbi_console_puts("[hat] Sv39 boot map built:\n");
 	sbi_console_puts("      identity giga  VA=0x0000000000000000 -> PA 0x0 (MMIO, RW)\n");
 	sbi_console_puts("      identity giga  VA=");
@@ -213,4 +251,117 @@ hat_boot_init(void)
 	    "  MISMATCH -> translation BROKEN\n");
 
 	return (satp);
+}
+
+/*
+ * ---------------------------------------------------------------------------
+ * R-P4: physical page allocator + high-VA kernel HAT (hat_memload-analog)
+ * ---------------------------------------------------------------------------
+ */
+
+/*
+ * hat_phys_init — initialize the bump allocator. The free pool starts one
+ * page above the kernel BSS end (page-aligned up) and runs to the RAM cap.
+ * Called from mlsetup after paging is on. Idempotent enough for R-P4.
+ */
+void
+hat_phys_init(void)
+{
+	unsigned long kend = ((unsigned long)__bss_end + PAGESIZE - 1) &
+	    ~(PAGESIZE - 1);
+
+	phys_bump = kend;
+	phys_bump_end = PHYS_RAM_END;
+	phys_alloc_count = 0;
+
+	sbi_console_puts("[hat] phys page allocator: free RAM ");
+	puthex(phys_bump);
+	sbi_console_puts(" .. ");
+	puthex(phys_bump_end);
+	sbi_console_puts(" (");
+	puthex((phys_bump_end - phys_bump) >> PAGESHIFT);
+	sbi_console_puts(" pages)\n");
+}
+
+/*
+ * hat_palloc — hand out one zeroed 4 KiB physical page. Returns the physical
+ * address (== a usable kernel pointer, since the kernel gigapage is identity
+ * mapped VA==PA). Panics on exhaustion. This is the seed of page_get().
+ */
+unsigned long
+hat_palloc(void)
+{
+	unsigned long pa;
+	unsigned long *p;
+	int i;
+
+	if (phys_bump == 0 || phys_bump + PAGESIZE > phys_bump_end) {
+		sbi_console_puts("[hat] PANIC: out of physical pages\n");
+		for (;;)
+			__asm__ __volatile__("wfi");
+	}
+	pa = phys_bump;
+	phys_bump += PAGESIZE;
+	phys_alloc_count++;
+
+	/* Zero it (VA==PA identity map). */
+	p = (unsigned long *)pa;
+	for (i = 0; i < (int)(PAGESIZE / sizeof (unsigned long)); i++)
+		p[i] = 0;
+	return (pa);
+}
+
+/*
+ * hat_kmap_page — the hat_memload-analog: map one physical page PA at kernel
+ * virtual address VA with the given RWX perm, through the shared root table's
+ * full 3-level Sv39 walk (allocating intermediate tables from the boot pool as
+ * needed). VA is expected to be a canonical high kernel VA (>= KERNELBASE).
+ * sfence.vma the single VA so the new mapping is visible immediately.
+ */
+void
+hat_kmap_page(unsigned long va, unsigned long pa, unsigned long perm)
+{
+	map_page(va, pa, perm);
+	__asm__ __volatile__("sfence.vma %0, zero" :: "r"(va) : "memory");
+}
+
+/*
+ * hat_highva_prove — R-P4 milestone-4 proof. Allocate a fresh physical page,
+ * map it at KERNELBASE in the high canonical VA range (R/W, kernel), write a
+ * signature through the high VA, and read it back — both through the high VA
+ * and through the page's identity (VA==PA) address — proving the high-VA
+ * translation resolves to the intended physical page. This is the seed of the
+ * kernel heap/VA regime that genunix (R-P5) will build on.
+ */
+void
+hat_highva_prove(void)
+{
+	unsigned long pa;
+	volatile unsigned long *hi, *ident;
+	const unsigned long sig = 0x5041474544554d50UL;	/* "PAGEDUMP" */
+
+	pa = hat_palloc();
+	hat_kmap_page(KERNELBASE, pa, PTE_R | PTE_W);
+
+	sbi_console_puts("[hat] high-VA map: KERNELBASE ");
+	puthex(KERNELBASE);
+	sbi_console_puts(" -> PA ");
+	puthex(pa);
+	sbi_console_puts(" (RW)\n");
+
+	hi = (volatile unsigned long *)KERNELBASE;
+	ident = (volatile unsigned long *)pa;
+
+	*hi = sig;				/* write through the HIGH VA */
+	__asm__ __volatile__("fence" ::: "memory");
+
+	sbi_console_puts("[hat] wrote ");
+	puthex(sig);
+	sbi_console_puts(" via high VA; readback high=");
+	puthex(*hi);
+	sbi_console_puts(" ident=");
+	puthex(*ident);
+	sbi_console_puts((*hi == sig && *ident == sig) ?
+	    "  MATCH -> high-VA translation verified\n" :
+	    "  MISMATCH -> high-VA map BROKEN\n");
 }
