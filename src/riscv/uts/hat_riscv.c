@@ -355,6 +355,106 @@ hat_kmap_page(unsigned long va, unsigned long pa, unsigned long perm)
 }
 
 /*
+ * ---------------------------------------------------------------------------
+ * R-P7 per-process address spaces (as.c support).
+ * ---------------------------------------------------------------------------
+ * A user address space is a FRESH Sv39 root page table whose kernel half (the
+ * two identity gigapages the boot map installed: low MMIO + the kernel RAM
+ * GiB) is copied in, so that after a trap from U-mode the kernel keeps running
+ * at its identity VAs on the process satp. User mappings are installed with
+ * PTE_U set through the same 3-level walk, allocating intermediate tables from
+ * the page allocator.
+ */
+
+/* Allocate a fresh, zeroed root page table for a new address space and copy
+ * the kernel gigapage entries from the shared boot root into it. Returns the
+ * root's physical address (== kernel pointer, identity mapped). */
+unsigned long
+hat_as_newroot(void)
+{
+	unsigned long *nr = alloc_table();
+	int i;
+
+	/*
+	 * Copy the KERNEL entries from the shared boot root so the kernel stays
+	 * reachable on the new satp: slot 0 (low MMIO identity giga — the UART
+	 * the syscall read path polls in S-mode), slot 2 (kernel RAM identity
+	 * giga — kernel text/data/stack), and the high half (slots 256..511 —
+	 * the KERNELBASE kmem tables). We deliberately DO NOT copy the low user
+	 * slots (1 = the R-P3 alias, 3 = where userland lives): leaving them
+	 * clear guarantees hat_as_map builds fresh user tables there and never
+	 * collides with a kernel gigapage leaf. Kernel gigapage leaves lack
+	 * PTE_U, so U-mode still cannot reach the kernel through the shared
+	 * slots.
+	 */
+	for (i = 0; i < PTES_PER_TABLE; i++)
+		nr[i] = 0;
+	nr[0] = root_pt[0];			/* low MMIO giga (UART) */
+	nr[2] = root_pt[2];			/* kernel RAM giga */
+	for (i = 256; i < PTES_PER_TABLE; i++)	/* KERNELBASE high half */
+		nr[i] = root_pt[i];
+	return ((unsigned long)nr);
+}
+
+/* Walk `root` (a physical/identity root PA) to install a 4 KiB user leaf
+ * VA->PA with the given RWX perm + PTE_U. Allocates intermediate tables. */
+void
+hat_as_map(unsigned long root, unsigned long va, unsigned long pa,
+    unsigned long perm)
+{
+	unsigned long *tbl = (unsigned long *)root;
+	int level;
+
+	for (level = 2; level > 0; level--) {
+		unsigned long idx = VPN(va, level);
+		unsigned long pte = tbl[idx];
+
+		if ((pte & PTE_V) == 0) {
+			unsigned long *nt = alloc_table();
+			tbl[idx] = PA_TO_PTE((unsigned long)nt) | PTE_V;
+			tbl = nt;
+		} else if (pte & PTE_RWX) {
+			/* A leaf where a table was expected: the caller is
+			 * mapping a user VA into a slot that already holds a
+			 * kernel gigapage/megapage. That is an address-layout
+			 * bug (user space must avoid kernel slots). Panic loudly
+			 * rather than dereference the leaf's PPN as a table. */
+			sbi_console_puts("[hat] PANIC: hat_as_map into a kernel "
+			    "leaf slot (va/kernel collision)\n");
+			for (;;)
+				__asm__ __volatile__("wfi");
+		} else {
+			tbl = (unsigned long *)PTE_TO_PA(pte);
+		}
+	}
+	tbl[VPN(va, 0)] = PA_TO_PTE(pa) | perm | PTE_U | PTE_V | PTE_A | PTE_D;
+}
+
+/* Build the process satp value (Sv39) for a given root PA. */
+unsigned long
+hat_as_satp(unsigned long root)
+{
+	return (SATP_MAKE(SATP_MODE_SV39, 0, root >> PAGESHIFT));
+}
+
+/* Switch the current hart to address space `satp` and flush the TLB. */
+void
+hat_as_switch(unsigned long satp)
+{
+	__asm__ __volatile__(
+	    "csrw satp, %0\n\t"
+	    "sfence.vma\n\t"
+	    :: "r"(satp) : "memory");
+}
+
+/* Return the shared kernel satp (to switch back to on process teardown). */
+unsigned long
+hat_kernel_satp(void)
+{
+	return (kernel_satp);
+}
+
+/*
  * hat_highva_prove — R-P4 milestone-4 proof. Allocate a fresh physical page,
  * map it at KERNELBASE in the high canonical VA range (R/W, kernel), write a
  * signature through the high VA, and read it back — both through the high VA

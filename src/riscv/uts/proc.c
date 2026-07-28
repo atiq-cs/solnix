@@ -101,6 +101,23 @@ this_cpu(void)
 	return (0);
 }
 
+/*
+ * curthread_kstacktop — the top (high address) of the CURRENT thread's kernel
+ * stack, 16-byte aligned. The R-P7 userland-exec path installs this in
+ * sscratch so a trap from U-mode lands on a valid kernel stack. Returns 0 for
+ * the boot/idle thread (which runs on the hart boot stack, not a kmem stack) —
+ * exec always runs from a real kmem-stacked thread, so a nonzero value.
+ */
+unsigned long
+curthread_kstacktop(void)
+{
+	kthread_t *self = curthread[this_cpu()];
+
+	if (self == 0 || self->t_stack == 0)
+		return (0);
+	return (((unsigned long)self->t_stack + self->t_stacksize) & ~15UL);
+}
+
 /* Enqueue a runnable thread at the tail (FIFO round-robin). Caller may hold or
  * not hold runq_lock; this takes it. */
 static void

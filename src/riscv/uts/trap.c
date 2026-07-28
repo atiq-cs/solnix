@@ -24,48 +24,13 @@
 #include "sbi.h"
 #include "riscv_regs.h"
 #include "asm_frame.h"
+#include "regs.h"
 
 /*
- * struct regs — the saved trap frame. MUST match asm_frame.h offsets. The
- * _Static_asserts below catch any drift between this struct and the asm.
+ * struct regs (regs.h) is the saved trap frame. MUST match asm_frame.h
+ * offsets. The _Static_asserts below catch any drift between the struct and
+ * the asm.
  */
-struct regs {
-	unsigned long r_ra;	/* x1 */
-	unsigned long r_sp;	/* x2 */
-	unsigned long r_gp;	/* x3 */
-	unsigned long r_tp;	/* x4 */
-	unsigned long r_t0;	/* x5 */
-	unsigned long r_t1;	/* x6 */
-	unsigned long r_t2;	/* x7 */
-	unsigned long r_s0;	/* x8 */
-	unsigned long r_s1;	/* x9 */
-	unsigned long r_a0;	/* x10 */
-	unsigned long r_a1;	/* x11 */
-	unsigned long r_a2;	/* x12 */
-	unsigned long r_a3;	/* x13 */
-	unsigned long r_a4;	/* x14 */
-	unsigned long r_a5;	/* x15 */
-	unsigned long r_a6;	/* x16 */
-	unsigned long r_a7;	/* x17 */
-	unsigned long r_s2;	/* x18 */
-	unsigned long r_s3;	/* x19 */
-	unsigned long r_s4;	/* x20 */
-	unsigned long r_s5;	/* x21 */
-	unsigned long r_s6;	/* x22 */
-	unsigned long r_s7;	/* x23 */
-	unsigned long r_s8;	/* x24 */
-	unsigned long r_s9;	/* x25 */
-	unsigned long r_s10;	/* x26 */
-	unsigned long r_s11;	/* x27 */
-	unsigned long r_t3;	/* x28 */
-	unsigned long r_t4;	/* x29 */
-	unsigned long r_t5;	/* x30 */
-	unsigned long r_t6;	/* x31 */
-	unsigned long r_sepc;
-	unsigned long r_sstatus;
-	unsigned long r_scause;
-	unsigned long r_stval;
-};
 
 _Static_assert(__builtin_offsetof(struct regs, r_ra) == TF_RA, "TF_RA");
 _Static_assert(__builtin_offsetof(struct regs, r_sp) == TF_SP, "TF_SP");
@@ -75,6 +40,14 @@ _Static_assert(__builtin_offsetof(struct regs, r_sstatus) == TF_SSTATUS, "TF_SST
 _Static_assert(__builtin_offsetof(struct regs, r_scause) == TF_SCAUSE, "TF_SCAUSE");
 _Static_assert(__builtin_offsetof(struct regs, r_stval) == TF_STVAL, "TF_STVAL");
 _Static_assert(sizeof (struct regs) <= TF_SIZE, "TF_SIZE too small");
+
+/* From syscall.c: dispatch an ecall-from-U-mode. Advances tf->r_sepc past the
+ * 4-byte ecall and writes the return value into tf->r_a0. */
+extern void syscall_trap(struct regs *tf);
+/* Set nonzero once a userland process is running (proc/exec), so an unexpected
+ * trap taken from U-mode is reported with its context instead of parking as a
+ * kernel bug. */
+extern volatile int userland_active;
 
 /* From timer.c: handle one S-mode timer interrupt (print tick, disarm). */
 extern void timer_intr(void);
@@ -217,6 +190,12 @@ trap(struct regs *tf)
 	}
 
 	/* Synchronous exception. */
+	if (code == EXC_ECALL_U) {
+		/* System call from userland: dispatch + return to U-mode. */
+		syscall_trap(tf);
+		return;
+	}
+
 	if (trap_probe_active) {
 		/*
 		 * Expected bring-up probe fault. Report, record the cause, and

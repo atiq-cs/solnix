@@ -24,6 +24,7 @@
 
 #include "sbi.h"
 #include "riscv_regs.h"
+#include "init_elf.h"
 
 extern void kputdec(unsigned long v);
 extern void kputhex(unsigned long v);
@@ -34,6 +35,9 @@ extern int vioblk_present(void);
 /* From proc.c: create + dispatch a kernel thread; yield. */
 extern void *thread_create(void (*entry)(void *), void *arg);
 extern void thread_yield(void);
+
+/* From uproc.c: exec a static ELF image as the first userland process. */
+extern int proc_exec_user(const char *path, const void *img, unsigned long len);
 
 /*
  * ---------------------------------------------------------------------------
@@ -136,18 +140,32 @@ single_user_thread(void *arg)
 {
 	(void) arg;
 
-	sbi_console_puts("\n[init] starting single-user context (kernel "
-	    "thread stub, R-P6 init-analog)\n");
+	sbi_console_puts("\n[init] starting single-user context\n");
 	sbi_console_puts("[init] root filesystem is mounted read-only; "
 	    "entering single-user mode\n");
 	sbi_console_puts("\nSINGLE USER MODE\n");
-	sbi_console_puts("Type control-d to proceed with normal startup,\n");
-	sbi_console_puts("(or give root password for system maintenance): ");
-	sbi_console_puts("\n\n# ");	/* the single-user shell prompt */
 
+	/*
+	 * R-P7: exec the real /sbin/init as a U-mode process. rootfs serves the
+	 * embedded static riscv64 ELF (init_elf[]); proc_exec_user builds a
+	 * fresh address space, loads the ELF, and drops to U-mode. It returns
+	 * when init exits (the interactive loop exits on 'q'). This is the
+	 * milestone: userland runs.
+	 *
+	 * NOTE: init_elf[] is embedded in the kernel image (built by
+	 * user/build-init.sh). The disk is attached + proven readable (R-P6),
+	 * but the ramdisk root serves no file bytes yet, so R-P7 embeds init;
+	 * reading /sbin/init off vioblk into this buffer is the R-P8 upgrade.
+	 */
 	single_user_reached = 1;
 
-	/* No console input wired yet (R-P7): yield back to the dispatcher. */
+	(void) proc_exec_user("/sbin/init", init_elf, init_elf_len);
+
+	sbi_console_puts("\n[init] /sbin/init returned to kernel; dropping to "
+	    "single-user shell stub\n");
+	sbi_console_puts("\n# ");	/* the single-user shell prompt */
+
+	/* No further console loop wired in the kernel (R-P8): yield forever. */
 	thread_yield();
 	for (;;)
 		thread_yield();

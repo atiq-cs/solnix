@@ -1,5 +1,5 @@
 /*
- * trap.S — illumos riscv64 S-mode trap vector (R-P3).
+ * trap.S — illumos riscv64 S-mode trap vector (R-P3, R-P7 U/S split).
  *
  * The stvec target. On any S-mode trap (exception or interrupt) the hardware:
  *   - writes the cause to scause, the faulting/return PC to sepc, aux info to
@@ -14,25 +14,56 @@
  * arm64-gate uts/aarch64 exception vectors: a thin asm shim that builds a
  * frame and calls the C dispatcher. Reimplemented from the Priv Spec.
  *
- * NOTE (R-P3 scope): we run entirely on the boot/kernel stack (no U-mode yet,
- * no per-cpu trap stack, no nested-trap handling). sp is already valid S-mode
- * kernel sp when we trap. R-P4 adds sscratch-based U/S stack swap + per-cpu.
+ * R-P7 U/S split: on entry we swap sp with sscratch. The convention is that
+ * sscratch holds the per-process KERNEL stack top while the CPU is in U-mode,
+ * and 0 while in S-mode (set by usermode_entry / restored below). After the
+ * `csrrw sp, sscratch, sp`, if the value now in sscratch (the old sp) reveals
+ * we came from U-mode (sscratch was nonzero => it was the kernel sp, now sp is
+ * it) we build the frame on the kernel stack and save the user sp from
+ * sscratch. If we came from S-mode (sscratch was 0), we swap back and use the
+ * current kernel sp — exactly the R-P3 behaviour, so the timer/PLIC/probe
+ * paths are unchanged. This is the NetBSD riscv trapframe U/S idiom,
+ * reimplemented from the Priv Spec.
  */
 
 #include "asm_frame.h"
+#include "riscv_regs.h"
 
 	.section .text
 	.align 4			/* stvec Direct-mode target must be 4-aligned */
 	.globl _trap_entry
 	.type _trap_entry, @function
 _trap_entry:
-	/* Make room for the trap frame on the current stack. */
+	/*
+	 * Swap sp <-> sscratch. t6 is saved into sscratch temporarily? No: we
+	 * cannot clobber any GPR before saving it. Use the atomic csrrw: after
+	 * it, sp = old sscratch, sscratch = old sp. We then need one scratch
+	 * register to test; save it to the frame we are about to build, but we
+	 * do not yet know if sp is valid. Trick: sscratch is 0 in S-mode, so if
+	 * after the swap sp==0 we were in S-mode and must swap back.
+	 */
+	csrrw	sp, sscratch, sp	/* sp <-> sscratch */
+	bnez	sp, 1f			/* sp!=0 => from U-mode, sp=kernel stack */
+	/* From S-mode: sscratch was 0. Swap back to recover the real sp. */
+	csrrw	sp, sscratch, sp	/* sp = real kernel sp, sscratch = 0 again */
+1:
+	/* sp now points at a valid kernel stack (U case) or the S-mode sp. */
+
+	/* Make room for the trap frame on the current (kernel) stack. */
 	addi	sp, sp, -TF_SIZE
 
 	/* Save all integer registers x1..x31 (x0 is hardwired zero, skip). */
 	sd	x1,  TF_RA(sp)
-	/* x2 = sp: save the ORIGINAL sp (before we subtracted TF_SIZE). */
-	addi	t0, sp, TF_SIZE
+	/*
+	 * x2 = sp: recover the ORIGINAL (interrupted) sp. It is currently in
+	 * sscratch (we swapped it there on entry): for the U case sscratch holds
+	 * the user sp; for the S case sscratch is 0 and the real prior sp was
+	 * sp+TF_SIZE. Read sscratch: if 0 (S-mode) use sp+TF_SIZE, else use it.
+	 */
+	csrr	t0, sscratch
+	bnez	t0, 2f
+	addi	t0, sp, TF_SIZE		/* S-mode: prior sp */
+2:
 	sd	t0,  TF_SP(sp)
 	sd	x3,  TF_GP(sp)
 	sd	x4,  TF_TP(sp)
@@ -92,6 +123,23 @@ _trap_entry:
 	ld	t0, TF_SSTATUS(sp)
 	csrw	sstatus, t0
 
+	/*
+	 * Set sscratch for the return. If we are returning to U-mode
+	 * (sstatus.SPP==0), sscratch must hold the kernel stack top to use on
+	 * the NEXT trap from U-mode; we use the top of THIS frame (sp+TF_SIZE),
+	 * which is the kernel stack we entered on. If returning to S-mode
+	 * (SPP==1), sscratch must be 0 (S-mode convention). t0 still holds the
+	 * restored sstatus.
+	 */
+	andi	t1, t0, SSTATUS_SPP
+	bnez	t1, 3f			/* SPP=1 => returning to S-mode */
+	addi	t1, sp, TF_SIZE		/* SPP=0 => kernel stack top for next U trap */
+	csrw	sscratch, t1
+	j	4f
+3:
+	csrw	sscratch, zero
+4:
+
 	/* Restore integer registers (x0 skipped; sp restored last via addi). */
 	ld	x1,  TF_RA(sp)
 	ld	x3,  TF_GP(sp)
@@ -124,8 +172,107 @@ _trap_entry:
 	ld	x30, TF_T5(sp)
 	ld	x31, TF_T6(sp)
 
-	/* Pop the frame (restores sp) and return from the trap. */
-	addi	sp, sp, TF_SIZE
+	/*
+	 * Restore sp (x2) LAST from the frame. TF_SP holds the correct prior sp
+	 * for BOTH cases: for a trap from U-mode it is the USER sp (saved from
+	 * sscratch on entry); for a trap from S-mode it is the prior kernel sp
+	 * (sp+TF_SIZE, computed + saved on entry). Loading it here — instead of
+	 * `addi sp, sp, TF_SIZE` — is what returns userland to its own stack on
+	 * sret. (This is the R-P7 fix: the R-P3 code only ever popped the kernel
+	 * frame, which left U-mode running on the kernel stack.)
+	 */
+	ld	x2,  TF_SP(sp)
 	sret
 
 	.size _trap_entry, . - _trap_entry
+
+/*
+ * usermode_entry(struct regs *tf, unsigned long kstacktop)
+ *   a0 = pointer to the user trap frame (r_sepc=entry PC, r_sp=user sp,
+ *        r_a0.. = argc/argv style args), a1 = kernel stack top to install in
+ *   sscratch for the next trap-from-U. Sets sstatus for a return to U-mode
+ *   (SPP=0 so sret drops to U, SPIE=1 so interrupts enable in U, SUM=1 so the
+ *   kernel may later touch user pages), loads the full user GPR set + sepc,
+ *   then `sret` into U-mode. Does not return.
+ *
+ * This is the one-way door from S-mode into a userland process. The satp for
+ * the process address space must already be loaded by the caller (as_switch).
+ */
+	.globl usermode_entry
+	.type usermode_entry, @function
+usermode_entry:
+	/* Install the kernel stack top for the next trap-from-U. */
+	csrw	sscratch, a1
+
+	/* Build sstatus: clear SPP (=>U), set SPIE (=>SIE in U), set SUM. */
+	csrr	t0, sstatus
+	li	t1, SSTATUS_SPP
+	not	t1, t1
+	and	t0, t0, t1		/* SPP = 0 */
+	li	t1, SSTATUS_SPIE
+	or	t0, t0, t1		/* SPIE = 1 */
+	li	t1, SSTATUS_SUM
+	or	t0, t0, t1		/* SUM = 1 */
+	csrw	sstatus, t0
+
+	/* sepc = user entry PC (from tf->r_sepc). */
+	ld	t0, TF_SEPC(a0)
+	csrw	sepc, t0
+
+	/*
+	 * Load the user GPRs from the frame. Load a0 (x10) LAST since a0 is our
+	 * frame pointer; use t0 as the base to preserve the frame pointer until
+	 * the end. Actually simpler: keep a0 as base, load everything except a0,
+	 * then load a0. sp (x2) is the user stack.
+	 */
+	ld	x1,  TF_RA(a0)
+	ld	x2,  TF_SP(a0)
+	ld	x3,  TF_GP(a0)
+	ld	x4,  TF_TP(a0)
+	ld	x5,  TF_T0(a0)
+	ld	x6,  TF_T1(a0)
+	ld	x7,  TF_T2(a0)
+	ld	x8,  TF_S0(a0)
+	ld	x9,  TF_S1(a0)
+	/* x10 = a0 loaded last */
+	ld	x11, TF_A1(a0)
+	ld	x12, TF_A2(a0)
+	ld	x13, TF_A3(a0)
+	ld	x14, TF_A4(a0)
+	ld	x15, TF_A5(a0)
+	ld	x16, TF_A6(a0)
+	ld	x17, TF_A7(a0)
+	ld	x18, TF_S2(a0)
+	ld	x19, TF_S3(a0)
+	ld	x20, TF_S4(a0)
+	ld	x21, TF_S5(a0)
+	ld	x22, TF_S6(a0)
+	ld	x23, TF_S7(a0)
+	ld	x24, TF_S8(a0)
+	ld	x25, TF_S9(a0)
+	ld	x26, TF_S10(a0)
+	ld	x27, TF_S11(a0)
+	ld	x28, TF_T3(a0)
+	ld	x29, TF_T4(a0)
+	ld	x30, TF_T5(a0)
+	ld	x31, TF_T6(a0)
+	ld	x10, TF_A0(a0)		/* a0 last */
+
+	sret				/* enter U-mode at sepc */
+	.size usermode_entry, . - usermode_entry
+
+/*
+ * uproc_enter_trampoline — landing pad for the rv_swtch INTO the userland
+ * launch (uproc.c). rv_swtch restores s0=&uframe, s1=kstacktop (callee-saved),
+ * then "returns" here. Move them into the a0/a1 usermode_entry expects and
+ * tail-call it. usermode_entry does not return (it srets into U-mode).
+ */
+	.globl uproc_enter_trampoline
+	.type uproc_enter_trampoline, @function
+uproc_enter_trampoline:
+	mv	a0, s0			/* &uframe */
+	mv	a1, s1			/* kstacktop */
+	call	usermode_entry
+1:	wfi
+	j	1b
+	.size uproc_enter_trampoline, . - uproc_enter_trampoline
