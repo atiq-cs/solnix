@@ -15,6 +15,7 @@ extern "C" {
 extern void sbi_console_putchar(int ch);
 extern void sbi_console_puts(const char *s);
 extern const char *sbi_console_kind(void);
+extern long sbi_set_timer(unsigned long deadline);
 
 #ifdef __cplusplus
 }

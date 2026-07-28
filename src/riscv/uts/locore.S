@@ -97,13 +97,14 @@ _start:
 
 	/*
 	 * Hand off to C. a0=hartid, a1=dtb are still live (we clobbered only
-	 * t0-t2, sp). C prototype:  void main(uint64_t hartid, uint64_t dtb);
-	 * We call main directly (no separate mlsetup for R-P2; the banner is the
-	 * whole job). main() must not return; if it does, park.
+	 * t0-t2, sp). C prototype:  void mlsetup(uint64_t hartid, uint64_t dtb);
+	 * mlsetup does the R-P3 machine-dependent bring-up (trap vector, Sv39
+	 * paging, timer) then enters main(). It must not return; if it does,
+	 * park.
 	 */
-	call	main
+	call	mlsetup
 
-	/* main() should never return. If it does, fall into park. */
+	/* mlsetup()/main() should never return. If it does, fall into park. */
 park:
 	wfi
 	j	park

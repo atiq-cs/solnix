@@ -35,10 +35,14 @@
 /* SBI extension IDs. */
 #define	SBI_EXT_LEGACY_PUTCHAR	0x01UL		/* legacy console putchar */
 #define	SBI_EXT_BASE		0x10UL		/* SBI Base extension */
+#define	SBI_EXT_TIME		0x54494D45UL	/* "TIME" timer extension */
 #define	SBI_EXT_DBCN		0x4442434EUL	/* "DBCN" debug console */
 
 /* SBI Base (0x10) function IDs. */
 #define	SBI_BASE_PROBE_EXTENSION	3UL
+
+/* SBI TIME (0x54494D45) function IDs. */
+#define	SBI_TIME_SET_TIMER		0UL
 
 /* DBCN (0x4442434E) function IDs. */
 #define	SBI_DBCN_CONSOLE_WRITE		0UL
@@ -149,6 +153,23 @@ sbi_console_puts(const char *s)
 			sbi_console_putchar('\r');
 		sbi_console_putchar((unsigned char)*s);
 	}
+}
+
+/*
+ * sbi_set_timer — SBI TIME extension (EID 0x54494D45, FID 0). Programs the
+ * platform timer (mtimecmp) to the absolute `time`-CSR deadline; when the
+ * counter reaches it, OpenSBI pends the S-mode timer interrupt (STIP). Calling
+ * again with a new (or far-future) deadline re-arms / disarms and clears the
+ * currently-pending timer interrupt, per the SBI spec. Returns the SBI error
+ * (0 == success).
+ */
+long
+sbi_set_timer(unsigned long deadline)
+{
+	sbiret_t ret;
+
+	ret = sbi_ecall(SBI_EXT_TIME, SBI_TIME_SET_TIMER, deadline, 0, 0);
+	return (ret.error);
 }
 
 /*
