@@ -41,7 +41,7 @@ Worth adding to the target universe (Phase 3 breadth):
   packaged there but not in Hipster.
 
 ### Tribblix
-- The **SPARC** build (our S1 source!) — Tribblix is the main live sparc illumos.
+- The **SPARC** build — TARGET is OpenIndiana Hipster SPARC (maintainer Ultra 45); Tribblix m34 used only as an ABI-compatible illumos-gate sysroot SOURCE for cross-toolchain bootstrap.
 - **zap** package manager + Tribblix "overlays"; some retro/niche pkgs.
 
 ### The big one: pkgsrc (SmartOS + others)
