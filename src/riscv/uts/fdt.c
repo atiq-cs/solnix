@@ -663,3 +663,397 @@ fdt_attach_drivers(unsigned long dtb)
 	(void) cur_name;
 	return (attached);
 }
+
+/*
+ * ---------------------------------------------------------------------------
+ * R-P16: richer driver-facing property parsing, MERGED from n-hys of_utils.c.
+ *
+ * Portions Copyright 2017 Hayashi Naoyuki; adapted for solnix from
+ * n-hys/illumos-gate (usr/src/uts/riscv64/io/of_utils.c).
+ *
+ * of_utils.c gives drivers of_get_reg / of_get_clock / of_get_reset /
+ * of_is_compatible / of_get_prop_int over a pnode_t promif device tree. We do
+ * NOT have that promif tree (our fdt.c is a token-stream walker), so rather
+ * than drag in promif/prom_*.c + sys/of_utils.h (a bigger, board-independent
+ * import that would not build against our walker), we MERGE of_utils's
+ * reg/clock/reset/compatible SEMANTICS onto our walker. A node is identified
+ * by its byte OFFSET into the struct block (fdt_node_t) -- the walker's
+ * natural handle -- replacing of_utils's pnode_t. This is what an adopted K1
+ * driver (dw-apb-uart, dwcmshc-sdhci, dwmac) binds through to get its MMIO
+ * base and clock/reset phandles from the DT instead of a compiled-in address.
+ * Our AIA-aware helpers above (fdt_intc_is_aia, fdt_k1_summary) are untouched.
+ *
+ * A node offset points AT the FDT_BEGIN_NODE token of the node. #address-cells
+ * / #size-cells are resolved by walking to the parent (of_get_address_cells /
+ * of_get_size_cells), defaulting 2/2 as of_utils does.
+ * ---------------------------------------------------------------------------
+ */
+
+typedef long fdt_node_t;		/* struct-block byte offset, or -1 */
+#define	FDT_NONE	(-1L)
+
+/* Base of the struct block + strings block for `dtb'. */
+static const unsigned char *
+fdt_struct(unsigned long dtb, const unsigned char **strs_out)
+{
+	const struct fdt_header *h = (const struct fdt_header *)dtb;
+	if (be32((const unsigned char *)&h->magic) != FDT_MAGIC)
+		return (0);
+	if (strs_out != 0)
+		*strs_out = (const unsigned char *)dtb +
+		    be32((const unsigned char *)&h->off_dt_strings);
+	return ((const unsigned char *)dtb +
+	    be32((const unsigned char *)&h->off_dt_struct));
+}
+
+/* Skip a BEGIN_NODE token's name; return the pointer just past it (aligned). */
+static const unsigned char *
+fdt_skip_name(const unsigned char *p)
+{
+	const char *name = (const char *)p;
+	int len = 0;
+	while (name[len] != '\0')
+		len++;
+	return (p + ((len + 4) & ~3U));
+}
+
+/*
+ * fdt_find_compatible -- return the node OFFSET of the first node whose
+ * `compatible' property contains a string starting with `pfx', or FDT_NONE.
+ * of_utils's of_is_compatible + of_register's walk, collapsed to a finder.
+ */
+fdt_node_t
+fdt_find_compatible(unsigned long dtb, const char *pfx)
+{
+	const unsigned char *stru, *strs, *p;
+	long node_off = FDT_NONE;
+
+	stru = fdt_struct(dtb, &strs);
+	if (stru == 0)
+		return (FDT_NONE);
+	p = stru;
+
+	for (;;) {
+		unsigned int tok = be32(p);
+		long here = (long)(p - stru);
+		p += 4;
+		if (tok == FDT_END)
+			break;
+		if (tok == FDT_NOP)
+			continue;
+		if (tok == FDT_BEGIN_NODE) {
+			node_off = here;
+			p = fdt_skip_name(p);
+			continue;
+		}
+		if (tok == FDT_END_NODE)
+			continue;
+		if (tok == FDT_PROP) {
+			unsigned int plen = be32(p);
+			unsigned int noff = be32(p + 4);
+			const char *pname = (const char *)strs + noff;
+			const char *pdata = (const char *)(p + 8);
+			if (namecmp(pname, "compatible") == 0 &&
+			    compat_has(pdata, plen, pfx))
+				return (node_off);
+			p += 8 + ((plen + 3) & ~3U);
+			continue;
+		}
+		break;
+	}
+	return (FDT_NONE);
+}
+
+/*
+ * fdt_node_prop -- locate property `name' on the node at `node_off'. On
+ * success returns 1 and sets *data to the property bytes and *len to its
+ * length. Only scans the node's OWN properties (stops at the first child
+ * BEGIN_NODE or the node's END_NODE). of_utils's prom_getprop analog.
+ */
+static int
+fdt_node_prop(unsigned long dtb, fdt_node_t node_off, const char *name,
+    const unsigned char **data, unsigned int *len)
+{
+	const unsigned char *stru, *strs, *p;
+
+	if (node_off < 0)
+		return (0);
+	stru = fdt_struct(dtb, &strs);
+	if (stru == 0)
+		return (0);
+	p = stru + node_off;
+	if (be32(p) != FDT_BEGIN_NODE)
+		return (0);
+	p += 4;
+	p = fdt_skip_name(p);
+	for (;;) {
+		unsigned int tok = be32(p);
+		p += 4;
+		if (tok == FDT_NOP)
+			continue;
+		if (tok == FDT_PROP) {
+			unsigned int plen = be32(p);
+			unsigned int noff = be32(p + 4);
+			const char *pname = (const char *)strs + noff;
+			if (namecmp(pname, name) == 0) {
+				if (data != 0)
+					*data = p + 8;
+				if (len != 0)
+					*len = plen;
+				return (1);
+			}
+			p += 8 + ((plen + 3) & ~3U);
+			continue;
+		}
+		/* first child or our own END_NODE: property not found here */
+		return (0);
+	}
+}
+
+/*
+ * fdt_node_prop_u32 -- read a single-cell (u32) property, defaulting `def' if
+ * absent. of_utils's of_get_prop_int (without the parent-walk; #*-cells uses
+ * the dedicated helpers below).
+ */
+int
+fdt_node_prop_u32(unsigned long dtb, fdt_node_t node_off, const char *name,
+    int def)
+{
+	const unsigned char *d;
+	unsigned int l;
+	if (fdt_node_prop(dtb, node_off, name, &d, &l) && l >= 4)
+		return ((int)be32(d));
+	return (def);
+}
+
+/*
+ * fdt_parent -- return the OFFSET of the parent of `node_off', or FDT_NONE for
+ * the root. Re-walks the struct block tracking a depth stack of BEGIN_NODE
+ * offsets (the walker has no back-pointers). of_utils gets this free from the
+ * promif tree; we reconstruct it.
+ */
+static fdt_node_t
+fdt_parent(unsigned long dtb, fdt_node_t node_off)
+{
+	const unsigned char *stru, *strs, *p;
+	long stack[16];
+	int depth = 0;
+
+	if (node_off <= 0)
+		return (FDT_NONE);
+	stru = fdt_struct(dtb, &strs);
+	if (stru == 0)
+		return (FDT_NONE);
+	p = stru;
+	for (;;) {
+		unsigned int tok = be32(p);
+		long here = (long)(p - stru);
+		p += 4;
+		if (tok == FDT_END)
+			break;
+		if (tok == FDT_NOP)
+			continue;
+		if (tok == FDT_BEGIN_NODE) {
+			if (here == node_off)
+				return (depth > 0 ? stack[depth - 1] :
+				    FDT_NONE);
+			if (depth < 16)
+				stack[depth] = here;
+			depth++;
+			p = fdt_skip_name(p);
+			continue;
+		}
+		if (tok == FDT_END_NODE) {
+			if (depth > 0)
+				depth--;
+			continue;
+		}
+		if (tok == FDT_PROP) {
+			unsigned int plen = be32(p);
+			p += 8 + ((plen + 3) & ~3U);
+			continue;
+		}
+		break;
+	}
+	return (FDT_NONE);
+}
+
+/* #address-cells / #size-cells for this node (from its parent). 2/2 default. */
+static int
+fdt_addr_cells(unsigned long dtb, fdt_node_t node_off)
+{
+	return (fdt_node_prop_u32(dtb, fdt_parent(dtb, node_off),
+	    "#address-cells", 2));
+}
+static int
+fdt_size_cells(unsigned long dtb, fdt_node_t node_off)
+{
+	return (fdt_node_prop_u32(dtb, fdt_parent(dtb, node_off),
+	    "#size-cells", 2));
+}
+
+/*
+ * fdt_node_reg -- read the `reg' entry at `index', honoring the node's
+ * #address-cells/#size-cells (of_utils of_get_reg). Fills *base (and *size if
+ * non-NULL). Returns 0 on success, -1 on absence/range error -- of_utils's
+ * return convention.
+ */
+int
+fdt_node_reg(unsigned long dtb, fdt_node_t node_off, int index,
+    unsigned long *base, unsigned long *size)
+{
+	const unsigned char *d;
+	unsigned int l;
+	int ac, sc;
+	unsigned int stride, off;
+
+	if (!fdt_node_prop(dtb, node_off, "reg", &d, &l))
+		return (-1);
+	ac = fdt_addr_cells(dtb, node_off);
+	sc = fdt_size_cells(dtb, node_off);
+	if (ac < 1 || ac > 2)
+		return (-1);
+	stride = (ac + sc) * 4;
+	off = stride * index;
+	if (off + ac * 4 > l)
+		return (-1);
+	if (base != 0)
+		*base = be_cells(d + off, ac);
+	if (size != 0)
+		*size = (sc > 0) ? be_cells(d + off + ac * 4, sc) : 0;
+	return (0);
+}
+
+/*
+ * fdt_node_phandle_id -- the shared body of of_get_clock / of_get_reset: read
+ * the `prop' ("clocks" or "resets") array of <phandle id> pairs at `index',
+ * returning the referenced controller's phandle in *phandle and the id in
+ * *id. The controller's #<kind>-cells must be 1 (as of_utils requires).
+ * Returns 0 on success. We return the phandle value rather than an of_utils
+ * pnode_t; a driver resolves it with fdt_find_phandle below.
+ */
+static int
+fdt_node_phandle_id(unsigned long dtb, fdt_node_t node_off, const char *prop,
+    int index, unsigned int *phandle, unsigned int *id)
+{
+	const unsigned char *d;
+	unsigned int l;
+	unsigned int off;
+
+	if (!fdt_node_prop(dtb, node_off, prop, &d, &l))
+		return (-1);
+	/* <phandle id> pairs (cells==1 controllers). */
+	off = index * 2 * 4;
+	if (off + 8 > l)
+		return (-1);
+	if (phandle != 0)
+		*phandle = be32(d + off);
+	if (id != 0)
+		*id = be32(d + off + 4);
+	return (0);
+}
+
+int
+fdt_node_clock(unsigned long dtb, fdt_node_t node_off, int index,
+    unsigned int *phandle, unsigned int *id)
+{
+	return (fdt_node_phandle_id(dtb, node_off, "clocks", index, phandle,
+	    id));
+}
+int
+fdt_node_reset(unsigned long dtb, fdt_node_t node_off, int index,
+    unsigned int *phandle, unsigned int *id)
+{
+	return (fdt_node_phandle_id(dtb, node_off, "resets", index, phandle,
+	    id));
+}
+
+/*
+ * fdt_find_phandle -- resolve a phandle to a node OFFSET (of_utils's
+ * prom_findnode_by_phandle). Scans for the node carrying phandle==`ph' in its
+ * "phandle" (or legacy "linux,phandle") property.
+ */
+fdt_node_t
+fdt_find_phandle(unsigned long dtb, unsigned int ph)
+{
+	const unsigned char *stru, *strs, *p;
+	long node_off = FDT_NONE;
+
+	stru = fdt_struct(dtb, &strs);
+	if (stru == 0)
+		return (FDT_NONE);
+	p = stru;
+	for (;;) {
+		unsigned int tok = be32(p);
+		long here = (long)(p - stru);
+		p += 4;
+		if (tok == FDT_END)
+			break;
+		if (tok == FDT_NOP)
+			continue;
+		if (tok == FDT_BEGIN_NODE) {
+			node_off = here;
+			p = fdt_skip_name(p);
+			continue;
+		}
+		if (tok == FDT_END_NODE)
+			continue;
+		if (tok == FDT_PROP) {
+			unsigned int plen = be32(p);
+			unsigned int noff = be32(p + 4);
+			const char *pname = (const char *)strs + noff;
+			const unsigned char *pdata = p + 8;
+			if ((namecmp(pname, "phandle") == 0 ||
+			    namecmp(pname, "linux,phandle") == 0) &&
+			    plen >= 4 && be32(pdata) == ph)
+				return (node_off);
+			p += 8 + ((plen + 3) & ~3U);
+			continue;
+		}
+		break;
+	}
+	return (FDT_NONE);
+}
+
+extern int cmo_selftest(void);
+
+/*
+ * fdt_of_utils_selftest -- R-P16 proof that the merged of_utils-style
+ * accessors work against a real DTB (the K1 board DTB, or the qemu-virt DTB).
+ * Finds the dw-apb-uart (or ns16550) node by compatible, reads its reg base +
+ * reg-shift, and (if present) its first clock phandle -- exactly the sequence
+ * a K1 console driver runs to bind from the DT. Returns 1 if reg was obtained.
+ *
+ * PROVE: "fdt(of): dw-apb-uart reg@X reg-shift=Y clock-phandle=Z (from DT)".
+ */
+int
+fdt_of_utils_selftest(unsigned long dtb)
+{
+	fdt_node_t n;
+	unsigned long base = 0, size = 0;
+	int shift;
+	unsigned int ph = 0, id = 0;
+	int have_reg;
+
+	n = fdt_find_compatible(dtb, "snps,dw-apb-uart");
+	if (n == FDT_NONE)
+		n = fdt_find_compatible(dtb, "ns16550");
+	if (n == FDT_NONE) {
+		sbi_console_puts("fdt(of): no dw-apb-uart/ns16550 node in DT\n");
+		return (0);
+	}
+	have_reg = (fdt_node_reg(dtb, n, 0, &base, &size) == 0);
+	shift = fdt_node_prop_u32(dtb, n, "reg-shift", 0);
+	(void) fdt_node_clock(dtb, n, 0, &ph, &id);
+
+	sbi_console_puts("fdt(of): dw-apb-uart reg@");
+	kputhex(base);
+	sbi_console_puts(" size ");
+	kputhex(size);
+	sbi_console_puts(" reg-shift=");
+	kputdec((unsigned long)shift);
+	sbi_console_puts(" clock-phandle=");
+	kputhex((unsigned long)ph);
+	sbi_console_puts(" (parsed from DT via merged of_utils accessors)\n");
+	return (have_reg);
+}
