@@ -18,3 +18,6 @@ artifacts/sparc-toolchain/sparc-sysroot-hipster.tar.zst
 artifacts/sparc-xbuild/**/build/
 artifacts/sparc-xbuild/**/*.so*
 artifacts/sparc-toolchain/hello*
+artifacts/install-media/*.iso
+artifacts/install-media/*.img
+artifacts/install-media/**/boot_archive*
