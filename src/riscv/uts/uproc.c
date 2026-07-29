@@ -94,6 +94,23 @@ extern void usermode_entry(struct regs *tf, unsigned long kstacktop);
 /* rootfs.c: resolve a path to file bytes (regular files + exec images). */
 extern int vfs_lookup(const char *path, const void **datap, unsigned long *lenp);
 
+/* blkfs.c: on-disk writable SNFS over the block cache (R-P12). */
+extern int snfs_open(const char *name, int create, unsigned long *lenp);
+extern long snfs_read(int slot, unsigned long off, unsigned char *kbuf,
+    unsigned long n);
+extern long snfs_write(int slot, unsigned long off, const unsigned char *kbuf,
+    unsigned long n);
+extern unsigned long snfs_len(int slot);
+extern int snfs_sync(void);
+extern int snfs_remount(void);
+extern int snfs_ready_p(void);
+
+/* R-P12 pipe pool (defined below); forward-declared for proc_close/proc_fork. */
+static void pipe_close(int pi, int is_write);
+static void pipe_ref(int pi, int is_write);
+static long pipe_read(int pi, char *ubuf, unsigned long n);
+static long pipe_write(int pi, const char *ubuf, unsigned long n);
+
 /* copy.S: fault-safe user-memory access (R-P9). */
 extern long copyin(const void *uaddr, void *kaddr, unsigned long n);
 extern long copyout(const void *kaddr, void *uaddr, unsigned long n);
@@ -375,6 +392,9 @@ typedef struct proc {
 		unsigned long	fd_len;
 		unsigned long	fd_pos;
 		void		*fd_wnode;	/* ramfs node if writable */
+		int		fd_snfs;	/* SNFS slot if on-disk file, else -1 */
+		int		fd_pipe;	/* pipe index if a pipe, else -1 */
+		int		fd_pipe_w;	/* 1 = write end, 0 = read end */
 	} p_fd[8];
 } proc_t;
 
@@ -416,7 +436,11 @@ proc_alloc(void)
 			for (k = 0; k < NSIG; k++)
 				p->p_sighand[k] = SIG_DFL_VAL;
 			for (k = 0; k < 8; k++)
+			for (k = 0; k < 8; k++) {
 				p->p_fd[k].fd_used = 0;
+				p->p_fd[k].fd_snfs = -1;
+				p->p_fd[k].fd_pipe = -1;
+			}
 			return (p);
 		}
 	}
@@ -509,6 +533,8 @@ proc_open(const char *path)
 			p->p_fd[fd].fd_len = len;
 			p->p_fd[fd].fd_pos = 0;
 			p->p_fd[fd].fd_wnode = 0;   /* read-only vfs image */
+			p->p_fd[fd].fd_snfs = -1;
+			p->p_fd[fd].fd_pipe = -1;
 			return (fd);
 		}
 	}
@@ -530,6 +556,25 @@ proc_fread(int fd, char *ubuf, unsigned long n)
 
 	if (p == 0 || fd < 3 || fd >= 8 || !p->p_fd[fd].fd_used)
 		return (-1);
+	/* R-P12: pipe read end. */
+	if (p->p_fd[fd].fd_pipe >= 0)
+		return (pipe_read(p->p_fd[fd].fd_pipe, ubuf, n));
+	/* R-P12: on-disk SNFS file. */
+	if (p->p_fd[fd].fd_snfs >= 0) {
+		unsigned char kb[256];
+		unsigned long got, off = p->p_fd[fd].fd_pos;
+		long r;
+		if (n > sizeof (kb))
+			n = sizeof (kb);
+		r = snfs_read(p->p_fd[fd].fd_snfs, off, kb, n);
+		if (r <= 0)
+			return (r);
+		got = (unsigned long)r;
+		if (copyout(kb, ubuf, got) != 0)
+			return (-14);
+		p->p_fd[fd].fd_pos += got;
+		return ((long)got);
+	}
 	/* R-P11: a writable ramfs fd reads back live data (it may have grown
 	 * since open); a read-only vfs fd reads the snapshotted image. */
 	if (p->p_fd[fd].fd_wnode != 0) {
@@ -562,6 +607,11 @@ proc_close(int fd)
 		return (-1);
 	p->p_fd[fd].fd_used = 0;
 	p->p_fd[fd].fd_wnode = 0;	/* R-P11: clear so a reused slot is clean */
+	/* R-P12: releasing a pipe end drops one reference on the pipe. */
+	if (p->p_fd[fd].fd_pipe >= 0)
+		pipe_close(p->p_fd[fd].fd_pipe, p->p_fd[fd].fd_pipe_w);
+	p->p_fd[fd].fd_snfs = -1;
+	p->p_fd[fd].fd_pipe = -1;
 	return (0);
 }
 
@@ -636,8 +686,11 @@ load_elf_into(proc_t *p, const char *path, const void *img, unsigned long len,
 	p->p_uframe.r_a1 = sp + 8;			/* argv (past argc) */
 
 	/* exec starts with a clean fd table (only console fds 0/1/2 implicit). */
-	for (i = 0; i < 8; i++)
+	for (i = 0; i < 8; i++) {
 		p->p_fd[i].fd_used = 0;
+		p->p_fd[i].fd_snfs = -1;
+		p->p_fd[i].fd_pipe = -1;
+	}
 	/* R-P11: exec resets caught signals to default (POSIX); ignored stay
 	 * ignored. No handler survives an image replacement. */
 	for (i = 0; i < NSIG; i++) {
@@ -784,6 +837,15 @@ proc_fork(struct regs *tf)
 	if (child->p_as == 0) {
 		child->p_inuse = 0;
 		return (-1);
+	}
+
+	/* R-P12: child inherits the parent's open fd table (pipes, files). Bump
+	 * the refcount on any inherited pipe end so close accounting is right. */
+	for (i = 0; i < 8; i++) {
+		child->p_fd[i] = parent->p_fd[i];
+		if (parent->p_fd[i].fd_used && parent->p_fd[i].fd_pipe >= 0)
+			pipe_ref(parent->p_fd[i].fd_pipe,
+			    parent->p_fd[i].fd_pipe_w);
 	}
 
 	/* Clone the parent's user frame; child returns 0 from fork. */
@@ -1328,6 +1390,13 @@ proc_openat_w(const char *path, int flags)
 	}
 	kpath[i] = 0;
 
+	/* R-P12: paths under /data/ live on the on-disk SNFS (block-cached). */
+	if (kpath[0] == '/' && kpath[1] == 'd' && kpath[2] == 'a' &&
+	    kpath[3] == 't' && kpath[4] == 'a' && kpath[5] == '/') {
+		extern long proc_openat_snfs(const char *kpath, int flags);
+		return (proc_openat_snfs(kpath, flags));
+	}
+
 	/* Read-only open of an existing file: route to the read-only vfs path
 	 * unless it already exists in the ramfs. */
 	if ((flags & (O_CREAT | O_WRONLY | O_RDWR)) == 0 &&
@@ -1349,6 +1418,8 @@ proc_openat_w(const char *path, int flags)
 			p->p_fd[fd].fd_data = r->rf_data;
 			p->p_fd[fd].fd_len = r->rf_len;
 			p->p_fd[fd].fd_pos = 0;
+			p->p_fd[fd].fd_snfs = -1;
+			p->p_fd[fd].fd_pipe = -1;
 			return (fd);
 		}
 	}
@@ -1370,6 +1441,29 @@ proc_fwrite(int fd, const char *ubuf, unsigned long n)
 
 	if (p == 0 || fd < 3 || fd >= 8 || !p->p_fd[fd].fd_used)
 		return (-1);
+	/* R-P12: pipe write end. */
+	if (p->p_fd[fd].fd_pipe >= 0)
+		return (pipe_write(p->p_fd[fd].fd_pipe, ubuf, n));
+	/* R-P12: on-disk SNFS file. */
+	if (p->p_fd[fd].fd_snfs >= 0) {
+		unsigned char kb[256];
+		unsigned long done = 0;
+		while (done < n) {
+			unsigned long chunk = n - done;
+			long w;
+			if (chunk > sizeof (kb))
+				chunk = sizeof (kb);
+			if (copyin(ubuf + done, kb, chunk) != 0)
+				return (done > 0 ? (long)done : -14);
+			w = snfs_write(p->p_fd[fd].fd_snfs,
+			    p->p_fd[fd].fd_pos, kb, chunk);
+			if (w <= 0)
+				break;
+			p->p_fd[fd].fd_pos += (unsigned long)w;
+			done += (unsigned long)w;
+		}
+		return ((long)done);
+	}
 	r = (struct ramfile *)p->p_fd[fd].fd_wnode;
 	if (r == 0)
 		return (-1);			/* read-only file */
@@ -1402,9 +1496,14 @@ proc_lseek(int fd, long off, int whence)
 
 	if (p == 0 || fd < 3 || fd >= 8 || !p->p_fd[fd].fd_used)
 		return (-1);
+	if (p->p_fd[fd].fd_pipe >= 0)
+		return (-1);		/* pipes are not seekable */
 	{
 		struct ramfile *r = (struct ramfile *)p->p_fd[fd].fd_wnode;
-		len = (r != 0) ? r->rf_len : p->p_fd[fd].fd_len;
+		if (p->p_fd[fd].fd_snfs >= 0)
+			len = snfs_len(p->p_fd[fd].fd_snfs);
+		else
+			len = (r != 0) ? r->rf_len : p->p_fd[fd].fd_len;
 	}
 	switch (whence) {
 	case 0: base = 0; break;			/* SEEK_SET */
@@ -1417,4 +1516,295 @@ proc_lseek(int fd, long off, int whence)
 		return (-1);
 	p->p_fd[fd].fd_pos = (unsigned long)np;
 	return (np);
+}
+
+/*
+ * ===========================================================================
+ * R-P12 pipes: pipe(2), dup2(2), and blocking pipe read/write. A pipe is a
+ * fixed ring buffer with a read cursor and a write cursor, plus reader/writer
+ * reference counts so a read returns EOF (0) once all write ends are closed.
+ * The shell wires `cmd1 | cmd2` by pipe()+fork()+dup2(): child1's stdout is the
+ * write end, child2's stdin is the read end. This is the seed of illumos
+ * fifofs/pipe(2). NOTE (R-P12 ceiling): fixed NPIPE pipes, PIPEBUF bytes each,
+ * no O_NONBLOCK, no SIGPIPE; a real fifofs vnode is R-P13.
+ * ===========================================================================
+ */
+#define	NPIPE		8
+#define	PIPEBUF		4096
+
+struct pipe {
+	int		pp_used;
+	unsigned long	pp_rpos;	/* total bytes read */
+	unsigned long	pp_wpos;	/* total bytes written */
+	int		pp_readers;	/* open read ends */
+	int		pp_writers;	/* open write ends */
+	unsigned char	pp_data[PIPEBUF];
+};
+static struct pipe pipetab[NPIPE];
+
+static struct pipe *
+pipe_alloc(void)
+{
+	int i;
+	for (i = 0; i < NPIPE; i++)
+		if (!pipetab[i].pp_used) {
+			pipetab[i].pp_used = 1;
+			pipetab[i].pp_rpos = 0;
+			pipetab[i].pp_wpos = 0;
+			pipetab[i].pp_readers = 1;
+			pipetab[i].pp_writers = 1;
+			return (&pipetab[i]);
+		}
+	return (0);
+}
+
+static void
+pipe_ref(int pi, int is_write)
+{
+	if (pi < 0 || pi >= NPIPE || !pipetab[pi].pp_used)
+		return;
+	if (is_write)
+		pipetab[pi].pp_writers++;
+	else
+		pipetab[pi].pp_readers++;
+}
+
+static void
+pipe_close(int pi, int is_write)
+{
+	if (pi < 0 || pi >= NPIPE || !pipetab[pi].pp_used)
+		return;
+	if (is_write) {
+		if (pipetab[pi].pp_writers > 0)
+			pipetab[pi].pp_writers--;
+		/* Last writer gone: wake blocked readers so they see EOF. */
+		if (pipetab[pi].pp_writers == 0)
+			wakeup(&pipetab[pi]);
+	} else {
+		if (pipetab[pi].pp_readers > 0)
+			pipetab[pi].pp_readers--;
+		if (pipetab[pi].pp_readers == 0)
+			wakeup(&pipetab[pi]);	/* wake blocked writers */
+	}
+	if (pipetab[pi].pp_readers == 0 && pipetab[pi].pp_writers == 0)
+		pipetab[pi].pp_used = 0;	/* free when both ends closed */
+}
+
+/*
+ * pipe_read — copy up to n bytes from the pipe to the user buffer. Blocks (real
+ * sleepq) while the pipe is empty and a writer still exists; returns 0 (EOF)
+ * once empty and all writers have closed.
+ */
+static long
+pipe_read(int pi, char *ubuf, unsigned long n)
+{
+	struct pipe *pp;
+	proc_t *self = curproc;
+	unsigned long avail, got = 0;
+
+	if (pi < 0 || pi >= NPIPE || !pipetab[pi].pp_used)
+		return (-1);
+	pp = &pipetab[pi];
+	for (;;) {
+		avail = pp->pp_wpos - pp->pp_rpos;
+		if (avail > 0)
+			break;
+		if (pp->pp_writers == 0)
+			return (0);		/* EOF: no more writers */
+		sleep_on(pp);			/* wait for data / writer close */
+		curproc = self;			/* restore after wakeup */
+	}
+	if (n > avail)
+		n = avail;
+	while (got < n) {
+		unsigned long idx = pp->pp_rpos % PIPEBUF;
+		unsigned long run = PIPEBUF - idx;
+		char ch;
+		if (run > n - got)
+			run = n - got;
+		/* Copy byte-run through a small bounce (fault-safe). */
+		{
+			unsigned long i;
+			for (i = 0; i < run; i++) {
+				ch = (char)pp->pp_data[idx + i];
+				if (copyout(&ch, ubuf + got + i, 1) != 0)
+					return (got + i > 0 ? (long)(got + i) : -14);
+			}
+		}
+		pp->pp_rpos += run;
+		got += run;
+	}
+	wakeup(pp);				/* space freed: wake writers */
+	return ((long)got);
+}
+
+/*
+ * pipe_write — copy up to n bytes from the user buffer into the pipe. Blocks
+ * while the pipe is full and a reader still exists; if all readers are gone
+ * returns -1 (EPIPE-ish, no SIGPIPE yet).
+ */
+static long
+pipe_write(int pi, const char *ubuf, unsigned long n)
+{
+	struct pipe *pp;
+	proc_t *self = curproc;
+	unsigned long put = 0, space;
+
+	if (pi < 0 || pi >= NPIPE || !pipetab[pi].pp_used)
+		return (-1);
+	pp = &pipetab[pi];
+	while (put < n) {
+		if (pp->pp_readers == 0)
+			return (put > 0 ? (long)put : -1);	/* EPIPE */
+		space = PIPEBUF - (pp->pp_wpos - pp->pp_rpos);
+		if (space == 0) {
+			sleep_on(pp);
+			curproc = self;
+			continue;
+		}
+		{
+			unsigned long idx = pp->pp_wpos % PIPEBUF;
+			unsigned long run = PIPEBUF - idx;
+			char ch;
+			unsigned long i;
+			if (run > space)
+				run = space;
+			if (run > n - put)
+				run = n - put;
+			for (i = 0; i < run; i++) {
+				if (copyin(ubuf + put + i, &ch, 1) != 0)
+					return (put + i > 0 ? (long)(put + i) : -14);
+				pp->pp_data[idx + i] = (unsigned char)ch;
+			}
+			pp->pp_wpos += run;
+			put += run;
+		}
+		wakeup(pp);			/* data available: wake readers */
+	}
+	return ((long)put);
+}
+
+/*
+ * proc_pipe — the pipe(2) backing. Allocate a pipe object, grab two fds (read
+ * end, write end) in the current process, and copy the pair out to the user
+ * int[2]. Returns 0 on success, -1 on failure.
+ */
+long
+proc_pipe(int *ufds)
+{
+	proc_t *p = curproc;
+	struct pipe *pp;
+	int pi, rfd = -1, wfd = -1, fd;
+	int pair[2];
+
+	if (p == 0 || ufds == 0)
+		return (-1);
+	pp = pipe_alloc();
+	if (pp == 0)
+		return (-1);
+	pi = (int)(pp - pipetab);
+
+	for (fd = 3; fd < 8 && rfd < 0; fd++)
+		if (!p->p_fd[fd].fd_used) rfd = fd;
+	for (fd = rfd + 1; fd < 8 && wfd < 0; fd++)
+		if (!p->p_fd[fd].fd_used) wfd = fd;
+	if (rfd < 0 || wfd < 0) {
+		pp->pp_used = 0;
+		return (-1);
+	}
+	p->p_fd[rfd].fd_used = 1; p->p_fd[rfd].fd_pipe = pi;
+	p->p_fd[rfd].fd_pipe_w = 0; p->p_fd[rfd].fd_snfs = -1;
+	p->p_fd[rfd].fd_wnode = 0; p->p_fd[rfd].fd_pos = 0;
+	p->p_fd[wfd].fd_used = 1; p->p_fd[wfd].fd_pipe = pi;
+	p->p_fd[wfd].fd_pipe_w = 1; p->p_fd[wfd].fd_snfs = -1;
+	p->p_fd[wfd].fd_wnode = 0; p->p_fd[wfd].fd_pos = 0;
+
+	pair[0] = rfd;
+	pair[1] = wfd;
+	if (copyout(pair, ufds, sizeof (pair)) != 0) {
+		proc_close(rfd);
+		proc_close(wfd);
+		return (-14);
+	}
+	return (0);
+}
+
+/*
+ * proc_dup2 — the dup2(2) backing. Redirect newfd to refer to the same object
+ * as oldfd (closing newfd first). Supports the console fds (0/1/2) as targets:
+ * dup2(pipe_wfd, 1) makes a child's stdout the pipe. We model console-target
+ * redirection by recording the source object in the console-fd's slot; the
+ * syscall read/write layer already special-cases fd 0/1/2, so we instead move
+ * the object into the low fd slot and mark it used. Returns newfd or -1.
+ */
+long
+proc_dup2(int oldfd, int newfd)
+{
+	proc_t *p = curproc;
+
+	if (p == 0 || oldfd < 0 || oldfd >= 8 || newfd < 0 || newfd >= 8)
+		return (-1);
+	if (oldfd == newfd)
+		return (newfd);
+	if (oldfd >= 3 && !p->p_fd[oldfd].fd_used)
+		return (-1);
+	/* Close the target first (drops a pipe ref if it held one). */
+	if (newfd >= 3 && p->p_fd[newfd].fd_used)
+		proc_close(newfd);
+	/* Duplicate oldfd's slot into newfd. For a console source (0/1/2) there
+	 * is no slot object; but the only use is dup2(pipe_fd, 0|1), i.e. old is
+	 * a real fd >=3, new is a console fd — copy the object down. */
+	if (oldfd >= 3) {
+		p->p_fd[newfd] = p->p_fd[oldfd];
+		if (p->p_fd[oldfd].fd_pipe >= 0)
+			pipe_ref(p->p_fd[oldfd].fd_pipe,
+			    p->p_fd[oldfd].fd_pipe_w);
+	}
+	return (newfd);
+}
+
+/*
+ * proc_openat_snfs — open a path under the on-disk SNFS mount point "/data/".
+ * Called from proc_openat_w when the path starts with /data/. create honors
+ * O_CREAT. Returns an fd (>=3) or negative errno.
+ */
+long
+proc_openat_snfs(const char *kpath, int flags)
+{
+	proc_t *p = curproc;
+	const char *name = kpath + 6;	/* strip "/data/" */
+	unsigned long len = 0;
+	int slot, fd;
+
+	if (!snfs_ready_p())
+		return (-1);
+	slot = snfs_open(name, (flags & O_CREAT) ? 1 : 0, &len);
+	if (slot < 0)
+		return (-1);
+	for (fd = 3; fd < 8; fd++) {
+		if (!p->p_fd[fd].fd_used) {
+			p->p_fd[fd].fd_used = 1;
+			p->p_fd[fd].fd_snfs = slot;
+			p->p_fd[fd].fd_pipe = -1;
+			p->p_fd[fd].fd_wnode = 0;
+			p->p_fd[fd].fd_len = len;
+			p->p_fd[fd].fd_pos = 0;
+			return (fd);
+		}
+	}
+	return (-1);
+}
+
+/* sys_sync — flush the on-disk FS block cache to disk (R-P12). */
+long
+sys_sync(void)
+{
+	return (snfs_ready_p() ? snfs_sync() : 0);
+}
+
+/* sys_remount — invalidate the block cache + re-mount (proves persistence). */
+long
+sys_remount(void)
+{
+	return (snfs_remount() ? 0 : -1);
 }

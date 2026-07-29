@@ -64,6 +64,66 @@ run_argv(const char *path, char *arg)
 	}
 }
 
+/*
+ * exec_stage — inside a pipeline child (fds already wired): exec cmd/arg. The
+ * shell builtin `echo` is inlined (writes to fd 1, which the child redirected
+ * to the pipe) so `echo hello | cat` works without an /bin/echo dependency.
+ */
+static void exec_stage(char *word) __attribute__((noreturn));
+static void
+exec_stage(char *word)
+{
+	char *cmd, *arg;
+	size_t i = 0;
+
+	while (word[i] == ' ') i++;
+	cmd = &word[i];
+	while (word[i] && word[i] != ' ') i++;
+	if (word[i] == ' ') { word[i] = '\0'; arg = &word[i + 1]; }
+	else arg = &word[i];
+
+	if (strcmp(cmd, "echo") == 0) {
+		puts(arg); puts("\n"); _exit(0);
+	}
+	{
+		char path[32]; char *av[4]; int n = 0, k;
+		path[0]='/'; path[1]='b'; path[2]='i'; path[3]='n'; path[4]='/';
+		for (k = 0; cmd[k] && k < 24; k++) path[5 + k] = cmd[k];
+		path[5 + k] = '\0';
+		av[n++] = path;
+		if (arg && arg[0]) av[n++] = arg;
+		av[n] = 0;
+		execve(path, av, 0);
+		puts("sh: exec failed in pipeline\n"); _exit(127);
+	}
+}
+
+/*
+ * run_pipeline — run "left | right": pipe(), fork left with stdout->write end,
+ * fork right with stdin->read end, close both ends in the parent, wait both.
+ * The R-P12 pipes gate: two processes wired by a kernel pipe + dup2.
+ */
+static void
+run_pipeline(char *left, char *right)
+{
+	int fds[2], p1, p2, st;
+
+	if (pipe(fds) != 0) { puts("sh: pipe failed\n"); return; }
+	p1 = fork();
+	if (p1 == 0) {
+		dup2(fds[1], 1); close(fds[0]); close(fds[1]);
+		exec_stage(left);
+	}
+	p2 = fork();
+	if (p2 == 0) {
+		dup2(fds[0], 0); close(fds[0]); close(fds[1]);
+		exec_stage(right);
+	}
+	close(fds[0]); close(fds[1]);
+	if (p1 > 0) (void) waitpid(p1, &st, 0);
+	if (p2 > 0) (void) waitpid(p2, &st, 0);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -85,6 +145,20 @@ main(int argc, char **argv)
 		if (readline(line, 128) < 0) {
 			puts("\n");
 			continue;
+		}
+
+		/* R-P12: a `|` runs a two-stage pipeline, then re-prompt. */
+		{
+			size_t b; int piped = 0;
+			for (b = 0; line[b]; b++)
+				if (line[b] == '|') {
+					line[b] = '\0';
+					run_pipeline(line, &line[b + 1]);
+					piped = 1;
+					break;
+				}
+			if (piped)
+				continue;
 		}
 
 		cmd = line;

@@ -49,6 +49,11 @@ extern int mountroot(void);
 extern int single_user(const char *rootdev);
 extern const char *rootdev_name(void);
 
+/* R-P12: writable data disk + on-disk SNFS + FDT device summary. */
+extern int vioblk_data_attach(void);
+extern int snfs_init(void);
+extern int fdt_summary(unsigned long dtb);
+
 /* FDT /memory parse (fdt.c). */
 extern int fdt_get_memory(unsigned long dtb, unsigned long *base,
     unsigned long *size);
@@ -127,6 +132,10 @@ startup_memlist(unsigned long dtb)
 	startup_rambase = base;
 	startup_ramsize = size;
 
+	/* R-P12: full FDT device summary (mem + uart + virtio node count) while
+	 * the DTB is still identity-mapped (before startup_vm remaps). */
+	(void) fdt_summary(dtb);
+
 	page_init(base, size);
 	sbi_console_puts("[startup] physmem: ");
 	kputdec(physmem);
@@ -195,6 +204,9 @@ startup_root(void)
 	(void) vioblk_attach();
 	(void) vionet_attach();
 	(void) mountroot();
+	/* R-P12: writable on-disk FS (FDT summary already printed at memlist). */
+	(void) vioblk_data_attach();
+	(void) snfs_init();
 	(void) single_user(rootdev_name());
 }
 

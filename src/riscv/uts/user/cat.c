@@ -8,13 +8,18 @@ int
 main(int argc, char **argv)
 {
 	char buf[128];
-	const char *path = (argc > 1) ? argv[1] : "/etc/motd";
 	int fd;
 	long n;
 
-	fd = open(path, O_RDONLY);
+	/* No arg: copy stdin (fd 0) to stdout — makes `echo x | cat` stream. */
+	if (argc <= 1) {
+		while ((n = read(0, buf, sizeof (buf))) > 0)
+			write(1, buf, (size_t)n);
+		return (0);
+	}
+	fd = open(argv[1], O_RDONLY);
 	if (fd < 0) {
-		printf("cat: cannot open %s\n", path);
+		printf("cat: cannot open %s\n", argv[1]);
 		return (1);
 	}
 	while ((n = read(fd, buf, sizeof (buf))) > 0)

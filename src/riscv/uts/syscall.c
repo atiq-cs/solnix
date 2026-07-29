@@ -65,6 +65,11 @@ extern void proc_deliver_signals(struct regs *tf);
 extern long proc_openat_w(const char *path, int flags);
 extern long proc_fwrite(int fd, const char *ubuf, unsigned long n);
 extern long proc_lseek(int fd, long off, int whence);
+/* R-P12: pipes, dup2, on-disk FS sync/remount. */
+extern long proc_pipe(int *ufds);
+extern long proc_dup2(int oldfd, int newfd);
+extern long sys_sync(void);
+extern long sys_remount(void);
 
 /* trap.c: clock-tick preemption count (R-P9 gate 5). */
 extern volatile unsigned long preempt_count;
@@ -78,6 +83,9 @@ extern long copyout(const void *kaddr, void *uaddr, unsigned long n);
 /* Riscv Linux-ABI subset numbers our userland stub uses. */
 #define	SYS_openat	56
 #define	SYS_close	57
+#define	SYS_pipe2	59
+#define	SYS_dup3	24
+#define	SYS_sync	81
 #define	SYS_lseek	62
 #define	SYS_read	63
 #define	SYS_write	64
@@ -97,6 +105,8 @@ extern long copyout(const void *kaddr, void *uaddr, unsigned long n);
 #define	SYS_cowreport	500
 /* solnix-private diagnostic: print the clock-preemption count (R-P9 gate 5). */
 #define	SYS_preemptreport 501
+/* solnix-private: invalidate the block cache + re-mount the on-disk FS. */
+#define	SYS_remount	502
 
 /*
  * sys_write — write `n` bytes of the user buffer to the console (fd 1 = stdout,
@@ -206,6 +216,20 @@ syscall_trap(struct regs *tf)
 		break;
 	case SYS_close:
 		ret = proc_close((int)tf->r_a0);
+		break;
+	case SYS_pipe2:
+		/* a0 = int[2] fds; a1 = flags (ignored). */
+		ret = proc_pipe((int *)tf->r_a0);
+		break;
+	case SYS_dup3:
+		/* a0 = oldfd, a1 = newfd, a2 = flags (ignored). dup2 semantics. */
+		ret = proc_dup2((int)tf->r_a0, (int)tf->r_a1);
+		break;
+	case SYS_sync:
+		ret = sys_sync();
+		break;
+	case SYS_remount:
+		ret = sys_remount();
 		break;
 	case SYS_getpid:
 		ret = proc_getpid();

@@ -29,6 +29,10 @@ typedef unsigned long size_t;
 #define SYS_wait4   260
 #define SYS_openat  56
 #define SYS_lseek   62
+#define SYS_pipe2   59
+#define SYS_dup3    24
+#define SYS_sync    81
+#define SYS_remount 502
 #define SYS_kill    129
 #define SYS_rt_sigaction 134
 #define SYS_rt_sigreturn 139
@@ -70,6 +74,12 @@ int  setgid(unsigned int gid);
 int  getuid(void);
 void (*signal(int sig, void (*handler)(int)))(int);
 int  sigaction_h(int sig, void (*handler)(int));
+
+/* R-P12: pipes, fd duplication, on-disk FS sync/remount. */
+int  pipe(int fds[2]);
+int  dup2(int oldfd, int newfd);
+int  sync_fs(void);
+int  remount_fs(void);
 
 /* string.h slice. */
 size_t strlen(const char *s);

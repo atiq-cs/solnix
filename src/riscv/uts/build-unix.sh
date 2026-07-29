@@ -48,6 +48,7 @@ echo "== compile (freestanding, $TC) =="
 "$CC" $CFLAGS -c uproc.c     -o uproc.o
 "$CC" $CFLAGS -c virtio.c    -o virtio.o
 "$CC" $CFLAGS -c vioblk.c    -o vioblk.o
+"$CC" $CFLAGS -c blkfs.c     -o blkfs.o
 "$CC" $CFLAGS -c vionet.c    -o vionet.o
 "$CC" $CFLAGS -c rootfs.c    -o rootfs.o
 "$CC" $CFLAGS -c startup.c   -o startup.o
@@ -57,7 +58,7 @@ echo "== link (riscv.ld @ 0x80200000) =="
 "$LD" -T riscv.ld -o "$OUT" locore.o trap_asm.o swtch.o sbi.o trap.o \
 	hat_riscv.o timer.o plic.o fdt.o vm_page.o kmem.o proc.o \
 	as.o elf.o syscall.o uart.o uproc.o copy.o \
-	virtio.o vioblk.o vionet.o rootfs.o startup.o main.o
+	virtio.o vioblk.o blkfs.o vionet.o rootfs.o startup.o main.o
 
 echo "== image info =="
 file "$OUT" || true

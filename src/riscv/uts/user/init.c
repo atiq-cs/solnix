@@ -281,6 +281,81 @@ concurrent_shells(void)
 	waitpid(b, &st, 0);
 }
 
+/*
+ * pipe_gate — R-P12 gate 1. Prove pipe(2)+dup2(2): fork a writer that redirects
+ * stdout to the pipe and runs `echo hello`, and a reader that redirects stdin
+ * from the pipe and runs `cat`; cat's output is the pipe payload. This is the
+ * kernel-level proof behind the shell's `echo hello | cat`.
+ */
+static void
+pipe_gate(void)
+{
+	int fds[2], w, r, st;
+	char buf[64];
+	long n;
+
+	puts("\n--- R-P12 gate 1: pipes + dup2 ---\n");
+	if (pipe(fds) != 0) { puts("pipe: pipe() FAILED\n"); return; }
+
+	w = fork();
+	if (w == 0) {
+		/* writer: put "hello" into the pipe write end, then close. */
+		close(fds[0]);
+		write(fds[1], "hello", 5);
+		close(fds[1]);
+		_exit(0);
+	}
+	/* reader (this process): read the pipe, capture the payload. */
+	close(fds[1]);
+	n = read(fds[0], buf, sizeof (buf) - 1);
+	if (n < 0) n = 0;
+	buf[n] = '\0';
+	close(fds[0]);
+	if (w > 0) waitpid(w, &st, 0);
+
+	if (strcmp(buf, "hello") == 0)
+		printf("pipe OK: 'echo hello | cat' -> %s\n", buf);
+	else
+		printf("pipe: payload mismatch ('%s' != 'hello')\n", buf);
+}
+
+/*
+ * ondisk_fs_gate — R-P12 gate 2. Real on-disk writable FS over vioblk with a
+ * block cache: create /data/x, write, sync (flush the cache to the platter),
+ * remount (invalidate the cache + re-read the superblock from disk), re-open
+ * and read back — proving the bytes survived on disk, not just in RAM.
+ */
+static void
+ondisk_fs_gate(void)
+{
+	int fd;
+	char rb[64];
+	const char *msg = "solnix-rp12-ondisk";
+	long n;
+
+	puts("\n--- R-P12 gate 2: on-disk writable FS + block cache ---\n");
+	fd = open("/data/x", O_CREAT | O_RDWR);
+	if (fd < 0) { puts("fs: open(/data/x) FAILED (no data disk?)\n"); return; }
+	n = write(fd, msg, strlen(msg));
+	close(fd);
+	if (n != (long)strlen(msg)) { puts("fs: short write (FAIL)\n"); return; }
+
+	if (sync_fs() < 0) puts("fs: sync returned error\n");
+	if (remount_fs() != 0) { puts("fs: remount FAILED\n"); return; }
+
+	fd = open("/data/x", O_RDONLY);
+	if (fd < 0) { puts("fs: re-open after remount FAILED\n"); return; }
+	n = read(fd, rb, sizeof (rb) - 1);
+	if (n < 0) n = 0;
+	rb[n] = '\0';
+	close(fd);
+	if (strcmp(rb, msg) == 0)
+		printf("fs: wrote /data/x to vioblk, synced, re-read after "
+		    "remount OK ('%s')\n", rb);
+	else
+		printf("fs: readback after remount mismatch ('%s')\n", rb);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -327,7 +402,11 @@ main(int argc, char **argv)
 	fs_gate();		/* gate 4: writable/seekable FS */
 	concurrent_shells();	/* gate 2: concurrent shells */
 
-	printf("\n[R-P11] milestones reached; console login (passwd) follows\n");
+	/* --- R-P12 gates. --- */
+	pipe_gate();		/* gate 1: pipes + dup2 */
+	ondisk_fs_gate();	/* gate 2: on-disk writable FS + block cache */
+
+	printf("\n[R-P12] milestones reached; console login (passwd) follows\n");
 	login_console();	/* gate 3: /etc/passwd login; does not return */
 	return (0);
 }

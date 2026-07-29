@@ -42,6 +42,10 @@ int  kill(int pid, int sig)                 { return (int)__sys(SYS_kill, pid, s
 int  setuid(unsigned int uid)               { return (int)__sys(SYS_setuid, uid, 0, 0, 0); }
 int  setgid(unsigned int gid)               { return (int)__sys(SYS_setgid, gid, 0, 0, 0); }
 int  getuid(void)                           { return (int)__sys(SYS_getuid, 0, 0, 0, 0); }
+int  pipe(int fds[2])                        { return (int)__sys(SYS_pipe2, (long)fds, 0, 0, 0); }
+int  dup2(int o, int nw)                     { return (int)__sys(SYS_dup3, o, nw, 0, 0); }
+int  sync_fs(void)                           { return (int)__sys(SYS_sync, 0, 0, 0, 0); }
+int  remount_fs(void)                        { return (int)__sys(SYS_remount, 0, 0, 0, 0); }
 
 /*
  * __sigreturn — the signal-handler return trampoline. When a handler returns,

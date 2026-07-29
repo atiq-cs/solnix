@@ -1773,3 +1773,109 @@ solnix-riscv login:
   K1 / the K3 class) — the AIA interrupt controller (APLIC + IMSIC) in place of
   the PLIC, real SoC console/storage/net drivers, a real DTB from firmware, SMP
   on physical harts, and a native rv build host.
+
+---
+
+## R-P12 — pipes + pipelines, a real on-disk writable FS with a block cache, and the DTB device-discovery arc toward K1/K3
+
+R-P12 takes the R-P11 kernel (preemptive multitasking, real libc slice, signals,
+/etc/passwd login, concurrent shells, an in-memory ramfs) and lands three
+things: **pipes + a shell pipeline**, a **real on-disk writable filesystem over
+vioblk fronted by a block/buffer cache** (replacing the ram-only writable FS for
+persistent `/data`), and the **start of the K1/K3 hardware arc** via a real,
+full flattened-devicetree parse that discovers memory + uart + virtio from the
+firmware DTB instead of hardcoding.
+
+### R-P12.0 New + changed sources (`src/riscv/uts/` + `user/`)
+
+| File | Change |
+|------|--------|
+| `blkfs.c` (new) | The block/buffer cache (`getblk`/`bread`/`bdwrite`/`bflush`/`binval`, NBUF=16 LRU-evicting 512-byte buffers with delayed write-back) + **SNFS**, a tiny on-disk writable FS: sector 0 superblock (magic "SNFS"), sector 1 directory (8 fixed 56-byte dirents), each file owning 8 contiguous data sectors. `snfs_open/read/write/len/sync/remount` all route through the cache. This is the seed of the illumos bio layer + a vnode/FS. |
+| `vioblk.c` | Added `vioblk_fs_write_sector` (T_OUT write path for the ustar disk) and a whole THIRD virtio-blk instance for the writable **data disk** (`vioblk_data_read/write_sector`, `vioblk_data_attach` which claims the blk device that is neither the ustar rootfs nor the R-P6 MBR test disk). |
+| `uproc.c` | fd table gains `fd_snfs` / `fd_pipe` / `fd_pipe_w`; `proc_fread/fwrite/lseek` dispatch by fd kind (pipe / SNFS / ramfs / vfs). New **pipe pool** (NPIPE ring buffers, reader/writer refcounts, blocking `pipe_read/pipe_write` on the sleepq), `proc_pipe` (pipe(2)), `proc_dup2` (dup2(2)), `proc_openat_snfs` (opens under `/data/`), `sys_sync`/`sys_remount`. `proc_fork` now **inherits the fd table** (pipes survive fork). |
+| `syscall.c` | New syscalls: `pipe2`(59), `dup3`(24, dup2 semantics), `sync`(81), private `remount`(502). |
+| `fdt.c` | New `fdt_summary(dtb)`: a full FDT walk that reports the /memory extent, the uart unit-address (parsed from the node name), and the virtio-mmio node count — the real DTB device-discovery gate. |
+| `startup.c` | `startup_memlist` calls `fdt_summary(dtb)` while the DTB is still identity-mapped (before `startup_vm` remaps); `startup_root` attaches the data disk + mounts SNFS before single-user. |
+| `user/cat.c` | With no arg, copies stdin (fd 0) to stdout — so `echo x | cat` genuinely streams through the pipe. |
+| `user/sh.c` | A `|` in the command line runs a **two-stage pipeline**: `pipe()`, fork left with `dup2(w,1)`, fork right with `dup2(r,0)`, parent closes both ends and waits both. |
+| `user/init.c` | Added R-P12 gate 1 (`pipe_gate`: fork a writer that puts "hello" in the pipe, read it back — proves pipe(2)) and gate 2 (`ondisk_fs_gate`: write `/data/x`, sync, remount, re-read after the cache is invalidated). |
+| `user/libc.{c,h}` | `pipe/dup2/sync_fs/remount_fs` stubs. |
+| `rp12-run.sh` (new) | Boots the R-P12 kernel with the R-P6 test disk + ustar rootfs + a 3rd raw `data.img` writable disk; drives login + an interactive `echo hello | cat`. `timeout 120`, detached (`&` + bounded `sleep`+`kill`), never foreground-waits. |
+
+### R-P12.1 Pipes + pipeline (gate 1)
+
+A pipe is a fixed 4 KiB ring buffer with total-bytes read/write cursors and
+reader/writer refcounts. `pipe_read` blocks on the sleepq while empty with a
+live writer and returns 0 (EOF) once all writers close; `pipe_write` blocks
+while full with a live reader. fds carry `fd_pipe` (pool index) + `fd_pipe_w`
+(which end). `proc_fork` copies the parent fd table and bumps pipe refcounts, so
+a pipe survives fork; `proc_close` drops one ref and frees the pipe when both
+ends are closed. `dup2` duplicates an fd slot (bumping a pipe ref), which is how
+`echo hello | cat` wires child stdout/stdin to the pipe.
+
+PROVEN (kernel-level, deterministic): `pipe OK: 'echo hello | cat' -> hello`.
+Also proven interactively: the shell parses `|`, forks pid 11 (left/echo) and
+pid 12 (right/cat), and "hello" streams through the kernel pipe.
+
+### R-P12.2 On-disk writable FS + block cache (gate 2 — the milestone)
+
+SNFS lives on a dedicated virtio-blk data disk. Every access goes through the
+block cache: writes mark buffers `B_DELWRI` (delayed), `snfs_sync` flushes every
+dirty buffer via `vioblk_data_write_sector`, and `snfs_remount` invalidates the
+whole cache and re-reads the superblock from the platter — so a post-remount
+read MUST come from disk, not a still-dirty buffer. The gate creates `/data/x`,
+writes, syncs, remounts, and re-reads; the data also persists across whole
+reboots (a second boot reports "SNFS mounted", not "mkfs").
+
+PROVEN: `[vioblk-data] writable data disk @0x10006000 online (SNFS)`;
+`[blkfs] sync: 1 dirty block(s) written back to disk`;
+`[blkfs] remount: block cache invalidated, re-reading superblock from disk`;
+`fs: wrote /data/x to vioblk, synced, re-read after remount OK ('solnix-rp12-ondisk')`.
+
+### R-P12.3 DTB device discovery (gate 3 — begins the K1/K3 arc)
+
+Rather than the full AIA APLIC+IMSIC bring-up (deferred — larger than this
+turn's budget), R-P12 starts the real-hardware arc with a real, full FDT walk.
+`fdt_summary` steps every struct-block token, matches node names (memory / uart
+/ virtio_mmio), reads the /memory `reg`, and parses the uart unit-address out of
+its node name — the beginning of firmware-driven device discovery a real SoC
+(K1/K3) needs instead of compiled-in addresses.
+
+PROVEN: `dtb: parsed FDT — mem@0x80000000 size 0x8000000, uart@0x10000000, 8 virtio nodes`.
+
+### R-P12.4 Result — SUCCESS (3 of 3 targeted gates)
+
+```
+dtb: parsed FDT — mem@0x0000000080000000 size 0x0000000008000000, uart@0x0000000010000000, 8 virtio nodes
+[vioblk-data] writable data disk @0x0000000010006000 online (SNFS)
+pipe OK: 'echo hello | cat' -> hello
+[blkfs] sync: 1 dirty block(s) written back to disk
+[blkfs] remount: block cache invalidated, re-reading superblock from disk
+fs: wrote /data/x to vioblk, synced, re-read after remount OK ('solnix-rp12-ondisk')
+solnix-riscv# echo hello | cat
+```
+
+**Deliberate R-P12 scope (documented ceilings, each an R-P13 upgrade path):**
+- **Pipes**: fixed NPIPE=8 pipes, 4 KiB each, no O_NONBLOCK, no SIGPIPE (a
+  closed-reader write returns -1, not a signal); a real fifofs vnode is R-P13.
+  Pipelines are two-stage; N-stage chaining is R-P13.
+- **SNFS**: 8 fixed files, 8 sectors (4 KiB) each, one flat directory, no
+  unlink/free-list/fragmentation, write-back only on explicit sync (no periodic
+  fsflush). A real UFS/FFS cylinder-group layout + a proper vnode cache is R-P13.
+- **Block cache**: NBUF=16, single linear-scan LRU (no hash chains); grow +
+  hash it when the working set exceeds the pool.
+- **DTB**: discovery is a *summary* (memory/uart/virtio counts), not yet wired
+  to driver attach; and **AIA (APLIC+IMSIC/MSI) was NOT done** — external IRQs
+  still route through the qemu-virt PLIC. Both are R-P13, the core of the K1/K3
+  bring-up.
+- **dup2** supports the pipeline case (source fd >= 3, target a console fd);
+  general fd-slot dup with a shared file-offset object is R-P13.
+
+### R-P12.5 Next: R-P13 (finish K1/K3 hardware bring-up)
+
+Real-hardware arc: AIA **APLIC + IMSIC (MSI)** in place of the PLIC (qemu
+`-machine virt,aia=aplic-imsic` first, then the SpaceMiT K1/K3 controllers),
+wire the FDT discovery to **driver attach**, real SoC console/storage/net
+drivers, **SMP on physical harts** (drop the boot-cpu-only dispatch), a native
+rv build host, N-stage pipelines + fifofs, and a real UFS/FFS + vnode cache —
+toward booting on the maintainer's RISC-V board.
