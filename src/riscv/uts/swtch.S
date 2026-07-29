@@ -22,6 +22,9 @@
  *   72: s6   80: s7   88: s8   96: s9  104: s10 112: s11
  *   120: satp  (R-P8: per-thread address space; restored on switch so a
  *              kernel thread that yields mid-syscall resumes on its own AS)
+ *   128: lofault (R-P10: per-thread copy_lofault snapshot; save/restore the
+ *              global around a preemptive switch so a preempted armed copy is
+ *              not observed/clobbered by the incoming thread)
  *
  * void rv_swtch(struct rv_context *old, struct rv_context *new);
  *   Save the current callee-saved context into *old, load *new, and return.
@@ -50,6 +53,7 @@
 #define	C_S10	104
 #define	C_S11	112
 #define	C_SATP	120
+#define	C_LOFAULT 128
 
 	.globl rv_swtch
 	.type rv_swtch, @function
@@ -73,6 +77,15 @@ rv_swtch:
 	/* Save the current satp (R-P8 per-thread AS). */
 	csrr	t0, satp
 	sd	t0, C_SATP(a0)
+	/*
+	 * Save the current thread's armed copy_lofault (R-P10). copy.S arms the
+	 * global around a user copy; if the clock preempts us mid-copy, snapshot
+	 * the arm into our context so the incoming thread cannot observe or
+	 * clobber it, and it is restored when we are switched back to.
+	 */
+	la	t1, copy_lofault
+	ld	t0, 0(t1)
+	sd	t0, C_LOFAULT(a0)
 
 	/* Load new context from *new (a1). */
 	ld	ra, C_RA(a1)
@@ -103,6 +116,10 @@ rv_swtch:
 	csrw	satp, t0
 	sfence.vma
 1:
+	/* Restore the incoming thread's copy_lofault into the global (R-P10). */
+	la	t1, copy_lofault
+	ld	t0, C_LOFAULT(a1)
+	sd	t0, 0(t1)
 
 	/* Return into the new thread's ra. */
 	ret

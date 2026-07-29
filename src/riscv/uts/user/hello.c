@@ -1,15 +1,14 @@
 /*
- * hello.c — solnix riscv64 /bin/hello (R-P8 fork/exec proof child).
- * Execed by /sbin/init's forked child; prints a line and exits 0.
+ * hello.c — solnix riscv64 /bin/hello (fork/exec proof child).
+ * R-P10: linked against libc-riscv (printf).
  */
-#include "libu.h"
+#include "libc.h"
 
 int
 main(int argc, char **argv)
 {
 	(void) argc; (void) argv;
-	uputs("hello from child: /bin/hello running in U-mode (pid ");
-	uputdec((unsigned long)ugetpid());
-	uputs(")\n");
+	printf("hello from child: /bin/hello running in U-mode (pid %d)\n",
+	    getpid());
 	return (0);
 }

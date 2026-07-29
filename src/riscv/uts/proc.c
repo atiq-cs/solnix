@@ -50,6 +50,7 @@ struct rv_context {
 	unsigned long c_tp;
 	unsigned long c_s[12];		/* s0..s11 */
 	unsigned long c_satp;		/* per-thread satp (R-P8 multi-AS) */
+	unsigned long c_lofault;	/* per-thread copy_lofault (R-P10 preempt) */
 };
 extern void rv_swtch(struct rv_context *old, struct rv_context *new);
 extern void rv_thread_start(void);
@@ -235,6 +236,7 @@ thread_create(void (*entry)(void *), void *arg)
 	 * its first act; the saved satp then follows it across future switches.
 	 */
 	t->t_ctx.c_satp = hat_kernel_satp();
+	t->t_ctx.c_lofault = 0;		/* R-P10: no armed copy on a fresh thread */
 
 	runq_enqueue(t);
 	return (t);

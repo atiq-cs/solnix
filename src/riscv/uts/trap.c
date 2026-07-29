@@ -62,13 +62,15 @@ extern int thread_preempt(void);
 /* Count of clock-tick preemptions of a user thread (R-P9 gate 5 proof). */
 volatile unsigned long preempt_count = 0;
 /*
- * preempt_enabled — gate 5 master switch. Clock-tick preemption of user threads
- * is implemented (thread_preempt + curproc-follows-thread) but is OFF by default
- * pending a fix for a re-entrancy fault when a user thread is preempted during
- * its exit/reap transition (see docs R-P9 gate 5). The 4 landed gates run on the
- * stable cooperative dispatcher. Set to 1 to exercise preemption.
+ * preempt_enabled — gate 5 master switch. Clock-tick preemption of user threads.
+ * R-P10: ENABLED. The R-P9 re-entrancy blocker (a global copy_lofault clobbered
+ * across a preemptive swtch) is fixed: copy_lofault is now per-thread (saved and
+ * restored in swtch.S like the per-thread satp), so an armed copy cannot be
+ * observed or clobbered across a preemptive switch. A user thread that never
+ * yields is now time-sliced off the clock (kernel-mode timer traps, SPP==1, are
+ * still never preempted, so no lock-holder is preempted).
  */
-volatile int preempt_enabled = 0;
+volatile int preempt_enabled = 1;
 
 /* From plic.c: service S-mode external interrupts (claim/dispatch/complete). */
 extern int plic_extintr(void);

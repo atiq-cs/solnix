@@ -1506,3 +1506,144 @@ Artifacts: `artifacts/riscv-port/rp9/` (`rp9-boot.log`, `unix-rp9`, `rootfs.img`
 - **K1/K3 hardware bring-up:** move off qemu virt to real RISC-V SoCs (SpacemiT
   K1 / the K3 class) — real PLIC/CLINT topology, real UART, DTB from firmware,
   SMP on physical harts.
+
+## R-P10 — preemption + a real libc slice + SMF-style init to multi-user
+
+R-P10 takes the R-P9 kernel (stable cooperative dispatcher, 4 landed gates, one
+deferred: clock-tick preemption gated off behind a known re-entrancy blocker)
+and ships the three R-P10 milestones: (1) fix + enable preemption, (2) a real
+separately-compiled libc slice the userland links against, and (3) an SMF-style
+`/sbin/init` that reads a service list off disk and reaches a multi-user login.
+
+### R-P10.0 New + changed sources (`src/riscv/uts/` + `user/`)
+
+| File | Change |
+|------|--------|
+| `proc.c` | `rv_context` gains `c_lofault` (per-thread copy_lofault snapshot); `thread_create` zeroes it. |
+| `swtch.S` | `rv_swtch` now saves the **global** `copy_lofault` into the outgoing context and restores the incoming context's into the global — exactly like the per-thread satp. This is the fix that unblocks preemption. New offset `C_LOFAULT=128`. |
+| `trap.c` | `preempt_enabled = 1` (was 0). Comment updated: the R-P9 re-entrancy blocker is fixed by the per-thread lofault. |
+| `user/libc.h` + `user/libc.c` (new) | A genuine, separately-compiled libc slice archived into `libc-riscv.a`: one crt0 (`_start`), syscall stubs, `malloc` over `brk`, `strlen`/`memcpy`/`memset`/`strcmp`, and a real varargs `printf` (`%s %d %u %x %c %%`). Replaces the R-P9 header-only `libu.h` (still present, unused). |
+| `user/build-user.sh` | Builds `libc-riscv.a` first, links every program (`init sh hello echo cat`) against it (crt0/printf/malloc pulled from the archive). Adds `/etc/motd` + `/etc/inittab` (the SMF-style service list) to the on-disk ustar rootfs. |
+| `user/sh.c` | Ported to `libc.h` (uses libc `printf`/`malloc`/`strcmp`); `malloc`s its line buffer to exercise malloc-over-brk. `cat <file>` now argv-driven. |
+| `user/init.c` | Rewritten for the multi-user milestone: R-P9 gates (regression), a two-spinner preemption proof, `parse_inittab()` (the SMF-style restarter seam: `wait:`/`respawn:` service list off disk), and `login_console()` (getty/login analog: `login:` prompt -> stub-accept -> drop to `/bin/sh`, respawn on shell exit). |
+| `user/{hello,echo,cat}.c` | Ported to `libc.h` (printf). |
+| `rp10-run.sh` (new) | Detached, `timeout 120`, scripted stdin drives login + shell + a second login (getty respawn). ANTI-WEDGE: never foreground-waits; `QEMU_DBG=1` adds `-d int`. |
+
+### R-P10.1 Preemption (gate 1 — the crux; the recorded R-P9 blocker, KNOWN fix)
+
+The R-P9 blocker: `copy_lofault` was one global, armed by `copyin`/`copyout`
+around a user copy. With preemption on, the clock could `swtch` a user thread
+mid-copy; the incoming thread would observe or clobber the outgoing thread's
+arm, and when the copy resumed the trap dispatcher's `sepc`-redirect landed on a
+stale/foreign recovery label (the instruction-fetch fault seen in R-P9).
+
+The fix is the same idiom R-P8 used for per-thread satp: make the arm
+per-thread. Rather than plumb `tp` into `copy.S` (the trap frame saves the
+**user** `tp`, so `tp`-in-register during a syscall is not `curthread`),
+`rv_swtch` snapshots the global into the outgoing `rv_context.c_lofault` and
+restores the incoming context's value into the global. The global is therefore
+always the running thread's arm; a preempted armed copy is saved and restored
+intact, and the incoming thread sees its own (0 = disarmed). `copy.S` and
+`trap.c` are unchanged — they still use the one global, which is now correct
+under preemption because `swtch` swaps it. `preempt_enabled` flips to 1.
+
+**Verified (verbatim, `artifacts/riscv-port/rp10/rp10-boot.log`):**
+
+```
+preempt OK: clock-tick preempted a user thread 7 times (timer ISR -> reschedule)
+preempt: child spinner finished 3 rounds
+preempt: parent spinner finished 3 rounds
+```
+
+Two CPU-bound user threads (init + a forked child) spin with NO syscalls; both
+finish their 3 rounds and the child exits — only the clock can slice between
+them. Under `-d int` (`rp10-int-trace-sample.log`) the only exceptions are the
+expected copyin EFAULT gate (one `load_page_fault`/`fault_load` at the bad-ptr
+test) and the COW store-faults (26 `store_page_fault` at user epcs, all handled
+by `proc_cow_fault`); **zero unhandled faults, zero instruction-fetch faults**
+(the old re-entrancy symptom is gone).
+
+### R-P10.2 libc slice (gate 2)
+
+`user/libc.c` + `libc.h` are a real freestanding libc archived into
+`libc-riscv.a`: crt0 (`_start` reads argc/argv off the ABI stack), the syscall
+stubs (`read`/`write`/`open`/`close`/`fork`/`execve`/`waitpid`/`_exit`), a bump
+`malloc` over `brk` (kernel `proc_brk` ABI: `brk(0)` queries the break,
+`brk(newbrk)` returns 0 on success), string helpers, and a genuine varargs
+`printf`. Every program links against it — the first libc on illumos-RISC-V.
+
+**Verified:**
+
+```
+[R-P10] /sbin/init running in U-mode (pid 1), linked against libc-riscv
+[R-P10] /bin/sh (pid 7) linked against libc-riscv (printf/malloc OK)
+```
+
+The shell `malloc`s its line buffer and prints via libc `printf`; `echo hello
+world`, `xecho hi there`, `hello`, `cat`, `cat /etc/inittab` all run correctly
+through the libc-linked programs.
+
+### R-P10.3 SMF-style init -> multi-user (gate 3)
+
+`/sbin/init` reads `/etc/inittab` off the on-disk ustar FS (`parse_inittab`):
+each line `wait:/path` (run-once boot task) or `respawn:/path` (daemon-analog)
+is fork+exec'd — the minimal SMF-style restarter seam. It then prints the
+multi-user milestone line and runs `login_console`, a getty/login analog that
+prints `login:`, reads a username, and drops to `/bin/sh`; exiting the shell
+re-prompts (getty respawn).
+
+**Verified:**
+
+```
+init: service (wait) /bin/hello
+[R-P10] multi-user milestone: init started 1 services; login: available
+
+solnix-riscv login: root
+login: welcome, root (dropping to /bin/sh)
+...
+solnix-riscv# exit
+sh: exit
+
+solnix-riscv login: operator
+login: welcome, operator (dropping to /bin/sh)
+```
+
+A full login -> shell -> exit -> re-login cycle: the first genuinely multi-user
+illumos-on-RISC-V.
+
+### R-P10.4 Result — SUCCESS (3 of 3 R-P10 gates)
+
+`src/riscv/uts/rp10-run.sh` (timeout 120, scripted stdin, detached) boots
+`-smp 4` OpenSBI + two virtio-blk (R-P6 test disk + ustar rootfs) + virtio-net.
+0 PANIC / 0 unhandled trap; self-terminates on the timeout. Gate 4 (signals) was
+not reached in this budget (see below).
+
+Artifacts: `artifacts/riscv-port/rp10/` (`rp10-boot.log`, `unix-rp10`,
+`rootfs.img`, `user_elfs.h`, `rp10-run.sh`, `libc.c`, `libc.h`, `build-user.sh`,
+`rp10-int-trace-sample.log`, `rp10-proof-lines.txt`).
+
+**Deliberate R-P10 scope (documented ceilings, each an R-P11 upgrade path):**
+- **`malloc` is a bump allocator** over `brk`, `free()` a no-op — fine for
+  short-lived sh/utils; a free-list is R-P11.
+- **`printf` has no width/precision/long modifiers** — `%s %d %u %x %c %%` only.
+- **`parse_inittab` has no real respawn/dependency graph** — `wait:`/`respawn:`
+  are started once; a full SMF restarter (dependencies, contracts, respawn on
+  crash) is R-P11.
+- **`login` is a stub** — no `/etc/passwd`, no authentication; it prints the
+  prompt, accepts any name, and drops to a shell. Real auth is R-P11.
+- **The `copy_lofault` swap in `swtch` is still single-hart correct** (one
+  global swapped across the switch); true SMP userland on multiple harts
+  concurrently in a copy needs a per-hart or genuinely per-thread-register
+  lofault. R-P10 dispatch is still boot-cpu (`this_cpu()==0`).
+- **Signals are not yet implemented** (gate 4, deferred — R-P11).
+
+### R-P10.5 Next: R-P11 (signals + real FS + K1/K3 hardware)
+
+- **Signals:** SIGCHLD/SIGKILL delivery + handlers; a second concurrent shell.
+- **A free-list malloc + fuller printf + `/etc/passwd` login.**
+- **A writable/seekable on-disk FS + vnode block cache** (replace read-into-RAM
+  ustar); `/dev`, `/proc`.
+- **K1/K3 hardware bring-up (the K1/K3 kernel work):** move off qemu virt to
+  real RISC-V SoCs (SpacemiT K1 / the K3 class) — the AIA interrupt controller
+  (APLIC + IMSIC) in place of the PLIC, real SoC console/storage/net drivers, a
+  real DTB from firmware, SMP on physical harts, and a native rv build host.
