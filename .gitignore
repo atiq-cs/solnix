@@ -11,3 +11,6 @@ src/riscv/uts/*.o
 src/riscv/uts/unix
 src/riscv/uts/k1.dtb
 /progress.md
+artifacts/sparc-toolchain/sysroot/
+artifacts/sparc-toolchain/hello
+artifacts/sparc-toolchain/*.o
