@@ -15,3 +15,6 @@ artifacts/sparc-toolchain/sysroot/
 artifacts/sparc-toolchain/hello
 artifacts/sparc-toolchain/*.o
 artifacts/sparc-toolchain/sparc-sysroot-hipster.tar.zst
+artifacts/sparc-xbuild/**/build/
+artifacts/sparc-xbuild/**/*.so*
+artifacts/sparc-toolchain/hello*
