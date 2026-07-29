@@ -37,6 +37,7 @@
 #define	SBI_EXT_BASE		0x10UL		/* SBI Base extension */
 #define	SBI_EXT_TIME		0x54494D45UL	/* "TIME" timer extension */
 #define	SBI_EXT_HSM		0x48534DUL	/* "HSM" hart state mgmt */
+#define	SBI_EXT_IPI		0x735049UL	/* "sPI" inter-processor IPI */
 #define	SBI_EXT_DBCN		0x4442434EUL	/* "DBCN" debug console */
 
 /* SBI Base (0x10) function IDs. */
@@ -48,6 +49,9 @@
 /* SBI HSM (0x48534D) function IDs. */
 #define	SBI_HSM_HART_START		0UL
 #define	SBI_HSM_HART_GET_STATUS		2UL
+
+/* SBI IPI (0x735049) function IDs. */
+#define	SBI_IPI_SEND_IPI		0UL
 
 /* DBCN (0x4442434E) function IDs. */
 #define	SBI_DBCN_CONSOLE_WRITE		0UL
@@ -208,6 +212,23 @@ sbi_hart_get_status(unsigned long hartid)
 	if (ret.error != 0)
 		return (ret.error);
 	return (ret.value);
+}
+
+/*
+ * sbi_send_ipi — SBI IPI (EID 0x735049, FID 0). Pend a S-mode software
+ * interrupt on the harts selected by (hart_mask, hart_mask_base): hart
+ * (hart_mask_base + i) is targeted for each set bit i in hart_mask. The woken
+ * hart traps IRQ_S_SOFT -> ipi_intr(). Used by the R-P13 dispatcher to wake an
+ * idle secondary hart when a thread becomes runnable. Returns the SBI error.
+ */
+long
+sbi_send_ipi(unsigned long hart_mask, unsigned long hart_mask_base)
+{
+	sbiret_t ret;
+
+	ret = sbi_ecall(SBI_EXT_IPI, SBI_IPI_SEND_IPI, hart_mask,
+	    hart_mask_base, 0);
+	return (ret.error);
 }
 
 /*

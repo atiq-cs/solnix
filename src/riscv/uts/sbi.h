@@ -33,6 +33,14 @@ extern long sbi_hart_start(unsigned long hartid, unsigned long start_addr,
     unsigned long opaque);
 extern long sbi_hart_get_status(unsigned long hartid);
 
+/*
+ * SBI IPI (Inter-Processor Interrupt) extension, EID 0x735049 ("sPI") — R-P13
+ * SMP. sbi_send_ipi(hart_mask, hart_mask_base) pends a S-mode software
+ * interrupt (sip.SSIP) on the selected harts, waking them from wfi to re-run
+ * their dispatcher. Returns the SBI error (0 == success).
+ */
+extern long sbi_send_ipi(unsigned long hart_mask, unsigned long hart_mask_base);
+
 #ifdef __cplusplus
 }
 #endif

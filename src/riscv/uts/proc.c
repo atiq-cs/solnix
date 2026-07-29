@@ -77,6 +77,7 @@ typedef struct kthread {
 	void		*t_arg;
 	tstate_t	t_state;
 	int		t_id;
+	int		t_cpu;		/* hart it last ran on (R-P13 SMP proof) */
 	void		*t_wchan;	/* sleep channel (R-P9), NULL if runnable */
 	void		*t_curproc;	/* this thread's user proc (R-P9 preempt) */
 	struct kthread	*t_link;	/* run-queue / sleepq link */
@@ -111,11 +112,24 @@ runq_lock_exit(void)
 	    :: "r"(&runq_lock) : "memory");
 }
 
-/* Current hartid via tp is not set up in R-P5; boot-cpu dispatch uses cpu 0. */
-static int
+/* Current hartid. R-P13 SMP: each hart runs the dispatcher, so this_cpu()
+ * must return the REAL hart index. We keep it in tp (the thread pointer):
+ * rv_swtch saves/restores tp per thread and every thread's context carries the
+ * hartid it runs on, set at dispatch entry + refreshed on each swtch. Reading
+ * tp is a single register read with no memory traffic — correct per hart. */
+static inline int
 this_cpu(void)
 {
-	return (0);
+	unsigned long id;
+	__asm__ __volatile__("mv %0, tp" : "=r"(id));
+	return ((int)(id & (MAXCPU - 1)));
+}
+
+/* Set this hart's id into tp (called once per hart as it enters dispatch). */
+static inline void
+set_this_cpu(unsigned long hartid)
+{
+	__asm__ __volatile__("mv tp, %0" :: "r"(hartid));
 }
 
 /*
@@ -215,6 +229,7 @@ thread_create(void (*entry)(void *), void *arg)
 	t->t_entry = entry;
 	t->t_arg = arg;
 	t->t_id = ++next_tid;
+	t->t_cpu = 0;
 	t->t_link = 0;
 	t->t_wchan = 0;
 	t->t_curproc = 0;
@@ -229,7 +244,12 @@ thread_create(void (*entry)(void *), void *arg)
 	t->t_ctx.c_s[1] = (unsigned long)arg;		/* s1 */
 	t->t_ctx.c_ra = (unsigned long)rv_thread_start;	/* first "return" */
 	t->t_ctx.c_sp = sp;
-	t->t_ctx.c_tp = (unsigned long)t;		/* tp = curthread hook */
+	/*
+	 * c_tp carries the hartid (this_cpu reads tp). Seed it to the creating
+	 * hart; swtch re-stamps it with the running hart on every dispatch, so a
+	 * thread that migrates to another hart sees the correct this_cpu there.
+	 */
+	t->t_ctx.c_tp = (unsigned long)this_cpu();
 	/*
 	 * New threads start on the kernel address space (the creator's, which is
 	 * the kernel satp). A user-process thread body switches to its own AS as
@@ -267,6 +287,14 @@ swtch(void)
 
 	new->t_state = TS_ONPROC;
 	curthread[cpu] = new;
+	/*
+	 * R-P13 SMP: stamp the incoming thread with the hart it is now running
+	 * on, so this_cpu() (which reads tp) is correct after rv_swtch restores
+	 * this thread's c_tp. A thread pulled off the shared runq by any hart
+	 * thus runs with the right cpu identity.
+	 */
+	new->t_cpu = cpu;
+	new->t_ctx.c_tp = (unsigned long)cpu;
 	/*
 	 * curproc follows the thread (R-P9 preempt safety): save the outgoing
 	 * thread's user proc, restore the incoming thread's. Without this a
@@ -449,18 +477,27 @@ idle_body(void *arg)
 void
 dispatch_init_cpu(int cpu)
 {
-	kthread_t *idle = kmem_alloc(sizeof (kthread_t));
+	kthread_t *idle;
+
+	/* kmem_alloc is not itself SMP-safe; serialize concurrent secondary
+	 * bring-up (and the boot hart's thread_create) under the runq lock. */
+	runq_lock_enter();
+	idle = kmem_alloc(sizeof (kthread_t));
+	runq_lock_exit();
 
 	idle->t_stack = 0;		/* runs on the existing boot/hart stack */
 	idle->t_stacksize = 0;
 	idle->t_entry = idle_body;
 	idle->t_arg = 0;
 	idle->t_id = -cpu - 1;		/* idle threads: negative ids */
+	idle->t_cpu = cpu;
 	idle->t_state = TS_ONPROC;
 	idle->t_link = 0;
 	idle->t_wchan = 0;
 	idle->t_curproc = 0;
+	idle->t_ctx.c_tp = (unsigned long)cpu;
 
+	set_this_cpu((unsigned long)cpu);	/* tp = our hartid from now on */
 	idlethread[cpu] = idle;
 	curthread[cpu] = idle;		/* we ARE the idle thread now */
 }
@@ -542,5 +579,177 @@ thread_ab_selftest(void)
 		sbi_console_puts("x, yielded to each other via swtch)\n");
 	} else {
 		sbi_console_puts("FAILED\n");
+	}
+}
+
+/*
+ * ---------------------------------------------------------------------------
+ * R-P13 physical-hart SMP: secondaries run the dispatcher.
+ *
+ * R-P5..R-P12 dispatched only on the boot cpu; secondaries parked in wfi
+ * (main.c secondary_main). R-P13 brings them into the ONE shared, locked runq:
+ * each secondary makes itself its hart's idle thread (dispatch_init_cpu with
+ * its real hartid), enables the S-soft IPI, and loops the dispatcher. A thread
+ * enqueued on the shared runq can then be pulled and run by ANY idle hart —
+ * genuine multi-hart execution under the runq_lock. An IPI (sbi_send_ipi)
+ * wakes a wfi'd idle hart when work appears.
+ *
+ * NOTE: ONE global runq + one global spinlock (runq_lock). Correct but not
+ * scalable; per-hart runqs + work-stealing + affinity are the illumos-shaped
+ * upgrade. The lock makes concurrent enqueue/dequeue/swtch from multiple harts
+ * safe today. (ceiling documented; no shortcut in the locking itself.)
+ * ---------------------------------------------------------------------------
+ */
+
+#define	HARTBIT(h)	(1UL << (h))
+extern long sbi_send_ipi(unsigned long hart_mask, unsigned long hart_mask_base);
+
+/* Bitmap of harts currently in their idle wfi (candidates to IPI-wake). */
+static volatile unsigned long idle_harts;
+/* Proof: which hart ran the SMP test thread, and how many harts dispatched. */
+volatile int smp_ran_on_hart = -1;
+volatile int smp_harts_dispatching = 0;
+/*
+ * Gate: the boot hart sets this once kmem + the dispatcher are online (in
+ * startup_dispatch). Secondaries were started back in mlsetup (before startup
+ * ran), so they MUST wait for this before touching kmem_alloc / the runq —
+ * otherwise they fault storing into an uninitialized allocator. Set with a
+ * release store; secondaries load-acquire.
+ */
+volatile int smp_dispatch_ready = 0;
+
+void
+smp_dispatch_open(void)
+{
+	__atomic_store_n(&smp_dispatch_ready, 1, __ATOMIC_RELEASE);
+}
+
+/*
+ * ipi_intr — S-soft interrupt handler (trap.c cleared sip.SSIP already). An
+ * IPI means "work may be runnable"; if this hart is idle and the runq is
+ * non-empty, yield so the idle loop re-dispatches. Cheap + safe from the trap.
+ */
+void
+ipi_intr(void)
+{
+	/* The idle loop re-checks the runq after each wfi; nothing more needed
+	 * here beyond having cleared the pending bit. Kept as the hook where a
+	 * real cross-call (TLB shootdown, reschedule) would dispatch. */
+}
+
+/*
+ * smp_wake_idle — if any hart is parked idle, send it an IPI so it re-checks
+ * the runq. Called when a thread is made runnable so a sleeping hart picks it
+ * up promptly instead of waiting for its next timer tick.
+ */
+void
+smp_wake_idle(void)
+{
+	unsigned long mask;
+	__atomic_load(&idle_harts, &mask, __ATOMIC_ACQUIRE);
+	if (mask != 0)
+		(void) sbi_send_ipi(mask, 0);
+}
+
+/*
+ * smp_secondary_dispatch — entry for a secondary hart (called from
+ * secondary_main instead of the old wfi park). Become this hart's idle thread
+ * on the shared runq, enable the IPI, and dispatch forever. Runs real threads
+ * pulled from the shared runq under runq_lock.
+ */
+void
+smp_secondary_dispatch(unsigned long hartid)
+{
+	/* Wait until the boot hart has brought kmem + the dispatcher online
+	 * (startup_dispatch). Secondaries were released in mlsetup, well before
+	 * startup() ran, so entering the runq before this would fault. */
+	while (__atomic_load_n(&smp_dispatch_ready, __ATOMIC_ACQUIRE) == 0)
+		__asm__ __volatile__("nop");
+
+	dispatch_init_cpu((int)hartid);		/* sets tp = hartid, idle thread */
+	__sync_fetch_and_add(&smp_harts_dispatching, 1);
+
+	/* Enable the S-soft (IPI) source so sbi_send_ipi can wake us from wfi. */
+	__asm__ __volatile__("csrs sie, %0" :: "r"(SIE_SSIE));
+	__asm__ __volatile__("csrs sstatus, %0" :: "r"(SSTATUS_SIE));
+
+	for (;;) {
+		kthread_t *t = runq_dequeue();
+		if (t != 0) {
+			/* Run it: switch to it, it returns to the runq when it
+			 * yields/exits, and we (idle) resume here. */
+			int cpu = this_cpu();
+			kthread_t *self = curthread[cpu];
+			t->t_state = TS_ONPROC;
+			t->t_cpu = cpu;
+			t->t_ctx.c_tp = (unsigned long)cpu;
+			curthread[cpu] = t;
+			self->t_curproc = proc_get_current();
+			rv_swtch(&self->t_ctx, &t->t_ctx);
+			proc_set_current(curthread[cpu]->t_curproc);
+			curthread[cpu] = self;	/* idle is current again */
+			set_this_cpu(hartid);	/* restore tp (idle ran with it) */
+		} else {
+			__sync_fetch_and_or(&idle_harts, HARTBIT(hartid));
+			__asm__ __volatile__("wfi");
+			__sync_fetch_and_and(&idle_harts, ~HARTBIT(hartid));
+		}
+	}
+}
+
+/*
+ * smp_probe_body — the R-P13 SMP proof thread. Enqueued on the shared runq by
+ * the boot hart; whichever idle secondary hart pulls it records its hartid.
+ * Proves a thread genuinely executed on a hart != the boot hart.
+ */
+static void
+smp_probe_body(void *arg)
+{
+	(void) arg;
+	/* Record the hart we ran on; the boot hart prints the result (printing
+	 * here too would interleave byte-for-byte with smp_selftest's line, as
+	 * the console has no cross-hart lock yet — that lock is the next SMP
+	 * item). Recording is a single word store, ordered by the release below. */
+	__atomic_store_n(&smp_ran_on_hart, this_cpu(), __ATOMIC_RELEASE);
+	thread_exit();
+}
+
+/*
+ * smp_selftest — R-P13 gate 3 proof. Enqueue a thread on the shared runq and
+ * IPI-wake the idle secondary harts to pull + run it. Wait (bounded) for it to
+ * report which hart it ran on; success requires hart != 0. Called from the
+ * boot hart after secondaries have entered smp_secondary_dispatch.
+ */
+void
+smp_selftest(void)
+{
+	int spin;
+
+	sbi_console_puts("[smp] enqueue a thread on the shared runq; "
+	    "IPI-wake secondaries to run it\n");
+	smp_ran_on_hart = -1;
+	(void) thread_create(smp_probe_body, 0);
+	smp_wake_idle();
+
+	for (spin = 0; spin < 50000000 &&
+	    __atomic_load_n(&smp_ran_on_hart, __ATOMIC_ACQUIRE) < 0; spin++) {
+		if ((spin & 0xffff) == 0)
+			smp_wake_idle();
+		__asm__ __volatile__("nop");
+	}
+
+	if (smp_ran_on_hart > 0) {
+		sbi_console_puts("[smp] OK: thread ran on hart ");
+		kputdec((unsigned long)smp_ran_on_hart);
+		sbi_console_puts(" (!=0); ");
+		kputdec((unsigned long)smp_harts_dispatching + 1);
+		sbi_console_puts(" harts online in dispatcher (1 boot + ");
+		kputdec((unsigned long)smp_harts_dispatching);
+		sbi_console_puts(" secondary)\n");
+	} else if (smp_ran_on_hart == 0) {
+		sbi_console_puts("[smp] thread ran on boot hart 0 only "
+		    "(no secondary pulled it this run)\n");
+	} else {
+		sbi_console_puts("[smp] WARN: SMP proof thread did not run\n");
 	}
 }

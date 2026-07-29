@@ -53,6 +53,10 @@ extern const char *rootdev_name(void);
 extern int vioblk_data_attach(void);
 extern int snfs_init(void);
 extern int fdt_summary(unsigned long dtb);
+/* R-P13: FDT-driven driver attach + physical-hart SMP proof. */
+extern int fdt_attach_drivers(unsigned long dtb);
+extern void smp_selftest(void);
+extern void smp_dispatch_open(void);
 
 /* FDT /memory parse (fdt.c). */
 extern int fdt_get_memory(unsigned long dtb, unsigned long *base,
@@ -136,6 +140,16 @@ startup_memlist(unsigned long dtb)
 	 * the DTB is still identity-mapped (before startup_vm remaps). */
 	(void) fdt_summary(dtb);
 
+	/* R-P13: turn the summary into real driver attach — walk compatible=
+	 * strings and bind uart / virtio / intc drivers to their FDT nodes
+	 * (not compiled-in addresses). Also while the DTB is identity-mapped. */
+	{
+		int n = fdt_attach_drivers(dtb);
+		sbi_console_puts("[devtree] ");
+		kputdec((unsigned long)n);
+		sbi_console_puts(" device(s) attached by FDT compatible\n");
+	}
+
 	page_init(base, size);
 	sbi_console_puts("[startup] physmem: ");
 	kputdec(physmem);
@@ -185,7 +199,15 @@ startup_dispatch(void)
 	dispatch_init_cpu(0);
 	sbi_console_puts("[startup] boot cpu is now cpu0 idle thread; "
 	    "dispatcher online\n");
+	/* Release the secondary harts (spinning in smp_secondary_dispatch) now
+	 * that kmem + the dispatcher are up: they can safely alloc + run. */
+	smp_dispatch_open();
 	thread_ab_selftest();
+
+	/* R-P13: physical-hart SMP — enqueue a thread on the shared runq and
+	 * IPI-wake the secondary harts (already in smp_secondary_dispatch) to
+	 * pull + run it on a hart != 0. */
+	smp_selftest();
 }
 
 /*

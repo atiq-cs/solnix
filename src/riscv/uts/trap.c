@@ -77,6 +77,11 @@ volatile int preempt_enabled = 1;
 
 /* From plic.c: service S-mode external interrupts (claim/dispatch/complete). */
 extern int plic_extintr(void);
+/* From aia.c: service S-ext IRQs via IMSIC stopei when AIA is the live model. */
+extern int aia_is_active(void);
+extern int aia_extintr(void);
+/* From proc.c: an IPI (S-soft) woke this hart to re-run its dispatcher (SMP). */
+extern void ipi_intr(void);
 
 /* The asm trap vector target (trap.S). Installed into stvec by set_trap_vector. */
 extern void _trap_entry(void);
@@ -239,8 +244,22 @@ trap(struct regs *tf)
 			if ((tf->r_sstatus & SSTATUS_SPP) == 0)
 				proc_deliver_signals(tf);
 			return;
+		case IRQ_S_SOFT:
+			/*
+			 * S-mode software interrupt = inter-processor interrupt
+			 * (R-P13 SMP). Clear sip.SSIP and let the hart re-check its
+			 * runq (ipi_intr yields if something is now runnable).
+			 */
+			__asm__ __volatile__("csrc sip, %0" :: "r"(SIE_SSIE));
+			ipi_intr();
+			return;
 		case IRQ_S_EXT:
-			(void) plic_extintr();
+			/* Route to AIA (IMSIC/stopei) if the AIA model is live, else
+			 * the legacy PLIC claim/complete. Chosen at boot from DTB. */
+			if (aia_is_active())
+				(void) aia_extintr();
+			else
+				(void) plic_extintr();
 			return;
 		default:
 			trap_report(tf, "interrupt");

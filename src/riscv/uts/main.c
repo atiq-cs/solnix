@@ -42,6 +42,11 @@ extern void clock_prove(unsigned long nticks);
 extern unsigned long gethrtime(void);
 extern void plic_selftest(void);
 extern void plic_set_context(unsigned long boot_hartid);
+/* R-P13 AIA (aia.c) + FDT intc detection (fdt.c) + SMP dispatch (proc.c). */
+extern void aia_selftest(unsigned long hartidx);
+extern int aia_is_active(void);
+extern int fdt_intc_is_aia(unsigned long dtb);
+extern void smp_secondary_dispatch(unsigned long hartid);
 extern volatile unsigned long timer_ticks;
 
 /* SMP: secondary-hart entry (locore.S) + its per-cpu stack pool. */
@@ -165,7 +170,15 @@ secondary_main(unsigned long hartid)
 		cpu_online[hartid] = 1;
 	__sync_fetch_and_add(&ncpu_online, 1);
 
-	/* Park: future idle thread. Interrupts stay masked on this hart in R-P4. */
+	/*
+	 * R-P13: instead of parking in wfi, enter the shared-runq dispatcher as
+	 * this hart's idle thread. The boot hart enqueues a proof thread + IPIs
+	 * us; we pull it off the runq and run it on THIS hart (hart N != 0),
+	 * proving physical-hart SMP. smp_secondary_dispatch never returns.
+	 */
+	smp_secondary_dispatch(hartid);
+
+	/* Never reached. */
 	for (;;)
 		__asm__ __volatile__("wfi");
 }
@@ -329,13 +342,23 @@ mlsetup(unsigned long hartid, unsigned long dtb)
 	boot_cpu.bc_smp_online = (boot_cpu.bc_nsecondary > 0);
 
 	/*
-	 * 6. R-P4 milestone: PLIC external-interrupt path. Init the PLIC, enable
-	 * the UART source, enable SEIE, trigger + claim + complete one external
-	 * interrupt. Proves the wired-interrupt path device drivers will use.
+	 * 6. R-P13 milestone: external-interrupt controller. Pick AIA vs PLIC
+	 * from the DTB (K1/K3 = AIA APLIC+IMSIC; qemu-virt default = PLIC). If
+	 * the firmware advertises an APLIC/IMSIC, route external IRQs through
+	 * IMSIC MSIs (stopei claim); otherwise use the legacy PLIC path.
 	 */
-	plic_set_context(hartid);
-	plic_selftest();
-	boot_cpu.bc_plic_online = 1;
+	if (fdt_intc_is_aia(dtb)) {
+		sbi_console_puts("[mlsetup] DTB: interrupt controller is AIA "
+		    "(APLIC+IMSIC) -> MSI IRQ model\n");
+		aia_selftest(hartid);
+		boot_cpu.bc_plic_online = aia_is_active();
+	} else {
+		sbi_console_puts("[mlsetup] DTB: interrupt controller is PLIC "
+		    "-> wired IRQ model\n");
+		plic_set_context(hartid);
+		plic_selftest();
+		boot_cpu.bc_plic_online = 1;
+	}
 
 	/*
 	 * 7. R-P4 milestone: periodic (cyclic) clock. Start the clock at HZ and

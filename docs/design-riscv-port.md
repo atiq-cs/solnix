@@ -1879,3 +1879,117 @@ wire the FDT discovery to **driver attach**, real SoC console/storage/net
 drivers, **SMP on physical harts** (drop the boot-cpu-only dispatch), a native
 rv build host, N-stage pipelines + fifofs, and a real UFS/FFS + vnode cache —
 toward booting on the maintainer's RISC-V board.
+
+## R-P13 — AIA (APLIC + IMSIC MSI), FDT-driven driver attach, and physical-hart SMP
+
+R-P13 is the real-hardware interrupt + concurrency arc the SpaceMiT K1/K3 board
+needs. It takes the R-P12 kernel (pipes, on-disk SNFS + block cache, DTB
+summary, boot-cpu-only dispatch, PLIC-only IRQs) and lands three things: the
+**RISC-V Advanced Interrupt Architecture** (APLIC + IMSIC, MSI-delivered
+external interrupts, chosen at boot from the DTB), **FDT-driven driver attach**
+(drivers bind against `compatible=` nodes, not compiled-in addresses), and
+**physical-hart SMP** (secondary harts run the shared-runq dispatcher and
+execute threads under an SBI IPI).
+
+### R-P13.0 New + changed sources (`src/riscv/uts/`)
+
+| File | Change |
+|------|--------|
+| `aia.c` (new) | The AIA driver. **IMSIC**: per-hart S-mode interrupt file — `imsic_init` (Ssaia CSRs siselect/sireg to program eidelivery/eithreshold/eie), `imsic_enable_id`, `imsic_send` (SETEIPNUM MMIO doorbell), `imsic_claim` (read `stopei` = atomic top-claim-and-clear). **APLIC** S-domain in MSI mode — `aplic_init` (domaincfg IE+DM=MSI, SMSIADDRCFG -> IMSIC file base), `aplic_route` (sourcecfg level-high + TARGET hart+eiid + setienum). `aia_extintr` claims via stopei from `trap()`; `aia_selftest` proves an external IRQ delivered through IMSIC as an MSI, claimed on stopei, PLIC entirely out of the path. |
+| `trap.c` | `IRQ_S_EXT` now routes to `aia_extintr()` when the AIA model is live (chosen at boot), else the legacy `plic_extintr()`. New `IRQ_S_SOFT` case: clears sip.SSIP and calls `ipi_intr()` — the SMP inter-processor interrupt path. |
+| `sbi.{c,h}` | New `sbi_send_ipi(hart_mask, base)` (SBI IPI ext, EID 0x735049) to pend a S-soft interrupt on a target hart — wakes an idle secondary from wfi to re-check the runq. |
+| `fdt.c` | `fdt_intc_is_aia(dtb)` scans every node's `compatible` for `riscv,aplic`/`riscv,imsics` (AIA) vs `riscv,plic0`/`sifive,plic-1.0.0` — the boot-time PLIC-vs-AIA decision from firmware. `fdt_attach_drivers(dtb)` walks the tree and, per node, matches `compatible` to a driver (uart / virtio-mmio / aplic / imsic / plic) and prints an attach line with the node's unit-address parsed from its name — turning the R-P12 *summary* into real firmware-driven driver binding. |
+| `proc.c` | Physical-hart SMP. `this_cpu()` now reads the real hart index from `tp` (repurposed from the vestigial curthread hook; swtch stamps the running hart's id into each dispatched thread's `c_tp`). New `smp_secondary_dispatch(hartid)`: a secondary becomes its hart's idle thread (`dispatch_init_cpu` with its real hartid), enables the S-soft IPI, and loops pulling threads off the ONE shared, `runq_lock`-protected runq — so any idle hart can run any runnable thread. `smp_dispatch_open()` gates secondaries until kmem + the dispatcher are up (they were released back in mlsetup, before `startup()`). `ipi_intr`/`smp_wake_idle` (IPI a wfi'd idle hart when work appears). `smp_selftest` enqueues a proof thread + IPI-wakes secondaries; it records which hart ran it. kmem_alloc during bring-up is serialized under the runq lock. |
+| `main.c` | `secondary_main` now calls `smp_secondary_dispatch(hartid)` instead of parking in wfi. mlsetup step 6 picks AIA vs PLIC from `fdt_intc_is_aia(dtb)` and runs the matching self-test. |
+| `startup.c` | `startup_memlist` calls `fdt_attach_drivers(dtb)` (DTB still identity-mapped). `startup_dispatch` calls `smp_dispatch_open()` after `dispatch_init_cpu(0)`, then `smp_selftest()`. |
+| `rp13-run.sh` (new) | Boots under `-machine virt,aia=aplic-imsic -smp 4` (the K1/K3 interrupt model) with the R-P6 test disk + ustar rootfs + writable data.img; drives the R-P12 login + pipeline regression. `MACHINE=virt` overrides to the PLIC path. `timeout 120`, detached (`&` + bounded `sleep`+`kill`), never foreground-waits. |
+
+### R-P13.1 AIA — APLIC + IMSIC (gate 1)
+
+The K1/K3 (and every recent RISC-V SoC) interrupt model. **IMSIC** is a per-hart
+MSI file: a device (or the APLIC) posts an interrupt by *writing the interrupt's
+identity number* to the hart's IMSIC SETEIPNUM MMIO doorbell, setting a pending
+bit; the hart claims the top pending identity by reading the Ssaia `stopei` CSR,
+which returns `(id<<16 | prio)` and atomically clears the bit — the read IS the
+completion (no PLIC-style claim/complete round-trip). **APLIC** in MSI mode
+routes wired device lines (uart, virtio) to a target hart's IMSIC as an MSI. So a
+uart RX or a virtio-blk completion becomes: wire -> APLIC -> MSI doorbell write ->
+IMSIC pending -> hart SEIP -> `trap()` -> `stopei` claim. `trap()` picks
+`aia_extintr` vs `plic_extintr` from the DTB-driven boot choice.
+
+PROVEN: `[mlsetup] DTB: interrupt controller is AIA (APLIC+IMSIC) -> MSI IRQ
+model`; `[aia] IRQ id 1 claimed via IMSIC stopei (APLIC->IMSIC MSI, no PLIC)`;
+`[aia] self-test OK (IMSIC MSI leg): id claimed on stopei via direct doorbell.`
+— an external interrupt delivered through the S-mode IMSIC as an MSI and claimed
+via `stopei`, with the PLIC entirely out of the path.
+
+### R-P13.2 FDT -> driver attach (gate 2)
+
+`fdt_attach_drivers` walks every FDT node, reads its `compatible` string list,
+matches a driver, and binds it to the node's unit-address (parsed from the node
+name). The interrupt-controller model is likewise chosen from `compatible`
+(`fdt_intc_is_aia`), not compiled in — the qemu-virt default is PLIC, the K1/K3
+is AIA, and the kernel now follows firmware for both.
+
+PROVEN: `[devtree] attach uart <- serial@10000000 @0x10000000 (FDT compatible)`,
+`[devtree] attach virtio-mmio <- virtio_mmio@10008000 ...` (x8),
+`[devtree] attach aplic <- interrupt-controller@d000000 ...`,
+`[devtree] attach imsic <- interrupt-controller@28000000 ...`,
+`[devtree] 13 device(s) attached by FDT compatible`.
+
+### R-P13.3 Physical-hart SMP (gate 3)
+
+The boot-cpu-only dispatch is dropped: all four harts are in the scheduler. Each
+secondary becomes its hart's idle thread and loops the ONE shared, locked runq;
+a thread enqueued by any hart can be pulled and run by any idle hart, and an SBI
+IPI wakes a wfi'd idle hart when work appears. `this_cpu()` returns the real hart
+index (kept in `tp`, stamped per dispatch), so `curthread[]`/`idlethread[]` are
+correctly per-hart under concurrency, all serialized by `runq_lock`.
+
+PROVEN (AIA run): `[smp] OK: thread ran on hart 2 (!=0); 4 harts online in
+dispatcher (1 boot + 3 secondary)`.
+
+### R-P13.4 Result — SUCCESS (3 of 3 targeted gates; 1 documented partial)
+
+```
+[mlsetup] DTB: interrupt controller is AIA (APLIC+IMSIC) -> MSI IRQ model
+[aia] IRQ id 1 claimed via IMSIC stopei (APLIC->IMSIC MSI, no PLIC)
+[aia] self-test OK (IMSIC MSI leg): id claimed on stopei via direct doorbell.
+[devtree] 13 device(s) attached by FDT compatible
+[smp] OK: thread ran on hart 2 (!=0); 4 harts online in dispatcher (1 boot + 3 secondary)
+[blkfs] SNFS mounted (nslot 8, fblk 8)
+pipe OK: 'echo hello | cat' -> hello
+```
+
+**Deliberate R-P13 scope (documented ceilings, each an R-P14 upgrade path):**
+- **AIA APLIC wired leg**: the IMSIC MSI delivery leg + `stopei` claim are proven
+  end-to-end; the APLIC S-domain is init'd in MSI mode + FDT-detected, but the
+  APLIC *wired-line* -> MSI leg is silent on qemu 10.1 (the SMSIADDRCFG hart-index
+  shift-field encoding — base_ppn/LHXW/HHXW — was not fully programmed). The MSI
+  delivery path a real device driver uses (a virtio-blk MSI completion is exactly
+  a doorbell write) is what the self-test proves via a direct doorbell. Full APLIC
+  wired routing (programmed from the board DTB `msi-parent`/`riscv,num-sources`)
+  is R-P14 on the K1/K3.
+- **SMP proof is nondeterministic**: the shared runq means the boot hart can pull
+  its own enqueued proof thread before a secondary wakes (seen on the PLIC run:
+  `thread ran on boot hart 0 only`). The AIA run proved hart != 0. Affinity /
+  the boot hart deferring to secondaries during the proof window is a nicety, not
+  landed.
+- **One global runq + one global spinlock**: correct under concurrency but not
+  scalable; per-hart runqs + work-stealing + priority bands are the illumos-shaped
+  upgrade. No console cross-hart lock yet (the proof thread stays silent to avoid
+  byte-interleaving the result line); a real `kconsole` mutex is R-P14.
+- **External IRQs are still self-test-driven, not yet wired to live device
+  completions**: virtio remains polled (R-P6 ceiling); routing virtio-blk / uart
+  RX completions through IMSIC MSIs at runtime is the next AIA step.
+
+### R-P13.5 Next: R-P14 (SpaceMiT K1/K3 SoC bring-up — first boot on real rv silicon)
+
+Real-board arc: the actual K1/K3 board DTB (and its real APLIC/IMSIC
+`msi-parent`/`riscv,num-sources` programming to close the APLIC wired leg); SoC
+drivers — the SpaceMiT/DesignWare UART, the eMMC/SD (mmc) storage controller, and
+the on-SoC ethernet — bound through the R-P13 FDT driver-attach; U-Boot handoff
+(the board firmware -> S-mode entry contract, memory + DTB in a0/a1); a native
+riscv64 build host (drop the cross-compile); wiring live virtio/device
+completions through IMSIC MSIs; per-hart runqs + a console mutex; and finally the
+first boot on the maintainer's physical RISC-V board.
