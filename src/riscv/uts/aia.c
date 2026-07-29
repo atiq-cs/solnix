@@ -205,16 +205,44 @@ imsic_claim(void)
  * writes at the IMSIC S-file doorbell region. In MSI mode the APLIC computes
  * the target IMSIC address from the SMSIADDRCFG base + the per-source TARGET
  * (hart index). We set the base to the S IMSIC file 0 doorbell page.
+ *
+ * R-P14: close the R-P13 APLIC-wired-leg ceiling. The AIA spec MSIADDRCFGH
+ * (§4.5.4) is NOT a bare high-PPN: it encodes the hart-index-to-address
+ * layout so the APLIC can compute per-hart IMSIC file addresses:
+ *   [31] L (lock)  [30:28] HHXS  [24:20] LHXS  [18:16] HHXW  [15:12] LHXW
+ *   [11:0] high 12 bits of base PPN.
+ * For a single group of harts with 4 KiB IMSIC file stride: LHXS=0 (each hart
+ * is +1 page), and LHXW = number of low hart-index bits (>=1 to cover harts
+ * 0..N). qemu computes target = (base_ppn + (hart << (12+LHXS))) ... i.e. the
+ * per-hart file. R-P13 wrote SMSIADDRCFGH=0 (LHXW=0), so qemu could not spread
+ * the MSI across harts — a documented cause of the silent wired leg. We now
+ * program the fields AND read them back: if the M-mode APLIC (OpenSBI) locked
+ * SMSIADDRCFG (making it read-only, the spec's parent-domain behavior), the
+ * read-back reveals it and we report that as the precise, honest ceiling.
  */
+#define	APLIC_MSIADDRCFGH_LHXW_SHIFT	12
+#define	APLIC_MSIADDRCFGH_LHXS_SHIFT	20
+
+static unsigned int aplic_smsiaddr_rb;		/* read-back after program */
+static unsigned int aplic_smsiaddrh_rb;
+static int aplic_msiaddr_writable;		/* did the write stick? */
+
 void
 aplic_init(void)
 {
-	/* Program the S-domain MSI target base = S IMSIC file base >> 12
-	 * (the AIA APLIC MSIADDRCFG holds a PPN-style base address). qemu
-	 * derives the per-hart file from base + hartidx*stride. */
-	mmio_wr32(APLIC_S_BASE + APLIC_SMSIADDRCFG,
-	    (unsigned int)(IMSIC_S_BASE >> 12));
-	mmio_wr32(APLIC_S_BASE + APLIC_SMSIADDRCFGH, 0);
+	unsigned int lo = (unsigned int)(IMSIC_S_BASE >> 12);
+	/* LHXW=2 covers hart indices 0..3 (four harts); LHXS=0 => 4 KiB stride. */
+	unsigned int hi = (2U << APLIC_MSIADDRCFGH_LHXW_SHIFT) |
+	    (0U << APLIC_MSIADDRCFGH_LHXS_SHIFT);
+
+	mmio_wr32(APLIC_S_BASE + APLIC_SMSIADDRCFG, lo);
+	mmio_wr32(APLIC_S_BASE + APLIC_SMSIADDRCFGH, hi);
+
+	/* Read the fields back: if the parent (M) domain locked them, the write
+	 * is dropped and we learn the exact reason the wired leg stays silent. */
+	aplic_smsiaddr_rb = mmio_rd32(APLIC_S_BASE + APLIC_SMSIADDRCFG);
+	aplic_smsiaddrh_rb = mmio_rd32(APLIC_S_BASE + APLIC_SMSIADDRCFGH);
+	aplic_msiaddr_writable = (aplic_smsiaddr_rb == lo);
 
 	/* Enable the domain in MSI delivery mode. */
 	mmio_wr32(APLIC_S_BASE + APLIC_DOMAINCFG,
@@ -329,6 +357,20 @@ aia_selftest(unsigned long hartidx)
 	aplic_route(UART0_IRQ, hartidx, UART_EIID);
 	aia_active = 1;			/* trap() now uses aia_extintr */
 
+	/* R-P14: report the APLIC MSI-addr programming read-back — the direct
+	 * evidence of whether the S-domain SMSIADDRCFG is writable or the M-mode
+	 * APLIC (OpenSBI) locked it (the spec parent-domain behavior). */
+	sbi_console_puts("[aia] APLIC SMSIADDRCFG readback lo=");
+	kputhex(aplic_smsiaddr_rb);
+	sbi_console_puts(" hi=");
+	kputhex(aplic_smsiaddrh_rb);
+	sbi_console_puts(aplic_msiaddr_writable ?
+	    " (S-domain MSI-addr WRITABLE)\n" :
+	    " (S-domain MSI-addr READ-ONLY: locked by M-mode APLIC)\n");
+	sbi_console_puts("[aia] APLIC DOMAINCFG readback=");
+	kputhex(mmio_rd32(APLIC_S_BASE + APLIC_DOMAINCFG));
+	sbi_console_puts("\n");
+
 	sbi_console_puts("[aia] IMSIC S-file @");
 	kputhex(imsic_hartbase);
 	sbi_console_puts(", APLIC S-domain @");
@@ -356,14 +398,22 @@ aia_selftest(unsigned long hartidx)
 		sbi_console_puts(" claimed on stopei.\n");
 	} else {
 		/*
-		 * qemu APLIC MSI wiring can differ by version; if the wired
-		 * path did not fire, prove the IMSIC MSI delivery leg directly
-		 * (a device writing the doorbell — what a real virtio-blk MSI
-		 * completion does). This still proves IMSIC delivery + stopei
-		 * claim; only the APLIC leg is unconfirmed.
+		 * The APLIC wired leg is silent on this qemu. The SMSIADDRCFG
+		 * read-back above tells us WHY: if it came back read-only, the
+		 * M-mode APLIC (OpenSBI) locked the S-domain MSI-addr config
+		 * (AIA §4.5.4 parent-domain lock), so our S-domain writes are
+		 * dropped and the APLIC cannot compute the target IMSIC file
+		 * address for a wired source — the precise, documented ceiling.
+		 * We prove the IMSIC MSI delivery leg directly (a device writing
+		 * the doorbell — exactly what a virtio-blk / dw-apb-uart MSI
+		 * completion does), which is the leg a real device driver uses.
 		 */
-		sbi_console_puts("[aia] APLIC wired leg silent; proving IMSIC "
-		    "MSI doorbell directly (device-style MSI)\n");
+		sbi_console_puts("[aia] APLIC wired leg silent (");
+		sbi_console_puts(aplic_msiaddr_writable ?
+		    "SMSIADDRCFG writable but qemu wired->MSI not delivered" :
+		    "SMSIADDRCFG locked read-only by M-mode APLIC/OpenSBI");
+		sbi_console_puts("); proving IMSIC MSI doorbell directly "
+		    "(device-style MSI)\n");
 		imsic_enable_id(UART_EIID);
 		imsic_send(UART_EIID);
 		for (spin = 0; spin < 2000000 && aia_claimed_count == 0; spin++)

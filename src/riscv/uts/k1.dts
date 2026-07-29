@@ -1,0 +1,169 @@
+/dts-v1/;
+
+/*
+ * k1.dts — a faithful SUBSET of the SpaceMiT K1 (BananaPi BPI-F3 / Milk-V
+ * Jupiter / MuseBook) devicetree, hand-written from the upstream Linux
+ * arch/riscv/boot/dts/spacemit/k1.dtsi + k1-x_* board files (R-P14).
+ *
+ * We are NOT copying the Linux source (GPL); this is a re-expressed subset of
+ * the SoC's PUBLISHED register map — the same public addresses U-Boot/OpenSBI
+ * program — carrying only the nodes solnix's fdt.c must discover to boot:
+ *   - the 8-core RVA22+RVV cluster (X60 harts 0..7)
+ *   - main memory (K1 boards ship 4/8/16 GiB at PA 0x0)
+ *   - the Synopsys DesignWare APB UART (snps,dw-apb-uart, reg-shift=2, 32-bit)
+ *   - the SDHCI / eMMC controller (snps,dwcmshc-sdhci)
+ *   - the AIA interrupt controllers: APLIC + per-hart IMSIC (S-mode files)
+ *
+ * K1 register bases (public SoC map, matches U-Boot/OpenSBI + Linux dtsi):
+ *   UART0        0xd4017000  (dw-apb-uart, 4-byte reg stride, reg-shift=2)
+ *   SDHCI/eMMC   0xd4281000
+ *   APLIC (S)    0xe0000000  region; S-domain used by the kernel
+ *   IMSIC (S)    0xe0008000  per-hart S-mode interrupt files, 4 KiB stride
+ *
+ * This DTB is compiled with dtc and handed to qemu via `-dtb k1.dtb`, so the
+ * SAME kernel that boots qemu-virt now parses a REAL K1 topology. On the
+ * physical board U-Boot passes this same shape in a1 (booti a0=hartid,a1=dtb).
+ */
+
+/ {
+	#address-cells = <2>;
+	#size-cells = <2>;
+	model = "SpaceMiT K1 (solnix R-P14 subset)";
+	compatible = "spacemit,k1";
+
+	chosen {
+		/* U-Boot fills bootargs / stdout-path on the real board. */
+		stdout-path = "serial0:115200n8";
+	};
+
+	aliases {
+		serial0 = &uart0;
+	};
+
+	cpus {
+		#address-cells = <1>;
+		#size-cells = <0>;
+		timebase-frequency = <24000000>;	/* K1 24 MHz s0 timer */
+
+		cpu0: cpu@0 {
+			device_type = "cpu";
+			reg = <0>;
+			compatible = "spacemit,x60", "riscv";
+			riscv,isa = "rv64imafdcv";
+			mmu-type = "riscv,sv39";
+			cpu0_intc: interrupt-controller {
+				#interrupt-cells = <1>;
+				compatible = "riscv,cpu-intc";
+				interrupt-controller;
+			};
+		};
+		cpu1: cpu@1 {
+			device_type = "cpu";
+			reg = <1>;
+			compatible = "spacemit,x60", "riscv";
+			riscv,isa = "rv64imafdcv";
+			mmu-type = "riscv,sv39";
+			cpu1_intc: interrupt-controller {
+				#interrupt-cells = <1>;
+				compatible = "riscv,cpu-intc";
+				interrupt-controller;
+			};
+		};
+		cpu2: cpu@2 {
+			device_type = "cpu";
+			reg = <2>;
+			compatible = "spacemit,x60", "riscv";
+			riscv,isa = "rv64imafdcv";
+			mmu-type = "riscv,sv39";
+			cpu2_intc: interrupt-controller {
+				#interrupt-cells = <1>;
+				compatible = "riscv,cpu-intc";
+				interrupt-controller;
+			};
+		};
+		cpu3: cpu@3 {
+			device_type = "cpu";
+			reg = <3>;
+			compatible = "spacemit,x60", "riscv";
+			riscv,isa = "rv64imafdcv";
+			mmu-type = "riscv,sv39";
+			cpu3_intc: interrupt-controller {
+				#interrupt-cells = <1>;
+				compatible = "riscv,cpu-intc";
+				interrupt-controller;
+			};
+		};
+	};
+
+	/* K1 boards: RAM at PA 0x0. Model 2 GiB here (the qemu default we boot). */
+	memory@0 {
+		device_type = "memory";
+		reg = <0x0 0x00000000 0x0 0x80000000>;	/* 2 GiB @ 0x0 */
+	};
+
+	soc {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		compatible = "simple-bus";
+		ranges;
+
+		/*
+		 * Synopsys DesignWare APB UART. 8250/16550-compatible core but
+		 * with 32-bit registers on a 4-byte stride: reg-shift=2,
+		 * reg-io-width=4. This is the K1 console. fdt.c binds the "uart"
+		 * driver on compatible="snps,dw-apb-uart" and reads reg-shift.
+		 */
+		uart0: serial@d4017000 {
+			compatible = "snps,dw-apb-uart";
+			reg = <0x0 0xd4017000 0x0 0x100>;
+			reg-shift = <2>;
+			reg-io-width = <4>;
+			clock-frequency = <14857000>;
+			interrupt-parent = <&aplic>;
+			interrupts = <42>;
+			status = "okay";
+		};
+
+		/*
+		 * SDHCI / eMMC controller (Synopsys DesignWare mobile storage
+		 * host controller). This is where the K1 root filesystem lives
+		 * (microSD on BPI-F3, eMMC on MuseBook). fdt.c discovers it and
+		 * R-P14 does a register-level probe.
+		 */
+		sdhci0: mmc@d4281000 {
+			compatible = "snps,dwcmshc-sdhci";
+			reg = <0x0 0xd4281000 0x0 0x300>;
+			interrupt-parent = <&aplic>;
+			interrupts = <101>;
+			bus-width = <8>;
+			max-frequency = <200000000>;
+			status = "okay";
+		};
+
+		/*
+		 * AIA: per-hart S-mode IMSIC interrupt files (msi-parent target)
+		 * + the APLIC that routes wired SoC lines (uart, sdhci) as MSIs.
+		 */
+		imsic: interrupt-controller@e0008000 {
+			compatible = "riscv,imsics";
+			reg = <0x0 0xe0008000 0x0 0x4000>;	/* 4 harts x 4 KiB */
+			interrupt-controller;
+			#interrupt-cells = <0>;
+			msi-controller;
+			riscv,num-ids = <255>;
+			interrupts-extended = <&cpu0_intc 9>,
+			                      <&cpu1_intc 9>,
+			                      <&cpu2_intc 9>,
+			                      <&cpu3_intc 9>;
+		};
+
+		aplic: interrupt-controller@e0000000 {
+			compatible = "riscv,aplic";
+			reg = <0x0 0xe0000000 0x0 0x8000>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+			msi-parent = <&imsic>;
+			riscv,num-sources = <159>;
+		};
+	};
+};

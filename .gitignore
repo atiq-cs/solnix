@@ -9,3 +9,4 @@ artifacts/seed/seed.tar.zst
 *.iso
 src/riscv/uts/*.o
 src/riscv/uts/unix
+src/riscv/uts/k1.dtb

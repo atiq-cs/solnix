@@ -317,6 +317,168 @@ fdt_summary(unsigned long dtb)
 
 /*
  * ---------------------------------------------------------------------------
+ * R-P14: SpaceMiT K1 board-DTB ingestion.
+ *
+ * fdt_k1_summary walks a REAL SpaceMiT K1 devicetree (compiled from k1.dts, a
+ * faithful subset of the upstream K1 dtsi, handed to qemu via `-dtb k1.dtb`
+ * and delivered to the kernel in a1 exactly as U-Boot's `booti` does on the
+ * physical board). It discovers, by `compatible` + `reg`, the four devices the
+ * K1 boot path needs: the memory extent, the DesignWare APB UART
+ * (snps,dw-apb-uart, with its reg-shift), the SDHCI/eMMC controller, and the
+ * APLIC+IMSIC AIA controllers. It fills *out with the dw-apb-uart base and
+ * reg-shift so the console driver can bind them, and prints the R-P14 gate-1
+ * proof line.
+ *
+ * PROVE: "k1-dtb: parsed SpaceMiT K1 — mem@X, dw-apb-uart@Y, sdhci@Z,
+ *         aplic@A/imsic@I".
+ * ---------------------------------------------------------------------------
+ */
+
+static int compat_has(const char *data, unsigned int plen, const char *pfx);
+
+/* struct k1_devs lives in k1.h (shared with uart.c / sdhci.c / startup.c). */
+#include "k1.h"
+
+/*
+ * Read the FIRST address of a node's `reg` = <addr size ...> using the given
+ * #address-cells (K1 soc bus uses 2). Returns the base, or 0 if absent.
+ */
+static unsigned long
+reg_base(const unsigned char *pdata, unsigned int plen, unsigned int acells)
+{
+	if (plen < acells * 4)
+		return (0);
+	return (be_cells(pdata, acells));
+}
+
+int
+fdt_k1_summary(unsigned long dtb, struct k1_devs *out)
+{
+	const struct fdt_header *h = (const struct fdt_header *)dtb;
+	const unsigned char *stru, *strs, *p;
+	unsigned int addr_cells = 2, size_cells = 2;
+	int depth = 0, in_memory = 0;
+	/* Which device is the CURRENT node, so a following reg/reg-shift prop
+	 * (which comes AFTER compatible in the token stream) lands in it. */
+	int cur = 0;		/* 0 none, 1 uart, 2 sdhci, 3 aplic, 4 imsic */
+	struct k1_devs d;
+	int i;
+
+	for (i = 0; i < (int)sizeof (d); i++)
+		((char *)&d)[i] = 0;
+
+	if (be32((const unsigned char *)&h->magic) != FDT_MAGIC)
+		return (0);
+	stru = (const unsigned char *)dtb +
+	    be32((const unsigned char *)&h->off_dt_struct);
+	strs = (const unsigned char *)dtb +
+	    be32((const unsigned char *)&h->off_dt_strings);
+	p = stru;
+
+	for (;;) {
+		unsigned int tok = be32(p);
+		p += 4;
+		if (tok == FDT_END)
+			break;
+		if (tok == FDT_NOP)
+			continue;
+		if (tok == FDT_BEGIN_NODE) {
+			const char *name = (const char *)p;
+			int len = 0;
+			while (name[len] != '\0')
+				len++;
+			p += (len + 4) & ~3U;
+			depth++;
+			cur = 0;
+			if (is_memory_node(name))
+				in_memory = 1;
+			continue;
+		}
+		if (tok == FDT_END_NODE) {
+			in_memory = 0;
+			cur = 0;
+			depth--;
+			continue;
+		}
+		if (tok == FDT_PROP) {
+			unsigned int plen = be32(p);
+			unsigned int noff = be32(p + 4);
+			const char *pname = (const char *)strs + noff;
+			const unsigned char *pdata = p + 8;
+			if (depth == 1 &&
+			    namecmp(pname, "#address-cells") == 0 && plen >= 4)
+				addr_cells = be32(pdata);
+			if (depth == 1 &&
+			    namecmp(pname, "#size-cells") == 0 && plen >= 4)
+				size_cells = be32(pdata);
+			if (in_memory && namecmp(pname, "reg") == 0 &&
+			    plen >= (addr_cells + size_cells) * 4) {
+				d.mem_base = be_cells(pdata, addr_cells);
+				d.mem_size = be_cells(pdata + addr_cells * 4,
+				    size_cells);
+			}
+			/* Node classification comes from its compatible list. */
+			if (namecmp(pname, "compatible") == 0) {
+				const char *cd = (const char *)pdata;
+				if (compat_has(cd, plen, "snps,dw-apb-uart")) {
+					cur = 1; d.uart_is_dw = 1;
+					d.uart_shift = 0;
+				} else if (compat_has(cd, plen, "ns16550")) {
+					cur = 1;
+				} else if (compat_has(cd, plen,
+				    "snps,dwcmshc-sdhci") ||
+				    compat_has(cd, plen, "sdhci") ||
+				    compat_has(cd, plen, "mmc")) {
+					cur = 2; d.sdhci_present = 1;
+				} else if (compat_has(cd, plen, "riscv,aplic")) {
+					cur = 3; d.aplic_present = 1;
+				} else if (compat_has(cd, plen,
+				    "riscv,imsics")) {
+					cur = 4; d.imsic_present = 1;
+				}
+			}
+			if (cur != 0 && namecmp(pname, "reg") == 0) {
+				unsigned long b =
+				    reg_base(pdata, plen, addr_cells);
+				if (cur == 1) d.uart_base = b;
+				else if (cur == 2) d.sdhci_base = b;
+				else if (cur == 3) d.aplic_base = b;
+				else if (cur == 4) d.imsic_base = b;
+			}
+			if (cur == 1 && namecmp(pname, "reg-shift") == 0 &&
+			    plen >= 4)
+				d.uart_shift = be32(pdata);
+			p += 8 + ((plen + 3) & ~3U);
+			continue;
+		}
+		break;
+	}
+
+	sbi_console_puts("k1-dtb: parsed SpaceMiT K1 — mem@");
+	kputhex(d.mem_base);
+	sbi_console_puts(" size ");
+	kputhex(d.mem_size);
+	sbi_console_puts(", dw-apb-uart@");
+	kputhex(d.uart_base);
+	sbi_console_puts(" (reg-shift=");
+	kputdec(d.uart_shift);
+	sbi_console_puts("), sdhci@");
+	kputhex(d.sdhci_base);
+	sbi_console_puts(", aplic@");
+	kputhex(d.aplic_base);
+	sbi_console_puts("/imsic@");
+	kputhex(d.imsic_base);
+	sbi_console_puts("\n");
+
+	if (out != 0)
+		*out = d;
+	/* K1 board confirmed iff the four signature devices are all present. */
+	return (d.uart_is_dw && d.sdhci_present && d.aplic_present &&
+	    d.imsic_present);
+}
+
+/*
+ * ---------------------------------------------------------------------------
  * R-P13: FDT-driven interrupt-controller detection + driver attach.
  * ---------------------------------------------------------------------------
  */

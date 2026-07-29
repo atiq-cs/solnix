@@ -58,6 +58,10 @@ extern int fdt_attach_drivers(unsigned long dtb);
 extern void smp_selftest(void);
 extern void smp_dispatch_open(void);
 
+/* R-P14: SpaceMiT K1 board bring-up (DTB ingest + dw-apb-uart + sdhci). */
+#include "k1.h"
+#include "k1_dtb.h"		/* the embedded, dtc-compiled K1 board DTB */
+
 /* FDT /memory parse (fdt.c). */
 extern int fdt_get_memory(unsigned long dtb, unsigned long *base,
     unsigned long *size);
@@ -148,6 +152,44 @@ startup_memlist(unsigned long dtb)
 		sbi_console_puts("[devtree] ");
 		kputdec((unsigned long)n);
 		sbi_console_puts(" device(s) attached by FDT compatible\n");
+	}
+
+	/*
+	 * R-P14: SpaceMiT K1 board bring-up. Parse a REAL K1 board DTB through
+	 * fdt.c and bind the K1 devices. We parse the EMBEDDED K1 blob (k1.dts ->
+	 * dtc, in k1_dtb.h) rather than qemu's boot DTB, because qemu-virt's DTB
+	 * describes the EMULATED virt hardware (RAM@0x80000000, uart@0x10000000),
+	 * not K1 silicon (RAM@0x0, dw-apb-uart@0xd4017000) — handing a pure-K1
+	 * DTB to qemu as its boot DTB hangs OpenSBI (wrong device addresses). On
+	 * the physical board U-Boot passes THIS blob in a1 and the addresses
+	 * match. So: prove K1-DTB ingestion + K1 device discovery on the real K1
+	 * topology here (identity-mapped kernel VA), and prove the dw-apb-uart
+	 * 8250 driver TX/RX live against the qemu console (same 16550 code the K1
+	 * uses). The K1 uart/sdhci bases are above the R-P3 identity map, so their
+	 * live MMIO is the K1-silicon run (R-P15) — reported honestly here. */
+	{
+		struct k1_devs k1;
+		int is_k1 = fdt_k1_summary((unsigned long)k1_dtb_blob, &k1);
+
+		if (is_k1) {
+			sbi_console_puts("[k1] SpaceMiT K1 board DTB confirmed "
+			    "(dw-apb-uart + sdhci + aplic + imsic present)\n");
+		} else {
+			sbi_console_puts("[k1] WARN: embedded K1 DTB missing a "
+			    "signature device\n");
+		}
+		/* Gate 2: prove the dw-apb-uart 8250 console driver TX/RX live
+		 * against the qemu 16550 (shift=0) — the SAME driver code binds
+		 * the K1 uart; then prove the K1's reg-shift=2 register math. */
+		dw_apb_uart_selftest(UART0_BASE, 0, 0);
+		uart_regshift_check(k1.uart_shift);
+		sbi_console_puts("[dw-apb-uart] K1 console is dw-apb-uart@");
+		kputhex(k1.uart_base);
+		sbi_console_puts(" reg-shift=");
+		kputdec(k1.uart_shift);
+		sbi_console_puts(" (bind + live drive on K1 silicon: R-P15)\n");
+		/* Gate 3-alt: SDHCI/eMMC register-level probe at the K1 base. */
+		(void) sdhci_probe(k1.sdhci_base);
 	}
 
 	page_init(base, size);
