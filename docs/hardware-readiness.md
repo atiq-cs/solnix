@@ -82,3 +82,19 @@ ABI glue, DT/driver specifics, and any HiFive/Unmatched real-silicon fixes could
 de-risk the Jupiter2 bring-up. HIGH PRIORITY to compare before R-P16 hardware work.
 ACTION NEEDED FROM MAINTAINER: grant repo access or drop a clone at a path/URL the
 dev-box can read.
+
+## UPDATE (2026-07-29): grounded R-P16 timeline from n-hys analysis
+Full analysis: artifacts/hayashin-priorart/analysis/n-hys-adoption-analysis.md.
+Corrected, HONEST estimate (supersedes earlier optimism):
+- **Console + storage-boot on Jupiter2/K1 ≈ 4–5 weeks** of focused work.
+- **+ networking ≈ 10–11 weeks.**
+- Board arrives ~1 week: near-term realistic = early serial-console bring-up
+  (U-Boot/OpenSBI handoff + real DTB + CMO + poll-console), NOT a usable system
+  day-1. A storage-booting system is ~a month out; networked ~2.5 months.
+Key correction: K1 is T-Head X60 — needs **cache-maintenance ops (CMO)** for
+non-coherent DMA; `asm/t-head.h` is the #1 adopt (blocks ALL K1 DMA: MMC+eth).
+Adopt from n-hys (CDDL): krtld R_RISCV_*, of_utils/promif FDT, copyin/out, FPU
+ctxop, sendsig, locks; UART asy_nsuart (adopt-mostly); EMAC as NIC template
+(K1=dwmac/stmmac, rewrite reg layer). KEEP ours: AIA (n-hys=100% PLIC), ctx-switch,
+sdhci (closer to K1 dwcmshc-sdhci than their Allwinner SMHC). RVV1.0 = still net-new
+(n-hys float-only); their float ctxop is the structure RVV extends.
