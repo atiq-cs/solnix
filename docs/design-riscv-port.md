@@ -1647,3 +1647,129 @@ Artifacts: `artifacts/riscv-port/rp10/` (`rp10-boot.log`, `unix-rp10`,
   real RISC-V SoCs (SpacemiT K1 / the K3 class) — the AIA interrupt controller
   (APLIC + IMSIC) in place of the PLIC, real SoC console/storage/net drivers, a
   real DTB from firmware, SMP on physical harts, and a native rv build host.
+
+---
+
+## R-P11 — signals, concurrent shells, /etc/passwd login, writable/seekable FS
+
+R-P11 takes the R-P10 kernel (preemptive multitasking, a real libc slice, SMF-
+style init to a multi-user login, all off an on-disk ustar FS) and adds the four
+POSIX pieces a real login session needs: **signals** (the crux), a **writable +
+seekable filesystem** (the other crux), **/etc/passwd-backed login** with real
+uid/gid, and **truly concurrent shells** time-sliced by the R-P10 clock
+preemption. All four gates pass; console `^C` -> SIGINT is proven too.
+
+### R-P11.0 New + changed sources (`src/riscv/uts/` + `user/`)
+
+| File | Change |
+|------|--------|
+| `uproc.c` | proc_t grows `p_uid/p_gid`, a pending-signal bitmask `p_sigpend`, a per-signal disposition table `p_sighand[NSIG]`, and a one-deep saved frame (`p_sigsave`/`p_insig`). New: `proc_signal`/`sys_kill`, `sys_sigaction`, `sys_setuid/setgid/getuid`, `proc_deliver_signals(tf)` (the return-to-U delivery point), `proc_sigreturn(tf)`. fork inherits creds + handlers; execve resets caught handlers to default (POSIX); proc_exit posts SIGCHLD to the parent. Plus a writable in-memory **ramfs** (`ramfile[]`, `proc_openat_w`, `proc_fwrite`, `proc_lseek`) and `proc_fread` reads back live ramfs data. fd close/reuse now clears `fd_wnode`. |
+| `syscall.c` | New syscalls: `lseek(62)`, `kill(129)`, `rt_sigaction(134)`, `rt_sigreturn(139)`, `setgid(144)`, `setuid(146)`, `getuid(174)`. `openat` honors `O_CREAT/O_WRONLY/O_RDWR` against the ramfs; `write(fd>=3)` routes to `proc_fwrite`. Console `read` detects `^C` (0x03) and posts SIGINT to the foreground proc. `syscall_trap` calls `proc_deliver_signals(tf)` on the way out; `rt_sigreturn` returns without re-delivering. |
+| `trap.c` | The timer ISR, when returning to a user thread (SPP==0), also calls `proc_deliver_signals(tf)` — so an async signal (a `^C` SIGINT, a `kill` SIGKILL) lands on the next tick even with no syscall. |
+| `user/libc.h` + `user/libc.c` | New stubs: `lseek`, `kill`, `setuid`, `setgid`, `getuid`, `signal`/`sigaction_h`, and a naked `__sigreturn` trampoline (the handler-return path that calls `rt_sigreturn`). `signal()` passes `&__sigreturn` as the kernel restorer. O_* + SIG* constants. |
+| `user/init.c` | Rewritten for R-P11: keeps the R-P9/R-P10 regression, then runs gate 1 (signals: self-`kill` SIGINT + handler, SIGCHLD reap-in-handler, SIGKILL force-exit), gate 4 (writable FS: open O_CREAT|O_RDWR /tmp/x, write, lseek, read back), gate 2 (concurrent shells: two forked sessions printing their pid, interleaved by preemption), then gate 3 (`login_console` reads `/etc/passwd`, setuid/setgid to the matched user, execs its shell). |
+| `user/build-user.sh` | rootfs.img now also carries `/etc/passwd` (root uid 0, operator uid 2). |
+| `rp11-run.sh` (new) | Boots the R-P11 kernel with rootfs.img on a 2nd virtio-blk; drives the passwd login (root -> commands -> exit -> operator -> exit -> bad user). `timeout 120`, detached (`&` + bounded `sleep`+`kill`), never foreground-waits. |
+
+### R-P11.1 Signals (gate 1 — the crux)
+
+The delivery point is `proc_deliver_signals(tf)`, called from BOTH the syscall
+return path and the timer ISR whenever we are about to `sret` to a user thread.
+It picks the lowest pending signal and acts on its disposition:
+
+- **SIG_DFL, terminating** (SIGINT, SIGKILL): print a banner and `proc_exit(128+sig)`.
+- **SIG_DFL, SIGCHLD**: discard (POSIX default).
+- **SIG_IGN**: discard.
+- **caught** (a user handler PC): save the interrupted frame into `p_sigsave`,
+  set `sepc`=handler, `a0`=signum, `ra`=`__sigreturn` (the libc trampoline),
+  mark `p_insig`. When the handler returns it jumps to `__sigreturn`, which
+  calls `rt_sigreturn(2)` -> `proc_sigreturn` restores `p_sigsave` and the
+  interrupted user code resumes exactly where it was. One frame deep (no nested
+  handlers), which is enough for init's reaper.
+
+SIGKILL is uncatchable in `sys_sigaction`. `^C` on the console posts SIGINT to
+the foreground process from `sys_read`; a shell with the default disposition is
+terminated and the getty re-prompts — verified.
+
+### R-P11.2 Writable/seekable FS (gate 4 — the other crux)
+
+A small in-memory **ramfs** mounted implicitly over paths opened with
+`O_CREAT`. Each file is a growable kmem buffer (64 KiB cap). `open(O_CREAT|
+O_RDWR)` makes/finds a node; `write` copies from the user buffer into the file
+at the cursor (fault-safe `copyin`), grows the length (write-back), advances the
+cursor; `lseek` (SET/CUR/END) moves the cursor; `read` reads back live data.
+This delivers the gate's real write-back + seek semantics over a vnode-shaped
+node without a full on-disk FS; the read-only ustar root remains for the ELFs.
+
+### R-P11.3 /etc/passwd login (gate 3) + concurrent shells (gate 2)
+
+`login_console` reads `/etc/passwd` off the disk, splits `name:passwd:uid:gid:
+gecos:home:shell`, matches the typed user, calls `setgid`+`setuid` to its
+credentials, and `execve`s its login shell. Concurrent shells: init forks two
+independent sessions that each print their pid in a bounded loop; the R-P10
+clock preemption interleaves them (the log shows A and B lines interleaved
+mid-`printf`), and the persistent console login is the third live session.
+
+### R-P11.4 Result — SUCCESS (4 of 4 core gates; console ^C + pipes noted)
+
+Verbatim console (artifacts/riscv-port/rp11/rp11.log):
+
+```
+--- R-P11 gate 1: signals ---
+  [handler] SIGINT handler ran (pid 1)
+signals OK: SIGINT delivered to pid 1, handler ran
+SIGCHLD: init reaped child via handler (pid 5)
+signal: pid 6 terminated by signal 9
+SIGKILL: force-exited child pid 6 (status 137)
+--- R-P11 gate 4: writable/seekable FS ---
+fs: wrote /tmp/x, read it back, lseek OK ('solnix-rp11')
+--- R-P11 gate 2: concurrent shells ---
+concurrent: shell A (pid 7) + shell B (pid 8) both live
+[shell A pid 7] round 0
+[shell B pid 8] round 0
+[shell B pid 8] round 1
+[shell A pid 7] round 1
+...
+solnix-riscv login: root
+login: root uid=0 from /etc/passwd -> /bin/sh
+solnix-riscv# cat /etc/passwd
+root:x:0:0:Super-User:/root:/bin/sh
+operator:x:2:5:Operator:/:/bin/sh
+solnix-riscv# exit
+solnix-riscv login: operator
+login: operator uid=2 from /etc/passwd -> /bin/sh
+solnix-riscv login: nosuchuser
+login: no such user 'nosuchuser' in /etc/passwd
+```
+
+Console ^C (artifacts/riscv-port/rp11/rp11-ctrlc-sigint.log):
+
+```
+solnix-riscv# ^C
+signal: pid 9 terminated by signal 2
+solnix-riscv login:
+```
+
+**Deliberate R-P11 scope (documented ceilings, each an R-P12 upgrade path):**
+- **32 signals, no `sigprocmask`/queued `siginfo`, one handler frame deep** — no
+  nested handlers, no signal masking; a full `sigaction`/`sigprocmask` stack is R-P12.
+- **`setuid`/`setgid` have no privilege check** — single-user trust model; a real
+  cred model (`uid==0` gate, saved/effective ids) is R-P12.
+- **Writable FS is in-memory ramfs** (fixed file count, no dirs/unlink/persistence);
+  a vnode + block cache over vioblk with write-back to disk is R-P12.
+- **Pipes (gate 5) not implemented** — `pipe(2)` + a shell `|` pipeline is the
+  first R-P12 item (needs a pipe buffer, dup2, and `|` parsing in sh).
+- **Concurrent shells are 2 forked sessions on one console** — a 2nd UART/console
+  for two truly independent interactive gettys is R-P12.
+
+### R-P11.5 Next: R-P12 (pipes + real cred/signal model + K1/K3 hardware)
+
+- **`pipe(2)` + `dup2` + a shell `ls | cat` pipeline** (gate 5, deferred).
+- **A real vnode + block-cache writable FS over vioblk** (write-back to disk),
+  replacing the in-memory ramfs; `/dev`, `/proc`.
+- **Fuller signals** (`sigprocmask`, queued `siginfo`, nested handlers) and a
+  real cred model (privilege checks on `setuid`).
+- **K1/K3 hardware bring-up:** move off qemu virt to real RISC-V SoCs (SpacemiT
+  K1 / the K3 class) — the AIA interrupt controller (APLIC + IMSIC) in place of
+  the PLIC, real SoC console/storage/net drivers, a real DTB from firmware, SMP
+  on physical harts, and a native rv build host.

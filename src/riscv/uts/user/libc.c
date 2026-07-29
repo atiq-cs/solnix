@@ -37,6 +37,53 @@ int  execve(const char *p, char *const av[], char *const ev[])
 int  waitpid(int pid, int *st, int opt)     { return (int)__sys(SYS_wait4, pid, (long)st, opt, 0); }
 void _exit(int s)                           { __sys(SYS_exit, s, 0, 0, 0); for (;;) ; }
 
+long lseek(int fd, long off, int whence)    { return __sys(SYS_lseek, fd, off, whence, 0); }
+int  kill(int pid, int sig)                 { return (int)__sys(SYS_kill, pid, sig, 0, 0); }
+int  setuid(unsigned int uid)               { return (int)__sys(SYS_setuid, uid, 0, 0, 0); }
+int  setgid(unsigned int gid)               { return (int)__sys(SYS_setgid, gid, 0, 0, 0); }
+int  getuid(void)                           { return (int)__sys(SYS_getuid, 0, 0, 0, 0); }
+
+/*
+ * __sigreturn — the signal-handler return trampoline. When a handler returns,
+ * its `ra` (set by the kernel at delivery) jumps here; we invoke rt_sigreturn,
+ * which restores the interrupted frame in the kernel and resumes it. Naked so
+ * no prologue perturbs the (about-to-be-discarded) register state.
+ */
+__attribute__((naked, used)) void
+__sigreturn(void)
+{
+	__asm__ __volatile__(
+	    "li a7, %0\n"
+	    "ecall\n"
+	    "1: j 1b\n"
+	    :: "i"(SYS_rt_sigreturn));
+}
+
+/*
+ * sigaction_h / signal — install `handler` for `sig`. Passes the __sigreturn
+ * trampoline VA as the restorer so the kernel knows where to send a returning
+ * handler. handler==SIG_DFL(0)/SIG_IGN(1) set the default/ignore disposition.
+ * signal() returns the previous handler; sigaction_h returns 0/-1.
+ */
+extern void __sigreturn(void);
+int
+sigaction_h(int sig, void (*handler)(int))
+{
+	long r = __sys(SYS_rt_sigaction, sig, (long)handler,
+	    (long)&__sigreturn, 0);
+	return (r < 0 ? -1 : 0);
+}
+
+void (*
+signal(int sig, void (*handler)(int)))(int)
+{
+	long prev = __sys(SYS_rt_sigaction, sig, (long)handler,
+	    (long)&__sigreturn, 0);
+	if (prev < 0)
+		return (SIG_DFL);
+	return ((void (*)(int))prev);
+}
+
 void cowreport(void)     { __sys(SYS_cowreport, 0, 0, 0, 0); }
 long preemptreport(void) { return __sys(SYS_preemptreport, 0, 0, 0, 0); }
 void spin(unsigned long n)

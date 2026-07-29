@@ -43,6 +43,7 @@ extern int uart_getc(void);
 /* uproc.c: the R-P8 process model backing the syscalls. */
 extern void proc_exit(int status) __attribute__((noreturn));
 extern int proc_getpid(void);
+extern int proc_signal(int pid, int sig);
 extern long proc_open(const char *path);
 extern long proc_fread(int fd, char *ubuf, unsigned long n);
 extern long proc_close(int fd);
@@ -53,6 +54,17 @@ extern int proc_waitpid(int pid, int *statusp);
 extern long proc_brk(unsigned long newbrk);
 extern unsigned long proc_cow_shared(void);
 extern unsigned long proc_cow_copied(void);
+/* R-P11 signals + creds + writable FS. */
+extern long sys_kill(int pid, int sig);
+extern long sys_sigaction(int sig, unsigned long handler, unsigned long restorer);
+extern long sys_setuid(unsigned int uid);
+extern long sys_setgid(unsigned int gid);
+extern long sys_getuid(void);
+extern void proc_sigreturn(struct regs *tf);
+extern void proc_deliver_signals(struct regs *tf);
+extern long proc_openat_w(const char *path, int flags);
+extern long proc_fwrite(int fd, const char *ubuf, unsigned long n);
+extern long proc_lseek(int fd, long off, int whence);
 
 /* trap.c: clock-tick preemption count (R-P9 gate 5). */
 extern volatile unsigned long preempt_count;
@@ -66,9 +78,16 @@ extern long copyout(const void *kaddr, void *uaddr, unsigned long n);
 /* Riscv Linux-ABI subset numbers our userland stub uses. */
 #define	SYS_openat	56
 #define	SYS_close	57
+#define	SYS_lseek	62
 #define	SYS_read	63
 #define	SYS_write	64
 #define	SYS_exit	93
+#define	SYS_kill	129
+#define	SYS_rt_sigaction 134
+#define	SYS_rt_sigreturn 139
+#define	SYS_setgid	144
+#define	SYS_setuid	146
+#define	SYS_getuid	174
 #define	SYS_getpid	172
 #define	SYS_brk		214
 #define	SYS_fork	220
@@ -90,10 +109,12 @@ sys_write(int fd, const char *ubuf, unsigned long n)
 	char kb[256];
 	unsigned long off = 0;
 
-	if (fd != 1 && fd != 2)
-		return (-1);
 	if (ubuf == 0)
 		return (-EFAULT);
+	if (fd >= 3)
+		return (proc_fwrite(fd, ubuf, n));	/* writable file (R-P11) */
+	if (fd != 1 && fd != 2)
+		return (-1);
 	/* Bounce the user buffer through the kernel in chunks via fault-safe
 	 * copyin. A bad user pointer returns EFAULT instead of panicking. */
 	while (off < n) {
@@ -137,6 +158,13 @@ sys_read(int fd, char *ubuf, unsigned long n)
 
 		if (c == '\r')
 			c = '\n';
+		/* R-P11: ^C on the console posts SIGINT to the foreground
+		 * (current) process, then returns what we have. */
+		if (c == 0x03) {
+			sbi_console_puts("^C\n");
+			proc_signal(proc_getpid(), 2 /* SIGINT */);
+			return (i > 0 ? (long)i : -4 /* EINTR */);
+		}
 		sbi_console_putchar(c);		/* echo */
 		ch = (char)c;
 		if (copyout(&ch, ubuf + i, 1) != 0)
@@ -169,8 +197,12 @@ syscall_trap(struct regs *tf)
 		ret = sys_read((int)tf->r_a0, (char *)tf->r_a1, tf->r_a2);
 		break;
 	case SYS_openat:
-		/* a0=dirfd (ignored), a1=path, a2=flags (ignored). */
-		ret = proc_open((const char *)tf->r_a1);
+		/* a0=dirfd (ignored), a1=path, a2=flags. R-P11: honor write/
+		 * create flags against the writable ramfs. */
+		ret = proc_openat_w((const char *)tf->r_a1, (int)tf->r_a2);
+		break;
+	case SYS_lseek:
+		ret = proc_lseek((int)tf->r_a0, (long)tf->r_a1, (int)tf->r_a2);
 		break;
 	case SYS_close:
 		ret = proc_close((int)tf->r_a0);
@@ -207,6 +239,29 @@ syscall_trap(struct regs *tf)
 		proc_exit((int)tf->r_a0);	/* does not return */
 		/* NOTREACHED */
 		ret = 0;
+		break;
+	case SYS_kill:
+		ret = sys_kill((int)tf->r_a0, (int)tf->r_a1);
+		break;
+	case SYS_rt_sigaction:
+		/* a0=sig, a1=handler PC (0=DFL,1=IGN), a2=restorer (libc
+		 * sigreturn trampoline VA). */
+		ret = sys_sigaction((int)tf->r_a0, tf->r_a1, tf->r_a2);
+		break;
+	case SYS_rt_sigreturn:
+		/* Restore the frame saved at signal delivery and return WITHOUT
+		 * advancing sepc or delivering another signal (the restored
+		 * frame already has the correct sepc). */
+		proc_sigreturn(tf);
+		return;
+	case SYS_setuid:
+		ret = sys_setuid((unsigned int)tf->r_a0);
+		break;
+	case SYS_setgid:
+		ret = sys_setgid((unsigned int)tf->r_a0);
+		break;
+	case SYS_getuid:
+		ret = sys_getuid();
 		break;	case SYS_cowreport: {
 		extern void kputdec(unsigned long v);
 		sbi_console_puts("COW fork OK: ");
@@ -246,4 +301,10 @@ syscall_trap(struct regs *tf)
 
 	tf->r_a0 = (unsigned long)ret;
 	tf->r_sepc += 4;		/* skip the ecall */
+
+	/* R-P11: deliver any pending signal on the way back to U-mode. This may
+	 * redirect tf into a handler, or (for a terminating default) not return.
+	 * Runs after sepc is advanced so a caught signal saves the post-ecall PC
+	 * and sigreturn resumes at the instruction after the syscall. */
+	proc_deliver_signals(tf);
 }

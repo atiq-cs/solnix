@@ -28,10 +28,27 @@ typedef unsigned long size_t;
 #define SYS_execve  221
 #define SYS_wait4   260
 #define SYS_openat  56
+#define SYS_lseek   62
+#define SYS_kill    129
+#define SYS_rt_sigaction 134
+#define SYS_rt_sigreturn 139
+#define SYS_setgid  144
+#define SYS_setuid  146
+#define SYS_getuid  174
 #define SYS_cowreport     500
 #define SYS_preemptreport 501
 
 #define O_RDONLY 0
+#define O_WRONLY 0x1
+#define O_RDWR   0x2
+#define O_CREAT  0x40
+
+/* Signals (subset). */
+#define SIGINT   2
+#define SIGKILL  9
+#define SIGCHLD  17
+#define SIG_DFL  ((void (*)(int))0)
+#define SIG_IGN  ((void (*)(int))1)
 
 /* Raw syscall + thin POSIX-ish wrappers (defined in libc.c). */
 long __sys(long n, long a0, long a1, long a2, long a3);
@@ -44,6 +61,15 @@ int  fork(void);
 int  execve(const char *path, char *const argv[], char *const envp[]);
 int  waitpid(int pid, int *status, int opt);
 void _exit(int status) __attribute__((noreturn));
+
+/* R-P11: signals, credentials, seekable I/O. */
+long lseek(int fd, long off, int whence);
+int  kill(int pid, int sig);
+int  setuid(unsigned int uid);
+int  setgid(unsigned int gid);
+int  getuid(void);
+void (*signal(int sig, void (*handler)(int)))(int);
+int  sigaction_h(int sig, void (*handler)(int));
 
 /* string.h slice. */
 size_t strlen(const char *s);

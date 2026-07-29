@@ -139,6 +139,14 @@ ustrlen_k(const char *s)
 	return (n);
 }
 
+/* Kernel-side string compare (ramfs path lookup, R-P11). */
+static int
+str_eq_uproc(const char *a, const char *b)
+{
+	while (*a && *a == *b) { a++; b++; }
+	return (*a == *b);
+}
+
 /*
  * argsnap_copy — snapshot a user argv[]/envp[] (NULL-terminated arrays of user
  * char* pointers) into `snap`, using fault-safe copyin so a bad pointer yields
@@ -325,6 +333,24 @@ typedef enum {
 	PS_ZOMBIE
 } pstate_t;
 
+/*
+ * R-P11 signals. A tiny POSIX-shaped signal set: NSIG signals, a pending bitmask
+ * (p_sigpend), and a per-signal disposition table (p_sighand: 0 = default,
+ * SIG_IGN_VAL = ignore, else a user handler PC). Delivery happens on the way
+ * back to U-mode (proc_deliver_signals): SIGKILL force-exits; a signal with a
+ * handler pushes a small signal frame and redirects sepc to the handler, which
+ * returns via the sigreturn trampoline (rt_sigreturn syscall) that restores the
+ * saved frame. This is the seed of illumos sig / lwp_sigmask + sendsig.
+ * NOTE (R-P11 ceiling): 32 signals, no sigprocmask/queued siginfo, one frame
+ * deep (no nested handlers); a full sigaction/sigprocmask stack is R-P12.
+ */
+#define	NSIG		32
+#define	SIGINT		2
+#define	SIGKILL		9
+#define	SIGCHLD		17
+#define	SIG_DFL_VAL	0UL
+#define	SIG_IGN_VAL	1UL
+
 typedef struct proc {
 	int		p_pid;
 	int		p_ppid;
@@ -334,13 +360,21 @@ typedef struct proc {
 	struct kthread	*p_thread;
 	struct regs	p_uframe;	/* frame to (re)enter U-mode with */
 	int		p_inuse;
+	unsigned int	p_uid;		/* R-P11: /etc/passwd login sets these */
+	unsigned int	p_gid;
+	unsigned long	p_sigpend;	/* R-P11: pending-signal bitmask */
+	unsigned long	p_sighand[NSIG];/* disposition per signal */
+	int		p_insig;	/* currently in a handler (frame saved) */
+	struct regs	p_sigsave;	/* frame saved across a handler */
 	/* Tiny per-process fd table: fd 0/1/2 are the console (stdin/out/err);
-	 * fd 3.. are open files (a vfs image + a read cursor). */
+	 * fd 3.. are open files (a vfs node + a cursor). fd_wnode!=0 => a
+	 * writable ramfs node (R-P11 writable FS); else a read-only vfs image. */
 	struct {
 		int		fd_used;
 		const unsigned char *fd_data;
 		unsigned long	fd_len;
 		unsigned long	fd_pos;
+		void		*fd_wnode;	/* ramfs node if writable */
 	} p_fd[8];
 } proc_t;
 
@@ -375,6 +409,12 @@ proc_alloc(void)
 			p->p_status = 0;
 			p->p_as = 0;
 			p->p_thread = 0;
+			p->p_uid = 0;
+			p->p_gid = 0;
+			p->p_sigpend = 0;
+			p->p_insig = 0;
+			for (k = 0; k < NSIG; k++)
+				p->p_sighand[k] = SIG_DFL_VAL;
 			for (k = 0; k < 8; k++)
 				p->p_fd[k].fd_used = 0;
 			return (p);
@@ -468,6 +508,7 @@ proc_open(const char *path)
 			p->p_fd[fd].fd_data = (const unsigned char *)data;
 			p->p_fd[fd].fd_len = len;
 			p->p_fd[fd].fd_pos = 0;
+			p->p_fd[fd].fd_wnode = 0;   /* read-only vfs image */
 			return (fd);
 		}
 	}
@@ -484,15 +525,26 @@ proc_fread(int fd, char *ubuf, unsigned long n)
 {
 	proc_t *p = curproc;
 	unsigned long avail;
+	const unsigned char *src;
+	unsigned long len;
 
 	if (p == 0 || fd < 3 || fd >= 8 || !p->p_fd[fd].fd_used)
 		return (-1);
-	avail = p->p_fd[fd].fd_len - p->p_fd[fd].fd_pos;
+	/* R-P11: a writable ramfs fd reads back live data (it may have grown
+	 * since open); a read-only vfs fd reads the snapshotted image. */
+	if (p->p_fd[fd].fd_wnode != 0) {
+		extern const unsigned char *ramfile_data(void *node,
+		    unsigned long *lenp);
+		src = ramfile_data(p->p_fd[fd].fd_wnode, &len);
+	} else {
+		src = p->p_fd[fd].fd_data;
+		len = p->p_fd[fd].fd_len;
+	}
+	avail = (p->p_fd[fd].fd_pos < len) ? (len - p->p_fd[fd].fd_pos) : 0;
 	if (n > avail)
 		n = avail;
 	/* Fault-safe copy into the user buffer. */
-	if (n > 0 && copyout(&p->p_fd[fd].fd_data[p->p_fd[fd].fd_pos],
-	    ubuf, n) != 0)
+	if (n > 0 && copyout(&src[p->p_fd[fd].fd_pos], ubuf, n) != 0)
 		return (-14);			/* EFAULT */
 	p->p_fd[fd].fd_pos += n;
 	return ((long)n);
@@ -509,6 +561,7 @@ proc_close(int fd)
 	if (p == 0 || fd < 3 || fd >= 8 || !p->p_fd[fd].fd_used)
 		return (-1);
 	p->p_fd[fd].fd_used = 0;
+	p->p_fd[fd].fd_wnode = 0;	/* R-P11: clear so a reused slot is clean */
 	return (0);
 }
 
@@ -585,6 +638,13 @@ load_elf_into(proc_t *p, const char *path, const void *img, unsigned long len,
 	/* exec starts with a clean fd table (only console fds 0/1/2 implicit). */
 	for (i = 0; i < 8; i++)
 		p->p_fd[i].fd_used = 0;
+	/* R-P11: exec resets caught signals to default (POSIX); ignored stay
+	 * ignored. No handler survives an image replacement. */
+	for (i = 0; i < NSIG; i++) {
+		if (p->p_sighand[i] != SIG_IGN_VAL)
+			p->p_sighand[i] = SIG_DFL_VAL;
+	}
+	p->p_insig = 0;
 	return (1);
 }
 
@@ -712,6 +772,13 @@ proc_fork(struct regs *tf)
 	if (child == 0)
 		return (-1);
 	child->p_ppid = parent->p_pid;
+	child->p_uid = parent->p_uid;	/* R-P11: inherit credentials */
+	child->p_gid = parent->p_gid;
+	{
+		int s;
+		for (s = 0; s < NSIG; s++)
+			child->p_sighand[s] = parent->p_sighand[s];
+	}
 
 	child->p_as = as_cow_copy(parent->p_as);
 	if (child->p_as == 0) {
@@ -877,6 +944,9 @@ proc_exit(int status)
 		int i;
 		for (i = 0; i < NPROC; i++) {
 			if (proctab[i].p_inuse && proctab[i].p_pid == ppid) {
+				/* R-P11: post SIGCHLD to the parent (it may have
+				 * a handler, e.g. init reaping via the handler). */
+				proctab[i].p_sigpend |= (1UL << SIGCHLD);
 				wakeup(&proctab[i]);
 				break;
 			}
@@ -989,4 +1059,362 @@ proc_sbrk(long incr)
 	if (as_grow(as, old + incr) == 0)
 		return (-1);
 	return ((long)old);
+}
+
+/*
+ * ===========================================================================
+ * R-P11 signals: kill(2), sigaction(2), delivery on return-to-U, sigreturn.
+ * ===========================================================================
+ *
+ * Delivery model (POSIX-shaped, one frame deep):
+ *   - proc_deliver_signals(tf) runs on the way back to U-mode (called from the
+ *     trap dispatcher after a syscall / preempt tick / fault, when returning to
+ *     a user thread). It picks the lowest pending signal not blocked.
+ *   - SIGKILL / a default-terminate signal (SIGINT default) -> proc_exit.
+ *   - SIGCHLD default -> ignored (discarded), matching POSIX SIG_DFL for CHLD.
+ *   - a caught signal (handler PC in p_sighand[sig]) -> save the interrupted
+ *     frame into p_sigsave, set sepc=handler, a0=sig, ra=p_sigrestore (the libc
+ *     sigreturn trampoline), and mark p_insig. When the handler returns it
+ *     jumps to the restorer, which calls SYS_rt_sigreturn -> proc_sigreturn,
+ *     restoring p_sigsave so the interrupted code resumes.
+ */
+
+static unsigned long p_sigrestore_va;	/* libc __sigreturn trampoline VA */
+
+/*
+ * proc_signal — post signal `sig` to the process with pid `pid` (or to every
+ * user proc if pid<=0 for the console-broadcast case handled by the caller).
+ * Sets the pending bit and wakes the target if it is asleep. Returns 0 on
+ * success, -1 if no such pid. This is the kernel-internal post used by kill(2),
+ * SIGCHLD (proc_exit), and the console ^C path.
+ */
+int
+proc_signal(int pid, int sig)
+{
+	int i;
+
+	if (sig <= 0 || sig >= NSIG)
+		return (-1);
+	for (i = 0; i < NPROC; i++) {
+		if (proctab[i].p_inuse && proctab[i].p_pid == pid &&
+		    proctab[i].p_state == PS_RUN) {
+			proctab[i].p_sigpend |= (1UL << sig);
+			wakeup(&proctab[i]);	/* if blocked, make runnable */
+			return (0);
+		}
+	}
+	return (-1);
+}
+
+/* sys_kill — the kill(2) backing: post `sig` to pid. */
+long
+sys_kill(int pid, int sig)
+{
+	return (proc_signal(pid, sig));
+}
+
+/*
+ * sys_sigaction — install a disposition for `sig`. handler==0 => SIG_DFL,
+ * handler==1 => SIG_IGN, else a user handler PC. `restorer` is the libc
+ * sigreturn trampoline VA (recorded once, shared by all handlers). SIGKILL
+ * cannot be caught or ignored (POSIX). Returns the previous disposition.
+ */
+long
+sys_sigaction(int sig, unsigned long handler, unsigned long restorer)
+{
+	proc_t *p = curproc;
+	unsigned long prev;
+
+	if (p == 0 || sig <= 0 || sig >= NSIG)
+		return (-1);
+	if (sig == SIGKILL)
+		return (-1);		/* uncatchable */
+	prev = p->p_sighand[sig];
+	p->p_sighand[sig] = handler;
+	if (restorer != 0)
+		p_sigrestore_va = restorer;
+	return ((long)prev);
+}
+
+/* sys_setuid / sys_setgid — set the process credentials (login uses these
+ * after reading /etc/passwd). No privilege check yet (single-user trust model);
+ * a real cred/uid==0 gate is R-P12. */
+long
+sys_setuid(unsigned int uid)
+{
+	if (curproc == 0)
+		return (-1);
+	curproc->p_uid = uid;
+	return (0);
+}
+
+long
+sys_setgid(unsigned int gid)
+{
+	if (curproc == 0)
+		return (-1);
+	curproc->p_gid = gid;
+	return (0);
+}
+
+long
+sys_getuid(void)
+{
+	return (curproc != 0 ? (long)curproc->p_uid : 0);
+}
+
+/*
+ * proc_deliver_signals — deliver at most one pending signal to the current
+ * process on the way back to U-mode. `tf` is the trap frame we are about to
+ * sret through (the process's live register state). Called from the trap
+ * dispatcher for any return to a user thread. Returns after either doing
+ * nothing (no pending signal), redirecting tf into a handler, or NOT returning
+ * (a terminating default disposition calls proc_exit).
+ */
+void
+proc_deliver_signals(struct regs *tf)
+{
+	proc_t *p = curproc;
+	int sig;
+	unsigned long disp;
+
+	if (p == 0 || p->p_sigpend == 0)
+		return;
+	if (p->p_insig)
+		return;		/* already in a handler (one frame deep) */
+
+	for (sig = 1; sig < NSIG; sig++) {
+		if ((p->p_sigpend & (1UL << sig)) == 0)
+			continue;
+		p->p_sigpend &= ~(1UL << sig);	/* consume */
+		disp = p->p_sighand[sig];
+
+		if (disp == SIG_IGN_VAL)
+			continue;		/* ignored: discard */
+
+		if (disp == SIG_DFL_VAL) {
+			/* Default action. SIGCHLD default = ignore; SIGKILL and
+			 * SIGINT default = terminate. */
+			if (sig == SIGCHLD)
+				continue;
+			sbi_console_puts("signal: pid ");
+			kputdec((unsigned long)p->p_pid);
+			sbi_console_puts(" terminated by signal ");
+			kputdec((unsigned long)sig);
+			sbi_console_puts("\n");
+			proc_exit(128 + sig);	/* does not return */
+		}
+
+		/* Caught: push a signal frame and redirect to the handler. */
+		if (p_sigrestore_va == 0)
+			continue;		/* no trampoline: cannot deliver */
+		p->p_sigsave = *tf;		/* save the interrupted frame */
+		p->p_insig = 1;
+		tf->r_sepc = disp;		/* enter handler */
+		tf->r_a0 = (unsigned long)sig;	/* handler(sig) */
+		tf->r_ra = p_sigrestore_va;	/* return -> sigreturn trampoline */
+		return;				/* deliver one per return */
+	}
+}
+
+/*
+ * proc_sigreturn — the rt_sigreturn(2) backing. The libc trampoline calls this
+ * when a handler returns; restore the frame saved at delivery so the
+ * interrupted user code resumes exactly where it was. `tf` is the current
+ * (handler-return) trap frame we overwrite with the saved one. Returns nothing
+ * meaningful (the restored a0 is the interrupted code's a0).
+ */
+void
+proc_sigreturn(struct regs *tf)
+{
+	proc_t *p = curproc;
+
+	if (p == 0 || !p->p_insig)
+		return;
+	*tf = p->p_sigsave;		/* restore interrupted state */
+	p->p_insig = 0;
+}
+
+/*
+ * ===========================================================================
+ * R-P11 writable/seekable FS: a tiny in-memory ramfs over /tmp. A file is a
+ * growable kmem buffer; open(O_CREAT) makes one, write() appends/overwrites at
+ * the cursor and grows the buffer, lseek() moves the cursor, read() reads back.
+ * This gives real write-back + seek semantics (the gate) without a full on-disk
+ * FS; a block-cache-backed vioblk FS is the R-P12 upgrade.
+ * NOTE (R-P11 ceiling): in-memory, fixed file count, no dirs/unlink/persistence;
+ * a vnode + block cache over vioblk with write-back is R-P12.
+ * ===========================================================================
+ */
+#define	NRAMFILE	8
+#define	RAMFILE_MAX	(64UL * 1024)	/* 64 KiB per file cap */
+#define	O_CREAT		0x40		/* matches libc O_CREAT */
+#define	O_WRONLY	0x1
+#define	O_RDWR		0x2
+
+struct ramfile {
+	int		rf_used;
+	char		rf_path[64];
+	unsigned char	*rf_data;
+	unsigned long	rf_len;		/* current file size */
+	unsigned long	rf_cap;		/* allocated capacity */
+};
+static struct ramfile ramfiles[NRAMFILE];
+
+/* Live data accessor for a ramfs node (used by proc_fread, declared earlier). */
+const unsigned char *
+ramfile_data(void *node, unsigned long *lenp)
+{
+	struct ramfile *r = (struct ramfile *)node;
+	*lenp = r->rf_len;
+	return (r->rf_data);
+}
+
+static struct ramfile *
+ramfs_find(const char *path)
+{
+	int i;
+	for (i = 0; i < NRAMFILE; i++)
+		if (ramfiles[i].rf_used &&
+		    str_eq_uproc(ramfiles[i].rf_path, path))
+			return (&ramfiles[i]);
+	return (0);
+}
+
+static struct ramfile *
+ramfs_create(const char *path)
+{
+	int i, j;
+	for (i = 0; i < NRAMFILE; i++) {
+		if (!ramfiles[i].rf_used) {
+			struct ramfile *r = &ramfiles[i];
+			r->rf_data = kmem_alloc(RAMFILE_MAX);
+			if (r->rf_data == 0)
+				return (0);
+			r->rf_cap = RAMFILE_MAX;
+			r->rf_len = 0;
+			for (j = 0; path[j] != 0 && j < 62; j++)
+				r->rf_path[j] = path[j];
+			r->rf_path[j] = 0;
+			r->rf_used = 1;
+			return (r);
+		}
+	}
+	return (0);
+}
+
+/*
+ * proc_openat_w — open supporting O_CREAT/O_WRONLY/O_RDWR against the ramfs.
+ * If the flags request write/create and the path is not a read-only vfs file,
+ * back the fd with a ramfs node (creating it on O_CREAT). Read-only opens fall
+ * through to the existing proc_open (vfs image). Returns fd or negative errno.
+ */
+long
+proc_openat_w(const char *path, int flags)
+{
+	proc_t *p = curproc;
+	char kpath[64];
+	unsigned long i;
+	int fd;
+	struct ramfile *r;
+
+	if (p == 0 || path == 0)
+		return (-1);
+	for (i = 0; i < sizeof (kpath) - 1; i++) {
+		if (copyin(path + i, &kpath[i], 1) != 0)
+			return (-14);
+		if (kpath[i] == 0)
+			break;
+	}
+	kpath[i] = 0;
+
+	/* Read-only open of an existing file: route to the read-only vfs path
+	 * unless it already exists in the ramfs. */
+	if ((flags & (O_CREAT | O_WRONLY | O_RDWR)) == 0 &&
+	    ramfs_find(kpath) == 0)
+		return (proc_open(path));
+
+	r = ramfs_find(kpath);
+	if (r == 0) {
+		if (!(flags & O_CREAT))
+			return (-1);		/* ENOENT-ish */
+		r = ramfs_create(kpath);
+		if (r == 0)
+			return (-1);
+	}
+	for (fd = 3; fd < 8; fd++) {
+		if (!p->p_fd[fd].fd_used) {
+			p->p_fd[fd].fd_used = 1;
+			p->p_fd[fd].fd_wnode = r;
+			p->p_fd[fd].fd_data = r->rf_data;
+			p->p_fd[fd].fd_len = r->rf_len;
+			p->p_fd[fd].fd_pos = 0;
+			return (fd);
+		}
+	}
+	return (-1);				/* fd table full */
+}
+
+/*
+ * proc_fwrite — write to an open writable (ramfs) fd. Copies from the user
+ * buffer into the file buffer at the cursor, growing rf_len, and advances the
+ * cursor. Console fds (1/2) are handled by the syscall layer. Returns bytes
+ * written or negative errno.
+ */
+long
+proc_fwrite(int fd, const char *ubuf, unsigned long n)
+{
+	proc_t *p = curproc;
+	struct ramfile *r;
+	unsigned long pos;
+
+	if (p == 0 || fd < 3 || fd >= 8 || !p->p_fd[fd].fd_used)
+		return (-1);
+	r = (struct ramfile *)p->p_fd[fd].fd_wnode;
+	if (r == 0)
+		return (-1);			/* read-only file */
+	pos = p->p_fd[fd].fd_pos;
+	if (pos + n > r->rf_cap)
+		n = (pos < r->rf_cap) ? (r->rf_cap - pos) : 0;
+	if (n == 0)
+		return (0);
+	if (copyin(ubuf, r->rf_data + pos, n) != 0)
+		return (-14);
+	pos += n;
+	if (pos > r->rf_len)
+		r->rf_len = pos;		/* file grew (write-back) */
+	p->p_fd[fd].fd_pos = pos;
+	p->p_fd[fd].fd_len = r->rf_len;
+	return ((long)n);
+}
+
+/*
+ * proc_lseek — move the read/write cursor of an open fd. whence 0=SET, 1=CUR,
+ * 2=END. Works for both writable ramfs fds and read-only vfs fds. Returns the
+ * new offset or -1.
+ */
+long
+proc_lseek(int fd, long off, int whence)
+{
+	proc_t *p = curproc;
+	unsigned long base, len;
+	long np;
+
+	if (p == 0 || fd < 3 || fd >= 8 || !p->p_fd[fd].fd_used)
+		return (-1);
+	{
+		struct ramfile *r = (struct ramfile *)p->p_fd[fd].fd_wnode;
+		len = (r != 0) ? r->rf_len : p->p_fd[fd].fd_len;
+	}
+	switch (whence) {
+	case 0: base = 0; break;			/* SEEK_SET */
+	case 1: base = p->p_fd[fd].fd_pos; break;	/* SEEK_CUR */
+	case 2: base = len; break;			/* SEEK_END */
+	default: return (-1);
+	}
+	np = (long)base + off;
+	if (np < 0)
+		return (-1);
+	p->p_fd[fd].fd_pos = (unsigned long)np;
+	return (np);
 }

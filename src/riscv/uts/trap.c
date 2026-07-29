@@ -59,6 +59,9 @@ extern void timer_intr(void);
  * Returns 1 if it preempted (R-P9 gate 5). */
 extern int thread_preempt(void);
 
+/* From uproc.c: deliver a pending signal on return-to-U (R-P11). */
+extern void proc_deliver_signals(struct regs *tf);
+
 /* Count of clock-tick preemptions of a user thread (R-P9 gate 5 proof). */
 volatile unsigned long preempt_count = 0;
 /*
@@ -225,6 +228,16 @@ trap(struct regs *tf)
 				if (thread_preempt())
 					preempt_count++;
 			}
+			/*
+			 * R-P11: a timer tick is also an async signal-delivery
+			 * point. If we are returning to a user thread, deliver any
+			 * pending signal (e.g. a ^C SIGINT posted from the console
+			 * ISR, or a SIGKILL from kill(2)) even though the user did
+			 * no syscall this tick. Runs after any preempt swtch, on
+			 * whichever thread we resume as.
+			 */
+			if ((tf->r_sstatus & SSTATUS_SPP) == 0)
+				proc_deliver_signals(tf);
 			return;
 		case IRQ_S_EXT:
 			(void) plic_extintr();

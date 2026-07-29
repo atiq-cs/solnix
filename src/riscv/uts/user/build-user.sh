@@ -75,16 +75,24 @@ cp sh.elf    "$STAGE/bin/sh"
 cp hello.elf "$STAGE/bin/hello"
 cp echo.elf  "$STAGE/bin/echo"
 cp cat.elf   "$STAGE/bin/cat"
-printf 'solnix riscv64 - the first illumos on RISC-V. R-P10: preemptive, libc, multi-user.\n' \
+printf 'solnix riscv64 - the first illumos on RISC-V. R-P11: signals, writable FS, passwd login, concurrent shells.\n' \
 	> "$STAGE/etc/motd"
+# /etc/passwd: R-P11 login reads uid/gid/shell from here.
+cat > "$STAGE/etc/passwd" <<'EOF'
+# solnix /etc/passwd - read by /sbin/init login (R-P11).
+# name:passwd:uid:gid:gecos:home:shell
+root:x:0:0:Super-User:/root:/bin/sh
+operator:x:2:5:Operator:/:/bin/sh
+EOF
 # inittab: the SMF-style service list. wait:=run-once boot task; respawn:=daemon.
 cat > "$STAGE/etc/inittab" <<'EOF'
-# solnix /etc/inittab - SMF-style service list read by /sbin/init (R-P10).
+# solnix /etc/inittab - SMF-style service list read by /sbin/init.
 # format: action:path   (action = wait | respawn)
 wait:/bin/hello
 EOF
 ( cd "$STAGE" && tar --format=ustar -cf rootfs.tar \
-    sbin/init bin/sh bin/hello bin/echo bin/cat etc/motd etc/inittab )
+    sbin/init bin/sh bin/hello bin/echo bin/cat \
+    etc/motd etc/inittab etc/passwd )
 cp "$STAGE/rootfs.tar" ../rootfs.img
 sz=$(wc -c < ../rootfs.img)
 pad=$(( (512 - (sz % 512)) % 512 ))
