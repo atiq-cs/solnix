@@ -19,7 +19,7 @@ export LD_LIBRARY_PATH="$GCC/lib/amd64:$GCC/lib:${LD_LIBRARY_PATH:-}"
 w=$(mktemp -d "/var/tmp/mk.$pname.XXXXXX"); tb="$w/s.tar"
 curl -fsSL -o "$tb" "$url" || { echo "RESULT	$pname	FAIL	download"; exit 1; }
 ( cd "$w" && (gzip -dc "$tb" 2>/dev/null||xz -dc "$tb" 2>/dev/null||cat "$tb")|tar xf - 2>/dev/null )
-sd=$(find "$w" -maxdepth 1 -mindepth 1 -type d ! -name out | head -1)
+sd=$(find "$w" -maxdepth 1 -mindepth 1 -type d ! -name 'PaxHeader*' ! -name '@PaxHeader' ! -name out | head -1)
 [ -d "$sd" ] || { echo "RESULT	$pname	FAIL	untar"; exit 1; }
 out="$w/out"; mkdir -p "$out/bin" "$out/share/man/man1"
 log="$w/.log"
@@ -27,7 +27,7 @@ log="$w/.log"
   && eval "prefix=$out PREFIX=$out DESTDIR= mandir=$out/share/man $icmd" ) >"$log" 2>&1
 if [ $? -ne 0 ]; then echo "RESULT	$pname	FAIL	build"; tail -15 "$log"|sed 's/^/  /'; exit 1; fi
 # rpath fix
-RP="$out/lib:$GCC/lib/amd64:$GCC/lib"; for d in $deps; do [ -d "$d/lib" ] && RP="$RP:$d/lib"; done
+RP="$out/lib:$GCC/lib/amd64:$GCC/lib"; for d in $deps; do [ -d "$d/lib" ] && RP="$RP:$d/lib"; [ -d "$d/lib/64" ] && RP="$RP:$d/lib/64"; done
 find "$out" -type f 2>/dev/null | while read -r f; do /usr/bin/elfedit -e "dyn:runpath $RP" "$f" 2>/dev/null || true; done
 mc=$(find "$out/share/man" "$out/man" -type f 2>/dev/null | wc -l | tr -d ' '); echo "$mc" > "$out/.manifest-man"
 named="/var/tmp/${pname}-${ver}"; [ -e "$named" ] && named="$named.$$"; cp -a "$out" "$named"
