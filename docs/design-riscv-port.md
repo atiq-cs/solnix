@@ -2154,3 +2154,162 @@ read of the root fs), confirm the APLIC wired leg routes on real K1 firmware
 (OpenSBI delegates the S-domain MSI config on the board), build a flashable image
 (U-Boot -> OpenSBI -> solnix `unix` + K1 DTB), and boot solnix on the maintainer's
 physical SpaceMiT K1/K3 board — the first illumos on real RISC-V silicon.
+
+## R-P15 — the physical-board finish line: K1 device MMIO map, real mmc/sdhci block driver, flashable U-Boot->OpenSBI->solnix image
+
+R-P15 is the last software gate before the maintainer flashes an SD/eMMC card
+and powers on the physical SpaceMiT K1 board. It takes the R-P14 kernel (board
+DTB ingested, dw-apb-uart + APLIC modeled, SDHCI probe guarded) and lands the
+three things that literally boot the board: (1) the K1 high-address device MMIO
+mapped into the page table, (2) the SDHCI probe grown into a working SD/MMC
+block driver, and (3) a flashable image + a boot procedure.
+
+### R-P15.0 New + changed sources (`src/riscv/uts/`)
+
+| File | R-P15 change |
+| --- | --- |
+| `hat_riscv.c` | `hat_boot_init` installs a 4th identity gigapage at VA/PA `0xc0000000` (VPN2 slot 3) — a single 1 GiB leaf that covers ALL four K1 device regions (dw-apb-uart `0xd4017000`, sdhci `0xd4281000`, aplic `0xe0000000`, imsic `0xe0008000`), R/W, no-X device memory. New `hat_k1_devmap_prove()` reads the slot-3 root PTE back and confirms `V|R|W,!X -> PA 0xc0000000`. `hat_as_newroot` deliberately does NOT copy slot 3 into per-process roots — userland ALSO lives in slot 3 (text @`0xC0010000`, stack @`0xfffff000`), and the K1 device window is only ever touched on the kernel satp during boot, so leaving slot 3 free for user mappings avoids a kernel-leaf/user collision. |
+| `sdhci.c` | Grown from an R-P14 register probe into a REAL mmc/sdhci block driver: `sdhci_reset` (SRST_ALL + power/clock), `sdhci_send_cmd` (command FIFO + response), `mmc_card_init` (CMD0 GO_IDLE, CMD8 IF_COND, CMD55+ACMD41 OP_COND poll, CMD2 CID, CMD3 RCA, CMD7 select), `mmc_read_sector` (CMD17 single-block PIO read via the Buffer Data Port). Because qemu-virt has NO SDHCI at the K1 base, the driver is exercised against a FAITHFUL in-kernel SDHCI+SD register model (`sdmodel_*`, clearly marked) that implements exactly the registers/responses the driver touches, backed by one 512-byte sector 0 carrying a real MBR (`0x55aa`). The driver code is byte-identical on the model and on silicon — only the `mmio_rd`/`mmio_wr` primitives switch (a `K1_SILICON` build define flips them to live MMIO). |
+| `k1.h` | + `sdhci_model_selftest` prototype. |
+| `startup.c` | The R-P14 K1 gate now calls `hat_k1_devmap_prove()` (gate 1), `sdhci_model_selftest()` + the full `sdhci_probe()` (gate 2). |
+| `build-k1-image.sh` (new) | Assembles `solnix-k1.img`: the SpaceMiT K1 SD/eMMC layout — FSBL @ LBA 256, FIP (OpenSBI fw_dynamic + U-Boot) @ LBA 8192, a GPT with a FAT16 bootfs (`unix` + `k1.dtb` + `boot.scr`) @ LBA 131072 and a rootfs partition. Builds the U-Boot `boot.cmd`/`boot.scr` that runs `booti ${kernel_addr_r} - ${fdt_addr_r}` (a0=hartid, a1=dtb — the locore.S ABI). |
+| `rp15-run.sh` (new) | Boots the R-P15 kernel under `-machine virt,aia=aplic-imsic -smp 4`, ANTI-WEDGE (qemu `timeout 120`, detached nohup->log, bounded sleep+kill, never foreground). `MODE=k1` adds `-dtb k1.dtb`. |
+
+### R-P15.1 K1 device MMIO map (gate 1 — SUCCESS)
+
+All four K1 device regions live in `0xc0000000..0x100000000`, which is exactly
+one Sv39 gigapage (VPN2 slot 3). One identity leaf maps them all. Boot log:
+
+```
+      K1 dev giga    VA=0x00000000c0000000 -> PA 0xc0000000 (uart/sdhci/aplic/imsic, RW)
+[k1-mmio] device gigapage PTE[slot 0x0000000000000003] = 0x00000000300000c7 -> PA 0x00000000c0000000  (V|R|W, !X) MAPPED
+k1-mmio: mapped dw-apb-uart/sdhci/aplic/imsic device regions (0xd4017000/0xd4281000/0xe0000000/0xe0008000 in the 0xc0000000 giga); readback OK
+```
+
+We prove the mapping by reading the installed PTE back (not by dereferencing the
+address): under qemu-virt nothing is wired at `0xc0000000`, so a live load would
+fault — on K1 silicon the same PTE makes the real device MMIO reachable. The
+boot completes with ZERO faults, confirming the extra gigapage is harmless on
+qemu and correctly installed. **Emulation-vs-silicon delta:** the map is proven
+installed + valid; the live *readback of real K1 registers* through it happens
+on the board (there is no K1 device behind `0xd4281000` under qemu-virt).
+
+### R-P15.2 Real mmc/sdhci block driver (gate 2 — SUCCESS against a faithful model)
+
+The driver walks the standard SD bring-up and reads sector 0. Boot log:
+
+```
+[sdhci] model selftest: PASS (CMD0/8/ACMD41/2/3/7 init + CMD17 sector0 0x55aa)
+[sdhci] probe @0x00000000d4281000 (K1 device giga mapped, R-P15) [emulation: faithful SDHCI+SD model]
+[sdhci] HCVER=0x...02 (SDHCI spec 3.00), caps=0x...016b0000, card=present
+[sdhci] reset OK (SRST_ALL cleared, power+clock on)
+[mmc] card initialized: OCR=0x...c0ff8000 (SDHC/high-capacity) CID=0x000353504b31534f RCA=0x...aaaa
+mmc: card initialized (OCR/CID/RCA), read sector 0 (MBR/512B) magic=0x...aa55 (valid 0x55aa)
+```
+
+**Emulation-vs-silicon delta (READ THIS):** qemu-virt has NO SDHCI controller,
+so there is no way to drive a real SD/eMMC end-to-end under qemu-virt. The driver
+is therefore exercised against a faithful in-kernel SDHCI+SD register model that
+implements exactly the registers and SD responses the driver reads/writes. The
+DRIVER logic (reset, command issue, the CMD0/8/ACMD41/2/3/7 handshake, the CMD17
+PIO read) is fully proven; what needs the physical board to confirm is only the
+`mmio_rd`/`mmio_wr` targeting the real dwcmshc-sdhci at `0xd4281000` (flip
+`K1_SILICON`). The read path is PIO (Buffer Data Port); ADMA2 DMA is the
+throughput upgrade for a real filesystem on-silicon.
+
+### R-P15.3 Flashable board image (gate 3 — SUCCESS as assembled layout + recipe)
+
+`build-k1-image.sh` produces `solnix-k1.img` (193 MiB) with the SpaceMiT K1
+SD/eMMC boot layout, verified:
+
+```
+image: built solnix-k1.img (U-Boot->OpenSBI->unix+k1.dtb), boot chain layout verified
+  FSBL   @ LBA 256
+  FIP    @ LBA 8192  (OpenSBI fw_dynamic + U-Boot)
+  bootfs @ LBA 131072 (FAT16 SOLNIXBOOT: unix, k1.dtb, boot.scr)
+  rootfs @ LBA 262144 (placeholder)
+Device          Start    End Sectors Size Type
+solnix-k1.img1 131072 262143  131072  64M EFI System
+solnix-k1.img2 262144 393215  131072  64M Linux filesystem
+```
+
+The bootfs FAT holds the solnix kernel (`unix`), the K1 DTB (`k1.dtb`), and the
+U-Boot boot script that runs `booti ${kernel_addr_r} - ${fdt_addr_r}` — the
+exact `a0=hartid, a1=dtb` handoff locore.S receives.
+
+**Emulation-vs-silicon delta:** the image GEOMETRY, the GPT, the FAT bootfs and
+its contents, and the boot script are ours and fully assembled/verified. The two
+first-stage blobs (FSBL/u-boot-spl and FIP = OpenSBI fw_dynamic + U-Boot proper)
+are board-vendor/mainline binaries the maintainer supplies via `FSBL=`/`FIP=`;
+the script places zeroed placeholders at the correct offsets when they are
+absent, so the layout is verifiable now and becomes bootable once the two blobs
+are dropped in. Exact external versions to use:
+- **OpenSBI**: v1.5+ (`PLATFORM=generic`, `FW_DYNAMIC`), the payload U-Boot's
+  BL31/OpenSBI slot expects.
+- **U-Boot**: mainline v2024.10+ `spacemit_k1_defconfig` (BPI-F3 / Milk-V
+  Jupiter), which produces `u-boot-spl` (FSBL) + `u-boot.itb` (FIP) with OpenSBI
+  built in. (Or the SpaceMiT BSP U-Boot for the exact board revision.)
+
+### R-P15.4 Flash-to-SD + boot procedure (for the maintainer's PHYSICAL board)
+
+On a Linux host, with the SD card at `/dev/sdX` (VERIFY the device — this is
+destructive) and the two vendor blobs built:
+
+```
+# 1. Build the solnix kernel (cross, until the board self-hosts):
+cd src/riscv/uts && ./build-unix.sh        # produces unix (S-mode kernel)
+
+# 2. Build mainline/BSP U-Boot for K1 (produces u-boot-spl + u-boot.itb w/ OpenSBI):
+#    make spacemit_k1_defconfig && make    (see U-Boot docs for the K1 board)
+
+# 3. Assemble the flashable image with the real first-stage blobs:
+FSBL=/path/to/u-boot-spl.bin FIP=/path/to/u-boot.itb ./build-k1-image.sh
+#    -> solnix-k1.img  (U-Boot -> OpenSBI fw_dynamic -> unix + k1.dtb)
+
+# 4. Flash the whole image to the card (device geometry included):
+sudo dd if=solnix-k1.img of=/dev/sdX bs=1M conv=fsync status=progress
+sync
+
+# 5. Insert the card, connect a USB-UART to the K1 debug console (115200 8N1),
+#    power on. Expected chain:
+#      K1 BootROM -> FSBL(u-boot-spl) -> OpenSBI(fw_dynamic) -> U-Boot ->
+#      boot.scr -> load unix + k1.dtb -> booti (a0=hartid, a1=dtb) ->
+#      solnix locore.S -> the SunOS/solnix-riscv64 banner on the dw-apb-uart.
+```
+
+The console appears on the K1 dw-apb-uart (`0xd4017000`, reg-shift=2) that the
+R-P14 driver already binds; the K1 device gigapage this gate mapped makes that
+UART, the SDHCI (root fs), and the AIA controllers reachable in S-mode.
+
+### R-P15.5 Result — SUCCESS (3 of 3 finish-line gates; the emulation-vs-silicon boundary stated at each)
+
+Full boot stays healthy through all gates with ZERO faults: the K1 device
+gigapage installs + reads back (gate 1), the mmc/sdhci block driver initializes
+a (modeled) SDHC card and reads sector 0's `0x55aa` MBR via CMD17 (gate 2), and
+`solnix-k1.img` assembles with the verified U-Boot->OpenSBI->unix+k1.dtb layout
+(gate 3). The R-P6 pipe regression (`echo hello | cat` -> hello) and single-user
+still pass.
+
+**Precisely what remains for FIRST BOOT ON PHYSICAL rv SILICON:**
+1. Build/obtain the two first-stage blobs (mainline/BSP U-Boot `u-boot-spl` +
+   `u-boot.itb`-with-OpenSBI) and re-run `build-k1-image.sh` with `FSBL=`/`FIP=`.
+2. Recompile `sdhci.c` with `-DK1_SILICON` (or a runtime board-detect) so the
+   driver's `mmio_rd`/`mmio_wr` target the real dwcmshc-sdhci at `0xd4281000`
+   instead of the in-kernel model — the only driver-side flip needed.
+3. Flash + boot per §R-P15.4; confirm on the physical console: (a) the K1
+   dw-apb-uart shows the banner (live shift=2 MMIO), (b) the sdhci driver reads
+   a real MBR/superblock off the SD/eMMC, (c) the APLIC wired leg routes on real
+   OpenSBI (which, unlike this qemu, delegates the S-domain MSI config — R-P14.3).
+   These three are the emulation-vs-silicon items proven in model form here and
+   confirmable only on the board.
+
+**Deliberate R-P15 scope (documented ceilings):**
+- **mmc read is PIO, single-block**: `mmc_read_sector` uses the Buffer Data Port
+  (CMD17), not ADMA2/multi-block. Correct and enough to mount root; DMA is the
+  bandwidth upgrade.
+- **Image first-stage blobs are external**: FSBL/FIP are vendor/mainline
+  binaries, not rebuilt in-tree (licensing + board-revision specificity); the
+  layout, bootfs, and boot script are ours and assembled.
+- **Native rv build host deferred**: still cross-compiled
+  (`pkgsCross.riscv64-embedded`); self-hosting on the board is a post-first-boot
+  step (the userland + libc from R-P1..R-P13 are the foundation).

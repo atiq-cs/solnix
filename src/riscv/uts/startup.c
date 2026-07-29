@@ -62,6 +62,9 @@ extern void smp_dispatch_open(void);
 #include "k1.h"
 #include "k1_dtb.h"		/* the embedded, dtc-compiled K1 board DTB */
 
+/* R-P15: hat gate-1 proof — the K1 device gigapage is mapped + readable. */
+extern void hat_k1_devmap_prove(void);
+
 /* FDT /memory parse (fdt.c). */
 extern int fdt_get_memory(unsigned long dtb, unsigned long *base,
     unsigned long *size);
@@ -188,7 +191,15 @@ startup_memlist(unsigned long dtb)
 		sbi_console_puts(" reg-shift=");
 		kputdec(k1.uart_shift);
 		sbi_console_puts(" (bind + live drive on K1 silicon: R-P15)\n");
-		/* Gate 3-alt: SDHCI/eMMC register-level probe at the K1 base. */
+		/* Gate 1 (R-P15): prove the K1 device MMIO window is mapped. */
+		hat_k1_devmap_prove();
+		/* Gate 3: R-P15 mmc/sdhci BLOCK DRIVER. sdhci_probe now runs the
+		 * full bring-up: SDHCI reset -> SD init (CMD0/8/ACMD41/2/3/7) ->
+		 * CMD17 read of sector 0. qemu-virt has no SDHCI at the K1 base,
+		 * so it drives a FAITHFUL in-kernel SDHCI+SD model (marked); on
+		 * real K1 silicon the SAME code path touches live MMIO (the K1
+		 * device gigapage is now identity-mapped by the R-P15 hat). */
+		sdhci_model_selftest();
 		(void) sdhci_probe(k1.sdhci_base);
 	}
 
