@@ -20,8 +20,10 @@ TARBALL="${1:?usage: make-iso-usb.sh <tarball> <outdir>}"
 OUTDIR="${2:?usage: make-iso-usb.sh <tarball> <outdir>}"
 WORK="$(mktemp -d /tmp/solnix-iso.XXXXXX)"
 mkdir -p "$OUTDIR"
-ISO="$OUTDIR/solnix-x86_64.iso"
-USB="$OUTDIR/solnix-x86_64-usb.img"
+# VARIANT names the media: minimal (console ISO) or graphical (live Xfce ISO).
+VARIANT="${VARIANT:-minimal}"
+ISO="$OUTDIR/solnix-x86_64-${VARIANT}.iso"
+USB="$OUTDIR/solnix-x86_64-${VARIANT}-usb.img"
 
 log() { printf '\n=== %s ===\n' "$*" >&2; }
 cleanup() { rm -rf "$WORK"; }

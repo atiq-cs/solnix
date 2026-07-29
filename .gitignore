@@ -21,3 +21,5 @@ artifacts/sparc-toolchain/hello*
 artifacts/install-media/*.iso
 artifacts/install-media/*.img
 artifacts/install-media/**/boot_archive*
+artifacts/install-media/*graphical*.iso
+artifacts/install-media/*graphical*.img
