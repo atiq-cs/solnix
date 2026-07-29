@@ -14,3 +14,4 @@ src/riscv/uts/k1.dtb
 artifacts/sparc-toolchain/sysroot/
 artifacts/sparc-toolchain/hello
 artifacts/sparc-toolchain/*.o
+artifacts/sparc-toolchain/sparc-sysroot-hipster.tar.zst
