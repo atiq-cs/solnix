@@ -40,7 +40,7 @@ export PKG_CONFIG_PATH="$PCP${PKG_CONFIG_PATH:+:}${PKG_CONFIG_PATH:-}"
 export CFLAGS="-m64 -fPIC -O2 -D__EXTENSIONS__ $DEPI ${EXTRA_CFLAGS:-}"
 export CXXFLAGS="$CFLAGS ${EXTRA_CXXFLAGS:-}"
 export CPPFLAGS="$DEPI"
-export LDFLAGS="-m64 $DEPL $DEPR"
+export LDFLAGS="-m64 $DEPL $DEPR ${EXTRA_LDFLAGS:-}"
 export LD_LIBRARY_PATH="$GCC/lib/amd64:$GCC/lib:${LD_LIBRARY_PATH:-}"
 
 # --- wave22 reusable family-fix knobs (see pkgs/illumos/packages.nix) ---
