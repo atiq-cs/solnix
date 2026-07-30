@@ -468,36 +468,58 @@ if command -v mdb >/dev/null 2>&1; then
   echo 'zfs_arc_max/Z 0x20000000' | mdb -kw >/dev/null 2>&1 || true
 fi
 sync
-# DEFINITIVE root-agnostic fix for the truncated-boot_archive FAIL: whether the
-# `digest -a sha1` over the ~450MB CPIO dies from OOM-kill or the missing
-# libtspi/pkcs11_tpm relocation abort, the effect is the same -- create_hash's
-# trap tears down the half-built archive -> FAIL rc=1. The boot loader does NOT
-# use this hash (loader.conf sets boot_archive.hash_load="NO"), so the expensive
-# hash is pure liability during install. Shadow `digest` with an instant stub in
-# a dir we prepend to PATH so bootadm's create_ramdisk finds it first: it writes
-# a trivial placeholder .hash and returns 0 immediately -- no 450MB SHA1, no OOM,
-# no ld.so abort. Restored implicitly (stub dir is install-scoped).
-_stubdir=/tmp/solnix-fastdigest
-mkdir -p "$_stubdir"
-cat > "$_stubdir/digest" <<'DIGSTUB'
+# DEFINITIVE root-agnostic fix for the truncated-boot_archive FAIL. bootadm's
+# create_ramdisk runs the hash via an ABSOLUTE path (`/usr/bin/digest -a sha1
+# $CPIO`), so a PATH-shadow can't intercept it. The real digest either OOMs on
+# the ~450MB CPIO, aborts on the missing libtspi/pkcs11_tpm provider, or (after
+# we disable that provider) reports "failed to find any cryptographic provider"
+# -- ALL leave a hashless -> truncated boot_archive -> FAIL rc=1. The loader does
+# NOT use this hash (loader.conf boot_archive.hash_load="NO"). So REPLACE the
+# digest BINARY itself (live + target) with an instant stub that emits a constant;
+# create_ramdisk's absolute-path call then succeeds immediately. Back up + restore.
+install_digest_stub() {
+  for _d in /usr/bin/digest "$ALTROOT/usr/bin/digest"; do
+    [ -e "$_d" ] || continue
+    [ -e "$_d.solnix-orig" ] || cp -p "$_d" "$_d.solnix-orig" 2>/dev/null || true
+    cat > "$_d" <<'DIGSTUB'
 #!/sbin/sh
-# solnix install-time stub: real `digest` OOMs/aborts on the 450MB boot_archive
-# CPIO and the hash is unused at boot (hash_load=NO). Emit a constant so
-# create_ramdisk's `digest ... > $tarchive.hash` succeeds instantly.
+# solnix install-time stub for /usr/bin/digest: the real digest OOMs/aborts on the
+# 450MB boot_archive CPIO and the hash is unused at boot (hash_load=NO). Emit a
+# constant so create_ramdisk's `digest -a sha1 ... > $tarchive.hash` succeeds now.
 printf '0000000000000000000000000000000000000000\n'
 exit 0
 DIGSTUB
-chmod 0755 "$_stubdir/digest"
-export PATH="$_stubdir:$PATH"
-build_ba() { run_to 300 sh -c 'PATH="/tmp/solnix-fastdigest:$PATH" bootadm update-archive -f -R "$1" 2>&1 | grep -vE "^gzip:|cannot find" | tail -6' _ "$ALTROOT" || true; }
-ba_ok() { [ -s "$BA" ] && [ "$(stat -c %s "$BA" 2>/dev/null || echo 0)" -ge 8388608 ] && file "$BA" 2>/dev/null | grep -qiE 'archive|cpio|ufs|boot'; }
+    chmod 0755 "$_d" 2>/dev/null || true
+  done
+}
+install_digest_stub
+build_ba() { run_to 300 sh -c 'bootadm update-archive -f -R "$1" 2>&1 | grep -vE "^gzip:|cannot find" | tail -6' _ "$ALTROOT" || true; }
+# The target boot_archive is a GZIP of a curated CPIO (create_ramdisk's x86
+# path: cpio -H odc | gzip). A minimal target is legitimately much smaller
+# (~27MB) than the full live-ISO ramdisk (~117MB), so size is NOT a validity
+# signal -- `file` even reports it as "gzip compressed data" (which is why the
+# old archive|cpio|ufs|boot regex wrongly rejected VALID archives). The real
+# integrity test is `gzip -t`: it inflates the entire deflate stream and fails
+# iff the archive was truncated mid-write. That catches the true failure
+# (partial gzip) and passes any complete archive regardless of size. The
+# unused-at-boot sha1 hash (hash_load=NO) is irrelevant to validity.
+ba_ok() {
+  [ -s "$BA" ] || return 1
+  # gzip magic 1f 8b -> validate the whole stream; else accept a bare CPIO/UFS.
+  if [ "$(od -An -N2 -tx1 "$BA" 2>/dev/null | tr -d ' ')" = "1f8b" ]; then
+    gzip -t "$BA" 2>/dev/null
+  else
+    [ "$(stat -c %s "$BA" 2>/dev/null || echo 0)" -ge 8388608 ] && \
+      file "$BA" 2>/dev/null | grep -qiE 'archive|cpio|ufs|boot'
+  fi
+}
 build_ba
 if ! ba_ok; then
-  log "boot_archive looks truncated ($(stat -c %s "$BA" 2>/dev/null||echo 0) bytes) — likely create_hash OOM; syncing + rebuilding once"
+  log "boot_archive incomplete ($(stat -c %s "$BA" 2>/dev/null||echo 0) bytes, gzip -t failed) — syncing + rebuilding once"
   sync; sleep 2
   build_ba
 fi
-ba_ok || die "boot_archive invalid/truncated after rebuild ($(stat -c %s "$BA" 2>/dev/null||echo 0) bytes) — install VM likely OOM during create_hash; increase install memory"
+ba_ok || die "boot_archive invalid/truncated after rebuild ($(stat -c %s "$BA" 2>/dev/null||echo 0) bytes) — gzip stream incomplete"
 log "boot_archive OK: $(stat -c %s "$BA" 2>/dev/null) bytes, $(file "$BA" 2>/dev/null)"
 
 # ---------------------------------------------------------------------------
