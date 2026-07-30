@@ -795,9 +795,11 @@ if [ "$GRAPHICAL" = 1 ]; then
     _src=""
     for _d in /usr/lib/64 /lib/64; do [ -e "$_d/$_so" ] && { _src="$_d/$_so"; break; }; done
     [ -n "$_src" ] || { echo "WARN: host lib not found: $_so" >&2; continue; }
-    # cp -L follows the symlink chain to the real .so and lands a real file at
-    # the SONAME name (ld.so.1 opens by SONAME, so this is all it needs).
-    cp -L "$_src" "$RDROOT/usr/lib/64/$_so" 2>/dev/null && _staged="$_staged $_so" \
+    # GNU cp -L (via $GCP): illumos /usr/bin/cp rejects -L on a single file
+    # (exit 2, usage error) -- only GNU cp derefs a single symlink. The host
+    # SONAMEs are symlinks (libXau.so.6 -> libXau.so.6.0.0), so -L follows the
+    # chain and lands a real file at the SONAME name (ld.so.1 opens by SONAME).
+    ${GCP:-/usr/gnu/bin/cp} -L "$_src" "$RDROOT/usr/lib/64/$_so" 2>/dev/null && _staged="$_staged $_so" \
       || echo "WARN: staging $_so had errors" >&2
   done
   log "GRAPHICAL: staged X11 transport libs ($_staged) into /usr/lib/64"
