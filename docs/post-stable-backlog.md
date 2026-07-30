@@ -39,6 +39,12 @@ boots, self-hosts, and pulls from the solnix.io cache.
   - Core illumos features to ensure are packaged: zones, bhyve, LX-branded
     zones, DTrace, FMA, OpenZFS feature-flag parity, crossbow networking
     (dladm/ipadm), SMF service catalog.
+  - **bhyve microVM control plane (Firecracker-equivalent)** — demand-driven,
+    post-stable. A thin REST/API daemon over libvmmapi + stripped virtio-only
+    device model + PVH fast-boot + bhyve-branded-zone jailing. Delivers
+    Firecracker's use case (fast, minimal, API-driven, densely packed VMs)
+    natively; a literal Firecracker port onto the aging Joyent KVM driver is
+    explicitly rejected. Full analysis: docs/design-microvm-bhyve.md.
   Produce a prioritized catalog (desktop vs server tracks) and feed it into the
   package-build pipeline once the base distro is stable.
 
