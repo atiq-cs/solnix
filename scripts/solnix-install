@@ -293,10 +293,21 @@ EOF
   || die "root copy failed"
 # recreate the pseudo-fs mountpoints + writable dirs the exclude skipped.
 for d in proc dev devices system/contract system/object system/volatile \
-         etc/svc/volatile var/run var/tmp tmp mnt export export/home root nix; do
+         etc/svc/volatile var/run var/tmp tmp mnt export export/home root nix \
+         var/adm var/adm/sa var/log var/spool var/saf; do
   mkdir -p "$ALTROOT/$d"
 done
 chmod 1777 "$ALTROOT/tmp" "$ALTROOT/var/tmp" "$ALTROOT/system/volatile" 2>/dev/null || true
+# /var/adm must exist (mode 775 root:sys) so ttymon/SAC's `makeutx` can create
+# /var/adm/utmpx at first boot -- without it the console-login getty spins on
+# "makeutx failed: No such file or directory" and never presents a login prompt
+# (the curated live-ramdisk root that SELF-INSTALL copies may lack a proper
+# /var/adm). Pre-create the login-accounting files too (empty is correct; the
+# system rewrites them at boot).
+chmod 0775 "$ALTROOT/var/adm" 2>/dev/null || true
+chown 0:3 "$ALTROOT/var/adm" 2>/dev/null || true   # root:sys
+for f in utmpx wtmpx; do : > "$ALTROOT/var/adm/$f" 2>/dev/null || true; done
+chmod 0644 "$ALTROOT/var/adm/utmpx" "$ALTROOT/var/adm/wtmpx" 2>/dev/null || true
 
 # essential /dev symlinks (gotcha #6): tar may not carry them from a live /dev.
 log "seeding essential /dev symlinks"
