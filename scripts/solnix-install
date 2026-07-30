@@ -222,7 +222,26 @@ log "creating pool $POOL on ${TARGET}s1 + BE dataset $BEDS"
 # OS enables any extra features itself post-boot as needed. This is the standard
 # illumos root-pool requirement (beadm/installers do the same).
 run_to 60 zpool create -f -d -o altroot="$ALTROOT" -o cachefile=none \
+  -o feature@log_spacemap=disabled \
+  -o feature@device_removal=enabled \
+  -o feature@obsolete_counts=enabled \
+  -o feature@zpool_checkpoint=enabled \
+  -o feature@spacemap_v2=enabled \
+  -o feature@embedded_data=enabled \
+  -o feature@lz4_compress=enabled \
+  -o feature@extensible_dataset=enabled \
   -O compression=on -O atime=off -m none "$POOL" "/dev/dsk/${TARGET}s1" || die "zpool create failed"
+# WHY the explicit feature list (not just -d): on modern illumos `zpool create`
+# AUTO-ACTIVATES com.delphix:log_spacemap (needed for the log spacemap) even under
+# -d, and the bundled loader64.efi's ZFS reader does NOT support log_spacemap ->
+# check_mos_features() rejects the pool -> the loader gets the right bootfs
+# (zfs:rpool/ROOT/solnix-1) but then "Failed to find bootable partition" (it
+# can't read the MOS). loader64.efi's features_for_read set is: device_removal,
+# obsolete_counts, zpool_checkpoint, spacemap_v2/histogram, embedded_data,
+# lz4_compress, extensible_dataset, hole_birth, bookmark_v2, large_dnode,
+# allocation_classes, edonr/sha512/skein/checksum_salt. We enable ONLY those the
+# loader reads + explicitly DISABLE log_spacemap (the boot-blocker). This is the
+# real root cause of the un-bootable installed disk (ESP+bootfs were always fine).
 zfs create -o canmount=off -o mountpoint=legacy "$POOL/ROOT"
 zfs create -o canmount=noauto -o mountpoint=/ "$BEDS"
 run_to 30 zfs mount "$BEDS"
