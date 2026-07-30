@@ -450,6 +450,13 @@ mkdir -p "$ALTROOT/platform/i86pc/amd64"
 # the archive is non-empty + a real archive; if it looks truncated, free memory
 # (sync) and rebuild ONCE. A boot_archive under ~8MB is not a valid solnix ramdisk.
 BA="$ALTROOT/platform/i86pc/amd64/boot_archive"
+# Belt-and-suspenders for the create_hash OOM: cap the live ZFS ARC at runtime
+# right before the archive build so `digest` has RAM even if this ISO predates
+# the /etc/system ARC cap. Harmless if already capped; mdb -kw is on the media.
+if command -v mdb >/dev/null 2>&1; then
+  echo 'zfs_arc_max/Z 0x20000000' | mdb -kw >/dev/null 2>&1 || true
+fi
+sync
 build_ba() { run_to 300 sh -c 'bootadm update-archive -f -R "$1" 2>&1 | grep -vE "^gzip:|cannot find" | tail -6' _ "$ALTROOT" || true; }
 ba_ok() { [ -s "$BA" ] && [ "$(stat -c %s "$BA" 2>/dev/null || echo 0)" -ge 8388608 ] && file "$BA" 2>/dev/null | grep -qiE 'archive|cpio|ufs|boot'; }
 build_ba

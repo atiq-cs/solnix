@@ -439,6 +439,21 @@ else
   echo "WARN: no seed/global.db found -- svc.startd will have an empty repo" >&2
 fi
 
+# 4b'. CAP ZFS ARC in the ramdisk /etc/system. ROOT CAUSE of the AUTO-INSTALL
+# failure at the target-BE boot_archive step: bootadm's create_ramdisk runs
+# `digest -a sha1` over the ~450MB target CPIO; on the RAM-backed live root the
+# ZFS ARC (uncapped by default) grows against the newly-created rpool + the
+# resident live root and the kernel OOM-kills `digest` ("create_hash line 377
+# Killed") -> truncated boot_archive -> SOLNIX_AUTOINSTALL_RESULT: FAIL rc=1.
+# This is deterministic + RAM-tuning-immune (fails at 10/12/14G) precisely
+# because ARC expands to consume whatever RAM you add. Cap ARC to 512MB so the
+# hashing step always has headroom; the live install never needs a big ARC.
+# (Append, don't clobber, any /etc/system copied by COPY_DIRS.)
+touch "$RDROOT/etc/system"
+if ! grep -q 'zfs_arc_max' "$RDROOT/etc/system" 2>/dev/null; then
+  printf '\n* solnix live-install: cap ZFS ARC so bootadm digest is not OOM-killed\nset zfs:zfs_arc_max = 0x20000000\n' >> "$RDROOT/etc/system"
+fi
+
 # 4c. SMF profile symlinks (oi-make-be.sh gotcha #8): generic/platform/name_service.
 ( cd "$RDROOT/etc/svc/profile" && \
   ln -sf generic_limited_net.xml generic.xml && \
