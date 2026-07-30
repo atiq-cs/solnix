@@ -276,12 +276,27 @@ for abi in "" amd64; do
 done
 
 # 3c. driver-config files (name_to_major etc. — without rootnex kernel panics)
+# We ship the FULL driver-config set so the live kernel can attach the widest
+# range of hardware: name_to_major (268), driver_aliases (1339 PCI-ID->driver
+# mappings) + minor_perm etc. Combined with the complete kernel/drv trees
+# (COPY_DIRS: platform/i86pc/kernel + kernel + usr/kernel = ~252 drivers), the
+# installer boots on essentially any host illumos-gate supports (NVMe, AHCI,
+# LSI mpt/mpt_sas, VMware pvscsi/vmxnet3s, virtio, ENA, igb/ixgbe/e1000g, bge,
+# rge, nge, sdhost, ...).
 mkdir -p "$RDROOT/etc/security"
 for f in name_to_major name_to_sysnum driver_aliases driver_classes minor_perm \
          system path_to_inst vfstab nsswitch.conf passwd shadow group \
          hosts netconfig; do
   [ -e "/etc/$f" ] && cp "/etc/$f" "$RDROOT/etc/$f" 2>/dev/null || true
 done
+# WIDEST-HARDWARE BOOT: /etc/path_to_inst binds specific driver INSTANCE numbers
+# to the BUILD HOST's exact PCI/device topology. Shipping the host's copy makes
+# the live kernel try to honor a foreign device tree -> on different hardware
+# (physical or a different hypervisor) instances misbind / devices don't attach.
+# Install media must ship an EMPTY path_to_inst so the kernel REBUILDS instance
+# assignments for whatever hardware it actually boots on (standard illumos
+# install-media behavior). devfsadm at live-boot then populates /dev fresh.
+: > "$RDROOT/etc/path_to_inst"
 # /etc/mnttab MUST be an empty regular file (mntfs mounts over it at boot); do
 # NOT copy the host's live mnttab (stale entries confuse the fs milestone).
 : > "$RDROOT/etc/mnttab"
@@ -452,6 +467,19 @@ fi
 touch "$RDROOT/etc/system"
 if ! grep -q 'zfs_arc_max' "$RDROOT/etc/system" 2>/dev/null; then
   printf '\n* solnix live-install: cap ZFS ARC so bootadm digest is not OOM-killed\nset zfs:zfs_arc_max = 0x20000000\n' >> "$RDROOT/etc/system"
+fi
+
+# 4b''. TRUE ROOT CAUSE of the boot_archive FAIL: bootadm's create_ramdisk runs
+# `digest -a sha1` over the target CPIO. `digest` uses the PKCS#11 framework,
+# whose pkcs11.conf enables the pkcs11_tpm.so provider -- but libtspi.so.1 (its
+# TrouSerS dependency) is NOT on the media, so ld.so hits a fatal relocation
+# error and the process dies with SIGKILL ("create_hash line 377 Killed").
+# That misreads as an OOM but is a missing-library relocation abort, which is
+# why it was RAM-tuning-immune. Disable the TPM provider so `digest` falls back
+# to the softtoken/SW SHA1 path and the hash (and boot_archive) build cleanly.
+PKCS="$RDROOT/etc/crypto/pkcs11.conf"
+if [ -f "$PKCS" ]; then
+  sed -i 's,^\(/usr/lib/security/\$ISA/pkcs11_tpm.so.*\)$,# solnix: disabled (libtspi.so.1 absent -> digest SIGKILL) \1,' "$PKCS"
 fi
 
 # 4c. SMF profile symlinks (oi-make-be.sh gotcha #8): generic/platform/name_service.

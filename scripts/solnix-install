@@ -493,7 +493,15 @@ EOF
 # 9. boot_archive (the ramdisk that mounts ZFS root) for the target BE.
 # ---------------------------------------------------------------------------
 log "building boot_archive on the target BE"
-[ -f "$ALTROOT/etc/path_to_inst" ] || : > "$ALTROOT/etc/path_to_inst"
+# WIDEST-HARDWARE FIRST BOOT: unconditionally EMPTY the target's path_to_inst so
+# the installed kernel REBUILDS device-instance assignments for whatever hardware
+# it actually boots on (the SELF-INSTALL source root may carry stale instance
+# bindings; a physical box or a different hypervisor has a different device tree).
+# Also drop a /reconfigure sentinel so the first boot runs a reconfiguration
+# (re-enumerate + attach all present devices) -- the standard illumos mechanism
+# for booting installed media on unknown hardware.
+: > "$ALTROOT/etc/path_to_inst"
+: > "$ALTROOT/reconfigure"
 # bootadm mkdirs <root>/platform/i86pc/amd64/archive_cache but does NOT create
 # the parent dir; the SELF-INSTALL live root has no platform/i86pc/amd64 (the
 # ramdisk installer env curates it out), so pre-create it or bootadm fails
