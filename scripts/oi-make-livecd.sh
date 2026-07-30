@@ -122,6 +122,17 @@ for d in $COPY_DIRS; do
   ( cd "$SRC" && tar -cf - "$d" ) | ( cd "$RDROOT" && tar -xf - ) || echo "WARN: copy $d had errors" >&2
 done
 
+# /etc/svc/volatile is a RUNTIME tmpfs (empty at boot). COPY_DIRS pulls it from
+# the build host, dragging in the host's LIVE svc.startd/init runtime state --
+# most fatally /etc/svc/volatile/init.state, which PID1 init reads at startup.
+# A stale init.state makes the fresh-booted init immediately re-exit -> the
+# kernel SIGKILL-restart loop ("init(8) exited on fatal signal 9: restarting
+# automatically", forever, before svc.startd ever runs). Purge everything the
+# host left here; the dir must be empty (the dladm subdir is recreated at boot
+# by bootenv). This was intermittent: the loop only appeared when the build host
+# happened to have a poisoned init.state at copy time.
+rm -rf "$RDROOT"/etc/svc/volatile/* "$RDROOT"/etc/svc/volatile/.[!.]* 2>/dev/null || true
+
 # bootadm's filelist manifests (boot/solaris/filelist.{ramdisk,safe}) name the
 # paths packed into the INSTALLED boot_archive. COPY_DIRS grabs boot/solaris/bin
 # (create_ramdisk et al.) but NOT the parent boot/solaris/, so these files were
