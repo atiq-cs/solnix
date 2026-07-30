@@ -95,3 +95,54 @@ Pairs with PS-7 (qualify all EC2 types). Multi-month; low priority vs package/bo
 > Hyper-V; CH-4 GCP/gVNIC; CH-5 accelerators; CH-6 declarative cloud modules; CH-7
 > per-instance device-audit CI; CH-8 upstream). Boot + run + expose ALL hardware on
 > every cloud instance type, every arch. Pairs with PS-7.
+
+## PS-9: network MTU / jumbo frames + audit of stale illumos defaults vs Linux/FreeBSD
+
+Investigate and, where safe, modernize kernel/network defaults that illumos has left
+conservative while Linux/FreeBSD have raised them.
+
+### 9a. MTU / jumbo frames
+- **Determine per-driver default MTU** on our built drivers. illumos NIC drivers
+  default to the standard **1500** Ethernet MTU; jumbo support and the max frame size
+  are per-driver `dladm` link properties (`dladm show-linkprop -p mtu <link>`,
+  `dladm set-linkprop -p mtu=9000 <link>`). Confirm which of our shipped drivers
+  advertise a jumbo `mtu` range (e1000g, igb, ixgbe, ena, bge, vioif, vmxnet3s, ...)
+  and what their max is (commonly 9000/9216; some cap at ~8500 or lower).
+- **AWS specifics**: EC2 supports 9001-byte jumbo frames within a VPC/placement group
+  and 1500 to the internet gateway; ENA advertises up to 9216. Verify `ena` on solnix
+  negotiates the jumbo MTU and that our cloud modules can set `mtu=9001` declaratively.
+- **Answer the concrete questions**: default is 1500 (not 8500); jumbo (9000/9001) is
+  supported *per driver via dladm*, not globally on by default. Document the matrix
+  (driver -> default MTU, max MTU, jumbo y/n) and expose `mtu` in the crossbow/ipadm
+  declarative network module (pairs with CH-6). Check path-MTU-discovery + TCP MSS
+  clamping behave with jumbo mixed segments.
+
+### 9b. Broader stale-defaults audit (illumos vs Linux/FreeBSD)
+Survey conservative illumos tunables other OSes have modernized; propose safe bumps
+(measure, don't cargo-cult). Candidates:
+- **TCP**: initial congestion window (initcwnd 10, RFC 6928 — verify illumos default),
+  default send/recv buffers + autotuning ceilings (`tcp_max_buf`, `tcp_recv_hiwat`,
+  `send/recv autotuning`), TCP timestamps/SACK/window-scaling on by default, CUBIC vs
+  NewReno as the default congestion control (illumos added CUBIC — is it default?),
+  ECN, TFO.
+- **Socket / net**: `somaxconn`/listen backlog cap, ephemeral port range
+  (`tcp_smallest/largest_anon_port`), `tcp_conn_req_max_q`.
+- **Filesystem / VM**: ZFS `zfs_arc_max` default sizing on modern RAM, `recordsize`
+  defaults, dirty-data limits; page-cache/segmap sizing; `maxphys` (max I/O size —
+  historically small on illumos vs Linux large-BIO); NVMe queue depths.
+- **Process / limits**: default `rlim_fd_cur/max` (file-descriptor limits — illumos
+  historically 256/65536 soft/hard), `maxusers`-derived table sizes, `maxpid`,
+  thread/LWP limits, `ndd`/`ipadm` legacy tunables that have modern `ipadm` equivalents.
+- **Crypto / entropy**: default RNG source, KCF provider ordering.
+- **Scheduler / timers**: default scheduling class, tick/hz, high-res timer defaults.
+
+Method: for each, compare the illumos default (source: `usr/src/uts/common/inet/`,
+`/etc/system` tunable docs, `ipadm show-prop`) against current Linux
+(`sysctl net.ipv4.*`, `/proc/sys`) and FreeBSD (`sysctl net.inet.*`) defaults, note
+where illumos is materially behind, propose a solnix default (via `/etc/system`,
+`ipadm`/`dladm` link/protocol props, or a tuning SMF service), and BENCHMARK before
+adopting. Ship sane modern defaults in the base config + document the knobs.
+
+Priority: post-stable, after the base distro + cache are green. Pairs with CH-6
+(declarative cloud/network modules) and PS-7 (per-instance qualification, where jumbo
+MTU on EC2 gets real-hardware validation).
