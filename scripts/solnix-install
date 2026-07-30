@@ -73,7 +73,14 @@ run_to() {  # run_to <seconds> <cmd...>
 # trap, so an early die() cleanup can still protect it (empty -> protect rpool +
 # every currently-imported pool, since nothing of ours is imported yet).
 ROOTDS=$(zfs list -H -o name,mountpoint 2>/dev/null | awk '$2=="/"{print $1; exit}')
-ROOTPOOL="${ROOTDS%%/*}"; [ -n "$ROOTPOOL" ] || ROOTPOOL=rpool
+ROOTPOOL="${ROOTDS%%/*}"
+# LIVE-INSTALLER case: the running root is a UFS ramdisk, so there is NO ZFS
+# pool mounted at / to protect. Leave ROOTPOOL empty (not the literal 'rpool')
+# so a real root install onto a fresh rpool is not falsely rejected as
+# "target == running root pool". Only default to rpool when a ZFS / exists.
+if [ -z "$ROOTPOOL" ]; then
+  case "$(df -n / 2>/dev/null)" in *zfs*) ROOTPOOL=rpool;; *) ROOTPOOL="";; esac
+fi
 # snapshot the pools imported at start; cleanup only exports pools NOT in this
 # set (i.e. only ones this run imported), so an early failure never touches a
 # pre-existing pool (e.g. the running root).

@@ -210,6 +210,12 @@ ln -s ../usr/bin/ksh93 "$RDROOT/sbin/sh"
 [ -e "$RDROOT/usr/bin/amd64/ksh93" ] || { mkdir -p "$RDROOT/usr/bin/amd64"; ln -s ../../bin/ksh93 "$RDROOT/usr/bin/amd64/ksh93" 2>/dev/null || true; }
 # a couple of core tools are also isaexec/i86 links; point /usr/bin/sh at ksh93.
 rm -f "$RDROOT/usr/bin/sh" 2>/dev/null; ln -s ksh93 "$RDROOT/usr/bin/sh" 2>/dev/null || true
+# /usr/bin/ksh (== /bin/ksh via the bin->usr/bin symlink) is the shebang of the
+# stock SMF method scripts (manifest-import.real, mime-types-cache, ...). The
+# curated LIVE_TOOLS copies only ksh93, so without this link `#!/bin/ksh`
+# scripts fail to exec -> the method exits 127 -> system/manifest-import goes
+# to maintenance -> milestone/single-user never onlines. Point it at ksh93.
+rm -f "$RDROOT/usr/bin/ksh" 2>/dev/null; ln -s ksh93 "$RDROOT/usr/bin/ksh" 2>/dev/null || true
 # /bin -> usr/bin (illumos convention; /etc/profile + method scripts use /bin/*).
 [ -e "$RDROOT/bin" ] || ln -s usr/bin "$RDROOT/bin" 2>/dev/null || true
 
@@ -484,10 +490,14 @@ cat > "$RDROOT/etc/svc/profile/site/solnix.xml" <<'PROFEOF'
        NOTE do NOT disable system/sysevent (milestone/devices REQUIRES it); with
        the gcc runtime libs present (3b') syseventd starts fine. -->
   <service name="system/rbac" version="1" type="service"><instance name="default" enabled="false"/></service>
-  <!-- Fibre Channel services are irrelevant in the console-installer / qemu env
-       and fail (missing tools, exit 127) -> they block milestone/devices. -->
-  <service name="network/npiv_config" version="1" type="service"><instance name="default" enabled="false"/></service>
-  <service name="system/device/fc-fabric" version="1" type="service"><instance name="default" enabled="false"/></service>
+  <!-- Fibre Channel services (npiv_config, fc-fabric) must NOT be disabled:
+       devices-fc-fabric.xml declares <dependent name='devices' require_all>
+       svc:/milestone/devices, so disabling fc-fabric strands milestone/devices
+       (and therefore single-user) forever. In the no-FC qemu/console env both
+       methods no-op: fc-fabric only runs luxadm when /etc/cfg/fp/fabric_WWN_map
+       exists (it doesn't -> exit 0), and npivconfig's `fcadm create-port-list`
+       returns 0 with no HBA. The FC tools (fcadm/cfgadm/fp.so.1) are shipped in
+       LIVE_TOOLS/COPY_DIRS so both services START cleanly -> devices onlines. -->
   <service name="system/ca-certificates" version="1" type="service"><instance name="default" enabled="false"/></service>
   <service name="system/dbus" version="1" type="service"><instance name="default" enabled="false"/></service>
   <service name="system/fcoe_initiator" version="1" type="service"><instance name="default" enabled="false"/></service>
