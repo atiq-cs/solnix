@@ -464,6 +464,11 @@ os_console="ttya"
 boot-args="-v"
 loader_logo="illumos"
 autoboot_delay="3"
+kernel="/platform/i86pc/kernel/amd64/unix"
+bootfile="/platform/i86pc/kernel/amd64/unix"
+boot_archive_load="YES"
+boot_archive_name="/platform/i86pc/amd64/boot_archive"
+boot_archive.hash_load="NO"
 EOF
 # The illumos EFI loader's sanity_check_currdev() accepts a ZFS BE as bootable
 # ONLY if it can stat /boot/defaults/loader.conf OR /boot/loader.rc on that
@@ -479,6 +484,9 @@ mkdir -p "$ALTROOT/boot/defaults"
 [ -s "$ALTROOT/boot/defaults/loader.conf" ] || cat > "$ALTROOT/boot/defaults/loader.conf" <<'EOF'
 kernel="/platform/i86pc/kernel/amd64/unix"
 bootfile="/platform/i86pc/kernel/amd64/unix"
+boot_archive_load="YES"
+boot_archive_name="/platform/i86pc/amd64/boot_archive"
+boot_archive.hash_load="NO"
 EOF
 # stage /boot/forth/ + the canonical /boot/loader.rc from the running root (/).
 # The illumos loader needs a PROPER loader.rc: `include loader.4th; initialize
