@@ -379,7 +379,23 @@ fi   # end SELF_INSTALL=0 nix-closure block
 # ---------------------------------------------------------------------------
 log "seeding SMF repository from seed/global.db"
 mkdir -p "$ALTROOT/etc/svc"
-if [ -e "$ALTROOT/lib/svc/seed/global.db" ]; then
+if [ "$SELF_INSTALL" = 1 ]; then
+  # SELF-INSTALL: the root copy already carried the LIVE root's
+  # /etc/svc/repository.db, which is FULLY PRE-IMPORTED (oi-make-livecd 4f) and
+  # proven to boot to multi-user (the live installer itself runs off it). Do NOT
+  # overwrite it with the minimal lib/svc/seed/global.db -- that minimal seed
+  # lacks the imported milestone instances, so first-boot manifest-import
+  # DELETES the orphaned svc:/milestone/{multi-user,single-user,devices,...}
+  # default instances -> "Console login service(s) cannot run" -> the system
+  # drops to maintenance mode instead of multi-user. Keep the good copied repo.
+  if [ -s "$ALTROOT/etc/svc/repository.db" ]; then
+    log "SELF-INSTALL: keeping the copied pre-imported repository.db (NOT reseeding from global.db)"
+  elif [ -e "$ALTROOT/lib/svc/seed/global.db" ]; then
+    log "SELF-INSTALL: no copied repo -> falling back to global.db seed"
+    cp "$ALTROOT/lib/svc/seed/global.db" "$ALTROOT/etc/svc/repository.db"
+    chmod 0600 "$ALTROOT/etc/svc/repository.db"
+  fi
+elif [ -e "$ALTROOT/lib/svc/seed/global.db" ]; then
   cp "$ALTROOT/lib/svc/seed/global.db" "$ALTROOT/etc/svc/repository.db"
   chmod 0600 "$ALTROOT/etc/svc/repository.db"
 fi
