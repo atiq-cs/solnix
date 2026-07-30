@@ -786,7 +786,8 @@ if [ "$GRAPHICAL" = 1 ]; then
     libxshmfence.so.1 libdbus-1.so.3 libuuid.so.1 libxml2.so.16 libintl.so.1
     libfribidi.so.0 libthai.so.0 libcups.so.2 libexif.so.12 libbrotlidec.so.1
     libbz2.so.1 liblzo2.so.2 libcrypt.so.1 libncurses.so.5 libtermcap.so.1
-    libsec.so.1"
+    libsec.so.1
+    libharfbuzz.so.0 libfontconfig.so.1 libXft.so.2 libSM.so.6 libXrender.so.1"
   # usr/lib/64 is a symlink -> amd64 on illumos; mkdir -p on an existing symlink
   # errors under set -e, so only mkdir when nothing is there, else write through.
   [ -e "$RDROOT/usr/lib/64" ] || mkdir -p "$RDROOT/usr/lib/64"
@@ -935,6 +936,27 @@ PATH=/usr/sbin:/usr/bin:/sbin; export PATH
   echo "[solnix] GRAPHICAL live media: fs writable, devfsadm done"
   /usr/sbin/devfsadm 2>&1 || true
   echo "[solnix] disks visible:"; ls /dev/dsk 2>/dev/null | head
+  # honor AUTOINSTALL_DISK marker (same block as the minimal method) BEFORE the
+  # desktop, so the automated install test completes headless. If no marker,
+  # fall through to the live desktop.
+  if [ -r /etc/solnix-autoinstall ]; then
+    _tgt=$(cat /etc/solnix-autoinstall 2>/dev/null)
+    if [ "$_tgt" = auto ] || [ -z "$_tgt" ]; then
+      for _c in /dev/rdsk/c*t*d0s0 /dev/rdsk/c*d0s0; do
+        [ -e "$_c" ] || continue
+        _d=$(basename "$_c"); _d=${_d%s0}; _tgt=$_d; break
+      done
+    fi
+    echo "[solnix] AUTO-INSTALL to ${_tgt:-<none found>}"
+    /usr/sbin/format </dev/null 2>&1 || true
+    if [ -n "$_tgt" ]; then
+      SOLNIX_POOL=rpool SOLNIX_ALLOW_RPOOL=1 /usr/sbin/solnix-install "$_tgt" \
+        && echo "SOLNIX_AUTOINSTALL_RESULT: DONE" \
+        || echo "SOLNIX_AUTOINSTALL_RESULT: FAIL rc=$?"
+    else
+      echo "SOLNIX_AUTOINSTALL_RESULT: FAIL no-target-disk"
+    fi
+  fi
   echo "[solnix] starting live Xfce desktop (Xvfb software framebuffer)..."
   /usr/sbin/solnix-live-desktop 2>&1 || echo "[solnix] desktop launcher returned non-zero"
   sleep 6
