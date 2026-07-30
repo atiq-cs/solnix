@@ -177,6 +177,7 @@ LIVE_TOOLS="
   usr/sbin/zpool usr/sbin/zfs usr/sbin/format usr/sbin/fmthard usr/sbin/prtvtoc
   usr/sbin/tar
   usr/sbin/mkfs usr/sbin/newfs usr/sbin/fsck usr/sbin/installboot
+  usr/sbin/fstyp usr/sbin/clri
   usr/sbin/bootadm usr/sbin/lofiadm usr/sbin/devfsadm usr/sbin/dladm
   usr/sbin/ipadm usr/sbin/ifconfig usr/sbin/prtconf usr/sbin/init
   usr/sbin/mount usr/sbin/umount usr/sbin/svcadm usr/sbin/svccfg usr/sbin/prtdiag

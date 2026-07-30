@@ -196,7 +196,21 @@ prtvtoc -h "/dev/rdsk/${TARGET}"
 # 2. ESP FAT32 + the pool + BE dataset
 # ---------------------------------------------------------------------------
 log "mkfs pcfs ESP on ${TARGET}s0"
-yes | run_to 60 mkfs -F pcfs -o fat=32,b=ESP "/dev/rdsk/${TARGET}s0" >/dev/null 2>&1 || true
+# fresh slice nodes after fmthard: re-run devfsadm so /dev/rdsk/${TARGET}s0
+# reflects the new vtoc before mkfs_pcfs opens it (stale node = silent no-op).
+devfsadm >/dev/null 2>&1 || true
+# NOTE: pcfs `b=<file>` installs a boot file, NOT a volume label — `b=ESP` was
+# misread as boot-file `/boot/ESP` -> `/boot/pmbr: No such file`. Drop it; the ESP
+# just needs a FAT32 filesystem (the loader.efi is copied in later at mount time).
+mkfs_esp() { yes | run_to 60 mkfs -F pcfs -o fat=32 "/dev/rdsk/${TARGET}s0" 2>&1; }
+mkfs_esp
+if ! fstyp "/dev/rdsk/${TARGET}s0" 2>/dev/null | grep -q pcfs; then
+  log "ESP mkfs did not yield pcfs; devfsadm + retry"
+  devfsadm >/dev/null 2>&1 || true
+  mkfs_esp
+  fstyp "/dev/rdsk/${TARGET}s0" 2>/dev/null | grep -q pcfs || die "ESP mkfs failed (fstyp=$(fstyp "/dev/rdsk/${TARGET}s0" 2>&1))"
+fi
+log "ESP fstyp: $(fstyp "/dev/rdsk/${TARGET}s0" 2>&1)"
 
 log "creating pool $POOL on ${TARGET}s1 + BE dataset $BEDS"
 run_to 60 zpool create -f -o altroot="$ALTROOT" -o cachefile=none \
@@ -439,7 +453,8 @@ log "boot_archive: $(file "$ALTROOT/platform/i86pc/amd64/boot_archive" 2>/dev/nu
 # ---------------------------------------------------------------------------
 log "installing loader on ESP + setting bootfs + menu.lst"
 mkdir -p "$ALTROOT/esp"
-mount -F pcfs "/dev/dsk/${TARGET}s0" "$ALTROOT/esp" || die "ESP mount failed"
+devfsadm >/dev/null 2>&1 || true
+mount -F pcfs "/dev/dsk/${TARGET}s0" "$ALTROOT/esp" || die "ESP mount failed (fstyp=$(fstyp "/dev/rdsk/${TARGET}s0" 2>&1))"
 mkdir -p "$ALTROOT/esp/EFI/Boot"
 cp "$ALTROOT/boot/loader64.efi" "$ALTROOT/esp/EFI/Boot/bootx64.efi" || die "loader copy failed"
 umount "$ALTROOT/esp"
