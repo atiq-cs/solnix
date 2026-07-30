@@ -480,21 +480,31 @@ mkdir -p "$ALTROOT/boot/defaults"
 kernel="/platform/i86pc/kernel/amd64/unix"
 bootfile="/platform/i86pc/kernel/amd64/unix"
 EOF
-# stage /boot/forth/ from the running root (/) if present (the loader menu
-# scripts); then a full loader.rc. NOTE: the SELF-INSTALL live ramdisk root
-# usually LACKS /boot/forth, so the minimal-loader.rc branch below is normal --
-# stat of /boot/loader.rc alone satisfies sanity_check_currdev; a broken include
-# would error at runtime, so only include loader.4th when it actually exists.
+# stage /boot/forth/ + the canonical /boot/loader.rc from the running root (/).
+# The illumos loader needs a PROPER loader.rc: `include loader.4th; initialize
+# drop; check-password; include beastie.4th; beastie-start` (autoboots via
+# autoboot_delay). A naive `include loader.4th\nstart` fails with "start not
+# found" (start isn't defined until the full include chain runs) -> the loader
+# drops to the OK prompt instead of booting. So COPY the host's real loader.rc
+# + the whole /boot/forth/ menu tree verbatim (they exist on the live root).
 if [ -d "/boot/forth" ] && [ ! -d "$ALTROOT/boot/forth" ]; then
   ( cd / && tar -cf - boot/forth ) | ( cd "$ALTROOT" && tar -xf - ) 2>/dev/null || true
 fi
+if [ -s /boot/loader.rc ]; then
+  cp /boot/loader.rc "$ALTROOT/boot/loader.rc" 2>/dev/null || true
+fi
 if [ ! -s "$ALTROOT/boot/loader.rc" ]; then
+  # fallback only if the host has no loader.rc: a self-contained rc that boots
+  # without the beastie menu (autoboot_delay in defaults/loader.conf drives it).
   if [ -f "$ALTROOT/boot/forth/loader.4th" ]; then
-    printf 'include /boot/forth/loader.4th\nstart\n' > "$ALTROOT/boot/loader.rc"
+    printf 'include /boot/forth/loader.4th\ninitialize drop\nboot\n' > "$ALTROOT/boot/loader.rc"
   else
-    printf '\\ solnix: minimal loader.rc (no forth staged); satisfies sanity_check_currdev\n' > "$ALTROOT/boot/loader.rc"
+    printf '\\ solnix: minimal loader.rc (no forth); satisfies sanity_check_currdev\nboot\n' > "$ALTROOT/boot/loader.rc"
   fi
 fi
+# ensure autoboot actually fires even if the menu is absent: defaults/loader.conf
+# already sets kernel/bootfile; make sure autoboot_delay is a real number (set
+# above in loader.conf) so `initialize`/menu autoboots the default BE.
 cat > "$ALTROOT/etc/solnix-release" <<EOF
 solnix system (installed by solnix-install)
 installed: $(date -u +%FT%TZ 2>/dev/null || date)
