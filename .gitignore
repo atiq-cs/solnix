@@ -23,3 +23,9 @@ artifacts/install-media/*.img
 artifacts/install-media/**/boot_archive*
 artifacts/install-media/*graphical*.iso
 artifacts/install-media/*graphical*.img
+
+# stray source tarballs dropped at repo root by local build agents (never content)
+/*.tar.gz
+/*.tar.xz
+/*.tar.bz2
+/*.tgz
