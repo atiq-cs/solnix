@@ -501,14 +501,17 @@ fi
 if [ -s /boot/loader.rc ]; then
   cp /boot/loader.rc "$ALTROOT/boot/loader.rc" 2>/dev/null || true
 fi
-if [ ! -s "$ALTROOT/boot/loader.rc" ]; then
-  # fallback only if the host has no loader.rc: a self-contained rc that boots
-  # without the beastie menu (autoboot_delay in defaults/loader.conf drives it).
-  if [ -f "$ALTROOT/boot/forth/loader.4th" ]; then
-    printf 'include /boot/forth/loader.4th\ninitialize drop\nboot\n' > "$ALTROOT/boot/loader.rc"
-  else
-    printf '\\ solnix: minimal loader.rc (no forth); satisfies sanity_check_currdev\nboot\n' > "$ALTROOT/boot/loader.rc"
-  fi
+if [ ! -s "$ALTROOT/boot/loader.rc" ] || ! grep -q 'initialize' "$ALTROOT/boot/loader.rc" 2>/dev/null; then
+  # No usable loader.rc, or one that never runs `initialize` (the word that
+  # reads /boot/defaults/loader.conf + /boot/loader.conf and thus sets $kernel).
+  # A bare `boot` rc leaves $kernel unset -> loader tries a module literally
+  # named 'kernel' -> "can't load 'kernel' / no bootable kernel". Write a
+  # self-contained rc that DOES run initialize, then boots the default BE.
+  # /boot/forth/loader.4th is staged into the ramdisk (oi-make-livecd 3d''), so
+  # the copied root carries it; warn (don't die) if somehow absent.
+  [ -f "$ALTROOT/boot/forth/loader.4th" ] || \
+    echo "WARN: BE lacks /boot/forth/loader.4th; loader.rc still runs initialize but forth menu absent" >&2
+  printf 'include /boot/forth/loader.4th\ninitialize drop\nboot\n' > "$ALTROOT/boot/loader.rc"
 fi
 # ensure autoboot actually fires even if the menu is absent: defaults/loader.conf
 # already sets kernel/bootfile; make sure autoboot_delay is a real number (set

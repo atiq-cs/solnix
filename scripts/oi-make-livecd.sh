@@ -327,6 +327,25 @@ for f in pmbr gptzfsboot loader64.efi; do
   [ -e "/boot/$f" ] && cp "/boot/$f" "$RDROOT/boot/$f" 2>/dev/null || echo "WARN: /boot/$f absent (install ESP/loader steps need it)" >&2
 done
 
+# 3d''. The forth menu tree + canonical loader.rc + defaults/loader.conf INSIDE
+#       the ramdisk /boot. ROOT CAUSE of the installed-disk 'can't load kernel'
+#       -> 'no bootable kernel' -> 'start not found': the SELF-INSTALL copies
+#       the ramdisk root (/) into the BE, and solnix-install copies the BE's
+#       /boot/loader.rc + /boot/forth FROM that copied root. The curated ramdisk
+#       /boot carried ONLY solaris/ + the loader binaries -- NO forth/, NO
+#       loader.rc -- so solnix-install fell back to a `boot`-only loader.rc that
+#       never runs `initialize` (the word that reads loader.conf), leaving
+#       $kernel unset -> the loader tries to load a module literally named
+#       'kernel' and fails. They live on the build host at /boot (the ISO tree
+#       is built from them, line 6a) and are tiny (forth/ ~210K, loader.rc 497B).
+#       Stage them so the installed BE gets the real initialize->read-conf chain.
+for b in forth loader.rc; do
+  [ -e "$SRC/boot/$b" ] || { echo "WARN: $SRC/boot/$b absent (installed BE loader.rc chain needs it)" >&2; continue; }
+  ( cd "$SRC" && tar -cf - "boot/$b" ) | ( cd "$RDROOT" && tar -xf - ) 2>/dev/null \
+    || echo "WARN: staging boot/$b into ramdisk had errors" >&2
+done
+[ -d "$SRC/boot/defaults" ] && { ( cd "$SRC" && tar -cf - boot/defaults ) | ( cd "$RDROOT" && tar -xf - ) 2>/dev/null || true; }
+
 # ---------------------------------------------------------------------------
 # 4. solnix-install + STANDARD illumos boot (svc.startd + seeded SMF repo).
 #
