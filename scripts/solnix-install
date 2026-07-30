@@ -449,7 +449,37 @@ console="ttya"
 os_console="ttya"
 boot-args="-v"
 loader_logo="illumos"
+autoboot_delay="3"
 EOF
+# The illumos EFI loader's sanity_check_currdev() accepts a ZFS BE as bootable
+# ONLY if it can stat /boot/defaults/loader.conf OR /boot/loader.rc on that
+# dataset (verified in loader64.efi strings). The SELF-INSTALL live ramdisk root
+# does not carry those (they live in the ISO staging tree, not the ramdisk), so
+# the loader REJECTS zfs:rpool/ROOT/solnix-1 in sanity_check_currdev and cycles
+# to "Failed to find bootable partition" -- even though unix + boot_archive are
+# present + fine. Guarantee both sanity files exist on the BE (idempotent), and
+# stage /boot/forth/ (loader.rc includes /boot/forth/loader.4th at runtime for
+# the menu; without it the loader errors on the include). Root-caused via ZFS
+# import of an installed pool on the illumos host (2026-07-30).
+mkdir -p "$ALTROOT/boot/defaults"
+[ -s "$ALTROOT/boot/defaults/loader.conf" ] || cat > "$ALTROOT/boot/defaults/loader.conf" <<'EOF'
+kernel="/platform/i86pc/kernel/amd64/unix"
+bootfile="/platform/i86pc/kernel/amd64/unix"
+EOF
+# stage /boot/forth/ from the source root if present (the loader menu scripts);
+# then a full loader.rc. If no forth dir is available, write a minimal loader.rc
+# that does NOT include loader.4th (the stat of loader.rc alone satisfies the
+# sanity check; the include would otherwise error at runtime).
+if [ -d "$SRC/boot/forth" ] && [ ! -d "$ALTROOT/boot/forth" ]; then
+  ( cd "$SRC" && tar -cf - boot/forth ) | ( cd "$ALTROOT" && tar -xf - ) 2>/dev/null || true
+fi
+if [ ! -s "$ALTROOT/boot/loader.rc" ]; then
+  if [ -f "$ALTROOT/boot/forth/loader.4th" ]; then
+    printf 'include /boot/forth/loader.4th\nstart\n' > "$ALTROOT/boot/loader.rc"
+  else
+    printf '\\ solnix: minimal loader.rc (no forth staged); satisfies sanity_check_currdev\n' > "$ALTROOT/boot/loader.rc"
+  fi
+fi
 cat > "$ALTROOT/etc/solnix-release" <<EOF
 solnix system (installed by solnix-install)
 installed: $(date -u +%FT%TZ 2>/dev/null || date)
