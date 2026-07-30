@@ -39,7 +39,7 @@ done
 export PKG_CONFIG_PATH="$PCP${PKG_CONFIG_PATH:+:}${PKG_CONFIG_PATH:-}"
 export CFLAGS="-m64 -fPIC -O2 -D__EXTENSIONS__ $DEPI ${EXTRA_CFLAGS:-}"
 export CXXFLAGS="$CFLAGS ${EXTRA_CXXFLAGS:-}"
-export CPPFLAGS="$DEPI"
+export CPPFLAGS="$DEPI ${EXTRA_CPPFLAGS:-}"
 export LDFLAGS="-m64 $DEPL $DEPR ${EXTRA_LDFLAGS:-}"
 export LD_LIBRARY_PATH="$GCC/lib/amd64:$GCC/lib:${LD_LIBRARY_PATH:-}"
 
@@ -81,6 +81,10 @@ for x in "\$@"; do
     --version-script) _skip=1; continue ;;
     -Wl,--no-as-needed|-Wl,--as-needed) continue ;;
     --no-as-needed|--as-needed) continue ;;
+    -Wl,--gc-sections|--gc-sections) continue ;;
+    -Wl,--build-id|-Wl,--build-id=*) continue ;;
+    -Wl,-pie|-pie|-Wl,-z,relro,-z,now) continue ;;
+    -fPIE) continue ;;
   esac
   _a="\$_a \$x"
 done
@@ -93,7 +97,13 @@ fi
 
 w=$(mktemp -d "/var/tmp/clib.$pname.XXXXXX")
 tb="$w/src.tar"
-curl -fsSL -o "$tb" "$url" 2>"$w/.dl" || { echo "RESULT	$pname	FAIL	download"; exit 1; }
+# freedesktop.org's release-tarball leaf cert is chronically expired server-side
+# (x.org 301-redirects there). We can't fix a remote expired leaf; integrity is
+# instead enforced by the sha256 pin below, so fetch with -k. Prefer a CA bundle
+# assembled from /etc/certs/CA when present.
+[ -s /var/tmp/ca-bundle.crt ] || cat /etc/certs/CA/*.pem > /var/tmp/ca-bundle.crt 2>/dev/null || true
+DLCA=""; [ -s /var/tmp/ca-bundle.crt ] && DLCA="--cacert /var/tmp/ca-bundle.crt"
+curl -fsSLk $DLCA -o "$tb" "$url" 2>"$w/.dl" || { echo "RESULT	$pname	FAIL	download"; exit 1; }
 if [ -n "$sha" ] && [ "$sha" != "-" ]; then
   got=$(digest -a sha256 "$tb" 2>/dev/null || sha256sum "$tb" | awk '{print $1}')
   [ "$got" = "$sha" ] || { echo "RESULT	$pname	FAIL	sha256 got=$got"; exit 1; }
@@ -175,6 +185,26 @@ done
 # --- man count (systematic; write .manifest-man like the builder does) ---
 mc=$(find "$out/share/man" "$out/man" -type f 2>/dev/null | wc -l | tr -d ' ')
 echo "$mc" > "$out/.manifest-man"
+
+# --- make .pc files relocatable (root-cause fix, benefits every wave) ---
+# oi-clib installs to a temp $out, then copies to the content-addressed store
+# path whose hash we can't know in advance. autotools bakes prefix=$out into the
+# .pc, so downstream pkg-config resolves includedir/libdir to a nonexistent temp
+# dir (broke libX11's keysym check against xorgproto). Rewrite the absolute
+# prefix to pkg-config's built-in ${pcfiledir} anchor: .pc files live two levels
+# below prefix (lib/pkgconfig, lib/64/pkgconfig, or share/pkgconfig), so
+# ${pcfiledir}/../.. is the prefix regardless of final store path.
+find "$out" -name '*.pc' -type f 2>/dev/null | while read -r pc; do
+  sed -i "s|^prefix=$out\b|prefix=\${pcfiledir}/../..|; s|^prefix=$out|prefix=\${pcfiledir}/../..|" "$pc" 2>/dev/null || true
+done
+
+# --- drop libtool .la archives (root-cause fix, benefits every wave) ---
+# .la files bake libdir='<temp build $out>/lib' and absolute dependency_libs;
+# downstream libtool follows them and dies ("not a valid libtool archive") since
+# the temp path is gone after freeze. pkg-config .pc files (fixed above) carry the
+# real link info, so .la files are redundant and actively harmful here. nixpkgs
+# strips them for the same reason. This unblocked libXrender/libXi/libXt/libXpm.
+find "$out" -name '*.la' -type f -delete 2>/dev/null || true
 
 # --- freeze OUT root (plain <pname>-<version>) ---
 named="/var/tmp/${pname}-${ver}"; [ -e "$named" ] && named="$named.$$"

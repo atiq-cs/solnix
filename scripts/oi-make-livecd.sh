@@ -279,6 +279,18 @@ cat > "$RDROOT/boot/solaris/bootenv.rc" <<'EOF'
 setprop console text
 EOF
 
+# 3d'. loader boot files INSIDE the ramdisk /boot (pmbr, gptzfsboot, loader64.efi).
+#      solnix-install needs them at INSTALL time from the copied root: mkfs_pcfs
+#      unconditionally copies a boot sector from /boot/pmbr when it FATs the ESP
+#      slice (absent -> `/boot/pmbr: No such file or directory` and no FAT is
+#      written); installboot writes /boot/pmbr + /boot/gptzfsboot to the target
+#      disk; and step 10 copies /boot/loader64.efi to the ESP. The curated
+#      ramdisk /boot only had solaris/bootenv.rc, so all three were missing.
+#      They are tiny (pmbr 512B, gptzfsboot ~140K, loader64.efi ~640K).
+for f in pmbr gptzfsboot loader64.efi; do
+  [ -e "/boot/$f" ] && cp "/boot/$f" "$RDROOT/boot/$f" 2>/dev/null || echo "WARN: /boot/$f absent (install ESP/loader steps need it)" >&2
+done
+
 # ---------------------------------------------------------------------------
 # 4. solnix-install + STANDARD illumos boot (svc.startd + seeded SMF repo).
 #
