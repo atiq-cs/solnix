@@ -193,6 +193,7 @@ LIVE_TOOLS="
   usr/bin/chown usr/bin/chgrp usr/bin/mount usr/bin/umount usr/bin/sync
   usr/bin/yes usr/bin/file usr/bin/vi usr/bin/more usr/bin/less usr/bin/tee
   usr/bin/env usr/bin/test usr/bin/true usr/bin/false usr/bin/sh usr/bin/pfexec
+  usr/bin/su usr/bin/login usr/bin/newtask
   usr/bin/digest usr/bin/openssl usr/bin/od usr/bin/xargs usr/bin/mkfile
   usr/bin/gzip
   usr/sbin/zpool usr/sbin/zfs usr/sbin/format usr/sbin/fmthard usr/sbin/prtvtoc
@@ -763,6 +764,26 @@ if [ "$GRAPHICAL" = 1 ]; then
       libgcc_s.so.1 libstdc++.so.6 libstdc++.so.6.0.33 libatomic.so.1 libatomic.so.1.2.0 2>/dev/null ) \
     | ( cd "$RDROOT/usr/gcc/14/lib/amd64" && tar -xf - ) 2>/dev/null || echo "WARN: gcc runtime lib copy had errors" >&2
 
+  # X11 transport libs (libXau/libXdmcp): Xvfb/Xorg link these, but the closure-
+  # gen ldd walk resolved them to the OI HOST's /usr/lib/64 (NOT /nix/store), so
+  # the '/nix/store/' closure filter dropped them -> live root lacks them ->
+  # 'ld.so.1: Xvfb: fatal: libXau.so.6: open failed' -> the live desktop never
+  # starts. Copy them (+ sonames) from the host /usr/lib/64 into the live root's
+  # /usr/lib/64 (tar keeps the soname symlinks). Small (~60KB). Also add the
+  # 32-bit /usr/lib copies in case a helper is 32-bit.
+  for _libdir in lib/64 lib usr/lib/64 usr/lib; do
+    [ -d "/$_libdir" ] || continue
+    _got=""
+    for _l in libXau.so.6 libXau.so.6.0.0 libXdmcp.so.6 libXdmcp.so.6.0.0; do
+      [ -e "/$_libdir/$_l" ] && _got="$_got $_l"
+    done
+    [ -n "$_got" ] || continue
+    mkdir -p "$RDROOT/$_libdir"
+    ( cd "/$_libdir" && tar -cf - $_got 2>/dev/null ) | ( cd "$RDROOT/$_libdir" && tar -xf - ) 2>/dev/null \
+      && log "GRAPHICAL: staged X11 transport libs ($_got) from /$_libdir" \
+      || echo "WARN: X11 transport lib copy from /$_libdir had errors" >&2
+  done
+
   # fonts: the closure has NO fonts and the OI host has none installed, so GTK
   # falls back to Xvfb's builtin bitmap fonts (fixed/cursor) -- proven usable in
   # the pd1d Xvfb smoke. Copy the OI system fonts IF present (better rendering);
@@ -866,6 +887,10 @@ TUIEOF
 #!/sbin/sh
 PATH=$XORGSRV/bin:$XKBCOMP/bin:/usr/bin:/usr/sbin:/sbin; export PATH
 export XKB_CONFIG_ROOT=$XKBCFG/share/X11/xkb
+# libXau/libXdmcp (X11 transport) are staged into /usr/lib/64 + /lib/64 (they
+# resolved to the OI host, not /nix/store, so the closure filter dropped them);
+# ensure ld.so finds them for Xvfb/Xorg.
+LD_LIBRARY_PATH_64=/usr/lib/64:/lib/64:/usr/gcc/14/lib/amd64; export LD_LIBRARY_PATH_64
 _disp=:0
 # start the software framebuffer X server (Xvfb) detached.
 $XORGSRV/bin/Xvfb \$_disp -screen 0 1280x800x24 -ac -nolisten tcp >/tmp/solnix-xvfb.log 2>&1 &
