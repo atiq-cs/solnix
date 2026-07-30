@@ -213,7 +213,15 @@ fi
 log "ESP fstyp: $(fstyp "/dev/rdsk/${TARGET}s0" 2>&1)"
 
 log "creating pool $POOL on ${TARGET}s1 + BE dataset $BEDS"
-run_to 60 zpool create -f -o altroot="$ALTROOT" -o cachefile=none \
+# CRITICAL for bootability: create the ROOT pool with -d (disable ALL feature
+# flags) so the illumos boot loader (loader64.efi / gptzfsboot) can READ the
+# pool. A default `zpool create` enables modern features (com.delphix:*,
+# org.openzfs:*, ...) the loader's ZFS reader doesn't understand -> the loader
+# mounts the BE then reports "Failed to find bootable partition" (it can't read
+# the dataset to find /platform/.../unix). -d gives a legacy-readable pool; the
+# OS enables any extra features itself post-boot as needed. This is the standard
+# illumos root-pool requirement (beadm/installers do the same).
+run_to 60 zpool create -f -d -o altroot="$ALTROOT" -o cachefile=none \
   -O compression=on -O atime=off -m none "$POOL" "/dev/dsk/${TARGET}s1" || die "zpool create failed"
 zfs create -o canmount=off -o mountpoint=legacy "$POOL/ROOT"
 zfs create -o canmount=noauto -o mountpoint=/ "$BEDS"
