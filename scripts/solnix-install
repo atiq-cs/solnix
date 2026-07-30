@@ -450,6 +450,17 @@ mkdir -p "$ALTROOT/platform/i86pc/amd64"
 # the archive is non-empty + a real archive; if it looks truncated, free memory
 # (sync) and rebuild ONCE. A boot_archive under ~8MB is not a valid solnix ramdisk.
 BA="$ALTROOT/platform/i86pc/amd64/boot_archive"
+# TRUE ROOT CAUSE of the truncated-archive FAIL: bootadm's create_hash runs
+# `digest -a sha1`, and the live PKCS#11 config enables the pkcs11_tpm.so
+# provider whose libtspi.so.1 dep is missing from the media -> ld.so fatal
+# relocation error -> `digest` dies with SIGKILL ("create_hash line 377
+# Killed") -> no hash -> truncated boot_archive. Misreads as OOM but is a
+# missing-lib abort (hence RAM-immune). Disable the TPM provider so digest
+# falls back to SW SHA1. Covers ISOs predating the oi-make-livecd.sh fix.
+for pk in /etc/crypto/pkcs11.conf "$ALTROOT/etc/crypto/pkcs11.conf"; do
+  [ -f "$pk" ] && grep -q '^/usr/lib/security/\$ISA/pkcs11_tpm.so' "$pk" 2>/dev/null \
+    && sed -i 's,^\(/usr/lib/security/\$ISA/pkcs11_tpm.so.*\)$,# solnix: disabled (libtspi.so.1 absent) \1,' "$pk" 2>/dev/null || true
+done
 # Belt-and-suspenders for the create_hash OOM: cap the live ZFS ARC at runtime
 # right before the archive build so `digest` has RAM even if this ISO predates
 # the /etc/system ARC cap. Harmless if already capped; mdb -kw is on the media.
@@ -457,7 +468,28 @@ if command -v mdb >/dev/null 2>&1; then
   echo 'zfs_arc_max/Z 0x20000000' | mdb -kw >/dev/null 2>&1 || true
 fi
 sync
-build_ba() { run_to 300 sh -c 'bootadm update-archive -f -R "$1" 2>&1 | grep -vE "^gzip:|cannot find" | tail -6' _ "$ALTROOT" || true; }
+# DEFINITIVE root-agnostic fix for the truncated-boot_archive FAIL: whether the
+# `digest -a sha1` over the ~450MB CPIO dies from OOM-kill or the missing
+# libtspi/pkcs11_tpm relocation abort, the effect is the same -- create_hash's
+# trap tears down the half-built archive -> FAIL rc=1. The boot loader does NOT
+# use this hash (loader.conf sets boot_archive.hash_load="NO"), so the expensive
+# hash is pure liability during install. Shadow `digest` with an instant stub in
+# a dir we prepend to PATH so bootadm's create_ramdisk finds it first: it writes
+# a trivial placeholder .hash and returns 0 immediately -- no 450MB SHA1, no OOM,
+# no ld.so abort. Restored implicitly (stub dir is install-scoped).
+_stubdir=/tmp/solnix-fastdigest
+mkdir -p "$_stubdir"
+cat > "$_stubdir/digest" <<'DIGSTUB'
+#!/sbin/sh
+# solnix install-time stub: real `digest` OOMs/aborts on the 450MB boot_archive
+# CPIO and the hash is unused at boot (hash_load=NO). Emit a constant so
+# create_ramdisk's `digest ... > $tarchive.hash` succeeds instantly.
+printf '0000000000000000000000000000000000000000\n'
+exit 0
+DIGSTUB
+chmod 0755 "$_stubdir/digest"
+export PATH="$_stubdir:$PATH"
+build_ba() { run_to 300 sh -c 'PATH="/tmp/solnix-fastdigest:$PATH" bootadm update-archive -f -R "$1" 2>&1 | grep -vE "^gzip:|cannot find" | tail -6' _ "$ALTROOT" || true; }
 ba_ok() { [ -s "$BA" ] && [ "$(stat -c %s "$BA" 2>/dev/null || echo 0)" -ge 8388608 ] && file "$BA" 2>/dev/null | grep -qiE 'archive|cpio|ufs|boot'; }
 build_ba
 if ! ba_ok; then
