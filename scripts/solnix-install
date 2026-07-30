@@ -466,12 +466,13 @@ mkdir -p "$ALTROOT/boot/defaults"
 kernel="/platform/i86pc/kernel/amd64/unix"
 bootfile="/platform/i86pc/kernel/amd64/unix"
 EOF
-# stage /boot/forth/ from the source root if present (the loader menu scripts);
-# then a full loader.rc. If no forth dir is available, write a minimal loader.rc
-# that does NOT include loader.4th (the stat of loader.rc alone satisfies the
-# sanity check; the include would otherwise error at runtime).
-if [ -d "$SRC/boot/forth" ] && [ ! -d "$ALTROOT/boot/forth" ]; then
-  ( cd "$SRC" && tar -cf - boot/forth ) | ( cd "$ALTROOT" && tar -xf - ) 2>/dev/null || true
+# stage /boot/forth/ from the running root (/) if present (the loader menu
+# scripts); then a full loader.rc. NOTE: the SELF-INSTALL live ramdisk root
+# usually LACKS /boot/forth, so the minimal-loader.rc branch below is normal --
+# stat of /boot/loader.rc alone satisfies sanity_check_currdev; a broken include
+# would error at runtime, so only include loader.4th when it actually exists.
+if [ -d "/boot/forth" ] && [ ! -d "$ALTROOT/boot/forth" ]; then
+  ( cd / && tar -cf - boot/forth ) | ( cd "$ALTROOT" && tar -xf - ) 2>/dev/null || true
 fi
 if [ ! -s "$ALTROOT/boot/loader.rc" ]; then
   if [ -f "$ALTROOT/boot/forth/loader.4th" ]; then
