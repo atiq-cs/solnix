@@ -122,6 +122,16 @@ for d in $COPY_DIRS; do
   ( cd "$SRC" && tar -cf - "$d" ) | ( cd "$RDROOT" && tar -xf - ) || echo "WARN: copy $d had errors" >&2
 done
 
+# bootadm's filelist manifests (boot/solaris/filelist.{ramdisk,safe}) name the
+# paths packed into the INSTALLED boot_archive. COPY_DIRS grabs boot/solaris/bin
+# (create_ramdisk et al.) but NOT the parent boot/solaris/, so these files were
+# missing -> in a SELF-INSTALL the copied BE has no filelist -> `bootadm
+# update-archive` -> "archive filelist is empty" -> boot_archive not built (step 9).
+# Copy them explicitly so the installed BE can build its boot_archive.
+for f in boot/solaris/filelist.ramdisk boot/solaris/filelist.safe; do
+  [ -e "$SRC/$f" ] && cp -p "$SRC/$f" "$RDROOT/$f" 2>/dev/null || true
+done
+
 # /usr/lib libs: copy ONLY the ldd closure of the installer tools (not the whole
 # 336MB /usr/lib/amd64 which is mostly gstreamer/db/etc cruft). The full /lib
 # tree above already carries the /lib/64 half of the closure; here we add the

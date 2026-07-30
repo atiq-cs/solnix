@@ -444,9 +444,22 @@ log "building boot_archive on the target BE"
 # ramdisk installer env curates it out), so pre-create it or bootadm fails
 # "mkdir of .../archive_cache failed: No such file or directory".
 mkdir -p "$ALTROOT/platform/i86pc/amd64"
-run_to 300 sh -c 'bootadm update-archive -f -R "$1" 2>&1 | grep -vE "^gzip:|cannot find" | tail -6' _ "$ALTROOT" || true
-[ -f "$ALTROOT/platform/i86pc/amd64/boot_archive" ] || die "boot_archive not built"
-log "boot_archive: $(file "$ALTROOT/platform/i86pc/amd64/boot_archive" 2>/dev/null)"
+# NOTE: create_hash (bootadm's sha1 step) is memory-hungry and gets OOM-killed on
+# small install VMs, leaving a TRUNCATED/empty boot_archive that [ -f ] passes but
+# the loader rejects ("Failed to find bootable partition"). So: build, then VERIFY
+# the archive is non-empty + a real archive; if it looks truncated, free memory
+# (sync) and rebuild ONCE. A boot_archive under ~8MB is not a valid solnix ramdisk.
+BA="$ALTROOT/platform/i86pc/amd64/boot_archive"
+build_ba() { run_to 300 sh -c 'bootadm update-archive -f -R "$1" 2>&1 | grep -vE "^gzip:|cannot find" | tail -6' _ "$ALTROOT" || true; }
+ba_ok() { [ -s "$BA" ] && [ "$(stat -c %s "$BA" 2>/dev/null || echo 0)" -ge 8388608 ] && file "$BA" 2>/dev/null | grep -qiE 'archive|cpio|ufs|boot'; }
+build_ba
+if ! ba_ok; then
+  log "boot_archive looks truncated ($(stat -c %s "$BA" 2>/dev/null||echo 0) bytes) — likely create_hash OOM; syncing + rebuilding once"
+  sync; sleep 2
+  build_ba
+fi
+ba_ok || die "boot_archive invalid/truncated after rebuild ($(stat -c %s "$BA" 2>/dev/null||echo 0) bytes) — install VM likely OOM during create_hash; increase install memory"
+log "boot_archive OK: $(stat -c %s "$BA" 2>/dev/null) bytes, $(file "$BA" 2>/dev/null)"
 
 # ---------------------------------------------------------------------------
 # 10. loader on ESP + bootfs + menu.lst (beadm-ready; T2.5 gotcha #1).
