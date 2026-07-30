@@ -841,6 +841,24 @@ if [ "$GRAPHICAL" = 1 ]; then
   XTERM=$(_rel "$(_find1 xterm-)")
   TWM=$(_rel "$(_find1 twm-)")
 
+  # Full store lib search path. On this illumos cross-build many desktop
+  # binaries do NOT list their own package's /lib in their ELF RUNPATH (the
+  # cross toolchain omits $ORIGIN/../lib), so libs that ARE staged in the
+  # closure -- e.g. libxfce4panel-2.0.so.4 lives in xfce4-panel/lib -- are
+  # still unfindable by ld.so.1 via RUNPATH alone. Build one LD_LIBRARY_PATH_64
+  # covering EVERY staged store /lib (+ /lib/amd64) so ld.so.1 resolves every
+  # closure lib by SONAME regardless of each binary's RUNPATH. This is the
+  # source fix for the recurring 'libXXX: open failed' whack-a-mole: the
+  # complete closure is on disk AND on the search path.
+  GFX_LIBPATH="/usr/lib/64:/lib/64:/usr/gcc/14/lib/amd64"
+  for _libd in $RDROOT/nix/store/*/lib; do
+    [ -d "$_libd" ] || continue
+    case "$_libd" in *-debug/lib) continue;; esac
+    GFX_LIBPATH="$GFX_LIBPATH:$(_rel "$_libd")"
+    [ -d "$_libd/amd64" ] && GFX_LIBPATH="$GFX_LIBPATH:$(_rel "$_libd/amd64")"
+  done
+  log "GRAPHICAL: LD_LIBRARY_PATH_64 spans $(echo "$GFX_LIBPATH" | tr ':' '\n' | grep -c .) dirs"
+
   # ~/.xinitrc -- the pd1d Xfce body (xfconfd -> xfwm4/panel/xfsettingsd/xterm ->
   # exec xfce4-session). Driven by the live-session launcher below.
   cat > "$RDROOT/home/solnix/.xinitrc" <<XINITEOF
@@ -848,6 +866,9 @@ if [ "$GRAPHICAL" = 1 ]; then
 # solnix live .xinitrc -- Xfce 4.18 session (software render).
 export PATH="$XFWM4/bin:$PANEL/bin:$SESSION/bin:$XFCONF/bin:$SETTINGS/bin:$THUNAR/bin:$XTERM/bin:$XKBCOMP/bin:/usr/bin:/usr/sbin:/sbin"
 export XKB_CONFIG_ROOT="$XKBCFG/share/X11/xkb"
+# full store lib search path (many desktop bins omit their own /lib from
+# RUNPATH; su - reset the env so set it here too). See GFX_LIBPATH build note.
+export LD_LIBRARY_PATH_64="$GFX_LIBPATH"
 export HOME=/home/solnix XDG_CONFIG_HOME=/tmp/solnix-xdg XDG_CACHE_HOME=/tmp/solnix-cache XDG_RUNTIME_DIR=/tmp/solnix-run
 mkdir -p "\$XDG_CONFIG_HOME" "\$XDG_CACHE_HOME" "\$XDG_RUNTIME_DIR" 2>/dev/null
 chmod 700 "\$XDG_RUNTIME_DIR" 2>/dev/null
@@ -910,8 +931,9 @@ PATH=$XORGSRV/bin:$XKBCOMP/bin:/usr/bin:/usr/sbin:/sbin; export PATH
 export XKB_CONFIG_ROOT=$XKBCFG/share/X11/xkb
 # libXau/libXdmcp (X11 transport) are staged into /usr/lib/64 + /lib/64 (they
 # resolved to the OI host, not /nix/store, so the closure filter dropped them);
-# ensure ld.so finds them for Xvfb/Xorg.
-LD_LIBRARY_PATH_64=/usr/lib/64:/lib/64:/usr/gcc/14/lib/amd64; export LD_LIBRARY_PATH_64
+# ensure ld.so finds them for Xvfb/Xorg -- AND every staged store /lib so libs
+# whose package /lib is not in the binary RUNPATH (e.g. libxfce4panel) resolve.
+LD_LIBRARY_PATH_64=$GFX_LIBPATH; export LD_LIBRARY_PATH_64
 _disp=:0
 # start the software framebuffer X server (Xvfb) detached.
 $XORGSRV/bin/Xvfb \$_disp -screen 0 1280x800x24 -ac -nolisten tcp >/tmp/solnix-xvfb.log 2>&1 &
