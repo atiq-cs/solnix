@@ -105,13 +105,21 @@ if [ "$POOL" = "rpool" ] && [ -z "${SOLNIX_ALLOW_RPOOL:-}" ]; then
   die "POOL=rpool but SOLNIX_ALLOW_RPOOL not set (refusing to clobber a pool named rpool). Set SOLNIX_POOL=spool for the gate, or SOLNIX_ALLOW_RPOOL=1 for a real root install."
 fi
 
-# default toplevel: the running system.
+# default toplevel: the running system. If neither a toplevel arg nor a
+# /run-current-system link exists (the LIVE-INSTALLER case, where the ramdisk
+# root IS the complete bootable illumos world), fall back to SELF-INSTALL: copy
+# the running root as the installed system, skipping the nix-closure steps.
+# This is the offline-bakeable path — the baked "system" is the live root.
+SELF_INSTALL=0
 if [ -z "$TOPLEVEL" ]; then
   TOPLEVEL=$(_readlink /run-current-system 2>/dev/null || true)
-  [ -n "$TOPLEVEL" ] || die "no toplevel given and /run-current-system not set"
 fi
-[ -d "$TOPLEVEL" ] || die "toplevel $TOPLEVEL not found"
-[ -e "$TOPLEVEL/activate" ] || die "$TOPLEVEL has no activate script (not a solnix toplevel)"
+if [ -z "$TOPLEVEL" ] || [ ! -e "$TOPLEVEL/activate" ]; then
+  SELF_INSTALL=1
+  log "no nix toplevel present -> SELF-INSTALL: install the running live root as the system"
+else
+  [ -d "$TOPLEVEL" ] || die "toplevel $TOPLEVEL not found"
+fi
 
 log "installing toplevel $TOPLEVEL onto $TARGET (pool $POOL, BE $BEDS)"
 log "base world = the running root ($SRCROOT); running root pool=$ROOTPOOL disk=${ROOTDISK:-unknown}"
@@ -246,6 +254,9 @@ done
 #    that are referenced only through illumos-system-path.)
 # ---------------------------------------------------------------------------
 log "copying toplevel closure into target /nix/store"
+if [ "$SELF_INSTALL" = 1 ]; then
+  log "SELF-INSTALL: skipping nix-closure copy (the copied live root IS the system)"
+else
 mkdir -p "$ALTROOT/nix/store"
 CLOSURE=""
 if command -v nix-store >/dev/null 2>&1; then
@@ -298,6 +309,7 @@ for must in systemPath/platform/i86pc/kernel/amd64/unix \
   [ -s "$t" ] || [ -e "$t" ] || die "toplevel slice missing on target: $must"
 done
 echo "closure OK: $_count store paths self-contained on $TARGET" >&2
+fi   # end SELF_INSTALL=0 nix-closure block
 
 # ---------------------------------------------------------------------------
 # 5. seed the SMF repository fresh from the seed (so the target boots the stock
@@ -319,6 +331,9 @@ fi
 #    config-generated manifests so first boot imports them.
 # ---------------------------------------------------------------------------
 log "staging toplevel SMF manifests + site profile + activate"
+if [ "$SELF_INSTALL" = 1 ]; then
+  log "SELF-INSTALL: skipping toplevel manifest/etc staging (base root already carries the solnix SMF plumbing)"
+else
 mkdir -p "$ALTROOT/lib/svc/manifest/solnix" "$ALTROOT/lib/svc/method" "$ALTROOT/etc/svc/profile/site"
 if [ -d "$TOPLEVEL/manifest/solnix" ]; then
   cp "$TOPLEVEL/manifest/solnix/"*.xml "$ALTROOT/lib/svc/manifest/solnix/" 2>/dev/null || true
@@ -350,10 +365,14 @@ if [ -e "$TOPLEVEL/seed-authorized-keys" ] && [ -x /usr/bin/bash ]; then
   ROOT="$ALTROOT" /usr/bin/bash "$TOPLEVEL/seed-authorized-keys" 2>/dev/null \
     || echo "NOTE: authorized_keys seed had non-fatal errors" >&2
 fi
+fi   # end SELF_INSTALL=0 toplevel-staging block
 
 # ---------------------------------------------------------------------------
 # 7. register generation 1 + switch tools on the target's PATH (T2.5 layout).
 # ---------------------------------------------------------------------------
+if [ "$SELF_INSTALL" = 1 ]; then
+  log "SELF-INSTALL: skipping generation/switch-tool registration (no nix toplevel)"
+else
 log "registering generation 1 + installing switch tools"
 mkdir -p "$ALTROOT/nix/var/nix/profiles"
 relink "$TOPLEVEL" "$ALTROOT/nix/var/nix/profiles/system-1-link"
@@ -364,6 +383,7 @@ if [ -e "$TOPLEVEL/bin/switch-to-configuration" ]; then
   relink "$TOPLEVEL/bin/solnix-rebuild"          "$ALTROOT/usr/bin/solnix-rebuild"
   [ -e "$TOPLEVEL/bin/solnix-install" ] && relink "$TOPLEVEL/bin/solnix-install" "$ALTROOT/usr/bin/solnix-install"
 fi
+fi   # end SELF_INSTALL=0 generation-registration block
 
 # ---------------------------------------------------------------------------
 # 8. ttya console + release stamp (make-be gotcha #1/#4). The copied root
@@ -387,7 +407,7 @@ EOF
 cat > "$ALTROOT/etc/solnix-release" <<EOF
 solnix system (installed by solnix-install)
 installed: $(date -u +%FT%TZ 2>/dev/null || date)
-toplevel:  $TOPLEVEL
+toplevel:  ${TOPLEVEL:-<self-install: live root>}
 installer: $(uname -a)
 target:    $TARGET pool $POOL BE $BEDS
 EOF

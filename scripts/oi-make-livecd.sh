@@ -105,11 +105,15 @@ COPY_DIRS="
   usr/lib/64
   usr/lib/security
   usr/lib/devfsadm
+  usr/lib/sysevent
+  usr/lib/inet
+  usr/lib/cfgadm
 "
 mkdir -p "$RDROOT"/usr/sbin "$RDROOT"/usr/bin "$RDROOT"/usr/lib "$RDROOT"/dev "$RDROOT"/devices \
          "$RDROOT"/proc "$RDROOT"/system/contract "$RDROOT"/system/object "$RDROOT"/tmp \
          "$RDROOT"/var/run "$RDROOT"/var/tmp "$RDROOT"/mnt "$RDROOT"/a "$RDROOT"/root "$RDROOT"/nix \
-         "$RDROOT"/etc/dev "$RDROOT"/etc/svc/volatile "$RDROOT"/system/boot "$RDROOT"/etc/dfs
+         "$RDROOT"/etc/dev "$RDROOT"/etc/svc/volatile "$RDROOT"/system/boot "$RDROOT"/etc/dfs \
+         "$RDROOT"/var/svc/manifest "$RDROOT"/var/svc/profile
 
 for d in $COPY_DIRS; do
   [ -e "$SRC/$d" ] || continue
@@ -129,7 +133,11 @@ CLOSURE_TOOLS="/sbin/zpool /sbin/zfs /usr/sbin/format /usr/sbin/fmthard
   /usr/sbin/ifconfig /usr/sbin/prtconf /usr/sbin/init /usr/sbin/mount
   /usr/sbin/umount /usr/bin/ksh93 /usr/bin/bash /sbin/sh /sbin/init
   /usr/bin/ls /usr/bin/cp /usr/bin/tar /usr/bin/sed /usr/bin/awk
-  /usr/bin/grep /usr/bin/date /usr/bin/find /usr/bin/vi /usr/bin/file"
+  /usr/bin/grep /usr/bin/date /usr/bin/find /usr/bin/vi /usr/bin/file
+  /usr/sbin/fcadm /usr/sbin/cfgadm /usr/lib/sysevent/syseventd
+  /usr/lib/cfgadm/fp.so.1 /sbin/dlmgmtd
+  /usr/sbin/svccfg /usr/sbin/svcadm /usr/bin/svcprop /usr/bin/svcs
+  /lib/svc/bin/svc.configd /lib/svc/bin/svc.startd /lib/svc/bin/mfstscan"
 for t in $CLOSURE_TOOLS; do
   [ -e "$SRC$t" ] && ldd "$SRC$t" 2>/dev/null | awk '{print $3}'
 done | grep '^/usr/lib' | sort -u | while read -r libpath; do
@@ -170,11 +178,13 @@ LIVE_TOOLS="
   usr/sbin/ipadm usr/sbin/ifconfig usr/sbin/prtconf usr/sbin/init
   usr/sbin/mount usr/sbin/umount usr/sbin/svcadm usr/sbin/svccfg usr/sbin/prtdiag
   usr/sbin/fdisk usr/sbin/format usr/sbin/zdb usr/sbin/dumpadm
+  usr/sbin/fcadm usr/sbin/cfgadm usr/sbin/fcinfo
   usr/bin/svcs usr/bin/svcprop usr/bin/coreadm usr/sbin/coreadm
   usr/sbin/soconfig usr/sbin/ndd usr/bin/ps usr/bin/tty usr/bin/who
   usr/bin/login usr/bin/i86/ksh93 usr/bin/pgrep usr/bin/pkill usr/bin/logger
   usr/sbin/hostconfig usr/sbin/sysconfig usr/lib/saf/ttymon usr/lib/saf/sac
   usr/lib/utmpd usr/lib/pfexecd usr/lib/rad/rad
+  usr/sbin/pmadm usr/sbin/sacadm usr/bin/coreadm usr/lib/utmpd
 "
 # build an INCLUDE list of paths that exist, then tar them in one pass so tar
 # PRESERVES hardlinks (the amd64/ isaexec dispatch dirs come along per-tool).
@@ -471,10 +481,13 @@ cat > "$RDROOT/etc/svc/profile/site/solnix.xml" <<'PROFEOF'
   <!-- disable the non-essential services that fail in the minimal ramdisk
        (missing support tools/files) so they don't cascade to maintenance mode
        and block single-user. None are console-installer dependencies.
-       NOTE: do NOT disable system/sysevent -- milestone/devices REQUIRES it
-       (disabling it blocks devices->single-user->solnix-live). With the gcc
-       runtime libs present (3b') syseventd starts fine. -->
+       NOTE do NOT disable system/sysevent (milestone/devices REQUIRES it); with
+       the gcc runtime libs present (3b') syseventd starts fine. -->
   <service name="system/rbac" version="1" type="service"><instance name="default" enabled="false"/></service>
+  <!-- Fibre Channel services are irrelevant in the console-installer / qemu env
+       and fail (missing tools, exit 127) -> they block milestone/devices. -->
+  <service name="network/npiv_config" version="1" type="service"><instance name="default" enabled="false"/></service>
+  <service name="system/device/fc-fabric" version="1" type="service"><instance name="default" enabled="false"/></service>
   <service name="system/ca-certificates" version="1" type="service"><instance name="default" enabled="false"/></service>
   <service name="system/dbus" version="1" type="service"><instance name="default" enabled="false"/></service>
   <service name="system/fcoe_initiator" version="1" type="service"><instance name="default" enabled="false"/></service>
@@ -581,6 +594,25 @@ if [ -e "$RDROOT/etc/svc/repository.db" ]; then
       /usr/sbin/svccfg apply "$_p" >/dev/null 2>&1 \
       && echo "applied profile $(basename "$_p")" >&2 \
       || echo "WARN: svccfg apply $_p failed" >&2
+  done
+  # DETERMINISTIC disables: svccfg apply of a profile does not reliably flip
+  # general/enabled for every service offline; set it explicitly for the
+  # non-essential services that fail in the minimal ramdisk (missing tools /
+  # desktop) and would otherwise cascade to maintenance.
+  # NOTE: do NOT disable network/npiv_config or system/device/fc-fabric --
+  # milestone/devices REQUIRES fc-fabric (require_all), so disabling it blocks
+  # the milestone. Instead we ship the FC tools (fcadm/cfgadm + cfgadm plugins +
+  # FC libs, see COPY_DIRS/LIVE_TOOLS) so those services START cleanly.
+  for _svc in system/rbac:default network/rpc/bind:default \
+              system/name-service-cache:default network/ipsec/ipsecalgs:default \
+              network/ipsec/policy:default application/opengl/ogl-select:default \
+              application/desktop-cache/gio-module-cache:default \
+              application/print/service-selector:default system/hal:default \
+              system/keymap:default system/intrd:default system/pkgserv:default \
+              system/zones-monitoring:default system/dbus:default \
+              system/fcoe_initiator:default; do
+    SVCCFG_REPOSITORY="$RDROOT/etc/svc/repository.db" \
+      /usr/sbin/svccfg -s "$_svc" setprop general/enabled = boolean: false >/dev/null 2>&1 || true
   done
   chmod 0600 "$RDROOT/etc/svc/repository.db"
 fi
