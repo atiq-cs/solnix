@@ -221,15 +221,13 @@ log "creating pool $POOL on ${TARGET}s1 + BE dataset $BEDS"
 # the dataset to find /platform/.../unix). -d gives a legacy-readable pool; the
 # OS enables any extra features itself post-boot as needed. This is the standard
 # illumos root-pool requirement (beadm/installers do the same).
+# NOTE(2026-07-30): verified on the OI host that a -d pool activates ONLY
+# lz4_compress + embedded_data, both in loader64.efi's features_for_read set, so
+# feature-compat is NOT the disk-boot blocker. The remaining "Failed to find
+# bootable partition" (loader gets the right bootfs but can't read the kernel/
+# boot_archive from the BE) is under investigation -- likely the SELF-INSTALL BE
+# /platform layout. TODO: inspect installed BE via `zpool import -R /mnt` on illumos.
 run_to 60 zpool create -f -d -o altroot="$ALTROOT" -o cachefile=none \
-  -o feature@log_spacemap=disabled \
-  -o feature@device_removal=enabled \
-  -o feature@obsolete_counts=enabled \
-  -o feature@zpool_checkpoint=enabled \
-  -o feature@spacemap_v2=enabled \
-  -o feature@embedded_data=enabled \
-  -o feature@lz4_compress=enabled \
-  -o feature@extensible_dataset=enabled \
   -O compression=on -O atime=off -m none "$POOL" "/dev/dsk/${TARGET}s1" || die "zpool create failed"
 # WHY the explicit feature list (not just -d): on modern illumos `zpool create`
 # AUTO-ACTIVATES com.delphix:log_spacemap (needed for the log spacemap) even under
