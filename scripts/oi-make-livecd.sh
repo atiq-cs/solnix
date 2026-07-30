@@ -764,25 +764,43 @@ if [ "$GRAPHICAL" = 1 ]; then
       libgcc_s.so.1 libstdc++.so.6 libstdc++.so.6.0.33 libatomic.so.1 libatomic.so.1.2.0 2>/dev/null ) \
     | ( cd "$RDROOT/usr/gcc/14/lib/amd64" && tar -xf - ) 2>/dev/null || echo "WARN: gcc runtime lib copy had errors" >&2
 
-  # X11 transport libs (libXau/libXdmcp): Xvfb/Xorg link these, but the closure-
-  # gen ldd walk resolved them to the OI HOST's /usr/lib/64 (NOT /nix/store), so
-  # the '/nix/store/' closure filter dropped them -> live root lacks them ->
-  # 'ld.so.1: Xvfb: fatal: libXau.so.6: open failed' -> the live desktop never
-  # starts. Copy them (+ sonames) from the host /usr/lib/64 into the live root's
-  # /usr/lib/64 (tar keeps the soname symlinks). Small (~60KB). Also add the
-  # 32-bit /usr/lib copies in case a helper is 32-bit.
-  for _libdir in lib/64 lib usr/lib/64 usr/lib; do
-    [ -d "/$_libdir" ] || continue
-    _got=""
-    for _l in libXau.so.6 libXau.so.6.0.0 libXdmcp.so.6 libXdmcp.so.6.0.0; do
-      [ -e "/$_libdir/$_l" ] && _got="$_got $_l"
-    done
-    [ -n "$_got" ] || continue
-    mkdir -p "$RDROOT/$_libdir"
-    ( cd "/$_libdir" && tar -cf - $_got 2>/dev/null ) | ( cd "$RDROOT/$_libdir" && tar -xf - ) 2>/dev/null \
-      && log "GRAPHICAL: staged X11 transport libs ($_got) from /$_libdir" \
-      || echo "WARN: X11 transport lib copy from /$_libdir had errors" >&2
+  # Host system/X11 libs the desktop binaries NEED but the /nix/store closure
+  # does NOT provide: their SONAMEs (e.g. libXau.so.6, libXfixes.so.1,
+  # libxshmfence.so.1, libdbus-1.so.3 ...) resolve to the OI HOST's /usr/lib/64,
+  # not /nix/store, so the '/nix/store/' closure filter drops them -> live root
+  # lacks them -> 'ld.so.1: Xvfb: fatal: libXfixes.so.1: open failed' -> the
+  # live desktop never starts. Stage each SONAME from the host into the live
+  # /usr/lib/64 (which is a symlink -> amd64). We deref (cp -L) into a real file
+  # named after the SONAME so it works regardless of whether the host entry is a
+  # same-dir symlink or points off to /lib/amd64. List derived by walking the
+  # NEEDED closure of Xvfb/Xorg + the xfce/slim binaries against the store
+  # closure (scripts note: closure-miss host libs). Small (~2MB total).
+  #   libXau/libXdmcp  X11 transport (Xvfb/Xorg)
+  #   libXfixes/libXRes/libX11.so.4  X11 ABI variants xfwm4/panel link
+  #   libxshmfence     Xvfb DRI3 fence
+  #   libdbus-1/libuuid  session bus (xfce4-session, at-spi)
+  #   libxml2/libintl/libfribidi/libthai  gtk/pango text stack
+  #   libcups/libexif  thunar/print + image metadata
+  #   libbrotlidec/libbz2/liblzo2/libcrypt/libncurses/libtermcap/libsec  misc deps
+  _hostlibs="libXau.so.6 libXdmcp.so.6 libXfixes.so.1 libXRes.so.1 libX11.so.4
+    libxshmfence.so.1 libdbus-1.so.3 libuuid.so.1 libxml2.so.16 libintl.so.1
+    libfribidi.so.0 libthai.so.0 libcups.so.2 libexif.so.12 libbrotlidec.so.1
+    libbz2.so.1 liblzo2.so.2 libcrypt.so.1 libncurses.so.5 libtermcap.so.1
+    libsec.so.1"
+  # usr/lib/64 is a symlink -> amd64 on illumos; mkdir -p on an existing symlink
+  # errors under set -e, so only mkdir when nothing is there, else write through.
+  [ -e "$RDROOT/usr/lib/64" ] || mkdir -p "$RDROOT/usr/lib/64"
+  _staged=""
+  for _so in $_hostlibs; do
+    _src=""
+    for _d in /usr/lib/64 /lib/64; do [ -e "$_d/$_so" ] && { _src="$_d/$_so"; break; }; done
+    [ -n "$_src" ] || { echo "WARN: host lib not found: $_so" >&2; continue; }
+    # cp -L follows the symlink chain to the real .so and lands a real file at
+    # the SONAME name (ld.so.1 opens by SONAME, so this is all it needs).
+    cp -L "$_src" "$RDROOT/usr/lib/64/$_so" 2>/dev/null && _staged="$_staged $_so" \
+      || echo "WARN: staging $_so had errors" >&2
   done
+  log "GRAPHICAL: staged X11 transport libs ($_staged) into /usr/lib/64"
 
   # fonts: the closure has NO fonts and the OI host has none installed, so GTK
   # falls back to Xvfb's builtin bitmap fonts (fixed/cursor) -- proven usable in
