@@ -868,6 +868,15 @@ fi
 #    raw image is kept tight (RD_MB). Keep BOTH the .gz name the loader expects.
 # ---------------------------------------------------------------------------
 log "finalizing ramdisk"
+# CRITICAL: the 4f offline pre-import (svccfg/svc.configd against the ramdisk's
+# repository.db) RE-CREATES /etc/svc/volatile/{init.state,init-next.state,
+# svc_nonpersist.db,repository-boot-*,...} as a side effect of running configd
+# at build time. The line-134 purge (right after COPY_DIRS) is undone by 4f. So
+# purge AGAIN here, AFTER 4f + BEFORE gzip, so the shipped boot_archive has an
+# EMPTY /etc/svc/volatile (a runtime tmpfs) -> fresh PID1 init doesn't read a
+# stale init.state -> no SIGKILL restart loop. (This is the real fix; the early
+# purge alone was insufficient because pre-import repopulates it.)
+rm -rf "$RDROOT"/etc/svc/volatile/* "$RDROOT"/etc/svc/volatile/.[!.]* 2>/dev/null || true
 df -k "$RDROOT" 2>/dev/null | awk 'NR==2{print "live root: "$3"KB used / "$2"KB total"}' >&2
 sync
 umount "$RDROOT" || die "umount ramdisk failed"
