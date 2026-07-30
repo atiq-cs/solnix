@@ -175,7 +175,21 @@ mkdir -p "$ALTROOT"
 #    zpool-created EFI label is sector-addressed and takes fmthard.)
 # ---------------------------------------------------------------------------
 log "GPT-labelling $TARGET"
-run_to 60 zpool create -f solnixtmp "/dev/dsk/${TARGET}" >/dev/null 2>&1 || die "clean EFI label failed"
+# Clean EFI label via a throwaway pool. This intermittently fails when the target
+# device node isn't fully settled yet (fresh disk / just-attached), so retry a
+# few times with a devfsadm + settle between attempts rather than dying on the
+# first transient miss.
+_label_ok=0
+for _try in 1 2 3 4 5; do
+  if run_to 60 zpool create -f solnixtmp "/dev/dsk/${TARGET}" >/dev/null 2>&1; then
+    _label_ok=1; break
+  fi
+  echo "clean EFI label attempt $_try failed; settling device + retrying" >&2
+  zpool destroy solnixtmp 2>/dev/null || true
+  devfsadm >/dev/null 2>&1 || true
+  sync; sleep 3
+done
+[ "$_label_ok" = 1 ] || die "clean EFI label failed after 5 attempts (device $TARGET not settling)"
 run_to 30 zpool destroy solnixtmp 2>/dev/null || true
 RESV_START=$(prtvtoc -h "/dev/rdsk/${TARGET}" 2>/dev/null | awk '$1==8{print $4}')
 RESV_SIZE=$(prtvtoc -h "/dev/rdsk/${TARGET}" 2>/dev/null | awk '$1==8{print $5}')
