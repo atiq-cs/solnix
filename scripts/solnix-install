@@ -425,6 +425,11 @@ EOF
 # ---------------------------------------------------------------------------
 log "building boot_archive on the target BE"
 [ -f "$ALTROOT/etc/path_to_inst" ] || : > "$ALTROOT/etc/path_to_inst"
+# bootadm mkdirs <root>/platform/i86pc/amd64/archive_cache but does NOT create
+# the parent dir; the SELF-INSTALL live root has no platform/i86pc/amd64 (the
+# ramdisk installer env curates it out), so pre-create it or bootadm fails
+# "mkdir of .../archive_cache failed: No such file or directory".
+mkdir -p "$ALTROOT/platform/i86pc/amd64"
 run_to 300 sh -c 'bootadm update-archive -f -R "$1" 2>&1 | grep -vE "^gzip:|cannot find" | tail -6' _ "$ALTROOT" || true
 [ -f "$ALTROOT/platform/i86pc/amd64/boot_archive" ] || die "boot_archive not built"
 log "boot_archive: $(file "$ALTROOT/platform/i86pc/amd64/boot_archive" 2>/dev/null)"

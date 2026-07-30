@@ -101,6 +101,7 @@ COPY_DIRS="
   lib
   sbin
   etc
+  boot/solaris/bin
   usr/lib/fs
   usr/lib/64
   usr/lib/security
@@ -172,7 +173,9 @@ LIVE_TOOLS="
   usr/bin/yes usr/bin/file usr/bin/vi usr/bin/more usr/bin/less usr/bin/tee
   usr/bin/env usr/bin/test usr/bin/true usr/bin/false usr/bin/sh usr/bin/pfexec
   usr/bin/digest usr/bin/openssl usr/bin/od usr/bin/xargs usr/bin/mkfile
+  usr/bin/gzip
   usr/sbin/zpool usr/sbin/zfs usr/sbin/format usr/sbin/fmthard usr/sbin/prtvtoc
+  usr/sbin/tar
   usr/sbin/mkfs usr/sbin/newfs usr/sbin/fsck usr/sbin/installboot
   usr/sbin/bootadm usr/sbin/lofiadm usr/sbin/devfsadm usr/sbin/dladm
   usr/sbin/ipadm usr/sbin/ifconfig usr/sbin/prtconf usr/sbin/init
