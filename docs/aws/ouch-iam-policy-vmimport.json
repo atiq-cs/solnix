@@ -1,0 +1,15 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    { "Sid": "ComputeStorageObservability", "Effect": "Allow", "Action": ["ec2:*","ssm:*","cloudwatch:*","autoscaling:Describe*"], "Resource": "*" },
+    { "Sid": "QuotasAndSupportCases", "Effect": "Allow", "Action": ["servicequotas:*","support:*"], "Resource": "*" },
+    { "Sid": "S3TestDataBackupsWalArchive", "Effect": "Allow", "Action": "s3:*", "Resource": "*" },
+    { "Sid": "KmsForEncryptedEbsAndSnapshotCopy", "Effect": "Allow", "Action": ["kms:CreateGrant","kms:Decrypt","kms:Encrypt","kms:GenerateDataKey*","kms:ReEncrypt*","kms:DescribeKey","kms:ListAliases","kms:ListKeys"], "Resource": "*" },
+    { "Sid": "IamSelfInspect", "Effect": "Allow", "Action": ["iam:GetUser","iam:GetRole","iam:GetInstanceProfile","iam:GetPolicy","iam:GetPolicyVersion","iam:GetRolePolicy","iam:ListRolePolicies","iam:ListAttachedRolePolicies","iam:List*"], "Resource": "*" },
+    { "Sid": "IamBenchRoleLifecycle", "Effect": "Allow", "Action": ["iam:CreateRole","iam:DeleteRole","iam:CreateInstanceProfile","iam:DeleteInstanceProfile","iam:AddRoleToInstanceProfile","iam:RemoveRoleFromInstanceProfile","iam:AttachRolePolicy","iam:DetachRolePolicy","iam:PutRolePolicy","iam:DeleteRolePolicy","iam:TagRole","iam:TagInstanceProfile"], "Resource": ["arn:aws:iam::*:role/bench-*","arn:aws:iam::*:instance-profile/bench-*"] },
+    { "Sid": "PassBenchRoleToEc2Ssm", "Effect": "Allow", "Action": "iam:PassRole", "Resource": "arn:aws:iam::*:role/bench-*", "Condition": {"StringEquals":{"iam:PassedToService":["ec2.amazonaws.com","ssm.amazonaws.com"]}} },
+    { "Sid": "ServiceLinkedRolesForSpotEtc", "Effect": "Allow", "Action": "iam:CreateServiceLinkedRole", "Resource": "*" },
+    { "Sid": "VmImportRoleLifecycle", "Effect": "Allow", "Action": ["iam:CreateRole","iam:DeleteRole","iam:PutRolePolicy","iam:DeleteRolePolicy","iam:GetRolePolicy","iam:AttachRolePolicy","iam:DetachRolePolicy","iam:TagRole"], "Resource": "arn:aws:iam::*:role/vmimport" },
+    { "Sid": "PassVmImportRoleToVmie", "Effect": "Allow", "Action": "iam:PassRole", "Resource": "arn:aws:iam::*:role/vmimport", "Condition": {"StringEquals":{"iam:PassedToService":"vmie.amazonaws.com"}} }
+  ]
+}
