@@ -19,9 +19,15 @@ ELFD=/usr/bin/elfdump
 
 # --- desktop root set (leaf packages) -------------------------------------
 : > "$QUEUE"
+# NOTE: libXfixes AND xkeyboard-config are seeded explicitly. libXfixes' /lib is
+# in no object's RUNPATH; xkeyboard-config is DATA-ONLY (no ELF at all) so the
+# RUNPATH BFS can never reach either. Without xkeyboard-config in the closure,
+# XKB_CONFIG_ROOT points at a missing dir and Xvfb dies 'Failed to compile
+# keymap'. Seeding the leaf packages pulls both into the closure.
 for pat in xorg-server xfce4-session xfce4-panel xfce4-settings xfce4-appfinder \
            xfwm4 xfdesktop libxfce4ui libxfce4util slim gtk3 twm xterm xkbcomp \
-           thunar exo garcon tumbler xfconf xrdb xsetroot xauth; do
+           thunar exo garcon tumbler xfconf xrdb xsetroot xauth libXfixes \
+           xkeyboard-config; do
   for d in "$STORE"/*-"$pat"-* "$STORE"/*-"$pat"; do
     [ -d "$d" ] || continue
     case "$d" in *-debug) continue;; *.drv) continue;; esac
@@ -51,9 +57,24 @@ while [ -s "$QUEUE" ]; do
       done
 done
 
-# The closure is the SEEN set. Keep only real (existing) non-debug non-drv dirs.
+# The closure is the SEEN set. Keep only real (existing) non-debug non-drv dirs,
+# AND drop any store dir that ships a FOREIGN-ISA 64-bit shared object. This host
+# has a stray aarch64 zlib in /nix/store; if it lands in the closure its /lib gets
+# on LD_LIBRARY_PATH_64 and its aarch64 libz.so.1 claims the libz.so.1 SONAME ->
+# 'libz.so relocation error'. A 32-bit x86 sibling does NOT shadow a 64-bit
+# resolve (ld.so.1 skips the wrong ELF class), so we reject ONLY a 64-bit lib
+# that is NOT x86-64/AMD64 (i.e. a foreign ISA like aarch64/sparc).
 sort -u "$SEEN" | while read -r d; do
   case "$d" in *-debug) continue;; *.drv) continue;; esac
-  [ -d "$d" ] && echo "$d"
+  [ -d "$d" ] || continue
+  _bad=0
+  for _so in "$d"/lib/*.so* "$d"/lib/amd64/*.so*; do
+    [ -e "$_so" ] || continue
+    _fi=$(file "$_so" 2>/dev/null)
+    case "$_fi" in *'ELF 64-bit'*) ;; *) continue;; esac   # ignore 32-bit siblings
+    echo "$_fi" | grep -qE 'x86-64|AMD64|Intel' || { _bad=1; break; }
+  done
+  [ "$_bad" = 1 ] && { echo "DROP foreign-ISA 64-bit lib: $d" >&2; continue; }
+  echo "$d"
 done > "$OUT"
 echo "=== closure written: $(wc -l < "$OUT") paths -> $OUT ===" >&2

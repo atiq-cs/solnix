@@ -782,12 +782,20 @@ if [ "$GRAPHICAL" = 1 ]; then
   #   libxml2/libintl/libfribidi/libthai  gtk/pango text stack
   #   libcups/libexif  thunar/print + image metadata
   #   libbrotlidec/libbz2/liblzo2/libcrypt/libncurses/libtermcap/libsec  misc deps
+  #   libbrotlidec  needs libbrotlicommon.so.1 (_kBrotliContextLookupTable);
+  #   libharfbuzz   needs libgraphite2.so.3 (gr_make_face_with_ops);
+  #   libthai       needs libdatrie.so.1 (trie_new_from_file);
+  #   libxml2       needs libicuuc.so.78 -> libicudata.so.78 (gtk XML path) -- transitive
+  #     deps of staged host libs, themselves not directly NEEDED by any binary
+  #     so the earlier walk missed them; ld.so.1 fails at reloc time otherwise.
   _hostlibs="libXau.so.6 libXdmcp.so.6 libXfixes.so.1 libXRes.so.1 libX11.so.4
     libxshmfence.so.1 libdbus-1.so.3 libuuid.so.1 libxml2.so.16 libintl.so.1
     libfribidi.so.0 libthai.so.0 libcups.so.2 libexif.so.12 libbrotlidec.so.1
     libbz2.so.1 liblzo2.so.2 libcrypt.so.1 libncurses.so.5 libtermcap.so.1
     libsec.so.1
-    libharfbuzz.so.0 libfontconfig.so.1 libXft.so.2 libSM.so.6 libXrender.so.1"
+    libharfbuzz.so.0 libfontconfig.so.1 libXft.so.2 libSM.so.6 libXrender.so.1
+    libbrotlicommon.so.1 libgraphite2.so.3 libdatrie.so.1 libicuuc.so.78
+    libicudata.so.78"
   # usr/lib/64 is a symlink -> amd64 on illumos; mkdir -p on an existing symlink
   # errors under set -e, so only mkdir when nothing is there, else write through.
   [ -e "$RDROOT/usr/lib/64" ] || mkdir -p "$RDROOT/usr/lib/64"
@@ -850,12 +858,27 @@ if [ "$GRAPHICAL" = 1 ]; then
   # closure lib by SONAME regardless of each binary's RUNPATH. This is the
   # source fix for the recurring 'libXXX: open failed' whack-a-mole: the
   # complete closure is on disk AND on the search path.
+  # Guard against FOREIGN-ISA store libs on the 64-bit search path: a stray
+  # aarch64 zlib etc. would claim the SONAME and yield 'libz.so relocation
+  # error'. Put a /lib dir on LD_LIBRARY_PATH_64 unless it has a 64-bit non-x86-64
+  # .so (a 32-bit x86 sibling is harmless; ld.so.1 skips the wrong ELF class).
+  # (Closure gen also filters these; belt+braces.)
+  _is_x86_libdir() {
+    for _so in "$1"/*.so*; do
+      [ -e "$_so" ] || continue
+      _fi=$(file "$_so" 2>/dev/null)
+      case "$_fi" in *'ELF 64-bit'*) ;; *) continue;; esac
+      echo "$_fi" | grep -qE 'x86-64|AMD64|Intel' || return 1
+    done
+    return 0
+  }
   GFX_LIBPATH="/usr/lib/64:/lib/64:/usr/gcc/14/lib/amd64"
   for _libd in $RDROOT/nix/store/*/lib; do
     [ -d "$_libd" ] || continue
     case "$_libd" in *-debug/lib) continue;; esac
+    _is_x86_libdir "$_libd" || { log "GRAPHICAL: skip wrong-arch libdir $(_rel "$_libd")"; continue; }
     GFX_LIBPATH="$GFX_LIBPATH:$(_rel "$_libd")"
-    [ -d "$_libd/amd64" ] && GFX_LIBPATH="$GFX_LIBPATH:$(_rel "$_libd/amd64")"
+    [ -d "$_libd/amd64" ] && _is_x86_libdir "$_libd/amd64" && GFX_LIBPATH="$GFX_LIBPATH:$(_rel "$_libd/amd64")"
   done
   log "GRAPHICAL: LD_LIBRARY_PATH_64 spans $(echo "$GFX_LIBPATH" | tr ':' '\n' | grep -c .) dirs"
 
