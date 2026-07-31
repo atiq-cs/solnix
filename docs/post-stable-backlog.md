@@ -146,3 +146,58 @@ adopting. Ship sane modern defaults in the base config + document the knobs.
 Priority: post-stable, after the base distro + cache are green. Pairs with CH-6
 (declarative cloud/network modules) and PS-7 (per-instance qualification, where jumbo
 MTU on EC2 gets real-hardware validation).
+
+## PS-10..PS-16: maintainer roadmap (2026-07-31) — HONEST scoping
+
+These are the maintainer's 7-item directive. Marked by realistic effort. Items are DISPATCHED as work
+or captured as specs; the kernel/GPU ports are MULTI-MONTH and will NOT complete in a single session.
+
+### PS-10: aarch64 Graviton/Neoverse kernel port (GICv3 + ACPI/SBBR) [MULTI-MONTH]
+Port the missing server-ARM bring-up so illumos-aarch64 boots on Graviton/Neoverse (currently EBBR/FDT +
+GICv2 only). SOURCE MINING: NetBSD (arch/aarch64 + acpi + gicv3 = `dev/acpi`, `arch/arm/cortex/gicv3*`) and
+FreeBSD (`sys/arm64/arm64/gicv3*`, `sys/dev/acpica`, `sys/arm64/acpica`) — both BSD-licensed, portable. Need:
+(1) GICv3/GICv3-ITS driver, (2) ACPI parser + MADT/GTDT/SPCR tables (illumos has acpica in x86; port to arm64),
+(3) SystemReady-SR/SBBR boot path, (4) Graviton ENA + EBS-NVMe already exist on x86 (reuse). THEN build
+bootable aarch64 EC2 image + aarch64 ISOs (Graviton, RPi4/5 via existing n-hys FDT, Apple Silicon via m1n1/
+Asahi-style FDT — separate). This is the CH-1 spec (.kiro/specs/solnix-cloud-hardware). Est: 3-6 months, upstream
+collab (Rich Lowe / illumos arm64-gate). DISPATCHED: source-survey subagent (find+catalog the BSD GICv3/ACPI
+code); implementation is a sustained effort, not one session.
+
+### PS-11: real GPU — Wayland/X11 accelerated + display-manager (GDM-class) + VNC [MULTI-MONTH for HW; VNC now]
+Current: software-rendered (lavapipe/llvmpipe) Xfce on Xvfb. For REAL GPU Vulkan: port a DRM/KMS substrate
+(the NetBSD drm2 / FreeBSD drm-kmod LinuxKPI shim — see docs/gpu-parity-survey.md + netbsd-driver-substrate.md),
+libinput/evdev/seatd for Wayland input, a compositor (COSMIC/wlroots), Xwayland bridge, and a display manager.
+This is the ~1-2yr "wall" (DRM-UAPI + evdev/libinput/seatd). SHIPPABLE NOW: package a VNC server (x11vnc /
+tigervnc) so the existing SW-desktop is remotely usable. DISPATCHED: VNC-server package build (immediate);
+DRM/Wayland substrate = long-horizon spec (already in docs/desktop-gpu-research.md P-D2..P-D5).
+
+### PS-12: ISO/IMG publish to solnix.io iso/ prefix + full metadata [DOABLE NOW]
+On each ISO/IMG completion: upload to s3.solnix.io/solnix-cache/iso/ with .sha256/.sha512, a README (contents,
+default accounts/secrets [currently NONE baked — installer creates none; live user 'solnix' passwordless on
+graphical only], burn instructions (dd/rufus/balena), boot+installer steps, expected-hosts list, complete
+driver list [252 drivers + 1339 driver_aliases], known-good/known-bad hardware matrix). DISPATCHED NOW for the
+2 verified x86_64 ISOs.
+
+### PS-13: platform-aware MTU + resource defaults at install time [DOABLE NOW — starting]
+At install, detect platform + set MTU to the NIC's advertised max (AWS ENA 9001 VPC / up to 9216; jumbo where
+the link supports it) via dladm, NOT a hardcoded 1500. GENERALIZE: audit install-time defaults that cap hardware
+(maxphys/IO size, ZFS ARC ceiling, TCP buffer autotuning, fd limits, ncpu/thread caps, ephemeral ports) and set
+them from detected hardware so the OS uses all available resources. Extends PS-9. DISPATCHED NOW: solnix-install
+platform-MTU + a defaults-audit pass.
+
+### PS-14: build/package ALL virtualization for every platform [MULTI-WEEK]
+bhyve + viona + virtio(blk/net/scsi/9p) + bhyve-branded zones + LX-branded zones + native zones, per arch.
+These are upstream illumos components — build + package + qualify (bhyve needs VT-x/AMD-V; zones are arch-generic).
+DISPATCHED: bhyve+zones package-build track (x86_64 first, the others follow). Est multi-week.
+
+### PS-15: NEW TASK — "KVM and Firecracker port and QEMU on solnix"
+(a) QEMU on solnix (TCG + the illumos KVM/bhyve accel backends) — package it. (b) evaluate reviving/forwarding
+the Joyent illumos-KVM driver + a Firecracker-equivalent. Captured as a standalone spec task. Est: research +
+multi-week.
+
+### PS-16: telemetry (solnix.io) + P2P BitTorrent binary-package distribution [SPEC PENDING from solnix.io team]
+(a) Telemetry pieces solnix.io wants. (b) Collaborative BitTorrent P2P distribution of binary packages to the
+solnix.io common cache AND peer solnix hosts, with a SECURITY model: per-package signing, validation,
+multi-build reproducibility comparison before trust/install; possibly a solnix.io registry of every host's
+public signing key + (ideally-avoided) human identity attestation. AWAITING the solnix.io team's written
+request for specifics before implementation. Captured; do NOT build until the spec lands.
