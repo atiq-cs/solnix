@@ -823,7 +823,12 @@ if [ "$GRAPHICAL" = 1 ]; then
   # Stage the host binaries into the live root, then (since dbus-launch is
   # missing) drive the session with dbus-run-session AND drop a tiny dbus-launch
   # shim (some tools shell out to it) that execs dbus-daemon --fork.
-  _dbus_bins="dbus-daemon dbus-run-session dbus-send dbus-uuidgen"
+  # iceauth: xfce4-session shells out to /usr/bin/iceauth to populate the ICE
+  # authority file + start the ICE listener; without it the session manager
+  # never exports SESSION_MANAGER and every client warns 'SESSION_MANAGER
+  # environment variable not defined'. The host iceauth links only core-OS libs
+  # (same as the dbus bins), so stage it the same cp -L way.
+  _dbus_bins="dbus-daemon dbus-run-session dbus-send dbus-uuidgen iceauth"
   _dbstaged=""
   mkdir -p "$RDROOT/usr/bin"
   for _b in $_dbus_bins; do
@@ -984,11 +989,18 @@ export LANG=C LC_ALL=C G_FILENAME_ENCODING=UTF-8 CHARSET=UTF-8
 export XKB_CONFIG_ROOT="$XKBCFG/share/X11/xkb"
 # DISPLAY must be set for every X client; su - can strip it, so default it here.
 : "\${DISPLAY:=:0}"; export DISPLAY
+# xfce4-session IS the session manager AND the launcher of the desktop. It must
+# be the SOLE thing started: it opens the ICE listener, exports SESSION_MANAGER,
+# THEN launches its 'Failsafe' session (xfwm4 + xfsettingsd + xfce4-panel +
+# xfdesktop + Thunar) as session-managed children that inherit SESSION_MANAGER.
+# The old .xinitrc backgrounded those clients BEFORE exec'ing xfce4-session, so
+# they raced the session manager and every one hit 'SESSION_MANAGER environment
+# variable not defined'. To find its Failsafe session xfce4-session needs
+# XDG_CONFIG_DIRS to include its own etc/xdg (holds xfce4-session.xml) and needs
+# xfconfd on the bus. Start xfconfd (a D-Bus service, no SM needed), point
+# XDG_CONFIG_DIRS at the session config, then exec the session manager alone.
+export XDG_CONFIG_DIRS="$SESSION/etc/xdg:$PANEL/etc/xdg:$SETTINGS/etc/xdg:$XFWM4/etc/xdg:/etc/xdg"
 "$XFCONF/lib/xfce4/xfconf/xfconfd" &
-"$XFWM4/bin/xfwm4" &
-"$PANEL/bin/xfce4-panel" &
-"$SETTINGS/bin/xfsettingsd" &
-"$XTERM/bin/xterm" -geometry 100x30 &
 exec "$SESSION/bin/xfce4-session"
 XINITEOF
   chmod 0755 "$RDROOT/home/solnix/.xinitrc"
@@ -1066,6 +1078,14 @@ sleep 8
 if [ ! -S /tmp/.X11-unix/X0 ]; then echo "[solnix] Xvfb failed to start (see /tmp/solnix-xvfb.log)"; fi
 # per-user XDG_RUNTIME_DIR (dbus/xfce want one it can create sockets in).
 mkdir -p /tmp/xdg-solnix && chown solnix /tmp/xdg-solnix 2>/dev/null; chmod 700 /tmp/xdg-solnix 2>/dev/null
+# The ICE library (xfce4-session's session manager) hard-wires its listener
+# socket under /tmp/.ICE-unix and refuses to create the dir as a non-root euid
+# ('_IceTransmkdir: euid != 0, /tmp/.ICE-unix will not be created' ->
+# '_IceTransMakeAllCOTSServerListeners: failed to open listener' -> the session
+# manager never exports SESSION_MANAGER -> every client warns). Pre-create it
+# (and .X11-unix) as root, world-writable+sticky (mode 1777) like /tmp normally
+# has, so ICE can bind its listener and SESSION_MANAGER comes up.
+mkdir -p /tmp/.ICE-unix /tmp/.X11-unix 2>/dev/null; chmod 1777 /tmp/.ICE-unix /tmp/.X11-unix 2>/dev/null
 # run the Xfce session AS the live user against that display (auto-login, no pw).
 # DISPLAY/XDG_RUNTIME_DIR are hard-exported via env (su - resets the environment)
 # and the session is started under dbus-run-session (the modern dbus-launch
@@ -1118,6 +1138,17 @@ PATH=/usr/sbin:/usr/bin:/sbin; export PATH
   echo "[solnix] SESSION-LOG-BEGIN"; tail -60 /tmp/solnix-x.log 2>/dev/null; echo "[solnix] SESSION-LOG-END"
   echo "[solnix] X socket:"; ls -la /tmp/.X11-unix 2>/dev/null
   echo "[solnix] X clients running?"; ps -ef 2>/dev/null | grep -E 'Xvfb|xfce|xterm|xfwm4|xfdesktop|dbus' | grep -v grep
+  # PERSISTENCE PROOF: snapshot AGAIN ~60s later. If xfce4-session (the session
+  # manager) + xfwm4 + xfce4-panel are still all present in this second ps, the
+  # live session held (didn't tear down after coming up).
+  sleep 60
+  echo "[solnix] SESSION-STILL-UP-CHECK (t+85s):"
+  ps -ef 2>/dev/null | grep -E 'xfce4-session|xfwm4|xfce4-panel|xfsettingsd|Xvfb' | grep -v grep
+  if ps -ef 2>/dev/null | grep -v grep | grep -q 'xfce4-sess'; then
+    echo "[solnix] SESSION-VERDICT: xfce4-session STILL RUNNING (session stayed up)"
+  else
+    echo "[solnix] SESSION-VERDICT: xfce4-session GONE (session exited)"
+  fi
 } > /dev/console 2>&1
 exit $SMF_EXIT_OK
 GMETHODEOF

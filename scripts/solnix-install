@@ -181,10 +181,11 @@ log "GPT-labelling $TARGET"
 # first transient miss.
 _label_ok=0
 for _try in 1 2 3 4 5; do
-  if run_to 60 zpool create -f solnixtmp "/dev/dsk/${TARGET}" >/dev/null 2>&1; then
-    _label_ok=1; break
-  fi
+  # capture the zpool error (was silenced) so a persistent failure is diagnosable
+  # from the serial log instead of only 'not settling'.
+  _zerr=$(run_to 60 zpool create -f solnixtmp "/dev/dsk/${TARGET}" 2>&1) && { _label_ok=1; break; }
   echo "clean EFI label attempt $_try failed; settling device + retrying" >&2
+  echo "  zpool create said: ${_zerr:-<no output>}" >&2
   zpool destroy solnixtmp 2>/dev/null || true
   devfsadm >/dev/null 2>&1 || true
   sync; sleep 3
