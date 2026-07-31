@@ -136,7 +136,10 @@
   # Signed with cache.solnix.io-1 (secret in secrets/cache-signing.yaml, sops).
   # Publish side: scripts/oi-cache-publish.sh. Verified: T2.3 gate fetched the
   # system-path closure through this URL into a fresh store with require-sigs.
-  nix.settings.substituters = [ "https://s3.solnix.io/solnix-cache" ];
+  # Read endpoint: the DB-backed cache service at cache.solnix.io (the flat
+  # s3.solnix.io/solnix-cache bucket is now only the publish/staging side; the
+  # authoritative substituter fronting the full history is cache.solnix.io).
+  nix.settings.substituters = [ "https://cache.solnix.io" ];
   nix.settings.trusted-public-keys = [
     "cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk="
   ];

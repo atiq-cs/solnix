@@ -9,7 +9,7 @@
 set -u
 export PATH=/nix-tools/bin:/usr/gnu/bin:/usr/bin:$PATH
 export NIX_CONF_DIR=/nix-tools/etc/nix
-CACHE=https://s3.solnix.io/solnix-cache
+CACHE=https://cache.solnix.io
 KEY="cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk="
 
 # BFS the closure via narinfo References (hash -> full path from StorePath line)
