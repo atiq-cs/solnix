@@ -788,6 +788,9 @@ if [ "$GRAPHICAL" = 1 ]; then
   #   libxml2       needs libicuuc.so.78 -> libicudata.so.78 (gtk XML path) -- transitive
   #     deps of staged host libs, themselves not directly NEEDED by any binary
   #     so the earlier walk missed them; ld.so.1 fails at reloc time otherwise.
+  #   dbus-daemon   needs libexpat.so.1 (XML_ParserCreate_MM) + libsmbios/libidmap;
+  #     all live under /usr/lib/64 which is a SYMLINK -> amd64, so COPY_DIRS only
+  #     archived the symlink, not the target files. cp -L stages real files here.
   _hostlibs="libXau.so.6 libXdmcp.so.6 libXfixes.so.1 libXRes.so.1 libX11.so.4
     libxshmfence.so.1 libdbus-1.so.3 libuuid.so.1 libxml2.so.16 libintl.so.1
     libfribidi.so.0 libthai.so.0 libcups.so.2 libexif.so.12 libbrotlidec.so.1
@@ -795,7 +798,8 @@ if [ "$GRAPHICAL" = 1 ]; then
     libsec.so.1
     libharfbuzz.so.0 libfontconfig.so.1 libXft.so.2 libSM.so.6 libXrender.so.1
     libbrotlicommon.so.1 libgraphite2.so.3 libdatrie.so.1 libicuuc.so.78
-    libicudata.so.78"
+    libicudata.so.78
+    libexpat.so.1 libsmbios.so.1 libidmap.so.1"
   # usr/lib/64 is a symlink -> amd64 on illumos; mkdir -p on an existing symlink
   # errors under set -e, so only mkdir when nothing is there, else write through.
   [ -e "$RDROOT/usr/lib/64" ] || mkdir -p "$RDROOT/usr/lib/64"
@@ -812,6 +816,70 @@ if [ "$GRAPHICAL" = 1 ]; then
       || echo "WARN: staging $_so had errors" >&2
   done
   log "GRAPHICAL: staged X11 transport libs ($_staged) into /usr/lib/64"
+
+  # D-BUS runtime (session bus). xfce4-session hard-requires a running session
+  # bus; the OI host ships dbus-daemon/dbus-run-session/dbus-send/dbus-uuidgen
+  # (all link only core-OS libs already in the live root) but NOT dbus-launch.
+  # Stage the host binaries into the live root, then (since dbus-launch is
+  # missing) drive the session with dbus-run-session AND drop a tiny dbus-launch
+  # shim (some tools shell out to it) that execs dbus-daemon --fork.
+  _dbus_bins="dbus-daemon dbus-run-session dbus-send dbus-uuidgen"
+  _dbstaged=""
+  mkdir -p "$RDROOT/usr/bin"
+  for _b in $_dbus_bins; do
+    _src=""
+    for _d in /usr/bin /usr/sbin /bin; do [ -x "$_d/$_b" ] && { _src="$_d/$_b"; break; }; done
+    [ -n "$_src" ] || { echo "WARN: host dbus binary not found: $_b" >&2; continue; }
+    ${GCP:-/usr/gnu/bin/cp} -L "$_src" "$RDROOT/usr/bin/$_b" 2>/dev/null \
+      && { chmod 0555 "$RDROOT/usr/bin/$_b"; _dbstaged="$_dbstaged $_b"; } \
+      || echo "WARN: staging dbus binary $_b had errors" >&2
+  done
+  # dbus-launch shim: the host lacks it and xfce4-session shells out to it; a
+  # 3-line wrapper around dbus-daemon --fork --print-address gives the same
+  # DBUS_SESSION_BUS_ADDRESS + PID output callers parse. dbus-run-session is the
+  # primary path (see launcher); this shim covers any stray dbus-launch call.
+  cat > "$RDROOT/usr/bin/dbus-launch" <<'DBLEOF'
+#!/bin/sh
+# minimal dbus-launch replacement (host lacks the real one). Start a session
+# bus via dbus-daemon and print the address (+ optional PID) as dbus-launch does.
+_out=$(/usr/bin/dbus-daemon --session --fork --print-address=1 --print-pid=2 2>/dev/null 3>&1)
+_addr=$(echo "$_out" | sed -n '1p'); _pid=$(echo "$_out" | sed -n '2p')
+[ -n "$_addr" ] || { echo "dbus-launch: failed to start dbus-daemon" >&2; exit 1; }
+echo "DBUS_SESSION_BUS_ADDRESS='$_addr';"
+echo "export DBUS_SESSION_BUS_ADDRESS;"
+echo "DBUS_SESSION_BUS_PID=${_pid};"
+DBLEOF
+  chmod 0555 "$RDROOT/usr/bin/dbus-launch"
+  log "GRAPHICAL: staged dbus binaries ($_dbstaged) + dbus-launch shim"
+
+  # /etc/machine-id: dbus refuses to spawn a bus without it ('Cannot spawn a
+  # message bus without a machine-id'). Seed a random 128-bit id at bake time
+  # and point /var/lib/dbus/machine-id at it (both paths dbus checks).
+  if [ -x "$RDROOT/usr/bin/dbus-uuidgen" ]; then
+    "$RDROOT/usr/bin/dbus-uuidgen" > "$RDROOT/etc/machine-id" 2>/dev/null || :
+  fi
+  # fallback / belt+braces: if dbus-uuidgen produced nothing, use urandom.
+  [ -s "$RDROOT/etc/machine-id" ] || \
+    od -An -tx1 -N16 /dev/urandom | tr -d ' \n' > "$RDROOT/etc/machine-id"
+  mkdir -p "$RDROOT/var/lib/dbus"
+  rm -f "$RDROOT/var/lib/dbus/machine-id" 2>/dev/null
+  ln -s /etc/machine-id "$RDROOT/var/lib/dbus/machine-id" 2>/dev/null || \
+    cp "$RDROOT/etc/machine-id" "$RDROOT/var/lib/dbus/machine-id" 2>/dev/null || :
+  log "GRAPHICAL: seeded /etc/machine-id ($(cat "$RDROOT/etc/machine-id" 2>/dev/null))"
+
+  # dbus config data: dbus-daemon reads /usr/share/dbus-1/session.conf (which
+  # includes /etc/dbus-1/session.d etc.) at startup; without it the bus won't
+  # spawn ('Failed to open .../session.conf'). Stage both dirs from the host.
+  for _dd in usr/share/dbus-1 etc/dbus-1; do
+    if [ -d "/$_dd" ]; then
+      mkdir -p "$RDROOT/$(dirname "$_dd")"
+      ( cd / && tar -cf - "$_dd" ) | ( cd "$RDROOT" && tar -xf - ) 2>/dev/null \
+        && log "GRAPHICAL: staged dbus config /$_dd" \
+        || echo "WARN: staging /$_dd had errors" >&2
+    else
+      echo "WARN: host dbus config dir /$_dd absent" >&2
+    fi
+  done
 
   # fonts: the closure has NO fonts and the OI host has none installed, so GTK
   # falls back to Xvfb's builtin bitmap fonts (fixed/cursor) -- proven usable in
@@ -888,13 +956,34 @@ if [ "$GRAPHICAL" = 1 ]; then
 #!/bin/sh
 # solnix live .xinitrc -- Xfce 4.18 session (software render).
 export PATH="$XFWM4/bin:$PANEL/bin:$SESSION/bin:$XFCONF/bin:$SETTINGS/bin:$THUNAR/bin:$XTERM/bin:$XKBCOMP/bin:/usr/bin:/usr/sbin:/sbin"
-export XKB_CONFIG_ROOT="$XKBCFG/share/X11/xkb"
 # full store lib search path (many desktop bins omit their own /lib from
 # RUNPATH; su - reset the env so set it here too). See GFX_LIBPATH build note.
 export LD_LIBRARY_PATH_64="$GFX_LIBPATH"
 export HOME=/home/solnix XDG_CONFIG_HOME=/tmp/solnix-xdg XDG_CACHE_HOME=/tmp/solnix-cache XDG_RUNTIME_DIR=/tmp/solnix-run
-mkdir -p "\$XDG_CONFIG_HOME" "\$XDG_CACHE_HOME" "\$XDG_RUNTIME_DIR" 2>/dev/null
+export XDG_DATA_HOME=/tmp/solnix-data
+mkdir -p "\$XDG_CONFIG_HOME" "\$XDG_CACHE_HOME" "\$XDG_RUNTIME_DIR" "\$XDG_DATA_HOME/.local/share" 2>/dev/null
 chmod 700 "\$XDG_RUNTIME_DIR" 2>/dev/null
+# Disable the AT-SPI accessibility bus: its org.a11y.Bus service (at-spi2) is not
+# in the closure, so every GTK client's spawn attempt fails and -- with the
+# broken C locale returning NULL D-Bus error strings -- trips a fatal GLib
+# 'Bail out!' assertion that tears the whole session down. GTK runs fine without
+# a11y once we tell it not to look.
+export NO_AT_BRIDGE=1 GTK_A11Y=none QT_ACCESSIBILITY=0 GTK_MODULES=
+# HOME (/home/solnix) is on the READ-ONLY ramdisk, so xfce4-session cannot write
+# ~/.ICEauthority -> the ICE session manager never starts -> every client fails
+# 'connect to the session manager' and xfconfd/panel/wm4 lose their bus names and
+# exit. Point ICE + X auth + HOME-ish dirs at the tmpfs XDG_RUNTIME_DIR so the
+# session manager can come up.
+export ICEAUTHORITY="\$XDG_RUNTIME_DIR/ICEauthority"
+export XAUTHORITY="\$XDG_RUNTIME_DIR/Xauthority"
+touch "\$ICEAUTHORITY" "\$XAUTHORITY" 2>/dev/null; chmod 600 "\$ICEAUTHORITY" "\$XAUTHORITY" 2>/dev/null
+# Force a UTF-8-safe C locale + filename encoding: Xlib/GLib have no locale data
+# here ('locale set to C', 'UTF-8 -> \"\" conversion not supported'), which was
+# producing NULL D-Bus error messages. Pin the charset so GLib stops choking.
+export LANG=C LC_ALL=C G_FILENAME_ENCODING=UTF-8 CHARSET=UTF-8
+export XKB_CONFIG_ROOT="$XKBCFG/share/X11/xkb"
+# DISPLAY must be set for every X client; su - can strip it, so default it here.
+: "\${DISPLAY:=:0}"; export DISPLAY
 "$XFCONF/lib/xfce4/xfconf/xfconfd" &
 "$XFWM4/bin/xfwm4" &
 "$PANEL/bin/xfce4-panel" &
@@ -958,13 +1047,30 @@ export XKB_CONFIG_ROOT=$XKBCFG/share/X11/xkb
 # whose package /lib is not in the binary RUNPATH (e.g. libxfce4panel) resolve.
 LD_LIBRARY_PATH_64=$GFX_LIBPATH; export LD_LIBRARY_PATH_64
 _disp=:0
+# Register socket families (esp. AF_UNIX -> /dev/ticotsord) so dbus-daemon can
+# open its session-bus unix socket. The minimal live root doesn't run the
+# network/socket-config SMF service, so soconfig must be invoked here; without
+# it dbus fails 'Failed to open socket: Address family not supported'.
+if [ -d /etc/sock2path.d ]; then
+  /sbin/soconfig -d /etc/sock2path.d 2>/dev/null || echo "[solnix] soconfig -d failed"
+fi
+# belt+braces: explicitly register AF_UNIX (family 1) transports in case the
+# dir load skipped them.
+/sbin/soconfig 1 2 0 /dev/ticotsord 2>/dev/null || true
+/sbin/soconfig 1 6 0 /dev/ticotsord 2>/dev/null || true
+/sbin/soconfig 1 1 0 /dev/ticlts 2>/dev/null || true
 # start the software framebuffer X server (Xvfb) detached.
 $XORGSRV/bin/Xvfb \$_disp -screen 0 1280x800x24 -ac -nolisten tcp >/tmp/solnix-xvfb.log 2>&1 &
 _xpid=\$!
 sleep 8
 if [ ! -S /tmp/.X11-unix/X0 ]; then echo "[solnix] Xvfb failed to start (see /tmp/solnix-xvfb.log)"; fi
+# per-user XDG_RUNTIME_DIR (dbus/xfce want one it can create sockets in).
+mkdir -p /tmp/xdg-solnix && chown solnix /tmp/xdg-solnix 2>/dev/null; chmod 700 /tmp/xdg-solnix 2>/dev/null
 # run the Xfce session AS the live user against that display (auto-login, no pw).
-su - solnix -c "DISPLAY=\$_disp HOME=/home/solnix /bin/sh /home/solnix/.xinitrc" >/tmp/solnix-x.log 2>&1 &
+# DISPLAY/XDG_RUNTIME_DIR are hard-exported via env (su - resets the environment)
+# and the session is started under dbus-run-session (the modern dbus-launch
+# replacement -- host lacks dbus-launch) so the session bus is up for xfconfd.
+su - solnix -c "env DISPLAY=\$_disp HOME=/home/solnix XDG_RUNTIME_DIR=/tmp/xdg-solnix /usr/bin/dbus-run-session -- /bin/sh /home/solnix/.xinitrc" >/tmp/solnix-x.log 2>&1 &
 echo "[solnix] live Xfce desktop launching on \$_disp (Xvfb pid \$_xpid); log /tmp/solnix-x.log"
 DTEOF
   chmod 0555 "$RDROOT/usr/sbin/solnix-live-desktop"
@@ -1004,11 +1110,14 @@ PATH=/usr/sbin:/usr/bin:/sbin; export PATH
   fi
   echo "[solnix] starting live Xfce desktop (Xvfb software framebuffer)..."
   /usr/sbin/solnix-live-desktop 2>&1 || echo "[solnix] desktop launcher returned non-zero"
-  sleep 6
+  # give xfce4-session time to spawn its children before snapshotting (the
+  # launcher's own Xvfb wait already elapsed; the session bus + xfwm4/panel come
+  # up a few seconds after su). Snapshot late so the ps below is meaningful.
+  sleep 25
   echo "[solnix] Xvfb log:";  tail -20 /tmp/solnix-xvfb.log 2>/dev/null
-  echo "[solnix] session log:"; tail -30 /tmp/solnix-x.log 2>/dev/null
+  echo "[solnix] SESSION-LOG-BEGIN"; tail -60 /tmp/solnix-x.log 2>/dev/null; echo "[solnix] SESSION-LOG-END"
   echo "[solnix] X socket:"; ls -la /tmp/.X11-unix 2>/dev/null
-  echo "[solnix] X clients running?"; ps -ef 2>/dev/null | grep -E 'Xvfb|xfce|xterm|xfwm4' | grep -v grep
+  echo "[solnix] X clients running?"; ps -ef 2>/dev/null | grep -E 'Xvfb|xfce|xterm|xfwm4|xfdesktop|dbus' | grep -v grep
 } > /dev/console 2>&1
 exit $SMF_EXIT_OK
 GMETHODEOF
