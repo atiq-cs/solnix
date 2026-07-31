@@ -29,3 +29,6 @@ artifacts/install-media/*graphical*.img
 /*.tar.xz
 /*.tar.bz2
 /*.tgz
+
+# live operational infra (builder IPs, hostnames, AMIs, keypair, SG) — never published
+/.infra/

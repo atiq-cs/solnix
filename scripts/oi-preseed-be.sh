@@ -42,7 +42,7 @@ ipadm create-addr -T dhcp -w 30 "$NIC/dhcp" 2>/dev/null || \
   ipadm create-addr -T dhcp "$NIC/v4" 2>/dev/null || true
 svcadm enable -s svc:/network/ssh:default 2>/dev/null || true
 # best-effort hostname
-hostname solnix-oi-build 2>/dev/null || true
+hostname solnix-builder-build 2>/dev/null || true
 EOS
 chmod +x "$BE/opt/solnix/firstboot.sh"
 

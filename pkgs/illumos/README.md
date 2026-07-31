@@ -352,11 +352,11 @@ ROOT_AUTHKEY=/root/.ssh/authorized_keys DISK=c1t1d0 <makeBeScript>
   `nix-store -q --tree` shows the whole graph; the builder asserts unix/genunix/
   svc.startd/libc/activate are all present.
 - **GATE T2.6 PASS** — the nixified make-be built an image → AMI
-  `ami-0f451a7429629ab46` → **5/5 booted to `svc:/milestone/multi-user-server`**
+  `<ami>` → **5/5 booted to `svc:/milestone/multi-user-server`**
   on m6i.large (`svcs -x` CLEAN; `/run-current-system` → the toplevel store
   path; DHCP + default route; cryptosvc + network/ssh online). Same bootable
   result as the hand recipe, from a config-driven builder. An earlier v1 AMI
-  `ami-0639fb184f218a519` also booted 5/5 (before the sshd→marker config tweak).
+  `<ami>` also booted 5/5 (before the sshd→marker config tweak).
 
 ## Modern compiler toolchains — GCC-14 + Clang-21 + GDB (host, gate ac45d71fc2)
 

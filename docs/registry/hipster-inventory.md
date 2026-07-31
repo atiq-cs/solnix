@@ -7,7 +7,7 @@ This is enumeration + analysis only (no builds).
 ## Source & method
 
 - **Publisher:** `openindiana.org` → `https://pkg.openindiana.org/hipster/`
-- **Build host:** `solnix-oi-build` (OpenIndiana Hipster, `illumos-960edb1c89`, i86pc).
+- **Build host:** `<keypair>-build` (OpenIndiana Hipster, `illumos-960edb1c89`, i86pc).
 - **Enumeration:** `pkg list -Haf "*"` (all forms, every published version) →
   50 288 rows → deduped to newest-per-name (`pkg` lists newest first within a
   name). **10 607 unique package names.**

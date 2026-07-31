@@ -70,14 +70,14 @@ QEMU-on-EC2 answers "where do we build/boot," not "does an OS exist to boot."
 
 Status: **substrate reality established + gate sourced (Tribblix m34 sparc
 recipe) + build attempt in flight.** Done on the persistent ouch account
-(us-east-2), host **ouch-w7-8** (solnix-oi-build, 3.142.68.35, 16 cores / ~107 GB
+(us-east-2), host **builder** (<keypair>-build, <builder-ip>, 16 cores / ~107 GB
 free, OI Hipster illumos-a28751f339). Every long op runs DETACHED via
 `scripts/oi-job.sh` (no blocking SSH). Assets: solnix.io cache + local
 `~/ws/solnix-archive/sparc/` ONLY — no AWS S3/ouch storage.
 
 ### S1.0 Host note (assigned hosts unusable; fell back to a warm w7 host)
 
-The task assigned **ouch-w8-11 / ouch-w8-12** (18.227.92.193 / 18.227.74.124).
+The task assigned **builder / builder** (<builder-ip> / <builder-ip>).
 Both were launched fresh at 2026-07-27T10:46Z and **never became SSH-reachable**:
 the console shows illumos boots to the login prompt, but guest DHCP fails —
 `/sbin/dhcpagent: configure_v4_lease: cannot set IP address on ena0: Cannot
@@ -86,7 +86,7 @@ AWS-side config is correct (main route table has the IGW 0.0.0.0/0 route; the
 single SG `solnix-ssh` allows my /32 on 22; source/dest-check aside). This is an
 in-guest network-plumbing failure on the fresh w8 AMI, not fixable without
 console/reboot (out of scope — do not terminate/reboot). Fell back to the
-already-warm **ouch-w7-8** (the aarch64-A3 host, 14 h uptime, known good) to make
+already-warm **builder** (the aarch64-A3 host, 14 h uptime, known good) to make
 progress. w8-11/12 left running & untouched for the maintainer to inspect.
 
 ### S1.1 THE governing reality: the SPARC gate build is NATIVE-only
@@ -259,7 +259,7 @@ The honest path forward, in order of leverage:
   attempt); zero blocking SSH.
 - solnix.io cache ONLY for assets (+ local archive); no AWS S3/ouch storage.
 - No git commit. Hosts not terminated. Assigned w8-11/12 left running for the
-  maintainer (their guest DHCP was broken; fell back to warm ouch-w7-8).
+  maintainer (their guest DHCP was broken; fell back to warm builder).
 
 Do NOT claim "sparc supported" until a sun4u kernel boots to an illumos
 milestone in qemu (steering rule).
@@ -496,8 +496,8 @@ question is RESOLVED (evidence below); a sparcv9 target-sysroot seed is extracte
 (libc/rtld/ld/sys/systemPath + gate) are built, RUNPATH-relocated, signed +
 published, and the libc is fetch-back-verified as EM_SPARCV9. Assets: solnix.io
 cache + local seed/archive stores ONLY (no AWS S3/ouch). Every long host op ran
-DETACHED via `scripts/oi-job.sh` (zero blocking SSH). Host ouch-n21
-(3.131.93.186). Not git-committed; hosts not terminated.
+DETACHED via `scripts/oi-job.sh` (zero blocking SSH). Host builder
+(<builder-ip>). Not git-committed; hosts not terminated.
 
 ### S2.0 RESOLVED: where does OI Hipster-on-sparc come from? — SELF-BUILT, no public OI sparc repo (evidence-based)
 
@@ -633,7 +633,7 @@ seed-aarch64), fetches the seed from solnix.io by SRI hash — built + verified
 
 `pkgs/illumos/sparc/{gate,default}.nix` (mirrors pkgs/illumos/aarch64/) ingest
 the sparc proto and slice the world. The proto (sparcv9 userland + sun4u kernel,
-183 MB) was extracted from the big-endian UFS, staged on ouch-n21 at
+183 MB) was extracted from the big-endian UFS, staged on builder at
 `/sparc/proto/root_sparc`. All six attrs built on the host (Nix 2.3.16,
 currentSystem x86_64-solaris; the slices are BIG-ENDIAN SPARC V9 ELF but the
 slicing + RUNPATH relocation runs cross on the amd64 host — the host illumos
@@ -681,7 +681,7 @@ AWS S3/ouch.
 - `oi-job.sh` detached+poll for every long host op (proto unpack, slice builds);
   publish ran backgrounded+polled locally. Zero blocking SSH held across a long op.
 - solnix.io cache + local seed/archive stores ONLY; no AWS S3/ouch storage.
-- No git commit. Hosts not terminated. ouch-n21 left running with
+- No git commit. Hosts not terminated. builder left running with
   `/sparc/proto/root_sparc` + the built+published slices in its store.
 
 ## S3 attempt 1 — QEMU sun4u boot ROOT CAUSE diagnosed (2026-07-27)

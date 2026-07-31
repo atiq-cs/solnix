@@ -27,9 +27,9 @@ OI_URL="https://dlc.openindiana.org/isos/hipster/20251026/OI-hipster-cloudimage.
 OI_VERSION="hipster-20251026"
 AMI_NAME="openindiana-${OI_VERSION}-ouch-$(date +%Y%m%d)"
 DATA_VOL_GB=20
-KEY_NAME="solnix-oi"
-SG_ID="sg-0da52f6d0000cb9c7"
-KEY="$HOME/.ssh/id_ed25519"          # ouch imported this same key as solnix-oi
+KEY_NAME="solnix-builder"
+SG_ID="<sg>"
+KEY="$HOME/.ssh/id_ed25519"          # ouch imported this same key as solnix-builder
 PUBKEY="$(cat "$HOME/.ssh/id_ed25519.pub")"
 EXPIRY="2026-08-02"
 ST=/tmp/ouch-base-ami.state          # tiny kv state so subcommands find each other
@@ -72,7 +72,7 @@ EOF
     --key-name "$KEY_NAME" --security-group-ids "$SG_ID" \
     --block-device-mappings "[{\"DeviceName\":\"/dev/xvdb\",\"Ebs\":{\"VolumeSize\":${DATA_VOL_GB},\"VolumeType\":\"gp3\",\"DeleteOnTermination\":false}}]" \
     --user-data "$USERDATA" \
-    --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=solnix-oi-import-ouch},{Key=Owner,Value=gregburd},{Key=Purpose,Value=solnix-dev},{Key=Expiry,Value=${EXPIRY}}]" \
+    --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=solnix-builder-import-ouch},{Key=Owner,Value=gregburd},{Key=Purpose,Value=solnix-dev},{Key=Expiry,Value=${EXPIRY}}]" \
     --output json)"
   DDIID="$(echo "$RUN" | jq -r '.Instances[0].InstanceId')"
   set_kv DDIID "$DDIID"
@@ -105,7 +105,7 @@ stage_seed() {
     --query 'Subnets[0].SubnetId' --output text)"
   RUN="$(aws ec2 run-instances --image-id "$UBU" --instance-type c5.large \
     --key-name "$KEY_NAME" --security-group-ids "$SG_ID" --subnet-id "$SUBNET" \
-    --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=solnix-oi-seed-ouch},{Key=Owner,Value=gregburd},{Key=Purpose,Value=solnix-dev},{Key=Expiry,Value=${EXPIRY}}]" \
+    --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=solnix-builder-seed-ouch},{Key=Owner,Value=gregburd},{Key=Purpose,Value=solnix-dev},{Key=Expiry,Value=${EXPIRY}}]" \
     --output json)"
   SEEDIID="$(echo "$RUN" | jq -r '.Instances[0].InstanceId')"
   set_kv SEEDIID "$SEEDIID"

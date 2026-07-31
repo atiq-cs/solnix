@@ -221,6 +221,6 @@ switch tools + beadm-ready pool):
 from the gate proto) — no slicing needed; the only fix was the pool
 mountpoint + menu.lst (gotcha #1).
 
-Artifacts: AMI `ami-036132346cc90bed0` (solnix-t2.5-generations-final),
+Artifacts: AMI `<ami>` (solnix-t2.5-generations-final),
 toplevel `83kwlmzs…-solnix-system-solnix`. Throwaway boot-test instances
 terminated.

@@ -35,6 +35,6 @@ fi
 [ -e /etc/nsswitch.conf ] || cp /etc/nsswitch.dns /etc/nsswitch.conf 2>/dev/null || true
 svcadm enable -s svc:/network/dns/client 2>&1 || true
 svcadm enable -s svc:/network/ssh:default 2>&1 || true
-hostname solnix-oi-build 2>/dev/null || true
+hostname solnix-builder-build 2>/dev/null || true
 echo "=== shim done $(date) ==="
 exit 0

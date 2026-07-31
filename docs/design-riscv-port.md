@@ -100,7 +100,7 @@ Two toolchains, two purposes:
   that will *later* be re-targeted to `riscv64-unknown-solaris2.11` once
   `uts/riscv` + a sysroot exist (the hard part — §3).
 
-  Status: **BUILT + VERIFIED** at `/export/riscv-toolchain` on ouch-w8-13
+  Status: **BUILT + VERIFIED** at `/export/riscv-toolchain` on builder
   (990 MB, 26 riscv64 tools): `riscv64-unknown-elf-gcc (GCC) 14.3.0`, GNU
   binutils 2.44, `-dumpmachine`=`riscv64-unknown-elf`, compiles C to `ELF 64-bit
   LSB relocatable RISC-V`; its `xgcc` built libgcc's riscv `save-restore.S` /
@@ -110,7 +110,7 @@ Two toolchains, two purposes:
   gettext fails on illumos (gnulib `getlocalename_l` conflict) → use 14.3.0 +
   strip in-tree gettext; (b) Solaris `/usr/bin/tar` mangles the gcc tarball's GNU
   pax headers → extract via python3 `tarfile`.
-  NOTE: the assigned host `ouch-w8-13` first came up network-impaired (ENA/DHCP:
+  NOTE: the assigned host `builder` first came up network-impaired (ENA/DHCP:
   `configure_v4_lease: cannot set IP address on ena0`); a `reboot-instances`
   cleared it (Inst=ok) — the orchestrator never blocked on the dead SSH, it did
   the offline deliverables (§2.2, §3–§6) while the host recovered. Not terminated.

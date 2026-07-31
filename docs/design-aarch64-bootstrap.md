@@ -7,8 +7,8 @@ QEMU-boot analysis, and (3) gives a concrete A2/A3/A4 plan mapped to our proven
 x86_64 recipes. Sources are cited inline (repos, IPD, commit dates). Honest
 about what is unmerged, unproven, and hard.
 
-Verified on 2026-07-25 against: the OI amd64 build host `solnix-oi-build`
-(illumos-960edb1c89, 16 cores / 64 GB, us-east-2 `i-01a55d152d2e59beb`), and
+Verified on 2026-07-25 against: the OI amd64 build host `<keypair>-build`
+(illumos-960edb1c89, 16 cores / 64 GB, us-east-2 `<instance>`), and
 live GitHub API queries.
 
 ---
@@ -37,7 +37,7 @@ live GitHub API queries.
   presents GICv3 + ACPI. So Graviton buys nothing over an x86 host for *booting*;
   it would only be a faster *build* host, and even that is not needed — the cross
   build runs on our amd64 illumos host and QEMU-TCG runs the guest anywhere.
-- **A2 started AND progressing** on `solnix-oi-build` (idle at the time; x86_64
+- **A2 started AND progressing** on `<keypair>-build` (idle at the time; x86_64
   gate untouched in a separate `/aarch64` tree). Harness cloned, bootstrap deps
   installed, **`make download` complete** (gate 1.15 GB + gcc 1.68 GB + u-boot +
   ATF + dtc + rpi fw + OmniOS aarch64 sysroot). **`make setup` well underway:**
@@ -206,7 +206,7 @@ ARM. Graviton therefore buys solnix nothing for *booting* aarch64 illumos.
 
 Mirror the x86_64 split exactly:
 
-- **Build host = amd64 illumos** (our existing `solnix-oi-build`, or a dedicated
+- **Build host = amd64 illumos** (our existing `<keypair>-build`, or a dedicated
   clone). The cross build is amd64-illumos-native — the same "native-anchored"
   reason from `design-build-strategy.md`: dmake/CTF/Solaris-ld are illumos
   binaries; only the *target* is aarch64. A Linux host cannot run this build.
@@ -390,7 +390,7 @@ ever).
 
 ## 5. A2 progress (this task)
 
-Started A2 on `solnix-oi-build` (idle at the time: load ~0.6, no nightly
+Started A2 on `<keypair>-build` (idle at the time: load ~0.6, no nightly
 running, 100 GB free; x86_64 gate at `/code/illumos-gate` left untouched — all
 aarch64 work isolated under `/aarch64`).
 
@@ -488,15 +488,15 @@ our host. A2 is underway.
 
 Status: **A3 DONE** (seed extracted, lib.systems wired + eval-verified, all
 aarch64 world slices built + signed + published + fetch-verified from
-solnix.io). Done on ouch (persistent account, us-east-2), host **ouch-w7-8**
-(3.142.68.35, i-02d180655d42f2d41; secondary hosts ouch-w7-6/w7-7 claimed but
+solnix.io). Done on ouch (persistent account, us-east-2), host **builder**
+(<builder-ip>, <instance>; secondary hosts builder/w7-7 claimed but
 were still SSH-warming — a single host sufficed for the exploratory integration).
 Every long host op ran DETACHED via `scripts/oi-job.sh` (no blocking SSH).
 Assets: solnix.io cache + local seed store ONLY — no AWS S3/ouch storage.
 
 ### 7.1 Proto restore (step 1) — DONE, kernel present
 
-Restored the archived aarch64 proto onto ouch-w7-8 by fetching it directly from
+Restored the archived aarch64 proto onto builder by fetching it directly from
 the solnix.io cache (host has read access; no scp needed):
 `https://s3.solnix.io/solnix-cache/archive/aarch64/aarch64-proto-73466454.tar.zst`
 → sha256 `b4c89fadde66db90936b98f403cb293358551590b2a9afbd61a75a684b23e3db`
@@ -584,7 +584,7 @@ New aarch64 slice expressions, MIRRORING `pkgs/illumos/{gate,default}.nix`:
   FOD (fetchurl from solnix.io + SRI above). Built + content-verified: unpacks to
   aarch64 `libc.so.1` (`ELF 64-bit ARM aarch64 (Solaris)`), ld.so.1, headers.
 
-Built on ouch-w7-8 (host Nix 2.3.16; the slicing/relocation runs on the amd64
+Built on builder (host Nix 2.3.16; the slicing/relocation runs on the amd64
 host, editing the aarch64 ELF's DT_RUNPATH via the HOST elfedit — mechanism is
 arch-independent). Store paths + RUNPATH relocation (all into the store, no host
 leak):
@@ -638,8 +638,8 @@ virtio-mmio/vioblk attach → ZFS root mount → devfsadm → SMF manifest-impor
 milestone/single-user → an interactive console maintenance prompt.** This far
 exceeds the A4 bar ("krtld / any recognizable milestone / a panic after krtld").
 
-Done on ouch (persistent, us-east-2), host **ouch-w7-8** (3.142.68.35,
-i-02d180655d42f2d41) — the host that already had the A3 proto restored. Every
+Done on ouch (persistent, us-east-2), host **builder** (<builder-ip>,
+<instance>) — the host that already had the A3 proto restored. Every
 long host op ran DETACHED via `scripts/oi-job.sh` (no blocking SSH). Assets:
 solnix.io cache + local host disk ONLY — no AWS S3/ouch storage. Artifacts under
 `artifacts/aarch64-a4/`.
@@ -760,7 +760,7 @@ boot path (u-boot + devicetree + loader64.efi + vioblk + ZFS) is proven.
 
 The cross gcc / `$CROSS` (the A4-blocker-1 from §7.5) is being rebuilt from the
 richlowe/arm64-gate harness (cloned fresh; the numa proto archive had only
-`proto/`, not the harness/`$CROSS`). Progress on ouch-w7-8, detached job
+`proto/`, not the harness/`$CROSS`). Progress on builder, detached job
 `aa-cross`:
 - `make download` COMPLETE (gate 1.21 GB, gcc, binutils-gdb, u-boot, ATF, dtc,
   perl, OmniOS braich sysroot).
@@ -801,8 +801,8 @@ Status: **A5 SUCCESS — the aarch64 illumos guest reaches
 gate (design-make-be.md §5), reached via a SERVICE-CONFIG fix (path a in the
 brief) — no `make illumos` / pkg-assembled image was needed.
 
-Done on ouch (persistent, us-east-2), host **ouch-w7-8** (3.142.68.35,
-i-02d180655d42f2d41) — the A4 host. Every long host op ran DETACHED (nohup +
+Done on ouch (persistent, us-east-2), host **builder** (<builder-ip>,
+<instance>) — the A4 host. Every long host op ran DETACHED (nohup +
 short-poll; no blocking SSH across a qemu boot — console captured to a logfile
 and polled). Assets: solnix.io cache + local host disk ONLY — no AWS S3/ouch.
 Artifacts under `artifacts/aarch64-a5/`.
@@ -938,7 +938,7 @@ primary A5 gate (multi-user-server) is met via console.
 
 ### 9.6 The "right way" completion route (documented, not required for A5)
 
-The cross gcc IS now finished on ouch-w7-8
+The cross gcc IS now finished on builder
 (`/aarch64/gate/arm64-gate/build/cross/bin/aarch64-unknown-solaris2.11-gcc`,
 `(GCC) 14.3.0`, all `make setup` stamps present: sysroot, binutils-gdb, sgs,
 boot-gcc, gcc, u-boot, atf, dtc, barn). The harness-style multi-user image
@@ -982,8 +982,8 @@ The image is built from a FULL `make illumos` nightly world proto + the genuinel
 EXTERNAL libs (libxml2/openssl from braich) + a full aarch64 OpenSSH — no A5
 load-bearing hand-injection into a restored proto.
 
-Done on ouch (persistent, us-east-2), host **ouch-w7-8** (3.142.68.35,
-`solnix-oi-build`, i86pc). Every long host op DETACHED (nohup -> logfile, poll);
+Done on ouch (persistent, us-east-2), host **builder** (<builder-ip>,
+`<keypair>-build`, i86pc). Every long host op DETACHED (nohup -> logfile, poll);
 never blocked SSH across the multi-hour build or a qemu boot (console -> socket/
 logfile, polled). Assets: solnix.io cache + local host disk ONLY — no AWS S3/ouch
 storage. Artifacts under `artifacts/aarch64-a6/`.
@@ -1155,7 +1155,7 @@ is python3.9-only, but the arm64-gate nightly packaging phase ran
 `ModuleNotFoundError: No module named 'pkg'`, so NO nightly IPS repo was produced
 and A6 had to hand-assemble the image. A7 closes it.
 
-Done on ouch (persistent, us-east-2), host **ouch-w7-8** (3.142.68.35). Every
+Done on ouch (persistent, us-east-2), host **builder** (<builder-ip>). Every
 long op detached (nohup → logfile, poll); never blocked SSH. Assets: solnix.io
 cache + local host disk ONLY — no AWS S3/ouch storage. Artifacts under
 `artifacts/aarch64-a7/`.
@@ -1289,7 +1289,7 @@ Status: **A8 SUCCESS — the clean `pkg image-create`-assembled aarch64 image BO
 to `multi-user-server`, SSH-in works, and `pkg list` shows the 34-package IPS
 image. aarch64 is FULLY QUALIFIED (clean pkg-image, ssh, pkg-functional).**
 
-Done on ouch (persistent, us-east-2), host **ouch-w7-8** (3.142.68.35). All long
+Done on ouch (persistent, us-east-2), host **builder** (<builder-ip>). All long
 ops detached (nohup → logfile / console-socket, poll; never blocked SSH). Assets:
 solnix.io cache + local host disk ONLY — no AWS S3/ouch storage. Artifacts under
 `artifacts/aarch64-a8/`.

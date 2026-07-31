@@ -6,14 +6,14 @@ Where and how solnix work happens. Always-on operational context.
 
 | Host | Role | Notes |
 |------|------|-------|
-| **AWS EC2 (`numa` profile)** | Primary dev + build substrate | Account `713545428937`, region **us-east-2**. Burner dev account, no cost concerns — but still terminate idle instances (hygiene, not thrift). |
+| **AWS EC2 (`numa` profile)** | Primary dev + build substrate | Account `<ACCOUNT-REDACTED>`, region **us-east-2**. Burner dev account, no cost concerns — but still terminate idle instances (hygiene, not thrift). |
 | **Maintainer's Sun UltraSPARC (home)** | SPARCv9 boot-test hardware | Runs OpenIndiana Hipster 2025.06 (illumos-31d3d510d0). For Phase 4 only. |
 
 ## AWS access
 
 ```bash
 export AWS_PROFILE=numa            # static creds in ~/.aws/credentials, region us-east-2
-aws sts get-caller-identity        # expect user/numa, account 713545428937
+aws sts get-caller-identity        # expect user/numa, account <ACCOUNT-REDACTED>
 ```
 
 If creds expire, refresh per `~/.kiro/steering/aws-builder.md` (Isengard/ada) —

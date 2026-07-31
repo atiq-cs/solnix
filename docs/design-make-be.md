@@ -9,7 +9,7 @@ working recipe + every boot gotcha found.
 
 **T2.2 DONE** — `svcs -x` is now CLEAN (0 in maintenance) and **interactive
 `ssh root@<solnix-ip>` login works** from a dev box (evidence:
-`artifacts/phase2-ssh/gate-a-b-evidence.txt`; AMI `ami-0e94f12f2d0a6d37a`). See
+`artifacts/phase2-ssh/gate-a-b-evidence.txt`; AMI `<ami>`). See
 gotchas #11–#16 for the crypto race + OpenSSH + ena/ifconfig fixes.
 
 Maps to roadmap T1.13–T1.16b (make-be + boot to multi-user-server milestone).
@@ -236,7 +236,7 @@ reached online regardless. **T2.2 UPDATE: all now resolved — `svcs -x` is CLEA
 - ~~**Intermittent early-kernel TSC hang (~50%)**~~ **RESOLVED (T2.1):** the
   diagnostic PIT run (`tsc_pit_also` → `freq_tsc_pit`) spun on the KVM-emulated
   8254; fixed by defaulting `pit_is_broken=1` in `tscc_pit.c` (gotcha #10).
-  Batch-measured 40% → 100% on m6i.large. AMI `ami-0e215d9b018112964`.
+  Batch-measured 40% → 100% on m6i.large. AMI `<ami>`.
   Boot-hang batch-test helper: `scripts/oi-boot-batch.sh` (launch N, parse
   console for the multi-user-server milestone, report N/M, terminate).
 - ~~Clean up the 5 peripheral maintenance services~~ **DONE (T2.2):** `svcs -x`
@@ -251,7 +251,7 @@ reached online regardless. **T2.2 UPDATE: all now resolved — `svcs -x` is CLEA
   — `lib/make-be.nix` emits a store-resident assembly script parameterized by a
   T2.8 `system.build.toplevel`; run as root on the host it produces the same
   bootable BE. Batch-booted 5/5 to multi-user-server from the nixified builder
-  (AMI `ami-0f451a7429629ab46`); `svcs -x` clean; the running system's
+  (AMI `<ami>`); `svcs -x` clean; the running system's
   `/run-current-system` points at the toplevel store path. See §7 (eval-split).
 - External libs + non-DEBUG kernel: fold into `pkgs.illumos.gate` (build
   non-DEBUG proto; the gate FOD should use `bldenv +d`).
@@ -343,8 +343,8 @@ hand-written ones where the toplevel provides them), symlinks
 `/run-current-system` → the toplevel, and DTD-validates every staged manifest.
 
 GATE T2.6 result: image built by the nixified script → AMI
-`ami-0f451a7429629ab46` → **5/5 booted to `multi-user-server` on m6i.large**
-(two batches, 10/10 total across `ami-0639fb184f218a519` + the v2 AMI); serial
+`<ami>` → **5/5 booted to `multi-user-server` on m6i.large**
+(two batches, 10/10 total across `<ami>` + the v2 AMI); serial
 console shows `svcs -x` CLEAN, the toplevel store path at `/run-current-system`,
 DHCP address + default route, `cryptosvc`+`network/ssh` online. The
 config-generated `site/solnix-marker` transient service imports and reaches

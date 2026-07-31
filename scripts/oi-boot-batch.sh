@@ -23,7 +23,7 @@ ITYPE="${ITYPE:-m6i.large}"
 WAIT="${WAIT:-300}"
 KEEP="${KEEP:-0}"
 SUBNET="${SUBNET:-subnet-08627f3be3da35553}"
-SG="${SG:-sg-06d7b829bb2ac37f1}"
+SG="${SG:-<sg>}"
 EXPIRY="$(date -d '+2 days' +%Y-%m-%d 2>/dev/null || date -v+2d +%Y-%m-%d)"
 
 # The gate milestone string in the serial console when boot succeeds:

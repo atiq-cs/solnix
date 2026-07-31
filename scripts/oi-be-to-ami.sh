@@ -43,6 +43,6 @@ echo
 echo "AMI registered: $AMI_ID (snapshot $SNAP_ID)"
 echo "Launch (Nitro, uefi) + capture serial console:"
 echo "  aws ec2 run-instances --region $REGION --image-id $AMI_ID --instance-type m6i.large \\"
-echo "    --key-name solnix-oi --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=solnix-test},{Key=Owner,Value=gregburd},{Key=Purpose,Value=solnix-dev},{Key=Expiry,Value=$EXPIRY}]'"
+echo "    --key-name solnix-builder --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=solnix-test},{Key=Owner,Value=gregburd},{Key=Purpose,Value=solnix-dev},{Key=Expiry,Value=$EXPIRY}]'"
 echo "  # then, repeatedly:"
 echo "  aws ec2 get-console-output --region $REGION --instance-id <iid> --output text"

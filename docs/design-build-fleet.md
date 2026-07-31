@@ -1,18 +1,19 @@
 # Parallel package-build fleet
 
-How solnix builds the registry (thousands of packages) fast, using the numa
-account's headroom (~1024 vCPU, cost-free burner). Aggressive parallelism is the
+How solnix builds the registry (thousands of packages) fast, using the build
+account's headroom (large vCPU quota, cost-free burner). Aggressive parallelism is the
 right call here.
 
 ## Topology
 
-- **Builder AMI (`solnix-builder`):** a snapshot of the `solnix-build` OI host
+- **Builder image (`solnix-builder`):** a snapshot of the `solnix-build` OI host
   once it carries Nix + the world slices + the modern toolchains (gcc-14 +
   clang). Fleet hosts launch from this — a full illumos+Nix build environment,
   reproducible, no hand setup.
-- **Fleet:** N large illumos builders (`m6i.8xlarge` = 32 vCPU each; scale count
-  for throughput). `scripts/oi-builder-fleet.sh up N`. Use `m6i.*` (ena + EBS);
-  NOT instance-store/Nitro-v5+ (illumos won't boot those). The AMI carries the
+- **Fleet:** N large illumos builders (~32 vCPU each; scale count
+  for throughput). `scripts/oi-builder-fleet.sh up N`. Use an EBS-backed type
+  with the paravirt net driver; NOT instance-store/newer-hypervisor types
+  (illumos won't boot those). The image carries the
   `pit_is_broken` fix so boots are reliable.
 - **Shared cache is the coordination point:** every builder pulls the base world
   + toolchains + already-built deps FROM `https://s3.solnix.io/solnix-cache`
@@ -72,9 +73,9 @@ then: m6i.4xlarge, scale by count.
 
 ~37% of freshly-launched builders (17/46 in one batch) come up port-22-filtered /
 SSH-dead — the OI cloud-image first-boot flakiness at scale (metadata-agent IMDSv1
-hang and/or ENA/DHCP race on Nitro). Impact: wasted instances + capacity
+hang and/or paravirt-net/DHCP race). Impact: wasted instances + capacity
 miscount. Handling: (1) launch +30-40% over target and reap the dead (interim);
 (2) fleet capacity = SSH-able count, not launched count; (3) DURABLE: rebuild the
-builder AMI with a hardened first-boot (metadata-shim baked in + a boot settle/
-retry + ENA/DHCP ordering) so first-boot is reliable. Agents MUST skip unreachable
-hosts without blocking (they do). TODO: harden the AMI first-boot (PS-7-adjacent).
+builder image with a hardened first-boot (metadata-shim baked in + a boot settle/
+retry + net/DHCP ordering) so first-boot is reliable. Agents MUST skip unreachable
+hosts without blocking (they do). TODO: harden the image first-boot (PS-7-adjacent).

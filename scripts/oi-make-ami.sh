@@ -35,7 +35,7 @@ aws sts get-caller-identity --region "$REGION" --output text \
   --query 'Arn' | grep -Eq ':user/(numa|ouch)' || { echo "wrong account/profile"; exit 1; }
 
 # --- key pair -----------------------------------------------------------------
-KEY_NAME="solnix-oi"
+KEY_NAME="solnix-builder"
 KEY_FILE="$HOME/.ssh/${KEY_NAME}.pem"
 if ! aws ec2 describe-key-pairs --region "$REGION" --key-names "$KEY_NAME" >/dev/null 2>&1; then
   log "creating key pair $KEY_NAME"
@@ -96,7 +96,7 @@ RUN_JSON="$(aws ec2 run-instances --region "$REGION" \
   --key-name "$KEY_NAME" --security-group-ids "$SG_ID" \
   --block-device-mappings "[{\"DeviceName\":\"/dev/xvdb\",\"Ebs\":{\"VolumeSize\":${DATA_VOL_GB},\"VolumeType\":\"gp3\",\"DeleteOnTermination\":false}}]" \
   --user-data "$USERDATA" \
-  --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=solnix-oi-import},{Key=Owner,Value=gregburd},{Key=Purpose,Value=solnix-dev},{Key=Expiry,Value=${EXPIRY}}]" \
+  --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=solnix-builder-import},{Key=Owner,Value=gregburd},{Key=Purpose,Value=solnix-dev},{Key=Expiry,Value=${EXPIRY}}]" \
   --output json)"
 IID="$(echo "$RUN_JSON" | jq -r '.Instances[0].InstanceId')"
 log "helper instance: $IID — waiting for OI image write to finish (several min)"
@@ -142,7 +142,7 @@ echo "INSTANCE_ID=$IID"
 # so the agent doesn't offer the wrong key first / no password popup).
 #
 # Working build host as of first run:
-#   base AMI (boots, no login):     ami-042e009635e7af4b7
-#   seeded Xen AMI (loginnable):    ami-0d36d9529e928f931
+#   base AMI (boots, no login):     <ami>
+#   seeded Xen AMI (loginnable):    <ami>
 #   instance type:                  m4.large (Xen HVM, xnf0 NIC)
 # =============================================================================

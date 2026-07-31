@@ -18,7 +18,13 @@ SSH() { ./scripts/oi-ssh.sh "$@"; }
 HOST_ENV='export PATH=/nix-tools/bin:/usr/gnu/bin:/usr/bin:/usr/sbin; export NIX_CONF_DIR=/nix-tools/etc/nix;'
 REMOTE=/var/tmp/solnix-pkgs
 
-FLEET_IPS=(18.188.11.117 18.226.58.142 18.227.80.34 3.22.168.45 3.134.97.192)
+# Fleet host IPs come from the gitignored .infra/fleet.env (BUILDER_IPS) so they
+# stay out of the published tree. Fall back to sourcing it if not already set.
+if [ -z "${FLEET_IPS:-}" ]; then
+  _INFRA="$REPO/.infra/fleet.env"
+  [ -f "$_INFRA" ] && . "$_INFRA"
+  read -r -a FLEET_IPS <<< "${BUILDER_IPS:-}"
+fi
 
 sync_one() {
   local IP="$1"

@@ -178,6 +178,6 @@ On the running solnix keeper (ena NIC, DHCP up):
   ena path.
 
 Full image build+boot from this toplevel via `lib/make-be.nix` is the same flow
-already gate-proven in T2.6 (`ami-0f451a7429629ab46`, 10/10 boots); the T2.9
+already gate-proven in T2.6 (`<ami>`, 10/10 boots); the T2.9
 change is confined to the config-generated `/etc` + `site/solnix-net` the toplevel
 now carries, both verified above.
