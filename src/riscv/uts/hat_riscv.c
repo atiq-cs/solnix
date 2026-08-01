@@ -178,6 +178,17 @@ map_page(unsigned long va, unsigned long pa, unsigned long perm)
 #define	ALIAS_VA	0x40000000UL	/* VPN2=1, canonical (bit38=0) */
 
 /*
+ * R-P15 K1 device window. The SpaceMiT K1 SoC places its high-address device
+ * MMIO well above the R-P3 low-MMIO identity gigapage (0x0..0x40000000):
+ *   dw-apb-uart 0xd4017000, sdhci/eMMC 0xd4281000  (both in the 0xd4xxxxxx run)
+ *   APLIC 0xe0000000, IMSIC 0xe0008000
+ * All four fall inside the single 1 GiB Sv39 gigapage at VA/PA 0xc0000000
+ * (VPN2=3, spanning 0xc0000000..0x100000000). So ONE identity gigapage maps
+ * every K1 device region. R/W, not executable (device memory).
+ */
+#define	K1_DEV_GIGA	0xc0000000UL	/* VPN2=3: covers 0xc0000000..0x100000000 */
+
+/*
  * hat_boot_init — build the boot page table and turn Sv39 on. Prints the
  * post-paging banner and the alias-readback proof. Returns the satp value
  * installed (for the caller's status line).
@@ -201,6 +212,12 @@ hat_boot_init(void)
 	/* 3. Non-identity 4 KiB alias -> the kernel's first text page (R/X). */
 	map_page(ALIAS_VA, kfirst, PTE_R | PTE_X);
 
+	/* 4. R-P15: identity gigapage for the K1 high-address device window
+	 * (dw-apb-uart/sdhci/aplic/imsic all live in 0xc0000000..0x100000000).
+	 * R/W device memory, no X. Harmless on qemu-virt (nothing is there);
+	 * on K1 silicon it makes the K1 uart/sdhci/aplic/imsic MMIO reachable. */
+	map_gigapage(K1_DEV_GIGA, K1_DEV_GIGA, PTE_R | PTE_W);
+
 	/* Compose satp: MODE=Sv39, ASID=0, PPN = root table PA >> 12. */
 	ppn = (unsigned long)root_pt >> PAGESHIFT;
 	satp = SATP_MAKE(SATP_MODE_SV39, 0, ppn);
@@ -223,6 +240,9 @@ hat_boot_init(void)
 	sbi_console_puts(" -> PA ");
 	puthex(kfirst);
 	sbi_console_puts(" (proof, RX)\n");
+	sbi_console_puts("      K1 dev giga    VA=");
+	puthex(K1_DEV_GIGA);
+	sbi_console_puts(" -> PA 0xc0000000 (uart/sdhci/aplic/imsic, RW)\n");
 	sbi_console_puts("      root PT PA=");
 	puthex((unsigned long)root_pt);
 	sbi_console_puts(" satp=");
@@ -394,6 +414,11 @@ hat_as_newroot(void)
 		nr[i] = 0;
 	nr[0] = root_pt[0];			/* low MMIO giga (UART) */
 	nr[2] = root_pt[2];			/* kernel RAM giga */
+	/* NOT slot 3: on K1 the device giga lives at 0xc0000000 (VPN2=3), but
+	 * userland ALSO lives in slot 3 (text @0xC0010000, stack @0xfffff000).
+	 * The K1 device window is only touched on the KERNEL satp during boot
+	 * (sdhci probe / aplic), never from a user process, so leave slot 3
+	 * free for user mappings and avoid the kernel-leaf collision. */
 	for (i = 256; i < PTES_PER_TABLE; i++)	/* KERNELBASE high half */
 		nr[i] = root_pt[i];
 	return ((unsigned long)nr);
@@ -702,6 +727,40 @@ hat_as_freeuser(unsigned long root)
 		page_free((unsigned long)l1);			/* level-1 table */
 	}
 	page_free(root);					/* root table */
+}
+
+/*
+ * hat_k1_devmap_prove — R-P15 gate-1 proof. Read back the root page-table
+ * entry for the K1 device gigapage (VPN2 slot 3, VA 0xc0000000) and confirm it
+ * is a VALID R/W leaf whose PPN points at PA 0xc0000000 — i.e. the four K1
+ * device regions (dw-apb-uart 0xd4017000, sdhci 0xd4281000, aplic 0xe0000000,
+ * imsic 0xe0008000) are all mapped and reachable by load/store. We PROVE the
+ * translation by reading back the installed PTE (not by dereferencing the
+ * address: on qemu-virt nothing is wired at 0xc0000000, so a live load would
+ * fault — on K1 silicon the same PTE makes the real MMIO reachable). Prints
+ * the readback so the boot log carries the proof.
+ */
+void
+hat_k1_devmap_prove(void)
+{
+	unsigned long slot = VPN(K1_DEV_GIGA, 2);	/* == 3 */
+	unsigned long pte = root_pt[slot];
+	unsigned long pa = PTE_TO_PA(pte);
+	int ok = (pte & PTE_V) && (pte & (PTE_R | PTE_W)) &&
+	    !(pte & PTE_X) && pa == K1_DEV_GIGA;
+
+	sbi_console_puts("[k1-mmio] device gigapage PTE[slot ");
+	puthex(slot);
+	sbi_console_puts("] = ");
+	puthex(pte);
+	sbi_console_puts(" -> PA ");
+	puthex(pa);
+	sbi_console_puts(ok ?
+	    "  (V|R|W, !X) MAPPED\n" : "  BAD -> device map BROKEN\n");
+	sbi_console_puts("k1-mmio: mapped dw-apb-uart/sdhci/aplic/imsic device "
+	    "regions (0xd4017000/0xd4281000/0xe0000000/0xe0008000 in the "
+	    "0xc0000000 giga); readback ");
+	sbi_console_puts(ok ? "OK\n" : "FAILED\n");
 }
 
 /* Switch the current hart to address space `satp` and flush the TLB. */

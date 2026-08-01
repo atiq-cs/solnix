@@ -354,6 +354,27 @@ sdmodel_wr(unsigned int off, unsigned int val, int width)
 static unsigned long sdhci_base;
 static int sdhci_use_model;
 
+/*
+ * Runtime board-detect (R-P16): one image boots BOTH qemu-virt and physical
+ * K1. sdhci_platform_k1 records whether we detected real K1 silicon (from the
+ * boot DTB in startup.c — see sdhci_set_platform), so the driver targets live
+ * MMIO on the board and the faithful in-kernel model under qemu-virt, WITHOUT
+ * a recompile. -1 = not yet detected. K1_SILICON, if defined, forces silicon
+ * (a build-time override for a board whose firmware DTB omits a signature
+ * device); with it undefined the decision is 100% runtime.
+ */
+static int sdhci_platform_k1 = -1;
+
+/*
+ * sdhci_set_platform — called once from startup after board detection.
+ * is_k1 != 0 => real K1 silicon (live MMIO); 0 => qemu-virt (faithful model).
+ */
+void
+sdhci_set_platform(int is_k1)
+{
+	sdhci_platform_k1 = is_k1 ? 1 : 0;
+}
+
 static inline unsigned int
 mmio_rd(unsigned int off, int width)
 {
@@ -571,19 +592,22 @@ sdhci_probe(unsigned long base)
 
 	sdhci_base = base;
 	/*
-	 * Pick the MMIO backend. On qemu-virt there is NO SDHCI wired at the K1
-	 * base, so route to the faithful model (marked). On real K1 silicon the
-	 * base holds a live dwcmshc-sdhci and we touch real MMIO. We choose the
-	 * model whenever the base is the K1 device window (which under qemu-virt
-	 * reads back 0) — the on-silicon run flips sdhci_use_model to 0 via the
-	 * K1_SILICON build define below. This is the ONE honest emulation seam.
+	 * Pick the MMIO backend at RUNTIME (R-P16 board-detect). On qemu-virt
+	 * there is NO SDHCI wired at the K1 base, so route to the faithful model
+	 * (marked). On real K1 silicon the base holds a live dwcmshc-sdhci and we
+	 * touch real MMIO. sdhci_platform_k1 is set by sdhci_set_platform() from
+	 * the boot DTB the firmware handed us (fdt_k1_summary): the same `unix`
+	 * image flips itself to live MMIO on the board and to the model under
+	 * qemu — no -DK1_SILICON recompile. This is the ONE honest emulation seam.
 	 */
 #ifdef K1_SILICON
-	sdhci_use_model = 0;	/* real board: live MMIO at 0xd4281000 */
+	sdhci_use_model = 0;	/* build override: force live MMIO */
 #else
-	sdhci_use_model = 1;	/* qemu-virt: no SDHCI here -> faithful model */
-	sdmodel_reset();
+	/* Default: undetected (-1) is treated as NOT-K1 (qemu-virt) -> model. */
+	sdhci_use_model = (sdhci_platform_k1 == 1) ? 0 : 1;
 #endif
+	if (sdhci_use_model)
+		sdmodel_reset();
 
 	sbi_console_puts("[sdhci] probe @");
 	kputhex(base);
@@ -647,19 +671,20 @@ sdhci_probe(unsigned long base)
 	return (1);
 }
 
-#ifndef K1_SILICON
 /*
  * sdhci_model_selftest — one runnable check that the driver logic is sound:
  * drive the full CMD0/8/ACMD41/2/3/7 + CMD17 path against the model and assert
  * the card came up SDHC and sector 0 carries the 0x55aa MBR signature. Fails
- * loudly on the console if the state machine breaks. (Kept small; the real
- * proof is the sdhci_probe banner in the boot log.)
+ * loudly on the console if the state machine breaks. Always compiled in (it is
+ * a model-backed unit check, independent of the runtime platform); the real
+ * on-hardware proof is the sdhci_probe banner in the boot log.
  */
 void
 sdhci_model_selftest(void)
 {
 	unsigned char sec0[SECTOR_SIZE];
 	int ok;
+	int save_platform = sdhci_platform_k1;
 
 	sdhci_base = 0xd4281000UL;	/* K1 base; model backs it here */
 	sdhci_use_model = 1;
@@ -671,9 +696,9 @@ sdhci_model_selftest(void)
 	    mmc_read_sector(0, sec0) &&
 	    sec0[510] == 0x55 && sec0[511] == 0xaa;
 
+	sdhci_platform_k1 = save_platform;	/* selftest must not perturb detect */
 	sbi_console_puts("[sdhci] model selftest: ");
 	sbi_console_puts(ok ?
 	    "PASS (CMD0/8/ACMD41/2/3/7 init + CMD17 sector0 0x55aa)\n" :
 	    "FAIL (driver state machine broke)\n");
 }
-#endif

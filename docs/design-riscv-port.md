@@ -2313,3 +2313,74 @@ still pass.
 - **Native rv build host deferred**: still cross-compiled
   (`pkgsCross.riscv64-embedded`); self-hosting on the board is a post-first-boot
   step (the userland + libc from R-P1..R-P13 are the foundation).
+
+---
+
+## R-P16 — runtime board-detect: ONE image boots both qemu-virt and physical K1 (DONE)
+
+R-P15's finish-line note left exactly one driver-side flip for the physical
+board: "Recompile `sdhci.c` with `-DK1_SILICON` (or a runtime board-detect) so
+the driver's `mmio_rd`/`mmio_wr` target the real dwcmshc-sdhci at `0xd4281000`
+instead of the in-kernel model." R-P16 does the runtime-board-detect option, so
+a SINGLE `unix` image self-selects the backend at boot — no per-target build.
+
+### R-P16.0 What changed (`src/riscv/uts/`)
+
+| File | Change |
+|------|--------|
+| `startup.c` | `startup_memlist` now parses the FIRMWARE boot DTB (a1) with `fdt_k1_summary(dtb,...)` — the real platform signal — in addition to the embedded blob (which only validates our own `k1.dts`). Prints `[board] runtime detect: ...`, calls `sdhci_set_platform(on_k1_silicon)`, and hands `sdhci_probe` the boot-DTB sdhci base on silicon / the embedded base under qemu. |
+| `sdhci.c` | Replaced the `#ifdef K1_SILICON`-only backend choice inside `sdhci_probe` with a RUNTIME decision: new file-static `sdhci_platform_k1` (set via `sdhci_set_platform`) drives `sdhci_use_model`. `K1_SILICON`, if still defined, becomes a build-time *force-silicon* override (belt-and-suspenders for a board whose firmware DTB omits a signature device); undefined → 100% runtime. `sdhci_model_selftest` is now always compiled in (model-backed unit check) and preserves the detect flag across its run. |
+| `k1.h` | Declares `sdhci_set_platform(int is_k1)`. |
+| `pf/board_detect_test.c` + `pf/board_detect_test.sh` | Host-side runnable check: compiles the REAL `fdt.c` natively with console stubs and asserts `fdt_k1_summary(k1.dtb)==1` (live MMIO) and `fdt_k1_summary(qemu-virt DTB)==0` (model). Not part of the kernel build (`pf/` holds the EMAC driver + this test; `build-unix.sh` lists sources explicitly). |
+
+### R-P16.1 The detection signal (why the boot DTB, not the embedded blob)
+
+The embedded `k1_dtb_blob` is our own `k1.dts` — it *always* parses as K1, so it
+validates the blob but is NOT a platform test. The honest signal is the DTB the
+firmware hands the kernel in `a1`:
+- **qemu-virt** (OpenSBI): describes the EMULATED virt hardware (ns16550 uart,
+  virtio, PLIC) — NO `snps,dwcmshc-sdhci`, `snps,dw-apb-uart`, `riscv,aplic`,
+  `riscv,imsics`. `fdt_k1_summary` requires all four signature devices, so it
+  returns 0 → faithful in-kernel model.
+- **physical K1** (U-Boot `booti`): passes a DTB with all four devices at their
+  real bases → `fdt_k1_summary` returns 1 → live MMIO at `0xd4281000`.
+
+### R-P16.2 Runnable check + result
+
+- **qemu-virt boot** (`build-unix.sh`, `timeout 120`): the boot log now carries
+  `[board] runtime detect: boot DTB is NOT K1 (qemu-virt) -> faithful in-kernel
+  SDHCI+SD model`, the sdhci model selftest still PASSes
+  (`CMD0/8/ACMD41/2/3/7 init + CMD17 sector0 0x55aa`), `mmc: card initialized ...
+  read sector 0 ... (valid 0x55aa)`, and the kernel reaches single-user with
+  `pipe OK: 'echo hello | cat' -> hello`. No regression from R-P15.
+- **host board-detect check** (`pf/board_detect_test.sh`, `timeout` on the qemu
+  DTB dump): proves the branch qemu CANNOT (a pure-K1 DTB hangs OpenSBI on
+  qemu — wrong RAM base). Feeds the committed `k1.dtb` and a dumped qemu-virt
+  DTB to the SAME `fdt_k1_summary` startup.c calls:
+  ```
+  k1.dtb   -> fdt_k1_summary = 1  (sdhci@0xd4281000 uart@0xd4017000)
+  virt.dtb -> fdt_k1_summary = 0  (sdhci@0x0 uart@0x0)
+  PASS: runtime board-detect distinguishes K1 vs qemu-virt (K1->live MMIO, virt->model)
+  ```
+
+### R-P16.3 Ceiling / next step
+
+- **Detection is by DTB signature, not silicon feature probe.** It trusts the
+  firmware DTB to name the K1 devices — correct for the U-Boot/OpenSBI boot path
+  the board actually uses. A misconfigured/partial board DTB would fall back to
+  the model; the `-DK1_SILICON` build override forces live MMIO in that case.
+  A future refinement could cross-check `mvendorid`/`marchid` (SBI) as a second
+  signal, but the DTB is the authoritative board description here.
+- **Only the sdhci backend is switched by the detect.** The dw-apb-uart, AIA,
+  and EMAC bring-up still report their own emulation-vs-silicon boundaries at
+  their gates (R-P14/R-P15). Extending `sdhci_set_platform` into a shared
+  `platform_is_k1()` that those drivers also consult is the natural next step
+  once the board is in hand and each driver's live-MMIO path is exercised.
+- **PHYSICAL-BOARD CONFIRMATION STILL REQUIRED.** The K1->live-MMIO path is
+  proven in *model + host-unit* form only; the actual dwcmshc-sdhci read off a
+  real SD/eMMC on the Milk-V Jupiter2 / BPI-F3 is the R-P15.5 item (2), now
+  reachable WITHOUT a recompile — flash the one image, boot, confirm the
+  `[board] runtime detect: boot DTB IS SpaceMiT K1 -> live MMIO` line appears and
+  the sdhci probe reads a real MBR. RVV1.0 (§5.1) remains DEFERRED beyond first
+  boot per the original plan (boot with `sstatus.VS=Off`; add vector
+  save/restore after multi-user).

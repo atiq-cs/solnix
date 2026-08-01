@@ -171,16 +171,42 @@ startup_memlist(unsigned long dtb)
 	 * uses). The K1 uart/sdhci bases are above the R-P3 identity map, so their
 	 * live MMIO is the K1-silicon run (R-P15) — reported honestly here. */
 	{
-		struct k1_devs k1;
+		struct k1_devs k1;		/* from the EMBEDDED K1 blob */
+		struct k1_devs boot;		/* from the FIRMWARE boot DTB (a1) */
 		int is_k1 = fdt_k1_summary((unsigned long)k1_dtb_blob, &k1);
+		/*
+		 * R-P16 RUNTIME BOARD-DETECT. The embedded blob ALWAYS parses as
+		 * K1 (it is our own k1.dts) -- that only validates the blob, it is
+		 * NOT a platform test. The real signal is the boot DTB the firmware
+		 * handed us in a1: OpenSBI on qemu-virt describes the EMULATED virt
+		 * hardware (ns16550 uart, virtio, PLIC -- no snps,dwcmshc-sdhci /
+		 * snps,dw-apb-uart / aplic+imsic), so fdt_k1_summary(boot) returns
+		 * 0; U-Boot on the physical K1 hands a DTB carrying all four K1
+		 * signature devices, so it returns 1. ONE `unix` image thus detects
+		 * its board at boot and drives live K1 MMIO on silicon vs the
+		 * faithful model under qemu -- no -DK1_SILICON recompile (per the
+		 * R-P15 next-step note).
+		 */
+		int on_k1_silicon = fdt_k1_summary(dtb, &boot);
+		unsigned long sdhci_base;
 
 		if (is_k1) {
-			sbi_console_puts("[k1] SpaceMiT K1 board DTB confirmed "
+			sbi_console_puts("[k1] embedded K1 DTB valid "
 			    "(dw-apb-uart + sdhci + aplic + imsic present)\n");
 		} else {
 			sbi_console_puts("[k1] WARN: embedded K1 DTB missing a "
 			    "signature device\n");
 		}
+		sbi_console_puts(on_k1_silicon ?
+		    "[board] runtime detect: boot DTB IS SpaceMiT K1 -> live "
+		    "MMIO (physical board)\n" :
+		    "[board] runtime detect: boot DTB is NOT K1 (qemu-virt) -> "
+		    "faithful in-kernel SDHCI+SD model\n");
+		/* Tell the sdhci driver which backend to use, at runtime. */
+		sdhci_set_platform(on_k1_silicon);
+		/* On real K1, use the sdhci base the FIRMWARE DTB reported; under
+		 * qemu-virt (model) use our embedded blob's K1 base 0xd4281000. */
+		sdhci_base = on_k1_silicon ? boot.sdhci_base : k1.sdhci_base;
 		/* Gate 2: prove the dw-apb-uart 8250 console driver TX/RX live
 		 * against the qemu 16550 (shift=0) — the SAME driver code binds
 		 * the K1 uart; then prove the K1's reg-shift=2 register math. */
@@ -193,14 +219,13 @@ startup_memlist(unsigned long dtb)
 		sbi_console_puts(" (bind + live drive on K1 silicon: R-P15)\n");
 		/* Gate 1 (R-P15): prove the K1 device MMIO window is mapped. */
 		hat_k1_devmap_prove();
-		/* Gate 3: R-P15 mmc/sdhci BLOCK DRIVER. sdhci_probe now runs the
-		 * full bring-up: SDHCI reset -> SD init (CMD0/8/ACMD41/2/3/7) ->
-		 * CMD17 read of sector 0. qemu-virt has no SDHCI at the K1 base,
-		 * so it drives a FAITHFUL in-kernel SDHCI+SD model (marked); on
-		 * real K1 silicon the SAME code path touches live MMIO (the K1
-		 * device gigapage is now identity-mapped by the R-P15 hat). */
+		/* Gate 3: R-P15 mmc/sdhci BLOCK DRIVER + R-P16 runtime backend.
+		 * sdhci_probe runs the full bring-up: SDHCI reset -> SD init
+		 * (CMD0/8/ACMD41/2/3/7) -> CMD17 read of sector 0. The backend
+		 * (live MMIO vs faithful model) was chosen at RUNTIME above from
+		 * the boot DTB, so the SAME code path serves qemu-virt and K1. */
 		sdhci_model_selftest();
-		(void) sdhci_probe(k1.sdhci_base);
+		(void) sdhci_probe(sdhci_base);
 	}
 
 	page_init(base, size);

@@ -31,6 +31,14 @@ extern void dw_apb_uart_selftest(unsigned long base, unsigned int shift,
 /* sdhci.c: gate-3-alt register-level SDHCI/eMMC probe. */
 extern int sdhci_probe(unsigned long base);
 
+/* sdhci.c: R-P16 runtime board-detect. is_k1 != 0 => live MMIO on real K1
+ * silicon; 0 => qemu-virt, drive the faithful in-kernel SDHCI+SD model. Set
+ * once from the boot DTB (see startup.c board detect). */
+extern void sdhci_set_platform(int is_k1);
+
+/* sdhci.c: R-P15 mmc block-driver self-test (CMD0/8/ACMD41/2/3/7 + CMD17). */
+extern void sdhci_model_selftest(void);
+
 /* uart.c: arithmetic proof of the reg-shift register-offset math (no MMIO). */
 extern void uart_regshift_check(unsigned int shift);
 
