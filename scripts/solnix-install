@@ -179,8 +179,19 @@ log "GPT-labelling $TARGET"
 # device node isn't fully settled yet (fresh disk / just-attached), so retry a
 # few times with a devfsadm + settle between attempts rather than dying on the
 # first transient miss.
+#
+# On SOME illumos builds / virtual controllers (QEMU nvme/virtio, and various
+# cloud volumes) `zpool create -f <wholedisk>` REFUSES to write the EFI label on
+# a disk that has no fdisk partition table at all -> `cannot label 'cNtNdN': try
+# using fdisk(8) and then provide a specific slice`. That is not a settle race,
+# it is deterministic. So on each attempt FIRST lay a whole-disk Solaris2 fdisk
+# partition (`fdisk -B <rdsk>p0`) so the subsequent whole-disk `zpool create`
+# has a partition to EFI-label. Harmless where the disk was already labellable.
 _label_ok=0
 for _try in 1 2 3 4 5; do
+  # whole-disk Solaris2 fdisk table (idempotent); satisfies the "try fdisk" case.
+  run_to 30 fdisk -B "/dev/rdsk/${TARGET}p0" >/dev/null 2>&1 || true
+  devfsadm >/dev/null 2>&1 || true; sync; sleep 1
   # capture the zpool error (was silenced) so a persistent failure is diagnosable
   # from the serial log instead of only 'not settling'.
   _zerr=$(run_to 60 zpool create -f solnixtmp "/dev/dsk/${TARGET}" 2>&1) && { _label_ok=1; break; }
@@ -675,6 +686,12 @@ EOF
 # ---------------------------------------------------------------------------
 # 11. finalize: export the pool so it's importable on the target machine.
 # ---------------------------------------------------------------------------
+# Remove the live-media auto-install marker from the INSTALLED BE so the
+# installed system does NOT re-run the live-installer (site/solnix-live) and
+# try to reinstall itself on every boot. The marker is a live-media test
+# scaffold only; it must never ship on the installed root/AMI. Also disable
+# the live-installer service in the target repo as belt-and-suspenders.
+rm -f "$ALTROOT/etc/solnix-autoinstall" 2>/dev/null || true
 log "finalizing (export pool)"
 sync
 zfs set canmount=noauto "$BEDS"
