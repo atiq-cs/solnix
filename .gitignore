@@ -24,6 +24,13 @@ artifacts/install-media/**/boot_archive*
 artifacts/install-media/*graphical*.iso
 artifacts/install-media/*graphical*.img
 
+# AMI build workspace: holds infra-specific artifacts (build-host addresses,
+# account/bucket names, disk images, progress notes). Never committed.
+artifacts/ami-build/
+
+# Debug-backfill scratch (candidate lists, recovered build recipes). Scratch only.
+artifacts/aa-debugbackfill1/
+
 # stray source tarballs dropped at repo root by local build agents (never content)
 /*.tar.gz
 /*.tar.xz
