@@ -14,6 +14,10 @@ export PATH=/nix-tools/bin:/usr/gnu/bin:/usr/bin:$PATH
 export NIX_CONF_DIR=/nix-tools/etc/nix
 GCC=/usr/gcc/14
 CC="$GCC/bin/gcc"; CXX="$GCC/bin/g++"; export CC CXX
+# portable core count: illumos has no nproc; psrinfo -p / kstat give CPU count.
+# empty $(nproc) made `gmake -j` spawn unbounded compilers -> thrash/OOM ->
+# compilers die with no diagnostic ("Error 1"). Cap at a sane number.
+nproc() { n=$(getconf _NPROCESSORS_ONLN 2>/dev/null || psrinfo 2>/dev/null | wc -l); n=${n:-4}; [ "$n" -gt 16 ] && n=16; echo "$n"; }
 CMAKE=$(ls /nix/store/*cmake*/bin/cmake 2>/dev/null | head -1)
 
 pname="$1"; ver="$2"; url="$3"; sha="$4"; bsys="$5"; shift 5
@@ -27,17 +31,32 @@ done
 # dep include/lib/rpath + cmake prefix + pkg-config path (deps ship .pc files;
 # autotools/cmake/meson all consult pkg-config, so point it at the dep libdirs).
 DEPI=""; DEPL=""; DEPR=""; CMPREFIX=""; PCP=""
+# sanitized pkgconfig overlay: some cached deps were frozen with a stale
+# /var/tmp/clib.*/out prefix baked into their .pc (includedir/libdir written
+# absolute, so the ${pcfiledir} relocation missed them). Copy each dep .pc into
+# an overlay and rewrite any dead /var/tmp/clib.*/out root to the real dep path.
+_pcovl=$(mktemp -d /var/tmp/pcovl.XXXXXX)
 for d in $deps; do
   [ -d "$d/include" ] && DEPI="$DEPI -I$d/include"
+  # nested include dirs (freetype2, glib-2.0, glib arch-include, etc.)
+  for sub in "$d/include"/* "$d/lib"/*/include; do
+    [ -d "$sub" ] && DEPI="$DEPI -I$sub"
+  done
   for L in "$d/lib" "$d/lib/64"; do
     [ -d "$L" ] && { DEPL="$DEPL -L$L"; DEPR="$DEPR -R$L"; }
-    [ -d "$L/pkgconfig" ] && PCP="$PCP${PCP:+:}$L/pkgconfig"
   done
-  [ -d "$d/share/pkgconfig" ] && PCP="$PCP${PCP:+:}$d/share/pkgconfig"
+  for P in "$d/lib/pkgconfig" "$d/lib/64/pkgconfig" "$d/share/pkgconfig"; do
+    [ -d "$P" ] || continue
+    for pc in "$P"/*.pc; do
+      [ -f "$pc" ] || continue
+      sed "s|/var/tmp/clib\.[^/]*/out|$d|g; s|/var/tmp/mk\.[^/]*/out|$d|g" "$pc" > "$_pcovl/$(basename "$pc")"
+    done
+  done
   CMPREFIX="$CMPREFIX${CMPREFIX:+;}$d"
 done
+PCP="$_pcovl"
 export PKG_CONFIG_PATH="$PCP${PKG_CONFIG_PATH:+:}${PKG_CONFIG_PATH:-}"
-export CFLAGS="-m64 -fPIC -O2 -D__EXTENSIONS__ $DEPI ${EXTRA_CFLAGS:-}"
+export CFLAGS="-m64 -fPIC -O2 -g -D__EXTENSIONS__ $DEPI ${EXTRA_CFLAGS:-}"
 export CXXFLAGS="$CFLAGS ${EXTRA_CXXFLAGS:-}"
 export CPPFLAGS="$DEPI ${EXTRA_CPPFLAGS:-}"
 export LDFLAGS="-m64 $DEPL $DEPR ${EXTRA_LDFLAGS:-}"
@@ -82,7 +101,11 @@ for x in "\$@"; do
     -Wl,--no-as-needed|-Wl,--as-needed) continue ;;
     --no-as-needed|--as-needed) continue ;;
     -Wl,--gc-sections|--gc-sections) continue ;;
+    -Wl,--exclude-libs,*|-Wl,--exclude-libs) continue ;;
+    -Wl,--exclude-libs=*|--exclude-libs=*) continue ;;
+    --exclude-libs) _skip=1; continue ;;
     -Wl,--build-id|-Wl,--build-id=*) continue ;;
+    -Wl,--export-dynamic|--export-dynamic|-rdynamic|-Wl,-E) continue ;;
     -Wl,-pie|-pie|-Wl,-z,relro,-z,now) continue ;;
     -fPIE) continue ;;
   esac
