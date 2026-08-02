@@ -1,10 +1,14 @@
 # Design: the x86_64-solaris stdenv bootstrap (Phase 1)
 
-Status: **in progress.** Two safe fixes APPLIED + validated by eval/instantiate
-in this task; the full stage1-gcc build is the remaining multi-day work. This
-doc is the bootstrap-chain design, the exact breakage found, the buildEnv
-infinite-recursion root cause + the fix applied, the stage derivations still to
-write (with file paths), and GATE 1.
+Status: **GATE 1b PASSED.** A from-source `hello` builds (realises) on the
+crackers illumos host via `nix-build`, the output binary runs (prints
+"Hello, world!"), and `nix-store -q --deriver` resolves. Both a
+`stdenv.mkDerivation` hello and a full GNU-autotools `hello-2.12.1`
+(configure -> gmake -> gmake install) build from source. The stdenv wires a
+real native cc (cc-wrapper + Solaris ld). Instantiation (GATE 1a) also still
+holds cross-platform (Linux eval + illumos realise), no x86_64-linux
+regression. This doc records the design, the exact breakage found, the
+recursion fix, and the GATE 1b work.
 
 Companion: `docs/design-nixpkgs-illumos.md` (the lib/systems + FreeBSD-mirror
 research this refines) and `docs/design-seed-extraction.md` (what the seed is).
@@ -35,12 +39,16 @@ research this refines) and `docs/design-seed-extraction.md` (what the seed is).
   the nixpkgs source root (`${path}/pkgs/build-support/...`, `path` = `pkgs.path`
   injected by callPackage). Now `pkgs.solnix.{cc,bintools,ccFlagsDump}`
   instantiate.
-- **What is NOT done (deliberately deferred, this is the multi-day work):** the
-  stage1 from-source builds (binutils/gcc/coreutils/bash/gnumake/gnused/gawk/
-  gzip) that let a realised x86_64-solaris derivation actually RUN on the illumos
-  host. The boot stage is INSTANTIATE-ONLY today: it points shell/coreutils at
-  the seed, and the current seed carries only compiler+ld+libc+headers+rtld+ELF
-  tools (no userland), so realising the trivial `hello` needs stage1.
+- **What GATE 1b needed (delivered this task):** a real `stdenv` with a wired
+  cc. Rather than the seed-cross-wrap + from-source-libc path originally
+  sketched below (the purist, multi-day route), the boot stdenv wires a
+  **native** cc — cc-wrapper `nativeTools`/`nativeLibc` around the crackers
+  host's `/usr` gcc 14.3.0 + Solaris ld, GNU coreutils at `/usr/gnu`, mirroring
+  how pkgs/stdenv/native does FreeBSD/Darwin stage0. `pkgs/stdenv/illumos/
+  default.nix` was rewritten to this shape. A from-source `hello`
+  (`stdenv.mkDerivation` AND full GNU-autotools `hello-2.12.1`) now realises on
+  the illumos host, runs, and `nix-store -q --deriver` resolves. See §7.
+  Impure-native (links host libc); pure toolchain is deferred (§7.2).
 
 ---
 
@@ -269,18 +277,74 @@ All in the fork (`~/ws/solnix-pkgs`), reached by patch into the nixpkgs tree
 > `nix-build` a from-source `hello` on x86_64-solaris yielding a `.drv` whose
 > output RUNS on the AMI, and `nix-store -q --deriver result` resolves.
 
-Split into the two halves this task addressed vs. deferred:
-
 - **GATE 1a (instantiation) — DONE.** A trivial x86_64-solaris
-  `stdenvNoCC.mkDerivation`/`stdenv.mkDerivation` instantiates; drvPath resolves;
-  the `.drv` has `system = x86_64-solaris`, `builder =
-  <seed>/usr/bin/bash`, and a clean input closure down to the seed FOD. This is
-  the proof the platform's stdenv path is real-Nix-shaped and the recursion is
-  gone.
-- **GATE 1b (realisation) — stage1.** Needs §5(A) (seed userland) + §6.1–6.3 so
-  the `.drv` builds on the illumos host and the output binary runs. Then
-  `nix-store -q --deriver` on the result resolves (it already would — the deriver
-  is recorded at instantiation; the missing piece is a successful build).
+  `stdenvNoCC.mkDerivation`/`stdenv.mkDerivation` instantiates; drvPath resolves.
+- **GATE 1b (realisation) — DONE.** Instead of the seed-cross-wrap + from-source
+  libc path this doc originally sketched, GATE 1b was reached by giving
+  x86_64-solaris a **native boot stdenv** (cc-wrapper `nativeTools`/`nativeLibc`
+  around the host `/usr` gcc 14.3.0 + Solaris ld, GNU coreutils at `/usr/gnu`),
+  mirroring pkgs/stdenv/native's FreeBSD/Darwin stage0 shape. This is
+  impure-native (links host libc) but proves x86_64-solaris is real-Nix capable.
+  Proof on the crackers host (SunOS 5.11, Nix 2.3.16):
+
+  ```
+  # (A) stdenv.mkDerivation hello (host cc via $CC)
+  out  = /nix/store/axdfl561i3carjchr8x0613f7xc93pi9-hello-src-1.0
+  drv  = /nix/store/z4ddlgcbm1bm01srnbs56h2gaqzz0zwr-hello-src-1.0.drv
+  run  -> Hello, world!
+  # (B) GNU hello-2.12.1 from source (./configure && gmake && gmake install)
+  out  = /nix/store/imkrn16lw3rlpgr0hakx243nm6q1jh4c-hello-2.12.1
+  drv  = /nix/store/vgmjmyw1pips650npp59z0ca6sjbz901-hello-2.12.1.drv
+  run  -> Hello, world!
+  nix-store -q --deriver <out> -> the .drv above (resolves)
+  .drv system = x86_64-solaris ; ldd -> /lib/64/libc.so.1 (host libc)
+  ```
+
+### 7.1 On-host workflow (what a fresh crackers host needs)
+
+The crackers illumos hosts have a classic Nix 2.3.16 at `/nix-tools/bin/nix`
+(single-user store at `/nix/store`, DB at `/nix/var/nix`), NOT on PATH. Two
+frictions had to be worked around; both are host-Nix quirks, not fork changes:
+
+1. **Solaris tar chokes on GitHub pax global headers** (`nix-prefetch-url
+   --unpack` fails: `typeflag 'g' not recognized`). Fix: a tiny Python `tar`
+   shim (`tarfile` handles pax) first on PATH. The host has python3 but no GNU
+   tar. (Shim lives at `/root/shim/bin/tar` on the host.)
+2. **Pinned nixpkgs requires Nix >= 2.18** (a hard `abort` in `default.nix` via
+   `lib/minfeatures.nix`); the host only has 2.3.16. 2.3.16 eval+build actually
+   works for this path, so `lib/minfeatures.nix` was patched on-host to drop the
+   `>= 2.18` check (keep the `nixVersion` builtin check). This is a HOST-LOCAL
+   edit to the fetched nixpkgs tree, not a fork patch. The real fix is a newer
+   Nix on the build host (deferred).
+
+Build recipe on-host: fetch pinned nixpkgs (`nix-prefetch-url --unpack` with the
+tar shim), `patch -p1` the four fork patches into a copy, patch `minfeatures.nix`,
+`nix-store --add` the tree (so `pkgs.path` is valid), import via a classic entry
+(`import <patched-nixpkgs> { system = "x86_64-solaris"; overlays = [ solnixOverlay ]; }`).
+Nix 2.3.16 has no flakes, so the classic import replaces `pkgsFor`.
+
+### 7.2 What is DEFERRED (documented debt, not required for GATE 1b)
+
+- **Purity.** The boot stdenv links the host `/usr` libc and uses the host gcc.
+  A fully-pure closure needs the seed-backed toolchain + from-source
+  `solnix.libc` (csu/crt/headers/rtld) + the all-packages libc selector
+  (`libc == "illumos-libc"`, currently `throw`s). §6.2/§6.3.
+- **GNU findutils on the stdenv PATH.** The generic stdenv fixup hooks
+  (audit-tmpdir, patch-shebangs, strip, compress-man, make-symlinks-relative,
+  broken-symlink check) + the configurePhase libtool fixup all shell out to GNU
+  `find -printf/-print0/-executable`, `xargs -0 -r -P`, `stat --printf`, or
+  `patchelf` — none present on the SunOS host (only GNU coreutils are, at
+  `/usr/gnu`). The boot stdenv DISABLES them via `dont*/no*` env vars in its
+  preHook (they are optional post-processing). Building a from-source GNU
+  findutils in stage1 and putting it on the stdenv PATH lets these run normally;
+  until then real packages that rely on shebang-patching/stripping need per-
+  package handling.
+- **Full `pkgs.hello` (nixpkgs autotools expr).** It instantiates cleanly but
+  its realise pulls a from-source coreutils/perl/gmp/m4/zlib/xz closure (the
+  stdenv `defaultBuildInputs`); building those on illumos is the Phase-2
+  from-source userland work (each a real Solaris build with likely portability
+  patches). GATE 1b was met with the two hello builds above, which prove the
+  compile+link+configure+make path without that heavy closure.
 
 ---
 
@@ -305,17 +369,25 @@ Split into the two halves this task addressed vs. deferred:
 
 ---
 
-## 9. Files changed in this task (solnix-pkgs)
+## 9. Files changed (solnix-pkgs)
 
-- `patches/0004-stdenv-illumos-bootstrap-stage.patch` — NEW. Adds
-  `pkgs/stdenv/illumos/default.nix` (boot stage) + repoints the selector
-  `x86_64-solaris = stagesIllumos`.
-- `pkgs/stdenv/illumos/default.nix` — NEW (source-of-truth copy; reaches nixpkgs
-  only via patch 0004).
-- `pkgs/os-specific/illumos/default.nix` — Fix B: `path` arg + wrapper imports
-  from `${path}/pkgs/build-support/...` and `${path}/lib/systems/examples.nix`.
-- `flake.nix` — add `0004` to the `applyPatches` list.
+- `pkgs/stdenv/illumos/default.nix` — REWRITTEN this task. Was a single
+  seed-backed INSTANTIATE-ONLY boot stage (`cc = null`); now a 2-element
+  stdenv-stages list wiring a **native** cc (cc-wrapper `nativeTools`/
+  `nativeLibc`, `nativePrefix = /usr`, `shell = /usr/bin/bash`, `initialPath =
+  [ /usr/gnu / /usr /usr/local ]`, Solaris ld via the bintools-wrapper Solaris
+  path). preHook disables the GNU-only fixup hooks (§7.2). This is the file that
+  closes GATE 1b.
+- `patches/0004-stdenv-illumos-bootstrap-stage.patch` — REGENERATED to embed the
+  rewritten stage file (new-file hunk) + the unchanged `x86_64-solaris =
+  stagesIllumos` selector hunk. Applies cleanly to pinned nixpkgs
+  (`applyPatches` realises); no x86_64-linux/freebsd regression.
+- `patches/0001..0003` and `pkgs/os-specific/illumos/default.nix` — unchanged
+  this task (0002's Solaris ld path is what the native bintools-wrapper uses).
 
-Validated by `nix eval`/`nix derivation show`; no git commit (per house rules).
-The four patches apply cleanly to the pinned base nixpkgs
-(`7f81d69cbd67…`); no regression to x86_64-linux or freebsd eval.
+HOST-LOCAL edits (NOT fork changes; documented in §7.1): a Python `tar` shim for
+pax tarballs, and dropping the Nix `>= 2.18` guard in the fetched nixpkgs
+`lib/minfeatures.nix` so the host's Nix 2.3.16 can eval it.
+
+Validated by realising a from-source hello on the crackers host + cross-platform
+instantiate on the Linux dev-box; no git commit (per house rules).
