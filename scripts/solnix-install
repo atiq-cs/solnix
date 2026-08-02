@@ -464,6 +464,75 @@ if [ -e "$TOPLEVEL/seed-authorized-keys" ] && [ -x /usr/bin/bash ]; then
   ROOT="$ALTROOT" /usr/bin/bash "$TOPLEVEL/seed-authorized-keys" 2>/dev/null \
     || echo "NOTE: authorized_keys seed had non-fatal errors" >&2
 fi
+
+# 6d. STAGE-A DECLARATIVE USERLAND (design §B/§C): the login env + nix.conf +
+#     default profile + store-DB dump + first-boot register oneshot — same as
+#     make-be, but staged onto the target BE root.
+log "staging Stage-A userland (profile.d/solnix-env.sh, nix.conf, default profile, store-db dump)"
+if [ -f "$TOPLEVEL/etc/profile.d/solnix-env.sh" ]; then
+  mkdir -p "$ALTROOT/etc/profile.d"
+  cp "$TOPLEVEL/etc/profile.d/solnix-env.sh" "$ALTROOT/etc/profile.d/solnix-env.sh"; chmod 0644 "$ALTROOT/etc/profile.d/solnix-env.sh"
+fi
+if [ -f "$TOPLEVEL/etc/nix/nix.conf" ]; then
+  mkdir -p "$ALTROOT/etc/nix"
+  cp "$TOPLEVEL/etc/nix/nix.conf" "$ALTROOT/etc/nix/nix.conf"; chmod 0644 "$ALTROOT/etc/nix/nix.conf"
+fi
+mkdir -p "$ALTROOT/nix/var/nix/profiles"
+relink "$TOPLEVEL/sw" "$ALTROOT/nix/var/nix/profiles/default"
+if command -v nix-store >/dev/null 2>&1; then
+  nix-store --dump-db "$TOPLEVEL" > "$ALTROOT/nix/.solnix-registration" 2>/dev/null \
+    || echo "NOTE: nix-store --dump-db failed; store DB not pre-dumped" >&2
+fi
+# first-boot store-registration oneshot (fixed manifest + method; self-disables).
+mkdir -p "$ALTROOT/lib/svc/manifest/solnix" "$ALTROOT/lib/svc/method"
+cat > "$ALTROOT/lib/svc/manifest/solnix/solnix-nix-register.xml" <<'EOF'
+<?xml version="1.0"?>
+<!DOCTYPE service_bundle SYSTEM "/usr/share/lib/xml/dtd/service_bundle.dtd.1">
+<service_bundle type="manifest" name="solnix:nix-register">
+  <service name="site/solnix-nix-register" type="service" version="1">
+    <single_instance/>
+    <dependency name="fs" grouping="require_all" restart_on="none" type="service">
+      <service_fmri value="svc:/system/filesystem/local:default"/>
+    </dependency>
+    <exec_method type="method" name="start" exec="/lib/svc/method/solnix-nix-register" timeout_seconds="600">
+      <method_context><method_credential user="root"/></method_context>
+    </exec_method>
+    <exec_method type="method" name="stop" exec=":true" timeout_seconds="60">
+      <method_context><method_credential user="root"/></method_context>
+    </exec_method>
+    <property_group name="startd" type="framework">
+      <propval name="duration" type="astring" value="transient"/>
+    </property_group>
+    <instance name="default" enabled="true"/>
+    <template><common_name><loctext xml:lang="C">solnix nix store DB registration (first boot)</loctext></common_name></template>
+  </service>
+</service_bundle>
+EOF
+cat > "$ALTROOT/lib/svc/method/solnix-nix-register" <<'EOF'
+#!/sbin/sh
+. /lib/svc/share/smf_include.sh
+SENTINEL=/nix/.solnix-registered
+REG=/nix/.solnix-registration
+if [ -e "$SENTINEL" ]; then exit $SMF_EXIT_OK; fi
+NIXSTORE=""
+for d in /nix/var/nix/profiles/default/bin /run/current-system/sw/bin /usr/bin; do
+  [ -x "$d/nix-store" ] && { NIXSTORE="$d/nix-store"; break; }
+done
+if [ -z "$NIXSTORE" ]; then
+  echo "solnix-nix-register: nix-store not found; skipping" > /dev/console 2>&1
+  exit $SMF_EXIT_OK
+fi
+if [ -s "$REG" ]; then
+  "$NIXSTORE" --load-db < "$REG" > /dev/console 2>&1 \
+    && echo "solnix-nix-register: store DB loaded" > /dev/console 2>&1 \
+    || echo "solnix-nix-register: load-db failed" > /dev/console 2>&1
+else
+  "$NIXSTORE" --register-validity /run-current-system > /dev/console 2>&1 || true
+fi
+: > "$SENTINEL"
+exit $SMF_EXIT_OK
+EOF
+chmod 0555 "$ALTROOT/lib/svc/method/solnix-nix-register"
 fi   # end SELF_INSTALL=0 toplevel-staging block
 
 # ---------------------------------------------------------------------------

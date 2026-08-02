@@ -22,6 +22,16 @@
 
   networking.hostName = lib.mkDefault "solnix";
 
+  # Stage-A declarative userland (design §D). The intended default package set is
+  # `with pkgs.solnix; [ nix file less vim curl htop git ]`. Today:
+  #   - nix is shipped by modules/config/nix.nix (nix.package -> systemPackages),
+  #     so it is NOT re-listed here (would duplicate the store path).
+  #   - base-tools (coreutils-equiv) is seeded by modules/config/system-path.nix.
+  #   - file/less/vim/curl/htop/git are NOT yet sliced as pkgs.solnix.* — the
+  #     orchestrator slices them, then they get added to this list. See the
+  #     Stage-A report. Empty for now so eval succeeds (nothing unresolved).
+  environment.systemPackages = with pkgs.solnix; [ ];
+
   # Declarative networking (T2.9): the primary NIC via DHCP. This GENERATES the
   # illumos bringup (ipadm create-if/create-addr with the legacy-ifconfig
   # fallback the gate ena driver needs, gotcha #15) as an SMF transient oneshot,

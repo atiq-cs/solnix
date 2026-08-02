@@ -12,6 +12,9 @@
   ./nixos-compat.nix
   ./config/networking.nix
   ./config/users.nix
+  ./config/system-path.nix
+  ./config/shell-environment.nix
+  ./config/nix.nix
   ./system/boot/init/smf.nix
   ./system/activation
 ]

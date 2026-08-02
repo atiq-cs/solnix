@@ -81,14 +81,9 @@ in
     };
   };
 
-  # nix.settings.*: configurations/base.nix records the binary-cache substituter
-  # + signing key. These are consumed by the image/cache tooling, not the module
-  # eval, so accept-and-ignore (freeform) is enough for evaluation.
-  options.nix.settings = mkOption {
-    type = types.submodule { freeformType = types.attrs; };
-    default = { };
-    description = "Nix settings (substituters, trusted keys). Recorded; see docs/cache.md.";
-  };
+  # nix.settings.* now lives in modules/config/nix.nix (design §B): that module
+  # OWNS the real freeform declaration + renders /etc/nix/nix.conf. Removed the
+  # accept-and-ignore stub here to avoid a double-declaration.
 
   # Tier-2 (translate systemd.services -> smf.services) is deferred and
   # opt-in by design (docs/design-smf-init.md §4.1). The honest path for a

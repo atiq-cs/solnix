@@ -18,6 +18,11 @@ let
   # GATE A: the gate proto as a store path (ingest variant; full build FOD later).
   gate = import ./gate.nix { };
 
+  # buildEnv — the symlink-farm merge, factored out of `systemPath` (below) into
+  # lib/build-env.nix so the declarative userland (modules/config/system-path.nix)
+  # composes its profile the same way. systemPath now CALLS it (design §B).
+  buildEnv = import ../../lib/build-env.nix { };
+
   mkIllumosComponent = args: import ./mk-illumos-component.nix ({ gate = gate; } // args);
 
   # store libdirs of the libc slice, for cross-component RUNPATH baking. Both
@@ -346,41 +351,15 @@ let
   ];
 
   # systemPath — compose the minimal world into one symlink-farm tree (design
-  # §4.2). buildEnv isn't available standalone (no nixpkgs), so this is a plain
-  # derivation that symlink-merges the component store paths into $out with the
-  # runtime /usr,/lib,/sbin,/kernel,/platform layout the image expects. SMF
+  # §4.2), now via the factored-out buildEnv (design §B: reuse, don't duplicate).
+  # pathsToLink=null links the FULL runtime /usr,/lib,/sbin,/kernel,/platform
+  # layout the image expects (a pathsToLink filter would drop the kernel). SMF
   # manifests come from smf.nix (T1.11), merged by the image builder, not here.
-  systemPath = derivation {
+  systemPath = buildEnv {
     name = "system-path";
-    system = builtins.currentSystem;
-    builder = "/usr/bin/bash";
-    PATH = "/usr/gnu/bin:/usr/bin:/usr/sbin";
     paths = [ sys rtld libc ld base-tools externalLibs ];
-    args = [ "-c" ''
-      set -eu
-      mkdir -p "$out"
-      # symlink-merge each component into $out, preserving its subtree layout.
-      # A later component's entry wins on a path collision (rare; components are
-      # disjoint by design). Each leaf is a symlink INTO the component's store
-      # path, so the composed tree stays a thin farm over the real slices.
-      for p in $paths; do
-        (cd "$p" && find . -type d) | while read -r d; do
-          mkdir -p "$out/$d"
-        done
-        (cd "$p" && find . \( -type f -o -type l \)) | while read -r f; do
-          rel="''${f#./}"
-          # link to the real component file in its store path.
-          ln -sf "$p/$rel" "$out/$rel"
-        done
-      done
-      # sanity: the composed tree must have bin+lib+kernel populated.
-      [ -e "$out/lib/amd64/libc.so.1" ]                    || { echo "FATAL: no libc in systemPath" >&2; exit 1; }
-      [ -e "$out/lib/amd64/ld.so.1" ]                      || { echo "FATAL: no rtld in systemPath" >&2; exit 1; }
-      [ -e "$out/usr/bin/ld" ]                             || { echo "FATAL: no ld in systemPath" >&2; exit 1; }
-      [ -e "$out/lib/svc/bin/svc.startd" ]                 || { echo "FATAL: no svc.startd in systemPath" >&2; exit 1; }
-      [ -e "$out/platform/i86pc/kernel/amd64/unix" ]       || { echo "FATAL: no unix in systemPath" >&2; exit 1; }
-      [ -e "$out/kernel/amd64/genunix" ]                   || { echo "FATAL: no genunix in systemPath" >&2; exit 1; }
-    '' ];
+    pathsToLink = null;      # link everything (kernel/platform/lib/usr/...).
+    ignoreCollisions = true; # slices are disjoint by design; last wins on clash.
   };
 
   # Modern compiler toolchains (backlog PS-1 clang / PS-4 latest-GCC/GDB, pulled
@@ -388,8 +367,13 @@ let
   # relocated into the store, the foundation the package-batch work builds on.
   # See ./toolchains.nix + docs/design-toolchains.md.
   toolchains = import ./toolchains.nix { inherit mkIllumosComponent libc; };
+
+  # nix (pkgs.solnix.nix) — the classic Nix 2.3.16 the host runs, ingested so it
+  # ships on the image (design §C). First cut = host /nix-tools ingest; see the
+  # TODO in ./nix.nix for the proper mk-illumos-component slice.
+  nix = import ./nix.nix { };
 in
 {
-  inherit gate libc rtld ld sys base-tools systemPath externalLibs;
+  inherit gate libc rtld ld sys base-tools systemPath externalLibs nix;
   inherit (toolchains) gcc14 clang gdb;
 }

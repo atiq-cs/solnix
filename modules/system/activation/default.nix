@@ -377,14 +377,20 @@ let
   #   shadow          <- users.users.*.hashedPassword (0400, root-only)
   # networking.generatedEtc / users.generatedEtc are the internal carriers the
   # config-surface modules populate; folded in here so the toplevel /etc is a
-  # pure function of the options, not hardcoded.
-  configEtc = (config.networking.generatedEtc or { }) // (config.users.generatedEtc or { });
+  # pure function of the options, not hardcoded. shell-environment + nix add
+  # their own carriers (profile.d/solnix-env.sh, nix/nix.conf) — nested paths, so
+  # the copy loop mkdir -p's each file's dirname (design §B).
+  configEtc =
+    (config.networking.generatedEtc or { })
+    // (config.users.generatedEtc or { })
+    // (config.environment.generatedEtc or { })
+    // (config.nix.generatedEtc or { });
   etc = pkgs.runCommand "solnix-etc" { } ''
     mkdir -p $out/etc
     printf '%s\n' '${config.networking.hostName}' > $out/etc/nodename
     printf 'solnix system toplevel\nhostname: %s\n' '${config.networking.hostName}' > $out/etc/solnix-release
     ${concatStringsSep "\n    " (mapAttrsToList (fname: content:
-      "cp ${pkgs.writeText "solnix-etc-${fname}" content} $out/etc/${fname}")
+      "mkdir -p $out/etc/$(dirname ${fname}); cp ${pkgs.writeText "solnix-etc-${builtins.replaceStrings ["/"] ["-"] fname}" content} $out/etc/${fname}")
       configEtc)}
     # /etc/shadow must be root-only (0400) or login refuses it.
     [ -e $out/etc/shadow ] && chmod 0400 $out/etc/shadow || true
@@ -414,6 +420,10 @@ let
   toplevel = pkgs.runCommand "solnix-system-${config.networking.hostName}" { } ''
     mkdir -p $out
     ln -s ${pkgs.solnix.systemPath}                 $out/systemPath
+    # sw: the composed userland profile (environment.systemPackages via buildEnv)
+    # -> /run/current-system/sw. SEPARATE from systemPath so a broken package set
+    # can't drop the kernel (design §B). shell-environment puts sw/bin first on PATH.
+    ln -s ${config.system.path}                     $out/sw
     ln -s ${config.system.build.smfManifests}/manifest/solnix $out/manifest/solnix 2>/dev/null || \
       { mkdir -p $out/manifest; ln -s ${config.system.build.smfManifests}/manifest/solnix $out/manifest/solnix; }
     ln -s ${activate}                                 $out/activate

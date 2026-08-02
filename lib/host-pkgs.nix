@@ -51,6 +51,12 @@ in
   writeScript = mkWriter true;
   runtimeShell = "/sbin/sh"; # the shell method scripts run under on-target
 
+  # buildEnv — the symlink-farm merge (lib/build-env.nix). The declarative
+  # userland (modules/config/system-path.nix) composes environment.systemPackages
+  # into system.path with it, the same merge pkgs.solnix.systemPath uses. Matches
+  # nixpkgs' pkgs.buildEnv surface for the args solnix passes (design §B).
+  buildEnv = import ./build-env.nix { };
+
   # buildPackages.libxml2 marker: smf.nix lists it as a nativeBuildInput for the
   # xmllint DTD gate. runCommand ignores nativeBuildInputs and puts /usr/bin
   # (host xmllint) on PATH, so this only needs to EXIST as an attr.

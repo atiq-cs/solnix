@@ -71,6 +71,9 @@ let
     ACTIVATE="${activate}"
     SYSTEMPATH="${systemPath}"
     SEED_AUTHKEYS="${seedAuthKeys}"  # T2.9: users.users.*.openssh.authorizedKeys seed
+    SW="${toplevel}/sw"                        # composed userland profile (Stage A)
+    ENV_SH="${toplevel}/etc/profile.d/solnix-env.sh"  # login environment
+    NIX_CONF="${toplevel}/etc/nix/nix.conf"           # /etc/nix/nix.conf
 
     die()  { echo "FATAL: $*" >&2; exit 1; }
     log()  { printf '\n=== %s ===\n' "$*" >&2; }
@@ -316,6 +319,96 @@ let
       ln -s "$TOPLEVEL/bin/solnix-rebuild"          "$BEROOT/usr/bin/solnix-rebuild"
       [ -e "$TOPLEVEL/bin/solnix-install" ] && ln -s "$TOPLEVEL/bin/solnix-install" "$BEROOT/usr/bin/solnix-install"
     fi
+
+    # 8a2. STAGE-A DECLARATIVE USERLAND (design §B/§C):
+    #   - /etc/profile.d/solnix-env.sh  : login env (PATH=sw/bin + NIX_PROFILES).
+    #   - /etc/nix/nix.conf             : nix settings (cache + single-user).
+    #   - /nix/var/nix/profiles/default -> $TOPLEVEL/sw : the default profile the
+    #     login env + nix expect (so `nix-env -iA` and PATH resolve).
+    #   - nix-store --dump-db of the toplevel closure -> BE:/nix/.solnix-registration
+    #     (a bare store copy is NOT a registered store; first boot load-db's it).
+    log "staging Stage-A userland (profile.d/solnix-env.sh, nix.conf, default profile, store-db dump)"
+    if [ -f "$ENV_SH" ]; then
+      mkdir -p "$BEROOT/etc/profile.d"
+      $GCP -L "$ENV_SH" "$BEROOT/etc/profile.d/solnix-env.sh"; chmod 0644 "$BEROOT/etc/profile.d/solnix-env.sh"
+    fi
+    if [ -f "$NIX_CONF" ]; then
+      mkdir -p "$BEROOT/etc/nix"
+      $GCP -L "$NIX_CONF" "$BEROOT/etc/nix/nix.conf"; chmod 0644 "$BEROOT/etc/nix/nix.conf"
+    fi
+    # default profile -> the toplevel's composed userland sw.
+    rm -f "$BEROOT/nix/var/nix/profiles/default"
+    ln -s "$SW" "$BEROOT/nix/var/nix/profiles/default"
+    # build-time store-db dump of the toplevel closure (registers ON first boot).
+    # nix-store is the host's (on PATH via /nix-tools/bin). The dump is a plain
+    # file staged into the BE; the first-boot oneshot below load-db's it.
+    if command -v nix-store >/dev/null 2>&1; then
+      nix-store --dump-db "$TOPLEVEL" > "$BEROOT/nix/.solnix-registration" 2>/dev/null \
+        || echo "NOTE: nix-store --dump-db failed; store DB not pre-dumped"
+    else
+      echo "NOTE: nix-store not on PATH; skipping store-db dump (register-validity fallback at boot)"
+    fi
+
+    # 8a3. FIRST-BOOT STORE-REGISTRATION oneshot (design §B, risk #1). A transient
+    # SMF service that runs `nix-store --load-db < /nix/.solnix-registration`
+    # ONCE (registers the copied store paths as valid), then self-disables via a
+    # sentinel so it never re-runs. Registration is the linchpin: a bare store
+    # copy is not a usable store until its DB is loaded. Fixed manifest + method
+    # (not smf.services here — this is boot plumbing, like solnix-hello).
+    log "installing first-boot store-registration oneshot (nix-store --load-db)"
+    mkdir -p "$BEROOT/lib/svc/manifest/solnix" "$BEROOT/lib/svc/method"
+    cat > "$BEROOT/lib/svc/manifest/solnix/solnix-nix-register.xml" <<'EOF'
+    <?xml version="1.0"?>
+    <!DOCTYPE service_bundle SYSTEM "/usr/share/lib/xml/dtd/service_bundle.dtd.1">
+    <service_bundle type="manifest" name="solnix:nix-register">
+      <service name="site/solnix-nix-register" type="service" version="1">
+        <single_instance/>
+        <dependency name="fs" grouping="require_all" restart_on="none" type="service">
+          <service_fmri value="svc:/system/filesystem/local:default"/>
+        </dependency>
+        <exec_method type="method" name="start" exec="/lib/svc/method/solnix-nix-register" timeout_seconds="600">
+          <method_context><method_credential user="root"/></method_context>
+        </exec_method>
+        <exec_method type="method" name="stop" exec=":true" timeout_seconds="60">
+          <method_context><method_credential user="root"/></method_context>
+        </exec_method>
+        <property_group name="startd" type="framework">
+          <propval name="duration" type="astring" value="transient"/>
+        </property_group>
+        <instance name="default" enabled="true"/>
+        <template><common_name><loctext xml:lang="C">solnix nix store DB registration (first boot)</loctext></common_name></template>
+      </service>
+    </service_bundle>
+    EOF
+    cat > "$BEROOT/lib/svc/method/solnix-nix-register" <<'EOF'
+    #!/sbin/sh
+    . /lib/svc/share/smf_include.sh
+    SENTINEL=/nix/.solnix-registered
+    REG=/nix/.solnix-registration
+    if [ -e "$SENTINEL" ]; then
+      exit $SMF_EXIT_OK   # already registered; nothing to do
+    fi
+    # nix-store is on the composed profile (default profile -> sw). Find it.
+    NIXSTORE=""
+    for d in /nix/var/nix/profiles/default/bin /run/current-system/sw/bin /usr/bin; do
+      [ -x "$d/nix-store" ] && { NIXSTORE="$d/nix-store"; break; }
+    done
+    if [ -z "$NIXSTORE" ]; then
+      echo "solnix-nix-register: nix-store not found; skipping (store unregistered)" > /dev/console 2>&1
+      exit $SMF_EXIT_OK
+    fi
+    if [ -s "$REG" ]; then
+      "$NIXSTORE" --load-db < "$REG" > /dev/console 2>&1 \
+        && echo "solnix-nix-register: store DB loaded" > /dev/console 2>&1 \
+        || echo "solnix-nix-register: load-db failed (store may be unregistered)" > /dev/console 2>&1
+    else
+      # fallback: register the current-system closure validity directly.
+      "$NIXSTORE" --register-validity /run-current-system > /dev/console 2>&1 || true
+    fi
+    : > "$SENTINEL"   # self-disable: never run again
+    exit $SMF_EXIT_OK
+    EOF
+    chmod 0555 "$BEROOT/lib/svc/method/solnix-nix-register"
 
     log "installing solnix-generated SMF manifests + site profile (add-not-replace)"
     mkdir -p "$BEROOT/lib/svc/manifest/solnix" "$BEROOT/lib/svc/method" "$BEROOT/etc/svc/profile/site"
