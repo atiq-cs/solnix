@@ -101,3 +101,23 @@ hermetic linkage), so AMIs are testable at every phase.
 - Every portability fix discovered (become overlay patches).
 - All oi-clib.sh recipes (codegen input for Phase 2).
 - The verified booting AMI raw + the declarative Stage-A modules + this roadmap.
+
+## BLOCKER (2026-08-02): bootstrap chicken-and-egg + account churn
+The pure stdenv build is BLOCKED by a circular dependency, exposed when ouch+crackers died:
+  pure hello -> needs GNU userland IN the seed -> needs a full-toolchain host to grow it
+  -> needs a runnable illumos Nix -> only ever produced by compiling Nix on a full OI host
+  -> that host died with ouch/crackers and is unreopenable.
+Two artifacts were NEVER banked to the surviving cache, so churn stranded us:
+  (1) a runnable illumos Nix CLOSURE (there is NO prebuilt Nix for illumos; only ever
+      compiled on a full OI host). cache.solnix.io has NONE.
+  (2) a seed WITH GNU userland (the x86_64 seed has only the Solaris toolchain; the
+      pure stdenv slices bash/coreutils/findutils/... from seed/usr/gnu/bin which is EMPTY;
+      oi-extract-seed.sh has no userland-grow code).
+BREAK-THE-CYCLE (account-proof, do ONCE): stand up a full OpenIndiana Hipster host
+(from OI's own ISO/cloud image in EC2 — NOT account-bound), and on it:
+  (a) build Nix + `nix-store --export` its closure -> publish to cache.solnix.io, so any
+      bare illumos host bootstraps nix by unpack-over-ssh (no on-host compiler).
+  (b) grow the seed GNU userland + republish the seed FOD (bump hash).
+Then the pure stdenv builds on any host, forever, regardless of account churn.
+The sun SPARC host cannot help (wrong arch). solnix.io cache/keys/code/seed(toolchain)
+all survive; only the build SUBSTRATE + these 2 artifacts are the gap.
