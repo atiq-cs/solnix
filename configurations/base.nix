@@ -27,10 +27,11 @@
   #   - nix is shipped by modules/config/nix.nix (nix.package -> systemPackages),
   #     so it is NOT re-listed here (would duplicate the store path).
   #   - base-tools (coreutils-equiv) is seeded by modules/config/system-path.nix.
-  #   - file/less/vim/curl/htop/git are NOT yet sliced as pkgs.solnix.* — the
-  #     orchestrator slices them, then they get added to this list. See the
-  #     Stage-A report. Empty for now so eval succeeds (nothing unresolved).
-  environment.systemPackages = with pkgs.solnix; [ ];
+  #   - file/less/vim/curl/htop/git come from pkgs.solnix.cached — the wave-built
+  #     cache index (pkgs/illumos/cached.nix, keyed by pname). Each is a
+  #     builtins.storePath that substitutes from cache.solnix.io at realise time
+  #     (verified present in the x86_64-solaris manifest).
+  environment.systemPackages = with pkgs.solnix.cached; [ file less vim curl htop git ];
 
   # Declarative networking (T2.9): the primary NIC via DHCP. This GENERATES the
   # illumos bringup (ipadm create-if/create-addr with the legacy-ifconfig

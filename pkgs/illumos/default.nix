@@ -372,8 +372,16 @@ let
   # ships on the image (design §C). First cut = host /nix-tools ingest; see the
   # TODO in ./nix.nix for the proper mk-illumos-component slice.
   nix = import ./nix.nix { };
+
+  # cached (pkgs.solnix.cached.<pname>) — every wave-built package in the cache
+  # (docs/registry/arch-manifest.tsv), exposed as a store-path attr so a config
+  # can list `with pkgs.solnix.cached; [ vim curl ... ]` and have each substitute
+  # from cache.solnix.io at realise time. See ./cached.nix for the CAVEATS
+  # (best-effort pname keying, last-wins on duplicate versions, eval forces a
+  # substituter check for absent paths).
+  cached = import ./cached.nix { system = "x86_64-solaris"; };
 in
 {
-  inherit gate libc rtld ld sys base-tools systemPath externalLibs nix;
+  inherit gate libc rtld ld sys base-tools systemPath externalLibs nix cached;
   inherit (toolchains) gcc14 clang gdb;
 }

@@ -36,7 +36,20 @@
       # x86_64-solaris with the fork's illumos overlay (exposes pkgs.illumos.*).
       pkgsFor = system: import nixpkgs {
         inherit system;
-        overlays = [ solnix-pkgs.overlays.default ];
+        overlays = [ solnix-pkgs.overlays.default cachedOverlay ];
+      };
+
+      # cachedOverlay — layer the wave-built cache index onto pkgs.solnix so a
+      # config can reference `pkgs.solnix.cached.<pname>` (store paths that
+      # substitute from cache.solnix.io at realise time). Only `cached` is added
+      # here: the rest of the gate-derived world (gate/libc/systemPath/...) is a
+      # host-local builtins.path proto that does not exist on the build system,
+      # so it stays in the host eval path (lib/eval-host.nix). cached.nix is pure
+      # (reads the manifest + builtins.storePath), so it evaluates anywhere.
+      cachedOverlay = _final: prev: {
+        solnix = prev.solnix // {
+          cached = import ./pkgs/illumos/cached.nix { system = "x86_64-solaris"; };
+        };
       };
     in
     {
