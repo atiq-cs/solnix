@@ -1,1 +1,5 @@
 pname	version	url	sha256	buildsys	deps	flags	system	out	debug
+jansson	2.14	https://github.com/akheron/jansson/releases/download/v2.14/jansson-2.14.tar.gz	5798d010e41cf8d76b66236cfb2f2543c8d082181d16bc3085ab49538d4b9929	autotools			sparcv9-solaris	/nix/store/wik180ad3l3ph8nbqii95bammp3vmw0m-jansson-2.14-sparcv9	
+c-ares	1.34.4	https://github.com/c-ares/c-ares/releases/download/v1.34.4/c-ares-1.34.4.tar.gz	fa38dbed659ee4cc5a32df5e27deda575fa6852c79a72ba1af85de35a6ae222f	autotools			sparcv9-solaris	/nix/store/fqvs4w6dp6bbfbjwjgjr04ai0fbihyx0-c-ares-1.34.4-sparcv9	
+oniguruma	6.9.9	https://github.com/kkos/oniguruma/releases/download/v6.9.9/onig-6.9.9.tar.gz	60162bd3b9fc6f4886d4c7a07925ffd374167732f55dce8c491bfd9cd818a6cf	autotools			sparcv9-solaris	/nix/store/b3nhla0fvsr7b328dak2yazxapmwrni2-oniguruma-6.9.9-sparcv9	
+pcre2	10.44	https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.44/pcre2-10.44.tar.gz	86b9cb0aa3bcb7994faa88018292bc704cdbb708e785f7c74352ff6ea7d3175b	autotools			sparcv9-solaris	/nix/store/kdx7s0drsxcryl7fgfr2m1bxqj10vyhq-pcre2-10.44-sparcv9	
