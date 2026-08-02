@@ -71,5 +71,19 @@
         # the full system closure (T2.8); realise on the illumos host.
         baseToplevel = self.solnixConfigurations.base.config.system.build.toplevel;
       });
+
+      # devShells: the build/ops toolchain used to DRIVE solnix builds from a
+      # flake-capable host (this is what `.envrc`'s `use flake` loads). Not the
+      # target userland (that's x86_64-solaris) — just host-side tools: nix,
+      # git, plus the cache publish/verify deps (sops, awscli2) and ISO tooling.
+      devShells = lib.genAttrs buildSystems (buildSystem:
+        let pkgs = pkgsFor buildSystem; in {
+          default = pkgs.mkShellNoCC {
+            packages = with pkgs; [ git sops age awscli2 xorriso jq curl ];
+            shellHook = ''
+              echo "solnix dev shell — build/ops tooling (target userland is x86_64-solaris)."
+            '';
+          };
+        });
     };
 }

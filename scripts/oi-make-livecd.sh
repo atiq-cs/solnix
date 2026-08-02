@@ -41,7 +41,7 @@ SRC="${SRC:-/}"                          # the running root we slice from
 # minimal root ~268MB + Xfce/xorg/gtk3 closure ~177MB = ~445MB used, so default
 # RD_MB to 900 for graphical, 450 for minimal.
 GRAPHICAL="${GRAPHICAL:-0}"
-if [ "$GRAPHICAL" = 1 ]; then RD_MB="${RD_MB:-900}"; else RD_MB="${RD_MB:-450}"; fi
+if [ "$GRAPHICAL" = 1 ]; then RD_MB="${RD_MB:-900}"; else RD_MB="${RD_MB:-560}"; fi
                                           # ldd-closure tool set is ~130MB du, ~215MB on UFS.
 INSTALLER="${INSTALLER:-/var/tmp/solnix-install}"   # scripts/solnix-install, scp'd here
 LABEL="${LABEL:-SOLNIX_INSTALL}"
@@ -149,7 +149,15 @@ done
 # /usr/lib half. Compute the closure with ldd, copy each referenced .so (follow
 # symlinks so the real file lands + recreate the soname link).
 log "copying ldd closure of installer tools from /usr/lib"
+# NOTE: sshd + the console-auth binaries are in this closure too. Their
+# DIRECT /usr/lib deps (libcrypto.so.3, libicu*.so.78, libxml2.so.16, libldap,
+# libsasl, libidmap, ...) are ldd-visible and get copied here for BOTH ABIs.
+# The dlopen'd runtime pieces (passwdutil.so.1, the NSS/NSPR mps tree) are NOT
+# ldd-visible and are force-copied in a dedicated block further down.
 CLOSURE_TOOLS="/sbin/zpool /sbin/zfs /usr/sbin/format /usr/sbin/fmthard
+  /usr/sbin/sshd /usr/bin/ssh-keygen /usr/bin/login /usr/bin/su
+  /usr/libexec/sshd-session /usr/libexec/sshd-auth
+  /usr/libexec/ssh-keysign /usr/libexec/sftp-server
   /usr/sbin/prtvtoc /usr/sbin/newfs /usr/sbin/mkfs /usr/sbin/installboot
   /usr/sbin/bootadm /usr/sbin/devfsadm /usr/sbin/dladm /usr/sbin/ipadm
   /usr/sbin/ifconfig /usr/sbin/prtconf /usr/sbin/init /usr/sbin/mount
@@ -192,6 +200,10 @@ LIVE_TOOLS="
   usr/bin/basename usr/bin/hostname usr/bin/sleep usr/bin/kill usr/bin/chmod
   usr/bin/chown usr/bin/chgrp usr/bin/mount usr/bin/umount usr/bin/sync
   usr/bin/yes usr/bin/file usr/bin/vi usr/bin/more usr/bin/less usr/bin/tee
+  usr/bin/vim usr/bin/ex usr/bin/view usr/bin/nano
+  usr/has/bin/vi
+  usr/bin/man usr/bin/mandoc usr/bin/col usr/bin/nroff
+  usr/bin/curl usr/bin/wget
   usr/bin/env usr/bin/test usr/bin/true usr/bin/false usr/bin/sh usr/bin/pfexec
   usr/bin/su usr/bin/login usr/bin/newtask
   usr/bin/digest usr/bin/openssl usr/bin/od usr/bin/xargs usr/bin/mkfile
@@ -207,10 +219,15 @@ LIVE_TOOLS="
   usr/sbin/fcadm usr/sbin/cfgadm usr/sbin/fcinfo
   usr/bin/svcs usr/bin/svcprop usr/bin/coreadm usr/sbin/coreadm
   usr/sbin/soconfig usr/sbin/ndd usr/bin/ps usr/bin/tty usr/bin/who
+  usr/sbin/in.routed usr/bin/netstat
   usr/bin/login usr/bin/i86/ksh93 usr/bin/pgrep usr/bin/pkill usr/bin/logger
   usr/sbin/hostconfig usr/sbin/sysconfig usr/lib/saf/ttymon usr/lib/saf/sac
   usr/lib/utmpd usr/lib/pfexecd usr/lib/rad/rad
   usr/sbin/pmadm usr/sbin/sacadm usr/bin/coreadm usr/lib/utmpd
+  usr/sbin/sshd usr/bin/ssh-keygen usr/bin/ssh-keysign usr/lib/ssh/ssh-keysign
+  usr/lib/ssh/sftp-server usr/lib/ssh/sshd
+  usr/libexec/sshd-session usr/libexec/sshd-auth usr/libexec/ssh-keysign
+  usr/libexec/ssh-pkcs11-helper usr/libexec/ssh-sk-helper usr/libexec/sftp-server
 "
 # build an INCLUDE list of paths that exist, then tar them in one pass so tar
 # PRESERVES hardlinks (the amd64/ isaexec dispatch dirs come along per-tool).
@@ -221,11 +238,26 @@ for t in $LIVE_TOOLS; do
   d=$(dirname "$t"); b=$(basename "$t")
   [ -e "$SRC/$d/amd64/$b" ] && echo "$d/amd64/$b" >> /tmp/solnix-tools.list
 done
-# tar the curated list in ONE pass (preserves hardlinks). illumos tar has no
-# working -I/-T include-file, so pass the paths as args via xargs (the list is
-# ~110 entries, well under ARG_MAX).
-( cd "$SRC" && tr '\n' ' ' < /tmp/solnix-tools.list | xargs tar -cf - 2>/dev/null ) \
-  | ( cd "$RDROOT" && tar -xf - ) 2>/dev/null || echo "WARN: tool copy had errors" >&2
+# MAN PAGES: the minimal install should ship `man` + pages for the staged tools
+# (NixOS parity — a base install has working man). /usr/share/man is ~82MB raw
+# but the ramdisk is right-sized + gzipped at the end (~4x), so it costs ~20MB
+# on media and lands in BOTH the ISO live-root AND the installed BE (the BE is
+# copied from the live-root). man(1) here uses mandoc (staged above), no nroff
+# pipeline needed. Include the man tree + man config if present.
+for mp in usr/share/man etc/man.conf usr/share/man/man.cf usr/share/mandoc; do
+  [ -e "$SRC/$mp" ] && echo "$mp" >> /tmp/solnix-tools.list
+done
+# Copy the curated list in ONE archive. NOTE: the earlier `xargs tar -cf -`
+# approach was BROKEN on illumos: illumos xargs honors a small -s command-size
+# cap and SPLITS a long list into multiple `tar -cf -` invocations, each
+# emitting a separate archive stream concatenated on stdout; `tar -xf -` reads
+# only the FIRST stream and discards the rest -> entries in later batches (e.g.
+# usr/libexec/sshd-auth) silently vanished, and WHICH ones dropped depended on
+# where xargs split (intermittent). cpio -o reads the whole path list from
+# stdin in a SINGLE archive (preserves hardlinks), so nothing is dropped.
+( cd "$SRC" && cpio -o -H ustar < /tmp/solnix-tools.list 2>/dev/null ) \
+  | ( cd "$RDROOT" && cpio -idm -H ustar 2>/dev/null ) \
+  || echo "WARN: tool copy had errors" >&2
 
 # /sbin/sh ships as a symlink to the 32-bit ../usr/bin/i86/ksh93 (needs 32-bit
 # libs we don't carry). Repoint it at the 64-bit /usr/bin/ksh93 (which is the
@@ -244,6 +276,72 @@ rm -f "$RDROOT/usr/bin/sh" 2>/dev/null; ln -s ksh93 "$RDROOT/usr/bin/sh" 2>/dev/
 rm -f "$RDROOT/usr/bin/ksh" 2>/dev/null; ln -s ksh93 "$RDROOT/usr/bin/ksh" 2>/dev/null || true
 # /bin -> usr/bin (illumos convention; /etc/profile + method scripts use /bin/*).
 [ -e "$RDROOT/bin" ] || ln -s usr/bin "$RDROOT/bin" 2>/dev/null || true
+
+# EDITORS: /usr/bin/{vi,ex,view} ship as symlinks to `vim`. The curated copy
+# now stages vim, but if vim failed to come through (or on a stripped source),
+# a bare `vi` symlink dangles (the exact bug: `vi` -> vim, vim absent). Ensure
+# vi resolves: if vim is present keep the link; else repoint vi/ex/view at the
+# real standalone /usr/has/bin/vi (nvi-derived, no vim dep). nano is a real bin.
+if [ ! -e "$RDROOT/usr/bin/vim" ]; then
+  if [ -e "$RDROOT/usr/has/bin/vi" ]; then
+    for _e in vi ex view; do rm -f "$RDROOT/usr/bin/$_e"; ln -s ../has/bin/vi "$RDROOT/usr/bin/$_e" 2>/dev/null || true; done
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 2b. AUTH RUNTIME dlopen closure (sshd PAM + console login/su).
+#
+# WHY this is separate from the ldd closure above: PAM loads its service
+# modules and the password backend by dlopen() at RUNTIME, so ldd of
+# sshd/login/su does NOT list them. Without them the console login(1)/su path
+# dies with `passwdutil.so.1: open failed` and `pam_authtok_get.so.1:
+# relocation error`, and network/ssh:default goes to maintenance (exit-95).
+# COPY_DIRS already grabs usr/lib/security (the pam_*.so.1 modules, both ABIs)
+# and the whole /lib tree (libpam.so.1 lives at /lib/libpam.so.1). What is
+# still missing is:
+#   - /usr/lib/passwdutil.so.1  (pam_unix_* dlopens it; 32-bit + amd64)
+#   - the NSS/NSPR mps tree (libsasl -> libldap -> dlopen NSS)
+#   - a handful of 32-bit /usr/lib deps of the 32-bit login/su/passwdutil path
+#     (libidmap, libsmbios, libldap.5, libsasl, libsldap) -- the CLOSURE loop
+#     above copies the amd64 half but the 32-bit login path needs the base ABI.
+# Note: login(1)/su(1)/passwdutil.so.1 are 32-bit ELF, so they load the
+# 32-bit (base) /usr/lib/*.so and 32-bit /usr/lib/security modules; sshd is
+# 64-bit and uses the amd64 variants. We copy BOTH ABIs where they exist.
+log "force-copying PAM/auth dlopen closure (passwdutil, NSS mps, 32-bit auth libs)"
+_copy_lib() {   # $1 = path under /usr/lib (relative to SRC); copies file+recreates dest dir
+  _s="$SRC${1}"; _rel=${1#/}
+  # /usr/lib/64 is a symlink to amd64 in our tree; normalize dest like the
+  # ldd-closure loop does so mkdir doesn't collide with the symlink.
+  _dr=$(echo "$_rel" | sed 's,^usr/lib/64/,usr/lib/amd64/,')
+  [ -e "$_s" ] || return 0
+  mkdir -p "$RDROOT/$(dirname "$_dr")"
+  cp -p "$_s" "$RDROOT/$_dr" 2>/dev/null || true
+}
+for _l in \
+  /usr/lib/passwdutil.so.1 /usr/lib/amd64/passwdutil.so.1 \
+  /usr/lib/libidmap.so.1 /usr/lib/libsmbios.so.1 \
+  /usr/lib/libldap.so.5 /usr/lib/libsasl.so.1 /usr/lib/libsldap.so.1 \
+  /usr/lib/64/libcrypto.so.3 /usr/lib/64/libidmap.so.1 \
+  /usr/lib/64/libsmbios.so.1 \
+  /usr/lib/64/libcrypt.so.1 /usr/lib/64/libgss.so.1 \
+  /usr/lib/64/gss/mech_krb5.so.1 /usr/lib/64/libkrb5.so.1 \
+  /usr/lib/64/libk5crypto.so.3 /usr/lib/64/libkrb5support.so.1 \
+  /usr/lib/64/libcom_err.so.3; do
+  _copy_lib "$_l"
+done
+# NSS/NSPR (mps) tree -- dlopen'd by libsasl/libldap; copy both ABIs whole
+# (~7MB, but auth silently fails without it). Real files + soname symlinks.
+if [ -d "$SRC/usr/lib/mps" ]; then
+  mkdir -p "$RDROOT/usr/lib/mps"
+  ( cd "$SRC/usr/lib" && tar -cf - mps ) | ( cd "$RDROOT/usr/lib" && tar -xf - ) 2>/dev/null \
+    || echo "WARN: copy /usr/lib/mps had errors" >&2
+fi
+# pam.conf + nsswitch already come via COPY_DIRS etc; sanity-check they landed.
+[ -s "$RDROOT/etc/pam.conf" ] || echo "WARN: /etc/pam.conf missing in live root (console auth needs it)" >&2
+
+# NOTE: scott + sshd host-key baking is done LATER (section 3c'), AFTER the
+# passwd/shadow/group copy below re-copies those files from the build host --
+# otherwise that copy clobbers scott's passwd/shadow lines.
 
 # ---------------------------------------------------------------------------
 # 3. make-be gotchas applied to the live root
@@ -290,6 +388,68 @@ for f in name_to_major name_to_sysnum driver_aliases driver_classes minor_perm \
          hosts netconfig; do
   [ -e "/etc/$f" ] && cp "/etc/$f" "$RDROOT/etc/$f" 2>/dev/null || true
 done
+
+# 3c'. scott + sshd host keys/config. MUST run AFTER the passwd/shadow/group
+#      copy above (which comes from the build host and would otherwise clobber
+#      scott's lines). SELF-INSTALL copies THIS live root's
+#      /etc/{passwd,shadow,group,user_attr} onto the installed BE verbatim, so
+#      baking scott here is what lands him on the AMI: uid 1001, group staff(10),
+#      shell ksh93, SHA-512 hashed password (baked; delivered out-of-band), and
+#      an /etc/user_attr Primary-Administrator line so `pfexec` gives uid=0.
+_SCOTT_HASH='$6$ArPWLrn2ySFy0yku$UT8DvBWBxdrSJ0LLGgznIBjfBwa.hBG6td1UjoOiue.FaNsp3sHs6yLwjDSWN7Aa6TT/aQJgMTEzGUtw//yJ40'
+_SCOTT_KEY='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKCqHOIyYwbp42C7MxnRFxOcy+ZE8cNOWdsdvCgVFm1L Greg Burd <greg@burd.me>'
+log "baking scott (uid 1001, Primary Administrator) into live root -> installed BE"
+grep -q '^staff:' "$RDROOT/etc/group" 2>/dev/null || echo 'staff::10:' >> "$RDROOT/etc/group"
+grep -q '^scott:' "$RDROOT/etc/passwd" 2>/dev/null || \
+  echo 'scott:x:1001:10:Scott (admin):/export/home/scott:/usr/bin/ksh93' >> "$RDROOT/etc/passwd"
+if ! grep -q '^scott:' "$RDROOT/etc/shadow" 2>/dev/null; then
+  # illumos shadow: name:hash:lastchg::::::  (lastchg in days; 6445 ~ 2027)
+  echo "scott:${_SCOTT_HASH}:6445::::::" >> "$RDROOT/etc/shadow"
+fi
+# RBAC: Primary Administrator profile so `pfexec` -> uid=0.
+touch "$RDROOT/etc/user_attr"
+grep -q '^scott:' "$RDROOT/etc/user_attr" 2>/dev/null || \
+  echo 'scott::::type=normal;profiles=Primary Administrator' >> "$RDROOT/etc/user_attr"
+# scott's home + authorized_keys (key login in addition to the password).
+mkdir -p "$RDROOT/export/home/scott/.ssh"
+echo "$_SCOTT_KEY" > "$RDROOT/export/home/scott/.ssh/authorized_keys"
+chmod 0700 "$RDROOT/export/home/scott/.ssh"
+chmod 0600 "$RDROOT/export/home/scott/.ssh/authorized_keys"
+chown -R 1001:10 "$RDROOT/export/home/scott" 2>/dev/null || true
+chmod 0400 "$RDROOT/etc/shadow"
+# sshd host keys + config: the AMI must accept SSH on first boot. /etc/ssh
+# (incl sshd_config) arrives via COPY_DIRS etc; pre-generate host keys so
+# SELF-INSTALL copies them onto the AMI (network/ssh also runs `ssh-keygen -A`
+# at first boot as a fallback). Force PasswordAuthentication + PubkeyAuth on.
+mkdir -p "$RDROOT/etc/ssh"
+# sshd privilege-separation chroot dir: the sshd privsep user's home is
+# /var/empty; sshd refuses to start (SMF network/ssh -> maintenance, exit 95)
+# if it is absent or not root-owned 0755. The COPY_DIRS etc grab does NOT
+# include /var, so create it explicitly.
+mkdir -p "$RDROOT/var/empty"
+chown 0:3 "$RDROOT/var/empty" 2>/dev/null || true   # root:sys
+chmod 0755 "$RDROOT/var/empty"
+# Other /var runtime dirs the stripped ramdisk drops but daemons expect at
+# start: ttymon's /var/saf/zsmon (else "cannot create log file .../zsmon/log"),
+# cron spool, svc log dir. Cheap to create; keeps svcs -x clean.
+mkdir -p "$RDROOT/var/saf/zsmon" "$RDROOT/var/spool/cron/crontabs" \
+         "$RDROOT/var/svc/log" "$RDROOT/var/log" "$RDROOT/var/adm" \
+         "$RDROOT/var/cron" 2>/dev/null || true
+# Default nodename so the installed host is not "unknown". COPY_DIRS etc
+# brings the build host's /etc/nodename ("unknown"), so overwrite it. A first
+# boot on EC2 can still rename; this just gives a sane default hostname.
+echo solnix > "$RDROOT/etc/nodename"
+if [ ! -s "$RDROOT/etc/ssh/ssh_host_rsa_key" ]; then
+  log "pre-generating sshd host keys into live root"
+  for _t in rsa ecdsa ed25519; do
+    _kf="$RDROOT/etc/ssh/ssh_host_${_t}_key"
+    [ -s "$_kf" ] || ssh-keygen -q -t "$_t" -N '' -f "$_kf" </dev/null 2>/dev/null || true
+  done
+fi
+if [ -f "$RDROOT/etc/ssh/sshd_config" ]; then
+  grep -q '^PubkeyAuthentication' "$RDROOT/etc/ssh/sshd_config" || echo 'PubkeyAuthentication yes' >> "$RDROOT/etc/ssh/sshd_config"
+  grep -q '^PasswordAuthentication' "$RDROOT/etc/ssh/sshd_config" || echo 'PasswordAuthentication yes' >> "$RDROOT/etc/ssh/sshd_config"
+fi
 # WIDEST-HARDWARE BOOT: /etc/path_to_inst binds specific driver INSTANCE numbers
 # to the BUILD HOST's exact PCI/device topology. Shipping the host's copy makes
 # the live kernel try to honor a foreign device tree -> on different hardware
@@ -611,6 +771,19 @@ cat > "$RDROOT/etc/svc/profile/site/solnix.xml" <<'PROFEOF'
   <service name="application/desktop-cache/gio-module-cache" version="1" type="service"><instance name="default" enabled="false"/></service>
   <service name="application/print/service-selector" version="1" type="service"><instance name="default" enabled="false"/></service>
   <service name="application/print/server" version="1" type="service"><instance name="default" enabled="false"/></service>
+  <!-- minimal cloud AMI: disable services whose method binaries/deps are not in
+       the curated ramdisk and that we do not need. Leaving them enabled sends
+       them to maintenance (svcs -x noise) but does not block boot. sshd +
+       basic networking are what matter. -->
+  <service name="network/shares/group" version="1" type="service"><instance name="default" enabled="false"/></service>
+  <service name="network/shares/reparsed" version="1" type="service"><instance name="default" enabled="false"/></service>
+  <service name="network/inetd" version="1" type="service"><instance name="default" enabled="false"/></service>
+  <service name="system/cron" version="1" type="service"><instance name="default" enabled="false"/></service>
+  <service name="system/system-log" version="1" type="service"><instance name="default" enabled="false"/></service>
+  <service name="system/dumpadm" version="1" type="service"><instance name="default" enabled="false"/></service>
+  <service name="system/picl" version="1" type="service"><instance name="default" enabled="false"/></service>
+  <service name="application/desktop-cache/input-method-cache" version="1" type="service"><instance name="default" enabled="false"/></service>
+  <service name="network/routing/route" version="1" type="service"><instance name="default" enabled="false"/></service>
 </service_bundle>
 PROFEOF
 
@@ -720,6 +893,10 @@ if [ -e "$RDROOT/etc/svc/repository.db" ]; then
               application/print/service-selector:default system/hal:default \
               system/keymap:default system/intrd:default system/pkgserv:default \
               system/zones-monitoring:default system/dbus:default \
+              network/shares/group:default network/shares/reparsed:default \
+              network/inetd:default system/cron:default system/system-log:default \
+              system/dumpadm:default system/picl:default network/routing/route:default \
+              application/desktop-cache/input-method-cache:default \
               system/fcoe_initiator:default; do
     SVCCFG_REPOSITORY="$RDROOT/etc/svc/repository.db" \
       /usr/sbin/svccfg -s "$_svc" setprop general/enabled = boolean: false >/dev/null 2>&1 || true
