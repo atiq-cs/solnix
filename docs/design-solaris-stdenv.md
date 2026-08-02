@@ -391,3 +391,128 @@ pax tarballs, and dropping the Nix `>= 2.18` guard in the fetched nixpkgs
 
 Validated by realising a from-source hello on the crackers host + cross-platform
 instantiate on the Linux dev-box; no git commit (per house rules).
+
+---
+
+## 10. PURE seed-backed stdenv (purity-first authoring)
+
+Status: **authored + INSTANTIATES host-free (drvPath resolves, closure = seed +
+stage1 + from-source libc, ZERO host `/usr` or host-libc leak).** Realisation is
+gated on the illumos host (the seed ELF cannot run on Linux) + the seed userland
+re-extraction. This supersedes the §7.2 "purity deferred" note: the pure path is
+now the authored `pkgs/stdenv/illumos/default.nix`, replacing the impure-native
+boot stdenv that closed GATE 1b.
+
+### 10.1 What was authored
+
+Mirrors `pkgs/stdenv/freebsd` (a `linkBootstrap`-sliced seed tarball folded
+through a staged `mkStdenv` list), GCC not Clang, Solaris ld not lld:
+
+- **stage0 seed unpack as a PLAIN `derivation`** (`unpack-seed.sh`) — the
+  recursion-breaker (FreeBSD's `bootstrapArchive`). Never `stdenv.mkDerivation`,
+  so building the stdenv from it cannot re-enter the stdenv build.
+- **`bootstrapTools`** — `linkBootstrap` slices of the seed as their own plain
+  derivations: `gcc-unwrapped` (seed gcc-10 prefix), `binutils-unwrapped`
+  (Solaris ld/as/ar/nm/mcs/elfdump/elfedit), `libc` (seed crt+headers+libs
+  slice, `bootstrapLibs`), and the GNU userland (`bash coreutils diffutils
+  findutils patch gnutar gawk gnumake gnugrep gnused gzip bzip2 xz`).
+- **pure 3-stage `mkStdenv` list**: `illumos-boot-0` (cc = seed gcc + Solaris
+  bintools, libc = seed slice) → `illumos-boot-1` (rebuild tools against boot-0
+  libc) → `illumos` (final; tools from stage1). Each stage re-inherits the
+  userland slices from `prevStage` so `initialPath`/`shell` resolve to fixed
+  store paths (no from-source bash→bison→… re-entry).
+- **cc-wrapper**: `nativeTools = false`, `nativeLibc = false`, `isGNU = true`,
+  `cc = gcc-unwrapped`, `bintools` = Solaris ld via `ld-solaris-wrapper`. This is
+  the purity switch vs. the old impure boot stdenv (`nativeLibc = true` +
+  `nativePrefix = /usr`).
+- **preHook keeps the GNU fixup hooks ENABLED** (the pure closure carries
+  findutils/coreutils/etc.), only `dontPatchELF`/`dontStrip` stay (no patchelf on
+  illumos; relocation is via elfedit).
+- **from-source `solnix.libcFromSource`** (`pkgs/os-specific/illumos/pkgs/
+  libc.nix`) — a PLAIN derivation assembling include+csu+rtld+libc.so
+  component-wise from the seed tarball (via the builtin `<nix/fetchurl.nix>`, not
+  the package-set fetchurl, to break the libc-selector cycle). The all-packages
+  libc selector now maps `libc == "illumos-libc"` → `solnix.libcFromSource`
+  (was `throw "Unknown libc illumos-libc"`).
+
+### 10.2 The seed-gcc relocatability handling
+
+The cc-wrapper's `extraBuildCommands` sets, all pointing at seed store paths:
+`-B <gcc-unwrapped>/usr/gcc/10/bin`, `-B .../10.5.0` + `.../10.5.0/amd64` (gcc
+internal crt + cc1/collect2), `--sysroot=<bootstrapLibs>`, and
+`GCC_EXEC_PREFIX=<gcc>/lib/gcc/` (driver prefix override). This forces the seed
+gcc driver to ignore its compiled-in `/usr/gcc/10` + fixincluded `/usr/include`
+absolutes. The eh_frame / `-R` handling rides the bintools-wrapper Solaris path.
+This is the single biggest realise-time risk (design-seed-extraction §5.1) and is
+VERIFIED ONLY ON THE ILLUMOS HOST.
+
+### 10.3 Evidence (Linux dev-box, `nix derivation show`)
+
+Real flake path (`import lib.nixpkgsSrc { system = x86_64-solaris; overlays = [
+overlays.default ]; }`), a `stdenv.mkDerivation` hello:
+
+```
+drv:     …-hello-src-1.0.drv         (INSTANTIATES)
+system:  x86_64-solaris
+builder: /nix/store/…-bash/bin/bash  (SEED bash slice — NOT /usr/bin/bash)
+stdenv:  /nix/store/…-stdenv-illumos (final pure stage)
+```
+
+Full drv closure (33 derivations) traces:
+`hello → stdenv-illumos → illumos-cc → {gcc-unwrapped, binutils, bootstrapLibs}
+→ … → illumos-seed-unpacked → seed.tar.zst` (the content-addressed FOD). The
+3 stages are present: `stdenv-illumos-boot-0` → `-boot-1` → `-illumos`. A
+host-path scan of ALL 33 drvs (`/usr`, `/opt`, host `/bin/bash`, host `/lib`):
+**0 leaks.** x86_64-linux `hello-2.12.3` unchanged (no regression); cross
+`crossSystem = x86_64-illumos` libc selector resolves to the from-source libc
+instead of throwing.
+
+### 10.4 Remaining on-host build unknowns (realisation, not eval)
+
+1. **Seed userland re-extraction (option A).** The current x86_64 seed FOD ships
+   NO userland (verified: `usr/bin` has only ld/as/ar/nm/mcs/elfdump/elfedit; no
+   bash/coreutils/make/sed/awk/grep/tar/gzip/xz). The pure stages slice the
+   userland from `usr/gnu/bin/*` — paths the GROWN seed carries. Re-run
+   `scripts/oi-extract-seed.sh` on the illumos host with a widened copy list
+   (add a minimal GNU userland), re-tar, bump the SRI hash in
+   `pkgs/stdenv/illumos/default.nix` + `pkgs/os-specific/illumos/{seed,pkgs/
+   libc}.nix` (three copies of the hash — consider a shared pin). Until then the
+   userland slices INSTANTIATE but the paths only exist post-re-extraction.
+2. **First-unpack builder bootstrap.** `unpack-seed.sh` needs the seed's own
+   bash + tar + zstd + elfedit as the unpack interpreter (FreeBSD's `unpack.nar`
+   analog). Wire the exact builder against the re-extracted seed on-host.
+3. **elfedit RUNPATH relocation.** `unpack-seed.sh` rewrites every seed ELF's
+   RUNPATH to `$ORIGIN`-relative; verify `elfedit` can grow the dynamic-section
+   RUNPATH string in place on the largest objects (`libstdc++.so.6`, `cc1plus`)
+   or fall back to relink (design-seed-extraction §2.5).
+4. **seed-gcc relocatability + eh_frame.** Verify the §10.2 flag override fully
+   defeats the compiled-in `/usr/gcc/10` prefix on a clean box (no `/usr/gcc/10`
+   present); the include-fixed host-absolute leakage risk (drop include-fixed +
+   `-isystem` the seed headers if a hello fails to compile).
+5. **from-source libc: compile-from-gate.** `libc.nix` currently REPACKAGES the
+   seed's built libc bits into the from-source LAYOUT (own store path, no seed
+   symlink in output). Replace with a true illumos-gate compile (dmake in
+   `usr/src/lib/libc`, `usr/src/cmd/sgs/rtld`, `usr/src/lib/crt`) once the gate
+   FOD (design-nixpkgs-illumos §1.5) lands. Output layout + passthru are
+   identical, so no stdenv/selector rewiring.
+6. **libc stage threading.** For the FINAL stdenv to realise a libc-consuming
+   package, `libcFromSource` must be produced by a BOOT stage (like FreeBSD's
+   `prevStage.freebsd.libc`), not lazily by the final stdenv. Off-host eval does
+   not exercise this; on-host it must be threaded through the stages' overrides.
+
+### 10.5 Files changed (this authoring, solnix-pkgs)
+
+- `pkgs/stdenv/illumos/default.nix` — REWRITTEN: impure-native boot stdenv →
+  pure seed-backed 3-stage bootstrap (bootstrapTools linkBootstrap slices +
+  mkStdenv + seed-gcc relocatability extraBuildCommands).
+- `pkgs/stdenv/illumos/{linkBootstrap.sh,unpack-seed.sh}` — NEW: the seed slice
+  script + the plain-derivation seed unpack + elfedit relocation.
+- `pkgs/os-specific/illumos/pkgs/{libc.nix,libc-unpack-seed.sh}` — NEW: the
+  from-source `libcFromSource` (plain-derivation, cycle-safe).
+- `pkgs/os-specific/illumos/default.nix` — added `libcFromSource = import ./pkgs/
+  libc.nix …` beside the existing seed-cross wrappers (kept for `ccFlagsDump`).
+- `patches/0003-all-packages-illumos.patch` — REGENERATED: added the libc
+  selector branch `libc == "illumos-libc" → solnix.libcFromSource`.
+- `patches/0004-stdenv-illumos-bootstrap-stage.patch` — REGENERATED: embeds the
+  rewritten pure stage file + the two new scripts + the selector hunk. All four
+  patches apply cleanly (`applyPatches` realises); no x86_64-linux regression.
