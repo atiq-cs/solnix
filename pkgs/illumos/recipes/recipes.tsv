@@ -1,0 +1,299 @@
+# pname	version	url	buildsys	deps	flags	sha256	source
+GraphicsMagick	1.3.47	https://sourceforge.net/projects/graphicsmagick/files/graphicsmagick/1.3.47/GraphicsMagick-1.3.47.tar.xz/download	autotools	zlib xz bzip2 libiconv	--without-x --disable-static --with-png --with-jpeg --with-ttf --with-lcms2 --with-tiff --with-webp --without-wmf --without-magick-plus-plus	SKIP	packages.nix
+ImageMagick	7.1.2-21	https://imagemagick.org/archive/releases/ImageMagick-7.1.2-21.tar.xz	autotools	zlib xz bzip2 libiconv	--without-x --disable-static --without-modules --with-png --with-jpeg --with-freetype --with-lcms --with-tiff --with-webp --without-gvc --without-rsvg --without-gslib --without-fontconfig --without-wmf --without-magick-plus-plus	SKIP	packages.nix
+a2ps	4.15.6	https://mirrors.kernel.org/gnu/a2ps/a2ps-4.15.6.tar.gz	autotools		--disable-gcc-warnings --disable-nls	87ff9d801cb11969181d5b8cf8b65e65e5b24bb0c76a1b825e8098f2906fbdf4	packages.nix
+apr	1.7.6	https://archive.apache.org/dist/apr/apr-1.7.6.tar.gz	autotools		--disable-static	6a10e7f7430510600af25fabf466e1df61aaae910bf1dc5d10c44a4433ccc81d	packages.nix
+args	6.4.6	https://github.com/Taywee/args/archive/refs/tags/6.4.6.tar.gz	cmake		-DARGS_BUILD_EXAMPLE=OFF -DARGS_BUILD_UNITTESTS=OFF		specs.tsv
+aria2	1.37.0	https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0.tar.xz	autotools	openssl-3 expat zlib libiconv	--disable-epoll --with-openssl --without-gnutls --with-libexpat --with-libcares --without-libssh2 --disable-static	60a420ad7085eb616cb6e2bdf0a7206d68ff3d37fb5a956dc44242eb2f79b66b	packages.nix
+aspell	0.60.8.2	https://ftpmirror.gnu.org/aspell/aspell-0.60.8.2.tar.gz	autotools	ncurses	--disable-static	57fe4863eae6048f72245a8575b44b718fb85ca14b9f8c0afc41b254dfd76919	packages.nix
+autoconf	2.72	https://mirrors.kernel.org/gnu/autoconf/autoconf-2.72.tar.xz	autotools	m4		ba885c1319578d6c94d46e9b0dceb4014caafe2490e437a0dbca3f270a223f5a	packages.nix
+automake	1.16.5	https://mirrors.kernel.org/gnu/automake/automake-1.16.5.tar.xz	autotools	autoconf m4		f01d58cd6d9d77fbdca9eb4bbd5ead1988228fdb73d6f7a201f5f8d6b118b469	packages.nix
+bdw-gc	8.2.8	https://github.com/ivmai/bdwgc/releases/download/v8.2.8/gc-8.2.8.tar.gz	autotools		--disable-docs		specs.tsv
+benchmark	1.9.0	https://github.com/google/benchmark/archive/refs/tags/v1.9.0.tar.gz	cmake		-DBENCHMARK_ENABLE_TESTING=OFF -DBENCHMARK_ENABLE_GTEST_TESTS=OFF -DBUILD_SHARED_LIBS=ON		specs.tsv
+berkeley-db	5.3.28	https://download.oracle.com/berkeley-db/db-5.3.28.tar.gz	custom			e0a992d740709892e81f9d93f06daf305cf73fb81b545afe72478043172c3628	packages.nix
+bison	3.8.2	https://mirrors.kernel.org/gnu/bison/bison-3.8.2.tar.xz	autotools	m4		9bba0214ccf7f1079c5d59210045227bcf619519840ebfa80cd3849cff5a5bf2	packages.nix
+byacc	20240109	https://invisible-island.net/archives/byacc/byacc-20240109.tgz	configure				specs.tsv
+bzip2	1.0.8	https://sourceware.org/pub/bzip2/bzip2-1.0.8.tar.gz	custom			ab5a03176ee106d3f0fa90e381da478ddae405918153cca248e682cd0c4a2269	packages.nix
+c-ares	1.34.4	https://github.com/c-ares/c-ares/releases/download/v1.34.4/c-ares-1.34.4.tar.gz	cmake		-DCARES_BUILD_TESTS=OFF -DCARES_BUILD_TOOLS=OFF		specs.tsv
+cJSON	1.7.18	https://github.com/DaveGamble/cJSON/archive/refs/tags/v1.7.18.tar.gz	cmake		-DENABLE_CJSON_TEST=Off -DBUILD_SHARED_LIBS=On		specs.tsv
+cabextract	1.11	https://www.cabextract.org.uk/cabextract-1.11.tar.gz	autotools				specs.tsv
+cadaver	0.23.3	https://notroj.github.io/cadaver/cadaver-0.23.3.tar.gz	autotools	readline ncurses expat openssl-3 zlib	--with-included-neon --with-ssl=openssl --disable-nls	fd4ce68a3230ba459a92bcb747fc6afa91e46d803c1d5ffe964b661793c13fca	packages.nix
+cairo	1.16.0	https://cairographics.org/releases/cairo-1.16.0.tar.xz	configure	libpng freetype fontconfig expat zlib	--disable-xlib --disable-xcb --disable-gl --enable-ft --enable-fc		specs.tsv
+catch2	3.7.1	https://github.com/catchorg/Catch2/archive/refs/tags/v3.7.1.tar.gz	cmake		-DBUILD_TESTING=OFF -DCATCH_INSTALL_DOCS=OFF		specs.tsv
+cfitsio	4.5.0	https://heasarc.gsfc.nasa.gov/FTP/software/fitsio/c/cfitsio-4.5.0.tar.gz	autotools	zlib			specs.tsv
+cflow	1.7	https://ftp.gnu.org/gnu/cflow/cflow-1.7.tar.gz	autotools				specs.tsv
+check	0.15.2	https://github.com/libcheck/check/releases/download/0.15.2/check-0.15.2.tar.gz	autotools				specs.tsv
+chromaprint	1.5.1	https://github.com/acoustid/chromaprint/releases/download/v1.5.1/chromaprint-1.5.1.tar.gz	cmake		-DBUILD_TOOLS=OFF -DBUILD_TESTS=OFF -DFFT_LIB=kissfft		specs.tsv
+civetweb	1.16	https://github.com/civetweb/civetweb/archive/refs/tags/v1.16.tar.gz	cmake		-DCIVETWEB_BUILD_TESTING=OFF -DCIVETWEB_ENABLE_SERVER_EXECUTABLE=ON -DCIVETWEB_ENABLE_SSL=OFF		specs.tsv
+cli11	2.4.2	https://github.com/CLIUtils/CLI11/archive/refs/tags/v2.4.2.tar.gz	cmake		-DCLI11_BUILD_TESTS=OFF -DCLI11_BUILD_EXAMPLES=OFF		specs.tsv
+cln	1.3.7	https://www.ginac.de/CLN/cln-1.3.7.tar.bz2	autotools	gmp			specs.tsv
+cmake	3.29.6	https://github.com/Kitware/CMake/releases/download/v3.29.6/cmake-3.29.6.tar.gz	custom	openssl-3 zlib expat bzip2 xz zstd ncurses		1391313003b83d48e2ab115a8b525a557f78d8c1544618b48d1d90184a10f0af	packages.nix
+cmocka	1.1.7	https://gitlab.com/cmocka/cmocka/-/archive/cmocka-1.1.7/cmocka-cmocka-1.1.7.tar.gz	cmake		-DWITH_EXAMPLES=OFF		specs.tsv
+confuse	3.3	https://github.com/libconfuse/libconfuse/releases/download/v3.3/confuse-3.3.tar.xz	autotools		--disable-examples		specs.tsv
+coreutils	9.7	https://ftp.gnu.org/gnu/coreutils/coreutils-9.7.tar.xz	autotools		--disable-gcc-warnings --disable-nls --without-selinux	e8bb26ad0293f9b5a1fc43fb42ba970e312c66ce92c1b0b16713d7500db251bf	packages.nix
+cpio	2.15	https://mirrors.kernel.org/gnu/cpio/cpio-2.15.tar.bz2	autotools		--disable-nls	937610b97c329a1ec9268553fb780037bcfff0dcffe9725ebc4fd9c1aa9075db	packages.nix
+cppi	1.18	https://ftp.gnu.org/gnu/cppi/cppi-1.18.tar.gz	autotools				specs.tsv
+cunit	3.2.7	https://gitlab.com/cunity/cunit/-/archive/3.2.7/cunit-3.2.7.tar.gz	cmake		-DCUNIT_DISABLE_TESTS=ON		specs.tsv
+curl	8.9.1	https://curl.se/download/curl-8.9.1.tar.xz	autotools	openssl-3 zlib	--with-openssl=/nix/store/nj5f1jljp3jja8hfs1q5yk8cmf9qll5d-openssl-3-3.4.0 --with-zlib=/nix/store/ia16b2720j6gpnwqxcfar6qdv141mjyb-zlib-1.3.1 --without-libpsl --disable-ldap --without-libidn2 --without-nghttp2 --without-brotli --without-zstd --without-libgsasl ac_cv_search_gsasl_init=no	f292f6cc051d5bbabf725ef85d432dfeacc8711dd717ea97612ae590643801e5	packages.nix
+cvs	1.12.13	https://ftp.halifax.rwth-aachen.de/gnu/non-gnu/cvs/source/feature/1.12.13/cvs-1.12.13.tar.bz2	autotools	zlib	--disable-nls --with-external-zlib	78853613b9a6873a30e1cc2417f738c330e75f887afdaf7b3d0800cb19ca515e	packages.nix
+cxxopts	3.2.0	https://github.com/jarro2783/cxxopts/archive/refs/tags/v3.2.0.tar.gz	cmake		-DCXXOPTS_BUILD_TESTS=OFF -DCXXOPTS_BUILD_EXAMPLES=OFF		specs.tsv
+daemonize	1.7.8	https://github.com/bmc/daemonize/archive/refs/tags/release-1.7.8.tar.gz	configure				specs.tsv
+datamash	1.9	https://ftp.gnu.org/gnu/datamash/datamash-1.9.tar.gz	autotools			f382ebda03650dd679161f758f9c0a6cc9293213438d4a77a8eda325aacb87d2	packages.nix
+ddrescue	1.28	https://mirrors.kernel.org/gnu/ddrescue/ddrescue-1.28.tar.lz	custom			6626c07a7ca1cc1d03cad0958522c5279b156222d32c342e81117cfefaeb10c1	packages.nix
+diffutils	3.10	https://mirrors.kernel.org/gnu/diffutils/diffutils-3.10.tar.xz	autotools			90e5e93cc724e4ebe12ede80df1634063c7a855692685919bfe60b556c9bd09e	packages.nix
+doctest	2.4.11	https://github.com/doctest/doctest/archive/refs/tags/v2.4.11.tar.gz	cmake		-DDOCTEST_WITH_TESTS=OFF -DDOCTEST_WITH_MAIN_IN_STATIC_LIB=ON		specs.tsv
+dos2unix	7.5.2	https://downloads.sourceforge.net/dos2unix/dos2unix-7.5.2.tar.gz	configure				specs.tsv
+duktape	2.7.0	https://github.com/svaarala/duktape/releases/download/v2.7.0/duktape-2.7.0.tar.xz	special				specs.tsv
+dwdiff	2.1.4	https://os.ghalkes.nl/dist/dwdiff-2.1.4.tar.bz2	autotools	libiconv	--without-gettext	df16fec44dcb467d65a4246a43628f93741996c1773e930b90c6dde22dd58e0a	packages.nix
+editline	1.17.1	https://github.com/troglobit/editline/releases/download/1.17.1/editline-1.17.1.tar.gz	autotools				specs.tsv
+enscript	1.6.6	https://mirrors.kernel.org/gnu/enscript/enscript-1.6.6.tar.gz	autotools		--disable-nls	6d56bada6934d055b34b6c90399aa85975e66457ac5bf513427ae7fc77f5c0bb	packages.nix
+exiv2	0.28.5	https://github.com/Exiv2/exiv2/archive/refs/tags/v0.28.5.tar.gz	cmake	zlib expat	-DEXIV2_ENABLE_XMP=OFF -DEXIV2_BUILD_SAMPLES=OFF -DEXIV2_BUILD_EXIV2_COMMAND=OFF -DEXIV2_ENABLE_INIH=OFF -DEXIV2_ENABLE_BROTLI=OFF -DEXIV2_ENABLE_NLS=OFF		specs.tsv
+expat	2.6.4	https://github.com/libexpat/libexpat/releases/download/R_2_6_4/expat-2.6.4.tar.gz	autotools			fd03b7172b3bd7427a3e7a812063f74754f24542429b634e0db6511b53fb2278	packages.nix
+expect	5.45.4	https://downloads.sourceforge.net/expect/expect5.45.4.tar.gz	configure	tcl	--with-tcl=$TCL/lib --with-tclinclude=$TCL/include		specs.tsv
+fftw	3.3.10	https://www.fftw.org/fftw-3.3.10.tar.gz	autotools		--enable-shared --disable-fortran		specs.tsv
+file	5.46	https://astron.com/pub/file/file-5.46.tar.gz	autotools	zlib	--disable-static --enable-zlib	c9cc77c7c560c543135edc555af609d5619dbef011997e988ce40a3d75d86088	packages.nix
+findutils	4.10.0	https://mirrors.kernel.org/gnu/findutils/findutils-4.10.0.tar.xz	autotools		--disable-nls	1387e0b67ff247d2abde998f90dfbf70c1491391a59ddfecb8ae698789f0a4f5	packages.nix
+flac	1.4.3	https://downloads.xiph.org/releases/flac/flac-1.4.3.tar.xz	autotools	ogg	--disable-examples --disable-doxygen-docs		specs.tsv
+flex	2.6.4	https://github.com/westes/flex/releases/download/v2.6.4/flex-2.6.4.tar.gz	autotools	m4	--disable-static	e87aae032bf07c26f85ac0ed3250998c37621d95f8bd748b31f15b33c45ee995	packages.nix
+gawk	5.3.1	https://mirrors.kernel.org/gnu/gawk/gawk-5.3.1.tar.xz	autotools	gmp mpfr readline ncurses	--disable-nls	694db764812a6236423d4ff40ceb7b6c4c441301b72ad502bb5c27e00cd56f78	packages.nix
+gc	8.2.6	https://github.com/ivmai/bdwgc/releases/download/v8.2.6/gc-8.2.6.tar.gz	autotools		--enable-threads=posix --enable-cplusplus --disable-static	b9183fe49d4c44c7327992f626f8eaa1d8b14de140f243edb1c9dcff7719a7fc	packages.nix
+gdbm	1.24	https://mirrors.kernel.org/gnu/gdbm/gdbm-1.24.tar.gz	autotools	readline ncurses	--enable-shared --enable-libgdbm-compat	695e9827fdf763513f133910bc7e6cfdb9187943a4fec943e57449723d2b8dbf	packages.nix
+gengetopt	2.23	https://mirrors.kernel.org/gnu/gengetopt/gengetopt-2.23.tar.xz	custom			b941aec9011864978dd7fdeb052b1943535824169d2aa2b0e7eae9ab807584ac	packages.nix
+geos	3.13.0	https://download.osgeo.org/geos/geos-3.13.0.tar.bz2	cmake		-DBUILD_TESTING=OFF		specs.tsv
+gettext	0.22.5	https://mirrors.kernel.org/gnu/gettext/gettext-0.22.5.tar.gz	autotools	libunistring ncurses	--enable-shared --disable-java --disable-csharp --without-emacs --disable-openmp	ec1705b1e969b83a9f073144ec806151db88127f5e40fe5a94cb6c8fa48996a0	packages.nix
+ginac	1.8.10	https://www.ginac.de/ginac-1.8.10.tar.bz2	autotools	cln gmp			specs.tsv
+git	2.45.2	https://mirrors.edge.kernel.org/pub/software/scm/git/git-2.45.2.tar.xz	autotools	openssl-3 zlib curl expat pcre2	--with-openssl=/nix/store/nj5f1jljp3jja8hfs1q5yk8cmf9qll5d-openssl-3-3.4.0 --with-zlib=/nix/store/ia16b2720j6gpnwqxcfar6qdv141mjyb-zlib-1.3.1 --with-curl=/nix/store/zr0lgnil1pf487ilainhvcdnrfwm6za6-curl-8.9.1 --with-expat=/nix/store/4s4gs3y2z53lm9r4k5yr6aysark77xam-expat-2.6.4 --with-libpcre2=/nix/store/mjig4id0j2q1rvs3c5pi5bbmprlks0ip-pcre2-10.47 --without-tcltk --without-iconv ac_cv_fread_reads_directories=no ac_cv_snprintf_returns_bogus=no	51bfe87eb1c02fed1484051875365eeab229831d30d0cec5d89a14f9e40e9adb	packages.nix
+glog	0.7.1	https://github.com/google/glog/archive/refs/tags/v0.7.1.tar.gz	cmake	gflags	-DBUILD_TESTING=OFF -DWITH_GTEST=OFF -DBUILD_SHARED_LIBS=ON		specs.tsv
+gmp	6.3.0	https://mirrors.kernel.org/gnu/gmp/gmp-6.3.0.tar.xz	autotools		--enable-cxx	a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898	packages.nix
+gnu-make	4.4.1	https://mirrors.kernel.org/gnu/make/make-4.4.1.tar.gz	autotools			dd16fb1d67bfab79a72f5e8390735c49e3e8e70b4945a15ab1f81ddb78658fb3	packages.nix
+gnu-tar	1.35	https://mirrors.kernel.org/gnu/tar/tar-1.35.tar.xz	autotools		--disable-nls	4d62ff37342ec7aed748535323930c7cf94acf71c3591882b26a7ea50f3edc16	packages.nix
+gnu-which	2.21	https://ftp.gnu.org/gnu/which/which-2.21.tar.gz	autotools			f4a245b94124b377d8b49646bf421f9155d36aa7614b6ebf83705d3ffc76eaad	packages.nix
+gnupg	2.4.7	https://gnupg.org/ftp/gcrypt/gnupg/gnupg-2.4.7.tar.bz2	autotools	libgpg-error libgcrypt libksba libassuan npth gmp zlib bzip2	--disable-doc --disable-gpgtar --disable-ldap		specs.tsv
+gnuplot	6.0.4	https://sourceforge.net/projects/gnuplot/files/gnuplot/6.0.4/gnuplot-6.0.4.tar.gz/download	autotools	readline ncurses libiconv	--without-x --with-readline=builtin --disable-wxwidgets --without-qt --without-cairo	458d94769625e73d5f6232500f49cbadcb2b183380d43d2266a0f9701aeb9c5b	packages.nix
+gnutls	3.8.4	https://www.gnupg.org/ftp/gcrypt/gnutls/v3.8/gnutls-3.8.4.tar.xz	autotools	nettle libtasn1 gmp libidn2 zlib	--with-included-unistring --without-p11-kit --disable-doc		specs.tsv
+googletest	1.15.2	https://github.com/google/googletest/archive/refs/tags/v1.15.2.tar.gz	cmake		-DBUILD_GMOCK=ON -DBUILD_SHARED_LIBS=ON -Dgtest_build_tests=OFF		specs.tsv
+gpgme	1.24.1	https://www.gnupg.org/ftp/gcrypt/gpgme/gpgme-1.24.1.tar.bz2	autotools	libgpg-error libassuan	--disable-gpg-test --disable-gpgsm-test --enable-languages=cpp		specs.tsv
+grep	3.11	https://mirrors.kernel.org/gnu/grep/grep-3.11.tar.xz	autotools	pcre2		1db2aedde89d0dea42b16d9528f894c8d15dae4e190b59aecc78f5a951276eab	packages.nix
+groff	1.23.0	https://ftpmirror.gnu.org/groff/groff-1.23.0.tar.gz	autotools		--without-x	6b9757f592b7518b4902eb6af7e54570bdccba37a871fddb2d30ae3863511c13	packages.nix
+gsed	4.9	https://mirrors.kernel.org/gnu/sed/sed-4.9.tar.xz	autotools			6e226b732e1cd739464ad6862bd1a1aba42d7982922da7a53519631d24975181	packages.nix
+gsl	2.8	https://ftp.gnu.org/gnu/gsl/gsl-2.8.tar.gz	autotools				specs.tsv
+gzip	1.14	https://mirrors.kernel.org/gnu/gzip/gzip-1.14.tar.xz	autotools		--disable-nls	01a7b881bd220bfdf615f97b8718f80bdfd3f6add385b993dcf6efd14e8c0ac6	packages.nix
+harfbuzz	10.1.0	https://github.com/harfbuzz/harfbuzz/releases/download/10.1.0/harfbuzz-10.1.0.tar.xz	cmake	freetype libpng	-DHB_HAVE_FREETYPE=ON -DBUILD_SHARED_LIBS=ON -DHB_BUILD_TESTS=OFF		specs.tsv
+help2man	1.49.3	https://mirrors.kernel.org/gnu/help2man/help2man-1.49.3.tar.xz	autotools			4d7e4fdef2eca6afe07a2682151cea78781e0a4e8f9622142d9f70c083a2fd4f	packages.nix
+htmldoc	1.9.20	https://github.com/michaelrsweet/htmldoc/releases/download/v1.9.20/htmldoc-1.9.20-source.tar.gz	autotools	libpng zlib	--without-gui		specs.tsv
+htop	3.3.0	https://github.com/htop-dev/htop/releases/download/3.3.0/htop-3.3.0.tar.xz	autotools	ncurses	--disable-unicode --enable-static	a69acf9b42ff592c4861010fce7d8006805f0d6ef0e8ee647a6ee6e59b743d5c	packages.nix
+hunspell	1.7.2	https://github.com/hunspell/hunspell/releases/download/v1.7.2/hunspell-1.7.2.tar.gz	autotools	ncurses	--disable-static --without-readline	11ddfa39afe28c28539fe65fc4f1592d410c1e9b6dd7d8a91ca25d85e9ec65b8	packages.nix
+hwloc	2.11.2	https://download.open-mpi.org/release/hwloc/v2.11/hwloc-2.11.2.tar.gz	autotools	ncurses	--enable-shared --disable-cairo --disable-libxml2 --with-hwloc-symbol-prefix=hwloc_	866ac8ef07b350a6a2ba0c6826c37d78e8994dcbcd443bdd2b436350de19d540	packages.nix
+iftop	1.0pre4-git	https://code.blinkace.com/pdw/iftop/-/archive/master/iftop-master.tar.gz	configure	ncurses pcre			specs.tsv
+inadyn	2.12.0	https://github.com/troglobit/inadyn/releases/download/v2.12.0/inadyn-2.12.0.tar.gz	configure	openssl nettle libtasn1 gmp json-c			specs.tsv
+indent	2.2.13	https://ftp.gnu.org/gnu/indent/indent-2.2.13.tar.xz	custom			1b81ba4e9a006ca8e6eb5cbbe4cf4f75dfc1fc9301b459aa0d40393e85590a0b	packages.nix
+iniparser	4.2.4	https://gitlab.com/iniparser/iniparser/-/archive/v4.2.4/iniparser-v4.2.4.tar.gz	cmake		-DBUILD_TESTING=OFF -DBUILD_SHARED_LIBS=ON		specs.tsv
+iperf3	3.17.1	https://github.com/esnet/iperf/archive/refs/tags/3.17.1.tar.gz	autotools	openssl			specs.tsv
+jansson	2.14	https://github.com/akheron/jansson/releases/download/v2.14/jansson-2.14.tar.gz	autotools				specs.tsv
+jemalloc	5.3.0	https://github.com/jemalloc/jemalloc/releases/download/5.3.0/jemalloc-5.3.0.tar.bz2	autotools		--disable-doc		specs.tsv
+jq	1.7.1	https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-1.7.1.tar.gz	autotools	oniguruma	--with-oniguruma=/nix/store/mw5bjc3dm6c5947g4jggslwdpgzhn7cz-oniguruma-6.9.9 --disable-maintainer-mode	478c9ca129fd2e3443fe27314b455e211e0d8c60bc8ff7df703873deeee580c2	packages.nix
+json-c	0.17	https://s3.amazonaws.com/json-c_releases/releases/json-c-0.17.tar.gz	custom			7550914d58fb63b2c3546f3ccfbe11f1c094147bd31a69dcd23714d7956159e6	packages.nix
+kyotocabinet	1.2.80	https://dbmx.net/kyotocabinet/pkg/kyotocabinet-1.2.80.tar.gz	configure	zlib			specs.tsv
+lame	3.100	https://downloads.sourceforge.net/lame/lame-3.100.tar.gz	autotools		--enable-nasm		specs.tsv
+lbzip2	2.5	https://github.com/kjn/lbzip2/archive/refs/tags/v2.5.tar.gz	configure				specs.tsv
+ldns	1.8.4	https://www.nlnetlabs.nl/downloads/ldns/ldns-1.8.4.tar.gz	configure	openssl	--with-ssl=$SSL --disable-gost		specs.tsv
+less	668	https://www.greenwoodsoftware.com/less/less-668.tar.gz	autotools	ncurses		2819f55564d86d542abbecafd82ff61e819a3eec967faa36cd3e68f1596a44b8	packages.nix
+leveldb	1.23	https://github.com/google/leveldb/archive/refs/tags/1.23.tar.gz	cmake		-DLEVELDB_BUILD_TESTS=OFF -DLEVELDB_BUILD_BENCHMARKS=OFF -DBUILD_SHARED_LIBS=ON		specs.tsv
+libassuan	3.0.1	https://gnupg.org/ftp/gcrypt/libassuan/libassuan-3.0.1.tar.bz2	autotools				specs.tsv
+libatomic_ops	7.8.2	https://github.com/ivmai/libatomic_ops/releases/download/v7.8.2/libatomic_ops-7.8.2.tar.gz	autotools				specs.tsv
+libavif	1.1.1	https://github.com/AOMediaCodec/libavif/archive/refs/tags/v1.1.1.tar.gz	cmake	zlib libpng libjpeg-turbo	-DAVIF_CODEC_DAV1D=OFF -DAVIF_LIBYUV=OFF -DBUILD_SHARED_LIBS=ON		specs.tsv
+libb2	0.98.1	https://github.com/BLAKE2/libb2/archive/refs/tags/v0.98.1.tar.gz	autotools				specs.tsv
+libcbor	0.11.0	https://github.com/PJK/libcbor/archive/refs/tags/v0.11.0.tar.gz	cmake		-DCBOR_CUSTOM_ALLOC=On -DWITH_EXAMPLES=Off		specs.tsv
+libcircllhist	0.0.1	https://github.com/openhistogram/libcircllhist/archive/refs/tags/v0.0.1.tar.gz	custom-make				specs.tsv
+libconfuse	3.3	https://github.com/libConfuse/libconfuse/releases/download/v3.3/confuse-3.3.tar.xz	autotools		--disable-examples		specs.tsv
+libcork	0.15.0	https://github.com/redjack/libcork/archive/refs/tags/0.15.0.tar.gz	cmake				specs.tsv
+libcpuid	0.7.1	https://github.com/anrieff/libcpuid/releases/download/v0.7.1/libcpuid-0.7.1.tar.gz	autotools				specs.tsv
+libcsv	3.0.3	https://downloads.sourceforge.net/libcsv/libcsv-3.0.3.tar.gz	autotools				specs.tsv
+libcue	2.3.0	https://github.com/lipnitsk/libcue/archive/refs/tags/v2.3.0.tar.gz	cmake				specs.tsv
+libde265	1.0.15	https://github.com/strukturag/libde265/releases/download/v1.0.15/libde265-1.0.15.tar.gz	configure		--disable-sherlock265 --disable-dec265		specs.tsv
+libdeflate	1.22	https://github.com/ebiggers/libdeflate/archive/refs/tags/v1.22.tar.gz	cmake		-DLIBDEFLATE_BUILD_TESTS=OFF		specs.tsv
+libdiscid	0.6.4	https://github.com/metabrainz/libdiscid/releases/download/v0.6.4/libdiscid-0.6.4.tar.gz	autotools				specs.tsv
+libdnet	1.18.0	https://github.com/ofalk/libdnet/archive/refs/tags/libdnet-1.18.0.tar.gz	configure				specs.tsv
+libedit	20240808-3.1	https://thrysoee.dk/editline/libedit-20240808-3.1.tar.gz	autotools	ncurses	--enable-shared	5f0573349d77c4a48967191cdd6634dd7aa5f6398c6a57fe037cc02696d6099f	packages.nix
+libestr	0.1.11	https://github.com/rsyslog/libestr/archive/refs/tags/v0.1.11.tar.gz	autotools				specs.tsv
+libevent	2.1.12	https://github.com/libevent/libevent/releases/download/release-2.1.12-stable/libevent-2.1.12-stable.tar.gz	autotools		--disable-samples --disable-openssl	92e6de1be9ec176428fd2367677e61ceffc2ee1cb119035037a27d346b0403bb	packages.nix
+libfastjson	1.2304.0	https://github.com/rsyslog/libfastjson/archive/refs/tags/v1.2304.0.tar.gz	autotools				specs.tsv
+libffi	3.4.6	https://github.com/libffi/libffi/releases/download/v3.4.6/libffi-3.4.6.tar.gz	autotools			b0dea9df23c863a7a50e825440f3ebffabd65df1497108e5d437747843895a4e	packages.nix
+libgeotiff	1.7.3	https://github.com/OSGeo/libgeotiff/releases/download/1.7.3/libgeotiff-1.7.3.tar.gz	autotools	libtiff proj zlib	--with-zlib		specs.tsv
+libgit2	1.8.4	https://github.com/libgit2/libgit2/archive/refs/tags/v1.8.4.tar.gz	cmake	openssl zlib pcre2	-DBUILD_TESTS=OFF -DUSE_SSH=OFF -DBUILD_CLI=OFF		specs.tsv
+libgpg-error	1.50	https://www.gnupg.org/ftp/gcrypt/libgpg-error/libgpg-error-1.50.tar.bz2	autotools		--enable-shared --disable-doc --disable-tests	69405349e0a633e444a28c5b35ce8f14484684518a508dc48a089992fe93e20a	packages.nix
+libgsasl	2.2.1	https://ftp.gnu.org/gnu/gsasl/libgsasl-2.2.1.tar.gz	configure				specs.tsv
+libgsf	1.14.52	https://download.gnome.org/sources/libgsf/1.14/libgsf-1.14.52.tar.xz	configure	zlib bzip2 libiconv			specs.tsv
+libheif	1.19.5	https://github.com/strukturag/libheif/releases/download/v1.19.5/libheif-1.19.5.tar.gz	cmake	zlib libpng libjpeg-turbo	-DWITH_EXAMPLES=OFF -DWITH_LIBDE265=OFF -DWITH_X265=OFF -DBUILD_TESTING=OFF		specs.tsv
+libiconv	1.18	https://ftpmirror.gnu.org/libiconv/libiconv-1.18.tar.gz	autotools		--disable-static --enable-shared	3b08f5f4f9b4eb82f151a7040bfd6fe6c6fb922efe4b1659c66ea933276965e8	packages.nix
+libidn	1.42	https://ftp.gnu.org/gnu/libidn/libidn-1.42.tar.gz	configure				specs.tsv
+libidn2	2.3.7	https://mirrors.kernel.org/gnu/libidn/libidn2-2.3.7.tar.gz	autotools	libunistring	--enable-shared --with-libunistring-prefix=/nix/store/p9ysv6z9mi2ha0y875pfkmmxln134v6f-libunistring-1.2	4c21a791b610b9519b9d0e12b8097bf2f359b12f8dd92647611a929e6bfd7d64	packages.nix
+libksba	1.6.7	https://www.gnupg.org/ftp/gcrypt/libksba/libksba-1.6.7.tar.bz2	autotools	libgpg-error			specs.tsv
+liblo	0.32	https://downloads.sourceforge.net/liblo/liblo-0.32.tar.gz	autotools		--enable-threads		specs.tsv
+libmad	0.15.1b	https://downloads.sourceforge.net/mad/libmad-0.15.1b.tar.gz	autotools				specs.tsv
+libmicrohttpd	1.0.1	https://ftp.gnu.org/gnu/libmicrohttpd/libmicrohttpd-1.0.1.tar.gz	autotools		--disable-doc --disable-examples		specs.tsv
+libmng	2.0.3	https://downloads.sourceforge.net/libmng/libmng-2.0.3.tar.xz	configure	zlib libjpeg-turbo lcms2			specs.tsv
+libmodbus	3.1.10	https://github.com/stephane/libmodbus/releases/download/v3.1.10/libmodbus-3.1.10.tar.gz	autotools				specs.tsv
+libmodplug	0.8.9.0	https://downloads.sourceforge.net/modplug-xmms/libmodplug-0.8.9.0.tar.gz	configure				specs.tsv
+libmspack	0.11	https://github.com/kyz/libmspack/archive/refs/tags/v0.11alpha.tar.gz	autotools-sub	libmspack			specs.tsv
+libnet	1.3	https://github.com/libnet/libnet/releases/download/v1.3/libnet-1.3.tar.gz	configure				specs.tsv
+libogg	1.3.5	https://downloads.xiph.org/releases/ogg/libogg-1.3.5.tar.xz	autotools				specs.tsv
+libowfat	0.34	https://www.fefe.de/libowfat/libowfat-0.34.tar.xz	configure				specs.tsv
+libpqxx	7.9.2	https://github.com/jtv/libpqxx/archive/refs/tags/7.9.2.tar.gz	cmake	libpq openssl	-DSKIP_BUILD_TEST=ON -DBUILD_SHARED_LIBS=ON		specs.tsv
+libpsl	0.21.5	https://github.com/rockdaboot/libpsl/releases/download/0.21.5/libpsl-0.21.5.tar.gz	autotools	libidn2 libunistring	--enable-shared	1dcc9ceae8b128f3c0b3f654decd0e1e891afc6ff81098f227ef260449dae208	packages.nix
+libqrencode	4.1.1	https://github.com/fukuchi/libqrencode/archive/refs/tags/v4.1.1.tar.gz	cmake	libpng	-DWITH_TOOLS=NO -DBUILD_SHARED_LIBS=ON		specs.tsv
+libraw	0.21.3	https://www.libraw.org/data/LibRaw-0.21.3.tar.gz	configure	libjpeg-turbo lcms2 zlib	--disable-examples		specs.tsv
+librtmp	2.4	https://github.com/mstorsjo/rtmpdump/archive/refs/heads/master.tar.gz	custom-make				specs.tsv
+libsamplerate	0.2.2	https://github.com/libsndfile/libsamplerate/releases/download/0.2.2/libsamplerate-0.2.2.tar.xz	configure				specs.tsv
+libserialport	0.1.2	https://github.com/sigrokproject/libserialport/archive/refs/tags/libserialport-0.1.2.tar.gz	autotools				specs.tsv
+libsndfile	1.2.2	https://github.com/libsndfile/libsndfile/releases/download/1.2.2/libsndfile-1.2.2.tar.xz	autotools	ogg vorbis flac opus	--disable-full-suite		specs.tsv
+libsrtp	2.6.0	https://github.com/cisco/libsrtp/archive/refs/tags/v2.6.0.tar.gz	cmake		-DLIBSRTP_TEST_APPS=OFF -DENABLE_OPENSSL=OFF -DBUILD_SHARED_LIBS=ON		specs.tsv
+libtasn1	4.19.0	https://mirrors.kernel.org/gnu/libtasn1/libtasn1-4.19.0.tar.gz	autotools			1613f0ac1cf484d6ec0ce3b8c06d56263cc7242f1c23b30d82d23de345a63f7a	packages.nix
+libtermkey	0.22	http://www.leonerd.org.uk/code/libtermkey/libtermkey-0.22.tar.gz	custom-make	ncurses			specs.tsv
+libtins	4.5	https://github.com/mfontanini/libtins/archive/refs/tags/v4.5.tar.gz	cmake	openssl	-DLIBTINS_ENABLE_CXX11=1		specs.tsv
+libtomcrypt	1.18.2	https://github.com/libtom/libtomcrypt/releases/download/v1.18.2/crypt-1.18.2.tar.xz	special				specs.tsv
+libtommath	1.3.0	https://github.com/libtom/libtommath/releases/download/v1.3.0/ltm-1.3.0.tar.xz	cmake		-DBUILD_SHARED_LIBS=On		specs.tsv
+libtool	2.4.7	https://mirrors.kernel.org/gnu/libtool/libtool-2.4.7.tar.xz	autotools	m4		4f7f217f057ce655ff22559ad221a0fd8ef84ad1fc5fcb6990cecc333aa1635d	packages.nix
+libucl	0.9.2	https://github.com/vstakhov/libucl/archive/refs/tags/0.9.2.tar.gz	autotools		--enable-shared		specs.tsv
+libuev	2.4.1	https://github.com/troglobit/libuev/releases/download/v2.4.1/libuev-2.4.1.tar.gz	configure				specs.tsv
+libunibreak	6.1	https://github.com/adah1972/libunibreak/releases/download/libunibreak_6_1/libunibreak-6.1.tar.gz	autotools				specs.tsv
+libunistring	1.2	https://mirrors.kernel.org/gnu/libunistring/libunistring-1.2.tar.xz	autotools		--enable-shared	632bd65ed74a881ca8a0309a1001c428bd1cbd5cd7ddbf8cedcd2e65f4dcdc44	packages.nix
+libunwind	1.8.1	https://github.com/libunwind/libunwind/releases/download/v1.8.1/libunwind-1.8.1.tar.gz	autotools		--disable-tests		specs.tsv
+libvorbis	1.3.7	https://downloads.xiph.org/releases/vorbis/libvorbis-1.3.7.tar.xz	autotools	ogg			specs.tsv
+libvterm	0.3.3	http://www.leonerd.org.uk/code/libvterm/libvterm-0.3.3.tar.gz	custom-make				specs.tsv
+libwebsockets	4.3.3	https://github.com/warmcat/libwebsockets/archive/refs/tags/v4.3.3.tar.gz	cmake	openssl zlib	-DLWS_WITH_SSL=ON -DLWS_WITHOUT_TESTAPPS=ON		specs.tsv
+libxml2	2.12.9	https://download.gnome.org/sources/libxml2/2.12/libxml2-2.12.9.tar.xz	autotools	zlib xz	--without-python --with-zlib=/nix/store/ia16b2720j6gpnwqxcfar6qdv141mjyb-zlib-1.3.1 --with-lzma=/nix/store/wvk11878x32rsxi4lj7v1k35ysbnpx0j-xz-5.6.3	59912db536ab56a3996489ea0299768c7bcffe57169f0235e7f962a91f483590	packages.nix
+libxslt	1.1.39	https://download.gnome.org/sources/libxslt/1.1/libxslt-1.1.39.tar.xz	autotools	libxml2 zlib	--without-python --with-libxml-prefix=/nix/store/dg703w1vjwm485kdm2hm0lnna50gvml8-libxml2-2.12.9 --without-crypto	2a20ad621148339b0759c4d4e96719362dee64c9a096dbba625ba053846349f0	packages.nix
+libyaml	0.2.5	https://github.com/yaml/libyaml/releases/download/0.2.5/yaml-0.2.5.tar.gz	autotools			c642ae9b75fee120b2d96c712538bd2cf283228d2337df2cf2988e3c02678ef4	packages.nix
+links	2.30	http://links.twibright.com/download/links-2.30.tar.bz2	autotools	zlib openssl-3 libevent	--enable-graphics=no --without-x	c4631c6b5a11527cdc3cb7872fc23b7f2b25c2b021d596be410dadb40315f166	packages.nix
+lrzip	0.651	https://github.com/ckolivas/lrzip/archive/refs/tags/v0.651.tar.gz	autotools	zlib xz zstd			specs.tsv
+luajit	2.1	https://github.com/LuaJIT/LuaJIT/archive/refs/heads/v2.1.tar.gz	custom			SKIP	packages.nix
+lynx	2.9.2	https://invisible-mirror.net/archives/lynx/tarballs/lynx2.9.2.tar.bz2	autotools	ncurses zlib	--with-screen=ncursesw --with-zlib --disable-nls --without-bzlib --without-brotli	7374b89936d991669e101f4e97f2c9592036e1e8cdaa7bafc259a77ab6fb07ce	packages.nix
+lz4	1.10.0	https://github.com/lz4/lz4/releases/download/v1.10.0/lz4-1.10.0.tar.gz	custom			537512904744b35e232912055ccf8ec66d768639ff3abe5788d90d792ec5f48b	packages.nix
+lzip	1.24.1	https://download.savannah.gnu.org/releases/lzip/lzip-1.24.1.tar.gz	configure				specs.tsv
+lzlib	1.15	https://download.savannah.gnu.org/releases/lzip/lzlib/lzlib-1.15.tar.gz	configure				specs.tsv
+m4	1.4.19	https://mirrors.kernel.org/gnu/m4/m4-1.4.19.tar.xz	autotools			63aede5c6d33b6d9b13511cd0be2cac046f2e70fd0a07aa9573a04a82783af96	packages.nix
+mariadb-connector-c	3.4.4	https://github.com/mariadb-corporation/mariadb-connector-c/archive/refs/tags/v3.4.4.tar.gz	cmake	openssl zlib	-DWITH_SSL=OPENSSL -DWITH_EXTERNAL_ZLIB=ON		specs.tsv
+mawk	1.3.4-20240905	https://invisible-island.net/datafiles/release/mawk.tar.gz	configure				specs.tsv
+mbedtls	3.6.2	https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-3.6.2/mbedtls-3.6.2.tar.bz2	cmake		-DENABLE_TESTING=OFF -DUSE_SHARED_MBEDTLS_LIBRARY=ON		specs.tsv
+mimalloc	2.1.7	https://github.com/microsoft/mimalloc/archive/refs/tags/v2.1.7.tar.gz	cmake		-DMI_BUILD_TESTS=OFF		specs.tsv
+minizip	4.0.7	https://github.com/zlib-ng/minizip-ng/archive/refs/tags/4.0.7.tar.gz	cmake	zlib	-DMZ_BUILD_TESTS=OFF -DMZ_COMPAT=ON		specs.tsv
+moreutils	0.69	https://git.joeyh.name/index.cgi/moreutils.git/snapshot/moreutils-0.69.tar.gz	special				specs.tsv
+most	5.2.0	https://www.jedsoft.org/releases/most/most-5.2.0.tar.gz	configure	ncurses			specs.tsv
+mpc	1.3.1	https://mirrors.kernel.org/gnu/mpc/mpc-1.3.1.tar.gz	autotools	gmp mpfr	--with-gmp=/nix/store/y7drqiwhf4clh2qnk771wfqndfgzgyjh-gmp-6.3.0 --with-mpfr=/nix/store/mqda6vakk20c1xmbkg5q28d75givvfh0-mpfr-4.2.1 --enable-shared	ab642492f5cf882b74aa0cb730cd410a81edcdbec895183ce930e706c1c759b8	packages.nix
+mpdecimal	4.0.0	https://www.bytereef.org/software/mpdecimal/releases/mpdecimal-4.0.0.tar.gz	autotools				specs.tsv
+mpfr	4.2.1	https://mirrors.kernel.org/gnu/mpfr/mpfr-4.2.1.tar.xz	autotools	gmp	--with-gmp=/nix/store/y7drqiwhf4clh2qnk771wfqndfgzgyjh-gmp-6.3.0 --enable-shared	277807353a6726978996945af13e52829e3abd7a9a5b7fb2793894e18f1fcbb2	packages.nix
+mpg123	1.32.10	https://downloads.sourceforge.net/mpg123/mpg123-1.32.10.tar.bz2	configure		--with-cpu=generic		specs.tsv
+mtr	0.95	https://github.com/traviscross/mtr/archive/refs/tags/v0.95.tar.gz	autotools	ncurses	--without-gtk		specs.tsv
+mutt	2.4.1	http://ftp.mutt.org/pub/mutt/mutt-2.4.1.tar.gz	autotools	ncurses libiconv zlib openssl-3	--disable-filemonitor --enable-pop --enable-imap --with-ssl --with-curses=/nix/store/29n9nyh6sa67jjlx6rf2ja733b8ryi14-ncurses-6.5 --enable-external-dotlock --disable-nls	5624321f0b1cc1eff6cab9ef08f25954ff64c51b33d4bf3b99484cf1edd8cfff	packages.nix
+nano	8.2	https://www.nano-editor.org/dist/v8/nano-8.2.tar.xz	autotools	ncurses	--disable-nls --enable-utf8	d5ad07dd862facae03051c54c6535e54c7ed7407318783fcad1ad2d7076fffeb	packages.nix
+nasm	2.16.03	https://www.nasm.us/pub/nasm/releasebuilds/2.16.03/nasm-2.16.03.tar.xz	configure				specs.tsv
+ncdu	1.19	https://dev.yorhel.nl/download/ncdu-1.19.tar.gz	autotools	ncurses		30363019180cde0752c7fb006c12e154920412f4e1b5dc3090654698496bb17d	packages.nix
+ncompress	5.0	https://github.com/vapier/ncompress/archive/refs/tags/v5.0.tar.gz	configure				specs.tsv
+ncurses	6.5	https://mirrors.kernel.org/gnu/ncurses/ncurses-6.5.tar.gz	custom			136d91bc269a9a5785e5f9e980bc76ab57428f604ce3e5a5a90cebc767971cc6	packages.nix
+neon	0.33.0	https://notroj.github.io/neon/neon-0.33.0.tar.gz	autotools	openssl-3 expat zlib	--with-ssl=openssl --with-expat --enable-shared --disable-static --disable-nls	659a5cc9cea05e6e7864094f1e13a77abbbdbab452f04d751a8c16a9447cf4b8	packages.nix
+netcdf	4.9.2	https://downloads.unidata.ucar.edu/netcdf-c/4.9.2/netcdf-c-4.9.2.tar.gz	cmake	zlib	-DENABLE_NETCDF_4=OFF -DENABLE_DAP=OFF -DENABLE_HDF5=OFF -DBUILD_TESTING=OFF		specs.tsv
+nettle	3.10	https://ftp.gnu.org/gnu/nettle/nettle-3.10.tar.gz	autotools	gmp	--disable-documentation		specs.tsv
+nghttp3	1.6.0	https://github.com/ngtcp2/nghttp3/releases/download/v1.6.0/nghttp3-1.6.0.tar.xz	autotools		--enable-lib-only		specs.tsv
+ngtcp2	1.9.1	https://github.com/ngtcp2/ngtcp2/releases/download/v1.9.1/ngtcp2-1.9.1.tar.xz	autotools	openssl	--enable-lib-only --with-openssl		specs.tsv
+ninja	1.12.1	https://github.com/ninja-build/ninja/archive/refs/tags/v1.12.1.tar.gz	custom			821bdff48a3f683bc4bb3b6f0b5fe7b2d647cf65d52aeb63328c91a6c6df285a	packages.nix
+nload	0.7.4	https://sourceforge.net/projects/nload/files/nload/0.7.4/nload-0.7.4.tar.gz/download	configure	ncurses	CXXMATHNS=1		specs.tsv
+nlohmann-json	3.11.3	https://github.com/nlohmann/json/archive/refs/tags/v3.11.3.tar.gz	cmake		-DJSON_BuildTests=OFF		specs.tsv
+nnn	5.0	https://github.com/jarun/nnn/releases/download/v5.0/nnn-v5.0.tar.gz	make	ncurses readline		ba82d6c685bb3687521de2f576244f82558a4af9afeeedda434d5ecb1c029520	packages.nix
+npth	1.8	https://gnupg.org/ftp/gcrypt/npth/npth-1.8.tar.bz2	configure		--enable-shared		specs.tsv
+nspr	4.35	https://ftp.mozilla.org/pub/nspr/releases/v4.35/src/nspr-4.35.tar.gz	custom			7ea3297ea5969b5d25a5dd8d47f2443cda88e9ee746301f6e1e1426f8a6abc8f	packages.nix
+oniguruma	6.9.9	https://github.com/kkos/oniguruma/releases/download/v6.9.9/onig-6.9.9.tar.gz	autotools			60162bd3b9fc6f4886d4c7a07925ffd374167732f55dce8c491bfd9cd818a6cf	packages.nix
+openssl-3	3.4.0	https://github.com/openssl/openssl/releases/download/openssl-3.4.0/openssl-3.4.0.tar.gz	custom	zlib		e15dda82fe2fe8139dc2ac21a36d4ca01d5313c75f99f46c4e8a27709b7294bf	packages.nix
+opus	1.5.2	https://downloads.xiph.org/releases/opus/opus-1.5.2.tar.gz	autotools				specs.tsv
+opusfile	0.12	https://downloads.xiph.org/releases/opus/opusfile-0.12.tar.gz	autotools	ogg opus openssl	--disable-http		specs.tsv
+paho-mqtt-c	1.3.13	https://github.com/eclipse/paho.mqtt.c/archive/refs/tags/v1.3.13.tar.gz	custom			47c77e95609812da82feee30db435c3b7c720d4fd3147d466ead126e657b6d9c	packages.nix
+parallel	20241122	https://ftp.gnu.org/gnu/parallel/parallel-20241122.tar.bz2	autotools				specs.tsv
+parted	3.6	https://ftp.gnu.org/gnu/parted/parted-3.6.tar.xz	autotools	readline ncurses	--disable-nls --disable-device-mapper	3b43dbe33cca0f9a18601ebab56b7852b128ec1a3df3a9b30ccde5e73359e612	packages.nix
+patch	2.7.6	https://mirrors.kernel.org/gnu/patch/patch-2.7.6.tar.xz	autotools		--disable-nls	ac610bda97abe0d9f6b7c963255a11dcb196c25e337c61f94e4778d632f1d8fd	packages.nix
+patchutils	0.4.2	https://github.com/twaugh/patchutils/archive/refs/tags/0.4.2.tar.gz	autotools				specs.tsv
+pbzip2	1.1.13	https://launchpad.net/pbzip2/1.1/1.1.13/+download/pbzip2-1.1.13.tar.gz	configure	bzip2			specs.tsv
+pcre	8.45	https://sourceforge.net/projects/pcre/files/pcre/8.45/pcre-8.45.tar.bz2/download	autotools		--enable-pcre8 --enable-utf --enable-unicode-properties --disable-static	4dae6fdcd2bb0bb6c37b5f97c33c2be954da743985369cddac3546e3218bffb8	packages.nix
+pcre2	10.47	https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.47/pcre2-10.47.tar.gz	autotools		--enable-pcre2-16 --enable-pcre2-32	c08ae2388ef333e8403e670ad70c0a11f1eed021fd88308d7e02f596fcd9dc16	packages.nix
+perl	5.42.0	https://www.cpan.org/src/5.0/perl-5.42.0.tar.gz	custom	zlib bzip2 gdbm		e093ef184d7f9a1b9797e2465296f55510adb6dab8842b0c3ed53329663096dc	packages.nix
+perl-params-util	1.102	https://cpan.metacpan.org/authors/id/R/RE/REHSACK/Params-Util-1.102.tar.gz	custom	perl		499bb1b482db24fda277a51525596ad092c2bd51dd508fa8fec2e9f849097402	packages.nix
+pinentry	1.3.1	https://www.gnupg.org/ftp/gcrypt/pinentry/pinentry-1.3.1.tar.bz2	autotools	libgpg-error libassuan ncurses	--enable-pinentry-curses --disable-pinentry-qt --disable-pinentry-gtk2 --disable-pinentry-gnome3 --disable-pinentry-tty --disable-pinentry-fltk --disable-pinentry-tqt		specs.tsv
+pixman	0.42.2	https://cairographics.org/releases/pixman-0.42.2.tar.gz	configure		--disable-gtk		specs.tsv
+pixz	1.0.7	https://github.com/vasi/pixz/releases/download/v1.0.7/pixz-1.0.7.tar.gz	configure	xz libevent			specs.tsv
+pkgconf	2.3.0	https://distfiles.ariadne.space/pkgconf/pkgconf-2.3.0.tar.xz	autotools			3a9080ac51d03615e7c1910a0a2a8df08424892b5f13b0628a204d3fcce0ea8b	packages.nix
+plotutils	2.6	https://ftpmirror.gnu.org/plotutils/plotutils-2.6.tar.gz	autotools	libiconv	--without-x --enable-libplotter --disable-static	4f4222820f97ca08c7ea707e4c53e5a3556af4d8f1ab51e0da6ff1627ff433ab	packages.nix
+plzip	1.11	https://download.savannah.gnu.org/releases/lzip/plzip/plzip-1.11.tar.gz	configure	lzlib			specs.tsv
+portaudio	19.7.0	https://files.portaudio.com/archives/pa_stable_v190700_20210406.tgz	configure				specs.tsv
+progress	0.17	https://github.com/Xfennec/progress/archive/refs/tags/v0.17.tar.gz	special				specs.tsv
+proj	9.4.1	https://download.osgeo.org/proj/proj-9.4.1.tar.gz	cmake	sqlite-3 libtiff	-DBUILD_TESTING=OFF -DENABLE_CURL=OFF		specs.tsv
+protobuf	28.3	https://github.com/protocolbuffers/protobuf/archive/refs/tags/v28.3.tar.gz	cmake	abseil-cpp zlib	-Dprotobuf_BUILD_TESTS=OFF -Dprotobuf_ABSL_PROVIDER=package -Dprotobuf_BUILD_SHARED_LIBS=ON		specs.tsv
+pugixml	1.14	https://github.com/zeux/pugixml/releases/download/v1.14/pugixml-1.14.tar.gz	cmake		-DBUILD_SHARED_LIBS=ON		specs.tsv
+python-313	3.13.1	https://www.python.org/ftp/python/3.13.1/Python-3.13.1.tar.xz	custom	zlib xz libffi openssl-3 ncurses sqlite-3 expat gdbm mpc		9cf9427bee9e2242e3877dd0f6b641c1853ca461f39d6503ce260a59c80bf0d9	packages.nix
+python-39	3.9.20	https://www.python.org/ftp/python/3.9.20/Python-3.9.20.tar.xz	custom	zlib bzip2 xz libffi openssl-3 ncurses readline sqlite-3 expat gdbm		6b281279efd85294d2d6993e173983a57464c0133956fbbb5536ec9646beaf0c	packages.nix
+python39-markupsafe	2.1.5	https://files.pythonhosted.org/packages/87/5b/aae44c6655f3801e81aa3eef09dbbf012431987ba564d7231722f68df02d/MarkupSafe-2.1.5.tar.gz	custom	python-39		d283d37a890ba4c1ae73ffadf8046435c76e7bc2247bbb63c00bd1a709c6544b	packages.nix
+qdbm	1.8.78	https://dbmx.net/qdbm/qdbm-1.8.78.tar.gz	configure	zlib bzip2			specs.tsv
+qrencode	4.1.1	https://github.com/fukuchi/libqrencode/archive/refs/tags/v4.1.1.tar.gz	cmake	zlib	-DWITH_TOOLS=NO -DWITH_TESTS=NO		specs.tsv
+ragel	6.10	https://www.colm.net/files/ragel/ragel-6.10.tar.gz	configure				specs.tsv
+rapidjson	1.1.0	https://github.com/Tencent/rapidjson/archive/refs/tags/v1.1.0.tar.gz	cmake		-DRAPIDJSON_BUILD_TESTS=OFF -DRAPIDJSON_BUILD_EXAMPLES=OFF -DRAPIDJSON_BUILD_DOC=OFF		specs.tsv
+re2	2024-07-02	https://github.com/google/re2/archive/refs/tags/2024-07-02.tar.gz	cmake	abseil-cpp	-DRE2_BUILD_TESTING=OFF -DBUILD_SHARED_LIBS=ON		specs.tsv
+re2c	4.3	https://github.com/skvadrik/re2c/releases/download/4.3/re2c-4.3.tar.xz	configure		--disable-nls		specs.tsv
+readline	8.2	https://mirrors.kernel.org/gnu/readline/readline-8.2.tar.gz	autotools	ncurses	--with-curses --enable-shared	3feb7171f16a84ee82ca18a36d7b9be109a52c04f492a053331d7d1095007c35	packages.nix
+recode	3.7.14	https://github.com/rrthomas/recode/releases/download/v3.7.14/recode-3.7.14.tar.gz	autotools	libiconv	--disable-gcc-warnings --disable-nls	786aafd544851a2b13b0a377eac1500f820ce62615ccc2e630b501e7743b9f33	packages.nix
+recutils	1.9	https://ftp.gnu.org/gnu/recutils/recutils-1.9.tar.gz	autotools		--disable-rec-crypt		specs.tsv
+rsync	3.3.0	https://download.samba.org/pub/rsync/src/rsync-3.3.0.tar.gz	autotools	zlib zstd lz4 openssl-3	--disable-xxhash --with-included-popt	7399e9a6708c32d678a72a63219e96f23be0be2336e50fd1348498d07041df90	packages.nix
+samurai	1.2	https://github.com/michaelforney/samurai/releases/download/1.2/samurai-1.2.tar.gz	custom			3b8cf51548dfc49b7efe035e191ff5e1963ebc4fe8f6064a5eefc5343eaf78a5	packages.nix
+scons	4.8.1	https://github.com/SCons/scons/archive/refs/tags/4.8.1.tar.gz	custom			9735ac24f345a11c76561991e3c3bdf943f97c772ded54156243e7f4ea5f4bc5	packages.nix
+screen	4.9.1	https://mirror.csclub.uwaterloo.ca/gnu/screen/screen-4.9.1.tar.gz	autotools	ncurses	--enable-telnet --enable-colors256	26cef3e3c42571c0d484ad6faf110c5c15091fbf872b06fa7aa4766c7405ac69	packages.nix
+sed	4.9	https://mirrors.kernel.org/gnu/sed/sed-4.9.tar.xz	autotools		--disable-nls --disable-gcc-warnings		specs.tsv
+shapelib	1.6.1	https://download.osgeo.org/shapelib/shapelib-1.6.1.tar.gz	cmake				specs.tsv
+sharutils	4.15.2	https://ftp.gnu.org/gnu/sharutils/sharutils-4.15.2.tar.xz	autotools		--disable-gcc-warnings --disable-nls	2b05cff7de5d7b646dc1669bc36c35fdac02ac6ae4b6c19cb3340d87ec553a9a	packages.nix
+slang	2.3.3	https://www.jedsoft.org/releases/slang/slang-2.3.3.tar.bz2	autotools	zlib			specs.tsv
+socat	1.8.0.3	http://www.dest-unreach.org/socat/download/socat-1.8.0.3.tar.gz	autotools		--disable-openssl --disable-readline	a9f9eb6cfb9aa6b1b4b8fe260edbac3f2c743f294db1e362b932eb3feca37ba4	packages.nix
+spawn-fcgi	1.6.4	https://github.com/lighttpd/spawn-fcgi/archive/refs/tags/spawn-fcgi-1.6.4.tar.gz	configure				specs.tsv
+speex	1.2.1	https://downloads.xiph.org/releases/speex/speex-1.2.1.tar.gz	autotools		--disable-binaries		specs.tsv
+speexdsp	1.2.1	https://downloads.xiph.org/releases/speex/speexdsp-1.2.1.tar.gz	autotools				specs.tsv
+sqlite-3	3.47.2	https://www.sqlite.org/2024/sqlite-autoconf-3470200.tar.gz	autotools	zlib readline ncurses	--enable-shared	f1b2ee412c28d7472bc95ba996368d6f0cdcf00362affdadb27ed286c179540b	packages.nix
+stunnel	5.79	https://www.stunnel.org/downloads/stunnel-5.79.tar.gz	configure	openssl	--with-ssl=$SSL --disable-systemd --disable-fips		specs.tsv
+swig	4.3.0	https://github.com/swig/swig/archive/refs/tags/v4.3.0.tar.gz	configure	pcre2	--with-pcre-prefix=$PCRE2		specs.tsv
+sysklogd	2.6.1	https://github.com/troglobit/sysklogd/releases/download/v2.6.1/sysklogd-2.6.1.tar.gz	configure				specs.tsv
+taglib	1.13.1	https://github.com/taglib/taglib/releases/download/v1.13.1/taglib-1.13.1.tar.gz	cmake	zlib	-DBUILD_SHARED_LIBS=ON -DBUILD_TESTING=OFF		specs.tsv
+tcc	0.9.27	https://download.savannah.gnu.org/releases/tinycc/tcc-0.9.27.tar.bz2	configure				specs.tsv
+tcl	8.6.14	https://prdownloads.sourceforge.net/tcl/tcl8.6.14-src.tar.gz	custom	zlib		5880225babf7954c58d4fb0f5cf6279104ce1cd6aa9b71e9a6322540e1c4de66	packages.nix
+tclap	1.2.5	https://downloads.sourceforge.net/tclap/tclap-1.2.5.tar.gz	autotools				specs.tsv
+tcpdump	4.99.5	https://www.tcpdump.org/release/tcpdump-4.99.5.tar.gz	autotools	libpcap			specs.tsv
+tcsh	6.24.14	https://astron.com/pub/tcsh/tcsh-6.24.14.tar.gz	autotools	ncurses		36880f258a63fc11fe72a65098b585ebc4ecdee24388b8ebec97e6ae8e485318	packages.nix
+texinfo	7.1	https://mirrors.kernel.org/gnu/texinfo/texinfo-7.1.tar.xz	autotools	ncurses	--disable-nls	deeec9f19f159e046fdf8ad22231981806dac332cc372f1c763504ad82b30953	packages.nix
+the_silver_searcher	2.2.0	https://geoff.greer.fm/ag/releases/the_silver_searcher-2.2.0.tar.gz	autotools	pcre xz zlib		d9621a878542f3733b5c6e71c849b9d1a830ed77cb1a1f6c2ea441d4b0643170	packages.nix
+tig	2.5.12	https://github.com/jonas/tig/releases/download/tig-2.5.12/tig-2.5.12.tar.gz	configure	ncurses			specs.tsv
+time	1.9	https://ftp.gnu.org/gnu/time/time-1.9.tar.gz	autotools				specs.tsv
+tini	0.19.0	https://github.com/krallin/tini/archive/refs/tags/v0.19.0.tar.gz	cmake				specs.tsv
+tllist	1.1.0	https://codeberg.org/dnkl/tllist/archive/1.1.0.tar.gz	custom-header				specs.tsv
+tmux	3.4	https://github.com/tmux/tmux/releases/download/3.4/tmux-3.4.tar.gz	autotools	libevent ncurses	ac_cv_header_ncurses_ncurses_h=no ac_cv_header_ncurses_h=no ac_cv_header_curses_h=yes	551ab8dea0bf505c0ad6b7bb35ef567cdde0ccb84357df142c254f35a23e19aa	packages.nix
+tokyocabinet	1.4.48	https://dbmx.net/tokyocabinet/tokyocabinet-1.4.48.tar.gz	configure	zlib bzip2	--enable-off64		specs.tsv
+toml11	4.2.0	https://github.com/ToruNiina/toml11/archive/refs/tags/v4.2.0.tar.gz	cmake		-DTOML11_BUILD_TESTS=OFF		specs.tsv
+tomlplusplus	3.4.0	https://github.com/marzer/tomlplusplus/archive/refs/tags/v3.4.0.tar.gz	cmake		-DBUILD_TESTING=OFF		specs.tsv
+tre	0.8.0	https://github.com/laurikari/tre/archive/refs/tags/v0.8.0.tar.gz	autotools				specs.tsv
+tree	2.1.3	https://gitlab.com/OldManProgrammer/unix-tree/-/archive/2.1.3/unix-tree-2.1.3.tar.gz	custom			f554a1b62233b96fa8eaa2d85e91bc62cad80ee441fd591380f16cdfbe3e8868	packages.nix
+twolame	0.4.0	https://github.com/njh/twolame/releases/download/0.4.0/twolame-0.4.0.tar.gz	autotools	zlib			specs.tsv
+ugrep	7.5.0	https://github.com/Genivia/ugrep/archive/refs/tags/v7.5.0.tar.gz	configure	pcre2 zlib bzip2 xz zstd brotli			specs.tsv
+unbound	1.22.0	https://www.nlnetlabs.nl/downloads/unbound/unbound-1.22.0.tar.gz	configure	openssl expat	--with-ssl=$SSL --with-libexpat=$EXPAT --with-pthreads		specs.tsv
+unibilium	2.1.1	https://github.com/neovim/unibilium/archive/refs/tags/v2.1.1.tar.gz	custom-make				specs.tsv
+units	2.24	https://ftp.gnu.org/gnu/units/units-2.24.tar.gz	autotools	readline ncurses	--disable-nls	1e502c4edfacf20b29284716c72e5ddb51a495a2365d7b03e7960494c4a0c902	packages.nix
+unixODBC	2.3.12	https://www.unixodbc.org/unixODBC-2.3.12.tar.gz	configure				specs.tsv
+utf8proc	2.9.0	https://github.com/JuliaStrings/utf8proc/archive/refs/tags/v2.9.0.tar.gz	cmake		-DBUILD_SHARED_LIBS=On		specs.tsv
+uthash	2.3.0	https://github.com/troydhanson/uthash/archive/refs/tags/v2.3.0.tar.gz	custom-header				specs.tsv
+w3m	0.5.6	https://git.sr.ht/~rkta/w3m/archive/v0.5.6.tar.gz	autotools	gc ncurses openssl-3 zlib	--with-ssl --disable-nls --disable-image --disable-w3mimg --with-gc=/nix/store/hfwbfqc6wpbhc0pw2iknsyb5q6ncm1fg-gc-8.2.6	8dd652cd3f31817d68c7263c34eeffb50118c80be19e1159bf8cbf763037095e	packages.nix
+wavpack	5.7.0	https://github.com/dbry/WavPack/releases/download/5.7.0/wavpack-5.7.0.tar.bz2	autotools				specs.tsv
+wcslib	8.4	https://www.atnf.csiro.au/people/mcalabre/WCS/wcslib-8.4.tar.bz2	autotools	cfitsio	--without-pgplot --disable-fortran		specs.tsv
+wdiff	1.2.2	https://ftp.gnu.org/gnu/wdiff/wdiff-1.2.2.tar.gz	autotools	ncurses	--disable-nls	34ff698c870c87e6e47a838eeaaae729fa73349139fc8db12211d2a22b78af6b	packages.nix
+wget	1.24.5	https://mirrors.kernel.org/gnu/wget/wget-1.24.5.tar.gz	autotools	openssl-3 zlib pcre2	--with-ssl=openssl --disable-nls --without-libpsl	fa2dc35bab5184ecbc46a9ef83def2aaaa3f4c9f3c97d4bd19dcb07d4da637de	packages.nix
+wolfssl	5.7.6	https://github.com/wolfSSL/wolfssl/archive/refs/tags/v5.7.6-stable.tar.gz	autotools		--enable-all		specs.tsv
+xz	5.6.3	https://github.com/tukaani-project/xz/releases/download/v5.6.3/xz-5.6.3.tar.gz	autotools		--disable-static --enable-shared	b1d45295d3f71f25a4c9101bd7c8d16cb56348bbef3bbc738da0351e17c73317	packages.nix
+yajl	2.1.0	https://github.com/lloyd/yajl/archive/refs/tags/2.1.0.tar.gz	cmake				specs.tsv
+yasm	1.3.0	https://www.tortall.net/projects/yasm/releases/yasm-1.3.0.tar.gz	configure				specs.tsv
+zimg	3.0.5	https://github.com/sekrit-twc/zimg/archive/refs/tags/release-3.0.5.tar.gz	configure				specs.tsv
+zlib	1.3.1	https://zlib.net/fossils/zlib-1.3.1.tar.gz	autotools		--64	9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23	packages.nix
+zlib-ng	2.2.2	https://github.com/zlib-ng/zlib-ng/archive/refs/tags/2.2.2.tar.gz	cmake		-DZLIB_COMPAT=ON -DWITH_GTEST=OFF -DZLIBNG_ENABLE_TESTS=OFF		specs.tsv
+zopfli	1.0.3	https://github.com/google/zopfli/archive/refs/tags/zopfli-1.0.3.tar.gz	cmake				specs.tsv
+zsh	5.9	https://sourceforge.net/projects/zsh/files/zsh/5.9/zsh-5.9.tar.xz/download	autotools	ncurses pcre2	--disable-gdbm --enable-multibyte --with-tcsetpgrp	9b8d1ecedd5b5e81fbf1918e876752a7dd948e05c1a0dba10ab863842d45acd5	packages.nix
+zstd	1.5.6	https://github.com/facebook/zstd/releases/download/v1.5.6/zstd-1.5.6.tar.gz	custom			8c29e06cf42aacc1eafc4077ae2ec6c6fcb96a626157e0593d5e82a34fd403c1	packages.nix
+zziplib	0.13.79	https://github.com/gdraheim/zziplib/archive/refs/tags/v0.13.79.tar.gz	cmake	zlib	-DZZIP_TESTCVE=OFF -DBUILD_STATIC_LIBS=OFF -DBUILD_SHARED_LIB=ON -DBUILD_TESTS=OFF		specs.tsv
