@@ -204,6 +204,8 @@ LIVE_TOOLS="
   usr/has/bin/vi
   usr/bin/man usr/bin/mandoc usr/bin/col usr/bin/nroff
   usr/bin/curl usr/bin/wget
+  usr/sbin/ping usr/sbin/traceroute
+  usr/has/bin/file etc/magic
   usr/bin/env usr/bin/test usr/bin/true usr/bin/false usr/bin/sh usr/bin/pfexec
   usr/bin/su usr/bin/login usr/bin/newtask
   usr/bin/digest usr/bin/openssl usr/bin/od usr/bin/xargs usr/bin/mkfile
@@ -286,6 +288,12 @@ if [ ! -e "$RDROOT/usr/bin/vim" ]; then
   if [ -e "$RDROOT/usr/has/bin/vi" ]; then
     for _e in vi ex view; do rm -f "$RDROOT/usr/bin/$_e"; ln -s ../has/bin/vi "$RDROOT/usr/bin/$_e" 2>/dev/null || true; done
   fi
+fi
+# `file` ships as /usr/bin/file -> ../has/bin/file (AST file(1) + /etc/magic db).
+# The curated copy now stages usr/has/bin/file + etc/magic; ensure the link
+# resolves (recreate it if the target came through but the link didn't).
+if [ -e "$RDROOT/usr/has/bin/file" ] && [ ! -e "$RDROOT/usr/bin/file" ]; then
+  rm -f "$RDROOT/usr/bin/file"; ln -s ../has/bin/file "$RDROOT/usr/bin/file" 2>/dev/null || true
 fi
 
 # ---------------------------------------------------------------------------
