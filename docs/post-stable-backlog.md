@@ -201,3 +201,17 @@ solnix.io common cache AND peer solnix hosts, with a SECURITY model: per-package
 multi-build reproducibility comparison before trust/install; possibly a solnix.io registry of every host's
 public signing key + (ideally-avoided) human identity attestation. AWAITING the solnix.io team's written
 request for specifics before implementation. Captured; do NOT build until the spec lands.
+
+## Rust toolchain on illumos (blocks uutils/coreutils + Rust CLI tools)
+STATUS: NOT PRESENT. The x86_64-solaris build fleet has a full C/C++ toolchain
+(gcc-14/clang-21) but NO rustc/cargo. This blocks:
+- uutils/coreutils (the Rust coreutils rewrite the maintainer requested)
+- the modern Rust CLI ecosystem (ripgrep, fd, bat, eza, zoxide, sd, hyperfine,
+  dust, choose, delta, ...) that the maintainer's nix-config uses.
+illumos IS a supported (tier-3) Rust target (x86_64-unknown-illumos /
+x86_64-pc-solaris). Bootstrapping options:
+  (a) cross-compile rustc FROM the x86_64-linux build box to x86_64-illumos, or
+  (b) use a stage0 illumos rustc if OI/pkgsrc ships one, then build cargo.
+This is a multi-day bootstrap milestone of its own; once done, a large swath of
+the maintainer's daily tools become buildable. Pairs with the "make solnix
+declarative" (Nix-on-illumos + home-manager) milestone.
