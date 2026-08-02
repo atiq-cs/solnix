@@ -16,6 +16,8 @@ PATHS_FILE="${1:?usage: BUILDER_IP=<ip> oi-fleet-publish.sh <paths-file>}"
 IP="${BUILDER_IP:?set BUILDER_IP to the builder that holds these paths}"
 SYSTEM="${SYSTEM:-x86_64-solaris}"
 ARCH_MANIFEST="$REPO/docs/registry/arch-manifest.tsv"; touch "$ARCH_MANIFEST"
+RECIPES="$REPO/docs/registry/recipes.tsv"; touch "$RECIPES"
+[ -s "$RECIPES" ] || printf 'pname\tversion\turl\tsha256\tbuildsys\tdeps\tflags\tsystem\tout\tdebug\n' > "$RECIPES"
 
 SOPS_AGE_KEY_FILE="${SOPS_AGE_KEY_FILE:-$HOME/.config/sops/age/keys.txt}"
 export SOPS_AGE_KEY_FILE
@@ -45,7 +47,10 @@ while IFS=$'\t' read -r first rest <&3; do
   [ -n "$SP" ] || continue
   case "$SP" in /nix/store/*) ;; *) continue;; esac
   hash="$(basename "$SP" | cut -d- -f1)"
-  if curl -fsS "https://s3.solnix.io/solnix-cache/$hash.narinfo" >/dev/null 2>&1; then
+  # authoritative presence check via S3 ls (the public narinfo GET flaps 404/503
+  # on this endpoint, and nix's own dest-store query caches stale positives which
+  # make `nix copy` skip real uploads — see --refresh below).
+  if aws --endpoint-url https://s3.solnix.io s3 ls "s3://solnix-cache/$hash.narinfo" >/dev/null 2>&1; then
     echo "skip (cached): $(basename "$SP")"; skip=$((skip+1)); continue
   fi
   echo "=== publish $(basename "$SP") ==="
@@ -53,9 +58,21 @@ while IFS=$'\t' read -r first rest <&3; do
     echo "  FAIL export/import"; fail=$((fail+1)); continue
   fi
   nix store sign --store "$TS" -k "$WORK/sign.key" --recursive "$SP" 2>>"$WORK/err" || { echo "  FAIL sign"; fail=$((fail+1)); continue; }
-  nix copy --store "$TS" --to "$S3" "$SP" 2>>"$WORK/err" || { echo "  FAIL copy"; fail=$((fail+1)); continue; }
+  # --refresh: bypass nix's stale positive dest-store lookup on this flaky endpoint
+  # (without it nix reports "copying 0 paths" and the object never lands in S3).
+  nix copy --refresh --store "$TS" --to "$S3" "$SP" 2>>"$WORK/err" || { echo "  FAIL copy"; fail=$((fail+1)); continue; }
   # arch manifest: tag this hash with its system so the site can classify by arch
   grep -q "^$hash	" "$ARCH_MANIFEST" || printf '%s\t%s\t%s\n' "$hash" "$SP" "$SYSTEM" >> "$ARCH_MANIFEST"
+  # recipe harvest: packages built by oi-clib/xbuild carry $SP/.solnix-recipe
+  # (a RECIPE<TAB>... row). Record it with the resolved out path so future
+  # "fully-Nix" rebuilds have the exact args. Debug roots carry no recipe.
+  if RECLINE=$(./scripts/oi-ssh.sh "$IP" "$HOST_NIX cat $SP/.solnix-recipe 2>/dev/null" </dev/null 2>/dev/null) && [ -n "$RECLINE" ]; then
+    ROW=$(printf '%s' "$RECLINE" | sed 's/^RECIPE\t//')
+    RPNAME=$(printf '%s' "$ROW" | cut -f1); RVER=$(printf '%s' "$ROW" | cut -f2)
+    # resolve the out column (10th field, blank on the package copy) to $SP
+    ROW=$(printf '%s' "$ROW" | awk -F'\t' -v OFS='\t' -v o="$SP" '{$9=o; print}')
+    grep -q "^$RPNAME	$RVER	" "$RECIPES" || printf '%s\n' "$ROW" >> "$RECIPES"
+  fi
   pub=$((pub+1))
 done 3< "$PATHS_FILE"
 

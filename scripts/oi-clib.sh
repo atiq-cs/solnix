@@ -9,6 +9,10 @@
 #                  CFLAGS/LDFLAGS/CMAKE_PREFIX_PATH; also added to RUNPATH.
 #     flags after `--` are passed to configure or as extra -D to cmake.
 # Output: RESULT<TAB><pname><TAB>OK|FAIL<TAB><out-path> <debug-path>|reason
+# Also on success: RECIPE<TAB>pname<TAB>version<TAB>url<TAB>sha256<TAB>buildsys<TAB>deps<TAB>flags<TAB>system<TAB>out<TAB>debug
+#   plus a matching TSV row written to $out/.solnix-recipe (travels in the nar),
+#   so every published package records the exact args to replay it as a real
+#   mkDerivation. See docs/registry/recipes.tsv.
 set -u
 export PATH=/nix-tools/bin:/usr/gnu/bin:/usr/bin:$PATH
 export NIX_CONF_DIR=/nix-tools/etc/nix
@@ -107,7 +111,9 @@ for x in "\$@"; do
     -Wl,--build-id|-Wl,--build-id=*) continue ;;
     -Wl,--export-dynamic|--export-dynamic|-rdynamic|-Wl,-E) continue ;;
     -Wl,-pie|-pie|-Wl,-z,relro,-z,now) continue ;;
+    -Wl,-z,relro|-Wl,-z,now|-Wl,-z,relro,*|-Wl,-z,now,*|-z,relro|-z,now) continue ;;
     -fPIE) continue ;;
+    -Wl,-z,noexecstack|-Wl,-z,noexecstack,*|-Wl,-z,execstack) continue ;;
   esac
   _a="\$_a \$x"
 done
@@ -229,6 +235,22 @@ done
 # strips them for the same reason. This unblocked libXrender/libXi/libXt/libXpm.
 find "$out" -name '*.la' -type f -delete 2>/dev/null || true
 
+# --- record a replayable recipe (self-describing package + stdout harvest) ---
+# sha may have been passed as `-`; pin the tarball's real digest now that it's
+# verified/downloaded, so a future rebuild can reconstruct the mkDerivation.
+rsha="$sha"
+if [ -z "$rsha" ] || [ "$rsha" = "-" ]; then
+  rsha=$(digest -a sha256 "$tb" 2>/dev/null || sha256sum "$tb" 2>/dev/null | awk '{print $1}')
+fi
+rsystem="$(uname -p 2>/dev/null || uname -m 2>/dev/null)-solaris"
+rdeps=$(echo "$deps" | sed 's/^ *//; s/ *$//')
+rflags=$(echo "$flags" | sed 's/^ *//; s/ *$//')
+# .solnix-recipe carries out/debug as placeholders (real paths only known after
+# nix-store --add below); the stdout RECIPE line carries the resolved paths.
+printf 'RECIPE\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  "$pname" "$ver" "$url" "$rsha" "$bsys" "$rdeps" "$rflags" "$rsystem" "" "" \
+  > "$out/.solnix-recipe"
+
 # --- freeze OUT root (plain <pname>-<version>) ---
 named="/var/tmp/${pname}-${ver}"; [ -e "$named" ] && named="$named.$$"
 cp -a "$out" "$named"
@@ -260,3 +282,7 @@ spd=$(nix-store --add "$dbg" 2>/dev/null)
 nix-store --add-root /var/tmp/gcroots/$(basename "$spo"|cut -d- -f1) --indirect --realise "$spo" >/dev/null 2>&1 || true
 nix-store --add-root /var/tmp/gcroots/$(basename "$spd"|cut -d- -f1)d --indirect --realise "$spd" >/dev/null 2>&1 || true
 echo "RESULT	$pname	OK	$spo $spd (man=$mc)"
+# machine-readable recipe with the resolved store paths, for immediate harvest
+# into docs/registry/recipes.tsv by the wave driver / oi-fleet-publish.sh.
+printf 'RECIPE\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  "$pname" "$ver" "$url" "$rsha" "$bsys" "$rdeps" "$rflags" "$rsystem" "$spo" "$spd"
