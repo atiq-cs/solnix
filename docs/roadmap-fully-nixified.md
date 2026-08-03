@@ -121,3 +121,18 @@ BREAK-THE-CYCLE (account-proof, do ONCE): stand up a full OpenIndiana Hipster ho
 Then the pure stdenv builds on any host, forever, regardless of account churn.
 The sun SPARC host cannot help (wrong arch). solnix.io cache/keys/code/seed(toolchain)
 all survive; only the build SUBSTRATE + these 2 artifacts are the gap.
+
+## CYCLE-BREAKER PATH FOUND + IN PROGRESS (2026-08-02)
+The reproducible, account-independent way to a full OI build host is our OWN existing
+recipe scripts/oi-make-ami.sh: a throwaway Amazon-Linux helper dd's OI's official raw
+cloud image (https://dlc.openindiana.org/isos/hipster/20260430/OI-hipster-cloudimage.img.zst,
+NEWER than the 20251026 the script pins) onto a blank EBS vol -> snapshot -> register AMI.
+This is how the FIRST OI builder was made; OI's image is on OI's server (not account-bound).
+Dispatched on beef (locked SG, no public access). Once the full OI host is up:
+  1. build a runnable illumos Nix on it + `nix-store --export` -> publish to cache.solnix.io
+     (THE missing account-proof artifact).
+  2. grow the seed GNU userland (oi-build-host-setup gives gcc/pkg -> the source tools) +
+     republish the seed FOD.
+Then any bare illumos host bootstraps nix from the cache -> pure stdenv builds -> Phase-3.
+NEW OI images publish periodically (20250402/20250606/20251026/20260430 seen) -> the OI-AMI
+build is always reproducible from dlc.openindiana.org, immune to burner-account churn.
