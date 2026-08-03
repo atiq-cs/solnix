@@ -88,6 +88,20 @@ let
       };
     };
 
+  # H7 helper: point libtool's NM at the GNU-format nm. Solaris /usr/bin/nm has
+  # an output format libtool's configure `global_symbol_pipe` probe cannot
+  # parse -> empty symbol list -> `nm ... | | sed` syntax error at link. gnm
+  # (GNU binutils nm, seed-sourced via the stdenv `illumosGnm` slice) emits the
+  # `<addr> T <sym>` format libtool expects. Set both NM (configure reads it)
+  # and export it into the environment so the generated libtool honours it.
+  gnm = "${final.illumosGnm or (throw "illumosGnm not in package set")}/bin/gnm";
+  withGnm = old:
+    { NM = gnm;
+      preConfigure = (old.preConfigure or "") + ''
+        export NM=${gnm}
+      '';
+    };
+
 in
 {
   # ======================================================================
@@ -102,8 +116,27 @@ in
   # `res_query: not found` and aborts `./configure failed for glib`. Thread
   # the resolver + split libc libs into the link. (H1 already lets the earlier
   # conftests exec; this is the separate resolver-lib gap behind it.)
-  pkg-config = onSolaris prev.pkg-config (old:
-    addLdFlags old "-lresolv ${socketLibs}");
+  # The `pkg-config` attr is a THIN WRAPPER (pkg-config-wrapper); the real
+  # glib-based build is `pkg-config-unwrapped`. Overrides for the actual
+  # compile/link (resolver libs, glib -lthread) must land on the unwrapped one.
+  pkg-config-unwrapped = onSolaris prev.pkg-config-unwrapped (old:
+    (addLdFlags old "-lresolv ${socketLibs}") // {
+      # H6c: pkg-config's bundled glib configure sets
+      #   G_THREAD_LIBS="-lpthread -lthread" on Solaris (a Sun Studio -mt relic).
+      # On modern illumos libthread was folded into libc and there is no
+      # standalone libthread.so; the pthread symbols are already pulled via
+      # -lpthread/libc, so -lthread is redundant and `ld: fatal: library
+      # -lthread: not found`. glib is sub-configured DURING make, so patch its
+      # GENERATED configure up front (touching configure.ac would trip
+      # maintainer-mode autoreconf, which the seed lacks): keep -lpthread, drop
+      # -lthread, then touch so it stays newer than configure.ac.
+      postPatch = (old.postPatch or "") + ''
+        if [ -e glib/configure ]; then
+          sed -i 's/-lpthread -lthread/-lpthread/g' glib/configure
+          touch glib/configure
+        fi
+      '';
+    });
 
   # --- socket/name-service split (-lnsl -lsocket) -----------------------
   # curl: does sockets + resolver; needs the split libc libs.
@@ -133,16 +166,13 @@ in
     { postPatch = (old.postPatch or "") + gnulibFix; });
   gettext = onSolaris prev.gettext (old:
     { postPatch = (old.postPatch or "") + gnulibFix;
-      # Upstream nixpkgs sets a blanket illumos
-      #   LDFLAGS=-lm -lmd -lmp -luutil -lnvpair -lnsl -lidmap -lavl -lsec
-      # (gettext/default.nix). The solnix seed only carries libc/libm/libnsl/
-      # libresolv/libsocket/... and NOT libmd/libmp/libnvpair/libuutil/libidmap/
-      # libavl/libsec (and seed libnsl itself NEEDs the absent libmp/libmd), so
-      # that link line fails `library -lmd: not found`. gettext-runtime does not
-      # actually need the name-service/crypto libs -- pin LDFLAGS to the
-      # seed-available libs. (Drop this once the seed regrows those libs.)
-      env = (old.env or { }) // { LDFLAGS = "-lm"; };
-    });
+      # H7: gettext builds libintl.so via libtool -> needs the GNU-format nm.
+      # (Previously this entry pinned LDFLAGS=-lm to dodge the H6 seed-lib gap;
+      # H6 is now fixed in the stdenv -- the seedSyslibs -L makes -lmd -lmp
+      # -lnvpair -luutil -lidmap -lavl -lsec resolve -- so the blanket illumos
+      # LDFLAGS from upstream gettext/default.nix links cleanly and the pin is
+      # dropped.)
+    } // withGnm old);
 
   # --- BIND: strip Solaris -zrelax=transtls that illumos ld rejects -----
   # BIND's configure injects `-zrelax=transtls` into LDFLAGS on SunOS; illumos
@@ -186,13 +216,27 @@ in
       '';
     });
 
+  # --- H7 libtool NM: packages whose link step drives libtool (build a .so via
+  # libtool -> global_symbol_pipe) need the GNU-format nm. -------------------
+  libidn2 = onSolaris prev.libidn2 (old: withGnm old);
+  libgpg-error = onSolaris prev.libgpg-error (old: withGnm old);
+
   # --- gcc-14 strictness relaxation (implicit decls / pointer types) ----
   # These build clean everywhere but trip gcc-14's promoted-to-error warnings
   # on illumos' older headers. Downgrade to warnings rather than patch sources.
   less = onSolaris prev.less (old: addCFlags old gcc14Relax);
   file = onSolaris prev.file (old: addCFlags old gcc14Relax);
   ncurses = onSolaris prev.ncurses (old:
-    addCFlags old "${gcc14Relax} -DNCURSES_WIDECHAR=1");
+    (addCFlags old "${gcc14Relax} -DNCURSES_WIDECHAR=1") // {
+      # H8: ncurses `--with-versioned-syms` emits gcc `-Wl,--version-script`
+      # (a GNU-ld spelling) straight to collect2, which execs the host Solaris
+      # ld directly (the H1 bypass) so the ld-solaris translation never runs ->
+      # `ld: fatal: unrecognized option '--version-script'`. Symbol versioning
+      # is cosmetic on a fresh port; drop the flag so the shared libs link with
+      # the native Solaris ld.
+      configureFlags = builtins.filter (f: f != "--with-versioned-syms")
+        (old.configureFlags or []);
+    });
 
   # NOTE: this is the seed set (~18 packages with documented fixes). Extend by
   # matching a build failure to a shared snippet above and adding one

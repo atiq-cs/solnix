@@ -64,6 +64,106 @@ store in a linked+run test, libiconv `bin/iconv --version` runs, libatomic_ops
 `.so` RUNPATH -> store. All deriver-resolve to a real `.drv` (built, not
 `nix-store --add`) and have host-free closures.
 
+## Third tranche (H2/H6/H7-fix proven + published, append-only, to cache.solnix.io)
+
+H2 (C++ runtime), H6 (seed-lib gap), H7 (libtool `global_symbol_pipe`) are all
+**FIXED** in the fork stdenv + tranche overlay (see the H2/H6/H7 sections
+below). These packages were H2/H6/H7-blocked and now build/run as real
+hermetic derivations. Persisted PER-PACKAGE (build -> verify -> publish ->
+registry row -> tranche3-paths.txt, before moving to the next) so a mid-run
+death strands at most one package.
+
+| pname                | new store hash                     | deriver | hermetic | runs | published |
+|----------------------|------------------------------------|---------|----------|------|-----------|
+| gettext-1.0          | dx6j3lyan943zgcv5bwz1f4sn8v7lihi   | y       | y        | y    | y         |
+| gettext-1.0-doc      | x8fby7vwwm24gjg5fdfaq4cb7dkbfwc5   | y       | y        | -    | y         |
+| gettext-1.0-info     | z85x174rdgffcc9rlzi6r1i1h9ycglby   | y       | y        | -    | y         |
+| gettext-1.0-man      | 0s5rd8hj6l1p0rb40q0x5nxxsq5kpii7   | y       | y        | -    | y         |
+| pkg-config-0.29.2    | d3i8k3f3qkkmg82naqgpriclvixv9rx5   | y       | y        | y    | y         |
+| pkg-config-0.29.2-doc| 5k037fbdcpk0np6qqg66102ilhrvx3mh   | y       | y        | -    | y         |
+| pkg-config-0.29.2-man| rvivdkvaq2p8ydpy65bqzbsl66rbi61k   | y       | y        | -    | y         |
+| pkg-config-wrapper   | z1wr6833mzxik5dajk2qcs76b60ip769   | y       | y        | y    | y         |
+| ncurses-6.6          | agvfjzh4cc3l9cw1sgnyjr911dbj8r5h   | y       | y        | y    | y         |
+| ncurses-6.6-dev      | d1ksp72428i870jk04i5pi10xzaxjsv8   | y       | y        | -    | y         |
+| ncurses-6.6-man      | szi8wd474fs8j23b12cqij7bg1scsqvd   | y       | y        | -    | y         |
+| less-704             | xslfwpdsjp1xiz35b5z53rxp1x03wmag   | y       | y        | y    | y         |
+| less-704-man         | pha3pjhvrg0n6dypn0cwjwi08p172riw   | y       | y        | -    | y         |
+| libidn2-2.3.8        | m79d4vqvw5r48qfb7q13zcc0069xrhhv   | y       | y        | y    | y         |
+| libidn2-2.3.8-bin    | 6ls4bwkqgf7q5ccsgsqrxkla4mlbr6g6   | y       | y        | y    | y         |
+| libidn2-2.3.8-dev    | sw37wr1nwgi25s5xfaq1niaqib5055xx   | y       | y        | -    | y         |
+| libidn2-2.3.8-devdoc | a0a5wb785a45x8p9ds0pzi740wjf43bl   | y       | y        | -    | y         |
+| libidn2-2.3.8-info   | 61cfdj8ldacylc1ng669sd88slcwv9kf   | y       | y        | -    | y         |
+| libgpg-error-1.61    | ang98c5cz6z59dqnavjj34nh3w91n3k8   | y       | y        | y    | y         |
+| libgpg-error-1.61-dev| 9s9h3sr02j34q0pvsx7aqhrpw43hj0fi   | y       | y        | -    | y         |
+| libgpg-error-1.61-info| 8kjzinlv18xj5x3pqaj6p2qy8xmhkff2  | y       | y        | -    | y         |
+| gmp-with-cxx-6.3.0   | v1agcprwan1vmggf6nax3lyrmwhmjmkj   | y       | y        | y    | y         |
+| gmp-with-cxx-6.3.0-dev| jiw3an4d596ipn9snrh21nw25zqlcy0v  | y       | y        | -    | y         |
+| gmp-with-cxx-6.3.0-info| 1x34dd1rd3vm06ac2b0f2k92rxrw4987 | y       | y        | -    | y         |
+
+8 packages / 24 outputs. published=24, failed=0. `runs` verified on illumos:
+`gettext`/`msgfmt --version`, `pkg-config --version` (0.29.2, wrapped +
+unwrapped), ncurses `tic -V` (`ncurses 6.6`), `less --version` (704,
+installCheck passed on-host), `idn2 --version` (Libidn2 2.3.8),
+`gpgrt-config --version` (1.61), and `libgmpxx.so.4` (C++, NEEDs
+`libstdc++.so.6`) resolving the C++ runtime from the store via `ldd` (the H2
+proof on a real package). All deriver-resolve to a real `.drv` and have
+host-free closures.
+
+### H2/H6/H7 fixes (the stdenv + overlay diffs)
+
+All three are **seed-sourced + hermetic** (no host `/usr/lib` refs; the fixed
+fork stdenv is captured at `artifacts/tranche3-fork-fixes/` since the fork is a
+separate, non-git tree). The seed FOD did NOT re-grow -- the needed illumos
+system libs and the C++ runtime were already inside the unpacked seed, just not
+on the link search path -- so the 4 pure-stdenv FOD sites and the seed SRI are
+**unchanged** (no bump).
+
+- **H2 (C++ runtime) -- FIXED.** `libstdc++.so.6`/`libgcc_s.so.1` live only in
+  the seed gcc runtime amd64 libdir (`gcc-unwrapped/usr/gcc/10/lib/amd64`),
+  which was not on the link search path, so a C++ binary linked but could not
+  RUN (same `ld.so.1: ... open failed` class as H1). Fix: the illumos cc-wrapper
+  `extraBuildCommands` now emits `-L$gccdir/lib/amd64` into `cc-cflags`; the H1
+  cc-wrapper.sh runpath pass then auto-adds `-Wl,-R,<store dir>`. Proven: a
+  C++ hello runs, and the real `gmp-with-cxx` `libgmpxx.so.4` NEEDs
+  `libstdc++.so.6` and `ldd` resolves it from the store.
+- **H6 (seed-lib gap) -- FIXED.** The illumos system libs
+  `libmd/libmp/libnvpair/libuutil/libidmap/libavl/libsec` (+ `libnsl/libsocket/
+  libresolv`) that autotools/gettext link lines reference are ALREADY inside the
+  unpacked seed under `usr/gnu/lib/amd64` (captured as the ldd-closure of the
+  GNU userland), but only as versioned `.so.N` -- no unversioned `.so` link, so
+  `-lmd` etc. did not resolve. Fix: a new `seedSyslibs` slice (a plain
+  derivation in the stdenv) symlinks that dir and adds the `.so -> .so.N` links,
+  and the cc-wrapper puts `-L${seedSyslibs}/lib/amd64` on the search path (H1
+  auto-`-R` then makes them run). Fully seed-sourced, so no seed regrow. Proven:
+  a C program linking all 7 libs links + runs; gettext (upstream's blanket
+  illumos `LDFLAGS`) links cleanly.
+  - **H6b/H6c (`-lthread`).** pkg-config's bundled glib configure sets
+    `G_THREAD_LIBS="-lpthread -lthread"` on Solaris (a Sun Studio `-mt` relic).
+    illumos folded libthread into libc; there is no standalone `libthread.so`
+    (and a shim SONAME-conflicts with libpthread), and `-lthread` is redundant.
+    Fix: `pkg-config-unwrapped` overlay `postPatch` drops `-lthread` from the
+    GENERATED `glib/configure` (keeps `-lpthread`).
+- **H7 (libtool `global_symbol_pipe` empty) -- FIXED.** Solaris `/usr/bin/nm`
+  output is not the format libtool's configure probe expects -> empty symbol
+  list -> `nm ... | | sed` syntax error at link. Fix: the stdenv exposes
+  `illumosGnm` (GNU nm 2.46.1, a small content-addressed FOD
+  `gnm.tar.gz`, RUNPATH-relocated to the seed gnu libs -- host-free), and the
+  overlay sets `NM=${illumosGnm}/bin/gnm` for the libtool-driven builds
+  (gettext, libidn2, libgpg-error) via the `withGnm` helper. Proven: `gnm -B`
+  emits `<addr> T <sym>` (GNU format libtool parses), and libidn2/libgpg-error/
+  gettext all build their `.so` via libtool cleanly.
+
+### H8 (ncurses `--version-script`) -- NEW gap, fixed per-package
+
+Exposed by building ncurses: `--with-versioned-syms` makes ncurses emit
+`-Wl,--version-script,resulting.map` straight to `collect2`, which execs the
+host Solaris `ld` directly (the H1 bypass) so the ld-solaris translation never
+runs -> `ld: fatal: unrecognized option '--version-script'`. Symbol versioning
+is cosmetic on a fresh port; the overlay filters `--with-versioned-syms` from
+ncurses' `configureFlags`. (A general stdenv fix -- translating
+`--version-script` -> Solaris `-M mapfile` in the cc-wrapper runpath pass --
+would unblock any GNU-version-script package at once; deferred.)
+
 ### H1 fix (the wrapper diff)
 
 The biggest lever. Root cause found by tracing the failing conftest exec:
@@ -206,15 +306,14 @@ gap; fixing them in the fork's stdenv/cc-wrapper unblocks large swaths at once.
   now build+run hermetically. Downstream of H1, gettext/libidn2/pkg-config
   now reach *later* stages and hit the distinct H6/H7 gaps below.
 
-- **H2 C++ runtime -- SAME CLASS as H1 (now understood).** `gmp-with-cxx`
-  (hence `nettle`) fails `C++ compiler not available` / `program does not
-  run`. Diagnosed: the C++ conftest links `libstdc++.so.6`/`libgcc_s.so.1`
-  which live ONLY in the seed (`illumos-seed-unpacked/usr/gcc/10/lib/amd64`)
-  and, like H1, get no RUNPATH -> `ld.so.1: ... open failed` at exec. H1's
-  `-Wl,-R` mechanism fixes it: adding `-Wl,-R,<seed gcc amd64 libdir>` makes a
-  C++ hello run. Remaining work is small -- bake that gcc-runtime `-R` into the
-  cc-wrapper (the dir is in the seed, not `gcc-unwrapped`, so it needs the
-  `gccForLibs`/seed path wired in). Needed for the whole C++ world.
+- **H2 C++ runtime -- FIXED (tranche 3).** Was: `gmp-with-cxx` (hence
+  `nettle`) fails `C++ compiler not available` / `program does not run`. Root
+  cause: the C++ conftest links `libstdc++.so.6`/`libgcc_s.so.1` which live only
+  in the seed gcc runtime amd64 libdir and got no RUNPATH -> `ld.so.1: ... open
+  failed`, the same class as H1. FIX: the illumos cc-wrapper now emits
+  `-L$gccdir/lib/amd64` into `cc-cflags` so the H1 `-Wl,-R` pass auto-adds the
+  store dir. Proven: C++ hello runs; real `gmp-with-cxx` `libgmpxx.so.4` links
+  `libstdc++.so.6` and `ldd` resolves it from the store (published, tranche 3).
 
 - **H3 curl-bootstrap `/setup` for build-dep srcs.** `openssl` pulls a real
   `perl` build whose `libxcrypt-4.5.2.tar.xz` src is fetched by the *curl
@@ -235,33 +334,35 @@ gap; fixing them in the fork's stdenv/cc-wrapper unblocks large swaths at once.
   interruptions (Nix's own downloader retries, but the mirror flaked past the
   retry budget). Retry later or pin a stable mirror/`fetchpatch` snapshot.
 
-- **H6 seed-lib gap (newly exposed by H1).** Now that conftests run, packages
-  whose configure link line references illumos system libs the seed lacks fail
-  `library -lmd: not found`. The seed carries only
-  libc/libm/libnsl/libresolv/libsocket/libdl/libelf/libpthread/librt and NOT
-  libmd/libmp/libnvpair/libuutil/libidmap/libavl/libsec (and the seed's own
-  `libnsl.so.1` NEEDs the absent libmp/libmd). Hit by gettext (upstream
-  `gettext/default.nix` sets a blanket illumos
-  `LDFLAGS=-lm -lmd -lmp -luutil -lnvpair -lnsl -lidmap -lavl -lsec`) and by
-  pkg-config's bundled-glib `res_query` probe. Partial mitigation: the
-  `solaris-overlay.nix` gettext entry now pins `LDFLAGS=-lm` (past configure).
-  Real fix: regrow the seed FOD with those system libs. Blocks gettext (a
-  nativeBuildInput for a large swath), libgpg-error, libidn.
+- **H6 seed-lib gap -- FIXED (tranche 3).** Was: with conftests running,
+  packages whose configure link references illumos system libs the seed lacked
+  a `.so` link for failed `library -lmd: not found`. The libs
+  (`libmd/libmp/libnvpair/libuutil/libidmap/libavl/libsec` +
+  `libnsl/libsocket/libresolv`) were ALREADY inside the unpacked seed under
+  `usr/gnu/lib/amd64` (only versioned `.so.N`, no `.so`). FIX: a `seedSyslibs`
+  slice symlinks that dir + adds the `.so -> .so.N` links; the cc-wrapper puts
+  `-L${seedSyslibs}/lib/amd64` on the search path (H1 auto-`-R` makes them run).
+  Seed-sourced -> **no seed regrow, seed SRI + 4 pure-stdenv FOD sites
+  unchanged**. `-lthread` variant (H6b/H6c): dropped in the pkg-config overlay
+  (glib's Sun-Studio relic; libthread is folded into libc). Proven: gettext
+  links the blanket illumos `LDFLAGS` cleanly + runs (published, tranche 3).
 
-- **H7 libtool `global_symbol_pipe` empty (newly exposed by H1).** With
-  configure passing, libtool's link emits `nm ... | | sed` -> `syntax error
-  near unexpected token '|'`, because its configure probe of Solaris
-  `/usr/bin/nm` yields an empty `global_symbol_pipe`. Proven fix: point libtool
-  `NM` at a GNU-format nm (`gnm`) -> `libintl.so` links cleanly. Hermetic fix
-  needs a GNU nm in the toolchain (seed regrow / bintools `gnm`); there is no
-  GNU-format nm in the store today. Blocks gettext (post-config), libidn2
-  (which cleared H1 configure but dies here).
+- **H7 libtool `global_symbol_pipe` empty -- FIXED (tranche 3).** Was:
+  libtool's link emitted `nm ... | | sed` -> `syntax error near unexpected
+  token '|'` because its probe of Solaris `/usr/bin/nm` yields an empty
+  `global_symbol_pipe`. FIX: the stdenv exposes `illumosGnm` (GNU nm 2.46.1, a
+  small content-addressed FOD, RUNPATH-relocated to the seed gnu libs -- host
+  free), and `withGnm` in `solaris-overlay.nix` sets `NM=${illumosGnm}/bin/gnm`
+  for the libtool-driven builds. Proven: `gnm -B` emits GNU `<addr> T <sym>`
+  format; libidn2/libgpg-error/gettext all build their `.so` via libtool and
+  run (published, tranche 3).
 
 ## SKIPPED this tranche (with blocker)
 
-H1 FIXED (tranche 2): `libiconv` `libunistring` `expat` `libatomic_ops` built +
-published. Still blocked downstream of H1:
-`gettext` `libidn2` `libgpg-error` (H6 seed-lib gap / H7 libtool nm) ·
-`pkg-config` internal-glib `res_query` (H6) · `ncurses` `less` (need pkg-config
--> H6 chain) · `nettle` `gmp` (H2 -- same class as H1, small remaining fix) ·
-`openssl` `sqlite` (H3) · `curl` `libffi` (H4) · `gnutls` `readline` (H5).
+H2/H6/H7 FIXED (tranche 3): `gettext` `pkg-config`(+wrapper) `ncurses` `less`
+`libidn2` `libgpg-error` `gmp-with-cxx` built + published (24 outputs). Newly
+fixed per-package: H8 (ncurses `--version-script`). Still blocked (other gaps):
+`nettle` (needs gmp -- now unblocked, retry) · `openssl` `sqlite` (H3
+curl-bootstrap `/setup`) · `curl` `libffi` (H4 spliced-pkgset override) ·
+`gnutls` `readline` (H5 fragile upstream fetches). The pkg-config unlock opens
+a large `nativeBuildInputs = [ pkg-config ]` downstream swath.
