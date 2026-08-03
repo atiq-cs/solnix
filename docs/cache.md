@@ -157,3 +157,21 @@ TWO bugs that silently broke publishes (caused mysterious 404s + under-counted c
    (or `aws s3 cp`) the result up. The oi-fleet-publish.sh path should use aws s3, NOT nix copy.
    Also: stale local binary-cache-v*.sqlite positives make Nix SKIP re-uploads -> clear them when
    re-verifying (deletes nothing from S3, just forces honest re-checks).
+
+## ⚠️ CRITICAL (2026-08-03): s3.solnix.io PACKAGE layer is NOT durable — backend defect
+Cache-integrity audit finding (docs/registry/AUDIT-cache-phantom-2026-08-03.md):
+- The `s3.solnix.io` MinIO-style gateway does NOT durably commit/replicate narinfo+nar objects
+  under the package (bucket-root) prefix. Writes return 200 without persisting; reads are
+  NON-DETERMINISTIC (same object: 200 on one request, 404 seconds later; 44/50 vs 8/50
+  request-to-request). This is NOT the nix-copy bug — `aws s3 cp` fails identically. It is a
+  BACKEND durability/replication defect. No client-side re-upload+verify loop can fix it.
+- STABLE / trustworthy: the `seed/` and `bootstrap/` prefixes — 10/10 stable (the churn-immune
+  bootstrap trust root is INTACT). Only the package narinfo layer flaps.
+- RECOVERY STAGED: 49/51 exactly-Nix real-derivation store paths re-exported + signed, staged
+  locally at /tmp/cache-audit/repair/bcache (on the OI host / dev-box) — ready for one-command
+  re-publish ONCE THE BACKEND IS DURABLE. 1 lost (gmp-with-cxx-info) needs rebuild.
+- ACTION REQUIRED (maintainer / infra): fix s3.solnix.io backend durability+replication for the
+  package prefix, OR migrate the package cache to a durable bucket, then re-publish the staged
+  bcache + re-run the tranches' publishes. Until then, treat package publishes as NOT PERSISTED
+  and do NOT gate build-verification on cache round-trip (verify locally: deriver + hermetic
+  closure + runs; the cache round-trip is unreliable by backend, not by our process).
