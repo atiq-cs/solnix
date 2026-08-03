@@ -41,7 +41,46 @@ s3://solnix-cache/
   nix-cache-info                      # "StoreDir: /nix/store"
   <storehash>.narinfo                 # one per store path (signed)
   nar/<filehash>.nar.xz               # xz-compressed NAR per path
+  bootstrap/                          # relocatable, compiler-free artifacts
+    nix-illumos-2.3.16.tar.zst        # prebuilt native illumos Nix (see below)
+    nix-illumos-2.3.16.tar.zst.sha256
 ```
+
+## Bootstrap: prebuilt native illumos Nix (no compiler)
+
+A bare illumos host cannot fetch from this cache until it has a working `nix`,
+and building Nix from source needs a C++ toolchain (gcc-14 + boost 1.78 + ...).
+To break that chicken-and-egg, a **prebuilt, relocatable, compiler-free** Nix
+2.3.16 lives under `bootstrap/`:
+
+| | |
+|---|---|
+| **URL** | `https://s3.solnix.io/solnix-cache/bootstrap/nix-illumos-2.3.16.tar.zst` |
+| **sha256** | `ebe3a573a4e0045caf600fc8148b0fa37ba46c38a443d5a6210195f5c02388ed` |
+| **sidecar** | `.../nix-illumos-2.3.16.tar.zst.sha256` |
+| **size** | 44.5 MiB (compressed), ~224 MiB unpacked |
+| **system** | `x86_64-solaris` |
+
+Contents: `nix-tools/` (the whole install prefix — nix 2.3.16 binaries + libs),
+`runtime-lib/` (every non-base shared lib the binaries need: gcc-14 runtime
+`libstdc++`/`libgcc_s`, boost 1.78, openssl, curl, sqlite, sodium, readline, ...
+verified sufficient to run nix with only the base illumos image present), and
+`bootstrap-register.sh`. A bare host installs with NO compiler:
+
+```sh
+curl -fsSL https://s3.solnix.io/solnix-cache/bootstrap/nix-illumos-2.3.16.tar.zst \
+  | zstd -d | tar -xf -              # -> ./nix-tools ./runtime-lib ./bootstrap-register.sh
+./bootstrap-register.sh              # installs /nix-tools + /nix store + cache.solnix.io substituter
+# then: export PATH=/nix-tools/bin:$PATH NIX_CONF_DIR=/nix-tools/etc/nix LD_LIBRARY_PATH=/nix-tools/runtime-lib
+```
+
+`bootstrap-register.sh` writes `/nix-tools/etc/nix/nix.conf` with the
+`cache.solnix.io` substituter + trusted key, so the freshly-installed nix pulls
+signed binaries immediately. Produced by `scripts/oi-nix-setup.sh` (from-source
+build) then packaged; regenerate + re-upload when the version or patches change.
+The nix binaries install to `/nix-tools` (a normal prefix, not a store path), so
+there is no nix store-path closure to publish as narinfos — the tarball IS the
+artifact.
 
 ## Publishing
 

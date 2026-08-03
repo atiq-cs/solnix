@@ -20,6 +20,17 @@
 #
 # Run ON the host as root:  ./oi-nix-setup.sh
 # It is written to be re-runnable; it skips steps whose output already exists.
+#
+# NOTE: a prebuilt native illumos Nix now exists in the surviving cache:
+#   https://s3.solnix.io/solnix-cache/bootstrap/nix-illumos-2.3.16.tar.zst
+#   (sha256 sidecar: .../nix-illumos-2.3.16.tar.zst.sha256)
+# A BARE illumos host with NO compiler should FETCH that instead of compiling:
+#   curl -fsSL https://s3.solnix.io/solnix-cache/bootstrap/nix-illumos-2.3.16.tar.zst \
+#     | zstd -d | tar -xf -            # -> ./nix-tools ./runtime-lib ./bootstrap-register.sh
+#   ./bootstrap-register.sh            # installs /nix-tools, /nix store, cache substituter
+# The tarball bundles gcc-14 runtime + all non-base shared libs, so it runs on a
+# stock image. This from-source path remains for producing NEW builds of that
+# artifact (e.g. after a patch/version bump).
 
 set -euo pipefail
 
@@ -88,7 +99,11 @@ cd "${SRCDIR}"
 if ! grep -q "sys/termios.h" src/libutil/util.cc; then
   gpatch -p1 < "${PATCHDIR}/0001-illumos-winsize-termios.patch"
 fi
-if ! grep -q "cfmakeraw" src/libstore/build.cc; then
+# Guard on a patch-UNIQUE marker (I_PUSH), not "cfmakeraw": stock build.cc
+# already contains a cfmakeraw() CALL at the pty setup, so grepping "cfmakeraw"
+# false-positives and the patch (which ADDS the missing definition) gets
+# silently skipped -> "'cfmakeraw' was not declared" at build time.
+if ! grep -q "I_PUSH" src/libstore/build.cc; then
   gpatch -p1 < "${PATCHDIR}/0002-illumos-cfmakeraw-pty-streams.patch"
 fi
 
