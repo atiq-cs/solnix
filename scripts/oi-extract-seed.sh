@@ -126,6 +126,75 @@ GLD="$("$GCC_PREFIX/bin/gcc" -print-prog-name=ld)"; [ -x "$GLD" ] && cp_opt "$GL
 echo "=== 5. host: OI gcc-10 prefix (whole) ==="
 cp_req "$GCC_PREFIX" "usr/gcc/10" host   # bin, lib, lib/amd64, libexec, lib/gcc/<triple>/10 incl include-fixed + crt*
 
+echo "=== 5b. host: GNU userland (usr/gnu/bin/*) + its lib closure ==="
+# The pure stdenv (solnix-pkgs pkgs/stdenv/illumos/default.nix) slices a minimal
+# GNU userland out of the seed via linkBootstrap. OI ships these as illumos
+# binaries (correct: they run on the target). They land in three places on OI:
+#   - most coreutils, GNU make      -> /usr/gnu/bin/<name>  (already unprefixed)
+#   - the remaining coreutils       -> /usr/bin/<name>      (unprefixed)
+#   - sed/awk/tar/patch/diff/find/  -> /usr/bin/g<name>     (g-prefixed GNU pkgs)
+#     grep/egrep/fgrep/xargs/cmp
+# Copy each into the seed under usr/gnu/bin/<name> (UNPREFIXED, the names the
+# stdenv slices expect), dereferencing symlinks so the slice is self-contained.
+# sh is a symlink to bash. gzip/xz/unxz/bzip2 are the same binary on OI and target.
+#
+# Prereq packages (pkg install if missing): file/gnu-coreutils file/gnu-findutils
+# text/gnu-sed text/gawk archiver/gnu-tar text/gnu-diffutils text/gnu-patch
+# (developer/build/gnu-make + text/gnu-grep + compress/{gzip,xz,bzip2} ship by default).
+#
+# Lib closure: these tools link libintl/libncurses/libguile/libreadline/libgmp/...
+# beyond the base libc set. Capture the full transitive ldd closure into
+# usr/gnu/lib/amd64/. The seed relocation (unpack-seed.sh) rewrites every ELF's
+# RUNPATH to $ORIGIN/../../lib/amd64:$ORIGIN/../lib/amd64, which for a bin at
+# usr/gnu/bin/ and a lib at usr/gnu/lib/amd64/ both resolve to usr/gnu/lib/amd64
+# -> the userland is self-contained wherever the seed lands.
+GNUCP="$(command -v /usr/gnu/bin/cp 2>/dev/null || echo cp)"  # GNU cp -L on plain files (Solaris cp -L needs -R)
+cp_gnu() { # dest-basename  src-abs-path
+  local b="$1" src="$2"
+  [ -e "$src" ] || die "missing required GNU tool: $src (pkg install the gnu-* package)"
+  mkdir -p "$SEED/usr/gnu/bin"
+  "$GNUCP" -L "$src" "$SEED/usr/gnu/bin/$b"
+  chmod u+w "$SEED/usr/gnu/bin/$b"
+  _record "$src" "usr/gnu/bin/$b" host
+}
+# coreutils delivered unprefixed under /usr/gnu/bin:
+for b in cat chgrp chmod chown cp cut date dd df dirname echo env expand expr \
+         false fold head id install ln ls mkdir mkfifo mknod mktemp mv nl nohup \
+         od paste printf pwd rm rmdir sleep sort split stty tail tee test touch \
+         tr true tsort tty uname uniq unlink wc who yes '[' basename comm; do
+  cp_gnu "$b" "/usr/gnu/bin/$b"
+done
+# coreutils delivered unprefixed under /usr/bin (clash with Solaris names in /usr/gnu):
+for b in md5sum printenv readlink realpath seq sha256sum stat tac whoami; do
+  cp_gnu "$b" "/usr/bin/$b"
+done
+# g-prefixed GNU tools -> unprefixed seed name:  seedname:host-g-name
+for pair in sed:gsed awk:gawk gawk:gawk make:gmake grep:ggrep egrep:gegrep \
+            fgrep:gfgrep diff:gdiff cmp:gcmp find:gfind xargs:gxargs patch:gpatch \
+            tar:gtar gzip:gzip bzip2:bzip2 xz:xz unxz:unxz bash:bash; do
+  dst="${pair%%:*}"; g="${pair##*:}"
+  if   [ -e "/usr/gnu/bin/$g" ]; then cp_gnu "$dst" "/usr/gnu/bin/$g"
+  else cp_gnu "$dst" "/usr/bin/$g"; fi
+done
+# sh -> bash (relative symlink; stays inside the seed after relocation)
+ln -sf bash "$SEED/usr/gnu/bin/sh"
+
+# lib closure: full transitive ldd of every staged GNU bin, flattened into
+# usr/gnu/lib/amd64 (dereferenced). Skip 32-bit strays (all tools are amd64).
+mkdir -p "$SEED/usr/gnu/lib/amd64"
+for f in "$SEED"/usr/gnu/bin/*; do
+  [ -f "$f" ] || continue   # skip the sh symlink
+  ldd "$f" 2>/dev/null | sed -n 's/.*=>[ \t]*//p' | awk '{print $1}'
+done | sort -u | grep '^/' | while read -r lib; do
+  [ -e "$lib" ] || { warn "GNU lib dep not found: $lib"; continue; }
+  file "$lib" 2>/dev/null | grep -q '32-bit' && continue
+  base="$(basename "$lib")"
+  [ -e "$SEED/usr/gnu/lib/amd64/$base" ] && continue
+  "$GNUCP" -L "$lib" "$SEED/usr/gnu/lib/amd64/$base"
+  chmod u+w "$SEED/usr/gnu/lib/amd64/$base"
+  _record "$lib" "usr/gnu/lib/amd64/$base" host
+done
+
 # ---- versions / provenance ------------------------------------------------
 echo "=== 6. capture versions ==="
 {
