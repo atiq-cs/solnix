@@ -136,3 +136,29 @@ Dispatched on beef (locked SG, no public access). Once the full OI host is up:
 Then any bare illumos host bootstraps nix from the cache -> pure stdenv builds -> Phase-3.
 NEW OI images publish periodically (20250402/20250606/20251026/20260430 seen) -> the OI-AMI
 build is always reproducible from dlc.openindiana.org, immune to burner-account churn.
+
+## DECISIONS (2026-08-03)
+### Cache immutability — NEVER remove/mutate published artifacts (Nix invariant)
+- Store paths are content-addressed + immutable by contract. Changing/removing a
+  published /nix/store/<hash>-x path BREAKS every closure referencing it by hash
+  (RUNPATH + References). So: cache.solnix.io is APPEND-ONLY.
+- Phase-3 fully-Nix rebuild publishes NEW real-derivation artifacts at DIFFERENT
+  hashes (real .drv provenance != nix-store--add content hash). Old + new COEXIST;
+  configs choose via narinfo/attribute. Old nix-store--add artifacts become
+  UNREFERENCED, not removed.
+- Do NOT GC cache.solnix.io during the migration (a missing path an old closure
+  needs = broken cache; an unreferenced path = harmless). Prune only far later,
+  deliberately, once the fully-Nix set is stable + nothing depends on legacy.
+
+### SPARC pure-stdenv build on `sun` (real UltraSPARC 45) — approved split
+- SPARC seed gcc is a SPARC binary -> the SPARC stdenv bootstrap MUST run on SPARC
+  (real or emulated). `sun` (sun4u SUNW,A70, gcc-13+pkg, 790G /scratch, ssh gburd) = real.
+- SPLIT: build the ROOT objects (crt/csu + libc + stage0/stage1 toolchain — the
+  ABI-critical, correctness-sensitive core) on REAL sun hardware (eliminates
+  emulator-fidelity doubt — we already caught the %g4/-mcmodel bug that emulation
+  masked). Fan out the BULK package rebuild on EMULATED sparc (throughput), consuming
+  the already-verified native root.
+- Treat `sun` as a build ORACLE not a fleet node: build under /scratch as gburd,
+  timeout-wrapped, non-disruptive (it's the maintainer's box, used for other things).
+- Sequencing: SPARC is Phase-5 (after x86_64 GATE 1b-PURE proves the pattern);
+  the sun-root build can start in parallel then (different substrate, no contention).
