@@ -120,7 +120,23 @@ cp_opt /usr/bin/nm       usr/bin/nm       host
 cp_opt /usr/bin/ar       usr/bin/ar       host
 cp_opt /usr/bin/mcs      usr/bin/mcs      host
 # whatever gcc actually calls for as/ld (may differ from the above):
-AS="$("$GCC_PREFIX/bin/gcc" -print-prog-name=as)"; [ -x "$AS" ] && cp_req "$AS" "usr/bin/$(basename "$AS")" host
+# The GNU assembler gcc-10 calls. `gcc -print-prog-name=as` resolves to
+# /usr/bin/gas -> ../gnu/bin/as (real GNU binutils `as` matched to this gcc-10).
+# The pure-stdenv toolchain slice expects usr/bin/as + usr/bin/gas AND the real
+# binary at usr/gnu/bin/as (the symlink target). A plain symlink copy leaves
+# usr/bin/gas DANGLING, so deref the real `as` into usr/gnu/bin/as (its lib
+# closure is captured by 5b's ldd sweep since it lives under usr/gnu/bin), and
+# point usr/bin/{as,gas} at it. NOTE: this must be the gcc-10 as, not gcc-14.
+AS_REAL="$(readlink -f "$("$GCC_PREFIX/bin/gcc" -print-prog-name=as)")"
+if [ -x "$AS_REAL" ]; then
+  mkdir -p "$SEED/usr/gnu/bin"
+  cp -L "$AS_REAL" "$SEED/usr/gnu/bin/as"; chmod u+w "$SEED/usr/gnu/bin/as"
+  _record "$AS_REAL" "usr/gnu/bin/as" host
+  ln -sf ../gnu/bin/as "$SEED/usr/bin/as"
+  ln -sf ../gnu/bin/as "$SEED/usr/bin/gas"
+else
+  die "gcc-10 assembler not found (gcc -print-prog-name=as -> $AS_REAL)"
+fi
 GLD="$("$GCC_PREFIX/bin/gcc" -print-prog-name=ld)"; [ -x "$GLD" ] && cp_opt "$GLD" "usr/bin/gld-$(basename "$GLD")" host
 
 echo "=== 5. host: OI gcc-10 prefix (whole) ==="
