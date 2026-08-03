@@ -1384,3 +1384,187 @@ deliverable) now boots end-to-end — ZFS root on virtio-mmio, multi-user-server
 SSH-in, and a queryable 34-package IPS image. The A6 hand-assembled image remains
 the fallback. Remaining follow-on (not a qualification blocker): build the aarch64
 `package/pkg` client + python runtime so `pkg` runs ON the guest.
+
+---
+
+## 13. A9 progress (aarch64 PURE cross stdenv — the GATE 1b-PURE analog)
+
+Status: **A9 PARTIAL — the pure aarch64 CROSS stdenv is WIRED and INSTANTIATES
+(seed FOD realises, libcCross realises to EM_AARCH64, cc/bintools wrappers emit
+correct aarch64 cross flags); a cross COMPILE is BLOCKED on the one missing seed
+half — the cross gcc.** This mirrors the x86_64 GATE 1b-PURE work
+(design-solaris-stdenv.md) but on the CROSS path, not native.
+
+Done from the x86 orchestration host `floki` (x86_64-linux, Nix 2.34.8) — the
+same off-host eval box the x86 pure stdenv is developed on. NO aarch64 hardware
+was needed (cross: tools run on x86, emit aarch64). Assets: solnix.io cache +
+local seed store ONLY.
+
+### 13.1 The cross-vs-native structural difference (why not a verbatim mirror)
+
+The x86_64 pure stdenv (`pkgs/stdenv/illumos/default.nix`, patch 0004) is
+**native**: `assert crossSystem == localSystem`, reached via the stdenv
+selector's `x86_64-solaris = stagesIllumos` branch. Its seed gcc + Solaris ld
+are x86 illumos binaries that RUN on the (illumos) build host and emit x86.
+
+aarch64 has **no running aarch64 illumos build host** (the port runs only on
+specific ARM boards / QEMU, §1–§2, never the x86 fleet or EC2 Graviton — GICv3/
+ACPI gap). So the aarch64 world is genuinely **cross-built from x86**: the cross
+gcc runs on x86 and emits aarch64 ELF that never RUNS during the stdenv build.
+In Nix terms `crossSystem = aarch64-solaris != localSystem`, so the stdenv
+selector routes to `stagesCross` (NOT `stagesIllumos`), whose stage0 build tools
+are the BUILD platform's own stdenv (bash/coreutils/make from x86 — which is why
+the aarch64 seed needs NO GNU userland, unlike the grown x86 seed) and whose
+`cc` we override to a seed-backed aarch64 cross cc-wrapper. Adding
+`aarch64-solaris = stagesIllumos` to the selector would be WRONG (it asserts
+native + the aarch64 seed tools can't run on x86). `stagesCross` is correct.
+
+### 13.2 aarch64 seed contents — verified by unpacking (honest)
+
+Unpacked `~/ws/solnix-seed-store/aarch64-seed.tar.zst` (sha256 3a9fd645…,
+matches the manifest). Confirms the manifest's own note ("target-sysroot seed
+only; cross gcc/$CROSS not in the archived proto"):
+
+- **HAVE** (aarch64 ELF target sysroot — the `libcCross` half):
+  `lib/{libc.so.1, ld.so.1, libm.so.0, libsocket, libnsl, libresolv, libelf,
+  libmd, libpthread, librt, libdl, libmp, libcustr, libofmt, libumem, librtld,
+  libld, liblddbg}` + `lib/64 -> .`; `usr/lib/{crt1,crti,crtn}.o` + `values-*.o`
+  (NO amd64 subdir; `usr/lib/64 -> .`); `usr/include/**` (full header tree);
+  `usr/bin/{ld, ar, nm, mcs, elfdump, elfedit}` — **all `readelf -h` Machine =
+  AArch64** (they RUN only on aarch64).
+- **LACK** (the compiler half — the CROSS SDK that must run on x86):
+  - **NO cross gcc** (no `usr/gcc`, no `aarch64-unknown-solaris2.11-gcc`, no
+    cc1/collect2 anywhere).
+  - **NO cross Solaris ld that runs on x86** (the seed's `usr/bin/ld` is aarch64).
+  - **NO GNU build userland** (the x86 seed grew `usr/gnu/bin/*`; this has none —
+    and a cross build does not need it: build tools come from the x86 host stdenv).
+
+The cross gcc WAS rebuilt on the ouch host `builder`
+(`/aarch64/gate/arm64-gate/build/cross/bin/aarch64-unknown-solaris2.11-gcc`,
+GCC 14.3.0, §8.6/§9.6), but that host is gone and it was never archived into the
+seed; the seed FOD URL had also 404'd. It is the single realise blocker.
+
+### 13.3 lib.systems wiring — VERIFIED (y)
+
+Already wired (patch 0001, §7.3). Re-verified by building the patched nixpkgs
+and elaborating `examples.aarch64-illumos`:
+`config=aarch64-unknown-solaris2.11, isSunOS=true, isAarch64=true,
+libc=illumos-libc, linker=solaris, cpu=aarch64, uname=SunOS`. All isSunOS-keyed
+wiring covers aarch64; only the cpu + double are arch-specific and both are
+registered. **No new lib.systems change was needed for A9.**
+
+### 13.4 The pure aarch64 cross stdenv — WIRED (y)
+
+New/changed in the fork (solnix-pkgs):
+
+- **`pkgs/os-specific/illumos/aarch64-cross.nix`** (new) — the aarch64 CROSS
+  toolchain slices, mirroring the x86 seed slices in
+  `pkgs/os-specific/illumos/default.nix` but cross (buildPlatform native,
+  host/target aarch64-solaris) and adapted for the aarch64 seed layout:
+  - `libc` — libcCross: the aarch64 sysroot (headers + crt + runtime libc),
+    `incdir=/usr/include`, `libdir=/usr/lib` (NO amd64 subdir, LP64/IPD 24).
+  - `binutils-unwrapped` — the Solaris ld/ar/nm/elfdump/elfedit slice (aarch64
+    ELF; a `crossLdMissing=true` passthru marks that the x86-host cross Solaris
+    ld is the missing runnable piece).
+  - `gcc-unwrapped` — the cross gcc slice. The seed has NO gcc, so this is a
+    wiring placeholder that INSTANTIATES but its installPhase FAILS LOUDLY at
+    realise with the exact seed gap (`crossGccMissing=true` passthru).
+  - `bintools` / `cc` — the Solaris bintools-wrapper + cc-wrapper around the
+    above, target triple `aarch64-unknown-solaris2.11`.
+- **`pkgs/os-specific/illumos/default.nix`** — exposes
+  `solnix.aarch64Cross = callPackage ./aarch64-cross.nix { inherit path; }`.
+- **`flake.nix`** — adds `overlays.aarch64Cross`, a crossOverlay that replaces
+  the generic cross stdenv's cc (nixpkgs would pick `buildPackages.gcc` = a
+  from-source `*-solaris` cross gcc, which does not work for illumos: it needs
+  the Solaris ld + the illumos gcc port) with `solnix.aarch64Cross.cc`. USAGE is
+  documented in the overlay comment: `pkgsCross.aarch64-illumos` with
+  `crossOverlays = [ overlays.aarch64Cross ]`.
+- **`patches/0002-bintools-wrapper-solaris.patch`** — the shared bintools patch
+  hardcoded the illumos interp as `lib/amd64/ld.so.1` (x86-only). Made it
+  arch-aware: `isx86_64 -> lib/amd64/ld.so.1`, else `lib/ld.so.1` (aarch64/
+  no-multilib LP64). The aarch64 bintools also drops the dynamic-linker trigger
+  (the cross Solaris ld sets the interp itself, `/lib/ld.so.1`), mirroring the
+  x86 native stdenv bintools.
+
+### 13.5 What INSTANTIATES / REALISES / is BLOCKED (the honest gate)
+
+Verified on floki against the freshly-built patched nixpkgs:
+
+- **seed FOD** — REALISES. The FOD source URL had 404'd; re-published the seed
+  bytes (§13.6) so it fetches again; unpacks to `/nix/store/2a9i…-illumos-seed-
+  aarch64-73466454`.
+- **libcCross (`solnix.aarch64Cross.libc`)** — REALISES. The sliced sysroot's
+  `lib/libc.so.1` is `EM_AARCH64 ELFCLASS64`; headers (`stdio.h`) + crt
+  (`crt1.o`) present; closure = 2 `/nix/store` paths, **no host leak**.
+- **binutils-unwrapped, gcc-unwrapped, bintools, cc** — all INSTANTIATE (drvPath
+  resolves). The bintools-wrapper REALISES: emits
+  `bin/aarch64-unknown-solaris2.11-ld` + `-ld-solaris` (the GNU->Solaris
+  translation hop), `libc-ldflags = -L…/usr/lib` (no amd64), and correctly drops
+  the dynamic-linker file. The cc-wrapper (proven with a throwaway stub gcc, NOT
+  shipped) assembles the correct aarch64 cross command line:
+  `aarch64-unknown-solaris2.11-gcc … -march=armv8-a -B…/illumos-aarch64-libc-
+  seed/usr/lib -idirafter …/illumos-aarch64-libc-seed/usr/include -L…/usr/lib`.
+- **cross COMPILE / pure aarch64 `hello` REALISE** — BLOCKED. Realising the
+  cc-wrapper (and therefore any `hello`) needs `gcc-unwrapped` to produce a real
+  prefix; the seed has no cross gcc, so `gcc-unwrapped` fails loudly by design.
+  This is the SOLE blocker. `pkgsCross.aarch64-illumos.hello` instantiates
+  through the seed cc-wrapper (routing verified; it forces the seed
+  `aarch64Cross.cc`) and its realise gate is exactly the cross gcc.
+
+Off-host eval note (identical to x86): forcing `hello.drvPath` for a full
+`*-solaris` package set on Nix 2.34.8 hits the libc-selector stage-threading
+recursion the x86 stdenv documents (`pkgs/os-specific/illumos/pkgs/libc.nix`
+header, "off-host eval does not exercise that path"), and the cc/bintools
+wrappers imported via `"${path}/…"` hit an `applyPatches`-re-import "path is not
+valid" artifact — BOTH reproduce identically for the proven x86 slices on this
+harness, so the aarch64 wiring is exactly as far along at eval-time as x86. Both
+resolve on the illumos host where GATE 1b-PURE passed (local nixpkgs checkout,
+classic Nix 2.3.16).
+
+### 13.6 Published (y — the parts that realise)
+
+- **aarch64 seed tarball** re-published (was 404): `s3://solnix-cache/archive/
+  aarch64/aarch64-seed.tar.zst` (+ manifest), append-only, sops S3 creds. Public
+  URL now HTTP 200; the seed FOD fetches + verifies (sha256-Op/WRbUW…).
+- **libcCross closure** signed (`cache.solnix.io-1`) + `nix copy`'d to
+  `s3://solnix-cache` (2 paths: the libcCross slice + the seed unpack). narinfos
+  live at `s3.solnix.io/solnix-cache/<hash>.narinfo` (HTTP 200).
+  **Fetch-back-verified** into a fresh store WITH signature verification against
+  the trusted pubkey: the fetched `libc.so.1` is EM_AARCH64, closure host-free.
+- **No pure aarch64 `hello` closure published** — it does not realise (no cross
+  gcc), so there is nothing to publish yet.
+
+### 13.7 The honest path to aarch64 GATE 1b-PURE + the RUN-verification tail
+
+1. **Grow the aarch64 seed with the cross-SDK half** (THE blocker). Re-run the
+   richlowe/arm64-gate `make download && make setup` on an x86 illumos host (the
+   §5/§8.6 recipe: host python-313 matching the braich sysroot, gcc10+gcc14,
+   Sun make, mpfr/mpc, texinfo) to produce `$CROSS/bin/aarch64-unknown-
+   solaris2.11-gcc` (an x86 host binary emitting aarch64, GCC 14.3.0) +
+   `$CROSS/opt/onbld/bin/amd64/ld` (the x86-host cross Solaris ld). Extend
+   `scripts/aa-extract-seed.sh` to pack that `$CROSS` prefix ALONGSIDE the
+   existing sysroot (the seed becomes cross-SDK + sysroot, as §3 envisioned).
+   Bump the seed FOD hash.
+2. **Replace the placeholders** in `aarch64-cross.nix`: `gcc-unwrapped` slices
+   the seed `$CROSS` gcc prefix (mirror the x86 `gcc-unwrapped` binLinks +
+   `-B`/GCC_EXEC_PREFIX relocatability handling, §NOTE(seed-gcc)); the cross
+   Solaris ld replaces the aarch64 `usr/bin/ld` in `binutils-unwrapped`.
+3. **Cross-REALISE the pure `hello`** on the x86 host: with the cross gcc
+   present, `pkgsCross.aarch64-illumos.hello` (crossOverlays=[aarch64Cross])
+   realises. GATE 1b-PURE for aarch64 = (a) it cross-compiles, (b)
+   `nix-store -q --deriver` resolves, (c) `elfdump/readelf -h` on the output
+   binary shows EM_AARCH64, (d) host-free closure (all `/nix/store` -> aarch64
+   seed, no x86/host leak). Publish the closure (SYSTEM=aarch64, append-only).
+4. **RUN verification (real aarch64 hardware, deferred).** Cross-compiling
+   proves EM_AARCH64 + a store-only closure but NOT that the binary RUNS — that
+   needs real aarch64 illumos: scp the pure `hello` into the QEMU virt guest
+   (§8–§12, `-machine virt -bios u-boot` GICv2) or onto an RPi4, run it, and
+   confirm `LD_DEBUG=libs` resolves libc from `/nix/store` (not the guest /usr).
+   That is the aarch64 analog of the x86 on-host GATE-1b RUN, and it is the only
+   step that fundamentally requires the arch's hardware/emulator.
+
+Summary: lib.systems wired (y); pure aarch64 cross stdenv wired (y); seed FOD +
+libcCross realise + published (y); cross `hello` REALISE blocked solely on the
+cross gcc (the seed's missing compiler half). No native shortcut exists —
+aarch64 is cross by nature; the wiring is complete and the gate is one seed
+growth away.
