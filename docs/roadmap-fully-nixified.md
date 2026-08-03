@@ -162,3 +162,31 @@ build is always reproducible from dlc.openindiana.org, immune to burner-account 
   timeout-wrapped, non-disruptive (it's the maintainer's box, used for other things).
 - Sequencing: SPARC is Phase-5 (after x86_64 GATE 1b-PURE proves the pattern);
   the sun-root build can start in parallel then (different substrate, no contention).
+
+## MILESTONE STATUS (2026-08-03)
+### GATE A PASSED — declarative Nix-operational x86_64 AMI (edition=unstable)
+First declarative solnix AMI boots on EC2 (see docs/gate-a.md): declarative profile on PATH,
+nix operational (pulled+ran a cache pkg on the instance), deriver resolves, rpool ONLINE,
+/etc/solnix-release EDITION=unstable. Reproducible via scripts/oi-make-declarative-be.sh
+(stage->deploy) + scripts/oi-be-to-ami.sh. Default substituter = ORIGIN s3.solnix.io/solnix-cache
+(CDN cache.solnix.io negative-caches 404 on fresh hashes; SUBSTITUTER= override once edge fixed).
+
+### Phase-3 fully-Nix rebuild — IN PROGRESS, swath opening
+Real .drv-backed hermetic x86_64-solaris derivations published (append-only), growing:
+  tranche 1 (8): zlib bzip2 xz file gnugrep gnused coreutils pcre2
+  tranche 2 (4, H1 cc-wrapper -R runpath fix): libiconv libunistring expat libatomic_ops
+  tranche 3 (H2+H6+H7 fixes -> the pkg-config swath): gettext ncurses less libidn2 libgpg-error
+    pkg-config + pkg-config-wrapper, gmp-with-cxx (H2 C++ runtime proof). ~52 real-derivation rows.
+Shared stdenv gaps found+fixed as we go: H1 (runpath, cc-wrapper patch 0005) DONE; H2 (C++ runtime,
+  same-class) DONE; H6 (seed system libs) + H7 (libtool gnm) DONE (tranche 3). pkg-config unblocks
+  the large autotools-with-shared-lib-deps swath -> the rebuild broadens from here.
+
+### Editions (release model) — see docs/design-editions.md
+Everything above = the `unstable` edition (rolling). A dated `26.11` stable = freeze unstable
+(nixpkgs release-26.11 pin + solnix-pkgs tag v26.11 + namespaced cache + solnix.edition="26.11")
+once x86_64 hits the release criteria (Phase-3 core fully-Nix + GATE A + installer ISO).
+
+### Per-arch GATE 1b-PURE status
+x86_64: FULL (pattern + Phase-3 executing). sparcv9: PARTIAL->FULL in progress (stdenv wired, hello
+  runs on real sun; nix-on-sparc building on the now-proper /nix). aarch64: cross stdenv wired,
+  libcCross published; cross-gcc seed-grow in progress -> cross-realise. riscv: port maturation.
