@@ -50,7 +50,11 @@ while IFS=$'\t' read -r first rest <&3; do
   # authoritative presence check via S3 ls (the public narinfo GET flaps 404/503
   # on this endpoint, and nix's own dest-store query caches stale positives which
   # make `nix copy` skip real uploads — see --refresh below).
-  if aws --endpoint-url https://s3.solnix.io s3 ls "s3://solnix-cache/$hash.narinfo" >/dev/null 2>&1; then
+  # NOTE: `s3 ls` on this backend BOTH false-negatives (re-publishes present
+  # objects) AND false-positives (skips genuinely-absent ones). The authoritative
+  # per-object check is `s3api head-object` (no list pagination). Use it, and
+  # allow FORCE=1 to skip the presence check entirely.
+  if [ -z "${FORCE:-}" ] && aws --endpoint-url https://s3.solnix.io s3api head-object --bucket solnix-cache --key "$hash.narinfo" >/dev/null 2>&1; then
     echo "skip (cached): $(basename "$SP")"; skip=$((skip+1)); continue
   fi
   echo "=== publish $(basename "$SP") ==="

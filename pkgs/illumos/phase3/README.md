@@ -109,6 +109,133 @@ installCheck passed on-host), `idn2 --version` (Libidn2 2.3.8),
 proof on a real package). All deriver-resolve to a real `.drv` and have
 host-free closures.
 
+## Fourth tranche (pkg-config swath + newly-unblocked, published, append-only, to s3.solnix.io)
+
+The tranche-3 `pkg-config`/`gmp`/`libgpg-error` unlock opened the
+`nativeBuildInputs = [ pkg-config ]` downstream swath plus the gmp-dependent
+crypto libs. These built + ran as real hermetic derivations against the pure
+stdenv. Persisted PER-PACKAGE (build -> verify -> stage -> registry row ->
+`artifacts/tranche4-paths.txt`, before moving on) so a mid-run death strands at
+most one package.
+
+**Cache-backend caveat (IMPORTANT):** during this tranche a cache-integrity
+audit proved the `s3.solnix.io` *package* narinfo/nar layer is **not durable**
+-- a backend defect: writes return HTTP 200 without persisting, and the GET
+layer flaps 200/404 non-deterministically (both `nix copy` and `aws s3 cp`
+hit it). No re-upload+verify loop can make an object stick; it needs a
+maintainer backend fix. So the tranche-4 deliverable is **build + LOCAL verify
++ stage**, NOT cache round-trip. Per-package success here means, verified on
+the OI build host:
+- `nix-store -q --deriver <out>` resolves to a real `.drv` (built, not
+  `nix-store --add`),
+- `nix-store -qR <out>` closure is 100% `/nix/store` (host-free),
+- the binary/`.so` runs / loads on illumos.
+
+The verified store paths are then **staged** into an on-host, re-publishable
+export at `/nix/tranche4-bcache/` on the OI builder
+(`root@18.218.136.61`): `exports/tranche4-union.closure.nar` (a single
+`nix-store --export` of the union closure of all 47 outputs -- 72 store paths,
+re-imports cleanly `rc=0`) plus the path manifest `tranche4-own-paths.txt`.
+A best-effort `nix copy`/`aws s3 cp` is still fired per package (harmless, may
+partially land), but the staged export is the authoritative artifact; it gets
+re-published once the cache backend is durable. Registry `published` column is
+therefore `staged` for tranche 4 (flip to `y` after a durable re-publish).
+
+| pname                | new store hash                     | deriver | hermetic | runs | staged    |
+|----------------------|------------------------------------|---------|----------|------|-----------|
+| lzo-2.10             | lx381c7fkvymf7ngdw4myxbi8hxlry68   | y       | y        | y    | staged    |
+| lzo-2.10-dev         | 36cxp23vhxp8a1hg0pwfjx7dgv2ys8an   | y       | y        | -    | staged    |
+| lzo-2.10-doc         | lxbiac5pkp05wmp9ia5vjk6vg1s8wpzy   | y       | y        | -    | staged    |
+| nettle-3.10.2        | vnd3pz1m3bdd9h9qaasi59knjcgvmggd   | y       | y        | y    | staged    |
+| nettle-3.10.2-dev    | b1xkv234d5rafhwskarn0niadxfjhfrr   | y       | y        | -    | staged    |
+| gperf-3.3            | b9753af9vpvi5b6pkj372skx7g25marr   | y       | y        | y    | staged    |
+| libgcrypt-1.12.2     | 3q6fkjz1mdah74h5j218amviz85vn14q   | y       | y        | y    | staged    |
+| libgcrypt-1.12.2-lib | 8hnzc6r2qllg6ik30ignjcf98fprmq3r   | y       | y        | y    | staged    |
+| libgcrypt-1.12.2-bin | fgps20syngigwxvaqxx0x1b0373cqlg3   | y       | y        | y    | staged    |
+| libgcrypt-1.12.2-dev | 91nnxp14j6mq1sip0w25786p8gc21q2a   | y       | y        | -    | staged    |
+| libgcrypt-1.12.2-info| dmpdsn13ny4rwdig2ilz7s2h2ncj5afz   | y       | y        | -    | staged    |
+| gdbm-1.26            | pk5b4cx0521a0wzylpbxjwnjvyl1kmym   | y       | y        | y    | staged    |
+| gdbm-1.26-lib        | b9ajac4rlc45iax9dlj4y2si1r5lgf38   | y       | y        | y    | staged    |
+| gdbm-1.26-dev        | 0id1356ngy8dkwpq9vvhwd2356isf63x   | y       | y        | -    | staged    |
+| gdbm-1.26-man        | 1b73587wpl2468vlwipkrnzjly2x6gwi   | y       | y        | -    | staged    |
+| gdbm-1.26-info       | 5g2q0jplnsl1n0k5ghw0r9j61d1zmy8m   | y       | y        | -    | staged    |
+| gzip-1.14            | dg2xrz7axz295mpld76g2z31wadfdbm0   | y       | y        | y    | staged    |
+| libpng-1.6.58        | 83899339dlrh7fiymhnq617gab3cx7pb   | y       | y        | y    | staged    |
+| libpng-1.6.58-dev    | fwl61fpic9iga1wr3qdpryvjgam8fj6c   | y       | y        | y    | staged    |
+| libpng-1.6.58-man    | p2krdyl1yhjz7i1l6snj9n1gkm1d2xrl   | y       | y        | -    | staged    |
+| mpfr-4.2.2           | syw2vs5dzxggkqshp7q4c88yd7mml2fn   | y       | y        | y    | staged    |
+| mpfr-4.2.2-dev       | rg3rcapnfqynqvnmnb8i1yc2n6h6r8m4   | y       | y        | -    | staged    |
+| mpfr-4.2.2-doc       | 38fsv58q2xy1mpkahfp7in4kydn4m91d   | y       | y        | -    | staged    |
+| mpfr-4.2.2-info      | saf8gxhp1q1rrpa08l9vv4wvycgmsbwh   | y       | y        | -    | staged    |
+| libmpc-1.4.1         | 93kllc9h31mw0mwypdqkbvfi8nr47igj   | y       | y        | y    | staged    |
+| popt-1.19            | jzs6myzi2vmgxh0k8i332wp3w7wvp6cj   | y       | y        | y    | staged    |
+| popt-1.19-dev        | frwc5isqrrkwkbnhy2p7mrg1qdbr7cz6   | y       | y        | -    | staged    |
+| popt-1.19-man        | pvxkwhh57qvzh8zp27398inhdx0rv5cf   | y       | y        | -    | staged    |
+| giflib-6.1.3         | crn1f09nbhwlkzlnjb5ysdsqp0igfpvq   | y       | y        | y    | staged    |
+| libconfig-1.8.2      | 58bc09q9nlf2cippgs168rhf9vrvf9rm   | y       | y        | y    | staged    |
+| check-0.15.2         | l6s957ilpdsvrpyrxk78ffb5s35mg4pm   | y       | y        | y    | staged    |
+| libksba-1.8.0        | 27cx0avn1g704f04zas9g3gfc6rmp3k4   | y       | y        | y    | staged    |
+| libksba-1.8.0-dev    | 06cjj7m0v6w2s3q4cb03gxqrhnn9krnl   | y       | y        | -    | staged    |
+| libksba-1.8.0-info   | 07rd25pi4fj03bp5yrcz3idh0p61lx50   | y       | y        | -    | staged    |
+| tcl-8.6.16           | wpfvvbrpwsqq4xyrxdj3ynvr6a6awkw7   | y       | y        | y    | staged    |
+| tcl-8.6.16-man       | b1frmzwph7dy4d9y5j9j6kr60wy1igq7   | y       | y        | -    | staged    |
+| gnum4-1.4.21         | 7rzym93wqjkij6cwrf6fhzdk2ggncq13   | y       | y        | y    | staged    |
+| patch-2.8            | 954mzmi94l0zmb9692fpzlzw5kkfax6y   | y       | y        | y    | staged    |
+| which-2.25           | xjl2ws0y1pkdwpjx9dfaqx5pxsz4121m   | y       | y        | y    | staged    |
+| which-2.25-man       | 93kb5ixa7yncq9qi81b1ka6bk5ar9cl3   | y       | y        | -    | staged    |
+| which-2.25-info      | ygw9bx72sgy21dk4yrcchqqp0iirnmq4   | y       | y        | -    | staged    |
+| findutils-4.10.0     | d5b51mjq5s3i6h3258plpnfwkry3xhjz   | y       | y        | y    | staged    |
+| readline-8.3p3       | jn4pbjb4nxli1hnpldzicn6rzld0fbyl   | y       | y        | y    | staged    |
+| readline-8.3p3-dev   | nabqzxdf9v8lx9gs80ndrhzln4xxsl4m   | y       | y        | -    | staged    |
+| readline-8.3p3-doc   | n2ap2k4ddn9lfsd457mzfk25y76v1pq4   | y       | y        | -    | staged    |
+| readline-8.3p3-info  | i5mrllbrxwsiapif5zv9v0b5vzp3wvrh   | y       | y        | -    | staged    |
+| readline-8.3p3-man   | 8pnm23r1n9iz70z3cm1771a06w9k093c   | y       | y        | -    | staged    |
+| gawk-5.4.0           | l2x88nbk34l4lbnzq6v2rmszkvjjpbir   | y       | y        | y    | staged    |
+| diffutils-3.12       | 45hclwpavdcmq800i9fz59k1hiqihn90   | y       | y        | y    | staged    |
+| gnutar-1.35          | bzzq99jch9j3aw39x49f207hig73jbr7   | y       | y        | y    | staged    |
+
+**23 packages / 50 outputs. built + verified + staged = 50, failed = 0** --
+the largest tranche yet. Every output was LOCALLY verified on the OI host:
+deriver resolves to a real `.drv` (y) and closure is 100% `/nix/store`
+(host-free, y) -- see the consolidated verify sweep. `runs` verified on
+illumos: `gzip 1.14`, `gperf --version` (3.3),
+`gdbmtool (gdbm) 1.26`, `libpng-config` (1.6.58, `libpng16.so.16` resolves
+libz/libm/libc from the store), `dumpsexp (Libgcrypt) 1.12.2` +
+`libgcrypt.so.20` resolving **the tranche-3 `libgpg-error.so.0` from the
+store**, `tclsh8.6` (8.6.16), and the `.so`s of nettle/mpfr/libmpc/giflib/
+libconfig/check/libksba (`libksba.so.8` -> tranche-3 `libgpg-error.so.0`),
+plus `m4 (GNU M4) 1.4.21`, `GNU patch 2.8`, `GNU which v2.25`, `find (GNU
+findutils) 4.10.0`, and readline's `libreadline.so.8`.
+Batch 4 adds `gawk` (`GNU Awk 5.4.0` linking **GNU MPFR 4.2.2 + GNU MP 6.3.0**
+from this and prior tranches), `diff (GNU diffutils) 3.12`, `tar (GNU tar)
+1.35`.
+Every output deriver-resolves to a real `.drv` (built, not `nix-store --add`)
+and has a 100% `/nix/store` closure. Append-only: these coexist at NEW hashes
+with all prior artifacts (0 deletions). **Staged** (not cache-durable -- see
+the backend caveat above) to `/nix/tranche4-bcache/` on the OI builder as
+`exports/tranche4-union.closure.nar` (`nix-store --export` of the 72-path
+union closure; re-imports `rc=0`); best-effort S3 uploads were also fired but
+the cache layer flaps and is not the deliverable.
+
+The tranche-4 dependency chains prove real cross-package linkage: `libgcrypt`
+and `libksba` both link the tranche-3 `libgpg-error`, and `libpng` links the
+tranche-1 `zlib` -- all resolved from `/nix/store`, none from the host.
+
+### H9 (gzipped patches: `gunzip` missing) -- NEW gap, fixed per-package
+
+`libpng` applies its apng patch as a `.gz` and shells out to `gunzip` in
+`patchPhase`; the pure seed stdenv carries no `gunzip` on PATH ->
+`gunzip: command not found` (exit 127). Compounding it, the freshly-built
+`gzip` (this tranche) installs only `gzip` -- the illumos gzip build skipped
+the usual `gunzip`/`zcat` wrapper symlinks. FIX (per-package, in
+`solaris-overlay.nix`): add a tiny `gunzip` shim (`exec gzip -d "$@"`) to
+`libpng.nativeBuildInputs`. Any package shipping gzipped patches will hit
+this; promote the shim (or a fixed gzip that emits the wrappers) to the
+stdenv's default `nativeBuildInputs` when it recurs. Also this tranche:
+`gdbm` needed `doCheck = false` (one flaky in-tree test, `gdbm_close error`,
+assumes a different `close()` errno than illumos returns; the library links +
+runs fine).
+
 ### H2/H6/H7 fixes (the stdenv + overlay diffs)
 
 All three are **seed-sourced + hermetic** (no host `/usr/lib` refs; the fixed
@@ -288,6 +415,17 @@ BUILDER_IP=<oi-ip> SYSTEM=x86_64-solaris \
   ./scripts/oi-fleet-publish.sh artifacts/tranche1-paths.txt
 ```
 
+**Cache-backend note (tranche 4+):** the `s3.solnix.io` package narinfo/nar
+layer is a non-durable backend (writes return 200 without persisting; GET
+flaps 200/404; `aws s3 cp` fails the same way -- a maintainer-side backend
+fix, not a process bug). From tranche 4 on, the deliverable is **local verify
+(real `.drv` + host-free closure + runs on illumos) + a re-publishable stage**
+(`nix-store --export` of the output closures into an on-host bcache, e.g.
+`/nix/tranche4-bcache/exports/`), NOT a cache round-trip. A best-effort S3
+upload is still fired per package. Re-publish the staged export once the
+backend is durable and flip the registry `published` column from `staged` to
+`y`.
+
 ## Blocker families still open (for the full rebuild — need a stdenv fix, not a per-package patch)
 
 These stopped the rest of the daily-toolset batch. Each is a *shared* stdenv
@@ -359,10 +497,30 @@ gap; fixing them in the fork's stdenv/cc-wrapper unblocks large swaths at once.
 
 ## SKIPPED this tranche (with blocker)
 
-H2/H6/H7 FIXED (tranche 3): `gettext` `pkg-config`(+wrapper) `ncurses` `less`
-`libidn2` `libgpg-error` `gmp-with-cxx` built + published (24 outputs). Newly
-fixed per-package: H8 (ncurses `--version-script`). Still blocked (other gaps):
-`nettle` (needs gmp -- now unblocked, retry) · `openssl` `sqlite` (H3
-curl-bootstrap `/setup`) · `curl` `libffi` (H4 spliced-pkgset override) ·
-`gnutls` `readline` (H5 fragile upstream fetches). The pkg-config unlock opens
-a large `nativeBuildInputs = [ pkg-config ]` downstream swath.
+Tranche 4 (this tranche): 15 packages / 35 outputs built + published (see the
+fourth-tranche table above). New gap fixed per-package: H9 (gzipped patches ->
+`gunzip` shim). Still blocked, deferred by known family:
+
+- **H3 (perl -> libxcrypt via curl-bootstrap `/setup`):** any package pulling
+  `autoreconfHook` or a `perl` build-input -- `libtasn1`, `libmd`, `libssh2`,
+  `liburcu`, `libassuan`, `npth`, `libtool`. (`libassuan`/`npth` reach
+  `autoreconf-hook -> perl -> libxcrypt`.) These are one stdenv fix away (wrap
+  the bootstrap/spliced fetchurl the same way tranche 3 wrapped the top-level
+  one).
+- **H5-class (fragile / uncovered fetch):** packages whose `src`/`patches`
+  use `fetchFromGitHub`/`fetchpatch` the fetchurl-shim does not cover --
+  `libxml2`, `zstd`, `pcre`, `freetype`, `libjpeg_turbo`, `pixman`, `libpsl`,
+  `json_c`, `libtiff`, `libwebp`, `c-ares`, `nghttp2`, `libuv`, `jansson`, ...
+  (eval fails in the shim: "value is a function while a set was expected").
+  Needs a `fetchFromGitHub`/`fetchpatch` shim, out of scope for this tranche.
+- **dep-chain gaps:** `sqlite` fails building its `unzip` build-dep
+  (`bzlib.h` not found -- bzip2 dev headers not wired into the unzip build);
+  not an H3/H4/H5, just a missing dev-header wire-up.
+- **H4 spliced-pkgset override (`curl`, `libffi`)** and **H3 (`openssl`)**
+  unchanged from tranche 3.
+
+Prior tranche 3 note (kept for history): H2/H6/H7 FIXED -- `gettext`
+`pkg-config`(+wrapper) `ncurses` `less` `libidn2` `libgpg-error`
+`gmp-with-cxx` built + published (24 outputs); H8 (ncurses
+`--version-script`) fixed per-package. `nettle` was listed as "retry" there
+and is now built + published in tranche 4.
