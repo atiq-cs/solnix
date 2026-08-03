@@ -30,6 +30,7 @@ no login-environment setup, and no `nix` binary on the booted image.
 
 ## D. Staged rollout
 - Stage A (next AMI): build-env + system-path + shell-environment + nix modules + pkgs.solnix.nix + toplevel $out/sw + etc union + make-be seeds. Default set: `environment.systemPackages = with pkgs.solnix; [ nix file less vim curl htop git ]`. Gate A: boot AMI, `echo $PATH` shows /run/current-system/sw/bin, `which nix-store` resolves, `nix-store -q /run/current-system` (store registered), file/less/vim/curl/htop/git run, `su - gburd` shows same PATH.
+  - **Gate A PASSED** (ami-079ea8ce50a066d5f, edition unstable). The reproducible pipeline (build toplevel -> scripts/oi-make-declarative-be.sh -> scripts/oi-be-to-ami.sh), the 5 gate checks, and the origin-vs-CDN substituter rationale are in [gate-a.md](gate-a.md). oi-make-declarative-be.sh is the OVERLAY path (declarative userland onto an already-booting target), distinct from lib/make-be.nix's full bootable-from-scratch path.
 - Stage B: run home-manager STANDALONE for gburd targeting x86_64-solaris; consume only portable subset (home.packages profile, dotfile symlinking, programs.* that generate files). Stub/drop systemd.user, dconf, GUI. solnix runs HM's activation script per-user (SMF oneshot or ~/.profile line).
 - Stage C: translate ec2 home config kept tools (file/htop/perl/openssl/python3/git-config/ssh-config); drop xclip/_1password-cli/minio-client/console-ai; defer elixir/erlang/emacs/cmake. Gated on package-batch slicing each as pkgs.solnix.*.
 
