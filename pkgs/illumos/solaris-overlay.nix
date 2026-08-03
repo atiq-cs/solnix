@@ -95,6 +95,16 @@ in
   # nixpkgs-map.tsv). ~18 entries seeded from documented wave findings.
   # ======================================================================
 
+  # --- pkg-config bundled glib: res_query needs -lresolv (illumos) ------
+  # pkg-config --with-internal-glib runs a sub-configure for glib; glib probes
+  # AC_CHECK_LIB(resolv, res_query). On illumos res_query lives in libresolv
+  # (and needs the split socket/name-service libs), so the probe fails
+  # `res_query: not found` and aborts `./configure failed for glib`. Thread
+  # the resolver + split libc libs into the link. (H1 already lets the earlier
+  # conftests exec; this is the separate resolver-lib gap behind it.)
+  pkg-config = onSolaris prev.pkg-config (old:
+    addLdFlags old "-lresolv ${socketLibs}");
+
   # --- socket/name-service split (-lnsl -lsocket) -----------------------
   # curl: does sockets + resolver; needs the split libc libs.
   curl = onSolaris prev.curl (old:
@@ -122,7 +132,17 @@ in
   diffutils = onSolaris prev.diffutils (old:
     { postPatch = (old.postPatch or "") + gnulibFix; });
   gettext = onSolaris prev.gettext (old:
-    { postPatch = (old.postPatch or "") + gnulibFix; });
+    { postPatch = (old.postPatch or "") + gnulibFix;
+      # Upstream nixpkgs sets a blanket illumos
+      #   LDFLAGS=-lm -lmd -lmp -luutil -lnvpair -lnsl -lidmap -lavl -lsec
+      # (gettext/default.nix). The solnix seed only carries libc/libm/libnsl/
+      # libresolv/libsocket/... and NOT libmd/libmp/libnvpair/libuutil/libidmap/
+      # libavl/libsec (and seed libnsl itself NEEDs the absent libmp/libmd), so
+      # that link line fails `library -lmd: not found`. gettext-runtime does not
+      # actually need the name-service/crypto libs -- pin LDFLAGS to the
+      # seed-available libs. (Drop this once the seed regrows those libs.)
+      env = (old.env or { }) // { LDFLAGS = "-lm"; };
+    });
 
   # --- BIND: strip Solaris -zrelax=transtls that illumos ld rejects -----
   # BIND's configure injects `-zrelax=transtls` into LDFLAGS on SunOS; illumos
