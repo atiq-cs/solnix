@@ -1568,3 +1568,103 @@ libcCross realise + published (y); cross `hello` REALISE blocked solely on the
 cross gcc (the seed's missing compiler half). No native shortcut exists —
 aarch64 is cross by nature; the wiring is complete and the gate is one seed
 growth away.
+
+## 14. A9 CLOSED — aarch64 GATE 1b-PURE PASSED (cross-realise)
+
+Status: **A9 DONE (cross-realise). aarch64 GATE 1b-PURE PASSED.** The one seed
+gap (the cross gcc) is closed: the richlowe/arm64-gate cross toolchain was
+rebuilt on an x86 OpenIndiana illumos host and folded into the seed, and the
+pure aarch64 `hello` CROSS-COMPILES to a host-free EM_AARCH64 closure.
+
+### 14.1 Cross toolchain rebuilt on x86 illumos (arm64-gate `make setup`)
+
+On the x86 OI build host: `git clone richlowe/arm64-gate`, installed prereqs
+(texinfo/astdev/swig/bison/mpc/xml-parser/openssl-11/zones-internal +
+**runtime/python-313** — the documented §5 sgs break, host python minor must
+match the braich sysroot's 3.13), then ran the minimal cross-toolchain target
+chain with `dmake` (skipping u-boot/atf/dtc/rpi/image — not needed for the
+compiler):
+
+```
+sysroot -> binutils-gdb -> sgs -> boot-gcc -> gcc
+```
+
+GMP override on OI: the Makefile's `GMPINCDIR=/usr/include/gmp` is OmniOS-only;
+OI ships `gmp.h` at `/usr/include`, so all dmake lines pass `GMPINCDIR=/usr/include`.
+Produced + verified on the x86 host:
+- `$CROSS/bin/aarch64-unknown-solaris2.11-gcc` **(GCC) 14.3.0**, `-dumpmachine`
+  = `aarch64-unknown-solaris2.11`; RUNS on x86, `echo 'int main(){}' | gcc -x c -`
+  emits an **EM_AARCH64 ELF64 EXEC** (readelf Machine=AArch64, elfdump
+  e_machine=EM_AARCH64). C++ (libstdc++) also emits EM_AARCH64.
+- `$CROSS/opt/onbld/bin/amd64/ld` — the x86-host Solaris link-editor (sgs, an
+  `ELF 64-bit AMD64` binary emitting aarch64).
+- `$CROSS/bin/aarch64-unknown-solaris2.11-{as,ld,ar,nm,objcopy,strip,readelf}` —
+  cross binutils 2.43.1 (x86 host, aarch64 target).
+
+### 14.2 Seed grown with the $CROSS half (scripts/aa-grow-seed-cross.sh)
+
+Unpacked the existing target-sysroot seed, folded in the cross-SDK
+(`usr/gcc/aarch64-14/{bin,libexec,lib,<triple>}` + `opt/onbld/bin/amd64/ld` +
+`usr/bin/aarch64-*-{as,ld,...}`), stripped the x86-host binaries (safe: EM_AMD64),
+re-tarred. The grown seed's cross gcc runs from the seed prefix and emits
+EM_AARCH64 (relocatable: the driver resolves cc1/collect2 relative to its own
+bin/). Published **append-only at a NEW key** (the cache never mutates a
+published artifact):
+- `.tar.zst`: sha256-POfgp683835QsD+LrpVmem6BHrooz4DetH2DpeCDpDA= (initial)
+- `.tar.gz`:  **sha256-GFUW07Ahaeu8w8Xaw754kCtJbKd2Qqp2vsflRm6L8oA=** (the FOD
+  hash; gzip so the seed FOD unpacks with the seed's bundled gzip and does NOT
+  pull the from-source `zstd` -> cmake -> ... -> perl closure that recurses in
+  the cross package set). URL: `.../archive/aarch64/aarch64-seed-cross-14.3.0.tar.gz`.
+
+### 14.3 aarch64-cross.nix placeholders -> real slices
+
+- `gcc-unwrapped`: was a `crossGccMissing` fail-loud placeholder; now slices the
+  seed's `usr/gcc/aarch64-14` prefix (bin/lib/libexec/<triple>) like the x86 slice.
+- `binutils-unwrapped`: was `crossLdMissing` (aarch64 ld only); now `bin/ld` ->
+  the x86-host cross Solaris ld (`opt/onbld/bin/amd64/ld`) + the cross binutils.
+- The cc/bintools wrappers' `coreutils`/`gnugrep`/`expand-response-params`/shell
+  now come from `buildPackages` (the wrappers RUN on the build host; using the
+  TARGET coreutils cross-built from source -> m4 -> curl -> perl loop).
+- seed FOD: package-set `fetchurl` -> **builtin `<nix/fetchurl.nix>`** (avoids the
+  fetchurl -> curl -> perl recursion; same trick as libcFromSource).
+- patch 0004: `mkStdenv` now passes `extraNativeBuildInputs = []` /
+  `extraBuildInputs = []` to genericStdenv so the native illumos stdenv can be
+  reused as `buildPackages.stdenv` for a cross build (cross/default.nix reads
+  `old.extraNativeBuildInputs`).
+- cross/default.nix (on-host): guarded the `updateAutotoolsGnuConfigScriptsHook`
+  off for illumos cross (its gnu-config -> curl -> perl closure recurses; a
+  hand-written source needs no config.sub refresh).
+
+### 14.4 The GATE — PASSED (verified on the x86 illumos host)
+
+`nix-build` of the pure `pkgsCross.aarch64-illumos.hello` (crossOverlays =
+[aarch64Cross]) on the x86 host: **BUILD_EXIT=0**. All four criteria:
+- (a) REALISES: `/nix/store/2igxr95xfrvn3ip9s5dxs8xvy2p8gf5f-hello-...-aarch64-cross`.
+- (b) EM_AARCH64: `file` -> `ELF 64-bit LSB executable aarch64, dynamically
+  linked`; `elfdump -e` -> e_machine=EM_AARCH64, e_class=ELFCLASS64, e_type=ET_EXEC.
+- (c) deriver resolves: `nix-store -q --deriver` ->
+  `.../5pzd9rq6l32m58k51431lcrg759cqdj2-hello-...-aarch64-cross.drv`.
+- (d) host-free closure: full `nix-store -qR` = **4 `/nix/store` paths** (hello,
+  illumos-aarch64-libc-seed, illumos-aarch64-gcc-unwrapped-seed,
+  illumos-seed-aarch64 FOD) — all -> the aarch64 seed, ZERO host leak. RUNPATH
+  = 3 `/nix/store` dirs (no host path); NEEDED = libgcc_s.so.1 + libc.so.1. The
+  only absolute non-store path is the ELF `.interp` = `/lib/ld.so.1`, which is
+  the CANONICAL aarch64 illumos runtime-linker path (the x86 analog carries
+  `/lib/amd64/ld.so.1`) — not a host leak.
+
+### 14.5 Published (append-only, SYSTEM=aarch64-solaris)
+
+The pure hello closure (4 paths) signed (`cache.solnix.io-1`) + `nix copy`'d to
+`s3://solnix-cache`. The grown seed tarball + cross manifest at
+`archive/aarch64/aarch64-seed-cross-14.3.0.{tar.gz,tar.zst}` +
+`aarch64-seed-manifest-cross.txt`.
+
+### 14.6 RUN verification (real aarch64 hardware — deferred)
+
+Cross-compiling proves EM_AARCH64 + a store-only closure but NOT that the binary
+RUNS. That needs real aarch64 illumos (no such host on EC2 — the GICv3/ACPI
+blocker): scp the pure `hello` into the QEMU `virt` guest (`-machine virt`,
+GICv2, u-boot; §8–§12) or onto an RPi4, run it, and confirm `LD_DEBUG=libs`
+resolves libc/libgcc_s from `/nix/store` (not the guest /usr). That is the
+aarch64 analog of the x86 on-host GATE-1b RUN and the only step that
+fundamentally requires the arch's hardware/emulator.

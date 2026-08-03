@@ -145,3 +145,15 @@ nix copy --from https://s3.solnix.io/solnix-cache \
 Fetching with a *wrong* trusted key + `require-sigs true` must fail with
 "lacks a signature by a trusted key" — that's the real proof the signature gate
 works, not just that bytes downloaded.
+
+## PUBLISH-PATH GOTCHAS (2026-08-03, found via aarch64 gate)
+TWO bugs that silently broke publishes (caused mysterious 404s + under-counted caches):
+1. **S3 prefix durability**: the `archive/` prefix is TRANSIENT (objects expire within minutes).
+   The `seed/` + package prefixes are DURABLE. FOD/seed URLs MUST use durable prefixes
+   (seed/<sys>/...), never archive/. (aarch64 + sparc seed FODs were on archive/ -> 404.)
+2. **`nix copy` S3 driver is BROKEN on this backend**: it reports "copying path..." then
+   "interrupted", objects never land -> narinfos 404 despite apparent success. This under-counted
+   prior batch publishes. WORKAROUND: `nix copy` to a local `file://` cache, then `aws s3 sync`
+   (or `aws s3 cp`) the result up. The oi-fleet-publish.sh path should use aws s3, NOT nix copy.
+   Also: stale local binary-cache-v*.sqlite positives make Nix SKIP re-uploads -> clear them when
+   re-verifying (deletes nothing from S3, just forces honest re-checks).
