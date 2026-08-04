@@ -13,7 +13,7 @@ binary cache. (T2.3.)
 | **S3 endpoint** | `https://s3.solnix.io` (S3-compatible, **not** AWS S3), region `us-east-1`, **path-style** |
 | **Substituter URL (consumers)** | `https://s3.solnix.io/solnix-cache` |
 | **Signing key** | `cache.solnix.io-1` |
-| **Public key** | `cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk=` |
+| **Public key** | `cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8=` |
 | **Secret key** | `secrets/cache-signing.yaml` (sops, repo age key) |
 | **S3 creds** | `secrets/s3-cache.yaml` (sops) — read in-shell, never written to disk |
 
@@ -137,7 +137,7 @@ only the public key trusted and `require-sigs` on:
 ```sh
 nix copy --from https://s3.solnix.io/solnix-cache \
   --to /tmp/freshstore \
-  --option trusted-public-keys 'cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk=' \
+  --option trusted-public-keys 'cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8=' \
   --option require-sigs true \
   /nix/store/b1q9mlpjpy9k31j0q6mjmc1h7l99ha2s-system-path
 ```
@@ -158,6 +158,28 @@ TWO bugs that silently broke publishes (caused mysterious 404s + under-counted c
    Also: stale local binary-cache-v*.sqlite positives make Nix SKIP re-uploads -> clear them when
    re-verifying (deletes nothing from S3, just forces honest re-checks).
 
+## RESOLVED (2026-08-04): s3.solnix.io is the WRITE INBOX; cache.solnix.io is the durable read cache
+The earlier "backend defect / objects evicted" notes below were a MISDIAGNOSIS on my part.
+solnix uses the NixOS.org two-endpoint model:
+  - **s3.solnix.io** (rustfs) = TRANSIENT write inbox. Builders upload here. A b2-mirror
+    reconciler (~10min) copies each package object to B2, verifies size, then DELETES it from
+    the inbox. So nar/, root *.narinfo, torrent/ objects correctly vanish from s3.solnix.io
+    minutes-to-hours after upload -- that is the inbox draining, NOT data loss. (seed/,
+    bootstrap/, arch-manifest.tsv are on a keep-list and stay in the inbox.)
+  - **cache.solnix.io** (Cloudflare -> B2) = DURABLE public read cache. 12,922+ narinfos live
+    here permanently. This is the substituter consumers/AMIs read. Standard Nix binary-cache
+    HTTP API (/nix-cache-info, /<hash>.narinfo, /nar/<file>.nar.xz), signed cache.solnix.io-1,
+    anonymous read + signature verification.
+  - **Trusted read pubkey (current): cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8=**
+    (the older 5HAV... key is superseded; verified 8UNrVA... realises with require-sigs).
+RULES: upload -> s3.solnix.io (unchanged); READ + durability-verify -> cache.solnix.io ONLY
+(never re-read the s3.solnix.io inbox to check durability). Narinfos carry a Torrent: field
+(opt-in BitTorrent package sharing, NixOS-model + P2P).
+FUTURE DIRECTION (maintainer): move OFF the s3.solnix.io endpoint for packages entirely and use
+the SAME model as NixOS.org (CDN -> object store), plus solnix's additional opt-in BitTorrent
+package sharing. s3.solnix.io stays only as the bootstrap-era upload convenience.
+
+## (SUPERSEDED - misdiagnosis, kept for history) 2026-08-03/04 "non-durable backend" notes
 ## ⚠️ CRITICAL (2026-08-03): s3.solnix.io PACKAGE layer is NOT durable — backend defect
 Cache-integrity audit finding (docs/registry/AUDIT-cache-phantom-2026-08-03.md):
 - The `s3.solnix.io` MinIO-style gateway does NOT durably commit/replicate narinfo+nar objects

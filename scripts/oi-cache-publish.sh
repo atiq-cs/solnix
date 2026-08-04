@@ -98,4 +98,4 @@ done
 
 echo "=== done. published paths: ${PATHS[*]} ==="
 echo "substituter (consumers):  https://s3.solnix.io/solnix-cache"
-echo "trusted-public-key:       cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk="
+echo "trusted-public-key:       cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8="

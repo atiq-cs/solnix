@@ -22,16 +22,22 @@
 
   networking.hostName = lib.mkDefault "solnix";
 
-  # Stage-A declarative userland (design §D). The intended default package set is
-  # `with pkgs.solnix; [ nix file less vim curl htop git ]`. Today:
-  #   - nix is shipped by modules/config/nix.nix (nix.package -> systemPackages),
-  #     so it is NOT re-listed here (would duplicate the store path).
-  #   - base-tools (coreutils-equiv) is seeded by modules/config/system-path.nix.
-  #   - file/less/vim/curl/htop/git come from pkgs.solnix.cached — the wave-built
-  #     cache index (pkgs/illumos/cached.nix, keyed by pname). Each is a
-  #     builtins.storePath that substitutes from cache.solnix.io at realise time
-  #     (verified present in the x86_64-solaris manifest).
-  environment.systemPackages = with pkgs.solnix.cached; [ file less vim curl htop git ];
+  # Stage-A declarative userland (design §D). FIRST declarative image (assembly
+  # milestone): the STARTER set is the proven real-derivation cache packages
+  # (docs/registry/real-derivations.tsv -> pkgs.solnix.starter), each a real
+  # .drv-backed NAR published to cache.solnix.io that substitutes at realise
+  # time. nix itself is added by modules/config/nix.nix (nix.package ->
+  # systemPackages), so it is NOT re-listed here. base-tools (coreutils-equiv
+  # from the gate proto) is seeded by modules/config/system-path.nix.
+  #
+  # Kept deliberately small: coreutils/file/gnugrep/gnused/bzip2/xz/zlib/pcre2.
+  # OMITTED (not real derivations / not published to the cache yet): gettext
+  # (real-derivations row is a 1.0 placeholder, NAR absent from cache), less,
+  # vim, curl, htop, git. Add them here once they land as published real
+  # derivations in real-derivations.tsv.
+  environment.systemPackages = with pkgs.solnix.starter; [
+    coreutils file gnugrep gnused bzip2 xz zlib pcre2
+  ];
 
   # Declarative networking (T2.9): the primary NIC via DHCP. This GENERATES the
   # illumos bringup (ipadm create-if/create-addr with the legacy-ifconfig
@@ -147,11 +153,14 @@
   # Signed with cache.solnix.io-1 (secret in secrets/cache-signing.yaml, sops).
   # Publish side: scripts/oi-cache-publish.sh. Verified: T2.3 gate fetched the
   # system-path closure through this URL into a fresh store with require-sigs.
-  # Read endpoint: the DB-backed cache service at cache.solnix.io (the flat
-  # s3.solnix.io/solnix-cache bucket is now only the publish/staging side; the
-  # authoritative substituter fronting the full history is cache.solnix.io).
-  nix.settings.substituters = [ "https://cache.solnix.io" ];
+  # Read endpoint: the durable public cache cache.solnix.io (Cloudflare -> B2),
+  # NixOS-style. Uploads go to the TRANSIENT s3.solnix.io inbox (rustfs); a
+  # b2-mirror reconciler drains the inbox to B2 (~10min) then deletes from the
+  # inbox -- so package objects correctly vanish from s3.solnix.io and live
+  # permanently at cache.solnix.io. Consumers read cache.solnix.io ONLY.
+  nix.settings.substituters = [ "https://cache.solnix.io" "https://cache.nixos.org" ];
   nix.settings.trusted-public-keys = [
-    "cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk="
+    "cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8="
+    "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
   ];
 }

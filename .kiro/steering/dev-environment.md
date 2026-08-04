@@ -66,7 +66,7 @@ The binary cache / substituter is **live** at solnix.io's S3-compatible endpoint
 - **Substituter URL (consumers):** `https://s3.solnix.io/solnix-cache`
   (path-style, plain HTTPS, no credentials for reads — a standard Nix binary
   cache: `nix-cache-info` + `<hash>.narinfo` + `nar/*.nar.xz`).
-- **Trusted public key:** `cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk=`
+- **Trusted public key:** `cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8=`
   (secret half in `secrets/cache-signing.yaml`, sops-encrypted to the repo age key).
 - **Baked into `configurations/base.nix`** (`nix.settings.substituters` +
   `trusted-public-keys`) so installed systems pull binaries by default.
