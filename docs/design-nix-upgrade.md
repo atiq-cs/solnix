@@ -55,3 +55,25 @@ weak diagnostics, forced the `__structuredAttrs=false` workaround, old HTTP/TLS)
 - Phase-3 breadth on the OLD toolchain continues in parallel (packages carry over), BUT
   don't scale to thousands on 2.3.16 — land the upgrade first, then fan out on 2.24+.
 - The first release is GATED on this upgrade (maintainer directive).
+
+## Fleet-scaling prerequisites (status, for the post-2.24 fan-out)
+- **Option B (locked flake.lock) — ALREADY SATISFIED:** solnix-pkgs/flake.lock pins nixpkgs to
+  7f81d69c (matches flake.nix). Any host evaluating the flake gets identical nixpkgs-patched.
+  The per-host "rebuild nixpkgs-patched" waste on the CURRENT fleet was the 2.3.16 NON-flake path
+  (manual nix-store --add). On Nix 2.24 (proper flakes) the fleet evals the locked flake + then
+  SUBSTITUTES the built patched-nixpkgs closure from cache.solnix.io (Unblock #1) => no per-host
+  rebuild. So the fleet-rebuild fan-out on 2.24 is clean: build closure once, push, N hosts fetch.
+- **Cache-as-substituter (Unblock #1) — READY:** every host nix.conf points at cache.solnix.io
+  + builders-use-substitutes=true (baked into oi-fleet-bootstrap.sh). H28 fixed site-side.
+- **Subnet routing (fleet<->OI-host/Codeberg) — our LAN, non-blocking** (cache reaches fine).
+
+## Sequencing to the first release (post-port)
+1. Nix 2.24 port lands (patches + from-source drv + bootstrap tarball + new pure stdenv, GATE
+   1b-PURE re-verified) — IN FLIGHT (a41ef8b5).
+2. Re-bank the 2.24 bootstrap tarball -> update oi-fleet-bootstrap.sh to install 2.24 (not 2.3.16).
+3. Fan out the fleet on 2.24: rebuild the package set as real derivations against the new stdenv
+   (the 79 existing carry over as store paths; re-validate + grow breadth). Cache-substituter means
+   build-once-fetch-many. Scale to ~12 hosts (quota headroom ~460).
+4. Re-cut COMPLETE images (AMI/ISO/IMG) on 2.24 + the full minimal-build-host baseline
+   (curl+ping+nvi+gdb+toolchain+full-PATH+no-core-files) where `nix profile install <name>` works.
+5. Freeze the first dated release (26.11) once x86_64 hits the release criteria.
