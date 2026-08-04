@@ -175,3 +175,18 @@ Cache-integrity audit finding (docs/registry/AUDIT-cache-phantom-2026-08-03.md):
   bcache + re-run the tranches' publishes. Until then, treat package publishes as NOT PERSISTED
   and do NOT gate build-verification on cache round-trip (verify locally: deriver + hermetic
   closure + runs; the cache round-trip is unreliable by backend, not by our process).
+
+## ⚠️ BACKEND FIX INCOMPLETE (2026-08-04) — objects EVICTED after write (slow-timescale)
+The site-team fix restored the immediate read/HEAD path + a dropped anon-read bucket policy,
+but object DURABILITY still fails on a minutes-to-hours timescale (was ms before):
+- Full re-publish uploaded 197 narinfos/190 nars, all read-back 200 at write time.
+- ~2h later: 78 present; then 44; churning non-monotonically (44<->49) -> final 49.
+- A zlib narinfo verified sticky 200x3 at 11:37 then GONE by ~13:xx (auth HEAD absent).
+- Only the NEWEST writes survive; older objects are culled. seed/+bootstrap/ prefixes EXEMPT (stable).
+- 0 package objects durably persist. This looks like an eviction/TTL/GC/quota policy on the MinIO
+  backend, NOT a client/publish-script issue (fixed publish path file://->aws s3 sync was used).
+HAND BACK TO SITE TEAM — the durability fix is incomplete: stored package objects are evicted
+  within minutes-hours; only trust-root prefixes and freshest writes survive.
+READY WHEN FIXED: all 177 signed closures staged locally (OI host store + local file:// cache);
+  re-run = single sign->file://->aws s3 sync sweep, then sticky-verify + staged->published flip.
+  Ask the team to confirm a test object PERSISTS FOR HOURS (not just passes an immediate sticky read).
