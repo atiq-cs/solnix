@@ -190,3 +190,21 @@ once x86_64 hits the release criteria (Phase-3 core fully-Nix + GATE A + install
 x86_64: FULL (pattern + Phase-3 executing). sparcv9: PARTIAL->FULL in progress (stdenv wired, hello
   runs on real sun; nix-on-sparc building on the now-proper /nix). aarch64: cross stdenv wired,
   libcCross published; cross-gcc seed-grow in progress -> cross-realise. riscv: port maturation.
+
+## HONEST CORRECTION (2026-08-04): a /usr/lib/64 impurity class affects some "real" derivations
+The gawk hermetic fix exposed a systemic issue: some Phase-3 packages have real .drv + run, but
+their closures are NOT fully hermetic — they link host libs from /usr/lib/64 that SHOULD come from
+the store. Root cause (two-layer): (1) nixpkgs expr doesn't declare gmp/mpfr/ncurses/etc as
+buildInputs so no store -L; (2) even with buildInputs, the seed-syslibs -L (host copies) wins the
+H1 auto-RUNPATH order unless the store -L is in NIX_CFLAGS_COMPILE_BEFORE (extraBefore).
+LEGIT boundary (NOT impurity): /lib/64 refs for libc/libm/libnsl/libmp/libmd = the illumos
+platform ABI, present on every illumos host, shared by every package incl the seed (like NixOS
+binaries referencing the kernel/loader). Only /usr/lib/64 refs for STORE-ownable libs are the bug.
+AFFECTED (flagged, fix pattern known = gawkReal: store buildInputs + NIX_CFLAGS_COMPILE_BEFORE -L,
+and build the REAL nixpkgs attr via callPackage not the stdenv-seed stub):
+  coreutils(libgmp), bash(libncurses.so.5), bc, xz(liblzma), gnumake(guile/gc/ffi/gmp/unistring),
+  gnugrep(libpcre2), binutils/gnm(libz/libzstd), nix-2.3.16(boost/openssl/curl/...).
+gawk FIXED (gawkReal: all 4 libs -> /nix/store, closure has real deps, runs reporting store versions).
+NEXT: a hermeticity-audit + fix pass over the accepted set (re-verify each real-derivation's ldd for
+/usr/lib/64 store-ownable leaks; apply the gawkReal pattern). This is required for a TRUE exactly-Nix
+claim. The AMIs still boot + run; this tightens the closure purity, not runtime function.
