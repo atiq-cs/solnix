@@ -221,6 +221,138 @@ The tranche-4 dependency chains prove real cross-package linkage: `libgcrypt`
 and `libksba` both link the tranche-3 `libgpg-error`, and `libpng` links the
 tranche-1 `zlib` -- all resolved from `/nix/store`, none from the host.
 
+## Fifth tranche (H3 CRACKED: perl + openssl + the build-tool swath, staged, append-only)
+
+**H3 is FIXED.** The perl<->libxcrypt curl-bootstrap `/setup` recursion (the
+biggest remaining shared blocker) is cracked, and its downstream swath built as
+real hermetic derivations. Cracking H3 unblocked perl + openssl (which gate a
+large fraction of the remaining packages) plus the whole
+autoreconf/perl-buildtool chain. Persisted PER-PACKAGE (build -> verify ->
+stage -> registry row -> `artifacts/tranche5-paths.txt`) so a mid-run death
+strands at most one package. Same non-durable-cache caveat as tranche 4:
+deliverable = **build + LOCAL verify + stage** (real `.drv` + host-free closure
++ runs on illumos + `nix-store --export` into `/nix/tranche5-bcache/`), NOT a
+cache round-trip. Registry `published` column = `staged`.
+
+| pname                | new store hash                     | deriver | hermetic | runs | staged    |
+|----------------------|------------------------------------|---------|----------|------|-----------|
+| perl-5.42.0          | 33r963cv0fq906ikbqmrcwlg3h3l53jf   | y       | y        | y    | staged    |
+| perl-5.42.0-man      | bfrjr0qilik4gaa9pd4ydk1wi3nz0ril   | y       | y        | -    | staged    |
+| perl-5.42.0-devdoc   | 4b1sjyi2z782jn6rgj5vibr94748v1nr   | y       | y        | -    | staged    |
+| libxcrypt-4.5.2      | 4sdc0fnvjbps8acfxysdbwiq8c7c9f2w   | y       | y        | y    | staged    |
+| libxcrypt-4.5.2-man  | wi2bjs3dx4msqx0n2hv5yky4zbbwlm77   | y       | y        | -    | staged    |
+| openssl-3.6.3        | i9szssxplv8mz45mk4fdzy2f8w8kcndr   | y       | y        | y    | staged    |
+| openssl-3.6.3-bin    | sdff5bw0l8shsz57smzrjcygjsivbbg4   | y       | y        | y    | staged    |
+| openssl-3.6.3-dev    | 63b1x7j2x0dvnhcxfrszgri7b1a2hrij   | y       | y        | -    | staged    |
+| openssl-3.6.3-doc    | w01bqykmfbn3m9ksz8l8l90bmzzag3iv   | y       | y        | -    | staged    |
+| openssl-3.6.3-man    | dq06zixvibqpvd5wz5fbi7fnqvfmywii   | y       | y        | -    | staged    |
+| libssh2-1.11.1       | crvi4nhdjw4j70wyz42m4qf7l71lbjfy   | y       | y        | y    | staged    |
+| libssh2-1.11.1-dev   | 7dkd25bzwkwjj8rnf98nn1z743wqf4z6   | y       | y        | -    | staged    |
+| libssh2-1.11.1-devdoc| zh1qm5704v39i12aa9yc81ay7y4l2icb   | y       | y        | -    | staged    |
+| help2man-1.49.3      | 91i9g989vvaxw81wgh5p87xx9jlkpvvz   | y       | y        | y    | staged    |
+| bison-3.8.2          | k3rfp4x85myhcv179n4hvnq5ddn0d3xl   | y       | y        | y    | staged    |
+| flex-2.6.4           | 8vwd1qrqyf1d614i2bw30nx5x3wk0m6g   | y       | y        | y    | staged    |
+| libtool-2.5.4        | 3vjdhx3z7mb30wgyrs9sk65p2bwdg4fj   | y       | y        | y    | staged    |
+| libtool-2.5.4-lib    | 2wf0x15f5nca80xx9dkcg8812j8kp13w   | y       | y        | -    | staged    |
+| libtasn1-4.21.0      | m4p8pv31dqiqq3g6vljri7flk7vj3jf7   | y       | y        | y    | staged    |
+| libtasn1-4.21.0-dev  | cgaw2d690afbclmfbx4f5sbzgfb4im33   | y       | y        | -    | staged    |
+| libtasn1-4.21.0-devdoc| m6c0bywj61kvsmf45iq277zg0b0ndp05  | y       | y        | -    | staged    |
+| libassuan-3.0.2      | njb1qijmgxj2829zc9p2476qwmb9iq96   | y       | y        | y    | staged    |
+| libassuan-3.0.2-dev  | q2fiipv6l250asv714jscwx57mqa86g7   | y       | y        | -    | staged    |
+| libassuan-3.0.2-info | ny5cj6v0djcwc0kl4jax62n69hm58aqx   | y       | y        | -    | staged    |
+| npth-1.8             | 7wki2nsc7n0vs9bxn3ky9sagjp4pfk92   | y       | y        | y    | staged    |
+| bc-1.08.2            | svmavln726gx6ixf6gvm1cdkbva9y9n5   | y       | y        | y    | staged    |
+| cpio-2.15            | jh0z5b177m7b8ncma7jiz6zsip3l606b   | y       | y        | y    | staged    |
+
+**11 packages / 27 outputs. built + verified + staged = 27, failed = 0.**
+`runs` verified on illumos: `perl -e` runs (`v5.42.0`, `i86pc-solaris`),
+`openssl version` (`OpenSSL 3.6.3`), `bison 3.8.2`, `flex 2.6.4`, `bc` (`2+2`
+-> `4`), `cpio 2.15`, `help2man 1.49.3`, `libtool 2.5.4`, and the `.so`s of
+libxcrypt/libtasn1/libassuan/npth load clean (0 missing deps). **Cross-package
+linkage proof:** `libssh2.so.1` resolves `libssl.so.3` + `libcrypto.so.3` from
+the tranche-5 `openssl` store path via `ldd` -- a real hermetic
+openssl->libssh2 link, host-free. Staged to `/nix/tranche5-bcache/` as
+`exports/tranche5-union.closure.nar` (`nix-store --export` of the 56-path
+union closure; re-imports `rc=0`) + `tranche5-own-paths.txt`.
+
+### H3 (perl<->libxcrypt curl-bootstrap `/setup`) -- **FIXED** (tranche 5)
+
+Root cause (confirmed by inspecting the failing `.drv`): building perl pulls
+`libxcrypt`, which nixpkgs wires as
+`libxcrypt = callPackage { fetchurl = stdenv.fetchurlBoot; perl = perl.override
+{ enableCrypt = false; fetchurl = stdenv.fetchurlBoot; }; }` -- a hardcoded
+`stdenv.fetchurlBoot` for its src to break the perl<->libxcrypt eval cycle.
+`fetchurlBoot` (`import build-support/fetchurl { curl = null; ... }`) emits a
+real derivation built by the *un-adapted* `stdenvNoCC`, so its
+`source-stdenv.sh` hits `/setup: No such file` under Nix 2.3.16 (no
+structuredAttrs). The tranche-1 shim only routed the TOP-LEVEL `fetchurl`
+through `builtins.fetchurl`; `stdenv.fetchurlBoot` was a separate,
+unreachable-from-a-top-level-overlay path.
+
+FIX (three parts, all in `artifacts/tranche5-fork-fixes/`):
+1. **`fetchurl-shim.nix`** now exposes a shared `shimFetch` (the multi-mirror
+   `builtins.fetchurl` fetcher) as both `fetchurl` AND `fetchurlBoot`, plus a
+   `solnixShimFetch` passthru.
+2. **`tranche5.nix`** re-asserts `stdenv.fetchurlBoot = solnixShimFetch` AFTER
+   the structuredAttrs adapter (which re-wraps stdenv and would drop it), so
+   the `stdenv.fetchurlBoot` that all-packages.nix reads for the libxcrypt
+   cycle-break resolves to the shim. libxcrypt's `libxcrypt-4.5.2.tar.xz` src
+   is now an eval-time fixed-output fetch (no builder, no `/setup`).
+
+With H3 gone, perl/openssl surfaced a cluster of NEW per-package gaps, all
+fixed this tranche:
+
+- **H10 perl `ld-shared.patch` no longer applies.** nixpkgs adds an
+  isSunOS-only `ld-shared.patch` targeting `hints/solaris_2.sh`; perl 5.42.0
+  rewrote that file (`*gcc*)` -> `*gcc*|*g++*)`) so Hunk #1 fails. The patch is
+  obsolete anyway (osvers 2.11 already uses `-shared`). Dropped.
+- **H11 perl `miniperl` link missing `-lm`.** cos/exp/log/pow/sin/fmod/sqrt/
+  atan2 undefined (illumos keeps libm separate); socketpair needs -lnsl/
+  -lsocket. Added via the link.
+  H10+H11 are applied in the **stdenv `mkDerivation` wrapper** (part 3 of the
+  fix, scoped to `pname == "perl"`) because an overlay `perl.overrideAttrs`
+  does NOT survive the `.override` calls that spawn perl variants
+  (`perlOnBuild`, help2man's build-tool perl). Every perl variant is built with
+  the one overlaid `stdenv-illumos`, so the wrapper reaches all of them. It
+  handles the `finalAttrs:` function form of `mkDerivation` by composing the
+  function and post-processing the resolved attrset.
+- **H12 libxcrypt version-script grammar.** `AX_CHECK_VSCRIPT` picks `-Wl,-M`
+  as the "Solaris version-script flag" but the map it generates is GNU
+  version-script syntax; native Solaris ld rejects it under -M
+  (`ld: fatal: libcrypt.map: 1: expected '=', ':', '|', or '@'`). Symbol
+  versioning is cosmetic on a fresh port -> `--disable-symvers`.
+- **H13 libxcrypt `test/explicit-bzero` fails** (illumos macros `explicit_bzero`
+  to `memset_s`, which does not behave the C11-Annex-K way the scrub test
+  expects). Library builds/links fine; `doCheck = false` (1 of 52 fails).
+- **H14 LocaleGettext perl module (help2man dep).** `Makefile.PL` probes
+  `$cc conftest.c -lintl` with NO `-L`; under strictDeps gettext's libdir is
+  not on the link path, and with gettext's `libintl.h` included, `gettext`
+  macro-expands to `libintl_gettext` -> `Undefined symbol` -> "gettext not
+  found". NIX_LDFLAGS does not help (illumos gcc execs host ld directly, the H1
+  bypass); NIX_CFLAGS_COMPILE's -L is only applied to compile steps.
+  Makefile.PL honors `$ENV{CC}`, but the stdenv setup exports CC=gcc AFTER the
+  drv attr, so we bake `-L${gettext}/lib` into CC in a **preConfigure** (post-
+  setup, pre-Makefile.PL). This unblocked the entire help2man ->
+  bison/flex/libtool -> autoreconfHook build-tool swath.
+- **H7 (libtool empty `global_symbol_pipe`) recurs** for libtasn1/libassuan/
+  npth/libssh2 -- added them to the tranche-3 `withGnm` (`NM=illumosGnm/gnm`).
+- **H16 openssl QUIC test flakiness.** openssl builds + links fully (perl
+  Configure, libssl/libcrypto with `-lsocket -lnsl -ldl`), but the QUIC
+  multistream tests are timing-sensitive and time out under load
+  (`op_deadline` exceeded, "network BIO I/O error"). Flaky perf tests, not a
+  crypto defect -> `doCheck = false`.
+
+### Still blocked after H3 (deferred, new/known gaps)
+
+- **H15 sqlite (seed bzip2 has no dev headers).** sqlite pulls `unzip` (test-
+  data tool) built with `USE_BZIP2`; `unzip` needs `bzlib.h` but the pinned
+  `bzip2` is a SEED slice (`3qapqhh7...`, only `bin`+`usr`, no
+  `include/bzlib.h` -- a single-output `linkBootstrap.sh` derivation, not a
+  real build). Fix needs the solnix overlay's `bzip2` pin swapped for a real
+  nixpkgs bzip2 build (which has `bin`/`dev`/`out` outputs), or a bzlib.h
+  wire-up; swapping the seed bzip2 may ripple into other bootstrap deps, so
+  deferred. Retry sqlite once bzip2 is rebuilt with a `dev` output.
+
 ### H9 (gzipped patches: `gunzip` missing) -- NEW gap, fixed per-package
 
 `libpng` applies its apng patch as a `.gz` and shells out to `gunzip` in
@@ -370,7 +502,9 @@ evaluating/building against the pure stdenv:
    (2). The shim routes every src through `builtins.fetchurl` (eval-time,
    hash-verified fixed-output = hermetic-by-hash, no builder, no stdenv),
    expanding `mirror://` from the upstream `mirrors.nix`. The src closure still
-   traces to a `/nix/store` fixed-output path.
+   traces to a `/nix/store` fixed-output path. **(tranche 5: the shim now also
+   backs `fetchurlBoot`, re-asserted on the stdenv after the adapter -- this is
+   the H3 fix; see the H3-FIXED section.)**
 
 2. **`__structuredAttrs = false` adapter** — Nix 2.3.16 has NO structuredAttrs
    support: it never writes `.attrs.sh`, so `NIX_ATTRS_SH_FILE` is empty at
@@ -453,12 +587,13 @@ gap; fixing them in the fork's stdenv/cc-wrapper unblocks large swaths at once.
   store dir. Proven: C++ hello runs; real `gmp-with-cxx` `libgmpxx.so.4` links
   `libstdc++.so.6` and `ldd` resolves it from the store (published, tranche 3).
 
-- **H3 curl-bootstrap `/setup` for build-dep srcs.** `openssl` pulls a real
-  `perl` build whose `libxcrypt-4.5.2.tar.xz` src is fetched by the *curl
-  bootstrap* `fetchurlBoot` (a different stdenv path the adapter in (2) does
-  not wrap), so it still hits the structuredAttrs `/setup` failure. Fix: apply
-  the `__structuredAttrs=false` force to the bootstrap/spliced stdenvs too, or
-  point `fetchurlBoot` at the same builtin-fetchurl shim.
+- **H3 curl-bootstrap `/setup` for build-dep srcs -- FIXED (tranche 5).** Was:
+  perl/openssl pull a `libxcrypt-4.5.2.tar.xz` src fetched by the *curl
+  bootstrap* `fetchurlBoot` (a different stdenv path the adapter in (2) did not
+  wrap), so it hit the structuredAttrs `/setup` failure. FIX: point
+  `fetchurlBoot` at the same builtin-fetchurl shim, re-asserted on the stdenv
+  AFTER the structuredAttrs adapter (see "H3 ... FIXED (tranche 5)" above).
+  Proven: perl 5.42.0 + openssl 3.6.3 build + run hermetically (tranche 5).
 
 - **H4 spliced-pkgset overrides.** `curl`/`libffi` still throw `shellPath
   missing` despite fix (3): `runtimeShell`/`bashNonInteractive` resolve from
@@ -501,23 +636,22 @@ Tranche 4 (this tranche): 15 packages / 35 outputs built + published (see the
 fourth-tranche table above). New gap fixed per-package: H9 (gzipped patches ->
 `gunzip` shim). Still blocked, deferred by known family:
 
-- **H3 (perl -> libxcrypt via curl-bootstrap `/setup`):** any package pulling
-  `autoreconfHook` or a `perl` build-input -- `libtasn1`, `libmd`, `libssh2`,
-  `liburcu`, `libassuan`, `npth`, `libtool`. (`libassuan`/`npth` reach
-  `autoreconf-hook -> perl -> libxcrypt`.) These are one stdenv fix away (wrap
-  the bootstrap/spliced fetchurl the same way tranche 3 wrapped the top-level
-  one).
+- **H3 (perl -> libxcrypt via curl-bootstrap `/setup`) -- FIXED in tranche 5.**
+  The H3-deferred packages `libtasn1`, `libssh2`, `libassuan`, `npth`,
+  `libtool` (plus `bison`, `flex`, `bc`, `cpio`) all BUILT in tranche 5 (see
+  the fifth-tranche table). `libmd`, `liburcu` not yet retried.
 - **H5-class (fragile / uncovered fetch):** packages whose `src`/`patches`
   use `fetchFromGitHub`/`fetchpatch` the fetchurl-shim does not cover --
   `libxml2`, `zstd`, `pcre`, `freetype`, `libjpeg_turbo`, `pixman`, `libpsl`,
   `json_c`, `libtiff`, `libwebp`, `c-ares`, `nghttp2`, `libuv`, `jansson`, ...
   (eval fails in the shim: "value is a function while a set was expected").
   Needs a `fetchFromGitHub`/`fetchpatch` shim, out of scope for this tranche.
-- **dep-chain gaps:** `sqlite` fails building its `unzip` build-dep
-  (`bzlib.h` not found -- bzip2 dev headers not wired into the unzip build);
-  not an H3/H4/H5, just a missing dev-header wire-up.
-- **H4 spliced-pkgset override (`curl`, `libffi`)** and **H3 (`openssl`)**
-  unchanged from tranche 3.
+- **H15 dep-chain gap (tranche 5):** `sqlite` fails building its `unzip`
+  build-dep (`bzlib.h` not found) -- the pinned `bzip2` is a SEED slice with
+  NO `dev` output. Needs the bzip2 pin swapped for a real build; deferred (see
+  the H15 note under the fifth tranche).
+- **H4 spliced-pkgset override (`curl`, `libffi`)** unchanged from tranche 3.
+  (`openssl` -- previously listed here as H3-blocked -- BUILT in tranche 5.)
 
 Prior tranche 3 note (kept for history): H2/H6/H7 FIXED -- `gettext`
 `pkg-config`(+wrapper) `ncurses` `less` `libidn2` `libgpg-error`
