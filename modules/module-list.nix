@@ -11,6 +11,7 @@
 [
   ./nixos-compat.nix
   ./config/edition.nix
+  ./config/coreadm.nix
   ./config/networking.nix
   ./config/users.nix
   ./config/system-path.nix

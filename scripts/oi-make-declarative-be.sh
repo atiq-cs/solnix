@@ -268,6 +268,26 @@ for u in $PERUSERS; do
   done
 done
 
+# maintainer directive: NO core files in shipped images/first-run. Scrub the live
+# target root + set the managed coreadm policy before this BE is imaged.
+log "core-scrub + coreadm policy (no core files in the image)"
+find / -xdev \( -name 'core' -o -name 'core.[0-9]*' \) -type f 2>/dev/null | while read -r c; do
+  file "$c" 2>/dev/null | grep -qi 'core file' && { rm -f "$c" && echo "  scrubbed: $c"; }
+done
+mkdir -p /var/cores && chmod 1777 /var/cores
+cat > /etc/coreadm.conf <<'CADM'
+COREADM_GLOB_PATTERN=/var/cores/core.%f.%p.%t
+COREADM_GLOB_CONTENT=default
+COREADM_INIT_PATTERN=/var/cores/core.%f.%p.%t
+COREADM_INIT_CONTENT=default
+COREADM_GLOB_ENABLED=yes
+COREADM_PROC_ENABLED=no
+COREADM_GLOB_SETID_ENABLED=no
+COREADM_PROC_SETID_ENABLED=no
+COREADM_GLOB_LOG_ENABLED=yes
+CADM
+coreadm -u 2>/dev/null || true
+
 sync
 log "DEPLOY DONE — target BE is declarative + nix-operational"
 echo "current-system: $CS"

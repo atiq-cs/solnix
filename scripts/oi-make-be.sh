@@ -577,6 +577,8 @@ built: $(date -u +%FT%TZ)
 proto: $PROTO
 host:  $(uname -a)
 EOF
+# maintainer directive: NO core files in shipped images; managed coreadm policy.
+. "$(dirname "$0")/lib-core-scrub.sh" 2>/dev/null && scrub_cores "$BEROOT" || echo "NOTE: lib-core-scrub not found; skipping core scrub"
 sync
 zfs set canmount=noauto "$BEDS"
 umount "$BEROOT/esp" 2>/dev/null || true
