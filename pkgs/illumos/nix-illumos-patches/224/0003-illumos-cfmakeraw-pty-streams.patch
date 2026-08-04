@@ -1,0 +1,49 @@
+Subject: illumos: supply cfmakeraw() and push STREAMS pty line modules
+
+illumos libc has no cfmakeraw(), so provide the standard BSD/glibc body. illumos
+pseudoterminal slaves are STREAMS devices: the terminal line modules ptem and
+ldterm must be pushed onto the slave fd before tcgetattr/tcsetattr, which
+otherwise fail with EINVAL and abort every build that uses the build log pty.
+
+--- a/src/libstore/unix/build/local-derivation-goal.cc
++++ b/src/libstore/unix/build/local-derivation-goal.cc
+@@ -72,6 +72,22 @@
+ 
+ namespace nix {
+ 
++#ifdef __sun
++// illumos libc has no cfmakeraw(); supply the standard BSD/glibc body so the
++// build pseudoterminal can be put into raw mode.
++#include <stropts.h>
++static void cfmakeraw(struct termios * t)
++{
++    t->c_iflag &= ~(IMAXBEL | IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL | IXON);
++    t->c_oflag &= ~OPOST;
++    t->c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
++    t->c_cflag &= ~(CSIZE | PARENB);
++    t->c_cflag |= CS8;
++    t->c_cc[VMIN] = 1;
++    t->c_cc[VTIME] = 0;
++}
++#endif
++
+ void handleDiffHook(
+     uid_t uid, uid_t gid,
+     const Path & tryA, const Path & tryB,
+@@ -891,6 +907,16 @@
+         if (!builderOut)
+             throw SysError("opening pseudoterminal slave");
+ 
++#ifdef __sun
++        // illumos pseudoterminal slaves are STREAMS devices; push the terminal
++        // line modules so that tcgetattr/tcsetattr succeed (they fail EINVAL
++        // otherwise).
++        if (ioctl(builderOut.get(), I_PUSH, "ptem") < 0)
++            throw SysError("pushing ptem module on pseudoterminal slave");
++        if (ioctl(builderOut.get(), I_PUSH, "ldterm") < 0)
++            throw SysError("pushing ldterm module on pseudoterminal slave");
++#endif
++
+         // Put the pt into raw mode to prevent \n -> \r\n translation.
+         struct termios term;
+         if (tcgetattr(builderOut.get(), &term))

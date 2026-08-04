@@ -1,0 +1,20 @@
+Subject: illumos: include <sys/termios.h> for struct winsize / TIOCGWINSZ
+
+On illumos struct winsize and the TIOCGWINSZ ioctl live in <sys/termios.h> and
+are not pulled in transitively via <sys/ioctl.h> as they are on Linux, so
+terminal.cc fails to compile. Include <sys/termios.h> under __sun.
+
+--- a/src/libutil/terminal.cc
++++ b/src/libutil/terminal.cc
+@@ -9,6 +9,11 @@
+ # define isatty _isatty
+ #else
+ # include <sys/ioctl.h>
++# ifdef __sun
++// illumos keeps struct winsize / TIOCGWINSZ in <sys/termios.h>; unlike Linux
++// it is not pulled in transitively via <sys/ioctl.h>.
++#  include <sys/termios.h>
++# endif
+ #endif
+ #include <unistd.h>
+ 

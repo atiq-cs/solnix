@@ -67,6 +67,39 @@ weak diagnostics, forced the `__structuredAttrs=false` workaround, old HTTP/TLS)
   + builders-use-substitutes=true (baked into oi-fleet-bootstrap.sh). H28 fixed site-side.
 - **Subnet routing (fleet<->OI-host/Codeberg) — our LAN, non-blocking** (cache reaches fine).
 
+## Productionization results (Nix 2.24.15, autotools, x86_64-solaris)
+Produced on a fresh OI-build-AMI clone (pkg update -> 2026 userland -> gcc-13):
+- **Clean patch series** `pkgs/illumos/nix-illumos-patches/224/*.patch` (5 numbered
+  patches, each what/why-commented, all apply `-p1` in sequence): 0001 winsize/termios
+  include, 0002 sigorset fallback guard, 0003 cfmakeraw + STREAMS ptem/ldterm re-port,
+  0004 flock LOCK_UN|LOCK_NB EINVAL fix, 0005 getSelfExe /proc/self/path/a.out. Build-env
+  tweaks (empty AC_CONFIG_FILES, openssl-3 .pc, ax_boost_base, vendored toml11,
+  ERROR_SWITCH_ENUM=, GNU-readline REPL, --disable-gc/markdown/cpuid) live in the
+  driver/derivation, documented in the series README.
+- **From-source derivation** `pkgs/illumos/nix224.nix` (standalone `derivation`, sandbox=false,
+  sha256-verified fetch, patch series applied, autotools build, RUNPATH relocate via
+  `/usr/bin/elfedit`, libgit2 bundled into `$out/lib`, CA baked into `$out/etc/ssl/certs`
+  + `ssl-cert-file` in `$out/etc/nix/nix.conf`). Realised to a real store path; deriver
+  resolves; `nix --version`=2.24.15 runs with **NO LD_LIBRARY_PATH** (ldd clean, RUNPATH =
+  store+system dirs only, no build-temp); TLS substitute + copy roundtrip + `nix profile`
+  install/list all proven. Driver: `scripts/oi-nix224-setup.sh`.
+- **Bootstrap tarball** `bootstrap/nix-illumos-2.24.15.tar.zst` re-banked
+  (`scripts/oi-nix224-bank-bootstrap.sh`): RUNPATH baked to the fixed install prefix
+  `/nix-tools224/{lib,lib/amd64,runtime-lib}` + a 39-lib runtime-lib closure (real .so
+  files, no dangling symlinks) + bundled CA. **Proven relocatable**: `env -i` (empty env)
+  `nix --version`=2.24.15, ldd all resolve — fixes the 2.3.16 LD_LIBRARY_PATH fragility.
+  Uploaded to `s3://solnix-cache/bootstrap/` (durable at the s3.solnix.io origin;
+  cache.solnix.io CDN heals as the H28 negative-cache TTL expires).
+- **`__structuredAttrs=false` adapter DROPPED**: proven a `__structuredAttrs=true`
+  derivation builds on the 2.24 nix (`.attrs.sh` written, list materialises as a bash
+  array) — the exact thing 2.3.16 could not do. `pkgs/illumos/phase3/tranche-entry-224.nix`
+  is the successor overlay entry with the adapter (and the H3 fetchurlBoot re-assert it
+  forced) removed. The pure `stagesNix` stdenv itself carries no adapter dependency.
+- **Remaining for full cutover:** run the GATE 1b-PURE hermetic-hello REALISE on 2.24 (needs
+  the seed-wired illumos build host, not a fresh clone — a multi-hour stdenv bootstrap);
+  point `oi-fleet-bootstrap.sh` at the 2.24 tarball; re-validate the 79 carry-over store
+  paths; re-cut images on 2.24.
+
 ## Sequencing to the first release (post-port)
 1. Nix 2.24 port lands (patches + from-source drv + bootstrap tarball + new pure stdenv, GATE
    1b-PURE re-verified) — IN FLIGHT (a41ef8b5).

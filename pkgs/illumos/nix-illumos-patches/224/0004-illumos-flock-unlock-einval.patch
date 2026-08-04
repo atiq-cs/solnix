@@ -1,0 +1,21 @@
+Subject: illumos: drop LOCK_NB when releasing a flock lock
+
+illumos rejects flock(fd, LOCK_UN | LOCK_NB) with EINVAL, whereas Linux ignores
+LOCK_NB on an unlock. ~FdLock releases with wait=false (LOCK_NB set), so the
+SysError thrown from the destructor during stack unwinding terminates the
+process on every build. Keep LOCK_NB off the unlock path.
+
+--- a/src/libstore/unix/pathlocks.cc
++++ b/src/libstore/unix/pathlocks.cc
+@@ -56,7 +56,10 @@
+                 return false;
+         }
+     } else {
+-        while (flock(desc, type | LOCK_NB) != 0) {
++        // illumos rejects flock(fd, LOCK_UN | LOCK_NB) with EINVAL (Linux ignores
++        // LOCK_NB on an unlock); ~FdLock unlocks with wait=false, so keep LOCK_NB
++        // off the unlock path or the destructor throws during unwinding.
++        while (flock(desc, type == LOCK_UN ? type : (type | LOCK_NB)) != 0) {
+             checkInterrupt();
+             if (errno == EWOULDBLOCK) return false;
+             if (errno != EINTR)

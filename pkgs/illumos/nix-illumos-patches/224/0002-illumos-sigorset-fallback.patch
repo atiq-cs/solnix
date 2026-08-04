@@ -1,0 +1,21 @@
+Subject: illumos: use the direct-assignment sigmask fallback (no glibc sigorset)
+
+illumos declares sigorset() with the kernel k_sigset_t signature, not the glibc
+three-argument sigset_t form the _POSIX_C_SOURCE branch assumes. Exclude __sun
+from that branch so setChildSignalMask() uses the portable direct-assignment
+fallback instead.
+
+--- a/src/libutil/unix/signals.cc
++++ b/src/libutil/unix/signals.cc
+@@ -105,7 +105,10 @@
+ {
+     assert(sigs); // C style function, but think of sigs as a reference
+ 
+-#if _POSIX_C_SOURCE >= 1 || _XOPEN_SOURCE || _POSIX_SOURCE
++// illumos declares sigorset() with the kernel k_sigset_t signature, not the
++// glibc three-argument sigset_t form this branch assumes; exclude __sun so the
++// direct-assignment fallback below is used instead.
++#if (_POSIX_C_SOURCE >= 1 || _XOPEN_SOURCE || _POSIX_SOURCE) && !defined(__sun)
+     sigemptyset(&savedSignalMask);
+     // There's no "assign" or "copy" function, so we rely on (math) idempotence
+     // of the or operator: a or a = a.

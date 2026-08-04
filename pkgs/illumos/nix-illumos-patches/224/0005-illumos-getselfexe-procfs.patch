@@ -1,0 +1,19 @@
+Subject: illumos: resolve getSelfExe() via /proc/self/path/a.out
+
+The non-Linux #else in getSelfExe() returns nullopt, so Nix cannot locate its
+own executable ("not an absolute path: 'nix'") and builds fail. illumos
+exposes the running executable through the /proc/self/path/a.out symlink; read
+it under __sun.
+
+--- a/src/libutil/current-process.cc
++++ b/src/libutil/current-process.cc
+@@ -139,6 +139,9 @@
+     {
+         #if __linux__ || __GNU__
+         return readLink("/proc/self/exe");
++        #elif __sun
++        // illumos exposes the running executable via this procfs symlink.
++        return readLink("/proc/self/path/a.out");
+         #elif __APPLE__
+         char buf[1024];
+         uint32_t size = sizeof(buf);
