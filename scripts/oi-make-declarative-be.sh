@@ -48,7 +48,16 @@ MODE="${MODE:-}"                         # stage | deploy (auto if empty)
 OUTDIR="${OUTDIR:-/scratch/gatea}"       # payload staging dir (both modes)
 CS="${CS:-}"                             # current-system store path (stage mode)
 NIXTOOLS="${NIXTOOLS:-/nix-tools}"       # host nix runtime (binaries + libs)
+# tar for extraction on the target. The closure archive uses GNU long-name
+# (@LongLink) entries for >100-char store paths, which illumos /usr/bin/tar
+# cannot extract. Point TAR at a GNU tar (staged next to the payload on a
+# minimal target that lacks one). Defaults to GNU `tar` on PATH.
+TAR="${TAR:-tar}"
 NIXSTORE="${NIXSTORE:-$NIXTOOLS/bin/nix-store}"
+# The bundled nix binary links libreadline.so.8 etc. from the runtime-lib set;
+# put them on LD_LIBRARY_PATH so nix-store runs on a minimal target that has no
+# system readline/ncurses (RUNPATH alone is not enough on a fresh illumos BE).
+export LD_LIBRARY_PATH="$NIXTOOLS/runtime-lib:$NIXTOOLS/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 POOL="${POOL:-rpool}"                    # target pool holding rpool/nix
 NIXDS="${NIXDS:-$POOL/nix}"              # the /nix dataset created on the target
 # per-user dirs are chowned for these logins (the KNOWN last-hurdle fix). Root +
@@ -62,7 +71,9 @@ PERUSERS="${PERUSERS:-root scott greg}"
 SUBSTITUTER="${SUBSTITUTER:-https://s3.solnix.io/solnix-cache}"
 TRUSTED_KEY="${TRUSTED_KEY:-cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk=}"
 
-export PATH="$NIXTOOLS/bin:/usr/sbin:/usr/bin:/usr/gnu/bin:/sbin:$PATH"
+# /usr/gnu/bin FIRST so `tar` resolves to GNU tar (the closure tar uses
+# `-T <file-list>` + symlink preservation, unsupported by illumos /usr/bin/tar).
+export PATH="$NIXTOOLS/bin:/usr/gnu/bin:/usr/bin:/usr/sbin:/sbin:$PATH"
 
 die() { echo "FATAL: $*" >&2; exit 1; }
 log() { printf '\n=== %s ===\n' "$*" >&2; }
@@ -103,9 +114,11 @@ if [ "$MODE" = stage ]; then
 
   # 2. tar the closure store paths (absolute, preserve perms + symlinks). GNU tar
   #    (/usr/gnu/bin) handles the -T file-list + symlink preservation the store
-  #    needs; illumos /usr/bin/tar does not take -T.
+  #    needs; illumos /usr/bin/tar does not take -T. Recurse each listed store
+  #    dir (no --no-recursion: GNU tar 1.35 applies --no-recursion to -T entries
+  #    too, which would archive only empty dir stubs).
   log "tarring closure -> $OUTDIR/closure.tar.gz"
-  ( cd / && tar --no-recursion -T <(sed 's,^/,,' "$OUTDIR/closure.list") -czpf "$OUTDIR/closure.tar.gz" ) \
+  ( cd / && tar -T <(sed 's,^/,,' "$OUTDIR/closure.list") -czpf "$OUTDIR/closure.tar.gz" ) \
     || die "closure tar failed"
 
   # 3. tar the /nix-tools nix runtime (binaries + runtime libs), so the target
@@ -151,7 +164,12 @@ fi
 log "target current-system = $CS"
 
 # 1. the /nix dataset (mounted /nix) on the target pool. Idempotent.
-if ! zfs list "$NIXDS" >/dev/null 2>&1; then
+# If /nix is already a populated store (Gate-A seeded it on the root dataset,
+# not a separate rpool/nix), reuse it in place: do NOT create/mount a dataset
+# over a non-empty /nix (zfs refuses, and we would shadow the existing store).
+if [ -d /nix/store ]; then
+  log "/nix/store already present — reusing existing /nix in place (no dataset create)"
+elif ! zfs list "$NIXDS" >/dev/null 2>&1; then
   log "creating $NIXDS (mountpoint /nix)"
   zfs create -o mountpoint=/nix -o compression=on "$NIXDS"
 else
@@ -160,10 +178,12 @@ fi
 mkdir -p /nix/store /nix/var/nix
 
 # 2. extract the closure + nix runtime into place (absolute paths in the tars).
-log "extracting closure.tar.gz -> /"
-( cd / && tar -xzpf "$OUTDIR/closure.tar.gz" ) || die "closure extract failed"
+# Use a GNU $TAR: the archive carries GNU @LongLink entries for long store
+# paths, which illumos /usr/bin/tar cannot extract.
+log "extracting closure.tar.gz -> / (tar=$TAR)"
+( cd / && "$TAR" -xzpf "$OUTDIR/closure.tar.gz" ) || die "closure extract failed"
 log "extracting nixtools.tar.gz -> /"
-( cd / && tar -xzpf "$OUTDIR/nixtools.tar.gz" ) || die "nixtools extract failed"
+( cd / && "$TAR" -xzpf "$OUTDIR/nixtools.tar.gz" ) || die "nixtools extract failed"
 [ -x "$NIXSTORE" ] || die "nix-store not present at $NIXSTORE after extract"
 
 # 3. register the store DB (the linchpin — a bare store copy is NOT a usable
@@ -212,7 +232,8 @@ chmod 0644 /etc/nix/nix.conf
 log "wiring login PATH (/run/current-system/sw/bin first)"
 mkdir -p /etc/profile.d
 if [ -f "$CS/etc/profile.d/solnix-env.sh" ]; then
-  cp -L "$CS/etc/profile.d/solnix-env.sh" /etc/profile.d/solnix-env.sh
+  cp -L "$CS/etc/profile.d/solnix-env.sh" /etc/profile.d/solnix-env.sh 2>/dev/null \
+    || cp "$CS/etc/profile.d/solnix-env.sh" /etc/profile.d/solnix-env.sh
 else
   cat > /etc/profile.d/solnix-env.sh <<'EOF'
 # solnix login environment (declarative). sw/bin first on PATH.
@@ -224,7 +245,9 @@ chmod 0644 /etc/profile.d/solnix-env.sh
 # belt-and-suspenders for shells that do not source /etc/profile.d/*: append a
 # guarded PATH line to each per-user ~/.profile (idempotent via a marker).
 for u in $PERUSERS; do
-  home="$(getent passwd "$u" 2>/dev/null | cut -d: -f6)"
+  # read home from /etc/passwd directly: a minimal illumos target may lack
+  # `getent`, and `home=$(getent ...)` under set -e would abort the script.
+  home="$(awk -F: -v u="$u" '$1==u{print $6}' /etc/passwd 2>/dev/null || true)"
   [ -n "$home" ] && [ -d "$home" ] || continue
   prof="$home/.profile"
   if ! grep -q '__SOLNIX_PATH' "$prof" 2>/dev/null; then
