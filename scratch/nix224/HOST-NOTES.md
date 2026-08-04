@@ -102,6 +102,49 @@ Target: x86_64-pc-solaris2.11 / x86_64-solaris
 - REMAINING: GATE 1b-PURE hello on the pure stdenv needs the forked nixpkgs
   (not on this fresh host); the structuredAttrs mechanism proof is the crux.
 
+### GATE 1b-PURE on Nix 2.24 — PASSED
+- Wired forked nixpkgs onto the 2.24 port host: nix-store --export/--import of
+  /nix/store/p3lfwcvh0vz6xc8wc1yhj2f8rg1flnb9-nixpkgs-patched (610M, valid DB)
+  from the primary; rsynced /root/solnix-pkgs (seed FOD) + fetchurl-shim.nix +
+  solaris-overlay.nix. Entry = plain tranche-224.nix (adapter DROPPED, no
+  structuredAttrsByDefault) = the tranche-entry-224.nix shape.
+- Pure stdenv bootstrap BUILT on 2.24: seed FOD (substituted) -> illumos-seed-
+  unpacked -> boot-0 (cc+bintools) -> boot-1 -> illumos final stdenv
+  (/nix/store/6ar9rqqzqh3fwbmzqssssbm9v6par22h-stdenv-illumos).
+- from-source hello (GNU hello 2.12.3, stdenv.mkDerivation) REALISES:
+  /nix/store/1324pg5kpdnmiyb1dfn487g36nh6640z-hello-2.12.3
+  - RUNS: bin/hello -> "Hello, world!"; --version -> "hello (GNU Hello) 2.12.3".
+  - deriver: /nix/store/p226pkc5js6bd5f7jr24iz34hy2996h4-hello-2.12.3.drv (1834B).
+  - ELF EM_AMD64 / ELFCLASS64 / ET_EXEC.
+  - HOST-FREE closure: nix-store -qR = 4 paths, ALL /nix/store (hello, gcc-
+    unwrapped, bootstrapLibs, illumos-seed-unpacked); 0 non-store refs; RUNPATH
+    store-only. NEEDED libc.so.1 resolves to system /lib/64 (illumos-native-libc
+    model, not a store artifact) — expected, like macOS libSystem.
+- __structuredAttrs ADAPTER CONFIRMED OUT of the eval path: grep -c
+  addAttrsToDerivation in the entry = 0. hello drv is structuredAttrs (__json);
+  cc-wrapper is classic (__structuredAttrs='') — BOTH build on 2.24, no adapter.
+- 2.24-SPECIFIC ROOT CAUSE (found + fixed): first bootstrap died at the cc-
+  wrapper/bintools/version-check-hook setup-hooks with literal @wrapperName@/
+  @suffixSalt@/@envCommand@ (`export: NIX_@wrapperName@_..._@suffixSalt@ not a
+  valid identifier`). Cause: the seed's gawk is NEEDED libmpfr.so.6, absent on
+  the fresh 2026 userland (present on the primary, which is why it built there).
+  stdenv setup.sh's substituteAll/_allFlags enumerates @var@ subs via
+  `awk 'BEGIN{for(v in ENVIRON)...}'`; a dead awk emits nothing -> placeholders
+  stay literal. FIX: `pkg install library/mpfr` on the host (stage0 seed-tool
+  host dep; final closure stays host-free). NOT a structuredAttrs issue.
+  Documented in tranche-entry-224.nix header.
+- PUBLISHED to cache.solnix.io (signed cache.solnix.io-1, nix copy to S3 via
+  oi-local-publish.sh after export->local): hello closure durable at origin
+  (all 4 narinfos + nar body 200, xz integrity OK); stdenv-illumos already
+  durable. hello narinfo on CDN still 404 (H28 negative-cache; heals on TTL).
+  arch-manifest.tsv updated with the hello path.
+- Note: the port host's Nix 2.24 has an illumos procfs quirk in findRuntimeRoots
+  (`read_symlink: Invalid argument [/proc/1/fd/0]`) that breaks nix-store
+  --delete/--query --roots/gc; worked around by direct sqlite ValidPaths+Refs
+  purge + rebuilding the target .drv directly (building a .drv directly
+  repopulates its invalid output; full-graph builds do NOT re-schedule a purged
+  intermediate whose consuming .drvs are already valid).
+
 ## HANDOFF (resume point for full cutover)
 DONE: host bootstrap; Nix 2.24.15 reproduced+working (build+profile+substitute);
 clean 5-patch series; from-source derivation (real .drv, RUNPATH-correct, CA

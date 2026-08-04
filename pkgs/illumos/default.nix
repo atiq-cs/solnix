@@ -380,8 +380,13 @@ let
   # (best-effort pname keying, last-wins on duplicate versions, eval forces a
   # substituter check for absent paths).
   cached = import ./cached.nix { system = "x86_64-solaris"; };
+
+  # starter (pkgs.solnix.starter.<pname>) — the FIRST declarative image's
+  # starter set, keyed off docs/registry/real-derivations.tsv (the proven,
+  # published, closure-complete real-derivation packages). See ./starter.nix.
+  starter = import ./starter.nix { system = "x86_64-solaris"; };
 in
 {
-  inherit gate libc rtld ld sys base-tools systemPath externalLibs nix cached;
+  inherit gate libc rtld ld sys base-tools systemPath externalLibs nix cached starter;
   inherit (toolchains) gcc14 clang gdb;
 }

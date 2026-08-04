@@ -506,7 +506,7 @@ Cloudflare->B2 read cache): upload to s3.solnix.io as before, wait for the
 drain, then `curl -sI https://cache.solnix.io/<hash>.narinfo` == 200.
 Cloudflare negative-caches early 404s, so poll with a cache-buster
 (`?x=$RANDOM`) after the drain. Trusted read pubkey is now
-`cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8=` (the old
+`cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk=` (the old
 `5HAV...` is superseded). So tranche 6's deliverable is **build + LOCAL verify
 (real .drv + host-free closure + runs on illumos) + upload + confirm durable at
 cache.solnix.io** -- `published` in the registry means confirmed-200 at

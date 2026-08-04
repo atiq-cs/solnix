@@ -30,6 +30,11 @@ artifacts/ami-build/
 
 # Debug-backfill scratch (candidate lists, recovered build recipes). Scratch only.
 artifacts/aa-debugbackfill1/
+artifacts/aa-debugbackfill3/
+artifacts/aa-debugbackfill4/
+artifacts/sparc-xbuild/debugbackfill1/
+artifacts/sparc-xbuild/debugbackfill2/
+artifacts/sparc-xbuild/debugbackfill3/
 
 # stray source tarballs dropped at repo root by local build agents (never content)
 /*.tar.gz

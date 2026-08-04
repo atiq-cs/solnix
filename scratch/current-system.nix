@@ -42,7 +42,7 @@ let
   # /etc/nix/nix.conf — cache.solnix.io substituter + key, single-user, no sandbox.
   nixConf = builtins.toFile "nix.conf" ''
     substituters = https://cache.solnix.io
-    trusted-public-keys = cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8=
+    trusted-public-keys = cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk=
     sandbox = false
     build-users-group =
     max-jobs = auto

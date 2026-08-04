@@ -14,7 +14,7 @@ for d in $deps; do
   [ -d "$d/lib" ] && { DEPL="$DEPL -L$d/lib"; DEPR="$DEPR -R$d/lib"; }
 done
 export CFLAGS="-m64 -fPIC -O2 -D__EXTENSIONS__ $DEPI ${EXTRA_CFLAGS:-}"
-export LDFLAGS="-m64 $DEPL $DEPR"
+export LDFLAGS="-m64 $DEPL $DEPR ${EXTRA_LDFLAGS:-}"
 export LD_LIBRARY_PATH="$GCC/lib/amd64:$GCC/lib:${LD_LIBRARY_PATH:-}"
 w=$(mktemp -d "/var/tmp/mk.$pname.XXXXXX"); tb="$w/s.tar"
 curl -fsSL -o "$tb" "$url" || { echo "RESULT	$pname	FAIL	download"; exit 1; }

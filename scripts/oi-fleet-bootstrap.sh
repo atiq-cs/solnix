@@ -29,20 +29,41 @@ zstd -d n.tar.zst -o n.tar && tar xf n.tar
 # the 2.24 tarball installs to /nix-tools224 (relocatable); its register script wires
 # the store DB. No LD_LIBRARY_PATH — the binaries are RUNPATH-correct.
 [ -f bootstrap-register.sh ] && sh ./bootstrap-register.sh >/dev/null 2>&1 || true
+# bootstrap-register.sh's `cp -Pf runtime-lib/*` copies nothing under illumos cp
+# (the -P flag semantics differ), leaving /nix-tools224/runtime-lib empty. Do the
+# copy directly with plain cp -f so the 39-lib runtime closure is in place.
+if [ -d /nix-tools224 ] && [ -d runtime-lib ]; then
+  mkdir -p /nix-tools224/runtime-lib
+  cp -f runtime-lib/* /nix-tools224/runtime-lib/ 2>/dev/null || true
+  [ -f ca-bundle.crt ] && cp -f ca-bundle.crt /nix-tools224/ca-bundle.crt 2>/dev/null || true
+fi
 NIXBIN=$(ls -d /nix-tools224/bin /nix-tools/bin 2>/dev/null | head -1)
+NIXROOT=${NIXBIN%/bin}
 mkdir -p /etc/profile.d /etc/nix
+# The transitive nix libs (libnixstore.so etc.) carry build-host RUNPATHs
+# (/usr/gcc/13, /usr/openssl/3, /var/tmp/libgit2-inst) not present on a bare
+# host, so LD_LIBRARY_PATH=runtime-lib is required despite the top binary's own
+# runtime-lib RUNPATH. (Bootstrap-tool concern only; final closures are host-free.)
 cat > /etc/profile.d/nix-illumos.sh <<EOF
 export PATH=${NIXBIN}:\$PATH
+export NIX_CONF_DIR=${NIXROOT}/etc/nix
+export LD_LIBRARY_PATH=${NIXROOT}/runtime-lib:${NIXROOT}/lib:${NIXROOT}/lib/amd64\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}
 EOF
+# ca-bundle lives at /nix-tools224/ca-bundle.crt (register script), fall back to
+# the etc/ssl path if present.
+SSLCERT=${NIXROOT}/ca-bundle.crt
+[ -f "$SSLCERT" ] || SSLCERT=${NIXROOT}/etc/ssl/certs/ca-bundle.crt
 cat > /etc/nix/nix.conf <<EOF
 substituters = https://cache.solnix.io https://cache.nixos.org
-trusted-public-keys = cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8= cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
-ssl-cert-file = ${NIXBIN%/bin}/etc/ssl/certs/ca-bundle.crt
+trusted-public-keys = cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk= cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
+ssl-cert-file = ${SSLCERT}
 sandbox = false
 build-users-group =
 builders-use-substitutes = true
 experimental-features = nix-command flakes
 EOF
+mkdir -p ${NIXROOT}/etc/nix && cp /etc/nix/nix.conf ${NIXROOT}/etc/nix/nix.conf
+/nix-tools224/bin/nix-store --init 2>/dev/null || true
 . /etc/profile.d/nix-illumos.sh
 echo "nix: $(nix --version 2>&1 | head -1); cache: $(curl -s -o /dev/null -w '%{http_code}' --max-time 10 https://cache.solnix.io/nix-cache-info)"
 REMOTE

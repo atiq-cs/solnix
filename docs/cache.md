@@ -13,7 +13,7 @@ binary cache. (T2.3.)
 | **S3 endpoint** | `https://s3.solnix.io` (S3-compatible, **not** AWS S3), region `us-east-1`, **path-style** |
 | **Substituter URL (consumers)** | `https://s3.solnix.io/solnix-cache` |
 | **Signing key** | `cache.solnix.io-1` |
-| **Public key** | `cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8=` |
+| **Public key** | `cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk=` |
 | **Secret key** | `secrets/cache-signing.yaml` (sops, repo age key) |
 | **S3 creds** | `secrets/s3-cache.yaml` (sops) — read in-shell, never written to disk |
 
@@ -137,7 +137,7 @@ only the public key trusted and `require-sigs` on:
 ```sh
 nix copy --from https://s3.solnix.io/solnix-cache \
   --to /tmp/freshstore \
-  --option trusted-public-keys 'cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8=' \
+  --option trusted-public-keys 'cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk=' \
   --option require-sigs true \
   /nix/store/b1q9mlpjpy9k31j0q6mjmc1h7l99ha2s-system-path
 ```
@@ -170,7 +170,7 @@ solnix uses the NixOS.org two-endpoint model:
     here permanently. This is the substituter consumers/AMIs read. Standard Nix binary-cache
     HTTP API (/nix-cache-info, /<hash>.narinfo, /nar/<file>.nar.xz), signed cache.solnix.io-1,
     anonymous read + signature verification.
-  - **Trusted read pubkey (current): cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8=**
+  - **Trusted read pubkey (current): cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk=**
     (the older 5HAV... key is superseded; verified 8UNrVA... realises with require-sigs).
 RULES: upload -> s3.solnix.io (unchanged); READ + durability-verify -> cache.solnix.io ONLY
 (never re-read the s3.solnix.io inbox to check durability). Narinfos carry a Torrent: field
@@ -223,7 +223,7 @@ The site team confirmed + resolved key items:
   build the patched-nixpkgs (+ any) closure on ONE host, `nix copy --to s3.solnix.io` (drains to
   durable cache), the other hosts SUBSTITUTE it instead of rebuilding. Every fleet host nix.conf:
     substituters = https://cache.solnix.io https://cache.nixos.org
-    trusted-public-keys = cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8= cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
+    trusted-public-keys = cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk= cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
     builders-use-substitutes = true
   This removes the per-host "rebuild nixpkgs-patched" waste (fleet A/C hit this).
 - **Fork distribution — Option B (RECOMMENDED, no git access): a locked flake.lock.** Resolve the
@@ -235,3 +235,16 @@ The site team confirmed + resolved key items:
   gateway / SNAT / route / DNS on the fleet CIDR. cache.solnix.io reaches fine (200) so we can
   make full progress via the cache while fixing routing. Then optionally add the OI host as a Nix
   remote builder (/etc/nix/machines).
+
+## ⚠️ TRUSTED KEY CORRECTION (verified 2026-08-04): the read key is 5HAV..., NOT 8UNrVA...
+An earlier site-team handoff doc stated cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8=
+as the trusted read key. That was WRONG. DEFINITIVE test (nix-store --realise --require-sigs into a
+FRESH empty store, isolated per key):
+  8UNrVA... -> "not signed by any of the keys" -> FAIL (rc=1)
+  5HAV...   -> realises cleanly -> PASS (rc=0)
+The correct, LIVE trusted read key (matches the signing secret) is:
+  cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk=
+All nix.conf / trusted-public-keys in config, scripts, images, and the bootstrap MUST use 5HAV...
+(8UNrVA... was propagated briefly from the handoff doc + reverted everywhere). Consumers on 8UNrVA
+reject the cache. If the site team intends to rotate to 8UNrVA, they must re-sign the objects with
+its private key first; until then 5HAV is authoritative (empirically verified).

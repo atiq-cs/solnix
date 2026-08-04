@@ -2,23 +2,41 @@
   "nodes": {
     "nixpkgs": {
       "locked": {
-        "lastModified": 1784796856,
-        "narHash": "sha256-wWFrV5/Qbm+lyt5x20E/bSbfJiGKMo4RCxZV8cl/WZI=",
+        "lastModified": 1784905249,
+        "narHash": "sha256-1qcuoASnpgjW0DmxwgZupT+uHUhRMlSasBSeYaTRfmU=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "e2587caef70cea85dd97d7daab492899902dbf5d",
+        "rev": "7f81d69cbd67048635c5d30cd2649e4d018976bc",
         "type": "github"
       },
       "original": {
         "owner": "NixOS",
-        "ref": "nixos-unstable",
         "repo": "nixpkgs",
+        "rev": "7f81d69cbd67048635c5d30cd2649e4d018976bc",
         "type": "github"
       }
     },
     "root": {
       "inputs": {
+        "solnix-pkgs": "solnix-pkgs"
+      }
+    },
+    "solnix-pkgs": {
+      "inputs": {
         "nixpkgs": "nixpkgs"
+      },
+      "locked": {
+        "lastModified": 1785164539,
+        "narHash": "sha256-viYt3eJGsJyFIe0eyLuWLPaa5GlpKdzqoY3STAPfkIk=",
+        "ref": "refs/heads/main",
+        "rev": "c73f24aed0027d74c7161e21314e585ac1ab5d34",
+        "revCount": 6,
+        "type": "git",
+        "url": "file:///home/gburd/ws/solnix-pkgs"
+      },
+      "original": {
+        "type": "git",
+        "url": "file:///home/gburd/ws/solnix-pkgs"
       }
     }
   },

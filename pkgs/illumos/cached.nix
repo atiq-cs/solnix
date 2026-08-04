@@ -36,7 +36,7 @@
 #          sets cache.solnix.io as a substituter, so evaluating the real system
 #          works; a bare `nix eval` needs
 #          `--option substituters https://cache.solnix.io
-#           --option trusted-public-keys cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8=`.
+#           --option trusted-public-keys cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk=`.
 #  (d) pname keying is BEST-EFFORT via builtins.parseDrvName (the same splitter
 #      Nix itself uses: cut at the first "-" followed by a digit). Odd names
 #      (git-tagged "v0.x", "master", date stamps) land a slightly-off key; the

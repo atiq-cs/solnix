@@ -284,9 +284,12 @@ rm -f "$RDROOT/usr/bin/ksh" 2>/dev/null; ln -s ksh93 "$RDROOT/usr/bin/ksh" 2>/de
 # package); /usr/bin/{vi,ex,view} link to nvi. This replaces the old vi->vim
 # symlink (which dangled whenever vim was absent).
 #   NOTE: nvi requires real BSD DB 1.85 (the db1 package) to actually EDIT — the
-#   db5-compat layer is not a drop-in. Until db1 lands, nvi is NOT staged as the
-#   default vi; vi/ex/view fall back to the native /usr/has/bin/vi (which works).
-#   Once db1 lands + nvi's edit passes, nvi becomes the staged default (first branch).
+#   db5-compat layer is not a drop-in (its 1-based RECNO rejects nvi's record-0
+#   append). db1 has landed and nvi is rebuilt against it; the nvi package's
+#   postInstall runs an edit smoke test and, on success, drops bin/nvi-edits-ok.
+#   This gate keys on that marker: nvi becomes the default vi/ex/view only when
+#   the marker is present (a WORKING nvi); otherwise vi/ex/view fall back to the
+#   native /usr/has/bin/vi.
 # So: if a WORKING nvi is present, point vi/ex/view at it; else the native vi. nano
 # is a real bin. (vim, if staged, remains available as `vim` but is NOT what vi is.)
 if [ -e "$RDROOT/usr/bin/nvi" ] && [ -e "$RDROOT/usr/bin/nvi-edits-ok" ]; then

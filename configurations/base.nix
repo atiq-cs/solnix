@@ -163,7 +163,7 @@
   # permanently at cache.solnix.io. Consumers read cache.solnix.io ONLY.
   nix.settings.substituters = [ "https://cache.solnix.io" "https://cache.nixos.org" ];
   nix.settings.trusted-public-keys = [
-    "cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8="
+    "cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk="
     "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
   ];
 }

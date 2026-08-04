@@ -90,7 +90,7 @@ in
         # cache.solnix.io = the durable public read cache (Cloudflare -> B2), NixOS-style.
         # Uploads go to the transient s3.solnix.io inbox; the b2-mirror reconciler drains
         # it to B2. Consumers read cache.solnix.io ONLY (never the s3.solnix.io inbox).
-        "cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8="
+        "cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk="
         "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
       ];
       sandbox = lib.mkDefault false;         # illumos has no Linux namespaces.

@@ -69,7 +69,7 @@ PERUSERS="${PERUSERS:-root scott greg}"
 # Images therefore point nix at the origin to avoid the transient 404 on a hash
 # published moments before boot. cache.solnix.io still works for aged content.
 SUBSTITUTER="${SUBSTITUTER:-https://s3.solnix.io/solnix-cache}"
-TRUSTED_KEY="${TRUSTED_KEY:-cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8=}"
+TRUSTED_KEY="${TRUSTED_KEY:-cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk=}"
 
 # /usr/gnu/bin FIRST so `tar` resolves to GNU tar (the closure tar uses
 # `-T <file-list>` + symlink preservation, unsupported by illumos /usr/bin/tar).
