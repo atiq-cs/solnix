@@ -33,7 +33,7 @@ IP="${SOLNIX_BUILD_IP:-$(aws ec2 describe-instances --profile numa --region us-e
 [ -n "$IP" ] && [ "$IP" != "None" ] || { echo "FATAL: no running solnix-build host" >&2; exit 1; }
 echo "illumos build host: $IP"
 
-HOST_NIX='export PATH=/nix-tools/bin:/usr/gnu/bin:/usr/bin:/usr/sbin:$PATH; export NIX_CONF_DIR=/nix-tools/etc/nix;'
+HOST_NIX='. /etc/profile.d/nix-illumos.sh 2>/dev/null; export PATH=/nix-tools/bin:/usr/gnu/bin:/usr/bin:/usr/sbin:$PATH; export NIX_CONF_DIR=/nix-tools/etc/nix;'
 
 # --- default publish set (resolved to VALID built paths on the host) -------
 # The bootable world is the illumos-system-path closure; the seed is the gate
