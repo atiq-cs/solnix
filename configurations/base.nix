@@ -35,8 +35,11 @@
   # (real-derivations row is a 1.0 placeholder, NAR absent from cache), less,
   # vim, curl, htop, git. Add them here once they land as published real
   # derivations in real-derivations.tsv.
+  #
+  # Editor: nvi (github.com/lichray/nvi2) is solnix's default vi — small, C++,
+  # wide-char, no vim dependency; /usr/bin/{vi,ex,view} link to nvi.
   environment.systemPackages = with pkgs.solnix.starter; [
-    coreutils file gnugrep gnused bzip2 xz zlib pcre2
+    coreutils file gnugrep gnused bzip2 xz zlib pcre2 nvi
   ];
 
   # Declarative networking (T2.9): the primary NIC via DHCP. This GENERATES the

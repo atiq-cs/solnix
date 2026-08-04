@@ -279,15 +279,16 @@ rm -f "$RDROOT/usr/bin/ksh" 2>/dev/null; ln -s ksh93 "$RDROOT/usr/bin/ksh" 2>/de
 # /bin -> usr/bin (illumos convention; /etc/profile + method scripts use /bin/*).
 [ -e "$RDROOT/bin" ] || ln -s usr/bin "$RDROOT/bin" 2>/dev/null || true
 
-# EDITORS: /usr/bin/{vi,ex,view} ship as symlinks to `vim`. The curated copy
-# now stages vim, but if vim failed to come through (or on a stripped source),
-# a bare `vi` symlink dangles (the exact bug: `vi` -> vim, vim absent). Ensure
-# vi resolves: if vim is present keep the link; else repoint vi/ex/view at the
-# real standalone /usr/has/bin/vi (nvi-derived, no vim dep). nano is a real bin.
-if [ ! -e "$RDROOT/usr/bin/vim" ]; then
-  if [ -e "$RDROOT/usr/has/bin/vi" ]; then
-    for _e in vi ex view; do rm -f "$RDROOT/usr/bin/$_e"; ln -s ../has/bin/vi "$RDROOT/usr/bin/$_e" 2>/dev/null || true; done
-  fi
+# EDITORS: solnix's default vi is nvi (github.com/lichray/nvi2) — a small, C++,
+# wide-char nvi with NO vim dependency. It's staged as usr/bin/nvi (from the nvi
+# package); /usr/bin/{vi,ex,view} link to nvi. This replaces the old vi->vim
+# symlink (which dangled whenever vim was absent). If nvi is present, point
+# vi/ex/view at it; else fall back to the standalone /usr/has/bin/vi. nano is a
+# real bin. (vim, if staged, remains available as `vim` but is NOT what vi is.)
+if [ -e "$RDROOT/usr/bin/nvi" ]; then
+  for _e in vi ex view; do rm -f "$RDROOT/usr/bin/$_e"; ln -s nvi "$RDROOT/usr/bin/$_e" 2>/dev/null || true; done
+elif [ -e "$RDROOT/usr/has/bin/vi" ]; then
+  for _e in vi ex view; do rm -f "$RDROOT/usr/bin/$_e"; ln -s ../has/bin/vi "$RDROOT/usr/bin/$_e" 2>/dev/null || true; done
 fi
 # `file` ships as /usr/bin/file -> ../has/bin/file (AST file(1) + /etc/magic db).
 # The curated copy now stages usr/has/bin/file + etc/magic; ensure the link
@@ -535,6 +536,58 @@ log "installing solnix-install + standard svc.startd boot"
 mkdir -p "$RDROOT/usr/sbin"
 cp "$INSTALLER" "$RDROOT/usr/sbin/solnix-install"
 chmod 0555 "$RDROOT/usr/sbin/solnix-install"
+
+# 4-DECL. DECLARATIVE-Nix installed system (CS=<current-system store path>).
+#   When CS is set, bake the current-system closure into the live ramdisk
+#   /nix/store + wire /run-current-system -> CS + the default profile + nix.conf.
+#   solnix-install (run from the live env) then finds a real toplevel with an
+#   activate/ + sw/, so it takes the DECLARATIVE install path (NOT SELF-INSTALL):
+#   the INSTALLED disk gets sw (userland+nix) + /etc/nix/nix.conf pointing at
+#   cache.solnix.io, i.e. a nix-operational build-host baseline. The closure is
+#   small (16 paths, ~250MB on UFS) so the ramdisk stays within RD_MB.
+#   CLOSURE_LIST (one store path/line) is authoritative if given; else the CS's
+#   own closure is walked on the build host via nix-store -qR.
+CS="${CS:-}"
+if [ -n "$CS" ]; then
+  [ -d "$CS" ] || die "CS=$CS not a directory (current-system store path)"
+  [ -e "$CS/sw" ] || die "$CS has no sw/ (not a solnix current-system)"
+  log "DECLARATIVE: baking current-system closure into live /nix/store ($CS)"
+  mkdir -p "$RDROOT/nix/store" "$RDROOT/nix/var/nix/profiles"
+  _clist="${CLOSURE_LIST:-}"
+  if [ -z "$_clist" ] || [ ! -s "$_clist" ]; then
+    _clist=/tmp/solnix-cs-closure.list
+    if command -v nix-store >/dev/null 2>&1; then
+      nix-store -qR "$CS" | sort -u > "$_clist"
+    else
+      echo "WARN: no nix-store on PATH + no CLOSURE_LIST; copying CS dir only (closure may be incomplete)" >&2
+      echo "$CS" > "$_clist"
+    fi
+  fi
+  _ncs=0
+  while read -r _p; do
+    [ -n "$_p" ] || continue
+    [ -e "$_p" ] || { echo "WARN: closure path missing on host: $_p" >&2; continue; }
+    ( cd / && tar -cf - "${_p#/}" ) | ( cd "$RDROOT" && tar -xf - ) 2>/dev/null && _ncs=$((_ncs+1)) \
+      || echo "WARN: copy $_p into ramdisk had errors" >&2
+  done < "$_clist"
+  log "DECLARATIVE: copied $_ncs store paths into live /nix/store"
+  # wire the toplevel so solnix-install's default-toplevel lookup resolves it
+  # (it reads /run-current-system) and takes the non-SELF-INSTALL path.
+  rm -f "$RDROOT/run-current-system" "$RDROOT/run/current-system" 2>/dev/null || true
+  ln -s "$CS" "$RDROOT/run-current-system"
+  mkdir -p "$RDROOT/run"; ln -s "$CS" "$RDROOT/run/current-system" 2>/dev/null || true
+  rm -f "$RDROOT/nix/var/nix/profiles/default"
+  ln -s "$CS/sw" "$RDROOT/nix/var/nix/profiles/default"
+  # nix.conf for the LIVE env too (so nix works in the installer shell); the
+  # INSTALLED system gets its own copy from $CS/etc/nix/nix.conf via solnix-install.
+  mkdir -p "$RDROOT/etc/nix"
+  [ -f "$CS/etc/nix/nix.conf" ] && cp -L "$CS/etc/nix/nix.conf" "$RDROOT/etc/nix/nix.conf" 2>/dev/null || true
+  # store DB dump so the installed system + the live env register the closure
+  # VALID (solnix-install stages this as /nix/.solnix-registration for first boot).
+  if command -v nix-store >/dev/null 2>&1; then
+    nix-store --dump-db "$CS" > "$RDROOT/nix/.solnix-registration" 2>/dev/null || true
+  fi
+fi
 
 # 4a. KEEP the real /sbin/init (the svc.startd launcher copied with sbin/). Do
 #     NOT replace it with a bare shell. If a stale re-run left our old bare-shell

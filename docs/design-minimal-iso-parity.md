@@ -89,3 +89,10 @@ parity is largely already there; the gap is the portable net-new list in §4.
 3. Fold both into `configurations/base.nix` `environment.systemPackages` (the minimal
    profile) alongside the build-host baseline (docs/design-minimal-build-host.md).
 4. Applies to AMI + ISO + IMG, x86_64 first, then per-arch as each reaches parity.
+
+## Default editor (update): vi = nvi (github.com/lichray/nvi2)
+solnix's default `vi` is **nvi** (lichray/nvi2 — modernized Berkeley nvi: small, C++,
+wide-char, NO vim dependency), packaged as `nvi`. `/usr/bin/{vi,ex,view}` link to `nvi`
+(NOT vim — that avoids the dangling vi->vim symlink class + keeps the base small). vim
+remains available as a separately-installable package (`vim`) but is not the default vi.
+Wired: pkgs/illumos/nvi2.nix, base.nix systemPackages, oi-make-livecd.sh vi/ex/view links.
