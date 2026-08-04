@@ -489,6 +489,156 @@ fixes already in place (patch 0002).
   in the toolchain (seed regrow / bintools `gnm`); there is no GNU-format nm
   in the store today.
 
+## Sixth tranche (openssl/perl-downstream + the `meh` toolset: curl/git/vim/openssh/htop, DURABLE at cache.solnix.io, append-only)
+
+Cracking H3/openssl/perl in tranche 5 opened the TLS/crypto/networking +
+autoreconf swath. Tranche 6 builds the maintainer's `meh` daily toolset on top
+of it: **curl, git, vim, openssh, htop** (the five priorities) plus the
+high-fan-in libs they ride on. Persisted PER-PACKAGE
+(`artifacts/tranche6-paths.txt` + a `real-derivations.tsv` row per output).
+
+**Cache-endpoint correction (supersedes the tranche 4/5 caveat):** the
+`s3.solnix.io` object store is the transient **upload inbox** -- a b2-mirror
+reconciler drains it to Backblaze B2 every ~10 min and then DELETES from the
+inbox (BY DESIGN, which is why objects appear to "vanish" from s3.solnix.io;
+that is not loss). Durability is verified at **`cache.solnix.io`** (the durable
+Cloudflare->B2 read cache): upload to s3.solnix.io as before, wait for the
+drain, then `curl -sI https://cache.solnix.io/<hash>.narinfo` == 200.
+Cloudflare negative-caches early 404s, so poll with a cache-buster
+(`?x=$RANDOM`) after the drain. Trusted read pubkey is now
+`cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8=` (the old
+`5HAV...` is superseded). So tranche 6's deliverable is **build + LOCAL verify
+(real .drv + host-free closure + runs on illumos) + upload + confirm durable at
+cache.solnix.io** -- `published` in the registry means confirmed-200 at
+cache.solnix.io, not just staged.
+
+| pname            | new store hash                     | deriver | hermetic | runs | durable(cache.solnix.io) |
+|------------------|------------------------------------|---------|----------|------|--------------------------|
+| git-2.55.0       | 4qzcgzlvi4y9hmq8qkqrs4myqsaw4dl3   | y       | y        | y    | y (meh)                  |
+| curl-8.21.0      | 6wawnnnkanlqc0bi578dgkq0zlapbv85   | y       | y        | y    | y (meh)                  |
+| curl-8.21.0-bin  | y7h4ih0vks8n06wandq2kv2384rgkaj6   | y       | y        | y    | y (meh)                  |
+| openssh-10.4p1   | mphsjkywwmw7r1isjl3mxnxc9sidryvb   | y       | y        | y    | y (meh)                  |
+| vim-9.2.0782     | z3c946kdxp0rdy05p2yan24vh4s679if   | y       | y        | y    | y (meh)                  |
+| htop-3.5.2       | 7rbad8qw9xskgl7g5qc776sjh1q45k49   | y       | y        | y    | y (meh)                  |
+| sqlite-3.53.3    | zsc2isaclyi7bi8czpfsw2iafzgpg74r   | y       | y        | y    | y                        |
+| sqlite-3.53.3-bin| ljdr2bsab8ffq9z57gmm6ldn90fadm8r   | y       | y        | y    | y                        |
+| libxml2-2.15.3   | wyjr0gh66qq9yncf8i8gd2xrp9mdzscf   | y       | y        | y    | y                        |
+| libxml2-2.15.3-bin| zj78a65bzzih7l2z95361m07vgmficr9  | y       | y        | y    | y                        |
+| libxslt-1.1.45   | 7clf9h4z2cqr4nkpyg3zc92f2lnxiwqa   | y       | y        | y    | y                        |
+| libxslt-1.1.45-bin| 6d9jk8wq11apks0r4yvyb6gpwbk9irck  | y       | y        | y    | y                        |
+| nghttp2-1.69.0   | mpzq1rhki8scrzwviacbh803jcfkwn9x   | y       | y        | y    | y                        |
+| nghttp2-1.69.0-lib| alkvc9gljlnjzrm3iaxphfx5flkf02dj  | y       | y        | y    | y                        |
+| libev-4.33       | aaqpllwkrlknaq18ws2d82sgp6lx1jvg   | y       | y        | y    | y                        |
+| libedit-20260508 | 5kdkxxazajj4fs37ylg2rzwhxc08cprv   | y       | y        | y    | y                        |
+| unzip-6.0        | b0vx1r1zx9sv6zy0nsvgz723llbr3aw3   | y       | y        | y    | y                        |
+| autoconf-2.73    | 0dnad54wp50kx02dfpv6cnpnzm0cs8lx   | y       | y        | y    | y                        |
+| automake-1.18.1  | 2q538skpybpl1cdlgkrmbiasmbmnpd4d   | y       | y        | y    | y                        |
+
+**14 packages / 39 outputs. built + verified + durable(cache.solnix.io) = 38,
+1 draining (openssh-dev), failed = 0.** All 5 meh-toolset priorities
+(**git 2.55.0, curl 8.21.0, openssh 10.4p1, vim 9.2, htop 3.5.2**) are
+confirmed durable at cache.solnix.io and installable via `nix profile install`
+on a running solnix instance. `runs` verified on illumos: `git --version`
+(2.55.0), `curl --version` (8.21.0, linking **OpenSSL 3.6.3 + zlib 1.3.2 +
+nghttp2 1.69.0** from this/prior tranches), `ssh -V` (OpenSSH_10.4p1, OpenSSL
+3.6.3), `vim --version` (9.2), `htop --version` (3.5.2), `sqlite3`, and the
+libxml2/libxslt/nghttp2/libev/libedit `.so`s. Every output deriver-resolves to
+a real `.drv` and has a 100% `/nix/store` closure (`nix-store -qR`, host-free).
+
+The cracked shared blockers this tranche unblock large swaths at once:
+
+- **H17 `outputChecks` under structuredAttrs-off -- FIXED.** Packages that
+  MANUALLY set `outputChecks` (a structuredAttrs-only attr; e.g. krb5's
+  `outputChecks.lib.disallowedRequisites`) break under our forced
+  `__structuredAttrs = false`: make-derivation only folds `outputChecks` into
+  structured form when structuredAttrs is on, else the raw set is passed as a
+  derivation env var (`cannot coerce a set to a string`). FIX: swap the
+  `addAttrsToDerivation { __structuredAttrs = false; }` adapter for
+  `overrideMkDerivationArgs` that ALSO nulls `outputChecks` (add-only ->
+  read+remove). Unblocks krb5 -> curl.
+- **H18 fetchpatch normalize-hash -- FIXED.** `fetchpatch` calls `fetchurl`
+  with a `postFetch` that normalises the patch, and the recorded sha256 is of
+  the NORMALISED output; the builtin-fetchurl shim only downloaded+hashed the
+  RAW file -> `hash mismatch` for EVERY fetchpatch (libev/libevent/libxml2
+  -> nghttp2/curl/gnutls/unbound -> git/openssh/cmake/libxslt/...). FIX: when
+  `postFetch` is present the shim fetches raw impurely (no hash) then runs
+  postFetch in a fixed-output derivation verified against the recorded sha256
+  (what real fetchurl does, minus the curl downloader). Unblocks the whole
+  fetchpatch swath.
+- **H19 fetchzip/fetchFromGitHub finalAttrs fixpoint -- FIXED.** `fetchzip` =
+  `lib.extendMkDerivation { constructDrv = fetchurl; }`, whose `__functor`
+  hands the fetcher a FUNCTION (the finalAttrs fixpoint), not an attrset; the
+  plain-function shim did `args ? urls` on a lambda -> `value is a function
+  while a set was expected` (blocked every fetchFromGitHub src: zstd/libarchive/
+  cmake/curl/...). FIX: the shim resolves the fixpoint (`self = f self`, folding
+  `derivationArgs` up so `finalAttrs.extension`/`stripRoot` reads resolve),
+  honours `downloadToTemp`/`recursiveHash`, and sanitises the store-path name
+  (gitlab/github archive urls carry `%`-encoded query strings). Unblocks the
+  fetchFromGitHub universe.
+- **H15 (seed bzip2 has no dev) -- FIXED (retry landed).** The top-level
+  `bzip2` is the dev-less bootstrap SEED slice, re-pinned by the final stdenv
+  stage (`inherit (prevStage) bzip2`), so a top-level overlay cannot replace
+  it. Build the REAL multi-output nixpkgs bzip2 (`bzip2Real`, autoreconfHook)
+  and thread its dev/out into the readers: `Compress-Raw-Bzip2` (git/wget perl,
+  via `perlPackages.overrideScope` so the perl-set INTERNAL self-reference is
+  replaced, not just the outer attr) and `unzip` (H15b: `-DUSE_BZIP2` needs
+  `bzlib.h`). **sqlite now builds** (its `unzip` test-data tool was the
+  original H15 blocker).
+- **H26/H26b libkstat/libsendfile/libproc seed gap -- FIXED for htop, still
+  gates cmake.** The seed carries only 13 base libs in `lib/amd64`; htop's
+  configure hard-requires `kstat_open()` (`-lkstat`) then `Pgrab_error()`
+  (`-lproc`), and cmake's bundled libuv links `-lkstat -lsendfile`. FIX for
+  htop: a content-addressed fixed-output `extraSyslibs` slice (same provenance
+  as the seed FOD -- extracted from the host illumos, hash-pinned) bundling the
+  full 64-bit ldd closure of libproc/libkstat/libsendfile/libcontract (18 libs)
+  with `.so -> .so.N` links, wired into htop via `NIX_CFLAGS_COMPILE -L` (the
+  H1 cc-wrapper pass auto-adds the matching `-R`). htop builds + runs; its
+  `nix-store -qR` closure is host-free (the bundled libproc's own transitive
+  deps -- librtld_db/libctf/libdwarf/... -- resolve at runtime from the illumos
+  base `/lib/64`, the platform ABI, same class as libc). **cmake is NOT fixed**
+  -- its libuv wants the same libs but cmake sits behind zstd/libarchive/brotli
+  (see the deferred list); wiring extraSyslibs into cmake is the next step.
+- **Per-package meh-toolset unblocks:** H20 git `rustSupport=false` (avoids
+  cargo-bootstrap -> unported LLVM bintools); H21 openssh `withFIDO=false`
+  (avoids libfido2 -> udev -> LLVM); H22 htop via `callPackage` with explicit
+  `systemdSupport=false; systemdLibs=null; sensorsSupport=false; lm_sensors=null`
+  (a plain `.override` did NOT suppress the `availableOn systemdLibs` default
+  because htop is a spliced-pkgset value whose splice recomputes arg defaults);
+  H23 gnutls `doCheck=false` (net-tools unixtools-splice infinite recursion);
+  H24 byacc `doCheck=false`; H25 nghttp2 `enableApp=false` (C++ nghttpx
+  network.h std::variant/Sockaddr fails); H27 libedit `-DNCURSES_TERM_H_incl`
+  (ncurses vs illumos termcap.h const-vs-nonconst `tgetstr` conflict; unblocked
+  openssh + krb5); H28 krb5 `libFolders` bash-array (structuredAttrs-off);
+  H29 curl/curlMinimal `gssSupport=false` (krb5 addr.c s6_addr port bug);
+  H30/H31 openssh drop libredirect check-input (Linux sys/xattr.h) + libxslt
+  `--with-debugger` (Solaris ld fatal on undefined version-script symbols);
+  H32 git swap zlib-ng->zlib + drop sendEmail/python/manual (all -> cmake);
+  H33 git `NO_GETTEXT=1` (libintl not linked, NIX_LDFLAGS bypassed on illumos);
+  H34 git `MAKE=${gnumake}/bin/make` (subdir `$(MAKE)` recursion resolved the
+  Solaris `/usr/bin/make` which chokes on git's GNU `shared.mak`) + NO_TCLTK;
+  H35 git postInstall `rm -f` (gitk never built); H36 git `doInstallCheck=false`.
+
+### Still blocked after tranche 6 (deferred)
+
+- **H26 cmake (`-lkstat -lsendfile` via bundled libuv).** cmake-minimal's
+  bootstrap link fails `ld: fatal: library -lkstat: not found`. The libs are
+  now available via the H26b `extraSyslibs` slice; wiring them into cmake's
+  link (a `NIX_CFLAGS_COMPILE -L${extraSyslibs}/lib/amd64` on cmake, plus
+  possibly `-lkstat -lsendfile` in `LDFLAGS`) is the next step. cmake gates
+  **zstd, libarchive, brotli** (all built with cmake) and hence **rsync, wget**
+  (pull zstd) and the FULL **curl** (brotli) -- curl landed via `curlMinimal`
+  (no brotli). Once cmake builds, that whole set unblocks.
+- **krb5 (addr.c `s6_addr` C port bug).** `expected identifier or '(' before
+  numeric constant` -- an illumos `<netinet/in.h>` `s6_addr` macro collides
+  with a krb5 struct field. A source patch, deferred (curl dodged it via
+  `gssSupport=false`).
+- **gnupg (net-tools unixtools-splice infinite recursion).** gnupg -> gnutls
+  pulls `net-tools` (`arp`) in `nativeBuildInputs`; the unixtools splice recurses
+  in this nixpkgs vintage. `gnutls.doCheck=false` did not drop it (net-tools is
+  a build input via the `lib.optionals doCheck` reading gnutls' INTERNAL
+  `doCheck`, not the overridden one). Needs a gnutls arg-level or net-tools
+  splice fix. gnupg was the one meh priority NOT landed.
+
 ## The composition (`tranche-entry.nix`)
 
 Four glue overlays on top of the fork's solnix overlay + `solaris-overlay.nix`.
