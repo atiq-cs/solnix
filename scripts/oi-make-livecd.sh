@@ -581,11 +581,35 @@ if [ -n "$CS" ]; then
   # nix.conf for the LIVE env too (so nix works in the installer shell); the
   # INSTALLED system gets its own copy from $CS/etc/nix/nix.conf via solnix-install.
   mkdir -p "$RDROOT/etc/nix"
-  [ -f "$CS/etc/nix/nix.conf" ] && cp -L "$CS/etc/nix/nix.conf" "$RDROOT/etc/nix/nix.conf" 2>/dev/null || true
-  # store DB dump so the installed system + the live env register the closure
-  # VALID (solnix-install stages this as /nix/.solnix-registration for first boot).
+  if [ -f "$CS/etc/nix/nix.conf" ]; then
+    cp -L "$CS/etc/nix/nix.conf" "$RDROOT/etc/nix/nix.conf" 2>/dev/null \
+      || cp "$CS/etc/nix/nix.conf" "$RDROOT/etc/nix/nix.conf" 2>/dev/null || true
+  fi
+  # FULL-CLOSURE store DB dump (NOT just the toplevel): --load-db needs every
+  # referenced path registered or first boot fails 'path <dep> is not valid'.
+  # solnix-install re-dumps this for the installed BE; the live copy lets the
+  # live env register the closure too.
   if command -v nix-store >/dev/null 2>&1; then
-    nix-store --dump-db "$CS" > "$RDROOT/nix/.solnix-registration" 2>/dev/null || true
+    nix-store --dump-db $(nix-store -qR "$CS") > "$RDROOT/nix/.solnix-registration" 2>/dev/null \
+      || nix-store --dump-db "$CS" > "$RDROOT/nix/.solnix-registration" 2>/dev/null || true
+  fi
+  # maintainer directive: managed coreadm policy + no cores in the live ramdisk.
+  if [ -f "$(dirname "$0")/lib-core-scrub.sh" ]; then
+    . "$(dirname "$0")/lib-core-scrub.sh"; scrub_cores "$RDROOT" || true
+  else
+    mkdir -p "$RDROOT/var/cores"; chmod 1777 "$RDROOT/var/cores" 2>/dev/null || true
+    cat > "$RDROOT/etc/coreadm.conf" <<'CADM'
+COREADM_GLOB_PATTERN=/var/cores/core.%f.%p.%t
+COREADM_GLOB_CONTENT=default
+COREADM_INIT_PATTERN=/var/cores/core.%f.%p.%t
+COREADM_INIT_CONTENT=default
+COREADM_GLOB_ENABLED=yes
+COREADM_PROC_ENABLED=no
+COREADM_GLOB_SETID_ENABLED=no
+COREADM_PROC_SETID_ENABLED=no
+COREADM_GLOB_LOG_ENABLED=yes
+CADM
+    find "$RDROOT" \( -name 'core' -o -name 'core.[0-9]*' \) -type f -delete 2>/dev/null || true
   fi
 fi
 
@@ -1429,6 +1453,13 @@ log "finalizing ramdisk"
 # stale init.state -> no SIGKILL restart loop. (This is the real fix; the early
 # purge alone was insufficient because pre-import repopulates it.)
 rm -rf "$RDROOT"/etc/svc/volatile/* "$RDROOT"/etc/svc/volatile/.[!.]* 2>/dev/null || true
+# maintainer directive: FINAL core scrub right before gzip (the 4f pre-import can
+# crash a helper + leave a core). Delete any stray core; the coreadm policy was
+# already written in the DECLARATIVE block (or here if no CS).
+find "$RDROOT" \( -name 'core' -o -name 'core.[0-9]*' \) -type f 2>/dev/null | while read -r _c; do
+  file "$_c" 2>/dev/null | grep -qi 'core file' && rm -f "$_c" && echo "  scrubbed core: ${_c#$RDROOT}" >&2 || true
+done
+[ -f "$RDROOT/etc/coreadm.conf" ] || { mkdir -p "$RDROOT/var/cores"; chmod 1777 "$RDROOT/var/cores" 2>/dev/null; printf 'COREADM_GLOB_PATTERN=/var/cores/core.%%f.%%p.%%t\nCOREADM_GLOB_ENABLED=yes\nCOREADM_PROC_ENABLED=no\n' > "$RDROOT/etc/coreadm.conf"; }
 df -k "$RDROOT" 2>/dev/null | awk 'NR==2{print "live root: "$3"KB used / "$2"KB total"}' >&2
 sync
 umount "$RDROOT" || die "umount ramdisk failed"

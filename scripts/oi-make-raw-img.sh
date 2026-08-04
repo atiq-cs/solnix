@@ -64,8 +64,14 @@ trap cleanup EXIT INT TERM
 # So we scrub by re-importing the pool read-write, scrubbing the BE root, re-export.
 
 log "running solnix-install $TARGET  (pool=$POOL, CS=$CS)"
-SOLNIX_POOL="$POOL" SOLNIX_ALLOW_RPOOL="" \
-  "$INSTALLER" "$TARGET" "$CS" 2>&1 | tail -40 || die "solnix-install failed"
+# Pass the host nix-store so solnix-install copies the closure the FAST way
+# (nix-store -qR), not the O(closure*filesize) fixpoint content scan. Its
+# runtime libs are on LD_LIBRARY_PATH (exported above); export both so the
+# child /sbin/sh env keeps them.
+export SOLNIX_NIXSTORE="${SOLNIX_NIXSTORE:-/nix-tools/bin/nix-store}"
+export LD_LIBRARY_PATH
+SOLNIX_POOL="$POOL" SOLNIX_ALLOW_RPOOL="" SOLNIX_NIXSTORE="$SOLNIX_NIXSTORE" \
+  "$INSTALLER" "$TARGET" "$CS" 2>&1 | tail -60 || die "solnix-install failed"
 
 # ---- core-scrub the installed BE (import altroot, scrub, export) -----------
 log "core-scrub the installed BE (no core files shipped)"
@@ -77,7 +83,7 @@ if zpool import -N -f -R "$ALT" "$POOL" 2>/dev/null; then
     zfs set canmount=noauto "$BE" 2>/dev/null || true
     zfs mount "$BE" 2>/dev/null || true
     BEROOT="$ALT"
-    if [ -x "$SCRUB" ]; then
+    if [ -f "$SCRUB" ]; then
       . "$SCRUB"
       scrub_cores "$BEROOT"
     else
@@ -85,7 +91,7 @@ if zpool import -N -f -R "$ALT" "$POOL" 2>/dev/null; then
       find "$BEROOT" \( -name 'core' -o -name 'core.[0-9]*' \) -type f -delete 2>/dev/null || true
     fi
     echo "=== core-file audit (must be zero) ==="
-    _cores=$(find "$BEROOT" -name 'core*' -type f 2>/dev/null | while read c; do file "$c" 2>/dev/null | grep -qi 'core file' && echo "$c"; done)
+    _cores=$(find "$BEROOT" -name 'core*' -type f 2>/dev/null | while read c; do file "$c" 2>/dev/null | grep -qi 'core file' && echo "$c" || true; done || true)
     if [ -n "$_cores" ]; then echo "CORES REMAIN:"; echo "$_cores"; else echo "ZERO core files in image BE"; fi
     zfs unmount "$BE" 2>/dev/null || zfs unmount -f "$BE" 2>/dev/null || true
   fi

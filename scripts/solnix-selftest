@@ -1,0 +1,39 @@
+#!/sbin/sh
+# solnix-selftest — first-boot gate-check oneshot: prints the declarative-Nix
+# proof to /dev/console (PATH, nix-store version, deriver, EDITION, no cores).
+# Self-disables via a sentinel. Injected into the image BE for the QEMU proof.
+. /lib/svc/share/smf_include.sh 2>/dev/null || true
+SENT=/nix/.solnix-selftested
+[ -e "$SENT" ] && exit 0
+{
+  echo ""
+  echo "======== SOLNIX SELFTEST BEGIN ========"
+  . /etc/profile.d/solnix-env.sh 2>/dev/null || true
+  export PATH=/run/current-system/sw/bin:/usr/sbin:/usr/bin:/sbin:$PATH
+  echo "PATH=$PATH"
+  echo "-- gate1: sw/bin on PATH + a tool runs --"
+  /run/current-system/sw/bin/file --version 2>&1 | head -1 || echo "file FAILED"
+  echo "-- gate2: nix on PATH + version --"
+  which nix-store 2>/dev/null; nix-store --version 2>&1 | head -1 || echo "nix-store FAILED"
+  echo "-- gate4: deriver resolves (store DB registered) --"
+  CS=$(ls -l /run-current-system 2>/dev/null | sed -n 's/.* -> //p')
+  echo "current-system: $CS"
+  nix-store -q --deriver "$CS" 2>&1 | head -1 || echo "deriver FAILED"
+  nix-store --verify-path "$CS" 2>&1 && echo "verify-path OK" || echo "verify-path FAILED"
+  echo "-- gate5: rpool/pool ONLINE + EDITION --"
+  zpool status 2>/dev/null | grep -iE "pool:|state:" | head -4
+  echo "release stamp:"; cat /etc/solnix-release 2>/dev/null | head -6
+  echo "EDITION grep:"; grep -i edition /etc/solnix-release 2>/dev/null || echo "(EDITION not in release stamp)"
+  echo "-- nix.conf endpoint --"; cat /etc/nix/nix.conf 2>/dev/null
+  echo "-- gate3: nix pull from cache.solnix.io (install a build-host tool) --"
+  # try a small durable build-host tool from cache.solnix.io (network permitting)
+  nix-store -r /nix/store/f74y1w7apfmmfcp4vmvdp545xzrpcx71-git-2.45.2 2>&1 | tail -3 || echo "(cache pull skipped/failed; needs network)"
+  echo "-- NO CORE FILES check (home + /var/cores; full-fs audit done at build) --"
+  _n=0; for c in /root/core* /export/home/*/core* /var/cores/core*; do [ -f "$c" ] || continue; file "$c" 2>/dev/null | grep -qi 'core file' && { echo "CORE: $c"; _n=$((_n+1)); }; done
+  echo "core-file count (home+cores): $_n"
+  echo "-- coreadm policy --"; head -1 /etc/coreadm.conf 2>/dev/null; ls -ld /var/cores 2>/dev/null
+  echo "-- home core check (~) --"; ls -la /root/core* 2>/dev/null || echo "no core in /root"
+  echo "======== SOLNIX SELFTEST END ========"
+} > /dev/console 2>&1
+: > "$SENT"
+exit 0

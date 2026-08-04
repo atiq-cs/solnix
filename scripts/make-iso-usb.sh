@@ -44,7 +44,7 @@ ISOROOT="$WORK/iso"
 log "writing loader.conf"
 cat > "$ISOROOT/boot/loader.conf" <<'EOF'
 loader_logo="illumos"
-console="${SOLNIX_CONSOLE:-text,ttya}"
+console="${SOLNIX_CONSOLE:-ttya,text}"
 ttya-mode="115200,8,n,1,-"
 autoboot_delay="5"
 boot_archive_load="YES"
@@ -53,7 +53,7 @@ boot_archive_name="/platform/i86pc/amd64/boot_archive"
 boot_archive.hash_load="NO"
 kernel="/platform/i86pc/kernel/amd64/unix"
 bootfile="unix"
-boot-args="-v"
+boot-args="-B console=ttya,input-console=ttya -v"
 EOF
 
 # ---------------------------------------------------------------------------

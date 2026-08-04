@@ -117,15 +117,35 @@ fi
 # root IS the complete bootable illumos world), fall back to SELF-INSTALL: copy
 # the running root as the installed system, skipping the nix-closure steps.
 # This is the offline-bakeable path — the baked "system" is the live root.
+#
+# DECLARATIVE toplevel detection: a full toplevel has activate/; the REDUCED
+# current-system (overlay path, scratch/current-system.nix) has NO activate but
+# IS declarative — it carries sw/ (userland+nix) + etc/nix/nix.conf. Treat a
+# toplevel with sw/bin/nix-store as declarative even without activate, so the
+# installer copies its closure into the target /nix/store + wires the Stage-A
+# userland (the activate-dependent steps self-guard on file presence below).
 SELF_INSTALL=0
 if [ -z "$TOPLEVEL" ]; then
   TOPLEVEL=$(_readlink /run-current-system 2>/dev/null || true)
 fi
-if [ -z "$TOPLEVEL" ] || [ ! -e "$TOPLEVEL/activate" ]; then
+if [ -z "$TOPLEVEL" ]; then
   SELF_INSTALL=1
   log "no nix toplevel present -> SELF-INSTALL: install the running live root as the system"
-else
+elif [ -e "$TOPLEVEL/activate" ] || [ -e "$TOPLEVEL/sw/bin/nix-store" ]; then
   [ -d "$TOPLEVEL" ] || die "toplevel $TOPLEVEL not found"
+  [ -e "$TOPLEVEL/activate" ] || log "declarative overlay toplevel (sw/ present, no activate) -> installing declarative userland layer"
+else
+  SELF_INSTALL=1
+  log "toplevel $TOPLEVEL has neither activate/ nor sw/bin/nix-store -> SELF-INSTALL"
+fi
+# OVERLAY: a declarative toplevel with NO systemPath (the reduced overlay
+# current-system). Kernel/libc/SMF come from the copied illumos root; we only
+# add the nix userland layer. Repo-handling matches SELF-INSTALL (keep the
+# copied, working repository.db — do NOT reseed from the minimal global.db).
+OVERLAY=0
+if [ "$SELF_INSTALL" = 0 ] && [ ! -e "$TOPLEVEL/systemPath" ]; then
+  OVERLAY=1
+  log "declarative OVERLAY install (no systemPath): base OS from copied root + nix userland layer"
 fi
 
 log "installing toplevel $TOPLEVEL onto $TARGET (pool $POOL, BE $BEDS)"
@@ -298,6 +318,15 @@ cat > /tmp/solnix-install.exclude <<EOF
 ./mnt
 .$ALTROOT
 EOF
+# SOLNIX_EXTRA_EXCLUDE: space-separated extra top-level paths to omit from the
+# base-root copy (build hosts accumulate huge non-OS trees like /aarch64,
+# /scratch, /code that must NOT ship in a clean image). Each is written as a
+# ./<path> exclude prefix. Also drop known build-junk parents unconditionally
+# (harmless if absent) so an image never carries the build environment.
+for _x in ${SOLNIX_EXTRA_EXCLUDE:-} aarch64 scratch code build; do
+  _x=${_x#/}; [ -n "$_x" ] || continue
+  echo "./$_x" >> /tmp/solnix-install.exclude
+done
 # illumos tar pairs key-letters to positional args IN ORDER: `tar cEfX -
 # <excludefile> .` means c(reate) E(xt-hdr) f(ile)=- X(exclude)=<file> then the
 # paths. The GNU `-cEf - -X file` form is NOT parsed correctly by illumos tar.
@@ -342,8 +371,16 @@ if [ "$SELF_INSTALL" = 1 ]; then
 else
 mkdir -p "$ALTROOT/nix/store"
 CLOSURE=""
-if command -v nix-store >/dev/null 2>&1; then
-  CLOSURE=$(nix-store -qR "$TOPLEVEL")
+# Prefer a real nix-store for the closure (fast, exact). SOLNIX_NIXSTORE lets a
+# build host point at its nix-store even though this script resets PATH; else
+# use nix-store if it is on PATH; else fall back to the fixpoint content scan
+# (the minimal proto installer env has no nix — slow but self-contained).
+_NIXSTORE=""
+if [ -n "${SOLNIX_NIXSTORE:-}" ] && [ -x "${SOLNIX_NIXSTORE}" ]; then _NIXSTORE="$SOLNIX_NIXSTORE"
+elif command -v nix-store >/dev/null 2>&1; then _NIXSTORE=nix-store; fi
+if [ -n "$_NIXSTORE" ]; then
+  log "closure via $_NIXSTORE -qR (fast path)"
+  CLOSURE=$("$_NIXSTORE" -qR "$TOPLEVEL")
   for p in $CLOSURE; do copy_path "$p"; done
 else
   # closure_refs <store-path>: emit every /nix/store/<hash>-name referenced by
@@ -371,6 +408,12 @@ else
   CLOSURE=$(echo "$seen" | tr ' ' '\n' | grep '^/nix/store/')
 fi
 relink "$TOPLEVEL" "$ALTROOT/run-current-system"
+# also the slash form /run/current-system (NixOS convention; the login env.sh +
+# switch-to-configuration look there). /run is a boot-time tmpfs on some setups,
+# so ALSO drop it under /etc so it persists; the belt-and-suspenders symlink at
+# the real path is what env.sh resolves.
+mkdir -p "$ALTROOT/run"
+relink "$TOPLEVEL" "$ALTROOT/run/current-system"
 
 # 4v. VERIFY every closure path landed on the target (the T2.7 gate: prove all
 #     ~17-20 store paths are self-contained on the installed disk). Fail loudly
@@ -383,7 +426,12 @@ for p in $CLOSURE; do
 done
 echo "closure: $_count paths, $_missing missing" >&2
 [ "$_missing" = 0 ] || die "closure incomplete: $_missing/$_count store paths did not land on target"
-# the load-bearing slices must specifically be present + non-empty.
+# the load-bearing slices must specifically be present + non-empty. This only
+# applies to a FULL toplevel that carries systemPath (kernel/libc/rtld baked into
+# /nix). The REDUCED overlay current-system has NO systemPath — its kernel/libc
+# come from the copied illumos root, not the closure — so skip the slice check
+# when the toplevel has no systemPath (declarative-userland overlay install).
+if [ -e "$TOPLEVEL/systemPath" ] || [ -e "$ALTROOT$TOPLEVEL/systemPath" ]; then
 for must in systemPath/platform/i86pc/kernel/amd64/unix \
             systemPath/kernel/amd64/genunix \
             systemPath/lib/svc/bin/svc.startd \
@@ -391,6 +439,9 @@ for must in systemPath/platform/i86pc/kernel/amd64/unix \
   t="$ALTROOT$TOPLEVEL/$must"
   [ -s "$t" ] || [ -e "$t" ] || die "toplevel slice missing on target: $must"
 done
+else
+  echo "declarative overlay toplevel (no systemPath) — kernel/libc from the copied illumos root; skipping slice check" >&2
+fi
 echo "closure OK: $_count store paths self-contained on $TARGET" >&2
 fi   # end SELF_INSTALL=0 nix-closure block
 
@@ -402,8 +453,8 @@ fi   # end SELF_INSTALL=0 nix-closure block
 # ---------------------------------------------------------------------------
 log "seeding SMF repository from seed/global.db"
 mkdir -p "$ALTROOT/etc/svc"
-if [ "$SELF_INSTALL" = 1 ]; then
-  # SELF-INSTALL: the root copy already carried the LIVE root's
+if [ "$SELF_INSTALL" = 1 ] || [ "$OVERLAY" = 1 ]; then
+  # SELF-INSTALL / OVERLAY: the root copy already carried the LIVE root's
   # /etc/svc/repository.db, which is FULLY PRE-IMPORTED (oi-make-livecd 4f) and
   # proven to boot to multi-user (the live installer itself runs off it). Do NOT
   # overwrite it with the minimal lib/svc/seed/global.db -- that minimal seed
@@ -412,9 +463,9 @@ if [ "$SELF_INSTALL" = 1 ]; then
   # default instances -> "Console login service(s) cannot run" -> the system
   # drops to maintenance mode instead of multi-user. Keep the good copied repo.
   if [ -s "$ALTROOT/etc/svc/repository.db" ]; then
-    log "SELF-INSTALL: keeping the copied pre-imported repository.db (NOT reseeding from global.db)"
+    log "keeping the copied pre-imported repository.db (NOT reseeding from global.db)"
   elif [ -e "$ALTROOT/lib/svc/seed/global.db" ]; then
-    log "SELF-INSTALL: no copied repo -> falling back to global.db seed"
+    log "no copied repo -> falling back to global.db seed"
     cp "$ALTROOT/lib/svc/seed/global.db" "$ALTROOT/etc/svc/repository.db"
     chmod 0600 "$ALTROOT/etc/svc/repository.db"
   fi
@@ -479,8 +530,12 @@ if [ -f "$TOPLEVEL/etc/nix/nix.conf" ]; then
 fi
 mkdir -p "$ALTROOT/nix/var/nix/profiles"
 relink "$TOPLEVEL/sw" "$ALTROOT/nix/var/nix/profiles/default"
-if command -v nix-store >/dev/null 2>&1; then
-  nix-store --dump-db "$TOPLEVEL" > "$ALTROOT/nix/.solnix-registration" 2>/dev/null \
+if [ -n "${_NIXSTORE:-}" ]; then
+  # dump the FULL CLOSURE DB, not just the toplevel: --load-db needs every
+  # referenced path registered, else first boot fails 'path <dep> is not valid'
+  # (the toplevel-only dump left nix-2.3.16 etc. unregistered -> nix unusable).
+  "$_NIXSTORE" --dump-db $CLOSURE > "$ALTROOT/nix/.solnix-registration" 2>/dev/null \
+    || "$_NIXSTORE" --dump-db "$TOPLEVEL" > "$ALTROOT/nix/.solnix-registration" 2>/dev/null \
     || echo "NOTE: nix-store --dump-db failed; store DB not pre-dumped" >&2
 fi
 # first-boot store-registration oneshot (fixed manifest + method; self-disables).
@@ -625,6 +680,9 @@ fi
 # already sets kernel/bootfile; make sure autoboot_delay is a real number (set
 # above in loader.conf) so `initialize`/menu autoboots the default BE.
 cat > "$ALTROOT/etc/solnix-release" <<EOF
+NAME="The Solnix Operating System"
+EDITION=${SOLNIX_EDITION:-unstable}
+ARCH=x86_64
 solnix system (installed by solnix-install)
 installed: $(date -u +%FT%TZ 2>/dev/null || date)
 toplevel:  ${TOPLEVEL:-<self-install: live root>}
@@ -646,6 +704,12 @@ log "building boot_archive on the target BE"
 # for booting installed media on unknown hardware.
 : > "$ALTROOT/etc/path_to_inst"
 : > "$ALTROOT/reconfigure"
+# Remove the COPIED build-host zpool.cache: it names the HOST's rpool, so the
+# installed system tries to import a non-existent rpool at boot -> ZFS-8000-D3/CS
+# fmd faults + "pool: rpool UNAVAIL" noise. The target must only know its own
+# (exported-with-cachefile=none) pool, which the loader's bootfs selects; drop
+# the stale cache so no phantom rpool import is attempted.
+rm -f "$ALTROOT/etc/zfs/zpool.cache" 2>/dev/null || true
 # bootadm mkdirs <root>/platform/i86pc/amd64/archive_cache but does NOT create
 # the parent dir; the SELF-INSTALL live root has no platform/i86pc/amd64 (the
 # ramdisk installer env curates it out), so pre-create it or bootadm fails
