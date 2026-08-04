@@ -1,6 +1,6 @@
 # lib-core-scrub.sh — remove stray core files + set the coreadm policy in a BE root.
 # Sourced by the image builders before snapshot/media assembly so no build-time
-# core dump ever ships (maintainer directive: no core files in images/first-run).
+# core dump ever ships (no core files in images/first-run systems).
 # Usage: BEROOT=/path/to/be/root scrub_cores
 scrub_cores() {
   local r="${1:-${BEROOT:?set BEROOT}}"

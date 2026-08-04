@@ -1,10 +1,9 @@
 { config, lib, ... }:
 # modules/config/coreadm.nix — core-file policy for solnix systems.
 #
-# Directive (maintainer, 2026-08-04): ISOs, AMIs, install images, and first-run
-# systems must NOT contain core files, and must not litter CWD/home with `core`
-# on a crash. illumos `coreadm` governs this; the persistent config is
-# /etc/coreadm.conf, read by svc:/system/coreadm:default at boot.
+# solnix systems must not ship or accumulate core files, and must not litter
+# CWD/home with `core` on a crash. illumos `coreadm` governs this; the persistent
+# config is /etc/coreadm.conf, read by svc:/system/coreadm:default at boot.
 #
 # Policy: route ALL cores to a managed /var/cores/ dir with descriptive names,
 # enable global dumps + logging, DISABLE the per-process CWD `core` litter.

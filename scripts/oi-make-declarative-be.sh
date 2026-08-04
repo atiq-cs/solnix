@@ -268,7 +268,7 @@ for u in $PERUSERS; do
   done
 done
 
-# maintainer directive: NO core files in shipped images/first-run. Scrub the live
+# scrub build-time core files + set the managed coreadm policy. Scrub the live
 # target root + set the managed coreadm policy before this BE is imaged.
 log "core-scrub + coreadm policy (no core files in the image)"
 find / -xdev \( -name 'core' -o -name 'core.[0-9]*' \) -type f 2>/dev/null | while read -r c; do
