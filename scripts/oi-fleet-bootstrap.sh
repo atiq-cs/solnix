@@ -34,6 +34,7 @@ substituters = https://cache.solnix.io https://cache.nixos.org
 trusted-public-keys = cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8= cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
 sandbox = false
 build-users-group =
+builders-use-substitutes = true
 EOF
 . /etc/profile.d/nix-illumos.sh
 echo "nix: $(nix-store --version 2>&1 | head -1); cache: $(curl -s -o /dev/null -w '%{http_code}' --max-time 10 https://cache.solnix.io/nix-cache-info)"

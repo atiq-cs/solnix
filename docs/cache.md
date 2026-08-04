@@ -212,3 +212,26 @@ HAND BACK TO SITE TEAM — the durability fix is incomplete: stored package obje
 READY WHEN FIXED: all 177 signed closures staged locally (OI host store + local file:// cache);
   re-run = single sign->file://->aws s3 sync sweep, then sticky-verify + staged->published flip.
   Ask the team to confirm a test object PERSISTS FOR HOURS (not just passes an immediate sticky read).
+
+## FLEET OPS (site/infra advisory 2026-08-04) — routing solved via cache, H28 FIXED
+The site team confirmed + resolved key items:
+- **H28 (Cloudflare 404 negative-cache) is FIXED on their side** — freshly-published paths
+  substitute IMMEDIATELY (no stale-404 shadowing). => scripts/cbproxy.py cache-buster is NO
+  LONGER NEEDED for correctness (keep as a fallback tool, but the plain substituter works).
+  Cache verified live: x86_64-solaris 7967, aarch64-solaris 1465, sparcv9-solaris 1084 objects.
+- **Fleet unblock #1 — cache-as-substituter (READY, HTTPS-only, no subnet/git fix needed):**
+  build the patched-nixpkgs (+ any) closure on ONE host, `nix copy --to s3.solnix.io` (drains to
+  durable cache), the other hosts SUBSTITUTE it instead of rebuilding. Every fleet host nix.conf:
+    substituters = https://cache.solnix.io https://cache.nixos.org
+    trusted-public-keys = cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8= cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
+    builders-use-substitutes = true
+  This removes the per-host "rebuild nixpkgs-patched" waste (fleet A/C hit this).
+- **Fork distribution — Option B (RECOMMENDED, no git access): a locked flake.lock.** Resolve the
+  fork once on a host that reaches it (primary/dev-box), commit flake.lock, fleet evaluates the
+  identical pinned nixpkgs-patched from the lock + substitutes the built closure from cache => no
+  per-host fork-source fetch. (Option A = push fork to git.solnix.io mirror w/ a read-only key,
+  if we want a git source; the mirror auto-creates the bare repo but is currently EMPTY/0-commits.)
+- **Subnet routing is OUR LAN issue** (fleet<->primary-OI-host + fleet<->Codeberg): fix default
+  gateway / SNAT / route / DNS on the fleet CIDR. cache.solnix.io reaches fine (200) so we can
+  make full progress via the cache while fixing routing. Then optionally add the OI host as a Nix
+  remote builder (/etc/nix/machines).
