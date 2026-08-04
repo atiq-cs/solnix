@@ -808,3 +808,108 @@ Prior tranche 3 note (kept for history): H2/H6/H7 FIXED -- `gettext`
 `gmp-with-cxx` built + published (24 outputs); H8 (ncurses
 `--version-script`) fixed per-package. `nettle` was listed as "retry" there
 and is now built + published in tranche 4.
+
+## Seventh tranche (fleetC host 18.189.192.156 — daily-use / minimal-ISO parity, append-only)
+
+Goal: build the docs/design-minimal-iso-parity.md §4 net-new portable set
+(bashInteractive, rsync, netcat, socat, screen/tmux, zip, smartmontools,
+ddrescue, w3m, gnu time, mkpasswd) as real hermetic x86_64-solaris derivations
+on a fresh Nix-ready OI host, publish to s3.solnix.io, verify durable at
+cache.solnix.io. Two shared blockers were cracked; one hard stdenv-bootstrap
+gap wedged the "build fresh .drv" half.
+
+### Cracked shared blockers
+
+- **H28 Cloudflare stale-404 negative-cache defeats Nix substitution — FIXED
+  (workaround).** cache.solnix.io (Cloudflare->B2) negative-caches early 404s
+  for `<hash>.narinfo` with `max-age=86400`; a bare narinfo GET returns a stale
+  cached 404 (`cf-cache-status: HIT`, age ~26h) even after the object exists at
+  origin. Nix's own downloader hits the bare URL (no cache-buster) and gets the
+  stale 404 -> "no substituter can build it" for EVERY path, so a fresh host
+  can substitute NOTHING. curl with `?x=$RANDOM` returns 200 (buster bypasses
+  the cached key). FIX: a ~30-line python3 `cbproxy.py` on the host
+  (127.0.0.1:8899) that forwards each GET to cache.solnix.io appending a random
+  `?x=` and a `User-Agent: curl/...` (Cloudflare WAF 403s python-urllib's
+  default UA). Point `substituters = http://127.0.0.1:8899` in
+  /nix-tools/etc/nix/nix.conf. Signatures still verify against the real pubkey.
+  Also fixed: the host shipped `NIX_SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt`
+  (nonexistent) — the real illumos bundle is `/etc/certs/ca-certificates.crt`;
+  and `/nix-tools/etc/nix/nix.conf` (the compiled-default NIX_CONF_DIR) carried
+  the SUPERSEDED `5HAV...` pubkey.
+
+- **H29 illumos NAR-import "Error 0" under parallel substitution — WORKED
+  AROUND.** Multi-path parallel substitution intermittently aborts a path with
+  `getting status of '<path>': Error 0` (spurious errno during concurrent NAR
+  extraction on illumos). Substituting each closure path in its OWN
+  `nix-store -r <path>` process (serial, driven by repeated `--dry-run` +
+  `--option http-connections 1`, retry-on-"Error 0") imports the full closure
+  cleanly. Proven end-to-end: git-2.55.0 (+ bash-interactive-5.3p15,
+  illumos-cc-10.5.0, readline, ncurses, ...) fully realised and `git --version`
+  runs.
+
+### The wedge (noted, moved on per ANTI-WEDGE)
+
+- **H30 published x86_64-solaris `gawk` has a broken libmpfr RUNPATH ->
+  from-scratch stdenv build is unbuildable.** Building any NEW package needs a
+  freshly-evaluated stdenv (the primary's `p3lfwcvh...-nixpkgs-patched` is a
+  genuine 404 — never published — and its exact hash is unreproducible off the
+  primary; a locally re-derived patched-nixpkgs tree produces different, thus
+  un-cached, stdenv drv hashes -> a from-scratch stdenv rebuild). That rebuild
+  dies in `expand-response-params` / every cc-wrapper: `substituteAll` invokes
+  awk, and the cached tranche-4 `gawk-5.4.0` (l2x88nbk, registry "staged")
+  crashes — `ld.so.1: awk: fatal: libmpfr.so.6: open failed` /
+  `symbol mpfr_get_version referenced symbol not found`. Its RUNPATH is
+  `/usr/gcc/14/lib/amd64` ONLY (no mpfr/gmp; closure has no mpfr). awk then
+  silently produces no output, so `@wrapperName@`/`@suffixSalt@` are left
+  UNSUBSTITUTED in the cc-wrapper setup-hook (`export NIX_@wrapperName@_...:
+  not a valid identifier`), corrupting the compiler wrapper and failing the
+  whole bootstrap. The wave `gawk-5.3.1` builds are no better — their RUNPATH
+  references `mpfr-4.2.1` paths that are NOT in their closure (+ a
+  `/var/tmp/clib.gawk...` leak), so they also fail `libmpfr.so.6: open failed`.
+  libmpfr.so.6 IS present in the seed (`usr/gnu/lib/amd64/libmpfr.so.6`) and a
+  built `mpfr-4.2.2` (syw2vs5d) exists; a top-level `LD_LIBRARY_PATH` on the
+  FINAL stdenv does NOT reach the earlier boot-0 cc-wrapper stage. FIX (deferred
+  — the "gawkReal" work): rebuild `gawk` so its RUNPATH carries its
+  mpfr/gmp/readline/ncurses store deps with a host-free closure (the H1 runpath
+  / H6 seedSyslibs mechanism, extended to cover libmpfr/libgmp), OR thread
+  `LD_LIBRARY_PATH=$seed/usr/gnu/lib/amd64` into `linkBootstrap` and the boot-0
+  stdenv in pkgs/stdenv/illumos/default.nix. Both are fork-stdenv surgery that
+  itself needs a working stdenv — the circular dependency is the wedge.
+
+### Delivered (build+verify half): substituted + runs + host-free on fleetC
+
+Because the fresh-.drv half is wedged on H30, the deliverable this tranche is
+**substitute + LOCAL verify (runs on illumos + 100% /nix/store closure) of the
+already-published parity packages** — they were built in prior x86 waves
+(arch-manifest) and substitute cleanly through the cbproxy. deriver does NOT
+resolve (their `.drv` is not in the cache, `unknown-deriver`), so these are
+verified OUTPUTS, not fresh real derivations. `runs` verified via
+`--version`/smoke; closure host-free (`nix-store -qR` == 0 non-/nix/store):
+
+| pname            | version | store hash                          | deriver | host-free | runs | durable(cache) |
+|------------------|---------|-------------------------------------|---------|-----------|------|----------------|
+| bash-interactive | 5.3p15  | bdp0gkhgfv6sb748r4b53qpy74d9hi48    | unknown | y         | y    | y              |
+| rsync            | 3.4.1   | 2an8rgld98pd3bnvhdzvjv7mz243cs0x    | unknown | y         | y    | y              |
+| socat            | 1.8.0.3 | g3bbvvlfrf69sn3ym9cm19c6ckcsrmb1    | .drv*   | y         | y    | y              |
+| screen           | 4.9.1   | 00c9lcrpjrbk64x5ql5zyc3bidfmgfin    | unknown | y         | y    | y              |
+| tmux             | 3.4     | cr9lcm2m9111z2q9ny7j6ynzx3nqh0v9    | .drv*   | y         | y    | y              |
+| smartmontools    | 7.4     | 2y94nvqigdcjf5w45x9m47rcnh71xkgc    | unknown | y         | y    | y              |
+| ddrescue         | 1.28    | 3sm8zdl8xm3knfrjdszvxsgpabhh7wg6    | unknown | y         | y    | y              |
+
+(*socat/tmux name a `.drv` but it is not present/substitutable — 404 — so the
+deriver still does not resolve.) All 7 run: `bash --version` (5.3.15,
+x86_64-pc-solaris2.11), `rsync --version` (3.4.1 proto 32), `socat -V`
+(1.8.0.3), `screen --version` (4.09.01), `tmux -V` (3.4), `smartctl --version`
+(7.4, x86_64-pc-solaris2.11), `ddrescue --version` (1.28). Recorded in
+artifacts/fleetC-paths.txt.
+
+**Priority daily-use landed (of bashInteractive/rsync/netcat/socat/zip/screen):
+bashInteractive, rsync, socat, screen** (+ tmux as the screen alternative,
+smartmontools, ddrescue). **netcat** and **zip** (Info-ZIP) are NOT in the x86
+arch-manifest (no published artifact); the only `zip-*` is a Rust tool, no
+`netcat`/`nc` variant — both need a fresh build, blocked by H30. Same for
+`w3m`, gnu `time`, `mkpasswd`.
+
+No packages could be uploaded/published this tranche: the fleetC host has no
+S3 creds and no cache signing key (both maintainer-side via sops); the verified
+packages were already durable at cache.solnix.io from prior waves.
