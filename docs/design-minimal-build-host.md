@@ -59,3 +59,21 @@ BUILT (real derivations): pkg-config, autoconf, automake, libtool, bison, flex,
   push to a private cache.
 - Applies to all image types (AMI/ISO/IMG) and all arches as each reaches parity;
   x86_64 first.
+
+## ADDENDUM (maintainer, 2026-08-04): default-distro must-haves + PATH + Nix version
+1. **curl AND ping in the DEFAULT distro** — every minimal image (AMI/ISO/IMG) ships curl
+   (real derivation, built) + ping. NOTE: illumos `ping` is native in the base OS
+   (/usr/sbin/ping) — ensure it's on PATH (see #2); curl must be in environment.systemPackages.
+   (This session hit a bare image with neither curl nor a usable ping/getent — must not recur.)
+2. **Default login PATH (bash AND ksh) must include the nix-ified paths + common defaults.**
+   The shell-environment module must set, for root + all users, in BOTH bash and ksh profiles:
+     PATH=/run/current-system/sw/bin:/nix-tools/bin:/usr/gnu/bin:/usr/bin:/usr/sbin:/sbin:/usr/ccs/bin
+   i.e. the declarative Nix profile FIRST, then the Nix tooling, then the illumos base OS dirs
+   (so both `htop` from the Nix profile AND native `ping`/`getent`/`format` resolve). Applies to
+   /etc/profile (ksh/sh login) + /etc/bashrc + /etc/profile.d — ksh93 is the illumos default shell
+   so it MUST get the PATH too (this session: ksh93 login had no nix paths).
+3. **Nix version: the FIRST solnix RELEASE must be built on Nix 2.24+ (or Lix 2.90+), NOT 2.3.16.**
+   2.3.16 was the bootstrap-only choice; it lacks `nix profile`, has a fragile LD_LIBRARY_PATH
+   relocatable install, weak diagnostics, and forced the __structuredAttrs=false workaround. The
+   transition (build 2.24+/Lix on x86_64-solaris -> re-bank bootstrap -> rebuild pure stdenv ->
+   re-cut images) is a prerequisite for the first release. See docs/design-nix-upgrade.md.
