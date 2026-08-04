@@ -208,3 +208,37 @@ gawk FIXED (gawkReal: all 4 libs -> /nix/store, closure has real deps, runs repo
 NEXT: a hermeticity-audit + fix pass over the accepted set (re-verify each real-derivation's ldd for
 /usr/lib/64 store-ownable leaks; apply the gawkReal pattern). This is required for a TRUE exactly-Nix
 claim. The AMIs still boot + run; this tightens the closure purity, not runtime function.
+
+## H30 RESOLVED (tranche 7): broken-gawk RUNPATH wedge, durably fixed on cache
+The published/wave gawk had a host-only RUNPATH (/usr/gcc/14/lib/amd64) and NO libmpfr.so.6 in its
+closure, so on a FRESH clean host it crashed at load (`ld.so.1: awk: fatal: libmpfr.so.6: open
+failed` / `symbol mpfr_get_version referenced symbol not found`). Because the stdenv setup.sh
+`_allFlags` uses awk to enumerate env vars for substituteAll, a crashing gawk made substituteAll emit
+NO --subst-var flags, leaving @wrapperName@/@suffixSalt@ literal in every cc-wrapper setup-hook
+(`export NIX_@wrapperName@_TARGET_HOST_@suffixSalt@=1: not a valid identifier`) -> the whole toolchain
+bootstrap died. FIX (gawkReal, now in pkgs/illumos/solaris-overlay.nix `gawk`): rebuild the real
+nixpkgs gawk with gmp+mpfr as store buildInputs + their -L in NIX_CFLAGS_COMPILE_BEFORE so the H1
+cc-wrapper auto-runpath bakes /nix/store -R (mpfr-4.2.2, gmp-6.3.0) into the RUNPATH. Built + verified
+(deriver resolves, host-free closure, runs in `env -i` with NO host /usr/gcc/14 libs), published to
+s3.solnix.io and DURABLE at cache.solnix.io (j7h3y8b2zr3294fg95wk10m3r0fd0xwn-gawk-5.4.1). A fresh host
+now substitutes the fixed gawk (proven: deleted local + host hack, re-substituted via cbproxy, ran
+clean). This unblocks fresh-host toolchain builds.
+
+## Tranche 7 (toolchain baseline, real hermetic x86_64-solaris derivations, published+durable)
+Built against a locally-reproduced nixpkgs-patched (patches 0001-0006 + minfeatures bypass, nix-store
+--add = 00w7p2sg4svr8rqavapiqv34iwyr1anw) on a fresh Nix-ready fleet host; pure stdenv+seed substituted
+from cache. All: deriver resolves to a .drv, host-free closure, run OK, no /usr/lib/64 store-ownable
+leak, published to s3.solnix.io + durable at cache.solnix.io (cache-bust verified 200):
+  m4 1.4.21 (98l63sff), gnumake 4.4.1 (13xdhnmn), gmp 6.3.0 C-only+dev+info (xvq75bi4/b7qj1122/ajyz028y),
+  binutils 2.46.1 GNU as/ar/nm + Solaris ld (a6yl9zl8), libffi 3.7.0 +dev/info/man (kmdpv0gz/...),
+  gawk 5.4.1 gawkReal +man (j7h3y8b2/pggw8z24). See pkgs/illumos/phase3/tranche7-toolchain.nix.
+  NOTE: `binutils` provides GNU as/ar/nm; the linker is the native illumos Solaris ld (by design --
+  gcc is --with-ld=/usr/bin/ld; GNU binutils ld is not the illumos linker).
+  FOLLOW-UP (gcc as a from-source profile package): NOT attempted this tranche -- gcc-unwrapped is the
+  seed-wrap (the seed's gcc-10 installed into a store path), which the stdenv already exposes; a true
+  from-source gcc profile pkg is a separate large effort (see design-minimal-build-host.md).
+  HOST NOTE (fresh-host bootstrap): the fresh host also needed libmpfr.so.6+libgmp.so.10 dropped into
+  /usr/gcc/14/lib/amd64 to satisfy the pre-gawkReal seed-gawk RUNPATH ONCE (chicken-and-egg); after
+  gawkReal is on the cache this host hack is unnecessary for subsequent fresh hosts (they substitute
+  the fixed gawk). Also: nix 2.3.16 needed NIX_SSL_CERT_FILE pointed at a real CA bundle
+  (/etc/certs/CA/*.pem concatenated) -- the default /etc/ssl/certs/ca-certificates.crt path was absent.

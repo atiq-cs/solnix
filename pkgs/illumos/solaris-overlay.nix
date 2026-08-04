@@ -160,6 +160,43 @@ in
     { postPatch = (old.postPatch or "") + gnulibFix; });
   gnused = onSolaris prev.gnused (old:
     { postPatch = (old.postPatch or "") + gnulibFix; });
+  # H30 (gawkReal): the seed/wave gawk crashes at load because its RUNPATH is
+  # the host /usr/gcc/14/lib/amd64 only and its closure has NO libmpfr.so.6 ->
+  # `ld.so.1: awk: fatal: libmpfr.so.6: open failed` -> substituteAll's awk
+  # emits nothing -> the cc-wrapper setup-hook keeps @wrapperName@/@suffixSalt@
+  # unsubstituted -> EVERY fresh-host bootstrap dies. Fix: build the REAL gawk
+  # with gmp/mpfr as store buildInputs AND their -L in NIX_CFLAGS_COMPILE_BEFORE
+  # so the H1 cc-wrapper auto-runpath pass bakes /nix/store -R entries (ahead of
+  # the host dir) into the RUNPATH -> host-free closure, loads without host libs.
+  # Uses the C-only gmp (gmp-with-cxx's C++ conftest fails to RUN on the seed
+  # toolchain) and mpfr against it, both with doCheck=false (illumos-flaky).
+  #
+  # EXPOSED AS `gawkReal`, NOT `gawk`: the top-level `gawk` is the seed-slice
+  # bootstrap gawk, re-pinned by the stdenv (`inherit (prevStage) ... gawk`), so
+  # a top-level `gawk =` override is shadowed (same class as the H15 bzip2 note).
+  # This is the user-facing/profile gawk (published, durable at cache.solnix.io)
+  # whose closure is host-free. The BOOTSTRAP seed-gawk RUNPATH is a stdenv-level
+  # concern; on a fresh host the seed-gawk is made to load once (host libmpfr in
+  # /usr/gcc/14/lib/amd64) purely to substitute this fixed gawk, after which it
+  # is the canonical gawk.
+  gawkReal = if isSolaris then
+    let
+      gmpC = (prev.gmp.override { cxx = false; }).overrideAttrs (_: { doCheck = false; });
+      mpfrC = (prev.mpfr.override { gmp = gmpC; }).overrideAttrs (_: { doCheck = false; });
+    in prev.gawk.overrideAttrs (old: {
+      postPatch = "";  # drop the autoreconf "no-pma" patch (drags gettext/texinfo)
+      nativeBuildInputs = builtins.filter
+        (d: let n = d.pname or d.name or ""; in
+            !(lib.hasInfix "autoreconf" n || lib.hasInfix "texinfo" n))
+        (old.nativeBuildInputs or []);
+      outputs = builtins.filter (o: o != "info") (old.outputs or [ "out" ]);
+      buildInputs = (old.buildInputs or []) ++ [ gmpC mpfrC ];
+      NIX_CFLAGS_COMPILE_BEFORE = lib.concatStringsSep " " [
+        (old.NIX_CFLAGS_COMPILE_BEFORE or "")
+        "-L${mpfrC}/lib" "-L${gmpC}/lib"
+      ];
+    })
+    else prev.gawk;
   gawk = onSolaris prev.gawk (old:
     { postPatch = (old.postPatch or "") + gnulibFix; });
   diffutils = onSolaris prev.diffutils (old:

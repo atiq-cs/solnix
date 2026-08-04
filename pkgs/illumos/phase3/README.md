@@ -913,3 +913,27 @@ arch-manifest (no published artifact); the only `zip-*` is a Rust tool, no
 No packages could be uploaded/published this tranche: the fleetC host has no
 S3 creds and no cache signing key (both maintainer-side via sops); the verified
 packages were already durable at cache.solnix.io from prior waves.
+
+## H30 RESOLVED (tranche 7, fleetA) — gawkReal built + published + durable
+The circular wedge is broken. On a fresh Nix-ready fleet host (3.148.235.207,
+reachable; primary 18.218.136.61 NOT reachable from the fleet — 100% packet
+loss / SSH timeout, matching fleetC), a working stdenv was reached by a ONE-TIME
+host hack (drop libmpfr.so.6+libgmp.so.10 into /usr/gcc/14/lib/amd64 to satisfy
+the pre-fix seed-gawk's host-only RUNPATH), then the DURABLE gawkReal was built:
+real nixpkgs gawk + gmp/mpfr store buildInputs + -L in NIX_CFLAGS_COMPILE_BEFORE
+so the H1 cc-wrapper auto-runpath bakes /nix/store mpfr/gmp into the RUNPATH.
+Verified: deriver resolves (a81b6ffv...gawk-5.4.1.drv), host-free closure, runs
+in `env -i` with the host hack DISABLED, and re-substitutes fresh from
+cache.solnix.io (via scripts/cbproxy.py to defeat H28 CDN stale-404) then runs
+clean. Published + durable: j7h3y8b2zr3294fg95wk10m3r0fd0xwn-gawk-5.4.1 (+ its
+mpfr-4.2.2 closure). The fix is folded into pkgs/illumos/solaris-overlay.nix as
+the canonical `gawk`. Fresh hosts now substitute the fixed gawk — unblocking the
+fresh-.drv toolchain builds that this README's earlier tranche recorded as wedged.
+
+With gawk fixed, tranche 7 (fleetA) built these as real hermetic x86_64-solaris
+derivations (deriver resolves, host-free, run OK, no /usr/lib/64 leak, published
++ durable, cache-bust 200): m4 1.4.21, gnumake 4.4.1, gmp 6.3.0 (C-only), binutils
+2.46.1, libffi 3.7.0, gawk 5.4.1, plus the gcc profile pkg (illumos-cc-10.5.0
+cc-wrapper + gcc-unwrapped seed-wrap; a hello.c compiles + runs). See
+pkgs/illumos/phase3/tranche7-toolchain.nix. gcc as a full from-source profile
+package remains a follow-up (the seed-wrap cc is the installable shipped now).

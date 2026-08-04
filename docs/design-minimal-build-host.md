@@ -50,6 +50,21 @@ BUILT (real derivations): pkg-config, autoconf, automake, libtool, bison, flex,
 - `libffi`, `gmp` — supporting libs (H4/known gaps).
 - `gdb` — the debugger (not yet attempted on x86_64-solaris).
 
+## Build status update (tranche 7) — toolchain baseline built as real profile derivations
+PROMOTED to real hermetic x86_64-solaris profile derivations (deriver resolves,
+host-free closure, run OK, no /usr/lib/64 leak, published + durable at cache.solnix.io):
+- `m4` 1.4.21, `gnumake` 4.4.1, `binutils` 2.46.1 (GNU as/ar/nm; illumos Solaris ld),
+  `libffi` 3.7.0 (+dev/info/man), `gmp` 6.3.0 (C-only, +dev/info).
+- `gdb` 17.2 is already a published real derivation (real-derivations.tsv, tranche 6).
+STILL OPEN:
+- `gcc` as a from-source PROFILE package. The stdenv already exposes a seed-wrap
+  gcc-unwrapped (the seed's gcc-10 in a store path) which makes from-source builds
+  work today; a user-facing `cc`/`g++` profile package = the seed-wrap cc + cc-wrapper
+  exposed as an installable (quick) OR a true from-source gcc build (large, separate
+  effort). Recorded as the remaining toolchain follow-up.
+Repro entry: pkgs/illumos/phase3/tranche7-toolchain.nix; gawkReal (H30) fix folded
+into pkgs/illumos/solaris-overlay.nix so the durable gawk is the canonical build.
+
 ## Notes
 - The seed already supplies gcc/binutils/make to the *build stdenv*, so from-source
   builds WORK today. This directive additionally requires these as *profile packages*
