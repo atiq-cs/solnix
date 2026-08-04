@@ -52,6 +52,13 @@ let
   # user profile, then current-system sw.
   nixProfiles = "/nix/var/nix/profiles/default $HOME/.nix-profile /run/current-system/sw";
 
+  # Guaranteed base PATH tail (maintainer directive 2026-08-04): after the
+  # profile-relative sw/bin dirs, ALWAYS append the Nix tooling + the illumos base
+  # OS dirs, so BOTH the Nix profile (htop, ...) AND native tools (ping, getent,
+  # format, ...) resolve in EVERY login shell (bash AND ksh93) regardless of what
+  # /etc/profile pre-set. Explicit so a bare image can never leave ksh without a PATH.
+  basePathTail = "/nix-tools/bin:/usr/gnu/bin:/usr/bin:/usr/sbin:/sbin:/usr/ccs/bin";
+
   # aliases only make sense in an interactive shell; guard them on $PS1.
   aliasLines = concatStringsSep "\n" (
     mapAttrsToList (name: value: "  alias ${name}=${lib.escapeShellArg value}") cfg.shellAliases
@@ -69,6 +76,15 @@ let
       export __SOLNIX_ENV_SOURCED
 
       ${exportedEnvVars}
+
+      # Guaranteed base PATH tail: Nix tooling + illumos base OS dirs ALWAYS present
+      # (append only dirs not already in PATH, so both nix-profile tools and native
+      # ping/getent/format resolve in bash + ksh93). Maintainer directive 2026-08-04.
+      for __d in ${basePathTail}; do
+        case ":''${PATH}:" in *":''${__d}:"*) : ;; *) PATH="''${PATH:-}:''${__d}" ;; esac
+      done
+      PATH="''${PATH#:}"; export PATH
+      unset __d
 
       export NIX_PROFILES="${nixProfiles}"
 
