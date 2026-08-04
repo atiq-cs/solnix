@@ -282,10 +282,14 @@ rm -f "$RDROOT/usr/bin/ksh" 2>/dev/null; ln -s ksh93 "$RDROOT/usr/bin/ksh" 2>/de
 # EDITORS: solnix's default vi is nvi (github.com/lichray/nvi2) — a small, C++,
 # wide-char nvi with NO vim dependency. It's staged as usr/bin/nvi (from the nvi
 # package); /usr/bin/{vi,ex,view} link to nvi. This replaces the old vi->vim
-# symlink (which dangled whenever vim was absent). If nvi is present, point
-# vi/ex/view at it; else fall back to the standalone /usr/has/bin/vi. nano is a
-# real bin. (vim, if staged, remains available as `vim` but is NOT what vi is.)
-if [ -e "$RDROOT/usr/bin/nvi" ]; then
+# symlink (which dangled whenever vim was absent).
+#   NOTE: nvi requires real BSD DB 1.85 (the db1 package) to actually EDIT — the
+#   db5-compat layer is not a drop-in. Until db1 lands, nvi is NOT staged as the
+#   default vi; vi/ex/view fall back to the native /usr/has/bin/vi (which works).
+#   Once db1 lands + nvi's edit passes, nvi becomes the staged default (first branch).
+# So: if a WORKING nvi is present, point vi/ex/view at it; else the native vi. nano
+# is a real bin. (vim, if staged, remains available as `vim` but is NOT what vi is.)
+if [ -e "$RDROOT/usr/bin/nvi" ] && [ -e "$RDROOT/usr/bin/nvi-edits-ok" ]; then
   for _e in vi ex view; do rm -f "$RDROOT/usr/bin/$_e"; ln -s nvi "$RDROOT/usr/bin/$_e" 2>/dev/null || true; done
 elif [ -e "$RDROOT/usr/has/bin/vi" ]; then
   for _e in vi ex view; do rm -f "$RDROOT/usr/bin/$_e"; ln -s ../has/bin/vi "$RDROOT/usr/bin/$_e" 2>/dev/null || true; done
