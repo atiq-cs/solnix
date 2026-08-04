@@ -3,15 +3,18 @@
 # solnix's default `vi`. A small, wide-char nvi fork (C) — a clean, illumos-friendly
 # vi with no vim dependency. Packaged as `nvi`; `vi`/`ex`/`view` link to it.
 #
-# Build: cmake, C. Deps: ncurses (curses UI) + Berkeley DB (the BSD 1.85 dbopen
-# API nvi uses for its file backing + recovery logs). On BSD, dbopen lives in
-# libc; illumos has no dbopen, so we link Berkeley DB's 1.85 compat (db_185.h,
-# built with --enable-compat185, the nixpkgs default). Installs bin/{nvi,vi,ex,
-# view} + share/vi.
+# Build: cmake, C. Deps: ncurses (curses UI) + real Berkeley DB 1.85 (db1). nvi
+# uses the BSD 1.85 dbopen() API for its file backing (an in-memory RECNO tree
+# with a `bfname` backing file, 0-based append). On BSD, dbopen lives in libc;
+# illumos has no dbopen, so nvi2's CMakeLists links a `db1` lib and includes
+# <db.h> for the 1.85 API. We supply both from the db1 package (real BSD DB
+# 1.85 -- see db1.nix). Berkeley DB 5.x --enable-compat185 is NOT a drop-in:
+# its RECNO is 1-based and rejects nvi's record-0 append. Installs bin/{nvi,vi,
+# ex,view} + share/vi.
 #
 # Usage (in the fork overlay / a callPackage site):
-#   nvi = pkgs.callPackage ./nvi2.nix { };
-{ lib, stdenv, fetchFromGitHub, cmake, ncurses, pkg-config, db }:
+#   nvi = pkgs.callPackage ./nvi2.nix { db1 = pkgs.callPackage ./db1.nix {}; };
+{ lib, stdenv, fetchFromGitHub, cmake, ncurses, pkg-config, db1 }:
 
 stdenv.mkDerivation (finalAttrs: {
   pname = "nvi";
@@ -28,13 +31,13 @@ stdenv.mkDerivation (finalAttrs: {
   };
 
   nativeBuildInputs = [ cmake pkg-config ];
-  buildInputs = [ ncurses db ];
+  buildInputs = [ ncurses db1 ];
 
-  # illumos has no BSD dbopen() in libc (BSD does), so nvi2's CMakeLists links a
-  # `db1` lib and includes <db.h> for the 1.85 API. Point both at Berkeley DB's
-  # 1.85 compat: link the db lib (named `db`, not `db1`) and include <db_185.h>
-  # (where BDB declares dbopen/DBT/RECNO). The db.h that find_path resolves lives
-  # next to db_185.h in the same include dir, so DB_INCLUDE_DIR is correct.
+  # nvi2's CMakeLists links a `db1` lib and includes <db.h> for the 1.85 API.
+  # The db1 package provides exactly those names (lib/libdb1.so, include/db.h),
+  # so no CMakeLists rewrite of the db link/include is needed -- unlike the old
+  # db5-compat path, which had to rename the lib to `db` and the header to
+  # <db_185.h>. The include/lib dirs come in via NIX_CFLAGS/NIX_LDFLAGS below.
   #
   # nvi2 probes openpty/__b64_ntop (BSD/glibc-isms absent from illumos libc) and,
   # when missing, links libutil/libresolv -- but neither symbol is used anywhere
@@ -49,9 +52,7 @@ stdenv.mkDerivation (finalAttrs: {
   postPatch = ''
     cp ${./patches/bitstring.h} bitstring.h
     cp ${./patches/util.h} util.h
-    sed -i 's/PRIVATE db1)/PRIVATE db)/' CMakeLists.txt
     sed -i 's,include_directories(''${CMAKE_CURRENT_BINARY_DIR}),include_directories(''${CMAKE_CURRENT_BINARY_DIR} ''${CMAKE_CURRENT_SOURCE_DIR}),' CMakeLists.txt
-    sed -i 's,#include <db.h>,#include <db_185.h>,' common/common.h
     sed -i 's/target_link_libraries(nvi PRIVATE ''${UTIL_LIBRARY})/if(UTIL_LIBRARY)\n        target_link_libraries(nvi PRIVATE ''${UTIL_LIBRARY})\n    endif()/' CMakeLists.txt
     sed -i 's/target_link_libraries(nvi PRIVATE ''${RESOLV_LIBRARY})/if(RESOLV_LIBRARY)\n        target_link_libraries(nvi PRIVATE ''${RESOLV_LIBRARY})\n    endif()/' CMakeLists.txt
   '';
@@ -63,19 +64,42 @@ stdenv.mkDerivation (finalAttrs: {
   cmakeFlags = [
     "-DCMAKE_BUILD_TYPE=Release"
   ];
-  env.NIX_CFLAGS_COMPILE_BEFORE = "-L${lib.getLib ncurses}/lib";
+  # Store -L before any host lib dir (hermeticity). Also expose db1's include so
+  # find_path(db.h) and the compile resolve the real 1.85 header, and db1's lib
+  # so find_library(db1) resolves libdb1.so from the store.
+  env.NIX_CFLAGS_COMPILE_BEFORE = "-L${lib.getLib ncurses}/lib -L${db1}/lib -I${db1}/include";
   # -lsocket -lnsl: illumos split socket/name-service libs. -lresolv: recover.c
   # uses b64_ntop/b64_pton (illumos puts them in libresolv, not libc). nvi2's own
   # find_library(resolv) probes __b64_ntop (underscored, absent) and misses this.
-  env.NIX_LDFLAGS = "-lsocket -lnsl -lresolv";
+  # -L${db1}/lib so the db1 link resolves; -R for the runtime search path.
+  env.NIX_LDFLAGS = "-L${db1}/lib -R${db1}/lib -lsocket -lnsl -lresolv";
 
   # nvi2 installs `nvi`; provide the classic vi/ex/view names as links to it.
+  # Then run nvi's own edit smoke test in-build (scripted ex session: append a
+  # line, write, quit; verify the file content). This is the exact operation
+  # that failed on db5-compat. On success, drop a `nvi-edits-ok` marker: the
+  # media build (oi-make-livecd.sh) gates pointing the system vi/ex/view at nvi
+  # on the presence of $out/bin/nvi-edits-ok, so vi becomes nvi only once nvi
+  # can actually edit.
   postInstall = ''
     if [ -x "$out/bin/nvi" ]; then
       for n in vi ex view; do
         [ -e "$out/bin/$n" ] || ln -s nvi "$out/bin/$n"
       done
     fi
+
+    export LD_LIBRARY_PATH="${db1}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    tf="$(mktemp)"
+    printf 'a\nhello world\n.\nw\nq\n' | "$out/bin/ex" -s "$tf"
+    if grep -q '^hello world$' "$tf"; then
+      echo "nvi edit smoke test PASSED: $(cat "$tf")"
+      touch "$out/bin/nvi-edits-ok"
+    else
+      echo "nvi edit smoke test FAILED; file was:" >&2
+      cat "$tf" >&2
+      exit 1
+    fi
+    rm -f "$tf"
   '';
 
   meta = with lib; {
