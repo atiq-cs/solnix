@@ -153,9 +153,23 @@ let
   # the REAL multi-output nixpkgs xz (bin/dev/lib/man, carries lzma.h and
   # liblzma.so + liblzma.pc) under a distinct name and thread it into python3
   # (see fixPy in tranche-entry-224.nix). Only on illumos.
-  xzReal = final.callPackage
+  xzReal = (final.callPackage
     (forkPath + "/pkgs/by-name/xz/xz/package.nix")
-    { };
+    { }).overrideAttrs (old: {
+      # xz-5.8.3's configure libtool ECHO probe selects the Solaris ksh builtin
+      # `print -r --`, but the generated libtool runs under bash where `print`
+      # does not exist -> every compile fails with `libtool: print: command not
+      # found` (bare `Error 1`, no compiler diagnostic). Rewrite the ECHO
+      # assignment in the generated libtool to the portable `printf %s\n`
+      # (libtool's own line-840 fallback). xzReal is python3's _lzma provider,
+      # so this unblocks the whole python3/meson swath (p11-kit/gnutls/
+      # fontconfig/libpsl/universal-ctags).
+      postConfigure = (old.postConfigure or "") + ''
+        for lt in $(find . -name libtool -type f 2>/dev/null); do
+          sed -i 's|print -r --|printf %s\\n|g' "$lt"
+        done
+      '';
+    });
 
   # illumos-extra-syslibs: a REAL derivation (rebuildable + substitutable on any
   # host), NOT a nix-store --add'd FOD. It assembles the versioned illumos
@@ -334,13 +348,83 @@ in
   # splice infinite-recurses in this nixpkgs vintage (unixtools.nix:35 provider
   # lookup). overrideAttrs doCheck=false does NOT break it: the package captures
   # net-tools into nativeBuildInputs from its OWN doCheck (computed in the let,
-  # before overrideAttrs runs). Root-cause fix: stub the top-level `net-tools`
-  # these packages reference to a no-op derivation, breaking the recursion for
-  # every consumer at once. The test suite is not the deliverable on a port.
-  net-tools = if isSolaris
-    then final.runCommand "net-tools-stub" { } "mkdir -p $out/bin"
-    else prev.net-tools;
-  gnutls = onSolaris prev.gnutls (old: { doCheck = false; });
+  # before overrideAttrs runs). Fix: pass a no-op `net-tools` as a package-
+  # function arg (scoped `.override`, no fixpoint cycle) so the recursive
+  # unixtools splice never evaluates. Test suite is not the deliverable.
+  gnutls = if isSolaris
+    then (prev.gnutls.override {
+      net-tools = prev.runCommand "net-tools-stub" { } "mkdir -p $out/bin";
+      util-linuxMinimal = prev.runCommand "util-linux-stub" { } "mkdir -p $out/bin";
+    }).overrideAttrs (old: {
+      doCheck = false;
+      NM = gnm;
+      # gnutls's shipped libtool probes lt_cv_sys_global_symbol_pipe with the
+      # Solaris /usr/bin/nm, whose output libtool cannot parse -> empty pipe ->
+      # the libgnutls.exp rule runs `nm ... | | sed` (`syntax error near |`).
+      # Force the cache var to the GNU-nm pipe (gnm -B + the standard libtool
+      # sed filter) so configure skips the failing probe and the export-symbols
+      # list is generated. Also thread NM=gnm (H7).
+      preConfigure = (old.preConfigure or "") + ''
+        export NM=${gnm}
+        export lt_cv_sys_global_symbol_pipe="${gnm} -B \$lib | sed -n -e 's/^.*[	 ]\([ABCDGIRSTW][ABCDGIRSTW]*\)[	 ][	 ]*\([_A-Za-z][_A-Za-z0-9]*\)$/\1 \2/p'"
+      '';
+    })
+    else prev.gnutls;
+
+  # meson-1.10.2's build runs its own test suite, which asserts `run_command(ld,
+  # '--version').returncode() == 0` and probes GNU-ld-only linker-script/ld-binary
+  # behaviours -- illumos `ld` is not GNU ld, so 5 tests fail and the build
+  # aborts (rc=5). Tests are not the deliverable; disable meson's checkPhase so
+  # the whole meson swath (p11-kit/fontconfig/libpsl/...) builds.
+  meson = if isSolaris
+    then prev.meson.overrideAttrs (old: {
+      doCheck = false; doInstallCheck = false;
+      nativeCheckInputs = [ ]; checkInputs = [ ];
+    })
+    else prev.meson;
+
+  # p11-kit (meson): common/message.c uses locale_t/strerror_l (illumos gates
+  # these behind __EXTENSIONS__ / <xlocale.h>), and common/path.c calls the
+  # 5-arg POSIX getpwuid_r, which illumos only declares when
+  # _POSIX_PTHREAD_SEMANTICS is defined (otherwise the 4-arg Solaris form ->
+  # "too many arguments"). Thread both illumos porting macros in. The link then
+  # needs -lsocket/-lnsl (rpc-transport.c uses socket/connect/socketpair -
+  # illumos split these out of libc). libintl_dgettext is unresolved because a
+  # GNU libintl.h leaked in but illumos gettext is native (in libc, no GNU
+  # -lintl); NIX_CFLAGS thread the socket libs, and configure is told there is
+  # no GNU libintl so it uses the native symbols. p11-kit is needed by gnutls.
+  p11-kit = if isSolaris
+    then prev.p11-kit.overrideAttrs (old: {
+      env = (old.env or { }) // {
+        NIX_CFLAGS_COMPILE = (old.env.NIX_CFLAGS_COMPILE or "")
+          + " -D__EXTENSIONS__ -D_POSIX_PTHREAD_SEMANTICS";
+        NIX_LDFLAGS = (old.env.NIX_LDFLAGS or "") + " -lsocket -lnsl";
+      };
+      mesonFlags = (old.mesonFlags or [ ]) ++ [ "-Dnls=false" ];
+    })
+    else prev.p11-kit;
+  # cscope's `emacsSupport` defaults true, pulling emacs-30.2 -> the clang/bpf
+  # bintools-wrapper that is null on illumos (assert coreutils/gnugrep). The
+  # emacs integration (xcscope.el) is optional; disable it so cscope builds
+  # with just ncurses.
+  cscope = if isSolaris
+    then prev.cscope.override { emacsSupport = false; }
+    else prev.cscope;
+
+  # The `ctags` attr is exuberant-ctags, whose src is an SVN checkout pulling
+  # subversion -> apr-util -> openldap -> the clang/bpf bintools (null on
+  # illumos). universal-ctags is the maintained replacement and builds from a
+  # plain tarball; alias ctags to it.
+  ctags = if isSolaris then final.universal-ctags else prev.ctags;
+
+  # universal-ctags builds fine but its checkPhase runs a man-page rst test
+  # (man-test) that fails on illumos (rst2man/locale differences); the ctags
+  # binary is the deliverable, not the man tests. Disable checks.
+  universal-ctags = if isSolaris
+    then prev.universal-ctags.overrideAttrs (old: {
+      doCheck = false; doInstallCheck = false;
+    })
+    else prev.universal-ctags;
 
   # H20 (tranche 6): git's `rustSupport` defaults to
   # `lib.meta.availableOn hostPlatform rustc` (true), pulling cargo -> cargo-

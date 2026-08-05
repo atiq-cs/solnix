@@ -400,6 +400,7 @@ import nixpkgs {
           "xorgproto" "libXau" "libXdmcp" "xcbproto" "libxcb"
           "libuv" "nghttp3" "ngtcp2" "spdlog" "fmt" "re2"
           "libxkbcommon" "libdeflate" "utf8proc" "lerc"
+          "yajl" "libssh" "cmark" "hiredis"
         ];
       in builtins.listToAttrs (builtins.concatMap
         (a: if prev ? ${a} then [{ name = a; value = fixCmake prev.${a}; }] else [ ])
