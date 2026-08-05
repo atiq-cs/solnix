@@ -1,0 +1,66 @@
+{
+  "nodes": {
+    "configGuess": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1,
+        "narHash": "sha256-rzwUIHMon1Bm10up5Yk+z6aRZ6R/O8Ce65pZsrohf+U=",
+        "path": "/nix/store/vq0j27nvpks679djbiykl8ikdyj6z5a9-config.guess-948ae97",
+        "type": "path"
+      },
+      "original": {
+        "path": "/nix/store/vq0j27nvpks679djbiykl8ikdyj6z5a9-config.guess-948ae97",
+        "type": "path"
+      }
+    },
+    "configSub": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1,
+        "narHash": "sha256-zD4kbkpC4PEZ/wXfPJgJNKJd0TeQf0l4nCtOLLcUo1s=",
+        "path": "/nix/store/1p61qjvlqmwrqab3zp5yh3z8rf3mvjmz-config.sub-948ae97",
+        "type": "path"
+      },
+      "original": {
+        "path": "/nix/store/1p61qjvlqmwrqab3zp5yh3z8rf3mvjmz-config.sub-948ae97",
+        "type": "path"
+      }
+    },
+    "fork": {
+      "flake": false,
+      "locked": {
+        "lastModified": 0,
+        "narHash": "sha256-+kO5NzFzg+2adyCJeB7L6ZCuC2bTFFY/5toZkG22j+o=",
+        "path": "/nix/store/qmvlnvf0kk1zkfjpjpxwimg5ym8sfwnk-nixpkgs-patched-1785781297346528064",
+        "type": "path"
+      },
+      "original": {
+        "path": "/nix/store/qmvlnvf0kk1zkfjpjpxwimg5ym8sfwnk-nixpkgs-patched-1785781297346528064",
+        "type": "path"
+      }
+    },
+    "root": {
+      "inputs": {
+        "configGuess": "configGuess",
+        "configSub": "configSub",
+        "fork": "fork",
+        "solnixPkgs": "solnixPkgs"
+      }
+    },
+    "solnixPkgs": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1785950642,
+        "narHash": "sha256-n32rXxF3LZU6+XC21/navzmgrq7B9J3adqYrPZBZzzM=",
+        "path": "/root/solnix-pkgs",
+        "type": "path"
+      },
+      "original": {
+        "path": "/root/solnix-pkgs",
+        "type": "path"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}

@@ -120,11 +120,16 @@ Produced on a fresh OI-build-AMI clone (pkg update -> 2026 userland -> gcc-13):
    its /nix/store hash path but not on PATH). FIX: ~/.nix-profile -> per-user profile; PATH prepends
    $HOME/.nix-profile/bin (shell-environment.nix + the .profile fallback). User installs now on PATH.
    (Packages ARE pure + hash-addressed in /nix/store — the gap was purely the profile->PATH link.)
-3. **`nix profile install` requires --impure** because the baked solnix-flake uses builtins.storePath
-   (nixpkgs ? builtins.storePath /nix/store/qmvln...-nixpkgs-patched; extra-syslibs.tar.gz storePath;
-   mirrors.nix storePath) -> "not allowed in pure evaluation mode". This SHOULD NOT be required.
-   FIX (follow-up, wire into the release flake): refactor the flake to take the fork nixpkgs + the
-   syslibs as flake INPUTS (path inputs / a proper flake.nix with inputs.nixpkgs following the pinned
-   rev) instead of builtins.storePath, so `nix profile install nixpkgs#<pkg>` evaluates PURELY. The
-   packages themselves are already pure hermetic derivations; only the flake glue forces --impure.
+3. **`nix profile install` used to require --impure** because the baked solnix-flake used
+   builtins.storePath (nixpkgs ? builtins.storePath /nix/store/qmvln...-nixpkgs-patched; the
+   fetchurl-shim mirrors.nix; the gnu-config config.guess/config.sub FODs) -> "not allowed in pure
+   evaluation mode". On Nix 2.24, pure eval ALSO rejects a plain absolute path literal ("access to
+   absolute path '/nix' is forbidden in pure evaluation mode"), so a bare path swap does not work.
+   FIXED: pkgs/illumos/phase3/by-name-flake is a proper flake.nix whose fork nixpkgs + the two
+   gnu-config FODs are `flake = false` path INPUTS pinned in flake.lock; pkgs.nix threads them into
+   the existing tranche-entry-224.nix overlay (single source of truth) via new forkPath/gnuConfigGuess/
+   gnuConfigSub params (defaults preserve the classic/impure `nix-build` path unchanged). Proven on
+   the 2.24 host: `nix registry add nixpkgs path:<flake>` then `nix profile install nixpkgs#hello`
+   with NO --impure -> installs + runs (Hello, world!). The AMI bakes this pure flake as solnix-flake
+   (oi-make-declarative-be.sh step 5c/5d updated). classic nix-env shim resolves by name too.
    ALSO fix: 'which' is missing from the base toolset (add it); nix profile install is the verb (not 'add').

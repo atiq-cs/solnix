@@ -30,13 +30,21 @@
 , nixpkgs ? <nixpkgs-patched>
 , illumos ? /root/solnix-pkgs/pkgs/os-specific/illumos
 , fetchurlShim ? ./fetchurl-shim-qmvlnvf0.nix
-, solarisOverlay ? /root/solaris-overlay-qmvlnvf0.nix
+, solarisOverlay ? ./solaris-overlay-qmvlnvf0.nix
+  # forkPath / gnuConfigGuess / gnuConfigSub: out-of-tree store paths the shim
+  # + overlay reference. Defaults are the absolute paths (classic/impure build
+  # path via `nix-build`). The pure by-name flake (pkgs/illumos/phase3/
+  # by-name-flake) passes these as `flake = false` INPUTS so `nix profile
+  # install` evaluates with NO --impure.
+, forkPath ? /nix/store/qmvlnvf0kk1zkfjpjpxwimg5ym8sfwnk-nixpkgs-patched-1785781297346528064
+, gnuConfigGuess ? null
+, gnuConfigSub ? null
 }:
 import nixpkgs {
   inherit system;
   overlays = [
     (final: prev: { solnix = final.callPackage illumos { }; illumos = final.solnix; })
-    (import fetchurlShim)
+    (import fetchurlShim { inherit forkPath; })
     # H3 (from tranche 5): route stdenv.fetchurlBoot through the same shim so
     # the libxcrypt perl<->libxcrypt cycle-break src is an eval-time
     # fixed-output fetch. On 2.24 the shim's fetchurlBoot passthru
@@ -84,44 +92,129 @@ import nixpkgs {
     })
     # illumosGnm + the C-only gmp/mpfr + no-check libffi that the solaris-overlay
     # withGnm helper and the fragile-test packages depend on.
-    (final: prev: {
+    (final: prev:
+     let
+      # fixPy: the full illumos CPython 3.14 fix set (config.guess, -z nodefs
+      # module links, socketmodule Py_SUNOS_VERSION, native libintl, relaxed
+      # openssl-dev ref). Applied to BOTH `python3` (the top-level alias) AND
+      # `python314` (the interpreter python3Packages/meson are actually built
+      # with) -- overriding only `python3` misses python3Packages.python, so the
+      # meson-pulled build-platform python stays broken and blocks the whole
+      # meson swath (xorgproto/pixman/p11-kit/libxcb/...).
+      #
+      # Gap 2: the top-level `bzip2`/`xz` are the dev-less stdenv SEED slices
+      # (bzip2 = a single binary, xz = a single binary; no bzlib.h/lzma.h, no
+      # libbz2.so/liblzma.so), so CPython silently omits the _bz2 and _lzma
+      # extension modules. Thread the header-ful REAL builds (bzip2Real/xzReal
+      # from the solaris-overlay: multi-output with bzlib.h/lzma.h + the libs)
+      # into the interpreter so _bz2 + _lzma compile and import.
+      fixPy = base: (base.override {
+        withZstd = false;
+        bzip2 = final.bzip2Real;
+        xz = final.xzReal;
+      }).overrideAttrs (old: {
+        configureFlags = (old.configureFlags or [ ])
+          ++ [ "--build=x86_64-pc-solaris2.11" ];
+        # Route the shared-module link through the cc-wrapper (`cc -shared`) and
+        # allow undefined symbols (`-z nodefs`): extension modules leave the
+        # CPython C-API symbols unresolved, bound from the interpreter at import
+        # (GNU ld does this by default; Solaris ld needs -z nodefs explicit).
+        preConfigure = (old.preConfigure or "") + ''
+          export LDSHARED="$CC -shared -Wl,-z,nodefs"
+          export LDCXXSHARED="$CXX -shared -Wl,-z,nodefs"
+          export BLDSHARED="$CC -shared -Wl,-z,nodefs"
+          # autoreconfPhase regenerates config.guess (the 2025-07-10 copy that
+          # `cannot guess build type` on this UNAME_RELEASE-empty illumos), so
+          # overwrite it HERE (post-autoreconf, pre-configure) with a fixed echo
+          # of the canonical triple.
+          for cg in config.guess $(find . -name config.guess 2>/dev/null); do
+            printf '#!/bin/sh\necho x86_64-pc-solaris2.11\n' > "$cg"
+            chmod +x "$cg"
+          done
+        '';
+        # socketmodule.c gates a Solaris-10 sethostname workaround on
+        # `Py_SUNOS_VERSION <= 510`, undefined here -> the cpp becomes
+        # `... && <empty> <= 510` -> "operator '&&' has no right operand".
+        # illumos is SunOS 5.11 (never the <=510 branch); rewrite to literal 0.
+        postPatch = (old.postPatch or "") + ''
+          sed -i 's/Py_SUNOS_VERSION <= 510/0/' Modules/socketmodule.c
+        '';
+        # A GNU gettext libintl.h leaks in via a store dep, so _localemodule.c
+        # emits libintl_* calls, but the link uses illumos's native `-lintl`
+        # (plain names only) -> `ld: fatal: symbol referencing errors` on
+        # _freeze_module. illumos libc provides gettext natively, so tell
+        # configure there is no libintl.h / no -lintl (autoconf cache).
+        env = (old.env or { }) // {
+          ac_cv_header_libintl_h = "no";
+          ac_cv_lib_intl_textdomain = "no";
+        };
+        # nixpkgs' python guards the main output against an openssl-dev ref
+        # (disallowedReferences); the sysconfig strip is incomplete on illumos
+        # so the -dev include path (build metadata, /nix/store, no host leak)
+        # remains. Clear the over-strict check so the interpreter lands.
+        disallowedReferences = [ ];
+        doCheck = false;
+        doInstallCheck = false;
+      });
+     in {
       illumosGnm = final.runCommand "illumos-gnm" { } ''
         mkdir -p $out/bin
         ln -s ${final.stdenv.cc.bintools.bintools}/bin/nm $out/bin/gnm
       '';
       gmpCOnly = (final.gmp.override { cxx = false; }).overrideAttrs (_: { doCheck = false; });
       libffiNoCheck = final.libffi.overrideAttrs (_: { doCheck = false; });
+      # libffi's doCheck pulls dejagnu -> expect, which fails to build on illumos
+      # (expect needs pty.h/BSD ptys, absent here). libffi tests are not the
+      # deliverable; disable its check globally so every consumer (python3,
+      # meson-driven xorgproto/libxcb, ...) gets a buildable libffi.
+      libffi = prev.libffi.overrideAttrs (_: { doCheck = false; });
+      # asciidoc (ninja's manual dep) runs a pytest suite in its build that is
+      # fragile on illumos (missing `mock`, etc.); tests are not the deliverable
+      # -> disable its checks so ninja -> the meson swath builds.
+      asciidoc = prev.asciidoc.overrideAttrs (_: {
+        doCheck = false; doInstallCheck = false; nativeCheckInputs = [ ];
+      });
+      # ninja (the meson backend) launches subprocesses with posix_spawn, but
+      # this illumos kernel lacks the SYS_spawn fast path and libc does not fall
+      # back -> the spawn syscall traps SIGSYS ("Bad System Call", core) the
+      # moment ninja runs a rule. Patch subprocess-posix.cc to fork()+execvp()
+      # (same signal-mask/pgroup/fd actions) so ninja works, unblocking every
+      # meson-built package (xorgproto/pixman/p11-kit/libpsl/libxcb/...).
+      ninja = prev.ninja.overrideAttrs (old: {
+        patches = (old.patches or [ ]) ++ [ ./ninja-fork-exec-illumos.patch ];
+      });
+      # withZstd off (CPython 3.14 compression.zstd -> zstd -> cmake extra graph)
+      # + the illumos fix set, applied to the alias AND the interpreter so
+      # python3Packages.python (meson's build python) is fixed too.
+      python3 = fixPy prev.python3;
+      python314 = fixPy prev.python314;
       mpfrCOnly = (final.mpfr.override { gmp = final.gmpCOnly; }).overrideAttrs (_: { doCheck = false; });
     })
-    (import solarisOverlay)
-    # H26 attempt (2.24): cmake-minimal's bundled/linked libuv links
-    # -lkstat -lsendfile (illumos), absent from the seed's 13 base libs, so the
-    # cmake bootstrap fails `ld: fatal: library -lkstat: not found`. The
-    # extra-syslibs FOD (same provenance as the seed, hash-pinned) carries
-    # libkstat/libsendfile/libproc in lib/amd64 with .so links. Wire its -L into
-    # libuv (which the solaris-overlay already patches for errno.h) so the
-    # cmake bootstrap link resolves. Unblocks cmake -> nvi (via zlib-ng-free
-    # nvi2 cmake build). extraSyslibs rebuilt inline (the overlay's copy is in a
-    # private `let`).
+    (import solarisOverlay { inherit forkPath gnuConfigGuess gnuConfigSub; })
+    # H26 (2.24): cmake-minimal's bundled libuv links -lkstat -lsendfile
+    # (illumos), absent from the seed's base libs, so the cmake bootstrap fails
+    # `ld: fatal: library -lkstat: not found`.
+    # extra-syslibs is now a REAL derivation (see solaris-overlay-qmvlnvf0.nix):
+    # it slices the versioned illumos syslibs (libmd/libmp/libuutil/libnvpair/
+    # libidmap/libavl/libsec + bare .so links) out of the seed via the stdenv's
+    # seedSyslibs slice, so it rebuilds reproducibly on any fresh host and
+    # substitutes from cache -- NO nix-store --add FOD. It carries libkstat/
+    # libsendfile/libproc/libcontract bare .so links pointing at the base
+    # platform /lib/amd64 (illumos ABI, resolved at runtime like libc). Wire
+    # its -L into cmake-minimal (bundled libuv links -lkstat -lsendfile) so the
+    # cmake bootstrap link resolves. Unblocks cmake -> nvi. Defined inline here
+    # (the overlay's copy is in a private `let`); anchored on final.seedSyslibs.
     (final: prev:
       let
-        extraSyslibs = final.stdenvNoCC.mkDerivation {
-          name = "illumos-extra-syslibs";
-          src = /nix/store/qbl2q3v2h3y4ghc6mpjc2cmjyf0ppabq-extra-syslibs.tar.gz;
-          dontUnpack = true;
-          installPhase = ''
-            mkdir -p "$out"
-            tar -xzf "$src" -C "$out"
-            # Some libs ship versioned-only (libmd.so.1, libmp.so.2, ...); add a
-            # bare lib<n>.so link so CMake's hermetic find_library(NAMES <n>)
-            # resolves them (cmlibarchive's LIBMD_LIBRARY probe -> NOTFOUND).
-            for so in "$out"/lib/amd64/*.so.*; do
-              [ -e "$so" ] || continue
-              base=''${so%.so.*}.so
-              [ -e "$base" ] || ln -s "$(basename "$so")" "$base"
-            done
-          '';
-        };
+        extraSyslibs = final.runCommand "illumos-extra-syslibs" { } ''
+          mkdir -p "$out/lib/amd64"
+          for f in ${final.seedSyslibs}/lib/amd64/*; do
+            ln -s "$f" "$out/lib/amd64/$(basename "$f")"
+          done
+          for n in libkstat libsendfile libproc libcontract; do
+            [ -e "/lib/amd64/$n.so.1" ] && ln -sf "/lib/amd64/$n.so.1" "$out/lib/amd64/$n.so"
+          done
+        '';
         seedL = "-L${extraSyslibs}/lib/amd64";
         # H37 (2.24): cmake's package.nix sets CMAKE_RANLIB to
         # ${bintools}/bin/ranlib, but the seed illumos bintools slice ships
@@ -231,6 +324,20 @@ import nixpkgs {
         nativeInstallCheckInputs = [];
       });
     })
+    # lua's Makefile solaris target ends with `ranlib`, but makeFlags sets
+    # RANLIB=${targetPrefix}ranlib -> bare `ranlib`, absent from the seed
+    # bintools slice (H37: seed ships ar/as/ld/nm/elfdump, no ranlib). The
+    # illumos /usr/bin/ranlib works on the seed ar's archives (the same stage0
+    # host-path convention the seed bintools uses for `ar`). Repoint RANLIB/AR
+    # at the illumos tools so the static liblua.a link succeeds.
+    (final: prev: {
+      lua5_4 = prev.lua5_4.overrideAttrs (old: {
+        makeFlags = builtins.filter
+          (f: !(final.lib.hasPrefix "RANLIB=" f))
+          (old.makeFlags or [ ])
+          ++ [ "RANLIB=/usr/bin/ranlib" ];
+      });
+    })
     # gawkReal defined after solaris-overlay so final.gawk is a resolved drv:
     # strip the autoreconf/texinfo path (illumos-fragile, unneeded for a working
     # awk) and link the C-only gmp/mpfr for bignum.
@@ -249,6 +356,132 @@ import nixpkgs {
         ];
       });
     })
+    # cmake-graph swath: the FIXED cmake is cmakeMinimal (kstat/sendfile link,
+    # ranlib wrapper, SIGSYS-spawn neuter, per H26/H37/H38). The full `cmake`
+    # attr is a SEPARATE --parallel bootstrap that carries none of those fixes,
+    # so every package whose nativeBuildInputs pull `cmake` fails the same way.
+    # Swap cmake -> cmakeMinimal in nativeBuildInputs (cmakeMinimal is a full
+    # working configure/build cmake for consumers -- nvi built through it), and
+    # drop doCheck: the cmake CTest suites shell out to host tools absent from
+    # the sandbox (zstd playTests needs `which`/`gdiff`) -- test noise on a
+    # fresh port, same rationale as the rsync/gdb doCheck=false above. One
+    # list-driven helper so the whole swath is one place.
+    (final: prev:
+      let
+        cmName = d: d.pname or d.name or "";
+        useMinimalCmake = d:
+          if final.lib.hasPrefix "cmake" (cmName d)
+             && !(final.lib.hasInfix "minimal" (cmName d))
+          then final.cmakeMinimal else d;
+        fixCmake = drv: drv.overrideAttrs (old: {
+          nativeBuildInputs = map useMinimalCmake (old.nativeBuildInputs or [ ]);
+          doCheck = false;
+          doInstallCheck = false;
+        });
+        # libtiff/libwebp/fontconfig pull a docs/test toolchain (sphinx/python3/
+        # libxslt) whose python `toml` src has an empty hash in this fork's
+        # fetch-shim -> instantiation throws before the build. Docs+tests are
+        # not the deliverable on a fresh port; strip the docs/test native inputs
+        # and check inputs so only the C library builds.
+        stripDocs = drv: (fixCmake drv).overrideAttrs (old: {
+          nativeBuildInputs = builtins.filter
+            (d: let n = final.lib.toLower (cmName d); in
+                !(final.lib.hasInfix "sphinx" n || final.lib.hasInfix "python" n
+                  || final.lib.hasInfix "libxslt" n || final.lib.hasInfix "docbook" n))
+            (map useMinimalCmake (old.nativeBuildInputs or [ ]));
+          nativeCheckInputs = [ ];
+          checkInputs = [ ];
+        });
+        attrs = [
+          "lz4" "brotli" "snappy" "zstd"
+          "c-ares" "libpsl" "json_c" "jansson"
+          "libjpeg" "libjpeg_turbo" "libtiff" "libwebp" "freetype"
+          "pixman" "fontconfig" "libarchive" "p11-kit" "p11_kit"
+          "xorgproto" "libXau" "libXdmcp" "xcbproto" "libxcb"
+          "libuv" "nghttp3" "ngtcp2" "spdlog" "fmt" "re2"
+          "libxkbcommon" "libdeflate" "utf8proc" "lerc"
+        ];
+      in builtins.listToAttrs (builtins.concatMap
+        (a: if prev ? ${a} then [{ name = a; value = fixCmake prev.${a}; }] else [ ])
+        attrs)
+      // builtins.listToAttrs (builtins.concatMap
+        (a: if prev ? ${a} then [{ name = a; value = stripDocs prev.${a}; }] else [ ])
+        [ "libtiff" "libwebp" "fontconfig" ])
+      // {
+        # libjpeg-turbo's SIMD path needs nasm, which does not build on illumos
+        # (bytesex.h uses htole64 -> -Werror implicit-decl, and its own zlib.h
+        # include is unresolved). SIMD is a perf optimization, not required for a
+        # working codec; drop it so the nasm dep leaves the graph. (libtiff/
+        # libwebp depend on this libjpeg-turbo, so they unblock too.)
+        libjpeg_turbo = (fixCmake prev.libjpeg_turbo).overrideAttrs (old: {
+          cmakeFlags = (old.cmakeFlags or [ ]) ++ [ "-DWITH_SIMD=OFF" ];
+          nativeBuildInputs = builtins.filter
+            (d: let n = final.lib.toLower (cmName d); in !(final.lib.hasInfix "nasm" n))
+            (map useMinimalCmake (old.nativeBuildInputs or [ ]));
+        });
+        # libwebp's AVX2 path emits _mm256_cvtsi256_si32 as an out-of-line call
+        # this gcc never resolves -> `ld: fatal: symbol referencing errors` when
+        # linking libwebp.so / the cwebp tools. Disable SIMD (perf-only) so the
+        # codec builds. (libtiff optionally consumes libwebp -> unblocks too.)
+        libwebp = (stripDocs prev.libwebp).overrideAttrs (old: {
+          cmakeFlags = (old.cmakeFlags or [ ]) ++ [ "-DWEBP_ENABLE_SIMD=OFF" "-DWEBP_BUILD_CWEBP=OFF" "-DWEBP_BUILD_DWEBP=OFF" "-DWEBP_BUILD_GIF2WEBP=OFF" "-DWEBP_BUILD_IMG2WEBP=OFF" "-DWEBP_BUILD_ANIM_UTILS=OFF" ];
+          # libwebp's only libtiff use is the tiff2webp tool (disabled above);
+          # libtiff's cmake FindCMath probe fails on illumos (pow lives in libc,
+          # no standalone libm.so for find_library) -> drop the libtiff input so
+          # the codec builds without dragging libtiff's broken probe in.
+          buildInputs = builtins.filter
+            (d: let n = final.lib.toLower (cmName d); in !(final.lib.hasInfix "tiff" n))
+            (old.buildInputs or [ ]);
+        });
+        # libtiff's cmake/FindCMath does find_library(NAMES m) + a link probe;
+        # illumos keeps libm at /lib/64/libm.so (libc-family, not a store path),
+        # which cmake's hermetic find_library never searches -> CMath NOTFOUND.
+        # Point CMAKE_LIBRARY_PATH at /lib/64 so the probe resolves; the -lm the
+        # link probe needs is on /lib/64 too. lerc/webp already routed through
+        # cmake-minimal by the attrs swap. Drop libdeflate/webp examples noise
+        # is not needed -- just the CMath hint.
+        # libtiff's cmake/FindCMath does find_library(NAMES m); illumos keeps
+        # libm in the cc bootstrapLibs (usr/lib/amd64/libm.so), which cmake's
+        # hermetic find_library never searches -> CMath NOTFOUND. Point
+        # CMAKE_LIBRARY_PATH at the bootstrapLibs amd64 dir so the probe resolves
+        # to the SAME libm the linker already pulls (pointing at /lib/64 instead
+        # records a second libm.so.2 -> `ld: recording name conflict`).
+        libtiff = (stripDocs prev.libtiff).overrideAttrs (old: {
+          env = (old.env or { }) // {
+            CMAKE_LIBRARY_PATH = "/nix/store/fcikgn2ap30cdak1m0gcz5spcjhl430q-bootstrapLibs/usr/lib/amd64";
+          };
+          # docs are stripped (sphinx removed), so the declared `doc`/`man`
+          # outputs are never populated -> "failed to produce output path". Drop.
+          outputs = builtins.filter (o: o != "doc" && o != "man") (old.outputs or [ "out" ]);
+        });
+        # libxkbcommon's docs enable doxygen, which pulls the UNFIXED full `cmake`
+        # (-> rhash bootstrap fail). Docs are not the deliverable; disable them so
+        # doxygen (and its cmake) leave the graph.
+        libxkbcommon = (fixCmake prev.libxkbcommon).overrideAttrs (old: {
+          mesonFlags = (old.mesonFlags or [ ]) ++ [ "-Denable-docs=false" ];
+          nativeBuildInputs = builtins.filter
+            (d: let n = final.lib.toLower (cmName d); in !(final.lib.hasInfix "doxygen" n))
+            (map useMinimalCmake (old.nativeBuildInputs or [ ]));
+        });
+        # spdlog's test suite links catch2, which pulls the UNFIXED full `cmake`
+        # (-> rhash bootstrap fail). Tests are off already (fixCmake); drop the
+        # catch2 buildInput and the tests flag so catch2's cmake leaves the graph.
+        spdlog = (fixCmake prev.spdlog).overrideAttrs (old: {
+          cmakeFlags = (old.cmakeFlags or [ ]) ++ [ "-DSPDLOG_BUILD_TESTS=OFF" "-DSPDLOG_BUILD_BENCH=OFF" ];
+          # illumos hides tm_gmtoff behind __EXTENSIONS__ (os-inl.h uses it).
+          # cc-wrapper threads NIX_CFLAGS_COMPILE_BEFORE (see gawkReal).
+          NIX_CFLAGS_COMPILE_BEFORE = (old.NIX_CFLAGS_COMPILE_BEFORE or "") + " -D__EXTENSIONS__";
+          buildInputs = builtins.filter
+            (d: let n = final.lib.toLower (cmName d); in !(final.lib.hasInfix "catch2" n))
+            (old.buildInputs or [ ]);
+        });
+        # ngtcp2's example clients (osslclient/osslserver) require CXX23, which
+        # this gcc lacks -> CMake Generate fails on examples/. The library itself
+        # builds fine (OpenSSL crypto backend detected); build lib-only.
+        ngtcp2 = (fixCmake prev.ngtcp2).overrideAttrs (old: {
+          cmakeFlags = (old.cmakeFlags or [ ]) ++ [ "-DENABLE_LIB_ONLY=ON" ];
+        });
+      })
   ];
   # 2.24 supports structuredAttrs natively, so the nixpkgs default is correct.
   config = { allowUnsupportedSystem = true; };

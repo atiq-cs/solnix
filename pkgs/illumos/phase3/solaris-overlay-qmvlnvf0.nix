@@ -27,10 +27,28 @@
 # into a handful of families (gnulib const, socket libs, GNU ld options,
 # gcc-14 strictness, C++ math namespace).
 
+# forkPath: the patched-nixpkgs source tree (bzip2/xz/htop package.nix are
+# callPackage'd out of it). gnuConfigGuess/gnuConfigSub: the content-addressed
+# gnu-config FODs (config.guess/config.sub). Defaults keep the classic/impure
+# build path (`nix-build`) working via builtins.storePath; the pure by-name
+# flake passes these as `flake = false` INPUTS so eval needs no --impure.
+{ forkPath ? /nix/store/qmvlnvf0kk1zkfjpjpxwimg5ym8sfwnk-nixpkgs-patched-1785781297346528064
+, gnuConfigGuess ? null
+, gnuConfigSub ? null
+}:
 final: prev:
 
 let
   inherit (final) lib;
+
+  # config.guess/config.sub sources: a pure-eval flake passes them as inputs;
+  # the classic path leaves them null and falls back to builtins.storePath.
+  configGuessSrc =
+    if gnuConfigGuess != null then gnuConfigGuess
+    else builtins.storePath /nix/store/vq0j27nvpks679djbiykl8ikdyj6z5a9-config.guess-948ae97;
+  configSubSrc =
+    if gnuConfigSub != null then gnuConfigSub
+    else builtins.storePath /nix/store/1p61qjvlqmwrqab3zp5yh3z8rf3mvjmz-config.sub-948ae97;
 
   # Only x86_64-solaris (and any *-solaris) needs these fixes. Elsewhere every
   # override below collapses to the untouched upstream drv.
@@ -125,38 +143,78 @@ let
   # `pkgs.bzip2.dev` -- notably the Compress-Raw-Bzip2 perl module (git/wget
   # -> libwww -> HTTP-Message). Only on illumos.
   bzip2Real = final.callPackage
-    /nix/store/qmvlnvf0kk1zkfjpjpxwimg5ym8sfwnk-nixpkgs-patched-1785781297346528064/pkgs/tools/compression/bzip2/default.nix
+    (forkPath + "/pkgs/tools/compression/bzip2/default.nix")
     { };
 
-  # H26b (tranche 6): the seed carries only 13 base libs in lib/amd64 and none
-  # of the GNU userland libs include libkstat/libsendfile -- yet htop's
-  # configure hard-requires kstat_open() (illumos CPU/proc stats) and cmake's
-  # bundled libuv links -lkstat -lsendfile. Both libs (+ kstat.h) exist on the
-  # illumos host; extract them into a content-addressed fixed-output tarball
-  # (same provenance as the seed FOD itself -- pulled from the host illumos,
-  # hash-pinned = hermetic-by-hash) and expose lib/amd64 with `.so -> .so.1`
-  # links. Wire it into the needing packages via NIX_CFLAGS_COMPILE -L (the H1
-  # cc-wrapper pass then auto-adds the matching -R so they run from the store).
-  # The tarball ships some libs versioned-only (libmd.so.1, libmp.so.2, ...);
-  # a bare `lib<n>.so -> lib<n>.so.N` link is added for each so CMake's hermetic
-  # find_library(NAMES <n>) resolves them (cmlibarchive's LIBMD_LIBRARY probe).
-  extraSyslibs = final.stdenvNoCC.mkDerivation {
-    name = "illumos-extra-syslibs";
-    src = /nix/store/qbl2q3v2h3y4ghc6mpjc2cmjyf0ppabq-extra-syslibs.tar.gz;
-    dontUnpack = true;
-    installPhase = ''
-      mkdir -p "$out"
-      tar -xzf "$src" -C "$out"
-      for so in "$out"/lib/amd64/*.so.*; do
-        [ -e "$so" ] || continue
-        base=''${so%.so.*}.so
-        [ -e "$base" ] || ln -s "$(basename "$so")" "$base"
-      done
-    '';
-  };
+  # xzReal (Gap 2): the top-level `xz` is the stdenv bootstrap SEED slice (a
+  # single binary from usr/gnu/bin/xz, NO headers/lib), and the final stdenv
+  # re-pins it via `inherit (prevStage) ... xz`, so consumers that need
+  # lzma.h + liblzma.so + the .pc (notably CPython's _lzma module) fail. Build
+  # the REAL multi-output nixpkgs xz (bin/dev/lib/man, carries lzma.h and
+  # liblzma.so + liblzma.pc) under a distinct name and thread it into python3
+  # (see fixPy in tranche-entry-224.nix). Only on illumos.
+  xzReal = final.callPackage
+    (forkPath + "/pkgs/by-name/xz/xz/package.nix")
+    { };
+
+  # illumos-extra-syslibs: a REAL derivation (rebuildable + substitutable on any
+  # host), NOT a nix-store --add'd FOD. It assembles the versioned illumos
+  # system libs (libmd/libmp/libuutil/libnvpair/libidmap/libavl/libsec + their
+  # bare `.so -> .so.N` link-editor links) by slicing them out of the seed via
+  # the stdenv's `seedSyslibs` slice (illumos-seed-syslibs), which itself is
+  # seed-sourced + host-free. Those libs are exactly the set CMake's hermetic
+  # find_library(NAMES <n>) needs (cmlibarchive's LIBMD_LIBRARY probe) and the
+  # -l<name> autotools/gettext link lines reference; the seed already carries
+  # them under usr/gnu/lib/amd64 (the ldd-closure of the GNU userland), so no
+  # host /lib ref is needed.
+  #
+  # libkstat/libsendfile are illumos BASE-PLATFORM libs (they live in the
+  # platform /lib/amd64, part of the stable ABI like libc/libm -- never a
+  # from-source Nix build). They are not in the seed slice, so a bare
+  # `libkstat.so -> /lib/amd64/libkstat.so.1` link is added for the link-editor
+  # `-l` probe (cmake's bundled libuv links -lkstat -lsendfile); the runtime
+  # loader resolves the platform .so.1 the same class as libc-family, so the
+  # closure stays host-free (the link target is a platform path, not a store
+  # dep). Consumers wire it via NIX_CFLAGS_COMPILE -L (the H1 cc-wrapper pass
+  # auto-adds the matching -R).
+  extraSyslibs = final.runCommand "illumos-extra-syslibs" { } ''
+    mkdir -p "$out/lib/amd64"
+    # seed-sourced versioned syslibs + their bare .so links (host-free).
+    for f in ${final.seedSyslibs}/lib/amd64/*; do
+      ln -s "$f" "$out/lib/amd64/$(basename "$f")"
+    done
+    # base-platform link-editor stubs for the libs the seed slice lacks
+    # (platform ABI at /lib/amd64, resolved at runtime like libc).
+    for n in libkstat libsendfile libproc libcontract; do
+      [ -e "/lib/amd64/$n.so.1" ] && ln -sf "/lib/amd64/$n.so.1" "$out/lib/amd64/$n.so"
+    done
+  '';
 
 in
 {
+  # Expose the header-ful bzip2/xz so downstream tranche overlays (fixPy in
+  # tranche-entry-224.nix) can thread them into python3 for _bz2/_lzma (Gap 2).
+  inherit bzip2Real xzReal;
+
+  # gnu-config: its config.guess/config.sub come from `fetchurl` against
+  # git.savannah.gnu.org, which is unreachable from illumos build hosts (every
+  # cgit endpoint times out). The fetchurl-shim turns that into an eval-time
+  # `builtins.fetchurl` that hangs the whole evaluation. The two scripts are
+  # content-addressed FODs already seeded into the store from cache.nixos.org
+  # (identical hash regardless of source): vq0j27nv config.guess-948ae97,
+  # 1p61qjvl config.sub-948ae97. Point gnu-config's sources at those store paths
+  # so eval never touches savannah. updateAutotoolsGnuConfigScriptsHook (pulled
+  # by every autotools package) needs this.
+  gnu-config = onSolaris prev.gnu-config (old: {
+    unpackPhase = ''
+      runHook preUnpack
+      cp ${configGuessSrc} ./config.guess
+      cp ${configSubSrc} ./config.sub
+      chmod +w ./config.sub ./config.guess
+      runHook postUnpack
+    '';
+  });
+
   # ======================================================================
   # KNOWN-FIX packages. Keyed by nixpkgs attr (the CLASS A/B target from
   # nixpkgs-map.tsv). ~18 entries seeded from documented wave findings.
@@ -271,11 +329,17 @@ in
       (b: (b.pname or b.name or "") != "bzip2") (old.buildInputs or []);
   });
 
-  # H23 (tranche 6): gnutls (pulled by gnupg) sets doCheck true on illumos
-  # (build==host), and its check inputs include `net-tools`, whose unixtools
-  # splice eval hits an infinite recursion in this nixpkgs vintage. The test
-  # suite is not the deliverable on a fresh port; disable doCheck so net-tools
-  # is never pulled. Unblocks gnupg -> gnutls.
+  # H23 (tranche 6): gnutls/gpgme set doCheck true on illumos (build==host),
+  # and their check inputs include `net-tools`, whose unixtools singleBinary
+  # splice infinite-recurses in this nixpkgs vintage (unixtools.nix:35 provider
+  # lookup). overrideAttrs doCheck=false does NOT break it: the package captures
+  # net-tools into nativeBuildInputs from its OWN doCheck (computed in the let,
+  # before overrideAttrs runs). Root-cause fix: stub the top-level `net-tools`
+  # these packages reference to a no-op derivation, breaking the recursion for
+  # every consumer at once. The test suite is not the deliverable on a port.
+  net-tools = if isSolaris
+    then final.runCommand "net-tools-stub" { } "mkdir -p $out/bin"
+    else prev.net-tools;
   gnutls = onSolaris prev.gnutls (old: { doCheck = false; });
 
   # H20 (tranche 6): git's `rustSupport` defaults to
@@ -333,7 +397,7 @@ in
   # needs at runtime. Only on illumos.
   htop = if isSolaris
     then (final.callPackage
-      /nix/store/qmvlnvf0kk1zkfjpjpxwimg5ym8sfwnk-nixpkgs-patched-1785781297346528064/pkgs/by-name/ht/htop/package.nix
+      (forkPath + "/pkgs/by-name/ht/htop/package.nix")
       { systemdSupport = false; systemdLibs = null; sensorsSupport = false; lm_sensors = null; })
       .overrideAttrs (old:
         # H26b: htop configure needs kstat_open() -> -lkstat, from extraSyslibs.
@@ -372,6 +436,85 @@ in
   # rsync, socat, netcat-family: raw sockets.
   rsync = onSolaris prev.rsync (old: addLdFlags old socketLibs);
   socat = onSolaris prev.socat (old: addLdFlags old socketLibs);
+  # whois: getservbyname/gethostbyname live in the split libc (-lsocket -lnsl).
+  whois = onSolaris prev.whois (old: addLdFlags old socketLibs);
+
+  # mkpasswd (built from the whois src): config.h auto-defines
+  # HAVE_SOLARIS_CRYPT_GENSALT for `__SVR4 && __sun`, whose crypt_gensalt is the
+  # 2-arg Solaris-native form — but we link libxcrypt (the 4-arg Linux form), so
+  # mkpasswd.c's Solaris branch fails `too few arguments to crypt_gensalt`. We
+  # use libxcrypt, so flip config.h to the Linux path (+ split-libc socket libs
+  # for the shared whois objects mkpasswd links).
+  mkpasswd = onSolaris prev.mkpasswd (old: addLdFlags old socketLibs // {
+    postPatch = (old.postPatch or "") + ''
+      sed -i 's/# define HAVE_SOLARIS_CRYPT_GENSALT/# define HAVE_LINUX_CRYPT_GENSALT/' config.h
+    '';
+  });
+
+  # tmux / smartmontools: both default a buildInput on
+  # `lib.meta.availableOn stdenv.hostPlatform systemdLibs`, which FORCES eval of
+  # the illumos `systemdLibs` derivation — that throws the cc/bintools-wrapper
+  # `bintools != null` assertion (systemd's stdenv variant has a null bintools
+  # on this fork), aborting eval before availableOn can return false. systemd is
+  # Linux-only, so cut it: tmux via its `withSystemd`/`withUtempter` args (never
+  # evaluates systemdLibs), smartmontools by nulling the conditional buildInput.
+  tmux = onSolaris (prev.tmux.override { withSystemd = false; withUtempter = false; }) (old:
+    addLdFlags old socketLibs);
+  smartmontools = onSolaris prev.smartmontools (old: {
+    buildInputs = [ ];
+  });
+
+  # hostname-debian (a smartmontools drivedb-fetch build-dep): gethostbyname/
+  # getnameinfo (-lsocket -lnsl) AND hstrerror (-lresolv) live in the illumos
+  # split libc/resolver.
+  hostname-debian = onSolaris prev.hostname-debian (old: addLdFlags old "${socketLibs} -lresolv");
+
+  # screen: hardcodes --enable-pam + a `pam` buildInput; nixpkgs `openpam` fails
+  # to compile on illumos (PATH_MAX undeclared without <limits.h>). illumos has
+  # native PAM but the build doesn't need it — drop PAM (screen still is the
+  # terminal multiplexer, the parity function). Remove --enable-pam + the pam
+  # buildInput.
+  screen = onSolaris prev.screen (old: withGnm old // {
+    configureFlags = builtins.filter (f: f != "--enable-pam") (old.configureFlags or [ ]);
+    buildInputs = builtins.filter
+      (b: let n = b.pname or b.name or ""; in n != "openpam" && n != "pam" && !(lib.hasInfix "pam" n))
+      (old.buildInputs or [ ]);
+  });
+
+  # dos2unix: upstream waterlan.home.xs4all.nl now serves an HTML error page for
+  # the 7.5.5 tarball (dead host). Point src at the sourceforge mirror — verified
+  # to hash-match the genuine nixpkgs 7.5.5 SRI. Also disable NLS: dos2unix's
+  # bundled gettext emits libintl_gettext/_textdomain/_bindtextdomain calls, but
+  # illumos libc provides native gettext (plain names) with no libintl_* symbols
+  # -> undefined at link. The parity role (line-ending conversion) needs no NLS.
+  dos2unix = onSolaris prev.dos2unix (old: {
+    src = final.fetchurl {
+      url = "https://downloads.sourceforge.net/project/dos2unix/dos2unix/7.5.5/dos2unix-7.5.5.tar.gz";
+      sha256 = "sha256-dfaSuEhMjCRXmi/9h98WuclCjtlUl+M5OiHRugaXrDM=";
+    };
+    makeFlags = (old.makeFlags or [ ]) ++ [ "ENABLE_NLS=" ];
+    # Drop the gettext buildInput: its libintl.h uses `_INTL_ASM(libintl_*)`
+    # (asm symbol-rename) that illumos gcc rejects (`expected identifier before
+    # __asm__`), and with NLS off the header is not needed anyway.
+    buildInputs = builtins.filter
+      (b: (b.pname or b.name or "") != "gettext") (old.buildInputs or [ ]);
+    nativeBuildInputs = builtins.filter
+      (b: (b.pname or b.name or "") != "gettext") (old.nativeBuildInputs or [ ]);
+  });
+
+  # w3m: the parity role is the text browser for the manual — no graphics/X11.
+  # graphicsSupport defaults on (!isDarwin) and drags imlib2 -> freetype-2.14.3,
+  # whose only src is download.savannah.gnu.org (502 from illumos). Drop
+  # graphics + X11: text w3m still browses the manual, and the freetype/imlib2/
+  # libx11 chain (+ the 502) is gone. Also point its `man` input (w3m's runtime
+  # MAN env) at the built mandoc instead of man-db: man-db's build needs groff,
+  # which dies `troff: Bad system call` on illumos. mandoc is the solnix manual
+  # renderer anyway (host-free, in the registry).
+  w3m = onSolaris (prev.w3m.override {
+    graphicsSupport = false;
+    x11Support = false;
+    man = final.mandoc;
+  }) (old: addLdFlags old socketLibs);
 
   # --- gnulib const-qualify (GNU coreutils / textutils family) ----------
   coreutils = onSolaris prev.coreutils (old:
@@ -440,6 +583,9 @@ in
   # libtool -> global_symbol_pipe) need the GNU-format nm. -------------------
   libidn2 = onSolaris prev.libidn2 (old: withGnm old);
   libgpg-error = onSolaris prev.libgpg-error (old: withGnm old);
+  # libpipeline (man-db dep, pulled by w3m/colordiff man-page install): its
+  # libtool link hits the same empty global_symbol_pipe (`nm | | sed`). GNU nm.
+  libpipeline = onSolaris prev.libpipeline (old: withGnm old);
 
   # H7 (tranche 5): more libtool-driven .so builds whose Solaris /usr/bin/nm
   # probe yields an empty global_symbol_pipe (`nm ... | | sed`). Route NM at the

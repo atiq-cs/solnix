@@ -245,37 +245,54 @@ if [ ! -f "$NIXTOOLS/ca-bundle.crt" ] && [ -f "$CA_SRC" ]; then
 fi
 
 # 5c. CLASSIC by-name entrypoint. The flakes path (registry.json above) makes
-# `nix profile install --impure nixpkgs#<pkg>` resolve by name. Classic
-# `nix-env -iA` needs a NIX_PATH target whose default import IS the package set:
-# the baked solnix-flake dir itself has only flake.nix (no default.nix), so
-# pointing <nixpkgs> at it makes nix-env import flake.nix + collide. Ship a tiny
-# shim dir /etc/nix/nixpkgs whose default.nix imports the flake's pkgs.nix for
-# x86_64-solaris; point NIX_PATH at THAT, and symlink each user's
+# `nix profile install nixpkgs#<pkg>` resolve by name -- now WITHOUT --impure:
+# the baked solnix-flake is the PURE by-name flake (pkgs/illumos/phase3/
+# by-name-flake) whose fork nixpkgs + gnu-config FODs are `flake = false`
+# INPUTS pinned in flake.lock, not builtins.storePath. Classic `nix-env -iA`
+# needs a NIX_PATH target whose default import IS the package set: the baked
+# flake dir has flake.nix + pkgs.nix, so ship a tiny shim dir /etc/nix/nixpkgs
+# whose default.nix imports the flake's pkgs.nix for x86_64-solaris (threading
+# the same locked inputs), and point NIX_PATH at THAT; symlink each user's
 # ~/.nix-defexpr/nixpkgs -> it so BOTH `nix-env -f '<nixpkgs>' -iA <pkg>` AND
 # the channel-style `nix-env -iA nixpkgs.<pkg>` resolve by name.
-# --impure is required for the flakes path because pkgs.nix uses
-# builtins.storePath (banned in pure eval); nix-env is impure by default.
 log "installing classic nix-env shim /etc/nix/nixpkgs (nix-env -iA by name)"
 mkdir -p /etc/nix/nixpkgs
-cat > /etc/nix/nixpkgs/default.nix <<'EOF'
+# Resolve the fork path from the baked flake.lock (pinned there by narHash).
+SHIM_FORK="$(grep -oE '/nix/store/[a-z0-9]+-nixpkgs-patched[^\"[:space:]]*' "$CS/solnix-flake/flake.lock" 2>/dev/null | head -1 || true)"
+cat > /etc/nix/nixpkgs/default.nix <<EOF
 # solnix classic nix-env entrypoint: the illumos package set (x86_64-solaris).
-# Imports the baked by-name flake's pkgs.nix so `nix-env -iA <pkg>` and
-# `nix-env -iA nixpkgs.<pkg>` resolve without --impure (nix-env is impure).
-import /run/current-system/solnix-flake/pkgs.nix { system = "x86_64-solaris"; }
+# Imports the baked pure by-name flake's pkgs.nix, threading the fork nixpkgs
+# (pinned in the flake's flake.lock) so \`nix-env -iA <pkg>\` and
+# \`nix-env -iA nixpkgs.<pkg>\` resolve by name. nix-env is impure by default,
+# so builtins.storePath here is fine; the flakes path is pure (needs no flag).
+let
+  flakeDir = /run/current-system/solnix-flake;
+  fork = builtins.storePath $SHIM_FORK;
+in import (flakeDir + "/pkgs.nix") {
+  system = "x86_64-solaris";
+  nixpkgs = fork;
+  forkPath = fork;
+  illumos = flakeDir + "/solnix-pkgs/pkgs/os-specific/illumos";
+  phase3 = flakeDir + "/solnix-pkgs/pkgs/os-specific/illumos/phase3";
+  gnuConfigGuess = null;
+  gnuConfigSub = null;
+}
 EOF
 chmod 0644 /etc/nix/nixpkgs/default.nix
 
-# 5d. BAKE the fork nixpkgs source tree into the target /nix/store. The by-name
-# flake's pkgs.nix does `builtins.storePath /nix/store/<hash>-nixpkgs-patched`,
-# a ~610MB flat-dir path (unknown-deriver, no references) that is NOT part of
-# the toplevel closure. On a FRESH image it must be fetched to EVALUATE any
-# by-name install. It IS published+signed (5HAV) and substitutable from the s3
-# ORIGIN, but the cache.solnix.io CDN edge negative-caches a stale 404 for it
-# (bare GET -> 404 cf-cache HIT), so relying on the CDN wedges by-name install.
-# Baking it local makes by-name work out of the box regardless of CDN state
-# (this is exactly the proven-on-AMI behavior). Idempotent: skip if present.
-log "baking fork nixpkgs source into /nix/store (by-name eval dep)"
-FORK="$(grep -oE '/nix/store/[a-z0-9]+-nixpkgs-patched[^\"[:space:]]*' "$CS/solnix-flake/pkgs.nix" 2>/dev/null | head -1 || true)"
+# 5d. BAKE the fork nixpkgs source tree into the target /nix/store. The pure
+# by-name flake references the fork as a `flake = false` INPUT (pinned by
+# narHash in flake.lock), a ~610MB flat-dir path (unknown-deriver, no
+# references) that is NOT part of the toplevel closure. On a FRESH image it
+# must be present to EVALUATE any by-name install (a locked path input is not
+# fetched over the network; it must exist in the local store). It IS
+# published+signed (5HAV) and substitutable from the s3 ORIGIN, but the
+# cache.solnix.io CDN edge negative-caches a stale 404 for it (bare GET -> 404
+# cf-cache HIT). Bake it local (as a GC root) so by-name works out of the box
+# regardless of CDN state. Idempotent: skip if present. (The fork path is read
+# from the baked flake.lock, which pins it.)
+log "baking fork nixpkgs source into /nix/store (pure by-name flake input)"
+FORK="$(grep -oE '/nix/store/[a-z0-9]+-nixpkgs-patched[^\"[:space:]]*' "$CS/solnix-flake/flake.lock" 2>/dev/null | head -1 || true)"
 if [ -n "$FORK" ]; then
   if [ -d "$FORK" ] && "$NIXSTORE" --verify-path "$FORK" >/dev/null 2>&1; then
     echo "  fork already local + valid: $FORK"
@@ -286,7 +303,7 @@ if [ -n "$FORK" ]; then
       || echo "NOTE: fork substitute failed; by-name eval will fetch it at first use (needs a working substituter)"
   fi
 else
-  echo "NOTE: could not locate fork nixpkgs path in $CS/solnix-flake/pkgs.nix; by-name eval will substitute it at first use"
+  echo "NOTE: could not locate fork nixpkgs path in $CS/solnix-flake/flake.lock; by-name eval will substitute it at first use"
 fi
 
 # 6. login PATH: prepend /run/current-system/sw/bin for the target logins.
@@ -312,6 +329,19 @@ export NIX_PATH="nixpkgs=/etc/nix/nixpkgs"
 EOF
 fi
 chmod 0644 /etc/profile.d/solnix-env.sh
+# 6b. first-boot-defaults + firewall etc union: install the toplevel's generated
+# /etc files (default/init TZ+LANG+umask, motd, inet/ntp.conf, ipf/ipf.conf,
+# logadm.d/solnix.conf, nsswitch.conf, bashrc) onto the target /etc so the
+# service-enable below finds them and the image ships the finished-OS defaults.
+log "installing first-boot etc union (default/init, motd, ntp.conf, ipf.conf, nsswitch, bashrc, logadm)"
+for rel in default/init motd inet/ntp.conf ipf/ipf.conf logadm.d/solnix.conf nsswitch.conf bashrc; do
+  src="$CS/etc/$rel"
+  [ -f "$src" ] || continue
+  mkdir -p "/etc/$(dirname "$rel")"
+  cp -L "$src" "/etc/$rel" 2>/dev/null || cp "$src" "/etc/$rel"
+  chmod 0644 "/etc/$rel"
+  echo "  installed /etc/$rel"
+done
 # belt-and-suspenders for shells that do not source /etc/profile.d/*: append a
 # guarded PATH line to each per-user ~/.profile (idempotent via a marker).
 for u in $PERUSERS; do
@@ -346,6 +376,11 @@ log "creating + chowning per-user nix dirs ($PERUSERS)"
 # gcroots/auto is shared by all users' installs -> sticky-writable (1777), like /tmp.
 mkdir -p /nix/var/nix/gcroots/auto /nix/var/nix/temproots
 chmod 1777 /nix/var/nix/gcroots/auto /nix/var/nix/temproots 2>/dev/null || true
+# build log dir: nix (single-user) writes a per-drv build log here; a non-root
+# user's first `nix profile install` else fails "creating directory
+# /nix/var/log/nix/drvs: Permission denied". Make the log tree sticky-writable.
+mkdir -p /nix/var/log/nix/drvs
+chmod 1777 /nix/var/log/nix /nix/var/log/nix/drvs 2>/dev/null || true
 for u in $PERUSERS; do
   id "$u" >/dev/null 2>&1 || { echo "NOTE: user $u absent; skipping per-user dirs"; continue; }
   for base in profiles gcroots; do
@@ -354,6 +389,21 @@ for u in $PERUSERS; do
     chown "$u" "$d" 2>/dev/null || echo "NOTE: chown $u $d failed"
   done
 done
+
+# 7b. PIN the by-name eval deps as PERMANENT GC roots so nix-gc can never remove
+#     them off the image (the ROOT CAUSE of prior AMIs' broken by-name install:
+#     the solnix-flake + fork nixpkgs store paths were GC'd -> "No such file").
+#     /run/current-system roots the flake transitively, but the fork nixpkgs is a
+#     bare builtins.storePath NOT in the toplevel closure -> unrooted. Add an
+#     explicit indirect gcroot for BOTH (flake belt-and-suspenders, fork required).
+log "pinning solnix-flake + fork nixpkgs as permanent GC roots (survive nix-gc)"
+mkdir -p /nix/var/nix/gcroots/solnix
+ln -sfn "$CS/solnix-flake" /nix/var/nix/gcroots/solnix/solnix-flake
+if [ -n "${FORK:-}" ] && [ -d "${FORK:-/nonexistent}" ]; then
+  ln -sfn "$FORK" /nix/var/nix/gcroots/solnix/nixpkgs-patched
+  echo "  gcroot -> $FORK"
+fi
+ls -l /nix/var/nix/gcroots/solnix/ 2>/dev/null || true
 
 # scrub build-time core files + set the managed coreadm policy. Scrub the live
 # target root + set the managed coreadm policy before this BE is imaged.

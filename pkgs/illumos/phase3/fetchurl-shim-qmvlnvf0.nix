@@ -33,16 +33,33 @@
 # NOTE: eval-time fetch (needs network during evaluation). Fine for a build
 # host with outbound HTTPS; the hash pins it. Upgrade path: seed srcs into the
 # S3 cache and eval fetches from cache.solnix.io.
+# forkPath: the patched-nixpkgs source tree the mirrors list is read from.
+# Default is the absolute store path (classic/impure build path). The pure
+# by-name flake passes its `fork` flake input here so eval never references an
+# out-of-tree absolute path.
+{ forkPath ? /nix/store/qmvlnvf0kk1zkfjpjpxwimg5ym8sfwnk-nixpkgs-patched-1785781297346528064 }:
 final: prev:
 let
   lib = final.lib;
-  mirrors = import /nix/store/p3lfwcvh0vz6xc8wc1yhj2f8rg1flnb9-nixpkgs-patched/pkgs/build-support/fetchurl/mirrors.nix;
-  httpOnly = builtins.filter (u: lib.hasPrefix "http" u);
+  mirrors = import (forkPath + "/pkgs/build-support/fetchurl/mirrors.nix");
+  # httpOnly: keep only http(s) mirrors, and DROP ftpmirror.gnu.org — it 502s
+  # from illumos hosts, and builtins.tryEval cannot catch a builtins.fetchurl IO
+  # error (network failures are fatal at eval), so a failing FIRST candidate
+  # aborts the whole evaluation instead of falling through. Dropping the flaky
+  # redirector puts a 200-returning mirror (nluug/kernel.org/ftp.gnu.org) first.
+  httpOnly = builtins.filter
+    (u: lib.hasPrefix "http" u && !(lib.hasInfix "ftpmirror.gnu.org" u));
   # expand one url: a mirror:// yields ALL its http(s) mirrors + path; a plain
-  # url yields itself.
+  # url yields itself — but ftp:// and dead hosts (info-zip.org) are dropped so a
+  # non-recoverable FIRST candidate never aborts eval (tryEval can't catch a
+  # fetchurl IO error). zip lists ftp://ftp.info-zip.org first + a fedora http
+  # mirror second; dropping the ftp url makes the http mirror win.
+  liveUrl = u: lib.hasPrefix "http" u
+    && !(lib.hasInfix "ftpmirror.gnu.org" u)
+    && !(lib.hasInfix "info-zip.org" u);
   expand = url:
     let m = builtins.match "mirror://([^/]+)/(.*)" url;
-    in if m == null then [ url ]
+    in if m == null then (if liveUrl url then [ url ] else [ ])
        else let site = builtins.elemAt m 0; rest = builtins.elemAt m 1;
                 bases = httpOnly (mirrors.${site} or (throw "fetchurl-shim: unknown mirror ${site}"));
             in map (b: b + rest) bases;
