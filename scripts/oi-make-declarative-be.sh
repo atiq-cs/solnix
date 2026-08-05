@@ -321,19 +321,31 @@ for u in $PERUSERS; do
   [ -n "$home" ] && [ -d "$home" ] || continue
   prof="$home/.profile"
   if ! grep -q '__SOLNIX_PATH' "$prof" 2>/dev/null; then
-    printf '\n# __SOLNIX_PATH: declarative userland on PATH (bash + ksh)\nPATH=/run/current-system/sw/bin:/nix-tools224/bin:/usr/gnu/bin:/usr/bin:/usr/sbin:/sbin:/usr/ccs/bin\nexport PATH\nLD_LIBRARY_PATH=/nix-tools224/runtime-lib:/nix-tools224/lib:/nix-tools224/lib/amd64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}\nexport LD_LIBRARY_PATH\nNIX_CONF_DIR=/etc/nix; export NIX_CONF_DIR\nNIX_PATH=nixpkgs=/etc/nix/nixpkgs; export NIX_PATH\n' >> "$prof"
+    printf '\n# __SOLNIX_PATH: declarative userland on PATH (bash + ksh)\nPATH=$HOME/.nix-profile/bin:/run/current-system/sw/bin:/nix-tools224/bin:/usr/gnu/bin:/usr/bin:/usr/sbin:/sbin:/usr/ccs/bin\nexport PATH\nLD_LIBRARY_PATH=/nix-tools224/runtime-lib:/nix-tools224/lib:/nix-tools224/lib/amd64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}\nexport LD_LIBRARY_PATH\nNIX_CONF_DIR=/etc/nix; export NIX_CONF_DIR\nNIX_PATH=nixpkgs=/etc/nix/nixpkgs; export NIX_PATH\n' >> "$prof"
   fi
   # channel-style classic by-name: ~/.nix-defexpr/nixpkgs -> the shim so
   # `nix-env -iA nixpkgs.<pkg>` resolves without -f. Idempotent (ln -sfn).
   mkdir -p "$home/.nix-defexpr"
   ln -sfn /etc/nix/nixpkgs "$home/.nix-defexpr/nixpkgs"
   chown -h "$u" "$home/.nix-defexpr" "$home/.nix-defexpr/nixpkgs" 2>/dev/null || true
+  # ~/.nix-profile -> the PER-USER profile (single-user), NOT the root-owned
+  # system default (else `nix profile install` as the user has nowhere writable
+  # + its bin never lands on PATH). The per-user profile dir is created in step 7.
+  if [ "$u" != root ]; then
+    ln -sfn "/nix/var/nix/profiles/per-user/$u/profile" "$home/.nix-profile"
+    chown -h "$u" "$home/.nix-profile" 2>/dev/null || true
+  fi
 done
 
 # 7. per-user single-user Nix dirs (THE known last-hurdle fix): each user needs
-#    /nix/var/nix/{profiles,gcroots}/per-user/<user> OWNED BY THAT USER, or
-#    single-user nix commands fail with a permissions error at first use.
+#    /nix/var/nix/{profiles,gcroots}/per-user/<user> OWNED BY THAT USER, and
+#    /nix/var/nix/gcroots/auto must be user-writable (nix profile install writes
+#    an auto GC-root symlink there) — else single-user installs fail with
+#    "Permission denied [.../gcroots/auto/...]" for a normal (non-root) user.
 log "creating + chowning per-user nix dirs ($PERUSERS)"
+# gcroots/auto is shared by all users' installs -> sticky-writable (1777), like /tmp.
+mkdir -p /nix/var/nix/gcroots/auto /nix/var/nix/temproots
+chmod 1777 /nix/var/nix/gcroots/auto /nix/var/nix/temproots 2>/dev/null || true
 for u in $PERUSERS; do
   id "$u" >/dev/null 2>&1 || { echo "NOTE: user $u absent; skipping per-user dirs"; continue; }
   for base in profiles gcroots; do

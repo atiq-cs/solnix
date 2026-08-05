@@ -110,3 +110,21 @@ Produced on a fresh OI-build-AMI clone (pkg update -> 2026 userland -> gcc-13):
 4. Re-cut COMPLETE images (AMI/ISO/IMG) on 2.24 + the full minimal-build-host baseline
    (curl+ping+nvi+gdb+toolchain+full-PATH+no-core-files) where `nix profile install <name>` works.
 5. Freeze the first dated release (26.11) once x86_64 hits the release criteria.
+
+## Image install-experience fixes (found via live testing)
+1. **gcroots/auto not user-writable** -> non-root `nix profile install` failed ("Permission denied
+   [/nix/var/nix/gcroots/auto/...]"). FIX: oi-make-declarative-be.sh makes gcroots/auto + temproots
+   1777 (sticky-writable, like /tmp). A normal user now installs WITHOUT pfexec.
+2. **~/.nix-profile pointed at the root-owned system default** (not the per-user profile) + the login
+   PATH did NOT include $HOME/.nix-profile/bin -> user-installed pkgs invisible (sqlite3 installed to
+   its /nix/store hash path but not on PATH). FIX: ~/.nix-profile -> per-user profile; PATH prepends
+   $HOME/.nix-profile/bin (shell-environment.nix + the .profile fallback). User installs now on PATH.
+   (Packages ARE pure + hash-addressed in /nix/store — the gap was purely the profile->PATH link.)
+3. **`nix profile install` requires --impure** because the baked solnix-flake uses builtins.storePath
+   (nixpkgs ? builtins.storePath /nix/store/qmvln...-nixpkgs-patched; extra-syslibs.tar.gz storePath;
+   mirrors.nix storePath) -> "not allowed in pure evaluation mode". This SHOULD NOT be required.
+   FIX (follow-up, wire into the release flake): refactor the flake to take the fork nixpkgs + the
+   syslibs as flake INPUTS (path inputs / a proper flake.nix with inputs.nixpkgs following the pinned
+   rev) instead of builtins.storePath, so `nix profile install nixpkgs#<pkg>` evaluates PURELY. The
+   packages themselves are already pure hermetic derivations; only the flake glue forces --impure.
+   ALSO fix: 'which' is missing from the base toolset (add it); nix profile install is the verb (not 'add').

@@ -77,6 +77,11 @@ let
 
       ${exportedEnvVars}
 
+      # User's per-user Nix profile bin FIRST, so `nix profile install <pkg>` puts
+      # <pkg> on PATH for that user (ahead of the system sw profile + base OS).
+      # ~/.nix-profile -> /nix/var/nix/profiles/per-user/<user>/profile (single-user).
+      case ":''${PATH}:" in *":''${HOME}/.nix-profile/bin:"*) : ;; *) PATH="''${HOME}/.nix-profile/bin:''${PATH}" ;; esac
+
       # Guaranteed base PATH tail: Nix tooling + illumos base OS dirs ALWAYS present
       # (append only dirs not already in PATH, so both nix-profile tools and native
       # ping/getent/format resolve in bash + ksh93).
