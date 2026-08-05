@@ -377,6 +377,19 @@ COREADM_GLOB_LOG_ENABLED=yes
 CADM
 coreadm -u 2>/dev/null || true
 
+# first-boot defaults: firewall (ipfilter, default-deny inbound + ssh) + NTP + logadm.
+# The /etc files (ipf/ipf.conf, inet/ntp.conf, logadm.d/solnix.conf, nsswitch.conf,
+# default/init, motd, bashrc) come from the toplevel's etc union (generatedEtc).
+# Here we ENABLE the stock base-OS services so they take effect at boot.
+log "enabling stock services (ipfilter firewall + ntp) + logadm"
+if [ -f /etc/ipf/ipf.conf ]; then
+  svcadm enable svc:/network/ipfilter:default 2>/dev/null || true
+  ipf -Fa -f /etc/ipf/ipf.conf 2>/dev/null || true   # load now (default-deny inbound + ssh)
+fi
+svcadm enable svc:/network/ntp:default 2>/dev/null || true
+mkdir -p /var/ntp
+[ -f /etc/logadm.d/solnix.conf ] && logadm -f /etc/logadm.conf 2>/dev/null || true
+
 sync
 log "DEPLOY DONE — target BE is declarative + nix-operational"
 echo "current-system: $CS"

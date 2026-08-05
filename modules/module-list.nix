@@ -13,6 +13,7 @@
   ./config/edition.nix
   ./config/coreadm.nix
   ./config/first-boot-defaults.nix
+  ./config/firewall.nix
   ./config/networking.nix
   ./config/users.nix
   ./config/system-path.nix

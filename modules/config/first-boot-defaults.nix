@@ -8,6 +8,15 @@ in
 {
   options.solnix.defaults = {
     enable = lib.mkOption { type = lib.types.bool; default = true; };
+    enableStockServices = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      description = ''
+        Stock base-OS SMF services (FMRIs like "network/ntp") to `svcadm enable`
+        at image build / first boot. For SERVICES SHIPPED BY THE OS (ntp, ipfilter),
+        not generated manifests. The image builder + activation enable these.
+      '';
+    };
     timeZone = lib.mkOption {
       type = lib.types.str; default = "UTC";
       description = "Default time zone (illumos reads TZ from /etc/default/init).";
@@ -65,9 +74,62 @@ in
       max-free = lib.mkDefault (1024 * 1024 * 1024);   # free up to 1GB
     };
 
-    # 3 (NTP) + the SMF nix-gc timer + logadm(/var/cores) are wired as SMF services in
-    # the activation layer (they need manifests, not just /etc files) — see
-    # docs/design-first-boot-defaults.md T1.3/T2.6/T2.7. Declared here as intent;
-    # the SMF generator picks them up.
+    # 3. NTP config (svc:/network/ntp reads /etc/inet/ntp.conf). EC2 provides a
+    # link-local NTP source at 169.254.169.123; fall back to the pool.
+    environment.generatedEtc."inet/ntp.conf" = ''
+      server ${cfg.ntpServer} iburst
+      server 0.pool.ntp.org iburst
+      server 1.pool.ntp.org iburst
+      driftfile /var/ntp/ntp.drift
+    '';
+
+    # 7. logadm — rotate /var/cores + solnix logs (illumos-native log rotation,
+    # the logrotate/journald-retention analog). Appended to the base logadm.conf.
+    environment.generatedEtc."logadm.d/solnix.conf" = ''
+      /var/cores/core.* -A 30d -C 20 -p 1d
+      /var/log/solnix.log -C 8 -c -s 10m
+    '';
+
+    # 8. nsswitch — hosts: files dns (drop mdns; no mdnsd -> avoids slow lookups).
+    environment.generatedEtc."nsswitch.conf" = ''
+      passwd:     files
+      group:      files
+      hosts:      files dns
+      ipnodes:    files dns
+      networks:   files
+      protocols:  files
+      rpc:        files
+      ethers:     files
+      netmasks:   files
+      bootparams: files
+      publickey:  files
+      netgroup:   files
+      automount:  files
+      aliases:    files
+      services:   files
+      printers:   user files
+      project:    files
+      auth_attr:  files
+      prof_attr:  files
+      tnrhtp:     files
+      tnrhdb:     files
+    '';
+
+    # 10. /etc/bashrc — a pleasant interactive shell (umask, PS1, common aliases).
+    # Sourced by interactive bash; ksh users get the login env from profile.d.
+    environment.generatedEtc."bashrc" = ''
+      # solnix interactive bash defaults
+      umask 022
+      [ -z "$PS1" ] && return
+      PS1='\u@\h:\w\$ '
+      alias ll='ls -l'
+      alias la='ls -la'
+      alias ..='cd ..'
+    '';
+
+    # 3+7 (SMF): enable the stock base-OS services (ntp for time, ipfilter is
+    # handled by modules/config/firewall.nix). These are ENABLED via the image's
+    # site profile / first-boot activation (svcadm enable), NOT generated manifests.
+    solnix.enableStockServices = [ "network/ntp" ];
   };
 }
