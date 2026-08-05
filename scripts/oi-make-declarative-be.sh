@@ -244,6 +244,51 @@ if [ ! -f "$NIXTOOLS/ca-bundle.crt" ] && [ -f "$CA_SRC" ]; then
   cp "$CA_SRC" "$NIXTOOLS/ca-bundle.crt" && echo "  installed $NIXTOOLS/ca-bundle.crt from $CA_SRC"
 fi
 
+# 5c. CLASSIC by-name entrypoint. The flakes path (registry.json above) makes
+# `nix profile install --impure nixpkgs#<pkg>` resolve by name. Classic
+# `nix-env -iA` needs a NIX_PATH target whose default import IS the package set:
+# the baked solnix-flake dir itself has only flake.nix (no default.nix), so
+# pointing <nixpkgs> at it makes nix-env import flake.nix + collide. Ship a tiny
+# shim dir /etc/nix/nixpkgs whose default.nix imports the flake's pkgs.nix for
+# x86_64-solaris; point NIX_PATH at THAT, and symlink each user's
+# ~/.nix-defexpr/nixpkgs -> it so BOTH `nix-env -f '<nixpkgs>' -iA <pkg>` AND
+# the channel-style `nix-env -iA nixpkgs.<pkg>` resolve by name.
+# --impure is required for the flakes path because pkgs.nix uses
+# builtins.storePath (banned in pure eval); nix-env is impure by default.
+log "installing classic nix-env shim /etc/nix/nixpkgs (nix-env -iA by name)"
+mkdir -p /etc/nix/nixpkgs
+cat > /etc/nix/nixpkgs/default.nix <<'EOF'
+# solnix classic nix-env entrypoint: the illumos package set (x86_64-solaris).
+# Imports the baked by-name flake's pkgs.nix so `nix-env -iA <pkg>` and
+# `nix-env -iA nixpkgs.<pkg>` resolve without --impure (nix-env is impure).
+import /run/current-system/solnix-flake/pkgs.nix { system = "x86_64-solaris"; }
+EOF
+chmod 0644 /etc/nix/nixpkgs/default.nix
+
+# 5d. BAKE the fork nixpkgs source tree into the target /nix/store. The by-name
+# flake's pkgs.nix does `builtins.storePath /nix/store/<hash>-nixpkgs-patched`,
+# a ~610MB flat-dir path (unknown-deriver, no references) that is NOT part of
+# the toplevel closure. On a FRESH image it must be fetched to EVALUATE any
+# by-name install. It IS published+signed (5HAV) and substitutable from the s3
+# ORIGIN, but the cache.solnix.io CDN edge negative-caches a stale 404 for it
+# (bare GET -> 404 cf-cache HIT), so relying on the CDN wedges by-name install.
+# Baking it local makes by-name work out of the box regardless of CDN state
+# (this is exactly the proven-on-AMI behavior). Idempotent: skip if present.
+log "baking fork nixpkgs source into /nix/store (by-name eval dep)"
+FORK="$(grep -oE '/nix/store/[a-z0-9]+-nixpkgs-patched[^\"[:space:]]*' "$CS/solnix-flake/pkgs.nix" 2>/dev/null | head -1 || true)"
+if [ -n "$FORK" ]; then
+  if [ -d "$FORK" ] && "$NIXSTORE" --verify-path "$FORK" >/dev/null 2>&1; then
+    echo "  fork already local + valid: $FORK"
+  else
+    echo "  substituting fork from origin ($SUBSTITUTER): $FORK"
+    "$NIXTOOLS/bin/nix" copy --from "$SUBSTITUTER" --to /nix \
+      --option trusted-public-keys "$TRUSTED_KEY" "$FORK" 2>&1 \
+      || echo "NOTE: fork substitute failed; by-name eval will fetch it at first use (needs a working substituter)"
+  fi
+else
+  echo "NOTE: could not locate fork nixpkgs path in $CS/solnix-flake/pkgs.nix; by-name eval will substitute it at first use"
+fi
+
 # 6. login PATH: prepend /run/current-system/sw/bin for the target logins.
 #    The toplevel's own /etc/profile.d/solnix-env.sh (if present in the CS etc/
 #    overlay) is the declarative source; install it, and also write a minimal
@@ -260,7 +305,10 @@ export PATH=/run/current-system/sw/bin:/nix-tools224/bin:/usr/gnu/bin:/usr/bin:/
 export NIX_PROFILES="/nix/var/nix/profiles/default $HOME/.nix-profile"
 export NIX_CONF_DIR=/etc/nix
 export LD_LIBRARY_PATH=/nix-tools224/runtime-lib:/nix-tools224/lib:/nix-tools224/lib/amd64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
-export NIX_PATH="nixpkgs=/run/current-system/solnix-flake"
+# by-name install: flakes registry maps nixpkgs -> the solnix illumos flake;
+# NIX_PATH points at the classic shim (/etc/nix/nixpkgs/default.nix) so
+# `nix-env -iA <pkg>` resolves the illumos package set by name.
+export NIX_PATH="nixpkgs=/etc/nix/nixpkgs"
 EOF
 fi
 chmod 0644 /etc/profile.d/solnix-env.sh
@@ -273,8 +321,13 @@ for u in $PERUSERS; do
   [ -n "$home" ] && [ -d "$home" ] || continue
   prof="$home/.profile"
   if ! grep -q '__SOLNIX_PATH' "$prof" 2>/dev/null; then
-    printf '\n# __SOLNIX_PATH: declarative userland on PATH (bash + ksh)\nPATH=/run/current-system/sw/bin:/nix-tools224/bin:/usr/gnu/bin:/usr/bin:/usr/sbin:/sbin:/usr/ccs/bin\nexport PATH\nLD_LIBRARY_PATH=/nix-tools224/runtime-lib:/nix-tools224/lib:/nix-tools224/lib/amd64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}\nexport LD_LIBRARY_PATH\nNIX_CONF_DIR=/etc/nix; export NIX_CONF_DIR\nNIX_PATH=nixpkgs=/run/current-system/solnix-flake; export NIX_PATH\n' >> "$prof"
+    printf '\n# __SOLNIX_PATH: declarative userland on PATH (bash + ksh)\nPATH=/run/current-system/sw/bin:/nix-tools224/bin:/usr/gnu/bin:/usr/bin:/usr/sbin:/sbin:/usr/ccs/bin\nexport PATH\nLD_LIBRARY_PATH=/nix-tools224/runtime-lib:/nix-tools224/lib:/nix-tools224/lib/amd64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}\nexport LD_LIBRARY_PATH\nNIX_CONF_DIR=/etc/nix; export NIX_CONF_DIR\nNIX_PATH=nixpkgs=/etc/nix/nixpkgs; export NIX_PATH\n' >> "$prof"
   fi
+  # channel-style classic by-name: ~/.nix-defexpr/nixpkgs -> the shim so
+  # `nix-env -iA nixpkgs.<pkg>` resolves without -f. Idempotent (ln -sfn).
+  mkdir -p "$home/.nix-defexpr"
+  ln -sfn /etc/nix/nixpkgs "$home/.nix-defexpr/nixpkgs"
+  chown -h "$u" "$home/.nix-defexpr" "$home/.nix-defexpr/nixpkgs" 2>/dev/null || true
 done
 
 # 7. per-user single-user Nix dirs (THE known last-hurdle fix): each user needs
