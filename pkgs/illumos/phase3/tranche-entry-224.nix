@@ -1,49 +1,56 @@
-# tranche-entry-224.nix — the Phase-3 "build real hermetic x86_64-solaris
+# tranche-entry-224.nix — Phase-3 "build real hermetic x86_64-solaris
 # derivations against the pure stdenv" entry point, on Nix 2.24+.
 #
-# This is the 2.24 successor to tranche-entry.nix. The single substantive change
-# is the DELETION of the `__structuredAttrs = false` stdenv adapter (and the
-# config.structuredAttrsByDefault = false knob): Nix 2.24 writes .attrs.sh and
-# exports NIX_ATTRS_SH_FILE natively, so the classic-env-var workaround the
-# 2.3.16 daemon required is gone. The by-name package universe builds directly
-# on the nixpkgs default — no adapter, simpler overlay. Both structured packages
-# (hello) and classic ones (cc-wrapper/bintools-wrapper) build correctly on 2.24.
+# This is the 2.24 successor to tranche-entry.nix, now wired against the NEWER
+# nixpkgs fork (qmvlnvf0, the one the 2.3.16 tranche6 used) so the
+# fetchFromGitHub/fetchpatch-src packages (curl/git/vim/htop/nvi/gdb) evaluate:
+# the older 00w7p2sg fork's eval-time fetchurl-shim only covered plain
+# `fetchurl`, so fetchpatch (H18) and fetchzip/fetchFromGitHub (H19) srcs threw.
+# The qmvlnvf0 fork ships the H18/H19-covering shim (fetchurl-shim, passed as
+# `fetchurlShim`), plus the H20-H36 per-package fixes live in the primary's
+# solaris-overlay (passed as `solarisOverlay`).
 #
-# HOST DEPENDENCY (seed stage0): the seed's GNU userland `awk` (gawk) is NEEDED
-# libmpfr.so.6, which it resolves from the host runtime linker path. stdenv
-# setup.sh's substituteAll/_allFlags enumerates @var@ substitutions via
-# `awk 'BEGIN { for (v in ENVIRON) ... }'`; if the seed awk cannot start (missing
-# libmpfr.so.6) it emits nothing, so the cc-wrapper/bintools-wrapper/version-
-# check-hook setup-hooks install with UNSUBSTITUTED @wrapperName@/@suffixSalt@/
-# @envCommand@ placeholders and later `source`s die with
-# `export: NIX_@wrapperName@_..._@suffixSalt@ not a valid identifier`. The build
-# host must provide libmpfr.so.6 (illumos: `pkg install library/mpfr`). This is
-# a stage0 seed-tool host dependency (the seed ELF runs against system libs
-# during bootstrap); the FINAL package closure remains host-free.
+# 2.24 vs 2.3.16: Nix 2.24 writes .attrs.sh and exports NIX_ATTRS_SH_FILE
+# natively, so the `__structuredAttrs = false` adapter the 2.3.16 daemon needed
+# is DELETED here; the by-name package universe builds directly on the nixpkgs
+# default. The tranche6 stack's structuredAttrs adapter + fetchurlBoot re-assert
+# are therefore dropped; everything else (perl wrap, bash pins, the base
+# illumosGnm/gmpCOnly/mpfrCOnly overlays, the primary solaris-overlay) carries
+# over unchanged.
 #
-# The H3 fetchurlBoot shim was only needed because the structuredAttrs adapter
-# re-wrapped stdenv and dropped stdenv.fetchurlBoot; with the adapter gone,
-# fetchurlBoot flows through unmodified, so the "re-assert after the adapter"
-# overlay is also dropped. The fetchurl-shim itself is retained solely for the
-# eval-time fixed-output fetch model (network reachability), not structuredAttrs.
+# HOST DEPENDENCY (seed stage0): the seed's GNU userland `awk` (gawk) NEEDs
+# libmpfr.so.6 from the host runtime linker path (stdenv setup.sh's
+# substituteAll enumerates @var@ via awk). The build host must provide
+# libmpfr.so.6 (`pkg install library/mpfr`). Stage0 host dep only; the FINAL
+# package closure stays host-free.
 #
 # Usage on host (Nix 2.24 store nix):
-#   nix-build /root/tranche-224.nix -A <nixpkgs-attr>   # e.g. -A hello
+#   nix-build /root/tranche-224.nix -A <nixpkgs-attr>   # e.g. -A gettext
 { system ? "x86_64-solaris"
 , nixpkgs ? <nixpkgs-patched>
 , illumos ? /root/solnix-pkgs/pkgs/os-specific/illumos
-, fetchurlShim ? ./fetchurl-shim.nix
-, solarisOverlay ? ../solaris-overlay.nix
+, fetchurlShim ? ./fetchurl-shim-qmvlnvf0.nix
+, solarisOverlay ? /root/solaris-overlay-qmvlnvf0.nix
 }:
 import nixpkgs {
   inherit system;
   overlays = [
     (final: prev: { solnix = final.callPackage illumos { }; illumos = final.solnix; })
     (import fetchurlShim)
-    # perl fix (from the 2.3.16 tranche7 stack): drop nixpkgs' ld-shared.patch
-    # (Linux-only) and add the illumos split-libc link libs, else perl fails to
-    # link its shared libperl. This is a whole-stdenv wrap so every perl in the
-    # graph (build-time deps of git/curl/gettext) gets it.
+    # H3 (from tranche 5): route stdenv.fetchurlBoot through the same shim so
+    # the libxcrypt perl<->libxcrypt cycle-break src is an eval-time
+    # fixed-output fetch. On 2.24 the shim's fetchurlBoot passthru
+    # (solnixShimFetch) is baked directly onto the stdenv (no structuredAttrs
+    # adapter re-wrap to fight).
+    (final: prev: {
+      stdenv = prev.stdenv // { fetchurlBoot = final.solnixShimFetch; };
+      stdenvNoCC = prev.stdenvNoCC // { fetchurlBoot = final.solnixShimFetch; };
+    })
+    # perl fix (H10/H11 from tranche 5): drop the Linux-only ld-shared.patch
+    # and add the illumos split-libc link libs (-lm -lnsl -lsocket), applied as
+    # a whole-stdenv mkDerivation wrap so every perl variant in the graph
+    # (build-time deps of git/curl/gettext) gets it. The fetchurlBoot passthru
+    # above is preserved because this wrap only rewrites .mkDerivation.
     (final: prev:
       let
         fixPerlAttrs = a:
@@ -54,7 +61,7 @@ import nixpkgs {
               (a.patches or []);
             NIX_LDFLAGS =
               (if a ? NIX_LDFLAGS then a.NIX_LDFLAGS + " " else "")
-              + "-lm -lnsl -lsocket -L/nix/store/ssszbis7hnay7yqi0gb738ly1cilg3dc-illumos-seed-unpacked/usr/gnu/lib/amd64";
+              + "-lm -lnsl -lsocket";
           }
           else a;
         patchPerl = stdenv: stdenv // {
@@ -76,9 +83,7 @@ import nixpkgs {
       runtimeShell = "${prev.bash}/bin/bash";
     })
     # illumosGnm + the C-only gmp/mpfr + no-check libffi that the solaris-overlay
-    # withGnm helper and the fragile-test packages depend on. (Same as the
-    # 2.3.16 tranche7 stack; the ONLY thing dropped for 2.24 is the
-    # __structuredAttrs=false adapter, not these package fixes.)
+    # withGnm helper and the fragile-test packages depend on.
     (final: prev: {
       illumosGnm = final.runCommand "illumos-gnm" { } ''
         mkdir -p $out/bin
@@ -89,56 +94,83 @@ import nixpkgs {
       mpfrCOnly = (final.mpfr.override { gmp = final.gmpCOnly; }).overrideAttrs (_: { doCheck = false; });
     })
     (import solarisOverlay)
-    # 2.24 link fix: solaris-overlay adds -lnsl/-lsocket/-lresolv to the link for
-    # the socket/resolver packages. On 2.24/this fork the bootstrapLibs libnsl.so
-    # + libresolv.so themselves NEED libmp.so.2 + libmd.so.1, absent from the
-    # default search path, so those links fail ("symbol referencing errors" /
-    # "C compiler cannot create executables"). The seed carries both at
-    # usr/gnu/lib/amd64; add that -L to exactly the packages the overlay already
-    # threads socket libs into (keeps the socket-free packages' hashes intact).
+    # H26 attempt (2.24): cmake-minimal's bundled/linked libuv links
+    # -lkstat -lsendfile (illumos), absent from the seed's 13 base libs, so the
+    # cmake bootstrap fails `ld: fatal: library -lkstat: not found`. The
+    # extra-syslibs FOD (same provenance as the seed, hash-pinned) carries
+    # libkstat/libsendfile/libproc in lib/amd64 with .so links. Wire its -L into
+    # libuv (which the solaris-overlay already patches for errno.h) so the
+    # cmake bootstrap link resolves. Unblocks cmake -> nvi (via zlib-ng-free
+    # nvi2 cmake build). extraSyslibs rebuilt inline (the overlay's copy is in a
+    # private `let`).
     (final: prev:
       let
-        seedL = " -L/nix/store/ssszbis7hnay7yqi0gb738ly1cilg3dc-illumos-seed-unpacked/usr/gnu/lib/amd64";
-        addSeed = drv: drv.overrideAttrs (old: {
+        extraSyslibs = final.stdenvNoCC.mkDerivation {
+          name = "illumos-extra-syslibs";
+          src = /nix/store/qbl2q3v2h3y4ghc6mpjc2cmjyf0ppabq-extra-syslibs.tar.gz;
+          dontUnpack = true;
+          installPhase = ''mkdir -p "$out"; tar -xzf "$src" -C "$out"'';
+        };
+        seedL = "-L${extraSyslibs}/lib/amd64";
+      in {
+        # cmake's own bootstrap builds a bundled libuv (Utilities/cmlibuv) that
+        # links kstat_*/sendfile on illumos -> `ld: fatal: library -lkstat: not
+        # found`. The nixpkgs libuv buildInput is separate, so the fix must land
+        # on cmake-minimal's bootstrap link: add the extra-syslibs -L and the
+        # two libs to NIX_LDFLAGS, and the -L to compile flags (H1 auto-adds -R).
+        cmakeMinimal = prev.cmakeMinimal.overrideAttrs (old: {
           env = (old.env or { }) // {
-            NIX_LDFLAGS = (old.env.NIX_LDFLAGS or "") + seedL;
+            NIX_CFLAGS_COMPILE = (old.env.NIX_CFLAGS_COMPILE or "") + " " + seedL;
+            NIX_LDFLAGS = (old.env.NIX_LDFLAGS or "") + " " + seedL + " -lkstat -lsendfile";
           };
         });
-      in {
-        pkg-config-unwrapped = addSeed prev.pkg-config-unwrapped;
-        # openssl: seed lib path + skip the test suite (its QUIC network tests
-        # hit "network BIO I/O error" in the sandbox=false no-network builder and
-        # grind for many minutes; the shipped library is unaffected).
-        openssl = (addSeed prev.openssl).overrideAttrs (_: { doCheck = false; });
-        socat = addSeed prev.socat;
-        curl = addSeed prev.curl;
-        wget = addSeed prev.wget;
-        openssh = addSeed prev.openssh;
-        rsync = addSeed prev.rsync;
-        # libxcrypt (build dep of perl -> openssl/gettext/bashInteractive) links
-        # its libcrypt.so with a GNU-ld version-script (-Wl,-M,./libcrypt.map)
-        # that Sun ld cannot parse ("expected a '=', ':', '|', or '@'"). The
-        # nixpkgs default only --disable-symvers on Cygwin; illumos needs it too.
-        libxcrypt = prev.libxcrypt.overrideAttrs (old: {
-          configureFlags = (old.configureFlags or []) ++ [ "--disable-symvers" ];
-          doCheck = false;
-        });
       })
-    # gettext + perl thread socket libs at the stdenv level (perl via the
-    # patchPerl wrap above; gettext-runtime's own configure), so add the seed
-    # lib path to just those two here rather than globally.
+    # release-toolset curl/rsync: the full `curl` attr and rsync enable
+    # zstd/brotli/lz4/xxHash, which pull zstd -> cmake (H26, still blocked on
+    # this fork: cmake-minimal bootstrap fails on -lkstat/-lsendfile). The
+    # release-critical curl deps are openssl+zlib+nghttp2 (http2) only, and
+    # rsync's core is fine without those compressors. Drop the cmake-pulling
+    # features so both build; scpSupport/libssh2 is already off on SunOS by
+    # default. This preserves the solaris-overlay's gssSupport=false + socket
+    # libs (curl) via a further .override/.overrideAttrs on the overlay result.
     (final: prev: {
-      gettext = prev.gettext.overrideAttrs (old: {
-        env = (old.env or { }) // {
-          NIX_LDFLAGS = (old.env.NIX_LDFLAGS or "")
-            + " -L/nix/store/ssszbis7hnay7yqi0gb738ly1cilg3dc-illumos-seed-unpacked/usr/gnu/lib/amd64"
-            # gettext-runtime auto-detects the Solaris ACL/nvpair lib pile
-            # (-luutil -lnvpair -lidmap -lavl -lsec) but the seed only ships them
-            # as versioned .so.N. /lib/64 carries the unversioned linkable .so
-            # (illumos base system libs, libc-family; runtime resolves from
-            # /lib/64 like libc.so.1, so the closure stays store-only).
-            + " -L/lib/64";
-        };
+      curl = (prev.curl.override {
+        zstdSupport = false; brotliSupport = false;
+        http3Support = false; pslSupport = false;
+      });
+      rsync = (prev.rsync.override {
+        enableZstd = false; enableLZ4 = false; enableXXHash = false;
+      }).overrideAttrs (old: {
+        # python3 (nativeCheckInputs, for runtests.py) pulls cmake (H26,
+        # blocked). Tests are not the deliverable on a fresh port; drop the
+        # check inputs + doCheck so cmake never enters the build.
+        doCheck = false;
+        nativeCheckInputs = [];
+        preCheck = "";
+      });
+      # gdb: pythonSupport (build==host default) pulls python3 -> cmake, and
+      # zstd/xxhash/sourceHighlight/dejagnu/libipt buildInputs each pull cmake
+      # too (all H26-blocked). The release-critical gdb deps are
+      # gmp/mpfr/ncurses/readline/expat/zlib (all on 2.24 already). Drop the
+      # cmake-pullers and disable debuginfod (elfutils). The H2 seedSyslibs
+      # RUNPATH supplies libstdc++/libgcc_s at runtime, so no static-libgcc/
+      # -static-libstdc++ is needed (and those flags break the illumos conftest
+      # link -> "C compiler cannot create executables"). doCheck off (dejagnu).
+      gdb = (prev.gdb.override {
+        pythonSupport = false;
+        withGuile = false;
+        enableDebuginfod = false;
+      }).overrideAttrs (old: {
+        buildInputs = builtins.filter
+          (b: let n = b.pname or b.name or ""; in
+              !(final.lib.hasInfix "zstd" n || final.lib.hasInfix "source-highlight" n
+                || final.lib.hasInfix "sourceHighlight" n || final.lib.hasInfix "xxhash" n
+                || final.lib.hasInfix "xxHash" n || final.lib.hasInfix "dejagnu" n
+                || final.lib.hasInfix "libipt" n || final.lib.hasInfix "processor-trace" n))
+          (old.buildInputs or []);
+        doCheck = false;
+        doInstallCheck = false;
+        nativeInstallCheckInputs = [];
       });
     })
     # gawkReal defined after solaris-overlay so final.gawk is a resolved drv:
@@ -160,7 +192,6 @@ import nixpkgs {
       });
     })
   ];
-  # 2.24 supports structuredAttrs natively, so the nixpkgs default is correct and
-  # requires no adapter. (structuredAttrsByDefault is left unset.)
+  # 2.24 supports structuredAttrs natively, so the nixpkgs default is correct.
   config = { allowUnsupportedSystem = true; };
 }
