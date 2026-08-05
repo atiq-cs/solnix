@@ -242,3 +242,16 @@ leak, published to s3.solnix.io + durable at cache.solnix.io (cache-bust verifie
   gawkReal is on the cache this host hack is unnecessary for subsequent fresh hosts (they substitute
   the fixed gawk). Also: nix 2.3.16 needed NIX_SSL_CERT_FILE pointed at a real CA bundle
   (/etc/certs/CA/*.pem concatenated) -- the default /etc/ssl/certs/ca-certificates.crt path was absent.
+
+## Nix 2.24 cutover — status (release path)
+DONE: Nix 2.24.15 productionized (from-source drv, 5-patch series, relocatable bootstrap tarball);
+  GATE 1b-PURE re-verified on 2.24 (hermetic hello, __structuredAttrs adapter dropped); fleet on 2.24
+  (3 hosts, build-once-fetch-many); 28 core pkgs rebuilt as real hermetic derivations on the 2.24
+  stdenv (docs/registry/real-derivations-224.tsv). TRUSTED KEY corrected to 5HAV... (verified;
+  8UNrVA from the handoff doc was wrong, reverted everywhere).
+IN FLIGHT: rebuild the remaining release-critical set on 2.24 (curl/git/vim/htop/nvi/gdb/gettext/
+  bashInteractive/rsync) — stage the newer qmvlnvf0 fork on the 2.24 builder (fetchFromGitHub/
+  fetchpatch coverage) + fix gettext's hardcoded -l seed libs.
+NEXT: re-cut release AMI/ISO/IMG on 2.24 (nix profile install by-name works; correct 5HAV key;
+  full toolset incl build-host baseline; curl/ping/nvi-edits/gdb; no core files; full PATH) ->
+  freeze 26.11.
