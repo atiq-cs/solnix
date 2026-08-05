@@ -1,0 +1,19 @@
+Neuter cmInstrumentation::GetDynamicSystemInformation on illumos.
+
+Every real (non-try-compile) `cmake` configure calls this method, which on
+Solaris has cmsys SystemInformation shell out (psrinfo/kstat) via popen ->
+posix_spawn. This illumos kernel (68259130da) lacks the SYS_spawn fast path and
+its libc does not fall back to fork/exec, so the spawn syscall returns ENOSYS
+and the process takes SIGSYS ("Bad System Call", core dump). The dynamic
+sysinfo is pure telemetry (host memory / CPU load in a JSON blob) and never
+affects the build, so make the probe a no-op.
+--- a/Source/cmInstrumentation.cxx
++++ b/Source/cmInstrumentation.cxx
+@@ -460,6 +460,7 @@
+ void cmInstrumentation::GetDynamicSystemInformation(double& memory,
+                                                     double& load)
+ {
++  memory = 0; load = 0; return;
+   cmsys::SystemInformation& info = this->GetSystemInformation();
+   if (!this->ranSystemChecks) {
+     info.RunCPUCheck();

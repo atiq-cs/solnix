@@ -137,6 +137,9 @@ let
   # hash-pinned = hermetic-by-hash) and expose lib/amd64 with `.so -> .so.1`
   # links. Wire it into the needing packages via NIX_CFLAGS_COMPILE -L (the H1
   # cc-wrapper pass then auto-adds the matching -R so they run from the store).
+  # The tarball ships some libs versioned-only (libmd.so.1, libmp.so.2, ...);
+  # a bare `lib<n>.so -> lib<n>.so.N` link is added for each so CMake's hermetic
+  # find_library(NAMES <n>) resolves them (cmlibarchive's LIBMD_LIBRARY probe).
   extraSyslibs = final.stdenvNoCC.mkDerivation {
     name = "illumos-extra-syslibs";
     src = /nix/store/qbl2q3v2h3y4ghc6mpjc2cmjyf0ppabq-extra-syslibs.tar.gz;
@@ -144,6 +147,11 @@ let
     installPhase = ''
       mkdir -p "$out"
       tar -xzf "$src" -C "$out"
+      for so in "$out"/lib/amd64/*.so.*; do
+        [ -e "$so" ] || continue
+        base=''${so%.so.*}.so
+        [ -e "$base" ] || ln -s "$(basename "$so")" "$base"
+      done
     '';
   };
 

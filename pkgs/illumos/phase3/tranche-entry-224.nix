@@ -109,9 +109,40 @@ import nixpkgs {
           name = "illumos-extra-syslibs";
           src = /nix/store/qbl2q3v2h3y4ghc6mpjc2cmjyf0ppabq-extra-syslibs.tar.gz;
           dontUnpack = true;
-          installPhase = ''mkdir -p "$out"; tar -xzf "$src" -C "$out"'';
+          installPhase = ''
+            mkdir -p "$out"
+            tar -xzf "$src" -C "$out"
+            # Some libs ship versioned-only (libmd.so.1, libmp.so.2, ...); add a
+            # bare lib<n>.so link so CMake's hermetic find_library(NAMES <n>)
+            # resolves them (cmlibarchive's LIBMD_LIBRARY probe -> NOTFOUND).
+            for so in "$out"/lib/amd64/*.so.*; do
+              [ -e "$so" ] || continue
+              base=''${so%.so.*}.so
+              [ -e "$base" ] || ln -s "$(basename "$so")" "$base"
+            done
+          '';
         };
         seedL = "-L${extraSyslibs}/lib/amd64";
+        # H37 (2.24): cmake's package.nix sets CMAKE_RANLIB to
+        # ${bintools}/bin/ranlib, but the seed illumos bintools slice ships
+        # ar/as/ld/nm/elfdump but NO `ranlib` symlink -- so every static-lib
+        # link in cmake's own build runs a nonexistent ranlib and fails with
+        # `Error running link command: no such file or directory`. The illumos
+        # /usr/bin/ranlib works on the seed ar's archives (verified), and the
+        # seed bintools already host-paths `ar -> ../usr/bin/ar`, so a matching
+        # ranlib wrapper is the same stage0 convention. Provide a store dir with
+        # ranlib (+ ar/strip alongside) and point CMAKE_RANLIB/AR/STRIP at it.
+        illumosRanlib = final.runCommand "illumos-ranlib" { } ''
+          mkdir -p $out/bin
+          ln -s /usr/bin/ranlib $out/bin/ranlib
+          ln -s /usr/bin/ar $out/bin/ar
+          ln -s /usr/bin/strip $out/bin/strip
+        '';
+        # H38 patch (below): one-line unified diff, applied with `patch` (the
+        # sandbox has no perl and illumos /usr/bin/sed's `a\` grouping is
+        # unreliable; `patch` is already used for the nixpkgs patches). The
+        # patch file lives next to this tranche (repo + builder).
+        cmInstrNoSpawnPatch = ./cmake-instrumentation-no-spawn.patch;
       in {
         # cmake's own bootstrap builds a bundled libuv (Utilities/cmlibuv) that
         # links kstat_*/sendfile on illumos -> `ld: fatal: library -lkstat: not
@@ -122,7 +153,34 @@ import nixpkgs {
           env = (old.env or { }) // {
             NIX_CFLAGS_COMPILE = (old.env.NIX_CFLAGS_COMPILE or "") + " " + seedL;
             NIX_LDFLAGS = (old.env.NIX_LDFLAGS or "") + " " + seedL + " -lkstat -lsendfile";
+            # cmlibarchive's CHECK_CRYPTO does find_library(NAMES md) after a
+            # successful CHECK_LIBRARY_EXISTS(md), then feeds ${LIBMD_LIBRARY}
+            # to a TRY_COMPILE. find_library is hermetic, so point
+            # CMAKE_LIBRARY_PATH at the extra-syslibs dir (now carrying a bare
+            # libmd.so) so it resolves instead of NOTFOUND.
+            CMAKE_LIBRARY_PATH = "${extraSyslibs}/lib/amd64";
           };
+          # Override the AR/RANLIB/STRIP the cmake package.nix derived from the
+          # ranlib-less seed bintools (H37). Appended after the package.nix `--`
+          # block so these win in the bootstrap's configureFlags.
+          cmakeFlags = (old.cmakeFlags or [ ]) ++ [
+            "-DCMAKE_AR=${illumosRanlib}/bin/ar"
+            "-DCMAKE_RANLIB=${illumosRanlib}/bin/ranlib"
+            "-DCMAKE_STRIP=${illumosRanlib}/bin/strip"
+          ];
+          # H38 (2.24): every real (non-try-compile) `cmake` configure runs
+          # cmInstrumentation::GetDynamicSystemInformation, which on Solaris has
+          # cmsys SystemInformation shell out (psrinfo/kstat) via posix_spawn.
+          # This illumos kernel (68259130da) lacks the SYS_spawn fast path and
+          # its libc does not fall back to fork/exec -> the spawn syscall returns
+          # ENOSYS and the process takes SIGSYS (`Bad System Call`, core). The
+          # dynamic sysinfo is pure telemetry (host memory/CPU load in a JSON
+          # blob), never build-affecting, so neuter the probe to a no-op. Kills
+          # the crash for cmake-as-a-build-tool (nvi et al.) and drops the
+          # unwanted instrumentation shell-out entirely.
+          postPatch = (old.postPatch or "") + ''
+            patch -p1 < ${cmInstrNoSpawnPatch}
+          '';
         });
       })
     # release-toolset curl/rsync: the full `curl` attr and rsync enable
