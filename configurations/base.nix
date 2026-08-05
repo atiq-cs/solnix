@@ -39,7 +39,7 @@
   # Editor: nvi (github.com/lichray/nvi2) is solnix's default vi — small, C++,
   # wide-char, no vim dependency; /usr/bin/{vi,ex,view} link to nvi.
   environment.systemPackages = with pkgs.solnix.starter; [
-    coreutils file gnugrep gnused bzip2 xz zlib pcre2 nvi
+    coreutils file gnugrep gnused bzip2 xz zlib pcre2 nvi which
   ];
 
   # Declarative networking (T2.9): the primary NIC via DHCP. This GENERATES the
