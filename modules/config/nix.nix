@@ -96,6 +96,20 @@ in
       sandbox = lib.mkDefault false;         # illumos has no Linux namespaces.
       build-users-group = lib.mkDefault "";  # single-user Stage A.
       max-jobs = lib.mkDefault "auto";
+      cores = lib.mkDefault 0;               # use all cores per build (NixOS default).
+      # flakes + the new CLI on by default (Nix 2.24). Matches the maintainer's floki.
+      experimental-features = lib.mkDefault "nix-command flakes";
+      require-sigs = lib.mkDefault true;     # verify cache signatures (5HAV).
+      # keep build inputs/outputs so `nix develop`/gc-roots behave like NixOS.
+      keep-outputs = lib.mkDefault true;
+      keep-derivations = lib.mkDefault true;
+      warn-dirty = lib.mkDefault false;
+      download-buffer-size = lib.mkDefault 524288000;
+      # allow all users to use the daemon-less store; trust root (the admin user
+      # gets trust via its RBAC Primary Administrator profile / group, not a
+      # hardcoded name here — the default image must not bake a specific username).
+      allowed-users = lib.mkDefault "*";
+      trusted-users = lib.mkDefault [ "root" ];
     };
 
     nix.generatedEtc."nix/nix.conf" = nixConfText;

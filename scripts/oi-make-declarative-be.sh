@@ -67,12 +67,10 @@ NIXDS="${NIXDS:-$POOL/nix}"              # the /nix dataset created on the targe
 # per-user dirs are chowned for these logins (the KNOWN last-hurdle fix). Root +
 # the base.nix admin logins. Override PERUSERS="root gburd ..." as needed.
 PERUSERS="${PERUSERS:-root gburd}"
-# Substituter: prefer the ORIGIN (s3.solnix.io/solnix-cache), NOT the CDN edge.
-# WHY (documented in docs/gate-a.md): the cache.solnix.io CDN edge negative-caches
-# a stale 404 for freshly-published hashes; the origin bucket serves them fine.
-# Images therefore point nix at the origin to avoid the transient 404 on a hash
-# published moments before boot. cache.solnix.io still works for aged content.
-SUBSTITUTER="${SUBSTITUTER:-https://s3.solnix.io/solnix-cache}"
+# Substituter: cache.solnix.io (the durable public CDN read cache). The earlier
+# CDN stale-404 issue was FIXED site-side, so consumers read the CDN only (the
+# s3.solnix.io inbox is write-only + transient; never a read substituter).
+SUBSTITUTER="${SUBSTITUTER:-https://cache.solnix.io}"
 TRUSTED_KEY="${TRUSTED_KEY:-cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk=}"
 # CA bundle for the baked ssl-cert-file (2.24 nix needs it for TLS substitute).
 CA_SRC="${CA_SRC:-/etc/certs/ca-certificates.crt}"
