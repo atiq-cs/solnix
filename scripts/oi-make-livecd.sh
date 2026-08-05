@@ -41,7 +41,7 @@ SRC="${SRC:-/}"                          # the running root we slice from
 # minimal root ~268MB + Xfce/xorg/gtk3 closure ~177MB = ~445MB used, so default
 # RD_MB to 900 for graphical, 450 for minimal.
 GRAPHICAL="${GRAPHICAL:-0}"
-if [ "$GRAPHICAL" = 1 ]; then RD_MB="${RD_MB:-900}"; else RD_MB="${RD_MB:-560}"; fi
+if [ "$GRAPHICAL" = 1 ]; then RD_MB="${RD_MB:-900}"; else RD_MB="${RD_MB:-820}"; fi
                                           # ldd-closure tool set is ~130MB du, ~215MB on UFS.
 INSTALLER="${INSTALLER:-/var/tmp/solnix-install}"   # scripts/solnix-install, scp'd here
 LABEL="${LABEL:-SOLNIX_INSTALL}"
@@ -260,6 +260,20 @@ done
 ( cd "$SRC" && cpio -o -H ustar < /tmp/solnix-tools.list 2>/dev/null ) \
   | ( cd "$RDROOT" && cpio -idm -H ustar 2>/dev/null ) \
   || echo "WARN: tool copy had errors" >&2
+
+# --- 2.24 nix runtime into the live ramdisk (so nix works in the installer
+# shell: nix profile install by-name from cache.solnix.io, solnix-install). The
+# relocatable /nix-tools224 (bootstrap tarball) + its CA bundle. ~185MB — sized
+# into RD_MB. The full toolset closure is NOT baked (that is the installed
+# system's job, fetched from cache); the live media stays minimal.
+if [ -d /nix-tools224 ]; then
+  log "staging /nix-tools224 into live ramdisk"
+  ( cd / && tar -cpf - nix-tools224 ) | ( cd "$RDROOT" && tar -xpf - ) 2>/dev/null \
+    || echo "WARN: nix-tools224 stage had errors" >&2
+  [ -f "$RDROOT/nix-tools224/ca-bundle.crt" ] || cp /etc/certs/ca-certificates.crt "$RDROOT/nix-tools224/ca-bundle.crt" 2>/dev/null || true
+fi
+# native ping (task requirement: curl + native ping present).
+[ -e "$RDROOT/usr/sbin/ping" ] || { [ -x /usr/sbin/ping ] && cp /usr/sbin/ping "$RDROOT/usr/sbin/ping" && chmod 4555 "$RDROOT/usr/sbin/ping" && chown root:bin "$RDROOT/usr/sbin/ping" 2>/dev/null; }
 
 # /sbin/sh ships as a symlink to the 32-bit ../usr/bin/i86/ksh93 (needs 32-bit
 # libs we don't carry). Repoint it at the 64-bit /usr/bin/ksh93 (which is the
@@ -894,12 +908,31 @@ INITEOF
 # a console banner shell for interactive use (invoked from console-login).
 cat > "$RDROOT/etc/solnix-live-shell" <<'SHELLEOF'
 #!/usr/bin/ksh93
-PATH=/usr/sbin:/usr/bin:/sbin:/usr/gnu/bin
+PATH=/nix-tools224/bin:/usr/sbin:/usr/bin:/sbin:/usr/gnu/bin:/usr/ccs/bin
 export PATH TERM=vt100 TMPDIR=/tmp
+LD_LIBRARY_PATH=/nix-tools224/runtime-lib:/nix-tools224/lib:/nix-tools224/lib/amd64
+export LD_LIBRARY_PATH
+NIX_CONF_DIR=/etc/nix; export NIX_CONF_DIR
+NIX_PATH=nixpkgs=/run/current-system/solnix-flake; export NIX_PATH
 cat /etc/solnix-banner 2>/dev/null
 exec /usr/bin/ksh93 2>/dev/null || exec /sbin/sh
 SHELLEOF
 chmod 0555 "$RDROOT/etc/solnix-live-shell"
+# LIVE nix.conf (5HAV, s3-origin, flakes) so nix works in the installer shell
+# even when no full CS is baked (minimal ISO). solnix-install re-copies the
+# INSTALLED system's nix.conf from the toplevel it lays down.
+mkdir -p "$RDROOT/etc/nix"
+if [ ! -f "$RDROOT/etc/nix/nix.conf" ]; then
+  cat > "$RDROOT/etc/nix/nix.conf" <<'NIXCONF'
+substituters = https://s3.solnix.io/solnix-cache https://cache.solnix.io
+trusted-public-keys = cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk=
+experimental-features = nix-command flakes
+ssl-cert-file = /nix-tools224/ca-bundle.crt
+sandbox = false
+build-users-group =
+max-jobs = auto
+NIXCONF
+fi
 cat > "$RDROOT/etc/solnix-banner" <<'BANNEREOF'
 
   ############################################################

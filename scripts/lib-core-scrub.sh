@@ -4,7 +4,9 @@
 # Usage: BEROOT=/path/to/be/root scrub_cores
 scrub_cores() {
   local r="${1:-${BEROOT:?set BEROOT}}"
-  # 1. delete every stray core file in the image (build-time crashes leave these)
+  # 1. delete every stray core file in the image (build-time crashes leave these).
+  # NOTE: no -xdev — /export/home and other child datasets are separate ZFS
+  # filesystems; -xdev would skip them and leave cores behind (the v3 image bug).
   find "$r" -type f -name core -exec file {} \; 2>/dev/null | grep -i "core file" | cut -d: -f1 | while read -r c; do
     rm -f "$c" && echo "  scrubbed core: ${c#$r}"
   done

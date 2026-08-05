@@ -47,7 +47,11 @@ set -euo pipefail
 MODE="${MODE:-}"                         # stage | deploy (auto if empty)
 OUTDIR="${OUTDIR:-/scratch/gatea}"       # payload staging dir (both modes)
 CS="${CS:-}"                             # current-system store path (stage mode)
-NIXTOOLS="${NIXTOOLS:-/nix-tools}"       # host nix runtime (binaries + libs)
+# 2.24 release: the nix runtime is /nix-tools224 (the relocatable 2.24 nix from
+# the bootstrap tarball). The image ships this dir + puts /nix-tools224/bin on
+# PATH (the from-source 2.24 nix drv is not on the cache; the runtime dir IS the
+# nix, exactly as the 2.3.16 images shipped /nix-tools).
+NIXTOOLS="${NIXTOOLS:-/nix-tools224}"    # host nix runtime (binaries + libs)
 # tar for extraction on the target. The closure archive uses GNU long-name
 # (@LongLink) entries for >100-char store paths, which illumos /usr/bin/tar
 # cannot extract. Point TAR at a GNU tar (staged next to the payload on a
@@ -70,6 +74,8 @@ PERUSERS="${PERUSERS:-root scott greg}"
 # published moments before boot. cache.solnix.io still works for aged content.
 SUBSTITUTER="${SUBSTITUTER:-https://s3.solnix.io/solnix-cache}"
 TRUSTED_KEY="${TRUSTED_KEY:-cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk=}"
+# CA bundle for the baked ssl-cert-file (2.24 nix needs it for TLS substitute).
+CA_SRC="${CA_SRC:-/etc/certs/ca-certificates.crt}"
 
 # /usr/gnu/bin FIRST so `tar` resolves to GNU tar (the closure tar uses
 # `-T <file-list>` + symlink preservation, unsupported by illumos /usr/bin/tar).
@@ -102,8 +108,10 @@ if [ "$MODE" = stage ]; then
 
   # structural sanity: the CS must carry the declarative layer we deploy.
   [ -e "$CS/sw" ]  || die "$CS has no sw/ (composed system profile)"
-  [ -e "$CS/nix" ] || die "$CS has no nix/ (nix slice)"
-  [ -e "$CS/sw/bin/nix-store" ] || die "$CS/sw/bin/nix-store missing (nix not on the profile)"
+  # 2.24: nix ships as $NIXTOOLS (/nix-tools224), NOT a baked CS/nix slice, and
+  # nix-store lives on PATH via $NIXTOOLS/bin — so the CS/nix + CS/sw/bin/nix-store
+  # checks the 2.3.16 layout required are dropped here.
+  [ -x "$NIXSTORE" ] || die "nix-store not found at $NIXSTORE (set NIXSTORE=)"
 
   mkdir -p "$OUTDIR"
 
@@ -209,21 +217,32 @@ mkdir -p /nix/var/nix/profiles
 rm -f /nix/var/nix/profiles/default
 ln -s "$CS/sw" /nix/var/nix/profiles/default
 
-# 5. /etc/nix/nix.conf — ORIGIN substituter (CDN-lag rationale in the header +
-#    docs/gate-a.md), single-user, no sandbox (illumos has no Linux namespaces).
-log "installing /etc/nix/nix.conf (origin substituter $SUBSTITUTER)"
+# 5. /etc/nix/nix.conf + registry.json — prefer the toplevel's declarative
+# copies (5HAV key, experimental-features=flakes, ssl-cert-file, s3-origin
+# substituter). Fall back to writing them if the CS has no etc/ overlay.
+log "installing /etc/nix/nix.conf + registry.json (5HAV, s3 origin $SUBSTITUTER)"
 mkdir -p /etc/nix
-cat > /etc/nix/nix.conf <<EOF
-# /etc/nix/nix.conf — solnix declarative image (oi-make-declarative-be.sh).
-# Substituter is the ORIGIN bucket, not the cache.solnix.io CDN edge: the edge
-# negative-caches stale 404s for freshly-published hashes (see docs/gate-a.md).
-substituters = $SUBSTITUTER
+if [ -f "$CS/etc/nix/nix.conf" ]; then
+  cp -L "$CS/etc/nix/nix.conf" /etc/nix/nix.conf 2>/dev/null || cp "$CS/etc/nix/nix.conf" /etc/nix/nix.conf
+else
+  cat > /etc/nix/nix.conf <<EOF
+substituters = $SUBSTITUTER https://cache.solnix.io
 trusted-public-keys = $TRUSTED_KEY
+experimental-features = nix-command flakes
+ssl-cert-file = $NIXTOOLS/ca-bundle.crt
 sandbox = false
 build-users-group =
 max-jobs = auto
 EOF
+fi
 chmod 0644 /etc/nix/nix.conf
+[ -f "$CS/etc/nix/registry.json" ] && { cp -L "$CS/etc/nix/registry.json" /etc/nix/registry.json 2>/dev/null || cp "$CS/etc/nix/registry.json" /etc/nix/registry.json; chmod 0644 /etc/nix/registry.json; }
+
+# 5b. the 2.24 nix runtime's baked ssl-cert-file must resolve: ensure the CA
+# bundle exists at $NIXTOOLS/ca-bundle.crt (copy from the host CA if missing).
+if [ ! -f "$NIXTOOLS/ca-bundle.crt" ] && [ -f "$CA_SRC" ]; then
+  cp "$CA_SRC" "$NIXTOOLS/ca-bundle.crt" && echo "  installed $NIXTOOLS/ca-bundle.crt from $CA_SRC"
+fi
 
 # 6. login PATH: prepend /run/current-system/sw/bin for the target logins.
 #    The toplevel's own /etc/profile.d/solnix-env.sh (if present in the CS etc/
@@ -236,9 +255,12 @@ if [ -f "$CS/etc/profile.d/solnix-env.sh" ]; then
     || cp "$CS/etc/profile.d/solnix-env.sh" /etc/profile.d/solnix-env.sh
 else
   cat > /etc/profile.d/solnix-env.sh <<'EOF'
-# solnix login environment (declarative). sw/bin first on PATH.
-export PATH=/run/current-system/sw/bin:$PATH
-export NIX_PROFILES="/nix/var/nix/profiles/default"
+# solnix login environment (declarative, Nix 2.24). Full PATH: sw + nix-tools224 + base OS.
+export PATH=/run/current-system/sw/bin:/nix-tools224/bin:/usr/gnu/bin:/usr/bin:/usr/sbin:/sbin:/usr/ccs/bin
+export NIX_PROFILES="/nix/var/nix/profiles/default $HOME/.nix-profile"
+export NIX_CONF_DIR=/etc/nix
+export LD_LIBRARY_PATH=/nix-tools224/runtime-lib:/nix-tools224/lib:/nix-tools224/lib/amd64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+export NIX_PATH="nixpkgs=/run/current-system/solnix-flake"
 EOF
 fi
 chmod 0644 /etc/profile.d/solnix-env.sh
@@ -251,7 +273,7 @@ for u in $PERUSERS; do
   [ -n "$home" ] && [ -d "$home" ] || continue
   prof="$home/.profile"
   if ! grep -q '__SOLNIX_PATH' "$prof" 2>/dev/null; then
-    printf '\n# __SOLNIX_PATH: declarative userland on PATH\nPATH=/run/current-system/sw/bin:$PATH\nexport PATH\n' >> "$prof"
+    printf '\n# __SOLNIX_PATH: declarative userland on PATH (bash + ksh)\nPATH=/run/current-system/sw/bin:/nix-tools224/bin:/usr/gnu/bin:/usr/bin:/usr/sbin:/sbin:/usr/ccs/bin\nexport PATH\nLD_LIBRARY_PATH=/nix-tools224/runtime-lib:/nix-tools224/lib:/nix-tools224/lib/amd64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}\nexport LD_LIBRARY_PATH\nNIX_CONF_DIR=/etc/nix; export NIX_CONF_DIR\nNIX_PATH=nixpkgs=/run/current-system/solnix-flake; export NIX_PATH\n' >> "$prof"
   fi
 done
 
@@ -270,8 +292,10 @@ done
 
 # scrub build-time core files + set the managed coreadm policy. Scrub the live
 # target root + set the managed coreadm policy before this BE is imaged.
+# NOTE: no -xdev — /export/home etc. are separate ZFS datasets; -xdev would
+# skip them and leave cores in the image.
 log "core-scrub + coreadm policy (no core files in the image)"
-find / -xdev \( -name 'core' -o -name 'core.[0-9]*' \) -type f 2>/dev/null | while read -r c; do
+find / \( -name 'core' -o -name 'core.[0-9]*' \) -type f 2>/dev/null | while read -r c; do
   file "$c" 2>/dev/null | grep -qi 'core file' && { rm -f "$c" && echo "  scrubbed: $c"; }
 done
 mkdir -p /var/cores && chmod 1777 /var/cores

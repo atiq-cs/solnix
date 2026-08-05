@@ -15,8 +15,8 @@
 # scrub_cores runs on the target BE before export (no core
 # files shipped).
 set -euo pipefail
-export PATH=/nix-tools/bin:/usr/sbin:/usr/bin:/usr/gnu/bin:/sbin
-export LD_LIBRARY_PATH="/nix-tools/runtime-lib:/nix-tools/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export PATH=/nix-tools224/bin:/usr/sbin:/usr/bin:/usr/gnu/bin:/sbin:/usr/ccs/bin
+export LD_LIBRARY_PATH="/nix-tools224/runtime-lib:/nix-tools224/lib:/nix-tools224/lib/amd64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 CS="${1:?usage: oi-make-raw-img.sh <current-system> [out.img] [size]}"
 OUT="${2:-/scratch/solnix-raw.img}"
@@ -68,7 +68,7 @@ log "running solnix-install $TARGET  (pool=$POOL, CS=$CS)"
 # (nix-store -qR), not the O(closure*filesize) fixpoint content scan. Its
 # runtime libs are on LD_LIBRARY_PATH (exported above); export both so the
 # child /sbin/sh env keeps them.
-export SOLNIX_NIXSTORE="${SOLNIX_NIXSTORE:-/nix-tools/bin/nix-store}"
+export SOLNIX_NIXSTORE="${SOLNIX_NIXSTORE:-/nix-tools224/bin/nix-store}"
 export LD_LIBRARY_PATH
 SOLNIX_POOL="$POOL" SOLNIX_ALLOW_RPOOL="" SOLNIX_NIXSTORE="$SOLNIX_NIXSTORE" \
   "$INSTALLER" "$TARGET" "$CS" 2>&1 | tail -60 || die "solnix-install failed"
@@ -93,6 +93,24 @@ if zpool import -N -f -R "$ALT" "$POOL" 2>/dev/null; then
     echo "=== core-file audit (must be zero) ==="
     _cores=$(find "$BEROOT" -name 'core*' -type f 2>/dev/null | while read c; do file "$c" 2>/dev/null | grep -qi 'core file' && echo "$c" || true; done || true)
     if [ -n "$_cores" ]; then echo "CORES REMAIN:"; echo "$_cores"; else echo "ZERO core files in image BE"; fi
+    # ---- stage the 2.24 nix runtime + flake registry + native ping into the BE
+    # solnix-install copies the toplevel closure + nix.conf/profile.d, but NOT
+    # the /nix-tools224 nix runtime dir, the flake registry, or native ping.
+    # The image's PATH + nix.conf reference all three; stage them here.
+    if [ -d /nix-tools224 ]; then
+      log "staging /nix-tools224 into the image BE"
+      ( cd / && tar -cpf - nix-tools224 ) | ( cd "$BEROOT" && tar -xpf - ) 2>/dev/null \
+        || echo "WARN: nix-tools224 stage failed"
+      # baked ssl-cert-file must resolve: ensure the CA bundle is present.
+      [ -f "$BEROOT/nix-tools224/ca-bundle.crt" ] || cp /etc/certs/ca-certificates.crt "$BEROOT/nix-tools224/ca-bundle.crt" 2>/dev/null || true
+    fi
+    if [ -f "$CS/etc/nix/registry.json" ]; then
+      mkdir -p "$BEROOT/etc/nix"
+      cp -L "$CS/etc/nix/registry.json" "$BEROOT/etc/nix/registry.json" 2>/dev/null || cp "$CS/etc/nix/registry.json" "$BEROOT/etc/nix/registry.json"
+    fi
+    if [ ! -e "$BEROOT/usr/sbin/ping" ] && [ -x /usr/sbin/ping ]; then
+      cp /usr/sbin/ping "$BEROOT/usr/sbin/ping" 2>/dev/null && chmod 4555 "$BEROOT/usr/sbin/ping" && chown root:bin "$BEROOT/usr/sbin/ping" 2>/dev/null || true
+    fi
     zfs unmount "$BE" 2>/dev/null || zfs unmount -f "$BE" 2>/dev/null || true
   fi
   zpool export "$POOL" 2>/dev/null || zpool export -f "$POOL" 2>/dev/null || true

@@ -131,7 +131,10 @@ fi
 if [ -z "$TOPLEVEL" ]; then
   SELF_INSTALL=1
   log "no nix toplevel present -> SELF-INSTALL: install the running live root as the system"
-elif [ -e "$TOPLEVEL/activate" ] || [ -e "$TOPLEVEL/sw/bin/nix-store" ]; then
+elif [ -e "$TOPLEVEL/activate" ] || [ -e "$TOPLEVEL/sw/bin/nix-store" ] || [ -e "$TOPLEVEL/sw" ]; then
+  # A solnix current-system carries sw/ (the composed userland profile). The
+  # 2.24 release toplevel ships nix as /nix-tools224 (not sw/bin/nix-store), so
+  # accept a bare sw/ as a declarative(-overlay) toplevel -> copy its closure.
   [ -d "$TOPLEVEL" ] || die "toplevel $TOPLEVEL not found"
   [ -e "$TOPLEVEL/activate" ] || log "declarative overlay toplevel (sw/ present, no activate) -> installing declarative userland layer"
 else
@@ -570,9 +573,12 @@ SENTINEL=/nix/.solnix-registered
 REG=/nix/.solnix-registration
 if [ -e "$SENTINEL" ]; then exit $SMF_EXIT_OK; fi
 NIXSTORE=""
-for d in /nix/var/nix/profiles/default/bin /run/current-system/sw/bin /usr/bin; do
+for d in /nix-tools224/bin /nix/var/nix/profiles/default/bin /run/current-system/sw/bin /usr/bin; do
   [ -x "$d/nix-store" ] && { NIXSTORE="$d/nix-store"; break; }
 done
+# the 2.24 nix runtime's transitive libs (libgit2 RUNPATH=/usr/gcc/13) need this.
+LD_LIBRARY_PATH=/nix-tools224/runtime-lib:/nix-tools224/lib:/nix-tools224/lib/amd64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+export LD_LIBRARY_PATH
 if [ -z "$NIXSTORE" ]; then
   echo "solnix-nix-register: nix-store not found; skipping" > /dev/console 2>&1
   exit $SMF_EXIT_OK
