@@ -58,25 +58,16 @@
   users.users.root.openssh.authorizedKeys.keys = [
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKCqHOIyYwbp42C7MxnRFxOcy+ZE8cNOWdsdvCgVFm1L Greg Burd <greg@burd.me>"
   ];
-  # scott: primary admin login for cloud test hosts. Secure hashed password
-  # (SHA-512 crypt) — password delivered out-of-band, never committed in clear.
-  users.users.scott = {
-    uid = 1001;
-    group = "staff";
-    description = "Scott (admin)";
-    shell = "/usr/bin/ksh93";
-    extraGroups = [ "adm" "sys" ];
-    hashedPassword = "$6$ArPWLrn2ySFy0yku$UT8DvBWBxdrSJ0LLGgznIBjfBwa.hBG6td1UjoOiue.FaNsp3sHs6yLwjDSWN7Aa6TT/aQJgMTEzGUtw//yJ40";
-    openssh.authorizedKeys.keys = [
-      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKCqHOIyYwbp42C7MxnRFxOcy+ZE8cNOWdsdvCgVFm1L Greg Burd <greg@burd.me>"
-    ];
-  };
-  users.users.greg = {
+  # gburd: the default primary user + admin login. Secure hashed password
+  # (SHA-512 crypt) — delivered out-of-band, never committed in clear. RBAC admin
+  # via extraGroups + a Primary Administrator profile (pfexec -> root).
+  users.users.gburd = {
     uid = 1000;
     group = "staff";
     description = "Greg Burd";
     shell = "/usr/bin/ksh93";
-    extraGroups = [ "adm" ];
+    extraGroups = [ "adm" "sys" ];
+    hashedPassword = "$6$ArPWLrn2ySFy0yku$UT8DvBWBxdrSJ0LLGgznIBjfBwa.hBG6td1UjoOiue.FaNsp3sHs6yLwjDSWN7Aa6TT/aQJgMTEzGUtw//yJ40";
     openssh.authorizedKeys.keys = [
       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKCqHOIyYwbp42C7MxnRFxOcy+ZE8cNOWdsdvCgVFm1L Greg Burd <greg@burd.me>"
     ];

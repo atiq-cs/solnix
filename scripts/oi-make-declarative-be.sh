@@ -65,8 +65,8 @@ export LD_LIBRARY_PATH="$NIXTOOLS/runtime-lib:$NIXTOOLS/lib${LD_LIBRARY_PATH:+:$
 POOL="${POOL:-rpool}"                    # target pool holding rpool/nix
 NIXDS="${NIXDS:-$POOL/nix}"              # the /nix dataset created on the target
 # per-user dirs are chowned for these logins (the KNOWN last-hurdle fix). Root +
-# the base.nix admin logins. Override PERUSERS="root scott greg ..." as needed.
-PERUSERS="${PERUSERS:-root scott greg}"
+# the base.nix admin logins. Override PERUSERS="root gburd ..." as needed.
+PERUSERS="${PERUSERS:-root gburd}"
 # Substituter: prefer the ORIGIN (s3.solnix.io/solnix-cache), NOT the CDN edge.
 # WHY (documented in docs/gate-a.md): the cache.solnix.io CDN edge negative-caches
 # a stale 404 for freshly-published hashes; the origin bucket serves them fine.
