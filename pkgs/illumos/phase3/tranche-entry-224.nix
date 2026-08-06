@@ -401,6 +401,7 @@ import nixpkgs {
           "libuv" "nghttp3" "ngtcp2" "spdlog" "fmt" "re2"
           "libxkbcommon" "libdeflate" "utf8proc" "lerc"
           "yajl" "libssh" "cmark" "hiredis"
+          "cjson" "libcbor"
         ];
       in builtins.listToAttrs (builtins.concatMap
         (a: if prev ? ${a} then [{ name = a; value = fixCmake prev.${a}; }] else [ ])
@@ -482,7 +483,72 @@ import nixpkgs {
         ngtcp2 = (fixCmake prev.ngtcp2).overrideAttrs (old: {
           cmakeFlags = (old.cmakeFlags or [ ]) ++ [ "-DENABLE_LIB_ONLY=ON" ];
         });
+        # libssh's sftpserver.c calls the 2-arg POSIX ctime_r; this illumos
+        # bootstrapLibs <time.h> only offers the 2-arg form through a
+        # __PRAGMA_REDEFINE_EXTNAME static-inline path gcc does not take, so
+        # every feature-macro combo still resolves to the 3-arg legacy form
+        # `ctime_r(const time_t*, char*, int)`. Patch the single call site to the
+        # 3-arg form (ctime output is a fixed 26-byte buffer).
+        libssh = (fixCmake prev.libssh).overrideAttrs (old: {
+          postPatch = (old.postPatch or "") + ''
+            sed -i 's/ctime_r(&z_st->st_mtime, time)/ctime_r(\&z_st->st_mtime, time, sizeof(time))/' src/sftpserver.c
+          '';
+        });
       })
+    # BREADTH: gnutls pulls net-tools (hostname) + util-linux-minimal via
+    # unixtools, whose provider table has no `solaris` entry and recurses
+    # infinitely on the `providers.linux` fallback (unixtools.nix:34). Those are
+    # only used by gnutls' test suite/tools; drop them (and texinfo, docs-only,
+    # same as gawkReal) so the recursion never triggers.
+    # p11-kit pulls a meson/ninja/python/xz-rebuild chain that fails on this
+    # fork; PKCS#11 trust-store is optional, so drop it + its trust-store flag.
+    # NM points libtool's symbol-export pipe at gnm (the seed has no plain nm).
+    # KNOWN-BLOCKED: libtool's $global_symbol_pipe is empty on illumos (nm
+    # output-format not recognized) -> `nm ... |  | sed` syntax error at the
+    # libgnutls.la link. Needs an lt_cv_sys_global_symbol_pipe override; the
+    # gnutls deps (nettle/libtasn1/libidn2) are already built + durable.
+    (final: prev: prev.lib.optionalAttrs (prev ? gnutls) {
+      gnutls = (prev.gnutls.override { p11-kit = null; }).overrideAttrs (old: {
+        nativeBuildInputs = builtins.filter
+          (d: let n = d.pname or d.name or ""; in
+              !(final.lib.hasInfix "net-tools" n || final.lib.hasInfix "util-linux" n
+                || final.lib.hasInfix "texinfo" n))
+          (old.nativeBuildInputs or [ ]);
+        configureFlags = builtins.filter
+          (f: f != "--with-p11-kit" && !(final.lib.hasPrefix "--with-default-trust-store-pkcs11" f))
+          (old.configureFlags or [ ]) ++ [ "--without-p11-kit" ];
+        buildInputs = builtins.filter
+          (d: let n = d.pname or d.name or ""; in !(final.lib.hasInfix "p11-kit" n))
+          (old.buildInputs or [ ]);
+        NM = "${final.illumosGnm}/bin/gnm";
+        outputs = builtins.filter (o: o != "info") (old.outputs or [ "out" ]);
+        doCheck = false;
+        doInstallCheck = false;
+      });
+    })
+    # DEBUG (DWARF) for the daily-driver core set. nixpkgs' separateDebugInfo
+    # gates its `-debug` split to isLinux (make-derivation.nix
+    # `separateDebugInfo' = separateDebugInfo && isLinux`) AND its hook needs GNU
+    # objcopy + `.note.gnu.build-id`; this illumos native toolchain has neither
+    # (Solaris ld has no --build-id, the binutils slice ships no objcopy). The
+    # portable equivalent gdb consumes on Solaris is in-band DWARF: compile
+    # `-ggdb` and don't strip it. Each core package's main `out` then carries
+    # .debug_* sections gdb reads directly (no .gnu_debuglink needed).
+    # NOTE: in-band DWARF in `out`, not a split `-debug` output; add a real
+    # split only if/when a GNU objcopy + build-id-capable ld lands on illumos.
+    (final: prev:
+      let
+        addDwarf = drv: drv.overrideAttrs (old: {
+          dontStrip = true;
+          # NIX_CFLAGS_COMPILE_BEFORE is threaded by the cc-wrapper and, unlike
+          # NIX_CFLAGS_COMPILE, is not part of packages' structured `env` (whose
+          # duplicate-key check rejects a top-level NIX_CFLAGS_COMPILE).
+          NIX_CFLAGS_COMPILE_BEFORE = (old.NIX_CFLAGS_COMPILE_BEFORE or "") + " -ggdb";
+        });
+        coreDebug = [ "ncurses" "readline" ];
+      in builtins.listToAttrs (builtins.concatMap
+        (a: if prev ? ${a} then [{ name = a; value = addDwarf prev.${a}; }] else [ ])
+        coreDebug))
   ];
   # 2.24 supports structuredAttrs natively, so the nixpkgs default is correct.
   config = { allowUnsupportedSystem = true; };
