@@ -260,14 +260,29 @@ dbg="/var/tmp/${pname}-${ver}-debug"; [ -e "$dbg" ] && dbg="$dbg.$$"
 mkdir -p "$dbg/lib/debug/.build-id"
 OBJCOPY=$(ls /usr/gnu/bin/gobjcopy /usr/gnu/bin/objcopy 2>/dev/null | head -1)
 OBJDUMP=$(ls /usr/gnu/bin/gobjdump /usr/gnu/bin/objdump 2>/dev/null | head -1)
+ELFEDIT=/usr/bin/elfedit
 set +e
 find "$named" -type f 2>/dev/null | while read -r f; do
   "$OBJDUMP" -h "$f" 2>/dev/null | grep -q '\.debug_info' || continue
+  chmod u+w "$f" 2>/dev/null
+  # build-id: prefer an existing GNU note; else inject a REAL .note.gnu.build-id
+  # (Solaris ld emits none). build-id = sha1 of the linked ELF (40 hex, unique per
+  # build); objcopy --add-section builds a PROGBITS section, elfedit retypes it to
+  # SHT_NOTE so readelf/gdb parse it. gdb then finds the split debug BY build-id
+  # (proven: gdb resolves source-level symbols from lib/debug/.build-id/XX/YY.debug).
   bid=$("$OBJDUMP" -s -j .note.gnu.build-id "$f" 2>/dev/null | awk '/^ /{for(i=2;i<=5;i++)printf $i}' | tail -c +33 2>/dev/null)
-  [ -z "$bid" ] && bid=$(/usr/bin/sha256sum "$f" | awk '{print $1}')
+  if [ ${#bid} -ne 40 ]; then
+    bid=$(/usr/bin/sha1sum "$f" | awk '{print $1}')
+    _note=$(mktemp)
+    # note: namesz=4 "GNU\0", descsz=20, type=3, 20-byte sha1. Pure printf.
+    printf '\004\000\000\000\024\000\000\000\003\000\000\000GNU\000'"$(echo "$bid" | sed 's/../\\x&/g')" > "$_note"
+    "$OBJCOPY" --add-section .note.gnu.build-id="$_note" \
+      --set-section-flags .note.gnu.build-id=alloc,readonly "$f" 2>/dev/null \
+      && "$ELFEDIT" -e "shdr:sh_type .note.gnu.build-id SHT_NOTE" "$f" 2>/dev/null
+    rm -f "$_note"
+  fi
   pre=$(printf '%s' "$bid" | cut -c1-2); rest=$(printf '%s' "$bid" | cut -c3-)
   dst="$dbg/lib/debug/.build-id/$pre"; mkdir -p "$dst"
-  chmod u+w "$f" 2>/dev/null
   "$OBJCOPY" --only-keep-debug "$f" "$dst/$rest.debug" 2>/dev/null || continue
   "$OBJCOPY" --strip-debug "$f" 2>/dev/null
   "$OBJCOPY" --add-gnu-debuglink="$dst/$rest.debug" "$f" 2>/dev/null

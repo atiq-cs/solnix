@@ -50,9 +50,13 @@
 # --only-keep-debug + --add-gnu-debuglink, mirroring nixpkgs' separateDebugInfo.
 # The main output ships stripped-of-debug (but keeps CTF, which illumos mdb/dtrace
 # use); the `debug` output holds the .debug files under
-# lib/debug/.build-id/<xx>/<rest>.debug so gdb finds them by build-id. Both are
-# cached+signed; a consumer pulls `debug` only when actually debugging. This is
-# the "separate packages that combine to debug" the maintainer asked for.
+# lib/debug/.build-id/<xx>/<rest>.debug so gdb finds them by build-id. Because
+# the native Solaris ld emits NO .note.gnu.build-id, the split step first injects
+# a real build-id note (sha1 of the linked ELF) with GNU objcopy --add-section +
+# illumos elfedit (retype to SHT_NOTE); gdb then loads the split debug BY
+# build-id. Both outputs are cached+signed; a consumer pulls `debug` only when
+# actually debugging. This is the "separate packages that combine to debug" the
+# maintainer asked for.
 #
 # Man pages (systematic; docs/design-manpages.md): man pages ride WITH the main
 # output ($out/share/man), never stripped, never split. autotools/configure gets
@@ -267,17 +271,31 @@ derivation {
       [ -x "$OBJCOPY" ] || OBJCOPY="$gccStore/usr/bin/gobjcopy"
       [ -x "$OBJCOPY" ] || OBJCOPY=/usr/gnu/bin/objcopy
       OBJDUMP="$gccStore/usr/gcc/14/bin/gobjdump"; [ -x "$OBJDUMP" ] || OBJDUMP=/usr/gnu/bin/objdump
+      ELFEDIT=/usr/bin/elfedit
       mkdir -p "$debug/lib/debug/.build-id"
       find "$out" -type f 2>/dev/null | while read -r f; do
         # only ELF with a .debug_info section
         "$OBJDUMP" -h "$f" 2>/dev/null | grep -q '\.debug_info' || continue
-        # locate by GNU build-id if present, else by a content hash fallback.
+        chmod u+w "$f" 2>/dev/null || true
+        # build-id: prefer an existing GNU note; else inject a REAL
+        # .note.gnu.build-id (Solaris ld emits none). build-id = sha1 of the
+        # linked ELF; objcopy --add-section makes a PROGBITS section, illumos
+        # elfedit retypes it to SHT_NOTE so gdb finds the split debug BY
+        # build-id (verified: gdb resolves source-level symbols from -debug).
         bid=$("$OBJDUMP" -s -j .note.gnu.build-id "$f" 2>/dev/null | awk '/^ /{for(i=2;i<=5;i++)printf $i}' | tail -c +33 2>/dev/null)
-        if [ -z "$bid" ]; then bid=$(/usr/bin/sha256sum "$f" | awk '{print $1}'); fi
+        if [ "''${#bid}" != 40 ]; then
+          bid=$(/usr/bin/sha1sum "$f" | awk '{print $1}')
+          _note=$(mktemp)
+          # note: namesz=4 "GNU\0", descsz=20, type=3, 20-byte sha1. Pure printf.
+          printf '\004\000\000\000\024\000\000\000\003\000\000\000GNU\000'"$(echo "$bid" | sed 's/../\\x&/g')" > "$_note"
+          "$OBJCOPY" --add-section .note.gnu.build-id="$_note" \
+            --set-section-flags .note.gnu.build-id=alloc,readonly "$f" 2>/dev/null \
+            && "$ELFEDIT" -e "shdr:sh_type .note.gnu.build-id SHT_NOTE" "$f" 2>/dev/null
+          rm -f "$_note"
+        fi
         pre=$(printf '%s' "$bid" | cut -c1-2); rest=$(printf '%s' "$bid" | cut -c3-)
         dst="$debug/lib/debug/.build-id/$pre"
         mkdir -p "$dst"
-        chmod u+w "$f" 2>/dev/null || true
         # 1) copy DWARF out, 2) strip it from the binary (KEEP CTF/.SUNW_ctf for
         #    mdb/dtrace), 3) link binary->debug by build-id.
         "$OBJCOPY" --only-keep-debug "$f" "$dst/$rest.debug" 2>/dev/null || continue

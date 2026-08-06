@@ -526,29 +526,57 @@ import nixpkgs {
         doInstallCheck = false;
       });
     })
-    # DEBUG (DWARF) for the daily-driver core set. nixpkgs' separateDebugInfo
-    # gates its `-debug` split to isLinux (make-derivation.nix
-    # `separateDebugInfo' = separateDebugInfo && isLinux`) AND its hook needs GNU
-    # objcopy + `.note.gnu.build-id`; this illumos native toolchain has neither
-    # (Solaris ld has no --build-id, the binutils slice ships no objcopy). The
-    # portable equivalent gdb consumes on Solaris is in-band DWARF: compile
-    # `-ggdb` and don't strip it. Each core package's main `out` then carries
-    # .debug_* sections gdb reads directly (no .gnu_debuglink needed).
-    # NOTE: in-band DWARF in `out`, not a split `-debug` output; add a real
-    # split only if/when a GNU objcopy + build-id-capable ld lands on illumos.
+    # DEBUG: REAL split-debug for the daily-driver core set (Option A: keep the
+    # trusted Solaris ld, inject a build-id note POST-link, then split). nixpkgs'
+    # separateDebugInfo gates its `-debug` split to isLinux AND depends on
+    # `ld --build-id` (Solaris ld has none), so it is a no-op here. The solnix
+    # hook (solnix-separate-debug-info.sh) reproduces the SAME artifact gdb
+    # consumes on any platform -- a `-debug` output with
+    # lib/debug/.build-id/XX/YY.debug reachable by build-id -- using the
+    # illumos-native toolchain (GNU objcopy 2.46 + illumos elfedit), verified
+    # end-to-end: gdb loads source-level symbols via the injected build-id on
+    # both executables and shared libraries; both keep running.
+    #
+    # This replaces the earlier in-band-DWARF workaround (dontStrip + -ggdb in
+    # `out`, no split) now that a build-id-capable path is proven.
     (final: prev:
       let
-        addDwarf = drv: drv.overrideAttrs (old: {
+        sepDebugHook = builtins.path {
+          path = ./solnix-separate-debug-info.sh;
+          name = "solnix-separate-debug-info.sh";
+        };
+        withRealSplitDebug = drv: drv.overrideAttrs (old: {
+          # keep DWARF (compile -ggdb, don't let the generic fixup strip it
+          # before our hook splits it out).
           dontStrip = true;
-          # NIX_CFLAGS_COMPILE_BEFORE is threaded by the cc-wrapper and, unlike
-          # NIX_CFLAGS_COMPILE, is not part of packages' structured `env` (whose
-          # duplicate-key check rejects a top-level NIX_CFLAGS_COMPILE).
           NIX_CFLAGS_COMPILE_BEFORE = (old.NIX_CFLAGS_COMPILE_BEFORE or "") + " -ggdb";
+          outputs = let o = old.outputs or [ "out" ];
+            in if builtins.elem "debug" o then o else o ++ [ "debug" ];
+          # tools the hook needs (host toolchain slice; native-on-illumos stage).
+          OBJCOPY = "/usr/gnu/bin/objcopy";
+          ELFEDIT = "/usr/bin/elfedit";
+          SHA1SUM = "/usr/bin/sha1sum";
+          # run the split in postFixup, per output, after the RUNPATH fixup.
+          postFixup = (old.postFixup or "") + ''
+            export OBJCOPY ELFEDIT SHA1SUM
+            . ${sepDebugHook}
+            for _o in $outputs; do
+              [ "$_o" = debug ] && continue
+              prefix=''${!_o}
+              [ -e "$prefix" ] || continue
+              _solnixSeparateDebugInfo
+            done
+          '';
         });
         coreDebug = [ "ncurses" "readline" ];
       in builtins.listToAttrs (builtins.concatMap
-        (a: if prev ? ${a} then [{ name = a; value = addDwarf prev.${a}; }] else [ ])
+        (a: if prev ? ${a} then [{ name = a; value = withRealSplitDebug prev.${a}; }] else [ ])
         coreDebug))
+      # FLEET ADOPTION: to enable real split-debug for MORE packages, add their
+      # nixpkgs attrs to `coreDebug`. (A blanket "every package" overlay would
+      # wrap the entire by-name set -- do that only after A/B'ing a wider sample,
+      # since -ggdb + the postFixup split adds build time + a `debug` output to
+      # each derivation.)
   ];
   # 2.24 supports structuredAttrs natively, so the nixpkgs default is correct.
   config = { allowUnsupportedSystem = true; };
