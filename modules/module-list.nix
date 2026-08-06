@@ -12,6 +12,7 @@
   ./nixos-compat.nix
   ./config/edition.nix
   ./config/coreadm.nix
+  ./config/libumem.nix
   ./config/first-boot-defaults.nix
   ./config/firewall.nix
   ./config/networking.nix

@@ -259,3 +259,17 @@ CAN WE BUILD WITH clang?
 
 RECOMMENDATION: ship first release on gcc-10 (illumos parity) + gdb-17.2 (latest). Post-stable:
 gcc-14 stdenv (PS-TC-1), then clang/LLVM (PS-TC-2).
+
+## PS-3 STATUS (2026-08-06): libumem PACKAGED + VERIFIED (64-bit), opt-in module written
+- Recipe: solnix-pkgs pkgs/os-specific/illumos/libumem.nix (git rev 1da3fbca, hash sha256-kLRoGAc8...).
+  Built: /nix/store/z1w683b46rd3drdh3p36gl2v82b6mwsn-libumem-2.2.0 (deriver resolves, host-free).
+- VERIFIED as a drop-in allocator for 64-bit programs: interposer libumem_malloc.so.1 exports
+  malloc/calloc/free DEFINED (elfdump: D <self>); `LD_PRELOAD=.../libumem_malloc.so.1 nix --version`
+  runs correctly. (64-bit = essentially the entire Nix userland.)
+- Opt-in module: modules/config/libumem.nix -> `solnix.programs.libumem.enable` (login-scoped
+  LD_PRELOAD, default OFF). Listed in module-list.nix.
+- REMAINING: (1) publish durable (needs signing key + s3 creds on a publish-capable host -- mechanical,
+  fold into next fleet push); (2) wire pkgs.solnix.libumem into the eval overlay so the module resolves;
+  (3) dual-ABI (32+64) build so the preload also covers 32-bit base-OS binaries (libumem.nix ABI TODO --
+  needs two configure/make passes, install 64 under lib/64/); (4) BENCHMARK vs libc malloc before any
+  system-default decision (level b).
