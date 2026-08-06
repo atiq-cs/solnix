@@ -215,3 +215,20 @@ x86_64-pc-solaris). Bootstrapping options:
 This is a multi-day bootstrap milestone of its own; once done, a large swath of
 the maintainer's daily tools become buildable. Pairs with the "make solnix
 declarative" (Nix-on-illumos + home-manager) milestone.
+
+## PS-3 UPDATE (allocator decision framing, 2026-08-06)
+Default allocator today = illumos libc malloc (stock). libumem (Bonwick/Adams slab) is present
+(libumem.so.1 in base OS + seed) but opt-in (LD_PRELOAD / -lumem).
+codeberg.org/gregburd/libumem = a MODERNIZED libumem. Making it the SOLNIX DEFAULT is attractive +
+a real differentiator (better multithreaded scaling, per-CPU magazines, debugging features
+UMEM_DEBUG). PLAN:
+  1. Package codeberg.org/gregburd/libumem as a real solnix derivation (libumem.nix).
+  2. Two adoption levels: (a) SHIP it + make it trivially opt-in (documented LD_PRELOAD / a
+     `programs.libumem.enable` that sets the preload globally) — LOW RISK; (b) make it the SYSTEM
+     DEFAULT malloc (e.g. via a libc malloc-interposition / crle default LD_PRELOAD, or building the
+     userland against it) — HIGHER RISK, needs benchmarking + broad testing (some programs assume
+     libc malloc internals / mallctl; libumem changes fragmentation + free() behavior).
+  3. BENCHMARK before defaulting: libumem vs libc malloc on real workloads (build times / a daemon /
+     pgbench-like) — adopt as default only if it wins without regressions, and keep a knob to revert.
+  RECOMMENDATION: do (a) now (package + easy opt-in), gate (b) on benchmarks. It's a solnix
+  differentiator worth doing, but "default allocator" is a measured decision, not a flip.
