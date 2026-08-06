@@ -273,3 +273,11 @@ gcc-14 stdenv (PS-TC-1), then clang/LLVM (PS-TC-2).
   (3) dual-ABI (32+64) build so the preload also covers 32-bit base-OS binaries (libumem.nix ABI TODO --
   needs two configure/make passes, install 64 under lib/64/); (4) BENCHMARK vs libc malloc before any
   system-default decision (level b).
+
+## PS-3 SAFETY NOTE (2026-08-06): system-wide preload unsafe until dual-ABI (T2)
+Verified on the demo host: a system-wide `LD_PRELOAD=libumem_malloc.so.1` (64-bit only) makes 32-bit
+base-OS tools (grep, pmap, ...) fail "wrong ELF class: ELFCLASS64". So `solnix.programs.libumem.enable`
+must NOT install a global /etc/profile.d preload until libumem ships dual-ABI (upstream T2 in
+/tmp/libumem-upstream-tasks.md). Interim: a `with-libumem <cmd>` per-command wrapper (safe, 64-bit
+programs only). Once T2 lands (both ABIs, lib/ + lib/64/), the runtime linker picks the matching class
+per process and the global preload becomes safe.
