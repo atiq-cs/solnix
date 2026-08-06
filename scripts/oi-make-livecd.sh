@@ -210,6 +210,9 @@ LIVE_TOOLS="
   usr/bin/su usr/bin/login usr/bin/newtask
   usr/bin/digest usr/bin/openssl usr/bin/od usr/bin/xargs usr/bin/mkfile
   usr/bin/gzip
+  usr/bin/mdb usr/bin/adb usr/bin/truss usr/bin/pstack usr/bin/pargs
+  usr/bin/pmap usr/bin/pfiles usr/bin/pgrep usr/bin/ptree usr/bin/gcore
+  usr/bin/prstat usr/bin/snoop
   usr/sbin/zpool usr/sbin/zfs usr/sbin/format usr/sbin/fmthard usr/sbin/prtvtoc
   usr/sbin/tar
   usr/sbin/mkfs usr/sbin/newfs usr/sbin/fsck usr/sbin/installboot

@@ -38,8 +38,11 @@
   #
   # Editor: nvi (github.com/lichray/nvi2) is solnix's default vi — small, C++,
   # wide-char, no vim dependency; /usr/bin/{vi,ex,view} link to nvi.
+  # Debuggers: gdb (from-source real derivation) is in the profile; mdb (the
+  # illumos native modular/post-mortem+kernel debugger) is base-OS-native at
+  # /usr/bin/mdb (staged by the media). Both ship by default.
   environment.systemPackages = with pkgs.solnix.starter; [
-    coreutils file gnugrep gnused bzip2 xz zlib pcre2 nvi which
+    coreutils file gnugrep gnused bzip2 xz zlib pcre2 nvi which gdb
   ];
 
   # Declarative networking (T2.9): the primary NIC via DHCP. This GENERATES the

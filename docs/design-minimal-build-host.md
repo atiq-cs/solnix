@@ -31,7 +31,9 @@ minimal solnix can `nix-build`/`cc`/`make`/`gdb` out of the box.
   `gmp`, `mpfr`, `expat`
 
 ### Debugging tools
-- `gdb` (the debugger — currently MISSING, must be built)
+- `gdb` (from-source real derivation) IN the default systemPackages, AND `mdb` (illumos
+  native modular/post-mortem+kernel debugger, base-OS) staged in the media. Both ship by default.
+  Plus the native introspection suite: truss(strace)/pstack/pargs/pmap/pfiles/gcore/pgrep/ptree.
 - debug-info: ship the `-debug` outputs / DWARF (solnix already splits debug;
   ensure the minimal profile can pull `-debug` outputs; `truss`/`mdb` are native
   illumos and present in the base OS)
