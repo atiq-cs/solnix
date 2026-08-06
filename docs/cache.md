@@ -248,3 +248,14 @@ All nix.conf / trusted-public-keys in config, scripts, images, and the bootstrap
 (8UNrVA... was propagated briefly from the handoff doc + reverted everywhere). Consumers on 8UNrVA
 reject the cache. If the site team intends to rotate to 8UNrVA, they must re-sign the objects with
 its private key first; until then 5HAV is authoritative (empirically verified).
+
+## Fleet publish model (2026-08-06): subagents BUILD, orchestrator PUBLISHES
+Build hosts run Nix 2.24 WITHOUT the S3 store scheme AND without awscli, and do NOT hold the 5HAV
+SECRET signing key. So a build-host subagent can BUILD hash-coherent store paths but CANNOT publish.
+Publishing is ORCHESTRATOR-side: scripts/oi-fleet-publish.sh runs from the maintainer box (holds the
+5HAV secret via sops secrets/cache-signing.yaml + S3 creds via secrets/s3-cache.yaml + awscli via
+nix run nixpkgs#awscli2), pulls the NARs from BUILDER_IP through a temp store, `nix store sign`s with
+5HAV, and `aws s3 cp`s to the s3.solnix.io inbox (drains to durable cache.solnix.io in ~10min).
+Dispatch pattern: subagents build + persist a paths file; the orchestrator runs oi-fleet-publish.sh
+on that paths file. (Public key 5HAV in cache-signing.yaml is cache_public_key; the SECRET is
+cache_signing_key, len ~106.)
