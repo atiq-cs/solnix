@@ -228,9 +228,12 @@ else
 substituters = $SUBSTITUTER https://cache.solnix.io
 trusted-public-keys = $TRUSTED_KEY
 experimental-features = nix-command flakes
-ssl-cert-file = $NIXTOOLS/ca-bundle.crt
 sandbox = false
 build-users-group =
+# single-user Stage A: no remote/local build hook (the default hook spawns a nix
+# child that can trip its lib preload under a stripped env). No remote builders.
+build-hook =
+builders =
 max-jobs = auto
 EOF
 fi
@@ -380,6 +383,31 @@ chmod 1777 /nix/var/nix/gcroots/auto /nix/var/nix/temproots 2>/dev/null || true
 # /nix/var/log/nix/drvs: Permission denied". Make the log tree sticky-writable.
 mkdir -p /nix/var/log/nix/drvs
 chmod 1777 /nix/var/log/nix /nix/var/log/nix/drvs 2>/dev/null || true
+# 7a. NON-ROOT SOURCE BUILDS (single-user store, no build-users-group): builds
+#     run AS the login user directly against the root-created store, which
+#     otherwise walls off a non-root user at each step. Set up the store so a
+#     normal user can BUILD (not just install prebuilt from cache):
+#   - the build lock files nix creates per store path are 0600 root:root when
+#     laid down by the root image build; a non-root builder can't open them
+#     ("opening lock file ...: Permission denied"). chgrp them to the operator
+#     group and make them group-writable. setgid the store dir so NEW paths/
+#     locks inherit the group.
+#   - the group is the primary group of the operator users. Default to `staff`
+#     (illumos non-root default) unless overridden.
+NRBUILD_GROUP="${NRBUILD_GROUP:-staff}"
+log "non-root-build store setup (locks group-writable + store setgid, group=$NRBUILD_GROUP)"
+chgrp "$NRBUILD_GROUP" /nix/store 2>/dev/null || true
+chmod 2775 /nix/store 2>/dev/null || true         # setgid: new files inherit the group
+# existing per-path lock files: group + group-writable (find, not a glob that can
+# overflow argv on a large store).
+find /nix/store -maxdepth 1 -name '*.lock' -type f 2>/dev/null \
+  | while read -r lk; do chgrp "$NRBUILD_GROUP" "$lk" 2>/dev/null; chmod 0664 "$lk" 2>/dev/null; done
+# make the whole var/nix + var/log/nix trees group-owned + setgid so nix's
+# on-demand dirs (drvs/<xx>/, temproots/<pid>, gcroots/auto/<n>) are writable.
+for d in /nix/var/nix /nix/var/log/nix; do
+  chgrp -R "$NRBUILD_GROUP" "$d" 2>/dev/null || true
+  find "$d" -type d -exec chmod g+ws {} + 2>/dev/null || true
+done
 for u in $PERUSERS; do
   id "$u" >/dev/null 2>&1 || { echo "NOTE: user $u absent; skipping per-user dirs"; continue; }
   for base in profiles gcroots; do
@@ -388,6 +416,22 @@ for u in $PERUSERS; do
     chown "$u" "$d" 2>/dev/null || echo "NOTE: chown $u $d failed"
   done
 done
+
+# 7c. pty for non-root builders: nix allocates a pty for build output when the
+#     invoking terminal is interactive. On illumos grantpt(3C) runs the setuid
+#     helper /usr/lib/pt_chmod to chown the slave to the caller; if it is not
+#     setuid-root (or /dev/pts is not mounted) a non-root build fails
+#     "opening pseudoterminal slave: Permission denied". Restore the base-OS
+#     invariants so a non-root `nix build` can get a build pty.
+if [ -f /usr/lib/pt_chmod ]; then
+  chown root:bin /usr/lib/pt_chmod 2>/dev/null || true
+  chmod 4555 /usr/lib/pt_chmod 2>/dev/null || true   # setuid-root (grantpt helper)
+fi
+# /dev/pts is a devfs mount populated at boot; ensure the mountpoint + fstab
+# entry exist so the pty subsystem is available on the imaged BE.
+mkdir -p /dev/pts 2>/dev/null || true
+grep -q '/dev/pts' /etc/vfstab 2>/dev/null \
+  || echo 'devpts\t-\t/dev/pts\tdevfs\t-\tyes\t-' >> /etc/vfstab 2>/dev/null || true
 
 # 7b. PIN the by-name eval deps as PERMANENT GC roots so nix-gc can never remove
 #     them off the image (the ROOT CAUSE of prior AMIs' broken by-name install:
