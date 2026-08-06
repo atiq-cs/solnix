@@ -316,11 +316,11 @@ if [ -f "$CS/etc/profile.d/solnix-env.sh" ]; then
     || cp "$CS/etc/profile.d/solnix-env.sh" /etc/profile.d/solnix-env.sh
 else
   cat > /etc/profile.d/solnix-env.sh <<'EOF'
-# solnix login environment (declarative, Nix 2.24). Full PATH: sw + nix-tools224 + base OS.
-export PATH=/run/current-system/sw/bin:/nix-tools224/bin:/usr/gnu/bin:/usr/bin:/usr/sbin:/sbin:/usr/ccs/bin
+# solnix login environment (declarative, Nix 2.24). Full PATH: user profile + sw
+# + base OS. The store nix is RUNPATH-correct, so no LD_LIBRARY_PATH is needed.
+export PATH=$HOME/.nix-profile/bin:/run/current-system/sw/bin:/usr/gnu/bin:/usr/bin:/usr/sbin:/sbin:/usr/ccs/bin
 export NIX_PROFILES="/nix/var/nix/profiles/default $HOME/.nix-profile"
 export NIX_CONF_DIR=/etc/nix
-export LD_LIBRARY_PATH=/nix-tools224/runtime-lib:/nix-tools224/lib:/nix-tools224/lib/amd64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
 # by-name install: flakes registry maps nixpkgs -> the solnix illumos flake;
 # NIX_PATH points at the classic shim (/etc/nix/nixpkgs/default.nix) so
 # `nix-env -iA <pkg>` resolves the illumos package set by name.
@@ -350,7 +350,7 @@ for u in $PERUSERS; do
   [ -n "$home" ] && [ -d "$home" ] || continue
   prof="$home/.profile"
   if ! grep -q '__SOLNIX_PATH' "$prof" 2>/dev/null; then
-    printf '\n# __SOLNIX_PATH: declarative userland on PATH (bash + ksh)\nPATH=$HOME/.nix-profile/bin:/run/current-system/sw/bin:/nix-tools224/bin:/usr/gnu/bin:/usr/bin:/usr/sbin:/sbin:/usr/ccs/bin\nexport PATH\nLD_LIBRARY_PATH=/nix-tools224/runtime-lib:/nix-tools224/lib:/nix-tools224/lib/amd64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}\nexport LD_LIBRARY_PATH\nNIX_CONF_DIR=/etc/nix; export NIX_CONF_DIR\nNIX_PATH=nixpkgs=/etc/nix/nixpkgs; export NIX_PATH\n' >> "$prof"
+    printf '\n# __SOLNIX_PATH: declarative userland on PATH (bash + ksh)\nPATH=$HOME/.nix-profile/bin:/run/current-system/sw/bin:/usr/gnu/bin:/usr/bin:/usr/sbin:/sbin:/usr/ccs/bin\nexport PATH\nNIX_CONF_DIR=/etc/nix; export NIX_CONF_DIR\nNIX_PATH=nixpkgs=/etc/nix/nixpkgs; export NIX_PATH\n' >> "$prof"
   fi
   # channel-style classic by-name: ~/.nix-defexpr/nixpkgs -> the shim so
   # `nix-env -iA nixpkgs.<pkg>` resolves without -f. Idempotent (ln -sfn).

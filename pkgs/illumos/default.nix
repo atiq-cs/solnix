@@ -373,6 +373,13 @@ let
   # TODO in ./nix.nix for the proper mk-illumos-component slice.
   nix = import ./nix.nix { };
 
+  # nix224 (pkgs.solnix.nix224) — the store-path Nix 2.24.15, RUNPATH-correct
+  # (runs with no LD_LIBRARY_PATH), ships on PATH via the system profile the
+  # NixOS way. This is the shipped nix (nix.package default), replacing the
+  # /nix-tools224 bootstrap that must never appear on a shipped image PATH.
+  # Substitutable from cache.solnix.io (5HAV-signed, durable).
+  nix224 = builtins.storePath /nix/store/jxn55a9725j8ba9hkqila89s66abszhr-nix-2.24.15;
+
   # cached (pkgs.solnix.cached.<pname>) — every wave-built package in the cache
   # (docs/registry/arch-manifest.tsv), exposed as a store-path attr so a config
   # can list `with pkgs.solnix.cached; [ vim curl ... ]` and have each substitute
@@ -387,6 +394,6 @@ let
   starter = import ./starter.nix { system = "x86_64-solaris"; };
 in
 {
-  inherit gate libc rtld ld sys base-tools systemPath externalLibs nix cached starter;
+  inherit gate libc rtld ld sys base-tools systemPath externalLibs nix nix224 cached starter;
   inherit (toolchains) gcc14 clang gdb;
 }

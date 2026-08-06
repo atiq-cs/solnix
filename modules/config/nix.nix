@@ -45,9 +45,9 @@ in
 
     package = mkOption {
       type = types.package;
-      default = pkgs.solnix.nix;
-      defaultText = lib.literalExpression "pkgs.solnix.nix";
-      description = "The Nix package that ships on the image (classic 2.3.16, design \u00a7C).";
+      default = pkgs.solnix.nix224;
+      defaultText = lib.literalExpression "pkgs.solnix.nix224";
+      description = "The Nix package that ships on the image (store-path Nix 2.24.15, RUNPATH-correct; on PATH via the system profile, NixOS-style).";
     };
 
     # nix.settings: the freeform /etc/nix/nix.conf attrs. Real declaration lives
@@ -95,6 +95,11 @@ in
       ];
       sandbox = lib.mkDefault false;         # illumos has no Linux namespaces.
       build-users-group = lib.mkDefault "";  # single-user Stage A.
+      # single-user Stage A: no remote/local build hook (the store nix is
+      # RUNPATH-correct, but the default build-hook spawns a nix child that can
+      # trip its lib preload under a stripped env). No remote builders either.
+      build-hook = lib.mkDefault "";
+      builders = lib.mkDefault "";
       max-jobs = lib.mkDefault "auto";
       cores = lib.mkDefault 0;               # use all cores per build (NixOS default).
       # flakes + the new CLI on by default (Nix 2.24). Matches the maintainer's floki.
