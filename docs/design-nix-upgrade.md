@@ -133,3 +133,22 @@ Produced on a fresh OI-build-AMI clone (pkg update -> 2026 userland -> gcc-13):
    with NO --impure -> installs + runs (Hello, world!). The AMI bakes this pure flake as solnix-flake
    (oi-make-declarative-be.sh step 5c/5d updated). classic nix-env shim resolves by name too.
    ALSO fix: 'which' is missing from the base toolset (add it); nix profile install is the verb (not 'add').
+
+## Structural: enable the Nix sandbox on illumos (2.24) — fixes the /usr/lib/64 host-lib-leak class
+Recurring across arches (x86_64 gawk H30, sparcv9 xz/gnumake/gawk/gnugrep tranche4): with
+`sandbox = false`, a build can link the HOST /usr/lib/64 copy of a lib instead of the /nix/store
+one — its .drv doesn't even list the store lib as an input, so the closure is silently impure
+(not certifiably host-free). Fingerprint: gnulib `$ORIGIN/../lib/<isa>` relative RUNPATH shadowing
+the store RPATH. We've been fixing this per-package (gawkReal NIX_CFLAGS_COMPILE_BEFORE pattern),
+but the ROOT fix is to ENABLE the Nix sandbox — Nix 2.24 supports it, and a sandbox hides
+/usr/lib outside the declared inputs so a build CAN'T leak host libs. TODO: turn `sandbox = true`
+on in the 2.24 stdenv (needs the illumos sandbox impl — Nix 2.24's sandbox uses the OS's
+namespace/chroot facility; on illumos this maps to a chroot/lofs or zones-lite jail — verify what
+2.24's sandbox does on SunOS). This converts whole batches from host-dependent to hermetic with
+NO per-package overrides. Until then, per-package gawkReal-pattern + REFUSE-to-publish-if-leaking
+(the sparc4 agent correctly did the latter).
+
+## Two SPARC seed fixes (high value, next sparc run)
+1. Add a real GNU `nm` (binutils nm) to the sparc seed -> unblocks the libtool `-export-symbols-regex`
+   / global_symbol_pipe subtree in ONE shot: gettext, ed, cpio, bc, gnupatch, gnutls, libidn2, ...
+2. bzip2 sparc came out ELF32 (v8+) — its hand-Makefile ignores -m64; needs a CFLAGS=-m64 override.
