@@ -294,3 +294,21 @@ per process and the global preload becomes safe.
   libunwind (drop libstdc++ dep), lld. Built on 2.3.16 host; recipe drops into the 2.24 overlay.
 - FOLLOW-UP: write clang-stdenv.nix into the 2.24 tranche-entry-224.nix overlay list (the on-host
   build was via the 2.3.16 tranche-toolchain flow; the recipe content is in artifacts/clang-latest-paths.txt).
+
+## PS-BREADTH-GATES (2026-08-06): 3 systemic blockers gating many x86_64 packages
+Found during the buildout lanes. Each is a SINGLE fix that unblocks a whole subtree:
+1. **libtool $global_symbol_pipe empty on illumos** -> the `.la` link runs `nm ... | | sed` (empty pipe
+   = syntax error). Blocks gnutls, gsasl, libidn (the TLS/i18n subtree). NM=gnm doesn't fix the
+   configure-time probe. FIX: patch libtool's global_symbol_pipe detection for illumos (or inject a
+   working `nm -B`/`gnm -p` pipe), fork-wide. HIGH VALUE (unblocks gnutls -> real HTTPS in curl/wget/
+   libmicrohttpd, and the i18n libs).
+2. **"Bad System Call" under the build for b2/bjam + icu pkgdata** -> blocks boost, icu4c, re2 (->icu),
+   and the C++-build-tool class. illumos rejects a syscall b2/pkgdata makes. FIX: identify the syscall
+   (truss the failing b2/pkgdata) + patch/stub it, or build icu/boost via cmake instead of b2. Unblocks
+   the C++ library subtree.
+3. **rhash-1.4.6 "Unknown target OS"** (cmake's hash dep) -> blocks the entire cmake-built graph
+   (double-conversion/cjson/libcbor/mbedtls/zlib-ng/xxHash/abseil-cpp/json-glib/...). FIX: add illumos
+   to rhash's OS detection (a configure/Makefile OS-case patch). VERY HIGH VALUE (cmake is a huge
+   dependency hub). NOTE: cmake itself builds (cmake 4.3.4 done); this is rhash pulled by cmake-using pkgs.
+Also per-pkg: nspr (ld), jemalloc (strerror_r return-type), libunwind (os-solaris.c:66 port bug),
+termcap (needs -fPIC; superseded by ncurses). Lower value / individual ports.
