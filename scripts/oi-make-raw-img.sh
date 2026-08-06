@@ -15,8 +15,9 @@
 # scrub_cores runs on the target BE before export (no core
 # files shipped).
 set -euo pipefail
-export PATH=/nix-tools224/bin:/usr/sbin:/usr/bin:/usr/gnu/bin:/sbin:/usr/ccs/bin
-export LD_LIBRARY_PATH="/nix-tools224/runtime-lib:/nix-tools224/lib:/nix-tools224/lib/amd64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+# build-host bootstrap nix-store for staging (never shipped). Prefer the sw
+# profile / default profile; the store nix is RUNPATH-correct (no LD_LIBRARY_PATH).
+export PATH=/run/current-system/sw/bin:/nix/var/nix/profiles/default/bin:/nix-tools224/bin:/usr/sbin:/usr/bin:/usr/gnu/bin:/sbin:/usr/ccs/bin
 
 CS="${1:?usage: oi-make-raw-img.sh <current-system> [out.img] [size]}"
 OUT="${2:-/scratch/solnix-raw.img}"
@@ -68,8 +69,7 @@ log "running solnix-install $TARGET  (pool=$POOL, CS=$CS)"
 # (nix-store -qR), not the O(closure*filesize) fixpoint content scan. Its
 # runtime libs are on LD_LIBRARY_PATH (exported above); export both so the
 # child /sbin/sh env keeps them.
-export SOLNIX_NIXSTORE="${SOLNIX_NIXSTORE:-/nix-tools224/bin/nix-store}"
-export LD_LIBRARY_PATH
+export SOLNIX_NIXSTORE="${SOLNIX_NIXSTORE:-nix-store}"   # resolved from PATH (sw/bin)
 SOLNIX_POOL="$POOL" SOLNIX_ALLOW_RPOOL="" SOLNIX_NIXSTORE="$SOLNIX_NIXSTORE" \
   "$INSTALLER" "$TARGET" "$CS" 2>&1 | tail -60 || die "solnix-install failed"
 
@@ -98,11 +98,8 @@ if zpool import -N -f -R "$ALT" "$POOL" 2>/dev/null; then
     # the /nix-tools224 nix runtime dir, the flake registry, or native ping.
     # The image's PATH + nix.conf reference all three; stage them here.
     if [ -d /nix-tools224 ]; then
-      log "staging /nix-tools224 into the image BE"
-      ( cd / && tar -cpf - nix-tools224 ) | ( cd "$BEROOT" && tar -xpf - ) 2>/dev/null \
-        || echo "WARN: nix-tools224 stage failed"
-      # baked ssl-cert-file must resolve: ensure the CA bundle is present.
-      [ -f "$BEROOT/nix-tools224/ca-bundle.crt" ] || cp /etc/certs/ca-certificates.crt "$BEROOT/nix-tools224/ca-bundle.crt" 2>/dev/null || true
+      # store nix ships in the CS closure (sw/bin/nix); no /nix-tools224 stage.
+      :
     fi
     if [ -f "$CS/etc/nix/registry.json" ]; then
       mkdir -p "$BEROOT/etc/nix"

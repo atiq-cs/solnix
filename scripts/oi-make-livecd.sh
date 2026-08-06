@@ -270,10 +270,11 @@ done
 # into RD_MB. The full toolset closure is NOT baked (that is the installed
 # system's job, fetched from cache); the live media stays minimal.
 if [ -d /nix-tools224 ]; then
-  log "staging /nix-tools224 into live ramdisk"
-  ( cd / && tar -cpf - nix-tools224 ) | ( cd "$RDROOT" && tar -xpf - ) 2>/dev/null \
-    || echo "WARN: nix-tools224 stage had errors" >&2
-  [ -f "$RDROOT/nix-tools224/ca-bundle.crt" ] || cp /etc/certs/ca-certificates.crt "$RDROOT/nix-tools224/ca-bundle.crt" 2>/dev/null || true
+  # build-host bootstrap only: if a /nix-tools224 exists on the BUILD host it may
+  # help stage, but it MUST NOT ship. The store nix (sw/bin/nix) is in the CS
+  # closure copied into the live ramdisk; nothing to stage here.
+  NIX224=/nix/store/jxn55a9725j8ba9hkqila89s66abszhr-nix-2.24.15
+  [ -x "$RDROOT$NIX224/bin/nix" ] || echo "WARN: store nix not in live closure ($NIX224)" >&2
 fi
 # native ping (task requirement: curl + native ping present).
 [ -e "$RDROOT/usr/sbin/ping" ] || { [ -x /usr/sbin/ping ] && cp /usr/sbin/ping "$RDROOT/usr/sbin/ping" && chmod 4555 "$RDROOT/usr/sbin/ping" && chown root:bin "$RDROOT/usr/sbin/ping" 2>/dev/null; }
@@ -915,10 +916,8 @@ INITEOF
 # a console banner shell for interactive use (invoked from console-login).
 cat > "$RDROOT/etc/solnix-live-shell" <<'SHELLEOF'
 #!/usr/bin/ksh93
-PATH=/nix-tools224/bin:/usr/sbin:/usr/bin:/sbin:/usr/gnu/bin:/usr/ccs/bin
+PATH=/run/current-system/sw/bin:/usr/sbin:/usr/bin:/sbin:/usr/gnu/bin:/usr/ccs/bin
 export PATH TERM=vt100 TMPDIR=/tmp
-LD_LIBRARY_PATH=/nix-tools224/runtime-lib:/nix-tools224/lib:/nix-tools224/lib/amd64
-export LD_LIBRARY_PATH
 NIX_CONF_DIR=/etc/nix; export NIX_CONF_DIR
 NIX_PATH=nixpkgs=/run/current-system/solnix-flake; export NIX_PATH
 cat /etc/solnix-banner 2>/dev/null
@@ -934,7 +933,7 @@ if [ ! -f "$RDROOT/etc/nix/nix.conf" ]; then
 substituters = https://s3.solnix.io/solnix-cache https://cache.solnix.io
 trusted-public-keys = cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk=
 experimental-features = nix-command flakes
-ssl-cert-file = /nix-tools224/ca-bundle.crt
+ssl-cert-file = /nix/store/jxn55a9725j8ba9hkqila89s66abszhr-nix-2.24.15/etc/ssl/certs/ca-bundle.crt
 sandbox = false
 build-users-group =
 max-jobs = auto
