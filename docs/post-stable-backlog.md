@@ -281,3 +281,16 @@ must NOT install a global /etc/profile.d preload until libumem ships dual-ABI (u
 /tmp/libumem-upstream-tasks.md). Interim: a `with-libumem <cmd>` per-command wrapper (safe, 64-bit
 programs only). Once T2 lands (both ABIs, lib/ + lib/64/), the runtime linker picks the matching class
 per process and the global preload becomes safe.
+
+## PS-TC-2 STATUS (2026-08-06): LLVM/clang 22.1.8 PACKAGED + clangStdenv proven
+- clang 22.1.8 (latest STABLE; 23 is git-only) built as a real x86_64-solaris .drv
+  (wbrsnb1r...-clang-22.1.8, deriver resolves), ON the pure gcc-10 stdenv. Target x86_64-pc-solaris2.11.
+- C + C++ hello both compile + run, host-free (48-path closure). Durable @ cache (5HAV).
+- clangStdenv: recipe pkgs/os-specific/illumos/phase3/clang-stdenv.nix (solnixClang + wrapper +
+  solnixClangStdenv). PROOF: zlib 1.3.2 built clang-driven (.comment=clang 22.1.8, runs). Durable.
+- illumos-LLVM fixes IN the recipe: unwrapped clang+llvm via cmake/ninja (null-bintools assert),
+  -lkstat + libnsl MD5/mp syslibs, __xnet_*/-lsocket -lnsl, -idirafter for <cstdlib>, gcc-10 C++ RUNPATH.
+- MINIMAL C/C++ clang: no compiler-rt/libcxx/lld yet. TODO: compiler-rt (sanitizers off), libcxx/
+  libunwind (drop libstdc++ dep), lld. Built on 2.3.16 host; recipe drops into the 2.24 overlay.
+- FOLLOW-UP: write clang-stdenv.nix into the 2.24 tranche-entry-224.nix overlay list (the on-host
+  build was via the 2.3.16 tranche-toolchain flow; the recipe content is in artifacts/clang-latest-paths.txt).
