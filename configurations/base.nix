@@ -53,25 +53,14 @@
 
   # Declarative users (T2.9): a login user + root, both with the maintainer's
   # ssh key. This GENERATES /etc/{passwd,shadow,group} entries (illumos format)
-  # merged over the base system accounts, and seeds ~/.ssh/authorized_keys —
-  # replacing the metadata-shim / ROOT_AUTHKEY key injection.
-  users.users.root.openssh.authorizedKeys.keys = [
-    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKCqHOIyYwbp42C7MxnRFxOcy+ZE8cNOWdsdvCgVFm1L Greg Burd <greg@burd.me>"
-  ];
-  # gburd: the default primary user + admin login. Secure hashed password
-  # (SHA-512 crypt) — delivered out-of-band, never committed in clear. RBAC admin
-  # via extraGroups + a Primary Administrator profile (pfexec -> root).
-  users.users.gburd = {
-    uid = 1000;
-    group = "staff";
-    description = "Greg Burd";
-    shell = "/usr/bin/ksh93";
-    extraGroups = [ "adm" "sys" ];
-    hashedPassword = "$6$ArPWLrn2ySFy0yku$UT8DvBWBxdrSJ0LLGgznIBjfBwa.hBG6td1UjoOiue.FaNsp3sHs6yLwjDSWN7Aa6TT/aQJgMTEzGUtw//yJ40";
-    openssh.authorizedKeys.keys = [
-      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKCqHOIyYwbp42C7MxnRFxOcy+ZE8cNOWdsdvCgVFm1L Greg Burd <greg@burd.me>"
-    ];
-  };
+  # merged over the base system accounts, and seeds ~/.ssh/authorized_keys.
+  #
+  # IDENTITY-FREE DEFAULT: base.nix defines NO personal user, key, or password
+  # (matching NixOS's identity-free installer image). The public AMI/ISO/IMG ship
+  # with root (RBAC/pfexec-capable) + no baked personal login; the installer/
+  # first-boot creates the operator's user. A maintainer's personal test build
+  # adds a user via a SEPARATE overlay (e.g. configurations/gburd.nix) that is
+  # NEVER included in any public image.
 
   # Two example SMF services exercise the generator (T1.11) end-to-end: each
   # renders to a DTD-valid manifest in system.build.toplevel, which make-be

@@ -65,8 +65,9 @@ export LD_LIBRARY_PATH="$NIXTOOLS/runtime-lib:$NIXTOOLS/lib${LD_LIBRARY_PATH:+:$
 POOL="${POOL:-rpool}"                    # target pool holding rpool/nix
 NIXDS="${NIXDS:-$POOL/nix}"              # the /nix dataset created on the target
 # per-user dirs are chowned for these logins (the KNOWN last-hurdle fix). Root +
-# the base.nix admin logins. Override PERUSERS="root gburd ..." as needed.
-PERUSERS="${PERUSERS:-root gburd}"
+# Default: root only (identity-free public image). Personal test builds override
+# PERUSERS="root <user>" via the personal overlay.
+PERUSERS="${PERUSERS:-root}"
 # Substituter: cache.solnix.io (the durable public CDN read cache). The earlier
 # CDN stale-404 issue was FIXED site-side, so consumers read the CDN only (the
 # s3.solnix.io inbox is write-only + transient; never a read substituter).

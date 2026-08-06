@@ -419,33 +419,37 @@ for f in name_to_major name_to_sysnum driver_aliases driver_classes minor_perm \
   [ -e "/etc/$f" ] && cp "/etc/$f" "$RDROOT/etc/$f" 2>/dev/null || true
 done
 
-# 3c'. gburd + sshd host keys/config. MUST run AFTER the passwd/shadow/group
-#      copy above (which comes from the build host and would otherwise clobber
-#      gburd's lines). SELF-INSTALL copies THIS live root's
-#      /etc/{passwd,shadow,group,user_attr} onto the installed BE verbatim, so
-#      baking gburd here is what lands him on the AMI: uid 1000, group staff(10),
-#      shell ksh93, SHA-512 hashed password (baked; delivered out-of-band), and
-#      an /etc/user_attr Primary-Administrator line so `pfexec` gives uid=0.
-_GBURD_HASH='$6$ArPWLrn2ySFy0yku$UT8DvBWBxdrSJ0LLGgznIBjfBwa.hBG6td1UjoOiue.FaNsp3sHs6yLwjDSWN7Aa6TT/aQJgMTEzGUtw//yJ40'
-_GBURD_KEY='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKCqHOIyYwbp42C7MxnRFxOcy+ZE8cNOWdsdvCgVFm1L Greg Burd <greg@burd.me>'
-log "baking gburd (uid 1000, Primary Administrator) into live root -> installed BE"
-grep -q '^staff:' "$RDROOT/etc/group" 2>/dev/null || echo 'staff::10:' >> "$RDROOT/etc/group"
-grep -q '^gburd:' "$RDROOT/etc/passwd" 2>/dev/null || \
-  echo 'gburd:x:1000:10:Greg Burd:/export/home/gburd:/usr/bin/ksh93' >> "$RDROOT/etc/passwd"
-if ! grep -q '^gburd:' "$RDROOT/etc/shadow" 2>/dev/null; then
-  # illumos shadow: name:hash:lastchg::::::  (lastchg in days; 6445 ~ 2027)
-  echo "gburd:${_GBURD_HASH}:6445::::::" >> "$RDROOT/etc/shadow"
+# 3c'. OPTIONAL personal-overlay user + sshd host keys. IDENTITY-FREE by default:
+#      a PUBLIC image bakes NO personal user/key/password (matching NixOS's
+#      installer). Only when PERSONAL_OVERLAY=1 (a maintainer's own test build)
+#      is a personal admin user baked — from PERSONAL_USER/PERSONAL_HASH/PERSONAL_KEY
+#      env (never hardcoded here). MUST run AFTER the passwd/shadow/group copy.
+if [ "${PERSONAL_OVERLAY:-0}" = 1 ]; then
+  _PU="${PERSONAL_USER:?PERSONAL_OVERLAY=1 requires PERSONAL_USER}"
+  _PU_HASH="${PERSONAL_HASH:-NP}"
+  _PU_KEY="${PERSONAL_KEY:-}"
+  log "baking personal user '$_PU' (uid 1000, Primary Administrator) -> installed BE"
+  grep -q '^staff:' "$RDROOT/etc/group" 2>/dev/null || echo 'staff::10:' >> "$RDROOT/etc/group"
+  grep -q "^$_PU:" "$RDROOT/etc/passwd" 2>/dev/null || \
+    echo "$_PU:x:1000:10:$_PU:/export/home/$_PU:/usr/bin/ksh93" >> "$RDROOT/etc/passwd"
+  if ! grep -q "^$_PU:" "$RDROOT/etc/shadow" 2>/dev/null; then
+    echo "$_PU:${_PU_HASH}:6445::::::" >> "$RDROOT/etc/shadow"
+  fi
+  # RBAC: Primary Administrator profile so `pfexec` -> uid=0.
+  touch "$RDROOT/etc/user_attr"
+  grep -q "^$_PU:" "$RDROOT/etc/user_attr" 2>/dev/null || \
+    echo "$_PU::::type=normal;profiles=Primary Administrator" >> "$RDROOT/etc/user_attr"
+  # home + authorized_keys (key login in addition to the password), if a key given.
+  mkdir -p "$RDROOT/export/home/$_PU/.ssh"
+  [ -n "$_PU_KEY" ] && echo "$_PU_KEY" > "$RDROOT/export/home/$_PU/.ssh/authorized_keys"
+  chmod 0700 "$RDROOT/export/home/$_PU/.ssh"
+  [ -f "$RDROOT/export/home/$_PU/.ssh/authorized_keys" ] && chmod 0600 "$RDROOT/export/home/$_PU/.ssh/authorized_keys"
+  chown -R 1000:10 "$RDROOT/export/home/$_PU" 2>/dev/null || true
+  # root key (personal build only), if provided
+  [ -n "$_PU_KEY" ] && { mkdir -p "$RDROOT/root/.ssh"; echo "$_PU_KEY" > "$RDROOT/root/.ssh/authorized_keys"; chmod 0700 "$RDROOT/root/.ssh"; chmod 0600 "$RDROOT/root/.ssh/authorized_keys"; }
+else
+  log "identity-free image (no personal user baked; installer/first-boot creates the operator)"
 fi
-# RBAC: Primary Administrator profile so `pfexec` -> uid=0.
-touch "$RDROOT/etc/user_attr"
-grep -q '^gburd:' "$RDROOT/etc/user_attr" 2>/dev/null || \
-  echo 'gburd::::type=normal;profiles=Primary Administrator' >> "$RDROOT/etc/user_attr"
-# gburd's home + authorized_keys (key login in addition to the password).
-mkdir -p "$RDROOT/export/home/gburd/.ssh"
-echo "$_GBURD_KEY" > "$RDROOT/export/home/gburd/.ssh/authorized_keys"
-chmod 0700 "$RDROOT/export/home/gburd/.ssh"
-chmod 0600 "$RDROOT/export/home/gburd/.ssh/authorized_keys"
-chown -R 1000:10 "$RDROOT/export/home/gburd" 2>/dev/null || true
 chmod 0400 "$RDROOT/etc/shadow"
 # sshd host keys + config: the AMI must accept SSH on first boot. /etc/ssh
 # (incl sshd_config) arrives via COPY_DIRS etc; pre-generate host keys so
