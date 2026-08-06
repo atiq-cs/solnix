@@ -437,6 +437,14 @@ if [ -f /etc/ipf/ipf.conf ]; then
 fi
 svcadm enable svc:/network/ntp:default 2>/dev/null || true
 mkdir -p /var/ntp
+
+# sudo -> pfexec: a REAL wrapper file (a shell function isn't inherited by ksh93
+# / scripts / exec'd programs). `sudo <cmd>` runs `pfexec <cmd>`; only installed
+# if no real sudo is present (a user who installs the sudo package wins).
+if [ ! -e /usr/bin/sudo ]; then
+  printf '#!/bin/sh\nexec /usr/bin/pfexec "$@"\n' > /usr/bin/sudo
+  chmod 0755 /usr/bin/sudo
+fi
 [ -f /etc/logadm.d/solnix.conf ] && logadm -f /etc/logadm.conf 2>/dev/null || true
 
 sync
