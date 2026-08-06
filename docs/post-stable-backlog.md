@@ -312,3 +312,12 @@ Found during the buildout lanes. Each is a SINGLE fix that unblocks a whole subt
    dependency hub). NOTE: cmake itself builds (cmake 4.3.4 done); this is rhash pulled by cmake-using pkgs.
 Also per-pkg: nspr (ld), jemalloc (strerror_r return-type), libunwind (os-solaris.c:66 port bug),
 termcap (needs -fPIC; superseded by ncurses). Lower value / individual ports.
+
+## PS-BREADTH-GATE-4 (2026-08-06, escalated): xz-5.8.3 blocks meson AND wget
+xz-5.8.3's liblzma fails to build on illumos (tuklib_physmem.c -- physmem detection). Originally seen
+blocking wget (transitive via python3). NOW ALSO confirmed blocking the ENTIRE MESON subtree
+(meson -> python3 -> xz-5.8.3): inih, opus, libspng, and all meson-built packages. This is a 4th
+systemic breadth-gate, HIGHER priority than first scoped. FIX: port xz-5.8.3 tuklib_physmem.c for
+illumos (the _SC_PHYS_PAGES/sysconf path -- illumos has sysconf(_SC_PHYS_PAGES) + getsysinfo; the
+Solaris branch may just need the right #ifdef). We built plain `xz` (5.6.x) before; this is the newer
+5.8.3 the current nixpkgs pins. Unblocks meson (-> the whole meson-built graph) + wget.
