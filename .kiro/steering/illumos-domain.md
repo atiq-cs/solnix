@@ -35,7 +35,7 @@ does not change the amd64-first ordering.
 ## Toolchain
 
 - Primary compiler is **GCC** (illumos ships a patched **illumos-gcc**; currently
-  ~gcc 10 primary, gcc 7 legacy/shadow — **verify current version**).
+  gcc 10.5.0 primary + gcc 7 shadow, CONFIRMED on OI Hipster; gcc 14.3.0 also available on host).
 - **Shadow compiler**: build compiles each object with the primary compiler and
   optionally a second (shadow) compiler purely to cross-check diagnostics.
   Mismatched warnings fail the build. Clang is usable only as shadow; a pure-clang

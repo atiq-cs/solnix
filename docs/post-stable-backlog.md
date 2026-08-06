@@ -232,3 +232,30 @@ UMEM_DEBUG). PLAN:
      pgbench-like) — adopt as default only if it wins without regressions, and keep a knob to revert.
   RECOMMENDATION: do (a) now (package + easy opt-in), gate (b) on benchmarks. It's a solnix
   differentiator worth doing, but "default allocator" is a measured decision, not a flip.
+
+## PS-TOOLCHAIN (compiler/debugger versions, assessed 2026-08-06)
+CURRENT STATE:
+- Pure stdenv builds packages WITH **gcc 10.5.0** (illumos-gcc-10 in the seed) — the SAME primary
+  compiler illumos-gate uses (gcc-10 primary + gcc-7 shadow). Deliberate: seed cut from illumos's
+  own toolchain so packages compile as illumos expects.
+- **gdb 17.2** shipped = the LATEST upstream gdb release. No upgrade needed.
+- **binutils 2.46.1** (GNU) present on host; Solaris ld is the primary linker.
+- **clang/LLVM: NOT in the fork** (clang = none).
+
+CAN WE BUILD WITH LATEST gcc?
+- gcc **14.3.0 already RUNS on the OI host** (/usr/gcc/14; used host-side by the split-debug/libumem
+  work). So gcc-14 works on illumos.
+- To build solnix PACKAGES with gcc-14: build gcc-14 as a real solnix derivation + swap into the
+  stdenv (a bootstrap effort: gcc self-build on the pure stdenv + any illumos gcc-14 build fixes).
+  Doable, not a flag flip. Latest is gcc-15 (2026) — newer than illumos-gate uses; unproven, more porting.
+- PLAN: PS-TC-1 = package gcc-14 + gcc-14 stdenv variant (opt-in `stdenv.override` first, then
+  candidate default after a rebuild sweep). Keep gcc-10 as the illumos-parity baseline.
+
+CAN WE BUILD WITH clang?
+- Not today. illumos supports clang (OI ships ooce/developer/clang; userland clang-buildable), so
+  portable in principle, but requires packaging LLVM/clang as a solnix derivation (large build) +
+  a clang-based stdenv. Kernel stays gcc; userland clang is the viable target.
+- PLAN: PS-TC-2 = package LLVM/clang + a clangStdenv (post gcc-14; LLVM is one of the biggest bootstraps).
+
+RECOMMENDATION: ship first release on gcc-10 (illumos parity) + gdb-17.2 (latest). Post-stable:
+gcc-14 stdenv (PS-TC-1), then clang/LLVM (PS-TC-2).
