@@ -600,6 +600,26 @@ if [ -n "$CS" ]; then
       || echo "WARN: copy $_p into ramdisk had errors" >&2
   done < "$_clist"
   log "DECLARATIVE: copied $_ncs store paths into live /nix/store"
+  # nix's NEEDED libs that resolve to the OS (libreadline/libsodium in
+  # /usr/lib/amd64) are only pulled into the ramdisk if some base tool links
+  # them; nix is the only reader of readline/sodium here, so a slim closure
+  # drops them -> 'ld.so.1: nix: libreadline.so.8: open failed'. Walk nix's ldd
+  # and copy any OS-resolved lib (not already in the ramdisk, not /nix/store)
+  # into the live /usr/lib/amd64 so nix runs with no LD_LIBRARY_PATH.
+  _nixbin=$(readlink -f "$CS/sw/bin/nix" 2>/dev/null || echo "$CS/sw/bin/nix")
+  if [ -x "$_nixbin" ]; then
+    ( unset LD_LIBRARY_PATH; ldd "$_nixbin" 2>/dev/null || true ) | awk '/=>/{print $3}' | while read -r _lib; do
+      case "$_lib" in /nix/store/*|"") continue;; esac
+      [ -f "$_lib" ] || continue
+      _dst="$RDROOT${_lib}"
+      [ -e "$_dst" ] && continue
+      mkdir -p "$(dirname "$_dst")" 2>/dev/null || true
+      # illumos /usr/bin/cp rejects -L on files; these are real files (ldd
+      # resolved them), so a plain cp copies content. Prefer GNU cp ($GCP).
+      { "$GCP" "$_lib" "$_dst" 2>/dev/null || cp "$_lib" "$_dst" 2>/dev/null; } \
+        && echo "  staged nix runtime lib: ${_lib}" >&2 || true
+    done || true
+  fi
   # wire the toplevel so solnix-install's default-toplevel lookup resolves it
   # (it reads /run-current-system) and takes the non-SELF-INSTALL path.
   rm -f "$RDROOT/run-current-system" "$RDROOT/run/current-system" 2>/dev/null || true

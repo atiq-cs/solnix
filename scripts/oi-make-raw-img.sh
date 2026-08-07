@@ -69,7 +69,14 @@ log "running solnix-install $TARGET  (pool=$POOL, CS=$CS)"
 # (nix-store -qR), not the O(closure*filesize) fixpoint content scan. Its
 # runtime libs are on LD_LIBRARY_PATH (exported above); export both so the
 # child /sbin/sh env keeps them.
-export SOLNIX_NIXSTORE="${SOLNIX_NIXSTORE:-nix-store}"   # resolved from PATH (sw/bin)
+# solnix-install tests `[ -x "$SOLNIX_NIXSTORE" ]` and resets its own PATH to
+# /usr/sbin:/usr/bin:/sbin, so a BARE name (nix-store) fails the -x test AND is
+# unresolvable in the child -> it falls back to the slow content-scan fixpoint
+# which picks up bogus /nix/store strings baked in source trees (nixpkgs test
+# fixtures) and dies "closure incomplete". Resolve an ABSOLUTE nix-store path
+# from THIS script's PATH (has /nix-tools224/bin + sw/bin) so the fast exact
+# `nix-store -qR` path is taken.
+export SOLNIX_NIXSTORE="${SOLNIX_NIXSTORE:-$(command -v nix-store 2>/dev/null || echo nix-store)}"
 SOLNIX_POOL="$POOL" SOLNIX_ALLOW_RPOOL="" SOLNIX_NIXSTORE="$SOLNIX_NIXSTORE" \
   "$INSTALLER" "$TARGET" "$CS" 2>&1 | tail -60 || die "solnix-install failed"
 
@@ -93,6 +100,25 @@ if zpool import -N -f -R "$ALT" "$POOL" 2>/dev/null; then
     echo "=== core-file audit (must be zero) ==="
     _cores=$(find "$BEROOT" -name 'core*' -type f 2>/dev/null | while read c; do file "$c" 2>/dev/null | grep -qi 'core file' && echo "$c" || true; done || true)
     if [ -n "$_cores" ]; then echo "CORES REMAIN:"; echo "$_cores"; else echo "ZERO core files in image BE"; fi
+    # ---- identity-free scrub: solnix-install clones the RUNNING build-host root
+    # as the BE base, so its /etc/{passwd,shadow,group} carry the build host's
+    # personal accounts (e.g. gburd). A PUBLIC image must be identity-free (root
+    # only; installer/first-boot creates the operator). Strip any non-system
+    # (uid>=1000) account + its home from the BE. Keeps root + system accounts.
+    echo "=== identity-free scrub (strip personal uid>=1000 accounts) ==="
+    _pw="$BEROOT/etc/passwd"
+    if [ -f "$_pw" ]; then
+      # names to strip = every uid>=1000 that is not a system placeholder.
+      _strip=$(awk -F: '($3+0)>=1000 && $1!="nobody" && $1!="noaccess" && $1!="nobody4"{print $1}' "$_pw" 2>/dev/null)
+      for _u in $_strip; do
+        _h=$(awk -F: -v u="$_u" '$1==u{print $6}' "$_pw" 2>/dev/null)
+        awk -F: -v u="$_u" '$1!=u' "$_pw" > "$_pw.c" && mv "$_pw.c" "$_pw"
+        [ -f "$BEROOT/etc/shadow" ] && { awk -F: -v u="$_u" '$1!=u' "$BEROOT/etc/shadow" > "$BEROOT/etc/shadow.c" && mv "$BEROOT/etc/shadow.c" "$BEROOT/etc/shadow"; }
+        [ -f "$BEROOT/etc/group" ]  && { awk -F: -v u="$_u" '$1!=u' "$BEROOT/etc/group"  > "$BEROOT/etc/group.c"  && mv "$BEROOT/etc/group.c"  "$BEROOT/etc/group"; }
+        case "$_h" in /export/home/*|/home/*) rm -rf "$BEROOT$_h" 2>/dev/null || true;; esac
+      done
+    fi
+    echo "identity audit: gburd rows=$(grep -c '^gburd' "$_pw" 2>/dev/null); uid>=1000 rows=$(awk -F: '($3+0)>=1000 && $1!="nobody" && $1!="noaccess"' "$_pw" 2>/dev/null | wc -l | tr -d ' ')"
     # ---- stage the 2.24 nix runtime + flake registry + native ping into the BE
     # solnix-install copies the toplevel closure + nix.conf/profile.d, but NOT
     # the /nix-tools224 nix runtime dir, the flake registry, or native ping.
