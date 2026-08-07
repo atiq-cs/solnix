@@ -18,6 +18,15 @@
 #
 # Deps not in OI: libgit2 (built from source here), toml11 (vendored header),
 # Boehm GC (--disable-gc), lowdown (--disable-markdown), libcpuid (--disable-cpuid).
+#
+# Host build-env prerequisites (build-time only, NOT in nix's runtime closure):
+#   pkg install text/jq developer/build/autoconf-archive \
+#               library/c++/nlohmann-json library/libarchive
+# jq + the AX_BOOST_BASE macro (autoconf-archive) are needed by configure;
+# nlohmann-json is a header-only build dep; libarchive supplies the OI system
+# libarchive.so.13 that nix links (same /usr/lib/amd64 baseline as sqlite/curl/
+# sodium/brotli). cmake (for the from-source libgit2) is taken from a store
+# gcc14Stdenv cmake-minimal via the `cmake` arg default below.
 
 { nixVersion ? "2.24.15"
 , nixSha256 ? "SKIP"            # sha256 of the GitHub source tarball; SKIP = trust-on-first-build
@@ -25,7 +34,14 @@
 , libgit2Sha256 ? "SKIP"
 , toml11Version ? "3.8.1"
 , toml11Sha256 ? "SKIP"
-, gcc ? "/usr/gcc/13"           # gcc-13 gives -std=c++2a (C++20)
+, gcc ? "/usr/gcc/14"           # gcc-14 gives full -std=c++2a (C++20); /usr/gcc/13
+                               # is not installed on the buildhost. The C++
+                               # runtime (libstdc++/libgcc_s) is bundled into
+                               # $out/lib below so the closure stays host-free.
+, cmake ? "/nix/store/27hi0il968a9h3hv5svfy6n95gsxbkxd-cmake-minimal-4.3.4/bin"
+                               # OI ships no cmake; libgit2's build needs it.
+                               # This is a from-source gcc14Stdenv cmake in the
+                               # store (build-time only, not in nix's closure).
 , patchDir ? ./nix-illumos-patches/224
 }:
 
@@ -48,7 +64,7 @@ derivation {
   builder = "/usr/bin/bash";
   PATH = "/usr/gnu/bin:${gcc}/bin:/usr/bin:/usr/sbin";
 
-  inherit nixVersion libgit2Version toml11Version gcc patchList;
+  inherit nixVersion libgit2Version toml11Version gcc cmake patchList;
   nixUrl = "https://github.com/NixOS/nix/archive/refs/tags/${nixVersion}.tar.gz";
   libgit2Url = "https://github.com/libgit2/libgit2/archive/refs/tags/v${libgit2Version}.tar.gz";
   toml11Url = "https://github.com/ToruNiina/toml11/archive/refs/tags/v${toml11Version}.tar.gz";
@@ -58,7 +74,7 @@ derivation {
     set -eu
     GCC="$gcc"
     export CC="$GCC/bin/gcc" CXX="$GCC/bin/g++"
-    export PATH="/usr/gnu/bin:$GCC/bin:/usr/bin:/usr/sbin"
+    export PATH="/usr/gnu/bin:$GCC/bin:$cmake:/usr/bin:/usr/sbin"
     WORK=$(mktemp -d /tmp/nix224.XXXXXX); cd "$WORK"
 
     # CA bundle: illumos ships per-CA PEMs in /etc/certs/CA/, no bundle.
@@ -107,7 +123,9 @@ derivation {
     export LDFLAGS="-m64 -L/usr/lib/amd64 -L$GIT2/lib -L/usr/openssl/3/lib/amd64 -R$GCC/lib/amd64 -R/usr/openssl/3/lib/amd64 -R$GIT2/lib"
     export EDITLINE_CFLAGS=" " EDITLINE_LIBS="-lreadline"
     export CONFIG_SHELL=/usr/bin/bash SHELL=/usr/bin/bash
-    export PKG_CONFIG_PATH="/usr/openssl/3/lib/amd64/pkgconfig:$GIT2/lib/pkgconfig:$GIT2/lib/amd64/pkgconfig:/usr/lib/amd64/pkgconfig:/usr/lib/pkgconfig"
+    # /usr/share/pkgconfig carries nlohmann_json.pc (header-only lib); the
+    # amd64 pkgconfig dirs carry libarchive/sqlite3/libcurl/libsodium/brotli.
+    export PKG_CONFIG_PATH="/usr/share/pkgconfig:/usr/openssl/3/lib/amd64/pkgconfig:$GIT2/lib/pkgconfig:$GIT2/lib/amd64/pkgconfig:/usr/lib/amd64/pkgconfig:/usr/lib/pkgconfig"
     export ACLOCAL_PATH=/usr/share/aclocal
     mkdir -p config
     for f in config.guess config.sub install-sh; do
@@ -142,6 +160,20 @@ derivation {
     mkdir -p "$out/lib"
     cp -P "$GIT2"/lib/libgit2.so* "$out/lib/" 2>/dev/null || cp -P "$GIT2"/lib64/libgit2.so* "$out/lib/" 2>/dev/null || true
 
+    echo "=== bundle gcc-14 C++ runtime into \$out/lib (host-free closure) ===" >&2
+    # nix's binaries NEED libstdc++.so.6 / libgcc_s.so.1 from the compiler. To
+    # keep the closure host-free (all /nix/store + /lib/64 libc-family), copy
+    # the gcc-14 runtime into $out/lib and let RUNPATH resolve it there — the
+    # file content is baked into the store NAR, so it lives in /nix/store, not
+    # under /usr/gcc at runtime.
+    for _l in libstdc++.so.6 libstdc++.so.6.0.33 libgcc_s.so.1; do
+      if [ -e "$GCC/lib/amd64/$_l" ]; then
+        cp -P "$GCC/lib/amd64/$_l" "$out/lib/" 2>/dev/null || true
+      fi
+    done
+    # Preserve the .so.6 -> .so.6.0.33 symlink shape if cp -P flattened it.
+    ( cd "$out/lib" && [ -e libstdc++.so.6.0.33 ] && { rm -f libstdc++.so.6; ln -s libstdc++.so.6.0.33 libstdc++.so.6; } ) 2>/dev/null || true
+
     echo "=== bake CA bundle + nix.conf ===" >&2
     mkdir -p "$out/etc/ssl/certs" "$out/etc/nix"
     cp "$CABUNDLE" "$out/etc/ssl/certs/ca-bundle.crt"
@@ -155,9 +187,10 @@ CONF
 
     echo "=== RUNPATH relocate: bake dep dirs so nix runs with NO LD_LIBRARY_PATH ===" >&2
     # Real dep lib dirs (keep tight: existing dirs only, so the .dynstr grow stays
-    # under the illumos ~500-char ceiling). $out/lib carries Nix's own libnix*.so
-    # AND the bundled libgit2.so; no build-temp path is referenced.
-    RP="$out/lib:$out/lib/amd64:$GCC/lib/amd64:/usr/openssl/3/lib/amd64:/usr/lib/amd64"
+    # under the illumos ~500-char ceiling). $out/lib carries Nix's own libnix*.so,
+    # the bundled libgit2.so, AND the bundled gcc-14 libstdc++/libgcc_s; no
+    # build-temp path and no /usr/gcc path is referenced at runtime.
+    RP="$out/lib:$out/lib/amd64:/usr/openssl/3/lib/amd64:/usr/lib/amd64"
     find "$out" -type f 2>/dev/null | while read -r f; do
       if /usr/bin/elfdump -d "$f" 2>/dev/null | grep -Eq 'SONAME|NEEDED|RUNPATH|RPATH'; then
         chmod u+w "$f" 2>/dev/null || true
