@@ -399,3 +399,17 @@ the pty slave can't be opened (illumos patch #6, alongside the existing 5); (b) 
 grantpt helper + make it work for non-root; (c) run builds as root / via a build-users-group + a
 privileged pty setup. (a) is the cleanest -- add to nix-illumos-patches/224/. Until then: cache-install
 works for users; source-builds need root or the patch.
+
+## PS-FRESHBOOT (2026-08-07): DEFAULT AMI ami-027e4af3722f46dd9 fails fresh m5.large launch
+Fresh launch-from-AMI smoke of the default identity-free AMI: 20+ min, SystemStatus=impaired, no SSH.
+Console: reaches EFI loader -> ZFS pool rpool/ROOT/openindiana-2026:08:03 -> loads unix + boot_archive,
+but never reaches multi-user/SSH (reboot cycles back to loader). So the DEFAULT AMI is NOT reliably
+fresh-launchable -> NOT release-ready. NOTE: the PERSONAL test instance 3.12.148.116 IS up + working
+(created/verified in the worker's build flow, not a cold AMI launch) -- so the SYSTEM works; the AMI
+PACKAGING/first-boot is the issue. This is the pre-existing "OI-on-EC2 boots reliably only on fresh
+launch + needs bootadm" problem, but bootadm alone wasn't sufficient here. INVESTIGATE: (a) is it an
+ENA/DHCP/network-plumbing first-boot gap (the instance boots but network/sshd never comes up)? (b) a
+boot_archive/BE-name mismatch (BE is openindiana-2026:08:03, not a solnix BE)? (c) the SMF first-boot
+services (solnix-nix-register, network/physical:default) failing? Need console-serial or a
+recovery-mount of the volume to see the multi-user boot log. This is the #1 release blocker for the
+AMI -- the system is proven (personal instance works), the cold-boot packaging is not.
