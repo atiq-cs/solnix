@@ -19,9 +19,16 @@
 # linker default for ALL processes) is intentionally NOT used here -- that is a
 # heavier, benchmarked decision (PS-3).
 #
-# NOTE: the packaged libumem is currently 64-bit only, so the preload applies to
-# 64-bit programs (nearly the entire Nix userland). 32-bit base-OS binaries keep
-# libc malloc (see the libumem.nix ABI TODO).
+# The packaged libumem is a single-ABI (64-bit) build, so the preload
+# applies to 64-bit programs (nearly the entire Nix userland). A system-wide
+# global preload stays UNSAFE and is deliberately NOT offered: (1) illumos base
+# tools are 32-bit (e.g. /usr/bin/true) and the 2.24 stdenv cannot yet build a
+# 32-bit libumem (gcc -m32 fails: "wrong ELF class: ELFCLASS32"), so a global
+# LD_PRELOAD would break every 32-bit exec; upstream 2.4.0 documents a two-pass
+# lib/+lib/64 dual-ABI install but that needs a 32-bit-capable toolchain path we
+# do not have. (2) libumem 2.4.0's malloc interposer has a calloc bug: calloc()
+# above ~2 KiB returns NULL (a global preload would break large-array callocs).
+# Both keep this login-scoped and opt-in, not a system default (see libumem.nix).
 { config, lib, pkgs, ... }:
 let cfg = config.solnix.programs.libumem;
 in {
