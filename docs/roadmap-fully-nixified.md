@@ -255,3 +255,25 @@ IN FLIGHT: rebuild the remaining release-critical set on 2.24 (curl/git/vim/htop
 NEXT: re-cut release AMI/ISO/IMG on 2.24 (nix profile install by-name works; correct 5HAV key;
   full toolset incl build-host baseline; curl/ping/nvi-edits/gdb; no core files; full PATH) ->
   freeze 26.11.
+
+## 2026-08-07 — full-buildout push (maintainer directive: build the whole solution)
+GOAL restated: fully-supported, fully-Nix-ified illumos with AMIs/ISOs/IMGs running on ALL EC2 instance
+types (+ eventually other clouds) AND local hardware (legacy UltraSPARC + new RISC-V).
+FOUNDATION NOW COMPLETE (this session): from-source gcc-14 + clang-22, from-source nix (no bootstrap
+artifacts), /nix-tools224 removed (NixOS-style nix on PATH), non-root builds baked into the image,
+fetchpatch pure-eval fixed, 4 systemic breadth-gates open (cmake/meson/TLS/C++). ~90 new pkgs this
+session. solnix is now a genuine from-source Nix distro, not a bootstrap assembly.
+ACTIVE DISPATCH (5 workers):
+- FRESH AMI (2e1cc589): cut default identity-free AMI + gburd personal test instance (all fixes) -> LEFT
+  RUNNING for maintainer test. The gated deliverable.
+- ld-gate + glib (7e4d8d7b): Solaris-ld --version-script mini-gate (unblocks gnutls-on-x86 + zlib-ng)
+  + glib/GTK subtree opener (harfbuzz/fontconfig/pango).
+- x86 wave 2 (00d9f94e): more cmake/meson/autotools breadth.
+- sparcv9 tranche-7 (761ebb70): self-hosting toolset (curl/git/openssh/vim/tmux) toward a usable
+  UltraSPARC dev box.
+NEXT AFTER THESE: (1) ISO + IMG cut with the fixes (not just AMI) for local-hardware install; (2)
+EC2 instance-type coverage (test the AMI on more instance families -- the current AMI targets Nitro/
+ENA x86; verify t3/m5/c5/r5/metal boot); (3) glib->GTK + gnutls-x86 breadth once the gates open; (4)
+RISC-V port resume (R-P16-prestage -> boot); (5) aarch64 cross re-establish when an arm64 boot path
+opens; (6) other-cloud substrate assessment (GCP/Azure/OCI image formats). Editions: unstable rolling
+now, 26.11 freeze after release criteria.
