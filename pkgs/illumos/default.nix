@@ -378,7 +378,7 @@ let
   # NixOS way. This is the shipped nix (nix.package default), replacing the
   # /nix-tools224 bootstrap that must never appear on a shipped image PATH.
   # Substitutable from cache.solnix.io (5HAV-signed, durable).
-  nix224 = builtins.storePath /nix/store/q9cgfd001i87byzv866v1dvdh28jji7l-nix-2.24.15;
+  nix224 = builtins.storePath /nix/store/w44py7y17i7z5c9mwhh62q5yzx681y1a-nix-2.24.15;
 
   # cached (pkgs.solnix.cached.<pname>) — every wave-built package in the cache
   # (docs/registry/arch-manifest.tsv), exposed as a store-path attr so a config
