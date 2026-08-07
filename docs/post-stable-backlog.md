@@ -386,3 +386,16 @@ FLEET LINEAGE CORRECTION: only 4 hosts are TRUE 2.24 (release lineage); 2 are 2.
 PARALLEL lineage, hash-incoherent). RELEASE breadth must target the true-2.24 hosts. FOLLOW-UP: port
 the gnutls realGnm/--disable-ld-version-script/-L-seed-syslibs fixes into the 2.24
 solaris-overlay-qmvlnvf0.nix so the RELEASE gets gnutls-x86 + HTTPS.
+
+## PS-PTY (2026-08-07): non-root nix source-build blocked by pseudoterminal-slave on illumos
+Nix 2.24 UNCONDITIONALLY allocates a build pty for the builder's stdio (not just interactive). On
+illumos a non-root user (gburd) can open /dev/ptmx (master) but grantpt/the slave open fails
+"opening pseudoterminal slave: Permission denied" -- /usr/lib/pt_chmod (the setuid grantpt helper)
+does not exist at that path on this illumos build, and devpts isn't a mountable FSType here. So
+non-root SOURCE builds fail, though `nix profile install` from the CACHE works (no build). ROOT
+builds: TBD (test above). The baked pty fix (pt_chmod chmod + vfstab devpts) was ineffective (wrong
+path / non-mountable FS). REAL FIX OPTIONS: (a) patch Nix 2.24 buildLoop to fall back to a pipe when
+the pty slave can't be opened (illumos patch #6, alongside the existing 5); (b) find illumos's actual
+grantpt helper + make it work for non-root; (c) run builds as root / via a build-users-group + a
+privileged pty setup. (a) is the cleanest -- add to nix-illumos-patches/224/. Until then: cache-install
+works for users; source-builds need root or the patch.
