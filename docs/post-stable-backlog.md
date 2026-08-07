@@ -360,3 +360,29 @@ glib's python3 dep is satisfied; GATE B likely completes there.
 FOLLOW-UP (high value): PORT the gate-A fixes (realGnm, gnutls --disable-ld-version-script, systemic
 -L seed-syslibs) from the 2.3.16 solaris-overlay.nix into the 2.24 solaris-overlay-qmvlnvf0.nix so the
 RELEASE lineage gets gnutls-x86 (real HTTPS in curl/wget) + glib (python3 already built on 2.24).
+
+## PS-3 libumem 2.4.0 (2026-08-07): 6/7 upstream tasks FIXED
+Our 7 filed tasks -> libumem 2.4.0 (via their 2.3.0 illumos-portability release) FIXED T1/T3/T4/T5/T6/T7.
+Recipe now stock configure/make/make install (all downstream workarounds dropped). T2 dual-ABI only
+DOCUMENTED upstream (two-pass -m32/-m64), not auto-built + gcc -m32 fails in our stdenv (seed cc has
+no 32-bit link path: crtp.o wrong ELF class) -> needs a 32-bit toolchain (out of scope) -> global
+preload stays UNSAFE for 32-bit base tools -> module stays login-scoped opt-in. New 2.4.0 upstream
+behavior: (a) interposer calloc(n,sz)>~2KiB returns NULL (in_calloc 2KiB static-buffer guard defect --
+report upstream); (b) double-free no longer aborts under UMEM_DEBUG (glibc-like log-not-crash; redzone
+overrun still faults). Both = further reasons the preload is opt-in. libumem 2.4.0 published durable.
+
+## gnutls-x86 REAL HTTPS PROVEN (2026-08-07) + fleet lineage correction
+gnutls-3.8.13 on x86_64 (2.3.16/tranche-6 lineage): libgnutls.so.30 links, host-free; curlMinimal
+8.21.0 (OpenSSL) built -> `curl https://cache.solnix.io/nix-cache-info` = full TLSv1.3 handshake,
+CN=solnix.io cert, body returned, exit 0. REAL HTTPS on x86 works. Fixes: realGnm=GNU nm 2.46.1,
+gnutls --disable-ld-version-script + NM=gnm, SYSTEMIC -L seed-syslibs on NIX_CFLAGS_COMPILE (curl/
+gnutls/gettext/openssl -- the -lnsl->libmd/libmp gap). python3 config.guess fix: --build=
+x86_64-pc-solaris2.11 + sed ac_sys_release=5.11 (empty uname -r) + disallowedReferences=[].
+glib BLOCKED: gobject-introspection's python3-env.drv carries __json but not __structuredAttrs=false
+-> bypasses the tranche's 2.3.16 stdenv adapter -> empty $stdenv (/setup missing). Needs Nix>=2.6
+for the python env builder, OR thread __structuredAttrs=false into python3's env stdenvNoCC. On the
+TRUE 2.24 lineage this adapter issue doesn't exist -> glib likely completes there.
+FLEET LINEAGE CORRECTION: only 4 hosts are TRUE 2.24 (release lineage); 2 are 2.3.16/tranche-6 (a
+PARALLEL lineage, hash-incoherent). RELEASE breadth must target the true-2.24 hosts. FOLLOW-UP: port
+the gnutls realGnm/--disable-ld-version-script/-L-seed-syslibs fixes into the 2.24
+solaris-overlay-qmvlnvf0.nix so the RELEASE gets gnutls-x86 + HTTPS.
