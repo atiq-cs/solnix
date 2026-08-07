@@ -413,3 +413,15 @@ boot_archive/BE-name mismatch (BE is openindiana-2026:08:03, not a solnix BE)? (
 services (solnix-nix-register, network/physical:default) failing? Need console-serial or a
 recovery-mount of the volume to see the multi-user boot log. This is the #1 release blocker for the
 AMI -- the system is proven (personal instance works), the cold-boot packaging is not.
+
+## PS-FLEET-HYGIENE (2026-08-07): upgraded hosts got a STALE fork (dupe hashes)
+The host-upgrade copied an OLDER qmvlnvf0 fork (without recent overlay fixes: H39 cmake-SIGSYS, xz
+CONFIG_SHELL print-fix) to the upgraded hosts. Result: wave6 on .14.255.246 RE-DERIVED the cmake fixes
+from scratch + rebuilt 6 dupes at DIFFERENT hashes than the true-HEAD fork -- wasted work + registry
+noise. ROOT: no `git` on the build hosts so the fork/overlay can't be pulled to HEAD; the fork itself
+(qmvlnvf0) doesn't substitute from cache (404). FIX (fleet hygiene, do before more dispatch): (1) put
+`git` on the build hosts (it's now BUILT for x86 -- install it), OR (2) rsync/export the CURRENT
+solnix-pkgs overlay tree (the phase3 .nix files, small) to every host at dispatch time, OR (3) publish
+the current fork to cache so hosts substitute the SAME fork. Until then, dispatch prompts must scp the
+current phase3 overlay files to the host first. The 13 NEW wave6 pnames are fine (real+host-free); the
+6 dupes are harmless (content-addressed, coexist) but avoidable.
