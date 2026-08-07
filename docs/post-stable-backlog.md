@@ -321,3 +321,21 @@ systemic breadth-gate, HIGHER priority than first scoped. FIX: port xz-5.8.3 tuk
 illumos (the _SC_PHYS_PAGES/sysconf path -- illumos has sysconf(_SC_PHYS_PAGES) + getsysinfo; the
 Solaris branch may just need the right #ifdef). We built plain `xz` (5.6.x) before; this is the newer
 5.8.3 the current nixpkgs pins. Unblocks meson (-> the whole meson-built graph) + wget.
+
+## PS-BREADTH second-order blockers (2026-08-07, from the cmake/meson/C++ wave)
+The 4 systemic gates are open (cmake/meson/TLS/C++ = +28 pkgs). Remaining blockers are per-subtree
+SECOND issues (each a real port, lower urgency than the gates were):
+- **glib** -> subproject libsysprof-capture needs Linux-isms (byteswap.h, O_BINARY, mkostemp). Blocks
+  the whole GTK/text stack: harfbuzz, fontconfig, pango, json-glib, gobject-introspection. FIX: port
+  or disable libsysprof-capture on illumos. HIGH value (unblocks GTK/font subtree).
+- **spdlog** -> illumos `struct tm` has NO `tm_gmtoff` (BSD ext illumos never added). FIX: patch
+  os-inl.h to use timezone/altzone. Cascades -> doxygen -> libusb1 docs.
+- **gnutls** -> a SECOND issue beyond the libtool-pipe: Solaris ld rejects --version-script, so
+  libgnutls.so.30 never links + psktool undefined syms. Needs a real gnutls Solaris port (symbol
+  versioning / GNU-ld). (libidn/gsasl/libtasn1/p11-kit DO build.)
+- **zlib-ng** -> Solaris ld rejects GNU --version-script (CMake patch or GNU ld). Same ld-flavor class.
+- **icu4c** -> genrb U_INVALID_FORMAT_ERROR (data-format port) -> blocks re2.
+- **hwloc** -> PICL backend wants /usr/lib/64/libpicl.so.1 (host leak); disable PICL to build.
+- **capnproto** -> stdenv nativeLibc/noLibc eval assertion (stdenv wiring, not a gate).
+Common theme: Solaris-ld --version-script rejection (gnutls/zlib-ng) is itself a mini-gate worth a
+generic fix (GNU-ld-for-version-scripts or a mapfile translation).
