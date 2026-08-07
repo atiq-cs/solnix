@@ -228,12 +228,18 @@ setprop ttya-mode 115200,8,n,1,-
 setprop ttya-ignore-cd true
 setprop ttya-rts-dtr-off false
 EOF
-# loader.conf: serial console + verbose boot (so the serial log shows progress)
+# loader.conf: serial console + verbose boot (so the serial log shows progress).
+# boot_archive.hash_load="NO" disables the EFI loader's boot_archive SHA1 check:
+# on a fresh cold boot from a snapshot/AMI the loader-computed SHA1 of the 89MB
+# archive does not match the stored boot_archive.hash, so the loader prints
+# "hash mismatch!" and reboots -> a boot LOOP. The kernel re-reads the archive
+# after root mount, so skipping the loader-side check is safe.
 cat > "$BEROOT/boot/loader.conf" <<'EOF'
 console="ttya"
 os_console="ttya"
 boot-args="-v"
 loader_logo="illumos"
+boot_archive.hash_load="NO"
 EOF
 
 # ---------------------------------------------------------------------------

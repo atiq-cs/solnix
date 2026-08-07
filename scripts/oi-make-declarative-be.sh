@@ -473,6 +473,24 @@ coreadm -u 2>/dev/null || true
 # first-boot defaults: firewall (ipfilter, default-deny inbound + ssh) + NTP + logadm.
 # The /etc files (ipf/ipf.conf, inet/ntp.conf, logadm.d/solnix.conf, nsswitch.conf,
 # default/init, motd, bashrc) come from the toplevel's etc union (generatedEtc).
+# COLD-BOOT: disable the EFI loader's boot_archive SHA1 verification. The
+# overlay path lays userland onto an already-booting base image whose
+# /boot/loader.conf defaults boot_archive.hash_load="YES". On a FRESH cold boot
+# from the resulting snapshot/AMI the loader-computed SHA1 of the ~89MB
+# boot_archive does not match the stored boot_archive.hash, so the loader prints
+# "hash mismatch!" and reboots -> a boot LOOP that never reaches multi-user/SSH.
+# The kernel re-reads the archive after root mount, so skipping the loader-side
+# check is safe. Also pin a serial console so EC2 get-console-output shows the
+# boot log. Idempotent.
+log "cold-boot: disabling loader boot_archive hash check + pinning serial console"
+for lc in /boot/loader.conf; do
+  [ -f "$lc" ] || : > "$lc"
+  grep -q '^boot_archive.hash_load=' "$lc" 2>/dev/null \
+    || echo 'boot_archive.hash_load="NO"' >> "$lc"
+  grep -q '^console=' "$lc" 2>/dev/null \
+    || echo 'console="ttya text"' >> "$lc"
+done
+
 # Here we ENABLE the stock base-OS services so they take effect at boot.
 log "enabling stock services (ipfilter firewall + ntp) + logadm"
 if [ -f /etc/ipf/ipf.conf ]; then
