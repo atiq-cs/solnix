@@ -339,3 +339,24 @@ SECOND issues (each a real port, lower urgency than the gates were):
 - **capnproto** -> stdenv nativeLibc/noLibc eval assertion (stdenv wiring, not a gate).
 Common theme: Solaris-ld --version-script rejection (gnutls/zlib-ng) is itself a mini-gate worth a
 generic fix (GNU-ld-for-version-scripts or a mapfile translation).
+
+## PS-GATE-A/B DONE + port-to-2.24 follow-up (2026-08-07)
+GATE A (gnutls on x86_64): DONE on the 2.3.16 tranche -- libgnutls.so.30 links, gnutls-cli 3.8.13
+runs, host-free. Root cause was NOT --version-script: the tranche's illumosGnm fallback symlinked
+Solaris /usr/bin/nm (not GNU nm) -> libtool global_symbol_pipe empty -> every -export-symbols-regex
+link died `nm objs | | sed`. FIXES (in the 2.3.16 solaris-overlay.nix): (1) realGnm =
+843364...-illumos-gnm (real GNU nm 2.46.1) for withGnm/gnm; (2) gnutls --disable-ld-version-script +
+NM=gnm as a configureFlag (env NM clobbered by bintools hook) + withP11-kit=false + strip
+net-tools/util-linux/which (eval recursion); (3) SYSTEMIC -L seed-syslibs on NIX_CFLAGS_COMPILE for
+gettext/pkg-config/openssl/libevent/unbound/perl (nixpkgs pins illumos -lnsl/-lmd/-lmp with NO -L;
+illumos gcc execs host ld directly, bypassing the wrapper -L). Built host-free: gnutls + gettext/
+openssl-3.6.3/libevent/unbound/nettle/libtasn1/libidn2/libunistring/gmpCOnly/perl/pkg-config.
+GATE B (glib/GTK): sysprof fix PROVEN (glib -Dsysprof=disabled, mirror nixpkgs FreeBSD) + 4 more
+(cmake reuse prebuilt, zstd buildContrib=false, tcl HAVE_STRLCPY+socketlibs, sqlite --disable-tcl,
+libffi doCheck=false -- all built). BLOCKED on: glib pulls python3-3.14.6 whose config.guess is too
+old for illumos ("cannot guess build type") -- a python3-on-illumos port (config.guess refresh +
+likely more). NOTE: the 2.24 lineage ALREADY built python3 3.14.6 (wave3) -- so on the 2.24 overlay
+glib's python3 dep is satisfied; GATE B likely completes there.
+FOLLOW-UP (high value): PORT the gate-A fixes (realGnm, gnutls --disable-ld-version-script, systemic
+-L seed-syslibs) from the 2.3.16 solaris-overlay.nix into the 2.24 solaris-overlay-qmvlnvf0.nix so the
+RELEASE lineage gets gnutls-x86 (real HTTPS in curl/wget) + glib (python3 already built on 2.24).
