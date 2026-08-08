@@ -425,3 +425,16 @@ solnix-pkgs overlay tree (the phase3 .nix files, small) to every host at dispatc
 the current fork to cache so hosts substitute the SAME fork. Until then, dispatch prompts must scp the
 current phase3 overlay files to the host first. The 13 NEW wave6 pnames are fine (real+host-free); the
 6 dupes are harmless (content-addressed, coexist) but avoidable.
+
+## PS-GLIB / seed-syslibs pollution (2026-08-07): the GTK/font subtree gate
+gnupg stack + meson tree + python3Packages LANDED (wave7). glib DEFERRED: correct fixes applied
+(drop libsysprof-capture Linux-byteswap, -Dxattr=false, -Dnls=disabled) but the REAL blocker is
+systemic seed-syslibs POLLUTION: the seed-syslibs Solaris libintl.so shadows GNU gettext on every
+link (cc-cflags -L beats buildInput -L and NIX_LDFLAGS_BEFORE) + a GNU libintl.h leaks onto the include
+path -> glib ggettext.c libintl_gettext undefined at link. Blocks glib -> harfbuzz/cairo/pango/
+fontconfig/gpgme/graphene (the whole GTK/font tree). REAL FIX = slim the seed-syslibs slice (remove
+its libintl/gettext so GNU gettext wins), which is a STAGE0 change that reinvalidates the whole store
+(heavy -- schedule as a deliberate stage0 pass, like the mpfr/gawk crack wave7 also hit). HIGH value
+(unblocks the GTK/font/desktop subtree). Also: enableMinimal on gnupg avoids the null-bintools
+llvmPackages.clang eval trap (openldap/gnutls/libusb deps); the clangStdenv-eval-assertion class
+(capnproto/nlopt/pinentry/rich->matplotlib) is a separate stdenv-eval gate to fix.
