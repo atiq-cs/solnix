@@ -1,0 +1,134 @@
+--- a/usr/src/uts/common/io/ena/ena.c
++++ b/usr/src/uts/common/io/ena/ena.c
+@@ -941,7 +941,7 @@
+  * Ethernet VLAN header. Rx has the additional requirement of needing
+  * additional margin for the sake of IP header alignment.
+  */
+-static void
++void
+ ena_update_buf_sizes(ena_t *ena)
+ {
+ 	ena->ena_max_frame_hdr = sizeof (struct ether_vlan_header);
+@@ -1699,12 +1699,18 @@
+ 	/*
+ 	 * Default to a standard 1500-byte MTU rather than the device maximum.
+ 	 * On cold boot some Nitro backends do not reliably deliver small
+-	 * broadcast frames (such as the DHCP OFFER) to a queue programmed with
++	 * broadcast frames (e.g. the DHCP OFFER) to a queue programmed with
+ 	 * jumbo-sized Rx buffers, leaving the interface link-up but unable to
+ 	 * complete DHCP. A standard MTU is received reliably; larger MTUs
+ 	 * remain available via the rx/tx descriptor tuning and max_mtu.
++	 *
++	 * The attach-time MTU may be raised by an ena.conf "mtu" property
++	 * (clamped to [ETHERMIN, ena_max_mtu]) once a host is known to
++	 * tolerate a larger frame; the property defaults to the boot-safe
++	 * value so nothing changes unless it is explicitly set.
+ 	 */
+-	ena->ena_mtu = min(ena->ena_max_mtu, ETHERMTU);
++	ena->ena_mtu = ena_get_prop(ena, "mtu", ETHERMIN, ena->ena_max_mtu,
++	    min(ena->ena_max_mtu, ETHERMTU));
+ 	ena_update_buf_sizes(ena);
+ 
+ 	if (!ena_get_hints(ena))
+--- a/usr/src/uts/common/io/ena/ena.h
++++ b/usr/src/uts/common/io/ena/ena.h
+@@ -897,6 +897,7 @@
+  * Misc
+  */
+ extern bool ena_reset(ena_t *, const enahw_reset_reason_t);
++extern void ena_update_buf_sizes(ena_t *);
+ extern bool ena_is_feat_avail(ena_t *, const enahw_feature_id_t);
+ extern bool ena_is_cap_avail(ena_t *, const enahw_capability_id_t);
+ extern void ena_update_hints(ena_t *, enahw_device_hints_t *);
+--- a/usr/src/uts/common/io/ena/ena_gld.c
++++ b/usr/src/uts/common/io/ena/ena_gld.c
+@@ -245,11 +245,70 @@
+ 	return (B_TRUE);
+ }
+ 
++/*
++ * Change the interface MTU.
++ *
++ * The device is initialised with a boot-safe MTU (1500) at attach and the
++ * Rx/Tx buffer sizes are derived from it. Changing the MTU changes those
++ * buffer sizes, which are baked into the IO queue descriptors when the queues
++ * are allocated. The ENA IO queues are (re)allocated when the data path is
++ * (re)started, so a change is applied cleanly only while the interface is
++ * stopped: update ena_mtu and the derived buffer sizes here, and the new
++ * sizes take effect the next time MAC starts the rings.
++ *
++ * While the data path is running we do not attempt a live resize. The only
++ * in-driver primitive that reprograms the device and reallocates the rings is
++ * ena_reset(), which is an error-recovery path: driving it under an active
++ * data path races in-flight Tx/Rx against the ring teardown and makes the
++ * device latch its fatal-error bit. Rather than risk wedging the link we
++ * report EBUSY, matching other illumos NIC drivers (e.g. i40e); the standard
++ * way to change the MTU of an active link is to bring it down first, and the
++ * evidence-based first-boot service applies the per-instance MTU via the
++ * ena.conf "mtu" property so the raise happens at a clean attach.
++ */
+ static int
++ena_set_mtu_prop(ena_t *ena, uint32_t new_mtu)
++{
++	int ret;
++
++	if (new_mtu < ETHERMIN || new_mtu > ena->ena_max_mtu)
++		return (EINVAL);
++
++	mutex_enter(&ena->ena_lock);
++	if (new_mtu == ena->ena_mtu) {
++		mutex_exit(&ena->ena_lock);
++		return (0);
++	}
++	if ((ena->ena_state & ENA_STATE_STARTED) != 0) {
++		mutex_exit(&ena->ena_lock);
++		return (EBUSY);
++	}
++
++	ret = mac_maxsdu_update(ena->ena_mh, new_mtu);
++	if (ret == 0) {
++		ena->ena_mtu = new_mtu;
++		ena_update_buf_sizes(ena);
++	}
++	mutex_exit(&ena->ena_lock);
++	return (ret);
++}
++
++static int
+ ena_m_setprop(void *arg, const char *pr_name, mac_prop_id_t pr_num,
+     uint_t pr_valsize, const void *pr_val)
+ {
+-	return (ENOTSUP);
++	ena_t *ena = arg;
++	uint32_t new_mtu;
++
++	switch (pr_num) {
++	case MAC_PROP_MTU:
++		if (pr_valsize < sizeof (uint32_t))
++			return (EOVERFLOW);
++		bcopy(pr_val, &new_mtu, sizeof (uint32_t));
++		return (ena_set_mtu_prop(ena, new_mtu));
++	default:
++		return (ENOTSUP);
++	}
+ }
+ 
+ static int
+@@ -401,6 +460,17 @@
+ ena_m_propinfo(void *arg, const char *pr_name, mac_prop_id_t pr_num,
+     mac_prop_info_handle_t prh)
+ {
++	ena_t *ena = arg;
++
++	switch (pr_num) {
++	case MAC_PROP_MTU:
++		mac_prop_info_set_perm(prh, MAC_PROP_PERM_RW);
++		mac_prop_info_set_range_uint32(prh, ETHERMIN,
++		    ena->ena_max_mtu);
++		break;
++	default:
++		break;
++	}
+ }
+ 
+ static mac_callbacks_t ena_m_callbacks = {

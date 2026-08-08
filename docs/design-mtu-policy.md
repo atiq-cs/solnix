@@ -84,3 +84,18 @@ changed at runtime.
   (follow-on).
 - `modules/config/mtu.nix` + a first-boot `solnix-mtu` SMF service — the
   evidence-based post-DHCP raise (follow-on).
+
+## Finding (2026-08-08): today's illumos ena can't do jumbo RX -> 1500 is the RIGHT value, not just safe
+The adaptive machinery is built + ready (runtime-settable MAC_PROP_MTU + the evidence-based
+first-boot service), BUT on the tested Nitro backends a real jumbo RECEIVE at 9001 LATCHES the ENA
+fatal-error bit: `rx_sgl_max=1` means a single ~12KB Rx buffer, and the first ~8KB receive wedges the
+NIC (DHCP completes at 9001 but the first big receive dies). So on TODAY's illumos ena, 1500 is not
+just boot-safe -- it's the only reliable MTU, and the first-boot service correctly probes-then-settles
+at 1500 (its 8KB jumbo round-trip probe fails -> revert). ALSO: driving the driver's only ring-realloc
+primitive (ena_reset, an error-recovery path, illumos 16391) under an active data path latches fatal
+0x21 -> so runtime MTU change returns EBUSY when the link is UP (applies at a clean stopped/attach
+state, like i40e/igb). NET: the patch + service AUTO-ENABLE jumbo on any driver that supports a
+verified live resize + jumbo RX; on the current ena they keep 1500. When a newer ena driver fixes
+jumbo RX (rx_sgl / scatter-gather), jumbo turns on automatically with no further work.
+Patches: ena-default-mtu-1500.patch (attach default), ena-runtime-mtu.patch (runtime-settable +
+EBUSY-when-up). Service: modules/config/mtu.nix + scripts/solnix-mtu.sh.

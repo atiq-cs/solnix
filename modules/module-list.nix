@@ -14,6 +14,7 @@
   ./config/coreadm.nix
   ./config/libumem.nix
   ./config/first-boot-defaults.nix
+  ./config/mtu.nix
   ./config/firewall.nix
   ./config/networking.nix
   ./config/users.nix
