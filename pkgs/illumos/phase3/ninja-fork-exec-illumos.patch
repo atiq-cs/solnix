@@ -1,0 +1,104 @@
+--- a/src/subprocess-posix.cc	Wed Aug  5 11:07:29 2026
++++ b/src/subprocess-posix.cc	Wed Aug  5 11:07:29 2026
+@@ -72,76 +72,37 @@
+     SetCloseOnExec(fd_);
+   }
+ 
+-  posix_spawn_file_actions_t action;
+-  int err = posix_spawn_file_actions_init(&action);
+-  if (err != 0)
+-    Fatal("posix_spawn_file_actions_init: %s", strerror(err));
++  // This illumos kernel lacks the SYS_spawn fast path and its libc does not
++  // fall back to fork/exec, so posix_spawn() traps SIGSYS ("Bad System Call").
++  // Use an explicit fork()+execvp() reproducing the signal mask, process
++  // group, and stdin/stdout/stderr file actions posix_spawn would set.
++  pid_ = fork();
++  if (pid_ < 0)
++    Fatal("fork: %s", strerror(errno));
+ 
+-  if (!use_console_) {
+-    err = posix_spawn_file_actions_addclose(&action, fd_);
+-    if (err != 0)
+-      Fatal("posix_spawn_file_actions_addclose: %s", strerror(err));
+-  }
++  if (pid_ == 0) {
++    if (sigprocmask(SIG_SETMASK, &set->old_mask_, 0) < 0)
++      _exit(127);
+ 
+-  posix_spawnattr_t attr;
+-  err = posix_spawnattr_init(&attr);
+-  if (err != 0)
+-    Fatal("posix_spawnattr_init: %s", strerror(err));
+-
+-  short flags = 0;
+-
+-  flags |= POSIX_SPAWN_SETSIGMASK;
+-  err = posix_spawnattr_setsigmask(&attr, &set->old_mask_);
+-  if (err != 0)
+-    Fatal("posix_spawnattr_setsigmask: %s", strerror(err));
+-  // Signals which are set to be caught in the calling process image are set to
+-  // default action in the new process image, so no explicit
+-  // POSIX_SPAWN_SETSIGDEF parameter is needed.
+-
+-  if (!use_console_) {
+-    // Put the child in its own process group, so ctrl-c won't reach it.
+-    flags |= POSIX_SPAWN_SETPGROUP;
+-    // No need to posix_spawnattr_setpgroup(&attr, 0), it's the default.
+-
+-    // Open /dev/null over stdin.
+-    err = posix_spawn_file_actions_addopen(&action, 0, "/dev/null", O_RDONLY,
+-          0);
+-    if (err != 0) {
+-      Fatal("posix_spawn_file_actions_addopen: %s", strerror(err));
++    if (!use_console_) {
++      setpgid(0, 0);
++      close(fd_);
++      int devnull = open("/dev/null", O_RDONLY);
++      if (devnull >= 0) {
++        dup2(devnull, 0);
++        if (devnull != 0)
++          close(devnull);
++      }
++      dup2(subproc_stdout_fd, 1);
++      dup2(subproc_stdout_fd, 2);
++      close(subproc_stdout_fd);
+     }
+ 
+-    err = posix_spawn_file_actions_adddup2(&action, subproc_stdout_fd, 1);
+-    if (err != 0)
+-      Fatal("posix_spawn_file_actions_adddup2: %s", strerror(err));
+-    err = posix_spawn_file_actions_adddup2(&action, subproc_stdout_fd, 2);
+-    if (err != 0)
+-      Fatal("posix_spawn_file_actions_adddup2: %s", strerror(err));
+-    err = posix_spawn_file_actions_addclose(&action, subproc_stdout_fd);
+-    if (err != 0)
+-      Fatal("posix_spawn_file_actions_addclose: %s", strerror(err));
++    const char* spawned_args[] = { "sh", "-c", command.c_str(), NULL };
++    execvp(spawned_args[0], const_cast<char**>(spawned_args));
++    _exit(127);
+   }
+ 
+-#ifdef POSIX_SPAWN_USEVFORK
+-  flags |= POSIX_SPAWN_USEVFORK;
+-#endif
+-
+-  err = posix_spawnattr_setflags(&attr, flags);
+-  if (err != 0)
+-    Fatal("posix_spawnattr_setflags: %s", strerror(err));
+-
+-  const char* spawned_args[] = { "sh", "-c", command.c_str(), NULL };
+-  err = posix_spawnp(&pid_, "sh", &action, &attr,
+-        const_cast<char**>(spawned_args), environ);
+-  if (err != 0)
+-    Fatal("posix_spawn: %s", strerror(err));
+-
+-  err = posix_spawnattr_destroy(&attr);
+-  if (err != 0)
+-    Fatal("posix_spawnattr_destroy: %s", strerror(err));
+-  err = posix_spawn_file_actions_destroy(&action);
+-  if (err != 0)
+-    Fatal("posix_spawn_file_actions_destroy: %s", strerror(err));
+-
+   if (!use_console_)
+     close(subproc_stdout_fd);
+   return true;

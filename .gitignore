@@ -44,3 +44,5 @@ artifacts/sparc-xbuild/debugbackfill3/
 
 # live operational infra (builder IPs, hostnames, AMIs, keypair, SG) — never published
 /.infra/
+scratch/
+artifacts/fan224-stage/

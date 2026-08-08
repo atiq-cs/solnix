@@ -71,6 +71,24 @@ let
                  });
          in if r.success then r.value
             else fetchFirst name sha256 (builtins.tail cands);
+  # try each candidate url with builtins.fetchTarball (PURE): fetch + unpack +
+  # strip-single-root + recursive-hash in one step, exactly what fetchzip
+  # (fetchFromGitHub/fetchFromGitLab) does. The recorded SRI hash is of the
+  # UNPACKED+stripped tree, which builtins.fetchTarball reproduces, so this needs
+  # NO --impure (unlike the raw fetchurl-without-hash path). First success wins.
+  # builtins.fetchTarball returns a bare PATH; fetchFromGitLab does
+  # `(fetcher args) // { meta = ...; }`, and `//` requires an attrset LHS. So
+  # wrap the path in a derivation-like set: outPath makes string-coercion +
+  # `${src}` work, type/name/drvPath keep isDerivation-style consumers happy.
+  fetchTarballFirst = name: sha256: cands:
+    if cands == [] then throw "fetchurl-shim: all urls failed (tarball) for ${name}"
+    else let r = builtins.tryEval (builtins.fetchTarball {
+                   inherit name sha256; url = builtins.head cands;
+                 });
+         in if r.success
+            then { outPath = r.value; type = "derivation"; inherit name;
+                   outputName = "out"; }
+            else fetchTarballFirst name sha256 (builtins.tail cands);
   # try each candidate url IMPURELY (no hash) — used for the fetchpatch path
   # where the recorded hash is of the POST-normalized patch, not the raw
   # download, so builtins.fetchurl can't verify the raw bytes. First fetch wins.
@@ -162,7 +180,19 @@ let
       sha256 = args.hash or args.sha256
         or (throw "fetchurl-shim: no hash/sha256");
       name = args.name or (baseNameOf (builtins.head cands));
-    in if (args.postFetch or "") != ""
+    in
+       # fetchzip signature (fetchFromGitHub/GitLab): downloadToTemp +
+       # recursiveHash. The recorded hash is of the unpacked+stripped tree, which
+       # builtins.fetchTarball reproduces PURELY — no raw hashless fetch needed.
+       # Only when stripRoot is left default (true): fetchTarball always strips a
+       # single root, matching fetchzip's default. Falls through to the impure
+       # raw path if stripRoot is explicitly false or the tarball fetch fails.
+       if (args.downloadToTemp or false) && (args.recursiveHash or false)
+          && (args.stripRoot or true)
+       then let r = builtins.tryEval (fetchTarballFirst name sha256 cands);
+            in if r.success then r.value
+               else postFetchFOD args (fetchFirstImpure (name + "-raw") cands)
+       else if (args.postFetch or "") != ""
        then postFetchFOD args (fetchFirstImpure (name + "-raw") cands)
        else fetchFirst name sha256 cands;
 in {

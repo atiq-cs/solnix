@@ -577,6 +577,20 @@ import nixpkgs {
       # wrap the entire by-name set -- do that only after A/B'ing a wider sample,
       # since -ggdb + the postFixup split adds build time + a `debug` output to
       # each derivation.)
+    # LATEST GCC: from-source gcc-14.4.0 (the proven floor) + a gcc14Stdenv.
+    # gcc14.nix builds the UNWRAPPED compiler (the top-level gcc14 attr's wrapCC
+    # asserts on the illumos bintools path); gcc14-stdenv.nix wraps it with
+    # wrapCCWith (seed Solaris bintools + libc, seedSyslibs -L) and overrideCCs
+    # the illumos stdenv. Prove: pkgs.zlib.override { stdenv = pkgs.gcc14Stdenv; }.
+    (final: prev: {
+      gcc14 = final.callPackage ./gcc14.nix {
+        path = forkPath;
+        isl_0_20 = final.isl_0_20;
+      };
+      gcc14Stdenv = final.callPackage ./gcc14-stdenv.nix {
+        inherit (final) gcc14 seedSyslibs;
+      };
+    })
   ];
   # 2.24 supports structuredAttrs natively, so the nixpkgs default is correct.
   config = { allowUnsupportedSystem = true; };

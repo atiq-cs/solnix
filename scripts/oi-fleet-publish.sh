@@ -22,7 +22,7 @@ RECIPES="$REPO/docs/registry/recipes.tsv"; touch "$RECIPES"
 SOPS_AGE_KEY_FILE="${SOPS_AGE_KEY_FILE:-$HOME/.config/sops/age/keys.txt}"
 export SOPS_AGE_KEY_FILE
 SOPS() { nix run nixpkgs#sops -- "$@"; }
-HOST_NIX='export PATH=/nix-tools/bin:/usr/gnu/bin:/usr/bin:/usr/sbin:$PATH; export NIX_CONF_DIR=/nix-tools/etc/nix;'
+HOST_NIX="${HOST_NIX:-export PATH=/nix-tools/bin:/usr/gnu/bin:/usr/bin:/usr/sbin:\$PATH; export NIX_CONF_DIR=/nix-tools/etc/nix;}"
 
 S3='s3://solnix-cache?endpoint=s3.solnix.io&region=us-east-1&scheme=https'
 eval "$(SOPS --decrypt secrets/s3-cache.yaml \
