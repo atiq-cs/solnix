@@ -447,3 +447,23 @@ flatten to plain env -- a Nix-2.3.16 infra gap (2.24 has native structuredAttrs,
 x86 2.24 lineage). FIX for sparc: migrate sparc to Nix 2.24 (the deferred sparc-2.24 migration), OR a
 structuredAttrs-free buildEnv reimpl for 2.3.16. gnupg on sparc blocked on freepgPatches gitlab %-URL
 (shim store-name). Both are 2.3.16-lineage limits -> the real fix is the sparc 2.24 migration.
+
+## PS-FIRSTBOOT-NETWORK (2026-08-08): CRITICAL — AMI fresh-launch network bring-up hangs (the REAL #1 AMI blocker)
+The instance-type matrix (10 fresh launches, all families t3/c5/r5/m5/m6i/c6i/c7i) found: after the
+cold-boot LOADER fix, the AMI boots the kernel fine (EFI->ZFS->multiuser console login) but then STALLS
+at "Hostname: unknown" -- the illumos first-boot identity/network service (svc:/system/illumos/useragent
+or the ec2 datasource/DHCP bring-up) logs once and NEVER completes DHCP+hostname+network -> sshd never
+reachable, port 22 filtered, EC2 status=impaired. 9/10 fresh launches FAILED (instance-type-INDEPENDENT
+-- not ENA/arch per-family; one earlier m5.large "PASS" was luck). Reboots sometimes advance hostname to
+ip-172-31-* but SSH still didn't come up in the wait windows.
+IMPACT: CORRECTS the earlier "fresh-launch-verified / releasable AMI" claim -- the AMI does NOT reliably
+reach SSH on cold launch. The COLD-BOOT LOADER loop IS fixed (separate); this is a SECOND, first-boot
+network/identity blocker. The v2026.08.07 release AMI is NOT reliably usable until this is fixed.
+FIX (the true #1 AMI blocker now): debug the illumos EC2 first-boot network/identity bring-up --
+useragent/ec2-datasource/DHCP (ipadm/dhcpagent on ena0). Likely: the ena0 DHCP client isn't started or
+races the identity service; or the EC2 metadata/hostname fetch hangs. Fix so a FRESH launch reaches
+network+sshd WITHOUT manual reboots, then re-run the 10-type matrix to validate. This gates a real EC2
+release.
+NOTE: ISO+IMG (local hardware) boot fine in QEMU (different first-boot path) -- this is EC2-fresh-launch
+specific. The personal test instance 3.12.148.116 works because it was brought up through the build flow
+(not a cold AMI launch).
