@@ -132,7 +132,6 @@ let
       curlDownload = dest: ''
         _ok=
         _ca="''${NIX_SSL_CERT_FILE:-''${SSL_CERT_FILE:-/nix-tools224/ca-bundle.crt}}"
-        if [ ! -f "$_ca" ]; then _ca=/nix-tools224/ca-bundle.crt; fi
         for _u in ${lib.concatMapStringsSep " " (u: lib.escapeShellArg u) cands}; do
           if curl -fsSL --cacert "$_ca" --retry 3 --connect-timeout 30 -o "${dest}" "$_u"; then _ok=1; break; fi
         done
@@ -189,12 +188,25 @@ let
                 else if args ? url && args.url != "" then [ args.url ]
                 else throw "fetchurl-shim: no url/urls";
       cands = lib.concatMap expand rawUrls;
-      sha256 = args.hash or args.sha256
-        or (throw "fetchurl-shim: no hash/sha256");
+      # builtins.fetchurl only accepts a `sha256` field (base16/base32/SRI).
+      # A src pinned with a bare `sha512`/`sha1` (no `hash`/`sha256`) has no
+      # sha256 to hand it; wrap the sha512 as an SRI string so the eval-time
+      # fetch still verifies. If nothing pins it, fall to the impure fetch
+      # (the enclosing FOD's outputHash pins the final result anyway).
+      # builtins.fetchurl's `sha256` field only accepts a real sha256 (hex/
+      # base32/SRI-sha256). A src pinned with a bare `sha512`/`sha1` cannot be
+      # verified through it, so fetch those impurely at eval time; the
+      # enclosing FOD's outputHash still pins the final store path.
+      sha256 = if args ? hash then args.hash
+               else if args ? sha256 then args.sha256
+               else null;
       name = args.name or (baseNameOf (builtins.head cands));
     in if (args.postFetch or "") != ""
        then postFetchFOD args cands
-       else fetchFirst name sha256 cands;
+       else if sha256 != null
+            then (let r = builtins.tryEval (fetchFirst name sha256 cands);
+                  in if r.success then r.value else fetchFirstImpure name cands)
+            else fetchFirstImpure name cands;
 in {
   fetchurl = shimFetch;
   # H3: expose the shimmed fetcher so a later overlay (after the structuredAttrs
