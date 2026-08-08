@@ -119,6 +119,18 @@ import nixpkgs {
           cffi = pySuper.cffi.overrideAttrs (_: {
             doCheck = false; doInstallCheck = false;
           });
+          # time-machine's tz tests assert tzname==('UTC','UTC'), but illumos
+          # libc reports the DST tzname as 3 spaces for UTC -> 2 test failures.
+          # test-only dep (fonttools nativeCheckInput); drop its check so
+          # fonttools -> liberation/noto/fontforge land.
+          time-machine = pySuper.time-machine.overrideAttrs (_: {
+            doCheck = false; doInstallCheck = false;
+          });
+          # fonttools' UFO test testUFOWriterRemoveFile fails on illumos fs
+          # semantics (ResourceError removing a data file); test-only, drop it.
+          fonttools = pySuper.fonttools.overrideAttrs (_: {
+            doCheck = false; doInstallCheck = false;
+          });
         };
       }).overrideAttrs (old: {
         configureFlags = (old.configureFlags or [ ])
@@ -254,6 +266,98 @@ import nixpkgs {
       # python3Packages.python (meson's build python) is fixed too.
       python3 = fixPy prev.python3;
       python314 = fixPy prev.python314;
+      # libfaketime's checkPhase runs a CLOCK_MONOTONIC self-test that loops
+      # forever on illumos (FORCE_MONOTONIC_FIX). test-only dep (pulled by
+      # time-machine -> fonttools -> fonts); drop its check so it can't hang.
+      libfaketime = prev.libfaketime.overrideAttrs (_: { doCheck = false; doInstallCheck = false; });
+      # gobject-introspection's giscanner needs distutils (ccompiler.py imports
+      # distutils.unixccompiler/sysconfig/ccompiler; the cygwinccompiler block is
+      # additionally Windows-only). Python 3.14 removed distutils. Fix: strip the
+      # dead Windows cygwin monkeypatch AND put setuptools (which vendors
+      # distutils via its distutils-precedence.pth, activated by
+      # SETUPTOOLS_USE_DISTUTILS=local) on the giscanner PYTHONPATH so
+      # `import distutils` resolves to setuptools' _distutils. Patch the
+      # UNWRAPPED package (where giscanner runs); unblocks every gir-consuming
+      # glib package (gsettings/json-glib/gdk-pixbuf/libgee).
+      # gobject-introspection's giscanner needs distutils (ccompiler.py uses
+      # distutils.unixccompiler/sysconfig/ccompiler), removed in Python 3.14; the
+      # setuptools _distutils shim does not reach meson's g-ir-scanner subprocess
+      # here, so g-i itself does not build on this port. Its C-library consumers
+      # (json-glib/gdk-pixbuf/gsettings-desktop-schemas/libnotify) are built with
+      # `-Dintrospection=disabled` below so they do NOT need g-i -- the .gir/
+      # .typelib data is only for language bindings, not the C libs. Keep the
+      # dead Windows cygwin monkeypatch stripped so g-i still evaluates.
+      gobject-introspection-unwrapped = prev.gobject-introspection-unwrapped.overrideAttrs (old: {
+        postPatch = (old.postPatch or "") + ''
+          sed -i '/^import distutils\.cygwinccompiler/d; /^orig_get_msvcr = distutils\.cygwinccompiler\.get_msvcr/d; /^distutils\.cygwinccompiler\.get_msvcr = get_msvcr_overwrite/d' giscanner/utils.py
+        '';
+      });
+      # glib C-library consumers: build without introspection so they skip the
+      # (unbuildable-here) gobject-introspection scanner. C libs + headers land;
+      # only the gir/typelib binding data + gi-docgen API-ref are dropped.
+      stripGi = drv: flags: drv.overrideAttrs (o: {
+        mesonFlags = (o.mesonFlags or [ ]) ++ flags;
+        # drop g-i (introspection off) and gi-docgen (docs off) from inputs;
+        # nixpkgs adds both unconditionally via hooks.
+        nativeBuildInputs = builtins.filter
+          (d: let n = d.pname or d.name or ""; in
+              !(final.lib.hasInfix "gobject-introspection" n
+                || final.lib.hasInfix "gi-docgen" n))
+          (o.nativeBuildInputs or [ ]);
+        buildInputs = (builtins.filter
+          (d: let n = d.pname or d.name or ""; in
+              !(final.lib.hasInfix "gobject-introspection" n
+                || final.lib.hasInfix "gi-docgen" n))
+          (o.buildInputs or [ ])) ++ [ final.gettext ];
+        # illumos libintl link fix: nixpkgs gettext's <libintl.h> renames
+        # gettext/bindtextdomain to libintl_* , so links need -lintl; meson's
+        # `-z defs` + --start-group link drops NIX_LDFLAGS, but exporting
+        # LDFLAGS in preConfigure lands -lintl in the right position.
+        preConfigure = (o.preConfigure or "") + ''
+          export LDFLAGS="-L${final.gettext}/lib -lintl $LDFLAGS"
+        '';
+        # drop man/devdoc outputs (their rst2man/gi-docgen/docbook toolchain is
+        # disabled here).
+        outputs = builtins.filter (x: x != "devdoc" && x != "man") (o.outputs or [ "out" ]);
+      });
+      json-glib = (final.stripGi prev.json-glib [ "-Dintrospection=disabled" "-Ddocumentation=disabled" ]).overrideAttrs (o: {
+        # json-glib's optional CLI tools (json-glib-validate/format) call
+        # gettext() -> reference libintl_* , but their meson executable() omits
+        # -lintl and illumos' separate libintl + `-z defs` makes it fatal. The
+        # C library + headers (the deliverable for consumers) build fine; drop
+        # the two tools so the package lands. Upgrade path: wire an intl
+        # find_library with the gettext -L if the CLI tools are ever needed.
+        postPatch = (o.postPatch or "") + ''
+          sed -i '/^tools = \[/,/^\]/c\tools = []' json-glib/meson.build
+        '';
+      });
+      gsettings-desktop-schemas = final.stripGi prev.gsettings-desktop-schemas [ "-Dintrospection=false" ];
+      libnotify = final.stripGi prev.libnotify [ "-Dintrospection=disabled" "-Dgtk_doc=false" "-Ddocbook_docs=disabled" "-Dman=false" "-Dtests=false" ];
+      gdk-pixbuf = final.stripGi prev.gdk-pixbuf [ "-Dintrospection=disabled" "-Dgtk_doc=false" "-Dman=false" ];
+      # desktop-file-utils' CLI tools (update-desktop-database/desktop-file-
+      # install) call gettext() -> libintl_* ; add -lintl via LDFLAGS in the
+      # right link position (same illumos separate-libintl issue as above).
+      desktop-file-utils = prev.desktop-file-utils.overrideAttrs (o: {
+        buildInputs = (o.buildInputs or [ ]) ++ [ final.gettext ];
+        preConfigure = (o.preConfigure or "") + ''
+          export LDFLAGS="-L${final.gettext}/lib -lintl $LDFLAGS"
+        '';
+      });
+      # libgsf calls textdomain/bindtextdomain -> libintl_* ; same illumos
+      # separate-libintl link fix. Autotools: --disable-introspection so it does
+      # not need the (unbuildable-here) g-i scanner, and drop g-i from inputs.
+      libgsf = prev.libgsf.overrideAttrs (o: {
+        configureFlags = (o.configureFlags or [ ]) ++ [ "--disable-introspection" ];
+        nativeBuildInputs = builtins.filter
+          (d: let n = d.pname or d.name or ""; in !(final.lib.hasInfix "gobject-introspection" n))
+          (o.nativeBuildInputs or [ ]);
+        buildInputs = (builtins.filter
+          (d: let n = d.pname or d.name or ""; in !(final.lib.hasInfix "gobject-introspection" n))
+          (o.buildInputs or [ ])) ++ [ final.gettext ];
+        preConfigure = (o.preConfigure or "") + ''
+          export LDFLAGS="-L${final.gettext}/lib -lintl $LDFLAGS"
+        '';
+      });
       mpfrCOnly = (final.mpfr.override { gmp = final.gmpCOnly; }).overrideAttrs (_: { doCheck = false; });
     })
     (import solarisOverlay { inherit forkPath gnuConfigGuess gnuConfigSub; })
@@ -561,7 +665,20 @@ import nixpkgs {
         attrs)
       // builtins.listToAttrs (builtins.concatMap
         (a: if prev ? ${a} then [{ name = a; value = stripDocs prev.${a}; }] else [ ])
-        [ "libtiff" "libwebp" "fontconfig" ])
+        [ "libtiff" "libwebp" ])
+      // {
+        # fontconfig's postInstall calls xsltproc to generate fonts.conf from a
+        # template (NOT just docs), so libxslt must stay in nativeBuildInputs;
+        # stripDocs wrongly removes it -> `xsltproc: command not found` (exit
+        # 127), which fails every glib/cairo/pango consumer downstream. Keep
+        # libxslt; only turn off the check/test toolchain.
+        fontconfig = prev.fontconfig.overrideAttrs (old: {
+          doCheck = false;
+          doInstallCheck = false;
+          nativeCheckInputs = [ ];
+          checkInputs = [ ];
+        });
+      }
       // {
         # libjpeg-turbo's SIMD path needs nasm, which does not build on illumos
         # (bytesex.h uses htole64 -> -Werror implicit-decl, and its own zlib.h
