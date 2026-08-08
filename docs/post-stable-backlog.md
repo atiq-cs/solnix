@@ -516,3 +516,16 @@ iterate further on the shim. NEXT WORK ITEM: newer ena driver. MEANWHILE: local-
 the reliable install path; the AMI works but with a low/variable fresh-launch success rate (retry-launch
 until one sticks, or use a working instance as a golden image via stop/start... which also doesn't fully
 recover -- so retry-launch is the practical workaround).
+
+## PS-EC2-ENA-DRIVER v2 (2026-08-08): CORRECTION -- the ena driver IS fixable, dispatched
+Earlier "not software-fixable at our level" was WRONG -- it meant "not fixable in the first-boot SHIM";
+the DRIVER itself is open-source illumos kernel code and absolutely fixable. Three code sources:
+(1) illumos-gate ena (usr/src/uts/common/io/ena/ -- solnix ships OI's ~2021 build; gate HEAD has later
+    fixes); (2) FreeBSD if_ena + ena_com HAL (in ~/ws/osv/bsd/sys/dev/ena/ + contrib/ena_com/ -- the
+    canonical Amazon driver, v2.6.3/2021 HAL; FreeBSD 14.x has newer with data-path/reset fixes);
+(3) OSv's ena port (~/ws/osv/drivers/ena.cc, has a feat/ena-aarch64 branch already built by the maintainer).
+The wedge ("ena0 link up, no packets, dhcpagent no lease") is the 2021 ena data-path/reset -- FreeBSD
+fixed this class in newer ena_com. PLAN (dispatched 392dfe76): update illumos ena to gate HEAD (may
+already fix it) -> else port FreeBSD's current ena_com data-path/reset fixes -> build the illumos ena
+kernel module -> inject into a fresh AMI -> measure >=9/10 cold-launch. This is the real EC2 fix +
+directly serves the aarch64/Graviton goal (Graviton needs ena too -- the osv aarch64 ena branch is a head start).
