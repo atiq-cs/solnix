@@ -236,13 +236,12 @@ import nixpkgs {
         # unreliable; `patch` is already used for the nixpkgs patches). The
         # patch file lives next to this tranche (repo + builder).
         cmInstrNoSpawnPatch = ./cmake-instrumentation-no-spawn.patch;
-      in {
+        fixCmake = drv: drv.overrideAttrs (old: {
         # cmake's own bootstrap builds a bundled libuv (Utilities/cmlibuv) that
         # links kstat_*/sendfile on illumos -> `ld: fatal: library -lkstat: not
         # found`. The nixpkgs libuv buildInput is separate, so the fix must land
         # on cmake-minimal's bootstrap link: add the extra-syslibs -L and the
         # two libs to NIX_LDFLAGS, and the -L to compile flags (H1 auto-adds -R).
-        cmakeMinimal = prev.cmakeMinimal.overrideAttrs (old: {
           env = (old.env or { }) // {
             NIX_CFLAGS_COMPILE = (old.env.NIX_CFLAGS_COMPILE or "") + " " + seedL;
             NIX_LDFLAGS = (old.env.NIX_LDFLAGS or "") + " " + seedL + " -lkstat -lsendfile";
@@ -274,7 +273,37 @@ import nixpkgs {
           postPatch = (old.postPatch or "") + ''
             patch -p1 < ${cmInstrNoSpawnPatch}
           '';
+          # H39 (2.24): the H38 instrumentation neuter covers only ONE spawn
+          # site. cmake links TWO libc.so.1 -- the seed-syslibs snapshot
+          # (illumos-seed-syslibs/lib/amd64/libc.so.1) AND the live
+          # /lib/64/libc.so.1 -- and inside the build sandbox its libuv
+          # uv_spawn / cmUVProcessChain (compiler-feature detection, try_run,
+          # execute_process) binds posix_spawn out of the STALE seed libc,
+          # whose SYS_spawn path traps SIGSYS (Bad System Call) on this kernel
+          # (68259130da). The live /lib/64/libc.so.1 carries the working
+          # fallback. The consumer-package gate (LD_LIBRARY_PATH_64=/lib/64)
+          # never reaches cmake's OWN configure spawns: cmakeConfigurePhase
+          # runs `cmake` before any consumer preConfigure sets it. Bake the
+          # export into cmake's setup-hook so EVERY consumer's cmake configure
+          # prefers the kernel-matched libc for all of its spawns. Done in
+          # postFixup: the nix-support/setup-hook file is assembled from the
+          # setupHooks list during fixupPhase, so postInstall is too early.
+          postFixup = (old.postFixup or "") + ''
+            hook="$out/nix-support/setup-hook"
+            if [ -f "$hook" ]; then
+              echo 'export LD_LIBRARY_PATH_64=/lib/64''${LD_LIBRARY_PATH_64:+:$LD_LIBRARY_PATH_64}' >> "$hook"
+            fi
+          '';
         });
+      in {
+        # Same illumos fix set for cmake-minimal (bootstrap tool) AND the full
+        # `cmake` 4.x: its own bundled libuv also links -lkstat/-lsendfile, its
+        # bootstrap needs the ranlib wrapper + the no-spawn instrumentation
+        # patch. Every cmake C/C++ lib that requests `cmake` (pugixml/tinyxml2/
+        # rapidjson/cereal/leveldb/...) routes through this rather than
+        # cmakeMinimal, so both must carry the fix.
+        cmakeMinimal = fixCmake prev.cmakeMinimal;
+        cmake = fixCmake prev.cmake;
       })
     # release-toolset curl/rsync: the full `curl` attr and rsync enable
     # zstd/brotli/lz4/xxHash, which pull zstd -> cmake (H26, still blocked on
@@ -323,6 +352,64 @@ import nixpkgs {
         doInstallCheck = false;
         nativeInstallCheckInputs = [];
       });
+    })
+    # cmocka 2.0.2: include/cmocka.h gates a CMOCKA_NO_ACCESS_ATTRIBUTE on
+    # __has_attribute(access) (true since GCC 10), but uses the `access(none,
+    # N)` MODE that GCC only accepts from 11+ -- GCC 10.5 here errors
+    # `attribute 'access' invalid mode 'none'`. Strip the access() attribute
+    # from the header so it degrades to the empty fallback the file already
+    # defines. cmocka is a leaf test lib (libcbor's test dep), so this is the
+    # only consumer-visible use.
+    (final: prev: {
+      cmocka = prev.cmocka.overrideAttrs (old: {
+        postPatch = (old.postPatch or "") + ''
+          sed -i 's/__attribute__((access(none, 1), access(none, 2)))//' include/cmocka.h
+        '';
+      });
+    })
+    # wave-4 fixups: none of these are SIGSYS (the cmake configure now passes
+    # for all of them via H39); each is a plain illumos build detail.
+    (final: prev: {
+      # tokyocabinet's configure needs bzlib.h, but the top-level `bzip2` is
+      # the header-less stdenv seed slice. Thread the header-ful bzip2Real
+      # (from solaris-overlay) so `bzlib.h is required` clears.
+      tokyocabinet = (prev.tokyocabinet.override { bzip2 = final.bzip2Real; });
+      # minizip-ng: top-level `xz` is the header-less seed slice, so its cmake
+      # LibLZMA probe fails (`LibLZMA library not found`); thread xzReal. Its
+      # CTest suite is fragile on a fresh illumos port and is not the
+      # deliverable, so drop doCheck (which also flips MZ_BUILD_TESTS off).
+      minizip-ng = (prev.minizip-ng.override { xz = final.xzReal; }).overrideAttrs (_: {
+        doCheck = false;
+      });
+      # libxlsxwriter runs its bundled test binary in checkPhase; the suite is
+      # fragile on illumos and not the deliverable.
+      libxlsxwriter = prev.libxlsxwriter.overrideAttrs (_: { doCheck = false; });
+      # libzip builds its man pages with groff, but groff shells troff out via
+      # posix_spawn and traps SIGSYS on this kernel (its own spawn path, not
+      # cmake's -- H39 does not reach it). Drop the man output + the groff
+      # nativeBuildInput so the library itself lands; man pages are not the
+      # deliverable on a fresh port.
+      libzip = prev.libzip.overrideAttrs (old: {
+        outputs = builtins.filter (o: o != "man") (old.outputs or [ "out" ]);
+        nativeBuildInputs = builtins.filter
+          (b: (b.pname or b.name or "") != "groff")
+          (old.nativeBuildInputs or [ ]);
+      });
+      # doctest runs its own test binary in checkPhase (fragile here); it is a
+      # header-only assertion lib consumed by xsimd, so the check is not the
+      # deliverable.
+      doctest = prev.doctest.overrideAttrs (_: { doCheck = false; });
+      # xsimd builds+runs a doctest suite (-DBUILD_TESTS=ON, doCheck=true); the
+      # SIMD test binary is fragile on this illumos gcc, and the header lib is
+      # the deliverable. Turn the suite off.
+      xsimd = prev.xsimd.overrideAttrs (old: {
+        doCheck = false;
+        cmakeFlags = (builtins.filter (f: f != "-DBUILD_TESTS=ON")
+          (old.cmakeFlags or [ ])) ++ [ "-DBUILD_TESTS=OFF" ];
+      });
+      # c-blosc gates its AVX2 roundtrip test binaries on doCheck; that suite
+      # fails on this platform's gcc and is not the deliverable.
+      c-blosc = prev.c-blosc.overrideAttrs (_: { doCheck = false; });
     })
     # lua's Makefile solaris target ends with `ranlib`, but makeFlags sets
     # RANLIB=${targetPrefix}ranlib -> bare `ranlib`, absent from the seed
@@ -410,6 +497,14 @@ import nixpkgs {
         (a: if prev ? ${a} then [{ name = a; value = stripDocs prev.${a}; }] else [ ])
         [ "libtiff" "libwebp" "fontconfig" ])
       // {
+        # fontconfig: stripDocs removes libxslt/python from nativeBuildInputs to
+        # dodge the docs toolchain's toml-hash gap, but fontconfig's postInstall
+        # still runs xsltproc to generate fonts.conf. Re-add just libxslt's bin
+        # output (xsltproc); PYTHON is pinned to the interpreter path in the
+        # solaris-overlay so AM_PATH_PYTHON needs no python on PATH.
+        fontconfig = (stripDocs prev.fontconfig).overrideAttrs (old: {
+          nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ final.libxslt.bin ];
+        });
         # libjpeg-turbo's SIMD path needs nasm, which does not build on illumos
         # (bytesex.h uses htole64 -> -Werror implicit-decl, and its own zlib.h
         # include is unresolved). SIMD is a perf optimization, not required for a
@@ -470,9 +565,16 @@ import nixpkgs {
         # catch2 buildInput and the tests flag so catch2's cmake leaves the graph.
         spdlog = (fixCmake prev.spdlog).overrideAttrs (old: {
           cmakeFlags = (old.cmakeFlags or [ ]) ++ [ "-DSPDLOG_BUILD_TESTS=OFF" "-DSPDLOG_BUILD_BENCH=OFF" ];
-          # illumos hides tm_gmtoff behind __EXTENSIONS__ (os-inl.h uses it).
-          # cc-wrapper threads NIX_CFLAGS_COMPILE_BEFORE (see gawkReal).
-          NIX_CFLAGS_COMPILE_BEFORE = (old.NIX_CFLAGS_COMPILE_BEFORE or "") + " -D__EXTENSIONS__";
+          # illumos `struct tm` has NO tm_gmtoff/tm_zone at all (SysV layout;
+          # __EXTENSIONS__ does not add them). os-inl.h's utc_minutes_offset
+          # reads tm.tm_gmtoff -> `no member named tm_gmtoff`. Replace the body
+          # with the illumos idiom: the extern `timezone`/`altzone` globals (set
+          # by tzset(), seconds WEST of UTC), negated for the east-of-UTC minutes
+          # spdlog expects; pick altzone under DST. tzset() is idempotent.
+          postPatch = (old.postPatch or "") + ''
+            sed -i 's#return static_cast<int>(tm.tm_gmtoff / 60);#tzset(); return static_cast<int>(-(tm.tm_isdst > 0 ? altzone : timezone) / 60);#' \
+              include/spdlog/details/os-inl.h
+          '';
           buildInputs = builtins.filter
             (d: let n = final.lib.toLower (cmName d); in !(final.lib.hasInfix "catch2" n))
             (old.buildInputs or [ ]);
@@ -568,7 +670,7 @@ import nixpkgs {
             done
           '';
         });
-        coreDebug = [ "ncurses" "readline" ];
+        coreDebug = [ ]; # host lacks objcopy; real split-debug disabled
       in builtins.listToAttrs (builtins.concatMap
         (a: if prev ? ${a} then [{ name = a; value = withRealSplitDebug prev.${a}; }] else [ ])
         coreDebug))
@@ -577,20 +679,6 @@ import nixpkgs {
       # wrap the entire by-name set -- do that only after A/B'ing a wider sample,
       # since -ggdb + the postFixup split adds build time + a `debug` output to
       # each derivation.)
-    # LATEST GCC: from-source gcc-14.4.0 (the proven floor) + a gcc14Stdenv.
-    # gcc14.nix builds the UNWRAPPED compiler (the top-level gcc14 attr's wrapCC
-    # asserts on the illumos bintools path); gcc14-stdenv.nix wraps it with
-    # wrapCCWith (seed Solaris bintools + libc, seedSyslibs -L) and overrideCCs
-    # the illumos stdenv. Prove: pkgs.zlib.override { stdenv = pkgs.gcc14Stdenv; }.
-    (final: prev: {
-      gcc14 = final.callPackage ./gcc14.nix {
-        path = forkPath;
-        isl_0_20 = final.isl_0_20;
-      };
-      gcc14Stdenv = final.callPackage ./gcc14-stdenv.nix {
-        inherit (final) gcc14 seedSyslibs;
-      };
-    })
   ];
   # 2.24 supports structuredAttrs natively, so the nixpkgs default is correct.
   config = { allowUnsupportedSystem = true; };

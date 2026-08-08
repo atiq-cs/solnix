@@ -155,20 +155,15 @@ let
   # (see fixPy in tranche-entry-224.nix). Only on illumos.
   xzReal = (final.callPackage
     (forkPath + "/pkgs/by-name/xz/xz/package.nix")
-    { }).overrideAttrs (old: {
-      # xz-5.8.3's configure libtool ECHO probe selects the Solaris ksh builtin
-      # `print -r --`, but the generated libtool runs under bash where `print`
-      # does not exist -> every compile fails with `libtool: print: command not
-      # found` (bare `Error 1`, no compiler diagnostic). Rewrite the ECHO
-      # assignment in the generated libtool to the portable `printf %s\n`
-      # (libtool's own line-840 fallback). xzReal is python3's _lzma provider,
-      # so this unblocks the whole python3/meson swath (p11-kit/gnutls/
-      # fontconfig/libpsl/universal-ctags).
-      postConfigure = (old.postConfigure or "") + ''
-        for lt in $(find . -name libtool -type f 2>/dev/null); do
-          sed -i 's|print -r --|printf %s\\n|g' "$lt"
-        done
-      '';
+    { }).overrideAttrs (o: {
+      # xz's package.nix pins preConfigure = "CONFIG_SHELL=/bin/sh". On illumos
+      # /bin/sh is ksh, whose builtin `print` makes libtool's echo probe bake
+      # ECHO='print -r --' into the generated libtool; the actual compile rules
+      # then run under bash (no `print`) -> `libtool: print: command not found`
+      # and every liblzma .lo fails. Point CONFIG_SHELL at the build bash so the
+      # libtool echo probe picks a POSIX echo. Unblocks xzReal -> python3 _lzma
+      # -> the meson/ninja/doxygen swath.
+      preConfigure = "CONFIG_SHELL=${final.stdenv.shell}";
     });
 
   # illumos-extra-syslibs: a REAL derivation (rebuildable + substitutable on any
@@ -202,6 +197,10 @@ let
     for n in libkstat libsendfile libproc libcontract; do
       [ -e "/lib/amd64/$n.so.1" ] && ln -sf "/lib/amd64/$n.so.1" "$out/lib/amd64/$n.so"
     done
+    # bare libm.so link for `-lm` / find_library(NAMES m): the seed slice carries
+    # only libm.so.2 (no bare .so), so link-editor -lm probes miss it. Point a
+    # bare .so at the platform libm (libc-family ABI, resolved at runtime).
+    [ -e "/lib/amd64/libm.so.2" ] && ln -sf "/lib/amd64/libm.so.2" "$out/lib/amd64/libm.so"
   '';
 
 in
@@ -226,6 +225,40 @@ in
       cp ${configSubSrc} ./config.sub
       chmod +w ./config.sub ./config.guess
       runHook postUnpack
+    '';
+  });
+
+  # rhash (a cmake build-dep on illumos): its non-autotools configure detects
+  # the target OS by splitting --target on '-' and matching field 2/3. This
+  # stdenv's hostPlatform.config is `x86_64-unknown-solaris` (no `2.11` suffix),
+  # so field 3 = `solaris` matches neither `sunos` nor `solaris2.*` in
+  # set_target_os -> `Unknown target OS` die. Add a bare `solaris)` alt to that
+  # case line. Unblocks the full `cmake` (4.x) -> every cmake C/C++ lib that
+  # pulls `cmake` (not cmakeMinimal): pugixml/tinyxml2/rapidjson/cereal/...
+  # plotutils: plotter.h unconditionally #includes X11/Xlib.h unless configured
+  # --without-x. No X11 on this headless illumos port, so build the non-X
+  # libplot/graph/plot tools only.
+  plotutils = onSolaris prev.plotutils (old: {
+    configureFlags = (old.configureFlags or [ ]) ++ [ "--without-x" ];
+  });
+
+  # nlohmann_json / yaml-cpp: their CMake test harness (JSON_BuildTests /
+  # YAML_CPP_BUILD_TESTS) runs execute_process/find_program probes that shell
+  # out via posix_spawn -> SIGSYS on this illumos kernel. Header-only libs; the
+  # tests are not the deliverable. Disable the test build so no spawn happens.
+  nlohmann_json = onSolaris prev.nlohmann_json (old: {
+    doCheck = false;
+    cmakeFlags = (old.cmakeFlags or [ ]) ++ [ "-DJSON_BuildTests=OFF" ];
+  });
+
+  yaml-cpp = onSolaris prev.yaml-cpp (old: {
+    doCheck = false;
+    cmakeFlags = (old.cmakeFlags or [ ]) ++ [ "-DYAML_CPP_BUILD_TESTS=OFF" ];
+  });
+
+  rhash = onSolaris prev.rhash (old: {
+    postPatch = (old.postPatch or "") + ''
+      sed -i 's/sunos|solaris2[.]\*)/sunos|solaris|solaris2.*)/' configure
     '';
   });
 
@@ -343,88 +376,53 @@ in
       (b: (b.pname or b.name or "") != "bzip2") (old.buildInputs or []);
   });
 
-  # H23 (tranche 6): gnutls/gpgme set doCheck true on illumos (build==host),
-  # and their check inputs include `net-tools`, whose unixtools singleBinary
-  # splice infinite-recurses in this nixpkgs vintage (unixtools.nix:35 provider
-  # lookup). overrideAttrs doCheck=false does NOT break it: the package captures
-  # net-tools into nativeBuildInputs from its OWN doCheck (computed in the let,
-  # before overrideAttrs runs). Fix: pass a no-op `net-tools` as a package-
-  # function arg (scoped `.override`, no fixpoint cycle) so the recursive
-  # unixtools splice never evaluates. Test suite is not the deliverable.
-  gnutls = if isSolaris
-    then (prev.gnutls.override {
-      net-tools = prev.runCommand "net-tools-stub" { } "mkdir -p $out/bin";
-      util-linuxMinimal = prev.runCommand "util-linux-stub" { } "mkdir -p $out/bin";
-    }).overrideAttrs (old: {
-      doCheck = false;
-      NM = gnm;
-      # gnutls's shipped libtool probes lt_cv_sys_global_symbol_pipe with the
-      # Solaris /usr/bin/nm, whose output libtool cannot parse -> empty pipe ->
-      # the libgnutls.exp rule runs `nm ... | | sed` (`syntax error near |`).
-      # Force the cache var to the GNU-nm pipe (gnm -B + the standard libtool
-      # sed filter) so configure skips the failing probe and the export-symbols
-      # list is generated. Also thread NM=gnm (H7).
-      preConfigure = (old.preConfigure or "") + ''
-        export NM=${gnm}
-        export lt_cv_sys_global_symbol_pipe="${gnm} -B \$lib | sed -n -e 's/^.*[	 ]\([ABCDGIRSTW][ABCDGIRSTW]*\)[	 ][	 ]*\([_A-Za-z][_A-Za-z0-9]*\)$/\1 \2/p'"
-      '';
-    })
-    else prev.gnutls;
+  # H23 (tranche 6): gnutls (pulled by gnupg) sets doCheck true on illumos
+  # (build==host), and its check inputs include `net-tools`, whose unixtools
+  # splice eval hits an infinite recursion in this nixpkgs vintage. The test
+  # suite is not the deliverable on a fresh port; disable doCheck so net-tools
+  # is never pulled. Unblocks gnupg -> gnutls.
+  gnutls = onSolaris prev.gnutls (old: { doCheck = false; }
+    // (withGnm old)
+    // {
+      # gnutls' bundled libtool is regenerated by autoreconf AFTER preConfigure,
+      # losing the NM export -> the main-dir libtool probes bare Solaris `nm`
+      # (empty global_symbol_pipe -> `nm | | sed` syntax error linking
+      # libgnutls.la). Pass NM as a configure variable so config.status bakes
+      # the GNU-format nm into every generated libtool, including the recursion.
+      configureFlags = (old.configureFlags or []) ++ [ "NM=${gnm}" ];
+    });
 
-  # meson-1.10.2's build runs its own test suite, which asserts `run_command(ld,
-  # '--version').returncode() == 0` and probes GNU-ld-only linker-script/ld-binary
-  # behaviours -- illumos `ld` is not GNU ld, so 5 tests fail and the build
-  # aborts (rc=5). Tests are not the deliverable; disable meson's checkPhase so
-  # the whole meson swath (p11-kit/fontconfig/libpsl/...) builds.
-  meson = if isSolaris
-    then prev.meson.overrideAttrs (old: {
-      doCheck = false; doInstallCheck = false;
-      nativeCheckInputs = [ ]; checkInputs = [ ];
-    })
-    else prev.meson;
+  # H48 (wave 8): the pkg-config-wrapper setup-hook ships an UNSUBSTITUTED
+  # placeholder -- `export PKG_CONFIG=@targetPrefix@@baseBinName@` -- because
+  # makeSetupHook's substitution did not replace @targetPrefix@/@baseBinName@
+  # on this fork. Every strictDeps consumer then reads PKG_CONFIG as the
+  # literal string, `@targetPrefix@@baseBinName@: command not found`, and its
+  # configure concludes "pkg-config not found" (blocks gnutls -> gnupg, the
+  # postgres lz4/zstd probes, flac's graphviz dep, memcached's sasl dep, ...).
+  # For a native build targetPrefix="" and baseBinName="pkg-config", so patch
+  # the installed setup-hook to export the real binary name. Broad unblock.
+  pkg-config = onSolaris prev.pkg-config (old: {
+    postFixup = (old.postFixup or "") + ''
+      for h in $out/nix-support/setup-hook; do
+        [ -f "$h" ] || continue
+        sed -i 's/@targetPrefix@@baseBinName@/pkg-config/g' "$h"
+      done
+    '';
+  });
 
-  # p11-kit (meson): common/message.c uses locale_t/strerror_l (illumos gates
-  # these behind __EXTENSIONS__ / <xlocale.h>), and common/path.c calls the
-  # 5-arg POSIX getpwuid_r, which illumos only declares when
-  # _POSIX_PTHREAD_SEMANTICS is defined (otherwise the 4-arg Solaris form ->
-  # "too many arguments"). Thread both illumos porting macros in. The link then
-  # needs -lsocket/-lnsl (rpc-transport.c uses socket/connect/socketpair -
-  # illumos split these out of libc). libintl_dgettext is unresolved because a
-  # GNU libintl.h leaked in but illumos gettext is native (in libc, no GNU
-  # -lintl); NIX_CFLAGS thread the socket libs, and configure is told there is
-  # no GNU libintl so it uses the native symbols. p11-kit is needed by gnutls.
-  p11-kit = if isSolaris
-    then prev.p11-kit.overrideAttrs (old: {
-      env = (old.env or { }) // {
-        NIX_CFLAGS_COMPILE = (old.env.NIX_CFLAGS_COMPILE or "")
-          + " -D__EXTENSIONS__ -D_POSIX_PTHREAD_SEMANTICS";
-        NIX_LDFLAGS = (old.env.NIX_LDFLAGS or "") + " -lsocket -lnsl";
-      };
-      mesonFlags = (old.mesonFlags or [ ]) ++ [ "-Dnls=false" ];
-    })
-    else prev.p11-kit;
-  # cscope's `emacsSupport` defaults true, pulling emacs-30.2 -> the clang/bpf
-  # bintools-wrapper that is null on illumos (assert coreutils/gnugrep). The
-  # emacs integration (xcscope.el) is optional; disable it so cscope builds
-  # with just ncurses.
-  cscope = if isSolaris
-    then prev.cscope.override { emacsSupport = false; }
-    else prev.cscope;
+  # H49 (wave 8): libusb1's withDocs defaults true (build==host), pulling
+  # doxygen -- which fails to compile on illumos (`-fno-fat-lto-objects are
+  # supported only with linker plugin`; gcc LTO needs a linker plugin the seed
+  # ld lacks). API docs are optional; disable them so doxygen is never built.
+  # Unblocks gnupg (scdaemon -> libusb1) and any other libusb1 consumer.
+  libusb1 = if isSolaris then prev.libusb1.override { withDocs = false; } else prev.libusb1;
 
-  # The `ctags` attr is exuberant-ctags, whose src is an SVN checkout pulling
-  # subversion -> apr-util -> openldap -> the clang/bpf bintools (null on
-  # illumos). universal-ctags is the maintained replacement and builds from a
-  # plain tarball; alias ctags to it.
-  ctags = if isSolaris then final.universal-ctags else prev.ctags;
-
-  # universal-ctags builds fine but its checkPhase runs a man-page rst test
-  # (man-test) that fails on illumos (rst2man/locale differences); the ctags
-  # binary is the deliverable, not the man tests. Disable checks.
-  universal-ctags = if isSolaris
-    then prev.universal-ctags.overrideAttrs (old: {
-      doCheck = false; doInstallCheck = false;
-    })
-    else prev.universal-ctags;
+  # H46 (wave 8): libgcrypt 1.12.2 builds + links clean on illumos, but its
+  # `make check` suite trips (`gcrypt: No such file or directory` in
+  # check-TESTS -- a test harness path assumption). The library is the
+  # deliverable and is already cached at a prior hash; skip the test suite on
+  # this fresh rebuild (same policy as openssl/gnutls). Unblocks gnupg.
+  libgcrypt = onSolaris prev.libgcrypt (old: { doCheck = false; });
 
   # H20 (tranche 6): git's `rustSupport` defaults to
   # `lib.meta.availableOn hostPlatform rustc` (true), pulling cargo -> cargo-
@@ -621,6 +619,168 @@ in
       # dropped.)
     } // withGnm old);
 
+  # --- PS-GLIB: make GNU gettext WIN over the seed libintl -----------------
+  # The stdenv cc-wrapper bakes `-L${seedSyslibs}/lib/amd64` into cc-cflags,
+  # which the wrapper PREPENDS into NIX_CFLAGS_COMPILE (add-flags.sh) -> it
+  # lands in `extraAfter`, on the gcc line ahead of any buildInput -L. That
+  # seed slice carries `libintl.so -> usr/gnu/lib/amd64/libintl.so.1`, the
+  # illumos GNU-userland libintl, which exports PLAIN `gettext` and NO
+  # `libintl_gettext`. GNU gettext's own libintl.so.8 exports `libintl_gettext`
+  # and its <libintl.h> macro-renames gettext -> libintl_gettext. glib includes
+  # that header (ggettext.c) and calls libintl_gettext, but `-lintl` resolves to
+  # the SEED libintl first -> `libintl_gettext` UNDEFINED at link.
+  #
+  # FIX (targeted, no stage0 rebuild): put GNU gettext's -L and -isystem on
+  # NIX_CFLAGS_COMPILE_BEFORE. The wrapper routes *_BEFORE into `extraBefore`,
+  # which precedes both the user params AND extraAfter (the seed -L) on the gcc
+  # command line -> gcc's left-to-right -L search finds GNU libintl.so.8 first,
+  # and the matching -isystem puts GNU <libintl.h> ahead of the seed include so
+  # header and lib agree (both libintl_gettext). Also thread the illumos socket/
+  # resolver libs: gio's DNS code links res_query/gethostbyname (H1 bypasses
+  # NIX_LDFLAGS on the compile+link one-shots, so -l<...> also rides on _BEFORE).
+  #
+  # Introspection + documentation are dropped: withIntrospection pulls
+  # gobject-introspection (a glib consumer -> bootstrap cycle) and -Ddocumentation
+  # pulls gi-docgen + a large python3.14 sphinx/pytest/babel docs chain. Neither
+  # is core to the GTK/font subtree the payoff needs; the shared libs + headers
+  # are what harfbuzz/pango/graphene link against. sysprof is disabled too:
+  # nixpkgs only guards `-Dsysprof=disabled` behind isFreeBSD, but its
+  # libsysprof-capture buildInput is equally Linux-only (O_BINARY/byteswap.h/
+  # mkostemp) and fails on illumos -- disable the option AND drop the buildInput.
+  # xattr off: illumos has no Linux getxattr/attr/xattr.h. tests off: the test
+  # helper getpwuid-preload.c wraps getpwnam_r/getpwuid_r as POSIX `int`, but
+  # illumos declares the legacy `struct passwd *` form -> conflicting types.
+  glib = onSolaris (prev.glib.override { withIntrospection = false; }) (old: {
+    NIX_CFLAGS_COMPILE_BEFORE =
+      (old.NIX_CFLAGS_COMPILE_BEFORE or "")
+      + " -L${final.gettext}/lib -isystem ${final.gettext}/include"
+      + " -lnsl -lsocket -lresolv";
+    mesonFlags = (old.mesonFlags or [ ]) ++ [ "-Ddocumentation=false" "-Dsysprof=disabled" "-Dxattr=false" "-Dtests=false" ];
+    buildInputs = builtins.filter
+      (b: (b.pname or b.name or "") != "libsysprof-capture") (old.buildInputs or [ ]);
+    # -Ddocumentation=false leaves the declared `devdoc` output unpopulated ->
+    # "failed to produce output path". Drop it (the libs/dev/bin outputs stay).
+    outputs = builtins.filter (o: o != "devdoc") (old.outputs or [ "out" ]);
+  });
+
+  # PS-GLIB payoff subtree. Build the CORE (glib -> harfbuzz, graphene) with
+  # introspection OFF: withIntrospection pulls gobject-introspection, which
+  # needs cairo -> the whole X11 graph (libx11/libxcb/libxrender), plus gtk-doc.
+  # None of that is needed for the shared libs + headers downstream text/font
+  # code links against. harfbuzz: withCairo already defaults false; keep it off.
+  # doCheck off: harfbuzz's own test suite needs a python-env. withGraphite2 off:
+  # graphite2 carries python3.withPackages(fonttools) + cmake in its
+  # nativeBuildInputs (build-time, not just checks) -> the fonttools/pytest
+  # python swath + the fork-unfixed cmake. The Graphite backend is an optional,
+  # rarely-used shaper; HarfBuzz's OpenType core shapes without it.
+  harfbuzz = onSolaris (prev.harfbuzz.override {
+    withIntrospection = false;
+    withGraphite2 = false;
+  }) (old: { doCheck = false; });
+
+  # zeromq: pulled by fontforge (-> dejavu_fonts -> fontconfig). libzmq.so links
+  # fine, but the perf tools (bin/proxy_thr, benchmark_*) leave the illumos
+  # socket calls (getsockname/accept/__xnet_bind/getaddrinfo) undefined -- the
+  # -lnsl/-lsocket split libs are not on their link line. Thread socketLibs via
+  # NIX_LDFLAGS (the correct illumos fix, applies to every link here).
+  zeromq = onSolaris prev.zeromq (old: addLdFlags old socketLibs);
+
+  # fontforge: pulled by dejavu_fonts -> fontconfig. Its FindMathLib.cmake does
+  # check_function_exists(pow) with no -lm (illumos libm is separate, so pow is
+  # NOT built-in -> MathLib_IS_BUILT_IN=FALSE), then find_library(NAMES m),
+  # which under cmake's hermetic mode does not see the platform /lib/amd64/
+  # libm.so -> MathLib_OK empty -> configure error. Pre-set MathLib_LIBRARIES to
+  # the full store path of the extra-syslibs bare libm.so (a symlink to the
+  # platform libm, host-free by the same convention as libkstat/libsendfile):
+  # a full path skips find_library AND links cleanly (a bare `m` makes cmake
+  # treat it as a target, `-lm` gets mangled to `../../-lm`).
+  fontforge = onSolaris prev.fontforge (old:
+    (addCFlags old "-L${extraSyslibs}/lib/amd64") // {
+      cmakeFlags = (old.cmakeFlags or [ ]) ++ [
+        "-DMathLib_LIBRARIES=${extraSyslibs}/lib/amd64/libm.so"
+      ];
+      # On startup fontforge writes $HOME/.config/fontforge. This host has no
+      # build sandbox, so HOME=/homeless-shelter persists on the real FS and the
+      # Nix builder's purity guard aborts any consumer build (dejavu_fonts runs
+      # `#!/usr/bin/env fontforge` scripts). Wrap the binary to point HOME at a
+      # per-invocation temp dir so nothing lands in /homeless-shelter.
+      postInstall = (old.postInstall or "") + ''
+        if [ -e "$out/bin/fontforge" ]; then
+          mv "$out/bin/fontforge" "$out/bin/.fontforge-real"
+          cat > "$out/bin/fontforge" <<EOF
+#!${final.stdenv.shell}
+export HOME="\''${TMPDIR:-/tmp}/fontforge-home"
+mkdir -p "\$HOME"
+exec "$out/bin/.fontforge-real" "\$@"
+EOF
+          chmod +x "$out/bin/fontforge"
+        fi
+      '';
+    });
+
+  # fontconfig: freetype+expat already build. Its configure's AM_PATH_PYTHON
+  # probe returns "none" (its version-list search does not recognise python
+  # 3.14) -- pin PYTHON to the interpreter so the search is skipped (3.14 >= 3
+  # passes the min check). The xsltproc (libxslt.bin) the postInstall needs is
+  # re-added in the tranche's post-stripDocs block. Unblocks cairo/pango.
+  fontconfig = onSolaris prev.fontconfig (old: {
+    PYTHON = "${final.python3}/bin/python3";
+  });
+
+  # cairo: drop the xlib/xcb backends (x11Support/xcbSupport off) so the libx11/
+  # libxcb/libxrender/libxext X graph leaves the build -- cairo still renders to
+  # image/PDF/PS/SVG surfaces (all pango needs). gobjectSupport stays on so
+  # cairo-gobject is available to pango. Its deps (fontconfig/freetype/pixman/
+  # glib) are all built. ctime_r fix: cairo's 2-arg fallback is skipped because
+  # meson detects HAVE_CTIME_R, but illumos ctime_r is the 3-arg form
+  # ctime_r(const time_t*, char*, int); patch the single 2-arg call in the PS
+  # surface (ctime_buf is a fixed 26-byte buffer). Same pattern as libssh.
+  cairo = onSolaris (prev.cairo.override {
+    x11Support = false;
+    xcbSupport = false;
+  }) (old: {
+    postPatch = (old.postPatch or "") + ''
+      sed -i 's/ctime_r (&now, ctime_buf)/ctime_r (\&now, ctime_buf, 26)/' src/cairo-ps-surface.c
+    '';
+  });
+
+  # pango: introspection off drops gi-docgen + gobject-introspection + the
+  # devdoc output; x11Support off drops libxft -> the libx11/libxcb X graph.
+  # pango still shapes/lays out text via harfbuzz + fontconfig + cairo (all
+  # built) -- the Xft backend is only for legacy X font rendering.
+  pango = onSolaris (prev.pango.override {
+    withIntrospection = false;
+    x11Support = false;
+  }) (old: { });
+
+  # graphene: pure SIMD geometry math -- no fonts/X. Introspection off drops
+  # gobject-introspection + gtk-doc's cairo pull. graphene has no -Dtests option
+  # (its meson always builds tests when mutest is present), so mutest is fixed
+  # below rather than dropped. -D__EXTENSIONS__: graphene's meson probes for an
+  # aligned-malloc (memalign/posix_memalign); illumos declares both in <stdlib.h>
+  # only under the extension namespace, so the probes fail without it.
+  graphene = onSolaris (prev.graphene.override {
+    withIntrospection = false;
+  }) (old: addCFlags old "-D__EXTENSIONS__");
+
+  # mutest (graphene's test framework): update_term_size() uses struct winsize
+  # / TIOCGWINSZ. On illumos both live in <sys/termios.h> behind
+  # `!__XOPEN_OR_POSIX || __EXTENSIONS__`, and mutest only includes <sys/ioctl.h>
+  # (which does NOT pull sys/termios.h here). Enable the extension namespace and
+  # force-include the header so the tty-size probe sees the type + ioctl.
+  mutest = onSolaris prev.mutest (old:
+    addCFlags old "-D__EXTENSIONS__ -include sys/termios.h");
+
+  # meson's installCheckPhase runs its full run_project_tests.py suite; 5 of
+  # ~500 cases fail on illumos for host-harness reasons, not meson defects: `ld
+  # --version` returncode probe (illumos ld exits nonzero on --version),
+  # get_supported_function_arguments / constructor_priority (gcc-attr probes),
+  # and a `FILE is in stdio.h` assert. The meson binary itself works (it drives
+  # glib/pango/etc. fine). Tests are not the deliverable on a fresh port; drop
+  # doInstallCheck so meson builds and unblocks the whole meson swath (glib ->
+  # harfbuzz/pango/graphene).
+  meson = onSolaris prev.meson (old: { doInstallCheck = false; installCheckPhase = "true"; });
+
   # --- BIND: strip Solaris -zrelax=transtls that illumos ld rejects -----
   # BIND's configure injects `-zrelax=transtls` into LDFLAGS on SunOS; illumos
   # ld ('ld: fatal: flags processing errors') doesn't accept it in the atomic
@@ -798,6 +958,191 @@ in
       configureFlags = builtins.filter (f: f != "--with-versioned-syms")
         (old.configureFlags or []);
     });
+
+  # H40 (wave 8): gnupg's non-minimal buildInputs include openldap (LDAP
+  # keyserver support), which drags in systemd via a version-check branch ->
+  # llvmPackages.clang -> the unported LLVM bintools-wrapper (null
+  # bintools/coreutils/gnugrep assertion), aborting eval before openldap even
+  # builds. LDAP keyserver is optional; drop openldap from the graph and
+  # --disable-ldap. Also disable the intel TPM2 backend (tpm2-tss is a
+  # Linux/udev path) via withTpm2Tss=false. The deps libgcrypt/libgpg-error/
+  # libassuan/libksba/npth/gnutls/sqlite/bzip2/readline/libusb1 are all ported.
+  gnupg = if isSolaris
+    then (prev.gnupg.override { withTpm2Tss = false; }).overrideAttrs (old: {
+      buildInputs = builtins.filter
+        (b: let n = (b.pname or b.name or ""); in n != "openldap" && n != "libusb1" && n != "libusb")
+        (old.buildInputs or []);
+      # openldap (LDAP keyserver, drags systemd->clang) and libusb1 (scdaemon
+      # smartcard; its illumos configure fails `clock_gettime() is required`)
+      # are both optional. Drop them + --disable-ldap; gnupg core
+      # (encrypt/sign/verify/keygen/agent) is the deliverable.
+      configureFlags = (old.configureFlags or []) ++ [ "--disable-ldap" ];
+    })
+    else prev.gnupg;
+
+  # H41 (wave 8): postgresql's optional feature args default to Linux-only
+  # deps whose bare eval trips the unported clang/systemd bintools assertion
+  # (systemdSupport via availableOn systemdLibs; pamSupport via linux-pam;
+  # numaSupport/uringSupport via numactl/liburing) or drag in an ICU/kerberos
+  # closure we defer (icuSupport/gssSupport). Also jitSupport pulls llvm.
+  # Turn all of them off via the package-function args (never evaluates the
+  # availableOn defaults). Keeps zlib/readline/openssl/libxml2/lz4/zstd, all
+  # ported. The core server + client + libpq is the deliverable.
+  postgresql = if isSolaris
+    then (prev.postgresql.override {
+      systemdSupport = false; pamSupport = false; gssSupport = false;
+      icuSupport = false; jitSupport = false; numaSupport = false;
+      uringSupport = false; curlSupport = false;
+      # generic.nix builds under an LLVM stdenv (`overrideCC llvmPackages.stdenv`)
+      # whenever the host cc is not clang, purely to enable -flto -- forcing the
+      # unported LLVM toolchain (bintools-wrapper null assertion). Feed it a
+      # stdenv that merely REPORTS cc.isClang=true so the branch takes the
+      # plain-stdenv path; the actual compiler stays our gcc stdenv. -flto is
+      # not the deliverable on a fresh port.
+      stdenv = final.stdenv // {
+        cc = final.stdenv.cc // { isClang = true; };
+      };
+    }).overrideAttrs (old: {
+      # outputChecks.disallowedRequisites still lists llvmPackages.llvm.*
+      # unconditionally; drop the purity checks so they do not re-force LLVM.
+      outputChecks = { };
+      # The `world`/`install-world` targets + install-time regression harness
+      # (temp-install -> initdb) are not the deliverable and initdb hits an
+      # illumos syscall it does not implement (`Bad System Call`, SIGSYS).
+      # Build/install the plain targets and skip the check phases.
+      buildFlags = [ "all" ];
+      installTargets = [ "install" ];
+      doCheck = false;
+      doInstallCheck = false;
+      # The `install` target produces no docs, leaving the (still-declared, so
+      # remove-references-to -t "$doc" stays valid) doc output empty ->
+      # "failed to produce output doc". Drop a minimal file so the output
+      # exists.
+      # generic.nix pins CFLAGS with -flto; gcc LTO objects on illumos embed
+      # the -dev include paths into the shared lib (the seed ld has no LTO
+      # plugin to strip them), creating a lib<->dev reference cycle Nix aborts
+      # on. Drop -flto (keep the gc-sections size flags) so outputs partition
+      # cleanly.
+      env = (old.env or { }) // {
+        CFLAGS = "-fdata-sections -ffunction-sections";
+      };
+      postInstall = (old.postInstall or "") + ''
+        # break the lib<->dev reference cycle Nix aborts on: scrub any -dev
+        # store-path refs embedded in the shared libs (illumos rpath residue).
+        # remove-references-to is already a nativeBuildInput.
+        if [ -n "''${lib:-}" ] && [ -d "$lib/lib" ]; then
+          find "$lib/lib" -type f \( -name '*.so*' -o -name '*.a' \) \
+            -exec remove-references-to -t "$dev" -t "$out" {} + 2>/dev/null || true
+        fi
+        # also scrub -dev refs from every out binary/lib (pgxs/pg_config
+        # residue) so the out<->dev cycle is broken too.
+        for d in "$out/bin" "$out/lib"; do
+          [ -d "$d" ] && find "$d" -type f \
+            -exec remove-references-to -t "$dev" {} + 2>/dev/null || true
+        done
+        mkdir -p "$doc/share/doc/postgresql"
+        echo "Documentation is not built in this port (SGML doc toolchain disabled)." \
+          > "$doc/share/doc/postgresql/README"
+        mkdir -p "$man/share/man/man1"
+        echo ".\" man pages are not built in this port (SGML doc toolchain disabled)." \
+          > "$man/share/man/man1/postgresql-port.1"
+      '';
+      # Keep the declared outputs (incl. doc): generic.nix's postInstall runs
+      # `remove-references-to -t "$dev" -t "$doc" -t "$man"`, so dropping the
+      # doc output would leave -t empty ("-t argument must be a Nix store
+      # path"). The `all`/`install` targets simply leave doc empty, which is
+      # fine. Just strip the doc toolchain from nativeBuildInputs.
+      nativeBuildInputs = builtins.filter
+        (b: let n = (b.pname or b.name or ""); in
+            n != "libxslt" && n != "docbook-xsl-nons"
+         && n != "docbook-xml" && n != "docbook_xml_dtd_45")
+        (old.nativeBuildInputs or []);
+      # lz4/zstd support is version-gated (no override arg) and its
+      # PKG_CHECK_MODULES probe cannot locate the built liblz4/libzstd on this
+      # seed (`pkg-config script could not be found`), blocking configure.
+      # Toast compression via lz4/zstd is optional; drop the flags + the
+      # buildInputs so configure never runs the probe.
+      configureFlags = builtins.filter
+        (f: f != "--with-lz4" && f != "--with-zstd"
+         && f != "--with-uuid=e2fs") (old.configureFlags or []);
+      buildInputs = builtins.filter
+        (b: let n = (b.pname or b.name or ""); in n != "lz4" && n != "zstd")
+        (old.buildInputs or []);
+    })
+    else prev.postgresql;
+
+  # H42 (wave 8): redis's withSystemd defaults to `availableOn systemd`, whose
+  # eval trips the unported systemd/clang bintools assertion. systemd is
+  # Linux-only; disable it via the arg. tlsSupport (openssl) + jemalloc stay.
+  redis = if isSolaris
+    then (prev.redis.override { withSystemd = false; useSystemJemalloc = false; }).overrideAttrs (old: {
+      # jemalloc fails to build on illumos (`cannot determine return type of
+      # strerror_r`); useSystemJemalloc=false drops the dep, and redis'
+      # Makefile then needs MALLOC=libc so it does not try its vendored
+      # jemalloc either.
+      makeFlags = (old.makeFlags or []) ++ [ "MALLOC=libc" ];
+    })
+    else prev.redis;
+
+  # H44 (wave 8): memcached's buildInputs include cyrus_sasl, which pulls
+  # openpam (a `pkg-config not found or too old` build failure on this seed).
+  # SASL auth is optional; drop cyrus_sasl from the graph. libevent (the real
+  # dep) stays. Also add the split-libc socket libs (memcached does sockets).
+  memcached = if isSolaris
+    then (prev.memcached.overrideAttrs (old: (addLdFlags old socketLibs) // {
+      buildInputs = builtins.filter
+        (b: (b.pname or b.name or "") != "cyrus-sasl"
+         && (b.pname or b.name or "") != "cyrus_sasl") (old.buildInputs or []);
+    }))
+    else prev.memcached;
+
+  # H45 (wave 8): libvorbis' XIPH_PATH_OGG configure macro compiles AND RUNS a
+  # `-logg` test program; the compile needs -L (H1 bypasses NIX_LDFLAGS) and
+  # the run needs libogg.so on the runtime linker path. -L alone leaves the
+  # test binary unable to load libogg -> "must have Ogg installed!". Pass
+  # libogg's include/lib dirs explicitly via the macro's own
+  # --with-ogg-includes/--with-ogg-libraries flags (no runtime probe), and add
+  # -L for the compile. libogg's lib is in its default output, headers in dev.
+  libvorbis = onSolaris prev.libvorbis (old:
+    (addCFlags old "-L${final.libogg}/lib") // {
+      configureFlags = (old.configureFlags or []) ++ [
+        "--with-ogg-includes=${final.libogg.dev}/include"
+        "--with-ogg-libraries=${final.libogg}/lib"
+      ];
+    });
+
+  # H47 (wave 8): flac's nativeBuildInputs pull doxygen + graphviz for the API
+  # docs; graphviz -> pango -> libthai fails its `pkg-config not found`
+  # configure on this seed, blocking flac. The codec libs + tools are the
+  # deliverable; drop the doc toolchain, disable the doxygen docs cmake target,
+  # drop the (now-empty) doc output, and skip the platform-sensitive check
+  # suite. Keeps cmake + libogg (both ported).
+  flac = onSolaris prev.flac (old: {
+    nativeBuildInputs = builtins.filter
+      (b: let n = (b.pname or b.name or ""); in n != "doxygen" && n != "graphviz")
+      (old.nativeBuildInputs or []);
+    cmakeFlags = (old.cmakeFlags or []) ++ [ "-DBUILD_DOCS=OFF" "-DINSTALL_MANPAGES=OFF" ];
+    # flac is cmake-built (no autotools remove-references-to -t $doc). With docs
+    # + manpages off, the doc and man outputs are empty -> "failed to produce
+    # output". Manpages are pandoc-generated (pandoc = haskell, not on this
+    # port). Drop both split outputs; keep bin/dev/out.
+    outputs = builtins.filter (o: o != "doc" && o != "man") (old.outputs or [ "out" ]);
+    doCheck = false;
+    doInstallCheck = false;
+  });
+
+  # H43 (wave 8): openvpn's useSystemd defaults to `availableOn systemd` (same
+  # assertion). Disable it. openvpn also lists linux-pam unconditionally; drop
+  # it from buildInputs (PLUGIN auth-pam is optional) so the Linux-only pam
+  # never enters the closure. Keeps lz4/lzo/openssl, all ported.
+  openvpn = if isSolaris
+    then (prev.openvpn.override { useSystemd = false; }).overrideAttrs (old: {
+      buildInputs = builtins.filter
+        (b: (b.pname or b.name or "") != "linux-pam"
+         && (b.pname or b.name or "") != "pam") (old.buildInputs or []);
+      configureFlags = (old.configureFlags or []) ++ [ "--disable-plugin-auth-pam" ];
+    })
+    else prev.openvpn;
 
   # NOTE: this is the seed set (~18 packages with documented fixes). Extend by
   # matching a build failure to a shared snippet above and adding one

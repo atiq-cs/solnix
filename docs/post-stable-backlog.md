@@ -438,3 +438,12 @@ its libintl/gettext so GNU gettext wins), which is a STAGE0 change that reinvali
 (unblocks the GTK/font/desktop subtree). Also: enableMinimal on gnupg avoids the null-bintools
 llvmPackages.clang eval trap (openldap/gnutls/libusb deps); the clangStdenv-eval-assertion class
 (capnproto/nlopt/pinentry/rich->matplotlib) is a separate stdenv-eval gate to fix.
+
+## PS-STRUCTUREDATTRS-2316 (2026-08-07): meson blocked on sparc by Nix 2.3.16 buildEnv
+sparc tranche-9: python3 COMPLETED (+_bz2/_lzma via real shared bzip2/xz -- proven import bz2,lzma) +
+gnupg deps (npth/libassuan/libksba) + ninja/re2c/zsh. meson BLOCKED: pkgs.buildEnv hard-codes
+__structuredAttrs=true (builder.pl dies without NIX_ATTRS_JSON_FILE) + its list-of-sets attrs can't
+flatten to plain env -- a Nix-2.3.16 infra gap (2.24 has native structuredAttrs, so meson works on the
+x86 2.24 lineage). FIX for sparc: migrate sparc to Nix 2.24 (the deferred sparc-2.24 migration), OR a
+structuredAttrs-free buildEnv reimpl for 2.3.16. gnupg on sparc blocked on freepgPatches gitlab %-URL
+(shim store-name). Both are 2.3.16-lineage limits -> the real fix is the sparc 2.24 migration.
