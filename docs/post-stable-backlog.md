@@ -494,3 +494,25 @@ ena has a DHCP lease; sentinel /var/lib/solnix/net-ok), re-cut, re-measure (targ
 lift reliability toward the ~100% first-boot-DHCP rate -- this is likely the LAST real AMI blocker (the
 determinism was already fixed; this is the reboot amplifier). Residual after this = pure per-boot ena
 driver flake (small, upstream, needs newer ena driver).
+
+## PS-EC2-ENA-DRIVER (2026-08-08): DEFINITIVE — reliable EC2 cold-launch needs a newer illumos ena driver
+FINAL diagnosis of the AMI cold-launch reliability. Two shim bugs FIXED (committed):
+  1. dual-DHCP-addrobj bind conflict (ena0/dhcp + ena0/v4) -> collision. FIXED.
+  2. false-negative reboot: shim cur_ip parsed the ADDR column, which reads '?' on the flaky ena path
+     even when STATE=ok -> shim thought "no address" + rebooted a host that HAD a lease -> re-rolled
+     the ena dice. FIXED (gate on installed IPv4 not STATE; net-ok sentinel; bounded reboot counter).
+     Reboot-on-good-lease ELIMINATED (passing hosts boot exactly once).
+THE REAL CEILING (NOT software-fixable): on a large fraction of fresh cold launches the 2021-vintage
+gate ena driver brings the LINK up (ena0 link up 1000Mbps) but NO PACKET FLOWS -- dhcpagent never
+completes a lease (ena0 bad address 0.0.0.0, no dhcp_bound), and NOTHING in-OS recovers it (svcadm
+restart network/physical, ipadm disable/enable-if, pkill+recreate dhcpagent all leave it wedged; even
+IMDS 169.254.169.254 is unreachable so a static-from-metadata fallback is impossible). The failure is
+mostly per-host-persistent, so reboots don't converge. Pass rate on the best AMI (ami-01dbb2a6a5e56cee6,
+rebootfix-v12): DHCP-window-dependent, 0-4/14 -- NOT release-grade.
+VERDICT: the EC2 AMI is NOT reliably cold-launchable until the illumos ena driver is updated (gate
+17939+ / a newer ena data-path) OR a VPC-DHCP-independent bring-up is engineered. This is an UPSTREAM
+illumos-on-Nitro limitation, not a solnix packaging bug. The shim fixes are correct + committed; do NOT
+iterate further on the shim. NEXT WORK ITEM: newer ena driver. MEANWHILE: local-hardware (ISO+IMG) is
+the reliable install path; the AMI works but with a low/variable fresh-launch success rate (retry-launch
+until one sticks, or use a working instance as a golden image via stop/start... which also doesn't fully
+recover -- so retry-launch is the practical workaround).
