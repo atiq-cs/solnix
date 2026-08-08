@@ -467,3 +467,17 @@ release.
 NOTE: ISO+IMG (local hardware) boot fine in QEMU (different first-boot path) -- this is EC2-fresh-launch
 specific. The personal test instance 3.12.148.116 works because it was brought up through the build flow
 (not a cold AMI launch).
+
+## PS-FIRSTBOOT-NETWORK UPDATE (2026-08-08): deterministic failure FIXED; residual driver flake remains
+Root cause of the 9/10 first-boot hang: DUAL DHCP addrobj on ena0 (ena0/dhcp AND ena0/v4, both persisted
+from the builder the AMI was snapshotted from) -> dhcpagent binds both -> collision -> no lease ->
+"Hostname: unknown" -> no sshd. Secondary: no default route (ssh "filtered"); sshd/cryptosvc in maintenance.
+FIX (committed): scripts/metadata-shim.sh (self-heal every boot -- strip ena0/v4, add default route,
+svcadm clear before enable, backgrounded retry worker so the SMF method exits fast) + beef/ouch-make-base-
+ami.sh (strip ena0/v4 + stale lease/duid at bake). New AMI ami-0281fec66ad81824f: fresh m5.large+t3.large+
+c5.xlarge PASS, no manual reboot -- the deterministic dual-addrobj class is FIXED.
+RESIDUAL (honest, NOT guest-fixable): on a fraction of fresh launches the 2021-vintage gate ena driver
+reports link-up but the DHCP exchange gets no response (ipadm refresh-addr times out); reboot/stop-start
+don't recover. This is the known gate-ena cold-launch flake -> needs the NEWER illumos ena driver
+(gate 17939+) or a driver-level fix. So fresh EC2 launch is now MOSTLY reliable (deterministic blocker
+gone) but not 100% until the ena driver is updated -- a real upstream illumos-EC2 limitation.
