@@ -145,6 +145,22 @@ zfs set mountpoint=legacy "$BE"
 mkdir -p /mnt/be; mount -t zfs "$BE" /mnt/be
 # 1. metadata-shim: replace the IMDSv1 metadata agent (beef org-enforces IMDSv2)
 install -m 0755 /tmp/metadata-shim.sh /mnt/be/usr/lib/metadata
+# 1b. FRESH-LAUNCH NETWORK RELIABILITY (PS-FIRSTBOOT-NETWORK): a solnix AMI is a
+#     snapshot of a live builder, so the BE inherits that builder's per-instance
+#     network state. The killer is a DUAL DHCP addrobj in /etc/ipadm/ipadm.conf
+#     (both ena0/dhcp AND ena0/v4): dhcpagent binds both on one NIC, they
+#     collide ("cannot set IP address ... Cannot assign requested address" ->
+#     "dhcp_bound failed") and no lease comes up -> "Hostname: unknown", no net,
+#     sshd unreachable on ~9/10 fresh launches. Keep exactly ONE ena0/dhcp
+#     addrobj and drop the stale lease/identifiers so a fresh boot re-DHCPs
+#     cleanly. (The shim also self-heals this at every boot, but scrub the image
+#     too so the very first boot is clean.)
+if [ -f /mnt/be/etc/ipadm/ipadm.conf ]; then
+  grep -v '_aobjname=ena0/v4' /mnt/be/etc/ipadm/ipadm.conf > /mnt/be/etc/ipadm/ipadm.conf.new \
+    && mv /mnt/be/etc/ipadm/ipadm.conf.new /mnt/be/etc/ipadm/ipadm.conf
+fi
+rm -f /mnt/be/etc/dhcp/*.dhc /mnt/be/etc/dhcp/duid /mnt/be/etc/dhcp/iaid 2>/dev/null || true
+rm -f /mnt/be/var/lib/solnix/first-boot-net-rebooted /mnt/be/var/lib/solnix/first-boot-net-reboots /mnt/be/var/lib/solnix/net-ok 2>/dev/null || true
 # 2. ena driver -> Nitro NIC.  inject module+conf+aliases+major into the BE.
 install -m 0755 -o 0 -g 3 /tmp/ena     /mnt/be/kernel/drv/amd64/ena
 install -m 0644 -o 0 -g 3 /tmp/ena.conf /mnt/be/kernel/drv/ena.conf
