@@ -481,3 +481,16 @@ reports link-up but the DHCP exchange gets no response (ipadm refresh-addr times
 don't recover. This is the known gate-ena cold-launch flake -> needs the NEWER illumos ena driver
 (gate 17939+) or a driver-level fix. So fresh EC2 launch is now MOSTLY reliable (deterministic blocker
 gone) but not 100% until the ena driver is updated -- a real upstream illumos-EC2 limitation.
+
+## PS-FIRSTBOOT-NETWORK v2 (2026-08-08): the SHIM'S REBOOT is the dominant failure (fixable, dispatched)
+Quantified ami-0281fec66ad81824f: ~29% (4/14) cold-launch success. DEFINITIVE root cause from console:
+PASS <=> boots=1/reboots=0; FAIL <=> boots=2/reboots=1. ALL 14 got DHCP on the FIRST boot (dual-addrobj
+fix CONFIRMED good). But an unconditional-ish reboot takes a host WITH a good lease and re-rolls the ena
+DHCP dice -> ~7/10 lose the 2nd roll ("Hostname: unknown"). So the reboot AMPLIFIES the residual ena
+flake instead of fixing anything. The shim's reboot is SUPPOSED to be conditional (only if no IP) -- so
+either cur_ip races/mis-detects the bound lease, or a SEPARATE base-image reboot fires. FIX (dispatched
+1940811e): recovery-mount to find the exact reboot trigger, make it truly conditional (never reboot if
+ena has a DHCP lease; sentinel /var/lib/solnix/net-ok), re-cut, re-measure (target >=8/10). Expected to
+lift reliability toward the ~100% first-boot-DHCP rate -- this is likely the LAST real AMI blocker (the
+determinism was already fixed; this is the reboot amplifier). Residual after this = pure per-boot ena
+driver flake (small, upstream, needs newer ena driver).
