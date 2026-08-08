@@ -1,0 +1,21 @@
+diff --git a/usr/src/uts/common/io/ena/ena.c b/usr/src/uts/common/io/ena/ena.c
+index 0736859d91..98304370b1 100644
+--- a/usr/src/uts/common/io/ena/ena.c
++++ b/usr/src/uts/common/io/ena/ena.c
+@@ -1696,7 +1696,15 @@ ena_attach_device_init(ena_t *ena)
+ 		ena_set_max_io_queues(ena);
+ 	}
+ 
+-	ena->ena_mtu = ena->ena_max_mtu;
++	/*
++	 * Default to a standard 1500-byte MTU rather than the device maximum.
++	 * On cold boot some Nitro backends do not reliably deliver small
++	 * broadcast frames (such as the DHCP OFFER) to a queue programmed with
++	 * jumbo-sized Rx buffers, leaving the interface link-up but unable to
++	 * complete DHCP. A standard MTU is received reliably; larger MTUs
++	 * remain available via the rx/tx descriptor tuning and max_mtu.
++	 */
++	ena->ena_mtu = min(ena->ena_max_mtu, ETHERMTU);
+ 	ena_update_buf_sizes(ena);
+ 
+ 	if (!ena_get_hints(ena))

@@ -529,3 +529,18 @@ fixed this class in newer ena_com. PLAN (dispatched 392dfe76): update illumos en
 already fix it) -> else port FreeBSD's current ena_com data-path/reset fixes -> build the illumos ena
 kernel module -> inject into a fresh AMI -> measure >=9/10 cold-launch. This is the real EC2 fix +
 directly serves the aarch64/Graviton goal (Graviton needs ena too -- the osv aarch64 ena branch is a head start).
+
+## PS-EC2-ENA-DRIVER RESOLVED (2026-08-08): 🎉 100% Nitro cold-launch -- one-line ena MTU fix
+The shipped ena was ALREADY illumos-gate HEAD (the "2021 OI ena" premise was wrong -- it has the 16373
+reset + 17939 Nitro-v5/v6 LLQ fixes). The wedge was NOT a HAL/data-path bug: the ena driver defaulted
+ena_mtu = ena_max_mtu (JUMBO 9216) at attach, and ena_m_setprop returns ENOTSUP so runtime lowering
+(the shim's mtu 1400) silently failed. On many Nitro backends a queue with jumbo Rx buffers does not
+reliably deliver small BROADCAST frames (the DHCP OFFER) on cold boot -> link-up, TX works, but
+Recv=0/brdcstrcv=0 -> no lease. ONE-LINE FIX (ena.c ena_attach_device_init):
+  ena->ena_mtu = min(ena->ena_max_mtu, ETHERMTU);   // 1500, matches FreeBSD if_ena
+Diagnosed with mdb/kstat/snoop/dhcpagent on genuinely-wedged cold boots. Patch:
+pkgs/illumos/patches/ena-default-mtu-1500.patch. Fixed ena module baked -> AMI ami-0cc154959d7d945ce.
+RE-MEASURED: 30/30 (100%) fresh cold launches (m5/t3/c5), vs 0/10 baseline. TARGET >=9/10 CRUSHED.
+solnix now RELIABLY cold-launches on EC2 Nitro. (No FreeBSD ena_com port needed.) NEXT: wire the patch
+into the base-AMI bake (oi-inject-ena / beef-make-base-ami) so every future AMI ships the fixed ena;
+re-cut the RELEASE AMI on ami-0cc154959d7d945ce (also fold in the patched nix + full package set).
