@@ -1582,9 +1582,71 @@ EOF
 
   # mtr: msg_control/msg_controllen on struct msghdr are XPG4.2 fields, hidden
   # unless __EXTENSIONS__/_XOPEN_SOURCE is set on illumos.
-
-  # mtr: msg_control/msg_controllen on struct msghdr are XPG4.2 fields, hidden
-  # unless __EXTENSIONS__/_XOPEN_SOURCE is set on illumos.
   mtr = onSolaris prev.mtr (old: addCFlags old illumosExtFlags);
+
+  # ---- wave15: gate-free CLI/sysadmin/shell tools -------------------------
+
+  # mc (Midnight Commander): gpm (Linux console mouse, needs linux/kd.h) and
+  # e2fsprogs (Linux ioctl ifr_hwaddr) don't build on illumos; libx11 pulls X.
+  # Drop all three + the ext2-undelete vfs and gpm-mouse; ship the non-X slang
+  # UI. __EXTENSIONS__ for the POSIX/BSD symbols mc's vfs touches.
+  mc = if isSolaris then
+    ((prev.mc.override { gpm = null; e2fsprogs = null; x11Support = false; })
+      .overrideAttrs (old:
+        (addCFlags old "-D__EXTENSIONS__") // {
+          buildInputs = builtins.filter
+            (d: let n = d.pname or d.name or ""; in
+              !(lib.hasInfix "gpm" n || lib.hasInfix "e2fsprogs" n
+                || lib.hasInfix "libX11" n || lib.hasInfix "libx11" n))
+            (old.buildInputs or []);
+          configureFlags = (old.configureFlags or []) ++
+            [ "--without-gpm-mouse" "--disable-vfs-undelfs" "--without-x" ];
+        }))
+    else prev.mc;
+
+  # tree: illumos <pwd.h> already defines `struct comment`; tree.h redefines it.
+  # Rename tree's struct out of the collision (+ __EXTENSIONS__ for strcasecmp).
+  tree = onSolaris prev.tree (old:
+    (addCFlags old "-D__EXTENSIONS__") // {
+      postPatch = (old.postPatch or "") + ''
+        substituteInPlace tree.h --replace "struct comment {" "struct tree_comment {"
+        for f in *.c tree.h; do
+          substituteInPlace "$f" --replace "struct comment " "struct tree_comment " || true
+        done
+      '';
+    });
+
+  # ugrep: bzip3 (arch intrinsics / "platform not supported") fails to build on
+  # illumos. ugrep autodetects compression libs; drop bzip3 and it builds fine.
+  ugrep = onSolaris prev.ugrep (old: {
+    buildInputs = builtins.filter
+      (d: !(lib.hasInfix "bzip3" (d.pname or d.name or "")))
+      (old.buildInputs or []);
+  });
+
+  # most: its Makefile runs `install -s`; strip dies with SIGSYS in the sandbox
+  # kernel. Strip the -s from the install rule so it installs unstripped.
+  most = onSolaris prev.most (old: {
+    dontStrip = true;
+    postPatch = (old.postPatch or "") + ''
+      substituteInPlace src/Makefile.in --replace " -s " " " || true
+    '';
+  });
+
+  # abduco: Makefile links -lutil, but illumos has no libutil (abduco ships
+  # forkpty-sunos.c). Its session server also uses sockets (-lsocket/-lnsl), and
+  # struct winsize/TIOC* live in <sys/termios.h> gated behind __EXTENSIONS__
+  # (abduco compiles with -D_XOPEN_SOURCE=700). LDFLAGS_STD=-lc drops -lutil.
+  abduco = onSolaris prev.abduco (old: {
+    env = (old.env or {}) // {
+      NIX_CFLAGS_COMPILE = lib.concatStringsSep " "
+        (lib.filter (s: s != "")
+          [ (old.env.NIX_CFLAGS_COMPILE or "") "-D__EXTENSIONS__ -include sys/termios.h" ]);
+      NIX_LDFLAGS = lib.concatStringsSep " "
+        (lib.filter (s: s != "")
+          [ (old.env.NIX_LDFLAGS or "") "-L/lib/64 ${socketLibs}" ]);
+    };
+    makeFlags = (old.makeFlags or []) ++ [ "LDFLAGS_STD=-lc" ];
+  });
 
 }
