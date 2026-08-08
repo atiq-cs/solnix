@@ -41,6 +41,14 @@
 final: prev:
 let
   lib = final.lib;
+  # curl for the in-builder raw download (fetchpatch path). Uses the already-built
+  # curl from the pkg set (`final.curl`), lazily: only forced when a package
+  # actually carries a postFetch (fetchpatch). NOTE: curl's OWN src must not need
+  # this path (else a cycle) -- curl's src is a plain hash-pinned tarball
+  # (fetchurl, no postFetch), so it takes the fetchFirst branch and never forces
+  # final.curl. CA trust: sandbox=false, so the builder inherits the daemon's
+  # NIX_SSL_CERT_FILE (nix.conf ssl-cert-file); curl reads CURL_CA_BUNDLE from it.
+  solnixCurl = final.curl.bin or final.curl;
   mirrors = import (forkPath + "/pkgs/build-support/fetchurl/mirrors.nix");
   # httpOnly: keep only http(s) mirrors, and DROP ftpmirror.gnu.org — it 502s
   # from illumos hosts, and builtins.tryEval cannot catch a builtins.fetchurl IO
@@ -71,24 +79,6 @@ let
                  });
          in if r.success then r.value
             else fetchFirst name sha256 (builtins.tail cands);
-  # try each candidate url with builtins.fetchTarball (PURE): fetch + unpack +
-  # strip-single-root + recursive-hash in one step, exactly what fetchzip
-  # (fetchFromGitHub/fetchFromGitLab) does. The recorded SRI hash is of the
-  # UNPACKED+stripped tree, which builtins.fetchTarball reproduces, so this needs
-  # NO --impure (unlike the raw fetchurl-without-hash path). First success wins.
-  # builtins.fetchTarball returns a bare PATH; fetchFromGitLab does
-  # `(fetcher args) // { meta = ...; }`, and `//` requires an attrset LHS. So
-  # wrap the path in a derivation-like set: outPath makes string-coercion +
-  # `${src}` work, type/name/drvPath keep isDerivation-style consumers happy.
-  fetchTarballFirst = name: sha256: cands:
-    if cands == [] then throw "fetchurl-shim: all urls failed (tarball) for ${name}"
-    else let r = builtins.tryEval (builtins.fetchTarball {
-                   inherit name sha256; url = builtins.head cands;
-                 });
-         in if r.success
-            then { outPath = r.value; type = "derivation"; inherit name;
-                   outputName = "out"; }
-            else fetchTarballFirst name sha256 (builtins.tail cands);
   # try each candidate url IMPURELY (no hash) — used for the fetchpatch path
   # where the recorded hash is of the POST-normalized patch, not the raw
   # download, so builtins.fetchurl can't verify the raw bytes. First fetch wins.
@@ -112,36 +102,58 @@ let
           s;
     in if lib.hasPrefix "." cleaned then "s" + cleaned else cleaned;
 
-  # H18 (tranche 6): fetchpatch calls fetchurl with a `postFetch` that
-  # normalizes the patch (decode + lsdiff/filterdiff), and the sha256 it passes
-  # is of that NORMALIZED output. Our builtins.fetchurl shim only downloads the
-  # RAW file and hashes THAT -> `hash mismatch` for every fetchpatch (libev,
-  # libevent, libxml2, ... -> nghttp2/curl/gnutls/unbound -> git/curl/openssh/
-  # gnupg/cmake/libxslt). Fix: when `postFetch` is present, fetch raw impurely
-  # (no hash) then run postFetch in a fixed-output derivation verified against
-  # the recorded sha256 — exactly what real fetchurl does, minus the curl
-  # downloader (the recursion we avoid). The adapted stdenvNoCC handles /setup.
-  postFetchFOD = args: raw:
+  # H18 (tranche 6) + PURE-EVAL FIX: fetchpatch calls fetchurl with a
+  # `postFetch` that normalizes the patch (decode + lsdiff/filterdiff), and the
+  # sha256 it passes is of that NORMALIZED output, not the raw download. The old
+  # shim fetched the raw at EVAL TIME via a hashless `builtins.fetchurl` (it
+  # cannot know the raw hash, only the post-normalized one) -- but a hashless
+  # `builtins.fetchurl` is ILLEGAL in pure evaluation mode
+  # ("fetchurl requires a 'sha256' argument"), so any package carrying a
+  # fetchpatch (wget's CVE patches, libev/libevent/libxml2 -> nghttp2/curl/
+  # gnutls/... -> git/openssh/gnupg/cmake) broke `nix profile install` without
+  # --impure. FIX: don't fetch the raw at eval time at all. Build a SINGLE
+  # fixed-output derivation keyed on the KNOWN post-normalized outputHash, and
+  # download the raw INSIDE the builder with curl (then run postFetch to
+  # normalize). This is exactly what real nixpkgs fetchurl does -- minus building
+  # curl from scratch (we use the already-built curl passthru), which is the
+  # recursion the eval-time shim was avoiding. Pure-eval-safe: the FOD's
+  # outputHash pins the result; no hashless eval-time fetch remains.
+  postFetchFOD = args: cands:
     let
       sha256 = args.hash or args.sha256 or (throw "fetchurl-shim: no hash");
-      name = args.name or (baseNameOf (toString raw));
+      name = args.name or (baseNameOf (builtins.head cands));
       # fetchzip sets downloadToTemp=true + recursiveHash=true: the raw file is
       # placed at $downloadedFile (NOT $out) and postFetch builds $out as a
       # directory hashed recursively. fetchpatch uses $out directly, flat hash.
       toTemp = args.downloadToTemp or false;
       recursive = args.recursiveHash or false;
+      # try each candidate url in the builder until curl succeeds (mirrors +
+      # flaky-host tolerance, same as the eval-time fetchFirst did).
+      curlDownload = dest: ''
+        _ok=
+        _ca="''${NIX_SSL_CERT_FILE:-''${SSL_CERT_FILE:-/nix-tools224/ca-bundle.crt}}"
+        if [ ! -f "$_ca" ]; then _ca=/nix-tools224/ca-bundle.crt; fi
+        for _u in ${lib.concatMapStringsSep " " (u: lib.escapeShellArg u) cands}; do
+          if curl -fsSL --cacert "$_ca" --retry 3 --connect-timeout 30 -o "${dest}" "$_u"; then _ok=1; break; fi
+        done
+        [ -n "$_ok" ] || { echo "fetchurl-shim: all urls failed for ${name}" >&2; exit 1; }
+      '';
     in final.stdenvNoCC.mkDerivation {
       inherit name;
-      nativeBuildInputs = args.nativeBuildInputs or [];
+      # curl (already built) for the raw download; plus any patch-tooling
+      # (patchutils for filterdiff/lsdiff) the postFetch needs. CA trust comes
+      # from the inherited NIX_SSL_CERT_FILE (sandbox=false); point curl's
+      # CURL_CA_BUNDLE at it in the download step.
+      nativeBuildInputs = [ solnixCurl ] ++ (args.nativeBuildInputs or []);
       buildCommand =
         (if toTemp
          then ''
            downloadedFile="$TMPDIR/${name}"
-           cp ${raw} "$downloadedFile"
+           ${curlDownload "$downloadedFile"}
            chmod +w "$downloadedFile"
          ''
          else ''
-           cp ${raw} "$out"
+           ${curlDownload "$out"}
            chmod +w "$out"
          '')
         + (args.postFetch or "");
@@ -180,20 +192,8 @@ let
       sha256 = args.hash or args.sha256
         or (throw "fetchurl-shim: no hash/sha256");
       name = args.name or (baseNameOf (builtins.head cands));
-    in
-       # fetchzip signature (fetchFromGitHub/GitLab): downloadToTemp +
-       # recursiveHash. The recorded hash is of the unpacked+stripped tree, which
-       # builtins.fetchTarball reproduces PURELY — no raw hashless fetch needed.
-       # Only when stripRoot is left default (true): fetchTarball always strips a
-       # single root, matching fetchzip's default. Falls through to the impure
-       # raw path if stripRoot is explicitly false or the tarball fetch fails.
-       if (args.downloadToTemp or false) && (args.recursiveHash or false)
-          && (args.stripRoot or true)
-       then let r = builtins.tryEval (fetchTarballFirst name sha256 cands);
-            in if r.success then r.value
-               else postFetchFOD args (fetchFirstImpure (name + "-raw") cands)
-       else if (args.postFetch or "") != ""
-       then postFetchFOD args (fetchFirstImpure (name + "-raw") cands)
+    in if (args.postFetch or "") != ""
+       then postFetchFOD args cands
        else fetchFirst name sha256 cands;
 in {
   fetchurl = shimFetch;
