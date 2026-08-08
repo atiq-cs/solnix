@@ -141,3 +141,14 @@ does not change the amd64-first ordering.
 Re-check these before relying on them (they drift): current illumos-gcc primary
 version; current gate SPARC buildability; aarch64 port merge status; whether KVM
 is anywhere but SmartOS. Prefer primary sources (illumos-gate, the fork repos).
+
+## Cloud NIC MTU policy (LESSON — do not repeat)
+Cloud/virtual NICs (ena/vioif/gve/…) must: (1) DEFAULT to a boot-safe MTU 1500 at driver
+attach (NOT the device max -- jumbo Rx buffers drop small broadcast DHCP-OFFER frames on
+Nitro cold boot -> no lease -> unreachable, cost solnix a ~29% cold-launch rate); (2) support
+MAC_PROP_MTU at RUNTIME (the ena bug: ena_m_setprop returned ENOTSUP, so the default was
+permanent + un-lowerable); (3) RAISE to the path-supported max (9001 within-VPC on Nitro,
+clamped to ena_max_mtu) AFTER DHCP, via an evidence-based first-boot service that probes
+reachability + rolls back to 1500 on failure. Full policy + per-instance MTU table:
+docs/design-mtu-policy.md. Never bake device-max MTU as the attach default; never ship a NIC
+whose MTU can't change at runtime.
