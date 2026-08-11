@@ -555,3 +555,15 @@ CANONICAL qmvlnvf0 overlay + tranche-entry-224.nix to the egret nodes (scp from 
 OR re-cut the egret base AMI with the canonical overlay baked. Until then egret waves may dup-derive +
 miss late fixes. The wave21 shim fetchPypi fix (pickHash skips empty strings) should also merge into the
 canonical shim. Publishing from egret is slow (new region path) -- fine, just grind.
+
+## PS-AARCH64-PUBLISH (2026-08-11): aarch64 wave2 built ~30 pkgs, publish incomplete
+aarch64 cross wave2 cracked native-bash-under-gcc14 (blocker #1) -> unblocked the coreutils family:
+bash/coreutils/diffutils/findutils/gawk/gnugrep/gnused/gnutar/gzip/gnum4/gdbm/libffi/pcre2/expat/
+file/tzdata/zlib/libiconv/libunistring/libxml2/readline/ncurses/gmp/mpfr/xz/bzip2/less (~30, up from 6).
+All in-store on 18.119.119.138 (gcroots protect them). The agent died before writing the publish list
+(aarch64-egret-publish2.txt had only the header) -- ground-truth store inventory recovered them.
+oi-node-publish.sh publish of the 184 aarch64 paths is INCOMPLETE (some cache=000 curl-timeouts made
+its HEAD-check wrongly skip; 1 "FAIL closure query" on the cross hello). TODO: finish the aarch64
+publish (retry with longer curl timeouts in the publisher's HEAD check, or FORCE). Register the ~30
+aarch64 pnames once durable. This also supplies several of the site-team audit's "dangling" aarch64
+narinfos (illumos-aarch64-seed).
