@@ -270,3 +270,21 @@ The s3.solnix.io inbox now has two upload auth mechanisms by prefix:
 2. PACKAGES (bucket root: <hash>.narinfo + nar/**): sops S3 creds via aws/nix -- UNCHANGED.
    scripts/oi-fleet-publish.sh (aws s3 cp with secrets/s3-cache.yaml) still works for package publish.
 Both drain to durable cache.solnix.io/B2 as before. Reads (cache.solnix.io) are open (no token).
+
+## Fast node-side publisher (2026-08-11): scripts/oi-node-publish.sh
+The from-source illumos nix on build nodes LACKS the s3 store scheme, and bridging closures through
+the orchestrator's home uplink (~0.3MB/s) stalls on big closures. SOLUTION: scripts/oi-node-publish.sh
+runs ON a build node (fast region bandwidth), signs (5HAV) + uploads narinfo+nar directly via SigV4
+curl/python. python-embedded SigV4 (node has python3 hashlib/hmac/ssl); validated byte-for-byte vs
+botocore + a mandatory startup KAT self-test (AWS-documented test vector) before any network call.
+Matches the durable narinfo format exactly (xz, nar/<base32-filehash>.nar.xz, base32 hashes,
+basename-sorted References incl self, Deriver, Sig). Idempotent/resumable (skips already-durable via
+cache-busted cache.solnix.io HEAD). Creds never logged.
+USAGE (orchestrator drops key transiently, shreds after):
+  . /tmp/.pubcreds; ST=$(mktemp); printf '%s' "$SIGNKEY" > "$ST"
+  AWS_ACCESS_KEY_ID="$AKID" AWS_SECRET_ACCESS_KEY="$SECRET" SIGN_KEY="$ST" \
+    bash /root/oi-node-publish.sh <paths-file>
+  shred -u "$ST"
+GOTCHA: nix's local NEGATIVE narinfo cache poisons `path-info --store` after any earlier absent-path
+lookup -> always pass `--option narinfo-cache-negative-ttl 0` when verifying freshly-published paths.
+This is now the STANDARD egret publish path (replaces the slow bridge in oi-fleet-publish.sh for x86).
