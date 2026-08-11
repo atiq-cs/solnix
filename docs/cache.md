@@ -259,3 +259,14 @@ nix run nixpkgs#awscli2), pulls the NARs from BUILDER_IP through a temp store, `
 Dispatch pattern: subagents build + persist a paths file; the orchestrator runs oi-fleet-publish.sh
 on that paths file. (Public key 5HAV in cache-signing.yaml is cache_public_key; the SECRET is
 cache_signing_key, len ~106.)
+
+## Cache upload auth (2026-08-11): TWO paths
+The s3.solnix.io inbox now has two upload auth mechanisms by prefix:
+1. IMAGES (images/** -- ISO/IMG/AMI-raw): token'd curl. Header `X-Solnix-Upload: $SOLNIX_UPLOAD_TOKEN`
+   (token in sops: secrets/s3-cache.yaml field solnix_upload_token; decrypt with SOPS_AGE_KEY_FILE). Example:
+     curl -T solnix.iso -H "X-Solnix-Upload: $SOLNIX_UPLOAD_TOKEN" \
+       https://s3.solnix.io/solnix-cache/images/<release>/solnix.iso
+   (aws-creds do NOT work for images/; token does NOT work for the bucket root.)
+2. PACKAGES (bucket root: <hash>.narinfo + nar/**): sops S3 creds via aws/nix -- UNCHANGED.
+   scripts/oi-fleet-publish.sh (aws s3 cp with secrets/s3-cache.yaml) still works for package publish.
+Both drain to durable cache.solnix.io/B2 as before. Reads (cache.solnix.io) are open (no token).

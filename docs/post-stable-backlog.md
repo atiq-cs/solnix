@@ -544,3 +544,14 @@ RE-MEASURED: 30/30 (100%) fresh cold launches (m5/t3/c5), vs 0/10 baseline. TARG
 solnix now RELIABLY cold-launches on EC2 Nitro. (No FreeBSD ena_com port needed.) NEXT: wire the patch
 into the base-AMI bake (oi-inject-ena / beef-make-base-ami) so every future AMI ships the fixed ena;
 re-cut the RELEASE AMI on ami-0cc154959d7d945ce (also fold in the patched nix + full package set).
+
+## PS-EGRET-OVERLAY-LINEAGE (2026-08-11): egret AMI ships the tranche6-lineage overlay, not canonical
+The egret fleet nodes (from the release AMI) use /root/solaris-overlay.nix (tranche6/2.3.16-lineage
+layout), NOT the canonical merged qmvlnvf0 overlay (solaris-overlay-qmvlnvf0.nix with all H39/glib/
+gnutls/pkg-config + wave1-17 fixes). So egret waves re-derive some fixes (wave21 re-cracked cmake-ranlib,
+rhash-solaris; also fixed a fetchPypi empty-hash bug in the shim -- captured to
+fetchurl-shim-egret-lineage.nix). FLEET-HYGIENE FIX (do before more egret waves): distribute the
+CANONICAL qmvlnvf0 overlay + tranche-entry-224.nix to the egret nodes (scp from git/Codeberg-clone),
+OR re-cut the egret base AMI with the canonical overlay baked. Until then egret waves may dup-derive +
+miss late fixes. The wave21 shim fetchPypi fix (pickHash skips empty strings) should also merge into the
+canonical shim. Publishing from egret is slow (new region path) -- fine, just grind.
