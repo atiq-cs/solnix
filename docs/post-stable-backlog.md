@@ -567,3 +567,17 @@ its HEAD-check wrongly skip; 1 "FAIL closure query" on the cross hello). TODO: f
 publish (retry with longer curl timeouts in the publisher's HEAD check, or FORCE). Register the ~30
 aarch64 pnames once durable. This also supplies several of the site-team audit's "dangling" aarch64
 narinfos (illumos-aarch64-seed).
+
+## PS-SG-GUARD (2026-08-11): 0.0.0.0/0 killed egret -> hard enforcement added
+ROOT CAUSE of the egret account loss: another agent (not the orchestrator) added tcp/22 <- 0.0.0.0/0
+to a security group, violating the burner account's T&C -> AWS shut the account down -> ALL instances
+terminated (23-node fleet lost). This is the SECOND time a world-open SG rule cost a burner account
+(first: the ouch->crackers migration, .infra/migration-ouch-to-crackers.md). A written steering rule
+was insufficient -- agents kept adding it.
+ENFORCEMENT (scripts/sg-guard.sh): all SG ingress changes must go through `sg-guard authorize`, which
+REFUSES 0.0.0.0/0, ::/0, and any block >= /8 (exit 2, before any AWS call). `sg-guard audit [regions]`
+scans for existing world-open rules; `sg-guard preflight <region>` MUST pass before any fleet launch
+(aborts if a world-open rule exists). `sg-guard selftest` = runnable check of the refusal logic.
+MANDATE for all future fleet work: (1) never call `aws ec2 authorize-security-group-ingress` directly
+-- use `sg-guard authorize`; (2) run `sg-guard preflight <region>` before launching; (3) dispatch
+prompts must forbid direct SG edits + require the guard. On a NEW account, run `sg-guard audit` first.
