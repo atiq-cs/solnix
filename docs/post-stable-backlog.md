@@ -594,3 +594,14 @@ extraSyslibs block with the runCommand form (seed-syslibs slice 4qh0sfp... IS in
 BAKE INTO v3: when re-cutting the fred build-base AMI + the release IMG, ship the CANONICAL tranche +
 overlay (not the stale baked one) so future reconstructions don't inherit this. This is PS-FLEET-
 HYGIENE recurring: the release IMG's baked build env must track the canonical fork HEAD.
+
+## PS-FRED-EXTRASYSLIBS-FIXED (2026-08-12): cmake unblocked fleet-wide
+extra-syslibs fix applied 6/6 fred nodes (byte-identical tranche cksum 2788000278). TWO cracks:
+(1) extraSyslibs -> runCommand from ${final.seedSyslibs}/lib/amd64 (no tarball FOD);
+(2) cmakeMinimal ranlib/strip: the seed bintools slice has ar/as/ld/nm but NO ranlib/strip ->
+    -DCMAKE_RANLIB/-DCMAKE_STRIP rewritten to ${final.coreutils}/bin/true (illumos `ar qc` writes the
+    index; fixupPhase strips). cmake-minimal-4.3.4 fully builds on fred now.
+Fix script: solnix-pkgs phase3/fix-tranche-224-extrasyslibs.py (idempotent). MUST bake the canonical
+tranche+overlay into the v3 build-base AMI + the release IMG so reconstructions don't re-inherit the
+stale lineage. gtk3 now instantiates past extra-syslibs; next blockers: toml-0.10.2 zero-placeholder
+hash in the fetchurl-shim, then libepoxy->libglvnd version-script.
