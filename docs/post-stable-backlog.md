@@ -581,3 +581,16 @@ scans for existing world-open rules; `sg-guard preflight <region>` MUST pass bef
 MANDATE for all future fleet work: (1) never call `aws ec2 authorize-security-group-ingress` directly
 -- use `sg-guard authorize`; (2) run `sg-guard preflight <region>` before launching; (3) dispatch
 prompts must forbid direct SG edits + require the guard. On a NEW account, run `sg-guard audit` first.
+
+## PS-FRED-STALE-EXTRASYSLIBS (2026-08-12): reconstructed AMI ships a stale tranche
+The fred build-base AMI (reconstructed from release-224-v2 IMG) bakes a /root/tranche-224.nix whose
+extraSyslibs binding uses a hardcoded `src = /nix/store/qbl2q3v2...-extra-syslibs.tar.gz` -- a FOD that
+was never published to the cache (404) and cannot rebuild (it is a tarball src, not derivable). This
+blocks every cmake-graph package (cmakeMinimal wires extraSyslibs). Non-cmake packages build fine
+(crypto wave got 1003 store paths). The canonical fork (solaris-overlay-qmvlnvf0.nix) already defines
+extraSyslibs the RIGHT way: `runCommand "illumos-extra-syslibs"` linking from ${final.seedSyslibs}/
+lib/amd64 (no tarball, fully rebuildable). FIX (agent d34a341b): surgically replace the node tranche's
+extraSyslibs block with the runCommand form (seed-syslibs slice 4qh0sfp... IS in-store), fleet-wide.
+BAKE INTO v3: when re-cutting the fred build-base AMI + the release IMG, ship the CANONICAL tranche +
+overlay (not the stale baked one) so future reconstructions don't inherit this. This is PS-FLEET-
+HYGIENE recurring: the release IMG's baked build env must track the canonical fork HEAD.
