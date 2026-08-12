@@ -605,3 +605,13 @@ Fix script: solnix-pkgs phase3/fix-tranche-224-extrasyslibs.py (idempotent). MUS
 tranche+overlay into the v3 build-base AMI + the release IMG so reconstructions don't re-inherit the
 stale lineage. gtk3 now instantiates past extra-syslibs; next blockers: toml-0.10.2 zero-placeholder
 hash in the fetchurl-shim, then libepoxy->libglvnd version-script.
+
+## Wave 25 (crypto) landed +24 + 2 systemic cracks (2026-08-12, fred)
++24 pkgs published host-free (libsodium/secp256k1/nettle/libgcrypt/cryptopp/libtomcrypt/libtommath/
+libb2/rhash/libgpg-error/libassuan/libksba/npth/libtasn1/softhsm/libp11/pkcs11helper/libyubikey/...).
+CRACKS (bake into overlay): (1) fetchurl-shim dead-mirror filter -- a dead gnupg.org mirror at the
+head of mirror://gnupg abort()ed the whole fetch past tryEval; deadHosts drop-filter unblocked the
+ENTIRE gnupg family at once. (2) rhash triple x86_64-pc-solaris2.11 (dot required). (3) libscrypt strip
+GNU-ld -z,relro/--version-script. Also re-added extra-syslibs via nix-store --add-fixed (belt-and-
+suspenders with the runCommand fix). cmake-dependent (xxhash/p11-kit/mbedtls/minisign) were SKIPPED
+by wave25 (ran before the fleet-wide cmake fix) -- now buildable, re-queue them.
