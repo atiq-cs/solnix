@@ -615,3 +615,20 @@ ENTIRE gnupg family at once. (2) rhash triple x86_64-pc-solaris2.11 (dot require
 GNU-ld -z,relro/--version-script. Also re-added extra-syslibs via nix-store --add-fixed (belt-and-
 suspenders with the runCommand fix). cmake-dependent (xxhash/p11-kit/mbedtls/minisign) were SKIPPED
 by wave25 (ran before the fleet-wide cmake fix) -- now buildable, re-queue them.
+
+## PS-FRED-ROOT-DISK-TOO-SMALL (2026-08-12): reconstructed AMI root pool is 7.3G -> nodes wedge
+The release-224-v2-derived AMI boots with a 7.3G zpool `spool` (autoexpand=off) even though the EBS is
+100G -- the pool partition is ~8G (slice 1, 16236255 sectors), the other 92G unused. Build nodes fill
+to 85-98% and wedge on cmake-graph builds. wave28 agent tried to grow the slice via LIVE fdisk ->
+corrupted the pool (node lost; cleanly isolated, no unique data lost, forensic snap retained). LESSON:
+NEVER live-fdisk/grow a mounted zpool slice.
+IMMEDIATE workaround (proven on one node): attach a 2nd big EBS (200G), REBOOT to detect (illumos
+nvme hot-plug needs a reboot -- devfsadm alone insufficient), `zpool create bpool c2t1d0`, set
+TMPDIR=/bpool/tmp -> builds have space (cmake-minimal builds). BUT /nix/store stays on the 7.3G root ->
+big closures still fill it.
+DURABLE FIX (do this): re-cut the build-base AMI with the root pool expanded to fill the disk (grow
+slice OFFLINE at AMI-build time via the Ubuntu-helper that has the pool exported, then zpool online -e;
+OR build the release IMG with a first-boot zpool-autoexpand SMF service like cloud growfs). Then every
+fred node launches with ~90G+ root. This + baking the canonical tranche + /dev/fd mount + good nix =
+the proper v3 build-base AMI (currently ami-0bbf52c39d67d9aa3 is v2: networked but small-root + stale-
+tranche + needs node-bootstrap).
