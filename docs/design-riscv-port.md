@@ -2384,3 +2384,22 @@ firmware hands the kernel in `a1`:
   the sdhci probe reads a real MBR. RVV1.0 (§5.1) remains DEFERRED beyond first
   boot per the original plan (boot with `sstatus.VS=Off`; add vector
   save/restore after multi-user).
+
+## Crib the BSD riscv64 ports for the machine-dependent layer (2026-08-13)
+The illumos riscv64 MD (machine-dependent) layer should be ADAPTED from the mature BSD riscv64 ports,
+not written from scratch — the same proven pattern solnix used for the ena NIC (cribbed from FreeBSD)
+and the planned desktop DRM/KMS (crib NetBSD external/bsd/drm2).
+Crib sources:
+  - NetBSD: src/sys/arch/riscv (locore/start, pmap, trap/exception, cpu_switch, atomics, clock/intr)
+    + the RISC-V ELF psABI/reloc definitions.
+  - FreeBSD: sys/riscv (equivalent MD layer).
+What's generic vs cribbed:
+  - Cross TOOLCHAIN (binutils+gcc, EM_RISCV): generic, build normally.
+  - psABI + ELF reloc types (sys/elf_riscv.h) + the RISC-V calling convention: OS-independent (from the
+    ISA + privileged spec) -> near-verbatim crib from the BSD headers.
+  - trap/context-switch/locore assembly: crib the BSD .S, adapt to illumos idioms.
+  - isa_defs.h / machtypes.h / atomics: adapt BSD definitions to illumos ddi/sunddi + the illumos type
+    system.
+Track: obtain a NetBSD-current source mirror as the reference (shared with the desktop DRM crib).
+STATUS.md (in /root/riscv-port/ on the build node) records which BSD files were cribbed per illumos MD
+piece + the phase reached + resume steps.
