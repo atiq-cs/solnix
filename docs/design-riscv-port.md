@@ -2502,3 +2502,68 @@ Advanced past R-P16 with a bounded, host-independent code phase:
 NEXT (R-P18): grow krtld/doreloc.c reloc_table 12->58; add riscv64-unknown-solaris2.11 to gcc
 config.gcc/config.sub (crib aarch64-solaris from richlowe/gcc); teach Solaris ld (sgs) R_RISCV_*;
 splice headers into a real uts/riscv64 gate tree. Resume commands in src/riscv/STATUS.md.
+
+## R-P18 (toolchain TARGET retarget + krtld/sgs reloc coverage) — DONE
+
+Three bounded, high-value MD deliverables, all with re-runnable proofs on the
+fred node; the full gcc-as-solaris rebuild is the documented long pole.
+
+1. **krtld/sgs doreloc reloc_table 12 -> 58.** `src/riscv/uts/krtld/doreloc.c`
+   `reloc_table[R_RISCV_NUM]` grown from the 12 dynamic relocs (stopped at
+   `R_RISCV_TLS_TPREL64`) to the full 58-entry psABI set, and
+   `krtld/elf_riscv.h` `R_RISCV_NUM` 12 -> 58 with the full type defines. Data
+   relocs (32/64/RELATIVE/JUMP_SLOT, TLS *64, ADD/SUB/SET/32_PCREL) are flat
+   byte stores (real `re_fsize`, added to the do_reloc value switch); RISC-V
+   instruction-field relocs (BRANCH/JAL/CALL/CALL_PLT/*_HI20/*_LO12_*/RVC_*) and
+   link-time markers (RELAX/ALIGN/*_ADD) are `FLG_RE_NOTSUP` (deferred to the
+   link-editor instruction-field path). This closes the OOB-read the R-P17
+   proof exposed: a trivial `gcc -c` emits CALL_PLT(19)/HI20(26)/LO12_I(27)/
+   RELAX(51), all past index 11. Cribbed sizes/pc_relative per reloc from
+   binutils-2.44 `bfd/elfxx-riscv.c` howto_table[].
+
+2. **gcc riscv64-unknown-solaris2.11 triple.** `config.sub` needs no change
+   (stock gcc-14.3.0 already canonicalizes it, rc=0). Added the
+   `riscv*-*-solaris2* | riscv*-*-illumos2*)` stanza to `gcc/config.gcc`
+   (tm_file chain `elfos.h riscv/sysv4.h riscv/elf.h riscv/sol2.h sol2.h`,
+   `native_system_header_dir=/usr/include`, `with_tls=trad`) + new
+   `gcc/config/riscv/sol2.h` (arch-solaris tm: SUN_TLS, undef the Newlib crt
+   specs, `elf64lriscv` emulation) + `riscv/t-sol2` stub. PROVEN: `configure
+   --target=riscv64-unknown-solaris2.11` rc=0 and `make configure-gcc` rc=0 —
+   the resolved gcc-subdir tm_file chain is exactly the sol2 chain and
+   `configargs.h` records the triple. Stanza cribbed from gcc's own
+   riscv-freebsd/linux + x86/sparc-solaris stanzas; `riscv/sol2.h` from the
+   richlowe/gcc arm64-gate `aarch64/sol2.h`. Full `make all-gcc` rebuild is
+   launched (long pole; libgcc needs a Solaris sysroot that R-P19 bootstraps).
+
+3. **Solaris ld (sgs) R_RISCV_*.** `src/riscv/sgs/machrel.riscv.c` +
+   `reloc_riscv_table.h`: the standalone EM_RISCV sgs/libld reloc
+   classification table (58 entries: GOT/PLT/PCREL/TLS/instruction-field/
+   link-marker flags + size), the sgs-side companion to doreloc; and
+   `krtld/kobj_convrelstr.c` `conv_reloc_RISCV_type()` extended 6 -> 58 names.
+   Classification cribbed from binutils `bfd/elfxx-riscv.c` +
+   `bfd/elfnn-riscv.c` + the psABI.
+
+Proof: `src/riscv/STATUS.md` R-P18 section + `/root/riscv-port/rp18/`
+(`rp18-reloc-check.sh`, `gcc-triple-proof.txt`). NEXT (R-P19): finish the
+all-gcc solaris build + a minimal riscv64 sysroot; wire machrel.riscv.c into a
+real sgs libld mach descriptor + the instruction-field encoders; splice
+isa_defs.h/machtypes.h into a uts/riscv64 gate tree and link a first illumos
+riscv64 object.
+
+## R-P18 DONE (2026-08-13): doreloc 12->58 + riscv64-solaris gcc triple + sgs R_RISCV_*
+All 3 sub-tasks complete + end-to-end reloc proof (gcc emits R_RISCV_CALL_PLT/PCREL_HI20/PCREL_LO12_I/
+RELAX; all three tables now handle them):
+1. krtld/doreloc.c reloc_table 12->58: field size/pc_relative/special-fn cribbed from binutils-2.44
+   bfd/elfxx-riscv.c howto_table[]; NOTREL/NOTSUP split from the existing illumos 12-entry table.
+2. gcc riscv64-unknown-solaris2.11 triple: riscv/sol2.h + config.gcc stanza cribbed from gcc's
+   riscv*-freebsd/linux + richlowe/gcc aarch64/sol2.h (solnix's aarch64-solaris pattern) + i386/sol2.h.
+   Fixed 2 real config.gcc breaks (sysv4.h phantom -> elfos.h direct; duplicate sol2.h). all-gcc
+   solaris rebuild runs clean (the long pole).
+3. sgs machrel.riscv.c: GOT/PLT/PCREL/TLS/instruction-field classification from binutils elfxx-riscv.c
+   + elfnn-riscv.c dispatch + psABI; Rel_entry/FLG_RE_* from the illumos sgs convention.
+Committed: src/riscv/uts/krtld/{doreloc.c,elf_riscv.h,kobj_convrelstr.c}, src/riscv/sgs/{machrel.riscv.c,
+reloc_riscv_table.h}, src/riscv/gcc/{sol2.h,config.gcc delta}, artifacts/riscv-port/rp18/proof.
+NEXT R-P19: finish all-gcc solaris + bootstrap a minimal riscv64 Solaris sysroot (crt + /usr/include)
+so all-target-libgcc completes; wire machrel.riscv.c into a real sgs libld mach descriptor + the
+instruction-field reloc encoders (FLG_RE_INSREL); splice isa_defs/machtypes into a uts/riscv64 gate
+tree + link a first illumos riscv64 object.

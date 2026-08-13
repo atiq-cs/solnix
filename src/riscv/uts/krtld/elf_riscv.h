@@ -41,7 +41,15 @@ extern "C" {
 
 #define	ELF_RISCV_MAXPGSZ	0x200000	/* maximum page size */
 
-#define R_RISCV_NUM		12
+/*
+ * RISC-V relocation types — the FULL psABI set (0..57).  Cribbed from the
+ * RISC-V ELF psABI (riscv-non-isa/riscv-elf-psabi-doc) and reconciled with the
+ * GNU/binutils canonical names in bfd/elfxx-riscv.c; matches
+ * uts/common/sys/elf_riscv.h.  The n-hys fork stopped at R_RISCV_TLS_TPREL64
+ * (R_RISCV_NUM was 12), so reloc_table[rtype] out-of-bounds read on the
+ * CALL_PLT(19)/PCREL_HI20(23)/RELAX(51) that gcc actually emits.
+ */
+#define R_RISCV_NUM		58
 
 #define	R_RISCV_NONE		0
 #define	R_RISCV_32		1
@@ -49,12 +57,56 @@ extern "C" {
 #define	R_RISCV_RELATIVE	3
 #define	R_RISCV_COPY		4
 #define	R_RISCV_JUMP_SLOT	5
+#define	R_RISCV_JMP_SLOT	R_RISCV_JUMP_SLOT
 #define	R_RISCV_TLS_DTPMOD32	6
 #define	R_RISCV_TLS_DTPMOD64	7
 #define	R_RISCV_TLS_DTPREL32	8
 #define	R_RISCV_TLS_DTPREL64	9
 #define	R_RISCV_TLS_TPREL32	10
 #define	R_RISCV_TLS_TPREL64	11
+/* 12..15 reserved */
+#define	R_RISCV_BRANCH		16
+#define	R_RISCV_JAL		17
+#define	R_RISCV_CALL		18
+#define	R_RISCV_CALL_PLT	19
+#define	R_RISCV_GOT_HI20	20
+#define	R_RISCV_TLS_GOT_HI20	21
+#define	R_RISCV_TLS_GD_HI20	22
+#define	R_RISCV_PCREL_HI20	23
+#define	R_RISCV_PCREL_LO12_I	24
+#define	R_RISCV_PCREL_LO12_S	25
+#define	R_RISCV_HI20		26
+#define	R_RISCV_LO12_I		27
+#define	R_RISCV_LO12_S		28
+#define	R_RISCV_TPREL_HI20	29
+#define	R_RISCV_TPREL_LO12_I	30
+#define	R_RISCV_TPREL_LO12_S	31
+#define	R_RISCV_TPREL_ADD	32
+#define	R_RISCV_ADD8		33
+#define	R_RISCV_ADD16		34
+#define	R_RISCV_ADD32		35
+#define	R_RISCV_ADD64		36
+#define	R_RISCV_SUB8		37
+#define	R_RISCV_SUB16		38
+#define	R_RISCV_SUB32		39
+#define	R_RISCV_SUB64		40
+#define	R_RISCV_GNU_VTINHERIT	41
+#define	R_RISCV_GNU_VTENTRY	42
+#define	R_RISCV_ALIGN		43
+#define	R_RISCV_RVC_BRANCH	44
+#define	R_RISCV_RVC_JUMP	45
+#define	R_RISCV_RVC_LUI		46
+#define	R_RISCV_GPREL_I		47
+#define	R_RISCV_GPREL_S		48
+#define	R_RISCV_TPREL_I		49
+#define	R_RISCV_TPREL_S		50
+#define	R_RISCV_RELAX		51
+#define	R_RISCV_SUB6		52
+#define	R_RISCV_SET6		53
+#define	R_RISCV_SET8		54
+#define	R_RISCV_SET16		55
+#define	R_RISCV_SET32		56
+#define	R_RISCV_32_PCREL	57
 
 /*
  * Processor specific section types
