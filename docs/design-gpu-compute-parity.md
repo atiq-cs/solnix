@@ -130,3 +130,52 @@ real 2nd minor space + cb_close teardown; wire scheduler run_job->virtio_gpu_exe
 via cb_chpoll+pollwakeup; C1b polish (virtio-PCI-child bind, devfsadm /dev/dri rule, completion-interrupt,
 zero-copy scanout). NEXT: C2 Mesa bring-up (softpipe/llvmpipe first for API, then virtio-gpu Gallium) +
 a metal instance for the C1 runtime proof.
+
+## C2 REACHED: software OpenGL renders on illumos (Mesa 24.0.9 softpipe + OSMesa, NO GPU)
+First GL on solnix. Mesa built as a standalone host build (native gcc-14 + a host-python venv meson
+1.4.2 + samurai/ninja) and frozen with `nix-store --add`; host-free. The nixpkgs meson/ninja/python3
+and LLVM derivations don't build through this fork (python3 -> libffi -> dejagnu -> expect wedges on
+pty_termios.o; the same wedge blocks the X11 graph on a fresh v3 node), so the standalone-shell +
+nix-store-add pattern (as the prior lavapipe node used) is the path.
+- Config (the no-DRM software path): `-Dgallium-drivers=swrast -Dllvm=disabled -Dosmesa=true
+  -Dplatforms= -Dglx=disabled -Degl=disabled -Dgbm=disabled -Ddri3=disabled`. swrast+llvm=disabled ==
+  softpipe (pure C rasterizer, NO LLVM). OSMesa = offscreen GL to a CPU buffer (cleanest headless proof).
+- Smoke: an OSMesa RGBA context renders a Gouraud triangle to a 256x256 memory buffer, reads pixels
+  back -> GL_VERSION `3.3 (Compatibility Profile) Mesa 24.0.9`, GL_RENDERER `softpipe`, 16200 lit px.
+  `OSMESA TRIANGLE SMOKE: PASS`. No GPU, no DRM, no X11, no LLVM.
+- illumos source patches (upstreamable): (1) u_atomic.h gate the __sun Solaris-atomic backend on
+  `!__GNUC__` so gcc-14 __atomic intrinsics are used (Solaris atomic.h predates p_atomic_read_relaxed);
+  (2) u_thread.c add `!__sun` to the pthread_getcpuclockid guard (no per-thread CPU clock on illumos).
+- illumos build fix (not a source patch): the host has a PARTIAL libdrm (xf86drm.h + libdrm.pc, no
+  drm.h). Mesa's meson auto-detects it via pkg-config, defines HAVE_LIBDRM, and gallium aux
+  (u_screen.c/renderonly.c) `#include <xf86drm.h>` -> missing drm.h. FIX: `PKG_CONFIG_LIBDIR=<shim-only>`
+  so meson can't see the host libdrm.pc.
+- Output: /nix/store/bgh83...-mesa-softpipe-24.0.9 {lib/libOSMesa.so*, lib/libglapi.so*, include/GL}.
+  Published to cache.solnix.io. Recipe: artifacts/gpu-mesa-c2/{mesa.nix,build-mesa-softpipe.sh,osmesa_tri.c}.
+- llvmpipe (stretch, deferred): same config with `-Dllvm=enabled -Dshared-llvm=disabled` + a hand-built
+  static LLVM 18 (X86, RTTI/EH/PIC on). The prior lavapipe node already proved llvmpipe (LLVM 18.1.8) +
+  lavapipe SW-Vulkan run on illumos (vulkaninfo DRIVER_ID_MESA_LLVMPIPE; llama.cpp Vulkan compute OK).
+  softpipe was taken first because it needs no multi-hour LLVM build and still proves the rasterizer.
+- xlib-GLX libGL.so (deferred): needs the X11 graph, which is blocked on this node by the same python3
+  pty.h wedge; OSMesa already proves software GL, so this second flavor was not rebuilt via standalone
+  scripts.
+- GBM / real-GPU (C2-stretch): `-Dgbm=enabled` needs libdrm (the C1 UAPI drm.h under
+  src/drm-port/src/uapi/drm/ satisfies the ABI) AND a runtime /dev/dri device. This non-metal node has
+  no DRM device, so GBM belongs on a metal instance running the C1 kernel module.
+
+## C2 MILESTONE (2026-08-13): first GL on solnix — Mesa softpipe + OSMesa
+Mesa 24.0.9 softpipe (pure-C rasterizer, NO LLVM) + OSMesa built for x86_64-solaris, host-free
+(libOSMesa.so runs with no LD_LIBRARY_PATH, resolves via store RUNPATH). GL SMOKE PASS: OSMesa offscreen
+RGBA context rendered a Gouraud triangle to a 256x256 CPU buffer -> GL_VERSION "3.3 Mesa 24.0.9",
+GL_RENDERER softpipe, 16200 lit pixels read back. Software GL on illumos, no GPU/DRM/X11/LLVM.
+meson config (no-DRM software path): -Dgallium-drivers=swrast -Dllvm=disabled -Dosmesa=true
+-Dplatforms= -Dglx=disabled -Degl=disabled -Dgbm=disabled -Ddri3=disabled -Dopengl=true
+-Dshared-glapi=enabled. illumos fixes: PKG_CONFIG_LIBDIR to hide the host's partial libdrm (no drm.h);
+u_atomic.h gate __sun backend on !__GNUC__ (use gcc __atomic intrinsics); u_thread.c !__sun on
+pthread_getcpuclockid. Recipe: solnix-pkgs mesa-softpipe.nix. Published.
+NOTE: the prior lavapipe node ALREADY proved llvmpipe (LLVM 18.1.8) + lavapipe SOFTWARE-VULKAN run on
+illumos -> software Vulkan is validated too. So the software GL+Vulkan stack works on illumos CPU NOW
+(unblocks gtk4-GL + CPU-Vulkan compute like llama.cpp's Vulkan backend for API bring-up).
+GBM (real-GPU bridge) needs a runtime /dev/dri device (the C1 kernel module on a metal instance).
+NEXT: llvmpipe/lavapipe as real derivations (faster SW GL/Vulkan); GBM + the C1 runtime on metal;
+then hardware Gallium drivers (C3).
