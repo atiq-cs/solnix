@@ -48,3 +48,6 @@ scratch/
 artifacts/fan224-stage/
 artifacts/sparc-xbuild/wave16/lockfile-progs-0.1.19/lockfile-progs-0.1.19
 src/riscv/**/toolchain/
+src/riscv/**/*.img
+src/riscv/**/*.fat
+src/riscv/**/*.elf
