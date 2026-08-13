@@ -76,3 +76,16 @@ G0 (X11 desktop + llama.cpp CPU) delivers a usable graphical + local-AI solnix W
 the deep kernel work. G1 (DRM/KMS from NetBSD) is the keystone that unlocks G2–G5 +
 GPU LLMs. Rust/Go toolchain ports run in parallel and gate COSMIC/ollama. This is a
 multi-quarter arc, correctly sequenced so each phase ships something usable.
+
+## MILESTONE (2026-08-13): Phase L beachhead — llama.cpp CPU inference LIVE on solnix
+llama.cpp (ggml-org tag b4991) built from source for x86_64-solaris + RAN real inference:
+`llama-cli -m stories260K.gguf -p "Once upon a time" -n 20` -> "Once upon a time, there was a little
+girl named Lily. She loved to play in the par" @ 70 tok/s, prompt-eval 342 tok/s, exit 0. Real ggml
+forward pass with OpenMP threads on illumos. CPU backend (LLAMAFILE=1 OPENMP=1); all accelerators OFF.
+Binaries: llama-cli/quantize/bench/embedding/perplexity/run + libggml/libllama .so, host-free, published
+(pzdqc1lgzkrjxc06mbmqn3x2f0837pyj-llama-cpp-b4991). Recipe: solnix-pkgs pkgs/illumos/llama-cpp.nix.
+illumos fixes (baked): RLIMIT_MEMLOCK->__sun guard (illumos has RLIMIT_VMEM), termios winsize include,
+CMAKE_SYSTEM_PROCESSOR=x86_64 + explicit AVX/AVX2/FMA/F16C (uname -p=i386 misses ggml SIMD regex),
+GGML_BUILD_NUMBER (no git in stdenv), from-source (nixpkgs attr throws unsupported-system on a GPU dep).
+=> solnix runs local LLMs on CPU TODAY, ahead of all the GPU/Vulkan/DRM work. GPU-accel comes with
+G3 Vulkan (llama.cpp has a Vulkan backend); ollama needs a Go toolchain (separate port).
