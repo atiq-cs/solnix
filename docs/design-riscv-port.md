@@ -2403,3 +2403,102 @@ What's generic vs cribbed:
 Track: obtain a NetBSD-current source mirror as the reference (shared with the desktop DRM crib).
 STATUS.md (in /root/riscv-port/ on the build node) records which BSD files were cribbed per illumos MD
 piece + the phase reached + resume steps.
+
+---
+
+## R-P17 — riscv64 cross toolchain rebuilt on the fred node + BSD-cribbed psABI/ISA headers (DONE)
+
+R-P17 is a bounded, host-independent CODE phase executed on the fred build node
+(root@52.88.62.49, illumos SunOS i386, native OI gcc 14.3.0 + GNU binutils). Two
+concrete, proven deliverables — the cross toolchain re-established from source on
+this host, and the illumos MD psABI/ISA headers the toolchain track (R1) and
+krtld/sgs depend on, BSD-cribbed where the definitions are ISA/psABI
+(OS-independent). All builds ran detached (nohup → log). Persisted to
+`/root/riscv-port/` on the node + `src/riscv/` in the repo.
+
+### R-P17.1 Cross toolchain — binutils 2.44 + gcc 14.3.0 stage-1 (riscv64-unknown-elf)
+
+- **binutils 2.44** `--target=riscv64-unknown-elf` (sha256 verified), built with
+  the native OI gcc in ~4 min → `riscv64-unknown-elf-{as,ld,readelf,objdump,...}`.
+- **gcc 14.3.0 stage-1** (rv64gc / lp64d, `--without-headers --with-newlib
+  --enable-languages=c --disable-multilib`) built in ~26 min including `libgcc.a`
+  for the target (backend confirmed). Full toolchain 968 MB at
+  `/root/riscv-port/toolchain/`.
+- **The illumos gcc-gettext break (design §2.3) recurred and was fixed here** the
+  same way: gcc 14's in-tree gettext fails on illumos (gnulib `getlocalename_l`
+  conflict); the fix strips the in-tree `gettext` symlink and no-ops the
+  top-level `*-gettext` Makefile targets (a `--disable-nls` cross cc does not
+  need gettext; `all-gcc`'s only direct prereq is `configure-gcc`). Baked into
+  `src/riscv/uts/toolchain-*.sh`.
+
+### R-P17.2 EM_RISCV proof + psABI reloc-coverage proof — PASS
+
+`src/riscv/uts/psabi-reloc-check.sh` (runnable; `artifacts/riscv-port/rp17/
+proof.log`):
+- cross-**as** `-march=rv64gc -mabi=lp64d` → object `Machine: RISC-V`, raw
+  `e_machine = 243` (**EM_RISCV**, confirmed independently by the host readelf);
+  cross-**ld** → EXEC, `Machine: RISC-V`, entry 0x80000000.
+- the cross **gcc** compiles C, `objdump -dr` shows it emits `R_RISCV_CALL_PLT`,
+  `R_RISCV_RELAX`, `R_RISCV_TPREL_{ADD,HI20,LO12_I,LO12_S}` — and the check
+  asserts EVERY emitted `R_RISCV_*` is defined in the new `sys/elf_riscv.h`.
+  Result: `ALL CHECKS PASSED`.
+
+### R-P17.3 illumos riscv64 MD headers (BSD-cribbed)
+
+New in `src/riscv/uts/sys/` (compile standalone; static-assert-checked):
+
+| file | what | crib |
+|------|------|------|
+| `sys/elf_riscv.h` | the **complete** RISC-V ELF psABI reloc set (0..57, `R_RISCV_NUM=58`) + ELF64 PLT/GOT defines. | NetBSD `elf_machdep.h` (psABI numbers are OS-independent) + GNU names |
+| `sys/isa_defs.h` | riscv64 stanza: LP64D, `_LITTLE_ENDIAN`, alignment set, `_CHAR_IS_SIGNED`, `_ALIGNMENT_REQUIRED=1`, no `_MULTI_DATAMODEL`. | RISC-V psABI + illumos sibling stanzas; endianness/elfsize vs NetBSD |
+| `sys/machtypes.h` | `lock_t`, `label_t` (setjmp save area = ra/sp/gp/tp/s0-s11, 16 slots), NCPU/MAXCPU. | NetBSD `reg.h` register-role block (calling convention is OS-independent) |
+
+**Why `sys/elf_riscv.h` is the load-bearing deliverable:** real gcc output uses
+relocs (19/23/24/51/...) that the n-hys fork's 12-entry `elf_riscv.h`
+(`R_RISCV_NUM=12`) does not define. R-P17 empirically confirmed n-hys's
+`krtld/doreloc.c` `reloc_table[R_RISCV_NUM]` stops at `R_RISCV_TLS_TPREL64` — so
+`reloc_table[rtype]` for a compiler-emitted `R_RISCV_CALL_PLT` is an
+out-of-bounds read. The full 58-entry psABI table (this header) is what the
+Solaris link-editor (sgs) and krtld must use; extending `doreloc.c`'s table to 58
+is the first R-P18 task.
+
+### R-P17.4 BSD reference mirror
+
+`src/riscv/bsd-ref/netbsd/` carries NetBSD-current `sys/arch/riscv/include/
+{elf_machdep,reg,mcontext,frame,asm}.h` as reference-only crib sources (not
+compiled, not shipped), + a `README.md` mapping each illumos MD file to its crib.
+TODO (like the pending NetBSD-drm mirror): pin a NetBSD-current `sys/arch/riscv`
+mirror as the authoritative reference; FreeBSD `sys/riscv` is the cross-check.
+
+### R-P17.5 Next: R-P18 (toolchain TARGET retarget — the R1 hard part)
+
+1. Grow `krtld/doreloc.c`'s `reloc_table[]` from 12 to the full 58 entries
+   (formulas in the BSD `nb_elf_machdep.h` comments) + bump `krtld/elf_riscv.h`
+   `R_RISCV_NUM` 12→58 to match `sys/elf_riscv.h`.
+2. Add the `riscv64-unknown-solaris2.11` OS stanza to gcc `config.gcc`/`config.sub`
+   (crib the aarch64-solaris config from richlowe/gcc) — retarget the proven
+   `riscv64-unknown-elf` toolchain to the illumos ABI.
+3. Teach the Solaris link-editor (sgs) `R_RISCV_*` relocs; splice
+   `sys/isa_defs.h` + `sys/machtypes.h` into a real `uts/riscv64` gate tree.
+
+## R-P17 COMPLETE (2026-08-13): riscv64 cross toolchain + BSD-cribbed psABI (load-bearing fix)
+Advanced past R-P16 with a bounded, host-independent code phase:
+- Cross TOOLCHAIN built from source on a fred node (OI gcc 14.3.0 native): binutils 2.44 + gcc 14.3.0
+  stage-1 rv64gc/lp64d + libgcc.a. EM_RISCV PROVEN (cross-as/ld -> Machine: RISC-V, e_machine=243;
+  cross-gcc compiles freestanding -mcmodel=medany kernel-style objects). Hit + fixed the documented
+  illumos gcc-gettext gnulib break (getlocalename_l). Toolchain = 968MB at /root/riscv-port/toolchain/
+  on the node (NOT in git -- rebuildable via the persisted toolchain-*.sh scripts; a future phase makes
+  it a real nix derivation).
+- LOAD-BEARING FIND: the prior n-hys illumos fork's uts/common/sys/elf_riscv.h had R_RISCV_NUM=12, but
+  real gcc emits R_RISCV_CALL_PLT(19)/PCREL_HI20(23)/PCREL_LO12_I(24)/RELAX(51) -- krtld/doreloc.c's
+  reloc_table[] would OUT-OF-BOUNDS read on them. R-P17 replaces it with the COMPLETE psABI table
+  (0-57, R_RISCV_NUM=58), cribbed from NetBSD elf_machdep.h. psabi-reloc-check.sh proves every
+  gcc-emitted reloc is covered.
+- MD headers written (BSD-cribbed): sys/elf_riscv.h (complete reloc table), sys/isa_defs.h (riscv64
+  LP64D little-endian stanza), sys/machtypes.h (lock_t/label_t register roles from NetBSD reg.h).
+  bsd-ref/netbsd/ = reference crib headers + provenance.
+- Committed: src/riscv/{STATUS.md, uts/sys/*.h, uts/psabi-reloc-check.sh, uts/toolchain-*.sh, bsd-ref/},
+  artifacts/riscv-port/rp17/proof.log.
+NEXT (R-P18): grow krtld/doreloc.c reloc_table 12->58; add riscv64-unknown-solaris2.11 to gcc
+config.gcc/config.sub (crib aarch64-solaris from richlowe/gcc); teach Solaris ld (sgs) R_RISCV_*;
+splice headers into a real uts/riscv64 gate tree. Resume commands in src/riscv/STATUS.md.
