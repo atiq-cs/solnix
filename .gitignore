@@ -51,3 +51,6 @@ src/riscv/**/toolchain/
 src/riscv/**/*.img
 src/riscv/**/*.fat
 src/riscv/**/*.elf
+src/drm-port/**/*.o
+src/drm-port/netbsd-ref/src/
+src/drm-port/**/drm
