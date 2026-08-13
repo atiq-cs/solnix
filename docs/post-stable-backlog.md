@@ -709,3 +709,20 @@ GPU once Vulkan lands; ollama needs Go). Exposed prereqs to track: Rust toolchai
 Go toolchain (ollama), seatd (logind replacement), libinput+evdev shim, a NetBSD-current source mirror
 as the DRM crib. G0 + llama.cpp-CPU ship a usable graphical + local-AI solnix without the deep kernel
 work; G1 unlocks the rest.
+
+## Wave 31 (scientific) +34 + 3 strategic blockers surfaced (2026-08-13, fred v3)
++34 published (fftw/cgal/geos/hdf5/netcdf/boost[icu-free]/nlopt/pari/primesieve/cfitsio/wcslib/matio/
+xtensor/xsimd/nanoflann/highs/osqp/coin-utils/mpdecimal/libmpc/gf2x/fplll/cddlib/symmetrica/cliquer/
+lrcalc/bliss/libhomfly/nfft/librttopo/geographiclib/libnova/spectra). 0 failed. Registry climbing.
+THREE strategic blockers (each gates a cluster -- worth dedicated ports):
+1. GFORTRAN on illumos (MISSING): openblas hard-requires it + throws at eval -> blocks the whole BLAS
+   cluster: openblas/flint/arb/symengine/superlu/clp/cbc/armadillo/blaze/ceres/sundials/lapack. A
+   gfortran (gcc's fortran front-end) build for x86_64-solaris would unlock all of these + is needed
+   for scientific Python (numpy/scipy) too. HIGH-VALUE port.
+2. python3 C-ext symbol-export gap: cpython builds to 99% then fails linking a C-extension .so
+   (_queue.cpython-314.so: undefined libpython symbols). An illumos shared-module symbol-export issue
+   (the -z defs / export-dynamic / libpython linkage). Blocks kissfft/clipper/proj + the whole
+   python3Packages C-ext class + gates a LOT (this is why wave19/32 python C-ext are fragile). Worth a
+   focused cpython-illumos-linkage fix.
+3. icu4c: genrb U_INVALID_FORMAT_ERROR (data build) -- gcc issue. Blocks libqalculate + full-ICU boost.
+   Dodged via enableIcu=false where possible. Known individual port.
