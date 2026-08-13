@@ -648,3 +648,10 @@ shared-lib aarch64 needs the seed cross gcc REBUILT with Solaris ld as its inter
 rebuild -- deferred). Blocked shared-dependent: sqlite(tcl)/gettext(bash)/libidn2(libiconv gnulib).
 Cross-fetch fix: config.sub via risqcapital/gnu-config-mirror (savannah unreachable from node),
 nix-store --add-fixed to the FOD path. Also hit the same 7.3G-root disk wall -> v3 AMI fixes it.
+
+## PS-FRED-V3-AMI (2026-08-13): proper build-base AMI ami-01f92696a3c816147
+v3 fixes the 7.3G-root wedge: 96G root (offline GPT-grow of the exported pool + first-boot
+solnix-zpool-expand SMF for larger volumes), canonical tranche (cksum 2788000278, cmake works),
+/dev/fd, good nix q9cgfd. Boot-tested: networked + cmake-minimal builds + 90G free after a full build.
+us-west-2 copy ami-07ea683bff41089b3. Fleet launches on v3 now. Node still runs solnix-node-bootstrap.sh
+once (pulls good nix + fork from cache). Capture scripts/fred-fix-base-ami.sh (the AMI-build helper).
