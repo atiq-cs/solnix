@@ -30,6 +30,11 @@
 #include <sys/sunddi.h>
 #include <sys/avl.h>
 #include <sys/errno.h>
+#include <sys/taskq.h>
+#include <sys/proc.h>		/* p0 */
+#include <sys/thread.h>
+#include <sys/disp.h>		/* minclsyspri */
+#include <sys/callb.h>
 
 /*
  * Linux negative-errno convention. The DRM core returns -EINVAL etc.; the
@@ -141,6 +146,185 @@ idr_alloc(struct idr *idr, void *ptr)
 	mutex_exit(&idr->idr_lock);
 	return (id);
 }
+/*
+ * --- C1b shim primitives (GEM/KMS/virtio need these) ---
+ *
+ * Mapping (Linux -> illumos), full table in DESIGN.md section E:
+ *   struct workqueue_struct / work_struct -> ddi_taskq (sys/taskq.h)
+ *   struct task_struct / kthread_run       -> thread_create (sys/proc.h)
+ *   struct completion                      -> kcondvar_t + kmutex_t
+ *   struct rw_semaphore                    -> krwlock_t (rw_enter/rw_exit)
+ *
+ * Provenance: these are the illumos re-implementations of the primitives
+ * NetBSD emulates in common/linux/linux_work.c, drm2/linux/linux_kthread.c,
+ * include/linux/completion.h, drm2/linux/linux_rwsem.c. We do NOT lift the
+ * NetBSD .c; we map each primitive to its illumos ksynch/ddi equivalent, using
+ * the NetBSD shim as the checklist of which Linux APIs the core calls.
+ */
+
+/* --- workqueue -> ddi_taskq. One taskq per workqueue; work = one dispatch. */
+struct workqueue_struct {
+	ddi_taskq_t	*wq_tq;
+};
+struct work_struct {
+	void		(*func)(struct work_struct *);
+	struct workqueue_struct *wq;
+};
+typedef void (*work_func_t)(struct work_struct *);
+
+static inline void
+INIT_WORK(struct work_struct *w, work_func_t fn)
+{
+	w->func = fn;
+	w->wq = NULL;
+}
+static inline struct workqueue_struct *
+create_singlethread_workqueue(const char *name)
+{
+	struct workqueue_struct *wq = kmem_zalloc(sizeof (*wq), KM_SLEEP);
+	/* NOTE: single-thread taskq; widen nthreads if a queue contends */
+	wq->wq_tq = ddi_taskq_create(NULL, name, 1, TASKQ_DEFAULTPRI, 0);
+	if (wq->wq_tq == NULL) {
+		kmem_free(wq, sizeof (*wq));
+		return (NULL);
+	}
+	return (wq);
+}
+static inline void
+destroy_workqueue(struct workqueue_struct *wq)
+{
+	if (wq == NULL)
+		return;
+	if (wq->wq_tq != NULL)
+		ddi_taskq_destroy(wq->wq_tq);
+	kmem_free(wq, sizeof (*wq));
+}
+/* the taskq trampoline: recover the work_struct and call its func */
+static void
+drm_work_run(void *arg)
+{
+	struct work_struct *w = arg;
+	w->func(w);
+}
+static inline int
+queue_work(struct workqueue_struct *wq, struct work_struct *w)
+{
+	w->wq = wq;
+	return (ddi_taskq_dispatch(wq->wq_tq, drm_work_run, w,
+	    DDI_NOSLEEP) == DDI_SUCCESS ? 1 : 0);
+}
+static inline void
+flush_workqueue(struct workqueue_struct *wq)
+{
+	if (wq != NULL && wq->wq_tq != NULL)
+		ddi_taskq_wait(wq->wq_tq);
+}
+
+/* --- kthread -> thread_create. kthread_run(fn,arg,name) starts a thread. */
+struct task_struct {
+	kthread_t	*ts_thread;
+	volatile int	ts_should_stop;
+};
+#define	KTHREAD_STACK	0	/* default kernel thread stack */
+static inline struct task_struct *
+kthread_run(void (*fn)(void *), void *arg, const char *name)
+{
+	struct task_struct *t = kmem_zalloc(sizeof (*t), KM_SLEEP);
+	(void) name;
+	t->ts_thread = thread_create(NULL, KTHREAD_STACK, fn, arg, 0,
+	    &p0, TS_RUN, minclsyspri);
+	return (t);
+}
+static inline int
+kthread_should_stop(struct task_struct *t)
+{
+	return (t->ts_should_stop);
+}
+static inline void
+kthread_stop(struct task_struct *t)
+{
+	/* signal + join is caller-specific; C1b callers set the flag + cv */
+	t->ts_should_stop = 1;
+}
+
+/* --- completion -> kcondvar_t + kmutex_t --- */
+struct completion {
+	kmutex_t	c_lock;
+	kcondvar_t	c_cv;
+	uint_t		c_done;
+};
+static inline void
+init_completion(struct completion *c)
+{
+	mutex_init(&c->c_lock, NULL, MUTEX_DRIVER, NULL);
+	cv_init(&c->c_cv, NULL, CV_DRIVER, NULL);
+	c->c_done = 0;
+}
+static inline void
+fini_completion(struct completion *c)
+{
+	cv_destroy(&c->c_cv);
+	mutex_destroy(&c->c_lock);
+}
+static inline void
+complete(struct completion *c)
+{
+	mutex_enter(&c->c_lock);
+	c->c_done++;
+	cv_broadcast(&c->c_cv);
+	mutex_exit(&c->c_lock);
+}
+static inline void
+wait_for_completion(struct completion *c)
+{
+	mutex_enter(&c->c_lock);
+	while (c->c_done == 0)
+		cv_wait(&c->c_cv, &c->c_lock);
+	c->c_done--;
+	mutex_exit(&c->c_lock);
+}
+/* returns >0 if completed before timeout, 0 on timeout (ticks, absolute) */
+static inline int
+wait_for_completion_timeout(struct completion *c, clock_t ticks)
+{
+	clock_t deadline = ddi_get_lbolt() + ticks;
+	int rc = 1;
+	mutex_enter(&c->c_lock);
+	while (c->c_done == 0) {
+		if (cv_timedwait(&c->c_cv, &c->c_lock, deadline) == -1) {
+			rc = 0;
+			break;
+		}
+	}
+	if (rc)
+		c->c_done--;
+	mutex_exit(&c->c_lock);
+	return (rc);
+}
+
+/* --- rw_semaphore -> krwlock_t --- */
+struct rw_semaphore {
+	krwlock_t	rw;
+};
+static inline void
+init_rwsem(struct rw_semaphore *s)
+{
+	rw_init(&s->rw, NULL, RW_DRIVER, NULL);
+}
+static inline void
+fini_rwsem(struct rw_semaphore *s)
+{
+	rw_destroy(&s->rw);
+}
+static inline void
+down_read(struct rw_semaphore *s)  { rw_enter(&s->rw, RW_READER); }
+static inline void
+up_read(struct rw_semaphore *s)    { rw_exit(&s->rw); }
+static inline void
+down_write(struct rw_semaphore *s) { rw_enter(&s->rw, RW_WRITER); }
+static inline void
+up_write(struct rw_semaphore *s)   { rw_exit(&s->rw); }
+
 static inline void *
 idr_find(struct idr *idr, uint32_t id)
 {

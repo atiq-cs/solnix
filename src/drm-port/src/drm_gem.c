@@ -1,21 +1,23 @@
 /*
- * drm_gem.c - GEM (Graphics Execution Manager) buffer-object stub for illumos.
+ * drm_gem.c - GEM (Graphics Execution Manager) buffer objects for illumos.
  *
  * Provenance: the object lifecycle (create -> handle in idr -> refcounted ->
  * close/free) mirrors NetBSD/Linux
  *   sys/external/bsd/drm2/dist/drm/drm_gem.c
  * (drm_gem_object_init / drm_gem_handle_create / drm_gem_object_release /
- * drm_gem_handle_delete). The Linux memory backing (shmem/uvm pages, dma-buf
- * export, TTM placement) is REPLACED here with a kmem_zalloc kernel buffer;
- * the real illumos backing (ddi_umem_alloc + devmap for mmap, or seg_kmem) is
- * mapped in DESIGN.md and deferred to C1b/C1c. This file exists to prove the
- * GEM create/handle/close ioctl surface compiles against illumos headers.
+ * drm_gem_handle_delete). C1b replaces the C1a kmem_zalloc stub backing with
+ * real illumos memory via ddi_umem_alloc(9F): the returned cookie is handed to
+ * devmap_umem_setup(9F) in drm_core.c cb_devmap so a userland mmap of the DRI
+ * node faults in exactly these pages -- the illumos analogue of Linux
+ * drm_gem_mmap -> shmem/uvm fault. Same pages also become the virtio-gpu
+ * RESOURCE_ATTACH_BACKING sg-list (virtio_gpu.c), so the host reads guest RAM.
  */
 
 #include <sys/types.h>
 #include <sys/sysmacros.h>	/* P2ROUNDUP */
 #include <sys/ddi.h>
 #include <sys/sunddi.h>
+#include <sys/ddidevmap.h>	/* ddi_umem_alloc, DDI_UMEM_SLEEP */
 
 #include "uapi/drm/drm.h"
 #include "drm_internal.h"
@@ -28,8 +30,8 @@ drm_gem_object_free(struct kref *kref)
 	    (struct drm_gem_object *)((char *)kref -
 	    offsetof(struct drm_gem_object, refcount));
 
-	if (obj->kaddr != NULL)
-		kmem_free(obj->kaddr, obj->size);
+	if (obj->umem_cookie != NULL)
+		ddi_umem_free(obj->umem_cookie);
 	kmem_free(obj, sizeof (*obj));
 }
 
@@ -58,7 +60,17 @@ drm_gem_create_dumb(struct drm_device *dev, intptr_t arg, int mode)
 	obj = kmem_zalloc(sizeof (*obj), KM_SLEEP);
 	kref_init(&obj->refcount);
 	obj->size = (size_t)size;
-	obj->kaddr = kmem_zalloc(obj->size, KM_SLEEP);
+	/*
+	 * Real page backing: ddi_umem_alloc gives kernel-VA-mapped, pageable
+	 * memory plus a cookie that devmap_umem_setup can hand to userland.
+	 * This replaces the C1a kmem_zalloc stub.
+	 */
+	obj->kaddr = ddi_umem_alloc(obj->size, DDI_UMEM_SLEEP,
+	    &obj->umem_cookie);
+	if (obj->kaddr == NULL) {
+		kmem_free(obj, sizeof (*obj));
+		return (ENOMEM);
+	}
 
 	mutex_enter(&dev->lock);
 	obj->handle = idr_alloc(&dev->gem_handles, obj);
@@ -144,4 +156,51 @@ drm_gem_close_ioctl(struct drm_device *dev, intptr_t arg, int mode)
 
 	(void) kref_put(&obj->refcount, drm_gem_object_free);
 	return (0);
+}
+
+/*
+ * drm_gem_object_lookup_offset - resolve an mmap offset (as returned by
+ * MAP_DUMB) back to its GEM object, for cb_devmap. C1b walks the handle table;
+ * a real port keys a dedicated offset AVL / drm_vma_offset_manager. Since each
+ * object's [mmap_offset, mmap_offset+size) is a disjoint monotonic range, an
+ * offset falls in exactly one object.
+ * NOTE: O(n) scan over the handle table; swap for an offset-keyed AVL if
+ * a device ever holds enough live objects for this to show up.
+ */
+struct drm_gem_object *
+drm_gem_object_lookup_offset(struct drm_device *dev, uint64_t offset)
+{
+	struct idr_entry *e;
+	struct drm_gem_object *found = NULL;
+
+	mutex_enter(&dev->gem_handles.idr_lock);
+	for (e = avl_first(&dev->gem_handles.idr_tree); e != NULL;
+	    e = AVL_NEXT(&dev->gem_handles.idr_tree, e)) {
+		struct drm_gem_object *o = e->ie_ptr;
+		if (offset >= o->mmap_offset &&
+		    offset < o->mmap_offset + o->size) {
+			found = o;
+			break;
+		}
+	}
+	mutex_exit(&dev->gem_handles.idr_lock);
+	return (found);
+}
+
+/*
+ * DRM_IOCTL_MODE_SET_SCANOUT_SOLNIX - the solnix C1b KMS demo ioctl. Takes a
+ * dumb-buffer handle + geometry and drives the virtio-gpu scanout chain
+ * (drm_gem_scanout, implemented in virtio_gpu.c). If no virtio-gpu transport
+ * is bound (the compile-only core, no QEMU device), drm_gem_scanout returns
+ * ENXIO -- the ioctl surface still compiles + dispatches.
+ */
+int
+drm_set_scanout_ioctl(struct drm_device *dev, intptr_t arg, int mode)
+{
+	struct drm_mode_set_scanout_solnix req;
+
+	if (ddi_copyin((void *)arg, &req, sizeof (req), mode) != 0)
+		return (EFAULT);
+	return (drm_gem_scanout(dev, req.handle, req.width, req.height,
+	    req.pitch));
 }

@@ -12,6 +12,7 @@
 
 #include <sys/types.h>
 #include <sys/ksynch.h>
+#include <sys/ddidevmap.h>	/* ddi_umem_cookie_t, devmap_cookie_t */
 #include "linux-compat/linux_compat.h"
 
 /*
@@ -29,21 +30,28 @@ struct drm_driver {
 };
 
 /*
- * struct drm_gem_object - a GEM buffer object. NetBSD/Linux carry a full
- * uvm/shmem backing + dma-buf export; the C1a stub carries just size + a
- * kmem-backed kernel buffer + a refcount + the handle it was issued.
+ * struct drm_gem_object - a GEM buffer object. C1b backs it with real pageable
+ * kernel memory via ddi_umem_alloc (cookie handed to devmap_umem_setup so a
+ * userland mmap faults the same pages in). The mmap_offset is a monotonic
+ * per-device offset that MAP_DUMB returns and cb_devmap resolves back to the
+ * object. For virtio-gpu the same pages become the RESOURCE_ATTACH_BACKING
+ * scatter-gather list, so the host scans out of guest RAM directly.
  */
 struct drm_gem_object {
 	struct kref	refcount;
 	size_t		size;		/* rounded to PAGESIZE */
 	uint32_t	handle;		/* idr id, 0 = unbound */
-	uint64_t	mmap_offset;	/* fake offset for MAP_DUMB (stub) */
-	caddr_t		kaddr;		/* kmem-backed pages (stub backing) */
+	uint64_t	mmap_offset;	/* devmap offset for MAP_DUMB */
+	caddr_t		kaddr;		/* ddi_umem_alloc kernel VA */
+	ddi_umem_cookie_t umem_cookie;	/* for devmap_umem_setup + free */
+	uint32_t	virtio_res_id;	/* virtio-gpu resource id, 0 = none */
 };
 
 /*
  * struct drm_device - one DRI device instance (maps to one illumos dev_info).
- * Owns the GEM handle table (idr) and points at its driver identity.
+ * Owns the GEM handle table (idr) and points at its driver identity. C1b adds
+ * a back-pointer to the virtio-gpu transport state (NULL until virtio attach)
+ * and an offset->object index so cb_devmap can resolve an mmap offset.
  */
 struct drm_device {
 	dev_info_t		*dip;
@@ -51,6 +59,7 @@ struct drm_device {
 	struct idr		gem_handles;	/* handle -> drm_gem_object */
 	kmutex_t		lock;
 	uint64_t		next_mmap_offset;
+	void			*vgpu;		/* struct virtio_gpu_softc * */
 };
 
 /*
@@ -72,5 +81,14 @@ int	drm_gem_map_dumb(struct drm_device *, intptr_t arg, int mode);
 int	drm_gem_destroy_dumb(struct drm_device *, intptr_t arg, int mode);
 int	drm_gem_close_ioctl(struct drm_device *, intptr_t arg, int mode);
 void	drm_gem_object_free(struct kref *);
+
+/* C1b: mmap support. cb_devmap resolves an offset back to a GEM object. */
+struct drm_gem_object *drm_gem_object_lookup_offset(struct drm_device *,
+    uint64_t offset);
+
+/* C1b: virtio-gpu KMS path (drm_kms.c over virtio_gpu.c). */
+int	drm_gem_scanout(struct drm_device *, uint32_t handle,
+    uint32_t width, uint32_t height, uint32_t pitch);
+int	drm_set_scanout_ioctl(struct drm_device *, intptr_t arg, int mode);
 
 #endif /* _DRM_INTERNAL_H_ */

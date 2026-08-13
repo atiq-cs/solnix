@@ -1,9 +1,11 @@
-# Makefile - build the illumos DRM core + GEM stub as a kernel module (C1a).
+# Makefile - build the illumos DRM core + GEM + virtio-gpu as a kernel module.
 #
 # Cross/native-compiles against the installed illumos kernel headers under
 # /usr/include. Produces ET_REL AMD64 objects and links them into a single
-# kernel module `drm`. This is the R-P17-equivalent milestone: the drm-core +
-# GEM stub COMPILING against illumos headers. It does not need to load.
+# kernel module `drm`. C1a: drm-core + GEM stub COMPILING. C1b adds real GEM
+# page backing (ddi_umem) + cb_devmap mmap, the C1b linux-compat shim
+# primitives (workqueue/kthread/completion/rwsem), and the virtio-gpu transport
+# + 2D modeset path. It does not need to load to hit the compile milestone.
 
 CC      = gcc
 KFLAGS  = -m64 -D_KERNEL -ffreestanding -nostdinc -std=gnu99 \
@@ -11,7 +13,7 @@ KFLAGS  = -m64 -D_KERNEL -ffreestanding -nostdinc -std=gnu99 \
           -I/usr/include -Isrc
 LDFLAGS = -r
 
-OBJS = src/drm_core.o src/drm_gem.o
+OBJS = src/drm_core.o src/drm_gem.o src/virtio_gpu.o
 MODULE = drm
 
 all: $(MODULE)

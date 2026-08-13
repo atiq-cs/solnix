@@ -27,6 +27,8 @@
 #include <sys/devops.h>
 #include <sys/ddi.h>
 #include <sys/sunddi.h>
+#include <sys/ddidevmap.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/file.h>
 #include <sys/errno.h>
@@ -37,6 +39,19 @@
 
 #include "uapi/drm/drm.h"
 #include "drm_internal.h"
+
+/*
+ * virtio-gpu transport (src/virtio_gpu.c). Declared here so drm_attach can bind
+ * the illumos virtio framework when the drm node is a virtio-gpu PCI child.
+ * On a non-virtio parent virtio_gpu_transport_attach returns NULL and the drm
+ * node still comes up as the compile-only core (dev->vgpu stays NULL, and the
+ * SET_SCANOUT path returns ENXIO). virtio_gpu.c is a distinct translation unit;
+ * a forward-declared opaque type keeps drm_core.c independent of its internals.
+ */
+struct virtio_gpu_softc;
+extern struct virtio_gpu_softc *virtio_gpu_transport_attach(dev_info_t *,
+    struct drm_device *);
+extern void virtio_gpu_transport_detach(struct virtio_gpu_softc *);
 
 #define	DRM_DRIVER_NAME	"drm"
 
@@ -166,11 +181,62 @@ drm_ioctl(dev_t d, int cmd, intptr_t arg, int mode, cred_t *credp, int *rvalp)
 	case DRM_IOCTL_MODE_DESTROY_DUMB:
 		err = drm_gem_destroy_dumb(dev, arg, mode);
 		break;
+	case DRM_IOCTL_MODE_SET_SCANOUT_SOLNIX:
+		err = drm_set_scanout_ioctl(dev, arg, mode);
+		break;
 	default:
 		err = ENOTTY;	/* unimplemented DRM ioctl */
 		break;
 	}
 	return (err);
+}
+
+/*
+ * ---- cb_devmap: GEM mmap (C1b) ----
+ *
+ * NetBSD routes drm's fo_mmap -> uvm fault -> the object's pages; illumos
+ * routes an mmap of the DRI node through the devmap(9E) framework: the user
+ * mmaps at the offset MAP_DUMB handed back, the kernel calls cb_devmap with
+ * that offset, and we bind the GEM object's ddi_umem_alloc cookie to the
+ * mapping via devmap_umem_setup(9F). The faulted pages ARE the object's pages,
+ * so the mapping is coherent with kernel writes and (for virtio-gpu) with the
+ * host-visible RESOURCE_ATTACH_BACKING sg-list.
+ */
+static const ddi_device_acc_attr_t drm_umem_acc = {
+	DDI_DEVICE_ATTR_V0,
+	DDI_NEVERSWAP_ACC,
+	DDI_STRICTORDER_ACC,
+};
+
+static int
+drm_devmap(dev_t d, devmap_cookie_t dhp, offset_t off, size_t len,
+    size_t *maplen, uint_t model)
+{
+	struct drm_device *dev = ddi_get_soft_state(drm_state, 0);
+	struct drm_gem_object *obj;
+	offset_t obj_off;
+	int rc;
+
+	(void) d; (void) model;
+	if (dev == NULL)
+		return (ENXIO);
+
+	obj = drm_gem_object_lookup_offset(dev, (uint64_t)off);
+	if (obj == NULL)
+		return (ENXIO);
+
+	/* offset within the object; must map inside the object's pages. */
+	obj_off = off - (offset_t)obj->mmap_offset;
+	if (obj_off + len > obj->size)
+		return (ENXIO);
+
+	rc = devmap_umem_setup(dhp, dev->dip, NULL, obj->umem_cookie,
+	    obj_off, len, PROT_ALL, DEVMAP_DEFAULTS, &drm_umem_acc);
+	if (rc != 0)
+		return (rc);
+
+	*maplen = len;
+	return (0);
 }
 
 static struct cb_ops drm_cb_ops = {
@@ -182,7 +248,7 @@ static struct cb_ops drm_cb_ops = {
 	.cb_read = nodev,
 	.cb_write = nodev,
 	.cb_ioctl = drm_ioctl,
-	.cb_devmap = nodev,	/* C1b: GEM mmap via devmap(9E) */
+	.cb_devmap = drm_devmap,	/* C1b: GEM mmap via devmap(9E) */
 	.cb_mmap = nodev,
 	.cb_segmap = nodev,
 	.cb_chpoll = nochpoll,	/* C1b: DRM event queue -> pollwakeup */
@@ -226,6 +292,15 @@ drm_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	    DRM_MINOR_RENDER, DDI_NT_DISPLAY, 0) != DDI_SUCCESS)
 		goto fail;
 
+	/*
+	 * If this node is a virtio-gpu PCI child, bind the illumos virtio
+	 * framework + probe the display. On any other parent this returns NULL
+	 * and the node stays a bare drm core (dev->vgpu == NULL). The scanout
+	 * ioctl checks dev->vgpu, so a NULL transport is a clean no-op, not a
+	 * failure -- this keeps the compile-only core loadable without a device.
+	 */
+	(void) virtio_gpu_transport_attach(dip, dev);
+
 	ddi_report_dev(dip);
 	return (DDI_SUCCESS);
 
@@ -247,6 +322,8 @@ drm_detach(dev_info_t *dip, ddi_detach_cmd_t cmd)
 		return (DDI_FAILURE);
 	dev = ddi_get_soft_state(drm_state, inst);
 	if (dev != NULL) {
+		if (dev->vgpu != NULL)
+			virtio_gpu_transport_detach(dev->vgpu);
 		ddi_remove_minor_node(dip, NULL);
 		idr_destroy(&dev->gem_handles);
 		mutex_destroy(&dev->lock);

@@ -85,3 +85,23 @@ harnesses (PyTorch/vLLM need Python-C-ext + the compute runtime + often Rust/Go 
 - Sequencing: C1 (DRM keystone) is the gate. Everything accelerated waits on it. Start the
   NetBSD-drm2 port scaffolding NOW (C1a: drm core + GEM on virtio-gpu) in parallel with the
   breadth/toolchain work.
+
+## C1b DONE (2026-08-13): virtio-gpu path compiles — GEM mmap + shims + SET_SCANOUT
+The full virtio-gpu 2D path compiles as one ET_REL/EM_AMD64 illumos kernel object (`drm`):
+- GEM real page backing: ddi_umem_alloc(9F) + cb_devmap/devmap_umem_setup(9F) -> userland mmap of a
+  GEM handle faults in real pages.
+- linux-compat shim primitives: workqueue->ddi_taskq, kthread->thread_create, completion->kcondvar_t,
+  rwsem->krwlock_t (kref/idr/mutex/kmem from C1a). NetBSD linux_work.c/linux_kthread.c/completion.h/
+  linux_rwsem.c used as the API checklist, mapped to illumos primitives.
+- virtio-gpu attach + GET_DISPLAY_INFO over the REAL illumos virtio framework KPI (same KPI vioif/vioblk
+  use; every virtio_* undef confirmed in /kernel/misc/amd64/virtio's exports, zero phantom).
+- SET_SCANOUT modeset: full RESOURCE_CREATE_2D->ATTACH_BACKING->SET_SCANOUT->TRANSFER_TO_HOST_2D->
+  RESOURCE_FLUSH chain. wire protocol cribbed verbatim from Linux/QEMU virtio_gpu.h (BSD-licensed);
+  command flow follows Linux virtgpu_vq.c + NetBSD, re-expressed on the illumos virtio KPI (no .c lifted).
+QEMU boot NOT reached: the EC2 build node is non-metal (TCG-only, no /dev/kvm) -> full illumos guest
+boot under TCG is prohibitively slow. Verified the symbol boundary STATICALLY instead (all virtio_*
+present in kernel exports). Stayed off the live kernel (panic risk on a device-less driver). A metal
+instance (or local hardware) is needed for the runtime scanout proof.
+Committed: src/drm-port/{src/*.c,*.h, virtio_gpu*, linux-compat, uapi, test/test_c1b.c}. ~1496 LOC.
+NEXT C1c: dma-fence (cv-backed) + dma-resv/ww_mutex + dma-buf fd-sharing (the hard illumos gap) +
+sync_file + drm scheduler -> gates C2 (Mesa/GBM/Vulkan). Also C1b runtime proof needs a metal instance.
