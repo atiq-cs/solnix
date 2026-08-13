@@ -672,3 +672,27 @@ session ports.
 PROCESS FIX: dispatch prompts must drop /tmp/.pubcreds + oi-node-publish.sh on the node BEFORE the
 agent starts (waves 28b/29 built fine but published=0 -- creds weren't on those us-east-2 nodes yet;
 orchestrator published after). Now all active nodes have creds.
+
+## PS-GRAPHICS-STACK (2026-08-13): X11 achievable, Wayland/Vulkan/GDM need kernel DRM/KMS
+Honest assessment of the graphics stack on illumos:
+BUILT + durable: full X11 CLIENT library graph (~20: libX11/libxcb/xorgproto/libXext/libXrender/libXft/
+  libXi/libXrandr/libXcursor/libXfixes/libXcomposite/libXdamage/libXinerama/libXtst/libxkbcommon/
+  xtrans/libXau/libXdmcp/libICE/libSM) + GTK deps (glib/cairo-X/pango-X/gdk-pixbuf/harfbuzz/graphene/
+  at-spi2/fontconfig/freetype).
+NEXT (achievable, X11 path -- illumos SUPPORTS Xorg): 
+  - gtk3/gtk4: blocked on libepoxy->libglvnd (Solaris ld rejects GNU --version-script; fixable: no-GL
+    gtk3 OR route libglvnd link through GNU ld) + a toml-hash shim crack. A few cracks out.
+  - Xorg SERVER: buildable on illumos (illumos ships Xorg via the xsvc/kernel-framebuffer path, NOT
+    DRI/DRM). Needs pixman(done) + libdrm-FREE build (illumos has no libdrm) + the illumos video
+    drivers (already in-kernel). This is the realistic desktop target: Xorg + a WM/DE over X11.
+FUNDAMENTALLY HARD (kernel-level, multi-year, NOT package ports):
+  - Wayland: needs GBM + DRM/KMS (/dev/dri, drm_* ioctls). illumos has NO DRM/KMS subsystem. wayland
+    libs won't have a working backend without a kernel DRM port. wlroots/compositors likewise.
+  - Vulkan / Mesa DRI / libGL: need a DRI driver + KMS. illumos GPU is Xorg-2D via kernel FB, no DRI.
+    (Mesa softpipe/llvmpipe SOFTWARE rendering MIGHT build for GL-without-GPU, worth a probe, but not
+    hardware-accelerated Vulkan.)
+  - GDM / display-manager: needs systemd-logind + DRM. On illumos the path is XDM/a-SMF-launched Xorg,
+    not GDM. 
+STRATEGY: pursue the X11 desktop (Xorg server + GTK-over-X + a lightweight WM/DE). Wayland/Vulkan/GDM
+are explicitly OUT until (if ever) illumos gains DRM/KMS -- document as a known non-goal for the
+current era. A software-Mesa (llvmpipe) probe is the only near-term GL option.
