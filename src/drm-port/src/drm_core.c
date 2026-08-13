@@ -181,6 +181,12 @@ drm_ioctl(dev_t d, int cmd, intptr_t arg, int mode, cred_t *credp, int *rvalp)
 	case DRM_IOCTL_MODE_DESTROY_DUMB:
 		err = drm_gem_destroy_dumb(dev, arg, mode);
 		break;
+	case DRM_IOCTL_PRIME_HANDLE_TO_FD:
+		err = drm_gem_prime_handle_to_fd(dev, arg, mode);
+		break;
+	case DRM_IOCTL_PRIME_FD_TO_HANDLE:
+		err = drm_gem_prime_fd_to_handle(dev, arg, mode);
+		break;
 	case DRM_IOCTL_MODE_SET_SCANOUT_SOLNIX:
 		err = drm_set_scanout_ioctl(dev, arg, mode);
 		break;
@@ -216,10 +222,32 @@ drm_devmap(dev_t d, devmap_cookie_t dhp, offset_t off, size_t len,
 	struct drm_gem_object *obj;
 	offset_t obj_off;
 	int rc;
+	minor_t emindr = getminor((dev_t)d);
 
-	(void) d; (void) model;
+	(void) model;
 	if (dev == NULL)
 		return (ENXIO);
+
+	/*
+	 * C1c: if this mmap is on a PRIME export minor (an exported/imported
+	 * dma-buf fd, minor >= DRM_PRIME_MINOR_BASE) the exported GEM object is
+	 * found by minor, and the mapping covers the whole object from offset 0.
+	 * Otherwise (card/render node) the offset selects the object as in C1b.
+	 */
+	if (emindr >= DRM_PRIME_MINOR_BASE) {
+		obj = drm_prime_devmap_object(dev, emindr);
+		if (obj == NULL)
+			return (ENXIO);
+		obj_off = off;
+		if (obj_off + len > obj->size)
+			return (ENXIO);
+		rc = devmap_umem_setup(dhp, dev->dip, NULL, obj->umem_cookie,
+		    obj_off, len, PROT_ALL, DEVMAP_DEFAULTS, &drm_umem_acc);
+		if (rc != 0)
+			return (rc);
+		*maplen = len;
+		return (0);
+	}
 
 	obj = drm_gem_object_lookup_offset(dev, (uint64_t)off);
 	if (obj == NULL)
@@ -278,6 +306,10 @@ drm_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	dev->next_mmap_offset = 0;
 	mutex_init(&dev->lock, NULL, MUTEX_DRIVER, NULL);
 	idr_init(&dev->gem_handles);
+	/* C1c: PRIME/sync_file fd sharing state (drm_prime.c owns the lists). */
+	dev->prime_major = ddi_driver_major(dip);
+	dev->prime_next_minor = DRM_PRIME_MINOR_BASE;
+	drm_prime_init(dev);
 
 	/*
 	 * Create the DRI minor nodes. Linux/NetBSD expose /dev/dri/card0 and
@@ -324,6 +356,7 @@ drm_detach(dev_info_t *dip, ddi_detach_cmd_t cmd)
 	if (dev != NULL) {
 		if (dev->vgpu != NULL)
 			virtio_gpu_transport_detach(dev->vgpu);
+		drm_prime_fini(dev);
 		ddi_remove_minor_node(dip, NULL);
 		idr_destroy(&dev->gem_handles);
 		mutex_destroy(&dev->lock);

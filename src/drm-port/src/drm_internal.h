@@ -12,6 +12,7 @@
 
 #include <sys/types.h>
 #include <sys/ksynch.h>
+#include <sys/list.h>		/* prime export / sync_file lists */
 #include <sys/ddidevmap.h>	/* ddi_umem_cookie_t, devmap_cookie_t */
 #include "linux-compat/linux_compat.h"
 
@@ -60,6 +61,16 @@ struct drm_device {
 	kmutex_t		lock;
 	uint64_t		next_mmap_offset;
 	void			*vgpu;		/* struct virtio_gpu_softc * */
+	/*
+	 * C1c PRIME/dma-buf + sync_file fd sharing (drm_prime.c). prime_major
+	 * is this driver's major (ddi_driver_major(dip)); PRIME exports and
+	 * sync_files each take a private minor >= DRM_PRIME_MINOR_BASE off
+	 * prime_next_minor and record it in these lists.
+	 */
+	major_t			prime_major;
+	minor_t			prime_next_minor;
+	list_t			prime_exports;	/* struct drm_prime_export */
+	list_t			sync_files;	/* struct sync_file */
 };
 
 /*
@@ -73,6 +84,9 @@ struct drm_file {
 	minor_t			minor;
 	boolean_t		is_render;	/* renderD* vs card* */
 };
+
+/* C1c: PRIME/sync_file fds allocate spec-vnode minors from this base up. */
+#define DRM_PRIME_MINOR_BASE	4096
 
 /* drm core entry points used by the driver glue */
 int	drm_version_ioctl(struct drm_device *, intptr_t arg, int mode);
@@ -90,5 +104,16 @@ struct drm_gem_object *drm_gem_object_lookup_offset(struct drm_device *,
 int	drm_gem_scanout(struct drm_device *, uint32_t handle,
     uint32_t width, uint32_t height, uint32_t pitch);
 int	drm_set_scanout_ioctl(struct drm_device *, intptr_t arg, int mode);
+
+/* C1c: PRIME (dma-buf) handle<->fd + sync_file (drm_prime.c). */
+struct dma_fence;
+void	drm_prime_init(struct drm_device *);
+void	drm_prime_fini(struct drm_device *);
+int	drm_gem_prime_handle_to_fd(struct drm_device *, intptr_t arg, int mode);
+int	drm_gem_prime_fd_to_handle(struct drm_device *, intptr_t arg, int mode);
+void	drm_prime_export_teardown(struct drm_device *, minor_t);
+struct drm_gem_object *drm_prime_devmap_object(struct drm_device *, minor_t);
+int	sync_file_create(struct drm_device *, struct dma_fence *);
+struct dma_fence *sync_file_get_fence(struct drm_device *, int fd);
 
 #endif /* _DRM_INTERNAL_H_ */

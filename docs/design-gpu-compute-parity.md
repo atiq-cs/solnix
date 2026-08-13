@@ -105,3 +105,28 @@ instance (or local hardware) is needed for the runtime scanout proof.
 Committed: src/drm-port/{src/*.c,*.h, virtio_gpu*, linux-compat, uapi, test/test_c1b.c}. ~1496 LOC.
 NEXT C1c: dma-fence (cv-backed) + dma-resv/ww_mutex + dma-buf fd-sharing (the hard illumos gap) +
 sync_file + drm scheduler -> gates C2 (Mesa/GBM/Vulkan). Also C1b runtime proof needs a metal instance.
+
+## C1c DONE (2026-08-13): DRM compile-phase COMPLETE -> C2 (Mesa/Vulkan) unblockable
+All C1c primitives compile in the single ET_REL/AMD64 `drm` object; 95 undef syms all real illumos KPI
+(genunix/specfs/unix/virtio), ZERO phantom (no dma_buf_*/linux_*/anon_inode/kmalloc):
+- dma-fence: init/signal/wait/callbacks over kref+kmutex+kcondvar+atomic flags (NetBSD linux_dma_fence.c
+  semantics, RCU dropped -> readers take the lock).
+- ww_mutex + dma-resv: real wound/wait (global ticket per acquire-ctx, -EDEADLK + lock_slow retry);
+  dma_resv = ww_mutex + excl fence + growable shared array.
+- drm scheduler: single FIFO run-queue + one worker kthread; each job carries a finished dma_fence.
+- **dma-buf-fd / PRIME (the load-bearing design, DESIGN.md §D.1)**: illumos has no anon-file dma_buf,
+  but falloc(9F) (fd over a vnode) + makespecvp() (spec-vnode over a dev_t routing to our cb_ops)
+  compose into it. The solnix PRIME fd = falloc'd fd whose f_vnode is a spec-vnode over THIS drm
+  device's char node at a private per-export minor (>= DRM_PRIME_MINOR_BASE) encoding the GEM handle.
+  -> passes cross-process via SCM_RIGHTS; mmap(fd) faults through the C1b cb_devmap onto the GEM
+  ddi_umem pages; FD_TO_HANDLE reverses via getf->f_vnode->getminor->export->object. The
+  DRM_IOCTL_PRIME_HANDLE_TO_FD/FD_TO_HANDLE UAPI is the REAL Linux DRM contract -> libdrm/GBM/Mesa
+  unchanged. sync_file reuses the same fd mechanism.
+=> **C2 (Mesa/GBM/Vulkan) is unblockable at the compile/ABI level**: C1c is the exact synchronization +
+buffer-sharing surface Mesa builds on, it compiles against real illumos KPI, and the DRM UAPI (incl
+PRIME) is preserved. Committed src/drm-port/ (~3453 LOC total, C1a+C1b+C1c).
+RUNTIME gaps (need a metal QEMU host, NOT compile-blocking): carve the PRIME/sync_file minors into a
+real 2nd minor space + cb_close teardown; wire scheduler run_job->virtio_gpu_exec; sync_file poll(2)
+via cb_chpoll+pollwakeup; C1b polish (virtio-PCI-child bind, devfsadm /dev/dri rule, completion-interrupt,
+zero-copy scanout). NEXT: C2 Mesa bring-up (softpipe/llvmpipe first for API, then virtio-gpu Gallium) +
+a metal instance for the C1 runtime proof.

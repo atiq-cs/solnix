@@ -1,6 +1,6 @@
-# solnix DRM/KMS port — layer-by-layer illumos mapping (C1a + C1b)
+# solnix DRM/KMS port — layer-by-layer illumos mapping (C1a + C1b + C1c)
 
-Phase **C1a/C1b** of the compute keystone in `docs/design-gpu-compute-parity.md`
+Phase **C1a/C1b/C1c** of the compute keystone in `docs/design-gpu-compute-parity.md`
 (illumos DRM/KMS core, cribbed from NetBSD `sys/external/bsd/drm2`). This
 document maps each NetBSD drm2 layer to its illumos DDI/VM/ksynch equivalent,
 records provenance per file, and marks what is done in C1a, C1b (KMS + real GEM
@@ -96,17 +96,60 @@ node or create a GEM object). Mapping:
 
 | Linux primitive | illumos equivalent | phase |
 |---|---|---|
-| `struct dma_fence` (signal/wait, callbacks) | `kcondvar_t` + `kmutex_t` + `kref`; callbacks via `taskq` | C1c |
-| `dma_fence_chain` / `dma_fence_array` | compose over the above | C1c |
-| `struct dma_resv` (reservation object, ww-locked) | `kmutex_t` set + `ww_mutex` shim (below) | C1c |
-| `struct dma_buf` (fd-exported buffer) | illumos has no fd-sharing of kernel buffers; export via a per-buffer minor node or a `ksensor`-style handle table, fd passed through `/dev/dri` | C1c (design open) |
-| `struct sg_table` (scatter-gather) | `ddi_dma_cookie_t` array from `ddi_dma_*_bind_handle` | C1c |
-| `sync_file` (fd-wrapped fence) | fence handle table + a minor node | C1c |
+| `struct dma_fence` (signal/wait, callbacks) | `kref` + `kmutex_t` + `kcondvar_t` + flags word + callback `list_t`; callbacks fire under the fence lock (`src/drm_dma.c`) | **C1c DONE** |
+| `dma_fence_chain` / `dma_fence_array` | compose over the above | deferred (not needed for virtio-gpu single-queue) |
+| `struct dma_resv` (reservation object, ww-locked) | `ww_mutex` + excl fence + shared-fence array (`src/drm_dma.c`) | **C1c DONE** |
+| `struct dma_buf` (fd-exported buffer) | **PRIME fd over `falloc` + a spec-vnode of this drm device at a private minor** (`src/drm_prime.c`) — see "D.1 the dma-buf-fd mechanism" below | **C1c DONE (design + compile)** |
+| `struct sg_table` (scatter-gather) | `ddi_dma_cookie_t` array (the virtio `virtio_dma_cookie_pa` list RESOURCE_ATTACH_BACKING already uses, C1b) | mapped (uses C1b path) |
+| `sync_file` (fd-wrapped fence) | same `falloc`+spec-vnode fd mechanism as PRIME, minor -> `struct sync_file` holding a fence ref (`src/drm_prime.c`) | **C1c DONE (compile; poll wiring pending)** |
+| `struct ww_mutex` (wound/wait) | `kmutex_t`+`kcondvar_t`, ticket-ordered wound/wait (`src/drm_dma.c`) | **C1c DONE** |
+| drm GPU scheduler | single FIFO run-queue + one worker kthread; jobs carry a finished dma_fence (`src/drm_sched.c`) | **C1c DONE** |
 
-`dma_buf` fd-passing is the one primitive with **no clean illumos analogue** and
-is flagged as the hardest sub-item of C1c (illumos does not pass kernel buffer
-objects across processes by fd the way Linux does; the port needs a handle
-table + a mechanism to hand userland a reference).
+### D.1 the dma-buf-fd mechanism (the load-bearing C1c design)
+
+Linux exports a GEM buffer as a `dma_buf` fd: an *anonymous* `struct file` whose
+`f_op` is `dma_buf_fops` and whose private data owns the pages; another
+process/driver receives the fd (over `SCM_RIGHTS`) and re-derives the sg-table.
+illumos has **no anonymous-file dma-buf type** — the gap this section flagged.
+But illumos has the two ingredients Linux's dma-buf is built from:
+
+1. `falloc(9F)` — the kernel side of `open(2)`: mint a `file_t` + an fd bound to
+   a vnode. Any subsystem can create an fd.
+2. `makespecvp()` — a *spec (device) vnode* over a `dev_t`; `mmap`/`close` of a
+   spec vnode route to the owning driver's `cb_ops`.
+
+So the **solnix PRIME fd** is: an fd from `falloc()` whose `file_t->f_vnode` is a
+spec-vnode over *this drm device's own char node* (`ddi_driver_major(dip)`) at a
+private per-export minor (`>= DRM_PRIME_MINOR_BASE`, allocated off
+`drm_device->prime_next_minor`) encoding which GEM handle was exported. Because
+it is a real fd over our own device:
+
+- it is passed across processes by the illumos `SCM_RIGHTS` / `I_SENDFD`
+  mechanism exactly like any other fd — the load-bearing requirement Mesa/GBM
+  need for render-node + cross-process buffer sharing;
+- `mmap(fd)` faults through *this driver's* `cb_devmap` (C1b) onto the GEM
+  object's `ddi_umem` pages — the same pages `RESOURCE_ATTACH_BACKING` hands the
+  host — so the importer sees the exact buffer. `cb_devmap` recognizes an export
+  minor (`>= DRM_PRIME_MINOR_BASE`) and resolves it via
+  `drm_prime_devmap_object` instead of the C1b mmap-offset lookup;
+- the import side (`DRM_IOCTL_PRIME_FD_TO_HANDLE`) reverses it with `getf(fd) ->
+  fp->f_vnode -> getminor -> the export -> the GEM object`, re-issues a handle in
+  the importing client's table + takes a reference. No Linux `dma_buf_ops`
+  needed.
+
+This reuses the C1b devmap path rather than inventing a second mmap route, and
+is pure real-KPI: `falloc`/`getf`/`releasef`/`setf`/`vn_rele`/`ddi_driver_major`
+are `T` (defined) in genunix and `makespecvp` is `T` in the always-loaded
+`specfs` module — verified. `sync_file` uses the identical fd mechanism (minor
+-> `struct sync_file` -> a fence ref); its `poll(2)` POLLIN-on-signal wiring
+lands when the drm node's `cb_chpoll` + a `pollwakeup(9F)` event queue are added
+(currently `nochpoll`; the fence-callback half is already in place).
+
+**C1c divergence from NetBSD: no RCU.** NetBSD's `linux_dma_fence.c` /
+`linux_dma_resv.c` use RCU for lockless fence readers. illumos has no RCU, so
+every reader in `drm_dma.c` takes the fence/resv lock. Correct, just not
+lockless; the section-E `NOTE` (global-rwlock/quiescent RCU emulation) is the
+upgrade path if lockless fence reads ever show up hot.
 
 ### E. the linux_* compat shims (the bulk of the crib)
 
@@ -120,9 +163,9 @@ table + a mechanism to hand userland a reference).
 | `struct workqueue`/`work_struct` | `common/linux/linux_work.c` | `ddi_taskq_create` + `ddi_taskq_dispatch` (`sys/taskq.h`) | DONE (C1b) |
 | `struct task_struct`/`kthread_run` | `linux_kthread.c` | `thread_create` + `p0`/`minclsyspri` (`sys/proc.h`,`sys/disp.h`) | DONE (C1b) |
 | `struct completion` | `include/linux/completion.h` | `kcondvar_t` + `kmutex_t` (`cv_wait`/`cv_timedwait`/`cv_broadcast`) | DONE (C1b) |
-| `struct ww_mutex` (wound/wait) | `linux_ww_mutex.c` | bespoke over `kmutex_t` + `kcondvar_t` (GEM/dma-resv need it) | C1c |
+| `struct ww_mutex` (wound/wait) | `linux_ww_mutex.c` | ticket-ordered wound/wait over `kmutex_t`+`kcondvar_t` (`src/drm_dma.c`) | DONE (C1c) |
 | `struct rw_semaphore` | `linux_rwsem.c` | `krwlock_t` (`rw_enter`/`rw_exit`) | DONE (C1b) |
-| `rcu` / `srcu` | `common/linux/linux_rcu.c`, `linux_srcu.c` | no illumos RCU; emulate with a quiescent-state barrier or a global rwlock (`NOTE: global rwlock, per-domain if contended`) | C1c |
+| `rcu` / `srcu` | `common/linux/linux_rcu.c`, `linux_srcu.c` | no illumos RCU; C1c dma-fence/dma-resv take the object lock on every read instead (correct, not lockless); global-rwlock/quiescent emulation is the upgrade path | C1c: lock-per-read |
 | `radixtree` / `xarray` | `linux_radixtree.c`, `linux_xa.c` | `avl_tree_t` or `mod_hash` | C1c |
 | `hrtimer` / `irq_work` | `linux_hrtimer.c`, `linux_irq_work.c` | `ddi_periodic_add` / `timeout(9F)` / taskq | C1b |
 | `struct pci_dev` + BAR/MSI | `linux_pci.c` | illumos `virtio` framework (`virtio_init`) handles PCI/BAR/MSI for virtio children | DONE for virtio (C1b); raw `ddi_regs_map_setup`+`ddi_intr_*` for non-virtio GPUs = C3 |
@@ -158,7 +201,7 @@ from Linux/QEMU (`src/virtio_gpu_hw.h`):
   `TRANSFER_TO_HOST_2D` → `RESOURCE_FLUSH`, driven by `drm_gem_scanout()` from
   the `DRM_IOCTL_MODE_SET_SCANOUT_SOLNIX` ioctl.
 
-## What compiles today (C1a + C1b) — the load-bearing piece
+## What compiles today (C1a + C1b + C1c) — the load-bearing piece
 
 `src/` builds to a single `ET_REL` AMD64 kernel object `drm` against the
 installed illumos kernel headers (`/usr/include`, `-D_KERNEL -ffreestanding
@@ -178,23 +221,50 @@ installed illumos kernel headers (`/usr/include`, `-D_KERNEL -ffreestanding
 - `linux-compat/linux_compat.h` — C1a shim (kref, idr, mutex, kmem) + the C1b
   primitives (workqueue→taskq, kthread→thread_create, completion→cv,
   rwsem→krwlock_t).
-- `uapi/drm/drm.h` — the preserved Linux DRM UAPI subset + the solnix-private
-  SET_SCANOUT demo ioctl.
-- `test/test_c1b.c` — userland self-check of the offset-lookup + cmd-buffer
-  layout math (`make`d + run separately; not part of the kernel object).
+- `linux-compat/linux_dma.h` + `drm_dma.c` — **C1c** dma-fence (kref + kmutex +
+  kcondvar + flags + callback list), ww_mutex (ticket-ordered wound/wait), and
+  dma-resv (excl + shared fence array). No RCU (lock-per-read).
+- `drm_sched.h` + `drm_sched.c` — **C1c** minimal single-FIFO-queue GPU
+  scheduler: one worker kthread drains jobs, each job's finished dma_fence is
+  signalled on completion (a submitter waits on it).
+- `drm_prime.c` — **C1c** PRIME (dma-buf) handle↔fd export/import + sync_file,
+  over `falloc` + a spec-vnode of this device at a private minor (see D.1).
+- `uapi/drm/drm.h` — the preserved Linux DRM UAPI subset + `PRIME_HANDLE_TO_FD`
+  / `PRIME_FD_TO_HANDLE` + the solnix-private SET_SCANOUT demo ioctl.
+- `test/test_c1b.c`, `test/test_c1c.c` — userland self-checks (offset-lookup +
+  cmd-buffer math for C1b; fence signal-once, ww_mutex ticket compare, resv
+  array growth for C1c) — `make`d + run separately; not part of the kernel
+  object.
 
 **Every undefined symbol in the linked object is a real illumos kernel KPI or
 an export of the illumos `virtio` module** (`ddi_soft_state_*`,
 `ddi_create_minor_node`, `ddi_copyin/out`, `ddi_umem_alloc`,
 `devmap_umem_setup`, `mod_install`, `mutex_*`, `avl_*`, `kmem_*`,
 `atomic_dec_uint_nv`, `virtio_init`, `virtio_queue_alloc`, `virtio_chain_*`,
-`virtio_dma_*`, `virtio_dev_get32`) — no unresolved Linux symbols, no phantom
+`virtio_dma_*`, `virtio_dev_get32`, and the C1c `falloc`/`getf`/`releasef`/
+`setf`/`makespecvp`/`vn_rele`/`ddi_driver_major`/`list_*`/`cv_*`/
+`atomic_add_64_nv`) — no unresolved Linux symbols, no phantom `dma_buf_*`
 virtio symbols (each `virtio_*` undef is verified against the module's
 `FUNC GLOB` exports). The shim + KPI declarations fully absorb the Linux KPI
 surface into illumos primitives: the impedance boundary is real and mappable.
 
 ## Next phases
 
+- **C1c (dma-buf + fence + scheduler for compute) — DONE (compiling):**
+  dma-fence (`src/drm_dma.c`, kref+kmutex+kcondvar+flags+callback list),
+  ww_mutex (ticket-ordered wound/wait) + dma-resv (excl+shared fence array),
+  the single-queue GPU scheduler (`src/drm_sched.c`), and the PRIME (dma-buf)
+  handle↔fd + sync_file fd-sharing over `falloc`+spec-vnode (`src/drm_prime.c`,
+  the load-bearing design in D.1). All link into the one `ET_REL` object; every
+  new undef is real genunix/specfs KPI. This is what Mesa/GBM/Vulkan need for
+  buffer synchronization + cross-process/cross-driver buffer sharing, so **C2
+  (Mesa/GBM/Vulkan) is now unblockable** at the compile/ABI level.
+  Remaining runtime gaps (need a metal QEMU host, not compile-blocking): the
+  sync_file `poll(2)` path (drm `cb_chpoll` + `pollwakeup` event queue, still
+  `nochpoll`); a second minor space carved out of the drm node for the PRIME/
+  sync_file spec-vnodes + `cb_close` teardown on export-minor close; wiring the
+  scheduler `run_job` to the virtio-gpu `virtio_gpu_exec` chain; and per-job
+  timeout/GPU-reset (C3-era, a real multi-ring GPU).
 - **C1b (KMS + real backing) — DONE (compiling):** real GEM backing
   (`ddi_umem_alloc`) + `cb_devmap`/`devmap_umem_setup` mmap; the C1b shim
   primitives (workqueue→taskq, kthread, completion, rwsem); virtio-gpu attach
@@ -208,6 +278,3 @@ surface into illumos primitives: the impedance boundary is real and mappable.
   `/dev/dri/`; and the completion-interrupt path instead of `virtio_queue_poll`.
   A QEMU `-device virtio-gpu` boot (needs KVM; this build host is a non-metal
   EC2 instance with TCG-only QEMU) is the unreached run-time stretch.
-- **C1c (dma-buf + scheduler for compute):** dma-fence (cv-backed),
-  dma-resv/ww_mutex, dma-buf fd-sharing (the hard illumos gap), sync_file, the
-  drm scheduler. This is what Vulkan-compute / render-node consumers need.
