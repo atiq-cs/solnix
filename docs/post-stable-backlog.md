@@ -632,3 +632,19 @@ OR build the release IMG with a first-boot zpool-autoexpand SMF service like clo
 fred node launches with ~90G+ root. This + baking the canonical tranche + /dev/fd mount + good nix =
 the proper v3 build-base AMI (currently ami-0bbf52c39d67d9aa3 is v2: networked but small-root + stale-
 tranche + needs node-bootstrap).
+
+## PS-AARCH64-FRED (2026-08-13): cross re-established + ceiling found (static-only)
+aarch64 cross toolchain re-established on fred (reconstructed /root/entry-aarch64-224.nix, a Nix-2.24
+cross entry using the live fork qmvlnvf0 + crossSystem aarch64-unknown-solaris2.11 + crossOverlays
+solnix.aarch64Cross.cc; captured to solnix-pkgs phase3/entry-aarch64-224.nix). Proof cross-builds:
+zlib + hello EM_AARCH64, deriver resolves, closure host-free (0 x86 leak). +5 NEW aarch64 pkgs
+cross-built + published (EM_AARCH64): pcre, oniguruma, libyaml, libtasn1, nghttp2 (+re-proofs of
+libffi/expat/pcre2/gdbm/zlib). aarch64 total now ~35.
+CEILING (real): the seed cross gcc drives shared-lib links through its bundled GNU bfd ld, whose
+libgcc mapfile (libgcc-unwind.map) is Solaris `$mapfile_version 2` format -> GNU ld rejects it. The
+driver resolves ld from its own read-only seed tree so -B wrapper tricks don't reach it. WORKAROUND:
+--disable-shared --enable-static (static libs + executables link clean -- that's the whole wave). FULL
+shared-lib aarch64 needs the seed cross gcc REBUILT with Solaris ld as its internal linker (a toolchain
+rebuild -- deferred). Blocked shared-dependent: sqlite(tcl)/gettext(bash)/libidn2(libiconv gnulib).
+Cross-fetch fix: config.sub via risqcapital/gnu-config-mirror (savannah unreachable from node),
+nix-store --add-fixed to the FOD path. Also hit the same 7.3G-root disk wall -> v3 AMI fixes it.
