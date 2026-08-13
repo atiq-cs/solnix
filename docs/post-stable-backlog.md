@@ -696,3 +696,16 @@ FUNDAMENTALLY HARD (kernel-level, multi-year, NOT package ports):
 STRATEGY: pursue the X11 desktop (Xorg server + GTK-over-X + a lightweight WM/DE). Wayland/Vulkan/GDM
 are explicitly OUT until (if ever) illumos gains DRM/KMS -- document as a known non-goal for the
 current era. A software-Mesa (llvmpipe) probe is the only near-term GL option.
+
+## PS-GRAPHICS-STACK SUPERSEDED (2026-08-13): Wayland/Vulkan/COSMIC ARE achievable via NetBSD DRM
+Correction: the earlier "Wayland/Vulkan/GDM = permanent non-goal (illumos has no DRM/KMS)" was too
+pessimistic. NetBSD has a working, maintained Linux-DRM compat layer (src/sys/external/bsd/drm2 /
+drmkms) running Mesa DRI on real GPUs -> an illumos DRM/KMS port is a PORTING problem with a proven
+BSD reference (same pattern as the ena NIC crib from FreeBSD), not a from-scratch wall. Full phased
+plan in docs/design-desktop-and-local-ai.md: G0 X11 desktop + llama.cpp-CPU (now) -> G1 DRM/KMS shim
+(crib NetBSD drmkms, keystone) -> G2 Mesa/GBM -> G3 Vulkan (lavapipe SW first) -> G4 Wayland/wlroots/
+smithay+XWayland -> G5 COSMIC + seatd greeter. Target: COSMIC DE + local LLMs (llama.cpp CPU near-term,
+GPU once Vulkan lands; ollama needs Go). Exposed prereqs to track: Rust toolchain (COSMIC + LLM tools),
+Go toolchain (ollama), seatd (logind replacement), libinput+evdev shim, a NetBSD-current source mirror
+as the DRM crib. G0 + llama.cpp-CPU ship a usable graphical + local-AI solnix without the deep kernel
+work; G1 unlocks the rest.
