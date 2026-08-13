@@ -655,3 +655,20 @@ solnix-zpool-expand SMF for larger volumes), canonical tranche (cksum 2788000278
 /dev/fd, good nix q9cgfd. Boot-tested: networked + cmake-minimal builds + 90G free after a full build.
 us-west-2 copy ami-07ea683bff41089b3. Fleet launches on v3 now. Node still runs solnix-node-bootstrap.sh
 once (pulls good nix + fork from cache). Capture scripts/fred-fix-base-ami.sh (the AMI-build helper).
+
+## Wave 28b (cmake-graph) +32 + SYSTEMIC libffi-doCheck crack (2026-08-13, fred v3)
++32 pkgs + full cmake: xxhash/fmt/spdlog/nlohmann_json/abseil-cpp/re2/protobuf/protobuf-c/flatbuffers/
+simdjson/yaml-cpp/jsoncpp/brotli/snappy/c-ares/msgpack-c/libcbor/minisign/s2n-tls/c-blosc2/minizip-ng/
+double-conversion/cjson/utf8proc/cmark/pugixml/tinyxml-2/lz4/zstd/libdeflate/zlib-ng. All host-free,
+published=99 failed=0. Registry crossed 1000 rows (1014).
+SYSTEMIC CRACK (bake into overlay): libffi doCheck=false removes its dejagnu->expect(pty.h) test wedge
+-- this was THE most common build-blocker across the batch (pty.h absent on illumos). Also: cmake
+bootstrap -lkstat/-lsendfile + ranlib->ar-s/strip->host-strip shims; rhash solaris* triple; jitter-
+entropy/s2n/zlib-ng strip -z relro/noexecstack/--version-script; spdlog tm_gmtoff patch; protobuf-c
+protoc --proto_path wrapper + withGnm.
+STILL BLOCKED (real ports): python3 cpython (config.guess fixed, stuck at socketmodule Py_SUNOS_VERSION
+-- gates mbedtls/p11-kit); icu4c (uconv.cpp gcc -- gates msgpack-cxx/re2-icu). Both are known multi-
+session ports.
+PROCESS FIX: dispatch prompts must drop /tmp/.pubcreds + oi-node-publish.sh on the node BEFORE the
+agent starts (waves 28b/29 built fine but published=0 -- creds weren't on those us-east-2 nodes yet;
+orchestrator published after). Now all active nodes have creds.
