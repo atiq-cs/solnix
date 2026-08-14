@@ -217,3 +217,18 @@ NEXT (real GPU): EC2 GPU instances (g4dn/g5/g6 = NVIDIA T4/A10G/L4 via PCI passt
 NO metal/kvm needed, the GPU is directly on the instance). The C1 DRM + a real GPU driver (nouveau/NVK
 for NVIDIA open path, or amdgpu on a g4ad AMD instance) binds the passthrough GPU. This is the real-GPU
 runtime + parity target, reachable on regular (bootable) EC2 GPU instances.
+
+## C3-amdgpu-c DONE (2026-08-14): amdgpu ring bring-up compiles -- driver compile-phase ~complete
+navi12 reg-base (SOC15 reg_offset[hwip][inst] -> RREG32/WREG32 address each IP block), GMC/GART (512MB,
+page-table BO from amdgpu_bo), GFX+SDMA amdgpu_ring_init (ring BO from amdgpu_bo GTT, rptr/wptr/doorbell/
+fence-writeback, amdgpu_ring_write), IH ring skeleton. Wiring compiles end-to-end: amdgpu_transport_attach
+-> amdgpu_ttm_init -> amdgpu_ip_blocks_init -> reg-base + wb + GMC + GFX/SDMA rings + IH. drm+amdgpu
+ET_REL, 124 undefs all real illumos KPI, zero phantom. Cribbed navi12_ip_offset.h + navi12_reg_base_init
++ soc15_common + amdgpu_ring.c/ih.h/gart.c VERBATIM (register bases, no .c lifted). amdgpu ~2100 LOC.
+=> The amdgpu real-GPU driver COMPILE-PHASE is essentially complete (device + memory/TTM + IP-blocks/
+rings all compile). ONLY C3-amdgpu-d remains: firmware load (request_firmware navi12_*.bin) + PSP/SMU
+power-up + live .hw_init register programming + rings wired to the C1 scheduler for live EXECBUFFER +
+KFD -- and that NEEDS REAL HARDWARE (a g4ad instance, gated on GPU quota). So: the ENTIRE accelerated-GPU
+stack (amdgpu kernel driver + C1 DRM + C2 Mesa + C3a Vulkan + C4 llama-Vulkan) compiles on illumos;
+runtime bring-up (C3-amdgpu-d live) is the real-hardware phase on g4ad (GPU quota CASE_OPENED) or local
+x86+GPU hw.

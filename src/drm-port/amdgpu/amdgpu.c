@@ -40,6 +40,7 @@
 #include "drm_internal.h"
 #include "amdgpu_priv.h"
 #include "ttm_priv.h"
+#include "amdgpu_ip.h"
 
 /*
  * The DDI regs-map access attributes for a PCI memory BAR: little-endian
@@ -238,9 +239,23 @@ amdgpu_transport_attach(dev_info_t *dip, struct drm_device *drm)
 		    "BO allocation unavailable");
 
 	/*
-	 * At this point a real amdgpu would call amdgpu_device_init's IP-init
-	 * chain (amdgpu_device_ip_early_init -> nv_set_ip_blocks). That is the
-	 * deferred bulk; C3-amdgpu-a stops here with BARs mapped + asic id read.
+	 * C3-amdgpu-c: the IP-block bring-up. With TTM up, set the Navi 12
+	 * register bases (navi12_reg_base_init) and stand up the GMC/GART page
+	 * table + the GFX/SDMA command rings + the IH ring -- each allocated
+	 * from amdgpu_bo_create (C3-amdgpu-b). This is the software floor the
+	 * live power-up + firmware load (C3-amdgpu-d) builds on. Non-fatal to
+	 * the attach: a failure leaves BARs + TTM valid and warns.
+	 */
+	if (sc->ttm != NULL &&
+	    amdgpu_ip_blocks_init(sc) != DDI_SUCCESS)
+		cmn_err(CE_WARN, "?amdgpu: IP-block init failed; "
+		    "rings unavailable");
+
+	/*
+	 * At this point a real amdgpu would proceed to amdgpu_device_ip_init's
+	 * .hw_init (power up, load firmware, program live registers). That is
+	 * C3-amdgpu-d and needs real hardware; C3-amdgpu-c stops with the reg
+	 * bases set + the ring/GMC/IH BOs allocated.
 	 */
 	return (sc);
 
@@ -259,6 +274,7 @@ amdgpu_transport_detach(struct amdgpu_softc *sc)
 {
 	if (sc == NULL)
 		return;
+	amdgpu_ip_blocks_fini(sc);
 	amdgpu_ttm_fini(sc);
 	if (sc->intr_htable != NULL) {
 		(void) ddi_intr_disable(sc->intr_htable[0]);

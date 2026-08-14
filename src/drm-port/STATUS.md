@@ -1,6 +1,92 @@
 # solnix DRM/KMS port — STATUS
 
-## Phase reached: C3-amdgpu-b (the smallest TTM — vmem VRAM manager over BAR0 + ddi_dma GTT manager + ttm_bo core + amdgpu_bo_create, COMPILING against illumos headers + the C1/amdgpu framework)
+## Phase reached: C3-amdgpu-c (the Navi 12 IP-block / ring bring-up — navi12 register bases + reduced GMC/GART + GFX/SDMA command rings + the IH ring, COMPILING against illumos headers + the C1/amdgpu framework)
+
+C3-amdgpu-c is the **last compile-phase piece before amdgpu drives a real GPU**.
+With TTM (C3-amdgpu-b) providing `amdgpu_bo_create`, each IP block now allocates
+its ring buffers + page tables. The chain the attach path runs after TTM:
+`navi12_reg_base_init` (set the SOC15 register bases so RREG32/WREG32 can
+address each IP block) -> `amdgpu_wb_init` (the ring-progress writeback buffer)
+-> `amdgpu_gmc_init` (the GART page table) -> `amdgpu_ring_init` x2 (the GFX +
+SDMA command rings) -> `amdgpu_ih_ring_init` (the interrupt ring). It allocates
+the BOs + sets up the pointers/reg-bases; it does NOT power up the GPU or load
+firmware (that is C3-amdgpu-d, needs real hardware).
+
+### C3-amdgpu-c deliverables, per piece (all COMPILING, ET_REL AMD64)
+
+- **navi12 register base: YES.** `amdgpu/amdgpu_ip.c` (build copy
+  `src/amdgpu_ip.c`) + `amdgpu_ip.h`. `navi12_reg_base_init` fills
+  `sc->ip->reg_offset[hwip][inst]` from the Navi 12 IP-base table (GC / HDP /
+  MMHUB / ATHUB / NBIF0 / MP0 / OSSSYS / SDMA=GC / SMUIO / THM / CLK / DF), the
+  base values cribbed **VERBATIM** from `../amdgpu-ref/src/navi12_ip_offset.h`
+  (the real gfx1011 MMIO bases, NOT invented). `amdgpu_reg_offset(sc, hwip,
+  inst, seg, reg)` = `reg_offset[..][seg] + reg` (the SOC15_REG_OFFSET model)
+  is the absolute MMIO word index RREG32/WREG32 (C3-amdgpu-a) then addresses.
+  Crib: `amdgpu_navi12_reg_init.c` + `soc15_common.h`.
+- **GMC / GART: YES.** `amdgpu/gmc.c`. `amdgpu_gmc_init` picks a 512 MB GART,
+  derives `num_gpu_pages = gart_size / GPU_PAGE_SIZE` and `table_size =
+  num_gpu_pages * 8` (8 bytes/PTE), allocates + zeroes the page-table BO from
+  `amdgpu_bo_create` (in GTT here so it has a CPU mapping; real GMC 10 puts it
+  in VRAM + kmaps it — the VRAM CPU-mmap devmap path is deferred). No live
+  aperture-register programming, no per-page PTE fill (deferred, needs live
+  MMIO / SDMA). Crib: `amdgpu_gart.h`/`amdgpu_gart.c` `amdgpu_gart_init` +
+  `gmc_v10_0` gart_size.
+- **GFX + SDMA ring_init: YES.** `amdgpu/amdgpu_ring.c`. `amdgpu_ring_init`:
+  `ring_size = pow2(max_dw * 4 * sched_hw_submission)`, `buf_mask =
+  ring_size/4 - 1`, `ptr_mask`, the ring BO from `amdgpu_bo_create`(GTT) ->
+  CPU ptr + GPU addr, the rptr/wptr/fence writeback slots (`amdgpu_wb_get`),
+  and the doorbell index. `amdgpu_ring_write` appends a dword with the wptr
+  wrap. This is the transport EXECBUFFER (the C1d 3D submit) ultimately feeds;
+  the live IB-emit + drm_sched wiring is C3-amdgpu-d. Crib: `amdgpu_ring.h` /
+  `amdgpu_ring.c` `amdgpu_ring_init` + `amdgpu_ring_write`; `gfx_v10_0` /
+  `sdma_v5_0` ring setup.
+- **IH ring: YES (skeleton).** `amdgpu/amdgpu_ring.c` `amdgpu_ih_ring_init`:
+  the 256 KB interrupt-handler ring BO (GTT) + rptr + ptr_mask. The GPU writes
+  interrupt-vector entries here; the ISR (amdgpu.c `amdgpu_intr_stub`, on the
+  MSI-X vector C3-amdgpu-a reserved) drains it. The IV decode + the
+  per-IP-block `.process` dispatch + the live WPTR/RPTR register wiring are
+  C3-amdgpu-d. Crib: `amdgpu_ih.h` + `navi10_ih.c`.
+- **writeback + aggregate: YES.** `amdgpu_wb_*` (a 128-slot GTT dword BO the
+  GPU posts ring progress into, bitmap slot allocator) + `amdgpu_ip_blocks_init`
+  / `_fini` (the reduced `amdgpu_device_ip_init`: common/GMC/GFX/SDMA/IH order,
+  per `nv_set_ip_blocks` CHIP_NAVI12; PSP/SMU/DCE/VCN skipped). Wired into
+  `amdgpu_transport_attach` after `amdgpu_ttm_init`.
+
+### C3-amdgpu-c what compiles (verified)
+
+    cd /root/drm-port && make
+      -> src/amdgpu_ip.o    ELF 64-bit LSB relocatable AMD64  (ET_REL, EM_AMD64)
+      -> src/gmc.o          ELF 64-bit LSB relocatable AMD64
+      -> src/amdgpu_ring.o  ELF 64-bit LSB relocatable AMD64
+      -> src/amdgpu.o       (now calls amdgpu_ip_blocks_init after TTM)
+      -> drm                links the three new objects into the single module
+    ./verify-syms.sh  # 124 undefs, zero phantom (C3-amdgpu-c adds only
+                      #   snprintf as a new external; all other new undefs are
+                      #   intra-amdgpu, resolved at link)
+    gcc -o /tmp/tc test/test_c3_amdgpu_c.c && /tmp/tc  # "C3-amdgpu-c logic self-check: PASS"
+
+### C3-amdgpu-c deferred (each mapped in docs/design-gpu-amdgpu.md)
+
+- **power-up + firmware** (`request_firmware` of navi12_*.bin, PSP/SMU
+  sequencing) — C3-amdgpu-d; needs the real V520.
+- **live register programming** — `gmc_v10_0` gart_enable (VM page-table base +
+  the PTE-fill loop over the GTT cookies), the GFX/SDMA `.hw_init` (ring-enable
+  registers + the doorbell aperture), the IH WPTR/RPTR wiring + IV decode.
+- **the live submit path** — the GFX/SDMA rings wired to the C1 scheduler
+  (`drm_sched.c`): a `drm_sched_job` `run_job` emits the IB into the ring +
+  rings the doorbell; completion signals the C1 dma-fence.
+
+### R-next: C3-amdgpu-d (firmware load + power-up sequencing — needs real hw)
+
+All remaining pieces are `RREG32/WREG32` against a real Navi 12: load the
+microcode blobs, power up (PSP/SMU), program the GMC/GFX/SDMA/IH live
+registers, wire the rings to the C1 scheduler, then KFD (A3-f, ROCm compute).
+The compile-phase floor — device-init (a) + TTM (b) + IP blocks/rings (c) — is
+now complete.
+
+---
+
+## Prior phase: C3-amdgpu-b (the smallest TTM — vmem VRAM manager over BAR0 + ddi_dma GTT manager + ttm_bo core + amdgpu_bo_create, COMPILING against illumos headers + the C1/amdgpu framework)
 
 C3-amdgpu-b builds the **key new kernel subsystem C1 deferred**: TTM
 (Translation Table Manager) — GPU memory management. C1's virtio-gpu had no
@@ -75,7 +161,7 @@ addresses. No migration, no eviction, no swap (deferred per the design).
   path extended); the GEM handle exists, the CPU mapping is deferred with
   eviction.
 
-### R-next: C3-amdgpu-c (IP blocks / ring bring-up)
+### R-next: C3-amdgpu-c (IP blocks / ring bring-up) — NOW DONE (see the top section)
 
 The TTM unblocks it: `amdgpu_device_ip_early_init` -> `nv_set_ip_blocks` ->
 `navi12_reg_base_init`, then each IP block (GFX/SDMA/GMC/IH) allocates its ring
@@ -401,9 +487,19 @@ present in `/kernel/misc/amd64/virtio`'s `FUNC GLOB` exports.
       virtio_impl.h      illumos virtio framework KPI (declarations)
       amdgpu.c           C3-amdgpu-a: reduced amdgpu_device_init
                          (amdgpu_transport_attach) + C3-amdgpu-b: calls
-                         amdgpu_ttm_init after the BAR map
+                         amdgpu_ttm_init after the BAR map + C3-amdgpu-c: calls
+                         amdgpu_ip_blocks_init after TTM
+      amdgpu_ip.h        C3-amdgpu-c: SOC15 reg_offset table + struct
+                         amdgpu_ring/amdgpu_ih/amdgpu_gmc/amdgpu_wb/amdgpu_ip
+      amdgpu_ip.c        C3-amdgpu-c: navi12_reg_base_init (VERBATIM IP bases)
+                         + amdgpu_reg_offset + amdgpu_wb_* + ip_blocks_init
+      gmc.c              C3-amdgpu-c: reduced GMC/GART (gart_size + page-table
+                         BO from amdgpu_bo_create, no live PTE programming)
+      amdgpu_ring.c      C3-amdgpu-c: amdgpu_ring_init (GFX+SDMA ring BOs +
+                         rptr/wptr/doorbell) + amdgpu_ring_write + IH ring
       amdgpu_priv.h      C3-amdgpu-a: the reduced adev softc (BAR/reg/asic) +
-                         C3-amdgpu-b: struct ttm_device *ttm
+                         C3-amdgpu-b: struct ttm_device *ttm +
+                         C3-amdgpu-c: struct amdgpu_ip *ip
       ttm_priv.h         C3-amdgpu-b: reduced ttm_resource/ttm_buffer_object/
                          ttm_range_mgr/ttm_gtt_alloc/ttm_device + amdgpu_bo;
                          the illumos-TTM design (vmem-VRAM, ddi_dma-GTT)
@@ -427,8 +523,12 @@ present in `/kernel/misc/amd64/virtio`'s `FUNC GLOB` exports.
                          asic classify)
       test_c3_amdgpu_b.c C3-amdgpu-b self-check (vmem<->VRAM-offset round-trip,
                          page rounding, used-bytes accounting, domain->mem_type)
-    amdgpu/              C3-amdgpu-a/b canonical phase artifacts (amdgpu.c,
-                         amdgpu_priv.h, ttm.c, ttm_priv.h, amdgpu_ttm.c + .o) +
+      test_c3_amdgpu_c.c C3-amdgpu-c self-check (SOC15 reg-offset on the real
+                         GC/OSSSYS bases, ring_size pow2 + buf_mask + wptr
+                         wrap, wb slot alloc/reuse, GART table-size math)
+    amdgpu/              C3-amdgpu-a/b/c canonical phase artifacts (amdgpu.c,
+                         amdgpu_priv.h, ttm.c, ttm_priv.h, amdgpu_ttm.c,
+                         amdgpu_ip.h, amdgpu_ip.c, gmc.c, amdgpu_ring.c) +
                          README.md; build copies live in src/
     amdgpu-ref/          NetBSD amdgpu crib (pin 5a77651) + PROVENANCE.md
     docs/design-gpu-amdgpu.md  the amdgpu illumos-layering design (TTM/PCI/

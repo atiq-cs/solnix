@@ -174,3 +174,17 @@ amdgpu_bo_gpu_offset(struct amdgpu_bo *abo)
 {
 	return (abo->tbo.mem.start);
 }
+
+/*
+ * amdgpu_bo_cpu_addr - the CPU-visible kernel address of a GTT-placed BO. GTT
+ * BOs are ddi_dma_mem_alloc'd system RAM, so gtt.kaddr is a valid kernel VA a
+ * ring/writeback/page-table user writes through. A VRAM BO has no CPU mapping
+ * yet (the devmap-over-BAR0 fault path is deferred with eviction) -> NULL.
+ */
+void *
+amdgpu_bo_cpu_addr(struct amdgpu_bo *abo)
+{
+	if (abo->tbo.mem.mem_type == TTM_PL_TT)
+		return ((void *)abo->tbo.gtt.kaddr);
+	return (NULL);
+}

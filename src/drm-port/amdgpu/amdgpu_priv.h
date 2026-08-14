@@ -104,6 +104,9 @@ struct amdgpu_softc {
 
 	/* C3-amdgpu-b TTM: the VRAM (vmem/BAR0) + GTT (ddi_dma) managers */
 	struct ttm_device	*ttm;		/* NULL until amdgpu_ttm_init */
+
+	/* C3-amdgpu-c IP blocks: reg_offset table + GMC + GFX/SDMA/IH rings */
+	struct amdgpu_ip	*ip;		/* NULL until amdgpu_ip_blocks_init */
 };
 
 /* the register access primitives -- the RREG32/WREG32 illumos mapping */
@@ -117,5 +120,9 @@ extern void	amdgpu_transport_detach(struct amdgpu_softc *);
 /* C3-amdgpu-b: the TTM device is defined in ttm_priv.h (included by ttm.c /
  * amdgpu_ttm.c). Forward-declared here so the softc can hold a pointer. */
 struct ttm_device;
+
+/* C3-amdgpu-c: the IP-block aggregate (reg_offset + GMC + rings + IH) is
+ * defined in amdgpu_ip.h. Forward-declared so the softc can hold a pointer. */
+struct amdgpu_ip;
 
 #endif	/* _AMDGPU_PRIV_H_ */

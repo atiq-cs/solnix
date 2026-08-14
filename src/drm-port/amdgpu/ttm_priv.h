@@ -266,5 +266,8 @@ int	amdgpu_bo_create(struct amdgpu_softc *, uint64_t size, uint32_t domain,
 	    struct amdgpu_bo **bo_out);
 void	amdgpu_bo_free(struct amdgpu_bo *);
 uint64_t amdgpu_bo_gpu_offset(struct amdgpu_bo *);
+/* C3-amdgpu-c: the CPU-visible address of a GTT-placed BO (its ddi_dma
+ * kaddr). VRAM BOs have no CPU mapping yet (devmap deferred) -> returns NULL. */
+void	*amdgpu_bo_cpu_addr(struct amdgpu_bo *);
 
 #endif	/* _TTM_PRIV_H_ */
