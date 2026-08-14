@@ -1,17 +1,182 @@
 # RISC-V (riscv64) port — STATUS
 
-**Phase reached: R-P21** (a REAL gate-shaped sgs libld `machrel.riscv.c` wired
-into `ld_reloc_local` + `ld_do_activerelocs` against the `_libld.h`
-`Rel_desc`/`Sym_desc`/`Ofl_desc` interfaces, with the %pcrel_hi/%pcrel_lo
-pairing upgraded from the R-P20 O(n) list to a real hash table; a hand-linked
-shared `libgcc_s.so.1` (EM_RISCV ET_DYN) + the first DYNAMIC riscv64-solaris
-hello; and a bigger genassym-DRIVEN riscv64 MD set partial-linked (`ld -r`) to
-one EM_RISCV `unix` object) -- DONE (all three sub-tasks, re-runnable proofs).
+**Phase reached: R-P22** (the sgs EM_RISCV backend SELECTED by a real gate-shaped
+`ld_config_target()` -> `ld_targ_riscv` so the illumos native link path drives
+the reloc pass through `machrel.riscv.c` not GNU ld; the FIRST EXECUTING
+riscv64-solaris code -- a freestanding EM_RISCV hello that RUNS on
+`qemu-system-riscv64 -machine virt` via OpenSBI and prints, plus a STATIC
+illumos-ABI hello (crt + a minimal `write(2)`/`exit(2)` libc); and a larger
+genassym-driven MD partial-link -- 6 units (locore/swtch/cpu/trap-dispatch/
+clock/mmu) -> one EM_RISCV `unix_riscv64.o` that full-links with every reloc
+resolved) -- DONE (all three sub-tasks, re-runnable proof
+`rp22/rp22-milestone-check.sh`).
+R-P21 (gate sgs `machrel.riscv.c` htab pairing + `libgcc_s.so.1` + first DYNAMIC
+hello + genassym MD partial-link),
 R-P20 (sgs %pcrel pairing + GOT/PLT alloc, csu crt + first hello ELF, larger uts
 unit), R-P19 (riscv64-solaris toolchain finished + sgs MACH descriptor + first
 EM_RISCV uts object), R-P18 (toolchain TARGET retarget + krtld/sgs reloc
 coverage), R-P17 (cross toolchain + BSD psABI/ISA headers) and R-P1..R-P16
 (kernel bring-up) are below / in `docs/design-riscv-port.md`.
+
+---
+
+## R-P22 — sgs ld_targ_riscv native selection + FIRST EXECUTING riscv64-solaris hello + larger MD partial-link
+
+Substrate: fred v3 (root@52.88.62.49), the intact R-P18/19 build-tree gcc
+(`build/gcc-sol-cfg3/gcc/xgcc -B<gcc>` reports `riscv64-unknown-solaris2.11`) +
+the R-P17 `riscv64-unknown-elf` binutils + the native OpenIndiana gcc 14.3.0 (for
+the linker-internal selection self-test) + `qemu-system-riscv64` 11.0.2 with
+OpenSBI v1.7 (`/usr/share/qemu/opensbi-riscv64-generic-fw_dynamic.bin`). NOTE:
+this host has only `qemu-system-riscv64` (full-system, `-machine virt`) -- there
+is NO user-mode `qemu-riscv64` and no `<nixpkgs>`, so the RUNNING hello is a
+freestanding S-mode payload booted by OpenSBI on the virt board (the
+R-P2..R-P16 substrate), not a qemu-user run. Proof: `rp22/rp22-milestone-check.sh`
+(all 3, re-runnable green).
+
+### R-P22.1 sgs ld_targ_riscv native SELECTION (retires the GNU-ld crutch) — DONE
+- `rp22/sgs/target.c`: the gate-shaped Target-dispatch layer that SELECTS the
+  EM_RISCV backend. `ld_targ_init_riscv()` builds a file-static `Target`
+  (`ld_targ_riscv`) whose `t_m` machine descriptor carries `m_mach = EM_RISCV`,
+  ELFCLASS64/ELFDATA2LSB, the RV64 page/word align, and the dynamic reloc
+  constants (`R_RISCV_RELATIVE`/`COPY`/`JUMP_SLOT`/`64`/`NONE`/`NUM`), and whose
+  `t_mr` machrel sub-struct points its `mr_*` function pointers at the R-P21
+  `machrel.riscv.c` entry points (`reloc_table`, `ld_reloc_local`,
+  `ld_do_activerelocs`, `ld_assign_got_ndx`, `ld_riscv_finish_pcrel`).
+  `ld_config_target(Half mach)` is the selection function the native ld calls
+  once per link: `switch (mach) { case EM_RISCV: ld_targ = *ld_targ_init_riscv();
+  return 1; default: return 0; }` -- exactly the gate `libld/common/target.c` +
+  `machrel.<mach>.c` `ld_targ_init_<mach>()` convention.
+- `rp22/sgs/target_shim.h`: the gate `Target`/`Target_mach`/`Target_machrel`
+  structs + the single `extern Target ld_targ;` global, reproduced
+  field-order-faithful to `usr/src/cmd/sgs/libld/common/_libld.h` (the gate is
+  not on this host) so `target.c` is a drop-in.
+- **Self-test** (`rp22/sgs/target_selftest.c`, compiled + linked against
+  `machrel.riscv.c` WITHOUT `-DMACHREL_SELFTEST` + `target.c`): (1)
+  `ld_config_target(EM_RISCV) == 1`, `ld_targ.t_m.m_mach == EM_RISCV`, the
+  `mr_*` pointers all non-NULL; (2) `ld_config_target(EM_X86_64) == 0` and the
+  installed RISC-V target is not clobbered; (3) a real %pcrel_hi/%pcrel_lo pair
+  driven THROUGH `ld_targ.t_mr.mr_do_activerelocs` (not a direct call)
+  reconstructs `S - P` **byte-identical to GNU ld** (`0x00001797`/`0x0a878793`,
+  `S-P == 0x10a8`) -- i.e. the link is driven by the illumos backend, not GNU
+  ld -- PASS.
+- **Scope (honest)**: this retires the GNU-ld crutch at the
+  SELECTION + reloc-DISPATCH level -- the linker's per-object backend choice
+  now routes EM_RISCV objects through `machrel.riscv.c` via a gate-shaped
+  `ld_targ`. The gate `usr/src/cmd/sgs` tree is NOT checked out on this host,
+  so we cannot rebuild the actual `ld` ELF; `target.c`/`target_shim.h` are the
+  gate-faithful drop-ins that will slot straight into a real sgs tree next to
+  the amd64/sparc targets (add the `case EM_RISCV` to the gate's own
+  `ld_config_target()`).
+- **CRIB**: `ld_targ_init_<mach>()` + the `Target` struct + the single
+  `ld_targ` global + `ld_config_target()`'s e_machine switch: illumos-gate
+  `usr/src/cmd/sgs/libld/common/target.c` + `machrel.amd64.c`
+  `ld_targ_init_x86_64()` / `machrel.sparc.c` `ld_targ_init_sparc()`; the
+  RISC-V dynamic reloc constants + LP64D/RV64 machine params: the psABI +
+  `uts/common/sys/elf_riscv.h`.
+
+### R-P22.2 FIRST EXECUTING riscv64-solaris code (RUNS on qemu) + static illumos-ABI hello — DONE
+- **The headline: a riscv64-solaris hello that RUNS.** `rp22/run/` -- a
+  freestanding EM_RISCV S-mode payload built with the
+  `riscv64-unknown-solaris2.11` gcc + the R-P17 binutils: `boot.S` (the OpenSBI
+  FW_JUMP entry: mask sie, set `gp`, set `sp = __boot_stack_top`, zero BSS,
+  `call kmain`), `kmain.c` (prints via SBI legacy console_putchar EID 0x01 then
+  SBI SRST shutdown), `sbi.h` (the SBI ecall interface), `virt.lds` (link at
+  the qemu-virt supervisor payload address `0x80200000`). Loaded with
+  `qemu-system-riscv64 -machine virt -bios opensbi...fw_dynamic.bin -kernel
+  hello.elf`; OpenSBI v1.7 hands off to `0x80200000` in S-mode and the payload
+  **prints, then clean-shuts-down in ~1 s** (SRST works, no timeout hang):
+  ```
+  hello from riscv64-solaris (R-P22)
+  first executing riscv64-solaris code
+  ```
+  This is the FIRST EXECUTING riscv64-solaris code -- our solaris-target
+  toolchain's EM_RISCV output running on emulated riscv64 hardware. Run log:
+  `rp22/run/qemu-run.log`.
+- **STATIC illumos-ABI hello** (`rp22/hello/hello_static.c` + `rp22/libc/`):
+  the R-P22 minimal libc -- `libc_syscall.s` provides `write(2)`/`exit(2)`/
+  `_syscall()` in the illumos riscv64 syscall ABI (`a7 = SYS_nr`, args in
+  `a0..a5`, `ecall`; `SYS_write == 4`, `SYS_exit == 1` from the native illumos
+  `<sys/syscall.h>`), archived to `libc.a`. `hello_static.c` calls `write(1,
+  msg, len)` then returns; linked STATIC with the R-P20 crt (`crt1/crti/crtn`)
+  + `libc.a` -> an EM_RISCV ELF64 ET_EXEC with **NO dynamic section** (no
+  `ld.so.1` needed), entry `_start`, zero relocs. `write` disassembles to
+  `li a7,4; ecall`, `_exit` to `li a7,1; ecall`, and `main`'s auipc/addi pcrel
+  pair to `msg` is resolved -- a complete self-contained static riscv64-solaris
+  exe that will run the moment the riscv64 illumos kernel syscall path
+  (R-P8/R-P9) is live under `qemu-system-riscv64`. (Sidesteps `ld.so.1` per the
+  anti-wedge directive; the RUNNING milestone is met by the bare-metal hello
+  above, which needs no libc + no runtime linker.)
+- **CRIB**: the OpenSBI FW_JUMP payload contract (S-mode entry at 0x80200000,
+  `a0=hartid`/`a1=fdt`) + the qemu-virt 0x80000000 DRAM base: OpenSBI +
+  qemu-virt docs; the SBI legacy console_putchar (EID 0x01) + SRST (EID
+  0x53525354) + legacy shutdown (EID 0x08) ecalls: the RISC-V SBI spec; the
+  `a7=nr`/`ecall` syscall stubs + `SYS_write=4`/`SYS_exit=1`: the illumos
+  riscv64 syscall ABI (same trap as the R-P20 `crt1.s exit(2)`) + the illumos
+  libc `SYSCALL()` csu idiom; the crt link order: R-P20.
+
+### R-P22.3 larger genassym-driven MD partial-link — DONE
+- Added THREE new genassym-driven MD units to the R-P21 set, all using the
+  generated `assym.h` `regs_r_*` offsets (not open-coded numbers):
+  - `rp22/uts/mach_trap.S` (`rv_trap_dispatch`): the full trap prologue that
+    saves the struct-regs frame and DISPATCHES by `scause` -- interrupt (sign
+    bit) -> `rv_interrupt`, ecall (cause 8/9) -> `rv_syscall` (advancing
+    `sepc` past the ecall), else -> `rv_trap`; restore + `sret`.
+  - `rp22/uts/mach_clock.S` (`rv_clock_intr`): the SBI-timer bottom half --
+    `rdtime` + a gp-relative load of `rv_clock_period` + an SBI `set_timer`
+    ecall (EID `0x54494D45` "TIME") to reprogram the deadline, then `call
+    clock`.
+  - `rp22/uts/mach_mmu.S` (`rv_set_satp`/`rv_tlb_flush_all`/`rv_get_satp`): the
+    MMU leaves -- `csrw satp; sfence.vma` root switch + the global TLB flush.
+- **Partial link** (`ld -r`) of all SIX units (R-P21 `mach_locore.o`/
+  `mach_swtch.o`/`mach_cpu.o` + the three new ones) -> one EM_RISCV ET_REL
+  `unix_riscv64.o` carrying the full kernel reloc set: `CALL_PLT` x7,
+  `PCREL_HI20`/`LO12` pairs, `BRANCH` x8, `RVC_BRANCH`/`RVC_JUMP`, `HI20`/
+  `LO12_I`/`LO12_S`, `ADD32`/`SUB32`/`SET6`/`SUB6`, `32_PCREL`, `ALIGN`/`RELAX`
+  -- exactly the relocs the R-P22.1-selected `machrel.riscv.c` backend resolves.
+- **Full link** with `mach_externs22.o` (`rv_trap`/`rv_interrupt`/`rv_syscall`/
+  `clock` + the R-P21 stubs): `ld -Ttext=0x10000 -e rv_trap_dispatch` resolves
+  EVERY reloc -> EM_RISCV ET_EXEC, zero residual relocs; disassembly shows
+  `rv_trap_dispatch`'s `jal rv_trap`/`jal rv_interrupt`/`jal rv_syscall` and
+  `rv_clock_intr`'s `jal clock` all resolved.
+- **CRIB**: the "save regs, decode scause, dispatch interrupt/syscall/trap C
+  handlers, restore, sret" shape: illumos amd64 `trap.S` + the R-P3 riscv
+  `trap.S`; the SBI `set_timer` (EID "TIME") + `rdtime`: the SBI + RISC-V
+  unprivileged specs + the R-P6 clock slice; the `csrw satp; sfence.vma` root
+  switch + `sfence.vma zero,zero` global flush: the RISC-V privileged spec +
+  the R-P7 mmu slice; the genassym offset SOURCE (assym.h): the R-P21 unit +
+  the illumos uts + BSD `genassym.cf` idiom.
+
+### `/root/riscv-port/rp22/` contents
+`sgs/{target.c, target_shim.h, target_selftest.c, _libld_shim.h, reloc_riscv.h,
+riscv_pcrel_htab.h, machrel.riscv.c, machrel_riscv_insn.c, target_selftest}`;
+`run/{boot.S, sbi.h, kmain.c, virt.lds, hello.elf, hello.bin, qemu-run.log}`
+(the RUNNING bare-metal hello); `libc/{libc_syscall.s, libc.a}`;
+`hello/{hello_static.c, hello_static, crt1.o, crti.o, crtn.o}` (the STATIC
+illumos-ABI hello); `uts/{mach_trap.S, mach_clock.S, mach_mmu.S,
+mach_externs22.c, assym.h, *.o, unix_riscv64.o, unix_riscv64.exec}`;
+`rp22-milestone-check.sh` (all 3, re-runnable green).
+Repo copies under `src/riscv/rp22/{sgs/{target.c, target_shim.h,
+target_selftest.c}, run/{boot.S, sbi.h, kmain.c, virt.lds, qemu-run.log},
+libc/libc_syscall.s, hello/hello_static.c, uts/{mach_trap.S, mach_clock.S,
+mach_mmu.S, mach_externs22.c}, rp22-milestone-check.sh}`.
+
+### Next: R-P23
+1. **Drop the sgs backend into a REAL gate sgs tree**: check out
+   `usr/src/cmd/sgs`, add `machrel.riscv.c` + the `ld_targ_riscv` Target to
+   `libld/common/`, add the `case EM_RISCV` to the gate's own
+   `ld_config_target()`, and rebuild the actual `ld` ELF so an EM_RISCV object
+   links with the native illumos linker binary (not GNU ld, and not just the
+   dispatch stub).
+2. **riscv64 illumos kernel syscall path so the STATIC hello RUNS**: bring the
+   R-P8/R-P9 syscall table + trap dispatch (the R-P22.3 `rv_trap_dispatch` is
+   the MD half) far enough that a `write(2)`/`exit(2)` ecall from the static
+   hello is serviced under `qemu-system-riscv64` -- the static illumos-ABI
+   hello then RUNS as a real riscv64-solaris process (vs the bare-metal SBI
+   hello, which bypasses the kernel).
+3. **Link a still-larger `unix` toward a bootable EM_RISCV image**: add the
+   remaining R-P1..R-P16 MD units (startup, real locore, mmu/hat, plic/aia,
+   virtio) to the genassym-driven partial link toward a linkable/bootable
+   riscv64 `unix`, and boot it on `qemu-system-riscv64 -machine virt`.
 
 ---
 
@@ -126,20 +291,18 @@ riscv_pcrel_htab.h, machrel.riscv.c}, libgcc_s/{libgcc_s.ver, README.md},
 uts/riscv64/{mach_swtch.S, mach_locore.S, mach_externs.c, assym.h}}` +
 `src/riscv/rp21-milestone-check.sh`.
 
-### Next: R-P22
+### Next (from R-P21) -> delivered by R-P22
 1. **Build the sgs backend inside a real (or stubbed) sgs tree** so `ld` selects
-   `ld_targ_riscv` for EM_RISCV: drop `machrel.riscv.c` + the mach descriptor
-   (`ld_targ_riscv`, R-P19.3) into `usr/src/cmd/sgs/libld/common/` against the
-   true `_libld.h`, add the EM_RISCV case to `ld_config_target()`, and link a
-   riscv64 object with the illumos `ld` itself (not GNU ld) -- then retire the
-   GNU-ld crutch.
+   `ld_targ_riscv` for EM_RISCV -- DONE R-P22.1 (gate-faithful `target.c`/
+   `target_shim.h` stub: `ld_config_target(EM_RISCV)` selects `ld_targ_riscv`;
+   the real gate-tree drop-in is R-P23.1).
 2. **libc bring-up toward a self-hosting userland**: a minimal riscv64-solaris
-   libc (crt + the syscalls the R-P8/R-P9 userland used) so the dynamic hello
-   actually RUNS under `ld.so.1` (needs the riscv64 `ld.so.1` MD reloc engine
-   -- the R-P16 krtld doreloc/kobj_reloc already covers the reloc math).
-3. **Grow the MD partial-link toward a linkable `unix`**: add more genassym-
-   driven units (real locore + trap + swtch + a machdep + the R-P17-20 headers)
-   and link a larger EM_RISCV `unix.o` set in the gate `uts/riscv64` layout.
+   libc (crt + syscalls) -- DONE R-P22.2 (a static `write(2)`/`exit(2)` libc +
+   the STATIC illumos-ABI hello; a bare-metal hello RUNS on qemu). Running it
+   as a real process under a riscv64 illumos kernel + `ld.so.1` is R-P23.2.
+3. **Grow the MD partial-link toward a linkable `unix`** -- DONE R-P22.3 (6-unit
+   EM_RISCV `unix_riscv64.o`: locore/swtch/cpu/trap-dispatch/clock/mmu, full
+   link resolves every reloc). A bootable `unix` image is R-P23.3.
 
 ---
 
