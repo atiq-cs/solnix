@@ -201,3 +201,19 @@ the FIFO scheduler (-> async hw-fence + completion interrupt); per-BO dma_resv f
 transfers over the GEM umem cookie. All runtime upgrades, not compile-blocking.
 NEXT: metal runtime (C1a-c 2D lit, then C1d 3D on a GPU host); then llama.cpp GGML_VULKAN over Venus =
 accelerated LLM. amdgpu (real-hw ROCm) is the C3 tail.
+
+## C4 DONE (2026-08-14): llama.cpp GGML_VULKAN compile-complete + loader->ICD dispatch proven
+llama.cpp b4991 built -DGGML_VULKAN=ON for x86_64-solaris: libggml-vulkan.so (exports ggml_backend_vk_*,
+NEEDED libvulkan.so.1), vulkan-shaders-gen ran (SPIR-V embedded), 55 host-free bins. Deps: Vulkan-Headers
+1.3.280, Vulkan-Loader (libvulkan.so.1, illumos fixes: SunOS in the Unix branch, __sun in
+COMMON_UNIX_PLATFORMS, getexecname for exe-path), glslang 14.3.0 (glslc->glslang shim, no shaderc).
+RUNTIME PROOF (non-metal, no GPU): the C4 loader read the C3a Venus ICD manifest, dlopen'd
+libvulkan_virtio.so, called vkCreateInstance -> -3 INITIALIZATION_FAILED (Venus needs /dev/dri/renderD*).
+This PROVES the loader->ICD dispatch is wired end-to-end -- the only missing piece is a live DRM render
+node (real GPU or the C1 runtime). CUDA-free; one build drives AMD/Intel/NVIDIA-via-NVK.
+=> The ENTIRE GPU-compute-to-accelerated-LLM SOFTWARE CHAIN compiles on illumos: C1 DRM kernel -> C2/C3a
+Mesa GL+Vulkan (virgl/Venus) -> C4 llama.cpp GGML_VULKAN. Pending only a live DRM render node on real hw.
+NEXT (real GPU): EC2 GPU instances (g4dn/g5/g6 = NVIDIA T4/A10G/L4 via PCI passthrough to the VM guest --
+NO metal/kvm needed, the GPU is directly on the instance). The C1 DRM + a real GPU driver (nouveau/NVK
+for NVIDIA open path, or amdgpu on a g4ad AMD instance) binds the passthrough GPU. This is the real-GPU
+runtime + parity target, reachable on regular (bootable) EC2 GPU instances.
