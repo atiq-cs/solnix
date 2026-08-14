@@ -743,3 +743,16 @@ is a separate boot+debug phase, best on local hw or after the metal-boot loader 
 NOTE: nested KVM on a regular EC2 VM is NOT an option (only metal exposes /dev/kvm). So EC2 runtime =
 metal = needs the loader port. The compile-complete stack is the correct + valuable current milestone;
 runtime GPU is gated on a boot-capable image on real (metal or local) hardware.
+
+## PS-METAL-BOOT CONFIRMED (2026-08-14): both m6i.metal AND c5n.metal fail identically
+Follow-up to PS-METAL-BOOT: tried c5n.metal (legacy-bios, classic Nitro firmware -- the maintainer's
+suggested type) with the BIOS AMI. SAME result as m6i.metal: SystemStatus=impaired, empty console
+(POST-stuck), illumos loader never ran, no SSH. Terminated (cost). CONCLUSION: the solnix v3 image
+does not boot on EC2 metal firmware on EITHER metal generation -- a real illumos-loader-on-EC2-metal
+gap, not instance-specific. The image boots fine on the regular Nitro-VM fleet (BIOS emulation) but the
+bare-metal firmware path differs. EC2-metal runtime (the only EC2 /dev/kvm source) is GATED on a loader
+port for EC2 metal firmware -- a distinct boot-path effort (ena-cold-boot class). The compile-complete
+GPU stack (C1a-d kernel + C2 Mesa + C3a Venus/virgl) is unaffected + is the correct current milestone;
+the DRM RUNTIME proof needs either (a) the EC2-metal loader port, or (b) LOCAL x86+GPU hardware (the
+truer real-GPU-parity target). Recommend deferring EC2-metal runtime in favor of local hw for the real
+GPU proof, and continuing compile-phase (C3 amdgpu scaffolding, llama.cpp-Vulkan build, R-P20+, breadth).
