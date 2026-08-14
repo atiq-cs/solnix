@@ -773,3 +773,15 @@ effort. The RUNTIME GPU proof should target LOCAL x86+GPU HARDWARE (the true par
 real GPU, real measurement, avoids the EC2-metal-firmware rabbit hole entirely). The compile-complete
 GPU stack (C1a-d + C2 + C3a + C4-Vulkan) is the correct EC2-side milestone; runtime + real-GPU parity
 is a local-hardware activity. EC2-metal-boot remains a documented backlog item (not the critical path).
+
+## PS-GPU-QUOTA (2026-08-14): fred GPU quota auto-DENIED, needs a human support case
+GPU (G-instance) quota on the fred account: requested 8 vCPU (L-DB2E81BA "Running On-Demand G and VT").
+us-east-1 CASE_CLOSED after ~1h with quota still 0.0 = AUTO-DENIED (new account, no GPU usage history ->
+AWS declines automated G-instance quota). Re-requested all regions (PENDING) + spot-G (L-3819A6DF).
+ROOT: AWS does NOT auto-grant GPU quota to a fresh burner account -- it needs a MANUAL SUPPORT CASE
+(console: Support -> Create case -> Service limit increase -> EC2 G instances, with a workload
+justification). That is a human/console step the CLI can't do. => GPU RUNTIME on EC2 g4ad is gated on
+the maintainer filing/approving that support case (or providing an account with GPU quota, or local
+x86+GPU hardware). The amdgpu driver (device+TTM+rings compile) + the full accelerated stack are ready;
+runtime (C3-amdgpu-d: firmware/power-up + live register programming) needs the real GPU behind that quota.
+ACTION FOR MAINTAINER: file the EC2 G-instance quota support case on fred (or point at GPU hardware).
