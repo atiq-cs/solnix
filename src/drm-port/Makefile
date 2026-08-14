@@ -13,7 +13,7 @@ KFLAGS  = -m64 -D_KERNEL -ffreestanding -nostdinc -std=gnu99 \
           -I/usr/include -Isrc
 LDFLAGS = -r
 
-OBJS = src/drm_core.o src/drm_gem.o src/virtio_gpu.o \
+OBJS = src/drm_core.o src/drm_gem.o src/virtio_gpu.o src/virtio_gpu_3d.o \
        src/drm_dma.o src/drm_sched.o src/drm_prime.o
 MODULE = drm
 

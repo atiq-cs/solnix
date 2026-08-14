@@ -35,37 +35,12 @@
 
 #include "virtio_impl.h"
 #include "virtio_gpu_hw.h"
+#include "virtio_gpu_priv.h"
 #include "drm_internal.h"
 
 /* virtqueue indices for virtio-gpu (spec: controlq=0, cursorq=1). */
 #define VIRTIO_GPU_VQ_CONTROL	0
 #define VIRTIO_GPU_VQ_CURSOR	1
-
-/* first non-reserved resource id (0 is invalid in the protocol). */
-#define VIRTIO_GPU_FIRST_RES_ID	1
-
-/*
- * struct virtio_gpu_softc - per-instance virtio-gpu transport state. Hung off
- * drm_device->vgpu. Holds the framework handle, the two queues, the scanout
- * geometry read from GET_DISPLAY_INFO, and a monotonic resource-id counter.
- */
-struct virtio_gpu_softc {
-	dev_info_t	*sc_dip;
-	virtio_t	*sc_virtio;
-	virtio_queue_t	*sc_controlq;
-	virtio_queue_t	*sc_cursorq;
-	kmutex_t	sc_lock;
-
-	uint32_t	sc_num_scanouts;
-	uint32_t	sc_next_res_id;
-
-	/* scanout 0 geometry from GET_DISPLAY_INFO (0x0 if display disabled). */
-	uint32_t	sc_width;
-	uint32_t	sc_height;
-	boolean_t	sc_display_ok;
-
-	struct drm_device *sc_drm;	/* back-pointer to the drm core device */
-};
 
 /*
  * DMA attributes for virtio-gpu command buffers. 64-bit addressable, page
@@ -74,7 +49,7 @@ struct virtio_gpu_softc {
  * static initializer; amd64 base page is 4096, used as the alignment constant.
  */
 #define VIRTIO_GPU_PAGE_ALIGN	4096
-static const ddi_dma_attr_t virtio_gpu_dma_attr = {
+const ddi_dma_attr_t virtio_gpu_dma_attr = {
 	.dma_attr_version	= DMA_ATTR_V0,
 	.dma_attr_addr_lo	= 0,
 	.dma_attr_addr_hi	= 0xFFFFFFFFFFFFFFFFULL,
@@ -90,36 +65,39 @@ static const ddi_dma_attr_t virtio_gpu_dma_attr = {
 };
 
 /*
- * virtio_gpu_exec - submit one control-queue command and wait for its response.
+ * virtio_gpu_exec_extra - submit one control-queue command (optionally with a
+ * trailing payload) and wait for its response.
  *
- * Builds a 2-descriptor chain: [cmd (device-reads)] + [resp (device-writes)],
- * submits it on the control queue, polls for completion, and copies the
- * response type back. This is the synchronous request/response pattern the 2D
- * commands use (Linux does this async via a fence + callback; C1b uses the
- * simplest correct thing: submit + poll, one command in flight).
+ * Builds a 2-descriptor chain: [cmd (+extra), device-reads] + [resp,
+ * device-writes], submits it on the control queue, polls for completion, and
+ * copies the response header back. The optional `extra`/`extra_len` payload is
+ * copied contiguously after the command struct in the same device-reads
+ * segment -- this is how SUBMIT_3D ships the command-buffer bytes and how
+ * ATTACH_BACKING ships its mem_entry array (Linux virtgpu_vq.c appends these
+ * to the command in the same sg-list; C1d copies into one contiguous DMA
+ * region, matching the C1b synchronous submit + poll style).
  *
- * NOTE: synchronous poll, one command in flight at a time under sc_lock.
- * Fine for modeset (a handful of commands at boot); a real driver pipelines
- * many chains + uses the completion interrupt. Upgrade when >1 command/frame.
- *
- * cmd_len : bytes of the command struct to send.
- * resp    : caller buffer for the response header (at least resp_len bytes).
- * Returns 0 on VIRTIO_GPU_RESP_OK_*, EIO otherwise.
+ * NOTE: synchronous poll, one command in flight at a time under sc_lock. The
+ * C1c scheduler serializes SUBMIT_3D onto this primitive; a real driver
+ * pipelines many chains + uses the completion interrupt. Upgrade when the
+ * scheduler needs >1 command in flight per frame.
  */
-static int
-virtio_gpu_exec(struct virtio_gpu_softc *sc, const void *cmd, size_t cmd_len,
+int
+virtio_gpu_exec_extra(struct virtio_gpu_softc *sc, const void *cmd,
+    size_t cmd_len, const void *extra, size_t extra_len,
     void *resp, size_t resp_len)
 {
 	virtio_dma_t *dma;
 	virtio_chain_t *vic;
 	uint8_t *va;
 	uint64_t cmd_pa, resp_pa;
+	size_t reads_len = cmd_len + extra_len;
 	struct virtio_gpu_ctrl_hdr *rhdr;
 	uint32_t rtype;
 	int ret = EIO;
 
-	/* one DMA buffer holds cmd then response, page-aligned regions. */
-	size_t total = P2ROUNDUP(cmd_len, 16) + resp_len;
+	/* one DMA buffer holds [cmd|extra] then response, 16-byte aligned split. */
+	size_t total = P2ROUNDUP(reads_len, 16) + resp_len;
 	dma = virtio_dma_alloc(sc->sc_virtio, total, &virtio_gpu_dma_attr,
 	    KM_SLEEP, "vgpu-cmd");
 	if (dma == NULL)
@@ -127,11 +105,13 @@ virtio_gpu_exec(struct virtio_gpu_softc *sc, const void *cmd, size_t cmd_len,
 
 	va = virtio_dma_va(dma, 0);
 	bcopy(cmd, va, cmd_len);
-	bzero(va + P2ROUNDUP(cmd_len, 16), resp_len);
+	if (extra != NULL && extra_len > 0)
+		bcopy(extra, va + cmd_len, extra_len);
+	bzero(va + P2ROUNDUP(reads_len, 16), resp_len);
 
 	/* the buffer is one physically-contiguous region (single cookie). */
 	cmd_pa = virtio_dma_cookie_pa(dma, 0);
-	resp_pa = cmd_pa + P2ROUNDUP(cmd_len, 16);
+	resp_pa = cmd_pa + P2ROUNDUP(reads_len, 16);
 
 	vic = virtio_chain_alloc(sc->sc_controlq, KM_SLEEP);
 	if (vic == NULL) {
@@ -139,8 +119,8 @@ virtio_gpu_exec(struct virtio_gpu_softc *sc, const void *cmd, size_t cmd_len,
 		return (ENOMEM);
 	}
 
-	/* device reads the command, then writes the response. */
-	if (virtio_chain_append(vic, cmd_pa, cmd_len,
+	/* device reads the command (+payload), then writes the response. */
+	if (virtio_chain_append(vic, cmd_pa, reads_len,
 	    VIRTIO_DIR_DEVICE_READS) != 0 ||
 	    virtio_chain_append(vic, resp_pa, resp_len,
 	    VIRTIO_DIR_DEVICE_WRITES) != 0) {
@@ -166,7 +146,7 @@ virtio_gpu_exec(struct virtio_gpu_softc *sc, const void *cmd, size_t cmd_len,
 	}
 
 	virtio_dma_sync(dma, DDI_DMA_SYNC_FORCPU);
-	rhdr = (struct virtio_gpu_ctrl_hdr *)(va + P2ROUNDUP(cmd_len, 16));
+	rhdr = (struct virtio_gpu_ctrl_hdr *)(va + P2ROUNDUP(reads_len, 16));
 	rtype = rhdr->type;
 	if (resp != NULL && resp_len > 0)
 		bcopy(rhdr, resp, resp_len);
@@ -177,6 +157,17 @@ virtio_gpu_exec(struct virtio_gpu_softc *sc, const void *cmd, size_t cmd_len,
 	virtio_chain_free(vic);
 	virtio_dma_free(dma);
 	return (ret);
+}
+
+/*
+ * virtio_gpu_exec - the no-trailing-payload case (2D modeset + most 3D
+ * commands). Thin wrapper over virtio_gpu_exec_extra.
+ */
+int
+virtio_gpu_exec(struct virtio_gpu_softc *sc, const void *cmd, size_t cmd_len,
+    void *resp, size_t resp_len)
+{
+	return (virtio_gpu_exec_extra(sc, cmd, cmd_len, NULL, 0, resp, resp_len));
 }
 
 /*
@@ -397,7 +388,9 @@ drm_gem_scanout(struct drm_device *dev, uint32_t handle, uint32_t width,
  *
  * This is the illumos analogue of a Linux virtio driver's .probe: virtio_init
  * with our feature set, claim controlq + cursorq, virtio_init_complete, then
- * read num_scanouts from config space and probe the display.
+ * read num_scanouts/num_capsets from config space and probe the display. C1d
+ * additionally requests VIRTIO_GPU_F_VIRGL (3D) and, if the host grants it,
+ * spins up the C1c scheduler that serializes SUBMIT_3D onto the controlq.
  */
 struct virtio_gpu_softc *
 virtio_gpu_transport_attach(dev_info_t *dip, struct drm_device *drm)
@@ -405,8 +398,12 @@ virtio_gpu_transport_attach(dev_info_t *dip, struct drm_device *drm)
 	struct virtio_gpu_softc *sc;
 	virtio_t *vio;
 
-	/* C1b negotiates no optional features (2D only, no virgl/edid/blob). */
-	vio = virtio_init(dip, 0, B_TRUE);
+	/*
+	 * C1d requests VIRGL (3D). The framework negotiates it down if the host
+	 * device is 2D-only (plain -device virtio-gpu vs virtio-gpu-gl); we then
+	 * read back what stuck with virtio_feature_present. EDID/blob stay off.
+	 */
+	vio = virtio_init(dip, (1ULL << VIRTIO_GPU_F_VIRGL), B_TRUE);
 	if (vio == NULL) {
 		cmn_err(CE_WARN, "virtio_gpu: virtio_init failed");
 		return (NULL);
@@ -417,6 +414,7 @@ virtio_gpu_transport_attach(dev_info_t *dip, struct drm_device *drm)
 	sc->sc_virtio = vio;
 	sc->sc_drm = drm;
 	sc->sc_next_res_id = VIRTIO_GPU_FIRST_RES_ID;
+	sc->sc_next_ctx_id = VIRTIO_GPU_FIRST_CTX_ID;
 	mutex_init(&sc->sc_lock, NULL, MUTEX_DRIVER, NULL);
 
 	/* controlq (0) carries the 2D commands; cursorq (1) the cursor. */
@@ -436,7 +434,19 @@ virtio_gpu_transport_attach(dev_info_t *dip, struct drm_device *drm)
 
 	sc->sc_num_scanouts =
 	    virtio_dev_get32(vio, VIRTIO_GPU_CFG_NUM_SCANOUTS);
-	cmn_err(CE_CONT, "?virtio_gpu: %u scanout(s)\n", sc->sc_num_scanouts);
+	sc->sc_num_capsets =
+	    virtio_dev_get32(vio, VIRTIO_GPU_CFG_NUM_CAPSETS);
+	sc->sc_has_virgl =
+	    virtio_features_present(vio, (1ULL << VIRTIO_GPU_F_VIRGL));
+	cmn_err(CE_CONT, "?virtio_gpu: %u scanout(s), %u capset(s), virgl=%d\n",
+	    sc->sc_num_scanouts, sc->sc_num_capsets, sc->sc_has_virgl);
+
+	/*
+	 * C1d: the scheduler that run_job's SUBMIT_3D onto the controlq. Started
+	 * unconditionally (harmless if virgl is off -- no 3D jobs are pushed);
+	 * the EXECBUFFER ioctl checks sc_has_virgl before using it.
+	 */
+	(void) drm_sched_init(&sc->sc_sched, "virtio_gpu_3d");
 
 	/* the probe: ask the host what displays it has. */
 	(void) virtio_gpu_get_display_info(sc);
@@ -456,6 +466,8 @@ virtio_gpu_transport_detach(struct virtio_gpu_softc *sc)
 {
 	if (sc == NULL)
 		return;
+	virtio_gpu_3d_context_fini(sc, sc->sc_drm);
+	drm_sched_fini(&sc->sc_sched);
 	virtio_fini(sc->sc_virtio, B_FALSE);
 	mutex_destroy(&sc->sc_lock);
 	kmem_free(sc, sizeof (*sc));

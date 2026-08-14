@@ -12,6 +12,11 @@
  * SET_SCANOUT, RESOURCE_FLUSH, TRANSFER_TO_HOST_2D); the 3D/virgl and blob
  * commands are omitted (not on the C1b critical path).
  *
+ * C1d appends the 3D command family (CTX_CREATE/CTX_DESTROY,
+ * RESOURCE_CREATE_3D, TRANSFER_{TO,FROM}_HOST_3D, SUBMIT_3D, GET_CAPSET_INFO/
+ * GET_CAPSET) that the virgl/venus command streams ride on -- same provenance
+ * (Linux virtio_gpu.h, BSD-licensed), same little-endian packed ABI.
+ *
  * NB: __le32/__le64 are little-endian on the wire. amd64 is little-endian, so
  * on this target the byte order matches native and no swap is needed; the
  * types are kept named __le* to mark the ABI contract (a big-endian illumos
@@ -54,6 +59,18 @@ enum virtio_gpu_ctrl_type {
 	VIRTIO_GPU_CMD_GET_CAPSET_INFO,
 	VIRTIO_GPU_CMD_GET_CAPSET,
 	VIRTIO_GPU_CMD_GET_EDID,
+
+	/* 3d commands (C1d; enum values match Linux virtio_gpu.h verbatim) */
+	VIRTIO_GPU_CMD_CTX_CREATE = 0x0200,
+	VIRTIO_GPU_CMD_CTX_DESTROY,
+	VIRTIO_GPU_CMD_CTX_ATTACH_RESOURCE,
+	VIRTIO_GPU_CMD_CTX_DETACH_RESOURCE,
+	VIRTIO_GPU_CMD_RESOURCE_CREATE_3D,
+	VIRTIO_GPU_CMD_TRANSFER_TO_HOST_3D,
+	VIRTIO_GPU_CMD_TRANSFER_FROM_HOST_3D,
+	VIRTIO_GPU_CMD_SUBMIT_3D,
+	VIRTIO_GPU_CMD_RESOURCE_MAP_BLOB,
+	VIRTIO_GPU_CMD_RESOURCE_UNMAP_BLOB,
 
 	/* cursor commands */
 	VIRTIO_GPU_CMD_UPDATE_CURSOR = 0x0300,
@@ -182,6 +199,119 @@ struct virtio_gpu_config {
 #define VIRTIO_GPU_CFG_EVENTS_CLEAR	4
 #define VIRTIO_GPU_CFG_NUM_SCANOUTS	8
 #define VIRTIO_GPU_CFG_NUM_CAPSETS	12
+
+/*
+ * ---- 3D command structs (C1d) ----
+ *
+ * Provenance: layouts reproduced VERBATIM from Linux/QEMU
+ * include/uapi/linux/virtio_gpu.h (the same BSD-licensed guest-driver ABI as
+ * the 2D structs above). These are the wire commands the virgl/venus command
+ * streams ride on: CTX_CREATE/CTX_DESTROY (a per-drm-file 3D context),
+ * RESOURCE_CREATE_3D (a 3D resource: target/format/bind/dims/array/mip),
+ * TRANSFER_{TO,FROM}_HOST_3D (box-form data movement), SUBMIT_3D (the
+ * command-buffer submit EXECBUFFER wraps), and GET_CAPSET_INFO/GET_CAPSET
+ * (capset feature query). All fields little-endian, packed identically.
+ */
+
+/* data passed in the control vq, 3d related */
+struct virtio_gpu_box {
+	__le32 x, y, z;
+	__le32 w, h, d;
+};
+
+/* VIRTIO_GPU_CMD_TRANSFER_TO_HOST_3D, VIRTIO_GPU_CMD_TRANSFER_FROM_HOST_3D */
+struct virtio_gpu_transfer_host_3d {
+	struct virtio_gpu_ctrl_hdr hdr;
+	struct virtio_gpu_box box;
+	__le64 offset;
+	__le32 resource_id;
+	__le32 level;
+	__le32 stride;
+	__le32 layer_stride;
+};
+
+/* VIRTIO_GPU_CMD_RESOURCE_CREATE_3D */
+#define VIRTIO_GPU_RESOURCE_FLAG_Y_0_TOP (1 << 0)
+struct virtio_gpu_resource_create_3d {
+	struct virtio_gpu_ctrl_hdr hdr;
+	__le32 resource_id;
+	__le32 target;
+	__le32 format;
+	__le32 bind;
+	__le32 width;
+	__le32 height;
+	__le32 depth;
+	__le32 array_size;
+	__le32 last_level;
+	__le32 nr_samples;
+	__le32 flags;
+	__le32 padding;
+};
+
+/* VIRTIO_GPU_CMD_CTX_CREATE */
+#define VIRTIO_GPU_CONTEXT_INIT_CAPSET_ID_MASK 0x000000ff
+struct virtio_gpu_ctx_create {
+	struct virtio_gpu_ctrl_hdr hdr;
+	__le32 nlen;
+	__le32 context_init;
+	char   debug_name[64];
+};
+
+/* VIRTIO_GPU_CMD_CTX_DESTROY */
+struct virtio_gpu_ctx_destroy {
+	struct virtio_gpu_ctrl_hdr hdr;
+};
+
+/* VIRTIO_GPU_CMD_CTX_ATTACH_RESOURCE, VIRTIO_GPU_CMD_CTX_DETACH_RESOURCE */
+struct virtio_gpu_ctx_resource {
+	struct virtio_gpu_ctrl_hdr hdr;
+	__le32 resource_id;
+	__le32 padding;
+};
+
+/* VIRTIO_GPU_CMD_SUBMIT_3D (hdr + size, followed by `size` command bytes) */
+struct virtio_gpu_cmd_submit {
+	struct virtio_gpu_ctrl_hdr hdr;
+	__le32 size;
+	__le32 padding;
+};
+
+/* capset ids (Mesa selects virgl vs venus by these). */
+#define VIRTIO_GPU_CAPSET_VIRGL			1
+#define VIRTIO_GPU_CAPSET_VIRGL2		2
+#define VIRTIO_GPU_CAPSET_GFXSTREAM_VULKAN	3
+#define VIRTIO_GPU_CAPSET_VENUS			4
+#define VIRTIO_GPU_CAPSET_CROSS_DOMAIN		5
+#define VIRTIO_GPU_CAPSET_DRM			6
+
+/* VIRTIO_GPU_CMD_GET_CAPSET_INFO */
+struct virtio_gpu_get_capset_info {
+	struct virtio_gpu_ctrl_hdr hdr;
+	__le32 capset_index;
+	__le32 padding;
+};
+
+/* VIRTIO_GPU_RESP_OK_CAPSET_INFO */
+struct virtio_gpu_resp_capset_info {
+	struct virtio_gpu_ctrl_hdr hdr;
+	__le32 capset_id;
+	__le32 capset_max_version;
+	__le32 capset_max_size;
+	__le32 padding;
+};
+
+/* VIRTIO_GPU_CMD_GET_CAPSET */
+struct virtio_gpu_get_capset {
+	struct virtio_gpu_ctrl_hdr hdr;
+	__le32 capset_id;
+	__le32 capset_version;
+};
+
+/* VIRTIO_GPU_RESP_OK_CAPSET (hdr followed by the capset blob) */
+struct virtio_gpu_resp_capset {
+	struct virtio_gpu_ctrl_hdr hdr;
+	__u8 capset_data[1];	/* flexible; blob follows the header */
+};
 
 /* simple pixel formats for fbcon/X (BGRA/BGRX are the common scanout ones). */
 enum virtio_gpu_formats {

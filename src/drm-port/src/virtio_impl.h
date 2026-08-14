@@ -57,7 +57,7 @@ extern void virtio_shutdown(virtio_t *vio);
 extern void virtio_device_reset(virtio_t *vio);
 
 /* feature negotiation helpers. */
-extern boolean_t virtio_feature_present(virtio_t *vio, uint64_t feature);
+extern boolean_t virtio_features_present(virtio_t *vio, uint64_t features);
 extern uint64_t virtio_features(virtio_t *vio);
 
 /*

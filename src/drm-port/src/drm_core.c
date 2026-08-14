@@ -38,7 +38,9 @@
 #include <sys/cmn_err.h>
 
 #include "uapi/drm/drm.h"
+#include "uapi/drm/virtgpu_drm.h"
 #include "drm_internal.h"
+#include "virtio_gpu_priv.h"
 
 /*
  * virtio-gpu transport (src/virtio_gpu.c). Declared here so drm_attach can bind
@@ -189,6 +191,43 @@ drm_ioctl(dev_t d, int cmd, intptr_t arg, int mode, cred_t *credp, int *rvalp)
 		break;
 	case DRM_IOCTL_MODE_SET_SCANOUT_SOLNIX:
 		err = drm_set_scanout_ioctl(dev, arg, mode);
+		break;
+	/*
+	 * C1d: the virtio-gpu 3D DRM ioctls (virtio_gpu_3d.c). EXECBUFFER is the
+	 * load-bearing submit path; CONTEXT_INIT/GET_CAPS/GETPARAM are what
+	 * virgl/venus Mesa probe + set up with; RESOURCE_CREATE/INFO/TRANSFER/MAP
+	 * round out 3D resource lifecycle + data movement. All reuse the C1 GEM,
+	 * the C1c scheduler+dma-fence, and the C1b cb_devmap.
+	 */
+	case DRM_IOCTL_VIRTGPU_EXECBUFFER:
+		err = virtio_gpu_ioctl_execbuffer(dev, arg, mode);
+		break;
+	case DRM_IOCTL_VIRTGPU_CONTEXT_INIT:
+		err = virtio_gpu_ioctl_context_init(dev, arg, mode);
+		break;
+	case DRM_IOCTL_VIRTGPU_GETPARAM:
+		err = virtio_gpu_ioctl_getparam(dev, arg, mode);
+		break;
+	case DRM_IOCTL_VIRTGPU_GET_CAPS:
+		err = virtio_gpu_ioctl_get_caps(dev, arg, mode);
+		break;
+	case DRM_IOCTL_VIRTGPU_RESOURCE_CREATE:
+		err = virtio_gpu_ioctl_resource_create(dev, arg, mode);
+		break;
+	case DRM_IOCTL_VIRTGPU_RESOURCE_INFO:
+		err = virtio_gpu_ioctl_resource_info(dev, arg, mode);
+		break;
+	case DRM_IOCTL_VIRTGPU_TRANSFER_TO_HOST:
+		err = virtio_gpu_ioctl_transfer_to_host(dev, arg, mode);
+		break;
+	case DRM_IOCTL_VIRTGPU_TRANSFER_FROM_HOST:
+		err = virtio_gpu_ioctl_transfer_from_host(dev, arg, mode);
+		break;
+	case DRM_IOCTL_VIRTGPU_MAP:
+		err = virtio_gpu_ioctl_map(dev, arg, mode);
+		break;
+	case DRM_IOCTL_VIRTGPU_WAIT:
+		err = virtio_gpu_ioctl_wait(dev, arg, mode);
 		break;
 	default:
 		err = ENOTTY;	/* unimplemented DRM ioctl */

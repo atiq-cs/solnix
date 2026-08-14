@@ -71,6 +71,18 @@ struct drm_device {
 	minor_t			prime_next_minor;
 	list_t			prime_exports;	/* struct drm_prime_export */
 	list_t			sync_files;	/* struct sync_file */
+
+	/*
+	 * C1d virtio-gpu 3D context. Real DRM scopes the 3D context per
+	 * drm_file (one context per open of renderD*); the C1a handle table is
+	 * device-global (see struct drm_file note), so C1d keeps one context per
+	 * device to match. ctx_id 0 == no context created yet; CONTEXT_INIT /
+	 * the first EXECBUFFER lazily creates it via CTX_CREATE_3D.
+	 * NOTE: device-global 3D context; scope per-drm_file when the handle
+	 * table becomes per-file (same upgrade the drm_file note tracks).
+	 */
+	uint32_t		ctx_id;		/* virtio-gpu 3D context id */
+	uint32_t		ctx_capset;	/* selected capset (virgl/venus) */
 };
 
 /*

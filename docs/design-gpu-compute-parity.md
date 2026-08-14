@@ -179,3 +179,25 @@ illumos -> software Vulkan is validated too. So the software GL+Vulkan stack wor
 GBM (real-GPU bridge) needs a runtime /dev/dri device (the C1 kernel module on a metal instance).
 NEXT: llvmpipe/lavapipe as real derivations (faster SW GL/Vulkan); GBM + the C1 runtime on metal;
 then hardware Gallium drivers (C3).
+
+## C1d DONE (2026-08-14): accelerated virtio-gpu path COMPILE-COMPLETE (kernel + userspace)
+C1d closes the last KERNEL gap for accelerated GPU. All 10 DRM_IOCTL_VIRTGPU_* wired, `drm` object
+still ET_REL/AMD64 (96 undef syms all real illumos KPI or virtio exports, zero phantom):
+- EXECBUFFER: copyin virgl/venus command stream -> drm_sched_job whose run_job ships SUBMIT_3D ->
+  drm_sched_entity_push_job -> finished C1c dma-fence is the out-fence (wrapped in a C1c sync_file fd);
+  in-fence waited first. THIS wires the C1c scheduler run_job -> virtio submission (the step C1c named).
+- CTX_CREATE/DESTROY (CONTEXT_INIT parses CAPSET_ID = virgl vs venus), RESOURCE_CREATE_3D (GEM +
+  ATTACH_BACKING + CTX_ATTACH), GET_CAPS/GETPARAM (capset blobs Mesa queries), TRANSFER_3D + MAP
+  (reuses C1b cb_devmap) + WAIT. Cribbed 3D wire structs + DRM UAPI verbatim from Linux virtio_gpu.h +
+  virtgpu_drm.h (so Mesa binds unchanged); flow from virtgpu_vq.c/virtgpu_ioctl.c re-expressed on the
+  illumos virtio KPI + C1c scheduler/fence/sync_file. DRM port ~4917 LOC total (C1a-d).
+=> STACK STATUS: with C3a's built virgl + Venus Vulkan ICD, the C1+C2+C3a stack is COMPILE-COMPLETE for
+accelerated virtio-gpu on illumos -- the host's GPU renders via QEMU -device virtio-gpu-gl +
+virglrenderer, through the C1 DRM + Mesa virgl/venus. PENDING ONLY THE METAL RUNTIME PROOF (QEMU+KVM+
+host-GPU; build nodes are TCG-only). The metal DRM-runtime agent is proving C1a-c 2D; C1d 3D + a
+GPU-having QEMU host is the accelerated proof.
+C1d ceilings (runtime, noted in-code): one 3D ctx/device (-> per-drm_file); SUBMIT_3D synchronous under
+the FIFO scheduler (-> async hw-fence + completion interrupt); per-BO dma_resv fencing; zero-copy 3D
+transfers over the GEM umem cookie. All runtime upgrades, not compile-blocking.
+NEXT: metal runtime (C1a-c 2D lit, then C1d 3D on a GPU host); then llama.cpp GGML_VULKAN over Venus =
+accelerated LLM. amdgpu (real-hw ROCm) is the C3 tail.

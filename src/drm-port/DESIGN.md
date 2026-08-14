@@ -1,4 +1,4 @@
-# solnix DRM/KMS port — layer-by-layer illumos mapping (C1a + C1b + C1c)
+# solnix DRM/KMS port — layer-by-layer illumos mapping (C1a + C1b + C1c + C1d)
 
 Phase **C1a/C1b/C1c** of the compute keystone in `docs/design-gpu-compute-parity.md`
 (illumos DRM/KMS core, cribbed from NetBSD `sys/external/bsd/drm2`). This
@@ -201,6 +201,52 @@ from Linux/QEMU (`src/virtio_gpu_hw.h`):
   `TRANSFER_TO_HOST_2D` → `RESOURCE_FLUSH`, driven by `drm_gem_scanout()` from
   the `DRM_IOCTL_MODE_SET_SCANOUT_SOLNIX` ioctl.
 
+### F.1 virtio-gpu 3D (C1d) — the accelerated command path
+
+C1d extends the C1b 2D transport to the **3D command/ioctl surface** that
+Mesa's virgl (GL) and venus (Vulkan) drivers drive — the one bounded kernel gap
+between the compiling C1 framework and accelerated GPU on solnix. It adds **no
+new transport, no VRAM, no TTM**: 3D is more command types on the *same*
+controlq + `virtio_gpu_exec` chain + GEM buffers, signalling the *same* C1c
+dma-fence via the *same* C1c scheduler. The host (QEMU `virtio-gpu-gl` +
+virglrenderer) is the actual GPU driver.
+
+The DRM UAPI is preserved verbatim in `src/uapi/drm/virtgpu_drm.h` (cribbed from
+the Linux `virtgpu_drm.h`, via the NetBSD import, + the current-Linux
+`CONTEXT_INIT`/`ring_idx`/blob params), so C3a's virgl/venus Mesa binds
+unchanged. The 3D wire structs are appended to `src/virtio_gpu_hw.h` (verbatim
+from Linux `virtio_gpu.h`). The command flow + ioctl handlers live in
+`src/virtio_gpu_3d.c` (crib: Linux `virtgpu_vq.c` + `virtgpu_ioctl.c`), sharing
+the C1b softc + `virtio_gpu_exec` via `src/virtio_gpu_priv.h`.
+
+| UAPI ioctl (`virtgpu_drm.h`) | C1d kernel path (`virtio_gpu_3d.c`) | reuses |
+|---|---|---|
+| **`DRM_IOCTL_VIRTGPU_EXECBUFFER`** | copyin the virgl/venus command stream → a `drm_sched_job` whose `run_job` ships it via `SUBMIT_3D` (`virtio_gpu_exec_extra`) → the job's finished dma-fence is the out fence (a `sync_file` fd); optional in-fence waited first | **C1c scheduler + dma-fence + sync_file** |
+| `DRM_IOCTL_VIRTGPU_CONTEXT_INIT` | parse the `CAPSET_ID` param → `CTX_CREATE` with the capset (virgl vs venus), one context per device (ceiling noted) | new `CTX_CREATE`/`CTX_DESTROY` cmds |
+| `DRM_IOCTL_VIRTGPU_GET_CAPS` | `GET_CAPSET_INFO` to match the requested capset id → `GET_CAPSET` for the blob → copyout to Mesa | new capset cmds |
+| `DRM_IOCTL_VIRTGPU_GETPARAM` | report `3D_FEATURES` (= negotiated `VIRTIO_GPU_F_VIRGL`), `CONTEXT_INIT`, `CAPSET_QUERY_FIX` | feature negotiation |
+| `DRM_IOCTL_VIRTGPU_RESOURCE_CREATE` | `ddi_umem_alloc` a GEM object → `RESOURCE_CREATE_3D` (target/format/bind/dims/array/mip) → `ATTACH_BACKING` → `CTX_ATTACH_RESOURCE`; returns bo_handle + res_handle | **C1 GEM** |
+| `DRM_IOCTL_VIRTGPU_RESOURCE_INFO` | GEM handle → host res id + size | C1 GEM |
+| `DRM_IOCTL_VIRTGPU_TRANSFER_{TO,FROM}_HOST` | GEM handle → `TRANSFER_{TO,FROM}_HOST_3D` (box form: level/offset/stride/layer_stride) | C1 GEM backing |
+| `DRM_IOCTL_VIRTGPU_MAP` | return the GEM object's mmap offset (userspace mmaps the render node; `cb_devmap` faults the umem pages) | **C1b `cb_devmap`** |
+| `DRM_IOCTL_VIRTGPU_WAIT` | synchronous FIFO scheduler → nothing outstanding (no-op success; per-BO dma_resv wait noted for async) | C1c dma-fence |
+
+The attach path now requests `VIRTIO_GPU_F_VIRGL`, reads back with
+`virtio_features_present`, reads `num_capsets` from config space, and
+`drm_sched_init`s the per-device 3D scheduler; detach `CTX_DESTROY`s the context
+and `drm_sched_fini`s. This **wires the C1c scheduler `run_job` → `SUBMIT_3D`**,
+the step STATUS.md's C1c "remaining runtime" list named.
+
+Deliberate C1d ceilings (compile milestone; runtime is the metal step): one 3D
+context per device (real DRM scopes it per `drm_file`; matches the C1a
+device-global handle table); `SUBMIT_3D` runs synchronously under the FIFO
+scheduler so the out-fence signals immediately (a real async transport returns a
+hardware fence + the completion interrupt); the `bo_handles` list is accepted
+but per-BO `dma_resv` fencing is not yet wired (the FIFO serializes submits —
+correct but coarse); 3D transfers copy through a fresh `virtio_dma` region like
+the 2D path (zero-copy over the GEM umem cookie is the same upgrade the 2D path
+notes).
+
 ## What compiles today (C1a + C1b + C1c) — the load-bearing piece
 
 `src/` builds to a single `ET_REL` AMD64 kernel object `drm` against the
@@ -249,6 +295,24 @@ virtio symbols (each `virtio_*` undef is verified against the module's
 surface into illumos primitives: the impedance boundary is real and mappable.
 
 ## Next phases
+
+- **C1d (virtio-gpu 3D command path) — DONE (compiling):** the EXECBUFFER
+  submit path (scheduler `run_job` → `SUBMIT_3D` → out dma-fence/sync_file),
+  CTX_CREATE/DESTROY 3D context, RESOURCE_CREATE_3D + ATTACH_BACKING,
+  TRANSFER_{TO,FROM}_HOST_3D (box form), GET_CAPS (GET_CAPSET_INFO/GET_CAPSET),
+  GETPARAM, RESOURCE_INFO, and MAP (reusing `cb_devmap`), all wired into the
+  `drm_ioctl` dispatch with the Linux `virtgpu_drm.h` UAPI preserved so C3a's
+  virgl/venus Mesa binds unchanged. `src/virtio_gpu_3d.c` + the 3D wire structs
+  in `src/virtio_gpu_hw.h` + `src/virtio_gpu_priv.h` (shared softc/exec) +
+  `src/uapi/drm/virtgpu_drm.h`. Links into the one `ET_REL` object; every new
+  undef is real genunix KPI (`kmem_alloc`, `strlen`) or a virtio export
+  (`virtio_features_present`). This closes the last **kernel** gap — with C3a's
+  (built) virgl/venus Mesa, the C1+C3a stack is **compile-complete for
+  accelerated virtio-gpu**, pending only the metal runtime proof (QEMU
+  `-device virtio-gpu-gl` + KVM + a host GPU). Runtime gaps carried from C1c
+  still apply (sync_file `poll(2)`, the second-minor space, the completion
+  interrupt replacing `virtio_queue_poll`, per-BO dma_resv fencing for async
+  submit).
 
 - **C1c (dma-buf + fence + scheduler for compute) — DONE (compiling):**
   dma-fence (`src/drm_dma.c`, kref+kmutex+kcondvar+flags+callback list),
