@@ -39,6 +39,7 @@
 
 #include "drm_internal.h"
 #include "amdgpu_priv.h"
+#include "ttm_priv.h"
 
 /*
  * The DDI regs-map access attributes for a PCI memory BAR: little-endian
@@ -225,6 +226,18 @@ amdgpu_transport_attach(dev_info_t *dip, struct drm_device *drm)
 		goto fail_bars;
 
 	/*
+	 * C3-amdgpu-b: stand up TTM -- the VRAM manager (a vmem arena over the
+	 * BAR0 aperture just mapped) + the GTT manager (ddi_dma system RAM).
+	 * This is what amdgpu_bo_create allocates ring buffers + page tables
+	 * from; the IP-block bring-up (C3-amdgpu-c) needs it. A TTM failure is
+	 * not fatal to the attach floor (BARs + asic id are still valid), so it
+	 * warns and proceeds -- the IP blocks that need a BO will fail later.
+	 */
+	if (amdgpu_ttm_init(sc) != DDI_SUCCESS)
+		cmn_err(CE_WARN, "?amdgpu: TTM init failed; "
+		    "BO allocation unavailable");
+
+	/*
 	 * At this point a real amdgpu would call amdgpu_device_init's IP-init
 	 * chain (amdgpu_device_ip_early_init -> nv_set_ip_blocks). That is the
 	 * deferred bulk; C3-amdgpu-a stops here with BARs mapped + asic id read.
@@ -246,6 +259,7 @@ amdgpu_transport_detach(struct amdgpu_softc *sc)
 {
 	if (sc == NULL)
 		return;
+	amdgpu_ttm_fini(sc);
 	if (sc->intr_htable != NULL) {
 		(void) ddi_intr_disable(sc->intr_htable[0]);
 		(void) ddi_intr_remove_handler(sc->intr_htable[0]);

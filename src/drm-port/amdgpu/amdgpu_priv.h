@@ -101,6 +101,9 @@ struct amdgpu_softc {
 	int			intr_cap;
 
 	enum amdgpu_asic_type	asic_type;	/* CHIP_NAVI12 */
+
+	/* C3-amdgpu-b TTM: the VRAM (vmem/BAR0) + GTT (ddi_dma) managers */
+	struct ttm_device	*ttm;		/* NULL until amdgpu_ttm_init */
 };
 
 /* the register access primitives -- the RREG32/WREG32 illumos mapping */
@@ -110,5 +113,9 @@ extern void	amdgpu_wreg32(struct amdgpu_softc *, uint32_t reg, uint32_t v);
 /* attach/detach, called from the C1 drm_attach the way virtio-gpu is */
 extern struct amdgpu_softc *amdgpu_transport_attach(dev_info_t *, struct drm_device *);
 extern void	amdgpu_transport_detach(struct amdgpu_softc *);
+
+/* C3-amdgpu-b: the TTM device is defined in ttm_priv.h (included by ttm.c /
+ * amdgpu_ttm.c). Forward-declared here so the softc can hold a pointer. */
+struct ttm_device;
 
 #endif	/* _AMDGPU_PRIV_H_ */

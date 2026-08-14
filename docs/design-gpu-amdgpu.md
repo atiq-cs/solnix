@@ -1,6 +1,8 @@
 # amdgpu on illumos — the C3-amdgpu layering design
 
-Phase **C3-amdgpu-a** (compile-phase scaffolding). This maps the amdgpu DRM
+Phase **C3-amdgpu-a** (PCI attach / asic detect / BAR map) + **C3-amdgpu-b**
+(the smallest TTM: vmem VRAM manager over BAR0 + ddi_dma GTT manager + the
+ttm_bo core + amdgpu_bo_create), both compile-phase. This maps the amdgpu DRM
 driver (real AMD GPU, the fully-open ROCm path) onto the C1 DRM framework that
 already compiles on illumos, targeting the **g4ad EC2 GPU: AMD Radeon Pro V520
 = Navi 12 = gfx1011, PCI 1002:7362**. amdgpu is the biggest new kernel surface
@@ -34,34 +36,47 @@ NetBSD's `amdgpu_` filename prefix and `__KERNEL_RCSID`).
 | **PCI attach** (BAR map, config space, MSI-X) | amdgpu_device.c device-init prologue; amdgpu_drv.c id table | `pci_config_setup` + `ddi_regs_map_setup` (per BAR) + `ddi_intr_alloc`/`_add_handler`. The raw-PCI analogue of C1b's virtio attach (which used the virtio bus). | **C3-amdgpu-a DONE (compiling)** — `src/amdgpu.c` |
 | **register access** RREG32/WREG32 | amdgpu_device.c `amdgpu_mm_rreg` (`bus_space_read_4`) | `ddi_get32`/`ddi_put32` on the BAR5 access handle at byte offset `4*reg`. | **C3-amdgpu-a DONE** — `amdgpu_rreg32`/`_wreg32` |
 | **asic detect** (Navi 12 / gfx1011) | amdgpu_drv.c `{0x1002,0x7362,...,CHIP_NAVI12}`; amdgpu_nv.c `nv_common_early_init` CHIP_NAVI12 case | read vendor/device/rev from config space -> classify CHIP_NAVI12. | **C3-amdgpu-a DONE** — `amdgpu_read_asic_id` |
-| **IP-block bring-up** | amdgpu_device.c `amdgpu_device_ip_early_init` -> amdgpu_nv.c `nv_set_ip_blocks` -> `navi12_reg_base_init` | the per-IP-block `.early_init/.sw_init/.hw_init` table; each IP block (GFX/SDMA/GMC/IH/PSP/DC) is a large port of its own. | **DEFERRED (C3-amdgpu-b..)** |
-| **TTM** (VRAM + GTT placement) | amdgpu_ttm.c, amdgpu_object.c, ttm/* | **the biggest NEW piece — C1 has no TTM** (virtio-gpu had no VRAM). See "TTM" below. VRAM = the BAR0 aperture (already mapped here); GTT = `ddi_dma_*` scatter-gather over system RAM; the LRU eviction is bespoke (illumos VM has no analogue). | **DEFERRED (C3-amdgpu-b, the key subsystem)** |
-| **GEM** (amdgpu_gem / amdgpu_bo) | amdgpu_object.c, amdgpu_gem.c | reuse **C1 GEM** (`drm_gem.c`, `ddi_umem_alloc`); amdgpu's BO is a GEM object + a TTM placement, so amdgpu_bo = C1 GEM object + the (deferred) TTM placement. | C1 GEM reused; BO/TTM glue deferred |
+| **IP-block bring-up** | amdgpu_device.c `amdgpu_device_ip_early_init` -> amdgpu_nv.c `nv_set_ip_blocks` -> `navi12_reg_base_init` | the per-IP-block `.early_init/.sw_init/.hw_init` table; each IP block (GFX/SDMA/GMC/IH/PSP/DC) is a large port of its own. | **DEFERRED (C3-amdgpu-c)** |
+| **TTM** (VRAM + GTT placement) | amdgpu_ttm.c, amdgpu_object.c, ttm/* | **the biggest NEW piece — C1 had no TTM** (virtio-gpu had no VRAM). See "TTM" below. VRAM = the BAR0 aperture (mapped in C3-amdgpu-a); GTT = `ddi_dma_*` scatter-gather over system RAM; migration/eviction deferred. | **C3-amdgpu-b DONE (compiling)** — `amdgpu/ttm.c` + `amdgpu_ttm.c` |
+| **GEM** (amdgpu_gem / amdgpu_bo) | amdgpu_object.c, amdgpu_gem.c | reuse **C1 GEM** (`drm_gem.c`, `ddi_umem_alloc`); amdgpu's BO is a GEM object + a TTM placement, so amdgpu_bo = C1 GEM object + the TTM placement. | C1 GEM reused; **BO/TTM glue: C3-amdgpu-b DONE** (`amdgpu_bo` wraps `ttm_buffer_object` + a C1 `drm_gem_object`; `amdgpu_bo_create`) |
 | **KMS** (display / DC) | amdgpu_display.c, the DC (display core) subtree | reuse the **C1 KMS shape** (C1b SET_SCANOUT modeset). **Skip for headless-compute-first bring-up** — ROCm needs no display. | DEFERRED / skip for compute |
 | **command submission** (rings / IB / amdgpu_cs) | amdgpu_cs.c, amdgpu_ring.c, amdgpu_ib.c | wire the GPU rings to the **C1 scheduler** (`drm_sched.c`): a `drm_sched_job` `run_job` writes the IB into the ring buffer + rings the doorbell; completion signals the C1 dma-fence — the same shape C1d used for the virtio SUBMIT_3D path. | DEFERRED (C3-amdgpu-c) |
 | **fences / sync** | amdgpu_fence.c, amdgpu_sync.c | reuse **C1c dma-fence + dma-resv + sync_file** (`drm_dma.c`, `drm_prime.c`) directly; amdgpu_fence is a dma-fence subclass. | C1c reused |
 | **KFD** (`/dev/kfd`, the ROCm compute ioctl surface) | amdkfd/* (a separate dir at the crib pin) | the compute path — a second char device + the KFD ioctls + the compute queues (user-mode queues / doorbells). | DEFERRED — **A3-f** (after GL/Vulkan) |
 | **firmware** (signed GPU microcode blobs) | amdgpu_ucode.c `request_firmware` | see "firmware" below. amdgpu firmware is redistributable (`linux-firmware` `amdgpu/` LICENSE.amdgpu). | DEFERRED |
 
-## TTM — the key new subsystem (C3-amdgpu-b)
+## TTM — the key new subsystem (C3-amdgpu-b — DONE, compiling)
 
 C1 deferred TTM deliberately: virtio-gpu buffers are host-shared system pages,
 no VRAM, so C1's DESIGN.md section C left TTM as "for when a real VRAM GPU is
 targeted (C3)". amdgpu on the V520 is that GPU. TTM manages *where* a buffer
-object lives and migrates it:
+object lives. The smallest useful version is now built (`amdgpu/ttm.c` +
+`ttm_priv.h` + `amdgpu_ttm.c`), COMPILING as ET_REL AMD64 into the `drm`
+module; every new undef is a real illumos KPI (`vmem_*` / `ddi_dma_*`), zero
+phantom. The illumos-TTM design, as built:
 
-| TTM concept | illumos mapping | note |
+| TTM concept | illumos mapping (BUILT) | status |
 |---|---|---|
-| system-memory pool | `ddi_umem_alloc` pages (the C1 GEM backing) | reuse C1 |
-| **VRAM manager** (device memory) | the **BAR0 aperture** — mapped in C3-amdgpu-a as `vram_hdl`/`vram_base`/`vram_size` — carved by a range allocator (a `gfxp`/`vmem` arena over the aperture offset). | the visible-VRAM window; a real Navi 12 has ~8-16GB VRAM but only a BAR-sized window is CPU-visible (resizable-BAR aside) |
-| **GTT / GART** (GPU page table over system RAM) | `ddi_dma_alloc_handle` + `ddi_dma_addr_bind_handle` -> cookies; the GART table itself is device pages the GMC IP block programs | this is the scatter-gather path C1b's virtio backing already uses (`virtio_dma_cookie_pa`) — reuse the pattern |
-| **placement / migration** (VRAM<->GTT<->system) | the DMA copy engine (SDMA ring) or a CPU memcpy through the two mappings | needs the SDMA ring (deferred) for async; a sync CPU copy works for bring-up |
-| **eviction / LRU** | **bespoke** — illumos VM has no TTM-LRU analogue; a simple per-manager LRU list + the ww_mutex-locked dma_resv (C1c) for the reservation. | the one piece with no illumos primitive to lean on |
+| system-memory pool (`TTM_PL_SYSTEM`) | `ddi_umem_alloc` pages (the C1 GEM backing) | reuse C1 (not placed by TTM here) |
+| **VRAM manager** (`TTM_PL_VRAM`, device memory) | a **`vmem_create` arena over the BAR0 aperture** (`sc->vram_size`), `VMC_IDENTIFIER` (the range is abstract device offsets, not real pages); `vmem_xalloc`/`vmem_xfree` carve GPU-page-aligned byte ranges. The arena spans `[TTM_VRAM_VMEM_BASE, +size)` so a NULL return unambiguously means OOM and offset 0 is representable. vmem IS the illumos general resource allocator — the clean fit. | **`ttm_range_man_*`** in `ttm.c` |
+| **GTT / GART** (`TTM_PL_TT`, GPU page table over system RAM) | `ddi_dma_alloc_handle` + `ddi_dma_mem_alloc` (DMA-able kernel pages) + `ddi_dma_addr_bind_handle` -> the **DMA cookies are the GPU-visible scatter-gather addresses** the GART would be programmed from (`cookie0.dmac_laddress` = the base). A byte-budget manager (each alloc carries its own cookies; no shared linear GART offset space yet). | **`ttm_gtt_man_*`** in `ttm.c` |
+| **ttm_buffer_object** / **ttm_resource** | reduced structs: a `kref`, a size, a placement (`mem_type` + `start`), and a backing union (VRAM `vmem` addr OR GTT `ddi_dma` state). Placed ONCE at `ttm_bo_init`; released on the last `ttm_bo_put`. | **`ttm_bo_init`/`_get`/`_put`** in `ttm.c` |
+| **amdgpu_bo** (GEM-on-TTM) | `struct amdgpu_bo` = a `ttm_buffer_object` + the placement domain + a C1 `drm_gem_object` wrapper; `amdgpu_bo_create(sc, size, AMDGPU_GEM_DOMAIN_{VRAM,GTT}, &bo)` is the create path a GEM_CREATE ioctl drives; `amdgpu_bo_gpu_offset` returns the address an IP block programs. | **`amdgpu_ttm.c`** |
+| **placement / migration** (VRAM<->GTT<->system) | the DMA copy engine (SDMA ring) or a CPU memcpy through the two mappings | **DEFERRED** — a BO is placed once at create; needs the SDMA ring |
+| **eviction / LRU** | **bespoke** — illumos VM has no TTM-LRU analogue; a per-manager LRU list + the ww_mutex-locked dma_resv (C1c) for the reservation. | **DEFERRED** — the one piece with no illumos primitive to lean on |
+| mmap of a VRAM BO (CPU fault of the aperture) | `devmap` over the BAR0 aperture (the C1b `cb_devmap` path, extended) | **DEFERRED** with eviction; the GEM handle exists, not yet the CPU mapping |
 
-TTM is the load-bearing next step: GEM-on-TTM (amdgpu_bo) is how every amdgpu
+Cribbed struct shapes (NO Linux/NetBSD .c lifted): `TTM_PL_*`/`ttm_place`/
+`ttm_placement` from `netbsd-ref .../ttm/ttm_placement.h`; `ttm_mem_reg`
+(-> `ttm_resource`) + `ttm_buffer_object` core from `.../ttm/ttm_bo_api.h`;
+`amdgpu_bo` from `../amdgpu-ref/src/amdgpu_object.h`; the range-manager shape
+from Linux `drm/ttm/ttm_range_manager.c` + `amdgpu_vram_mgr` (re-expressed over
+`vmem`); the ddi_dma idiom from illumos nvme/vioif + C1b's virtio backing.
+
+TTM is the load-bearing step: GEM-on-TTM (amdgpu_bo) is how every amdgpu
 buffer — command buffers, page tables, the framebuffer, compute allocations —
-is allocated. C3-amdgpu-b is "the smallest TTM: a VRAM range allocator over the
-BAR0 aperture + GTT via ddi_dma, no migration, no eviction".
+is allocated. With C3-amdgpu-b done, the IP-block bring-up (C3-amdgpu-c) can
+allocate its ring buffers + page tables from `amdgpu_bo_create`.
 
 ## firmware — the loading approach
 
@@ -82,8 +97,11 @@ C1's `linux_compat.h` + `linux_dma.h` cover kref/idr/mutex/spinlock/kmalloc/
 copy_user + dma-fence/dma-resv/ww_mutex/scheduler/sync_file. amdgpu needs, in
 addition (each maps to an illumos primitive — none is a blocker, all are work):
 
-1. **TTM** — the whole `ttm_bo_*`/`ttm_resource_*`/`ttm_tt` API. No C1 analogue;
-   the biggest gap. Map per the TTM table above. (C3-amdgpu-b.)
+1. **TTM** — the `ttm_bo_*`/`ttm_resource_*` core + the VRAM/GTT managers.
+   **C3-amdgpu-b DONE (compiling)**: `amdgpu/ttm.c` (vmem VRAM manager +
+   ddi_dma GTT manager + reduced `ttm_buffer_object`) + `amdgpu_ttm.c`
+   (`amdgpu_bo_create`). `ttm_tt` (the swappable system-page backing) + LRU
+   eviction + migration remain deferred. Map per the TTM table above.
 2. **`request_firmware` / `release_firmware`** — illumos `firmware(9F)`
    (`firmware_open`/`_read`/`_close`) or a packaged-path `vn_rdwr`. (above.)
 3. **`readl`/`writel`/`ioread32`/`iowrite32`** — `ddi_get32`/`ddi_put32` on the
@@ -127,12 +145,23 @@ undefined symbol resolves to a real illumos DDI export (checked by
 up any IP block; it is the PCI-attach/asic-detect/BAR-map floor the rest of
 amdgpu builds on.
 
-## R-next (C3-amdgpu-b)
+## C3-amdgpu-b deliverable (DONE) + R-next (C3-amdgpu-c)
 
-**The smallest TTM**: a VRAM range allocator over the BAR0 aperture (`vmem`
-arena on the aperture offset) + GTT via `ddi_dma_*`, no migration/eviction —
-enough to allocate an amdgpu_bo in VRAM and in GTT. That unblocks the IP-block
-bring-up (`nv_set_ip_blocks`/`navi12_reg_base_init`), which needs BOs for its
-ring buffers + page tables. Then: the IH ring (item 4) + `request_firmware`
-(item 2), then the GFX/SDMA rings wired to the C1 scheduler (C3-amdgpu-c),
-then KFD (A3-f, the ROCm compute surface).
+**The smallest TTM — DONE (compiling).** A VRAM range allocator over the BAR0
+aperture (`vmem` arena on the aperture offset) + GTT via `ddi_dma_*`, the
+reduced `ttm_buffer_object` core, and `amdgpu_bo_create` — enough to allocate
+an amdgpu_bo in VRAM and in GTT, no migration/eviction/swap. Files:
+`amdgpu/ttm_priv.h`, `amdgpu/ttm.c`, `amdgpu/amdgpu_ttm.c`;
+`amdgpu_transport_attach` now calls `amdgpu_ttm_init` after the BAR map. The
+`drm` module links ET_REL AMD64 with 123 undefs, zero phantom (the 10 new are
+`vmem_create/destroy/xalloc/xfree` + `ddi_dma_alloc_handle/mem_alloc/
+addr_bind_handle/unbind_handle/mem_free/free_handle`, all real illumos KPI).
+Self-check: `test/test_c3_amdgpu_b.c` (vmem<->offset round-trip, page rounding,
+used-bytes accounting, domain->mem_type) prints PASS.
+
+**R-next (C3-amdgpu-c): IP blocks / ring bring-up.** The TTM unblocks it:
+`amdgpu_device_ip_early_init` -> `nv_set_ip_blocks` -> `navi12_reg_base_init`,
+then each IP block allocates its ring buffers + page tables from
+`amdgpu_bo_create`. Then the IH ring (item 4) + `request_firmware` (item 2),
+then the GFX/SDMA rings wired to the C1 scheduler, then KFD (A3-f, the ROCm
+compute surface).
