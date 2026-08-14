@@ -756,3 +756,20 @@ GPU stack (C1a-d kernel + C2 Mesa + C3a Venus/virgl) is unaffected + is the corr
 the DRM RUNTIME proof needs either (a) the EC2-metal loader port, or (b) LOCAL x86+GPU hardware (the
 truer real-GPU-parity target). Recommend deferring EC2-metal runtime in favor of local hw for the real
 GPU proof, and continuing compile-phase (C3 amdgpu scaffolding, llama.cpp-Vulkan build, R-P20+, breadth).
+
+## PS-METAL-BOOT DEEPER (2026-08-14): installboot fix applied, metal STILL won't boot
+Applied the real installer-bug fix (installboot stage1+stage2 on the ZFS pool slice s1, not the ESP s0
+-- solnix-install was wrong; committed) + registered a legacy-bios metalboot AMI + launched c5n.metal
+with the FIXED image. Result: STILL impaired, console COMPLETELY EMPTY (not even the AWS POST countdown
+the earlier attempts showed) after ~20min. Terminated. 
+So: 3+ metal attempts (m6i UEFI-reject, m6i BIOS impaired-POST, c5n BIOS impaired-POST, c5n FIXED-image
+impaired-empty-console) all fail. The installboot fix was CORRECT + necessary (real bug, helps local
+BIOS installs) but is NOT sufficient for EC2 metal. The empty console suggests EC2 metal's serial-console
+capture and/or the illumos BIOS chain on metal firmware needs more than the pool-slice stage2 -- this is
+a genuine multi-step illumos-on-EC2-metal boot port (SeaBIOS/CSM PMBR handling, serial console routing,
+possibly the ena/nvme timing on metal), NOT a one-fix task.
+DECISION: STOP burning metal on trial-and-error (~$4/hr, 4 attempts). EC2-metal runtime is a real port
+effort. The RUNTIME GPU proof should target LOCAL x86+GPU HARDWARE (the true parity target anyway --
+real GPU, real measurement, avoids the EC2-metal-firmware rabbit hole entirely). The compile-complete
+GPU stack (C1a-d + C2 + C3a + C4-Vulkan) is the correct EC2-side milestone; runtime + real-GPU parity
+is a local-hardware activity. EC2-metal-boot remains a documented backlog item (not the critical path).
