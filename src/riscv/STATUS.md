@@ -1,11 +1,135 @@
 # RISC-V (riscv64) port — STATUS
 
-**Phase reached: R-P19** (riscv64-solaris toolchain finished + sgs libld MACH
-descriptor / instruction-field reloc encoders + first EM_RISCV uts/riscv64
-object) — DONE (all three sub-tasks, re-runnable proofs). R-P18 (toolchain
-TARGET retarget + krtld/sgs reloc coverage), R-P17 (cross toolchain + BSD
-psABI/ISA headers) and R-P1..R-P16 (kernel bring-up) are below / in
-`docs/design-riscv-port.md`.
+**Phase reached: R-P20** (sgs libld %pcrel_hi/%pcrel_lo pairing + GOT/PLT slot
+allocation, csu crt1/crti/crtn + first riscv64-solaris hello ELF executable,
+and a larger uts unit -- genassym + a machdep cpu-init source that links toward
+the kernel) -- DONE (all three sub-tasks, re-runnable proofs). R-P19
+(riscv64-solaris toolchain finished + sgs MACH descriptor + first EM_RISCV uts
+object), R-P18 (toolchain TARGET retarget + krtld/sgs reloc coverage), R-P17
+(cross toolchain + BSD psABI/ISA headers) and R-P1..R-P16 (kernel bring-up) are
+below / in `docs/design-riscv-port.md`.
+
+---
+
+## R-P20 — sgs %pcrel pairing + GOT/PLT alloc, csu crt + first hello ELF, larger uts unit
+
+Substrate: fred v3 (root@52.88.62.49). The R-P19 install-time gcc `bin/` wrapper
+was gone (only binutils symlinks + libgcc.a survived), but the R-P18/19 build
+tree `build/gcc-sol-cfg3/gcc/xgcc` is intact and reports
+`riscv64-unknown-solaris2.11`; drove it directly as `xgcc -B<gcc>` (no rebuild).
+Crib source on host: binutils-2.44 `bfd/elfnn-riscv.c` (pcrel pairing + PLT/GOT
+layout) and the R-P1..R-P16 illumos riscv64 MD tree (struct layouts for
+genassym). Proof: `rp20/rp20-milestone-check.sh` (all 3).
+
+### R-P20.1 sgs %pcrel_hi/%pcrel_lo pairing + GOT/PLT allocation — DONE
+- `rp20/sgs/machrel_riscv_pcrel.c`: the RISC-V PC-relative address PAIRING.
+  RISC-V splits a 32-bit pcrel address across `auipc %pcrel_hi20` and a
+  following `addi/load %pcrel_lo12` that references the HI *by label* -- the
+  LO's reloc symbol resolves to the AUIPC address, not the target, so its low
+  12 bits must come from the SAME (S+A-P) value the HI computed. Exact binutils
+  two-pass model: (1) `ld_riscv_record_pcrel_hi()` computes value=S+A-addr,
+  applies the HI immediate, records `{HI_addr -> value}`; (2)
+  `ld_riscv_record_pcrel_lo()` defers the LO, remembering the HI address (its
+  resolved symbol value); (3) `ld_riscv_resolve_pcrel_lo()` finds the HI by that
+  address and splices the HI's stored value into the LO immediate, so
+  HI(rounded high20)+LO(sext low12)==S+A-P. Diagnostics (missing HI, addend on
+  GOT_HI20, addend-crosses-high-part overflow) match binutils. Self-test: S-PC
+  reconstruct across auipc/addi, LO resolved from recorded HI, missing-HI
+  rejected, and byte-identical GNU-ld bytes `0x00001797`/`0x0a878793` for the
+  R-P19.3 pair -- PASS.
+- `rp20/sgs/machrel_riscv_gotplt.c`: GOT/PLT slot allocation for CALL_PLT /
+  GOT_HI20 / JUMP_SLOT. RV64 layout from binutils (GOT_ENTRY_SIZE=8,
+  PLT_HEADER_SIZE=32, PLT_ENTRY_SIZE=16, GOTPLT_HEADER_SIZE=16); idempotent
+  per-symbol slots, header-biased offsets, `.plt/.got.plt/.got` sizing, and
+  emitters for the 4-insn PLT entry stub (auipc t3 / ld t3 / jalr t1,t3 / nop)
+  + the 8-insn header trampoline. Self-test: idempotent+monotonic slots,
+  binutils sizes/offsets, PLT stub decodes + its pcrel hi/lo reconstructs the
+  `.got.plt` target -- PASS.
+- **CRIB**: `riscv_pcrel_{hi,lo}_reloc` structs + record/resolve algorithm from
+  binutils-2.44 `bfd/elfnn-riscv.c` (~1962-2170, 2877-2930); PLT/GOT layout +
+  `riscv_make_plt_{header,entry}` (~296-410). Gate `Rel_desc`/`Target`/htab
+  wiring documented inline (this uses an O(n) list, marked as the upgrade
+  point).
+
+### R-P20.2 csu crt (crt1/crti/crtn) + first riscv64-solaris hello ELF — DONE
+- `rp20/csu/{crt1,crti,crtn}.s`: riscv64 C runtime. `crt1.s` `_start`:
+  terminate the frame chain, set `gp` from `__global_pointer$` (relaxation
+  off), pull argc/argv/envp into a0/a1/a2 per psABI, 16-align sp, then
+  `call _init; call main`, then `exit(2)` (SYS_exit=1 via `ecall`) with main's
+  return -- freestanding, no libc. `crti/crtn` open/close `_init`/`_fini` (SVR4
+  csu split; riscv64 addi sp,-16 / sd ra,8(sp) frame). All EM_RISCV.
+- `rp20/hello/hello.c` -> `ld -static -e _start` with crt1/crti/hello/crtn +
+  libgcc.a -> valid **EM_RISCV ELF64 ET_EXEC** entry `_start`, ZERO relocs.
+  `_start` disassembles to gp-setup + jal _init + jal main + li a7,1;ecall; the
+  gp-relative auipc/addi pcrel pair to `__global_pointer$` resolved -- the
+  first riscv64-solaris userland executable.
+- **full libgcc_s.so.1: NOT this phase (R-P21 long pole).** R-P17/18 gcc was
+  `--disable-shared` (`enable_shared = no` in the libgcc Makefile), so
+  `all-target-libgcc` only builds static `libgcc.a` (138 members, present).
+  `libgcc_s.so.1` needs `--enable-shared` reconfigure + full rebuild AND a real
+  libc (Solaris `SHLIB_LINK` pulls `-lc`), neither of which exists yet.
+  Documented as the R-P21 gate; static libgcc.a suffices for the linkable-exe
+  milestone.
+- **CRIB**: initial-stack layout + a0=argc/a1=argv/a2=envp from RISC-V psABI
+  "Program Startup" + glibc/newlib Scrt1; `.option norelax; lla gp,
+  __global_pointer$` from psABI + gcc riscv startup; crt open/close split +
+  "call _init; call main; exit" from illumos csu (amd64/aarch64 crt1.s);
+  SYS_exit=1 + `ecall` from the illumos syscall convention.
+
+### R-P20.3 larger uts unit — genassym + machdep cpu-init — DONE
+- `rp20/uts/riscv64/genassym.c` + `genassym.sh`: the illumos riscv64 kernel
+  asm-offset generator. MD .S (locore/trap/swtch/setjmp) reach into C structs
+  by numeric offset (`sd ra,C_RA(a0)`, TF_* frame, LABEL_* in label_t), today
+  hand-maintained + `_Static_assert`-guarded. genassym.c compiles the ACTUAL
+  `struct regs`/`struct rv_context`/`label_t` and, via inline-asm
+  `ASSYM(name, offsetof(...))` in a `.assym` section, emits the compiler's real
+  offsets; `genassym.sh` extracts `assym.h`. Cross-compiled to **EM_RISCV**
+  ET_REL. Generated offsets EXACTLY match the hand-maintained
+  swtch.S/asm_frame.h/machtypes.h (regs_r_ra=0, regs_r_sp=8, rv_context_c_ra=0,
+  c_satp=120, c_lofault=128, LABEL_SP=8, regs_SIZE=280) -- genassym validates
+  (and would replace) the hand offsets. Freestanding pipeline (compiler folds
+  offsetof; no runnable libc) -- the classic gate/BSD genassym trick.
+- `rp20/uts/riscv64/mach_cpu.c` (+ `externs.c`): a machdep slice (per-cpu
+  online, install stvec, account a switch, a dispatch table) exercising the
+  load-bearing reloc set: **R_RISCV_CALL_PLT** (x2 cross-TU calls),
+  **PCREL_HI20+PCREL_LO12** pairs + HI20/LO12 absolute pairs (external data via
+  auipc/addi), BRANCH/RVC_BRANCH, ADD32/SUB32/SET6/SUB6. Cross-compiled to
+  EM_RISCV; cross-`ld -Ttext=0x10000 -e cpu_online` with the externs stub
+  resolves EVERY reloc -> EM_RISCV ET_EXEC, zero relocs; the CALL_PLT to
+  `rv_swtch` and the auipc/addi pcrel pairs to
+  `cpu_list`/`trap_entry`/`hart_online_mask` all disassemble resolved. The
+  R-P19 mod stub grown to a multi-TU unit that links toward the kernel and
+  exercises exactly the relocs R-P20.1 resolves.
+- **CRIB**: the OFFSET/SIZE/ASSYM mechanism from illumos uts genassym.c +
+  sys/assym.h and BSD `sys/arch/riscv/riscv/genassym.cf`; struct layouts from
+  the R-P1..R-P16 MD tree (`regs.h`, `proc.c`, `sys/machtypes.h`); the
+  per-cpu/stvec shape from that MD tree + the RISC-V privileged spec.
+
+### `/root/riscv-port/rp20/` contents
+`sgs/{machrel_riscv_pcrel.c, machrel_riscv_gotplt.c, machrel_riscv_insn.c
+(from rp19), pcrel_selftest, gotplt_selftest}`; `csu/{crt1,crti,crtn}.s + .o`;
+`hello/{hello.c, hello.o, hello.elf}`; `uts/riscv64/{genassym.c, genassym.sh,
+genassym.{s,o}, assym.h, mach_cpu.c, externs.c, mach_cpu.o, externs.o,
+kunit_riscv64.{o,exec}, mod_riscv64.c, sys/*.h}`; `rp20-milestone-check.sh`
+(all 3, re-runnable). Crt objects also installed into
+`sysroot-riscv-sol/usr/lib/{crt1,crti,crtn}.o`. Repo copies under
+`src/riscv/{sgs,csu,hello,uts/riscv64}/` + `src/riscv/rp20-milestone-check.sh`.
+
+### Next: R-P21
+1. **Fold the sgs pieces into a real gate `machrel.riscv.c`** against the true
+   `usr/src/cmd/sgs/include/_libld.h` `Rel_desc`/`Target` types: swap the
+   standalone shims for the gate structs, wire the pcrel-pairing hash (keyed by
+   `Rel_desc->rel_roffset`) + GOT/PLT allocator into `ld_do_activerelocs` /
+   `ld_allocate_got` / `ld_perform_outreloc`, and build inside a real (or
+   stubbed) sgs tree so `ld` selects `ld_targ_riscv` for EM_RISCV.
+2. **Shared libgcc_s.so.1 (the R-P20 long pole)**: bring up a minimal
+   riscv64-solaris libc (or a stub `-lc` with the symbols `SHLIB_LINK` needs),
+   reconfigure gcc `--enable-shared`, complete `all-target-libgcc` to produce
+   `libgcc_s.so.1`; then link a *dynamic* hello.
+3. **Grow the uts unit toward a linkable `unix`/`genunix`**: replace `assym.h`'s
+   hand offsets in the real `.S` files with genassym output, then cross-compile
+   + link a bigger MD set (locore + swtch + trap + a machdep) as an EM_RISCV
+   kernel image in the gate layout.
 
 ---
 

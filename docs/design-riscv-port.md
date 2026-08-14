@@ -2638,3 +2638,50 @@ NEXT R-P20: fold the standalone sgs sources into a real gate usr/src/cmd/sgs/lib
 (%pcrel_hi/%pcrel_lo pairing + GOT/PLT allocation); grow the bootstrap sysroot to real (csu crt1/crti/
 crtn + libc headers) for full all-target-libgcc; cross-compile a larger uts unit toward linkable
 unix/genunix. The riscv64-solaris toolchain + sgs backend now compile+link real illumos riscv64 objects.
+
+## R-P20 DONE: sgs %pcrel pairing + GOT/PLT, csu crt + first hello ELF, larger uts unit
+All 3 sub-tasks complete (re-runnable green proof: src/riscv/rp20-milestone-check.sh). Drove the intact
+R-P19 build-tree gcc (build/gcc-sol-cfg3/gcc/xgcc -B<gcc>) directly -- the install-time bin/ wrapper was
+gone but the compiler works; no rebuild needed.
+- R-P20.1: sgs %pcrel_hi/%pcrel_lo PAIRING (machrel_riscv_pcrel.c) -- the load-bearing linker-correctness
+  piece. RISC-V splits a 32-bit pcrel address across auipc(%pcrel_hi20)+addi/load(%pcrel_lo12); the LO's
+  reloc symbol is the AUIPC address, so the LO's low 12 bits must reuse the HI's computed (S+A-P). Exact
+  binutils two-pass model: record HI {addr->value}, defer LO (remember HI addr), resolve LO by looking up
+  the HI and splicing its value. Byte-identical to GNU ld (0x00001797 / 0x0a878793 for the R-P19.3 pair).
+  Plus GOT/PLT slot allocation (machrel_riscv_gotplt.c): idempotent slots, binutils RV64 layout (GOT=8,
+  PLT_HDR=32, PLT_ENT=16, GOTPLT_HDR=16), PLT header+entry stub emitters. Cribbed from binutils-2.44
+  bfd/elfnn-riscv.c riscv_resolve_pcrel_lo_relocs + riscv_make_plt_{header,entry}.
+- R-P20.2: csu crt1/crti/crtn (RISC-V psABI _start: gp setup, argc/argv/envp handoff, call _init/main,
+  exit(2)) -> hello.c cross-compiled + linked to a valid EM_RISCV ELF64 ET_EXEC, entry _start, zero
+  relocs -- the first riscv64-solaris userland executable. Full libgcc_s.so.1 deferred to R-P21 (gcc is
+  --disable-shared and needs a real libc for SHLIB_LINK); static libgcc.a suffices for the milestone.
+- R-P20.3: larger uts unit -- genassym.c (compiles struct regs / rv_context / label_t, emits assym.h
+  whose compiler offsets EXACTLY match the hand-maintained swtch.S/asm_frame.h/machtypes.h values) +
+  mach_cpu.c (a machdep cpu-init slice emitting CALL_PLT + PCREL_HI20/LO12 pairs + BRANCH/ADD/SUB/SET),
+  both cross-compiled to EM_RISCV; cross-ld resolves every reloc -> EM_RISCV ET_EXEC. Cribbed from the
+  illumos uts genassym idiom + the R-P1..R-P16 MD structs.
+Persisted src/riscv/{sgs/machrel_riscv_pcrel.c, sgs/machrel_riscv_gotplt.c, csu/{crt1,crti,crtn}.s,
+hello/hello.c, uts/riscv64/{genassym.c, genassym.sh, assym.h, mach_cpu.c, externs.c},
+rp20-milestone-check.sh}.
+NEXT R-P21: fold the sgs pieces into a real _libld.h Rel_desc/Target machrel.riscv.c (htab-keyed pairing +
+GOT/PLT into ld_do_activerelocs/ld_allocate_got); bring up a minimal libc so gcc --enable-shared can
+finish libgcc_s.so.1 (dynamic hello); replace the .S hand offsets with genassym output + link a bigger MD
+set (locore+swtch+trap+machdep) toward an EM_RISCV kernel image.
+
+## R-P20 DONE (2026-08-14): first riscv64-solaris userland ELF + sgs %pcrel pairing + GOT/PLT
+- sgs %pcrel_hi/%pcrel_lo PAIRING (machrel_riscv_pcrel.c): the LO reloc's symbol is the auipc address,
+  so its low-12 reuses the HI's S+A-P -- binutils two-pass model (record HI addr->value, defer LO,
+  resolve by HI lookup). Byte-identical to GNU ld (0x00001797/0x0a878793 for the R-P19.3 pair). GOT/PLT
+  slot allocation (machrel_riscv_gotplt.c: RV64 GOT=8/PLT_HDR=32/PLT_ENT=16, header+entry stubs).
+  Cribbed binutils bfd/elfnn-riscv.c riscv_resolve_pcrel_lo_relocs + riscv_make_plt_*.
+- csu crt1/crti/crtn (RISC-V psABI _start: gp setup, argc/argv/envp, call _init/main, exit) -> hello.c
+  cross-compiled+linked -> FIRST riscv64-solaris userland EM_RISCV ELF64 ET_EXEC, entry _start, 0 relocs.
+- genassym.c: compiler-computed asm offsets EXACTLY match the hand-maintained swtch.S/asm_frame.h/
+  machtypes.h; mach_cpu.c machdep slice -> EM_RISCV ET_EXEC (CALL_PLT + PCREL pairs + BRANCH/ADD/SUB/SET
+  all resolved). 
+- libgcc_s.so.1 (shared) BLOCKED (gcc --disable-shared + needs a real libc) = R-P21 gate; static
+  libgcc.a suffices for the linkable-exe milestone.
+Committed src/riscv/{sgs/machrel_riscv_pcrel.c,gotplt.c, csu/*.s, hello/hello.c, uts/riscv64/genassym*,
+mach_cpu.c,externs.c}. NEXT R-P21: fold sgs into real _libld.h machrel.riscv.c (htab pairing + GOT/PLT
+into ld_do_activerelocs); minimal libc -> --enable-shared libgcc_s.so.1 (dynamic hello); genassym-driven
+offsets + link a bigger MD set toward an EM_RISCV kernel image.
