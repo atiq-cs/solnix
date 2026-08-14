@@ -1,6 +1,24 @@
 # RISC-V (riscv64) port — STATUS
 
-**Phase reached: R-P23** (the FIRST BOOTING illumos-riscv64 kernel -- an
+**Phase reached: R-P24** (the R-P23 booting illumos-riscv64 kernel GROWN
+toward genunix, four subsystems each boot-verified under `qemu-system-riscv64
+-machine virt`: **Sv39 virtual memory** -- `hat_boot_init` builds the 3-level
+Sv39 boot page table [identity map keeps the kernel live across mmu-enable +
+a high direct-map kpm window], writes `satp` [MODE=8] + `sfence.vma`, and the
+kernel KEEPS EXECUTING in virtual address space [`paging enabled (Sv39):
+satp=0x8000000000080224`, direct-map probe reads the kernel's own `_start`
+through the high VA]; a **periodic clock** -- the SBI timer [`sbi_set_timer` @
+100 Hz] delivered as a Supervisor Timer Interrupt through the R-P23
+`rv_trap_dispatch` -> `rv_interrupt` -> `rv_timer_intr`, ten ticks counted;
+the **qemu-virt PLIC** -- init + enable UART0 [IRQ 10] + claim/complete an
+external interrupt [source id 10 claimed + completed], reached through the
+direct-map; and the **genunix on-ramp** -- a first-fit `kmem_alloc` over a
+16 MiB boot heap + a `page_t` seed [`page_create`] + a single-thread
+dispatcher `rv_swtch` into an idle loop on a fresh kmem stack with the clock
+ticking) -- DONE (all four sub-tasks, re-runnable proof
+`rp24/rp24-milestone-check.sh`).
+
+R-P23 (the FIRST BOOTING illumos-riscv64 kernel -- an
 illumos-MD kernel skeleton built with the NATIVE `riscv64-unknown-solaris2.11`
 toolchain that boots under `qemu-system-riscv64 -machine virt` via OpenSBI and
 prints a SunOS banner via SBI: `locore _start` -> set `stvec` -> `mlsetup`
@@ -31,6 +49,160 @@ unit), R-P19 (riscv64-solaris toolchain finished + sgs MACH descriptor + first
 EM_RISCV uts object), R-P18 (toolchain TARGET retarget + krtld/sgs reloc
 coverage), R-P17 (cross toolchain + BSD psABI/ISA headers) and R-P1..R-P16
 (kernel bring-up) are below / in `docs/design-riscv-port.md`.
+
+---
+
+## R-P24 — grow the booting kernel toward genunix (Sv39 paging + clock + PLIC + kmem/page/dispatcher on-ramp)
+
+Substrate: fred v3 (root@52.88.62.49), the R-P18/19 build-tree gcc
+(`build/gcc-sol-cfg3/gcc/xgcc -B<gcc>` = `riscv64-unknown-solaris2.11`) + the
+R-P17 `riscv64-unknown-elf` binutils + `qemu-system-riscv64 -machine virt` with
+OpenSBI v1.7. R-P24 extends the R-P23 native-toolchain booting kernel skeleton
+(`rp24/kernel/`, a superset of `rp23/kernel/`) with four subsystems, each
+boot-verified under qemu -- Sv39 paging, a periodic clock, the qemu-virt PLIC,
+and a minimal genunix on-ramp (kmem/page/dispatcher). Proof:
+`rp24/rp24-milestone-check.sh` (rebuild + reboot, all four green, re-runnable).
+
+Boot flow now: `locore _start` -> `mlsetup` (trap self-test) -> `main`:
+`hat_boot_init` (Sv39 ON) -> banner -> `startup_kmem`/`page_setup` -> `plic_init`
++ claim -> `clock_init` -> `dispatch_onramp` (swtch into the idle loop with the
+clock ticking) -> known halt.
+
+### R-P24.1 Sv39 virtual memory — DONE
+- **The kernel turns on Sv39 paging and keeps executing in virtual address
+  space.** `rp24/kernel/{mmu_riscv.h, hat_boot.c, mach_mmu.S}`:
+  `hat_boot_init()` builds the first Sv39 page table (a single level-2 root,
+  `boot_l2[512]`, page-aligned in BSS so its PA == link address pre-paging),
+  IDENTITY-maps the low 4 GiB with 1 GiB gigapage leaves (V|R|W|X) so the PC/sp/
+  gp stay valid the instant `satp` flips, ALSO installs a high direct-map
+  (`KERNEL_DMAP_BASE = 0xffffffc000000000` + pa -> pa, gigapage leaves) as the
+  kpm window, then `rv_set_satp(MAKE_SATP(root))` writes `satp` (MODE=8=Sv39,
+  root PPN) + `sfence.vma`. Because the kernel is identity-mapped the next fetch
+  after the `csrw satp` still resolves -> the kernel keeps running.
+- **Boot proof** (`rp24/kernel/qemu-boot.log`): the line AFTER the satp write:
+  ```
+  [R-P24.1] enabling Sv39 paging (3-level, 39-bit VA)...
+  paging enabled (Sv39): satp=0x8000000000080224 -- kernel now executing in virtual address space
+    satp readback     : 0x8000000000080224
+    direct-map probe  : 0x1040107310017073 (word @ dmap+0x80200000)
+  ```
+  `satp=0x8000_0000_0008_0224` = MODE 8 (Sv39) | root PPN 0x80224 (root PA
+  0x80224000). The direct-map probe reads the kernel's own `_start`
+  (`csrci sstatus,2` 0x10017073 ; `csrw sie,zero` 0x10401073) through
+  `KERNEL_DMAP_BASE + 0x80200000` -- proving the high mapping translates, not
+  just the identity one.
+- **Scope (honest)**: gigapage identity + direct-map is the BOOT map (keeps the
+  low addresses live across mmu-enable + gives a kpm window); it is not yet the
+  per-segment kernel-text/data mapping with proper R^X permissions, and there
+  are no 4 KiB leaf tables / `hat_memload` yet. R-P25 relocates kernel
+  text/data into the high VA, drops the identity map, and adds leaf-level
+  mapping.
+- **CRIB**: `hat_boot_init` building a boot root + identity-mapping the kernel +
+  installing a direct-map + `satp`+`sfence.vma` is this repo's R-P3.2 Sv39 boot
+  map + R-P5 `hat_riscv.c hat_boot_init` + i86pc `hat_kbootmmu`/`hat_kern_setup`;
+  the Sv39 PTE encoding (PPN[53:10]<<10 | V|R|W|X|A|D|G), the gigapage-leaf rule,
+  the 3-level VA[38:12] split, and `satp` MODE=8 are the RISC-V privileged spec;
+  the "keep the low identity map live across mmu-enable" trick is the i86pc/
+  aarch64 boot-map idiom.
+
+### R-P24.2 clock + timer interrupts — DONE
+- **A periodic S-mode timer interrupt ticks through the R-P23 trap path.**
+  `rp24/kernel/clock_riscv.c`: `clock_init()` arms the SBI timer
+  (`sbi_set_timer(rdtime + period)`, 100 Hz over the 10 MHz qemu-virt timebase),
+  unmasks `sie.STIE`, sets `sstatus.SIE`. Each Supervisor Timer Interrupt
+  (scause = INT | 5) routes `stvec -> _trap_entry -> rv_trap_dispatch` (the
+  R-P22/23 full-GPR trap frame) -> `rv_interrupt` (main.c, decodes scause) ->
+  `rv_timer_intr` (counts a tick, re-arms; masks STIE on the last tick).
+- **Boot proof**: ten ticks counted + printed by the idle loop:
+  ```
+    clock tick 1
+    ...
+    clock tick 10
+  [dispatcher] idle loop counted 10 clock ticks; on-ramp proven
+  ```
+- **CRIB**: the "arm SBI set_timer, take STIP, re-arm for a periodic tick"
+  cadence is the RISC-V SBI spec `sbi_set_timer` + the R-P22.3 `rv_clock_intr` +
+  the R-P4.2 cyclic-clock contract; STIE/SIE unmask + the scause==5 timer decode
+  are the RISC-V privileged spec; `rv_trap_dispatch` is R-P22.3/R-P23.
+
+### R-P24.3 PLIC (external interrupt controller) — DONE
+- **The qemu-virt PLIC is initialized and an external interrupt is
+  claimed/completed.** `rp24/kernel/plic.c`: `plic_init()` sets UART0 (IRQ 10)
+  priority > 0, enables it for the hart-0 S-mode context (ctx 1), drops the
+  threshold to 0; `plic_provoke_uart()` sets the ns16550a THRE interrupt-enable
+  so qemu asserts IRQ 10; `plic_claim()` reads the claim register (returns the
+  pending source id) and `plic_complete()` writes it back (EOI). The PLIC is
+  reached through the high direct-map (`KERNEL_DMAP_BASE + 0x0C000000`), proving
+  the direct-map is usable for MMIO after paging.
+- **Boot proof**:
+  ```
+  [R-P24.3] PLIC: init + claim an external interrupt (UART0 IRQ10)
+    PLIC claim        : source id 10 -- claimed + completed (external interrupt handled)
+  ```
+  Source id 10 == UART0. `rv_interrupt` also handles scause==9 (S-external) by
+  claim/complete, so a live external interrupt routes through the trap path too.
+- **CRIB**: the PLIC register map (priority @ base+4*src, enable bitmap @
+  base+0x2000+0x80*ctx, threshold/claim @ base+0x200000+0x1000*ctx) + the "set
+  priority, enable for context, drop threshold, claim, complete" flow are the
+  RISC-V PLIC spec + this repo's R-P4.3 PLIC contract; the qemu-virt base
+  0x0C000000 + UART0=IRQ10 + S-mode context numbering are the qemu virt board.
+
+### R-P24.4 toward the dispatcher / genunix — DONE (minimal on-ramp)
+- **A boot heap + `kmem_alloc` + a `page_t` seed + a single-thread dispatcher
+  `swtch` into an idle loop.** `rp24/kernel/{startup.c, mach_swtch.S}`:
+  - `startup_kmem()` + `kmem_alloc()/kmem_free()`: a first-fit allocator over a
+    16 MiB BSS boot heap (split + coalesce). Boot proof:
+    `kmem heap: 16777192 bytes; kmem_alloc(4096)=0x80226018 kmem_alloc(256)=0x80227030`
+    then `kmem_free ok; inuse now 0 bytes`.
+  - `page_setup()`/`page_create()`: a flat `page_t` array (pfn + inuse) seeding
+    the VM page layer over an 8 MiB managed window. Boot proof:
+    `page_t layer: 2048 frames managed; page_create()=0x88000000`.
+  - `dispatch_onramp()` + `rv_swtch` (mach_swtch.S, save/load callee-saved +
+    ra/sp + satp, `sfence.vma`, `ret`): builds an idle `kthread_t` on a fresh
+    16 KiB kmem stack, `swtch`es the boot CPU into `idle_loop` (which `wfi`s and
+    counts clock ticks), then `swtch`es back. Boot proof:
+    ```
+    [dispatcher] built idle kthread (fresh 16K kmem stack); swtch -> idle
+    [dispatcher] idle thread running on its own stack; entering idle loop with clock ticking
+    ... clock tick 1..10 ...
+    [dispatcher] swtched back to boot context; dispatcher round-trip complete
+    ```
+    A thread running on a kmem-allocated stack, entered by a real context
+    switch, in the idle loop with the clock ticking -- the genunix on-ramp.
+- **Scope (honest, per the anti-wedge directive)**: this is the REDUCED seam --
+  a first-fit boot heap (not the slab `kmem_cache`/vmem), a flat `page_t` array
+  (not the page hash + freelists), a two-context hand `swtch` (not the full disp
+  queues / `thread_create`/`setrun`). It proves the on-ramp end to end; R-P25
+  grows it into the real allocator + page layer + dispatcher.
+- **CRIB**: the `startup()`/`startup_memlist`/`startup_kmem` decomposition +
+  the heap-then-kmem-then-page-then-dispatcher order is illumos uts/common/os
+  `startup.c` + i86pc `startup.c`; the first-fit kmem + `page_t` seed are the
+  R-P5.1/R-P5.2 page/kmem contracts (reduced from slab/vmem to a bump-split
+  heap); `rv_swtch` (save callee-saved + ra/sp + satp, sfence, ret) is the
+  R-P5.4 / R-P21 `mach_swtch.S` switch body (RISC-V LP64 callee-saved s0..s11;
+  NetBSD riscv `cpu_switch.S` idiom), trimmed of the lofault/genassym coupling
+  for the minimal seam.
+
+### `/root/riscv-port/rp24/` contents
+`kernel/{locore.S, mach_trap.S, mach_clock.S, mach_mmu.S, mach_swtch.S,
+mmu_riscv.h, clock_riscv.h, plic.h, assym.h, sbi.h, sbi.c, hat_boot.c,
+clock_riscv.c, plic.c, startup.c, main.c, kernel.lds, build-kernel.sh, *.o,
+unix.elf, qemu-boot.log}` (the grown kernel); `rp24-milestone-check.sh` (all
+four sub-tasks, rebuild+reboot, re-runnable green). Repo copies under
+`src/riscv/rp24/`.
+
+### Next: R-P25
+1. **Kernel syscall/exec path** so the R-P22.2b static hello RUNS as a process
+   (map the a.out, U-mode entry, `write(2)`/`exit(2)` ecall serviced by
+   `rv_syscall`); then the exec/interp/aux-vector path lets the R-P23.2 ld.so.1
+   engine host the dynamic hello.
+2. **Full HAT**: relocate kernel text/data into the high VA, drop the identity
+   map, add 4 KiB leaf tables + `hat_memload`/`hat_unload` + proper R^X kernel
+   permissions; grow the boot heap into vmem/`kmem_cache` and the flat `page_t`
+   into the page hash + freelists.
+3. **SMP secondaries** via SBI HSM (`hart_start`) + the real dispatcher
+   (`thread_create`/`setrun`/disp queues) replacing the two-context hand swtch;
+   the callout wheel driven by the clock tick.
 
 ---
 
