@@ -726,3 +726,20 @@ THREE strategic blockers (each gates a cluster -- worth dedicated ports):
    focused cpython-illumos-linkage fix.
 3. icu4c: genrb U_INVALID_FORMAT_ERROR (data build) -- gcc issue. Blocks libqalculate + full-ICU boost.
    Dodged via enableIcu=false where possible. Known individual port.
+
+## PS-METAL-BOOT (2026-08-14): solnix v3 image doesn't boot on EC2 metal firmware
+The DRM runtime proof needs /dev/kvm (only EC2 *.metal has it). Launched m6i.metal (us-east-1) with a
+legacy-BIOS AMI (metal rejected the UEFI AMI). Result: SystemStatus=impaired, console stuck at the AWS
+metal firmware POST countdown -- illumos LOADER NEVER RAN. Root cause: EC2 metal uses REAL UEFI/BIOS
+firmware that differs from the Nitro-VM BIOS emulation the regular m5.4xlarge fleet boots on; the
+solnix v3 image's loader is validated for the Nitro-VM path, not the metal firmware. Terminated after
+~2.5h (cost hygiene; it never booted).
+IMPLICATION: the DRM RUNTIME proof (modload the C1 drm module + QEMU virtio-gpu + KVM) is blocked on a
+metal-boot-capable solnix image, which is its own loader/boot-path port (same class as the ena
+cold-boot work). Options: (1) port the solnix loader for EC2 metal firmware (real work); (2) LOCAL
+HARDWARE -- an x86 box w/ a GPU is the truest runtime+GPU target + avoids the metal-firmware issue;
+(3) DEFER runtime -- the C1a-d + C2 + C3a stack COMPILES (the hard de-risk is done); runtime validation
+is a separate boot+debug phase, best on local hw or after the metal-boot loader port.
+NOTE: nested KVM on a regular EC2 VM is NOT an option (only metal exposes /dev/kvm). So EC2 runtime =
+metal = needs the loader port. The compile-complete stack is the correct + valuable current milestone;
+runtime GPU is gated on a boot-capable image on real (metal or local) hardware.
