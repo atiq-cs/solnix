@@ -2685,3 +2685,62 @@ Committed src/riscv/{sgs/machrel_riscv_pcrel.c,gotplt.c, csu/*.s, hello/hello.c,
 mach_cpu.c,externs.c}. NEXT R-P21: fold sgs into real _libld.h machrel.riscv.c (htab pairing + GOT/PLT
 into ld_do_activerelocs); minimal libc -> --enable-shared libgcc_s.so.1 (dynamic hello); genassym-driven
 offsets + link a bigger MD set toward an EM_RISCV kernel image.
+
+## R-P21 DONE: gate sgs machrel.riscv.c (htab pairing) + libgcc_s.so.1 (dynamic hello) + bigger MD partial-link
+All 3 sub-tasks complete (re-runnable green proof: src/riscv/rp21-milestone-check.sh). Drove the intact
+R-P18/19 build-tree gcc directly + the R-P17 binutils. illumos-gate is NOT on the host, so the sgs backend
+is cribbed from knowledge of machrel.amd64.c/machrel.sparc.c/_libld.h shape and made compilable against a
+field-faithful _libld.h shim.
+- R-P21.1: the R-P20 standalone sgs pieces folded into ONE gate-shaped machrel.riscv.c wired into the sgs
+  reloc passes against _libld.h Rel_desc/Sym_desc/Ofl_desc (shim: src/riscv/sgs/_libld_shim.h). Four gate
+  entry points (amd64/sparc names/roles): ld_reloc_local (classify + idempotent GOT/PLT slot assignment
+  on the Sym_desc, growing ofl_gotcnt/ofl_pltcnt), ld_assign_got_ndx, ld_do_activerelocs (the output pass:
+  S+A or S+A-P, flat store vs INSREL splice vs the %pcrel_hi/%pcrel_lo record-HI/defer-LO/resolve-by-HI
+  model), ld_riscv_finish_pcrel. THE R-P20 GATE: the O(n) list is replaced by a real chained hash table
+  (riscv_pcrel_htab.h) keyed by the auipc-site address (power-of-two buckets, Knuth hash, grow+rehash),
+  hung off Ofl_desc.ofl_riscv_pcrel -> O(1) LO resolution. Self-test PASS: idempotent GOT/PLT slots
+  (2->1), pcrel pair byte-identical to GNU ld (0x00001797/0x0a878793), dangling-LO rejected, htab scales
+  to 1000 pairs O(1). Cribbed: sgs machrel.amd64.c/machrel.sparc.c/_libld.h SHAPE; binutils elfnn-riscv.c
+  pairing + PLT/GOT layout; RISC-V psABI Calculation.
+- R-P21.2: libgcc_s.so.1 HAND-LINKED from the static libgcc.a (138 objs, gcc is --disable-shared) + a
+  GCC_3.0 version script (214 syms, crib: illumos libgcc-unwind.map + gcc libgcc-std.ver.in) instead of a
+  full --enable-shared rebuild. One binutils blocker: the R-P17 elf64lriscv emulation had
+  config.has_shared=false (bare-metal newlib, no GENERATE_SHLIB_SCRIPT) -> `-shared not supported`; fixed
+  by regenerating ONLY that emulation (GENERATE_SHLIB_SCRIPT/PIE=yes + genscripts + relink just ld-new ->
+  riscv64-unknown-elf-ld-shared), not a full binutils rebuild. Result: EM_RISCV ET_DYN, SONAME
+  libgcc_s.so.1, syms @@GCC_3.0. Dynamic hello: R-P20 hello + crt linked -lgcc_s with --dynamic-linker
+  /usr/lib/ld.so.1 -> EM_RISCV, INTERP /usr/lib/ld.so.1, NEEDED libgcc_s.so.1 = the first DYNAMIC
+  riscv64-solaris userland exe. Recipe: src/riscv/libgcc_s/README.md.
+- R-P21.3: replaced hand .S offsets with genassym output -- mach_swtch.S (rv_swtch/rv_savectx via the
+  generated rv_context_c_*/LABEL_* macros in assym.h) + mach_locore.S (rv_trap_entry building a struct regs
+  frame at generated regs_r_* offsets). ld -r of mach_locore.o+mach_swtch.o+mach_cpu.o -> one EM_RISCV
+  ET_REL unix_riscv64.o preserving the full kernel reloc set (CALL_PLT x3, PCREL pairs, HI20/LO12,
+  BRANCH/RVC_BRANCH, ADD32/SUB32/SET6/SUB6, 32_PCREL, RELAX). Full link with mach_externs.o resolves EVERY
+  reloc -> EM_RISCV ET_EXEC, 0 relocs (jal <rv_trap> CALL_PLT, auipc/addi pcrel pair to rv_lofault,
+  jal <rv_swtch> all resolved). Cribbed: R-P20 genassym idiom + BSD genassym.cf; R-P3/R-P5 switch/trap
+  bodies; the <assym.h>-only-offset kernel build discipline.
+Persisted src/riscv/{sgs/{_libld_shim.h, reloc_riscv.h, riscv_pcrel_htab.h, machrel.riscv.c},
+libgcc_s/{libgcc_s.ver, README.md}, uts/riscv64/{mach_swtch.S, mach_locore.S, mach_externs.c, assym.h},
+rp21-milestone-check.sh}.
+NEXT R-P22: build machrel.riscv.c inside a real/stubbed sgs tree so illumos ld selects ld_targ_riscv for
+EM_RISCV (retire the GNU-ld crutch); minimal riscv64-solaris libc so the dynamic hello RUNS under ld.so.1
+(the R-P16 krtld doreloc already covers the riscv64 reloc math); grow the genassym-driven MD partial-link
+toward a larger linkable EM_RISCV unix.o set in the gate uts/riscv64 layout.
+
+## R-P21 DONE (2026-08-14): first DYNAMIC riscv64-solaris exe + gate sgs backend + genassym MD link
+- sgs gate backend: machrel.riscv.c with the 4 gate entry points (ld_reloc_local, ld_assign_got_ndx,
+  ld_do_activerelocs, ld_riscv_finish_pcrel) shaped like machrel.amd64/sparc.c; the R-P20 O(n) pcrel
+  list scan REPLACED by a real chained hash table (riscv_pcrel_htab.h, keyed by auipc-site addr, off
+  Ofl_desc.ofl_riscv_pcrel -> O(1) LO resolution). Self-test: pcrel pair byte-identical GNU ld, scales
+  to 1000 pairs, dangling-LO rejected.
+- libgcc_s.so.1: hand-linked EM_RISCV ET_DYN (SONAME libgcc_s.so.1, 214 syms @@GCC_3.0) from the static
+  libgcc.a + a version script (no --enable-shared rebuild; fixed a binutils elf64lriscv has_shared=false
+  by regen'ing that emulation + relinking ld). Dynamic hello -> EM_RISCV, INTERP /usr/lib/ld.so.1,
+  NEEDED libgcc_s.so.1 -- the FIRST dynamic riscv64-solaris executable.
+- genassym-driven MD: mach_swtch.S/mach_locore.S using assym.h offsets; ld -r of locore+swtch+cpu ->
+  EM_RISCV ET_REL exercising the full reloc set (CALL_PLT + PCREL pairs + HI20/LO12 + BRANCH/RVC +
+  ADD32/SUB32/SET6/SUB6/32_PCREL/RELAX); full link -> ET_EXEC, 0 relocs.
+Committed src/riscv/{sgs/machrel.riscv.c+htab+shim, libgcc_s/, uts/riscv64/mach_*.S+externs+genassym.cf}.
+NEXT R-P22: build machrel.riscv.c in a real/stubbed sgs tree so illumos ld selects ld_targ_riscv for
+EM_RISCV (retire the GNU-ld crutch); minimal riscv64-solaris libc so the dynamic hello RUNS under
+ld.so.1; grow the genassym MD partial-link toward a larger unix.o kernel image.
