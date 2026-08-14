@@ -200,3 +200,143 @@ WPTR/RPTR register wiring + the IV decode, then the GFX/SDMA rings wired to the
 C1 scheduler (the live EXECBUFFER path), then KFD (A3-f, the ROCm compute
 surface). All of it is `RREG32/WREG32` against a real V520 — the compile-phase
 floor is now complete.
+
+## C3-amdgpu-d — firmware load + power-up + live-register programming (COMPILE-phase done; runtime is HARDWARE-GATED)
+
+The LAST amdgpu phase before it drives a real V520. Three parts compile + are
+structurally verifiable off-hardware; the fourth is the precise runtime
+checklist for when a g4ad / local GPU is available. New files under
+`amdgpu/` (build copies in `src/`):
+
+    amdgpu_ucode.h/.c   firmware(9F) fetch of navi12_*.bin + the
+                        common_firmware_header parse/validate (the security
+                        gate). OFF-HARDWARE verifiable.
+    amdgpu_psp.h/psp.c  the psp_v11_0 bring-up (authenticate + load every blob
+                        through the PSP GFX command ring). HARDWARE-GATED.
+    gmc_hw.c            gmc_v10_0 gart_enable: program the VM page-table base +
+                        aperture, flush the TLB. HARDWARE-GATED.
+    gfx_hw.c            gfx_v10_0 hw_init: RLC resume + CP (ME/PFP/CE) load +
+                        the GFX ring enable + doorbell. HARDWARE-GATED.
+    sdma_hw.c           sdma_v5_0 hw_init: point the SDMA ring registers at the
+                        C3-c ring BO + rptr writeback + enable. HARDWARE-GATED.
+    amdgpu_hw.h/.c      the reduced .hw_init chain wiring the above in the crib
+                        order (ucode -> psp -> gmc -> gfx -> sdma).
+    amdgpu_job.h/.c     the ring -> C1 drm_sched wiring for live EXECBUFFER
+                        (amdgpu_job / amdgpu_ib_schedule -> ring_write the IB
+                        packet -> doorbell). Compiles; execution HARDWARE-GATED.
+
+### 1. Firmware loading (COMPILES + parse verifiable off-hardware)
+
+Linux `request_firmware("amdgpu/navi12_pfp.bin")` maps onto illumos
+`firmware(9F)` (`sys/firmload.h`, the NetBSD-derived firmload — the four
+symbols `firmware_open`/`firmware_get_size`/`firmware_read`/`firmware_close`
+are exported by genunix, verified zero-phantom). `amdgpu_ucode_load` is the
+`request_firmware` analogue: open `amdgpu/<name>`, size it, read it into a
+kmem buffer, close. `amdgpu_ucode_validate` then parses the
+`common_firmware_header` and rejects a truncated / out-of-bounds-payload /
+foreign / v0 blob **before any byte reaches the GPU** — this is the load-bearing
+security check and it runs + is asserted off-hardware (`test/test_c3_amdgpu_d.c`).
+`amdgpu_ucode_init` fetches the whole Navi 12 required set (pfp/me/ce/mec/rlc/
+sdma/smc, VCN optional).
+
+The blobs are the **redistributable** linux-firmware `amdgpu/navi12_*.bin`.
+
+**Firmware-package plan (solnix).** The driver bundles NO blob (stays
+license-clean). A separate solnix `amdgpu-firmware` package ships the
+redistributable linux-firmware `amdgpu/navi12_*.bin` files and installs them
+under the illumos firmware search path that `firmware_open` walks (per the
+illumos firmload config, e.g. `/usr/lib/firmware/` or the boot-module dir).
+Off a firmware-equipped host `amdgpu_ucode_init` returns failure, which the
+attach path treats as non-fatal (BARs/TTM/rings/scheduler stay valid) — so the
+compile-phase driver loads cleanly with or without the package, and the package
+is what unlocks the power-up on a real GPU.
+
+### 2. .hw_init register sequences (COMPILE + structurally verifiable; run only on hw)
+
+Each per-IP-block `.hw_init` is written as the real RREG32/WREG32 sequence
+against the SOC15 reg model (C3-a `amdgpu_rreg32/wreg32` + C3-c
+`amdgpu_reg_offset(sc, hwip, inst, seg, reg)`), cribbed from the AMD asic
+files. They compile + the structure is verifiable; the poll loops read live
+status the silicon writes, so off-hardware they time out cleanly (never a false
+success).
+
+| block | file | sequence (crib) |
+|---|---|---|
+| **PSP** | psp.c | wait sOS RUNNING (C2PMSG_64) → create the PSP GFX command ring (C2PMSG_69/101) → authenticate+load each blob (C2PMSG_115 response). Crib: `psp_v11_0.c` + `psp_gfx_if.h`. |
+| **GMC** | gmc_hw.c | set the system aperture → point GCVM_CONTEXT0 page-table base at the C3-c GART BO → set start/end → enable L2 + context → flush TLB (INVALIDATE_ENG0_ACK). Crib: `gmc_v10_0.c` + `gfxhub_v2_0.c`. |
+| **GFX** | gfx_hw.c | RLC resume (RLC_CNTL, poll RLC_GPM_STAT) → CP resume: program CP_RB0_BASE/CNTL/WPTR at the C3-c GFX ring + doorbell → unhalt ME/PFP/CE (CP_ME_CNTL=0) → poll CP_STAT. Crib: `gfx_v10_0.c`. |
+| **SDMA** | sdma_hw.c | halt (SDMA0_F32_CNTL) → SDMA0_GFX_RB_BASE/CNTL at the C3-c SDMA ring + RPTR_ADDR writeback + doorbell → enable ring + unhalt → poll SDMA0_STATUS_REG. Crib: `sdma_v5_0.c`. |
+
+`amdgpu_hw_init` (amdgpu_hw.c) runs them in the crib order after the firmware
+fetch; `amdgpu_transport_attach` calls it after the C3-c IP-block init. A
+failure at any live gate is non-fatal.
+
+### 3. Ring → C1 scheduler wiring for live EXECBUFFER (COMPILES)
+
+The C1d EXECBUFFER contract (an IB in a GTT BO) feeds a real amdgpu ring the
+same way the virtio path feeds the controlq (`src/virtio_gpu_3d.c`
+`virtio_gpu_submit`):
+
+    EXECBUFFER (IB in a GTT BO)
+      -> amdgpu_job_alloc + amdgpu_job_submit          [amdgpu_job.c]
+         -> drm_sched_job_init + drm_sched_entity_push_job   [C1c drm_sched]
+            -> (worker) amdgpu_job_run -> amdgpu_ib_schedule
+               -> amdgpu_ring_write the PACKET3 INDIRECT_BUFFER (GFX) or the
+                  SDMA indirect packet (SDMA)           [C3-c ring]
+               -> amdgpu_ring_commit: advance the hw WPTR / ring the doorbell
+                  [HARDWARE-GATED — BAR2 doorbell mapping is deferred]
+
+A per-device `drm_gpu_scheduler` is added to `struct amdgpu_ip` (init in
+`amdgpu_ip_blocks_init`). `amdgpu_job_run` returns NULL off-hardware
+(synchronous completion under the C1c FIFO); on a real GPU it would return a
+dma_fence bound to the ring's fence writeback slot. The IB packet encoding is
+asserted off-hardware (`test/test_c3_amdgpu_d.c`).
+
+### 4. HARDWARE-GATED runtime checklist (the g4ad / local-GPU bring-up order)
+
+Everything below reads a live register whose value the silicon writes; NONE can
+be validated without a powered V520. In order — each gate must pass before the
+next runs:
+
+1. **Firmware present.** `amdgpu_ucode_init` succeeds only with the solnix
+   `amdgpu-firmware` package installed. Off-hardware-independent, but a
+   prerequisite for every gate below. *Confirm:* the `?amdgpu: microcode
+   loaded: N blobs` line, N == the required-set count.
+2. **PSP sOS RUNNING.** `amdgpu_psp_wait_sos` polls MP0 C2PMSG_64 for the
+   RUNNING bit the on-die PSP bootloader sets. *Gate:* the poll returns success
+   (off-hardware it times out). This authenticates the driver may talk to the PSP.
+3. **PSP ring create + fw authenticate.** `amdgpu_psp_ring_create` +
+   `amdgpu_psp_load_fw` per blob: the PSP verifies each signature and writes the
+   C2PMSG_115 response. *Gate:* response error-mask clear for every required
+   blob. A signature mismatch here means the wrong / corrupt blob — fix the
+   firmware package. **This is the single biggest live unknown**: the PSP fw
+   auth handshake exercises the real security path.
+4. **SMU power-up ready.** (Load the SMC blob via the PSP, then the SMU
+   reports ready via its MP1 message registers — the SMU brings up clocks/power.
+   The reduced chain loads the blob; the SMU ready-bit poll is the runtime step
+   to add against a live MP1.) *Gate:* SMU MSG response ready-bit.
+5. **GMC gart_enable + TLB flush.** `amdgpu_gmc_hw_init` programs the VM
+   page-table base and flushes; the flush confirm polls
+   GCVM_INVALIDATE_ENG0_ACK. *Gate:* ACK bit set. Also program the per-page
+   PTEs (walk the C3-b GTT DMA cookies — the deferred PTE-fill loop) before the
+   GPU can actually reach GTT memory.
+6. **GFX RLC + CP up.** `amdgpu_gfx_hw_init`: RLC_GPM_STAT reports running,
+   then CP_STAT leaves busy after the CP starts. *Gate:* both polls succeed.
+7. **SDMA engine ready.** `amdgpu_sdma_hw_init`: SDMA0_STATUS_REG reports idle
+   after unhalt. *Gate:* idle bit set.
+8. **Ring rptr advances (live EXECBUFFER).** Submit a NOP IB via
+   `amdgpu_job_submit`; the GFX/SDMA ring's rptr (in the writeback slot the
+   ring reserved) must advance from 0 past the IB, and the fence writeback slot
+   must land the fence seqno. *Gate:* rptr advance + fence seqno == submitted.
+   This is the end-to-end proof the whole stack drives the GPU. Requires the
+   BAR2 doorbell mapping (deferred in C3-a — add the BAR2 `ddi_regs_map_setup`
+   and point `amdgpu_ring_commit` at the doorbell dword).
+9. **Interrupt (IH) delivery.** The GPU writes an IV into the C3-c IH ring and
+   raises the MSI-X vector C3-a reserved; the ISR drains rptr→wptr. *Gate:* the
+   ISR fires and the IH wptr advances. (Wire the IH WPTR/RPTR registers + the
+   IV decode against a live IH.)
+
+The order matters: 2→3 gate the driver's right to load firmware; 5 must precede
+6/7 (the engines need the GART); 8 needs 6/7 + the doorbell mapping; 9 needs the
+engines generating interrupts. A benchmark/soak run starts at step 8 once 1–7
+pass.

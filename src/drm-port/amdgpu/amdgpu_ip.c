@@ -284,6 +284,17 @@ amdgpu_ip_blocks_init(struct amdgpu_softc *sc)
 		goto fail_sdma;
 	}
 
+	/*
+	 * 6. the C1 GPU scheduler for the live EXECBUFFER path (C3-amdgpu-d).
+	 * amdgpu_job_submit pushes jobs here; the worker calls amdgpu_job_run
+	 * -> amdgpu_ib_schedule -> the ring. Non-fatal if it fails (the rings
+	 * are still allocated; only live submit is unavailable).
+	 */
+	if (drm_sched_init(&ip->sched, "amdgpu") == 0)
+		ip->sched_ready = B_TRUE;
+	else
+		cmn_err(CE_WARN, "?amdgpu: scheduler init failed");
+
 	ip->initialized = B_TRUE;
 	cmn_err(CE_CONT, "?amdgpu: IP blocks up: navi12 reg base + GMC "
 	    "(GART %llu MB) + GFX/SDMA rings + IH ring\n",
@@ -311,6 +322,10 @@ amdgpu_ip_blocks_fini(struct amdgpu_softc *sc)
 
 	if (ip == NULL)
 		return;
+	if (ip->sched_ready) {
+		drm_sched_fini(&ip->sched);
+		ip->sched_ready = B_FALSE;
+	}
 	amdgpu_ih_ring_fini(sc);
 	amdgpu_ring_fini(&ip->sdma_ring);
 	amdgpu_ring_fini(&ip->gfx_ring);

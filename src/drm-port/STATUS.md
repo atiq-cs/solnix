@@ -1,5 +1,92 @@
 # solnix DRM/KMS port — STATUS
 
+## Phase reached: C3-amdgpu-d (firmware load + power-up + live-register programming — the LAST amdgpu phase before it drives a real V520; COMPILE-phase done, runtime is the g4ad/local-GPU HARDWARE-GATED checklist)
+
+C3-amdgpu-d completes the amdgpu **compile-phase**. Three parts compile + are
+structurally verifiable off-hardware; the fourth is the precise runtime
+checklist. The `drm` module links ET_REL AMD64, **zero-phantom (128 undefs,
+all real illumos KPI or virtio/intra-module)** — the 4 new externals are the
+illumos `firmware(9F)` triple + `drv_usecwait`.
+
+### C3-amdgpu-d deliverables, per piece
+
+- **Firmware loading: YES (COMPILES + parse/validate verifiable off-hardware).**
+  `amdgpu/amdgpu_ucode.h` + `amdgpu_ucode.c`. `amdgpu_ucode_load` = the
+  `request_firmware` analogue over illumos `firmware(9F)`
+  (`firmware_open`/`firmware_get_size`/`firmware_read`/`firmware_close`,
+  `sys/firmload.h` — all four exported by genunix, verified zero-phantom).
+  `amdgpu_ucode_validate` parses the `common_firmware_header` and rejects a
+  truncated / out-of-bounds-payload / foreign / v0 blob **before any byte
+  reaches the GPU** (the security gate). `amdgpu_ucode_init` fetches the Navi 12
+  required set (pfp/me/ce/mec/rlc/sdma/smc; VCN optional). Crib: Linux
+  `amdgpu_ucode.h` struct ABI + `amdgpu_ucode.c` validate + linux-firmware
+  `amdgpu/navi12_*.bin` names.
+- **.hw_init register sequences: YES (COMPILE + structurally verifiable; run
+  only on hw).** Written as the real RREG32/WREG32 sequences against the SOC15
+  reg model (C3-a `amdgpu_rreg32/wreg32` + C3-c `amdgpu_reg_offset`):
+  `amdgpu/psp.c` (psp_v11_0 sOS wait + PSP ring create + fw authenticate/load),
+  `amdgpu/gmc_hw.c` (gmc_v10_0 gart_enable: VM page-table base + aperture +
+  TLB flush), `amdgpu/gfx_hw.c` (gfx_v10_0: RLC resume + CP ME/PFP/CE load +
+  GFX ring enable + doorbell), `amdgpu/sdma_hw.c` (sdma_v5_0: ring registers +
+  rptr writeback + enable). `amdgpu/amdgpu_hw.c` runs them in the crib order
+  (ucode→psp→gmc→gfx→sdma); `amdgpu_transport_attach` calls it after the C3-c
+  IP-block init (non-fatal). The poll loops read live status the silicon
+  writes, so off-hardware they time out cleanly — never a false success. Crib:
+  `psp_v11_0.c`/`psp_gfx_if.h`, `gmc_v10_0.c`/`gfxhub_v2_0.c`, `gfx_v10_0.c`,
+  `sdma_v5_0.c`.
+- **Ring → C1 scheduler EXECBUFFER wiring: YES (COMPILES; execution
+  HARDWARE-GATED).** `amdgpu/amdgpu_job.h` + `amdgpu_job.c`. Mirrors the virtio
+  submit path: `amdgpu_job_alloc`/`amdgpu_job_submit` →
+  `drm_sched_job_init`/`drm_sched_entity_push_job` (C1c drm_sched) → the worker
+  calls `amdgpu_job_run` → `amdgpu_ib_schedule` → `amdgpu_ring_write` the
+  PACKET3 INDIRECT_BUFFER (GFX) / SDMA indirect packet → `amdgpu_ring_commit`
+  (doorbell/WPTR, HARDWARE-GATED). A per-device `drm_gpu_scheduler` is added to
+  `struct amdgpu_ip` (init in `amdgpu_ip_blocks_init`). `amdgpu_job_run`
+  returns NULL off-hardware (synchronous under the C1c FIFO). Crib:
+  `amdgpu_job.c`/`amdgpu_ib.c` + the Navi PM4/SDMA packet spec + the C1d
+  `virtio_gpu_submit` shape.
+- **Firmware-package plan (solnix): documented.** The driver bundles no blob
+  (license-clean). A separate solnix `amdgpu-firmware` package ships the
+  redistributable linux-firmware `amdgpu/navi12_*.bin` and installs them under
+  the illumos firmware search path `firmware_open` walks. Off a firmware host
+  the fetch fails, non-fatal — the compile-phase driver loads with or without
+  it. See `docs/design-gpu-amdgpu.md`.
+
+### C3-amdgpu-d HARDWARE-GATED runtime checklist (g4ad / local GPU, in order)
+
+Each gate reads a live register the silicon writes; NONE validates without a
+powered V520. Order is load-bearing:
+
+1. **Firmware present** (`amdgpu-firmware` package) — prerequisite.
+2. **PSP sOS RUNNING** (MP0 C2PMSG_64) — the driver's right to load fw.
+3. **PSP fw authenticate** (per blob, C2PMSG_115 response) — the biggest live
+   unknown; exercises the real signature path.
+4. **SMU power-up ready** (MP1 message ready-bit) — clocks/power.
+5. **GMC gart_enable + TLB flush** (GCVM_INVALIDATE_ENG0_ACK) + the deferred
+   per-page PTE fill over the C3-b GTT cookies.
+6. **GFX RLC running + CP idle** (RLC_GPM_STAT, CP_STAT).
+7. **SDMA idle** (SDMA0_STATUS_REG).
+8. **Ring rptr advances (live EXECBUFFER)** — submit a NOP IB, the ring rptr +
+   fence writeback slot must advance. Needs the deferred BAR2 doorbell mapping.
+9. **IH interrupt delivery** — the GPU raises the MSI-X vector; the ISR drains
+   the IH ring.
+
+Full detail in `docs/design-gpu-amdgpu.md` (the C3-amdgpu-d section).
+
+### C3-amdgpu-d what compiles (verified)
+
+    cd /root/drm-port && make
+      -> src/amdgpu_ucode.o src/psp.o src/gmc_hw.o src/gfx_hw.o
+         src/sdma_hw.o src/amdgpu_hw.o src/amdgpu_job.o   (all ET_REL AMD64)
+      -> drm    ELF 64-bit LSB relocatable AMD64 (ET_REL, EM_AMD64)
+    ./verify-syms.sh   -> zero-phantom OK: all 128 undefined symbols resolve
+    gcc -o /tmp/td test/test_c3_amdgpu_d.c && /tmp/td   -> PASS
+      (ucode header validate: accept well-formed, reject truncated/OOB/foreign/
+       v0; PACKET3 + SDMA IB packet encoding)
+
+---
+
+
 ## Phase reached: C3-amdgpu-c (the Navi 12 IP-block / ring bring-up — navi12 register bases + reduced GMC/GART + GFX/SDMA command rings + the IH ring, COMPILING against illumos headers + the C1/amdgpu framework)
 
 C3-amdgpu-c is the **last compile-phase piece before amdgpu drives a real GPU**.

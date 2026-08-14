@@ -41,6 +41,9 @@
 #include "amdgpu_priv.h"
 #include "ttm_priv.h"
 #include "amdgpu_ip.h"
+#include "amdgpu_ucode.h"
+#include "amdgpu_psp.h"
+#include "amdgpu_hw.h"
 
 /*
  * The DDI regs-map access attributes for a PCI memory BAR: little-endian
@@ -254,9 +257,16 @@ amdgpu_transport_attach(dev_info_t *dip, struct drm_device *drm)
 	/*
 	 * At this point a real amdgpu would proceed to amdgpu_device_ip_init's
 	 * .hw_init (power up, load firmware, program live registers). That is
-	 * C3-amdgpu-d and needs real hardware; C3-amdgpu-c stops with the reg
-	 * bases set + the ring/GMC/IH BOs allocated.
+	 * C3-amdgpu-d and needs real hardware; the reduced power-up chain
+	 * (amdgpu_hw_init) is wired but HARDWARE-GATED -- off-hardware the
+	 * firmware fetch fails (no solnix firmware package) or the PSP handshake
+	 * times out, both non-fatal to the software floor (BARs/TTM/rings/
+	 * scheduler stay valid). See docs/design-gpu-amdgpu.md's runtime
+	 * checklist for the g4ad/local-GPU bring-up order.
 	 */
+	if (sc->ip != NULL)
+		(void) amdgpu_hw_init(sc);
+
 	return (sc);
 
 fail_bars:
@@ -274,6 +284,7 @@ amdgpu_transport_detach(struct amdgpu_softc *sc)
 {
 	if (sc == NULL)
 		return;
+	amdgpu_hw_fini(sc);
 	amdgpu_ip_blocks_fini(sc);
 	amdgpu_ttm_fini(sc);
 	if (sc->intr_htable != NULL) {

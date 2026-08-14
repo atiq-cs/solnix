@@ -107,6 +107,10 @@ struct amdgpu_softc {
 
 	/* C3-amdgpu-c IP blocks: reg_offset table + GMC + GFX/SDMA/IH rings */
 	struct amdgpu_ip	*ip;		/* NULL until amdgpu_ip_blocks_init */
+
+	/* C3-amdgpu-d: microcode (firmware(9F) blobs) + PSP bring-up state */
+	struct amdgpu_ucode	*ucode;		/* NULL until amdgpu_ucode_init */
+	struct amdgpu_psp	*psp;		/* NULL until amdgpu_psp_hw_init */
 };
 
 /* the register access primitives -- the RREG32/WREG32 illumos mapping */
@@ -124,5 +128,10 @@ struct ttm_device;
 /* C3-amdgpu-c: the IP-block aggregate (reg_offset + GMC + rings + IH) is
  * defined in amdgpu_ip.h. Forward-declared so the softc can hold a pointer. */
 struct amdgpu_ip;
+
+/* C3-amdgpu-d: the microcode store (amdgpu_ucode.h) + the PSP context
+ * (amdgpu_psp.h). Forward-declared so the softc can hold pointers. */
+struct amdgpu_ucode;
+struct amdgpu_psp;
 
 #endif	/* _AMDGPU_PRIV_H_ */

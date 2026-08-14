@@ -232,3 +232,21 @@ KFD -- and that NEEDS REAL HARDWARE (a g4ad instance, gated on GPU quota). So: t
 stack (amdgpu kernel driver + C1 DRM + C2 Mesa + C3a Vulkan + C4 llama-Vulkan) compiles on illumos;
 runtime bring-up (C3-amdgpu-d live) is the real-hardware phase on g4ad (GPU quota CASE_OPENED) or local
 x86+GPU hw.
+
+## C3-amdgpu-d DONE (2026-08-14): amdgpu driver COMPILE-PHASE COMPLETE
+Firmware-load (amdgpu_ucode_load via illumos firmware(9F) firmware_open/get_size/read/close; validate
+REJECTS truncated/OOB/foreign/v0 blobs before any byte reaches the GPU -- asserted off-hardware) +
+hw_init sequences (psp_v11_0 auth/load, gmc_v10 gart_enable+TLB, gfx_v10 RLC+CP+ring, sdma_v5 ring;
+real RREG32/WREG32 against the SOC15 model, poll-loops time out cleanly off-hw = never a false success)
++ EXECBUFFER->C1-scheduler wiring (amdgpu_job -> drm_sched -> amdgpu_ib_schedule -> PACKET3
+INDIRECT_BUFFER ring_write -> doorbell). drm+amdgpu ET_REL, 128 undefs all real illumos KPI, zero
+phantom. amdgpu ~2700 LOC (a/b/c/d). Firmware pkg: separate solnix amdgpu-firmware ships redistributable
+linux-firmware navi12_*.bin (driver bundles no blob, license-clean; fetch-failure non-fatal).
+=> THE ENTIRE ACCELERATED-GPU STACK NOW COMPILES ON ILLUMOS: amdgpu kernel driver (device+TTM+rings+
+firmware+hw_init+EXECBUFFER) + C1 DRM + C2 Mesa GL + C3a Venus Vulkan + C4 llama.cpp-Vulkan. Nothing
+left to COMPILE. 
+HARDWARE-GATED RUNTIME CHECKLIST (g4ad/local GPU, ordered): 1.fw present 2.PSP sOS RUNNING 3.PSP fw
+auth (biggest live unknown) 4.SMU ready 5.GMC gart+TLB+PTE-fill 6.GFX RLC+CP 7.SDMA idle 8.live
+EXECBUFFER (ring rptr + fence writeback advance; needs the deferred BAR2 doorbell map) 9.IH interrupt
+delivery. Skipped-until-powered-GPU: BAR2 doorbell map, per-page PTE-fill loop, IH IV-decode, KFD.
+=> RUNTIME needs a real V520 (g4ad, gated on the GPU-quota support case PS-GPU-QUOTA) OR local x86+GPU hw.
