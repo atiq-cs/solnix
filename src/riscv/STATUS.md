@@ -1,10 +1,133 @@
 # RISC-V (riscv64) port — STATUS
 
-**Phase reached: R-P18** (toolchain TARGET retarget + krtld/sgs reloc coverage)
-— DONE (config + reloc tables + proofs; full gcc-as-solaris rebuild is the
-documented long pole, launched). R-P17 (cross toolchain + BSD-cribbed
+**Phase reached: R-P19** (riscv64-solaris toolchain finished + sgs libld MACH
+descriptor / instruction-field reloc encoders + first EM_RISCV uts/riscv64
+object) — DONE (all three sub-tasks, re-runnable proofs). R-P18 (toolchain
+TARGET retarget + krtld/sgs reloc coverage), R-P17 (cross toolchain + BSD
 psABI/ISA headers) and R-P1..R-P16 (kernel bring-up) are below / in
 `docs/design-riscv-port.md`.
+
+---
+
+## R-P19 — riscv64-solaris toolchain finished + sgs MACH descriptor + first uts object
+
+Substrate: fred v3 (root@52.88.62.49), the R-P18 all-gcc-solaris build tree
+(`/root/riscv-port/build/gcc-sol-cfg3/`), the R-P17 `riscv64-unknown-elf`
+binutils 2.44, and binutils-2.44 `bfd/` as the reloc-math crib source.
+
+### R-P19.1 all-gcc-solaris finished + riscv64-solaris libgcc.a — DONE
+- **Long-pole `make all-gcc` (riscv64-unknown-solaris2.11) finished.** Two real
+  build blockers found + fixed in `gcc/config/riscv/sol2.h`
+  (`rp19/config-riscv-sol2.h`, appended to R-P18's header):
+  (a) the generic `config/sol2.cc` `solaris_output_init_fini()` emits
+  `.init/.fini` entries via `ASM_OUTPUT_CALL`, which the RISC-V ELF backend
+  never defines (only i386/sparc sol2.h do) — added an `ASM_OUTPUT_CALL` for
+  RISC-V (`\tcall\t` + `assemble_name`, the `call` pseudo, R_RISCV_CALL_PLT);
+  (b) `#undef MULTILIB_DEFAULTS` so the common sol2.h `{ "m64" }` wins over
+  riscv/riscv.h without a redefinition warning. `cc1` links, `make all-gcc`
+  exits 0, `-dumpmachine` = `riscv64-unknown-solaris2.11`, GCC 14.3.0.
+- **Minimal sysroot + libgcc bootstrap** (`rp19/rp19-sysroot-libgcc.sh`,
+  idempotent). The solaris triple had no in-tree binutils, so the build-tree
+  `gcc/as` + `gcc/collect-ld` wrappers had empty `ORIGINAL_*_FOR_TARGET` and
+  ran `exec "" -march=...` — pointed them at the R-P17 `riscv64-unknown-elf`
+  as/ld (psABI is identical; only the OS triple differs) and published
+  `riscv64-unknown-solaris2.11-{ar,ranlib,...}` on PATH. Added four BOOTSTRAP
+  stub headers (`sys/mman.h`, `sys/types.h`, `unistd.h`, `stdlib.h`) the
+  Solaris `enable-execute-stack-mprotect.c` references, plus the minimal
+  `/usr/include/sys/{isa_defs,machtypes,elf_riscv}.h` sysroot (the R-P17 MD
+  headers). `gmake libgcc.a` builds the 138 compiler-runtime objects (soft
+  int/float, clz/ctz, muldi3, ...) — skips the Solaris gmon/profiling extra
+  that needs full libc. Installed at
+  `toolchain-sol/lib/gcc/riscv64-unknown-solaris2.11/14.3.0/libgcc.a` (5.6 MB,
+  138 EM_RISCV members). PROOF: `rp19/rp19-toolchain-check.sh`.
+- **CRIB**: `ASM_OUTPUT_CALL` shape from gcc `i386/sol2.h` + `sparc/sol2.h`,
+  adapted to the RISC-V `call` mnemonic. The as/ld-wrapper + PATH bootstrap is
+  standard cross-gcc practice (a target reusing another's binutils for an
+  identical psABI).
+
+### R-P19.2 sgs libld MACH descriptor + RISC-V instruction-field reloc encoders — DONE
+- `rp19/machrel_riscv_insn.c`: the `FLG_RE_INSREL` encoder `ld_reloc_riscv_insn()`
+  — splices a computed value into the U/I/S/B/J immediate slots of a 32-bit
+  instruction (and CB/CJ/CI slots of a 16-bit RVC instruction) exactly as
+  binutils `perform_relocation()` does: ENCODE the value into the field layout,
+  read-modify-write `word = (word & ~dst_mask) | (enc & dst_mask)`, LE store.
+  Handles HI20/LO12_I/LO12_S (+ TPREL/PCREL/GOT/TLS HI/LO variants),
+  CALL/CALL_PLT (auipc U-part + jalr I-part, 64-bit splice), JAL, BRANCH,
+  RVC_BRANCH/JUMP/LUI. HI/LO split via `RISCV_CONST_HIGH_PART`. Self-test
+  round-trips every field type against the binutils EXTRACT macros — PASS.
+- `rp19/machrel_riscv_dispatch.c`: `ld_do_reloc_riscv()` — the reloc-apply core
+  the MACH descriptor + krtld `do_reloc()` reduce to. Consults the R-P18
+  classification table (`sgs_reloc_table_riscv[]`), computes the RISC-V
+  Calculation (S+A, or S+A-P for PC-relative), and routes INSREL types to the
+  encoder, flat data types to a byte store, and link-time markers to a no-op.
+  ADD/SUB/SET/SUB6 are correctly in-place modify (not overwrite), cribbed from
+  binutils `riscv_elf_add_sub_reloc`. Self-test: flat64 / 32_PCREL / HI20+LO12
+  pair / ADD32+SUB32 / RELAX no-op — PASS.
+- `rp19/machtarget_riscv.c`: `ld_targ_riscv` — the EM_RISCV `Target` descriptor
+  skeleton (Target_mach: EM_RISCV/ELFCLASS64/ELFDATA2LSB/pagesize; the M_R_*
+  dynamic reloc identities: RELATIVE=3 / JUMP_SLOT=5 / COPY=4 / TLS_*64;
+  null/fill func bytes) with `t_mr` wiring the classification table +
+  `ld_do_reloc_riscv`. This is the record `ld_config_target()` returns for
+  `e_machine == EM_RISCV`. Self-test: descriptor identity + reloc applied
+  THROUGH the `t_mr.mr_do_reloc` pointer — PASS.
+- **BYTE-IDENTICAL to GNU ld**: on the R-P19.3 object the INSREL encoder
+  produces exactly `auipc a5,0x1 = 0x00001797` + `addi a5,a5,168 = 0x0a878793`
+  for the `riscv64_boot_label` PCREL_HI20/LO12 pair — the same bytes GNU ld
+  emitted, verified in `rp19-milestone-check.sh` R-P19.3d.
+- **CRIB**: `ENCODE_{U,I,S,B,J}TYPE_IMM` / `ENCODE_C{B,J,I}TYPE_IMM` / `RV_X` /
+  `RISCV_CONST_HIGH_PART` from binutils-2.44 `include/opcode/riscv.h`; the
+  per-reloc encode dispatch + CALL `U | I<<32` packing + the RMW store +
+  get/put_insn 16/32/64 LE model from `bfd/elfnn-riscv.c perform_relocation()`;
+  `dst_mask == ENCODE_xTYPE_IMM(-1U)` from `bfd/elfxx-riscv.c` howto_table[];
+  ADD/SUB math from `riscv_elf_add_sub_reloc`. The Target/Rel_entry/FLG_RE_*
+  shape follows the illumos sgs machrel.<arch>.c convention.
+
+### R-P19.3 first illumos uts/riscv64 EM_RISCV object — DONE
+- `rp19/uts/riscv64/` gate-layout tree: `mod_riscv64.c` (a trivial loadable
+  module: a `label_t` save-area store, `_init/_fini/_info`) compiled `_KERNEL`
+  / freestanding against the R-P17 illumos riscv64 MD headers spliced into
+  `sys/{isa_defs,machtypes,elf_riscv,feature_tests}.h`. Compile-time asserts
+  pin the ISA contract (LP64, `_LITTLE_ENDIAN`, `_ALIGNMENT_REQUIRED`,
+  `_MAX_ALIGNMENT==16`, `label_t == 16 XLEN slots`) so a wrong data model fails
+  the BUILD.
+- Built by BOTH the R-P17 `riscv64-unknown-elf` gcc AND the new
+  `riscv64-unknown-solaris2.11` gcc → a valid **EM_RISCV (243) ELF64-LSB
+  ET_REL** illumos kernel object. It emits exactly the reloc set this port must
+  resolve: `R_RISCV_CALL_PLT(19)`, `R_RISCV_PCREL_HI20(23)`,
+  `R_RISCV_PCREL_LO12_I(24)`, `R_RISCV_RELAX(51)`, plus ADD32/SUB32/SET6/SET8/
+  SUB6/32_PCREL — all in-bounds in the R-P18 doreloc table, all classified +
+  applied by the R-P19.2 pieces.
+- **Link-apply proof**: cross-`ld -Ttext=0x80000000 -e _init` resolves every
+  reloc → an EM_RISCV ET_EXEC entry 0x80000062, zero relocs remaining; the
+  applied auipc/addi disassembles to `0x800010b8 <riscv64_boot_label>`.
+- **CRIB**: the MD headers are the R-P17 BSD-cribbed set (NetBSD
+  `sys/arch/riscv` psABI/register roles); the modlinkage/`_init/_fini/_info`
+  shape is the illumos kmod convention.
+
+### `/root/riscv-port/rp19/` contents
+`machrel_riscv_insn.c`, `machrel_riscv_dispatch.c`, `machtarget_riscv.c`,
+`machrel.riscv.c` + `reloc_riscv_table.h` (from R-P18), `config-riscv-sol2.h`
+(updated), `rp19-milestone-check.sh` (sgs + uts proofs), `rp19-toolchain-check.sh`
+(gcc + libgcc proofs), `rp19-sysroot-libgcc.sh` (idempotent bootstrap),
+`uts/riscv64/{mod_riscv64.c, mod_riscv64.o, mod_riscv64.linked, sys/*.h}`,
+the self-test binaries. Host toolchain:
+`toolchain-sol/` (riscv64-unknown-solaris2.11 gcc + libgcc.a + bin symlinks),
+`sysroot-riscv-sol/usr/include/sys/*.h`. Repo copies under `src/riscv/sgs/`,
+`src/riscv/gcc/`, `src/riscv/uts/riscv64/`, `src/riscv/rp19-*.sh`.
+
+### Next: R-P20
+1. Fold the standalone `machrel_riscv_insn.c` + `machrel_riscv_dispatch.c` +
+   `machtarget_riscv.c` into a real `usr/src/cmd/sgs/libld/common/machrel.riscv.c`
+   against the gate `_libld.h` `Rel_desc`/`Target` types, and add the
+   `%pcrel_hi`/`%pcrel_lo` pairing + GOT/PLT slot allocation the classification
+   flags mark (the scaffolding this bootstrap deferred).
+2. Grow the bootstrap sysroot toward a real one: build illumos csu
+   (crt1/crti/crtn) for riscv64 and the minimal libc headers so
+   `all-target-libgcc` completes fully (incl. the Solaris gmon/unwind extras)
+   and shared objects link.
+3. Cross-compile a larger uts/riscv64 unit (locore/genassym or a real driver)
+   through the retargeted toolchain + the folded sgs machrel, toward a linkable
+   `unix`/`genunix` in the gate layout.
 
 ---
 

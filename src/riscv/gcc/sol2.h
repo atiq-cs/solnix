@@ -74,3 +74,29 @@ along with GCC; see the file COPYING3.  If not see
  * standard riscv -march/-mabi passthrough; no -xarch translation is needed
  * (unlike x86 Studio as), so ASM_SPEC stays the riscv/elf.h default.
  */
+
+/*
+ * The generic Solaris solaris_output_init_fini() in config/sol2.cc emits
+ * .init/.fini array entries via ASM_OUTPUT_CALL, which the RISC-V ELF backend
+ * (riscv/elf.h, riscv/riscv.h) does not define -- only i386/sparc sol2.h do.
+ * RISC-V uses the "call symbol" pseudo-instruction (assembler expands it to an
+ * auipc+jalr pair, R_RISCV_CALL_PLT); emit the callee as a bare symbol name.
+ * Cribbed from i386/sol2.h + sparc/sol2.h ASM_OUTPUT_CALL, adapted to the
+ * RISC-V call mnemonic.
+ */
+#undef ASM_OUTPUT_CALL
+#define ASM_OUTPUT_CALL(FILE, FN)					\
+  do									\
+    {									\
+      fprintf (FILE, "\tcall\t");					\
+      assemble_name (FILE, XSTR (XEXP (DECL_RTL (FN), 0), 0));		\
+      fprintf (FILE, "\n");						\
+    }									\
+  while (0)
+
+/*
+ * riscv/riscv.h defines MULTILIB_DEFAULTS; the common sol2.h redefines it to
+ * { "m64" } for the 64-bit-only Solaris model.  UNDEF here so sol2.h wins
+ * without a redefinition warning (riscv64-solaris is 64-bit only anyway).
+ */
+#undef MULTILIB_DEFAULTS

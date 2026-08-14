@@ -54,3 +54,6 @@ src/riscv/**/*.elf
 src/drm-port/**/*.o
 src/drm-port/netbsd-ref/src/
 src/drm-port/**/drm
+src/riscv/**/*.linked
+src/riscv/**/toolchain-sol/
+src/riscv/**/sysroot-riscv-sol/

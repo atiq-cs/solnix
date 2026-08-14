@@ -2567,3 +2567,74 @@ NEXT R-P19: finish all-gcc solaris + bootstrap a minimal riscv64 Solaris sysroot
 so all-target-libgcc completes; wire machrel.riscv.c into a real sgs libld mach descriptor + the
 instruction-field reloc encoders (FLG_RE_INSREL); splice isa_defs/machtypes into a uts/riscv64 gate
 tree + link a first illumos riscv64 object.
+
+## R-P19 DONE: riscv64-solaris toolchain finished + sgs MACH descriptor + first uts/riscv64 object
+All 3 sub-tasks complete with re-runnable proofs (on fred v3; see
+`src/riscv/STATUS.md` R-P19 section for the full narrative).
+1. **all-gcc-solaris finished + riscv64-solaris libgcc.a.** The R-P18 long-pole
+   `make all-gcc` for `riscv64-unknown-solaris2.11` was blocked by two real
+   errors, both fixed in `gcc/config/riscv/sol2.h`: (a) the generic
+   `config/sol2.cc solaris_output_init_fini()` calls `ASM_OUTPUT_CALL`, which
+   the RISC-V backend never defines — added one (the `call` pseudo +
+   `assemble_name`, cribbed from i386/sparc sol2.h); (b) `#undef
+   MULTILIB_DEFAULTS` so the common sol2.h `{ "m64" }` wins cleanly. `cc1` links,
+   `all-gcc` exits 0, `-dumpmachine == riscv64-unknown-solaris2.11`. Then a
+   minimal sysroot + libgcc bootstrap (idempotent `rp19-sysroot-libgcc.sh`):
+   point gcc's build-tree as/collect-ld wrappers (empty `ORIGINAL_*_FOR_TARGET`)
+   at the R-P17 `riscv64-unknown-elf` binutils (identical psABI), publish
+   triple-prefixed ar/ranlib on PATH, add BOOTSTRAP stub headers for the
+   Solaris `enable-execute-stack` bits, and `gmake libgcc.a` → a 138-member
+   EM_RISCV `libgcc.a` installed under `toolchain-sol/lib/gcc/`.
+2. **sgs libld MACH descriptor + RISC-V instruction-field reloc encoders.**
+   `machrel_riscv_insn.c` implements the `FLG_RE_INSREL` encoder
+   (`ld_reloc_riscv_insn`) that splices a value into the U/I/S/B/J (and RVC
+   CB/CJ/CI) immediate slots exactly as binutils `perform_relocation()` does
+   (ENCODE + `word = (word & ~dst_mask) | (enc & dst_mask)`, HI/LO via
+   `RISCV_CONST_HIGH_PART`, CALL as auipc-U + jalr-I<<32). `machrel_riscv_dispatch.c`
+   (`ld_do_reloc_riscv`) consults the R-P18 classification table, computes the
+   psABI Calculation (S+A / S+A-P), and routes INSREL → encoder, flat data →
+   byte store (with correct ADD/SUB/SET in-place modify), markers → no-op.
+   `machtarget_riscv.c` (`ld_targ_riscv`) is the EM_RISCV `Target` descriptor
+   skeleton wiring `t_mr` to the classification table + apply core. Encode math
+   cribbed from binutils-2.44 `include/opcode/riscv.h` ENCODE_* +
+   `bfd/elfnn-riscv.c perform_relocation()` + `elfxx-riscv.c` howto dst_mask +
+   `riscv_elf_add_sub_reloc`. The encoder output is BYTE-IDENTICAL to GNU ld on
+   a real object (auipc 0x00001797 + addi 0x0a878793 for a PCREL_HI20/LO12
+   pair).
+3. **First illumos uts/riscv64 EM_RISCV object.** A gate-layout
+   `uts/riscv64/mod_riscv64.c` (a trivial module + a `label_t` store, with
+   compile-time asserts on the ISA/label_t contract) compiled `_KERNEL`
+   freestanding against the R-P17 riscv64 MD headers by BOTH the elf gcc AND
+   the new `riscv64-unknown-solaris2.11` gcc → a valid EM_RISCV(243) ELF64-LSB
+   ET_REL kernel object emitting CALL_PLT/PCREL_HI20/PCREL_LO12/RELAX/ADD32/
+   SUB32/SET6/32_PCREL. Cross-ld resolves every reloc → EM_RISCV ET_EXEC.
+Persisted: `src/riscv/sgs/{machrel_riscv_insn,machrel_riscv_dispatch,machtarget_riscv}.c`,
+`src/riscv/gcc/config-riscv-sol2.h`, `src/riscv/uts/riscv64/{mod_riscv64.c,sys/*.h}`,
+`src/riscv/rp19-{milestone,toolchain}-check.sh`, `src/riscv/rp19-sysroot-libgcc.sh`;
+host `/root/riscv-port/rp19/` + `toolchain-sol/` + `sysroot-riscv-sol/`.
+NEXT R-P20: fold the standalone sgs sources into a real
+`usr/src/cmd/sgs/libld/common/machrel.riscv.c` (gate `_libld.h` Rel_desc/Target,
+%pcrel_hi/%pcrel_lo pairing + GOT/PLT allocation); grow the bootstrap sysroot to
+a real one (illumos csu crt1/crti/crtn + libc headers) so full
+`all-target-libgcc` + shared linking works; cross-compile a larger uts unit
+(locore/genassym or a driver) toward a linkable unix/genunix.
+
+## R-P19 DONE (2026-08-14): riscv64 toolchain targets illumos end-to-end
+All 3 sub-tasks complete (re-runnable green proofs):
+- R-P19.1: gcc riscv64-unknown-solaris2.11 all-gcc CLEAN (fixed sol2.h: added ASM_OUTPUT_CALL the RISC-V
+  backend lacked + #undef MULTILIB_DEFAULTS) -> -dumpmachine=riscv64-unknown-solaris2.11; minimal
+  sysroot + 138-member EM_RISCV libgcc.a (as/ld wrappers pointed at the R-P17 riscv64-elf binutils,
+  identical psABI).
+- R-P19.2: sgs/ld RISC-V backend -- machrel_riscv_insn.c (INSREL encoders: U/I/S/B/J + RVC CB/CJ/CI
+  immediate splices, byte-identical to GNU ld's perform_relocation -- produces the exact auipc/addi for
+  a PCREL_HI20/LO12 pair), machrel_riscv_dispatch.c (classify+compute S+A/S+A-P+ADD/SUB/SET), 
+  machtarget_riscv.c (ld_targ_riscv EM_RISCV Target descriptor). Encode math cribbed from binutils-2.44
+  include/opcode/riscv.h + bfd/elfnn-riscv.c + elfxx-riscv.c.
+- R-P19.3: FIRST illumos riscv64 kernel object -- uts/riscv64/mod_riscv64.c compiled _KERNEL/freestanding
+  by BOTH the elf gcc AND the new solaris gcc -> EM_RISCV(243) ET_REL emitting CALL_PLT/PCREL_HI20/
+  PCREL_LO12/RELAX/ADD32/SUB32/SET6/32_PCREL; cross-ld resolves every reloc -> EM_RISCV ET_EXEC.
+Committed src/riscv/{sgs/machrel_riscv_*.c,machtarget_riscv.c, gcc/sol2.h, uts/riscv64/mod_riscv64.c}.
+NEXT R-P20: fold the standalone sgs sources into a real gate usr/src/cmd/sgs/libld/common/machrel.riscv.c
+(%pcrel_hi/%pcrel_lo pairing + GOT/PLT allocation); grow the bootstrap sysroot to real (csu crt1/crti/
+crtn + libc headers) for full all-target-libgcc; cross-compile a larger uts unit toward linkable
+unix/genunix. The riscv64-solaris toolchain + sgs backend now compile+link real illumos riscv64 objects.
