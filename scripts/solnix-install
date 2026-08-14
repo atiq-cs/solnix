@@ -798,17 +798,31 @@ ba_ok || die "boot_archive invalid/truncated after rebuild ($(stat -c %s "$BA" 2
 log "boot_archive OK: $(stat -c %s "$BA" 2>/dev/null) bytes, $(file "$BA" 2>/dev/null)"
 
 # ---------------------------------------------------------------------------
-# 10. loader on ESP + bootfs + menu.lst (beadm-ready; T2.5 gotcha #1).
+# 10. loader: UEFI path (ESP) + BIOS/CSM path (pool boot area) + bootfs + menu.
 # ---------------------------------------------------------------------------
-log "installing loader on ESP + setting bootfs + menu.lst"
+# Two independent boot paths, because EC2 boots solnix two different ways:
+#   * Nitro VMs (m5/m6i/c5 non-metal) boot via UEFI 2.70 -> the firmware reads
+#     the ESP and runs EFI/Boot/bootx64.efi (= loader64.efi).
+#   * EC2 bare-metal instances (m6i.metal, c5n.metal, ...) are Legacy-BIOS ONLY
+#     (AWS: "All Nitro instances support UEFI and Legacy BIOS EXCEPT bare metal
+#     instances"). Metal's SeaBIOS/CSM ignores the ESP and runs the MBR/PMBR
+#     stage1 -> gptzfsboot (stage2, in the ZFS POOL boot area) -> loader.
+# stage2 (gptzfsboot) MUST be installed on the ZFS POOL slice (s1), NOT the ESP
+# (s0): installboot records stage2's location into stage1, and on x86 GPT+ZFS
+# stage2 lives in the pool boot area of the pool vdev slice. Targeting the pcfs
+# ESP leaves stage1 pointing at LBA 256 with no gptzfsboot there -> a real
+# BIOS/CSM (EC2 metal) reads 1 sector of pcfs garbage and hangs at POST. On
+# Nitro VMs this never surfaced because they UEFI-boot and skip the BIOS chain.
+log "installing UEFI loader on ESP"
 mkdir -p "$ALTROOT/esp"
 devfsadm >/dev/null 2>&1 || true
 mount -F pcfs "/dev/dsk/${TARGET}s0" "$ALTROOT/esp" || die "ESP mount failed (fstyp=$(fstyp "/dev/rdsk/${TARGET}s0" 2>&1))"
 mkdir -p "$ALTROOT/esp/EFI/Boot"
 cp "$ALTROOT/boot/loader64.efi" "$ALTROOT/esp/EFI/Boot/bootx64.efi" || die "loader copy failed"
 umount "$ALTROOT/esp"
-installboot -fm "$ALTROOT/boot/pmbr" "$ALTROOT/boot/gptzfsboot" "/dev/rdsk/${TARGET}s0" 2>&1 || \
-  echo "NOTE: installboot -m warning is expected on EFI-labelled disks (UEFI uses the ESP loader)"
+log "installing BIOS/CSM stage1+stage2 (pmbr + gptzfsboot) on the ZFS pool slice ${TARGET}s1"
+installboot -fm "$ALTROOT/boot/pmbr" "$ALTROOT/boot/gptzfsboot" "/dev/rdsk/${TARGET}s1" 2>&1 || \
+  die "installboot (BIOS stage1/stage2) failed on ${TARGET}s1"
 zpool set bootfs="$BEDS" "$POOL"
 # beadm needs the pool mounted + a menu.lst under the pool root (libbe "Invalid
 # path for menu.lst" otherwise); give the pool a mountpoint + seed menu.lst.
