@@ -2816,3 +2816,61 @@ Committed src/riscv/rp22/{sgs/target.c, run/*, libc/, hello/, uts/mach_{trap,clo
 NEXT R-P23: real gate usr/src/cmd/sgs ld build selecting ld_targ_riscv; riscv64 ld.so.1 so the dynamic
 hello runs as a process; wire the static hello to the R-P8/9 kernel syscall path; grow unix.o toward
 a bootable riscv64 kernel image.
+
+## R-P23 DONE: FIRST BOOTING illumos-riscv64 kernel (native toolchain) + reduced ld.so.1 reloc engine + real native ld
+- THE HEADLINE -- the FIRST BOOTING illumos-riscv64 kernel. The illumos MD startup path, built with the
+  NATIVE riscv64-unknown-solaris2.11 gcc + R-P17 binutils into an EM_RISCV ET_EXEC kernel ELF (entry
+  _start @ 0x80200000, zero residual relocs), booted by OpenSBI on qemu-system-riscv64 -machine virt:
+  locore.S _start (mask ints, claim boot hart, set sp, zero BSS, install stvec -> _trap_entry ->
+  rv_trap_dispatch) -> mlsetup(hartid,dtb) (records boot cpu; PROVES the trap path via a deliberate
+  S-mode ebreak -- OpenSBI delegates breakpoints to S-mode -- dispatched through the R-P22.3
+  rv_trap_dispatch [grown to a CORRECT full-GPR save/restore] + resumed via sret) -> main() SunOS
+  banner via SBI legacy console -> known halt (SBI SRST). Output includes:
+      "[mlsetup] trap path self-test: PASS (deliberate breakpoint dispatched + resumed)"
+      "SunOS Release 5.11 Version solnix-riscv64 (illumos on RISC-V, native toolchain)"
+      "[R-P23] first booting illumos-riscv64 kernel: locore -> mlsetup -> banner reached."
+  vs R-P22's standalone hello (no kernel entry) and vs the R-P1..R-P16 unix (boots, but built with the
+  earlier BSD-substrate toolchain). A boot SKELETON: reaches mlsetup+banner+proven-trap+known-halt; no
+  Sv39/allocator/SMP/clock/PLIC/genunix yet (R-P24+). Cribbed: this repo's R-P2..R-P16
+  src/riscv/uts/{locore.S,main.c,sbi.c} + i86pc mlsetup->main + arm64-gate locore; full-GPR trap frame
+  from amd64 trap.S + R-P3 riscv trap.S + R-P20 genassym; OpenSBI/qemu-virt/SBI/privileged specs.
+- REDUCED riscv64 ld.so.1 reloc engine: rtld_riscv.c elf_reloc_riscv() -- rtld's elf_reloc() inner
+  switch for riscv64 -- resolves R_RISCV_RELATIVE (B+A), R_RISCV_JUMP_SLOT (bind PLT/GOT slot, eager),
+  R_RISCV_64 (S+A) at runtime as an S-mode payload under qemu, binds a GOT slot + CALLS through it +
+  derefs the RELATIVE pointer -> both PASS. The full DYNAMIC-hello-as-process path (kernel exec/proc/
+  syscall + ld.so.1 self-reloc + _rt_boot/elf_rtbndr + real libc/libgcc_s) is R-P24+; documented in
+  src/riscv/rp23/ldso/README.md. Static-hello (R-P22.2b, no ld.so.1) stays the supported exe path.
+- REAL native ld (ldmin.c): links a REAL EM_RISCV .o through the sgs backend with NO GNU ld in the
+  reloc path -- opens the .o with libelf/gelf, selects ld_targ_riscv via ld_config_target(EM_RISCV),
+  builds libld Rel_desc[] from .rela.text+symtab, drives ld_targ.t_mr.mr_do_activerelocs
+  (machrel.riscv.c), emits relocated .text BYTE-IDENTICAL to GNU ld (auipc %pcrel_hi -> 0x00000797,
+  addi %pcrel_lo -> 0x01078793). Reloc-output pass over one section, not the full link-editor; full
+  gate ld needs the usr/src/cmd/sgs tree (not on host) -- drop-in steps in src/riscv/rp23/gate-ld/README.md.
+Committed src/riscv/rp23/{kernel/{locore.S,mach_trap.S,sbi.c,sbi.h,main.c,kernel.lds,build-kernel.sh,
+qemu-boot.log}, ldso/{rtld_riscv.c,build-ldso.sh,README.md,qemu-ldso.log}, gate-ld/{ldmin.c,t_pcrel.s,
+build-gate-ld.sh,README.md}, rp23-milestone-check.sh}.
+NEXT R-P24: grow the booting kernel toward genunix (Sv39 paging, SBI-timer clock [rv_clock_intr is the
+MD half], PLIC/AIA, SMP via SBI HSM, then startup()->page_t/kmem/callout/dispatcher); the kernel
+exec/proc/syscall path so the static hello runs as a process (then ld.so.1 hosts the dynamic hello);
+full gate ld + rtld/riscv64 build when the sgs tree is available.
+
+## R-P23 DONE (2026-08-14): FIRST BOOTING illumos-riscv64 KERNEL
+- The illumos MD startup path, built with the NATIVE riscv64-unknown-solaris2.11 toolchain -> EM_RISCV
+  ET_EXEC (entry _start @ 0x80200000, 0 residual relocs), booted by OpenSBI on qemu-system-riscv64
+  -machine virt. Boot output:
+    [mlsetup] trap path self-test: PASS (deliberate breakpoint dispatched + resumed)
+    SunOS Release 5.11 Version solnix-riscv64 (illumos on RISC-V, native toolchain)
+    [R-P23] first booting illumos-riscv64 kernel: locore -> mlsetup -> banner reached.
+  Flow: locore _start (mask ints, claim boot hart, sp, zero BSS, stvec->_trap_entry->rv_trap_dispatch)
+  -> mlsetup (proves the trap path with a deliberate S-mode ebreak dispatched through rv_trap_dispatch
+  w/ full-GPR save/restore + transparent resume) -> main() SunOS banner via SBI -> known halt. THE FIRST
+  BOOTING illumos-riscv64 KERNEL.
+- riscv64 ld.so.1 (reduced): rtld_riscv.c resolves R_RISCV_RELATIVE/JUMP_SLOT/64 at runtime under qemu
+  (PASS). Full dynamic-hello-as-process needs the kernel exec/proc/syscall path (R-P24+).
+- native sgs ld (reduced): ldmin.c links a real EM_RISCV object through the sgs backend (ld_config_target
+  + machrel.riscv.c, no GNU ld) -> relocated .text byte-identical to GNU ld. Full gate ld needs
+  usr/src/cmd/sgs.
+Committed src/riscv/rp23/{kernel/*, ldso/rtld_riscv.c, gate-ld/ldmin.c}. The riscv64 arc: compiles
+(R-P17) -> native link (R-P18-21) -> executes (R-P22) -> KERNEL BOOTS (R-P23). NEXT R-P24: grow kernel
+toward genunix (Sv39 paging, clock, PLIC/AIA intr, SMP, page_t/kmem/dispatcher) + kernel syscall/exec
+path (static hello runs as a process) + full gate ld/rtld.
