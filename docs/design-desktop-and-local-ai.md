@@ -89,3 +89,20 @@ CMAKE_SYSTEM_PROCESSOR=x86_64 + explicit AVX/AVX2/FMA/F16C (uname -p=i386 misses
 GGML_BUILD_NUMBER (no git in stdenv), from-source (nixpkgs attr throws unsupported-system on a GPU dep).
 => solnix runs local LLMs on CPU TODAY, ahead of all the GPU/Vulkan/DRM work. GPU-accel comes with
 G3 Vulkan (llama.cpp has a Vulkan backend); ollama needs a Go toolchain (separate port).
+
+## G0 MILESTONE (2026-08-13): X11 desktop LIVE on solnix
+gtk3-with-X11 BUILT (the 3x-blocked headline): libgtk-3.so.0 + libgdk-3.so.0, X11 backend confirmed
+(libgdk NEEDs libX11/libXi/libXext/libXrandr/libepoxy), host-free (131-path closure, 0 non-store).
+Full G0 X11 desktop: Xvfb X server (+Xnest/Xephyr, DRM-free), dwm+twm WMs, xterm, xinit/startx,
+xsetroot/xrdb, libXfont2/xkbcomp/xkeyboard-config/font-util. `startx -> Xvfb+dwm+xterm` = a working
+minimal X session. 30 leaves, 262 published, 0 failed, all host-free.
+REUSABLE CRACK (libglvnd/GNU-symbol-versioning on Solaris ld): sed every --version-script/-Bsymbolic
+out of all Makefile.am/.in (nixpkgs patches only one occurrence; the $(VERSION_SCRIPT) expansion
+survives) + drop addDriverRunpath (its patchelf setup-hook is 127 on illumos). This is THE recipe for
+any GNU-symbol-versioned pkg on Solaris ld. Also: gobject-introspection badPlatforms=[x86_64-solaris]
+flips every withIntrospection default false; _XPG4_2+-lxnet (sockets remap to __xnet_* in
+/lib/amd64/libxnet.so, a platform lib); fetchPypi firstHash fix.
+HARDWARE Xorg (-Dxorg=true) deferred: needs libpciaccess (illumos libdevinfo) + a KMS/xsvc DDX = G1
+kernel work. Xvfb (software X server) proves the server builds + gives a headless X session NOW.
+=> Desktop track: G0 X11 usable (gtk3 apps over Xvfb/a WM). GTK4-GL now unblockable (Mesa softpipe/
+OSMesa from C2). COSMIC (G5) still needs Rust + the G1/C1 DRM runtime.
