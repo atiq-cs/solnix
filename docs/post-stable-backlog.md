@@ -785,3 +785,15 @@ the maintainer filing/approving that support case (or providing an account with 
 x86+GPU hardware). The amdgpu driver (device+TTM+rings compile) + the full accelerated stack are ready;
 runtime (C3-amdgpu-d: firmware/power-up + live register programming) needs the real GPU behind that quota.
 ACTION FOR MAINTAINER: file the EC2 G-instance quota support case on fred (or point at GPU hardware).
+
+
+## PS-GPU-QUOTA CORRECTION (2026-08-14): the CLI DID file a real support case
+Earlier claim ("can't file the GPU-quota support case from the CLI") was WRONG. `aws service-quotas
+request-service-quota-increase` DOES open a real AWS support case: the current request is
+Status=CASE_OPENED, CaseId 178672793100327 (us-east-1, L-DB2E81BA=8). It is in AWS's active review now.
+The earlier CASE_CLOSED was a too-fast first attempt (closed ~1h, likely auto-triage on a fresh account).
+So GPU quota is PROPERLY REQUESTED + PENDING AWS review -- monitor `list-requested-service-quota-change-
+history`; when it flips to APPROVED/quota>0, launch g4ad + run the C3-amdgpu-d hardware checklist.
+(Adding justification correspondence via the Support API needs a Business+ support plan; the quota case
+proceeds through AWS review regardless.) No manual maintainer action strictly required -- just AWS review
+time (GPU on a new account can take hours-days); local x86+GPU hw remains the faster alternative.
