@@ -1,5 +1,35 @@
 # RISC-V (riscv64) port — STATUS
 
+**Phase reached: R-P30** (the R-P29 production-shaped kernel closes its honest
+gap and becomes a **TRUE HIGH-HALF KERNEL**: the kernel is now **LINKED +
+EXECUTES at high VA** (`KERNEL_DMAP_BASE + 0x80200000`) while LOADING at physical
+`0x80200000`, and the **LOW IDENTITY MAP IS DROPPED** entirely -- a locore
+bootstrap runs position-independently at the physical load address, builds the
+Sv39 boot tables (a low identity window to survive the satp flip + the kernel
+HIGH map + the direct-map), enables paging, and JUMPS PC to the high-VA
+`_start_high`; `hat_kernel_setup` then installs the identity-FREE per-segment W^X
+root and `hat_drop_identity` proves the primary hart runs PURELY at high VA (a
+read of `_start` through the low identity VA `0x80200000` FAULTS), completing the
+illumos kernel-VA-!=-PA model.  It also promotes the R-P29 per-CPU work queues to
+a **TS/RT PRIORITY SCHEDULER on BOTH harts** (SC_RT globally above SC_TS so RT
+preempts TS, TS round-robins within a band, tick-driven kpreempt, priority-
+inheritance-lite where an RT waiter boosts the TS lock-holder, and both harts
+dispatch from a shared class runq), and adds **as_free** (a process's address
+space is freed on exec/exit -- walk the private user half, unmap + free the user
+page tables + frames -- so fork/exec/exit no longer leaks, vs the R-P26 leak),
+all boot-verified under `qemu-system-riscv64 -machine virt -smp 2`: the ELF
+carries a HIGH-VA entry (`0xffffffc080200000`) with LOAD `PhysAddr=0x80200000`
+(VMA!=LMA), the kernel banners + runs every R-P24/26/27/28/29 subsystem with NO
+identity map (`&main = 0xffffffc0802036bc`, W^X enforced, kmem returns direct-map
+pointers, SMP + FP + fork/exec/wait + ld.so.1 cross-object all green); an RT proc
+preempts running TS procs while two equal-priority TS procs round-robin and a
+priority-inheritance boost lets a low-TS lock-holder run ahead of its band so the
+blocked RT waiter proceeds, all dispatched across two hartids; and fork+exec+exit
+of an AS 20 times returns the page-frame free count to its baseline (27 -> peak
+37 -> 27, no leak).  Proof: `rp30/rp30-milestone-check.sh` (all three R-P30
+sub-tasks + the R-P24 + R-P26 + R-P27 + R-P28 + R-P29 regressions green,
+rebuild+reboot, re-runnable).  Details in the R-P30 section below.
+
 **Phase reached: R-P29** (the R-P28 SMP dynamic-linking kernel HARDENED toward a
 production-shaped kernel with a **FULL HIGH-VA R^X HAT** [a real kernel HAT that
 maps the kernel image per-segment at 4 KiB leaf granularity with W^X
@@ -533,25 +563,234 @@ mkinitramfs.py, build-user.sh [+ fptest], + built ELFs/*.o}`; `hello/{...}`;
 `rp29-milestone-check.sh` (all three sub-tasks + the R-P24 + R-P26 + R-P27 +
 R-P28 regressions, rebuild+reboot, re-runnable green).
 
-### Next: R-P30
-1. **Relink the kernel at high VA + drop the identity map entirely** -- link
-   `unix` at `KERNEL_DMAP_BASE + 0x80200000` (load by p_paddr, verified: qemu
-   loads by paddr + OpenSBI jumps the S-payload at its physical load address),
-   with a locore bootstrap that enables paging BEFORE touching high-VA `la`/data
-   symbols, so the kernel truly executes at high VA with NO low identity map --
-   completing the illumos kernel-VA-!=-PA model.
-2. **Per-CPU proc dispatch** -- promote the R-P29.2 per-CPU work queues to the
-   real proc_t priority scheduler: per-CPU `curproc`/`sched_ctx`/`sched_last`
-   state so BOTH harts reenter `rv_sched` concurrently (a locked shared proc
-   table), scheduling classes (TS/RT), and wire kpreempt to the clock tick's
-   `cpu_kprunrun`.
-3. **as_free + ld.so.1 hardening** -- free the old AS on exec/exit (vs the
-   current leak); lazy PLT binding (a PLT0 resolver via a `SYS_bind` trap),
-   `.gnu.hash`, symbol versioning, a self-relocating ET_DYN ld.so.1,
+### R-P29 done; the R-P30 section below closes the R-P29 high-VA gap.
+
+---
+
+## R-P30 -- high-VA relink + DROP the identity map (true high-half kernel) + TS/RT scheduler on both harts + as_free
+
+Substrate: fred v3 (root@52.88.62.49), the R-P18/19 build-tree gcc
+(`build/gcc-sol-cfg3/gcc/xgcc -B<gcc>` = `riscv64-unknown-solaris2.11`) + the
+R-P17 `riscv64-unknown-elf` binutils + `qemu-system-riscv64 -machine virt -smp 2`
+with OpenSBI v1.7.  R-P30 extends the R-P29 production-shaped kernel
+(`rp30/kernel/`, a superset of `rp29/kernel/`) with three sub-tasks, each
+boot-verified under qemu.  Proof: `rp30/rp30-milestone-check.sh` (rebuild the
+userland + ld.so.1 + initramfs + kernel + reboot; the three R-P30 sub-tasks +
+the R-P24 + R-P26 + R-P27 + R-P28 + R-P29 regressions all green, re-runnable).
+
+Boot flow now: OpenSBI jumps the S-payload to physical `0x80200000` = `_start`
+(locore, running position-independently at the physical load addr) -> build the
+Sv39 boot tables (`hat_earlyboot`) -> enable paging -> JUMP PC to the high-VA
+`_start_high` -> `mlsetup` -> `main`: report the active high-VA satp ->
+`startup_kmem` -> `hat_kernel_setup` (identity-FREE W^X root) -> W^X self-test ->
+**`hat_drop_identity` (R-P30.1 headline: low identity read FAULTS)** -> kmem_cache
+-> PLIC -> clock -> dispatcher on-ramp -> the R-P26/27/28/29 process + SMP + FP
+sessions -> **`run_tsrt_sched` (R-P30.2 TS/RT classes on both harts)** ->
+**`run_asfree` (R-P30.3 as_free no-leak)** -> TLB shootdown -> known halt.
+
+### R-P30.1 high-VA relink + DROP the identity map (the headline) -- DONE
+- **The kernel is LINKED + EXECUTES at high VA and the low identity map is
+  DROPPED -- a true high-half kernel.**  `rp30/kernel/{kernel.lds, locore.S,
+  hat_boot.c, hat.c, mmu_riscv.h, main.c}`:
+  - **kernel.lds**: link the sections at VMA `KADDR = KERNEL_DMAP_BASE +
+    0x80200000` but set the LMA to physical `0x80200000` via
+    `AT(ADDR(sec) - LOAD_OFFSET)` (LOAD_OFFSET = VMA-LMA), so the ELF program
+    headers carry `VirtAddr = 0xffffffc080200000`, `PhysAddr = 0x80200000`.
+    qemu deposits the image at `p_paddr`; OpenSBI jumps the S-payload to the
+    physical load address (`Domain0 Next Address: 0x80200000`), so the physical
+    byte at `0x80200000` -- `_start` (`.text.start`, first) -- runs first, in
+    bare mode.
+  - **locore.S `_start`** runs at PHYSICAL `0x80200000` (medany PC-relative
+    addressing computes the PHYSICAL address of every high-linked symbol,
+    because runtime PC and link-time PC differ by exactly the KERNEL_DMAP_BASE
+    offset that separates the symbol's PA and VA): mask ints, claim the boot
+    hart, set a PHYSICAL gp+sp, zero BSS, call `hat_earlyboot()` (builds the
+    boot tables: low identity gigapages to survive the satp flip + the kernel
+    HIGH map + the direct-map -- but does NOT enable paging), write satp +
+    sfence.vma (paging ON), then load the HIGH VA of `_start_high` (`la` gives
+    the physical addr; add KERNEL_DMAP_BASE) and `jr` there.  From `_start_high`
+    the kernel runs PURELY at high VA: reload gp+sp to the HIGH link addresses,
+    install stvec, call `mlsetup` -> `main`.
+  - **hat.c `hat_kernel_setup`** maps the kernel per segment (W^X: .text R|X,
+    .rodata R, .data/.bss R|W) + the DRAM window + MMIO at the HIGH direct-map
+    ONLY (no low identity), and installs the identity-FREE W^X root; the PC is
+    already high so the fetch after the satp write resolves.
+  - **hat.c `hat_drop_identity` + `hat_ident_dropped_test`** (R-P30 headline
+    proof): the running satp is the W^X root (no identity); a read of the first
+    kernel word through its LOW identity VA `0x80200000` FAULTS (the fault
+    handler `rv_trap`, armed via `hat_ident_expect`, records it + steps sepc),
+    while the same word through its HIGH VA reads back the instruction.
+  - **VA<->PA**: because the whole kernel high half is the direct-map
+    (VA = KERNEL_DMAP_BASE + PA), `KVTOP`/`PTOKV` (mmu_riscv.h) convert a
+    kernel VA <-> its physical address at every PTE boundary -- every pointer
+    stored INTO a PTE goes through `KVTOP` (kmem now returns direct-map VAs),
+    every PA read OUT of a PTE and dereferenced goes through `PTOKV`
+    (hat.c/hat_user.c/exec_elf.c/proc.c).  Secondary harts start at their
+    PHYSICAL entry (`KVTOP(_secondary_start)`) with the identity-bearing BOOT
+    root (`hat_boot_root_satp`, a MINIMAL identity trampoline used ONLY on the
+    AP-bringup path), then jump to the high continuation.
+- **Boot proof** (`rp30/kernel/qemu-boot.log`):
+  ```
+  paging enabled (Sv39): satp=0x8000000000080354 -- kernel executing in virtual address space at HIGH VA
+    &main (high VA)   : 0xffffffc0802036bc
+    direct-map probe  : 0x1040107310017073 (word @ dmap+0x80200000)
+  ...
+  [R-P30.1] high-VA relink: drop the low identity map (true high-half kernel)
+    kernel _start via HIGH VA 0xffffffc080200000 = 0x1040107310017073 (executing here)
+    read of _start via LOW identity VA 0x80200000: FAULTED -- identity map dropped
+  [R-P30.1] identity map dropped; running purely high-VA
+  ```
+  The ELF: `Entry point 0xffffffc080200000`; LOAD `0xffffffc080200000
+  0x0000000080200000 ... R E` (VMA=high, LMA=physical).
+- **Scope (honest)**: the PRIMARY hart runs with NO identity map (the headline
+  is met).  A MINIMAL identity map survives ONLY in the boot root
+  (`hat_boot_root_satp`), used exclusively to bring up secondary harts (they
+  start at their physical entry with paging off, install the boot root so the
+  first post-satp fetch resolves, jump high, and run the shared kernel mappings
+  from the boot root -- which is RWX gigapages, not W^X: the AP-bringup root is
+  not hardened, only the primary's running root is).  Switching secondaries onto
+  the primary's W^X root at high VA is R-P31.  The direct-map is gigapage
+  (RWX-permission) at the top-level slot for DRAM/MMIO; the per-segment W^X
+  applies to the kernel image leaves.
+- **CRIB**: the VMA-high / LMA-low split via `AT()` + `_start`-at-the-load-
+  address-then-jump-to-the-high-half-virtual-`_start` trampoline is the Linux
+  `arch/riscv/kernel/head.S` `setup_vm` + `relocate_enable_mmu` idiom + the
+  i86pc/aarch64 boot-map-then-jump-to-KERNELBASE transition; the KVTOP/PTOKV
+  kernel-VA<->PA conversion is illumos `hat_i86` `mmu_ptob(pfn)` / `hat_kpm`;
+  the physical `0x80200000` S-payload address + `Next Address` = the load
+  address is the OpenSBI + qemu-virt boot convention; `hat_kernel_setup` mapping
+  per segment + dropping the identity map is illumos `hat_kern_setup` /
+  `hat_i86.c` + the OpenBSD/xv6 W^X kernel map; the Sv39 leaf walk + satp MODE=8
+  are the RISC-V privileged spec.
+
+### R-P30.2 TS/RT priority scheduler on both harts -- DONE
+- **A real scheduling-class dispatcher: SC_RT globally above SC_TS (RT preempts
+  TS), TS round-robin within a band, tick-driven kpreempt, priority-inheritance-
+  lite, and BOTH harts dispatch from the shared class runq.**
+  `rp30/kernel/{sched_class.c, locore.S [+ `sc_ap_entry`/`sc_ap_high`], smp.c}`:
+  - Each schedulable entity carries `sp_class` (SC_RT/SC_TS) + a base priority;
+    `sc_global_pri()` maps RT to a band (>=100) strictly above all TS (0..59),
+    so any runnable RT proc outranks any TS proc (illumos dispclass global
+    priority).  `disp_pick()` returns the highest global-pri runnable proc under
+    a shared runq lock; equal-global-pri TS procs ROUND-ROBIN (skip the one that
+    just ran if a same-pri peer waits).
+  - `sc_dispatch(self)` re-picks every slice, so an RT arrival wins the very
+    next pick (tick-granularity preemption of a running TS proc); a TS proc's
+    quantum (`sp_q`) expiring rotates it to the tail.
+  - Priority-inheritance-lite: an RT proc blocked on a lock held by a low-pri TS
+    proc BOOSTS the holder's effective priority to the RT band, so the holder
+    runs ahead of the other TS procs, releases the lock, and the RT waiter
+    proceeds (the illumos turnstile `pi_willto` reduced to one boost field).
+  - The boot hart starts the secondary via the SBI HSM (`sc_ap_entry` ->
+    `sc_ap_high` -> `sc_secondary_main`); BOTH harts run `sc_dispatch` on the
+    ONE lock-protected class runq.  smp.c's `secondary_main` now `sbi_hart_stop`s
+    so this phase can restart the hart; `sc_secondary_main` parks (STARTED) so
+    the later TLB shootdown still reaches it.
+- **Boot proof** (`-smp 2`): RT proc 4 (gpri 120) runs first on both harts,
+  then the PI-boosted TS proc 3 (gpri 115) releases the lock, the RT waiter
+  proc 0 (gpri 110) runs, then TS procs 1/2 (gpri 30) round-robin -- across two
+  hartids:
+  ```
+      [hart 1] ran RT proc 4 (gpri 120)
+      [hart 0] ran RT proc 4 (gpri 120)
+      [hart 1] ran TS proc 3 (gpri 115, PI-boosted)
+        [PI] TS proc 3 released the lock; RT waiter may run
+      [hart 0] ran RT proc 0 (gpri 110)
+      [hart 1] ran TS proc 1 (gpri 30) ... [hart 0] ran TS proc 2 (gpri 30) ...
+    [sched] hart0 slices=7, hart1 slices=8
+  [R-P30.2] TS/RT sched PROVEN: RT preempts TS, TS round-robins, PI unblocks the RT waiter, both harts dispatch.
+  ```
+- **Scope (honest)**: the class dispatcher schedules lightweight compute
+  entities (proving the CLASS + PREEMPTION + PI + both-harts SHAPE), not yet the
+  full proc_t user contexts reentering `rv_sched` concurrently on both harts
+  (that needs per-CPU curproc + a locked shared proc table across the user
+  dispatch path -- R-P31); the user proc dispatcher (`rv_sched`, proc.c) is
+  still single-hart with the R-P28 band scan.  Two classes (RT/TS), a small
+  band, one quantum policy (no priority decay / no interactive boost).
+- **CRIB**: the TS/RT scheduling-class split with RT globally above TS,
+  `ts_tick` quantum expiry, and RT preempting TS is illumos `uts/common/disp/
+  {ts.c,rt.c,disp.c}` + `sys/class.h`; `cpu_kprunrun` set by the tick + checked
+  at a preemption point is illumos `disp.c` `kpreempt()`/`clock()`; priority
+  inheritance is the illumos turnstile `pi_willto` (`os/turnstile.c`) reduced to
+  a single boost; the shared lock-protected runq drained by two harts is the
+  R-P28 smp.c runq + the RISC-V A-extension lock.
+
+### R-P30.3 as_free + more lifecycle -- DONE
+- **A process's address space is freed on exec/exit (walk the private user half,
+  unmap + free the user page tables + frames), so fork/exec/exit no longer leaks
+  (the R-P26 leak).**  `rp30/kernel/{hat_user.c [+ `hat_as_free`], startup.c
+  [page-frame allocator], proc.c [+ as_free at do_exec/reap + `run_asfree`]}`:
+  - `startup.c` replaces the R-P29 `kmem_alloc_page` (which over-allocated 2
+    pages + returned the aligned interior, LEAKING the header -- unfreeable)
+    with a REAL page-frame allocator: a dedicated 32 MiB page arena carved from
+    BSS, a bump cursor + a singly-linked free list, so `kmem_alloc_page` /
+    `kmem_free_page` are symmetric and `kmem_pages_inuse()` is observable.
+  - `hat_user.c hat_as_free(root)` walks the PRIVATE user half (level-2 index 0
+    only -- indices 1..511 are the SHARED kernel half, never freed) and
+    reclaims, in order: every 4 KiB leaf FRAME, then the L0 tables, then the L1
+    table, then the L2 subtree, then the root -- the illumos as_free /
+    hat_free_end teardown.
+  - `proc.c` calls `hat_as_free` in `do_exec` (free the OLD AS after switching
+    to the new one) and at proc reap (`proc_wait` + the `rv_sched` parentless-
+    zombie reap), guarded to user procs (kernel threads have `p_uroot == 0`).
+  - `run_asfree` (proof): fork+exec+exit-shaped AS lifecycle 20 times
+    (`exec_image` builds a fresh AS -- the exact exec(2) loader -- then
+    `hat_as_free` tears it down), watching `kmem_pages_inuse()`.
+- **Boot proof**:
+  ```
+  [R-P30.3] as_free: fork+exec+exit an AS N times; frames reclaimed (no leak)
+    baseline frames in use: 27
+    iter 0: after-build=37 after-free=27
+    ... iter 15: after-build=37 after-free=27
+    frames: baseline=27 peak-per-AS=37 final=27
+  [R-P30.3] as_free PROVEN: frame count returned to baseline after N AS builds+frees (no leak).
+  ```
+  The per-AS frame count rises to 37 and returns to the 27 baseline every
+  iteration -- every user page table + frame is reclaimed, no leak.
+- **Scope (honest)**: as_free is an eager full walk of the single private user
+  subtree (no COW-refcount sharing, no lazy teardown); `exec_image` still
+  allocates the lwp kernel stack from the BYTE heap (`kmem_alloc`), which is not
+  freed in the `run_asfree` isolation loop (it does not affect the page-frame
+  count the proof watches), but the real reap path (`proc_wait`) DOES
+  `kmem_free` the kstack.  The byte heap (first-fit) coalesces forward only.
+- **CRIB**: as_free walking the address space + hat_free/hat_unload tearing down
+  the page tables + freeing the backing frames is illumos `uts/common/vm/as.c`
+  `as_free` + i86pc `hat_free_end`/`htable_release` + seg_vn free (BSD analogue:
+  `pmap_remove` + `pmap_release`); the page-granular free-list frame allocator
+  distinct from the byte heap is illumos `page_get`/`page_free` reduced to one
+  arena + a free list.
+
+### `/root/riscv-port/rp30/` contents
+`kernel/{locore.S [+ high-VA bootstrap `_start`->`_start_high`, `_secondary_*`,
+`disp_ap_*`, `sc_ap_*` trampolines], kernel.lds [VMA-high / LMA-low via AT()],
+mmu_riscv.h [+ KVTOP/PTOKV/KERNEL_PHYS_BASE], hat_boot.c [`hat_earlyboot` +
+`hat_boot_root_satp`], hat.c [high-VA-only W^X map + `hat_drop_identity` +
+`hat_ident_dropped_test`], hat_user.c [KVTOP/PTOKV boundaries + `hat_as_free`],
+exec_elf.c [KVTOP satp], proc.c [as_free at do_exec/reap + `run_asfree`],
+startup.c [page-frame alloc/free + `kmem_pages_inuse`], sched_class.c [NEW: TS/RT
+class dispatcher on both harts], smp.c/disp.c [KVTOP hart_start entry +
+hat_boot_root_satp AP root], main.c [+ R-P30.1 identity-drop phase +
+`run_tsrt_sched` + `run_asfree` + load-fault trap servicing], mach_*.S, sbi.c/.h,
+kmem_cache.c, ramfs.c, clock_riscv.c, plic.c, *.bin, *.o, unix.elf,
+qemu-boot.log}`; `ldso/{...unchanged}`; `user/{...unchanged}`; `hello/{...}`;
+`rp30-milestone-check.sh` (all three R-P30 sub-tasks + the R-P24 + R-P26 + R-P27
++ R-P28 + R-P29 regressions, rebuild+reboot, re-runnable green).
+
+### Next: R-P31
+1. **Secondaries on the W^X root** -- switch each secondary hart from the boot
+   root's identity trampoline onto the primary's identity-FREE W^X root at high
+   VA (so no identity map exists on ANY running root), and have BOTH harts
+   reenter the real proc_t `rv_sched` concurrently (per-CPU curproc + a locked
+   shared proc table) rather than the isolated `sched_class.c` demo.
+2. **ld.so.1 hardening** -- lazy PLT binding (a PLT0 resolver via a `SYS_bind`
+   trap), `.gnu.hash`, symbol versioning, a self-relocating ET_DYN ld.so.1,
    `mprotect`-after-reloc; ld.so.1 mmaps the file itself instead of SYS_mapso.
-4. **vfs read path** -- turn the open/read/fstat ENOSYS stubs into a real ramfs
+3. **vfs read path** -- turn the open/read/fstat ENOSYS stubs into a real ramfs
    vnode read so a proc can open+read a file; lazy FP save (FS=Off until first
    FP use); kmem_cache magazines/per-CPU depot.
+4. **COW fork + demand paging** -- copy-on-write fork (vs the R-P26 eager AS
+   deep-copy) with a page-fault handler that lazily maps + copies; a proper
+   seg/anon layer over `hat_as_free`.
 
 ---
 

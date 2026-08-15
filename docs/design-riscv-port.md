@@ -3178,3 +3178,24 @@ Honest scope: kernel still linked-low (executes low identity VA); HAT maps it R^
 = R-P30. NEXT R-P30: relink kernel at high VA + drop identity; per-CPU TS/RT priority scheduler both
 harts; as_free + ld.so.1 hardening (lazy PLT/.gnu.hash/versioning); real ramfs vnode read; lazy FP;
 kmem magazines. The riscv64 kernel now has W^X memory protection + slab + SMP work-stealing + FP.
+
+## R-P30 DONE (2026-08-15): TRUE HIGH-HALF KERNEL (identity dropped) + TS/RT sched + as_free
+All 3 boot-verified under qemu-virt -smp 2, all R-P24-29 regressions green:
+- High-VA relink + DROP identity (closes the R-P29 gap): kernel LINKED+EXECUTES at high VA
+  (0xffffffc080200000) while LOADING at physical 0x80200000 (kernel.lds VMA-high/LMA-low via AT()).
+  locore _start runs PIC at physical, hat_earlyboot builds boot tables (low identity to survive the
+  satp flip + kernel high map + direct-map), enables paging, jumps PC to _start_high; hat_kernel_setup
+  installs an identity-FREE W^X root; hat_drop_identity. PROOF: &main high VA 0xffffffc08020401e; a read
+  of _start via the LOW identity VA 0x80200000 FAULTS -> identity dropped; running purely high-VA.
+  KVTOP/PTOKV convert VA<->PA at every PTE boundary. Cribbed Linux head.S setup_vm/relocate_enable_mmu +
+  illumos hat_i86 + GNU ld high-half AT() idiom.
+- TS/RT scheduler (sched_class.c): SC_RT > SC_TS (RT preempts TS), TS round-robin, tick kpreempt,
+  priority-inheritance-lite (RT waiter boosts the TS lock-holder); both harts dispatch from the class
+  runq. Cribbed illumos disp/ts.c/rt.c + turnstile PI.
+- as_free (no-leak): page-frame alloc/free + hat_as_free walks the private user half, frees frames +
+  L0/L1/L2 tables + root, wired into exec/reap. PROOF: frames baseline=27 peak=37 final=27. Cribbed
+  illumos vm/as.c as_free + hat_free_end + page_get/free.
+Committed src/riscv/rp30/kernel/{sched_class.c,kernel.lds,locore.S,hat_boot.c,hat.c,hat_user.c,+grown}.
+The riscv64 kernel is now a TRUE HIGH-HALF, W^X, SMP, preemptive, TS/RT-scheduled, leak-free kernel with
+dynamic linking. NEXT R-P31: secondaries on the W^X root (drop the boot identity trampoline), ld.so.1
+hardening (lazy PLT/.gnu.hash/versioning), real ramfs vnode read, lazy FP, kmem magazines, more syscalls.
