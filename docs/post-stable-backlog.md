@@ -835,3 +835,18 @@ sqlite, libgpg-error, libtasn1, libsodium, libedit, libgcrypt, gawk, m4 (+ nativ
 build tools). aarch64 now ~42. Remaining: nettle (gmp-cxx C++ mapfile wall), gettext-target/libassuan
 (bash->readline SHARED-lib mapfile wall) -- both need the seed gcc rebuilt w/ Solaris ld (the deep C++/
 shared-lib fix), OR static-only variants.
+
+## PS-AARCH64-WAVE4 (2026-08-15): openssl Perl-target crack -> +9 net/TLS (curl!)
+Cracked openssl-cross: openssl 3.6.3 had no solaris64-aarch64 target + nixpkgs' configureScript map
+lacked aarch64-solaris. FIX: (1) nixpkgs openssl/default.nix aarch64-solaris = ./Configure
+solaris64-aarch64-gcc; (2) Configurations/55-solaris-aarch64.conf (crib solaris64-x86_64-gcc's
+solaris-common -lsocket/-lnsl/-ldl + linux-aarch64 asm profile aarch64.S/bsaes). +9 EM_AARCH64 pkgs
+published (80 paths, 0 failed): openssl, CURL (marquee, host-free), nghttp2, libssh2, libidn2, libxml2,
+libyaml, expat, npth. aarch64 now ~64. New cracks (entry-aarch64-wave4.nix): staticSharedOverlay
+(--disable-shared transitive), socketFix (aaSeedL -lsocket/-lnsl/-lmd/-lmp), pieFix (-fPIE compile-only
+defeats the copy-reloc-against-protected wall), curlMinimal (drop libpsl->gtk-doc->broken py env).
+REMAINING aarch64 ceiling: (1) NATIVE cmake C++ bootstrap wall (x86_64-solaris g++ can't build
+cmake-minimal) -> gates zstd/lz4/json-c/jansson/brotli/snappy/c-ares (the cmake data/compression class);
+unblocking native cmake opens that class. (2) cross bash (netopen.c internal_error illumos port) ->
+gates libassuan/target-gettext. (3) C++ mapfile wall (nettle/gnutls need gmp-cxx) -> needs seed gcc w/
+Solaris ld. The net/TLS + crypto cores are now DONE on aarch64 -- a usable base userland cross-builds.
