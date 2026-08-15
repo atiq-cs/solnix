@@ -2938,3 +2938,70 @@ startup,main}.c + mach_swtch.S. NEXT R-P25: kernel syscall/exec path (static hel
 ld.so.1 hosts dynamic hello), full HAT (4K leaf hat_memload, drop identity, vmem/kmem_cache, page
 freelists), SMP secondaries via SBI HSM + real dispatcher/callout. The riscv64 kernel now has VM +
 interrupts + a dispatcher -- the genunix on-ramp.
+
+## R-P25 DONE: kernel syscall/exec path -- the FIRST riscv64-solaris userland PROCESS runs
+All 3 sub-tasks + the R-P24 regression boot-verified under qemu-virt+OpenSBI (native riscv64-solaris
+toolchain); re-runnable proof src/riscv/rp25/rp25-milestone-check.sh. The R-P24 booting kernel grown
+with the syscall/exec path: it execs the R-P22 static hello into a fresh user address space and runs
+it in U-mode; the process makes its OWN write(2)/exit(2) syscalls (its own line "hello from
+riscv64-solaris userland process" appears, then exit(0), then the kernel continues).
+1. U-mode entry + trap-based syscalls (mach_uentry.S, mach_trap.S, main.c): rv_user_enter installs the
+   user satp, sets sscratch=lwp kernel trap stack, programs sstatus (SPP=0 -> return to U, SPIE, SUM so
+   the kernel syscall handler may read the user buffer), sepc=user _start, user sp, and sret. A trap
+   from U lands in _u_trap_entry (the new stvec pad) which csrrw-swaps the user sp for the kernel stack
+   via sscratch (sscratch==0 in the kernel, so a kernel trap swaps back), then rv_trap_dispatch stashes
+   the user sp, resets sscratch=0 while in the kernel, and on the way out reloads the user sp + re-arms
+   sscratch iff returning to U. rv_syscall = the illumos riscv64 ABI (a7=nr, a0..a5=args, ret a0):
+   SYS_write(4) -> SBI console (returns n), SYS_exit(1) -> restore kernel satp + rv_klongjmp back to
+   run_user (rv_ksetjmp/rv_klongjmp = a minimal label_t so the kernel gets control back on exit).
+2. Static hello RUNS as a process (rp25/user/hello.c + user_elf.S + main.c run_user): the R-P22.2b
+   static hello (R-P20 crt + R-P22 write/exit-via-ecall libc, EM_RISCV ET_EXEC entry 0x10160) embedded
+   in the kernel .rodata via .incbin (no filesystem needed); run_user execs it, rv_ksetjmps, enters
+   U-mode; the process runs its _start -> main -> write(1,msg,len) [ecall] -> exit(0) [ecall].
+3. Minimal exec (exec_elf.c, hat_user.c, startup.c): hat_user_new copies the kernel high half (kernel-
+   text gigapage + direct-map, indices 1..511) into a fresh Sv39 user root, index 0 left private for
+   4K user leaves (hat_user_map walks/creates L1+L0). All page tables + user frames from
+   kmem_alloc_page (a PAGE-ALIGNED wrapper -- the fix: satp roots/page tables must be 4K-aligned, the
+   first-fit heap only 16-byte, which is why the first user-satp switch faulted). exec_user validates
+   the ELF64 header, walks the PT_LOAD phdrs, maps+copies each segment (zeroing the bss tail), maps a
+   16K user stack below 0x40000000, builds the psABI initial stack (argc/argv/envp/auxv AT_PAGESZ/
+   AT_ENTRY/AT_NULL), allocates the lwp kernel trap stack, returns u_satp/u_entry/u_sp/u_kstack_top.
+Reduced (anti-wedge): one static ELF via .incbin (no open/fs), eager segment copy (no demand/COW),
+fixed user stack, minimal auxv, single lwp, exit unwinds via label_t (no proc table / wait). Cribbed:
+sscratch swap-on-trap + sret-to-U = RISC-V priv spec + xv6-riscv usertrap/uservec/kernelvec + BSD riscv
+cpu_trap; a7=nr/a0..a5 dispatch + SYS_write=4/SYS_exit=1 = illumos os/syscall.c + native <sys/syscall.h>
+(the R-P22 libc ABI); PT_LOAD walk + auxv = illumos exec mapelfexec/elfexec + BSD exec_elf64 + RISC-V
+psABI program-startup; user-AS = kernel-high-half-shared + private user leaves = illumos hat/as_t +
+i86pc kernel-vs-user hat; .incbin linked-in init = the classic bring-up idiom. Committed
+src/riscv/rp25/{kernel/{mach_uentry.S,mach_trap.S,hat_user.c,exec_elf.c,proc_riscv.h,startup.c,main.c,
+user_elf.S,...}, user/{hello.c,build-user.sh}, rp25-milestone-check.sh}. The riscv64 arc: compiles
+(R-P17) -> native link (R-P18-21) -> executes (R-P22) -> KERNEL BOOTS (R-P23) -> KERNEL PAGES+TICKS+
+dispatcher (R-P24) -> USERLAND PROCESS RUNS (R-P25, the first riscv64-solaris process). NEXT R-P26:
+fork/exec/wait + a real proc/lwp table + a general fs-backed exec hosting ld.so.1 for the dynamic
+hello; more syscalls + the SunOS errno ABI; full HAT (high-VA relocate, drop identity, 4K leaf
+hat_memload, vmem/kmem_cache, page freelists) + real dispatcher/callout + SMP secondaries.
+
+## R-P25 DONE (2026-08-15): FIRST riscv64-solaris userland PROCESS
+The kernel execs a static hello ELF, drops to U-mode, and the process makes its OWN syscalls:
+```
+----- userland process output -----
+hello from riscv64-solaris userland process
+----- end userland process output -----
+[R-P25] the userland process called exit(0); wrote 44 bytes via its own write(2). Kernel continues.
+```
+- U-mode entry (mach_uentry.S rv_user_enter: sret SPP=0 + SPIE + SUM, sepc=user _start, user sp/satp).
+- Trap-from-U kernel-stack swap: _u_trap_entry does csrrw sp,sscratch,sp (sscratch = lwp kstack in U,
+  0 in kernel -> a kernel trap swaps back + keeps its sp); the sscratch==0-in-kernel invariant enforced.
+- rv_syscall (illumos riscv64 ABI a7=nr/a0-a5/ret-a0): SYS_write=4->SBI console, SYS_exit=1->restore
+  kernel satp + rv_klongjmp back to the kernel.
+- Minimal exec (exec_elf.c): validate ELF64, map+copy PT_LOAD (bss zero), 16K user stack, psABI initial
+  stack (argc/argv/envp/auxv AT_PAGESZ/ENTRY/NULL); hat_user.c builds a fresh Sv39 user root sharing the
+  kernel high half + private 4K user leaves.
+Load-bearing bug fixed: page tables need 4K alignment; first-fit kmem gave 16B -> the first user satp
+switch page-faulted (looping at _u_trap_entry). Fix: kmem_alloc_page() for all page tables + user frames
+(found via qemu -d int). Cribbed: xv6-riscv usertrap/uservec + BSD cpu_trap (sscratch/sret-to-U);
+illumos os/syscall.c (dispatch) + mapelfexec/elfexec (PT_LOAD/auxv) + hat (user AS). Committed
+src/riscv/rp25/kernel/{mach_uentry.S,hat_user.c,exec_elf.c,user_elf.S,+grown mach_trap/locore/main/
+startup/hat_boot}. The riscv64 arc: compiles->links->executes->kernel-boots->VM+intr+dispatcher->
+USERLAND PROCESS. NEXT R-P26: fork/exec/wait + real proc/lwp table + fs-backed exec (ld.so.1 hosts the
+dynamic hello) + more syscalls/errno + full HAT + real dispatcher/callout + SMP.

@@ -1,6 +1,28 @@
 # RISC-V (riscv64) port — STATUS
 
-**Phase reached: R-P24** (the R-P23 booting illumos-riscv64 kernel GROWN
+**Phase reached: R-P25** (the R-P24 booting illumos-riscv64 kernel GROWN with
+the SYSCALL/EXEC path so the FIRST riscv64-solaris userland PROCESS runs, all
+boot-verified under `qemu-system-riscv64 -machine virt`: the kernel builds a
+fresh **user address space** [a per-process Sv39 root that shares the kernel
+high half -- identity kernel-text gigapage + the direct-map -- and carries
+private 4 KiB leaf tables for the user segments, `hat_user_new`/`hat_user_map`],
+**execs** the R-P22 static hello ELF embedded in the kernel image [`exec_elf.c`
+walks the PT_LOAD program headers, maps+copies each segment into freshly
+page-aligned frames, and builds the psABI initial stack argc/argv/envp/auxv],
+enters **U-mode** [`rv_user_enter`: `sret` with `sstatus.SPP=0`+SPIE+SUM,
+`sepc`=user `_start`, the user `sp`, the user `satp`], and services the
+process's OWN **write(2)/exit(2)** syscalls through the R-P22/23 trap path [a
+U-mode `ecall` traps to `_u_trap_entry`, which swaps to the lwp kernel stack via
+`sscratch`, then `rv_trap_dispatch` -> `rv_syscall` reads `a7`=nr/`a0..a5`=args
+and returns in `a0`; `SYS_write=4` routes the buffer to the SBI console,
+`SYS_exit=1` `rv_klongjmp`s control back to the kernel]. Boot proof: the process
+prints its OWN line `hello from riscv64-solaris userland process` and exits
+`exit(0)` [`wrote 44 bytes via its own write(2)`], then the kernel continues --
+this is the first riscv64-solaris userland process, vs R-P22's bare-metal
+payload / R-P23's kernel-only) -- DONE (all three sub-tasks + the R-P24
+regression, re-runnable proof `rp25/rp25-milestone-check.sh`).
+
+R-P24 (the R-P23 booting illumos-riscv64 kernel GROWN
 toward genunix, four subsystems each boot-verified under `qemu-system-riscv64
 -machine virt`: **Sv39 virtual memory** -- `hat_boot_init` builds the 3-level
 Sv39 boot page table [identity map keeps the kernel live across mmu-enable +
@@ -191,18 +213,161 @@ unix.elf, qemu-boot.log}` (the grown kernel); `rp24-milestone-check.sh` (all
 four sub-tasks, rebuild+reboot, re-runnable green). Repo copies under
 `src/riscv/rp24/`.
 
-### Next: R-P25
-1. **Kernel syscall/exec path** so the R-P22.2b static hello RUNS as a process
-   (map the a.out, U-mode entry, `write(2)`/`exit(2)` ecall serviced by
-   `rv_syscall`); then the exec/interp/aux-vector path lets the R-P23.2 ld.so.1
-   engine host the dynamic hello.
-2. **Full HAT**: relocate kernel text/data into the high VA, drop the identity
-   map, add 4 KiB leaf tables + `hat_memload`/`hat_unload` + proper R^X kernel
-   permissions; grow the boot heap into vmem/`kmem_cache` and the flat `page_t`
-   into the page hash + freelists.
-3. **SMP secondaries** via SBI HSM (`hart_start`) + the real dispatcher
-   (`thread_create`/`setrun`/disp queues) replacing the two-context hand swtch;
-   the callout wheel driven by the clock tick.
+### Next: R-P26
+1. **fork(2)/exec(2)/wait(2)** -- a real process table + `lwp`/`proc` structs,
+   copy the parent AS (or COW), a general `exec` that opens the ELF from a
+   filesystem (vs the embedded `.incbin`) and hosts the R-P23.2 `ld.so.1`
+   engine for the DYNAMIC hello (interp + aux vector already scaffolded here).
+2. **More syscalls + errno ABI** -- `open/read/close/brk/mmap`, the SunOS
+   error-return convention (the R-P22 libc returns `a0` verbatim today), the
+   full `<sys/syscall.h>` table driving `rv_syscall`, and per-lwp trap state.
+3. **Full HAT + real dispatcher** (carried from R-P24): relocate kernel
+   text/data into the high VA + drop the identity map + `hat_memload`/`hat_unload`
+   + R^X kernel permissions; vmem/`kmem_cache`; the page hash + freelists;
+   `thread_create`/`setrun`/disp queues; SMP secondaries via SBI HSM.
+
+---
+
+## R-P25 -- the kernel syscall/exec path so a userland PROCESS runs (U-mode entry + write/exit syscalls + a minimal static-ELF exec)
+
+Substrate: fred v3 (root@52.88.62.49), the R-P18/19 build-tree gcc
+(`build/gcc-sol-cfg3/gcc/xgcc -B<gcc>` = `riscv64-unknown-solaris2.11`) + the
+R-P17 `riscv64-unknown-elf` binutils + `qemu-system-riscv64 -machine virt` with
+OpenSBI v1.7. R-P25 extends the R-P24 native-toolchain booting kernel
+(`rp25/kernel/`, a superset of `rp24/kernel/`) with the syscall/exec path and
+runs the R-P22 static hello AS A PROCESS. Proof: `rp25/rp25-milestone-check.sh`
+(rebuild the userland hello + the kernel + reboot; the three R-P25 sub-tasks +
+the four R-P24 subsystems all green, re-runnable).
+
+Boot flow now: the R-P24 flow (`hat_boot_init` Sv39 ON -> banner -> kmem/page ->
+PLIC -> clock -> `dispatch_onramp` idle-loop round-trip) THEN
+`run_user`: `exec_user` (build a user AS + map the embedded static ELF + a user
+stack) -> `rv_ksetjmp` a kernel return point -> `rv_user_enter` (`sret` to
+U-mode) -> the process runs its OWN `write(2)` then `exit(2)`, the `exit`
+syscall `rv_klongjmp`s back into the kernel -> known halt.
+
+### R-P25.1 U-mode entry + trap-based syscalls -- DONE
+- **The kernel enters U-mode and services `ecall` syscalls from the userland
+  process.** `rp25/kernel/{mach_uentry.S, mach_trap.S, main.c}`:
+  - `rv_user_enter(struct uproc *)` (`mach_uentry.S`): install the user
+    address space (`csrw satp` + `sfence.vma`), set `sscratch` = the lwp kernel
+    trap stack top, program `sstatus` [clear `SPP` -> return to U, set `SPIE`
+    so interrupts are enabled in U, set `SUM` so the kernel syscall handler may
+    read/write the user buffer], set `sepc` = user `_start`, load the user
+    `sp`, and `sret`.
+  - **trap-from-U kernel-stack swap** (`_u_trap_entry`, `mach_uentry.S`, now the
+    `stvec` landing pad): `csrrw sp, sscratch, sp` atomically swaps the user
+    `sp` for the kernel trap-stack top when trapping from U (in the kernel
+    `sscratch`==0, so a kernel trap swaps back and keeps its own `sp`), then
+    falls into `rv_trap_dispatch`. The dispatcher stashes the swapped-out `sp`
+    in the frame `R_SP` slot, resets `sscratch`=0 while in the kernel, and on
+    the way out reloads the user `sp` + re-arms `sscratch` if returning to U
+    (`sstatus.SPP`==0), keeps `sscratch`=0 if returning to S.
+  - `rv_syscall(struct regs *)` (`main.c`): the illumos riscv64 ABI dispatcher
+    -- `a7`=syscall number, `a0..a5`=args, result in `a0`. `SYS_write`(4) routes
+    `buf[0..n)` to the SBI console and returns `n`; `SYS_exit`(1) records the
+    status, restores the kernel `satp`, and `rv_klongjmp`s back to `run_user`.
+  - `rv_ksetjmp`/`rv_klongjmp` (`mach_uentry.S`): a minimal `label_t` so the
+    kernel enters U-mode and gets control back on `exit(2)` (the process does
+    not "return").
+- **Boot proof** (`rp25/kernel/qemu-boot.log`):
+  ```
+  [R-P25] sret -> U-mode; the process now runs and makes its OWN syscalls:
+  ----- userland process output -----
+  hello from riscv64-solaris userland process
+  ----- end userland process output -----
+  [R-P25] the userland process called exit(0); wrote 44 bytes via its own write(2). Kernel continues.
+  ```
+- **CRIB**: the `sscratch`-holds-kernel-stack-in-U / `csrrw` swap-on-trap /
+  `sscratch`==0-in-kernel idiom is the RISC-V privileged-spec trap convention
+  (xv6-riscv `usertrap`/`uservec`/`kernelvec`, BSD riscv `cpu_trap`); the
+  `sret` to U with `SPP=0`+`SPIE`+`SUM`+`sepc`+user `sp` is the privileged spec
+  `sret` semantics + the illumos `lwp_rtt`/exec user-return; the `a7`=nr /
+  `a0..a5`=args / return-in-`a0` dispatch + `SYS_write=4`/`SYS_exit=1` are the
+  illumos syscall trap (`os/syscall.c`) + the native `<sys/syscall.h>` (the
+  same ABI the R-P22 `libc_syscall.s` emits); `rv_ksetjmp`/`rv_klongjmp` are the
+  illumos `on_fault`/`label_t` idiom + the RISC-V LP64 callee-saved set.
+
+### R-P25.2 the R-P22 static hello RUNS as a userland PROCESS -- DONE
+- **The static hello runs in U-mode and makes its own syscalls -- the first
+  riscv64-solaris userland process.** `rp25/user/{hello.c, build-user.sh}` +
+  `rp25/kernel/{user_elf.S, main.c run_user}`:
+  - `rp25/user/hello.c` is the R-P22.2b static hello given the R-P25 message,
+    linked static with the R-P20 crt (`crt1/crti/crtn`) + the R-P22 minimal
+    libc (`libc_syscall.o`: `write(2)`/`exit(2)` via `ecall`) into an EM_RISCV
+    `ET_EXEC` (`hello_user`, entry `0x10160`, two PT_LOAD segments).
+  - `user_elf.S` embeds that ELF in the kernel `.rodata` via `.incbin`
+    (`user_elf_start`/`user_elf_end`) -- no filesystem needed to get the process
+    bytes (the anti-wedge substrate).
+  - `run_user()` (`main.c`) execs it into a fresh user AS, `rv_ksetjmp`s a
+    kernel return, `rv_user_enter`s to U-mode; the process's `_start` reads
+    `argc/argv/envp` off the initial stack, calls `main`, `write(1, msg, len)`
+    [`ecall` -> kernel `rv_syscall` -> SBI console], returns, and `_start`
+    calls `exit(0)` [`ecall` -> kernel -> `rv_klongjmp` back].
+- **Boot proof**: the process's OWN `write(2)` output
+  `hello from riscv64-solaris userland process` appears between the
+  `----- userland process output -----` markers, then `exit(0)` and the kernel
+  continues (see R-P25.1 log). The output is produced by the userland process's
+  own `write(2)`, not the kernel.
+- **CRIB**: embedding an init/user payload in the kernel image via `.incbin`
+  (vs a root filesystem) is the classic linked-in-init bring-up idiom (Linux
+  initramfs-in-kernel); the static hello + its `write/exit`-via-`ecall` libc is
+  the R-P22.2b hello_static.
+
+### R-P25.3 toward a real exec (map the static ELF PT_LOAD segments) -- DONE (reduced)
+- **A minimal `exec` maps a static ELF into a fresh user AS + builds the aux
+  vector.** `rp25/kernel/{exec_elf.c, hat_user.c, proc_riscv.h, startup.c}`:
+  - `hat_user_new()` (`hat_user.c`) allocates a fresh Sv39 user root and copies
+    the kernel high half (indices 1..511: the identity kernel-text gigapage for
+    VA >=1 GiB + the direct-map) so a trap taken from U keeps the kernel mapped;
+    index 0 (VA 0..1 GiB, where the static ELF links at `0x10000`) is left
+    private for the user leaf subtree.
+  - `hat_user_map(root, va, pa, perms)` walks/creates the level-1 + level-0
+    tables and installs a 4 KiB leaf (`PTE_U` | R/W/X from the phdr flags |
+    A|D). All page tables + user frames come from `kmem_alloc_page()`
+    (`startup.c`) -- a PAGE-ALIGNED wrapper over the first-fit `kmem_alloc`
+    (page tables and satp roots MUST be 4 KiB aligned; the first-fit heap only
+    guarantees 16-byte alignment -- the alignment fix that made the user satp
+    switch stop faulting).
+  - `exec_user(struct uproc *)` (`exec_elf.c`) validates the ELF64 header
+    (magic, EM_RISCV, ET_EXEC), walks the PT_LOAD program headers, maps + copies
+    each segment (zeroing the `p_memsz > p_filesz` bss tail), maps a 16 KiB
+    user stack just below `0x40000000`, builds the psABI initial stack
+    (`argc`=1, `argv[0]`="hello", NULL, envp NULL, auxv `AT_PAGESZ`/`AT_ENTRY`/
+    `AT_NULL`), allocates the lwp kernel trap stack, and returns `u_satp`/
+    `u_entry`/`u_sp`/`u_kstack_top`.
+- **Boot proof**:
+  ```
+  [R-P25] exec: loading the embedded static hello into a fresh user address space
+    user entry VA     : 0x0000000000010160
+    user sp (argv)    : 0x000000003fffffa0
+    user satp         : 0x8000000000080233
+  ```
+- **Scope (honest, per the anti-wedge directive)**: REDUCED exec -- one static
+  ELF embedded via `.incbin` (no filesystem/`open`), eager copy of the segments
+  into kmem frames (no demand paging / COW), a fixed-size user stack, a minimal
+  aux vector (`AT_PAGESZ`/`AT_ENTRY`/`AT_NULL`), a single lwp, `exit` unwinds via
+  a `label_t` longjmp (no process table / `wait`). It is toward the general
+  `gexec`/`elfexec`; R-P26 opens the ELF from a filesystem + hosts `ld.so.1` for
+  the dynamic hello and adds fork/exec/wait.
+- **CRIB**: the "walk the program headers, map+copy each PT_LOAD, zero the bss
+  tail, set the entry, build the aux vector" shape is the illumos exec
+  `mapelfexec`/`elfexec` + BSD `exec_elf64_imgact`; the initial-stack layout
+  (argc, argv[], NULL, envp[], NULL, auxv[], AT_NULL) is the RISC-V psABI
+  program-startup + the illumos `exec_args`; the "user AS = kernel high half
+  shared + private user leaf tables" split is the illumos `hat`/`as_t` /
+  i86pc kernel-vs-user hat separation; the 3-level Sv39 walk + PTE encoding are
+  the RISC-V privileged spec.
+
+### `/root/riscv-port/rp25/` contents
+`kernel/{locore.S, mach_trap.S, mach_clock.S, mach_mmu.S, mach_swtch.S,
+mach_uentry.S, user_elf.S, mmu_riscv.h, clock_riscv.h, plic.h, proc_riscv.h,
+assym.h, sbi.h, sbi.c, hat_boot.c, hat_user.c, exec_elf.c, clock_riscv.c,
+plic.c, startup.c, main.c, kernel.lds, build-kernel.sh, user_hello.bin, *.o,
+unix.elf, qemu-boot.log}` (the grown kernel); `user/{hello.c, build-user.sh,
+hello_user, *.o}` (the userland process); `rp25-milestone-check.sh` (all three
+sub-tasks + the R-P24 regression, rebuild+reboot, re-runnable green). Repo
+copies under `src/riscv/rp25/`.
 
 ---
 
