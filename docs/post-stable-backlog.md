@@ -797,3 +797,12 @@ history`; when it flips to APPROVED/quota>0, launch g4ad + run the C3-amdgpu-d h
 (Adding justification correspondence via the Support API needs a Business+ support plan; the quota case
 proceeds through AWS review regardless.) No manual maintainer action strictly required -- just AWS review
 time (GPU on a new account can take hours-days); local x86+GPU hw remains the faster alternative.
+
+## PS-PYTHON3-CEXT CRACKED (2026-08-15, wave38): the central breadth bottleneck is DONE
+python3 3.14.6 now builds with WORKING C EXTENSIONS on x86_64-solaris: import _queue (cpython-314.so),
+ctypes, ssl (OpenSSL 3.6.3), sqlite3 (3.53.3) all succeed -- the illumos shared-module symbol-export gap
+that blocked the whole python3Packages C-ext class is FIXED. Full cmake-4.3.4 also built (not just
+cmakeMinimal). This unblocks the large python3Packages C-ext class + the full-cmake graph. NEXT: wire
+gfortran through the gcc14 path (the fork's gfortran routes through gcc15 which isn't illumos-wired) so
+numpy/scipy build on the (already-built) gfortran+openblas -- numpy is the marquee follow-on. Register
+the python3Packages C-ext wave once numpy lands.
