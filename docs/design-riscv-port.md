@@ -3199,3 +3199,22 @@ Committed src/riscv/rp30/kernel/{sched_class.c,kernel.lds,locore.S,hat_boot.c,ha
 The riscv64 kernel is now a TRUE HIGH-HALF, W^X, SMP, preemptive, TS/RT-scheduled, leak-free kernel with
 dynamic linking. NEXT R-P31: secondaries on the W^X root (drop the boot identity trampoline), ld.so.1
 hardening (lazy PLT/.gnu.hash/versioning), real ramfs vnode read, lazy FP, kmem magazines, more syscalls.
+
+## R-P31 DONE (2026-08-15): no-identity-map SMP + hardened ld.so.1 + vfs read(2)
+All 3 boot-verified under qemu-virt -smp 2, R-P24-30 regressions green:
+- Secondaries on the W^X root (NO identity map anywhere): the AP enables paging via a TRANSIENT boot-root
+  trampoline (only for its satp-flip instant), jumps high, switches onto the primary's identity-FREE W^X
+  root (hat_wxroot_satp); after bring-up the boot-root identity window is SCRUBBED (hat_boot_drop_identity).
+  PROOF: secondary satp==W^X-root, read of _start via low identity VA FAULTS, work on 2 harts, no identity
+  map anywhere. Cribbed illumos mp_startup + Linux head.S secondary_start_sbi/relocate_enable_mmu.
+- ld.so.1 hardened: lazy PLT (PLT0->_rtld_bind trampoline->rtld_bind resolve-on-first-call; 2nd call
+  straight through patched GOT), .gnu.hash (bloom+chain, SysV fallback), GNU versioning (__multf3@GCC_3.0),
+  PT_GNU_RELRO mprotected RO after reloc. Cribbed RISC-V psABI PLT + binutils elfnn-riscv + glibc
+  dl-machine _dl_runtime_resolve + illumos ld.so.1 elf_rtbndr.
+- vfs read(2): real open->per-proc fd->ramfs vnode->fop_read; a proc opens+reads /etc/release, fstat/
+  lseek/getcwd, uname -> SunOS/solnix-riscv64/riscv64. + read/open/close/lseek/fstat/stat/getcwd/mprotect/
+  uname syscalls. Cribbed illumos os/fio.c + fs/vnode.c + os/uname.c.
+Committed src/riscv/rp31/{kernel/smp_wxroot.c+grown, ldso/rtld_riscv.c+rtld_start.S, user/fsread/hellolazy}.
+The riscv64 kernel: high-half, W^X, SMP (no identity), preemptive TS/RT, fork/exec/wait, leak-free,
+dynamic-linked (lazy PLT/versioning/relro), vfs read. NEXT R-P32: both harts in the real proc_t
+dispatcher; self-relocating ET_DYN ld.so.1; vfs write + real vnode layer; COW fork + demand paging.

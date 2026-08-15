@@ -1,5 +1,37 @@
 # RISC-V (riscv64) port — STATUS
 
+**Phase reached: R-P31** (the R-P30 true-high-half kernel completes SMP high-half
+by putting **SECONDARIES ON THE W^X ROOT** -- the boot identity trampoline is
+dropped entirely: R-P30 dropped the identity map on the PRIMARY but a secondary
+hart still ran the shared kernel mappings from the identity-bearing BOOT root;
+R-P31 brings the secondary up so it enables paging via a transient boot-root
+trampoline [needed only for the single instant of the initial satp flip from its
+physical PC], JUMPS to the high VA, then SWITCHES onto the primary's
+identity-FREE W^X kernel root [`hat_wxroot_satp`], so BOTH harts run purely
+high-VA with NO identity map on ANY running root; after both harts are up the
+boot-root identity window is SCRUBBED entirely [`hat_boot_drop_identity`] so no
+identity mapping survives anywhere.  It also HARDENS **ld.so.1** with **LAZY PLT
+binding** [the PLT0 stub -> the `_rtld_bind` trampoline -> resolve on first call:
+the first cross-object `__multf3` call fires the bind trampoline + patches the
+GOT slot, the second call jumps straight through], **.gnu.hash** lookup (bloom
+filter + gnu chain, SysV `.hash` fallback), **GNU symbol versioning** (`.gnu.version`
+/ verneed / verdef, matching `__multf3@GCC_3.0`), and **mprotect of the RELRO
+segment** read-only after relocation; and adds a **REAL ramfs read(2) path**
+[open -> per-proc fd -> ramfs vnode -> copy bytes] plus **more syscalls**
+(`read`/`open`/`close`/`lseek`/`fstat`/`stat`/`getcwd`/`mprotect`/`uname`), all
+boot-verified under `qemu-system-riscv64 -machine virt -smp 2`: the secondary's
+running satp equals the primary's W^X root satp (`0x800000000008036c`), a read of
+`_start` via the low identity VA `0x80200000` FAULTS on the secondary, the
+boot-root identity window is scrubbed, and SMP work still splits 4/4 across two
+hartids; a dynamic `hellolazy` (linked lazy + `--hash-style=both` + `-z relro`)
+resolves `__multf3@GCC_3.0` LAZILY on first call via the bind trampoline (the
+second call uses the patched GOT), ld.so.1 mprotects its relro read-only, and it
+exits 42; and a userland process opens + reads `/etc/release` from the ramfs
+(prints its contents), fstat/lseek/getcwd work, and `uname(2)` returns
+`SunOS`/`solnix-riscv64`.  Proof: `rp31/rp31-milestone-check.sh` (all three
+R-P31 sub-tasks + the R-P24 + R-P26 + R-P27 + R-P28 + R-P29 + R-P30 regressions
+green, rebuild+reboot, re-runnable).  Details in the R-P31 section below.
+
 **Phase reached: R-P30** (the R-P29 production-shaped kernel closes its honest
 gap and becomes a **TRUE HIGH-HALF KERNEL**: the kernel is now **LINKED +
 EXECUTES at high VA** (`KERNEL_DMAP_BASE + 0x80200000`) while LOADING at physical
@@ -788,6 +820,240 @@ qemu-boot.log}`; `ldso/{...unchanged}`; `user/{...unchanged}`; `hello/{...}`;
 3. **vfs read path** -- turn the open/read/fstat ENOSYS stubs into a real ramfs
    vnode read so a proc can open+read a file; lazy FP save (FS=Off until first
    FP use); kmem_cache magazines/per-CPU depot.
+4. **COW fork + demand paging** -- copy-on-write fork (vs the R-P26 eager AS
+   deep-copy) with a page-fault handler that lazily maps + copies; a proper
+   seg/anon layer over `hat_as_free`.
+
+---
+
+## R-P31 -- secondaries on the W^X root (drop the boot identity trampoline) + ld.so.1 hardening (lazy PLT + .gnu.hash + versioning + relro) + real ramfs read(2)
+
+Substrate: fred v3 (root@52.88.62.49), the R-P18/19 build-tree gcc
+(`build/gcc-sol-cfg3/gcc/xgcc -B<gcc>` = `riscv64-unknown-solaris2.11`) + the
+R-P17 `riscv64-unknown-elf` binutils + `qemu-system-riscv64 -machine virt -smp 2`
+with OpenSBI v1.7.  R-P31 extends the R-P30 true-high-half kernel
+(`rp31/kernel/`, a superset of `rp30/kernel/`) with three sub-tasks, each
+boot-verified under qemu.  Proof: `rp31/rp31-milestone-check.sh` (rebuild the
+userland + ld.so.1 + initramfs + kernel + reboot; the three R-P31 sub-tasks +
+the R-P24 + R-P26 + R-P27 + R-P28 + R-P29 + R-P30 regressions all green,
+re-runnable).
+
+### R-P31.1 secondaries on the W^X root (the headline) -- DONE
+- **A secondary hart runs on the primary's identity-FREE W^X kernel root -- no
+  identity map exists on ANY running root, on ANY hart, after boot.**
+  `rp31/kernel/{locore.S, hat.c, hat_boot.c, smp_wxroot.c, sched_class.c,
+  smp.c, disp.c}`:
+  - **The gap R-P30 left**: R-P30 dropped the low identity map on the PRIMARY
+    (the primary runs the W^X root, which has NO identity), but a secondary hart
+    started at its PHYSICAL entry (paging off) and installed the identity-bearing
+    BOOT root (`hat_boot_root_satp`) so its first post-satp fetch resolved; it
+    then ran the shared kernel mappings FROM that boot root -- so the boot
+    identity trampoline survived on the AP path.
+  - **hat.c `hat_wxroot_satp`**: returns the satp value of the W^X kernel root
+    (`MAKE_SATP(KVTOP(hat_kroot))`), for a secondary to switch onto once it runs
+    at high VA.  The W^X root maps the kernel image (high, per-segment W^X) + the
+    direct-map, but NO low identity.
+  - **locore.S AP high continuations** (`_secondary_high`, `sc_ap_high`,
+    `disp_ap_high`, and the new `wx_ap_entry`/`wx_ap_high`): the secondary starts
+    at its PHYSICAL entry, installs the BOOT root (`a1`) so the initial satp flip
+    survives, JUMPS to the high VA, then -- now that PC is high -- calls
+    `hat_wxroot_satp()` (a high-VA C call on the direct-map) and switches to the
+    W^X root (`csrw satp; sfence.vma`).  Because PC is already high and the W^X
+    root maps the kernel image + direct-map, the fetch after the satp write
+    resolves; from here the secondary runs with NO identity map, exactly like the
+    primary.  (hartid `a0` is preserved in `s0` across the C call.)
+  - **smp_wxroot.c `run_secondaries_wxroot` + `wx_secondary_main`**: the R-P31.1
+    driver starts the secondary at `wx_ap_entry` (boot root = transient flip
+    trampoline); the secondary switches to the W^X root and PROVES it -- its
+    running satp equals the W^X root satp AND a read of the first kernel word
+    through its LOW identity VA `0x80200000` FAULTS (the AP-only trap hook
+    `hat_ap_ident_expect` in main.c `rv_trap` records it + steps sepc).  Both
+    harts then drain a shared runq (SMP work still splits), and finally
+    `hat_boot_drop_identity` SCRUBS the boot root's low identity gigapages so no
+    identity map survives anywhere.  This phase runs LAST among the SMP phases
+    (after `run_tsrt_sched`, which now `sbi_hart_stop`s its AP so this phase can
+    restart it) because the scrub drops the transient trampoline the earlier
+    AP-restart phases need.
+- **Boot proof** (`rp31/kernel/qemu-boot.log`, `-smp 2`):
+  ```
+  [R-P31.1] secondaries on the W^X root: bring up a secondary hart + switch it onto the identity-FREE W^X kernel root
+    [smp] boot hart 0 runs on the W^X root satp=0x800000000008036c
+    [smp] W^X root satp=0x800000000008036c; starting secondary 1 at wx_ap_entry (boot root = transient flip trampoline)
+    [R-P31.1] SECONDARY hart online: hartid=1
+      running satp=0x800000000008036c == W^X root satp (identity-FREE root)
+      read of _start via LOW identity VA 0x80200000: FAULTED -- secondary runs purely high-VA (no identity)
+      [hart 1] ran work item 0 ... [hart 0] ran work item 7
+    [smp] work items run: hart0=4 hart1=4
+    [smp] boot-root identity window scrubbed (hat_boot_drop_identity) -- no identity map anywhere
+  [R-P31.1] SECONDARY-ON-W^X-ROOT PROVEN: the secondary runs the identity-FREE W^X root (low identity read faults), no identity map anywhere, SMP work on 2 harts.
+  ```
+- **Scope (honest)**: the secondary switches onto the SHARED W^X root and runs a
+  shared-runq work split (proving the AP-MMU-to-the-shared-kernel-hat + no-
+  identity SHAPE).  The full proc_t `rv_sched` reentered concurrently on both
+  harts (per-CPU curproc + a locked shared proc table across the USER dispatch
+  path) is still R-P32; the R-P31 secondary drains a lock-protected work runq,
+  not the user-proc dispatcher.  The initial satp flip still needs a transient
+  identity (the physical PC must be mapped for the one instant between `csrw
+  satp` and the jump-to-high) -- that is the boot-root trampoline, used only for
+  that instant and then scrubbed; NO running root carries identity.
+- **CRIB**: an AP enabling its MMU to the SHARED kernel hat (not a private
+  identity root) is illumos `uts/i86pc/os/mp_startup.c` mp_startup (the secondary
+  CPU switches to the kernel hat's page table before entering the dispatcher);
+  switching from a transient trampoline root to the final identity-free root
+  after the high jump is Linux `arch/riscv/kernel/head.S` secondary_start_sbi +
+  relocate_enable_mmu (trampoline_pg_dir -> swapper_pg_dir); dropping the
+  transient identity once every hart is at the final VA is the Linux setup_vm
+  trampoline abandonment + the i86pc hat_kern_setup boot-identity drop; the
+  shared runq + amoswap.w spinlock is the R-P28 smp.c model + the RISC-V A ext.
+
+### R-P31.2 ld.so.1 hardening -- DONE
+- **ld.so.1 gains lazy PLT binding, .gnu.hash, GNU symbol versioning, and
+  mprotect of the relro segment after relocation.**  `rp31/ldso/{rtld_riscv.c,
+  rtld_start.S}` + kernel `SYS_mprotect` (`proc.c hat_user_protect` /
+  `hat_user.c`):
+  - **Lazy PLT binding**: instead of eagerly resolving every PLT slot at startup,
+    `plt_lazy_setup` arms the standard riscv lazy-binding contract -- `.got.plt[0]`
+    <- the `_rtld_bind` trampoline (rtld_start.S), `.got.plt[1]` <- the app's
+    `struct lobj *` -- and leaves each `.got.plt[2+N]` at its as-linked PLT0
+    value.  The FIRST call to PLT entry N jumps into the PLT0 header, which loads
+    the trampoline from GOT[0], the id from GOT[1], computes the reloc arg
+    `(retaddr - PLT0 - 44) >> 1 == N*8` in `t1`, and jumps to `_rtld_bind`.  The
+    trampoline saves a0..a7 + fa0..fa7 (the real args) + ra, calls
+    `rtld_bind(id, N*8)` which resolves symbol N cross-object, patches
+    `.got.plt[2+N]`, and returns the target address; the trampoline restores the
+    args and tail-jumps to it.  The SECOND call finds the patched slot and jumps
+    straight through -- so the bind fires exactly once, on first use.
+  - **.gnu.hash**: `gnu_lookup` implements the gABI `.gnu.hash` lookup (bloom
+    filter reject + the bucket/chain walk with the `hash|1` chain-end marker),
+    with the SysV `.hash` bucket/chain as the fallback when `.gnu.hash` is absent.
+  - **Symbol versioning**: `ver_string` reads `.gnu.version` (DT_VERSYM) for the
+    dynsym index + walks `.gnu.version_r` (verneed) / `.gnu.version_d` (verdef)
+    to the version STRING; `def_ver_ok` accepts a definition whose version
+    matches the reference's (so `__multf3@GCC_3.0` binds to the like-versioned
+    def).  The reference version is looked up per-reloc and passed through
+    `sym_resolve`/`sym_lookup`.
+  - **RELRO mprotect**: after relocation ld.so.1 finds the `PT_GNU_RELRO` segment
+    and `SYS_mprotect`s it `PROT_READ` (read-only) -- the kernel `proc_mprotect`
+    -> `hat_user_protect` clears `PTE_W` over the range + flushes the TLB.  So the
+    now-relocated GOT/`.data.rel.ro` cannot be overwritten after startup.
+  - The app's `DT_RELA` and `DT_JMPREL` coincide on these objects, so
+    `apply_rela(app, ..., skip_jumpslot=1)` applies only the app's RELATIVE
+    relocs and LEAVES the JUMP_SLOTs for lazy binding (a needed fix, else the
+    JUMP_SLOTs were eagerly resolved via the coincident RELA table and the lazy
+    path never fired).  NEEDED objects are still eagerly self-relocated.
+- **Boot proof**: a dynamic `hellolazy` (linked lazy + `--hash-style=both` +
+  `-z relro`) that calls `__multf3` in libgcc_s.so.1 twice:
+  ```
+  [ld.so.1] LAZY PLT armed (resolve-on-first-call); slots: 2
+  [ld.so.1] symbol lookup: .gnu.hash (with SysV .hash fallback)
+  [ld.so.1] symbol versioning: .gnu.version tables active (GNU verneed/verdef)
+  [ld.so.1] RELRO: mprotect 0x0000000000011000 read-only (1 page(s))
+    [hellolazy] FIRST cross-object call to __multf3 (fires the lazy bind)...
+  [ld.so.1]   LAZY bind on first call: __multf3@GCC_3.0 -> 0x0000000038009b36
+  [ld.so.1]   LAZY bind on first call: __fixtfsi@GCC_3.0 -> 0x000000003800b2cc
+    [hellolazy] SECOND cross-object call to __multf3 (uses the patched GOT, no resolver)...
+    [hellolazy] both cross-object calls correct (42 and 6) -- lazy binding works
+  [R-P31.2] hellolazy exit status=42
+  [R-P31.2] ld.so.1 hardening PROVEN: lazy PLT bound on first call (relro read-only, .gnu.hash + versioned lookup); exit 42.
+  ```
+  The first call fires the trampoline (the bind line) + patches the GOT; the
+  second call prints no bind line (straight through the patched slot).
+- **Scope (honest)**: lazy binding + .gnu.hash + versioning + relro are wired
+  for the app's PLT against a flat loaded-object scope (app + NEEDED in order);
+  the NEEDED objects are still bound eagerly at map time (only the APP's PLT is
+  lazy).  ld.so.1 is still a static ET_EXEC entered by the kernel exec path (not
+  yet a self-relocating ET_DYN), and NEEDED objects are still mapped by the
+  kernel `SYS_mapso` (ld.so.1 does not yet mmap the file itself) -- R-P32.
+- **CRIB**: the `.got.plt[0]=resolver`/`[1]=link-map` reserved-slot contract +
+  the PLT0 header computing the reloc arg + the resolver trampoline saving arg
+  regs + calling the C binder + jumping to the resolved address is the RISC-V
+  psABI PLT layout + binutils `bfd/elfnn-riscv.c` riscv_make_plt0_entry + glibc
+  `sysdeps/riscv/dl-machine.h` `_dl_runtime_resolve` / elf_machine_runtime_setup,
+  the illumos analogue being ld.so.1 `elf_rtbndr`/`elf_plt_init`
+  (`usr/src/cmd/sgs/rtld/...`); the `.gnu.hash` bloom+bucket+chain algorithm + the
+  `.gnu.version`/verneed/verdef version match is the gABI + glibc
+  `dl-lookup.c`/`_dl_check_map_versions`; mprotecting PT_GNU_RELRO read-only after
+  relocation is the gABI relro contract + illumos ld.so.1 setup.c `_relro`.
+
+### R-P31.3 real ramfs read(2) path + more syscalls -- DONE
+- **A userland process opens + reads a ramfs file's contents through a real
+  read(2) path, plus lseek/fstat/stat/getcwd/uname.**  `rp31/kernel/{proc.c,
+  main.c, ramfs.c}` + `rp31/user/fsread.c`:
+  - **proc.c** adds a per-proc open-file table (`proc_t.p_fd[NOFILE]`, each entry
+    a reduced vnode: the ramfs byte range from `ramfs_lookup` + a read offset)
+    and the file-op bodies: `proc_open` (resolve a path in the ramfs to an fd
+    >=3), `proc_read` (copy from the fd's current offset into the user buffer,
+    advancing the offset; EOF returns 0), `proc_lseek` (SEEK_SET/CUR/END),
+    `proc_fstat`/`proc_stat` (report the size), `proc_close_file`,
+    `proc_mprotect` (R-P31.2's relro backing).
+  - **main.c `rv_syscall`** wires `SYS_read`/`SYS_open`/`SYS_close`/`SYS_lseek`/
+    `SYS_fstat`/`SYS_stat`/`SYS_mprotect`/`SYS_getcwd`/`SYS_uname` (the R-P29
+    ENOSYS stubs become real); `uname(2)` fills a reduced utsname with
+    `SunOS`/`solnix-riscv64`/`5.11`/`solnix`/`riscv64`.
+  - **fsread.c** (a new userland program, exec'd via `run_fsread`) opens
+    `/etc/release`, stats it, reads its bytes and prints them, fstats the fd,
+    lseeks back to 0 + re-reads the first byte, getcwd, and uname.
+  - **build-kernel.sh** seeds `/etc/release` + `/bin/fsread` into the initramfs.
+- **Boot proof**:
+  ```
+  [R-P31.3] ramfs read(2) path: a process opens + reads a ramfs file + uname(2)
+    [fsread] open + read a ramfs file:
+      stat(/etc/release) size=44 bytes
+      opened /etc/release as fd=3
+      contents: solnix riscv64 (R-P31)
+  SunOS solnix-riscv64
+      fstat fd size matches: yes
+      lseek(0)+read first byte='s'
+      getcwd()='/'
+      uname sysname='SunOS' nodename='solnix-riscv64' machine='riscv64'
+  [R-P31.3] ramfs read PROVEN: a process opened + read a ramfs file's contents; uname(2) returned SunOS/solnix-riscv64.
+  ```
+- **Scope (honest)**: the reduced vnode is the ramfs byte range + an offset (no
+  page cache, no inode, no directory hierarchy, no write path); `getcwd` is a
+  fixed `/` (no cwd tracking); the reduced stat/utsname buffers model only the
+  fields the proof reads (st_size; the 5 fixed-width utsname strings).
+- **CRIB**: the per-proc open-file table (fd -> file -> vnode + offset) is
+  illumos `os/fio.c` (falloc/getf/ufalloc) + `fs/vnode.c`; open resolving a path
+  then read doing uiomove out of the backing bytes advancing f_offset is
+  `vn_open` -> VOP_LOOKUP + VOP_READ (`fop_read`) reduced to a memcpy over the
+  ramfs range; lseek/fstat are `os/lseek.c` / VOP_GETATTR reduced to the length;
+  `uname(2)` returning the utsname is illumos `os/uname.c` / `utsname` reduced to
+  the SunOS identity strings.
+
+### `/root/riscv-port/rp31/` contents
+`kernel/{locore.S [+ wx_ap_entry/wx_ap_high + the W^X-root switch in every AP
+high continuation], hat.c [+ hat_wxroot_satp], hat_boot.c [+ hat_boot_drop_identity],
+smp_wxroot.c [NEW: run_secondaries_wxroot + wx_secondary_main], sched_class.c
+[sc_secondary_main STOPs so R-P31.1 can restart the AP], smp.c/disp.c, hat_user.c
+[+ hat_user_protect], proc.c [+ the fd table + proc_open/read/lseek/fstat/stat/
+close/mprotect], main.c [+ the new syscalls + run_fsread + run_lazybind +
+run_secondaries_wxroot + the AP-only identity-drop trap hook], ramfs.c, user_elf.S
+[+ fsread/dynexec3 .incbin], build-kernel.sh [+ /etc/release + hellolazy in the
+ramfs + the R-P31 assertions], kernel.lds, mmu_riscv.h, exec_elf.c, startup.c,
+kmem_cache.c, plic.c, clock_riscv.c, mach_*.S, sbi.c/.h, *.o, *.bin, unix.elf,
+qemu-boot.log}`; `ldso/{rtld_riscv.c [+ .gnu.hash + versioning + lazy setup +
+rtld_bind + relro], rtld_start.S [+ _rtld_bind trampoline], build-ldso.sh,
+ld.so.1.lds, ld.so.1}`; `user/{fsread.c [NEW], hellolazy.c [NEW], dynexec3.c
+[NEW], build-user.sh [+ fsread/hellolazy/dynexec3], + the R-P30 programs}`;
+`rp31-milestone-check.sh` (all three R-P31 sub-tasks + the R-P24 + R-P26 + R-P27
++ R-P28 + R-P29 + R-P30 regressions, rebuild+reboot, re-runnable green).
+Repo copies under `src/riscv/rp31/{kernel/*, ldso/*, user/*,
+rp31-milestone-check.sh}`.
+
+### Next: R-P32
+1. **Both harts in the real proc_t dispatcher** -- have BOTH harts reenter the
+   real `rv_sched` (proc.c) concurrently on the W^X root: per-CPU `curproc` + a
+   locked shared proc table + per-CPU idle contexts, so real user procs dispatch
+   across two harts (vs the R-P31 shared-runq work split), completing true SMP
+   user scheduling on the identity-free high-half kernel.
+2. **Self-relocating ET_DYN ld.so.1 + ld.so.1 mmaps its own objects** -- rebuild
+   ld.so.1 as an ET_DYN that self-relocates from AT_BASE (vs the static ET_EXEC),
+   and have ld.so.1 mmap the NEEDED files itself (open+mmap the ramfs file) rather
+   than the kernel `SYS_mapso`; recursive DT_NEEDED-of-a-NEEDED + a real
+   breadth-first scope.
+3. **vfs write + a real vnode layer** -- grow the ramfs read(2) path into a real
+   vnode/VOP layer with a write(2) path (ramfs pages writable), directories +
+   lookuppn, and a small dev/proc; cwd tracking for a real getcwd/chdir.
 4. **COW fork + demand paging** -- copy-on-write fork (vs the R-P26 eager AS
    deep-copy) with a page-fault handler that lazily maps + copies; a proper
    seg/anon layer over `hat_as_free`.
