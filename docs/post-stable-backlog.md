@@ -822,3 +822,16 @@ GNU-ld Solaris-libgcc-mapfile wall). TWO strategic blockers gating the bigger aa
    xxHash/brotli. + openssl-cross needs a Perl Configure target (aarch64-unknown-solaris2.11) -> gates
    curl/git/libssh2/libarchive/libpsl. C++ (nettle/gmp-cxx) hits the mapfile wall even for executables
    (g++/unwind not viable through GNU ld -> needs the seed gcc rebuilt w/ Solaris ld, the deep fix).
+
+## PS-AARCH64-WAVE3 (2026-08-15): gettext -L crack -> +9 crypto/core aarch64 pkgs
+Cracked the native gettext -L blocker (headline) + pkg-config-cross (same crack): the cross entry's
+buildPackages illumos-cc-10.5.0 cc-wrapper predates the x86 H6 fix (no -L${seedSyslibs}/lib/amd64);
+gettext-1.0's runtime sub-configure links -lmd/-lmp/-luutil/... with no -L -> "cannot create
+executables". FIX (gettextSyslibsOverlay, entry-aarch64-wave3.nix): inject -L${extraSyslibs}/lib/amd64
+(the seed-sourced FOD w/ bare .so links) into native gettext + pkg-config NIX_LDFLAGS + pin NM to the
+GNU-format FOD nm. Also the -fPIE -pie crack (defeats the aarch64 GNU-ld copy-reloc-against-protected
+wall on executables -> unblocked gawk). +9 EM_AARCH64 pkgs published (49 paths, 0 failed): oniguruma,
+sqlite, libgpg-error, libtasn1, libsodium, libedit, libgcrypt, gawk, m4 (+ native gettext/pkg-config
+build tools). aarch64 now ~42. Remaining: nettle (gmp-cxx C++ mapfile wall), gettext-target/libassuan
+(bash->readline SHARED-lib mapfile wall) -- both need the seed gcc rebuilt w/ Solaris ld (the deep C++/
+shared-lib fix), OR static-only variants.
