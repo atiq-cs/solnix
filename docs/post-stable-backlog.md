@@ -806,3 +806,19 @@ cmakeMinimal). This unblocks the large python3Packages C-ext class + the full-cm
 gfortran through the gcc14 path (the fork's gfortran routes through gcc15 which isn't illumos-wired) so
 numpy/scipy build on the (already-built) gfortran+openblas -- numpy is the marquee follow-on. Register
 the python3Packages C-ext wave once numpy lands.
+
+## PS-AARCH64-WAVE2 (2026-08-15): +6 pkgs, 2 cross fixes, 2 strategic blockers
+aarch64 cross re-established on fred; +6 EM_AARCH64 host-free pkgs (libidn2/pcre/popt/lzo/libatomic_ops/
+libpipeline, published). TWO cross-wide fixes (baked into entry-aarch64-wave.nix staticFix, applied
+per-pkg to avoid rehashing the done-35): (1) unset GCC_EXEC_PREFIX (the x86 native cc setup-hook poisons
+the cross gcc's cc1 search -> posix_spawnp fail); (2) --disable-shared --enable-static (the documented
+GNU-ld Solaris-libgcc-mapfile wall). TWO strategic blockers gating the bigger aarch64 wave:
+1. NATIVE gettext-1.0 (x86 build platform) configure conftest links -lmd/-lmp/-luutil/... with no -L ->
+   "C compiler cannot create executables" (a native-build/solaris-overlay plumbing bug). Gates every
+   autoreconf/gettext consumer: oniguruma/sqlite/libgpg-error/libgcrypt/libassuan/libedit/libsodium/
+   libtasn1/nettle. FIX: add the extra-syslibs -L to the native gettext-1.0 build (same class as the
+   x86 extra-syslibs fix).
+2. cross pkg-config-0.29.2 internal-glib sub-configure fails -> gates nghttp2/json-c/snappy/c-ares/
+   xxHash/brotli. + openssl-cross needs a Perl Configure target (aarch64-unknown-solaris2.11) -> gates
+   curl/git/libssh2/libarchive/libpsl. C++ (nettle/gmp-cxx) hits the mapfile wall even for executables
+   (g++/unwind not viable through GNU ld -> needs the seed gcc rebuilt w/ Solaris ld, the deep fix).
