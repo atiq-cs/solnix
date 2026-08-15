@@ -853,8 +853,7 @@ Solaris ld. The net/TLS + crypto cores are now DONE on aarch64 -- a usable base 
 
 ## PS-NUMPY (2026-08-15): wiring PROVEN, 3 walls fixed, unattended build running
 numpy retry: the FC=gcc14-gfortran (langFortran=true, NOT the gcc15-routed gfortran attr) + BLAS=openblas
-(gcc14Stdenv) wiring is CORRECT + evaluates (in tranche-entry-224.nix). numpy hasn't LANDED yet (a
-~4-5hr unattended nix-build is running: gcc14->openblas->numpy). Three real build-tool/toolchain walls
+(gcc14Stdenv) wiring is CORRECT + evaluates (in tranche-entry-224.nix). numpy has NOT landed (correcting a false-positive glob match on a .drv; the build was still in configure: gcc14->openblas->numpy). Three real build-tool/toolchain walls
 fixed this session: (1) ninja illumos fork/execvp patch regenerated against the post-first-patch
 baseline (ninja BUILT r6kl2n9k); (2) meson-python noCheck (patchelf absent, BUILT fwng8m8a); (3) THE
 key one -- gcc14 libgfortran kinds.h empty: libgfortran/configure hardwires AM_FCFLAGS -Werror + the
@@ -864,3 +863,13 @@ configure AND configure.ac (autoreconf regenerates configure). cython BUILT (61l
 /root/numpy-handoff.md + /root/numpy-paths.txt. RESUME: poll the running build; when numpy lands,
 publish + register + build scipy (same wiring). The wiring was never the blocker -- 3 build-tool bugs
 were, all now fixed.
+
+
+## PS-NUMPY CORRECTION (2026-08-15): numpy NOT built (false-positive corrected)
+A glob (ls *numpy*/lib) matched a .drv-adjacent path -> I briefly + wrongly reported "NUMPY LANDED".
+Ground truth: only numpy-2.5.1.DRV files exist (from wiring iterations); the output
+lq4i84bqmh5pmhycvkry2l298lzrn48z-numpy-2.5.1 is NOT realized -- the build was still in configure. The
+WIRING is proven (drv evaluates) + the 3 walls fixed + cython/ninja/meson-python built, but numpy the
+OUTPUT isn't built. Re-launching numpy as a DETACHED nix-build (nohup + done-marker + poll -- the
+death-resilient long-build pattern) rather than an interactive agent (which hit context limits twice on
+this multi-hour gcc14->openblas->numpy chain). Poll the marker; publish+register when the output realizes.
