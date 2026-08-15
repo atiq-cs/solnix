@@ -1,5 +1,25 @@
 # RISC-V (riscv64) port — STATUS
 
+**Phase reached: R-P28** (the R-P27 preemptive-multiprocess kernel GROWN with
+**REAL CROSS-OBJECT DYNAMIC LINKING** [ld.so.1 maps + binds `DT_NEEDED`], an
+**illumos-style PRIORITY DISPATCH** [priority disp queues + `thread_create`],
+and **SMP secondaries via the SBI HSM** [a second hart drains a shared runq],
+all boot-verified under `qemu-system-riscv64 -machine virt -smp 2`: the R-P27
+ld.so.1 (which only *reported* `DT_NEEDED`) now OPENS libgcc_s.so.1 from the
+ramfs via a `SYS_mapso` syscall, MAPS it into the process AS at a chosen base,
+processes ITS dynamic section, and BINDS the application's cross-object
+`R_RISCV_JUMP_SLOT` references (`__multf3`/`__fixtfsi`) to the resolved libgcc_s
+addresses -- a DYNAMIC hello CALLS `__multf3` in libgcc_s across the object
+boundary and exits `42`; the R-P27 round-robin runq becomes a priority
+dispatcher (`rv_sched` picks the highest-priority band, round-robin within it)
+and `kthread_create` builds kernel threads scheduled in priority order
+(HIGH->MID->LOW); and the boot hart brings up a secondary hart with the SBI HSM
+`hart_start` ecall -> the secondary sets up its trap vector + the shared kernel
+AS + enters the scheduler, and BOTH harts drain one lock-protected work runq
+(two distinct hartids execute). Proof: `rp28/rp28-milestone-check.sh` (all three
+R-P28 sub-tasks + the R-P24 + R-P26 + R-P27 regressions green, re-runnable).
+Details in the R-P28 section below.
+
 **Phase reached: R-P27** (the R-P26 MULTIPROCESS kernel GROWN with **timer-tick
 PREEMPTION**, **fs-backed exec over a minimal ramfs**, and **ld.so.1 hosting the
 first DYNAMICALLY-LINKED riscv64-solaris process**, all boot-verified under
@@ -271,6 +291,219 @@ four sub-tasks, rebuild+reboot, re-runnable green). Repo copies under
 
 ---
 
+## R-P28 -- real cross-object dynamic linking (ld.so.1 maps+binds DT_NEEDED) + priority dispatch queues + SMP secondaries via SBI HSM
+
+Substrate: fred v3 (root@52.88.62.49), the R-P18/19 build-tree gcc
+(`build/gcc-sol-cfg3/gcc/xgcc -B<gcc>` = `riscv64-unknown-solaris2.11`) + the
+R-P17 `riscv64-unknown-elf` binutils (incl. the shared linker `ld-shared`) +
+`qemu-system-riscv64 -machine virt -smp 2` with OpenSBI v1.7. R-P28 extends the
+R-P27 preemptive-multiprocess kernel (`rp28/kernel/`, a superset of
+`rp27/kernel/`) with three subsystems, each boot-verified under qemu -- real
+cross-object dynamic linking, priority dispatch queues + `thread_create`, and
+SMP secondaries via the SBI HSM extension. Proof:
+`rp28/rp28-milestone-check.sh` (rebuild the userland + ld.so.1 + the initramfs +
+the kernel + reboot; the three R-P28 sub-tasks + the R-P24 + R-P26 + R-P27
+regressions all green, re-runnable).
+
+Boot flow now: the R-P27 flow (R-P24 subsystems -> fork/exec/wait session ->
+preemption -> fs-backed exec -> ld.so.1 hosts the R-P27 DYNAMIC hello) THEN
+`run_xobject` (a DYNAMIC hello that CALLS a libgcc_s routine cross-object) ->
+`run_priodisp` (three kernel threads at different priorities) -> `smp_start`
+(bring up a secondary hart, both harts drain a shared runq) -> known halt.
+
+### R-P28.1 ld.so.1 maps + binds DT_NEEDED -- real cross-object dynamic linking (the headline) -- DONE
+- **ld.so.1 maps the app's `DT_NEEDED` object (libgcc_s.so.1) into the address
+  space, processes its dynamic section, and BINDS the app's cross-object
+  `R_RISCV_JUMP_SLOT` references to the symbols as defined in the loaded
+  library; a DYNAMIC hello CALLS a libgcc_s routine across the object boundary
+  and it works.** `rp28/ldso/rtld_riscv.c` + `rp28/kernel/exec_elf.c`
+  (`exec_map_so`) + `rp28/user/hellodyn.c`:
+  - The new **cross-object hello** (`hellodyn.c`) performs a 128-bit binary-
+    float multiply (`long double`, TFmode) that GCC lowers to a call to
+    `__multf3` (+ `__fixtfsi` for the cast) -- routines that live in
+    libgcc_s.so.1, NOT in the executable (RV64GC has no hardware `_Float128`,
+    so these are ALWAYS genuine libcalls, unlike a 64-bit divide or 128-bit
+    integer multiply which RV64GC inlines). Linked with the shared linker
+    (`ld-shared`) against `-lgcc_s` (no static libgcc.a), it is an ET_EXEC with
+    `PT_INTERP=/usr/lib/ld.so.1`, `NEEDED libgcc_s.so.1`, and two
+    `R_RISCV_JUMP_SLOT` relocs against UNDEF `.dynsym` entries (`__multf3`,
+    `__fixtfsi`) whose GOT/PLT slots ld.so.1 must fill.
+  - **ld.so.1** (`rtld_riscv.c`) walks the auxv, parses the app's
+    `PT_DYNAMIC` (`STRTAB`/`SYMTAB`/`HASH`/`RELA`/`JMPREL`/`PLTRELSZ` +
+    `DT_NEEDED`), and for each `DT_NEEDED` calls the kernel's new **`SYS_mapso`**
+    syscall (a7=222) to map the object at a chosen base (`0x38000000`, in the
+    same Sv39 L2 index-0 subtree as the app + stack), then parses THAT object's
+    dynamic section (its own symtab/strtab/`.hash` + its `RELATIVE`/`JMPREL`
+    self-relocs) and records it in a loaded-object list. It then applies the
+    app's own `RELATIVE` relocs and **binds the app's PLT `JUMP_SLOT` relocs
+    cross-object**: for each, `elf_hash(name)` -> walk `bucket[h%nbucket]` ->
+    `chain[]` in each loaded object's `.hash` to find the DEFINED symbol, and
+    write `base_of_defining_object + st_value` into the app's GOT slot at
+    `r_offset` (EAGER binding; the PLT stub then jumps straight through the GOT
+    slot to the real function).
+  - **The kernel** (`exec_map_so`, `SYS_mapso`) resolves the object by name in
+    the ramfs (bare soname searched along a reduced `/lib`:`/usr/lib` library
+    path), checks it is an EM_RISCV ET_DYN, and maps its `PT_LOAD` segments
+    biased by `base` (each at `base + p_vaddr`) into the calling proc's user
+    root, writable so the linker can patch the GOT. `SYS_mapso` reaches the
+    proc's `p_uroot` via `proc_curroot()`.
+  - **User FP enabled**: the soft-float TF routines read the `frm` FP CSR, so
+    the exec path now sets `sstatus.FS = Initial` in the user trap frame
+    (`proc.c`) -- without it `__multf3` traps as an illegal instruction.
+- **Boot proof** (`rp28/kernel/qemu-boot.log`):
+  ```
+  [ld.so.1] riscv64 runtime linker (R-P28: cross-object bind)
+  [ld.so.1] DT_NEEDED: libgcc_s.so.1 -> mapping at 0x0000000038000000
+  [ld.so.1]   bound __multf3 -> 0x0000000038009b36
+  [ld.so.1]   bound __fixtfsi -> 0x000000003800b2cc
+  [ld.so.1] cross-object PLT binds: 2
+    [hellodyn] calling __multf3 in libgcc_s.so.1 across the object boundary...
+    [hellodyn] __multf3 returned 42 -- cross-object bind OK
+  [R-P28.1] cross-object hello _start ran + called a libgcc_s routine via ld.so.1; exit status=42
+  [R-P28.1] cross-object bind PROVEN: __multf3 in libgcc_s.so.1 called + returned 42 across objects.
+  ```
+  The bound address `0x38009b36` == map base `0x38000000` + libgcc_s's
+  `__multf3` `st_value 0x9b36` (matches its `.dynsym`); the hello's exit `42`
+  (6.0L * 7.0L, cast to int) is positive proof the cross-object call executed
+  and returned the correct value -- vs R-P27 where ld.so.1 only *reported*
+  `DT_NEEDED` and bound nothing (its RELA table was empty).
+- **Scope (honest)**: EAGER PLT binding (no lazy stub / no PLT0 resolver);
+  SysV `.hash` lookup (no `.gnu.hash`); symbol versioning IGNORED (the plain
+  `.dynstr` name is matched regardless of its `GCC_3.0` version -- correct here
+  with a single definition); flat scope (app first, then each `DT_NEEDED` in
+  order, no recursive NEEDED-of-a-NEEDED); the object is mapped by a kernel
+  syscall (the real ld.so.1 `mmap`s the file itself); ld.so.1 is still a static
+  ET_EXEC at a fixed base (not a self-relocating ET_DYN); the FP register file
+  is not saved across context switches (the one FP proc runs alone). R-P29:
+  lazy PLT, `.gnu.hash`, versioning, self-relocating ld.so.1, FP context switch.
+- **CRIB**: mapping the `DT_NEEDED` objects, processing each object's dynamic
+  section, and binding the caller's relocations against the loaded objects'
+  symbol tables is `usr/src/cmd/sgs/rtld/common/setup.c` (load the primary + its
+  dependencies) + `analyze.c` `load_so()`/`analyze_lmc()` + `_elf.c`
+  `elf_bndr()`/`elf_reloc()` (PLT/GOT binding + symbol lookup) reduced to the
+  riscv64 load-time types; the SysV `.hash` bucket/chain lookup is the SysV
+  gABI; the `R_RISCV_JUMP_SLOT = S (+ A)` formula + the "GOT slot at `r_offset`
+  gets the resolved symbol address, PLT stub jumps through it" model are the
+  RISC-V psABI + the R-P23 reloc engine; mapping an ET_DYN's `PT_LOAD` segments
+  at a chosen base is illumos `analyze.c` `elf_map_it`; the `sstatus.FS` enable
+  is the RISC-V privileged spec FP-state field.
+
+### R-P28.2 priority dispatch queues + thread_create -- DONE
+- **The R-P27 flat round-robin runq becomes an illumos-style priority
+  dispatcher, and `kthread_create` builds kernel threads scheduled in priority
+  order.** `rp28/kernel/proc.c`:
+  - `proc_t` gains `p_pri` (a small `NPRI=8` band scale, higher = sooner) +
+    `p_kthread` (a kernel thread runs a C function in the kernel AS, no U-mode
+    trap frame). `rv_sched` now (pass 1) finds the highest occupied RUNNABLE
+    band + reaps parentless zombies, then (pass 2) ROUND-ROBINs within that top
+    band from a `sched_last` cursor -- highest-priority-first, FIFO within a
+    band. The round-robin-within-a-band is what keeps R-P27's preemption fair
+    (two equal-priority CPU-bound procs still interleave).
+  - `kthread_create(entry, pri)` allocates a proc, marks it a kernel thread,
+    seeds its scheduler context so the first `rv_swtch` enters a trampoline
+    that runs `entry()` (read from the proc's `p_kentry`, the illumos `t_pc`
+    idiom) then `kthread_exit()` (mark ZOMBIE + yield forever; the scheduler
+    reaps the parentless slot).
+- **Boot proof**: three kernel threads created in LOW/HIGH/MID order run
+  HIGH->MID->LOW (by priority, not creation order):
+  ```
+    [kthread] HIGH (pri 7) running
+    [kthread] MID  (pri 4) running
+    [kthread] LOW  (pri 1) running
+  [R-P28.2] threads dispatched in priority order (HIGH pri 7, then MID pri 4, then LOW pri 1).
+  ```
+- **Scope (honest)**: a single global runq scanned by band (not per-CPU
+  `disp_t` queues), a handful of priorities (not the 170 illumos global
+  priorities / scheduling classes), no priority decay/boost, no kernel
+  preemption of a running kthread (`kpreempt`). R-P29: per-CPU disp queues +
+  scheduling classes + kpreempt.
+- **CRIB**: "scan the dispatch queues highest-priority-first, run the first
+  runnable thread, re-dispatch on yield" is illumos `uts/common/disp/disp.c`
+  `disp()` + the `DISP_MAXRUNPRI` band walk; `thread_create()` building a
+  kthread on a fresh stack with a seeded start context + a dispatch priority is
+  `uts/common/disp/thread.c` `thread_create()` + the R-P24 `startup.c`
+  `thread_init`/`swtch` seam.
+
+### R-P28.3 SMP secondaries via SBI HSM -- procs on 2 harts -- DONE
+- **The boot hart brings up a secondary hart with the SBI HSM `hart_start`
+  ecall; both harts drain a shared, lock-protected runq -- work executes on TWO
+  distinct hartids.** `rp28/kernel/{sbi.c, sbi.h, locore.S, smp.c}`:
+  - `sbi_hart_start(hartid, addr, opaque)` (`sbi.c`) calls the SBI HSM
+    extension (EID `"HSM"`=0x48534D, FID 0). `smp_start` (`smp.c`, on the boot
+    hart) starts the other hart at `_secondary_start` with the shared kernel
+    satp as the opaque arg.
+  - `_secondary_start` (`locore.S`) is the AP entry: in S-mode, bare (physical
+    == link addresses), `a0`=hartid/`a1`=opaque; it sets `gp`, a per-hart
+    stack, masks interrupts, installs `stvec` (`_u_trap_entry`), switches to the
+    shared kernel AS (`satp = a1`), and calls `secondary_main(hartid)`.
+  - `secondary_main` reports the hartid online (proving a DISTINCT hart runs)
+    and, alongside the boot hart, drains a shared work runq guarded by an
+    `amoswap.w` test-and-set spinlock (`smp.c`).
+- **Boot proof** (`-smp 2`):
+  ```
+    [smp] boot hartid=0; starting secondary hartid=1 at _secondary_start via SBI HSM
+    [smp] SECONDARY hart online: hartid=1 (entered the shared scheduler)
+      [hart 1] ran work item 0
+      [hart 0] ran work item 1
+      ... (items split across both harts) ...
+    [smp] work items run: hart0=6 hart1=6
+  [R-P28.3] SMP PROVEN: work ran on BOTH harts (two distinct hartids executed).
+  ```
+  Both hartid 0 and hartid 1 execute runq items -- procs (work) run on BOTH
+  harts, vs R-P27's single hart.
+- **Scope (honest)**: the secondary shares the boot kernel page table; the
+  shared runq is a work-item queue drained under ONE global spinlock (a real
+  shared *dispatch* queue of the priority procs from R-P28.2 is the next step --
+  the per-hart `curproc`/`sched_ctx`/`sched_last` state in `rv_sched` is not yet
+  per-CPU, so the SMP proof uses a dedicated lock-protected work queue rather
+  than reentering `rv_sched` on both harts); no per-CPU areas / no IPIs / no
+  TLB shootdown; the secondary parks after draining (the boot hart drives the
+  known halt). R-P29: per-CPU `cpu_t` + per-CPU disp queues + IPIs so both harts
+  run the priority scheduler concurrently.
+- **CRIB**: the HSM `hart_start` ecall (EID 0x48534D, FID 0, args
+  hartid/start_addr/opaque) + the STOPPED-hart AP-start model are the RISC-V
+  SBI spec (Hart State Management); the AP entry that sets stack/pagetable/trap-
+  vector then enters the dispatcher is illumos `mp_startup`/i86pc
+  `mach_cpu_start` + BSD riscv `cpu_hatch`; the shared runq + a dispatch lock is
+  the illumos `disp_lock`/`cpu_t` shared-dispatch model reduced to one runq +
+  one spinlock; the `amoswap.w` test-and-set spinlock is the RISC-V A-extension
+  + the illumos mutex/`lock_set` spin primitive.
+
+### `/root/riscv-port/rp28/` contents
+`kernel/{locore.S [+ `_secondary_start` + secondary stack], mach_trap.S,
+mach_clock.S, mach_mmu.S, mach_swtch.S, mach_uentry.S, user_elf.S [+
+dynexec2.bin], mmu_riscv.h, clock_riscv.h, plic.h, proc_riscv.h, assym.h,
+sbi.h [+ sbi_hart_start], sbi.c [+ HSM], hat_boot.c, hat_user.c, exec_elf.c [+
+exec_map_so/map_dyn_segments], ramfs.c, proc.c [+ priority disp +
+kthread_create + FS-enable], clock_riscv.c, plic.c, smp.c [NEW: SMP], startup.c,
+main.c [+ run_xobject/run_priodisp/smp_start], kernel.lds, build-kernel.sh,
+*.bin, *.o, unix.elf, qemu-boot.log}`; `ldso/{rtld_start.S, rtld_riscv.c [+
+cross-object map/bind], ld.so.1.lds, build-ldso.sh, ld.so.1, *.o}`;
+`user/{forker.c, execee.c, preempt.c, fsexec.c, dynexec.c, dynexec2.c [NEW],
+hellodyn.c [NEW: cross-object hello], mkinitramfs.py, build-user.sh, + built
+ELFs/*.o}`; `hello/{hellodyn.dyn, hellodyn.o}`; `rp28-milestone-check.sh` (all
+three sub-tasks + the R-P24 + R-P26 + R-P27 regressions, rebuild+reboot,
+re-runnable green).
+
+### Next: R-P29
+1. **ld.so.1 hardening** -- lazy PLT binding (a real PLT0 resolver via a
+   `SYS_bind` trap), `.gnu.hash`, symbol versioning (VERSYM/VERNEED), a
+   self-relocating ET_DYN ld.so.1 at an arbitrary base, recursive `DT_NEEDED`,
+   `mprotect`-after-reloc (drop the RWX on the loaded objects); ld.so.1 mmaps
+   the file itself (`open`/`mmap`) instead of the `SYS_mapso` split.
+2. **per-CPU dispatch + kpreempt** -- per-CPU `cpu_t` + per-CPU disp queues so
+   BOTH harts run the R-P28.2 priority scheduler concurrently (not a separate
+   work queue), IPIs, scheduling classes (TS/RT), kernel preemption points, and
+   an FP context switch (lazy FS=Dirty save/restore, `fpu_save`/`fp_restore`).
+3. **more syscalls + errno ABI + as_free** -- `open/read/close/brk/mmap`, the
+   SunOS error-return convention, free the old AS on exec/exit (vs the current
+   leak), per-lwp trap state, argv/envp passthrough.
+4. **Full HAT** (carried) -- relocate kernel text/data into the high VA + drop
+   the identity map + `hat_memload`/R^X kernel perms; vmem/`kmem_cache`; the
+   page hash + freelists; TLB shootdown across harts.
+
+---
+
 ## R-P27 -- timer-tick preemption + fs-backed exec (ramfs) + ld.so.1 hosting the first DYNAMIC process
 
 Substrate: fred v3 (root@52.88.62.49), the R-P18/19 build-tree gcc
@@ -444,7 +677,7 @@ mkinitramfs.py, build-user.sh, + built ELFs/*.o}` (the userland programs);
 `rp27-milestone-check.sh` (all three sub-tasks + the R-P24 + R-P26 regressions,
 rebuild+reboot, re-runnable green). Repo copies under `src/riscv/rp27/`.
 
-### Next: R-P28
+### Next: R-P28 (DELIVERED -- see the R-P28 section above)
 1. **ld.so.1 maps + binds DT_NEEDED** -- give ld.so.1 `open`/`read`/`mmap`
    syscalls (or a ramfs read path), MAP `libgcc_s.so.1` into the AS, relocate
    it, and BIND the app's cross-object symbols (a real dynamic hello that

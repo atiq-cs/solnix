@@ -3045,3 +3045,59 @@ Honest scope: ld.so.1 walks/reports/relocates (real shape) but doesn't yet MAP c
 (the hello binds no libgcc symbol, empty RELA -> runs); libgcc_s.so.1 seeded in ramfs for R-P28's
 map/bind. NEXT R-P28: ld.so.1 maps+binds DT_NEEDED (cross-object dynamic), priority disp queues +
 thread_create, more syscalls/errno/as_free, full HAT + SMP.
+
+## R-P28 DONE: real cross-object dynamic linking (ld.so.1 maps+binds DT_NEEDED) + priority dispatch + SMP
+All 3 boot-verified under qemu-virt -smp 2:
+- CROSS-OBJECT DYNAMIC LINKING (the headline): a new DYNAMIC hello (hellodyn.c) does a long double
+  (TFmode/_Float128) multiply that GCC lowers to __multf3/__fixtfsi -- routines in libgcc_s.so.1, not
+  the exe (RV64GC has no hw _Float128 -> always a libcall), producing R_RISCV_JUMP_SLOT relocs vs UNDEF
+  .dynsym syms. ld.so.1 (rtld_riscv.c) parses the app PT_DYNAMIC, calls a new SYS_mapso kernel syscall
+  to MAP libgcc_s.so.1 at base 0x38000000 (kernel exec_map_so/map_dyn_segments: ramfs-lookup the soname
+  along /lib:/usr/lib, map its ET_DYN PT_LOAD segments biased by base, writable), parses libgcc_s's own
+  dynamic (symtab/strtab/.hash + self-relocs), then BINDS the app PLT JUMP_SLOT slots cross-object via
+  SysV .hash lookup (elf_hash->bucket->chain) writing base+st_value into the app GOT (eager binding).
+  PROOF: [ld.so.1] bound __multf3 -> 0x38009b36 (= base + libgcc st_value) / __fixtfsi -> 0x3800b2cc;
+  the hello CALLS __multf3 across objects + exits 42 (6.0L*7.0L). Load-bearing fix: soft-float TF reads
+  the frm CSR -> user sstatus.FS must be set to Initial (else illegal-instruction trap). Cribbed illumos
+  ld.so.1 setup.c(load deps)/analyze.c load_so+elf_map_it/_elf.c elf_bndr+elf_reloc + SysV gABI .hash +
+  RISC-V psABI JUMP_SLOT + R-P23 reloc engine.
+- PRIORITY DISPATCH + thread_create: proc_t gains p_pri (NPRI=8 bands) + p_kthread; rv_sched picks the
+  highest occupied RUNNABLE band, round-robin within it (keeps R-P27 preemption fair) + reaps parentless
+  zombies; kthread_create(entry,pri) seeds a kernel thread (trampoline runs entry() from p_kentry then
+  kthread_exit). PROOF: 3 kthreads created LOW/HIGH/MID run HIGH(7)->MID(4)->LOW(1). Cribbed illumos
+  disp.c disp()/DISP_MAXRUNPRI + thread.c thread_create.
+- SMP via SBI HSM: sbi_hart_start (EID HSM=0x48534D FID0); smp_start (boot hart) launches the secondary
+  at _secondary_start (locore.S: S-mode bare entry a0=hartid/a1=opaque, set gp/per-hart stack/stvec/
+  satp=shared kernel AS, call secondary_main); both harts drain a shared work runq under an amoswap.w
+  spinlock. PROOF: [smp] SECONDARY hart online hartid=1; work items split hart0=6/hart1=6 -> two
+  distinct hartids execute. Cribbed SBI HSM spec + illumos mp_startup/mach_cpu_start + BSD cpu_hatch +
+  RISC-V A-ext spinlock.
+Persisted /root/riscv-port/rp28/{kernel/{smp.c NEW,+grown exec_elf/proc/main/locore/sbi/sbi.h/user_elf},
+ldso/rtld_riscv.c (cross-object map/bind), user/{hellodyn.c,dynexec2.c NEW}, rp28-milestone-check.sh}.
+The riscv64 arc: ...->PREEMPTIVE+fs+DYNAMIC LINKING->CROSS-OBJECT DYNAMIC LINKING + PRIORITY DISP + SMP.
+Honest scope: eager PLT bind (no lazy/PLT0), SysV .hash (no .gnu.hash), versioning ignored, flat scope,
+object mapped by SYS_mapso (not ld.so.1 mmap), ld.so.1 still fixed-base ET_EXEC, no FP context switch
+(one FP proc runs alone); priority runq is one global (not per-CPU disp_t), no kpreempt; the SMP proof
+uses a dedicated lock-protected work queue (rv_sched state not yet per-CPU), secondary shares the boot
+pagetable, no IPIs/TLB-shootdown. NEXT R-P29: ld.so.1 hardening (lazy PLT, .gnu.hash, versioning,
+self-relocating ET_DYN, mprotect-after-reloc), per-CPU disp queues + kpreempt + FP context switch, more
+syscalls/errno/as_free, full HAT (high-VA R^X kernel) + vmem/kmem_cache + TLB shootdown.
+
+## R-P28 DONE (2026-08-15): cross-object dynamic linking + priority dispatch + SMP (2 harts)
+All 3 boot-verified under qemu-virt -smp 2:
+- REAL cross-object dynamic linking: hellodyn.c does a long double (TFmode) multiply -> GCC emits
+  __multf3/__fixtfsi (RV64GC softfloat libcall) -> R_RISCV_JUMP_SLOT vs UNDEF syms in libgcc_s.so.1.
+  New SYS_mapso (exec_map_so) maps the ET_DYN's PT_LOAD; rewritten rtld_riscv.c maps libgcc_s @
+  0x38000000, parses its symtab/.hash, binds the app's PLT JUMP_SLOT cross-object via SysV-hash
+  (base+st_value into the app GOT). bound __multf3->0x38009b36, __fixtfsi->0x3800b2cc; the cross-object
+  call works -> exit 42. Fix: user sstatus.FS=Initial (softfloat reads frm CSR). Cribbed illumos rtld
+  setup/analyze/_elf (load_so/elf_map_it/elf_bndr) + gABI .hash + R-P23 reloc.
+- Priority dispatch: p_pri (NPRI=8) + kthread_create; rv_sched picks the highest occupied RUNNABLE band
+  round-robin. 3 threads LOW/HIGH/MID run HIGH(7)->MID(4)->LOW(1). Cribbed illumos disp.c + thread.c.
+- SMP: sbi_hart_start (HSM) + _secondary_start (locore) -> secondary_main; both harts drain a shared
+  runq under an amoswap.w spinlock. hartid=1 online; work split hart0=6 hart1=6. Cribbed SBI HSM +
+  illumos mp_startup + BSD cpu_hatch + RISC-V A-ext.
+Committed src/riscv/rp28/{kernel/smp.c+grown exec/proc/main/locore, ldso/rtld_riscv.c, user/hellodyn.c}.
+The riscv64 kernel is now PREEMPTIVE + MULTIPROCESS + SMP + DYNAMICALLY-LINKED. NEXT R-P29: ld.so.1
+hardening (lazy PLT/.gnu.hash/versioning/mprotect), per-CPU disp queues + kpreempt + FP ctx switch,
+more syscalls/errno, full high-VA R^X HAT + vmem/kmem_cache + TLB shootdown.
