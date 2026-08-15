@@ -1,5 +1,39 @@
 # RISC-V (riscv64) port — STATUS
 
+**Phase reached: R-P32** (the R-P31 true-SMP high-half kernel grows the MEMORY-
+MANAGEMENT + SMP-PROCESS maturity: the **REAL proc_t DISPATCHER on BOTH HARTS**,
+**COPY-ON-WRITE fork + DEMAND PAGING**, and **vfs write(2) over a real vnode
+layer**.  (1) `rv_sched_cpu` now runs the REAL proc_t scheduler on BOTH harts
+concurrently against ONE shared, spinlock-guarded proc runq (`proc_tab`), with
+per-hart `curproc` + scheduler context (the hartid carried in `tp`, recovered on
+trap entry from a bit packed into the aligned `sscratch` kernel-stack top); a
+process forked on hart 0 is dispatched on hart 1 -- a first process forks N
+children and each prints the hart it ran on, scheduler-balanced across two
+hartids; the SMP save/load race is closed with a per-proc `p_onproc`
+still-switching flag (a peer hart never picks a proc whose context is mid-save)
+and the kmem/frame allocators + the console are spinlock-serialized.  (2) fork
+now SHARES the parent's user pages read-only + `PTE_COW` (a software RSW bit)
+instead of the R-P26 eager copy; a store to a shared page FAULTS (scause 15) into
+the page-fault handler (`rv_trap` -> `proc_pagefault` -> `hat_cow_fault`), which
+copies just that frame into a private writable one -- the child's write does NOT
+corrupt the parent (COW isolation), and a kernel copyout to a COW page (wait(2)
+writing `*statusp`) is handled too; a demand-paged (`PTE_LAZY`, V clear) page is
+reserved without backing and faulted in as a fresh zeroed frame on first touch
+(`hat_demand_fault`); a per-frame refcount (`page_ref_*`) frees a shared frame
+only when the last AS lets go.  (3) a real vnode op vector
+(`VOP_READ`/`WRITE`/`LOOKUP`/`GETATTR`) over two fs types -- the read-only ramfs
+(initramfs blob) and a WRITABLE tmpfs (a kmem buffer grown on write) -- so a
+process `write(2)`s `/tmp/hello.txt`, reads it back (round-trip MATCH), fstat's
+it, and a write to the read-only ramfs returns EROFS.  All boot-verified under
+`qemu-system-riscv64 -machine virt -smp 2`: six forked children run across two
+hartids (`procs dispatched: hart0`/`hart1`), a COW store fault copies a shared
+page (the parent stays UNCHANGED) + a demand-page fault fills a lazy page, and a
+proc writes+reads a tmpfs file through the VOP_* layer while the ramfs rejects
+the write.  Proof: `rp32/rp32-milestone-check.sh` (all three R-P32 sub-tasks +
+the R-P24 + R-P26 + R-P27 + R-P28 + R-P29 + R-P30 + R-P31 regressions green,
+rebuild+reboot, re-runnable).  Details in the R-P32 section below.  **Next:
+R-P33.**
+
 **Phase reached: R-P31** (the R-P30 true-high-half kernel completes SMP high-half
 by putting **SECONDARIES ON THE W^X ROOT** -- the boot identity trampoline is
 dropped entirely: R-P30 dropped the identity map on the PRIMARY but a secondary
@@ -825,6 +859,148 @@ qemu-boot.log}`; `ldso/{...unchanged}`; `user/{...unchanged}`; `hello/{...}`;
    seg/anon layer over `hat_as_free`.
 
 ---
+
+## R-P32 -- the real proc_t dispatcher on BOTH harts + copy-on-write fork + demand paging + vfs write(2) over a real vnode layer
+
+R-P32 grows the R-P31 true-SMP high-half kernel along the memory-management +
+SMP-process axis.  Built with the native `riscv64-unknown-solaris2.11` toolchain
+(R-P17 binutils + the R-P19 gcc), booted under `qemu-system-riscv64 -machine
+virt -smp 2` with OpenSBI.  `rp32/kernel/build-kernel.sh` rebuilds the userland +
+ld.so.1 + initramfs + kernel + reboot; the three R-P32 sub-tasks + the
+R-P24/26/27/28/29/30/31 regressions are asserted from the boot log.
+
+### R-P32.1 -- procs on BOTH harts (the real proc_t dispatcher, SMP)
+
+R-P31 ran secondaries on the identity-free W^X root draining a *work-item* runq;
+R-P30's TS/RT class scheduler ran *compute slices* on two harts.  R-P32 runs the
+REAL `proc_t` dispatcher on BOTH harts:
+
+  - `rv_sched` becomes `rv_sched_cpu(int cpu)` and runs on hart 0 AND hart 1
+    concurrently against ONE shared runq (`proc_tab`), serialized by a spinlock
+    (`sched_lock`, an `amoswap.w` test-and-set).  The running proc
+    (`cpu_cur[NCPU]`) and the scheduler context (`cpu_sched_ctx[NCPU]`) are
+    PER-HART; the round-robin cursor is shared under the lock.
+  - `cpuid()` reads the hartid from `tp`.  `tp` is set at kernel entry
+    (`_start_high` for the boot hart, `proc_ap_high` for the secondary) and --
+    critically -- RESTORED on every trap entry: a U-mode proc clobbers `tp`, so
+    `rv_user_frame_ret`/`rv_user_enter` pack the hartid into bit 0 of the
+    16-aligned kernel-stack top when writing `sscratch`, and `_u_trap_entry`
+    recovers `tp = sscratch & 1` on the way in.  This makes `curproc` correct in
+    the syscall/fault handler on either hart.
+  - a first process (`smproc`) forks N children; the boot hart brings up the
+    secondary at `proc_ap_entry` -> `proc_secondary_main` -> `rv_sched_cpu(1)`,
+    and BOTH harts drain the shared runq.  A child forked on hart 0 is
+    dispatched on hart 1 (each child prints its `p_hart` via `SYS_gethartid`).
+  - the SMP save/load race (a peer hart picking a proc whose context is still
+    being saved by `rv_swtch`) is closed with a per-proc `p_onproc` flag: a proc
+    going off-cpu (sched/yield/exit) is marked `p_onproc=1` and is not pickable
+    (or reapable) until the dispatching hart has fully switched it off and
+    cleared the flag; a freshly-created proc is `p_onproc=1` until its context
+    is seeded.  The kmem heap + page-frame allocators and `sbi_console_puts` are
+    spinlock-serialized for concurrent access from two harts.
+
+Boot proof: `procs dispatched: hart0=.../hart1=...` (both > 0), children
+`running on hart 1`, `procs-on-both-harts PROVEN`.
+
+CRIB: illumos `uts/common/disp/disp.c` `disp()` + the `cpu_t` per-CPU dispatch
+model (a shared dispatch queue drained by every CPU, `disp_lock` around the
+pick + the onproc transition, `cpu_thread` per CPU); the `tp`-holds-hartid /
+per-CPU-pointer convention is Linux riscv `__my_cpu_offset` + xv6-riscv
+`tp=hartid`; the `p_onproc` still-switching guard is the xv6-riscv `p->lock`
+held-across-swtch invariant reduced to a flag; the amoswap.w spinlock is the
+RISC-V A extension.
+
+### R-P32.2 -- copy-on-write fork + demand paging (the headline)
+
+R-P26 fork COPIED the whole parent AS eagerly.  R-P32 makes it copy-on-write +
+adds demand paging, driven by the RISC-V page-fault handler:
+
+  - two software PTE bits from the Sv39 RSW field ([9:8]): `PTE_COW` (bit 8) and
+    `PTE_LAZY` (bit 9).
+  - `hat_user_cow_share` (fork): for every private user leaf, SHARE the same
+    physical frame into the child and, in BOTH parent and child, clear `PTE_W` +
+    set `PTE_COW` (a writable OR already-COW leaf); bump a per-frame refcount
+    (`page_ref_inc`).  A genuinely read-only leaf is shared as-is.  The live
+    parent satp is flushed (its leaves went read-only).
+  - the page-fault path: a store/load/instruction fault (scause 15/13/12) whose
+    `stval` is a user VA routes `rv_trap` -> `proc_pagefault(stval, scause)`.
+    This covers a fault taken in U-mode AND a fault taken in S-mode with SUM set
+    (the kernel copying out to a COW page, e.g. `wait(2)` writing `*statusp`).
+  - `hat_cow_fault`: a store to a `PTE_COW` leaf allocates a FRESH frame, copies
+    the shared frame's bytes, remaps the VA writable with `PTE_COW` cleared, and
+    drops one reference on the old shared frame (freed only when the last sharer
+    lets go, via `page_ref_dec` inside `kmem_free_page`).  The child's write
+    does NOT corrupt the parent.
+  - `hat_user_lazy` reserves a `PTE_LAZY` leaf (V clear, perms in RSW); the first
+    access faults into `hat_demand_fault`, which backs it with a fresh zeroed
+    frame (`SYS_lazy`).
+
+Boot proof: `[COW] store fault -> copied page va=... (pid ...)` +
+`[demand] fault -> mapped zeroed page va=...`, the parent reads its page
+`UNCHANGED (COW isolated the child's write)`, `COW copy faults=3 demand-page
+faults=1`, `COW + demand paging PROVEN`.
+
+CRIB: illumos `seg_vn` SEGVN_COW (`uts/common/vm/seg_vn.c` `segvn_dup` + the
+`anon_dup`/`F_PROT` copy-on-write fault + `anon_zero` demand-zero `F_INVAL`) +
+the `page_t` `p_cowcnt` refcount; BSD `pmap_copy_on_write`; xv6-riscv COW
+(`uvmcopy` mapping parent+child RO with `PTE_COW`, `cowfault` copying in the
+trap, per-page refcounts); the scause 12/13/15 exception codes are the RISC-V
+privileged spec; `trap -> pagefault(addr,type) -> as_fault -> segvn_fault` is
+illumos `uts/common/os/trap.c` + `vm/as.c` `as_fault`.
+
+### R-P32.3 -- vfs write(2) + a real vnode layer
+
+R-P31 had a read(2) path with the ramfs bytes stored directly in the fd.  R-P32
+introduces a vnode op vector and a writable filesystem (`vfs.c`):
+
+  - `struct vnode` dispatched through `vnodeops { vop_read, vop_write,
+    vop_getattr }`; `fop_read`/`fop_write`/`fop_getattr` call `v_op->vop_*`, and
+    `vfs_lookup` is the reduced `VOP_LOOKUP` that resolves a path to a vnode.
+  - two fs types: the READ-ONLY ramfs (a transient vnode over the initramfs
+    bytes; `VOP_WRITE` -> EROFS) and a WRITABLE tmpfs (a `kmem_alloc` buffer per
+    file that GROWS on write, a flat name table of `/tmp/*` files created on
+    first open-with-O_CREAT).
+  - the per-proc fd table holds a vnode pointer + a byte offset; `proc_open`/
+    `proc_openf` (O_CREAT), `proc_read`, `proc_write`, `proc_lseek`,
+    `proc_fstat`, `proc_stat`, `proc_close_file` all route through the VOP_*
+    layer.  `SYS_write` to fd 1/2 still goes to the console.
+
+Boot proof: a process writes 35 bytes to `/tmp/hello.txt`, reads them back
+(`tmpfs write/read round-trip: MATCH`), `fstat size=35`, and a write to the
+read-only ramfs `/etc/release` returns `-30 (EROFS)`; `vfs write(2) PROVEN`.
+
+CRIB: illumos `fs/vnode.c` `fop_read`/`fop_write`/`fop_lookup`/`fop_getattr` +
+the `vnodeops` vector (`uts/common/sys/vnode.h`); the tmpfs (a writable in-RAM
+file whose bytes ARE the file, grown on write) is illumos
+`uts/common/fs/tmpfs/tmp_vnops.c` (`tmp_write`/`tmp_read`/`tmpnode`) reduced to a
+flat kmem buffer per file; the per-proc fd table is `os/fio.c` (`falloc`/`getf`/
+`ufalloc`); the ramfs-over-a-boot-archive read is illumos `boot_archive`.
+
+### R-P32 files
+
+`rp32/kernel/`: `proc.c` [SMP dispatcher `rv_sched_cpu`, per-hart `curproc`/
+`sched_ctx`, `sched_lock`, `p_onproc`, `proc_pagefault`, `proc_secondary_main`/
+`run_procs_smp`, `proc_gethartid`, the VOP_* file syscalls], `hat_user.c`
+[`hat_user_cow_share`, `hat_cow_fault`, `hat_user_lazy`, `hat_demand_fault`],
+`startup.c` [per-frame refcount `page_ref_*`, allocator + kmem_free_page locks],
+`vfs.c` [the vnode layer + ramfs/tmpfs vnodeops], `main.c` [the page-fault route
+in `rv_trap`, `SYS_lazy`/`SYS_gethartid`, `SYS_write`/`SYS_open` over the vnode
+layer, `run_cowtest`/`run_procs_smp`/`run_vfstest` drivers], `mmu_riscv.h`
+[`PTE_COW`/`PTE_LAZY`], `locore.S` [`tp=hartid`, `proc_ap_entry`/`proc_ap_high`],
+`mach_uentry.S` + `mach_trap.S` [pack/restore the hartid in `sscratch`],
+`sbi.c` [serialized console], `user_elf.S` [embed cowtest/smproc/vfstest],
+`build-kernel.sh` [+ R-P32 asserts].  `rp32/user/`: `cowtest.c`, `smproc.c`,
+`vfstest.c`, `build-user.sh`.  Proof: `rp32/rp32-milestone-check.sh` (all three
+R-P32 sub-tasks + the R-P24/26/27/28/29/30/31 regressions green,
+rebuild+reboot, re-runnable).
+
+### R-P33 (next)
+
+Directions: real per-CPU idle threads + an idle loop (so a hart with no runnable
+proc `wfi`s instead of spinning in `rv_sched_cpu`); a broader syscall/vnode set
+(directories/`VOP_CREATE`/`VOP_REMOVE`, a mount table, `dup`/`pipe`); signals +
+`kill`; and demand-paged file-backed segments (page a `PT_LOAD` in on the exec
+fault instead of eager `exec_image`).
 
 ## R-P31 -- secondaries on the W^X root (drop the boot identity trampoline) + ld.so.1 hardening (lazy PLT + .gnu.hash + versioning + relro) + real ramfs read(2)
 

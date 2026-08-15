@@ -3218,3 +3218,23 @@ Committed src/riscv/rp31/{kernel/smp_wxroot.c+grown, ldso/rtld_riscv.c+rtld_star
 The riscv64 kernel: high-half, W^X, SMP (no identity), preemptive TS/RT, fork/exec/wait, leak-free,
 dynamic-linked (lazy PLT/versioning/relro), vfs read. NEXT R-P32: both harts in the real proc_t
 dispatcher; self-relocating ET_DYN ld.so.1; vfs write + real vnode layer; COW fork + demand paging.
+
+## R-P32 DONE (2026-08-15): both-harts proc_t dispatch + COW fork + demand paging + vfs write
+All 3 boot-verified under qemu-virt -smp 2, R-P24-31 regressions green:
+- Real proc_t scheduler on BOTH harts: rv_sched_cpu(cpu) runs the TS scheduler on both harts vs ONE
+  shared spinlock runq; per-hart curproc/sched-ctx; hartid in tp (packed in sscratch kstack-top,
+  recovered on trap entry); p_onproc still-switching flag closes the SMP save/load race. PROOF: 6
+  children run on hart1, dispatched hart0=370 hart1=9.
+- COW fork + demand paging: PTE_COW/PTE_LAZY software bits (Sv39 RSW). fork shares parent pages RO+COW;
+  store fault (scause 15) -> proc_pagefault -> hat_cow_fault copies frame + remaps RW; per-frame
+  refcount frees at last release. Demand: PTE_LAZY leaf filled on first touch. PROOF: [COW] store fault
+  copied page; parent read UNCHANGED (child write isolated); [demand] fault mapped zeroed page. Cribbed
+  illumos seg_vn SEGVN_COW/anon + BSD pmap_copy_on_write + xv6 COW + RISC-V scause 12/13/15.
+- vfs write(2): vnodeops{vop_read/write/getattr} + vfs_lookup over RO ramfs (VOP_WRITE->EROFS) + a
+  writable tmpfs; fd table routes open/read/write/lseek/fstat/stat through VOP_*. PROOF: write 35 bytes
+  to /tmp/hello.txt, read back MATCH, fstat size=35, ramfs write -> EROFS. Cribbed illumos vnode/tmpfs +
+  os/fio.
+Committed src/riscv/rp32/{kernel/vfs.c+grown proc/hat_user/main/locore/mach_trap, user/cowtest/smproc/
+vfstest}. The riscv64 kernel: high-half W^X SMP (real proc dispatch on both harts) + COW/demand-paged
+memory + fork/exec/wait + dynamic linking + a vnode fs with read+write. NEXT R-P33: per-CPU idle/wfi,
+directories/mount/dup/pipe, signals+kill, demand-paged file-backed exec.
