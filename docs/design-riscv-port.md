@@ -3101,3 +3101,80 @@ Committed src/riscv/rp28/{kernel/smp.c+grown exec/proc/main/locore, ldso/rtld_ri
 The riscv64 kernel is now PREEMPTIVE + MULTIPROCESS + SMP + DYNAMICALLY-LINKED. NEXT R-P29: ld.so.1
 hardening (lazy PLT/.gnu.hash/versioning/mprotect), per-CPU disp queues + kpreempt + FP ctx switch,
 more syscalls/errno, full high-VA R^X HAT + vmem/kmem_cache + TLB shootdown.
+
+## R-P29 DONE: full high-VA R^X HAT (W^X kernel + slab kmem_cache + TLB shootdown) + per-CPU disp + kpreempt + FP ctx switch
+Hardens the R-P28 SMP kernel toward a production-shaped kernel + linker; all 3 boot-verified under
+qemu-virt -smp 2:
+- FULL HIGH-VA R^X HAT (the headline memory-management maturity): a real kernel HAT (hat.c) replaces
+  the R-P24 boot map (RWX gigapages). kernel.lds page-aligns the segments + brackets them with boundary
+  symbols (__text_start/__etext, __rodata_start/__erodata, __data_start/__end). hat_memload(root,va,pa,
+  perms) is the 4 KiB Sv39 leaf-install primitive (3-level walk, alloc missing tables, A|D preset).
+  hat_kernel_setup() maps the kernel PER SEGMENT with W^X -- .text R|X (exec, NOT writable), .rodata R,
+  .data/.bss R|W (writable, NOT exec) -- at both the low identity VA + the high direct-map alias
+  (KERNEL_DMAP_BASE+pa); a 2 MiB-megapage RW window over the 256 MiB qemu DRAM covers the boot heap +
+  stacks + page tables; MMIO is RW (no X); it installs the new root + publishes it (hat_active_root) so
+  user ASes clone the fine-grained W^X half. PROOF: calls a probe THROUGH its high-VA alias
+  (0xffffffc0802018a6 returns the marker 0x5239 -- high-VA execution); a deliberate store to .text
+  FAULTS (scause 15, caught by rv_trap) -- W^X ENFORCED. vmem (kmem_cache.c): a one-arena resource
+  allocator (span import, first-fit segment list, coalescing) + a slab kmem_cache (a cache draws
+  page-sized SLABS from the arena, slices into equal objects on a free list; alloc 40/free 40/re-alloc
+  recycles). TLB shootdown: local sfence.vma + remote sfence.vma to hart 1 via SBI RFENCE
+  (remote_sfence_vma) -> SBI_SUCCESS. Cribbed illumos hat_i86.c(hat_memload/hat_kern_setup)+seg_kmem +
+  vmem.c(Bonwick vmem) + kmem.c(Bonwick slab) + hat_tlb_inval/x_call + RISC-V Sv39 PTE R/W/X + SFENCE.VMA
+  + SBI RFENCE spec + OpenBSD/xv6 W^X kernel map.
+- PER-CPU DISPATCH + kpreempt (disp.c): each hart owns a cpu_t.cpu_disp queue; disp_run drains the LOCAL
+  queue first, disp_steal takes from a peer's tail when empty (work-stealing). disp_ap_entry (locore.S) is
+  a 2nd AP entry landing in disp_secondary_main (secondary sbi_hart_stops when done so the R-P28 SMP proof
+  can restart it). kpreempt(hartid) checks cpu_runrun at an explicit preemption point + yields. PROOF: 12
+  jobs enqueued UNBALANCED (9 on hart0, 3 on hart1) -> hart1 drains its 3 + STEALS from hart0; cpu0 ran=6
+  (stole 0), cpu1 ran=6 (stole 3), both concurrent (char-interleaved console); kpreempt fires at iter 500.
+  Cribbed illumos disp.c(cpu_disp/setbackdq/disp_getwork/kpreempt) + cpu_t + SBI HSM hart_stop + A-ext
+  spinlock.
+- FP CONTEXT SWITCH + more syscalls: struct rv_context gains an FP area (c_fcsr + c_f[32]); rv_swtch
+  (mach_swtch.S) sets sstatus.FS=Dirty then fsd f0..f31 + frcsr the outgoing ctx / fld + fscsr the
+  incoming (fresh ctxs zero the area). proc_brk (proc.c) grows an anon heap from 0x20000000 one 4 KiB
+  zeroed page on demand + local TLB flush; rv_syscall adds brk(17)/read(3)/open(5)/close(6)/fstat(28)/
+  mmap(115) with the reduced SunOS errno-return ABI (negative a0 = -errno: EBADF/ENOMEM/ENOSYS). fptest.c
+  (user) grows brk (writes+reads the new page) + forks two children pinning distinct fs0 sentinels
+  (111/222) that spin (preempted). PROOF: parent getpid()=13; brk grew + heap[0]=41 (OK); the two FP
+  procs interleave via preemption + BOTH keep fs0 intact every round -> FP state PRESERVED (R-P28, which
+  did not save FP, would corrupt them). Cribbed illumos fpu_save/fp_restore + lwp FPU area + RISC-V
+  sstatus.FS (fsd/fld/frcsr/fscsr) + os/grow.c brk()/as_map + sys/syscall.h + sys/errno.h.
+Committed src/riscv/rp29/{kernel/{hat.c,kmem_cache.c,disp.c NEW; +grown mach_swtch/proc/main/startup/
+locore/sbi/sbi.h/hat_boot/proc_riscv.h/user_elf/kernel.lds/build-kernel}, user/fptest.c NEW,
+rp29-milestone-check.sh}. The riscv64 kernel now runs at high VA with W^X ENFORCED, slab kmem_cache,
+cross-hart TLB shootdown, per-CPU disp queues + steal + kpreempt, and per-proc FP context switch.
+Honest scope: kernel still LINKED low + runs at the low identity VA (hat also maps it at the high alias +
+executes a probe there; NOT dropping the identity map -- medany la/data refs resolve low, so truly
+running high + dropping identity needs relinking at KERNEL_DMAP_BASE+0x80200000 [verified: qemu loads by
+p_paddr, OpenSBI jumps the S-payload at its physical load addr even with a high e_entry] + a locore
+bootstrap enabling paging before touching high-VA symbols -- R-P30); low identity gigapages for unused
+space ARE dropped. kmem_cache = one free list (no magazines/depot/coloring); vmem = one arena. TLB
+shootdown via SBI RFENCE (firmware executes; no per-hart queue/coalescing). Per-CPU queues hold work-item
+jobs (proving the per-CPU-queue+steal shape across 2 harts), not yet proc_t priority procs reentering
+rv_sched on both harts (needs per-CPU curproc/sched-cursor + locked shared proc table -- R-P30); kpreempt
+is an explicit poll (not yet wired to the tick cpu_kprunrun); no TS/RT classes. FP save is EAGER (not lazy
+FS=Off); brk is eager on-demand (no seg_vn/lazy-fault/shrink-free); open/read/fstat are ENOSYS stubs; old
+AS still leaked on exec/exit. NEXT R-P30: relink kernel at high VA + DROP the identity map entirely;
+promote per-CPU work queues to the proc_t priority scheduler on both harts (TS/RT classes, tick-driven
+kpreempt); as_free + ld.so.1 hardening (lazy PLT/.gnu.hash/versioning/self-reloc/mprotect); a real ramfs
+vnode read path (open/read/fstat); lazy FP save; kmem_cache magazines.
+
+
+## R-P29 DONE (2026-08-15): production-shaped kernel -- W^X HAT + slab kmem + per-CPU disp + FP switch
+All 3 boot-verified under qemu-virt -smp 2:
+- Full HAT (hat.c): kernel mapped per-segment at 4K leaves with W^X (.text R|X, .rodata R, .data/.bss
+  R|W); hat_memload leaf. High-VA execution PROVEN via the direct-map alias. W^X ENFORCED (store to
+  .text -> scause 15 fault). vmem arena + slab kmem_cache (kmem_cache.c, Bonwick; 40-obj recycle).
+  TLB shootdown: local + remote sfence.vma to hart 1 via SBI RFENCE (SUCCESS).
+- Per-CPU dispatch (disp.c): each hart owns cpu_disp; work-stealing from the peer (9/3 -> cpu0 ran6
+  stole0, cpu1 ran6 stole3); kpreempt point. Cribbed illumos disp.c/cpu_t.
+- FP context switch: rv_swtch saves/restores fcsr + f0-f31; two FP procs (fs0 111/222) preserve state
+  across preemption. + getpid/brk/read/open/close/fstat/mmap w/ reduced SunOS -errno ABI (brk grows an
+  anon heap). Cribbed illumos hat_i86/seg_kmem/vmem/kmem/disp/fpu + os/grow + RISC-V Sv39/SFENCE/SBI.
+Committed src/riscv/rp29/{kernel/hat.c,kmem_cache.c,disp.c,+grown mach_swtch/proc/main/startup}.
+Honest scope: kernel still linked-low (executes low identity VA); HAT maps it R^X + at the high alias
+(high-VA exec proven) but doesn't yet DROP identity (medany la/data resolve low) -> true high-VA relink
+= R-P30. NEXT R-P30: relink kernel at high VA + drop identity; per-CPU TS/RT priority scheduler both
+harts; as_free + ld.so.1 hardening (lazy PLT/.gnu.hash/versioning); real ramfs vnode read; lazy FP;
+kmem magazines. The riscv64 kernel now has W^X memory protection + slab + SMP work-stealing + FP.

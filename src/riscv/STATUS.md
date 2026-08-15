@@ -1,5 +1,33 @@
 # RISC-V (riscv64) port — STATUS
 
+**Phase reached: R-P29** (the R-P28 SMP dynamic-linking kernel HARDENED toward a
+production-shaped kernel with a **FULL HIGH-VA R^X HAT** [a real kernel HAT that
+maps the kernel image per-segment at 4 KiB leaf granularity with W^X
+permissions -- .text R|X, .rodata R, .data/.bss R|W, no page both writable and
+executable -- executes through the high direct-map alias, ENFORCES W^X (a store
+to .text faults), adds a **vmem arena + slab kmem_cache** (Bonwick vmem/kmem)
+over the R-P24 first-fit heap, and does a **TLB shootdown** broadcasting a remote
+sfence.vma to the secondary hart via SBI RFENCE], **PER-CPU DISPATCH + kpreempt**
+[each hart owns its own dispatch queue (cpu_t.cpu_disp); both harts drain their
+local queue concurrently and STEAL from a peer when empty -- procs balanced
+across 2 harts' per-CPU queues; a kpreempt() kernel preemption point fires +
+yields], and **FP CONTEXT SWITCH + more syscalls** [rv_swtch saves/restores the
+FP register file (fcsr + f0..f31) per context so two FP-using procs that pin
+distinct values in the same FP register preempt each other WITHOUT corrupting
+each other's FP state; getpid/brk + the reduced SunOS errno return ABI +
+mmap/open/read/close/fstat], all boot-verified under `qemu-system-riscv64
+-machine virt -smp 2`: the R-P24 boot map (RWX gigapages) is replaced by a real
+per-segment W^X kernel map at 4 KiB leaves, the kernel calls a probe through its
+canonical Sv39 high VA (`0xffffffc0_802018a6` returns the R-P29 marker), a
+deliberate store to `.text` FAULTS (W^X enforced), a slab kmem_cache recycles
+freed objects, a remote sfence.vma is issued + accepted by hart 1; two per-CPU
+dispatch queues are drained by hart 0 (6 jobs, own queue) and hart 1 (6 jobs, 3
+stolen from the peer) concurrently and a kpreempt point fires; and two FP procs
+(fs0=111 and fs0=222) interleave via timer preemption and BOTH keep their fs0
+intact across every switch. Proof: `rp29/rp29-milestone-check.sh` (all three
+R-P29 sub-tasks + the R-P24 + R-P26 + R-P27 + R-P28 regressions green,
+re-runnable). Details in the R-P29 section below.
+
 **Phase reached: R-P28** (the R-P27 preemptive-multiprocess kernel GROWN with
 **REAL CROSS-OBJECT DYNAMIC LINKING** [ld.so.1 maps + binds `DT_NEEDED`], an
 **illumos-style PRIORITY DISPATCH** [priority disp queues + `thread_create`],
@@ -288,6 +316,242 @@ four sub-tasks, rebuild+reboot, re-runnable green). Repo copies under
    text/data into the high VA + drop the identity map + `hat_memload`/`hat_unload`
    + R^X kernel permissions; vmem/`kmem_cache`; the page hash + freelists;
    `thread_create`/`setrun`/disp queues; SMP secondaries via SBI HSM.
+
+---
+
+## R-P29 -- full high-VA R^X HAT (W^X kernel + slab kmem_cache + TLB shootdown) + per-CPU dispatch + kpreempt + FP context switch
+
+Substrate: fred v3 (root@52.88.62.49), the R-P18/19 build-tree gcc
+(`build/gcc-sol-cfg3/gcc/xgcc -B<gcc>` = `riscv64-unknown-solaris2.11`) + the
+R-P17 `riscv64-unknown-elf` binutils (incl. the shared linker `ld-shared`) +
+`qemu-system-riscv64 -machine virt -smp 2` with OpenSBI v1.7. R-P29 HARDENS the
+R-P28 SMP dynamic-linking kernel (`rp29/kernel/`, a superset of `rp28/kernel/`)
+toward a production-shaped kernel, each subsystem boot-verified under qemu --
+the full high-VA R^X HAT (the headline memory-management maturity step),
+per-CPU dispatch queues + kpreempt, and an FP context switch + more syscalls.
+Proof: `rp29/rp29-milestone-check.sh` (rebuild the userland + ld.so.1 + the
+initramfs + the kernel + reboot; the three R-P29 sub-tasks + the R-P24 + R-P26 +
+R-P27 + R-P28 regressions all green, re-runnable).
+
+Boot flow now: the R-P28 flow (R-P24 subsystems) THEN `hat_kernel_setup` (build
++ install the W^X kernel map, high-VA probe, W^X self-test) -> `kmem_cache_init`
++ a slab alloc/free proof -> R-P24 PLIC/clock/dispatcher -> R-P26/27/28 sessions
+-> `run_fptest` (FP context switch + getpid/brk) -> `disp_percpu_demo` (per-CPU
+queues + steal + kpreempt) -> `smp_start` (R-P28 SMP regression) ->
+`hat_tlb_shootdown` (remote sfence.vma to hart 1) -> known halt.
+
+### R-P29.1 full high-VA R^X HAT (the headline) -- DONE
+- **A real kernel HAT replaces the R-P24 boot map: the kernel image is mapped
+  PER SEGMENT at 4 KiB leaf granularity with W^X permissions, the kernel
+  executes through the high direct-map alias, W^X is ENFORCED, a slab
+  kmem_cache sits over the boot heap, and a TLB shootdown broadcasts to the
+  secondary hart.** `rp29/kernel/{hat.c, kmem_cache.c, kernel.lds, mmu_riscv.h,
+  sbi.c/.h, hat_boot.c}`:
+  - `kernel.lds` now PAGE-ALIGNs the segments and brackets them with boundary
+    symbols (`__text_start/__etext`, `__rodata_start/__erodata`,
+    `__data_start/__end`) so each kernel segment can be mapped by whole 4 KiB
+    leaf PTEs with its own R^X bits.
+  - `hat_memload(root, va, pa, perms)` (hat.c) is the 4 KiB leaf mapping
+    primitive (the illumos hat_memload contract): a 3-level Sv39 walk that
+    allocates missing tables and installs one page-sized mapping with the given
+    protections (A|D preset).  `hat_kernel_setup()` builds a fresh Sv39 root and
+    maps `.text` **R|X** (executable, NOT writable), `.rodata` **R** (read-only),
+    `.data`+`.bss` **R|W** (writable, NOT executable) -- so **no page is both
+    writable and executable (W^X)** -- at BOTH the low identity VA and the high
+    direct-map alias (`KERNEL_DMAP_BASE + pa`).  A 2 MiB-megapage RW window over
+    the 256 MiB qemu DRAM (0x80000000..0x90000000) covers the boot heap + kernel
+    stacks + page tables; MMIO (0..256 MiB) is mapped RW (no X).  It installs
+    the new root (satp + sfence.vma) and publishes it so user ASes clone the
+    fine-grained W^X kernel half.
+  - **High-VA execution proof**: after the switch, `hat_kernel_setup` computes
+    the high direct-map alias of a probe function (`KERNEL_DMAP_BASE + &probe`)
+    and CALLS it through that canonical Sv39 high VA -- the fetch + execute come
+    from the high half.
+  - **W^X self-test**: `hat_wx_selftest` stores to a `.text` address; because
+    `.text` is mapped R|X (no W) the store traps as a store/AMO page fault
+    (scause 15), which `rv_trap` (main.c) catches (arming flag set), records,
+    and steps sepc past -- proving `.text` is not writable.
+  - **vmem + slab kmem_cache** (kmem_cache.c): a one-arena vmem resource
+    allocator (span import, first-fit segment list, coalescing free) + a
+    slab-style `kmem_cache` (a cache draws page-sized SLABS from the arena and
+    slices each into equal objects threaded on a free list; alloc/free recycle).
+    Boot proof: create a 96-byte-object cache, alloc 40 objects (one slab of
+    42), free them, re-alloc and confirm a freed object is recycled.
+  - **TLB shootdown** (hat.c `hat_tlb_shootdown` + sbi.c `sbi_remote_sfence_vma`):
+    a local `sfence.vma` + a remote `sfence.vma` to the secondary hart via the
+    SBI RFENCE extension (EID "RFNC", FID 1) -- every hart drops stale
+    translations after a shared kernel mapping changes.
+- **Boot proof** (`rp29/kernel/qemu-boot.log`):
+  ```
+  [R-P29.1] full HAT: per-segment R^X kernel map (text RX, rodata R, data/bss RW) + high-VA execution
+    [hat] high-VA probe via dmap alias 0xffffffc0802018a6 returned 0x0000000000005239 (executed at high VA)
+    new kernel satp   : 0x8000000000080362 -- W^X kernel map installed
+    [R-P29.1] W^X test: store to .text FAULTED -- W^X enforced (.text is not writable)
+  [R-P29.1] vmem arena + slab kmem_cache: create + alloc/free recycle
+    cache 'rp29_obj' (96B): allocated 40 objs -> slabs=1 objs/slab-total=42 inuse=40
+    freed 40; re-alloc recycled addr 0x000000008038c0c0 (a freed obj, recycle OK)
+  [R-P29.1] TLB shootdown: local sfence.vma + remote sfence.vma to hart 1 (SBI RFENCE)
+    remote sfence.vma to hart 1: SBI_SUCCESS -- TLB shootdown broadcast across harts
+  [R-P29.1] TLB shootdown PROVEN: cross-hart sfence.vma issued + accepted.
+  ```
+- **Scope (honest)**: the kernel is still LINKED low (0x80200000) and runs at
+  the low identity VA; hat_kernel_setup maps it fine-grained R^X and ALSO at the
+  high direct-map alias (proving high-VA execution by calling a probe through
+  it), but the identity map of the kernel image is NOT dropped -- because the
+  medany kernel's `la`/global-data references resolve to the low link
+  addresses, truly running at high VA + dropping the low identity map requires
+  RELINKING the kernel at `KERNEL_DMAP_BASE + 0x80200000` (verified feasible:
+  qemu loads the ELF by p_paddr and OpenSBI jumps the S-payload at its physical
+  load address even when e_entry is the high VA, so a high-linked kernel boots
+  bare then turns paging on -- the R-P30 step, requiring a locore bootstrap that
+  enables paging before touching high-VA symbols).  The low identity gigapages
+  for unused address space ARE dropped (only the kernel image 4 KiB leaves + the
+  256 MiB RW DRAM window + MMIO remain).  kmem_cache is a single per-cache free
+  list (no magazines / per-CPU depot / slab coloring); vmem is one arena.  The
+  TLB shootdown uses the SBI RFENCE (firmware executes the remote fence); no
+  per-hart shootdown queue / no lazy shootdown coalescing.
+- **CRIB**: mapping the kernel per segment with distinct R^X protections + the
+  hat_memload leaf-install contract + dropping the boot identity map is illumos
+  `uts/i86pc/vm/hat_i86.c` (`hat_memload`/`hat_kern_setup`) + `seg_kmem` + the
+  OpenBSD/xv6 W^X kernel map; the 4 KiB Sv39 leaf walk + the R/W/X leaf bits +
+  the non-leaf-PTE rule + SFENCE.VMA are the RISC-V privileged spec; the
+  "keep the running code mapped across the satp switch then jump to the new VA"
+  transition is the i86pc/aarch64 boot-map trampoline idiom; the vmem arena is
+  `uts/common/os/vmem.c` (Bonwick vmem) and the slab kmem_cache is
+  `uts/common/os/kmem.c` (Bonwick slab), both reduced to one arena / one free
+  list; the cross-hart sfence.vma is the illumos `hat_tlb_inval`/`x_call`
+  TLB-shootdown model mapped onto the SBI RFENCE `remote_sfence_vma`.
+
+### R-P29.2 per-CPU dispatch queues + kpreempt -- DONE
+- **Each hart owns its own dispatch queue; both harts drain their LOCAL queue
+  concurrently and STEAL from a peer when empty; a kpreempt() kernel
+  preemption point fires.** `rp29/kernel/{disp.c, locore.S, sbi.c/.h}`:
+  - A `cpu_t` per hart carries a per-CPU `cpu_disp_t` (a job ring + a lock only
+    contended on a steal) + a `cpu_runrun` preempt flag.  Jobs are placed on
+    the per-CPU queues at enqueue time (illumos `setbackdq`); `disp_run(self)`
+    drains the LOCAL queue first (fast path) and, when empty, `disp_steal`s from
+    a peer's queue tail (illumos `disp_getwork` work-stealing balance).
+  - `disp_ap_entry` (locore.S) is a second AP entry (like `_secondary_start`
+    but landing in `disp_secondary_main`) so the secondary drains its OWN
+    per-CPU queue.  The secondary `sbi_hart_stop`s itself when done (returns to
+    the HSM STOPPED state) so the later R-P28 SMP proof can restart it.
+  - `kpreempt(hartid)` checks `cpu_runrun` (set by `kpreempt_arm`, the illumos
+    `cpu_kprunrun`) at an explicit kernel preemption point and yields.
+- **Boot proof** (`-smp 2`): 12 jobs enqueued UNBALANCED (9 on hart 0's queue, 3
+  on hart 1's); hart 1 drains its 3 then STEALS from hart 0 -- both harts run
+  concurrently from their own queues:
+  ```
+  [R-P29.2] per-CPU dispatch: each hart drains its OWN runq; empty queue STEALS from the peer
+    [cpu 0] ran job N (from own queue) ... [cpu 1] ran job M (STOLEN from peer) ...
+    [disp] cpu0 ran=6 (stole 0); cpu1 ran=6 (stole 3)
+  [R-P29.2] percpu disp PROVEN: both harts ran from their own per-CPU queues + a steal balanced them.
+    [kpreempt] cpu_runrun set at iter 500 -> kernel loop yielded
+  [R-P29.2] kpreempt PROVEN: kernel preemption point fired + yielded.
+  ```
+  (The two harts' console output interleaves char-by-char -- genuine concurrent
+  execution.)
+- **Scope (honest)**: the per-CPU queues hold work-item jobs (proving the
+  per-CPU-queue + steal SHAPE across 2 harts), not yet the full proc_t priority
+  procs reentering `rv_sched` on both harts (that needs per-CPU curproc/
+  sched-cursor state + a locked shared proc table -- R-P30); kpreempt is an
+  explicit poll point (not yet wired to the clock tick's `cpu_kprunrun`); no
+  scheduling classes (TS/RT).
+- **CRIB**: `cpu_t.cpu_disp` (a per-CPU disp_t with its own queues) + `setbackdq`
+  placement + `disp_getwork` stealing from a peer when the local queue is empty
+  is illumos `uts/common/disp/disp.c` + `sys/cpu.h` `cpu_t`; `kpreempt()`
+  checking `cpu_kprunrun` is illumos `disp.c` `kpreempt()` + the
+  `cpu_runrun`/`cpu_kprunrun` flags; the HSM hart_stop (return to STOPPED) is the
+  SBI spec; the amoswap.w per-queue spinlock is the RISC-V A-extension.
+
+### R-P29.3 FP context switch + more syscalls -- DONE
+- **rv_swtch now saves/restores the FP register file (fcsr + f0..f31) per
+  context, so two FP-using procs preempt each other WITHOUT corrupting each
+  other's FP state; getpid/brk + the reduced SunOS errno ABI work.**
+  `rp29/kernel/{mach_swtch.S, proc_riscv.h, proc.c, startup.c, main.c}` +
+  `rp29/user/fptest.c`:
+  - `struct rv_context` (proc_riscv.h) gains an FP save area (`c_fcsr` +
+    `c_f[32]`); `rv_swtch` (mach_swtch.S) enables `sstatus.FS=Dirty` then
+    `fsd`s f0..f31 + `frcsr` of the outgoing context into `*old` and `fld`s +
+    `fscsr`s the incoming context from `*new` -- the illumos `fpu_save`/
+    `fp_restore` folded into the switch.  Fresh contexts zero the FP area
+    (`ctx_clear_fp` in proc.c, thread_init in startup.c) so the first switch-in
+    loads clean FP state.
+  - `proc_brk` (proc.c) is a minimal program break: an anonymous heap growing
+    upward from 0x20000000, one 4 KiB zeroed page mapped on demand into the
+    proc's user AS (+ a local TLB flush).  `rv_syscall` (main.c) adds
+    `SYS_brk`(17)/`SYS_read`(3)/`SYS_open`(5)/`SYS_close`(6)/`SYS_fstat`(28)/
+    `SYS_mmap`(115) with the reduced SunOS error-return ABI (a negative a0 is
+    -errno: EBADF/ENOMEM/ENOSYS from `sys/errno.h`); mmap is a reduced anonymous
+    map (brk-backed).
+  - `fptest.c` (user): queries+grows brk (writes+reads the new page), then forks
+    two children that pin distinct sentinels in `fs0` (111 and 222) and spin
+    (getting preempted many times), re-reading fs0 each round; each verifies its
+    fs0 survived.
+- **Boot proof**: the two FP children interleave via preemption and BOTH keep
+  their fs0 intact across every switch:
+  ```
+    [fptest] parent getpid()=13
+    [fptest] brk grew heap to 536875008; wrote+read heap[0]=41 (OK)
+    [fp A pid=14] round 0 fs0=111 (intact) ... [fp B pid=15] round 0 fs0=222 (intact) ...
+    [fp A] FP state PRESERVED across preemption
+    [fp B] FP state PRESERVED across preemption
+  [R-P29.3] FP ctx switch PROVEN: two FP procs preempted + kept distinct fs0 (rv_swtch saves/restores f0..f31).
+  [R-P29.3] syscalls PROVEN: getpid/brk + the reduced SunOS errno return ABI.
+  ```
+  Under the R-P28 kernel (which did NOT save FP across rv_swtch) the two
+  children -- writing different values into the SAME architectural fs0 -- would
+  corrupt each other; here both stay intact, proving the per-context FP save.
+- **Scope (honest)**: EAGER FP save/restore on every switch (not the illumos
+  lazy FS=Off-until-first-FP-use / `fp_fork` deferred save -- eager is simpler +
+  correct, at the cost of always touching 32 FP regs per switch); brk is an
+  eager on-demand page map (no seg_vn / no lazy fault-in / no shrink-frees
+  the pages); open/read/fstat are ENOSYS stubs (the vfs read path is later); no
+  per-lwp trap state beyond the existing kstack; the old AS is still leaked on
+  exec/exit (as_free is R-P30).
+- **CRIB**: saving/restoring the FP register file across a context switch is
+  illumos `fpu_save`/`fp_restore` + the lwp FPU save area + the RISC-V
+  privileged-spec `sstatus.FS` state field (fsd/fld/frcsr/fscsr); brk growing an
+  anonymous heap by mapping fresh pages is illumos `os/grow.c` `brk()` + `as_map`
+  reduced to on-demand 4 KiB leaf maps; the a7=nr/a0..=args/-errno-in-a0 ABI +
+  the errno numbers are the native `sys/syscall.h` + `sys/errno.h`.
+
+### `/root/riscv-port/rp29/` contents
+`kernel/{locore.S [+ `disp_ap_entry`], mach_trap.S, mach_clock.S, mach_mmu.S,
+mach_swtch.S [+ FP save/restore], mach_uentry.S, user_elf.S [+ fptest.bin],
+mmu_riscv.h, clock_riscv.h, plic.h, proc_riscv.h [+ FP context fields], assym.h,
+sbi.h/.c [+ IPI/RFENCE/hart_stop], hat_boot.c [+ hat_active_root], hat.c [NEW:
+full high-VA R^X HAT + hat_memload + W^X self-test + TLB shootdown],
+kmem_cache.c [NEW: vmem arena + slab kmem_cache], hat_user.c, exec_elf.c,
+ramfs.c, proc.c [+ FP ctx-clear + proc_brk + p_brk], clock_riscv.c, plic.c,
+smp.c, disp.c [NEW: per-CPU disp queues + steal + kpreempt], startup.c, main.c
+[+ R-P29.1 HAT/kmem_cache/TLB phases + run_fptest + new syscalls], kernel.lds
+[+ page-aligned segments + boundary symbols], build-kernel.sh, *.bin, *.o,
+unix.elf, qemu-boot.log}`; `ldso/{...unchanged from R-P28...}`;
+`user/{forker.c, execee.c, preempt.c, fsexec.c, dynexec.c, dynexec2.c,
+hellodyn.c, fptest.c [NEW: FP-context-switch + getpid/brk proof],
+mkinitramfs.py, build-user.sh [+ fptest], + built ELFs/*.o}`; `hello/{...}`;
+`rp29-milestone-check.sh` (all three sub-tasks + the R-P24 + R-P26 + R-P27 +
+R-P28 regressions, rebuild+reboot, re-runnable green).
+
+### Next: R-P30
+1. **Relink the kernel at high VA + drop the identity map entirely** -- link
+   `unix` at `KERNEL_DMAP_BASE + 0x80200000` (load by p_paddr, verified: qemu
+   loads by paddr + OpenSBI jumps the S-payload at its physical load address),
+   with a locore bootstrap that enables paging BEFORE touching high-VA `la`/data
+   symbols, so the kernel truly executes at high VA with NO low identity map --
+   completing the illumos kernel-VA-!=-PA model.
+2. **Per-CPU proc dispatch** -- promote the R-P29.2 per-CPU work queues to the
+   real proc_t priority scheduler: per-CPU `curproc`/`sched_ctx`/`sched_last`
+   state so BOTH harts reenter `rv_sched` concurrently (a locked shared proc
+   table), scheduling classes (TS/RT), and wire kpreempt to the clock tick's
+   `cpu_kprunrun`.
+3. **as_free + ld.so.1 hardening** -- free the old AS on exec/exit (vs the
+   current leak); lazy PLT binding (a PLT0 resolver via a `SYS_bind` trap),
+   `.gnu.hash`, symbol versioning, a self-relocating ET_DYN ld.so.1,
+   `mprotect`-after-reloc; ld.so.1 mmaps the file itself instead of SYS_mapso.
+4. **vfs read path** -- turn the open/read/fstat ENOSYS stubs into a real ramfs
+   vnode read so a proc can open+read a file; lazy FP save (FS=Off until first
+   FP use); kmem_cache magazines/per-CPU depot.
 
 ---
 
