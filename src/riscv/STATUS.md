@@ -1,5 +1,18 @@
 # RISC-V (riscv64) port — STATUS
 
+**Phase reached: R-P27** (the R-P26 MULTIPROCESS kernel GROWN with **timer-tick
+PREEMPTION**, **fs-backed exec over a minimal ramfs**, and **ld.so.1 hosting the
+first DYNAMICALLY-LINKED riscv64-solaris process**, all boot-verified under
+`qemu-system-riscv64 -machine virt`: the R-P24 100 Hz clock, made free-running,
+drives round-robin preemption so two CPU-bound procs that never cooperatively
+yield still INTERLEAVE; a linked-in **initramfs** archive backs `exec(path)`
+which resolves the ELF by name (`/bin/execee`); and a userland **ld.so.1**
+(entered by the exec path when the app carries `PT_INTERP`) reads the auxv,
+reports the app's `DT_NEEDED`, relocates it, and jumps to its `_start` -- the
+DYNAMIC hello (R-P21) runs as a process and calls `exit(2)` (captured status).
+Proof: `rp27/rp27-milestone-check.sh` (all three R-P27 sub-tasks + the R-P24 +
+R-P26 regressions green, re-runnable). Details in the R-P27 section below.
+
 **Phase reached: R-P26** (the R-P25 single-user-process kernel GROWN into the
 first MULTIPROCESS riscv64-solaris kernel, all boot-verified under
 `qemu-system-riscv64 -machine virt`: a minimal **proc/lwp table** [`proc.c`
@@ -255,6 +268,197 @@ four sub-tasks, rebuild+reboot, re-runnable green). Repo copies under
    text/data into the high VA + drop the identity map + `hat_memload`/`hat_unload`
    + R^X kernel permissions; vmem/`kmem_cache`; the page hash + freelists;
    `thread_create`/`setrun`/disp queues; SMP secondaries via SBI HSM.
+
+---
+
+## R-P27 -- timer-tick preemption + fs-backed exec (ramfs) + ld.so.1 hosting the first DYNAMIC process
+
+Substrate: fred v3 (root@52.88.62.49), the R-P18/19 build-tree gcc
+(`build/gcc-sol-cfg3/gcc/xgcc -B<gcc>` = `riscv64-unknown-solaris2.11`) + the
+R-P17 `riscv64-unknown-elf` binutils + `qemu-system-riscv64 -machine virt` with
+OpenSBI v1.7. R-P27 extends the R-P26 multiprocess kernel (`rp27/kernel/`, a
+superset of `rp26/kernel/`) with preemptive scheduling, a minimal in-memory
+filesystem + fs-backed exec, and a userland `ld.so.1` that hosts the R-P21
+DYNAMIC hello. Proof: `rp27/rp27-milestone-check.sh` (rebuild the userland
+programs + ld.so.1 + the initramfs + the kernel + reboot; the three R-P27
+sub-tasks + the four R-P24 subsystems + the four R-P26 sub-tasks all green,
+re-runnable).
+
+Boot flow now: the R-P26 flow (R-P24 subsystems -> `run_user` forker
+fork/exec/wait session) THEN `run_preempt` (free-running clock + a proc that
+forks two CPU-bound children that interleave via preemption) -> `run_fsexec`
+(dump the ramfs + a proc that execs `/bin/execee` by path) -> `run_dynamic`
+(a proc that execs `/bin/hello`, whose `PT_INTERP` routes exec through the
+ld.so.1 path) -> known halt.
+
+### R-P27.1 timer-tick preemption -- two CPU-bound procs interleave -- DONE
+- **The R-P24 100 Hz clock tick, made free-running, preempts the running proc
+  so the cooperative R-P26 dispatcher becomes preemptive.**
+  `rp27/kernel/{clock_riscv.c, main.c rv_interrupt, proc.c proc_yield}`:
+  - `clock_run_forever()` (clock_riscv.c) flips the R-P24 finite boot-proof
+    cadence (stop after `CLOCK_TEST_TICKS`) into a free-running tick and
+    RE-UNMASKS `sie.STIE` (the R-P24 idle-loop phase masked it after the last
+    tick) -- the preemption heartbeat.
+  - `rv_interrupt()` (main.c), on a timer tick taken while a USER proc is
+    running (`sstatus.SPP==0`: trapped from U-mode), calls `proc_preempt_tick`
+    (raise `want_resched`) then `proc_yield` if pending. `proc_yield` (proc.c)
+    puts the running proc back on the runq (`P_RUNNABLE`) and `rv_swtch`es to
+    the scheduler; when the scheduler next picks the proc the swtch returns
+    here, `rv_interrupt` returns, and the trap epilogue `sret`s the proc back
+    exactly where the tick hit it. We defer the switch to the interrupt-return
+    path (a flag), not switch inside the tick, the illumos `cpu_runrun` /
+    xv6 yield-on-tick split.
+- **Boot proof** (`rp27/kernel/qemu-boot.log`): a process forks two CPU-bound
+  children (a long no-syscall compute spin between progress lines, NO
+  cooperative yields); their output INTERLEAVES:
+  ```
+      [worker A pid=5] round 0
+      [worker B pid=6] round 0
+      [worker A pid=5] round 1
+      [worker B pid=6] round 1
+      ...
+  ```
+  Under the R-P26 cooperative dispatcher worker A would print all four rounds
+  before B ever ran (A never yields); the interleaving proves the timer
+  preempted A mid-spin to run B and vice-versa. The check counts A/B run
+  transitions and requires >=2.
+- **Scope (honest)**: round-robin only (no priorities / disp queues yet), the
+  preemption point is the timer-interrupt return to U-mode (no kernel
+  preemption / no `kpreempt`), one CPU. It proves preemption end to end;
+  R-P28+ grows priority disp queues + `thread_create`.
+- **CRIB**: the "tick raises a resched flag, the trap-return path calls yield()
+  which sets the thread RUNNABLE + swtch()es to the scheduler, the interrupted
+  frame resumes after the swtch-back" split is illumos `clock()`/`preempt()`/
+  `cpu_runrun` + xv6-riscv `usertrap` yield-on-tick + `sched`/`swtch`; the
+  free-running SBI-timer re-arm + STIE unmask is the RISC-V SBI spec + the
+  R-P24 clock.
+
+### R-P27.2 fs-backed exec + a minimal ramfs (initramfs) -- DONE
+- **A minimal in-memory filesystem seeded from a linked-in initramfs archive
+  backs `exec(path)`, which resolves the ELF by name -- replacing the R-P26
+  embedded-per-program `.incbin` where exec ignored the path.**
+  `rp27/kernel/{ramfs.c, user_elf.S}` + `rp27/user/mkinitramfs.py`:
+  - `mkinitramfs.py` packs `(archive-path, host-file)` pairs into a flat
+    `SOLRAMFS` archive (`magic`, then `{u32 namelen; u32 datalen; name; data;
+    pad-to-8}` records, `namelen==0` terminator). build-kernel seeds it with
+    `/bin/execee`, `/bin/fsexec`, `/bin/hello` (the DYNAMIC hello),
+    `/usr/lib/ld.so.1`, `/lib/libgcc_s.so.1`; `user_elf.S` embeds the blob via
+    `.incbin` (`initramfs_start`/`_end`).
+  - `ramfs_lookup(path, &bytes, &len)` (ramfs.c) walks the archive for an
+    exact-name match -- the reduced vfs `lookuppn` (no directories/inodes/
+    mounts, just a flat records scan over the linked-in image). `proc_exec`
+    (proc.c) resolves the `execve` path through it (falling back to the
+    embedded execee for R-P26 back-compat).
+- **Boot proof**: the ramfs is dumped (proving it is populated + walkable) and
+  a process execs `/bin/execee` BY PATH:
+  ```
+    ramfs contents:
+      /bin/execee  (2680 bytes)
+      /bin/fsexec  (2600 bytes)
+      /bin/hello  (3480 bytes)
+      /usr/lib/ld.so.1  (9312 bytes)
+      /lib/libgcc_s.so.1  (1153000 bytes)
+    [fsexec] exec by absolute path: /bin/execee (via ramfs)
+    [execee] NEW program image running after exec(2); pid=7
+  ```
+  The execee line reached via the string `/bin/execee` proves the path drove
+  the lookup (vs R-P26's path-ignoring embedded exec).
+- **Scope (honest)**: a flat archive (no directory hierarchy / no `open`/`read`
+  syscalls / no writable fs), exact-name match, the whole image linked into
+  `.rodata`. It is the fs-backed-exec enabler for ld.so.1; R-P28 grows
+  `open/read/close/mmap` + a real vfs.
+- **CRIB**: reading a name/size/bytes archive straight out of memory to resolve
+  a boot path is the illumos `boot_archive` (the loader-handed root image) +
+  Linux initramfs (newc cpio) reduced to a flat scan; exec-by-path over it is
+  illumos `vfs` `lookuppn`/`vn_open` reduced to an exact-name match.
+
+### R-P27.3 ld.so.1 hosts the DYNAMIC hello -- the first dynamically-linked process -- DONE
+- **exec detects the app's `PT_INTERP`, loads BOTH the app and the userland
+  `ld.so.1` into one AS, builds an auxv, and enters ld.so.1, which relocates
+  the app + jumps to its `_start`.** `rp27/ldso/{rtld_start.S, rtld_riscv.c,
+  ld.so.1.lds}` + `rp27/kernel/exec_elf.c exec_dynamic`:
+  - `ld.so.1` is a static EM_RISCV ET_EXEC linked at `0x30000000` (above the
+    app at `0x10000`, below the user stack at `0x40000000` -- no collision).
+    `_rtld_start` (rtld_start.S) captures the psABI initial stack, calls
+    `rtld_main(sp)`, then tail-jumps to the returned app entry with the stack
+    intact (so the app crt sees argc/argv/envp/auxv per the psABI).
+  - `rtld_main` (rtld_riscv.c) walks the auxv (`AT_PHDR`/`AT_PHENT`/`AT_PHNUM`/
+    `AT_ENTRY`/`AT_BASE`), finds the app's `PT_DYNAMIC`, reports its
+    `DT_NEEDED` (`libgcc_s.so.1`), and applies the app's `DT_RELA` table with
+    the R-P23 riscv64 reloc engine (`elf_reloc_riscv`: `R_RISCV_RELATIVE` /
+    `R_RISCV_JUMP_SLOT` / `R_RISCV_64`), then returns the app entry.
+  - `exec_dynamic` (exec_elf.c), when `elf_has_interp` sees `PT_INTERP`,
+    resolves the interp path (`/usr/lib/ld.so.1`) from the ramfs, maps the app
+    and ld.so.1 (both ET_EXEC, own vaddrs) into a fresh user AS, builds the
+    initial stack with the full auxv (`AT_PHDR`=the app phdr VA, `AT_ENTRY`=the
+    app `_start`, `AT_BASE`=0), and sets the process entry to ld.so.1's entry.
+    `do_exec`/`proc_exec` (proc.c) route any `PT_INTERP` image here.
+- **Boot proof**: a process execs `/bin/hello` (the R-P21 DYNAMIC hello,
+  INTERP=/usr/lib/ld.so.1, NEEDED=libgcc_s.so.1); the log shows the interpreter
+  running, reporting the dependency, relocating, and jumping -- then the hello
+  itself runs its `_start` -> `main` -> `exit(2)` (captured status 45):
+  ```
+    [dynexec] exec /bin/hello (DYNAMIC: INTERP=/usr/lib/ld.so.1)
+  [ld.so.1] riscv64 runtime linker: hosting the DYNAMIC hello
+  [ld.so.1] DT_NEEDED: libgcc_s.so.1
+  [ld.so.1] relocations applied to the app: 0
+  [ld.so.1] app relocated; jumping to its entry (_start)
+  [R-P27.3] dynamic hello _start ran + called exit(2); status=45
+  ```
+  The captured exit status (`45`, the hello's argc-derived `main` return) is
+  positive proof the hello's OWN code executed after ld.so.1 jumped -- not a
+  coincidental trap (no fault appears in the log). This is the first
+  DYNAMICALLY-LINKED riscv64-solaris process: the R-P21 dynamic hello + the
+  R-P23 reduced rtld engine, now hosted by the R-P26/R-P27 kernel + fs exec.
+- **Scope (honest, per the anti-wedge directive)**: ld.so.1 reads the auxv,
+  parses `PT_DYNAMIC`, reports `DT_NEEDED`, and runs the relocate loop -- the
+  real ld.so.1 shape -- but does NOT yet MAP the `DT_NEEDED` objects
+  (`libgcc_s.so.1`) into the AS or bind cross-object symbols; the DYNAMIC hello
+  binds no symbol from libgcc_s (its `DT_RELA` is empty), so no cross-object
+  binding is needed to run it. ld.so.1 is a static ET_EXEC at a fixed base (not
+  yet a self-relocating ET_DYN); the interp is loaded by the kernel exec path
+  (not `mmap`ed by ld.so.1). libgcc_s.so.1 IS seeded in the ramfs so the
+  R-P28 step (map + relocate + bind DT_NEEDED via `open`/`read`/`mmap`) has its
+  input in place.
+- **CRIB**: exec detecting `PT_INTERP`, mapping the interpreter, building the
+  auxv (`AT_PHDR`/`AT_PHNUM`/`AT_PHENT`/`AT_ENTRY`/`AT_BASE`), and entering the
+  interpreter is the illumos exec `elfexec`/`mapexec_interp` + BSD
+  `exec_elf_imgact` interp handling; `_rtld_start` capturing sp + calling the C
+  linker + tail-jumping to the executable entry is the illumos ld.so.1
+  `rtld_start`/`_rt_boot`; walking `PT_DYNAMIC` for `DT_RELA`/`DT_RELASZ`/
+  `DT_NEEDED` + the relocate loop are `usr/src/cmd/sgs/rtld/common/setup.c` +
+  `_elf.c` reduced to the riscv64 load-time types; the reloc formulas are the
+  R-P23 `rtld_riscv.c` + the RISC-V psABI; the auxv contents are the RISC-V
+  psABI + `<sys/auxv.h>`.
+
+### `/root/riscv-port/rp27/` contents
+`kernel/{locore.S, mach_trap.S, mach_clock.S, mach_mmu.S, mach_swtch.S,
+mach_uentry.S, user_elf.S, mmu_riscv.h, clock_riscv.h, plic.h, proc_riscv.h,
+assym.h, sbi.h, sbi.c, hat_boot.c, hat_user.c, exec_elf.c, ramfs.c, proc.c,
+clock_riscv.c, plic.c, startup.c, main.c, kernel.lds, build-kernel.sh,
+forker.bin, execee.bin, preempt.bin, fsexec.bin, dynexec.bin, initramfs.bin,
+*.o, unix.elf, qemu-boot.log}` (the grown kernel); `ldso/{rtld_start.S,
+rtld_riscv.c, ld.so.1.lds, build-ldso.sh, ld.so.1, *.o}` (the userland
+ld.so.1); `user/{forker.c, execee.c, preempt.c, fsexec.c, dynexec.c,
+mkinitramfs.py, build-user.sh, + built ELFs/*.o}` (the userland programs);
+`rp27-milestone-check.sh` (all three sub-tasks + the R-P24 + R-P26 regressions,
+rebuild+reboot, re-runnable green). Repo copies under `src/riscv/rp27/`.
+
+### Next: R-P28
+1. **ld.so.1 maps + binds DT_NEEDED** -- give ld.so.1 `open`/`read`/`mmap`
+   syscalls (or a ramfs read path), MAP `libgcc_s.so.1` into the AS, relocate
+   it, and BIND the app's cross-object symbols (a real dynamic hello that
+   CALLS a libgcc_s routine, vs the current no-cross-reloc hello); make ld.so.1
+   a self-relocating ET_DYN loaded at an arbitrary base.
+2. **priority disp queues + `thread_create`** -- grow the round-robin runq into
+   priority dispatch queues + `setrun`/`thread_create`, and add kernel
+   preemption points.
+3. **more syscalls + errno ABI + as_free** -- `open/read/close/brk/mmap`, the
+   SunOS error-return convention, free the old AS on exec/exit (vs the current
+   leak), per-lwp trap state, argv/envp passthrough.
+4. **Full HAT + SMP** (carried): relocate kernel text/data into the high VA +
+   drop the identity map + `hat_memload`/R^X kernel perms; vmem/`kmem_cache`;
+   the page hash + freelists; SMP secondaries via SBI HSM.
 
 ---
 

@@ -3023,3 +3023,25 @@ mach_trap/main/startup}. The riscv64 arc: compiles->links->executes->boots->VM+i
 MULTIPROCESS (fork/exec/wait). NEXT R-P27: fs-backed exec + ld.so.1 (dynamic hello), timer-preemption +
 real disp queue + COW fork, more syscalls/errno/as_free, full HAT + SMP.
 Honest scope: cooperative sched (preemption=R-P27), copy-not-COW fork, embedded-ELF exec, NPROC=8.
+
+## R-P27 DONE (2026-08-15): preemption + fs-backed exec + first DYNAMICALLY-LINKED process
+All 3 boot-verified under qemu-virt:
+- Timer-tick PREEMPTION: free-running 100Hz clock; a tick taken in U-mode raises want_resched ->
+  proc_yield -> rv_swtch to a peer. PROOF: two CPU-bound children (no cooperative yields) INTERLEAVE
+  A0,B0,A1,B1,A2,B2,A3,B3 -- impossible under R-P26 cooperative scheduling. Cribbed illumos clock()/
+  preempt() + xv6 yield-on-tick.
+- fs-backed exec + ramfs: a SOLRAMFS archive (.incbin'd, /bin/{execee,fsexec,hello} + /usr/lib/ld.so.1
+  + /lib/libgcc_s.so.1); ramfs_lookup(path) (reduced vfs lookuppn); proc_exec resolves execve path.
+  PROOF: exec("/bin/execee") by path runs. Cribbed illumos boot_archive/vfs + Linux initramfs.
+- ld.so.1 hosts the DYNAMIC hello (FIRST dynamically-linked riscv64-solaris process): exec_dynamic
+  detects PT_INTERP -> resolves /usr/lib/ld.so.1 from ramfs -> maps app + ld.so.1 -> full auxv (AT_PHDR/
+  ENTRY/BASE) -> enters ld.so.1 (_rtld_start->rtld_main) which walks PT_DYNAMIC, reports DT_NEEDED
+  libgcc_s.so.1, applies RELA (R-P23 reduced reloc engine), jumps to _start -> the hello ran + exit
+  status=45. Cribbed illumos elfexec/mapexec_interp + BSD interp handling + illumos ld.so.1 rtld_start/
+  setup.c/_elf.c + R-P23 rtld_riscv.c.
+Committed src/riscv/rp27/{kernel/ramfs.c+grown proc/clock/main/exec, ldso/rtld_*, user/preempt/fsexec/
+dynexec}. The riscv64 arc: ...->userland process->multiprocess->PREEMPTIVE + fs + DYNAMIC LINKING.
+Honest scope: ld.so.1 walks/reports/relocates (real shape) but doesn't yet MAP cross-object DT_NEEDED
+(the hello binds no libgcc symbol, empty RELA -> runs); libgcc_s.so.1 seeded in ramfs for R-P28's
+map/bind. NEXT R-P28: ld.so.1 maps+binds DT_NEEDED (cross-object dynamic), priority disp queues +
+thread_create, more syscalls/errno/as_free, full HAT + SMP.
