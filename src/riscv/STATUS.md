@@ -1,5 +1,50 @@
 # RISC-V (riscv64) port — STATUS
 
+**Phase reached: R-P34** (the R-P33 full-Unix-core kernel rounds out the
+SYSCALL/VFS surface toward hosting real programs with **SIGNAL COMPLETENESS**,
+**fd MANAGEMENT**, and **VFS MATURITY**, each boot-verified under
+`qemu-system-riscv64 -machine virt -smp 2`.  (1) SIGNAL COMPLETENESS: a per-proc
+BLOCKED-signal mask (`p_sigmask`) that `sigprocmask(SIG_BLOCK/UNBLOCK/SETMASK)`
+edits -- a blocked signal STAYS PENDING (the delivery path skips it) and
+DELIVERS on unblock (proven: a proc blocks SIGUSR1, raises it [stays pending],
+then unblocks it [the pending signal delivers + runs the handler]); `sigsuspend`
+atomically swaps in a temporary mask + blocks until an unmasked signal (a
+cooperative wfi-poll on `p_sigpend` that keeps the SBI timer live so it wakes on
+a `kill`/alarm); `SA_RESTART` rewinds the saved `sepc` past the `ecall` on
+delivery so an interrupted (`EINTR`) syscall re-runs -- and `sigsuspend` is
+NEVER restarted (POSIX, via a per-proc `p_no_restart` guard); `SIGCHLD` is
+posted to the PARENT on child exit (a parent can catch it, not just block in
+`wait`); and `alarm(2)` arms a per-proc one-shot deadline (a `clock_ticks`
+count) that the tick handler (`proc_alarm_tick`, called from `rv_interrupt`)
+turns into `SIGALRM` when it passes (proven: `alarm(1)` delivers SIGALRM).
+(2) fd MANAGEMENT: `dup(2)`/`dup2(2)`/`fcntl(F_DUPFD/F_GETFD/F_SETFD/F_GETFL/
+F_SETFL)` over the R-P31/32 per-proc fd table (a dup'd fd is a second reference
+to the same vnode/pipe-end/offset with FD_CLOEXEC cleared; `dup2` onto a console
+fd installs/removes the file backing so `proc_write`/`proc_read` route fd 1/2 to
+a file when redirected); `FD_CLOEXEC` is honored across `exec` (`proc_fd_cloexec`
+closes every close-on-exec fd in `do_exec` before the new image runs).  Proof: a
+proc `dup2`s a file onto stdout, writes through fd 1 (the bytes land IN THE
+FILE, not the console), restores stdout, reads the file back; then it sets
+FD_CLOEXEC on an fd + execs -- the CLOEXEC fd is CLOSED in the new image while a
+plain fd survives.  (3) VFS MATURITY: a MOUNT TABLE (`vfs_mount` maps a
+mount-point prefix to a fs type; "/"=ramfs, "/tmp"=tmpfs seeded at boot,
+`mount("tmpfs", "/mnt")` adds more) + a MULTI-LEVEL PATH WALK (`vfs_walk`, the
+reduced `lookuppn`: walk a path component-by-component from the root, validating
+that every INTERMEDIATE directory exists [a mount point or a `mkdir`'d tmpfs
+dir], rejecting a walk through a missing dir, then resolve the leaf against the
+fs its longest mount prefix covers) + `rename`/`unlink` over tmpfs.  Proof:
+`mount tmpfs at /mnt`, `mkdir /mnt/sub`, create + read `/mnt/sub/file` (a
+multi-level walk ACROSS the mount + directory), a pre-mkdir open of
+`/mnt/sub/file` correctly ENOENTs (the walk rejects the missing dir), then
+`rename /mnt/sub/file -> /mnt/sub/renamed` + `unlink` it.  Proof:
+`rp34/rp34-milestone-check.sh` (all three R-P34 sub-tasks + the R-P24 + R-P26 +
+R-P27 + R-P28 + R-P29 + R-P30 + R-P31 + R-P32 + R-P33 regressions green,
+rebuild+reboot, re-runnable).  Cribbed illumos sig.c (sigprocmask/issig held
+signals) + timer.c/clock.c (it_real/realitexpire -> SIGALRM) + fio.c
+(dupfd/fcntl/FD_CLOEXEC) + lookup.c (lookuppnvp) + vfs_t/vfssw (the mount list) +
+tmpfs tmp_vnops; xv6/BSD for the trap-return signal-frame + fd shape.
+**Next: R-P35.**
+
 **Phase reached: R-P33** (the R-P32 real-proc_t-on-both-harts kernel grows the
 PROCESS + IPC + FILESYSTEM maturity with a **MINIMAL SIGNAL FRAMEWORK + kill(2)**,
 **pipe(2) + directories**, and **per-CPU idle/wfi + file-backed demand-exec**,
@@ -36,7 +81,8 @@ by a program whose text is paged in on the fetch fault (`[exec-demand] fault ->
 paged text from file`) and then runs its compute loop correctly.  Proof:
 `rp33/rp33-milestone-check.sh` (all three R-P33 sub-tasks + the R-P24 + R-P26 +
 R-P27 + R-P28 + R-P29 + R-P30 + R-P31 + R-P32 regressions green, rebuild+reboot,
-re-runnable).  Details in the R-P33 section below.  **Next: R-P34.**
+re-runnable).  Details in the R-P33 section below.  **Next: R-P34 (DONE -- see
+the R-P34 phase above).**
 
 **Phase reached: R-P32** (the R-P31 true-SMP high-half kernel grows the MEMORY-
 MANAGEMENT + SMP-PROCESS maturity: the **REAL proc_t DISPATCHER on BOTH HARTS**,
@@ -1176,16 +1222,122 @@ R-P33 asserts].  `rp33/user/`: `sigtest.c`, `pipetest.c`, `dpexec.c`,
 `build-user.sh`.  Proof: `rp33/rp33-milestone-check.sh` (all three R-P33 sub-tasks
 + the R-P24..R-P32 regressions green, rebuild+reboot, re-runnable).
 
-### R-P34 (next)
+### R-P35 (next)
 
-Directions: signal maturity (a signal mask / `sigprocmask`, `SA_RESTART`,
-queued/real-time signals, `SIGCHLD` on child exit, `alarm`/`SIGALRM` off the
-timer); a real fd `dup`/`dup2` + `fcntl`; a VFS mount table + a path-component
-walk (multi-level directories, `..`/`.`, `VOP_CREATE`/`VOP_REMOVE`/`rename`); a
-per-CPU idle THREAD in the dispatcher proper (so `rv_sched_cpu` `wfi`s on an
-empty runq + is woken by an IPI, not just a standalone proof); and demand-paged
-file-backed segments for the DYNAMIC exec path (ld.so.1 + libgcc_s mapped
-file-backed + demand-paged, not just the static text).
+Directions: queued/real-time signals (`sigqueue`/`SA_SIGINFO` carrying a value,
+not just a pending bit); a per-CPU idle THREAD in the dispatcher proper (so
+`rv_sched_cpu` `wfi`s on an empty runq + is woken by an IPI, replacing the
+R-P34 wfi-poll in `proc_wait_signal`); demand-paged file-backed segments for
+the DYNAMIC exec path (ld.so.1 + libgcc_s mapped file-backed + demand-paged,
+not just the static text); a real cwd (chdir/relative-path walk, `.`/`..` in
+`vfs_walk`), `VOP_CREATE`/`VOP_REMOVE` proper directory-entry linkage, and a
+tmpfs that stores directory entries in the dir vnode (vs the R-P34 flat name
+table + prefix scan); and `waitpid`/process groups + a controlling terminal
+toward a shell.
+
+## R-P34 -- signal completeness (sigprocmask/sigsuspend/SA_RESTART/SIGCHLD/alarm) + fd management (dup/dup2/fcntl/FD_CLOEXEC) + VFS maturity (mount table + multi-level path walk + rename/unlink)
+
+Substrate: fred v3 (root@52.88.62.49), the R-P18/19 build-tree gcc
+(`build/gcc-sol-cfg3/gcc/xgcc -B<gcc>` = `riscv64-unknown-solaris2.11`) + the
+R-P17 `riscv64-unknown-elf` binutils + `qemu-system-riscv64 -machine virt -smp 2`
+with OpenSBI v1.7.  R-P34 extends the R-P33 full-Unix-core kernel
+(`rp34/kernel/`, a superset of `rp33/kernel/`) with three sub-tasks, each
+boot-verified under qemu.  Proof: `rp34/rp34-milestone-check.sh` (rebuild the
+userland + ld.so.1 + initramfs + kernel + reboot; the three R-P34 sub-tasks +
+the R-P24 + R-P26 + R-P27 + R-P28 + R-P29 + R-P30 + R-P31 + R-P32 + R-P33
+regressions all green, re-runnable).
+
+### R-P34.1 signal completeness (a headline) -- DONE
+- **sigprocmask (block/unblock)**: a per-proc BLOCKED-signal mask
+  (`proc_t.p_sigmask`).  `sigprocmask(how, set, oldp)` (SYS 238) with
+  `SIG_BLOCK`/`SIG_UNBLOCK`/`SIG_SETMASK` edits it (`signal.c`
+  `proc_sigprocmask`); SIGKILL is masked out (never blockable); `oldp` (a user
+  VA, SUM set) receives the previous mask.  `proc_deliver_signals` now computes
+  `pmask = p_sigpend & ~p_sigmask` -- a blocked pending signal is SKIPPED (stays
+  pending) until unblocked, at which point it delivers on the next return-to-U.
+- **sigsuspend**: `proc_sigsuspend(mask)` (SYS 239) atomically installs a
+  temporary mask + blocks in `proc_wait_signal` (proc.c) until a pending,
+  UNMASKED signal appears, then restores the caller's mask + returns EINTR.
+  `proc_wait_signal` enables `sstatus.SIE` on the proc kernel context + `wfi`s
+  polling `p_sigpend` (rather than P_WAITING + `sched()`), so the SBI timer
+  stays live to fire `proc_alarm_tick` even when this is the ONLY proc (a
+  P_WAITING block would deadlock -- the scheduler would spin with interrupts
+  off).  A peer-hart `kill` also wakes the `wfi`.
+- **SA_RESTART**: `sigaction` now carries `sa_flags` (a3); `p_sigflags[sig]`
+  records `SA_RESTART`.  On delivery, if the interrupted frame's `a0` is `-4`
+  (EINTR) and the caught signal is SA_RESTART, `proc_deliver_signals` rewinds
+  the saved `sepc` by 4 (past the `ecall`) so the interrupted syscall RE-RUNS
+  when the handler returns.  `sigsuspend` sets `p_no_restart` so it is NEVER
+  restarted (POSIX carve-out), consumed by `proc_take_no_restart`.
+- **SIGCHLD on child exit**: `proc_exit` posts `SIGCHLD` (18) to the parent's
+  `p_sigpend` (atomic OR) + wakes a `wait`-blocked parent -- a parent can
+  install a SIGCHLD handler + catch child deaths instead of only blocking in
+  `wait`.
+- **alarm(2)/SIGALRM**: `proc_alarm(secs)` (SYS 240) arms a per-proc one-shot
+  deadline `p_alarm_deadline` (a `clock_ticks` count at HZ=100; 0 cancels) +
+  returns the seconds left on the previous alarm.  `proc_alarm_tick` (called
+  from `rv_interrupt` on every timer tick) posts `SIGALRM` (14) + clears the
+  deadline of any proc whose alarm has passed (and wakes a blocked one).
+- **Boot proof** (`rp34/kernel/qemu-boot.log`, `sigtest`): a proc blocks
+  SIGUSR1 with `sigprocmask` + raises it (`SIGUSR1 stayed pending while
+  blocked`), then unblocks it (`pending SIGUSR1 delivered on unblock`); a fork
+  child exits and the parent's SIGCHLD handler runs (`SIGCHLD delivered on
+  child exit`); `alarm(1)` fires SIGALRM (`SIGALRM delivered by alarm(2)`); and
+  `sigsuspend` blocks until SIGALRM (`sigsuspend woke on SIGALRM`).
+- CRIB PROVENANCE: illumos `uts/common/os/sig.c` (`sigprocmask`/`issig`
+  skipping held signals, `sigtoproc`) + `sigsuspend`/`cv_wait_sig`;
+  `os/timer.c`+`clock.c` (`it_real`/`realitexpire` -> SIGALRM off the tick);
+  the SA_RESTART `sepc`-rewind is the RISC-V trap-frame analogue of the illumos
+  `sysent` `SE_NOUNLOAD`/`ERESTART` restart + BSD `p_sigacts`/`SA_RESTART`.
+
+### R-P34.2 fd management (a headline) -- DONE
+- **dup(2)/dup2(2)**: `proc_dup(oldfd)` (SYS 241) installs the lowest free fd
+  (>=3) as a second reference to the same open-file (vnode/pipe-end/offset;
+  FD_CLOEXEC cleared -- POSIX); `proc_dup2(oldfd, newfd)` (SYS 242) redirects
+  onto a CHOSEN fd (closing the target first), and can redirect a file onto a
+  console fd (0/1/2) or restore a console fd (`dup2(2, 1)`) -- `proc_write`/
+  `proc_read` now route fd 1/2 to a file when the slot is `f_used`, else to the
+  console.  A dup'd pipe end bumps the pipe refcount.
+- **fcntl(2)**: `proc_fcntl(fd, cmd, arg)` (SYS 243) with `F_DUPFD` (lowest free
+  fd >= arg), `F_GETFD`/`F_SETFD` (read/set `FD_CLOEXEC`), `F_GETFL`/`F_SETFL`
+  (reduced: 0/accept-ignore).
+- **FD_CLOEXEC across exec**: the fd table gains `f_cloexec`; `do_exec` calls
+  `proc_fd_cloexec` BEFORE the new image runs to close every close-on-exec fd
+  (non-CLOEXEC fds survive into the new program).
+- **Boot proof** (`fdtest` + `fdexecee`): `dup2` a file onto stdout, write
+  through fd 1 (`dup2 redirected stdout to the file` -- the bytes are read back
+  FROM THE FILE, proving the redirect), `fcntl(F_SETFD/F_GETFD)` sets+reads
+  FD_CLOEXEC, then `exec fdexecee` with fd 9 CLOEXEC + fd 8 plain -- the new
+  image finds fd 9 CLOSED + fd 8 open (`CLOEXEC-across-exec PROVEN`).
+- CRIB PROVENANCE: illumos `uts/common/os/fio.c` (`fd_reserve`/`dupfd`,
+  `fcntl` F_DUPFD/F_GETFD/F_SETFD, FD_CLOEXEC closed in `close_exec`) + the
+  fifofs pipe refcount bump on dup.
+
+### R-P34.3 VFS maturity -- DONE
+- **mount table**: `vfs_mount(fstype, path)` (SYS 246) maps a mount-point path
+  prefix to a fs type (VT_RAMFS/VT_TMPFS) in `mount_tab[]`; `vfs_mount_init`
+  seeds "/"=ramfs + "/tmp"=tmpfs at boot; `mount_fstype(path)` returns the
+  LONGEST-matching mount prefix's fs (so the tmpfs-vs-ramfs decision is now the
+  mount table, not a hardcoded `/tmp/` test).
+- **multi-level path walk (lookuppn)**: `vfs_walk(path, out, create)` walks a
+  tmpfs path component-by-component from the root, validating that every
+  INTERMEDIATE prefix (`/mnt`, `/mnt/sub`, ...) names an existing directory (a
+  mount point or a `mkdir`'d tmpfs dir), rejecting a walk through a missing dir
+  with ENOENT, then resolves the leaf via `vfs_lookup` over the leaf's fs.
+  `proc_openf`/`proc_stat` route through `vfs_walk`.
+- **rename/unlink**: `vfs_unlink(path)` (SYS 244) frees a tmpfs file's buffer +
+  slot; `vfs_rename(from, to)` (SYS 245) rewrites the slot's name (replacing an
+  existing target).
+- **Boot proof** (`vfstest`): `mount tmpfs at /mnt: OK`; an open of
+  `/mnt/sub/file` BEFORE `mkdir /mnt/sub` correctly ENOENTs (`walk rejects
+  missing dir`); after `mkdir`, `walked /mnt/sub/file + read` returns the deep
+  file's bytes (`multi-level path walk across a mount: OK`); `rename` makes the
+  old name gone + the new name readable; `unlink` removes it.
+- CRIB PROVENANCE: illumos `uts/common/fs/lookup.c` `lookuppnvp` (component
+  walk crossing a mounted fs) + `vfs_t`/`vfssw` (the mount list keyed by
+  `vfs_vnodecovered`) + `fs/tmpfs/tmp_vnops.c` (`tmp_lookup`/`tmp_remove`);
+  reduced here to a prefix mount table + an intermediate-dir-existence walk +
+  a flat tmpfs name table.
 
 ## R-P31 -- secondaries on the W^X root (drop the boot identity trampoline) + ld.so.1 hardening (lazy PLT + .gnu.hash + versioning + relro) + real ramfs read(2)
 

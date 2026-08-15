@@ -3255,3 +3255,17 @@ The riscv64 kernel now has the FULL Unix core: SMP proc scheduling, COW+demand-p
 fork/exec/wait, signals, pipes, a read/write vnode fs with directories, dynamic linking, idle/wfi.
 NEXT R-P34: sigprocmask/SIGCHLD/alarm, dup/fcntl, VFS mount + multi-level path walk, idle thread in
 rv_sched_cpu, file-backed demand-exec for the dynamic ld.so.1 path.
+
+## R-P34 DONE (2026-08-15): signal-completeness + fd-mgmt + VFS mount/multi-level-walk
+All boot-verified under qemu-virt -smp 2, R-P24-33 green:
+- Signals: sigprocmask (pending-stays-blocked-then-delivers-on-unblock), sigsuspend, SA_RESTART, SIGCHLD
+  (posted to parent on child exit), alarm(2)/SIGALRM (tick-driven). PROOF: SIGUSR1 pending-while-blocked
+  -> delivered on unblock; SIGCHLD on child exit; sigsuspend woke on SIGALRM.
+- fd mgmt: dup/dup2/fcntl (F_DUPFD/GETFD/SETFD/GETFL/SETFL) + FD_CLOEXEC across exec. PROOF: dup2
+  redirected stdout to a file; CLOEXEC-across-exec.
+- VFS: mount table (mount tmpfs at /mnt) + multi-level path walk (lookuppn across mount+dirs, missing-dir
+  reject) + rename/unlink. PROOF: multi-level walk across a mount OK.
+Cribbed illumos os/sig.c/timer.c/fio.c + fs/lookup.c lookuppnvp/vfssw + tmpfs + xv6/BSD. Committed
+src/riscv/rp34/{kernel/proc.c+signal.c+vfs.c+main.c, user/fdtest/fdexecee}. The riscv64 kernel now has
+POSIX signals+fd+VFS-mount -- shell-ready. NEXT R-P35: per-CPU idle thread + IPI wakeup (replace the
+wfi-poll wait), pipe-based shell, more fs (open flags/O_CREAT/O_TRUNC), a real init->shell.
