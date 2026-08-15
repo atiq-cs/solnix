@@ -1,0 +1,5 @@
+# solnix /etc/rc -- the boot shell script (scripted stdin for /bin/sh)
+echo hello
+cat /etc/release
+echo hi | cat
+true

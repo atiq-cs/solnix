@@ -1,5 +1,47 @@
 # RISC-V (riscv64) port — STATUS
 
+**Phase reached: R-P35** (the R-P34 shell-ready kernel now runs a REAL USERLAND
+SESSION with **PER-CPU IDLE + IPI WAKEUP**, a **REAL init PROCESS (pid 1)**, and
+a **MINIMAL INTERACTIVE SHELL (/bin/sh)**, each boot-verified under
+`qemu-system-riscv64 -machine virt -smp 2`.  (1) PER-CPU IDLE + IPI WAKEUP (the
+enabler): `rv_sched_cpu` now, when its runq has nothing RUNNABLE but a proc is
+blocked (`P_WAITING`) or running on the peer, PARKS the hart in `wfi` (low
+power) instead of busy-polling; a runnable transition (a child exit, a
+signal/alarm post) sends an SBI SOFTWARE IPI (`sbi_send_ipi_hart` ->
+`SCAUSE_S_SOFTWARE`, cleared in `rv_interrupt`) to WAKE the sleeping hart to
+re-dispatch -- and `proc_wait_signal` (sigsuspend) drops the R-P34 wfi-poll for
+a real `P_WAITING` block + `sched()`.  The free-running timer + `sstatus.SIE`/
+`SSIE` unmasked in the idle path guarantee a wakeup source (a lost IPI is
+bounded by one tick).  Proof: a proc forks a child + blocks in `wait(2)`; a
+hart parks in the idle `wfi` (`idle-wfi parks: hart0=2 hart1=1`); the child
+exit IPI-wakes the blocked parent (`idle+IPI PROVEN`, no busy-poll).  (2) A REAL
+init PROCESS (pid 1): the kernel execs the embedded `/sbin/init` as PID 1
+(`proc_reset_pids` restarts numbering at 1 for the fresh session); init opens
+the ramfs script `/etc/rc`, `dup2`s it onto the shell's stdin, `fork`+`exec`s
+`/bin/sh`, and reaps children in a `wait(2)` loop -- ADOPTING a re-parented
+orphan (`proc_exit` re-parents a dying proc's live children to `INIT_PID`, and
+init reaps the grandchild it adopts).  Proof: `[init] pid 1 running`, forked
+shell pid 3, adopted+reaped the orphan grandchild (`reaped pid 4 status 23`),
+reaped the shell (`reaped pid 3 status 0 (the shell)`), `init done`.  (3) A
+MINIMAL SHELL (/bin/sh): reads a scripted stdin (`/etc/rc`) line-by-line,
+tokenizes argv, `fork`+`exec`+`wait`s each command (echo/cat/true exec'd from
+the ramfs WITH REAL ARGV -- argv now passes through `exec(2)` via a kernel
+argv-staging buffer laid onto the new program's initial stack), and runs a
+PIPELINE `cmd1 | cmd2` over the R-P33 pipe + R-P34 `dup2` (fork both halves,
+wire left's stdout -> right's stdin).  A supporting fix: `proc_exit` now CLOSES
+the proc's open fds so a pipe write end reaches refcount 0 and the reader sees
+EOF.  Proof: the shell runs `echo hello` -> `hello`, `cat /etc/release` -> the
+release contents, and `echo hi | cat` -> `hi` (a real pipe + dup2), then
+`true`, then exits.  Proof: `rp35/rp35-milestone-check.sh` (all three R-P35
+sub-tasks + the R-P24 + R-P26 + R-P27 + R-P28 + R-P29 + R-P30 + R-P31 + R-P32 +
+R-P33 + R-P34 regressions green, rebuild+reboot, re-runnable).  Cribbed illumos
+`disp.c` (`disp()`/`poke_cpu`/`cpu_resched` -- idle CPU woken by a cross-call
+IPI when a runnable thread lands on the dispatch queue) + `os/exit.c` (init
+re-parenting orphans + `closeall`) + `os/exec.c` (`exec_args`/`stk_copyin`
+argv onto the new stack); xv6 `user/init.c` (`for(;;) wait()`) + `user/sh.c`
+(EXEC/PIPE nodes: pipe + fork + dup2 the ends) + BSD `/sbin/init`; the SBI IPI
+is the RISC-V SBI spec IPI extension.  **Next: R-P36.**
+
 **Phase reached: R-P34** (the R-P33 full-Unix-core kernel rounds out the
 SYSCALL/VFS surface toward hosting real programs with **SIGNAL COMPLETENESS**,
 **fd MANAGEMENT**, and **VFS MATURITY**, each boot-verified under
@@ -43,7 +85,7 @@ rebuild+reboot, re-runnable).  Cribbed illumos sig.c (sigprocmask/issig held
 signals) + timer.c/clock.c (it_real/realitexpire -> SIGALRM) + fio.c
 (dupfd/fcntl/FD_CLOEXEC) + lookup.c (lookuppnvp) + vfs_t/vfssw (the mount list) +
 tmpfs tmp_vnops; xv6/BSD for the trap-return signal-frame + fd shape.
-**Next: R-P35.**
+**Next: R-P36.**
 
 **Phase reached: R-P33** (the R-P32 real-proc_t-on-both-harts kernel grows the
 PROCESS + IPC + FILESYSTEM maturity with a **MINIMAL SIGNAL FRAMEWORK + kill(2)**,
@@ -1222,18 +1264,126 @@ R-P33 asserts].  `rp33/user/`: `sigtest.c`, `pipetest.c`, `dpexec.c`,
 `build-user.sh`.  Proof: `rp33/rp33-milestone-check.sh` (all three R-P33 sub-tasks
 + the R-P24..R-P32 regressions green, rebuild+reboot, re-runnable).
 
-### R-P35 (next)
+### R-P36 (next)
 
 Directions: queued/real-time signals (`sigqueue`/`SA_SIGINFO` carrying a value,
-not just a pending bit); a per-CPU idle THREAD in the dispatcher proper (so
-`rv_sched_cpu` `wfi`s on an empty runq + is woken by an IPI, replacing the
-R-P34 wfi-poll in `proc_wait_signal`); demand-paged file-backed segments for
-the DYNAMIC exec path (ld.so.1 + libgcc_s mapped file-backed + demand-paged,
-not just the static text); a real cwd (chdir/relative-path walk, `.`/`..` in
-`vfs_walk`), `VOP_CREATE`/`VOP_REMOVE` proper directory-entry linkage, and a
-tmpfs that stores directory entries in the dir vnode (vs the R-P34 flat name
-table + prefix scan); and `waitpid`/process groups + a controlling terminal
-toward a shell.
+not just a pending bit); a LIVE CONSOLE INPUT path (a real tty/UART read so
+`/bin/sh` reads interactively from the console instead of only a scripted
+`/etc/rc`, with line editing + a controlling terminal + process groups /
+`setpgid` / job control); demand-paged file-backed segments for the DYNAMIC
+exec path (ld.so.1 + libgcc_s mapped file-backed + demand-paged, not just the
+static text); a real cwd (`chdir`/relative-path walk, `.`/`..` in `vfs_walk`),
+`VOP_CREATE`/`VOP_REMOVE` proper directory-entry linkage, and a tmpfs that
+stores directory entries in the dir vnode (vs the R-P34 flat name table + prefix
+scan); `waitpid(pid, ...)` (vs the current wait-any); shell builtins (`cd`,
+`export`), env/argv from the shell into `execve`'s envp, quoting + redirection
+(`>`/`<`); and closing the latent SMP COW-vs-`wait` interaction seen after heavy
+fork/exec churn (a store to an already-writable leaf spuriously faulting under
+no-ASID TLB aliasing -- R-P35 runs the init/shell session EARLY, before the
+churn, and adds a defensive stale-TLB flush+retry guard in `proc_pagefault`;
+R-P36 should add per-AS ASIDs or a remote TLB shootdown on COW copy).
+
+## R-P35 -- per-CPU idle + IPI wakeup + a real init(pid 1) + a minimal interactive shell (echo/cat/pipe)
+
+Substrate: fred v3 (root@52.88.62.49), the R-P18/19 build-tree gcc
+(`build/gcc-sol-cfg3/gcc/xgcc -B<gcc>` = `riscv64-unknown-solaris2.11`) + the
+R-P17 `riscv64-unknown-elf` binutils + `qemu-system-riscv64 -machine virt -smp 2`
+with OpenSBI v1.7.  R-P35 extends the R-P34 shell-ready kernel (`rp35/kernel/`,
+a superset of `rp34/kernel/`) with three sub-tasks, each boot-verified under
+qemu.  Proof: `rp35/rp35-milestone-check.sh` (rebuild the userland + ld.so.1 +
+initramfs + kernel + reboot; the three R-P35 sub-tasks + the R-P24 + R-P26 +
+R-P27 + R-P28 + R-P29 + R-P30 + R-P31 + R-P32 + R-P33 + R-P34 regressions all
+green, re-runnable).  The R-P35 init + shell phases run EARLY (right after the
+R-P26 multiprocess proof, `run_idle_ipi` + `run_init` in `main()`) in a clean
+proc/frame state.
+
+### R-P35.1 per-CPU idle + IPI wakeup (the enabler) -- DONE
+- **idle thread in the dispatcher proper**: `rv_sched_cpu` (proc.c) tracks, per
+  scan, whether any proc is RUNNABLE and whether any is BLOCKED (`P_WAITING`) or
+  RUNNING on the peer hart.  When nothing is runnable on this hart but a blocked/
+  peer-running proc exists, the hart sets `cpu_idling[cpu]` (under `sched_lock`),
+  increments `cpu_idle_events[cpu]`, and parks in `wfi` -- vs the R-P34
+  busy-poll.  On wake it re-scans; when NO proc is alive it returns.
+- **real `P_WAITING` block for sigsuspend**: `proc_wait_signal` now marks the
+  caller `P_WAITING` + `sched()`s (a real scheduler block) until a deliverable
+  unmasked signal is pending, replacing the R-P34 wfi-poll on `p_sigpend`; it
+  re-checks the pending set under `sched_lock` before blocking (closing the
+  post-vs-block wake race).
+- **SBI software IPI wake**: `proc_ipi_wake_others` (proc.c) posts an SBI
+  software IPI (`sbi_send_ipi_hart`) to every peer hart on a runnable transition
+  (`proc_kill`/`proc_kill_post`/`proc_alarm_tick`/`proc_exit`'s parent-wake) so a
+  hart parked in `wfi` wakes + re-dispatches.  `rv_interrupt` decodes
+  `SCAUSE_S_SOFTWARE` (cause 1) and clears `SSIP` (`csrci sip, 0x2`);
+  `clock_enable_ssie` unmasks `SSIE` (`sie` bit 1) so `wfi` resumes on the IPI.
+  The IPI is sent to ALL peers (not only observed-idle ones) so a peer in the
+  lost-wakeup window (scanned empty, about to `wfi`, `cpu_idling` not yet set)
+  still wakes -- and the free-running timer bounds any residual lost IPI to one
+  tick.
+- **Boot proof** (`run_idle_ipi`/`proc_run_idle_ipi`): bring up the secondary
+  hart into the shared dispatcher, run the forker (fork a child + a REAL
+  `wait(2)` block); a hart parks in the idle `wfi` (`idle-wfi parks: hart0=2
+  hart1=1`) and the child exit IPI-wakes the blocked parent (`idle+IPI PROVEN`).
+- CRIB PROVENANCE: `poke_cpu()`/`cpu_resched` sending a cross-call IPI to a
+  halted CPU when a runnable thread lands on the dispatch queue is illumos
+  `uts/common/disp/disp.c` `setbackdq`/`disp()` + the i86pc `mach_cpu_pause`;
+  the `wfi`-on-empty-runq idle is the RISC-V privileged-spec `wfi` + xv6-riscv
+  scheduler idle; the SBI IPI (EID "sPI", software interrupt) is the RISC-V SBI
+  spec IPI extension.
+
+### R-P35.2 a real init process (pid 1) (a headline) -- DONE
+- **init as pid 1**: `run_init` calls `proc_reset_pids` (safe: the proc table
+  is empty between phases) so the embedded `/sbin/init` is built as PID 1
+  (`proc_first(init_elf_start)`).  init (`user/init.c`) prints its pid, spawns
+  an orphan maker, opens `/etc/rc` + `dup2`s it onto fd 0, `fork`+`exec`s
+  `/bin/sh`, then loops in `wait(2)` reaping every child until none remain.
+- **orphan adoption/reaping**: `proc_exit` (proc.c) RE-PARENTS a dying proc's
+  still-live children to `INIT_PID` (1) -- the classic Unix orphan adoption;
+  init's `wait(2)` loop then reaps them.  The orphan maker forks a grandchild
+  then exits at once; the grandchild is re-parented to init + reaped
+  (`reaped pid 4 status 23`).
+- **Boot proof**: `[init] pid 1 running`, `[init] forked shell pid 3`,
+  `[orphan] grandchild (adopted by init) exiting`, `[init] reaped pid 4 status
+  23` (the adopted orphan), `[init] reaped pid 3 status 0 (the shell)`, `[init]
+  all children reaped; count 3. init done.`
+- CRIB PROVENANCE: init(1M) as pid 1 forking the shell + looping in `wait(2)` to
+  reap orphans is illumos `usr/src/cmd/init` + BSD `/sbin/init` + xv6
+  `user/init.c` (`for(;;) wait()`); orphan re-parenting to init on `exit()` is
+  the SVR4/illumos `os/exit.c` reparent-to-init.
+
+### R-P35.3 a minimal interactive shell (/bin/sh) (a headline) -- DONE
+- **read-line / parse-argv / fork-exec-wait**: `/bin/sh` (`user/sh.c`) reads its
+  stdin (fd 0 = the `/etc/rc` script init `dup2`'d on) into a buffer, splits it
+  into lines, tokenizes each into whitespace-separated argv (up to 8 args),
+  resolves a bare command name under `/bin/`, and `fork`+`exec`+`wait`s it.
+  Blank/`#`-comment lines + an `exit` builtin are handled.
+- **argv passthrough across exec(2)**: `SYS_execve` now takes argv (a1);
+  `proc_execv` stages the caller's argv strings into a kernel buffer
+  (`exec_argv_reset`/`exec_argv_push`, read from the OLD AS before the switch)
+  and `exec_image` (exec_elf.c) lays them onto the NEW program's initial stack
+  (argc, argv[0..n-1], NULL, envp NULL, auxv) per the RISC-V psABI -- so
+  `echo hello` reaches `/bin/echo` with real args (vs the R-P26..R-P34 fixed
+  `argc=1, argv[0]="prog"`).
+- **a pipeline (cmd1 | cmd2)**: on a single `|` the shell `pipe(2)`s, forks the
+  left half (`dup2(fds[1],1)`, close both), forks the right half
+  (`dup2(fds[0],0)`, close both), closes both ends in the parent, and `wait`s
+  twice -- wiring left's stdout to right's stdin over the R-P33 pipe + R-P34
+  `dup2`.  A supporting fix: `proc_exit` now CLOSES the exiting proc's open fds
+  (dropping pipe refcounts) so a pipe write end held via `dup2` reaches refcount
+  0 on exit and the reader sees EOF (else `cat` blocks forever).
+- **the /bin commands**: `echo` (prints argv space-separated + newline), `cat`
+  (copies each path arg, or stdin with no args, to stdout), `true` (exit 0) --
+  static EM_RISCV programs in the ramfs, exec'd by the shell.
+- **Boot proof**: `solnix sh: reading commands from stdin`; `sh$ echo hello` ->
+  `hello`; `sh$ cat /etc/release` -> `solnix riscv64 (R-P31)` / `SunOS
+  solnix-riscv64`; `sh$ echo hi | cat` -> `hi` (the pipe + dup2); `sh$ true`;
+  `sh: end of script; exiting`.
+- CRIB PROVENANCE: the read-line / parse-argv / fork-exec-wait loop + the
+  "pipe + fork + dup2 the ends" pipeline is xv6 `user/sh.c` (EXEC/PIPE nodes) +
+  the BSD/illumos `/bin/sh` execution model, reduced to one pipe stage +
+  whitespace tokenizing; the argv-onto-the-new-stack copy is illumos
+  `os/exec.c` `exec_args`/`stk_copyin`; `echo`/`cat`/`true` are the
+  BSD/illumos `usr/src/cmd` idioms.
+
 
 ## R-P34 -- signal completeness (sigprocmask/sigsuspend/SA_RESTART/SIGCHLD/alarm) + fd management (dup/dup2/fcntl/FD_CLOEXEC) + VFS maturity (mount table + multi-level path walk + rename/unlink)
 

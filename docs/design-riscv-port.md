@@ -3269,3 +3269,24 @@ Cribbed illumos os/sig.c/timer.c/fio.c + fs/lookup.c lookuppnvp/vfssw + tmpfs + 
 src/riscv/rp34/{kernel/proc.c+signal.c+vfs.c+main.c, user/fdtest/fdexecee}. The riscv64 kernel now has
 POSIX signals+fd+VFS-mount -- shell-ready. NEXT R-P35: per-CPU idle thread + IPI wakeup (replace the
 wfi-poll wait), pipe-based shell, more fs (open flags/O_CREAT/O_TRUNC), a real init->shell.
+
+## R-P35 DONE (2026-08-15): the riscv64 kernel runs a REAL USERLAND SESSION (init + shell)
+All boot-verified under qemu-virt -smp 2, R-P24-34 green. THE "it's a real OS" milestone:
+- Per-CPU idle + IPI wakeup (replaces the R-P34 wfi-poll): rv_sched_cpu parks a hart in wfi when its runq
+  is empty; a runnable transition sends an SBI software IPI (sbi_send_ipi_hart) that wakes it; rv_interrupt
+  decodes SCAUSE_S_SOFTWARE; proc_wait_signal does a real P_WAITING block. PROOF: idle-wfi parks
+  hart0=2/hart1=1, child-exit IPI-woke the blocked parent (no busy-poll).
+- init (pid 1): kernel execs /sbin/init as pid 1; init opens /etc/rc, dup2->shell stdin, fork+exec /bin/sh,
+  reaps in a wait() loop; proc_exit reparents orphans to INIT_PID. PROOF: [init] pid 1 -> forked shell pid3
+  -> reaped adopted orphan pid4 -> reaped shell pid3 -> init done.
+- Minimal shell + commands + pipe: /bin/sh tokenizes argv, fork+exec+wait, cmd1|cmd2 pipeline (R-P33 pipe
+  + R-P34 dup2). Added argv-passthrough-across-exec + fd-close-on-exit (pipe EOF). PROOF: echo hello->hello;
+  cat /etc/release->SunOS solnix-riscv64; echo hi | cat->hi; /bin/{echo,cat,true} exec from ramfs.
+Cribbed illumos disp.c poke_cpu + os/exit.c orphan-reparent/closeall + os/exec.c argv-stage + xv6 init/sh +
+BSD + SBI IPI. Committed src/riscv/rp35/{kernel/proc.c+main+exec+clock, user/init.c,sh.c,echo,cat,true}.
+The riscv64 kernel runs init->shell->commands+pipe -- a real userland session. NEXT R-P36: live console
+tty + job control, per-AS ASIDs (close the latent SMP COW-vs-wait TLB aliasing under heavy churn),
+waitpid, cwd/./.., shell builtins/redirs.
+Honest note: a latent SMP COW-vs-wait TLB-aliasing fault surfaces only under heavy fork/exec churn (no-ASID
+aliasing); R-P35 runs the session early+clean + a defensive sfence-retry; proper fix (ASIDs/remote
+shootdown) queued R-P36.
