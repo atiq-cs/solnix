@@ -1,6 +1,36 @@
 # RISC-V (riscv64) port — STATUS
 
-**Phase reached: R-P25** (the R-P24 booting illumos-riscv64 kernel GROWN with
+**Phase reached: R-P26** (the R-P25 single-user-process kernel GROWN into the
+first MULTIPROCESS riscv64-solaris kernel, all boot-verified under
+`qemu-system-riscv64 -machine virt`: a minimal **proc/lwp table** [`proc.c`
+`proc_t`: pid, state, parent pid, per-process user AS (Sv39 satp root), a
+per-process kernel stack, a saved scheduler context `rv_context`, and a pointer
+to the proc's trap frame -- one lwp per proc], **fork(2)** [`SYS_fork`/`do_fork`:
+allocate a child, COPY the parent's user AS (`hat_user_copy` deep-copies every
+4 KiB user leaf -- copy, not COW), copy the parent trap frame onto the child
+kernel stack with `a0`=0 so the child returns 0 while the parent returns the
+child pid, seed the child scheduler context so the first `rv_swtch` into it
+lands in the trap-return epilogue and `sret`s to U-mode], **exec(2)**
+[`SYS_execve`/`do_exec`: reuse the R-P25 `exec_image` loader to replace the
+calling proc's AS with a second embedded ELF, rewrite the trap frame
+(`sepc`=new entry, `sp`=new user stack) + switch the live `satp` so the syscall
+return `sret`s into the NEW program], and **wait(2)/exit rendezvous**
+[`SYS_wait`/`proc_wait` blocks the parent (state WAITING, yields) until a child
+reaches ZOMBIE via `SYS_exit`/`proc_exit`, then reaps it -- returns its pid +
+exit status], scheduled by a real **runq dispatcher** [`rv_sched` runs on the
+boot/kernel context+AS, picks a RUNNABLE proc and `rv_swtch`es into it loading
+its user satp; procs yield back cooperatively at fork/wait/exit -- the R-P24
+single-idle-`swtch` grown to N proc kernel stacks + a real context switch
+between them]. Boot proof: a parent (pid 1) forks a child (pid 2), BOTH run
+through the dispatcher and print their pid, the child `exit(7)`s, the parent
+`wait(2)` reaps `pid=2 status=7`; then the parent fork+exec+waits a child
+(pid 3) that execs a DIFFERENT program (`[execee] NEW program image running
+after exec(2); pid=3`, `exit(9)`) which the parent reaps `pid=3 status=9` --
+the first riscv64-solaris fork+wait, vs R-P25's single process) -- DONE (all
+four sub-tasks + the R-P24 regression, re-runnable proof
+`rp26/rp26-milestone-check.sh`).
+
+R-P25 (the R-P24 booting illumos-riscv64 kernel GROWN with
 the SYSCALL/EXEC path so the FIRST riscv64-solaris userland PROCESS runs, all
 boot-verified under `qemu-system-riscv64 -machine virt`: the kernel builds a
 fresh **user address space** [a per-process Sv39 root that shares the kernel
@@ -225,6 +255,173 @@ four sub-tasks, rebuild+reboot, re-runnable green). Repo copies under
    text/data into the high VA + drop the identity map + `hat_memload`/`hat_unload`
    + R^X kernel permissions; vmem/`kmem_cache`; the page hash + freelists;
    `thread_create`/`setrun`/disp queues; SMP secondaries via SBI HSM.
+
+---
+
+## R-P26 -- the first MULTIPROCESS riscv64-solaris kernel (proc/lwp table + fork/exec/wait + a runq dispatcher)
+
+Substrate: fred v3 (root@52.88.62.49), the R-P18/19 build-tree gcc
+(`build/gcc-sol-cfg3/gcc/xgcc -B<gcc>` = `riscv64-unknown-solaris2.11`) + the
+R-P17 `riscv64-unknown-elf` binutils + `qemu-system-riscv64 -machine virt` with
+OpenSBI v1.7. R-P26 extends the R-P25 single-user-process kernel
+(`rp26/kernel/`, a superset of `rp25/kernel/`) with a process table,
+fork/exec/wait, and a real dispatcher that schedules between process kernel
+stacks. Proof: `rp26/rp26-milestone-check.sh` (rebuild the two userland
+programs + the kernel + reboot; all four R-P26 sub-tasks + the four R-P24
+subsystems green, re-runnable).
+
+Boot flow now: the R-P24 flow (`hat_boot_init` Sv39 ON -> banner -> kmem/page ->
+PLIC -> clock -> `dispatch_onramp` idle-loop round-trip) THEN `run_user`:
+`proc_first(forker)` (build pid 1: a fresh user AS + a seeded kernel trap frame
++ scheduler context) -> `rv_sched` (the runq: `rv_swtch` into pid 1, which
+forks; the child runs cooperatively, both print; the child exits, the parent
+waits + reaps; then a fork+exec+wait of a second program) -> `rv_sched` returns
+when no proc is left alive -> known halt.
+
+### R-P26.1 proc/lwp table + real per-process context -- DONE
+- **A minimal `proc_t` table with a per-process address space, kernel stack,
+  and saved context, replacing R-P25's single-user-context assumption.**
+  `rp26/kernel/{proc.c, proc_riscv.h}`: `proc_t` carries pid, state
+  (`UNUSED`/`RUNNABLE`/`RUNNING`/`WAITING`/`ZOMBIE`), parent pid, the user Sv39
+  root + satp (`p_uroot`/`p_usatp`), a per-process 16 KiB kernel stack
+  (`p_kstack`/`p_kstack_top`, the `sscratch` value while in U-mode), a saved
+  scheduler context (`struct rv_context` = callee-saved + ra/sp + satp for
+  `rv_swtch`), a pointer to the proc's trap frame on its kernel stack (`p_tf`),
+  and the exit status. `proc_alloc` hands out slots + pids; `proc_first` builds
+  pid 1 from an embedded ELF: it `exec_image`s the program into a fresh user
+  AS, seeds a `struct regs` trap frame at the top of the kernel stack
+  (`sepc`=entry, `sp`=user sp, `sstatus` SPP=0|SPIE|SUM), and seeds the
+  scheduler context so the first `rv_swtch` into it (`c_ra`=`rv_user_frame_ret`,
+  `c_sp`=the frame, `c_satp`=the user satp) drops to U-mode at the entry.
+- **Boot proof**: `[R-P26] proc table: building the first process (pid 1) from
+  the embedded forker ELF`; the pids printed by the running processes
+  (`my pid=1`, `my pid=2`, `pid=3`) are the proc table's assigned pids.
+- **CRIB**: `proc_t` (pid, `p_stat`, `p_parent`, the AS, the kernel stack, the
+  exit status) reduced from illumos `uts/common/sys/proc.h` `proc_t`/`kthread_t`/
+  `klwp_t` + this repo's R-P5 `proc.c`; the "one lwp per proc, its context is
+  the callee-saved set + ra/sp + satp" is the R-P5/R-P24 riscv `rv_context` +
+  the RISC-V LP64 ABI; "seed a trap frame + a context so the first swtch enters
+  U-mode" is the xv6-riscv `allocproc`/`forkret` idiom.
+
+### R-P26.2 fork(2) -- a parent forks a child; BOTH run -- DONE
+- **`SYS_fork` allocates a child, COPIES the parent's user AS, and duplicates
+  the context so the child returns 0 while the parent returns the child pid.**
+  `rp26/kernel/{proc.c do_fork, hat_user.c hat_user_copy, mach_trap.S
+  rv_user_frame_ret}`: `do_fork` allocates a child proc, `hat_user_new`s a
+  fresh user root (sharing the kernel high half), `hat_user_copy` DEEP-COPIES
+  the parent's private user half (walks the level-2 index-0 subtree and
+  duplicates every 4 KiB user leaf frame -- copy, not COW), copies the parent's
+  trap frame onto the child kernel stack with `a0`=0, and seeds the child
+  scheduler context (`c_ra`=`rv_user_frame_ret`, `c_sp`=the copied frame,
+  `c_satp`=the child satp). When the scheduler `rv_swtch`es into the child it
+  lands in `rv_user_frame_ret` (a global entry at the trap-return epilogue) with
+  the child user satp installed, and `sret`s to U-mode at the instruction after
+  the child's `fork` `ecall` -- returning 0. The parent gets the child pid in
+  `a0` from `proc_fork`.
+- **Boot proof**:
+  ```
+    [parent] forked child pid=2; my pid=1
+    [child]  running; my pid=2
+  ```
+  Both processes run through the dispatcher and print DISTINCT output (their own
+  pid) -- the multiprocess headline.
+- **CRIB**: `cfork`/`forklwp` (copy the AS + duplicate the lwp so the child
+  returns 0, the parent the child pid) is illumos `os/fork.c` + BSD
+  `kern_fork`; the "copy the trapframe, set `a0`=0, seed `context.ra`=forkret,
+  `swtch` into it" mechanism is xv6-riscv `fork`/`forkret`/`scheduler`/`swtch`;
+  the AS deep-copy (walk the page tables, dup each user leaf) is illumos
+  `hat_dup`/`as_dup` + BSD `pmap_copy` reduced to an eager leaf copy.
+
+### R-P26.3 exec(2) from a process -- DONE (embedded ELF)
+- **`SYS_execve` replaces the calling process's AS with a second embedded ELF
+  and returns into the new program.** `rp26/kernel/proc.c do_exec` +
+  `exec_elf.c exec_image` + `user_elf.S` (embeds both the forker and the
+  `execee` target via `.incbin`): `do_exec` `exec_image`s the new program into
+  a fresh user AS, rewrites the calling proc's trap frame (`sepc`=new entry,
+  `sp`=new user stack, GPRs zeroed) + updates the scheduler context satp, and
+  switches the LIVE `satp` (we are mid-syscall in the proc's context, and the
+  trap-return epilogue `sret`s under whatever satp is current) so the syscall
+  return drops into the NEW program image. The kernel stack + trap frame live
+  in identity-mapped low DRAM that the new user AS also maps (shared kernel high
+  half), so switching satp mid-kernel is safe.
+- **Boot proof**: the exec child runs a DIFFERENT program that prints a line
+  the forker never could:
+  ```
+    [child]  exec(2)ing a new program image...
+    [execee] NEW program image running after exec(2); pid=3
+  ```
+- **Scope (honest)**: embedded ELF (no filesystem/`open`; the `path` argument is
+  ignored -- the reduced exec always runs the embedded `execee`), no `as_free`
+  of the old AS (leaks the old frames), no argv/envp passthrough. Toward the
+  general `gexec`; R-P27 opens the ELF from a filesystem + hosts `ld.so.1`.
+- **CRIB**: exec replacing the AS + rewriting the return frame is illumos
+  `gexec`/`elfexec` + BSD `kern_exec`; the `exec_image` PT_LOAD walk is the
+  R-P25 `exec_elf`; the "switch the live page table so the syscall return lands
+  in the new image" is the illumos `exec` `mmu` handoff / xv6-riscv
+  `exec`+`w_satp`.
+
+### R-P26.4 wait(2)/exit rendezvous + the runq dispatcher -- DONE
+- **The parent blocks in `wait(2)` until the child exits, then reaps it;
+  scheduled by a real runq + a context switch between proc kernel stacks.**
+  `rp26/kernel/{proc.c rv_sched/sched/proc_exit/proc_wait, mach_swtch.S
+  rv_swtch}`: `rv_sched` (the scheduler loop, runs on the boot/kernel
+  context+AS) scans the table for a RUNNABLE proc, marks it RUNNING, and
+  `rv_swtch`es into it (loading its user satp); a proc yields back to the
+  scheduler via `sched()` (`rv_swtch` its context into `sched_ctx`). `SYS_exit`
+  (`proc_exit`) records the status, marks the proc ZOMBIE, wakes a WAITING
+  parent (WAITING -> RUNNABLE), and yields FOREVER. `SYS_wait` (`proc_wait`)
+  scans for a ZOMBIE child; if none yet it sets WAITING + yields, and on wake
+  re-scans; when it finds one it reaps it (frees the kernel stack, clears the
+  slot) and returns its pid + exit status through the user `status` pointer.
+  This grows the R-P24 single-idle-`swtch` into an N-context cooperative
+  dispatcher scheduling between process kernel stacks.
+- **Boot proof**:
+  ```
+    [parent] wait(2) reaped pid=2 status=7
+    ...
+    [parent] wait(2) reaped exec-child pid=3 status=9
+  ```
+  The parent blocks, the child (or exec child) exits with a distinct status,
+  the parent is woken + reaps it and prints the reaped pid + status -- the
+  wait/exit rendezvous, proving the dispatcher schedules between the two procs.
+- **Scope (honest, per the anti-wedge directive)**: COOPERATIVE scheduling
+  (procs yield only at fork/wait/exit; the R-P24 100 Hz timer tick is the later
+  preemption hook), a fixed `NPROC`=8 table, copy-not-COW fork, the reduced
+  exec above, `wait` reaps ZOMBIE children of the caller only (no process
+  groups / `waitid` idtype/options). It proves multiprocess + real scheduling
+  end to end; R-P27 grows preemption + a real disp queue + `thread_create`.
+- **CRIB**: the `waitid`/`exit` ZOMBIE rendezvous (parent blocks, child
+  ZOMBIEs, parent reaps) is illumos `os/exit.c`/`os/wait.c` reduced to a
+  parent/child reap + xv6-riscv `wait`/`exit`; the runq + `rv_swtch` between
+  kernel stacks is the R-P24 dispatcher on-ramp (`mach_swtch.S`) grown to N
+  contexts + the illumos `disp`/`swtch` seam + xv6-riscv `scheduler`/`sched`.
+
+### `/root/riscv-port/rp26/` contents
+`kernel/{locore.S, mach_trap.S, mach_clock.S, mach_mmu.S, mach_swtch.S,
+mach_uentry.S, user_elf.S, mmu_riscv.h, clock_riscv.h, plic.h, proc_riscv.h,
+assym.h, sbi.h, sbi.c, hat_boot.c, hat_user.c, exec_elf.c, proc.c,
+clock_riscv.c, plic.c, startup.c, main.c, kernel.lds, build-kernel.sh,
+forker.bin, execee.bin, *.o, unix.elf, qemu-boot.log}` (the grown kernel);
+`user/{forker.c, execee.c, build-user.sh, forker, execee, *.o}` (the two
+userland programs); `rp26-milestone-check.sh` (all four sub-tasks + the R-P24
+regression, rebuild+reboot, re-runnable green). Repo copies under
+`src/riscv/rp26/`.
+
+### Next: R-P27
+1. **fs-backed exec + `ld.so.1`** -- open the ELF from a filesystem (vs the
+   embedded `.incbin`), honor the `execve` path argument + argv/envp, and host
+   the R-P23.2 `ld.so.1` runtime-reloc engine for the DYNAMIC hello (interp +
+   aux vector already scaffolded).
+2. **preemption + a real disp queue** -- turn the R-P24 100 Hz timer tick into
+   a preemption point (`setrun`/`swtch` off the tick), grow the cooperative
+   runq into priority disp queues + `thread_create`, and add COW fork
+   (`hat_user_copy` becomes copy-on-write with a page-fault handler).
+3. **more syscalls + errno ABI + as_free** -- `open/read/close/brk/mmap`, the
+   SunOS error-return convention, free the old AS on exec/exit (vs the current
+   leak), and per-lwp trap state.
+4. **Full HAT + SMP** (carried): relocate kernel text/data into the high VA +
+   drop the identity map + `hat_memload`/R^X kernel perms; vmem/`kmem_cache`;
+   the page hash + freelists; SMP secondaries via SBI HSM.
 
 ---
 

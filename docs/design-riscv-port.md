@@ -3005,3 +3005,21 @@ src/riscv/rp25/kernel/{mach_uentry.S,hat_user.c,exec_elf.c,user_elf.S,+grown mac
 startup/hat_boot}. The riscv64 arc: compiles->links->executes->kernel-boots->VM+intr+dispatcher->
 USERLAND PROCESS. NEXT R-P26: fork/exec/wait + real proc/lwp table + fs-backed exec (ld.so.1 hosts the
 dynamic hello) + more syscalls/errno + full HAT + real dispatcher/callout + SMP.
+
+## R-P26 DONE (2026-08-15): FIRST MULTIPROCESS riscv64-solaris kernel (fork/exec/wait)
+All 4 boot-verified under qemu-virt:
+- proc_t table (pid/state/ppid/per-proc user AS satp root/per-proc kernel stack/saved rv_context/
+  trap-frame/exit status).
+- fork(2): parent pid=1 forks child pid=2, BOTH run via the dispatcher + print distinct pid (copy AS,
+  dup lwp, child returns 0). exec(2): child execs a new image -> [execee] pid=3. wait(2)/exit: parent
+  reaps pid=2 status=7 + pid=3 status=9 via a ZOMBIE rendezvous. Dispatcher: rv_sched runq + rv_swtch
+  between proc kernel stacks (cooperative; parent WAITING->child ZOMBIE->parent woken+reaps).
+Boot log: [parent] forked child pid=2 / [child] running pid=2 / [parent] wait reaped pid=2 status=7 /
+[execee] NEW program image after exec pid=3 / [parent] reaped pid=3 status=9 / === R-P26 ALL PASS ===.
+Key fix: exec must switch the LIVE satp mid-syscall (the trap epilogue sret's under the current satp).
+Cribbed: illumos proc.h/cfork/forklwp/gexec/exit/wait + hat_dup/as_dup + xv6-riscv fork/exec/scheduler/
+swtch + BSD kern_fork/exec/pmap_copy. Committed src/riscv/rp26/kernel/{proc.c,+grown exec/hat_user/
+mach_trap/main/startup}. The riscv64 arc: compiles->links->executes->boots->VM+intr->userland process->
+MULTIPROCESS (fork/exec/wait). NEXT R-P27: fs-backed exec + ld.so.1 (dynamic hello), timer-preemption +
+real disp queue + COW fork, more syscalls/errno/as_free, full HAT + SMP.
+Honest scope: cooperative sched (preemption=R-P27), copy-not-COW fork, embedded-ELF exec, NPROC=8.
