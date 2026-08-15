@@ -1,5 +1,43 @@
 # RISC-V (riscv64) port — STATUS
 
+**Phase reached: R-P33** (the R-P32 real-proc_t-on-both-harts kernel grows the
+PROCESS + IPC + FILESYSTEM maturity with a **MINIMAL SIGNAL FRAMEWORK + kill(2)**,
+**pipe(2) + directories**, and **per-CPU idle/wfi + file-backed demand-exec**,
+each boot-verified under `qemu-system-riscv64 -machine virt -smp 2`.  (1) SIGNALS:
+a per-proc pending mask + a disposition table (`sigaction`/`signal`); `kill(2)`
+posts a signal to a proc (atomic OR into `p_sigpend`, waking a `wait(2)`-blocked
+target); delivery happens on the RETURN-TO-U edge (`proc_deliver_signals`, called
+from `mach_trap.S .Lret`): the kernel BUILDS A SIGNAL FRAME on the user stack (a
+saved copy of the interrupted trap frame), rewrites the trap frame so the
+epilogue `sret`s into the handler (`a0`=signo, `ra`=the userland `sa_restorer`
+trampoline, `sp`=the sigframe), and clears the pending bit; the handler returns
+through the restorer, which `ecall`s `SYS_sigreturn` to copy the saved frame back
+so the proc resumes exactly where it was interrupted.  Default actions terminate
+(SIGKILL/SIGTERM/SIGSEGV/USR1/USR2 -> `proc_exit(128+sig)`); an unresolved user
+page fault raises SIGSEGV (the kernel no longer halts on a bad user access).
+Proof: a child installs a SIGUSR1 handler + spins, the parent `kill(2)`s it, the
+handler RUNS + returns via sigreturn (the child resumes + exits 0); then the
+parent SIGKILLs a second uncatchable spinner (reaped status 137 = 128+9).
+(2) pipe(2): a kernel ring buffer (`pipe_t`) with two fds (read + write end),
+blocking read/write mediated by the R-P30 scheduler (a full/empty end yields +
+re-checks), reader/writer refcounts (EOF when the last writer closes, EPIPE when
+the last reader closes); fork inherits the fd table + bumps the pipe refcounts.
+Directories: a `VT_DIR` tmpfs vnode + `VOP_READDIR`, `mkdir`/`getdents` over
+tmpfs (a dir enumerates the tmpfs entries directly under its path).  Proof: a
+parent writes + a fork-inherited child reads a pipe message (blocking IPC);
+`mkdir(/tmp/d)` + two files + `readdir` lists 2 entries.  (3) per-CPU idle +
+`wfi`: a hart with an empty runq parks in `wfi` (low power, woken by the SBI
+timer) instead of spinning -- proven by idling across 5 timer wakeups while the
+tick counter advances; and FILE-BACKED DEMAND-EXEC: `exec_image_demand` maps a
+PT_LOAD text segment FILE-BACKED + LAZY (`PTE_LAZY`) instead of the eager
+`exec_image` copy, and the first instruction fetch faults into `exec_demand_fault`
+which pages just that text page in from the ELF image (vs eager copy) -- proven
+by a program whose text is paged in on the fetch fault (`[exec-demand] fault ->
+paged text from file`) and then runs its compute loop correctly.  Proof:
+`rp33/rp33-milestone-check.sh` (all three R-P33 sub-tasks + the R-P24 + R-P26 +
+R-P27 + R-P28 + R-P29 + R-P30 + R-P31 + R-P32 regressions green, rebuild+reboot,
+re-runnable).  Details in the R-P33 section below.  **Next: R-P34.**
+
 **Phase reached: R-P32** (the R-P31 true-SMP high-half kernel grows the MEMORY-
 MANAGEMENT + SMP-PROCESS maturity: the **REAL proc_t DISPATCHER on BOTH HARTS**,
 **COPY-ON-WRITE fork + DEMAND PAGING**, and **vfs write(2) over a real vnode
@@ -32,7 +70,7 @@ proc writes+reads a tmpfs file through the VOP_* layer while the ramfs rejects
 the write.  Proof: `rp32/rp32-milestone-check.sh` (all three R-P32 sub-tasks +
 the R-P24 + R-P26 + R-P27 + R-P28 + R-P29 + R-P30 + R-P31 regressions green,
 rebuild+reboot, re-runnable).  Details in the R-P32 section below.  **Next:
-R-P33.**
+R-P33 (DONE -- see the R-P33 phase above).**
 
 **Phase reached: R-P31** (the R-P30 true-high-half kernel completes SMP high-half
 by putting **SECONDARIES ON THE W^X ROOT** -- the boot identity trampoline is
@@ -994,13 +1032,160 @@ layer, `run_cowtest`/`run_procs_smp`/`run_vfstest` drivers], `mmu_riscv.h`
 R-P32 sub-tasks + the R-P24/26/27/28/29/30/31 regressions green,
 rebuild+reboot, re-runnable).
 
-### R-P33 (next)
+## R-P33 -- signals + kill(2) + pipe(2) + directories + per-CPU idle/wfi + file-backed demand-exec
 
-Directions: real per-CPU idle threads + an idle loop (so a hart with no runnable
-proc `wfi`s instead of spinning in `rv_sched_cpu`); a broader syscall/vnode set
-(directories/`VOP_CREATE`/`VOP_REMOVE`, a mount table, `dup`/`pipe`); signals +
-`kill`; and demand-paged file-backed segments (page a `PT_LOAD` in on the exec
-fault instead of eager `exec_image`).
+Substrate: fred v3 (root@52.88.62.49), the R-P18/19 build-tree gcc
+(`build/gcc-sol-cfg3/gcc/xgcc -B<gcc>` = `riscv64-unknown-solaris2.11`) + the
+R-P17 `riscv64-unknown-elf` binutils + `qemu-system-riscv64 -machine virt -smp 2`
+with OpenSBI v1.7.  R-P33 extends the R-P32 kernel (`rp33/kernel/`, a superset of
+`rp32/kernel/`) with three sub-tasks, each boot-verified under qemu.  Proof:
+`rp33/rp33-milestone-check.sh` (rebuild the userland + ld.so.1 + initramfs +
+kernel + reboot; the three R-P33 sub-tasks + the R-P24 + R-P26 + R-P27 + R-P28 +
+R-P29 + R-P30 + R-P31 + R-P32 regressions all green, re-runnable).
+
+### R-P33.1 signals + kill(2) (the headline) -- DONE
+- **A minimal signal framework with REAL delivery on return-to-U.**
+  `rp33/kernel/{signal.c, proc.c, main.c, mach_trap.S}` + `rp33/user/sigtest.c`:
+  - **signal.c** owns the delivery logic: a per-proc pending mask (`p_sigpend`) +
+    a disposition table (`p_sighand[NSIG]`: 0=SIG_DFL, 1=SIG_IGN, else a user
+    handler VA) + the `sa_restorer` VA (`p_sigrestorer`).  `proc_sigaction`
+    installs a handler (SIGKILL cannot be caught); `proc_kill` (SYS_kill) posts a
+    signal (an atomic OR into the target's `p_sigpend`, and if the target is
+    blocked in `wait(2)` it is made RUNNABLE so it returns to U + delivers).
+  - **Delivery** (`proc_deliver_signals`) runs at `mach_trap.S .Lret` -- the
+    common trap-return path, so EVERY return to U-mode checks the running proc
+    for a pending signal.  If a handler is installed it BUILDS A SIGNAL FRAME on
+    the user stack (`struct sigframe` = a saved copy of the whole interrupted
+    `struct regs` + a magic guard), then rewrites the trap frame so the epilogue
+    `sret`s into the handler: `sepc`=handler, `a0`=signo, `sp`=the sigframe,
+    `ra`=the userland `sa_restorer`.  One signal is delivered per U-trip.
+  - **sigreturn** (`proc_sigreturn`, SYS_sigreturn) -- the handler `ret`s to the
+    restorer stub (a naked `ecall SYS_sigreturn`), which copies the saved frame
+    back into the trap frame so the proc resumes EXACTLY where the signal
+    interrupted it (the saved sepc, sp, and every GPR restored).
+  - **Default actions**: SIGKILL/SIGTERM/SIGSEGV/USR1/USR2 SIG_DFL -> terminate
+    (`proc_exit(128+sig)`).  **SIGSEGV on an unhandled fault**: an unresolved
+    U-mode page fault (`proc_pagefault` returns 0) now posts SIGSEGV to the proc
+    (`proc_signal_fault`) instead of halting the kernel -- the default action
+    terminates just that proc.  fork inherits the disposition table + restorer
+    (POSIX) but starts with an empty pending mask.
+- **Boot proof** (`-smp 2`):
+  ```
+    [sigtest][child] installed SIGUSR1 handler; waiting for the signal
+    [sigtest][parent] kill(child, SIGUSR1)
+      [signal] delivering sig 16 to pid 29 -> handler @0x00000000000103ca
+    [sigtest][child] SIGUSR1 handler RAN (sig=16)
+    [sigtest][child] resumed after the handler returned (sigreturn OK); exiting 0
+    [sigtest][parent] reaped SIGUSR1 child status=0
+    [sigtest][child2] spinning forever (only SIGKILL can stop me)
+    [sigtest][parent] kill(child2, SIGKILL)
+      [signal] sig 9 default action: terminate pid 30
+    [sigtest][parent] reaped SIGKILL child2 status=137 (128+SIGKILL ...)
+  [R-P33.1] signals + kill PROVEN ...
+  ```
+- **CRIB**: the per-proc pending mask + disposition table + "deliver on the way
+  back to U-mode, build a frame on the user stack, redirect the saved PC to the
+  handler, restore via a sigreturn syscall" model is illumos
+  `uts/common/os/sig.c` (sigtoproc/issig/psig/sendsig) + the MD `sendsig()`
+  building a ucontext on the user stack + `setcontext` on return; the sigframe-
+  on-the-user-stack + `sret` to the catcher + sigreturn is the BSD/xv6-riscv
+  usertrap signal path; the trap-frame rewrite (sepc/a0/sp/ra) is the RISC-V
+  privileged-spec `sret` applied to the R-P25 `struct regs`.
+
+### R-P33.2 pipe(2) + directories -- DONE
+- **pipe(2): a kernel ring buffer with two fds + blocking read/write.**
+  `rp33/kernel/proc.c` + `rp33/user/pipetest.c`:
+  - `pipe_t` = a 512-byte ring buffer with read/write positions + reader/writer
+    refcounts.  `proc_pipe` (SYS_pipe) allocates one + installs two fds (read
+    end + write end) in the caller.  fork inherits the fd table + bumps the pipe
+    refcounts (`pipe_incref`) so a parent + child share the SAME pipe; `close`
+    drops a ref (`pipe_close`), freeing the pipe when both ends hit 0.
+  - blocking read/write: a read on an empty buffer with writers still open BLOCKS
+    (`pipe_block`: mark RUNNABLE + `rv_swtch` to the scheduler, re-check on wake)
+    -- the R-P30 dispatcher runs the peer, which produces bytes; a write to a
+    full buffer blocks likewise.  A read with no writers left returns 0 (EOF); a
+    write with no readers returns EPIPE.  `proc_read`/`proc_write` route a pipe
+    fd through `pipe_read_pub`/`pipe_write_pub` (direction-checked).
+  - **Directories**: `vfs.c` gains a `VT_DIR` tmpfs vnode + `VOP_READDIR`
+    (`dir_vnodeops`); `vfs_mkdir` (SYS_mkdir) creates a dir in the tmpfs table,
+    `vfs_readdir` enumerates every tmpfs entry DIRECTLY under the dir path.
+    `proc_openf` tags a dir fd; `proc_getdents` (SYS_getdents) reads one entry
+    name per call via `VOP_READDIR`, advancing the fd offset.
+- **Boot proof**: a parent writes 31 bytes + a fork-inherited child reads them
+  through the pipe (`[child] read 31 bytes: 'hello from parent over the pipe'`);
+  `mkdir(/tmp/d)` + two files + `readdir(/tmp/d)` lists 2 entries (`entry: one`,
+  `entry: two`).
+- **CRIB**: the fifofs/pipe ring buffer with reader/writer counts + blocking
+  read/write that sleeps on the buffer + wakes the peer is illumos
+  `uts/common/fs/fifofs/fifovnops.c` (fifo_read/fifo_write/fifo_wait) +
+  `sys/pipe.h` + the xv6 pipe (pipewrite/piperead sleep/wakeup), reduced to a
+  cooperative yield-and-recheck against the R-P30 scheduler; the `VT_DIR` +
+  `VOP_READDIR`/`tmp_readdir` + `mkdir`/`getdents` dir path is illumos tmpfs
+  `tmp_readdir`/`tmp_mkdir` + the `fop_readdir` vnode op, reduced to a prefix
+  scan of the flat tmpfs name table.
+
+### R-P33.3 per-CPU idle + wfi + file-backed demand-exec -- DONE
+- **A hart with an empty runq parks in `wfi` (low power) instead of spinning.**
+  `rp33/kernel/main.c` `run_idle_wfi`: with the free-running 100 Hz SBI timer as
+  the tick source (re-armed + SIE set before idling), the hart enters an idle
+  loop that `wfi`s between ticks; the STIP timer wakes it, `rv_interrupt` counts
+  + re-arms.  Proof: `hart idled in wfi across 5 timer wakeups (tick 380 ->
+  385)` -- the CPU slept in wfi (not spun) while the tick advanced.
+- **File-backed demand-exec: page a PT_LOAD text segment in on the fetch fault.**
+  `rp33/kernel/{exec_elf.c, proc.c, main.c}` + `rp33/user/dpexec.c`:
+  - `exec_image_demand` loads an ELF like `exec_image` EXCEPT the first
+    executable, non-writable, fully-file-backed PT_LOAD (the text) is mapped
+    LAZY (`hat_user_lazy`: V clear + `PTE_LAZY` + R|X|U) instead of eager-copied,
+    and its file backing (image base, seg VA, file offset, filesz, memsz) is
+    recorded on the proc (`p_dimg`/`p_dva`/`p_doff`/`p_dfilesz`/`p_dmemsz`).
+  - the first instruction fetch of an unbacked text page faults (scause 12)
+    into `proc_pagefault`, which routes a fault inside the demand region to
+    `exec_demand_fault`: allocate a frame, copy the corresponding file bytes
+    from the ELF image (zero-fill the tail past filesz), map it R|X|U.  So the
+    text is paged in from the "file" (the embedded ELF) ON DEMAND, vs the eager
+    `exec_image` copy.  `proc_first_demand` builds the first proc this way.
+- **Boot proof**: `[exec-demand] fault -> paged text from file va=0x10000
+  (pid 33)` then `[dpexec] demand-paged text is executing` +
+  `[dpexec] compute loop result=11990000 (text ran from demand-paged pages)`.
+- **CRIB**: an idle thread that halts the CPU (`hlt`/`wfi`) when its runq is
+  empty, woken by the timer/IPI, is illumos `uts/*/os/cpu_idle()`/`idle()` (the
+  i86pc `mach_cpu_idle` -> i86_mwait/hlt, the sun4 `cpu_halt`) + the RISC-V `wfi`
+  low-power hint (xv6-riscv scheduler `wfi` in the empty-runq branch, Linux
+  arch/riscv `cpu_do_idle`); mmap'ing a file-backed PT_LOAD (seg_vn + a vnode +
+  offset) and faulting each page in from the file on `F_INVAL` is illumos exec
+  `mapelfexec` (VOP_MAP the text) + `segvn_fault`/`fop_getpage`, reduced to the
+  embedded ELF bytes as the "file" + the R-P32 lazy-leaf demand-paging.
+
+### R-P33 files
+
+`rp33/kernel/`: `signal.c` [NEW -- the signal framework: `proc_sigaction`,
+`proc_deliver_signals`, `proc_sigreturn`, `proc_signal_fault`, the sigframe],
+`proc.c` [`p_sigpend`/`p_sighand`/`p_sigrestorer` + accessors + `proc_kill`; the
+`pipe_t` ring buffer + `proc_pipe`/`pipe_read`/`pipe_write`/`pipe_close`/
+`pipe_incref`; fork fd-table + signal-disposition inheritance; the dir syscalls
+`proc_mkdir`/`proc_getdents`; `proc_first_demand` + the demand-exec route in
+`proc_pagefault`; the `p_d*` demand region], `exec_elf.c` [`exec_image_demand`
+(lazy file-backed text) + `exec_demand_fault`], `vfs.c` [`VT_DIR` + `VOP_READDIR`
+(`dir_vnodeops`), `vfs_mkdir`, `vfs_readdir`, `vfs_isdir`, shared tmpfs name
+slots], `mach_trap.S` [the `proc_deliver_signals` hook at `.Lret`], `main.c`
+[SYS_kill/sigaction/sigreturn/pipe/mkdir/getdents + the SIGSEGV route in
+`rv_trap`; `run_sigtest`/`run_pipetest`/`run_idle_wfi`/`run_dpexec` drivers],
+`proc_riscv.h` [the `ud_*` demand-exec descriptor in `struct uproc`],
+`user_elf.S` [embed sigtest/pipetest/dpexec], `build-kernel.sh` [+ signal.o + the
+R-P33 asserts].  `rp33/user/`: `sigtest.c`, `pipetest.c`, `dpexec.c`,
+`build-user.sh`.  Proof: `rp33/rp33-milestone-check.sh` (all three R-P33 sub-tasks
++ the R-P24..R-P32 regressions green, rebuild+reboot, re-runnable).
+
+### R-P34 (next)
+
+Directions: signal maturity (a signal mask / `sigprocmask`, `SA_RESTART`,
+queued/real-time signals, `SIGCHLD` on child exit, `alarm`/`SIGALRM` off the
+timer); a real fd `dup`/`dup2` + `fcntl`; a VFS mount table + a path-component
+walk (multi-level directories, `..`/`.`, `VOP_CREATE`/`VOP_REMOVE`/`rename`); a
+per-CPU idle THREAD in the dispatcher proper (so `rv_sched_cpu` `wfi`s on an
+empty runq + is woken by an IPI, not just a standalone proof); and demand-paged
+file-backed segments for the DYNAMIC exec path (ld.so.1 + libgcc_s mapped
+file-backed + demand-paged, not just the static text).
 
 ## R-P31 -- secondaries on the W^X root (drop the boot identity trampoline) + ld.so.1 hardening (lazy PLT + .gnu.hash + versioning + relro) + real ramfs read(2)
 

@@ -3238,3 +3238,20 @@ Committed src/riscv/rp32/{kernel/vfs.c+grown proc/hat_user/main/locore/mach_trap
 vfstest}. The riscv64 kernel: high-half W^X SMP (real proc dispatch on both harts) + COW/demand-paged
 memory + fork/exec/wait + dynamic linking + a vnode fs with read+write. NEXT R-P33: per-CPU idle/wfi,
 directories/mount/dup/pipe, signals+kill, demand-paged file-backed exec.
+
+## R-P33 DONE (2026-08-15): signals/kill + pipe + directories + idle/wfi + file-backed demand-exec
+All 3 boot-verified under qemu-virt -smp 2, R-P24-32 regressions green:
+- Signals + kill(2): kill posts to p_sigpend; on return-to-U (mach_trap .Lret -> proc_deliver_signals)
+  the kernel builds a sigframe on the user stack, rewrites the trap frame (sepc=handler, a0=signo,
+  ra=sa_restorer), sret to handler; SYS_sigreturn restores. PROOF: SIGUSR1 handler RAN + resumed
+  (sigreturn OK); SIGKILL terminates (status 137). Cribbed illumos os/sig.c sendsig/psig + xv6/BSD.
+- pipe(2) (fork-inherited fds, blocking ring buffer -- child read 31 bytes) + directories (mkdir/readdir,
+  VT_DIR/VOP_READDIR over tmpfs). Cribbed illumos fifofs + tmpfs readdir.
+- idle/wfi (harts wfi when runq empty, timer-woken -- 5 wakeups) + file-backed demand-exec (exec maps
+  ELF PT_LOAD file-backed, text demand-paged on fault -- [exec-demand] fault paged text, dpexec ran).
+  Cribbed illumos cpu_idle + mapelfexec VOP_MAP/segvn_fault over R-P32 lazy leaves.
+Committed src/riscv/rp33/{kernel/signal.c+grown proc/exec/vfs/mach_trap, user/sigtest/pipetest/dpexec}.
+The riscv64 kernel now has the FULL Unix core: SMP proc scheduling, COW+demand-paged memory, W^X,
+fork/exec/wait, signals, pipes, a read/write vnode fs with directories, dynamic linking, idle/wfi.
+NEXT R-P34: sigprocmask/SIGCHLD/alarm, dup/fcntl, VFS mount + multi-level path walk, idle thread in
+rv_sched_cpu, file-backed demand-exec for the dynamic ld.so.1 path.
