@@ -873,3 +873,16 @@ WIRING is proven (drv evaluates) + the 3 walls fixed + cython/ninja/meson-python
 OUTPUT isn't built. Re-launching numpy as a DETACHED nix-build (nohup + done-marker + poll -- the
 death-resilient long-build pattern) rather than an interactive agent (which hit context limits twice on
 this multi-hour gcc14->openblas->numpy chain). Poll the marker; publish+register when the output realizes.
+
+## PS-AARCH64-WAVE5 (2026-08-15): native-cmake wire -> +11 compression/data class
+Cracked the native-cmake wall by WIRING the cross build-platform cmake to the WORKING x86 cmake-minimal
+(6kg8h3gl...-cmake-minimal-4.3.4, built by the x86 fixed tranche) via a cmakeWireOverlay in the native
+overlay list -- cross pkgs use a functioning native cmake instead of rebuilding the broken one. +11
+EM_AARCH64 pkgs published (39 paths, 0 failed): zstd/lz4/brotli/snappy/json-c/jansson/xxhash/libdeflate/
+zlib-ng/c-ares/minizip. aarch64 now ~92. Cracks: pcre2/readline forced-static, gnugrep/bash->buildPackages
+(dodge the aarch64-bash netopen wall), CXX-probe bypass (CMAKE_CXX_COMPILER_WORKS -- cmake project()
+enables CXX + the cross g++ link hits the unwind-map wall) for C-only libs. THE remaining aarch64 ceiling:
+the cross C++ mapfile/unwind-map wall (libgcc-unwind.map file-format-not-recognized) blocks any genuinely
+C++ pkg that links a C++ executable/shared lib -> needs the seed gcc rebuilt with a Solaris-ld-compatible
+unwind spec (the deep toolchain fix). aarch64 now cross-builds: coreutils + crypto + net/TLS(curl) +
+compression/data -- a substantial base userland. Wave5 entry -> fork.
