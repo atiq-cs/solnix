@@ -850,3 +850,17 @@ cmake-minimal) -> gates zstd/lz4/json-c/jansson/brotli/snappy/c-ares (the cmake 
 unblocking native cmake opens that class. (2) cross bash (netopen.c internal_error illumos port) ->
 gates libassuan/target-gettext. (3) C++ mapfile wall (nettle/gnutls need gmp-cxx) -> needs seed gcc w/
 Solaris ld. The net/TLS + crypto cores are now DONE on aarch64 -- a usable base userland cross-builds.
+
+## PS-NUMPY (2026-08-15): wiring PROVEN, 3 walls fixed, unattended build running
+numpy retry: the FC=gcc14-gfortran (langFortran=true, NOT the gcc15-routed gfortran attr) + BLAS=openblas
+(gcc14Stdenv) wiring is CORRECT + evaluates (in tranche-entry-224.nix). numpy hasn't LANDED yet (a
+~4-5hr unattended nix-build is running: gcc14->openblas->numpy). Three real build-tool/toolchain walls
+fixed this session: (1) ninja illumos fork/execvp patch regenerated against the post-first-patch
+baseline (ninja BUILT r6kl2n9k); (2) meson-python noCheck (patchelf absent, BUILT fwng8m8a); (3) THE
+key one -- gcc14 libgfortran kinds.h empty: libgfortran/configure hardwires AM_FCFLAGS -Werror + the
+seed cc-wrapper feeds a nonexistent -I<bootstrapLibs>/include -> -Wmissing-include-dirs+-Werror fails
+every kind probe -> empty kinds.h. FIX (gcc14.nix FIX 5): sed -Wno-missing-include-dirs into BOTH
+configure AND configure.ac (autoreconf regenerates configure). cython BUILT (61l18900). Handoff:
+/root/numpy-handoff.md + /root/numpy-paths.txt. RESUME: poll the running build; when numpy lands,
+publish + register + build scipy (same wiring). The wiring was never the blocker -- 3 build-tool bugs
+were, all now fixed.
