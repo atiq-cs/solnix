@@ -1,5 +1,114 @@
 # RISC-V (riscv64) port — STATUS
 
+**Phase reached: R-P39** (the R-P38 bridge kernel -- which ran ONE real,
+upstream-source coreutils echo linked against a hand-written per-program
+`coreutils_shim.h` -- now links real programs against a **REAL, REUSABLE solnix
+riscv64 libc** (`libc.a`: syscall stubs + buffered stdio + string + stdlib +
+ctype + real `crt1`/`crti`/`crtn`, backed by the kernel's syscalls), runs a
+**2ND real upstream coreutils util** against that same libc, and provides a
+**PERSISTENT (disk-backed) block filesystem** whose writes go back through
+`bdev_strategy` and survive an unmount+remount -- each boot-verified under
+`qemu-system-riscv64 -machine virt -smp 2`.
+
+(1) THE HEADLINE -- A REAL, REUSABLE LIBC (not a per-program shim).  R-P38's
+`coreutils_shim.h` inlined, as `static` functions in one header, exactly the
+libc surface a single echo referenced -- it was a per-program stand-in.  R-P39
+builds a genuine **`libc.a`**: separate translation units cross-compiled by the
+on-node `riscv64-unknown-solaris2.11` toolchain into a real `ar` archive --
+`port/syscall.c` (the illumos riscv64 SYSTRAP idiom via `sys/systrap.h`:
+`read`/`write`/`open`/`close`/`lseek`/`getpid`/`chdir`/`dup`/`dup2`/`_exit`,
+each translating the reduced-SunOS `-errno` return into `errno`/-1),
+`port/stdio.c` (a real `FILE` with `stdin`/`stdout`/`stderr`, per-stream flush
+buffers, `fwrite`/`fputc`/`putchar`/`puts`/`fputs`/`fflush` + a minimal
+`printf`/`fprintf`/`vfprintf` covering `%s%c%d%i%u%x%X%p%l*` with width/zero/
+left flags -- no floating point), `port/string.c` (`strlen`/`strcmp`/`strncmp`/
+`strcpy`/`strncpy`/`strcat`/`strchr`/`strrchr`/`memcpy`/`memmove`/`memset`/
+`memcmp`), `port/stdlib.c` (a first-fit `sbrk`-over-`SYS_brk` heap:
+`malloc`/`free`/`calloc`/`realloc`, plus `getenv` over the `environ` vector,
+`strtol`/`atoi`/`atol`, and the C89 `exit`/`atexit` that runs the LIFO atexit
+chain then flushes every stdio stream then traps `_exit`), `port/ctype.c` (the
+full ASCII/C-locale classifier set), `port/libc_start.c` (`__libc_start`, the
+C-level program entry the crt1 `_start` tail-calls: it stashes `environ`, runs
+`_init`/`.init` constructors, calls `main`, and `exit()`s its return), and
+`port/progname.c` (the shared `program_name`).  The startup uses **real crt
+files**: a new `csu/crt1.s` (`_start` sets the frame chain + `gp`, loads
+argc/argv/envp off the RISC-V psABI initial stack, and calls `__libc_start` --
+routing teardown through the libc so stdio is flushed + atexit runs, the C89
+contract) plus the R-P20 `crti.s`/`crtn.s` (the `_init`/`_fini` brackets).
+**Public headers** live in `libc/include/` (`stdio.h`/`stdlib.h`/`string.h`/
+`ctype.h`/`unistd.h`/`stddef.h`/`sys/types.h`/`sys/systrap.h`).  Proof: the
+SAME unmodified GNU coreutils-9.5 `src/echo.c` (compiled with a tiny gnulib
+scaffolding chain -- `cu-include/config.h`/`system.h`/`assure.h`/`c-ctype.h` ->
+`coreutils_glue.h`, which maps gnulib's `_()`/`STREQ`/`c_isxdigit`/`close_stdout`/
+`set_program_name`/`version_etc`/the usage-text macros onto the REAL libc, NOT
+re-implementing libc) is DYNAMICALLY LINKED (`ld.so.1`, `NEEDED libgcc_s.so.1`)
+against `libc.a` as `/bin/coreecho2`; `nm` shows the libc symbols
+(`printf`/`fwrite`/`getenv`/`exit`/`atexit`/`strlen`/`__libc_start`) resolved
+STATICALLY from the archive (defined `T`, zero undefined libc symbols -- the
+only dynamic `NEEDED` is `libgcc_s.so.1`).  Run from the shell:
+`/bin/coreecho2 R-P39 real-libc-echo` -> `R-P39 real-libc-echo` (argv join via
+libc stdio); `/bin/coreecho2 -e libc\tstdio` -> `libc<TAB>stdio` (the real echo
+`-e` escape engine driving libc `putchar`/`fwrite`).  This turns "we can run one
+hand-shimmed program" into "we can run real programs against a real, reusable
+libc."
+
+(2) A 2ND REAL UPSTREAM COREUTILS UTIL against the same libc.  The unmodified
+GNU coreutils-9.5 `src/true.c` is compiled with the same `cu-include/` gnulib
+scaffolding, linked against `libc.a` + the real crt, dynamically linked via
+`ld.so.1`, as `/bin/coretrue` -- proving the libc + exec path generalizes
+beyond echo (it exercises `set_program_name`/`setlocale`/`STREQ`/
+`atexit(close_stdout)` from the real libc).  The interactive shell gained a
+`[exit N]` report after each foreground command (a general improvement) so a
+util whose only observable result is its status is verifiable; proof:
+`/bin/coretrue` -> `[exit 0]`.
+
+(3) A PERSISTENT (disk-backed) block filesystem.  R-P38's blockfs mounted a
+block-backed fs and READ a file through `bdev_strategy`, but its `vop_write`
+returned `EROFS` and every mount re-`mkfs`'d.  R-P39 makes it PERSISTENT:
+`blockfs_vop_write` does a read-modify-write of the file's data block back
+THROUGH `bdev_strategy` and updates the on-disk inode size; a new
+`blockfs_create`/`vfs_blockfs_create` allocates a free inode + data block
+(inode index k -> data block `DATA_BLK + k`) and writes the inode table back
+through the block layer; and `vfs_blockfs_mount` now `mkfs`'s ONLY ONCE per boot
+(`blockfs_fmt_done`), so a REMOUNT reuses the RAM disk's (persistent) contents.
+Proof (`run_blockfs`): after the R-P38 read, the kernel REMOUNTS, `create`s
+`/blk/persist`, WRITES 103 bytes to it through the block vnode
+(`fop_write` -> `blockfs_vop_write` -> `bdev_strategy`), UNMOUNTS, REMOUNTS (no
+re-`mkfs`), OPENS `/blk/persist`, and READS it back -- the bytes match what was
+written (`solnix riscv64 blockfs (R-P39): this line was WRITTEN through
+bdev_strategy, survived unmount+remount.`), i.e. the write-back persisted
+through the block layer across the unmount+remount round-trip.
+
+Proof: `rp39/rp39-milestone-check.sh` (all three R-P39 sub-tasks + every
+R-P24..R-P38 regression green -- rebuild+reboot, re-runnable; 134 PASS lines,
+zero FAIL, -smp 2).  Cribbed the illumos libc SYSTRAP idiom (`usr/src/lib/libc/`
+`<isa>/sys` a7-trap wrappers) + the C89 stdio/stdlib/string/ctype contracts
+(illumos libc `stdio`/`_iob`, the K&R `sbrk` storage allocator, glibc/illumos
+`__libc_start_main`'s "stash environ, run ctors, call main, exit" body) + the
+real `crt1`/`crti`/`crtn` csu convention (amd64/aarch64) + the RISC-V psABI
+initial stack + gp init; GNU coreutils-9.5 `src/echo.c` + `src/true.c` (built
+against the real libc with the gnulib `system.h`/`c-ctype.h`/`config.h`
+scaffolding); the illumos ufs write-back path (`ufs_itrunc`/`wrip` -> `bmap` ->
+`bwrite`) + xv6 `fs.c` (`ialloc`/`balloc`/`writei` -> `bwrite`) block-write
+model + the `strategy(9E)` block I/O entry point, reduced to one data block
+per file.
+
+**Restore note (fresh node):** built on the R-P36/37/38 node from the R-P38
+tree + the already-rebuilt cross toolchain + qemu; `rp39/` was seeded by copying
+`rp38/`, then the R-P39 deltas applied on top: a new `libc/` tree (`include/*`,
+`port/*.c`, `csu/crt1.s`, `build-libc.sh`, `coreutils_glue.h`); `user/cu-include/`
+(the gnulib scaffolding headers) + `user/build-cu.sh` (build `coreecho2`/
+`coretrue` against `libc.a`); `user/sh.c` (`[exit N]` foreground-status report);
+`kernel/vfs.c` (blockfs write-back + `create` + mkfs-once); `kernel/main.c`
+(`run_blockfs` persistence proof); `kernel/build-kernel.sh` (build the libc +
+cu utils, ramfs `/bin/coreecho2` + `/bin/coretrue`, the R-P39 feed_console
+commands + assertions, `K`/`U` retargeted to `rp39`).  R-P38 boot re-confirmed
+(`rp38-milestone-check.sh`: 127 PASS / 0 FAIL, the real shim-linked coreutils
+echo + fg/bg job control + blockfs) before starting R-P39.
+
+**Next: R-P40.**
+
+
 **Phase reached: R-P38** (the PIVOTAL BRIDGE: the R-P37 interactive-shell kernel
 now **EXECUTES A REAL, UPSTREAM-SOURCE riscv64 ELF built the way a solnix PACKAGE
 is built** -- the GNU coreutils echo, compiled by the on-node cross toolchain +

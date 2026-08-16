@@ -3366,3 +3366,28 @@ xv6 sh bg/fg + waitpid(WNOHANG); illumos specfs/bdev strategy(9E) + xv6 fs.c blo
 GNU coreutils-9.5 src/echo.c. NEXT R-P39: port more of the real libc surface (so a coreutils util links a
 real libc, not a shim) + exec a 2nd real program + a persistent (disk-backed) root fs. The kernel runs the
 actual toolchain's output -- the bridge from toy kernel to package-capable.
+
+## R-P39 DONE (2026-08-16): a REAL reusable libc.a -- real programs link a real libc, not a shim
+All boot-verified qemu -smp 2, 135 PASS / 0 FAIL, R-P24-38 regressions green (R-P38 re-confirmed first).
+THE step from "we ran one hand-shimmed program" to "we run real programs against a real libc":
+- Real libc.a (an ar archive of separately cross-compiled TUs, NOT a per-program shim): port/syscall.c
+  (illumos riscv64 SYSTRAP idiom, -errno->errno/-1), port/stdio.c (real FILE, stdin/out/err, per-stream
+  flush buffers, fwrite/fputc/putchar/puts/fputs/fflush + minimal printf/fprintf/vfprintf w/ width/flags),
+  port/string.c + port/ctype.c (full C89), port/stdlib.c (first-fit sbrk-over-SYS_brk heap
+  malloc/free/calloc/realloc, getenv, strtol/atoi, C89 exit/atexit LIFO->flush stdio->_exit),
+  port/libc_start.c (__libc_start: environ, _init, main, exit), port/progname.c. Real crt: csu/crt1.s +
+  R-P20 crti/crtn; public headers in libc/include/. PROOF it's a real libc not a shim: nm coreecho2.dyn
+  shows printf/fwrite/getenv/exit/atexit/strlen/__libc_start resolved STATICALLY from the archive (T, zero
+  undefined libc symbols; only dynamic NEEDED is libgcc_s.so.1).
+- Same UNMODIFIED coreutils-9.5 src/echo.c rebuilt against libc.a (dynamic, ld.so.1) as /bin/coreecho2:
+  "R-P39 real-libc-echo"; -e libc\tstdio -> real TAB.
+- 2nd real program: unmodified coreutils-9.5 src/true.c against the same libc.a -> /bin/coretrue -> exit 0
+  (proves the libc + exec path generalizes; exercises set_program_name/setlocale/atexit(close_stdout)).
+- Persistent disk-backed fs: blockfs_vop_write does read-modify-write through bdev_strategy + updates the
+  on-disk inode size; blockfs_create allocates inodes/data; mkfs once/boot. PROOF: create /blk/persist,
+  write 103 bytes through the block vnode, unmount -> remount (no re-mkfs) -> read back, bytes match.
+Cribbed illumos libc SYSTRAP/stdio/__libc_start_main + K&R sbrk allocator + illumos csu crt1/crti/crtn +
+RISC-V psABI; GNU coreutils-9.5 echo.c+true.c (+ gnulib scaffolding onto the real libc); illumos ufs
+wrip->bmap->bwrite + xv6 fs.c write-back. NEXT R-P40: grow the libc surface (opendir/readdir, more stdio,
+signal(2) wrappers) toward linking a bigger real coreutils util (ls/cat/wc) + a persistent root fs at boot.
+A real libc.a is the foundation for running the actual solnix riscv64 package set.
