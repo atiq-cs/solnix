@@ -1051,3 +1051,24 @@ binding every wave dodged), fmt, nlohmann_json, pugixml, tinyxml-2, yaml-cpp. NO
 THIRD deep ceiling cracked this session (zstd, python3, C++). Orthogonal nits (not the wall): gmp isascii/
 spdlog tm_gmtoff need __EXTENSIONS__; Catch2 isnan; double-conversion drags ninja->python3->openssl. NEXT:
 wave11 harvests the C++ class (harfbuzz/pango/protobuf/abseil/spdlog-with-__EXTENSIONS__).
+
+## PS-PYTHON-DEPS-CLASS-OPEN (2026-08-16): 30 python3Packages + 2 foundational fixes
+The python-deps class is OPEN: 30 python3Packages built (each resolves the fixed python3, verified
+importable). Pure-python (26): certifi/charset-normalizer/idna/urllib3/click/jinja2/markupsafe/attrs/
+python-dateutil/pytz/tomli/toml/tomlkit/more-itertools/wcwidth/iniconfig/sortedcontainers/decorator/
+pyparsing/mdurl/pygments/setuptools-scm/build/virtualenv/mock/six. C-ext (4, prove the class): cython,
+pyyaml(libyaml), cffi(libffi -- _cffi_backend.so imports), lxml(libxml2/libxslt -- lxml.etree imports).
+TWO FOUNDATIONAL FIXES (both durable in the fork):
+  1. fetchurl-shim pickHash: fetchPypi passes both sha256 AND an empty hash="" -- the old
+     'args.hash or args.sha256' picked the EMPTY hash -> zero-digest FOD mismatch that blocked the WHOLE
+     python tree. Fix: pickHash prefers the first non-empty. (Unblocked toml -> the whole tree.)
+  2. python3-illumos-fix sysconfigdata LDSHARED: the recorded bare 'ld' made every OUT-OF-TREE C-ext die
+     'ld: fatal: symbol referencing errors'. postFixup rewrites LDSHARED/BLDSHARED/LDCXXSHARED to
+     'gcc -shared' in _sysconfigdata__sunos_.py. THIS opens the C-ext class (cython/cffi/pyyaml/lxml).
+requests-runtime members all built (certifi/idna/urllib3/charset-normalizer) but `requests` itself blocked
+by its TEST-tooling chain (pytest-xdist->execnet->gevent->c-ares->cmake->rhash, whose configure rejects
+illumos "Unknown target OS") -- a test-dep wall, not a requests wall (drop the test deps to get requests).
+SKIPPED (rust/host): pynacl (sphinx->requests->charset-normalizer non-overridden scope->cargo), requests
+(rhash), psutil (needs -lkstat, host-only lib -> would be a host leak), cryptography>=3.4/bcrypt (rust),
+numpy (deferred). Published ~56 paths. registry 1448 (x86 1146). NEXT: broaden python-deps (drop test-deps
+for requests; rich/markdown/packaging-graph; the C-ext class is open for anything not needing rust/kstat).
