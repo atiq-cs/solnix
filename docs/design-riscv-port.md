@@ -3314,3 +3314,27 @@ SBI RFENCE + waitid(P_PID+WNOHANG) + lookuppn cwd; xv6 sh redir/builtins; BSD na
 more fs (O_CREAT/O_TRUNC file creation, mkdir/rmdir), a real /sbin/init reading /etc/inittab, exec of a
 cache-built userland binary. rp36 restore recipes (overlay/setup-gcc/build-toolchain/build-dynchain) are
 in git -- the RISC-V port is now reconstructable from git on any fresh node.
+
+## R-P37 DONE (2026-08-16): the riscv64 kernel runs an INTERACTIVE login-style session
+All boot-verified qemu -smp 2, R-P24-36 regressions green (R-P36 boot re-confirmed first).
+- Live tty + line discipline: console.c reads input via the SBI legacy console getchar (EID 0x02) --
+  OpenSBI owns the qemu-virt ns16550 UART @0x10000000 + drains RX itself, so the guest asks OpenSBI
+  (a direct RBR read saw nothing). Drained on the timer tick (console_poll, polled RX-intr stand-in) + in
+  console_read; amoswap lock across 2 harts. Canonical mode: echo/backspace/CR->NL/^D->EOF. proc_read(fd0)
+  routes to it. PROOF (typed+echoed live): echo hello->hello, cat /etc/release, echo hi|cat->hi, cd/redir.
+- Job control ^C: per-proc p_pgid + setpgid/getpgid, tty fg pgrp; console_poll posts SIGINT(^C)/SIGTSTP(^Z)
+  to the fg pgrp lock-free from the tick (fires against a spinning command). PROOF: loop in its own pgrp,
+  ^C -> sig 2 terminate pid16, the SHELL SURVIVES + re-prompts; ^Z -> [job] pid17 stopped (P_STOPPED +
+  WUNTRACED report, 0x7f sentinel).
+- O_CREAT/mkdir/rmdir: open(2) O_CREAT(new file)+O_TRUNC(vfs_truncate)+O_APPEND; mkdir(2)+rmdir(2). PROOF:
+  echo x > /tmp/new CREATES it; mkdir/cd/echo>/cat; mkdir+rmdir round-trip.
+- inittab respawn: /sbin/init reads /etc/inittab (SVR4 id:action:command respawn) + respawns /bin/sh on
+  exit. PROOF: reading /etc/inittab -> spawn #1 pid2 -> ^D reap -> respawning -> spawn #2 pid19 -> respawned
+  shell runs -> 2 spawns, init done.
+Cribbed illumos ldterm STREAMS line-discipline (ldterm_dosig->SIGINT/SIGTSTP on t_pgrp) + SBI legacy
+getchar + t_pgrp job control + tmpfs tmp_create/O_TRUNC + init(1M) /etc/inittab respawn; xv6 console.c +
+init.c; BSD tty.c + /sbin/init; RISC-V SBI legacy getchar + 8250/16550 @0x10000000. NEXT R-P38: exec a
+CACHE-BUILT userland binary (a real illumos riscv64 ELF from the nix cache, not a hand-built one) -- the
+bridge from the bespoke test userland to the actual solnix package set; + more fs (real block/disk vnode,
+a persistent fs), + full bg/fg job control (fg/bg builtins, SIGCONT). The riscv64 kernel runs an
+interactive shell with job control -- a real Unix session.

@@ -1,5 +1,101 @@
 # RISC-V (riscv64) port — STATUS
 
+**Phase reached: R-P37** (the R-P36 userland-session kernel becomes INTERACTIVE
+with a **LIVE CONSOLE TTY + CANONICAL LINE DISCIPLINE**, **JOB CONTROL basics**
+(process groups + a tty foreground pgrp, ^C/^Z), **FILE CREATION** (open(2)
+O_CREAT/O_TRUNC/O_APPEND + mkdir(2)/rmdir(2)), and an **inittab-driven /sbin/init
+that RESPAWNS the console shell**, each boot-verified under `qemu-system-riscv64
+-machine virt -smp 2`.
+
+(1) LIVE tty/console input + a canonical LINE DISCIPLINE (the headline): a new
+console driver (`console.c`) reads console input via the SBI legacy console
+getchar (`sbi_console_getchar`, EID 0x02) -- OpenSBI owns the qemu-virt ns16550
+UART @ 0x10000000 for its own console and drains the RX itself, so the guest
+asks OpenSBI for each byte (a direct ns16550 RBR read sees nothing; `-nographic`
+wires host stdin to that UART).  Input is drained two ways: `console_poll()` on
+the timer tick (a polled RX-interrupt stand-in) AND `console_read()` (the fd-0
+read(2) backend, which polls directly since the read loop spins IN THE KERNEL
+where the timer is masked); an amoswap test-and-set keeps the two harts from
+racing on the input ring.  The canonical (cooked) line discipline echoes each
+typed byte, maps CR->NL (icrnl), erases on backspace/DEL, and returns one whole
+line per read (0 at ^D EOF).  `proc_read` routes fd 0 (no file/pipe backing) to
+`console_read`, so `/bin/sh` reads TYPED commands INTERACTIVELY.  Proof: the boot
+feeds the console via qemu's piped stdin (a here-doc of typed commands staged
+with sleeps); the line discipline echoes each line and the shell runs it live --
+`echo hello`->`hello`, `cat /etc/release`, `echo hi | cat`->`hi` (pipe+dup2),
+`echo redir > /tmp/f; cat < /tmp/f`->`redir`, `cd /tmp; echo rel > g; cat g`->
+`rel`, all typed at a `$ ` prompt.
+
+(2) JOB CONTROL basics: a per-proc `p_pgid` (a fresh proc leads its own group
+pgid==pid; fork inherits, exec keeps) + `setpgid(2)`/`getpgid(2)`; a tty
+foreground process group (`tty_fg_pgrp`, set by the shell via `tty_setfg` before
+a fg command + reclaimed after).  The line discipline's `console_poll` (run off
+the tick) posts SIGINT on ^C and SIGTSTP on ^Z to EVERY proc in the fg pgrp,
+lock-free (an atomic OR like `proc_alarm_tick`, since it runs in interrupt
+context) EVEN WHEN NO read(2) IS PENDING -- so a ^C interrupts a SPINNING fg
+command, not the blocked shell.  SIGINT default terminates (128+2); SIGTSTP
+default STOPS (`proc_stop_self` -> a new `P_STOPPED` state the scheduler skips,
+plus a WUNTRACED wait report: `proc_waitpid` reports a `P_STOPPED` child once
+with a `WIFSTOPPED` status sentinel 0x7f, without reaping).  Proof: the shell
+runs `loop` in its own pgrp on the tty, a ^C delivers SIGINT to loop's pgrp
+(`sig 2 default action: terminate pid 16`) and the shell SURVIVES + re-prompts
+(runs `echo after-jobs`->`after-jobs`); a second `loop` is ^Z'd (`[job] pid 17
+stopped (SIGTSTP)`, the shell prints `[sh] job pid 17 stopped`).
+
+(3) FILE CREATION: `open(2)` O_CREAT (create a new tmpfs file -- already in
+R-P36) now also honors O_TRUNC (reset the file to length 0 via `vfs_truncate`)
+and O_APPEND (start the offset at end-of-file); `mkdir(2)` (relative paths now
+cwd-resolved) + new `rmdir(2)`/`SYS_rmdir`/`vfs_rmdir` (removes an EMPTY tmpfs
+dir).  The tmpfs table grew from 8 to 24 slots so the interactive session's
+files coexist with the earlier proofs'.  Proof: `echo x > /tmp/new` CREATES the
+new file (O_CREAT|O_TRUNC) -> `cat /tmp/new`->`x`; `mkdir /tmp/dd; cd /tmp/dd;
+echo y > f; cat f`->`y` (a dir + a file created inside it); `mkdir /tmp/empty`
+then `rmdir /tmp/empty` round-trips cleanly.
+
+(4) inittab-driven init + RESPAWN: `/sbin/init` reads `/etc/inittab` (a ramfs
+file with an SVR4-style `id:action:command` respawn console entry) and, in a
+getty/respawn loop, fork+execs `/bin/sh` on the LIVE CONSOLE (fd 0/1/2 = the
+tty; no /etc/rc dup2 -- the shell reads interactively), reaps it (+ any adopted
+orphan), and RESPAWNS it when it exits.  A stopped child (status 0x7f) is NOT
+respawned.  Proof: init reads inittab, spawns shell #1 (`spawn #1: forked shell
+pid 2`); ^D exits it (`sh: EOF (^D); exiting`, `reaped pid 2 status 0 (the
+console shell)`); init RESPAWNS it (`respawning the console shell`, `spawn #2:
+forked shell pid 19`); the respawned shell runs `echo respawned-shell`->
+`respawned-shell`, ^D exits it, `respawn demo complete (2 spawns); init done.`
+
+Proof: `rp37/rp37-milestone-check.sh` (all four R-P37 sub-tasks + every
+R-P24..R-P36 regression green -- rebuild+reboot, re-runnable).  `run_init` was
+moved to the END of `main` (after every non-interactive proof) since the shell
+now BLOCKS on live console input; a latent `set -e` + `grep -c` (exit 1 on a
+zero count) landmine in the FP-preservation assertion was hardened with
+`|| true`.  Cribbed illumos ldterm STREAMS line discipline (`ldterm_rmsg`/
+`ldterm_dosig` raising SIGINT/SIGTSTP on the tty `t_pgrp`) + the SBI legacy
+console getchar (EID 0x02, OpenSBI `sbi_getc`), the `t_pgrp` job-control model
+(setpgid + the terminal foreground group), tmpfs `tmp_create`/`VOP_CREATE` +
+O_TRUNC, and init(1M) reading `/etc/inittab` + respawning a console getty/shell
+(SVR4 `inittab(4)` `id:rstate:action:command`, action=respawn); xv6 console.c
+(consoleintr/consoleread line discipline + the input ring, uart intr) + user/
+init.c (the `for(;;) wait()` reaper); BSD tty.c (ttyinput/ttread cooked mode) +
+/sbin/init; the RISC-V SBI spec (legacy console getchar) + the 8250/16550 UART
+model (qemu-virt UART0 @ 0x10000000, PLIC IRQ 10).
+
+**Restore note (fresh node):** built on the R-P36 node from the R-P36 tree +
+the already-rebuilt cross toolchain + qemu; `rp37/` was seeded by copying
+`rp36/` (kernel + user + ldso + the prebuilt dynamic hellos/ld.so.1), then the
+R-P37 deltas (new `kernel/console.c`; `kernel/sbi.c`/`.h` SBI getchar;
+`kernel/proc.c` p_pgid/setpgid/tty-fg/P_STOPPED/console_read-fd0/O_TRUNC-O_APPEND/
+rmdir/pf_verbose; `kernel/vfs.c` NTMPFILE=24/vfs_truncate/vfs_rmdir;
+`kernel/signal.c` SIGINT/SIGTSTP/stop-default; `kernel/main.c` syscalls
+setpgid/getpgid/tty_setfg/rmdir + console_poll-on-tick + run_init-moved-to-end;
+`user/init.c` inittab+respawn; `user/sh.c` interactive+job-control;
+`user/loop.c` new; `user/etc-inittab.txt` new; `kernel/build-kernel.sh` the
+staged console feeder + R-P37 assertions) applied on top.  R-P36 boot
+re-confirmed (`rp36-milestone-check.sh`: init+shell scripted session, ASID churn
+clean, waitpid, cwd, redir) before starting R-P37.
+
+**Next: R-P38.**
+
+
 **Phase reached: R-P36** (the R-P35 userland-session kernel gets **PER-AS ASIDs +
 IPI-DRIVEN REMOTE TLB SHOOTDOWN** [THE R-P35 SMP FIX], **waitpid(2)**, a **per-proc
 cwd + chdir(2) + . / .. resolution**, and a **/bin/sh with cd/exit builtins + >/<

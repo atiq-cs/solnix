@@ -1,0 +1,3 @@
+# solnix /etc/inittab -- SVR4-style init table (id:action:command)
+# The console entry: respawn a login shell on the console whenever it exits.
+co:respawn:/bin/sh
