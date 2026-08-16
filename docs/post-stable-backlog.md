@@ -1018,3 +1018,15 @@ typing-extensions/six + the flit-core/installer/hatchling/pluggy/pytest bootstra
 zstd-illumos-fix + python3-illumos-fix (cksum evolved again by design). NEXT: build the broad python-deps
 class (requests/urllib3/certifi/cryptography/jinja2/click/pyyaml/...) -- now unblocked; add _bz2/_lzma +
 pip toml-pin when a dep needs them. This + the zstd fix retire the two biggest x86 breadth ceilings.
+
+## PS-AARCH64-WAVE9 (2026-08-16): +13 incl gnutls(TLS) + lua/tcl/luajit(interpreters) + DBs + gpg-crypto
++13 EM_AARCH64 pkgs (published 74 paths, 0 failed): gnutls 3.8.13 (THE deep TLS win -- C/autotools,
+dropped unbound/p11-kit/cxx, nettle/libtasn1/libidn2 from base, --without-p11-kit), lua5.4/tcl8.6/luajit
+2.1 (three INTERPRETERS), gdbm/lmdb (embedded DBs), libgcrypt/libgpg-error/libassuan (gpg crypto stack),
+libxslt (over static libxml2), libpcap/tcpdump (packet capture), hiredis (redis client). aarch64 now 146
+rows (13->146 this session): a capable base -- coreutils + full crypto (nettle/libsodium/libgcrypt/gnutls)
++ net/TLS(curl/gnutls) + compression + graphics(libpng/libjpeg/giflib/freetype/lcms2/openjpeg) + FFI +
+event-loops + interpreters(lua/tcl/luajit) + DBs(gdbm/lmdb) + tools(tcpdump). SKIPPED (in-entry): p11-kit/
+fontconfig/gpgme (meson-zstd or dep-chain drags), harfbuzz/pango (C++ unwind wall). Walls unchanged:
+meson->python3->zstd (cross) + the C++ unwind/mapfile wall (needs seed gcc w/ Solaris ld -- the one deep
+aarch64 toolchain fix that would unlock the whole C++ class). wave9 entry -> fork.
