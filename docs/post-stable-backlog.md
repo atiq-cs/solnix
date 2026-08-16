@@ -913,3 +913,20 @@ net(wget/rsync) + compression + jq + nano. Remaining: dash/mksh/tmux/findutils (
 issues), + the C++ mapfile/unwind wall (caps all C++ pkgs -- the one deep fix: seed gcc w/ Solaris ld).
 NOTE: wave5's cmakeWireOverlay + wave6's crossBashOverlay are the two key cross-userland enablers;
 entry-aarch64-wave6.nix is the current base (built on wave4; wave5 cmake-wire should be folded in if not).
+
+## PS-SPARC-NIX224-MIGRATION (2026-08-16): nix-2.24 does REAL builds on sun -- migration gate cleared
+Ground-truthed on sun (UltraSPARC sun4u sparcv9, load idle, GENTLE -j1/-j2). The sparc nix-2.24.15
+port is FAR past "built+runs":
+- Full parallel install at /nix/nix-tools224/bin (nix/nix-build/nix-instantiate/nix-daemon/...), built
+  PARALLEL to the running 2.3.16 (/nix/nix-tools) so 2.3.16 breadth is never disrupted.
+- 2.24 READS the existing store DB that 2.3.16 wrote (path-info resolves gcc-unwrapped; store info ->
+  Version 2.24.15, local). Store-DB compatibility confirmed across the version jump.
+- 2.24 EVALUATES the existing sparc overlay (tranche-sparc-t13.nix) + instantiates hello-2.12.3.drv.
+- 2.24 REALIZES it (nix-build --max-jobs 1 --cores 2) -> /nix/store/47s80hhsgfd5dy57vqckm8cx11mgngrs-
+  hello-2.12.3, a real sparc ELF that RUNS ("Hello, world!").
+So nix-2.24 does REAL builds against the real overlay/store on sparc -- the migration gate. The hard port
+(boost ucontext backend, static libgcc unwinder, Solaris ar/ld) is durable-captured to
+artifacts/sparc-toolchain/nix224/ (recipe + 5 patches + shim + build log). NEXT: store-install the 2.24
+nix as a proper derivation (like x86 q9cgfd...) so a fresh sparc node bootstraps it from cache; then run
+sparc breadth on 2.24 (migrate off 2.3.16) + publish the 2.24-built sparc NARs. sparc registry currently
+17 rows wired to 2.24 (+ ~60 more built on 2.3.16 to migrate).
