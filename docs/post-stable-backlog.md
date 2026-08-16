@@ -1072,3 +1072,20 @@ SKIPPED (rust/host): pynacl (sphinx->requests->charset-normalizer non-overridden
 (rhash), psutil (needs -lkstat, host-only lib -> would be a host leak), cryptography>=3.4/bcrypt (rust),
 numpy (deferred). Published ~56 paths. registry 1448 (x86 1146). NEXT: broaden python-deps (drop test-deps
 for requests; rich/markdown/packaging-graph; the C-ext class is open for anything not needing rust/kstat).
+
+## PS-PYTHON-DEPS-WAVE2 (2026-08-16): +31 -- complete requests/rich/flask/pytest/httpx ecosystems
++31 python3Packages (26 pure-python + 5 C-ext/C++), 57 paths published. COMPLETE ECOSYSTEMS:
+- requests (2.34.2, via doCheck=false dropping the rhash test-dep chain; runtime deps already built)
+- rich (+ markdown-it-py + linkify-it-py + uc-micro-py + colorama + termcolor)
+- flask (+ werkzeug + itsdangerous + blinker)
+- pytest (+ pytest-cov + pytest-mock + coverage + py + exceptiongroup + packaging)
+- httpx (+ httpcore + anyio + sniffio + h11 + requests-toolbelt)
+- web servers: waitress + bottle; data: python-dotenv, chardet, msgpack(C-ext), ujson(C-ext), greenlet(C++)
+Mechanism: one shared overrideScope on python3Packages dropping check-phases/inputs per node (the runtime
+builds fine; only test-dep chains -- cc-wrapper eval recursion, rust, or flaky illumos tests -- blocked
+eval, cut once per package). Overlay durable: pkgs/os-specific/illumos/phase3/pydeps2-overlay.nix.
+python-deps total now ~61 across both waves. registry 1479 (x86 1177). SKIPPED (rust/kstat/cmake-H26):
+jsonschema/hypothesis/cryptography/bcrypt/pynacl/pydantic-core/rpds-py (rust), psutil (kstat host-only),
+brotli/regex (cmake H26 / build-splice), numpy (deferred). The pip ecosystem is now USABLE on illumos.
+NEXT: the rust-on-illumos toolchain would unlock the biggest remaining python pool (cryptography/pydantic/
+hypothesis) + gates COSMIC + much ML tooling -- a high-value future port.
