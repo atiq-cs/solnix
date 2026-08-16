@@ -901,3 +901,15 @@ rehashes gcc14). i.e. build numpy against the pre-built openblas (yc302a4v) + th
 cython, ninja, meson-python, gfortran (k22k41z8), openblas (yc302a4v), + the 3 wall-fixes (ninja patch,
 meson-python noCheck, gcc14 libgfortran -Werror/kinds.h). numpy DEFERRED -- the wiring is proven, the
 remaining work is store-path-pinning the override so it stops re-deriving gcc14. Not claiming numpy built.
+
+## PS-AARCH64-WAVE6 (2026-08-15): +17 userland incl a working shell (oksh)
++17 EM_AARCH64 C-only pkgs (200 paths published, 0 failed): oksh (WORKING aarch64 ksh -- the userland
+headline), gnugrep/gnused/diffutils/gnupatch/which/file, gzip/bzip2/gnutar/cpio, jq(+oniguruma static),
+wget(openssl TLS)/rsync/socat, nano, libevent. THE big unblock: crossBashOverlay (bash/runtimeShell ->
+native buildPackages.bash) kills the target-bash netopen.c-wall drag that blocked EVERY patchShebangs
+pkg. + pieFix (-fPIE dodges the copy-reloc-against-protected-libc-symbol wall), staticShared for
+pcre2/oniguruma/readline/libedit/xz. aarch64 now has a USABLE userland: shell(oksh) + coreutils + text +
+net(wget/rsync) + compression + jq + nano. Remaining: dash/mksh/tmux/findutils (various illumos/source
+issues), + the C++ mapfile/unwind wall (caps all C++ pkgs -- the one deep fix: seed gcc w/ Solaris ld).
+NOTE: wave5's cmakeWireOverlay + wave6's crossBashOverlay are the two key cross-userland enablers;
+entry-aarch64-wave6.nix is the current base (built on wave4; wave5 cmake-wire should be folded in if not).
