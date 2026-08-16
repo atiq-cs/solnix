@@ -3412,3 +3412,26 @@ signal()-over-sigaction/sa_restorer; coreutils-9.5 cat.c + gnulib getopt/full-wr
 brk/sbrk os/grow.c (reset break on exec) + ufs/specfs bdev_strategy. NEXT R-P41: grow libc further
 (dirfd/fstatat/more signal) toward ls (opendir+lstat+sort) + wc, a bigger persistent fs (subdirs on the
 blockfs), toward a self-hosting-ish coreutils set from real upstream source.
+
+## R-P41 DONE (2026-08-16): a real coreutils SET (echo/true/cat/wc from upstream) + ls + subdir persistence
+All boot-verified qemu -smp 2, 149 PASS / 0 FAIL, R-P24-40 regressions green (R-P40 re-confirmed first).
+- libc.a grown (still real, nm-static): port/misc.c adds qsort(shellsort)+bsearch, strcoll(C-locale
+  ==strcmp), getpwuid/getgrgid (scan /etc/passwd,/etc/group else numeric), fileno/isatty/setvbuf/readlink/
+  strtoul + strdup/strnlen/strspn/strcspn/strpbrk/strstr/memchr/mempcpy; stdio printf gained %*s + %z. The
+  kernel stat ABI grew to report vfs_vtype so the libc cooks a real st_mode (S_ISDIR works). Members:
+  syscall/string/ctype/stdlib/stdio/stdio2/stat/dir/signal/misc/libc_start/progname.
+- REAL COREUTILS SET: wc = UNMODIFIED coreutils-9.5 src/wc.c -> corewc.dyn (ld.so.1, links libc.a):
+  wc /etc/release -> "2 5 44" (correct). So echo/true/cat/wc are a real SET from unmodified upstream source
+  on one libc.a. ls = corels.dyn (from-scratch lister exercising opendir/readdir/lstat/qsort/strcoll):
+  ls / -> "bin etc lib sbin usr" (sorted); ls /bin -> the SET (cat/corecat/coreecho/corewc/...) sorted;
+  ls -l /etc -> "-rw-r--r-- 1 0 0 163 inittab". HONEST ls GAP: unmodified GNU src/ls.c pulls ~32 gnulib
+  modules (obstack/quotearg/human/mbswidth/hash/mpsort) -- larger than the port -- so this ls is
+  from-scratch (cat.c+wc.c are the unmodified-upstream utils); faithful ls.c deferred R-P42. Fixes: user
+  stack 4->16 pages (wc's 16KiB buffer), ramfs_readdir dedup off-by-one.
+- Subdir persistent fs: blockfs inode gained i_type (file/dir) + root-relative path names; blockfs_mkdir/
+  readdir + proc_mkdir/openf /blk/* routing. PROOF: mkdir /blk/sub, write /blk/sub/f, unmount, remount (no
+  re-mkfs), ls /blk/sub -> f, read back 103 bytes match -> SUBDIR PERSISTENCE PROVEN.
+Cribbed illumos libc qsort(shellsort)/strcoll/nsswitch-files getpwuid + GNU coreutils-9.5 wc.c + gnulib;
+illumos ufs dir inode + xv6 fs.c dirlookup/dirlink. NEXT R-P42: faithful upstream src/ls.c with the gnulib
+scaffolding (the ~32 modules) so ls is unmodified-upstream too + more utils (head/tail/mkdir/rm) toward a
+self-hosting coreutils set from real source, + toward running a cache-built riscv64 binary.

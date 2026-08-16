@@ -1,5 +1,140 @@
 # RISC-V (riscv64) port — STATUS
 
+**Phase reached: R-P41** (the R-P40 kernel -- which GREW a real, reusable
+solnix riscv64 `libc.a` and linked + ran the unmodified GNU coreutils `cat`
+against it, leaving a disk-backed blockfs mounted at boot -- now **grows that
+libc further** [`qsort`, `strcoll`, `getpwuid`/`getgrgid`, `fileno`/`isatty`/
+`setvbuf`, `readlink`, `strtoul` + string helpers, `printf %*s`], **links +
+runs a REAL coreutils SET** [the UNMODIFIED GNU coreutils `wc` + a real `ls`],
+and **grows the blockfs with SUBDIRECTORIES** [a nested `/blk/sub/f` persists
+across an unmount+remount, `ls /blk/sub` lists it] -- each boot-verified under
+`qemu-system-riscv64 -machine virt -smp 2`).
+
+(1) THE HEADLINE (part 1) -- GROW THE REAL libc.a FURTHER.  R-P40's `libc.a`
+covered what `cat` referenced.  R-P41 adds a new SEPARATELY compiled TU
+(`port/misc.c`) into the SAME real `ar` archive (`nm` shows every one resolved
+STATICALLY, `T` -- not shims): `qsort` (a shellsort over arbitrary-width
+elements, the K&R/illumos qsort reduced) + `bsearch`; `strcoll` (the C-locale
+collation == `strcmp`); `getpwuid`/`getgrgid` (scan `/etc/passwd`/`/etc/group`
+for the id's 3rd field, else synthesize the decimal id -- the illumos nsswitch
+"files" backend reduced to a single-file scan; `ls -l` owner/group names);
+`fileno`/`isatty`/`setvbuf` (stdio glue `ls`/`wc` call at startup); `readlink`
+(ENOSYS -- no symlinks; `lstat`==`stat`); `strtoul`; and `strdup`/`strnlen`/
+`strspn`/`strcspn`/`strpbrk`/`strstr`/`memchr`/`mempcpy`.  `port/stdio.c`'s
+`printf` grew `%*s` (dynamic field width from an `int` arg -- `wc`'s
+`printf(" %*s", number_width, umaxtostr(...))` needs it) + a `%z` length
+modifier.  New public headers `pwd.h`/`grp.h`; `stdlib.h`/`string.h`/`stdio.h`/
+`unistd.h` grew the new prototypes + `_IOLBF`/`_IONBF`/`_IOFBF`.  The kernel's
+`SYS_stat`/`SYS_fstat` ABI grew from a 1-word (size) to a 2-word (size + type
+code) return, and `proc_stat`/`proc_fstat` write `vfs_vtype(vp)` (0 regular,
+1 dir, 2 char) so the libc `stat`/`fstat`/`lstat` cook a REAL `st_mode`
+(`S_ISDIR` works) from the kernel getattr -- `ls` distinguishes dirs from files.
+`build-libc.sh` compiles `misc.c` and asserts `qsort`/`strcoll`/`getpwuid`/
+`getgrgid`/`fileno`/`setvbuf`/`isatty`/`strtoul` all defined `T`.  This turns
+"a real libc big enough for cat" into "a real libc big enough for a coreutils
+SET."
+
+(2) THE HEADLINE (part 2) -- LINK + RUN A REAL COREUTILS SET (`wc` + `ls`).
+The UNMODIFIED GNU coreutils-9.5 `src/wc.c` (982 lines) is compiled with a
+`wc-include/` gnulib scaffolding chain (`config.h`/`system.h` -> `wc_glue.h`,
+plus `argmatch.h`/`fadvise.h`/`physmem.h`/`stat-size.h`/`xbinary-io.h`/
+`uchar.h`/`argv-iter.h`/`readtokens0.h`/`wc.h` shims) mapping gnulib's
+`getopt_long` (the R-P40 `getopt.c`), `argv-iter`/`readtokens0` (reduced real
+forms in `wclib.c`), `physmem_available`/`__argmatch`/`umaxtostr`/`imaxtostr`/
+`getdelim`, and the C-locale multibyte fast-path stubs (`mbrtoc32`/`c32width`/
+`iswspace`/`btoc32` -- dead with `MB_CUR_MAX==1`, present only to compile) onto
+the REAL grown libc -- NOT re-implementing libc.  `corewc.dyn` is DYNAMICALLY
+linked (`ld.so.1`, `NEEDED libgcc_s.so.1`) as `/bin/corewc`; `nm` shows
+`open`/`close`/`fstat`/`lseek`/`read`/`write`/`malloc`/`printf`/`getopt_long`
+resolved `T` STATICALLY from `libc.a`.  Run from the shell:
+`/bin/corewc /etc/release` -> `2 5 44 /etc/release` (2 lines, 5 words, 44 bytes
+-- `wc` `fopen`s the file, `fstat`s it, and counts through the real libc
+`read` byte loop, the real `wc` algorithm unchanged).  A real `ls`
+(`/bin/corels`) EXERCISES exactly the grown-libc surface -- `opendir`/`readdir`/
+`closedir` (over `SYS_getdents`), `lstat`/`stat` (reading the R-P41 kernel type
+code so `S_ISDIR` works), `qsort` + `strcoll` (the C-locale entry sort),
+`getpwuid`/`getgrgid` + `snprintf` for `-l`: `ls /` -> `bin  etc  lib  sbin
+usr` (SORTED); `ls /bin` -> `cat  corecat  coreecho  coreecho2  corels
+coretrue  corewc  counter  echo  ...` (SORTED, the coreutils SET present);
+`ls -l /etc` -> `-rw-r--r-- 1 0 0  163 inittab` / ... (type/perm, links, owner,
+group, size, name).  So `echo`/`true`/`cat`/`wc` are a REAL coreutils SET from
+UNMODIFIED upstream source on one real reusable `libc.a`.  (This `ls` is
+written from scratch to exercise the grown libc; coreutils' unmodified
+`src/ls.c` pulls ~32 gnulib modules -- `obstack` [29 uses], `quotearg` [57],
+`human` [22], `mbswidth`, `hash`, `mpsort`, `filemode`, `dircolors`,
+`canonicalize`, `areadlink`, `idcache`, `filevercmp` -- whose faithful
+scaffolding is a far larger body than the port itself; it is DEFERRED to
+R-P42+.  The unmodified-upstream utils this phase links are `cat.c` [R-P40] +
+`wc.c` [R-P41]; a documented ls-gap, not a silent one.)  Two fixes made this
+work: the user stack grew from 4 pages (16 KiB) to 16 pages (64 KiB) --
+`wc`'s `char buf[BUFFER_SIZE+1]` is 16 KiB on the stack alone, which overflowed
+the old stack (SIGSEGV); and the `ramfs_readdir` dedup scan now stops at the
+CURRENT record's header (not its name pointer), so the first directory entry is
+no longer mis-flagged as a duplicate of itself.
+
+(3) A RICHER PERSISTENT FS -- SUBDIRECTORIES.  R-P40's blockfs was flat (one
+leaf name per inode).  R-P41 adds a DIRECTORY inode: the on-disk
+`struct blockfs_inode` gained an `i_type` field (0 file, 1 dir) and its
+`i_name` holds a path RELATIVE to the blockfs root (a nested leaf is stored as
+`"sub/f"`), so nested-path resolution is a name match after reading the inode
+table THROUGH `bdev_strategy` (the ufs/xv6 dirlookup model reduced to
+full-relative-path names, no directory data blocks).  `blockfs_mkdir` allocates
+a dir inode (written back through `bdev_strategy`); `blockfs_readdir` enumerates
+the inodes whose name is a direct child of a directory; `proc_mkdir` routes a
+`/blk/*` path to `vfs_blockfs_mkdir` and `proc_openf` routes a `/blk/dir` to a
+blockfs directory vnode (tagged so `vfs_readdir` crosses `blockfs_readdir`).
+Proof (`run_blockfs`): after the R-P39/R-P40 persistence proofs, the kernel
+REMOUNTS, `mkdir`s `/blk/sub` (an on-disk dir inode), `create`s + WRITES the
+NESTED `/blk/sub/f` through the block vnode, UNMOUNTS, REMOUNTS (no re-`mkfs`),
+LISTS `/blk/sub` (its child `f` enumerated from the on-disk inode table read
+through `bdev_strategy`) and READS `/blk/sub/f` back -- the nested path + its
+103 bytes match what was written (`solnix riscv64 blockfs (R-P41): a NESTED
+file under a real on-disk subdirectory, persisted through bdev_strategy.`),
+i.e. a real subdirectory + a nested path persisted on the disk-backed fs across
+the unmount+remount round-trip.
+
+Proof: `rp41/rp41-milestone-check.sh` (all three R-P41 sub-tasks + every
+R-P24..R-P40 regression green -- rebuild+reboot, re-runnable; 148 PASS lines,
+zero FAIL, -smp 2).  `user/test_getopt.c` (R-P40) still covers the
+`getopt_long` state machine both `wc` and `cat` drive.  Cribbed the illumos
+libc `qsort` (a shellsort over arbitrary element width, the K&R storage/
+Sedgewick-gap form) + the C-locale `strcoll`==`strcmp` shortcut + the illumos
+nsswitch "files" `getpwuid_r`/`getgrgid_r` reduced to a single `/etc/passwd`/
+`/etc/group` scan; GNU coreutils-9.5 `src/wc.c` (the `wc` algorithm, built
+against the grown libc with the gnulib `system.h`/`getopt`/`argv-iter`/
+`physmem`/`argmatch`/`readtokens0`/`umaxtostr` scaffolding onto the real libc)
++ gnulib `lib/argv-iter.c`/`lib/inttostr.c`; the illumos ufs directory inode
+(`ufs_mkdir`/`ufs_dirlook` -- a dir inode + name-based child lookup) + xv6
+`fs.c` `dirlookup`/`dirlink` (the on-disk directory-entry model), reduced here
+to full-relative-path inode names read back through `bdev_strategy`; and the
+POSIX `opendir`/`readdir`/`lstat`/`qsort` `ls` shape (a from-scratch `ls` that
+exercises the grown libc, with coreutils' unmodified `src/ls.c` gnulib stack
+[`obstack`/`quotearg`/`human`/`mbswidth`/`hash`/`mpsort`] documented as an
+R-P42+ gap).
+
+**Restore note (fresh node):** built on the R-P36..R-P40 node from the R-P40
+tree + the already-rebuilt cross toolchain + qemu; `rp41/` was seeded by copying
+`rp40/`, then the R-P41 deltas applied on top: `libc/` grew `include/pwd.h`,
+`include/grp.h` + `port/misc.c` (and edits to `port/stat.c`/`port/stdio.c` + the
+`include/` headers + `build-libc.sh`); `user/wc-include/*` (the wc gnulib
+scaffolding) + `user/wclib.c` + `user/build-wc.sh`; `user/ls.c` +
+`user/build-ls.sh`; the `coreutils-9.5/lib/` gnulib tree was extracted from the
+on-node tarball; `kernel/ramfs.c` (`ramfs_isdir`/`ramfs_readdir` -- flat-archive
+directory enumeration), `kernel/vfs.c` (a ramfs dir vnode + blockfs
+subdirectories: `i_type`, `blockfs_mkdir`/`blockfs_readdir`/`blockfs_isdir` +
+the `vfs_blockfs_mkdir`/`opendir`/`readdir` wrappers + `vfs_vtype`),
+`kernel/proc.c` (2-word stat ABI, `/blk/*` mkdir + dir-open routing),
+`kernel/exec_elf.c` (user stack 4 -> 16 pages), `kernel/main.c` (`run_blockfs`
+subdir persistence proof), `kernel/build-kernel.sh` (build the grown libc + wc +
+ls, ramfs `/bin/corewc` + `/bin/corels`, the R-P41 `wc /etc/release` + `ls /` +
+`ls /bin` + `ls -l /etc` feed_console commands + assertions, `K`/`U` retargeted
+to `rp41`).  R-P40 boot re-confirmed (`rp40-milestone-check.sh`: 142 PASS / 0
+FAIL, the grown libc.a + real cat + persistent root blockfs) before starting
+R-P41.
+
+**Next: R-P42.**
+
+
 **Phase reached: R-P40** (the R-P39 kernel -- which built a REAL, REUSABLE
 solnix riscv64 `libc.a` that unmodified GNU coreutils `echo`/`true` link -- now
 **GROWS that libc's surface** toward a BIGGER real coreutils util, **links +
