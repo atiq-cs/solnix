@@ -3391,3 +3391,24 @@ RISC-V psABI; GNU coreutils-9.5 echo.c+true.c (+ gnulib scaffolding onto the rea
 wrip->bmap->bwrite + xv6 fs.c write-back. NEXT R-P40: grow the libc surface (opendir/readdir, more stdio,
 signal(2) wrappers) toward linking a bigger real coreutils util (ls/cat/wc) + a persistent root fs at boot.
 A real libc.a is the foundation for running the actual solnix riscv64 package set.
+
+## R-P40 DONE (2026-08-16): grown libc + a BIGGER real coreutils util (cat) + persistent root fs at boot
+All boot-verified qemu -smp 2, 142 PASS / 0 FAIL, R-P24-39 regressions green (R-P39 re-confirmed first).
+- Grew the REAL libc.a (still separately-compiled TUs, nm shows T/static -- not shims): dir
+  (opendir/readdir/closedir + struct dirent over SYS_getdents), fs stat (stat/fstat/lstat + full struct
+  stat + S_IF*/S_ISREG over SYS_stat/SYS_fstat), read-capable stdio (fopen/fclose/fread/fgets/fgetc/getc/
+  fseek/ftell + snprintf/sprintf/vsnprintf), signal (signal/sigaction/kill/raise + sa_restorer trampoline
+  over R-P33/34 signal syscalls), + getpagesize/stpcpy/__systrap4.
+- BIGGER real coreutils util = cat: UNMODIFIED coreutils-9.5 src/cat.c (23KB) against the grown libc.a
+  (real gnulib getopt_long/full_write/safe_read/io_blksize/error/quotef), dynamic via ld.so.1. PROOF:
+  cat /etc/release -> "solnix riscv64 (R-P31)" / "SunOS solnix-riscv64" via real open/fstat/read/write.
+  TWO KERNEL FIXES: console-fd fstat succeeds; exec resets p_brk + first brk grow rounds down to map the
+  base heap page (a stale inherited break left cat's first malloc unmapped).
+- Persistent root fs at boot: run_blockfs leaves the disk-backed blockfs MOUNTED at boot; proc_openf routes
+  /blk/* to the block vnode. PROOF: /bin/corecat /blk/persist prints the line persisted through
+  bdev_strategy + read back through the block layer -- a file served from the disk-backed fs, not ramfs.
+Cribbed illumos libc getdents-opendir/readdir + stat/xstat + C89 _filbuf/getc + memory-stream snprintf +
+signal()-over-sigaction/sa_restorer; coreutils-9.5 cat.c + gnulib getopt/full-write/safe-read; illumos
+brk/sbrk os/grow.c (reset break on exec) + ufs/specfs bdev_strategy. NEXT R-P41: grow libc further
+(dirfd/fstatat/more signal) toward ls (opendir+lstat+sort) + wc, a bigger persistent fs (subdirs on the
+blockfs), toward a self-hosting-ish coreutils set from real upstream source.

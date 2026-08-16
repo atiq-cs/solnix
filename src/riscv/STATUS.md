@@ -1,5 +1,116 @@
 # RISC-V (riscv64) port — STATUS
 
+**Phase reached: R-P40** (the R-P39 kernel -- which built a REAL, REUSABLE
+solnix riscv64 `libc.a` that unmodified GNU coreutils `echo`/`true` link -- now
+**GROWS that libc's surface** toward a BIGGER real coreutils util, **links +
+runs unmodified GNU coreutils `cat`** against the grown libc, and **leaves the
+disk-backed blockfs MOUNTED at boot** so the interactive shell reads a file
+served from the persistent fs -- each boot-verified under
+`qemu-system-riscv64 -machine virt -smp 2`.
+
+(1) THE HEADLINE (part 1) -- GROW THE REAL libc.a.  R-P39's `libc.a` covered
+exactly what `echo`/`true` referenced.  R-P40 adds, as SEPARATELY compiled
+translation units into the SAME real `ar` archive (`nm` shows every one resolved
+STATICALLY, `T` -- not shims): `port/dir.c` (`opendir`/`readdir`/`closedir` +
+`struct dirent` over the kernel's `SYS_getdents`, which returns one entry
+basename per call), `port/stat.c` (`stat`/`fstat`/`lstat` + a full `struct stat`
++ the `S_IF*`/`S_ISREG` macros over the kernel's size-only `SYS_stat`/`SYS_fstat`
+getattr -- it synthesizes `st_mode` [regular 0644], `st_blksize`, `st_blocks`,
+and reports a console fd 0/1/2 as `S_IFCHR` so a coreutils util's
+"input file == output file" dev/ino guard does not misfire on the reduced
+getattr), `port/stdio2.c` (a READ-capable `FILE*` family -- `fopen`/`fclose`/
+`fread`/`fgets`/`fgetc`/`getc`/`fseek`/`ftell` over real `open`/`read`/`lseek`/
+`close` with a per-stream fill buffer, plus `snprintf`/`sprintf`/`vsnprintf`
+targeting a bounded memory `FILE` through the existing `vfprintf` conversion
+loop), and `port/signal.c` (`signal`/`sigaction`/`kill`/`raise` over the R-P33/
+R-P34 kernel signal syscalls, supplying the `sa_restorer` trampoline that ecalls
+`SYS_sigreturn`); plus `getpagesize` (`syscall.c`) and `stpcpy` (`string.c`).
+New public headers: `sys/stat.h`, `dirent.h`, `signal.h`; `sys/types.h` gained
+`ino_t`/`dev_t`/`nlink_t`/`blksize_t`/`blkcnt_t`; `sys/systrap.h` gained
+`__systrap4` + `SYS_sigaction`/`SYS_sigreturn`; `stdio.h`/`unistd.h`/`string.h`
+grew the new prototypes + `O_*`/`SEEK_*` + a `bufpos`/`__F_STR` FILE field.
+`build-libc.sh` compiles the four new TUs and its symbol sanity now asserts
+`fopen`/`fread`/`fgets`/`fseek`/`ftell`/`fclose`/`snprintf`/`sprintf`/`opendir`/
+`readdir`/`closedir`/`stat`/`fstat`/`lstat`/`signal`/`sigaction`/`kill` all
+defined `T` in the archive.  This turns "a real libc that echo/true link" into
+"a real libc big enough for a bigger real program."
+
+(2) THE HEADLINE (part 2) -- LINK + RUN A BIGGER REAL COREUTILS UTIL (`cat`).
+The UNMODIFIED GNU coreutils-9.5 `src/cat.c` (23 KB, vs echo's tiny `main`) is
+compiled with a `user/cat-include/` gnulib scaffolding chain (`config.h`/
+`system.h` -> `cat_glue.h`, plus the `alignalloc.h`/`ioblksize.h`/`fadvise.h`/
+`full-write.h`/`safe-read.h`/`xbinary-io.h`/`getopt.h` `#include`-shims cat
+references) that maps gnulib's `getopt_long` (a real, self-checked `getopt.c`),
+`full_write`/`safe_read` (real fd write/read loops in `catlib.c`), `io_blksize`/
+`xalignalloc`/`fdadvise`/`xset_binary_mode`/`error`/`quotef`/`write_error`/the
+`GETOPT_*`/`case_GETOPT_*` macros onto the REAL grown libc -- NOT
+re-implementing libc.  `corecat.dyn` is DYNAMICALLY linked (`ld.so.1`, `NEEDED
+libgcc_s.so.1`) as `/bin/corecat`; `nm` shows `open`/`close`/`fstat`/`malloc`/
+`free`/`printf`/`fwrite`/`fputs`/`write`/`read`/`lseek` all resolved `T`
+STATICALLY from `libc.a`.  Run from the shell: `/bin/corecat /etc/release` ->
+`solnix riscv64 (R-P31)` / `SunOS solnix-riscv64` (cat `open`s the real file,
+`fstat`s it, and `simple_cat`'s it out via the real libc `read`/`write` loop --
+the real coreutils cat algorithm, unchanged, on the real libc + `getopt_long`).
+Two kernel fixes made cat work: `proc_fstat` of a console fd (0/1/2, unopened in
+the fd table) now SUCCEEDS with size 0 (cat `fstat`s stdout up front), and
+`proc_brk`/`exec` reset the program break on exec (an inherited stale `p_brk`
+from the forking shell left the base heap page unmapped for the new image, so
+`cat`'s first `malloc` store-faulted) -- the first `brk` grow now rounds DOWN to
+map the page containing `HEAP_BASE`, and exec re-seeds `p_brk`.
+
+(3) A PERSISTENT ROOT FS AT BOOT.  R-P39 proved the blockfs PERSISTS across an
+unmount+remount within `run_blockfs`; R-P40 makes the boot path USE it: after
+the persistence proof, `run_blockfs` does a FINAL remount and LEAVES the
+disk-backed blockfs MOUNTED (a boot remount reuses `bdev0`'s persisted
+contents), and `proc_openf` now routes a `/blk/NAME` path to the block vnode
+(via `vfs_blockfs_open`, whose transient vnode's `vop_read` crosses
+`bdev_strategy`).  So the interactive boot session's shell runs
+`/bin/corecat /blk/persist` and the real cat prints `solnix riscv64 blockfs
+(R-P39): this line was WRITTEN through bdev_strategy, survived unmount+remount.`
+-- a file served from the DISK-BACKED fs (persisted from the earlier write-back
+step, read back through the block layer this session), proving the boot path can
+serve files from a persistent fs, not just ramfs.  (Fixed a latent dangling
+pointer: `vfs_blockfs_open` now copies the name into its own static buffer
+rather than stashing the caller's transient path pointer.)
+
+Proof: `rp40/rp40-milestone-check.sh` (all three R-P40 sub-tasks + every
+R-P24..R-P39 regression green -- rebuild+reboot, re-runnable; 141 PASS lines,
+zero FAIL, -smp 2).  `user/test_getopt.c` is an `assert`-based host self-check
+for the `getopt_long` state machine (clustered short opts, `--long`/`--long=VAL`,
+short-with-arg, `--` terminator, unknown option).  Cribbed the illumos libc
+`getdents`-backed `opendir`/`readdir`/`closedir` (`usr/src/lib/libc/port/gen/`)
++ the POSIX `struct dirent`/`struct stat`/`S_IF*` contract + the illumos libc
+`stat`/`xstat` "trap, then cook a struct stat from getattr" shape + the C89
+buffered `FILE`/`_filbuf`/`getc` read model + the memory-stream `snprintf` trick
++ the illumos/glibc `signal()`-over-`sigaction()` + `sa_restorer`-ecalls-
+`sigreturn` idiom; GNU coreutils-9.5 `src/cat.c` (the cat algorithm, built
+against the grown libc with the gnulib `system.h`/`getopt`/`full-write`/
+`safe-read`/`ioblksize`/`fadvise`/`alignalloc` scaffolding onto the real libc) +
+gnulib `lib/getopt.c`/`lib/full-write.c`/`lib/safe-read.c`; the illumos brk/sbrk
+`os/grow.c` heap-segment growth (map fresh anon pages, reset the break on exec)
++ the ufs/specfs `bdev_strategy` block-read path kept mounted as a persistent
+second/root fs, with `lookuppn` routing a mount-point prefix to the fs that
+covers it.
+
+**Restore note (fresh node):** built on the R-P36..R-P39 node from the R-P39
+tree + the already-rebuilt cross toolchain + qemu; `rp40/` was seeded by copying
+`rp39/`, then the R-P40 deltas applied on top: `libc/` grew `include/sys/stat.h`,
+`include/dirent.h`, `include/signal.h` + `port/stat.c`/`dir.c`/`signal.c`/
+`stdio2.c` (and edits to `stdio.c`/`syscall.c`/`string.c` + the `include/`
+headers + `build-libc.sh`); `user/cat-include/*` (the cat gnulib scaffolding) +
+`user/getopt.c`/`catlib.c`/`test_getopt.c` + `user/build-cat.sh`; `kernel/proc.c`
+(console-fd `fstat`, exec `p_brk` reset + first-grow round-down, `/blk/*` open
+routing), `kernel/main.c` (`run_blockfs` leaves the blockfs mounted at boot),
+`kernel/vfs.c` (`vfs_blockfs_open` owns the name), `kernel/build-kernel.sh`
+(build the grown libc + cat, ramfs `/bin/corecat`, the R-P40 `cat /etc/release`
++ `cat /blk/persist` feed_console commands + assertions, `K`/`U` retargeted to
+`rp40`).  R-P39 boot re-confirmed (`rp39-milestone-check.sh`: 135 PASS / 0 FAIL,
+the real libc.a + coreecho2/coretrue + persistent blockfs) before starting
+R-P40.
+
+**Next: R-P41.**
+
+
 **Phase reached: R-P39** (the R-P38 bridge kernel -- which ran ONE real,
 upstream-source coreutils echo linked against a hand-written per-program
 `coreutils_shim.h` -- now links real programs against a **REAL, REUSABLE solnix
