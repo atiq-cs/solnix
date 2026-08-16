@@ -886,3 +886,18 @@ the cross C++ mapfile/unwind-map wall (libgcc-unwind.map file-format-not-recogni
 C++ pkg that links a C++ executable/shared lib -> needs the seed gcc rebuilt with a Solaris-ld-compatible
 unwind spec (the deep toolchain fix). aarch64 now cross-builds: coreutils + crypto + net/TLS(curl) +
 compression/data -- a substantial base userland. Wave5 entry -> fork.
+
+## PS-NUMPY DEFERRED (2026-08-15): NOT built -- override rehashes gcc14 into a failing rebuild
+FINAL honest status after multiple multi-hour attempts: numpy is NOT built. Root cause of the last
+failure (detached build, exit 100): the numpy override chain -- openblas.override{stdenv=gcc14Stdenv} +
+python3Packages.overrideScope under gcc14Stdenv -- REHASHES gcc14 to a DIFFERENT gcc-wrapper-14.4.0.drv
+(kw0hs6bw...) that rebuilds gcc14 from scratch and FAILS, cascading to blas/lapack/openblas/numpy. The
+already-BUILT working gcc14 (k22k41z8q051gjxw5ysycbzwlpg1b1sn-gcc-14.4.0) + openblas
+(yc302a4v...-openblas-0.3.33) are in-store, but the override doesn't REUSE them -- it re-derives.
+THE FIX (bounded, for a future focused pass): pin the numpy/openblas override to REUSE the exact
+built store paths (import them via builtins.storePath / a fixed cc, don't override stdenv in a way that
+rehashes gcc14). i.e. build numpy against the pre-built openblas (yc302a4v) + the pre-built gcc14
+(k22k41z8) as literal inputs, so nothing re-derives. What DID land: python3-cext (working), full cmake,
+cython, ninja, meson-python, gfortran (k22k41z8), openblas (yc302a4v), + the 3 wall-fixes (ninja patch,
+meson-python noCheck, gcc14 libgfortran -Werror/kinds.h). numpy DEFERRED -- the wiring is proven, the
+remaining work is store-path-pinning the override so it stops re-deriving gcc14. Not claiming numpy built.
