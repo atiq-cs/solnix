@@ -1030,3 +1030,24 @@ event-loops + interpreters(lua/tcl/luajit) + DBs(gdbm/lmdb) + tools(tcpdump). SK
 fontconfig/gpgme (meson-zstd or dep-chain drags), harfbuzz/pango (C++ unwind wall). Walls unchanged:
 meson->python3->zstd (cross) + the C++ unwind/mapfile wall (needs seed gcc w/ Solaris ld -- the one deep
 aarch64 toolchain fix that would unlock the whole C++ class). wave9 entry -> fork.
+
+## PS-AARCH64-CXX-WALL-CRACKED (2026-08-16): the deep aarch64 C++ ceiling is SOLVED
+THE C++ unwind/mapfile wall -- the deepest aarch64 ceiling all session (blocked every C++ shared-lib/exe +
+cmake C++ probe) -- is CRACKED. The prior assumption was INVERTED. Real root cause: the ONLY aarch64-
+capable linker in the seed is GNU binutils ld 2.43.1 (the seed's cross Solaris ld is x86-host + rejects
+EM_AARCH64 entirely: "unsupported ELF machine type: EM_AARCH64"). The cross gcc was configured
+--with-gnu-ld=no, so its *link: spec (config/aarch64/sol2.h) emits Solaris flags -G -dy -z text
+-M .../libgcc-unwind.map for any shared/shared-libgcc link; but collect2 execs the GNU ld, which reads
+-M FILE as a linker-script + chokes on the Solaris $mapfile_version-2 syntax -> "libgcc-unwind.map:1:
+syntax error". C-only static links never hit it (why all prior waves dodged via --disable-shared).
+FIX (bounded, NO seed-gcc rebuild): cxxNomapCc -- a -specs= override on the cross cc-wrapper redefining
+*link: with the two -M %s...map tokens removed (the mapfiles only restrict unwinder symbol VISIBILITY;
+dropping = default visibility, harmless). PROVEN: trivial C++ .so (EM_AARCH64 ET_DYN, exports _Z3fooi) +
+throw/catch exe (EM_AARCH64 ET_EXEC, imports __cxa_throw@CXXABI_1.3 + __gxx_personality_v0 -- unwinder
+exercised). C-only rows regression-safe (shared clause never fires for static). Full diagnosis:
+docs/aarch64-cxx-wall-fix.md. C++ CLASS OPENED -- 6 built (published 11 paths): gmpxx (the --enable-cxx
+binding every wave dodged), fmt, nlohmann_json, pugixml, tinyxml-2, yaml-cpp. NOW UNBLOCKED: harfbuzz/pango
+(fonts), protobuf/abseil (the cmake-graph class), nettle-c++, and the whole C++ ecosystem. This is the
+THIRD deep ceiling cracked this session (zstd, python3, C++). Orthogonal nits (not the wall): gmp isascii/
+spdlog tm_gmtoff need __EXTENSIONS__; Catch2 isnan; double-conversion drags ninja->python3->openssl. NEXT:
+wave11 harvests the C++ class (harfbuzz/pango/protobuf/abseil/spdlog-with-__EXTENSIONS__).
