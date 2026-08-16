@@ -985,3 +985,17 @@ NEXT (the last python3 wall): python3's build pulls expect-5.45.4 via libffi's d
 and expect fails on illumos (pty_termios.o). The tranche already ships libffiNoCheck (builds clean) --
 wiring python3 to libffiNoCheck clears the last wall -> then the whole python-deps class opens up. Also
 re-run the aarch64 meson-graphics attempt now that native zstd passes (freetype/pixman/libwebp).
+
+## PS-AARCH64-WAVE8 (2026-08-16): +15 libs incl FFI/event-loops/crypto/graphics (published 52 paths)
++15 EM_AARCH64 pkgs: libffi (FFI bindings), libuv+libev (event loops), nettle+libsodium+libtasn1+libmd
+(crypto stack), freetype+lcms2+libexif+openjpeg (graphics), libyaml/pcre/libatomic_ops/xxHash. MESON WALL
+DODGED for 4 graphics libs: freetype via its AUTOTOOLS configure path (dropped harfbuzz/brotli/bzip2/libpng
++ CVE fetchpatches; core TT/Type1/CFF rendering intact), lcms2/libexif via autotools, openjpeg via cmake
+BUILD_CODEC=OFF (no python3/libtiff drag). aarch64 now 133 rows (13->133 this session): coreutils + crypto
+(full: nettle/libsodium/libgcrypt/libtasn1/libmd) + net/TLS(curl) + compression + graphics(libpng/libjpeg/
+giflib/freetype/lcms2/openjpeg) + FFI(libffi) + event-loops(libuv/libev) + parse/math + shell(oksh). A
+capable cross-built base userland+libs. Documented skips (in-entry): c-ares (iovec redef illumos bug),
+libcbor/mbedtls (C++ unwind wall / meson-zstd), mandoc/most/libmicrohttpd/libb2 (various). Remaining walls
+unchanged: (1) meson->python3->zstd (pixman/libwebp/mbedtls -- note the x86 zstd fix is x86; aarch64-cross
+meson still needs a cross-usable zstd/meson path), (2) C++ unwind/mapfile wall (needs seed gcc w/ Solaris
+ld). wave8 entry -> fork.
