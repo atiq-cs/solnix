@@ -930,3 +930,20 @@ artifacts/sparc-toolchain/nix224/ (recipe + 5 patches + shim + build log). NEXT:
 nix as a proper derivation (like x86 q9cgfd...) so a fresh sparc node bootstraps it from cache; then run
 sparc breadth on 2.24 (migrate off 2.3.16) + publish the 2.24-built sparc NARs. sparc registry currently
 17 rows wired to 2.24 (+ ~60 more built on 2.3.16 to migrate).
+
+## PS-X86-BREADTH-2026-08-16 + config.sub IFD infra gap
++18 NEW x86_64-solaris real derivations (published 27 paths incl transitive, 0 failed): libdaemon, libnet,
+fswatch, bvi, sipcalc, monocypher, mpfi, renameutils, libplist, unibilium, cloc, libsmi, scdoc, cmph,
+getopt, mikmod, rename, duff. Classes: libs/crypto/math + net/tools/util + docs/audio. x86 registry now
+deep (~1107); genuine NEW-portable-C candidates are scarce (~1 win/batch after the first dozen) -- future
+x86 breadth needs the python-deps pool (gated: python3 closure not cached + a python3 rebuild fails zstd's
+CTest playTests on illumos -> fix zstd doCheck=false or the test, then the python-deps class opens up).
+INFRA GAP REPAIRED: every eval hit git.savannah.gnu.org for config.sub-948ae97 (an
+updateAutotoolsGnuConfigScriptsHook IFD) -- savannah unreachable from nodes + the FOD missing from cache.
+Repaired by fetching the exact-rev blob from Software Heritage (sha256 verified byte-exact) +
+nix-store --add-fixed -> /nix/store/1p61qjvlqmwrqab3zp5yh3z8rf3mvjmz-config.sub-948ae97. TODO: publish that
+config.sub FOD to the cache so fresh nodes get it as a substitute (avoid the savannah round-trip).
+PUBLISH-CREDS BUG (2nd occurrence, now root-caused): the SIGNKEY drop grabbed the COMMENT line of
+cache-signing.yaml ("# solnix binary-cache signing key...") not the cache_signing_key: field -- the awk
+matched a substring. FIX: anchor to ^cache_signing_key: (line start). The agent correctly REFUSED to
+fake-sign (which would pollute the cache with unverifiable narinfos). Orchestrator re-extracted + published.
