@@ -963,3 +963,25 @@ unlocks BOTH aarch64-graphics-meson AND x86-python-deps); (2) the C++ unwind/map
 syntax error) still caps any C++ shared-lib/exe -> needs seed gcc w/ Solaris ld. STALE-IP LESSON (again):
 the wave7 agent got a stale node IP (34.208.151.254, a terminated-fleet node) -- it actually ran on the
 resume-fleet node 54.202.207.120; publish/fetch must use .infra/fred-nodes-current.txt.
+
+## PS-ZSTD-ILLUMOS-UNLOCK (2026-08-16): fixed native zstd's playTests -> unblocks python-deps + meson-graphics
+The native zstd CTest ("playTests") failure was the wall blocking BOTH the x86 python-deps class AND the
+meson-based aarch64 graphics stack (freetype/pixman/libwebp -> meson -> python3 -> native zstd). ROOT CAUSE:
+the zstd LIBRARY/binary ALWAYS built + worked (round-trip -19 byte-identical, real AMD64 libzstd.so.1.5.7);
+only tests/playTests.sh made three Linux/BSD assumptions that fail on illumos. FIX = REAL targeted
+test-patches (NOT doCheck=false; the full suite still runs, 100% tests passed):
+  1. gdiff->diff (the SunOS branch hardcodes GNU-diff's name; hermetic build ships plain diff) + diffutils
+     in nativeCheckInputs.
+  2. skip the Linux PT_GNU_STACK exec-stack check (#2963) on SunOS -- the illumos amd64 toolchain emits no
+     such header + NX is an OS default (sxadm), so the grep never matches.
+  3. rm the leftover 0-byte tmp.zst before `test ! -f tmp.zst` (an illumos CLI error-path cleanup diff on
+     the invalid --zstd= negative tests).
+Fix overlay durable in the fork: pkgs/os-specific/illumos/phase3/zstd-illumos-fix.nix (no-op off Solaris).
+Published: zstd-1.5.7 out/bin/dev/man (7 paths, 0 failed). UNLOCK PROVEN: nix-build -A python3 --dry-run
+now lists only 4 drvs (expect/dejagnu/libffi/python3) -- zstd + its whole cmake chain is cached, NOT
+rebuilding. TRANCHE CKSUM CHANGED BY DESIGN: 2788000278 -> 3825392453 (the canonical tranche now imports
+the zstd fix at line 101 after solarisOverlay). NEW canonical cksum = 3825392453.
+NEXT (the last python3 wall): python3's build pulls expect-5.45.4 via libffi's dejagnu/expect check chain,
+and expect fails on illumos (pty_termios.o). The tranche already ships libffiNoCheck (builds clean) --
+wiring python3 to libffiNoCheck clears the last wall -> then the whole python-deps class opens up. Also
+re-run the aarch64 meson-graphics attempt now that native zstd passes (freetype/pixman/libwebp).
