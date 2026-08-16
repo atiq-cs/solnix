@@ -260,6 +260,21 @@ Dispatch pattern: subagents build + persist a paths file; the orchestrator runs 
 on that paths file. (Public key 5HAV in cache-signing.yaml is cache_public_key; the SECRET is
 cache_signing_key, len ~106.)
 
+> **Credential extraction (canonical).** Always extract secrets with the
+> structured sops path, never a substring grep/awk (which can match a YAML
+> comment line and silently yield the comment instead of the value):
+>
+> ```sh
+> SIGNKEY=$(sops --decrypt --extract '["cache_signing_key"]' secrets/cache-signing.yaml)
+> AKID=$(sops    --decrypt --extract '["aws_access_key_id"]'   secrets/s3-cache.yaml)
+> SECRET=$(sops  --decrypt --extract '["aws_secret_access_key"]' secrets/s3-cache.yaml)
+> ```
+>
+> The publish scripts (oi-cache-publish.sh / oi-fleet-publish.sh /
+> sparc-cache-publish.sh) already use `sops --extract`. A valid signing key is
+> `cache.solnix.io-1:<base64>` (len ~106); if it starts with `#` you grabbed a
+> comment. Never fake-sign — an unverifiable narinfo pollutes the cache.
+
 ## Cache upload auth (2026-08-11): TWO paths
 The s3.solnix.io inbox now has two upload auth mechanisms by prefix:
 1. IMAGES (images/** -- ISO/IMG/AMI-raw): token'd curl. Header `X-Solnix-Upload: $SOLNIX_UPLOAD_TOKEN`
