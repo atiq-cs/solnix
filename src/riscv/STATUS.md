@@ -1,5 +1,86 @@
 # RISC-V (riscv64) port — STATUS
 
+**Phase reached: R-P36** (the R-P35 userland-session kernel gets **PER-AS ASIDs +
+IPI-DRIVEN REMOTE TLB SHOOTDOWN** [THE R-P35 SMP FIX], **waitpid(2)**, a **per-proc
+cwd + chdir(2) + . / .. resolution**, and a **/bin/sh with cd/exit builtins + >/<
+redirection**, each boot-verified under `qemu-system-riscv64 -machine virt
+-smp 2`.
+
+(1) PER-AS ASIDs + REMOTE TLB SHOOTDOWN (the headline -- closes the R-P35 latent
+fault):  Every address space now carries its own 16-bit ASID tagged into `satp`
+(`MAKE_SATP_ASID(root_pa, asid)`, ASID in bits [59:44]; ASID 0 reserved for the
+kernel/global mappings).  `hat_asid_alloc` hands ASIDs out monotonically from 1
+with a generation counter; on 16-bit wrap it bumps the generation, flushes the
+whole local TLB (recycling every ASID), and callers broadcast a remote
+shootdown.  `rv_tlb_flush_asid(asid)` is `sfence.vma x0, aN` (ASID-scoped, so a
+root switch or per-AS shootdown leaves other ASes' TLB entries live).  Each
+AS-creation site (`proc_first`, `proc_first_demand`, fork's child, exec's new
+AS) calls `proc_assign_asid` to stamp a fresh ASID into `p_usatp`/`c_satp`.  THE
+FIX: after `hat_user_cow_share` drops `PTE_W` in the PARENT's live page tables at
+fork, `do_fork` no longer does a LOCAL-only `rv_tlb_flush_all()` -- it does an
+ASID-scoped local flush (`rv_tlb_flush_asid(parent->p_asid)`) PLUS an IPI-driven
+REMOTE-hart TLB shootdown (`hat_tlb_shootdown` -> SBI RFENCE `remote_sfence_vma`)
+so a peer hart running the parent cannot keep a stale WRITABLE TLB entry and
+store into the shared COW frame -- the R-P35 COW-vs-wait TLB-aliasing fault under
+heavy fork/exec churn.  `do_exec` likewise shoots the OLD AS's ASID down on the
+peer before freeing it.  Proof (`run_asid_churn`): the COW-share + ASID-scoped
+local flush + remote shootdown + teardown churn loop runs CLEAN (no fault, no
+frame leak) across a real ASID rollover (`asid-gen 1->2`); `ASID churn PROVEN` +
+`ASID rollover handled`.  The live shell session (init forks a child per command)
+now drives that exact COW churn and runs clean.
+
+(2) waitpid(2) + WNOHANG/specific-pid:  `proc_waitpid(want_pid, &status,
+options)` generalizes R-P35's wait-any -- `want_pid>0` reaps only that child
+(ignoring siblings), `WNOHANG` (options bit 1) polls (returns 0 if no matching
+zombie is ready); `proc_wait` is now a `proc_waitpid(-1, .., 0)` wrapper.  New
+`SYS_waitpid(248)`.  Proof (`run_waitpid`): a `WNOHANG` poll of a live child
+returns 0; a specific-pid wait reaps only the named zombie (leaving its sibling
+untouched); `waitpid PROVEN`.
+
+(3) cwd + . / ..:  a per-proc `p_cwd[128]` (absolute, canonicalized, `/` at
+boot, inherited across fork, kept across exec per POSIX).  New `SYS_chdir(247)`
+-> `proc_chdir` resolves the target (relative to cwd) + requires it be a
+directory (`vfs_path_isdir`: a mount point or a mkdir'd tmpfs dir).  `path_resolve`
+prepends the cwd to a relative path and collapses `.`/`..` component-by-component;
+it is applied in `proc_openf` and `proc_execv`.  Proof: the shell `cd /tmp`s,
+cat's a RELATIVE `g` (resolved to `/tmp/g`), `cd ..`'s back, and an ABSOLUTE
+`/tmp/g` still reads.
+
+(4) shell builtins + redirection:  `/bin/sh` gains `cd`/`exit` builtins (run in
+the shell, no fork) and `>`/`<` file redirection -- the child opens the file
+(`O_CREAT` for `>`) and `dup2`s it onto fd 1/0 before `exec` (over the R-P34 fd
+table + R-P35 dup2).  Proof: `echo redir > /tmp/f; cat < /tmp/f` -> `redir`;
+`cd /tmp; echo rel > g; cat g` -> `rel`.
+
+Proof: `rp36/rp36-milestone-check.sh` (all four R-P36 sub-tasks + every
+R-P24..R-P35 regression green -- rebuild+reboot, re-runnable).  Cribbed illumos
+HAT/context ASID management (i86pc `hat_alloc`/hment ASID reuse, sun4v
+`sfmmu_get_ctx`/`sfmmu_alloc_ctx` context rollover-and-flush), `xc_call`/
+`hat_tlb_inval` cross-CPU TLB shootdown over SBI RFENCE, `waitid`/`waitsys`
+(P_PID + WNOHANG in `os/exit.c`), `lookuppn`/`lookuppnvp` cwd (`u_cdir` base +
+the `..` parent walk in `fs/lookup.c`); xv6 `sh.c` (redir/builtins); BSD
+`namei()` relative-to-cwd; the RISC-V privileged spec (ASID in `satp`, `sfence.vma`
+rs2=ASID).
+
+**Restore note (fresh node):** the R-P17..R-P35 tree was restored from the git
+per-phase deltas by overlaying `rp22..rp35` in order (latest file wins) into a
+full working dir (`rp36-overlay.sh`); the cross toolchain was rebuilt from
+source on the node -- binutils-2.44 (`riscv64-unknown-elf`) + gcc-14.3.0
+(`riscv64-unknown-solaris2.11`, config.gcc stanza + `riscv/sol2.h` +
+`riscv/t-sol2`, via `rp36-setup-gcc.sh` + `rp36-build-toolchain.sh`; the
+`all-gcc` gettext prereq was dropped so `--disable-nls` builds clean) + the
+solaris `libgcc.a` (`all-target-libgcc`, core `libgcc.a` only) + a shared-capable
+binutils `ld` (regen `elf64lriscv` emulation with `GENERATE_SHLIB_SCRIPT`) +
+hand-linked `libgcc_s.so.1` + `hello.dyn`/`hellodyn.dyn`/`hellolazy.dyn` +
+`ld.so.1` (`rp36-build-dynchain.sh`).  The R-P34.1 (sigprocmask/alarm/sigsuspend)
+and R-P34.3 (mount/multi-level-walk/rename/unlink) userland test drivers
+(`sigtest.c`/`vfstest.c`) were NOT persisted to git in R-P34, so they were
+reconstructed from the R-P35 reference boot log's expected output (the
+underlying kernel syscalls were already present).  R-P35 boot (init+shell:
+`echo hello`, `cat`, `echo hi | cat`) re-confirmed before starting R-P36.
+
+**Next: R-P37.**
+
 **Phase reached: R-P35** (the R-P34 shell-ready kernel now runs a REAL USERLAND
 SESSION with **PER-CPU IDLE + IPI WAKEUP**, a **REAL init PROCESS (pid 1)**, and
 a **MINIMAL INTERACTIVE SHELL (/bin/sh)**, each boot-verified under

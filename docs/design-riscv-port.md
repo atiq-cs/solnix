@@ -3290,3 +3290,27 @@ waitpid, cwd/./.., shell builtins/redirs.
 Honest note: a latent SMP COW-vs-wait TLB-aliasing fault surfaces only under heavy fork/exec churn (no-ASID
 aliasing); R-P35 runs the session early+clean + a defensive sfence-retry; proper fix (ASIDs/remote
 shootdown) queued R-P36.
+
+## R-P36 DONE (2026-08-16): ASIDs (fix the SMP-COW fault) + waitpid + cwd + shell builtins/redir
+Also PROVED the disaster-recovery path: on a FRESH node with no port tree + no toolchain, reconstructed
+the full R-P17..R-P35 working dir from git per-phase deltas (rp36-overlay.sh, latest-file-wins) + REBUILT
+the entire cross toolchain from source (binutils-2.44 riscv64-unknown-elf + gcc-14.3.0
+riscv64-unknown-solaris2.11 + solaris libgcc.a + shared-capable ld + libgcc_s.so.1 + ld.so.1), then
+re-confirmed the R-P35 init+shell boot BEFORE R-P36. (gcc-14 download_prerequisites gettext fails on OI ->
+--disable-nls; the R-P34 test drivers sigtest.c/vfstest.c were never persisted -> reconstructed from the
+R-P35 boot log + now in git.) All boot-verified qemu -smp 2, R-P24-35 regressions green.
+- ASIDs + shootdown (THE R-P35 fix): per-AS 16-bit ASID in satp (MAKE_SATP_ASID), ASID-scoped sfence.vma
+  x0,aN, allocator w/ generation-bump rollover; do_fork/do_exec now do an ASID-scoped local flush + an
+  IPI-driven REMOTE-hart shootdown (SBI RFENCE) so a peer hart can't keep a stale writable TLB entry into
+  a COW frame. PROOF: heavy COW-churn ran clean (no fault/leak); ASID rollover handled (gen 1->2).
+- waitpid(2) (SYS 248): specific-pid + WNOHANG. PROOF: WNOHANG poll returned 0 for a live child; specific
+  wait reaped only the named zombie.
+- cwd + ./.. : per-proc p_cwd, chdir(2) (SYS 247), path_resolve (cwd-relative + ./.. collapse). PROOF:
+  cd /tmp; cat g->rel; cd ..; cat /tmp/g->rel.
+- shell builtins/redir: /bin/sh gets cd/exit + >/< . PROOF: echo redir > /tmp/f; cat < /tmp/f -> redir.
+Cribbed illumos HAT/context ASID (i86pc hat_alloc, sun4v sfmmu ctx rollover) + xc_call/hat_tlb_inval over
+SBI RFENCE + waitid(P_PID+WNOHANG) + lookuppn cwd; xv6 sh redir/builtins; BSD namei; RISC-V priv spec
+(ASID in SATP, sfence.vma rs2=ASID). NEXT R-P37: live tty console input + job control (pgrp/SIGTSTP),
+more fs (O_CREAT/O_TRUNC file creation, mkdir/rmdir), a real /sbin/init reading /etc/inittab, exec of a
+cache-built userland binary. rp36 restore recipes (overlay/setup-gcc/build-toolchain/build-dynchain) are
+in git -- the RISC-V port is now reconstructable from git on any fresh node.
