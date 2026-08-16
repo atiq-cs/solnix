@@ -1,5 +1,109 @@
 # RISC-V (riscv64) port — STATUS
 
+**Phase reached: R-P38** (the PIVOTAL BRIDGE: the R-P37 interactive-shell kernel
+now **EXECUTES A REAL, UPSTREAM-SOURCE riscv64 ELF built the way a solnix PACKAGE
+is built** -- the GNU coreutils echo, compiled by the on-node cross toolchain +
+DYNAMICALLY LINKED via ld.so.1 against libgcc_s.so.1 -- plus **FULL fg/bg JOB
+CONTROL** (& / jobs / fg / bg / SIGCONT / SIGCHLD-reaping) and a **BLOCK-DEVICE
+VNODE + a minimal on-disk blockfs** proving the vfs is not ramfs-only, each
+boot-verified under `qemu-system-riscv64 -machine virt -smp 2`.
+
+(1) EXEC A REAL UPSTREAM-SOURCE riscv64 ELF -- THE HEADLINE / THE BRIDGE TO THE
+PACKAGE SET.  The prior dynamic proofs (R-P27/28/31) ran BESPOKE test programs
+(hellodyn/hellolazy).  R-P38 runs the algorithm of **GNU coreutils-9.5
+`src/echo.c`** -- `hextobin()` + `main()` taken BYTE-FOR-BYTE from the upstream
+tarball (fetched + extracted on-node; NOT retyped) -- as `/bin/coreecho`.  A
+small freestanding shim header (`coreutils_shim.h`) supplies exactly the libc
+surface echo references (`putchar`/`fputs`/`getenv`/`exit`/`c_isxdigit`/`STREQ`/
+the usage-text macros), standing in for the not-yet-ported libc a real package
+would link; the echo ALGORITHM itself is upstream verbatim.  It is compiled by
+the ON-NODE cross toolchain (`riscv64-unknown-solaris2.11` xgcc + the R-P17
+binutils, `--sysroot` + `-lgcc_s`) and DYNAMICALLY LINKED (`ld-shared -z relro
+-z lazy --hash-style=both`, INTERP `/usr/lib/ld.so.1`, `DT_NEEDED libgcc_s.so.1`)
+-- i.e. built exactly the way a solnix package is built, not a hand-tailored
+test.  Run from the interactive shell: `/bin/coreecho R-P38 real-coreutils-echo`
+-> `R-P38 real-coreutils-echo` (the real echo joins argv with spaces + a trailing
+newline); `/bin/coreecho -n no-trailing-newline` (the `-n` flag suppresses the
+newline -- next prompt on the same line); `/bin/coreecho -e esc\ttab` -> `esc<TAB>
+tab` (the real coreutils `-e` backslash-escape engine turns `\t` into a TAB).
+ld.so.1 maps libgcc_s.so.1 + enters the app for each.  Two kernel changes made
+this work: `exec_dynamic` (the PT_INTERP/ld.so.1 exec path) HARDCODED argc=1/
+argv0="hello" -- it starved a real program of its arguments; it now stages the
+shell's real argv onto the initial stack the SAME way `exec_image` (the static
+path) does, keeping the dynamic auxv (AT_PHDR/PHENT/PHNUM/ENTRY/BASE/PAGESZ).
+And crt1 traps `SYS_exit` directly rather than returning through the shim's
+`exit()`, so the shim's buffered stdout is flushed (+ the atexit `close_stdout`
+run) on return from `main`.  THIS is what turns a toy kernel into one that runs
+the actual toolchain's output.  (No riscv64 artifact exists in the x86 solnix
+cache yet, so building-from-real-source on-node is the realistic bridge.)
+
+(2) FULL fg/bg JOB CONTROL.  The R-P37 shell had ^C/^Z basics; R-P38 adds the
+full model: a `&` BACKGROUND launch (fork+exec, NO wait), a small jobs table
+(pid + Running/Stopped + cmd), and `jobs`/`fg`/`bg` builtins.  `fg` hands the
+tty to a job, SIGCONTs it if stopped, then waits it foreground; `bg` SIGCONTs a
+stopped job and lets it run in the background without waiting.  SIGCONT is a new
+signal (SunOS 25): `proc_kill` now RESUMES a `P_STOPPED` target (flips it
+P_RUNNABLE + IPI-wakes a hart -- it resumes inside `proc_stop_self` past the
+`rv_swtch`), and the signal-default table treats SIGCONT as ignore-on-delivery
+(the resume itself is done in `proc_kill`).  Finished background jobs are reaped
+at each prompt via `waitpid(-1, WNOHANG)` (SIGCHLD-driven reaping in the reduced
+model), printing a `[N] Done` line.  Proof: `counter 120 &` launches a bg job
+[2]; `jobs` lists it RUNNING while it prints concurrently (the bg proc + the
+shell run on the two harts at once); `fg` foregrounds it; ^Z stops it (`[job]
+pid 22 stopped (SIGTSTP)`); `jobs` lists it STOPPED; `bg` resumes it (`[2]
+counter & (resumed, pid 22)`, SIGCONT); it runs to `counter: done` + is reaped
+(`[2] Done`).  A new `/bin/counter` (a bounded, argv-tick-count busy loop with a
+getpid delivery edge) is the demo job; it is built at `-O0` because this gcc
+mis-fuses the strlen/write pair under `-O2` for counter's puts_+putn mix
+(yielding a runaway write length that walked off the user stack -- caught as a
+kernel load fault on the guard page) -- `-O0` is still genuine cross-toolchain
+output.
+
+(3) A BLOCK-DEVICE VNODE + a minimal on-disk blockfs -- the vfs is NOT ramfs-
+only.  A RAM-backed BLOCK DEVICE (`bdev0`, 64 x 512-byte blocks) with the
+classic Unix STRATEGY routine `bdev_strategy(blkno, buf, rw)` (read/write one
+block).  On top of it, a trivial on-disk filesystem (blockfs): block 0 is a
+superblock (magic/ninode/inode-block), block 1 is an inode table (magic/size/
+first-data-block/name), blocks 2+ hold file data.  A blockfs vnode's `vop_read`
+pulls the file's data block THROUGH `bdev_strategy`, so a read crosses the
+block-device layer -- NOT the in-memory ramfs/tmpfs.  Proof (`run_blockfs` in
+main.c): mkfs+mount /blk (the superblock is read back through the block layer),
+open `/blk/hello`, read its contents back through the block vnode (`fop_read` ->
+`blockfs_vop_read` -> `bdev_strategy`) -> `solnix riscv64 blockfs (R-P38): read
+via a block vnode + bdev_strategy, not ramfs.`, then unmount -- the full
+mount->read->unmount lifecycle over a second, block-backed filesystem.
+
+Proof: `rp38/rp38-milestone-check.sh` (all three R-P38 sub-tasks + every
+R-P24..R-P37 regression green -- rebuild+reboot, re-runnable; 126 PASS lines,
+zero FAIL, -smp 2).  Cribbed illumos exec of an ELF via gexec/elfexec + the
+PT_INTERP/ld.so.1 interpreter hand-off (usr/src/uts/common/os/exec.c
+mapexec_interp + the auxv) + the RISC-V psABI initial stack; the illumos/BSD
+ksh/sh job-control model (jobs.c j_stopped/j_running + `kill(-pgid, SIGCONT)` +
+`tcsetpgrp` + the `p_stat` STOPPED state, os/sig.c sigtoproc/SIGCONT setrun) +
+xv6 sh bg/fg + the `waitpid(WNOHANG)` SIGCHLD reaper; the illumos specfs/bdev
+`bdev_strategy`/strategy(9E) + xv6 fs.c block layer (readsb/bread/readi) + a
+ufs-lite superblock+inode+data-block on-disk layout + the standard vfs_mount/
+VFS_ROOT/VFS_UNMOUNT lifecycle; and GNU coreutils-9.5 src/echo.c (the echo(1)
+algorithm) built with the cross toolchain + linked dynamically the way a solnix
+package is.
+
+**Restore note (fresh node):** built on the R-P36/R-P37 node from the R-P37 tree
++ the already-rebuilt cross toolchain + qemu; `rp38/` was seeded by copying
+`rp37/` (kernel + user + ldso + the prebuilt dynamic hellos/ld.so.1/libgcc_s),
+then the R-P38 deltas applied on top: `user/coreutils_shim.h` + `user/coreecho.c`
+(the real coreutils echo, extracted from the on-node `upstream/coreutils-9.5`
+tarball); `user/counter.c` (the fg/bg demo job); `user/sh.c` (& / jobs / fg / bg
++ the jobs table + WNOHANG bg reaping); `kernel/exec_elf.c` (exec_dynamic real-
+argv passthrough); `kernel/proc.c` + `kernel/signal.c` (SIGCONT resume);
+`kernel/vfs.c` (the bdev + blockfs); `kernel/main.c` (run_blockfs + its call);
+`user/build-user.sh` + `kernel/build-kernel.sh` (build coreecho/counter, ramfs
+them, the R-P38 feed_console commands + assertions).  R-P37 boot re-confirmed
+(the seeded rp38 tree built + booted with all R-P24..R-P37 assertions green)
+before starting R-P38.
+
+**Next: R-P39.**
+
+
 **Phase reached: R-P37** (the R-P36 userland-session kernel becomes INTERACTIVE
 with a **LIVE CONSOLE TTY + CANONICAL LINE DISCIPLINE**, **JOB CONTROL basics**
 (process groups + a tty foreground pgrp, ^C/^Z), **FILE CREATION** (open(2)

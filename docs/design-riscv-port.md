@@ -3338,3 +3338,31 @@ CACHE-BUILT userland binary (a real illumos riscv64 ELF from the nix cache, not 
 bridge from the bespoke test userland to the actual solnix package set; + more fs (real block/disk vnode,
 a persistent fs), + full bg/fg job control (fg/bg builtins, SIGCONT). The riscv64 kernel runs an
 interactive shell with job control -- a real Unix session.
+
+## R-P38 DONE (2026-08-16): THE PACKAGE-SET BRIDGE -- the kernel runs a REAL upstream coreutils program
+All boot-verified qemu -smp 2, 126 PASS / 0 FAIL, R-P24-37 regressions green (R-P37 boot re-confirmed
+first). THE milestone: the kernel now runs the actual toolchain's output -- a real GNU coreutils program
+compiled + dynamically linked the way a solnix package is, not a hand-tailored test.
+- (1) REAL upstream-source riscv64 ELF: GNU coreutils-9.5 src/echo.c (hextobin()+main() byte-for-byte into
+  coreecho.c; coreutils_shim.h supplies exactly the libc surface echo references, standing in for the
+  not-yet-ported libc). Compiled by the on-node cross toolchain (riscv64-unknown-solaris2.11 xgcc + R-P17
+  binutils, --sysroot -lgcc_s). DYNAMICALLY LINKED (ld-shared -z relro -z lazy --hash-style=both, INTERP
+  /usr/lib/ld.so.1, DT_NEEDED libgcc_s.so.1). PROOF from the shell: /bin/coreecho R-P38 real-coreutils-echo
+  -> "R-P38 real-coreutils-echo"; -n suppresses newline; -e esc\ttab -> real TAB (the coreutils -e engine);
+  ld.so.1 maps libgcc_s.so.1 + enters the app each time. TWO ROOT-CAUSE KERNEL FIXES: exec_dynamic (the
+  ld.so.1 path) had hardcoded argc=1/argv0="hello" starving real programs of args -> now stages the shell's
+  real argv like exec_image (keeping the dynamic auxv); crt1 traps SYS_exit directly -> the shim flushes
+  buffered stdout (+ atexit close_stdout) on return from main.
+- (2) Full fg/bg job control: & bg launch, jobs table, jobs/fg/bg builtins, SIGCONT (SunOS 25) resuming a
+  P_STOPPED proc, waitpid(-1,WNOHANG) reaping. PROOF: counter 120 & -> [2]; jobs Running (concurrent on
+  both harts); fg; ^Z stops; jobs Stopped; bg (SIGCONT) resumes; done + reaped -> [2] Done.
+- (3) Block-device vnode + on-disk fs: RAM-backed bdev0 (bdev_strategy(blkno,buf,rw)) + a trivial blockfs
+  (superblock+inode+data); a blockfs vnode vop_read pulls blocks THROUGH bdev_strategy. PROOF: mount /blk
+  (superblock read via the block layer) -> read /blk/hello through the block vnode -> unmount. The vfs is
+  not ramfs-only.
+Cribbed illumos gexec/elfexec + PT_INTERP hand-off (mapexec_interp + auxv) + RISC-V psABI stack; illumos/
+BSD ksh/sh job-control (j_stopped/j_running, kill(-pgid,SIGCONT), tcsetpgrp, p_stat) + os/sig.c SIGCONT +
+xv6 sh bg/fg + waitpid(WNOHANG); illumos specfs/bdev strategy(9E) + xv6 fs.c block layer + ufs-lite layout;
+GNU coreutils-9.5 src/echo.c. NEXT R-P39: port more of the real libc surface (so a coreutils util links a
+real libc, not a shim) + exec a 2nd real program + a persistent (disk-backed) root fs. The kernel runs the
+actual toolchain's output -- the bridge from toy kernel to package-capable.
