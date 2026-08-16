@@ -947,3 +947,19 @@ PUBLISH-CREDS BUG (2nd occurrence, now root-caused): the SIGNKEY drop grabbed th
 cache-signing.yaml ("# solnix binary-cache signing key...") not the cache_signing_key: field -- the awk
 matched a substring. FIX: anchor to ^cache_signing_key: (line start). The agent correctly REFUSED to
 fake-sign (which would pollute the cache with unverifiable narinfos). Orchestrator re-extracted + published.
+
+## PS-AARCH64-WAVE7 (2026-08-16): +12 graphics/parse/math libs (published 54 paths)
++12 EM_AARCH64 C-only pkgs: graphics (libpng/libjpeg-turbo+libturbojpeg/giflib -> future desktop), parse/
+data (yajl/cJSON/msgpack-c/jansson/libconfig), math (gmp cxx=false C-core/mpfr/libmpc), compression (zlib
+static). All .a = ELF aarch64 relocatable, host-free closures (no x86 leak). cmakeWireOverlay FOLDED IN
+(yajl/cjson/msgpack-c/jansson/libjpeg-turbo are cmake-driven). Re-materialized 3 missing FODs whose NARs
+are ABSENT from cache: seed-aarch64 (rebuilt from source -> 1rwvn524..., old b1nzjqq stale), gnm (repointed
+NM at host /usr/gnu/bin/nm), config.guess/sub (nix-store --import from local). Per-pkg: cmake ->
+BUILD_SHARED_LIBS=OFF, gmp -D__EXTENSIONS__ (isascii hidden under -std=c99), mpfr/libmpc -> C-only
+gmpC/mpfrC (default drags gmp-with-cxx -> C++ wall), libpng static-zlib+fPIE (longjmp copy-reloc), giflib
+libgif.a-only, libconfig --disable-cxx. aarch64 now ~120. TWO SHARED WALLS: (1) meson->python3->native-zstd
+blocks freetype/pixman/libwebp (SAME zstd-fails-CTest issue that gates x86 python-deps -- fixing zstd
+unlocks BOTH aarch64-graphics-meson AND x86-python-deps); (2) the C++ unwind/mapfile wall (libgcc-unwind.map
+syntax error) still caps any C++ shared-lib/exe -> needs seed gcc w/ Solaris ld. STALE-IP LESSON (again):
+the wave7 agent got a stale node IP (34.208.151.254, a terminated-fleet node) -- it actually ran on the
+resume-fleet node 54.202.207.120; publish/fetch must use .infra/fred-nodes-current.txt.
