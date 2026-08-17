@@ -1135,3 +1135,19 @@ operand") -- a CPython-3.14 illumos preprocessor bug. CROSS-POLLINATION: the x86
 FIXES THIS EXACT BUG (postConfigure seds pyconfig.h Py_SUNOS_VERSION -> 511). wave13 = apply that same
 Py_SUNOS_VERSION=511 sed to the aarch64 NATIVE python3 -> native python3 builds -> meson + protoc work ->
 harfbuzz/pixman/cairo/pango/protobuf all unblock. native-openssl-fix -> docs/aarch64-native-openssl-fix.md.
+
+## PS-RUST-WAVE1 (2026-08-17): the Rust ECOSYSTEM is open -- buildRustPackage + rpds-py wheel proven
+rustPlatform WIRED (rust-overlay.nix, 229 lines): rustc/cargo = the seed, rustPlatform rebuilt via nixpkgs'
+makeRustPlatform. buildRustPackage/fetchCargoVendor/cargoSetupHook/maturinBuildHook all resolve. 3 illumos
+fixes: target triple, store-`-L` platform libs (purity filter strips /lib/amd64), RUNPATH/LD seed-libc
+shadow (malloc-NULL abort). BUILT via buildRustPackage: ripgrep 14.1.1 (rg runs+finds patterns), fd 10.2.0,
+tokei 12.1.2, hyperfine 1.19.0, maturin 1.7.4 (324 crates). THE python-crypto unlock PROVEN WITH A REAL
+WHEEL: rpds-py (rpds_py-2026.6.3-cp314-solaris_x86_64.whl, pyo3 backend) built via maturin -> import rpds
+-> HashTrieMap({1:2}). That's the exact backend cryptography/pydantic-core/hypothesis use, now building
+through nix. Published 15 paths. registry 1506. rust-overlay.nix durable in fork. BLOCKERS: fetchCargoVendor/
+importCargoLock need a solnix vendor-FOD shim (cargo vendor works on-host as a workaround); the RUNPATH dance
+wants de-referencing to from-source gcc-14 for a hermetic closure. NEXT: harvest the Rust CLI class
+(bat/eza/dust/sd/bottom/ripgrep-all) + the python-crypto pool (cryptography/pydantic-core/bcrypt via the
+proven maturin path) + this is the FOUNDATION for COSMIC (Rust desktop) -- the maintainer's expanded goal.
+The 5th deep unlock (zstd/python3/python-C-ext/aarch64-C++/Rust) is now productized: real Rust binaries run
+on solnix.
