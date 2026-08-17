@@ -1304,3 +1304,31 @@ uninorm/u8_tolower + libidn2 threaded onto the link). NOTE the DESKTOP-TOOLKIT a
 COMPLETE GTK4 adaptive GUI toolkit on illumos aarch64. For COSMIC specifically (Rust+Wayland+smithay):
 wayland(w15) + Rust(x86 works) are there; aarch64-cross-rust (w18) unblocks the COSMIC Rust crates. wave17
 entry -> fork.
+
+## PS-DESKTOP-ISO-BLOCKED (2026-08-17): the nix-native ISO needs the G0-hash NARs from the ORIGINAL cross-builder
+The cache-hole-fix agent (honest, refused host-fallback) reached a definitive verdict:
+- The 14 X/font runtime libs are GENUINELY 404 (confirmed: the cached leaves xorg-server/xterm/dwm are 200
+  and their References: list these EXACT 14 G0 hashes -- the G0 cross-builder built them but published only
+  the leaf/-dev outputs). A real cache-completeness bug.
+- HASH-COHERENT REBUILD = NO (total drift): nix-instantiate evaluates all 14 to DIFFERENT runtime hashes
+  than the G0 targets (libx11 an761->bk3dzcqw, libxcb spa9l3d4->f589qph8, libxau p3gdn67f->b8sv3a3p, ...).
+  The overlay/inputs moved since G0, so a rebuild can't satisfy the cached leaves' baked-in RUNPATH.
+- FRESH-COMPLETE-CLOSURE ROUTE = BLOCKED on this node: every X lib needs meson->python3, and python3 won't
+  configure in the Nix build sandbox on this illumos (the sandbox returns EMPTY uname fields -> config.guess
+  bails; forcing --build/--host hits the socketmodule Py_SUNOS_VERSION bug -- the multi-hour source-port
+  wedge). The G0 wave AVOIDED all this by CROSS-BUILDING on LINUX; this EC2 node has no remote builder +
+  the linux cross-builder is off-limits.
+VERDICT: the nix-native desktop ISO is NOT buildable from an EC2 illumos node today. THE FIX (durable, two
+options): (A) republish the 14 G0-HASH runtime -lib/leaf NARs from the ORIGINAL G0 LINUX CROSS-BUILDER via
+oi-publish-wave.sh -- since the cached leaves reference these EXACT hashes, NO ISO re-pin needed (the
+cleanest fix; needs access to the G0 cross-builder or its store); OR (B) rebuild the WHOLE x86 desktop
+closure FRESH on a linux cross-builder (with the zstd + python3 illumos fixes already in the tranche) +
+publish it COMPLETE (every runtime narinfo) + re-pin the ISO to the new closure. Both need a LINUX
+cross-builder (the substrate that built the original x86-solaris packages) -- an EC2 illumos node can't
+self-host the meson/python3 desktop build. ARCHITECTURAL NOTE: the x86-solaris cache was largely built by a
+LINUX cross-builder (nixpkgs pkgsCross.x86_64-solaris style) -- runtime-closure completeness depends on that
+builder publishing full closures, not just leaves. A cache-closure-completeness audit + a policy of
+publishing `nix-store -qR` (full closure) per wave would prevent this class of hole. Durable fixes banked by
+the agent: fetchurl-shim pickHash (first-non-empty; "" or x = "" in Nix bit fetchPypi) + zstd/libffi test
+disables. The host-sourced PoC ISO (185MB) stays a PoC. NEXT: whoever has the linux cross-builder republishes
+the 14 (option A) -> then /var/tmp/solnix-nix-native-desktop/nix-native-desktop-build.sh finishes the ISO.
