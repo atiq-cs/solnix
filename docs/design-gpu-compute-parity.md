@@ -349,3 +349,32 @@ Vulkan on Intel Arc/xe hw. Deferred: intel-clc/RT (LLVM), video, hasvk.
 Vulkan-compute-reaches-every-vendor vector -- one GGML_VULKAN runs on either vendor's GPU once a DRM node
 runs. The parity target g4ad is AMD (RADV); Intel Arc/xe (ANV) is ready if that hardware appears. NVIDIA's
 open path (NVK) is the same Mesa/C1 shape -- a future follow-on. gpu-bringup.sh fires on the quota grant.
+
+## C3-KFD COMPLETE (compile-phase) (2026-08-17): /dev/kfd -- the ROCm/HIP COMPUTE surface on illumos
+The DEEPEST AMD compute path (beyond graphics Vulkan) now compiles zero-phantom on illumos. This is the
+ROCm/HIP entry point -- accelerated compute (rocBLAS/the ML runtime), the truest "as fast as Linux" target.
+- /dev/kfd = a 2nd minor node (KFD_MINOR=64) on the SAME illumos char device the C1 DRM core owns +
+  C3-amdgpu attaches to. drm_core.c cb_ioctl routes by minor to kfd_ioctl; the DRI minors (card0/renderD128)
+  stay on DRM dispatch -- mirroring Linux's distinct /dev/kfd + /dev/dri/renderD* over one amdgpu device.
+- Core compute ioctls (verbatim Linux ABI, base 'K'): GET_VERSION, CREATE/DESTROY_QUEUE, GET_CLOCK_COUNTERS,
+  GET_PROCESS_APERTURES(+_NEW), ACQUIRE_VM, ALLOC/FREE_MEMORY_OF_GPU, MAP/UNMAP_MEMORY_TO_GPU,
+  SET_SCRATCH_BACKING_VA, AVAILABLE_MEMORY. Deferred (events/SVM/CRIU/debugger/dmabuf) return ENOTTY with
+  the ABI numbers+structs present so handlers slot in.
+- Compute-queue/doorbell: kfd_queue_create registers ring/ptr VAs + allocates a doorbell dword in the
+  process's BAR2 page + returns queue_id/doorbell_offset. BAR2 (doorbell BAR) is now MAPPED by the
+  C3-amdgpu attach (was unmapped). Per-process context keyed by illumos pid_t (ddi_get_pid).
+- 1770 LOC KFD (+121 test). Memory alloc uses the REAL C3-amdgpu TTM amdgpu_bo_create.
+- ZERO-PHANTOM: the full drm-full module links ET_REL AMD64 with 131 undefs, ALL resolve (verify-syms.sh:
+  "all 131 undefined symbols resolve to illumos KPI or virtio exports") -- ddi_copyin/out, kmem_*, mutex_*,
+  avl_*/list_*, cmn_err, gethrtime + intra-module amdgpu_bo_create/kfd_*. Self-check (test_kfd) PASS: the
+  ABI encoding is bit-for-bit Linux, doorbell offset math, page-bitmap alloc/free, gfx10 aperture order.
+Compile-complete: char device + ioctl dispatch + version/topology/apertures + acquire_vm + memory alloc/
+free/map accounting + queue create/destroy + doorbell slot + per-process lifecycle. Hardware-gated
+(C3-amdgpu-d, powered V520 + firmware): the live MQD write + HWS/MES runlist, GPUVM PTE program, the
+doorbell BAR2 mmap fault, events/SVM.
+ROCm USERSPACE NEXT: libhsakmt (the HSA thunk -- its hsaKmt* wrappers map 1:1 onto these AMDKFD_IOC_*; one
+solnix gap: its topology reader assumes Linux /sys) -> ROCr (HSA runtime) -> HIP. Compute is now unblocked
+at the kernel/ABI level exactly as RADV unblocked graphics-Vulkan.
+=> THE FULL AMD ACCELERATOR STACK COMPILES ON illumos: graphics (C1 DRM + C3-amdgpu + RADV+ACO + ICD) AND
+compute (/dev/kfd + the ROCm ioctl surface). Plus Intel graphics (ANV). The north-star software is
+comprehensive; runtime is g4ad-gated. gpu-bringup.sh fires on the quota grant.
