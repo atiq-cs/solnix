@@ -250,3 +250,35 @@ auth (biggest live unknown) 4.SMU ready 5.GMC gart+TLB+PTE-fill 6.GFX RLC+CP 7.S
 EXECBUFFER (ring rptr + fence writeback advance; needs the deferred BAR2 doorbell map) 9.IH interrupt
 delivery. Skipped-until-powered-GPU: BAR2 doorbell map, per-page PTE-fill loop, IH IV-decode, KFD.
 => RUNTIME needs a real V520 (g4ad, gated on the GPU-quota support case PS-GPU-QUOTA) OR local x86+GPU hw.
+
+## North-star restatement (2026-08-17, maintainer): accelerator parity, not CPU inference
+The maintainer reaffirmed: CPU LLM inference (llama.cpp @70 tok/s) was only a BEACHHEAD. The long-term
+goal is solnix providing GPU/TPU/accelerator support AS FAST AS LINUX on similar hardware. GPU support is
+CRITICAL. Maintainer is requesting the GPU instance limit increase.
+
+READINESS (what's done, non-hardware): the accelerated software stack is COMPILE-COMPLETE + zero-phantom
+(src/drm-port ~9089 LOC): C1 DRM/KMS + C2 Mesa (softpipe/llvmpipe/lavapipe) + C3a virgl/Venus Vulkan ICD +
+C3-amdgpu (device/TTM/navi12/rings/firmware) + C4 llama.cpp GGML_VULKAN. scripts/gpu-bringup.sh is the
+one-command launch-to-runtime flow (refuses while quota=0; fires on the grant). The 9-step bring-up is
+documented (design-gpu-amdgpu.md).
+
+THE RUNTIME GATE (hardware-only): a real GPU that boots solnix = a GPU EC2 instance (g4ad: AMD V520,
+fully-open amdgpu/ROCm, PCI-passthrough to a normally-booting Nitro VM -- NO metal/kvm needed) on the quota
+grant, OR local x86+GPU hardware. Live register sequences (PSP fw-auth, ring rptr/fence, BAR2 doorbell, KFD)
+are hardware-only -- never modload experimental kernel code into a live host kernel.
+
+PARITY VECTORS (the plan, lead with the broadest):
+- Vulkan-compute FIRST (the lead vector): one llama.cpp GGML_VULKAN reaches EVERY vendor once a DRM render
+  node runs -- AMD (RADV/amdgpu), Intel (ANV/xe), NVIDIA (NVK, the open path). Broadest reach per unit work.
+- ROCm/HIP (AMD) via amdgpu + KFD (/dev/kfd) -- the deepest AMD compute path; C3-amdgpu-d + the KFD char
+  device (deferred A3-f). The g4ad V520 is the parity target.
+- oneAPI/Level-Zero (Intel) via the xe DRM driver -- a future crib (same C1 DRM framework).
+- TPU/other accelerators: most modern accelerators expose a DRM/accel char device + a userspace runtime;
+  the C1 DRM framework + the dma-buf/PRIME + scheduler shape generalize. The Linux drivers/accel/ subsystem
+  (Habana/etc.) is the crib reference when a specific TPU is targeted -- same crib-BSD/upstream-and-adapt
+  doctrine.
+NON-HARDWARE WORK THAT STILL ADVANCES PARITY (compile-verified, not runtime-gated): keep the Mesa/Vulkan
+driver surface broadening (RADV for AMD, ANV for Intel -- both compile against the C1 DRM ioctls), the KFD
+compute-ioctl surface, and the ROCm userspace runtime (HSA/ROCr) porting -- each a bounded first-step
+compile with zero phantom symbols, exactly like every prior port. These land BEFORE the hardware so the
+grant is instant-to-measurement.
