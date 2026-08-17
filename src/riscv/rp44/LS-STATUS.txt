@@ -1,0 +1,121 @@
+R-P44 ls.c ATTEMPT -- DEFERRED to R-P45
+========================================
+
+TARGET: the UNMODIFIED GNU coreutils-9.5 src/ls.c (5658 lines) LINKING the
+real solnix riscv64 libc.a, the way pwd.c/env.c/head.c/tail.c/wc.c do.
+
+WHAT LANDED THIS PHASE (the R-P44 milestone, 154 PASS / 0 FAIL, boot-verified
+-smp 2):
+
+  * REAL riscv64 setjmp/longjmp -- libc/port/setjmp.S + libc/include/setjmp.h.
+    setjmp saves the RISC-V psABI callee-saved set into the jmp_buf:
+        integer:  ra, sp, s0(fp), s1, s2..s11   (14 uint64 slots, index 0..13)
+        float:    fs0..fs11                      (12 uint64 slots, index 14..25)
+    longjmp restores them and returns val (or 1 if val==0, the C89 rule).
+    gp/tp are per-thread-fixed and not saved.  _setjmp/_longjmp alias the
+    plain forms (this reduced libc has no signal mask, so sigsetjmp/siglongjmp
+    are #defined to setjmp/longjmp with savemask ignored).  Added to the
+    reusable libc.a via libc/build-libc.sh (assembled by the on-node
+    riscv64-unknown-elf-as; nm shows setjmp/longjmp defined T in libc.a).
+    Self-tested standalone: user/sjtest.c (-> /bin/sjtest) sets a jmp_buf,
+    calls a nested function that burns stack, longjmp(env,42) unwinds back to
+    the setjmp call site -- the boot log shows "SJTEST PASS: longjmp returned
+    42, stack intact" + "SJTEST PASS: longjmp(env,0) returned 1".  This is the
+    reusable, valuable headline part 1 and is DONE + boot-verified.
+
+FINDING re ls.c and setjmp: coreutils-9.5 src/ls.c does NOT call setjmp/
+longjmp directly (the R-P43 note referred to an older ls whose sort_files used
+a sort_failed jmp_buf; 9.5 refactored that away).  ls.c only #includes
+<setjmp.h> for the type, which now resolves.  So the real setjmp/longjmp is
+correct + reusable but is not itself the ls.c blocker -- the gnulib module
+surface is.
+
+PRECISE ls.c SURFACE (scoped this phase; awk of the "..." includes + grep of
+the actual calls in ls.c):
+
+  ls.c #includes 31 gnulib module headers:
+    acl argmatch assure c-strcase dev-ino filenamecat hard-locale hash human
+    filemode filevercmp idcache ls mbswidth mpsort obstack quote smack
+    stat-size stat-time strftime xdectoint xstrtol xstrtol-error areadlink
+    dircolors xgethostname c-ctype canonicalize statx
+
+  the functions ls.c actually CALLS from them (call counts in ls.c):
+    hash_initialize/insert/free/get_n_entries (hash.c, 1120 lines)
+    obstack_init/finish/blank/grow/next_free/object_size (obstack macros;
+        obstack.in.h 553 lines -> obstack.h, plus obstack.c 332 lines)
+    quotearg_buffer + clone_quoting_options/set_char_quoting/get_quoting_style
+        (quotearg.c 1084 lines -- the quoting_options struct is the keystone)
+    human_readable x7 (human.c 473 lines)
+    mbswidth x8 (mbswidth.c 200 lines -> needs wcwidth/mbrtowc)
+    filevercmp x4 (filevercmp.c 188 lines, self-contained)
+    mpsort x2 (mpsort.c 156 lines, self-contained)
+    filemodestring x1 (filemode.c 166 lines)
+    strftime x7 (nstrftime/strftime.c 2051 lines -- the -l time column)
+    hard_locale x2, argmatch/argmatch_valid x3 (argmatch.c 293 lines)
+    xstrtoumax/xstrtol x4 (xstrtol.c 247 lines)
+    file_has_acl x5 (file-has-acl.c 684 lines; --disable-acl stubs it)
+    areadlink/areadlink_with_size x2 (areadlink.c 56 lines)
+    canonicalize_filename_mode x2 (canonicalize.c 469 lines -> realpath family)
+    getuser/getgroup x2 (idcache.c 228 lines)
+    xgethostname x2 (xgethostname.c 28 + gethostname.c 104)
+    c_strncasecmp x2 (c-strncasecmp.c 56 lines)
+    last_component x1 (basename-lgpl.c), umaxtostr x9 (inttostr; imaxtostr)
+
+THE ACTUAL BLOCKER (why the verbatim-gnulib path did not link this phase):
+
+  The tarball lib/ ships the module .c files but NOT their generated .h:
+  obstack.h (from obstack.in.h), the C-library replacement headers
+  (stdlib.h/string.h/wchar.h/... from *.in.h), and the gnulib config
+  machinery (config.h with the HAVE_* set, plus the _GL_ATTRIBUTE_*,
+  intprops.h, verify.h, attribute.h glue) are produced by `./configure` +
+  `make` in lib/.  A NATIVE configure of the cu-full tarball succeeds
+  (FORCE_UNSAFE_CONFIGURE=1 ./configure --disable-nls --disable-acl -> lib/
+  config.h generated) but the OpenIndiana host's gnulib decides the SYSTEM
+  headers suffice, so it does NOT emit local obstack.h / stdlib.h / string.h
+  files -- they resolve from /usr/include natively.  For the CROSS build
+  against the reduced solnix libc (which has no obstack.h, no gnulib
+  wrappers), those generated headers are absent, and quotearg.h/human.h/etc.
+  hard-#error "Please include config.h first" and demand the _GL_ATTRIBUTE_*
+  macros.  So the verbatim-.c path needs the gnulib GENERATED-header
+  environment reproduced for the riscv64 target, which the native configure
+  does not hand over.
+
+R-P45 PLAN (two viable routes, in preference order):
+
+  ROUTE A (verbatim gnulib, faithful): drive the gnulib header generation for
+  the cross target -- either (a) run coreutils' `make` far enough that lib/
+  emits obstack.h + the *.in.h-derived headers + intprops.h/verify.h/
+  attribute.h into a dir, then feed THAT dir + a hand-tuned config.h (HAVE_*
+  matching the solnix libc) to the cross-compile of ls.c + the module .c set;
+  or (b) fetch the gnulib obstack.h/intprops.h/... directly and pin a config.h.
+  Then link ls.c + {obstack,mpsort,hash,quotearg,filevercmp,mbswidth,human,
+  filemode,argmatch,xstrtol,idcache,areadlink,xgethostname,canonicalize,
+  nstrftime}.c verbatim, growing the libc for wcwidth/mbrtowc (mbswidth),
+  realpath (canonicalize), nl_langinfo/localeconv (human/strftime).
+
+  ROUTE B (façade, the proven house pattern -- started this phase): the
+  ls-include/ scaffold is already staged: config.h + system.h -> ls_glue.h,
+  and thin ls-include/<module>.h shims that all route to ls_glue.h (mirroring
+  cu3-include's system.h -> cu3_glue.h that made wc/head/tail/env link
+  UNMODIFIED).  R-P45 fills ls_glue.h with the C-locale-reduced APIs for the
+  ls surface above (the quoting_options struct + quotearg_buffer, obstack via
+  the real obstack.in.h dropped in as obstack.h, human_readable, mbswidth via
+  the grown wcwidth, filevercmp/mpsort verbatim, filemodestring, the id
+  caches, canonicalize via realpath).  ls.c stays UNMODIFIED -- the glue lives
+  in the include façade, exactly as for the 10 landed utils.
+
+  Either route: boot proof is `/bin/lsup /`, `/bin/lsup -l /etc`,
+  `/bin/lsup -la /blk/sub` -- the build-kernel.sh console feed + the R-P44.3
+  assertions are ALREADY wired (they DEFER cleanly when corelsup.dyn is
+  absent, and will PASS the moment it links).  ls then JOINS the real-upstream
+  set (11 utils) alongside echo/true/cat/wc/head/tail/basename/dirname/pwd/env.
+
+STAGED FOR R-P45 (already on the node under rp44/):
+  libc/port/setjmp.S, libc/include/setjmp.h          (DONE, in libc.a)
+  user/sjtest.c, user/sjtest.dyn                      (DONE, /bin/sjtest)
+  user/ls-include/{config.h,system.h,<31 module>.h}   (Route B scaffold)
+  user/ls-include/selinux/selinux.h, sys/ioctl.h, termios.h  (system shims)
+  kernel/build-kernel.sh: /bin/lsup console feed + R-P44.3 assertions (DEFER
+      until corelsup.dyn exists, then PASS)
+  upstream/cu-full/coreutils-9.5: NATIVELY CONFIGURED (lib/config.h generated)
+      -- the Route A header-generation starting point.

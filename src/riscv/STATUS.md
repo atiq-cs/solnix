@@ -1,5 +1,59 @@
 # RISC-V (riscv64) port — STATUS
 
+**Phase reached: R-P44** (the R-P43 kernel -- which ran 10 real, UNMODIFIED
+upstream coreutils utils [echo/true/cat/wc/head/tail/basename/dirname/pwd/env]
+on one reusable libc.a -- now gains a **REAL riscv64 setjmp/longjmp** (the RISC-V
+psABI callee-saved save/restore in asm) in that same libc.a, boot-verified
+under qemu-system-riscv64 -machine virt -smp 2 -- 154 PASS / 0 FAIL.)
+
+R-P44 deliverables (all boot-verified, -smp 2, on top of the R-P24..R-P43
+regressions which stay green):
+
+1. **REAL riscv64 setjmp/longjmp (libc/port/setjmp.S + libc/include/setjmp.h).**
+   setjmp saves the RISC-V psABI callee-saved set into the jmp_buf -- integer
+   ra/sp/s0(fp)/s1/s2..s11 (14 uint64 slots) followed by the float fs0..fs11
+   (12 uint64 slots); longjmp restores them and returns val, or 1 if val==0
+   (the C89 rule).  gp/tp are per-thread-fixed and not saved.  _setjmp/_longjmp
+   alias the plain forms, and (no signal mask in this reduced libc)
+   sigsetjmp/siglongjmp are #defined to setjmp/longjmp.  The asm is assembled
+   by the on-node riscv64-unknown-elf-as and added to the reusable libc.a via
+   build-libc.sh; nm shows setjmp/longjmp defined T in libc.a.  Self-tested
+   standalone: user/sjtest.c (/bin/sjtest) sets a jmp_buf, longjmps back over a
+   nested stack-burning call -- the boot log shows the setjmp call site
+   returning 42 with the stack intact ("SJTEST PASS: longjmp returned 42, stack
+   intact") and the longjmp(env,0)->returns-1 rule.  This is the reusable,
+   valuable headline part 1 and is DONE.  (Finding: coreutils-9.5 ls.c does not
+   call setjmp/longjmp directly -- it only #includes <setjmp.h> for the type,
+   which now resolves; the real setjmp/longjmp is correct + reusable regardless.)
+
+2. **The faithful UNMODIFIED coreutils-9.5 src/ls.c -- scoped + DEFERRED to
+   R-P45.**  This phase precisely scoped ls.c's gnulib surface (31 module
+   headers; the exact ls-called API: hash/obstack/quotearg/human/mbswidth/
+   mpsort/filevercmp/filemode/argmatch/xstrtol/idcache/areadlink/xgethostname/
+   canonicalize/strftime) and found the concrete blocker: the tarball lib/
+   ships the module .c but NOT their GENERATED headers (obstack.h from
+   obstack.in.h, the C-library *.in.h wrappers, and the _GL_ATTRIBUTE_*/
+   intprops.h/verify.h + a HAVE_* config.h).  A native configure of the
+   cu-full tarball succeeds (lib/config.h generated) but gnulib uses the host
+   /usr/include there, so it emits no local obstack.h/stdlib.h for the cross
+   build against the reduced solnix libc.  The Route-B facade scaffold (the
+   proven cu3-include system.h->glue pattern) is staged under
+   user/ls-include/ (config.h + system.h + 31 module-header shims all routing
+   to ls_glue.h), and the build-kernel.sh /bin/lsup console feed + R-P44.3
+   assertions are ALREADY wired -- they DEFER cleanly when corelsup.dyn is
+   absent and PASS the moment ls.c links.  See rp44/LS-STATUS.txt for the full
+   scoping + the R-P45 plan (Route A verbatim-gnulib header generation, or
+   Route B facade).  The from-scratch R-P41 ls (/bin/corels) stays the ls
+   exerciser meanwhile.
+
+R-P44 boot proof (rp44/qemu-boot.log, saved via tee): SJTEST PASS x2 (longjmp
+42 + stack intact, val==0->1), libc.a defines setjmp/longjmp T, all
+R-P24..R-P43 regressions green -- 154 PASS / 0 FAIL under -smp 2.  Next: R-P45
+(land the faithful UNMODIFIED ls.c per rp44/LS-STATUS.txt, so ls joins the
+real-upstream set for 11 utils).
+
+---
+
 **Phase reached: R-P43** (the R-P42 kernel -- which ran 8 real, UNMODIFIED
 upstream coreutils utils [echo/true/cat/wc/head/tail/basename/dirname] on one
 reusable libc.a -- now **links + runs 2 MORE real, UNMODIFIED upstream

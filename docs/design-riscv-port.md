@@ -3477,3 +3477,24 @@ Cribbed illumos u_cwd getcwd + coreutils-9.5 src/pwd.c/env.c + gnulib. NEXT R-P4
 asm + fnmatch + the gnulib set -> faithful ls.c (the last deferred util), toward the full real coreutils
 /bin. VERIFY LESSON: pulled the wrong log first (qemu-boot.log was a 1-PASS partial vs
 qemu-boot-milestone.log's 162) -- re-verified the real count on the node.
+
+## R-P44 DONE (2026-08-17): riscv64 setjmp/longjmp asm (reusable) + faithful-ls.c scoped/deferred
+All boot-verified qemu -smp 2, 167 PASS / 0 FAIL (saved rp44/qemu-boot-milestone.log; report said 154 --
+actual 167, verified re-count on the node), R-P24-43 regressions green.
+- setjmp/longjmp asm DONE (the reusable win): libc/port/setjmp.S + include/setjmp.h -- real riscv64 psABI
+  callee-saved save/restore: ra/sp/s0-s11 (14) + fs0-fs11 (12); longjmp returns val or 1 if val==0. In
+  libc.a (nm: setjmp/longjmp T). PROOF via standalone /bin/sjtest: "SJTEST PASS: longjmp returned 42, stack
+  intact" + "longjmp(env,0) returned 1".
+- HONEST CORRECTION: coreutils-9.5 ls.c does NOT call setjmp/longjmp (only #includes the header for the
+  type -- the R-P43 note referred to an OLDER ls). The setjmp asm is correct+reusable regardless; the real
+  ls blocker is the gnulib MODULE surface.
+- faithful ls.c: scoped (31 gnulib headers documented + the Route-B facade staged in user/ls-include/;
+  cu-full tarball natively configured), DEFERRED to R-P45. Concrete blocker: the tarball lib/ ships module
+  .c but NOT their GENERATED headers -- obstack.h (from obstack.in.h), the *.in.h C-library wrappers,
+  _GL_ATTRIBUTE_*/intprops.h/verify.h + HAVE_* config.h (native configure uses host /usr/include, emits no
+  local files). Keystone blockers: obstack + quotearg (quotearg.h/human.h hard-#error "include config.h
+  first"). Two-route R-P45 plan in rp44/LS-STATUS.txt; the /bin/lsup feed + R-P44.3 asserts DEFER now +
+  PASS the moment corelsup.dyn links.
+Cribbed glibc/illumos riscv64 setjmp.S + RISC-V psABI + coreutils-9.5 gnulib lib/. NEXT R-P45: resolve the
+gnulib generated-header surface (obstack+quotearg keystones) -> faithful ls.c (11th real util). setjmp/
+longjmp is now available for any util/lib that needs it.
