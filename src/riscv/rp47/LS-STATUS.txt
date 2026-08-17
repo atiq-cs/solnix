@@ -1,0 +1,100 @@
+R-P47 -- the two R-P46 deferred faults FIXED + 1 more real util (false)
+======================================================================
+
+HEADLINE #1 (DONE, boot-verified -smp 2): the FULL `ls -l` output/cleanup path
+no longer SIGSEGVs at exit.
+
+  ROOT CAUSE (bisected in R-P47):
+    R-P46 printed the -l line ("... Jan release") then took a SIGSEGV.  The
+    fault PC was inside the reduced libc `free` reached from `fclose`, at the
+    exit-time atexit hook `close_stdout` (gnulib).  `close_stdout` does
+    fclose(stdout); the reduced libc `fclose` (libc/port/stdio2.c) then
+    UNCONDITIONALLY called free() on the FILE.  But stdin/stdout/stderr are
+    STATIC FILEs (`&__stdout`, with a static `__out_buf`), NOT heap blocks.
+    free(&__stdout) computed a bogus block header (`&__stdout - HDR`), and the
+    first-fit allocator's forward-coalesce then dereferenced a clobbered `next`
+    pointer -> a load fault.  (This is why the +FORMAT / default -l runs faulted
+    at exit but the earlier utils that never fclose(stdout) did not.)
+
+  THE FIX (one place, all callers -- libc/port/stdio2.c + stdlib.c):
+    * fclose() now frees only a HEAP stream: it skips free() (and the buffer
+      free) for stdin/stdout/stderr.  This matches glibc/illumos -- the standard
+      streams are never freed on fclose.  Every close_stdout/atexit caller
+      benefits.
+    * free() (libc/port/stdlib.c) also gained a defensive heap-bounds guard
+      (ignore a pointer outside [__heap_head, __brk_cur)) + a coalesce-target
+      sanity check, so a stray non-heap free can never fault the allocator.
+
+  PROOF (rp47/qemu-boot.log, boot-verified -smp 2):
+    /bin/lsup -l --time-style=+%b /etc  ->
+        total 1
+        -rw-r--r-- 1 0 0 44 Jan release
+        [exit 0]
+    The REAL UNMODIFIED ls prints the whole long line (mode / nlink / owner /
+    group / size / MONTH / name) AND exits cleanly.  (R-P46: month printed,
+    then SIGSEGV.)
+
+HEADLINE #2 (DONE, boot-verified -smp 2): `yes | head` over a closing pipe no
+longer faults the kernel.
+
+  ROOT CAUSE (bisected in R-P47):
+    `head -3` reads 3 lines then exits, closing the pipe read end.  Before the
+    writer even hit the closed pipe, the kernel took a synchronous load fault:
+        [trap] scause=0xd sepc=<fop_getattr> stval=0x0
+    `head` (and `yes`) fstat their stdin/stdout up front; the pipe fd has
+    f_pipe set and f_vnode == NULL, but proc_fstat (kernel/proc.c) called
+    fop_getattr((vnode*)f_vnode) unconditionally -> fop_getattr's `ld 0(a0)`
+    with a0==NULL -> a NULL-vnode load fault that halted the kernel.
+
+  THE FIX (kernel/proc.c):
+    * proc_fstat + proc_lseek now GUARD pipe fds: fstat of a pipe reports a
+      char-special of size 0 (no NULL-vnode deref); lseek of a pipe returns
+      ESPIPE.  (The read/write paths already routed pipe fds to
+      pipe_read/pipe_write.)
+    * pipe_write() now POSTS SIGPIPE (sig 13, default action = terminate) to
+      the writer via proc_kill(curpid, SIGPIPE) when the readers hit 0, and
+      returns EPIPE.  Delivery happens on the trap-return edge
+      (proc_deliver_signals), so the writer dies gracefully instead of spinning
+      or faulting in the teardown.  SIGPIPE (13) + EPIPE (-32) added to proc.c.
+
+  PROOF (rp47/qemu-boot.log):
+    /bin/coreyes | /bin/corehead -3  ->
+        ...
+        [signal] sig 13 default action: terminate pid 48
+    $ echo pipe-survived
+    pipe-survived
+    yes takes SIGPIPE when head closes the read end; the shell survives to run
+    the next command; NO [trap] halting.
+
+ONE MORE REAL UTIL (bank progress):
+  * false -- UNMODIFIED coreutils-9.5 src/false.c (which #includes true.c
+    verbatim, EXIT_FAILURE), linked against the real libc.a via the lsup gnulib
+    support objects (progname/closeout/quotearg/version-etc/proper_name_lite +
+    the cu4 getopt.o).  Boot-verified: /bin/corefalse runs + exits 1.  14 real
+    UNMODIFIED upstream coreutils now link the one reusable libc.a.
+
+DEFERRED TO R-P48 (isolated; NOT the %b/format path -- that is proven fixed):
+  1. The locale-abformat DEFAULT `ls -l /etc` (no --time-style; long_time_format
+     "%b %e  %Y" / "%b %e %H:%M" spliced into the abformat[] globals) still
+     STALLS in ls startup BEFORE it prints `total`.  Evidence it is NOT the
+     %b/nstrftime path: (a) `ls -l --time-style=+%b /etc` prints the month AND
+     exits cleanly (headline #1); (b) the REAL gnulib nstrftime formats the
+     exact default abformat string "Jan %e  %Y" -> "Jan  1  1970" in isolation
+     (stftest2, via tzalloc/localtime_rz).  So the stall is in the wider
+     default-`-l` startup (abmon_init's 12 nl_langinfo+mbswidth calls, the
+     long_time_expected_width width probe, or the locale/hard_locale path), not
+     the time formatting.  In the milestone feed the default -l is run
+     BACKGROUNDED (`ls -l /etc &`) so the stall cannot block the boot / init
+     reap.  R-P48: bisect abmon_init + long_time_expected_width with a small
+     instrumented harness; likely a reduced-libc mbrtowc/wcwidth or
+     nl_langinfo(ABMON) loop under the C locale.
+
+BUILD ENTRY POINTS (self-contained under rp47/; scripts retargeted rp46->rp47):
+  libc/port/stdio2.c          fclose: skip free for stdin/stdout/stderr
+  libc/port/stdlib.c          free: heap-bounds guard + coalesce sanity
+  kernel/proc.c               proc_fstat/proc_lseek pipe guards; pipe_write
+                              posts SIGPIPE; SIGPIPE(13)/RERR_EPIPE(-32) defs
+  user/build-cu5.sh           compile+link false.c (UNMODIFIED) on libc.a
+  kernel/build-kernel.sh      feed: +%b -l (clean exit) + yes|head (SIGPIPE) +
+                              false + default -l backgrounded; R-P47.1/.2/.3
+                              assertions; R-P47.1 DEFER note

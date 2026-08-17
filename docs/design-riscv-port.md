@@ -3540,3 +3540,25 @@ exitfail.c filename + "no failure" prose + DEFER lines), R-P24-45 regressions gr
 Cribbed gnulib nstrftime/time_rz + coreutils-9.5 whoami.c/yes.c + illumos libc getuid. NEXT R-P47: the full
 ls -l output-path SIGSEGV + the pipe SIGPIPE teardown, toward robust ls -l + pipelines. The vfprintf .prec
 fix is a broad libc correctness win (every %.*s/%.Ns caller). VERIFY: 177 PASS confirmed on node.
+
+## R-P47 DONE (2026-08-17): ls -l SIGSEGV + pipe SIGPIPE root-caused+fixed (libc/kernel) -- 14 real utils
+All boot-verified qemu -smp 2, 183 PASS / 0 real FAIL (verified on node; report said 184; the grep "FAIL"
+hits are misfires: exitfail/no-failure/DEFER), R-P24-46 regressions green.
+- ls -l SIGSEGV ROOT-CAUSED: the reduced libc fclose unconditionally free()'d the FILE, but stdin/stdout/
+  stderr are STATIC FILEs (&__stdout + static buffer); gnulib close_stdout atexit -> fclose(stdout) ->
+  free(&__stdout) -> the first-fit allocator's exit-time coalesce deref'd a clobbered next -> SIGSEGV. FIX
+  (libc/port/stdio2.c + stdlib.c): fclose frees ONLY heap streams (skips std streams); free gained a
+  heap-bounds guard. PROOF: lsup -l --time-style=+%b /etc -> "-rw-r--r-- 1 0 0 44 Jan release" + exit 0.
+- yes|head SIGPIPE ROOT-CAUSED: the kernel took a NULL-vnode load fault (fop_getattr ld 0(a0), a0=NULL)
+  because proc_fstat on a pipe fd (f_vnode==NULL) deref'd the null vnode when head fstat'd its pipe stdin.
+  FIX (kernel/proc.c): proc_fstat/proc_lseek guard pipe fds (char-special size 0 / ESPIPE, no deref) +
+  pipe_write posts SIGPIPE(13) to the writer when readers hit 0. PROOF: coreyes | corehead -3 -> sig 13
+  terminate the writer, then echo pipe-survived -> pipe-survived (no halt).
+- +false (UNMODIFIED coreutils false.c). 14 real upstream coreutils on one libc.a.
+- DEFERRED R-P48: the DEFAULT ls -l /etc (locale abformat "%b %e %Y", no --time-style) stalls in ls STARTUP
+  before "total" -- NOT the %b/format path (proven: +%b exits clean, gnulib nstrftime formats it in
+  isolation); likely abmon_init's nl_langinfo/mbrtowc/wcwidth loop under the C locale. In LS-STATUS.txt.
+Cribbed coreutils-9.5 false.c + illumos libc stdio/free + pipe/SIGPIPE (fifo_close + sig delivery). NEXT
+R-P48: the default-ls-l abmon_init startup stall + more utils (nproc/uname/mkdir need num_processors/
+systeminfo/getlogin). The fclose-static-stream + free-bounds + pipe-SIGPIPE fixes are broad correctness
+wins (every fclose/free/pipe caller). VERIFY: 183 PASS confirmed on node.

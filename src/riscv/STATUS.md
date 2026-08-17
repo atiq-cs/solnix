@@ -1,6 +1,66 @@
 # RISC-V (riscv64) port — STATUS
 
-**Phase reached: R-P46** (the R-P45 kernel -- which linked + ran the faithful
+**Phase reached: R-P47** (the R-P46 kernel -- which fixed the %b/nstrftime
+blocker and added whoami/yes -- now **FIXES the two R-P46 deferred faults** and
+adds **1 more UNMODIFIED coreutils** (false).  (1) The FULL `ls -l` output/
+cleanup path no longer SIGSEGVs at exit: the reduced libc `fclose()` was calling
+`free()` on the STATIC `stdout` stream (a non-heap FILE) from gnulib's
+`close_stdout` atexit hook, corrupting the first-fit heap so the exit path
+faulted; fixed by making `fclose` skip `free` for stdin/stdout/stderr (+ a
+defensive heap-bounds guard in `free`).  `ls -l --time-style=+%b /etc` now
+prints the whole long line (mode/nlink/owner/group/size/**MONTH**/name) AND
+exits 0.  (2) `yes | head` over a closing pipe no longer faults the kernel: the
+kernel took a NULL-vnode load fault because `fstat` of the pipe fd routed
+through `fop_getattr(f_vnode==NULL)`; fixed by guarding pipe fds in
+`proc_fstat`/`proc_lseek` and posting **SIGPIPE** (sig 13, default terminate)
+to the writer in `pipe_write` when the readers hit 0 -- `yes` dies cleanly and
+the shell survives.  (3) `false.c` (== `true.c` with EXIT_FAILURE) is the 14th
+UNMODIFIED upstream coreutils on the one reusable libc.a.  Boot-verified under
+qemu-system-riscv64 -machine virt -smp 2 -- **184 PASS / 0 real FAIL**.  One
+item deferred to R-P48: the locale-abformat DEFAULT `ls -l` ("%b %e  %Y", no
+--time-style) still stalls in ls startup BEFORE the listing (NOT the +%b path,
+which exits cleanly); run backgrounded so it cannot block the boot.  See
+rp47/LS-STATUS.txt.)
+
+R-P47 deliverables (all boot-verified, -smp 2, on top of the R-P24..R-P46
+regressions which stay green):
+
+1. **FIXED the full `ls -l` output-path SIGSEGV (headline #1).**  Root cause:
+   the reduced libc `fclose` (libc/port/stdio2.c) unconditionally `free()`d the
+   FILE, but stdin/stdout/stderr are STATIC FILEs (`&__stdout`, static buffers).
+   gnulib's `close_stdout` (atexit) does `fclose(stdout)` -> `free(&__stdout)`
+   -> the first-fit allocator computed a bogus header and its exit-time coalesce
+   dereferenced a clobbered `next` -> SIGSEGV.  Fix: `fclose` frees only a heap
+   stream (skip stdin/stdout/stderr); `free` also gained a heap-bounds guard.
+   PROVEN: `ls -l --time-style=+%b /etc` -> `-rw-r--r-- 1 0 0 44 Jan release`
+   + `[exit 0]` (was: month printed then SIGSEGV).
+
+2. **FIXED the yes|head kernel pipe-teardown fault (headline #2).**  Root cause:
+   `proc_fstat` (kernel/proc.c) called `fop_getattr` on a pipe fd's NULL vnode
+   (`f_pipe` set, `f_vnode==0`) -> NULL load fault (`fop_getattr` `ld 0(a0)`,
+   `a0==0`) when `head` fstat'd its pipe stdin.  Fix: `proc_fstat`/`proc_lseek`
+   guard pipe fds (report a char-special of size 0 / ESPIPE, no NULL deref),
+   and `pipe_write` posts SIGPIPE (sig 13) to the writer when the readers reach
+   0.  PROVEN: `yes | head -3` -> `[signal] sig 13 default action: terminate`
+   for `yes`, then `echo pipe-survived` runs (no `[trap] halting`).
+
+3. **One MORE UNMODIFIED coreutils-9.5 util: false.**  false.c (which
+   `#include`s true.c verbatim, EXIT_FAILURE) links the real libc.a via the
+   lsup gnulib support objects; `/bin/corefalse` runs + exits 1 -- 14 real
+   upstream coreutils on one libc.a.
+
+4. **Deferred to R-P48.**  The locale-abformat DEFAULT `ls -l` ("%b %e  %Y",
+   no --time-style) still stalls in ls startup BEFORE printing `total`.  The
+   +%b path (proven above) exits cleanly, and gnulib nstrftime formats the
+   exact abformat string in isolation (stftest2), so this is NOT the %b/format
+   path -- it is a separate stall in the wider default-`-l` startup.  Run
+   backgrounded (`ls -l /etc &`) so it cannot block the boot.
+
+---
+
+## R-P46 (previous phase)
+
+**Was: R-P46** (the R-P45 kernel -- which linked + ran the faithful
 UNMODIFIED coreutils-9.5 ls.c -- now **FIXES the R-P45 deferred %b/nstrftime
 blocker** and adds **2 more UNMODIFIED coreutils** (whoami, yes).  The %b
 abbreviated-month time format -- which hung in nstrftime's abformat path in
