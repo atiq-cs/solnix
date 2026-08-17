@@ -1265,3 +1265,24 @@ under the sparc kernel). FIX = port the x86 0003 pty patch's runtime behavior to
 then sparc breadth runs natively on 2.24 (not 2.3.16). Until then: 2.24 evaluates/realises (cache-coherent),
 2.3.16 builds. NEXT sparc tranche: the PTY builder fix + the github-archive clean-src fix for lz4/jansson/
 libsodium/c-ares.
+
+## PS-DESKTOP-ISO-CACHE-HOLE (2026-08-17): the nix-native ISO exposed a G0-wave publish gap (14 X libs 404)
+The nix-native desktop ISO agent did the RIGHT thing -- REFUSED to fall back to host-sourced (the prior
+agent's error) and found a real CACHE-INTEGRITY problem. It pulled + verified nix-native from cache:
+xorg-server 21.1.24, xterm-410, dwm-6.6 (all AMD64 illumos ELFs, RUNPATH entirely /nix/store, only
+non-store NEEDED = illumos system libs -- correct nix-native) + 46 closure paths. BUT 14 core X/font
+RUNTIME libs are GENUINELY 404 on cache.solnix.io (not a 429; retried 3-6x): libX11/libxcb/libXau/libXdmcp/
+libXext/libXfixes/libglvnd/libepoxy/freetype/fontconfig-lib/brotli-lib/libICE/libSM/dbus-lib. ROOT CAUSE:
+the G0 desktop wave publish was INCOMPLETE -- only top-level narinfos (+ their -dev/-devdoc/-bin) landed;
+the transitive RUNTIME narinfos did NOT. (The registry hashes libx11 4v0.../mesa-softpipe bgh... are 404;
+cairo 0k9.../pango 4rid... point at -devdoc/-dev not runtime.) A NATIVE REBUILD produces DIFFERENT hashes
+(local libx11 .drv = hydl04fg vs cached an761) -- so the closure can only be satisfied by REPUBLISHING the
+14 from the ORIGINAL cross-builder that made the G0 wave (or a hash-coherent rebuild). So: the nix-native
+desktop ISO is NOT buildable until the 14 libs are republished -- ISO NOT built (honestly, not host-faked).
+FIX: rebuild the 14 X/font runtime libs hash-coherently (the G0 wave's builder/overlay) + republish their
+narinfos+nars to cache, THEN run /var/tmp/solnix-nix-native-desktop/nix-native-desktop-build.sh (the
+one-command finish). Also: oi-make-livecd.sh GRAPHICAL=1 is Xfce-wired -> adapt its .xinitrc + xorg lookup
+to dwm/xorg-server-21.1.24 (the El-Torito BIOS+UEFI + live-user + LD_LIBRARY_PATH machinery is reusable).
+BROADER LESSON: this is a cache-completeness audit finding -- the G0 wave (+ possibly others) published
+top-level but not full runtime closures; a cache-closure-completeness audit would catch other holes. The
+prior host-sourced ISO (solnix-x86_64-desktop.iso, 185MB) stays a PoC, NOT published as solnix.
