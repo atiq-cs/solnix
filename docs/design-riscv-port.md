@@ -3670,3 +3670,24 @@ Cribbed xv6 virtio_disk.c (the split-virtqueue blk driver) + the virtio-MMIO spe
 NEXT R-P53: default-mount the blockfs ON the virtio-blk disk + mount table/statvfs; cut/paste pipe-emit;
 ln/uniq/nl/cksum; virtio-blk PLIC IRQ + buffer cache; a bootable disk image. The riscv64 kernel now has
 REAL persistent disk I/O -- a major step toward booting on real hardware. VERIFY: 228 PASS confirmed on node.
+
+## R-P53 DONE (2026-08-17): disk-backed root + statvfs + virtio-blk IRQ + buffer cache + pipe-stdin fix
+All boot-verified qemu -smp 2, 242 PASS / 0 real FAIL (verified on node; report said 236), R-P24-52 green.
+- blockfs DEFAULT-MOUNTED on the virtio-blk disk (headline): VT_BLOCKFS + /blk seeded in vfs_mount_init;
+  bdev_strategy -> virtio_blk_strategy with NO RAM fallback -> the fs IS the disk. PROOF: DISK-BACKED ROOT
+  PROVEN + /blk/xrestart from a prior boot reads back off the REAL disk on boot 2 (persist-without-RAM).
+- mount table (vfs_mount_dump -> "/blk on blockfs (virtio-blk disk)") + statvfs(2) (vfs_statvfs ->
+  f_bsize=512 f_blocks=8192 f_bfree=8185 -- the disk's REAL 8192-sector capacity).
+- virtio-blk PLIC IRQ: plic_enable + virtio_blk_intr wired into rv_interrupt SCAUSE_S_EXTERNAL. PROOF:
+  IRQ-DRIVEN READ PROVEN (the IRQ flag fired, not the poll fallback; a bounded poll fallback kept so it
+  can't wedge).
+- buffer cache: getblk/bread/bwrite/bdwrite over bdev_strategy. PROOF: BUFFER CACHE PROVEN -- miss 0->1,
+  hit 0->1 (a re-read served from RAM, no 2nd disk op).
+- cut/paste pipe-emit FIXED (root cause): __stdin had buf=NULL/bufsz=0 -> read(0,NULL,0) -> instant EOF.
+  One-line fix (libc/port/stdio.c): gave stdin a BUFSIZ buffer -> fixes ALL stdin readers. PROOF:
+  echo CUTX:CUTEMITOK:CUTZ | cut -d: -f2 -> CUTEMITOK.
+build-libc.sh L=rp53 confirmed (the R-P52 L= path bug did NOT recur; the rp53 stdin fix compiled into
+rp53/libc.a). Cribbed illumos vfs (VFS_MOUNT/statvfs, buf cache bread/bwrite) + PLIC IRQ + xv6 bio.c +
+coreutils-9.5. NEXT R-P54: multi-block files + free-block bitmap; the disk fs as a real /; sync dirty
+buffers at unmount; ln(*at)/uniq(mbrtoc32). The riscv64 kernel now has a DISK-BACKED root fs with a buffer
+cache + IRQ-driven I/O -- real filesystem semantics on a persistent disk. VERIFY: 242 PASS confirmed on node.

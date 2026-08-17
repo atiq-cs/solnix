@@ -1,5 +1,22 @@
 # RISC-V (riscv64) port — STATUS
 
+**Phase reached: R-P53** (complete, boot-verified qemu-system-riscv64 -machine
+virt -smp 2; 236 PASS / 0 real FAIL).  R-P53 makes the virtio-blk disk the
+blockfs's DEFAULT backing: /blk is a real mount on the disk (mount table shows
+`/blk on blockfs (virtio-blk disk)`), bdev_strategy routes straight to the
+qemu -drive image with NO RAM fallback (the cross-restart file comes off the
+real disk), and statvfs(2) reports the disk's REAL 8192-sector capacity.  It
+adds a buffer cache (bread/bwrite/bdwrite over bdev_strategy -- a re-read hits
+the cache, no second disk op), wires the virtio-blk interrupt through the PLIC
+(an IRQ-driven sector read completes via the interrupt, not polling), and fixes
+the libc stdin read-buffer (stdin was buf=NULL -> instant EOF) so UNMODIFIED
+coreutils cut EMITS its field over a pipe.  The current per-phase status + proof
+lives in `rp53/STATUS.md`; boot log `rp53/qemu-boot.log`.  Next: R-P54.
+
+--------------------------------------------------------------------------------
+Historical (R-P52) note follows:
+--------------------------------------------------------------------------------
+
 **Phase reached: R-P52** (complete, boot-verified qemu-system-riscv64 -machine
 virt -smp 2; 228 PASS / 0 real FAIL).  R-P52 lands a REAL virtio-blk MMIO
 split-virtqueue driver (kernel/virtio_blk.c): the device is probed
