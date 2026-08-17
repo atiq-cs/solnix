@@ -1089,3 +1089,17 @@ jsonschema/hypothesis/cryptography/bcrypt/pynacl/pydantic-core/rpds-py (rust), p
 brotli/regex (cmake H26 / build-splice), numpy (deferred). The pip ecosystem is now USABLE on illumos.
 NEXT: the rust-on-illumos toolchain would unlock the biggest remaining python pool (cryptography/pydantic/
 hypothesis) + gates COSMIC + much ML tooling -- a high-value future port.
+
+## PS-AARCH64-WAVE11 (2026-08-16): +13 C++ pkgs -- the C++ class HARVESTED
++13 EM_AARCH64 pkgs (all published, 0 failed) proving the cracked C++ wall works: abseil-cpp + re2 (OPENS
+the serialization/cmake-graph class), gtest/gmock/catch2/doctest/spdlog (dev/test), eigen/range-v3/cxxopts/
+cli11/magic-enum (header-only C++), flatbuffers(+flatc)/leveldb. Fixes: cxxExt/cmStatic env-aware, spdlog
+tm_gmtoff (illumos hides it under g++ even w/ __EXTENSIONS__ -> compute from timezone/altzone), catch2
+isnan->std::isnan, strip test-flags that force network/gtest (abseil ABSL_*_GOOGLETEST, re2 RE2_USE_ICU),
+-D__EXTENSIONS__ + CMAKE_CXX_EXTENSIONS=ON. aarch64 now 164 rows (13->164 this session). SKIPPED (all
+orthogonal to the C++ wall -- the meson/ninja->python3->NATIVE-openssl drag): font stack (harfbuzz/fribidi/
+pango -- meson-only, no autotools path), protobuf (needs a build-platform protoc whose native chain drags
+native gtest->openssl). ROOT CAUSE of all remaining skips = the NATIVE openssl-3.6.3 build FAILS ("ld:
+symbol referencing errors" -- the H6 native-syslib -L gap on the BUILD platform). THE single highest-leverage
+next target: fix native openssl (build-platform) -> unblocks protobuf's native protoc + harfbuzz/fribidi
+meson + cxxopts icu. wave12 = fix native openssl then harvest protobuf/font-stack. wave11 entry -> fork.
