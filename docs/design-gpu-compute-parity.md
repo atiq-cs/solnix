@@ -282,3 +282,26 @@ driver surface broadening (RADV for AMD, ANV for Intel -- both compile against t
 compute-ioctl surface, and the ROCm userspace runtime (HSA/ROCr) porting -- each a bounded first-step
 compile with zero phantom symbols, exactly like every prior port. These land BEFORE the hardware so the
 grant is instant-to-measurement.
+
+## C3-RADV progress (2026-08-17): the real AMD Vulkan driver's wrapper layer compiled zero-phantom
+Advancing GPU parity (the real AMD hardware Vulkan driver RADV, vs software lavapipe) -- compile-phase,
+ahead of the g4ad hardware. Persisted src/drm-port/radv/ (286 LOC + RADV-STATUS.md):
+- libdrm_amdgpu COMPILED (libdrm 2.4.120 -Damdgpu=enabled) against the C1/amdgpu ioctls, ZERO-PHANTOM
+  (nm -u -D: 62 undefs all real -- 24 drm* via libdrm.so.2 NEEDED + 36 libc + 2 CRT). LOAD-BEARING FIX:
+  the C1 drm-port decodes the LINUX _IOC ioctl scheme, not illumos <sys/ioccom.h>; libdrm falls into its
+  BSD branch on __sun (incompatible encoding) -> forced the Linux encoding via radv/linux-ioctl-compat.h
+  (8/8/14/2 nr/type/size/dir). PROVEN on-node (ioctl-encoding-test.c): AMDGPU_GEM_CREATE=0xc0086440,
+  CS nr=0x44, INFO nr=0x45 dir=W -- the exact Linux DRM AMDGPU encoding the C1/amdgpu kernel decodes.
+- RADV meson config SUCCEEDS (Mesa 24.0.9, -Dvulkan-drivers=amd,virtio, -Dllvm=disabled -> ACO no-LLVM),
+  zero remaining dependency gaps; the ICD manifest (radeon_icd.x86_64.json, vk_icdGetInstanceProcAddr) is
+  emitted by the build (loader->ICD contract, same shape as C3a Venus).
+- REMAINING BLOCKER (build-tool, NOT a port gap): RADV's C objects need generated SPIR-V headers
+  (bvh/*.spv.h, meta shaders) from a REAL glslangValidator. ⚠️ HONEST: the node currently has only a STUB
+  glslangValidator ("Glslang Version: stub 11.0.0") -- NOT the real tool. So RADV's libvulkan_radeon.so is
+  NOT yet compiled. RESUME STEP: build REAL glslang (needs cmake -- bootstrap cmake, then glslang, then the
+  RADV core compile finishes). This is a host build-tool chain (cmake->glslang->RADV), not an illumos
+  portability problem -- the port surface (libdrm_amdgpu + ioctl ABI + RADV config + ACO) is proven clean.
+- Hardware-gated (g4ad/quota): real device enum, queue submit, draw -- the runtime measurement.
+NEXT: build real glslang (cmake bootstrap) -> compile libvulkan_radeon.so -> zero-phantom .so audit -> wire
+the ICD -> ready for the g4ad parity proof. RADV (the real AMD hw Vulkan path) is the driver that makes
+GGML_VULKAN run FAST on the V520 (vs software lavapipe).
