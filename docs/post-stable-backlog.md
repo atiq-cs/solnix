@@ -1164,3 +1164,18 @@ the pyo3-0.29 SchemaValidator rebuild (NOT the rust toolchain). SKIPPED: hypothe
 setuptools-rust, >2 tries). BLOCKERS: pydantic-core SchemaValidator (pyo3-0.29 rebuild), unixtools.nix
 solaris provider (one-line), on-host cargo-vendor (needs a vendor-FOD shim). Rust is now a productive
 solnix toolchain: real CLIs run + the python-crypto backend does real crypto.
+
+## PS-AARCH64-WAVE13 (2026-08-17): THE FONT STACK opens (COSMIC text-rendering foundation)
+Native python3 FIXED via the x86 Py_SUNOS_VERSION cross-pollination (sed socketmodule.c Py_SUNOS_VERSION<=510
+-> 0; + -z nodefs module link, H6 syslib -L -lsocket -lnsl -lmd -lmp, ac_cv_header_libintl_h=no,
+disallowedReferences=[], config.guess overwrite; applied to BOTH python3 + python314-meson-build-python via
+a fixPy helper). buildPackages.python3 RUNS (Python 3.14.6, imports socket/ssl/ctypes/sqlite3, OpenSSL
+3.6.3). -> the meson toolchain (native python3/meson/ninja/re2c) works. FONT STACK BUILT (target
+EM_AARCH64): fribidi(meson)/pixman(meson)/freetype(autotools)/harfbuzz(C++ meson, core shaper+subset)/
+fontconfig(autotools, dejavu stubbed to break the fontforge python3-env drag) + abseil-cpp. Native protoc
+runs (libprotoc 35.1); target abseil-cpp built; target protobuf wrapper skipped (cross cmake pulls
+tests.cmake/absl::scoped_mock_log). Native C++ tool wall solved: re2c/ninja/protoc died ld.so.1
+libstdc++.so.6-open-failed -> -L<gcc-unwrapped>/usr/gcc/10/lib/amd64. aarch64 now 176 rows. THE FONT/DESKTOP
+STACK IS SUBSTANTIALLY OPEN (freetype+harfbuzz+fribidi+pixman+fontconfig = the core text-rendering libs for
+COSMIC). REMAINING (wave14): cairo/pango need a TARGET aarch64 python3 interpreter (glib preFixup ->
+python3Packages -> the cross python3 build + its own socketmodule fix). wave13 entry -> fork.
