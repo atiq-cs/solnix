@@ -3737,3 +3737,31 @@ BOOTABLE-ROOT MILESTONE: the virtio-blk disk IS /, /bin+/sbin+/etc live on it, i
 it, files persist across a full restart with the disk as the live root. From NOTHING to a disk-rooted
 illumos-riscv64 kernel running a real coreutils userland off a persistent disk -- one step from a
 bootable-on-hardware image. VERIFY: 257 PASS confirmed on node.
+
+## R-P56 DONE (2026-08-17): solnix riscv64 boots like REAL HARDWARE -- -bios fw_payload.elf only, no -kernel
+All boot-verified, 260 PASS / 0 actual FAIL (verified on node; report said 226 verdict lines), R-P24-55
+green. build-libc.sh L=rp56 confirmed. THE headline: solnix riscv64 now boots the way real RISC-V hardware
+boots.
+- OpenSBI fw_payload boots -bios-ONLY: OpenSBI v1.8.1 built PLATFORM=generic FW_PAYLOAD=y
+  FW_TEXT_START=0x80000000 FW_PAYLOAD_PATH=unix.bin FW_PAYLOAD_OFFSET=0x200000; the kernel flattened
+  (objcopy -O binary, byte0==phys 0x80200000) + embedded as the payload. PROOF: qemu -machine virt -smp 2
+  -bios fw_payload.elf -drive disk.img (NO -kernel) -> OpenSBI v1.8.1 banner -> Domain0 Next Address
+  0x80200000 (S-mode) -> [mlsetup] S-mode entry from OpenSBI -> mounts disk root -> init/sh. (Solaris-target
+  binutils has no -pie -> firmware fixed non-PIE at 0x80000000, fine for -bios on qemu virt; Makefile edits
+  + opensbi-xtools/ cross-wrapper documented, Makefile.orig kept.) fw_payload.elf = 6.2MB.
+- Partition table + kernel reads root FROM the partition: disk.img got a DOS/MBR (part 1 type 0x83, start
+  LBA 2048, 8192 sectors / 5MiB). blockfs_probe_partition() parses the MBR -> blockfs_part_base; bdev_
+  strategy's virtio path offsets every blockfs block (bdev block N -> raw sector 2048+N). PROOF: MBR
+  PARTITION FOUND: root fs in partition 1 @ LBA 2048; the R-P55 root-pivot + cross-restart persistence
+  (/blk/xrestart + /root/persist) hold with the fs INSIDE the partition (boot 2 re-read across a full
+  restart); statvfs reports the 8192-block partition capacity.
+- 2-file bootable layout delivered (the standard RISC-V HW layout): fw_payload.elf (OpenSBI + embedded
+  kernel, 6.2MB) + partitioned disk.img (root partition, 5MiB), boots -bios-only. A single combined GPT
+  image = R-P57.
+Cribbed the OpenSBI fw_payload build (docs/firmware/fw_payload) + the RISC-V boot flow (OpenSBI M-mode ->
+S-mode payload) + MBR partition tables. NEXT R-P57: a single combined GPT image (boot+root on one disk;
+teach the kernel GPT), a real-HW block backend (SD/MMC or NVMe), + a device-tree parse (the kernel already
+receives the DTB at S-mode entry: dtb=0x82200000). THE MILESTONE: solnix riscv64 boots -bios fw_payload.elf
+only (OpenSBI in firmware -> the embedded kernel -> mounts its root fs from a real MBR partition), NO
+-kernel -- exactly how real RISC-V hardware boots. From NOTHING to a real-hardware-boot-flow illumos-riscv64
+OS in one session. VERIFY: 260 PASS confirmed on node.

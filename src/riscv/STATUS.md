@@ -1,18 +1,26 @@
-# RISC-V (riscv64) port — STATUS
+# RISC-V (riscv64) port -- STATUS
 
-**Phase reached: R-P53** (complete, boot-verified qemu-system-riscv64 -machine
-virt -smp 2; 236 PASS / 0 real FAIL).  R-P53 makes the virtio-blk disk the
-blockfs's DEFAULT backing: /blk is a real mount on the disk (mount table shows
-`/blk on blockfs (virtio-blk disk)`), bdev_strategy routes straight to the
-qemu -drive image with NO RAM fallback (the cross-restart file comes off the
-real disk), and statvfs(2) reports the disk's REAL 8192-sector capacity.  It
-adds a buffer cache (bread/bwrite/bdwrite over bdev_strategy -- a re-read hits
-the cache, no second disk op), wires the virtio-blk interrupt through the PLIC
-(an IRQ-driven sector read completes via the interrupt, not polling), and fixes
-the libc stdin read-buffer (stdin was buf=NULL -> instant EOF) so UNMODIFIED
-coreutils cut EMITS its field over a pipe.  The current per-phase status + proof
-lives in `rp53/STATUS.md`; boot log `rp53/qemu-boot.log`.  Next: R-P54.
+**Phase reached: R-P56** (complete, boot-verified qemu-system-riscv64 -machine
+virt -smp 2; 256 PASS / 0 real FAIL).  R-P56 makes a REAL BOOTABLE IMAGE that
+boots with `-bios fw_payload.elf` ONLY (NO `-kernel`) -- how real RISC-V
+hardware boots.  (1) The kernel is wrapped into an OpenSBI **fw_payload**
+(OpenSBI v1.8.1, PLATFORM=generic, FW_TEXT_START=0x80000000, the kernel embedded
+as the payload at FW_PAYLOAD_OFFSET=0x200000 -> 0x80200000): qemu boots
+`-bios fw_payload.elf` and OpenSBI (M-mode) jumps to the embedded solnix kernel
+(Domain0 Next Address 0x80200000, S-mode), which mounts the disk root -> init/sh.
+(2) `disk.img` gets a DOS/MBR partition table (part 1, type 0x83, start LBA 2048,
+8192 sectors); the kernel parses the MBR (`blockfs_probe_partition`) and
+reads/writes the root fs FROM THE PARTITION (one partition-base offset in
+`bdev_strategy`); the R-P55 full root-pivot + cross-restart persistence still
+hold with the fs INSIDE the partition.  (3) The bootable image is the standard
+2-file RISC-V HW layout: `fw_payload.elf` (firmware + embedded kernel) +
+partitioned `disk.img` (root partition).  The per-phase status + proof lives in
+`rp56/STATUS.md`; the boot flow + partition layout in `rp56/BOOTABLE-IMAGE.md`;
+boot log `rp56/qemu-boot.log`.  Next: R-P57 (a single combined GPT image + a
+real-HW block backend + a DTB parse).
 
+--------------------------------------------------------------------------------
+Historical (R-P53) note follows:
 --------------------------------------------------------------------------------
 Historical (R-P52) note follows:
 --------------------------------------------------------------------------------
