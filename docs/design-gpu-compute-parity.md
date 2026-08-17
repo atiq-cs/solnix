@@ -445,3 +445,30 @@ path with NO LLVM (the ROCm equivalent of GGML_VULKAN). => solnix now has, ALL C
 graphics (C1 DRM+C3-amdgpu+libdrm_amdgpu+RADV+ACO+ICD) + AMD compute (the full ROCm stack) + Intel graphics
 (ANV). The north-star accelerator software is COMPREHENSIVE; runtime is the single g4ad gate. gpu-bringup.sh
 fires on the quota grant -> GGML_VULKAN (graphics) OR GGML_HIP+AOT (compute) parity vs Linux.
+
+## C6-GGML_HIP verdict (2026-08-17): GGML_HIP kernels need LLVM -> GGML_VULKAN is THE LLVM-free accelerated path
+DECISIVE honest finding that CLARIFIES the accelerated-compute strategy (+ corrects the earlier optimistic
+"AOT avoids LLVM for GGML" framing -- AOT works for rocBLAS's Tensile kernels but NOT for GGML):
+- GGML_HIP HARD-REQUIRES hipcc/LLVM: ggml-hip/CMakeLists.txt enable_language(HIP) over 159 .cu files
+  (~12,154 LOC), 127 <<<grid,block,shmem,stream>>> launch sites (a hipcc/clang language extension g++
+  CANNOT parse). CRITICALLY: GGML has NO hipModuleLoad/.hsaco path -- it FUSES host+device in each .cu +
+  compiles from source, so there is no offline .hsaco to precompile + no loader in GGML. The rocBLAS
+  AOT-precompiled-Tensile template (C6, LLVM-free) DOES NOT APPLY to GGML's kernels.
+- BUT the GGML_HIP HOST dispatch backend compiles with plain g++ (no hipcc/LLVM) + links the full solnix
+  ROCm stack zero-phantom: libamdhip64.so.5 -> libhsa-runtime64.so.1 -> libhsakmt.so.1 -> libdrm. The
+  ggml-hip-host-dispatch-proof.cpp walks GGML's exact per-op sequence (device->stream->hipMalloc->
+  hipMemcpyAsync->hipLaunchKernel[what <<<>>> lowers to]->sync->free); 25 undef, 0 phantom; runs off-hw
+  (hipRuntimeGetVersion=3275 OK, chain returns hipErrorNoDevice -- expected, no powered V520). The DISPATCH
+  CHAIN IS WIRED; only the KERNEL COMPILE is the LLVM gate.
+THE STRATEGIC CONCLUSION (aligns with the parity plan's Vulkan-compute-lead): GGML_VULKAN is THE LLVM-FREE
+accelerated path today -- Vulkan shaders compile to SPIR-V via glslang (NO LLVM, already built for RADV);
+RADV is compiled zero-phantom. So the "as fast as Linux" GPU-compute proof leads with GGML_VULKAN on RADV
+(the V520 speaks Vulkan). GGML_HIP reaches the dispatch chain but its kernels wait on either (a) the ROCm
+HIP/clang/LLVM toolchain ported to illumos (a large future effort), or (b) an upstream GGML AOT-kernel path
+(doesn't exist). ROCm/rocBLAS (Tensile AOT .hsaco) remains LLVM-free + reachable for the rocBLAS workload
+class; GGML specifically needs the HIP kernel compiler. => THE ACCELERATED-COMPUTE PARITY PLAN (updated):
+1) LEAD: GGML_VULKAN on RADV (LLVM-free, compile-complete, glslang shaders) -- the g4ad V520 proof.
+2) rocBLAS-class ROCm workloads: AOT .hsaco via HIP/ROCr (LLVM-free). 3) GGML_HIP: needs the HIP/LLVM port
+(deferred; not the lead path). This is a scope CLARIFICATION -- GGML_VULKAN was always the lead vector; the
+finding confirms it's also the LLVM-free one. The dispatch chain being wired (host backend zero-phantom)
+means if the HIP kernel compiler is ever ported, GGML_HIP activates immediately.
