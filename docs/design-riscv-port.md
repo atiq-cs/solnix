@@ -3714,3 +3714,26 @@ balloc/bfree bitmap) + coreutils-9.5 tsort.c. NEXT R-P55: the FULL root-pivot (m
 /bin + /etc on disk, exec init/sh off the disk -> a bootable image); optionally doubly-indirect blocks + the
 heavier coreutils. The riscv64 kernel now has a REAL filesystem allocator (multi-block + bitmap + sync) on a
 persistent disk -- the last fs pieces before a bootable-on-hardware image. VERIFY: 250 PASS confirmed on node.
+
+## R-P55 DONE (2026-08-17): the BOOTABLE-ROOT milestone -- the virtio-blk disk IS / (init/sh/coreutils exec off it)
+All boot-verified qemu -smp 2, 257 PASS / 0 actual FAIL (verified on node; report said 250), R-P24-54
+green. build-libc.sh L=rp55 confirmed.
+- FULL ROOT-PIVOT (headline): vfs_rootfs_pivot() (illumos VFS_MOUNTROOT reduced to a root-device flag) --
+  once set, proc_execv resolves /bin/*,/sbin/* off the disk + proc_openf resolves /etc/*,/bin/*,/sbin/*
+  reads off the disk. The kernel MKFS-POPULATES the ramfs root onto the blockfs at boot (xv6 mkfs.c model):
+  /sbin/init, /bin/{sh,ls,cat,echo,true}, /etc/{inittab,release,rc}, bsync'd to the real virtio-blk disk;
+  on-disk layout bumped to v3 (32 inodes, 8-block inode table). init(pid 1) reads /etc/inittab OFF THE
+  DISK, respawns /bin/sh OFF THE DISK, the shell runs /bin/<util> OFF THE DISK (all read back as valid ELF,
+  \x7fELF magic). PROOF: ROOT-PIVOT PROVEN + read /sbin/init off the disk 4448 bytes ELF magic OK.
+- persist-across-restart with disk-as-root: /root/persist written on a prior boot FOUND on the disk root on
+  the next full qemu restart. PROOF: ROOT-PERSIST PROVEN.
+- bootable-image steps documented: rp55/BOOTABLE-IMAGE.md (OpenSBI->kernel->mount-disk-root->init flow, GPT/
+  MBR partition layout, the R-P56 gap: wrap the kernel in an OpenSBI fw_payload + partition table -> boot
+  with -bios only, no -kernel).
+Cribbed illumos vfs (VFS_MOUNTROOT / root-pivot) + xv6 mkfs.c (populate the image) + the OpenSBI->kernel->
+root boot chain. NEXT R-P56: wrap the kernel in an OpenSBI fw_payload + a partition table so firmware boots
+disk.img with -bios only (no -kernel) -- a REAL bootable image; + real-HW block backend + DTB parse. THE
+BOOTABLE-ROOT MILESTONE: the virtio-blk disk IS /, /bin+/sbin+/etc live on it, init/sh/coreutils exec off
+it, files persist across a full restart with the disk as the live root. From NOTHING to a disk-rooted
+illumos-riscv64 kernel running a real coreutils userland off a persistent disk -- one step from a
+bootable-on-hardware image. VERIFY: 257 PASS confirmed on node.
