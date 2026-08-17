@@ -1,0 +1,1 @@
+06a9b94 README.md: Post deprecation info for thunk repo

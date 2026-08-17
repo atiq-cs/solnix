@@ -378,3 +378,23 @@ at the kernel/ABI level exactly as RADV unblocked graphics-Vulkan.
 => THE FULL AMD ACCELERATOR STACK COMPILES ON illumos: graphics (C1 DRM + C3-amdgpu + RADV+ACO + ICD) AND
 compute (/dev/kfd + the ROCm ioctl surface). Plus Intel graphics (ANV). The north-star software is
 comprehensive; runtime is g4ad-gated. gpu-bringup.sh fires on the quota grant.
+
+## ROCm userspace: libhsakmt COMPILES (compile-phase) (2026-08-17) -- the HSA thunk on illumos
+The ROCm-userspace entry above the C3-KFD kernel driver: libhsakmt (ROCT-Thunk-Interface) COMPILES
+zero-phantom on illumos x86_64. libhsakmt.so.1 (~217KB, valid ELF64 AMD64), 88 hsaKmt* exports (the FULL
+thunk API: OpenKFD/GetVersion/CreateQueue/AllocMemory/MapMemoryToGPU/AcquireSystemProperties/
+GetNodeProperties/CreateEvent/WaitOnEvent). 13,503 LOC upstream C + only 240 LOC solnix adaptation (5 header
+shims + build + audit) + a 3-LINE delta to 2 shipped headers (libdrm->shim include, __linux__->
+__linux__||__sun typedef guard) -- NO .c logic rewritten (clean crib-and-adapt). illumos adaptations: the
+_IOC shim (reused from RADV/ANV/KFD -- same ABI as the C3-KFD kernel), alloca<->alloca.h, MADV_* hints->0
+no-ops, a libnuma stub (numa_available==-1 -- correct illumos degradation), a perf_event.h stub. ZERO-PHANTOM:
+59 undefs, 0 phantom (audit-undef.sh: "zero-phantom OK") -- all real libc (incl get_nprocs)/pthread/libdl/
+libdrm_amdgpu (amdgpu_device_*, drmOpenRender)/crt. Compile-complete: the whole .so + all ABI wrappers + the
+_IOC equivalence to C3-KFD. Runtime-gated: the /sys topology read at hsaKmtOpenKFD (the ONE functional gap
+-- Option A recommended: the C3-KFD driver populates a solnix sysfs-shim dir, 5 path-macro changes, parser
+intact; documented), + the doorbell mmap/live HWS/GPUVM (already g4ad/C3-amdgpu-d gates). ROCr NEXT: ROCR-
+Runtime (libhsa-runtime64) dlopen's libhsakmt + needs OpenKFD/GetVersion/AcquireSystemProperties+
+GetNodeProperties(<-the topology shim)/AllocMemory/MapMemory/CreateQueue+doorbell/CreateEvent -- ALL present
++exported. Then HIP + rocBLAS. => THE ROCm COMPUTE STACK ON illumos: C3-KFD kernel (/dev/kfd + ioctls) ->
+libhsakmt (88 hsaKmt* exports) -> [ROCr -> HIP -> rocBLAS] (next). The accelerated-compute path is built
+kernel + thunk; ROCr/HIP + the g4ad runtime remain. Persisted src/drm-port/rocm/.
