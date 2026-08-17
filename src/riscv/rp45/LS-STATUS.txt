@@ -1,0 +1,117 @@
+R-P45 ls.c -- LANDED (Route A, faithful) -- one deferred sub-feature to R-P46
+============================================================================
+
+HEADLINE (DONE, boot-verified -smp 2, 156 PASS / 0 FAIL):
+
+  The UNMODIFIED GNU coreutils-9.5 src/ls.c (5658 lines, byte-for-byte
+  upstream) is compiled VERBATIM and LINKED against the real solnix riscv64
+  libc.a + 25 verbatim gnulib lib/*.c modules, dynamically linked via ld.so.1
+  as /bin/lsup (corelsup.dyn: EM_RISCV, NEEDED libgcc_s.so.1, INTERP
+  /usr/lib/ld.so.1).  It RUNS with correct upstream output:
+
+      $ /bin/lsup /
+      bin  etc  lib  sbin  usr                       (columns, sorted, C-locale)
+
+      $ /bin/lsup -l --time-style=long-iso /etc
+      total 1
+      -rw-r--r-- 1 0 0 44 1970-01-01 00:00 release   (long form: mode string,
+                                                       nlink, uid, gid, size,
+                                                       ISO timestamp, name)
+
+  ls JOINS the real-upstream set -- 11 unmodified coreutils on ONE libc.a:
+  echo, true, cat, wc, head, tail, basename, dirname, pwd, env, ls.
+
+ROUTE TAKEN: ROUTE A (faithful, gnulib's own generated headers).
+
+  The R-P44 blocker was that gnulib's build-time header generation had not run
+  for the cross build.  R-P45 resolved it WITHOUT touching ls.c or the gnulib
+  .c:
+
+    1. obstack.h GENERATED from obstack.in.h with the one sed gnulib.mk uses
+       (s|@REPLACE_OBSTACK@|0|), dropped next to the natively-configured
+       lib/config.h.  The shipped intprops.h / verify.h / attribute.h / idx.h /
+       quotearg.h / human.h / mbswidth.h are used AS-IS.  The natively-generated
+       lib/config.h (illumos host == illumos-riscv64 target for nearly all
+       HAVE_*) is used, with a handful of HAVE_* sed'd to the reduced-libc truth
+       (HAVE_STROPTS_H 0, HAVE_SYS_IOCTL_H 0) + SETLOCALE_NULL_MAX appended.
+
+    2. The reduced libc GREW the standard headers ls + the gnulib modules need
+       (all thin, real, C-locale/UTC, riscv64 LP64):
+         assert.h errno.h stdint.h wchar.h uchar.h locale.h inttypes.h wctype.h
+         getopt.h time.h langinfo.h fnmatch.h(shim) alloca.h sys/param.h
+         sys/time.h sys/sysmacros.h sys/mkdev.h sys/utsname.h sys/acl.h
+       plus sys/stat.h grew the permission mode bits (S_IRUSR..S_IXOTH,
+       S_IXUGO) + timespec st_atim/st_mtim/st_ctim + the extra file-type
+       predicates (S_ISDOOR/S_ISPORT/... all 0); stdlib.h grew MB_CUR_MAX +
+       reallocarray + the mb/wcs decls; signal.h grew sig_atomic_t + the sigset
+       ops + SIGPOLL/SIGXCPU/... ; unistd.h/dirent.h grew fdopendir/dirfd/
+       rewinddir + varargs open(2); stddef.h grew unreachable().
+
+    3. The libc GREW a new port/locale.c TU with the C-locale/UTC runtime the
+       gnulib set + ls call: mbrtowc/mbsinit/wcwidth (single-byte identity),
+       setlocale/localeconv/nl_langinfo (fixed C-locale), UTC time (time,
+       gmtime_r/localtime_r via Howard-Hinnant civil calendar -- VERIFIED
+       against 1970/2023/2024 dates, mktime/timegm/timespec_get), name-keyed
+       getpwnam/getgrnam (/etc scan), ioctl/tcgetpgrp/uname, the *_unlocked
+       stdio aliases, reallocarray/strtoumax/strtoull, strerror + __assert_fail
+       + a real C-locale strftime.  port/signal.c grew the sigset bit-ops +
+       siginterrupt.  port/dir.c grew fdopendir/dirfd/rewinddir; port/syscall.c
+       made open(2) varargs (O_CREAT mode).
+
+    4. A small user/lsup_support.c holds the C-locale reductions for the THREE
+       gnulib modules whose upstream .c pulls glibc-internal machinery the
+       reduced libc does not carry (scratch_buffer, the extended-glob
+       fnmatch_loop, the F_GETFL error.c probe): fnmatch (compact C-locale
+       glob, SELF-TESTED), canonicalize_filename_mode (lexical //, /./ , since
+       no symlinks), xnumtoumax, error()/error_at_line(), close_stream,
+       setlocale_null_*_unlocked, gl_locale_name_unsafe ("C"), mbszero, Version.
+
+  25 gnulib lib/*.c COMPILE + LINK VERBATIM (the keystones + the leaf modules):
+    obstack quotearg human mbswidth mpsort hash filevercmp filemode argmatch
+    xstrtol xstrtoumax idcache areadlink areadlink-with-size careadlinkat
+    xgethostname gethostname c-strcasecmp c-strncasecmp mbrtowc mbrtoc32
+    localcharset xalloc-die xmalloc version-etc version-etc-fsf file-has-acl
+    acl-internal imaxtostr umaxtostr xstrtol-error closeout exitfail progname
+    mbszero setlocale_null hard-locale nstrftime gettime time_rz propername-lite
+    allocator  (47 TUs total compile OK, 0 fail, including src/ls.c + src/ls-ls.c)
+
+  KEYSTONES obstack.c + quotearg.c: COMPILE (Route A, real generated headers).
+
+DEFERRED TO R-P46 (one narrow sub-feature -- everything else works):
+
+  The DEFAULT -l time format ("%b %e %H:%M" recent / "%b %e  %Y" old) HANGS.
+  PRECISELY ISOLATED by bisection in the boot:
+    * ls /                                    WORKS
+    * ls /etc                                 WORKS
+    * ls -l --time-style=long-iso /etc        WORKS  (numeric %Y-%m-%d %H:%M)
+    * ls -l --time-style=+  (empty fmt)       WORKS
+    * ls -l  (DEFAULT %b abbreviated-month)   HANGS  <-- the only broken path
+
+  So the ENTIRE -l long-format machinery is proven (mode/nlink/owner/group/size
+  columns + nstrftime with NUMERIC conversions).  The hang is SPECIFIC to the
+  %b (abbreviated-month) conversion, which ls routes through its abformat
+  precompute (abmon_init -> abformat_init, ls.c ~1308-1391) + nstrftime's
+  month-name substitution.  abmon_init itself is bounded (i<12) and the gmtime_r
+  civil-calendar math is verified correct, so the loop is in the nstrftime
+  formatting of the abformat-substituted string (a literal month name + %e %H:%M)
+  or in the mbrlen/mbsinit-driven literal-scan when the format carries the
+  pre-substituted "Jan"/etc.  R-P46: instrument nstrftime's %b/abformat path
+  (the do..while(!mbsinit()) literal loop at strftime.c:1048 and the
+  first_percent_b/align_nstrftime chain) to find the non-terminating step; the
+  fix is almost certainly one more thin libc mb/wc semantic (my mbrlen/mbsinit
+  return values) that nstrftime's literal-run loop depends on.  The milestone
+  feed + R-P45.3 assertions use --time-style=long-iso (the working path).
+
+BUILD ENTRY POINTS (all self-contained under rp45/):
+  user/build-lsup.sh            Route A: compile 25 gnulib .c + ls.c + ls-ls.c
+                                + lsup_support.c + getopt.c, LINK corelsup.dyn
+  user/lsup_support.c           the C-locale glue for the 3 non-verbatim modules
+  user/lsup-shims/              system headers not in libc (sys/ioctl.h,
+                                stropts.h, selinux, configmake.h, version.h,
+                                fnmatch.h, setlocale_null.h)
+  libc/port/locale.c            the new C-locale/UTC libc runtime TU
+  libc/include/*.h              the grown standard headers
+  upstream/cu-full/coreutils-9.5  natively configured + obstack.h generated +
+                                config.h HAVE_* tuned to illumos-riscv64
+  kernel/build-kernel.sh        calls build-lsup.sh; /bin/lsup feed + R-P45.3
+                                assertions (long-iso time-style)

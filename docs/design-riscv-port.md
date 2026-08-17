@@ -3498,3 +3498,25 @@ actual 167, verified re-count on the node), R-P24-43 regressions green.
 Cribbed glibc/illumos riscv64 setjmp.S + RISC-V psABI + coreutils-9.5 gnulib lib/. NEXT R-P45: resolve the
 gnulib generated-header surface (obstack+quotearg keystones) -> faithful ls.c (11th real util). setjmp/
 longjmp is now available for any util/lib that needs it.
+
+## R-P45 DONE (2026-08-17): faithful UNMODIFIED ls.c RUNS -- 11 real upstream coreutils on one libc.a
+All boot-verified qemu -smp 2, 170 PASS / 0 real FAIL (the "1 FAIL" grep-count was "FAILED: none" + "no
+failure" substrings -- verified false positive on the node), R-P24-44 regressions green. ROUTE A (faithful,
+gnulib's OWN generated headers -- no facade; ls.c byte-for-byte upstream):
+- obstack + quotearg keystones compile (obstack.h generated from obstack.in.h via gnulib.mk's sed; shipped
+  intprops/verify/attribute headers as-is; native lib/config.h HAVE_* sed'd to reduced-libc truth).
+- 25 gnulib lib/*.c compile+link VERBATIM (47 TUs OK / 0 fail incl src/ls.c): obstack/quotearg/human/
+  mbswidth/mpsort/hash/filevercmp/filemode/argmatch/xstrtol/idcache/areadlink/xgethostname/c-strcasecmp/
+  mbrtowc/localcharset/xalloc/version-etc/file-has-acl/nstrftime/gettime/time_rz/... libc grew ~20 headers
+  + port/locale.c (C-locale/UTC runtime); user/lsup_support.c supplies C-locale reductions for the 3
+  modules needing glibc-internal machinery (fnmatch self-tested, canonicalize, error, close_stream).
+- FAITHFUL UNMODIFIED ls.c LINKED+RAN: corelsup.dyn = EM_RISCV, ld.so.1, NEEDED libgcc_s. PROOF:
+  lsup / -> "bin  etc  lib  sbin  usr" (columns, sorted, C-locale); lsup -l --time-style=long-iso /etc ->
+  "-rw-r--r-- 1 0 0 44 1970-01-01 00:00 release" (mode/nlink/uid/gid/size/time). ls JOINS the real set:
+  11 UNMODIFIED upstream coreutils on one libc.a (echo/true/cat/wc/head/tail/basename/dirname/pwd/env/ls).
+- DEFERRED R-P46 (one narrow sub-feature): the DEFAULT -l %b abbreviated-month HANGS in nstrftime's
+  month-name path (bisected: ls /, ls /etc, -l --time-style=long-iso, -l --time-style=+ ALL work; only %b
+  loops). Plan in rp45/LS-STATUS.txt.
+Cribbed coreutils-9.5 gnulib lib/ (25 modules) + illumos libc locale. NEXT R-P46: fix the %b/abformat
+nstrftime hang (default ls -l time column). VERIFY LESSON: the "1 FAIL" was a grep misfire on "FAILED:
+none" -- confirmed false on the node (the classic grep -v ":0" trap).

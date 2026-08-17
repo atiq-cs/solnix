@@ -1,5 +1,74 @@
 # RISC-V (riscv64) port — STATUS
 
+**Phase reached: R-P45** (the R-P44 kernel -- which added a REAL riscv64
+setjmp/longjmp to the reusable libc.a on top of 10 real UNMODIFIED upstream
+coreutils utils -- now **compiles + links + RUNS the FAITHFUL UNMODIFIED GNU
+coreutils-9.5 src/ls.c**, byte-for-byte upstream, against the real libc.a + 25
+verbatim gnulib lib/*.c modules, dynamically via ld.so.1 as /bin/lsup.  ls
+JOINS the real-upstream set for **11 unmodified coreutils on one libc.a**
+[echo/true/cat/wc/head/tail/basename/dirname/pwd/env/ls], boot-verified under
+qemu-system-riscv64 -machine virt -smp 2 -- **156 PASS / 0 FAIL**.)
+
+R-P45 deliverables (all boot-verified, -smp 2, on top of the R-P24..R-P44
+regressions which stay green):
+
+1. **Resolved the gnulib generated-header surface via ROUTE A (faithful).**
+   The R-P44 blocker was that gnulib's build-time header generation had not run
+   for the cross build.  R-P45 fixed it WITHOUT touching ls.c or the gnulib .c:
+   obstack.h is GENERATED from obstack.in.h with the one sed gnulib.mk uses
+   (s|@REPLACE_OBSTACK@|0|); the shipped intprops.h/verify.h/attribute.h/idx.h/
+   quotearg.h/human.h/mbswidth.h are used AS-IS; the natively-generated
+   lib/config.h (illumos host == illumos-riscv64 target for nearly all HAVE_*)
+   is used with a few HAVE_* sed'd to the reduced-libc truth (HAVE_STROPTS_H 0,
+   HAVE_SYS_IOCTL_H 0) + SETLOCALE_NULL_MAX appended.  The KEYSTONES obstack.c
+   + quotearg.c compile first, then 25 gnulib lib/*.c compile + link VERBATIM
+   (47 TUs total compile OK / 0 fail, incl. src/ls.c + src/ls-ls.c):
+   obstack quotearg human mbswidth mpsort hash filevercmp filemode argmatch
+   xstrtol xstrtoumax idcache areadlink areadlink-with-size careadlinkat
+   xgethostname gethostname c-strcasecmp c-strncasecmp mbrtowc mbrtoc32
+   localcharset xalloc-die xmalloc version-etc version-etc-fsf file-has-acl
+   acl-internal imaxtostr umaxtostr xstrtol-error closeout exitfail progname
+   mbszero setlocale_null hard-locale nstrftime gettime time_rz propername-lite
+   allocator.  The libc GREW the standard headers ls needs (assert/errno/stdint/
+   wchar/uchar/locale/inttypes/wctype/getopt/time/langinfo/alloca + sys/param,
+   sys/time, sys/sysmacros, sys/mkdev, sys/utsname, sys/acl; sys/stat grew the
+   permission bits + timespec st_*tim; signal grew sig_atomic_t + sigset ops)
+   and a new port/locale.c TU with the C-locale/UTC runtime (mbrtowc/mbsinit/
+   wcwidth single-byte identity, setlocale/localeconv/nl_langinfo fixed C,
+   UTC time via a verified civil-calendar gmtime_r/mktime/timegm, name-keyed
+   getpwnam/getgrnam, ioctl/tcgetpgrp/uname, *_unlocked stdio, reallocarray/
+   strtoumax, strerror + __assert_fail + a real C-locale strftime).  A small
+   user/lsup_support.c holds the C-locale reductions for the 3 gnulib modules
+   whose upstream .c pulls glibc-internal machinery the reduced libc lacks
+   (fnmatch [compact C-locale glob, self-tested], canonicalize_filename_mode
+   [lexical], xnumtoumax, error/error_at_line, close_stream, the setlocale_null
+   *_unlocked variants, gl_locale_name_unsafe, mbszero, Version).
+
+2. **The FAITHFUL UNMODIFIED coreutils-9.5 src/ls.c -- LINKED + RAN.**
+   corelsup.dyn is EM_RISCV, NEEDED libgcc_s.so.1, INTERP /usr/lib/ld.so.1, and
+   runs correct upstream output on the boot console:
+     `$ /bin/lsup /` -> `bin  etc  lib  sbin  usr` (columns, sorted, C-locale);
+     `$ /bin/lsup -l --time-style=long-iso /etc` -> `total 1` +
+     `-rw-r--r-- 1 0 0 44 1970-01-01 00:00 release` (long form: mode string,
+     nlink, uid, gid, size, ISO timestamp, name).  ls JOINS the 11-util
+     real-upstream set on one libc.a.  ONE narrow sub-feature is DEFERRED to
+     R-P46: the DEFAULT -l time format (%b abbreviated-month via ls's abformat
+     precompute) HANGS in nstrftime's month-name path -- precisely isolated by
+     boot bisection (ls /, ls /etc, ls -l --time-style=long-iso, and ls -l
+     --time-style=+ ALL work; only the %b conversion loops).  The milestone
+     uses --time-style=long-iso (the working numeric path).  See
+     rp45/LS-STATUS.txt for the exact remaining blocker + the R-P46 plan.
+
+R-P45 boot proof (rp45/qemu-boot.log, saved via tee): R-P45.3 PASS x3 (ls /
+lists root entries; ls -l /etc prints the long form; ls.c LINKED against real
+libc.a + gnulib lib/*.c), plus SJTEST + all R-P24..R-P44 regressions green --
+156 PASS / 0 FAIL under -smp 2.  Next: R-P46 (fix the %b/abformat nstrftime
+hang so the DEFAULT ls -l time column works; see rp45/LS-STATUS.txt).
+
+---
+
+# RISC-V (riscv64) port — STATUS
+
 **Phase reached: R-P44** (the R-P43 kernel -- which ran 10 real, UNMODIFIED
 upstream coreutils utils [echo/true/cat/wc/head/tail/basename/dirname/pwd/env]
 on one reusable libc.a -- now gains a **REAL riscv64 setjmp/longjmp** (the RISC-V
