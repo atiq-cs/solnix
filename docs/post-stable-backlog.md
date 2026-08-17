@@ -1225,3 +1225,23 @@ AdwAboutDialog uses as_*); the libadwaita16 recipe is staged (one appstream away
 +libyaml+curl+libstemmer+libxmlb) -> libadwaita; + librsvg (rust-overlay, SVG icons), libsoup, cairomm/
 pangomm/atkmm. NOTE the COSMIC-specific stack (Rust+Wayland+smithay) is more relevant to COSMIC itself than
 GTK4 (GTK is the GNOME/GTK-app class); both toolkits now on illumos. wave16 entry -> fork.
+
+## PS-DESKTOP-ISO (2026-08-17): graphical x86 install ISO built (host-sourced PoC) + the nix-native path
+Maintainer asked for a graphical x86_64 install ISO with COSMIC + Firefox + Chrome. HONEST feasibility:
+COSMIC (Rust+Wayland compositor stack, not built for x86), Firefox (unported Rust+C++ mega-build), Chrome
+(closed-source, no illumos target) are NOT buildable today. Built the ACHIEVABLE graphical desktop ISO:
+- solnix-x86_64-desktop.iso, 185MB, hybrid BIOS+UEFI (sha256 c40217fc...), boots to a minimal-X desktop
+  (Xorg[Xvfb on EC2]->twm + welcome xterm + gtk3-demo, auto-login passwordless solnix user via .xinitrc) +
+  the solnix-install/solnix-install-tui ZFS-BE installer. Verified by El Torito boot-catalog (BIOS
+  /boot/cdboot + UEFI /boot/efiboot.img) + boot_archive contents (11 X binaries + X11 data + gtk3/pango/X11
+  libs baked) + a live Xvfb+twm+xterm+gtk3-demo smoke test. On node /var/tmp/solnix-media-gfx/.
+⚠️ CAVEAT (agent honest-disclosed): the ISO used HOST-SOURCED (OpenIndiana pkg) Xorg/twm/xterm because the
+ISO node couldn't pull the nix-native desktop stack (429 cache rate-limit / local FOD). That VIOLATES the
+"solnix must be EXACTLY Nix" north star -- so this ISO is a HOST-SOURCED PROOF-OF-CONCEPT, NOT a Nix-pure
+solnix release; do NOT publish it as a solnix release. BUT: the nix-native x86 desktop stack IS built +
+published (registry: xorg-server 95v3s1kb, libx11 4v0nqr9a, xterm isv62jd4, dwm xqzxh526, cairo 0k9x5i6b,
+pango 4rid1w5i, gdk-pixbuf 0a654m5j, mesa-softpipe bgh83x75 -- from the G0 desktop wave). So the NIX-NATIVE
+desktop ISO is fully achievable: re-bake pulling the CACHED nix packages (not host pkg). Roadmap: (1)
+nix-native minimal-X ISO from the cached G0 stack [next], (2) Xfce nix packages, (3) Firefox via the working
+Rust toolchain, (4) Wayland[x86]->wlroots/smithay->COSMIC (largest), (5) Chrome unachievable. Report +
+builder (oi-make-livecd-hostx.sh) on the node. NOT committed (gitignored ISO).
