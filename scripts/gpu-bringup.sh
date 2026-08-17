@@ -59,6 +59,9 @@ cat <<'STEPS'
       RADV+ACO->ICD->loader) already compiles on illumos; this is the runtime activation on the V520.
    9. accelerated proof: llama.cpp GGML_VULKAN inference ON THE GPU — measure tok/s
       vs the 70 tok/s CPU baseline vs Linux on the same g4ad. THE PARITY NUMBER.
+  10. ROCm/HIP compute (the deepest path): /dev/kfd + the KFD compute ioctls (COMPILED, zero-phantom,
+      src/drm-port/amdkfd/) -> libhsakmt (HSA thunk) -> ROCr -> HIP -> rocBLAS/the ML runtime. The
+      C3-amdgpu-d live MQD/HWS-runlist + doorbell BAR2 mmap-fault activate the compute queues on the V520.
 STEPS
 echo "  Node IP recorded. Run the bring-up steps (each is a bounded port already compiling)."
 echo "  ⚠️ TERMINATE when done: aws ec2 terminate-instances --region $REGION --instance-ids $ID"
