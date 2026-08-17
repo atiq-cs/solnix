@@ -1245,3 +1245,23 @@ desktop ISO is fully achievable: re-bake pulling the CACHED nix packages (not ho
 nix-native minimal-X ISO from the cached G0 stack [next], (2) Xfce nix packages, (3) Firefox via the working
 Rust toolchain, (4) Wayland[x86]->wlroots/smithay->COSMIC (largest), (5) Chrome unachievable. Report +
 builder (oi-make-livecd-hostx.sh) on the node. NOT committed (gitignored ISO).
+
+## PS-SPARC-T14 (2026-08-17): +11 sparcv9 pkgs + the nix-2.24 fresh-builder PTY wall (the migration's real gap)
++11 sparcv9 pkgs (all confirmed ELF 64-bit MSB SPARCV9, derivers present, gently -- peak load 4.55, ended
+idle): zlib, gmp (with-cxx), libgpg-error, libgcrypt, nettle, libtasn1, libmd, libpaper, findutils,
+gnugrep, cpio. t14 layered on t13 (withGnm + fix-libtool-print.sh + host-free rpath + doCheck off, NO
+cmake). Published 11 NARs staged to the sun bcache (166 nars) -> orchestrator signs+pushes. Dropped bzip2
+(built 32-bit SPARC32PLUS -- the plain Makefile ignored -m64; honest non-win, removed). Skipped the
+github-archive fetchurl-shim-rename pkgs (lz4/jansson/libsodium/libpsl/c-ares -- need per-pkg clean
+src-name+hash) + libpcap (eval error). sparcv9 registry now ~28.
+⚠️ THE SPARC->NIX-2.24 MIGRATION GAP (newly precise): nix-2.24 EVALUATES + REALISES the sparc overlay
+(identical drv/output hashes to the builder -- overlay agreement confirmed), BUT its FRESH BUILDER hits an
+illumos PTY wall: "error: opening pseudoterminal slave: Permission denied" -- so actual COMPILATION still
+uses the proven nix-2.3.16 toolchain at /nix/nix-tools. This is the SAME class as the x86 nix-2.24
+build-pty fix (patch 0003 illumos-cfmakeraw-pty-streams: cfmakeraw + STREAMS ptem/ldctl on the build pty) --
+the sparc nix-2.24 needs that same PTY-slave fix applied/verified for its BUILDER (the x86 224 recipe has
+it; the sparc build-pty permission path differs -- likely /dev/ptmx grantpt/unlockpt or the STREAMS push
+under the sparc kernel). FIX = port the x86 0003 pty patch's runtime behavior to the sparc nix-2.24 builder,
+then sparc breadth runs natively on 2.24 (not 2.3.16). Until then: 2.24 evaluates/realises (cache-coherent),
+2.3.16 builds. NEXT sparc tranche: the PTY builder fix + the github-archive clean-src fix for lz4/jansson/
+libsodium/c-ares.
