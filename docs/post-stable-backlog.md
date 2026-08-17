@@ -1209,3 +1209,19 @@ still dodged (gettext-runtime sub-configure fails "C compiler cannot create exec
 gate X client libs on waylandSupport, wire the jpeg/png/no-tiff overrides) -> libadwaita -> COSMIC apps.
 NOTE: COSMIC is Wayland-native + Rust -- wayland(wave15) + Rust(working) are the two most COSMIC-relevant
 pieces, both now on illumos; GTK4 is more for the GNOME/GTK app class than COSMIC itself. wave15 entry -> fork.
+
+## PS-AARCH64-WAVE16 (2026-08-17): GTK4 BUILT on illumos -- the GUI toolkit landed
++8 EM_AARCH64 pkgs (published 8): GTK4 4.22.4 (the headline -- libgtk-4.a static, WAYLAND backend, gtk4.pc/
+gtk4-wayland.pc) via pkgs.gtk4.override+overrideAttrs: static default_library, introspection/media-gstreamer/
+x11/broadway/vulkan/cups off, buildInputs filtered (dropped libice/libsm/libx*/gst/libGL/cups), the pango
+.pc chain added, custom native glib for glib-compile-resources; 7 walls cracked (native glib tools, pango
+.pc Requires, libtiff unconditional gdktiff.c, EGL headers <epoxy/egl.h>, BTN_* input-event-codes shim,
+hb-glib.h, + the shared-lib R_AARCH64_ADR_PREL_PG_HI21 relocation wall -> static-only). + C++ binding libs
+(glibmm 2.66 + libsigc++ 2.12 -- CONFIRMS the cxxNomapCc C++ wall crack works for the C++ binding class) +
+json-glib + harfbuzz-glib + libtiff + libepoxy-egl + libjpeg-turbo (nasm-free). aarch64 now 203 rows
+(13->203 this session). THE GTK TOOLKIT IS ON illumos aarch64. libadwaita NOT built -- reaches
+dependency('gtk4') found YES 4.22.4, then meson hard-requires appstream (meson.build:43, no disable switch;
+AdwAboutDialog uses as_*); the libadwaita16 recipe is staged (one appstream away). wave17: appstream (libxml2
++libyaml+curl+libstemmer+libxmlb) -> libadwaita; + librsvg (rust-overlay, SVG icons), libsoup, cairomm/
+pangomm/atkmm. NOTE the COSMIC-specific stack (Rust+Wayland+smithay) is more relevant to COSMIC itself than
+GTK4 (GTK is the GNOME/GTK-app class); both toolkits now on illumos. wave16 entry -> fork.
