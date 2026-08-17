@@ -1,0 +1,141 @@
+########## core/util/lnx/os_linux.cpp ##########
+--- core/util/lnx/os_linux.cpp.orig	Mon Aug 17 16:36:17 2026
++++ core/util/lnx/os_linux.cpp	Mon Aug 17 16:36:17 2026
+@@ -49,7 +49,9 @@
+ #include <pthread.h>
+ #include <limits.h>
+ #include <sched.h>
++#ifndef __sun
+ #include <sys/sysinfo.h>
++#endif
+ #include <sys/time.h>
+ #include <sys/utsname.h>
+ #include <unistd.h>
+@@ -269,6 +271,17 @@
+ }
+ 
+ size_t GetUsablePhysicalHostMemorySize() {
++#ifdef __sun
++  // illumos has no glibc struct sysinfo{totalram,mem_unit}; the portable
++  // physical-RAM query is sysconf(_SC_PHYS_PAGES) * sysconf(_SC_PAGESIZE).
++  long pages = sysconf(_SC_PHYS_PAGES);
++  long page_size = sysconf(_SC_PAGESIZE);
++  if (pages < 0 || page_size < 0) {
++    return 0;
++  }
++  const size_t physical_size = static_cast<size_t>(pages) * static_cast<size_t>(page_size);
++  return std::min(GetUserModeVirtualMemorySize(), physical_size);
++#else
+   struct sysinfo info = {0};
+   if (sysinfo(&info) != 0) {
+     return 0;
+@@ -277,6 +290,7 @@
+   const size_t physical_size =
+       static_cast<size_t>(info.totalram * info.mem_unit);
+   return std::min(GetUserModeVirtualMemorySize(), physical_size);
++#endif
+ }
+ 
+ uintptr_t GetUserModeVirtualMemoryBase() { return (uintptr_t)0; }
+@@ -419,7 +433,7 @@
+   // Check kernel version - not a concurrency concern.
+   // use non-RAW for getres due to bug in older 2.6.x kernels
+   if (first.load(std::memory_order_acquire)) {
+-    utsname kernelInfo;
++    struct utsname kernelInfo;
+     if (uname(&kernelInfo) == 0) {
+       try {
+         std::string ver = kernelInfo.release;
+########## loader/executable.cpp ##########
+--- loader/executable.cpp.orig	Mon Aug 17 16:42:29 2026
++++ loader/executable.cpp	Mon Aug 17 16:42:29 2026
+@@ -81,7 +81,11 @@
+ HSA_API r_debug _amdgpu_r_debug = {5,
+                            nullptr,
+                            reinterpret_cast<uintptr_t>(&_loader_debug_state),
++#ifdef __sun
++                           RT_CONSISTENT,
++#else
+                            r_debug::RT_CONSISTENT,
++#endif
+                            0};
+ static link_map* r_debug_tail = nullptr;
+ 
+@@ -168,7 +172,11 @@
+ {
+   // Loader resets the link_map, but the executables and loaded code objects are not deleted.
+   _amdgpu_r_debug.r_map = nullptr;
++#ifdef __sun
++  _amdgpu_r_debug.r_state = RT_CONSISTENT;
++#else
+   _amdgpu_r_debug.r_state = r_debug::RT_CONSISTENT;
++#endif
+   r_debug_tail = nullptr;
+   delete loader;
+ }
+@@ -222,7 +230,11 @@
+ 
+   // Assuming runtime atomic implements C++ std::memory_order
+   WriterLockGuard<ReaderWriterLock> writer_lock(rw_lock_);
++#ifdef __sun
++  atomic::Store(&_amdgpu_r_debug.r_state, RT_ADD, std::memory_order_relaxed);
++#else
+   atomic::Store(&_amdgpu_r_debug.r_state, r_debug::RT_ADD, std::memory_order_relaxed);
++#endif
+   atomic::Fence(std::memory_order_acq_rel);
+   _loader_debug_state();
+   atomic::Fence(std::memory_order_acq_rel);
+@@ -229,7 +241,11 @@
+   for (auto &lco : reinterpret_cast<ExecutableImpl*>(executable)->loaded_code_objects) {
+     AddCodeObjectInfoIntoDebugMap(&(lco->r_debug_info));
+   }
++#ifdef __sun
++  atomic::Store(&_amdgpu_r_debug.r_state, RT_CONSISTENT, std::memory_order_release);
++#else
+   atomic::Store(&_amdgpu_r_debug.r_state, r_debug::RT_CONSISTENT, std::memory_order_release);
++#endif
+   _loader_debug_state();
+ 
+   return HSA_STATUS_SUCCESS;
+@@ -238,7 +254,11 @@
+ void AmdHsaCodeLoader::DestroyExecutable(Executable *executable) {
+   // Assuming runtime atomic implements C++ std::memory_order
+   WriterLockGuard<ReaderWriterLock> writer_lock(rw_lock_);
++#ifdef __sun
++  atomic::Store(&_amdgpu_r_debug.r_state, RT_DELETE, std::memory_order_relaxed);
++#else
+   atomic::Store(&_amdgpu_r_debug.r_state, r_debug::RT_DELETE, std::memory_order_relaxed);
++#endif
+   atomic::Fence(std::memory_order_acq_rel);
+   _loader_debug_state();
+   atomic::Fence(std::memory_order_acq_rel);
+@@ -245,7 +265,11 @@
+   for (auto &lco : reinterpret_cast<ExecutableImpl*>(executable)->loaded_code_objects) {
+     RemoveCodeObjectInfoFromDebugMap(&(lco->r_debug_info));
+   }
++#ifdef __sun
++  atomic::Store(&_amdgpu_r_debug.r_state, RT_CONSISTENT, std::memory_order_release);
++#else
+   atomic::Store(&_amdgpu_r_debug.r_state, r_debug::RT_CONSISTENT, std::memory_order_release);
++#endif
+   _loader_debug_state();
+ 
+   executables[((ExecutableImpl*)executable)->id()] = nullptr;
+########## core/runtime/amd_aql_queue.cpp ##########
+--- core/runtime/amd_aql_queue.cpp.orig	Mon Aug 17 16:42:29 2026
++++ core/runtime/amd_aql_queue.cpp	Mon Aug 17 16:42:29 2026
+@@ -513,7 +513,14 @@
+ #ifdef __linux__
+     // Create a system-unique shared memory path for this thread.
+     char ring_buf_shm_path[16];
++#ifdef __sun
++    // illumos has no gettid syscall; pthread_self() is a process-unique thread
++    // id, which is all this shm path name needs (queue_full_workaround_ is the
++    // APU/HSA_PROFILE_FULL path; discrete GPUs never take it).
++    pid_t sys_unique_tid = pid_t((uintptr_t)pthread_self());
++#else
+     pid_t sys_unique_tid = pid_t(syscall(__NR_gettid));
++#endif
+     sprintf(ring_buf_shm_path, "/%u", sys_unique_tid);
+ 
+     int ring_buf_shm_fd = -1;

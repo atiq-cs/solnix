@@ -398,3 +398,27 @@ GetNodeProperties(<-the topology shim)/AllocMemory/MapMemory/CreateQueue+doorbel
 +exported. Then HIP + rocBLAS. => THE ROCm COMPUTE STACK ON illumos: C3-KFD kernel (/dev/kfd + ioctls) ->
 libhsakmt (88 hsaKmt* exports) -> [ROCr -> HIP -> rocBLAS] (next). The accelerated-compute path is built
 kernel + thunk; ROCr/HIP + the g4ad runtime remain. Persisted src/drm-port/rocm/.
+
+## C5-ROCr COMPLETE (compile-phase) (2026-08-17): libhsa-runtime64.so -- the HSA RUNTIME on illumos
+The HSA runtime (the layer HIP/rocBLAS/the ML runtime sit on) compiles zero-phantom on illumos.
+libhsa-runtime64.so.1 (~1.4MB ET_DYN AMD64), ROCR-Runtime rocm-4.2.0 matched to the ROCT-Thunk 1.9.0 the
+solnix libhsakmt came from. 37-unit HSA-runtime core (~24,747 LOC upstream), g++ 14, links against the
+solnix libhsakmt.so.1. 239 exports / 186 hsa_* (init/agent/queue/signal/memory-pool/AQL/code-object-load --
+everything HIP consumes). KEY: comgr/LLVM NOT NEEDED for the core -- ROCr's code-object loader is
+libamdhsacode (its OWN libelf-based ELF reader, no LLVM); comgr/LLVM only enters at HIP's runtime JIT
+(hiprtc). ZERO-PHANTOM: 281 undefs, 0 phantom (35 hsaKmt*->libhsakmt, 145 C++ ABI->libstdc++/libgcc_s,
+~20 elf*/gelf*->libelf, pthread/dl/mmap->libc, sendfile->libsendfile). illumos adaptation: 200 LOC shims
+(CLOCK_HIGHRES/<alloca.h>/limits) + a 47-line #ifdef __sun delta across 3 .cpp (sysinfo->sysconf,
+CLOCK_MONOTONIC_RAW->CLOCK_HIGHRES, r_debug RT_* unscoped enums, __NR_gettid->pthread_self) -- NO compute
+logic rewritten.
+=> THE HIP/rocBLAS NEXT STEP + THE LLVM-AVOIDANCE INSIGHT: ROCr exports the full hsa_*/hsa_amd_* surface HIP
+needs. The heavy dep (comgr/LLVM) is at HIP's RUNTIME JIT (hiprtc), NOT ROCr. FASTEST PATH TO ACCELERATED
+COMPUTE: AOT PRECOMPILED .hsaco kernels -- GGML/rocBLAS SHIP precompiled Tensile kernels -> needs only ROCr's
+loader (present) + HIP dispatch, NO runtime LLVM. Full hiprtc = a large future LLVM-for-illumos port
+(deferred). So an accelerated GGML/rocBLAS workload can run via AOT kernels + ROCr, avoiding the LLVM port.
+Compile-complete: the whole ROCr core + loader + the hsa_* surface. Hardware-gated: hsa_init topology (the
+libhsakmt /sys shim, Option A), live AQL dispatch (doorbell/HWS), memory-pool->GPUVM, code-object ISA load
+-- all g4ad/C3-amdgpu-d.
+=> THE FULL ROCm COMPUTE STACK ON illumos: C3-KFD (/dev/kfd) -> libhsakmt (thunk) -> ROCr (HSA runtime) ->
+[HIP dispatch + AOT .hsaco -> rocBLAS/GGML] (the AOT path avoids LLVM). Graphics (RADV/ANV) + compute (ROCm)
+both compile zero-phantom; runtime is the single g4ad gate.
