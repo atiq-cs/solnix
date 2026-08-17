@@ -1121,3 +1121,17 @@ pydantic-core/rpds-py/hypothesis/bcrypt/pynacl), (b) Rust CLI tools (ripgrep/fd/
 for COSMIC (Rust desktop) + ollama-adjacent ML tooling. De-ref /usr/gcc/14 to the tranche's nixpkgs gcc-14
 for a hermetic closure. THIS is the 5th deep unlock this session (zstd, python3, python-C-ext, aarch64-C++,
 now Rust) -- Rust was the single biggest gate on the maintainer's expanded COSMIC + local-LLM goals.
+
+## PS-AARCH64-WAVE12 (2026-08-17): native openssl FIXED + registry 1500; font stack gated on a KNOWN CPython fix
+Native (build-platform) openssl-3.6.3 FIXED -- the H6 -L gap: the openssl binary links -lsocket -lnsl, and
+the seed's libnsl.so transitively NEEDs libmd.so.1 (MD5*) + libmp.so.2 (mp_*) which ship versioned-only
+(no bare .so), with no -L on the native link. Fix: nativeOpensslWireOverlay (like cmakeWireOverlay) injects
+-L extraSyslibs/lib/amd64 -lmd -lmp on buildPackages.openssl. PROOF: native openssl-3.6.3 builds (AMD64
+libssl.so.3, openssl version runs). Cascaded native fixes: zstd (buildContrib=false), libffi
+(doCheck=false), tcl (H6 -L), python3 (--build/--host explicit). +6 aarch64 pkgs (lz4/snappy/utf8proc/
+simdjson/cereal/brotli). registry 1500, aarch64 170. THE FONT STACK (harfbuzz/pixman/cairo/pango) + protobuf
+stay gated on ONE thing: native python3-3.14.6 fails at socketmodule.c:5928 ("operator && has no right
+operand") -- a CPython-3.14 illumos preprocessor bug. CROSS-POLLINATION: the x86 python3-illumos-fix ALREADY
+FIXES THIS EXACT BUG (postConfigure seds pyconfig.h Py_SUNOS_VERSION -> 511). wave13 = apply that same
+Py_SUNOS_VERSION=511 sed to the aarch64 NATIVE python3 -> native python3 builds -> meson + protoc work ->
+harfbuzz/pixman/cairo/pango/protobuf all unblock. native-openssl-fix -> docs/aarch64-native-openssl-fix.md.
