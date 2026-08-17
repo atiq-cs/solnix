@@ -305,3 +305,29 @@ ahead of the g4ad hardware. Persisted src/drm-port/radv/ (286 LOC + RADV-STATUS.
 NEXT: build real glslang (cmake bootstrap) -> compile libvulkan_radeon.so -> zero-phantom .so audit -> wire
 the ICD -> ready for the g4ad parity proof. RADV (the real AMD hw Vulkan path) is the driver that makes
 GGML_VULKAN run FAST on the V520 (vs software lavapipe).
+
+## C3-RADV COMPLETE (compile-phase) (2026-08-17): libvulkan_radeon.so -- the REAL AMD Vulkan driver on illumos
+THE GPU-parity milestone (compile-phase, ahead of the g4ad hardware): the real AMD hardware Vulkan driver
+RADV COMPILED for illumos x86_64. This is the FAST GGML_VULKAN path on the V520 (vs software lavapipe).
+- REAL glslang 14.3.0 built (cmake 3.29.6 bootstrap -> KhronosGroup/glslang, ENABLE_OPT=0; replaced the
+  stub). Verified: glslangValidator --version = 11:14.3.0, trivial .vert->.spv (664B, magic 0x07230203),
+  the exact RADV bvh invocation emits SPIR-V C headers -- 19 .spv.h generated in-build (the gate the stub
+  couldn't pass).
+- libvulkan_radeon.so COMPILED: 16MB, 90 RADV objects (amdgpu winsys + device/queue/cmd_buffer/meta/nir/
+  si_cmd_buffer/layers) + 30 ACO objects (the shader compiler, NO LLVM). RADV ~22.8k LOC + ACO ~14.7k LOC.
+- 5 illumos compile breaks fixed crib-and-adapt (banked in the build scripts): libdrm drm.h shim install,
+  alloca <alloca.h> guard (util/macros.h+aco_ir.h, root-cause), getpwuid_r 4-arg SunOS form, libsync.h
+  _IOWR via linux-ioctl-compat.h (Linux _IOC matches the C1 kernel), int8_t!=signed-char -Werror relax.
+- ZERO-PHANTOM AUDIT: 5326 WEAK undefs = same-.so Vulkan dispatch aliases (wsi_/vk_common_/radv_/layer
+  trampolines + ACO TLS -- WEAK = intra-.so, not external); 336 GLOB undefs individually grepped against
+  the union of NEEDED libs -> TRULY-UNRESOLVED = 0 (all resolve to libc/libdrm_amdgpu[->C1 ioctl path]/
+  libdrm/libexpat/libstdc++/libm/libz/libgcc_s/libelf). Compile-verified proof (can't RUN without the GPU).
+- ICD wired: radeon_icd.x86_64.json (api 1.3.274) + the .so exports vk_icdGetInstanceProcAddr +
+  vk_icdGetPhysicalDeviceProcAddr + vk_icdNegotiateLoaderICDInterfaceVersion (the full loader contract).
+COMPILE-COMPLETE: glslang + libdrm_amdgpu + RADV core + ACO + the .so + the ICD + the zero-phantom audit.
+HARDWARE-GATED (g4ad V520 / quota): device enum, queue submit, draw -- the runtime parity measurement.
+SO THE FULL AMD VULKAN STACK NOW COMPILES ON illumos: C1 DRM -> C3-amdgpu kernel driver -> libdrm_amdgpu
+(zero-phantom, Linux _IOC ABI) -> RADV+ACO userspace driver (zero-phantom) -> the ICD -> the Vulkan loader
+-> GGML_VULKAN. The instant the GPU quota grants, gpu-bringup.sh launches a g4ad + runs the amdgpu bring-up
++ this RADV .so + the accelerated GGML_VULKAN parity proof vs Linux. Persisted src/drm-port/radv/ (scripts +
+audits + ICD + RADV-STATUS.md; the 16MB .so is gitignored, on the node).

@@ -57,3 +57,4 @@ src/drm-port/**/drm
 src/riscv/**/*.linked
 src/riscv/**/toolchain-sol/
 src/riscv/**/sysroot-riscv-sol/
+src/drm-port/radv/*.so

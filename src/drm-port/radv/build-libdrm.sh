@@ -122,6 +122,17 @@ if [ $rc -ne 0 ]; then
   grep -E "FAILED:| error:|fatal error|not found|Dependency|ERROR|meson.build|undefined" "$log" | head -40 | sed 's/^/  /'
   echo "  --- log: $log ---"; exit 1
 fi
+# install the Linux-_IOC shim next to the installed drm.h so downstream
+# consumers (RADV/Mesa) that include <libdrm/drm.h> resolve the quote-include.
+cp -f /var/tmp/linux-ioctl-compat.h "$out/include/libdrm/linux-ioctl-compat.h" 2>/dev/null || true
+# libsync.h uses Linux _IOWR; on illumos pull the same shim (Linux _IOC encoding).
+LS_OUT="$out/include/libsync.h"
+if [ -f "$LS_OUT" ] && ! grep -q linux-ioctl-compat "$LS_OUT"; then
+  sed -i 's|#include <sys/ioctl.h>|#include <sys/ioctl.h>\n#ifdef __sun\n#include "linux-ioctl-compat.h"\n#endif|' "$LS_OUT" 2>/dev/null || true
+fi
+# the shim resolves via -I.../include/libdrm; also drop a copy in include/ so the
+# quote-include next to libsync.h resolves directly.
+cp -f /var/tmp/linux-ioctl-compat.h "$out/include/linux-ioctl-compat.h" 2>/dev/null || true
 echo "RESULT libdrm OK $out"
 echo "  amdgpu lib: $(ls "$out"/lib/libdrm_amdgpu* 2>/dev/null)"
 echo "  amdgpu pc:  $(ls "$out"/lib/pkgconfig/libdrm_amdgpu.pc 2>/dev/null)"

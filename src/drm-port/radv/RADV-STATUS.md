@@ -102,31 +102,97 @@ gate; mako/pyyaml/ninja present). The RADV target set is real and complete:
       layers_radv_*.c.o        <- app layers
       + ACO (aco_*) the RADV shader compiler (no LLVM)
 
-### 4. RADV core object compile: **BLOCKED on one build-time tool — glslangValidator**
+### 4. RADV core object compile: **DONE — `libvulkan_radeon.so` COMPILED**
 
-RADV's C/C++ objects have a ninja build-order dependency on generated SPIR-V
-headers (`src/amd/vulkan/bvh/*.spv.h` — the ray-tracing BVH build shaders, and
-the meta shaders) that are compiled at build time by **`glslangValidator`**
-(`find_program(..., required: with_amd_vk)` — a *hard* RADV requirement, not
-optional). No `.c.o` compiles until those `.spv.h` exist. The node had **no
-glslangValidator and no cmake** (glslang's build system). A stub glslang lets
-meson *config* pass (proving all deps resolve) but not the object compile.
+**glslang unblocked, then RADV compiled.** A real `glslangValidator` (glslang
+14.3.0, SPIR-V 1.6) was built from source on the node:
 
-**The precise remaining blocker: build `glslangValidator` (native build tool)
-for illumos.** It needs cmake, which the node also lacked; a cmake bootstrap
-(`./bootstrap && gmake`, cmake-3.29.6) was started on the node. Once cmake +
-glslang land, the RADV core objects (amdgpu winsys + device + queue +
-cmd_buffer) compile against the illumos-built libdrm_amdgpu with the same
-portability-patch set as C3a Venus.
+- **cmake** — the source bootstrap finished (`cmake 3.29.6` at
+  `/var/tmp/cmake-3.29.6/bin`), gcc-14.
+- **glslang** — KhronosGroup/glslang tag `14.3.0`, `cmake -GNinja -DENABLE_OPT=0`
+  (SPIRV-Tools optimizer not needed for RADV's `-V ... -x` GLSL path, so it was
+  skipped — no SPIRV-Tools/SPIRV-Headers fetch). Built the `glslang` executable +
+  the `glslangValidator` compat alias. Installed over the stub in
+  `/root/mesa-venv/bin`.
+- **Verify:** `glslangValidator --version` → `Glslang Version: 11:14.3.0`
+  (REAL, not `stub 11.0.0`); a trivial `.vert -> .spv` emits a 664-byte SPIR-V
+  (magic `0x07230203`); the exact RADV bvh invocation
+  `glslangValidator -V --target-env spirv1.5 -x -o out.spv.h in.comp` emits a
+  proper SPIR-V C header.
 
-This is a **build-tool** gap, not a portability gap: RADV's own C source
-configured cleanly and its winsys links only libdrm_amdgpu (ported) + libc.
-glslang is a host tool that emits the driver's built-in shaders; it is the same
-tool Mesa requires on Linux.
+With real glslang on PATH, the RADV ninja build proceeded and **linked
+`libvulkan_radeon.so` (16 MB)** for illumos x86_64:
 
-### 5. ICD manifest / loader dispatch: wired by the build
+- **19 `.spv.h`** SPIR-V headers generated at build time by the real glslang
+  (bvh RT-build shaders + radix_sort shaders) — the exact gate that the stub
+  could not pass.
+- **90 RADV objects** (`libvulkan_radeon.so.p/`) — the amdgpu winsys
+  (`winsys_amdgpu_radv_amdgpu_{winsys,bo,cs,surface}`), device / physical_device /
+  instance / queue / cmd_buffer / meta / nir / si_cmd_buffer, layers.
+- **30 ACO objects** (`libaco.a`) — the RADV shader compiler, no LLVM.
 
-RADV's meson emits `share/vulkan/icd.d/radeon_icd.x86_64.json`:
+**illumos compile breaks fixed (crib-and-adapt, banked in the build scripts):**
+
+1. **`linux-ioctl-compat.h` not found** — libdrm's *installed* `drm.h` `__sun`
+   branch `#include "linux-ioctl-compat.h"` (the Linux `_IOC` shim), but the shim
+   was not installed next to the headers. Fix: `build-libdrm.sh` now copies the
+   shim into `$out/include/libdrm/` (and `$out/include/`).
+2. **`alloca` implicit** — illumos puts `alloca` in `<alloca.h>`, not
+   `<stdlib.h>`. 10 AMD/ACO files use it. Fix: guarded `#include <alloca.h>` in
+   the two shared headers they pull — `src/util/macros.h` (C) and
+   `src/amd/compiler/aco_ir.h` (ACO C++). (A global `-include alloca.h` was tried
+   first but broke the `.S` assembler TUs — reverted.)
+3. **`getpwuid_r` arity** — illumos uses the 4-arg SunOS form returning
+   `struct passwd*`, not the 5-arg POSIX form. Fix: `__sun`-guarded call in
+   `src/util/disk_cache_os.c` + `src/amd/vulkan/meta/radv_meta.c` (both callers).
+4. **`libsync.h` `_IOWR`** — the amdgpu winsys pulls libdrm's `libsync.h`, which
+   uses Linux `_IOWR`; illumos `<sys/ioctl.h>` doesn't supply it. Fix:
+   `__sun`-guarded `#include "linux-ioctl-compat.h"` in the installed `libsync.h`
+   (same Linux `_IOC` encoding as drm.h — matches the C1 kernel).
+5. **`-Werror=incompatible-pointer-types` / `pointer-sign`** — illumos `int8_t`
+   is `char`, not `signed char`; RGTC format code trips mesa's own `-Werror`. Fix:
+   `-Dc_args=-Wno-error=incompatible-pointer-types -Wno-error=pointer-sign`
+   (warning-only flags, safe for `.S` unlike `-include`).
+
+Venus (`libvulkan_virtio.so`) was kept in the config for ICD-set parity but is
+NOT required for RADV; it hits an unrelated illumos `CMSG_*`/`msg_control`
+ancillary-data break in `vn_renderer_vtest.c` (Venus was the C3a deliverable and
+its own gap, not RADV's). The RADV target `libvulkan_radeon.so` was built
+directly and links clean.
+
+### 4b. Zero-phantom undef audit: **YES — every undef real**
+
+`elfdump -sN .dynsym libvulkan_radeon.so`:
+
+- **WEAK UNDEF: 5326** — the Vulkan entrypoint dispatch aliases (`wsi_*`,
+  `vk_common_*`, `vk_cmd_enqueue_*`, `radv_*`, and the `rra_/rmv_/sqtt_/rage2_/
+  metro_exodus_/quantic_dream_` app-workaround layers) + the ACO
+  `aco::instruction_buffer` TLS init helper. WEAK by ELF rule = optional; the
+  loader binds them to the in-`.so` entrypoint dispatch table (or leaves null).
+  Not phantom — every one is a same-`.so` dispatch trampoline, not an external.
+- **GLOB UNDEF: 336** — the hard externals. **Per-symbol grep of all 336 against
+  the union of the NEEDED libs → TRULY-UNRESOLVED = 0.** Every one resolves:
+  `libc.so.1` (pthread/str/mem/malloc/stdio/syscalls), `libdrm_amdgpu.so.1`
+  (`amdgpu_device_get_fd`, `amdgpu_bo_*`, `amdgpu_cs_*` — the winsys → C1 ioctl
+  path), `libdrm.so.2` (`drmSyncobj*`, `drmPrime*`, `drmCommandWriteRead`),
+  `libexpat.so.1` (`XML_*`, driconf), `libstdc++.so.6` (operator new/delete,
+  `std::__throw_*`, `_Rb_tree_*`, cxxabi vtables — the ACO C++ backend),
+  `libm.so.2` / `libz.so.1` / `libgcc_s.so.1` / `libelf.so.1`.
+
+**ZERO PHANTOM** — no undef that "should exist". See `radv/radv-undef-audit.txt`,
+`radv/radv-glob-undef.txt`, `radv/radv-real-ext-undef.txt`.
+
+### 5. ICD manifest / loader dispatch: **WIRED + VERIFIED**
+
+RADV's meson emitted `radeon_icd.x86_64.json` (`radv/radeon_icd.x86_64.json`):
+`api_version 1.3.274`, `library_path` → the built `libvulkan_radeon.so`. The `.so`
+**exports the full ICD loader contract**: `vk_icdGetInstanceProcAddr`,
+`vk_icdGetPhysicalDeviceProcAddr`, `vk_icdNegotiateLoaderICDInterfaceVersion`
+(verified via `elfdump -sN .dynsym`). On real hardware the loader reads the JSON →
+`dlopen` `libvulkan_radeon.so` → `vk_icdGetInstanceProcAddr` → RADV dispatch —
+same contract as the C3a Venus ICD.
+
+For reference, RADV's meson emits `share/vulkan/icd.d/radeon_icd.x86_64.json`:
 
     { "file_format_version":"1.0.0",
       "ICD": { "library_path":"../../../lib/libvulkan_radeon.so",
@@ -147,8 +213,9 @@ unblocks the compile.)
 | libdrm_amdgpu.so (amdgpu ioctl wrappers) | **COMPILED, zero-phantom (62 undefs all real)** |
 | Linux `_IOC` ioctl encoding == C1 kernel | **PROVEN (ioctl-encoding-test)** |
 | Mesa RADV meson config (`-Dvulkan-drivers=amd`, ACO, no LLVM) | **CONFIGURED, no dep gaps** |
-| RADV core objects (winsys/device/queue/cmd_buffer) | build-tool-gated on glslangValidator (cmake bootstrapping) |
-| `libvulkan_radeon.so` + `radeon_icd.x86_64.json` | emitted by the build once glslang lands |
+| glslangValidator (real, glslang 14.3.0, SPIR-V 1.6) | **BUILT, replaces the stub** |
+| RADV core objects (winsys/device/queue/cmd_buffer/meta/nir + ACO) | **COMPILED (90 RADV + 30 ACO objs, 19 glslang .spv.h)** |
+| `libvulkan_radeon.so` (16 MB) + `radeon_icd.x86_64.json` | **BUILT + zero-phantom (5326 WEAK dispatch aliases, 336 GLOB all real; 0 phantom)** |
 | Real Vulkan on the V520 (device enum, queue submit, draw) | HARDWARE-GATED (g4ad, quota grant) |
 
 ## Deferred (optional RADV features, not compile-blocking for the core)
@@ -168,14 +235,34 @@ unblocks the compile.)
     ioctl-encoding-test.c    proof the shim emits the Linux DRM AMDGPU ioctl numbers
     RADV-STATUS.md           this file
 
-## How to resume (finish the RADV core compile)
+## Reproduce (RADV core compile -- DONE)
 
-1. Wait for the cmake bootstrap on the node: `grep CMAKE_DONE /var/tmp/cmake-boot.log`.
-2. Build glslang: fetch glslang (a Vulkan-SDK-pinned tag), `cmake -GNinja` +
-   `ninja`, install `glslangValidator` onto PATH (replacing the stub in
-   `/root/mesa-venv/bin`).
-3. `sh /root/c2/build-mesa-radv.sh` → `libvulkan_radeon.so` +
-   `radeon_icd.x86_64.json`.
-4. Undef audit: `nm -u -D libvulkan_radeon.so` → every undef must be libc /
-   libdrm_amdgpu (ported) / libvulkan-loader / ACO-internal. Document like the
-   libdrm_amdgpu audit above.
+The compile is complete on this node. To reproduce from clean:
+
+1. **cmake** (build-tool): source bootstrap (gcc-14) or a cached nix cmake.
+   Binary on the node: `/var/tmp/cmake-3.29.6/bin/cmake` (cmake 3.29.6).
+2. **glslang** (real): `git clone --depth 1 --branch 14.3.0` KhronosGroup/glslang;
+   `cmake -S . -B build -GNinja -DENABLE_OPT=0 -DGLSLANG_TESTS=OFF`; `ninja -C build`;
+   `ninja -C build install` -> the `glslang` executable + a `glslangValidator` alias.
+   Install over the stub at `/root/mesa-venv/bin`. `glslangValidator --version` ->
+   `Glslang Version: 11:14.3.0` (not `stub`). ENABLE_OPT=0 skips SPIRV-Tools --
+   RADV's `-V ... -x` GLSL path does not need the optimizer.
+3. **libdrm_amdgpu**: `sh radv/build-libdrm.sh` -- now also installs the
+   `linux-ioctl-compat.h` shim next to the headers + patches the installed
+   `libsync.h` to pull the Linux `_IOC` encoding on `__sun`.
+4. **RADV**: `sh radv/build-mesa-radv.sh` -- meson config + ninja + install. The
+   five illumos fixes (alloca include / getpwuid_r arity / libsync `_IOWR` /
+   pointer-sign warning gates) are baked into the two build scripts. Or build just
+   the driver target:
+   `ninja -C /var/tmp/mesa-24.0.9/_brad src/amd/vulkan/libvulkan_radeon.so`.
+5. Artifacts persisted in `radv/`: `libvulkan_radeon.so` (16 MB),
+   `radeon_icd.x86_64.json`, `radv-undef-audit.txt`, `radv-glob-undef.txt`,
+   `radv-real-ext-undef.txt`.
+
+## Next (hardware-gated on the g4ad V520)
+
+Everything above is COMPILE-verified. What remains needs the real AMD V520 GPU
+(Navi 12, gfx1011) -- device enumeration, queue submit, draw/dispatch -- plus the
+C3-amdgpu kernel driver loaded (compile-only here, never modloaded into the live
+kernel). This is the FAST GGML_VULKAN path for llama.cpp on the V520, vs the
+software lavapipe fallback.

@@ -59,6 +59,43 @@ if [ -f "$VMB" ] && ! grep -q 'idep_nir' "$VMB"; then
   sed -i 's|^  idep_vulkan_runtime,|  idep_vulkan_runtime,\n  idep_nir,\n  idep_vtn,|' "$VMB" 2>/dev/null || true
 fi
 
+# illumos: alloca lives in <alloca.h> (not <stdlib.h>). RADV/ACO/ac_common use
+# alloca; inject a guarded include into the two shared headers they pull.
+MAC="$sd/src/util/macros.h"
+if [ -f "$MAC" ] && ! grep -q alloca.h "$MAC"; then
+  sed -i 's|#include <stdio.h>|#include <stdio.h>\n#ifdef __sun\n#include <alloca.h>\n#endif|' "$MAC" 2>/dev/null || true
+fi
+ACOIR="$sd/src/amd/compiler/aco_ir.h"
+if [ -f "$ACOIR" ] && ! grep -q alloca.h "$ACOIR"; then
+  sed -i 's|#define ACO_IR_H|#define ACO_IR_H\n#ifdef __sun\n#include <alloca.h>\n#endif|' "$ACOIR" 2>/dev/null || true
+fi
+
+# illumos: getpwuid_r is the 4-arg SunOS form (returns struct passwd*), not the
+# 5-arg POSIX form disk_cache_os.c assumes.
+DCO="$sd/src/util/disk_cache_os.c"
+if [ -f "$DCO" ] && ! grep -q "4-arg SunOS" "$DCO"; then
+  python3 - "$DCO" <<'PYX'
+import sys
+p=sys.argv[1]; s=open(p).read()
+old="         getpwuid_r(getuid(), &pwd, buf, buf_size, &result);\n"
+new=("#ifdef __sun\n         result = getpwuid_r(getuid(), &pwd, buf, buf_size); /* 4-arg SunOS */\n"
+     "#else\n         getpwuid_r(getuid(), &pwd, buf, buf_size, &result);\n#endif\n")
+open(p,"w").write(s.replace(old,new,1))
+PYX
+fi
+
+RVM="$sd/src/amd/vulkan/meta/radv_meta.c"
+if [ -f "$RVM" ] && ! grep -q "4-arg SunOS" "$RVM"; then
+  python3 - "$RVM" <<'PYM'
+import sys
+p=sys.argv[1]; s=open(p).read()
+old="   getpwuid_r(getuid(), &pwd, path2, PATH_MAX - strlen(suffix2), &result);\n"
+new=("#ifdef __sun\n   result = getpwuid_r(getuid(), &pwd, path2, PATH_MAX - strlen(suffix2)); /* 4-arg SunOS */\n"
+     "#else\n   getpwuid_r(getuid(), &pwd, path2, PATH_MAX - strlen(suffix2), &result);\n#endif\n")
+open(p,"w").write(s.replace(old,new,1))
+PYM
+fi
+
 out="/var/tmp/mesa-radv-out"; mkdir -p "$out"
 cat > /var/tmp/native-radv.$$.ini <<NFEOF
 [binaries]
@@ -74,6 +111,8 @@ cd "$sd"
   --wrap-mode=nodownload \
   --native-file /var/tmp/native-radv.$$.ini \
   -Dgallium-drivers=swrast \
+  -Dc_args="-Wno-error=incompatible-pointer-types -Wno-error=pointer-sign" \
+  -Dcpp_args="-Wno-error=incompatible-pointer-types" \
   -Dvulkan-drivers=amd,virtio \
   -Dvideo-codecs= \
   -Dplatforms= \

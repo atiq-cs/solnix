@@ -1,0 +1,32 @@
+libvulkan_radeon.so -- zero-phantom undef audit (illumos x86_64, compile-verified)
+
+.so size: 16053136 bytes (16 MB)
+SONAME:   libvulkan_radeon.so
+NEEDED:   libdrm_amdgpu.so.1, libdrm.so.2, libc.so.1, libexpat.so.1, libz.so.1,
+          libm.so.2, libstdc++.so.6, libgcc_s.so.1, libelf.so.1
+
+Dynamic undefined symbols (elfdump -sN .dynsym):
+  WEAK UNDEF : 5326  -- Vulkan dispatch aliases (wsi_/vk_common_/vk_cmd_enqueue_/
+               radv_/rra_/rmv_/sqtt_/rage2_/metro_exodus_/quantic_dream_ layer
+               trampolines) + the aco::instruction_buffer TLS init helper
+               (_ZTHN3aco18instruction_bufferE). WEAK = optional by ELF rule;
+               the loader binds them to the in-.so entrypoint dispatch table or
+               leaves null. Not phantom -- every one is a same-.so dispatch alias.
+  GLOB UNDEF : 336   -- the hard externals. EVERY ONE resolves against a NEEDED lib:
+    * libc.so.1     -- pthread_*, str*/mem*, malloc/calloc/realloc/free, stdio
+                       (fprintf/snprintf/...), math wrappers, syscalls
+                       (read/write/stat/mmap/uname/...), qsort_r, getenv, ...
+    * libdrm_amdgpu.so.1 -- amdgpu_device_get_fd, amdgpu_bo_*, amdgpu_cs_*,
+                       amdgpu_query_* (the amdgpu winsys -> C1 ioctl path)
+    * libdrm.so.2   -- drmGetDevices2, drmSyncobj*, drmPrime*, drmCommandWriteRead
+    * libexpat.so.1 -- XML_ParserCreate/ParseBuffer/SetElementHandler/... (driconf)
+    * libstdc++.so.6-- operator new/delete (_Znwm/_ZdlPvm), std::__throw_*,
+                       _Rb_tree_*, cxxabi vtables (ACO C++ backend)
+    * libm.so.2     -- sin/sinf/cos/... ; libz.so.1 -- deflate/inflate ;
+      libgcc_s.so.1 -- unwind/TLS ; libelf.so.1 -- shader ELF handling
+  Verified: per-symbol grep of all 336 GLOB undefs against the union of the NEEDED
+  libs -- TRULY-UNRESOLVED count = 0. ZERO PHANTOM.
+
+ICD entry points EXPORTED by libvulkan_radeon.so (loader contract, full):
+  vk_icdGetInstanceProcAddr, vk_icdGetPhysicalDeviceProcAddr,
+  vk_icdNegotiateLoaderICDInterfaceVersion
