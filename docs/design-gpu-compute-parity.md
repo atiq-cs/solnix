@@ -331,3 +331,21 @@ SO THE FULL AMD VULKAN STACK NOW COMPILES ON illumos: C1 DRM -> C3-amdgpu kernel
 -> GGML_VULKAN. The instant the GPU quota grants, gpu-bringup.sh launches a g4ad + runs the amdgpu bring-up
 + this RADV .so + the accelerated GGML_VULKAN parity proof vs Linux. Persisted src/drm-port/radv/ (scripts +
 audits + ICD + RADV-STATUS.md; the 16MB .so is gitignored, on the node).
+
+## C4-ANV COMPLETE (compile-phase) (2026-08-17): libvulkan_intel.so -- BOTH open Vulkan drivers on illumos
+Intel's ANV Vulkan driver COMPILED for illumos x86_64 (a fast follow-on -- reused the whole RADV toolchain:
+glslang 14.3.0/meson/ninja/libdrm/Mesa + the 5 Mesa-wide illumos fixes). libvulkan_intel.so: 22MB, 266 ANV
+objects + 16 genxml headers + 5 glslang shaders, ANV ~13.6k LOC. i915 AND xe DRM ioctls ported (xe=modern
+Arc/Xe, i915=legacy) -- ANV needs NO libdrm_intel, it issues i915/xe ioctls directly via intel_ioctl()->
+ioctl(); encoding proven to match the C1 kernel (DRM_IOCTL_XE_GEM_CREATE=0xc0386441, GEM_CLOSE=0x40086409,
+identical to Linux). 2 ANV-specific fixes on top of the 5 RADV ones: the Linux _IOC ioctl shim (same as
+RADV) + a portable futex fallback (illumos has no futex(2) -> pthread mutex+condvar in src/util/futex.c,
+UTIL_FUTEX_SUPPORTED for __sun). ZERO-PHANTOM: 6357 WEAK (intra-.so Vulkan dispatch) + 254 GLOB all real
+(libc incl ioctl, libdrm, libz, libstdc++/libgcc_s C++ ABI verified, libm) -> truly-unresolved = 0. ICD
+wired: intel_icd.x86_64.json (api 1.3.274) + all 3 vk_icd* loader entrypoints. Compile-complete: device/
+queue/cmd_buffer/allocator/pipeline/blorp/isl/brw-compiler/genxml/per-gen(90-200). Hardware-gated: real
+Vulkan on Intel Arc/xe hw. Deferred: intel-clc/RT (LLVM), video, hasvk.
+=> BOTH major OPEN Vulkan drivers now compile zero-phantom on illumos: RADV (AMD) + ANV (Intel). The
+Vulkan-compute-reaches-every-vendor vector -- one GGML_VULKAN runs on either vendor's GPU once a DRM node
+runs. The parity target g4ad is AMD (RADV); Intel Arc/xe (ANV) is ready if that hardware appears. NVIDIA's
+open path (NVK) is the same Mesa/C1 shape -- a future follow-on. gpu-bringup.sh fires on the quota grant.

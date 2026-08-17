@@ -1,0 +1,7 @@
+{
+    "ICD": {
+        "api_version": "1.3.274",
+        "library_path": "/var/tmp/mesa-anv-out/lib/libvulkan_intel.so"
+    },
+    "file_format_version": "1.0.0"
+}
