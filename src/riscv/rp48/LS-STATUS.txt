@@ -1,0 +1,91 @@
+R-P48 -- the DEFAULT ls -l startup stall FIXED at the root + 2 more utils
+=========================================================================
+
+HEADLINE (DONE, boot-verified -smp 2): the R-P47-deferred DEFAULT `ls -l`
+startup stall is FIXED.  DEFAULT `ls -l /etc` (no --time-style, locale abformat
+"%b %e  %Y") used to hang in ls startup BEFORE printing "total".
+
+  ROOT CAUSE (bisected in R-P48; the R-P47 abmon-precompute hypothesis was
+  DISPROVEN):
+    * abtest.dyn replicated ls abmon_init + abformat_init verbatim AND called
+      the REAL gnulib nstrftime with the exact default abformat -- ALL TERMINATE
+      ("Jan  1  1970", "Jan  1  2024", "Jan  1 00:00").  So the abmon precompute
+      and nstrftime were NOT the loop (contra the R-P47 note).
+    * An instrumented copy of ls.c (lsdbg, DBG() write markers on stdout) walked
+      the startup: main -> setlocale -> decode_switches -> getenv(TIME_STYLE) ->
+      argmatch -> locale_time_style -> ... the LAST marker printed was
+      "decode: locale_time_style, hard_locale?" -- the hang is INSIDE
+      hard_locale(LC_TIME).
+    * hard_locale -> gnulib setlocale_null_r (setlocale_null.c), whose body
+      dispatches into setlocale_null_r_unlocked.  The reduced lsup_support.c
+      implemented setlocale_null_r_unlocked by calling setlocale_null_r AGAIN:
+
+          int setlocale_null_r_unlocked(int c, char *b, size_t n) {
+              return setlocale_null_r(c, b, n);   /* <-- recurses back */
+          }
+
+      setlocale_null_r -> setlocale_null_r_unlocked -> setlocale_null_r -> ...
+      INFINITE MUTUAL RECURSION.
+    * Only the DEFAULT/locale time-style reaches hard_locale.  `+%b` takes the
+      '+' branch; long-iso/full-iso set the format directly in the switch(res)
+      cases -- NONE call hard_locale.  That is EXACTLY why only the default -l
+      hung while every explicit --time-style (+%b, long-iso) worked + exited.
+
+  THE FIX (one place, user/lsup_support.c):
+    setlocale_null_r_unlocked() now returns the C-locale string DIRECTLY (via
+    setlocale_null_unlocked), mirroring the real gnulib _unlocked contract
+    (copy the result; return 0 / ERANGE / EINVAL).  The cycle is broken.
+    ls.c and the verbatim gnulib .c stay UNMODIFIED; corelsup.dyn is the real
+    upstream ls.
+
+  PROOF (rp48/qemu-boot.log, boot-verified -smp 2): DEFAULT `ls -l /etc` ->
+      total 1
+      -rw-r--r-- 1 0 0 44 Jan  1  1970 release
+      [exit 0]
+    ...run FOREGROUNDED, and the shell reaches the next command
+    (default-ls-l-done).  The default long listing (mode/nlink/owner/group/size
+    + the abbreviated-month date + name) fully works AND exits.  (R-P47: hung
+    before "total".)
+
+MORE UTILS (bank toward a robust /bin; 16 real UNMODIFIED coreutils now):
+  * uname -- UNMODIFIED coreutils-9.5 uname.c.  The libc uname(2) already
+             existed (R-P31.3); uname.c under HAVE_SYSINFO also calls
+             sysinfo(SI_ARCHITECTURE/SI_PLATFORM), so the libc grew a sysinfo(2)
+             (locale.c, returns "riscv64") + a sys/systeminfo.h shim.
+             `uname -a` -> "SunOS solnix 5.11 solnix riscv64 riscv64 riscv64 ...".
+  * nproc -- UNMODIFIED coreutils-9.5 nproc.c + lib/nproc.c.  num_processors ->
+             the new libc sysconf(_SC_NPROCESSORS_ONLN) -> the new SYS_ncpu
+             kernel syscall (proc_ncpu_online = 1 + disp_secondary_online).
+  * mkdir -- the SYS_mkdir path (R-P37): mkdir /tmp/d5; cd into it; a file made
+             there reads back -- the new dir is real + usable.
+  16 real UNMODIFIED upstream coreutils on the one reusable libc.a:
+  echo true cat wc head tail basename dirname pwd env whoami yes false ls
+  uname nproc.
+
+DEFERRED TO R-P49:
+  1. The disk-backed blockfs mount root /blk is not opendir-able from USERLAND
+     (coreutils opendir/getdents -> ENOENT on the mount root), though reads of
+     files under it work (corecat /blk/persist) and on-disk mkdir /blk/sub is
+     proven KERNEL-side (R-P41.3).  A VFS mount-root-traversal gap: proc_getdents
+     / the vfs lookup does not descend into the mounted fs at the mount vnode.
+  2. R-P28.1 (cross-object ld.so.1 bind of the DYNAMIC hello) is intermittently
+     flaky under -smp 2 (exit status -1 vs the expected 42) -- a pre-existing
+     SMP timing race in the lazy PLT resolution, NOT introduced by R-P48; it
+     passes on a clean boot (the milestone log above shows exit 42 PASS).
+
+BUILD ENTRY POINTS (self-contained under rp48/; scripts retargeted rp47->rp48):
+  user/lsup_support.c          setlocale_null_r_unlocked returns C directly
+                               (breaks the recursion) + xdectoumax delegate
+  libc/port/locale.c           + sysinfo(2)(SI_*) + sysconf(_SC_NPROCESSORS_*)
+  libc/port/syscall.c          + __sys_ncpu() (SYS_ncpu wrapper)
+  libc/include/sys/systrap.h   + SYS_ncpu (225)
+  kernel/main.c                + SYS_ncpu case -> proc_ncpu_online()
+  kernel/proc.c                + proc_ncpu_online() (1 + disp_secondary_online)
+  user/lsup-shims/sys/systeminfo.h  SI_* selectors uname.c queries
+  user/build-cu6.sh            compile+link UNMODIFIED uname.c + nproc.c
+  user/abtest.c/.sh            abmon/nstrftime bisect harness (regression probe)
+  user/ls_dbg.c, build-lsdbg.sh  the instrumented-ls DBG bisect (DEBUG ONLY;
+                               corelsup.dyn stays UNMODIFIED upstream ls.c)
+  kernel/build-kernel.sh       feed: DEFAULT ls -l /etc FOREGROUNDED (headline)
+                               + uname -a + nproc + mkdir /tmp/d5; R-P48.1/.2/.3
+                               assertions

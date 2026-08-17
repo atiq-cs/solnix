@@ -3562,3 +3562,26 @@ Cribbed coreutils-9.5 false.c + illumos libc stdio/free + pipe/SIGPIPE (fifo_clo
 R-P48: the default-ls-l abmon_init startup stall + more utils (nproc/uname/mkdir need num_processors/
 systeminfo/getlogin). The fclose-static-stream + free-bounds + pipe-SIGPIPE fixes are broad correctness
 wins (every fclose/free/pipe caller). VERIFY: 183 PASS confirmed on node.
+
+## R-P48 DONE (2026-08-17): default ls -l FIXED (setlocale_null recursion) + uname/nproc/mkdir -- 16 real utils
+All boot-verified qemu -smp 2, 190 PASS / 0 real FAIL (verified on node), R-P24-47 regressions green.
+- DEFAULT ls -l startup stall ROOT-CAUSED (the R-P47 abmon hypothesis DISPROVEN by instrumented bisect --
+  abtest replicated abmon_init+abformat_init+real nstrftime and ALL terminated): the hang was in
+  decode_switches' locale_time_style case inside hard_locale(LC_TIME) -> gnulib setlocale_null_r ->
+  setlocale_null_r_unlocked, and the reduced lsup_support.c implemented _unlocked by calling
+  setlocale_null_r AGAIN -> infinite mutual recursion. Only the DEFAULT/locale time-style reaches
+  hard_locale (+%b/long-iso skip it) -- exactly why only the default -l hung. FIX (one place,
+  lsup_support.c): setlocale_null_r_unlocked returns the C-locale string directly (mirrors real gnulib);
+  ls.c stays UNMODIFIED. PROOF: default ls -l /etc -> "total 1 / -rw-r--r-- 1 0 0 44 Jan  1  1970 release"
+  + exit 0 + the shell continues.
+- uname: uname -a -> "SunOS solnix 5.11 solnix riscv64 riscv64 riscv64 Solaris" (libc sysinfo(2) SI_* +
+  sys/systeminfo.h shim). nproc: num_processors -> libc sysconf(_SC_NPROCESSORS_ONLN) -> new SYS_ncpu
+  kernel syscall (proc_ncpu_online). mkdir: real usable dir.
+- 16 real UNMODIFIED upstream coreutils on one libc.a: echo/true/false/cat/wc/head/tail/basename/dirname/
+  pwd/env/ls/whoami/yes/uname/nproc (+ mkdir).
+Cribbed coreutils-9.5 uname.c/nproc.c/mkdir.c + gnulib setlocale_null + illumos sysinfo/sysconf. DEFERRED
+R-P49 (documented): (1) blockfs mount-root /blk not opendir-able from userland (VFS mount-root traversal
+gap; file reads under it work, kernel-side mkdir /blk/sub proven R-P41.3); (2) R-P28.1 cross-object ld.so.1
+bind intermittently flaky under -smp 2 (PRE-EXISTING SMP timing race, passes on a clean boot, not
+introduced by R-P48). NEXT R-P49: the blockfs opendir traversal + the SMP ld.so race + more utils. The
+setlocale_null fix + SYS_ncpu are reusable. VERIFY: 190 PASS confirmed on node.
