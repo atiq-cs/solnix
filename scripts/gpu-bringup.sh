@@ -54,7 +54,9 @@ cat <<'STEPS'
    5. rings: GFX + SDMA ring rptr/wptr + BAR2 doorbell map; IH ring WPTR/RPTR live (C3-amdgpu-c/d).
    6. hw_init: per-IP-block .hw_init (common/GMC/GFX/SDMA/IH) reaches ring-test PASS.
    7. Mesa: radeonsi Gallium on the render node — glxinfo/OSMesa renders on-GPU (C2/C3a).
-   8. Vulkan: RADV (or the Venus ICD) — vulkaninfo enumerates the V520 queue.
+   8. Vulkan: RADV — libvulkan_radeon.so (COMPILED, zero-phantom, src/drm-port/radv/) + its ICD;
+      vulkaninfo enumerates the V520 queue. The full AMD Vulkan stack (DRM->amdgpu->libdrm_amdgpu->
+      RADV+ACO->ICD->loader) already compiles on illumos; this is the runtime activation on the V520.
    9. accelerated proof: llama.cpp GGML_VULKAN inference ON THE GPU — measure tok/s
       vs the 70 tok/s CPU baseline vs Linux on the same g4ad. THE PARITY NUMBER.
 STEPS
