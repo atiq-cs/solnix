@@ -1193,3 +1193,19 @@ cairo/pango (wave14) = the core desktop rendering+toolkit foundation for COSMIC.
 gettext-1.0 fails (its gettext-runtime sub-configure hardcodes illumos LDFLAGS -luutil -lidmap the aarch64
 seed lacks -- needs seed uutil/idmap stubs; dodged by dropping from glib/pango); gobject-introspection off
 (heavy). wave15: gdk-pixbuf + libepoxy + atk -> GTK4 proper, toward the COSMIC toolkit. wave14 entry -> fork.
+
+## PS-AARCH64-WAVE15 (2026-08-17): WAYLAND on illumos (COSMIC-native) + GTK4 dep graph
++6 EM_AARCH64 pkgs (published 21 paths): WAYLAND 1.26.0 -- the COSMIC-native protocol lib now
+cross-compiles on illumos (dropped the kqueue epoll-shim -- illumos has native epoll; added a
+`#elif defined(__sun)` getpeerucred(3C) arm to wayland-os.c -- a real illumos port), wayland-protocols
+1.49, graphene 1.10.8 (GTK4 matrix math), libxkbcommon 1.13.2 (keyboard, X-backend off), gdk-pixbuf 2.44.6
+(PIC nasm-free jpeg + wave7 png + builtin loaders + -fPIE copy-reloc + H6 socket -L), libepoxy 1.5.10 (GL
+dispatch, headless dlopen). aarch64 now 198 rows. THE COSMIC TOOLKIT PATH: font stack (wave13) + glib/
+cairo/pango (wave14) + wayland + GTK4-dep-graph (wave15). GTK4 itself NOT built -- its package.nix has
+unconditional heavy deps surviving x11Support=false waylandSupport=true (gobject-introspection no-disable,
+gst-plugins-base/bad, the X client libs, libpng-apng/nasm/tiff) -> needs a PATCHED gtk4. cross gettext
+still dodged (gettext-runtime sub-configure fails "C compiler cannot create executables" even w/ the syslib
+-L; illumos libc has gettext so nls off works). wave16: patched gtk4 (drop gobject-introspection+gstreamer,
+gate X client libs on waylandSupport, wire the jpeg/png/no-tiff overrides) -> libadwaita -> COSMIC apps.
+NOTE: COSMIC is Wayland-native + Rust -- wayland(wave15) + Rust(working) are the two most COSMIC-relevant
+pieces, both now on illumos; GTK4 is more for the GNOME/GTK app class than COSMIC itself. wave15 entry -> fork.
