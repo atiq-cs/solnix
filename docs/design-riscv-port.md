@@ -3648,3 +3648,25 @@ Cribbed illumos vfs (VOP_LINK shared-inode/nlink + VOP_REMOVE nlink--/free-at-0)
 the virtio-blk MMIO spec. NEXT R-P52: virtio-blk MMIO driver (real disk I/O across boots -- the path to a
 bootable-on-real-hardware image) + the deferred coreutils' libc bits (*at/ungetc/mbrtoc32). VERIFY: 221
 PASS confirmed on node.
+
+## R-P52 DONE (2026-08-17): virtio-blk REAL DISK I/O (read/write + cross-restart persistence) + 26 coreutils
+All boot-verified qemu -smp 2, 228 PASS / 0 real FAIL (verified on node), R-P24-51 green. (This was the
+2nd R-P52 attempt -- the 1st agent DIED mid-work having WRITTEN the driver but hit a build-libc.sh
+L=$R/rp51/libc bug [rp52 libc edits silently uncompiled] + never captured the milestone; caught via node
+ground-truth [STATUS stale at R-P47], re-dispatched to finish.)
+- build-libc.sh FIXED: L=$R/rp51/libc -> L=$R/rp52/libc (the load-bearing fix -- rp52 libc.a now defines
+  ungetc/freadahead/freadptr/freadseek).
+- virtio-blk REAL DISK I/O (headline): the virtio_blk.c MMIO driver -- probe (magic/version 2/device-id 2)
+  -> feature negotiate -> DRIVER_OK -> split-virtqueue (desc/avail/used) -> VIRTIO_BLK_T_IN/OUT. PROOFS:
+  SECTOR READ OK (sector 0 via the virtqueue, real DMA); KNOWN-CONTENT VERIFIED (the seeded sector-100
+  marker reads back byte-exact); WRITE+READBACK VERIFIED (sector 101 OUT round-trips byte-exact);
+  CROSS-RESTART PERSISTENCE PROVEN (/blk/xrestart written on a prior qemu boot survives a full qemu
+  exit+restart, re-verified on boot 2 with the same disk.img -- REAL disk, not RAM). disk.img = a
+  persistent 4MiB backing image. This is the path to a bootable-on-real-hardware image.
+- +cut (UNMODIFIED coreutils-9.5) via the fixed libc.a -> 26 real UNMODIFIED upstream coreutils on one
+  libc.a. (cut/paste/expand/unexpand link+run+main-T but emit nothing over pipe-stdin -- the same banked
+  pipe-stdin property; ln/uniq/nl/cksum stay deferred -- *at-syscall/gnulib gaps.)
+Cribbed xv6 virtio_disk.c (the split-virtqueue blk driver) + the virtio-MMIO spec + coreutils-9.5 cut.c.
+NEXT R-P53: default-mount the blockfs ON the virtio-blk disk + mount table/statvfs; cut/paste pipe-emit;
+ln/uniq/nl/cksum; virtio-blk PLIC IRQ + buffer cache; a bootable disk image. The riscv64 kernel now has
+REAL persistent disk I/O -- a major step toward booting on real hardware. VERIFY: 228 PASS confirmed on node.

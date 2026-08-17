@@ -1,5 +1,22 @@
 # RISC-V (riscv64) port — STATUS
 
+**Phase reached: R-P52** (complete, boot-verified qemu-system-riscv64 -machine
+virt -smp 2; 228 PASS / 0 real FAIL).  R-P52 lands a REAL virtio-blk MMIO
+split-virtqueue driver (kernel/virtio_blk.c): the device is probed
+(magic/version 2/device-id 2, features negotiated, DRIVER_OK), a known-content
+sector seeded in a qemu -drive image is READ back byte-exact through the
+descriptor/avail/used rings (real DMA), a WRITE round-trips, and a file written
+on a PRIOR qemu boot survives a full exit+restart (cross-restart persistence on
+a real disk).  It also fixes libc/build-libc.sh (it was rebuilding the rp51
+libc, so rp52 libc edits never compiled) and lands ungetc/freadptr/freadseek so
+UNMODIFIED coreutils-9.5 cut links (26 real UNMODIFIED coreutils on one libc.a).
+The current per-phase status + proof lives in `rp52/STATUS.md`; boot log
+`rp52/qemu-boot.log`.  Next: R-P53.
+
+--------------------------------------------------------------------------------
+Historical (R-P47) note follows:
+--------------------------------------------------------------------------------
+
 **Phase reached: R-P47** (the R-P46 kernel -- which fixed the %b/nstrftime
 blocker and added whoami/yes -- now **FIXES the two R-P46 deferred faults** and
 adds **1 more UNMODIFIED coreutils** (false).  (1) The FULL `ls -l` output/
