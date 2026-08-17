@@ -1399,3 +1399,20 @@ the userspace layer; the compositor activates with the GPU stack on g4ad hardwar
 of the desktop + GPU goals: BOTH the COSMIC compositor AND the accelerated-compute stack land at the same
 g4ad-runtime gate. NEXT: the x86 COSMIC stack (stage 1 running) mirrors this for the ISO target arch; then
 the compositor + a session on GPU hardware.
+
+## PS-X86-COSMIC-STAGE1 (2026-08-17): cmake unblocked on x86 illumos + 6 pkgs; the python wall is a WIRING gap
++6 x86_64-solaris pkgs (published 20 paths): cmake 4.3.4 (THE unblock -- broke the -lkstat/-lsendfile wall
+that had cmake documented as blocked; opens the whole cmake find_package class), freetype 2.14.3, brotli
+1.2.0, libuv 1.52.1, libarchive 3.8.8, rhash 1.4.6. 5 durable illumos fixes in solaris-overlay.nix (rhash
+solaris OS-token, libuv/libarchive doCheck=false, cmake extraSyslibs+ranlib/strip shims+-lkstat -lsendfile).
+⚠️ HONEST ROOT-CAUSE (ground-truthed): the agent reported "python3-3.14.6 / the meson stack BLOCKED" -- BUT
+x86 python3-3.14.6 ALREADY WORKS (python3-illumos-fix.nix from the pip-class wave: madxlm4... imports
+ctypes/ssl, built requests/rich/flask/etc.). The stage1 node's /root/tranche-224.nix does NOT import
+python3-illumos-fix (grep=0) -- so it rebuilt python3 from scratch + hit the walls the EXISTING fix already
+solves. So the x86 meson stack (wayland/harfbuzz/cairo/pango/GTK4) is NOT actually blocked -- it's a WIRING
+gap: wire python3-illumos-fix into the desktop-stage tranche + point meson's python attr at the fixed
+python3 (the same recursive python314 self-override the pip-class wave used). FIX = import python3-illumos-fix
++ the meson-python attr override, then the x86 meson desktop stack builds (mirroring aarch64 waves 14-17
+which DID have the fix wired). NEXT (stage 2): wire the existing python3 fix -> x86 wayland/harfbuzz/cairo/
+pango/GTK4 (the meson stack) -> then the COSMIC crates (aarch64-proven) native on x86 -> the ISO. 8-stage
+roadmap + honest Firefox(unported)/Chrome(closed) gap in docs/x86-cosmic-stack.md.
