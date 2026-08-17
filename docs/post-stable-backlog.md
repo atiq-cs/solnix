@@ -1179,3 +1179,17 @@ libstdc++.so.6-open-failed -> -L<gcc-unwrapped>/usr/gcc/10/lib/amd64. aarch64 no
 STACK IS SUBSTANTIALLY OPEN (freetype+harfbuzz+fribidi+pixman+fontconfig = the core text-rendering libs for
 COSMIC). REMAINING (wave14): cairo/pango need a TARGET aarch64 python3 interpreter (glib preFixup ->
 python3Packages -> the cross python3 build + its own socketmodule fix). wave13 entry -> fork.
+
+## PS-AARCH64-WAVE14 (2026-08-17): font->GUI-toolkit path OPEN (glib/cairo/pango) -- COSMIC toolkit foundation
++16 EM_AARCH64 pkgs (published 42 paths): the CROSS aarch64 python3 (the keystone) + glib + cairo + pango
++ tcl + the cross-python deps (xz/zstd/sqlite/readline/ncurses/bzip2/gdbm/mpdecimal/expat) + libthai/
+libdatrie. Cracked 4 cross-python walls: (1) configure.ac MACHDEP no solaris cross arm -> added *-*-solaris*
+arms, (2) sysconfig.get_platform() release=None -> guarded, (3) socketmodule Py_SUNOS_VERSION->0 + cc
+-shared -z nodefs + H6 syslib -L, (4) cross-python deps -fPIC+static. + illumos glib (drop target gettext,
+_POSIX_PTHREAD_SEMANTICS getpwuid_r, _XOPEN_SOURCE=600 _XPG4_2 CMSG, Solaris sysinfo fallback), cairo
+(solaris ipc_rmid arm), pango (libthai/libdatrie, dropped libXft dejavu drag). aarch64 now 192 rows
+(13->192 this session). THE FONT->GUI-TOOLKIT PATH IS OPEN: freetype/harfbuzz/fontconfig (wave13) + glib/
+cairo/pango (wave14) = the core desktop rendering+toolkit foundation for COSMIC. REMAINING (wave15): cross
+gettext-1.0 fails (its gettext-runtime sub-configure hardcodes illumos LDFLAGS -luutil -lidmap the aarch64
+seed lacks -- needs seed uutil/idmap stubs; dodged by dropping from glib/pango); gobject-introspection off
+(heavy). wave15: gdk-pixbuf + libepoxy + atk -> GTK4 proper, toward the COSMIC toolkit. wave14 entry -> fork.
