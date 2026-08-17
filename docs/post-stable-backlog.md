@@ -1332,3 +1332,22 @@ publishing `nix-store -qR` (full closure) per wave would prevent this class of h
 the agent: fetchurl-shim pickHash (first-non-empty; "" or x = "" in Nix bit fetchPypi) + zstd/libffi test
 disables. The host-sourced PoC ISO (185MB) stays a PoC. NEXT: whoever has the linux cross-builder republishes
 the 14 (option A) -> then /var/tmp/solnix-nix-native-desktop/nix-native-desktop-build.sh finishes the ISO.
+
+## PS-AARCH64-WAVE18 (2026-08-17): aarch64-cross-rust WORKS -- the COSMIC Rust gate is OPEN
+The last toolchain gate for the COSMIC Rust stack on aarch64 is cracked. aarch64-unknown-illumos is a real
+rustc target (llvm-target aarch64-unknown-solaris2.11) but TIER-3 (no prebuilt std). PATH B (build-std),
+tractable + no nightly: the OI x86 rustc ships rust-src + RUSTC_BOOTSTRAP=1 unlocks -Zbuild-std=std,
+panic_abort (aarch64 std from source) + the wave aarch64 cross-gcc linker + a syslib shim (libposix4->librt,
+libmd/libmp symlinks, libsendfile/liblgrp stubs via RUSTFLAGS -L -lmd -lmp). PROVEN two ways (both readelf
+Machine: AArch64): trivial fn main() -> EM_AARCH64 EXEC (interp /lib/ld.so.1) + a std-using staticlib (the
+librsvg-c shape) -> EM_AARCH64 .a with exported C symbol. So the COSMIC Rust stack is CROSS-BUILDABLE at the
+toolchain level -- remaining per-crate work is the same buildRustPackage cross-wiring + native-lib deps
+(banked waves 13-18), not a rustc/std limitation. + libsoup 3.6.6 built (the -lunistring fix: -L libunistring
+-L libidn2 -lunistring -lidn2 onto static libpsl.a; skipped examples that pulled x86 libidn2) + libpsl 0.21.5.
+librsvg NOT built -- but it's a nixpkgs INTEGRATION issue (the fetchurl-shim zeroed-hash trap on the
+crate-vendor tarball), NOT a codegen gap (the staticlib path is proven); next = a real cargo-vendor FOD +
+point rustPlatform at crossRustEnv. aarch64 now 215 rows. aarch64-rust-overlay.nix + report durable.
+=> THE COSMIC DESKTOP PATH ON aarch64 IS NOW UNBLOCKED AT EVERY TOOLCHAIN LAYER: Wayland (w15) + GTK4/
+libadwaita (w16/17) + aarch64-cross-rust (w18, build-std). The remaining work to a running COSMIC is
+per-crate cross-build integration (the COSMIC Rust crates + smithay) + a Wayland compositor -- bounded
+integration, no missing toolchain. NOTE: the OI rust seed (3GB) needs staging into a nix FOD (documented).
