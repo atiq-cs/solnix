@@ -1103,3 +1103,21 @@ native gtest->openssl). ROOT CAUSE of all remaining skips = the NATIVE openssl-3
 symbol referencing errors" -- the H6 native-syslib -L gap on the BUILD platform). THE single highest-leverage
 next target: fix native openssl (build-platform) -> unblocks protobuf's native protoc + harfbuzz/fribidi
 meson + cxxopts icu. wave12 = fix native openssl then harvest protobuf/font-stack. wave11 entry -> fork.
+
+## PS-RUST-ON-ILLUMOS (2026-08-17): Rust WORKS on solnix -- gates COSMIC + local-LLM + python-crypto
+DEFINITIVE: Rust on solnix is feasible + WORKING TODAY. illumos is a Rust TIER-2 target
+(x86_64-unknown-illumos: host tools + std). Stage0 from the OI Hipster pkg developer/lang/rustc@1.97.1
+(rustc + cargo + rustdoc + clippy + rust-analyzer + illumos std, 1.67GB) extracted into a scratch pkg
+image (no system mutation), wrapped as a Nix seed. PROVEN: rustc 1.97.1 + cargo 1.97.1 run; trivial crate
+-> running x86_64-illumos ELF; cargo new/build + crates.io fetch + external crate (itoa) compile. THE
+python-crypto unlock PROVEN END-TO-END: built pyo3 0.22.6 (the exact rust backend cryptography/rpds-py/
+pydantic-core use) -- full proc-macro chain (syn/pyo3-macros/pyo3-build-config/pyo3-ffi) compiled, and
+python3 -c "import pyo3test; pyo3test.add(2,40)" returned 42 across the FFI boundary. Seed durable in fork:
+pkgs/os-specific/illumos/rust-illumos-seed.nix; report docs/rust-illumos-bootstrap.md; published
+rust-illumos-1.97.1 (wrapped) + rust-seed-stage (raw). Binaries carry RUNPATH=/usr/gcc/14/lib/amd64:/usr/
+lib -> the seed wraps them w/ LD_LIBRARY_PATH+cc. NEXT (high value): expose rustc/cargo/rustPlatform in
+solaris-overlay so buildRustPackage derivations resolve -> then (a) the python-crypto pool (cryptography/
+pydantic-core/rpds-py/hypothesis/bcrypt/pynacl), (b) Rust CLI tools (ripgrep/fd/bat/eza), (c) the FOUNDATION
+for COSMIC (Rust desktop) + ollama-adjacent ML tooling. De-ref /usr/gcc/14 to the tranche's nixpkgs gcc-14
+for a hermetic closure. THIS is the 5th deep unlock this session (zstd, python3, python-C-ext, aarch64-C++,
+now Rust) -- Rust was the single biggest gate on the maintainer's expanded COSMIC + local-LLM goals.
