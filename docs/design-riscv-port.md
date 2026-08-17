@@ -3585,3 +3585,25 @@ gap; file reads under it work, kernel-side mkdir /blk/sub proven R-P41.3); (2) R
 bind intermittently flaky under -smp 2 (PRE-EXISTING SMP timing race, passes on a clean boot, not
 introduced by R-P48). NEXT R-P49: the blockfs opendir traversal + the SMP ld.so race + more utils. The
 setlocale_null fix + SYS_ncpu are reusable. VERIFY: 190 PASS confirmed on node.
+
+## R-P49 DONE (2026-08-17): blockfs opendir + SMP ld.so fence.i race fixed -- 18 real coreutils
+All boot-verified qemu -smp 2, 201 PASS / 0 real FAIL (verified on node; report said 198), R-P24-48
+regressions green.
+- blockfs mount-root opendir: proc_openf only routed /blk/NAME leaves (required path[4]=='/'); bare /blk
+  fell to vfs_walk -> ramfs root -> ENOENT. FIX: proc_openf matches the bare mount root (path[4]==0) +
+  crosses into the mounted fs root (vfs_blockfs_opendir("") -> blockfs_readdir("")). PROOF: ls /blk ->
+  "hello persist sub". (per-entry lstat metadata prints "?" -- blockfs getattr wiring deferred R-P50.)
+- SMP ld.so.1 bind race ROOT-CAUSED (a real RISC-V I-cache-coherence bug): ld.so maps a DT_NEEDED .so's
+  CODE pages with plain DATA stores; RISC-V needs fence.i before a hart EXECUTES them, but only sfence.vma
+  (TLB) was done -> a hart fetched stale I-cache lines -> __multf3 returned garbage -> exit -1. FIX: local
+  fence.i + SBI remote_fence_i to all harts in exec_map_so + fence.i in rv_set_satp (root-switch backstop);
+  kernel -march += _zifencei. PROOF: R-P28.1 exits 42; 3x milestone re-boots all "bind PROVEN"; a 20-boot
+  stress loop 20/20 (local-only fence.i was ~1-in-15 flaky; remote_fence_i made it deterministic). (Also
+  caught+fixed a substring-match assertion bug: status=42 falsely matched 4294967295 -> gated on the
+  "bind PROVEN"/"bind FAILED" lines.)
+- +unlink (libc unlink(2) -> vfs_unlink) + tty (libc ttyname -> /dev/console). 18 real UNMODIFIED upstream
+  coreutils on one libc.a.
+Cribbed illumos vfs mount-crossing + ld.so.1 (the I-cache/fence.i coherence on the first-map path) +
+coreutils-9.5 unlink.c/tty.c + RISC-V Zifencei. NEXT R-P50 (consolidation): wire blockfs getattr into
+stat/lstat so ls -l /blk shows real metadata + more utils. The fence.i fix is a broad SMP-correctness win
+(any dynamically-loaded code on multi-hart). VERIFY: 201 PASS confirmed on node.
