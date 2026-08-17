@@ -1351,3 +1351,24 @@ point rustPlatform at crossRustEnv. aarch64 now 215 rows. aarch64-rust-overlay.n
 libadwaita (w16/17) + aarch64-cross-rust (w18, build-std). The remaining work to a running COSMIC is
 per-crate cross-build integration (the COSMIC Rust crates + smithay) + a Wayland compositor -- bounded
 integration, no missing toolchain. NOTE: the OI rust seed (3GB) needs staging into a nix FOD (documented).
+
+## PS-COSMIC-RUST-STACK (2026-08-17): the COSMIC Rust stack CROSS-BUILDS to aarch64-illumos (one bounded blocker)
+LANDMARK for the COSMIC path: the COSMIC/Wayland Rust crate stack cross-builds to EM_AARCH64 TODAY via the
+wave18 build-std recipe. THE ECOSYSTEM GATE IS OPEN: libc 0.2 ships solarish/illumos.rs (full illumos
+support); nix 0.29 + rustix 0.38/1.1 both cross-build clean (rustix is illumos-aware by design: os!=linux
+-> libc backend, os==illumos -> solarish feature). 16 crates cross-built EM_AARCH64 (verified readelf
+Machine: AArch64): libc/nix/rustix/errno/memmap2/polling + calloop (smithay's event loop) + cosmic-text
+(COSMIC's text shaper + rustybuzz/swash/skrifa/fontdb/unicode-bidi/rayon) + iced_core (COSMIC's GUI base) +
+palette + the xkbcommon binding (pkg-config-cross wired to the w18 aarch64 .pc). ~60+ crates in the
+transitive closures, all AArch64.
+THE ONE PRECISE BLOCKER (bounded, upstreamable): wayland-backend's pure-Rust SERVER backend (compiled
+unconditionally, gates wayland-client/server + smithay-client-toolkit) has NO illumos poll path: (1) a hard
+epoll(linux)/kqueue(BSD) allowlist that omits illumos, (2) RecvFlags::CMSG_CLOEXEC (Linux MSG_CMSG_CLOEXEC,
+cfg'd out on solarish by rustix). illumos has no epoll in rustix 0.38 (uses event ports / poll(2)). FIX =
+a bounded crate patch adding an illumos poll(2)/event-ports path + a solarish recv-flag branch (the agent
+WROTE the patch -> fork rust-patches/). NOT a rustc/std/nix/rustix limitation. => COSMIC ON solnix IS
+REACHABLE: toolchain (w18 build-std) + ecosystem (libc/nix/rustix illumos) + COSMIC rendering (cosmic-text)
++ GUI (iced_core) all cross-build; only wayland-backend's poll path needs the illumos patch, then the
+wayland-facing crates + cosmic-comp (the compositor) + the cosmic-* app crates build. This is INTEGRATION
+(bounded crate patches), not a missing toolchain. NEXT: apply the wayland-backend patch -> wayland-client/
+server + smithay-client-toolkit -> cosmic-comp -> a COSMIC session. Report docs/cosmic-rust-stack.md.
