@@ -3628,3 +3628,23 @@ getattr + link + coreutils-9.5 stat.c/link.c/fold.c/tr.c. NEXT R-P51: real hard 
 illumos-riscv64 kernel booting under qemu, SMP-correct, running an interactive shell + 22 real UNMODIFIED
 upstream GNU coreutils against a real libc.a with a persistent block-backed fs -- in one session (R-P17->
 R-P50). VERIFY: 217 PASS confirmed on node.
+
+## R-P51 DONE (2026-08-17): REAL hard links (shared inode/nlink) + 25 coreutils + virtio-blk plan
+All boot-verified qemu -smp 2, 221 PASS / 0 real FAIL (verified on node), R-P24-50 green, SMP determinism
+3/3 (exit 42).
+- REAL hard links (headline): R-P50's vfs_link COPIED bytes; R-P51 splits the tmpfs slot into a DIRECTORY
+  ENTRY (name + v_ino) + a shared tmp_inode (data + len + cap + i_nlink). link(2) adds a 2nd entry at the
+  SAME inode + bumps nlink; unlink(2) frees the entry, drops nlink, frees the inode data ONLY at nlink==0.
+  proc_stat/proc_fstat + libc stat.c report st_nlink/st_ino. PROOF: stat /tmp/a AND /tmp/b -> both
+  "Inode: 11 Links: 2"; echo >> /tmp/a; cat /tmp/b -> shared data; unlink /tmp/a; cat /tmp/b -> still reads
+  (nlink 2->1); unlink /tmp/b -> inode freed (1->0). + >> append to the shell.
+- +paste/expand/unexpand (UNMODIFIED coreutils-9.5). 25 real UNMODIFIED upstream coreutils on one libc.a.
+  Deferred R-P52 (libc gaps, documented): ln (*at syscall family), cut (ungetc/freadptr), uniq (mbrtoc32),
+  nl (xdectoint), cksum (<byteswap.h>).
+- virtio-blk DOCUMENTED for R-P52 (rp51/VIRTIO-BLK-PLAN.md): the MMIO register layout, the split-virtqueue
+  descriptor/avail/used rings, the 3-descriptor blk request, the init + one-sector-read sequence, wiring
+  into bdev_strategy. RAM-blockfs kept; real sector read deferred.
+Cribbed illumos vfs (VOP_LINK shared-inode/nlink + VOP_REMOVE nlink--/free-at-0) + coreutils-9.5 src/ +
+the virtio-blk MMIO spec. NEXT R-P52: virtio-blk MMIO driver (real disk I/O across boots -- the path to a
+bootable-on-real-hardware image) + the deferred coreutils' libc bits (*at/ungetc/mbrtoc32). VERIFY: 221
+PASS confirmed on node.
