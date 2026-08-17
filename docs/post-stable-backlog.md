@@ -1151,3 +1151,16 @@ wants de-referencing to from-source gcc-14 for a hermetic closure. NEXT: harvest
 proven maturin path) + this is the FOUNDATION for COSMIC (Rust desktop) -- the maintainer's expanded goal.
 The 5th deep unlock (zstd/python3/python-C-ext/aarch64-C++/Rust) is now productized: real Rust binaries run
 on solnix.
+
+## PS-RUST-WAVE2 (2026-08-17): the python-crypto pool is OPEN + 10 Rust CLIs
++13 pkgs: 6 new Rust CLIs (just/sd/zoxide/dust/eza/bat -- 10 total w/ ripgrep/fd/tokei/hyperfine) + the
+PYTHON-CRYPTO POOL: cryptography 44.0.0 (pyo3 + native OpenSSL 3.6.3 -- real SHA256 MATCHES hashlib
+byte-for-byte, the headline; CC=stdenv.cc/bin/cc, OPENSSL_NO_VENDOR=1), pydantic-core 2.33.2 (imports;
+SchemaValidator runtime segfaults on py3.14/pyo3<0.26 -- import is the boot proof), cffi 2.1.0, the
+jsonschema chain (rpds-py[wave1]->referencing 0.37->jsonschema-specifications->jsonschema 4.26.0 all
+import). Published 26 paths. registry 1517. Overlay durable: pydeps-crypto-overlay.nix. pydantic/fastapi
+backend now imports -- pydantic v2 itself blocks only on an unrelated unixtools.nix solaris recursion +
+the pyo3-0.29 SchemaValidator rebuild (NOT the rust toolchain). SKIPPED: hypothesis/bcrypt (seed-maturin/
+setuptools-rust, >2 tries). BLOCKERS: pydantic-core SchemaValidator (pyo3-0.29 rebuild), unixtools.nix
+solaris provider (one-line), on-host cargo-vendor (needs a vendor-FOD shim). Rust is now a productive
+solnix toolchain: real CLIs run + the python-crypto backend does real crypto.
