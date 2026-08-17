@@ -3435,3 +3435,23 @@ Cribbed illumos libc qsort(shellsort)/strcoll/nsswitch-files getpwuid + GNU core
 illumos ufs dir inode + xv6 fs.c dirlookup/dirlink. NEXT R-P42: faithful upstream src/ls.c with the gnulib
 scaffolding (the ~32 modules) so ls is unmodified-upstream too + more utils (head/tail/mkdir/rm) toward a
 self-hosting coreutils set from real source, + toward running a cache-built riscv64 binary.
+
+## R-P42 DONE (2026-08-17): 8 real upstream coreutils utils on one libc.a (head/tail/basename/dirname added)
+All boot-verified qemu -smp 2, 156 PASS / 0 FAIL (orchestrator RE-RAN the milestone to confirm -- the
+first R-P42 agent DIED stuck on ls.c's 31 gnulib modules; STATUS was ground-truthed at R-P41, the retry
+used a wedge-proof scope). R-P24-41 regressions green.
+- head + tail: UNMODIFIED coreutils-9.5 src/head.c (1097 lines) + src/tail.c (2527 lines) verbatim against
+  rp42/libc/libc.a via per-util gnulib glue (C-locale reductions on the proven wc_glue.h), dynamic via
+  ld.so.1. PROOF: head -2 /etc/release -> both lines; tail -1 /etc/release -> last line. libc grew memrchr
+  + clearerr/fpurge.
+- basename + dirname: UNMODIFIED src/basename.c + src/dirname.c (the zero-kernel-change utils) via cu3_glue
+  (gnulib base_name/dir_len/strip_trailing_slashes reduced). PROOF: basename /usr/lib/ld.so.1 -> ld.so.1;
+  dirname /usr/lib/ld.so.1 -> /usr/lib.
+- FULL REAL-UPSTREAM SET = 8: echo/true/cat/wc/head/tail/basename/dirname (all [exit 0] in the boot).
+- ls.c SURVEYED + DEFERRED to R-P43 (confirmed rabbit hole: 5658 lines, 31 gnulib modules -- obstack/mpsort/
+  hash/human/mbswidth/dircolors/filevercmp/acl/canonicalize/filemode); the from-scratch R-P41 ls stays.
+  env.c also deferred (needs sig2str/operand2sig); pwd needs a kernel getcwd (R-P43).
+Cribbed coreutils-9.5 src/head.c/tail.c/basename.c/dirname.c + gnulib; illumos libc memrchr. NEXT R-P43:
+kernel getcwd -> pwd, sig2str -> env, then the faithful ls.c (the gnulib set), toward a fuller real
+coreutils /bin. LESSON RE-CONFIRMED: ground-truth on the node (re-ran the milestone) rather than trust a
+truncated agent report; the first R-P42 died + was caught.

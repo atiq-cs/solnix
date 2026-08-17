@@ -1,14 +1,95 @@
 # RISC-V (riscv64) port — STATUS
 
-**Phase reached: R-P41** (the R-P40 kernel -- which GREW a real, reusable
-solnix riscv64 `libc.a` and linked + ran the unmodified GNU coreutils `cat`
-against it, leaving a disk-backed blockfs mounted at boot -- now **grows that
-libc further** [`qsort`, `strcoll`, `getpwuid`/`getgrgid`, `fileno`/`isatty`/
-`setvbuf`, `readlink`, `strtoul` + string helpers, `printf %*s`], **links +
-runs a REAL coreutils SET** [the UNMODIFIED GNU coreutils `wc` + a real `ls`],
-and **grows the blockfs with SUBDIRECTORIES** [a nested `/blk/sub/f` persists
-across an unmount+remount, `ls /blk/sub` lists it] -- each boot-verified under
-`qemu-system-riscv64 -machine virt -smp 2`).
+**Phase reached: R-P42** (the R-P41 kernel -- which GREW a real, reusable
+solnix riscv64 `libc.a` and ran a REAL coreutils SET [`echo`/`true`/`cat`/`wc`
+from UNMODIFIED upstream source + a from-scratch `ls`] with subdirectory
+persistence -- now **links + runs MORE real, UNMODIFIED upstream coreutils
+utils on the SAME `libc.a`**: the verbatim GNU coreutils-9.5 `src/head.c` and
+`src/tail.c` [`safe_read`/`full_read` + the real `read(2)` byte/line loop; the
+libc grew `memrchr` for head's reverse line scan], dynamically linked via
+`ld.so.1`, plus two more syscall-light utils `src/basename.c` + `src/dirname.c`
+[gnulib `base_name`/`dir_len` reduced, pure string]. Each boot-verified under
+`qemu-system-riscv64 -machine virt -smp 2` -- 155 PASS / 0 FAIL.)
+
+R-P42 deliverables (all boot-verified, `-smp 2`, on top of the R-P24..R-P41
+regressions which stay green):
+
+1. **head + tail (UNMODIFIED coreutils-9.5 `src/head.c` + `src/tail.c`).**
+   Compiled verbatim from a headerless build tree
+   (`rp42/upstream/coreutils-9.5/src/{head,tail}.c`, byte-identical to the
+   `coreutils-9.5.tar.xz` extract in `rp42/upstream/cu-full/`) against the REAL
+   `rp42/libc/libc.a` via a per-util gnulib scaffolding built on the proven
+   `wc_glue.h` C-locale reduction: `head-include/head_glue.h` supplies
+   `safe_read`/`full_read` (gnulib `lib/safe-read.c`+`lib/full-write.c` reduced
+   to the EINTR-retry loop), `xdectoumax` (`lib/xdectoint.c` reduced with the
+   `bkKmMG...` IEC multipliers), `xmalloc`/`xnrealloc`, `offtostr`, `ISDIGIT`,
+   `OFF_T_MAX`, `emit_mandatory_arg_note`, and `quote()`/`assure()` (identity in
+   the C locale); `tail-include/tail_glue.h` adds `cl_strtod`/`xstrtod`,
+   `xstrtoumax`+the `LONGINT_*` enum, `xnanosleep`/`iopoll`/`isapipe` (stubs --
+   the `-f` follow path is unreachable without inotify on the reduced kernel),
+   `struct timespec`+`get_stat_mtime`/`dtotimespec`, `xpalloc`, `last_component`,
+   `main_exit`/`write_error`, and the `errno`/`fcntl` constants. The libc grew
+   ONE symbol for these: `memrchr` (`port/misc.c`, proto in `include/string.h`),
+   plus `clearerr`+`fpurge` in `port/stdio2.c`. `nm` shows `read`/`lseek`/
+   `open`/`write`/`printf`/`getopt_long` resolved `T` STATICALLY from `libc.a`.
+   Boot proof: `head -2 /etc/release` -> `solnix riscv64 (R-P31)` +
+   `SunOS solnix-riscv64` (both lines); `tail -1 /etc/release` ->
+   `SunOS solnix-riscv64` (the last line). `corehead.dyn`/`coretail.dyn` are
+   `/bin/corehead` `/bin/coretail`.
+
+2. **basename + dirname (UNMODIFIED coreutils-9.5 `src/basename.c` +
+   `src/dirname.c`).** Two syscall-light utils (pure string, no new kernel
+   syscall) against the same libc via `cu3-include/cu3_glue.h`, which reduces
+   the gnulib `basename-lgpl`/`dirname-lgpl`/`stripslash` string helpers
+   (`base_name`/`base_len`/`dir_len`/`last_component`/`strip_trailing_slashes`,
+   POSIX single-slash) + the `filename.h` macros
+   (`FILE_SYSTEM_PREFIX_LEN`/`ISSLASH`/`IS_RELATIVE_FILE_NAME`). Boot proof:
+   `basename /usr/lib/ld.so.1` -> `ld.so.1`; `dirname /usr/lib/ld.so.1` ->
+   `/usr/lib`. `/bin/corebasename` `/bin/coredirname`.
+
+So the real, UNMODIFIED upstream coreutils SET on ONE reusable `libc.a` is now
+**8 utils**: `echo` (R-P38/39), `true` (R-P39), `cat` (R-P40), `wc` (R-P41),
+**`head`**, **`tail`**, **`basename`**, **`dirname`** (R-P42). `ls` remains the
+from-scratch R-P41 exerciser (`/bin/corels`).
+
+**DEFERRED to R-P43:**
+- **`env.c`** -- attempted (`build-cu3.sh` compiles it optionally); does not
+  compile against the current glue without `sig2str`/`operand2sig` (signal-name
+  tables), `intptr_t`/`IDX_MAX`/`EXIT_CANCELED`/`SIGNUM_BOUND`. A bounded chunk
+  of glue, deferred to keep R-P42 wedge-proof.
+- **UNMODIFIED `src/ls.c`** -- 5658 lines, 31 gnulib module headers including the
+  heavy ones (`obstack`, `mpsort`, `hash`, `human`, `mbswidth`, `dircolors`,
+  `filevercmp`, `acl`, `canonicalize`, `filemode`, `strftime`, `idcache`). This
+  is the same rabbit hole the R-P41 note flagged; NOT attempted past the include
+  survey to avoid wedging the phase. The from-scratch R-P41 `ls` stays as the
+  grown-libc exerciser. Real upstream `ls.c` deferred to R-P43+.
+
+**Next: R-P43** -- land `env` (grow the glue with `sig2str`/`operand2sig` +
+`intptr_t`/`IDX_MAX`), consider `pwd` (needs a kernel `getcwd`/`SYS_getcwd` --
+the kernel has `SYS_chdir`/`SYS_mkdir` but no getcwd today) and `mkdir` the util
+(`SYS_mkdir` exists; needs a `mkdir()` libc wrapper + `mkdir-p`/`modechange`/
+`savewd` glue), and begin the real `ls.c` gnulib-module port
+(`obstack`/`hash`/`mpsort` first).
+
+R-P42 persisted files (host `/root/riscv-port/rp42/`):
+- `libc/port/misc.c` (+`memrchr`), `libc/port/stdio2.c` (+`clearerr`/`fpurge`),
+  `libc/include/string.h`/`stdio.h` (protos); `libc/build-libc.sh` retargeted to
+  rp42.
+- `user/head-include/` (`head_glue.h` + shim headers), `user/tail-include/`
+  (`tail_glue.h` + shim headers), `user/cu3-include/` (`cu3_glue.h` + shims);
+  `user/build-head.sh`, `user/build-tail.sh`, `user/build-cu3.sh`; the built
+  `corehead.dyn`/`coretail.dyn`/`corebasename.dyn`/`coredirname.dyn`.
+- `upstream/coreutils-9.5/src/{head,tail,basename,dirname}.c` (verbatim, in the
+  headerless build tree) + `upstream/cu-full/` (full verbatim tarball extract).
+- `kernel/build-kernel.sh` (retargeted rp41->rp42; builds head/tail/basename/
+  dirname, embeds them in the initramfs, feeds the shell commands, and asserts
+  the R-P42.* PASS lines from the boot log).
+
+---
+
+## History: R-P41 (previous phase)
+
+**Phase reached: R-P41** (details below, kept for provenance).
 
 (1) THE HEADLINE (part 1) -- GROW THE REAL libc.a FURTHER.  R-P40's `libc.a`
 covered what `cat` referenced.  R-P41 adds a new SEPARATELY compiled TU
