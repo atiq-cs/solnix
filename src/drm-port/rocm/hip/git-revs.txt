@@ -1,0 +1,3 @@
+HIP        github.com/ROCm/HIP     rocm-4.2.0  37cb3a3
+ROCclr     github.com/ROCm/ROCclr  rocm-4.2.0  f343e8f
+amd_comgr.h github.com/ROCm/ROCm-CompilerSupport rocm-4.2.0 (header only, dlopen at runtime)

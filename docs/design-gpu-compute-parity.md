@@ -422,3 +422,26 @@ libhsakmt /sys shim, Option A), live AQL dispatch (doorbell/HWS), memory-pool->G
 => THE FULL ROCm COMPUTE STACK ON illumos: C3-KFD (/dev/kfd) -> libhsakmt (thunk) -> ROCr (HSA runtime) ->
 [HIP dispatch + AOT .hsaco -> rocBLAS/GGML] (the AOT path avoids LLVM). Graphics (RADV/ANV) + compute (ROCm)
 both compile zero-phantom; runtime is the single g4ad gate.
+
+## C6-HIP COMPLETE (compile-phase) (2026-08-17): libamdhip64.so -- the ROCm userspace stack is COMPLETE on illumos
+The accelerated-compute dispatch layer -- HIP (the CUDA-like runtime rocBLAS/GGML_HIP dispatch through) --
+compiles zero-phantom on illumos. libamdhip64.so.5 (~8.9MB ET_DYN AMD64), 68 units (~42,269 LOC upstream
+rocm-4.2.0 HIP+ROCclr), g++ 14, on the solnix ROCr + libhsakmt. 248 public hip* exports incl the WHOLE AOT
+path: hipInit, hipMalloc/hipMemcpyHtoD/DtoH, hipStreamCreate, hipModuleLoad/GetFunction/LaunchKernel/Unload.
+HIPRTC/LLVM/COMGR SKIPPED (the AOT-path insight): no LLVM/clang/comgr built or linked -- comgr is only
+function-pointer typedefs ROCclr dlopen's at runtime (amd_comgr.h header only; audit: "amd_comgr link: 0").
+AOT-DISPATCH LINK PROOF: hip-aot-dispatch-proof.cpp (a hipModuleLoad(.hsaco) + hipModuleLaunchKernel
+vector-add) COMPILES + LINKS (26KB exe) against libamdhip64+ROCr+libhsakmt; ldd resolves the full chain; the
+path hipModuleLoad -> hsa_executable_load_agent_code_object -> hipModuleLaunchKernel -> hsa AQL is wired
+end-to-end. ZERO-PHANTOM: nm -pD 384 undef, 0 phantom (70 hsa_*->ROCr, 194 C++ ABI + 20 cxa/Unwind/TLS->
+libstdc++/libgcc_s, 15 pthread, libc/libm/librt; 0 comgr, 0 LLVM). ~316 solnix-adaptation + 47 source-delta,
+no compute logic rewritten. Compile-complete: HIP core + AOT dispatch chain + the 248-entry API. Hardware-
+gated: hipInit agent enum (the /sys topology shim + powered V520), live AQL dispatch, hipMalloc->GPUVM,
+.hsaco ISA load.
+=> THE COMPLETE ROCm STACK ON illumos (all compile-verified zero-phantom): C3-KFD (/dev/kfd + ioctls) ->
+libhsakmt (thunk, 88 hsaKmt*) -> ROCr (HSA runtime, 186 hsa_*) -> HIP (248 hip*, AOT dispatch). rocBLAS ships
+precompiled Tensile .hsaco + GGML_HIP dispatches via HIP -> accelerated compute is reachable via the AOT
+path with NO LLVM (the ROCm equivalent of GGML_VULKAN). => solnix now has, ALL COMPILING zero-phantom: AMD
+graphics (C1 DRM+C3-amdgpu+libdrm_amdgpu+RADV+ACO+ICD) + AMD compute (the full ROCm stack) + Intel graphics
+(ANV). The north-star accelerator software is COMPREHENSIVE; runtime is the single g4ad gate. gpu-bringup.sh
+fires on the quota grant -> GGML_VULKAN (graphics) OR GGML_HIP+AOT (compute) parity vs Linux.

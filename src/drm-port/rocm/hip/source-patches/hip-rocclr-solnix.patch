@@ -1,0 +1,45 @@
+diff --git a/rocclr/hip_formatting.hpp b/rocclr/hip_formatting.hpp
+index 83f1467..db66789 100644
+--- a/rocclr/hip_formatting.hpp
++++ b/rocclr/hip_formatting.hpp
+@@ -478,6 +478,10 @@ inline std::ostream& operator<<(std::ostream& os, const hipLibraryPropertyType&
+   return os;
+ }
+ 
++#if USE_PROF_API
++/* solnix: the hip_api_id_t stream operators depend on the ROCprofiler tracing
++   header (hip_prof_str.h); gate them on the profiler so an AOT-only build with
++   USE_PROF_API=0 (telemetry off) does not need the generated API-id type. */
+ inline std::ostream& operator<<(std::ostream& os, const hip_api_id_t& s) {
+   os << hip_api_name(s);
+   return os;
+@@ -491,6 +495,7 @@ inline std::ostream& operator<<(std::ostream& os, const hip_api_id_t* s) {
+   }
+   return os;
+ }
++#endif  // USE_PROF_API
+ 
+ inline std::ostream& operator<<(std::ostream& os, const hipTextureDesc& s) {
+   os << '{'
+diff --git a/rocclr/hip_prof_api.h b/rocclr/hip_prof_api.h
+index 8773f9a..562baa8 100644
+--- a/rocclr/hip_prof_api.h
++++ b/rocclr/hip_prof_api.h
+@@ -263,8 +263,17 @@ class api_callbacks_table_t {
+   typedef void* fun_t;
+   bool set_activity(uint32_t id, act_t fun, void* arg) { return false; }
+   bool set_callback(uint32_t id, fun_t fun, void* arg) { return false; }
++  // solnix: no-op accessors so the AOT build (USE_PROF_API=0, telemetry off)
++  // compiles the profiler-registration API surface + the stream profiling
++  // gate. With the profiler off these always report "disabled".
++  bool is_enabled() const { return false; }
++  void set_enabled(bool) {}
+ };
+ 
++// solnix: hip_api_name is normally emitted into the generated hip_prof_str.h;
++// with the profiler off, name lookups just return a fixed string.
++static inline const char* hip_api_name(uint32_t) { return "<hip-api>"; }
++
+ #endif
+ 
+ #endif  // HIP_SRC_HIP_PROF_API_H
