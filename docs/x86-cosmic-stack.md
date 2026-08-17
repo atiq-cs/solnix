@@ -1,131 +1,157 @@
-# x86_64-solaris COSMIC stack — Stage 1 (native)
+# x86_64-solaris COSMIC stack — Stage 2 (native)
 
 Native x86_64-solaris (illumos) build. Goal: the foundation for a graphical
-x86_64 COSMIC desktop ISO. This stage builds the cross-cutting build toolchain
-that every later desktop wave needs, and the leaf of the font stack.
+x86_64 COSMIC desktop ISO. Stage 1 unblocked cmake + the font leaf
+(freetype/brotli/libuv). Stage 2 landed the WIRING FIX that unblocks the entire
+meson desktop stack, then built the meson toolchain and the first tier of
+meson-based render libraries.
 
-## Headline: cmake is UNBLOCKED on illumos x86_64
+## Headline: python3 + meson WORK natively on illumos x86_64
 
-`cmake` was previously documented as **blocked** on illumos (solaris-overlay
-note H26: `-lkstat`/`-lsendfile`, avoided by building git/curl cmake-free).
-This stage broke that wall. cmake gates brotli, and brotli gates freetype; it
-also gates every future package that shells out to cmake for `find_package`.
+Stage 1 reported "python3/meson blocked" — but that was a **wiring gap**, not a
+real block. The illumos CPython 3.14 fix set already existed (proven by the
+pip-class wave that built requests/rich/flask); stage 1's tranche simply never
+imported it. Stage 2 wired it in.
 
-## NEW x86_64-solaris packages this stage (6, all ELF-verified AMD64)
+### The wiring fix (STEP 0 — verified)
 
-| package        | store path                                                        | kind        |
-|----------------|-------------------------------------------------------------------|-------------|
-| cmake 4.3.4    | rxn8ir7k7vpqmwdmrrj4g9lh1dp1c8f7-cmake-4.3.4                       | AMD64 exe   |
-| freetype 2.14.3| ivl2s65d3i7q9yljdkvvapmqj2hd8cr1-freetype-2.14.3                   | AMD64 .so   |
-| brotli 1.2.0   | c6d79nf4qnghpxwx1cmdqglhfbzl3905-brotli-1.2.0                      | AMD64 exe   |
-| libuv 1.52.1   | ph37gkna0lqn9qq58byffwj7rpxd0gmp-libuv-1.52.1                      | AMD64 .so   |
-| libarchive 3.8.8| py4w0587qnkj584spd9zg7awc3331375-libarchive-3.8.8                 | AMD64 .so   |
-| rhash 1.4.6    | xf5f17iqz67n6siks479rpmnd307wmxw-rhash-1.4.6                       | AMD64 .so   |
+`fixPy` applies the illumos CPython-3.14 fix set to BOTH `python3` and
+`python314`, and aliases `python3 = python314` so python3Packages / meson's
+build-platform python and the top-level python3 are the SAME derivation:
 
-Published: 20 store paths (the 6 packages + dev/lib splits + closure) via
-`oi-publish-wave.sh` → s3.solnix.io/solnix-cache, all `200 OK`, failed=0.
-(cache.solnix.io is the CDN read path; propagation lags s3 by a few minutes.)
+  - `--build=x86_64-pc-solaris2.11` (config.guess can't read UNAME_RELEASE in
+    the sandbox; overwrite the regenerated config.guess post-autoreconf).
+  - `LDSHARED='$CC -shared -Wl,-z,nodefs'` (extension modules leave CPython
+    C-API symbols unresolved, bound at import; Solaris ld needs `-z nodefs`).
+  - `sed Py_SUNOS_VERSION <= 510 -> 0` in socketmodule.c (empty macro ->
+    `&& <empty> <= 510` cpp error).
+  - `ac_cv_header_libintl_h=no` / `ac_cv_lib_intl_textdomain=no` (a GNU
+    libintl.h leaks in and emits `libintl_*` calls that the native `-lintl`
+    can't resolve on `_freeze_module`).
+  - `withZstd = false`, `disallowedReferences = []`, `doCheck = false`.
 
-## The illumos fixes landed in solaris-overlay.nix (native, not cross)
+Plus, for the meson backend:
+  - **ninja** — patched `subprocess-posix.cc` to `fork()+execvp()` instead of
+    `posix_spawn` (this illumos kernel lacks the SYS_spawn fast path and libc
+    does not fall back -> `posix_spawn` traps SIGSYS "Bad System Call"). Applied
+    after nixpkgs' spawn-sh patch so it rebases cleanly.
+  - **libffi / asciidoc** — `doCheck = false` (dejagnu/expect need BSD ptys;
+    asciidoc's pytest is fragile).
+  - **meson** — `doCheck = false` (its build-time test suite runs Linux-only
+    linker-script/ld-binary tests).
 
-These are additive overrides on the upstream nixpkgs expressions. The aarch64
-waves used the same *classes* of fix; here they are applied natively (no
-cross-compiler, no cross-python hacks — just the illumos portability layer).
+VERIFICATION (all confirmed on-node):
+  - `python3.14 --version` -> `Python 3.14.6`, ELF 64-bit AMD64.
+  - `import ctypes, ssl, _ssl, _ctypes` -> OK, `OpenSSL 3.6.3`.
+  - `meson --version` -> `1.10.2`; its interpreter shebang is the FIXED
+    `python3.14` (the meson-facing python attr resolves the fixed interpreter).
+  - `ninja` -> AMD64 ELF, built with the fork-exec patch; drives real meson
+    builds (pixman's meson test suite ran + passed under it).
 
-1. **rhash** — nixpkgs passes `--target=x86_64-unknown-solaris`; rhash's
-   configure only matched `sunos|solaris2.*`, so the bare `solaris` OS token
-   yielded `UNKNOWN` and aborted. Broadened the case to add `solaris`.
-   (`doCheck = false` — the ni-test binary is irrelevant.)
+## NEW x86_64-solaris packages this stage (7, ELF-verified where applicable)
 
-2. **libuv** — the test binary `run-tests` failed to link (kstat/openpty
-   symbols) during `make check`. Library itself builds fine → `doCheck = false`.
+| package             | store path                                                   | kind        |
+|---------------------|--------------------------------------------------------------|-------------|
+| python3 3.14.6      | 5d3rrvmhmr0jjzklzj51jk17plswypbd-python3-3.14.6              | AMD64 exe   |
+| ninja 1.13.2        | 753yp8zgjyyylkn1mhmh7lla3vm9n7xx-ninja-1.13.2                | AMD64 exe   |
+| meson 1.10.2        | irsw3akxzsazq6qj27lqgsm55bh0c9xj-meson-1.10.2                | py tool     |
+| pixman 0.46.4       | 31kmbpsp7adc02cqqsrwzv2wg7jsbcy3-pixman-0.46.4               | AMD64 .so   |
+| fribidi 1.0.16      | iy4vvxxq99hf2ac4wb0slb9f5bssqiqr-fribidi-1.0.16              | AMD64 .so   |
+| wayland-protocols 1.49 | n351kx8kxlh84x1n9n1bnga1ggk8hhi5-wayland-protocols-1.49    | data        |
+| libxkbcommon 1.13.2 | vzzlz9s5w8f67s8z5hw6a5lq7270w6z1-libxkbcommon-1.13.2         | AMD64 .so   |
 
-3. **libarchive** — test-suite fails on illumos; the library builds → `doCheck = false`.
+Published: **31 store paths** (the 7 packages + their dev/lib splits + closure,
+including libxcb / libX11 pulled by libxkbcommon) via `oi-publish-wave.sh` ->
+s3.solnix.io/solnix-cache, all `200 OK`, `failed=0`.
 
-4. **cmake** — three distinct illumos breaks, all fixed:
-   - bootstrap links bundled libuv against `-lkstat -lsendfile` (illumos
-     syslibs) → wired `extraSyslibs` `lib/amd64` into the link.
-   - `gcc -print-prog-name=ranlib`/`strip` resolve to `/usr/ccs/bin/*`
-     (host-only, absent in the sandbox), and the illumos binutils ships `ar`
-     but its `bin/ranlib` and `bin/strip` are **dangling symlinks** (never
-     built). nixpkgs hard-passes `-DCMAKE_RANLIB=<binutils>/bin/ranlib`, so
-     every static-archive link failed `no such file or directory`. Fix: drop
-     working shims (`ranlib = ar s`; `strip = no-op`, the store fixup strips)
-     and rewrite the assembled `$configureFlags` to point at them.
-   - final `bin/cmake` link left `kstat_close`/`sendfile` unresolved (from
-     `libuv.so`) → added `-lkstat -lsendfile` to `NIX_LDFLAGS`; `BUILD_TESTING=OFF`.
+Paths file: `/root/x86-cosmic-stage2-paths.txt`.
+Wired tranche: `/root/tranche-stage2.nix` (`/root/tranche-224.nix` + fixPy +
+ninja fork-exec + the desktop-libs overlay).
 
-5. **extra-syslibs FOD** — regenerated the host-illumos syslib tarball
-   (`libkstat`/`libsendfile` + closure, `lib/amd64` with `.so` links) and
-   repointed the overlay at it (the old store path was gone on this fresh node).
+## The illumos fixes landed in the desktop-libs overlay (native, aarch64 recipe)
 
-## What was SKIPPED, and the honest reason
+  1. **charset-normalizer withMypyc=false** (via `pythonPackagesExtensions`) —
+     its mypyc/Rust speedup extension (`ast-serialize -> cargo ->
+     cargo-bootstrap`, which has no illumos libc config -> `assert
+     !(nativeLibc && noLibc)`) is the ROOT of the sphinx -> requests ->
+     charset-normalizer -> rust chain that every docs-building meson lib drags
+     in via gobject-introspection -> fontconfig docs. Turning it off unblocks
+     cairo/harfbuzz/pango/gdk-pixbuf eval in one place.
 
-**python3-3.14.6 / the meson stack** — the whole modern desktop stack
-(harfbuzz, fribidi, pixman, cairo, pango, wayland, wayland-protocols,
-libxkbcommon, libinput, libseat/seatd, gdk-pixbuf, graphene, libepoxy, GTK4,
-libadwaita) builds with **meson**, whose interpreter is nixpkgs' default
-`python3` = **3.14.6**. That python fails to build natively on illumos with a
-cluster of *new-in-3.14* portability regressions, hit in order:
-   - config.guess can't read `uname -r` in the sandbox (fixed: pin
-     `--build=x86_64-pc-solaris2.11`).
-   - `Py_SUNOS_VERSION` emitted empty → `socketmodule.c` `#if ... &&
-     Py_SUNOS_VERSION <= 510` loses its right operand (fixed: pin to 511).
-   - `HAVE_RTPSPAWN` false-positive pulls VxWorks `RTP_ID`/`rtpSpawn`/
-     `VX_FP_TASK` (fixed: force-undef).
-   - Linux-only `lchmod`/`close_range`/`pthread_getattr_np` under
-     `-Werror=implicit-function-declaration` (fixed: downgrade to warning).
-   - **`_freeze_module` is `Killed` at runtime** during frozen-module codegen
-     (the just-built interpreter crashes). This is the wall.
-   - **And** even a fixed top-level `python3` does not reach meson: meson pulls
-     python3 through a *different* attribute path that bypasses the overlay
-     override (observed the original unpatched drv hash in the meson closure).
+  2. **harfbuzz / graphene withIntrospection=false** — g-i pulls the same doc
+     chain; COSMIC (Rust) does not need the `.gir` typelibs.
 
-   Past the ">2 tries" threshold on a single package with a runtime crash and a
-   plumbing mismatch → SKIPPED this stage. The five source-level fixes above are
-   left in the overlay for the next attempt (which should target an older
-   python — 3.11/3.12 predate the VxWorks/close_range regressions — or wire the
-   overlay onto the meson-facing python attribute).
+  3. **wayland withDocumentation=false, withTests=false** — native host==build
+     defaults docs on, pulling graphviz/doxygen -> the rust doc chain.
 
-**fontconfig** — autotools (no python), but eval currently fails on a
-bintools-wrapper assertion via a doc/gperf dep. Not chased this stage.
+  4. **libxkbcommon** — `-Denable-docs=false`, drop doxygen (which pulls the
+     unfixed full cmake -> rhash bootstrap), drop the empty `doc` output,
+     `doCheck=false`. BUILDS.
+
+## What is BLOCKED, and the honest reason (deferred to stage 3)
+
+These are all **real illumos platform gaps** (not wiring), each needing a source
+port. Each was tried and hit a hard portability wall; per the ">2 tries SKIP"
+rule they are documented for stage 3.
+
+  - **glib 2.88** — the render-lib gate (harfbuzz-gobject, cairo, pango,
+    gdk-pixbuf all need it). Cleared four illumos breaks (gi-docgen python-hash
+    mismatch -> dropped; `<byteswap.h>` in libsysprof-capture -> `-Dsysprof=
+    disabled`; no `getxattr()` -> `-Dxattr=false`; sysprof wrap subproject ->
+    disabled). The remaining wall is the **libintl linkage**: glib's ggettext.c
+    includes GNU gettext's `libintl.h` (redefines `gettext -> libintl_gettext`),
+    but `-lintl` resolves to illumos's native `/lib/libintl.so.1` (SONAME
+    `libintl.so.1`, plain names only) instead of the store GNU gettext
+    (`libintl.so.8`, which HAS `libintl_*`) -> `ld: fatal: symbol referencing
+    errors`. Even `-Dnls=disabled` + `-L${gettext}/lib` did not flip the
+    resolution (the illumos linker's default `/lib` search wins). The stage-3
+    fix is either (a) the python approach — hide GNU libintl.h so glib uses
+    libc's native plain-name gettext — or (b) force `-l:libintl.so.8` / an
+    absolute-path link so the GNU lib binds.
+
+  - **wayland (core lib)** — `event-loop.c` uses `<sys/epoll.h>`,
+    `<sys/signalfd.h>`, `<sys/timerfd.h>`. illumos has NEITHER epoll NOR kqueue
+    (nixpkgs pulls `epoll-shim`, which needs `<sys/event.h>` -> also fails).
+    Needs a native illumos **event-ports** (`port_create`/`port_associate`)
+    port of event-loop.c. The aarch64 wave15 did exactly this port; mirror it
+    native.
+
+  - **libinput** — pulls `udev-check-hook`; illumos has no udev (device
+    enumeration is devfs/`di_*`). Needs an illumos device-discovery shim.
+
+  - **seatd/libseat** — same `nativeLibc && noLibc` assert via a Linux-only dep.
+
+  - **libepoxy** — its `libGL` (= libglvnd) dep fails: illumos ld rejects GNU
+    `--version-script=...ver`; Solaris ld uses `-M mapfile`. Needs libglvnd's
+    meson patched to emit Solaris mapfiles (multiple `.ver` files), or libepoxy
+    built `x11Support=false` (loses GL, not useful for the render stack).
 
 ## Roadmap to the x86_64 COSMIC desktop ISO
 
-Stage 1 (this): **build toolchain unblocked** — cmake on illumos + freetype
-(font leaf). ✅
+Stage 1: **build toolchain** — cmake on illumos + freetype (font leaf). DONE.
+Stage 2 (this): **python3/meson WIRED + working** + the meson toolchain
+(ninja/meson) + the meson render leaves (pixman, fribidi, wayland-protocols,
+libxkbcommon). DONE.
 
 Next stages, in order:
-1. **python3 + meson** — the gating blocker. Either (a) build an older python3
-   (3.11/3.12) and point meson at it, or (b) fix python3-3.14's `_freeze_module`
-   runtime crash and wire the overlay onto meson's python attribute. Everything
-   below is meson and waits on this.
-2. **font/render stack** — fontconfig, harfbuzz, fribidi, pixman, cairo, pango,
-   gdk-pixbuf, graphene, libepoxy. Same illumos portability classes as the
-   aarch64 waves 13–15, applied natively. Unblocks once meson works.
-3. **Wayland base** — wayland (illumos getpeerucred + native-epoll port from
-   aarch64 wave15), wayland-protocols, libxkbcommon, libinput, libseat/seatd.
-   The COSMIC display/compositor base. All meson.
-4. **GTK4 + libadwaita** — the aarch64 wave16/17 recipe (introspection/
-   gstreamer/x11 off, wayland on) applied native. Native is easier than the
-   aarch64 cross.
-5. **cross-rust / native-rust** — the x86 rust seed works native (Tier-2
-   x86_64-unknown-illumos); build-std for the COSMIC Rust crates.
-6. **COSMIC crates** — smithay + the cosmic-* crate graph; per-crate illumos
-   integration.
-7. **compositor** — cosmic-comp on a Wayland session.
-8. **the ISO** — hybrid BIOS+UEFI graphical installer with the COSMIC session.
-
-The COSMIC ISO is several waves out; this stage lays the toolchain foundation.
+1. **glib libintl port** — the render-lib gate. Fix the GNU-vs-native libintl
+   linkage (see above). Unblocks harfbuzz-gobject, cairo, pango, gdk-pixbuf,
+   graphene, gobject-introspection (the whole font/render meson swath, all of
+   which now EVAL and only wait on glib).
+2. **wayland event-ports port** — replace epoll/signalfd/timerfd in
+   event-loop.c with illumos `port_*` (aarch64 wave15). Then wayland +
+   wayland-scanner build; libxkbcommon (built) + wayland-protocols (built) are
+   already the rest of the client-protocol base.
+3. **libinput udev shim + seatd/libseat** — the input + seat-management base.
+4. **libglvnd Solaris mapfiles -> libepoxy** — the GL dispatch base.
+5. **GTK4 + libadwaita + appstream** — the aarch64 wave16/17 recipe
+   (introspection/gstreamer/x11 off, wayland on), native. Waits on glib + the
+   render swath.
+6. **cross-rust / native-rust** + **COSMIC crates** (smithay + cosmic-*).
+7. **compositor** (cosmic-comp) + **the ISO**.
 
 ## Honest gap: Firefox and Chrome (out of scope, roadmap only)
 
-- **Firefox** — not ported to illumos (its build wants a Rust/clang/toolchain
-  and platform glue that has no illumos target today). Would be a large port,
-  not a wave.
-- **Chrome/Chromium** — closed-source (Chrome) / no illumos target
-  (Chromium's build assumes Linux/mac/win). Not buildable on illumos. Document
-  only.
-
-Neither is in scope for the COSMIC desktop stack. A COSMIC install would ship
+Unchanged from stage 1: Firefox has no illumos target (large port);
+Chrome/Chromium is closed / has no illumos build target. A COSMIC install ships
 without a mainstream browser until one is ported (a separate, large effort).

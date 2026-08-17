@@ -1416,3 +1416,22 @@ python3 (the same recursive python314 self-override the pip-class wave used). FI
 which DID have the fix wired). NEXT (stage 2): wire the existing python3 fix -> x86 wayland/harfbuzz/cairo/
 pango/GTK4 (the meson stack) -> then the COSMIC crates (aarch64-proven) native on x86 -> the ISO. 8-stage
 roadmap + honest Firefox(unported)/Chrome(closed) gap in docs/x86-cosmic-stack.md.
+
+## PS-X86-COSMIC-STAGE2 (2026-08-17): x86 python3/meson/ninja WORK (the wiring gap confirmed) + 7 meson pkgs
+CONFIRMED the stage-1 "python3/meson blocked" was a WIRING GAP, not a real block: wiring fixPy into
+tranche-stage2.nix (fixPy on python314 + python3=python314 alias so meson's build-python == top-level
+python, fixing the gi-docgen hash too) -> python3.14.6 works (imports ctypes/ssl, OpenSSL 3.6.3), meson
+1.10.2 + ninja 1.13.2 (fork()+execvp() patch -- illumos traps SIGSYS on posix_spawn; patch in fork). +7 x86
+meson pkgs: python3/ninja/meson/pixman/fribidi/wayland-protocols/libxkbcommon (published 31 paths). x86
+COSMIC stack advancing. STAGE-3 gaps (all have AARCH64 PRECEDENTS -- port the aarch64 fixes native to x86):
+- glib: GNU-vs-native libintl linkage (-lintl resolves native libintl.so.1 not the store GNU libintl.so.8);
+  aarch64 wave14 dodged via nls-off. harfbuzz/cairo/pango/gdk-pixbuf/graphene all EVAL, wait only on glib.
+- wayland core: event-loop.c needs epoll/signalfd/timerfd; illumos has neither -> the port_create/
+  port_associate (event ports) port -- AARCH64 WAVE15 ALREADY DID THIS (getpeerucred + native-epoll).
+- libinput: needs udev (illumos has none) -> a udev shim + seatd.
+- libepoxy: libglvnd GNU --version-script vs Solaris ld -M mapfile -- the SAME class as the aarch64 C++
+  mapfile wall (cracked wave10 via -specs=).
+So stage 3 = PORT THE AARCH64 FIXES (wave14 glib-nls, wave15 wayland-event-ports, wave10-style mapfiles)
+NATIVE to x86 -> then GTK4/libadwaita (wave16/17 native) -> native-rust (the x86 OI rust seed works) ->
+the COSMIC crates (aarch64-proven, 48 rlibs) -> cosmic-comp -> the ISO. The aarch64 desktop waves are the
+proven template; x86 is native (easier). ninja fork-exec patch durable in fork. registry x86 +7.
