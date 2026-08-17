@@ -1,6 +1,60 @@
 # RISC-V (riscv64) port — STATUS
 
-**Phase reached: R-P45** (the R-P44 kernel -- which added a REAL riscv64
+**Phase reached: R-P46** (the R-P45 kernel -- which linked + ran the faithful
+UNMODIFIED coreutils-9.5 ls.c -- now **FIXES the R-P45 deferred %b/nstrftime
+blocker** and adds **2 more UNMODIFIED coreutils** (whoami, yes).  The %b
+abbreviated-month time format -- which hung in nstrftime's abformat path in
+R-P45 -- is fixed at the ROOT CAUSE: the reduced libc's `vfprintf` did not
+parse the `.` precision, so ls `abformat_init`'s `snprintf("%.*s%s%s", ...)`
+mis-consumed its varargs (int-as-char* -> NULL deref).  Teaching vfprintf the
+`.prec` precision makes strftime + gnulib nstrftime format the abbreviated
+month **"Jan  1  1970"** -- proven at three layers (stftest = libc strftime;
+stftest2 = the REAL gnulib nstrftime.o via tzalloc/localtime_rz; real ls
+`--time-style=+%b /etc` -> "Jan").  whoami runs (geteuid/getpwuid; the libc
+grew getuid/geteuid/getgid/getegid); yes compiles + links.  Boot-verified under
+qemu-system-riscv64 -machine virt -smp 2 -- **177 PASS / 0 FAIL**.  Two items
+deferred to R-P47, NEITHER the %b path: the FULL default `ls -l` output-path
+SIGSEGV (post-timestamp) + yes-over-a-closing-pipe kernel SIGPIPE fault.  See
+rp46/LS-STATUS.txt.)
+
+R-P46 deliverables (all boot-verified, -smp 2, on top of the R-P24..R-P45
+regressions which stay green):
+
+1. **FIXED the R-P45 %b/nstrftime hang (headline).**  Root cause bisected to
+   the reduced libc `vfprintf` (libc/port/stdio.c) not parsing the `.`
+   precision: on `snprintf("%.*s%s%s", prefix_len, fmt, abmon[i], pb+2)` (ls
+   `abformat_init`, ls.c ~1373) it emitted a literal "%." and consumed no arg
+   for `.*`, so the first `%s` took `prefix_len` (an int) as a `char*` ->
+   `strlen(NULL)` -> a NULL-deref fault the freestanding process spun on.  Fix:
+   vfprintf now parses `.prec` (`.*` from an int arg or `.N`) and `__emit_str`
+   honors it (truncate to prec, NULL-safe) -- a real, faithful printf feature
+   the reduced libc was missing; every printf-family caller benefits.  PROVEN:
+   stftest (libc strftime + nl_langinfo(ABMON) -> "Jan  1  1970"), stftest2
+   (the REAL gnulib nstrftime.o + time_rz.o via tzalloc/localtime_rz -> the ls
+   -l default abformat string -> "Jan  1  1970"), and the real UNMODIFIED ls
+   (`-l --time-style=+%b /etc` -> the "Jan" abbreviated month in the time col).
+
+2. **Two MORE UNMODIFIED coreutils-9.5 utils on the SAME libc.a.**  whoami.c
+   (geteuid()+getpwuid(); the libc grew getuid/geteuid/getgid/getegid returning
+   0 for the single-user root kernel, port/misc.c) -- /bin/corewhoami prints
+   the user + exits 0.  yes.c COMPILED + LINKED (main T) via the new cu3-include
+   glue (parse_gnu_standard_options_only + full_write + bad_cast, reduced to the
+   C-locale/POSIX behavior; the R-P45-grown libc's dirfd + sigset ops made the
+   stale cu3_glue.h stubs redundant -- guarded out; the unreachable() macro
+   collision guarded in wc_glue.h).
+
+3. **Deferred to R-P47 (both NEWLY isolated, NEITHER is the %b path).**  (a) The
+   FULL default `ls -l` (the whole -l pipeline through exit) trips a SEPARATE
+   output-path SIGSEGV, POST-timestamp: the `+%b` run prints the month then
+   faults in the -l output/cleanup path (not the time code, proven fixed).
+   (b) `yes` EXECUTION over a closing pipe (yes | head) trips a kernel-side
+   SIGPIPE / pipe-teardown fault; yes itself links cleanly.
+
+---
+
+## R-P45 (previous phase)
+
+**Was: R-P45** (the R-P44 kernel -- which added a REAL riscv64
 setjmp/longjmp to the reusable libc.a on top of 10 real UNMODIFIED upstream
 coreutils utils -- now **compiles + links + RUNS the FAITHFUL UNMODIFIED GNU
 coreutils-9.5 src/ls.c**, byte-for-byte upstream, against the real libc.a + 25

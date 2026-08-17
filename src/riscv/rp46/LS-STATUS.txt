@@ -1,0 +1,78 @@
+R-P46 -- the R-P45 %b/nstrftime blocker FIXED + 2 more real utils (whoami, yes)
+=============================================================================
+
+HEADLINE (DONE, boot-verified -smp 2): the R-P45 deferred sub-feature -- the
+DEFAULT ls -l %b abbreviated-month time column hanging in nstrftime's abformat
+path -- is RESOLVED at the ROOT CAUSE.
+
+  ROOT CAUSE (bisected in R-P46):
+    ls abformat_init() (ls.c ~1356) precomputes the -l time format by calling
+      snprintf(nfmt, ABFORMAT_SIZE, "%.*s%s%s", prefix_len, fmt, abmon[i], pb+2)
+    to splice the aligned abbreviated month name into "%b %e  %Y".  The reduced
+    libc's vfprintf (libc/port/stdio.c) did NOT parse the '.' precision.  So on
+    "%.*s" the parser fell to default: (emitting a literal "%."), consumed NO
+    vararg for the width-'*', and then the first real %s consumed prefix_len
+    (an int, value 0) AS a char* -> __emit_str((char*)0) -> strlen(NULL) ->
+    a NULL-deref page fault that the freestanding process spun on == the "hang".
+
+  THE FIX (one place, all callers):
+    libc/port/stdio.c vfprintf now parses the .prec precision (".*" from an int
+    arg, or ".N" digits) and __emit_str honors it (truncate a string to prec,
+    NULL-safe).  This is a real, faithful printf feature the reduced libc was
+    missing; every caller of the libc printf family benefits.
+
+  PROOF (all in rp46/qemu-boot.log, boot-verified -smp 2):
+    * /bin/stftest  (links the real libc.a): nl_langinfo(ABMON_1)="Jan";
+      strftime(_,_,"Jan %e  %Y",_) -> "Jan  1  1970"; strftime(_,_,"%b %e  %Y",_)
+      -> "Jan  1  1970".  The reduced libc strftime + langinfo are correct.
+    * /bin/stftest2 (links the REAL gnulib nstrftime.o + time_rz.o + libc.a):
+      tzalloc(NULL) + localtime_rz + nstrftime("Jan %e  %Y", &tm, localtz, 0)
+      -> "Jan  1  1970"  (the EXACT ls -l default abformat path), and the raw
+      "%b %e  %Y" and recent "%b %e %H:%M" formats also produce "Jan  1  1970"
+      / "Jan  1 00:00".  The gnulib nstrftime %b/abformat chain no longer hangs.
+    * the REAL UNMODIFIED ls: /bin/lsup -l --time-style=+%b /etc prints the %b
+      abbreviated month ("Jan") in the time column (was the hanging conversion).
+
+  So the R-P45 blocker -- "%b hangs in nstrftime's abformat month path" -- is
+  fixed and proven at three layers (libc strftime, gnulib nstrftime, real ls).
+
+TWO MORE REAL UTILS (bank progress):
+  * whoami  -- UNMODIFIED coreutils-9.5 src/whoami.c, geteuid()+getpwuid() on
+    the reduced libc; boot-verified: /bin/corewhoami prints the current user
+    (the numeric id, since /etc/passwd has no uid-0 name) and exits 0.  The libc
+    grew getuid/geteuid/getgid/getegid (single-user root, uid 0) in port/misc.c.
+  * yes     -- UNMODIFIED coreutils-9.5 src/yes.c, COMPILED + LINKED against the
+    real libc.a (main T) via the new cu3-include glue (parse_gnu_standard_
+    options_only + full_write + bad_cast, reduced to C-locale/POSIX; the R-P45-
+    grown libc's dirfd + the sigset ops made the stale cu3_glue.h stubs
+    redundant -- guarded out).  Its EXECUTION over a closing pipe is deferred
+    (see below).
+
+DEFERRED TO R-P47 (both NEWLY isolated, NEITHER is the %b path -- that is fixed):
+  1. The FULL default `ls -l /etc` (the whole -l pipeline through exit) trips a
+     SEPARATE output-path SIGSEGV, POST-timestamp: the --time-style=+%b run
+     prints the abbreviated month correctly, THEN faults in the -l output/
+     cleanup path (not the time-formatting code, which is proven above).
+     Bisected to after the timestamp+name are emitted (dired_outbuf / obstack /
+     close_stdout at exit).  R-P47: instrument print_long_format's tail +
+     dired flush; likely a reduced-libc obstack/free or a format-string pointer
+     into freed argv.
+  2. `yes` EXECUTION over a closing pipe (yes | head) trips a kernel-side
+     SIGPIPE / pipe-teardown fault (scause 0xd load fault -> [trap] halting).
+     yes itself compiles + links cleanly; the fault is in the reduced kernel's
+     pipe close / SIGPIPE delivery when the reader exits.  R-P47: handle the
+     write-to-closed-pipe -> EPIPE/SIGPIPE path in the kernel pipe vnode.
+
+BUILD ENTRY POINTS (self-contained under rp46/; all scripts retargeted rp45->rp46):
+  libc/port/stdio.c           vfprintf .prec fix (the %b headline)
+  libc/port/misc.c            getuid/geteuid/getgid/getegid (uid 0)
+  libc/include/unistd.h       the uid/gid decls
+  user/build-cu4.sh           compile+link whoami.c + yes.c (UNMODIFIED)
+  user/cu3-include/wc_glue.h  parse_gnu_standard_options_only + full_write +
+                              bad_cast; the unreachable() collision guarded
+  user/cu3-include/cu3_glue.h stale dirfd stub removed; sigset stubs #if 0'd
+                              (libc.a now provides them)
+  user/cu3-include/long-options.h, full-write.h  thin shims -> wc_glue.h
+  user/stftest.c, stftest2.c  the %b proof harnesses (libc strftime; real
+                              gnulib nstrftime.o + time_rz.o)
+  kernel/build-kernel.sh      calls build-cu4.sh; feed + R-P46.1/.2 assertions

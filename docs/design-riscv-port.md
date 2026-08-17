@@ -3520,3 +3520,23 @@ gnulib's OWN generated headers -- no facade; ls.c byte-for-byte upstream):
 Cribbed coreutils-9.5 gnulib lib/ (25 modules) + illumos libc locale. NEXT R-P46: fix the %b/abformat
 nstrftime hang (default ls -l time column). VERIFY LESSON: the "1 FAIL" was a grep misfire on "FAILED:
 none" -- confirmed false on the node (the classic grep -v ":0" trap).
+
+## R-P46 DONE (2026-08-17): the %b hang ROOT-CAUSED + fixed (libc vfprintf .prec) + whoami/yes
+All boot-verified qemu -smp 2, 177 PASS / 0 real FAIL (verified on node; the "FAIL" grep hits are misfires:
+exitfail.c filename + "no failure" prose + DEFER lines), R-P24-45 regressions green.
+- THE %b HANG ROOT-CAUSED: it was NOT in nstrftime/abmon (those are correct). The reduced libc vfprintf
+  (port/stdio.c) never parsed `.` precision -> ls abformat_init's snprintf("%.*s%s%s", prefix_len, fmt,
+  abmon[i], ...) hit `%.` in vfprintf's default case (consuming NO vararg for .*), so the first %s consumed
+  prefix_len (int 0) as a char* -> __emit_str((char*)0) -> strlen(NULL) -> NULL-deref spin. FIX: vfprintf
+  now parses .prec (.* from an int arg, or .N) + __emit_str honors it (truncate + NULL-safe) -- one place,
+  all printf-family callers benefit. PROVEN 3 layers: stftest (real libc strftime "%b %e %Y" -> Jan 1
+  1970), stftest2 (the REAL gnulib nstrftime.o + time_rz.o via tzalloc/localtime_rz -- the exact ls -l
+  path -> Jan 1 1970), real UNMODIFIED ls: lsup -l --time-style=+%b /etc -> "...Jan release".
+- More utils: whoami (UNMODIFIED, libc grew getuid/geteuid/getgid/getegid uid 0) + yes (compiles+links via
+  cu3 glue parse_gnu_standard_options_only/full_write/bad_cast).
+- DEFERRED R-P47 (2 newly-isolated, neither the %b path): (a) FULL default ls -l output-path SIGSEGV
+  (post-timestamp, in the -l output/cleanup path); (b) yes|head kernel SIGPIPE/pipe-teardown fault (yes
+  links fine). Both in rp46/LS-STATUS.txt.
+Cribbed gnulib nstrftime/time_rz + coreutils-9.5 whoami.c/yes.c + illumos libc getuid. NEXT R-P47: the full
+ls -l output-path SIGSEGV + the pipe SIGPIPE teardown, toward robust ls -l + pipelines. The vfprintf .prec
+fix is a broad libc correctness win (every %.*s/%.Ns caller). VERIFY: 177 PASS confirmed on node.
