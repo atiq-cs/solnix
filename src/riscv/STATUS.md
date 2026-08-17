@@ -1,5 +1,72 @@
 # RISC-V (riscv64) port — STATUS
 
+**Phase reached: R-P43** (the R-P42 kernel -- which ran 8 real, UNMODIFIED
+upstream coreutils utils [echo/true/cat/wc/head/tail/basename/dirname] on one
+reusable libc.a -- now **links + runs 2 MORE real, UNMODIFIED upstream
+coreutils utils, pwd + env, for 10 total**, all boot-verified under
+qemu-system-riscv64 -machine virt -smp 2 -- 163 PASS / 0 FAIL.)
+
+R-P43 deliverables (all boot-verified, -smp 2, on top of the R-P24..R-P42
+regressions which stay green):
+
+1. **pwd (UNMODIFIED coreutils-9.5 src/pwd.c) + a REAL getcwd(2).** The kernel
+   got a real getcwd: kernel/proc.c proc_getcwd() copies the calling proc's
+   tracked working-directory string (proc_t.p_cwd, already maintained by
+   SYS_chdir/proc_chdir) into the user buffer, and kernel/main.c SYS_getcwd
+   routes through it (was hardcoded to always return "/"). No vnode-to-root
+   walk is needed -- proc_chdir already canonicalizes the cwd path, so this is
+   the illumos u_cwd path-string approach. The libc grew a getcwd wrapper
+   (port/syscall.c; a NULL buffer mallocs, for the gnulib xgetcwd(NULL,0)
+   extension). src/pwd.c LINKS the real libc.a via cu3-include/cu3_glue.h,
+   which supplies xgetcwd + the robust_getcwd fallback names
+   (get_root_dev_ino/psame_inode/readdir_ignoring_dot_and_dotdot/dirfd/fchdir
+   -- the fallback is unreachable because xgetcwd succeeds via SYS_getcwd). The
+   blockfs gained chdir-into-subdir: vfs_path_isdir now recognizes a /blk
+   directory via vfs_blockfs_isdir. nm shows getcwd resolved T STATICALLY from
+   libc.a. Boot proof: cd /blk/sub; pwd -> /blk/sub. /bin/corepwd.
+
+2. **env (UNMODIFIED coreutils-9.5 src/env.c).** The libc grew
+   execve/sigprocmask (port/syscall.c; SYS_execve/SYS_sigprocmask) +
+   putenv/setenv/unsetenv (port/stdlib.c, editing the environ array,
+   copy-on-first-write off the crt1 stack vector). cu3-include/cu3_glue.h grew
+   sig2str/operand2sig (small C-locale signal-name tables), the POSIX sigset
+   bit-ops (sigemptyset/sigfillset/sigaddset/sigdelset/sigismember over the
+   scalar sigset_t), a PATH-searching execvp, x2nrealloc/xpalloc/xstrdup,
+   strtok, exit_failure/initialize_exit_failure, EXIT_CANCELED/EXIT_ENOENT/
+   EXIT_CANNOT_INVOKE, intptr_t/IDX_MAX, devmsg, main_exit/emit_exec_status. A
+   small DEFAULT ENVIRONMENT (PATH=/bin PWD=/ HOME=/ SHELL=/bin/sh) is now laid
+   on the exec initial stack (kernel/exec_elf.c dynamic path -- the envp was
+   previously NULL, an empty env; the auxv word count was fixed for the added
+   envp vector). Boot proof: env -> prints PATH=/bin/PWD=//HOME=//SHELL=/bin/sh;
+   env FOO=bar -> reprints the environment with FOO=bar added (env with a
+   NAME=VAL and no command sets it into environ then prints the modified env).
+   /bin/coreenv.
+
+So the real, UNMODIFIED upstream coreutils SET on ONE reusable libc.a is now
+**10 utils**: echo (R-P38/39), true (R-P39), cat (R-P40), wc (R-P41),
+head/tail/basename/dirname (R-P42), **pwd** + **env** (R-P43). ls remains the
+from-scratch R-P41 exerciser (/bin/corels).
+
+3. **ls.c attempted, DEFERRED to R-P44 (time-boxed).** The faithful UNMODIFIED
+   src/ls.c (5658 lines, ~31 gnulib modules) was attempted under a hard time
+   box; it does not yet compile. The FIRST real blocker is setjmp.h -- ls.c
+   uses setjmp/longjmp for its qsort comparison error recovery (sort_failed in
+   sort_files()), which needs a REAL riscv64 setjmp/longjmp (asm, not a stub).
+   The system-header shims (termios.h, sys/ioctl.h in rp43/user/ls-include/)
+   were added; fnmatch.h and the ~30 gnulib .c modules (obstack/mpsort/hash/
+   human/mbswidth/filevercmp/filemode/idcache/canonicalize/argmatch/dircolors/
+   areadlink/xgethostname -- all present verbatim in
+   rp43/upstream/cu-full/coreutils-9.5/lib/) are deferred to R-P44. Full detail
+   + the R-P44 plan in rp43/LS-STATUS.txt. Deferring kept the phase wedge-proof:
+   pwd+env (10 real utils) is the milestone.
+
+Milestone: `bash rp43/rp43-milestone-check.sh` (163 PASS / 0 FAIL; boot log
+saved to rp43/qemu-boot.log).
+
+---
+
+## R-P42 (previous phase)
+
 **Phase reached: R-P42** (the R-P41 kernel -- which GREW a real, reusable
 solnix riscv64 `libc.a` and ran a REAL coreutils SET [`echo`/`true`/`cat`/`wc`
 from UNMODIFIED upstream source + a from-scratch `ls`] with subdirectory

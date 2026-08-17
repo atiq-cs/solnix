@@ -3455,3 +3455,25 @@ Cribbed coreutils-9.5 src/head.c/tail.c/basename.c/dirname.c + gnulib; illumos l
 kernel getcwd -> pwd, sig2str -> env, then the faithful ls.c (the gnulib set), toward a fuller real
 coreutils /bin. LESSON RE-CONFIRMED: ground-truth on the node (re-ran the milestone) rather than trust a
 truncated agent report; the first R-P42 died + was caught.
+
+## R-P43 DONE (2026-08-17): 10 real upstream coreutils utils (pwd + env added; getcwd kernel syscall)
+All boot-verified qemu -smp 2, 162 PASS / 0 FAIL (saved to rp43/qemu-boot-milestone.log; the report said
+163 -- actual is 162, verified by re-count), R-P24-42 regressions green.
+- getcwd + pwd: kernel proc_getcwd() copies the per-proc p_cwd string into the user buf (SYS_getcwd was
+  hardcoded /); illumos u_cwd path-string approach (proc_chdir canonicalizes, no vnode walk). libc getcwd
+  wrapper. UNMODIFIED src/pwd.c links libc.a. + blockfs chdir-into-subdir. PROOF: cd /blk/sub; pwd ->
+  /blk/sub.
+- env: libc grew execve/sigprocmask + putenv/setenv/unsetenv (environ edits); cu3 glue grew sig2str/
+  operand2sig (C-locale signal tables), execvp (PATH search), x2nrealloc. exec now gives a default envp
+  (PATH=/bin PWD=/ HOME=/ SHELL=/bin/sh; was NULL) + fixed an auxv word-count off-by-2. UNMODIFIED src/env.c
+  links libc.a. PROOF: env -> prints PATH/PWD/HOME/SHELL; env FOO=bar -> adds FOO=bar.
+- THE 10-UTIL SET: echo/true/cat/wc/head/tail/basename/dirname/pwd/env -- all real UNMODIFIED upstream
+  coreutils on one libc.a.
+- ls.c: time-boxed attempt, DEFERRED to R-P44. First blocker precisely identified: setjmp.h -- ls.c uses
+  setjmp/longjmp for qsort error recovery (sort_failed in sort_files()), needs real riscv64 setjmp/longjmp
+  asm (not a stub); + fnmatch.h + ~30 gnulib .c (present verbatim in the tarball lib/). Plan in
+  rp43/LS-STATUS.txt. The from-scratch R-P41 ls stays.
+Cribbed illumos u_cwd getcwd + coreutils-9.5 src/pwd.c/env.c + gnulib. NEXT R-P44: riscv64 setjmp/longjmp
+asm + fnmatch + the gnulib set -> faithful ls.c (the last deferred util), toward the full real coreutils
+/bin. VERIFY LESSON: pulled the wrong log first (qemu-boot.log was a 1-PASS partial vs
+qemu-boot-milestone.log's 162) -- re-verified the real count on the node.
