@@ -3607,3 +3607,24 @@ Cribbed illumos vfs mount-crossing + ld.so.1 (the I-cache/fence.i coherence on t
 coreutils-9.5 unlink.c/tty.c + RISC-V Zifencei. NEXT R-P50 (consolidation): wire blockfs getattr into
 stat/lstat so ls -l /blk shows real metadata + more utils. The fence.i fix is a broad SMP-correctness win
 (any dynamically-loaded code on multi-hart). VERIFY: 201 PASS confirmed on node.
+
+## R-P50 DONE (2026-08-17): CONSOLIDATION -- 22 real coreutils + blockfs real ls -l metadata + port summary
+All boot-verified qemu -smp 2, 217 PASS / 0 real FAIL (verified on node; report said 214), R-P24-49 green,
+SMP cross-object bind PROVEN 3/3. A round-number consolidation milestone.
+- blockfs getattr -> real ls -l /blk metadata (HEADLINE): proc_stat ran vfs_walk on /blk/* (resolves in
+  ramfs -> ENOENT) so coreutils printed "?". FIX (kernel/vfs.c): vfs_blockfs_getattr reads the on-disk
+  inode size+type via bdev_strategy; proc_stat routes /blk* to it; libc/port/stdio.c gained %j/%t/%o printf
+  (stat's %ju/%jo printed literal before). PROOF: ls -l /blk -> "-rw-r--r-- 1 0 0 83 hello / ... 103 persist
+  / drwxr-xr-x ... sub"; stat /blk/persist -> Size 103, regular file, 0644.
+- +stat (the getattr proof) + link (new link(2) syscall -> vfs_link) + fold + tr (header shims). TOTAL 22
+  real UNMODIFIED upstream coreutils on one libc.a (was 18): echo/true/false/cat/wc/head/tail/basename/
+  dirname/pwd/env/ls/whoami/yes/uname/nproc/unlink/tty/stat/link/fold/tr (+mkdir).
+- CONSOLIDATION SUMMARY: rp50/RISCV-PORT-SUMMARY.md -- the full arc R-P17->R-P50 (cross toolchain -> kernel
+  boot -> Sv39/SMP/ASIDs -> init+shell -> job control -> real libc.a -> 22 real coreutils -> persistent
+  blockfs w/ real metadata), current capability, and the R-P51+ gap.
+Honest ceiling: vfs_link copies bytes (no shared inode/nlink) -> real hard links R-P51. Cribbed illumos vfs
+getattr + link + coreutils-9.5 stat.c/link.c/fold.c/tr.c. NEXT R-P51: real hard links (shared inode/nlink)
++ toward a disk driver + a bootable image + eventually native nix. The RISC-V port: from NOTHING to an
+illumos-riscv64 kernel booting under qemu, SMP-correct, running an interactive shell + 22 real UNMODIFIED
+upstream GNU coreutils against a real libc.a with a persistent block-backed fs -- in one session (R-P17->
+R-P50). VERIFY: 217 PASS confirmed on node.
