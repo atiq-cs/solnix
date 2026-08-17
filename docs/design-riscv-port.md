@@ -3691,3 +3691,26 @@ rp53/libc.a). Cribbed illumos vfs (VFS_MOUNT/statvfs, buf cache bread/bwrite) + 
 coreutils-9.5. NEXT R-P54: multi-block files + free-block bitmap; the disk fs as a real /; sync dirty
 buffers at unmount; ln(*at)/uniq(mbrtoc32). The riscv64 kernel now has a DISK-BACKED root fs with a buffer
 cache + IRQ-driven I/O -- real filesystem semantics on a persistent disk. VERIFY: 242 PASS confirmed on node.
+
+## R-P54 DONE (2026-08-17): multi-block files + free-block bitmap + sync-at-unmount + disk-served-at-boot
+All boot-verified qemu -smp 2, 250 PASS / 0 real FAIL (verified on node; the "1 FAIL" grep hit was the
+literal "PASS/FAIL SUMMARY" header substring -- confirmed NO FAIL: verdict lines, all phase banners ALL
+PASS; report said 243), R-P24-53 green. build-libc.sh L=rp54 confirmed (the R-P52 L= bug did not recur).
+- Multi-block files + free-block bitmap (headline): new v2 on-disk layout (SB / 2-block inode table /
+  2-block free-block bitmap / data). Inode gains i_addr[8] direct + one singly-indirect block via bmap
+  (xv6 crib); balloc/bfree flip bitmap bits (a REAL allocator, not a bump pointer). PROOF: a 10KiB file
+  written to /blk read back BYTE-EXACT spanning 20 data + 1 indirect block; f_bfree dropped by EXACTLY 21
+  + RECOVERED to its pre-write value on delete.
+- sync dirty buffers at unmount: bsync() (flush all dirty buffers) from vfs_blockfs_unmount. PROOF: a
+  bdwrite (delayed) block was NOT on disk until bsync flushed it; a cache-bypassing re-read found the exact
+  bytes.
+- disk fs as real / : PARTIAL -- an /etc/release-style file written to the disk-backed blockfs, flushed to
+  the real virtio-blk disk, SERVED from the disk-backed mount during boot (the prerequisite). Full
+  root-pivot (mount blockfs AS /, exec /bin off the disk) -> R-P55.
+- +tsort (UNMODIFIED coreutils-9.5, 27th) via a house freopen_safer shim (tsort.c itself unmodified).
+  ln/uniq/nl/comm deferred (regex/multibyte/xmemcoll/*at heavy trees) -> R-P55.
+Cribbed illumos ufs (indirect blocks, the free-block bitmap cg, sync/fsflush) + xv6 fs.c (bmap/indirect +
+balloc/bfree bitmap) + coreutils-9.5 tsort.c. NEXT R-P55: the FULL root-pivot (mount blockfs as /, populate
+/bin + /etc on disk, exec init/sh off the disk -> a bootable image); optionally doubly-indirect blocks + the
+heavier coreutils. The riscv64 kernel now has a REAL filesystem allocator (multi-block + bitmap + sync) on a
+persistent disk -- the last fs pieces before a bootable-on-hardware image. VERIFY: 250 PASS confirmed on node.
