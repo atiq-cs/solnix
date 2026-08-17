@@ -1286,3 +1286,21 @@ to dwm/xorg-server-21.1.24 (the El-Torito BIOS+UEFI + live-user + LD_LIBRARY_PAT
 BROADER LESSON: this is a cache-completeness audit finding -- the G0 wave (+ possibly others) published
 top-level but not full runtime closures; a cache-closure-completeness audit would catch other holes. The
 prior host-sourced ISO (solnix-x86_64-desktop.iso, 185MB) stays a PoC, NOT published as solnix.
+
+## PS-AARCH64-WAVE17 (2026-08-17): the GTK4 ADAPTIVE TOOLKIT COMPLETE on illumos (libadwaita + bindings)
++11 EM_AARCH64 pkgs (published 14 paths): libadwaita 1.9.2 (THE headline -- the GNOME adaptive-widget lib)
++ the appstream chain (libstemmer 2.2.0, libfyaml 0.9.6 [__sun endian arm + cfmakeraw shim], libxmlb 0.3.27,
+appstream 1.1.3 [-Dcompose=false drops librsvg/xapian; curl17 curlMinimal-static dodges nghttp3/libpsl/lzip])
++ the FULL C++ binding line (libsigc++ 3.8 -> glibmm 2.88 -> cairomm 1.18 + pangomm 2.56 -> gtkmm 4.22) +
+curl17. aarch64 now 213 rows (13->213 this session). GTK4 C-AND-C++ APP DEVELOPMENT ON illumos aarch64 IS
+VIABLE. Fixes: appstream sassc via LD_LIBRARY_PATH=/nix-tools224/runtime-lib (libstdc++ location), gtkmm
+perl-neutralize generate_defs exes (aarch64 exe-link wall), -lexpat -ldatrie static-fontconfig link tests.
+TWO PRECISE GAPS (wave18): (1) librsvg = the AARCH64-CROSS-RUST gap -- crossSystem.rust.rustcTarget
+"aarch64-unknown-solaris" exists but pkgs.rustc fails the bintools/clang assertion (the OI rust seed is
+X86-NATIVE, no aarch64-solaris rustc/std). THIS ALSO GATES THE WHOLE COSMIC RUST STACK -> aarch64-cross-rust
+bring-up is the high-value next target. (2) libsoup = one -lunistring away (static libpsl needs libunistring's
+uninorm/u8_tolower + libidn2 threaded onto the link). NOTE the DESKTOP-TOOLKIT arc on aarch64: font stack
+(w13) + glib/cairo/pango (w14) + wayland (w15) + GTK4 (w16) + libadwaita/appstream/C++-bindings (w17) = a
+COMPLETE GTK4 adaptive GUI toolkit on illumos aarch64. For COSMIC specifically (Rust+Wayland+smithay):
+wayland(w15) + Rust(x86 works) are there; aarch64-cross-rust (w18) unblocks the COSMIC Rust crates. wave17
+entry -> fork.
