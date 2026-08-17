@@ -1435,3 +1435,21 @@ So stage 3 = PORT THE AARCH64 FIXES (wave14 glib-nls, wave15 wayland-event-ports
 NATIVE to x86 -> then GTK4/libadwaita (wave16/17 native) -> native-rust (the x86 OI rust seed works) ->
 the COSMIC crates (aarch64-proven, 48 rlibs) -> cosmic-comp -> the ISO. The aarch64 desktop waves are the
 proven template; x86 is native (easier). ninja fork-exec patch durable in fork. registry x86 +7.
+
+## PS-X86-COSMIC-STAGE3 (2026-08-17): the x86 render/toolkit gate CLEARED (glib+cairo+pango+wayland native)
++7 x86_64-solaris pkgs (published 17 paths, 882-path closure): glib (THE gate) + harfbuzz + cairo + pango +
+gdk-pixbuf + graphene + wayland. The whole render cascade came off the glib libintl fix (the wave14 fix
+NATIVE): ggettext.c's unconditional #include <libintl.h> pulled GNU gettext's libintl_* redirects against
+the native plain-SUNW libintl.so.1 -> dropped the GNU gettext nativeBuildInput + a native libintl.h shim so
+glib's meson ngettext probe takes the system-intl path + -lintl + _XOPEN_SOURCE/__EXTENSIONS__/
+_POSIX_PTHREAD_SEMANTICS. wayland: illumos already has native epoll/signalfd/timerfd/getpeerucred (EASIER
+than the aarch64 event-ports port) -> dropped epoll-shim + a getpeerucred(3C) arm to wayland-os.c. Shared
+cuts: fontconfig dejavu-stub, libjpeg SIMD-off, libtiff sphinx-off. DEFERRED stage 4 (all documented):
+libepoxy (Solaris ld rejects libglvnd's GNU --version-script -- the wave10 mapfile wall; fix = strip the
+flag at the CC-WRAPPER level [PATH ld-wrapper doesn't intercept -- collect2 calls its configured ld] OR use
+the store GNU ld 2.46.1); libseat/seatd (the nativeLibc assert fixed via systemdSupport=false; now hits
+#error Unsupported platform in common/drm.c + seatd/client.c -- needs __sun DRM+fd-pass arms). GTK4/
+libadwaita not attempted (budget) -- now UNBLOCKED on glib+render+wayland. x86 COSMIC render/toolkit gate
+CLEARED. Remaining stages: libepoxy cc-wrapper strip -> seatd __sun arms -> libinput udev shim -> GTK4/
+libadwaita (wave16/17 native) -> native rust + COSMIC crates -> cosmic-comp + ISO. tranche-stage3.nix +
+shims persisted. The aarch64-fix-native-to-x86 strategy WORKS (glib/wayland both via the aarch64 precedent).
