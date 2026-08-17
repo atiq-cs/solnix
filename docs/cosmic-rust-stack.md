@@ -1,165 +1,233 @@
 # COSMIC / Wayland Rust stack cross-build to aarch64-illumos (EM_AARCH64)
 
-## Verdict
+## Verdict (updated)
 
-**The COSMIC / Wayland Rust crate stack cross-builds to EM_AARCH64 illumos.**
-The ecosystem gate is OPEN: `libc`, `nix`, and `rustix` all support illumos and
-all cross-compile cleanly. The COSMIC rendering + GUI layer cross-builds:
-`cosmic-text` (text shaping), `iced_core` (the COSMIC GUI base), the Rust
-`xkbcommon` binding, `calloop` (smithay's event loop), and the whole font/unicode
-substrate (rustybuzz, swash, skrifa, fontdb, unicode-bidi, ...).
+**The COSMIC compositor stack cross-builds to aarch64-illumos, compile-phase,
+for every layer except the live-DRM/GPU/udev hardware backends.**
 
-The ONE precise integration blocker is `wayland-backend`'s **pure-Rust server
-backend**, which has no illumos code path (it hard-codes an epoll(linux)/kqueue(BSD)
-polling allowlist and uses the Linux-only `MSG_CMSG_CLOEXEC` recv flag). This gates
-`wayland-client` / `wayland-server` / `smithay-client-toolkit`. It is a bounded
-crate-porting job, not a rustc/std/ecosystem gap.
+The one bounded blocker from the previous wave -- `wayland-backend`'s pure-Rust
+server backend -- is CLOSED. With a targeted illumos patch it cross-builds, and
+that unblocked the entire Wayland-Rust layer, the smithay non-hardware core, and
+the full COSMIC GUI toolkit (`libcosmic` 1.0.0 + the pop-os `iced`/`winit`/
+`softbuffer` forks + `cosmic-config` + `cosmic-theme` + `cosmic-text` +
+`cosmic-client-toolkit` + `cosmic-protocols`).
+
+`cosmic-comp` (the compositor) is hardware-gated by design: it hard-requires
+smithay's `backend_drm`/`backend_gbm`/`backend_egl`/`backend_udev`/
+`backend_session_libseat`/`backend_libinput`/`backend_vulkan`/`backend_x11` +
+`renderer_glow`/`renderer_multi`/`renderer_pixman` -- every one pulls a Linux
+DRM/KMS/udev/libseat/mesa/vulkan `-sys` native lib. That is the live-hardware
+boundary, not a Rust/illumos gap.
+
+**"The COSMIC compositor stack cross-builds to aarch64-illumos except the
+live-DRM/GBM/udev/libinput/vulkan hardware backends (which need a real GPU +
+DRM node)."**
+
+## What changed since the last wave
+
+- **wayland-backend patch: APPLIED and it works.** The rust server backend
+  cross-builds EM_AARCH64.
+- **The whole Wayland-Rust layer cross-builds**: wayland-client, wayland-server,
+  wayland-scanner, wayland-cursor, wayland-protocols, wayland-protocols-wlr.
+- **smithay 0.7.0 non-hardware core cross-builds**: `wayland_frontend` +
+  `desktop` (the full wayland-server frontend, protocol handlers, desktop
+  space/window management, utils, SHM, dmabuf types).
+- **smithay-client-toolkit** cross-builds (with cross-pkg-config wired).
+- **A cosmic-\* crate cross-builds -- the milestone hit**: `cosmic-config`,
+  `cosmic-theme`, and the whole `libcosmic` 1.0.0 GUI toolkit cross-build
+  EM_AARCH64. COSMIC compiles for solnix.
+
+## The wayland-backend illumos patch (the unblock)
+
+The previous report predicted the disk patch (add illumos to the epoll cfg
+allowlist) was "necessary-but-insufficient" and that illumos would need a real
+`poll(2)`/event-ports path. **That prediction was wrong in a good way**: the
+rustix version wayland-backend-0.3.17 actually pulls is **rustix 1.1.4**, which:
+
+- exposes `rustix::event::epoll` on illumos
+  (`#[cfg(any(linux_kernel, target_os = "illumos", target_os = "redox"))]` --
+   illumos ships an epoll(2) emulation), and
+- exports `Timespec` unconditionally from `rustix::event`, and
+- provides `epoll::{create, add, delete, wait}` with the modern
+  `Buffer`/`spare_capacity` `wait` signature wayland-backend uses.
+
+So illumos can use the same epoll code path as Linux -- no bespoke event-ports
+backend needed. The real gaps were narrower than feared, and the full patch has
+three parts (`/root/cosmic-rust/patches/wayland-backend-0.3.17-illumos.patch`):
+
+1. `src/rs/server_impl/common_poll.rs` -- add `illumos`/`solaris` to the epoll
+   cfg allowlist at all three sites the previous disk patch touched **plus the
+   `epoll::delete` site in `dispatch_events_for`** the disk patch missed.
+2. `src/rs/server_impl/handle.rs` -- add `illumos`/`solaris` to the `epoll::add`
+   cfg in `insert_client` (the disk patch missed this file entirely; without it
+   `insert_client` gets no `ret` binding -> E0425).
+3. `src/rs/socket.rs` -- the ONE genuine illumos gap: `RecvFlags::CMSG_CLOEXEC`
+   is cfg'd out on `solarish` in rustix (illumos libc has no
+   `MSG_CMSG_CLOEXEC`). Patch: on `illumos`/`solaris` fall back to
+   `RecvFlags::DONTWAIT` and set `FD_CLOEXEC` on each received fd manually with
+   `fcntl` -- exactly what the crate already does for macos/redox.
+
+Result: `wayland-backend v0.3.17` -> `libwayland_backend-*.rlib` EM_AArch64.
+Verified with `readelf -h` Machine: AArch64.
+
+## The Wayland-Rust layer (unblocked by the patch)
+
+All cross-built EM_AARCH64 via a `[patch.crates-io] wayland-backend = { path =
+... }` override:
+
+| crate                  | version | note |
+|------------------------|---------|------|
+| wayland-backend        | 0.3.17  | patched (illumos epoll + solarish recv-flag) |
+| wayland-client         | 0.31.15 | |
+| wayland-server         | 0.31.14 | |
+| wayland-scanner        | 0.31.11 | proc-macro (host) + AArch64 output |
+| wayland-cursor         | 0.31.14 | |
+| wayland-protocols      | 0.32.13 | client+server+staging+unstable |
+| wayland-protocols-wlr  | 0.3.12  | client+server |
+
+## smithay -- which modules cross-build vs which are hardware-gated
+
+Built `smithay 0.7.0` with `--no-default-features --features
+wayland_frontend,desktop`. Cross-built EM_AARCH64 -> `libsmithay-*.rlib`.
+
+Two smithay source fixes were needed, only ONE illumos-specific:
+
+- **illumos gap**: `src/wayland/shm/pool.rs` -- on illumos `siginfo_t::si_addr`
+  is an accessor **method**, not a struct field (glibc/BSD expose a field).
+  Patch adds a solarish arm calling `(*info).si_addr()`.
+- **not illumos** (upstream rand 0.10 API drift): `src/utils/sealed_file.rs`
+  needs `use rand::RngExt` for `.sample()`; and `src/backend/allocator/dmabuf.rs`
+  uses `rustix::ioctl::opcode` (gated linux/bsd/redox) for the `DMA_BUF_SYNC`
+  ioctl -- gated to non-illumos with an illumos no-op `sync_plane` (there is no
+  DMA-BUF kernel interface on illumos; dmabuf-fd sharing is Linux/DRM-specific).
+  Patch: `/root/cosmic-rust/patches/smithay-0.7.0-illumos.patch`.
+
+**Cross-builds (non-hardware, compile-phase):**
+- `wayland_frontend` -- the entire wayland-server frontend + all protocol
+  handlers (compositor, shm, seat, output, xdg-shell, layer-shell, dmabuf
+  protocol types, ...).
+- `desktop` -- space/window/layer management, damage tracking.
+- `utils`, `input` abstractions (the types), the SHM renderer glue, dmabuf
+  *types* (minus the Linux sync ioctl).
+
+**Hardware-gated (need live DRM/GPU/udev -- NOT cross-built):**
+- `backend_drm` / `backend_gbm` -> `drm`, `drm-ffi`, `drm-sys`, `gbm` (Linux DRM
+  kernel FFI + Mesa GBM; `drm-ffi` uses `rustix::ioctl::{None,Read,Write,
+  ReadWrite}Opcode`, all gated linux/bsd -- this is the live-DRM boundary).
+- `backend_egl` / `renderer_gl(ow)` -> Mesa EGL/GLES `-sys` (needs a GPU driver).
+- `backend_libinput` -> `input` (libinput C lib, evdev).
+- `backend_udev` -> `udev` C lib.
+- `backend_session_libseat` -> `libseat` C lib.
+- `backend_vulkan` -> `ash` (Vulkan loader + ICD).
+- `backend_x11` / `backend_winit` -> xcb/X11 `-sys`, winit DRM path.
+- `renderer_multi` / `renderer_pixman` -> pixman `-sys` + multi-GPU DRM.
+
+## smithay-client-toolkit
+
+Cross-built EM_AARCH64 with `calloop,xkbcommon` features (cross-pkg-config wired
+to the wave18 aarch64 `xkbcommon.pc`/`wayland-*.pc`). Pulled + cross-built its
+closure: calloop 0.13, calloop-wayland-source, wayland-csd-frame, cursor-icon,
+xkeysym, xkbcommon 0.7, memmap2, polling. -> `libsmithay_client_toolkit-*.rlib`.
+
+## THE MILESTONE: cosmic-\* crates cross-build EM_AARCH64
+
+COSMIC compiles for solnix. Built against the pop-os `libcosmic` 1.0.0 checkout
+(iced + winit + softbuffer submodule forks).
+
+| cosmic-\* crate            | version | note |
+|----------------------------|---------|------|
+| **libcosmic** (crate `cosmic`) | 1.0.0 | the COSMIC GUI toolkit -- full lib cross-built |
+| cosmic-config              | 1.0.0   | config layer every cosmic app uses (macro+subscription) |
+| cosmic-theme               | 1.0.0   | theme layer |
+| cosmic-text                | 0.19.0  | (pop-os fork, pulled by libcosmic) |
+| cosmic-client-toolkit (cctk) | 0.1.0 | cosmic wayland client toolkit |
+| cosmic-protocols           | 0.1.0   | cosmic wayland protocol bindings |
+
+`libcosmic` was built `--no-default-features --features wayland,tokio` (the
+Wayland software path). It pulled + cross-built the whole COSMIC GUI stack:
+the pop-os `iced` 0.14 fork (`iced_core`, `iced_runtime`, `iced_widget`,
+`iced_winit`, `iced_wgpu`, `iced_graphics`, `iced_tiny_skia`, `iced_futures`,
+`iced_debug`), the pop-os `winit` cosmic-0.14 fork, `softbuffer` (wayland
+software path), `taffy`, `glam`, `reis`, plus the cosmic-config/theme layers --
+ALL EM_AARCH64.
+
+Two more bounded, non-hardware fixes were needed on the way (both upstreamable):
+
+- **reis 0.7.1** (`src/util.rs`): the libei client uses
+  `net::RecvFlags::CMSG_CLOEXEC` unconditionally with no fallback -- the same
+  illumos gap as wayland-backend's socket. Patched to use empty recv flags +
+  manual `FD_CLOEXEC` on solarish.
+  (`/root/cosmic-rust/patches/reis-0.7.1-illumos.patch`)
+- **winit** (pop-os cosmic-0.14, `platform_impl/linux/mod.rs`): `is_main_thread`
+  is defined for linux/dragonfly/freebsd/openbsd/netbsd but not illumos ->
+  E0425. Added an illumos/solaris arm (std thread-name heuristic; no portable
+  main-thread query is bound for solarish in this libc).
+  (`/root/cosmic-rust/patches/winit-popos-cosmic-0.14-illumos.patch`)
+- **iced (pop-os 0.14 fork)** `Cargo.toml`: its workspace `softbuffer` dep
+  enabled default features incl `kms`, which forced `drm`/`drm-ffi` (the DRM
+  hardware path) into the software renderer. Set `default-features = false,
+  features = ["wayland","wayland-dlopen"]` to keep the wayland software path.
+  (`/root/cosmic-rust/patches/iced-popos-0.14-softbuffer-nokms.patch`)
+
+## The next precise blocker
+
+**cosmic-comp itself is hardware-gated.** Its `Cargo.toml` hard-requires smithay
+with `backend_drm, backend_gbm, backend_egl, backend_libinput,
+backend_session_libseat, backend_udev, backend_winit, backend_vulkan,
+backend_x11, renderer_glow, renderer_multi, renderer_pixman`. Every one of those
+pulls a Linux-hardware `-sys` native lib (drm-ffi/gbm/mesa-egl/libinput/udev/
+libseat/xcb/vulkan/pixman). The first hard compile-phase stop is `drm-ffi`
+0.7.1 using `rustix::ioctl::{NoneOpcode, ReadOpcode, WriteOpcode,
+ReadWriteOpcode}` -- all gated `linux_kernel/bsd/redox`, absent on illumos.
+
+That is the live-DRM/GPU boundary the task flagged. Closing it is NOT a Rust
+gap: it requires an illumos DRM/KMS + GBM + input/session stack (kernel DRM
+driver + Mesa GBM/EGL for the target GPU + libinput/udev/libseat equivalents),
+i.e. the platform's graphics substrate, not a crate patch. Compile-phase stubs
+(RADV-style) could be added crate-by-crate, but they would need the live
+`C3-amdgpu` DRM node + a GPU to actually run.
+
+So the actionable next step toward a running COSMIC on solnix is the
+**hardware/driver layer** (DRM/GBM/EGL/udev/libseat on illumos), not more Rust
+crate porting. The Rust/compile-phase story is done up to that boundary.
 
 ## cross-rust recipe re-verified: YES
 
-STEP 0 reproduced: a trivial `fn main(){}` cross-compiled to an EM_AARCH64 EXEC
-via the wave18 build-std recipe (host x86 OI rustc 1.97.1 + `RUSTC_BOOTSTRAP=1` +
-`-Zbuild-std=std,panic_abort` + the aarch64 cross-gcc linker + the syslib shim).
-`readelf -h`: Class ELF64, Type EXEC, Machine AArch64. Saved as
-`/root/cosmic-rust/step0-aarch64.exe`.
-
-The recipe (from `aarch64-rust-overlay.nix`, unchanged):
-- host   : `/tmp/rustimg/usr/bin/{rustc,cargo}` (OI rust seed, stable 1.97.1)
-- unlock : `RUSTC_BOOTSTRAP=1`
-- std    : `.cargo/config.toml [unstable] build-std = ["std","panic_abort"]`
-- target : `aarch64-unknown-illumos` (llvm-target aarch64-unknown-solaris2.11)
-- linker : `aarch64-unknown-solaris2.11-cc` / `-ar` (the wave cross gcc 14.3.0)
-- -L shim: `RUSTFLAGS="-L native=/tmp/aa-syslibs/lib -C link-arg=-lmd -C link-arg=-lmp"`
-           (libposix4->librt.1, libmd->libmd.1, libmp->libmp.2, empty sendfile/lgrp stubs)
-- runtime: `LD_LIBRARY_PATH=/tmp/rustimg/usr/lib/amd64:/tmp/rustimg/usr/lib`
-The full env is captured in `/root/cosmic-rust/crossenv.sh`.
-
-## The ecosystem gate: does nix / rustix support illumos? YES
-
-This is the make-or-break for the whole Rust ecosystem, and it passes at both the
-source-cfg level AND the actual-cross-build level.
-
-- **libc 0.2**: full illumos support -- `src/unix/solarish/illumos.rs` ships,
-  `#[cfg(target_os = "illumos")]` blocks throughout `solarish/mod.rs`.
-  Cross-built -> EM_AARCH64.
-- **nix 0.29**: cross-built cleanly with `fs,process,socket,poll` features
-  enabled -> EM_AARCH64. (nix groups solarish; 19 solaris refs + 3 illumos refs
-  in src.)
-- **rustix 0.38 AND rustix 1.1**: cross-built cleanly (both major versions pulled
-  transitively, both -> EM_AARCH64). rustix's `build.rs` handles illumos
-  explicitly:
-    - `os != "linux"` -> selects the **libc backend** (the linux_raw asm backend
-      is Linux-only, correctly bypassed).
-    - `if os == "solaris" || os == "illumos" { use_feature("solarish"); }`
-  So rustix is illumos-aware by design. Its Linux-only APIs (epoll, `MSG_CMSG_CLOEXEC`)
-  are correctly cfg'd out on solarish -- which is precisely what trips wayland-backend
-  (see blocker below): the crate consuming rustix assumes those Linux APIs exist.
-
-The two crates that "gate a LOT" of the ecosystem both build. The gate is open.
-
-## Crates that cross-built cleanly -> EM_AARCH64
-
-Verified rlib/exe present with `readelf -h` Machine: AArch64 (see
-`/root/cosmic-rust/rlibs/MANIFEST.txt`):
-
-### Foundation / ecosystem gate
-| crate     | version | note |
-|-----------|---------|------|
-| libc      | 0.2.185 | solarish/illumos.rs |
-| nix       | 0.29    | fs/process/socket/poll |
-| rustix    | 0.38 + 1.1 | libc backend, solarish feature |
-| errno     | 0.3     | |
-| memmap2   | 0.9     | mmap (smithay/wayland shm) |
-| polling   | 3.11    | (calloop's poller) |
-| calloop   | 0.14    | smithay's event loop |
-
-### COSMIC rendering + GUI layer (pure Rust, no C deps)
-| crate       | version | note |
-|-------------|---------|------|
-| cosmic-text | 0.12.1  | **what COSMIC renders text with** |
-| rustybuzz   | 0.14    | HarfBuzz-equiv shaping (pure Rust) |
-| swash       | 0.1.19  | glyph rendering |
-| skrifa      | 0.22    | font access (fontations) |
-| fontdb      | 0.16    | font DB |
-| iced_core   | 0.13.2  | **the COSMIC GUI lib base** |
-| palette     | 0.7     | color (iced dep) |
-
-cosmic-text pulled a 63-rlib closure (unicode-bidi, unicode-segmentation,
-unicode-linebreak, fontconfig-parser, sys-locale, rayon, read-fonts, tinyvec,
-self_cell, ...), ALL EM_AARCH64. Zero illumos gaps in the entire text-shaping +
-GUI-core stack.
-
-### Wayland C-binding layer
-| crate     | version | note |
-|-----------|---------|------|
-| xkbcommon | 0.7     | Rust binding; cross-built once pkg-config-cross was wired to the wave18 aarch64 libxkbcommon .pc |
-
-The wave15/18 EM_AARCH64 C libs are present and confirmed AArch64: `libwayland-{client,server,cursor,egl}.a` and `libxkbcommon.a` (built as static archives).
-
-## The precise integration blocker: `wayland-backend` pure-Rust server backend
-
-`wayland-sys` / `wayland-client` / `wayland-server` / `wayland-protocols` /
-`smithay-client-toolkit` all depend on `wayland-backend`, whose **rust** backend
-(`src/rs/`) is compiled **unconditionally** ("The rust backend is always
-available" -- crate docs). Its server impl has no illumos path:
-
-1. **Polling allowlist** (`src/rs/server_impl/common_poll.rs`, 4 cfg sites):
-   epoll for `linux/android/redox`, kqueue for `dragonfly/freebsd/netbsd/openbsd/macos`.
-   **illumos is in neither**, so `dispatch_all_clients` and its `poll_fd`/`ret`
-   bindings are cfg'd out entirely -> E0599 (missing method) + E0425 (missing names).
-2. **`RecvFlags::CMSG_CLOEXEC`** (`src/rs/socket.rs:77`): used for all targets
-   except macos/redox. In rustix this maps to `c::MSG_CMSG_CLOEXEC`, a Linux/BSD
-   flag illumos libc lacks, so rustix cfg's it out on solarish -> E0599.
-
-Adding illumos to the epoll allowlist (patch
-`/root/cosmic-rust/wayland-backend-illumos-epoll.patch`) fixes site (1)'s method,
-but then exposes (2) and the still-Linux-only epoll bindings -- because **illumos
-has no epoll in rustix 0.38** (illumos uses event ports / `port_create`, or
-`poll(2)`). So the fix is not a cfg toggle: the Rust server backend needs a real
-`poll(2)`- or event-ports-based polling path for illumos, plus a solarish branch
-for the recv flags.
-
-`smithay-client-toolkit` additionally needs `PKG_CONFIG_ALLOW_CROSS=1` +
-`PKG_CONFIG_PATH` pointed at the aarch64 xkbcommon/wayland `.pc` (a build-script
-cross-pkg-config wiring, solvable and demonstrated -- with it wired, sctk compiled
-xkbcommon and got to exactly the wayland-backend gaps above).
-
-### What's needed to close the wayland blocker (in order)
-1. **Preferred**: patch `wayland-backend`'s rust server backend to add an illumos
-   polling path (poll(2) or illumos event ports) and a solarish `RecvFlags` branch
-   -- a bounded crate patch, upstreamable. This is the true fix because the rust
-   backend compiles unconditionally.
-2. The `client_system`/`server_system` (C libwayland) features do NOT dodge this:
-   the `rs` module still compiles. (They would let the *sys* backend do the polling
-   at runtime, but the rust module must still *compile*.) So (1) is required
-   regardless.
-3. Wire cross-pkg-config for the `-sys` build scripts (xkbcommon, wayland) to the
-   wave18 EM_AARCH64 `.pc` files -- already demonstrated working for xkbcommon.
+Unchanged from the previous wave (`/root/cosmic-rust/crossenv.sh`): host x86 OI
+rustc 1.97.1 + `RUSTC_BOOTSTRAP=1` + `-Zbuild-std=std,panic_abort` + the
+aarch64 cross-gcc 14.3.0 linker + the `/tmp/aa-syslibs` shim
+(`-lmd -lmp` + posix4/sendfile/lgrp stubs) + `CARGO_BUILD_TARGET=
+aarch64-unknown-illumos`. For the `-sys`/pkg-config crates: `PKG_CONFIG_ALLOW_
+CROSS=1` + `PKG_CONFIG_PATH` -> the wave18 aarch64 `xkbcommon.pc`/`wayland-*.pc`.
 
 ## Count
 
-**16 EM_AARCH64 artifacts** persisted (15 rlibs + 1 exe), representing distinct
-crates; the transitive closures built total ~60+ crates per project, all AArch64.
-Cleanly-cross-built named crates: libc, nix, rustix (x2), errno, memmap2, polling,
-calloop, cosmic-text, rustybuzz, swash, skrifa, fontdb, iced_core, palette,
-xkbcommon = **16 named crates**, plus their EM_AARCH64 dep closures.
+**48 EM_AARCH64 rlibs** persisted in `/root/cosmic-rust/rlibs/` (+ the STEP 0
+exe), up from 16. Each `readelf -h` Machine: AArch64 (see
+`/root/cosmic-rust/rlibs/MANIFEST.txt`).
 
-## Is the COSMIC Rust stack cross-buildable?
-
-**Yes, with one bounded exception.** The toolchain (wave18) + the ecosystem gate
-(libc/nix/rustix illumos support) + the COSMIC rendering/GUI layer (cosmic-text +
-iced_core + calloop + the font stack) all cross-build to EM_AARCH64 today, out of
-the box, no patches. The single blocker is `wayland-backend`'s pure-Rust server
-backend lacking an illumos polling path -- a targeted, upstreamable crate patch,
-NOT a rustc/std/nix/rustix limitation. "The COSMIC Rust stack cross-builds to
-aarch64-illumos except for the wayland-backend rust server poll path."
+New named crates cross-built this wave (beyond the prior 16): wayland-backend
+(patched), wayland-client, wayland-server, wayland-cursor, wayland-protocols,
+wayland-protocols-wlr, wayland-csd-frame, cursor-icon, xkeysym,
+smithay-client-toolkit, calloop-wayland-source, smithay, reis, glam,
+cosmic-config, cosmic-theme, iced_futures, notify, atomicwrites, libcosmic
+(cosmic), cosmic-client-toolkit, cosmic-protocols, iced_winit, iced_wgpu,
+iced_tiny_skia, iced_widget, iced_graphics, winit, softbuffer, taffy = **~30
+new named crates**, plus their EM_AARCH64 dep closures (~150+ crates compiled
+across the projects).
 
 ## Artifacts (on the fred node)
 
-- `/root/cosmic-rust/rlibs/*.rlib` -- 15 EM_AARCH64 rlibs (one per crate)
+- `/root/cosmic-rust/rlibs/*.rlib` -- 48 EM_AARCH64 rlibs
 - `/root/cosmic-rust/rlibs/MANIFEST.txt` -- per-file `readelf` Machine confirmation
+- `/root/cosmic-rust/patches/` -- the 5 illumos/cross patches:
+  - `wayland-backend-0.3.17-illumos.patch` (the unblock)
+  - `reis-0.7.1-illumos.patch`
+  - `smithay-0.7.0-illumos.patch`
+  - `winit-popos-cosmic-0.14-illumos.patch`
+  - `iced-popos-0.14-softbuffer-nokms.patch`
+- `/root/cosmic-rust/wayland-backend-illumos-epoll.patch` -- the earlier
+  (partial) epoll-only patch, superseded by patches/wayland-backend-0.3.17-illumos.patch
 - `/root/cosmic-rust/step0-aarch64.exe` -- STEP 0 trivial-crate EM_AARCH64 EXEC
 - `/root/cosmic-rust/crossenv.sh` -- the reproducible cross-rust env
 - `/root/cosmic-rust/rlibmachine.sh` -- rlib EM-check helper
-- `/root/cosmic-rust/wayland-backend-illumos-epoll.patch` -- the blocker's first
-  (necessary-but-insufficient) patch site

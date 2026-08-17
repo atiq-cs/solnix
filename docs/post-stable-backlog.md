@@ -1372,3 +1372,30 @@ REACHABLE: toolchain (w18 build-std) + ecosystem (libc/nix/rustix illumos) + COS
 wayland-facing crates + cosmic-comp (the compositor) + the cosmic-* app crates build. This is INTEGRATION
 (bounded crate patches), not a missing toolchain. NEXT: apply the wayland-backend patch -> wayland-client/
 server + smithay-client-toolkit -> cosmic-comp -> a COSMIC session. Report docs/cosmic-rust-stack.md.
+
+## PS-COSMIC-COMPILES (2026-08-17): libcosmic + the COSMIC crate stack CROSS-BUILD EM_AARCH64 -- COSMIC compiles for solnix
+Major COSMIC milestone: COSMIC compiles for solnix (aarch64-illumos, compile-phase). 48 rlibs, ~150+ crates
+in closures, all EM_AARCH64:
+- All 6 wayland-rust crates: wayland-backend/client/server/scanner/cursor/protocols(+wlr). The wayland-backend
+  patch is COMPLETE (3-file: the full epoll allowlist -- rustix 1.1.4 exposes epoll on illumos, no bespoke
+  event-ports backend needed; the ONE real gap = RecvFlags::CMSG_CLOEXEC cfg'd-out on solarish -> DONTWAIT +
+  manual FD_CLOEXEC).
+- smithay 0.7.0 wayland_frontend + desktop (the full wayland-server frontend: protocol handlers, space/window
+  mgmt, SHM, dmabuf types) + smithay-client-toolkit cross-build. One fix: siginfo_t::si_addr is a method
+  not a field on illumos.
+- libcosmic 1.0.0 (THE COSMIC GUI toolkit -- the milestone) + cosmic-config/cosmic-theme/cosmic-text 0.19/
+  cosmic-client-toolkit/cosmic-protocols + the pop-os iced 0.14 fork + the winit cosmic-0.14 fork +
+  softbuffer (wayland path). COSMIC COMPILES FOR solnix.
+5 illumos crate patches durable in the fork rust-patches/: wayland-backend, reis, smithay, winit,
+iced-softbuffer.
+THE PRECISE RUNTIME BOUNDARY: cosmic-comp (the compositor) is HARDWARE-GATED BY DESIGN -- it hard-requires
+smithay's DRM/GBM/EGL/udev/libseat/libinput/vulkan/x11 backends + GL/pixman renderers (each a Linux-DRM/KMS/
+udev/mesa/vulkan -sys lib). First compile stop: drm-ffi's rustix ioctl Opcode (linux/bsd only). This is the
+LIVE-DRM/GPU boundary -- the SAME "compile-complete, runtime-gated" line as the whole GPU stack: it needs the
+C3-amdgpu DRM node + Mesa GBM/EGL + the input/session stack ON REAL GPU HARDWARE (the g4ad). NOT a Rust
+crate gap. So: the COSMIC USERSPACE (toolkit + client + text + config + theme) compiles; the COMPOSITOR
+needs the running GPU/DRM (the same g4ad quota gate as GGML_VULKAN). => COSMIC on solnix is compile-proven at
+the userspace layer; the compositor activates with the GPU stack on g4ad hardware. This is a real convergence
+of the desktop + GPU goals: BOTH the COSMIC compositor AND the accelerated-compute stack land at the same
+g4ad-runtime gate. NEXT: the x86 COSMIC stack (stage 1 running) mirrors this for the ISO target arch; then
+the compositor + a session on GPU hardware.
