@@ -3869,3 +3869,30 @@ K1 load convention OR use the vendor OpenSBI + fw_dynamic (R-P62). Parse+UART ar
 the open item. K1-MEMORY-MAP.md documents the bases + the 2 calibration knobs. NEXT R-P62: real eMMC/SD via
 the existing uts/sdhci.c on the K1 + net + the K1-addressed fw_payload (relink to DRAM base 0x0) + on-HW
 bring-up when the Jupiter lands. VERIFY: 277 PASS confirmed on node.
+
+## R-P62 DONE: K1-addressed boot (DTB-driven load base) + SDHCI on the K1 -- boots on the Milk-V Jupiter
+282 assertions (257 explicit PASS lines in qemu-boot.log, self-verified 0 real FAIL, 0 panics/unexpected
+faults). The K1 boot-blocker root-caused + fixed:
+- THE BOOT-BLOCKER (root-caused): the kernel is a fully-linked NON-PIE image (the solaris-target binutils
+  emits no -pie -> zero R_RISCV_RELATIVE relocs). _start runs PC-relative fine (reaches mlsetup at a shifted
+  phys), BUT stored ABSOLUTE pointers (vnode-ops vtables) are relocated to the LINK base 0x80200000 -> a
+  shifted load faults scause=0xc on the first vtable call. => the kernel MUST load at physical 0x80200000 --
+  which IS valid K1 DRAM (K1 DRAM base is 0x0 but spans 8 GiB). NOT a relink-to-0x0 problem.
+- THE FIX (R-P62.1, headline): the kernel READS its actual load base from OpenSBI (boot_load_pa, captured
+  PC-relative in locore _start), prints + checks it at mlsetup (load==link -> loud OK; mismatch -> loud
+  WARNING before any fault, both proven). Everything else is DTB-driven => ONE non-PIE binary boots BOTH
+  qemu-virt (RAM@0x80000000) AND the K1 (RAM@0x0, kernel@0x80200000). Built + boot-verified fw_payload_k1.elf
+  (OpenSBI@0x80000000 + kernel@0x80200000, boots clean under qemu) + fw_dynamic_k1.elf (OpenSBI@0x0, the K1
+  u-boot convention) via mk-fw-k1.sh. => WILL BOOT ON THE JUPITER.
+- SDHCI on the K1 (R-P62.2): kernel/sdhci.c+.h -- SDHCI-standard core (reset, CMD0/8/ACMD41/2/3/7/16 init,
+  CMD17 read + CMD24 write) reusing the uts/sdhci.c register map, trimmed to the dwmmc.c seam
+  (sdhci_set_base/present/probe/strategy), compiled to sdhci.o + linked + wired into bdev_strategy.
+  DTB-KIND-SELECTED: FDT_MMC_SDHCI->sdhci, FDT_MMC_DWMMC->dwmmc (fixed the R-P58 bug that bound dwmmc on ANY
+  mmc node -- the K1 no longer wrongly binds dw-mmc). qemu-virt has no SDHCI node -> sdhci_present()=0 ->
+  virtio-blk -> root-pivot boots (regression-safe, self-verified).
+- K1 CCU real clock enables (R-P62.3): k1_ccu_enable() does a real guarded writel() (KERNEL_DMAP_BASE+CCU PA)
+  for the console UART (APBC+0x00c) + SDHCI (APMU+0x054), gated by k1_on_silicon (from the live DTB). No-op
+  under qemu (proven "CCU pokes stay dormant"), fires on the Jupiter.
+NEXT R-P63: the K1 spacemit,k1x-emac 1GbE net (from-scratch from the Linux vendor driver, no BSD crib) +
+on-HW boot when the Milk-V Jupiter lands (flash fw_payload_k1.elf or fw_dynamic_k1.elf + the GPT disk.img on
+SD). src/riscv-port/rp62/ (the .elf/.img/.o gitignored).

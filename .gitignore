@@ -63,3 +63,7 @@ src/riscv/**/disk.img
 src/drm-port/nvk/*.so
 src/drm-port/powervr/*.so
 src/drm-port/**/*.so
+src/riscv-port/**/*.elf
+src/riscv-port/**/*.img
+src/riscv-port/**/*.o
+src/riscv-port/**/*.a
