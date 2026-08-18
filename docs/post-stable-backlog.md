@@ -1566,3 +1566,26 @@ as per-crate nix drvs (rlibs are one bundled path now), (2) land smallvil [or a 
 wayvnc as the session, (3) compose the ISO from the stage5 closure + the compositor. cosmic-comp itself
 needs its render path retyped to a SW renderer (a bounded upstream-ish refactor) OR the GPU (the g4ad).
 Patches: src/drm-port/cosmic-illumos-patches.txt + patch-wayland-backend.sh.
+
+## PS-WASM-DEMO (2026-08-18): solnix riscv64 boots in a browser (TinyEMU-WASM) -- native-proven, one emcc step from live
+DELIVERED (the hard part done): TinyEMU (Bellard's, tinyemu-2019-12-21) patched to boot the REAL solnix
+riscv64 fw_payload.elf + disk.img to an INTERACTIVE SHELL -- native-proven on the node in ~48s: ls -> "bin
+etc lib sbin usr", cat /etc/release -> "solnix riscv64 (R-P31) / SunOS solnix-riscv64", echo works. Full
+boot: OpenSBI -> kernel -> Sv39/HAT/W^X/kmem -> fork/exec/COW -> preemption -> signals -> virtio-blk DMA +
+GPT root -> init(pid1) -> /bin/sh -> real coreutils off the disk. TinyEMU patches (2019 stock != qemu-virt):
+ns16550 UART @0x10000000 (OpenSBI console), virtio->0x10001000/PLIC->0x0c000000/CLINT@0x02000000, FDT
+ns16550a+stdout-path, CSRs for OpenSBI v1.8.1 (mvendorid/marchid/mimpid + the time CSR->real mtime so
+alarm(2) fires), PLIC claim/complete at the hart0 S-context 0x201000 (THE boot-wedge -- the S-mode kernel's
+virtio-blk IRQ claim), dropped virtio-console -> UART input. + illumos/emscripten portability fixes
+(byteswap/tm_gmtoff/tun/statvfs).
+BROWSER BUNDLE assembled (all but the .wasm): index.html + xterm.js 5.3.0 + emu/lib.js (xterm<->emulator
+glue) + images/fw_payload.bin + split disk/blk*.bin + solnix.cfg + the patched-source tarball + build-wasm.sh.
+Serve-tested static (all files fetch, config parses). PUBLISHED: the 1.6MB bundle tarball ->
+https://cache.solnix.io/images/wasm-demo/solnix-riscv64-wasm-demo.tar.gz.
+THE ONE REMAINING STEP (off-node, site-team): emscripten has NO illumos host (this node is illumos), so the
+emcc build runs on a LINUX+emsdk box: run build-wasm.sh -> riscvemu64-wasm.{js,wasm} -> drop into emu/ ->
+the page boots solnix in the browser. The emulator+payload combo is PROVEN native; the JS entry points
+(vm_start/console_queue_char) + glue match the page. SITE-TEAM handoff: artifacts/SITE-TEAM-WASM-DEMO.md
+(bundle layout, the one emcc step, static serving [single-threaded -> NO COOP/COEP needed, serve .wasm as
+application/wasm, gzip the ~5-6MB images], mount at /browser, what the user sees = a real solnix riscv64
+shell in xterm.js). A zero-install "try solnix in your browser" demo, native-proven, one emcc away.
