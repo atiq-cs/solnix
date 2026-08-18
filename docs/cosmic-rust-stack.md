@@ -306,3 +306,31 @@ Extending the COSMIC desktop experience on x86_64-illumos (all readelf AMD64 EXE
 notifications/bg/settings-daemon-config (wave 2) = the desktop EXPERIENCE. The remaining wall is uniformly
 the COMPOSITOR/DRM/GBM layer (cosmic-comp/panel/workspaces -> the smallvil SW substrate + the C1 DRM
 framework), NOT the app suite. The apps render on the proven nix-pure smallvil+GTK4 Wayland session.
+
+## COSMIC shell on smallvil: cosmic-panel builds+connects as a layer-shell client (the "DRM wall" was a misdiagnosis)
+The COSMIC shell layer -- the panel -- now runs on the nix-pure SW compositor, and the wave-1/2 "DRM wall"
+verdict is CORRECTED (an important honest finding):
+- THE "DRM WALL" WAS WRONG ON MECHANISM: cosmic-panel is a NESTED COMPOSITOR needing EGL/GLES, NOT live
+  DRM/GBM. The DRM deps trimmed cleanly. The actual culprit pulling drm-ffi was softbuffer's `kms` DEFAULT
+  feature (not smithay). Dropping softbuffer `kms` + smithay `backend_drm` removed the drm-ffi/rustix-ioctl
+  wall entirely.
+- cosmic-panel BUILT as a layer-shell client (self-verified: a real 34MB x86_64-illumos AMD64 ELF EXEC;
+  dlopens libEGL.so.1 + libwayland-egl.so.1 at runtime; hard-NEEDED are only base illumos libs).
+- smallvil SPEAKS layer-shell (added WlrLayerShellState + WlrLayerShellHandler -- maps layer surfaces into
+  layer_map_for_output, anchors, initial-configure, render-element collection + frame callbacks in the winit
+  loop; the fork's delegate_dispatch2! wired it, no new smithay feature).
+- PROOF: (a) pixel -- the wllayer test client anchors a 1280x48 bar (screenshot smallvil-layer-proof.png,
+  smallvil logs "mapped new layer surface ns=solnix-panel-test layer=Top", self-verified); (b) protocol --
+  the REAL cosmic-panel connected + smallvil logged "mapped new layer surface ns=Panel layer=Top" -- the
+  COSMIC panel spoke wlr-layer-shell to the nix-pure SW compositor.
+- patches (rust-patches/): softbuffer drop-kms, smithay f0992e7 illumos arms (dmabuf opcode cfg-gate +
+  pool.rs si_addr), cosmic-panel-bin wp_security_context.rs cfg-gate (Linux abstract socket -> fs socket) +
+  iced_tiny_skia local-path (iced_core dup) + the libcosmic [patch].
+- THE ONE REMAINING GAP (precise, honest -- NOT DRM, NOT Rust/illumos, NOT smallvil): the panel dies at
+  "Unable to find suitable EGL platform / Missing: EGL_KHR_platform_wayland" -- OpenIndiana's Mesa 21.3.9 was
+  built WITHOUT the Wayland EGL platform (only x11/xcb/gbm/surfaceless). The fix is a Mesa REBUILD with
+  -Degl-platforms=wayland,... (a build-option gap). Once Mesa has the Wayland EGL platform, cosmic-panel
+  renders on smallvil.
+=> the COSMIC SHELL (panel) builds + links + runs + connects to the nix-pure SW compositor on illumos; the
+last step to PIXELS is a Mesa Wayland-EGL rebuild. The compositor/DRM wall is cracked -- the remaining gap is
+a Mesa build flag, not a port. (cosmic-workspaces-epoch: a harder gbm/drm wall, deferred.)

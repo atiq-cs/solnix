@@ -293,3 +293,118 @@ link + start + hit the winit "no WAYLAND_DISPLAY" gate (cosmic-notifications) or
 "Could not find wayland compositor" (cosmic-bg), which is the expected runtime
 gate, not a link failure. cosmic-settings additionally needs
 `LD_LIBRARY_PATH=/root/illumos-shims/udev` at runtime for the udev/input stubs.
+
+
+---
+
+# Wave 3 — cracking the compositor/DRM wall via SOFTWARE
+
+Goal: get cosmic-panel building as a **wlr-layer-shell client** + make the
+nix-pure `smallvil` SW compositor **speak layer-shell** + render a COSMIC shell
+element on the smallvil desktop over VNC — without the hardware DRM port.
+
+## Results
+
+| item | result |
+|---|---|
+| **cosmic-panel** built as x86_64-illumos ELF | **YES** — 34 MB EXEC, feature-trim + 4 illumos patches |
+| smallvil speaks wlr-layer-shell | **YES** — WlrLayerShellHandler added, maps + renders layer surfaces |
+| layer-shell surface RENDERS on smallvil over VNC | **YES** (test client) — pixel proof: a bar anchored TOP, screenshot |
+| cosmic-panel connects to smallvil as a layer-shell client | **YES** — smallvil logs `mapped new layer surface ns="Panel" layer=Top` |
+| cosmic-panel RENDERS pixels on smallvil | **NO** — host Mesa lacks the Wayland EGL platform (see verdict) |
+| cosmic-workspaces-epoch | not attempted (budget); harder gbm/drm wall (wave-2 note) |
+
+Screenshot proof: `/root/smallvil-layer-proof.png` (1280x800) — a full-width
+48 px bar anchored to the TOP of the smallvil desktop (green apps block, dark
+panel bg, blue clock block) over the dark desktop, served via x11vnc 127.0.0.1.
+
+## The KEY HYPOTHESIS, tested
+
+Wave-1 deferred cosmic-panel as a "HARD DRM/GPU wall." Re-investigated:
+cosmic-panel is a **nested compositor** (`xdg_shell_wrapper`) — it runs its own
+Wayland server, hosts the applets as clients, composites them through smithay's
+`GlesRenderer` (EGL/GLES) into a `wl_egl_surface`, and hands that to the host
+compositor's layer surface. So `backend_egl` + `renderer_gl` are genuinely
+required (used across 11 source files). BUT the DRM parts ARE droppable:
+
+- **`backend_drm` smithay feature: droppable** — cosmic-panel source never uses
+  `backend::drm`/`DrmDevice`/`gbm` (grep-verified). Removed from the features.
+- **`drm-ffi` (the actual illumos wall): droppable** — it was pulled by
+  **softbuffer** (`default` feature `kms` -> `drm` -> `drm-ffi`), gated
+  `cfg(all(unix, not(apple/android/redox)))` which illumos matches. Dropped
+  `kms` from softbuffer's default features (its KMS backend presents to a raw
+  Linux framebuffer, never used by a Wayland client). This removed the
+  rustix-ioctl-opcode illumos gap entirely.
+
+So the wave-1 "DRM wall" verdict was **wrong on the mechanism**: it is NOT a
+live-DRM/GBM boundary for the panel. The real requirement is **EGL/GLES**, which
+OpenIndiana Mesa provides — the panel builds + links + runs.
+
+## The remaining wall (honest, precise): Mesa's Wayland EGL platform is absent
+
+The panel runs, connects to smallvil, and smallvil maps its "Panel" layer
+surface, then the panel dies at:
+`Unable to find suitable EGL platform / Missing extensions:
+["EGL_KHR_platform_wayland","EGL_EXT_platform_wayland"]`.
+
+Host OpenIndiana Mesa 21.3.9 client EGL exposes only
+`EGL_KHR_platform_x11 / EGL_MESA_platform_xcb / EGL_KHR_platform_gbm /
+EGL_MESA_platform_surfaceless` — built WITHOUT the Wayland EGL platform. The
+panel's nested GLES renderer needs the client-side Wayland EGL platform to draw
+onto its `wl_egl_surface`. This is a **Mesa build-option gap** (rebuild Mesa with
+`-Degl-platforms=wayland,x11,surfaceless`, or realise a nix-pure Mesa with the
+wayland platform), NOT a Rust/illumos code gap and NOT a smallvil gap. It is the
+same "needs a real GL/EGL substrate for Wayland" boundary, now pinned to one
+missing Mesa platform rather than a whole DRM stack.
+
+## smallvil layer-shell support (added)
+
+smithay's `wayland_frontend` already ships the wlr-layer-shell protocol; no new
+feature needed. This smithay fork uses one `delegate_dispatch2!(Smallvil)` macro
+(already in smallvil), so no per-protocol delegate macro was needed. Added:
+`layer_shell_state` field + `WlrLayerShellState::new`; a `WlrLayerShellHandler`
+impl (`handlers/layer_shell.rs`) that maps new layer surfaces into
+`layer_map_for_output` (arrange() sizes them from anchors); initial-configure on
+first commit in the compositor `commit` handler; and layer render-element
+collection + frame callbacks in `winit.rs`. A minimal nix-pure wlr-layer-shell
+test client (`/root/wllayer`, built from `wllayer.c`) proves the compositor side
+end-to-end and provides the pixel proof.
+
+## Per-app illumos fixes (wave 3)
+
+1. **smithay f0992e7** (`rust-patches/smithay-illumos/`):
+   - `backend/allocator/dmabuf.rs:416` — `rustix::ioctl::opcode::write::<..>`
+     (the `opcode` module is linux/bsd-gated); cfg-gated illumos to a dummy
+     `DMA_BUF_SYNC` opcode (the dma-buf sync ioctl is never reached on illumos).
+   - `wayland/shm/pool.rs:367` — `(*info).si_addr` -> `si_addr()`; illumos libc
+     `si_addr` is an accessor method, not a field.
+2. **cosmic-panel-bin** (`rust-patches/cosmic-panel/`):
+   - `wp_security_context.rs` — Linux abstract-namespace socket
+     (`std::os::linux::net::SocketAddrExt` + `SocketAddr::from_abstract_name`);
+     cfg-gated illumos to a filesystem socket in `XDG_RUNTIME_DIR` (unlinked once
+     both endpoints hold fds).
+   - Cargo.toml — dropped `backend_drm` from smithay features; pointed
+     `iced_tiny_skia` at `path = "/root/libcosmic/iced/tiny_skia"` (its direct
+     git dep was a SECOND libcosmic checkout not covered by `[patch]` — the
+     iced_core/iced_graphics version-dup, same class as the wave-1 a11y dup).
+   - root Cargo.toml — appended the wave-1 `[patch]` libcosmic block.
+3. **softbuffer** (shared cargo-home checkout `c2b2c19`): dropped `kms` from
+   `default` features (removes the `drm`/`drm-ffi` illumos wall).
+
+## smallvil EGL runtime note (important)
+
+smallvil's winit EGL backend runs under Xvfb :99 with the **default** Mesa env.
+Forcing `LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe` BREAKS EGL here
+(`DRI2: failed to create dri screen` -> `eglInitialize NOT_INITIALIZED`); the
+default DRI2 path succeeds (Mesa EGL 1.4). The session launcher sets those env
+vars ONLY for the client, never for smallvil.
+
+## Patches + artefacts
+
+- `/root/cosmic-apps/rust-patches/` (+ mirrored into
+  `pkgs/os-specific/illumos/rust-patches/` for the orchestrator to commit):
+  `PANEL-LAYER-SHELL-RECIPE.md`, `cosmic-panel/`, `smallvil-layer-shell/`
+  (incl. `wllayer.c` + the proof screenshot), `smithay-illumos/`.
+- Launcher `solnix-cosmic-session.sh`: added `--layer` (run the layer-shell test
+  bar) + the smallvil-EGL-env note.
+- Screenshot: `/root/smallvil-layer-proof.png`.
