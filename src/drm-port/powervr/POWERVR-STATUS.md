@@ -2,6 +2,90 @@
 
 ---
 
+# C-PVR-d: Mesa 25.3.6 LINKED — libvulkan_powervr_mesa.so WITH BXE-2-32
+
+**The final userspace PowerVR Vulkan driver for the Milk-V Jupiter's exact GPU
+is LINKED.** The CLC/LLVM toolchain wedge that blocked C-PVR-c is closed: the
+toolchain (LLVM 20.1.8 + SPIRV-Tools 2026.4.1 + SPIRV-LLVM-Translator + libclc
+0.2.0) was co-located onto the Mesa node and the 25.3.6
+`libvulkan_powervr_mesa.so` linked with `-Dmesa-clc=enabled -Dllvm=enabled
+-Dprecomp-compiler=enabled`.
+
+## The headline result
+
+| Check | Result |
+|-------|--------|
+| **LINKED** | **YES** — Mesa 25.3.6, `-Dvulkan-drivers=imagination`, ninja 585/585 rc=0 |
+| .so size | **16,010,152 bytes** (16 MB; pco compiler statically folded in, no split .so) |
+| Imagination tree LOC | 79,610 C (vulkan 63,119 + pco 15,794 + common); ~585 objects linked |
+| **Zero-phantom** | **YES** — 343 UNDEF: 336 GLOB all resolve to the 7 NEEDED libs; **truly-unresolved GLOB = 0** |
+| remaining 2 undefs | `_ITM_registerTMCloneTable` / `_ITM_deregisterTMCloneTable` — **WEAK** GCC transactional-memory hooks, optional-by-design, resolved-to-0 at load, never phantom |
+| **BXE-2-32 IN the .so** | **YES** — `nm`: `pvr_device_info_36_29_52_182` (OBJT, 152 B) + `pvr_device_info_init`; `strings`: `BXE-2-32`, `B-Series` |
+| **dlopen(RTLD_NOW\|RTLD_GLOBAL)** | **OK** — every symbol bound at load; `vk_icdGetInstanceProcAddr`/`Negotiate`/`GetPhysicalDeviceProcAddr` all non-NULL |
+| **ICD wired** | **YES** — `powervr_mesa_icd.x86_64.json` (api_version 1.4.328); all 3 loader entry points exported |
+| **pvr_drm ABI vs C-PVR-b** | **re-confirmed IDENTICAL** — 14 ioctls re-encoded through the illumos `_IOC` shim match C-PVR-b (byte-identical header per C-PVR-c) |
+| NEEDED | `libdrm.so.2 libz.so.1 libexpat.so.1 libstdc++.so.6 libm.so.2 libgcc_s.so.1 libc.so.1` |
+
+SUBMIT_JOBS encodes `0x8010644d` (`DRM_IOW`, write-direction high bit) — the
+value the byte-identical `pvr_drm.h` macro `PVR_IOCTL(0x0d, DRM_IOW, submit_jobs)`
+produces; the low 24 bits (`10644d`) and all other 13 opcodes match C-PVR-b's
+table exactly.
+
+## Co-location approach (the fast path)
+
+Installing clang-20 on the Mesa node + copying the SPIRV/libclc products was
+fastest, as predicted:
+
+1. `pkg install developer/clang-20` on the Mesa node (~1 min) → `llvm-config`
+   20.1.8, clang 20.1.8 (SPIRV+X86 targets).
+2. `tar`'d `/root/clc-toolchain/install` (44 MB, 24 MB compressed) from the CLC
+   node, unpacked to the **same absolute path** on the Mesa node so the `.pc`
+   files' absolute `prefix=/root/clc-toolchain/install` resolve unchanged.
+3. Wrote `/root/clc-toolchain/env.sh` on the Mesa node (the
+   `LD_LIBRARY_PATH=/usr/clang/20/lib:/usr/gcc/14/lib/amd64` gotcha) and proved
+   the chain: `clang -target spirv64` → `llvm-spirv` → `spirv-val` = **VALID**;
+   `pkg-config` resolves SPIRV-Tools 2026.4.1 + libclc 0.2.0.
+
+The C-PVR-a illumos fixes (5 Mesa-wide + the pvr_drm `__sun` guard + `_BITULL`)
+were already applied to the tree and carried forward unchanged — **no new
+Mesa-25 illumos link break surfaced**. mesa_clc built from the tree, compiled
+pco's usclib (`common.cl`/`sync.cl`/`tex.cl` → `pco_usclib.spv` →
+`pco_usclib.cpp/.h`) via the real LLVM-backed chain, and the whole imagination
+C tree + the .so linked clean.
+
+## What is now compile+LINK-complete vs Jupiter-hardware-gated
+
+**Compile+LINK-complete (the userspace driver is DONE):**
+- `libvulkan_powervr_mesa.so` (25.3.6) **links** on illumos x86_64, zero-phantom,
+  dlopen-able, with the ICD contract.
+- The **BXE-2-32 device table is IN the linked .so** (the Jupiter's exact
+  BVNC 36.29.52.182 / device_id 0x36052182), selected at runtime by
+  `pvr_device_info_init`.
+- pco (the modern NIR shader compiler) is built and statically linked.
+- pvr_drm ABI identical to C-PVR-b (14 ioctls).
+
+**Jupiter-hardware-gated (unchanged — needs the real board):**
+- The C-PVR-b kernel DRM node exposing `/dev/dri` decoding the 14 ioctls.
+- All runtime rendering / job submission / GPU-VM (needs the physical BXE-2-32).
+
+## Artifacts (`src/drm-port/powervr/powervr-mesa25/`)
+
+- `libvulkan_powervr_mesa.so` — the LINKED driver (25.3.6, BXE-2-32, 16 MB).
+- `powervr_mesa_icd.x86_64.json` — the ICD manifest (api_version 1.4.328).
+- `pvr25-link-audit.out` — the full zero-phantom + BXE + dlopen + ICD + ABI audit.
+- `pvr25-truly-unresolved.txt` / `pvr25-undef-all.txt` — the undef audit inputs.
+- `pvr25-link.build.log.gz` — the meson+ninja link log (585/585).
+- `../link-powervr25.sh` — the finish/link script (CLC toolchain env + the
+  `-Dmesa-clc=enabled -Dllvm=enabled -Dprecomp-compiler=enabled` options).
+
+## Reproduce (on the co-located node, CLC toolchain present)
+
+    export PATH=/nix/store/q9cgfd001i87byzv866v1dvdh28jji7l-nix-2.24.15/bin:$PATH
+    sh /root/drm-port/powervr/link-powervr25.sh 25.3.6
+    # -> /var/tmp/mesa-25.3.6/_bpvr25link/src/imagination/vulkan/libvulkan_powervr_mesa.so
+
+---
+
 # C-PVR-c: Mesa 25.x bump — the Jupiter's EXACT GPU (BXE-2-32)
 
 ## The headline answers
@@ -36,12 +120,17 @@
 
 ## Driver built y/n + zero-phantom — the honest split
 
-**The 25.x port compiles the BXE-2-32-carrying source clean on illumos, but the
-full `libvulkan_powervr_mesa.so` LINK from 25.3.6 is blocked by a new 25.x
-build-time dependency on an LLVM-backed OpenCL-C compiler that this illumos host
-does not have. The runnable, zero-phantom driver artifact today is the
-ABI-identical 24.0.9 build; it lacks only the BXE-2-32 table that 25.3.6 supplies
-in source.**
+**RESOLVED in C-PVR-d (above): the CLC toolchain was co-located and the 25.3.6
+`libvulkan_powervr_mesa.so` (WITH BXE-2-32) is now LINKED, zero-phantom,
+dlopen-able. The wedge described below is the historical state before the
+toolchain was installed on the Mesa node.**
+
+**[HISTORICAL — pre-C-PVR-d] The 25.x port compiles the BXE-2-32-carrying source
+clean on illumos, but the full `libvulkan_powervr_mesa.so` LINK from 25.3.6 was
+blocked by a new 25.x build-time dependency on an LLVM-backed OpenCL-C compiler
+that this illumos host did not yet have. The runnable, zero-phantom driver
+artifact was the ABI-identical 24.0.9 build; it lacked only the BXE-2-32 table
+that 25.3.6 supplies in source.**
 
 ### What compiled from 25.3.6 (COMPILE-proof, `powervr-mesa25/pvr25-compile-proof.out`)
 

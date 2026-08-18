@@ -1,0 +1,8 @@
+{
+    "ICD": {
+        "api_version": "1.4.328",
+        "library_arch": "64",
+        "library_path": "/var/tmp/mesa-powervr25-out/lib/libvulkan_powervr_mesa.so"
+    },
+    "file_format_version": "1.0.1"
+}

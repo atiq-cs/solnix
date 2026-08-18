@@ -583,3 +583,26 @@ complete on illumos:
 - illumos runtime gotcha (baked into env.sh): LD_LIBRARY_PATH=/usr/clang/20/lib:/usr/gcc/14/lib/amd64
   (libLLVM.so.20.1 + gcc libstdc++; source binaries got no runpath).
 src/drm-port/clc-toolchain/ (env.sh + CLC-TOOLCHAIN-STATUS.md).
+
+## C-PVR-d (DONE): the PowerVR userspace Vulkan driver for the Jupiter's EXACT GPU is LINKED + zero-phantom
+The final link -- the userspace PowerVR driver for the Milk-V Jupiter's BXE-2-32 is a real, dlopen-able,
+zero-phantom shared object on illumos:
+- libvulkan_powervr_mesa.so LINKED from Mesa 25.3.6 (ninja 585/585 rc=0), 16,010,152 bytes (16MB, pco
+  statically folded in), the imagination tree ~79,610 C LOC. Built with the CLC toolchain (LLVM 20.1.8 +
+  SPIRV-Tools + libclc), mesa_clc compiling pco's usclib .cl->.spv via the real LLVM chain.
+- ZERO-PHANTOM (self-verified on the node): 343 UNDEF (336 GLOB), all GLOB resolve to the 7 NEEDED libs ->
+  truly-unresolved GLOB = 0; the 2 leftovers are WEAK _ITM_*TMCloneTable GCC hooks (optional-by-design,
+  never phantom).
+- BXE-2-32 IN the .so (self-verified nm + strings): pvr_device_info_36_29_52_182 (OBJT 152B) +
+  pvr_device_info_init (the runtime BVNC selector, FUNC 4436B); strings "BXE-2-32"/"B-Series". The Jupiter's
+  exact BVNC 36.29.52.182 / device_id 0x36052182.
+- dlopen(RTLD_NOW|RTLD_GLOBAL) OK -- every symbol bound; the 3 ICD loader entry points non-NULL. ICD wired:
+  powervr_mesa_icd.x86_64.json (api_version 1.4.328).
+- pvr_drm ABI re-confirmed identical to the C-PVR-b kernel driver (14 ioctls, SUBMIT_JOBS=0x8010644d via
+  the illumos _IOC shim). No new Mesa-25 illumos link break -- the C-PVR-a fixes carried forward unchanged.
+=> THE USERSPACE POWERVR DRIVER FOR THE JUPITER'S EXACT GPU IS DONE (compile+LINK-complete, zero-phantom,
+ICD-wired, ABI-coherent with the kernel driver). The FULL PowerVR stack on illumos: userspace Vulkan (C-PVR-a
+rogue + C-PVR-d BXE-2-32/pco, LINKED) + kernel DRM (C-PVR-b, onto C1) + FW-load (pvr_fw_riscv). REMAINING
+(true hardware gates, unchanged): the physical Jupiter + the SpacemiT FW blob + the runtime register-touching
+bring-up. src/drm-port/powervr/powervr-mesa25/ (the .so is gitignored [16MB]; audit outputs + link-powervr25.sh
++ POWERVR-STATUS.md committed).

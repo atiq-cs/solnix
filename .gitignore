@@ -62,3 +62,4 @@ src/riscv/**/fw_payload.elf
 src/riscv/**/disk.img
 src/drm-port/nvk/*.so
 src/drm-port/powervr/*.so
+src/drm-port/**/*.so
