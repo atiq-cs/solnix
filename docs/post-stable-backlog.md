@@ -1589,3 +1589,42 @@ the page boots solnix in the browser. The emulator+payload combo is PROVEN nativ
 (bundle layout, the one emcc step, static serving [single-threaded -> NO COOP/COEP needed, serve .wasm as
 application/wasm, gzip the ~5-6MB images], mount at /browser, what the user sees = a real solnix riscv64
 shell in xterm.js). A zero-install "try solnix in your browser" demo, native-proven, one emcc away.
+
+## PS-MILKV-JUPITER (2026-08-18): the physical RISC-V box -- hardware-functional assessment + the driver-crib plan
+The Milk-V Jupiter (SpacemiT K1/M1, 8x X60 RV64GCVB + RVV1.0) has SHIPPED -> RISC-V goes from hardware-gated
+to ACTIONABLE. HONEST hardware-functional verdict vs solnix R-P60:
+- CPU (8x SpacemiT X60, RVV1.0 vector): our kernel is generic RV64 -- boots the K1 with its DTB + per-core
+  bringup (the DTB parser exists R-P57; needs the K1 clock/reset + secondary-hart start for 8 cores). RVV1.0
+  is NOT yet used (our libc/kernel are scalar) -- a big future win for CPU LLM inference (vector-accelerated).
+- GPU = Imagination IMG BXE-2-32 (PowerVR B-series) -- ⚠️ THE HARD PROBLEM. NOT AMD/Intel/NVIDIA, so
+  RADV/ANV/NVK + the entire ROCm stack are USELESS here (different GPU arch entirely). PowerVR is the
+  worst-case open-GPU situation: Imagination's stack is largely PROPRIETARY (closed pvr userspace + signed
+  firmware); the open Mesa `powervr` Vulkan driver + the `powervr` DRM kernel driver are YOUNG + LINUX-ONLY;
+  there is NO NetBSD/FreeBSD PowerVR driver to crib. So HW-ACCELERATED COSMIC/LLM on the Jupiter is a hard
+  multi-month effort (or needs Imagination's blob). => LEAD WITH CPU/SOFTWARE: llvmpipe SW-render for COSMIC
+  (proven), CPU inference (RVV-accelerated) for LLMs -- both reachable WITHOUT the PowerVR driver.
+- Storage eMMC/microSD (dw-mmc/SDHCI -- we have the dw-mmc driver R-P58/59!) + M.2 NVMe (PCIe -- need a
+  PCIe RC + NVMe driver). Net 1GbE (K1 MAC / Motorcomm YT PHY -- need the MAC driver). USB3 (DWC3). HDMI
+  (via the IMG display controller -- tied to the GPU problem, but a simple framebuffer/scanout may work
+  without 3D).
+DRIVER-CRIB REVIEW (per the crib-BSD doctrine -- what NetBSD/FreeBSD give us):
+- dw-mmc/SDHCI: WE ALREADY HAVE IT (R-P58/59 dw-mmc bring-up). Wire it to the K1 DTB mmc@ node.
+- NVMe: FreeBSD nvme(4) / NetBSD ld@nvme -- clean, well-documented, PCIe-standard. CRIBBABLE.
+- PCIe root complex: the K1/DesignWare PCIe -- FreeBSD/NetBSD dwc PCIe + the K1-specific glue.
+- 1GbE MAC: depends on the K1 MAC (if DesignWare/Synopsys DWMAC -> FreeBSD/NetBSD dwc_gmac cribbable; if a
+  SpacemiT-custom MAC -> harder, may need the Linux driver as reference).
+- USB3 DWC3: FreeBSD/NetBSD xhci + dwc3 glue -- cribbable.
+- GPU (PowerVR): NO BSD driver exists. Options: (a) llvmpipe SW render (LEAD -- no GPU driver needed);
+  (b) a KMS/framebuffer-only scanout for a display without 3D (crib the simpledrm/simple-framebuffer idea);
+  (c) the long game -- port the Linux Mesa `powervr` + the powervr DRM (young, Linux-only, hard). Lead (a).
+PLAN (toward COSMIC + LLMs in LM-Studio on the Jupiter, SOFTWARE-first):
+  1. K1 bring-up: the K1 DTB + clocks/reset + 8-hart SMP start + the real console UART (R-P61).
+  2. Real storage: wire dw-mmc (have it) to the K1 eMMC/SD + crib NVMe (FreeBSD nvme) for M.2 (R-P62).
+  3. Net: crib the K1 MAC (dwc_gmac if DWMAC) so the box is networked (R-P63).
+  4. RVV1.0: use the vector unit in libc/the kernel + (big) for CPU LLM inference (R-P64+).
+  5. COSMIC on llvmpipe SW render (proven on x86/aarch64) + a framebuffer scanout for HDMI (no PowerVR 3D).
+  6. Local LLMs: llama.cpp CPU + RVV (LM-Studio is Electron/x86-centric -- on RISC-V the realistic path is
+     llama.cpp/llama-server + a web UI, OR LM-Studio's model format served by our llama-server; note LM-Studio
+     itself is a closed x86/arm Electron app -- clarify: a LM-Studio-COMPATIBLE local-LLM stack, not the
+     LM-Studio binary, unless a riscv Electron build exists [it doesn't yet]).
+Once the box arrives: boot the R-P60 fw_payload on it (may need the K1 DTB), then R-P61+ per this plan.
