@@ -515,3 +515,26 @@ amdgpu[or nouveau/i915] DRM node). => solnix's accelerator software is now COMPR
 drivers (every vendor) + the full AMD ROCm compute stack (KFD->libhsakmt->ROCr->HIP) + the C1 DRM/C3-amdgpu
 kernel drivers, ALL compile zero-phantom. The GGML_VULKAN parity proof (the LLVM-free lead path) runs on
 ANY of the 3 vendors' hardware. gpu-bringup.sh fires on the quota grant (g4ad = AMD/RADV lead).
+
+## C-PVR (2026-08-18): the FULL PowerVR driver stack compiles zero-phantom on illumos (for the Milk-V Jupiter)
+The Milk-V Jupiter's Imagination PowerVR BXE-2-32 GPU driver -- BOTH halves now compile zero-phantom on
+illumos (the answer to "we need PowerVR drivers"; the Native_SDK was NOT a driver -- this is the real open
+Mesa+Linux-DRM driver, ported):
+- C-PVR-a (USERSPACE, done): libvulkan_powervr_mesa.so (6.9MB) + libpowervr_rogue.so (9.5MB, the rogue NIR
+  shader compiler -- NO LLVM/Rust), ~97k LOC, 14 pvr_drm ioctls, 2603 undefs->0 truly-unresolved,
+  dlopen-verified, ICD wired.
+- C-PVR-b (KERNEL DRM, done): the Linux drm/imagination driver ported onto the C1 DRM framework -- 2590 LOC
+  (2272 .c + 318 .h), 15 ioctls, 12 ET_REL objects into drm-pvr. pvr_gem->C1 GEM(ddi_umem), pvr_vm->GPU MMU,
+  pvr_ccb->FW command rings, pvr_context/queue/job->C1 drm_sched, pvr_sync->C1 dma-fence, pvr_fw_riscv->the
+  firmware(9F) blob load + the BXE-2-32's RISC-V FW coprocessor + startstop. ZERO-PHANTOM: 59 undefs = 7
+  C1-framework (dma_fence/drm_sched) + 52 real illumos KPI (ddi/kmem/avl/list/firmware/atomic), comm -23 = 0.
+  ABI MATCHES C-PVR-a's pvr_drm.h BYTE-FOR-BYTE (all 14 DRM_IOCTL_PVR_* numbers + arg struct sizes;
+  test_pvr_abi.c PASS -- like libdrm_amdgpu<->amdgpu).
+=> THE FULL POWERVR STACK IS ON illumos (framework-complete): userspace Vulkan (rogue, no LLVM) + kernel DRM
+(onto C1) + the RISC-V FW-load path, both zero-phantom + ABI-matched. REMAINING (Jupiter-hardware-gated, the
+same class as every GPU): (1) the BXE-2-32 device table (Mesa 25.x + pco) + CORE_ID BVNC identity, (2) the
+SpacemiT FW blob (from the K1 BSP, obtainable), (3) the register-touching runtime (MMU PT walk/cache flush,
+RISC-V remap, FW doorbell+boot-poll+IRQ) -- all on the physical Jupiter. So: ACCELERATED COSMIC/LLMs on the
+Jupiter are reachable via this driver (interim: llvmpipe SW render keeps the box usable). NEXT: wire pvr into
+the shared drm_core.c (one call-site) + the Mesa-25.x bump for BXE-2-32 + on-HW bring-up when the box lands.
+Persisted src/drm-port/powervr-drm/ + src/drm-port/powervr/.
