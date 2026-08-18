@@ -1519,3 +1519,26 @@ aarch64 cosmic-rlibs are on the mesa node 3.135.239.78) -> the COSMIC Rust crate
 (transplant the seed). Remaining x86 COSMIC ISO stages: native rust (transplant seed) -> COSMIC crates
 (smithay + cosmic-*) -> cosmic-comp -> ISO; + libinput udev shim (devfs/di_*). The x86 GTK/desktop TOOLKIT
 is DONE nix-native (matches the aarch64 wave17 completeness). registry x86 updated.
+
+## PS-SOLNIX-ISO (2026-08-18): the NIX-PURE graphical/install ISO DELIVERED (the honest canonical one)
+DELIVERED (+ VERIFIED nix-native, unlike the earlier host-sourced attempt): solnix-x86_64-nix-native-
+desktop.iso, 257 MiB (269,783,040 bytes), sha256 dde174d929365f941957429f2f45b968c5a4ccb9473350c20b98461ef
+a9dfe15. Published DURABLE: https://cache.solnix.io/images/v2026.08.18-nix-native-desktop/solnix-x86_64-nix-
+native-desktop.iso (+ .sha256). Hybrid BIOS+UEFI (El Torito: /boot/cdboot no-emul + /boot/efiboot.img FAT
+ESP BOOTX64.EFI + GPT ESP, MBR 55aa). solnix-install (ZFS-BE) at /usr/sbin. Contents: the COMPLETE
+nix-native x86_64-solaris GTK4/Wayland desktop TOOLKIT + render stack baked into /nix/store (118 paths, 350
+AMD64 Solaris ELFs): gtk4 4.22.4 (Wayland+EGL) + libepoxy + wayland 1.26 + cairo/pango/harfbuzz/glib/
+gdk-pixbuf/graphene + freetype/fontconfig + hash-coherent stage2-4 X11 libs + nix-native CLIs (coreutils/
+ripgrep/figlet/cbonsai). VERIFIED NIX-NATIVE: decompressed boot_archive (gzip->1.1GB UFS) RO-mounted;
+libgtk-4.so + rg have RUNPATH entirely /nix/store (NOT /usr), NEEDED only illumos base syslibs -- NO host
+leak. This is the EXACTLY-Nix graphical-toolkit install ISO.
+HONEST desktop status: (1) COSMIC/Wayland compositor NOT shipped (no cosmic-comp/weston/sway in cache yet --
+needs the native-rust+smithay stages, stage 6 in flight); (2) the X11+dwm session NOT runnable from cache
+(the G0 X11 leaves reference 30+ X/font libs that are 404 -- the PS-DESKTOP-ISO-BLOCKED cache hole; a native
+rebuild hits the python3/meson sandbox wall -- confirmed, not worked around); (3) WHAT SHIPPED = the
+nix-pure GTK4/Wayland toolkit + render stack (the real stage2-4 win), cache-complete + RUNPATH-clean -- a
+RUNNING graphical session is ONE COMPOSITOR AWAY (cosmic-comp, stage 6). (4) Firefox (no illumos target) /
+Chrome (closed, no illumos build) unchanged. => TWO ISO artifacts now exist: the viewable-desktop AMI
+(ami-000a59cf344644604, OI-pkg X11, usable-but-not-nix-pure) + THIS nix-pure toolkit ISO (canonical, exactly-
+Nix, compositor-pending). The nix-pure COSMIC session lands when stage 6 (cosmic-comp SW backend) completes.
+artifacts/SOLNIX-ISO.md.
