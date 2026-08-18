@@ -1,0 +1,30 @@
+# COSMIC desktop apps — wave 2 — x86_64-illumos native ELF binaries
+# All: readelf Machine = Advanced Micro Devices X86-64, Type = EXEC.
+# GUI apps runtime-gate on a Wayland compositor (same as wave 1).
+# cosmic-settings additionally needs LD_LIBRARY_PATH=/root/illumos-shims/udev
+# at runtime (the illumos libudev/libinput link stubs).
+
+cosmic-notifications=/root/cosmic-apps/cosmic-notifications/target/x86_64-unknown-illumos/release/cosmic-notifications
+cosmic-bg=/root/cosmic-apps/cosmic-bg/target/x86_64-unknown-illumos/release/cosmic-bg
+cosmic-settings=/root/cosmic-apps/cosmic-settings/target/x86_64-unknown-illumos/release/cosmic-settings
+
+# cosmic-settings pages compiled (11): about, appearance/date-time via page-date,
+# power, region, users, networking, default-apps, window-management, workspaces,
+# legacy-applications, display.
+# Build feature set (from /root/cosmic-apps):
+#   --no-default-features --features wayland,single-instance,openrc,page-about,
+#   page-date,page-power,page-region,page-users,page-networking,page-default-apps,
+#   page-window-management,page-workspaces,page-legacy-applications,page-display
+# with PATH prepending /usr/gnu/bin, PKG_CONFIG_PATH + RUSTFLAGS -L /root/illumos-shims/udev.
+
+# cosmic-settings-daemon: config/theme/geonames parts compile as rlibs (the daemon
+# does NOT use logind/seatd/session; its binary walls are pipewire + udev, both
+# Linux hardware C libs). rlibs:
+cosmic-settings-daemon-config-rlibs=/root/cosmic-apps/cosmic-settings-daemon/target/x86_64-unknown-illumos/release/libcosmic_settings_config.rlib,libcosmic_settings_daemon_config.rlib,libgeonames.rlib
+
+# illumos link stubs (unblock udev/libinput-linked crates):
+illumos-udev-stub=/root/illumos-shims/udev/libudev.so.1
+illumos-libinput-stub=/root/illumos-shims/udev/libinput.so.10
+
+# DEFERRED:
+# cosmic-workspaces-epoch — DRM/GBM wall (gbm-sys, drm-sys) + udev; compositor-adjacent.

@@ -153,3 +153,143 @@ deliverable; painting is the next (compositor/DRM) wave.
 push. The 14-binary bundle is staged at
 `/nix/store/5m4c9x9wk9a42wbgsn33hi2mn5n620lq-wave-bin` and recorded in
 `/root/cosmic-apps-wave1-paths.txt` for the orchestrator to publish. published=0.
+
+
+---
+
+# COSMIC desktop apps — wave 2 (settings / config-daemon / notifications / bg / workspaces)
+
+Same substrate as wave 1: native `x86_64-unknown-illumos`, the built
+`/root/libcosmic` toolkit, `/root/cosmic-cargo-home` (shared registry with the
+baked-in illumos patches — wayland-backend/winit/rustix), rust seed 1.97.1,
+OpenIndiana gcc 14. Each libcosmic-using app gets the wave-1 `[patch]` block
+appended (`libcosmic`/`cosmic-config`/`cosmic-theme` -> `/root/libcosmic`).
+
+Two additions to the recipe this wave:
+1. **`/usr/gnu/bin` on PATH** — `gettext-sys` builds bundled gettext from source
+   with GNU `ld`; wave-1 apps had it, cosmic-settings needs it too.
+2. **illumos udev/libinput link stubs** (`/root/illumos-shims/udev`, regen script
+   in `rust-patches/make-udev-input-stubs.sh`) — see the fixes below.
+
+## Apps COMPILED to x86_64-illumos ELF (wave 2)
+
+| app | binary | runs |
+|---|---|---|
+| **cosmic-notifications** | cosmic-notifications/.../release/cosmic-notifications | `--version`/start OK, panics at winit (no display) = runtime gate |
+| **cosmic-bg** | cosmic-bg/.../release/cosmic-bg | starts, "Could not find wayland compositor" = runtime gate |
+| **cosmic-settings** | cosmic-settings/.../release/cosmic-settings | `--help` lists pages (with `LD_LIBRARY_PATH=/root/illumos-shims/udev`); GUI runtime-gated |
+| **cosmic-settings-daemon** (config/theme parts) | rlibs: libcosmic_settings_config / libcosmic_settings_daemon_config / libgeonames | library crates — no binary (binary needs pipewire+udev, below) |
+
+Staged bundle: `/root/cosmic-apps/wave2-bin/` (+ `wave2-bin/lib/` = the udev/input
+stubs). Paths file: `/root/cosmic-apps-wave2-paths.txt`.
+
+### cosmic-settings — pages that compile (11 of ~16)
+
+Built `-p cosmic-settings --no-default-features` with:
+`wayland,single-instance,openrc,page-about,page-date,page-power,page-region,
+page-users,page-networking,page-default-apps,page-window-management,
+page-workspaces,page-legacy-applications,page-display`.
+
+Compiling pages: **about, appearance (via the app core), date-time, power,
+region, users, networking, default-apps, window-management, workspaces,
+legacy-applications, display**. `nmrs` (NetworkManager), `secret-service`,
+`accounts-zbus`, `locales-rs`, `cosmic-mime-apps`, `cosmic-randr-shell`,
+`upower_dbus`, `timedate-zbus`, `hostname1-zbus`, `sysinfo` all build native.
+
+Pages DEFERRED:
+- **page-sound** — `cosmic-settings-audio-client` -> `libspa-sys`/`pipewire-sys`
+  (PipeWire audio C lib, pkg-config + bindgen against real SPA headers). No
+  illumos PipeWire. A symbol-stub is not enough (bindgen needs the headers).
+- **page-input**, **page-accessibility** — the wave-1 a11y dup: two `iced_core`/
+  `iced_futures` in the graph (a second libcosmic checkout via the
+  `cosmic-settings-config`/subscription git deps NOT redirected by the top-level
+  `[patch]`). `physical_to_scancode(Physical)` sees two different `Physical`
+  types -> E0308. A transitive-graph fix (redirect the nested libcosmic), not an
+  illumos gap.
+- **page-bluetooth** — `bluez-zbus` + BlueZ; no illumos BlueZ (same wall as the
+  wave-1 bluetooth applet).
+- **avif** feature — `dav1d` C lib via pkg-config (dropped; png/jpeg/webp keep).
+- **wgpu** feature — GPU/Mesa (dropped, as wave-1 did for cosmic-files).
+
+## cosmic-settings-daemon — the logind-equivalent verdict
+
+**Key finding: this daemon does NOT use logind/systemd/seatd/session at all.**
+`grep -rni 'logind|seatd|libseat|Session|Suspend|systemd' src/` is empty. It is
+the *config/appearance/theme/date/battery* daemon, not a session/power manager.
+So **seatd does not help this daemon** — there is nothing here that wants a
+logind seat/session API.
+
+What builds vs. what walls the binary:
+- **Config/theme parts BUILD clean** as rlibs: `cosmic-settings-config`,
+  `cosmic-settings-daemon-config` (theme/greeter), `geonames`. These are the
+  input-config, shortcuts, theme, and geoname (timezone/region) pieces — the
+  parts an illumos COSMIC session actually needs for appearance/config.
+- **The daemon *binary* has two Linux-hardware C-lib walls (NOT logind):**
+  1. **pipewire** — `cosmic-settings-audio-server` -> `libspa-sys`/`pipewire-sys`
+     (pkg-config `libpipewire-0.3` + bindgen against SPA headers). Audio server.
+  2. **udev** — `udev` crate for backlight enumeration in `main.rs`
+     (`udev::Enumerator`/`MonitorBuilder`). Linux hardware.
+  `upower_dbus` (battery) is D-Bus and portable — only needs a upower service.
+
+Verdict: the daemon's **config/theme/appearance layer is illumos-ready today**
+(the rlibs compile). The full daemon binary needs an illumos audio backend
+(PipeWire or a pipewire-shim) + a udev-equivalent for backlight. Neither is a
+logind gap — logind is simply not used here. If a future COSMIC session on
+illumos wants seat/session/power management, that lives in cosmic-comp /
+cosmic-session (wave 1), where seatd is the relevant illumos piece.
+
+## Per-app illumos fixes (wave 2)
+
+1. **cosmic-notifications**: `--no-default-features` (drop `systemd` ->
+   `tracing-journald`, Linux journald). Everything else (zbus/dbus p2p, tokio,
+   cosmic-panel-config, enumflags2) builds native. No source edits.
+
+2. **cosmic-bg**: `--no-default-features` (drop `avif` -> `dav1d-sys` pkg-config
+   C lib). Keeps png/jpeg/webp/jxl. `smithay-client-toolkit` (Wayland *client*,
+   not the compositor DRM stack) builds native. No source edits.
+
+3. **gettext-sys 0.26**: prepend `/usr/gnu/bin` to PATH so the bundled
+   gettext-0.26 `configure`/`make` uses GNU `ld` (same as wave 1; needed because
+   cosmic-settings + libcosmic pull `freedesktop-desktop-entry` ->
+   `gettext-rs`/`gettext-sys`). No source edits.
+
+4. **cosmic-settings**: `--no-default-features` + explicit page features (above)
+   + `openrc` (the app has a `compile_error!("Enable 'systemd' or 'openrc' ...")`
+   guard for bluetooth service management; `openrc` is the neutral non-systemd
+   path). No source edits.
+
+5. **illumos libudev / libinput link stubs** (NEW — `rust-patches/`):
+   `cosmic-comp-config` has an unconditional `input = "0.10"` dep (libinput
+   binding) which pulls `input-sys` (`-linput`) + `udev` -> `libudev-sys`
+   (`-ludev`), and cosmic-settings `page-display`/`page-input` use `udev`
+   directly. udev + libinput are Linux hardware C libs with no illumos port, but
+   the config crates only need them to LINK (the enumeration paths are
+   runtime-gated on the compositor). Fix: a `libudev.so.1` (82 syms) and
+   `libinput.so.10` (298 `libinput_*` syms) built from the crate-declared symbol
+   lists, each an `abort()`-ing no-op, plus matching `.pc` files.
+   - build: `PKG_CONFIG_PATH=/root/illumos-shims/udev RUSTFLAGS="-L /root/illumos-shims/udev"`.
+   - runtime: `LD_LIBRARY_PATH=/root/illumos-shims/udev` (a real udev/libinput
+     call aborts loudly — never reached for `--help` or the non-hardware pages).
+   This unblocked page-display, page-window-management, page-workspaces,
+   page-legacy-applications in cosmic-settings, and would unblock the daemon's
+   backlight-udev part (pipewire remains the daemon binary wall).
+   Regen: `sh rust-patches/make-udev-input-stubs.sh <dir>`.
+
+## Apps DEFERRED (wave 2)
+
+- **cosmic-workspaces-epoch**: HARD DRM/GBM wall (same boundary as cosmic-panel /
+  cosmic-comp). Unconditional deps `gbm = "0.18"` (-> `gbm-sys`, DRM buffer
+  management) + `drm-sys` (via cosmic-protocols/screencopy) + `cosmic-comp-config`
+  (-> udev). The udev part is covered by the stub above, but `gbm-sys`/`drm-sys`
+  are the live GPU/DRM buffer layer (Mesa GBM + kernel DRM ioctls), the same
+  compositor-adjacent wall documented for cosmic-panel in wave 1. This is the
+  workspace *overview* — it composites live surface thumbnails through GBM/DRM.
+  Deferred with the compositor/DRM wave, not ground on.
+
+## Runtime gate (unchanged from wave 1)
+
+All GUI wave-2 apps need a running Wayland compositor + display to paint. They
+link + start + hit the winit "no WAYLAND_DISPLAY" gate (cosmic-notifications) or
+"Could not find wayland compositor" (cosmic-bg), which is the expected runtime
+gate, not a link failure. cosmic-settings additionally needs
+`LD_LIBRARY_PATH=/root/illumos-shims/udev` at runtime for the udev/input stubs.

@@ -280,3 +280,29 @@ The toolkit now produces REAL COSMIC desktop-app binaries -- the desktop EXPERIE
 + 10 applets. The remaining wall is the COMPOSITOR/DRM layer (cosmic-comp -> smallvil SW substrate), NOT the
 app suite. WAVE 2 next: cosmic-settings + settings-daemon (needs a logind-equivalent) + notifications + bg +
 workspaces-epoch. The apps render on the nix-pure smallvil+GTK4 Wayland session (already proven).
+
+## COSMIC apps WAVE 2 (DONE, self-verified): settings(11 pages) + notifications + bg + settings-daemon config
+Extending the COSMIC desktop experience on x86_64-illumos (all readelf AMD64 EXEC, self-verified):
+- cosmic-notifications (ELF; --no-default-features drops journald), cosmic-bg (ELF; drops avif/dav1d),
+  cosmic-settings (ELF, 11 PAGES: about/appearance/date-time/power/region/users/networking/default-apps/
+  window-management/workspaces/legacy-applications/display -- --help self-verified), cosmic-settings-daemon
+  (the config/theme/appearance parts -- 4 rlibs: cosmic-settings-config/daemon-config/geonames).
+- LOGIND-EQUIVALENT VERDICT (the key finding): cosmic-settings-daemon does NOT use logind/systemd/seatd/
+  session AT ALL (grep-empty) -- it's the config/appearance/theme/date/battery daemon, not a session/power
+  manager. So the "logind gap" doesn't exist for it; seatd doesn't help it. Its config layer compiles clean;
+  the daemon BINARY's only walls are two Linux-hardware C libs (NEITHER logind): pipewire (libspa/pipewire-sys,
+  audio) + udev (backlight enum). upower_dbus (battery) is portable D-Bus.
+- NEW illumos technique (durable, rust-patches/make-udev-input-stubs.sh): link-only stubs for the Linux
+  hardware C libs -- libudev.so.1 (82 syms) + libinput.so.10 (298 syms) as abort()-ing no-ops + .pc files.
+  udev/libinput are Linux-only; the config crates need them only to LINK (enumeration is runtime-gated).
+  Build via PKG_CONFIG_PATH + RUSTFLAGS=-L; runtime LD_LIBRARY_PATH. Unblocked 4 settings pages + the
+  daemon's backlight part. (An honest link-stub, NOT a fake impl -- the runtime calls abort, gated on the
+  hardware not being present, exactly like the Linux-hardware boundary elsewhere.)
+- DEFERRALS (precise): cosmic-workspaces-epoch (hard gbm-sys+drm-sys = the live GPU/DRM buffer layer, the
+  same compositor-adjacent wall as cosmic-panel/cosmic-comp -- defer with the DRM wave; the udev part is now
+  stub-covered, GBM/DRM is the real boundary); settings pages sound (pipewire)/input+a11y (iced graph-dup)/
+  bluetooth (BlueZ).
+=> COSMIC desktop apps on illumos now: session/launcher/term/files + 10 applets (wave 1) + settings[11 pages]/
+notifications/bg/settings-daemon-config (wave 2) = the desktop EXPERIENCE. The remaining wall is uniformly
+the COMPOSITOR/DRM/GBM layer (cosmic-comp/panel/workspaces -> the smallvil SW substrate + the C1 DRM
+framework), NOT the app suite. The apps render on the proven nix-pure smallvil+GTK4 Wayland session.
