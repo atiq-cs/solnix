@@ -1469,3 +1469,21 @@ per-package ceiling + reported cleanly (145 tool uses vs the wedge's 6.8h/7-tool
 toolkit: GTK4 DONE. Remaining ISO stages: xapian-libtool-uuid -> appstream -> libadwaita; seatd __sun arms;
 libinput/udev; native rust + COSMIC crates (the aarch64 crates + x86 rust seed both proven); cosmic-comp +
 ISO. tranche-stage4.nix + shims persisted.
+
+## PS-WASM-BROWSER-TERMINAL (backlog, post-account, no-EC2): solnix riscv64 in a browser via a WASM emulator
+Maintainer asked: can solnix run in WASM in a browser (terminal only)? HONEST answer: YES for the RISC-V
+kernel via a browser-side emulator; NO for illumos-x86/SPARC compiled-to-WASM.
+- FEASIBLE + genuinely-solnix (the achievable target): a RISC-V system emulator compiled to WASM
+  (TinyEMU/jslinux-style, or qemu-system-riscv64 via emscripten) BOOTS the EXISTING solnix riscv64
+  fw_payload.elf (R-P56: OpenSBI + the embedded kernel) + disk.img (the GPT root fs) -> the real solnix
+  kernel -> init -> shell -> the 27 real UNMODIFIED coreutils, streamed to an xterm.js terminal over the
+  emulated UART. TERMINAL-ONLY, real solnix (the actual kernel+userland we built, not a mockup). It's
+  MOSTLY INTEGRATION (the kernel already boots -bios fw_payload.elf): wire TinyEMU-WASM + xterm.js + serve
+  the 2 image files (fw_payload.elf ~6.3MB + disk.img ~5MB) as a static "try solnix in your browser" page
+  on solnix.io. No new porting, no EC2 -> PERFECT for after the burner winds down.
+- NOT feasible: compiling illumos itself (x86/SPARC monolithic SVR4 kernel, real MMU/HW assumptions) to
+  WASM -- no illumos->WASM target, multi-year, no payoff. A native wasm32-wasi solnix userland isn't
+  "solnix" (no kernel) + the toolchain doesn't target it.
+- PLAN (post-account): (1) build TinyEMU or qemu-riscv64 to WASM (emscripten), (2) xterm.js frontend +
+  the emulated 16550 UART <-> terminal, (3) serve fw_payload.elf + disk.img static, (4) a solnix.io
+  /browser page. A compelling zero-install demo of the RISC-V port. No hardware, no EC2, weekend-scale.
