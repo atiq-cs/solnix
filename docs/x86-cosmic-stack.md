@@ -1,3 +1,18 @@
+# x86_64-solaris COSMIC stack — Stage 6 (native): the COSMIC Rust stack + a SW-render Wayland compositor
+
+Stage 6 (see `docs/x86-cosmic-stage6.md` for the full record) landed the Rust
+headline: native x86_64-unknown-illumos rustc/cargo 1.97.1 (realised from cache),
+the whole COSMIC/wayland Rust crate stack compiled native to x86_64-illumos
+rlibs (389 rlibs: libcosmic, iced, cosmic-text, cosmic-config/theme, smithay,
+winit, wayland core), and a software-render Wayland compositor (smithay
+`smallvil`, winit backend) built to a running AMD64 ELF. cosmic-comp remains
+hard-coupled to DRM/GBM at compile time even on winit (the aarch64 finding,
+reproduced) — the smithay SW compositor is the viewable-desktop fallback. Crate
+illumos patches: `src/drm-port/cosmic-illumos-patches.txt` +
+`src/drm-port/patch-wayland-backend.sh`. Published: 4 new store paths, failed=0.
+
+---
+
 # x86_64-solaris COSMIC stack — Stage 5 (native): toolkit complete + seatd
 
 Native x86_64-solaris (illumos) build. Stage 5 lands the **headline milestone**:

@@ -1,0 +1,34 @@
+=== x86_64-illumos native COSMIC-stack crate patches (stage 6) ===
+
+1) wayland-backend 0.3.17 (the epoll + CMSG_CLOEXEC patch)
+   file src/rs/server_impl/common_poll.rs: add `illumos`,`solaris` to the four
+     `cfg(any(target_os="linux",...,"redox"))` epoll gates (create/dispatch_all_clients/
+     epoll::delete). illumos has rustix epoll.
+   file src/rs/server_impl/handle.rs: add illumos/solaris to the `let ret = { epoll::add }`
+     register-client cfg (else `ret` is undefined -> E0425).
+   file src/rs/socket.rs: illumos rustix RecvFlags has no CMSG_CLOEXEC. Add illumos/solaris
+     to the `cfg(not(any(macos,redox)))` / `cfg(any(macos,redox))` split so illumos takes the
+     DONTWAIT + fcntl(FD_CLOEXEC) fallback path (same as macos/redox).
+   (script: /root/patch-wayland-backend.sh)
+
+2) reis 0.7.1 (libei): src/util.rs uses net::RecvFlags::CMSG_CLOEXEC unconditionally.
+   illumos: select net::RecvFlags::empty() via cfg(any(illumos,solaris)).
+
+3) smithay (0.7.0 + git HEAD): three illumos cuts
+   src/wayland/shm/pool.rs: `(*info).si_addr` -> `(*info).si_addr()` in the
+     not(linux/android) siginfo branch (illumos siginfo_t exposes si_addr as a method).
+   src/backend/allocator/dmabuf.rs: gate `const DMA_BUF_SYNC` + `sync_plane` ioctl off
+     illumos/solaris (rustix::ioctl::opcode not exposed for illumos; a SW renderer does no
+     dmabuf zero-copy sync -> stub `let _ = (plane, flags);`).
+   src/utils/sealed_file.rs (git HEAD only): `use rand::{Rng, RngExt, distr::Alphanumeric}`
+     and `(&mut rng).sample_iter(Alphanumeric).take(7)` for the shm_open random name
+     (rand-0.9 API; the not(memfd) shm_open path illumos takes).
+
+4) winit (crates.io 0.31.0-beta.2 AND pop-os git cosmic-0.14):
+   src/platform_impl/linux/mod.rs: add is_main_thread() for illumos/solaris via
+     libc thr_main() (== 1 on the main thread). Use `unsafe extern "C"` (edition 2024).
+
+5) softbuffer (pop-os cosmic-4.0), pulled by iced_tiny_skia: its default features enable
+   `kms` -> the `drm`/drm-ffi crate, whose rustix::ioctl::{NoneOpcode,ReadOpcode,...} are not
+   exposed on illumos. FIX: the iced workspace softbuffer dep -> default-features=false
+   (wayland/x11 SW framebuffer only, no DRM/KMS). Drops drm-ffi from the graph.

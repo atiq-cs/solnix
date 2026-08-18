@@ -1542,3 +1542,27 @@ Chrome (closed, no illumos build) unchanged. => TWO ISO artifacts now exist: the
 (ami-000a59cf344644604, OI-pkg X11, usable-but-not-nix-pure) + THIS nix-pure toolkit ISO (canonical, exactly-
 Nix, compositor-pending). The nix-pure COSMIC session lands when stage 6 (cosmic-comp SW backend) completes.
 artifacts/SOLNIX-ISO.md.
+
+## PS-X86-COSMIC-STAGE6 (2026-08-18): native x86 rust + the COSMIC toolkit (389 rlibs) + a SW Wayland compositor that RUNS
+Native x86 rust WORKING: the published seed cvs3wrjn...-rust-illumos-1.97.1 realized from cache (no build),
+rustc/cargo 1.97.1 host=x86_64-unknown-illumos, cargo new -> running AMD64 ELF (native, the seed's own std,
+no cross -- simpler than aarch64 build-std). COSMIC/wayland crates: 389 rlibs x86_64-illumos --
+wayland-backend/client/server/calloop (the epoll+CMSG_CLOEXEC patch), cosmic-text/iced_core, smithay 0.7.0
+(wayland_frontend+desktop+renderer_pixman, NO DRM; 3 illumos cuts: si_addr(), DMA_BUF_SYNC gate, rand API),
+libcosmic 1.0.0 FULL toolkit + cosmic-config/theme + iced 0.14 + iced_tiny_skia + winit(pop-os) + wgpu +
+resvg (winit is_main_thread illumos arm via libc thr_main, reis CMSG_CLOEXEC cut, softbuffer
+default-features=false drops drm-ffi) -- LARGER than the aarch64 48-rlib proof. cosmic-comp SW-backend NOT
+built (DRM-walled: render/mod.rs+element.rs import kms::render::gles::GbmGlowBackend UNCONDITIONALLY, the
+render element type is GBM/DRM+GLES woven through shell/render -- retyping to SW exceeds budget; the aarch64
+finding reproduced). SW COMPOSITOR FALLBACK BUILT + RUNS: smithay `smallvil` (backend_winit +
+wayland_frontend + desktop) -> AMD64 ELF, NEEDs only base illumos libs + libxkbcommon (EGL/GL dlopen'd ->
+llvmpipe/softpipe from stage5 mesa); RUNS natively (creates Wayland socket wayland-1, loads xkb keymap,
+inits winit -- stops only on no-display = a config step [parent display or headless+VNC], NOT a port gap).
+=> A NIX-PURE SW-RENDER WAYLAND DESKTOP IS REACHABLE: smallvil compositor (winit + llvmpipe) + GTK4 4.22.4/
+libadwaita 1.9.2 clients (stage4/5), viewable via wayvnc/Xvnc. This CONVERGES with the viewable-desktop
+deliverable: the AMI used OI-pkg X11 (usable but not nix-pure); THIS is the NIX-PURE path (smallvil +
+llvmpipe + GTK4 + wayvnc, all /nix/store). REMAINING to the nix-pure COSMIC ISO: (1) wrap the seed+crates
+as per-crate nix drvs (rlibs are one bundled path now), (2) land smallvil [or a trimmed cosmic-comp] +
+wayvnc as the session, (3) compose the ISO from the stage5 closure + the compositor. cosmic-comp itself
+needs its render path retyped to a SW renderer (a bounded upstream-ish refactor) OR the GPU (the g4ad).
+Patches: src/drm-port/cosmic-illumos-patches.txt + patch-wayland-backend.sh.
