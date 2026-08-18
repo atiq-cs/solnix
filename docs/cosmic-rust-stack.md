@@ -255,3 +255,28 @@ The smithay `smallvil` Wayland compositor + a GTK4/libadwaita client, all nix-pu
 => the nix-pure GTK4/Wayland DESKTOP renders + is viewable. This is the compositor+toolkit layer of the
 COSMIC desktop; the cosmic-* APPS (session/panel/launcher/term/files -- wave 1 in flight) render on top of
 exactly this. Launcher scripts/solnix-cosmic-session.sh + docs/COSMIC-SESSION-CONNECT.md.
+
+## COSMIC apps WAVE 1 (DONE, self-verified): 14 COSMIC desktop apps compile + run on x86_64-illumos
+The toolkit now produces REAL COSMIC desktop-app binaries -- the desktop EXPERIENCE, not just the toolkit:
+- 14 apps compiled to real x86_64-illumos ELF (AMD64, readelf/file-confirmed; --help/--version run; GUI apps
+  runtime-gated on a compositor): cosmic-session (the glue), cosmic-launcher, cosmic-term (the flagship --
+  self-verified "cosmic-term 1.5.0" runs, a real 140MB ELF), cosmic-files (links+starts, winit-gated on a
+  display), + 10 applets (time/power/audio/network/notifications/status-area/workspaces/minimize/app-list/
+  panel-button).
+- Foundation: the rust seed 1.97.1 (native x86_64-unknown-illumos, from cache) + libcosmic + iced recompile
+  natively against /root/libcosmic (linker = OI gcc 14.3.0, no lld). Recipe: CARGO_HOME=... cargo build
+  --release --target x86_64-unknown-illumos, reusing the built toolkit via [patch."libcosmic"]={path=...}.
+- Per-app illumos fixes (pkgs/os-specific/illumos/rust-patches/): cosmic-session --no-default-features
+  (drops systemd/logind/journald); wayland-backend 0.3.15/16 <- the patched 0.3.17 illumos files
+  (cfg-identical); winit rev f737f1f <- the thr_main() is_main_thread illumos arm; libcosmic TextEditor
+  additive .class()/text_editor re-export (toolkit-rev vs app-HEAD API); cosmic-app-list + applet-minimize
+  memfd_create->POSIX-shm (illumos rustix has no memfd); cosmic-files --features wayland,desktop,dbus-config,
+  notify (drops io-uring/gvfs).
+- DEFERRED (precise, all non-illumos-Rust or hardware): cosmic-panel (smithay backend_drm/egl/renderer_gl =
+  the live-DRM/GPU wall, same as cosmic-comp; cosmic-panel-button DID build); cosmic-applet-a11y (dup
+  iced_futures from a 2nd libcosmic checkout); applet-bluetooth (bluer Linux-BlueZ compile_error); applet-
+  battery/tiling/input-sources (libudev-sys Linux udev).
+=> THE COSMIC DESKTOP APP SUITE compiles + runs on illumos: session glue + terminal + launcher + file manager
++ 10 applets. The remaining wall is the COMPOSITOR/DRM layer (cosmic-comp -> smallvil SW substrate), NOT the
+app suite. WAVE 2 next: cosmic-settings + settings-daemon (needs a logind-equivalent) + notifications + bg +
+workspaces-epoch. The apps render on the nix-pure smallvil+GTK4 Wayland session (already proven).

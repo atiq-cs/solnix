@@ -1,0 +1,88 @@
+diff --git a/cosmic-app-list/src/wayland_handler.rs b/cosmic-app-list/src/wayland_handler.rs
+index 03c1697..6e1894f 100644
+--- a/cosmic-app-list/src/wayland_handler.rs
++++ b/cosmic-app-list/src/wayland_handler.rs
+@@ -493,10 +493,39 @@ impl AppData {
+         };
+         std::thread::spawn(move || {
+             let name = c"app-list-screencopy";
++            #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
+             let Ok(fd) = rustix::fs::memfd_create(name, rustix::fs::MemfdFlags::CLOEXEC) else {
+                 tracing::error!("Failed to get fd for capture");
+                 return;
+             };
++            // illumos/Solaris rustix has no memfd_create; use an anonymous POSIX shm object
++            // (shm_open CREATE|EXCL|RDWR, then shm_unlink so it disappears on close).
++            #[cfg(any(target_os = "illumos", target_os = "solaris"))]
++            let fd = {
++                let _ = name;
++                let uniq = format!(
++                    "/cosmic-scfd-{}-{}",
++                    std::process::id(),
++                    std::time::SystemTime::now()
++                        .duration_since(std::time::UNIX_EPOCH)
++                        .map(|d| d.as_nanos())
++                        .unwrap_or(0)
++                );
++                match rustix::shm::open(
++                    uniq.as_str(),
++                    rustix::shm::OFlags::CREATE | rustix::shm::OFlags::EXCL | rustix::shm::OFlags::RDWR,
++                    rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
++                ) {
++                    Ok(fd) => {
++                        let _ = rustix::shm::unlink(uniq.as_str());
++                        fd
++                    }
++                    Err(_) => {
++                        tracing::error!("Failed to get fd for capture");
++                        return;
++                    }
++                }
++            };
+ 
+             // XXX is this going to use to much memory?
+             let img = capture_data.capture_source_shm_fd(false, &handle, fd, None);
+diff --git a/cosmic-applet-minimize/src/wayland_handler.rs b/cosmic-applet-minimize/src/wayland_handler.rs
+index 562693e..3d04afc 100644
+--- a/cosmic-applet-minimize/src/wayland_handler.rs
++++ b/cosmic-applet-minimize/src/wayland_handler.rs
+@@ -313,10 +313,39 @@ impl AppData {
+         };
+         std::thread::spawn(move || {
+             let name = c"minimize-applet-screencopy";
++            #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
+             let Ok(fd) = rustix::fs::memfd_create(name, rustix::fs::MemfdFlags::CLOEXEC) else {
+                 tracing::error!("Failed to get fd for capture");
+                 return;
+             };
++            // illumos/Solaris rustix has no memfd_create; use an anonymous POSIX shm object
++            // (shm_open CREATE|EXCL|RDWR, then shm_unlink so it disappears on close).
++            #[cfg(any(target_os = "illumos", target_os = "solaris"))]
++            let fd = {
++                let _ = name;
++                let uniq = format!(
++                    "/cosmic-scfd-{}-{}",
++                    std::process::id(),
++                    std::time::SystemTime::now()
++                        .duration_since(std::time::UNIX_EPOCH)
++                        .map(|d| d.as_nanos())
++                        .unwrap_or(0)
++                );
++                match rustix::shm::open(
++                    uniq.as_str(),
++                    rustix::shm::OFlags::CREATE | rustix::shm::OFlags::EXCL | rustix::shm::OFlags::RDWR,
++                    rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
++                ) {
++                    Ok(fd) => {
++                        let _ = rustix::shm::unlink(uniq.as_str());
++                        fd
++                    }
++                    Err(_) => {
++                        tracing::error!("Failed to get fd for capture");
++                        return;
++                    }
++                }
++            };
+ 
+             // XXX is this going to use to much memory?
+             let img = capure_data.capture_source_shm_fd(false, handle.clone(), fd, None);

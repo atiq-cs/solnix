@@ -1,0 +1,33 @@
+diff --git a/src/widget/mod.rs b/src/widget/mod.rs
+index ed6f55d..e9d0e9a 100644
+--- a/src/widget/mod.rs
++++ b/src/widget/mod.rs
+@@ -91,7 +91,7 @@ pub use iced::widget::{Svg, svg};
+ 
+ pub mod text_editor;
+ #[doc(inline)]
+-pub use text_editor::TextEditor;
++pub use text_editor::{TextEditor, text_editor};
+ 
+ #[doc(inline)]
+ pub use iced_core::widget::{Id, Operation, Widget};
+diff --git a/src/widget/text_editor.rs b/src/widget/text_editor.rs
+index f25cb27..098cbb4 100644
+--- a/src/widget/text_editor.rs
++++ b/src/widget/text_editor.rs
+@@ -131,6 +131,15 @@ impl<'a, Message: Clone + 'static> TextEditor<'a, Message> {
+         self
+     }
+ 
++    /// Sets the style class of the text editor (mirrors the underlying iced widget).
++    pub fn class(
++        mut self,
++        class: impl Into<<crate::Theme as Catalog>::Class<'a>>,
++    ) -> Self {
++        self.inner = self.inner.class(class);
++        self
++    }
++
+     fn uses_popup_context_menu(&self) -> bool {
+         #[cfg(all(wayland_platform, feature = "winit"))]
+         if matches!(

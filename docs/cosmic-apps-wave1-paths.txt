@@ -1,0 +1,1 @@
+cosmic-apps-wave1-x86_64-illumos /nix/store/5m4c9x9wk9a42wbgsn33hi2mn5n620lq-wave-bin
