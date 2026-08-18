@@ -1505,3 +1505,17 @@ NIX-NATIVE desktop stack (GTK4/wayland/cairo/pango/mesa-softpipe from tranche-st
 published -- a Nix-pure desktop AMI is the next iteration (bake the /nix/store desktop closure instead of
 OI-pkg). For the 1-day burner goal (a connectable desktop the maintainer SEES), this AMI delivers; the
 Nix-pure version is the post-account follow-up. solnix-desktop-vnc.sh -> scripts/.
+
+## PS-X86-COSMIC-STAGE5 (2026-08-18): the x86 GTK TOOLKIT is COMPLETE (libadwaita) + seatd bonus
++8 x86_64-solaris pkgs (published 91 paths): libadwaita 1.9.2 (TOOLKIT COMPLETE -- NEEDED libgtk-4.so.1 +
+libappstream.so.5 + the full render stack, host-free) + the appstream chain (xapian 1.4.31 [the libuuid
+gap was libuuid's TRANSITIVE closure in /usr/lib/amd64 not /lib/amd64 -- both dirs on -L], appstream 1.1.3
+[7 illumos cuts: libblake3 useTBB=false, libfyaml __sun endian, libstemmer -fPIC, zstd, itstool/xmlto/
+man-db dropped], libblake3/libfyaml/libstemmer/zstd) + seatd 0.9.3 (BONUS -- the session-mgmt half:
+common/drm.c __sun /dev/dri + <sys/ioccom.h>, seatd/client.c getpeerucred, common/terminal.c <sys/vt.h>/
+/dev/vt/N, dropped --version-script mapfile wall). x86 GTK4+libadwaita+appstream+seatd all NIX-NATIVE +
+host-free. HONEST deferral: native rust wasn't on this node (only the rustc-src FOD; the rust seed +
+aarch64 cosmic-rlibs are on the mesa node 3.135.239.78) -> the COSMIC Rust crates are the next stage
+(transplant the seed). Remaining x86 COSMIC ISO stages: native rust (transplant seed) -> COSMIC crates
+(smithay + cosmic-*) -> cosmic-comp -> ISO; + libinput udev shim (devfs/di_*). The x86 GTK/desktop TOOLKIT
+is DONE nix-native (matches the aarch64 wave17 completeness). registry x86 updated.
