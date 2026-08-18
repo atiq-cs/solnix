@@ -334,3 +334,29 @@ verdict is CORRECTED (an important honest finding):
 => the COSMIC SHELL (panel) builds + links + runs + connects to the nix-pure SW compositor on illumos; the
 last step to PIXELS is a Mesa Wayland-EGL rebuild. The compositor/DRM wall is cracked -- the remaining gap is
 a Mesa build flag, not a port. (cosmic-workspaces-epoch: a harder gbm/drm wall, deferred.)
+
+## Mesa Wayland-EGL rebuilt: the COSMIC panel gets a real EGL/GLES context on smallvil (the EGL wall is GONE)
+The last software blocker to a rendering COSMIC shell is eliminated -- self-verified:
+- Mesa 25.1.4 rebuilt on x86_64-illumos WITH the Wayland EGL platform (-Dplatforms=wayland,x11, gallium
+  softpipe+llvmpipe/LLVM 20.1.8, native). Reused the C-PVR/RADV illumos fixes (u_atomic gcc-intrinsics guard,
+  u_thread sched-affinity, macros.h alloca, disk_cache 4-arg getpwuid_r, the linux-ioctl-compat _IOC shim).
+- libEGL.so advertises EGL_KHR_platform_wayland + EGL_EXT_platform_wayland (self-verified via strings + a
+  runtime eglGetPlatformDisplay probe).
+- cosmic-panel gets a REAL EGL context on smallvil (self-verified from the panel log): "Successfully selected
+  EGL platform: PLATFORM_WAYLAND_KHR" -> EGL 1.5 -> hardware_accelerated color format -> "EGL context
+  created" -> "Initializing OpenGL ES Renderer" on llvmpipe (OpenGL ES 3.2 Mesa 25.1.4). The prior "Unable to
+  find suitable EGL platform / Missing: EGL_KHR_platform_wayland" wall is GONE. smallvil maps the panel's
+  layer surface (ns=Panel layer=Top).
+- Pixel proof: the wlr-layer-shell test bar (ns=solnix-panel-test) rendered a 1280x48 top-anchored bar
+  smallvil composited (layerbar.ppm -> artifacts/cosmic-shell-layerbar-newmesa.png, COSMIC-blue content).
+- The NEW illumos fix (why the prior agent stalled at ninja): libgallium NEEDs libLLVM.so.20.1; with -z defs
+  the Solaris linker resolves gallium's NEEDED transitively when linking libEGL/libGLESv2/dri_gbm, but
+  /usr/clang/20/lib wasn't on the link-time search path -> 220 undefined LLVM symbols. Fix: /usr/clang/20/lib
+  on LD_LIBRARY_PATH for the ninja run (Solaris ld searches it for dependency sonames). One line in the recipe.
+- HONEST: the BARE cosmic-panel paints an EMPTY surface (no applets/config/live frame loop) -- a persistent
+  VISIBLE COSMIC bar needs the panel's applet/config/frame-loop wired (panel-side config, beyond the
+  Mesa/EGL deliverable, which is DONE).
+=> the COSMIC shell's render path is COMPLETE on illumos: nix-pure smallvil compositor + the Wayland-EGL Mesa
++ cosmic-panel getting a GLES2 context + smallvil compositing layer-shell clients to pixels. The desktop
+stack (toolkit + 20+ apps + shell/panel render path) is software-complete; HW-accel is the DRM/GBM + GPU
+gate. scripts/build-mesa-waylandegl.sh + docs/MESA-WAYLAND-EGL-STATUS.md.
