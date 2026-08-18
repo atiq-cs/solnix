@@ -472,3 +472,26 @@ class; GGML specifically needs the HIP kernel compiler. => THE ACCELERATED-COMPU
 (deferred; not the lead path). This is a scope CLARIFICATION -- GGML_VULKAN was always the lead vector; the
 finding confirms it's also the LLVM-free one. The dispatch chain being wired (host backend zero-phantom)
 means if the HIP kernel compiler is ever ported, GGML_HIP activates immediately.
+
+## C5-NVK (2026-08-18): NVIDIA's open Vulkan driver -- C surface + ioctls ported; blocked ONLY on rust-NAK (a wiring gap)
+NVK (NVIDIA's open Vulkan driver, Mesa src/nouveau/vulkan) -- the 3rd open-Vulkan vendor. Honest maturity
+finding (NOT an illumos portability gap): libvulkan_nouveau.so did NOT compile, blocked by exactly ONE
+thing -- NVK's shader compiler NAK (src/nouveau/compiler/nak, ~23k LOC) is written in RUST (needs
+rustc>=1.73 + rust.bindgen -> libclang), the one structural difference from RADV (ACO=C++) + ANV (brw=C++)
+which need no LLVM/Rust. meson resolves EVERY dep + dies at exactly meson.build:7 "Unknown compiler: rustc"
+(no rustc/bindgen/libclang on the GPU node). What DID land (zero-phantom, real): libdrm_nouveau.so.2 (the
+libdrm_amdgpu analogue, -Dnouveau=enabled, nvif/ headers) with the nouveau ioctl encoding PROVEN matching
+the C1 kernel (NOUVEAU_GEM_NEW=0xc0306480, Linux _IOC via the shared shim); 34 undefs 0 phantom; the ICD
+wired (nouveau_icd.x86_64.json, canonical vk_icd contract). The NVK C surface (~31k LOC: vulkan core/mme/
+nil/winsys/nvidia_headers) configures clean + reuses the 5 shared fixes. libvulkan_nouveau.so =
+link_whole(libnvk), libnvk deps idep_nak (Rust) -> blocked ONLY by the rust-1.73 toolchain, not any illumos
+break.
+=> THE WIRING PATH (NOT a wall): we HAVE x86 rust working (the OI rust seed 1.97.1 >> 1.73, wrapped as
+rust-illumos-seed.nix; ripgrep/fd/cryptography built). NVK needs rustc + rust.bindgen (-> libclang) ON THE
+GPU/MESA NODE. So NVK completes by: (1) put the x86 rust seed + bindgen/libclang on the mesa node, (2)
+-Dvulkan-drivers=amd,intel,nouveau-experimental -> NAK compiles (Rust) -> libvulkan_nouveau.so links. This
+is a bounded wiring step (rust already works on x86-illumos), not an illumos NVK port. TRIAD: RADV(AMD)+
+ANV(Intel) compile zero-phantom no-LLVM; NVK(NVIDIA) = ioctls+libdrm_nouveau+ICD+C-surface done, waits on
+rust+bindgen on the node (bindgen->libclang is the one new dep). NEXT: wire the x86 rust seed + bindgen onto
+the mesa node -> finish NVK. The Vulkan-compute-every-vendor vector is 2/3 compiled + the 3rd is a rust-wire
+away. Persisted src/drm-port/nvk/.
