@@ -1,166 +1,222 @@
-#!/bin/sh
-# metadata-shim.sh — replaces /usr/lib/metadata in the OpenIndiana cloud image.
-#
-# WHY: the OI cloud image's real metadata-agent is an IMDSv1 client and this AWS
-# account enforces IMDSv2, so the agent 401s and hangs to its 300s SMF timeout,
-# gating svc:/milestone/network. We swap it for this shim, which brings
-# networking up (DHCP on ena0) + enables ssh, then exits FAST so the milestones
-# proceed. The slow retry/route/reboot work is BACKGROUNDED so the SMF method
-# returns quickly (a long-blocking method is itself killed at the 300s timeout,
-# which is how earlier versions lost their reboot/ssh steps).
-#
-# FRESH-COLD-LAUNCH FAILURES on the solnix AMI (PS-FIRSTBOOT-NETWORK) + fixes:
-#   (A) DUAL DHCP ADDROBJ (the ~50% root cause): the baked
-#       /etc/ipadm/ipadm.conf carries TWO DHCP addrobjs on ena0 (ena0/dhcp AND
-#       ena0/v4). dhcpagent tries to bind BOTH on the one NIC and they collide
-#       -> "configure_v4_lease: cannot set IP address on ena0: Cannot assign
-#       requested address" / "dhcp_bound failed" -> no lease -> "Hostname:
-#       unknown", no net, sshd unreachable. (The old shim RE-created ena0/v4 on
-#       every boot, guaranteeing the conflict.) FIX: keep exactly ONE addrobj.
-#   (B) NO DEFAULT ROUTE -> ssh "filtered": some boots get an IP but no default
-#       route (lease landed on a secondary addrobj) -> SYN-ACKs can't leave ->
-#       port 22 looks filtered. FIX: add the VPC default route explicitly.
-#   (C) sshd/cryptosvc LEFT IN MAINTENANCE: they can go to maintenance if they
-#       start before net/crypto is ready; a plain enable does NOT clear it.
-#       FIX: svcadm clear before enable.
-#   (D) SPURIOUS REBOOT vs. LOST DHCP DICE-ROLL (the cold-launch failure): the
-#       real signal for a usable network is an INSTALLED IPv4 on ena0 (ipadm's
-#       ADDR column), NOT the addrobj STATE. On the flaky ena path the addrobj
-#       can read STATE=ok while ADDR stays "?" (lease acknowledged but its IP
-#       never installed) -- and dhcpagent frequently fails the lease outright
-#       ("ena0 has a bad address 0.0.0.0", no dhcp_bound). No in-OS action
-#       recovers a wedged dhcpagent on ena (svcadm restart network/physical,
-#       ipadm disable/enable-if, pkill+recreate all verified useless); only a
-#       fresh boot yields a fresh, sometimes-working lease. So gate the reboot
-#       on cur_ip (an installed IP): a host that HAS an IP is never rebooted;
-#       a host that lost the dice-roll reboots for another try, bounded by a
-#       reboot COUNTER (REBOOT_STAMP holds the count, cap MAX_REBOOTS) so
-#       losing hosts get several fresh leases without ever looping forever.
-#       Earlier versions either rebooted a host that already had a working IP
-#       (STATE=ok/ADDR=? race -> boot-2 dice-roll lost ~7/10) or capped at ONE
-#       reboot (one fresh try, ~29% cumulative); both are wrong.
-exec >>/var/log/solnix-metadata.log 2>&1
-set -x
-echo "=== solnix shim $(date) ==="
-
-STATE=/var/lib/solnix; REBOOT_STAMP="$STATE/first-boot-net-reboots"
-NET_OK="$STATE/net-ok"
-mkdir -p "$STATE" 2>/dev/null || true
-
-# (A) collapse the dual DHCP addrobj to a single ena0/dhcp in the persistent
-# config so dhcpagent does not fight itself. Idempotent.
-if grep -q '_aobjname=ena0/v4' /etc/ipadm/ipadm.conf 2>/dev/null; then
-  echo "-- removing redundant ena0/v4 DHCP addrobj (dual-addrobj bind conflict)"
-  grep -v '_aobjname=ena0/v4' /etc/ipadm/ipadm.conf > /etc/ipadm/ipadm.conf.new 2>/dev/null \
-    && mv /etc/ipadm/ipadm.conf.new /etc/ipadm/ipadm.conf
-fi
-
-NIC=$(dladm show-phys -p -o LINK 2>/dev/null | head -1)
-i=0
-while [ -z "$NIC" ] && [ $i -lt 15 ]; do
-  i=$((i+1)); sleep 2; NIC=$(dladm show-phys -p -o LINK 2>/dev/null | head -1)
-done
-echo "NIC='$NIC'"
-
-# kill any stray secondary DHCP addrobj so only ena0/dhcp binds (no conflict).
-[ -n "$NIC" ] && ipadm delete-addr "$NIC/v4" 2>/dev/null || true
-
-# DNS + ssh up-front (fast, synchronous) — clear maintenance FIRST.
-[ -s /etc/resolv.conf ] || printf 'nameserver 169.254.169.253\nnameserver 8.8.8.8\n' > /etc/resolv.conf
-[ -e /etc/nsswitch.conf ] || cp /etc/nsswitch.dns /etc/nsswitch.conf 2>/dev/null || true
-svcadm clear svc:/network/dns/client 2>/dev/null || true
-svcadm enable svc:/network/dns/client 2>/dev/null || true
-svcadm clear svc:/system/cryptosvc 2>/dev/null || true
-svcadm clear svc:/network/ssh:default 2>/dev/null || true
-svcadm enable svc:/system/cryptosvc 2>/dev/null || true
-svcadm enable svc:/network/ssh:default 2>/dev/null || true
-
-NN=$(cat /etc/nodename 2>/dev/null); { [ -n "$NN" ] && [ "$NN" != unknown ]; } || NN=solnix
-hostname "$NN" 2>/dev/null || true
-
-# ---- backgrounded network worker: waits for the baked ena0/dhcp to install a
-#      usable IP, adds the route, re-enables ssh, and (only if no IP appears)
-#      reboots for a fresh DHCP dice-roll -- bounded by a reboot counter. Runs
-#      detached so the SMF method returns immediately (no 300s-timeout kill).
-[ -n "$NIC" ] && (
-  cur_ip() {
-    ipadm show-addr -po addrobj,addr 2>/dev/null | grep "^${NIC}/" \
-      | sed 's,^[^:]*:,,; s,/.*,,' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' \
-      | grep -vE '^0\.0\.0\.0$' | head -1
-  }
-  add_route() {
-    netstat -rn 2>/dev/null | grep -q '^default' && return 0
-    ip=$(cur_ip); [ -n "$ip" ] || return 1
-    gw=$(echo "$ip" | awk -F. '{printf "%d.%d.%d.%d",$1,$2,int($3/16)*16,1}')
-    echo "adding default route via $gw (from $ip/20)"
-    route -p add default "$gw" 2>&1 || route add default "$gw" 2>&1 || true
-  }
-
-  # Bring up a REAL, usable IP on ena0. "Usable" means cur_ip is non-empty (an
-  # actual IPv4 is installed on the NIC) -- NOT merely STATE=ok. On the flaky
-  # ena path the addrobj can reach STATE=ok while the lease IP is never
-  # installed (ADDR stays "?"): that host has no route and no ssh. And when
-  # dhcpagent fails to complete a lease on the ena link (the ~85%/boot ena DHCP
-  # dice-roll: "ena0 has a bad address 0.0.0.0", no dhcp_bound), NO in-OS action
-  # recovers it -- svcadm restart network/physical, ipadm disable/enable-if,
-  # pkill dhcpagent + re-create all leave the agent wedged (verified). The only
-  # thing that yields a fresh, working lease is a fresh boot. So: wait for the
-  # baked ena0/dhcp to install an IP; if it does not, reboot for another
-  # dice-roll -- bounded by a reboot COUNTER so losing hosts get several fresh
-  # tries (1 - p_fail^tries) instead of the single retry the old one-shot
-  # sentinel allowed, while a working host is NEVER rebooted and the counter
-  # caps the loop.
-
-  # phase 1: wait (generously) for the baked ena0/dhcp to install a real IP.
-  k=0; while [ $k -lt 30 ] && [ -z "$(cur_ip)" ]; do k=$((k+1)); sleep 2; done
-  # phase 2: one cheap in-OS re-kick in case dhcpagent just needs a nudge (does
-  # not recover a truly wedged agent, but is free and occasionally helps).
-  if [ -z "$(cur_ip)" ]; then
-    echo "no usable IP after wait -> one in-OS re-kick (refresh + restart net/phys)"
-    ipadm refresh-addr "$NIC/dhcp" 2>&1 || true
-    svcadm restart svc:/network/physical:default 2>&1 || true
-    w=0; while [ $w -lt 15 ] && [ -z "$(cur_ip)" ]; do w=$((w+1)); sleep 2; done
-  fi
-
-  ifconfig "$NIC" mtu 1400 2>&1 || dladm set-linkprop -p mtu=1400 "$NIC" 2>&1 || true
-  add_route
-  # re-clear/enable ssh now the network is up (in case it raced earlier).
-  svcadm clear svc:/network/ssh:default 2>/dev/null || true
-  svcadm enable svc:/network/ssh:default 2>/dev/null || true
-
-  echo "-- worker ipadm show-addr:"; ipadm show-addr 2>&1
-  echo "-- worker default route:"; netstat -rn 2>&1 | grep default | head -2
-
-  # (D) decide on a reboot using the REAL usability signal (cur_ip = an actual
-  # installed IP), never STATE=ok. If we have an IP, mark net-ok and never
-  # reboot. If not, the ena DHCP dice-roll was lost this boot and no in-OS fix
-  # recovers it -> reboot for a fresh lease, bounded by a reboot COUNTER so a
-  # host that keeps losing gets several fresh tries but can never loop forever.
-  # reboot budget: a fresh boot recovers hosts that merely lost the DHCP
-  # dice-roll, but on many instances the ena data path is dead (link up yet no
-  # packet flows: no DHCP, and IMDS/route are unreachable too) and no number of
-  # reboots helps -- that is the ena driver, not something this shim can fix.
-  # So keep a SMALL budget: it converts the recoverable losers (measured: some
-  # hosts pass only on reboot #1) without burning ~4.5 min/reboot on the
-  # persistently-dead ones.
-  MAX_REBOOTS=3
-  if [ -n "$(cur_ip)" ]; then
-    : > "$NET_OK" 2>/dev/null || true
-    echo "usable IP $(cur_ip) installed; net-ok sentinel set, no reboot"
-  elif [ -f "$NET_OK" ]; then
-    echo "no IP this pass but net-ok sentinel present; not rebooting"
-  else
-    n=$(cat "$REBOOT_STAMP" 2>/dev/null); [ -n "$n" ] || n=0
-    if [ "$n" -lt "$MAX_REBOOTS" ]; then
-      echo "no usable IP (ena DHCP lost); reboot $((n+1))/$MAX_REBOOTS for a fresh lease"
-      echo $((n+1)) > "$REBOOT_STAMP" 2>/dev/null || true
-      sleep 3; /usr/sbin/reboot
-    else
-      echo "no usable IP after $MAX_REBOOTS reboots; giving up (ena DHCP driver issue)"
-    fi
-  fi
-  echo "=== worker done $(date) ==="
-) >>/var/log/solnix-metadata.log 2>&1 &
-
-echo "=== shim done (worker backgrounded) $(date) ==="
-exit 0
+    Updating git repository `https://github.com/pop-os//cosmic-protocols`
+    Updating git repository `https://github.com/smithay/smithay`
+     Locking 16 packages to latest Rust 1.97.1 compatible versions
+      Adding build_helpers v0.14.0 (/root/libcosmic/iced/build_helpers)
+      Adding cosmic-config v1.0.0 (/root/libcosmic/cosmic-config)
+      Adding cosmic-config-derive v1.0.0 (/root/libcosmic/cosmic-config-derive)
+      Adding cosmic-theme v1.0.0 (/root/libcosmic/cosmic-theme)
+      Adding iced v0.14.0 (/root/libcosmic/iced)
+      Adding iced_core v0.14.0 (/root/libcosmic/iced/core)
+      Adding iced_debug v0.14.0 (/root/libcosmic/iced/debug)
+      Adding iced_futures v0.14.0 (/root/libcosmic/iced/futures)
+      Adding iced_graphics v0.14.0 (/root/libcosmic/iced/graphics)
+      Adding iced_program v0.14.0 (/root/libcosmic/iced/program)
+      Adding iced_renderer v0.14.0 (/root/libcosmic/iced/renderer)
+      Adding iced_runtime v0.14.0 (/root/libcosmic/iced/runtime)
+      Adding iced_tiny_skia v0.14.0 (/root/libcosmic/iced/tiny_skia)
+      Adding iced_wgpu v0.14.0 (/root/libcosmic/iced/wgpu)
+      Adding iced_widget v0.14.2 (/root/libcosmic/iced/widget)
+      Adding libcosmic v1.0.0 (/root/libcosmic)
+ Downloading crates ...
+  Downloaded cc v1.2.65
+  Downloaded arrayvec v0.7.7
+  Downloaded defmt v1.1.0
+  Downloaded defmt-macros v1.1.0
+  Downloaded pxfm v0.1.29
+  Downloaded zerocopy-derive v0.8.52
+  Downloaded zerocopy v0.8.52
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.46
+   Compiling unicode-ident v1.0.24
+   Compiling libc v0.2.186
+   Compiling cfg-if v1.0.4
+   Compiling serde_core v1.0.228
+   Compiling autocfg v1.5.1
+   Compiling log v0.4.33
+   Compiling smallvec v1.15.2
+   Compiling version_check v0.9.5
+   Compiling rustix v1.1.4
+   Compiling once_cell v1.21.4
+   Compiling pin-project-lite v0.2.17
+   Compiling pkg-config v0.3.33
+   Compiling shlex v2.0.1
+   Compiling find-msvc-tools v0.1.9
+   Compiling libm v0.2.16
+   Compiling libloading v0.8.9
+   Compiling memchr v2.8.2
+   Compiling cc v1.2.65
+   Compiling thiserror v2.0.18
+   Compiling scoped-tls v1.0.1
+   Compiling dlib v0.5.3
+   Compiling downcast-rs v1.2.1
+   Compiling slab v0.4.12
+   Compiling wayland-client v0.31.14
+   Compiling tracing-core v0.1.36
+   Compiling futures-core v0.3.32
+   Compiling async-task v4.7.1
+   Compiling memoffset v0.9.1
+   Compiling wayland-sys v0.31.11
+   Compiling num-traits v0.2.19
+   Compiling serde v1.0.228
+   Compiling quick-xml v0.39.4
+   Compiling thiserror v1.0.69
+   Compiling futures-io v0.3.32
+   Compiling siphasher v1.0.3
+   Compiling cfg_aliases v0.2.1
+   Compiling cursor-icon v1.2.0
+   Compiling smithay-client-toolkit v0.20.0
+   Compiling xcursor v0.3.10
+   Compiling raw-window-handle v0.6.2
+   Compiling errno v0.3.14
+   Compiling memmap2 v0.9.11
+   Compiling rustc-hash v2.1.2
+   Compiling build_helpers v0.14.0 (/root/libcosmic/iced/build_helpers)
+   Compiling syn v2.0.118
+   Compiling bytes v1.12.0
+   Compiling as-raw-xcb-connection v1.0.1
+   Compiling rand_core v0.6.4
+   Compiling phf_shared v0.11.3
+   Compiling x11rb-protocol v0.13.2
+   Compiling futures-sink v0.3.32
+   Compiling fastrand v2.4.1
+   Compiling rand v0.8.6
+   Compiling generic-array v0.14.7
+   Compiling palette v0.7.6
+   Compiling by_address v1.2.1
+   Compiling stable_deref_trait v1.2.1
+   Compiling futures-channel v0.3.32
+   Compiling web-time v1.1.0
+   Compiling wayland-scanner v0.31.10
+   Compiling wayland-backend v0.3.15
+   Compiling smol_str v0.3.6
+   Compiling futures-task v0.3.32
+   Compiling unicode-segmentation v1.13.3
+   Compiling fast-srgb8 v1.0.0
+   Compiling lilt v0.8.1
+   Compiling crossbeam-utils v0.8.21
+   Compiling glam v0.25.0
+   Compiling arrayvec v0.7.7
+   Compiling phf_generator v0.11.3
+   Compiling simd-adler32 v0.3.9
+   Compiling core_maths v0.1.1
+   Compiling parking v2.2.1
+   Compiling adler2 v2.0.1
+   Compiling slotmap v1.1.1
+   Compiling crc32fast v1.5.0
+   Compiling miniz_oxide v0.8.9
+   Compiling zerocopy v0.8.52
+   Compiling winnow v1.0.3
+   Compiling iced_core v0.14.0 (/root/libcosmic/iced/core)
+   Compiling equivalent v1.0.2
+   Compiling rustix v0.38.44
+   Compiling hashbrown v0.17.1
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling approx v0.5.1
+   Compiling concurrent-queue v2.5.0
+   Compiling ttf-parser v0.25.1
+   Compiling tinyvec_macros v0.1.1
+   Compiling flate2 v1.1.9
+   Compiling getrandom v0.4.3
+   Compiling rand_core v0.10.1
+   Compiling roxmltree v0.20.0
+   Compiling event-listener v5.4.1
+   Compiling bitflags v2.13.0
+   Compiling tinyvec v1.11.0
+   Compiling indexmap v2.14.0
+   Compiling fdeflate v0.3.7
+   Compiling self_cell v1.2.2
+   Compiling unicode-script v0.5.8
+   Compiling typenum v1.20.1
+   Compiling event-listener-strategy v0.5.4
+   Compiling toml_parser v1.1.2+spec-1.1.0
+   Compiling fontconfig-parser v0.5.8
+   Compiling futures-lite v2.6.1
+   Compiling signal-hook-registry v1.4.8
+   Compiling unicode-bidi v0.3.18
+   Compiling aho-corasick v1.1.4
+   Compiling async-io v2.6.0
+   Compiling toml_edit v0.25.12+spec-1.1.0
+   Compiling regex-syntax v0.8.11
+   Compiling drm-sys v0.6.1
+   Compiling sys-locale v0.3.2
+   Compiling zeno v0.3.3
+   Compiling drm-fourcc v2.2.0
+   Compiling proc-macro-crate v3.5.0
+   Compiling synstructure v0.13.2
+   Compiling yazi v0.2.1
+   Compiling float-cmp v0.9.0
+   Compiling block-buffer v0.10.4
+   Compiling crypto-common v0.1.7
+   Compiling strict-num v0.1.1
+   Compiling fontdb v0.23.0
+   Compiling socket2 v0.6.4
+   Compiling mio v1.2.1
+   Compiling same-file v1.0.6
+   Compiling endi v1.1.1
+   Compiling parking_lot_core v0.9.12
+   Compiling byteorder-lite v0.1.0
+   Compiling arrayref v0.3.9
+   Compiling rangemap v1.7.1
+   Compiling unicode-linebreak v0.1.5
+   Compiling linebender_resource_handle v0.1.1
+   Compiling walkdir v2.5.0
+   Compiling digest v0.10.7
+   Compiling polling v3.11.0
+   Compiling gethostname v1.1.0
+   Compiling euclid v0.22.14
+   Compiling x11rb v0.13.2
+   Compiling tiny-xlib v0.2.5
+   Compiling regex-automata v0.4.14
+   Compiling uncased v0.9.10
+   Compiling atomic-waker v1.1.2
+   Compiling serde_derive v1.0.228
+   Compiling bytemuck_derive v1.10.2
+   Compiling thiserror-impl v2.0.18
+   Compiling tracing-attributes v0.1.31
+   Compiling displaydoc v0.2.6
+   Compiling thiserror-impl v1.0.69
+   Compiling zerofrom-derive v0.1.7
+   Compiling wayland-server v0.31.13
+   Compiling wayland-csd-frame v0.3.0
+   Compiling yoke-derive v0.8.2
+   Compiling phf_macros v0.11.3
+   Compiling bytemuck v1.25.0
+   Compiling tracing v0.1.44
+   Compiling palette_derive v0.7.6
+   Compiling futures-macro v0.3.32
+   Compiling zerovec-derive v0.11.3
+   Compiling xkeysym v0.2.1
+   Compiling calloop v0.14.4
+   Compiling clipboard_x11 v0.4.2 (https://github.com/pop-os/window_clipboard.git?tag=sctk-0.20#f68595ee)
+   Compiling zerofrom v0.1.8
+   Compiling phf v0.11.3
+   Compiling font-types v0.11.3
+   Compiling zerocopy-derive v0.8.52
+   Compiling wayland-protocols v0.32.13
+   Compiling wayland-cursor v0.31.14
+   Compiling yoke v0.8.3
+   Compiling futures-util v0.3.32
+   Compiling enumflags2_derive v0.7.12
+   Compiling xkbcommon v0.8.0
+   Compiling calloop-wayland-source v0.4.1
+   Compiling tinystr v0.8.3
+   Compiling zerovec v0.11.6
+   Compiling read-fonts v0.39.2
+   Compiling read-fonts v0.37.0
+   Compiling tokio-macros v2.7.0
+   Compiling tiny-skia-path v0.11.4
+   Compiling pxfm v0.1.29
+   Compiling cpufeatures v0.2.17
+   Compiling bitflags v1.3.2
+   Compiling zune-core v0.5.1
+   Compiling png v0.17.16
+   Compiling tokio v1.52.3
+   Compiling sha2 v0.10.9
+   Compiling enumflags2 v0.7.12
+   Compiling zvariant_utils v3.4.0
+   Compiling unic-langid-impl v0.9.6
+   Compiling unic-langid v0.9.6
+   Compiling zune-jpeg v0.5.15
+   Compiling zvariant_derive v5.12.0
+   Compiling lyon_geom v1.0.19
+   Compiling async-signal v0.2.14

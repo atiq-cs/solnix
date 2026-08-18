@@ -98,3 +98,30 @@ ctxop, sendsig, locks; UART asy_nsuart (adopt-mostly); EMAC as NIC template
 (K1=dwmac/stmmac, rewrite reg layer). KEEP ours: AIA (n-hys=100% PLIC), ctx-switch,
 sdhci (closer to K1 dwcmshc-sdhci than their Allwinner SMHC). RVV1.0 = still net-new
 (n-hys float-only); their float ctxop is the structure RVV extends.
+
+## EC2 AMI cold-boot: the ena data-path blocker (root-caused, honest)
+The desktop AMI fails to network on a clean cold launch. Root-caused (all verified on live cold instances):
+- FIXED: ipfilter's default-deny ruleset DROPPED the IMDSv2 token PUT response (curl code 000 with ipf on;
+  code 200 after a `pass in ... from 169.254.169.254` rule). The shim + ipf.conf now pass IMDS.
+- ARCHITECTURALLY IMPOSSIBLE (the key finding): static-IP-from-IMDS cannot bootstrap. EC2 IMDS at
+  169.254.169.254 only answers packets sourced from the instance's REAL VPC private IP -- a self-assigned
+  link-local is rejected (verified: curl --interface <link-local> -> code 000; from the real DHCP IP ->
+  code 200). To ask IMDS for the IP you must ALREADY have the IP -- genuine chicken-and-egg. The
+  static-from-IMDS approach is impossible; static-from-DHCP-OFFER is the only in-OS static path.
+- THE REAL BLOCKER = the ena DRIVER, not the shim: on failing boots dhcpagent gets NO DHCP OFFER at all
+  (dhcpinfo empty, console "Hostname: unknown", IPv4LL 169.254.0.1) -- the ena data path is dead, not just
+  the DHCP config. No in-OS action recovers a wedged agent (delete/create-addr, refresh, restart
+  network/physical all fail); fresh-boot DHCP is a high-variance dice-roll (batches of 0/3, 4/4). Reboots
+  don't reliably help because the ena path stays dead. The deterministic fix belongs in the ena driver
+  (the illumos ena data-path / interrupt / reset handling on cold boot), NOT the metadata shim.
+- The shim (scripts/metadata-shim.sh) does what IS fixable: single-addrobj (collapse the dual-DHCP
+  conflict), the ipf IMDS pass rule, wait ~100s for DHCP then set the deterministic default route
+  (gw = subnet base+1), recover the assigned IP statically from the DHCP OFFER via dhcpinfo, bounded reboot
+  (cap 4) only if there's no OFFER.
+- AMIs (from the failing ami-000a59cf344644604): v4 ami-095543f0de750dc33 (static-from-OFFER + bounded
+  reboot), v3 ami-0870478cf2ea34604, v2 ami-03081d83a7d0bd410, v1 ami-0d91ba781fc5e637f.
+=> HONEST STATE: the AMI is not reliably cold-launchable because of the ena driver's cold-boot data-path
+unreliability -- a DRIVER bug, not shim-fixable + not further-iterable at the AMI layer. The VIEWABLE-desktop
+demo runs on a BUILD NODE (reachable), which is the usable path today. Next: the illumos ena driver cold-boot
+data-path fix (crib the FreeBSD if_ena reset/interrupt bring-up) -- a kernel-driver task, separate from the
+image work. docs/AMI-ENA-COLDBOOT-FINDINGS.md has the full analysis.
