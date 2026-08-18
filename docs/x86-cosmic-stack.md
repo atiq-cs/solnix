@@ -1,170 +1,166 @@
-# x86_64-solaris COSMIC stack — Stage 3 (native)
+# x86_64-solaris COSMIC stack — Stage 4 (native): the toolkit gate
 
-Native x86_64-solaris (illumos) build. Goal: the foundation for a graphical
-x86_64 COSMIC desktop ISO. Stage 1 unblocked cmake + the font leaf. Stage 2
-wired python3/meson/ninja + built the first meson render leaves (pixman,
-fribidi, wayland-protocols, libxkbcommon). Stage 3 CLEARS THE RENDER/TOOLKIT
-GATE: glib native, the full harfbuzz/cairo/pango/gdk-pixbuf/graphene cascade,
-and the wayland core — all as native ports of the proven aarch64 wave14/15
-recipes.
+Native x86_64-solaris (illumos) build. Stage 3 cleared the render/toolkit
+foundation (glib + harfbuzz/cairo/pango/gdk-pixbuf/graphene + wayland core).
+Stage 4 lands **GTK4 4.22.4 with the full Wayland+EGL backend** — the toolkit
+gate — plus **libepoxy** (the wave10 mapfile wall, solved), and the appstream
+support chain up to libxmlb. libadwaita is blocked one dep short (xapian's
+libtool/libuuid link).
 
-## Headline: the glib libintl gate is CLEARED (wave14 native), and the whole render swath + wayland core build
+Wired tranche: `/root/tranche-stage4.nix` (extends `/root/tranche-stage3.nix`).
+Paths file: `/root/x86-cosmic-stage4-paths.txt`.
+New shim: `/root/solnix-linux-input/linux/input.h` (the BTN_* codes).
 
-Stage 2 stalled on the GNU-vs-native libintl linkage. Stage 3 took the report's
-option (a) — make glib bind the NATIVE plain-name gettext family — and the fix
-cascaded: glib -> graphene/harfbuzz/cairo/gdk-pixbuf/pango all build, and
-wayland core builds via illumos's native epoll (EASIER than the anticipated
-wave15 event-ports port).
+## Headline: GTK4 4.22.4 built native, Wayland + EGL backend, ELF-verified
 
-### GAP 1 — glib (the render-lib gate): CLEARED
+`libgtk-4.so.1.2200.4` — ELF 64-bit AMD64, host-free. NEEDED shows the full
+render stack (glib/gobject/gio/pango/harfbuzz/cairo/gdk-pixbuf/graphene),
+`libepoxy.so.0`, `libwayland-client.so.0`, `libwayland-egl.so.1`,
+`libxkbcommon.so.0`, native `libintl.so.1` + `libc.so.1`. Also produced
+`gtk4-wayland.pc` (the Wayland backend is compiled in).
 
-WHY stage 2 failed: glib/ggettext.c does an UNCONDITIONAL `#include <libintl.h>`
-(outside the ENABLE_NLS guard) and calls bindtextdomain/bind_textdomain_codeset/
-dgettext/textdomain/gettext. The GNU gettext nativeBuildInput put its
-`<libintl.h>` on the include path, which `#define`s those -> `libintl_*` — names
-the native `/lib/amd64/libintl.so.1` (plain SUNW ABI) does not export. Adding
-`-L${gettext}/lib` did not flip resolution (native `/lib` search wins).
+The recipe (native port of the aarch64 wave16 shape):
+  - `waylandSupport = true` (COSMIC is Wayland); `x11Support / vulkanSupport /
+    trackerSupport / cupsSupport / xineramaSupport / broadwaySupport` all OFF.
+    On illumos these all default to `isLinux` = false, except we FORCE wayland
+    ON (nixpkgs would leave it off).
+  - `-Dintrospection=disabled` (g-i -> gi-docgen dies on the spliced python3
+    hash mismatch; COSMIC/Rust needs no .gir), `-Dmedia-gstreamer=disabled`
+    (gst-plugins-base pulls valgrind's sourceware fetchpatch + GL), docs off,
+    demos/examples/testsuite off.
+  - buildInputs filtered: drop `libGL` (= libglvnd, the version-script wall) and
+    the gstreamer plugins. GTK4's GL renderer dispatches through libepoxy's
+    dlopen layer, so it needs NO link-time libGL — keeping it would re-arm the
+    libglvnd mapfile wall.
+  - Native-libintl fix (as glib/pango): drop the GNU gettext nativeBuildInput,
+    prepend the `/root/solnix-intl-include/libintl.h` shim, link `-L/lib/amd64
+    -lintl`; `-lsocket -lnsl` for the Wayland client; the SUS/__EXTENSIONS__
+    defines for CMSG_*/getpwuid_r.
+  - `postFixup = ""` (the stock postFixup wrapProgram's the demos, which are off).
 
-THE STAGE-3 FIX (native, wave14 class):
-  - Drop the GNU `gettext` nativeBuildInput (its `<libintl.h>` leaves the path).
-  - Prepend a native `libintl.h` shim (`/root/solnix-intl-include/libintl.h`,
-    plain SUNW prototypes) via `-I` so glib's meson probe
-    `cc.has_function('ngettext', prefix:'#include <libintl.h>')` compiles and
-    glib takes the system-intl path (never the internal-proxy `assert` at
-    meson.build:2353). illumos ships the whole family natively:
-    `libintl.so.1` (gettext/dgettext/dcgettext/textdomain/bindtextdomain) +
-    `libc.so.1` (bind_textdomain_codeset/ngettext/dngettext/dcngettext).
-  - Link native `-L/lib/amd64 -lintl`; add `-D_XOPEN_SOURCE=600 -D__EXTENSIONS__
-    -D_POSIX_PTHREAD_SEMANTICS` for the CMSG_* / getpwuid_r decls.
-  - `-Dintrospection=disabled -Dtests=false -Dnls=disabled`, drop the `devdoc`
-    output and the gi-docgen/gobject-introspection nativeBuildInputs (g-i's
-    gi-docgen dies on the spliced build/host python3 hash mismatch; COSMIC/Rust
-    needs no .gir typelibs).
+Two illumos-specific compile fixes GTK4 needed:
+  - **`<linux/input.h>`** — `gdkseat-wayland.c` includes it for the BTN_* mouse/
+    stylus button codes. illumos has no Linux input subsystem; a shim header
+    (`/root/solnix-linux-input/linux/input.h`) carrying just those stable
+    input-event ABI constants (BTN_LEFT/RIGHT/MIDDLE/BACK/FORWARD, BTN_STYLUS
+    1-3) is on the include path.
+  - **`epoxy/egl.h`** — see libepoxy below.
 
-VERIFIED: `libglib-2.0.so.0.8800.1` — ELF 64-bit AMD64, `NEEDED libintl.so.1`
-(native plain names) + `libiconv.so.2` + `libc.so.1`; host-free (no /root or
-/tmp refs). gio/gobject/gmodule all present.
+## GAP 3 CLEARED: libepoxy — the wave10 mapfile wall, solved (NOT worked around)
 
-### The render cascade (all wait only on glib): ALL BUILT
+The prior blocker was libglvnd's GNU `--version-script=*.ver`, which the Solaris
+ld rejects, and a PATH `ld` wrapper does not intercept (gcc/collect2 calls its
+configured Solaris ld directly — confirmed again this stage). The wave10 fix
+attempts all fought that wall.
 
-  - **graphene 1.10.8** — meson probes memalign/aligned_alloc/posix_memalign but
-    illumos gates all three behind `__EXTENSIONS__`/`_XOPEN_SOURCE` in
-    `<stdlib.h>` -> "No aligned malloc function could be found." Fix: expose the
-    SUS decls. Dropped the `installedTests` output.
-  - **harfbuzz 13.2.1** — introspection + docs off (drop gtk-doc/docbook, which
-    pull the gi-docgen/sphinx chain).
-  - **cairo 1.18.4** — `-Dgtk_doc=false`, drop the `devdoc` output.
-  - **pango 1.57.1** — docs/introspection/man-pages off; same native-libintl fix
-    as glib (pango uses the `_()` gettext macros); `FONTCONFIG_FILE` pointed at a
-    plain system path so the makeFontsConf->dejavu->fontforge chain leaves.
-  - **gdk-pixbuf 2.44.6** — docs/introspection off; same native-libintl fix
-    (`gdk-pixbuf-util.c` emitted `libintl_bindtextdomain`); TIFF loader dropped
-    (`libtiff = null`, `-Dtiff=disabled`); PNG (libpng/zlib) + JPEG (libjpeg,
-    SIMD off) stay.
+The stage-4 insight: **libepoxy on illumos does not need libglvnd at all.** Build
+epoxy with `-Dx11=false -Dglx=no` (drops the libGL/libx11 propagated inputs and
+the `-DLIBGL_PATH` env, so libglvnd never enters the graph) but keep
+`-Degl=yes` (GTK4's Wayland backend hard-includes `<epoxy/egl.h>`). epoxy's EGL
+and GL entry points are dlopen'd at RUNTIME by soname, so `egl=yes` needs no
+link-time libEGL/libGL — the version-script wall never appears.
 
-Shared cuts that unblocked the cascade (all documented in the tranche):
-  - **fontconfig** — `dejavu_fonts` stubbed to an empty dir + `--with-default-
-    fonts=/usr/share/fonts`, so the dejavu -> fontforge -> libtiff + sphinx ->
-    pystemmer (non-PIC libstemmer.a -> Solaris ld "relocations remain against
-    allocatable but non-writable sections") chain leaves the graph.
-  - **libtiff** — drop sphinx docs + the `doc` output.
-  - **libjpeg-turbo** — `-DWITH_SIMD=0` + drop nasm (nasm fails on illumos:
-    htole64/htole32 -> no `<endian.h>`; zlib.h not found).
-  - **time-machine / fonttools** (python) — `doCheck=false` (illumos tz + rmtree
-    test-harness quirks, not lib defects).
+`egl=yes` needs the Khronos `EGL/`+`KHR/` headers at compile. libglvnd's SOURCE
+tarball ships them (`include/EGL/*`, `include/KHR/*`), so we copy them out of
+`libglvnd.src` (a fetched FOD — no build, no ld wall) into a `runCommand`
+include dir, made a **propagatedBuildInput** of epoxy so consumers (gtk4)
+inherit the `-I` (epoxy/egl_generated.h includes `<EGL/eglplatform.h>`).
 
-VERIFIED: cairo/pango/harfbuzz/graphene/gdk-pixbuf libs all ELF 64-bit AMD64.
+VERIFIED: `libepoxy.so.0.0.0` — ELF 64-bit AMD64, NEEDED only `libdl.so.1` +
+`libc.so.1` (pure dlopen dispatch, no GL backend baked in — correct for illumos),
+host-free. `epoxy/egl.h` + `egl_generated.h` installed.
 
-### GAP 2 — wayland core: BUILT (native epoll, NOT the wave15 event-ports port)
+## The appstream support chain (for libadwaita): mostly built
 
-The report anticipated porting event-loop.c to illumos event-ports. But illumos
-ALREADY provides native `epoll_create/epoll_ctl/epoll_wait`, `signalfd`,
-`timerfd_create`, `eventfd`, `getpeerucred`, `port_*` in libc + `<sys/*.h>` —
-EASIER than the aarch64 cross. wayland's meson only pulls `epoll-shim` on
-freebsd/openbsd; on solaris it assumes native epoll. So:
-  - Drop nixpkgs' `epoll-shim` buildInput (it needs `<sys/event.h>`/kqueue,
-    absent on illumos).
-  - Inject an illumos `getpeerucred(3C)` arm into `wayland-os.c` (which otherwise
-    `#error`s — it has neither FreeBSD LOCAL_PEERCRED nor Linux SO_PEERCRED). The
-    arm uses getpeerucred + ucred_geteuid/getegid/getpid/free.
-  - Re-enable the scanner (`wayland-scanner` — COSMIC needs the codegen tool);
-    add `expat` + `libxml2` buildInputs the scanner needs.
-  - Link `-lsocket -lnsl` (`_XPG4_2`/`__EXTENSIONS__` maps socket()/connect()/
-    accept()/listen() to `__xnet_*` in libsocket).
-  - `-D_XOPEN_SOURCE=600 -D__EXTENSIONS__ -D_POSIX_PTHREAD_SEMANTICS`.
+libadwaita hard-requires `appstream` (meson.build:43, `required:true`), so it
+is not skippable. appstream pulls a deep chain; each layer needed an illumos
+cut or shim:
 
-VERIFIED: `libwayland-client.so`, `libwayland-server.so` — ELF 64-bit AMD64;
-`libwayland-server` NEEDs `libsocket.so.1` + `libc.so.1` (getpeerucred).
-`wayland-scanner` — AMD64 executable.
+  - **librsvg (Rust) — CUT via `-Dcompose=false`.** appstream's `compose`
+    (icon rendering) pulls librsvg 2.62, which is a Rust crate -> cargo-bootstrap
+    -> the `nativeLibc && noLibc` bintools assert (Rust is stage 5, not ported).
+    The appstream metadata library libadwaita needs does not require compose;
+    also dropped `-Dvapi` (vala), `withIntrospection`, `withSystemd`.
+  - **doxygen/catch2/spdlog — CUT.** `itstool` -> a `libxml2` (pythonSupport)
+    variant that pulls `doxygen` for the python-binding API docs; doxygen drags
+    `spdlog` -> `catch2`, which fails to compile on gcc-10 illumos
+    (`Catch::isnan` unqualified-lookup). Fix: strip `doxygen` from libxml2's
+    nativeBuildInputs (only added under pythonSupport; docs aren't the
+    deliverable). Also dropped g-i + gtk-doc on `libxmlb`.
+  - **liblzma — SHIMMED (native).** `libxmlb` needs liblzma, but this stack's
+    `xz` builds tool-only (`usr/gnu/bin/xz`, no lib/pkgconfig). illumos ships
+    native `liblzma.so.5` + `<lzma.h>` in `/usr/lib/amd64` + `/usr/include`, so
+    drop the tool-only xz buildInput and synthesize a `liblzma.pc` (on
+    PKG_CONFIG_PATH) + explicit `-I/usr/include` pointing at the system lib.
+    **libxmlb 0.3.27 built** (`libxmlb.so.2.0.0`, ELF AMD64).
+  - **desktop-file-utils — native-libintl fix.** A libadwaita nativeBuildInput;
+    a GNU `<libintl.h>` leaked in and it emitted `libintl_gettext` but linked
+    native `-lintl` (plain names). Same fix as glib/pango. **Built.**
 
-## NEW x86_64-solaris packages this stage (7, ELF-verified)
+## What is BLOCKED, and the honest reason (deferred)
 
-| package          | store path                                                 | kind      |
-|------------------|------------------------------------------------------------|-----------|
-| glib 2.88.1      | zz4lki88mzzyzym0nnsjysc3hk6q1421-glib-2.88.1               | AMD64 .so |
-| graphene 1.10.8  | gma9mhrs8hg97ig2xgg74w9jlkjkdvz6-graphene-1.10.8           | AMD64 .so |
-| harfbuzz 13.2.1  | f4k5hmygik04m58njmr7jyf24vrr5y6d-harfbuzz-13.2.1           | AMD64 .so |
-| cairo 1.18.4     | wry1dv5l9dr5pbm6n06gd1zwqnbvv2i0-cairo-1.18.4              | AMD64 .so |
-| gdk-pixbuf 2.44.6| 87iq1x8mavy9dbdwldrwiin59lr8703b-gdk-pixbuf-2.44.6         | AMD64 .so |
-| pango 1.57.1     | lk5mi7rk9dc4bdh66214dndagh5hpqw8-pango-1.57.1              | AMD64 .so |
-| wayland 1.26.0   | wbs749x2qhivx35sl75r443gadh8hn3d-wayland-1.26.0            | AMD64 .so + scanner |
+  - **libadwaita 1.9.2 — blocked one dep short.** It needs appstream, and
+    appstream's last unbuilt dep is **xapian 1.4.31**. xapian needs
+    `uuid_generate` (illumos has native `libuuid.so.1` + `<uuid/uuid.h>` in
+    `/lib/amd64` + `/usr/include`). We got it configuring (pre-seed
+    `ac_cv_search_uuid_generate=-luuid`, `--disable-backend-remote` for the
+    misfiring fork() probe) and compiling, but the final **libtool** link drops
+    the `-L/lib/amd64` from NIX_LDFLAGS (libtool filters `-L` its own way),
+    leaving `ld: library -luuid: not found` / a truncated undefined-symbol
+    error. NEXT: give xapian the uuid path in a form libtool preserves — either
+    an `LDFLAGS`/`XAPIAN_LIBS` make override that survives libtool, or an
+    `extraSyslibs`-style store dir with a bare `libuuid.so` + a proper
+    `-L${that}` (the stage-3 cmake pattern), or point xapian at a native
+    `uuid.pc`. Once xapian links, appstream -> libadwaita should cascade (all
+    other appstream deps built this stage).
 
-Published: **17 store paths** (the 7 packages + their dev/bin splits) via
-`oi-publish-wave.sh` -> s3.solnix.io/solnix-cache; the full render+wayland
-closure (882 paths) is on the cache (`failed=0` on the settled run).
-
-Paths file: `/root/x86-cosmic-stage3-paths.txt`.
-Wired tranche: `/root/tranche-stage3.nix` (extends `/root/tranche-stage2.nix`).
-Shim: `/root/solnix-intl-include/libintl.h`, `/root/wl-illumos-arm.c`,
-`/root/solnix-ld-noverscript.sh`.
-
-## What is BLOCKED, and the honest reason (deferred to stage 4)
-
-  - **GAP 3 — libepoxy / libglvnd** — the Solaris link-editor rejects libglvnd's
-    GNU `--version-script=*.ver` (wave10 mapfile wall): `ld: fatal: unrecognized
-    option '--version-script='`. A PATH `ld` wrapper that strips the token does
-    NOT intercept, because libglvnd links via `gcc`/`collect2`, which calls its
-    configured (Solaris) ld directly, bypassing PATH. STAGE-4 FIX: strip
-    `--version-script` at the cc-wrapper level (the flag only restricts symbol
-    visibility, harmless to drop for GL dispatch), OR point gcc at the store GNU
-    ld (`-B`/`-fuse-ld`; a GNU ld 2.46.1 exists at `/usr/gnu/bin/ld` and
-    understands `--version-script`), OR translate the `.ver` files to Solaris
-    `-M` mapfiles. libepoxy is a GL-dispatch dep, not the toolkit gate.
-
-  - **GAP 4 — seatd / libseat** — the `nativeLibc && noLibc` assert is FIXED
-    (`systemdSupport = false` drops the Linux-only systemd dep; the builtin
-    backend stays). It now COMPILES but hits `#error Unsupported platform` in
-    `common/drm.c` (DRM device-close `DRM_IOCTL_*` ioctls) and `seatd/client.c`
-    (fd-passing) — they have `__linux__`/`__FreeBSD__`/`__NetBSD__` arms and no
-    `__sun` arm. STAGE-4: add illumos arms (the DRM ioctl set + client fd-pass;
-    illumos has DRM via `/dev/dri` + the standard SCM_RIGHTS fd-passing).
+  - **GAP 4 — seatd / libseat** — unchanged from stage 3: `systemdSupport=false`
+    makes it COMPILE, but `common/drm.c` + `seatd/client.c` `#error` on the
+    missing `__sun` arm (DRM close ioctls + SCM_RIGHTS fd-pass). STAGE-5: add
+    the illumos arms (illumos has DRM via `/dev/dri` + standard SCM_RIGHTS).
 
   - **libinput / udev** — unchanged: illumos has no udev (device enumeration is
-    devfs/`di_*`); needs a device-discovery shim. Lowest priority (input can
-    come after the render stack).
+    devfs/`di_*`); needs a device-discovery shim. Lowest priority.
+
+## NEW x86_64-solaris packages this stage (6, ELF-verified)
+
+| package                | store path                                              | kind      |
+|------------------------|---------------------------------------------------------|-----------|
+| gtk4 4.22.4            | 6yys6wn20fqysr66dpayyy0dli96gm4c-gtk4-4.22.4            | AMD64 .so (libgtk-4 + wayland) |
+| libepoxy 1.5.10        | 7b434b2ill6bdar61p2j9fv5wwchgpam-libepoxy-1.5.10        | AMD64 .so (egl, dlopen dispatch) |
+| libxmlb 0.3.27         | vcamha0m92qd00ln3bk6ysli2n9550d5-libxmlb-0.3.27-lib     | AMD64 .so |
+| libtiff 4.7.1          | gmy96byf4mvb9hczs3bfi3336liv11ml-libtiff-4.7.1-dev      | AMD64 .so |
+| libwebp 1.6.0          | cd7xfdydn5awdp1dws4xqp8izcb8xfvq-libwebp-1.6.0          | AMD64 .so (SIMD off) |
+| desktop-file-utils 0.28| mznp23rbmgcdkkbddj54vwx6n1gahcxr-desktop-file-utils-0.28| AMD64 bin |
+
+libtiff needed `-DCMath_HAVE_LIBC_POW=1` (illumos pow is in libc; FindCMath's
+probe + find_library(m) both miss the hermetic path) and the `man` output
+dropped. libwebp needed `-DWEBP_ENABLE_SIMD=OFF` (the AVX2
+`_mm256_cvtsi256_si32` intrinsic is an undefined symbol on gcc-10 illumos).
+
+Published: **54 store paths** (the 6 packages + their new closure) via
+`oi-publish-wave.sh` -> the cache; `failed=0`. The full gtk4 closure
+(533 already-cached + 54 new) is on the cache.
 
 ## Roadmap to the x86_64 COSMIC desktop ISO
 
 Stage 1: build toolchain (cmake + freetype). DONE.
-Stage 2: python3/meson WIRED + the meson render leaves. DONE.
-Stage 3 (this): **the render/toolkit gate** — glib (wave14 native libintl) +
-the harfbuzz/cairo/pango/gdk-pixbuf/graphene cascade + **wayland core** (native
-epoll + getpeerucred, simpler than the wave15 event-ports port). DONE.
+Stage 2: python3/meson + the meson render leaves. DONE.
+Stage 3: the render/toolkit gate — glib + render cascade + wayland core. DONE.
+Stage 4 (this): **GTK4 (Wayland+EGL) + libepoxy (mapfile wall solved)** + the
+appstream chain up to libxmlb. DONE (libadwaita one dep short).
 
 Next stages, in order:
-1. **libepoxy** — strip `--version-script` at the cc-wrapper level (or use the
-   store GNU ld). The GL dispatch base.
-2. **seatd/libseat illumos arms** — port `common/drm.c` + `seatd/client.c` to
-   `__sun` (DRM ioctls + SCM_RIGHTS fd-pass). The seat-management base.
+1. **xapian libtool/libuuid link** (above) -> **appstream** -> **libadwaita-1**.
+   The one remaining hop for the widget layer.
+2. **seatd/libseat illumos arms** (`common/drm.c` + `seatd/client.c`).
 3. **libinput udev shim** — device discovery via devfs/`di_*`.
-4. **GTK4 + libadwaita + appstream** — the aarch64 wave16/17 recipe
-   (introspection/gstreamer off, wayland on), native. Now unblocked on glib +
-   the render swath + wayland.
-5. **cross-rust / native-rust** + **COSMIC crates** (smithay + cosmic-*).
-6. **compositor** (cosmic-comp) + **the ISO**.
+4. **cross-rust / native-rust** + **COSMIC crates** (smithay + cosmic-*).
+   Also unblocks librsvg (appstream compose) if wanted.
+5. **compositor** (cosmic-comp) + **the ISO**.
 
 ## Honest gap: Firefox and Chrome (out of scope, roadmap only)
 
-Unchanged: Firefox has no illumos target (large port); Chrome/Chromium is
-closed / has no illumos build target. A COSMIC install ships without a
-mainstream browser until one is ported (a separate, large effort).
+Unchanged: Firefox has no illumos target; Chrome/Chromium is closed / has no
+illumos build target. A COSMIC install ships without a mainstream browser until
+one is ported (a separate, large effort).

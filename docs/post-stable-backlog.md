@@ -1453,3 +1453,19 @@ libadwaita not attempted (budget) -- now UNBLOCKED on glib+render+wayland. x86 C
 CLEARED. Remaining stages: libepoxy cc-wrapper strip -> seatd __sun arms -> libinput udev shim -> GTK4/
 libadwaita (wave16/17 native) -> native rust + COSMIC crates -> cosmic-comp + ISO. tranche-stage3.nix +
 shims persisted. The aarch64-fix-native-to-x86 strategy WORKS (glib/wayland both via the aarch64 precedent).
+
+## PS-X86-COSMIC-STAGE4 (2026-08-18): GTK4 BUILT native on x86 + libepoxy mapfile wall SOLVED (restart, no wedge)
+After the prior stage-4 agent WEDGED 6.8h on libglvnd (killed + restarted with GTK4-first + a hard
+anti-wedge budget), the restart LANDED it: +6 x86_64 pkgs (published 54 paths). GTK4 4.22 (libgtk-4.so,
+Wayland+EGL backend, the aarch64 wave16 recipe native: waylandSupport on, x11/vulkan/gstreamer/introspection
+off, libglvnd dropped -- GL via epoxy dlopen; illumos fixes: <linux/input.h> BTN_* shim + epoxy egl.h) +
+libepoxy (THE mapfile wall SOLVED not worked-around: -Dx11=false -Dglx=no -Degl=yes -> EGL/GL by dlopen, no
+link-time libGL -> the libglvnd --version-script wall NEVER APPEARS; Khronos EGL/KHR headers from
+libglvnd.src FOD; NEEDED only libdl+libc) + libxmlb/libtiff/libwebp/desktop-file-utils. libadwaita+appstream
+PARTIAL: libxmlb built, but appstream's last dep xapian's libtool link drops -L/lib/amd64 for -luuid
+(documented; one libtool-surviving-uuid fix from appstream->libadwaita). seatd not attempted (budget). THE
+ANTI-WEDGE LESSON APPLIED: the restart agent stopped grinding xapian's libtool the moment it hit the
+per-package ceiling + reported cleanly (145 tool uses vs the wedge's 6.8h/7-tools/0-output). x86 COSMIC
+toolkit: GTK4 DONE. Remaining ISO stages: xapian-libtool-uuid -> appstream -> libadwaita; seatd __sun arms;
+libinput/udev; native rust + COSMIC crates (the aarch64 crates + x86 rust seed both proven); cosmic-comp +
+ISO. tranche-stage4.nix + shims persisted.
