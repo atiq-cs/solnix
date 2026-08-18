@@ -1628,3 +1628,30 @@ PLAN (toward COSMIC + LLMs in LM-Studio on the Jupiter, SOFTWARE-first):
      itself is a closed x86/arm Electron app -- clarify: a LM-Studio-COMPATIBLE local-LLM stack, not the
      LM-Studio binary, unless a riscv Electron build exists [it doesn't yet]).
 Once the box arrives: boot the R-P60 fw_payload on it (may need the K1 DTB), then R-P61+ per this plan.
+
+## PS-MILKV-JUPITER-PLAN (2026-08-18): the driver-crib plan (docs/riscv-jupiter-driver-plan.md, 479 lines) + 2 corrections
+The Jupiter driver review is done -- CORRECTS two of my earlier assumptions (honest):
+1. The GbE MAC is CUSTOM `spacemit,k1x-emac` (NOT Synopsys DWMAC -- verified by reading the ~3000-line
+   vendor driver: 0 stmmac refs, own DMA descriptors). So NO dwc_gmac crib -- it's a FROM-SCRATCH port
+   (2-3 wk, HIGH risk). The YT8531 PHY IS in BSD mii (small relief).
+2. The in-repo K1 DTB (k1.dts/k1_dtb.h) is WRONG: it models AIA + 4 harts + dw-mmc; the REAL K1 is
+   PLIC + 8 harts + SDHCI. Must regenerate the embedded DTB from the vendor k1-x.dtsi FIRST or every driver
+   binds the wrong topology. (R-P61 must use the corrected DTB.)
+PRIORITIZED CRIB PLAN (effort/risk):
+  P0 K1 clocks/reset/pinctrl -- NO crib (Linux vendor CCU only), minimal enable-only shim, 3-5d, med
+  P0 console UART -- own ns16550 asy_nsuart.c (add spacemit,pxa-uart to the FDT match, reg-shift-2), 1-2h, low
+  P1 SDHCI eMMC/SD -- HAVE uts/sdhci.c + FreeBSD sdhci_fdt.c for gaps, 2-4d, low (NOTE: K1 uses SDHCI not
+     the dw-mmc we built R-P58/59 -- pivot to the illumos sdhci driver we already have)
+  P2 1GbE MAC -- NO crib, custom spacemit,k1x-emac from-scratch, 2-3wk, HIGH
+  P3 PCIe RC -- FreeBSD pci_dw.c+pci_dw_mv.c+pci_host_generic.c, 2-3wk, med-high
+  P4 NVMe -- FreeBSD nvme.c/nvme_ctrlr.c (post-PCIe), 1-2wk, low
+  P5 framebuffer scanout -- FreeBSD simplefb.c/vt_early_fb.c (inherit U-Boot's fb: map+blit via visual_io/
+     /dev/fb), 3-5d inherit / 2-3wk from-scratch, med -- THIS is what puts a SW-rendered COSMIC on HDMI
+  P6 USB3 -- FreeBSD xhci.c+dwc3/dwc3.c, 3-4wk, med
+  GPU PowerVR -- NO BSD driver, do NOT port (llvmpipe SW render + the framebuffer scanout = the desktop path)
+BOOT PATH: U-Boot -> OpenSBI -> booti a0=hartid a1=dtb; console works with the existing reg-shift-2 ns16550
+(+ the pxa-uart FDT match); reaching init needs the clock/reset shim + the SDHCI driver. R-P60 fw_payload
+likely boots to a console banner + early kernel BUT ONLY with the CORRECTED DTB (8-hart/PLIC/SDHCI).
+TIMELINE: P0-P5 to a networked, storage-backed, HDMI-visible SW-rendered desktop ~= 7-10 WEEKS, dominated by
+the 2 custom-IP ports (emac, PCIe). Then COSMIC-on-llvmpipe + local LLMs (llama.cpp CPU+RVV). This is the
+honest scope for a full COSMIC desktop + local LLMs on the physical Jupiter. Plan: docs/riscv-jupiter-driver-plan.md.
