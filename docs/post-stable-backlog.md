@@ -1655,3 +1655,36 @@ likely boots to a console banner + early kernel BUT ONLY with the CORRECTED DTB 
 TIMELINE: P0-P5 to a networked, storage-backed, HDMI-visible SW-rendered desktop ~= 7-10 WEEKS, dominated by
 the 2 custom-IP ports (emac, PCIe). Then COSMIC-on-llvmpipe + local LLMs (llama.cpp CPU+RVV). This is the
 honest scope for a full COSMIC desktop + local LLMs on the physical Jupiter. Plan: docs/riscv-jupiter-driver-plan.md.
+
+## PS-POWERVR-DRIVER (2026-08-18): the Native_SDK is NOT a driver; the OPEN PowerVR driver (Mesa + Linux DRM) IS the port target
+Maintainer asked if powervr-graphics/Native_SDK is the PowerVR driver. HONEST verdict (read the README
+directly): NO. Native_SDK is the APP-SIDE SDK -- its own README says "The PowerVR SDK does NOT provide
+OpenGL ES or Vulkan API system libraries. Please ask the platform provider." framework/ = PVRShell/PVRVk/
+PVRUtils (app boilerplate) + examples/. It's a framework for WRITING apps that CALL a driver, not a driver.
+The powervr-graphics ORG has NO open driver (only SDKs/tools: WebGL_SDK, PVRMonitor, perfdoc). So the SDK
+is a dead end for driving the GPU.
+THE REAL OPEN POWERVR DRIVER EXISTS (2 pieces, both open, portable via crib-and-adapt -- but the crib is
+LINUX-Mesa/Linux-DRM here, not BSD, since PowerVR predates any BSD port):
+1. USERSPACE: Mesa src/imagination -- the open Vulkan driver: vulkan/ (the VK driver) + pco/ (the PowerVR
+   shader compiler, NIR-based, no LLVM) + common/ + csbgen/ (control-stream-block gen) + drm-shim/.
+2. KERNEL: Linux drivers/gpu/drm/imagination -- the open DRM driver, 29 .c files (pvr_ccb/cccb, pvr_context,
+   pvr_fw[+meta/mips/RISCV], pvr_vm, pvr_gem, pvr_queue, pvr_power...). MAINLINED.
+GOOD SIGNS: (a) pvr_fw_riscv.c EXISTS in the DRM driver -> the open driver already handles RISC-V firmware
+coprocessors (the K1 BXE likely uses a RISC-V FW proc -- so the FW-load path is already there). (b) pco (the
+shader compiler) is NIR-based, NO LLVM (unlike NVK's NAK-needs-rust or the AMD hipcc-needs-LLVM issue -- a
+relief). (c) the FIRMWARE blob (PowerVR needs a signed FW coprocessor image) comes from the SpacemiT K1 BSP
+(obtainable, like amdgpu's signed microcode -- NOT a blocker; firmware(9F)-style load).
+THE HONEST SCOPE (this is the BIG one): the BXE-2-32 is PowerVR B-series (Rogue/Volcanic lineage). The open
+Mesa+DRM driver's mature support is for the Rogue/AXE-1-16M class (TI AM62 etc.); B-SERIES (BXE) support is
+NEWER/PARTIAL in the open driver -- so beyond porting Mesa+DRM to illumos, the BXE-specific bring-up (the
+B-series GPU/FW/regs) is where the open driver itself is still maturing upstream. This is a MULTI-MONTH
+effort (kernel DRM port to illumos, ~29 .c files onto the C1 DRM framework we built + the pvr_fw RISC-V load
++ the BXE regs; userspace Mesa powervr+pco onto illumos like RADV/ANV). BUT it's a REAL PATH (open driver
+exists, NIR-not-LLVM, RISC-V FW already handled, blob obtainable) -- exactly the crib-and-adapt doctrine
+(8x validated), just Linux-cribbed + longer because B-series is upstream-young.
+PLAN (the compile-verified first step, like every prior port): C-PVR-a = port the Mesa powervr USERSPACE
+(vulkan/ + pco) to illumos onto the same Mesa toolchain RADV/ANV used (glslang/meson/ninja present) --
+libvulkan_powervr.so compile-phase zero-phantom; C-PVR-b = the kernel DRM (pvr_* .c) onto the C1 DRM
+framework + the pvr_fw_riscv load + the BXE regs, ET_REL zero-phantom. Then on the Jupiter: the SpacemiT FW
+blob + the live bring-up. LEAD/INTERIM: llvmpipe SW render still gives a usable (unaccelerated) COSMIC
+desktop on the box WHILE the PowerVR driver is ported -- so the box is usable early, accelerated later.
