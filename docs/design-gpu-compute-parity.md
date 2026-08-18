@@ -606,3 +606,29 @@ rogue + C-PVR-d BXE-2-32/pco, LINKED) + kernel DRM (C-PVR-b, onto C1) + FW-load 
 (true hardware gates, unchanged): the physical Jupiter + the SpacemiT FW blob + the runtime register-touching
 bring-up. src/drm-port/powervr/powervr-mesa25/ (the .so is gitignored [16MB]; audit outputs + link-powervr25.sh
 + POWERVR-STATUS.md committed).
+
+## GGML_VULKAN (DONE, self-verified): the LLVM-free "as fast as Linux" LLM path builds + links + RUNS on illumos
+The maintainer's NORTH-STAR beachhead -- local-LLM inference via GGML_VULKAN (SPIR-V shaders through glslang,
+NO hipcc/LLVM kernel compile, unlike GGML_HIP) -- builds, links, and runs on x86_64-illumos:
+- Vulkan deps: Vulkan-Headers (source, Khronos v1.3.280, header-only) + Vulkan-Loader (source ->
+  libvulkan.so.1.3.280, a 727KB x86_64-illumos ELF, 4 illumos patches: __sun in COMMON_UNIX_PLATFORMS +
+  /proc/self/path/a.out exe-path + __EXTENSIONS__) + glslang 14.3.0/spirv-headers/spirv-tools (OI pkg) + a
+  written glslc wrapper (python shim -> glslangValidator; OI has no glslc/shaderc).
+- GGML_VULKAN configured ("Including Vulkan backend", Vulkan 1.3.280). vulkan-shaders-gen built + RUNS on
+  illumos (x86_64 ELF) -> 1653 .spv generated, 138 .comp.cpp blobs embedded, a 243KB shaders.hpp. SPIR-V gen
+  works on illumos (the key thing -- glslang, no LLVM).
+- libggml-vulkan.so built (43MB ELF, links libvulkan.so.1, SPIR-V embedded). llama-cli LINKED + RUNS
+  (self-verified: a real AMD64 ELF, "version 0.1.2-dev ... built with GNU 14.3.0 for SunOS amd64").
+  ZERO-PHANTOM (ldd -r = 0 symbol-not-found on both libggml-vulkan + llama-cli; the vk* refs resolve to
+  libvulkan.so.1).
+- llama-cli --list-devices RUNS: initializes the Vulkan backend, calls the loader, enumerates -> reports
+  (none) [no GPU + no RADV ICD on the headless node -- the EXPECTED headless result]. Real device binding via
+  RADV is GPU-hardware-gated, exactly like the RADV/ANV/NVK/PowerVR compile-proofs.
+- illumos fixes (crib-and-adapt): llama.cpp RLIMIT_MEMLOCK/<sys/syslimits.h>/"Unknown architecture" guards;
+  miniaudio _Alignas C++ gate; glslc->glslangValidator wrapper + feature-test hardening (coopmat2/NV skipped);
+  -lsocket -lnsl link fix.
+=> the LLVM-free local-LLM inference engine BUILDS + LINKS + RUNS on illumos (SPIR-V via glslang). The only
+gate to actual token-generation is a real GPU + a loaded RADV ICD (hardware). This is the concrete
+"as fast as Linux" LLM lead path proven buildable on solnix -- on RADV (AMD), and the same GGML_VULKAN binary
+targets ANY Vulkan ICD (ANV/NVK/PowerVR). src/drm-port/ggml-vulkan/ (the 43MB .so + 727KB loader gitignored;
+GGML-VULKAN-STATUS.md + the glslc wrapper + patch scripts committed).
