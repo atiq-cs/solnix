@@ -1708,3 +1708,27 @@ phantom); the SPECIFIC BXE-2-32 support needs a Mesa BUMP to 25.x. Compile-compl
 the C-PVR-b kernel DRM node (next), (3) runtime on the Jupiter. NEXT: C-PVR-b (the kernel DRM driver, Linux
 drm/imagination onto the C1 framework + pvr_fw_riscv) matching the 14-ioctl ABI; + a Mesa-25.x bump for the
 BXE-2-32 device table. Persisted src/drm-port/powervr/.
+
+## PS-COSMIC-APPS (2026-08-18): port the COSMIC desktop APP SUITE (the actual desktop experience)
+A compositor + toolkit is not a desktop -- the DESKTOP EXPERIENCE is the cosmic-* APPS. We have the
+FOUNDATION built (libcosmic 1.0.0 toolkit + iced + smithay + the wayland stack, all cross-built/native,
+with the illumos crate walls cracked in rust-patches/: wayland-backend epoll/CMSG_CLOEXEC, smithay si_addr,
+winit thr_main). Now port the apps that FORM the desktop. All are Rust crates on libcosmic -> they REUSE
+the cracked patches + add per-app deps.
+THE FULL COSMIC APP SUITE (pop-os/cosmic-*):
+  SHELL/SESSION: cosmic-comp (compositor, DRM-walled -> SW-backend/smallvil), cosmic-session (orchestrator),
+    cosmic-workspaces-epoch (overview)
+  PANEL: cosmic-panel (bars), cosmic-applets (network/battery/audio/clock/power/...)
+  LAUNCH: cosmic-launcher, cosmic-app-library (app grid)
+  SETTINGS: cosmic-settings + cosmic-settings-daemon
+  NOTIF: cosmic-notifications ; GREETER: cosmic-greeter (on greetd) ; BG: cosmic-bg/osd/randr
+  CORE APPS: cosmic-files, cosmic-term, cosmic-edit, cosmic-store, cosmic-screenshot, cosmic-player
+  ICONS/THEME: cosmic-icons + the pop/adwaita icon themes
+PRIORITY (a USABLE session first): cosmic-session -> cosmic-panel + cosmic-applets -> cosmic-launcher ->
+  cosmic-term + cosmic-files -> cosmic-settings -> notifications/bg/greeter -> edit/store/screenshot/player.
+PER-APP illumos gaps to expect (crib/adapt): the settings-daemon needs a logind-equivalent (illumos has no
+systemd-logind -> seatd/a shim, or stub the power/session bits); cosmic-files needs trash/mime (xdg dirs);
+several apps use zbus (D-Bus -- dbus IS built) + the wlr-layer-shell protocol (in wayland-protocols, built);
+cosmic-comp is DRM-walled (the SW-render/smallvil path is the interim, per stage6). Each app -> a real
+binary (cross EM_AARCH64 or native x86), compile-verified, published. This turns the toolkit into the actual
+COSMIC DESKTOP. NEXT: wave1 = session+panel+launcher+term+files (the usable core), then the rest.
