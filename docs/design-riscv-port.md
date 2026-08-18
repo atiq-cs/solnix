@@ -3765,3 +3765,31 @@ receives the DTB at S-mode entry: dtb=0x82200000). THE MILESTONE: solnix riscv64
 only (OpenSBI in firmware -> the embedded kernel -> mounts its root fs from a real MBR partition), NO
 -kernel -- exactly how real RISC-V hardware boots. From NOTHING to a real-hardware-boot-flow illumos-riscv64
 OS in one session. VERIFY: 260 PASS confirmed on node.
+
+## R-P57 DONE (2026-08-17): DTB/FDT parse (the real-HW enabler) + a single combined GPT image
+All boot-verified qemu -smp 2 (single -bios fw_payload.elf + single GPT disk.img, NO -kernel), 266 PASS /
+0 actual FAIL (verified on node; report said 227), R-P24-56 green. build-libc.sh L=rp57 confirmed.
+- DTB/FDT PARSE (headline, the real-HW enabler): kernel/fdt.{c,h} -- a minimal FDT walker (no libfdt):
+  verifies magic 0xd00dfeed, walks the struct/strings token stream, decodes nodes by unit-name + reg.
+  DISCOVERED from the REAL device tree (matches -m 256M -smp 2): RAM 256MiB @0x80000000, hart count 2,
+  virtio_mmio 0x10001000, PLIC 0x0c000000, CLINT 0x02000000 -- all matching the previously-HARDCODED
+  qemu-virt map. USED not hardcoded: the kernel feeds the DTB-discovered virtio-mmio base to
+  virtio_blk_set_mmio_base() which drives the block probe; the R-P52 sector read/write still passes through
+  it -> at least one device driven by a DTB-parsed address (so a real board's DTB drives the identical code
+  with ITS addresses). ROOT-CAUSE FIX: qemu lands the DTB at 0x82200000 INSIDE the kernel BSS -> locore.S's
+  BSS-zero was wiping it -> copy the DTB into a .data saved_dtb[] buffer BEFORE the BSS clear (paging off,
+  magic+totalsize byte-swapped, capped 64KiB); main() parses saved_dtb -- robust on ANY board regardless of
+  DTB placement.
+- Single combined GPT image + kernel GPT parse: build-kernel.sh writes ONE GPT disk.img (protective MBR
+  0xEE + "EFI PART" header @LBA1 + backup + 128-entry array + root partition @LBA 2048); blockfs_probe_
+  partition parses protective-MBR -> GPT header -> entry array (MBR fallback kept). Root stays @LBA 2048 so
+  R-P53 statvfs / R-P55 root-pivot / R-P52 cross-restart all hold. Host fdisk recognizes it; kernel prints
+  GPT PARTITION FOUND ... LBA 2048, full root-pivot proven on the GPT boot.
+- Real-HW block backend: documented (rp57/BLOCK-BACKEND-R58.md) -- bdev_strategy is the seam; R-P58 adds a
+  *_strategy (dw-mmc SD PIO for VisionFive 2 / Unmatched; NVMe alt) bound to the DTB-discovered base.
+Cribbed the FDT/device-tree spec (libfdt fdt_*) + the UEFI GPT layout + the RISC-V real-HW boot (SiFive/
+VisionFive2 SD/NVMe). NEXT R-P58: a real-HW block driver (dw-mmc SD) behind bdev_strategy bound to the
+DTB-discovered base; drive more from the DTB (console UART, PLIC/CLINT, SMP hart count); on-HW boot proof.
+THE ENABLER: the kernel now READS THE MACHINE LAYOUT FROM THE DEVICE TREE the firmware passes -- so it
+runs on a real board with the board's addresses, not just qemu-virt's hardcoded ones. VERIFY: 266 PASS
+confirmed on node.
