@@ -1,0 +1,172 @@
+#!/usr/bin/env python3
+# gen_k1_dtb.py -- emit a minimal but CORRECT SpacemiT K1 flattened device tree
+# (FDT/DTB) as a C header (k1_dtb.h) for the R-P61 static-parse self-test.
+#
+# Corrected K1 topology (per the parallel Jupiter driver review + the mainline
+# arch/riscv/boot/dts/spacemit/k1-x.dtsi + OpenSBI spacemit/k1):
+#   - 8 harts (cpu@0..cpu@7), rv64imafdcv, 2 clusters x 4 cores
+#   - PLIC (sifive,plic-1.0.0) at 0xe0000000  -- NOT AIA
+#   - CLINT (sifive,clint0) at 0xe4000000
+#   - console UART: spacemit,pxa-uart @ 0xd4017000, reg-shift 2 (16550 variant)
+#   - SDHCI mmc @ 0xd4280000 (spacemit,k1-sdhci)  -- NOT dw-mmc
+#   - k1x-emac 1GbE MAC @ 0xcac80000 (spacemit,k1x-emac), PLIC IRQ 109
+#   - memory@0 = 8 GiB (Milk-V Jupiter 8GB SKU)
+#
+# We build the FDT struct+strings blocks by hand (spec v0.4). Big-endian u32s.
+import struct, sys
+
+FDT_BEGIN_NODE = 1
+FDT_END_NODE   = 2
+FDT_PROP       = 3
+FDT_END        = 9
+FDT_MAGIC      = 0xd00dfeed
+
+strings = bytearray()
+stroff = {}
+def sidx(name):
+    if name in stroff:
+        return stroff[name]
+    off = len(strings)
+    stroff[name] = off
+    strings.extend(name.encode() + b'\0')
+    return off
+
+struct_blk = bytearray()
+def u32(v): struct_blk.extend(struct.pack('>I', v & 0xffffffff))
+def pad4():
+    while len(struct_blk) % 4: struct_blk.append(0)
+def begin(name):
+    u32(FDT_BEGIN_NODE)
+    struct_blk.extend(name.encode() + b'\0'); pad4()
+def end(): u32(FDT_END_NODE)
+def prop(name, val: bytes):
+    u32(FDT_PROP); u32(len(val)); u32(sidx(name))
+    struct_blk.extend(val); pad4()
+def p_u32(name, v): prop(name, struct.pack('>I', v))
+def p_u64(name, v): prop(name, struct.pack('>Q', v))
+def p_str(name, s): prop(name, s.encode() + b'\0')
+def p_strlist(name, ss): prop(name, b''.join(x.encode()+b'\0' for x in ss))
+def p_reg64(name, base, size): prop(name, struct.pack('>QQ', base, size))
+def p_empty(name): prop(name, b'')
+
+# ---- root ----
+begin("")
+p_u32("#address-cells", 2)
+p_u32("#size-cells", 2)
+p_str("model", "SpacemiT K1 (Milk-V Jupiter)")
+p_strlist("compatible", ["milkv,jupiter", "spacemit,k1"])
+
+# memory@0 : 8 GiB
+begin("memory@0")
+p_str("device_type", "memory")
+p_reg64("reg", 0x00000000, 0x200000000)  # 8 GiB
+end()
+
+# cpus : 8 harts
+begin("cpus")
+p_u32("#address-cells", 1)
+p_u32("#size-cells", 0)
+p_u32("timebase-frequency", 24000000)
+for i in range(8):
+    begin("cpu@%d" % i)
+    p_str("device_type", "cpu")
+    p_u32("reg", i)
+    p_str("compatible", "spacemit,x60")
+    p_str("riscv,isa", "rv64imafdcv")
+    p_str("mmu-type", "riscv,sv39")
+    p_str("status", "okay")
+    begin("interrupt-controller")
+    p_u32("#interrupt-cells", 1)
+    p_empty("interrupt-controller")
+    p_str("compatible", "riscv,cpu-intc")
+    end()
+    end()
+end()
+
+# soc
+begin("soc")
+p_u32("#address-cells", 2)
+p_u32("#size-cells", 2)
+p_str("compatible", "simple-bus")
+p_empty("ranges")
+
+# PLIC (NOT AIA) @ 0xe0000000
+begin("plic@e0000000")
+p_strlist("compatible", ["spacemit,k1-plic", "sifive,plic-1.0.0"])
+p_reg64("reg", 0xe0000000, 0x4000000)
+p_u32("#interrupt-cells", 1)
+p_empty("interrupt-controller")
+p_u32("riscv,ndev", 159)
+end()
+
+# CLINT @ 0xe4000000
+begin("clint@e4000000")
+p_strlist("compatible", ["spacemit,k1-clint", "sifive,clint0"])
+p_reg64("reg", 0xe4000000, 0x10000)
+end()
+
+# console UART: spacemit,pxa-uart @ 0xd4017000, reg-shift 2
+begin("serial@d4017000")
+p_strlist("compatible", ["spacemit,pxa-uart", "intel,xscale-uart"])
+p_reg64("reg", 0xd4017000, 0x100)
+p_u32("reg-shift", 2)
+p_u32("reg-io-width", 4)
+p_u32("clock-frequency", 14857000)
+p_str("status", "okay")
+end()
+
+# SDHCI (NOT dw-mmc) @ 0xd4280000
+begin("mmc@d4280000")
+p_strlist("compatible", ["spacemit,k1-sdhci", "sdhci"])
+p_reg64("reg", 0xd4280000, 0x200)
+p_u32("bus-width", 8)
+p_empty("non-removable")
+p_str("status", "okay")
+end()
+
+# k1x-emac 1GbE MAC @ 0xcac80000 (spacemit,k1x-emac) -- the Jupiter on-board NIC.
+# The DW-GMAC-family MAC; PLIC interrupt 109 (the exact line is the board DTB's
+# interrupts cell -- an on-HW knob).
+begin("ethernet@cac80000")
+p_strlist("compatible", ["spacemit,k1x-emac", "spacemit,k1-emac"])
+p_reg64("reg", 0xcac80000, 0x2000)
+p_u32("interrupts", 109)
+p_str("phy-mode", "rgmii-id")
+p_str("status", "okay")
+end()
+
+end()  # /soc
+end()  # /root
+u32(FDT_END)
+
+# ---- assemble the header + blocks ----
+HDR = 40
+off_mem_rsvmap = HDR
+rsvmap = struct.pack('>QQ', 0, 0)  # one terminating zero entry
+off_struct = off_mem_rsvmap + len(rsvmap)
+# align struct to 4 (already), strings after struct
+off_strings = off_struct + len(struct_blk)
+totalsize = off_strings + len(strings)
+
+hdr = struct.pack('>IIIIIIIIII',
+    FDT_MAGIC, totalsize, off_struct, off_strings,
+    off_mem_rsvmap, 17, 16, 0, len(strings), len(struct_blk))
+blob = hdr + rsvmap + struct_blk + strings
+
+# emit C header
+out = sys.argv[1] if len(sys.argv) > 1 else "k1_dtb.h"
+with open(out, "w") as f:
+    f.write("/* k1_dtb.h -- GENERATED by gen_k1_dtb.py: a minimal CORRECT\n")
+    f.write(" * SpacemiT K1 (Milk-V Jupiter) DTB for the R-P61 static-parse\n")
+    f.write(" * self-test.  Topology: 8 harts, PLIC@0xe0000000 (NOT AIA),\n")
+    f.write(" * CLINT@0xe4000000, spacemit,pxa-uart@0xd4017000 (shift 2),\n")
+    f.write(" * SDHCI mmc@0xd4280000 (NOT dw-mmc), memory@0 = 8 GiB.\n")
+    f.write(" */\n")
+    f.write("#ifndef _RP61_K1_DTB_H\n#define _RP61_K1_DTB_H\n")
+    f.write("static const unsigned char k1_dtb[] = {\n")
+    for i in range(0, len(blob), 12):
+        f.write("\t" + "".join("0x%02x, " % b for b in blob[i:i+12]) + "\n")
+    f.write("};\n")
+    f.write("static const unsigned int k1_dtb_len = %d;\n" % len(blob))
+    f.write("#endif\n")
+print("wrote %s (%d bytes DTB)" % (out, len(blob)))

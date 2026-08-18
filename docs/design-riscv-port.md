@@ -3896,3 +3896,23 @@ faults). The K1 boot-blocker root-caused + fixed:
 NEXT R-P63: the K1 spacemit,k1x-emac 1GbE net (from-scratch from the Linux vendor driver, no BSD crib) +
 on-HW boot when the Milk-V Jupiter lands (flash fw_payload_k1.elf or fw_dynamic_k1.elf + the GPT disk.img on
 SD). src/riscv-port/rp62/ (the .elf/.img/.o gitignored).
+
+## R-P63 DONE: the SpacemiT K1 spacemit,k1x-emac 1GbE net driver -- toward a networked Milk-V Jupiter
+286 assertions (261 explicit PASS lines, self-verified 0 real FAIL, 0 panics). The Jupiter's on-board
+ethernet:
+- k1x-emac driver (kernel/emac.c + emac.h): from-scratch, DW-GMAC-family, cribbed from the Linux
+  spacemit/k1x_emac.c (NO BSD crib -- it's a SpacemiT-specific MAC). MAC init (DMA soft-reset/station-MAC/
+  RGMII PHY-interface/RE|TE) + DW-GMAC normal des0..des3 chained TX+RX DMA rings (KVTOP phys) + emac_tx/
+  emac_rx poll+kick + mdio_read/mdio_write + PHY scan + auto-neg + emac_intr (DMA-status w1c via the K1 PLIC,
+  fi_net_irq). emac.o (10KB) links into unix.elf.
+- DTB-selected + regression-safe (self-verified): the walker discovers spacemit,k1x-emac @ 0xcac80000
+  (PLIC IRQ 109) -> FDT_NET_K1X_EMAC -> emac.c. qemu-virt has NO ethernet@ node -> emac_present()=0, no MMIO
+  touched, the R-P62 root-pivot boot unbroken (dormant-under-qemu, exactly like SDHCI in R-P62).
+- K1 CCU emac clock-enable: k1_ccu_live_bringup() ungates emac0 (APMU+0x03c) via the guarded k1_writel()
+  (gated on k1_on_silicon; no-op under qemu, fires on the Jupiter).
+- virtio-net qemu-runnable proof DEFERRED (a 2nd ~500-line driver, not the "cheap" bar; the net-device seam
+  is in place for a virtio-net sibling later). The k1x-emac compile-proof + DTB-select + dormant-clean-boot
+  IS the R-P63 deliverable, like SDHCI.
+NEXT R-P64: the on-HW boot when the Milk-V Jupiter box lands -- flash rp63/fw_payload_k1.elf + the GPT
+disk.img on SD; SDHCI root + k1x-emac 1GbE come live; calibrate the RGMII clock-delay + station MAC + SDH
+divisor + UART baud on silicon. src/riscv-port/rp63/ (the .elf/.img gitignored).
