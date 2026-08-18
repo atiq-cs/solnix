@@ -1487,3 +1487,21 @@ kernel via a browser-side emulator; NO for illumos-x86/SPARC compiled-to-WASM.
 - PLAN (post-account): (1) build TinyEMU or qemu-riscv64 to WASM (emscripten), (2) xterm.js frontend +
   the emulated 16550 UART <-> terminal, (3) serve fw_payload.elf + disk.img static, (4) a solnix.io
   /browser page. A compelling zero-install demo of the RISC-V port. No hardware, no EC2, weekend-scale.
+
+## PS-SOLNIX-AMI (2026-08-18): a VIEWABLE-desktop EC2 AMI delivered (usable demo; desktop is OI-pkg, NOT nix-pure)
+DELIVERED: ami-000a59cf344644604 (us-east-2, solnix-cosmic-desktop-20260818-035909, snap-05edfce498172fc2e,
+100G gp3 x86_64 uefi ENA hvm). VERIFIED by launching one instance: boots reliably on Nitro (m5.large), SSH
+~60s, nix 2.24.15 + cache.solnix.io substituter (200, trusted key) -> nix-build works. Desktop stack BAKED
+(GTK4/GTK3/cairo/pango/mesa-swrast-llvmpipe/Xvfb/Xorg/twm/xterm/x11vnc/fonts) + /root/solnix-desktop-vnc.sh
+(RAN on verify: Xvfb:1 + twm + xterm + gtk4-demo + gtk3-demo, x11vnc LISTENING on 127.0.0.1:5900 ONLY --
+never world-open). LAUNCH+CONNECT recipe in artifacts/SOLNIX-AMI.md:
+  run-instances --image-id ami-000a59cf344644604 --instance-type m5.large ... (scoped SG, no 0.0.0.0/0)
+  ssh root@<ip> ; /root/solnix-desktop-vnc.sh ; ssh -L 5900:localhost:5900 root@<ip> ; VNC->localhost:5900 (pw solnix)
+Build+verify instances TERMINATED (burner); AMI+snapshot persist. Security: sg-guard CLEAN, no 0.0.0.0/0.
+⚠️ HONEST CAVEAT (the "EXACTLY Nix" north star): the desktop binaries are NATIVE OI-pkg (X11/GTK), NOT
+nix-native -- same distinction as the earlier host-sourced ISO. So this AMI is a USABLE VIEWABLE-DESKTOP
+DEMO (great for "see solnix running in EC2 from the laptop"), NOT a canonical Nix-pure solnix release. The
+NIX-NATIVE desktop stack (GTK4/wayland/cairo/pango/mesa-softpipe from tranche-stage4.nix) IS built +
+published -- a Nix-pure desktop AMI is the next iteration (bake the /nix/store desktop closure instead of
+OI-pkg). For the 1-day burner goal (a connectable desktop the maintainer SEES), this AMI delivers; the
+Nix-pure version is the post-account follow-up. solnix-desktop-vnc.sh -> scripts/.
