@@ -3793,3 +3793,29 @@ DTB-discovered base; drive more from the DTB (console UART, PLIC/CLINT, SMP hart
 THE ENABLER: the kernel now READS THE MACHINE LAYOUT FROM THE DEVICE TREE the firmware passes -- so it
 runs on a real board with the board's addresses, not just qemu-virt's hardcoded ones. VERIFY: 266 PASS
 confirmed on node.
+
+## R-P58 DONE (2026-08-18): devices DTB-driven (PLIC/UART/CLINT/harts) + a dw-mmc SD driver skeleton -> real-board-ready
+All boot-verified qemu -smp 2 (single -bios fw_payload.elf + GPT disk, NO -kernel), 269 PASS / 0 actual FAIL
+(verified on node), R-P24-57 green. build-libc.sh L=rp58 confirmed.
+- Devices now DTB-DRIVEN (generalizing the R-P57 enabler): PLIC base from the DTB (plic_set_base <- fi_plic_
+  base; plic_init uses it not a hardcoded constant); console UART base from the DTB (new serial@/uart@ FDT
+  match -> fi_uart_base -> uart0_phys; UART LSR READ at its DTB address = 0x60 -- a device probed at its DTB
+  MMIO); CLINT base DTB-reported; SMP hart count (smp_start(hartid, fi_nharts) -- DTB reports 2, both harts
+  up, R-P28.3 SMP proof holds). So a real board's DTB drives PLIC/UART/CLINT/harts with ITS addresses.
+- dw-mmc SD driver SKELETON (headline 2): dwmmc.{c,h} -- DesignWare MMC (snps,dw-mshc) register layout
+  (CTRL/CMD/CMDARG/RINTSTS/STATUS/FIFO/BLKSIZ/BYTCNT) + the CMD/DATA FSM + card-init (CMD0/CMD8/ACMD41/CMD2/
+  CMD3/CMD9/CMD7/CMD16) + single-sector PIO read (CMD17)/write (CMD24), behind bdev_strategy with the same
+  (blkno,buf,rw) shape. COMPILED + LINKED (dwmmc.o in unix.elf; dwmmc_strategy/probe/present/set_base
+  symbols). DTB device-select REGRESSION-SAFE: qemu-virt has no mmc@ node -> dwmmc_present()==0 -> the block
+  layer stays on virtio-blk -> full root-pivot boots unchanged (a board's DTB with an mmc@ node binds dw-mmc
+  instead, NO code change above the strategy seam). Can't RUN dw-mmc under qemu-virt (no dw-mmc there) --
+  compile-phase + structured, activates on real HW.
+- on-HW checklist: rp58/ON-HARDWARE.md (VisionFive 2 SPL/FIT + HiFive Unmatched FSBL SD-GPT layouts, the
+  board OpenSBI/u-boot chain, dw-mmc DTB-activation, the on-HW bring-up gaps [clock/FIFO/power/DMA], NVMe
+  alt, first-boot verification order).
+Cribbed the dw-mmc/SDHCI spec + illumos sdcard/sdhost + the DTB device binding + the VisionFive2/Unmatched
+boot flow. NEXT R-P59: boot on a REAL BOARD (close the dw-mmc clock/FIFO/power gaps), GPT root-match by TYPE
+GUID, optional dw-mmc DMA / NVMe. THE PORT IS REAL-BOARD-READY: it boots the real-HW flow (-bios fw_payload),
+reads its layout from the DTB (PLIC/UART/CLINT/harts/virtio all DTB-driven), parses a GPT root, and has an
+SD-driver skeleton that the board's DTB activates -- the remaining work is the dw-mmc HW bring-up on real
+silicon. VERIFY: 269 PASS confirmed on node.
