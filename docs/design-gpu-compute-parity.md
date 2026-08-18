@@ -562,3 +562,24 @@ BXS-4-64). FOUND: Mesa 25.3.6 (NOT 25.1.4) ships it.
 => the Jupiter's EXACT-GPU userspace driver is compile-proven on illumos + ABI-coherent with the kernel
 driver; the final .so link is gated on building the CLC/LLVM-18 toolchain on the node (a bounded build-dep
 task, not a port). src/drm-port/powervr/powervr-mesa25/.
+
+## CLC/LLVM toolchain (LLVM 20.1.8) -- unblocks the Mesa-25 PowerVR .so link AND GGML_HIP (one OI pkg)
+The CLC toolchain that pco's usclib (mesa_clc) needs -- and that GGML_HIP's .cu kernels need -- is now
+complete on illumos:
+- LLVM 20.1.8 via OI pkg `developer/clang-20` (343MB, ~1min install -- NOT a multi-hour source build). ONE
+  package delivered headers + llvm-config + clang + ALL THREE targets in one shot: X86 (mesa_clc) + SPIRV
+  (mesa_clc) + AMDGPU/amdgcn (GGML_HIP). The lazy win.
+- Built from source against it: SPIRV-Tools 2026.4.1 (spirv-as/val/opt + SPIRV-Tools.pc), SPIRV-LLVM-
+  Translator (llvm_release_200 -> llvm-spirv + libLLVMSPIRVLib.a), libclc 0.2.0 (release/20.x ->
+  spirv-mesa3d-.spv + spirv64-mesa3d-.spv [the mesa_clc inputs] + amdgcn bitcode + libclc.pc).
+- PROVEN end-to-end: OpenCL-C -> clang -target spirv64 -> llvm-spirv -> spirv-val = SPIRV VALID (the exact
+  mesa_clc chain).
+- Satisfies Mesa 25.3.6 -Dmesa-clc=enabled -Dllvm=enabled (meson sees llvm-config 20.1.8 + libclc 0.2.0 +
+  SPIRV-Tools). => the final PowerVR libvulkan_powervr_mesa.so (25.3.6, WITH BXE-2-32) is now LINKABLE (the
+  one-command finish is in CLC-TOOLCHAIN-STATUS.md §6; the only logistics = co-locate the Mesa 25.3.6 tree +
+  this toolchain on one node).
+- GGML_HIP: the AMDGPU/amdgcn LLVM backend gap is CLOSED (already in OI clang-20). GGML_HIP's remaining need
+  is the hipcc wrapper (not an LLVM-backend gap) -- the "as fast as Linux" LLM path advances.
+- illumos runtime gotcha (baked into env.sh): LD_LIBRARY_PATH=/usr/clang/20/lib:/usr/gcc/14/lib/amd64
+  (libLLVM.so.20.1 + gcc libstdc++; source binaries got no runpath).
+src/drm-port/clc-toolchain/ (env.sh + CLC-TOOLCHAIN-STATUS.md).
