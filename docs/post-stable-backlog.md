@@ -1688,3 +1688,23 @@ libvulkan_powervr.so compile-phase zero-phantom; C-PVR-b = the kernel DRM (pvr_*
 framework + the pvr_fw_riscv load + the BXE regs, ET_REL zero-phantom. Then on the Jupiter: the SpacemiT FW
 blob + the live bring-up. LEAD/INTERIM: llvmpipe SW render still gives a usable (unaccelerated) COSMIC
 desktop on the box WHILE the PowerVR driver is ported -- so the box is usable early, accelerated later.
+
+## PS-POWERVR-C-PVR-a (2026-08-18): the PowerVR userspace Vulkan driver COMPILES zero-phantom on illumos
+The Jupiter GPU driver, userspace half: the Mesa PowerVR (imagination-experimental) Vulkan driver COMPILES
+zero-phantom on illumos x86_64. libvulkan_powervr_mesa.so (6.9MB) + libpowervr_rogue.so (9.5MB, the rogue
+NIR shader compiler -- NO LLVM, NO Rust, the relief predicted). ~97k LOC (71k .c/83 files + 26k .h). 14
+pvr_drm ioctls (0x00-0x0d, direct drmIoctl like ANV, Linux _IOC shim to match C-PVR-b). ZERO-PHANTOM: 2603
+undefs (2345 WEAK intra-.so VK dispatch + 258 GLOB all real: libpowervr_rogue/libdrm/libz/libstdc++/libc)
+-> 0 truly-unresolved; dlopen(RTLD_NOW) OK; vk_icdGetInstanceProcAddr non-NULL. ICD wired
+(powervr_mesa_icd.x86_64.json). One powervr break fixed: pvr_drm.h pulls <linux/const.h> for _BITULL ->
+added bit-helpers to the libdrm-out shim + #ifdef __sun guard. Reused the 5 Mesa-wide illumos fixes +
+-Dllvm=disabled (no Rust gate, the one structural diff from NVK).
+⚠️ PRECISE HONEST FINDING: the pinned Mesa 24.0.9 imagination driver supports GX6250 (Rogue) + AXE-1-16M
+(A-series) + BXS-4-64 (B-series) -- but the JUPITER's BXE-2-32 is NOT in the tree ("BXE" appears nowhere).
+The compiler is rogue/ (pco landed POST-24.0.9). So B-series scaffolding exists but the BXE-2-32 DEVICE
+TABLE needs a NEWER Mesa (25.x-era, which also brings pco). => the driver FRAMEWORK is on illumos (zero-
+phantom); the SPECIFIC BXE-2-32 support needs a Mesa BUMP to 25.x. Compile-complete: the whole tree + both
+.so's + ICD + the 14-ioctl surface. Hardware-gated: (1) the BXE-2-32 device table (Mesa 25.x + pco), (2)
+the C-PVR-b kernel DRM node (next), (3) runtime on the Jupiter. NEXT: C-PVR-b (the kernel DRM driver, Linux
+drm/imagination onto the C1 framework + pvr_fw_riscv) matching the 14-ioctl ABI; + a Mesa-25.x bump for the
+BXE-2-32 device table. Persisted src/drm-port/powervr/.
