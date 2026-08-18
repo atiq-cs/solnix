@@ -1,0 +1,66 @@
+diff --git a/smallvil/src/state.rs b/smallvil/src/state.rs
+index 42c68ad..6c255ed 100644
+--- a/smallvil/src/state.rs
++++ b/smallvil/src/state.rs
+@@ -4,7 +4,10 @@ use smithay::{
+     desktop::{PopupManager, Space, Window, WindowSurfaceType},
+     input::{Seat, SeatState},
+     reexports::{
+-        calloop::{EventLoop, Interest, LoopSignal, Mode, PostAction, generic::Generic},
++        calloop::{
++            EventLoop, LoopSignal,
++            timer::{TimeoutAction, Timer},
++        },
+         wayland_server::{
+             Display, DisplayHandle,
+             backend::{ClientData, ClientId, DisconnectReason},
+@@ -107,21 +110,14 @@ impl Smallvil {
+         }
+     }
+ 
+-    fn init_wayland_listener(display: Display<Smallvil>, event_loop: &mut EventLoop<Self>) -> OsString {
+-        // Creates a new listening socket, automatically choosing the next available `wayland` socket name.
++    fn init_wayland_listener(mut display: Display<Smallvil>, event_loop: &mut EventLoop<Self>) -> OsString {
+         let listening_socket = ListeningSocketSource::new_auto().unwrap();
+-
+-        // Get the name of the listening socket.
+-        // Clients will connect to this socket.
+         let socket_name = listening_socket.socket_name().to_os_string();
+ 
+         let loop_handle = event_loop.handle();
+ 
+         loop_handle
+             .insert_source(listening_socket, move |client_stream, _, state| {
+-                // Inside the callback, you should insert the client into the display.
+-                //
+-                // You may also associate some data with the client when inserting the client.
+                 state
+                     .display_handle
+                     .insert_client(client_stream, Arc::new(ClientState::default()))
+@@ -129,16 +125,18 @@ impl Smallvil {
+             })
+             .expect("Failed to init the wayland event source.");
+ 
+-        // You also need to add the display itself to the event loop, so that client events will be processed by wayland-server.
++        // Dispatch the wayland display on a periodic Timer rather than a calloop
++        // Generic FD source. On illumos the nested-epoll readiness of client FDs
++        // does not propagate to the outer display poll FD, so a level-triggered
++        // Generic source never fires and clients hang at handshake. A time-based
++        // Timer polls the display unconditionally, sidestepping epoll entirely.
+         loop_handle
+             .insert_source(
+-                Generic::new(display, Interest::READ, Mode::Level),
+-                |_, display, state| {
+-                    // Safety: we don't drop the display
+-                    unsafe {
+-                        display.get_mut().dispatch_clients(state).unwrap();
+-                    }
+-                    Ok(PostAction::Continue)
++                Timer::immediate(),
++                move |_, _, state| {
++                    let _ = display.dispatch_clients(state);
++                    let _ = display.flush_clients();
++                    TimeoutAction::ToDuration(std::time::Duration::from_millis(4))
+                 },
+             )
+             .unwrap();

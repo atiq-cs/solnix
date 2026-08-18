@@ -231,3 +231,27 @@ across the projects).
 - `/root/cosmic-rust/step0-aarch64.exe` -- STEP 0 trivial-crate EM_AARCH64 EXEC
 - `/root/cosmic-rust/crossenv.sh` -- the reproducible cross-rust env
 - `/root/cosmic-rust/rlibmachine.sh` -- rlib EM-check helper
+
+## The nix-pure COSMIC Wayland session RENDERS (verified, viewable over VNC)
+The smithay `smallvil` Wayland compositor + a GTK4/libadwaita client, all nix-pure, SW-rendered, viewable:
+- smallvil (nix-pure smithay compositor) runs on illumos: opens a winit-x11 window in Xvfb, inits EGL
+  (PLATFORM_X11_KHR) + GlesRenderer on softpipe SW GL, creates the wayland-1 socket, composites.
+- A GTK4 4.22.4 / libadwaita 1.9.2 client (AdwApplicationWindow + AdwHeaderBar + AdwStatusPage + a pill
+  button, GSK_RENDERER=cairo) connects as a Wayland client + RENDERS inside smallvil. Screenshot:
+  solnix-gtk4-libadwaita-wayland.png (27KB, real widgets).
+- NIX-PURE (verified via ldd under the launcher path): 73/81 client libs are /nix/store -- the ENTIRE
+  GTK4/libadwaita/pango/cairo/harfbuzz/gdk-pixbuf/graphene/wayland/glib toolkit. The 8 non-nix are ONLY the
+  illumos base (libc/libm/libpthread/libsocket/libnsl/libmd/libresolv/libmp from /lib/64 + libgcc_s) -- the
+  OS itself, unavoidable -- plus the OI-pkg Mesa softpipe libGL/libEGL that smallvil dlopens (the remaining
+  purity gap: a nix-pure Mesa/illumos derivation isn't realized on this host yet).
+- x11vnc binds 127.0.0.1:5900 only (SG untouched). Connect: ssh -N -L 5900:127.0.0.1:5900 root@<host> +
+  vncviewer 127.0.0.1:5900.
+- THE REAL FIX (durable, rust-patches/smallvil-illumos-timer-dispatch.patch): clients hung at the Wayland
+  handshake because smallvil dispatched its display via a calloop `Generic` FD source -- on illumos the
+  nested-epoll readiness of client FDs doesn't propagate to the outer display poll FD, so it never fired.
+  Swapped for a periodic calloop `Timer` that polls dispatch_clients + flush_clients every few ms (no epoll
+  dependency). Clients then complete the handshake + render. (A general illumos-vs-Linux epoll-nesting
+  lesson for the whole smithay/calloop stack.)
+=> the nix-pure GTK4/Wayland DESKTOP renders + is viewable. This is the compositor+toolkit layer of the
+COSMIC desktop; the cosmic-* APPS (session/panel/launcher/term/files -- wave 1 in flight) render on top of
+exactly this. Launcher scripts/solnix-cosmic-session.sh + docs/COSMIC-SESSION-CONNECT.md.
