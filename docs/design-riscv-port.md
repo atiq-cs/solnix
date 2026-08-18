@@ -3843,3 +3843,29 @@ NEXT R-P60: on-a-real-board boot (the dw-mmc HW is now complete -- needs a Visio
 uniq/nl. THE PORT: real-HW block driver COMPLETE (clock/FIFO/power/DMA), GPT-GUID root, DTB-driven -- fully
 software-ready for real RISC-V silicon (only the on-board dw-mmc runtime + a physical board remain).
 VERIFY: 273 PASS confirmed on node.
+
+## R-P61 DONE (2026-08-18): SpacemiT K1 (Milk-V Jupiter) bring-up scaffolding -- CORRECTED topology + 8-hart SMP
+All boot-verified qemu (-smp 2 regressions + a dedicated -smp 8 K1 boot), 277 PASS / 0 real FAIL (verified
+on node), R-P24-60 green. build-libc.sh L=rp61 confirmed. Built to the CORRECTED K1 topology (from the
+driver-review corrections -- the in-repo DTB was wrong AIA/4-hart/dw-mmc):
+- K1 DTB parse: generated a minimal CORRECT K1 DTB (gen_k1_dtb.py -> k1_dtb.h, hand-built FDT bytes, no dtc
+  on node): PLIC (NOT AIA), 8 harts, SDHCI (NOT dw-mmc), spacemit,pxa-uart shift 2, CLINT, 8 GiB. Extended
+  fdt.c (the R-P57 walker) to capture UART/MMC compatible + reg-shift, classify FDT_UART_PXA/NS16550 +
+  FDT_MMC_SDHCI/DWMMC, split fdt_discover_ptr/fdt_discover so the static blob parses via the SAME walker.
+  PROOF: discovered 8 harts + PLIC@0xe0000000 + CLINT@0xe4000000 + pxa-uart@0xd4017000 shift2 + SDHCI@
+  0xd4280000 + 8 GiB (DRAM base 0x0).
+- 8-hart SMP (-smp 8): generalized smp_start from R-P28's single secondary to all N (up to 8); per-hart
+  stacks. ROOT-CAUSED + fixed a real bug: OpenSBI picked boot-hart 4/7 under -smp 8, exposing a 1-bit
+  hartid encoding in the U-trap entry (andi tp,sp,1) -> wrong hartid -> cpu_cur[wrong] NULL -> fork fault;
+  fixed to pack hartid in the 4 free low bits (andi tp,sp,15) + NCPU 2->8. PROOF: SMP PROVEN work ran on 8
+  distinct harts (hart0=5...hart7=2).
+- K1 clock/reset shim: k1.c documents the CCU map (MPMU/APBC/APBS/APMU) + k1_ccu_enable(); console-UART +
+  SDHCI clocks wired as the first consumers (compile-phase no-op under qemu; real writel() -> R-P62).
+- K1 console UART: per the correction -- NO new driver, FDT_UART_PXA selects the existing ns16550 path at
+  reg-shift 2.
+⚠️ HONEST HW FINDING: the R-P60 fw_payload will NOT boot on the Jupiter AS-IS -- the K1 DRAM base is 0x0,
+NOT qemu-virt's 0x80000000, so the qemu-virt fw_payload (FW_TEXT_START=0x80000000) must be RELINKED to the
+K1 load convention OR use the vendor OpenSBI + fw_dynamic (R-P62). Parse+UART are ready; the load address is
+the open item. K1-MEMORY-MAP.md documents the bases + the 2 calibration knobs. NEXT R-P62: real eMMC/SD via
+the existing uts/sdhci.c on the K1 + net + the K1-addressed fw_payload (relink to DRAM base 0x0) + on-HW
+bring-up when the Jupiter lands. VERIFY: 277 PASS confirmed on node.
