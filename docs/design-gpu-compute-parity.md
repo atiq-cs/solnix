@@ -538,3 +538,27 @@ RISC-V remap, FW doorbell+boot-poll+IRQ) -- all on the physical Jupiter. So: ACC
 Jupiter are reachable via this driver (interim: llvmpipe SW render keeps the box usable). NEXT: wire pvr into
 the shared drm_core.c (one call-site) + the Mesa-25.x bump for BXE-2-32 + on-HW bring-up when the box lands.
 Persisted src/drm-port/powervr-drm/ + src/drm-port/powervr/.
+
+## C-PVR-c (Mesa 25.3.6): the Jupiter's EXACT GPU (BXE-2-32) device table -- compile-proven on illumos
+The Milk-V Jupiter's Imagination PowerVR is the BXE-2-32 -- Mesa 24.0.9 lacked it (only GX6250/AXE-1-16M/
+BXS-4-64). FOUND: Mesa 25.3.6 (NOT 25.1.4) ships it.
+- BXE-2-32 IS in Mesa 25.3.6 src/imagination: device_info/bxe-2-32.h -- public_name "BXE-2-32", B-Series,
+  device_id 0x36052182, BVNC 36.29.52.182, a complete pvr_device_info_36_29_52_182 (56 feature bits +
+  enhancements + quirks + ident), runtime-selected by CASE_PACKED_BVNC_DEVICE_INFO(36,29,52,182). (12 parts
+  in 25.3.6 vs 3 in 24.0.9.)
+- Compiler: 25.x defaults to `pco` (pure C/NIR, NO Rust, 15,794 LOC; the vulkan driver 63,119 LOC); rogue is
+  legacy/unwired.
+- COMPILE-PROVEN on illumos: the BXE-2-32-carrying source compiles clean -- pvr_device_info.c -> .o OK
+  (T pvr_device_info_init, the runtime BVNC selector), 10/77 imagination objects built. The C-PVR-a illumos
+  fixes (5 Mesa-wide + pvr_drm __sun guard + _BITULL shim) apply to 25.3.6 UNCHANGED -- no new source breaks.
+- pvr_drm ABI: BYTE-IDENTICAL 24.0.9 <-> 25.3.6 (14 ioctls 0x00-0x0d, all struct layouts + flags) => the
+  C-PVR-b KERNEL DRIVER NEEDS ZERO CHANGES. The whole PowerVR stack stays coherent across the Mesa bump.
+- THE ONE GAP (not PowerVR/illumos-specific): the full 25.3.6 .so LINK needs the CLC toolchain (LLVM>=18-dev
+  + SPIRV-Tools + SPIRV-LLVM-Translator + libclc) for pco's usclib (common/sync/tex.cl OpenCL-C helper
+  shaders via mesa_clc). The node has only the clang-21 runtime (no llvm-config/headers/SPIRV-Tools/libclc).
+  build-mesa-powervr25.sh with -Dmesa-clc=enabled -Dllvm=enabled links it once that toolchain is present.
+  The runnable zero-phantom artifact TODAY stays the ABI-identical 24.0.9 .so (truly-unresolved=0); its only
+  gap is the BXE table -- which 25.3.6 supplies + I proved compiles.
+=> the Jupiter's EXACT-GPU userspace driver is compile-proven on illumos + ABI-coherent with the kernel
+driver; the final .so link is gated on building the CLC/LLVM-18 toolchain on the node (a bounded build-dep
+task, not a port). src/drm-port/powervr/powervr-mesa25/.

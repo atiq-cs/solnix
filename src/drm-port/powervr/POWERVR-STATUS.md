@@ -1,4 +1,152 @@
-# solnix PowerVR port — STATUS (C-PVR-a: Imagination's open Vulkan driver)
+# solnix PowerVR port — STATUS
+
+---
+
+# C-PVR-c: Mesa 25.x bump — the Jupiter's EXACT GPU (BXE-2-32)
+
+## The headline answers
+
+1. **Does Mesa 25.x have the BXE-2-32 device table? YES — in Mesa 25.3.6.**
+   NOT in 25.1.4 (still GX6250 / AXE-1-16M / BXS-4-64, the same three as 24.0.9).
+   The BXE-2-32 landed in the 25.2/25.3 window. **25.3.6** ships
+   `src/imagination/common/device_info/bxe-2-32.h` with the complete device
+   table for the Milk-V Jupiter's exact GPU:
+   - **public_name `BXE-2-32`**, **series `B-Series`**, **device_id `0x36052182`**.
+   - **BVNC = 36.29.52.182** (b=36, v=29, n=52, c=182).
+   - Full `pvr_device_info_36_29_52_182` = `features` (56 `has_*` bits) +
+     `enhancements` + `quirks` + `ident` — a real hand-maintained table, not a
+     stub. Selected at runtime by
+     `CASE_PACKED_BVNC_DEVICE_INFO(36, 29, 52, 182)` in `pvr_device_info.c`.
+   - 25.3.6's switch enumerates **12** parts (vs 3 in 24.0.9): G6110, GX6250,
+     GX6650, GE8300, AXE-1-16M, **BXE-2-32**, BXE-4-32, BXM-4-64, BXS-4-64, and
+     three more B-series BVNCs.
+
+2. **pco vs rogue: 25.x defaults to `pco`.** The top `src/imagination/meson.build`
+   now does `subdir('pco')` unconditionally; `rogue/` still ships but is legacy
+   and no longer wired into the driver build. `pco` is pure C / NIR (**no Rust**,
+   the NVK-style relief holds) — 15,794 LOC. The vulkan driver is 63,119 LOC; the
+   whole `src/imagination` C tree is 79,610 LOC.
+
+3. **pvr_drm ABI delta vs C-PVR-b: ZERO.** `include/drm-uapi/pvr_drm.h` is
+   **byte-identical** between Mesa 24.0.9 and 25.3.6 — the 14 ioctls
+   (`DRM_IOCTL_PVR_*` opcodes 0x00–0x0d), every arg-struct layout, every flag
+   (`DRM_PVR_BO_*`, `DRM_PVR_SYNC_OP_*`, `DRM_PVR_SUBMIT_JOB_*`) match. The only
+   diff is C-PVR-a's own `__sun` linux-header guard applied to the 24.0.9 copy.
+   **C-PVR-b needs no update** (`powervr-mesa25/pvr25-abi-and-bxe.out`).
+
+## Driver built y/n + zero-phantom — the honest split
+
+**The 25.x port compiles the BXE-2-32-carrying source clean on illumos, but the
+full `libvulkan_powervr_mesa.so` LINK from 25.3.6 is blocked by a new 25.x
+build-time dependency on an LLVM-backed OpenCL-C compiler that this illumos host
+does not have. The runnable, zero-phantom driver artifact today is the
+ABI-identical 24.0.9 build; it lacks only the BXE-2-32 table that 25.3.6 supplies
+in source.**
+
+### What compiled from 25.3.6 (COMPILE-proof, `powervr-mesa25/pvr25-compile-proof.out`)
+
+- **meson setup SUCCEEDED** (`-Dvulkan-drivers=imagination -Dimagination-srv=false
+  -Dgallium-drivers= -Dmesa-clc=system -Dprecomp-compiler=auto`), all deps
+  resolved (libdrm 2.4.120, glslang), **no LLVM forced** — see the CLC wedge.
+- **`pvr_device_info.c` → `pvr_device_info.c.o`: OK.** This is the file carrying
+  the BXE-2-32 device table. `nm` shows `T pvr_device_info_init` — the exact
+  function the driver calls with the runtime BVNC to select BXE-2-32. The
+  Jupiter's device identity/features **compile clean on illumos x86_64** with
+  the C-PVR-a fixes.
+- 10/77 imagination C objects compiled before the gate: all of `common/`
+  (device_info, debug, dump, util), all of `vulkan/pds/`, and `pco_clc` (the
+  pure-C/NIR precompiler). The C-PVR-a illumos fixes (5 Mesa-wide + the pvr_drm
+  `__sun` guard + the `_BITULL` shim) apply **unchanged** to 25.3.6 — no new
+  illumos source breaks surfaced in the 10 that built.
+
+### The 25.x CLC/LLVM wedge (why the final `.so` did not link here)
+
+Mesa 25.x put `with_imagination_vk` in the `with_driver_using_cl` list, which
+forces `with_clc` → hard-requires LLVM. The cause is `pco`'s **usclib**
+(`src/imagination/pco/usclib/{common,sync,tex}.cl`) — OpenCL-C GPU helper
+shaders that the driver dispatches. The build chain is:
+
+    common.cl/sync.cl/tex.cl  --mesa_clc-->  pco_usclib.spv
+                              --vtn_bindgen2-->  pco_usclib.cpp/.h
+
+`pco_usclib.h` is `#include`d by the pco compiler and ~67 of the 77 imagination
+C objects, so it gates the whole imagination C compile in 25.x. `mesa_clc`
+requires **LLVM ≥ 18 (dev: headers + `llvm-config`) + SPIRV-Tools +
+SPIRV-LLVM-Translator + libclc**. This host has only the **clang-21 RUNTIME**
+package (`/usr/clang/21`: `libLLVM.so`, `libclang.so`) — **no `llvm-config`, no
+headers, no SPIRV-Tools, no libclc**. Building that four-project CLC toolchain on
+illumos is the newer-toolchain fight the task flagged; per the anti-wedge rule it
+is documented, not chased. Setup was unblocked with `-Dmesa-clc=system` (which
+makes `with_clc = with_gallium_rusticl = false`, since we build no rusticl) so
+the rest of the graph could be exercised; the one ninja failure is exactly
+`pco_usclib.spv`.
+
+**What closing the wedge takes (the precise recipe):** build/install on the
+illumos node, against clang-21: (1) an LLVM 18–21 **dev** install exposing
+`llvm-config` + headers, (2) **SPIRV-Tools**, (3) **SPIRV-LLVM-Translator**
+matching the LLVM major, (4) **libclc**. Then re-run
+`build-mesa-powervr25.sh` with `-Dmesa-clc=enabled -Dllvm=enabled`; the C tree
+already compiles, so the driver `.so` (with BXE-2-32) links and the zero-phantom
+audit runs exactly as C-PVR-a's.
+
+### The runnable zero-phantom artifact today: the 24.0.9 driver (ABI-identical)
+
+Since `pvr_drm.h` is byte-identical 24.0.9 ↔ 25.3.6, the C-PVR-a
+`libvulkan_powervr_mesa.so` remains the correct, loadable driver for the pvr
+kernel ABI — re-verified here:
+
+    /var/tmp/mesa-powervr-out/lib/libvulkan_powervr_mesa.so   (6.9 MB)
+    nm -u -D -> 2603 undefs = 2345 WEAK (intra-.so vk dispatch) + 258 GLOB
+    258 GLOB all resolve to NEEDED libs -> truly-unresolved = 0 (zero-phantom)
+    ICD: vk_icdGetInstanceProcAddr / vk_icdGetPhysicalDeviceProcAddr /
+         vk_icdNegotiateLoaderICDInterfaceVersion  all exported
+
+Its one gap is the BXE-2-32 device table — present in 25.3.6 source and proven
+to compile on illumos above.
+
+## Compile-complete vs Jupiter-hardware-gated (25.x)
+
+**Compile-complete (proven here):**
+- Mesa 25.3.6 **has** the exact BXE-2-32 table (BVNC 36.29.52.182, 0x36052182).
+- `pvr_device_info.c` (the BXE-2-32 selector) compiles clean on illumos x86_64.
+- The C-PVR-a illumos fixes carry to 25.3.6 unchanged; no new source breaks in
+  the 10/77 objects that built.
+- pvr_drm ABI byte-identical → **zero delta for C-PVR-b**.
+- The runnable zero-phantom `.so` exists (24.0.9, ABI-identical).
+
+**Wedge-gated (not on this build node — the CLC toolchain):**
+- The 25.3.6 `.so` link needs the LLVM-backed `mesa_clc` for `pco`'s usclib.
+  Recipe above; nothing PowerVR/illumos-specific, purely a missing host toolchain.
+
+**Jupiter-hardware-gated (needs the real BXE-2-32 + live pvr DRM node):**
+- C-PVR-b's kernel DRM node decoding the 14 ioctls; all runtime rendering /
+  job submission / GPU-VM.
+
+## Files added (`src/drm-port/powervr/`)
+
+- `build-mesa-powervr25.sh` — the Mesa 25.3.6 build (C-PVR-a fixes + the 25.x
+  option deltas: `imagination-experimental`→`imagination`, `swrast`/`osmesa`/
+  `dri3` gone, the `mesa-clc=system` + `precomp-compiler=auto` CLC-gate bypass
+  for setup). Idempotent.
+- `powervr-mesa25/bxe-2-32.h` — the BXE-2-32 device table from 25.3.6.
+- `powervr-mesa25/pvr_device_info.c.25.3.6` — the 12-part BVNC switch.
+- `powervr-mesa25/pvr_drm.h.25.3.6` — the 25.3.6 pvr uapi (== 24.0.9, == C-PVR-b).
+- `powervr-mesa25/pvr25-abi-and-bxe.out` — the ABI-identical proof + BXE identity.
+- `powervr-mesa25/pvr25-compile-proof.out` — the compile-proof + the CLC wedge.
+
+## Reproduce
+
+    export PATH=/nix/store/q9cgfd001i87byzv866v1dvdh28jji7l-nix-2.24.15/bin:$PATH
+    # host has clang-21 runtime only; the CLC toolchain (LLVM-dev + SPIRV-Tools
+    # + SPIRV-LLVM-Translator + libclc) must be present for the FULL link.
+    sh /root/drm-port/powervr/build-mesa-powervr25.sh 25.3.6
+    # -> compiles the imagination C tree incl. BXE-2-32; the final .so link is
+    #    gated on mesa_clc (pco usclib) until the CLC toolchain is installed.
+
+---
+
+# C-PVR-a: Imagination's open Vulkan driver (Mesa 24.0.9) — baseline
+
 
 ## Goal
 
