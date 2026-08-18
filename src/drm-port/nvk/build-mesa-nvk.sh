@@ -8,24 +8,25 @@
 # (DRM_NOUVEAU_*) through drmCommandWrite/WriteRead -- the exact analogue of
 # RADV's libdrm_amdgpu winsys.
 #
-# GATE: NVK's shader compiler NAK (src/nouveau/compiler/nak) is written in RUST
-# (requires rustc >= 1.73.0 + rust.bindgen -> libclang). This is unlike RADV
-# (ACO, C++) and ANV (brw, C++), which need no LLVM/Rust. Mesa 24.0.9 names the
-# driver `nouveau-experimental` -- upstream's own signal that NVK is early here.
-# meson config resolves EVERY dependency (libdrm_nouveau/libdrm found, glslang
-# found, nvidia_headers/nil/mme/winsys all C) and dies at exactly one point:
-#   src/nouveau/compiler/meson.build:7: ERROR: Unknown compiler(s): [['rustc']]
-# The node has no rustc/cargo/bindgen/libclang. Bootstrapping the Rust 1.73
-# toolchain + bindgen (which needs libclang == building LLVM/clang, the very
-# drag NVK's NAK avoids at runtime) on illumos is a separate multi-hour project.
-# This script configures NVK to that gate; the nouveau ioctl port + libdrm_nouveau
-# + the ICD contract are all COMPILE-ready behind it.
+# RUST WIRED: NVK's shader compiler NAK (src/nouveau/compiler/nak) is Rust.
+#   rustc/cargo  = the native x86_64-illumos OI seed 1.97.1 (>> NAK's 1.73 min)
+#                  /nix/store/cvs3wrjnadd8prryvhy37pyzzc8dy1cd-rust-illumos-1.97.1
+#   bindgen      = bindgen-cli 0.69.4, built once via the seed cargo
+#                  /var/tmp/bindgen-out/bin/bindgen
+#   libclang     = /usr/clang/21/lib/libclang.so.21.1.8 (OI runtime/clang-21 pkg)
+#   syn/quote/proc-macro2/unicode-ident = crate tarballs pre-fetched into
+#                  subprojects/packagecache (offline; --wrap-mode=nodownload)
 set -u
-export PATH=/root/mesa-venv/bin:/usr/gnu/bin:/usr/bin:$PATH
+SEED=/nix/store/cvs3wrjnadd8prryvhy37pyzzc8dy1cd-rust-illumos-1.97.1
+CLANG=/usr/clang/21
+BINDGEN=/var/tmp/bindgen-out/bin/bindgen
+export PATH="$SEED/bin:/var/tmp/bindgen-out/bin:/root/mesa-venv/bin:/usr/gnu/bin:/usr/bin:$PATH"
 MESON=/root/mesa-venv/bin/meson
 NINJA=/root/mesa-venv/bin/ninja
 GCC=/usr/gcc/14; CC="$GCC/bin/gcc"; CXX="$GCC/bin/g++"; export CC CXX
-export LD_LIBRARY_PATH="$GCC/lib/amd64:$GCC/lib:${LD_LIBRARY_PATH:-}"
+# libclang (bindgen) + gcc runtime + rust seed libs on the loader path
+export LIBCLANG_PATH="$CLANG/lib"
+export LD_LIBRARY_PATH="$CLANG/lib:$GCC/lib/amd64:$GCC/lib:${LD_LIBRARY_PATH:-}"
 NPROC=$(psrinfo | wc -l | tr -d ' ')
 ver="${1:-24.0.9}"
 LIBDRM=/var/tmp/libdrm-out          # libdrm + libdrm_nouveau (winsys ioctl wrappers)
@@ -81,14 +82,17 @@ if [ -f "$LS" ] && ! grep -q linux-ioctl-compat "$LS"; then
 fi
 
 out="/var/tmp/mesa-nvk-out"; mkdir -p "$out"
-printf "[binaries]\nc = '%s'\ncpp = '%s'\npkgconfig = '/usr/bin/pkg-config'\n" "$CC" "$CXX" > /var/tmp/native-nvk.ini
+# native file: wire rust + bindgen so meson's rust.bindgen resolves.
+cat > /var/tmp/native-nvk.ini <<INI
+[binaries]
+c = '$CC'
+cpp = '$CXX'
+rust = '$SEED/bin/rustc'
+rust-ld = '$CC'
+bindgen = '$BINDGEN'
+pkgconfig = '/usr/bin/pkg-config'
+INI
 
-# NVK config: add nouveau to the RADV/ANV driver set. In Mesa 24.0.9 the driver
-# is named `nouveau-experimental`. NAK needs no LLVM (its own compiler) -- so
-# -Dllvm=disabled stays. The full triad target line is:
-#   -Dvulkan-drivers=amd,intel,nouveau-experimental
-# (this script builds nouveau alone to isolate the NVK/NAK gate; flip to the
-#  triad once a Rust 1.73 toolchain is present.)
 log="/var/tmp/mesa-nvk.build.log"
 (
 cd "$sd"
@@ -99,6 +103,7 @@ cd "$sd"
   -Dgallium-drivers=swrast \
   -Dc_args="-Wno-error=incompatible-pointer-types -Wno-error=pointer-sign" \
   -Dcpp_args="-Wno-error=incompatible-pointer-types" \
+  -Drust_args="-Cpanic=abort" \
   -Dvulkan-drivers=nouveau-experimental \
   -Dvideo-codecs= \
   -Dplatforms= \
@@ -113,14 +118,11 @@ cd "$sd"
 rc=$?
 if [ $rc -ne 0 ]; then
   if grep -q "Unknown compiler(s): \[\['rustc'\]\]" "$log"; then
-    echo "RESULT mesa-nvk GATED rust (NAK requires rustc >= 1.73.0; not on node)"
-    echo "  Config resolved every non-Rust dep:"
-    grep -E "libdrm_nouveau found|libdrm found|glslangValidator found" "$log" | sed 's/^/    /'
-    echo "  Gate: $(grep -n rustc "$log" | head -2 | sed 's/^/    /')"
+    echo "RESULT mesa-nvk GATED rust (rustc not found -- seed not on PATH)"
     echo "  --- log: $log ---"; exit 2
   fi
   echo "RESULT mesa-nvk FAIL build (rc=$rc)"
-  grep -E "FAILED:| error:|fatal error|not found|Dependency|Program|Run-time|ERROR|meson.build|required|undefined" "$log" | head -80 | sed 's/^/  /'
+  grep -E "FAILED:| error:|fatal error|not found|Dependency|Program|Run-time|ERROR|meson.build|required|undefined|bindgen|clang|rustc" "$log" | head -80 | sed 's/^/  /'
   echo "  --- log: $log ---"; exit 1
 fi
 echo "RESULT mesa-nvk OK $out"

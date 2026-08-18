@@ -1,0 +1,42 @@
+libvulkan_nouveau.so -- zero-phantom undef audit (illumos x86_64, NVK w/ NAK)
+
+BUILD:   /var/tmp/mesa-24.0.9/_bnvk/src/nouveau/vulkan/libvulkan_nouveau.so
+INSTALL: /var/tmp/mesa-nvk-out/lib/libvulkan_nouveau.so
+SIZE:    17,647,856 bytes (ELF 64-bit LSB dynamic lib, AMD64) -- includes NAK Rust
+NODE:    /root/drm-port/nvk/libvulkan_nouveau.so (persisted copy)
+
+SONAME  : libvulkan_nouveau.so
+NEEDED  : libsocket.so.1 libnsl.so.1 libdrm.so.2 libz.so.1 libpthread.so.1
+          librt.so.1 libumem.so.1 libstdc++.so.6 libm.so.2 libgcc_s.so.1 libc.so.1
+
+TOTAL UNDEF (nm -u -D, unique): 2690
+  vs RADV libvulkan_radeon.so : 5664  (NVK exposes fewer entrypoints)
+  vs ANV  libvulkan_intel.so  : 6615
+
+CLASSIFICATION -- every undef accounted for:
+  1. WEAK undef wsi_* / vk_common_* / vk_* : Vulkan-runtime layered-dispatch
+     trampolines. WEAK => resolve-to-0 / bound by the loader's dispatch table at
+     runtime; NOT link failures. Identical residual pattern to RADV (579 wsi_)
+     and ANV (579 wsi_) -- both accepted zero-phantom. NVK has the same 579 wsi_.
+  2. drm* (48): drmIoctl / drmCommandWrite{,ReadRead} / drmSyncobj* / drmGetCap /
+     drmPrime* / drmMode* -- all exported by the sibling libdrm.so.2 (NEEDED).
+     The nouveau winsys -> libdrm-core -> C1-ioctl path.
+  3. C++ (_Z*, __cxa*, _Unwind*, operator new/delete, Rb_tree, throw_*):
+     libstdc++.so.6 + libgcc_s.so.1 (NEEDED). (NAK links the Rust std which pulls
+     libgcc unwinder; the C++ vulkan/util pulls libstdc++.)
+  4. zlib (deflate/inflate/crc32/...): libz.so.1 (NEEDED). Shader-cache path.
+  5. libc/posix/math/socket (~all the rest): malloc/mmap/pthread_*/str*/mem*/
+     open/read/write/poll/pread/pwrite/regcomp/setjmp/__xnet_*/__posix_*/cosf/...
+     -- libc.so.1 / libsocket.so.1 / libnsl.so.1 / libm.so.2 (NEEDED).
+     All 54 hand-checked "residual" libc symbols confirmed present (non-UNDEF)
+     in libc/libsocket/libnsl -> 0 missing.
+
+MACHINE-CHECKED PROOF (the definitive zero-phantom test):
+  dlopen("libvulkan_nouveau.so", RTLD_NOW|RTLD_LOCAL) => OK
+    RTLD_NOW eagerly binds every STRONG undef; it succeeded => zero strong phantom.
+  dlsym(h, "vk_icdGetInstanceProcAddr") => 0x7fff7d3dc470 (exported, callable).
+  (LD_LIBRARY_PATH = libdrm-out/lib : gcc-14/lib/amd64 : /lib/64)
+
+VERDICT: ZERO-PHANTOM. Same rigor + same result as RADV/ANV. The only unbound
+symbols are the WEAK Vulkan-runtime dispatch trampolines (by design), every
+strong reference resolves from the 11 NEEDED base/toolchain libs.

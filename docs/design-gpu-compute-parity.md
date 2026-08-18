@@ -495,3 +495,23 @@ ANV(Intel) compile zero-phantom no-LLVM; NVK(NVIDIA) = ioctls+libdrm_nouveau+ICD
 rust+bindgen on the node (bindgen->libclang is the one new dep). NEXT: wire the x86 rust seed + bindgen onto
 the mesa node -> finish NVK. The Vulkan-compute-every-vendor vector is 2/3 compiled + the 3rd is a rust-wire
 away. Persisted src/drm-port/nvk/.
+
+## C5-NVK COMPLETE (compile-phase) (2026-08-18): the OPEN-VULKAN TRIAD is COMPLETE on illumos
+NVK (NVIDIA's open Vulkan driver) COMPILED + LINKED -- libvulkan_nouveau.so (17.6MB ELF64 AMD64, ~54,245
+LOC = 31,133 C + 23,112 Rust NAK). The rust wiring was CLEAN (not a rabbit hole): the x86 rust seed 1.97.1
+realized from cache (cvs3wrjn...-rust-illumos-1.97.1); bindgen/libclang turned out ALREADY ON THE NODE
+(/usr/clang/21/lib/libclang.so -- OI's clang-21 pkg, NO LLVM build needed); bindgen 0.69.4 built in 35s via
+the seed cargo, emitted nak_bindings.rs; NAK's proc-macro deps (syn/quote/proc-macro2) pre-fetched offline.
+NAK compiled (23,112 LOC Rust -> libnak.a via libclang-parsed bindings + a syn proc-macro). libvulkan_
+nouveau.so linked (ninja 66/66, 0 FAILED). ZERO-PHANTOM: 2690 undefs all accounted (WEAK wsi_/vk_common_
+loader trampolines identical to RADV/ANV, drm*->libdrm, C++->libstdc++/libgcc_s, libc/socket/nsl/m/z) ->
+0 true phantoms; MACHINE-CHECKED: dlopen(RTLD_NOW) succeeded (every strong undef binds) + vk_icdGet
+InstanceProcAddr exported. ICD wired (nouveau_icd.x86_64.json, api 1.1.274).
+=> THE OPEN-VULKAN TRIAD IS COMPLETE ON illumos x86_64 (all compile-phase zero-phantom): RADV (AMD, ACO/
+no-LLVM) + ANV (Intel, brw/no-LLVM) + NVK (NVIDIA, NAK/Rust+libclang). ONE llama.cpp GGML_VULKAN reaches
+AMD, Intel, AND NVIDIA GPUs once a DRM render node runs -- the Vulkan-compute-every-vendor vector fully
+realized in software. Real device enumeration/dispatch stays hardware-gated (a powered GPU + the C1/
+amdgpu[or nouveau/i915] DRM node). => solnix's accelerator software is now COMPREHENSIVE: 3 open Vulkan
+drivers (every vendor) + the full AMD ROCm compute stack (KFD->libhsakmt->ROCr->HIP) + the C1 DRM/C3-amdgpu
+kernel drivers, ALL compile zero-phantom. The GGML_VULKAN parity proof (the LLVM-free lead path) runs on
+ANY of the 3 vendors' hardware. gpu-bringup.sh fires on the quota grant (g4ad = AMD/RADV lead).

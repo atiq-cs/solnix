@@ -60,3 +60,4 @@ src/riscv/**/sysroot-riscv-sol/
 src/drm-port/radv/*.so
 src/riscv/**/fw_payload.elf
 src/riscv/**/disk.img
+src/drm-port/nvk/*.so
