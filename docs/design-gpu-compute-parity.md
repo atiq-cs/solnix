@@ -632,3 +632,17 @@ gate to actual token-generation is a real GPU + a loaded RADV ICD (hardware). Th
 "as fast as Linux" LLM lead path proven buildable on solnix -- on RADV (AMD), and the same GGML_VULKAN binary
 targets ANY Vulkan ICD (ANV/NVK/PowerVR). src/drm-port/ggml-vulkan/ (the 43MB .so + 727KB loader gitignored;
 GGML-VULKAN-STATUS.md + the glslc wrapper + patch scripts committed).
+
+## STANDING DIRECTIVE: GPU parity validation on real hardware (when a GPU instance is available)
+The north star is "as fast as Linux" for BOTH graphics AND LLMs. When GPU hardware is available:
+1. LINUX BASELINE FIRST (the target, always runnable): on the SAME GPU, run the SAME stack on Linux --
+   vkmark/glmark2 (graphics FPS) + GGML_VULKAN llama-bench (LLM tok/s, GPU vs CPU) via Mesa RADV. This is
+   the concrete number solnix must match on that exact silicon.
+2. SOLNIX RUNTIME PROBE: the illumos GPU runtime needs a live kernel with the DRM driver bound to the GPU.
+   EC2 doesn't boot solnix + we never modload experimental DRM into a live host kernel -> the honest path to
+   a solnix GPU number is GPU PASSTHROUGH to an illumos/solnix guest (vfio-pci) OR a metal instance / local
+   hardware (the Milk-V Jupiter for PowerVR, a local AMD box for RADV). Probe how far the hardware allows;
+   document the exact gap; NEVER claim parity without a real solnix number.
+3. VERDICT: report Linux numbers + how close solnix gets + what closes the last gap. Both graphics
+   (a real app rendering on the GPU) AND LLM (real tok/s) must be validated, per vendor (AMD/RADV first).
+Current chiuso GPU quota: 8 G/VT vCPU (us-east-2) = one g4ad.2xlarge (AMD V520/RADV) or g4dn (NVIDIA/NVK).
