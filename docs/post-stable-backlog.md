@@ -1732,3 +1732,29 @@ several apps use zbus (D-Bus -- dbus IS built) + the wlr-layer-shell protocol (i
 cosmic-comp is DRM-walled (the SW-render/smallvil path is the interim, per stage6). Each app -> a real
 binary (cross EM_AARCH64 or native x86), compile-verified, published. This turns the toolkit into the actual
 COSMIC DESKTOP. NEXT: wave1 = session+panel+launcher+term+files (the usable core), then the rest.
+
+## PS-CHIUSO-BUILDER (2026-08-21): the builder recovers, but the GUI/COSMIC stack must be REBUILT
+Fresh-account (chiuso) bootstrap findings toward the pop!_OS-identical COSMIC desktop goal:
+- BUILDER RECOVERED: the release-224-v2 AMI (ami-0d3d3c52afe04838c) boots + SSHes (ena reboot-until-SSH
+  mitigation works) + has gcc-14.3 + the /nix-tools224 bootstrap nix + the fork (/root/solnix-pkgs,
+  nixpkgs-patched) + the world exprs. The /nix/store is empty at imaging BUT nix-2.24.15 (q9cgfd...)
+  re-primes from s3.solnix.io/solnix-cache -> nix RUNS. Working builder snapshotted:
+  ami-005b9546698ed0b89. Fixes to use the cache: NIX_CONF_DIR=/nix-tools224/etc/nix, clear the stale
+  ~/.cache/nix/binary-cache-v6.sqlite, require-sigs=false (cache re-signed under cache.solnix.io-1, the
+  local trusted key is stale; content still NarHash-verified).
+- CACHE INTEGRITY IS PARTIAL: narinfos present but many NAR BODIES 404. RE-PRIMABLE = foundational libs
+  only (zlib/libxml2/coreutils[rebuilt]/gnutar/findutils/gawk/pcre2/gperf/giflib/popt/tcl/check/... -- 15
+  base paths, store 9->146, all x86_64-solaris ELF). NOT re-primable (missing NAR + no local .drv):
+  mpfr/nettle/readline/libmpc/libgcrypt/libksba/libconfig (blocked on a missing deep-toolchain NAR).
+- THE COSMIC GUI STACK IS NOT IN THE CACHE AT ALL (gtk4/libadwaita/wayland/mesa/pango/cairo/harfbuzz/glib/
+  freetype/fontconfig + the COSMIC apps) -- built in prior dead accounts, never banked to the durable cache.
+  It ALL must be REBUILT from source. LINCHPIN BLOCKER: glib evals via tranche-224 but hits an eval-time
+  savannah config.guess/config.sub fetch (403) NOT covered by the node's fetchurl-shim. The prior fix (FOD
+  config.sub byte-exact from Software Heritage) is in the fork git but not applied on this node's checkout.
+- SCOPE to the goal: fix the config.guess/sub shim (unblocks glib) -> rebuild glib -> gtk4/wayland/mesa/
+  pango/cairo -> libadwaita -> the 20+ COSMIC apps (already ported, in git) -> the shell/session -> the
+  graphical installer (COSMIC front-end, NixOS-installer style, ZFS-BE) -> the desktop AMI -> provision
+  ~/ws/nix-config -> launch a connectable instance. A LARGE multi-session build campaign (rebuild+integrate,
+  not invent -- every piece compiled before). Fragile now due to agent truncation + the ena cold-boot
+  lottery + the toolchain-gap. NEXT concrete step: port the config.sub Software-Heritage FOD fix onto the
+  builder's fetchurl-shim so glib builds.
