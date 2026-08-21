@@ -1774,3 +1774,21 @@ Fresh-account (chiuso) bootstrap findings toward the pop!_OS-identical COSMIC de
   -Dglx=no mapfile fix; libadwaita+appstream=stage5; the COSMIC rust toolkit=stage6 (389 rlibs). Template =
   tranche-224.nix + the solaris-overlay. BANK each rebuilt closure to the cache this time (prior builds were
   lost). Wave B1 (glib->GTK4) in flight.
+
+## PS-CHIUSO-BUILDER update 2: environment SOUND, glib closure now a per-package fix campaign
+Progress on the COSMIC-desktop goal (chiuso, driven directly due to agent truncation):
+- Builder env is now SOUND: nix-2.24 (from cache) + gcc-14 + config.guess FOD (from cache.nixos.org) + the
+  reconstructed split-debug hook + THE /dev/fd MOUNT (the big unblock -- /dev/fd wasn't mounted so every
+  source build failed on bash process substitution; now mounted+persistent). Result: the from-source
+  pipeline COMPILES -- xz + ~440 dep paths built, store 166 -> 607.
+- glib now EVALUATES clean (a real glib-2.88.1.drv) + its closure BUILDS until it hits per-package illumos
+  breaks in the fresh dep versions (KNOWN fix-classes, need re-applying in the overlay for these versions):
+  pkg-config-0.29.2 (ld symbol-ref -> resolver-libs), gettext-1.0 (C compiler cannot create executables ->
+  H1 conftest-exec fix), tcl-8.6.16 (strlcpy static/non-static -> illumos libc now has strlcpy), perl-5.42.0
+  (symbol-ref). Each is a documented class; the fresh closure re-hits them because the rebuilt versions
+  differ from the originally-banked ones.
+- REALISTIC SCOPE: the environment is sound; glib->GTK4->COSMIC is now a sustained per-package fix+rebuild
+  grind through the closure (many packages, documented fix-classes, no new unknowns) + banking each to the
+  cache so it's not lost again. Long but tractable. The agents keep truncating (7+ deaths) so it's
+  orchestrator-driven-direct for now. NEXT: apply the pkg-config/gettext/tcl/perl illumos fixes for these
+  versions in the tranche overlay, rebuild the glib closure, bank it, then proceed up the GUI stack.
