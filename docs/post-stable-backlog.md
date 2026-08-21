@@ -1758,3 +1758,19 @@ Fresh-account (chiuso) bootstrap findings toward the pop!_OS-identical COSMIC de
   not invent -- every piece compiled before). Fragile now due to agent truncation + the ena cold-boot
   lottery + the toolchain-gap. NEXT concrete step: port the config.sub Software-Heritage FOD fix onto the
   builder's fetchurl-shim so glib builds.
+
+## PS-CHIUSO-BUILDER update: glib config.guess UNBLOCKED + the COSMIC-stage-entry reconstruction insight
+- FIXED the glib linchpin: the config.guess/config.sub FODs (vq0j27nv config.guess-948ae97, 1p61qjvl
+  config.sub-948ae97) are content-addressed + portable -- copied onto the builder from cache.nixos.org (the
+  HEALTHY public cache, which has the generic FODs our partial solnix cache lost). glib's eval-time savannah
+  403 is now cleared. KEY TECHNIQUE: cache.nixos.org can supply the generic/portable FODs (config scripts,
+  and likely source tarballs) that the solnix cache is missing NAR bodies for -- use it as a secondary
+  substituter for the recoverable-generic pieces.
+- INSIGHT on the COSMIC GUI stack: the x86 COSMIC stage entries (tranche-stage2-6) were NODE-LOCAL on the
+  prior (dead) build hosts -- the git commits (dda94090ac stage3, b77dca5425 stage4, a2b071ce45 stage5,
+  93a5889d85 stage6) document the FIXES + published paths but NOT always the standalone build .nix. So
+  rebuilding the GUI stack = RECONSTRUCT the stage build-exprs from the documented fixes (all captured):
+  glib=wave14 libintl fix; wayland=native epoll+getpeerucred; GTK4=wave16 recipe + libepoxy -Degl=yes
+  -Dglx=no mapfile fix; libadwaita+appstream=stage5; the COSMIC rust toolkit=stage6 (389 rlibs). Template =
+  tranche-224.nix + the solaris-overlay. BANK each rebuilt closure to the cache this time (prior builds were
+  lost). Wave B1 (glib->GTK4) in flight.
