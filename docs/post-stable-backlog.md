@@ -1792,3 +1792,19 @@ Progress on the COSMIC-desktop goal (chiuso, driven directly due to agent trunca
   cache so it's not lost again. Long but tractable. The agents keep truncating (7+ deaths) so it's
   orchestrator-driven-direct for now. NEXT: apply the pkg-config/gettext/tcl/perl illumos fixes for these
   versions in the tranche overlay, rebuild the glib closure, bank it, then proceed up the GUI stack.
+
+## PS-CHIUSO-BUILDER update 3: the ROOT of the conftest-fail class = seed libresolv/libnsl need -L/lib/amd64
+Grinding the glib closure per-package (driven direct; agents truncating), 2 fixes landed + the root class found:
+- perl-5.42.0: FIXED (-L/lib/amd64 -lmp -lmd in the perl-pname NIX_LDFLAGS -- committed fork 913a900). BUILDS.
+- tcl-8.6.16: FIXED (-DHAVE_STRLCPY=1 + -L/lib/amd64 -lsocket -lnsl -- committed fork e368478). BUILDS.
+- ROOT CLASS FOUND: pkg-config + gettext (+ likely many more) fail configure "C compiler cannot create
+  executables" because the SEED bootstrapLibs' libresolv.so + libnsl.so transitively require libmd.so.1 +
+  libmp.so.2 (MD5Init, mp_itom, ...) which are NOT on the default link path -- so even a TRIVIAL conftest
+  link fails. Proven: `gcc conftest.c -L<seed>/usr/lib/amd64 -lresolv -lnsl` FAILS; adding `-L/lib/amd64`
+  (where libmd/libmp live) FIXES it. This is a FOUNDATIONAL stdenv fix, not per-package: -L/lib/amd64 must
+  be in the DEFAULT link environment (cc-wrapper cc-ldflags OR the seed/stdenv NIX_LDFLAGS) so every build's
+  conftest + link resolves libmd/libmp. Applying it globally unblocks the whole conftest-fail class at once
+  (pkg-config, gettext, and the many packages that pull the seed resolv/nsl).
+- NEXT: inject `-L/lib/amd64` into the default link env (the illumos stdenv/cc-wrapper) -- the single
+  foundational fix that unblocks the conftest class -> then the glib->GTK4->COSMIC closure builds through.
+  This is the highest-leverage next step (one fix, many packages). It touches the seed/stdenv derivation.
