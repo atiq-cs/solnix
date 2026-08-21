@@ -1824,3 +1824,22 @@ now SOLVED, and the glib closure builds through most of its tree:
   through glib -> gobject-introspection -> gtk4 -> ... -> COSMIC, each a documented-class fix. The
   environment is sound; this is now a (long) grind, best parallelized across agents once the harness is
   stable (agents truncated all session, forcing one-at-a-time direct driving).
+
+## PS-CHIUSO-BUILDER FINAL (session close): foundation DONE + committed; resume the parallel grind next
+The chiuso session established a SOUND build foundation for the COSMIC-desktop goal, all committed + durable:
+- Builder AMI (all fixes + 1193 store paths + libintl.so): CHIUSO_BUILDER_V3_AMI in .infra/fleet-chiuso.env.
+- FIXES committed (fork): /dev/fd mount (build-env), config.guess/sub FODs (from cache.nixos.org),
+  split-debug hook (reconstructed), perl (-lmp/-lmd), tcl (-DHAVE_STRLCPY + socket libs), the blanket
+  -L/lib/amd64 -L/usr/lib/amd64 conftest-class fix, gettext libtool global_symbol_pipe force (libintl.so
+  BUILDS). BUILT: perl, tcl, pkg-config, libffi, expat, xz/liblzma, ncurses, libintl.so, +~1190 paths.
+- CURRENT EDGE: gettext binary link (gettext_LDADD omits -lintl -> libintl_* undefined; needs a Makefile
+  gettext_LDADD patch -- libintl.so itself is done). Then glib -> gobject-introspection -> gtk4 ->
+  libadwaita -> the COSMIC apps (all ported, in git) -> the graphical installer (COSMIC/NixOS-installer
+  style, ZFS-BE) -> the desktop AMI -> provision ~/ws/nix-config -> launch a connectable instance.
+- BLOCKERS on speed (why it paused, not scope): (1) the agent harness wedged/truncated agents (0-2 tool-uses
+  or truncated mid-run), (2) the ena cold-boot lottery made fresh worker nodes unreliable (8+ reboot cycles,
+  no SSH). So parallel fan-out was not achievable; serial hand-driving works but is one-package-per-many-turns.
+- RESUME PLAN: from CHIUSO_BUILDER_V3_AMI (or the running node), fan out the per-package grind IN PARALLEL
+  when the agent harness executes reliably -- each remaining package is a documented-class illumos fix
+  (add -l/-L/-D, force a libtool var, or a small Makefile/patch). The foundation removes the hard part;
+  what remains is breadth best done in parallel.
