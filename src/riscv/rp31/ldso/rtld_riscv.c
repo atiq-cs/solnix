@@ -222,6 +222,20 @@ puts_(const char *s)
 	sys_write(1, s, slen(s));
 }
 
+/*
+ * Info-level trace is silent by default; set LD_DEBUG in the environment to
+ * enable it (the glibc convention).  FATAL diagnostics always use puts_ and
+ * are never gated.  ld_debug is initialized once from envp in rtld_main.
+ */
+static int ld_debug = 0;
+
+static void
+iputs_(const char *s)
+{
+	if (ld_debug)
+		puts_(s);
+}
+
 static void
 puthex_(unsigned long v)
 {
@@ -233,6 +247,13 @@ puthex_(unsigned long v)
 		b[2 + i] = hx[(v >> ((15 - i) * 4)) & 0xf];
 	b[18] = 0;
 	puts_(b);
+}
+
+static void
+iputhex_(unsigned long v)
+{
+	if (ld_debug)
+		puthex_(v);
 }
 
 /* ---- a loaded object: base + its dynamic symbol/hash tables ---------- */
@@ -627,12 +648,12 @@ rtld_bind(unsigned long id, unsigned long reloc_arg)
 	}
 	val += (Elf64_Addr)r->r_addend;
 	*got = val;			/* patch: next call jumps straight */
-	puts_("[ld.so.1]   LAZY bind on first call: ");
-	puts_(nm);
-	if (want) { puts_("@"); puts_(want); }
-	puts_(" -> ");
-	puthex_(val);
-	puts_("\n");
+	iputs_("[ld.so.1]   LAZY bind on first call: ");
+	iputs_(nm);
+	if (want) { iputs_("@"); iputs_(want); }
+	iputs_(" -> ");
+	iputhex_(val);
+	iputs_("\n");
 	return (val);
 }
 
@@ -670,11 +691,11 @@ bind_plt(const struct lobj *app)
 			return (-1);
 		}
 		*got = val + (Elf64_Addr)r->r_addend;
-		puts_("[ld.so.1]   bound ");
-		puts_(nm);
-		puts_(" -> ");
-		puthex_(*got);
-		puts_("\n");
+		iputs_("[ld.so.1]   bound ");
+		iputs_(nm);
+		iputs_(" -> ");
+		iputhex_(*got);
+		iputs_("\n");
 		bound++;
 	}
 	return (bound);
@@ -768,7 +789,22 @@ rtld_main(unsigned long *stackp)
 	unsigned i;
 	Elf64_Addr next_base = 0x38000000UL;	/* where NEEDED libs land */
 
-	puts_("[ld.so.1] riscv64 runtime linker (R-P28: cross-object bind)\n");
+	/*
+	 * Scan envp for LD_DEBUG to enable info-level trace (silent by default).
+	 * envp starts after argc, argv[argc], and the argv NULL terminator.
+	 */
+	{
+		unsigned long *e = stackp + 1 + argc + 1;
+		for (; *e != 0; e++) {
+			const char *v = (const char *)*e;
+			if (v[0] == 'L' && v[1] == 'D' && v[2] == '_' &&
+			    v[3] == 'D' && v[4] == 'E' && v[5] == 'B' &&
+			    v[6] == 'U' && v[7] == 'G' && v[8] == '=')
+				ld_debug = 1;
+		}
+	}
+
+	iputs_("[ld.so.1] riscv64 runtime linker (R-P28: cross-object bind)\n");
 
 	nobj = 0;
 
@@ -811,7 +847,7 @@ rtld_main(unsigned long *stackp)
 	}
 
 	if (dyn == 0) {
-		puts_("[ld.so.1] app has no PT_DYNAMIC (static?); entering\n");
+		iputs_("[ld.so.1] app has no PT_DYNAMIC (static?); entering\n");
 		return (at_entry);
 	}
 
@@ -823,11 +859,11 @@ rtld_main(unsigned long *stackp)
 	for (i = 0; dyn[i].d_tag != DT_NULL; i++) {
 		if (dyn[i].d_tag == DT_NEEDED && app->strtab != 0) {
 			const char *nm = app->strtab + dyn[i].d_val;
-			puts_("[ld.so.1] DT_NEEDED: ");
-			puts_(nm);
-			puts_(" -> mapping at ");
-			puthex_(next_base);
-			puts_("\n");
+			iputs_("[ld.so.1] DT_NEEDED: ");
+			iputs_(nm);
+			iputs_(" -> mapping at ");
+			iputhex_(next_base);
+			iputs_("\n");
 			if (load_needed(nm, next_base) != 0)
 				return (0);
 			next_base += 0x02000000UL;	/* next lib base */
@@ -858,21 +894,21 @@ rtld_main(unsigned long *stackp)
 	 */
 	{
 		long np = plt_lazy_setup(app);
-		puts_("[ld.so.1] LAZY PLT armed (resolve-on-first-call); slots: ");
+		iputs_("[ld.so.1] LAZY PLT armed (resolve-on-first-call); slots: ");
 		{
 			char nb[2];
 			nb[0] = (np >= 0 && np < 10) ? (char)('0' + np) : '?';
 			nb[1] = 0;
-			puts_(nb);
+			iputs_(nb);
 		}
-		puts_("\n");
+		iputs_("\n");
 		if (app->gnu_hash != 0)
-			puts_("[ld.so.1] symbol lookup: .gnu.hash (with SysV .hash "
+			iputs_("[ld.so.1] symbol lookup: .gnu.hash (with SysV .hash "
 			    "fallback)\n");
 		else
-			puts_("[ld.so.1] symbol lookup: SysV .hash\n");
+			iputs_("[ld.so.1] symbol lookup: SysV .hash\n");
 		if (app->versym != 0)
-			puts_("[ld.so.1] symbol versioning: .gnu.version tables "
+			iputs_("[ld.so.1] symbol versioning: .gnu.version tables "
 			    "active (GNU verneed/verdef)\n");
 	}
 
@@ -894,9 +930,9 @@ rtld_main(unsigned long *stackp)
 				unsigned long al = (a + len - ap + 0xfffUL) &
 				    ~0xfffUL;
 				if (sys_mprotect(ap, al, 1 /*PROT_READ*/) == 0) {
-					puts_("[ld.so.1] RELRO: mprotect ");
-					puthex_(ap);
-					puts_(" read-only (");
+					iputs_("[ld.so.1] RELRO: mprotect ");
+					iputhex_(ap);
+					iputs_(" read-only (");
 					{
 						char d[8]; int k = 0;
 						unsigned long v = al >> 12;
@@ -904,19 +940,19 @@ rtld_main(unsigned long *stackp)
 						else { char t[8]; int j = 0;
 						    while (v) { t[j++] = '0'+(v%10); v/=10; }
 						    while (j) d[k++] = t[--j]; }
-						d[k] = 0; puts_(d);
+						d[k] = 0; iputs_(d);
 					}
-					puts_(" page(s))\n");
+					iputs_(" page(s))\n");
 					did = 1;
 				}
 			}
 		}
 		if (!did)
-			puts_("[ld.so.1] RELRO: no PT_GNU_RELRO segment (nothing "
+			iputs_("[ld.so.1] RELRO: no PT_GNU_RELRO segment (nothing "
 			    "to protect)\n");
 	}
 
-	puts_("[ld.so.1] app + libs relocated; LAZY PLT armed + RELRO set; "
+	iputs_("[ld.so.1] app + libs relocated; LAZY PLT armed + RELRO set; "
 	    "entering the app\n");
 	return (at_entry);
 }
