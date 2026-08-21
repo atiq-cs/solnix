@@ -1843,3 +1843,22 @@ The chiuso session established a SOUND build foundation for the COSMIC-desktop g
   when the agent harness executes reliably -- each remaining package is a documented-class illumos fix
   (add -l/-L/-D, force a libtool var, or a small Makefile/patch). The foundation removes the hard part;
   what remains is breadth best done in parallel.
+
+## PS-CHIUSO-BUILDER: NEXT BLOCKER captured (the render-lib agent found it before truncating)
+The render/font stack (freetype/fontconfig/brotli/...) hits a PRE-EXISTING LATENT eval bug, distinct from
+gettext -- worth fixing first next session because it gates the whole render half:
+- CHAIN: freetype -> brotli -> cmake-minimal -> CMAKE_LIBRARY_PATH -> the overlay's `extraSyslibs`
+  runCommand -> references `final.seedSyslibs` -> ERROR "attribute 'seedSyslibs' in selection path
+  'seedSyslibs' not found". seedSyslibs is NOT a top-level attr in the tranche-entry-224 `final` overlay
+  set. It is referenced (as final.seedSyslibs) in BOTH the solaris-overlay's private `let` extraSyslibs
+  (~line 197) AND the tranche-entry-224 extraSyslibs runCommand (~line 240) + wired into cmake-minimal's
+  CMAKE_LIBRARY_PATH (~line 284). It only triggers when a package forces cmake-minimal's CMAKE_LIBRARY_PATH
+  to evaluate (brotli does -> freetype does).
+- FIX (next session): define `seedSyslibs` as a top-level attr in the overlay (or change the extraSyslibs
+  runCommand to reference the correct existing attr -- likely the stdenv seed / illumos seed slice that
+  carries /usr/lib/amd64 the platform libs). Grep the fork for where seedSyslibs SHOULD resolve
+  (stdenv/illumos or the seed) + expose it in final. Once fixed, brotli -> freetype -> fontconfig ->
+  pixman -> harfbuzz (the render/font stack, glib-free) should build (each then a documented-class link fix).
+- STATUS: agents ran unreliably (render agent got 20 tool-uses + this finding before truncating; glib agent
+  wedged at 2). The finding is the value. Fix seedSyslibs + the gettext gettext_LDADD, then the render stack
+  + glib both unblock.
