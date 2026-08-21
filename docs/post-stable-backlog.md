@@ -1862,3 +1862,31 @@ gettext -- worth fixing first next session because it gates the whole render hal
 - STATUS: agents ran unreliably (render agent got 20 tool-uses + this finding before truncating; glib agent
   wedged at 2). The finding is the value. Fix seedSyslibs + the gettext gettext_LDADD, then the render stack
   + glib both unblock.
+
+## PS-CHIUSO-BUILDER: the two blockers are CASCADES (session progress + exact next layers)
+Worked both blockers directly this session. Each is a CASCADE of sub-fixes (not one fix) -- real progress,
+all committed, with the exact remaining layer pinpointed:
+- BLOCKER 2 (gettext->glib): libtool empty-pipe FIXED -> libintl.so.8.4.6 BUILDS (what glib needs). Remaining:
+  the gettext BINARY's gettext_LDADD omits -lintl -> libintl_* undefined. NEXT: patch gettext-runtime/src
+  Makefile gettext_LDADD to include ../intl/libintl.la (env LDFLAGS is not honored by that target).
+- BLOCKER 1 (seedSyslibs->render stack): a 5-deep cascade, 4 FIXED + committed:
+  (a) extraSyslibs referenced final.seedSyslibs (stdenv-local, not top-level) -> PINNED the pre-built
+      /nix/store/ylyfkm6...-illumos-extra-syslibs (cache-substitutable, the aarch64-waves approach).
+  (b) cmake-instrumentation-no-spawn.patch (node-local, lost) -> reconstructed as a sed neutering
+      GetDynamicSystemInformation.
+  (c) the extraSyslibs runCommand fought the overlaid stdenv (structuredAttrs trivial-builder, silent
+      exit 1) -> the pinning sidesteps it.
+  (d) cmake-minimal bootstrap C++ probe link-failed on seed libresolv/libnsl->libmd/libmp -> added real
+      LDFLAGS/CXXFLAGS/CFLAGS=-L/lib/amd64 -L/usr/lib/amd64 (bootstrap bypasses cc-wrapper NIX_LDFLAGS); the
+      -L now reaches the probe (verified in the log).
+  (e) REMAINING: the cmake bootstrap C++ probe STILL reports "not C++11 aware" INSIDE the sandbox, though
+      the EXACT command (g++ -std=gnu++11 -L/lib/amd64 test.cxx) compiles+links+RUNS fine OUTSIDE. So it's a
+      cc-wrapper flag-reorder / hardening / -R interaction specific to cmake's raw bootstrap g++ (not the
+      wrapped cc). NEXT: inspect the cc-wrapper's flag injection during the bootstrap (it may append
+      -lstdc++ or reorder -L after the objects, or a hardening flag rejects the probe); or bypass by passing
+      the probe a pre-known-good CMAKE_CXX_COMPILER_WORKS=1 / -DCMAKE_CXX_STANDARD, or build cmake-minimal
+      with the cc-wrapper's hardening disabled for the bootstrap.
+  cmake-minimal gates the ENTIRE render stack (brotli/freetype/fontconfig/pixman) + much of the GUI toolkit,
+  so it must be solved. It is deep but the next layer is pinpointed.
+HONEST PATTERN: each blocker = a 4-6-deep cascade of documented-class sub-fixes, one turn+ each, driven
+serially by hand (agents non-functional). Real motion; cmake-minimal is the current hard node.
