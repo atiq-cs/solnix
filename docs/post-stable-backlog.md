@@ -1808,3 +1808,19 @@ Grinding the glib closure per-package (driven direct; agents truncating), 2 fixe
 - NEXT: inject `-L/lib/amd64` into the default link env (the illumos stdenv/cc-wrapper) -- the single
   foundational fix that unblocks the conftest class -> then the glib->GTK4->COSMIC closure builds through.
   This is the highest-leverage next step (one fix, many packages). It touches the seed/stdenv derivation.
+
+## PS-CHIUSO-BUILDER update 4: foundational fixes landed, glib closure at 1039 paths, gettext is the current edge
+Session progress (driven direct; agents truncating). The build ENVIRONMENT + FOUNDATIONAL link issues are
+now SOLVED, and the glib closure builds through most of its tree:
+- FIXED + committed: /dev/fd mount (build-env), config.guess FOD (glib gate), split-debug hook (reconstructed),
+  perl (-lmp/-lmd), tcl (-DHAVE_STRLCPY + socket libs), and THE FOUNDATIONAL blanket overlay: every
+  derivation gets `-L/lib/amd64 -L/usr/lib/amd64` so the seed libresolv/libnsl resolve libmd/libmp/libidmap
+  (the whole "C compiler cannot create executables" conftest class). pkg-config + ~all the base closure now
+  build -- store 166 -> 1039 paths (libffi, expat, xz/liblzma, ncurses, etc.).
+- CURRENT EDGE: gettext-1.0 (a big gnulib/libiconv/libintl package) -- configure now passes (the syslib
+  conftest -lm -lmd ... -lidmap resolves) but the MAKE step fails Error 2 in the libintl/libgnu link. Needs
+  a focused look at the specific link error (buried in the make output).
+- SCOPE: the hard foundational blockers are DONE (env + the link class). Remaining = the per-package tail
+  through glib -> gobject-introspection -> gtk4 -> ... -> COSMIC, each a documented-class fix. The
+  environment is sound; this is now a (long) grind, best parallelized across agents once the harness is
+  stable (agents truncated all session, forcing one-at-a-time direct driving).
