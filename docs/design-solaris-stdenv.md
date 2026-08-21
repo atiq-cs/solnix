@@ -516,3 +516,15 @@ instead of throwing.
 - `patches/0004-stdenv-illumos-bootstrap-stage.patch` — REGENERATED: embeds the
   rewritten pure stage file + the two new scripts + the selector hunk. All four
   patches apply cleanly (`applyPatches` realises); no x86_64-linux regression.
+
+## Critical build-env fix (2026-08-21): /dev/fd must be mounted (sandbox=off builds)
+On a fresh chiuso builder (release-224-v2 AMI, sandbox=false in nix.conf), EVERY nix derivation failed --
+even trivial `.patch.drv`/`.sh.drv` -- with `patch-shebangs.sh: /dev/fd/63: No such file or directory`.
+ROOT CAUSE: the release image booted WITHOUT the fd filesystem mounted (it's in /etc/vfstab as mount-at-boot
+`no`), and /bin/sh is ksh93 not bash, so bash process substitution `cat <(...)` (which patch-shebangs + many
+nixpkgs setup-hooks use) had no /dev/fd/NN to open. With sandbox OFF, builds use the host's /dev, so the
+missing mount broke the whole build environment.
+FIX: `mount -F fd fd /dev/fd` (illumos fd filesystem) + flip the /etc/vfstab entry to mount-at-boot `yes`.
+Then `cat <(echo ok)` -> ok, and derivations build (glib closure compiles). A builder AMI MUST have /dev/fd
+mounted (bake it into the image / first-boot). This is why the earlier "146 packages built" were only the
+substituted-from-cache ones (no in-build process-substitution); fresh SOURCE builds needed /dev/fd.
