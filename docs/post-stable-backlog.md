@@ -1890,3 +1890,28 @@ all committed, with the exact remaining layer pinpointed:
   so it must be solved. It is deep but the next layer is pinpointed.
 HONEST PATTERN: each blocker = a 4-6-deep cascade of documented-class sub-fixes, one turn+ each, driven
 serially by hand (agents non-functional). Real motion; cmake-minimal is the current hard node.
+
+## PS-CHIUSO-BUILDER: BOTH blockers CRACKED this session (major) + a disk-size infra wall
+Drove both COSMIC blockers to completion + cascaded into the render stack. All fixes committed (fork).
+BUILT this session (store 1193 -> 1837 paths): cmake-minimal, brotli, gdbm, gettext, python3, meson, freetype.
+- BLOCKER 1 (seedSyslibs -> render stack): DONE. Fixes: pinned the pre-built extra-syslibs store path
+  (ylyfkm6, cache-substitutable) instead of the runCommand; reconstructed the lost cmake-instrumentation
+  patch as a sed; sidestepped the structuredAttrs trivial-builder; and THE key fix -- cmake-minimal's
+  bootstrap C++ probe was link+run-failing because the probe binary couldn't find libstdc++.so.6 at RUNTIME
+  (no -R runpath) -> misreported "not C++11 aware". Added -R/usr/gcc/14/lib/amd64. cmake-minimal + brotli BUILD.
+- BLOCKER 2 (gettext -> glib): DONE. libintl.so exported 0 symbols because BOTH illumos nm variants emit
+  SOLARIS format (not GNU/BSD) -> libtool's global_symbol_pipe probe left it empty -> empty libintl.expsym.
+  Fix: NM='gnm -p' (POSIX) + a matching global_symbol_pipe regex + the *_LDADD libintl.la append. gettext,
+  python3, meson, freetype all BUILD.
+- FOUNDATIONAL (generalized from the cmake fix): added the OI gcc-14 libstdc++ -R runpath globally to the
+  blanket fixAttrs LDFLAGS/CXXFLAGS -- any raw configure C++ probe (re2c/...) now runs. eval-clean.
+- INFRA WALL (why it paused): the builder's ROOT is only 8G (release-224-v2 image) and the growing store
+  (1837 paths) filled it 100% -> re2c/ninja/pixman failed with "No space left", and a reboot to pick up a
+  grown/added EBS volume hit BOTH the full-disk-blocks-boot AND the ena cold-boot lottery -> the node
+  (13.59.231.243, i-0825653b668dacea4) is now wedged mid-boot ("Hostname: unknown" + "No space left").
+- RECOVERY (next session): launch a FRESH builder from the v3 AMI ami-077dfaa002e3718db with a LARGER root
+  (--block-device-mappings VolumeSize=60) so the store has room; all 6+ blocker fixes are in the fork, so a
+  fresh builder re-realizes cmake-minimal/gettext/python3/meson/freetype from them + the cache. Then finish
+  the render swath (ninja/pixman/fontconfig/harfbuzz) -> glib -> gtk4 -> libadwaita -> the COSMIC apps.
+=> BOTH blockers are SOLVED (the session's goal). The remaining path is the (now-unblocked) render/GUI
+cascade on a builder with adequate disk.
