@@ -9,16 +9,32 @@
 # pkgs/illumos/patches/ena-default-mtu-1500.patch) fixes cold-launch DHCP; larger
 # MTUs remain reachable via the device max.
 #
-#   oi-inject-ena.sh -R <root>            install fixed ena into <root> (no bootadm)
-#   oi-inject-ena.sh -R <root> --archive  install + rebuild <root> boot_archive
+#   oi-inject-ena.sh -R <root>                   install fixed ena into <root> (no bootadm)
+#   oi-inject-ena.sh -R <root> --archive         install + rebuild <root> boot_archive (needs bootadm/illumos)
+#   oi-inject-ena.sh -R <root> --archive-offline install + repack <root> boot_archive WITHOUT bootadm
 #
 # Sources the fixed module from ENA_MODULE (default: the stripped module built
 # from the patched gate). Verifies the installed driver defaults to 1500 (the
 # ena_attach_device_init 0x5dc immediate) when a disassembler is available.
+#
+# OFFLINE INJECTION (no running illumos node) — proven method that built
+# ami-0fd4acf5e378c3e25 from a Linux helper (AL2023, kernel 6.18):
+#   1. Build OpenZFS from source vs the kernel headers (no distro pkg on AL2023):
+#        ./autogen.sh && ./configure --with-linux=/lib/modules/$(uname -r)/build && make -j && make install
+#        modprobe zfs   # OpenZFS 2.4.4 imports illumos pools read-write, no feature-flag mismatch
+#   2. zpool import -f -R /mnt/illumos <pool>   # illumos root pool is "spool"; BE = spool/ROOT/<be>
+#      zfs mount <pool>/ROOT/<be>
+#   3. oi-inject-ena.sh -R /mnt/illumos --archive-offline
+#   4. zfs unmount; zpool export <pool>; snapshot the vol; register a uefi/ena AMI.
+# The illumos boot_archive is a gzip'd odc (POSIX ASCII) cpio; /boot/loader.conf
+# on solnix sets boot_archive.hash_load="NO", so the .hash file is NOT verified
+# (do not bother recomputing it). The loader reads boot_archive directly, so the
+# fixed ena MUST be inside it — the on-disk replacement alone is not enough.
 set -eu
 
 ROOT=/
 DO_ARCHIVE=0
+DO_ARCHIVE_OFFLINE=0
 # Fixed module: prefer an explicit ENA_MODULE, else the staged fixed module,
 # else build it from the patched gate on demand.
 ENA_MODULE="${ENA_MODULE:-/root/solnix-assets/ena-mtu-fix}"
@@ -29,7 +45,8 @@ while [ $# -gt 0 ]; do
   case "$1" in
     -R) ROOT="$2"; shift 2 ;;
     --archive) DO_ARCHIVE=1; shift ;;
-    *) echo "usage: $0 -R <root> [--archive]" >&2; exit 2 ;;
+    --archive-offline) DO_ARCHIVE_OFFLINE=1; shift ;;
+    *) echo "usage: $0 -R <root> [--archive|--archive-offline]" >&2; exit 2 ;;
   esac
 done
 
@@ -67,5 +84,31 @@ if [ "$DO_ARCHIVE" = 1 ]; then
   log "rebuilding boot_archive for $ROOT so the fixed ena is in the ramdisk"
   mkdir -p "$ROOT/platform/i86pc/amd64"
   bootadm update-archive -f -R "$ROOT" 2>&1 | grep -vE '^gzip:|cannot find' | tail -6 || true
+fi
+
+# Offline boot_archive repack (no bootadm/illumos): the archive is a gzip'd odc
+# cpio; extract it, swap ena in the tree (same original entry order), repack,
+# and re-gzip. hash_load="NO" in loader.conf so the .hash is not verified.
+if [ "$DO_ARCHIVE_OFFLINE" = 1 ]; then
+  BA="$ROOT/platform/i86pc/amd64/boot_archive"
+  [ -f "$BA" ] || die "no boot_archive at $BA"
+  command -v cpio >/dev/null || die "cpio required for --archive-offline"
+  log "offline-repacking boot_archive $BA with the fixed ena"
+  WD=$(mktemp -d); trap 'rm -rf "$WD"' EXIT
+  gunzip -c "$BA" > "$WD/ba.cpio"
+  ( cd "$WD" && cpio -it < ba.cpio 2>/dev/null > order.txt )
+  mkdir -p "$WD/root"
+  ( cd "$WD/root" && cpio -idm --no-absolute-filenames < "$WD/ba.cpio" 2>/dev/null )
+  [ -f "$WD/root/kernel/drv/amd64/ena" ] || die "boot_archive has no kernel/drv/amd64/ena"
+  cp "$ENA_MODULE" "$WD/root/kernel/drv/amd64/ena"
+  chmod 0755 "$WD/root/kernel/drv/amd64/ena"
+  chown 0:3 "$WD/root/kernel/drv/amd64/ena" 2>/dev/null || true
+  ( cd "$WD/root" && cpio -o -H odc < "$WD/order.txt" 2>/dev/null > "$WD/ba.new.cpio" )
+  cp -p "$BA" "$BA.stock.bak"
+  gzip -c -9 "$WD/ba.new.cpio" > "$BA"
+  # keep the per-file bootadm cache consistent so a later rebuild won't regress
+  C="$ROOT/platform/i86pc/amd64/archive_cache/kernel/drv/amd64/ena"
+  if [ -f "$C" ]; then cp -p "$C" "$C.stock.bak"; gzip -1 -c "$ENA_MODULE" > "$C"; fi
+  log "offline boot_archive repacked (fixed ena inside; hash not verified per loader.conf)"
 fi
 log "done"
