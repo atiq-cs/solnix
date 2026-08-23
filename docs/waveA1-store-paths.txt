@@ -1,0 +1,17 @@
+# Wave A1 render/font stack -- store paths for orchestrator to bank to cache
+# (no oi-publish-wave.sh / /tmp/.pubcreds on this node; report-only)
+freetype        /nix/store/vr4am5zr3inmr046i4j25rw7pg2y0bil-freetype-2.14.3
+brotli          /nix/store/ssjdzkbv90cg050qz7bcw0wf7fwy0rkx-brotli-1.2.0
+libpng          /nix/store/cyh46pqbvg5bp9r1r85x01wfshj4qwf2-libpng-apng-1.6.58
+pixman          /nix/store/brlryrb133xyv6wwlz3vwzxs4qync6hz-pixman-0.46.4
+fontconfig      /nix/store/gh26ihmfhwkgfnfa3avyisg750l3qpyr-fontconfig-2.18.1
+harfbuzz        /nix/store/3fz2bi0ynjzkbha7kdf4pzqza33z1cnp-harfbuzz-13.2.1
+cairo           /nix/store/b83slq3lb2iv6ji8qk3k54q3cbpvrxp8-cairo-1.18.4
+libjpeg_turbo   /nix/store/37sw2gf3rakfp8c6hj6x1gwvj6vdj7bf-libjpeg-turbo-3.1.4.1
+fribidi         /nix/store/jxi8lw5990a5lp41n9d3v0gw18xvsinq-fribidi-1.0.16
+libwebp         /nix/store/h2fyl8w7fc79yb25n9yx6avz9sb8m00a-libwebp-1.6.0
+libtiff         /nix/store/rvr9cx64zqnksv5bdw5vslarmxyc98cs-libtiff-4.7.1
+lcms2           /nix/store/llijdfsk4ksfm74x6ylm80jp0m4zv0is-lcms2-2.19.1
+cmakeMinimal    /nix/store/p7dvg7h6s4c3ccbjvdpkp6jv5b6bwifx-cmake-minimal-4.3.4
+zstd            /nix/store/vfar9gfsp5as36x060xgrjgv0gw49pyi-zstd-1.5.7
+re2c            /nix/store/0xgyd5ks336rgbkfqwxwfxyxdl94yghk-re2c-4.5.1

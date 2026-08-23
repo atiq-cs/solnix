@@ -1,0 +1,76 @@
+diff --git a/src/backend/allocator/dmabuf.rs b/src/backend/allocator/dmabuf.rs
+index 405e544..936dfb0 100644
+--- a/src/backend/allocator/dmabuf.rs
++++ b/src/backend/allocator/dmabuf.rs
+@@ -316,14 +316,24 @@ impl Dmabuf {
+     /// Returns `Err` if the plane with the specified index does not exist or
+     /// the dmabuf_sync ioctl failed
+     pub fn sync_plane(&self, idx: usize, flags: DmabufSyncFlags) -> Result<(), DmabufSyncFailed> {
+-        let plane = self
+-            .0
+-            .planes
+-            .get(idx)
+-            .ok_or(DmabufSyncFailed::PlaneIndexOutOfBound)?;
+-        unsafe { rustix::ioctl::ioctl(&plane.fd, Setter::<DMA_BUF_SYNC, _>::new(dma_buf_sync { flags })) }
+-            .map_err(std::io::Error::from)?;
+-        Ok(())
++        #[cfg(any(target_os = "illumos", target_os = "solaris"))]
++        {
++            // illumos has no DMA-BUF kernel interface; a software renderer does no
++            // dmabuf zero-copy sync. No-op.
++            let _ = (idx, flags);
++            return Ok(());
++        }
++        #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
++        {
++            let plane = self
++                .0
++                .planes
++                .get(idx)
++                .ok_or(DmabufSyncFailed::PlaneIndexOutOfBound)?;
++            unsafe { rustix::ioctl::ioctl(&plane.fd, Setter::<DMA_BUF_SYNC, _>::new(dma_buf_sync { flags })) }
++                .map_err(std::io::Error::from)?;
++            Ok(())
++        }
+     }
+ }
+ 
+@@ -399,6 +409,7 @@ struct dma_buf_sync {
+     flags: DmabufSyncFlags,
+ }
+ 
++#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
+ const DMA_BUF_SYNC: rustix::ioctl::Opcode = rustix::ioctl::opcode::write::<dma_buf_sync>(b'b', 0);
+ 
+ /// A mapping into a [`Dmabuf`]
+diff --git a/src/utils/sealed_file.rs b/src/utils/sealed_file.rs
+index 2fc478f..d403f25 100644
+--- a/src/utils/sealed_file.rs
++++ b/src/utils/sealed_file.rs
+@@ -53,7 +53,7 @@ impl SealedFile {
+     /// Create a `[SealedFile]` with the given binary data.
+     #[cfg(not(any(target_os = "linux", target_os = "freebsd", target_os = "android")))]
+     pub fn with_data(name: &CStr, data: &[u8]) -> Result<Self, std::io::Error> {
+-        use rand::{Rng, distr::Alphanumeric};
++        use rand::{Rng, RngExt, distr::Alphanumeric};
+         use rustix::{
+             io::Errno,
+             shm::{self, Mode},
+diff --git a/src/wayland/shm/pool.rs b/src/wayland/shm/pool.rs
+index b52e731..dcc0798 100644
+--- a/src/wayland/shm/pool.rs
++++ b/src/wayland/shm/pool.rs
+@@ -362,7 +362,12 @@ unsafe fn siginfo_si_addr(info: *mut libc::siginfo_t) -> *mut libc::c_void {
+     unsafe { (*(info as *const siginfo_t)).si_addr }
+ }
+ 
+-#[cfg(not(any(target_os = "linux", target_os = "android")))]
++#[cfg(any(target_os = "illumos", target_os = "solaris"))]
++unsafe fn siginfo_si_addr(info: *mut libc::siginfo_t) -> *mut libc::c_void {
++    unsafe { (*info).si_addr() as _ }
++}
++
++#[cfg(not(any(target_os = "linux", target_os = "android", target_os = "illumos", target_os = "solaris")))]
+ unsafe fn siginfo_si_addr(info: *mut libc::siginfo_t) -> *mut libc::c_void {
+     unsafe { (*info).si_addr as _ }
+ }

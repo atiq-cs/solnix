@@ -1,0 +1,12 @@
+--- a/src/platform_impl/linux/mod.rs
++++ b/src/platform_impl/linux/mod.rs
+@@ -193,3 +193,9 @@
+ fn is_main_thread() -> bool {
+     std::thread::current().name() == Some("main")
+ }
++
++#[cfg(any(target_os = "illumos", target_os = "solaris"))]
++fn is_main_thread() -> bool {
++    unsafe extern "C" { fn thr_main() -> libc::c_int; }
++    unsafe { thr_main() == 1 }
++}

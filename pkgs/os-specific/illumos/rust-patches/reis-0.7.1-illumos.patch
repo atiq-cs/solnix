@@ -1,0 +1,16 @@
+--- a/src/util.rs
++++ b/src/util.rs
+@@ -52,7 +52,13 @@
+         net::recvmsg(
+             socket,
+             &mut [IoSliceMut::new(buf)],
+             &mut cmsg_buffer,
+-            net::RecvFlags::CMSG_CLOEXEC,
++            {
++                #[cfg(any(target_os = "illumos", target_os = "solaris"))]
++                { net::RecvFlags::empty() }
++                #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
++                { net::RecvFlags::CMSG_CLOEXEC }
++            },
+         )
+     })?;

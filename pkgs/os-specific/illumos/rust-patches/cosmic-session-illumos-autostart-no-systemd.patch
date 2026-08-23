@@ -1,0 +1,19 @@
+diff --git a/src/main.rs b/src/main.rs
+index 0f2c00f..508ed3a 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -351,7 +351,13 @@ async fn start(
+ 	start_component("cosmic-idle", span, &process_manager, &env_vars).await;
+ 
+ 	#[cfg(feature = "autostart")]
+-	if !*is_systemd_used() {
++	#[cfg(feature = "systemd")]
++	let run_autostart = !*is_systemd_used();
++	#[cfg(feature = "autostart")]
++	#[cfg(not(feature = "systemd"))]
++	let run_autostart = true;
++	#[cfg(feature = "autostart")]
++	if run_autostart {
+ 		info!("looking for autostart folders");
+ 		let mut directories_to_scan = Vec::new();
+ 
