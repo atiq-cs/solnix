@@ -1,85 +1,89 @@
 #!/bin/sh
-# solnix nix-pure Wayland desktop session:
-#   Xvfb (virtual X display)  <-  smallvil (nix-pure smithay Wayland compositor,
-#   winit-x11 backend, softpipe/llvmpipe SW GL)  <-  GTK4/libadwaita client
-#   (nix-pure, GDK_BACKEND=wayland).  x11vnc exports the Xvfb to 127.0.0.1:5900.
+# solnix-cosmic-session.sh -- one command: Xorg(dummy)+swrast DRI2 -> smallvil
+# (smithay SW Wayland compositor, softpipe GLES2) -> a Wayland client ->
+# x0vncserver + a localhost relay exporting the framebuffer on 127.0.0.1:5900.
 #
-# All toolkit pieces (compositor, GTK4 4.22.4, libadwaita 1.9.2, wayland libs)
-# are /nix/store. Only the illumos base libc/libm/pthread and the OI-pkg Mesa
-# softpipe libGL/libEGL (dlopen'd by the winit EGL backend) are non-nix -- there
-# is no nix-pure Mesa realised on this host yet.
+#   solnix-cosmic-session.sh              # smallvil + the wl_shm test client
+#   solnix-cosmic-session.sh -c PROG      # run PROG as the Wayland client
+#   solnix-cosmic-session.sh --cosmic-term  # try cosmic-term (connects; SW-shm gated)
 #
-# Usage:  /root/solnix-cosmic-session.sh            # launches the GTK4 client
-#         /root/solnix-cosmic-session.sh -c PROG    # launches PROG as the client
-#         /root/solnix-cosmic-session.sh --shm      # launches the wl_shm test client
-set -e
-
-export PATH=/nix/store/q9cgfd001i87byzv866v1dvdh28jji7l-nix-2.24.15/bin:/usr/bin:$PATH
+# stop:  pkill -9 -f smallvil; pkill -9 x0vncserver; pkill -9 lo-relay; pkill -9 Xorg
+set -u
 
 DISP=:99
-GEOM=1280x800x24
-XDG=/tmp/xdg-runtime
-SMALLVIL=/root/smithay/target/x86_64-unknown-illumos/debug/smallvil
-XVFB=/usr/bin/Xvfb
-X11VNC=/usr/bin/x11vnc
-NIXLIBS="$(cat /root/nix-gtk-libpath.txt)"
-WLLIB=/nix/store/9paxj1538q1qvcw4vdpcv1c4crazdj32-wayland-1.26.0/lib
+BIN=/root/cosmic-gcroots/waveB2-bin
+WLLIB=/nix/store/jp5g7biz7c2bsqz48awsd5qwa9asig73-wayland-1.26.0/lib
+XKB=/nix/store/qrlmmyrjgzff4nywbprq995lpfnfbb7l-xkeyboard-config-2.48/share/X11/xkb
+export XDG_RUNTIME_DIR=/tmp/xdg-runtime
+mkdir -p "$XDG_RUNTIME_DIR"; chmod 700 "$XDG_RUNTIME_DIR"
 
-CLIENT=/root/adw-hello                # default: the nix-pure GTK4/libadwaita app
-CLIENT_LIBS="$NIXLIBS"
-CLIENT_ENV="GDK_BACKEND=wayland GSK_RENDERER=cairo"
-case "$1" in
-  -c)    CLIENT="$2"; CLIENT_ENV="" ;;
-  --shm) CLIENT=/root/wlclient; CLIENT_LIBS="$WLLIB"; CLIENT_ENV="" ;;
+# --- clean slate ---
+pkill -9 -f smallvil 2>/dev/null; pkill -9 x0vncserver 2>/dev/null
+pkill -9 lo-relay 2>/dev/null;   pkill -9 wlclient 2>/dev/null
+pkill -9 Xorg 2>/dev/null;       sleep 2
+rm -f "$XDG_RUNTIME_DIR"/wayland-1*
+
+# --- the mediated-GL server libglx link is populated at boot by ogl-select;
+#     re-run it so Xorg loads GLX/DRISWRAST (fresh AMIs miss the amd64 link). ---
+svcadm restart application/opengl/ogl-select 2>/dev/null; sleep 2
+
+# --- 1. DISPLAY substrate: Xorg :99, dummy driver = a headless framebuffer that
+#        (unlike Xvfb/Xvnc) advertises DRI2 so Mesa's swrast EGL-X11 works. ---
+/usr/bin/Xorg $DISP -config /root/xorg-dummy.conf -noreset -nolisten tcp \
+  > /root/xorg.log 2>&1 &
+sleep 5
+
+# --- 2. smallvil: the smithay SW Wayland compositor. winit-x11 opens a window in
+#        Xorg :99; EGL PLATFORM_X11_KHR -> softpipe GLES2 (SW). GALLIUM=softpipe
+#        (NOT llvmpipe: llvmpipe fails the DRI2 swrast screen on this Mesa). ---
+(
+  export DISPLAY=$DISP
+  unset WAYLAND_DISPLAY               # so winit uses X11, not a nested wayland
+  export XKB_CONFIG_ROOT="$XKB"
+  export LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=softpipe
+  export LIBGL_DRIVERS_PATH=/usr/lib/xorg/modules/dri/amd64
+  export LD_LIBRARY_PATH="$WLLIB:/usr/lib/64"
+  exec "$BIN/smallvil"
+) > /root/smallvil.log 2>&1 &
+sleep 10
+
+# --- 3. a Wayland client inside smallvil ---
+CLIENT="$BIN/../.. "   # placeholder
+case "${1:-}" in
+  -c)            CLIENT="$2" ;;
+  --cosmic-term) CLIENT="$BIN/cosmic-term" ;;
+  --cosmic-files)CLIENT="$BIN/cosmic-files" ;;
+  *)             CLIENT="/root/wlclient" ;;   # raw wl_shm proof (illumos-safe tmpfile shm)
 esac
-
-echo "[solnix] cleaning up any previous session"
-pkill -9 -f smallvil  2>/dev/null || true
-pkill -9 -f x11vnc    2>/dev/null || true
-pkill -9 -f adw-hello 2>/dev/null || true
-pkill -9 -f wlclient  2>/dev/null || true
-sleep 1
-
-mkdir -p "$XDG"; chmod 700 "$XDG"; rm -f "$XDG"/wayland-*
-
-echo "[solnix] starting Xvfb $DISP ($GEOM)"
-if ! DISPLAY=$DISP /root/xgrab /tmp/.probe.ppm >/dev/null 2>&1; then
-  "$XVFB" $DISP -screen 0 $GEOM -ac >/root/xvfb.log 2>&1 &
-  sleep 3
-fi
-
-echo "[solnix] starting smallvil (nix-pure Wayland compositor, softpipe)"
-# nice 19 + Timer-driven client dispatch (see the illumos-epoll note in the source);
-# GL is dlopen'd from the OI Mesa softpipe.
-( unset WAYLAND_DISPLAY
-  export DISPLAY=$DISP XDG_RUNTIME_DIR=$XDG RUST_LOG=warn
-  nohup nice -n 19 "$SMALLVIL" -c /bin/true >/root/smallvil.log 2>&1 & )
-for i in 1 2 3 4 5 6 7 8 9 10; do
-  sleep 1; [ -S "$XDG/wayland-1" ] && break
-done
-[ -S "$XDG/wayland-1" ] || { echo "[solnix] smallvil socket not created"; exit 1; }
-echo "[solnix] wayland-1 socket up"
-
-echo "[solnix] starting client: $CLIENT"
-( export LD_LIBRARY_PATH="$CLIENT_LIBS" WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=$XDG
-  export LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe
-  # shellcheck disable=SC2086
-  env $CLIENT_ENV nohup nice -n 19 "$CLIENT" >/root/client.log 2>&1 & )
+(
+  export WAYLAND_DISPLAY=wayland-1 GDK_BACKEND=wayland
+  export LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=softpipe
+  export LIBGL_DRIVERS_PATH=/usr/lib/xorg/modules/dri/amd64
+  unset DISPLAY
+  if [ "$CLIENT" = "/root/wlclient" ]; then
+    export LD_LIBRARY_PATH="$WLLIB:/usr/lib/64"
+  else
+    export LD_LIBRARY_PATH="$BIN/lib:$WLLIB:/usr/lib/64"
+  fi
+  exec "$CLIENT"
+) > /root/cosmic-client.log 2>&1 &
 sleep 4
 
-echo "[solnix] starting x11vnc on 127.0.0.1:5900 (localhost only, SSH-tunnel it)"
-"$X11VNC" -display $DISP -localhost -rfbport 5900 -nopw -forever -shared -bg \
-  -o /root/x11vnc.log >/dev/null 2>&1
+# --- 4. VNC export, localhost-only. x0vncserver (TigerVNC 1.8) can only listen
+#        on all interfaces, so it runs on :5901 and lo-relay binds 127.0.0.1:5900
+#        and forwards -> the only externally-tunneled listener is localhost. ---
+/usr/bin/x0vncserver -display $DISP -rfbport 5901 -SecurityTypes None \
+  > /root/x0vnc.log 2>&1 &
+sleep 3
+/root/lo-relay 5900 5901 > /root/lo-relay.log 2>&1 &
 sleep 2
 
+echo "=== solnix COSMIC/Wayland session ==="
+echo "Xorg :99      pid $(pgrep -f 'Xorg :99' | head -1)"
+echo "smallvil      pid $(pgrep -f smallvil | head -1)  (softpipe SW GLES2 compositor)"
+echo "client        pid $(pgrep -f "$(basename "$CLIENT")" | head -1)  ($CLIENT)"
+echo "x0vncserver   pid $(pgrep -f x0vncserver | head -1)  (mirrors :99 on 5901)"
+echo "lo-relay      pid $(pgrep -f lo-relay | head -1)"
 echo
-echo "[solnix] session up:"
-pgrep -fl smallvil  | head -1
-pgrep -fl "$(basename "$CLIENT")" | head -1
 netstat -an 2>/dev/null | grep '127.0.0.1.5900' | head -1
-echo
-echo "[solnix] connect from your machine:"
-echo "    ssh -N -L 5900:127.0.0.1:5900 root@<this-host>"
-echo "    <vnc-viewer> 127.0.0.1:5900"
-echo
-echo "[solnix] to stop:  pkill -9 -f smallvil; pkill -9 -f x11vnc; pkill -9 -f $(basename "$CLIENT")"
+echo "VNC: 127.0.0.1:5900 (localhost only). Tunnel: ssh -N -L 5900:127.0.0.1:5900 root@<host>"
