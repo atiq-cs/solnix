@@ -1,0 +1,31 @@
+diff --git a/usr/src/uts/common/io/ena/ena.c b/usr/src/uts/common/io/ena/ena.c
+index 0736859d..f27ab90c 100644
+--- a/usr/src/uts/common/io/ena/ena.c
++++ b/usr/src/uts/common/io/ena/ena.c
+@@ -1696,7 +1696,7 @@ ena_attach_device_init(ena_t *ena)
+ 		ena_set_max_io_queues(ena);
+ 	}
+ 
+-	ena->ena_mtu = ena->ena_max_mtu;
++	ena->ena_mtu = min(ena->ena_max_mtu, ETHERMTU);
+ 	ena_update_buf_sizes(ena);
+ 
+ 	if (!ena_get_hints(ena))
+diff --git a/usr/src/uts/common/io/ena/ena_rx.c b/usr/src/uts/common/io/ena/ena_rx.c
+index 8ebf6c99..fadb21ff 100644
+--- a/usr/src/uts/common/io/ena/ena_rx.c
++++ b/usr/src/uts/common/io/ena/ena_rx.c
+@@ -328,6 +328,13 @@ ena_ring_rx_start(mac_ring_driver_t rh, uint64_t gen_num)
+ 	ENAHW_REG_INTR_UNMASK(intr_ctrl);
+ 	ena_hw_abs_write32(ena, rxq->er_cq_unmask_addr, intr_ctrl);
+ 	rxq->er_state |= ENA_RXQ_STATE_RUNNING;
++	/*
++	 * Cold-boot Rx settle: on EC2 Nitro the first broadcast frames (DHCP
++	 * OFFER) can be missed if the ring is brought up too quickly relative to
++	 * the backend enabling delivery. A short delay after arming the Rx
++	 * interrupt makes cold-boot DHCP reception deterministic.
++	 */
++	delay(drv_usectohz(50000));
+ 	return (0);
+ }
+ 

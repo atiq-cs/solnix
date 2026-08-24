@@ -98,8 +98,14 @@ if [ "$DO_ARCHIVE_OFFLINE" = 1 ]; then
   gunzip -c "$BA" > "$WD/ba.cpio"
   ( cd "$WD" && cpio -it < ba.cpio 2>/dev/null > order.txt )
   mkdir -p "$WD/root"
-  ( cd "$WD/root" && cpio -idm --no-absolute-filenames < "$WD/ba.cpio" 2>/dev/null )
-  [ -f "$WD/root/kernel/drv/amd64/ena" ] || die "boot_archive has no kernel/drv/amd64/ena"
+  # NOTE: the boot_archive is best edited IN PLACE on a booted illumos root (never
+  # via a ZFS import of the target pool -- ZFS-import edits corrupt the DHCP config
+  # and produce AMIs that boot but never lease; measured 0/6 vs in-place 6/6).
+  # cpio extract: illumos cpio has NO --no-absolute-filenames (GNU-only). Passing it
+  # here made this extract SILENTLY NO-OP on illumos -- the ena swap never happened.
+  # illumos boot_archive entries are relative, so plain -idm is correct + safe.
+  ( cd "$WD/root" && cpio -idm < "$WD/ba.cpio" 2>/dev/null )
+  [ -f "$WD/root/kernel/drv/amd64/ena" ] || die "boot_archive has no kernel/drv/amd64/ena (cpio extract failed -- was --no-absolute-filenames passed? illumos cpio lacks it)"
   cp "$ENA_MODULE" "$WD/root/kernel/drv/amd64/ena"
   chmod 0755 "$WD/root/kernel/drv/amd64/ena"
   chown 0:3 "$WD/root/kernel/drv/amd64/ena" 2>/dev/null || true

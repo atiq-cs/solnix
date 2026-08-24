@@ -1,0 +1,73 @@
+#!/bin/sh
+# metadata-shim.sh — replaces /usr/lib/metadata in the solnix (OpenIndiana-derived)
+# cloud image on EC2 Nitro (ena NIC).
+#
+# WHY: the stock OI metadata-agent is an IMDSv1 client; this account enforces
+# IMDSv2, so the agent 401s and hangs to its 300s timeout, gating
+# svc:/milestone/network. We swap it for this shim, which brings up DHCP on the
+# ena NIC and enables ssh, then exits 0 so the milestones proceed.
+#
+# Nitro/ena: single DHCP addrobj only (ena0/dhcp). The earlier Xen-era shim
+# created a SECOND addrobj (ena0/v4) as a fallback and then set mtu=1400; on
+# Nitro both were wrong — the dual addrobj races DHCP and the mtu set fails
+# ENOTSUP. The ena driver now defaults MTU to 1500 (ETHERMTU), so no clamp is
+# needed. One addrobj, no mtu twiddling.
+exec >>/var/log/solnix-metadata.log 2>&1
+set -x
+echo "=== solnix shim $(date) ==="
+i=0; NIC=""
+while [ $i -lt 30 ]; do
+  NIC=$(dladm show-phys -p -o LINK 2>/dev/null | head -1)
+  [ -n "$NIC" ] && break
+  i=$((i+1)); sleep 2
+done
+echo "waited ${i}x2s; NIC='$NIC'"
+if [ -n "$NIC" ]; then
+  ipadm create-if "$NIC" 2>&1 || true
+  # Single DHCP address object. If a stale ena0/v4 exists from a prior boot,
+  # delete it so it cannot race the real lease.
+  ipadm delete-addr "$NIC/v4" 2>/dev/null || true
+  ipadm create-addr -T dhcp -w 30 "$NIC/dhcp" 2>&1 || true
+
+  # Bounded first-boot DHCP watchdog. On a cold Nitro boot the ena Rx path can
+  # need a second, faster DHCP attempt after the network stack is fully warm:
+  # the OFFER/ACK are received (proven) but the first configure_v4_lease loses
+  # a timing race and the interface comes up link-up with no lease. A single
+  # reboot lets the second boot's DHCP bind cleanly. We reboot at most ONCE,
+  # gated by a marker file, so this can never loop.
+  # NOTE: reboot-to-retry, not a driver-level Rx fix; the durable fix is in
+  # the illumos ena Rx cold-boot bring-up, but a one-shot reboot is the smallest
+  # change that makes cold-boot DHCP deterministic on the heavy image.
+  MARK=/var/lib/solnix-dhcp-retried
+  got=""
+  j=0
+  while [ $j -lt 20 ]; do
+    got=$(ipadm show-addr -p -o ADDR "$NIC/dhcp" 2>/dev/null)
+    case "$got" in
+      ""|\?|0.0.0.0*) : ;;   # not yet
+      *) break ;;              # have a v4 address
+    esac
+    j=$((j+1)); sleep 2
+  done
+  case "$got" in
+    ""|\?|0.0.0.0*)
+      if [ ! -f "$MARK" ]; then
+        mkdir -p /var/lib
+        : > "$MARK"
+        echo "no DHCP lease after 40s; one-shot reboot to retry $(date)"
+        sync
+        /usr/sbin/reboot
+      else
+        echo "still no lease after the one-shot reboot; giving up cleanly $(date)"
+      fi
+      ;;
+  esac
+fi
+# DNS (DHCP on illumos here doesn't seed resolv.conf reliably)
+[ -s /etc/resolv.conf ] || printf 'nameserver 169.254.169.253\nnameserver 8.8.8.8\n' > /etc/resolv.conf
+[ -e /etc/nsswitch.conf ] || cp /etc/nsswitch.dns /etc/nsswitch.conf 2>/dev/null || true
+svcadm enable -s svc:/network/dns/client 2>&1 || true
+svcadm enable -s svc:/network/ssh:default 2>&1 || true
+hostname solnix-builder-build 2>/dev/null || true
+echo "=== shim done $(date) ==="
+exit 0
