@@ -55,3 +55,34 @@ the module natively:
     # link with the proto ld (ctfmerge against genunix is optional):
     #   ld -ztype=kmod -N misc/mac -z defs -M .../{ddi,mac,kernel}.mapfile \
     #      -M debug64/dtrace.mapfile -o debug64/ena debug64/*.o
+
+
+## CORRECTION -- the fix is real but INCOMPLETE (measured, disassembly-verified)
+
+A later verification (docs/ena-cold-boot-verification.md) disassembled the ena
+driver in the shipped AMIs (root AND boot_archive) and measured real cold-launch
+success. Findings:
+
+- The fix IS present and byte-identical in both the root and the boot_archive of
+  the live AMIs (disassembly-proven `cmpl $0x5dc` = min(max_mtu,1500)). It did
+  propagate.
+- BUT the "30/30 (100%)" numbers below were measured only on SMALL 2-vCPU types
+  (m5.large / t3.large / c5.large). They do NOT hold on larger / heavier images:
+    * light base AMI:  m5.large ~80%,  m5.4xlarge 70%
+    * heavy gtk4 AMI:  m5.large 0/15,  m5.4xlarge 0/10  (~100% wedge)
+- Root cause of the residual wedge: the illumos ena Rx cold-boot DHCP-OFFER
+  RECEPTION reliability (per docs/design-mtu-policy.md: rx_sgl_max=1, jumbo/ring-
+  realloc latches). The 1500 MTU is the correct value but does not fix Rx
+  reception on cold boot; the heavy gtk4 image (60GB root, 89MB boot_archive,
+  5 ZFS fs) triggers it reliably. NOT CPU/instance-type-bound; a warm reboot does
+  not recover it (dhcpagent stuck SELECTING, ena Rx never delivers the OFFER).
+- `Hostname: unknown` prints EARLY on EVERY boot (good and bad) -- it is NOT the
+  failure signal. The real signal is SSH reachability (a DHCP lease was obtained).
+- A stale OpenIndiana Xen-HVM /usr/lib/metadata shim is present on both AMIs
+  (creates a dual DHCP addrobj + a failing mtu=1400 set); it should be replaced
+  by the current single-addrobj metadata-shim.
+
+The complete fix is a source-level ena Rx-path change (gate rebuild + offline
+boot_archive inject + disassembly verify), tracked as the next ena task. Do NOT
+RW-mount an illumos ZFS root from OpenZFS-on-Linux for boot-critical edits (it
+corrupts the pool, ZFS-8000-CS); edit the boot_archive as raw gzip'd cpio only.
