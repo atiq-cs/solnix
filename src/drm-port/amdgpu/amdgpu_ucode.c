@@ -189,6 +189,7 @@ struct navi12_fw_ent {
 };
 
 static const struct navi12_fw_ent navi12_fw_table[] = {
+	{ AMDGPU_UCODE_ID_SOS,     NAVI12_FW_SOS,  B_TRUE  },
 	{ AMDGPU_UCODE_ID_CP_PFP,  NAVI12_FW_PFP,  B_TRUE  },
 	{ AMDGPU_UCODE_ID_CP_ME,   NAVI12_FW_ME,   B_TRUE  },
 	{ AMDGPU_UCODE_ID_CP_CE,   NAVI12_FW_CE,   B_TRUE  },

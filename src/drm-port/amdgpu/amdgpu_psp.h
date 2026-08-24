@@ -42,12 +42,15 @@ struct amdgpu_softc;
 struct amdgpu_psp {
 	struct amdgpu_bo	*km_ring_bo;	/* PSP GFX command ring BO */
 	uint64_t		km_ring_gpu_addr;
+	struct amdgpu_bo	*fw_pri_bo;	/* sOS/sysdrv staging BO (fw_pri) */
+	uint64_t		fw_pri_gpu_addr;
 	boolean_t		initialized;
 };
 
 /* --- PSP bring-up (psp.c), all HARDWARE-GATED at runtime --- */
 int	amdgpu_psp_hw_init(struct amdgpu_softc *);
 void	amdgpu_psp_hw_fini(struct amdgpu_softc *);
+int	amdgpu_psp_bootloader_load_sos(struct amdgpu_softc *, struct amdgpu_psp *);
 int	amdgpu_psp_wait_sos(struct amdgpu_softc *);
 int	amdgpu_psp_ring_create(struct amdgpu_softc *, struct amdgpu_psp *);
 int	amdgpu_psp_load_fw(struct amdgpu_softc *, struct amdgpu_psp *,

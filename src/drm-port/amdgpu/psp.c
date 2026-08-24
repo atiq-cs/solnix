@@ -55,7 +55,8 @@
 
 /* the mailbox slots psp_v11_0 uses (crib: psp_v11_0.c). */
 #define	PSP_C2PMSG_SOS_STATUS	MP0_C2PMSG(64)	/* sOS boot status */
-#define	PSP_C2PMSG_BL_STATUS	MP0_C2PMSG(35)	/* bootloader status */
+#define	PSP_C2PMSG_BL_STATUS	MP0_C2PMSG(35)	/* bootloader status + cmd */
+#define	PSP_C2PMSG_BL_ADDR_HI	MP0_C2PMSG(36)	/* bootloader: fw hi addr */
 #define	PSP_C2PMSG_CMD_ID	MP0_C2PMSG(69)	/* ring/command doorbell */
 #define	PSP_C2PMSG_CMD_LO	MP0_C2PMSG(101)	/* cmd buf addr low */
 #define	PSP_C2PMSG_CMD_HI	MP0_C2PMSG(102)	/* cmd buf addr high */
@@ -64,6 +65,17 @@
 /* status bits (crib: psp_v11_0 MBOX_READY / the sOS RUNNING marker). */
 #define	PSP_SOS_RUNNING_MASK	0x80000000u
 #define	PSP_MBOX_READY_MASK	0x80000000u
+
+/*
+ * PSP on-die bootloader command bits in C2PMSG_35 (crib: psp_v11_0.c
+ * psp_v11_0_bootloader_load_component / the C2PMSG_35 command encoding). The
+ * bootloader signals "ready for a command" by setting bit 31 of C2PMSG_35 to 1;
+ * the driver then writes the fw hi-address into C2PMSG_36 and pokes the load
+ * command (low byte = 1 in psp_v11's encoding, shifted to the command field)
+ * back into C2PMSG_35. The 0x2 selects the sOS component on Navi.
+ */
+#define	PSP_BL_READY_MASK	0x80000000u	/* BL ready-for-cmd bit */
+#define	PSP_BL_CMD_LOAD_SOS	0x20000u	/* load-sOS component cmd */
 
 /* how long to poll a PSP status word before giving up (live-hw only). */
 #define	PSP_POLL_TIMEOUT_US	1000000		/* 1 s in 1 us steps */
@@ -101,6 +113,115 @@ psp_wait_reg(struct amdgpu_softc *sc, uint32_t reg, uint32_t mask,
 		drv_usecwait(1);	/* live-hw: give the PSP a microsecond */
 	}
 	return (DDI_FAILURE);	/* off-hardware: always lands here */
+}
+
+/*
+ * amdgpu_psp_bootloader_load_sos - load the PSP secure-OS (sOS) via the on-die
+ * bootloader. On Navi12 the PSP does NOT boot its sOS by itself: the driver
+ * must stage the signed navi12_sos.bin into a GPU-visible BO and hand its
+ * address to the on-die bootloader through the C2PMSG_35/36 mailbox, then the
+ * bootloader authenticates + starts the sOS (which is what flips C2PMSG_64
+ * RUNNING). Without this step amdgpu_psp_wait_sos times out forever
+ * ("PSP sOS not running") -- this is the C3-amdgpu-d gate.
+ *
+ * Crib: psp_v11_0.c psp_v11_0_bootloader_load_sos / psp_v11_0_bootloader_load_
+ * component: wait BL ready (C2PMSG_35 bit31), write fw hi-addr to C2PMSG_36,
+ * write the load command to C2PMSG_35, wait for the bootloader to consume it.
+ *
+ * The BO alloc + copy + register writes are structurally correct + COMPILE;
+ * the bootloader's accept (C2PMSG_35 clears / C2PMSG_81 status) is
+ * HARDWARE-GATED -- on real silicon the sOS comes up + wait_sos then succeeds.
+ */
+int
+amdgpu_psp_bootloader_load_sos(struct amdgpu_softc *sc, struct amdgpu_psp *psp)
+{
+	struct amdgpu_ucode *uc = sc->ucode;
+	struct amdgpu_firmware_info *sos = NULL;
+	const struct psp_firmware_header_v1_0 *sos_hdr;
+	struct amdgpu_bo *bo;
+	const uint8_t *sos_ucode;
+	uint32_t sos_size, i;
+	void *bo_va;
+	int r;
+
+	if (uc == NULL || !uc->ready)
+		return (DDI_FAILURE);
+
+	/* find the sOS blob in the loaded ucode set. */
+	for (i = 0; i < uc->fw_count; i++) {
+		if (uc->fw[i].fw_id == AMDGPU_UCODE_ID_SOS && uc->fw[i].loaded) {
+			sos = &uc->fw[i];
+			break;
+		}
+	}
+	if (sos == NULL || sos->raw == NULL) {
+		cmn_err(CE_WARN, "?amdgpu: no sOS firmware (navi12_sos.bin) "
+		    "loaded -- cannot bootstrap the PSP");
+		return (DDI_FAILURE);
+	}
+
+	/*
+	 * The sOS payload is at sos_offset_bytes within the blob (a psp v1_0
+	 * header). Validate it sits inside the raw buffer before using it.
+	 */
+	sos_hdr = (const struct psp_firmware_header_v1_0 *)sos->raw;
+	if ((uint64_t)sos_hdr->sos_offset_bytes +
+	    (uint64_t)sos_hdr->sos_size_bytes > (uint64_t)sos->raw_size) {
+		cmn_err(CE_WARN, "?amdgpu: sOS header out of range "
+		    "(off %u sz %u raw %lu)", sos_hdr->sos_offset_bytes,
+		    sos_hdr->sos_size_bytes, (unsigned long)sos->raw_size);
+		return (DDI_FAILURE);
+	}
+	sos_ucode = sos->raw + sos_hdr->sos_offset_bytes;
+	sos_size = sos_hdr->sos_size_bytes;
+
+	/*
+	 * Stage the sOS into a GTT BO the PSP bootloader can DMA from. Reuse
+	 * the fw_pri BO across bootloader loads (sysdrv/sos share it on Navi).
+	 */
+	if (psp->fw_pri_bo == NULL) {
+		r = amdgpu_bo_create(sc, sos_size, AMDGPU_GEM_DOMAIN_GTT, &bo);
+		if (r != DDI_SUCCESS)
+			return (r);
+		psp->fw_pri_bo = bo;
+		psp->fw_pri_gpu_addr = amdgpu_bo_gpu_offset(bo);
+	}
+	bo_va = amdgpu_bo_cpu_addr(psp->fw_pri_bo);
+	if (bo_va == NULL)
+		return (DDI_FAILURE);
+	bcopy(sos_ucode, bo_va, sos_size);
+
+	/*
+	 * 1. Wait for the on-die bootloader to be ready to accept a command
+	 *    (C2PMSG_35 bit31 set). HARDWARE-GATED: off-hardware this times out.
+	 */
+	if (psp_wait_reg(sc, PSP_C2PMSG_BL_STATUS, PSP_BL_READY_MASK,
+	    PSP_BL_READY_MASK) != DDI_SUCCESS) {
+		cmn_err(CE_WARN, "?amdgpu: PSP bootloader not ready "
+		    "(expected off-hardware)");
+		return (DDI_FAILURE);
+	}
+
+	/*
+	 * 2. Hand the bootloader the sOS address (bits [39:8] in C2PMSG_36 per
+	 *    psp_v11) and issue the load-sOS command in C2PMSG_35.
+	 */
+	psp_wreg(sc, PSP_C2PMSG_BL_ADDR_HI,
+	    (uint32_t)(psp->fw_pri_gpu_addr >> 20));
+	psp_wreg(sc, PSP_C2PMSG_BL_STATUS, PSP_BL_CMD_LOAD_SOS);
+
+	/*
+	 * 3. Wait for the bootloader to consume the command (bit31 re-set = idle
+	 *    again / ready). HARDWARE-GATED. After this, amdgpu_psp_wait_sos
+	 *    should observe C2PMSG_64 RUNNING on real silicon.
+	 */
+	if (psp_wait_reg(sc, PSP_C2PMSG_BL_STATUS, PSP_BL_READY_MASK,
+	    PSP_BL_READY_MASK) != DDI_SUCCESS) {
+		cmn_err(CE_WARN, "?amdgpu: PSP bootloader sOS load not "
+		    "acknowledged (expected off-hardware)");
+		return (DDI_FAILURE);
+	}
+	return (DDI_SUCCESS);
 }
 
 /*
@@ -226,7 +347,20 @@ amdgpu_psp_hw_init(struct amdgpu_softc *sc)
 	psp = kmem_zalloc(sizeof (*psp), KM_SLEEP);
 	sc->psp = psp;
 
-	/* 1. wait for the on-die bootloader to bring the sOS RUNNING. */
+	/*
+	 * 1. Load the sOS via the on-die bootloader. On Navi12 the PSP does not
+	 *    self-boot its sOS -- the driver must stage navi12_sos.bin + hand it
+	 *    to the bootloader (C2PMSG_35/36). Without this, wait_sos never sees
+	 *    RUNNING. This is the C3-amdgpu-d gate.
+	 */
+	r = amdgpu_psp_bootloader_load_sos(sc, psp);
+	if (r != DDI_SUCCESS) {
+		cmn_err(CE_WARN, "?amdgpu: PSP sOS bootloader load failed "
+		    "(expected off-hardware)");
+		goto fail;
+	}
+
+	/* 2. wait for the bootloader to bring the sOS RUNNING. */
 	r = amdgpu_psp_wait_sos(sc);
 	if (r != DDI_SUCCESS) {
 		cmn_err(CE_WARN, "?amdgpu: PSP sOS not running "
@@ -234,12 +368,12 @@ amdgpu_psp_hw_init(struct amdgpu_softc *sc)
 		goto fail;
 	}
 
-	/* 2. create the PSP GFX command ring. */
+	/* 3. create the PSP GFX command ring. */
 	r = amdgpu_psp_ring_create(sc, psp);
 	if (r != DDI_SUCCESS)
 		goto fail;
 
-	/* 3. authenticate + load each required blob through the PSP. */
+	/* 4. authenticate + load each required blob through the PSP. */
 	for (i = 0; i < AMDGPU_UCODE_ID_MAXIMUM; i++) {
 		struct amdgpu_firmware_info *fw = &uc->fw[i];
 

@@ -160,6 +160,7 @@ enum amdgpu_ucode_id {
 	AMDGPU_UCODE_ID_RLC_G,
 	AMDGPU_UCODE_ID_SMC,
 	AMDGPU_UCODE_ID_VCN,
+	AMDGPU_UCODE_ID_SOS,		/* PSP secure-OS (navi12_sos.bin) */
 	AMDGPU_UCODE_ID_MAXIMUM,
 };
 
