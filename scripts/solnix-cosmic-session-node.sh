@@ -29,5 +29,5 @@ env LD_LIBRARY_PATH="$BIN/lib:$WLLIB:/usr/lib/64" \
     /nix/cosmic/cosmic-apps/cosmic-term/target/x86_64-unknown-illumos/release/cosmic-term --no-daemon &
 sleep 2
 # 4. x11vnc exporting :99 on 127.0.0.1:5900 (localhost only)
-/usr/bin/x11vnc -display :99 -localhost -rfbport 5900 -noipv6 -forever -shared -nopw -noxdamage &
+env -u WAYLAND_DISPLAY /usr/bin/x11vnc -display :99 -localhost -rfbport 5900 -noipv6 -forever -shared -nopw -noxdamage &
 echo "solnix COSMIC session started; VNC on 127.0.0.1:5900 (ssh -N -L 5900:127.0.0.1:5900 root@<ip>)"
