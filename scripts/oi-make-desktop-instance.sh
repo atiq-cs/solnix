@@ -3,7 +3,7 @@
 # instance for the maintainer to test.
 #
 # Prereqs (all now satisfied this campaign):
-#   * the canonical reliable-boot AMI (ena-fixed): ami-0978836610527a836
+#   * the canonical 10/10-reliable-boot AMI (ena + PIT-hang fixed): ami-08028a88f6e53ff49
 #   * the built COSMIC stack on the nixpool store volume (vol-00db8261b2ab3c143)
 #   * scripts/solnix-cosmic-session.sh (Xorg-dummy + smallvil + cosmic apps + VNC-on-localhost)
 #   * the graphical installer (installer/, renders over VNC)
@@ -22,7 +22,7 @@
 set -eu
 
 REGION=us-east-2
-AMI=ami-0978836610527a836            # canonical reliable-boot (ena-fixed)
+AMI=ami-08028a88f6e53ff49            # canonical 10/10 (ena + pit_is_broken=1 kernel-hang fix)
 NIXPOOL_VOL=vol-00db8261b2ab3c143    # the built COSMIC store
 SG=sg-0c5bd795eebf02b59
 SUBNET=subnet-0bacf32f8c7ba9a5b      # us-east-2a (same AZ as the nixpool vol)
