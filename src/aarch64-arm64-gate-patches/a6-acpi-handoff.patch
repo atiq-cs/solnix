@@ -1,0 +1,74 @@
+diff --git a/usr/src/uts/armv8/Makefile.files b/usr/src/uts/armv8/Makefile.files
+index 8fbe5d8491..75e365b26d 100644
+--- a/usr/src/uts/armv8/Makefile.files
++++ b/usr/src/uts/armv8/Makefile.files
+@@ -120,6 +120,7 @@ DBOOT_OBJS +=			\
+ 	dboot_printf.o		\
+ 	dboot_conf.o		\
+ 	dboot_conf_acpi.o	\
++	dboot_synth_fdt.o	\
+ 	dboot_conf_fdt.o	\
+ 	dboot_conf_uefi.o	\
+ 	dboot_memlist.o		\
+diff --git a/usr/src/uts/armv8/dboot/dboot.h b/usr/src/uts/armv8/dboot/dboot.h
+index fc6c906459..1b314de440 100644
+--- a/usr/src/uts/armv8/dboot/dboot.h
++++ b/usr/src/uts/armv8/dboot/dboot.h
+@@ -63,6 +63,11 @@ extern int dboot_configure_fdt(void);
+  */
+ extern int dboot_configure_acpi(void);
+ 
++/*
++ * dboot_synth_fdt.c
++ */
++extern uint64_t dboot_synth_fdt(struct xboot_info *);
++
+ /*
+  * dboot_uefimem.c
+  */
+diff --git a/usr/src/uts/armv8/dboot/dboot_conf_acpi.c b/usr/src/uts/armv8/dboot/dboot_conf_acpi.c
+index 2065202350..b8b911a3ff 100644
+--- a/usr/src/uts/armv8/dboot/dboot_conf_acpi.c
++++ b/usr/src/uts/armv8/dboot/dboot_conf_acpi.c
+@@ -36,6 +36,7 @@
+ 
+ extern void boot_smccc_init(struct xboot_info *);
+ extern void boot_psci_init(struct xboot_info *);
++extern uint64_t dboot_synth_fdt(struct xboot_info *);
+ 
+ static const ACPI_TABLE_XSDT *
+ get_acpi_xsdt(void)
+@@ -305,5 +306,16 @@ dboot_configure_acpi(void)
+ 	boot_smccc_init(bi);
+ 	boot_psci_init(bi);
+ 	dboot_count_pcierc(bi);
+-	return (dboot_configure_acpi_cpuinfo(bi));
++	if (dboot_configure_acpi_cpuinfo(bi) != 0)
++		return (-1);
++
++	/*
++	 * Synthesise a minimal FDT from the static ACPI tables so that
++	 * the kernel's FDT-fed prom_emul and device enumeration work
++	 * unchanged. On failure bi_fdt stays 0 (no devicetree); the
++	 * kernel would then come up without enumerated devices.
++	 */
++	bi->bi_fdt = dboot_synth_fdt(bi);
++
++	return (0);
+ }
+diff --git a/usr/src/uts/armv8/dboot/dboot_machdep.c b/usr/src/uts/armv8/dboot/dboot_machdep.c
+index 854c788dee..595328c40b 100644
+--- a/usr/src/uts/armv8/dboot/dboot_machdep.c
++++ b/usr/src/uts/armv8/dboot/dboot_machdep.c
+@@ -182,9 +182,8 @@ exitto(int (*entrypoint)(struct xboot_info *), struct xboot_info *bi)
+ 
+ 	if (bi->bi_fdt == 0) {
+ 		dboot_printf(
+-		    "dboot: ACPI kernel support is a work in progress\n");
+-		for (;;)
+-			/* spin forever */;
++		    "dboot: no devicetree (ACPI synth failed); "
++		    "kernel device enumeration will be incomplete\n");
+ 	}
+ 
+ 	/*
