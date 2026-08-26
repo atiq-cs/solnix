@@ -56,3 +56,35 @@ in parallel with x86_64 breadth; expect it to be a long track.
   proto builds → seed → hello runs → boots in QEMU. Do NOT claim "aarch64
   supported" until it boots to multi-user (per the architecture steering's
   supported-means-boots rule).
+
+## === NATIVE-BOOT CAMPAIGN (multi-week, approved) ===
+# The cross-build role (A1-A3) WORKS: 218 aarch64-solaris store paths, cross toolchain builds, EM_AARCH64
+# verified. The NATIVE-boot track (a bootable aarch64 solnix instance) is the campaign. Verdict from the
+# readiness assessment: native Graviton/EC2 = BLOCKED at the illumos port (GICv3/ACPI/Nitro, months
+# upstream); QEMU-virt (GICv2/devicetree) is the port's real, feasible target. So the campaign boots QEMU
+# FIRST, then tackles the Graviton platform gaps.
+
+## A4 — Build the arm64-gate KERNEL (the missing artifact)
+# The cross toolchain builds but `make illumos` (unix/genunix for aarch64) was never completed. Do the full
+# arm64-gate build on a dedicated amd64-illumos host: fetch richlowe/illumos-gate@arm64-gate + the arm64-gate
+# tooling, satisfy its build-env (Python 3.13 for sgs, the right nightly.sh/env), run `make illumos` to
+# produce aarch64 unix/genunix + the base kmods + a proto. Gate: an aarch64 illumos kernel binary exists +
+# nm-verifies as EM_AARCH64. (Big bootstrap: ~7GB tree, multi-hour build, its own toolchain reqs.)
+
+## A5 — Boot solnix-aarch64 in QEMU-virt (GICv2/devicetree -- the port's real target)
+# Assemble the arm64-gate boot artifacts (u-boot.bin + an illumos-disk.img/boot_archive with the A4 kernel +
+# the A3 cross-built userland) and boot under qemu-system-aarch64 -M virt,gic-version=2 -cpu cortex-a72.
+# Gate: solnix-aarch64 reaches multi-user + a shell in QEMU. This is the first BOOTABLE aarch64 solnix.
+
+## A6 — The Graviton/Nitro platform port (the hard, months-long part)
+# Make arm64-gate illumos boot on real AWS Graviton (m7g/c7g). The three blockers (from the assessment):
+#   1. GICv3 interrupt controller (Graviton) vs the port's GICv2 -> write/port a GICv3 driver.
+#   2. ACPI platform enumeration (Nitro) vs the port's devicetree -> an ACPI bring-up path.
+#   3. Nitro ena (net) + nvme (disk) drivers on aarch64 illumos (the x86 ena work is a partial crib; nvme
+#      needs an aarch64 driver). Gated behind #1.
+# Gate: solnix-aarch64 boots on a Graviton instance + networks (the aarch64 analog of the x86 10/10 boot).
+
+## A7 — The aarch64 build-farm animal + AMI
+# Once A6 boots: bake an aarch64 solnix AMI, wire the by-name nix channel (Goal 2, same mechanism as x86),
+# prove PG builds on aarch64 (Goal 3), register the buildfarm animal. Also fix the ELFOSABI_NONE vs
+# ELFOSABI_SOLARIS final-link flag (full ABI parity) noted in the assessment.
