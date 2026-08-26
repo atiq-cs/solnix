@@ -55,3 +55,14 @@ manually on the box; full home-manager activation awaits this mkHome change.
 2. Deterministic auto-start paint -> bake a reproducible desktop AMI.
 3. Wire the solnix overlay into mkHome -> gburd@solnix activates the real config.
 4. cosmic-greeter (Solaris-PAM port) for the login-manager parity.
+
+## Multi-app full-desktop: NOT yet reliably painting (honest)
+The client-dispatch fix reliably paints a LONE cosmic-term (proven, steady, re-verified). But a MULTI-APP
+session (cosmic-panel + cosmic-term + cosmic-files together, all rebuilt against the dispatch patch) does
+NOT reliably composite -- the framebuffer is black despite all procs running + VNC listening. The apps
+BUILT fine (panel/files/launcher/notifications rebuilt OK; settings/bg blocked by a dav1d-sys native-lib,
+unrelated). The gap is session-composition reliability (start-ordering / layer-shell panel + app interaction
+/ a mixed old-new proc state from repeated restarts), NOT the per-app dispatch (that's fixed).
+STATUS: single COSMIC app paints reliably; the full panel+apps desktop needs a clean, ordered session
+bring-up + per-app paint re-verification. Deferred as desktop-polish (below the higher-priority build-farm +
+aarch64-native goals). The reliable-boot + connectable-VNC + single-app-paint wins stand.
