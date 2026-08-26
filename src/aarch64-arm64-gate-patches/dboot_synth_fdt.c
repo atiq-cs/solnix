@@ -53,6 +53,30 @@
 #define	SYNTH_PHANDLE_ITS	2u
 
 /*
+ * prom_emul (prom_emul_fdt.c) uses the FDT `phandle` property as the node
+ * identity: get_phandle() VERIFYs a `phandle` prop exists on every node it
+ * walks (root, each child, each sibling, each parent).  Real DTs assign these;
+ * we must too, one unique value per node.  Reserve 1/2 for the GIC/ITS (which
+ * other nodes reference as interrupt/msi parent) and hand out the rest from a
+ * counter starting past them.
+ */
+#define	SYNTH_PHANDLE_FIRST	3u
+static uint32_t synth_next_phandle;
+
+static uint32_t
+synth_alloc_phandle(void)
+{
+	return (synth_next_phandle++);
+}
+
+/* Emit a unique `phandle` on the node currently being built. */
+static void
+synth_emit_phandle(void *fdt)
+{
+	(void) fdt_property_cell(fdt, "phandle", synth_alloc_phandle());
+}
+
+/*
  * GIC v3 interrupt encoding (3 cells): <type nr flags>.
  *   type: 0 = SPI, 1 = PPI
  *   flags: 4 = level-high, 1 = edge-rising
@@ -71,12 +95,30 @@
 #define	TMR_PPI_HYP		10	/* EL2 physical */
 
 /*
+ * PCIe outbound address windows.  MCFG only describes the config-space
+ * (ECAM) base; the IO / MMIO32 / MMIO64 windows that the pcierc driver
+ * requires as the `ranges` property are not in any static ACPI table we
+ * parse (they live in the DSDT _CRS).  Emit the fixed QEMU virt machine
+ * windows, which also match the layout EDK2 presents on that platform.
+ *
+ * child-address encoding (DT PCI binding): high cell = space+flags
+ *   0x01000000 = IO, 0x02000000 = MEM32, 0x03000000 = MEM64.
+ *
+ * NOTE: QEMU-virt-fixed windows; real SBBR/Graviton needs the DSDT
+ * _CRS parsed for its own IO/MMIO windows.  Upgrade dboot_conf_acpi to
+ * extract the root-bridge _CRS and feed it here when moving off QEMU.
+ */
+#define	PCI_SPACE_IO		0x01000000u
+#define	PCI_SPACE_MEM32		0x02000000u
+#define	PCI_SPACE_MEM64		0x03000000u
+
+/*
  * The synthesised blob.  Placed in dboot's static data so that it
  * survives the handoff to the kernel (which relocates it via
  * fdt_open_into in bop_relocate).  16KiB is comfortably larger than the
  * node set we emit.
  */
-#define	SYNTH_FDT_MAX	8192
+#define	SYNTH_FDT_MAX	16384
 static uint8_t synth_fdt[SYNTH_FDT_MAX] __aligned(8);
 
 extern const void *dboot_uefi_get_acpi_rsdp(void);
@@ -409,6 +451,8 @@ dboot_synth_fdt(struct xboot_info *bi)
 	synth_scan_spcr(&uart);
 	necam = synth_scan_mcfg(ecam, 8);
 
+	synth_next_phandle = SYNTH_PHANDLE_FIRST;
+
 	if (!gic.have_gicd || !gic.have_gicr) {
 		dboot_printf("dboot: synth FDT: MADT missing GICv3 "
 		    "distributor/redistributor\n");
@@ -427,9 +471,11 @@ dboot_synth_fdt(struct xboot_info *bi)
 	(void) fdt_property_cell(fdt, "#size-cells", 2);
 	(void) fdt_property_cell(fdt, "interrupt-parent", SYNTH_PHANDLE_GIC);
 	(void) fdt_property_string(fdt, "compatible", "solnix,acpi-synth");
+	synth_emit_phandle(fdt);
 
 	/* /chosen -- build_firmware_properties_fdt walks this. */
 	(void) fdt_begin_node(fdt, "chosen");
+	synth_emit_phandle(fdt);
 	(void) fdt_end_node(fdt);
 
 	/* /psci -- PSCI is mandatory on ACPI aarch64. */
@@ -442,12 +488,14 @@ dboot_synth_fdt(struct xboot_info *bi)
 	(void) fdt_property_cell(fdt, "cpu_off", bi->bi_psci_cpu_off_id);
 	(void) fdt_property_cell(fdt, "cpu_on", bi->bi_psci_cpu_on_id);
 	(void) fdt_property_cell(fdt, "migrate", bi->bi_psci_migrate_id);
+	synth_emit_phandle(fdt);
 	(void) fdt_end_node(fdt);
 
 	/* /cpus with one cpu@N per MADT GICC entry (already in bi_cpuinfo). */
 	(void) fdt_begin_node(fdt, "cpus");
 	(void) fdt_property_cell(fdt, "#address-cells", 1);
 	(void) fdt_property_cell(fdt, "#size-cells", 0);
+	synth_emit_phandle(fdt);
 	{
 		struct xboot_cpu_info *xci =
 		    (struct xboot_cpu_info *)bi->bi_cpuinfo;
@@ -464,6 +512,7 @@ dboot_synth_fdt(struct xboot_info *bi)
 			    "psci");
 			(void) fdt_property_cell(fdt, "reg",
 			    (uint32_t)xci[i].xci_mpidr);
+			synth_emit_phandle(fdt);
 			(void) fdt_end_node(fdt);
 		}
 	}
@@ -473,6 +522,7 @@ dboot_synth_fdt(struct xboot_info *bi)
 	(void) fdt_begin_node(fdt, "memory@0");
 	(void) fdt_property_string(fdt, "device_type", "memory");
 	(void) prop_reg2(fdt, 0, 0);
+	synth_emit_phandle(fdt);
 	(void) fdt_end_node(fdt);
 
 	/* Architected timer (PPIs fixed by the architecture). */
@@ -495,6 +545,7 @@ dboot_synth_fdt(struct xboot_info *bi)
 		(void) fdt_property(fdt, "interrupts", irq, sizeof (irq));
 	}
 	(void) fdt_property(fdt, "always-on", NULL, 0);
+	synth_emit_phandle(fdt);
 	(void) fdt_end_node(fdt);
 
 	/* GICv3 interrupt controller: reg = <GICD .. GICR ..>. */
@@ -546,7 +597,41 @@ dboot_synth_fdt(struct xboot_info *bi)
 			(void) prop_interrupt(fdt, GIC_SPI, uart.irq - 32,
 			    IRQ_LEVEL_HI);
 		}
+		synth_emit_phandle(fdt);
 		(void) fdt_end_node(fdt);
+	}
+
+	/*
+	 * virtio-mmio transport slots.  QEMU virt places 32 slots at
+	 * 0xa000000 + n*0x200, each SPI (16 + n), edge-rising -- the same
+	 * layout QEMU's generated FDT carries, which is how the FDT path
+	 * binds the boot disk (virtio-blk-device).  ACPI has no table that
+	 * describes these, so we emit the fixed QEMU-virt map; the illumos
+	 * viommionex nexus binds `virtio,mmio' and probes each slot,
+	 * ignoring the empty ones.  Without these the root virtio-blk disk
+	 * never attaches and vfs_mountroot falls back to the ramdisk lofi.
+	 *
+	 * NOTE: QEMU-virt-fixed 32-slot window; real SBBR/Graviton has
+	 * no virtio-mmio (boot disk is NVMe/virtio over PCIe).  Gate this on
+	 * a QEMU-virt detection (or drop it) when moving to real hardware.
+	 */
+	{
+		uint64_t vbase = 0xa000000ULL;
+		uint32_t n;
+		for (n = 0; n < 32; n++) {
+			synth_nodename(name, sizeof (name), "virtio_mmio",
+			    vbase + (uint64_t)n * 0x200);
+			(void) fdt_begin_node(fdt, name);
+			(void) fdt_property_string(fdt, "compatible",
+			    "virtio,mmio");
+			(void) prop_reg2(fdt, vbase + (uint64_t)n * 0x200,
+			    0x200);
+			(void) prop_interrupt(fdt, GIC_SPI, 16 + n,
+			    IRQ_EDGE_RISING);
+			(void) fdt_property(fdt, "dma-coherent", NULL, 0);
+			synth_emit_phandle(fdt);
+			(void) fdt_end_node(fdt);
+		}
 	}
 
 	/* PCIe ECAM root complex(es). */
@@ -571,6 +656,44 @@ dboot_synth_fdt(struct xboot_info *bi)
 				(void) fdt_property(fdt, "bus-range", br,
 				    sizeof (br));
 			}
+			{
+				/*
+				 * ranges: <child(3) parent(2) size(2)> per
+				 * window.  find_resource() in pcierc walks this
+				 * for the IO/MMIO32/MMIO64 available lists; it
+				 * panics ("No ranges property") if absent.
+				 */
+				static const uint64_t rwin[3][4] = {
+					/* space, child-addr, parent-addr, size */
+					{ PCI_SPACE_IO,    0x00000000ULL,
+					  0x3eff0000ULL,   0x00010000ULL },
+					{ PCI_SPACE_MEM32, 0x10000000ULL,
+					  0x10000000ULL,   0x2eff0000ULL },
+					{ PCI_SPACE_MEM64, 0x8000000000ULL,
+					  0x8000000000ULL, 0x8000000000ULL },
+				};
+				fdt32_t rg[3 * 7];
+				int w;
+				for (w = 0; w < 3; w++) {
+					uint64_t ca = rwin[w][1];
+					uint64_t pa = rwin[w][2];
+					uint64_t sz = rwin[w][3];
+					fdt32_t *e = &rg[w * 7];
+					e[0] = cpu_to_fdt32(
+					    (uint32_t)rwin[w][0]);
+					e[1] = cpu_to_fdt32(
+					    (uint32_t)(ca >> 32));
+					e[2] = cpu_to_fdt32((uint32_t)ca);
+					e[3] = cpu_to_fdt32(
+					    (uint32_t)(pa >> 32));
+					e[4] = cpu_to_fdt32((uint32_t)pa);
+					e[5] = cpu_to_fdt32(
+					    (uint32_t)(sz >> 32));
+					e[6] = cpu_to_fdt32((uint32_t)sz);
+				}
+				(void) fdt_property(fdt, "ranges", rg,
+				    sizeof (rg));
+			}
 			if (gic.have_its) {
 				fdt32_t mm[4];
 				mm[0] = cpu_to_fdt32(0);
@@ -590,6 +713,7 @@ dboot_synth_fdt(struct xboot_info *bi)
 				    << 20;
 				(void) prop_reg2(fdt, ecam[i].base, sz);
 			}
+			synth_emit_phandle(fdt);
 			(void) fdt_end_node(fdt);
 		}
 	}
