@@ -148,3 +148,24 @@ bootloader load (navi12_sos.bin, phase C3-amdgpu-d) is not implemented -> no fw-
 no render path -> RADV can't enumerate. STAGE 3 measurement NOT RUN (no fabricated number; Linux V520 stays
 1995/283). NEXT: implement the PSP sOS bootloader load sequence (C3-amdgpu-d) -> GFX power-up -> /dev/dri ->
 RADV -> the first solnix V520 benchmark.
+
+## UPDATE -- GPU measurement attempt: the CIRCULAR blocker (no number, nothing fabricated)
+The AMD libc fix is PROVEN + reproducible on the real g4ad: every boot reaches the console login prompt,
+full device probe, SMF online -- the 32-bit init SIGKILL-loop is dead. BUT SSH was never reached, so the
+amdgpu bind (STAGE 2) was not attempted. Linux V520 stays 1995 pp / 283 tg.
+
+THE CIRCULAR BLOCKER (precisely named): the libc-AMD fix requires a root-filesystem edit (cp
+libc_hwcap3.so.1 -> /lib/libc.so.1). The only OFFLINE way to edit the root is `zpool import` -- but a
+ZFS-import-edited AMI POISONS DHCP (docs/ena-rx-coldboot-fix.md root-cause #1, the dominant unrecoverable
+one: import-edited = 0/10). The repo's SAFE in-place edit method needs SSH -- which needs the libc fix. The
+boot_archive carries only kernel/drivers (no libc), so it can't break the circle. Tested the dual-addrobj +
+clean-export fixes too -- still 0 DHCP, exactly matching the doc. Also: the V520 (pci1002,*) never appeared
+in the console device tree (only pci1d0f NVMe) -- BIOS/enum gap vs console-ring truncation is undetermined
+without prtconf -D (needs SSH).
+
+THE UNBLOCK (the ONLY path avoiding the circle, and it's build-side not hardware): make the solnix libc
+PACKAGE install the int/syscall build as the BASE /lib/libc.so.1 (as UPSTREAM illumos does -- see
+pkgs/illumos/patches/libc-amd-int-syscall-base.README.md "Permanent fix"). Then a g4ad AMI built by the
+IN-PLACE method (never zpool-import) ships libc-correct AND DHCP-intact in ONE image -> SSH works -> prtconf
+1002 (is the V520 enumerated?) -> amdgpu bind + the PSP sOS bootloader-load test (8c2ec60) -> the bench.
+Kept AMIs for next session: ami-0cb7254da736f1df1 (libc+ena), ami-0de76c0bb198c735f (libc-only) + snapshots.
