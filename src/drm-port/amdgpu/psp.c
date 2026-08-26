@@ -140,20 +140,20 @@ amdgpu_psp_bootloader_load_sos(struct amdgpu_softc *sc, struct amdgpu_psp *psp)
 	const struct psp_firmware_header_v1_0 *sos_hdr;
 	struct amdgpu_bo *bo;
 	const uint8_t *sos_ucode;
-	uint32_t sos_size, i;
+	uint32_t sos_size;
 	void *bo_va;
 	int r;
 
 	if (uc == NULL || !uc->ready)
 		return (DDI_FAILURE);
 
-	/* find the sOS blob in the loaded ucode set. */
-	for (i = 0; i < uc->fw_count; i++) {
-		if (uc->fw[i].fw_id == AMDGPU_UCODE_ID_SOS && uc->fw[i].loaded) {
-			sos = &uc->fw[i];
-			break;
-		}
-	}
+	/*
+	 * The ucode set is stored by fw_id index (uc->fw[id]), not packed, so
+	 * index the sOS slot directly. (A linear [0,fw_count) scan misses it:
+	 * AMDGPU_UCODE_ID_SOS is past the count of loaded blobs.)
+	 */
+	if (uc->fw[AMDGPU_UCODE_ID_SOS].loaded)
+		sos = &uc->fw[AMDGPU_UCODE_ID_SOS];
 	if (sos == NULL || sos->raw == NULL) {
 		cmn_err(CE_WARN, "?amdgpu: no sOS firmware (navi12_sos.bin) "
 		    "loaded -- cannot bootstrap the PSP");
@@ -194,11 +194,23 @@ amdgpu_psp_bootloader_load_sos(struct amdgpu_softc *sc, struct amdgpu_psp *psp)
 	/*
 	 * 1. Wait for the on-die bootloader to be ready to accept a command
 	 *    (C2PMSG_35 bit31 set). HARDWARE-GATED: off-hardware this times out.
+	 *
+	 * NOTE (measured on a real V520 / g4ad): the MP0 C2PMSG registers do NOT
+	 * fall inside the mapped MMIO BAR. On Navi12 the register BAR (BAR5) is
+	 * only 512 KB (0x80000), but SOC15_REG_OFFSET(MP0,0,C2PMSG_64) lands at
+	 * word 0x3b26540 (~247 MB) -- far outside the BAR window -- so the direct
+	 * ddi_get32 path here reads out-of-range (0x0) and this wait always times
+	 * out ("C2PMSG_35=0x0"). Even the in-range GC probe reads 0xffffffff
+	 * (block unpowered). The MP0 SMN block must be reached via the SMN
+	 * index/data indirect window (mmMP0/RSMU-routed), NOT direct BAR access.
+	 * Implementing that indirect register path is the next step to reach the
+	 * live PSP sOS bring-up. See docs/design-gpu-amdgpu.md (PSP SMN indirect).
 	 */
 	if (psp_wait_reg(sc, PSP_C2PMSG_BL_STATUS, PSP_BL_READY_MASK,
 	    PSP_BL_READY_MASK) != DDI_SUCCESS) {
 		cmn_err(CE_WARN, "?amdgpu: PSP bootloader not ready "
-		    "(expected off-hardware)");
+		    "(C2PMSG_35=0x%x; MP0 regs need SMN indirect access, "
+		    "not direct BAR)", psp_rreg(sc, PSP_C2PMSG_BL_STATUS));
 		return (DDI_FAILURE);
 	}
 

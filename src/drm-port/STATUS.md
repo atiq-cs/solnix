@@ -54,6 +54,32 @@ illumos `firmware(9F)` triple + `drv_usecwait`.
 
 ### C3-amdgpu-d HARDWARE-GATED runtime checklist (g4ad / local GPU, in order)
 
+**Live-hardware result (real V520 on g4ad.2xlarge): amdgpu BOUND to pci1002,7362
+(CHIP_NAVI12), firmware loaded, walls at the PSP mailbox because the MP0 SMN
+registers are unreachable via direct BAR.** What ran, on the real GPU:
+- attach `1002:7362 rev c3 (CHIP_NAVI12)`, no panic; `/dev/dri/card0`,
+  `renderD128`, `/dev/kfd` created.
+- TTM (VRAM 256 MB BAR0, GTT 512 MB) -> GMC/GART 512 MB -> GFX/SDMA/IH rings ->
+  **9 navi12 firmware blobs loaded + validated** (incl `navi12_sos.bin` ver
+  0x180764). kfd bound.
+- FIXED this pass: the sOS lookup false-negative (`psp.c` scanned
+  `uc->fw[0..fw_count)` but blobs are stored BY `fw_id` index, and
+  `AMDGPU_UCODE_ID_SOS`=12 > `fw_count`=9 -> "no sOS firmware loaded"). Now
+  indexes `uc->fw[AMDGPU_UCODE_ID_SOS]` directly; sOS is found + the PSP path runs.
+- **THE WALL (measured, root-caused):** `amdgpu_psp_bootloader_load_sos` reads
+  C2PMSG_35 (bootloader-ready) and gets **0x0** forever. Diagnostic on the real
+  card: `SOC15_REG_OFFSET(MP0,0,C2PMSG_64)` = word **0x3b26540** = byte
+  **0xec99500 (~247 MB)**, but the MMIO register BAR (BAR5) is only **0x80000
+  (512 KB)** -> the offset is **out of range** -> the direct `ddi_get32`
+  reads 0x0. Even the in-range GC probe (GRBM_STATUS) reads **0xffffffff**
+  (block unpowered). BAR map verified correct (assigned-addresses: BAR0 VRAM
+  256 MB, BAR2 doorbell 2 MB, BAR5 MMIO 512 KB -> illumos rnumber 1/2/3, matches
+  `AMDGPU_RNUM`). **Root cause: on Navi12 the MP0 SMN block (C2PMSG mailbox) is
+  NOT directly BAR-mapped; it must be reached through the SMN index/data
+  indirect register window.** The port's direct-BAR-only `psp_rreg/_wreg`
+  cannot address it. Next step: implement SMN indirect register access for the
+  MP0 block, then the PSP sOS handshake can run on real silicon.
+
 Each gate reads a live register the silicon writes; NONE validates without a
 powered V520. Order is load-bearing:
 

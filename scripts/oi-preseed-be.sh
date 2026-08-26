@@ -45,6 +45,19 @@ else
   echo "  NOTE: $BE/usr/lib/libc/libc_hwcap3.so.1 absent -- base libc NOT swapped (AMD boxes will init-loop)"
 fi
 
+echo "=== 3c. ena plain-PCI aliases (g4ad/Nitro enumerates ENA as pci1d0f,* not pciex1d0f,*) ==="
+# On g4ad the npe nexus presents the ENA NIC as a legacy-PCI compatible name
+# (path_to_inst: /pci@0,0/pci1d0f,ec20@5 -> ena), but the stock driver_aliases
+# only list the PCIe-express form (pciex1d0f,*). Without a pci1d0f,* alias the
+# device enumerates but ena never binds -> no NIC -> no DHCP -> no SSH. NVMe is
+# unaffected (it binds by class: pciclass,010802). Add both forms.
+if [ -f "$BE/etc/driver_aliases" ]; then
+  for a in pci1d0f,ec2 pci1d0f,1ec2 pci1d0f,ec20 pci1d0f,ec21; do
+    grep -q "^ena \"$a\"" "$BE/etc/driver_aliases" || echo "ena \"$a\"" >> "$BE/etc/driver_aliases"
+  done
+  echo "  added pci1d0f,* ena aliases"
+fi
+
 echo "=== 4. first-boot DHCP+ssh SMF service (IMDS-independent) ==="
 install -d "$BE/opt/solnix"
 cat > "$BE/opt/solnix/firstboot.sh" <<'EOS'

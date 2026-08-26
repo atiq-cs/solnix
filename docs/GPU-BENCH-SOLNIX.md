@@ -169,3 +169,75 @@ pkgs/illumos/patches/libc-amd-int-syscall-base.README.md "Permanent fix"). Then 
 IN-PLACE method (never zpool-import) ships libc-correct AND DHCP-intact in ONE image -> SSH works -> prtconf
 1002 (is the V520 enumerated?) -> amdgpu bind + the PSP sOS bootloader-load test (8c2ec60) -> the bench.
 Kept AMIs for next session: ami-0cb7254da736f1df1 (libc+ena), ami-0de76c0bb198c735f (libc-only) + snapshots.
+
+## UPDATE -- CIRCLE BROKEN: g4ad boots to SSH, amdgpu BOUND to the real V520, walls at the PSP MP0 register window
+
+The build-side unblock worked. A g4ad AMI baked via the fixed `oi-preseed-be.sh`
+(in-place on the mounted BE: AMD-safe libc + single-addrobj DHCP, NO zpool
+reguid -> no DHCP poison) boots to root SSH. The first solnix V520 amdgpu bind on
+real hardware followed. No number fabricated; Linux V520 stays 1995 pp / 283 tg.
+
+### STAGE 0 -- fresh fixed AMI baked + VERIFIED: ami-0531979c70a921d71
+Built from the g4ad-v4 base BE (BIOS boot-block + cu_flags=0 already baked), on
+an Ubuntu ZFS helper: `zpool import -N -R /mnt` (no reguid) -> mount BE -> fixed
+`oi-preseed-be.sh` -> clean export -> snapshot -> `register-image
+--boot-mode legacy-bios`. VERIFIED on the mounted BE before snapshot:
+- base `/lib/libc.so.1` swapped to the int/syscall variant (`libc_hwcap3.so.1`,
+  md5 b3bde24b): **0 sysenter, 352 int-$0x91/syscall** (the AMD-safe libc).
+- `ipadm.conf` single `ena0/dhcp` (stale `ena0/v4` stripped).
+- BIOS MBR bootcode present (pmbr jmp eb3c90) + `cu_flags=0` in `/etc/system`.
+- **+ the NIC bind fix (new): ena `pci1d0f,*` driver_aliases.** g4ad enumerates
+  the ENA NIC as `pci1d0f,ec20` (legacy-PCI compatible name), but the stock
+  aliases were only `pciex1d0f,*` -> the device enumerated but ena never bound
+  -> no NIC -> no DHCP. Added the `pci1d0f,*` aliases (now in `oi-preseed-be.sh`).
+
+### STAGE 1 -- g4ad boots to ROOT SSH (the circle is broken)
+Cold-launch of ami-0531979c70a921d71 on g4ad.2xlarge reached root SSH. Every
+boot reaches `console login:` with SMF online (the libc AMD fix is solid -- no
+init SIGKILL-loop). With the ena `pci1d0f,*` alias, `ena0` binds
+(`pci1d0f,ec20`), DHCP gets a lease (172.31.x), sshd is reachable. First solnix
+userland-over-SSH on the AMD/V520 g4ad. (Cold `run-instances` is the reliable
+path; warm reboot can drop the lease -- matches ena-rx-coldboot-fix.md.)
+
+### STAGE 2 -- amdgpu V520: ENUMERATED + BOUND; walls at the MP0 PSP register window
+`prtconf -D` shows the V520 fully enumerated: `pci1002,a34@1e`, compatible incl
+`pci1002,7362` (Navi12) + `pciexclass,038000`. Built `src/drm-port` natively
+(`gmake kfd` -> `drm-full`, 131 syms resolve), staged the 15 `navi12_*.bin`
+(linux-firmware) in `/kernel/firmware/amdgpu`, `add_drv` bound amdgpu to
+`pci1002,7362` -> `/dev/dri/card0` + `renderD128` + `/dev/kfd` created; amdgpu0
+attaches, no panic. Bring-up: TTM -> GMC/GART -> GFX/SDMA/IH rings -> **9
+firmware blobs loaded + validated** (incl `navi12_sos.bin` ver 0x180764).
+
+Two bugs, one fixed, one root-caused (the exact wall):
+- **FIXED: the sOS-not-found false negative.** `psp.c` scanned
+  `uc->fw[0..fw_count)` for the SOS blob, but the ucode set is stored BY
+  `fw_id` index and `AMDGPU_UCODE_ID_SOS`=12 > `fw_count`=9 -> the scan missed
+  it -> "no sOS firmware (navi12_sos.bin) loaded". Fixed to index
+  `uc->fw[AMDGPU_UCODE_ID_SOS]` directly. sOS is now found; the PSP bootloader
+  path runs.
+- **THE WALL (root-caused, not fixed): the MP0/PSP C2PMSG registers are outside
+  the mapped BAR.** The PSP bootloader-ready poll on C2PMSG_35 reads **0x0**
+  forever. Live diagnostic on the real card:
+  `SOC15_REG_OFFSET(MP0,0,C2PMSG_64)` = word **0x3b26540** = byte **0xec99500
+  (~247 MB)**, but the MMIO register BAR (BAR5) is only **0x80000 (512 KB)** ->
+  **out of range** -> the direct `ddi_get32` reads 0x0. The in-range GC probe
+  (GRBM_STATUS) reads **0xffffffff** (GC block unpowered). BAR map verified
+  correct (BAR0 VRAM 256 MB, BAR2 doorbell 2 MB, BAR5 MMIO 512 KB -> rnumber
+  1/2/3 = `AMDGPU_RNUM`). Root cause: **on Navi12 the MP0 SMN block (the PSP
+  C2PMSG mailbox) is NOT directly BAR-mapped -- it must be reached via the SMN
+  index/data indirect register window.** The port's direct-BAR-only
+  `psp_rreg/_wreg` cannot address it, so the PSP handshake never starts.
+
+### STAGE 3 -- measure: NOT RUN. amdgpu is bound + firmware up, but the PSP sOS
+cannot start (MP0 registers unreachable) -> no GFX power-up -> no /dev/dri
+render path -> RADV cannot enumerate. No number fabricated. Linux V520 baseline
+stays 1995 pp / 283 tg.
+
+### NEXT (the single concrete step)
+Implement SMN index/data indirect register access for the MP0 block in the
+illumos amdgpu port (Linux routes `mmMP0_SMN_C2PMSG_*` through the SMN window,
+not the BAR). With that, `psp_rreg(C2PMSG_35)` reaches the live PSP -> the sOS
+bootloader handshake (the code is in place, `amdgpu_psp_bootloader_load_sos`) ->
+sOS RUNNING (C2PMSG_64) -> fw authenticate -> GFX/SDMA power-up -> /dev/dri ->
+RADV NAVI12 -> the first solnix V520 GGML_VULKAN number vs 1995/283.
+Baked AMI kept: **ami-0531979c70a921d71** (boots to SSH, amdgpu-ready).
