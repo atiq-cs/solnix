@@ -1,0 +1,27 @@
+diff --git a/usr/src/uts/common/krtld/kobj.c b/usr/src/uts/common/krtld/kobj.c
+index 9668d8c28d..dbfa2b62cb 100644
+--- a/usr/src/uts/common/krtld/kobj.c
++++ b/usr/src/uts/common/krtld/kobj.c
+@@ -683,6 +683,22 @@ attr_val(val_t *bootaux)
+ 		}
+ 	}
+ 
++#if defined(__aarch64__)
++	/*
++	 * The boot loader (dboot) maps the kernel image in whole pages, so it
++	 * rounds the writable segment's end (`_edata`) and the text segment's
++	 * end (`_etext`) up to a page boundary when building the initial page
++	 * tables.  kobj_segbrk() grows the kernel by BOP_ALLOC()ing the next
++	 * page above these cursors; if a cursor sits mid-page, its round-up
++	 * lands on the page dboot already mapped, and kbm_map() panics with an
++	 * overlapping allocation.  Align the cursors up to match dboot's
++	 * page-granular image mapping so growth always starts on the first
++	 * page dboot did not map.
++	 */
++	_etext = (caddr_t)P2ROUNDUP((uintptr_t)_etext, (uintptr_t)PAGESIZE);
++	_edata = (caddr_t)P2ROUNDUP((uintptr_t)_edata, (uintptr_t)PAGESIZE);
++#endif
++
+ 	/* To do the kobj_alloc, _edata needs to be set. */
+ 	for (i = 0; i < NLIBMACROS; i++) {
+ 		if (bootaux[libmacros[i].lmi_ba_index].ba_ptr != NULL) {
