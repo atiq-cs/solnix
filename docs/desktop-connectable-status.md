@@ -66,3 +66,29 @@ unrelated). The gap is session-composition reliability (start-ordering / layer-s
 STATUS: single COSMIC app paints reliably; the full panel+apps desktop needs a clean, ordered session
 bring-up + per-app paint re-verification. Deferred as desktop-polish (below the higher-priority build-farm +
 aarch64-native goals). The reliable-boot + connectable-VNC + single-app-paint wins stand.
+
+## Multi-app: RESOLVED to the precise boundary (cosmic-term paints; cosmic-panel needs a fuller session)
+Re-verified: cosmic-term paints STEADILY in the multi-app session too (8497B byte-identical VNC captures
+across 25s -- the client-dispatch fix holds for normal COSMIC apps). The multi-app "black" was NOT a
+compositor/dispatch regression -- it was cosmic-PANEL crashing (the panel process ran but exited, so nothing
+new to composite; a lone painting cosmic-term remained).
+
+cosmic-panel's EXACT failure (its own log): it EXITS on missing SESSION SERVICES, not a paint/dispatch bug:
+  - "failed to create workspaces dbus proxy: No such file or directory" (no D-Bus session bus / no
+    cosmic-workspaces service)
+  - "Failed to connect to the notifications daemon"
+  - "Failed to initialize fractional scaling manager: NotPresent"  (wp_fractional_scale protocol not in smallvil)
+  - "Failed to initialize security context manager: NotPresent"    (wp_security_context protocol not in smallvil)
+cosmic-panel is the desktop SHELL BAR -- it expects a full COSMIC session: a D-Bus session bus + companion
+daemons (cosmic-workspaces, cosmic-notifications) + richer wayland protocols (fractional-scale,
+security-context) that the minimal smallvil compositor doesn't advertise. This is a SESSION-INTEGRATION gap,
+distinct from (and beyond) the per-app client-dispatch fix.
+
+## Honest desktop state (final for now)
+- COSMIC *apps* (cosmic-term, and by the same fix cosmic-files/edit/etc.) PAINT reliably + steady on illumos.
+- The COSMIC *shell* (cosmic-panel) needs a fuller session substrate to render: D-Bus session bus + the
+  companion daemons + the fractional-scale/security-context wayland protocols added to smallvil (or a real
+  cosmic-comp, which is itself a rewrite on illumos -- see cosmic-comp-illumos-finding.md).
+- So: "a connectable box running COSMIC apps" = DONE + reliable. "The full pop!_OS COSMIC shell (panel +
+  workspaces + notifications)" = needs the session-service + wayland-protocol layer (the next desktop phase,
+  below the build-farm/aarch64/GPU priorities).
