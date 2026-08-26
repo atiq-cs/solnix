@@ -44,13 +44,18 @@
 #include "amdgpu_psp.h"
 
 /*
- * The MP0 SMN C2PMSG mailbox register offsets (crib: psp_v11_0.c; these are
- * the stable Navi PSP mailbox indices within the MP0 SMN block). RREG32/WREG32
- * reach them via amdgpu_reg_offset(sc, MP0_HWIP, 0, seg, reg). psp_v11 uses
- * SOC15 register mmMP0_SMN_C2PMSG_nn; the C2PMSG registers live at a fixed
- * stride from the block base.
+ * The MP0 C2PMSG mailbox register offsets. On Navi12 (mp_11_0) the register
+ * mmMP0_SMN_C2PMSG_N sits at word (0x40 + N) within the MP0 block, BASE_IDX 0.
+ * With reg_offset[MP0][0][0] = 0x00016000 the SOC15 word for C2PMSG_64 is
+ * 0x16080 (byte 0x58200) -- INSIDE the 512 KB BAR, so it is direct-BAR
+ * addressable. (The prior 0x03b10500 base was wrong: it pushed the SOC15 word
+ * to 0x3b26540 / byte ~247 MB, off the BAR, which is what made a direct read
+ * return 0x0 and looked like it needed the SMN window. The register is in-BAR;
+ * the base constant was the bug.)
+ *
+ * Crib: mp/mp_11_0_offset.h mmMP0_SMN_C2PMSG_N = 0x40 + N, BASE_IDX 0.
  */
-#define	MP0_C2PMSG_BASE		0x03b10500	/* mmMP0_SMN_C2PMSG_0 word idx */
+#define	MP0_C2PMSG_BASE		0x00000040	/* mmMP0_SMN_C2PMSG_0 word idx */
 #define	MP0_C2PMSG(n)		(MP0_C2PMSG_BASE + (n))
 
 /* the mailbox slots psp_v11_0 uses (crib: psp_v11_0.c). */
@@ -80,6 +85,47 @@
 /* how long to poll a PSP status word before giving up (live-hw only). */
 #define	PSP_POLL_TIMEOUT_US	1000000		/* 1 s in 1 us steps */
 
+/*
+ * The SMN (System Management Network) index/data indirect register window.
+ *
+ * With the corrected C2PMSG base (word 0x40 + N, MP0 seg0 0x16000) the mailbox
+ * lands at byte 0x58200-class -- INSIDE the 512 KB BAR -- so MP0 access is
+ * direct ddi_get32 (psp_rreg/psp_wreg below). The SMN index/data window
+ * (smn_rreg/smn_wreg) is retained for a diagnostic cross-check and for any MP0
+ * register that ever falls outside the BAR: Linux reaches out-of-BAR SMN
+ * registers by writing the SMN byte address (SOC15 word << 2) into
+ * mmPCIE_INDEX2, reading back to flush, then read/write mmPCIE_DATA2 (both
+ * index/data live in-BAR, BIF/NBIO seg0).
+ *
+ * Crib: nbio_v2_3.c get_pcie_index_offset/get_pcie_data_offset (mmPCIE_INDEX2
+ * = word 0x0e, mmPCIE_DATA2 = word 0x0f) + amdgpu_device.c
+ * amdgpu_device_indirect_rreg/_wreg.
+ */
+#define	MP_PCIE_INDEX2		0x0000000e	/* mmPCIE_INDEX2 (word idx) */
+#define	MP_PCIE_DATA2		0x0000000f	/* mmPCIE_DATA2  (word idx) */
+
+static uint32_t
+smn_rreg(struct amdgpu_softc *sc, uint32_t smn_addr)
+{
+	amdgpu_wreg32(sc, MP_PCIE_INDEX2, smn_addr);
+	(void) amdgpu_rreg32(sc, MP_PCIE_INDEX2);	/* readback flush */
+	return (amdgpu_rreg32(sc, MP_PCIE_DATA2));
+}
+
+static void
+smn_wreg(struct amdgpu_softc *sc, uint32_t smn_addr, uint32_t v)
+{
+	amdgpu_wreg32(sc, MP_PCIE_INDEX2, smn_addr);
+	(void) amdgpu_rreg32(sc, MP_PCIE_INDEX2);	/* readback flush */
+	amdgpu_wreg32(sc, MP_PCIE_DATA2, v);
+	(void) amdgpu_rreg32(sc, MP_PCIE_DATA2);	/* readback flush */
+}
+
+/*
+ * psp_rreg/psp_wreg - MP0 C2PMSG mailbox access. With the corrected base the
+ * SOC15 word (reg_offset[MP0][0][0] + reg) is in-BAR, so use the direct
+ * ddi_get32/put32 path (amdgpu_rreg32/_wreg32).
+ */
 static uint32_t
 psp_rreg(struct amdgpu_softc *sc, uint32_t reg)
 {
@@ -106,9 +152,17 @@ psp_wait_reg(struct amdgpu_softc *sc, uint32_t reg, uint32_t mask,
     uint32_t want)
 {
 	int i;
+	uint32_t v;
 
 	for (i = 0; i < PSP_POLL_TIMEOUT_US; i++) {
-		if ((psp_rreg(sc, reg) & mask) == want)
+		v = psp_rreg(sc, reg);
+		/*
+		 * An all-ones read is an unpowered/no-responder read, NOT a
+		 * live status. Reject it so a dead 0xffffffff cannot spuriously
+		 * satisfy a bit31 ready-check (which 0xffffffff would otherwise
+		 * pass). A real PSP status word is never all-ones here.
+		 */
+		if (v != 0xffffffffu && (v & mask) == want)
 			return (DDI_SUCCESS);
 		drv_usecwait(1);	/* live-hw: give the PSP a microsecond */
 	}
@@ -192,25 +246,64 @@ amdgpu_psp_bootloader_load_sos(struct amdgpu_softc *sc, struct amdgpu_psp *psp)
 	bcopy(sos_ucode, bo_va, sos_size);
 
 	/*
+	 * Diagnostic (measured on the g4ad V520 under Nitro): probe the register
+	 * fabric before the handshake. The MP0 C2PMSG mailbox is at the corrected
+	 * in-BAR offset (word 0x16000+0x40+N; C2PMSG_35 = word 0x16063 = byte
+	 * 0x5818c, inside the 512 KB BAR), reachable both directly and via the SMN
+	 * index/data window. MEASURED: PCI cmd=0xc7 (IO+MEM+BusMaster enabled),
+	 * BAR0/VRAM reads 0x0 (framebuffer decodes as zeroed memory), but the
+	 * whole register BAR (BAR5) -- even NBIO mmPCIE_INDEX2 written with
+	 * 0xdeadbeef -- reads 0xffffffff. That is a register fabric that is
+	 * unclocked / held in reset: the GPU SOC has not been POSTed. The MP0
+	 * mailbox is correctly addressed + mem-enabled; the wall is GPU power-up
+	 * (a vBIOS/ATOM POST + SMU power sequence), NOT register addressing.
+	 */
+	{
+		uint32_t bl_word = amdgpu_reg_offset(sc, MP0_HWIP, 0, 0,
+		    PSP_C2PMSG_BL_STATUS);
+		/*
+		 * BAR-liveness: mmPCIE_INDEX2 is an in-BAR NBIO register that
+		 * normally reads back what is written; VRAM[0] shows whether the
+		 * framebuffer BAR decodes. If both the register BAR and NBIO read
+		 * 0xffffffff, the whole register fabric is unpowered.
+		 */
+		amdgpu_wreg32(sc, MP_PCIE_INDEX2, 0xdeadbeef);
+		cmn_err(CE_CONT, "?amdgpu: BAR-live check: PCIE_INDEX2 wrote "
+		    "0xdeadbeef read 0x%x (in-BAR word 0xe); PCI cmd=0x%x; "
+		    "VRAM[0]=0x%x\n",
+		    amdgpu_rreg32(sc, MP_PCIE_INDEX2),
+		    pci_config_get16(sc->pci_conf, PCI_CONF_COMM),
+		    (sc->vram_hdl != NULL) ?
+		    ddi_get32(sc->vram_hdl, (uint32_t *)(void *)sc->vram_base) :
+		    0xbadbad);
+		cmn_err(CE_CONT, "?amdgpu: PSP probe direct-BAR: "
+		    "C2PMSG_35=0x%x C2PMSG_64=0x%x C2PMSG_115=0x%x "
+		    "(word 0x%x, BAR sz 0x%lx)\n",
+		    psp_rreg(sc, PSP_C2PMSG_BL_STATUS),
+		    psp_rreg(sc, PSP_C2PMSG_SOS_STATUS),
+		    psp_rreg(sc, PSP_C2PMSG_RESP),
+		    bl_word, (unsigned long)sc->rmmio_size);
+		cmn_err(CE_CONT, "?amdgpu: PSP probe SMN-window: "
+		    "C2PMSG_35=0x%x (smn addr 0x%x)\n",
+		    smn_rreg(sc, bl_word << 2), bl_word << 2);
+	}
+
+	/*
 	 * 1. Wait for the on-die bootloader to be ready to accept a command
 	 *    (C2PMSG_35 bit31 set). HARDWARE-GATED: off-hardware this times out.
 	 *
-	 * NOTE (measured on a real V520 / g4ad): the MP0 C2PMSG registers do NOT
-	 * fall inside the mapped MMIO BAR. On Navi12 the register BAR (BAR5) is
-	 * only 512 KB (0x80000), but SOC15_REG_OFFSET(MP0,0,C2PMSG_64) lands at
-	 * word 0x3b26540 (~247 MB) -- far outside the BAR window -- so the direct
-	 * ddi_get32 path here reads out-of-range (0x0) and this wait always times
-	 * out ("C2PMSG_35=0x0"). Even the in-range GC probe reads 0xffffffff
-	 * (block unpowered). The MP0 SMN block must be reached via the SMN
-	 * index/data indirect window (mmMP0/RSMU-routed), NOT direct BAR access.
-	 * Implementing that indirect register path is the next step to reach the
-	 * live PSP sOS bring-up. See docs/design-gpu-amdgpu.md (PSP SMN indirect).
+	 * The MP0 C2PMSG mailbox is direct-BAR addressable at the corrected
+	 * offset (word 0x16063 for C2PMSG_35, inside the 512 KB BAR). On the
+	 * g4ad V520 under Nitro this still reads 0xffffffff because the GPU
+	 * register fabric is unpowered (see the diagnostic above) -- so the wait
+	 * times out. The psp_wait_reg 0xffffffff guard prevents a dead all-ones
+	 * read from spuriously satisfying the bit31 ready-check.
 	 */
 	if (psp_wait_reg(sc, PSP_C2PMSG_BL_STATUS, PSP_BL_READY_MASK,
 	    PSP_BL_READY_MASK) != DDI_SUCCESS) {
 		cmn_err(CE_WARN, "?amdgpu: PSP bootloader not ready "
-		    "(C2PMSG_35=0x%x; MP0 regs need SMN indirect access, "
-		    "not direct BAR)", psp_rreg(sc, PSP_C2PMSG_BL_STATUS));
+		    "(C2PMSG_35=0x%x; register fabric unpowered -- GPU not "
+		    "POSTed)", psp_rreg(sc, PSP_C2PMSG_BL_STATUS));
 		return (DDI_FAILURE);
 	}
 

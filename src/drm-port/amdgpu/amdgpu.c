@@ -44,6 +44,7 @@
 #include "amdgpu_ucode.h"
 #include "amdgpu_psp.h"
 #include "amdgpu_hw.h"
+#include "kfd_priv.h"		/* C3-KFD: kfd_chardev_bind/unbind */
 
 /*
  * The DDI regs-map access attributes for a PCI memory BAR: little-endian
@@ -127,6 +128,20 @@ amdgpu_read_asic_id(struct amdgpu_softc *sc)
 static int
 amdgpu_map_bars(struct amdgpu_softc *sc)
 {
+	uint16_t cmd;
+
+	/*
+	 * Enable PCI memory-space decode + bus-mastering before touching any
+	 * BAR. illumos (unlike Linux pci_enable_device/pci_set_master) does NOT
+	 * do this for the driver: with Memory Space Enable (bit 1) clear the
+	 * device does not decode MMIO reads and the whole register BAR reads
+	 * 0xffffffff (measured on the g4ad V520: even NBIO mmPCIE_INDEX2 read
+	 * back all-ones). Set MAE (0x2) + ME (0x4) so the mapped BAR is live.
+	 */
+	cmd = pci_config_get16(sc->pci_conf, PCI_CONF_COMM);
+	cmd |= PCI_COMM_MAE | PCI_COMM_ME;
+	pci_config_put16(sc->pci_conf, PCI_CONF_COMM, cmd);
+
 	(void) ddi_dev_regsize(sc->dip, AMDGPU_RNUM(AMDGPU_BAR_MMIO),
 	    &sc->rmmio_size);
 	if (ddi_regs_map_setup(sc->dip, AMDGPU_RNUM(AMDGPU_BAR_MMIO),
@@ -141,6 +156,30 @@ amdgpu_map_bars(struct amdgpu_softc *sc)
 	    &sc->vram_hdl) != DDI_SUCCESS) {
 		ddi_regs_map_free(&sc->rmmio_hdl);
 		return (DDI_FAILURE);
+	}
+
+	/*
+	 * Map BAR2 (the doorbell aperture) for the KFD compute path. amdgpu maps
+	 * it as write-combining device memory; the KFD carves per-process
+	 * doorbell pages out of it (see amdkfd/kfd_device.c). The doorbell
+	 * physical base is BAR2 in PCI config space (offset 0x18, a 64-bit BAR on
+	 * Navi). Non-fatal: if BAR2 is absent (e.g. off-hardware / a stub parent)
+	 * the doorbell aperture is empty and the KFD queue path is hardware-gated
+	 * but everything still attaches -- the same contract the TTM/IP init use.
+	 */
+	(void) ddi_dev_regsize(sc->dip, AMDGPU_RNUM(AMDGPU_BAR_DOORBELL),
+	    &sc->doorbell_size);
+	if (ddi_regs_map_setup(sc->dip, AMDGPU_RNUM(AMDGPU_BAR_DOORBELL),
+	    &sc->doorbell_base_va, 0, 0, &amdgpu_vram_acc,
+	    &sc->doorbell_hdl) == DDI_SUCCESS) {
+		/* PCI BAR2 (config offset 0x18): the doorbell physical base */
+		sc->doorbell_base =
+		    pci_config_get64(sc->pci_conf, PCI_CONF_BASE2) &
+		    ~(uint64_t)0xf;
+	} else {
+		sc->doorbell_hdl = NULL;
+		sc->doorbell_base = 0;
+		sc->doorbell_size = 0;
 	}
 	return (DDI_SUCCESS);
 }
@@ -267,6 +306,16 @@ amdgpu_transport_attach(dev_info_t *dip, struct drm_device *drm)
 	if (sc->ip != NULL)
 		(void) amdgpu_hw_init(sc);
 
+	/*
+	 * C3-KFD: stand up the KFD (amdkfd) compute view of this device -- the
+	 * /dev/kfd ROCm/HSA compute path. Creates the kfd_dev (topology +
+	 * doorbell aperture over the BAR2 just mapped) + the process table; the
+	 * /dev/kfd minor node itself is created by the C1 drm_attach (it owns the
+	 * char device). Non-fatal to the attach floor. The compute-queue live
+	 * path (MQD/HWS-MES map, GPUVM PTE program) is hardware-gated.
+	 */
+	kfd_chardev_bind(sc);
+
 	return (sc);
 
 fail_bars:
@@ -284,6 +333,7 @@ amdgpu_transport_detach(struct amdgpu_softc *sc)
 {
 	if (sc == NULL)
 		return;
+	kfd_chardev_unbind();
 	amdgpu_hw_fini(sc);
 	amdgpu_ip_blocks_fini(sc);
 	amdgpu_ttm_fini(sc);
@@ -296,6 +346,8 @@ amdgpu_transport_detach(struct amdgpu_softc *sc)
 	}
 	if (sc->vram_hdl != NULL)
 		ddi_regs_map_free(&sc->vram_hdl);
+	if (sc->doorbell_hdl != NULL)
+		ddi_regs_map_free(&sc->doorbell_hdl);
 	if (sc->rmmio_hdl != NULL)
 		ddi_regs_map_free(&sc->rmmio_hdl);
 	if (sc->pci_conf != NULL)
