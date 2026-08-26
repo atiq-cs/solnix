@@ -308,6 +308,30 @@ else
   echo "NOTE: could not locate fork nixpkgs path in $CS/solnix-flake/flake.lock; by-name eval will substitute it at first use"
 fi
 
+# 5e. RE-LOCK + verify the by-name flake evaluates IN THE IMAGE. The baked
+# flake.lock may pin solnixPkgs (and the fork/FOD inputs) to PRE-BAKE store
+# paths that don't exist in this image -- a locked `path:` input is never
+# network-fetched, so if the pinned path is absent the flake fails to EVALUATE
+# and `nix profile install nixpkgs#<pkg>` breaks out of the box (measured: the
+# lock pinned solnixPkgs to a nonexistent /nix/store/...-solnix-pkgs path; the
+# fix is a re-lock to the in-image path). Re-lock the path inputs to the image
+# tree, then prove eval before trusting the AMI.
+if [ -d "$CS/solnix-flake" ] && [ -f "$CS/solnix-flake/flake.nix" ]; then
+  log "re-locking the by-name flake to in-image paths + verifying eval"
+  # re-lock the path inputs (solnixPkgs/fork/config FODs) against the local tree
+  "$NIXTOOLS/bin/nix" flake update --flake "path:$CS/solnix-flake" \
+    --extra-experimental-features 'nix-command flakes' 2>&1 | sed 's/^/    /' \
+    || echo "NOTE: flake re-lock reported an issue; verifying eval anyway"
+  # PROVE a by-name eval resolves in the image (drvPath), else warn loudly
+  if "$NIXTOOLS/bin/nix" eval --extra-experimental-features 'nix-command flakes' \
+       "path:$CS/solnix-flake#legacyPackages.x86_64-solaris.coreutils.drvPath" \
+       >/dev/null 2>&1; then
+    echo "    by-name eval OK: nix profile install nixpkgs#<pkg> will work in the image"
+  else
+    echo "NOTE: by-name eval did NOT resolve in the image -- 'nix profile install nixpkgs#<pkg>' may need a manual 'nix flake update solnixPkgs' on first boot. Investigate before shipping this AMI as the upgradable base."
+  fi
+fi
+
 # 6. login PATH: prepend /run/current-system/sw/bin for the target logins.
 #    The toplevel's own /etc/profile.d/solnix-env.sh (if present in the CS etc/
 #    overlay) is the declarative source; install it, and also write a minimal
