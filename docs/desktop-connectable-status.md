@@ -14,17 +14,22 @@ Connect:
   ssh -N -L 5900:127.0.0.1:5900 root@<ip>
   vncviewer localhost:5900
 
-## The HONEST gap: cosmic-term does NOT reliably paint
-cosmic-term (and the iced/libcosmic GUI apps) CONNECT to smallvil + bind its globals + run the iced loop,
-but do NOT reach a stable visible paint in the auto-started session — the framebuffer stays black. Earlier
-one-off cosmic-term screenshots (File/Edit/View menu) were LUCKY captures from a hand-started session before
-it stalled; the steady state is that the iced render loop stalls on illumos.
+## RESOLVED: cosmic-term now paints RELIABLY (the client-dispatch fix)
+cosmic-term (and every iced/libcosmic GUI app) now reaches a STEADY visible paint under smallvil on illumos.
+Verified byte-identical VNC captures across t0/+30s/poke/+60s (agent) + independently re-verified across time
+(orchestrator, matching md5 628cd67b) — the full COSMIC terminal (File/Edit/View + New terminal + tab +
+cursor). NOT a lucky one-off this time.
 
-ROOT CAUSE (the real desktop-quality blocker): the illumos wayland-CLIENT dispatch latency
-(~8s+ roundtrips, client-side epoll-nesting — flagged since the first softbuffer wave). iced's frame loop
-doesn't drive to a steady paint through it. The FIX is an iced/winit/wayland-client dispatch patch for
-illumos (make the client event loop drive frames despite the nested-epoll readiness quirk) — NOT a few
-launcher tweaks. Until then: smallvil + raw wl_shm clients paint reliably; iced GUI apps do not.
+The earlier black frames were the illumos wayland-CLIENT dispatch stall: illumos nested-epoll readiness
+doesn't propagate -> calloop's Generic FD source (wrapping the wayland conn FD in calloop-wayland-source's
+WaylandSource) never fires -> the client never pumps its wayland queue -> no frame -> black. FIXED by
+calloop-wayland-source-illumos-timer-dispatch.patch (the direct client-side analog of the smallvil server-
+side Timer fix): an 8ms calloop Timer sub-source pumps the queue unconditionally (TimerWheel is polled by the
+loop core, not epoll). THE single highest-leverage patch — fixes every iced/winit COSMIC app at once (all
+route through sctk's WaylandSource). The desktop is now USABLE, not just connectable.
+
+Still to do: rebuild the OTHER COSMIC apps (files/settings/panel) against the patched
+calloop-wayland-source so they paint too (cosmic-term is rebuilt + proven).
 
 ## Launcher / auto-start (scripts/solnix-cosmic-session-node.sh, on the node + in repo)
 Xorg:99-dummy + smallvil (softpipe) + a Wayland client + x11vnc(127.0.0.1:5900). Two illumos-vs-GNU gotchas
