@@ -76,7 +76,7 @@ in parallel with x86_64 breadth; expect it to be a long track.
 # the A3 cross-built userland) and boot under qemu-system-aarch64 -M virt,gic-version=2 -cpu cortex-a72.
 # Gate: solnix-aarch64 reaches multi-user + a shell in QEMU. This is the first BOOTABLE aarch64 solnix.
 
-## A6 — The Graviton/Nitro platform port (the hard, months-long part)
+## A6 — The Graviton/Nitro platform port  [IN PROGRESS: GICv3 CLEARED (boots to shell); ACPI = a ~2-4wk handoff shim (NOT months -- port is already dual-mode FDT/ACPI, blocked on one spin-halt in dboot_machdep.c + an ACPI-fed prom_emul); ena/nvme aarch64 kmods BUILT; VERIFIED on real c6g.metal silicon: EDK2->illumos EFI loader->ZFS armpool root->Loading unix->the ACPI spin-halt. Revised scope ~2-4wk, not months.]
 # Make arm64-gate illumos boot on real AWS Graviton (m7g/c7g). The three blockers (from the assessment):
 #   1. GICv3 interrupt controller (Graviton) vs the port's GICv2 -> write/port a GICv3 driver.
 #   2. ACPI platform enumeration (Nitro) vs the port's devicetree -> an ACPI bring-up path.
