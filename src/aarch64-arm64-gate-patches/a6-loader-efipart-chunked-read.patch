@@ -1,0 +1,95 @@
+--- a/usr/src/boot/efi/libefi/efipart.c	2026-08-27 05:40:20.844366579 -0400
++++ b/usr/src/boot/efi/libefi/efipart.c	2026-08-27 05:40:22.659341239 -0400
+@@ -71,6 +71,14 @@
+ /* Bounce buffer max size */
+ #define	BIO_BUFFER_SIZE	0x4000
+ 
++/*
++ * Maximum bytes per single EFI ReadBlocks call.  Large single transfers are
++ * mishandled by some UEFI NVMe drivers (AWS Nitro), which return success but
++ * only copy part of the buffer; cap the transfer to a size every firmware
++ * handles reliably.
++ */
++#define	EFIPART_IOMAX_BYTES	0x4000
++
+ struct devsw efipart_fddev = {
+ 	.dv_name = "fd",
+ 	.dv_type = DEVT_FD,
+@@ -996,8 +1004,40 @@
+ 
+ 	switch (rw & F_MASK) {
+ 	case F_READ:
+-		status = blkio->ReadBlocks(blkio, blkio->Media->MediaId, blk,
+-		    nblks * blkio->Media->BlockSize, buf);
++		/*
++		 * Some UEFI BlockIo implementations (notably the NVMe driver
++		 * in AWS Nitro/Graviton firmware) return EFI_SUCCESS for a
++		 * large single ReadBlocks but only transfer part of the
++		 * request, silently corrupting the tail.  That surfaces later
++		 * as a ZFS checksum failure ("all block copies unavailable").
++		 * Cap each ReadBlocks at EFIPART_IOMAX_BYTES so every
++		 * transfer stays within a size all firmware handles.
++		 */
++		status = EFI_SUCCESS;
++		while (nblks > 0) {
++			daddr_t chunk = nblks;
++			daddr_t maxblks = EFIPART_IOMAX_BYTES /
++			    blkio->Media->BlockSize;
++
++			if (maxblks < 1)
++				maxblks = 1;
++			if (chunk > maxblks)
++				chunk = maxblks;
++			status = blkio->ReadBlocks(blkio,
++			    blkio->Media->MediaId, blk,
++			    chunk * blkio->Media->BlockSize, buf);
++#ifdef EFIPART_DEBUG
++			printf("A6BLK rd lba=%ju nblks=%ju bytes=%ju bs=%u "
++			    "st=%lu\n", (uintmax_t)blk, (uintmax_t)chunk,
++			    (uintmax_t)(chunk * blkio->Media->BlockSize),
++			    blkio->Media->BlockSize, DECODE_ERROR(status));
++#endif
++			if (EFI_ERROR(status))
++				break;
++			blk += chunk;
++			nblks -= chunk;
++			buf += chunk * blkio->Media->BlockSize;
++		}
+ 		break;
+ 	case F_WRITE:
+ 		if (blkio->Media->ReadOnly)
+@@ -1104,10 +1144,21 @@
+ 	if (disk_blocks == 0)
+ 		disk_blocks = blkio->Media->LastBlock + 1 - d_offset;
+ 
++#ifdef EFIPART_DEBUG
++	printf("A6RS in rw=%d blk=%ju off=%ju size=%ju doff=%ju dblks=%ju "
++	    "bs=%u last=%ju\n", rw & F_MASK, (uintmax_t)blk, (uintmax_t)off,
++	    (uintmax_t)size, (uintmax_t)d_offset, (uintmax_t)disk_blocks,
++	    blkio->Media->BlockSize, (uintmax_t)blkio->Media->LastBlock);
++#endif
+ 	/* make sure we don't read past disk end */
+ 	if ((off + size) / blkio->Media->BlockSize > d_offset + disk_blocks) {
+ 		diskend = d_offset + disk_blocks;
+ 		readstart = off / blkio->Media->BlockSize;
++#ifdef EFIPART_DEBUG
++		printf("A6RS CLAMP off=%ju size=%ju diskend=%ju readstart=%ju\n",
++		    (uintmax_t)off, (uintmax_t)size, (uintmax_t)diskend,
++		    (uintmax_t)readstart);
++#endif
+ 
+ 		if (diskend <= readstart) {
+ 			if (rsize != NULL)
+@@ -1133,6 +1184,12 @@
+ 	if (ioalign > 1 && (uintptr_t)buf != roundup2((uintptr_t)buf, ioalign))
+ 		need_buf = true;
+ 
++#ifdef EFIPART_DEBUG
++	printf("A6RS dec need_buf=%d ioalign=%u buf=%p bufaln=%d\n",
++	    need_buf, ioalign, buf,
++	    (int)((uintptr_t)buf == roundup2((uintptr_t)buf, ioalign)));
++#endif
++
+ 	if (need_buf) {
+ 		for (bio_size = BIO_BUFFER_SIZE; bio_size > 0;
+ 		    bio_size -= blkio->Media->BlockSize) {
