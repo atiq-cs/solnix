@@ -317,6 +317,7 @@ synth_scan_madt(synth_gic_t *g)
 typedef struct synth_uart {
 	uint64_t	base;
 	uint32_t	irq;		/* GSIV (SPI absolute) */
+	uint8_t		iface;		/* raw SPCR/DBG2 InterfaceType */
 	const char	*compat;
 	bool		have;
 } synth_uart_t;
@@ -342,8 +343,21 @@ synth_scan_spcr(synth_uart_t *u)
 	if (base == 0)
 		return;
 
+	/*
+	 * AWS Graviton quirk: the SPCR declares InterfaceType 0x00 ("full
+	 * 16550") with byte-width GAS access descriptors, but the console
+	 * device is physically an ARM PL011 (the firmware, the SBSA/PL011
+	 * register layout, and Linux's PL011 driver all agree).  When the
+	 * SPCR is stamped AMAZON, force the PL011 interpretation so the
+	 * boot UART driver (SBSA/PL011-compatible) drives the right device.
+	 */
+	if (iface != 0x03 && iface != 0x0d && iface != 0x0e &&
+	    strncmp(spcr->Header.OemId, "AMAZON", 6) == 0)
+		iface = 0x03;
+
 	u->base = base;
 	u->irq = irq;
+	u->iface = iface;
 	u->have = true;
 
 	switch (iface) {
@@ -647,6 +661,49 @@ dboot_synth_fdt(struct xboot_info *bi)
 	necam = synth_scan_mcfg(ecam, 8);
 	synth_scan_crs(&crs);
 	qemu = synth_is_qemu_virt();
+
+	/*
+	 * Populate the early-boot UART (bi_bsvc_uart_*) from the SPCR when
+	 * the loader did not hand us one via the bcons.uart.* properties.
+	 *
+	 * On QEMU virt the loader's FDT-UART discovery (/chosen/stdout-path
+	 * -> serial node) forwards a valid base, so this stays a no-op.  On
+	 * real SBBR/Graviton the console UART is described ONLY by the static
+	 * SPCR table: the DSDT namespace carries no UART device, so the
+	 * loader's ACPI namespace walk finds none ("no compatible MMIO
+	 * UARTs") and never sets bcons.uart.mmio_base -- leaving the kernel's
+	 * boot_uart at base 0, i.e. silent.  The SPCR base IS authoritative
+	 * per SBBR, so drive the early UART from it directly.
+	 *
+	 * bi_bsvc_uart_type takes the raw SPCR/DBG2 InterfaceType, which
+	 * shares the XBI_BSVC_UART_* numbering for the types the boot UART
+	 * driver supports (PL011=0x03, SBSA2X=0x0d, SBSA=0x0e).  16550 and
+	 * friends are left as NONE (unsupported by the boot UART driver).
+	 */
+	if (uart.have && bi->bi_bsvc_uart_mmio_base == 0) {
+		switch (uart.iface) {
+		case 0x03:	/* ARM PL011 */
+		case 0x0d:	/* ARM SBSA 32-bit only */
+		case 0x0e:	/* ARM SBSA generic */
+			/*
+			 * Set the early-boot UART fields only.  The kernel
+			 * proper runs bcons_init(bi) itself after exitto, in a
+			 * clean state: boot_uart_init(bi) picks up these fields
+			 * and, because the base is now non-zero, sets diag to
+			 * CONS_TTY -- so the kernel banner reaches the SPCR
+			 * UART.  We deliberately do NOT re-run bcons_init()
+			 * here: re-entering it mid-configure (re-running the
+			 * framebuffer/keyboard init) wedges the boot before the
+			 * kernel is entered.
+			 */
+			bi->bi_bsvc_uart_mmio_base = uart.base;
+			bi->bi_bsvc_uart_type =
+			    (xbi_bsvc_uart_type_t)uart.iface;
+			break;
+		default:
+			break;
+		}
+	}
 
 	synth_next_phandle = SYNTH_PHANDLE_FIRST;
 

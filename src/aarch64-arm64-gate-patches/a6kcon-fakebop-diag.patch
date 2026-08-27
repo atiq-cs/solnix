@@ -1,0 +1,43 @@
+--- a/usr/src/uts/armv8/os/fakebop.c
++++ b/usr/src/uts/armv8/os/fakebop.c
+@@ -219,6 +219,20 @@
+ {
+ 	extern void boot_fb_shadow_init(bootops_t *);
+ 
++	/*
++	 * A6KCON diagnostic: raw write to the SPCR UART (0x90a0000 on
++	 * Graviton) at the very entry of the kernel proper (MMU on), before
++	 * bcons_init.  If [A6KCON:BOP] reaches the console, the kernel-proper
++	 * identity map covers the UART and we reached bop_init.
++	 */
++	if (xbp != NULL && xbp->bi_bsvc_uart_mmio_base != 0) {
++		volatile uint32_t *dr =
++		    (volatile uint32_t *)(uintptr_t)xbp->bi_bsvc_uart_mmio_base;
++		const char *m = "[A6KCON:BOP]\r\n";
++		while (*m != '\0')
++			*dr = (uint32_t)(uint8_t)*m++;
++	}
++
+ 	bsvc_init(xbp);
+ 
+ 	bootops = &bootop;
+@@ -241,6 +255,19 @@
+ 
+ 	bcons_init(xbp);
+ 
++	/*
++	 * A6KCON diagnostic: raw write to the SPCR UART right after
++	 * bcons_init.  If [A6KCON:BCONS] appears (and [A6KCON:BOP] did),
++	 * bcons_init survived; any subsequent silence is downstream.
++	 */
++	if (xbp != NULL && xbp->bi_bsvc_uart_mmio_base != 0) {
++		volatile uint32_t *dr =
++		    (volatile uint32_t *)(uintptr_t)xbp->bi_bsvc_uart_mmio_base;
++		const char *m = "[A6KCON:BCONS]\r\n";
++		while (*m != '\0')
++			*dr = (uint32_t)(uint8_t)*m++;
++	}
++
+ 	kbm_init();
+ 
+ 	/*
