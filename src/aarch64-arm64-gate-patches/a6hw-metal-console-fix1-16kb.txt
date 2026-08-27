@@ -1,0 +1,913 @@
+i-0ac20ec1594d1cdda	                                                                          
+A6RS in rw=1 blk=1581354 off=809653248 size=131584 doff=524544 dblks=16236255 bs
+[79C[02;01H
+                                                                                
+=512 last=16777215[18D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x131824e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=1581354 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581386 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581418 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581450 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581482 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581514 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581546 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581578 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581610 nblks=1 bytes=512 bs=512 st=0[50D[02;01H
+                                                                                
+A6RS in rw=1 blk=1581313 off=809632256 size=131584 doff=524544 dblks=16236255 bs
+[79C[02;01H
+                                                                                
+=512 last=16777215[18D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x1317d2e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=1581313 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581345 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581377 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581409 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581441 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581473 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581505 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581537 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581569 nblks=1 bytes=512 bs=512 st=0[50D[02;01H
+                                                                                
+A6RS in rw=1 blk=532748 off=272766976 size=132096 doff=524544 dblks=16236255 bs=
+[79C[02;01H
+                                                                                
+512 last=16777215[17D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x1317e8e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=532748 nblks=32 bytes=16384 bs=512 st=0[52D[02;01H
+                                                                                
+A6BLK rd lba=532780 nblks=32 bytes=16384 bs=512 st=0[52D[02;01H
+                                                                                
+A6BLK rd lba=532812 nblks=32 bytes=16384 bs=512 st=0[52D[02;01H
+                                                                                
+A6BLK rd lba=532844 nblks=32 bytes=16384 bs=512 st=0[52D[02;01H
+                                                                                
+A6BLK rd lba=532876 nblks=32 bytes=16384 bs=512 st=0[52D[02;01H
+                                                                                
+A6BLK rd lba=532908 nblks=32 bytes=16384 bs=512 st=0[52D[02;01H
+                                                                                
+A6BLK rd lba=532940 nblks=32 bytes=16384 bs=512 st=0[52D[02;01H
+                                                                                
+A6BLK rd lba=532972 nblks=32 bytes=16384 bs=512 st=0[52D[02;01H
+                                                                                
+A6BLK rd lba=533004 nblks=2 bytes=1024 bs=512 st=0[50D[02;01H
+                                                                                
+A6RS in rw=1 blk=6824213 off=3493997056 size=132096 doff=524544 dblks=16236255 b
+[79C[02;01H
+                                                                                
+s=512 last=16777215[19D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x1317fae0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=6824213 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=6824245 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=6824277 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=6824309 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=6824341 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=6824373 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=6824405 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=6824437 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=6824469 nblks=2 bytes=1024 bs=512 st=0[51D[02;01H
+                                                                                
+A6RS in rw=1 blk=4727069 off=2420259328 size=132096 doff=524544 dblks=16236255 b
+[79C[02;01H
+                                                                                
+s=512 last=16777215[19D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x13180ae0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=4727069 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=4727101 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=4727133 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=4727165 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=4727197 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=4727229 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=4727261 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=4727293 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=4727325 nblks=2 bytes=1024 bs=512 st=0[51D[02;01H
+                                                                                
+A6RS in rw=1 blk=532746 off=272765952 size=132096 doff=524544 dblks=16236255 bs=
+[79C[02;01H
+                                                                                
+512 last=16777215[17D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x1317e4e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=532746 nblks=32 bytes=16384 bs=512 st=0[52D[02;01H
+                                                                                
+A6BLK rd lba=532778 nblks=32 bytes=16384 bs=512 st=0[52D[02;01H
+                                                                                
+A6BLK rd lba=532810 nblks=32 bytes=16384 bs=512 st=0[52D[02;01H
+                                                                                
+A6BLK rd lba=532842 nblks=32 bytes=16384 bs=512 st=0[52D[02;01H
+                                                                                
+A6BLK rd lba=532874 nblks=32 bytes=16384 bs=512 st=0[52D[02;01H
+                                                                                
+A6BLK rd lba=532906 nblks=32 bytes=16384 bs=512 st=0[52D[02;01H
+                                                                                
+A6BLK rd lba=532938 nblks=32 bytes=16384 bs=512 st=0[52D[02;01H
+                                                                                
+A6BLK rd lba=532970 nblks=32 bytes=16384 bs=512 st=0[52D[02;01H
+                                                                                
+A6BLK rd lba=533002 nblks=2 bytes=1024 bs=512 st=0[50D[02;01H
+                                                                                
+A6RS in rw=1 blk=1581357 off=809654784 size=132096 doff=524544 dblks=16236255 bs
+[79C[02;01H
+                                                                                
+=512 last=16777215[18D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x13182ae0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=1581357 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581389 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581421 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581453 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581485 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581517 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581549 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581581 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581613 nblks=2 bytes=1024 bs=512 st=0[51D[02;01H
+                                                                                
+A6RS in rw=1 blk=1581355 off=809653760 size=132096 doff=524544 dblks=16236255 bs
+[79C[02;01H
+                                                                                
+=512 last=16777215[18D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x131826e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=1581355 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581387 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581419 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581451 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581483 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581515 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581547 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581579 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581611 nblks=2 bytes=1024 bs=512 st=0[51D[02;01H
+                                                                                
+A6RS in rw=1 blk=11018575 off=5641510400 size=131584 doff=524544 dblks=16236255 
+[79C[02;01H
+                                                                                
+bs=512 last=16777215[20D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x13186ee0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=11018575 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018607 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018639 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018671 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018703 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018735 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018767 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018799 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018831 nblks=1 bytes=512 bs=512 st=0[51D[02;01H
+                                                                                
+A6RS in rw=1 blk=11018542 off=5641493504 size=135168 doff=524544 dblks=16236255 
+[79C[02;01H
+                                                                                
+bs=512 last=16777215[20D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x13182ce0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=11018542 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018574 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018606 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018638 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018670 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018702 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018734 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018766 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018798 nblks=8 bytes=4096 bs=512 st=0[52D[02;01H
+                                                                                
+A6RS in rw=1 blk=5775618 off=2957116416 size=131584 doff=524544 dblks=16236255 b
+[79C[02;01H
+                                                                                
+s=512 last=16777215[19D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x1317d4e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=5775618 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=5775650 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=5775682 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=5775714 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=5775746 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=5775778 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=5775810 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=5775842 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=5775874 nblks=1 bytes=512 bs=512 st=0[50D[02;01H
+                                                                                
+A6RS in rw=1 blk=11018575 off=5641510400 size=131584 doff=524544 dblks=16236255 
+[79C[02;01H
+                                                                                
+bs=512 last=16777215[20D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x13186ee0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=11018575 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018607 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018639 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018671 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018703 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018735 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018767 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018799 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018831 nblks=1 bytes=512 bs=512 st=0[51D[02;01H
+                                                                                
+A6RS in rw=1 blk=11018542 off=5641493504 size=135168 doff=524544 dblks=16236255 
+[79C[02;01H
+                                                                                
+bs=512 last=16777215[20D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x13182ce0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=11018542 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018574 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018606 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018638 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018670 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018702 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018734 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018766 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018798 nblks=8 bytes=4096 bs=512 st=0[52D[02;01H
+                                                                                
+|[01DA6RS in rw=1 blk=532748 off=272766976 size=132096 doff=524544 dblks=16236255 bs=
+[79C[02;01H
+                                                                                
+512 last=16777215[17D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x1317e8e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=532748 nblks=32 bytes=16384 bs=512 st=0[52D[02;01H
+                                                                                
+A6BLK rd lba=532780 nblks=32 bytes=16384 bs=512 st=0[52D[02;01H
+                                                                                
+A6BLK rd lba=532812 nblks=32 bytes=16384 bs=512 st=0[52D[02;01H
+                                                                                
+A6BLK rd lba=532844 nblks=32 bytes=16384 bs=512 st=0[52D[02;01H
+                                                                                
+A6BLK rd lba=532876 nblks=32 bytes=16384 bs=512 st=0[52D[02;01H
+                                                                                
+A6BLK rd lba=532908 nblks=32 bytes=16384 bs=512 st=0[52D[02;01H
+                                                                                
+A6BLK rd lba=532940 nblks=32 bytes=16384 bs=512 st=0[52D[02;01H
+                                                                                
+A6BLK rd lba=532972 nblks=32 bytes=16384 bs=512 st=0[52D[02;01H
+                                                                                
+A6BLK rd lba=533004 nblks=2 bytes=1024 bs=512 st=0[50D[02;01H
+                                                                                
+A6RS in rw=1 blk=6824213 off=3493997056 size=132096 doff=524544 dblks=16236255 b
+[79C[02;01H
+                                                                                
+s=512 last=16777215[19D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x1317fae0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=6824213 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=6824245 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=6824277 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=6824309 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=6824341 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=6824373 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=6824405 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=6824437 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=6824469 nblks=2 bytes=1024 bs=512 st=0[51D[02;01H
+                                                                                
+A6RS in rw=1 blk=4727069 off=2420259328 size=132096 doff=524544 dblks=16236255 b
+[79C[02;01H
+                                                                                
+s=512 last=16777215[19D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x13180ae0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=4727069 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=4727101 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=4727133 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=4727165 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=4727197 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=4727229 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=4727261 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=4727293 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=4727325 nblks=2 bytes=1024 bs=512 st=0[51D[02;01H
+                                                                                
+A6RS in rw=1 blk=532746 off=272765952 size=132096 doff=524544 dblks=16236255 bs=
+[79C[02;01H
+                                                                                
+512 last=16777215[17D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x1317e4e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=532746 nblks=32 bytes=16384 bs=512 st=0[52D[02;01H
+                                                                                
+A6BLK rd lba=532778 nblks=32 bytes=16384 bs=512 st=0[52D[02;01H
+                                                                                
+A6BLK rd lba=532810 nblks=32 bytes=16384 bs=512 st=0[52D[02;01H
+                                                                                
+A6BLK rd lba=532842 nblks=32 bytes=16384 bs=512 st=0[52D[02;01H
+                                                                                
+A6BLK rd lba=532874 nblks=32 bytes=16384 bs=512 st=0[52D[02;01H
+                                                                                
+A6BLK rd lba=532906 nblks=32 bytes=16384 bs=512 st=0[52D[02;01H
+                                                                                
+A6BLK rd lba=532938 nblks=32 bytes=16384 bs=512 st=0[52D[02;01H
+                                                                                
+A6BLK rd lba=532970 nblks=32 bytes=16384 bs=512 st=0[52D[02;01H
+                                                                                
+A6BLK rd lba=533002 nblks=2 bytes=1024 bs=512 st=0[50D[02;01H
+                                                                                
+A6RS in rw=1 blk=1581357 off=809654784 size=132096 doff=524544 dblks=16236255 bs
+[79C[02;01H
+                                                                                
+=512 last=16777215[18D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x13182ae0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=1581357 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581389 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581421 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581453 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581485 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581517 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581549 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581581 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581613 nblks=2 bytes=1024 bs=512 st=0[51D[02;01H
+                                                                                
+A6RS in rw=1 blk=1581354 off=809653248 size=131584 doff=524544 dblks=16236255 bs
+[79C[02;01H
+                                                                                
+=512 last=16777215[18D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x131824e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=1581354 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581386 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581418 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581450 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581482 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581514 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581546 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581578 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581610 nblks=1 bytes=512 bs=512 st=0[50D[02;01H
+                                                                                
+A6RS in rw=1 blk=6824213 off=3493997056 size=132096 doff=524544 dblks=16236255 b
+[79C[02;01H
+                                                                                
+s=512 last=16777215[19D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x1317fae0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=6824213 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=6824245 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=6824277 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=6824309 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=6824341 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=6824373 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=6824405 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=6824437 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=6824469 nblks=2 bytes=1024 bs=512 st=0[51D[02;01H
+                                                                                
+A6RS in rw=1 blk=4727069 off=2420259328 size=132096 doff=524544 dblks=16236255 b
+[79C[02;01H
+                                                                                
+s=512 last=16777215[19D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x13180ae0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=4727069 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=4727101 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=4727133 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=4727165 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=4727197 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=4727229 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=4727261 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=4727293 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=4727325 nblks=2 bytes=1024 bs=512 st=0[51D[02;01H
+                                                                                
+A6RS in rw=1 blk=1581357 off=809654784 size=132096 doff=524544 dblks=16236255 bs
+[79C[02;01H
+                                                                                
+=512 last=16777215[18D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x13182ae0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=1581357 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581389 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581421 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581453 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581485 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581517 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581549 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581581 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581613 nblks=2 bytes=1024 bs=512 st=0[51D[02;01H
+                                                                                
+A6RS in rw=1 blk=1581355 off=809653760 size=132096 doff=524544 dblks=16236255 bs
+[79C[02;01H
+                                                                                
+=512 last=16777215[18D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x131826e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=1581355 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581387 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581419 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581451 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581483 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581515 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581547 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581579 nblks=32 bytes=16384 bs=512 st=0[53D[02;01H
+                                                                                
+A6BLK rd lba=1581611 nblks=2 bytes=1024 bs=512 st=0[51D[02;01H
+                                                                                
+A6RS in rw=1 blk=11018575 off=5641510400 size=131584 doff=524544 dblks=16236255 
+[79C[02;01H
+                                                                                
+bs=512 last=16777215[20D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x13186ee0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=11018575 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018607 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018639 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018671 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018703 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018735 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018767 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018799 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018831 nblks=1 bytes=512 bs=512 st=0[51D[02;01H
+                                                                                
+A6RS in rw=1 blk=11018542 off=5641493504 size=135168 doff=524544 dblks=16236255 
+[79C[02;01H
+                                                                                
+bs=512 last=16777215[20D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x13182ce0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=11018542 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018574 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018606 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018638 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018670 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018702 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018734 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018766 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018798 nblks=8 bytes=4096 bs=512 st=0[52D[02;01H
+                                                                                
+/[01D-[01D[09;15HWelcome to illumos[11;05H1 [01D.[01CBoot Multi User [Enter][12;05H2 [01D.[01CBoot Single User[13;05H3 [01D.[01CEscape to loader prompt[14;05H4 [01D.[01CReboot[16;05HOptions:[17;05H5 [01D.[01CConfigure Boot Options...[50;01H[23;04HAutoboot in 9 seconds. [Space] to pause [50;01H[23;04HAutoboot in 8 seconds. [Space] to pause [50;01H[23;04HAutoboot in 7 seconds. [Space] to pause [50;01H[23;04HAutoboot in 6 seconds. [Space] to pause [50;01H[23;04HAutoboot in 5 seconds. [Space] to pause [50;01H[23;04HAutoboot in 4 seconds. [Space] to pause [50;01H[23;04HAutoboot in 3 seconds. [Space] to pause [50;01H[23;04HAutoboot in 2 seconds. [Space] to pause [50;01H[23;04HAutoboot in 1 second. [Space] to pause [50;01H[23;04H                                        [50;01HLoading /platform/ARMH,sbbr/kernel/aarch64/unix...[50D[02;01H
+                                                                                
+A6RS in rw=1 blk=14164339 off=7252141568 size=131584 doff=524544 dblks=16236255 
+[79C[02;01H
+                                                                                
+bs=512 last=16777215[20D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x1318b6e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=14164339 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=14164371 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=14164403 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=14164435 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=14164467 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=14164499 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=14164531 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=14164563 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=14164595 nblks=1 bytes=512 bs=512 st=0[51D[02;01H
+                                                                                
+A6RS in rw=1 blk=15212828 off=7788967936 size=131584 doff=524544 dblks=16236255 
+[79C[02;01H
+                                                                                
+bs=512 last=16777215[20D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x131808e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=15212828 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=15212860 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=15212892 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=15212924 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=15212956 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=15212988 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=15213020 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=15213052 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=15213084 nblks=1 bytes=512 bs=512 st=0[51D[02;01H
+                                                                                
+ZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+A6RS in rw=1 blk=11018575 off=5641510400 size=131584 doff=524544 dblks=16236255 
+[79C[02;01H
+                                                                                
+bs=512 last=16777215[20D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x13186ee0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=11018575 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018607 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018639 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018671 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018703 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018735 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018767 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018799 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018831 nblks=1 bytes=512 bs=512 st=0[51D[02;01H
+                                                                                
+A6RS in rw=1 blk=11018542 off=5641493504 size=135168 doff=524544 dblks=16236255 
+[79C[02;01H
+                                                                                
+bs=512 last=16777215[20D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x13182ce0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=11018542 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018574 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018606 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018638 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018670 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018702 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018734 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018766 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=11018798 nblks=8 bytes=4096 bs=512 st=0[52D[02;01H
+                                                                                
+A6RS in rw=1 blk=14164339 off=7252141568 size=131584 doff=524544 dblks=16236255 
+[79C[02;01H
+                                                                                
+bs=512 last=16777215[20D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x1318b6e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=14164339 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=14164371 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=14164403 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=14164435 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=14164467 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=14164499 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=14164531 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=14164563 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=14164595 nblks=1 bytes=512 bs=512 st=0[51D[02;01H
+                                                                                
+ZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+\[01DZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+can't find '/platform/ARMH,sbbr/kernel/aarch64/unix'[52D[02;01H
+                                                                                
+Loading /platform/armv8/kernel/aarch64/unix...[46D[02;01H
+                                                                                
+ZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+|[01DZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+ZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+can't find '/platform/armv8/kernel/aarch64/unix'[48D[02;01H
+                                                                                
+Loading armv8/kernel/aarch64...[31D[02;01H
+                                                                                
+/[01Dcan't find 'armv8/kernel/aarch64'[33D[02;01H
+                                                                                
+Loading /platform/ARMH,sbbr/kernel/aarch64/unix...[50D[02;01H
+                                                                                
+-[01DZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+ZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+\[01DZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+can't find '/platform/ARMH,sbbr/kernel/aarch64/unix'[52D[02;01H
+                                                                                
+Loading /platform/armv8/kernel/aarch64/unix...[46D[02;01H
+                                                                                
+ZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+|[01DZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+ZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+can't find '/platform/armv8/kernel/aarch64/unix'[48D[02;01H
+                                                                                
+Loading armv8/kernel/aarch64...[31D[02;01H
+                                                                                
+/[01D-[01Dcan't find 'armv8/kernel/aarch64'[33D[02;01H
+                                                                                
+Loading armv8/kernel/aarch64...[31D[02;01H
+                                                                                
+\[01Dcan't find 'armv8/kernel/aarch64'[33D[02;01H
+                                                                                
+[02;01H
+                                                                                
+A6RS in rw=1 blk=14164336 off=7252140032 size=132608 doff=524544 dblks=16236255 
+[79C[02;01H
+                                                                                
+bs=512 last=16777215[20D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x1318b0e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=14164336 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=14164368 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=14164400 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=14164432 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=14164464 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=14164496 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=14164528 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=14164560 nblks=32 bytes=16384 bs=512 st=0[54D[02;01H
+                                                                                
+A6BLK rd lba=14164592 nblks=3 bytes=1536 bs=512 st=0[52D[02;01H
+                                                                                
+ZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+ZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+Warning: error reading /boot/solaris/bootenv.rc[47D[02;01H
+                                                                                
+|[01D/[01DLoading /boot/defaults/loader.conf [35D[02;01H
+                                                                                
+console ttya is invalid![24D[02;01H
+                                                                                
+console ttyb is invalid![24D[02;01H
+                                                                                
+console ttyc is invalid![24D[02;01H
+                                                                                
+console ttyd is invalid![24D[02;01H
+                                                                                
+Available consoles:[19D[02;01H
+                                                                                
+    text[08D[02;01H
+                                                                                
+    null[08Csoftware device[31D[02;01H
+                                                                                
+    spin[08Csoftware device[31D[02;01H
+                                                                                
+-[01D\[01D|[01D/[01D-[01D\[01D|[01DLoading /platform/ARMH,sbbr/kernel/aarch64/unix...[50D[02;01H
+                                                                                
+ZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+/[01DZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+ZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+can't find '/platform/ARMH,sbbr/kernel/aarch64/unix'[52D[02;01H
+                                                                                
+Loading /platform/armv8/kernel/aarch64/unix...[46D[02;01H
+                                                                                
+-[01DZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+ZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+ZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+can't find '/platform/armv8/kernel/aarch64/unix'[48D[02;01H
+                                                                                
+Loading armv8/kernel/aarch64...[31D[02;01H
+                                                                                
+\[01D|[01Dcan't find 'armv8/kernel/aarch64'[33D[02;01H
+                                                                                
+Loading /platform/ARMH,sbbr/kernel/aarch64/unix...[50D[02;01H
+                                                                                
+ZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+/[01DZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+ZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+can't find '/platform/ARMH,sbbr/kernel/aarch64/unix'[52D[02;01H
+                                                                                
+Loading /platform/armv8/kernel/aarch64/unix...[46D[02;01H
+                                                                                
+-[01DZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+ZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+ZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+can't find '/platform/armv8/kernel/aarch64/unix'[48D[02;01H
+                                                                                
+Loading armv8/kernel/aarch64...[31D[02;01H
+                                                                                
+\[01D|[01Dcan't find 'armv8/kernel/aarch64'[33D[02;01H
+                                                                                
+Loading armv8/kernel/aarch64...[31D[02;01H
+                                                                                
+/[01Dcan't find 'armv8/kernel/aarch64'[33D[02;01H
+                                                                                
+Unable to load a kernel![24D[02;01H
+                                                                                
+[02;01H
+                                                                                
+Type '?' for a list of commands, 'help' for more detailed help.[63D[02;01H
+                                                                                
+	2026-08-27T08:19:53+00:00

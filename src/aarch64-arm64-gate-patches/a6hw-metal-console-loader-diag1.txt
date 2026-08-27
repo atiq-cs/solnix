@@ -1,0 +1,861 @@
+i-0e665d620838fb1eb	8585 nblks=132 bytes=67584 bs=512 st=0[54D[02;01H
+                                                                                
+A6RS in rw=1 blk=536745 off=274813440 size=66048 doff=524544 dblks=16236255 bs=5
+[79C[02;01H
+                                                                                
+12 last=16777215[16D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x133722e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=536745 nblks=129 bytes=66048 bs=512 st=0[53D[02;01H
+                                                                                
+A6RS in rw=1 blk=7877525 off=4033292800 size=132096 doff=524544 dblks=16236255 b
+[79C[02;01H
+                                                                                
+s=512 last=16777215[19D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x133cfae0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=7877525 nblks=258 bytes=132096 bs=512 st=0[55D[02;01H
+                                                                                
+A6RS in rw=1 blk=7876002 off=4032513024 size=134656 doff=524544 dblks=16236255 b
+[79C[02;01H
+                                                                                
+s=512 last=16777215[19D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x133114e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=7876002 nblks=263 bytes=134656 bs=512 st=0[55D[02;01H
+                                                                                
+A6RS in rw=1 blk=4753439 off=2433760768 size=131584 doff=524544 dblks=16236255 b
+[79C[02;01H
+                                                                                
+s=512 last=16777215[19D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x12e60ee0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=4753439 nblks=257 bytes=131584 bs=512 st=0[55D[02;01H
+                                                                                
+A6RS in rw=1 blk=7896911 off=4043218432 size=85504 doff=524544 dblks=16236255 bs
+[79C[02;01H
+                                                                                
+=512 last=16777215[18D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x13d46ee0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=7896911 nblks=167 bytes=85504 bs=512 st=0[54D[02;01H
+                                                                                
+A6RS in rw=1 blk=1728094 off=884784128 size=135680 doff=524544 dblks=16236255 bs
+[79C[02;01H
+                                                                                
+=512 last=16777215[18D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x13928ce0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=1728094 nblks=265 bytes=135680 bs=512 st=0[55D[02;01H
+                                                                                
+|[01DA6RS in rw=1 blk=524560 off=268574720 size=139264 doff=524544 dblks=16236255 bs=
+[79C[02;01H
+                                                                                
+512 last=16777215[17D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x12d7f0e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=524560 nblks=272 bytes=139264 bs=512 st=0[54D[02;01H
+                                                                                
+A6RS in rw=1 blk=1641802 off=840602624 size=131584 doff=524544 dblks=16236255 bs
+[79C[02;01H
+                                                                                
+=512 last=16777215[18D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x12f064e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=1641802 nblks=257 bytes=131584 bs=512 st=0[55D[02;01H
+                                                                                
+A6RS in rw=1 blk=4949780 off=2534287360 size=134656 doff=524544 dblks=16236255 b
+[79C[02;01H
+                                                                                
+s=512 last=16777215[19D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x12e3f8e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=4949780 nblks=263 bytes=134656 bs=512 st=0[55D[02;01H
+                                                                                
+A6RS in rw=1 blk=759246 off=388733952 size=131584 doff=524544 dblks=16236255 bs=
+[79C[02;01H
+                                                                                
+512 last=16777215[17D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x13016ce0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=759246 nblks=257 bytes=131584 bs=512 st=0[54D[02;01H
+                                                                                
+/[01DA6RS in rw=1 blk=7896722 off=4043121664 size=134656 doff=524544 dblks=16236255 b
+[79C[02;01H
+                                                                                
+s=512 last=16777215[19D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x13d2f4e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=7896722 nblks=263 bytes=134656 bs=512 st=0[55D[02;01H
+                                                                                
+A6RS in rw=1 blk=1822121 off=932925952 size=108544 doff=524544 dblks=16236255 bs
+[79C[02;01H
+                                                                                
+=512 last=16777215[18D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x137122e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=1822121 nblks=212 bytes=108544 bs=512 st=0[55D[02;01H
+                                                                                
+-[01DA6RS in rw=1 blk=1820745 off=932221440 size=103424 doff=524544 dblks=16236255 bs
+[79C[02;01H
+                                                                                
+=512 last=16777215[18D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x136662e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=1820745 nblks=202 bytes=103424 bs=512 st=0[55D[02;01H
+                                                                                
+A6RS in rw=1 blk=1821554 off=932635648 size=82944 doff=524544 dblks=16236255 bs=
+[79C[02;01H
+                                                                                
+512 last=16777215[17D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x136cb4e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=1821554 nblks=162 bytes=82944 bs=512 st=0[54D[02;01H
+                                                                                
+\[01DA6RS in rw=1 blk=4945811 off=2532255232 size=196608 doff=524544 dblks=16236255 b
+[79C[02;01H
+                                                                                
+s=512 last=16777215[19D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x13c4f6e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=4945811 nblks=384 bytes=196608 bs=512 st=0[55D[02;01H
+                                                                                
+|[01DA6RS in rw=1 blk=730999 off=374271488 size=183296 doff=524544 dblks=16236255 bs=
+[79C[02;01H
+                                                                                
+512 last=16777215[17D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x1324bee0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=730999 nblks=358 bytes=183296 bs=512 st=0[54D[02;01H
+                                                                                
+/[01DA6RS in rw=1 blk=1856155 off=950351360 size=184832 doff=524544 dblks=16236255 bs
+[79C[02;01H
+                                                                                
+=512 last=16777215[18D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x137b06e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=1856155 nblks=361 bytes=184832 bs=512 st=0[55D[02;01H
+                                                                                
+A6RS in rw=1 blk=759503 off=388865536 size=114176 doff=524544 dblks=16236255 bs=
+[79C[02;01H
+                                                                                
+512 last=16777215[17D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x13036ee0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=759503 nblks=223 bytes=114176 bs=512 st=0[54D[02;01H
+                                                                                
+-[01DA6RS in rw=1 blk=4906630 off=2512194560 size=164864 doff=524544 dblks=16236255 b
+[79C[02;01H
+                                                                                
+s=512 last=16777215[19D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x1392dce0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=4906630 nblks=322 bytes=164864 bs=512 st=0[55D[02;01H
+                                                                                
+\[01DA6RS in rw=1 blk=4906952 off=2512359424 size=143360 doff=524544 dblks=16236255 b
+[79C[02;01H
+                                                                                
+s=512 last=16777215[19D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x139560e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=4906952 nblks=280 bytes=143360 bs=512 st=0[55D[02;01H
+                                                                                
+[2J[01;01Hloading CORE EXT words [23D[02;01Hloading SEARCH & SEARCH-EXT words [34D[03;01Hloading Johns-Hopkins locals [29D[04;01Hloading MARKER [15D[05;01Hloading ficl O-O extensions [28D[06;01Hloading ficl utility classes [29D[07;01Hloading ficl string class [26D[08;01HA6RS in rw=1 blk=6922478 off=3544308736 size=131584 doff=524544 dblks=16236255 b
+[08;80H[09;01Hs=512 last=16777215[19D[10;01HA6RS dec need_buf=0 ioalign=8 buf=0x1317ace0 bufaln=1[53D[11;01HA6BLK rd lba=6922478 nblks=257 bytes=131584 bs=512 st=0[55D[12;01H/[01DA6RS in rw=1 blk=11018575 off=5641510400 size=131584 doff=524544 dblks=16236255 
+[12;80H[13;01Hbs=512 last=16777215[20D[14;01HA6RS dec need_buf=0 ioalign=8 buf=0x13186ee0 bufaln=1[53D[15;01HA6BLK rd lba=11018575 nblks=257 bytes=131584 bs=512 st=0[56D[16;01HA6RS in rw=1 blk=11018542 off=5641493504 size=135168 doff=524544 dblks=16236255 
+[16;80H[17;01Hbs=512 last=16777215[20D[18;01HA6RS dec need_buf=0 ioalign=8 buf=0x13182ce0 bufaln=1[53D[19;01HA6BLK rd lba=11018542 nblks=264 bytes=135168 bs=512 st=0[56D[20;01H-[01DA6RS in rw=1 blk=4839447 off=2477796864 size=134656 doff=524544 dblks=16236255 b
+[20;80H[21;01Hs=512 last=16777215[19D[22;01HA6RS dec need_buf=0 ioalign=8 buf=0x1385fee0 bufaln=1[53D[23;01HA6BLK rd lba=4839447 nblks=263 bytes=134656 bs=512 st=0[55D[24;01HA6RS in rw=1 blk=1733585 off=887595520 size=131584 doff=524544 dblks=16236255 bs
+[24;80H[25;01H=512 last=16777215[18D[26;01HA6RS dec need_buf=0 ioalign=8 buf=0x13bd72e0 bufaln=1[53D[27;01HA6BLK rd lba=1733585 nblks=257 bytes=131584 bs=512 st=0[55D[28;01HA6RS in rw=1 blk=4839434 off=2477790208 size=134656 doff=524544 dblks=16236255 b
+[28;80H[29;01Hs=512 last=16777215[19D[30;01HA6RS dec need_buf=0 ioalign=8 buf=0x1385e4e0 bufaln=1[53D[31;01HA6BLK rd lba=4839434 nblks=263 bytes=134656 bs=512 st=0[55D[32;01HA6RS in rw=1 blk=7036868 off=3602876416 size=82432 doff=524544 dblks=16236255 bs
+[32;80H[33;01H=512 last=16777215[18D[34;01HA6RS dec need_buf=0 ioalign=8 buf=0x139558e0 bufaln=1[53D[35;01HA6BLK rd lba=7036868 nblks=161 bytes=82432 bs=512 st=0[54D[36;01H\[01DA6RS in rw=1 blk=1732988 off=887289856 size=113664 doff=524544 dblks=16236255 bs
+[36;80H[37;01H=512 last=16777215[18D[38;01HA6RS dec need_buf=0 ioalign=8 buf=0x13b8c8e0 bufaln=1[53D[39;01HA6BLK rd lba=1732988 nblks=222 bytes=113664 bs=512 st=0[55D[40;01H|[01DA6RS in rw=1 blk=7036857 off=3602870784 size=133120 doff=524544 dblks=16236255 b
+[40;80H[41;01Hs=512 last=16777215[19D[42;01HA6RS dec need_buf=0 ioalign=8 buf=0x139542e0 bufaln=1[53D[43;01HA6BLK rd lba=7036857 nblks=260 bytes=133120 bs=512 st=0[55D[44;01H/[01DA6RS in rw=1 blk=660783 off=338320896 size=135168 doff=524544 dblks=16236255 bs=
+[44;80H[45;01H512 last=16777215[17D[46;01HA6RS dec need_buf=0 ioalign=8 buf=0x13002ee0 bufaln=1[53D[47;01HA6BLK rd lba=660783 nblks=264 bytes=135168 bs=512 st=0[54D[48;01HA6RS in rw=1 blk=1732961 off=887276032 size=137728 doff=524544 dblks=16236255 bs
+[48;80H[49;01H=512 last=16777215[18D[50;01HA6RS dec need_buf=0 ioalign=8 buf=0x13b892e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=1732961 nblks=269 bytes=137728 bs=512 st=0[55D[02;01H
+                                                                                
+-[01D\[01DA6RS in rw=1 blk=7036810 off=3602846720 size=132608 doff=524544 dblks=16236255 b
+[79C[02;01H
+                                                                                
+s=512 last=16777215[19D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x1394e4e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=7036810 nblks=259 bytes=132608 bs=512 st=0[55D[02;01H
+                                                                                
+EFI boot environment[20D[02;01H
+                                                                                
+|[01DA6RS in rw=1 blk=1728071 off=884772352 size=142848 doff=524544 dblks=16236255 bs
+[79C[02;01H
+                                                                                
+=512 last=16777215[18D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x13925ee0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=1728071 nblks=279 bytes=142848 bs=512 st=0[55D[02;01H
+                                                                                
+/[01D-[01DA6RS in rw=1 blk=7877827 off=4033447424 size=133120 doff=524544 dblks=16236255 b
+[79C[02;01H
+                                                                                
+s=512 last=16777215[19D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x133f56e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=7877827 nblks=260 bytes=133120 bs=512 st=0[55D[02;01H
+                                                                                
+A6RS in rw=1 blk=7895204 off=4042344448 size=134656 doff=524544 dblks=16236255 b
+[79C[02;01H
+                                                                                
+s=512 last=16777215[19D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x13c718e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=7895204 nblks=263 bytes=134656 bs=512 st=0[55D[02;01H
+                                                                                
+A6RS in rw=1 blk=14164336 off=7252140032 size=132608 doff=524544 dblks=16236255 
+[79C[02;01H
+                                                                                
+bs=512 last=16777215[20D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x1318b0e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=14164336 nblks=259 bytes=132608 bs=512 st=0[56D[02;01H
+                                                                                
+ZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+ZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+Warning: error reading /boot/solaris/bootenv.rc[47D[02;01H
+                                                                                
+\[01D|[01DLoading /boot/defaults/loader.conf [35D[02;01H
+                                                                                
+console ttya is invalid![24D[02;01H
+                                                                                
+console ttyb is invalid![24D[02;01H
+                                                                                
+console ttyc is invalid![24D[02;01H
+                                                                                
+console ttyd is invalid![24D[02;01H
+                                                                                
+Available consoles:[19D[02;01H
+                                                                                
+    text[08D[02;01H
+                                                                                
+    null[08Csoftware device[31D[02;01H
+                                                                                
+    spin[08Csoftware device[31D[02;01H
+                                                                                
+/[01D-[01D\[01D|[01DA6RS in rw=1 blk=7896329 off=4042920448 size=88576 doff=524544 dblks=16236255 bs
+[79C[02;01H
+                                                                                
+=512 last=16777215[18D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x13cfe2e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=7896329 nblks=173 bytes=88576 bs=512 st=0[54D[02;01H
+                                                                                
+A6RS in rw=1 blk=7895874 off=4042687488 size=66048 doff=524544 dblks=16236255 bs
+[79C[02;01H
+                                                                                
+=512 last=16777215[18D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x13cc54e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=7895874 nblks=129 bytes=66048 bs=512 st=0[54D[02;01H
+                                                                                
+A6RS in rw=1 blk=1017516 off=520968192 size=66048 doff=524544 dblks=16236255 bs=
+[79C[02;01H
+                                                                                
+512 last=16777215[17D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x12e328e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=1017516 nblks=129 bytes=66048 bs=512 st=0[54D[02;01H
+                                                                                
+/[01D-[01DA6RS in rw=1 blk=656176 off=335962112 size=134656 doff=524544 dblks=16236255 bs=
+[79C[02;01H
+                                                                                
+512 last=16777215[17D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x12dc30e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=656176 nblks=263 bytes=134656 bs=512 st=0[54D[02;01H
+                                                                                
+\[01DA6RS in rw=1 blk=1732863 off=887225856 size=138752 doff=524544 dblks=16236255 bs
+[79C[02;01H
+                                                                                
+=512 last=16777215[18D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x13b7cee0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=1732863 nblks=271 bytes=138752 bs=512 st=0[55D[02;01H
+                                                                                
+|[01D/[01DA6RS in rw=1 blk=4837556 off=2476828672 size=134144 doff=524544 dblks=16236255 b
+[79C[02;01H
+                                                                                
+s=512 last=16777215[19D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x137738e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=4837556 nblks=262 bytes=134144 bs=512 st=0[55D[02;01H
+                                                                                
+-[01D\[01D|[01D/[01D[01;01H                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+[01;01H-[01D [04;46H    [0m[33m[40m,[0m[37m[40m                             [05;46H   [0m[33m[40m,./% [0m[31m[40m&[0m[37m[40m                         [06;46H   [0m[33m[40m(****[0m[31m[40m*([0m[37m[40m                        [07;46H     [0m[33m[40m*/*[0m[31m[40m//[0m[37m[40m                        [08;46H     [0m[33m[40m*,//[0m[31m[40m/(([0m[37m[40m                      [09;46H       [0m[33m[40m,*/[0m[31m[40m/((/%[0m[37m[40m                   [10;46H         [0m[33m[40m//[0m[31m[40m/((((%[0m[37m[40m                 [11;46H          [0m[33m[40m,*[0m[31m[40m/(((((%[0m[37m[40m       [0m[33m[40m&[0m[31m[40m#///((&[12;46H[0m[37m[40m           [0m[33m[40m./[0m[31m[40m//((((((%[0m[37m[40m  [0m[31m[40m%/(((/[0m[37m[40m    [13;46H            [0m[33m[40m./[0m[31m[40m///(((((///((,[0m[37m[40m      [14;46H            [0m[33m[40m.*//[0m[31m[40m//(((((((((([0m[37m[40m      [15;46H                 [0m[31m[40m./((((((((/[0m[37m[40m      [16;46H                  [0m[31m[40m(/((((((([0m[37m[40m       [17;46H                  [0m[31m[40m,,((((((/[0m[37m[40m       [18;46H                    [0m[31m[40m/(((([0m[37m[40m         [19;46H                 [0m[31m[40m%/(((([0m[37m[40m           [20;46H             [0m[33m[40m&[0m[31m[40m%#/((((.[0m[37m[40m            [21;46H           [0m[33m[40m,[0m[31m[40m([0m[37m[40m [0m[31m[40m,/[0m[37m[40m [0m[31m[40m/(/[0m[37m[40m              [22;46H               [0m[31m[40m,/[0m[37m[40m                 [04;46H    [0m[33m[40m,[0m[37m[40m                             [05;46H   [0m[33m[40m,./% [0m[31m[40m&[0m[37m[40m                         [06;46H   [0m[33m[40m(****[0m[31m[40m*([0m[37m[40m                        [07;46H     [0m[33m[40m*/*[0m[31m[40m//[0m[37m[40m                        [08;46H     [0m[33m[40m*,//[0m[31m[40m/(([0m[37m[40m                      [09;46H       [0m[33m[40m,*/[0m[31m[40m/((/%[0m[37m[40m                   [10;46H         [0m[33m[40m//[0m[31m[40m/((((%[0m[37m[40m                 [11;46H          [0m[33m[40m,*[0m[31m[40m/(((((%[0m[37m[40m       [0m[33m[40m&[0m[31m[40m#///((&[12;46H[0m[37m[40m           [0m[33m[40m./[0m[31m[40m//((((((%[0m[37m[40m  [0m[31m[40m%/(((/[0m[37m[40m    [13;46H            [0m[33m[40m./[0m[31m[40m///(((((///((,[0m[37m[40m      [14;46H            [0m[33m[40m.*//[0m[31m[40m//(((((((((([0m[37m[40m      [15;46H                 [0m[31m[40m./((((((((/[0m[37m[40m      [16;46H                  [0m[31m[40m(/((((((([0m[37m[40m       [17;46H                  [0m[31m[40m,,((((((/[0m[37m[40m       [18;46H                    [0m[31m[40m/(((([0m[37m[40m         [19;46H                 [0m[31m[40m%/(((([0m[37m[40m           [20;46H             [0m[33m[40m&[0m[31m[40m%#/((((.[0m[37m[40m            [21;46H           [0m[33m[40m,[0m[31m[40m([0m[37m[40m [0m[31m[40m,/[0m[37m[40m [0m[31m[40m/(/[0m[37m[40m              [22;46H               [0m[31m[40m,/[0m[37m[40m                  
+[22;80H[01;02H _  _  _                               [02;02H(_)| || | _   _  _ __ ___    ___   ___ [03;02H| || || || | | || '_ ` _ \  / _ \ / __|[04;02H| || || || |_| || | | | | || (_) |\__ \[05;02H|_||_||_| \__,_||_| |_| |_| \___/ |___/[01;02H _  _  _                               [02;02H(_)| || | _   _  _ __ ___    ___   ___ [03;02H| || || || | | || '_ ` _ \  / _ \ / __|[04;02H| || || || |_| || | | | | || (_) |\__ \[05;02H|_||_||_| \__,_||_| |_| |_| \___/ |___/[10;02H|[11;02H|[12;02H|[13;02H|[14;02H|[15;02H|[16;02H|[17;02H|[18;02H|[19;02H|[20;02H|[21;02H|[10;44H|[11;44H|[12;44H|[13;44H|[14;44H|[15;44H|[16;44H|[17;44H|[18;44H|[19;44H|[20;44H|[21;44H|[09;03H=========================================[22;03H=========================================[09;02H+[22;02H+[09;44H+[22;44H+[10;02H|[11;02H|[12;02H|[13;02H|[14;02H|[15;02H|[16;02H|[17;02H|[18;02H|[19;02H|[20;02H|[21;02H|[10;44H|[11;44H|[12;44H|[13;44H|[14;44H|[15;44H|[16;44H|[17;44H|[18;44H|[19;44H|[20;44H|[21;44H|[09;03H=========================================[22;03H=========================================[09;02H+[22;02H+[09;44H+[22;44H+[50;01HA6RS in rw=1 blk=5775618 off=2957116416 size=131584 doff=524544 dblks=16236255 b
+[79C[02;01H
+                                                                                
+s=512 last=16777215[19D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x1317d4e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=5775618 nblks=257 bytes=131584 bs=512 st=0[55D[02;01H
+                                                                                
+A6RS in rw=1 blk=11018575 off=5641510400 size=131584 doff=524544 dblks=16236255 
+[79C[02;01H
+                                                                                
+bs=512 last=16777215[20D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x13186ee0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=11018575 nblks=257 bytes=131584 bs=512 st=0[56D[02;01H
+                                                                                
+A6RS in rw=1 blk=11018542 off=5641493504 size=135168 doff=524544 dblks=16236255 
+[79C[02;01H
+                                                                                
+bs=512 last=16777215[20D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x13182ce0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=11018542 nblks=264 bytes=135168 bs=512 st=0[56D[02;01H
+                                                                                
+\[01DA6RS in rw=1 blk=532748 off=272766976 size=132096 doff=524544 dblks=16236255 bs=
+[79C[02;01H
+                                                                                
+512 last=16777215[17D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x1317e8e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=532748 nblks=258 bytes=132096 bs=512 st=0[54D[02;01H
+                                                                                
+A6RS in rw=1 blk=6824213 off=3493997056 size=132096 doff=524544 dblks=16236255 b
+[79C[02;01H
+                                                                                
+s=512 last=16777215[19D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x1317fae0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=6824213 nblks=258 bytes=132096 bs=512 st=0[55D[02;01H
+                                                                                
+A6RS in rw=1 blk=4727069 off=2420259328 size=132096 doff=524544 dblks=16236255 b
+[79C[02;01H
+                                                                                
+s=512 last=16777215[19D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x13180ae0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=4727069 nblks=258 bytes=132096 bs=512 st=0[55D[02;01H
+                                                                                
+A6RS in rw=1 blk=532746 off=272765952 size=132096 doff=524544 dblks=16236255 bs=
+[79C[02;01H
+                                                                                
+512 last=16777215[17D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x1317e4e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=532746 nblks=258 bytes=132096 bs=512 st=0[54D[02;01H
+                                                                                
+A6RS in rw=1 blk=1581357 off=809654784 size=132096 doff=524544 dblks=16236255 bs
+[79C[02;01H
+                                                                                
+=512 last=16777215[18D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x13182ae0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=1581357 nblks=258 bytes=132096 bs=512 st=0[55D[02;01H
+                                                                                
+A6RS in rw=1 blk=1581354 off=809653248 size=131584 doff=524544 dblks=16236255 bs
+[79C[02;01H
+                                                                                
+=512 last=16777215[18D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x131824e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=1581354 nblks=257 bytes=131584 bs=512 st=0[55D[02;01H
+                                                                                
+A6RS in rw=1 blk=1581313 off=809632256 size=131584 doff=524544 dblks=16236255 bs
+[79C[02;01H
+                                                                                
+=512 last=16777215[18D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x1317d2e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=1581313 nblks=257 bytes=131584 bs=512 st=0[55D[02;01H
+                                                                                
+A6RS in rw=1 blk=532748 off=272766976 size=132096 doff=524544 dblks=16236255 bs=
+[79C[02;01H
+                                                                                
+512 last=16777215[17D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x1317e8e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=532748 nblks=258 bytes=132096 bs=512 st=0[54D[02;01H
+                                                                                
+A6RS in rw=1 blk=6824213 off=3493997056 size=132096 doff=524544 dblks=16236255 b
+[79C[02;01H
+                                                                                
+s=512 last=16777215[19D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x1317fae0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=6824213 nblks=258 bytes=132096 bs=512 st=0[55D[02;01H
+                                                                                
+A6RS in rw=1 blk=4727069 off=2420259328 size=132096 doff=524544 dblks=16236255 b
+[79C[02;01H
+                                                                                
+s=512 last=16777215[19D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x13180ae0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=4727069 nblks=258 bytes=132096 bs=512 st=0[55D[02;01H
+                                                                                
+A6RS in rw=1 blk=532746 off=272765952 size=132096 doff=524544 dblks=16236255 bs=
+[79C[02;01H
+                                                                                
+512 last=16777215[17D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x1317e4e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=532746 nblks=258 bytes=132096 bs=512 st=0[54D[02;01H
+                                                                                
+A6RS in rw=1 blk=1581357 off=809654784 size=132096 doff=524544 dblks=16236255 bs
+[79C[02;01H
+                                                                                
+=512 last=16777215[18D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x13182ae0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=1581357 nblks=258 bytes=132096 bs=512 st=0[55D[02;01H
+                                                                                
+A6RS in rw=1 blk=1581355 off=809653760 size=132096 doff=524544 dblks=16236255 bs
+[79C[02;01H
+                                                                                
+=512 last=16777215[18D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x131826e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=1581355 nblks=258 bytes=132096 bs=512 st=0[55D[02;01H
+                                                                                
+A6RS in rw=1 blk=11018575 off=5641510400 size=131584 doff=524544 dblks=16236255 
+[79C[02;01H
+                                                                                
+bs=512 last=16777215[20D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x13186ee0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=11018575 nblks=257 bytes=131584 bs=512 st=0[56D[02;01H
+                                                                                
+A6RS in rw=1 blk=11018542 off=5641493504 size=135168 doff=524544 dblks=16236255 
+[79C[02;01H
+                                                                                
+bs=512 last=16777215[20D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x13182ce0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=11018542 nblks=264 bytes=135168 bs=512 st=0[56D[02;01H
+                                                                                
+A6RS in rw=1 blk=5775618 off=2957116416 size=131584 doff=524544 dblks=16236255 b
+[79C[02;01H
+                                                                                
+s=512 last=16777215[19D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x1317d4e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=5775618 nblks=257 bytes=131584 bs=512 st=0[55D[02;01H
+                                                                                
+A6RS in rw=1 blk=11018575 off=5641510400 size=131584 doff=524544 dblks=16236255 
+[79C[02;01H
+                                                                                
+bs=512 last=16777215[20D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x13186ee0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=11018575 nblks=257 bytes=131584 bs=512 st=0[56D[02;01H
+                                                                                
+A6RS in rw=1 blk=11018542 off=5641493504 size=135168 doff=524544 dblks=16236255 
+[79C[02;01H
+                                                                                
+bs=512 last=16777215[20D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x13182ce0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=11018542 nblks=264 bytes=135168 bs=512 st=0[56D[02;01H
+                                                                                
+|[01DA6RS in rw=1 blk=532748 off=272766976 size=132096 doff=524544 dblks=16236255 bs=
+[79C[02;01H
+                                                                                
+512 last=16777215[17D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x1317e8e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=532748 nblks=258 bytes=132096 bs=512 st=0[54D[02;01H
+                                                                                
+A6RS in rw=1 blk=6824213 off=3493997056 size=132096 doff=524544 dblks=16236255 b
+[79C[02;01H
+                                                                                
+s=512 last=16777215[19D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x1317fae0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=6824213 nblks=258 bytes=132096 bs=512 st=0[55D[02;01H
+                                                                                
+A6RS in rw=1 blk=4727069 off=2420259328 size=132096 doff=524544 dblks=16236255 b
+[79C[02;01H
+                                                                                
+s=512 last=16777215[19D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x13180ae0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=4727069 nblks=258 bytes=132096 bs=512 st=0[55D[02;01H
+                                                                                
+A6RS in rw=1 blk=532746 off=272765952 size=132096 doff=524544 dblks=16236255 bs=
+[79C[02;01H
+                                                                                
+512 last=16777215[17D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x1317e4e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=532746 nblks=258 bytes=132096 bs=512 st=0[54D[02;01H
+                                                                                
+A6RS in rw=1 blk=1581357 off=809654784 size=132096 doff=524544 dblks=16236255 bs
+[79C[02;01H
+                                                                                
+=512 last=16777215[18D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x13182ae0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=1581357 nblks=258 bytes=132096 bs=512 st=0[55D[02;01H
+                                                                                
+A6RS in rw=1 blk=1581354 off=809653248 size=131584 doff=524544 dblks=16236255 bs
+[79C[02;01H
+                                                                                
+=512 last=16777215[18D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x131824e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=1581354 nblks=257 bytes=131584 bs=512 st=0[55D[02;01H
+                                                                                
+A6RS in rw=1 blk=6824213 off=3493997056 size=132096 doff=524544 dblks=16236255 b
+[79C[02;01H
+                                                                                
+s=512 last=16777215[19D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x1317fae0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=6824213 nblks=258 bytes=132096 bs=512 st=0[55D[02;01H
+                                                                                
+A6RS in rw=1 blk=4727069 off=2420259328 size=132096 doff=524544 dblks=16236255 b
+[79C[02;01H
+                                                                                
+s=512 last=16777215[19D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x13180ae0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=4727069 nblks=258 bytes=132096 bs=512 st=0[55D[02;01H
+                                                                                
+A6RS in rw=1 blk=1581357 off=809654784 size=132096 doff=524544 dblks=16236255 bs
+[79C[02;01H
+                                                                                
+=512 last=16777215[18D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x13182ae0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=1581357 nblks=258 bytes=132096 bs=512 st=0[55D[02;01H
+                                                                                
+A6RS in rw=1 blk=1581355 off=809653760 size=132096 doff=524544 dblks=16236255 bs
+[79C[02;01H
+                                                                                
+=512 last=16777215[18D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x131826e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=1581355 nblks=258 bytes=132096 bs=512 st=0[55D[02;01H
+                                                                                
+A6RS in rw=1 blk=11018575 off=5641510400 size=131584 doff=524544 dblks=16236255 
+[79C[02;01H
+                                                                                
+bs=512 last=16777215[20D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x13186ee0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=11018575 nblks=257 bytes=131584 bs=512 st=0[56D[02;01H
+                                                                                
+A6RS in rw=1 blk=11018542 off=5641493504 size=135168 doff=524544 dblks=16236255 
+[79C[02;01H
+                                                                                
+bs=512 last=16777215[20D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x13182ce0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=11018542 nblks=264 bytes=135168 bs=512 st=0[56D[02;01H
+                                                                                
+/[01D-[01D[09;15HWelcome to illumos[11;05H1 [01D.[01CBoot Multi User [Enter][12;05H2 [01D.[01CBoot Single User[13;05H3 [01D.[01CEscape to loader prompt[14;05H4 [01D.[01CReboot[16;05HOptions:[17;05H5 [01D.[01CConfigure Boot Options...[50;01H[23;04HAutoboot in 9 seconds. [Space] to pause [50;01H[23;04HAutoboot in 8 seconds. [Space] to pause [50;01H[23;04HAutoboot in 7 seconds. [Space] to pause [50;01H[23;04HAutoboot in 6 seconds. [Space] to pause [50;01H[23;04HAutoboot in 5 seconds. [Space] to pause [50;01H[23;04HAutoboot in 4 seconds. [Space] to pause [50;01H[23;04HAutoboot in 3 seconds. [Space] to pause [50;01H[23;04HAutoboot in 2 seconds. [Space] to pause [50;01H[23;04HAutoboot in 1 second. [Space] to pause [50;01H[23;04H                                        [50;01HLoading /platform/ARMH,sbbr/kernel/aarch64/unix...[50D[02;01H
+                                                                                
+A6RS in rw=1 blk=14164339 off=7252141568 size=131584 doff=524544 dblks=16236255 
+[79C[02;01H
+                                                                                
+bs=512 last=16777215[20D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x1318b6e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=14164339 nblks=257 bytes=131584 bs=512 st=0[56D[02;01H
+                                                                                
+A6RS in rw=1 blk=15212828 off=7788967936 size=131584 doff=524544 dblks=16236255 
+[79C[02;01H
+                                                                                
+bs=512 last=16777215[20D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x131808e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=15212828 nblks=257 bytes=131584 bs=512 st=0[56D[02;01H
+                                                                                
+ZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+A6RS in rw=1 blk=11018575 off=5641510400 size=131584 doff=524544 dblks=16236255 
+[79C[02;01H
+                                                                                
+bs=512 last=16777215[20D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x13186ee0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=11018575 nblks=257 bytes=131584 bs=512 st=0[56D[02;01H
+                                                                                
+A6RS in rw=1 blk=11018542 off=5641493504 size=135168 doff=524544 dblks=16236255 
+[79C[02;01H
+                                                                                
+bs=512 last=16777215[20D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x13182ce0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=11018542 nblks=264 bytes=135168 bs=512 st=0[56D[02;01H
+                                                                                
+A6RS in rw=1 blk=14164339 off=7252141568 size=131584 doff=524544 dblks=16236255 
+[79C[02;01H
+                                                                                
+bs=512 last=16777215[20D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x1318b6e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=14164339 nblks=257 bytes=131584 bs=512 st=0[56D[02;01H
+                                                                                
+ZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+\[01DZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+can't find '/platform/ARMH,sbbr/kernel/aarch64/unix'[52D[02;01H
+                                                                                
+Loading /platform/armv8/kernel/aarch64/unix...[46D[02;01H
+                                                                                
+ZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+|[01DZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+ZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+can't find '/platform/armv8/kernel/aarch64/unix'[48D[02;01H
+                                                                                
+Loading armv8/kernel/aarch64...[31D[02;01H
+                                                                                
+/[01Dcan't find 'armv8/kernel/aarch64'[33D[02;01H
+                                                                                
+Loading /platform/ARMH,sbbr/kernel/aarch64/unix...[50D[02;01H
+                                                                                
+-[01DZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+ZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+\[01DZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+can't find '/platform/ARMH,sbbr/kernel/aarch64/unix'[52D[02;01H
+                                                                                
+Loading /platform/armv8/kernel/aarch64/unix...[46D[02;01H
+                                                                                
+ZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+|[01DZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+ZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+can't find '/platform/armv8/kernel/aarch64/unix'[48D[02;01H
+                                                                                
+Loading armv8/kernel/aarch64...[31D[02;01H
+                                                                                
+/[01D-[01Dcan't find 'armv8/kernel/aarch64'[33D[02;01H
+                                                                                
+Loading armv8/kernel/aarch64...[31D[02;01H
+                                                                                
+\[01Dcan't find 'armv8/kernel/aarch64'[33D[02;01H
+                                                                                
+[02;01H
+                                                                                
+A6RS in rw=1 blk=14164336 off=7252140032 size=132608 doff=524544 dblks=16236255 
+[79C[02;01H
+                                                                                
+bs=512 last=16777215[20D[02;01H
+                                                                                
+A6RS dec need_buf=0 ioalign=8 buf=0x1318b0e0 bufaln=1[53D[02;01H
+                                                                                
+A6BLK rd lba=14164336 nblks=259 bytes=132608 bs=512 st=0[56D[02;01H
+                                                                                
+ZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+ZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+Warning: error reading /boot/solaris/bootenv.rc[47D[02;01H
+                                                                                
+|[01D/[01DLoading /boot/defaults/loader.conf [35D[02;01H
+                                                                                
+console ttya is invalid![24D[02;01H
+                                                                                
+console ttyb is invalid![24D[02;01H
+                                                                                
+console ttyc is invalid![24D[02;01H
+                                                                                
+console ttyd is invalid![24D[02;01H
+                                                                                
+Available consoles:[19D[02;01H
+                                                                                
+    text[08D[02;01H
+                                                                                
+    null[08Csoftware device[31D[02;01H
+                                                                                
+    spin[08Csoftware device[31D[02;01H
+                                                                                
+-[01D\[01D|[01D/[01D-[01D\[01D|[01DLoading /platform/ARMH,sbbr/kernel/aarch64/unix...[50D[02;01H
+                                                                                
+ZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+/[01DZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+ZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+can't find '/platform/ARMH,sbbr/kernel/aarch64/unix'[52D[02;01H
+                                                                                
+Loading /platform/armv8/kernel/aarch64/unix...[46D[02;01H
+                                                                                
+-[01DZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+ZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+ZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+can't find '/platform/armv8/kernel/aarch64/unix'[48D[02;01H
+                                                                                
+Loading armv8/kernel/aarch64...[31D[02;01H
+                                                                                
+\[01D|[01Dcan't find 'armv8/kernel/aarch64'[33D[02;01H
+                                                                                
+Loading /platform/ARMH,sbbr/kernel/aarch64/unix...[50D[02;01H
+                                                                                
+ZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+/[01DZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+ZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+can't find '/platform/ARMH,sbbr/kernel/aarch64/unix'[52D[02;01H
+                                                                                
+Loading /platform/armv8/kernel/aarch64/unix...[46D[02;01H
+                                                                                
+-[01DZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+ZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+ZFS: i/o error - all block copies unavailable[45D[02;01H
+                                                                                
+can't find '/platform/armv8/kernel/aarch64/unix'[48D[02;01H
+                                                                                
+Loading armv8/kernel/aarch64...[31D[02;01H
+                                                                                
+\[01D|[01Dcan't find 'armv8/kernel/aarch64'[33D[02;01H
+                                                                                
+Loading armv8/kernel/aarch64...[31D[02;01H
+                                                                                
+/[01Dcan't find 'armv8/kernel/aarch64'[33D[02;01H
+                                                                                
+Unable to load a kernel![24D[02;01H
+                                                                                
+[02;01H
+                                                                                
+Type '?' for a list of commands, 'help' for more detailed help.[63D[02;01H
+                                                                                
+	2026-08-27T08:01:24+00:00

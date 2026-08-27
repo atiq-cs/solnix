@@ -68,3 +68,5 @@ src/riscv-port/**/*.img
 src/riscv-port/**/*.o
 src/riscv-port/**/*.a
 src/aarch64-arm64-gate-patches/*.efi
+src/aarch64-arm64-gate-patches/fakebop.c.orig
+src/aarch64-arm64-gate-patches/fakebop.c.a6kcon-diag
