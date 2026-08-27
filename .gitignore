@@ -67,3 +67,4 @@ src/riscv-port/**/*.elf
 src/riscv-port/**/*.img
 src/riscv-port/**/*.o
 src/riscv-port/**/*.a
+src/aarch64-arm64-gate-patches/*.efi
