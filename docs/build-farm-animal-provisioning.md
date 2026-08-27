@@ -31,6 +31,41 @@ Copy it to the durable account (aws ec2 register-image from a copied snapshot, o
 4. Nix-upgradable (Goal 2, proven): the by-name flake + registry are baked; `nix profile install
    nixpkgs#<pkg>` + `nix profile upgrade` work (the AMI-bake re-lock step is in oi-make-declarative-be.sh).
 
+### x86 animal AMI bake (session findings — the baked AMI + the first-boot pool hook)
+The animal capability was baked onto a running node and snapshotted. The **pre-install, the first-boot
+build-pool hook, nix-by-name, and run_build driving a PG build are all PROVEN on the live node**; a baked AMI
+(`ami-05b9358e0aacc7bc3`, name `solnix-pgbf-animal-20260827`) boots to a login prompt with the full stack,
+but **a cold-launched instance of the derived AMI does not acquire a DHCP lease** (SSH unreachable) — an
+unresolved `create-image`-capture regression, NOT the base/software/pool-hook/subnet (the 10/10 base
+cold-launches fine and the build node reboots+DHCPs fine with the full stack). Ruled out: root-pool space,
+wrong base, a stale `/etc/dhcp/ena0.dhc` lease cache, and the added SMF service. Strongest remaining
+hypothesis: `svc:/system/illumos/metadata` is transient and the live snapshot captures it complete, so the
+fresh boot skips the metadata shim's DHCP bring-up — consistent with ena-rx-coldboot-fix.md's central finding
+that only the specific IN-PLACE boot_archive build method yields a cold-boot-reliable AMI. **Recommended
+operator path: provision the animal directly on a cold-launched 10/10 base** (`ami-0f5ab5fac82d7cd1f`
+solnix-ena-1010-v15, verified reliable) via the scripted pre-install above, rather than depending on a
+re-baked AMI; if you do re-bake with `create-image --no-reboot`, cold-launch-verify SSH before trusting it.
+
+- **The extra deps are exactly two IPS packages** beyond the base toolchain+core-perl:
+  `pkg install developer/ccache library/perl-5/ipc-run-542` (ipc-run-542 matches perl 5.42 on the box;
+  the unversioned `library/perl-5/ipc-run` may resolve to a wrong perl ABI).
+- **First-boot build-pool hook (idempotent):** if a second whole disk is attached and `bfpool` doesn't
+  exist, find the first disk that is NOT the root-pool disk and NOT already in a pool, then
+  `zpool create -f bfpool <cNtMd0>; zfs create -o mountpoint=/pgbf bfpool/pgbf; chown pgbf /pgbf`. The disk
+  is enumerated by `diskinfo`; the root disk comes from `zpool status spool`. illumos enumerates new disks
+  at boot, so the operator attaches the volume at launch (or attaches later + reboots). Implemented as an
+  append to the proven metadata shim (`/usr/lib/metadata`); PROVEN to create `bfpool/pgbf` at `/pgbf` on the
+  first boot after a 100 GiB volume attach.
+- **Keep ~630 MB+ free on the root pool.** A near-full root (94–98%) separately wedged a node's LOADER with
+  an out-of-memory boot_archive (`No rootfs module provided, aborting`) — the boot_archive rewrite couldn't
+  get its COW space on the full pool. Do NOT install large by-name closures (e.g. coreutils) onto the root
+  before baking; the by-name capability needs only the flake+registry+inputs present, not a `nix profile
+  install`.
+- **Remove the cached DHCP lease before baking:** `rm -f /etc/dhcp/ena0.dhc` (it otherwise bakes the
+  build-node's dead lease/IP). Also clear `/var/lib/solnix-dhcp-reboots`.
+- Full report + operator runbook: /tmp/pgbf-ami-report.md (session), and the runbook is the scripted
+  pre-install in this section.
+
 ## aarch64 build-farm animal (NATIVE = campaign in progress)
 Native aarch64-on-Graviton is A6 (multi-week: GICv3/ACPI/Nitro-drivers). QEMU-boot is DONE (A4+A5). Until A6
 lands, the aarch64 role is a CROSS-build target ON an x86 animal (aarch64-solaris store paths built). A
@@ -108,3 +143,13 @@ lands. The 10/10-class boot fixes + the aarch64 kernel-build learnings carry ove
 - 10/10 cold boot (ena Rx-config + the tsc_pit_also/pit_is_broken kernel-hang fix, measured).
 - Nix upgrade-over-time works (by-name channel + the solnix binary cache substituters).
 - Never live-grow the mounted root; attach a separate large pool for build/store data.
+
+## Post-migration note (mala account 724081032357)
+The migration copied `solnix-pgbf-animal-mala` (ami-0fc72ded5e56955e5) into mala, BUT re-baked pgbf-animal
+AMIs carry the cold-boot DHCP regression above (the create-image capture loses the in-place-boot_archive
+reliable-boot property, per ena-rx-coldboot-fix.md). So in mala, provision the PG build-farm animal the
+RELIABLE way: cold-launch the migrated 10/10 base `solnix-10of10-pitfix-mala` (ami-074834047d4775cc7) --
+which boots reliably -- then run the scripted pre-install (pgbf user + PGBuildFarm/client-code +
+developer/ccache + library/perl-5/ipc-run + the build-farm.conf; attach a volume for the first-boot bfpool).
+Do NOT rely on the re-baked solnix-pgbf-animal-mala for a reliable cold boot until the DHCP regression is
+fixed. (mala quota is 5 vCPU/0 GPU until the open increase requests approve -- 1 small animal for now.)
