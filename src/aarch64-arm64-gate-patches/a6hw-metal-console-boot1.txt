@@ -1,0 +1,41 @@
+i-0bd9cbbfa5604da6b	Tianocore/EDK2 firmware version RELEASE 4.19.9
+Press ESCAPE for boot options ....WARNING: acpiuart: no compatible MMIO UARTs
+[=3hConsoles: EFI console|/-\Command line arguments: loader64.efiImage base: 0x15d51000EFI version: 2.70EFI Firmware: EDK II (rev 1.00)illumos/arm64 EFI loader, Revision 1.1   Load Path: \EFI\BOOT\BOOTAA64.EFI   Load Device: PcieRoot(0x0)/Pci(0x2,0x0)/Pci(0x0,0x0)/Pci(0x1,0x0)/Pci(0x0,0x0
+)/NVMe(0x1,00-00-00-00-00-00-00-00)/HD(1,GPT,6A81C547-9A90-B14D-8FDC-AE46E6AC658
+4,0x100,0x80000)   BootCurrent: 0001   BootOrder: 0001[*] 0000 0002 0003 0004 0005Trying ZFS poolZFS: i/o error - all block copies unavailableSetting currdev to zfs:armpool:ZFS: i/o error - all block copies unavailableZFS: can't read object set for dataset 54ZFS: can't open root filesystemTrying ESP: PcieRoot(0x0)/Pci(0x2,0x0)/Pci(0x0,0x0)/Pci(0x1,0x0)/Pci(0x0,0x0)/NV
+Me(0x1,00-00-00-00-00-00-00-00)/HD(1,GPT,6A81C547-9A90-B14D-8FDC-AE46E6AC6584,0x
+100,0x80000)Setting currdev to disk0p1:|And now the part: PcieRoot(0x0)/Pci(0x2,0x0)/Pci(0x0,0x0)/Pci(0x1,0x0)/Pci(0x0,0
+x0)/NVMe(0x1,00-00-00-00-00-00-00-00)/HD(1,GPT,6A81C547-9A90-B14D-8FDC-AE46E6AC6
+584,0x100,0x80000)Setting currdev to disk0p1:And now the part: PcieRoot(0x0)/Pci(0x2,0x0)/Pci(0x0,0x0)/Pci(0x1,0x0)/Pci(0x0,0
+x0)/NVMe(0x1,00-00-00-00-00-00-00-00)/HD(2,GPT,053F26C2-C361-564D-868F-72DD22BD7
+87F,0x80100,0xF7BEDF)ZFS: i/o error - all block copies unavailableSetting currdev to zfs:armpool:/ZFS: i/o error - all block copies unavailableZFS: can't read object set for dataset 54ZFS: can't open root filesystemAnd now the part: PcieRoot(0x0)/Pci(0x2,0x0)/Pci(0x0,0x0)/Pci(0x1,0x0)/Pci(0x0,0
+x0)/NVMe(0x1,00-00-00-00-00-00-00-00)/HD(9,GPT,BBF78F4D-F89B-5644-8FE2-8392C0152
+B6E,0xFFBFDF,0x4000)Setting currdev to disk0p9:Failed to find bootable partitionpress any key to interrupt reboot in 4 secondspress any key to interrupt reboot in 3 secondspress any key to interrupt reboot in 2 secondspress any key to interrupt reboot in 1 secondsINFO: PXE boot device is not found, system will not be rebooted
+INFO: Continuing to next boot option
+UEFI Interactive Shell v2.2
+EDK II
+UEFI v2.70 (EDK II, 0x00010000)
+Mapping table
+      FS1: Alias(s):F1:
+          MemoryMapped(0xB,0x200000,0x33FFFF)
+      FS0: Alias(s):F0:
+          Fv(D997FA2C-8C27-4459-8DB4-BDFD1A8C4907)
+      FS2: Alias(s):HD2b:;BLK1:
+          PcieRoot(0x0)/Pci(0x2,0x0)/Pci(0x0,0x0)/Pci(0x1,0x0)/Pci(0x0,0x0)/NVMe
+(0x1,00-00-00-00-00-00-00-00)/HD(1,GPT,6A81C547-9A90-B14D-8FDC-AE46E6AC6584,0x10
+0,0x80000)
+     BLK0: Alias(s):
+          PcieRoot(0x0)/Pci(0x2,0x0)/Pci(0x0,0x0)/Pci(0x1,0x0)/Pci(0x0,0x0)/NVMe
+(0x1,00-00-00-00-00-00-00-00)
+     BLK2: Alias(s):
+          PcieRoot(0x0)/Pci(0x2,0x0)/Pci(0x0,0x0)/Pci(0x1,0x0)/Pci(0x0,0x0)/NVMe
+(0x1,00-00-00-00-00-00-00-00)/HD(2,GPT,053F26C2-C361-564D-868F-72DD22BD787F,0x80
+100,0xF7BEDF)
+     BLK3: Alias(s):
+          PcieRoot(0x0)/Pci(0x2,0x0)/Pci(0x0,0x0)/Pci(0x1,0x0)/Pci(0x0,0x0)/NVMe
+(0x1,00-00-00-00-00-00-00-00)/HD(9,GPT,BBF78F4D-F89B-5644-8FE2-8392C0152B6E,0xFF
+BFDF,0x4000)
+Press ESC in 5 seconds to skip startup.nsh or any other key to continue.
+
+Synchronous Exception at 0x0000000015D9BA5C
+	2026-08-27T05:50:52+00:00

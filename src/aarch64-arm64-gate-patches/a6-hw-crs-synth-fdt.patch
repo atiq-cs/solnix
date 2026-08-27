@@ -1,0 +1,398 @@
+diff --git a/src/aarch64-arm64-gate-patches/dboot_synth_fdt.c b/src/aarch64-arm64-gate-patches/dboot_synth_fdt.c
+index 6550f8a330..c5a3ed43ee 100644
+--- a/src/aarch64-arm64-gate-patches/dboot_synth_fdt.c
++++ b/src/aarch64-arm64-gate-patches/dboot_synth_fdt.c
+@@ -11,9 +11,9 @@
+ 
+ /*
+  * Synthesise a minimal flattened devicetree from the static ACPI tables
+- * (MADT/SPCR/MCFG) parsed by dboot_conf_acpi.c, so that the kernel's
+- * FDT-fed prom_emul and the standard prom->devinfo enumeration work
+- * unchanged on ACPI (SBBR/Graviton) platforms.
++ * (MADT/SPCR/MCFG) plus the PCIe host-bridge _CRS in the DSDT, so that
++ * the kernel's FDT-fed prom_emul and the standard prom->devinfo
++ * enumeration work unchanged on ACPI (SBBR/Graviton) platforms.
+  *
+  * This is deliberately the minimal node set the aarch64 port binds:
+  * the GICv3 distributor/redistributor (+ITS), the architected timer,
+@@ -97,16 +97,16 @@ synth_emit_phandle(void *fdt)
+ /*
+  * PCIe outbound address windows.  MCFG only describes the config-space
+  * (ECAM) base; the IO / MMIO32 / MMIO64 windows that the pcierc driver
+- * requires as the `ranges` property are not in any static ACPI table we
+- * parse (they live in the DSDT _CRS).  Emit the fixed QEMU virt machine
+- * windows, which also match the layout EDK2 presents on that platform.
++ * requires as the `ranges` property live in the PCIe host-bridge _CRS in
++ * the DSDT.  synth_scan_crs() below extracts them directly from the DSDT
++ * AML resource descriptors (no full AML interpreter needed -- the root
++ * bridge's _CRS resource template is a fixed byte sequence of large
++ * address-space descriptors).  If that fails we fall back to the QEMU
++ * virt fixed windows so a QEMU-EDK2 boot without a parseable _CRS still
++ * works.
+  *
+  * child-address encoding (DT PCI binding): high cell = space+flags
+  *   0x01000000 = IO, 0x02000000 = MEM32, 0x03000000 = MEM64.
+- *
+- * NOTE: QEMU-virt-fixed windows; real SBBR/Graviton needs the DSDT
+- * _CRS parsed for its own IO/MMIO windows.  Upgrade dboot_conf_acpi to
+- * extract the root-bridge _CRS and feed it here when moving off QEMU.
+  */
+ #define	PCI_SPACE_IO		0x01000000u
+ #define	PCI_SPACE_MEM32		0x02000000u
+@@ -408,7 +408,200 @@ synth_scan_mcfg(synth_ecam_t *e, int max)
+ 	return ((int)n);
+ }
+ 
+-/* Emit a 2-cell (addr, size) reg property. */
++/*
++ * PCIe host-bridge outbound windows extracted from the DSDT _CRS.
++ *
++ * Each window is a (space, child-addr, parent-addr, size) tuple in the
++ * DT PCI `ranges` sense: `child` is the PCI-side address, `parent` is the
++ * CPU-physical address, `size` the window length.  ACPI resource
++ * descriptors carry (min, max, translation-offset, length): the PCI-side
++ * (child) address is `min`, and the CPU-side (parent) address is
++ * `min + translation`.
++ */
++typedef struct synth_win {
++	uint32_t	space;		/* PCI_SPACE_IO / MEM32 / MEM64 */
++	uint64_t	child;
++	uint64_t	parent;
++	uint64_t	size;
++} synth_win_t;
++
++typedef struct synth_crs {
++	synth_win_t	win[8];
++	int		nwin;
++	bool		have;
++} synth_crs_t;
++
++/* ACPI large-resource descriptor tags (ACPI 6.x, table 6.42/6.44). */
++#define	ACPI_LRES_WORD_ADDR	0x88	/* WordAddressSpace  (2-byte fields) */
++#define	ACPI_LRES_DWORD_ADDR	0x87	/* DWordAddressSpace (4-byte fields) */
++#define	ACPI_LRES_QWORD_ADDR	0x8a	/* QWordAddressSpace (8-byte fields) */
++#define	ACPI_LRES_END_TAG	0x79	/* actually a small-res end tag */
++
++/* Address-space resource types (byte 3 of the descriptor). */
++#define	ACPI_RESTYPE_MEMORY	0
++#define	ACPI_RESTYPE_IO		1
++#define	ACPI_RESTYPE_BUS	2
++
++/*
++ * General flags bit 0: 1 = ResourceConsumer, 0 = ResourceProducer.  A
++ * host-bridge outbound window is a Producer, so producer == (bit0 clear).
++ */
++#define	ACPI_RESFLAG_CONSUMER	0x01
++#define	ACPI_RES_IS_PRODUCER(gf)	(((gf) & ACPI_RESFLAG_CONSUMER) == 0)
++
++/*
++ * Read one address-space descriptor's 5 fields (gran, min, max, tra, len)
++ * of `fw` bytes each, little-endian, starting at *p.  Advances *p.
++ */
++static void
++crs_read_fields(const uint8_t *base, uint32_t off, int fw, uint64_t out[5])
++{
++	int i, b;
++	for (i = 0; i < 5; i++) {
++		uint64_t v = 0;
++		for (b = 0; b < fw; b++)
++			v |= ((uint64_t)base[off + i * fw + b]) << (b * 8);
++		out[i] = v;
++	}
++}
++
++/*
++ * Scan the DSDT for the PCIe host-bridge _CRS producer windows.  The root
++ * bridge's resource template is a run of large address-space descriptors
++ * beginning with a WordAddressSpace of ResourceType BusNumber (0x88 /
++ * type 2); the memory/IO producer windows follow it.  We locate that
++ * bus-number producer and then collect the memory/IO producer windows
++ * that immediately follow, stopping at the end tag or a non-address-space
++ * descriptor.  This is a direct AML byte-stream read of the fixed
++ * resource-descriptor encoding -- not a general AML interpreter.
++ */
++static void
++synth_scan_crs(synth_crs_t *c)
++{
++	const ACPI_TABLE_FADT *fadt;
++	const ACPI_TABLE_HEADER *dsdt;
++	uint64_t dsdt_pa;
++	uint32_t dsdt32;
++	const uint8_t *p;
++	uint32_t len, off;
++
++	memset(c, 0, sizeof (*c));
++
++	/*
++	 * The DSDT is not listed in the XSDT; it is referenced by the FADT
++	 * (XDsdt 64-bit, else Dsdt 32-bit).  Find the FADT, follow it.
++	 */
++	fadt = (const ACPI_TABLE_FADT *)synth_find_table(ACPI_SIG_FADT);
++	if (fadt == NULL)
++		return;
++	memcpy(&dsdt_pa, &fadt->XDsdt, sizeof (dsdt_pa));
++	if (dsdt_pa == 0) {
++		memcpy(&dsdt32, &fadt->Dsdt, sizeof (dsdt32));
++		dsdt_pa = dsdt32;
++	}
++	if (dsdt_pa == 0)
++		return;
++	dsdt = (const ACPI_TABLE_HEADER *)(uintptr_t)dsdt_pa;
++	if (strncmp(dsdt->Signature, ACPI_SIG_DSDT,
++	    strlen(ACPI_SIG_DSDT)) != 0)
++		return;
++	memcpy(&len, &dsdt->Length, sizeof (len));
++	if (len <= sizeof (*dsdt))
++		return;
++	p = (const uint8_t *)dsdt;
++
++	/* Find the bus-number WordAddressSpace producer (root bridge). */
++	for (off = sizeof (*dsdt); off + 3 < len; off++) {
++		uint16_t dlen;
++		if (p[off] != ACPI_LRES_WORD_ADDR)
++			continue;
++		dlen = (uint16_t)(p[off + 1] | (p[off + 2] << 8));
++		/* WordAddressSpace min payload is 13 bytes. */
++		if (dlen < 13 || off + 3 + dlen > len)
++			continue;
++		if (p[off + 3] != ACPI_RESTYPE_BUS)
++			continue;
++		if (!ACPI_RES_IS_PRODUCER(p[off + 4]))
++			continue;
++		/* Found it: collect the windows that follow. */
++		off += 3 + dlen;
++		break;
++	}
++	if (off + 3 >= len)
++		return;
++
++	while (off + 3 < len && c->nwin < 8) {
++		uint8_t tag = p[off];
++		uint16_t dlen;
++		uint8_t restype, gflags;
++		int fw;
++		uint64_t f[5];
++		synth_win_t *w;
++
++		if (tag == ACPI_LRES_DWORD_ADDR)
++			fw = 4;
++		else if (tag == ACPI_LRES_QWORD_ADDR)
++			fw = 8;
++		else if (tag == ACPI_LRES_WORD_ADDR)
++			fw = 2;
++		else
++			break;	/* end of the root-bridge resource template */
++
++		dlen = (uint16_t)(p[off + 1] | (p[off + 2] << 8));
++		if (off + 3 + dlen > len)
++			break;
++		restype = p[off + 3];
++		gflags = p[off + 4];
++		/* skip byte 5 (type-specific flags); fields start at +6 */
++		crs_read_fields(p, off + 6, fw, f);
++
++		if (ACPI_RES_IS_PRODUCER(gflags) && f[4] != 0 &&
++		    (restype == ACPI_RESTYPE_MEMORY ||
++		    restype == ACPI_RESTYPE_IO)) {
++			w = &c->win[c->nwin++];
++			w->child = f[1];		/* min */
++			w->parent = f[1] + f[3];	/* min + translation */
++			w->size = f[4];			/* length */
++			if (restype == ACPI_RESTYPE_IO)
++				w->space = PCI_SPACE_IO;
++			else if ((f[1] >> 32) != 0 || fw == 8)
++				w->space = PCI_SPACE_MEM64;
++			else
++				w->space = PCI_SPACE_MEM32;
++		}
++
++		off += 3 + dlen;
++	}
++
++	if (c->nwin > 0)
++		c->have = true;
++}
++
++/*
++ * Distinguish QEMU virt from real SBBR/Graviton firmware by the ACPI OEM
++ * ID (FADT header): QEMU/EDK2 stamp "BOCHS "/"BXPC", real Nitro/Graviton
++ * stamps "AMAZON".  Only QEMU virt needs the synthesised virtio-mmio
++ * transport slots (its virtio-blk disk has no ACPI description); real
++ * hardware boots off NVMe-over-PCIe and must not carry them.
++ */
++static bool
++synth_is_qemu_virt(void)
++{
++	const ACPI_TABLE_HEADER *h;
++
++	h = synth_find_table(ACPI_SIG_FADT);
++	if (h == NULL)
++		h = synth_find_table(ACPI_SIG_MADT);
++	if (h == NULL)
++		return (false);
++	/* OemId is a 6-byte space-padded field. */
++	if (strncmp(h->OemId, "BOCHS", 5) == 0 ||
++	    strncmp(h->OemId, "BXPC", 4) == 0 ||
++	    strncmp(h->OemId, "QEMU", 4) == 0)
++		return (true);
++	return (false);
++}
++
+ static int
+ prop_reg2(void *fdt, uint64_t addr, uint64_t size)
+ {
+@@ -442,6 +635,8 @@ dboot_synth_fdt(struct xboot_info *bi)
+ 	synth_gic_t gic;
+ 	synth_uart_t uart;
+ 	synth_ecam_t ecam[8];
++	synth_crs_t crs;
++	bool qemu;
+ 	int necam;
+ 	int nc;
+ 	int rc;
+@@ -450,6 +645,8 @@ dboot_synth_fdt(struct xboot_info *bi)
+ 	synth_scan_madt(&gic);
+ 	synth_scan_spcr(&uart);
+ 	necam = synth_scan_mcfg(ecam, 8);
++	synth_scan_crs(&crs);
++	qemu = synth_is_qemu_virt();
+ 
+ 	synth_next_phandle = SYNTH_PHANDLE_FIRST;
+ 
+@@ -605,17 +802,18 @@ dboot_synth_fdt(struct xboot_info *bi)
+ 	 * virtio-mmio transport slots.  QEMU virt places 32 slots at
+ 	 * 0xa000000 + n*0x200, each SPI (16 + n), edge-rising -- the same
+ 	 * layout QEMU's generated FDT carries, which is how the FDT path
+-	 * binds the boot disk (virtio-blk-device).  ACPI has no table that
+-	 * describes these, so we emit the fixed QEMU-virt map; the illumos
+-	 * viommionex nexus binds `virtio,mmio' and probes each slot,
+-	 * ignoring the empty ones.  Without these the root virtio-blk disk
+-	 * never attaches and vfs_mountroot falls back to the ramdisk lofi.
++	 * binds the boot disk (virtio-blk-device).  QEMU's ACPI has no table
++	 * that describes these, so we emit the fixed QEMU-virt map; the
++	 * illumos viommionex nexus binds `virtio,mmio' and probes each slot,
++	 * ignoring the empty ones.
+ 	 *
+-	 * NOTE: QEMU-virt-fixed 32-slot window; real SBBR/Graviton has
+-	 * no virtio-mmio (boot disk is NVMe/virtio over PCIe).  Gate this on
+-	 * a QEMU-virt detection (or drop it) when moving to real hardware.
++	 * Emitted ONLY under QEMU virt (OEM ID BOCHS/BXPC).  Real
++	 * SBBR/Graviton has no virtio-mmio -- its boot disk is
++	 * NVMe-over-PCIe, described by ACPI/_CRS and enumerated through the
++	 * pcie node below -- and must not carry these slots (they would map
++	 * MMIO the platform does not decode).
+ 	 */
+-	{
++	if (qemu) {
+ 		uint64_t vbase = 0xa000000ULL;
+ 		uint32_t n;
+ 		for (n = 0; n < 32; n++) {
+@@ -661,10 +859,13 @@ dboot_synth_fdt(struct xboot_info *bi)
+ 				 * ranges: <child(3) parent(2) size(2)> per
+ 				 * window.  find_resource() in pcierc walks this
+ 				 * for the IO/MMIO32/MMIO64 available lists; it
+-				 * panics ("No ranges property") if absent.
++				 * panics ("No ranges property") if absent.  Prefer
++				 * the windows parsed from the DSDT _CRS (real
++				 * hardware); fall back to the fixed QEMU-virt map
++				 * only if no _CRS producer windows were found.
+ 				 */
+-				static const uint64_t rwin[3][4] = {
+-					/* space, child-addr, parent-addr, size */
++				static const uint64_t qemu_rwin[3][4] = {
++					/* space, child, parent, size */
+ 					{ PCI_SPACE_IO,    0x00000000ULL,
+ 					  0x3eff0000ULL,   0x00010000ULL },
+ 					{ PCI_SPACE_MEM32, 0x10000000ULL,
+@@ -672,27 +873,57 @@ dboot_synth_fdt(struct xboot_info *bi)
+ 					{ PCI_SPACE_MEM64, 0x8000000000ULL,
+ 					  0x8000000000ULL, 0x8000000000ULL },
+ 				};
+-				fdt32_t rg[3 * 7];
+-				int w;
+-				for (w = 0; w < 3; w++) {
+-					uint64_t ca = rwin[w][1];
+-					uint64_t pa = rwin[w][2];
+-					uint64_t sz = rwin[w][3];
+-					fdt32_t *e = &rg[w * 7];
+-					e[0] = cpu_to_fdt32(
+-					    (uint32_t)rwin[w][0]);
+-					e[1] = cpu_to_fdt32(
+-					    (uint32_t)(ca >> 32));
+-					e[2] = cpu_to_fdt32((uint32_t)ca);
+-					e[3] = cpu_to_fdt32(
+-					    (uint32_t)(pa >> 32));
+-					e[4] = cpu_to_fdt32((uint32_t)pa);
+-					e[5] = cpu_to_fdt32(
+-					    (uint32_t)(sz >> 32));
+-					e[6] = cpu_to_fdt32((uint32_t)sz);
++				fdt32_t rg[8 * 7];
++				int nw, w;
++				for (w = 0; w < 8 * 7; w++)
++					rg[w] = 0;
++				if (crs.have && i == 0) {
++					nw = crs.nwin;
++					for (w = 0; w < nw; w++) {
++						uint64_t ca = crs.win[w].child;
++						uint64_t pa = crs.win[w].parent;
++						uint64_t sz = crs.win[w].size;
++						fdt32_t *e = &rg[w * 7];
++						e[0] = cpu_to_fdt32(
++						    crs.win[w].space);
++						e[1] = cpu_to_fdt32(
++						    (uint32_t)(ca >> 32));
++						e[2] = cpu_to_fdt32(
++						    (uint32_t)ca);
++						e[3] = cpu_to_fdt32(
++						    (uint32_t)(pa >> 32));
++						e[4] = cpu_to_fdt32(
++						    (uint32_t)pa);
++						e[5] = cpu_to_fdt32(
++						    (uint32_t)(sz >> 32));
++						e[6] = cpu_to_fdt32(
++						    (uint32_t)sz);
++					}
++				} else {
++					nw = 3;
++					for (w = 0; w < nw; w++) {
++						uint64_t ca = qemu_rwin[w][1];
++						uint64_t pa = qemu_rwin[w][2];
++						uint64_t sz = qemu_rwin[w][3];
++						fdt32_t *e = &rg[w * 7];
++						e[0] = cpu_to_fdt32(
++						    (uint32_t)qemu_rwin[w][0]);
++						e[1] = cpu_to_fdt32(
++						    (uint32_t)(ca >> 32));
++						e[2] = cpu_to_fdt32(
++						    (uint32_t)ca);
++						e[3] = cpu_to_fdt32(
++						    (uint32_t)(pa >> 32));
++						e[4] = cpu_to_fdt32(
++						    (uint32_t)pa);
++						e[5] = cpu_to_fdt32(
++						    (uint32_t)(sz >> 32));
++						e[6] = cpu_to_fdt32(
++						    (uint32_t)sz);
++					}
+ 				}
+ 				(void) fdt_property(fdt, "ranges", rg,
+-				    sizeof (rg));
++				    (int)(nw * 7 * sizeof (fdt32_t)));
+ 			}
+ 			if (gic.have_its) {
+ 				fdt32_t mm[4];
+@@ -733,9 +964,11 @@ dboot_synth_fdt(struct xboot_info *bi)
+ 
+ 	nc = (int)bi->bi_cpuinfo_cnt;
+ 	dboot_printf("dboot: synthesised FDT from ACPI (%d cpu%s, gicd=0x%lx "
+-	    "gicr=0x%lx%s, %d pcie rc)\n", nc, nc == 1 ? "" : "s",
+-	    (unsigned long)gic.gicd, (unsigned long)gic.gicr,
+-	    gic.have_its ? " +its" : "", necam);
++	    "gicr=0x%lx%s, %d pcie rc, %s, %d _CRS win%s)\n", nc,
++	    nc == 1 ? "" : "s", (unsigned long)gic.gicd,
++	    (unsigned long)gic.gicr, gic.have_its ? " +its" : "", necam,
++	    qemu ? "qemu virtio-mmio" : "hw pcie-only",
++	    crs.nwin, crs.nwin == 1 ? "" : "s");
+ 
+ 	return ((uint64_t)(uintptr_t)synth_fdt);
+ 
