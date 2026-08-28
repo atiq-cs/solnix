@@ -152,3 +152,12 @@ activation until the overlay is wired; the fallback is deliberate.
   /pgbf/buildroot/HEAD/CHANGEME-test.lastrun-logs/.
 - Registry backup: /etc/nix/registry.json.bak (pre-repoint).
 - Progress: /tmp/dixi-progress.txt (dev box).
+
+## nix-config activation follow-ups (for the maintainer, after the ponytail-input fix)
+solnix-pkgs is now wired into mkHome (nix-config commit; ponytail input restored, commit 0c7c7fe). To
+activate gburd@dixi/dixa/dixr, the maintainer needs to:
+1. `nix flake lock --update-input solnix-pkgs` (add solnix-pkgs to flake.lock -- it's a new input).
+2. Confirm solnix-pkgs exposes aarch64-solaris (+ riscv64-solaris) builds, not just x86_64-solaris (dixa/
+   dixr need those; the fork's lib.nixpkgsSrc has the *-solaris platforms wired via the systems patch --
+   verify each arch resolves).
+Both are quick once the ponytail 404 (which blocked ALL lock updates) is fixed -- now done.
