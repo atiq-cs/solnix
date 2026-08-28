@@ -1,0 +1,32 @@
+DIXR PROGRESS (RISC-V solnix -> Milk-V Jupiter / COSMIC)
+
+R-P63 baseline: BOOTS (y) -- canonical rp63/qemu-boot.log, 484 PASS, 0 real FAIL, 0 panics.
+  NOTE: not rebuilt this session; full rebuild NOT reproducible from git (missing kernel
+  .c/.S set + gitignored prebuilt userland libc.a/.dyn/ld.so.1 -- lived only on the wiped node).
+
+R-P64 LANDED (the advance): the graphics path -- a virtio-gpu 2D display driver, the RISC-V
+  analog of the x86 drm-port's first scanout bring-up. QEMU-VERIFIED, not compile-only.
+  - src/riscv-port/rp64/kernel/virtio_gpu.c + .h: from-scratch driver, virtio-mmio transport
+    identical to virtio_blk.c; device layer = controlq + 6-step scanout bring-up
+    (GET_DISPLAY_INFO/CREATE_2D/ATTACH_BACKING/SET_SCANOUT/TRANSFER_TO_HOST_2D/RESOURCE_FLUSH)
+    + virtio_gpu_flush() per-frame present + fb accessors (the DRM-node analog).
+  - Standalone bare-metal harness (gpu_harness.c/start.S/harness.ld/build-gpu-harness.sh) runs
+    the driver's EXACT path on qemu-system-riscv64 -M virt -device virtio-gpu-device -bios none.
+    Built with a bare-metal riscv64-unknown-elf gcc (binutils 2.44 + gcc 14.3.0 all-gcc, built
+    fresh in /tmp/rvtc on the node -- the illumos cross-toolchain was gone).
+  - PROOF: gpu found at mmio slot 7 (DeviceID 16), scanout 0 live 1024x768, RGBW test pattern
+    drawn + presented; R-P64 PASS in gpu-qemu-boot.log. A QMP screendump captured the LIVE host
+    scanout -> scanout.png (also artifacts/riscv-virtio-gpu-scanout.png): R/G/B/W quadrants match
+    the drawn fb byte-for-byte -> the guest fb reached the host display.
+  - QEMU flag: -global virtio-mmio.force-legacy=false (qemu 11 virt defaults mmio to legacy v1;
+    driver, like virtio_blk.c, uses modern v2).
+  - Deferred: linking virtio_gpu.c into unix.elf (one build-kernel.sh line + run_virtio_gpu() after
+    run_virtio_blk()) -- blocked by the R-P63-rebuild blocker, NOT the driver. Seam ready.
+
+K1 real-hardware punch-list -> /tmp/dixr-report.md (SD image partial, FW/PowerVR/DDR blobs external,
+  register calibration knobs scaffolded, first-pixels via simple-framebuffer recommended, userland
+  breadth = full libc + seed toolchain + nixpkgs riscv64 cross is the other big board-independent gap).
+
+Node i-0d027155a9f17ea4e LEFT RUNNING. New src persisted to src/riscv-port/rp64/ on the dev box.
+Toolchain build tip: illumos node -- background via `at now` (nohup/ctrun -d died); disk tight on /
+(771MB) so build in /tmp (swap, ~27GB); drop gcc's in-tree gettext (localename.c fails on OpenIndiana).

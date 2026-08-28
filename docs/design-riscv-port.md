@@ -3916,3 +3916,35 @@ ethernet:
 NEXT R-P64: the on-HW boot when the Milk-V Jupiter box lands -- flash rp63/fw_payload_k1.elf + the GPT
 disk.img on SD; SDHCI root + k1x-emac 1GbE come live; calibrate the RGMII clock-delay + station MAC + SDH
 divisor + UART baud on silicon. src/riscv-port/rp63/ (the .elf/.img gitignored).
+
+## R-P64 DONE: the graphics path -- a virtio-gpu 2D display driver (the RISC-V analog of the x86 drm-port)
+The biggest gap between R-P63's headless minimal OS and the COSMIC daily-driver goal is a display path
+(R-P63 had NO framebuffer/scanout/DRM node). On QEMU the DRM-scanout analog is virtio-gpu, exactly as
+virtio-blk is the analog of the K1's SDHCI/dw-mmc block device. R-P64 brings it up + PROVES it in QEMU.
+- kernel/virtio_gpu.c + virtio_gpu.h (NEW): a from-scratch virtio-gpu driver. The virtio-mmio TRANSPORT is
+  identical to virtio_blk.c (probe MagicValue/Version==2/DeviceID, negotiate 0 features, one split
+  virtqueue, kick via QueueNotify, poll the used ring). The DEVICE layer is the virtio-gpu controlq +
+  the 6-step scanout bring-up (spec v1.2 sec 5.7): GET_DISPLAY_INFO -> RESOURCE_CREATE_2D (B8G8R8X8) ->
+  RESOURCE_ATTACH_BACKING (KVTOP(fb)) -> SET_SCANOUT -> TRANSFER_TO_HOST_2D -> RESOURCE_FLUSH.
+  virtio_gpu_flush() is the per-frame present a compositor calls; virtio_gpu_fb()/_width()/_height() expose
+  the framebuffer (the DRM-node analog a console/llvmpipe compositor draws into).
+- QEMU-VERIFIED (a real increment, not compile-only): a standalone bare-metal harness (kernel/gpu_harness.c
+  + start.S + harness.ld + build-gpu-harness.sh) runs the driver's EXACT bring-up path against QEMU's real
+  -device virtio-gpu-device under qemu-system-riscv64 -M virt -bios none (M-mode, no MMU/SBI). It probes the
+  GPU (found at virtio-mmio slot 7, DeviceID 16), brings up scanout 0 (1024x768), draws an RGBW-quadrant +
+  diagonal test pattern, and presents frames. gpu-qemu-boot.log carries the [GPU:...] markers + R-P64 PASS;
+  a QMP screendump (kernel/scanout.png, artifacts/riscv-virtio-gpu-scanout.png) is the LIVE host scanout,
+  whose R/G/B/W quadrants match the drawn framebuffer byte-for-byte -- the guest fb reached the host display.
+- The driver source compiles UNCHANGED into the kernel (KVTOP/KERNEL_DMAP_BASE from mmu_riscv.h, direct map)
+  or the harness (-DGPU_HARNESS, identity map, PA==VA under -bios none). QEMU flag: -global
+  virtio-mmio.force-legacy=false (qemu 11 virt defaults virtio-mmio to legacy v1; the driver, like
+  virtio_blk.c, uses the modern v2 layout).
+- A toolchain note: the full R-P63 kernel rebuild is NOT reproducible from git on a fresh node (missing
+  kernel .c/.S set + gitignored prebuilt userland libc.a/.dyn/ld.so.1). R-P64's harness is built with a
+  bare-metal riscv64-unknown-elf gcc (freestanding -nostdlib, no target libc), so it is the reproducible
+  QEMU proof. Wiring virtio_gpu.c into unix.elf (one build-kernel.sh line + a run_virtio_gpu() call after
+  run_virtio_blk() + virtio_gpu_set_mmio_base() from the FDT path) is deferred until that rebuild is
+  reproducible. src/riscv-port/rp64/.
+NEXT: first pixels on silicon via a simple-framebuffer consumer (cheap, no PowerVR firmware) before the
+PowerVR BXE accelerated path; in parallel (board-independent) a full libc + seed toolchain + nixpkgs-illumos
+riscv64 cross so COSMIC/llvmpipe builds for riscv64.
