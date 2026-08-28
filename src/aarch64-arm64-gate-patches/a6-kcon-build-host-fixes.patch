@@ -1,0 +1,47 @@
+NOTE: build-host enablement for building arm64-gate on OpenIndiana (not OmniOS).
+Two fixes needed to get a byte-clean aarch64 ZFS image out of the nightly on a
+fresh OpenIndiana build host:
+
+1. usr/src/Makefile.master: TOOLS_PYTHON must be a host python that ships the
+   illumos `pkg` module. OpenIndiana packages `pkg` for python3.9 only, but the
+   default TOOLS_PYTHON=$(PYTHON3) resolves to python3.13 -> validate_pkg fails
+   with "ModuleNotFoundError: No module named 'pkg'", which aborts building
+   proto_list_aarch64 and prevents osnet-incorporation + entire from publishing.
+   (On OmniOS pkg is available for the ON python, so this hardcode is
+   host-specific; upstream should detect the pkg-capable host python.)
+
+2. usr/src/pkg/Makefile: the gendeps SUPPRESSPKGDEP=true branch (taken on any
+   non-OmniOS host) only copied .dep -> .res for DEP_PKGS, skipping
+   DEP_SYNTH_PKGS (osnet-incorporation, osnet-redist). Their .res never gets
+   created, so their .pub never builds, so osnet-incorporation (and therefore
+   `entire`, which requires it) is never published to repo.redist. The image's
+   pkg-install then fails: every osnet package require:s osnet-incorporation.
+   Fix: include DEP_SYNTH_PKGS in the suppress-branch copy loop. This is a real
+   bug for all non-OmniOS SUPPRESSPKGDEP builds, not host-specific.
+
+diff --git a/usr/src/Makefile.master b/usr/src/Makefile.master
+index fab4bd0c2f..acf4649b12 100644
+--- a/usr/src/Makefile.master
++++ b/usr/src/Makefile.master
+@@ -251,7 +251,7 @@ PYTHON3b_PKGVERS=	-35
+ PYTHON3b_SUFFIX=	m
+ #
+ $(BUILDPY3b)PYTHON3b=	/usr/bin/python$(PYTHON3b_VERSION)
+-TOOLS_PYTHON=		$(PYTHON3)
++TOOLS_PYTHON=		/usr/bin/python3.9
+ SORT=		/usr/bin/sort
+ TR=		/usr/bin/tr
+ TOUCH=		/usr/bin/touch
+diff --git a/usr/src/pkg/Makefile b/usr/src/pkg/Makefile
+index 777939ee66..162b2a4b85 100644
+--- a/usr/src/pkg/Makefile
++++ b/usr/src/pkg/Makefile
+@@ -439,7 +439,7 @@ $(PDIR):
+ $(PDIR)/gendeps: $(DEP_SYNTH_PKGS) $(DEP_PKGS)
+ 	$(PKGDEBUG)if [ "$(SUPPRESSPKGDEP)" = "true" ]; then \
+ 		print "Suppressing dependency resolution"; \
+-		for p in $(DEP_PKGS:%.dep=%); do \
++		for p in $(DEP_SYNTH_PKGS:%.dep=%) $(DEP_PKGS:%.dep=%); do \
+ 			$(CP) $$p.dep $$p.res; \
+ 		done; \
+ 	else \

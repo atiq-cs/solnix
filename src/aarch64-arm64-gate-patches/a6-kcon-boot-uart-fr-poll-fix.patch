@@ -1,0 +1,130 @@
+diff --git a/usr/src/uts/armv8/boot/boot_uart.c b/usr/src/uts/armv8/boot/boot_uart.c
+index d1c77ebf09..613fc7be7a 100644
+--- a/usr/src/uts/armv8/boot/boot_uart.c
++++ b/usr/src/uts/armv8/boot/boot_uart.c
+@@ -92,17 +92,28 @@ boot_uart_getchar(void)
+ void
+ boot_uart_putchar(int c)
+ {
++	/*
++	 * Bounded FR poll: some SBBR/PL011 implementations (observed on AWS
++	 * Graviton) do not drive the TXFF/TXFE flags the way SBSA leads us to
++	 * expect, so an unbounded spin here hangs the boot forever on the
++	 * first console write -- the kernel then emits no banner though it is
++	 * running.  Cap the waits and fall through (still write the byte).
++	 */
++	uint32_t cap;
++
+ 	if (boot_uart_mmio_base == NULL)
+ 		return;
+ 
+-	while (boot_uart_readreg32(SBSA_UARTFR) & SBSA_UARTFR_TXFF)
++	for (cap = 0; (boot_uart_readreg32(SBSA_UARTFR) & SBSA_UARTFR_TXFF) &&
++	    cap < 1000000u; cap++)
+ 		boot_uart_yield();
+ 
+ 	if ((c & 0xff) == '\n')
+ 		boot_uart_putchar('\r');
+ 
+ 	boot_uart_writereg32(SBSA_UARTDR, c & 0xff);
+-	while (!(boot_uart_readreg32(SBSA_UARTFR) & SBSA_UARTFR_TXFE))
++	for (cap = 0; !(boot_uart_readreg32(SBSA_UARTFR) & SBSA_UARTFR_TXFE) &&
++	    cap < 1000000u; cap++)
+ 		boot_uart_yield();
+ }
+ 
+diff --git a/usr/src/uts/armv8/os/fakebop.c b/usr/src/uts/armv8/os/fakebop.c
+index 4d04263654..5619904d94 100644
+--- a/usr/src/uts/armv8/os/fakebop.c
++++ b/usr/src/uts/armv8/os/fakebop.c
+@@ -219,6 +219,20 @@ bop_init(struct xboot_info *xbp)
+ {
+ 	extern void boot_fb_shadow_init(bootops_t *);
+ 
++	/*
++	 * A6KCON diagnostic: raw write to the SPCR UART (0x90a0000 on
++	 * Graviton) at the very entry of the kernel proper (MMU on), before
++	 * bcons_init.  If [A6KCON:BOP] reaches the console, the kernel-proper
++	 * identity map covers the UART and we reached bop_init.
++	 */
++	if (xbp != NULL && xbp->bi_bsvc_uart_mmio_base != 0) {
++		volatile uint32_t *dr =
++		    (volatile uint32_t *)(uintptr_t)xbp->bi_bsvc_uart_mmio_base;
++		const char *m = "[A6KCON:BOP]\r\n";
++		while (*m != '\0')
++			*dr = (uint32_t)(uint8_t)*m++;
++	}
++
+ 	bsvc_init(xbp);
+ 
+ 	bootops = &bootop;
+@@ -241,6 +255,69 @@ bop_init(struct xboot_info *xbp)
+ 
+ 	bcons_init(xbp);
+ 
++	/*
++	 * A6KCON diagnostic: raw write to the SPCR UART right after
++	 * bcons_init.  If [A6KCON:BCONS] appears (and [A6KCON:BOP] did),
++	 * bcons_init survived; any subsequent silence is downstream.
++	 */
++	if (xbp != NULL && xbp->bi_bsvc_uart_mmio_base != 0) {
++		volatile uint32_t *dr =
++		    (volatile uint32_t *)(uintptr_t)xbp->bi_bsvc_uart_mmio_base;
++		const char *m = "[A6KCON:BCONS]\r\n";
++		while (*m != '\0')
++			*dr = (uint32_t)(uint8_t)*m++;
++	}
++
++	/*
++	 * A6KCON diagnostic: the raw markers above blindly write UARTDR
++	 * (offset 0) and succeed, but boot_uart_putchar() polls the PL011
++	 * flag register UARTFR (offset 0x18): it spins on TXFF before a
++	 * write and on !TXFE after.  If Graviton's PL011 FR does not behave
++	 * as SBSA expects, the first bcons/prom print hangs forever in that
++	 * loop -- which matches "markers appear, banner never does".  Read
++	 * FR raw and emit [A6KCON:FR=xxxxxxxx], then try a *bounded*
++	 * flag-checked write of 'Z': [A6KCON:PUT ok] if TXFF cleared and
++	 * TXFE set within the cap, else [A6KCON:PUT hang txff]/[hang txfe].
++	 * All status is emitted via raw DR writes, which we know reach the
++	 * console.
++	 */
++	if (xbp != NULL && xbp->bi_bsvc_uart_mmio_base != 0) {
++		volatile uint32_t *dr =
++		    (volatile uint32_t *)(uintptr_t)xbp->bi_bsvc_uart_mmio_base;
++		volatile uint32_t *fr = (volatile uint32_t *)
++		    (uintptr_t)(xbp->bi_bsvc_uart_mmio_base + 0x18);
++		uint32_t frv = *fr;
++		const char *hex = "0123456789abcdef";
++		const char *m = "[A6KCON:FR=";
++		int i;
++		uint32_t cap;
++		int ok = 1;
++
++		while (*m != '\0')
++			*dr = (uint32_t)(uint8_t)*m++;
++		for (i = 28; i >= 0; i -= 4)
++			*dr = (uint32_t)(uint8_t)hex[(frv >> i) & 0xf];
++		*dr = ']'; *dr = '\r'; *dr = '\n';
++
++		/* bounded TXFF wait (bit 5) */
++		for (cap = 0; (*fr & (1u << 5)) && cap < 1000000u; cap++)
++			;
++		if (cap >= 1000000u)
++			ok = 0;
++		*dr = (uint32_t)'Z';
++		/* bounded TXFE wait (bit 7) */
++		for (cap = 0; !(*fr & (1u << 7)) && cap < 1000000u; cap++)
++			;
++		if (cap >= 1000000u)
++			ok = -1;
++
++		m = (ok == 1) ? "\r\n[A6KCON:PUT ok]\r\n" :
++		    (ok == 0) ? "\r\n[A6KCON:PUT hang txff]\r\n" :
++		    "\r\n[A6KCON:PUT hang txfe]\r\n";
++		while (*m != '\0')
++			*dr = (uint32_t)(uint8_t)*m++;
++	}
++
+ 	kbm_init();
+ 
+ 	/*

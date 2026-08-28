@@ -1,0 +1,54 @@
+A6-kcon: live console capture from real Graviton c6g.metal (i-043669148987059be),
+via `aws ec2 get-console-output --latest`, us-east-2 mala. Terminated after capture.
+
+This is the FIRST-ever early-kernel output captured on real Graviton silicon for
+the illumos aarch64 port. Prior legs (chiuso account) were IAM-blocked from the
+serial console and blind past "Booting...". mala's working serial console +
+get-console-output made this visible.
+
+--- boot sequence (ANSI stripped) ---
+Available consoles:
+    text  PciRoot(0x0)/Pci(0x3,0x0)/AcpiAdr(0x80010100)
+    ttya  PciRoot(0x0)/Pci(0x1,0x0)/Serial(0x0)/Uart(115200,8,N,1)
+    ttyb  ISA IO device PciRoot(0x0)/Pci(0x1,0x0)/Serial(0x1)
+...
+Welcome to illumos
+  Boot Multi User [Enter] / Boot Single User / Escape to loader prompt / Reboot
+Autoboot in N seconds...
+Loading /platform/ARMH,sbbr/kernel/aarch64/unix...
+can't find '/platform/ARMH,sbbr/kernel/aarch64/unix'
+Loading /platform/armv8/kernel/aarch64/unix...
+Loading /platform/armv8/aarch64/boot_archive...
+Loading /platform/armv8/aarch64/boot_archive.hash...
+Booting...
+[A6KCON:BOP]
+[A6KCON:BCONS]
+<end of console output -- no kernel banner after this>
+
+--- interpretation ---
+[A6KCON:BOP]   = fakebop.c bop_init(), BEFORE bcons_init(), raw write to
+                 xbp->bi_bsvc_uart_mmio_base (the SPCR PL011 @ 0x90a0000,
+                 populated by dboot_synth_fdt from the AMAZON SPCR quirk).
+                 => the ACPI/SPCR-UART path RAN, dboot handed off, the kernel
+                    proper's identity map covers the UART, and bop_init reached.
+[A6KCON:BCONS] = same raw write, AFTER bcons_init(xbp).
+                 => bcons_init() SURVIVED (did not wedge).
+
+Both markers use a BLIND write to UARTDR (offset 0). They appear.
+The kernel banner (and all subsequent output) goes through the bcons path:
+bcons_putchar -> boot_uart_putchar, which POLLS the PL011 flag register
+UARTFR (offset 0x18): `while (FR & TXFF) yield()` before the write and
+`while (!(FR & TXFE)) yield()` after. On Graviton these flag bits evidently
+do not behave as SBSA expects, so the FIRST flag-checked console write spins
+forever -> the kernel is running but silent (no banner).
+
+=> Root-cause of "silent after Booting..." on real silicon (that the blind
+   prior legs could never localize): an unbounded FR poll in
+   uts/armv8/boot/boot_uart.c boot_uart_putchar().
+
+--- fix (built, persisted, NOT yet re-tested on metal -- see report) ---
+Bound both FR-poll loops (cap 1,000,000 iters, then fall through and still
+write the byte). Patch: a6-kcon-boot-uart-fr-poll-fix.patch. A new FR-value +
+bounded-write diagnostic ([A6KCON:FR=xxxxxxxx], [A6KCON:PUT ok|hang txff|hang
+txfe]) was also added after [A6KCON:BCONS] to confirm the FR hypothesis on the
+next metal boot.
