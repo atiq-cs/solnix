@@ -156,3 +156,14 @@ What remains for solnix to boot + run COSMIC on the REAL Milk-V Jupiter.
      accelerated path (F).
   5. Board-independent, in parallel: full libc + seed toolchain + nixpkgs riscv64
      cross so COSMIC/llvmpipe can be built for riscv64 (G).
+
+## Reproducibility clarification (orchestrator)
+The R-P64 agent flagged "R-P63 not reproducible from git" -- but that assessed only the SPARSE phase-delta
+dir src/riscv-port/rp63/ (10 files, the K1 delta). The AUTHORITATIVE full RISC-V tree is src/riscv/ (330
+.c/.S in git, incl src/riscv/uts/ = 116 files = the full kernel: locore/SMP/virtio_blk/sdhci/dwmmc/etc.).
+The .gitignore correctly excludes only BUILD OUTPUTS (*.o, uts/unix, *.dtb, *.img, toolchain/). So R-P63 is
+SUBSTANTIALLY in git. The genuine narrower gap: the exact rp63 BUILD WIRING (which src/riscv/ sources + the
+seed toolchain build order) isn't a single reproducible `build.sh` from a clean checkout, and the prebuilt
+seed userland (libc.a/ld.so.1 -- build outputs) must be rebuilt. FOLLOW-UP (before the K1 board): write a
+reproducible src/riscv/build-all.sh (clean-checkout -> seed toolchain -> uts/unix + userland -> fw_payload +
+disk.img) so R-P63/R-P64 rebuild deterministically -- and link virtio_gpu.c (R-P64) into unix.elf via that.
