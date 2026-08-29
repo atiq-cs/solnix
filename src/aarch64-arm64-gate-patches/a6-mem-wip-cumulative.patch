@@ -1,0 +1,436 @@
+diff --git a/usr/src/Makefile.master b/usr/src/Makefile.master
+index fab4bd0c2f..acf4649b12 100644
+--- a/usr/src/Makefile.master
++++ b/usr/src/Makefile.master
+@@ -251,7 +251,7 @@ PYTHON3b_PKGVERS=	-35
+ PYTHON3b_SUFFIX=	m
+ #
+ $(BUILDPY3b)PYTHON3b=	/usr/bin/python$(PYTHON3b_VERSION)
+-TOOLS_PYTHON=		$(PYTHON3)
++TOOLS_PYTHON=		/usr/bin/python3.9
+ SORT=		/usr/bin/sort
+ TR=		/usr/bin/tr
+ TOUCH=		/usr/bin/touch
+diff --git a/usr/src/boot/efi/libefi/efipart.c b/usr/src/boot/efi/libefi/efipart.c
+index 7dcfaaaf28..fec9bac84c 100644
+--- a/usr/src/boot/efi/libefi/efipart.c
++++ b/usr/src/boot/efi/libefi/efipart.c
+@@ -71,6 +71,14 @@ static int efipart_printhd(int);
+ /* Bounce buffer max size */
+ #define	BIO_BUFFER_SIZE	0x4000
+ 
++/*
++ * Maximum bytes per single EFI ReadBlocks call.  Large single transfers are
++ * mishandled by some UEFI NVMe drivers (AWS Nitro), which return success but
++ * only copy part of the buffer; cap the transfer to a size every firmware
++ * handles reliably.
++ */
++#define	EFIPART_IOMAX_BYTES	0x4000
++
+ struct devsw efipart_fddev = {
+ 	.dv_name = "fd",
+ 	.dv_type = DEVT_FD,
+@@ -996,8 +1004,40 @@ efipart_readwrite(pdinfo_t *pd, int rw, daddr_t blk, daddr_t nblks,
+ 
+ 	switch (rw & F_MASK) {
+ 	case F_READ:
+-		status = blkio->ReadBlocks(blkio, blkio->Media->MediaId, blk,
+-		    nblks * blkio->Media->BlockSize, buf);
++		/*
++		 * Some UEFI BlockIo implementations (notably the NVMe driver
++		 * in AWS Nitro/Graviton firmware) return EFI_SUCCESS for a
++		 * large single ReadBlocks but only transfer part of the
++		 * request, silently corrupting the tail.  That surfaces later
++		 * as a ZFS checksum failure ("all block copies unavailable").
++		 * Cap each ReadBlocks at EFIPART_IOMAX_BYTES so every
++		 * transfer stays within a size all firmware handles.
++		 */
++		status = EFI_SUCCESS;
++		while (nblks > 0) {
++			daddr_t chunk = nblks;
++			daddr_t maxblks = EFIPART_IOMAX_BYTES /
++			    blkio->Media->BlockSize;
++
++			if (maxblks < 1)
++				maxblks = 1;
++			if (chunk > maxblks)
++				chunk = maxblks;
++			status = blkio->ReadBlocks(blkio,
++			    blkio->Media->MediaId, blk,
++			    chunk * blkio->Media->BlockSize, buf);
++#ifdef EFIPART_DEBUG
++			printf("A6BLK rd lba=%ju nblks=%ju bytes=%ju bs=%u "
++			    "st=%lu\n", (uintmax_t)blk, (uintmax_t)chunk,
++			    (uintmax_t)(chunk * blkio->Media->BlockSize),
++			    blkio->Media->BlockSize, DECODE_ERROR(status));
++#endif
++			if (EFI_ERROR(status))
++				break;
++			blk += chunk;
++			nblks -= chunk;
++			buf += chunk * blkio->Media->BlockSize;
++		}
+ 		break;
+ 	case F_WRITE:
+ 		if (blkio->Media->ReadOnly)
+@@ -1104,10 +1144,21 @@ efipart_realstrategy(void *devdata, int rw, daddr_t blk, size_t size,
+ 	if (disk_blocks == 0)
+ 		disk_blocks = blkio->Media->LastBlock + 1 - d_offset;
+ 
++#ifdef EFIPART_DEBUG
++	printf("A6RS in rw=%d blk=%ju off=%ju size=%ju doff=%ju dblks=%ju "
++	    "bs=%u last=%ju\n", rw & F_MASK, (uintmax_t)blk, (uintmax_t)off,
++	    (uintmax_t)size, (uintmax_t)d_offset, (uintmax_t)disk_blocks,
++	    blkio->Media->BlockSize, (uintmax_t)blkio->Media->LastBlock);
++#endif
+ 	/* make sure we don't read past disk end */
+ 	if ((off + size) / blkio->Media->BlockSize > d_offset + disk_blocks) {
+ 		diskend = d_offset + disk_blocks;
+ 		readstart = off / blkio->Media->BlockSize;
++#ifdef EFIPART_DEBUG
++		printf("A6RS CLAMP off=%ju size=%ju diskend=%ju readstart=%ju\n",
++		    (uintmax_t)off, (uintmax_t)size, (uintmax_t)diskend,
++		    (uintmax_t)readstart);
++#endif
+ 
+ 		if (diskend <= readstart) {
+ 			if (rsize != NULL)
+@@ -1133,6 +1184,12 @@ efipart_realstrategy(void *devdata, int rw, daddr_t blk, size_t size,
+ 	if (ioalign > 1 && (uintptr_t)buf != roundup2((uintptr_t)buf, ioalign))
+ 		need_buf = true;
+ 
++#ifdef EFIPART_DEBUG
++	printf("A6RS dec need_buf=%d ioalign=%u buf=%p bufaln=%d\n",
++	    need_buf, ioalign, buf,
++	    (int)((uintptr_t)buf == roundup2((uintptr_t)buf, ioalign)));
++#endif
++
+ 	if (need_buf) {
+ 		for (bio_size = BIO_BUFFER_SIZE; bio_size > 0;
+ 		    bio_size -= blkio->Media->BlockSize) {
+diff --git a/usr/src/pkg/Makefile b/usr/src/pkg/Makefile
+index 777939ee66..162b2a4b85 100644
+--- a/usr/src/pkg/Makefile
++++ b/usr/src/pkg/Makefile
+@@ -439,7 +439,7 @@ $(PDIR):
+ $(PDIR)/gendeps: $(DEP_SYNTH_PKGS) $(DEP_PKGS)
+ 	$(PKGDEBUG)if [ "$(SUPPRESSPKGDEP)" = "true" ]; then \
+ 		print "Suppressing dependency resolution"; \
+-		for p in $(DEP_PKGS:%.dep=%); do \
++		for p in $(DEP_SYNTH_PKGS:%.dep=%) $(DEP_PKGS:%.dep=%); do \
+ 			$(CP) $$p.dep $$p.res; \
+ 		done; \
+ 	else \
+diff --git a/usr/src/uts/armv8/Makefile.files b/usr/src/uts/armv8/Makefile.files
+index 8fbe5d8491..75e365b26d 100644
+--- a/usr/src/uts/armv8/Makefile.files
++++ b/usr/src/uts/armv8/Makefile.files
+@@ -120,6 +120,7 @@ DBOOT_OBJS +=			\
+ 	dboot_printf.o		\
+ 	dboot_conf.o		\
+ 	dboot_conf_acpi.o	\
++	dboot_synth_fdt.o	\
+ 	dboot_conf_fdt.o	\
+ 	dboot_conf_uefi.o	\
+ 	dboot_memlist.o		\
+diff --git a/usr/src/uts/armv8/boot/boot_uart.c b/usr/src/uts/armv8/boot/boot_uart.c
+index d1c77ebf09..b866e45343 100644
+--- a/usr/src/uts/armv8/boot/boot_uart.c
++++ b/usr/src/uts/armv8/boot/boot_uart.c
+@@ -92,18 +92,33 @@ boot_uart_getchar(void)
+ void
+ boot_uart_putchar(int c)
+ {
++	/*
++	 * FR-poll handling for a misbehaving SBBR/PL011.  On AWS Graviton the
++	 * PL011 flag register (UARTFR) reads 0x00000000 forever: TXFF (bit 5)
++	 * never sets (so the pre-write FIFO-full guard is a no-op) and TXFE
++	 * (bit 7) never sets either -- so the old post-write "wait for TX
++	 * empty" spun to its cap on every character, making the console
++	 * unusably slow (and, unbounded, hung the boot outright).  A UART
++	 * whose FR is stuck at zero gives us no useful flow-control signal, so
++	 * bound the pre-write TXFF guard to a small cap (it still throttles a
++	 * *working* PL011 that briefly reports FIFO-full) and drop the
++	 * post-write TXFE wait entirely.  Blind UARTDR writes are proven to
++	 * reach the console on this part (the raw BOP/BCONS/FR-diag markers),
++	 * so no post-write handshake is required.
++	 */
++	uint32_t cap;
++
+ 	if (boot_uart_mmio_base == NULL)
+ 		return;
+ 
+-	while (boot_uart_readreg32(SBSA_UARTFR) & SBSA_UARTFR_TXFF)
++	for (cap = 0; (boot_uart_readreg32(SBSA_UARTFR) & SBSA_UARTFR_TXFF) &&
++	    cap < 65536u; cap++)
+ 		boot_uart_yield();
+ 
+ 	if ((c & 0xff) == '\n')
+ 		boot_uart_putchar('\r');
+ 
+ 	boot_uart_writereg32(SBSA_UARTDR, c & 0xff);
+-	while (!(boot_uart_readreg32(SBSA_UARTFR) & SBSA_UARTFR_TXFE))
+-		boot_uart_yield();
+ }
+ 
+ /*
+diff --git a/usr/src/uts/armv8/dboot/dboot.h b/usr/src/uts/armv8/dboot/dboot.h
+index fc6c906459..1b314de440 100644
+--- a/usr/src/uts/armv8/dboot/dboot.h
++++ b/usr/src/uts/armv8/dboot/dboot.h
+@@ -63,6 +63,11 @@ extern int dboot_configure_fdt(void);
+  */
+ extern int dboot_configure_acpi(void);
+ 
++/*
++ * dboot_synth_fdt.c
++ */
++extern uint64_t dboot_synth_fdt(struct xboot_info *);
++
+ /*
+  * dboot_uefimem.c
+  */
+diff --git a/usr/src/uts/armv8/dboot/dboot_conf_acpi.c b/usr/src/uts/armv8/dboot/dboot_conf_acpi.c
+index 2065202350..b8b911a3ff 100644
+--- a/usr/src/uts/armv8/dboot/dboot_conf_acpi.c
++++ b/usr/src/uts/armv8/dboot/dboot_conf_acpi.c
+@@ -36,6 +36,7 @@
+ 
+ extern void boot_smccc_init(struct xboot_info *);
+ extern void boot_psci_init(struct xboot_info *);
++extern uint64_t dboot_synth_fdt(struct xboot_info *);
+ 
+ static const ACPI_TABLE_XSDT *
+ get_acpi_xsdt(void)
+@@ -305,5 +306,16 @@ dboot_configure_acpi(void)
+ 	boot_smccc_init(bi);
+ 	boot_psci_init(bi);
+ 	dboot_count_pcierc(bi);
+-	return (dboot_configure_acpi_cpuinfo(bi));
++	if (dboot_configure_acpi_cpuinfo(bi) != 0)
++		return (-1);
++
++	/*
++	 * Synthesise a minimal FDT from the static ACPI tables so that
++	 * the kernel's FDT-fed prom_emul and device enumeration work
++	 * unchanged. On failure bi_fdt stays 0 (no devicetree); the
++	 * kernel would then come up without enumerated devices.
++	 */
++	bi->bi_fdt = dboot_synth_fdt(bi);
++
++	return (0);
+ }
+diff --git a/usr/src/uts/armv8/dboot/dboot_machdep.c b/usr/src/uts/armv8/dboot/dboot_machdep.c
+index 854c788dee..595328c40b 100644
+--- a/usr/src/uts/armv8/dboot/dboot_machdep.c
++++ b/usr/src/uts/armv8/dboot/dboot_machdep.c
+@@ -182,9 +182,8 @@ exitto(int (*entrypoint)(struct xboot_info *), struct xboot_info *bi)
+ 
+ 	if (bi->bi_fdt == 0) {
+ 		dboot_printf(
+-		    "dboot: ACPI kernel support is a work in progress\n");
+-		for (;;)
+-			/* spin forever */;
++		    "dboot: no devicetree (ACPI synth failed); "
++		    "kernel device enumeration will be incomplete\n");
+ 	}
+ 
+ 	/*
+diff --git a/usr/src/uts/armv8/os/fakebop.c b/usr/src/uts/armv8/os/fakebop.c
+index 4d04263654..de764b55d4 100644
+--- a/usr/src/uts/armv8/os/fakebop.c
++++ b/usr/src/uts/armv8/os/fakebop.c
+@@ -219,6 +219,20 @@ bop_init(struct xboot_info *xbp)
+ {
+ 	extern void boot_fb_shadow_init(bootops_t *);
+ 
++	/*
++	 * A6KCON diagnostic: raw write to the SPCR UART (0x90a0000 on
++	 * Graviton) at the very entry of the kernel proper (MMU on), before
++	 * bcons_init.  If [A6KCON:BOP] reaches the console, the kernel-proper
++	 * identity map covers the UART and we reached bop_init.
++	 */
++	if (xbp != NULL && xbp->bi_bsvc_uart_mmio_base != 0) {
++		volatile uint32_t *dr =
++		    (volatile uint32_t *)(uintptr_t)xbp->bi_bsvc_uart_mmio_base;
++		const char *m = "[A6KCON:BOP]\r\n";
++		while (*m != '\0')
++			*dr = (uint32_t)(uint8_t)*m++;
++	}
++
+ 	bsvc_init(xbp);
+ 
+ 	bootops = &bootop;
+@@ -241,6 +255,69 @@ bop_init(struct xboot_info *xbp)
+ 
+ 	bcons_init(xbp);
+ 
++	/*
++	 * A6KCON diagnostic: raw write to the SPCR UART right after
++	 * bcons_init.  If [A6KCON:BCONS] appears (and [A6KCON:BOP] did),
++	 * bcons_init survived; any subsequent silence is downstream.
++	 */
++	if (xbp != NULL && xbp->bi_bsvc_uart_mmio_base != 0) {
++		volatile uint32_t *dr =
++		    (volatile uint32_t *)(uintptr_t)xbp->bi_bsvc_uart_mmio_base;
++		const char *m = "[A6KCON:BCONS]\r\n";
++		while (*m != '\0')
++			*dr = (uint32_t)(uint8_t)*m++;
++	}
++
++	/*
++	 * A6KCON diagnostic: the raw markers above blindly write UARTDR
++	 * (offset 0) and succeed, but boot_uart_putchar() polls the PL011
++	 * flag register UARTFR (offset 0x18): it spins on TXFF before a
++	 * write and on !TXFE after.  If Graviton's PL011 FR does not behave
++	 * as SBSA expects, the first bcons/prom print hangs forever in that
++	 * loop -- which matches "markers appear, banner never does".  Read
++	 * FR raw and emit [A6KCON:FR=xxxxxxxx], then try a *bounded*
++	 * flag-checked write of 'Z': [A6KCON:PUT ok] if TXFF cleared and
++	 * TXFE set within the cap, else [A6KCON:PUT hang txff]/[hang txfe].
++	 * All status is emitted via raw DR writes, which we know reach the
++	 * console.
++	 */
++	if (xbp != NULL && xbp->bi_bsvc_uart_mmio_base != 0) {
++		volatile uint32_t *dr =
++		    (volatile uint32_t *)(uintptr_t)xbp->bi_bsvc_uart_mmio_base;
++		volatile uint32_t *fr = (volatile uint32_t *)
++		    (uintptr_t)(xbp->bi_bsvc_uart_mmio_base + 0x18);
++		uint32_t frv = *fr;
++		const char *hex = "0123456789abcdef";
++		const char *m = "[A6KCON:FR=";
++		int i;
++		uint32_t cap;
++		int ok = 1;
++
++		while (*m != '\0')
++			*dr = (uint32_t)(uint8_t)*m++;
++		for (i = 28; i >= 0; i -= 4)
++			*dr = (uint32_t)(uint8_t)hex[(frv >> i) & 0xf];
++		*dr = ']'; *dr = '\r'; *dr = '\n';
++
++		/* bounded TXFF wait (bit 5) */
++		for (cap = 0; (*fr & (1u << 5)) && cap < 1000000u; cap++)
++			;
++		if (cap >= 1000000u)
++			ok = 0;
++		*dr = (uint32_t)'Z';
++		/* bounded TXFE wait (bit 7) */
++		for (cap = 0; !(*fr & (1u << 7)) && cap < 1000000u; cap++)
++			;
++		if (cap >= 1000000u)
++			ok = -1;
++
++		m = (ok == 1) ? "\r\n[A6KCON:PUT ok]\r\n" :
++		    (ok == 0) ? "\r\n[A6KCON:PUT hang txff]\r\n" :
++		    "\r\n[A6KCON:PUT hang txfe]\r\n";
++		while (*m != '\0')
++			*dr = (uint32_t)(uint8_t)*m++;
++	}
++
+ 	kbm_init();
+ 
+ 	/*
+@@ -1501,14 +1578,45 @@ build_boot_properties(struct xboot_info *xbp)
+ #define	IN_RANGE(a, b, e) ((a) >= (b) && (a) <= (e))
+ static memlist_t *boot_free_memlist = NULL;
+ 
++/* A6MEM diagnostic: track boot-memlist arena consumption. */
++static uint_t a6mem_arena_total;
++static uint_t a6mem_nodes_inuse;
++static uint_t a6mem_nodes_hwm;
++
++static void
++a6mem_dump_list(const char *name, struct memlist *lp)
++{
++	uint_t cnt = 0;
++	uint64_t bytes = 0;
++	while (lp != NULL) {
++		cnt++;
++		bytes += lp->ml_size;
++		lp = lp->ml_next;
++	}
++	bop_printf(NULL, "[A6MEM] %s: entries=%u usable=0x%lx\n",
++	    name, cnt, (unsigned long)bytes);
++}
+ 
+ static memlist_t *
+ bmemlist_alloc()
+ {
+ 	memlist_t *ptr;
+ 	if (boot_free_memlist == 0) {
++		extern struct memlist *phys_install;
++		extern struct memlist *phys_avail;
++		extern struct memlist *boot_scratch;
++		bop_printf(NULL, "[A6MEM] OOM: arena_total=%u inuse=%u "
++		    "hwm=%u\n", a6mem_arena_total, a6mem_nodes_inuse,
++		    a6mem_nodes_hwm);
++		a6mem_dump_list("phys_avail", phys_avail);
++		a6mem_dump_list("phys_install", phys_install);
++		a6mem_dump_list("boot_scratch", boot_scratch);
++		a6mem_dump_list("bootmem_avail", bootmem_avail);
+ 		bop_panic("bmemlist_alloc Out of memory\n");
+ 	}
++	a6mem_nodes_inuse++;
++	if (a6mem_nodes_inuse > a6mem_nodes_hwm)
++		a6mem_nodes_hwm = a6mem_nodes_inuse;
+ 	ptr = boot_free_memlist;
+ 	boot_free_memlist = ptr->ml_next;
+ 	ptr->ml_address = 0;
+@@ -1521,6 +1629,8 @@ bmemlist_alloc()
+ static void
+ bmemlist_free(memlist_t *ptr)
+ {
++	if (a6mem_nodes_inuse > 0)
++		a6mem_nodes_inuse--;
+ 	ptr->ml_address = 0;
+ 	ptr->ml_size = 0;
+ 	ptr->ml_prev = 0;
+@@ -1717,6 +1827,9 @@ bmemlist_init(struct xboot_info *xbp)
+ 	for (i = 0; i < sizeof (boot_list) / sizeof (boot_list[0]); i++) {
+ 		bmemlist_free(&boot_list[i]);
+ 	}
++	a6mem_arena_total = sizeof (boot_list) / sizeof (boot_list[0]);
++	a6mem_nodes_inuse = 0;
++	a6mem_nodes_hwm = 0;
+ 	memlist_t *ml;
+ 
+ 	ml = (memlist_t *)xbp->bi_phys_avail;
+@@ -1729,4 +1842,10 @@ bmemlist_init(struct xboot_info *xbp)
+ 	boot_scratch = bmemlist_dup(ml);
+ 
+ 	bmemlist_insert(&bootmem_avail, MISC_VA_BASE, MISC_VA_SIZE);
++
++	bop_printf(NULL, "[A6MEM] init: arena_total=%u inuse_after_dup=%u\n",
++	    a6mem_arena_total, a6mem_nodes_inuse);
++	a6mem_dump_list("phys_avail", phys_avail);
++	a6mem_dump_list("phys_install", phys_install);
++	a6mem_dump_list("boot_scratch", boot_scratch);
+ }
+diff --git a/usr/src/uts/common/krtld/kobj.c b/usr/src/uts/common/krtld/kobj.c
+index 9668d8c28d..dbfa2b62cb 100644
+--- a/usr/src/uts/common/krtld/kobj.c
++++ b/usr/src/uts/common/krtld/kobj.c
+@@ -683,6 +683,22 @@ attr_val(val_t *bootaux)
+ 		}
+ 	}
+ 
++#if defined(__aarch64__)
++	/*
++	 * The boot loader (dboot) maps the kernel image in whole pages, so it
++	 * rounds the writable segment's end (`_edata`) and the text segment's
++	 * end (`_etext`) up to a page boundary when building the initial page
++	 * tables.  kobj_segbrk() grows the kernel by BOP_ALLOC()ing the next
++	 * page above these cursors; if a cursor sits mid-page, its round-up
++	 * lands on the page dboot already mapped, and kbm_map() panics with an
++	 * overlapping allocation.  Align the cursors up to match dboot's
++	 * page-granular image mapping so growth always starts on the first
++	 * page dboot did not map.
++	 */
++	_etext = (caddr_t)P2ROUNDUP((uintptr_t)_etext, (uintptr_t)PAGESIZE);
++	_edata = (caddr_t)P2ROUNDUP((uintptr_t)_edata, (uintptr_t)PAGESIZE);
++#endif
++
+ 	/* To do the kobj_alloc, _edata needs to be set. */
+ 	for (i = 0; i < NLIBMACROS; i++) {
+ 		if (bootaux[libmacros[i].lmi_ba_index].ba_ptr != NULL) {
