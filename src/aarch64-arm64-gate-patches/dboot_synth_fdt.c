@@ -225,6 +225,7 @@ typedef struct synth_gic {
 	uint64_t	gicr;
 	uint64_t	gicr_len;
 	uint64_t	its;
+	uint32_t	ngicc;		/* count of GICC (per-cpu) entries */
 	bool		have_gicd;
 	bool		have_gicr;
 	bool		have_its;
@@ -287,13 +288,14 @@ synth_scan_madt(synth_gic_t *g)
 			 */
 			const ACPI_MADT_GENERIC_INTERRUPT *c =
 			    (const ACPI_MADT_GENERIC_INTERRUPT *)item;
+			g->ngicc++;
 			if (!g->have_gicr) {
 				uint64_t base;
 				memcpy(&base, &c->GicrBaseAddress,
 				    sizeof (base));
-				if (base != 0) {
+				if (base != 0 &&
+				    (g->gicr == 0 || base < g->gicr)) {
 					g->gicr = base;
-					g->gicr_len = 0x20000;
 					g->have_gicr = true;
 				}
 			}
@@ -823,6 +825,9 @@ dboot_synth_fdt(struct xboot_info *bi)
 		reg[3] = cpu_to_fdt32((uint32_t)(gicd_len & 0xffffffff));
 		reg[4] = cpu_to_fdt32((uint32_t)(gic.gicr >> 32));
 		reg[5] = cpu_to_fdt32((uint32_t)(gic.gicr & 0xffffffff));
+		if (gic.have_gicr && gic.gicr_len == 0)
+			gic.gicr_len = (uint64_t)(gic.ngicc ?
+			    gic.ngicc : 1) * 0x20000;
 		reg[6] = cpu_to_fdt32((uint32_t)(gic.gicr_len >> 32));
 		reg[7] = cpu_to_fdt32((uint32_t)(gic.gicr_len & 0xffffffff));
 		(void) fdt_property(fdt, "reg", reg, sizeof (reg));
