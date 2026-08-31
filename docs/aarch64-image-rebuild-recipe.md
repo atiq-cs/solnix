@@ -5,6 +5,27 @@ the reproducible path to get that unix into a bootable image and onto real Gravi
 The source rebuild is solved (docs/aarch64-a6-mem-arena-diagnosis.md); this is the
 image-assembly layer.
 
+## Progress state (this session)
+Executed the pipeline through `out/illumos.zfs`; only the final disk-image pack + metal boot remain:
+- [x] **Fixed unix built** (aarch64 ELF, arena `MMU_PAGESIZE*128`) -- reproducible via `bldenv -T aarch64`.
+- [x] **Staged into proto** (`proto/root_aarch64/platform/armv8/kernel/aarch64/unix`).
+- [x] **Published to the nightly repo** (the `usr/src/pkg` `dmake install` PACKAGING step -- NOT a full
+      nightly build, since proto was already fully populated at 456M). The repo now has
+      `system/kernel 0.5.11-999999.2026.8.31...` (the fixed kernel) -- 1492 packages total.
+- [x] **`build_image.sh` ran** (IMGRC=0): `pkg image-create` + install `entire` + `on-nightly/*` into
+      `bpool/braich_image` -> **`out/illumos.zfs` = 1.45GB with the fixed kernel** (the metal-bound rootfs).
+- [ ] **`build_qemu.sh`** (out/illumos.zfs -> illumos-disk.img): BLOCKED. A stale lofi mapping on the old
+      illumos-disk.img was `Device busy` (residue of earlier interrupted `zpool import` attempts); a reboot
+      + stop/start to clear it left the build node with a confused device-id/network state (`Hostname:
+      unknown`, devid mismatches from volume reordering, sshd unreachable). NOT an aarch64 problem -- the
+      build HOST node degraded from accumulated volume/lofi churn.
+- [ ] Transfer + metal boot (the proven hang-proof path below).
+
+**Durable:** the build volume (`vol-0fa781c000e594045`, DeleteOnTermination=False) carries the fixed-kernel
+build tree + `out/illumos.zfs`; snapshotted (`snap-090dabad9f16554f3`) so it survives the node. **Finish on a
+CLEAN build node**: attach this snapshot, clear/skip the stale lofi (a fresh node has none), run
+`build_qemu.sh` (out/illumos.zfs is ready) -> transfer -> metal. One clean `build_qemu.sh` from the banner.
+
 ## The pipeline (arm64-gate/tools/, captured in image-tools/)
 ```
 proto/root_aarch64/  --(nightly pkgsend publish)-->  packages/aarch64/nightly/repo.redist
