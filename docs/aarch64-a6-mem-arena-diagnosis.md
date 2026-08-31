@@ -101,3 +101,30 @@ non-interactive command, background long ops on-node with `nohup ... > logfile`,
 the logfile with separate short reads. NEVER an interactive disk-probe (`format`, chained
 `prtvtoc`/`diskinfo` loops) over SSH -- those block and wedge. get-console-output for all
 metal console reads.
+
+## RESULT: arena fix PROVEN on real Graviton (c6g.metal)
+The full pipeline ran (build unix -> pkgsend publish -> build_image.sh -> build_qemu.sh ->
+Linux-helper transfer -> arm64 UEFI AMI -> c6g.metal -> get-console-output). The fixed
+kernel boots FAR past the old OOM (artifacts/a6mem-fixed-metal-console.txt):
+```
+[A6MEM] raw_phys_avail: entries=7 usable=0x1feec67000
+[A6MEM] raw_phys_installed: entries=3 usable=0x2000000000
+[A6MEM] init: arena_total=16384 inuse_after_dup=13     <- grown arena (was ~819), 13 used
+illumos Version arm64-gate-0-gae3cab2471 64-bit
+mem = 134217728K (0x2000000000)                        <- 128GB detected; PAST bmemlist!
+scsi_vhci0 at root                                     <- device tree init reached
+panic[cpu0]: assertion failed: num_redistributors >= max_ncpus (0x1 >= 0x40),
+             gicthree.c:1581
+```
+The arena fix is CONFIRMED correct: the OOM is gone, RAM enumerates, device init starts.
+NOTE the [A6MEM] numbers show only 7+3+2 = ~12 raw segments on THIS metal (arena_total=16384,
+inuse=13) -- so *8 (819) should have sufficed here; the real fix value is the safety margin
+for larger/more-fragmented maps (and the OOM is definitively behind us either way).
+
+## NEXT blocker (new, well-defined): GICv3 redistributor count
+`gicthree.c:1581` asserts `num_redistributors >= max_ncpus`, but the synthesized FDT declares
+only 1 GIC redistributor while the c6g.metal has 64 cores (max_ncpus 0x40). Fix: in
+dboot_synth_fdt.c, emit the GICR (redistributor) reg regions for ALL cpus from the ACPI MADT
+GICC entries (each GICC has a GICR base), not just cpu0 -- OR relax the count to the real
+redistributor stride. The A6-vm/A6-phandle legs already parse the MADT; extend the gic node
+synthesis. This is the next leg after A6-mem (arena) -- the banner is now gated on GIC, not memory.
