@@ -827,7 +827,10 @@ dboot_synth_fdt(struct xboot_info *bi)
 		reg[5] = cpu_to_fdt32((uint32_t)(gic.gicr & 0xffffffff));
 		if (gic.have_gicr && gic.gicr_len == 0)
 			gic.gicr_len = (uint64_t)(gic.ngicc ?
-			    gic.ngicc : 1) * 0x20000;
+			    gic.ngicc : 1) * 0x40000;
+		dboot_printf("[A6GIC] ngicc=%u gicr=0x%llx len=0x%llx\n",
+		    gic.ngicc, (unsigned long long)gic.gicr,
+		    (unsigned long long)gic.gicr_len);
 		reg[6] = cpu_to_fdt32((uint32_t)(gic.gicr_len >> 32));
 		reg[7] = cpu_to_fdt32((uint32_t)(gic.gicr_len & 0xffffffff));
 		(void) fdt_property(fdt, "reg", reg, sizeof (reg));

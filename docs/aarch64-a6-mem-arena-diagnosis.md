@@ -128,3 +128,28 @@ dboot_synth_fdt.c, emit the GICR (redistributor) reg regions for ALL cpus from t
 GICC entries (each GICC has a GICR base), not just cpu0 -- OR relax the count to the real
 redistributor stride. The A6-vm/A6-phandle legs already parse the MADT; extend the gic node
 synthesis. This is the next leg after A6-mem (arena) -- the banner is now gated on GIC, not memory.
+
+## A6-gic progress: redistributor count 1 -> 16 (open: reaching 64)
+The GICR-region fix (dboot_synth_fdt.c: count GICC entries as ngicc, use the lowest per-cpu
+GicrBaseAddress as the contiguous region base, size gicr_len) moved gicthree.c's
+num_redistributors from 1 to **16** -- real progress, but c6g.metal has 64 cpus (max_ncpus
+0x40) so the VERIFY3U still trips at 0x10 >= 0x40.
+
+Sizing gicr_len at ngicc*0x20000 vs ngicc*0x40000 (VLPIS 4-frame) gave the SAME count (16),
+which means the region SIZE is not the limiter -- 16 is the actual count found. Two candidate
+causes (needs the [A6GIC] ngicc value, which dboot_printf did NOT surface on the metal console
+-- likely suppressed in the quiet-loader boot mode; route it through the same SPCR path the
+A6-kcon fix uses, or a bop_printf, to read it):
+  (a) ngicc genuinely == 16: the synth MADT scan sees only 16 GICC subtables (unlikely on a
+      64-vcpu box, but possible if the loader hands a trimmed MADT or the metal groups cpus).
+  (b) Graviton presents redistributors in MULTIPLE regions, or the 16th GICR sets
+      GICR_TYPER_Last so the walker stops at 16 from a single base -- i.e. the lowest
+      GicrBaseAddress region only covers 16 cpus; the other 48 live at other bases we're not
+      emitting. Fix: emit ONE #redistributor-region per distinct GICC GicrBaseAddress (or a
+      redistributor-stride property), not a single merged region.
+
+NEXT: make [A6GIC] visible (bop/SPCR path) to read ngicc + the per-cpu GicrBaseAddress spread;
+if the bases are non-contiguous/multi-region, emit multiple GICR regions in the FDT. The arena
+fix is DONE (proven); this GIC-topology leg is the sole remaining blocker to the SunOS banner
+on real Graviton. Durable: GIC-fixed tree snapshot snap-0e4d84a54c071e8fa; build node
+i-0fdb29d5efb2f3c28 STOPPED (volume vol-0b229ada0d822ab5a persists) -- start it to resume.
