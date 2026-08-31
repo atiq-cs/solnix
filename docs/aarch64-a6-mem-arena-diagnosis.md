@@ -53,15 +53,36 @@ covers any realistic fragmented server memory map. Captured in
 diagnostic that dumps arena_total/inuse/hwm + the raw phys_avail/phys_install/boot_scratch
 segment counts, to CONFIRM the fix + show Graviton's real fragmentation on the next boot).
 
-## Status: fix written, rebuild BLOCKED on a cross-assembler wiring gap
-The fix + the [A6MEM] diagnostic are applied to fakebop.c on the build node and captured
-as a durable patch. Rebuilding the aarch64 `unix` to test it on metal is currently blocked:
-`bldenv <env/aarch64>` builds, but the `.S` kernel sources assemble with the HOST (x86)
-assembler instead of the cross `aarch64-unknown-solaris2.11-as` (`no such instruction:
-'stxrb w4,w2,[x0]'` -- a valid AArch64 instruction rejected by x86 gas). The cross gcc/ld/
-objcopy ARE present (`/aarch64/arm64-gate/build/cross/bin/`), but the assembler isn't wired
-for `.S` compilation in a from-scratch rebuild on this node -- the same reproducibility gap
-as R-P63: the exact build wiring that produced `gae3cab2471` lived on prior nodes.
+## Status: fix written AND the aarch64 unix REBUILDS from scratch (reproducibility gap SOLVED)
+The fix + the [A6MEM] diagnostic are applied to fakebop.c and the aarch64 `unix` now
+rebuilds cleanly from a fresh checkout (aarch64 ELF, BLDRC=0, 1.8MB, carrying the
+`boot_list[MMU_PAGESIZE*128]` arena fix). The rebuild had been blocked on the build wiring
+(the gap that lived on prior nodes); three fixes make it deterministic:
+
+1. **`bldenv -T aarch64`** -- the TARGET-MACH flag. `bldenv` sets `MACH=${flags.T}` and
+   `NATIVE_MACH=$(uname -p)`; without `-T aarch64`, MACH defaults to the native i386 and the
+   env file's `if [[ ${MACH} == "aarch64" ]]` cross branch never fires -> the whole build
+   goes `-m32 -Di386` with the host x86 gcc/as (THAT was the `stxrb no such instruction` --
+   x86 gas fed AArch64 asm, not a missing cross-as). With `-T aarch64` the build correctly
+   uses `--primary gcc14,.../aarch64-unknown-solaris2.11-gcc` + sysroot + `-Daarch64`.
+2. **Regenerate the empty `assym.h`** -- `unix/debug64/assym.h` was a stale 0-byte file, so
+   `dboot_srt0.S` (which `#include`s `assym.h`) couldn't resolve `HCR_TGE`/`ICC_SRE_EL2_EN`/
+   `CPACR_FPEN_MASK` (register-bit immediates emitted from `genassym.cf`). `dmake
+   debug64/assym.h` regenerates it (6362 bytes, all constants present).
+3. **gcc-14 `-Werror` suppressions** -- 30 benign sites (`unused-variable`,
+   `unused-but-set-variable`, `empty-body`) in common vm/disp/cmt/kobj code that a newer gcc
+   flags. `Makefile.uts` already has `-Wno-unused`/`-Wno-empty-body` but gated behind
+   `$(RELEASE_BUILD)`; added them to `CERRWARN` unconditionally so the DEBUG cross-build gets
+   them too. Plus 2 source fixes: `HATSTAT_INC(x) (0)` -> `((void)0)`; `hment.c` `hm2`
+   -> `hm2 __unused` (used only by a DEBUG `ASSERT`). All captured in
+   `src/aarch64-arm64-gate-patches/a6-mem-plus-gcc14-build-fixes.patch`.
+
+**Remaining (last reproducibility item):** the IMAGE-assembly recipe (pack the new `unix`
+into the boot_archive inside `illumos-disk.img`) still lived on a prior node -- a
+`build_qemu.sh`-class script. To metal-test the arena fix, rebuild the boot image with the
+fresh unix (swap unix + rebuild boot_archive in the ZFS image), then use the proven transfer
++ get-console path below. A reproducible `build-image.sh` is the aarch64 analog of the
+RISC-V `build-all.sh` follow-up.
 
 ## Verification path (when the cross-as wiring is restored)
 The transfer + boot mechanics are now PROVEN and hang-proof (used successfully this session):
