@@ -1,0 +1,232 @@
+diff --git a/usr/src/uts/Makefile.uts b/usr/src/uts/Makefile.uts
+index 331fc23d6d..f56533c0d4 100644
+--- a/usr/src/uts/Makefile.uts
++++ b/usr/src/uts/Makefile.uts
+@@ -183,8 +183,16 @@ CERRWARN += -_gcc=-Wno-missing-braces
+ CERRWARN += -_gcc=-Wno-sign-compare
+ CERRWARN += -_gcc=-Wno-unused-parameter
+ CERRWARN += -_gcc=-Wno-missing-field-initializers
++CERRWARN += -_gcc=-Wno-unused-variable
++CERRWARN += -_gcc=-Wno-unused-but-set-variable
++CERRWARN += -_gcc=-Wno-empty-body
+ CERRWARN += $(CCWARNINLINE)
+ 
++# gcc 14 flags these in DEBUG kernel builds (aarch64 cross); benign, downgrade
++CERRWARN += -_gcc=-Wno-unused-variable
++CERRWARN += -_gcc=-Wno-unused-but-set-variable
++CERRWARN += -_gcc=-Wno-empty-body
++
+ CNOWARN_UNINIT = -_gcc=-Wno-maybe-uninitialized
+ 
+ # DEBUG v. -nd make for frequent unused variables, empty conditions, etc. in
+diff --git a/usr/src/uts/armv8/os/fakebop.c b/usr/src/uts/armv8/os/fakebop.c
+index 4d04263654..71af70f4ef 100644
+--- a/usr/src/uts/armv8/os/fakebop.c
++++ b/usr/src/uts/armv8/os/fakebop.c
+@@ -219,6 +219,20 @@ bop_init(struct xboot_info *xbp)
+ {
+ 	extern void boot_fb_shadow_init(bootops_t *);
+ 
++	/*
++	 * A6KCON diagnostic: raw write to the SPCR UART (0x90a0000 on
++	 * Graviton) at the very entry of the kernel proper (MMU on), before
++	 * bcons_init.  If [A6KCON:BOP] reaches the console, the kernel-proper
++	 * identity map covers the UART and we reached bop_init.
++	 */
++	if (xbp != NULL && xbp->bi_bsvc_uart_mmio_base != 0) {
++		volatile uint32_t *dr =
++		    (volatile uint32_t *)(uintptr_t)xbp->bi_bsvc_uart_mmio_base;
++		const char *m = "[A6KCON:BOP]\r\n";
++		while (*m != '\0')
++			*dr = (uint32_t)(uint8_t)*m++;
++	}
++
+ 	bsvc_init(xbp);
+ 
+ 	bootops = &bootop;
+@@ -241,6 +255,69 @@ bop_init(struct xboot_info *xbp)
+ 
+ 	bcons_init(xbp);
+ 
++	/*
++	 * A6KCON diagnostic: raw write to the SPCR UART right after
++	 * bcons_init.  If [A6KCON:BCONS] appears (and [A6KCON:BOP] did),
++	 * bcons_init survived; any subsequent silence is downstream.
++	 */
++	if (xbp != NULL && xbp->bi_bsvc_uart_mmio_base != 0) {
++		volatile uint32_t *dr =
++		    (volatile uint32_t *)(uintptr_t)xbp->bi_bsvc_uart_mmio_base;
++		const char *m = "[A6KCON:BCONS]\r\n";
++		while (*m != '\0')
++			*dr = (uint32_t)(uint8_t)*m++;
++	}
++
++	/*
++	 * A6KCON diagnostic: the raw markers above blindly write UARTDR
++	 * (offset 0) and succeed, but boot_uart_putchar() polls the PL011
++	 * flag register UARTFR (offset 0x18): it spins on TXFF before a
++	 * write and on !TXFE after.  If Graviton's PL011 FR does not behave
++	 * as SBSA expects, the first bcons/prom print hangs forever in that
++	 * loop -- which matches "markers appear, banner never does".  Read
++	 * FR raw and emit [A6KCON:FR=xxxxxxxx], then try a *bounded*
++	 * flag-checked write of 'Z': [A6KCON:PUT ok] if TXFF cleared and
++	 * TXFE set within the cap, else [A6KCON:PUT hang txff]/[hang txfe].
++	 * All status is emitted via raw DR writes, which we know reach the
++	 * console.
++	 */
++	if (xbp != NULL && xbp->bi_bsvc_uart_mmio_base != 0) {
++		volatile uint32_t *dr =
++		    (volatile uint32_t *)(uintptr_t)xbp->bi_bsvc_uart_mmio_base;
++		volatile uint32_t *fr = (volatile uint32_t *)
++		    (uintptr_t)(xbp->bi_bsvc_uart_mmio_base + 0x18);
++		uint32_t frv = *fr;
++		const char *hex = "0123456789abcdef";
++		const char *m = "[A6KCON:FR=";
++		int i;
++		uint32_t cap;
++		int ok = 1;
++
++		while (*m != '\0')
++			*dr = (uint32_t)(uint8_t)*m++;
++		for (i = 28; i >= 0; i -= 4)
++			*dr = (uint32_t)(uint8_t)hex[(frv >> i) & 0xf];
++		*dr = ']'; *dr = '\r'; *dr = '\n';
++
++		/* bounded TXFF wait (bit 5) */
++		for (cap = 0; (*fr & (1u << 5)) && cap < 1000000u; cap++)
++			;
++		if (cap >= 1000000u)
++			ok = 0;
++		*dr = (uint32_t)'Z';
++		/* bounded TXFE wait (bit 7) */
++		for (cap = 0; !(*fr & (1u << 7)) && cap < 1000000u; cap++)
++			;
++		if (cap >= 1000000u)
++			ok = -1;
++
++		m = (ok == 1) ? "\r\n[A6KCON:PUT ok]\r\n" :
++		    (ok == 0) ? "\r\n[A6KCON:PUT hang txff]\r\n" :
++		    "\r\n[A6KCON:PUT hang txfe]\r\n";
++		while (*m != '\0')
++			*dr = (uint32_t)(uint8_t)*m++;
++	}
++
+ 	kbm_init();
+ 
+ 	/*
+@@ -1501,14 +1578,45 @@ build_boot_properties(struct xboot_info *xbp)
+ #define	IN_RANGE(a, b, e) ((a) >= (b) && (a) <= (e))
+ static memlist_t *boot_free_memlist = NULL;
+ 
++/* A6MEM diagnostic: track boot-memlist arena consumption. */
++static uint_t a6mem_arena_total;
++static uint_t a6mem_nodes_inuse;
++static uint_t a6mem_nodes_hwm;
++
++static void
++a6mem_dump_list(const char *name, struct memlist *lp)
++{
++	uint_t cnt = 0;
++	uint64_t bytes = 0;
++	while (lp != NULL) {
++		cnt++;
++		bytes += lp->ml_size;
++		lp = lp->ml_next;
++	}
++	bop_printf(NULL, "[A6MEM] %s: entries=%u usable=0x%lx\n",
++	    name, cnt, (unsigned long)bytes);
++}
+ 
+ static memlist_t *
+ bmemlist_alloc()
+ {
+ 	memlist_t *ptr;
+ 	if (boot_free_memlist == 0) {
++		extern struct memlist *phys_install;
++		extern struct memlist *phys_avail;
++		extern struct memlist *boot_scratch;
++		bop_printf(NULL, "[A6MEM] OOM: arena_total=%u inuse=%u "
++		    "hwm=%u\n", a6mem_arena_total, a6mem_nodes_inuse,
++		    a6mem_nodes_hwm);
++		a6mem_dump_list("phys_avail", phys_avail);
++		a6mem_dump_list("phys_install", phys_install);
++		a6mem_dump_list("boot_scratch", boot_scratch);
++		a6mem_dump_list("bootmem_avail", bootmem_avail);
+ 		bop_panic("bmemlist_alloc Out of memory\n");
+ 	}
++	a6mem_nodes_inuse++;
++	if (a6mem_nodes_inuse > a6mem_nodes_hwm)
++		a6mem_nodes_hwm = a6mem_nodes_inuse;
+ 	ptr = boot_free_memlist;
+ 	boot_free_memlist = ptr->ml_next;
+ 	ptr->ml_address = 0;
+@@ -1521,6 +1629,8 @@ bmemlist_alloc()
+ static void
+ bmemlist_free(memlist_t *ptr)
+ {
++	if (a6mem_nodes_inuse > 0)
++		a6mem_nodes_inuse--;
+ 	ptr->ml_address = 0;
+ 	ptr->ml_size = 0;
+ 	ptr->ml_prev = 0;
+@@ -1708,7 +1818,7 @@ bmemlist_find(struct memlist **listp, uint64_t size, int align)
+ static void
+ bmemlist_init(struct xboot_info *xbp)
+ {
+-	static memlist_t boot_list[MMU_PAGESIZE * 8 / sizeof (memlist_t)];
++	static memlist_t boot_list[MMU_PAGESIZE * 128 / sizeof (memlist_t)];
+ 	int i;
+ 	extern struct memlist *phys_install;
+ 	extern struct memlist *phys_avail;
+@@ -1717,6 +1827,14 @@ bmemlist_init(struct xboot_info *xbp)
+ 	for (i = 0; i < sizeof (boot_list) / sizeof (boot_list[0]); i++) {
+ 		bmemlist_free(&boot_list[i]);
+ 	}
++	a6mem_arena_total = sizeof (boot_list) / sizeof (boot_list[0]);
++	a6mem_nodes_inuse = 0;
++	a6mem_nodes_hwm = 0;
++	bop_printf(NULL, "[A6MEM] pre-dup arena_total=%u\n", a6mem_arena_total);
++	a6mem_dump_list("raw_phys_avail", (memlist_t *)xbp->bi_phys_avail);
++	a6mem_dump_list("raw_phys_installed", (memlist_t *)xbp->bi_phys_installed);
++	a6mem_dump_list("raw_boot_scratch", (memlist_t *)xbp->bi_boot_scratch);
++
+ 	memlist_t *ml;
+ 
+ 	ml = (memlist_t *)xbp->bi_phys_avail;
+@@ -1729,4 +1847,10 @@ bmemlist_init(struct xboot_info *xbp)
+ 	boot_scratch = bmemlist_dup(ml);
+ 
+ 	bmemlist_insert(&bootmem_avail, MISC_VA_BASE, MISC_VA_SIZE);
++
++	bop_printf(NULL, "[A6MEM] init: arena_total=%u inuse_after_dup=%u\n",
++	    a6mem_arena_total, a6mem_nodes_inuse);
++	a6mem_dump_list("phys_avail", phys_avail);
++	a6mem_dump_list("phys_install", phys_install);
++	a6mem_dump_list("boot_scratch", boot_scratch);
+ }
+diff --git a/usr/src/uts/armv8/vm/hat_aarch64.h b/usr/src/uts/armv8/vm/hat_aarch64.h
+index 8c79800f22..df121ce491 100644
+--- a/usr/src/uts/armv8/vm/hat_aarch64.h
++++ b/usr/src/uts/armv8/vm/hat_aarch64.h
+@@ -137,7 +137,7 @@ extern struct hatstats hatstat;
+ #ifdef DEBUG
+ #define	HATSTAT_INC(x)	(++hatstat.x)
+ #else
+-#define	HATSTAT_INC(x)	(0)
++#define	HATSTAT_INC(x)	((void)0)
+ #endif
+ 
+ #if defined(_KERNEL) || defined(_BOOT)
+diff --git a/usr/src/uts/armv8/vm/hment.c b/usr/src/uts/armv8/vm/hment.c
+index 27aa5aa815..145fdb1a76 100644
+--- a/usr/src/uts/armv8/vm/hment.c
++++ b/usr/src/uts/armv8/vm/hment.c
+@@ -720,7 +720,7 @@ hment_steal(void)
+ 	page_t *last = last_page;
+ 	page_t *pp = last;
+ 	hment_t *hm = NULL;
+-	hment_t *hm2;
++	hment_t *hm2 __unused;
+ 	htable_t *ht;
+ 	uint_t found_one = 0;
+ 
