@@ -107,6 +107,20 @@ block copied from the x86_64 module, plus `AV_RISCV_*` hwcap bits including
 `AV_RISCV_V` for the K1's RVV) and a three-line `cfg_if` arm in `mod.rs`.
 **Verified: with the patch applied, the probe compiles to EM_RISCV.**
 
+> **CORRECTION.** That verification was INCOMPLETE, and the patch as first written
+> carried three defects -- found later by applying it to a pristine libc and asserting
+> the *layout* rather than only compiling a probe (fixed in `effbcc19b7`):
+> (1) the new-file hunk header said 150 lines while the body had 162, so `patch`
+> silently dropped the tail -- the whole `AV_RISCV_*` block, including the `AV_RISCV_V`
+> RVV bit this document specifically calls out for the K1; (2) the fp union's flat view
+> was `[[u32;16];17]`, an x86-FXSAVE shape, making `mcontext_t` 1088 B instead of 520 --
+> a libc `ucontext_t` LARGER than the kernel's, i.e. a signal handler smashing the
+> stack; (3) `REG_PC=0` with x1..x31 at 1..31, contradicting BOTH authorities cited
+> here -- solnix's own `src/riscv/uts/regs.h` and NetBSD's `nb_mcontext.h` put x1..x31
+> in slots 0..30 with **PC last at 31**. The probe passed anyway because it named the
+> five missing types and not the hwcaps. Lesson: compiling a probe is not verifying a
+> layout; assert sizes/offsets, and negative-control the assertion.
+
 The one thing in that patch a real illumos riscv64 `<sys/regset.h>` could order
 differently is `NGREG` and the `REG_*` index order; the patch says so in a
 comment and follows the NetBSD riscv `_NGREG`/`__gregset_t` layout already cribbed
