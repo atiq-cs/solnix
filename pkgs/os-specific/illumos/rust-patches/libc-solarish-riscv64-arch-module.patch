@@ -4,7 +4,7 @@ WHY: libc's `src/unix/solarish/mod.rs` selects an arch submodule with a cfg_if
 that knows only `x86_64` and `x86`. On a riscv64 illumos target the whole
 arch-specific surface is therefore ABSENT, and any crate that names it fails to
 compile. Measured on a `riscv64gc-unknown-illumos` custom target with
-`-Zbuild-std=std,panic_abort`: `std` itself builds fine (it does not reference
+-Zbuild-std=std,panic_abort: `std` itself builds fine (it does not reference
 these), but a downstream probe naming them yields exactly five E0425s:
 
     cannot find type `ucontext_t`   in crate `libc`
@@ -18,25 +18,43 @@ entire riscv64 gap in libc for illumos -- the machine-dependent
 signal/ucontext/ELF-phdr surface, nothing else.
 
 REGISTER MODEL: RV64 has 32 integer registers x0..x31 and 32 FP registers
-f0..f31 (D extension, 64-bit each) plus fcsr. This mirrors the NetBSD riscv
-`_NGREG`/`__gregset_t` layout already cribbed into
-src/riscv/bsd-ref/netbsd/nb_mcontext.h, and follows the same illumos
-`greg_t`/`gregset_t`/`fpregset_t`/`mcontext_t`/`ucontext_t` nesting the
-existing solarish/x86_64.rs uses. REG_* index names follow the RISC-V ABI
-register names (the illumos <sys/regset.h> for riscv64 must agree; when the
-solnix riscv64 <sys/regset.h> lands, re-verify NGREG and the index order and
-adjust here -- these are the ONE thing in this patch that a real illumos
-riscv64 header could order differently).
+f0..f31 (D extension, 64-bit each) plus fcsr. The gregset holds x1..x31 in
+slots 0..30 with the PC in the LAST slot (31) and no slot for x0 (hardwired
+zero on RISC-V). That ordering is not a guess: it is what the solnix riscv64
+kernel's own trap frame uses (src/riscv/uts/regs.h `struct regs`: r_ra(x1)
+through r_t6(x31), then r_sepc) and it agrees with the NetBSD riscv
+`_NGREG`/`__gregset_t` layout cribbed into
+src/riscv/bsd-ref/netbsd/nb_mcontext.h (_REG_X1==0 .. _REG_X31==30,
+_REG_PC==31). NGREG==32, NFPREG==33 (f0..f31 + fcsr, NetBSD _NFREG).
+
+This is the ONE thing in this patch a real illumos riscv64 <sys/regset.h>
+could order differently; re-verify NGREG and the index order when the solnix
+riscv64 <sys/regset.h> lands, and adjust here.
+
+FP UNION SIZING: the union's flat-u32 view is [[u32; 33]; 2] == 264 bytes, the
+same size as the fpchip_state view (32*u64 + fcsr + pad). It is deliberately
+NOT the x86_64 module's [[u32; 13]; 10]: that is the 520-byte FXSAVE area, and
+copying it here silently inflates mcontext_t from 520 to 1088 bytes -- an ABI
+break against the kernel's ucontext. A libc-side ucontext_t larger than the
+kernel's is how a signal handler smashes the stack, so this is load-bearing.
 
 Elf64_* / dl_phdr_info are arch-independent for any LP64 ELF target and are
 copied verbatim from solarish/x86_64.rs.
+
+VERIFIED: applies to libc 0.2.189; with it applied the five-type probe compiles
+for riscv64gc-unknown-illumos to EM_RISCV rlibs, and a 24-assertion
+compile-time layout check passes (fpchip_state 264, fp_reg_set 264, fpregset_t
+264, mcontext_t 520/align 8, Elf64_Phdr 56, greg_t 8, REG_X1 0, REG_X31 30,
+REG_PC 31, NGREG 32, NFPREG 33, every index in range, psABI aliases, hwcap
+bits). The layout assertions were negative-controlled: substituting the x86
+FXSAVE union view makes them fail, so they are not vacuous.
 
 Apply against libc 0.2.189 (also applies cleanly to 0.2.184-0.2.186; the
 solarish tree has not changed shape in that range).
 
 --- a/src/unix/solarish/mod.rs
 +++ b/src/unix/solarish/mod.rs
-@@ -3047,6 +3047,9 @@ cfg_if! {
+@@ -3049,6 +3049,9 @@
          mod x86_common;
          pub use self::x86_64::*;
          pub use self::x86_common::*;
@@ -48,12 +66,12 @@ solarish tree has not changed shape in that range).
          mod x86_common;
 --- /dev/null
 +++ b/src/unix/solarish/riscv64.rs
-@@ -0,0 +1,150 @@
+@@ -0,0 +1,221 @@
 +//! riscv64 illumos/Solaris machine-dependent definitions.
 +//!
-+//! Mirrors solarish/x86_64.rs for RV64GC: 32 integer gregs + 32 D-extension
-+//! fpregs + fcsr. The Elf64_*/dl_phdr_info block is arch-independent LP64 ELF
-+//! and is identical to the x86_64 module's.
++//! Mirrors solarish/x86_64.rs for RV64GC: 32 integer gregs + 33 D-extension
++//! fpregs (f0..f31 + fcsr). The Elf64_*/dl_phdr_info block is arch-independent
++//! LP64 ELF and is identical to the x86_64 module's.
 +use crate::prelude::*;
 +
 +cfg_if! {
@@ -97,10 +115,16 @@ solarish tree has not changed shape in that range).
 +        pub dlpi_tls_data: *mut c_void,
 +    }
 +
-+    // sys/regset.h -- RV64 D-extension FP state: f0..f31 (64-bit) + fcsr.
++    // sys/regset.h -- RV64 D-extension FP state: f0..f31 (64-bit each) then
++    // fcsr, i.e. NFPREG == 33 slots. Matches the NetBSD riscv __fregset_t
++    // (_NFREG 33: "F0-31, FCSR") cribbed into
++    // src/riscv/bsd-ref/netbsd/nb_mcontext.h.
 +    pub struct __c_anonymous_fpchip_state {
 +        pub fpu_regs: [u64; 32],
 +        pub fpu_fcsr: u32,
++        // Explicit tail pad: keeps the union's two views the same size and the
++        // struct 8-byte aligned, so ucontext_t's size does not depend on
++        // implicit trailing padding.
 +        pub fpu_pad: u32,
 +    }
 +
@@ -108,8 +132,15 @@ solarish tree has not changed shape in that range).
 +        pub fp_reg_set: __c_anonymous_fp_reg_set,
 +    }
 +
-+    // NGREG for riscv64 = 32 (x0..x31; x0 slot carries the PC on illumos,
-+    // matching how the other illumos ports store the trap PC in the gregset).
++    // NGREG for riscv64 == 32. Index order follows the solnix kernel's
++    // riscv64 trap frame (src/riscv/uts/regs.h `struct regs`: x1..x31 then
++    // sepc) and the NetBSD riscv gregset: slots 0..30 are x1..x31 and the
++    // LAST slot (31) is the PC. There is deliberately no slot for x0, which
++    // is hardwired zero on RISC-V.
++    //
++    // This is the ONE thing in this module a real illumos riscv64
++    // <sys/regset.h> could order differently; re-verify NGREG and the index
++    // order when that header lands.
 +    pub struct mcontext_t {
 +        pub gregs: [crate::greg_t; 32],
 +        pub fpregs: fpregset_t,
@@ -135,9 +166,13 @@ solarish tree has not changed shape in that range).
 +}
 +
 +s_no_extra_traits! {
++    // The second view is the flat u32 array illumos exposes for the same
++    // bytes. 33 u64 slots == 66 u32, expressed as [[u32; 33]; 2] so both
++    // union members are exactly 264 bytes. (The x86_64 module's
++    // [[u32; 13]; 10] is the 520-byte FXSAVE view and does NOT carry over.)
 +    pub union __c_anonymous_fp_reg_set {
 +        pub fpchip_state: __c_anonymous_fpchip_state,
-+        pub f_fpregs: [[u32; 16]; 17],
++        pub f_fpregs: [[u32; 33]; 2],
 +    }
 +}
 +
@@ -166,39 +201,81 @@ solarish tree has not changed shape in that range).
 +    }
 +}
 +
-+// sys/regset.h -- gregset indices, RISC-V ABI register names.
-+pub const REG_PC: c_int = 0;
-+pub const REG_RA: c_int = 1;
-+pub const REG_SP: c_int = 2;
-+pub const REG_GP: c_int = 3;
-+pub const REG_TP: c_int = 4;
-+pub const REG_T0: c_int = 5;
-+pub const REG_T1: c_int = 6;
-+pub const REG_T2: c_int = 7;
-+pub const REG_S0: c_int = 8;
-+pub const REG_S1: c_int = 9;
-+pub const REG_A0: c_int = 10;
-+pub const REG_A1: c_int = 11;
-+pub const REG_A2: c_int = 12;
-+pub const REG_A3: c_int = 13;
-+pub const REG_A4: c_int = 14;
-+pub const REG_A5: c_int = 15;
-+pub const REG_A6: c_int = 16;
-+pub const REG_A7: c_int = 17;
-+pub const REG_S2: c_int = 18;
-+pub const REG_S3: c_int = 19;
-+pub const REG_S4: c_int = 20;
-+pub const REG_S5: c_int = 21;
-+pub const REG_S6: c_int = 22;
-+pub const REG_S7: c_int = 23;
-+pub const REG_S8: c_int = 24;
-+pub const REG_S9: c_int = 25;
-+pub const REG_S10: c_int = 26;
-+pub const REG_S11: c_int = 27;
-+pub const REG_T3: c_int = 28;
-+pub const REG_T4: c_int = 29;
-+pub const REG_T5: c_int = 30;
-+pub const REG_T6: c_int = 31;
++// sys/regset.h -- gregset indices. Slots 0..30 are x1..x31 (no x0 slot: it is
++// hardwired zero), slot 31 is the PC. RISC-V ABI names alias the x-numbers.
++pub const REG_X1: c_int = 0;
++pub const REG_X2: c_int = 1;
++pub const REG_X3: c_int = 2;
++pub const REG_X4: c_int = 3;
++pub const REG_X5: c_int = 4;
++pub const REG_X6: c_int = 5;
++pub const REG_X7: c_int = 6;
++pub const REG_X8: c_int = 7;
++pub const REG_X9: c_int = 8;
++pub const REG_X10: c_int = 9;
++pub const REG_X11: c_int = 10;
++pub const REG_X12: c_int = 11;
++pub const REG_X13: c_int = 12;
++pub const REG_X14: c_int = 13;
++pub const REG_X15: c_int = 14;
++pub const REG_X16: c_int = 15;
++pub const REG_X17: c_int = 16;
++pub const REG_X18: c_int = 17;
++pub const REG_X19: c_int = 18;
++pub const REG_X20: c_int = 19;
++pub const REG_X21: c_int = 20;
++pub const REG_X22: c_int = 21;
++pub const REG_X23: c_int = 22;
++pub const REG_X24: c_int = 23;
++pub const REG_X25: c_int = 24;
++pub const REG_X26: c_int = 25;
++pub const REG_X27: c_int = 26;
++pub const REG_X28: c_int = 27;
++pub const REG_X29: c_int = 28;
++pub const REG_X30: c_int = 29;
++pub const REG_X31: c_int = 30;
++pub const REG_PC: c_int = 31;
++
++// ABI register-name aliases (RISC-V psABI).
++pub const REG_RA: c_int = REG_X1;
++pub const REG_SP: c_int = REG_X2;
++pub const REG_GP: c_int = REG_X3;
++pub const REG_TP: c_int = REG_X4;
++pub const REG_T0: c_int = REG_X5;
++pub const REG_T1: c_int = REG_X6;
++pub const REG_T2: c_int = REG_X7;
++pub const REG_S0: c_int = REG_X8;
++pub const REG_FP: c_int = REG_X8;
++pub const REG_S1: c_int = REG_X9;
++pub const REG_A0: c_int = REG_X10;
++pub const REG_A1: c_int = REG_X11;
++pub const REG_A2: c_int = REG_X12;
++pub const REG_A3: c_int = REG_X13;
++pub const REG_A4: c_int = REG_X14;
++pub const REG_A5: c_int = REG_X15;
++pub const REG_A6: c_int = REG_X16;
++pub const REG_A7: c_int = REG_X17;
++pub const REG_S2: c_int = REG_X18;
++pub const REG_S3: c_int = REG_X19;
++pub const REG_S4: c_int = REG_X20;
++pub const REG_S5: c_int = REG_X21;
++pub const REG_S6: c_int = REG_X22;
++pub const REG_S7: c_int = REG_X23;
++pub const REG_S8: c_int = REG_X24;
++pub const REG_S9: c_int = REG_X25;
++pub const REG_S10: c_int = REG_X26;
++pub const REG_S11: c_int = REG_X27;
++pub const REG_T3: c_int = REG_X28;
++pub const REG_T4: c_int = REG_X29;
++pub const REG_T5: c_int = REG_X30;
++pub const REG_T6: c_int = REG_X31;
++
++// fpregset indices: f0..f31 then fcsr (NetBSD _REG_F0 / _REG_FPCSR).
++pub const REG_F0: c_int = 0;
++pub const REG_FPCSR: c_int = 32;
++
++pub const NGREG: usize = 32;
++pub const NFPREG: usize = 33;
 +
 +// sys/auxv_riscv.h analog -- hwcap bits the kernel reports via AT_SUN_HWCAP.
 +// RVV1.0 presence (the K1's vector unit) is AV_RISCV_V.
