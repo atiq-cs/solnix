@@ -335,6 +335,8 @@ fdt_summary(unsigned long dtb)
  */
 
 static int compat_has(const char *data, unsigned int plen, const char *pfx);
+static int compat_is_ns16550_uart(const char *data, unsigned int plen);
+static int compat_is_sdhci_mmc(const char *data, unsigned int plen);
 
 /* struct k1_devs lives in k1.h (shared with uart.c / sdhci.c / startup.c). */
 #include "k1.h"
@@ -420,15 +422,16 @@ fdt_k1_summary(unsigned long dtb, struct k1_devs *out)
 			/* Node classification comes from its compatible list. */
 			if (namecmp(pname, "compatible") == 0) {
 				const char *cd = (const char *)pdata;
-				if (compat_has(cd, plen, "snps,dw-apb-uart")) {
-					cur = 1; d.uart_is_dw = 1;
-					d.uart_shift = 0;
-				} else if (compat_has(cd, plen, "ns16550")) {
+				if (compat_is_ns16550_uart(cd, plen)) {
 					cur = 1;
-				} else if (compat_has(cd, plen,
-				    "snps,dwcmshc-sdhci") ||
-				    compat_has(cd, plen, "sdhci") ||
-				    compat_has(cd, plen, "mmc")) {
+					/*
+					 * reg-shift (read below) carries the
+					 * stride; dw/pxa-class cores use 4-byte
+					 * registers (shift 2).
+					 */
+					d.uart_is_dw = 1;
+					d.uart_shift = 0;
+				} else if (compat_is_sdhci_mmc(cd, plen)) {
 					cur = 2; d.sdhci_present = 1;
 				} else if (compat_has(cd, plen, "riscv,aplic")) {
 					cur = 3; d.aplic_present = 1;
@@ -498,6 +501,67 @@ compat_has(const char *data, unsigned int plen, const char *pfx)
 		i++;		/* skip the NUL */
 	}
 	return (0);
+}
+
+/*
+ * Board-independent device classification. Each SoC spells the same IP with a
+ * different compatible string, so the accepted spellings live in one table per
+ * device class: adding a board is one string, not a new branch at every call
+ * site.
+ *
+ * UART: all of these are 16550-family cores that asy_nsuart.c drives; the
+ * register stride differences are carried by reg-shift/reg-io-width in the DT,
+ * not by the bind string. The SpaceMiT K1 (Milk-V Jupiter) spells its console
+ * "spacemit,pxa-uart" in the vendor BSP and "spacemit,k1-uart" /
+ * "intel,xscale-uart" in mainline - none of which matched before, which would
+ * leave the K1 console unbound (silent boot) even though the driver is
+ * register-compatible.
+ */
+static const char *ns16550_uart_compat[] = {
+	"ns16550a",		/* qemu virt, generic */
+	"ns16550",
+	"snps,dw-apb-uart",	/* DesignWare APB (many RISC-V SoCs) */
+	"spacemit,pxa-uart",	/* K1, vendor BSP spelling */
+	"spacemit,k1-uart",	/* K1, mainline spelling */
+	"intel,xscale-uart",	/* K1, mainline fallback spelling */
+	0
+};
+
+/*
+ * MMC: SDHCI-standard cores (uts/sdhci.c). The K1 is "spacemit,k1-x-sdhci" -
+ * a standard SDHCI core, NOT the Synopsys dw-mmc family, so it binds here and
+ * NOT to the dw-mmc driver.
+ */
+static const char *sdhci_mmc_compat[] = {
+	"spacemit,k1-x-sdhci",	/* K1 (Milk-V Jupiter): eMMC + SD */
+	"snps,dwcmshc-sdhci",
+	"sdhci",
+	"mmc",
+	0
+};
+
+static int
+compat_matches_any(const char *data, unsigned int plen, const char **tbl)
+{
+	unsigned int i;
+
+	for (i = 0; tbl[i] != 0; i++) {
+		if (compat_has(data, plen, tbl[i]))
+			return (1);
+	}
+	return (0);
+}
+
+static int
+compat_is_ns16550_uart(const char *data, unsigned int plen)
+{
+	return (compat_matches_any(data, plen, ns16550_uart_compat));
+}
+
+static int
+compat_is_sdhci_mmc(const char *data, unsigned int plen)
+{
+	return (compat_matches_any(data, plen, sdhci_mmc_compat));
 }
 
 /*
@@ -631,10 +695,10 @@ fdt_attach_drivers(unsigned long dtb)
 				const char *drv = 0;
 				/* virtio-mmio: read device-id later; here bind the
 				 * transport, blk/net distinguished at probe. */
-				if (compat_has(pdata, plen, "ns16550") ||
-				    compat_has(pdata, plen, "ns16550a") ||
-				    compat_has(pdata, plen, "snps,dw-apb-uart"))
+				if (compat_is_ns16550_uart(pdata, plen))
 					drv = "uart";
+				else if (compat_is_sdhci_mmc(pdata, plen))
+					drv = "sdhci";
 				else if (compat_has(pdata, plen, "virtio,mmio"))
 					drv = "virtio-mmio";
 				else if (compat_has(pdata, plen, "riscv,aplic"))
@@ -1035,11 +1099,16 @@ fdt_of_utils_selftest(unsigned long dtb)
 	unsigned int ph = 0, id = 0;
 	int have_reg;
 
-	n = fdt_find_compatible(dtb, "snps,dw-apb-uart");
-	if (n == FDT_NONE)
-		n = fdt_find_compatible(dtb, "ns16550");
+	{
+		unsigned int ci;
+
+		n = FDT_NONE;
+		for (ci = 0; ns16550_uart_compat[ci] != 0 && n == FDT_NONE;
+		    ci++)
+			n = fdt_find_compatible(dtb, ns16550_uart_compat[ci]);
+	}
 	if (n == FDT_NONE) {
-		sbi_console_puts("fdt(of): no dw-apb-uart/ns16550 node in DT\n");
+		sbi_console_puts("fdt(of): no 16550-family uart node in DT\n");
 		return (0);
 	}
 	have_reg = (fdt_node_reg(dtb, n, 0, &base, &size) == 0);

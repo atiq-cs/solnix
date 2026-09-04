@@ -1,38 +1,54 @@
 /dts-v1/;
 
 /*
- * k1.dts — a faithful SUBSET of the SpaceMiT K1 (BananaPi BPI-F3 / Milk-V
- * Jupiter / MuseBook) devicetree, hand-written from the upstream Linux
- * arch/riscv/boot/dts/spacemit/k1.dtsi + k1-x_* board files (R-P14).
+ * k1.dts - a faithful SUBSET of the SpaceMiT K1 devicetree (Milk-V Jupiter /
+ * BananaPi BPI-F3 / MuseBook), re-expressed from the SoC's PUBLISHED register
+ * map (the same public addresses U-Boot/OpenSBI program). NOT a copy of the
+ * Linux source: an independent re-expression of published hardware addresses,
+ * carrying only the nodes solnix's fdt.c must discover.
  *
- * We are NOT copying the Linux source (GPL); this is a re-expressed subset of
- * the SoC's PUBLISHED register map — the same public addresses U-Boot/OpenSBI
- * program — carrying only the nodes solnix's fdt.c must discover to boot:
- *   - the 8-core RVA22+RVV cluster (X60 harts 0..7)
- *   - main memory (K1 boards ship 4/8/16 GiB at PA 0x0)
- *   - the Synopsys DesignWare APB UART (snps,dw-apb-uart, reg-shift=2, 32-bit)
- *   - the SDHCI / eMMC controller (snps,dwcmshc-sdhci)
- *   - the AIA interrupt controllers: APLIC + per-hart IMSIC (S-mode files)
+ * CORRECTED against the authoritative vendor map (SpaceMiT BSP
+ * arch/riscv/boot/dts/spacemit/k1-x.dtsi, cross-checked vs mainline v6.14
+ * k1.dtsi). The previous revision was written before the physical board
+ * existed and was WRONG on four boot-critical points:
  *
- * K1 register bases (public SoC map, matches U-Boot/OpenSBI + Linux dtsi):
- *   UART0        0xd4017000  (dw-apb-uart, 4-byte reg stride, reg-shift=2)
- *   SDHCI/eMMC   0xd4281000
- *   APLIC (S)    0xe0000000  region; S-domain used by the kernel
- *   IMSIC (S)    0xe0008000  per-hart S-mode interrupt files, 4 KiB stride
+ *   node        previous (wrong)         real K1
+ *   ----------  -----------------------  ------------------------------
+ *   intr ctlr   APLIC+IMSIC (AIA)        PLIC (riscv,plic0), ndev=159
+ *   cpus        4 harts                  8 harts (single cluster)
+ *   MMC         snps,dwcmshc-sdhci       spacemit,k1-x-sdhci (3 ctlrs)
+ *   UART bind   snps,dw-apb-uart only    spacemit,pxa-uart (+ aliases)
  *
- * This DTB is compiled with dtc and handed to qemu via `-dtb k1.dtb`, so the
- * SAME kernel that boots qemu-virt now parses a REAL K1 topology. On the
- * physical board U-Boot passes this same shape in a1 (booti a0=hartid,a1=dtb).
+ * Getting these wrong makes every driver bind against the wrong topology, so
+ * this file is the prerequisite for any physical bring-up. The K1 is a PLIC
+ * SoC - solnix already drives PLIC (uts/plic.c); the AIA path (aia.c) is NOT
+ * used on this board. The MMC IP is SDHCI-standard - solnix already has
+ * uts/sdhci.c; the dw-mmc driver (rp59/dwmmc.c) is the WRONG IP for the K1.
+ *
+ * Register bases (public SoC map; see docs/riscv-jupiter-driver-plan.md):
+ *   CCU/RESET      0xd4050000  (+apmu 0xd4282800, apbc 0xd4015000)
+ *   PINCTRL        0xd401e000
+ *   PLIC           0xe0000000  (0x04000000 window, ndev=159)
+ *   CLINT          0xe4000000
+ *   UART0 console  0xd4017000  reg-shift=2 reg-io-width=4   IRQ 42
+ *   SDHCI0/1/2     0xd4280000 / 0xd4280800 / 0xd4281000     IRQ 99/100/101
+ *   GbE emac0/1    0xcac80000 / 0xcac81000                  IRQ 131/133
+ *   USB3 dwc3      0xc0a00000                               IRQ 125
+ *   PCIe0 dbi      0xca000000  atu 0xca300000  cfg 0x8f000000  IRQ 141
+ *   GPU (img,rgx)  0xcac00000                               IRQ 75
+ *
+ * On the physical board U-Boot passes a DTB in a1 (booti a0=hartid a1=dtb);
+ * this subset is what solnix parses when it supplies its own, and what QEMU
+ * gets via -dtb k1.dtb so the same kernel exercises a real K1 topology.
  */
 
 / {
 	#address-cells = <2>;
 	#size-cells = <2>;
-	model = "SpaceMiT K1 (solnix R-P14 subset)";
+	model = "SpaceMiT K1 (solnix subset)";
 	compatible = "spacemit,k1";
 
 	chosen {
-		/* U-Boot fills bootargs / stdout-path on the real board. */
 		stdout-path = "serial0:115200n8";
 	};
 
@@ -43,8 +59,13 @@
 	cpus {
 		#address-cells = <1>;
 		#size-cells = <0>;
-		timebase-frequency = <24000000>;	/* K1 24 MHz s0 timer */
+		timebase-frequency = <24000000>;	/* K1 24 MHz arch timer */
 
+		/*
+		 * EIGHT X60 harts, single cluster. SMP start must bring up all
+		 * 8 (hart 0 boots; 1..7 come up via SBI HSM hart_start).
+		 * rv64imafdcv = RVA22-class + RVV 1.0.
+		 */
 		cpu0: cpu@0 {
 			device_type = "cpu";
 			reg = <0>;
@@ -93,9 +114,61 @@
 				interrupt-controller;
 			};
 		};
+		cpu4: cpu@4 {
+			device_type = "cpu";
+			reg = <4>;
+			compatible = "spacemit,x60", "riscv";
+			riscv,isa = "rv64imafdcv";
+			mmu-type = "riscv,sv39";
+			cpu4_intc: interrupt-controller {
+				#interrupt-cells = <1>;
+				compatible = "riscv,cpu-intc";
+				interrupt-controller;
+			};
+		};
+		cpu5: cpu@5 {
+			device_type = "cpu";
+			reg = <5>;
+			compatible = "spacemit,x60", "riscv";
+			riscv,isa = "rv64imafdcv";
+			mmu-type = "riscv,sv39";
+			cpu5_intc: interrupt-controller {
+				#interrupt-cells = <1>;
+				compatible = "riscv,cpu-intc";
+				interrupt-controller;
+			};
+		};
+		cpu6: cpu@6 {
+			device_type = "cpu";
+			reg = <6>;
+			compatible = "spacemit,x60", "riscv";
+			riscv,isa = "rv64imafdcv";
+			mmu-type = "riscv,sv39";
+			cpu6_intc: interrupt-controller {
+				#interrupt-cells = <1>;
+				compatible = "riscv,cpu-intc";
+				interrupt-controller;
+			};
+		};
+		cpu7: cpu@7 {
+			device_type = "cpu";
+			reg = <7>;
+			compatible = "spacemit,x60", "riscv";
+			riscv,isa = "rv64imafdcv";
+			mmu-type = "riscv,sv39";
+			cpu7_intc: interrupt-controller {
+				#interrupt-cells = <1>;
+				compatible = "riscv,cpu-intc";
+				interrupt-controller;
+			};
+		};
 	};
 
-	/* K1 boards: RAM at PA 0x0. Model 2 GiB here (the qemu default we boot). */
+	/*
+	 * K1 boards: RAM at PA 0x0. The Jupiter ships 4/8/16 GiB; U-Boot passes
+	 * the real size on hardware. 2 GiB modelled here (the QEMU default we
+	 * boot with -dtb) - the kernel reads the actual reg from the live DTB.
+	 */
 	memory@0 {
 		device_type = "memory";
 		reg = <0x0 0x00000000 0x0 0x80000000>;	/* 2 GiB @ 0x0 */
@@ -108,62 +181,201 @@
 		ranges;
 
 		/*
-		 * Synopsys DesignWare APB UART. 8250/16550-compatible core but
-		 * with 32-bit registers on a 4-byte stride: reg-shift=2,
-		 * reg-io-width=4. This is the K1 console. fdt.c binds the "uart"
-		 * driver on compatible="snps,dw-apb-uart" and reads reg-shift.
+		 * Console UART. 16550-family core with 32-bit registers on a
+		 * 4-byte stride (reg-shift=2, reg-io-width=4) - solnix's
+		 * ns16550 driver (asy_nsuart.c) is register-compatible. The K1
+		 * bind string is SpaceMiT's, NOT snps,dw-apb-uart: the vendor
+		 * BSP uses spacemit,pxa-uart, mainline uses spacemit,k1-uart /
+		 * intel,xscale-uart. All are listed so the same DTB parses
+		 * whichever string the live board's U-Boot hands us.
 		 */
 		uart0: serial@d4017000 {
-			compatible = "snps,dw-apb-uart";
+			compatible = "spacemit,pxa-uart", "spacemit,k1-uart",
+			             "intel,xscale-uart", "snps,dw-apb-uart";
 			reg = <0x0 0xd4017000 0x0 0x100>;
 			reg-shift = <2>;
 			reg-io-width = <4>;
 			clock-frequency = <14857000>;
-			interrupt-parent = <&aplic>;
+			interrupt-parent = <&plic>;
 			interrupts = <42>;
 			status = "okay";
 		};
 
 		/*
-		 * SDHCI / eMMC controller (Synopsys DesignWare mobile storage
-		 * host controller). This is where the K1 root filesystem lives
-		 * (microSD on BPI-F3, eMMC on MuseBook). fdt.c discovers it and
-		 * R-P14 does a register-level probe.
+		 * SDHCI controllers - SDHCI-STANDARD register model (NOT dw-mmc).
+		 * Three instances: 0xd4280000 (eMMC), 0xd4280800, 0xd4281000
+		 * (SD/microSD). Root lives on eMMC (Jupiter) or microSD.
+		 * solnix's uts/sdhci.c is register-compatible; binding is by
+		 * "spacemit,k1-x-sdhci". Each needs its SDH clocks ungated and
+		 * SDH resets deasserted via the CCU shim before probe.
 		 */
-		sdhci0: mmc@d4281000 {
-			compatible = "snps,dwcmshc-sdhci";
-			reg = <0x0 0xd4281000 0x0 0x300>;
-			interrupt-parent = <&aplic>;
-			interrupts = <101>;
+		sdhci0: mmc@d4280000 {
+			compatible = "spacemit,k1-x-sdhci";
+			reg = <0x0 0xd4280000 0x0 0x300>;
+			interrupt-parent = <&plic>;
+			interrupts = <99>;
 			bus-width = <8>;
 			max-frequency = <200000000>;
+			non-removable;			/* eMMC */
+			status = "okay";
+		};
+
+		sdhci2: mmc@d4281000 {
+			compatible = "spacemit,k1-x-sdhci";
+			reg = <0x0 0xd4281000 0x0 0x300>;
+			interrupt-parent = <&plic>;
+			interrupts = <101>;
+			bus-width = <4>;
+			max-frequency = <200000000>;
+			status = "okay";		/* SD / microSD */
+		};
+
+		/*
+		 * 1GbE MAC - SpaceMiT-custom (spacemit,k1x-emac), NOT a Synopsys
+		 * DWMAC/stmmac, so there is no BSD driver to crib. The PHY is a
+		 * Motorcomm YT8531 (standard clause-22 MDIO, already in BSD mii).
+		 * The k1x APMU config block (ctrl-reg/dline-reg for RGMII mode +
+		 * delay line) is a board-sensitive quirk needing a live
+		 * calibration knob.
+		 */
+		emac0: ethernet@cac80000 {
+			compatible = "spacemit,k1x-emac";
+			reg = <0x0 0xcac80000 0x0 0x420>;
+			interrupt-parent = <&plic>;
+			interrupts = <131>;
 			status = "okay";
 		};
 
 		/*
-		 * AIA: per-hart S-mode IMSIC interrupt files (msi-parent target)
-		 * + the APLIC that routes wired SoC lines (uart, sdhci) as MSIs.
+		 * PCIe0 root complex - Synopsys DesignWare core with K1 glue
+		 * (dbi/atu/cfg windows, Gen2 x1). Gates NVMe on the M.2 slot.
+		 * The combphy (shared IP with USB3) init has no BSD crib.
 		 */
-		imsic: interrupt-controller@e0008000 {
-			compatible = "riscv,imsics";
-			reg = <0x0 0xe0008000 0x0 0x4000>;	/* 4 harts x 4 KiB */
-			interrupt-controller;
-			#interrupt-cells = <0>;
-			msi-controller;
-			riscv,num-ids = <255>;
-			interrupts-extended = <&cpu0_intc 9>,
-			                      <&cpu1_intc 9>,
-			                      <&cpu2_intc 9>,
-			                      <&cpu3_intc 9>;
+		pcie0: pcie@ca000000 {
+			compatible = "k1x,dwc-pcie";
+			reg = <0x0 0xca000000 0x0 0x00100000>,	/* dbi    */
+			      <0x0 0xca300000 0x0 0x00010000>,	/* atu    */
+			      <0x0 0x8f000000 0x0 0x00100000>;	/* config */
+			reg-names = "dbi", "atu", "config";
+			interrupt-parent = <&plic>;
+			interrupts = <141>;
+			max-link-speed = <2>;
+			num-lanes = <1>;
+			num-viewport = <8>;
+			device_type = "pci";
+			/*
+			 * A PCI bridge node must carry the PCI-standard cell
+			 * counts (3 address cells: phys.hi/mid/lo, 2 size) and
+			 * the ranges that map bus space to CPU space, or a
+			 * conforming parser rejects/mis-reads it. 32-bit
+			 * non-prefetchable MEM window at 0x90000000 (below the
+			 * 0xc0000000 SoC register region).
+			 */
+			#address-cells = <3>;
+			#size-cells = <2>;
+			bus-range = <0x0 0xff>;
+			ranges = <0x02000000 0x0 0x90000000
+			          0x0 0x90000000 0x0 0x08000000>;
+			status = "okay";
 		};
 
-		aplic: interrupt-controller@e0000000 {
-			compatible = "riscv,aplic";
-			reg = <0x0 0xe0000000 0x0 0x8000>;
+		/*
+		 * USB3 - Synopsys DWC3 core under a K1 wrapper. Off the boot
+		 * path; the motivating uses are a USB keyboard/mouse for the
+		 * desktop and a USB-Ethernet fallback while the custom MAC is
+		 * unported.
+		 */
+		usb3_0: usb@c0a00000 {
+			compatible = "snps,dwc3";
+			reg = <0x0 0xc0a00000 0x0 0x10000>;
+			interrupt-parent = <&plic>;
+			interrupts = <125>;
+			dr_mode = "host";
+			status = "okay";
+		};
+
+		/*
+		 * GPU - Imagination PowerVR BXE-2-32 (BVNC 36.29.52.182). No
+		 * open kernel driver path exists: no BSD crib, the Linux powervr
+		 * DRM + Mesa driver are young and Linux-only, and the vendor
+		 * stack needs signed firmware. Declared (disabled) so the node
+		 * is discoverable/reportable only - the desktop renders in
+		 * SOFTWARE (llvmpipe) and the GPU is not driven. See
+		 * docs/riscv-jupiter-driver-plan.md section 7.
+		 */
+		gpu: gpu@cac00000 {
+			compatible = "img,rgx";
+			reg = <0x0 0xcac00000 0x0 0x10000>;
+			interrupt-parent = <&plic>;
+			interrupts = <75>;
+			status = "disabled";
+		};
+
+		/*
+		 * CCU (clock) + reset share one register block. SpaceMiT-custom
+		 * with no BSD reference: solnix drives it with a minimal
+		 * enable-only MMIO shim (ungate a clock, deassert a reset) per
+		 * device, NOT a port of the Linux clock framework.
+		 */
+		ccu: clock-controller@d4050000 {
+			compatible = "spacemit,k1x-clock";
+			reg = <0x0 0xd4050000 0x0 0x1000>,	/* mpmu/ccu */
+			      <0x0 0xd4282800 0x0 0x0400>,	/* apmu     */
+			      <0x0 0xd4015000 0x0 0x1000>,	/* apbc     */
+			      <0x0 0xd4090000 0x0 0x1000>;	/* apbs     */
+			reg-names = "ccu", "apmu", "apbc", "apbs";
+			#clock-cells = <1>;
+			status = "okay";
+
+			/*
+			 * Reset shares the CCU register block, so it is a child
+			 * of the clock-controller rather than a sibling at the
+			 * same unit-address (two nodes cannot share one).
+			 */
+			reset: reset-controller {
+				compatible = "spacemit,k1x-reset";
+				#reset-cells = <1>;
+				status = "okay";
+			};
+		};
+
+		/*
+		 * CLINT - per-hart software/timer interrupts. OpenSBI owns it in
+		 * M-mode; the node documents the base for completeness.
+		 */
+		clint: timer@e4000000 {
+			compatible = "spacemit,k1-clint", "riscv,clint0";
+			reg = <0x0 0xe4000000 0x0 0x10000>;
+			interrupts-extended = <&cpu0_intc 3>, <&cpu0_intc 7>,
+			                      <&cpu1_intc 3>, <&cpu1_intc 7>,
+			                      <&cpu2_intc 3>, <&cpu2_intc 7>,
+			                      <&cpu3_intc 3>, <&cpu3_intc 7>,
+			                      <&cpu4_intc 3>, <&cpu4_intc 7>,
+			                      <&cpu5_intc 3>, <&cpu5_intc 7>,
+			                      <&cpu6_intc 3>, <&cpu6_intc 7>,
+			                      <&cpu7_intc 3>, <&cpu7_intc 7>;
+		};
+
+		/*
+		 * PLIC - the K1's interrupt controller (NOT AIA/APLIC+IMSIC).
+		 * 159 wired sources; two contexts per hart (M-mode 11, S-mode 9)
+		 * across all 8 harts. solnix's uts/plic.c drives this directly.
+		 */
+		plic: interrupt-controller@e0000000 {
+			compatible = "spacemit,k1-plic", "riscv,plic0";
+			reg = <0x0 0xe0000000 0x0 0x04000000>;
 			interrupt-controller;
-			#interrupt-cells = <2>;
-			msi-parent = <&imsic>;
-			riscv,num-sources = <159>;
+			#interrupt-cells = <1>;
+			#address-cells = <0>;
+			riscv,ndev = <159>;
+			interrupts-extended = <&cpu0_intc 11>, <&cpu0_intc 9>,
+			                      <&cpu1_intc 11>, <&cpu1_intc 9>,
+			                      <&cpu2_intc 11>, <&cpu2_intc 9>,
+			                      <&cpu3_intc 11>, <&cpu3_intc 9>,
+			                      <&cpu4_intc 11>, <&cpu4_intc 9>,
+			                      <&cpu5_intc 11>, <&cpu5_intc 9>,
+			                      <&cpu6_intc 11>, <&cpu6_intc 9>,
+			                      <&cpu7_intc 11>, <&cpu7_intc 9>;
 		};
 	};
 };
