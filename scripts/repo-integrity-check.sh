@@ -42,6 +42,9 @@ echo "== repo integrity =="
 echo "-- build-log content in tracked scripts --"
 while IFS= read -r f; do
 	[ -f "$f" ] || continue
+	# Skip self: this file necessarily contains the marker strings it searches
+	# for, so it would always match its own pattern.
+	[ "$f" = "scripts/repo-integrity-check.sh" ] && continue
 	n=$(grep -acE 'Updating git repository|Locking [0-9]+ packages|Adding [a-z0-9_-]+ v[0-9]|^ *Compiling [a-z]|^ *Downloaded [a-z]|ninja: build stopped|The Meson build system' "$f" 2>/dev/null)
 	if [ "${n:-0}" -ge 3 ]; then
 		note "FAIL $f looks like build-log output ($n markers), not a script"
