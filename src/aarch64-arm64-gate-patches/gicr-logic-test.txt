@@ -1,12 +1,27 @@
-ngicc=64 distinct_bases=64 regions=4 stride=0x20000
+MADT: ngicc=64 distinct_bases=64 -> regions=4 stride=0x20000
   region[0] base=0xbc00080000 size=0x200000 ncpu=16
   region[1] base=0xbd00080000 size=0x200000 ncpu=16
   region[2] base=0xbe00080000 size=0x200000 ncpu=16
   region[3] base=0xbf00080000 size=0x200000 ncpu=16
+hardware model: 64 redistributors, TYPER.Last set at: 0xbc00260000 0xbd00260000 0xbe00260000 0xbf00260000
+
 reg cells = 20 (1 GICD + 4 GICR pairs), array cap = 68
-gicthree walker finds 64 redistributors; max_ncpus=64 -> PASS
-OLD single-region walk finds 128 (observed 0x10=16)
+
+OLD single merged region base=0xbc00080000 size=0x1000000
+OLD walker finds 16 (metal observed 0x10 = 16) -> REPRODUCED
+
+NEW 4-region walker finds 64 redistributors (phantom frames=0)
+VERIFY3U(64 >= max_ncpus 64) -> PASS
+
+per-region walk (Last must fire at each region's end):
+  region[0] -> 16 redistributors, phantom=0, last addr=0xbc00260000 Last=1
+  region[1] -> 16 redistributors, phantom=0, last addr=0xbd00260000 Last=1
+  region[2] -> 16 redistributors, phantom=0, last addr=0xbe00260000 Last=1
+  region[3] -> 16 redistributors, phantom=0, last addr=0xbf00260000 Last=1
+
+both-models check: region size alone caps each region at 16, so total=64 regardless of Last
+
 single-cpu: regions=1 stride=0x20000 size=0x20000 OK
 no-bases: regions=0 OK (emitter falls back)
 
-ALL CHECKS PASSED
+ALL CHECKS PASSED (old path reproduces metal's 16; new path yields 64)

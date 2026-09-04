@@ -1,0 +1,83 @@
+sig=b'APIC' length=5268 rev=5 oem=b'AMAZON'
+subtable counts: {'GICC': 64, 'GICMSI': 1, 'GICITS': 4}
+
+ngicc = 64   standalone GICR subtables = 0
+
+distinct GicrBaseAddress values among GICC: 64
+  min=0xbc00080000 max=0xbf00260000
+  [ 0] 0xbc00080000  delta=0x0
+  [ 1] 0xbc000a0000  delta=0x20000
+  [ 2] 0xbc000c0000  delta=0x20000
+  [ 3] 0xbc000e0000  delta=0x20000
+  [ 4] 0xbc00100000  delta=0x20000
+  [ 5] 0xbc00120000  delta=0x20000
+  [ 6] 0xbc00140000  delta=0x20000
+  [ 7] 0xbc00160000  delta=0x20000
+  [ 8] 0xbc00180000  delta=0x20000
+  [ 9] 0xbc001a0000  delta=0x20000
+  [10] 0xbc001c0000  delta=0x20000
+  [11] 0xbc001e0000  delta=0x20000
+  [12] 0xbc00200000  delta=0x20000
+  [13] 0xbc00220000  delta=0x20000
+  [14] 0xbc00240000  delta=0x20000
+  [15] 0xbc00260000  delta=0x20000
+  [16] 0xbd00080000  delta=0xffe20000
+  [17] 0xbd000a0000  delta=0x20000
+  [18] 0xbd000c0000  delta=0x20000
+  [19] 0xbd000e0000  delta=0x20000
+  [20] 0xbd00100000  delta=0x20000
+  [21] 0xbd00120000  delta=0x20000
+  [22] 0xbd00140000  delta=0x20000
+  [23] 0xbd00160000  delta=0x20000
+  [24] 0xbd00180000  delta=0x20000
+  [25] 0xbd001a0000  delta=0x20000
+  [26] 0xbd001c0000  delta=0x20000
+  [27] 0xbd001e0000  delta=0x20000
+  [28] 0xbd00200000  delta=0x20000
+  [29] 0xbd00220000  delta=0x20000
+  [30] 0xbd00240000  delta=0x20000
+  [31] 0xbd00260000  delta=0x20000
+  [32] 0xbe00080000  delta=0xffe20000
+  [33] 0xbe000a0000  delta=0x20000
+  [34] 0xbe000c0000  delta=0x20000
+  [35] 0xbe000e0000  delta=0x20000
+  [36] 0xbe00100000  delta=0x20000
+  [37] 0xbe00120000  delta=0x20000
+  [38] 0xbe00140000  delta=0x20000
+  [39] 0xbe00160000  delta=0x20000
+  [40] 0xbe00180000  delta=0x20000
+  [41] 0xbe001a0000  delta=0x20000
+  [42] 0xbe001c0000  delta=0x20000
+  [43] 0xbe001e0000  delta=0x20000
+  [44] 0xbe00200000  delta=0x20000
+  [45] 0xbe00220000  delta=0x20000
+  [46] 0xbe00240000  delta=0x20000
+  [47] 0xbe00260000  delta=0x20000
+  [48] 0xbf00080000  delta=0xffe20000
+  [49] 0xbf000a0000  delta=0x20000
+  [50] 0xbf000c0000  delta=0x20000
+  [51] 0xbf000e0000  delta=0x20000
+  [52] 0xbf00100000  delta=0x20000
+  [53] 0xbf00120000  delta=0x20000
+  [54] 0xbf00140000  delta=0x20000
+  [55] 0xbf00160000  delta=0x20000
+  [56] 0xbf00180000  delta=0x20000
+  [57] 0xbf001a0000  delta=0x20000
+  [58] 0xbf001c0000  delta=0x20000
+  [59] 0xbf001e0000  delta=0x20000
+  [60] 0xbf00200000  delta=0x20000
+  [61] 0xbf00220000  delta=0x20000
+  [62] 0xbf00240000  delta=0x20000
+  [63] 0xbf00260000  delta=0x20000
+
+unique deltas: ['0x20000', '0xffe20000']
+span=0x3001e0000  ngicc*0x20000=0x800000  ngicc*0x40000=0x1000000
+contiguous-at-uniform-stride: False
+
+first 4 + last 2 GICC entries (cpuif, uid, flags, gicc_base, gicr_base, mpidr, len):
+  cpuif=  0 uid=  0 fl=0x1 base=0xbc00000000 gicr=0xbc00080000 mpidr=0x0 len=80
+  cpuif=  1 uid=  1 fl=0x1 base=0xbc00000000 gicr=0xbc000a0000 mpidr=0x10000 len=80
+  cpuif=  2 uid=  2 fl=0x1 base=0xbc00000000 gicr=0xbc000c0000 mpidr=0x20000 len=80
+  cpuif=  3 uid=  3 fl=0x1 base=0xbc00000000 gicr=0xbc000e0000 mpidr=0x30000 len=80
+  cpuif= 62 uid= 62 fl=0x1 base=0xbc00000000 gicr=0xbf00240000 mpidr=0x3000e0000 len=80
+  cpuif= 63 uid= 63 fl=0x1 base=0xbc00000000 gicr=0xbf00260000 mpidr=0x3000f0000 len=80
