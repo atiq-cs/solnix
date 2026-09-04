@@ -1,222 +1,139 @@
-    Updating git repository `https://github.com/pop-os//cosmic-protocols`
-    Updating git repository `https://github.com/smithay/smithay`
-     Locking 16 packages to latest Rust 1.97.1 compatible versions
-      Adding build_helpers v0.14.0 (/root/libcosmic/iced/build_helpers)
-      Adding cosmic-config v1.0.0 (/root/libcosmic/cosmic-config)
-      Adding cosmic-config-derive v1.0.0 (/root/libcosmic/cosmic-config-derive)
-      Adding cosmic-theme v1.0.0 (/root/libcosmic/cosmic-theme)
-      Adding iced v0.14.0 (/root/libcosmic/iced)
-      Adding iced_core v0.14.0 (/root/libcosmic/iced/core)
-      Adding iced_debug v0.14.0 (/root/libcosmic/iced/debug)
-      Adding iced_futures v0.14.0 (/root/libcosmic/iced/futures)
-      Adding iced_graphics v0.14.0 (/root/libcosmic/iced/graphics)
-      Adding iced_program v0.14.0 (/root/libcosmic/iced/program)
-      Adding iced_renderer v0.14.0 (/root/libcosmic/iced/renderer)
-      Adding iced_runtime v0.14.0 (/root/libcosmic/iced/runtime)
-      Adding iced_tiny_skia v0.14.0 (/root/libcosmic/iced/tiny_skia)
-      Adding iced_wgpu v0.14.0 (/root/libcosmic/iced/wgpu)
-      Adding iced_widget v0.14.2 (/root/libcosmic/iced/widget)
-      Adding libcosmic v1.0.0 (/root/libcosmic)
- Downloading crates ...
-  Downloaded cc v1.2.65
-  Downloaded arrayvec v0.7.7
-  Downloaded defmt v1.1.0
-  Downloaded defmt-macros v1.1.0
-  Downloaded pxfm v0.1.29
-  Downloaded zerocopy-derive v0.8.52
-  Downloaded zerocopy v0.8.52
-   Compiling proc-macro2 v1.0.106
-   Compiling quote v1.0.46
-   Compiling unicode-ident v1.0.24
-   Compiling libc v0.2.186
-   Compiling cfg-if v1.0.4
-   Compiling serde_core v1.0.228
-   Compiling autocfg v1.5.1
-   Compiling log v0.4.33
-   Compiling smallvec v1.15.2
-   Compiling version_check v0.9.5
-   Compiling rustix v1.1.4
-   Compiling once_cell v1.21.4
-   Compiling pin-project-lite v0.2.17
-   Compiling pkg-config v0.3.33
-   Compiling shlex v2.0.1
-   Compiling find-msvc-tools v0.1.9
-   Compiling libm v0.2.16
-   Compiling libloading v0.8.9
-   Compiling memchr v2.8.2
-   Compiling cc v1.2.65
-   Compiling thiserror v2.0.18
-   Compiling scoped-tls v1.0.1
-   Compiling dlib v0.5.3
-   Compiling downcast-rs v1.2.1
-   Compiling slab v0.4.12
-   Compiling wayland-client v0.31.14
-   Compiling tracing-core v0.1.36
-   Compiling futures-core v0.3.32
-   Compiling async-task v4.7.1
-   Compiling memoffset v0.9.1
-   Compiling wayland-sys v0.31.11
-   Compiling num-traits v0.2.19
-   Compiling serde v1.0.228
-   Compiling quick-xml v0.39.4
-   Compiling thiserror v1.0.69
-   Compiling futures-io v0.3.32
-   Compiling siphasher v1.0.3
-   Compiling cfg_aliases v0.2.1
-   Compiling cursor-icon v1.2.0
-   Compiling smithay-client-toolkit v0.20.0
-   Compiling xcursor v0.3.10
-   Compiling raw-window-handle v0.6.2
-   Compiling errno v0.3.14
-   Compiling memmap2 v0.9.11
-   Compiling rustc-hash v2.1.2
-   Compiling build_helpers v0.14.0 (/root/libcosmic/iced/build_helpers)
-   Compiling syn v2.0.118
-   Compiling bytes v1.12.0
-   Compiling as-raw-xcb-connection v1.0.1
-   Compiling rand_core v0.6.4
-   Compiling phf_shared v0.11.3
-   Compiling x11rb-protocol v0.13.2
-   Compiling futures-sink v0.3.32
-   Compiling fastrand v2.4.1
-   Compiling rand v0.8.6
-   Compiling generic-array v0.14.7
-   Compiling palette v0.7.6
-   Compiling by_address v1.2.1
-   Compiling stable_deref_trait v1.2.1
-   Compiling futures-channel v0.3.32
-   Compiling web-time v1.1.0
-   Compiling wayland-scanner v0.31.10
-   Compiling wayland-backend v0.3.15
-   Compiling smol_str v0.3.6
-   Compiling futures-task v0.3.32
-   Compiling unicode-segmentation v1.13.3
-   Compiling fast-srgb8 v1.0.0
-   Compiling lilt v0.8.1
-   Compiling crossbeam-utils v0.8.21
-   Compiling glam v0.25.0
-   Compiling arrayvec v0.7.7
-   Compiling phf_generator v0.11.3
-   Compiling simd-adler32 v0.3.9
-   Compiling core_maths v0.1.1
-   Compiling parking v2.2.1
-   Compiling adler2 v2.0.1
-   Compiling slotmap v1.1.1
-   Compiling crc32fast v1.5.0
-   Compiling miniz_oxide v0.8.9
-   Compiling zerocopy v0.8.52
-   Compiling winnow v1.0.3
-   Compiling iced_core v0.14.0 (/root/libcosmic/iced/core)
-   Compiling equivalent v1.0.2
-   Compiling rustix v0.38.44
-   Compiling hashbrown v0.17.1
-   Compiling toml_datetime v1.1.1+spec-1.1.0
-   Compiling approx v0.5.1
-   Compiling concurrent-queue v2.5.0
-   Compiling ttf-parser v0.25.1
-   Compiling tinyvec_macros v0.1.1
-   Compiling flate2 v1.1.9
-   Compiling getrandom v0.4.3
-   Compiling rand_core v0.10.1
-   Compiling roxmltree v0.20.0
-   Compiling event-listener v5.4.1
-   Compiling bitflags v2.13.0
-   Compiling tinyvec v1.11.0
-   Compiling indexmap v2.14.0
-   Compiling fdeflate v0.3.7
-   Compiling self_cell v1.2.2
-   Compiling unicode-script v0.5.8
-   Compiling typenum v1.20.1
-   Compiling event-listener-strategy v0.5.4
-   Compiling toml_parser v1.1.2+spec-1.1.0
-   Compiling fontconfig-parser v0.5.8
-   Compiling futures-lite v2.6.1
-   Compiling signal-hook-registry v1.4.8
-   Compiling unicode-bidi v0.3.18
-   Compiling aho-corasick v1.1.4
-   Compiling async-io v2.6.0
-   Compiling toml_edit v0.25.12+spec-1.1.0
-   Compiling regex-syntax v0.8.11
-   Compiling drm-sys v0.6.1
-   Compiling sys-locale v0.3.2
-   Compiling zeno v0.3.3
-   Compiling drm-fourcc v2.2.0
-   Compiling proc-macro-crate v3.5.0
-   Compiling synstructure v0.13.2
-   Compiling yazi v0.2.1
-   Compiling float-cmp v0.9.0
-   Compiling block-buffer v0.10.4
-   Compiling crypto-common v0.1.7
-   Compiling strict-num v0.1.1
-   Compiling fontdb v0.23.0
-   Compiling socket2 v0.6.4
-   Compiling mio v1.2.1
-   Compiling same-file v1.0.6
-   Compiling endi v1.1.1
-   Compiling parking_lot_core v0.9.12
-   Compiling byteorder-lite v0.1.0
-   Compiling arrayref v0.3.9
-   Compiling rangemap v1.7.1
-   Compiling unicode-linebreak v0.1.5
-   Compiling linebender_resource_handle v0.1.1
-   Compiling walkdir v2.5.0
-   Compiling digest v0.10.7
-   Compiling polling v3.11.0
-   Compiling gethostname v1.1.0
-   Compiling euclid v0.22.14
-   Compiling x11rb v0.13.2
-   Compiling tiny-xlib v0.2.5
-   Compiling regex-automata v0.4.14
-   Compiling uncased v0.9.10
-   Compiling atomic-waker v1.1.2
-   Compiling serde_derive v1.0.228
-   Compiling bytemuck_derive v1.10.2
-   Compiling thiserror-impl v2.0.18
-   Compiling tracing-attributes v0.1.31
-   Compiling displaydoc v0.2.6
-   Compiling thiserror-impl v1.0.69
-   Compiling zerofrom-derive v0.1.7
-   Compiling wayland-server v0.31.13
-   Compiling wayland-csd-frame v0.3.0
-   Compiling yoke-derive v0.8.2
-   Compiling phf_macros v0.11.3
-   Compiling bytemuck v1.25.0
-   Compiling tracing v0.1.44
-   Compiling palette_derive v0.7.6
-   Compiling futures-macro v0.3.32
-   Compiling zerovec-derive v0.11.3
-   Compiling xkeysym v0.2.1
-   Compiling calloop v0.14.4
-   Compiling clipboard_x11 v0.4.2 (https://github.com/pop-os/window_clipboard.git?tag=sctk-0.20#f68595ee)
-   Compiling zerofrom v0.1.8
-   Compiling phf v0.11.3
-   Compiling font-types v0.11.3
-   Compiling zerocopy-derive v0.8.52
-   Compiling wayland-protocols v0.32.13
-   Compiling wayland-cursor v0.31.14
-   Compiling yoke v0.8.3
-   Compiling futures-util v0.3.32
-   Compiling enumflags2_derive v0.7.12
-   Compiling xkbcommon v0.8.0
-   Compiling calloop-wayland-source v0.4.1
-   Compiling tinystr v0.8.3
-   Compiling zerovec v0.11.6
-   Compiling read-fonts v0.39.2
-   Compiling read-fonts v0.37.0
-   Compiling tokio-macros v2.7.0
-   Compiling tiny-skia-path v0.11.4
-   Compiling pxfm v0.1.29
-   Compiling cpufeatures v0.2.17
-   Compiling bitflags v1.3.2
-   Compiling zune-core v0.5.1
-   Compiling png v0.17.16
-   Compiling tokio v1.52.3
-   Compiling sha2 v0.10.9
-   Compiling enumflags2 v0.7.12
-   Compiling zvariant_utils v3.4.0
-   Compiling unic-langid-impl v0.9.6
-   Compiling unic-langid v0.9.6
-   Compiling zune-jpeg v0.5.15
-   Compiling zvariant_derive v5.12.0
-   Compiling lyon_geom v1.0.19
-   Compiling async-signal v0.2.14
+#!/bin/sh
+# metadata-shim.sh — replaces /usr/lib/metadata in the solnix (OpenIndiana-derived)
+# cloud image on EC2 Nitro (ena NIC).
+#
+# WHY: the stock OI metadata-agent is an IMDSv1 client; this account enforces
+# IMDSv2, so the agent 401s and hangs to its 300s timeout, gating
+# svc:/milestone/network. We swap it for this shim, which brings up DHCP on the
+# ena NIC and enables ssh, then exits 0 so the milestones proceed.
+#
+# Nitro/ena: single DHCP addrobj only (ena0/dhcp). One addrobj, no mtu twiddling
+# (the ena driver defaults MTU to 1500 = ETHERMTU).
+#
+# COLD-BOOT DHCP RACE: the persisted /etc/ipadm/ipadm.conf bakes in the ena0/dhcp
+# addrobj, so svc:/network/ip-interface-management starts DHCP on it at boot,
+# BEFORE this shim runs — the real lease is driven by the SMF network stack, not
+# by this shim's create-addr (which just reports "already exists"). On a cold
+# Nitro boot the OFFER and ACK are received (proven) but the first
+# configure_v4_lease can lose a timing race and the addrobj comes up with no
+# lease. RECOVERY: re-request the lease IN PLACE with `ipadm refresh-addr`, which
+# renews WITHOUT destroying the working persisted addrobj (delete-addr would tear
+# down the very config the SMF stack already bound and make the race permanent).
+# Loop a few times after the stack is warm; a fresh transaction almost always
+# binds without a reboot. Only if the in-place loop is exhausted do we fall back
+# to a BOUNDED reboot (counter file, not a one-shot mark) so a stubborn instance
+# still recovers unattended without ever looping forever.
+exec >>/var/log/solnix-metadata.log 2>&1
+set -x
+echo "=== solnix shim $(date) ==="
+
+# Wait for the NIC to attach.
+i=0; NIC=""
+while [ $i -lt 45 ]; do
+  NIC=$(dladm show-phys -p -o LINK 2>/dev/null | head -1)
+  [ -n "$NIC" ] && break
+  i=$((i+1)); sleep 2
+done
+echo "waited ${i}x2s; NIC='$NIC'"
+
+lease_ok() {
+  # true if NIC/dhcp holds a real v4 lease (not empty/?/0.0.0.0)
+  a=$(ipadm show-addr -p -o ADDR "$NIC/dhcp" 2>/dev/null)
+  case "$a" in
+    ""|\?|0.0.0.0*) return 1 ;;
+    *) echo "lease=$a"; return 0 ;;
+  esac
+}
+
+if [ -n "$NIC" ]; then
+  ipadm create-if "$NIC" 2>&1 || true
+  # Drop only a STALE Xen-era ena0/v4 addrobj (never the persisted ena0/dhcp).
+  ipadm delete-addr "$NIC/v4" 2>/dev/null || true
+  # Ensure the dhcp addrobj exists (persisted config normally already made it;
+  # this only matters on an image without the baked ipadm.conf). NEVER delete it.
+  if ! ipadm show-addr -p -o ADDROBJ "$NIC/dhcp" >/dev/null 2>&1; then
+    ipadm create-addr -T dhcp -w 30 "$NIC/dhcp" 2>&1 || true
+  fi
+
+  # Enable ssh + dns NOW (not after the DHCP loop) so the instant a lease binds
+  # the box is reachable -- no extra serialized delay on the recovery path.
+  [ -s /etc/resolv.conf ] || printf 'nameserver 169.254.169.253\nnameserver 8.8.8.8\n' > /etc/resolv.conf
+  [ -e /etc/nsswitch.conf ] || cp /etc/nsswitch.dns /etc/nsswitch.conf 2>/dev/null || true
+  svcadm enable -s svc:/network/dns/client 2>&1 || true
+  svcadm enable -s svc:/network/ssh:default 2>&1 || true
+
+  # Wait for the SMF-stack-driven DHCP to bind (widened watchdog for the heavy image).
+  j=0
+  while [ $j -lt 30 ]; do
+    lease_ok && break
+    j=$((j+1)); sleep 2
+  done
+
+  # In-place re-request loop: NON-DESTRUCTIVELY force a fresh DHCP transaction
+  # (keeps the working persisted addrobj -- delete-addr would tear down the config
+  # the SMF stack bound and make the race permanent). Each pass tries two gentle
+  # levers: refresh-addr (renew), then an interface bounce (down/up drives a fresh
+  # DISCOVER). The OFFER/ACK are proven to arrive on the ena Rx path, so a fresh
+  # in-place transaction after the stack is warm binds -- we AVOID rebooting
+  # entirely on the DHCP path, because a reboot re-rolls the (separate) rare
+  # early-boot kernel-init hang. Many patient in-place passes >> one reboot.
+  k=0
+  while [ $k -lt 8 ] && ! lease_ok; do
+    k=$((k+1))
+    echo "no lease yet; in-place DHCP recovery pass $k $(date)"
+    ipadm refresh-addr "$NIC/dhcp" 2>&1 || true
+    ipadm disable-if -t "$NIC" 2>&1 || true
+    sleep 1
+    ipadm enable-if -t "$NIC" 2>&1 || true
+    j=0
+    while [ $j -lt 15 ]; do
+      lease_ok && break
+      j=$((j+1)); sleep 2
+    done
+  done
+
+  # Last resort ONLY after ~8 in-place passes (~5min) have all failed: a single
+  # bounded reboot (counter, max 1). In-place recovery is strongly preferred; the
+  # reboot exists purely so a truly wedged network stack still self-heals
+  # unattended. Kept to 1 to minimize exposure to the early-boot hang on re-roll.
+  if ! lease_ok; then
+    CNT=/var/lib/solnix-dhcp-reboots
+    mkdir -p /var/lib
+    n=$(cat "$CNT" 2>/dev/null || echo 0)
+    case "$n" in ''|*[!0-9]*) n=0 ;; esac
+    if [ "$n" -lt 1 ]; then
+      echo "$((n+1))" > "$CNT"
+      echo "in-place recovery exhausted; single bounded reboot $((n+1))/1 $(date)"
+      sync
+      /usr/sbin/reboot
+    else
+      echo "reboot budget (1) exhausted; giving up cleanly $(date)"
+    fi
+  else
+    rm -f /var/lib/solnix-dhcp-reboots 2>/dev/null || true
+  fi
+fi
+
+# DNS/ssh already enabled above (before the DHCP wait). Re-assert idempotently
+# in case the NIC path was skipped, then finish so milestones proceed.
+[ -s /etc/resolv.conf ] || printf 'nameserver 169.254.169.253\nnameserver 8.8.8.8\n' > /etc/resolv.conf
+svcadm enable -s svc:/network/ssh:default 2>&1 || true
+hostname solnix-builder-build 2>/dev/null || true
+
+# Grow the root pool to the whole slice. A cloud image is authored at a small size
+# (~1.9GiB), so on a larger EBS volume the pool would otherwise leave the extra
+# space unused and the image runs out of room almost immediately. This cannot be
+# done from the image-build helper: the vdev is whole_disk=1, and expanding it
+# requires relabeling the slice, which OpenZFS-on-Linux refuses ("unable to read
+# disk capacity") -- only the illumos ZFS/EFI label code does it. So it happens
+# here, on the first boot that reaches this shim. `online -e` is a no-op once the
+# vdev already covers its device, so this is idempotent and costs nothing on
+# subsequent boots. Deliberately LAST: network bring-up must never wait on it.
+for P in $(zpool list -H -o name 2>/dev/null); do
+  DEV=$(zpool status "$P" 2>/dev/null | awk -v p="$P" '$1==p{f=1;next} f&&NF>=5{print $1;exit}')
+  [ -n "$DEV" ] && zpool online -e "$P" "$DEV" 2>&1
+done
+zpool list 2>&1
+
+echo "=== shim done $(date) ==="
+exit 0
