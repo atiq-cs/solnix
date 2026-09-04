@@ -50,6 +50,16 @@ DPU/HDMI            spacemit,dpu / saturn (board display overlay dtsi, custom)
 subset of the *vendor* `k1-x.dtsi` (PLIC not AIA, 8 harts, `spacemit,k1-x-sdhci`,
 the emac/dwc3/pcie/ccu nodes). Everything below assumes the corrected DTB.
 
+> **STATUS: DONE.** `src/riscv/uts/k1.dts` + `k1_dtb.h` now carry the corrected
+> topology, and `fdt.c` device classification is table-driven
+> (`ns16550_uart_compat[]` / `sdhci_mmc_compat[]`) so the K1's UART and SDHCI
+> bind strings match. Verified: dtc compiles with zero warnings; the DTB
+> decompiles to 8 harts + `riscv,plic0` (ndev 159) + `spacemit,k1-x-sdhci` x2 +
+> all four UART spellings + emac/pcie/dwc3/gpu/ccu; the embedded `k1_dtb.h`
+> blob round-trips; `fdt.c` cross-compiles clean for riscv64. So P0's
+> console-bind half (§1-console) is also DONE -- what remains at P0 is the
+> clocks/reset shim (§6), which needs live hardware to verify.
+
 ---
 
 ## 1. Will the R-P60 fw_payload even boot on the Jupiter?
