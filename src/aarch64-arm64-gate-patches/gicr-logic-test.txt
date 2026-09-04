@@ -1,0 +1,12 @@
+ngicc=64 distinct_bases=64 regions=4 stride=0x20000
+  region[0] base=0xbc00080000 size=0x200000 ncpu=16
+  region[1] base=0xbd00080000 size=0x200000 ncpu=16
+  region[2] base=0xbe00080000 size=0x200000 ncpu=16
+  region[3] base=0xbf00080000 size=0x200000 ncpu=16
+reg cells = 20 (1 GICD + 4 GICR pairs), array cap = 68
+gicthree walker finds 64 redistributors; max_ncpus=64 -> PASS
+OLD single-region walk finds 128 (observed 0x10=16)
+single-cpu: regions=1 stride=0x20000 size=0x20000 OK
+no-bases: regions=0 OK (emitter falls back)
+
+ALL CHECKS PASSED

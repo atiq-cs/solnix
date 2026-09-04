@@ -1,0 +1,353 @@
+diff --git a/src/aarch64-arm64-gate-patches/dboot_synth_fdt.c b/src/aarch64-arm64-gate-patches/dboot_synth_fdt.c
+index a7ab5eeaec..db7c9fb20a 100644
+--- a/src/aarch64-arm64-gate-patches/dboot_synth_fdt.c
++++ b/src/aarch64-arm64-gate-patches/dboot_synth_fdt.c
+@@ -219,18 +219,238 @@ synth_find_table(const char *sig)
+  * is optional (present on QEMU virt and Graviton).  The redistributor base
+  * falls back to the per-CPU GICC GicrBaseAddress if no standalone GICR
+  * subtable is present.
++ *
++ * Redistributor topology: a GICv3 redistributor is 2 MMIO frames (4 with
++ * VLPIS).  gicthree.c walks each declared region from its base, advancing a
++ * cursor frame-by-frame, and stops on either GICR_TYPER_Last or region end.
++ * It therefore needs EVERY region the platform presents, since the last
++ * redistributor of each physical block sets GICR_TYPER_Last and terminates
++ * that region's walk.
++ *
++ * QEMU virt puts all redistributors in one contiguous block, but real
++ * hardware need not: AWS Graviton (c6g.metal, 64 cpus) spreads them over 4
++ * blocks of 16 at 0xbc00080000/0xbd00080000/0xbe00080000/0xbf00080000 (a
++ * 0x20000 stride within a block, but a ~4GiB jump between blocks).  Merging
++ * those into one region only ever finds the first 16 -- GICR_TYPER_Last on
++ * the 16th ends the walk -- so we coalesce the per-cpu bases into maximal
++ * constant-stride runs and emit one region per run.
+  */
++#define	SYNTH_GICR_MAX_REGIONS	16
++#define	SYNTH_GICR_FRAME	0x10000ULL	/* one GICR MMIO frame */
++
+ typedef struct synth_gic {
+ 	uint64_t	gicd;
+ 	uint64_t	gicr;
+ 	uint64_t	gicr_len;
+ 	uint64_t	its;
+ 	uint32_t	ngicc;		/* count of GICC (per-cpu) entries */
++	/*
++	 * Per-cpu GICR bases, coalesced into contiguous regions.  Only used
++	 * on the GICC-fallback path (no standalone GICR subtable), which is
++	 * what real ACPI firmware presents.
++	 */
++	uint64_t	gicr_base[SYNTH_GICR_MAX_REGIONS];
++	uint64_t	gicr_size[SYNTH_GICR_MAX_REGIONS];
++	uint32_t	ngicr_regions;
++	uint64_t	gicr_stride;	/* derived per-cpu GICR stride */
+ 	bool		have_gicd;
+ 	bool		have_gicr;
+ 	bool		have_its;
+ } synth_gic_t;
+ 
++/*
++ * Collected per-cpu GICR bases, kept sorted ascending as they are inserted.
++ * Sized for NCPU since there is one GICR per cpu.
++ */
++static uint64_t synth_gicr_cpu_base[NCPU];
++static uint32_t synth_gicr_ncpu_base;
++
++/* Insertion sort: keep the base list ascending and deduplicated. */
++static void
++synth_gicr_insert(uint64_t base)
++{
++	uint32_t i, j;
++
++	if (base == 0 || synth_gicr_ncpu_base >= NCPU)
++		return;
++
++	for (i = 0; i < synth_gicr_ncpu_base; i++) {
++		if (synth_gicr_cpu_base[i] == base)
++			return;			/* duplicate */
++		if (synth_gicr_cpu_base[i] > base)
++			break;
++	}
++	for (j = synth_gicr_ncpu_base; j > i; j--)
++		synth_gicr_cpu_base[j] = synth_gicr_cpu_base[j - 1];
++	synth_gicr_cpu_base[i] = base;
++	synth_gicr_ncpu_base++;
++}
++
++/*
++ * Coalesce the collected per-cpu GICR bases into maximal runs of constant
++ * stride, one FDT reg region per run.  The stride is derived from the data
++ * (the smallest positive delta between adjacent bases): 0x20000 for a
++ * 2-frame redistributor, 0x40000 when VLPIS adds the vector frames.
++ */
++static void
++synth_gicr_coalesce(synth_gic_t *g)
++{
++	uint64_t stride, d;
++	uint32_t i, n;
++
++	if (synth_gicr_ncpu_base == 0)
++		return;
++
++	stride = 0;
++	for (i = 1; i < synth_gicr_ncpu_base; i++) {
++		d = synth_gicr_cpu_base[i] - synth_gicr_cpu_base[i - 1];
++		if (stride == 0 || d < stride)
++			stride = d;
++	}
++	/* Single cpu, or a degenerate map: assume a 2-frame redistributor. */
++	if (stride == 0)
++		stride = SYNTH_GICR_FRAME * 2;
++	g->gicr_stride = stride;
++
++	g->ngicr_regions = 0;
++	g->gicr_base[0] = synth_gicr_cpu_base[0];
++	n = 1;
++	for (i = 1; i < synth_gicr_ncpu_base; i++) {
++		if (synth_gicr_cpu_base[i] - synth_gicr_cpu_base[i - 1] ==
++		    stride) {
++			n++;
++			continue;
++		}
++		/* Run ended: close this region out. */
++		g->gicr_size[g->ngicr_regions] = (uint64_t)n * stride;
++		g->ngicr_regions++;
++		if (g->ngicr_regions >= SYNTH_GICR_MAX_REGIONS) {
++			/*
++			 * Out of region slots.  Everything left is dropped;
++			 * gicthree.c will VERIFY on the short count rather
++			 * than silently mis-map, which is the right failure.
++			 */
++			dboot_printf("dboot: synth FDT: more than %d GICR "
++			    "regions; truncating\n", SYNTH_GICR_MAX_REGIONS);
++			return;
++		}
++		g->gicr_base[g->ngicr_regions] = synth_gicr_cpu_base[i];
++		n = 1;
++	}
++	g->gicr_size[g->ngicr_regions] = (uint64_t)n * stride;
++	g->ngicr_regions++;
++}
++
++/*
++ * Emit the GICR topology to the console.
++ *
++ * dboot_printf() goes through bcons, which on the real-hardware quiet-loader
++ * path is not wired to the SPCR UART -- its output never reached the Graviton
++ * serial console.  The mechanism that DOES print (proven by the [A6KCON:*]
++ * markers) is a raw store to the SPCR UART data register, so use that: the MMU
++ * is off in dboot, making the SPCR base directly addressable.  Falls back to
++ * dboot_printf when no SPCR UART was found (e.g. QEMU virt, where
++ * dboot_printf works anyway).
++ */
++static void
++synth_uart_putc(volatile uint32_t *dr, char c)
++{
++	/*
++	 * Bounded TXFF wait before each byte.  The short [A6KCON:*] markers
++	 * could store blindly (14 bytes fits the 32-byte PL011 TX FIFO), but
++	 * this diagnostic emits a few hundred bytes and would overflow the
++	 * FIFO and drop characters.  The wait is CAPPED because Graviton's
++	 * PL011 does not drive TXFF/TXFE the way SBSA implies (the same quirk
++	 * the boot_uart FR-poll fix handles) -- an unbounded spin here would
++	 * hang the boot instead of printing.  UARTFR is at offset 0x18, i.e.
++	 * dr[6] in uint32_t units; TXFF is bit 5.
++	 */
++	uint32_t cap;
++
++	for (cap = 0; (dr[6] & (1 << 5)) != 0 && cap < 1000000u; cap++)
++		;
++	*dr = (uint32_t)(uint8_t)c;
++}
++
++static void
++synth_uart_puts(volatile uint32_t *dr, const char *s)
++{
++	while (*s != '\0') {
++		if (*s == '\n')
++			synth_uart_putc(dr, '\r');
++		synth_uart_putc(dr, *s++);
++	}
++}
++
++static void
++synth_uart_puthex(volatile uint32_t *dr, uint64_t v)
++{
++	static const char hex[] = "0123456789abcdef";
++	char buf[17];
++	int i = 0, started = 0, sh;
++
++	for (sh = 60; sh >= 0; sh -= 4) {
++		unsigned nyb = (unsigned)((v >> sh) & 0xf);
++		if (nyb != 0 || started || sh == 0) {
++			buf[i++] = hex[nyb];
++			started = 1;
++		}
++	}
++	buf[i] = '\0';
++	synth_uart_puts(dr, buf);
++}
++
++static void
++synth_gicr_diag(struct xboot_info *bi, const synth_gic_t *g, uint32_t nr)
++{
++	volatile uint32_t *dr;
++	uint32_t i;
++
++	if (bi == NULL || bi->bi_bsvc_uart_mmio_base == 0) {
++		dboot_printf("[A6GIC] ngicc=%u nbase=%u regions=%u "
++		    "stride=0x%llx gicr=0x%llx\n", g->ngicc,
++		    synth_gicr_ncpu_base, nr,
++		    (unsigned long long)g->gicr_stride,
++		    (unsigned long long)g->gicr);
++		return;
++	}
++
++	dr = (volatile uint32_t *)(uintptr_t)bi->bi_bsvc_uart_mmio_base;
++
++	synth_uart_puts(dr, "[A6GIC] ngicc=");
++	synth_uart_puthex(dr, g->ngicc);
++	synth_uart_puts(dr, " distinct_gicr_base=");
++	synth_uart_puthex(dr, synth_gicr_ncpu_base);
++	synth_uart_puts(dr, " regions=");
++	synth_uart_puthex(dr, nr);
++	synth_uart_puts(dr, " stride=0x");
++	synth_uart_puthex(dr, g->gicr_stride);
++	synth_uart_puts(dr, "\n");
++
++	for (i = 0; i < nr; i++) {
++		synth_uart_puts(dr, "[A6GIC] region[");
++		synth_uart_puthex(dr, i);
++		synth_uart_puts(dr, "] base=0x");
++		synth_uart_puthex(dr, g->gicr_base[i]);
++		synth_uart_puts(dr, " size=0x");
++		synth_uart_puthex(dr, g->gicr_size[i]);
++		synth_uart_puts(dr, " ncpu=0x");
++		synth_uart_puthex(dr, g->gicr_stride ?
++		    g->gicr_size[i] / g->gicr_stride : 0);
++		synth_uart_puts(dr, "\n");
++	}
++
++	/* The raw per-cpu bases: min/max bracket the spread. */
++	if (synth_gicr_ncpu_base > 0) {
++		synth_uart_puts(dr, "[A6GIC] gicr_base min=0x");
++		synth_uart_puthex(dr, synth_gicr_cpu_base[0]);
++		synth_uart_puts(dr, " max=0x");
++		synth_uart_puthex(dr,
++		    synth_gicr_cpu_base[synth_gicr_ncpu_base - 1]);
++		synth_uart_puts(dr, "\n");
++	}
++}
++
+ static void
+ synth_scan_madt(synth_gic_t *g)
+ {
+@@ -249,6 +469,8 @@ synth_scan_madt(synth_gic_t *g)
+ 	item = (const ACPI_SUBTABLE_HEADER *)
+ 	    ((uintptr_t)madt + sizeof (*madt));
+ 
++	synth_gicr_ncpu_base = 0;
++
+ 	while (item < end && item->Length != 0) {
+ 		switch (item->Type) {
+ 		case ACPI_MADT_TYPE_GENERIC_DISTRIBUTOR: {
+@@ -293,6 +515,13 @@ synth_scan_madt(synth_gic_t *g)
+ 				uint64_t base;
+ 				memcpy(&base, &c->GicrBaseAddress,
+ 				    sizeof (base));
++				/*
++				 * Collect EVERY per-cpu base; they are
++				 * coalesced into regions after the walk.
++				 * gicr stays the lowest base (the region-0
++				 * base, also the node-name address).
++				 */
++				synth_gicr_insert(base);
+ 				if (base != 0 &&
+ 				    (g->gicr == 0 || base < g->gicr)) {
+ 					g->gicr = base;
+@@ -308,6 +537,18 @@ synth_scan_madt(synth_gic_t *g)
+ 		item = (const ACPI_SUBTABLE_HEADER *)
+ 		    ((uintptr_t)item + item->Length);
+ 	}
++
++	/*
++	 * A standalone GICR subtable describes its own region directly; the
++	 * GICC-fallback path has to derive regions from the per-cpu bases.
++	 */
++	if (g->have_gicr && g->gicr_len != 0) {
++		g->gicr_base[0] = g->gicr;
++		g->gicr_size[0] = g->gicr_len;
++		g->ngicr_regions = 1;
++	} else {
++		synth_gicr_coalesce(g);
++	}
+ }
+ 
+ /*
+@@ -812,28 +1053,49 @@ dboot_synth_fdt(struct xboot_info *bi)
+ 	(void) fdt_property(fdt, "interrupt-controller", NULL, 0);
+ 	(void) fdt_property_cell(fdt, "#address-cells", 2);
+ 	(void) fdt_property_cell(fdt, "#size-cells", 2);
+-	(void) fdt_property_cell(fdt, "#redistributor-regions", 1);
++	(void) fdt_property_cell(fdt, "#redistributor-regions",
++	    gic.ngicr_regions ? gic.ngicr_regions : 1);
+ 	(void) fdt_property(fdt, "ranges", NULL, 0);
+ 	(void) fdt_property_cell(fdt, "phandle", SYNTH_PHANDLE_GIC);
+ 	{
+-		/* GICD (default 0x10000) and GICR windows. */
+-		fdt32_t reg[8];
++		/*
++		 * reg = <GICD len> then ONE address/size pair per
++		 * redistributor region.  gicthree.c maps reg index 0 as the
++		 * distributor and 1..#redistributor-regions as the
++		 * redistributor regions, taking each region's size from the
++		 * regspec, so the pair count must match the property exactly.
++		 */
++		fdt32_t reg[4 * (1 + SYNTH_GICR_MAX_REGIONS)];
+ 		uint64_t gicd_len = 0x10000;
+-		reg[0] = cpu_to_fdt32((uint32_t)(gic.gicd >> 32));
+-		reg[1] = cpu_to_fdt32((uint32_t)(gic.gicd & 0xffffffff));
+-		reg[2] = cpu_to_fdt32((uint32_t)(gicd_len >> 32));
+-		reg[3] = cpu_to_fdt32((uint32_t)(gicd_len & 0xffffffff));
+-		reg[4] = cpu_to_fdt32((uint32_t)(gic.gicr >> 32));
+-		reg[5] = cpu_to_fdt32((uint32_t)(gic.gicr & 0xffffffff));
+-		if (gic.have_gicr && gic.gicr_len == 0)
+-			gic.gicr_len = (uint64_t)(gic.ngicc ?
+-			    gic.ngicc : 1) * 0x40000;
+-		dboot_printf("[A6GIC] ngicc=%u gicr=0x%llx len=0x%llx\n",
+-		    gic.ngicc, (unsigned long long)gic.gicr,
+-		    (unsigned long long)gic.gicr_len);
+-		reg[6] = cpu_to_fdt32((uint32_t)(gic.gicr_len >> 32));
+-		reg[7] = cpu_to_fdt32((uint32_t)(gic.gicr_len & 0xffffffff));
+-		(void) fdt_property(fdt, "reg", reg, sizeof (reg));
++		uint32_t i, nr, np;
++
++		nr = gic.ngicr_regions;
++		if (nr == 0) {
++			/* No per-cpu bases: fall back to one sized region. */
++			gic.gicr_base[0] = gic.gicr;
++			gic.gicr_size[0] = gic.gicr_len != 0 ? gic.gicr_len :
++			    SYNTH_GICR_FRAME * 2;
++			nr = 1;
++		}
++
++		np = 0;
++		reg[np++] = cpu_to_fdt32((uint32_t)(gic.gicd >> 32));
++		reg[np++] = cpu_to_fdt32((uint32_t)(gic.gicd & 0xffffffff));
++		reg[np++] = cpu_to_fdt32((uint32_t)(gicd_len >> 32));
++		reg[np++] = cpu_to_fdt32((uint32_t)(gicd_len & 0xffffffff));
++		for (i = 0; i < nr; i++) {
++			reg[np++] = cpu_to_fdt32(
++			    (uint32_t)(gic.gicr_base[i] >> 32));
++			reg[np++] = cpu_to_fdt32(
++			    (uint32_t)(gic.gicr_base[i] & 0xffffffff));
++			reg[np++] = cpu_to_fdt32(
++			    (uint32_t)(gic.gicr_size[i] >> 32));
++			reg[np++] = cpu_to_fdt32(
++			    (uint32_t)(gic.gicr_size[i] & 0xffffffff));
++		}
++		synth_gicr_diag(bi, &gic, nr);
++		(void) fdt_property(fdt, "reg", reg,
++		    np * sizeof (fdt32_t));
+ 	}
+ 
+ 	if (gic.have_its) {
