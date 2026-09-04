@@ -24,13 +24,32 @@ other, which is what makes the plan parallelisable.
 
 ## The two real gates
 
-**Gate A -- the illumos riscv64 userland (libc + crt).** The critical path, weeks
-to months. But it has a *finite, measured* interface: Rust std needs exactly
-**twelve** illumos-libc symbols (`___errno`, `__posix_getpwuid_r`, the `__xnet_*`
-socket entries, `__xnet_getaddrinfo`, `getexecname`, `pset_info`,
-`stack_getbounds`) plus the illumos-only libraries. solnix already has a
-hand-grown riscv64 libc that boots a real OS (R-P63: init/shell/27 coreutils, 484
-PASS), so this is growth against a known target, not a from-scratch port.
+**Gate A -- the illumos riscv64 userland (libc + crt + a socket layer).** The
+critical path. Measured properly in `docs/riscv64-libc-rust-abi-gap.md`, which
+*corrected* the earlier 12-symbol framing:
+
+* The ABI surface is **sixteen** symbols, not twelve (`__major`/`__minor`/
+  `__makedev` come from the libc crate; `__tls_get_addr` was masked by glibc's
+  `ld.so` during cross-linking and only appears on a native link).
+* **Six of them are not libc at all** -- the `__xnet_*` set lives in **libsocket**.
+  This is a libsocket port as much as a libc port.
+* 8 of the 10 "required libraries" are **link-satisfying only** (`libposix4` is a
+  compatlink to `librt`, itself a whole-library filter on libc). Only libsocket and
+  libnsl need real code.
+* **8 of the 16 are already implemented for real** (`src/riscv/libc/port/illumos_abi.c`,
+  every entry tagged `[REAL]`/`[REAL/1THREAD]`/`[ENOSYS]`), and a real `println!()`
+  binary links against them and gets far enough into std's init to call
+  `stack_getbounds` successfully.
+* **The true blocker underneath is bigger than libc: the kernel has no socket layer
+  and no IP stack** (21 syscalls, none of illumos's nine socket calls; `vionet.c`
+  sends one hand-built ARP frame). All seven `__xnet_*` are MISSING-AT-KERNEL, so
+  they cannot honestly be implemented before that exists.
+
+**And one kernel change is on the critical path right now: the `tp` collision.**
+RISC-V reserves `tp` for the userland thread pointer; our kernel repurposes it as
+the hart index (`uts/proc.c` does `mv tp, hartid`). Rust TLS cannot work until `tp`
+belongs to userland and the hart id moves to a CSR. Cheap to fix now, expensive
+after more code depends on it -- see `docs/riscv64-crt-rust-startup.md`.
 
 **Gate B -- scanout (pixels on the monitor).** Needs **no hardware**: QEMU
 virtio-gpu exercises the whole path, and our R-P64 `virtio_gpu.c` already does the
