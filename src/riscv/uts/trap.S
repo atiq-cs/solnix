@@ -55,10 +55,21 @@ _trap_entry:
 	/* Save all integer registers x1..x31 (x0 is hardwired zero, skip). */
 	sd	x1,  TF_RA(sp)
 	/*
+	 * x5 (t0) MUST be saved before anything uses t0 as scratch, and the TF_SP
+	 * computation below needs a scratch register. Saving it here rather than in
+	 * register order is deliberate: doing the csrr first would overwrite the
+	 * interrupted code's t0 and then store the WRONG value into TF_T0, so the
+	 * restore path would hand the interrupted code a corrupted t0. That
+	 * silently miscompiles any interruptible loop that keeps a live value in
+	 * t0 -- it presents as a wild pointer dereference far from the real cause.
+	 */
+	sd	x5,  TF_T0(sp)
+	/*
 	 * x2 = sp: recover the ORIGINAL (interrupted) sp. It is currently in
 	 * sscratch (we swapped it there on entry): for the U case sscratch holds
 	 * the user sp; for the S case sscratch is 0 and the real prior sp was
 	 * sp+TF_SIZE. Read sscratch: if 0 (S-mode) use sp+TF_SIZE, else use it.
+	 * t0 is free to clobber now that x5 is in the frame.
 	 */
 	csrr	t0, sscratch
 	bnez	t0, 2f
@@ -67,7 +78,6 @@ _trap_entry:
 	sd	t0,  TF_SP(sp)
 	sd	x3,  TF_GP(sp)
 	sd	x4,  TF_TP(sp)
-	sd	x5,  TF_T0(sp)
 	sd	x6,  TF_T1(sp)
 	sd	x7,  TF_T2(sp)
 	sd	x8,  TF_S0(sp)

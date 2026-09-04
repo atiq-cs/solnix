@@ -875,6 +875,29 @@ fdt_node_prop(unsigned long dtb, fdt_node_t node_off, const char *name,
 }
 
 /*
+ * fdt_node_prop_str -- read a string property. Returns 1 and points *out at the
+ * NUL-terminated bytes in the DTB (no copy) on success, 0 if absent.
+ *
+ * Used to read `riscv,isa` / `compatible` off cpu@0 so the kernel can pick a
+ * cache-maintenance backend that this CPU actually implements: both Zicbom and
+ * the T-Head custom ops trap as illegal instructions on a part that lacks them,
+ * so the choice must come from the DT rather than from a build flag.
+ */
+int
+fdt_node_prop_str(unsigned long dtb, fdt_node_t node_off, const char *name,
+    const char **out)
+{
+	const unsigned char *d;
+	unsigned int l;
+
+	if (!fdt_node_prop(dtb, node_off, name, &d, &l) || l == 0)
+		return (0);
+	if (out != 0)
+		*out = (const char *)d;
+	return (1);
+}
+
+/*
  * fdt_node_prop_u32 -- read a single-cell (u32) property, defaulting `def' if
  * absent. of_utils's of_get_prop_int (without the parent-walk; #*-cells uses
  * the dedicated helpers below).

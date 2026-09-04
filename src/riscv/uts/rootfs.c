@@ -289,6 +289,7 @@ static const struct vfile vfiles[] = {
 	{ "/bin/hello", hello_elf, 0 },
 	{ "/bin/echo",  echo_elf,  0 },
 	{ "/bin/cat",   cat_elf,   0 },
+	{ "/bin/fbtest", fbtest_elf, 0 },	/* R-P64 scanout-seam proof */
 };
 #define NVFILES (int)(sizeof (vfiles) / sizeof (vfiles[0]))
 
@@ -308,6 +309,7 @@ vfiles_init(void)
 	vfile_len[3] = hello_elf_len;
 	vfile_len[4] = echo_elf_len;
 	vfile_len[5] = cat_elf_len;
+	vfile_len[6] = fbtest_elf_len;
 	vfiles_ready = 1;
 }
 

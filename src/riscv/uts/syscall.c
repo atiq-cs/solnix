@@ -70,6 +70,12 @@ extern long proc_pipe(int *ufds);
 extern long proc_dup2(int oldfd, int newfd);
 extern long sys_sync(void);
 extern long sys_remount(void);
+/*
+ * The scanout seam (docs/riscv64-scanout-seam.md): ioctl carries the
+ * FBIOGMODE/FBIOFLUSH contract and mmap hands the compositor the framebuffer.
+ */
+extern long proc_ioctl(int fd, int cmd, unsigned long arg);
+extern long proc_mmap(int fd, unsigned long len);
 
 /* trap.c: clock-tick preemption count (R-P9 gate 5). */
 extern volatile unsigned long preempt_count;
@@ -89,6 +95,8 @@ extern long copyout(const void *kaddr, void *uaddr, unsigned long n);
 #define	SYS_lseek	62
 #define	SYS_read	63
 #define	SYS_write	64
+#define	SYS_ioctl	29
+#define	SYS_mmap	222
 #define	SYS_exit	93
 #define	SYS_kill	129
 #define	SYS_rt_sigaction 134
@@ -227,6 +235,24 @@ syscall_trap(struct regs *tf)
 		break;
 	case SYS_sync:
 		ret = sys_sync();
+		break;
+	case SYS_ioctl:
+		/* a0=fd, a1=request, a2=arg (a user pointer the driver
+		 * copyin/copyouts). The scanout node's FBIOGMODE/FBIOFLUSH. */
+		ret = proc_ioctl((int)tf->r_a0, (int)tf->r_a1, tf->r_a2);
+		break;
+	case SYS_mmap:
+		/*
+		 * a0=addr (ignored: the driver picks the VA), a1=len,
+		 * a2=prot, a3=flags, a4=fd, a5=offset. Only a device mapping of
+		 * /dev/fb is supported, and only at offset 0 -- offset 0 must map
+		 * pixel (0,0) per the seam contract, and there is nothing else in
+		 * the buffer to map.
+		 */
+		if (tf->r_a5 != 0)
+			ret = -22 /* EINVAL */;
+		else
+			ret = proc_mmap((int)tf->r_a4, tf->r_a1);
 		break;
 	case SYS_remount:
 		ret = sys_remount();

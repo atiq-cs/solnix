@@ -51,7 +51,16 @@ extern const char *rootdev_name(void);
 
 /* R-P12: writable data disk + on-disk SNFS + FDT device summary. */
 extern int vioblk_data_attach(void);
-extern int snfs_init(void);
+/* cmo.c: pick the cache-maintenance backend for this boot from the DT. */
+extern int cmo_init(unsigned long dtb);
+extern int cmo_selftest(void);
+/*
+ * R-P64 scanout seam: the virtio-gpu display device (virtio_gpu.c) and the
+ * /dev/fb node over it (fb.c) that a software compositor mmaps and flushes.
+ */
+extern int virtio_gpu_init(void);
+extern int fb_init(void);
+extern int fb_selftest(void);extern int snfs_init(void);
 extern int fdt_summary(unsigned long dtb);
 /* R-P13: FDT-driven driver attach + physical-hart SMP proof. */
 extern int fdt_attach_drivers(unsigned long dtb);
@@ -127,6 +136,17 @@ startup_memlist(unsigned long dtb)
 	unsigned long size = PHYS_RAM_SIZE_FALLBACK;
 
 	sbi_console_puts("\n[startup] startup_memlist: physical memory\n");
+
+	/*
+	 * Choose the cache-maintenance backend FIRST, before any driver can touch
+	 * a DMA path. Both candidate instruction sets (Zicbom, T-Head custom) trap
+	 * as illegal instructions on a CPU that lacks them, so until this runs the
+	 * only safe behavior is the plain ordering fence -- which is exactly what
+	 * cmo_backend's default gives, but a wrong choice later is fatal, so make
+	 * the choice as early as the DTB is available.
+	 */
+	(void) cmo_init(dtb);
+	(void) cmo_selftest();
 
 	if (fdt_get_memory(dtb, &base, &size)) {
 		sbi_console_puts("[startup] FDT /memory: base ");
@@ -303,6 +323,29 @@ startup_root(void)
 	(void) virtio_discover();
 	(void) vioblk_attach();
 	(void) vionet_attach();
+
+	/*
+	 * The scanout seam (docs/riscv64-scanout-seam.md): bring up the display
+	 * device, then promote it to the /dev/fb node a software compositor mmaps.
+	 * Ordered here, after virtio_discover, because virtio_gpu_init does its own
+	 * MMIO-slot probe and needs the transport window already known-good; and
+	 * before single_user, because the userland the seam serves starts there.
+	 *
+	 * A boot with no display device is not a failure: virtio_gpu_init returns
+	 * 0, fb_init reports the node was not created, and the kernel continues to
+	 * a serial console exactly as before.
+	 */
+	if (virtio_gpu_init()) {
+		sbi_console_puts("[R-P64] virtio-gpu scanout bring-up OK "
+		    "(GET_DISPLAY_INFO -> CREATE_2D -> ATTACH_BACKING -> "
+		    "SET_SCANOUT)\n");
+		(void) fb_init();
+		(void) fb_selftest();
+	} else {
+		sbi_console_puts("[R-P64] no virtio-gpu device; /dev/fb not "
+		    "created (serial console only)\n");
+	}
+
 	(void) mountroot();
 	/* R-P12: writable on-disk FS (FDT summary already printed at memlist). */
 	(void) vioblk_data_attach();

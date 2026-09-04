@@ -320,6 +320,35 @@ pipe_gate(void)
 }
 
 /*
+ * scanout_gate -- R-P64. Run /bin/fbtest, the userland proof of the /dev/fb
+ * scanout seam (open + FBIOGMODE + mmap + paint + FBIOFLUSH). Forked so a
+ * failure in the test cannot take init down, and so the seam is exercised from
+ * a separately exec'd address space, exactly as a compositor would.
+ */
+static void
+scanout_gate(void)
+{
+	int pid, st = 0;
+
+	puts("\n--- R-P64 gate: /dev/fb scanout seam from userland ---\n");
+	pid = fork();
+	if (pid == 0) {
+		char *av[2];
+
+		av[0] = "fbtest";
+		av[1] = 0;
+		execve("/bin/fbtest", av, 0);
+		puts("scanout: exec /bin/fbtest FAILED\n");
+		_exit(1);
+	}
+	if (pid < 0) {
+		puts("scanout: fork FAILED\n");
+		return;
+	}
+	waitpid(pid, &st, 0);
+}
+
+/*
  * ondisk_fs_gate — R-P12 gate 2. Real on-disk writable FS over vioblk with a
  * block cache: create /data/x, write, sync (flush the cache to the platter),
  * remount (invalidate the cache + re-read the superblock from disk), re-open
@@ -405,6 +434,14 @@ main(int argc, char **argv)
 	/* --- R-P12 gates. --- */
 	pipe_gate();		/* gate 1: pipes + dup2 */
 	ondisk_fs_gate();	/* gate 2: on-disk writable FS + block cache */
+
+	/* --- R-P64 scanout seam: /dev/fb from userland. ---
+	 * Runs /bin/fbtest as a child so a failure there cannot take init down,
+	 * and so the test exercises the seam through a real exec'd process with
+	 * its own address space (which is what a compositor will be). Skipped
+	 * silently on a boot with no display device: open(/dev/fb) returns ENXIO,
+	 * fbtest says so, and init carries on to the console. */
+	scanout_gate();
 
 	printf("\n[R-P12] milestones reached; console login (passwd) follows\n");
 	login_console();	/* gate 3: /etc/passwd login; does not return */

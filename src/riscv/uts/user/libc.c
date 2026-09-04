@@ -26,6 +26,44 @@ __sys(long n, long a0, long a1, long a2, long a3)
 	return (r_a0);
 }
 
+/*
+ * __sys6 -- the 6-argument syscall form. mmap is the only caller: its fd is a4
+ * and its offset a5, past what __sys can pass.
+ */
+long
+__sys6(long n, long a0, long a1, long a2, long a3, long a4, long a5)
+{
+	register long r_a0 asm("a0") = a0;
+	register long r_a1 asm("a1") = a1;
+	register long r_a2 asm("a2") = a2;
+	register long r_a3 asm("a3") = a3;
+	register long r_a4 asm("a4") = a4;
+	register long r_a5 asm("a5") = a5;
+	register long r_a7 asm("a7") = n;
+
+	__asm__ __volatile__("ecall"
+	    : "+r"(r_a0)
+	    : "r"(r_a1), "r"(r_a2), "r"(r_a3), "r"(r_a4), "r"(r_a5), "r"(r_a7)
+	    : "memory");
+	return (r_a0);
+}
+
+int  ioctl(int fd, int req, void *arg)
+{ return (int)__sys(SYS_ioctl, fd, req, (long)arg, 0); }
+
+/*
+ * mmap -- returns the mapped address, or MAP_FAILED on error. The kernel returns
+ * the VA on success and a negative errno on failure, so any negative return
+ * becomes MAP_FAILED (a real framebuffer VA is a low-canonical user address and
+ * never negative).
+ */
+void *mmap(void *addr, size_t len, int prot, int flags, int fd, long off)
+{
+	long r = __sys6(SYS_mmap, (long)addr, (long)len, prot, flags, fd, off);
+
+	return (r < 0 ? MAP_FAILED : (void *)r);
+}
+
 long write(int fd, const char *b, size_t n) { return __sys(SYS_write, fd, (long)b, (long)n, 0); }
 long read(int fd, char *b, size_t n)        { return __sys(SYS_read, fd, (long)b, (long)n, 0); }
 int  open(const char *p, int fl)            { return (int)__sys(SYS_openat, -100, (long)p, fl, 0); }

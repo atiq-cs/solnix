@@ -41,11 +41,23 @@ typedef unsigned long size_t;
 #define SYS_getuid  174
 #define SYS_cowreport     500
 #define SYS_preemptreport 501
+/* The scanout seam (docs/riscv64-scanout-seam.md): the /dev/fb node's ioctls
+ * and the mmap that hands the compositor the framebuffer. */
+#define SYS_ioctl   29
+#define SYS_mmap    222
 
 #define O_RDONLY 0
 #define O_WRONLY 0x1
 #define O_RDWR   0x2
 #define O_CREAT  0x40
+
+/* mmap protection/flags. The kernel's device-mapping path ignores these (the
+ * scanout framebuffer is always shared read-write), but userland and any Rust
+ * FFI binding still spell them out, so define the usual values. */
+#define PROT_READ  0x1
+#define PROT_WRITE 0x2
+#define MAP_SHARED 0x1
+#define MAP_FAILED ((void *)-1L)
 
 /* Signals (subset). */
 #define SIGINT   2
@@ -56,6 +68,11 @@ typedef unsigned long size_t;
 
 /* Raw syscall + thin POSIX-ish wrappers (defined in libc.c). */
 long __sys(long n, long a0, long a1, long a2, long a3);
+/* 6-argument form: mmap needs a4 (fd) and a5 (offset), which __sys cannot
+ * reach. Kept separate so the common 4-arg path stays as cheap as it was. */
+long __sys6(long n, long a0, long a1, long a2, long a3, long a4, long a5);
+int  ioctl(int fd, int req, void *arg);
+void *mmap(void *addr, size_t len, int prot, int flags, int fd, long off);
 long write(int fd, const char *b, size_t n);
 long read(int fd, char *b, size_t n);
 int  open(const char *path, int flags);

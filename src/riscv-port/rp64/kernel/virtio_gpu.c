@@ -204,11 +204,15 @@ static union gpu_cmd gpu_req  __attribute__((aligned(16)));
 static struct virtio_gpu_resp_display_info gpu_resp __attribute__((aligned(16)));
 
 /*
- * The guest framebuffer: 32bpp B8G8R8X8.  Statically sized to the harness
- * default (1024x768); the driver clamps the scanout to what fits.  4 MiB.
+ * The guest framebuffer: 32bpp B8G8R8X8, linear, physically contiguous, page
+ * aligned -- exactly what the /dev/fb seam (docs/riscv64-scanout-seam.md §2.1)
+ * must hand a compositor.  Sized for a 1920x1080 desktop (8.3 MiB) so the mode
+ * comes from GET_DISPLAY_INFO rather than a 1024x768 compile-time cap; the
+ * driver still clamps to what fits.  This lives in .bss so it costs image size
+ * nothing, only RAM.
  */
-#define	FB_MAX_W	1024
-#define	FB_MAX_H	768
+#define	FB_MAX_W	1920
+#define	FB_MAX_H	1080
 #define	FB_BPP		4
 static unsigned int fb[FB_MAX_W * FB_MAX_H] __attribute__((aligned(4096)));
 
@@ -217,6 +221,17 @@ static unsigned int fb[FB_MAX_W * FB_MAX_H] __attribute__((aligned(4096)));
 static unsigned long virtio_base;	/* chosen slot base PA, 0 = none */
 static int gpu_ready;
 static unsigned int scan_w, scan_h;	/* the display we bound */
+/*
+ * scan_stride -- BYTES per row, a real field rather than an implied scan_w*4
+ * (seam doc gap item 3), because the K1 DPU needs its plane pitch aligned and
+ * the compositor must honor whatever we report instead of recomputing it.
+ *
+ * WHY it equals scan_w*FB_BPP on virtio-gpu: TRANSFER_TO_HOST_2D reads the
+ * guest backing as packed rows at the RESOURCE_CREATE_2D width, so this backend
+ * cannot pad.  A DPU backend behind the same /dev/fb node is free to report a
+ * padded stride; that is precisely why the field exists.
+ */
+static unsigned int scan_stride;
 
 static unsigned long virtio_probe_base = VIRTIO_MMIO_BASE;
 
@@ -398,6 +413,7 @@ virtio_gpu_init(void)
 	}
 	if (scan_w > FB_MAX_W) scan_w = FB_MAX_W;
 	if (scan_h > FB_MAX_H) scan_h = FB_MAX_H;
+	scan_stride = scan_w * FB_BPP;		/* packed: see scan_stride comment */
 
 	/* ---- step 2: RESOURCE_CREATE_2D (B8G8R8X8) ---- */
 	zero(&gpu_req, sizeof (gpu_req));
@@ -416,7 +432,7 @@ virtio_gpu_init(void)
 	gpu_req.attach.resource_id = GPU_RES_ID;
 	gpu_req.attach.nr_entries = 1;
 	gpu_req.attach.entry0.addr = KVTOP(fb);
-	gpu_req.attach.entry0.length = scan_w * scan_h * FB_BPP;
+	gpu_req.attach.entry0.length = scan_stride * scan_h;
 	resp = gpu_cmd(sizeof (gpu_req.attach), sizeof (gpu_resp));
 	if (resp != VIRTIO_GPU_RESP_OK_NODATA)
 		return (0);
@@ -437,23 +453,47 @@ virtio_gpu_init(void)
 }
 
 /*
- * virtio_gpu_flush -- push the current guest fb to the host resource and
- * present it (TRANSFER_TO_HOST_2D + RESOURCE_FLUSH over the whole scanout).
- * This is what a compositor calls each frame.  Returns 0 on OK, -1 otherwise.
+ * virtio_gpu_flush_rect -- push the damage rect [x,y,w,h] of the guest fb to
+ * the host resource and present it (TRANSFER_TO_HOST_2D + RESOURCE_FLUSH over
+ * that rect only).  This is what FBIOFLUSH calls each frame.
+ *
+ * WHY a rect and not always the whole screen (seam doc gap item 4): a software
+ * compositor's typical damage is a fraction of the screen, and the transfer is
+ * O(w*h) memcpy work inside the device.  A blinking cursor should not cost a
+ * 1080p copy.  A zero-sized rect means "whole screen".
+ *
+ * The rect is clamped to the scanout; the guest-memory `offset` is the byte
+ * offset of pixel (x,y) in the backing, i.e. y*stride + x*bpp.
+ *
+ * Returns 0 on OK, -1 otherwise.
  */
 int
-virtio_gpu_flush(void)
+virtio_gpu_flush_rect(unsigned int x, unsigned int y, unsigned int w,
+    unsigned int h)
 {
 	unsigned int resp;
 
 	if (!gpu_ready)
 		return (-1);
 
+	if (w == 0 || h == 0) {			/* whole screen */
+		x = 0; y = 0; w = scan_w; h = scan_h;
+	}
+	if (x >= scan_w || y >= scan_h)
+		return (-1);
+	if (x + w > scan_w)
+		w = scan_w - x;
+	if (y + h > scan_h)
+		h = scan_h - y;
+
 	zero(&gpu_req, sizeof (gpu_req));
 	gpu_req.xfer.hdr.type = VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D;
-	gpu_req.xfer.r.width = scan_w;
-	gpu_req.xfer.r.height = scan_h;
-	gpu_req.xfer.offset = 0;
+	gpu_req.xfer.r.x = x;
+	gpu_req.xfer.r.y = y;
+	gpu_req.xfer.r.width = w;
+	gpu_req.xfer.r.height = h;
+	gpu_req.xfer.offset = (unsigned long)y * scan_stride +
+	    (unsigned long)x * FB_BPP;
 	gpu_req.xfer.resource_id = GPU_RES_ID;
 	resp = gpu_cmd(sizeof (gpu_req.xfer), sizeof (gpu_resp));
 	if (resp != VIRTIO_GPU_RESP_OK_NODATA)
@@ -461,8 +501,10 @@ virtio_gpu_flush(void)
 
 	zero(&gpu_req, sizeof (gpu_req));
 	gpu_req.flush.hdr.type = VIRTIO_GPU_CMD_RESOURCE_FLUSH;
-	gpu_req.flush.r.width = scan_w;
-	gpu_req.flush.r.height = scan_h;
+	gpu_req.flush.r.x = x;
+	gpu_req.flush.r.y = y;
+	gpu_req.flush.r.width = w;
+	gpu_req.flush.r.height = h;
 	gpu_req.flush.resource_id = GPU_RES_ID;
 	resp = gpu_cmd(sizeof (gpu_req.flush), sizeof (gpu_resp));
 	if (resp != VIRTIO_GPU_RESP_OK_NODATA)
@@ -471,8 +513,22 @@ virtio_gpu_flush(void)
 	return (0);
 }
 
+/*
+ * virtio_gpu_flush -- whole-screen present.  Retained as the simple form the
+ * R-P64 harness and the kernel console path call.
+ */
+int
+virtio_gpu_flush(void)
+{
+	return (virtio_gpu_flush_rect(0, 0, 0, 0));
+}
+
 /* framebuffer accessors -- the "DRM node" a compositor/console draws into. */
 unsigned int *virtio_gpu_fb(void)      { return (fb); }
+unsigned long virtio_gpu_fb_pa(void)   { return (KVTOP(fb)); }
 unsigned int  virtio_gpu_width(void)   { return (scan_w); }
 unsigned int  virtio_gpu_height(void)  { return (scan_h); }
+unsigned int  virtio_gpu_stride(void)  { return (scan_stride); }
+unsigned long virtio_gpu_fb_size(void) { return ((unsigned long)scan_stride *
+					   scan_h); }
 int           virtio_gpu_present(void) { return (gpu_ready); }

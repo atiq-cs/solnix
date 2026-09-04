@@ -395,6 +395,7 @@ typedef struct proc {
 		int		fd_snfs;	/* SNFS slot if on-disk file, else -1 */
 		int		fd_pipe;	/* pipe index if a pipe, else -1 */
 		int		fd_pipe_w;	/* 1 = write end, 0 = read end */
+		int		fd_fb;		/* 1 = the /dev/fb scanout node */
 	} p_fd[8];
 } proc_t;
 
@@ -435,11 +436,11 @@ proc_alloc(void)
 			p->p_insig = 0;
 			for (k = 0; k < NSIG; k++)
 				p->p_sighand[k] = SIG_DFL_VAL;
-			for (k = 0; k < 8; k++)
 			for (k = 0; k < 8; k++) {
 				p->p_fd[k].fd_used = 0;
 				p->p_fd[k].fd_snfs = -1;
 				p->p_fd[k].fd_pipe = -1;
+				p->p_fd[k].fd_fb = 0;
 			}
 			return (p);
 		}
@@ -610,6 +611,14 @@ proc_close(int fd)
 	/* R-P12: releasing a pipe end drops one reference on the pipe. */
 	if (p->p_fd[fd].fd_pipe >= 0)
 		pipe_close(p->p_fd[fd].fd_pipe, p->p_fd[fd].fd_pipe_w);
+	/* The scanout node: drop the driver's open reference.  The user mapping
+	 * deliberately outlives close (as_free reclaims it at exit), which is what
+	 * a compositor expects from a framebuffer it has mmap'd. */
+	if (p->p_fd[fd].fd_fb) {
+		extern long fb_close(void);
+		(void) fb_close();
+		p->p_fd[fd].fd_fb = 0;
+	}
 	p->p_fd[fd].fd_snfs = -1;
 	p->p_fd[fd].fd_pipe = -1;
 	return (0);
@@ -690,6 +699,7 @@ load_elf_into(proc_t *p, const char *path, const void *img, unsigned long len,
 		p->p_fd[i].fd_used = 0;
 		p->p_fd[i].fd_snfs = -1;
 		p->p_fd[i].fd_pipe = -1;
+		p->p_fd[i].fd_fb = 0;
 	}
 	/* R-P11: exec resets caught signals to default (POSIX); ignored stay
 	 * ignored. No handler survives an image replacement. */
@@ -1397,6 +1407,42 @@ proc_openat_w(const char *path, int flags)
 		return (proc_openat_snfs(kpath, flags));
 	}
 
+	/*
+	 * The scanout seam: /dev/fb is a character device, not a file -- it has no
+	 * bytes to read, only the FBIOGMODE/FBIOFLUSH ioctls and an mmap of the
+	 * framebuffer (docs/riscv64-scanout-seam.md section 2).  Route it to the
+	 * fb driver and mark the fd so ioctl/mmap can find it and read/write
+	 * cannot mistake it for a ramfs node.
+	 *
+	 * NOTE: one hardcoded device path rather than a devfs; a real /dev needs a
+	 * vnode layer, and one node is what the scanout seam requires.
+	 */
+	if (str_eq_uproc(kpath, "/dev/fb")) {
+		extern long fb_open(void);
+		long r = fb_open();
+
+		if (r < 0)
+			return (r);		/* ENXIO: no scanout engine */
+		for (fd = 3; fd < 8; fd++) {
+			if (!p->p_fd[fd].fd_used) {
+				p->p_fd[fd].fd_used = 1;
+				p->p_fd[fd].fd_fb = 1;
+				p->p_fd[fd].fd_wnode = 0;
+				p->p_fd[fd].fd_data = 0;
+				p->p_fd[fd].fd_len = 0;
+				p->p_fd[fd].fd_pos = 0;
+				p->p_fd[fd].fd_snfs = -1;
+				p->p_fd[fd].fd_pipe = -1;
+				return (fd);
+			}
+		}
+		{
+			extern long fb_close(void);
+			(void) fb_close();	/* undo the open reference */
+		}
+		return (-1);			/* fd table full */
+	}
+
 	/* Read-only open of an existing file: route to the read-only vfs path
 	 * unless it already exists in the ramfs. */
 	if ((flags & (O_CREAT | O_WRONLY | O_RDWR)) == 0 &&
@@ -1807,4 +1853,64 @@ long
 sys_remount(void)
 {
 	return (snfs_remount() ? 0 : -1);
+}
+
+/*
+ * ===========================================================================
+ * The scanout seam's syscall backends: ioctl + mmap for /dev/fb.
+ *
+ * These are the two entry points syscall.c routes SYS_ioctl / SYS_mmap to. They
+ * exist here rather than in fb.c because only uproc.c knows the fd table and
+ * the calling process's address space; fb.c owns everything about the device.
+ * ===========================================================================
+ */
+
+/* fb.c: the /dev/fb driver (the cb_ops-shaped entry points). */
+extern long fb_ioctl(int cmd, unsigned long arg);
+extern long fb_mmap(unsigned long root, unsigned long len);
+/* as.c: the caller's AS root page-table PA, for fb_mmap's hat_as_map loop. */
+extern unsigned long as_root(as_t *as);
+
+#define	ENOTTY_UPROC	25
+
+/*
+ * proc_ioctl — dispatch an ioctl on an open fd. Only the scanout node has any
+ * ioctls; every other fd kind gets ENOTTY, which is the correct POSIX answer
+ * for "this fd is not a device that understands ioctls".
+ */
+long
+proc_ioctl(int fd, int cmd, unsigned long arg)
+{
+	proc_t *p = curproc;
+
+	if (p == 0 || fd < 3 || fd >= 8 || !p->p_fd[fd].fd_used)
+		return (-9 /* EBADF */);
+	if (p->p_fd[fd].fd_fb)
+		return (fb_ioctl(cmd, arg));
+	return (-ENOTTY_UPROC);
+}
+
+/*
+ * proc_mmap — map an open fd's memory into the calling process. Only the
+ * scanout node is mappable, so this is deliberately not a general mmap: there
+ * is no segment list to hang anonymous or file-backed mappings off yet (as.c is
+ * explicit about that), and the seam needs exactly one mapping of one device.
+ *
+ * Returns the user VA on success, negative errno otherwise.
+ *
+ * NOTE: device-mapping only, fixed VA, no MAP_ANON/file mappings; a real
+ * seg_vn/seg_dev mmap is the upgrade when userland needs general mmap.
+ */
+long
+proc_mmap(int fd, unsigned long len)
+{
+	proc_t *p = curproc;
+
+	if (p == 0 || p->p_as == 0)
+		return (-22 /* EINVAL */);
+	if (fd < 3 || fd >= 8 || !p->p_fd[fd].fd_used)
+		return (-9 /* EBADF */);
+	if (!p->p_fd[fd].fd_fb)
+		return (-19 /* ENODEV: only /dev/fb is mappable */);
+	return (fb_mmap(as_root(p->p_as), len));
 }
