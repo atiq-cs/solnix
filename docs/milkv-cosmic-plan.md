@@ -51,12 +51,32 @@ the hart index (`uts/proc.c` does `mv tp, hartid`). Rust TLS cannot work until `
 belongs to userland and the hart id moves to a CSR. Cheap to fix now, expensive
 after more code depends on it -- see `docs/riscv64-crt-rust-startup.md`.
 
-**Gate B -- scanout (pixels on the monitor).** Needs **no hardware**: QEMU
-virtio-gpu exercises the whole path, and our R-P64 `virtio_gpu.c` already does the
-device half (QEMU-verified guest framebuffer -> host display). What is missing is
-the OS half (a mmap-able framebuffer node) and the compositor half (a ~250-line
-smallvil framebuffer backend). Contract fully specified in
-`docs/riscv64-scanout-seam.md`.
+**Gate B -- scanout (pixels on the monitor). CLEARED in QEMU.** Both halves exist:
+* **OS half DONE** -- `/dev/fb` (`src/riscv-port/rp64/kernel/fb.c` + `fbio.h`): a
+  userland process opens the node, reads the mode (1280x800, stride 5120,
+  XRGB8888), mmaps 4000 KiB of real scanout memory, paints through the mapping and
+  flushes; a QMP screendump of the **host** display contains those pixels. 13/13
+  userland checks, 6/6 consecutive `-smp 4` boots. The verifier is
+  **negative-controlled** (a blank dump and a sheared dump both fail), which is what
+  makes the PNG evidence rather than decoration. Error paths validate rather than
+  trust userland: oversized damage rects clamp, out-of-range origins are rejected,
+  optional `FBIOSMODE` honestly returns ENOTSUP.
+* **Compositor half WRITTEN + host-tested** --
+  `src/riscv-port/rp64/compositor/fb_backend.rs` (775 lines), the smithay backend
+  that renders into `/dev/fb` instead of DRM/KMS or a winit host window (smithay
+  0.7.0 has no fbdev backend). Verified pin: **smithay 0.7.0 + winit 0.30.13** --
+  the `DragMoved` drift that blocked smallvil is HEAD-only, so pinning the release
+  avoids it rather than patching around it. 12/12 host tests, including that stride
+  is honored not recomputed, and that it paints the same reference pattern as
+  `fbtest.c` so the Rust and C halves provably agree on the ABI.
+
+Running it *on* solnix is gated by Gate A, not by the display path.
+
+**A correction to Gate A's critical path:** the gate for a compositor is **AF_UNIX
+sockets (1-2 weeks), not TCP/IP**. A Wayland compositor is a UNIX-socket server
+before it is anything else. The 1-3 month TCP/IP work does **not** belong on this
+critical path. The kernel currently has 25 syscalls with no threads, sockets, anon
+mmap or dlopen -- all four of which a libcosmic client needs.
 
 ## Sequencing (three independent tracks)
 
