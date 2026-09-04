@@ -1,0 +1,213 @@
+WHAT: add a riscv64 arch module to the libc crate's solarish (illumos/Solaris) tree.
+
+WHY: libc's `src/unix/solarish/mod.rs` selects an arch submodule with a cfg_if
+that knows only `x86_64` and `x86`. On a riscv64 illumos target the whole
+arch-specific surface is therefore ABSENT, and any crate that names it fails to
+compile. Measured on a `riscv64gc-unknown-illumos` custom target with
+`-Zbuild-std=std,panic_abort`: `std` itself builds fine (it does not reference
+these), but a downstream probe naming them yields exactly five E0425s:
+
+    cannot find type `ucontext_t`   in crate `libc`
+    cannot find type `mcontext_t`   in crate `libc`
+    cannot find type `fpregset_t`   in crate `libc`
+    cannot find type `Elf64_Phdr`   in crate `libc`
+    cannot find type `dl_phdr_info` in crate `libc`
+
+(The same probe on `x86_64-unknown-illumos` compiles clean.) So this file is the
+entire riscv64 gap in libc for illumos -- the machine-dependent
+signal/ucontext/ELF-phdr surface, nothing else.
+
+REGISTER MODEL: RV64 has 32 integer registers x0..x31 and 32 FP registers
+f0..f31 (D extension, 64-bit each) plus fcsr. This mirrors the NetBSD riscv
+`_NGREG`/`__gregset_t` layout already cribbed into
+src/riscv/bsd-ref/netbsd/nb_mcontext.h, and follows the same illumos
+`greg_t`/`gregset_t`/`fpregset_t`/`mcontext_t`/`ucontext_t` nesting the
+existing solarish/x86_64.rs uses. REG_* index names follow the RISC-V ABI
+register names (the illumos <sys/regset.h> for riscv64 must agree; when the
+solnix riscv64 <sys/regset.h> lands, re-verify NGREG and the index order and
+adjust here -- these are the ONE thing in this patch that a real illumos
+riscv64 header could order differently).
+
+Elf64_* / dl_phdr_info are arch-independent for any LP64 ELF target and are
+copied verbatim from solarish/x86_64.rs.
+
+Apply against libc 0.2.189 (also applies cleanly to 0.2.184-0.2.186; the
+solarish tree has not changed shape in that range).
+
+--- a/src/unix/solarish/mod.rs
++++ b/src/unix/solarish/mod.rs
+@@ -3047,6 +3047,9 @@ cfg_if! {
+         mod x86_common;
+         pub use self::x86_64::*;
+         pub use self::x86_common::*;
++    } else if #[cfg(target_arch = "riscv64")] {
++        mod riscv64;
++        pub use self::riscv64::*;
+     } else if #[cfg(target_arch = "x86")] {
+         mod x86;
+         mod x86_common;
+--- /dev/null
++++ b/src/unix/solarish/riscv64.rs
+@@ -0,0 +1,150 @@
++//! riscv64 illumos/Solaris machine-dependent definitions.
++//!
++//! Mirrors solarish/x86_64.rs for RV64GC: 32 integer gregs + 32 D-extension
++//! fpregs + fcsr. The Elf64_*/dl_phdr_info block is arch-independent LP64 ELF
++//! and is identical to the x86_64 module's.
++use crate::prelude::*;
++
++cfg_if! {
++    if #[cfg(target_os = "solaris")] {
++        use crate::unix::solarish::solaris;
++    }
++}
++
++pub type greg_t = c_long;
++
++pub type Elf64_Addr = c_ulong;
++pub type Elf64_Half = c_ushort;
++pub type Elf64_Off = c_ulong;
++pub type Elf64_Sword = c_int;
++pub type Elf64_Sxword = c_long;
++pub type Elf64_Word = c_uint;
++pub type Elf64_Xword = c_ulong;
++pub type Elf64_Lword = c_ulong;
++pub type Elf64_Phdr = __c_anonymous_Elf64_Phdr;
++
++s! {
++    pub struct __c_anonymous_Elf64_Phdr {
++        pub p_type: crate::Elf64_Word,
++        pub p_flags: crate::Elf64_Word,
++        pub p_offset: crate::Elf64_Off,
++        pub p_vaddr: crate::Elf64_Addr,
++        pub p_paddr: crate::Elf64_Addr,
++        pub p_filesz: crate::Elf64_Xword,
++        pub p_memsz: crate::Elf64_Xword,
++        pub p_align: crate::Elf64_Xword,
++    }
++
++    pub struct dl_phdr_info {
++        pub dlpi_addr: crate::Elf64_Addr,
++        pub dlpi_name: *const c_char,
++        pub dlpi_phdr: *const crate::Elf64_Phdr,
++        pub dlpi_phnum: crate::Elf64_Half,
++        pub dlpi_adds: c_ulonglong,
++        pub dlpi_subs: c_ulonglong,
++        pub dlpi_tls_modid: size_t,
++        pub dlpi_tls_data: *mut c_void,
++    }
++
++    // sys/regset.h -- RV64 D-extension FP state: f0..f31 (64-bit) + fcsr.
++    pub struct __c_anonymous_fpchip_state {
++        pub fpu_regs: [u64; 32],
++        pub fpu_fcsr: u32,
++        pub fpu_pad: u32,
++    }
++
++    pub struct fpregset_t {
++        pub fp_reg_set: __c_anonymous_fp_reg_set,
++    }
++
++    // NGREG for riscv64 = 32 (x0..x31; x0 slot carries the PC on illumos,
++    // matching how the other illumos ports store the trap PC in the gregset).
++    pub struct mcontext_t {
++        pub gregs: [crate::greg_t; 32],
++        pub fpregs: fpregset_t,
++    }
++
++    pub struct ucontext_t {
++        pub uc_flags: c_ulong,
++        pub uc_link: *mut ucontext_t,
++        pub uc_sigmask: crate::sigset_t,
++        pub uc_stack: crate::stack_t,
++        pub uc_mcontext: mcontext_t,
++        #[cfg(target_os = "illumos")]
++        pub uc_brand_data: [*mut c_void; 3],
++        #[cfg(target_os = "illumos")]
++        pub uc_filler: [c_long; 2],
++        #[cfg(target_os = "solaris")]
++        pub uc_xrs: solaris::xrs_t,
++        #[cfg(target_os = "solaris")]
++        pub uc_lwpid: c_uint,
++        #[cfg(target_os = "solaris")]
++        pub uc_filler: [c_long; 2],
++    }
++}
++
++s_no_extra_traits! {
++    pub union __c_anonymous_fp_reg_set {
++        pub fpchip_state: __c_anonymous_fpchip_state,
++        pub f_fpregs: [[u32; 16]; 17],
++    }
++}
++
++cfg_if! {
++    if #[cfg(feature = "extra_traits")] {
++        impl PartialEq for __c_anonymous_fp_reg_set {
++            fn eq(&self, other: &__c_anonymous_fp_reg_set) -> bool {
++                unsafe {
++                    self.fpchip_state == other.fpchip_state
++                        || self
++                            .f_fpregs
++                            .iter()
++                            .zip(other.f_fpregs.iter())
++                            .all(|(a, b)| a == b)
++                }
++            }
++        }
++        impl Eq for __c_anonymous_fp_reg_set {}
++        impl hash::Hash for __c_anonymous_fp_reg_set {
++            fn hash<H: hash::Hasher>(&self, state: &mut H) {
++                unsafe {
++                    self.f_fpregs.hash(state);
++                }
++            }
++        }
++    }
++}
++
++// sys/regset.h -- gregset indices, RISC-V ABI register names.
++pub const REG_PC: c_int = 0;
++pub const REG_RA: c_int = 1;
++pub const REG_SP: c_int = 2;
++pub const REG_GP: c_int = 3;
++pub const REG_TP: c_int = 4;
++pub const REG_T0: c_int = 5;
++pub const REG_T1: c_int = 6;
++pub const REG_T2: c_int = 7;
++pub const REG_S0: c_int = 8;
++pub const REG_S1: c_int = 9;
++pub const REG_A0: c_int = 10;
++pub const REG_A1: c_int = 11;
++pub const REG_A2: c_int = 12;
++pub const REG_A3: c_int = 13;
++pub const REG_A4: c_int = 14;
++pub const REG_A5: c_int = 15;
++pub const REG_A6: c_int = 16;
++pub const REG_A7: c_int = 17;
++pub const REG_S2: c_int = 18;
++pub const REG_S3: c_int = 19;
++pub const REG_S4: c_int = 20;
++pub const REG_S5: c_int = 21;
++pub const REG_S6: c_int = 22;
++pub const REG_S7: c_int = 23;
++pub const REG_S8: c_int = 24;
++pub const REG_S9: c_int = 25;
++pub const REG_S10: c_int = 26;
++pub const REG_S11: c_int = 27;
++pub const REG_T3: c_int = 28;
++pub const REG_T4: c_int = 29;
++pub const REG_T5: c_int = 30;
++pub const REG_T6: c_int = 31;
++
++// sys/auxv_riscv.h analog -- hwcap bits the kernel reports via AT_SUN_HWCAP.
++// RVV1.0 presence (the K1's vector unit) is AV_RISCV_V.
++pub const AV_RISCV_M: u32 = 0x0001;
++pub const AV_RISCV_A: u32 = 0x0002;
++pub const AV_RISCV_F: u32 = 0x0004;
++pub const AV_RISCV_D: u32 = 0x0008;
++pub const AV_RISCV_C: u32 = 0x0010;
++pub const AV_RISCV_V: u32 = 0x0020;
++pub const AV_RISCV_ZBA: u32 = 0x0040;
++pub const AV_RISCV_ZBB: u32 = 0x0080;
++pub const AV_RISCV_ZBS: u32 = 0x0100;

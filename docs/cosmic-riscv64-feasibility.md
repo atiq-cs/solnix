@@ -403,25 +403,18 @@ Persisted in the repo:
 | `pkgs/os-specific/illumos/rust-targets/riscv64gc-unknown-illumos.json` | the Rust target spec — rustc-accepted, builds full std |
 | `pkgs/os-specific/illumos/rust-patches/libc-solarish-riscv64-arch-module.patch` | the libc solarish riscv64 arch module — closes the measured 5-type gap |
 
-> **⚠️ ARTIFACT STATUS (orchestrator).** Of the four fork-side/repo artifacts, the
-> Rust **target JSON** was recovered and is committed to the solnix-pkgs fork at
-> `pkgs/os-specific/illumos/rust-targets/riscv64gc-unknown-illumos.json`. The
-> **libc patch** and the **syslib shim script** did NOT make it off the build node
-> before it terminated, so their *bodies* are lost. They are reconstructable from
-> this document, which preserves the full specification:
->   * shim: the illumos-only libraries (`-lsocket -lposix4 -lnsl -lumem -lsendfile
->     -llgrp -lssp -lresolv`, + `-lmd -lmp` transitively) and the **complete
->     twelve-symbol** list in section 1.4 -- that list, not the script, is the
->     deliverable.
->   * libc patch: a new `src/unix/solarish/riscv64.rs` (RV64: 32 gregs, 32
->     D-extension fpregs + fcsr, RISC-V ABI `REG_*`, the arch-independent
->     `Elf64_*`/`dl_phdr_info` block copied from the x86_64 module, `AV_RISCV_*`
->     hwcaps incl. `AV_RISCV_V`) plus a three-line `cfg_if` arm in `mod.rs`, with
->     `NGREG`/`REG_*` following `src/riscv/bsd-ref/netbsd/nb_mcontext.h` pending a
->     real illumos riscv64 `<sys/regset.h>`.
-> Cost of reconstruction is roughly an hour, versus the multi-week libc/crt work
-> that actually gates this. Lesson applied: see `docs/durability-account-loss.md`
-> -- artifacts must be copied off a node as they are produced, not at task end.
+> **ARTIFACT STATUS (orchestrator).** All four artifacts are present and now
+> COMMITTED. An earlier note here claimed the libc patch and the syslib shim were
+> lost with the build node -- that was WRONG: they had been written into the solnix
+> repo's `pkgs/os-specific/illumos/rust-patches/`, and the check that produced the
+> "lost" conclusion looked only in the solnix-pkgs fork. They were, however, sitting
+> UNTRACKED (one careless clean away from real loss), which is its own lesson:
+> "persisted to disk" is not "safe" -- only committed is safe. Verified before
+> committing: the patch is 213 lines carrying the full `riscv64.rs` body (18
+> references to the five previously-missing types, 51 to riscv64/`REG_`/`NGREG`/
+> `AV_RISCV_*`) plus the `cfg_if` arm; the shim is 79 lines carrying the library
+> list and all twelve symbols. The Rust target JSON lives in the solnix-pkgs fork
+> at `pkgs/os-specific/illumos/rust-targets/riscv64gc-unknown-illumos.json`.
 
 | `pkgs/os-specific/illumos/rust-patches/make-riscv64-illumos-syslib-shim.sh` | the link shim + **the 12-symbol illumos-libc ABI surface** rust std needs |
 | `scripts/build-mesa-riscv64-lavapipe.sh` | the Mesa riscv64 llvmpipe+lavapipe cross recipe (1124/1124 verified) |
