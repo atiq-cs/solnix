@@ -1,0 +1,47 @@
+Fix softbuffer's Wayland SW buffer allocation on illumos.
+
+softbuffer (pop-os fork, tag cosmic-4.0, rev c2b2c19) already uses POSIX
+shm_open on the non-linux/non-freebsd path in create_memfile() -- it is NOT a
+memfd_create gap. The real defect on illumos is the shm object NAME: softbuffer
+builds it as "softbuffer-XXXXXXX" with no leading slash. illumos shm_open(3C)
+requires the name to begin with "/" and rejects any other name with EINVAL
+(errno 22). That is the exact panic COSMIC apps hit at
+src/wayland/buffer.rs:52 -- "Failed to create POSIX shm to store buffer:
+Os { code: 22, kind: InvalidInput }".
+
+Verified with a C repro on the target: shm_open("/name", O_RDWR|O_CREAT|O_EXCL,
+0600) -> valid fd + ftruncate ok; shm_open("name", ...) -> EINVAL(22).
+
+Fix (illumos/non-linux branch only):
+  - prepend "/" to the shm name (the leading slash illumos requires).
+  - drop the exec bit from the mode: Mode::RWXU (0700) -> Mode::RUSR|Mode::WUSR
+    (0600), matching the proven cosmic-app-list / cosmic-applet-minimize illumos
+    POSIX-shm idiom (rustix::fs::Mode::RUSR|WUSR). illumos accepts 0700 too, but
+    0600 keeps the anonymous SW buffer non-executable and consistent.
+
+This only touches the non-linux/freebsd branch, so Linux/FreeBSD (memfd) and
+other targets are unchanged.
+
+--- a/src/wayland/buffer.rs
++++ b/src/wayland/buffer.rs
+@@ -37,7 +37,9 @@ fn create_memfile() -> File {
+     let mut rng = fastrand::Rng::new();
+ 
+     for _ in 0..=4 {
+-        let mut name = String::from("softbuffer-");
++        // illumos shm_open(3C) requires the object name to begin with "/"
++        // (EINVAL otherwise). Prepend it here.
++        let mut name = String::from("/softbuffer-");
+         name.extend(iter::repeat_with(|| rng.alphanumeric()).take(7));
+         name.push('\0');
+ 
+@@ -46,7 +48,8 @@ fn create_memfile() -> File {
+         let fd = rustix::shm::shm_open(
+             name,
+             ShmOFlags::RDWR | ShmOFlags::CREATE | ShmOFlags::EXCL,
+-            Mode::RWXU,
++            // 0600 (no exec bit) -- the proven illumos POSIX-shm mode.
++            Mode::RUSR | Mode::WUSR,
+         );
+         if !matches!(fd, Err(Errno::EXIST)) {
+             let fd = fd.expect("Failed to create POSIX shm to store buffer.");

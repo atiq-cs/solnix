@@ -1,0 +1,95 @@
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -37,6 +37,9 @@
+     RegistrationToken, Token, TokenFactory,
+ };
+ use rustix::io::Errno;
++#[cfg(any(target_os = "illumos", target_os = "solaris"))]
++use calloop::timer::{TimeoutAction, Timer};
++use std::time::Duration;
+ use wayland_backend::client::{ReadEventsGuard, WaylandError};
+ use wayland_client::{Connection, DispatchError, EventQueue};
+ 
+@@ -71,6 +74,15 @@
+     // Some calloop event handlers don't support error handling, so we have to store the error
+     // for a short time until we reach a method which allows it
+     stored_error: Result<(), io::Error>,
++    // On illumos/solaris the nested-epoll readiness of the wayland connection
++    // FD does not propagate to the outer calloop poll FD, so the Generic source
++    // above never fires and the wayland queue is never dispatched (black frames,
++    // multi-second stalls). Drive the queue from a periodic Timer instead, which
++    // calloop tracks in its own TimerWheel and does not depend on epoll readiness.
++    // This mirrors the smallvil server-side Timer dispatch fix. The Generic FD
++    // source is kept registered but simply never wakes us on these targets.
++    #[cfg(any(target_os = "illumos", target_os = "solaris"))]
++    timer: Timer,
+ }
+ 
+ impl<D> WaylandSource<D> {
+@@ -88,6 +100,8 @@
+             read_guard: None,
+             fake_token: None,
+             stored_error: Ok(()),
++            #[cfg(any(target_os = "illumos", target_os = "solaris"))]
++            timer: Timer::immediate(),
+         }
+     }
+ 
+@@ -130,8 +144,8 @@
+ 
+     fn process_events<F>(
+         &mut self,
+-        _: Readiness,
+-        _: Token,
++        _readiness: Readiness,
++        _token: Token,
+         mut callback: F,
+     ) -> Result<PostAction, Self::Error>
+     where
+@@ -139,6 +153,16 @@
+     {
+         debug_assert!(self.read_guard.is_none());
+ 
++        // illumos/solaris: reschedule the driving Timer so it keeps firing, then
++        // fall through to pump the queue unconditionally below. The Generic FD
++        // never wakes us here, so this Timer is the only thing that pumps.
++        #[cfg(any(target_os = "illumos", target_os = "solaris"))]
++        {
++            let _ = self.timer.process_events(_readiness, _token, |_, _| {
++                TimeoutAction::ToDuration(Duration::from_millis(8))
++            });
++        }
++
+         // Take the stored error
+         std::mem::replace(&mut self.stored_error, Ok(()))?;
+ 
+@@ -165,6 +189,10 @@
+         token_factory: &mut TokenFactory,
+     ) -> calloop::Result<()> {
+         self.fake_token = Some(token_factory.token());
++        #[cfg(any(target_os = "illumos", target_os = "solaris"))]
++        {
++            self.timer.register(poll, token_factory)?;
++        }
+         self.connection_source.register(poll, token_factory)
+     }
+ 
+@@ -173,10 +201,18 @@
+         poll: &mut Poll,
+         token_factory: &mut TokenFactory,
+     ) -> calloop::Result<()> {
++        #[cfg(any(target_os = "illumos", target_os = "solaris"))]
++        {
++            self.timer.reregister(poll, token_factory)?;
++        }
+         self.connection_source.reregister(poll, token_factory)
+     }
+ 
+     fn unregister(&mut self, poll: &mut Poll) -> calloop::Result<()> {
++        #[cfg(any(target_os = "illumos", target_os = "solaris"))]
++        {
++            self.timer.unregister(poll)?;
++        }
+         self.connection_source.unregister(poll)
+     }
+ 

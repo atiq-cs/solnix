@@ -1,0 +1,35 @@
+diff --git a/cosmic-panel-bin/src/xdg_shell_wrapper/mod.rs b/cosmic-panel-bin/src/xdg_shell_wrapper/mod.rs
+index f9fc5f5..aa2d773 100644
+--- a/cosmic-panel-bin/src/xdg_shell_wrapper/mod.rs
++++ b/cosmic-panel-bin/src/xdg_shell_wrapper/mod.rs
+@@ -97,6 +97,30 @@ pub fn run(
+     // immediately instead of being polled once per loop iteration. This is
+     // what allows the loop timeouts below to be generous without hurting
+     // applet responsiveness.
++    // Register the embedded applet server. On illumos the level-triggered
++    // Generic FD readiness of the nested server display does not propagate
++    // through the outer calloop poll (the same nested-poll gap that wedges the
++    // wayland client blocking_read and smallvil's server dispatch), so a Level
++    // Generic source never fires and embedded applets hang at their registry
++    // roundtrip -- never rendering, so the panel never learns their thickness
++    // and stays at its 8px minimum (below the 20px render gate) forever. Drive
++    // the embedded server from a periodic Timer that dispatches + flushes
++    // unconditionally, sidestepping epoll entirely.
++    #[cfg(any(target_os = "illumos", target_os = "solaris"))]
++    {
++        let mut server_display = server_display;
++        handle
++            .insert_source(
++                calloop::timer::Timer::immediate(),
++                move |_, _, state| {
++                    let _ = server_display.dispatch_clients(state);
++                    let _ = server_display.flush_clients();
++                    calloop::timer::TimeoutAction::ToDuration(Duration::from_millis(4))
++                },
++            )
++            .expect("Failed to insert embedded wayland server timer.");
++    }
++    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
+     handle
+         .insert_source(
+             calloop::generic::Generic::new(

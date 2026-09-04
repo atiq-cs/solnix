@@ -1,0 +1,389 @@
+diff --git a/smallvil/src/handlers/compositor.rs b/smallvil/src/handlers/compositor.rs
+index 188b06e..7c03cfa 100644
+--- a/smallvil/src/handlers/compositor.rs
++++ b/smallvil/src/handlers/compositor.rs
+@@ -1,6 +1,7 @@
+ use crate::{Smallvil, grabs::resize_grab, state::ClientState};
+ use smithay::{
+     backend::renderer::utils::on_commit_buffer_handler,
++    desktop::{WindowSurfaceType, layer_map_for_output},
+     reexports::wayland_server::{
+         Client,
+         protocol::{wl_buffer, wl_surface::WlSurface},
+@@ -9,7 +10,9 @@ use smithay::{
+         buffer::BufferHandler,
+         compositor::{
+             CompositorClientState, CompositorHandler, CompositorState, get_parent, is_sync_subsurface,
++            with_states,
+         },
++        shell::wlr_layer::LayerSurfaceData,
+         shm::{ShmHandler, ShmState},
+     },
+ };
+@@ -43,6 +46,31 @@ impl CompositorHandler for Smallvil {
+ 
+         xdg_shell::handle_commit(&mut self.popups, &self.space, surface);
+         resize_grab::handle_commit(&mut self.space, surface);
++
++        // wlr-layer-shell (cosmic-panel bar): arrange the layer map and send the
++        // initial configure so the client attaches a buffer. Without this the
++        // panel surface never gets sized and never paints.
++        if let Some(output) = self.space.outputs().find(|o| {
++            layer_map_for_output(o)
++                .layer_for_surface(surface, WindowSurfaceType::TOPLEVEL)
++                .is_some()
++        }) {
++            let initial_configure_sent = with_states(surface, |states| {
++                states
++                    .data_map
++                    .get::<LayerSurfaceData>()
++                    .map(|d| d.lock().unwrap().initial_configure_sent)
++                    .unwrap_or(false)
++            });
++            let output = output.clone();
++            let mut map = layer_map_for_output(&output);
++            map.arrange();
++            if !initial_configure_sent {
++                if let Some(layer) = map.layer_for_surface(surface, WindowSurfaceType::TOPLEVEL) {
++                    layer.layer_surface().send_configure();
++                }
++            }
++        }
+     }
+ }
+ 
+diff --git a/smallvil/src/handlers/mod.rs b/smallvil/src/handlers/mod.rs
+index fafba61..ca3958b 100644
+--- a/smallvil/src/handlers/mod.rs
++++ b/smallvil/src/handlers/mod.rs
+@@ -87,4 +87,77 @@ impl WaylandDndGrabHandler for Smallvil {
+ 
+ impl OutputHandler for Smallvil {}
+ 
++//
++// Session-shell protocols (for cosmic-panel): wlr-layer-shell, fractional-scale, security-context
++//
++
++use smithay::desktop::{LayerSurface as DesktopLayerSurface, layer_map_for_output};
++use smithay::wayland::fractional_scale::FractionalScaleHandler;
++use smithay::wayland::security_context::{
++    SecurityContext, SecurityContextHandler, SecurityContextListenerSource,
++};
++use smithay::wayland::shell::wlr_layer::{
++    Layer, LayerSurface as WlrLayerSurfaceHandle, WlrLayerShellHandler, WlrLayerShellState,
++};
++use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
++
++impl WlrLayerShellHandler for Smallvil {
++    fn shell_state(&mut self) -> &mut WlrLayerShellState {
++        &mut self.layer_shell_state
++    }
++
++    fn new_layer_surface(
++        &mut self,
++        surface: WlrLayerSurfaceHandle,
++        wl_output: Option<WlOutput>,
++        _layer: Layer,
++        namespace: String,
++    ) {
++        // Map the layer surface onto an output. smallvil maps a single "winit"
++        // output at (0,0); fall back to it when the client did not pin one.
++        let output = wl_output
++            .as_ref()
++            .and_then(smithay::output::Output::from_resource)
++            .or_else(|| self.space.outputs().next().cloned());
++        if let Some(output) = output {
++            let mut map = layer_map_for_output(&output);
++            let _ = map.map_layer(&DesktopLayerSurface::new(surface, namespace));
++        }
++    }
++
++    fn layer_destroyed(&mut self, surface: WlrLayerSurfaceHandle) {
++        if let Some((mut map, layer)) = self.space.outputs().find_map(|o| {
++            let map = layer_map_for_output(o);
++            let layer = map
++                .layers()
++                .find(|&l| l.layer_surface() == &surface)
++                .cloned();
++            layer.map(|layer| (map, layer))
++        }) {
++            map.unmap_layer(&layer);
++        }
++    }
++}
++
++impl FractionalScaleHandler for Smallvil {}
++
++impl SecurityContextHandler for Smallvil {
++    fn context_created(&mut self, source: SecurityContextListenerSource, _context: SecurityContext) {
++        // A privileged client (e.g. a cosmic-panel applet given
++        // X_PRIVILEGED_WAYLAND_SOCKET) connects on this listener. Insert the
++        // listener into the event loop and register each incoming stream as a
++        // client on the display; otherwise the socket is never accepted and the
++        // applet's registry roundtrip fails with ECONNREFUSED (which made
++        // cosmic-applet-time panic, so the panel never learned its thickness and
++        // stayed collapsed). smallvil applies no extra sandboxing here.
++        self.loop_handle
++            .insert_source(source, move |client_stream, _, state| {
++                let _ = state
++                    .display_handle
++                    .insert_client(client_stream, std::sync::Arc::new(crate::state::ClientState::default()));
++            })
++            .expect("Failed to insert security context listener source");
++    }
++}
++
+ smithay::delegate_dispatch2!(Smallvil);
+diff --git a/smallvil/src/handlers/xdg_shell.rs b/smallvil/src/handlers/xdg_shell.rs
+index be3a02f..ec9676b 100644
+--- a/smallvil/src/handlers/xdg_shell.rs
++++ b/smallvil/src/handlers/xdg_shell.rs
+@@ -33,7 +33,20 @@ impl XdgShellHandler for Smallvil {
+ 
+     fn new_toplevel(&mut self, surface: ToplevelSurface) {
+         let window = Window::new_wayland_window(surface);
+-        self.space.map_element(window, (0, 0), false);
++        // Place new toplevels inside the non-exclusive zone so they sit below the
++        // panel's reserved strip (its exclusive zone) instead of under the bar,
++        // then cascade each additional window so multiple app windows stay
++        // visible instead of stacking at one point.
++        let base = self
++            .space
++            .outputs()
++            .next()
++            .map(|o| smithay::desktop::layer_map_for_output(o).non_exclusive_zone().loc)
++            .unwrap_or_default();
++        let n = self.space.elements().count() as i32;
++        let off = (n * 48).min(600);
++        self.space
++            .map_element(window, (base.x + off, base.y + off), false);
+     }
+ 
+     fn new_popup(&mut self, surface: PopupSurface, _positioner: PositionerState) {
+diff --git a/smallvil/src/state.rs b/smallvil/src/state.rs
+index 42c68ad..7ca2f65 100644
+--- a/smallvil/src/state.rs
++++ b/smallvil/src/state.rs
+@@ -4,7 +4,10 @@ use smithay::{
+     desktop::{PopupManager, Space, Window, WindowSurfaceType},
+     input::{Seat, SeatState},
+     reexports::{
+-        calloop::{EventLoop, Interest, LoopSignal, Mode, PostAction, generic::Generic},
++        calloop::{
++            EventLoop, LoopHandle, LoopSignal,
++            timer::{TimeoutAction, Timer},
++        },
+         wayland_server::{
+             Display, DisplayHandle,
+             backend::{ClientData, ClientId, DisconnectReason},
+@@ -14,11 +17,14 @@ use smithay::{
+     utils::{Logical, Point},
+     wayland::{
+         compositor::{CompositorClientState, CompositorState},
++        fractional_scale::FractionalScaleManagerState,
+         output::OutputManagerState,
++        security_context::SecurityContextState,
+         selection::data_device::DataDeviceState,
+-        shell::xdg::XdgShellState,
++        shell::{wlr_layer::WlrLayerShellState, xdg::XdgShellState},
+         shm::ShmState,
+         socket::ListeningSocketSource,
++        viewporter::ViewporterState,
+     },
+ };
+ 
+@@ -29,10 +35,17 @@ pub struct Smallvil {
+ 
+     pub space: Space<Window>,
+     pub loop_signal: LoopSignal,
++    // calloop loop handle, needed to insert the wp_security_context listener
++    // source when a privileged client (e.g. a cosmic-panel applet) is created.
++    pub loop_handle: LoopHandle<'static, Smallvil>,
+ 
+     // Smithay State
+     pub compositor_state: CompositorState,
+     pub xdg_shell_state: XdgShellState,
++    pub layer_shell_state: WlrLayerShellState,
++    pub fractional_scale_manager_state: FractionalScaleManagerState,
++    pub security_context_state: SecurityContextState,
++    pub viewporter_state: ViewporterState,
+     pub shm_state: ShmState,
+     pub output_manager_state: OutputManagerState,
+     pub seat_state: SeatState<Smallvil>,
+@@ -43,7 +56,7 @@ pub struct Smallvil {
+ }
+ 
+ impl Smallvil {
+-    pub fn new(event_loop: &mut EventLoop<Self>, display: Display<Self>) -> Self {
++    pub fn new(event_loop: &mut EventLoop<'static, Self>, display: Display<Self>) -> Self {
+         let start_time = std::time::Instant::now();
+ 
+         let dh = display.handle();
+@@ -55,6 +68,14 @@ impl Smallvil {
+         // Initialize protocols needed for displaying windows
+         let compositor_state = CompositorState::new::<Self>(&dh);
+         let xdg_shell_state = XdgShellState::new::<Self>(&dh);
++        // Session-shell protocols cosmic-panel requires: a wlr-layer-shell global
++        // (the panel bar is a layer surface), plus wp_fractional_scale and
++        // wp_security_context managers (cosmic-panel probes for these at startup
++        // and logs NotPresent + degrades without them).
++        let layer_shell_state = WlrLayerShellState::new::<Self>(&dh);
++        let fractional_scale_manager_state = FractionalScaleManagerState::new::<Self>(&dh);
++        let security_context_state = SecurityContextState::new::<Self, _>(&dh, |_client| true);
++        let viewporter_state = ViewporterState::new::<Self>(&dh);
+         let shm_state = ShmState::new::<Self>(&dh, vec![]);
+         let popups = PopupManager::default();
+ 
+@@ -87,6 +108,7 @@ impl Smallvil {
+ 
+         // Get the loop signal, used to stop the event loop
+         let loop_signal = event_loop.get_signal();
++        let loop_handle = event_loop.handle();
+ 
+         Self {
+             start_time,
+@@ -94,10 +116,15 @@ impl Smallvil {
+ 
+             space,
+             loop_signal,
++            loop_handle,
+             socket_name,
+ 
+             compositor_state,
+             xdg_shell_state,
++            layer_shell_state,
++            fractional_scale_manager_state,
++            security_context_state,
++            viewporter_state,
+             shm_state,
+             output_manager_state,
+             seat_state,
+@@ -107,21 +134,14 @@ impl Smallvil {
+         }
+     }
+ 
+-    fn init_wayland_listener(display: Display<Smallvil>, event_loop: &mut EventLoop<Self>) -> OsString {
+-        // Creates a new listening socket, automatically choosing the next available `wayland` socket name.
++    fn init_wayland_listener(mut display: Display<Smallvil>, event_loop: &mut EventLoop<'static, Self>) -> OsString {
+         let listening_socket = ListeningSocketSource::new_auto().unwrap();
+-
+-        // Get the name of the listening socket.
+-        // Clients will connect to this socket.
+         let socket_name = listening_socket.socket_name().to_os_string();
+ 
+         let loop_handle = event_loop.handle();
+ 
+         loop_handle
+             .insert_source(listening_socket, move |client_stream, _, state| {
+-                // Inside the callback, you should insert the client into the display.
+-                //
+-                // You may also associate some data with the client when inserting the client.
+                 state
+                     .display_handle
+                     .insert_client(client_stream, Arc::new(ClientState::default()))
+@@ -129,16 +149,18 @@ impl Smallvil {
+             })
+             .expect("Failed to init the wayland event source.");
+ 
+-        // You also need to add the display itself to the event loop, so that client events will be processed by wayland-server.
++        // Dispatch the wayland display on a periodic Timer rather than a calloop
++        // Generic FD source. On illumos the nested-epoll readiness of client FDs
++        // does not propagate to the outer display poll FD, so a level-triggered
++        // Generic source never fires and clients hang at handshake. A time-based
++        // Timer polls the display unconditionally, sidestepping epoll entirely.
+         loop_handle
+             .insert_source(
+-                Generic::new(display, Interest::READ, Mode::Level),
+-                |_, display, state| {
+-                    // Safety: we don't drop the display
+-                    unsafe {
+-                        display.get_mut().dispatch_clients(state).unwrap();
+-                    }
+-                    Ok(PostAction::Continue)
++                Timer::immediate(),
++                move |_, _, state| {
++                    let _ = display.dispatch_clients(state);
++                    let _ = display.flush_clients();
++                    TimeoutAction::ToDuration(std::time::Duration::from_millis(4))
+                 },
+             )
+             .unwrap();
+diff --git a/smallvil/src/winit.rs b/smallvil/src/winit.rs
+index 190c155..f170376 100644
+--- a/smallvil/src/winit.rs
++++ b/smallvil/src/winit.rs
+@@ -3,10 +3,14 @@ use std::time::Duration;
+ use smithay::{
+     backend::{
+         renderer::{
+-            damage::OutputDamageTracker, element::surface::WaylandSurfaceRenderElement, gles::GlesRenderer,
++            damage::OutputDamageTracker,
++            element::surface::{WaylandSurfaceRenderElement, render_elements_from_surface_tree},
++            element::Kind,
++            gles::GlesRenderer,
+         },
+         winit::{self, WinitEvent},
+     },
++    desktop::layer_map_for_output,
+     output::{Mode, Output, PhysicalProperties, Subpixel},
+     reexports::calloop::EventLoop,
+     utils::{Rectangle, Transform},
+@@ -63,6 +67,28 @@ pub fn init_winit(
+ 
+                 {
+                     let (renderer, mut framebuffer) = backend.bind().unwrap();
++
++                    // Collect wlr-layer-shell surfaces (e.g. the cosmic-panel bar)
++                    // as custom render elements: smallvil's Space only tracks xdg
++                    // windows, so layer surfaces must be rendered explicitly at the
++                    // geometry the LayerMap arranged for them.
++                    let mut layer_elements: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = Vec::new();
++                    {
++                        let map = layer_map_for_output(&output);
++                        for layer in map.layers() {
++                            let geo = map.layer_geometry(layer).unwrap_or_default();
++                            let loc = geo.loc.to_physical(1);
++                            layer_elements.extend(render_elements_from_surface_tree(
++                                renderer,
++                                layer.wl_surface(),
++                                loc,
++                                1.0,
++                                1.0,
++                                Kind::Unspecified,
++                            ));
++                        }
++                    }
++
+                     smithay::desktop::space::render_output::<
+                         _,
+                         WaylandSurfaceRenderElement<GlesRenderer>,
+@@ -75,7 +101,7 @@ pub fn init_winit(
+                         1.0,
+                         0,
+                         [&state.space],
+-                        &[],
++                        &layer_elements,
+                         &mut damage_tracker,
+                         [0.1, 0.1, 0.1, 1.0],
+                     )
+@@ -92,6 +118,20 @@ pub fn init_winit(
+                     )
+                 });
+ 
++                // Frame callbacks for layer surfaces (the panel drives its next
++                // frame off these, same as normal windows).
++                {
++                    let map = layer_map_for_output(&output);
++                    for layer in map.layers() {
++                        layer.send_frame(
++                            &output,
++                            state.start_time.elapsed(),
++                            Some(Duration::ZERO),
++                            |_, _| Some(output.clone()),
++                        );
++                    }
++                }
++
+                 state.space.refresh();
+                 state.popups.cleanup();
+                 let _ = state.display_handle.flush_clients();

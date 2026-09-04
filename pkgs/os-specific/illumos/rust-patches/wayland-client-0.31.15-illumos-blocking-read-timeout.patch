@@ -1,0 +1,37 @@
+--- a/src/conn.rs
++++ b/src/conn.rs
+@@ -229,15 +229,27 @@
+         rustix::event::PollFlags::IN | rustix::event::PollFlags::ERR,
+     )];
+ 
+-    loop {
+-        match rustix::event::poll(&mut fds, None) {
+-            Ok(_) => break,
+-            Err(rustix::io::Errno::INTR) => continue,
+-            Err(e) => return Err(WaylandError::Io(e.into())),
+-        }
++    // On illumos the readiness of the wayland connection FD does not reliably
++    // propagate through poll(2) (the same nested-poll readiness gap that breaks
++    // calloop's Generic source and smallvil's server-side dispatch). A poll with
++    // an infinite timeout therefore blocks forever even when a read would
++    // succeed, wedging every synchronous Connection::roundtrip (e.g. winit's
++    // registry_queue_init that iced_winit applets do at startup). Poll with a
++    // short timeout instead and attempt the read unconditionally on wake-up, so
++    // pending events are drained even when poll never signals readable.
++    let timeout = rustix::event::Timespec {
++        tv_sec: 0,
++        tv_nsec: 8_000_000, // 8ms
++    };
++    match rustix::event::poll(&mut fds, Some(&timeout)) {
++        Ok(_) => {}
++        Err(rustix::io::Errno::INTR) => {}
++        Err(e) => return Err(WaylandError::Io(e.into())),
+     }
+ 
+-    // at this point the fd is ready
++    // Attempt the read regardless of whether poll reported readiness: on illumos
++    // poll may time out with data waiting. A WouldBlock simply yields 0 and the
++    // caller retries, which reissues the poll above.
+     match guard.read() {
+         Ok(n) => Ok(n),
+         // if we are still "wouldblock", just return 0; the caller will retry.
