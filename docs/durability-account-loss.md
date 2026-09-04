@@ -33,13 +33,21 @@ is cheaply rebuildable, or the artifact must be snapshotted.
    attach the volume elsewhere.
 3. **Prefer STOP over TERMINATE** for a build host whose volume you still want,
    and snapshot before stopping if the work is significant.
-4. **A script must not depend on an un-captured node-local artifact.** If a
+4. **"Copied to the dev box" is NOT "safe" -- only COMMITTED is safe.** A real
+   near-miss: the riscv64 libc patch and syslib shim were written into the repo
+   working tree and left UNTRACKED. They were briefly believed lost with a
+   terminated node (the check looked in the wrong repo), and even once found they
+   were one careless clean from genuine loss. Corollary for the orchestrator:
+   harvesting an agent's artifact is not done until `git commit` has run. Corollary
+   for agents: say WHERE you persisted something, with a full path, so the harvest
+   cannot look in the wrong place.
+5. **A script must not depend on an un-captured node-local artifact.** If a
    script wants `/root/solnix-assets/X`, then either X's *source* is in git with a
    documented rebuild step, or X is in a snapshot. State which, in the script.
-5. **Record the substrate in `.infra/`** (gitignored): account id, region, quota,
+6. **Record the substrate in `.infra/`** (gitignored): account id, region, quota,
    keypair, SG, serial-console status, and the ids of every durable AMI/snapshot.
    The published repo must not carry cloud specifics.
-6. **Re-verify the rebuild path is real, not assumed.** The x86 base is
+7. **Re-verify the rebuild path is real, not assumed.** The x86 base is
    rebuildable because it starts from a *public* source
    (`dlc.openindiana.org/isos/hipster/.../OI-hipster-cloudimage.img.zst`) plus
    committed fixes. Any platform whose starting point is NOT public+committed is
