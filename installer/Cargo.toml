@@ -1,0 +1,33 @@
+[package]
+name = "solnix-installer"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "solnix-installer"
+path = "src/main.rs"
+
+[features]
+default = ["wayland"]
+wayland = ["libcosmic/wayland"]
+
+[dependencies]
+env_logger = "0.11"
+
+[dependencies.libcosmic]
+git = "https://github.com/pop-os/libcosmic"
+rev = "2ab0d4c57079f0baf91d24b08a3821984121af62"
+default-features = false
+features = [
+    "winit",
+    "tokio",
+    "a11y",
+    "dbus-config",
+    "single-instance",
+    "multi-window",
+    "x11",
+    "wayland",
+]
+
+[profile.release]
+opt-level = 3

@@ -77,3 +77,6 @@ src/riscv/uts/unix-scanout
 
 # Build scratch.
 wave12-work/
+# Scratch copies of the RISC-V phase trees; their unique content is merged into
+# the tracked src/riscv/rp*/ trees (verified: 0 sources missing).
+_rp[0-9][0-9]/
