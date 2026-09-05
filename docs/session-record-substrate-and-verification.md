@@ -57,6 +57,14 @@ calloop patch but was **complementary** (compositor side vs client side, differe
 - **A harness can test the right function and still miss the bug.** The GICR harness tested
   the coalescer but not the coalescer's *input path*, and a guard there discarded 63 of 64
   cpus. It now mirrors the guard, verified failing with the bug re-injected.
+- **A correlation is not a mechanism.** "The working boot does X right where the broken
+  one dies" felt like evidence and was not: the two boots were running *different
+  drivers* (QEMU virt attaches `gictwo0`/GICv2; the metal path is `gicthree.c`), so the
+  comparison was meaningless. Before building on a cross-environment comparison, confirm
+  both sides execute the same code. And **decode numbers rather than pattern-matching
+  them** -- the "byte-wide writes" were QEMU decomposing one 32-bit store into four
+  `writeb` log lines, and every "bad offset" decoded to a single value: QEMU's own
+  `num_irq` bound.
 - **Check before dismissing.** Three findings (the complementary patch, the `_rp*` trees,
   the "lost" artifacts) came from comparing rather than assuming.
 - **Snapshot a toolchain the moment it works, before first use.** See
