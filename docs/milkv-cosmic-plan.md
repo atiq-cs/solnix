@@ -45,7 +45,21 @@ critical path. Measured properly in `docs/riscv64-libc-rust-abi-gap.md`, which
   sends one hand-built ARP frame). All seven `__xnet_*` are MISSING-AT-KERNEL, so
   they cannot honestly be implemented before that exists.
 
-**And one kernel change is on the critical path right now: the `tp` collision.**
+> **UPDATE -- Gate A moved substantially.** The `tp` collision is **RESOLVED** (split by
+> privilege: userland's TLS pointer in U-mode, the kernel's per-hart id in S-mode, swapped
+> by `trap.S` into a trapframe slot that costs no memory; `this_cpu()` is still one register
+> read). **AF_UNIX/SOCK_STREAM with SCM_RIGHTS is REAL** -- 18/18 checks across two
+> processes with the received fd proven writable-through, negative-controlled. Five of the
+> sixteen ABI symbols moved `[ENOSYS]` -> `[REAL]`. Three pre-existing kernel bugs were
+> found and fixed on the way (second-fork COW dropping `PTE_COW`, the `copy_lofault`
+> redirect ignoring `SPP`, `this_cpu()` masking instead of validating).
+>
+> **What a Wayland client still needs, in priority order: `poll(2)`/`select` (a compositor
+> main loop is built on it), threads/`pthread_create`, anonymous mmap (only `/dev/fb` is
+> mappable today), `dlopen`, `__tls_get_addr`.** That list -- not TCP/IP, and no longer
+> sockets -- is the remaining Gate A work.
+
+**And one kernel change WAS on the critical path: the `tp` collision (now fixed).**
 RISC-V reserves `tp` for the userland thread pointer; our kernel repurposes it as
 the hart index (`uts/proc.c` does `mv tp, hartid`). Rust TLS cannot work until `tp`
 belongs to userland and the hart id moves to a CSR. Cheap to fix now, expensive
