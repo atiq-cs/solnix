@@ -70,6 +70,21 @@ extern long proc_pipe(int *ufds);
 extern long proc_dup2(int oldfd, int newfd);
 extern long sys_sync(void);
 extern long sys_remount(void);
+/* AF_UNIX sockets (uproc.c: the fd-table half; unixsock.c: the protocol). */
+extern long sys_socket(int domain, int type, int protocol);
+extern long sys_socketpair(int domain, int type, int protocol, int *ufds);
+extern long sys_bind(int fd, unsigned long uaddr, unsigned int ulen);
+extern long sys_listen(int fd, int backlog);
+extern long sys_accept(int fd, unsigned long uaddr, unsigned long ulenp);
+extern long sys_connect(int fd, unsigned long uaddr, unsigned int ulen);
+extern long sys_getsockopt(int fd, int level, int name, unsigned long uval,
+    unsigned long ulenp);
+extern long sys_setsockopt(int fd, int level, int name, unsigned long uval,
+    unsigned int ulen);
+extern long sys_sendmsg_fds(int fd, const char *ubuf, unsigned long n,
+    unsigned long ufds, int nfds);
+extern long sys_recvmsg_fds(int fd, char *ubuf, unsigned long n,
+    unsigned long ufds, int maxfds, unsigned long unfds_out);
 /*
  * The scanout seam (docs/riscv64-scanout-seam.md): ioctl carries the
  * FBIOGMODE/FBIOFLUSH contract and mmap hands the compositor the framebuffer.
@@ -115,6 +130,24 @@ extern long copyout(const void *kaddr, void *uaddr, unsigned long n);
 #define	SYS_preemptreport 501
 /* solnix-private: invalidate the block cache + re-mount the on-disk FS. */
 #define	SYS_remount	502
+/*
+ * AF_UNIX sockets. The numbers follow the riscv Linux ABI (as every other
+ * syscall here does) so a freestanding userland stub links unchanged.
+ * sendmsg/recvmsg deliberately take a FLAT fd array rather than a struct msghdr
+ * + cmsghdr chain: the cmsghdr walk belongs in libsocket's __xnet_sendmsg, which
+ * is where illumos puts it, and keeping it out of the kernel keeps this path
+ * small and total. See the sys_sendmsg_fds comment in uproc.c.
+ */
+#define	SYS_socket	198
+#define	SYS_socketpair	199
+#define	SYS_bind	200
+#define	SYS_listen	201
+#define	SYS_accept	202
+#define	SYS_connect	203
+#define	SYS_getsockopt	209
+#define	SYS_setsockopt	208
+#define	SYS_sendmsg	211
+#define	SYS_recvmsg	212
 
 /*
  * sys_write — write `n` bytes of the user buffer to the console (fd 1 = stdout,
@@ -256,6 +289,45 @@ syscall_trap(struct regs *tf)
 		break;
 	case SYS_remount:
 		ret = sys_remount();
+		break;
+	case SYS_socket:
+		ret = sys_socket((int)tf->r_a0, (int)tf->r_a1, (int)tf->r_a2);
+		break;
+	case SYS_socketpair:
+		/* a0=domain a1=type a2=protocol a3=int[2] out */
+		ret = sys_socketpair((int)tf->r_a0, (int)tf->r_a1,
+		    (int)tf->r_a2, (int *)tf->r_a3);
+		break;
+	case SYS_bind:
+		ret = sys_bind((int)tf->r_a0, tf->r_a1, (unsigned int)tf->r_a2);
+		break;
+	case SYS_listen:
+		ret = sys_listen((int)tf->r_a0, (int)tf->r_a1);
+		break;
+	case SYS_accept:
+		ret = sys_accept((int)tf->r_a0, tf->r_a1, tf->r_a2);
+		break;
+	case SYS_connect:
+		ret = sys_connect((int)tf->r_a0, tf->r_a1,
+		    (unsigned int)tf->r_a2);
+		break;
+	case SYS_getsockopt:
+		ret = sys_getsockopt((int)tf->r_a0, (int)tf->r_a1,
+		    (int)tf->r_a2, tf->r_a3, tf->r_a4);
+		break;
+	case SYS_setsockopt:
+		ret = sys_setsockopt((int)tf->r_a0, (int)tf->r_a1,
+		    (int)tf->r_a2, tf->r_a3, (unsigned int)tf->r_a4);
+		break;
+	case SYS_sendmsg:
+		/* a0=fd a1=buf a2=len a3=int* fds a4=nfds (see uproc.c) */
+		ret = sys_sendmsg_fds((int)tf->r_a0, (const char *)tf->r_a1,
+		    tf->r_a2, tf->r_a3, (int)tf->r_a4);
+		break;
+	case SYS_recvmsg:
+		/* a0=fd a1=buf a2=len a3=int* fds a4=maxfds a5=int* nfds_out */
+		ret = sys_recvmsg_fds((int)tf->r_a0, (char *)tf->r_a1,
+		    tf->r_a2, tf->r_a3, (int)tf->r_a4, tf->r_a5);
 		break;
 	case SYS_getpid:
 		ret = proc_getpid();

@@ -306,8 +306,22 @@ trap(struct regs *tf)
 	 * label and this is a load/store fault (bad user pointer), redirect the
 	 * return PC to the recovery label and clear the arm. The copy routine
 	 * lands on _copy_fault and returns -1 (EFAULT) to its caller — no panic.
+	 *
+	 * SPP==1 IS REQUIRED. copy_lofault is a KERNEL text address, so this
+	 * redirect is only meaningful when the faulting copy was executing in
+	 * S-mode. If the trap came from U-mode (SPP==0), sret would drop to U-mode
+	 * at a kernel VA userland cannot execute, turning a recoverable EFAULT into
+	 * an immediate instruction page fault whose stval and sepc BOTH equal
+	 * _copy_fault -- a confusing crash far from its cause. The arm is a global
+	 * rather than per-frame, so a U-mode fault CAN arrive while some copy is
+	 * armed without belonging to it; requiring SPP makes the guard say what it
+	 * means.
+	 *
+	 * NOTE: global arm. rv_context.c_lofault already saves/restores it per
+	 * thread, which is a hint that making copy_lofault per-thread outright is
+	 * the real upgrade.
 	 */
-	if (copy_lofault != 0 &&
+	if (copy_lofault != 0 && (tf->r_sstatus & SSTATUS_SPP) != 0 &&
 	    (code == EXC_LOAD_PAGE_FAULT || code == EXC_STORE_PAGE_FAULT ||
 	    code == EXC_LOAD_ACCESS || code == EXC_STORE_ACCESS)) {
 		tf->r_sepc = copy_lofault;

@@ -25,7 +25,7 @@ CFLAGS="-march=rv64imac_zicsr -mabi=lp64 -mcmodel=medany \
 	-ffreestanding -nostdlib -fno-stack-protector -fno-pic \
 	-Wall -Wextra -Os -g"
 
-PROGS="init sh hello echo cat fbtest"
+PROGS="init sh hello echo cat fbtest socktest"
 
 echo "== build libc slice: libc-riscv.a =="
 "$CC" $CFLAGS -c libc.c -o libc.o
@@ -77,6 +77,8 @@ cp echo.elf  "$STAGE/bin/echo"
 cp cat.elf   "$STAGE/bin/cat"
 # R-P64: the /dev/fb scanout-seam proof (init runs it as a boot gate).
 cp fbtest.elf "$STAGE/bin/fbtest"
+# The AF_UNIX + SCM_RIGHTS gate (init runs it as a boot gate).
+cp socktest.elf "$STAGE/bin/socktest"
 printf 'solnix riscv64 - the first illumos on RISC-V. R-P11: signals, writable FS, passwd login, concurrent shells.\n' \
 	> "$STAGE/etc/motd"
 # /etc/passwd: R-P11 login reads uid/gid/shell from here.
@@ -93,7 +95,7 @@ cat > "$STAGE/etc/inittab" <<'EOF'
 wait:/bin/hello
 EOF
 ( cd "$STAGE" && tar --format=ustar -cf rootfs.tar \
-    sbin/init bin/sh bin/hello bin/echo bin/cat bin/fbtest \
+    sbin/init bin/sh bin/hello bin/echo bin/cat bin/fbtest bin/socktest \
     etc/motd etc/inittab etc/passwd )
 cp "$STAGE/rootfs.tar" ../rootfs.img
 sz=$(wc -c < ../rootfs.img)

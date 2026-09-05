@@ -145,13 +145,46 @@ runq_lock_exit(void)
  * decisions, so this_cpu() has nothing to be correct FOR there; the gap costs
  * nothing. Fixing that root cause is worth doing, but it is a separate change and
  * must be verified by boot rate, not by inspection.
+ *
+ * WHY A RANGE CHECK, not a mask. This used to be `id & (MAXCPU - 1)`, which
+ * turns ANY value in tp into a valid-looking cpu index. That is only safe while
+ * nothing but the kernel ever writes tp. Now that userland owns tp in U-mode, a
+ * stale or foreign value can reach here -- and MAXCPU is 8 while a typical boot
+ * is -smp 4, so masking folds it into the 4..7 range whose curthread[] slots
+ * stay NULL for the whole boot, giving a NULL dereference far from the cause.
+ * (Measured: a userland tp of 0x5a5a0000deadbeef masks to 7 and killed
+ * thread_preempt inside the timer trap.) Returning -1 makes an untrustworthy tp
+ * a condition callers can refuse to act on rather than a silent mis-index. Cost
+ * is one compare-and-branch; still no memory traffic.
  */
 static inline int
 this_cpu(void)
 {
 	unsigned long id;
 	__asm__ __volatile__("mv %0, tp" : "=r"(id));
-	return ((int)(id & (MAXCPU - 1)));
+	if (id >= MAXCPU)
+		return (-1);		/* tp is not a hart id: say so, do not guess */
+	return ((int)id);
+}
+
+/*
+ * this_cpu_ok -- the cpu index for code that runs on a kernel thread, where tp
+ * is a hart id by contract (every kernel-thread context carries c_tp, and the
+ * trap entry reloads it on the way in from U-mode). Falls back to cpu 0 if that
+ * contract is somehow broken, because these callers have no way to decline: they
+ * are mid-yield/exit/sleep and must index SOMETHING. Cpu 0's slots are always
+ * initialized, so the fallback degrades to "the wrong hart's bookkeeping" rather
+ * than a NULL dereference.
+ *
+ * Callers that CAN decline (thread_preempt, reached from the timer trap where a
+ * userland tp may still be live) use this_cpu() and check for -1 instead.
+ */
+static inline int
+this_cpu_ok(void)
+{
+	int cpu = this_cpu();
+
+	return (cpu < 0 ? 0 : cpu);
 }
 
 /* Set this hart's S-mode id into tp (locore seeds it; this re-stamps it). */
@@ -174,7 +207,21 @@ int
 thread_preempt(void)
 {
 	int cpu = this_cpu();
-	kthread_t *self = curthread[cpu];
+	kthread_t *self;
+
+	/*
+	 * Refuse to act on a cpu identity we do not trust. this_cpu() returns -1
+	 * when tp does not hold a hart id, and curthread[] is NULL for any hart
+	 * that never entered the dispatcher. Preemption is always optional -- not
+	 * preempting is a correct outcome -- so bail instead of dereferencing.
+	 * Without this, an untrustworthy tp turned a skipped time-slice into a
+	 * fatal NULL dereference inside the timer trap.
+	 */
+	if (cpu < 0)
+		return (0);
+	self = curthread[cpu];
+	if (self == 0)
+		return (0);
 
 	if (self->t_state == TS_IDLE)
 		return (0);		/* idle thread never preempts */
@@ -194,7 +241,7 @@ thread_preempt(void)
 unsigned long
 curthread_kstacktop(void)
 {
-	kthread_t *self = curthread[this_cpu()];
+	kthread_t *self = curthread[this_cpu_ok()];
 
 	if (self == 0 || self->t_stack == 0)
 		return (0);
@@ -280,7 +327,7 @@ thread_create(void (*entry)(void *), void *arg)
 	 * This is the KERNEL id only: a user thread's tp is its TLS pointer and
 	 * lives in the process's saved user frame (p_uframe.r_tp), not here.
 	 */
-	t->t_ctx.c_tp = (unsigned long)this_cpu();
+	t->t_ctx.c_tp = (unsigned long)this_cpu_ok();
 	/*
 	 * New threads start on the kernel address space (the creator's, which is
 	 * the kernel satp). A user-process thread body switches to its own AS as
@@ -302,7 +349,7 @@ thread_create(void (*entry)(void *), void *arg)
 void
 swtch(void)
 {
-	int cpu = this_cpu();
+	int cpu = this_cpu_ok();
 	kthread_t *old = curthread[cpu];
 	kthread_t *new;
 
@@ -350,7 +397,7 @@ swtch(void)
 void
 thread_yield(void)
 {
-	int cpu = this_cpu();
+	int cpu = this_cpu_ok();
 	kthread_t *self = curthread[cpu];
 
 	if (self->t_state != TS_IDLE)
@@ -382,7 +429,7 @@ static kthread_t *sleepq_head;		/* singly-linked list of TS_SLEEP threads */
 void
 sleep_on(void *chan)
 {
-	int cpu = this_cpu();
+	int cpu = this_cpu_ok();
 	kthread_t *self = curthread[cpu];
 
 	self->t_state = TS_SLEEP;
@@ -446,7 +493,7 @@ wakeup(void *chan)
 void
 thread_exit(void)
 {
-	int cpu = this_cpu();
+	int cpu = this_cpu_ok();
 	kthread_t *self = curthread[cpu];
 
 	self->t_state = TS_DEAD;
@@ -463,7 +510,7 @@ thread_exit(void)
 int
 curthread_id(void)
 {
-	kthread_t *self = curthread[this_cpu()];
+	kthread_t *self = curthread[this_cpu_ok()];
 	return (self != 0 ? self->t_id : 0);
 }
 
@@ -709,7 +756,7 @@ smp_secondary_dispatch(unsigned long hartid)
 		if (t != 0) {
 			/* Run it: switch to it, it returns to the runq when it
 			 * yields/exits, and we (idle) resume here. */
-			int cpu = this_cpu();
+			int cpu = this_cpu_ok();
 			kthread_t *self = curthread[cpu];
 			t->t_state = TS_ONPROC;
 			t->t_cpu = cpu;
@@ -741,7 +788,7 @@ smp_probe_body(void *arg)
 	 * here too would interleave byte-for-byte with smp_selftest's line, as
 	 * the console has no cross-hart lock yet — that lock is the next SMP
 	 * item). Recording is a single word store, ordered by the release below. */
-	__atomic_store_n(&smp_ran_on_hart, this_cpu(), __ATOMIC_RELEASE);
+	__atomic_store_n(&smp_ran_on_hart, this_cpu_ok(), __ATOMIC_RELEASE);
 	thread_exit();
 }
 

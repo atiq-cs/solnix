@@ -633,8 +633,38 @@ hat_as_cow_share(unsigned long dstroot, unsigned long srcroot)
 							*cp |= PTE_COW;
 					}
 					page_incref(pa);
+				} else if (pte & PTE_COW) {
+					/*
+					 * ALREADY-COW leaf: this parent has been
+					 * forked before, so an earlier fork already
+					 * dropped W and set COW here. It is NOT a
+					 * genuinely read-only page, so it must be
+					 * shared COW again -- the new child needs
+					 * PTE_COW too, or its first write store-faults
+					 * on a leaf that hat_as_cow_fault refuses to
+					 * split (V|U|!W|!COW) and the process dies.
+					 *
+					 * WHY THIS BRANCH IS SEPARATE: the test above
+					 * asks "is it writable NOW", which cannot tell
+					 * a never-writable page from one made RO by a
+					 * previous fork. PTE_COW is exactly that
+					 * distinction, so consult it rather than
+					 * inferring writability from the perm bits.
+					 * The parent's leaf is already RO+COW and stays
+					 * as it is; only the child mapping is added.
+					 */
+					hat_as_map(dstroot, va, pa, perm);
+					{
+						unsigned long *cp =
+						    hat_pte_ptr(dstroot, va);
+						if (cp != 0)
+							*cp |= PTE_COW;
+					}
+					page_incref(pa);
 				} else {
-					/* Read/exec-only: share verbatim. */
+					/* Never-writable leaf (text/rodata): share
+					 * verbatim. A read never faults, and a write
+					 * SHOULD fault -- there is nothing to split. */
 					hat_as_map(dstroot, va, pa, perm);
 					page_incref(pa);
 				}
