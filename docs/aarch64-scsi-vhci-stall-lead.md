@@ -1,4 +1,52 @@
-# aarch64: the post-`scsi_vhci` stall — a lead worth starting from
+# aarch64: the post-`scsi_vhci` stall
+
+> ## ⚠️ THE HYPOTHESIS BELOW IS REFUTED. Read this box, then skip to "The real lead".
+>
+> I wrote the byte-wide-GICD-write theory from the QEMU log and committed it. It is
+> **wrong**, refuted statically with no hardware spend, on three independent counts
+> (all re-verified by me):
+>
+> 1. **No byte accessor exists.** `gicthree.c` has only `gicd_write4` = `ddi_put32`
+>    and `gicd_write8` = `ddi_put64`. The sweep is **already word-granular**:
+>    `for (n = 32; n < gc_maxsources; n += 32) gicd_write4(gc, GICD_ICENABLERn(n>>5), 0xFFFFFFFF)`.
+>    Same in `gictwo.c`.
+> 2. **QEMU manufactures the bytes, not the kernel.** `hw/intc/arm_gic.c` decomposes
+>    `gic_dist_writel()` -> 2x `writew` -> 4x `writeb`, so ONE 32-bit kernel store
+>    produces FOUR "writeb" log lines. The log shows exactly that: runs of four
+>    consecutive bytes at **word-aligned** starts (`0x1a4` is `% 4 == 0`, then
+>    `1a5 1a6 1a7`, then `2a4..2a7`). I confirmed the alignment and the run length.
+> 3. **"Bad offset" is QEMU's `num_irq` bound, not a granularity complaint.** Every
+>    register group's first rejected offset decodes to **irq 288 = QEMU virt's
+>    `NUM_IRQS`(256) + 32**: ICENABLER `0x1a4`, ICPENDR `0x2a4`, ICACTIVER `0x3a4`,
+>    IPRIORITYR `0x520`, ITARGETSR `0x920` all -> 288. The kernel sweeps to
+>    `GICD_TYPER_LINES` (up to 1020); QEMU virt has only 288 lines. Nothing that
+>    matters is dropped, and on Graviton those lines physically exist so there is
+>    nothing to reject at all.
+>
+> And the fatal flaw in my reasoning: the QEMU log's next node after `scsi_vhci` is
+> **`gictwo0 at root`** -- QEMU virt runs the **GICv2** driver, while the metal path
+> is `gicthree.c`. A different attach entirely, so that log could never have
+> evidenced the metal stall. I compared two different code paths and did not check
+> which driver each was using.
+>
+> **Lesson:** "the working boot does X right where the broken one dies" is a
+> correlation, and I treated it as a mechanism. Before building on it, confirm both
+> sides are running the same code -- and decode the numbers rather than
+> pattern-matching them (my own ICFGR decode was also wrong: it is 2 bits per irq).
+>
+> ## The real lead (same class as the boot_uart FR-poll bug)
+>
+> `gicthree.c:303 reg_await_clear4()` is an **unbounded** `while (ddi_get32(...) & mask);`
+> spin, reached from `gicd_drain_writes` (GICD_CTLR.RWP), `gicr_drain_writes`
+> (GICR_CTLR.RWP) and `gicv3_awaken_cpu` (GICR_WAKER.ChildrenAsleep). **A silent hang
+> with no panic is exactly an unbounded MMIO spin** -- a `VERIFY` would have printed
+> something. This is the same failure shape as the Graviton boot-UART FR-poll bug,
+> where a flag that never changes state on this hardware wedged an unbounded poll.
+
+---
+
+# Original (REFUTED) hypothesis, kept for the record
+
 
 The GICv3 redistributor-count blocker is cleared on real Graviton
 (`artifacts/a6gic3-metal-console-GIC-CLEARED.txt`). The boot now reaches:
