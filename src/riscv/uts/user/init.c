@@ -320,6 +320,116 @@ pipe_gate(void)
 }
 
 /*
+ * tp_gate -- prove userland owns tp (x4).
+ *
+ * The RISC-V TLS ABI requires tp to point at the running thread's TLS block, so
+ * a userland program must be able to put a value in tp and find it unchanged
+ * later. The kernel also keeps a per-hart id in tp -- but only while in S-mode
+ * (see uts/asm_frame.h TF_CPUID). This test is the positive proof that the split
+ * holds, and it is the check that fails if the kernel ever reclaims tp:
+ *
+ *   1. A syscall (a synchronous trap into S-mode and back) must not disturb tp.
+ *      This is the path that reloads the kernel id on entry and restores the
+ *      user tp on exit; get it backwards and tp comes back as a small integer.
+ *   2. A long spin must not disturb tp either. That covers the ASYNCHRONOUS
+ *      path: a timer tick lands mid-loop, may preempt to another thread and even
+ *      another hart, and tp must still survive. A syscall-only test would pass
+ *      even with the interrupt path broken.
+ *   3. A forked child running with its own tp must not perturb the parent's, and
+ *      vice versa -- tp is per-process state, not a global register.
+ *
+ * The magic values are deliberately large and not small integers, so a tp that
+ * comes back holding a hart id (0..7) or zero reads as an obvious failure rather
+ * than a plausible one.
+ */
+#define	TP_MAGIC_PARENT	0x5a5a0000deadbeefUL
+#define	TP_MAGIC_CHILD	0xa5a5000012345678UL
+
+static unsigned long
+tp_read(void)
+{
+	unsigned long v;
+	__asm__ __volatile__("mv %0, tp" : "=r"(v));
+	return (v);
+}
+
+static void
+tp_write(unsigned long v)
+{
+	__asm__ __volatile__("mv tp, %0" :: "r"(v));
+}
+
+static int
+tp_check(unsigned long want, const char *what)
+{
+	unsigned long got = tp_read();
+
+	if (got == want) {
+		printf("  [ok] tp survived %s\n", what);
+		return (0);
+	}
+	printf("  [FAIL] tp clobbered by %s: got 0x%x%x want 0x%x%x\n", what,
+	    (unsigned int)(got >> 32), (unsigned int)got,
+	    (unsigned int)(want >> 32), (unsigned int)want);
+	return (1);
+}
+
+static void
+tp_gate(void)
+{
+	int bad = 0, pid, st = 0;
+	volatile unsigned long spin;
+
+	puts("\n--- gate: userland owns tp (x4), the TLS thread pointer ---\n");
+
+	/* 3. Child first: it must not see, or leak into, the parent's tp. */
+	pid = fork();
+	if (pid == 0) {
+		int cbad = 0;
+
+		tp_write(TP_MAGIC_CHILD);
+		(void) getpid();
+		cbad += tp_check(TP_MAGIC_CHILD, "a syscall in the child");
+		for (spin = 0; spin < 4000000UL; spin++)
+			;
+		cbad += tp_check(TP_MAGIC_CHILD, "a preemptible spin in the child");
+		_exit(cbad == 0 ? 0 : 1);
+	}
+
+	/* 1. + 2. in the parent, concurrently with the child's own tp. */
+	tp_write(TP_MAGIC_PARENT);
+	(void) getpid();
+	bad += tp_check(TP_MAGIC_PARENT, "a syscall");
+	for (spin = 0; spin < 4000000UL; spin++)
+		;
+	bad += tp_check(TP_MAGIC_PARENT, "a preemptible spin (timer ticks)");
+
+	if (pid > 0) {
+		waitpid(pid, &st, 0);
+		if (st == 0) {
+			puts("  [ok] the child kept its own distinct tp\n");
+		} else {
+			puts("  [FAIL] the child's tp was clobbered\n");
+			bad++;
+		}
+		bad += tp_check(TP_MAGIC_PARENT, "a child running with its own tp");
+	}
+
+	/*
+	 * Leave tp at 0 on the way out. Nothing in this libc uses tp yet, and
+	 * leaving a magic value there would make a future real TLS pointer's first
+	 * bug look like a stale value from this test.
+	 */
+	tp_write(0);
+
+	if (bad == 0)
+		puts("TP GATE PASS: userland tp is preserved across syscalls, "
+		    "interrupts and fork\n");
+	else
+		puts("TP GATE FAIL\n");
+}
+
+/*
  * scanout_gate -- R-P64. Run /bin/fbtest, the userland proof of the /dev/fb
  * scanout seam (open + FBIOGMODE + mmap + paint + FBIOFLUSH). Forked so a
  * failure in the test cannot take init down, and so the seam is exercised from
@@ -434,6 +544,9 @@ main(int argc, char **argv)
 	/* --- R-P12 gates. --- */
 	pipe_gate();		/* gate 1: pipes + dup2 */
 	ondisk_fs_gate();	/* gate 2: on-disk writable FS + block cache */
+
+	/* --- tp belongs to userland: the precondition for any TLS. --- */
+	tp_gate();
 
 	/* --- R-P64 scanout seam: /dev/fb from userland. ---
 	 * Runs /bin/fbtest as a child so a failure there cannot take init down,

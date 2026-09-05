@@ -83,16 +83,26 @@ def main():
               f"RGB{got} expect RGB{exp}")
 
     # The diagonal proves stride addressing: a wrong stride shears it.
+    #
+    # fbtest paints white where x*h == y*w EXACTLY. Recomputing x as y*w//h does
+    # NOT round-trip through integer division for most sizes, so scan for the
+    # points that genuinely satisfy the predicate rather than assuming a sampled
+    # position lands on the line. (At 1280x800 the naive form happens to work,
+    # which is exactly how a latent test bug hides.)
     hits = 0
     samples = 0
-    for i in range(1, 10):
-        y = i * h // 10
-        x = y * w // h
-        if 0 <= x < w:
-            samples += 1
-            if at(x, y) == WHITE:
-                hits += 1
-    good = hits == samples
+    for y in range(0, h, max(1, h // 24)):
+        for x in range(w):
+            if x * h == y * w:
+                samples += 1
+                if at(x, y) == WHITE:
+                    hits += 1
+                break
+    # x*h == y*w has a solution only every h/gcd(w,h) rows, so the number of
+    # exact points is a property of the resolution, not of correctness. Require a
+    # handful and that ALL of them are white -- a sheared diagonal fails on the
+    # colors, not on the count.
+    good = samples >= 4 and hits == samples
     ok &= good
     print(f"  {'ok  ' if good else 'FAIL'} white diagonal at {hits}/{samples} "
           f"sampled points (proves stride addressing, not width*4)")

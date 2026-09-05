@@ -22,8 +22,17 @@
  * it) we build the frame on the kernel stack and save the user sp from
  * sscratch. If we came from S-mode (sscratch was 0), we swap back and use the
  * current kernel sp — exactly the R-P3 behaviour, so the timer/PLIC/probe
- * paths are unchanged. This is the NetBSD riscv trapframe U/S idiom,
+ * bits must be 0 in Direct mode). This is the NetBSD riscv trapframe U/S idiom,
  * reimplemented from the Priv Spec.
+ *
+ * THE tp SPLIT: tp (x4) means different things by privilege. In U-mode it is
+ * userland's thread pointer (the RISC-V TLS ABI requires it there); in S-mode it
+ * is the kernel's per-hart id (what this_cpu() reads). This vector is the seam
+ * that swaps them: a trap FROM U saves the user tp into TF_TP and reloads the
+ * kernel id from TF_CPUID; a return TO U stamps TF_CPUID with the live kernel id
+ * and restores the user tp from TF_TP. A trap from S-mode does neither -- tp is
+ * already the kernel id there. See asm_frame.h TF_CPUID for why the id lives in
+ * the trap frame rather than in a CSR.
  */
 
 #include "asm_frame.h"
@@ -78,6 +87,23 @@ _trap_entry:
 	sd	t0,  TF_SP(sp)
 	sd	x3,  TF_GP(sp)
 	sd	x4,  TF_TP(sp)
+	/*
+	 * THE tp SPLIT, U side. Discriminate on sstatus.SPP, the authoritative
+	 * "came from U" bit (t0 cannot serve here: after label 2 it holds a stack
+	 * pointer, which is nonzero in BOTH cases). SPP==0 means x4/tp held
+	 * USERLAND's thread pointer -- now safely in TF_TP -- and the kernel's
+	 * per-hart id is parked in TF_CPUID, so reload it and this_cpu() is correct
+	 * for the whole of the C handler. SPP==1 means tp is already the kernel id
+	 * and TF_CPUID holds nothing meaningful, so skip it.
+	 *
+	 * ORDERING: must come after `sd x4, TF_TP(sp)` (else the user tp is lost),
+	 * and it may clobber t0 only because x5 was saved to TF_T0 above.
+	 */
+	csrr	t0, sstatus
+	andi	t0, t0, SSTATUS_SPP
+	bnez	t0, 5f			/* SPP=1: from S-mode, tp is already ours */
+	ld	x4,  TF_CPUID(sp)
+5:
 	sd	x6,  TF_T1(sp)
 	sd	x7,  TF_T2(sp)
 	sd	x8,  TF_S0(sp)
@@ -145,6 +171,18 @@ _trap_entry:
 	bnez	t1, 3f			/* SPP=1 => returning to S-mode */
 	addi	t1, sp, TF_SIZE		/* SPP=0 => kernel stack top for next U trap */
 	csrw	sscratch, t1
+	/*
+	 * THE tp SPLIT, S side. We are about to hand tp back to userland, so park
+	 * the kernel's per-hart id (live in tp right now) in TF_CPUID, where the
+	 * next trap from U reloads it. The frame that trap builds has its base at
+	 * sscratch - TF_SIZE == this sp, so the slot the reader reads is the slot we
+	 * write.
+	 *
+	 * A preemptive swtch inside trap() may have moved this thread to another
+	 * hart; that swtch re-stamped tp, so stamping from tp HERE (rather than from
+	 * anything read on entry) records the hart we are actually returning on.
+	 */
+	sd	x4, TF_CPUID(sp)
 	j	4f
 3:
 	csrw	sscratch, zero
@@ -207,12 +245,24 @@ _trap_entry:
  *
  * This is the one-way door from S-mode into a userland process. The satp for
  * the process address space must already be loaded by the caller (as_switch).
+ *
+ * THE tp SPLIT: this path hands tp to userland without ever building a trap
+ * frame, so it must park the kernel's per-hart id itself. The id goes at
+ * kstacktop-8, the exact word the next trap-from-U reads as TF_CPUID (that trap
+ * builds its frame at kstacktop-TF_SIZE).
  */
 	.globl usermode_entry
 	.type usermode_entry, @function
 usermode_entry:
 	/* Install the kernel stack top for the next trap-from-U. */
 	csrw	sscratch, a1
+
+	/*
+	 * Park the kernel's per-hart id (live in tp) at kstacktop-8, where the next
+	 * trap from U reads it as TF_CPUID. Must precede the user tp load below,
+	 * which is the instant tp stops being ours.
+	 */
+	sd	tp, TF_CPUID_FROM_KSTACKTOP(a1)
 
 	/* Build sstatus: clear SPP (=>U), set SPIE (=>SIE in U), set SUM. */
 	csrr	t0, sstatus

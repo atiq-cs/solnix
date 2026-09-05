@@ -40,6 +40,17 @@ _Static_assert(__builtin_offsetof(struct regs, r_sstatus) == TF_SSTATUS, "TF_SST
 _Static_assert(__builtin_offsetof(struct regs, r_scause) == TF_SCAUSE, "TF_SCAUSE");
 _Static_assert(__builtin_offsetof(struct regs, r_stval) == TF_STVAL, "TF_STVAL");
 _Static_assert(sizeof (struct regs) <= TF_SIZE, "TF_SIZE too small");
+/*
+ * TF_CPUID (the parked S-mode per-hart id, THE tp SPLIT) lives in the frame's
+ * 16-byte alignment padding, so it must sit at or past the end of struct regs
+ * and still be a whole word inside the frame. If struct regs ever grows a field
+ * that reaches 280, this fires rather than letting the trap entry silently clobber
+ * a saved register with a hart id.
+ */
+_Static_assert(TF_CPUID >= (int)sizeof (struct regs), "TF_CPUID overlaps struct regs");
+_Static_assert(TF_CPUID + 8 <= TF_SIZE, "TF_CPUID outside the trap frame");
+_Static_assert(TF_CPUID_FROM_KSTACKTOP == TF_CPUID - TF_SIZE,
+    "TF_CPUID must be reachable from the kernel stack top");
 
 /* From syscall.c: dispatch an ecall-from-U-mode. Advances tf->r_sepc past the
  * 4-byte ecall and writes the return value into tf->r_a0. */

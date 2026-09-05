@@ -10,14 +10,16 @@
  * RISC-V LP64 calling convention — what a switch must preserve across a call:
  *   ra (x1)      return address
  *   sp (x2)      stack pointer
- *   tp (x4)      thread pointer (per-thread; we repurpose as curthread hook)
+ *   tp (x4)      thread pointer. THE tp SPLIT: in S-mode this is the KERNEL's
+ *                per-hart id (this_cpu()); userland's TLS pointer lives in the
+ *                process's saved user frame, not here. See proc.c this_cpu().
  *   s0-s11       callee-saved (s0=x8/fp, s1=x9, s2-s11=x18-x27)
  * Caller-saved regs (t0-t6, a0-a7) need NOT be saved: swtch() is a normal C
  * call, so the compiler already spilled anything live across it. That is the
  * whole trick — a cooperative switch only has to save the callee-saved set.
  *
  * struct rv_context layout (proc.c) — 15 * 8 = 120 bytes:
- *   0:  ra   8:  sp   16: tp
+ *   0:  ra   8:  sp   16: tp (S-mode per-hart id)
  *   24: s0   32: s1   40: s2   48: s3   56: s4   64: s5
  *   72: s6   80: s7   88: s8   96: s9  104: s10 112: s11
  *   120: satp  (R-P8: per-thread address space; restored on switch so a

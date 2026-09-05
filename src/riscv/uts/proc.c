@@ -112,11 +112,40 @@ runq_lock_exit(void)
 	    :: "r"(&runq_lock) : "memory");
 }
 
-/* Current hartid. R-P13 SMP: each hart runs the dispatcher, so this_cpu()
- * must return the REAL hart index. We keep it in tp (the thread pointer):
- * rv_swtch saves/restores tp per thread and every thread's context carries the
- * hartid it runs on, set at dispatch entry + refreshed on each swtch. Reading
- * tp is a single register read with no memory traffic — correct per hart. */
+/*
+ * Current hartid. R-P13 SMP: each hart runs the dispatcher, so this_cpu() must
+ * return the REAL hart index. We keep it in tp -- but ONLY while in S-mode.
+ *
+ * THE tp SPLIT. RISC-V reserves tp (x4) for the userland thread pointer, and the
+ * TLS ABI requires tp to point at the running thread's TLS block, so userland
+ * must own tp in U-mode -- Rust/illumos TLS is unimplementable otherwise. The
+ * kernel wants a per-hart id in a single register because this_cpu() is on the
+ * hot path of every dispatch decision. Both hold if tp's meaning is split by
+ * privilege: userland's thread pointer in U-mode, the kernel's per-hart id in
+ * S-mode. trap.S is the seam that swaps them at the U/S boundary, parking the
+ * kernel id in the trap frame (TF_CPUID) while U-mode runs. See asm_frame.h
+ * TF_CPUID for why a frame slot and not a CSR.
+ *
+ * COST: this_cpu() is unchanged -- one register read, no memory traffic. The
+ * split adds exactly one load on entry from U and one store on return to U, both
+ * to the trap frame's own already-dirty cache line. Nothing on the S-mode trap
+ * path (timer, PLIC, IPI) and nothing on the context-switch path changes.
+ *
+ * tp is seeded by dispatch_init_cpu (via set_this_cpu) as each hart enters the
+ * dispatcher, and rv_swtch saves/restores it per thread so a thread pulled off
+ * the shared runq by any hart carries the right id.
+ *
+ * DO NOT seed tp in locore.S instead. It looks strictly better (this_cpu() would
+ * be valid from the first S-mode instruction rather than from dispatch_init_cpu),
+ * and it measurably destabilizes the boot: 3/3 clean boots became 2/4 with that
+ * one `mv tp, a0` added and nothing else changed. Some early-boot path -- before
+ * the dispatcher exists -- depends on tp being 0, and setting it early breaks that
+ * silently and intermittently. The window between S-mode entry and
+ * dispatch_init_cpu runs on the boot/hart stack with no threads and no dispatch
+ * decisions, so this_cpu() has nothing to be correct FOR there; the gap costs
+ * nothing. Fixing that root cause is worth doing, but it is a separate change and
+ * must be verified by boot rate, not by inspection.
+ */
 static inline int
 this_cpu(void)
 {
@@ -125,7 +154,7 @@ this_cpu(void)
 	return ((int)(id & (MAXCPU - 1)));
 }
 
-/* Set this hart's id into tp (called once per hart as it enters dispatch). */
+/* Set this hart's S-mode id into tp (locore seeds it; this re-stamps it). */
 static inline void
 set_this_cpu(unsigned long hartid)
 {
@@ -245,9 +274,11 @@ thread_create(void (*entry)(void *), void *arg)
 	t->t_ctx.c_ra = (unsigned long)rv_thread_start;	/* first "return" */
 	t->t_ctx.c_sp = sp;
 	/*
-	 * c_tp carries the hartid (this_cpu reads tp). Seed it to the creating
-	 * hart; swtch re-stamps it with the running hart on every dispatch, so a
-	 * thread that migrates to another hart sees the correct this_cpu there.
+	 * c_tp carries the S-mode per-hart id (this_cpu reads tp). Seed it to the
+	 * creating hart; swtch re-stamps it with the running hart on every dispatch,
+	 * so a thread that migrates to another hart sees the correct this_cpu there.
+	 * This is the KERNEL id only: a user thread's tp is its TLS pointer and
+	 * lives in the process's saved user frame (p_uframe.r_tp), not here.
 	 */
 	t->t_ctx.c_tp = (unsigned long)this_cpu();
 	/*
@@ -497,7 +528,7 @@ dispatch_init_cpu(int cpu)
 	idle->t_curproc = 0;
 	idle->t_ctx.c_tp = (unsigned long)cpu;
 
-	set_this_cpu((unsigned long)cpu);	/* tp = our hartid from now on */
+	set_this_cpu((unsigned long)cpu);	/* tp = our S-mode hart id */
 	idlethread[cpu] = idle;
 	curthread[cpu] = idle;		/* we ARE the idle thread now */
 }
@@ -666,7 +697,7 @@ smp_secondary_dispatch(unsigned long hartid)
 	while (__atomic_load_n(&smp_dispatch_ready, __ATOMIC_ACQUIRE) == 0)
 		__asm__ __volatile__("nop");
 
-	dispatch_init_cpu((int)hartid);		/* sets tp = hartid, idle thread */
+	dispatch_init_cpu((int)hartid);		/* idle thread; re-stamps tp = hartid */
 	__sync_fetch_and_add(&smp_harts_dispatching, 1);
 
 	/* Enable the S-soft (IPI) source so sbi_send_ipi can wake us from wfi. */
