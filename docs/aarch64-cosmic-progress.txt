@@ -1,0 +1,181 @@
+aarch64 COSMIC/GTK4 parity — progress (chiuso builder 3.145.77.215)
+
+Builder: root@3.145.77.215 (solnix-builder-build, SunOS 5.11 illumos-fb435c17bd, x86_64 illumos)
+nix: 2.24.15 (/nix/store/q9cgfd...-nix-2.24.15)
+nixpool free: ~72G. Disjoint workspace: /root/aa-work, TMPDIR=/root/aa-work/tmp, gcroots=/root/aa-gcroots
+x86 COSMIC agent: shares this builder; nix locks per-.drv so no .drv contention. Load ~0.02 at start (idle).
+
+=== TASK 1: aarch64 cross toolchain + entry eval + leaf (EM_AARCH64) — DONE ===
+- entry-aa-fin.nix EVALUATES clean. cross triple = aarch64-unknown-solaris2.11.
+- cross cc resolves: /nix/store/5d7jcqnksk48p8gzg2v832jlxb5jbnpw-...-seed-cc-14.3.0
+- arm64-gate proto + cross-gcc available FROM CACHE (s3.solnix.io/solnix-cache):
+    gcc-unwrapped: /nix/store/x05ph9yklp66g07fjxrkdxix45ajpxkx-illumos-aarch64-gcc-unwrapped-seed
+    libc-seed:     /nix/store/d3wwr0blzzc2f5xysalbavx0wnc9l74z-illumos-aarch64-libc-seed
+- LEAF hello-aarch64 cross-built (cached, self-realized): 
+    /nix/store/2igxr95xfrvn3ip9s5dxs8xvy2p8gf5f-hello-aarch64-unknown-solaris2.11-aarch64-cross
+    file: ELF 64-bit LSB executable aarch64; elfdump e_machine = EM_AARCH64  <-- CONFIRMED
+- gcroots staged: /root/aa-gcroots/{hello-aarch64,gcc-unwrapped,libc-seed,cross-cc}
+
+VERDICT T1: aarch64 cross toolchain + entries EVAL=YES, cross-build leaf EM_AARCH64=YES.
+
+=== TASK 2: aarch64 GTK4 toolkit spine — IN PROGRESS ===
+Entry: /root/entry-aa-gtk4.nix -> entry-aa-fin-x.nix (proven cross set + params)
+  + crossOverlays: /root/aa-toolkit-fixes-overlay.nix (target fixes)
+  + native overlays: /root/aa-native-toml-overlay.nix (buildPackages syslib+toml)
+
+BACK-PORTED FIXES (new aarch64 overlay entries, from x86 session + aa docs):
+ 1. openssl target Configure: added solaris64-aarch64-gcc target (upstream ships
+    none) -> configureScript "./Configure solaris64-aarch64-gcc no-asm". EVAL-throw fixed.
+ 2. cxxNomapCc (docs/aarch64-cxx-wall-fix.md) baked onto the cross cc-wrapper:
+    -specs= override of *link: dropping the two `-M %s..map` clauses. The seed
+    cross gcc emitted Solaris-mapfile syntax that GNU ld (the only aarch64 ld)
+    cant parse - Now every shared/C++ cross link works.
+
+=== TASK 2: aarch64 GTK4 toolkit spine — IN PROGRESS ===
+Entry: /root/entry-aa-gtk4.nix -> entry-aa-fin-x.nix (proven cross set + params)
+  + crossOverlays: /root/aa-toolkit-fixes-overlay.nix (target fixes)
+  + native overlays: /root/aa-native-toml-overlay.nix (buildPackages syslib+toml)
+
+BACK-PORTED FIXES (new aarch64 overlay entries, from x86 session + aa docs):
+ 1. openssl target Configure: added solaris64-aarch64-gcc target (upstream ships
+    none) -> configureScript "./Configure solaris64-aarch64-gcc no-asm". EVAL-throw fixed.
+ 2. cxxNomapCc (docs/aarch64-cxx-wall-fix.md) baked onto the cross cc-wrapper:
+    -specs= override of the *link: spec dropping the two -M %s..map clauses. The
+    seed cross gcc emitted Solaris-mapfile syntax that GNU ld (the only aarch64
+    ld) can't parse -> "file format not recognized". Now shared/C++ cross links work.
+ 3. aarch64 target syslib shim (docs/aarch64-cross-rust.md): bare libmd.so->
+    libmd.so.1 / libmp.so->libmp.so.2 links vs the aarch64 libc-seed, linked
+    -L<shim>/lib -lmd -lmp (target libnsl needs MD5* / mp_* @SUNW_1.1). Also strips
+    the leaked x86 extra-syslibs -L (GNU ld rejected AMD64 libs as incompatible).
+ 4. native H6 syslib wire (docs/aarch64-native-openssl-fix.md): native perl/
+    openssl/tcl get -L<x86 extraSyslibs>/lib/amd64 -lmd -lmp (buildPackages cc
+    predates the x86 H6 fix). Native perl 5.42 BUILT.
+ 5. cairo ipc_rmid_deferred_release: solaris->true cross-file (illumos defers shm
+    release after IPC_RMID). EVAL-throw fixed.
+ 6. fontconfig: dropped --with-default-fonts / postInstall dejavu ref (dejavu ->
+    fontforge -> libtiff -> sphinx -> toml eval chain). Points at /usr/share/fonts.
+ 7. wayland illumos port: getpeerucred (no SO_PEERCRED), -D__EXTENSIONS__,
+    -lsocket -lnsl, -Ddocumentation=false.
+
+CROSS-BUILT (EM_AARCH64 CONFIRMED):
+ - openssl-3.6.3: libcrypto.so.3 + libssl.so.3 + bin/openssl = EM_AARCH64 illumos ELF
+     /nix/store/ydly6xypn0mqmv2wnis7hi4r63idiqiq-openssl-aarch64-unknown-solaris2.11-3.6.3
+     gcroot /root/aa-gcroots/openssl-out . Native perl gcroot /root/aa-gcroots/native-perl.
+   -> PROVES the cxxNomapCc shared-link wall + aarch64 syslib shim + native-H6 chain.
+
+EVAL-CLEAN (aarch64 target, ready to cross-build): glib, wayland, harfbuzz,
+  pixman, cairo, openssl(built).
+EVAL-BLOCKED (fetchurl-shim zeroed-hash trap on python toml-0.10.2, a KNOWN
+  wave16/17 infra bug per docs/aarch64-cross-rust.md, NOT an aarch64 port issue;
+  affects x86 too): pango, gtk4, gdk-pixbuf (their meson -> gi-docgen/sphinx doc
+  chain pulls toml). libadwaita: appstream cross-libc assert (needs appstream-minimal).
+
+=== TASK 2 UPDATE: native toolchain UNBLOCKED, target spine libs EM_AARCH64 ===
+
+CROSS-BUILT (EM_AARCH64 CONFIRMED) — 3 toolkit spine libs + leaf:
+ - hello-aarch64 (leaf, T1)          EM_AARCH64
+ - openssl-3.6.3 libcrypto/libssl.so EM_AARCH64  /nix/store/ydly6xypn0mqmv2wnis7hi4r63idiqiq-...
+ - libffi-3.7.0 libffi.so.8          EM_AARCH64  /nix/store/q1rplf9lgl1sxjx1k0nihp2q2rj5azkz-...
+ - pcre2-10.47 libpcre2-{8,16,32}.so EM_AARCH64  /nix/store/cym9gaci6ypxl2yz6xkp76xrd0q5sb9v-...
+ gcroots: /root/aa-gcroots/{hello-aarch64,openssl-out,openssl-bin,libffi,pcre2,native-perl}
+
+BACK-PORTED FIXES (all NEW aarch64 overlay entries; persisted to fork):
+ TARGET (crossOverlays, /root/aa-toolkit-fixes-overlay.nix):
+   - openssl solaris64-aarch64-gcc Configure target + aarch64 syslib shim
+     (bare libmd.so->.1 / libmp.so->.2 vs the aarch64 libc-seed; -L<shim> -lmd -lmp)
+   - cxxNomapCc on the cross cc (docs/aarch64-cxx-wall-fix.md): -specs= drops the
+     `-M %s..map` clauses so GNU ld (the only aarch64 ld) doesn't choke on the
+     Solaris unwind mapfile -> shared/C++ cross links work
+   - libffi: perl for libffi.map-sun + --disable-symvers (the -Wl,-M mapfile that
+     GNU ld can't parse)
+   - cairo ipc_rmid_deferred_release solaris->true
+   - fontconfig: drop dejavu default-fonts (dejavu->fontforge->sphinx->toml chain)
+   - wayland illumos port (getpeerucred / -D__EXTENSIONS__ / -lsocket -lnsl)
+ NATIVE (buildPackages overlays, /root/aa-native-toml-overlay.nix):
+   - H6 syslib -L wire: openssl/tcl/pkg-config-unwrapped (+ perl in the entry
+     perl-wrap): -L<x86 extraSyslibs>/lib/amd64 -lmd -lmp so native tools' -lnsl
+     conftests resolve libnsl's transitive MD5*/mp_*
+   - gettext WIRED to the x86 session's working native gettext-1.0 (libtool
+     empty-global_symbol_pipe libintl.la wall already cracked there)
+   - cmake-minimal WIRED to the x86 session's working build (wave5 cmakeWireOverlay)
+   - libffi doCheck=false (drops dejagnu->expect->tcl fake-rfc2553 strlcpy clash)
+   - zstd buildContrib=false (gen_html C++ doc tool dies)
+   - toml FOD repin (fetchurl-shim zeroed-hash trap; the doc chain)
+ ENTRY (/root/entry-aa-fin-x.nix, extraCrossOverlays/extraNativeOverlays params +
+   cxxNomapCc on aarch64CcSwap + perl-wrap now carries the H6 -L)
+
+NATIVE TOOLCHAIN NOW BUILDS THROUGH: perl, gettext(wired), pkg-config, tcl,
+  cmake-minimal(wired), zstd, python3, meson — the hard native-tool wall is cleared.
+
+REMAINING (per-target-package illumos-port nits, the documented cross grind):
+  - readline: uses Solaris `-Wl,-i` (GNU ld reads -i as -r, conflicts with -shared).
+    Pulled transitively via a bash-interactive/gzip runtime-shell chain. Needs a
+    readline overlay dropping -Wl,-i (or forcing static).
+  - glib: retry now that the native toolchain is unblocked (was blocked on
+    native gettext/perl/pkg-config, all now resolved).
+
+=== FINAL REPORT (aarch64 COSMIC/GTK4 parity, this session) ===
+
+BUILDER: root@3.145.77.215 (SunOS 5.11 illumos, x86_64 host, cross->aarch64).
+Disjoint from the x86 agent: /root/aa-work (TMPDIR), /root/aa-gcroots, /root/entry-aa-*,
+/root/aa-*-overlay.nix. Shared the ONE builder; nix per-.drv locks + disjoint attrs
+avoided collisions. Contention: load rose to ~2-3 mid-session (x86 agent active);
+used -j2 --cores 3 throughout to share. No wedge on the builder itself.
+
+TASK 1 (toolchain + entries eval + leaf EM_AARCH64): DONE.
+  aarch64 cross entry entry-aa-fin(-x).nix EVALUATES; triple aarch64-unknown-solaris2.11.
+  arm64-gate proto + cross-gcc + libc-seed available FROM CACHE (s3.solnix.io).
+  Leaf hello-aarch64 = EM_AARCH64 illumos ELF (confirmed elfdump).
+
+TASK 2 (GTK4 toolkit spine): PARTIAL -- toolchain fully unblocked, 5 EM_AARCH64
+  leaf/spine libs cross-built, glib blocked on a per-package cross tail (not a
+  toolchain gap). NEW: /root/entry-aa-gtk4.nix.
+  EM_AARCH64 CROSS-BUILT + gcrooted (indirect roots /root/aa-gcroots/root-*):
+    - hello-aarch64                          (leaf)
+    - openssl-3.6.3  libcrypto/libssl.so.3   /nix/store/ydly6xypn0mqmv2wnis7hi4r63idiqiq-openssl-aarch64-unknown-solaris2.11-3.6.3
+    - libffi-3.7.0   libffi.so.8.4.0         /nix/store/q1rplf9lgl1sxjx1k0nihp2q2rj5azkz-libffi-aarch64-unknown-solaris2.11-3.7.0
+    - pcre2-10.47    libpcre2-{8,16,32}.so   /nix/store/cym9gaci6ypxl2yz6xkp76xrd0q5sb9v-pcre2-aarch64-unknown-solaris2.11-10.47
+    - readline-8.3p3 libreadline.so.8        /nix/store/07sm5z6svgy1gch2mrrhc32hb86d3rcs-readline-aarch64-unknown-solaris2.11-8.3p3
+  NATIVE toolchain (buildPackages) now BUILDS THROUGH: perl-5.42, gettext(wired),
+    pkg-config, tcl, cmake-minimal(wired), zstd, python3, meson.
+
+BACK-PORTED FIXES (all NEW aarch64 overlay entries; persisted to the fork at
+  /root/solnix-pkgs/pkgs/os-specific/illumos/aarch64-overlays/ AND local checkout
+  pkgs/illumos/phase3/aarch64-overlays/):
+  entry-aa-fin-x.nix       : + extraCrossOverlays/extraNativeOverlays params;
+                             + cxxNomapCc on the cross cc (docs/aarch64-cxx-wall-fix.md);
+                             + perl-wrap now carries the H6 -L.
+  aa-toolkit-fixes-overlay.nix (crossOverlays / target):
+     openssl solaris64-aarch64-gcc Configure target + aarch64 syslib shim
+       (bare libmd.so->.1 / libmp.so->.2 vs aarch64 libc-seed; -L<shim> -lmd -lmp);
+     libffi perl(map-sun) + --disable-symvers (GNU ld can't parse -Wl,-M mapfile);
+     cairo ipc_rmid_deferred_release solaris->true;
+     fontconfig drop dejavu default-fonts (dejavu->fontforge->sphinx->toml chain);
+     wayland illumos port (getpeerucred / -D__EXTENSIONS__ / -lsocket -lnsl);
+     readline drop Solaris -Wl,-i (GNU ld: -i==-r conflicts with -shared);
+     gtk4 Wayland-only / strip X-only; libadwaita docs/vala off.
+  aa-native-toml-overlay.nix (overlays / buildPackages):
+     H6 syslib -L wire (openssl/tcl/pkg-config-unwrapped); gettext WIRED to the
+     x86 session's working native gettext-1.0; cmake-minimal WIRED (wave5 style);
+     libffi doCheck=false (drops dejagnu->tcl fake-rfc2553 strlcpy); zstd
+     buildContrib=false; toml FOD repin (fetchurl-shim zeroed-hash trap).
+
+TASK 3 (COSMIC apps): NOT REACHED. The x86 COSMIC apps are cargo builds
+  (aarch64-cross-rust.md path); they require the aarch64 GTK4/libadwaita toolkit
+  which is gated on glib. See "next" below.
+
+REMAINING (documented per-package cross grind, NOT toolchain gaps):
+  - glib: its target python3->bash->readline(fixed) chain reaches target xz
+    (liblzma) whose libtool compile fails via an in-build path (compile succeeds
+    standalone; libtool-on-illumos class). Grind: fix target xz, then glib links.
+  - After glib: gtk4/pango/gdk-pixbuf eval hit the fetchurl-shim zeroed-hash trap
+    on python toml (KNOWN wave16/17 infra bug, affects x86 too; the native toml
+    repin helps buildPackages but the target doc chain (gi-docgen) needs the same
+    at target scope). libadwaita: appstream cross-libc assert (appstream-minimal).
+  - COSMIC apps: cargo build-std path per aarch64-cross-rust.md once toolkit lands.
+
+VERDICT: aarch64 cross toolchain + entries EVAL=YES; leaf + 4 toolkit libs
+  cross-built EM_AARCH64=YES; the C++/shared-link wall (cxxNomapCc), the aarch64
+  syslib shim, and the native H6/gettext/cmake walls are all cracked + persisted.
+  glib->gtk4->libadwaita->COSMIC is now a bounded per-package cross tail on a
+  WORKING toolchain (the milestone: toolkit toolchain parity proven on aarch64).

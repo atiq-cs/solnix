@@ -1,0 +1,32 @@
+64-bit aarch64 kernel modules
+cpu0: ARM Cortex-A53 @ 1000 MHz
+cpu1: ARM Cortex-A53 @ 1000 MHz
+cpu2: ARM Cortex-A53 @ 1000 MHz
+cpu3: ARM Cortex-A53 @ 1000 MHz
+GCCRC=7
+Hostname: braich
+illumos Version arm64-gate-0-gd37d5ec328 64-bit
+postgres (PostgreSQL) 16.4
+root on armpool/ROOT/braich fstype zfs
+src/backend/postgres:   ELF 64-bit LSB executable aarch64 Version 1, dynamically linked, not stripped
+SunOS braich 5.11 arm64-gate-0-gd37d5ec328 armv8 aarch64 QEMU,virt
+t:              ELF 64-bit LSB executable aarch64 Version 1, dynamically linked, not stripped, no debugging information available
+uid=0(root) gid=0(root)
+109042: /opt/pg16/bin/postgres --check -F -c log_checkpoints=false -c max_conn
+109083: /opt/pg16/bin/postgres --check -F -c log_checkpoints=false -c max_conn
+AFTERKILL= 4
+DESCRC=0
+HAVE_PGDATA
+pg_controldata (PostgreSQL) 16.4
+PROMPT# kill -9 109042 109063 109083 109079 2>&1; sleep 2; echo AFTERKILL=$(pgrep -f pg16/bin | wc -l); which pstack pflags mdb 2>/dev/null
+psql (PostgreSQL) 16.4
+selecting default max_connections ... PROMPT# cat /tmp/pginitdb2.log
+selecting default max_connections ... PROMPT# echo RUN=$(pgrep -f initdb|wc -l); tail -3 /tmp/pginitdb2.log; test -f /pgdata/global/pg 
+selecting default max_connections ... PROMPT# echo RUN=$(pgrep -f initdb|wc -l); test -f /pgdata/global/pg 
+selecting default max_connections ... PROMPT# grep -iE "success|pg 
+selecting default max_connections ... PROMPT# INITRUN=$(pgrep -f initdb | wc -l); echo INITRUN=$INITRUN; test -f /pgdata/global/pg 
+selecting default max_connections ... PROMPT# ps -eo pid,s,comm | grep -iE "initdb|postgres" | grep -v grep
+selecting default max_connections ... PROMPT# ps -eo pid,s,time,comm | grep -iE "initdb|postgres" | grep -v grep
+SEMA_OK
+semget=0
+semop=0

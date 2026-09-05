@@ -74,3 +74,6 @@ src/aarch64-arm64-gate-patches/fakebop.c.a6kcon-diag
 # RISC-V scanout build outputs (rebuildable via src/riscv/uts/build-scanout.sh)
 src/riscv/uts/unix-o0
 src/riscv/uts/unix-scanout
+
+# Build scratch.
+wave12-work/
