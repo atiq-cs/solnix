@@ -3,6 +3,15 @@
  * userland ELFs (init, sh, hello, echo, cat), each linked against the
  * libc-riscv.a slice, as byte arrays embedded in the kernel image so
  * rootfs can serve them and exec can load them. Do not edit by hand.
+ *
+ * ⚠️ TOOLCHAIN PROVENANCE: these bytes were produced by a riscv64 cross GCC
+ * 14.x. That matters -- regenerating this file with GCC 15.2.0 produces a
+ * userland that BREAKS THE BOOT even from unmodified sources (measured: 3/3
+ * boots pass with these committed bytes, 0/3 when regenerated under 15.2.0,
+ * init dying in the signal gate). If you regenerate, pin gcc 14.x and re-run
+ * the boot gate; if you must use a newer compiler, expect to debug the
+ * userland first. This blob is a BUILD OUTPUT committed for reproducibility
+ * precisely because the toolchain that made it is not guaranteed available.
  */
 #ifndef _USER_ELFS_H
 #define _USER_ELFS_H

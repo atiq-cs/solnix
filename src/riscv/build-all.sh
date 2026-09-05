@@ -14,6 +14,12 @@
 #
 # Toolchain (the one hard external dependency -- everything else is in git):
 #   A riscv64 bare-metal/ELF gcc that targets rv64gc. Two proven options:
+#     ⚠️ PIN THE MAJOR VERSION: use gcc 14.x. The committed generated userland
+#     (src/riscv/uts/user_elfs.h, user/libc-riscv.a) was produced by a 14.x cross
+#     compiler. Regenerating it with gcc 15.2.0 yields a userland that BREAKS THE
+#     BOOT even from pristine sources with zero edits -- measured 3/3 boots PASS
+#     with the committed blobs vs 0/3 with 15.2.0-regenerated ones (init dies in
+#     the signal gate). So a major-version skew here is not cosmetic.
 #     (a) stock riscv64-unknown-elf-gcc 14.3.0 (the R-P64 virtio_gpu harness used
 #         this; fastest to obtain -- nix: nixpkgs#pkgsCross.riscv64-embedded.gcc,
 #         or a distro riscv64-elf-gcc). Set RISCV_GCC to its bin dir.
