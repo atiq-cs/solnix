@@ -14,12 +14,16 @@
 #
 # Toolchain (the one hard external dependency -- everything else is in git):
 #   A riscv64 bare-metal/ELF gcc that targets rv64gc. Two proven options:
-#     ⚠️ PIN THE MAJOR VERSION: use gcc 14.x. The committed generated userland
-#     (src/riscv/uts/user_elfs.h, user/libc-riscv.a) was produced by a 14.x cross
-#     compiler. Regenerating it with gcc 15.2.0 yields a userland that BREAKS THE
-#     BOOT even from pristine sources with zero edits -- measured 3/3 boots PASS
-#     with the committed blobs vs 0/3 with 15.2.0-regenerated ones (init dies in
-#     the signal gate). So a major-version skew here is not cosmetic.
+#     ⚠️ PIN gcc 14.3.0 for the committed generated userland
+#     (src/riscv/uts/user_elfs.h, user/libc-riscv.a) -- that is the version those
+#     bytes were produced with, so pin it for reproducibility.
+#     NOTE: a regenerated userland breaking the boot was FIRST blamed on a gcc
+#     15.2.0-vs-14.x skew. That was WRONG: gcc 14.3.0 fails identically. The real
+#     cause was three pre-existing KERNEL bugs that any userland rebuild exposed
+#     (second-fork COW dropping PTE_COW in hat_riscv.c, the copy_lofault redirect
+#     ignoring SPP in trap.c, and this_cpu() masking rather than validating in
+#     proc.c) -- all now fixed. Pin the version for reproducibility, not because
+#     the compiler was at fault.
 #     (a) stock riscv64-unknown-elf-gcc 14.3.0 (the R-P64 virtio_gpu harness used
 #         this; fastest to obtain -- nix: nixpkgs#pkgsCross.riscv64-embedded.gcc,
 #         or a distro riscv64-elf-gcc). Set RISCV_GCC to its bin dir.
