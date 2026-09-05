@@ -1,8 +1,8 @@
 diff --git a/src/aarch64-arm64-gate-patches/dboot_synth_fdt.c b/src/aarch64-arm64-gate-patches/dboot_synth_fdt.c
-index a7ab5eeaec..db7c9fb20a 100644
+index a7ab5eeaec..9ccf6a28d8 100644
 --- a/src/aarch64-arm64-gate-patches/dboot_synth_fdt.c
 +++ b/src/aarch64-arm64-gate-patches/dboot_synth_fdt.c
-@@ -219,18 +219,238 @@ synth_find_table(const char *sig)
+@@ -219,18 +219,244 @@ synth_find_table(const char *sig)
   * is optional (present on QEMU virt and Graviton).  The redistributor base
   * falls back to the per-CPU GICC GicrBaseAddress if no standalone GICR
   * subtable is present.
@@ -42,6 +42,12 @@ index a7ab5eeaec..db7c9fb20a 100644
 +	uint64_t	gicr_stride;	/* derived per-cpu GICR stride */
  	bool		have_gicd;
  	bool		have_gicr;
++	/*
++	 * True only when a STANDALONE GICR subtable supplied the region.
++	 * Distinct from have_gicr, which merely means "some redistributor base
++	 * is known" and goes true as soon as the first GICC is seen.
++	 */
++	bool		have_gicr_subtable;
  	bool		have_its;
  } synth_gic_t;
  
@@ -241,7 +247,7 @@ index a7ab5eeaec..db7c9fb20a 100644
  static void
  synth_scan_madt(synth_gic_t *g)
  {
-@@ -249,6 +469,8 @@ synth_scan_madt(synth_gic_t *g)
+@@ -249,6 +475,8 @@ synth_scan_madt(synth_gic_t *g)
  	item = (const ACPI_SUBTABLE_HEADER *)
  	    ((uintptr_t)madt + sizeof (*madt));
  
@@ -250,7 +256,27 @@ index a7ab5eeaec..db7c9fb20a 100644
  	while (item < end && item->Length != 0) {
  		switch (item->Type) {
  		case ACPI_MADT_TYPE_GENERIC_DISTRIBUTOR: {
-@@ -293,6 +515,13 @@ synth_scan_madt(synth_gic_t *g)
+@@ -270,6 +498,7 @@ synth_scan_madt(synth_gic_t *g)
+ 			g->gicr = base;
+ 			g->gicr_len = len;
+ 			g->have_gicr = true;
++			g->have_gicr_subtable = true;
+ 			break;
+ 		}
+ 		case ACPI_MADT_TYPE_GENERIC_TRANSLATOR: {
+@@ -289,10 +518,24 @@ synth_scan_madt(synth_gic_t *g)
+ 			const ACPI_MADT_GENERIC_INTERRUPT *c =
+ 			    (const ACPI_MADT_GENERIC_INTERRUPT *)item;
+ 			g->ngicc++;
+-			if (!g->have_gicr) {
++			/*
++			 * Skip only when a STANDALONE GICR subtable already
++			 * described the regions.  Testing have_gicr here would
++			 * be wrong: the first GICC sets it, so cpus 1..n-1
++			 * would never be collected and every region would
++			 * collapse to the single cpu0 base.
++			 */
++			if (!g->have_gicr_subtable) {
  				uint64_t base;
  				memcpy(&base, &c->GicrBaseAddress,
  				    sizeof (base));
@@ -264,7 +290,7 @@ index a7ab5eeaec..db7c9fb20a 100644
  				if (base != 0 &&
  				    (g->gicr == 0 || base < g->gicr)) {
  					g->gicr = base;
-@@ -308,6 +537,18 @@ synth_scan_madt(synth_gic_t *g)
+@@ -308,6 +551,18 @@ synth_scan_madt(synth_gic_t *g)
  		item = (const ACPI_SUBTABLE_HEADER *)
  		    ((uintptr_t)item + item->Length);
  	}
@@ -273,7 +299,7 @@ index a7ab5eeaec..db7c9fb20a 100644
 +	 * A standalone GICR subtable describes its own region directly; the
 +	 * GICC-fallback path has to derive regions from the per-cpu bases.
 +	 */
-+	if (g->have_gicr && g->gicr_len != 0) {
++	if (g->have_gicr_subtable && g->gicr_len != 0) {
 +		g->gicr_base[0] = g->gicr;
 +		g->gicr_size[0] = g->gicr_len;
 +		g->ngicr_regions = 1;
@@ -283,7 +309,7 @@ index a7ab5eeaec..db7c9fb20a 100644
  }
  
  /*
-@@ -812,28 +1053,49 @@ dboot_synth_fdt(struct xboot_info *bi)
+@@ -812,28 +1067,49 @@ dboot_synth_fdt(struct xboot_info *bi)
  	(void) fdt_property(fdt, "interrupt-controller", NULL, 0);
  	(void) fdt_property_cell(fdt, "#address-cells", 2);
  	(void) fdt_property_cell(fdt, "#size-cells", 2);

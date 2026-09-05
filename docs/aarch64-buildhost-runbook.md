@@ -80,4 +80,11 @@ toolchain is the expensive artifact; the OmniOS install is the cheap half.
   `src/aarch64-arm64-gate-patches/a6-mem-plus-gcc14-build-fixes.patch`
   (`-Wno-unused-variable`, `-Wno-unused-but-set-variable`, `-Wno-empty-body`:
   upstream has them only behind `$(RELEASE_BUILD)`, and the DEBUG cross build
-  needs them too).
+  needs them too). **Also add `-Wno-unused-but-set-parameter`** (note: PARAMETER,
+  a distinct gcc-14 warning from `-unused-but-set-variable`) next to the existing
+  `-Wno-empty-body` lines in BOTH `CERRWARN` blocks -- the aarch64 build trips it
+  and the patch above predates the discovery.
+- **Generate `priv_const.c` BEFORE `genunix`.** `uts/aarch64/Makefile` does not
+  order this, so `genunix` fails to link on a missing `priv_const.o`. Build
+  `$SRC/uts/common/os/priv_const.c` first (a `dmake` of that target), then
+  proceed. This bites every fresh tree.

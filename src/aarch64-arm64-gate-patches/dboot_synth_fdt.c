@@ -255,6 +255,12 @@ typedef struct synth_gic {
 	uint64_t	gicr_stride;	/* derived per-cpu GICR stride */
 	bool		have_gicd;
 	bool		have_gicr;
+	/*
+	 * True only when a STANDALONE GICR subtable supplied the region.
+	 * Distinct from have_gicr, which merely means "some redistributor base
+	 * is known" and goes true as soon as the first GICC is seen.
+	 */
+	bool		have_gicr_subtable;
 	bool		have_its;
 } synth_gic_t;
 
@@ -492,6 +498,7 @@ synth_scan_madt(synth_gic_t *g)
 			g->gicr = base;
 			g->gicr_len = len;
 			g->have_gicr = true;
+			g->have_gicr_subtable = true;
 			break;
 		}
 		case ACPI_MADT_TYPE_GENERIC_TRANSLATOR: {
@@ -511,7 +518,14 @@ synth_scan_madt(synth_gic_t *g)
 			const ACPI_MADT_GENERIC_INTERRUPT *c =
 			    (const ACPI_MADT_GENERIC_INTERRUPT *)item;
 			g->ngicc++;
-			if (!g->have_gicr) {
+			/*
+			 * Skip only when a STANDALONE GICR subtable already
+			 * described the regions.  Testing have_gicr here would
+			 * be wrong: the first GICC sets it, so cpus 1..n-1
+			 * would never be collected and every region would
+			 * collapse to the single cpu0 base.
+			 */
+			if (!g->have_gicr_subtable) {
 				uint64_t base;
 				memcpy(&base, &c->GicrBaseAddress,
 				    sizeof (base));
@@ -542,7 +556,7 @@ synth_scan_madt(synth_gic_t *g)
 	 * A standalone GICR subtable describes its own region directly; the
 	 * GICC-fallback path has to derive regions from the per-cpu bases.
 	 */
-	if (g->have_gicr && g->gicr_len != 0) {
+	if (g->have_gicr_subtable && g->gicr_len != 0) {
 		g->gicr_base[0] = g->gicr;
 		g->gicr_size[0] = g->gicr_len;
 		g->ngicr_regions = 1;

@@ -35,7 +35,7 @@ typedef struct synth_gic {
 	uint64_t	gicr_size[SYNTH_GICR_MAX_REGIONS];
 	uint32_t	ngicr_regions;
 	uint64_t	gicr_stride;
-	bool		have_gicd, have_gicr, have_its;
+	bool		have_gicd, have_gicr, have_gicr_subtable, have_its;
 } synth_gic_t;
 
 /* ------------------------------------------------------------------ */
@@ -242,7 +242,17 @@ main(int argc, char **argv)
 			uint64_t grbase;
 			g.ngicc++;
 			memcpy(&grbase, b + off + 60, 8);
-			synth_gicr_insert(grbase);
+			/*
+			 * Mirror the REAL guard in synth_scan_madt(): collect
+			 * per-cpu bases unless a STANDALONE GICR subtable
+			 * already described the regions. Guarding on have_gicr
+			 * instead (as the first version did) collects only
+			 * cpu0, because the first GICC sets have_gicr -- the
+			 * bug that shipped and produced distinct_gicr_base=1
+			 * on real metal. The assert below pins the regression.
+			 */
+			if (!g.have_gicr_subtable)
+				synth_gicr_insert(grbase);
 			if (grbase != 0 && (g.gicr == 0 || grbase < g.gicr)) {
 				g.gicr = grbase;
 				g.have_gicr = true;
@@ -254,6 +264,19 @@ main(int argc, char **argv)
 
 	/* Hardware model from the same MADT data. */
 	hw_build(synth_gicr_cpu_base, synth_gicr_ncpu_base, g.gicr_stride);
+
+	/*
+	 * REGRESSION GUARD (metal-observed bug): on a box whose GICCs each
+	 * carry their own GicrBaseAddress, the number of distinct collected
+	 * bases must equal the cpu count. distinct==1 while ngicc>1 is the
+	 * exact symptom of guarding the collection on have_gicr, which the
+	 * shipped kernel did -- metal printed ngicc=40 (0x40=64) with
+	 * distinct_gicr_base=1, collapsing all four regions into one cpu.
+	 */
+	if (g.ngicc > 1) {
+		assert(synth_gicr_ncpu_base > 1);
+		assert(synth_gicr_ncpu_base == g.ngicc);
+	}
 
 	nr = g.ngicr_regions;
 	printf("MADT: ngicc=%u distinct_bases=%u -> regions=%u stride=0x%llx\n",
