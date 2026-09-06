@@ -43,6 +43,7 @@
 #include "sbi.h"
 #include "riscv_regs.h"
 #include "regs.h"
+#include "fp.h"
 
 extern void kputhex(unsigned long v);
 extern void kputdec(unsigned long v);
@@ -917,6 +918,24 @@ proc_fork(struct regs *tf)
 	child->p_uframe.r_sepc = tf->r_sepc + 4;	/* skip the ecall */
 
 	child->p_thread = thread_create(child_thread_body, child);
+	/*
+	 * FP state must be COPIED, not shared: two processes writing one
+	 * register file is exactly the bug fp.c exists to fix, one level down.
+	 * fp_fork flushes the parent first (its live registers may be dirtier
+	 * than its saved context) and leaves the child NULL if the parent never
+	 * used FP, which costs nothing.
+	 */
+	if (child->p_thread != 0) {
+		fpu_ctx_t **pslot = fp_self_slot();
+		fpu_ctx_t *cfp = 0;
+
+		if (!fp_fork(pslot != 0 ? *pslot : 0, &cfp)) {
+			/* allocation failure: fail the fork rather than share */
+			child->p_thread = 0;
+		} else {
+			fp_thread_set(child->p_thread, cfp);
+		}
+	}
 	if (child->p_thread == 0) {
 		as_free(child->p_as);
 		child->p_inuse = 0;
@@ -949,6 +968,17 @@ proc_exec(const char *path, const void *img, unsigned long len,
 	if (p == 0)
 		return (-1);
 	oldas = p->p_as;
+	/*
+	 * exec replaces the program, so its FP registers must not leak into the
+	 * new one. Zero rather than free: the allocation is reused, and an
+	 * all-zero register file is a valid initial FP state.
+	 */
+	{
+		fpu_ctx_t **slot = fp_self_slot();
+
+		if (slot != 0)
+			fp_exec_reset(*slot);
+	}
 
 	/* Build the new AS into the process (load_elf_into sets p->p_as). */
 	if (!load_elf_into(p, path, img, len, snap)) {

@@ -43,6 +43,11 @@ mkdir -p "$ARTDIR"
 
 echo "== compile kernel (freestanding, $TC) =="
 KOBJS=""
+# float.s does the f0-f31 + fcsr moves for fp.c. Lower-case .s (no cpp needed
+# beyond assym.h) and it is listed separately so the ${src%.S} rule below stays
+# simple.
+"$CC" $CFLAGS -c float.s -o float.o
+KOBJS="$KOBJS float.o"
 for src in locore.S trap.S swtch.S copy.S; do
 	o="${src%.S}.o"
 	[ "$src" = trap.S ] && o=trap_asm.o
@@ -51,7 +56,7 @@ for src in locore.S trap.S swtch.S copy.S; do
 done
 for src in sbi trap hat_riscv timer plic aia fdt cmo vm_page kmem proc as elf \
 	   syscall uart sdhci uproc unixsock virtio vioblk blkfs vionet rootfs \
-	   startup main; do
+	   fp startup main; do
 	"$CC" $CFLAGS -c "$src.c" -o "$src.o"
 	KOBJS="$KOBJS $src.o"
 done

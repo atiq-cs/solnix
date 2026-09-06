@@ -54,4 +54,18 @@ extern void fp_ctx_zero(fpu_ctx_t *ctx);
  */
 extern volatile int fp_swtch_enabled;
 
+/*
+ * Address of the current thread's FP-context pointer. Defined in proc.c so
+ * callers need neither curthread[] nor kthread_t's layout. Returns NULL if
+ * there is no current thread.
+ */
+extern fpu_ctx_t **fp_self_slot(void);
+
+/*
+ * Install an FP context on a not-currently-running thread (fork's child).
+ * struct kthread stays opaque to callers.
+ */
+struct kthread;
+extern void fp_thread_set(struct kthread *t, fpu_ctx_t *ctx);
+
 #endif	/* _FP_H */

@@ -25,6 +25,7 @@
 #include "riscv_regs.h"
 #include "asm_frame.h"
 #include "regs.h"
+#include "fp.h"
 
 /*
  * struct regs (regs.h) is the saved trap frame. MUST match asm_frame.h
@@ -299,6 +300,25 @@ trap(struct regs *tf)
 	if (code == EXC_STORE_PAGE_FAULT) {
 		if (proc_cow_fault(tf->r_stval))
 			return;		/* split done: retry the faulting store */
+	}
+
+	/*
+	 * FP first-use trap. A thread runs with sstatus.FS=Off until it executes
+	 * an FP instruction, which then raises an illegal instruction. That is
+	 * the lazy-switch hook: allocate or restore this thread's FP register
+	 * file, enable the FPU in the frame's sstatus, and return so the SAME
+	 * instruction re-executes.
+	 *
+	 * sepc is deliberately NOT advanced -- the instruction never executed.
+	 * U-mode only (SPP==0): the kernel contains no FP instructions, so an
+	 * illegal instruction from S-mode is a genuine bug and must still panic
+	 * rather than be silently absorbed here.
+	 */
+	if (code == EXC_ILLEGAL_INST && (tf->r_sstatus & SSTATUS_SPP) == 0) {
+		fpu_ctx_t **slot = fp_self_slot();
+
+		if (slot != 0 && fp_fenflt(slot, &tf->r_sstatus))
+			return;		/* FPU on: retry the faulting insn */
 	}
 
 	/*

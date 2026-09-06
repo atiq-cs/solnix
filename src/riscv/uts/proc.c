@@ -30,6 +30,46 @@
 
 /* kmem for thread + stack allocation (kmem.c). */
 extern void *kmem_alloc(unsigned long size);
+
+#include "fp.h"
+
+/*
+ * FP backing store. Kept here rather than in fp.c so the policy code needs no
+ * knowledge of this kernel's allocator.
+ */
+fpu_ctx_t *
+fp_ctx_alloc(void)
+{
+	fpu_ctx_t *c = kmem_alloc(sizeof (fpu_ctx_t));
+	unsigned int i;
+
+	if (c == 0)
+		return (0);
+	for (i = 0; i < FPU_NREGS; i++)
+		c->fpu_regs[i] = 0;
+	c->fpu_csr = 0;
+	return (c);
+}
+
+void
+fp_ctx_copy(fpu_ctx_t *dst, const fpu_ctx_t *src)
+{
+	unsigned int i;
+
+	for (i = 0; i < FPU_NREGS; i++)
+		dst->fpu_regs[i] = src->fpu_regs[i];
+	dst->fpu_csr = src->fpu_csr;
+}
+
+void
+fp_ctx_zero(fpu_ctx_t *c)
+{
+	unsigned int i;
+
+	for (i = 0; i < FPU_NREGS; i++)
+		c->fpu_regs[i] = 0;
+	c->fpu_csr = 0;
+}
 extern void kmem_free(void *buf, unsigned long size);
 
 /* Shared console helpers (startup.c). */
@@ -51,6 +91,14 @@ struct rv_context {
 	unsigned long c_s[12];		/* s0..s11 */
 	unsigned long c_satp;		/* per-thread satp (R-P8 multi-AS) */
 	unsigned long c_lofault;	/* per-thread copy_lofault (R-P10 preempt) */
+	/*
+	 * Lazily-allocated FP register file (fpu_ctx_t *), NULL until this
+	 * thread first executes an FP instruction. A POINTER rather than the
+	 * registers themselves: 264 bytes inline here would be copied by every
+	 * switch, and the trap frame has no room (its pad is already TF_CPUID).
+	 * See fp.c.
+	 */
+	unsigned long c_fpu;
 };
 extern void rv_swtch(struct rv_context *old, struct rv_context *new);
 extern void rv_thread_start(void);
@@ -297,6 +345,38 @@ runq_dequeue(void)
 }
 
 /*
+ * fp_self_slot -- address of the CURRENT thread's FP-context pointer.
+ *
+ * trap.c and uproc.c need to allocate/copy/reset FP state for the running
+ * thread, but neither should reach into curthread[] or need kthread_t's layout.
+ * Exposing just this one slot keeps the dispatcher's internals private and gives
+ * those callers exactly what fp_fenflt()/fp_fork() take.
+ */
+fpu_ctx_t **
+fp_self_slot(void)
+{
+	kthread_t *self = curthread[this_cpu()];
+
+	if (self == 0)
+		return (0);
+	return ((fpu_ctx_t **)&self->t_ctx.c_fpu);
+}
+
+/*
+ * fp_thread_set -- install an FP context on a thread that is not running.
+ *
+ * fork needs to hand the child its copied FP state, and the child's kthread_t
+ * layout is private to this file. Takes struct kthread * opaquely so callers
+ * need only the pointer they already hold.
+ */
+void
+fp_thread_set(struct kthread *t, fpu_ctx_t *ctx)
+{
+	if (t != 0)
+		t->t_ctx.c_fpu = (unsigned long)ctx;
+}
+
+/*
  * thread_create — allocate a kthread + stack, seed its context so the first
  * switch into it starts at rv_thread_start -> entry(arg), and enqueue it.
  */
@@ -394,6 +474,12 @@ swtch(void)
 	 * and corrupt the next syscall.
 	 */
 	old->t_curproc = proc_get_current();
+	/*
+	 * FP state moves here, in C, so swtch.S stays untouched (it carries the
+	 * x5/t0 ordering and tp-swap constraints). Threads that never touch the
+	 * FPU have a NULL c_fpu and this is a pointer test.
+	 */
+	fp_switch((fpu_ctx_t *)old->t_ctx.c_fpu, (fpu_ctx_t *)new->t_ctx.c_fpu);
 	rv_swtch(&old->t_ctx, &new->t_ctx);
 	proc_set_current(curthread[cpu]->t_curproc);
 	/*
@@ -794,6 +880,8 @@ smp_secondary_dispatch(unsigned long hartid)
 			t->t_ctx.c_tp = (unsigned long)cpu;
 			curthread[cpu] = t;
 			self->t_curproc = proc_get_current();
+			fp_switch((fpu_ctx_t *)self->t_ctx.c_fpu,
+			    (fpu_ctx_t *)t->t_ctx.c_fpu);
 			rv_swtch(&self->t_ctx, &t->t_ctx);
 			proc_set_current(curthread[cpu]->t_curproc);
 			curthread[cpu] = self;	/* idle is current again */
