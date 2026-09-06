@@ -264,3 +264,39 @@ the same machine and load, interleaved.
   flag exists for exactly this and is `volatile` so it cannot be folded away.
 * That a **soft-float process still pays nothing** — FS stays Off for it, otherwise this is an
   eager save with extra steps.
+
+## DONE — FPTEST PASS, negative-controlled
+
+Three concurrent hard-float processes each stamp a distinct pattern into all of f0–f31 **plus
+fcsr**, spin through several 100 Hz preemptions, and each reads its own values back.
+**Negative control**: `fp_swtch_enabled = 0` makes the test FAIL, so the PASS is load-bearing.
+Rate: scanout 5/6, FP gate 5/6 — and they pass/fail *together*, so the one failure is the
+pre-existing general boot flake rather than anything FP-specific.
+
+### Two design errors found by running it, not by reading it
+
+1. **Fresh processes inherited an enabled FPU.** Nothing seeded `sstatus.FS` in `p_uframe`, so a
+   new process ran with whatever FS the kernel last left — and `fp_save`/`fp_restore` must enable
+   the FPU to execute `fsd`/`fld`. So userland arrived with FP already on and the first-use trap
+   never fired. Fixed by clearing FS in the fresh frame.
+
+2. **The lazy-restore design was wrong.** `sret` restores `sstatus` from the thread's **saved trap
+   frame, not the live CSR**. Once a thread has taken its first-use trap, its frame carries
+   FS=Clean permanently — so setting the live FS=Off at switch time changed nothing, and the
+   thread resumed with FP enabled, using whatever registers the previous thread left.
+   `fp_switch()` now **restores the incoming context directly**. Laziness still pays where it
+   matters: a thread that has never touched the FPU has a NULL context, gets FS=Off, and costs
+   nothing until it faults once.
+
+**How they were localised** (guessing had already failed twice): temporary console markers on the
+three policy paths showed `fp_switch`, `fenflt`, *and* three context allocations all running while
+state was still corrupted — which ruled out the plumbing and pointed squarely at `fp_switch`'s
+logic. The markers are gone; the cheap path counters remain, because *"did the policy run at
+all?"* is the first question any future FP bug raises.
+
+### What this unblocks
+
+A hard-float (lp64d) Rust binary — and therefore llvmpipe — can now run without two processes
+silently corrupting each other's FP registers. That was the top blocker on the Gate A list.
+Remaining Gate A items: **event ports** (~4 days, what `calloop` actually uses on illumos),
+threads (performance, not a gate — and safe to add only now that FP is preserved), `dlopen`.
