@@ -16,6 +16,16 @@
  * instead of validating the hart id (proc.c). All three are fixed, so the
  * compiler was a red herring -- the pin is for reproducibility, not safety.
  *
+ * A FOURTH bug was the real flakiness driver: a dead `t_state == TS_IDLE`
+ * test in the dispatcher let TWO HARTS RUN THE IDLE THREAD on one stack
+ * (proc.c). Boot rate 2/10 before, 8/10 with only that changed. So the
+ * blobs were never at fault either. Under the gcc 14.3.0 pin a regeneration
+ * now measures 6/6 clean boots -- the recipe demonstrably works.
+ *
+ * The sequence -- blame the compiler, then the blobs, then find a dispatcher
+ * race -- is worth remembering: distrust a plausible explanation until the
+ * mechanism has actually been observed.
+ *
  * Always re-run the boot gate after regenerating, and judge by BOOT RATE
  * across several attempts rather than one pass. This blob is a BUILD OUTPUT
  * kept in git because the toolchain that made it is not guaranteed
