@@ -166,12 +166,16 @@ if ! step_done update; then
   mark update
 fi
 
-# 3. Toolchain + the two buildfarm-specific deps. ipc-run-542 matches the box's
-#    perl 5.42 ABI (the unversioned ipc-run can resolve to a wrong perl ABI).
+# 3. Toolchain + the buildfarm-specific deps. ipc-run-542 matches the box's perl
+#    5.42 ABI (the unversioned ipc-run can resolve to a wrong perl ABI).
+#    gnu-diffutils is REQUIRED, not cosmetic: PG's test_json_parser TAP test
+#    asserts diff prints NOTHING for identical files, but the illumos
+#    /usr/bin/diff prints "No differences encountered" with -u/-c/-U3, which
+#    fails 4 subtests and the whole module-test_json_parserCheck stage.
 if ! step_done tools; then
   pkg install --accept developer/gcc-14 developer/build/gnu-make \
     developer/parser/bison developer/lexer/flex developer/versioning/git \
-    developer/ccache library/perl-5/ipc-run-542; rc=$?
+    developer/ccache library/perl-5/ipc-run-542 text/gnu-diffutils; rc=$?
   [ $rc -eq 0 ] || [ $rc -eq 4 ] || { echo "PREP_FAILED pkg install rc=$rc"; exit 1; }
   for t in gcc gmake bison flex git ccache; do
     command -v $t >/dev/null || { echo "PREP_FAILED missing $t"; exit 1; }
@@ -208,6 +212,10 @@ if ! step_done conf; then
 my $f = shift; local $/; open my $i, '<', $f or die $!; my $t = <$i>; close $i;
 my $new = "\tconfig_opts => [\n\t\tqw(\n\t\t  --enable-cassert\n\t\t  --enable-debug\n\t\t  --enable-tap-tests\n\t\t  --without-icu\n\t\t  ),\n\t],\n";
 $t =~ s/\tconfig_opts => \[\n\t\tqw\(\n.*?\t\],\n/$new/s or die "config_opts block not found";
+# GNU diff must win over the illumos one for every build/test child process:
+# test_json_parser's TAP test asserts an empty diff output.
+my $env = "\tbuild_env => {\n\n\t\t# PG TAP tests assert diff prints NOTHING for identical files; the illumos\n\t\t# /usr/bin/diff prints 'No differences encountered' with -u, so put GNU\n\t\t# diffutils (/usr/gnu/bin) ahead of it for the whole build/test run.\n\t\tPATH => '/usr/gnu/bin:/usr/bin:/usr/sbin',\n";
+$t =~ s/\tbuild_env => \{\n/$env/ unless $t =~ m{/usr/gnu/bin:/usr/bin};
 open my $o, '>', $f or die $!; print $o $t; close $o;
 EOP
   perl -c build-farm.conf || { echo "PREP_FAILED build-farm.conf syntax"; exit 1; }
