@@ -1,5 +1,13 @@
 # solnix cold-boot 10/10: the pre-userland kernel hang ROOT-CAUSED + FIXED (15/15)
 
+> **⚠️ STALE CLOUD IDENTIFIERS.** Every AWS instance/AMI/snapshot id below belongs to a
+> CLOSED account (chiuso / mala / lala) and no longer resolves. The findings, root causes
+> and recipes here remain valid — only the ids are dead. Current substrate ids live in the
+> gitignored `.infra/`; the rebuild paths are `docs/base-ami-rebuild-runbook.md` (x86_64,
+> from the public OI cloudimage) and `docs/aarch64-buildhost-runbook.md` (the aarch64 gate
+> host). See `docs/durability-account-loss.md` for why this keeps happening and the rules
+> that limit the damage.
+
 ## Result
 NEW CANONICAL AMI **ami-08028a88f6e53ff49** (solnix-kh-pitfix-zfs) = **15/15** unattended
 cold launches on m5.4xlarge (measured, clean first-pass: PASS=15 DHCP-stuck=0 HANG=0).

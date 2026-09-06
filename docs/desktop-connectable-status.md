@@ -1,5 +1,13 @@
 # solnix connectable COSMIC desktop — honest status
 
+> **⚠️ STALE CLOUD IDENTIFIERS.** Every AWS instance/AMI/snapshot id below belongs to a
+> CLOSED account (chiuso / mala / lala) and no longer resolves. The findings, root causes
+> and recipes here remain valid — only the ids are dead. Current substrate ids live in the
+> gitignored `.infra/`; the rebuild paths are `docs/base-ami-rebuild-runbook.md` (x86_64,
+> from the public OI cloudimage) and `docs/aarch64-buildhost-runbook.md` (the aarch64 gate
+> host). See `docs/durability-account-loss.md` for why this keeps happening and the rules
+> that limit the damage.
+
 ## What's REAL and verified (deterministic)
 A connectable solnix Wayland desktop on x86_64-illumos, on the 10/10-reliable base
 (ami-08028a88f6e53ff49, PIT-hang fixed). VNC-verified end-to-end:
@@ -92,3 +100,31 @@ distinct from (and beyond) the per-app client-dispatch fix.
 - So: "a connectable box running COSMIC apps" = DONE + reliable. "The full pop!_OS COSMIC shell (panel +
   workspaces + notifications)" = needs the session-service + wayland-protocol layer (the next desktop phase,
   below the build-farm/aarch64/GPU priorities).
+
+## RESOLVED: the session-service layer is built; the panel-render wall is now a Mesa EGL gap
+The session-service + wayland-protocol layer cosmic-panel needs has been PROVIDED and verified, and the
+panel now runs its full init on it. The remaining blocker is NOT a missing service/protocol -- it is a Mesa
+build-config gap. What was done (patches in pkgs/os-specific/illumos/rust-patches/):
+- **D-Bus session bus** (`dbus-daemon` 1.16.2 is on the box): starts cleanly; clearing the panel's
+  "workspaces dbus proxy: No such file" (that error was the BUS being absent -- with the bus the proxy
+  succeeds-as-absent; cosmic-workspaces need not be built). cosmic-notifications runs (does not claim its
+  D-Bus name here, so "connect to notifications daemon" still logs, but NON-FATALLY).
+- **smallvil-illumos-session-shell-protocols.patch**: adds FOUR globals + handlers to the smithay-fork
+  smallvil (one blanket `delegate_dispatch2!` wires dispatch): `zwlr_layer_shell_v1` (the panel bar IS a
+  layer surface -- smallvil advertised none; also added LayerMap arrange/configure at commit + rendering
+  layer surfaces as custom_elements in the winit loop, which stock smallvil never did), `wp_fractional_scale`,
+  `wp_security_context`, `wp_viewporter`. Clears ALL of: fractional NotPresent, security NotPresent,
+  viewporter NotPresent.
+- **wayland-client-0.31.14-illumos-blocking-read-timeout.patch**: the panel's synchronous startup
+  `Connection::roundtrip -> blocking_read -> poll(fd, INFINITE)` wedged on the same illumos nested-poll
+  readiness gap the calloop-wayland-source Timer patch fixes for the async path. Poll with an 8ms timeout +
+  read unconditionally. (Also: launch smallvil with WAYLAND_DISPLAY UNSET so its winit uses X11, not a
+  nested wayland client that hits the identical infinite-roundtrip hang.)
+- After all of it, cosmic-panel connects, binds globals, spawns applets, then EXITS on the sole FATAL:
+  **"Unable to find suitable EGL platform" -- missing `EGL_KHR/EXT_platform_wayland`**. The system illumos
+  Mesa 21.3.9 (`/usr/lib/GL/amd64/libEGL`) has `platform_x11`/`gbm`/`surfaceless` but NOT wayland. The
+  panel's `xdg_shell_wrapper` is a GL nested compositor (`egl_context().make_current_with_surface` +
+  GlesRenderer per layer) -- it hard-requires an EGL wayland platform; no tiny-skia/SW path like iced apps.
+- NEXT (the precise blocker): build illumos Mesa WITH the wayland EGL platform enabled (or rework the panel
+  wrapper to a surfaceless/pbuffer GL + wl_shm software-upload path). This is a Mesa-packaging task, distinct
+  from the (now-complete) session-service + wayland-protocol layer.

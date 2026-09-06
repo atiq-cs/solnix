@@ -1,5 +1,13 @@
 # solnix build-farm animal provisioning (durable-account recipe)
 
+> **⚠️ STALE CLOUD IDENTIFIERS.** Every AWS instance/AMI/snapshot id below belongs to a
+> CLOSED account (chiuso / mala / lala) and no longer resolves. The findings, root causes
+> and recipes here remain valid — only the ids are dead. Current substrate ids live in the
+> gitignored `.infra/`; the rebuild paths are `docs/base-ami-rebuild-runbook.md` (x86_64,
+> from the public OI cloudimage) and `docs/aarch64-buildhost-runbook.md` (the aarch64 gate
+> host). See `docs/durability-account-loss.md` for why this keeps happening and the rules
+> that limit the damage.
+
 When the durable (non-burner) account is designated, provision the long-term solnix build-farm animals with
 this recipe. The technical capabilities are all PROVEN (Goals 2+3 done on x86; aarch64 QEMU-boot done).
 

@@ -1,4 +1,12 @@
 # RESOLVED: true 10/10 achieved. The bucket-B kernel hang was tsc_pit_also() touching the
+
+> **⚠️ STALE CLOUD IDENTIFIERS.** Every AWS instance/AMI/snapshot id below belongs to a
+> CLOSED account (chiuso / mala / lala) and no longer resolves. The findings, root causes
+> and recipes here remain valid — only the ids are dead. Current substrate ids live in the
+> gitignored `.infra/`; the rebuild paths are `docs/base-ami-rebuild-runbook.md` (x86_64,
+> from the public OI cloudimage) and `docs/aarch64-buildhost-runbook.md` (the aarch64 gate
+> host). See `docs/durability-account-loss.md` for why this keeps happening and the rules
+> that limit the damage.
 # unreliable Nitro i8254 PIT for a legacy diagnostic cross-check after the VMware CPUID leaf already
 # gave the TSC freq. FIX: set pit_is_broken=1 (documented escape hatch, no kernel rebuild). Canonical
 # AMI ami-08028a88f6e53ff49 = MEASURED 15/15 unattended on m5.4xlarge. See docs/kernel-hang-tsc-pit-fix.md.

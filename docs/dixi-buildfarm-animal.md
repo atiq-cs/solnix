@@ -1,5 +1,13 @@
 # dixi -- x86 solnix PostgreSQL build-farm animal (mala) -- PROVISIONED
 
+> **⚠️ STALE CLOUD IDENTIFIERS.** Every AWS instance/AMI/snapshot id below belongs to a
+> CLOSED account (chiuso / mala / lala) and no longer resolves. The findings, root causes
+> and recipes here remain valid — only the ids are dead. Current substrate ids live in the
+> gitignored `.infra/`; the rebuild paths are `docs/base-ami-rebuild-runbook.md` (x86_64,
+> from the public OI cloudimage) and `docs/aarch64-buildhost-runbook.md` (the aarch64 gate
+> host). See `docs/durability-account-loss.md` for why this keeps happening and the rules
+> that limit the damage.
+
 Node: i-0fe02f42572a1ba2d, m5.2xlarge, us-east-2a, 3.137.220.180.
 Provisioned DIRECTLY on the cold-launched 10/10 base + scripted pre-install
 (NOT a re-baked AMI -- the re-bake carries the cold-boot DHCP regression).
