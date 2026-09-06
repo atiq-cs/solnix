@@ -96,3 +96,62 @@ Three things are needed from the hardware, and the second one changes a schedule
 2. **Does the stock vendor image boot?** It reveals whether U-Boot leaves a live
    framebuffer, which decides **3-5 days vs 2-3 weeks** for pixels on HDMI.
 3. **Reachability** — driven directly, or via a handed-over runbook.
+
+## Later round: six pre-existing kernel bugs, all found by new code exercising old code
+
+The pattern is consistent enough to state as a rule: **a new subsystem is a test of the
+old ones.** None of these would have been found by reading the code.
+
+| bug | found by | effect |
+|---|---|---|
+| `trap.S` corrupted `t0` on every S-mode trap | the scanout work | 1/6 boots -> 6/6 |
+| `cmo.h` illegal instruction on non-T-Head CPUs | the scanout work | dead code hid a latent trap |
+| second-fork COW dropped `PTE_COW` (`hat_riscv.c`) | the AF_UNIX work | userland rebuilds broke |
+| `copy_lofault` ignored `SPP` (`trap.c`) | the AF_UNIX work | wrong-privilege fault recovery |
+| `this_cpu()` masked instead of validating (`proc.c`) | the `tp` split | unsafe once userland writes `tp` |
+| **dead `TS_IDLE` test let two harts run one thread** | the poll work | **2/10 boots -> 8/10 -> 6/6** |
+| **no FP state saved across a context switch** | assessing smallvil | would corrupt llvmpipe SILENTLY |
+
+The last two are the most instructive. The `TS_IDLE` race closed a **three-step
+misdiagnosis chain** — the same boot flakiness was blamed on a gcc version skew (I committed
+that), then on the committed userland blobs, and was actually a dispatcher bug all along.
+Each explanation was plausible; none was verified against a mechanism. The rule now recorded
+in the source: **distrust a plausible explanation until the mechanism has been observed.**
+
+The FP bug is worse than it sounds. It hid because our userland is soft-float, but Rust's
+riscv64 illumos target is hard-float and llvmpipe is pure float math — so a compositor and
+its client would corrupt each other's FP registers **silently**, producing garbage pixels
+rather than an error. It would have looked like a renderer bug for weeks.
+
+## The instrument was the bug: ~13 seconds per character
+
+The aarch64 console emitted **~13 s/char** because `boot_uart_putchar()` waited for a TXFE
+flag that never sets on Graviton, burning its full 1,000,000-iteration cap on every byte. A
+prior boot spent **2.5 hours** printing ~670 characters of debug markers.
+
+Two lessons:
+
+* **A capped poll on a condition that never occurs is not "bounded" — it is a fixed cost.**
+  Prefer removing an unnecessary wait to capping it; size any necessary cap to the physical
+  event rather than to a round number.
+* **The debug instrument was perturbing the system by hours, so it was never a passive
+  observer.** That invalidated a queued A/B experiment (removing 19 markers also removed
+  ~2.5h of settle time from the middle of `gicv3_init`), and it made a "stall" ambiguous —
+  at 13 s/char a single devinfo line costs ~10 minutes, so a boot that looked hung may
+  simply have been printing.
+
+## My own error rate, and what it says about the arrangement
+
+Agents corrected me repeatedly this session, and the corrections were substantive:
+
+* the "lost" riscv64 artifacts (they were untracked in a repo I hadn't checked);
+* the byte-wide-GICD hypothesis (I compared two boots running *different GIC drivers*);
+* the gcc-skew explanation for the userland breakage (three kernel bugs, not the compiler);
+* "calloop uses poll" (on illumos it uses **event ports** via `polling`/`rustix`);
+* my FP-fix sketch (`fpu.c` needs a ctxop framework this port lacks; the trap frame is
+  exactly full so FP belongs in `rv_context`).
+
+The common thread: **I was reliably wrong where I reasoned from general knowledge instead of
+tracing the actual dependency or measuring the actual value.** The corrections all came from
+agents that measured. Briefs should therefore keep saying "refuting this is a good outcome"
+and "get evidence before fixing" — those two sentences produced most of the value here.
