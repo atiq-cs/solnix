@@ -54,6 +54,23 @@ critical path. Measured properly in `docs/riscv64-libc-rust-abi-gap.md`, which
 > found and fixed on the way (second-fork COW dropping `PTE_COW`, the `copy_lofault`
 > redirect ignoring `SPP`, `this_cpu()` masking instead of validating).
 >
+> **⚠️ REVISED PRIORITY -- the real first wall is FLOATING POINT.** The kernel saves NO
+> FP state across a context switch (`docs/riscv-no-fp-context-switch.md`): zero fsd/fld in
+> swtch.S/trap.S, no FP frame slots, and `uts/fpu.c` present but in no build script. Proven
+> 3/3 by a fork probe where the parent read back exactly parent^child from its own f0-f7.
+> It hid because our userland is soft-float (`-march=rv64imac`), but the Rust
+> riscv64gc-unknown-illumos target is **lp64d hard-float** and llvmpipe is pure float math --
+> so a compositor and its client would corrupt each other's FP registers SILENTLY, producing
+> garbage pixels rather than an error. This must be fixed before any hard-float userland is
+> trusted. The fix is `fpu.c` + FP frame slots + an FS lazy-switch policy (save when Dirty,
+> trap on first use), judged by boot rate.
+>
+> **And a correction: `poll(2)` is necessary but NOT sufficient.** On illumos `calloop` goes
+> `polling` 3.11 -> `rustix::event::port` -> **event ports** (`port_create`/
+> `port_associate`/`port_getn`), and `wayland-backend`'s server side uses the native
+> **`epoll(5)` shim**. poll(2) is what libc and those shims sit on, not what calloop calls --
+> so **event ports** join the Gate A list.
+>
 > **What a Wayland client still needs, in priority order: `poll(2)`/`select` (a compositor
 > main loop is built on it), threads/`pthread_create`, anonymous mmap (only `/dev/fb` is
 > mappable today), `dlopen`, `__tls_get_addr`.** That list -- not TCP/IP, and no longer
