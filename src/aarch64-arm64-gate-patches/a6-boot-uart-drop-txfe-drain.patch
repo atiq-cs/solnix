@@ -1,0 +1,54 @@
+diff --git a/usr/src/uts/armv8/boot/boot_uart.c b/usr/src/uts/armv8/boot/boot_uart.c
+--- a/usr/src/uts/armv8/boot/boot_uart.c
++++ b/usr/src/uts/armv8/boot/boot_uart.c
+@@ -92,28 +92,50 @@ boot_uart_getchar(void)
+ void
+ boot_uart_putchar(int c)
+ {
+ 	/*
+ 	 * Bounded FR poll: some SBBR/PL011 implementations (observed on AWS
+ 	 * Graviton) do not drive the TXFF/TXFE flags the way SBSA leads us to
+ 	 * expect, so an unbounded spin here hangs the boot forever on the
+ 	 * first console write -- the kernel then emits no banner though it is
+ 	 * running.  Cap the waits and fall through (still write the byte).
++	 *
++	 * TXFE IS NOT WAITED ON AT ALL, and that is deliberate.  Measured on
++	 * Graviton: TXFE never sets on this UART, so a capped post-write drain
++	 * costs the FULL cap on EVERY character.  At 1e6 iterations that
++	 * measured ~13 seconds per character -- ~2.5 hours of console output
++	 * for a few hundred characters, which made every metal boot an
++	 * afternoon and made -B prom_debug=1 completely unaffordable.
++	 *
++	 * Draining the FIFO after each byte is not needed for correctness
++	 * either: the TXFF (full) check before the write is what prevents
++	 * overrun, and the hardware drains on its own.  A post-write TXFE wait
++	 * only matters when handing the UART to another agent (a kexec-style
++	 * transfer, or powering the block down), which the boot console never
++	 * does.  So the drain is dropped rather than capped, and the TXFF cap
++	 * is lowered to a value that still bounds a genuinely wedged FIFO
++	 * without dominating the boot.
+ 	 */
+ 	uint32_t cap;
+ 
+ 	if (boot_uart_mmio_base == NULL)
+ 		return;
+ 
++	/*
++	 * Wait for space, bounded.  10k iterations is ample for a real FIFO to
++	 * drain one slot at any sane baud, and cheap enough that a UART whose
++	 * TXFF is stuck-full costs milliseconds per character rather than
++	 * seconds.
++	 */
+ 	for (cap = 0; (boot_uart_readreg32(SBSA_UARTFR) & SBSA_UARTFR_TXFF) &&
+-	    cap < 1000000u; cap++)
++	    cap < 10000u; cap++)
+ 		boot_uart_yield();
+ 
+ 	if ((c & 0xff) == '\n')
+ 		boot_uart_putchar('\r');
+ 
+ 	boot_uart_writereg32(SBSA_UARTDR, c & 0xff);
+-	for (cap = 0; !(boot_uart_readreg32(SBSA_UARTFR) & SBSA_UARTFR_TXFE) &&
+-	    cap < 1000000u; cap++)
+-		boot_uart_yield();
+ }
