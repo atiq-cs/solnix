@@ -214,3 +214,53 @@ that identifies which process's data leaked, so a partial fix (say, saving `f0`-
 but not `fcsr`, or saving on switch but not across `fork`) produces a diagnosable
 failure rather than a vague one. Extend it to `f8`-`f31` and `fcsr` when the
 implementation claims to cover them.
+
+## Implementation status: wired, booting, 9/10 — with an honest caveat on the control
+
+The policy module (`fp.c`/`fp.h`), the assembly (`fpsave.S`), and every integration point are
+in and the scanout gate passes: `R-P64 SCANOUT PASS`, all four quadrants plus the diagonal.
+
+**Two of my own bugs were caught by building and booting, not by reading:**
+
+1. **`float.s` was never buildable in this port.** It wants `<sys/asm_linkage.h>` (ENTRY /
+   SET_SIZE) and a generated `assym.h` (FPU_CTX_* offsets), and this port has neither — it had
+   been imported and never compiled. Compounding that, the kernel is built **soft-float**
+   (`-march=rv64imac_zicsr_zifencei`), so `fsd`/`frcsr` fail with *"extension `d' required"*.
+   Replaced by **`fpsave.S`**, self-contained in the port's own idiom, enabling F/D for *itself
+   only* via `.option arch, +f, +d` so the kernel proper stays soft-float — which is precisely
+   what makes lazy FP handling safe.
+2. **A store page fault at dispatcher start.** `kmem_alloc` does not zero and both
+   `thread_create` and the idle-thread setup initialise `rv_context` **field by field**, so the
+   new `c_fpu` held heap garbage that `fp_switch` dereferenced on the first switch. The console
+   named it: `stval=0x3f3e3d3c3b3a3938` — a byte-counting pattern, not an address. Fixed at both
+   construction sites.
+
+### Boot rate, stated precisely
+
+| tree | result |
+|---|---|
+| FP wired in, run set A | 5/6 |
+| FP wired in, run set B | 4/4 |
+| **FP total** | **9/10** |
+| pristine baseline (claimed earlier, under load average 67) | 6/6 |
+| **true pristine control** | **never obtained — both attempts invalid** |
+
+The first control attempt stashed the build-script entry while leaving `fp.c`/`fpsave.S` in the
+tree, producing a *mismatched* tree (0/4) rather than a pristine one. The second attempt was
+mislabelled: the files were already tracked so the stash did not remove them, and it silently
+**re-measured the FP tree** (4/4). Both are recorded rather than dropped, because they are the
+same *"what is this comparison actually comparing?"* error this project has hit twice before —
+once when a QEMU-vs-metal comparison turned out to run different GIC drivers.
+
+**Honest position: 9/10 measured on the FP tree; not a demonstrable regression, and not a clean
+bill either.** A valid control requires reverting the wiring *and* removing the FP sources, on
+the same machine and load, interleaved.
+
+### Still to verify
+
+* The hard-float probe strengthened to **all 32 registers + `fcsr`** across several processes
+  (`fptest.c` currently covers f0–f7 and demonstrates the *bug*).
+* The **negative control**: set `fp_swtch_enabled = 0` and confirm the FP test **FAILS**. The
+  flag exists for exactly this and is `volatile` so it cannot be folded away.
+* That a **soft-float process still pays nothing** — FS stays Off for it, otherwise this is an
+  eager save with extra steps.
