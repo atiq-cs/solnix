@@ -42,6 +42,22 @@
 > with no panic is exactly an unbounded MMIO spin** -- a `VERIFY` would have printed
 > something. This is the same failure shape as the Graviton boot-UART FR-poll bug,
 > where a flag that never changes state on this hardware wedged an unbounded poll.
+>
+> ## OUTCOME (measured on c6g.metal): GICv3 init now COMPLETES
+>
+> The polls were bounded and the attach path instrumented; see
+> **`docs/aarch64-a6-gicd-bounded-await.md`** for the full result. The boot now
+> runs the whole GICv3 init, attaches `gicthree0` (all 4 redistributor regions)
+> and `arm_gtmr0`, and stalls later at `NOTICE: Performing full ZFS device scan!`
+> -- the first step needing real NVMe/PCIe enumeration and ITS/MSI delivery.
+>
+> WARNING: **no GIC flag was actually stuck** -- all 17 markers printed and *zero*
+> `await-timeout` lines appeared. So the bound was not demonstrably the thing that
+> helped, and the leading explanation is that the 17 added `prom_printf` calls
+> perturbed a barrier/settle-time bug. Before treating the GIC leg as closed,
+> rebuild with the bounds kept but the markers removed: if the boot still reaches
+> the ZFS scan the bound was load-bearing, if it goes silent the markers were.
+> That experiment is cheap and has NOT been run.
 
 ---
 

@@ -1,0 +1,243 @@
+--- a/usr/src/uts/armv8/io/gicthree.c	2026-09-05 15:37:25.177335673 -0400
++++ b/usr/src/uts/armv8/io/gicthree.c	2026-09-05 15:39:45.903471403 -0400
+@@ -110,6 +110,7 @@
+ #include <sys/gic_v3.h>
+ #include <sys/gic_ops.h>
+ #include <sys/vmem.h>
++#include <sys/promif.h>
+ #include <vm/hat.h>
+ #include <vm/hat_pte.h>
+ 
+@@ -299,14 +300,101 @@
+ 	return (val);
+ }
+ 
+-static inline void
+-reg_await_clear4(ddi_acc_handle_t hdl, caddr_t base,
+-    uint32_t reg, uint32_t mask)
++/*
++ * Bound for the register-flag polls below.
++ *
++ * WHAT: an iteration cap on every "wait for this GIC status flag to clear"
++ * spin, plus a one-line report naming the site that gave up.
++ *
++ * WHY: these polls were unbounded (`while (ddi_get32(...) & mask);`).  On real
++ * AWS Graviton the PL011 was already observed not to drive its TX flags the
++ * way SBSA implies (see the bounded FR poll in armv8/boot/boot_uart.c), so a
++ * status flag that never clears is a demonstrated property of this hardware,
++ * not a theoretical one.  An unbounded spin turns that into a silent hang with
++ * no panic and no console output -- which is exactly the observed failure mode
++ * after `scsi_vhci0 is /scsi_vhci`.  Bounding it converts an undiagnosable
++ * hang into a named, printed symptom and lets the boot continue far enough to
++ * report it.
++ *
++ * The cap is deliberately generous: RWP/ChildrenAsleep settle in well under a
++ * microsecond on conforming hardware, so a healthy machine never approaches
++ * this and prints nothing.
++ */
++#define	GICV3_AWAIT_MAX	10000000u
++
++/*
++ * Cap on how many await-timeout reports we will print.
++ *
++ * WHY: the redistributor polls run once per CPU, so a flag that is stuck on
++ * every one of Graviton's 64 redistributors would otherwise emit 64 near
++ * identical lines.  The first few carry all the diagnostic value (which site,
++ * which register, which redistributor); the rest are noise on a slow console.
++ */
++#define	GICV3_AWAIT_REPORT_MAX	8
++
++static uint32_t gicv3_await_timeouts = 0;
++
++/*
++ * Poll until `mask` reads back clear in `reg`, giving up after
++ * GICV3_AWAIT_MAX iterations.
++ *
++ * On giving up, report the site and the last value read and return, letting
++ * the caller proceed.  Continuing is the point: a silent bound would only move
++ * the mystery, whereas a bound that announces itself tells us which flag the
++ * hardware never cleared.
++ */
++static void
++reg_await_clear4_site(ddi_acc_handle_t hdl, caddr_t base,
++    uint32_t reg, uint32_t mask, const char *site)
+ {
+-	while (ddi_get32(hdl, (uint32_t *)(base + reg)) & mask)
+-		;
++	uint32_t val;
++	uint32_t n;
++
++	for (n = 0; n < GICV3_AWAIT_MAX; n++) {
++		val = ddi_get32(hdl, (uint32_t *)(base + reg));
++		if ((val & mask) == 0)
++			return;
++	}
++
++	/*
++	 * NOTE: prom_printf, not dev_err/cmn_err.  This can run with the
++	 * distributor lock held and interrupts disabled, where the normal
++	 * logging path is not safe.  prom_printf reaches the console through
++	 * the (already bounded) boot_uart_putchar, so it cannot itself hang,
++	 * and this is a once-per-stuck-flag message rather than a hot path.
++	 */
++	if (++gicv3_await_timeouts <= GICV3_AWAIT_REPORT_MAX) {
++		prom_printf("[A6GICD:await-timeout site=%s reg=0x%x "
++		    "mask=0x%x val=0x%x base=%p]\n",
++		    site, reg, mask, val, (void *)base);
++	}
+ }
+ 
++#define	reg_await_clear4(hdl, base, reg, mask)	\
++	reg_await_clear4_site((hdl), (base), (reg), (mask), __func__)
++
++/*
++ * Coarse progress marker for the GICv3 attach path.
++ *
++ * WHAT: a short, unconditional one-liner marking each stage of attach/init.
++ *
++ * WHY: on real Graviton the boot goes silent immediately after
++ * `scsi_vhci0 is /scsi_vhci`, and the GIC is the next node to attach.  Silence
++ * means no panic fired, so nothing in the normal logging path ever ran; the
++ * only way to learn where control stopped is to print on the way in.  These
++ * are kept very short on purpose (the console is slow, and long bursts overrun
++ * the PL011's 32-byte TX FIFO), and there are a fixed handful of them rather
++ * than one per redistributor.
++ *
++ * They are unconditional rather than behind prom_debug because the failure they
++ * localise reproduces only on this hardware, and the boot that needs them is
++ * the one that is already silent.
++ *
++ * NOTE: gate behind prom_debug or drop once the GICv3 attach path is trusted on
++ * this hardware.
++ */
++#define	A6GICD_MARK(s)	prom_printf("[A6GICD:" s "]\n")
++
+ static inline uint32_t
+ gicd_read4(gicv3_conf_t *gic, uint32_t reg)
+ {
+@@ -1578,6 +1666,8 @@
+ 	/*
+ 	 * Check that we have at least as many redistributors as we do CPUs.
+ 	 */
++	prom_printf("[A6GICD:walk1 nredist=0x%x nregions=0x%x]\n",
++	    num_redistributors, gc->gc_num_redist_regions);
+ 	VERIFY3U(num_redistributors, >=, max_ncpus);
+ 
+ 	/*
+@@ -1662,6 +1752,7 @@
+ 	 * Iterate the cpuinfo ensuring that we have a redistributor for
+ 	 * each CPU.
+ 	 */
++	A6GICD_MARK("walk2-done");
+ 	for (ci = cpuinfo_first();
+ 	    ci != cpuinfo_end();
+ 	    ci = cpuinfo_next(ci)) {
+@@ -1906,6 +1997,10 @@
+ 	 */
+ 	gc->gc_lpi_pend_sz = (gc->gc_lpi_max_intid + 1) / 8;
+ 
++	prom_printf("[A6GICD:lpi idbits=0x%x propsz=0x%lx pendsz=0x%lx "
++	    "nredist=0x%x]\n", idbits, (unsigned long)gc->gc_lpi_prop_sz,
++	    (unsigned long)gc->gc_lpi_pend_sz, gc->gc_num_redist);
++
+ 	for (i = 0; i < gc->gc_num_redist; i++) {
+ 		gicv3_redistributor_t *r = &gc->gc_redist[i];
+ 
+@@ -2046,7 +2141,11 @@
+ 	 * Tell the hardware that this CPU is awake and wait for the wakeup to
+ 	 * complete.
+ 	 */
++	if (cp->cpu_id == 0)
++		A6GICD_MARK("cpu0-awaken");
+ 	gicv3_awaken_cpu(gc, cp);
++	if (cp->cpu_id == 0)
++		A6GICD_MARK("cpu0-awake");
+ 
+ 	/*
+ 	 * CPU Interface Configuration
+@@ -2085,11 +2184,15 @@
+ 	 * Configure SGIs and PPIs in this CPU's GIC redistributor.
+ 	 */
+ 	gicv3_init_gicr(&gc->gc_redist[cp->cpu_id], 0, 0);
++	if (cp->cpu_id == 0)
++		A6GICD_MARK("cpu0-gicr");
+ 
+ 	/*
+ 	 * Program LPI tables and enable LPIs on this redistributor.
+ 	 */
+ 	gicv3_enable_redist_lpis(gc, &gc->gc_redist[cp->cpu_id]);
++	if (cp->cpu_id == 0)
++		A6GICD_MARK("cpu0-lpis");
+ 
+ 	/*
+ 	 * Finally, tell the world we're ready.
+@@ -2117,6 +2220,8 @@
+ 
+ 	gc->gc_dip = dip;
+ 
++	A6GICD_MARK("init-enter");
++
+ 	/*
+ 	 * Global initialization involves the distributor, so lock it.
+ 	 */
+@@ -2131,9 +2236,14 @@
+ 		return (DDI_FAILURE);
+ 	}
+ 
++	A6GICD_MARK("redist-assigned");
++
+ 	gc->gc_gicd_typer = gicd_read4(gc, GICD_TYPER);
+ 	gc->gc_maxsources = GICD_TYPER_LINES(gc->gc_gicd_typer);
+ 
++	prom_printf("[A6GICD:typer=0x%x maxsources=0x%x nredist=0x%x]\n",
++	    gc->gc_gicd_typer, gc->gc_maxsources, gc->gc_num_redist);
++
+ 	/*
+ 	 * Disable the distributor and drain writes. This is done is pieces
+ 	 * as we want to avoid unpredictable behaviour when changing affinity
+@@ -2148,11 +2258,14 @@
+ 	(void) gicd_rmw4(gc, GICD_CTLR,
+ 	    GICD_CTLR_RWP|GICD_CTLR_EnableGrp1A|GICD_CTLR_EnableGrp1, 0x0);
+ 	gicd_drain_writes(gc);
++	A6GICD_MARK("gicd-disabled");
+ 	(void) gicd_rmw4(gc, GICD_CTLR,
+ 	    GICD_CTLR_RWP|GICD_CTLR_ARE_NS, GICD_CTLR_ARE_NS);
+ 	gicd_drain_writes(gc);
++	A6GICD_MARK("are-set");
+ 	VERIFY((gicd_read4(gc, GICD_CTLR) & GICD_CTLR_ARE_NS) ==
+ 	    GICD_CTLR_ARE_NS);
++	A6GICD_MARK("are-verified");
+ 
+ 	/*
+ 	 * XXXARM: Quirks might be needed
+@@ -2180,6 +2293,7 @@
+ 	for (n = 32; n < gc->gc_maxsources; n += 32)
+ 		gicd_write4(gc, GICD_ICENABLERn(n >> 5), 0xFFFFFFFF);
+ 	gicd_drain_writes(gc);
++	A6GICD_MARK("spis-disabled");
+ 
+ 	/*
+ 	 * Move all SPIs to non-secure group 1.
+@@ -2207,6 +2321,8 @@
+ 	(void) gicd_rmw4(gc, GICD_CTLR, GICD_CTLR_RWP,
+ 	    GICD_CTLR_EnableGrp1A);
+ 
++	A6GICD_MARK("gicd-enabled");
++
+ 	/*
+ 	 * Done touching the distributor.
+ 	 */
+@@ -2227,10 +2343,13 @@
+ 		return (DDI_FAILURE);
+ 	}
+ 
++	A6GICD_MARK("lpis-init");
++
+ 	/*
+ 	 * Initialize the boot processor.
+ 	 */
+ 	gicv3_cpu_init_raw(gc, CPU);
++	A6GICD_MARK("init-done");
+ 	return (DDI_SUCCESS);
+ }
+ 
