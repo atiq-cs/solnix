@@ -487,6 +487,39 @@ poll_gate(void)
 }
 
 /*
+ * fp_gate -- run /bin/fptest, the proof that hard-float state survives a context
+ * switch. Forked and exec'd like the other gates so a failure cannot take init
+ * down, and so the probe runs in a real separate address space.
+ *
+ * fptest is the ONE hard-float (lp64d) program in this userland; everything else
+ * is soft-float, which is exactly why a kernel that saved no FP state went
+ * unnoticed for so long. Three processes each stamp a distinct pattern into all
+ * of f0-f31 plus fcsr and check it survives several preemptions.
+ */
+static void
+fp_gate(void)
+{
+	int pid, st = 0;
+
+	puts("\n--- gate: hard-float context switch (f0-f31 + fcsr) ---\n");
+	pid = fork();
+	if (pid == 0) {
+		char *av[2];
+
+		av[0] = "fptest";
+		av[1] = 0;
+		execve("/bin/fptest", av, 0);
+		puts("fp: exec /bin/fptest FAILED\n");
+		_exit(1);
+	}
+	if (pid < 0) {
+		puts("fp: fork FAILED\n");
+		return;
+	}
+	waitpid(pid, &st, 0);
+}
+
+/*
  * scanout_gate -- R-P64. Run /bin/fbtest, the userland proof of the /dev/fb
  * scanout seam (open + FBIOGMODE + mmap + paint + FBIOFLUSH). Forked so a
  * failure in the test cannot take init down, and so the seam is exercised from
@@ -612,6 +645,7 @@ main(int argc, char **argv)
 	 * top of the sockets. Run before the scanout gate so a poll regression is
 	 * reported before the display path, which does not depend on it. --- */
 	poll_gate();
+	fp_gate();
 
 	/* --- R-P64 scanout seam: /dev/fb from userland. ---
 	 * Runs /bin/fbtest as a child so a failure there cannot take init down,

@@ -734,6 +734,19 @@ load_elf_into(proc_t *p, const char *path, const void *img, unsigned long len,
 	}
 	p->p_uframe.r_sepc = entry;
 	p->p_uframe.r_sp = sp;
+	/*
+	 * Start the process with the FPU DISABLED (sstatus.FS = Off, bits 14:13
+	 * cleared). Nothing else seeded this field, so a fresh process used to
+	 * inherit whatever FS the kernel happened to leave set -- and since
+	 * fp_save/fp_restore enable the FPU to run fsd/fld, userland arrived with
+	 * FP already on. The first-use trap then never fired, no context was ever
+	 * allocated, and FP state was neither saved nor restored: exactly the
+	 * corruption this is meant to prevent, but silently.
+	 *
+	 * Off is also the correct initial state semantically: a process that never
+	 * touches the FPU should never pay for one.
+	 */
+	p->p_uframe.r_sstatus &= ~(3UL << 13);
 	p->p_uframe.r_a0 = (unsigned long)snap->argc;	/* argc */
 	p->p_uframe.r_a1 = sp + 8;			/* argv (past argc) */
 

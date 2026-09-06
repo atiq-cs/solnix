@@ -72,6 +72,15 @@ _Static_assert(sizeof (fpu_ctx_t) == 33 * 8, "fpu_ctx_t must be 264 bytes");
  */
 volatile int fp_swtch_enabled = 1;
 
+/*
+ * Path counters. Cheap, and they answer the first question any FP bug raises:
+ * did the policy run at all? When this was first wired up all three paths were
+ * being reached while state was still corrupted, which is what localised the bug
+ * to fp_switch's logic rather than to the plumbing.
+ */
+unsigned long fp_dbg_switch, fp_dbg_saved, fp_dbg_fenflt, fp_dbg_restored,
+    fp_dbg_alloc;
+
 extern void _fpu_save(fpu_ctx_t *);
 extern void _fpu_restore(fpu_ctx_t *);
 
@@ -149,17 +158,36 @@ fp_switch(fpu_ctx_t *old, fpu_ctx_t *new)
 	if (!fp_swtch_enabled)
 		return;
 
+	fp_dbg_switch++;
 	if (old != 0)
-		(void) fp_save(old);
+		fp_dbg_saved += (unsigned long)fp_save(old);
 
 	/*
-	 * Off regardless of whether `new` owns state: if it does, it faults
-	 * once and we restore; if it does not, it faults once and we allocate.
-	 * Either way the registers it sees are never another thread's.
+	 * RESTORE the incoming thread's registers here rather than deferring to
+	 * the first-use trap.
+	 *
+	 * Deferring does not work, and the reason is worth recording: sret
+	 * restores sstatus from the thread's SAVED TRAP FRAME, not from the live
+	 * CSR. Once a thread has taken its first-use trap, its frame carries
+	 * FS=Clean forever. Setting the live FS=Off at switch time therefore has
+	 * no effect on what that thread resumes with -- it returns to U-mode with
+	 * FP enabled and simply uses whatever f0-f31 the previous thread left.
+	 * Measured exactly that way: all three probe processes reported every
+	 * register clobbered while fenflt fired only once each.
+	 *
+	 * Restoring eagerly for a thread that OWNS state is still lazy overall:
+	 * a thread that has never touched the FPU has a NULL context, gets FS=Off,
+	 * and costs nothing until it faults once. That is where the savings are on
+	 * a kernel whose threads are mostly soft-float.
 	 */
-	set_fs(SSTATUS_FS_OFF);
-	(void) new;
+	if (new != 0) {
+		fp_restore(new);
+		fp_dbg_restored++;
+	} else {
+		set_fs(SSTATUS_FS_OFF);
+	}
 }
+
 
 /*
  * First-use trap. An FP instruction executed with FS=Off raises an illegal
@@ -176,12 +204,14 @@ fp_fenflt(fpu_ctx_t **ctxp, unsigned long *sstatusp)
 	if (ctxp == 0 || sstatusp == 0)
 		return (0);
 
+	fp_dbg_fenflt++;
 	ctx = *ctxp;
 	if (ctx == 0) {
 		ctx = fp_ctx_alloc();
 		if (ctx == 0)
 			return (0);	/* no memory: let it fault for real */
 		*ctxp = ctx;
+		fp_dbg_alloc++;
 		/*
 		 * A fresh context is all zeroes, and Initial is exactly the FS
 		 * encoding for "enabled, registers are zero".
@@ -189,6 +219,7 @@ fp_fenflt(fpu_ctx_t **ctxp, unsigned long *sstatusp)
 		set_fs(SSTATUS_FS_INITIAL);
 	} else {
 		fp_restore(ctx);
+		fp_dbg_restored++;
 	}
 
 	/*

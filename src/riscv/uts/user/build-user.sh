@@ -27,12 +27,25 @@ CFLAGS="-march=rv64imac_zicsr -mabi=lp64 -mcmodel=medany \
 
 PROGS="init sh hello echo cat fbtest socktest polltest"
 
+# fptest is the ONE userland program built HARD-FLOAT (lp64d). Everything else is
+# soft-float, which is exactly why the missing FP context-switch stayed hidden --
+# no process ever used the FPU. This probe must use it to test it.
+FP_CFLAGS="-march=rv64imafdc_zicsr -mabi=lp64d -mcmodel=medany -ffreestanding \
+	-fno-stack-protector -fno-pie -O2 -Wall"
+
 echo "== build libc slice: libc-riscv.a =="
 "$CC" $CFLAGS -c libc.c -o libc.o
 "$AR" rcs libc-riscv.a libc.o
 echo "  libc-riscv.a: $("$AR" t libc-riscv.a | tr '\n' ' ')($(wc -c < libc-riscv.a) bytes)"
 
 echo "== build userland ELFs (linked against libc-riscv.a): $PROGS =="
+# fptest is standalone (its own _start, inline-asm syscalls, no libc) AND
+# hard-float, so it is built separately from the soft-float PROGS loop and linked
+# without libc-riscv.a.
+"$CC" $FP_CFLAGS -c fptest.c -o fptest.o
+"$LD" -T init.ld -o fptest.elf fptest.o
+echo "  fptest.elf: hard-float lp64d ($(wc -c < fptest.elf) bytes)"
+
 for p in $PROGS; do
 	"$CC" $CFLAGS -c "$p.c" -o "$p.o"
 	# Link the program object + the libc archive; _start + printf/malloc/etc
@@ -68,7 +81,7 @@ echo "== emit user_elfs.h =="
 	echo " */"
 	echo "#ifndef _USER_ELFS_H"
 	echo "#define _USER_ELFS_H"
-	for p in $PROGS; do
+	for p in $PROGS fptest; do
 		echo "static const unsigned char ${p}_elf[] = {"
 		od -An -v -tu1 "$p.elf" | awk '{for(i=1;i<=NF;i++)printf "%s,",$i; print ""}'
 		echo "};"
@@ -98,6 +111,7 @@ cp fbtest.elf "$STAGE/bin/fbtest"
 cp socktest.elf "$STAGE/bin/socktest"
 # The poll(2) + anonymous-mmap gate (init runs it as a boot gate).
 cp polltest.elf "$STAGE/bin/polltest"
+cp fptest.elf   "$STAGE/bin/fptest"
 printf 'solnix riscv64 - the first illumos on RISC-V. R-P11: signals, writable FS, passwd login, concurrent shells.\n' \
 	> "$STAGE/etc/motd"
 # /etc/passwd: R-P11 login reads uid/gid/shell from here.
@@ -115,7 +129,7 @@ wait:/bin/hello
 EOF
 ( cd "$STAGE" && tar --format=ustar -cf rootfs.tar \
     sbin/init bin/sh bin/hello bin/echo bin/cat bin/fbtest bin/socktest \
-    bin/polltest etc/motd etc/inittab etc/passwd )
+    bin/polltest bin/fptest etc/motd etc/inittab etc/passwd )
 cp "$STAGE/rootfs.tar" ../rootfs.img
 sz=$(wc -c < ../rootfs.img)
 pad=$(( (512 - (sz % 512)) % 512 ))
