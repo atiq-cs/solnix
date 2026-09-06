@@ -31,6 +31,11 @@
  * across execve, fd table is 8 slots. These are the syscalls a shell + a couple
  * utils need to be genuinely interactive + multi-process. Upgrade path (R-P9):
  * copyin/out with fault trap, signals, argv/env/auxv, a real vnode fd layer.
+ *
+ * The compositor set added on top of that: AF_UNIX sockets with SCM_RIGHTS, the
+ * /dev/fb scanout ioctl+mmap, poll(2) (73, with poll's flat millisecond timeout
+ * rather than ppoll's timespec) and anonymous mmap (MAP_ANON = 0x100, the
+ * illumos value).
  */
 
 #include "sbi.h"
@@ -91,6 +96,13 @@ extern long sys_recvmsg_fds(int fd, char *ubuf, unsigned long n,
  */
 extern long proc_ioctl(int fd, int cmd, unsigned long arg);
 extern long proc_mmap(int fd, unsigned long len);
+extern long proc_mmap_anon(unsigned long len);
+/*
+ * poll(2) -- what a compositor's main loop is built on (and what calloop, which
+ * smithay/smallvil use, sits directly on). uproc.c owns it because readiness is
+ * an fd-table question.
+ */
+extern long proc_poll(unsigned long ufds, int nfds, int timeout);
 
 /* trap.c: clock-tick preemption count (R-P9 gate 5). */
 extern volatile unsigned long preempt_count;
@@ -112,6 +124,24 @@ extern long copyout(const void *kaddr, void *uaddr, unsigned long n);
 #define	SYS_write	64
 #define	SYS_ioctl	29
 #define	SYS_mmap	222
+/*
+ * poll(2). The riscv Linux ABI has no plain `poll` slot -- only ppoll (73) --
+ * so we take 73 with poll(2)'s ARGUMENT SHAPE (a2 = timeout in milliseconds,
+ * negative = block forever) rather than ppoll's timespec + sigmask. That is the
+ * same trade already made for sendmsg/recvmsg: keep the kernel entry point the
+ * simple flat one and leave the richer POSIX shape to libc, which is where
+ * illumos puts it.
+ */
+#define	SYS_poll	73
+/*
+ * clock_gettime(2). Needed by anything that measures time in userland -- and a
+ * poll timeout is untestable without it: a test that cannot read a clock cannot
+ * tell "blocked for 200 ms" from "returned instantly". Only CLOCK_MONOTONIC and
+ * CLOCK_REALTIME are answered, both from the same `time` CSR (there is no
+ * time-of-day source on this platform yet, so REALTIME is monotonic-since-boot
+ * and says so rather than inventing an epoch).
+ */
+#define	SYS_clock_gettime	113
 #define	SYS_exit	93
 #define	SYS_kill	129
 #define	SYS_rt_sigaction 134
@@ -276,17 +306,72 @@ syscall_trap(struct regs *tf)
 		break;
 	case SYS_mmap:
 		/*
-		 * a0=addr (ignored: the driver picks the VA), a1=len,
-		 * a2=prot, a3=flags, a4=fd, a5=offset. Only a device mapping of
-		 * /dev/fb is supported, and only at offset 0 -- offset 0 must map
-		 * pixel (0,0) per the seam contract, and there is nothing else in
-		 * the buffer to map.
+		 * a0=addr (ignored: the kernel picks the VA), a1=len, a2=prot,
+		 * a3=flags, a4=fd, a5=offset.
+		 *
+		 * Two mappings exist. MAP_ANON gives fresh zeroed private pages
+		 * (what Rust std and every allocator want); a real fd maps the
+		 * /dev/fb scanout buffer.
+		 *
+		 * MAP_ANON IS 0x100 ON illumos, not Linux's 0x20. Getting that
+		 * wrong is not a theoretical risk: a Rust binary built against
+		 * Linux's value already tripped over it here. Both directions of
+		 * the mistake are caught -- 0x20 is refused with EINVAL rather
+		 * than silently treated as a file mapping of fd 0x20 -- so a
+		 * mis-built caller gets a diagnosable error instead of a wild
+		 * mapping.
 		 */
-		if (tf->r_a5 != 0)
+#define	MAP_ANON_ILLUMOS	0x100
+#define	MAP_ANON_LINUX		0x020
+		if (tf->r_a3 & MAP_ANON_ILLUMOS) {
+			ret = proc_mmap_anon(tf->r_a1);
+		} else if (tf->r_a3 & MAP_ANON_LINUX) {
+			sbi_console_puts("[mmap] MAP_ANON is 0x100 on illumos, "
+			    "not Linux's 0x20 -- refusing\n");
 			ret = -22 /* EINVAL */;
-		else
+		} else if (tf->r_a5 != 0) {
+			/*
+			 * A file/device mapping at a non-zero offset. Only
+			 * /dev/fb is mappable and offset 0 must be pixel (0,0)
+			 * per the seam contract, so there is nothing else to map.
+			 */
+			ret = -22 /* EINVAL */;
+		} else {
 			ret = proc_mmap((int)tf->r_a4, tf->r_a1);
+		}
 		break;
+	case SYS_poll:
+		/* a0=struct pollfd *, a1=nfds, a2=timeout in ms (-1 = block). */
+		ret = proc_poll(tf->r_a0, (int)tf->r_a1, (int)tf->r_a2);
+		break;
+	case SYS_clock_gettime: {
+		/* a0=clockid, a1=struct timespec * { long tv_sec; long tv_nsec; }. */
+		extern unsigned long gethrtime(void);
+		unsigned long ns = gethrtime();
+		long ts[2];
+
+		if (tf->r_a1 == 0) {
+			ret = -EFAULT;
+			break;
+		}
+		/*
+		 * CLOCK_REALTIME (0) and CLOCK_MONOTONIC (4, the illumos value)
+		 * both answer from the `time` CSR. There is no time-of-day source
+		 * on this platform, so REALTIME is monotonic-since-boot: stated
+		 * here rather than faked into a plausible-looking epoch, because a
+		 * wrong wall clock is harder to notice than an obviously small one.
+		 * Any other clockid is refused rather than silently aliased.
+		 */
+		if (tf->r_a0 != 0 && tf->r_a0 != 4) {
+			ret = -22 /* EINVAL */;
+			break;
+		}
+		ts[0] = (long)(ns / 1000000000UL);
+		ts[1] = (long)(ns % 1000000000UL);
+		ret = (copyout(ts, (void *)tf->r_a1, sizeof (ts)) != 0) ?
+		    -EFAULT : 0;
+		break;
+	}
 	case SYS_remount:
 		ret = sys_remount();
 		break;

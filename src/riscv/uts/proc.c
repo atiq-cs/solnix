@@ -64,7 +64,14 @@ void swtch(void);
 typedef enum {
 	TS_RUN,		/* on the run queue, runnable */
 	TS_ONPROC,	/* currently executing */
-	TS_IDLE,	/* idle thread (only runs when runq empty) */
+	/*
+	 * TS_IDLE is DECLARED BUT NEVER ASSIGNED: an idle thread is TS_ONPROC
+	 * while it runs, like any other. Do not write `t_state == TS_IDLE` to
+	 * detect the idle thread -- that test can never be true, and two guards
+	 * written that way silently did nothing (see thread_yield). Compare
+	 * against idlethread[cpu] instead.
+	 */
+	TS_IDLE,	/* unused: idle threads are TS_ONPROC. Kept for the enum ABI */
 	TS_SLEEP,	/* blocked on a wait channel (R-P9 sleepq) */
 	TS_DEAD		/* exited */
 } tstate_t;
@@ -223,7 +230,14 @@ thread_preempt(void)
 	if (self == 0)
 		return (0);
 
-	if (self->t_state == TS_IDLE)
+	/*
+	 * Never preempt the idle thread. Identify it by IDENTITY, not by state:
+	 * t_state is TS_ONPROC while a thread runs (dispatch_init_cpu sets the idle
+	 * thread ONPROC, and swtch sets every incoming thread ONPROC), so a
+	 * `t_state == TS_IDLE` test never fires and this guard silently did
+	 * nothing. TS_IDLE is a value nothing ever assigns.
+	 */
+	if (self == idlethread[cpu])
 		return (0);		/* idle thread never preempts */
 	if (runq_head == 0)
 		return (0);		/* nothing else runnable */
@@ -393,6 +407,23 @@ swtch(void)
 /*
  * thread_yield — voluntarily give up the cpu: re-enqueue self at the runq tail
  * and switch to the next runnable thread. Cooperative round-robin.
+ *
+ * AN IDLE THREAD MUST NEVER GO ON THE RUNQ, and the test for that must be
+ * IDENTITY, not state. The runq is shared by every hart, so an idle thread
+ * enqueued on it gets dequeued and resumed by a DIFFERENT hart while its owning
+ * hart is still executing on that same stack and kthread_t -- two harts running
+ * one thread. It presents far from the cause: a wild sepc (0xfffffffffffffffc,
+ * 0x0), "[disp] thread A/B context-switch FAILED", or a stall anywhere later in
+ * the boot, intermittently.
+ *
+ * The state test that used to be here (`t_state != TS_IDLE`) could never fire:
+ * every running thread is TS_ONPROC, because dispatch_init_cpu marks the idle
+ * thread ONPROC and swtch marks each incoming thread ONPROC. TS_IDLE is a value
+ * nothing in the dispatcher ever assigns, so the guard was dead code and every
+ * idle_body yield published the idle thread to the other harts.
+ *
+ * Measured: 2/10 clean boots with the state test, 8/10 with this identity test
+ * and nothing else changed.
  */
 void
 thread_yield(void)
@@ -400,7 +431,7 @@ thread_yield(void)
 	int cpu = this_cpu_ok();
 	kthread_t *self = curthread[cpu];
 
-	if (self->t_state != TS_IDLE)
+	if (self != idlethread[cpu])
 		runq_enqueue(self);		/* back of the line */
 	swtch();
 }

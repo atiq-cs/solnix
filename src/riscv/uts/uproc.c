@@ -62,6 +62,7 @@ extern unsigned long as_npages(as_t *as);
 extern void as_setbrk(as_t *as, unsigned long brk);
 extern unsigned long as_getbrk(as_t *as);
 extern unsigned long as_grow(as_t *as, unsigned long newbrk);
+extern unsigned long as_anon_map(as_t *as, unsigned long len);
 extern int as_copyto(as_t *as, unsigned long va, const void *src,
     unsigned long n);
 
@@ -110,6 +111,29 @@ static void pipe_close(int pi, int is_write);
 static void pipe_ref(int pi, int is_write);
 static long pipe_read(int pi, char *ubuf, unsigned long n);
 static long pipe_write(int pi, const char *ubuf, unsigned long n);
+
+/*
+ * The AF_UNIX socket layer (unixsock.c). Declared here because the fd table --
+ * which is this file's business -- is what binds a socket index to a descriptor,
+ * and read/write/close/fork must route to the socket when a descriptor holds one.
+ */
+extern int unsock_socket(int domain, int type, int protocol);
+extern int unsock_bind(int si, const char *kpath);
+extern int unsock_listen(int si, int backlog);
+extern int unsock_connect(int si, const char *kpath);
+extern int unsock_accept(int si);
+extern void unsock_accepted(int si);
+extern long unsock_send(int si, const char *ubuf, unsigned long n,
+    const int *kfds, int nfds);
+extern long unsock_recv(int si, char *ubuf, unsigned long n, int *outfds,
+    int *noutfds);
+extern int unsock_socketpair(int domain, int type, int *sa, int *sb);
+extern void unsock_ref(int si);
+extern void unsock_close(int si);
+/* Defined at the bottom of this file (the SCM_RIGHTS capture/install helpers). */
+int unsock_fd_dup_into(int fd);
+int unsock_fd_install_slot(int ri);
+void unsock_rights_drop(int ri);
 
 /* copy.S: fault-safe user-memory access (R-P9). */
 extern long copyin(const void *uaddr, void *kaddr, unsigned long n);
@@ -396,6 +420,7 @@ typedef struct proc {
 		int		fd_pipe;	/* pipe index if a pipe, else -1 */
 		int		fd_pipe_w;	/* 1 = write end, 0 = read end */
 		int		fd_fb;		/* 1 = the /dev/fb scanout node */
+		int		fd_sock;	/* AF_UNIX socket index, else -1 */
 	} p_fd[8];
 } proc_t;
 
@@ -440,6 +465,7 @@ proc_alloc(void)
 				p->p_fd[k].fd_used = 0;
 				p->p_fd[k].fd_snfs = -1;
 				p->p_fd[k].fd_pipe = -1;
+				p->p_fd[k].fd_sock = -1;
 				p->p_fd[k].fd_fb = 0;
 			}
 			return (p);
@@ -536,6 +562,7 @@ proc_open(const char *path)
 			p->p_fd[fd].fd_wnode = 0;   /* read-only vfs image */
 			p->p_fd[fd].fd_snfs = -1;
 			p->p_fd[fd].fd_pipe = -1;
+			p->p_fd[fd].fd_sock = -1;
 			return (fd);
 		}
 	}
@@ -560,6 +587,11 @@ proc_fread(int fd, char *ubuf, unsigned long n)
 	/* R-P12: pipe read end. */
 	if (p->p_fd[fd].fd_pipe >= 0)
 		return (pipe_read(p->p_fd[fd].fd_pipe, ubuf, n));
+	/* An AF_UNIX endpoint: read(2) is recvmsg with no ancillary data. Rights
+	 * sent by the peer stay queued for a real recvmsg rather than being
+	 * silently discarded here. */
+	if (p->p_fd[fd].fd_sock >= 0)
+		return (unsock_recv(p->p_fd[fd].fd_sock, ubuf, n, 0, 0));
 	/* R-P12: on-disk SNFS file. */
 	if (p->p_fd[fd].fd_snfs >= 0) {
 		unsigned char kb[256];
@@ -611,6 +643,15 @@ proc_close(int fd)
 	/* R-P12: releasing a pipe end drops one reference on the pipe. */
 	if (p->p_fd[fd].fd_pipe >= 0)
 		pipe_close(p->p_fd[fd].fd_pipe, p->p_fd[fd].fd_pipe_w);
+	/*
+	 * An AF_UNIX endpoint is reference-counted the same way: the socket is torn
+	 * down (and its peer told, so a blocked reader sees EOF rather than hanging)
+	 * only when the last descriptor referring to it goes away.
+	 */
+	if (p->p_fd[fd].fd_sock >= 0) {
+		unsock_close(p->p_fd[fd].fd_sock);
+		p->p_fd[fd].fd_sock = -1;
+	}
 	/* The scanout node: drop the driver's open reference.  The user mapping
 	 * deliberately outlives close (as_free reclaims it at exit), which is what
 	 * a compositor expects from a framebuffer it has mmap'd. */
@@ -621,6 +662,7 @@ proc_close(int fd)
 	}
 	p->p_fd[fd].fd_snfs = -1;
 	p->p_fd[fd].fd_pipe = -1;
+	p->p_fd[fd].fd_sock = -1;
 	return (0);
 }
 
@@ -699,6 +741,7 @@ load_elf_into(proc_t *p, const char *path, const void *img, unsigned long len,
 		p->p_fd[i].fd_used = 0;
 		p->p_fd[i].fd_snfs = -1;
 		p->p_fd[i].fd_pipe = -1;
+		p->p_fd[i].fd_sock = -1;
 		p->p_fd[i].fd_fb = 0;
 	}
 	/* R-P11: exec resets caught signals to default (POSIX); ignored stay
@@ -856,6 +899,11 @@ proc_fork(struct regs *tf)
 		if (parent->p_fd[i].fd_used && parent->p_fd[i].fd_pipe >= 0)
 			pipe_ref(parent->p_fd[i].fd_pipe,
 			    parent->p_fd[i].fd_pipe_w);
+		/* Same for an inherited AF_UNIX endpoint: the child's copy of the
+		 * descriptor is a second reference, so the socket must outlive
+		 * whichever process closes first. */
+		if (parent->p_fd[i].fd_used && parent->p_fd[i].fd_sock >= 0)
+			unsock_ref(parent->p_fd[i].fd_sock);
 	}
 
 	/* Clone the parent's user frame; child returns 0 from fork. */
@@ -1433,6 +1481,7 @@ proc_openat_w(const char *path, int flags)
 				p->p_fd[fd].fd_pos = 0;
 				p->p_fd[fd].fd_snfs = -1;
 				p->p_fd[fd].fd_pipe = -1;
+				p->p_fd[fd].fd_sock = -1;
 				return (fd);
 			}
 		}
@@ -1466,6 +1515,7 @@ proc_openat_w(const char *path, int flags)
 			p->p_fd[fd].fd_pos = 0;
 			p->p_fd[fd].fd_snfs = -1;
 			p->p_fd[fd].fd_pipe = -1;
+			p->p_fd[fd].fd_sock = -1;
 			return (fd);
 		}
 	}
@@ -1490,6 +1540,9 @@ proc_fwrite(int fd, const char *ubuf, unsigned long n)
 	/* R-P12: pipe write end. */
 	if (p->p_fd[fd].fd_pipe >= 0)
 		return (pipe_write(p->p_fd[fd].fd_pipe, ubuf, n));
+	/* An AF_UNIX endpoint: write(2) is sendmsg with no ancillary data. */
+	if (p->p_fd[fd].fd_sock >= 0)
+		return (unsock_send(p->p_fd[fd].fd_sock, ubuf, n, 0, 0));
 	/* R-P12: on-disk SNFS file. */
 	if (p->p_fd[fd].fd_snfs >= 0) {
 		unsigned char kb[256];
@@ -1832,6 +1885,7 @@ proc_openat_snfs(const char *kpath, int flags)
 			p->p_fd[fd].fd_used = 1;
 			p->p_fd[fd].fd_snfs = slot;
 			p->p_fd[fd].fd_pipe = -1;
+			p->p_fd[fd].fd_sock = -1;
 			p->p_fd[fd].fd_wnode = 0;
 			p->p_fd[fd].fd_len = len;
 			p->p_fd[fd].fd_pos = 0;
@@ -1892,14 +1946,14 @@ proc_ioctl(int fd, int cmd, unsigned long arg)
 
 /*
  * proc_mmap — map an open fd's memory into the calling process. Only the
- * scanout node is mappable, so this is deliberately not a general mmap: there
- * is no segment list to hang anonymous or file-backed mappings off yet (as.c is
- * explicit about that), and the seam needs exactly one mapping of one device.
+ * scanout node is mappable through THIS path; anonymous memory goes through
+ * proc_mmap_anon below. There is no general segment list to hang file-backed
+ * mappings off yet (as.c is explicit about that).
  *
  * Returns the user VA on success, negative errno otherwise.
  *
- * NOTE: device-mapping only, fixed VA, no MAP_ANON/file mappings; a real
- * seg_vn/seg_dev mmap is the upgrade when userland needs general mmap.
+ * NOTE: device mapping only for file-backed mmap, fixed VA; a real
+ * seg_vn/seg_dev mmap is the upgrade when userland needs to map a file.
  */
 long
 proc_mmap(int fd, unsigned long len)
@@ -1913,4 +1967,823 @@ proc_mmap(int fd, unsigned long len)
 	if (!p->p_fd[fd].fd_fb)
 		return (-19 /* ENODEV: only /dev/fb is mappable */);
 	return (fb_mmap(as_root(p->p_as), len));
+}
+
+/*
+ * proc_mmap_anon -- the MAP_ANON|MAP_PRIVATE path: fresh zeroed private pages in
+ * the calling process's anon arena. This is what Rust std, every malloc
+ * implementation and every thread-stack allocator actually asks for, and until
+ * now the only mappable thing in this kernel was /dev/fb.
+ *
+ * Returns the user VA, or a negative errno. as.c owns the arena (as_anon_map).
+ */
+long
+proc_mmap_anon(unsigned long len)
+{
+	proc_t *p = curproc;
+	unsigned long va;
+
+	if (p == 0 || p->p_as == 0)
+		return (-22 /* EINVAL */);
+	if (len == 0)
+		return (-22 /* EINVAL */);
+	va = as_anon_map(p->p_as, len);
+	if (va == 0)
+		return (-12 /* ENOMEM */);
+	return ((long)va);
+}
+
+/*
+ * ===========================================================================
+ * poll(2) -- the syscall a compositor's main loop is built on.
+ *
+ * WHY THIS IS THE GATE. A Wayland compositor (and calloop, which smithay and
+ * smallvil use) does not read sockets speculatively; it asks the kernel which of
+ * its descriptors can be serviced and then services exactly those. Without
+ * poll(2) the main loop cannot exist, no matter how good the socket layer is.
+ *
+ * LEVEL-TRIGGERED, DELIBERATELY. This implementation holds NO per-fd state
+ * between calls: fd_ready() recomputes every answer from the current ring
+ * cursors, backlog depth and reference counts. That is what makes it
+ * level-triggered rather than edge-triggered, and it is the property this
+ * project has been bitten by repeatedly on illumos (see
+ * docs/cosmic-shell-session-layer.md and the calloop / wayland-client
+ * timer-dispatch patches): a socket that ALREADY has buffered bytes when poll is
+ * called must report readable on that call, not on the next write. The scan
+ * therefore happens BEFORE any waiting, on every pass, and the test suite
+ * checks exactly that case.
+ *
+ * WHAT "READY" MEANS. POLLIN is "a read will not block", which includes EOF: a
+ * socket or pipe whose peer has gone reports POLLIN|POLLHUP, because read()
+ * returns 0 immediately and an event loop watching only POLLIN must still learn
+ * the client left. POLLOUT is "a write will not block". POLLERR is reported only
+ * where the kernel can really tell a write would fail (all readers gone), never
+ * as a catch-all. POLLNVAL is a closed/never-opened descriptor and counts toward
+ * the return value, as POSIX requires.
+ *
+ * NOTE (ceiling): the wait is a yield loop, not a per-object wait queue, so a
+ * poll that blocks costs a time slice per pass instead of zero cpu. It is
+ * correct -- the deadline comes from the `time` CSR (gethrtime), which advances
+ * in hardware and cannot stall the way a tick counter can while S-mode
+ * interrupts are masked inside a syscall -- but it is not efficient. The upgrade
+ * is registering the poller on each polled object's wait channel; wakeup()
+ * already runs at every readiness change and already uses those channel
+ * addresses, so the hooks exist. NPOLLFD is capped because the fd table is 8
+ * slots; a real poll cache (illumos pollcache) is the same upgrade.
+ * ===========================================================================
+ */
+
+/* illumos sys/poll.h values (identical to the Linux ones, so no translation). */
+#define	POLLIN		0x0001
+#define	POLLPRI		0x0002
+#define	POLLOUT		0x0004
+#define	POLLERR		0x0008
+#define	POLLHUP		0x0010
+#define	POLLNVAL	0x0020
+#define	POLLRDNORM	0x0040
+#define	POLLWRNORM	POLLOUT
+
+#define	NPOLLFD		16
+
+/* unixsock.c readiness bits (UNPOLL_*), kept out of the poll ABI on purpose. */
+#define	UNPOLL_RD	0x1
+#define	UNPOLL_WR	0x2
+#define	UNPOLL_HUP	0x4
+extern int unsock_poll(int si);
+
+/* uart.c: is a console input byte waiting? The read(0) path blocks on this. */
+extern int uart_rx_ready(void);
+/* timer.c: the monotonic clock, read from the `time` CSR. */
+extern unsigned long gethrtime(void);
+
+/* The user ABI struct. int fd; short events; short revents -- 8 bytes. */
+struct upollfd {
+	int		pf_fd;
+	short		pf_events;
+	short		pf_revents;
+};
+
+/*
+ * fd_ready -- the whole readiness policy, in one place, recomputed from live
+ * state. Returns the full revents mask for `fd` ignoring `events` (the caller
+ * applies the event filter); returns POLLNVAL for a descriptor that is not open.
+ */
+static short
+fd_ready(proc_t *p, int fd)
+{
+	short r = 0;
+
+	if (fd < 0 || fd >= 8)
+		return (POLLNVAL);
+
+	/*
+	 * fd 0/1/2 are the console UNLESS dup2 moved a real object into the slot
+	 * (the shell does exactly that for a pipeline), so check the slot first
+	 * and only fall back to console semantics.
+	 */
+	if (fd <= 2 && !p->p_fd[fd].fd_used) {
+		if (fd == 0)
+			return (uart_rx_ready() ? (short)POLLIN : (short)0);
+		return (POLLOUT);	/* stdout/stderr never block */
+	}
+
+	if (!p->p_fd[fd].fd_used)
+		return (POLLNVAL);
+
+	if (p->p_fd[fd].fd_sock >= 0) {
+		int m = unsock_poll(p->p_fd[fd].fd_sock);
+
+		if (m & UNPOLL_RD)
+			r |= POLLIN | POLLRDNORM;
+		if (m & UNPOLL_WR)
+			r |= POLLOUT;
+		if (m & UNPOLL_HUP) {
+			/*
+			 * Peer gone: a write would fail EPIPE, which is a real
+			 * error the kernel can see, so POLLERR is earned here
+			 * rather than sprayed as a catch-all.
+			 */
+			r |= POLLHUP | POLLERR;
+			r &= ~(short)POLLOUT;
+		}
+		return (r);
+	}
+
+	if (p->p_fd[fd].fd_pipe >= 0) {
+		int pi = p->p_fd[fd].fd_pipe;
+		struct pipe *pp = &pipetab[pi];
+
+		if (!pp->pp_used)
+			return (POLLNVAL);
+		if (p->p_fd[fd].fd_pipe_w) {
+			if (pp->pp_readers == 0)
+				return (POLLERR);	/* write would EPIPE */
+			if (pp->pp_wpos - pp->pp_rpos < PIPEBUF)
+				r |= POLLOUT;
+		} else {
+			if (pp->pp_wpos != pp->pp_rpos)
+				r |= POLLIN | POLLRDNORM;
+			else if (pp->pp_writers == 0)
+				r |= POLLIN | POLLHUP;	/* read returns 0 now */
+		}
+		return (r);
+	}
+
+	if (p->p_fd[fd].fd_fb) {
+		/*
+		 * The framebuffer is writable and has no readable event. Reporting
+		 * POLLIN would be worse than useless: read() on it returns 0
+		 * forever, so a compositor told "readable" would spin. Say only
+		 * what is true.
+		 */
+		return (POLLOUT);
+	}
+
+	/* Regular file (ramfs, on-disk SNFS, or an embedded image): POSIX says a
+	 * regular file is always ready in both directions. */
+	return (POLLIN | POLLRDNORM | POLLOUT);
+}
+
+/*
+ * proc_poll -- poll(2). `ufds` is a user array of nfds struct pollfd; `timeout`
+ * is in milliseconds, with the two special values POSIX defines: 0 = scan once
+ * and return immediately, negative = block until something is ready.
+ *
+ * Returns the number of descriptors with a non-zero revents (0 on timeout), or a
+ * negative errno. revents is written back for every entry, including the zero
+ * ones, because a caller reusing the array must not see stale bits.
+ */
+long
+proc_poll(unsigned long ufds, int nfds, int timeout)
+{
+	proc_t *p = curproc;
+	proc_t *self;
+	struct upollfd kfds[NPOLLFD];
+	unsigned long deadline = 0;
+	int i, nready;
+
+	if (p == 0)
+		return (-9 /* EBADF */);
+	if (nfds < 0 || nfds > NPOLLFD)
+		return (-22 /* EINVAL */);
+	if (nfds == 0) {
+		/* A pure sleep. Still honors the timeout rather than returning
+		 * instantly, which is what a poll-based timer does. */
+		if (timeout <= 0)
+			return (0);
+	} else {
+		if (ufds == 0)
+			return (-14 /* EFAULT */);
+		if (copyin((const void *)ufds, kfds,
+		    (unsigned long)nfds * sizeof (struct upollfd)) != 0)
+			return (-14 /* EFAULT */);
+	}
+
+	if (timeout > 0)
+		deadline = gethrtime() + (unsigned long)timeout * 1000000UL;
+
+	self = p;
+	for (;;) {
+		/*
+		 * Scan FIRST, on every pass. This is the level-triggered contract:
+		 * already-buffered data must be visible to the very first scan.
+		 */
+		nready = 0;
+		for (i = 0; i < nfds; i++) {
+			short want, got;
+
+			if (kfds[i].pf_fd < 0) {
+				kfds[i].pf_revents = 0;	/* POSIX: ignored */
+				continue;
+			}
+			got = fd_ready(p, kfds[i].pf_fd);
+			/*
+			 * Only the requested events are reported, except
+			 * POLLERR/POLLHUP/POLLNVAL which POSIX always reports --
+			 * a caller must not be able to opt out of learning that
+			 * its descriptor died.
+			 */
+			want = (short)(kfds[i].pf_events |
+			    POLLERR | POLLHUP | POLLNVAL);
+			kfds[i].pf_revents = (short)(got & want);
+			if (kfds[i].pf_revents != 0)
+				nready++;
+		}
+		if (nready > 0)
+			break;
+		if (timeout == 0)
+			break;			/* immediate: 0 ready is the answer */
+		if (timeout > 0 && gethrtime() >= deadline)
+			break;			/* timed out: return 0 */
+
+		/*
+		 * Wait. thread_yield gives the cpu to whoever might make us ready
+		 * (the peer process is on its own kernel thread), and curproc is
+		 * restored after because the dispatcher switches processes under
+		 * us. See the ceiling NOTE above: correct, not cheap.
+		 */
+		thread_yield();
+		curproc = self;
+		p = self;
+	}
+
+	if (nfds > 0 && copyout(kfds, (void *)ufds,
+	    (unsigned long)nfds * sizeof (struct upollfd)) != 0)
+		return (-14 /* EFAULT */);
+	return ((long)nready);
+}
+
+/*
+ * ===========================================================================
+ * AF_UNIX socket syscalls: the fd-table half of unixsock.c.
+ *
+ * unixsock.c owns the protocol (rings, backlog, rights queue, blocking) and
+ * speaks in SOCKET INDICES. This half owns the fd table and translates between
+ * descriptors and those indices. Splitting it this way keeps every write to
+ * p_fd[] in one file, which is what makes the reference counting auditable.
+ *
+ * The SCM_RIGHTS direction of travel is the subtle part and is handled here
+ * deliberately:
+ *   sending   -- the sender's descriptors are DUPLICATED into kernel-side
+ *                references BEFORE the bytes are queued, so the sender may
+ *                close its own copies immediately after sendmsg (exactly what a
+ *                Wayland client does with a buffer fd) without the receiver
+ *                losing the object.
+ *   receiving -- the kernel-side references are INSTALLED into the receiver's
+ *                own fd table, producing descriptor numbers that are valid in
+ *                the receiver and unrelated to the sender's numbers. That is
+ *                what "passing a file descriptor" actually means.
+ * ===========================================================================
+ */
+
+/* unixsock.c calls these to reach the fd table + curproc without including it. */
+void *
+unsock_curproc(void)
+{
+	return (curproc);
+}
+
+void
+unsock_setcurproc(void *p)
+{
+	curproc = (proc_t *)p;
+}
+
+/*
+ * sock_fd_install -- bind socket index `si` to a fresh descriptor in the current
+ * process. Returns the fd, or a negative errno. The socket's reference count is
+ * NOT bumped here: the caller already owns exactly one reference (from
+ * unsock_socket / unsock_accept / unsock_socketpair) and this transfers it to
+ * the descriptor.
+ */
+static int
+sock_fd_install(int si)
+{
+	proc_t *p = curproc;
+	int fd;
+
+	if (p == 0)
+		return (-9 /* EBADF */);
+	for (fd = 3; fd < 8; fd++) {
+		if (p->p_fd[fd].fd_used)
+			continue;
+		p->p_fd[fd].fd_used = 1;
+		p->p_fd[fd].fd_data = 0;
+		p->p_fd[fd].fd_len = 0;
+		p->p_fd[fd].fd_pos = 0;
+		p->p_fd[fd].fd_wnode = 0;
+		p->p_fd[fd].fd_snfs = -1;
+		p->p_fd[fd].fd_pipe = -1;
+		p->p_fd[fd].fd_fb = 0;
+		p->p_fd[fd].fd_sock = si;
+		return (fd);
+	}
+	return (-24 /* EMFILE */);
+}
+
+/*
+ * sock_of_fd -- the socket index behind a descriptor, or -1 if the descriptor is
+ * not a socket. Every socket syscall validates through here so a file or pipe fd
+ * passed to setsockopt/listen/accept fails cleanly instead of corrupting state.
+ */
+static int
+sock_of_fd(int fd)
+{
+	proc_t *p = curproc;
+
+	if (p == 0 || fd < 3 || fd >= 8 || !p->p_fd[fd].fd_used)
+		return (-1);
+	return (p->p_fd[fd].fd_sock);
+}
+
+/*
+ * copy_sun_path -- pull the sun_path string out of a user sockaddr_un.
+ *
+ * struct sockaddr_un is { uint16_t sun_family; char sun_path[108]; } on illumos,
+ * so the path begins 2 bytes in. We validate the family rather than trusting it:
+ * a caller that passes AF_INET here gets EAFNOSUPPORT, not a path parsed out of
+ * an IP address.
+ */
+static long
+copy_sun_path(unsigned long uaddr, unsigned int ulen, char *kpath,
+    unsigned long kmax)
+{
+	unsigned short fam = 0;
+	unsigned long n;
+
+	if (uaddr == 0)
+		return (-14 /* EFAULT */);
+	if (ulen < 3)
+		return (-22 /* EINVAL: no room for a family + a byte of path */);
+	if (copyin((const void *)uaddr, &fam, sizeof (fam)) != 0)
+		return (-14 /* EFAULT */);
+	if (fam != 1 /* AF_UNIX */)
+		return (-97 /* EAFNOSUPPORT */);
+
+	n = ulen - 2;
+	if (n > kmax - 1)
+		n = kmax - 1;
+	if (copyin((const void *)(uaddr + 2), kpath, n) != 0)
+		return (-14 /* EFAULT */);
+	kpath[n] = '\0';
+	if (kpath[0] == '\0')
+		return (-22 /* EINVAL: the abstract namespace is not supported */);
+	return (0);
+}
+
+long
+sys_socket(int domain, int type, int protocol)
+{
+	int si = unsock_socket(domain, type, protocol);
+	int fd;
+
+	if (si < 0)
+		return (si);		/* already a negative errno */
+	fd = sock_fd_install(si);
+	if (fd < 0) {
+		unsock_close(si);
+		return (fd);
+	}
+	return (fd);
+}
+
+long
+sys_bind(int fd, unsigned long uaddr, unsigned int ulen)
+{
+	char path[108];
+	int si = sock_of_fd(fd);
+	long r;
+
+	if (si < 0)
+		return (-88 /* ENOTSOCK */);
+	r = copy_sun_path(uaddr, ulen, path, sizeof (path));
+	if (r != 0)
+		return (r);
+	return (unsock_bind(si, path));
+}
+
+long
+sys_listen(int fd, int backlog)
+{
+	int si = sock_of_fd(fd);
+
+	if (si < 0)
+		return (-88 /* ENOTSOCK */);
+	return (unsock_listen(si, backlog));
+}
+
+long
+sys_connect(int fd, unsigned long uaddr, unsigned int ulen)
+{
+	char path[108];
+	int si = sock_of_fd(fd);
+	long r;
+
+	if (si < 0)
+		return (-88 /* ENOTSOCK */);
+	r = copy_sun_path(uaddr, ulen, path, sizeof (path));
+	if (r != 0)
+		return (r);
+	return (unsock_connect(si, path));
+}
+
+/*
+ * sys_accept -- accept(2). Blocks in unsock_accept until a connection is queued,
+ * installs the new endpoint into a descriptor, and only THEN calls
+ * unsock_accepted -- which is what releases the peer's blocked connect(). The
+ * order matters: if connect returned before the server had a valid descriptor, a
+ * client could write into a socket the server cannot yet read.
+ */
+long
+sys_accept(int fd, unsigned long uaddr, unsigned long ulenp)
+{
+	int si = sock_of_fd(fd);
+	int peer, nfd;
+
+	(void) uaddr;
+	(void) ulenp;		/* AF_UNIX accept: no meaningful peer address */
+
+	if (si < 0)
+		return (-88 /* ENOTSOCK */);
+	peer = unsock_accept(si);
+	if (peer < 0)
+		return (peer);
+	nfd = sock_fd_install(peer);
+	if (nfd < 0) {
+		unsock_close(peer);
+		return (nfd);
+	}
+	unsock_accepted(peer);
+	return (nfd);
+}
+
+long
+sys_socketpair(int domain, int type, int protocol, int *ufds)
+{
+	int a, b, fda, fdb, pair[2];
+	int r;
+
+	(void) protocol;
+	r = unsock_socketpair(domain, type, &a, &b);
+	if (r != 0)
+		return (r);
+	fda = sock_fd_install(a);
+	if (fda < 0) {
+		unsock_close(a);
+		unsock_close(b);
+		return (fda);
+	}
+	fdb = sock_fd_install(b);
+	if (fdb < 0) {
+		(void) proc_close(fda);
+		unsock_close(b);
+		return (fdb);
+	}
+	pair[0] = fda;
+	pair[1] = fdb;
+	if (copyout(pair, ufds, sizeof (pair)) != 0) {
+		(void) proc_close(fda);
+		(void) proc_close(fdb);
+		return (-14 /* EFAULT */);
+	}
+	return (0);
+}
+
+/*
+ * sendmsg/recvmsg, reduced to what SCM_RIGHTS needs.
+ *
+ * Rather than decode a full struct msghdr + cmsghdr chain in the kernel (which
+ * is a lot of user-memory parsing for a fixed shape), the syscall takes the two
+ * things that actually vary: the data buffer and a flat array of descriptors.
+ * libsocket's __xnet_sendmsg is where the cmsghdr walk belongs -- that is
+ * userland's job in the illumos layering, and doing it there keeps this kernel
+ * path small and total. The ABI is deliberately explicit about this so nobody
+ * mistakes it for a complete sendmsg(2).
+ */
+long
+sys_sendmsg_fds(int fd, const char *ubuf, unsigned long n, unsigned long ufds,
+    int nfds)
+{
+	int si = sock_of_fd(fd);
+	int sendfds[8], kfds[8];
+	int i, dup;
+	long r;
+
+	if (si < 0)
+		return (-88 /* ENOTSOCK */);
+	if (nfds < 0 || nfds > 8)
+		return (-22 /* EINVAL */);
+
+	if (nfds > 0) {
+		if (copyin((const void *)ufds, sendfds,
+		    (unsigned long)nfds * sizeof (int)) != 0)
+			return (-14 /* EFAULT */);
+		/*
+		 * Duplicate each descriptor into a kernel-side reference BEFORE
+		 * queueing, so the sender can close its copy right after this
+		 * call. A descriptor that is not passable (not open, or not a
+		 * type we can duplicate) fails the whole call rather than being
+		 * dropped -- a silently-missing fd is worse than an error.
+		 */
+		for (i = 0; i < nfds; i++) {
+			dup = unsock_fd_dup_into(sendfds[i]);
+			if (dup < 0) {
+				while (--i >= 0)
+					unsock_rights_drop(kfds[i]);
+				return (dup);
+			}
+			kfds[i] = dup;
+		}
+	}
+
+	r = unsock_send(si, ubuf, n, nfds > 0 ? kfds : 0, nfds);
+	if (r < 0 && nfds > 0) {
+		for (i = 0; i < nfds; i++)
+			unsock_rights_drop(kfds[i]);
+	}
+	return (r);
+}
+
+/*
+ * sys_recvmsg_fds -- receive bytes plus any descriptors whose place in the byte
+ * stream has been reached. The received fds are the RECEIVER's descriptor
+ * numbers (installed by unsock_fd_dup_into's kernel references being handed
+ * over), which is why the caller must read *unfds_out to learn how many arrived.
+ */
+long
+sys_recvmsg_fds(int fd, char *ubuf, unsigned long n, unsigned long ufds,
+    int maxfds, unsigned long unfds_out)
+{
+	int si = sock_of_fd(fd);
+	int gotfds[8];
+	int ngot = 0, i, out[8], nout = 0;
+	long r;
+
+	if (si < 0)
+		return (-88 /* ENOTSOCK */);
+	if (maxfds < 0 || maxfds > 8)
+		return (-22 /* EINVAL */);
+
+	r = unsock_recv(si, ubuf, n, maxfds > 0 ? gotfds : 0,
+	    maxfds > 0 ? &ngot : 0);
+	if (r < 0)
+		return (r);
+
+	if (ngot > maxfds)
+		ngot = maxfds;
+	for (i = 0; i < ngot; i++) {
+		/*
+		 * The queued value is a RIGHTS index (a captured object), not a
+		 * descriptor. Install it into THIS process's fd table: that is
+		 * the step that makes the received fd genuinely usable, because
+		 * the number handed to userland then indexes the receiver's own
+		 * table and names the sender's object.
+		 */
+		int nfd = unsock_fd_install_slot(gotfds[i]);
+
+		if (nfd < 0) {
+			/* Out of descriptors: drop the rest rather than leak. */
+			int j;
+
+			for (j = i; j < ngot; j++)
+				unsock_rights_drop(gotfds[j]);
+			break;
+		}
+		out[nout++] = nfd;
+	}
+	if (nout > 0 && ufds != 0) {
+		if (copyout(out, (void *)ufds,
+		    (unsigned long)nout * sizeof (int)) != 0)
+			return (-14 /* EFAULT */);
+	}
+	if (unfds_out != 0) {
+		if (copyout(&nout, (void *)unfds_out, sizeof (nout)) != 0)
+			return (-14 /* EFAULT */);
+	}
+	return (r);
+}
+
+/*
+ * sys_getsockopt / sys_setsockopt -- the minimum that lets a client library's
+ * boilerplate succeed without lying about behaviour.
+ *
+ * SO_TYPE and SO_ERROR are answered for real (we know both). Everything else
+ * returns ENOPROTOOPT rather than 0: a compositor that sets SO_PASSCRED and gets
+ * a silent success would believe it has credentials it will never receive.
+ */
+long
+sys_getsockopt(int fd, int level, int name, unsigned long uval,
+    unsigned long ulenp)
+{
+	int si = sock_of_fd(fd);
+	int v;
+	unsigned int len = 0;
+
+	if (si < 0)
+		return (-88 /* ENOTSOCK */);
+	if (level != 0xffff /* SOL_SOCKET */)
+		return (-99 /* ENOPROTOOPT */);
+	switch (name) {
+	case 0x1008:		/* SO_TYPE */
+		v = 2;		/* SOCK_STREAM */
+		break;
+	case 0x1007:		/* SO_ERROR */
+		v = 0;		/* no pending async error is tracked */
+		break;
+	default:
+		return (-99 /* ENOPROTOOPT */);
+	}
+	if (ulenp != 0) {
+		if (copyin((const void *)ulenp, &len, sizeof (len)) != 0)
+			return (-14 /* EFAULT */);
+		if (len > sizeof (v))
+			len = sizeof (v);
+	} else {
+		len = sizeof (v);
+	}
+	if (uval != 0 && copyout(&v, (void *)uval, len) != 0)
+		return (-14 /* EFAULT */);
+	if (ulenp != 0 && copyout(&len, (void *)ulenp, sizeof (len)) != 0)
+		return (-14 /* EFAULT */);
+	return (0);
+}
+
+long
+sys_setsockopt(int fd, int level, int name, unsigned long uval,
+    unsigned int ulen)
+{
+	int si = sock_of_fd(fd);
+
+	(void) uval;
+	(void) ulen;
+	if (si < 0)
+		return (-88 /* ENOTSOCK */);
+	/*
+	 * Nothing is settable yet. Returning ENOPROTOOPT is the honest answer;
+	 * pretending to accept SO_SNDBUF/SO_PASSCRED would make a caller believe
+	 * a buffer size or a credential mode took effect.
+	 */
+	(void) level;
+	(void) name;
+	return (-99 /* ENOPROTOOPT */);
+}
+
+/*
+ * unsock_fd_dup_into -- capture descriptor `fd` as an in-flight SCM_RIGHTS
+ * reference; unsock_fd_install_slot -- plant a captured reference into the
+ * RECEIVER's fd table.
+ *
+ * WHY A SLOT COPY AND NOT AN FD NUMBER. A descriptor number means nothing in
+ * another process; passing the number is what a fake implementation does. What
+ * has to travel is the OBJECT the slot names. Here an fd slot is a small value
+ * struct (a ramfs node pointer, an SNFS slot index, a pipe index, the fb flag),
+ * and every one of those identifiers is GLOBAL -- ramfs nodes and pipes live in
+ * kernel tables, not per-process ones -- so copying the slot transfers the object
+ * correctly across unrelated processes, which is what SCM_RIGHTS means.
+ * (Measured: passing the number let the server receive "an fd" that referred to
+ * nothing, and the write through it failed.)
+ *
+ * NOTE: a slot copy is a flattened stand-in for illumos's file_t. It carries the
+ * file OFFSET by value, so sender and receiver end up with independent cursors
+ * rather than the shared offset real SCM_RIGHTS gives (dup semantics). For a
+ * Wayland buffer fd -- mmap'd, or read whole -- that is immaterial; for a shared
+ * append-mode log it would be wrong. The upgrade is a refcounted file_t the slot
+ * points AT rather than contains.
+ */
+struct sock_rights {
+	int	r_used;
+	const unsigned char *r_data;
+	unsigned long r_len;
+	unsigned long r_pos;
+	void	*r_wnode;
+	int	r_snfs;
+	int	r_pipe;
+	int	r_pipe_w;
+	int	r_fb;
+	int	r_sock;
+};
+
+#define	NRIGHTS	16
+static struct sock_rights rightstab[NRIGHTS];
+
+int
+unsock_fd_dup_into(int fd)
+{
+	proc_t *p = curproc;
+	int i;
+
+	if (p == 0 || fd < 0 || fd >= 8 || !p->p_fd[fd].fd_used)
+		return (-9 /* EBADF */);
+	for (i = 0; i < NRIGHTS; i++) {
+		if (rightstab[i].r_used)
+			continue;
+		rightstab[i].r_used = 1;
+		rightstab[i].r_data = p->p_fd[fd].fd_data;
+		rightstab[i].r_len = p->p_fd[fd].fd_len;
+		rightstab[i].r_pos = p->p_fd[fd].fd_pos;
+		rightstab[i].r_wnode = p->p_fd[fd].fd_wnode;
+		rightstab[i].r_snfs = p->p_fd[fd].fd_snfs;
+		rightstab[i].r_pipe = p->p_fd[fd].fd_pipe;
+		rightstab[i].r_pipe_w = p->p_fd[fd].fd_pipe_w;
+		rightstab[i].r_fb = p->p_fd[fd].fd_fb;
+		rightstab[i].r_sock = p->p_fd[fd].fd_sock;
+		/*
+		 * Hold a reference for the in-flight entry so the sender may
+		 * close its own descriptor immediately after sendmsg (exactly
+		 * what a Wayland client does with a buffer fd) without the
+		 * object going away before the receiver claims it.
+		 */
+		if (rightstab[i].r_pipe >= 0)
+			pipe_ref(rightstab[i].r_pipe, rightstab[i].r_pipe_w);
+		if (rightstab[i].r_sock >= 0)
+			unsock_ref(rightstab[i].r_sock);
+		return (i);		/* a RIGHTS index, not an fd */
+	}
+	return (-24 /* EMFILE */);
+}
+
+/*
+ * unsock_fd_install_slot -- claim rights index `ri` into a free descriptor of the
+ * CURRENT process. This is the step that makes a received fd genuinely usable:
+ * the number it returns indexes the RECEIVER's table and names the SENDER's
+ * object. Returns the new fd, or a negative errno.
+ */
+int
+unsock_fd_install_slot(int ri)
+{
+	proc_t *p = curproc;
+	int fd;
+
+	if (p == 0 || ri < 0 || ri >= NRIGHTS || !rightstab[ri].r_used)
+		return (-9 /* EBADF */);
+	for (fd = 3; fd < 8; fd++) {
+		if (p->p_fd[fd].fd_used)
+			continue;
+		p->p_fd[fd].fd_used = 1;
+		p->p_fd[fd].fd_data = rightstab[ri].r_data;
+		p->p_fd[fd].fd_len = rightstab[ri].r_len;
+		p->p_fd[fd].fd_pos = rightstab[ri].r_pos;
+		p->p_fd[fd].fd_wnode = rightstab[ri].r_wnode;
+		p->p_fd[fd].fd_snfs = rightstab[ri].r_snfs;
+		p->p_fd[fd].fd_pipe = rightstab[ri].r_pipe;
+		p->p_fd[fd].fd_pipe_w = rightstab[ri].r_pipe_w;
+		p->p_fd[fd].fd_fb = rightstab[ri].r_fb;
+		p->p_fd[fd].fd_sock = rightstab[ri].r_sock;
+		rightstab[ri].r_used = 0;	/* reference moves to the fd */
+		return (fd);
+	}
+	return (-24 /* EMFILE */);
+}
+
+/*
+ * unsock_rights_drop -- release an in-flight rights entry nobody claimed (a
+ * failed send, or a socket closed with rights still queued) so the underlying
+ * object's reference is not leaked.
+ */
+void
+unsock_rights_drop(int ri)
+{
+	if (ri < 0 || ri >= NRIGHTS || !rightstab[ri].r_used)
+		return;
+	if (rightstab[ri].r_pipe >= 0)
+		pipe_close(rightstab[ri].r_pipe, rightstab[ri].r_pipe_w);
+	if (rightstab[ri].r_sock >= 0)
+		unsock_close(rightstab[ri].r_sock);
+	rightstab[ri].r_used = 0;
+}
+
+/* Diagnostics for the gate banner (unixsock.c owns the counters). */
+extern void unsock_stats(int *nsock, int *nbind);
+
+void
+sock_report(void)
+{
+	int ns = 0, nb = 0;
+
+	unsock_stats(&ns, &nb);
+	sbi_console_puts("[unixsock] live sockets ");
+	kputdec((unsigned long)ns);
+	sbi_console_puts(", bound names ");
+	kputdec((unsigned long)nb);
+	sbi_console_puts("\n");
 }

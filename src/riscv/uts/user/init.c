@@ -430,6 +430,63 @@ tp_gate(void)
 }
 
 /*
+ * socket_gate -- run /bin/socktest, the AF_UNIX + SCM_RIGHTS proof. Forked so a
+ * failure cannot take init down, and exec'd so the socket layer is exercised from
+ * a real separate address space, which is what a compositor and its clients are.
+ */
+static void
+socket_gate(void)
+{
+	int pid, st = 0;
+
+	puts("\n--- gate: AF_UNIX sockets + SCM_RIGHTS fd passing ---\n");
+	pid = fork();
+	if (pid == 0) {
+		char *av[2];
+
+		av[0] = "socktest";
+		av[1] = 0;
+		execve("/bin/socktest", av, 0);
+		puts("socket: exec /bin/socktest FAILED\n");
+		_exit(1);
+	}
+	if (pid < 0) {
+		puts("socket: fork FAILED\n");
+		return;
+	}
+	waitpid(pid, &st, 0);
+}
+
+/*
+ * poll_gate -- run /bin/polltest, the poll(2) + anonymous-mmap proof. Forked and
+ * exec'd for the same reasons as socket_gate: a failure cannot take init down,
+ * and the test exercises poll from a real separate address space, which is what
+ * a compositor is.
+ */
+static void
+poll_gate(void)
+{
+	int pid, st = 0;
+
+	puts("\n--- gate: poll(2) readiness + anonymous mmap ---\n");
+	pid = fork();
+	if (pid == 0) {
+		char *av[2];
+
+		av[0] = "polltest";
+		av[1] = 0;
+		execve("/bin/polltest", av, 0);
+		puts("poll: exec /bin/polltest FAILED\n");
+		_exit(1);
+	}
+	if (pid < 0) {
+		puts("poll: fork FAILED\n");
+		return;
+	}
+	waitpid(pid, &st, 0);
+}
+
+/*
  * scanout_gate -- R-P64. Run /bin/fbtest, the userland proof of the /dev/fb
  * scanout seam (open + FBIOGMODE + mmap + paint + FBIOFLUSH). Forked so a
  * failure in the test cannot take init down, and so the seam is exercised from
@@ -547,6 +604,14 @@ main(int argc, char **argv)
 
 	/* --- tp belongs to userland: the precondition for any TLS. --- */
 	tp_gate();
+
+	/* --- AF_UNIX sockets: the real gate for a Wayland compositor. --- */
+	socket_gate();
+
+	/* --- poll(2) + anonymous mmap: what the compositor's MAIN LOOP needs on
+	 * top of the sockets. Run before the scanout gate so a poll regression is
+	 * reported before the display path, which does not depend on it. --- */
+	poll_gate();
 
 	/* --- R-P64 scanout seam: /dev/fb from userland. ---
 	 * Runs /bin/fbtest as a child so a failure there cannot take init down,

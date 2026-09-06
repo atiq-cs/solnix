@@ -16,8 +16,9 @@
  *
  * NOTE (R-P9): copy-on-write fork IS implemented (as_cow_copy shares pages
  * read-only + splits them on the store fault); as_free reclaims all user leaves
- * + page tables + root. Still no segment list / demand paging / mmap. Upgrade
- * path: seg_vn/seg_kmem-style segments + demand paging.
+ * + page tables + root. as_anon_map adds the MAP_ANON arena. Still no segment
+ * list / demand paging / munmap. Upgrade path: seg_vn/seg_kmem-style segments +
+ * demand paging.
  */
 
 #include "sbi.h"
@@ -53,6 +54,7 @@ typedef struct as {
 	unsigned long	a_satp;		/* Sv39 satp for this AS */
 	unsigned long	a_npages;	/* user pages mapped */
 	unsigned long	a_brk;		/* current program break (heap top VA) */
+	unsigned long	a_mmap;		/* next free VA in the anon mmap arena */
 } as_t;
 
 /* From kmem.c. */
@@ -66,6 +68,21 @@ void as_free(as_t *as);
  * as_alloc — build a fresh user address space (new Sv39 root with the kernel
  * gigapages copied in). Returns the as_t (kmem) or NULL.
  */
+/*
+ * ANON_MMAP_BASE -- the base of the anonymous-mmap arena, which grows UP.
+ *
+ * Placement inside Sv39 level-2 slot 3 (0xC0000000..0xFFFFFFFF), the one slot
+ * with no kernel entry, alongside the other user regions:
+ *   0xC0010000  userland text/data, heap (brk) growing up behind it
+ *   0xC4000000  the /dev/fb device mapping (fb.c FB_MMAP_BASE, <= 8 MiB)
+ *   0xD0000000  THIS arena, growing up
+ *   0xfffff000  top of the user stack, growing down (64 KiB)
+ * That leaves ~768 MiB of arena between the framebuffer and the stack, which is
+ * more than the physical memory a boot has, so the arena cannot collide with
+ * either neighbour before page_alloc fails first.
+ */
+#define	ANON_MMAP_BASE	0xD0000000UL
+
 as_t *
 as_alloc(void)
 {
@@ -77,7 +94,60 @@ as_alloc(void)
 	as->a_satp = hat_as_satp(as->a_root);
 	as->a_npages = 0;
 	as->a_brk = 0;
+	as->a_mmap = ANON_MMAP_BASE;
 	return (as);
+}
+
+/*
+ * as_anon_map -- back [va, va+len) with fresh ZEROED private user pages and
+ * return the VA. This is the MAP_ANON|MAP_PRIVATE primitive: every allocator
+ * (including Rust std's) and every thread-stack allocation wants it, and until
+ * now only /dev/fb was mappable.
+ *
+ * Allocation is a bump pointer up the arena; the pages are eagerly allocated and
+ * mapped RW (no demand paging exists), and they are zeroed because page_alloc
+ * zeroes -- which MAP_ANON requires, not merely permits.
+ *
+ * Returns the mapped VA, or 0 if the length is unusable or a page allocation
+ * failed partway (the pages already installed stay mapped and are reclaimed with
+ * the rest of the AS at exit; there is no partial-unmap primitive to undo them
+ * with, which is the same reason munmap does not exist -- see the NOTE).
+ *
+ * NOTE (ceiling): a bump arena with NO reuse and NO munmap. Freed mappings are
+ * reclaimed only at process exit, so a program that maps and unmaps in a loop
+ * exhausts the arena. The upgrade is a real seg_vn segment list with a free list
+ * and an unmap primitive in the hat; that is also what munmap(2) needs, so both
+ * arrive together rather than shipping a munmap that silently leaks.
+ */
+unsigned long
+as_anon_map(as_t *as, unsigned long len)
+{
+	unsigned long va, p, end;
+
+	if (as == 0 || len == 0)
+		return (0);
+	len = (len + PAGESIZE - 1) & ~(PAGESIZE - 1);
+	va = as->a_mmap;
+	end = va + len;
+	if (end < va)
+		return (0);		/* length overflowed the arena */
+
+	for (p = va; p < end; p += PAGESIZE) {
+		unsigned long pa = page_alloc();	/* zeroed */
+
+		if (pa == 0)
+			return (0);
+		hat_as_map(as->a_root, p, pa, PTE_R | PTE_W);
+		as->a_npages++;
+	}
+	as->a_mmap = end;
+	/*
+	 * The arena VAs were unmapped a moment ago, and this AS may be the live
+	 * satp (mmap is called from a syscall in the mapping process), so a
+	 * negative TLB entry for a touched-and-faulted VA must not survive.
+	 */
+	__asm__ __volatile__("sfence.vma" ::: "memory");
+	return (va);
 }
 
 /*
@@ -195,6 +265,7 @@ as_copy(as_t *src)
 		return (0);
 	}
 	c.dst->a_brk = src->a_brk;
+	c.dst->a_mmap = src->a_mmap;	/* the arena bump follows the AS */
 	return (c.dst);
 }
 
@@ -226,6 +297,13 @@ as_cow_copy(as_t *src)
 	shared = hat_as_cow_share(dst->a_root, src->a_root);
 	dst->a_npages = shared;
 	dst->a_brk = src->a_brk;
+	/*
+	 * The arena bump must be INHERITED, not reset: the child's anon mappings
+	 * are already present (COW-shared with the parent's), so restarting the
+	 * bump at the base would hand out VAs that are already mapped and the
+	 * second mmap would silently overwrite the first.
+	 */
+	dst->a_mmap = src->a_mmap;
 	as_cow_shared_total += shared;
 
 	/* Both AS TLBs must be flushed: the parent's writable leaves became

@@ -35,9 +35,9 @@
  *     which this satisfies. Upgrade path: a sockfs vnode.
  *   - SOCK_STREAM only. SOCK_DGRAM is unimplemented (a compositor does not need
  *     it) and is refused with EPROTONOSUPPORT rather than silently downgraded.
- *   - no O_NONBLOCK, no poll/select, no SO_PEERCRED, no socket timeouts.
- *     A compositor's main loop wants poll(2); that is named as the next item in
- *     the AF_UNIX design notes, not quietly assumed to work.
+ *   - no O_NONBLOCK, no SO_PEERCRED, no socket timeouts. poll(2) IS supported
+ *     (unsock_poll below is its readiness query); O_NONBLOCK is not, so a poller
+ *     must respect the readiness answer rather than probing with a read.
  */
 
 #include "sbi.h"
@@ -89,6 +89,15 @@ extern void unsock_setcurproc(void *p);
 #define	NSCMFD		8	/* SCM_RIGHTS fds queued per direction */
 #define	UNPATHMAX	104	/* sun_path, the BSD/illumos sockaddr_un size */
 #define	BACKLOG_MAX	4
+
+/*
+ * The readiness bits unsock_poll reports. Deliberately NOT the POLLIN/POLLOUT
+ * values: this file knows nothing about the poll(2) ABI, and uproc.c (which owns
+ * the fd table and therefore the syscall shape) does the translation.
+ */
+#define	UNPOLL_RD	0x1
+#define	UNPOLL_WR	0x2
+#define	UNPOLL_HUP	0x4
 
 /*
  * A byte ring plus an fd queue: ONE direction of a connected stream.
@@ -693,6 +702,71 @@ unsock_close(int si)
 	s->s_listening = 0;
 	s->s_bound = 0;
 	s->s_bindslot = -1;
+}
+
+/*
+ * unsock_poll -- the readiness query behind poll(2). Returns a mask of
+ * UNPOLL_RD / UNPOLL_WR / UNPOLL_HUP describing what this socket could do RIGHT
+ * NOW without blocking. uproc.c translates that into POLLIN/POLLOUT/POLLHUP.
+ *
+ * THIS MUST BE LEVEL-TRIGGERED, and the way it is written is what guarantees
+ * that: every answer is recomputed from the CURRENT ring state (d_wpos - d_rpos,
+ * the queued-rights count, whether the peer still exists), and nothing is
+ * remembered between calls. There is no "data arrived" edge to miss, so a socket
+ * that already has buffered bytes reports readable on the FIRST poll rather than
+ * only after the next write -- the failure mode that has repeatedly bitten this
+ * project's event loops on illumos.
+ *
+ * The three roles a stream socket takes each get the right answer:
+ *   listener   -- readable when the backlog is non-empty, i.e. exactly when
+ *                 accept() would not block. A compositor polls its listening
+ *                 socket, so getting this wrong would stall every new client.
+ *   connected  -- readable when the peer's tx ring has bytes OR has queued
+ *                 SCM_RIGHTS with no payload; writable when our own tx ring has
+ *                 space and the peer is still there.
+ *   hung up    -- the peer is gone. Reported RD as well as HUP, because read()
+ *                 will return 0 immediately: "readable" means "will not block",
+ *                 and EOF satisfies that. An event loop that only watches POLLIN
+ *                 still learns the client left.
+ *
+ * An unbound, unconnected, non-listening socket has nothing to report, so it
+ * returns 0 rather than a guess.
+ */
+int
+unsock_poll(int si)
+{
+	struct unsock *s = sock_at(si);
+	struct sodir *rx;
+	int m = 0;
+
+	if (s == 0)
+		return (0);
+
+	if (s->s_listening)
+		return (s->s_nbacklog > 0 ? UNPOLL_RD : 0);
+
+	rx = rx_of(s);
+	if (rx == 0) {
+		/*
+		 * No peer ring. Two distinct situations, and conflating them would
+		 * be wrong: a socket that was never connected has nothing to say
+		 * (0), while a socket whose peer CLOSED is hung up -- and read()
+		 * on it returns 0 immediately, which is readable, because
+		 * "readable" means "will not block" and EOF satisfies that. An
+		 * event loop watching only POLLIN still learns the client left.
+		 */
+		if (s->s_shutdown)
+			return (UNPOLL_RD | UNPOLL_HUP);
+		return (0);		/* fresh or merely bound: not connected */
+	}
+	if (s->s_shutdown)
+		return (UNPOLL_RD | UNPOLL_HUP);
+
+	if (rx->d_wpos != rx->d_rpos || rx->d_nscm > 0)
+		m |= UNPOLL_RD;
+	if (s->s_tx.d_wpos - s->s_tx.d_rpos < SOBUF)
+		m |= UNPOLL_WR;
+	return (m);
 }
 
 /* Report: how many sockets/names are live (the gate banner prints this). */

@@ -64,6 +64,41 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, long off)
 	return (r < 0 ? MAP_FAILED : (void *)r);
 }
 
+/*
+ * mmap_anon -- fresh zeroed private pages. Spelled out as its own wrapper
+ * because MAP_ANON is the case every allocator wants and the flag value is the
+ * one thing easy to get wrong here (illumos 0x100, NOT Linux's 0x20).
+ */
+void *mmap_anon(size_t len)
+{
+	return (mmap(0, len, PROT_READ | PROT_WRITE,
+	    MAP_ANON | MAP_PRIVATE, -1, 0));
+}
+
+/*
+ * poll -- see libc.h. The kernel takes the flat millisecond timeout, so this is
+ * a straight forward; a full ppoll (timespec + sigmask) belongs above this.
+ */
+int poll(struct pollfd *fds, unsigned long nfds, int timeout)
+{
+	return ((int)__sys(SYS_poll, (long)fds, (long)nfds, timeout, 0));
+}
+
+/*
+ * monotonic_ms -- milliseconds since boot from CLOCK_MONOTONIC. Exists so a test
+ * can prove a poll timeout ACTUALLY blocked for about the requested time; a test
+ * with no clock cannot tell blocking from returning instantly.
+ */
+unsigned long monotonic_ms(void)
+{
+	long ts[2] = { 0, 0 };
+
+	if (__sys(SYS_clock_gettime, CLOCK_MONOTONIC, (long)ts, 0, 0) != 0)
+		return (0);
+	return ((unsigned long)ts[0] * 1000UL +
+	    (unsigned long)ts[1] / 1000000UL);
+}
+
 long write(int fd, const char *b, size_t n) { return __sys(SYS_write, fd, (long)b, (long)n, 0); }
 long read(int fd, char *b, size_t n)        { return __sys(SYS_read, fd, (long)b, (long)n, 0); }
 int  open(const char *p, int fl)            { return (int)__sys(SYS_openat, -100, (long)p, fl, 0); }
@@ -293,4 +328,100 @@ _start(void)
 	    "li a7, 93\n"		/* SYS_exit(main's return in a0) */
 	    "ecall\n"
 	    "1: j 1b\n");
+}
+
+/*
+ * ---------------------------------------------------------------------------
+ * AF_UNIX socket wrappers.
+ *
+ * These are the thin syscall shims a real libsocket would sit on: illumos's
+ * __xnet_socket/__xnet_bind/__xnet_connect/__xnet_socketpair/__xnet_getsockopt
+ * are themselves thin wrappers over the corresponding kernel entry points, so
+ * mapping them onto these is a rename plus the XPG4.2 version flag rather than
+ * new logic.
+ *
+ * strlen-based path length: bind/connect pass sizeof(family) + strlen(path) + 1
+ * as the address length, which is the sockaddr_un convention (the kernel reads
+ * the path from offset 2 and stops at the NUL).
+ * ---------------------------------------------------------------------------
+ */
+
+int
+socket(int domain, int type, int protocol)
+{
+	return ((int)__sys(SYS_socket, domain, type, protocol, 0));
+}
+
+int
+socketpair_un(int fds[2])
+{
+	return ((int)__sys(SYS_socketpair, AF_UNIX, SOCK_STREAM, 0,
+	    (long)fds));
+}
+
+static void
+sun_fill(struct sockaddr_un *sa, const char *path)
+{
+	unsigned long i;
+
+	sa->sun_family = AF_UNIX;
+	for (i = 0; i + 1 < sizeof (sa->sun_path) && path[i] != '\0'; i++)
+		sa->sun_path[i] = path[i];
+	sa->sun_path[i] = '\0';
+}
+
+int
+bind_un(int fd, const char *path)
+{
+	struct sockaddr_un sa;
+
+	sun_fill(&sa, path);
+	return ((int)__sys(SYS_bind, fd, (long)&sa,
+	    (long)(2 + strlen(sa.sun_path) + 1), 0));
+}
+
+int
+listen_un(int fd, int backlog)
+{
+	return ((int)__sys(SYS_listen, fd, backlog, 0, 0));
+}
+
+int
+accept_un(int fd)
+{
+	return ((int)__sys(SYS_accept, fd, 0, 0, 0));
+}
+
+int
+connect_un(int fd, const char *path)
+{
+	struct sockaddr_un sa;
+
+	sun_fill(&sa, path);
+	return ((int)__sys(SYS_connect, fd, (long)&sa,
+	    (long)(2 + strlen(sa.sun_path) + 1), 0));
+}
+
+int
+getsockopt_int(int fd, int level, int name, int *val)
+{
+	unsigned int len = sizeof (int);
+
+	return ((int)__sys6(SYS_getsockopt, fd, level, name, (long)val,
+	    (long)&len, 0));
+}
+
+long
+sendmsg_fds(int fd, const void *buf, unsigned long n, const int *fds, int nfds)
+{
+	return (__sys6(SYS_sendmsg, fd, (long)buf, (long)n, (long)fds,
+	    (long)nfds, 0));
+}
+
+long
+recvmsg_fds(int fd, void *buf, unsigned long n, int *fds, int maxfds,
+    int *nfds_out)
+{
+	return (__sys6(SYS_recvmsg, fd, (long)buf, (long)n, (long)fds,
+	    (long)maxfds, (long)nfds_out));
 }
