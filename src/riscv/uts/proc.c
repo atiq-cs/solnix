@@ -413,6 +413,16 @@ thread_create(void (*entry)(void *), void *arg)
 	t->t_ctx.c_s[0] = (unsigned long)entry;		/* s0 */
 	t->t_ctx.c_s[1] = (unsigned long)arg;		/* s1 */
 	t->t_ctx.c_ra = (unsigned long)rv_thread_start;	/* first "return" */
+	/*
+	 * No FP state yet: a thread earns a register file only when it first
+	 * executes an FP instruction (fp_fenflt allocates it). This MUST be
+	 * explicit -- kmem_alloc does not zero and thread_create initialises
+	 * fields one by one, so leaving it out means fp_switch dereferences heap
+	 * garbage as a pointer on the very first switch. That was a real store
+	 * page fault at dispatcher start, with stval holding a byte-counting
+	 * pattern rather than any plausible address.
+	 */
+	t->t_ctx.c_fpu = 0;
 	t->t_ctx.c_sp = sp;
 	/*
 	 * c_tp carries the S-mode per-hart id (this_cpu reads tp). Seed it to the
@@ -691,6 +701,13 @@ dispatch_init_cpu(int cpu)
 	idle->t_wchan = 0;
 	idle->t_curproc = 0;
 	idle->t_ctx.c_tp = (unsigned long)cpu;
+	/*
+	 * Same reason as thread_create: kmem_alloc does not zero and these
+	 * fields are set one by one, so c_fpu must be cleared explicitly or the
+	 * first switch away from idle dereferences garbage. The idle thread
+	 * never uses FP, so this stays NULL for its whole life.
+	 */
+	idle->t_ctx.c_fpu = 0;
 
 	set_this_cpu((unsigned long)cpu);	/* tp = our S-mode hart id */
 	idlethread[cpu] = idle;

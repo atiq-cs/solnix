@@ -43,11 +43,13 @@ mkdir -p "$ARTDIR"
 
 echo "== compile kernel (freestanding, $TC) =="
 KOBJS=""
-# float.s does the f0-f31 + fcsr moves for fp.c. Lower-case .s (no cpp needed
-# beyond assym.h) and it is listed separately so the ${src%.S} rule below stays
-# simple.
-"$CC" $CFLAGS -c float.s -o float.o
-KOBJS="$KOBJS float.o"
+# fpsave.S does the f0-f31 + fcsr moves for fp.c. It is the ONE file that needs
+# the F and D extensions: the kernel proper is soft-float and must stay that way
+# (that is what makes lazy FP handling safe), so the extensions are enabled via
+# `.option arch, +f, +d` inside the file rather than by widening the kernel's
+# -march. Listed separately so the ${src%.S} loop below stays simple.
+"$CC" $CFLAGS -c fpsave.S -o fpsave.o
+KOBJS="$KOBJS fpsave.o"
 for src in locore.S trap.S swtch.S copy.S; do
 	o="${src%.S}.o"
 	[ "$src" = trap.S ] && o=trap_asm.o
