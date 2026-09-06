@@ -80,6 +80,9 @@ getpwuid(uid_t uid)
 #define	ENOSYS	89
 #define	EFAULT	14
 #define	EAI_FAIL 4
+/* illumos value; spelled out because the freestanding riscv64 build has no
+ * <errno.h> with the illumos numbering. */
+#define	EAFNOSUPPORT 97
 
 typedef struct solnix_stack {
 	void	*ss_sp;
@@ -261,35 +264,48 @@ main(void)
 		printf("__posix_getpwuid_r: OK (caller buffer, errno discipline)\n");
 	}
 
-	/* ---- the ENOSYS group: must FAIL. This is the anti-fake check: if any
-	 * of these ever returns >= 0, something started pretending to work. */
+	/* ---- the socket group: must FAIL, and fail for the RIGHT REASON.
+	 *
+	 * This is the anti-fake check, and it got sharper when AF_UNIX became
+	 * real: the question is no longer "does everything refuse" but "does each
+	 * entry refuse the things that genuinely do not exist, and refuse them
+	 * with the errno that names the actual reason".
+	 *   - a NON-AF_UNIX family must give EAFNOSUPPORT: there is still no IP
+	 *     stack, and saying ENOSYS would understate that AF_UNIX works.
+	 *   - __xnet_sendto stays ENOSYS: an addressed send needs SOCK_DGRAM,
+	 *     which the kernel refuses.
+	 * On the HOST there is no solnix kernel to ecall into, so an AF_UNIX call
+	 * reports ENOSYS from the host stub; the riscv64 in-kernel gate
+	 * (uts/user/socktest.c) is what proves the AF_UNIX path really works. */
 	{
 		int sv[2] = { -1, -1 };
 		unsigned int ol = 0;
 		void *res = (void *)1;
 
 		errno = 0;
-		CHECK(__xnet_socket(2, 1, 0) == -1 && errno == ENOSYS,
-		    "__xnet_socket must fail ENOSYS");
+		CHECK(__xnet_socket(2, 1, 0) == -1 && errno == EAFNOSUPPORT,
+		    "__xnet_socket(AF_INET) must fail EAFNOSUPPORT (no IP stack)");
 		errno = 0;
-		CHECK(__xnet_socketpair(1, 1, 0, sv) == -1 && errno == ENOSYS,
-		    "__xnet_socketpair must fail ENOSYS");
+		CHECK(__xnet_socketpair(2, 1, 0, sv) == -1 &&
+		    errno == EAFNOSUPPORT,
+		    "__xnet_socketpair(AF_INET) must fail EAFNOSUPPORT");
 		CHECK(sv[0] == -1 && sv[1] == -1,
-		    "__xnet_socketpair must not hand back fds");
+		    "__xnet_socketpair must not hand back fds on failure");
 		errno = 0;
-		CHECK(__xnet_bind(0, "", 0) == -1 && errno == ENOSYS,
-		    "__xnet_bind must fail ENOSYS");
+		CHECK(__xnet_bind(0, "", 0) == -1,
+		    "__xnet_bind on a non-socket fd must fail");
 		errno = 0;
-		CHECK(__xnet_connect(0, "", 0) == -1 && errno == ENOSYS,
-		    "__xnet_connect must fail ENOSYS");
+		CHECK(__xnet_connect(0, "", 0) == -1,
+		    "__xnet_connect on a non-socket fd must fail");
 		errno = 0;
-		CHECK(__xnet_getsockopt(0, 0, 0, 0, &ol) == -1 &&
-		    errno == ENOSYS, "__xnet_getsockopt must fail ENOSYS");
+		CHECK(__xnet_getsockopt(0, 0, 0, 0, &ol) == -1,
+		    "__xnet_getsockopt on a non-socket fd must fail");
 		/* getaddrinfo does NOT use errno; it returns EAI_*. */
 		CHECK(__xnet_getaddrinfo("h", 0, 0, &res) == EAI_FAIL,
 		    "__xnet_getaddrinfo must return EAI_FAIL");
 		CHECK(res == 0, "__xnet_getaddrinfo must NULL *res");
-		printf("__xnet_* / ENOSYS group: OK (all refuse; none fakes success)\n");
+		printf("__xnet_* group: OK (AF_INET refused EAFNOSUPPORT, sendto/getaddrinfo "
+	    "ENOSYS/EAI_FAIL; AF_UNIX proven by uts/user/socktest.c on the target)\n");
 	}
 
 	/* NOTE: __tls_get_addr is intentionally NOT called -- it aborts the

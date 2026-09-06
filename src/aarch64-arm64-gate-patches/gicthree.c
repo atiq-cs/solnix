@@ -390,10 +390,28 @@ reg_await_clear4_site(ddi_acc_handle_t hdl, caddr_t base,
  * localise reproduces only on this hardware, and the boot that needs them is
  * the one that is already silent.
  *
- * NOTE: gate behind prom_debug or drop once the GICv3 attach path is trusted on
- * this hardware.
+ * NOTE: now gated at compile time by A6GICD_MARKERS, default 0 (off).
+ *
+ * WHY GATED: the boot that first cleared GICv3 init carried both the bounded
+ * polls and these markers, and every bound passed with no stuck flag -- so it
+ * was not established which of the two moved the boot forward.  A marker is
+ * console I/O, i.e. delay plus barriers, between GIC programming steps, which
+ * can mask a missing-barrier or settle-time defect.  Building with the bounds
+ * kept and the markers compiled out separates the two: still reaching the ZFS
+ * scan means the bound mattered; going silent again means the markers did, and
+ * a real timing/barrier bug is still present.
+ *
+ * Set A6GICD_MARKERS to 1 to bring the phase markers back for diagnosis.
  */
-#define	A6GICD_MARK(s)	prom_printf("[A6GICD:" s "]\n")
+#define	A6GICD_MARKERS	0
+
+#if A6GICD_MARKERS
+#define	A6GICD_MARK(s)		prom_printf("[A6GICD:" s "]\n")
+#define	A6GICD_PRINTF(...)	prom_printf(__VA_ARGS__)
+#else
+#define	A6GICD_MARK(s)		((void)0)
+#define	A6GICD_PRINTF(...)	((void)0)
+#endif
 
 static inline uint32_t
 gicd_read4(gicv3_conf_t *gic, uint32_t reg)
@@ -1666,7 +1684,7 @@ gicv3_assign_redistributors(dev_info_t *dip, gicv3_conf_t *gc)
 	/*
 	 * Check that we have at least as many redistributors as we do CPUs.
 	 */
-	prom_printf("[A6GICD:walk1 nredist=0x%x nregions=0x%x]\n",
+	A6GICD_PRINTF("[A6GICD:walk1 nredist=0x%x nregions=0x%x]\n",
 	    num_redistributors, gc->gc_num_redist_regions);
 	VERIFY3U(num_redistributors, >=, max_ncpus);
 
@@ -1997,7 +2015,7 @@ gicv3_init_lpis(gicv3_conf_t *gc)
 	 */
 	gc->gc_lpi_pend_sz = (gc->gc_lpi_max_intid + 1) / 8;
 
-	prom_printf("[A6GICD:lpi idbits=0x%x propsz=0x%lx pendsz=0x%lx "
+	A6GICD_PRINTF("[A6GICD:lpi idbits=0x%x propsz=0x%lx pendsz=0x%lx "
 	    "nredist=0x%x]\n", idbits, (unsigned long)gc->gc_lpi_prop_sz,
 	    (unsigned long)gc->gc_lpi_pend_sz, gc->gc_num_redist);
 
@@ -2241,7 +2259,7 @@ gicv3_init(dev_info_t *dip, gicv3_conf_t *gc)
 	gc->gc_gicd_typer = gicd_read4(gc, GICD_TYPER);
 	gc->gc_maxsources = GICD_TYPER_LINES(gc->gc_gicd_typer);
 
-	prom_printf("[A6GICD:typer=0x%x maxsources=0x%x nredist=0x%x]\n",
+	A6GICD_PRINTF("[A6GICD:typer=0x%x maxsources=0x%x nredist=0x%x]\n",
 	    gc->gc_gicd_typer, gc->gc_maxsources, gc->gc_num_redist);
 
 	/*

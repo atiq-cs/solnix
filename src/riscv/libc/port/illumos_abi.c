@@ -394,37 +394,101 @@ __makedev(int version, major_t majdev, minor_t mindev)
 
 /*
  * ===========================================================================
- * [ENOSYS] The socket surface. NOT IMPLEMENTED -- and deliberately not faked.
+ * [REAL x5 / ENOSYS x2] The socket surface.
  * ===========================================================================
  *
  * On illumos these seven live in LIBSOCKET (usr/src/lib/libsocket/socket/
  * weaks.c, socket.c, socketpair.c), NOT in libc -- they are thin XPG4.2-flavour
  * shims over the _so_* libc syscall wrappers, e.g.
  *     __xnet_bind(s, a, l) => _so_bind(s, a, l, SOV_XPG4_2)
- * They are collected here only so that a riscv64 link can complete and so that
- * calling one FAILS VISIBLY.
+ * They are collected here so a riscv64 link can complete; the five that are now
+ * REAL keep exactly that shape, forwarding to the kernel's AF_UNIX layer.
  *
- * WHY NOT IMPLEMENTED: there is no socket layer in this kernel, and no IP
- * stack. Verified by grep over src/riscv/uts/ and the riscv-port kernel trees:
- * no sockaddr, no struct socket, no so_state, no tcp_, no ip_output. The
- * syscall dispatcher (uts/syscall.c) implements 21 calls and none of illumos's
- * socket syscalls (SYS_so_socket 230, so_socketpair 231, bind 232, listen 233,
- * accept 234, connect 235, recvfrom 238, sendto 242, getsockopt 245). The only
- * networking that exists is one raw-frame path: uts/vionet.c transmits a single
- * hand-built ARP frame, and rp63/kernel/emac.c drives the K1 MAC registers.
- * That is NIC bring-up, not a network stack.
+ * WHAT CHANGED: the kernel now HAS a socket layer -- AF_UNIX/SOCK_STREAM in
+ * uts/unixsock.c plus the fd-table half in uts/uproc.c, reached through ten new
+ * syscalls (socket 198, socketpair 199, bind 200, listen 201, accept 202,
+ * connect 203, setsockopt 208, getsockopt 209, sendmsg 211, recvmsg 212). It is
+ * verified end to end by uts/user/socktest.c: two separate processes exchange
+ * bytes in both directions and pass a file descriptor with SCM_RIGHTS, and the
+ * received descriptor is PROVEN usable (the server writes through it; the client
+ * reads those exact bytes back out of the file). The test is negative-controlled
+ * -- breaking only the fd-install step flips exactly that check to FAIL.
  *
- * Therefore every one of these returns -1/ENOSYS. Any "implementation" of them
- * ahead of a socket layer could only be a fake, and a fake here would turn a
- * clear link-time gap into a mystifying runtime failure inside Rust's net code.
+ * WHAT IS STILL ENOSYS, and why it is not a fake:
+ *   - AF_INET/AF_INET6 of any kind. There is STILL no IP stack: no sockaddr_in
+ *     handling, no tcp_, no ip_output anywhere in the kernel. __xnet_socket
+ *     therefore forwards AF_UNIX and REFUSES every other family with
+ *     EAFNOSUPPORT rather than pretending. That is a real answer, not a stub.
+ *   - __xnet_sendto: meaningful only for connectionless/addressed sends, i.e.
+ *     SOCK_DGRAM, which the kernel refuses (EPROTONOSUPPORT). A stream send
+ *     ignoring the address would silently misbehave, so this stays ENOSYS.
+ *   - __xnet_getaddrinfo: name resolution, above the socket layer entirely.
  *
- * NEAREST-TERM EXCEPTION worth recording: __xnet_socketpair for AF_UNIX needs
- * no IP stack at all -- an AF_UNIX socketpair is a bidirectional pipe, and this
- * kernel ALREADY has pipes (proc_pipe / SYS_pipe2). That makes it the one entry
- * here reachable without the multi-month networking work, and it is the one
- * Rust's process plumbing reaches for first. See
- * docs/riscv64-libc-rust-abi-gap.md §5 item 5.
+ * So the tagging below is per-entry and each tag is earned: [REAL] means a real
+ * AF_UNIX path all the way to the kernel, [ENOSYS] means the facility genuinely
+ * does not exist.
  */
+
+/*
+ * The kernel syscall numbers (riscv Linux ABI, matching uts/syscall.c) and a
+ * raw ecall. This libc has no syscall TU of its own for these yet, so the stub
+ * is local and deliberately minimal -- when a full port/sys/ layer lands, these
+ * become _so_socket()/_so_bind() calls and only the bodies below change.
+ */
+#define	SOLNIX_SYS_socket	198
+#define	SOLNIX_SYS_socketpair	199
+#define	SOLNIX_SYS_bind		200
+#define	SOLNIX_SYS_listen	201
+#define	SOLNIX_SYS_accept	202
+#define	SOLNIX_SYS_connect	203
+#define	SOLNIX_SYS_getsockopt	209
+
+#define	SOLNIX_AF_UNIX		1
+#define	EAFNOSUPPORT_V		97
+
+static long
+solnix_sys5(long n, long a0, long a1, long a2, long a3, long a4)
+{
+#if defined(__riscv)
+	register long r_a0 asm("a0") = a0;
+	register long r_a1 asm("a1") = a1;
+	register long r_a2 asm("a2") = a2;
+	register long r_a3 asm("a3") = a3;
+	register long r_a4 asm("a4") = a4;
+	register long r_a7 asm("a7") = n;
+
+	__asm__ __volatile__("ecall"
+	    : "+r"(r_a0)
+	    : "r"(r_a1), "r"(r_a2), "r"(r_a3), "r"(r_a4), "r"(r_a7)
+	    : "memory");
+	return (r_a0);
+#else
+	/*
+	 * Host builds: build-illumos-abi.sh compiles this TU natively as well as
+	 * for riscv64 so the self-check can run on the build machine. There is no
+	 * solnix kernel to ecall into there (and the riscv register names are not
+	 * even valid), so report ENOSYS rather than fabricate a result. The host
+	 * self-check exercises argument handling and the errno contract; the
+	 * syscall itself is exercised by the riscv64 run.
+	 */
+	(void) n; (void) a0; (void) a1; (void) a2; (void) a3; (void) a4;
+	return (-ENOSYS);
+#endif
+}
+
+/*
+ * solnix_ret -- the kernel returns -errno; libc returns -1 and sets errno. One
+ * place so every entry below reports failures identically.
+ */
+static long
+solnix_ret(long r)
+{
+	if (r < 0) {
+		errno = (int)(-r);
+		return (-1);
+	}
+	return (r);
+}
 
 static int
 solnix_no_socket(void)
@@ -433,54 +497,89 @@ solnix_no_socket(void)
 	return (-1);
 }
 
+/*
+ * [REAL] __xnet_socket -- AF_UNIX forwarded to the kernel; every other family
+ * REFUSED with EAFNOSUPPORT because there is no IP stack. Refusing is the honest
+ * answer: a fake success here would fail later, inside Rust's net code, where the
+ * cause is far away.
+ */
 int
 __xnet_socket(int family, int type, int protocol)
 {
-	(void) family; (void) type; (void) protocol;
-	return (solnix_no_socket());	/* [ENOSYS] no socket layer */
+	if (family != SOLNIX_AF_UNIX) {
+		errno = EAFNOSUPPORT_V;	/* no IP stack: say so at the call */
+		return (-1);
+	}
+	return ((int)solnix_ret(solnix_sys5(SOLNIX_SYS_socket, family, type,
+	    protocol, 0, 0)));
 }
 
+/*
+ * [REAL] __xnet_socketpair -- AF_UNIX socketpair. This was flagged in the ABI
+ * study as the nearest-term of the seven (a bidirectional pipe, no IP stack
+ * needed) and it is the one Rust's own process plumbing reaches for first.
+ */
 int
 __xnet_socketpair(int family, int type, int protocol, int sv[2])
 {
-	(void) family; (void) type; (void) protocol; (void) sv;
-	/*
-	 * [ENOSYS] -- but see the note above: AF_UNIX is implementable on the
-	 * existing pipe machinery and should be the first of these to become
-	 * real.
-	 */
-	return (solnix_no_socket());
+	if (family != SOLNIX_AF_UNIX) {
+		errno = EAFNOSUPPORT_V;
+		return (-1);
+	}
+	return ((int)solnix_ret(solnix_sys5(SOLNIX_SYS_socketpair, family, type,
+	    protocol, (long)sv, 0)));
 }
 
+/*
+ * [REAL] __xnet_bind / __xnet_connect -- the gate's own path. The kernel reads
+ * sun_path from offset 2 of the sockaddr and validates sun_family, so an
+ * AF_INET sockaddr passed here is rejected by the kernel rather than
+ * misinterpreted as a pathname.
+ */
 int
 __xnet_bind(int s, const void *addr, unsigned int addrlen)
 {
-	(void) s; (void) addr; (void) addrlen;
-	return (solnix_no_socket());	/* [ENOSYS] */
+	return ((int)solnix_ret(solnix_sys5(SOLNIX_SYS_bind, s, (long)addr,
+	    (long)addrlen, 0, 0)));
 }
 
 int
 __xnet_connect(int s, const void *addr, unsigned int addrlen)
 {
-	(void) s; (void) addr; (void) addrlen;
-	return (solnix_no_socket());	/* [ENOSYS] */
+	return ((int)solnix_ret(solnix_sys5(SOLNIX_SYS_connect, s, (long)addr,
+	    (long)addrlen, 0, 0)));
 }
 
+/*
+ * [ENOSYS] __xnet_sendto -- an ADDRESSED send, which is only meaningful for
+ * connectionless sockets (SOCK_DGRAM). The kernel implements SOCK_STREAM only
+ * and refuses SOCK_DGRAM with EPROTONOSUPPORT, so there is no correct behaviour
+ * to provide here: silently ignoring the destination address and doing a stream
+ * send would be a fake that misdelivers. Connected sends work through
+ * write(2)/sendmsg, which ARE real.
+ */
 ssize_t
 __xnet_sendto(int s, const void *buf, size_t len, int flags, const void *addr,
     unsigned int addrlen)
 {
 	(void) s; (void) buf; (void) len; (void) flags;
 	(void) addr; (void) addrlen;
-	return ((ssize_t)solnix_no_socket());	/* [ENOSYS] */
+	return ((ssize_t)solnix_no_socket());	/* [ENOSYS] no SOCK_DGRAM */
 }
 
+/*
+ * [REAL] __xnet_getsockopt -- forwarded. The kernel answers SO_TYPE and
+ * SO_ERROR for real and returns ENOPROTOOPT for everything else, so a caller
+ * that probes an unsupported option learns the truth instead of reading a zero
+ * it will act on. (The SCTP special case the illumos original carries is
+ * irrelevant here: there is no SCTP.)
+ */
 int
 __xnet_getsockopt(int s, int level, int optname, void *optval,
     unsigned int *optlenp)
 {
-	(void) s; (void) level; (void) optname; (void) optval; (void) optlenp;
-	return (solnix_no_socket());	/* [ENOSYS] */
+	return ((int)solnix_ret(solnix_sys5(SOLNIX_SYS_getsockopt, s, level,
+	    optname, (long)optval, (long)optlenp)));
 }
 
 /*
