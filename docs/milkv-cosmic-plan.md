@@ -71,10 +71,39 @@ critical path. Measured properly in `docs/riscv64-libc-rust-abi-gap.md`, which
 > **`epoll(5)` shim**. poll(2) is what libc and those shims sit on, not what calloop calls --
 > so **event ports** join the Gate A list.
 >
-> **What a Wayland client still needs, in priority order: `poll(2)`/`select` (a compositor
-> main loop is built on it), threads/`pthread_create`, anonymous mmap (only `/dev/fb` is
-> mappable today), `dlopen`, `__tls_get_addr`.** That list -- not TCP/IP, and no longer
-> sockets -- is the remaining Gate A work.
+> **What a Wayland client still needs, REVISED ORDER (see the two docs above):**
+> **(1) FP context switch** -- hard blocker; every Rust binary is `lp64d` hard-float.
+> **(2) event ports / the `epoll(5)` shim** -- what `calloop` actually calls (~4 d + 1-2 d).
+> **(3) raise the 8-slot fd table** (`p_fd[8]`, and `NPOLLFD` 16) -- a compositor holds a
+> listener + 1-2 fds per client + the framebuffer, so this binds early.
+> **(4) `munmap` + file-backed `mmap`** -- both need a real `seg_vn`; the anon arena is a
+> bump allocator with no reuse today.
+> **(5) threads/`pthread_create`, `dlopen`, `__tls_get_addr`.**
+>
+> **`poll(2)` and anonymous `mmap` are DONE** -- `[REAL]`, 35/35 userland checks including
+> the level-triggered case and a two-sided negative control, a 200 ms timeout measured at
+> 203 ms, and `MAP_ANON` = 0x100 with Linux's 0x20 refused rather than misread
+> (`docs/riscv64-poll-and-anon-mmap.md`).
+>
+> **Threads must NOT land before (1)** -- concurrent LWPs in one address space would multiply
+> the FP corruption rather than expose it. Two scoping results worth having: a compositor
+> **can** work single-threaded (`smallvil` is; Rust's `available_parallelism` already falls
+> back to 1; llvmpipe runs at `LP_NUM_THREADS=0`), so threads are a **performance** item and
+> not a gate; and a fully-static link avoids needing `dlopen` at all, provided the Mesa ICD
+> is linked in rather than loaded at runtime -- a deliberate build-time choice, not a kernel
+> feature. `dlopen` itself is weeks, not days: `uts/elf.c` is 175 lines and rejects anything
+> but static `ET_EXEC`, and there is no `ld.so.1` on riscv64.
+>
+> **A fifth pre-existing kernel bug fell out and was FIXED: the idle thread was being
+> published on the shared runq.** `thread_yield`/`thread_preempt` guarded it with
+> `t_state == TS_IDLE` -- a value nothing ever assigns (`dispatch_init_cpu` and `swtch` both
+> set `TS_ONPROC`), so both guards were dead code and every `idle_body` yield let another
+> hart dequeue and resume the idle thread while its owning hart was still on that stack.
+> Two harts, one thread. **This was the boot-flakiness root cause: 2/10 clean boots before,
+> 8/10 with only that guard changed to compare identity, 6/6 on the final kernel** -- so the
+> "~5/6 baseline" the committed userland blobs were judged against was this race, not the
+> blobs. It presented as a wild `sepc` (`0xfffffffffffffffc`, `0x0`) or
+> `[disp] thread A/B context-switch FAILED`, far from the cause.
 
 **And one kernel change WAS on the critical path: the `tp` collision (now fixed).**
 RISC-V reserves `tp` for the userland thread pointer; our kernel repurposes it as

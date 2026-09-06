@@ -73,19 +73,34 @@ VNC export: TigerVNC 1.8's `x0vncserver` can only listen on all interfaces, so i
 runs on `:5901` and a 40-line `lo-relay` (bind `127.0.0.1:5900` → `127.0.0.1:5901`)
 makes the only tunnelable listener localhost-bound.
 
-## Known gap (honest)
+## Known gap — CLOSED: cosmic-term now PAINTS in smallvil
 
-The COSMIC apps (`cosmic-term`, `cosmic-files`, all 16 iced apps) **connect to and
-run on smallvil** but panic at
+The COSMIC apps previously panicked at
 `softbuffer/wayland/buffer.rs:52 — Failed to create POSIX shm to store buffer:
-Os { code: 22, kind: InvalidInput }`. `softbuffer`'s Wayland SW buffer uses a
-sealed-memfd/`shm_open` path illumos rejects (`EINVAL`). This is a **built-binary
-patch gap** in the bundled `softbuffer` (unlike `cosmic-app-list`/`applet-minimize`,
-which already carry a `memfd → POSIX-shm` illumos patch). The compositor + render
-path is proven with the `wl_shm` client; wiring the same illumos POSIX-shm shim
-into `softbuffer` and relinking the apps is the remaining step to a COSMIC app
-painting pixels. smallvil's own sealed-keymap file hits the same `os error 22`
-(non-fatal — it logs and continues).
+Os { code: 22, kind: InvalidInput }`. Root cause: softbuffer's non-linux branch
+(`create_memfile`) builds its POSIX-shm object name as `"softbuffer-XXXXXXX"`
+with **no leading slash**; illumos `shm_open(3C)` requires the name to begin with
+`/` and rejects any other name with `EINVAL`. Fix (`rust-patches/`
+`softbuffer-illumos-posix-shm.patch`): prepend `/` to the name and drop the exec
+bit (`Mode::RWXU` → `Mode::RUSR|Mode::WUSR`, the proven illumos idiom). Relinked
+`cosmic-term` — the `wl_shm` pool now allocates, no panic.
+
+A second fix was needed to reach pixels: iced's `fallback::Renderer<iced_wgpu,
+iced_tiny_skia>` tries wgpu first, and wgpu 28 **panics** in `Instance::new` on
+illumos (no wgpu backend) instead of returning `Err`, so the tiny-skia fallback
+never fires. Running with `ICED_BACKEND=tiny-skia` makes `iced_wgpu` return a
+clean `Err` (it never calls `Instance::new`) and iced uses the tiny-skia SW path
+that blits through the patched softbuffer. `cosmic-term` then creates its window,
+gets configured by smallvil, and **paints** — screenshot:
+`artifacts/solnix-cosmic-term-painting.png` (the COSMIC Terminal: File/Edit/View
+menu, "New terminal" title, "+" tab button, cursor, rounded COSMIC dark window).
+
+Honest remaining item (NOT softbuffer): illumos wayland-client dispatch is very
+slow (~8 s per roundtrip — the client-side of the epoll-nesting latency the
+smallvil timer-dispatch patch fixes server-side). cosmic-term paints, then its
+iced redraw loop spins re-initialising under the slow dispatch and leaks memory
+if left running. The paint happens; steady-state needs a client-side dispatch
+fix in iced/winit-on-illumos.
 
 ## Artifacts on the host (`root@3.145.77.215`)
 
@@ -93,6 +108,7 @@ painting pixels. smallvil's own sealed-keymap file hits the same `os error 22`
 |---|---|
 | `/root/solnix-cosmic-session.sh` | one-command session launcher |
 | `/root/solnix-cosmic-wayland.png` | screenshot: wl_shm client composited by smallvil |
+| `/root/solnix-cosmic-term-painting.png` | screenshot: **cosmic-term PAINTING** in smallvil (also `artifacts/`) |
 | `/root/xorg-dummy.conf` | headless Xorg dummy-driver config (DRI2 software) |
 | `/root/wlclient` (+ `.c`) | raw `wl_shm` client (illumos-safe tmpfile shm) |
 | `/root/adw-hello` (+ `.c`) | GTK4/libadwaita client (built; GDK wayland backend gated) |

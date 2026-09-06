@@ -202,10 +202,127 @@ over-run, and the emitter's fallback still produces a valid single region.
 ## Status
 
 - Root cause: **identified from real hardware tables**, candidate (b).
-- Fix: **written and logically proven** against that hardware data.
-- Metal confirmation: **NOT yet obtained.** No banner is claimed. The
-  confirming boot is gated on rebuilding `unix`, which needs a build host that
-  no longer exists (see below).
+- Fix: **proven in logic** (harness reproduces old=16 and new=64) and
+  **confirmed on real Graviton**: the `gicthree.c:1581` panic is gone and the
+  boot proceeds past `scsi_vhci0`.
+- Banner: **NOT reached.** The boot stalls silently after `scsi_vhci0 is
+  /scsi_vhci`; next leg is device enumeration (NVMe/PCIe attach).
+
+## Metal run 1: the diagnostic works, and it caught a bug in this fix
+
+The rebuilt kernel booted on c6g.metal and the `[A6GIC]` lines reached the
+console (`artifacts/a6gic2-metal-console-run1.txt`), confirming the raw
+SPCR-UART route is the correct mechanism where `dboot_printf` was invisible:
+
+```
+Loading /platform/armv8/kernel/aarch64/unix...
+Booting...
+[A6GIC] ngicc=40 distinct_gicr_base=1 regions=1 stride=0x20000
+[A6GIC] region[0] base=0xbc00080000 size=0x20000 ncpu=0x1
+[A6GIC] gicr_base min=0xbc00080000 max=0xbc00080000
+[A6KCON:BOP]
+[A6KCON:BCONS]
+```
+
+`ngicc=40` is hex: 0x40 = 64 cpus, matching the MADT exactly. But
+`distinct_gicr_base=1` was wrong -- it should have been 64. The coalescer got a
+single base, so it emitted one region of one cpu.
+
+**Cause: a pre-existing guard I preserved without re-examining.** The GICC arm
+of `synth_scan_madt()` was wrapped in `if (!g->have_gicr)`, which was correct
+when the code only needed *one* fallback base. `have_gicr` goes true on the
+first GICC, so once the fix needed *every* base, that guard silently discarded
+cpus 1..63. The flag was doing double duty: "a standalone GICR subtable exists"
+and "some base is known".
+
+Fix: split the two meanings. A new `have_gicr_subtable` means specifically that
+a standalone GICR subtable supplied the regions, and the collection loop and the
+region-derivation branch now test that instead of `have_gicr`.
+
+The harness had not caught this because it called `synth_gicr_insert()`
+unconditionally -- it tested the coalescer but not the scan guard feeding it. It
+now mirrors the real guard and asserts that a box with per-cpu GICR bases yields
+as many distinct bases as cpus. Verified the assertion actually fails when the
+shipped guard is re-injected:
+
+```
+$ # with `if (!g.have_gicr)` restored
+buggy: test_gicr_regions.c:277: main: Assertion `synth_gicr_ncpu_base > 1' failed.
+$ # with the fix
+ALL CHECKS PASSED (old path reproduces metal's 16; new path yields 64)
+```
+
+That is the lesson worth keeping: the harness proved the algorithm but not its
+*input path*, so a correct coalescer was fed one base. A test that cannot fail
+for the bug you shipped is not yet a test of the thing that broke.
+
+### Where the boot stopped (run 2) -- and the missing patch
+
+Run 2 emitted the correct 4-region FDT but still stopped after
+`[A6KCON:BCONS]`, *earlier* than prior sessions had reached. That was a
+regression of my own making, not a GIC problem: this rebuilt tree was missing
+`a6-kcon-boot-uart-fr-poll-fix.patch`. Its `boot_uart.c` half was NOT in
+`a6-cumulative-all-legs.patch` (only its `fakebop.c` half was), so `boot_uart.c`
+still had the unbounded `while (!(FR & TXFE))` spin that hangs on Graviton's
+PL011. Applying that patch restored console output past `bcons_init`.
+
+**Lesson for the patch set:** `a6-cumulative-all-legs.patch` is NOT complete.
+Rebuilding from a fresh gate needs, in addition: the FR-poll patch, the arena
+one-line constant, the CERRWARN `-Wno-unused-but-set-parameter` addition, and
+the `priv_const.c` prereq step.
+
+## RESULT: the GIC blocker is CLEARED on real Graviton (run 3)
+
+Run 3 carried the corrected multi-region fix plus the FR-poll patch
+(`artifacts/a6gic3-metal-console-GIC-CLEARED.txt`):
+
+```
+[A6GIC] ngicc=40 distinct_gicr_base=40 regions=4 stride=0x20000
+[A6GIC] region[0] base=0xbc00080000 size=0x200000 ncpu=0x10
+[A6GIC] region[1] base=0xbd00080000 size=0x200000 ncpu=0x10
+[A6GIC] region[2] base=0xbe00080000 size=0x200000 ncpu=0x10
+[A6GIC] region[3] base=0xbf00080000 size=0x200000 ncpu=0x10
+[A6GIC] gicr_base min=0xbc00080000 max=0xbf00260000
+[A6KCON:BOP]
+[A6KCON:BCONS]
+module /platform/armv8/kernel/aarch64/unix: text at [0xfffffffffe02a000, ...]
+module /kernel/aarch64/genunix: text at [0xfffffffffe699a20, ...]
+module /platform/armv8/kernel/misc/aarch64/platmod: text at [...]
+illumos Version arm64-gate-0-gb0e9cd2f8d 64-bit
+DEBUG enabled
+mem = 134217728K (0x2000000000)
+Using default device instance data
+SMBIOS not loaded (System does not export an SMBIOS table)
+root nexus = Amazon EC2
+pseudo0 at root
+pseudo0 is /pseudo
+scsi_vhci0 at root
+scsi_vhci0 is /scsi_vhci        <-- PAST the old panic point
+```
+
+All numbers match the hardware: `ngicc=40` is hex (64 cpus),
+`distinct_gicr_base=40` (64 distinct bases), 4 regions of `ncpu=0x10` (16),
+spanning `0xbc00080000..0xbf00260000`.
+
+**The panic is gone.** Every prior run died at `scsi_vhci0 at root` with
+`assertion failed: num_redistributors >= max_ncpus (0x10 >= 0x40),
+gicthree.c:1581`. This run prints `scsi_vhci0 is /scsi_vhci` and continues; the
+console contains **zero** occurrences of `gicthree` or `num_redistributors`.
+That is the multi-region FDT satisfying `VERIFY3U`, exactly as the harness
+predicted (64 >= 64).
+
+### Next blocker (precisely named, deliberately not fixed)
+
+The boot then goes quiet after `scsi_vhci0 is /scsi_vhci`, with no panic and no
+further device-tree output over ~25 minutes. `describe-instance-status` reported
+`running / system ok / instance impaired`. **No `SunOS Release 5.11` banner was
+reached, and none is claimed.**
+
+The next leg is device enumeration past `scsi_vhci`: the NVMe/PCIe root-complex
+attach that must follow before root-mount. The GIC is now *counted* correctly,
+but interrupt distribution and the ITS/MSI wiring are what the first real device
+exercises, and that is the natural suspect. Per instruction this was captured,
+not fixed.
 
 ## Why the metal re-test is a separate leg
 
