@@ -302,3 +302,22 @@ In `artifacts/`:
 - The build host and the Linux transfer helper are in the same VPC: allow the
   build host's **private** /32 on :22 for the duration of the copy and revoke it
   afterwards, rather than any public rule. Transfer measured **90.6 MB/s**.
+
+## RESOLVED: the bound was load-bearing, not the markers
+
+The open question in this document -- whether bounding the spins fixed the stall or whether the
+19 `[A6GICD:*]` markers' settle time did -- is now **answered: the bound.**
+
+With markers compiled out entirely (**0** `A6GICD` lines on the console) and only the bounded
+`reg_await_clear4()` spins kept, the boot still reaches `gicthree0 at root` with all four GICR
+regions, `arm_gtmr0 at root`, and `NOTICE: Performing full ZFS device scan!`, with **0**
+`await-timeout` lines. Evidence: `artifacts/a6uart-metal-console-raw.txt`.
+
+So there is **no barrier/timing bug hiding behind print delays**, which was the honest worry
+when the original agent declined to claim credit for its own fix.
+
+Note this only became answerable after the console fix (`docs/aarch64-console-13s-per-char.md`).
+At ~13 s/char, removing 19 markers also removed roughly **2.5 hours** of settle time from the
+middle of `gicv3_init`, so "markers removed" and "bound alone" were never the two arms of a
+clean A/B. Fixing the instrument first is what made the experiment mean anything -- a general
+lesson worth carrying: **an instrument that changes the system by hours is not an observer.**
