@@ -46,6 +46,21 @@
 #include "fp.h"
 #include "port.h"
 
+/*
+ * Per-process open-file limit.
+ *
+ * Raised from 8 to 32 because a Wayland compositor binds on this early and in a
+ * way that is easy to misdiagnose: it holds a listening socket, one or two fds
+ * per connected client, the framebuffer, and an event port -- so 8 is exhausted
+ * at roughly the THIRD client, and the symptom is a client failing to connect
+ * rather than anything pointing at a table size.
+ *
+ * Named rather than literal because the bound appeared at ~24 separate sites
+ * (bounds checks, allocation scans, fork copies, close-all loops); a literal is
+ * how one of them gets missed and the table is walked past its end.
+ */
+#define	NOFILE		32
+
 extern void kputhex(unsigned long v);
 extern void kputdec(unsigned long v);
 
@@ -424,7 +439,7 @@ typedef struct proc {
 		int		fd_fb;		/* 1 = the /dev/fb scanout node */
 		int		fd_sock;	/* AF_UNIX socket index, else -1 */
 		int		fd_port;	/* event-port index, else -1 */
-	} p_fd[8];
+	} p_fd[NOFILE];
 } proc_t;
 
 #define	NPROC	16
@@ -464,7 +479,7 @@ proc_alloc(void)
 			p->p_insig = 0;
 			for (k = 0; k < NSIG; k++)
 				p->p_sighand[k] = SIG_DFL_VAL;
-			for (k = 0; k < 8; k++) {
+			for (k = 0; k < NOFILE; k++) {
 				p->p_fd[k].fd_used = 0;
 				p->p_fd[k].fd_snfs = -1;
 				p->p_fd[k].fd_pipe = -1;
@@ -557,7 +572,7 @@ proc_open(const char *path)
 	kpath[i] = 0;
 	if (!vfs_lookup(kpath, &data, &len))
 		return (-1);
-	for (fd = 3; fd < 8; fd++) {
+	for (fd = 3; fd < NOFILE; fd++) {
 		if (!p->p_fd[fd].fd_used) {
 			p->p_fd[fd].fd_used = 1;
 			p->p_fd[fd].fd_data = (const unsigned char *)data;
@@ -587,7 +602,7 @@ proc_fread(int fd, char *ubuf, unsigned long n)
 	const unsigned char *src;
 	unsigned long len;
 
-	if (p == 0 || fd < 3 || fd >= 8 || !p->p_fd[fd].fd_used)
+	if (p == 0 || fd < 3 || fd >= NOFILE || !p->p_fd[fd].fd_used)
 		return (-1);
 	/* R-P12: pipe read end. */
 	if (p->p_fd[fd].fd_pipe >= 0)
@@ -641,7 +656,7 @@ proc_close(int fd)
 
 	if (fd >= 0 && fd <= 2)
 		return (0);
-	if (p == 0 || fd < 3 || fd >= 8 || !p->p_fd[fd].fd_used)
+	if (p == 0 || fd < 3 || fd >= NOFILE || !p->p_fd[fd].fd_used)
 		return (-1);
 	p->p_fd[fd].fd_used = 0;
 	p->p_fd[fd].fd_wnode = 0;	/* R-P11: clear so a reused slot is clean */
@@ -766,7 +781,7 @@ load_elf_into(proc_t *p, const char *path, const void *img, unsigned long len,
 	p->p_uframe.r_a1 = sp + 8;			/* argv (past argc) */
 
 	/* exec starts with a clean fd table (only console fds 0/1/2 implicit). */
-	for (i = 0; i < 8; i++) {
+	for (i = 0; i < NOFILE; i++) {
 		p->p_fd[i].fd_used = 0;
 		p->p_fd[i].fd_snfs = -1;
 		p->p_fd[i].fd_pipe = -1;
@@ -924,7 +939,7 @@ proc_fork(struct regs *tf)
 
 	/* R-P12: child inherits the parent's open fd table (pipes, files). Bump
 	 * the refcount on any inherited pipe end so close accounting is right. */
-	for (i = 0; i < 8; i++) {
+	for (i = 0; i < NOFILE; i++) {
 		child->p_fd[i] = parent->p_fd[i];
 		if (parent->p_fd[i].fd_used && parent->p_fd[i].fd_pipe >= 0)
 			pipe_ref(parent->p_fd[i].fd_pipe,
@@ -1530,7 +1545,7 @@ proc_openat_w(const char *path, int flags)
 
 		if (r < 0)
 			return (r);		/* ENXIO: no scanout engine */
-		for (fd = 3; fd < 8; fd++) {
+		for (fd = 3; fd < NOFILE; fd++) {
 			if (!p->p_fd[fd].fd_used) {
 				p->p_fd[fd].fd_used = 1;
 				p->p_fd[fd].fd_fb = 1;
@@ -1566,7 +1581,7 @@ proc_openat_w(const char *path, int flags)
 		if (r == 0)
 			return (-1);
 	}
-	for (fd = 3; fd < 8; fd++) {
+	for (fd = 3; fd < NOFILE; fd++) {
 		if (!p->p_fd[fd].fd_used) {
 			p->p_fd[fd].fd_used = 1;
 			p->p_fd[fd].fd_wnode = r;
@@ -1596,7 +1611,7 @@ proc_fwrite(int fd, const char *ubuf, unsigned long n)
 	struct ramfile *r;
 	unsigned long pos;
 
-	if (p == 0 || fd < 3 || fd >= 8 || !p->p_fd[fd].fd_used)
+	if (p == 0 || fd < 3 || fd >= NOFILE || !p->p_fd[fd].fd_used)
 		return (-1);
 	/* R-P12: pipe write end. */
 	if (p->p_fd[fd].fd_pipe >= 0)
@@ -1654,7 +1669,7 @@ proc_lseek(int fd, long off, int whence)
 	unsigned long base, len;
 	long np;
 
-	if (p == 0 || fd < 3 || fd >= 8 || !p->p_fd[fd].fd_used)
+	if (p == 0 || fd < 3 || fd >= NOFILE || !p->p_fd[fd].fd_used)
 		return (-1);
 	if (p->p_fd[fd].fd_pipe >= 0)
 		return (-1);		/* pipes are not seekable */
@@ -1864,9 +1879,9 @@ proc_pipe(int *ufds)
 		return (-1);
 	pi = (int)(pp - pipetab);
 
-	for (fd = 3; fd < 8 && rfd < 0; fd++)
+	for (fd = 3; fd < NOFILE && rfd < 0; fd++)
 		if (!p->p_fd[fd].fd_used) rfd = fd;
-	for (fd = rfd + 1; fd < 8 && wfd < 0; fd++)
+	for (fd = rfd + 1; fd < NOFILE && wfd < 0; fd++)
 		if (!p->p_fd[fd].fd_used) wfd = fd;
 	if (rfd < 0 || wfd < 0) {
 		pp->pp_used = 0;
@@ -1902,7 +1917,7 @@ proc_dup2(int oldfd, int newfd)
 {
 	proc_t *p = curproc;
 
-	if (p == 0 || oldfd < 0 || oldfd >= 8 || newfd < 0 || newfd >= 8)
+	if (p == 0 || oldfd < 0 || oldfd >= NOFILE || newfd < 0 || newfd >= NOFILE)
 		return (-1);
 	if (oldfd == newfd)
 		return (newfd);
@@ -1941,7 +1956,7 @@ proc_openat_snfs(const char *kpath, int flags)
 	slot = snfs_open(name, (flags & O_CREAT) ? 1 : 0, &len);
 	if (slot < 0)
 		return (-1);
-	for (fd = 3; fd < 8; fd++) {
+	for (fd = 3; fd < NOFILE; fd++) {
 		if (!p->p_fd[fd].fd_used) {
 			p->p_fd[fd].fd_used = 1;
 			p->p_fd[fd].fd_snfs = slot;
@@ -1999,7 +2014,7 @@ proc_ioctl(int fd, int cmd, unsigned long arg)
 {
 	proc_t *p = curproc;
 
-	if (p == 0 || fd < 3 || fd >= 8 || !p->p_fd[fd].fd_used)
+	if (p == 0 || fd < 3 || fd >= NOFILE || !p->p_fd[fd].fd_used)
 		return (-9 /* EBADF */);
 	if (p->p_fd[fd].fd_fb)
 		return (fb_ioctl(cmd, arg));
@@ -2024,7 +2039,7 @@ proc_mmap(int fd, unsigned long len)
 
 	if (p == 0 || p->p_as == 0)
 		return (-22 /* EINVAL */);
-	if (fd < 3 || fd >= 8 || !p->p_fd[fd].fd_used)
+	if (fd < 3 || fd >= NOFILE || !p->p_fd[fd].fd_used)
 		return (-9 /* EBADF */);
 	if (!p->p_fd[fd].fd_fb)
 		return (-19 /* ENODEV: only /dev/fb is mappable */);
@@ -2090,8 +2105,9 @@ proc_mmap_anon(unsigned long len)
  * interrupts are masked inside a syscall -- but it is not efficient. The upgrade
  * is registering the poller on each polled object's wait channel; wakeup()
  * already runs at every readiness change and already uses those channel
- * addresses, so the hooks exist. NPOLLFD is capped because the fd table is 8
- * slots; a real poll cache (illumos pollcache) is the same upgrade.
+ * addresses, so the hooks exist. NPOLLFD tracks NOFILE (a process cannot poll
+ * more fds than it can hold open); a real poll cache (illumos pollcache) is the
+ * same upgrade.
  * ===========================================================================
  */
 
@@ -2105,7 +2121,12 @@ proc_mmap_anon(unsigned long len)
 #define	POLLRDNORM	0x0040
 #define	POLLWRNORM	POLLOUT
 
-#define	NPOLLFD		16
+/*
+ * Polling more fds than a process can hold open is meaningless, so this tracks
+ * NOFILE rather than being an independent number -- when NOFILE went 8 -> 32 a
+ * separate constant here would have silently become the new ceiling.
+ */
+#define	NPOLLFD		NOFILE
 
 /* unixsock.c readiness bits (UNPOLL_*), kept out of the poll ABI on purpose. */
 #define	UNPOLL_RD	0x1
@@ -2135,7 +2156,7 @@ fd_ready(proc_t *p, int fd)
 {
 	short r = 0;
 
-	if (fd < 0 || fd >= 8)
+	if (fd < 0 || fd >= NOFILE)
 		return (POLLNVAL);
 
 	/*
@@ -2325,10 +2346,10 @@ proc_port_create(void)
 
 	if (p == 0)
 		return (-22 /* EINVAL */);
-	for (fd = 0; fd < 8; fd++)
+	for (fd = 0; fd < NOFILE; fd++)
 		if (!p->p_fd[fd].fd_used)
 			break;
-	if (fd == 8)
+	if (fd == NOFILE)
 		return (-24 /* EMFILE */);
 
 	port = port_alloc(p);
@@ -2348,7 +2369,7 @@ proc_port_create(void)
 static int
 fd_to_port(proc_t *p, int fd)
 {
-	if (p == 0 || fd < 0 || fd >= 8 || !p->p_fd[fd].fd_used)
+	if (p == 0 || fd < 0 || fd >= NOFILE || !p->p_fd[fd].fd_used)
 		return (-1);
 	return (p->p_fd[fd].fd_port);
 }
@@ -2371,7 +2392,7 @@ proc_port_associate(int pfd, int source, int object, int events,
 		return (-9 /* EBADF */);
 	if (source != PORT_SOURCE_FD)
 		return (-22 /* EINVAL: only fd sources are implemented */);
-	if (object < 0 || object >= 8 || !p->p_fd[object].fd_used)
+	if (object < 0 || object >= NOFILE || !p->p_fd[object].fd_used)
 		return (-9 /* EBADF: the watched fd */);
 	if (port_assoc_add(port, object, events, user) != 0)
 		return (-28 /* ENOSPC: association table full */);
@@ -2524,7 +2545,7 @@ sock_fd_install(int si)
 
 	if (p == 0)
 		return (-9 /* EBADF */);
-	for (fd = 3; fd < 8; fd++) {
+	for (fd = 3; fd < NOFILE; fd++) {
 		if (p->p_fd[fd].fd_used)
 			continue;
 		p->p_fd[fd].fd_used = 1;
@@ -2551,7 +2572,7 @@ sock_of_fd(int fd)
 {
 	proc_t *p = curproc;
 
-	if (p == 0 || fd < 3 || fd >= 8 || !p->p_fd[fd].fd_used)
+	if (p == 0 || fd < 3 || fd >= NOFILE || !p->p_fd[fd].fd_used)
 		return (-1);
 	return (p->p_fd[fd].fd_sock);
 }
@@ -2932,7 +2953,7 @@ unsock_fd_dup_into(int fd)
 	proc_t *p = curproc;
 	int i;
 
-	if (p == 0 || fd < 0 || fd >= 8 || !p->p_fd[fd].fd_used)
+	if (p == 0 || fd < 0 || fd >= NOFILE || !p->p_fd[fd].fd_used)
 		return (-9 /* EBADF */);
 	for (i = 0; i < NRIGHTS; i++) {
 		if (rightstab[i].r_used)
@@ -2976,7 +2997,7 @@ unsock_fd_install_slot(int ri)
 
 	if (p == 0 || ri < 0 || ri >= NRIGHTS || !rightstab[ri].r_used)
 		return (-9 /* EBADF */);
-	for (fd = 3; fd < 8; fd++) {
+	for (fd = 3; fd < NOFILE; fd++) {
 		if (p->p_fd[fd].fd_used)
 			continue;
 		p->p_fd[fd].fd_used = 1;

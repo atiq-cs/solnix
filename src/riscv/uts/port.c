@@ -48,9 +48,15 @@
  * wayland socket, a few clients, a ping fd) and matches p_fd[]'s own width, so a
  * port cannot be asked to watch more fds than a process can hold open.
  */
-#define	PORT_NPORT	4
-#define	PORT_NASSOC	8
-#define	PORT_NUSER	8
+/*
+ * PORT_NASSOC is raised alongside the process fd table (NOFILE, now 32): a port
+ * cannot usefully watch more fds than a process can hold open, and leaving it at
+ * 8 while NOFILE grew would just move the compositor's client ceiling from the fd
+ * table to here -- the same symptom, a different table.
+ */
+#define	PORT_NPORT	8
+#define	PORT_NASSOC	32
+#define	PORT_NUSER	16
 
 typedef struct port_assoc {
 	int		pa_used;
