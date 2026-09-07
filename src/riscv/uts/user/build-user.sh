@@ -25,7 +25,7 @@ CFLAGS="-march=rv64imac_zicsr -mabi=lp64 -mcmodel=medany \
 	-ffreestanding -nostdlib -fno-stack-protector -fno-pic \
 	-Wall -Wextra -Os -g"
 
-PROGS="init sh hello echo cat fbtest socktest polltest"
+PROGS="init sh hello echo cat fbtest socktest polltest porttest"
 
 # fptest is the ONE userland program built HARD-FLOAT (lp64d). Everything else is
 # soft-float, which is exactly why the missing FP context-switch stayed hidden --
@@ -111,6 +111,7 @@ cp fbtest.elf "$STAGE/bin/fbtest"
 cp socktest.elf "$STAGE/bin/socktest"
 # The poll(2) + anonymous-mmap gate (init runs it as a boot gate).
 cp polltest.elf "$STAGE/bin/polltest"
+cp porttest.elf "$STAGE/bin/porttest"
 cp fptest.elf   "$STAGE/bin/fptest"
 printf 'solnix riscv64 - the first illumos on RISC-V. R-P11: signals, writable FS, passwd login, concurrent shells.\n' \
 	> "$STAGE/etc/motd"
@@ -129,7 +130,7 @@ wait:/bin/hello
 EOF
 ( cd "$STAGE" && tar --format=ustar -cf rootfs.tar \
     sbin/init bin/sh bin/hello bin/echo bin/cat bin/fbtest bin/socktest \
-    bin/polltest bin/fptest etc/motd etc/inittab etc/passwd )
+    bin/polltest bin/porttest bin/fptest etc/motd etc/inittab etc/passwd )
 cp "$STAGE/rootfs.tar" ../rootfs.img
 sz=$(wc -c < ../rootfs.img)
 pad=$(( (512 - (sz % 512)) % 512 ))

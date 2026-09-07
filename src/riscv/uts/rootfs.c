@@ -293,6 +293,7 @@ static const struct vfile vfiles[] = {
 	{ "/bin/socktest", socktest_elf, 0 },	/* AF_UNIX + SCM_RIGHTS gate */
 	{ "/bin/polltest", polltest_elf, 0 },	/* poll(2) + anon mmap gate */
 	{ "/bin/fptest", fptest_elf, 0 },	/* hard-float context-switch gate */
+	{ "/bin/porttest", porttest_elf, 0 },	/* event-ports gate */
 };
 #define NVFILES (int)(sizeof (vfiles) / sizeof (vfiles[0]))
 
@@ -316,6 +317,7 @@ vfiles_init(void)
 	vfile_len[7] = socktest_elf_len;
 	vfile_len[8] = polltest_elf_len;
 	vfile_len[9] = fptest_elf_len;
+	vfile_len[10] = porttest_elf_len;
 	vfiles_ready = 1;
 }
 

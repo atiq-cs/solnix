@@ -487,6 +487,35 @@ poll_gate(void)
 }
 
 /*
+ * port_gate -- run /bin/porttest, the event-ports proof. Event ports are what
+ * calloop actually uses on illumos, so this is the interface a compositor's event
+ * loop will sit on; poll(2) is necessary but not what any crate in that stack
+ * calls directly.
+ */
+static void
+port_gate(void)
+{
+	int pid, st = 0;
+
+	puts("\n--- gate: event ports (port_create/associate/getn/send) ---\n");
+	pid = fork();
+	if (pid == 0) {
+		char *av[2];
+
+		av[0] = "porttest";
+		av[1] = 0;
+		execve("/bin/porttest", av, 0);
+		puts("port: exec /bin/porttest FAILED\n");
+		_exit(1);
+	}
+	if (pid < 0) {
+		puts("port: fork FAILED\n");
+		return;
+	}
+	waitpid(pid, &st, 0);
+}
+
+/*
  * fp_gate -- run /bin/fptest, the proof that hard-float state survives a context
  * switch. Forked and exec'd like the other gates so a failure cannot take init
  * down, and so the probe runs in a real separate address space.
@@ -645,6 +674,7 @@ main(int argc, char **argv)
 	 * top of the sockets. Run before the scanout gate so a poll regression is
 	 * reported before the display path, which does not depend on it. --- */
 	poll_gate();
+	port_gate();
 	fp_gate();
 
 	/* --- R-P64 scanout seam: /dev/fb from userland. ---
