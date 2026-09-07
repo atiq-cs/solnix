@@ -35,6 +35,7 @@ extern void hat_as_walk_leaves(unsigned long root,
     unsigned long perm), void *arg);
 extern void hat_as_freeuser(unsigned long root);
 extern unsigned long hat_as_va2pa(unsigned long root, unsigned long va);
+extern unsigned long hat_as_unmap(unsigned long root, unsigned long va);
 
 /* vm_page.c */
 extern void page_free(unsigned long pa);
@@ -49,12 +50,35 @@ extern void kputdec(unsigned long v);
  * as_t — a user address space: its root table PA, precomputed satp, and a
  * small tally of mapped user pages (diagnostics). Kept in kmem by the caller.
  */
+/*
+ * How many freed anon extents an address space remembers for reuse. 16 covers a
+ * compositor's churn (buffer pools being resized, clients coming and going)
+ * without needing a dynamic allocator underneath the allocator.
+ */
+#define	AS_NFREE	16
+
 typedef struct as {
 	unsigned long	a_root;		/* root page-table PA */
 	unsigned long	a_satp;		/* Sv39 satp for this AS */
 	unsigned long	a_npages;	/* user pages mapped */
 	unsigned long	a_brk;		/* current program break (heap top VA) */
 	unsigned long	a_mmap;		/* next free VA in the anon mmap arena */
+	/*
+	 * Freed anon extents, newest first, for reuse. A fixed array rather than
+	 * a linked list because the nodes would otherwise need an allocator that
+	 * itself wants mmap -- and a compositor's steady state is a handful of
+	 * long-lived mappings plus churn, not thousands of distinct holes.
+	 *
+	 * When the array is full the oldest entry is DROPPED rather than
+	 * coalesced, which leaks that VA range until process exit. That is a
+	 * bounded, documented ceiling (see as_anon_unmap) and strictly better
+	 * than the previous behaviour of leaking every single unmap.
+	 */
+	struct {
+		unsigned long	f_va;
+		unsigned long	f_len;
+	}		a_free[AS_NFREE];
+	unsigned int	a_nfree;
 } as_t;
 
 /* From kmem.c. */
@@ -127,6 +151,37 @@ as_anon_map(as_t *as, unsigned long len)
 	if (as == 0 || len == 0)
 		return (0);
 	len = (len + PAGESIZE - 1) & ~(PAGESIZE - 1);
+
+	/*
+	 * Reuse a freed extent if one fits, newest first. Exact-fit only: a
+	 * best-fit split would leave remainder entries that need coalescing to
+	 * stay useful, and an uncoalesced splinter list degrades into a slow leak.
+	 * Exact fit is the common case here anyway -- allocators re-request the
+	 * same rounded sizes.
+	 */
+	{
+		unsigned int i;
+
+		for (i = 0; i < as->a_nfree; i++) {
+			if (as->a_free[i].f_len != len)
+				continue;
+			va = as->a_free[i].f_va;
+			as->a_free[i] = as->a_free[as->a_nfree - 1];
+			as->a_nfree--;
+			/* Re-back it: the pages were freed at unmap time. */
+			for (p = va; p < va + len; p += PAGESIZE) {
+				unsigned long pa = page_alloc();
+
+				if (pa == 0)
+					return (0);
+				hat_as_map(as->a_root, p, pa,
+				    PTE_R | PTE_W);
+				as->a_npages++;
+			}
+			return (va);
+		}
+	}
+
 	va = as->a_mmap;
 	end = va + len;
 	if (end < va)
@@ -148,6 +203,68 @@ as_anon_map(as_t *as, unsigned long len)
 	 */
 	__asm__ __volatile__("sfence.vma" ::: "memory");
 	return (va);
+}
+
+/*
+ * as_anon_unmap -- tear down [va, va+len) in the anon arena, free its pages, and
+ * remember the VA range for reuse. Returns 0 on success, -1 if the range is not
+ * in the arena.
+ *
+ * This plus hat_as_unmap is what munmap(2) needs, and what makes as_anon_map's
+ * free-list reuse possible. Before it existed, every unmap leaked until process
+ * exit, so a program that mapped and unmapped in a loop exhausted the arena --
+ * which a long-running compositor resizing buffer pools would do.
+ *
+ * The pages ARE freed here (unlike hat_as_unmap, which only returns the PA):
+ * anon pages are private by construction, so this address space is the sole
+ * owner and page_free is safe. That would NOT hold for a COW-shared page, which
+ * is exactly why the hat layer leaves the decision to its caller.
+ */
+int
+as_anon_unmap(as_t *as, unsigned long va, unsigned long len)
+{
+	unsigned long p;
+
+	if (as == 0 || len == 0)
+		return (-1);
+	if ((va & (PAGESIZE - 1)) != 0)
+		return (-1);		/* must be page-aligned */
+	len = (len + PAGESIZE - 1) & ~(PAGESIZE - 1);
+	if (va < ANON_MMAP_BASE || va + len > as->a_mmap)
+		return (-1);		/* not a range we handed out */
+
+	for (p = va; p < va + len; p += PAGESIZE) {
+		unsigned long pa = hat_as_unmap(as->a_root, p);
+
+		if (pa != 0) {
+			page_free(pa);
+			if (as->a_npages > 0)
+				as->a_npages--;
+		}
+	}
+
+	/*
+	 * Remember the hole. If the table is full the OLDEST entry is dropped:
+	 * that range then leaks until exit. Bounded and deliberate -- the
+	 * alternative is failing the unmap, which would be worse, and coalescing
+	 * needs a sorted structure this layer does not have yet.
+	 */
+	if (as->a_nfree == AS_NFREE) {
+		unsigned int i;
+
+		for (i = 1; i < AS_NFREE; i++)
+			as->a_free[i - 1] = as->a_free[i];
+		as->a_nfree--;
+	}
+	as->a_free[as->a_nfree].f_va = va;
+	as->a_free[as->a_nfree].f_len = len;
+	as->a_nfree++;
+
+	/*
+	 * The caller must invalidate the TLB; as_anon_unmap cannot know whether
+	 * this AS is loaded on the current hart.
+	 */
+	return (0);
 }
 
 /*

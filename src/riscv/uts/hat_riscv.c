@@ -458,6 +458,53 @@ hat_as_map(unsigned long root, unsigned long va, unsigned long pa,
 	tbl[VPN(va, 0)] = PA_TO_PTE(pa) | perm | PTE_U | PTE_V | PTE_A | PTE_D;
 }
 
+/*
+ * hat_as_unmap -- tear down the leaf mapping for page-aligned `va` and return the
+ * physical page it referred to, or 0 if it was not mapped.
+ *
+ * The inverse of hat_as_map, and the primitive munmap(2) and arena reuse both
+ * need: without it a freed mapping can only be reclaimed by tearing down the
+ * whole address space at process exit, which is why the anon arena was a bump
+ * allocator with no reuse.
+ *
+ * Returning the PA rather than freeing it here is deliberate: this layer owns
+ * page TABLES, not page ownership. A COW-shared page must not be handed to
+ * page_free() just because one address space stopped pointing at it, so the
+ * caller -- which knows the sharing rules -- decides.
+ *
+ * Interior tables are intentionally NOT freed even when they empty out. Doing so
+ * requires proving no sibling leaf remains and interacts badly with a concurrent
+ * walk; the leak is bounded by the address space's own size and vanishes with
+ * hat_as_freeuser at exit. Reclaiming them is a separate change with its own risk.
+ *
+ * TLB: the caller must invalidate. This function cannot know whether the AS is
+ * currently loaded on this hart, and issuing sfence.vma for an AS that is not
+ * active is both wasteful and misleading.
+ */
+unsigned long
+hat_as_unmap(unsigned long root, unsigned long va)
+{
+	unsigned long *tbl = (unsigned long *)root;
+	unsigned long pte, pa;
+	int level;
+
+	for (level = 2; level > 0; level--) {
+		pte = tbl[VPN(va, level)];
+		if ((pte & PTE_V) == 0)
+			return (0);		/* no such mapping */
+		if (pte & PTE_RWX)
+			return (0);		/* a large leaf: not ours to split */
+		tbl = (unsigned long *)PTE_TO_PA(pte);
+	}
+
+	pte = tbl[VPN(va, 0)];
+	if ((pte & PTE_V) == 0)
+		return (0);
+	pa = PTE_TO_PA(pte);
+	tbl[VPN(va, 0)] = 0;
+	return (pa);
+}
+
 /* Build the process satp value (Sv39) for a given root PA. */
 unsigned long
 hat_as_satp(unsigned long root)

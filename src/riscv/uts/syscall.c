@@ -124,6 +124,7 @@ extern long copyout(const void *kaddr, void *uaddr, unsigned long n);
 #define	SYS_write	64
 #define	SYS_ioctl	29
 #define	SYS_mmap	222
+#define	SYS_munmap	215
 /*
  * poll(2). The riscv Linux ABI has no plain `poll` slot -- only ppoll (73) --
  * so we take 73 with poll(2)'s ARGUMENT SHAPE (a2 = timeout in milliseconds,
@@ -165,6 +166,7 @@ extern long copyout(const void *kaddr, void *uaddr, unsigned long n);
  * equivalent syscalls to borrow numbers from -- these are illumos-specific, and
  * they are what calloop actually calls on this platform (see uts/port.c).
  */
+extern long proc_munmap(unsigned long addr, unsigned long len);
 extern long proc_port_create(void);
 extern long proc_port_associate(int pfd, int source, int object, int events,
     unsigned long user);
@@ -357,6 +359,10 @@ syscall_trap(struct regs *tf)
 		} else {
 			ret = proc_mmap((int)tf->r_a4, tf->r_a1);
 		}
+		break;
+	case SYS_munmap:
+		/* a0=addr, a1=len. Anon arena only; /dev/fb is not unmappable. */
+		ret = proc_munmap(tf->r_a0, tf->r_a1);
 		break;
 	case SYS_port_create:
 		ret = proc_port_create();

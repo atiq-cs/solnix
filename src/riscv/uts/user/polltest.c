@@ -548,6 +548,40 @@ anon_mmap_gate(void)
 
 	/* Zero length must fail rather than return a 0-page mapping. */
 	check(mmap_anon(0) == MAP_FAILED, "mmap(MAP_ANON, len=0) fails");
+
+	/*
+	 * munmap + ARENA REUSE. The arena used to be a bump allocator with no
+	 * reuse, so this is the check that matters: map, unmap, map the same size
+	 * again, and the SAME VA must come back. If it does not, the arena is
+	 * still leaking on every unmap and a long-running compositor exhausts it.
+	 */
+	{
+		unsigned char *m3 = mmap_anon(8192);
+		unsigned char *m4;
+		long ur;
+
+		check(m3 != (unsigned char *)MAP_FAILED, "mmap 8K for the reuse test");
+		if (m3 != (unsigned char *)MAP_FAILED) {
+			m3[0] = 0x5a;
+			m3[8191] = 0xa5;
+			check(m3[0] == 0x5a && m3[8191] == 0xa5,
+			    "the mapping is writable end to end");
+			ur = __sys(215 /*SYS_munmap*/, (long)m3, 8192, 0, 0);
+			check(ur == 0, "munmap(8K) succeeds");
+			m4 = mmap_anon(8192);
+			check(m4 == m3,
+			    "ARENA REUSE: the same VA comes back after munmap");
+			if (m4 != (unsigned char *)MAP_FAILED) {
+				check(m4[0] == 0 && m4[8191] == 0,
+				    "the reused mapping is ZEROED (no stale data leak)");
+			}
+		}
+		/* Negative: unmapping something never mapped must fail. */
+		check(__sys(215, 0xD0000000L - 4096, 4096, 0, 0) != 0,
+		    "NEGATIVE: munmap of an unmapped VA fails");
+		check(__sys(215, 0xD0001001L, 4096, 0, 0) != 0,
+		    "NEGATIVE: munmap of a misaligned addr fails");
+	}
 }
 
 int

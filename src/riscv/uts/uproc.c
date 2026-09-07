@@ -79,6 +79,7 @@ extern unsigned long as_npages(as_t *as);
 extern void as_setbrk(as_t *as, unsigned long brk);
 extern unsigned long as_getbrk(as_t *as);
 extern unsigned long as_grow(as_t *as, unsigned long newbrk);
+extern int as_anon_unmap(as_t *as, unsigned long va, unsigned long len);
 extern unsigned long as_anon_map(as_t *as, unsigned long len);
 extern int as_copyto(as_t *as, unsigned long va, const void *src,
     unsigned long n);
@@ -2314,6 +2315,39 @@ proc_poll(unsigned long ufds, int nfds, int timeout)
 	    (unsigned long)nfds * sizeof (struct upollfd)) != 0)
 		return (-14 /* EFAULT */);
 	return ((long)nready);
+}
+
+/*
+ * munmap(addr, len) -- release an anon mapping and make its VA reusable.
+ *
+ * Previously absent, and its absence was load-bearing: the anon arena was a bump
+ * allocator, so every unmap leaked until process exit and a program that mapped
+ * and unmapped in a loop exhausted the arena. A long-running compositor resizing
+ * buffer pools does exactly that.
+ *
+ * Only the anon arena is unmappable. /dev/fb's mapping deliberately outlives
+ * close() (as_free reclaims it at exit), so pointing munmap at it returns EINVAL
+ * rather than tearing the framebuffer out from under the compositor.
+ */
+long
+proc_munmap(unsigned long addr, unsigned long len)
+{
+	proc_t *p = curproc;
+
+	if (p == 0 || p->p_as == 0)
+		return (-22 /* EINVAL */);
+	if (len == 0 || (addr & 0xfff) != 0)
+		return (-22 /* EINVAL: POSIX requires an aligned addr */);
+	if (as_anon_unmap(p->p_as, addr, len) != 0)
+		return (-22 /* EINVAL: not a range we handed out */);
+	/*
+	 * Flush now: this AS is the one currently loaded (we are in its syscall),
+	 * so stale TLB entries for the just-unmapped pages would let userland keep
+	 * touching freed pages -- a use-after-free that would look like memory
+	 * corruption far from its cause.
+	 */
+	__asm__ __volatile__("sfence.vma" ::: "memory");
+	return (0);
 }
 
 /*
