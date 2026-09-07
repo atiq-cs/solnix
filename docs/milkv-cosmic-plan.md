@@ -71,11 +71,24 @@ critical path. Measured properly in `docs/riscv64-libc-rust-abi-gap.md`, which
 > **`epoll(5)` shim**. poll(2) is what libc and those shims sit on, not what calloop calls --
 > so **event ports** join the Gate A list.
 >
-> **What a Wayland client still needs, REVISED ORDER (see the two docs above):**
-> **(1) FP context switch** -- hard blocker; every Rust binary is `lp64d` hard-float.
-> **(2) event ports / the `epoll(5)` shim** -- what `calloop` actually calls (~4 d + 1-2 d).
-> **(3) raise the 8-slot fd table** (`p_fd[8]`, and `NPOLLFD` 16) -- a compositor holds a
-> listener + 1-2 fds per client + the framebuffer, so this binds early.
+> **STATUS: (1) and (2) are DONE. (3) is now the next binding constraint.**
+>
+> **(1) FP context switch -- ✅ DONE.** `FPTEST PASS`: three concurrent hard-float processes,
+> all 32 registers + `fcsr`, across several preemptions, negative-controlled
+> (`fp_swtch_enabled=0` makes it FAIL). This was the hard blocker -- every Rust binary is
+> `lp64d` hard-float and llvmpipe is pure float math, so two processes would have corrupted
+> each other *silently*.
+>
+> **(2) event ports -- ✅ DONE.** `PORTTEST PASS 24/24` from userland: oneshot semantics (a
+> fired association does not re-fire while the fd is still readable), re-association updating
+> rather than appending, `port_send` delivered with no fd ready (calloop's wakeup), the cookie
+> round-tripping verbatim, HUP reported when only POLLIN was asked for, and a negative control
+> proving an empty fd does not report readable. Syscalls 510-514.
+>
+> **(3) raise the 8-slot fd table** (`p_fd[8]`, and `NPOLLFD` 16) -- **now the next binding
+> constraint.** A compositor holds a listener + 1-2 fds per client + the framebuffer + a port,
+> so 8 is exhausted by roughly the third client. Note the event-port association table (8 per
+> port) has the same ceiling and should be raised with it.
 > **(4) `munmap` + file-backed `mmap`** -- both need a real `seg_vn`; the anon arena is a
 > bump allocator with no reuse today.
 > **(5) threads/`pthread_create`, `dlopen`, `__tls_get_addr`.**
