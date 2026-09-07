@@ -58,7 +58,7 @@ for src in locore.S trap.S swtch.S copy.S; do
 done
 for src in sbi trap hat_riscv timer plic aia fdt cmo vm_page kmem proc as elf \
 	   syscall uart sdhci uproc unixsock virtio vioblk blkfs vionet rootfs \
-	   fp startup main; do
+	   fp port startup main; do
 	"$CC" $CFLAGS -c "$src.c" -o "$src.o"
 	KOBJS="$KOBJS $src.o"
 done
