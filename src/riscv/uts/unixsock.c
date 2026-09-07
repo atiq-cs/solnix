@@ -138,6 +138,19 @@ struct unsock {
 	int	s_refs;			/* fd references (fork/dup bump this) */
 	int	s_shutdown;		/* peer gone: reads drain then EOF */
 	/*
+	 * s_lingering -- this endpoint's owner has closed it, but its tx ring
+	 * still holds bytes (or rights) the peer has not read. The slot stays
+	 * allocated, with NO fd referring to it, purely so the reader can finish
+	 * draining. Cleared (and the slot actually freed) by the reader when the
+	 * ring empties.
+	 *
+	 * POSIX requires this: data written before a close must still be
+	 * readable. Without it, a client that writes a request and exits
+	 * immediately is silently unheard -- which is exactly how a Wayland
+	 * client behaves, and exactly the bug the integration test caught.
+	 */
+	int	s_lingering;
+	/*
 	 * tx is what THIS socket writes and the peer reads; rx is the reverse.
 	 * A connected pair shares nothing: each socket owns its own tx, and
 	 * reads out of its peer's tx. Keeping both here (rather than one shared
@@ -209,6 +222,7 @@ sock_alloc(int type)
 		socktab[i].s_bindslot = -1;
 		socktab[i].s_listening = 0;
 		socktab[i].s_peer = -1;
+		socktab[i].s_lingering = 0;
 		socktab[i].s_refs = 1;
 		socktab[i].s_shutdown = 0;
 		socktab[i].s_nbacklog = 0;
@@ -555,6 +569,22 @@ unsock_recv(int si, char *ubuf, unsigned long n, int *outfds, int *noutfds)
 			break;
 		if (d->d_nscm > 0)
 			break;			/* rights with no payload bytes */
+		/*
+		 * Drained a lingering peer: now the slot can really go, and only
+		 * now is this EOF. Freeing it here (rather than in close) is what
+		 * makes "write then exit" work.
+		 */
+		{
+			struct unsock *lp = sock_at(s->s_peer);
+
+			if (lp != 0 && lp->s_lingering) {
+				lp->s_lingering = 0;
+				lp->s_used = 0;
+				s->s_peer = -1;
+				s->s_shutdown = 1;
+				return (0);	/* EOF, after a full drain */
+			}
+		}
 		if (s->s_shutdown || sock_at(s->s_peer) == 0)
 			return (0);		/* EOF */
 		sleep_on(d);
@@ -666,6 +696,23 @@ unsock_close(int si)
 
 	/* Last reference: tell the peer, release the name, wake every waiter. */
 	p = sock_at(s->s_peer);
+
+	/*
+	 * If our tx still holds unread bytes or rights AND the peer is still
+	 * around to read them, do not tear this endpoint down: mark it lingering
+	 * so the ring outlives the descriptor. This is the cheap version of the
+	 * "refcounted ring that outlives the endpoint" upgrade the recv path
+	 * documents -- the ring already lives in the slot, so keeping the slot is
+	 * enough, without a separate refcounted object.
+	 */
+	if (p != 0 && (s->s_tx.d_wpos > s->s_tx.d_rpos || s->s_tx.d_nscm > 0)) {
+		s->s_refs = 0;
+		s->s_lingering = 1;
+		p->s_shutdown = 1;	/* reader drains, THEN sees EOF */
+		wakeup(&s->s_tx);
+		wakeup(p);
+		return;
+	}
 	/*
 	 * Any rights still queued in OUR tx were never received. Drop them so the
 	 * objects they hold are not leaked for the life of the boot.

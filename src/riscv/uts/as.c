@@ -496,12 +496,38 @@ as_grow(as_t *as, unsigned long newbrk)
  * root) of `as` and free the as_t. Called on proc_exit teardown. Must not run
  * while `as` is the active satp (switch to the kernel AS first).
  */
+/*
+ * The /dev/fb device window. Kept in sync with fb.c's FB_MMAP_BASE and the
+ * address-space map comment above.
+ */
+#define	FB_DEV_VA_BASE	0xC4000000UL
+#define	FB_DEV_VA_END	(FB_DEV_VA_BASE + 0x800000UL)	/* <= 8 MiB */
+
 static void
 as_free_leaf(void *arg, unsigned long va, unsigned long pa, unsigned long perm)
 {
 	(void) arg;
-	(void) va;
 	(void) perm;
+
+	/*
+	 * DO NOT free the framebuffer. Those pages are the scanout hardware
+	 * window, not memory this address space owns: they are mapped into every
+	 * process that opened /dev/fb, and page_free()ing them at one process's
+	 * exit hands live display memory back to the page allocator, where it is
+	 * promptly reused. The surviving mapper then store-faults on its own
+	 * framebuffer.
+	 *
+	 * Found by the compositor-shaped integration test, and only findable
+	 * there: it needs a process that maps /dev/fb, forks, has the child exit,
+	 * and then keeps painting. No per-feature gate does all four, which is
+	 * precisely the argument for having an integration test at all.
+	 *
+	 * (My first theory was COW-marking at fork. Wrong: the fault lands after
+	 * the CHILD EXITS, which points at teardown rather than at fork.)
+	 */
+	if (va >= FB_DEV_VA_BASE && va < FB_DEV_VA_END)
+		return;
+
 	page_free(pa);
 }
 

@@ -35,6 +35,23 @@
 #include "sbi.h"
 #include "riscv_regs.h"
 
+/*
+ * The /dev/fb device window, which must NEVER be copy-on-write shared.
+ *
+ * COW assumes a page is ORDINARY MEMORY whose contents can be duplicated on
+ * write. A framebuffer is neither: it is a window onto the scanout hardware, so
+ * "privatising" it would give the writer a copy that the display never reads,
+ * and marking it read-only makes the owner's next paint store-fault. That is
+ * exactly what happened -- a store fault at 0xc4000000 in the parent right after
+ * fork, found by the integration test rather than by any per-feature gate,
+ * because only a compositor-shaped test both forks AND paints.
+ *
+ * Kept in sync with fb.c's FB_MMAP_BASE and the as.c address-space map comment.
+ */
+#define	FB_DEV_VA_BASE	0xC4000000UL
+#define	FB_DEV_VA_END	(FB_DEV_VA_BASE + 0x800000UL)	/* <= 8 MiB */
+
+
 /* Kernel image bounds from the linker script (riscv.ld). */
 extern char _start[];
 extern char __bss_end[];
@@ -657,6 +674,17 @@ hat_as_cow_share(unsigned long dstroot, unsigned long srcroot)
 				va = ((unsigned long)i2 << 30) |
 				    ((unsigned long)i1 << 21) |
 				    ((unsigned long)i0 << 12);
+				/*
+				 * Device mappings are NOT COW-able (see FB_DEV_VA_BASE). COW assumes a
+				 * page is ordinary memory whose contents can be duplicated on write; a
+				 * framebuffer is a window onto the scanout hardware, so privatising it
+				 * would hand the writer pixels the display never reads, and marking it
+				 * read-only makes the owner's next paint store-fault. Leave it writable
+				 * in BOTH address spaces -- sharing the real scanout window is the
+				 * correct semantics, since both processes mean to see the same pixels.
+				 */
+				if (va >= FB_DEV_VA_BASE && va < FB_DEV_VA_END)
+					continue;
 				pa = PTE_TO_PA(pte);
 				perm = pte & PTE_RWX;
 
@@ -897,3 +925,4 @@ hat_highva_prove(void)
 	    "  MATCH -> high-VA translation verified\n" :
 	    "  MISMATCH -> high-VA map BROKEN\n");
 }
+

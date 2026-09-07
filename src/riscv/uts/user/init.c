@@ -487,6 +487,40 @@ poll_gate(void)
 }
 
 /*
+ * miniwl_gate -- the INTEGRATION gate. Every other gate proves one subsystem in
+ * isolation; this one proves they work together in the shape smallvil uses them:
+ * a client request arrives over a UNIX socket, is delivered by an event port, and
+ * CAUSES a frame to be painted to /dev/fb, with a nanosleep frame timer and a
+ * munmap/reuse cycle in the same process. Interaction bugs live here and nowhere
+ * a per-feature test can see them.
+ *
+ * Run LAST, after the individual gates: if a subsystem is broken on its own, its
+ * own gate should be what says so, not this.
+ */
+static void
+miniwl_gate(void)
+{
+	int pid, st = 0;
+
+	puts("\n--- gate: INTEGRATION (socket + port + timer + framebuffer) ---\n");
+	pid = fork();
+	if (pid == 0) {
+		char *av[2];
+
+		av[0] = "miniwl";
+		av[1] = 0;
+		execve("/bin/miniwl", av, 0);
+		puts("miniwl: exec /bin/miniwl FAILED\n");
+		_exit(1);
+	}
+	if (pid < 0) {
+		puts("miniwl: fork FAILED\n");
+		return;
+	}
+	waitpid(pid, &st, 0);
+}
+
+/*
  * port_gate -- run /bin/porttest, the event-ports proof. Event ports are what
  * calloop actually uses on illumos, so this is the interface a compositor's event
  * loop will sit on; poll(2) is necessary but not what any crate in that stack
@@ -684,6 +718,7 @@ main(int argc, char **argv)
 	 * silently on a boot with no display device: open(/dev/fb) returns ENXIO,
 	 * fbtest says so, and init carries on to the console. */
 	scanout_gate();
+	miniwl_gate();
 
 	printf("\n[R-P12] milestones reached; console login (passwd) follows\n");
 	login_console();	/* gate 3: /etc/passwd login; does not return */

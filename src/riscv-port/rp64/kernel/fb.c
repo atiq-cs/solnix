@@ -63,6 +63,7 @@ extern void kputhex(unsigned long v);
 #define	EINVAL		22
 #define	ENOTSUP		48
 #define	ENXIO		6
+#define	ENOMEM		12
 
 /*
  * FB_MMAP_BASE -- the fixed user VA the framebuffer mapping lands at.
@@ -94,7 +95,44 @@ typedef enum fb_backend {
 
 static fb_backend_t fb_backend;
 static int fb_opens;			/* open reference count */
-static unsigned long fb_user_va;	/* current user mapping VA, 0 = none */
+/*
+ * The user VA the framebuffer is mapped at, PER ADDRESS SPACE.
+ *
+ * ⚠️ This was a single global, which made the "already mapped" short-circuit in
+ * fb_mmap process-BLIND: once ANY process had mapped /dev/fb, every later
+ * process got the VA handed back with no PTE ever installed in ITS address
+ * space, and store-faulted on its first paint. The single-process gate never saw
+ * it because it was the first mapper; the integration test found it immediately
+ * by being the SECOND.
+ *
+ * Keyed by AS root (satp PPN base), which is what fb_mmap is already given.
+ */
+#define	FB_MAX_MAPPERS	8
+static unsigned long fb_map_root[FB_MAX_MAPPERS];
+static unsigned long fb_map_va[FB_MAX_MAPPERS];
+
+/*
+ * Return this AS's framebuffer VA, or 0 if it has none. `slot` (may be NULL) is
+ * set to a free slot when the AS is not found, or -1 if the table is full.
+ */
+static unsigned long
+fb_va_for_root(unsigned long root, int *slot)
+{
+	int i, free = -1;
+
+	for (i = 0; i < FB_MAX_MAPPERS; i++) {
+		if (fb_map_root[i] == root && fb_map_va[i] != 0) {
+			if (slot != 0)
+				*slot = i;
+			return (fb_map_va[i]);
+		}
+		if (free < 0 && fb_map_va[i] == 0)
+			free = i;
+	}
+	if (slot != 0)
+		*slot = free;
+	return (0);
+}
 
 /* Per-frame accounting, so the boot log can show the seam actually carried
  * frames rather than merely initializing. */
@@ -112,7 +150,14 @@ fb_init(void)
 {
 	fb_backend = FB_BACKEND_NONE;
 	fb_opens = 0;
-	fb_user_va = 0;
+	{
+		int i;
+
+		for (i = 0; i < FB_MAX_MAPPERS; i++) {
+			fb_map_root[i] = 0;
+			fb_map_va[i] = 0;
+		}
+	}
 	fb_flush_count = 0;
 	fb_flush_pixels = 0;
 
@@ -314,6 +359,7 @@ fb_ioctl(int cmd, unsigned long arg)
 long
 fb_mmap(unsigned long root, unsigned long len)
 {
+	int slot = -1;
 	unsigned long fbsize, pa, va, off;
 
 	if (fb_backend == FB_BACKEND_NONE)
@@ -327,8 +373,14 @@ fb_mmap(unsigned long root, unsigned long len)
 	if (len > fbsize)
 		return (-EINVAL);		/* would run off the buffer */
 
-	if (fb_user_va != 0)
-		return ((long)fb_user_va);	/* already mapped */
+	/*
+	 * Already mapped IN THIS ADDRESS SPACE? Only then is returning the VA
+	 * without installing PTEs correct.
+	 */
+	if ((va = fb_va_for_root(root, &slot)) != 0)
+		return ((long)va);
+	if (slot < 0)
+		return (-ENOMEM);	/* too many concurrent mappers */
 
 	pa = virtio_gpu_fb_pa();
 	if ((pa & (PAGESIZE - 1)) != 0)
@@ -346,7 +398,8 @@ fb_mmap(unsigned long root, unsigned long len)
 	 */
 	__asm__ __volatile__("sfence.vma" ::: "memory");
 
-	fb_user_va = va;
+	fb_map_root[slot] = root;
+	fb_map_va[slot] = va;
 
 	sbi_console_puts("[fb] mmap: ");
 	kputdec(len >> 10);
