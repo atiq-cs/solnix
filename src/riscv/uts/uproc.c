@@ -2342,6 +2342,70 @@ proc_poll(unsigned long ufds, int nfds, int timeout)
 }
 
 /*
+ * nanosleep(&req, &rem) -- suspend for at least req, then report any remainder.
+ *
+ * WHY THIS MATTERS BEYOND sleep(1). Rust's thread::sleep goes through it, and so
+ * does every event loop that arms a timer: calloop's Timer sources are what this
+ * project's own illumos dispatch patches lean on (the calloop-wayland-source and
+ * cosmic-panel timer-dispatch fixes both replaced a broken FD-readiness path with
+ * a periodic Timer). A compositor with no working sleep busy-waits instead.
+ *
+ * It is also a librt symbol, which on illumos is a whole-library FILTER over
+ * libc -- librt has zero objects, so every one of its 75 symbols must ultimately
+ * live in libc. This is one of them.
+ *
+ * Deadline-based rather than tick-counting, matching proc_poll: counting ticks
+ * accumulates error on every early wakeup, whereas re-checking gethrtime() against
+ * a fixed deadline is self-correcting. thread_yield() rather than a spin so other
+ * threads actually run -- the whole point of sleeping.
+ */
+long
+proc_nanosleep(unsigned long ureq, unsigned long urem)
+{
+	struct {
+		long tv_sec;
+		long tv_nsec;
+	} req;
+	unsigned long deadline, now;
+
+	if (ureq == 0)
+		return (-22 /* EINVAL */);
+	if (copyin((void *)ureq, &req, sizeof (req)) != 0)
+		return (-14 /* EFAULT */);
+	/*
+	 * POSIX: tv_nsec must be in [0, 1e9). Reject rather than normalising, so
+	 * a caller passing 2e9 ns learns it was wrong instead of silently
+	 * sleeping a different length of time than it asked for.
+	 */
+	if (req.tv_sec < 0 || req.tv_nsec < 0 || req.tv_nsec >= 1000000000L)
+		return (-22 /* EINVAL */);
+
+	deadline = gethrtime() + (unsigned long)req.tv_sec * 1000000000UL +
+	    (unsigned long)req.tv_nsec;
+
+	while ((now = gethrtime()) < deadline)
+		thread_yield();
+
+	/*
+	 * We only return when the deadline has passed, so the remainder is always
+	 * zero. It is still written when asked for: a caller that loops on
+	 * `while (nanosleep(&req, &req))` after a signal would otherwise re-read
+	 * its ORIGINAL request and sleep twice. (Signals cannot interrupt this
+	 * yet -- when they can, this is where the true remainder goes.)
+	 */
+	if (urem != 0) {
+		struct {
+			long tv_sec;
+			long tv_nsec;
+		} rem = { 0, 0 };
+
+		if (copyout(&rem, (void *)urem, sizeof (rem)) != 0)
+			return (-14 /* EFAULT */);
+	}
+	return (0);
+}
+
+/*
  * munmap(addr, len) -- release an anon mapping and make its VA reusable.
  *
  * Previously absent, and its absence was load-bearing: the anon arena was a bump

@@ -241,6 +241,45 @@ main(int argc, char **argv)
 	close(p);
 
 	/*
+	 * nanosleep. The check that matters is the ELAPSED TIME, not the return
+	 * code: a nanosleep that returns 0 immediately would pass any
+	 * status-only test while leaving every timer-driven event loop
+	 * busy-waiting. Measured against clock_gettime, with a generous upper
+	 * bound because this is a 100 Hz cooperative scheduler under QEMU.
+	 */
+	{
+		struct timespec_ { long tv_sec; long tv_nsec; } req, rem, t0, t1;
+		long ns;
+
+		/* CLOCK_MONOTONIC=4 on illumos; boot-relative here, which is fine
+		 * for measuring an interval. */
+		__sys(113 /*clock_gettime*/, 4, (long)&t0, 0, 0);
+		req.tv_sec = 0; req.tv_nsec = 150000000L;	/* 150 ms */
+		rem.tv_sec = -1; rem.tv_nsec = -1;
+		check(__sys(101 /*nanosleep*/, (long)&req, (long)&rem, 0, 0) == 0,
+		    "nanosleep(150ms) returns 0");
+		__sys(113, 4, (long)&t1, 0, 0);
+		ns = (t1.tv_sec - t0.tv_sec) * 1000000000L +
+		    (t1.tv_nsec - t0.tv_nsec);
+		check(ns >= 150000000L,
+		    "nanosleep actually SLEPT >= the requested 150 ms");
+		/* This libc's printf handles %d/%u/%x/%s only -- no %ld -- so cast
+		 * rather than silently printing the format string. */
+		printf("  (measured %d ms for a 150 ms request)\n",
+		    (int)(ns / 1000000L));
+		check(rem.tv_sec == 0 && rem.tv_nsec == 0,
+		    "the remainder is written and zero on a full sleep");
+
+		/* POSIX: tv_nsec >= 1e9 is EINVAL, not silently normalised. */
+		req.tv_sec = 0; req.tv_nsec = 2000000000L;
+		check(__sys(101, (long)&req, 0, 0, 0) != 0,
+		    "NEGATIVE: nanosleep with tv_nsec >= 1e9 is refused");
+		req.tv_sec = -1; req.tv_nsec = 0;
+		check(__sys(101, (long)&req, 0, 0, 0) != 0,
+		    "NEGATIVE: nanosleep with a negative tv_sec is refused");
+	}
+
+	/*
 	 * AT_SUN_EXECNAME + PSET_INFO. Both are "survivable" gaps per the ABI
 	 * study -- getexecname and available_parallelism degrade rather than
 	 * crash -- but both are one kernel slot each, and a wrong CPU count is

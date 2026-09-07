@@ -130,6 +130,7 @@ extern long copyout(const void *kaddr, void *uaddr, unsigned long n);
  * Rust's available_parallelism() -- asks for the online-CPU count. Only PSET_INFO
  * is implemented; other subcodes return EINVAL rather than a plausible lie.
  */
+#define	SYS_nanosleep	101
 #define	SYS_pset	207
 #define	PSET_INFO	3
 /*
@@ -173,6 +174,7 @@ extern long copyout(const void *kaddr, void *uaddr, unsigned long n);
  * equivalent syscalls to borrow numbers from -- these are illumos-specific, and
  * they are what calloop actually calls on this platform (see uts/port.c).
  */
+extern long proc_nanosleep(unsigned long ureq, unsigned long urem);
 extern long proc_munmap(unsigned long addr, unsigned long len);
 extern long proc_port_create(void);
 extern long proc_port_associate(int pfd, int source, int object, int events,
@@ -366,6 +368,10 @@ syscall_trap(struct regs *tf)
 		} else {
 			ret = proc_mmap((int)tf->r_a4, tf->r_a1);
 		}
+		break;
+	case SYS_nanosleep:
+		/* a0=const struct timespec *req, a1=struct timespec *rem. */
+		ret = proc_nanosleep(tf->r_a0, tf->r_a1);
 		break;
 	case SYS_pset: {
 		/*
