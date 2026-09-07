@@ -68,7 +68,7 @@ first, which makes the gap more visible than 47/340 suggests.
   `hermetic_closure=y` in the registry were established at build time and are not
   invalidated by a missing binary artifact.
 * It **is** a claim that the cache cannot currently satisfy them, so a user on a
-  fresh machine would have to rebuild those 47 from source — and for the 8 phantoms
+  fresh machine would have to rebuild those 47 from source — and for the 7 phantoms
   would hit a substitution failure rather than a clean fallback.
 
 ## Recommended repair, in order
