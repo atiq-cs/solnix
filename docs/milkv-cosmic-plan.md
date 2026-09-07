@@ -85,10 +85,11 @@ critical path. Measured properly in `docs/riscv64-libc-rust-abi-gap.md`, which
 > round-tripping verbatim, HUP reported when only POLLIN was asked for, and a negative control
 > proving an empty fd does not report readable. Syscalls 510-514.
 >
-> **(3) raise the 8-slot fd table** (`p_fd[8]`, and `NPOLLFD` 16) -- **now the next binding
-> constraint.** A compositor holds a listener + 1-2 fds per client + the framebuffer + a port,
-> so 8 is exhausted by roughly the third client. Note the event-port association table (8 per
-> port) has the same ceiling and should be raised with it.
+> **(3) raise the 8-slot fd table -- ✅ DONE.** `NOFILE=32` (was 8), with `PORT_NASSOC` 32,
+> `PORT_NPORT` 8 and `NPOLLFD` now *tracking* NOFILE rather than being an independent 16 --
+> otherwise raising one just moves the ceiling to the next table. All ~24 hardcoded bounds
+> converted to the name, verified zero literals left. Costs checked: ~256 B of stack for
+> `kfds[NPOLLFD]` against an 8 KB thread stack, and ~576 B of heap per `proc_t`. 4/4 boots.
 > **(4) `munmap` + file-backed `mmap`** -- both need a real `seg_vn`; the anon arena is a
 > bump allocator with no reuse today.
 > **(5) threads/`pthread_create`, `dlopen`, `__tls_get_addr`.**
