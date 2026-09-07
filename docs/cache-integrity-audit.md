@@ -101,3 +101,28 @@ part that matters — collapsing them hides the mode that actually breaks client
 (7) or `narinfo_404` (40). Sorted so the phantoms come first, since those are the
 ones that break a client rather than merely slow it down. The `out_path` column is
 what a re-publish needs, so repair is mechanical if any host still holds the paths.
+
+## Repair feasibility, checked against a live host
+
+I checked the 7 phantom store paths against `dixi` (the one running solnix box, with
+a 19-path store):
+
+| phantom | on dixi? |
+|---|---|
+| `coreutils` (`3wlwvk71…`) | **present** — `/nix/store/3wlwvk71i6dfwiq63kdakq02fig8m68p-coreutils` |
+| the other 6 | absent |
+
+So **1 of 7 is repairable by re-upload today**; the rest need either another host
+that still holds them or a rebuild from the derivation. That is worth knowing before
+planning the repair: item (2) in the order below is *not* uniformly mechanical.
+
+Note what this also implies about durability. These paths were built on machines in
+accounts that have since closed (three of them), and the binary artifacts went with
+them — the same failure class as `docs/durability-account-loss.md`, but for *cache
+contents* rather than build environments. The registry rows survived because they are
+in git; the NARs did not because they were only ever in a bucket.
+
+The generalisable fix is the one already listed as item (3): **verify fetchability at
+publish time**. A path that is never confirmed retrievable is not really published,
+and discovering that months later — after the machine that could have re-uploaded it
+is gone — is exactly what happened here.
