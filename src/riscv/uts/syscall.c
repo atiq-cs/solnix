@@ -161,6 +161,24 @@ extern long copyout(const void *kaddr, void *uaddr, unsigned long n);
 /* solnix-private: invalidate the block cache + re-mount the on-disk FS. */
 #define	SYS_remount	502
 /*
+ * Event ports. Numbered in the solnix-private range because Linux has no
+ * equivalent syscalls to borrow numbers from -- these are illumos-specific, and
+ * they are what calloop actually calls on this platform (see uts/port.c).
+ */
+extern long proc_port_create(void);
+extern long proc_port_associate(int pfd, int source, int object, int events,
+    unsigned long user);
+extern long proc_port_dissociate(int pfd, int source, int object);
+extern long proc_port_getn(int pfd, unsigned long ulist, int max,
+    unsigned long unp, int timeout);
+extern long proc_port_send(int pfd, unsigned long user);
+
+#define	SYS_port_create		510
+#define	SYS_port_associate	511
+#define	SYS_port_dissociate	512
+#define	SYS_port_getn		513
+#define	SYS_port_send		514
+/*
  * AF_UNIX sockets. The numbers follow the riscv Linux ABI (as every other
  * syscall here does) so a freestanding userland stub links unchanged.
  * sendmsg/recvmsg deliberately take a FLAT fd array rather than a struct msghdr
@@ -339,6 +357,26 @@ syscall_trap(struct regs *tf)
 		} else {
 			ret = proc_mmap((int)tf->r_a4, tf->r_a1);
 		}
+		break;
+	case SYS_port_create:
+		ret = proc_port_create();
+		break;
+	case SYS_port_associate:
+		/* a0=port fd, a1=source, a2=object fd, a3=events, a4=user cookie. */
+		ret = proc_port_associate((int)tf->r_a0, (int)tf->r_a1,
+		    (int)tf->r_a2, (int)tf->r_a3, tf->r_a4);
+		break;
+	case SYS_port_dissociate:
+		ret = proc_port_dissociate((int)tf->r_a0, (int)tf->r_a1,
+		    (int)tf->r_a2);
+		break;
+	case SYS_port_getn:
+		/* a0=port fd, a1=port_event[], a2=max, a3=&n, a4=timeout ms. */
+		ret = proc_port_getn((int)tf->r_a0, tf->r_a1, (int)tf->r_a2,
+		    tf->r_a3, (int)tf->r_a4);
+		break;
+	case SYS_port_send:
+		ret = proc_port_send((int)tf->r_a0, tf->r_a1);
 		break;
 	case SYS_poll:
 		/* a0=struct pollfd *, a1=nfds, a2=timeout in ms (-1 = block). */

@@ -44,6 +44,7 @@
 #include "riscv_regs.h"
 #include "regs.h"
 #include "fp.h"
+#include "port.h"
 
 extern void kputhex(unsigned long v);
 extern void kputdec(unsigned long v);
@@ -422,6 +423,7 @@ typedef struct proc {
 		int		fd_pipe_w;	/* 1 = write end, 0 = read end */
 		int		fd_fb;		/* 1 = the /dev/fb scanout node */
 		int		fd_sock;	/* AF_UNIX socket index, else -1 */
+		int		fd_port;	/* event-port index, else -1 */
 	} p_fd[8];
 } proc_t;
 
@@ -467,6 +469,7 @@ proc_alloc(void)
 				p->p_fd[k].fd_snfs = -1;
 				p->p_fd[k].fd_pipe = -1;
 				p->p_fd[k].fd_sock = -1;
+				p->p_fd[k].fd_port = -1;
 				p->p_fd[k].fd_fb = 0;
 			}
 			return (p);
@@ -564,6 +567,7 @@ proc_open(const char *path)
 			p->p_fd[fd].fd_snfs = -1;
 			p->p_fd[fd].fd_pipe = -1;
 			p->p_fd[fd].fd_sock = -1;
+		p->p_fd[fd].fd_port = -1;
 			return (fd);
 		}
 	}
@@ -649,9 +653,19 @@ proc_close(int fd)
 	 * down (and its peer told, so a blocked reader sees EOF rather than hanging)
 	 * only when the last descriptor referring to it goes away.
 	 */
+	/*
+	 * Releasing a port on close matters more than it looks: the port table is
+	 * fixed at four, so a leaked port permanently costs a compositor one of
+	 * the handles it needs.
+	 */
+	if (p->p_fd[fd].fd_port >= 0) {
+		port_free(p->p_fd[fd].fd_port);
+		p->p_fd[fd].fd_port = -1;
+	}
 	if (p->p_fd[fd].fd_sock >= 0) {
 		unsock_close(p->p_fd[fd].fd_sock);
 		p->p_fd[fd].fd_sock = -1;
+		p->p_fd[fd].fd_port = -1;
 	}
 	/* The scanout node: drop the driver's open reference.  The user mapping
 	 * deliberately outlives close (as_free reclaims it at exit), which is what
@@ -664,6 +678,7 @@ proc_close(int fd)
 	p->p_fd[fd].fd_snfs = -1;
 	p->p_fd[fd].fd_pipe = -1;
 	p->p_fd[fd].fd_sock = -1;
+		p->p_fd[fd].fd_port = -1;
 	return (0);
 }
 
@@ -756,6 +771,7 @@ load_elf_into(proc_t *p, const char *path, const void *img, unsigned long len,
 		p->p_fd[i].fd_snfs = -1;
 		p->p_fd[i].fd_pipe = -1;
 		p->p_fd[i].fd_sock = -1;
+		p->p_fd[i].fd_port = -1;
 		p->p_fd[i].fd_fb = 0;
 	}
 	/* R-P11: exec resets caught signals to default (POSIX); ignored stay
@@ -1525,6 +1541,7 @@ proc_openat_w(const char *path, int flags)
 				p->p_fd[fd].fd_snfs = -1;
 				p->p_fd[fd].fd_pipe = -1;
 				p->p_fd[fd].fd_sock = -1;
+		p->p_fd[fd].fd_port = -1;
 				return (fd);
 			}
 		}
@@ -1559,6 +1576,7 @@ proc_openat_w(const char *path, int flags)
 			p->p_fd[fd].fd_snfs = -1;
 			p->p_fd[fd].fd_pipe = -1;
 			p->p_fd[fd].fd_sock = -1;
+		p->p_fd[fd].fd_port = -1;
 			return (fd);
 		}
 	}
@@ -1929,6 +1947,7 @@ proc_openat_snfs(const char *kpath, int flags)
 			p->p_fd[fd].fd_snfs = slot;
 			p->p_fd[fd].fd_pipe = -1;
 			p->p_fd[fd].fd_sock = -1;
+		p->p_fd[fd].fd_port = -1;
 			p->p_fd[fd].fd_wnode = 0;
 			p->p_fd[fd].fd_len = len;
 			p->p_fd[fd].fd_pos = 0;
@@ -2274,6 +2293,184 @@ proc_poll(unsigned long ufds, int nfds, int timeout)
 	    (unsigned long)nfds * sizeof (struct upollfd)) != 0)
 		return (-14 /* EFAULT */);
 	return ((long)nready);
+}
+
+/*
+ * ------------------------------------------------------------------
+ * Event ports (illumos port_create/associate/dissociate/getn/send).
+ *
+ * This is what calloop actually uses on illumos -- see port.c for the traced
+ * dependency chain and why poll(2) alone is not sufficient. These wrappers do
+ * the userland-facing work (fd allocation, copyin/copyout, blocking) and defer
+ * the port bookkeeping to port.c, which knows nothing about proc_t.
+ * ------------------------------------------------------------------
+ */
+
+/* fd_ready with the void* signature port_scan takes, so port.c stays proc-free. */
+static int
+port_ready_cb(void *owner, int fd)
+{
+	return (fd_ready((proc_t *)owner, fd));
+}
+
+/*
+ * port_create() -> a new fd. The fd is the handle userland holds; the port index
+ * lives in fd_port, exactly as a socket index lives in fd_sock.
+ */
+long
+proc_port_create(void)
+{
+	proc_t *p = curproc;
+	int fd, port;
+
+	if (p == 0)
+		return (-22 /* EINVAL */);
+	for (fd = 0; fd < 8; fd++)
+		if (!p->p_fd[fd].fd_used)
+			break;
+	if (fd == 8)
+		return (-24 /* EMFILE */);
+
+	port = port_alloc(p);
+	if (port < 0)
+		return (-23 /* ENFILE: no free port objects */);
+
+	p->p_fd[fd].fd_used = 1;
+	p->p_fd[fd].fd_snfs = -1;
+	p->p_fd[fd].fd_pipe = -1;
+	p->p_fd[fd].fd_sock = -1;
+	p->p_fd[fd].fd_fb = 0;
+	p->p_fd[fd].fd_port = port;
+	return (fd);
+}
+
+/* Resolve an fd to its port index, or -1 if it is not a port. */
+static int
+fd_to_port(proc_t *p, int fd)
+{
+	if (p == 0 || fd < 0 || fd >= 8 || !p->p_fd[fd].fd_used)
+		return (-1);
+	return (p->p_fd[fd].fd_port);
+}
+
+/*
+ * port_associate(port_fd, source, object, events, user).
+ *
+ * Only PORT_SOURCE_FD is accepted. Anything else returns EINVAL rather than
+ * being silently ignored: a consumer that asked to watch a timer and got no
+ * error would wait forever on an event that can never arrive.
+ */
+long
+proc_port_associate(int pfd, int source, int object, int events,
+    unsigned long user)
+{
+	proc_t *p = curproc;
+	int port = fd_to_port(p, pfd);
+
+	if (port < 0)
+		return (-9 /* EBADF */);
+	if (source != PORT_SOURCE_FD)
+		return (-22 /* EINVAL: only fd sources are implemented */);
+	if (object < 0 || object >= 8 || !p->p_fd[object].fd_used)
+		return (-9 /* EBADF: the watched fd */);
+	if (port_assoc_add(port, object, events, user) != 0)
+		return (-28 /* ENOSPC: association table full */);
+	return (0);
+}
+
+/*
+ * port_dissociate(port_fd, source, object). Absent is deliberately NOT an error
+ * -- see port.c: a oneshot association may have fired and removed itself between
+ * the consumer deciding to drop it and doing so, and `polling` tolerates ENOENT.
+ */
+long
+proc_port_dissociate(int pfd, int source, int object)
+{
+	proc_t *p = curproc;
+	int port = fd_to_port(p, pfd);
+
+	if (port < 0)
+		return (-9 /* EBADF */);
+	if (source != PORT_SOURCE_FD)
+		return (-22 /* EINVAL */);
+	(void) port_assoc_del(port, object);
+	return (0);
+}
+
+/*
+ * port_getn(port_fd, list, max, &n, timeout_ms).
+ *
+ * Blocking semantics deliberately match proc_poll's, which are already proven to
+ * actually block (a 200 ms request measured 203 ms) rather than spin: timeout 0
+ * polls once, >0 waits until a deadline computed from gethrtime(), <0 blocks.
+ *
+ * timeout is milliseconds here rather than illumos's timespec, because that is
+ * the shape rustix passes down and translating it twice would only add a place
+ * to get it wrong.
+ */
+long
+proc_port_getn(int pfd, unsigned long ulist, int max, unsigned long unp,
+    int timeout)
+{
+	proc_t *p = curproc;
+	int port = fd_to_port(p, pfd);
+	port_event_t ev[8];
+	unsigned long deadline = 0;
+	int n, i;
+
+	if (port < 0)
+		return (-9 /* EBADF */);
+	if (max <= 0 || ulist == 0)
+		return (-22 /* EINVAL */);
+	if (max > 8)
+		max = 8;		/* the on-stack batch bound */
+
+	if (timeout > 0)
+		deadline = gethrtime() + (unsigned long)timeout * 1000000UL;
+
+	for (;;) {
+		n = port_scan(port, ev, max, port_ready_cb);
+		if (n < 0)
+			return (-9 /* EBADF */);
+		if (n > 0)
+			break;
+		if (timeout == 0)
+			break;			/* poll once and report zero */
+		if (timeout > 0 && gethrtime() >= deadline)
+			break;			/* timed out: n stays 0 */
+		thread_yield();
+	}
+
+	for (i = 0; i < n; i++) {
+		if (copyout(&ev[i], (void *)(ulist +
+		    (unsigned long)i * sizeof (ev[0])), sizeof (ev[0])) != 0)
+			return (-14 /* EFAULT */);
+	}
+	if (unp != 0) {
+		unsigned int un = (unsigned int)n;
+
+		if (copyout(&un, (void *)unp, sizeof (un)) != 0)
+			return (-14 /* EFAULT */);
+	}
+	return (0);
+}
+
+/*
+ * port_send(port_fd, events, user) -- queue a user event. This is calloop's
+ * Ping/LoopSignal wakeup, so it is not optional; port_scan drains user events
+ * ahead of the fd scan so a wakeup wins even when no fd is ready.
+ */
+long
+proc_port_send(int pfd, unsigned long user)
+{
+	proc_t *p = curproc;
+	int port = fd_to_port(p, pfd);
+
+	if (port < 0)
+		return (-9 /* EBADF */);
+	if (port_user_send(port, user) != 0)
+		return (-11 /* EAGAIN: user-event queue full */);
+	return (0);
 }
 
 /*
