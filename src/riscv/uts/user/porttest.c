@@ -240,6 +240,28 @@ main(int argc, char **argv)
 	close(sv[0]);
 	close(p);
 
+	/*
+	 * AT_SUN_EXECNAME + PSET_INFO. Both are "survivable" gaps per the ABI
+	 * study -- getexecname and available_parallelism degrade rather than
+	 * crash -- but both are one kernel slot each, and a wrong CPU count is
+	 * worse than an absent one: callers size thread pools from it.
+	 */
+	{
+		unsigned int nc = 0;
+		long r2;
+
+		/* SYS_pset(207), PSET_INFO=3: a3 = &numcpus. */
+		r2 = __sys6(207, 3, 0, 0, (long)&nc, 0, 0);
+		check(r2 == 0, "pset_info(PSET_INFO) succeeds");
+		check(nc >= 1 && nc <= 8,
+		    "the reported CPU count is sane (1..MAXCPU, not 0)");
+		printf("  (online CPUs reported: %u)\n", nc);
+
+		/* Wrong subcode must be refused, not answered with a guess. */
+		check(__sys6(207, 99, 0, 0, (long)&nc, 0, 0) != 0,
+		    "NEGATIVE: an unimplemented pset subcode is refused");
+	}
+
 	printf("%d checks, %d failed\n", checks, bad);
 	if (bad == 0)
 		printf("PORTTEST PASS: event ports usable by a compositor loop\n");

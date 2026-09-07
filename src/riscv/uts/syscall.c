@@ -126,6 +126,13 @@ extern long copyout(const void *kaddr, void *uaddr, unsigned long n);
 #define	SYS_mmap	222
 #define	SYS_munmap	215
 /*
+ * SYS_pset(207) with the PSET_INFO subcode is how libc's pset_info(3C) -- and so
+ * Rust's available_parallelism() -- asks for the online-CPU count. Only PSET_INFO
+ * is implemented; other subcodes return EINVAL rather than a plausible lie.
+ */
+#define	SYS_pset	207
+#define	PSET_INFO	3
+/*
  * poll(2). The riscv Linux ABI has no plain `poll` slot -- only ppoll (73) --
  * so we take 73 with poll(2)'s ARGUMENT SHAPE (a2 = timeout in milliseconds,
  * negative = block forever) rather than ppoll's timespec + sigmask. That is the
@@ -360,6 +367,27 @@ syscall_trap(struct regs *tf)
 			ret = proc_mmap((int)tf->r_a4, tf->r_a1);
 		}
 		break;
+	case SYS_pset: {
+		/*
+		 * a0=subcode, a1=psetid, a2=&type, a3=&numcpus, a4=cpulist.
+		 * We report the whole machine as the single default pset: this
+		 * kernel has no processor-set support, and saying "one set
+		 * containing every online CPU" is true rather than a stub.
+		 */
+		extern int cpu_ncpu_online(void);
+		unsigned int nc;
+
+		if ((int)tf->r_a0 != PSET_INFO) {
+			ret = -22 /* EINVAL */;
+			break;
+		}
+		nc = (unsigned int)cpu_ncpu_online();
+		ret = 0;
+		if (tf->r_a3 != 0 &&
+		    copyout(&nc, (void *)tf->r_a3, sizeof (nc)) != 0)
+			ret = -14 /* EFAULT */;
+		break;
+	}
 	case SYS_munmap:
 		/* a0=addr, a1=len. Anon arena only; /dev/fb is not unmappable. */
 		ret = proc_munmap(tf->r_a0, tf->r_a1);

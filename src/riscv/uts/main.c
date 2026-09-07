@@ -65,6 +65,27 @@ static volatile int cpu_online[MAXCPU];
 static volatile int ncpu_online = 0;	/* count of SECONDARY harts reported in */
 
 /*
+ * cpu_ncpu_online -- total online harts, for libc's pset_info(PSET_INFO) and
+ * hence Rust's available_parallelism().
+ *
+ * ⚠️ ncpu_online counts SECONDARY harts only (each secondary increments it as it
+ * reports in), so the total is that plus the boot hart. Returning ncpu_online
+ * directly would under-report by exactly one and, on a single-hart boot, report
+ * ZERO CPUs -- which callers would read as "unknown" rather than "one".
+ */
+int
+cpu_ncpu_online(void)
+{
+	int n = ncpu_online + 1;	/* + the boot hart */
+
+	if (n < 1)
+		n = 1;
+	if (n > MAXCPU)
+		n = MAXCPU;
+	return (n);
+}
+
+/*
  * console_lock — a minimal test-and-set spinlock so concurrent harts do not
  * interleave console output byte-for-byte. amoswap.w publishes/acquires; a
  * store releases. This is the seed of the real illumos console/mutex path;

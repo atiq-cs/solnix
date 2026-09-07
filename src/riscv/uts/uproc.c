@@ -169,6 +169,13 @@ extern long copyout(const void *kaddr, void *uaddr, unsigned long n);
 #define	AT_EUID		12
 #define	AT_GID		13
 #define	AT_EGID		14
+/*
+ * AT_SUN_EXECNAME (2014) is illumos-specific: it carries the full path of the
+ * executable, and libc's getexecname(3C) reads it. Rust's env::current_exe()
+ * goes through getexecname, so without this slot that call fails -- survivable,
+ * but it is one auxv entry and the string is already on the stack as argv[0].
+ */
+#define	AT_SUN_EXECNAME	2014
 
 /*
  * Bounded snapshot of an exec argv/envp: at most ARG_MAX_N pointers and
@@ -295,7 +302,14 @@ build_user_stack(as_t *as, unsigned long ustack_top, unsigned long entry,
 	unsigned long strbase;
 	unsigned long uargv[ARG_MAX_N];
 	unsigned long uenvp[ARG_MAX_N];
-	unsigned long aux[16];
+	/*
+	 * Sized with headroom on purpose: the current set is 8 pairs (16 words)
+	 * counting AT_NULL, so aux[16] was exactly full and the next slot anyone
+	 * adds would silently overflow a stack array. 24 leaves room for the
+	 * dynamic-linker slots (AT_PHDR/AT_PHENT/AT_PHNUM/AT_BASE) that ld.so.1
+	 * will need.
+	 */
+	unsigned long aux[24];
 	int naux = 0;
 	int i;
 	unsigned long strbytes;
@@ -344,6 +358,16 @@ build_user_stack(as_t *as, unsigned long ustack_top, unsigned long entry,
 	aux[naux++] = AT_EUID;   aux[naux++] = 0;
 	aux[naux++] = AT_GID;    aux[naux++] = 0;
 	aux[naux++] = AT_EGID;   aux[naux++] = 0;
+	/*
+	 * argv[0] is already planted in the string block, so the exec name costs
+	 * nothing extra -- point at it rather than copying the path twice.
+	 * Skipped when argc==0 (nothing to point at) rather than planting a null
+	 * that getexecname would have to special-case.
+	 */
+	if (snap->argc > 0) {
+		aux[naux++] = AT_SUN_EXECNAME;
+		aux[naux++] = uargv[0];
+	}
 	aux[naux++] = AT_NULL;   aux[naux++] = 0;
 
 	/*
