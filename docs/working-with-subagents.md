@@ -114,6 +114,36 @@ tracing the actual dependency or measuring the actual value.
 * **Tag every resource** and never touch another tenant's or agent's instance/volume — these
   accounts are shared.
 
+## Hazards measured in the multi-agent campaign (fold these into every brief)
+
+These are in `/tmp/briefs/COMMON.md` as a reusable preamble; the durable copy is here.
+
+* **Flaky things in this project are BURSTY, so a small sample lies.** Measured on the riscv64
+  gates: **1/4, then 8/8 on the identical tree**, then 4/4 loaded and 4/4 idle — 17/20 overall with
+  the three failures *consecutive*. "Judge by rate" tacitly assumes independent attempts; these are
+  not. A 4-run sample inside a burst reports 25% and outside reports 100%, **both honestly**. Ask
+  for **>=8 runs**, and for the *clustering* to be reported rather than averaged away. Host CPU
+  load was measured NOT to be the trigger, so "the box was busy" is not an explanation.
+* **Ask whether the cited evidence EXISTS.** Three stale claims were retracted in one session, all
+  caught by looking for the file rather than reasoning about plausibility: an install path
+  documented "VERIFIED" citing a proof log **never present in git**; "regeneration measures 6/6"
+  that was a lucky timing phase; and a PCIe "Ground truth" table measured on a **VM** and used for
+  metal. The shape is always *a real measurement, correctly recorded, then summarised one step too
+  confidently* — and **the summary outlives the caveat.** Annotate the retraction at the SOURCE,
+  not only in the doc that supersedes it, or the next reader inherits it.
+* **An observation window shorter than the phenomenon's period sees nothing.** An aarch64 "stall"
+  was recorded as reproduced from a **27-second** console read containing ONE firmware banner; it
+  is really a reset loop on an ~8-10 minute period. Four agents inherited the wrong phenomenon.
+  Before concluding "hung", establish how long you actually watched.
+* **illumos's missing GNU tools fail SILENTLY.** No `readlink(1)` (a `$(...)` expanded empty, so
+  `ln -sf ""` no-oped and a live ramdisk got ZERO of its 13 `/dev` nodes); no `stat(1)` at all, not
+  even `gstat`, so a `stat -c %s` size gate was **always false** and the `&&` check after it never
+  ran; `/usr/bin/diff` prints "No differences encountered". Verify a tool exists on the target
+  before depending on it; prefer POSIX (`wc -c`, `ls -ld`) or the helpers already in these scripts.
+* **A `.patch` with no diff hunks is a trap** — applying it silently no-ops and ships an unpatched
+  binary that looks fine. Five such files existed. `scripts/repo-integrity-check.sh` now fails on
+  it; prose belongs in `.notes.md`.
+
 ## Budget the run
 
 State a tool-use target and what to do when it runs out:
