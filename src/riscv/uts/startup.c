@@ -10,7 +10,8 @@
  *     startup_memlist()  -> page_init()   real page_t/freelist over DTB RAM
  *     startup_vm()       -> kmem_init()   kernel VA arena + kmem slab
  *     startup_cyclic()   -> (clock already periodic) + callout wheel proof
- *     startup_dispatch() -> dispatch_init_cpu(0): boot cpu becomes cpu0's idle
+ *     startup_dispatch() -> dispatch_init_cpu(boot hartid): boot cpu becomes
+ *          its own hart's idle
  *                           thread; the dispatcher + swtch come online
  *
  * Each stage runs its R-P5 gate self-test so the console proves the subsystem
@@ -118,6 +119,18 @@ kputhex(unsigned long v)
 static unsigned long startup_rambase;
 static unsigned long startup_ramsize;
 int startup_ncpu;			/* set by main() from the SMP count */
+/*
+ * The hart OpenSBI elected as the boot hart -- the boot hart's own dispatcher
+ * cpu slot. Set by main() from a0 before it calls startup().
+ *
+ * This is NOT always 0. OpenSBI runs a boot-hart lottery, so on qemu virt the
+ * S-mode payload is entered on hart 0 about 2/3 of the time and on hart 1/2/3
+ * otherwise. It cannot be recovered from tp here: locore deliberately leaves tp
+ * at 0 for the boot hart (see the this_cpu() comment in proc.c -- seeding tp
+ * early destabilized the boot), so the id must be carried across the MD->MI seam
+ * explicitly, exactly like startup_ncpu.
+ */
+int startup_boot_hartid;
 
 /* Fallbacks if the DTB parse fails (qemu virt default). */
 #define	PHYS_RAM_BASE_FALLBACK	0x80000000UL
@@ -294,9 +307,26 @@ static void
 startup_dispatch(void)
 {
 	sbi_console_puts("\n[startup] startup_dispatch: threads + swtch\n");
-	dispatch_init_cpu(0);
-	sbi_console_puts("[startup] boot cpu is now cpu0 idle thread; "
-	    "dispatcher online\n");
+	/*
+	 * The boot hart must claim ITS OWN hart's dispatcher slot, not slot 0.
+	 * This was a hardcoded dispatch_init_cpu(0), which aliased two harts onto
+	 * one slot whenever OpenSBI's boot-hart lottery picked a hart other than
+	 * 0: the boot hart took curthread[0]/idlethread[0] while
+	 * start_secondaries -- which skips only the boot hartid -- released the
+	 * REAL hart 0 into smp_secondary_dispatch(0), whose dispatch_init_cpu(0)
+	 * claimed the same slot. Hart 0's "curthread[cpu] = self" at the end of
+	 * each dispatch then overwrote the boot hart's curthread with idlethread,
+	 * so the boot hart's next swtch() saw new == old, returned early, and
+	 * thread_exit fell into its wfi dead-end -- taking startup with it.
+	 * Observed as: console stops at exactly 178 lines inside the A/B
+	 * dispatcher self-test, zero userland exec'd, all seven gates failing
+	 * together, and every failing run having a nonzero OpenSBI Boot HART ID.
+	 * See docs/riscv64-preboot-flake.md.
+	 */
+	dispatch_init_cpu(startup_boot_hartid);
+	sbi_console_puts("[startup] boot cpu is now cpu");
+	kputdec((unsigned long)startup_boot_hartid);
+	sbi_console_puts(" idle thread; dispatcher online\n");
 	/* Release the secondary harts (spinning in smp_secondary_dispatch) now
 	 * that kmem + the dispatcher are up: they can safely alloc + run. */
 	smp_dispatch_open();

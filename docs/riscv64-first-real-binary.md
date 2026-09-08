@@ -340,6 +340,17 @@ because the window is real and the guard is one instruction.
 
 #### ⚠️ The pre-boot flake is BURSTY, not uniformly random (measured separately)
 
+> **RESOLVED — see `docs/riscv64-preboot-flake.md`.** The burst source named as
+> "still unidentified" below has been found: it is OpenSBI's **boot-hart
+> lottery**, which is sticky across consecutive QEMU runs. `startup_dispatch()`
+> hardcoded `dispatch_init_cpu(0)`, so whenever the lottery picked a hart other
+> than 0 the boot hart and the real hart 0 aliased onto one dispatcher slot.
+> Fixed and negative-controlled with a deterministic slot check
+> (`src/riscv/uts/hart-slot-check.py`), because — as measured — the crash rate is
+> too bursty to use as a control at all: reinstating the bug produced 0 crashes
+> in 40 runs. The interleaved console output cited below as "the most concrete
+> lead" turned out to be a **red herring**: it also appears on passing runs.
+
 Independent re-measurement by the orchestrator, after a full `build-user.sh`
 regeneration, hit **1/4** — then **8/8** immediately afterwards with no change to
 the tree, then **4/4 loaded and 4/4 idle**. Overall 17/20, but the three failures
@@ -510,6 +521,13 @@ trap.
 ---
 
 ## 11. The pre-boot flake, quantified
+
+> **RESOLVED — root cause, fix, deterministic test and negative control are in
+> `docs/riscv64-preboot-flake.md`.** Cause: `startup_dispatch()` hardcoded
+> `dispatch_init_cpu(0)` while OpenSBI's boot hart is frequently *not* hart 0, so
+> two harts shared one dispatcher cpu slot and clobbered `curthread[]`; the boot
+> hart's `swtch()` then returned into `thread_exit`'s dead-end `wfi`. The section
+> below is kept as the historical measurement.
 
 Separately from anything above, a boot occasionally dies **before userland**:
 the console stops at line 178 of 546, inside the kernel dispatcher self-test

@@ -820,6 +820,8 @@ extern long sbi_send_ipi(unsigned long hart_mask, unsigned long hart_mask_base);
 static volatile unsigned long idle_harts;
 /* Proof: which hart ran the SMP test thread, and how many harts dispatched. */
 volatile int smp_ran_on_hart = -1;
+/* startup.c: the hart OpenSBI elected as the boot hart (NOT always 0). */
+extern int startup_boot_hartid;
 volatile int smp_harts_dispatching = 0;
 /*
  * Gate: the boot hart sets this once kmem + the dispatcher are online (in
@@ -952,16 +954,25 @@ smp_selftest(void)
 		__asm__ __volatile__("nop");
 	}
 
-	if (smp_ran_on_hart > 0) {
+	if (smp_ran_on_hart >= 0 && smp_ran_on_hart != startup_boot_hartid) {
 		sbi_console_puts("[smp] OK: thread ran on hart ");
 		kputdec((unsigned long)smp_ran_on_hart);
-		sbi_console_puts(" (!=0); ");
+		sbi_console_puts(" (!=boot hart ");
+		kputdec((unsigned long)startup_boot_hartid);
+		sbi_console_puts("); ");
 		kputdec((unsigned long)smp_harts_dispatching + 1);
 		sbi_console_puts(" harts online in dispatcher (1 boot + ");
 		kputdec((unsigned long)smp_harts_dispatching);
 		sbi_console_puts(" secondary)\n");
-	} else if (smp_ran_on_hart == 0) {
-		sbi_console_puts("[smp] thread ran on boot hart 0 only "
+	} else if (smp_ran_on_hart == startup_boot_hartid) {
+		/*
+		 * Compare against the REAL boot hartid, not against 0. OpenSBI's
+		 * boot-hart lottery means hart 0 is frequently a SECONDARY, so a
+		 * `> 0` test reported a genuine cross-hart dispatch onto hart 0 as
+		 * "boot hart only" and would have reported the boot hart's own
+		 * dispatch as a success on any nonzero-boot-hart run.
+		 */
+		sbi_console_puts("[smp] thread ran on the boot hart only "
 		    "(no secondary pulled it this run)\n");
 	} else {
 		sbi_console_puts("[smp] WARN: SMP proof thread did not run\n");

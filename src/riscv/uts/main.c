@@ -162,6 +162,7 @@ putdec(unsigned long v)
 /* From startup.c: the MI startup()-analog + its cpu count input. */
 extern void startup(unsigned long dtb);
 extern int startup_ncpu;
+extern int startup_boot_hartid;
 
 /* From proc.c: drive the cooperative dispatcher (R-P8 keeps userland running). */
 extern void thread_yield(void);
@@ -481,6 +482,14 @@ main(void)
 	 * the machine-dependent kernel to the machine-independent kernel.
 	 */
 	startup_ncpu = ncpu_online + 1;
+	/*
+	 * The dispatcher indexes its per-cpu slots by hart id, so startup must
+	 * know which hart WE are. OpenSBI's boot-hart lottery makes this a
+	 * nonzero hart on roughly a third of qemu virt boots; assuming 0 aliased
+	 * the boot hart onto the real hart 0's slot (docs/riscv64-preboot-flake.md).
+	 */
+	startup_boot_hartid = (int)(boot_cpu.bc_hartid < MAXCPU ?
+	    boot_cpu.bc_hartid : 0);
 	startup(boot_cpu.bc_dtb);
 
 	sbi_console_puts("\n");
