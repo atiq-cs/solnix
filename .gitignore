@@ -74,6 +74,16 @@ src/aarch64-arm64-gate-patches/fakebop.c.a6kcon-diag
 # RISC-V scanout build outputs (rebuildable via src/riscv/uts/build-scanout.sh)
 src/riscv/uts/unix-o0
 src/riscv/uts/unix-scanout
+# unix-k1.Image / fw_payload.* -- build outputs of build-k1-payload.sh.
+# Deliberately NOT tracked even though the maintainer needs a file to flash: it is
+# regenerable in one command with the same pinned gcc (unlike user_elfs.h, which
+# needs a cross toolchain that is not guaranteed present, and so IS tracked). A
+# committed image that drifts from its source is worse than no image -- someone
+# would flash a stale kernel and debug the wrong code on real hardware. The
+# runbook tells the reader to run build-k1-payload.sh.
+src/riscv/uts/unix-k1.Image
+src/riscv/uts/fw_payload.bin
+src/riscv/uts/fw_payload.elf
 
 # Build scratch.
 wave12-work/
