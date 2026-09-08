@@ -475,9 +475,26 @@ fdt_k1_summary(unsigned long dtb, struct k1_devs *out)
 
 	if (out != 0)
 		*out = d;
-	/* K1 board confirmed iff the four signature devices are all present. */
-	return (d.uart_is_dw && d.sdhci_present && d.aplic_present &&
-	    d.imsic_present);
+	/*
+	 * K1 board confirmed iff the SIGNATURE devices are present.
+	 *
+	 * This used to also require aplic_present && imsic_present, which could
+	 * NEVER be true: the K1 is a PLIC SoC, not AIA (that correction is the
+	 * whole point of the current k1.dts, and mainline's k1.dtsi has
+	 * interrupt-controller@e0000000 compatible "riscv,plic0"). So the
+	 * predicate was unsatisfiable on real K1 silicon AND on our own DTB --
+	 * the boot log's "[k1] WARN: embedded K1 DTB missing a signature device"
+	 * was this bug, not a bad DTB, and the runtime board-detect would have
+	 * reported "NOT K1" while running ON the K1 and driven the in-kernel
+	 * SDHCI MODEL instead of real silicon.
+	 *
+	 * The signature is now the two devices that actually identify the board
+	 * and that both our k1.dts and mainline's k1.dtsi carry: a 16550-family
+	 * UART bound by a SpaceMiT/xscale compatible string, and an SDHCI-standard
+	 * MMC controller. UNVERIFIED-until-hardware: only a boot on the board can
+	 * confirm the vendor U-Boot's DTB spells them the same way.
+	 */
+	return (d.uart_is_dw && d.sdhci_present);
 }
 
 /*

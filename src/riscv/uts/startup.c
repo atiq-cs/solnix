@@ -32,6 +32,7 @@ extern void page_selftest(void);
 extern unsigned long page_freecount(void);
 extern unsigned long physmem;			/* total managed pages */
 extern void hat_page_layer_online(void);	/* hat.c: route PT allocs to page_alloc */
+extern unsigned long hat_phys_ram_limit(void);	/* hat.c: end of the boot id. giga */
 
 extern void kmem_init(void);
 extern void kmem_selftest(void);
@@ -212,20 +213,21 @@ startup_memlist(unsigned long dtb)
 		 * K1 (it is our own k1.dts) -- that only validates the blob, it is
 		 * NOT a platform test. The real signal is the boot DTB the firmware
 		 * handed us in a1: OpenSBI on qemu-virt describes the EMULATED virt
-		 * hardware (ns16550 uart, virtio, PLIC -- no snps,dwcmshc-sdhci /
-		 * snps,dw-apb-uart / aplic+imsic), so fdt_k1_summary(boot) returns
-		 * 0; U-Boot on the physical K1 hands a DTB carrying all four K1
-		 * signature devices, so it returns 1. ONE `unix` image thus detects
-		 * its board at boot and drives live K1 MMIO on silicon vs the
-		 * faithful model under qemu -- no -DK1_SILICON recompile (per the
-		 * R-P15 next-step note).
+		 * hardware, whose uart is an ns16550 with NO SDHCI controller
+		 * anywhere, so fdt_k1_summary(boot) returns 0; the K1's U-Boot hands
+		 * a DTB carrying a SpaceMiT/xscale uart AND spacemit,k1-x-sdhci, so
+		 * it returns 1. ONE `unix` image thus detects its board at boot and
+		 * drives live K1 MMIO on silicon vs the faithful model under qemu --
+		 * no -DK1_SILICON recompile (per the R-P15 next-step note).
+		 * UNVERIFIED-until-hardware: the discrimination is proven only in the
+		 * qemu direction so far; the K1 direction needs the board.
 		 */
 		int on_k1_silicon = fdt_k1_summary(dtb, &boot);
 		unsigned long sdhci_base;
 
 		if (is_k1) {
 			sbi_console_puts("[k1] embedded K1 DTB valid "
-			    "(dw-apb-uart + sdhci + aplic + imsic present)\n");
+			    "(SpaceMiT/xscale uart + sdhci present)\n");
 		} else {
 			sbi_console_puts("[k1] WARN: embedded K1 DTB missing a "
 			    "signature device\n");
@@ -259,6 +261,24 @@ startup_memlist(unsigned long dtb)
 		 * the boot DTB, so the SAME code path serves qemu-virt and K1. */
 		sdhci_model_selftest();
 		(void) sdhci_probe(sdhci_base);
+	}
+
+	/*
+	 * Clamp the managed extent to what the boot identity map can dereference
+	 * as VA==PA. page_init writes its page_t array through VA==PA at the front
+	 * of the region it manages, so RAM beyond the kernel's identity gigapage
+	 * must not be handed to it. No-op on qemu-virt (512 MiB fits); on the K1,
+	 * bank-0 DRAM is 2 GiB and only 1 GiB is mapped.
+	 */
+	{
+		unsigned long limit = hat_phys_ram_limit();
+		if (base < limit && base + size > limit) {
+			sbi_console_puts("[startup] clamping managed RAM to the "
+			    "boot identity gigapage end ");
+			kputhex(limit);
+			sbi_console_puts("\n");
+			size = limit - base;
+		}
 	}
 
 	page_init(base, size);

@@ -50,6 +50,13 @@ KOBJS=""
 # -march. Listed separately so the ${src%.S} loop below stays simple.
 "$CC" $CFLAGS -c fpsave.S -o fpsave.o
 KOBJS="$KOBJS fpsave.o"
+# image_header.S emits the Linux RISC-V Image header as byte 0 of .text so the
+# same kernel can also be booted by U-Boot `booti` on real K1 silicon. It is
+# INERT here (OpenSBI/qemu enter at the ELF e_entry = _start, past the header),
+# and building it into the gate kernel is deliberate: the gates then prove it
+# does not perturb the qemu-virt boot.
+"$CC" $CFLAGS -c image_header.S -o image_header.o
+KOBJS="$KOBJS image_header.o"
 for src in locore.S trap.S swtch.S copy.S; do
 	o="${src%.S}.o"
 	[ "$src" = trap.S ] && o=trap_asm.o

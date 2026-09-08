@@ -37,7 +37,7 @@ MCOPY="${MCOPY:-mcopy}"
 DTC="${DTC:-dtc}"
 
 OUT="${OUT:-solnix-k1.img}"
-KERNEL="${KERNEL:-unix}"
+KERNEL="${KERNEL:-unix-k1.Image}"
 DTS="${DTS:-k1.dts}"
 DTB="${DTB:-k1.dtb}"
 
@@ -66,7 +66,7 @@ place() { # place <blob> <lba> <label>
 	local blob="$1" lba="$2" label="$3"
 	if [ -n "${blob:-}" ] && [ -f "$blob" ]; then
 		dd if="$blob" of="$OUT" bs=$SECTOR seek="$lba" conv=notrunc status=none
-		echo "   placed $label ($(stat -c%s "$blob") bytes) @ LBA $lba"
+		echo "   placed $label ($(wc -c < "$blob") bytes) @ LBA $lba"
 	else
 		echo "   PLACEHOLDER $label @ LBA $lba (supply via env; see recipe)"
 	fi
@@ -87,14 +87,21 @@ dd if=/dev/zero of="$BOOTFS_IMG" bs=$SECTOR count=$BOOTFS_SECTORS status=none
 "$MKFSVFAT" -F 16 -n SOLNIXBOOT "$BOOTFS_IMG" >/dev/null
 
 # U-Boot boot script: load the solnix kernel + dtb into RAM and booti.
-# K1 DRAM base is 0x0; U-Boot conventionally loads kernel high and the dtb
-# just below it. booti <kernel> - <dtb> => a0=hartid, a1=dtb (locore.S ABI).
+#
+# NOTE: `booti` requires the Linux RISC-V Image header (magic 0x05435352 at
+# offset 0x38) -- U-Boot's arch/riscv/lib/image.c booti_setup() refuses anything
+# else with "Bad Linux RISCV Image magic!". So this loads unix-k1.Image (built by
+# build-k1-payload.sh), NOT the raw `unix` ELF, which has program-header bytes at
+# that offset. The addresses below must also match the address the Image was
+# LINKED at (KBASE), because booti relocates to gd->ram_base + text_offset and
+# the K1's gd->ram_base is 0x0. booti <kernel> - <dtb> => a0=hartid, a1=dtb
+# (locore.S ABI); the `-` is the required no-initrd placeholder.
 cat > boot.cmd <<'EOS'
 # solnix K1 boot script (compiled to boot.scr with mkimage -T script)
-setenv kernel_addr_r 0x00400000
-setenv fdt_addr_r    0x02000000
-echo "solnix: loading unix + k1.dtb from bootfs..."
-load mmc 0:1 ${kernel_addr_r} unix
+setenv kernel_addr_r 0x02000000
+setenv fdt_addr_r    0x08000000
+echo "solnix: loading unix-k1.Image + k1.dtb from bootfs..."
+load mmc 0:1 ${kernel_addr_r} unix-k1.Image
 load mmc 0:1 ${fdt_addr_r} k1.dtb
 echo "solnix: booti ${kernel_addr_r} - ${fdt_addr_r}"
 booti ${kernel_addr_r} - ${fdt_addr_r}
@@ -108,7 +115,7 @@ else
 	echo "   board or a host with u-boot-tools before flashing for real boot)"
 fi
 
-"$MCOPY" -i "$BOOTFS_IMG" "$KERNEL" ::unix
+"$MCOPY" -i "$BOOTFS_IMG" "$KERNEL" ::unix-k1.Image
 "$MCOPY" -i "$BOOTFS_IMG" "$DTB"    ::k1.dtb
 "$MCOPY" -i "$BOOTFS_IMG" boot.scr  ::boot.scr
 "$MCOPY" -i "$BOOTFS_IMG" boot.cmd  ::boot.cmd
@@ -119,10 +126,12 @@ dd if="$BOOTFS_IMG" of="$OUT" bs=$SECTOR seek=$BOOTFS_OFFS conv=notrunc status=n
 
 echo "== [6/6] verify layout =="
 "$SFDISK" -l "$OUT" || true
-echo "-- image: $(stat -c%s "$OUT") bytes ($OUT) --"
+# wc -c, not `stat -c %s`: illumos has NO stat(1) at all (not even gstat), so a
+# stat-based size read is silently empty there.
+echo "-- image: $(wc -c < "$OUT") bytes ($OUT) --"
 echo
-echo "image: built $OUT (U-Boot->OpenSBI->unix+k1.dtb), boot chain layout verified"
+echo "image: built $OUT (U-Boot->OpenSBI->unix-k1.Image+k1.dtb), boot chain layout verified"
 echo "  FSBL   @ LBA $FSBL_OFFS"
 echo "  FIP    @ LBA $FIP_OFFS  (OpenSBI fw_dynamic + U-Boot)"
-echo "  bootfs @ LBA $BOOTFS_OFFS (FAT16 SOLNIXBOOT: unix, k1.dtb, boot.scr)"
+echo "  bootfs @ LBA $BOOTFS_OFFS (FAT16 SOLNIXBOOT: unix-k1.Image, k1.dtb, boot.scr)"
 echo "  rootfs @ LBA $ROOTFS_OFFS (placeholder)"

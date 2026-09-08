@@ -37,6 +37,9 @@ extern void set_trap_vector(void);
 extern void trap_selftest(void);
 extern unsigned long hat_boot_init(void);
 extern void hat_phys_init(void);
+extern void hat_phys_set_ram(unsigned long base, unsigned long size);
+extern int fdt_get_memory(unsigned long dtb, unsigned long *base,
+    unsigned long *size);
 extern void hat_highva_prove(void);
 extern void clock_prove(unsigned long nticks);
 extern unsigned long gethrtime(void);
@@ -350,6 +353,17 @@ mlsetup(unsigned long hartid, unsigned long dtb)
 	 * canonical high KERNELBASE and prove the translation by writing and
 	 * reading it back through both the high VA and the page's identity VA.
 	 */
+	/*
+	 * Adopt the firmware's /memory extent BEFORE hat_phys_init, so the boot
+	 * bump allocator draws from real DRAM. A compiled-in 0x80000000 base is
+	 * wrong on the SpaceMiT K1, whose DRAM is 0x0..0x80000000 with SoC MMIO
+	 * above it -- bump-allocating there would hand out MMIO as page tables.
+	 */
+	{
+		unsigned long rb = 0, rs = 0;
+		if (fdt_get_memory(dtb, &rb, &rs))
+			hat_phys_set_ram(rb, rs);
+	}
 	hat_phys_init();
 	hat_highva_prove();
 	boot_cpu.bc_highva_online = 1;

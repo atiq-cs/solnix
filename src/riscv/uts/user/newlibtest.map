@@ -145,37 +145,37 @@ Discarded input sections
  .debug_info    0x0000000000000000      0xe8a newlibtest.o
  .debug_abbrev  0x0000000000000000      0x2ba newlibtest.o
  .debug_loclists
-                0x0000000000000000      0x1ce newlibtest.o
+                0x0000000000000000      0x1d2 newlibtest.o
  .debug_aranges
                 0x0000000000000000       0x40 newlibtest.o
  .debug_rnglists
-                0x0000000000000000       0x87 newlibtest.o
- .debug_line    0x0000000000000000      0x492 newlibtest.o
- .debug_str     0x0000000000000000      0x4e9 newlibtest.o
+                0x0000000000000000       0x88 newlibtest.o
+ .debug_line    0x0000000000000000      0x4a2 newlibtest.o
+ .debug_str     0x0000000000000000      0x501 newlibtest.o
  .debug_line_str
                 0x0000000000000000      0x20b newlibtest.o
  .comment       0x0000000000000000       0x13 newlibtest.o
  .note.GNU-stack
                 0x0000000000000000        0x0 newlibtest.o
- .debug_frame   0x0000000000000000       0x68 newlibtest.o
+ .debug_frame   0x0000000000000000       0x90 newlibtest.o
  .riscv.attributes
                 0x0000000000000000       0x68 newlibtest.o
- .debug_info    0x0000000000000000      0x729 newlib_glue.o
- .debug_abbrev  0x0000000000000000      0x1e0 newlib_glue.o
+ .debug_info    0x0000000000000000      0x734 newlib_glue.o
+ .debug_abbrev  0x0000000000000000      0x1bb newlib_glue.o
  .debug_loclists
-                0x0000000000000000      0x222 newlib_glue.o
+                0x0000000000000000      0x244 newlib_glue.o
  .debug_aranges
                 0x0000000000000000       0x30 newlib_glue.o
  .debug_rnglists
-                0x0000000000000000       0x3e newlib_glue.o
- .debug_line    0x0000000000000000      0x5ce newlib_glue.o
- .debug_str     0x0000000000000000      0x15a newlib_glue.o
+                0x0000000000000000       0x8c newlib_glue.o
+ .debug_line    0x0000000000000000      0x668 newlib_glue.o
+ .debug_str     0x0000000000000000      0x172 newlib_glue.o
  .debug_line_str
                 0x0000000000000000       0x7c newlib_glue.o
  .comment       0x0000000000000000       0x13 newlib_glue.o
  .note.GNU-stack
                 0x0000000000000000        0x0 newlib_glue.o
- .debug_frame   0x0000000000000000      0x118 newlib_glue.o
+ .debug_frame   0x0000000000000000      0x250 newlib_glue.o
  .riscv.attributes
                 0x0000000000000000       0x68 newlib_glue.o
  .debug_info    0x0000000000000000      0x131 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-atexit.o)
@@ -1211,488 +1211,488 @@ Linker script and memory map
 
                 0x0000000040010000                . = 0x40010000
 
-.text           0x0000000040010000     0xcf9e
+.text           0x0000000040010000     0xd066
  *(.text.init)
  *(.text*)
  .text          0x0000000040010000       0x4c /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/crt0.o
                 0x0000000040010000                _start
- .text          0x000000004001004c       0x10 newlibtest.o
- .text.startup  0x000000004001005c      0x31e newlibtest.o
-                0x000000004001005c                main
- .text          0x000000004001037a      0x100 newlib_glue.o
-                0x000000004001037a                _write
-                0x0000000040010394                _read
-                0x00000000400103ae                _close
-                0x00000000400103ce                _lseek
-                0x00000000400103e8                _getpid
-                0x00000000400103fa                _exit
-                0x0000000040010408                _sbrk
-                0x0000000040010448                _fstat
-                0x000000004001045e                _isatty
-                0x0000000040010462                _kill
-                0x000000004001046e                _open
- .text          0x000000004001047a       0x1a /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-atexit.o)
-                0x000000004001047a                atexit
- .text          0x0000000040010494       0x20 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-exit.o)
-                0x0000000040010494                exit
- .text          0x00000000400104b4       0x2e /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-malloc.o)
-                0x00000000400104b4                malloc
-                0x00000000400104ca                free
- .text          0x00000000400104e2      0x760 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-mallocr.o)
-                0x00000000400104e2                _malloc_r
- .text          0x0000000040010c42       0x2c /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-mlock.o)
-                0x0000000040010c42                __malloc_lock
-                0x0000000040010c58                __malloc_unlock
- .text          0x0000000040010c6e      0x30a /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-strtol.o)
-                0x0000000040010ec4                _strtol_r
-                0x0000000040010ef8                strtol_l
-                0x0000000040010f38                strtol
- .text          0x0000000040010f78        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-ctype_.o)
- .text          0x0000000040010f78      0x662 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-qsort.o)
-                0x0000000040010f78                qsort
- .text          0x00000000400115da      0x324 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-fflush.o)
-                0x00000000400115da                __sflush_r
-                0x000000004001179a                _fflush_r
-                0x0000000040011842                fflush
- .text          0x00000000400118fe      0x40a /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-findfp.o)
-                0x0000000040011b1a                __sfp
-                0x0000000040011c30                __sinit
-                0x0000000040011c86                __sfp_lock_acquire
-                0x0000000040011c9c                __sfp_lock_release
-                0x0000000040011cb2                __fp_lock_all
-                0x0000000040011cdc                __fp_unlock_all
- .text          0x0000000040011d08       0x94 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-fwalk.o)
-                0x0000000040011d08                _fwalk_sglue
- .text          0x0000000040011d9c       0x8c /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-printf.o)
-                0x0000000040011d9c                _printf_r
-                0x0000000040011dde                printf
- .text          0x0000000040011e28      0x13c /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-puts.o)
-                0x0000000040011e28                _puts_r
-                0x0000000040011f4e                puts
- .text          0x0000000040011f64      0x184 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-snprintf.o)
-                0x0000000040011f64                _snprintf_r
-                0x0000000040012022                snprintf
- .text          0x00000000400120e8      0x140 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-stdio.o)
-                0x00000000400120e8                __sread
-                0x000000004001213c                __seofread
-                0x000000004001214e                __swrite
-                0x00000000400121b6                __sseek
-                0x0000000040012214                __sclose
- .text          0x0000000040012228       0x4c /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-closer.o)
-                0x0000000040012228                _close_r
- .text          0x0000000040012274       0xa4 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-reent.o)
-                0x0000000040012274                _reclaim_reent
- .text          0x0000000040012318        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-impure.o)
- .text          0x0000000040012318       0x5a /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-lseekr.o)
-                0x0000000040012318                _lseek_r
- .text          0x0000000040012372       0x5a /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-readr.o)
-                0x0000000040012372                _read_r
- .text          0x00000000400123cc       0x4c /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-sbrkr.o)
-                0x00000000400123cc                _sbrk_r
- .text          0x0000000040012418       0x5a /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-writer.o)
-                0x0000000040012418                _write_r
- .text          0x0000000040012472       0x16 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-errno.o)
-                0x0000000040012472                __errno
- .text          0x0000000040012488       0x72 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-init.o)
-                0x0000000040012488                __libc_init_array
- .text          0x00000000400124fa       0x44 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-fini.o)
-                0x00000000400124fa                __libc_fini_array
- .text          0x000000004001253e       0xa4 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-lock.o)
-                0x000000004001253e                __retarget_lock_init
-                0x000000004001254e                __retarget_lock_init_recursive
-                0x000000004001255e                __retarget_lock_close
-                0x000000004001256e                __retarget_lock_close_recursive
-                0x000000004001257e                __retarget_lock_acquire
-                0x000000004001258e                __retarget_lock_acquire_recursive
-                0x000000004001259e                __retarget_lock_try_acquire
-                0x00000000400125b0                __retarget_lock_try_acquire_recursive
-                0x00000000400125c2                __retarget_lock_release
-                0x00000000400125d2                __retarget_lock_release_recursive
- .text          0x00000000400125e2       0xaa /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-memset.o)
-                0x00000000400125e2                memset
- .text          0x000000004001268c       0xa6 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-strlen.o)
-                0x000000004001268c                strlen
- .text          0x0000000040012732       0xea /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-strcmp.o)
-                0x0000000040012732                strcmp
- .text          0x000000004001281c       0xae /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-__atexit.o)
-                0x000000004001281c                __register_exitproc
- .text          0x00000000400128ca      0x100 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-__call_atexit.o)
-                0x00000000400128ca                __call_exitprocs
- .text.startup  0x00000000400129ca       0x2c /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-__call_atexit.o)
- .text          0x00000000400129f6      0x356 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-freer.o)
-                0x00000000400129f6                _malloc_trim_r
-                0x0000000040012ae6                _free_r
- .text          0x0000000040012d4c     0x26da /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-svfprintf.o)
-                0x0000000040012d4c                _svfprintf_r
- .text          0x0000000040015426     0x2900 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-vfprintf.o)
-                0x0000000040015426                _vfprintf_r
-                0x0000000040017c22                vfprintf
- .text          0x0000000040017d26       0x40 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-sprint_r.o)
-                0x0000000040017d26                __sprint_r
- .text          0x0000000040017d66       0xb2 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-ssprint_r.o)
-                0x0000000040017d66                __ssprint_r
- .text          0x0000000040017e18      0x116 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-fclose.o)
-                0x0000000040017e18                _fclose_r
-                0x0000000040017f18                fclose
- .text          0x0000000040017f2e      0x374 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-fvwrite.o)
-                0x0000000040017f2e                __sfvwrite_r
- .text          0x00000000400182a2      0x114 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-wsetup.o)
-                0x00000000400182a2                __swsetup_r
- .text          0x00000000400183b6       0xc6 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-memchr.o)
-                0x00000000400183b6                memchr
- .text          0x000000004001847c       0xbe /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-strncpy.o)
-                0x000000004001847c                strncpy
- .text          0x000000004001853a       0x44 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-localeconv.o)
-                0x000000004001853a                __localeconv_l
-                0x000000004001854e                _localeconv_r
-                0x0000000040018566                localeconv
- .text          0x000000004001857e      0x118 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-memmove-stub.o)
-                0x000000004001857e                memmove
- .text          0x0000000040018696      0x126 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-memcpy.o)
-                0x0000000040018696                memcpy
- .text          0x00000000400187bc       0x92 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libm_a-s_frexp.o)
-                0x00000000400187bc                frexp
- .text          0x000000004001884e     0x1142 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-dtoa.o)
-                0x0000000040018a22                _dtoa_r
- .text          0x0000000040019990      0xff0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-mprec.o)
-                0x0000000040019990                _Balloc
-                0x0000000040019a18                _Bfree
-                0x0000000040019a40                __multadd
-                0x0000000040019b76                __s2b
-                0x0000000040019c82                __hi0bits
-                0x0000000040019d22                __lo0bits
-                0x0000000040019e10                __i2b
-                0x0000000040019eb4                __multiply
-                0x000000004001a0aa                __pow5mult
-                0x000000004001a1bc                __lshift
-                0x000000004001a2ee                __mcmp
-                0x000000004001a33a                __mdiff
-                0x000000004001a534                __ulp
-                0x000000004001a59e                __b2d
-                0x000000004001a69c                __d2b
-                0x000000004001a7b0                __ratio
-                0x000000004001a85e                _mprec_log10
-                0x000000004001a8ae                __copybits
-                0x000000004001a910                __any_on
- .text          0x000000004001a980      0x514 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-reallocr.o)
-                0x000000004001a980                _realloc_r
- .text          0x000000004001ae94      0x14e /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-ssputs_r.o)
-                0x000000004001ae94                __ssputs_r
- .text          0x000000004001afe2      0x218 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-makebuf.o)
-                0x000000004001afe2                __smakebuf_r
-                0x000000004001b116                __swhatbuf_r
- .text          0x000000004001b1fa       0xfa /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-locale.o)
-                0x000000004001b1fa                _setlocale_r
-                0x000000004001b26c                __locale_mb_cur_max
-                0x000000004001b286                setlocale
- .text          0x000000004001b2f4       0x54 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-fstatr.o)
-                0x000000004001b2f4                _fstat_r
- .text          0x000000004001b348       0x4c /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-isattyr.o)
-                0x000000004001b348                _isatty_r
- .text          0x000000004001b394       0x50 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-assert.o)
-                0x000000004001b394                __assert_func
-                0x000000004001b3d4                __assert
- .text          0x000000004001b3e4       0xd4 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-callocr.o)
-                0x000000004001b3e4                _calloc_r
- .text          0x000000004001b4b8       0x84 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-mbtowc_r.o)
-                0x000000004001b4b8                _mbtowc_r
-                0x000000004001b4d0                __ascii_mbtowc
- .text          0x000000004001b53c       0x64 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-wctomb_r.o)
-                0x000000004001b53c                _wctomb_r
-                0x000000004001b554                __ascii_wctomb
- .text          0x000000004001b5a0       0x86 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-fiprintf.o)
-                0x000000004001b5a0                _fiprintf_r
-                0x000000004001b5dc                fiprintf
- .text          0x000000004001b626     0x10a2 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-vfiprintf.o)
-                0x000000004001b626                _vfiprintf_r
-                0x000000004001c5c4                vfiprintf
- .text          0x000000004001c6c8       0x14 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-abort.o)
-                0x000000004001c6c8                abort
- .text          0x000000004001c6dc      0x472 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-signal.o)
-                0x000000004001c6dc                _init_signal_r
-                0x000000004001c72c                _signal_r
-                0x000000004001c7bc                _raise_r
-                0x000000004001c84e                __sigtramp_r
-                0x000000004001c906                raise
-                0x000000004001c9a4                signal
-                0x000000004001ca3a                _init_signal
-                0x000000004001ca90                __sigtramp
- .text          0x000000004001cb4e       0x66 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-signalr.o)
-                0x000000004001cb4e                _kill_r
-                0x000000004001cba2                _getpid_r
- .text          0x000000004001cbb4      0x3ea /nix/store/c231v52nr5smrzgygvpk0cs1f0336z0l-riscv64-none-elf-gcc-14.3.0/lib/gcc/riscv64-none-elf/14.3.0/libgcc.a(trunctfdf2.o)
-                0x000000004001cbb4                __trunctfdf2
+ .text          0x000000004001004c       0x1e newlibtest.o
+ .text.startup  0x000000004001006a      0x340 newlibtest.o
+                0x000000004001006a                main
+ .text          0x00000000400103aa      0x198 newlib_glue.o
+                0x00000000400103aa                _write
+                0x00000000400103d2                _read
+                0x00000000400103fa                _close
+                0x0000000040010428                _lseek
+                0x0000000040010450                _getpid
+                0x0000000040010470                _exit
+                0x0000000040010486                _sbrk
+                0x00000000400104d8                _fstat
+                0x00000000400104fc                _isatty
+                0x000000004001050e                _kill
+                0x0000000040010528                _open
+ .text          0x0000000040010542       0x1a /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-atexit.o)
+                0x0000000040010542                atexit
+ .text          0x000000004001055c       0x20 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-exit.o)
+                0x000000004001055c                exit
+ .text          0x000000004001057c       0x2e /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-malloc.o)
+                0x000000004001057c                malloc
+                0x0000000040010592                free
+ .text          0x00000000400105aa      0x760 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-mallocr.o)
+                0x00000000400105aa                _malloc_r
+ .text          0x0000000040010d0a       0x2c /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-mlock.o)
+                0x0000000040010d0a                __malloc_lock
+                0x0000000040010d20                __malloc_unlock
+ .text          0x0000000040010d36      0x30a /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-strtol.o)
+                0x0000000040010f8c                _strtol_r
+                0x0000000040010fc0                strtol_l
+                0x0000000040011000                strtol
+ .text          0x0000000040011040        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-ctype_.o)
+ .text          0x0000000040011040      0x662 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-qsort.o)
+                0x0000000040011040                qsort
+ .text          0x00000000400116a2      0x324 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-fflush.o)
+                0x00000000400116a2                __sflush_r
+                0x0000000040011862                _fflush_r
+                0x000000004001190a                fflush
+ .text          0x00000000400119c6      0x40a /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-findfp.o)
+                0x0000000040011be2                __sfp
+                0x0000000040011cf8                __sinit
+                0x0000000040011d4e                __sfp_lock_acquire
+                0x0000000040011d64                __sfp_lock_release
+                0x0000000040011d7a                __fp_lock_all
+                0x0000000040011da4                __fp_unlock_all
+ .text          0x0000000040011dd0       0x94 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-fwalk.o)
+                0x0000000040011dd0                _fwalk_sglue
+ .text          0x0000000040011e64       0x8c /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-printf.o)
+                0x0000000040011e64                _printf_r
+                0x0000000040011ea6                printf
+ .text          0x0000000040011ef0      0x13c /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-puts.o)
+                0x0000000040011ef0                _puts_r
+                0x0000000040012016                puts
+ .text          0x000000004001202c      0x184 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-snprintf.o)
+                0x000000004001202c                _snprintf_r
+                0x00000000400120ea                snprintf
+ .text          0x00000000400121b0      0x140 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-stdio.o)
+                0x00000000400121b0                __sread
+                0x0000000040012204                __seofread
+                0x0000000040012216                __swrite
+                0x000000004001227e                __sseek
+                0x00000000400122dc                __sclose
+ .text          0x00000000400122f0       0x4c /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-closer.o)
+                0x00000000400122f0                _close_r
+ .text          0x000000004001233c       0xa4 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-reent.o)
+                0x000000004001233c                _reclaim_reent
+ .text          0x00000000400123e0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-impure.o)
+ .text          0x00000000400123e0       0x5a /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-lseekr.o)
+                0x00000000400123e0                _lseek_r
+ .text          0x000000004001243a       0x5a /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-readr.o)
+                0x000000004001243a                _read_r
+ .text          0x0000000040012494       0x4c /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-sbrkr.o)
+                0x0000000040012494                _sbrk_r
+ .text          0x00000000400124e0       0x5a /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-writer.o)
+                0x00000000400124e0                _write_r
+ .text          0x000000004001253a       0x16 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-errno.o)
+                0x000000004001253a                __errno
+ .text          0x0000000040012550       0x72 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-init.o)
+                0x0000000040012550                __libc_init_array
+ .text          0x00000000400125c2       0x44 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-fini.o)
+                0x00000000400125c2                __libc_fini_array
+ .text          0x0000000040012606       0xa4 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-lock.o)
+                0x0000000040012606                __retarget_lock_init
+                0x0000000040012616                __retarget_lock_init_recursive
+                0x0000000040012626                __retarget_lock_close
+                0x0000000040012636                __retarget_lock_close_recursive
+                0x0000000040012646                __retarget_lock_acquire
+                0x0000000040012656                __retarget_lock_acquire_recursive
+                0x0000000040012666                __retarget_lock_try_acquire
+                0x0000000040012678                __retarget_lock_try_acquire_recursive
+                0x000000004001268a                __retarget_lock_release
+                0x000000004001269a                __retarget_lock_release_recursive
+ .text          0x00000000400126aa       0xaa /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-memset.o)
+                0x00000000400126aa                memset
+ .text          0x0000000040012754       0xa6 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-strlen.o)
+                0x0000000040012754                strlen
+ .text          0x00000000400127fa       0xea /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-strcmp.o)
+                0x00000000400127fa                strcmp
+ .text          0x00000000400128e4       0xae /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-__atexit.o)
+                0x00000000400128e4                __register_exitproc
+ .text          0x0000000040012992      0x100 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-__call_atexit.o)
+                0x0000000040012992                __call_exitprocs
+ .text.startup  0x0000000040012a92       0x2c /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-__call_atexit.o)
+ .text          0x0000000040012abe      0x356 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-freer.o)
+                0x0000000040012abe                _malloc_trim_r
+                0x0000000040012bae                _free_r
+ .text          0x0000000040012e14     0x26da /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-svfprintf.o)
+                0x0000000040012e14                _svfprintf_r
+ .text          0x00000000400154ee     0x2900 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-vfprintf.o)
+                0x00000000400154ee                _vfprintf_r
+                0x0000000040017cea                vfprintf
+ .text          0x0000000040017dee       0x40 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-sprint_r.o)
+                0x0000000040017dee                __sprint_r
+ .text          0x0000000040017e2e       0xb2 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-ssprint_r.o)
+                0x0000000040017e2e                __ssprint_r
+ .text          0x0000000040017ee0      0x116 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-fclose.o)
+                0x0000000040017ee0                _fclose_r
+                0x0000000040017fe0                fclose
+ .text          0x0000000040017ff6      0x374 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-fvwrite.o)
+                0x0000000040017ff6                __sfvwrite_r
+ .text          0x000000004001836a      0x114 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-wsetup.o)
+                0x000000004001836a                __swsetup_r
+ .text          0x000000004001847e       0xc6 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-memchr.o)
+                0x000000004001847e                memchr
+ .text          0x0000000040018544       0xbe /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-strncpy.o)
+                0x0000000040018544                strncpy
+ .text          0x0000000040018602       0x44 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-localeconv.o)
+                0x0000000040018602                __localeconv_l
+                0x0000000040018616                _localeconv_r
+                0x000000004001862e                localeconv
+ .text          0x0000000040018646      0x118 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-memmove-stub.o)
+                0x0000000040018646                memmove
+ .text          0x000000004001875e      0x126 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-memcpy.o)
+                0x000000004001875e                memcpy
+ .text          0x0000000040018884       0x92 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libm_a-s_frexp.o)
+                0x0000000040018884                frexp
+ .text          0x0000000040018916     0x1142 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-dtoa.o)
+                0x0000000040018aea                _dtoa_r
+ .text          0x0000000040019a58      0xff0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-mprec.o)
+                0x0000000040019a58                _Balloc
+                0x0000000040019ae0                _Bfree
+                0x0000000040019b08                __multadd
+                0x0000000040019c3e                __s2b
+                0x0000000040019d4a                __hi0bits
+                0x0000000040019dea                __lo0bits
+                0x0000000040019ed8                __i2b
+                0x0000000040019f7c                __multiply
+                0x000000004001a172                __pow5mult
+                0x000000004001a284                __lshift
+                0x000000004001a3b6                __mcmp
+                0x000000004001a402                __mdiff
+                0x000000004001a5fc                __ulp
+                0x000000004001a666                __b2d
+                0x000000004001a764                __d2b
+                0x000000004001a878                __ratio
+                0x000000004001a926                _mprec_log10
+                0x000000004001a976                __copybits
+                0x000000004001a9d8                __any_on
+ .text          0x000000004001aa48      0x514 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-reallocr.o)
+                0x000000004001aa48                _realloc_r
+ .text          0x000000004001af5c      0x14e /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-ssputs_r.o)
+                0x000000004001af5c                __ssputs_r
+ .text          0x000000004001b0aa      0x218 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-makebuf.o)
+                0x000000004001b0aa                __smakebuf_r
+                0x000000004001b1de                __swhatbuf_r
+ .text          0x000000004001b2c2       0xfa /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-locale.o)
+                0x000000004001b2c2                _setlocale_r
+                0x000000004001b334                __locale_mb_cur_max
+                0x000000004001b34e                setlocale
+ .text          0x000000004001b3bc       0x54 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-fstatr.o)
+                0x000000004001b3bc                _fstat_r
+ .text          0x000000004001b410       0x4c /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-isattyr.o)
+                0x000000004001b410                _isatty_r
+ .text          0x000000004001b45c       0x50 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-assert.o)
+                0x000000004001b45c                __assert_func
+                0x000000004001b49c                __assert
+ .text          0x000000004001b4ac       0xd4 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-callocr.o)
+                0x000000004001b4ac                _calloc_r
+ .text          0x000000004001b580       0x84 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-mbtowc_r.o)
+                0x000000004001b580                _mbtowc_r
+                0x000000004001b598                __ascii_mbtowc
+ .text          0x000000004001b604       0x64 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-wctomb_r.o)
+                0x000000004001b604                _wctomb_r
+                0x000000004001b61c                __ascii_wctomb
+ .text          0x000000004001b668       0x86 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-fiprintf.o)
+                0x000000004001b668                _fiprintf_r
+                0x000000004001b6a4                fiprintf
+ .text          0x000000004001b6ee     0x10a2 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-vfiprintf.o)
+                0x000000004001b6ee                _vfiprintf_r
+                0x000000004001c68c                vfiprintf
+ .text          0x000000004001c790       0x14 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-abort.o)
+                0x000000004001c790                abort
+ .text          0x000000004001c7a4      0x472 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-signal.o)
+                0x000000004001c7a4                _init_signal_r
+                0x000000004001c7f4                _signal_r
+                0x000000004001c884                _raise_r
+                0x000000004001c916                __sigtramp_r
+                0x000000004001c9ce                raise
+                0x000000004001ca6c                signal
+                0x000000004001cb02                _init_signal
+                0x000000004001cb58                __sigtramp
+ .text          0x000000004001cc16       0x66 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-signalr.o)
+                0x000000004001cc16                _kill_r
+                0x000000004001cc6a                _getpid_r
+ .text          0x000000004001cc7c      0x3ea /nix/store/c231v52nr5smrzgygvpk0cs1f0336z0l-riscv64-none-elf-gcc-14.3.0/lib/gcc/riscv64-none-elf/14.3.0/libgcc.a(trunctfdf2.o)
+                0x000000004001cc7c                __trunctfdf2
 
-.rodata         0x000000004001cfa0      0xbd8
+.rodata         0x000000004001d068      0xbd8
  *(.rodata*)
  .rodata.str1.8
-                0x000000004001cfa0      0x467 newlibtest.o
+                0x000000004001d068      0x467 newlibtest.o
                                         0x32a (size before relaxing)
- *fill*         0x000000004001d407        0x1 
- .rodata        0x000000004001d408       0x14 newlibtest.o
- *fill*         0x000000004001d41c        0x4 
- .rodata        0x000000004001d420      0x101 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-ctype_.o)
-                0x000000004001d420                _ctype_
+ *fill*         0x000000004001d4cf        0x1 
+ .rodata        0x000000004001d4d0       0x14 newlibtest.o
+ *fill*         0x000000004001d4e4        0x4 
+ .rodata        0x000000004001d4e8      0x101 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-ctype_.o)
+                0x000000004001d4e8                _ctype_
  .rodata.str1.8
-                0x000000004001d521        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-puts.o)
+                0x000000004001d5e9        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-puts.o)
                                           0x2 (size before relaxing)
  .rodata.str1.8
-                0x000000004001d521        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-svfprintf.o)
+                0x000000004001d5e9        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-svfprintf.o)
                                          0x5a (size before relaxing)
- *fill*         0x000000004001d521        0x7 
- .rodata        0x000000004001d528      0x190 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-svfprintf.o)
+ *fill*         0x000000004001d5e9        0x7 
+ .rodata        0x000000004001d5f0      0x190 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-svfprintf.o)
  .rodata.str1.8
-                0x000000004001d6b8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-vfprintf.o)
+                0x000000004001d780        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-vfprintf.o)
                                          0x5a (size before relaxing)
- .rodata        0x000000004001d6b8      0x190 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-vfprintf.o)
+ .rodata        0x000000004001d780      0x190 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-vfprintf.o)
  .rodata.str1.8
-                0x000000004001d848        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-dtoa.o)
+                0x000000004001d910        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-dtoa.o)
                                          0x5a (size before relaxing)
  .rodata.str1.8
-                0x000000004001d848        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-mprec.o)
+                0x000000004001d910        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-mprec.o)
                                          0x3b (size before relaxing)
- .rodata        0x000000004001d848      0x128 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-mprec.o)
-                0x000000004001d858                __mprec_tens
-                0x000000004001d920                __mprec_tinytens
-                0x000000004001d948                __mprec_bigtens
+ .rodata        0x000000004001d910      0x128 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-mprec.o)
+                0x000000004001d920                __mprec_tens
+                0x000000004001d9e8                __mprec_tinytens
+                0x000000004001da10                __mprec_bigtens
  .rodata.str1.8
-                0x000000004001d970        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-locale.o)
+                0x000000004001da38        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-locale.o)
                                          0x1a (size before relaxing)
  .rodata.str1.8
-                0x000000004001d970        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-assert.o)
+                0x000000004001da38        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-assert.o)
                                          0x47 (size before relaxing)
  .rodata.str1.8
-                0x000000004001d970        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-vfiprintf.o)
+                0x000000004001da38        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-vfiprintf.o)
                                          0x37 (size before relaxing)
- .rodata        0x000000004001d970      0x190 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-vfiprintf.o)
+ .rodata        0x000000004001da38      0x190 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-vfiprintf.o)
  *(.srodata*)
- .srodata.cst8  0x000000004001db00       0x78 newlibtest.o
+ .srodata.cst8  0x000000004001dbc8       0x78 newlibtest.o
                                           0x8 (size before relaxing)
- .srodata.cst8  0x000000004001db78        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-strcmp.o)
+ .srodata.cst8  0x000000004001dc40        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-strcmp.o)
                                           0x8 (size before relaxing)
- .srodata.cst8  0x000000004001db78        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-svfprintf.o)
+ .srodata.cst8  0x000000004001dc40        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-svfprintf.o)
                                          0x18 (size before relaxing)
- .srodata.cst8  0x000000004001db78        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-vfprintf.o)
+ .srodata.cst8  0x000000004001dc40        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-vfprintf.o)
                                          0x18 (size before relaxing)
- .srodata.cst8  0x000000004001db78        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libm_a-s_frexp.o)
+ .srodata.cst8  0x000000004001dc40        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libm_a-s_frexp.o)
                                           0x8 (size before relaxing)
- .srodata.cst8  0x000000004001db78        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-dtoa.o)
+ .srodata.cst8  0x000000004001dc40        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-dtoa.o)
                                          0x48 (size before relaxing)
- .srodata.cst8  0x000000004001db78        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-mprec.o)
+ .srodata.cst8  0x000000004001dc40        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-mprec.o)
                                          0x10 (size before relaxing)
- .srodata.cst8  0x000000004001db78        0x0 /nix/store/c231v52nr5smrzgygvpk0cs1f0336z0l-riscv64-none-elf-gcc-14.3.0/lib/gcc/riscv64-none-elf/14.3.0/libgcc.a(trunctfdf2.o)
+ .srodata.cst8  0x000000004001dc40        0x0 /nix/store/c231v52nr5smrzgygvpk0cs1f0336z0l-riscv64-none-elf-gcc-14.3.0/lib/gcc/riscv64-none-elf/14.3.0/libgcc.a(trunctfdf2.o)
                                           0x8 (size before relaxing)
 
-.rela.dyn       0x000000004001db78        0x0
- .rela.text     0x000000004001db78        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/crt0.o
+.rela.dyn       0x000000004001dc40        0x0
+ .rela.text     0x000000004001dc40        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/crt0.o
  .rela.text.startup
-                0x000000004001db78        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/crt0.o
+                0x000000004001dc40        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/crt0.o
 
-.preinit_array  0x000000004001db78        0x0
-                0x000000004001db78                PROVIDE (__preinit_array_start = .)
+.preinit_array  0x000000004001dc40        0x0
+                0x000000004001dc40                PROVIDE (__preinit_array_start = .)
  *(.preinit_array)
-                0x000000004001db78                PROVIDE (__preinit_array_end = .)
+                0x000000004001dc40                PROVIDE (__preinit_array_end = .)
 
-.init_array     0x000000004001db78        0x8
-                0x000000004001db78                PROVIDE (__init_array_start = .)
+.init_array     0x000000004001dc40        0x8
+                0x000000004001dc40                PROVIDE (__init_array_start = .)
  *(SORT_BY_NAME(.init_array.*))
  .init_array.00000
-                0x000000004001db78        0x8 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-__call_atexit.o)
+                0x000000004001dc40        0x8 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-__call_atexit.o)
  *(.init_array)
-                0x000000004001db80                PROVIDE (__init_array_end = .)
+                0x000000004001dc48                PROVIDE (__init_array_end = .)
 
-.fini_array     0x000000004001db80        0x0
-                0x000000004001db80                PROVIDE (__fini_array_start = .)
+.fini_array     0x000000004001dc48        0x0
+                0x000000004001dc48                PROVIDE (__fini_array_start = .)
  *(SORT_BY_NAME(.fini_array.*))
  *(.fini_array)
-                0x000000004001db80                PROVIDE (__fini_array_end = .)
+                0x000000004001dc48                PROVIDE (__fini_array_end = .)
 
-.data           0x000000004001db80      0xb48
+.data           0x000000004001dc48      0xb48
  *(.data*)
- .data          0x000000004001db80        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/crt0.o
- .data          0x000000004001db80        0x0 newlibtest.o
- .data          0x000000004001db80        0x0 newlib_glue.o
- .data          0x000000004001db80        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-atexit.o)
- .data          0x000000004001db80        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-exit.o)
- .data          0x000000004001db80        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-malloc.o)
- .data          0x000000004001db80      0x810 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-mallocr.o)
-                0x000000004001db80                __malloc_av_
- .data          0x000000004001e390        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-mlock.o)
- .data          0x000000004001e390        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-strtol.o)
- .data          0x000000004001e390        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-ctype_.o)
- .data          0x000000004001e390        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-qsort.o)
- .data          0x000000004001e390        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-fflush.o)
- .data          0x000000004001e390       0x18 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-findfp.o)
-                0x000000004001e390                __sglue
- .data          0x000000004001e3a8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-fwalk.o)
- .data          0x000000004001e3a8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-printf.o)
- .data          0x000000004001e3a8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-puts.o)
- .data          0x000000004001e3a8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-snprintf.o)
- .data          0x000000004001e3a8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-stdio.o)
- .data          0x000000004001e3a8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-closer.o)
- .data          0x000000004001e3a8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-reent.o)
- .data          0x000000004001e3a8      0x178 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-impure.o)
-                0x000000004001e3a8                _impure_data
- .data          0x000000004001e520        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-lseekr.o)
- .data          0x000000004001e520        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-readr.o)
- .data          0x000000004001e520        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-sbrkr.o)
- .data          0x000000004001e520        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-writer.o)
- .data          0x000000004001e520        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-errno.o)
- .data          0x000000004001e520        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-init.o)
- .data          0x000000004001e520        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-fini.o)
- .data          0x000000004001e520        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-lock.o)
- .data          0x000000004001e520        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-memset.o)
- .data          0x000000004001e520        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-strlen.o)
- .data          0x000000004001e520        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-strcmp.o)
- .data          0x000000004001e520        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-__atexit.o)
- .data          0x000000004001e520        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-__call_atexit.o)
- .data          0x000000004001e520        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-freer.o)
- .data          0x000000004001e520        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-svfprintf.o)
- .data          0x000000004001e520        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-vfprintf.o)
- .data          0x000000004001e520        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-sprint_r.o)
- .data          0x000000004001e520        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-ssprint_r.o)
- .data          0x000000004001e520        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-fclose.o)
- .data          0x000000004001e520        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-fvwrite.o)
- .data          0x000000004001e520        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-wsetup.o)
- .data          0x000000004001e520        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-memchr.o)
- .data          0x000000004001e520        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-strncpy.o)
- .data          0x000000004001e520        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-localeconv.o)
- .data          0x000000004001e520        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-memmove-stub.o)
- .data          0x000000004001e520        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-memcpy.o)
- .data          0x000000004001e520        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libm_a-s_frexp.o)
- .data          0x000000004001e520        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-dtoa.o)
- .data          0x000000004001e520        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-mprec.o)
- .data          0x000000004001e520        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-reallocr.o)
- .data          0x000000004001e520        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-ssputs_r.o)
- .data          0x000000004001e520        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-makebuf.o)
- .data          0x000000004001e520      0x1a8 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-locale.o)
-                0x000000004001e520                __global_locale
- .data          0x000000004001e6c8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-fstatr.o)
- .data          0x000000004001e6c8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-isattyr.o)
- .data          0x000000004001e6c8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-assert.o)
- .data          0x000000004001e6c8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-callocr.o)
- .data          0x000000004001e6c8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-mbtowc_r.o)
- .data          0x000000004001e6c8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-wctomb_r.o)
- .data          0x000000004001e6c8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-fiprintf.o)
- .data          0x000000004001e6c8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-vfiprintf.o)
- .data          0x000000004001e6c8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-abort.o)
- .data          0x000000004001e6c8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-signal.o)
- .data          0x000000004001e6c8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-signalr.o)
- .data          0x000000004001e6c8        0x0 /nix/store/c231v52nr5smrzgygvpk0cs1f0336z0l-riscv64-none-elf-gcc-14.3.0/lib/gcc/riscv64-none-elf/14.3.0/libgcc.a(trunctfdf2.o)
+ .data          0x000000004001dc48        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/crt0.o
+ .data          0x000000004001dc48        0x0 newlibtest.o
+ .data          0x000000004001dc48        0x0 newlib_glue.o
+ .data          0x000000004001dc48        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-atexit.o)
+ .data          0x000000004001dc48        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-exit.o)
+ .data          0x000000004001dc48        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-malloc.o)
+ .data          0x000000004001dc48      0x810 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-mallocr.o)
+                0x000000004001dc48                __malloc_av_
+ .data          0x000000004001e458        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-mlock.o)
+ .data          0x000000004001e458        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-strtol.o)
+ .data          0x000000004001e458        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-ctype_.o)
+ .data          0x000000004001e458        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-qsort.o)
+ .data          0x000000004001e458        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-fflush.o)
+ .data          0x000000004001e458       0x18 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-findfp.o)
+                0x000000004001e458                __sglue
+ .data          0x000000004001e470        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-fwalk.o)
+ .data          0x000000004001e470        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-printf.o)
+ .data          0x000000004001e470        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-puts.o)
+ .data          0x000000004001e470        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-snprintf.o)
+ .data          0x000000004001e470        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-stdio.o)
+ .data          0x000000004001e470        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-closer.o)
+ .data          0x000000004001e470        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-reent.o)
+ .data          0x000000004001e470      0x178 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-impure.o)
+                0x000000004001e470                _impure_data
+ .data          0x000000004001e5e8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-lseekr.o)
+ .data          0x000000004001e5e8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-readr.o)
+ .data          0x000000004001e5e8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-sbrkr.o)
+ .data          0x000000004001e5e8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-writer.o)
+ .data          0x000000004001e5e8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-errno.o)
+ .data          0x000000004001e5e8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-init.o)
+ .data          0x000000004001e5e8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-fini.o)
+ .data          0x000000004001e5e8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-lock.o)
+ .data          0x000000004001e5e8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-memset.o)
+ .data          0x000000004001e5e8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-strlen.o)
+ .data          0x000000004001e5e8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-strcmp.o)
+ .data          0x000000004001e5e8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-__atexit.o)
+ .data          0x000000004001e5e8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-__call_atexit.o)
+ .data          0x000000004001e5e8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-freer.o)
+ .data          0x000000004001e5e8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-svfprintf.o)
+ .data          0x000000004001e5e8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-vfprintf.o)
+ .data          0x000000004001e5e8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-sprint_r.o)
+ .data          0x000000004001e5e8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-ssprint_r.o)
+ .data          0x000000004001e5e8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-fclose.o)
+ .data          0x000000004001e5e8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-fvwrite.o)
+ .data          0x000000004001e5e8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-wsetup.o)
+ .data          0x000000004001e5e8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-memchr.o)
+ .data          0x000000004001e5e8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-strncpy.o)
+ .data          0x000000004001e5e8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-localeconv.o)
+ .data          0x000000004001e5e8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-memmove-stub.o)
+ .data          0x000000004001e5e8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-memcpy.o)
+ .data          0x000000004001e5e8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libm_a-s_frexp.o)
+ .data          0x000000004001e5e8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-dtoa.o)
+ .data          0x000000004001e5e8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-mprec.o)
+ .data          0x000000004001e5e8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-reallocr.o)
+ .data          0x000000004001e5e8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-ssputs_r.o)
+ .data          0x000000004001e5e8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-makebuf.o)
+ .data          0x000000004001e5e8      0x1a8 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-locale.o)
+                0x000000004001e5e8                __global_locale
+ .data          0x000000004001e790        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-fstatr.o)
+ .data          0x000000004001e790        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-isattyr.o)
+ .data          0x000000004001e790        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-assert.o)
+ .data          0x000000004001e790        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-callocr.o)
+ .data          0x000000004001e790        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-mbtowc_r.o)
+ .data          0x000000004001e790        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-wctomb_r.o)
+ .data          0x000000004001e790        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-fiprintf.o)
+ .data          0x000000004001e790        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-vfiprintf.o)
+ .data          0x000000004001e790        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-abort.o)
+ .data          0x000000004001e790        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-signal.o)
+ .data          0x000000004001e790        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-signalr.o)
+ .data          0x000000004001e790        0x0 /nix/store/c231v52nr5smrzgygvpk0cs1f0336z0l-riscv64-none-elf-gcc-14.3.0/lib/gcc/riscv64-none-elf/14.3.0/libgcc.a(trunctfdf2.o)
 
-.sdata          0x000000004001e6c8       0x20
-                0x000000004001eec8                PROVIDE (__global_pointer$ = (. + 0x800))
+.sdata          0x000000004001e790       0x20
+                0x000000004001ef90                PROVIDE (__global_pointer$ = (. + 0x800))
  *(.sdata*)
- .sdata         0x000000004001e6c8       0x10 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-mallocr.o)
-                0x000000004001e6c8                __malloc_sbrk_base
-                0x000000004001e6d0                __malloc_trim_threshold
- .sdata         0x000000004001e6d8        0x8 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-impure.o)
-                0x000000004001e6d8                _impure_ptr
- .sdata         0x000000004001e6e0        0x8 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-__call_atexit.o)
-                0x000000004001e6e0                __atexit_recursive_mutex
-                0x000000004001e6e8                __bss_start = .
+ .sdata         0x000000004001e790       0x10 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-mallocr.o)
+                0x000000004001e790                __malloc_sbrk_base
+                0x000000004001e798                __malloc_trim_threshold
+ .sdata         0x000000004001e7a0        0x8 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-impure.o)
+                0x000000004001e7a0                _impure_ptr
+ .sdata         0x000000004001e7a8        0x8 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-__call_atexit.o)
+                0x000000004001e7a8                __atexit_recursive_mutex
+                0x000000004001e7b0                __bss_start = .
 
-.sbss           0x000000004001e6e8       0x78
+.sbss           0x000000004001e7b0       0x78
  *(.sbss*)
- .sbss          0x000000004001e6e8       0x18 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-mallocr.o)
-                0x000000004001e6e8                __malloc_max_total_mem
-                0x000000004001e6f0                __malloc_max_sbrked_mem
-                0x000000004001e6f8                __malloc_top_pad
- .sbss          0x000000004001e700        0x8 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-findfp.o)
-                0x000000004001e700                __stdio_exit_handler
- .sbss          0x000000004001e708        0x4 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-reent.o)
-                0x000000004001e708                errno
- *fill*         0x000000004001e70c        0x4 
- .sbss          0x000000004001e710       0x39 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-lock.o)
-                0x000000004001e710                __lock___arc4random_mutex
-                0x000000004001e718                __lock___dd_hash_mutex
-                0x000000004001e720                __lock___tz_mutex
-                0x000000004001e728                __lock___env_recursive_mutex
-                0x000000004001e730                __lock___malloc_recursive_mutex
-                0x000000004001e738                __lock___at_quick_exit_mutex
-                0x000000004001e740                __lock___atexit_recursive_mutex
-                0x000000004001e748                __lock___sfp_recursive_mutex
- *fill*         0x000000004001e749        0x7 
- .sbss          0x000000004001e750        0x8 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-__call_atexit.o)
-                0x000000004001e750                __atexit
- .sbss          0x000000004001e758        0x8 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-locale.o)
-                0x000000004001e758                _PathLocale
+ .sbss          0x000000004001e7b0       0x18 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-mallocr.o)
+                0x000000004001e7b0                __malloc_max_total_mem
+                0x000000004001e7b8                __malloc_max_sbrked_mem
+                0x000000004001e7c0                __malloc_top_pad
+ .sbss          0x000000004001e7c8        0x8 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-findfp.o)
+                0x000000004001e7c8                __stdio_exit_handler
+ .sbss          0x000000004001e7d0        0x4 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-reent.o)
+                0x000000004001e7d0                errno
+ *fill*         0x000000004001e7d4        0x4 
+ .sbss          0x000000004001e7d8       0x39 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-lock.o)
+                0x000000004001e7d8                __lock___arc4random_mutex
+                0x000000004001e7e0                __lock___dd_hash_mutex
+                0x000000004001e7e8                __lock___tz_mutex
+                0x000000004001e7f0                __lock___env_recursive_mutex
+                0x000000004001e7f8                __lock___malloc_recursive_mutex
+                0x000000004001e800                __lock___at_quick_exit_mutex
+                0x000000004001e808                __lock___atexit_recursive_mutex
+                0x000000004001e810                __lock___sfp_recursive_mutex
+ *fill*         0x000000004001e811        0x7 
+ .sbss          0x000000004001e818        0x8 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-__call_atexit.o)
+                0x000000004001e818                __atexit
+ .sbss          0x000000004001e820        0x8 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-locale.o)
+                0x000000004001e820                _PathLocale
  *(.scommon)
 
-.bss            0x000000004001e760      0x590
+.bss            0x000000004001e828      0x590
  *(.bss*)
- .bss           0x000000004001e760        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/crt0.o
- .bss           0x000000004001e760        0x0 newlibtest.o
- .bss           0x000000004001e760        0x0 newlib_glue.o
- .bss           0x000000004001e760        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-atexit.o)
- .bss           0x000000004001e760        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-exit.o)
- .bss           0x000000004001e760        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-malloc.o)
- .bss           0x000000004001e760       0x50 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-mallocr.o)
-                0x000000004001e760                __malloc_current_mallinfo
- .bss           0x000000004001e7b0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-mlock.o)
- .bss           0x000000004001e7b0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-strtol.o)
- .bss           0x000000004001e7b0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-ctype_.o)
- .bss           0x000000004001e7b0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-qsort.o)
- .bss           0x000000004001e7b0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-fflush.o)
- .bss           0x000000004001e7b0      0x228 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-findfp.o)
-                0x000000004001e7b0                __sf
- .bss           0x000000004001e9d8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-fwalk.o)
- .bss           0x000000004001e9d8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-printf.o)
- .bss           0x000000004001e9d8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-puts.o)
- .bss           0x000000004001e9d8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-snprintf.o)
- .bss           0x000000004001e9d8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-stdio.o)
- .bss           0x000000004001e9d8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-closer.o)
- .bss           0x000000004001e9d8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-reent.o)
- .bss           0x000000004001e9d8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-impure.o)
- .bss           0x000000004001e9d8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-lseekr.o)
- .bss           0x000000004001e9d8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-readr.o)
- .bss           0x000000004001e9d8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-sbrkr.o)
- .bss           0x000000004001e9d8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-writer.o)
- .bss           0x000000004001e9d8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-errno.o)
- .bss           0x000000004001e9d8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-init.o)
- .bss           0x000000004001e9d8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-fini.o)
- .bss           0x000000004001e9d8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-lock.o)
- .bss           0x000000004001e9d8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-memset.o)
- .bss           0x000000004001e9d8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-strlen.o)
- .bss           0x000000004001e9d8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-strcmp.o)
- .bss           0x000000004001e9d8      0x318 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-__atexit.o)
-                0x000000004001e9d8                __atexit0
- .bss           0x000000004001ecf0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-__call_atexit.o)
- .bss           0x000000004001ecf0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-freer.o)
- .bss           0x000000004001ecf0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-svfprintf.o)
- .bss           0x000000004001ecf0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-vfprintf.o)
- .bss           0x000000004001ecf0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-sprint_r.o)
- .bss           0x000000004001ecf0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-ssprint_r.o)
- .bss           0x000000004001ecf0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-fclose.o)
- .bss           0x000000004001ecf0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-fvwrite.o)
- .bss           0x000000004001ecf0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-wsetup.o)
- .bss           0x000000004001ecf0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-memchr.o)
- .bss           0x000000004001ecf0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-strncpy.o)
- .bss           0x000000004001ecf0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-localeconv.o)
- .bss           0x000000004001ecf0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-memmove-stub.o)
- .bss           0x000000004001ecf0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-memcpy.o)
- .bss           0x000000004001ecf0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libm_a-s_frexp.o)
- .bss           0x000000004001ecf0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-dtoa.o)
- .bss           0x000000004001ecf0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-mprec.o)
- .bss           0x000000004001ecf0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-reallocr.o)
- .bss           0x000000004001ecf0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-ssputs_r.o)
- .bss           0x000000004001ecf0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-makebuf.o)
- .bss           0x000000004001ecf0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-locale.o)
- .bss           0x000000004001ecf0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-fstatr.o)
- .bss           0x000000004001ecf0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-isattyr.o)
- .bss           0x000000004001ecf0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-assert.o)
- .bss           0x000000004001ecf0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-callocr.o)
- .bss           0x000000004001ecf0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-mbtowc_r.o)
- .bss           0x000000004001ecf0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-wctomb_r.o)
- .bss           0x000000004001ecf0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-fiprintf.o)
- .bss           0x000000004001ecf0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-vfiprintf.o)
- .bss           0x000000004001ecf0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-abort.o)
- .bss           0x000000004001ecf0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-signal.o)
- .bss           0x000000004001ecf0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-signalr.o)
- .bss           0x000000004001ecf0        0x0 /nix/store/c231v52nr5smrzgygvpk0cs1f0336z0l-riscv64-none-elf-gcc-14.3.0/lib/gcc/riscv64-none-elf/14.3.0/libgcc.a(trunctfdf2.o)
+ .bss           0x000000004001e828        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/crt0.o
+ .bss           0x000000004001e828        0x0 newlibtest.o
+ .bss           0x000000004001e828        0x0 newlib_glue.o
+ .bss           0x000000004001e828        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-atexit.o)
+ .bss           0x000000004001e828        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-exit.o)
+ .bss           0x000000004001e828        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-malloc.o)
+ .bss           0x000000004001e828       0x50 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-mallocr.o)
+                0x000000004001e828                __malloc_current_mallinfo
+ .bss           0x000000004001e878        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-mlock.o)
+ .bss           0x000000004001e878        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-strtol.o)
+ .bss           0x000000004001e878        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-ctype_.o)
+ .bss           0x000000004001e878        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-qsort.o)
+ .bss           0x000000004001e878        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-fflush.o)
+ .bss           0x000000004001e878      0x228 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-findfp.o)
+                0x000000004001e878                __sf
+ .bss           0x000000004001eaa0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-fwalk.o)
+ .bss           0x000000004001eaa0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-printf.o)
+ .bss           0x000000004001eaa0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-puts.o)
+ .bss           0x000000004001eaa0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-snprintf.o)
+ .bss           0x000000004001eaa0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-stdio.o)
+ .bss           0x000000004001eaa0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-closer.o)
+ .bss           0x000000004001eaa0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-reent.o)
+ .bss           0x000000004001eaa0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-impure.o)
+ .bss           0x000000004001eaa0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-lseekr.o)
+ .bss           0x000000004001eaa0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-readr.o)
+ .bss           0x000000004001eaa0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-sbrkr.o)
+ .bss           0x000000004001eaa0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-writer.o)
+ .bss           0x000000004001eaa0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-errno.o)
+ .bss           0x000000004001eaa0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-init.o)
+ .bss           0x000000004001eaa0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-fini.o)
+ .bss           0x000000004001eaa0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-lock.o)
+ .bss           0x000000004001eaa0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-memset.o)
+ .bss           0x000000004001eaa0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-strlen.o)
+ .bss           0x000000004001eaa0        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-strcmp.o)
+ .bss           0x000000004001eaa0      0x318 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-__atexit.o)
+                0x000000004001eaa0                __atexit0
+ .bss           0x000000004001edb8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-__call_atexit.o)
+ .bss           0x000000004001edb8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-freer.o)
+ .bss           0x000000004001edb8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-svfprintf.o)
+ .bss           0x000000004001edb8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-vfprintf.o)
+ .bss           0x000000004001edb8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-sprint_r.o)
+ .bss           0x000000004001edb8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-ssprint_r.o)
+ .bss           0x000000004001edb8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-fclose.o)
+ .bss           0x000000004001edb8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-fvwrite.o)
+ .bss           0x000000004001edb8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-wsetup.o)
+ .bss           0x000000004001edb8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-memchr.o)
+ .bss           0x000000004001edb8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-strncpy.o)
+ .bss           0x000000004001edb8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-localeconv.o)
+ .bss           0x000000004001edb8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-memmove-stub.o)
+ .bss           0x000000004001edb8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-memcpy.o)
+ .bss           0x000000004001edb8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libm_a-s_frexp.o)
+ .bss           0x000000004001edb8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-dtoa.o)
+ .bss           0x000000004001edb8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-mprec.o)
+ .bss           0x000000004001edb8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-reallocr.o)
+ .bss           0x000000004001edb8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-ssputs_r.o)
+ .bss           0x000000004001edb8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-makebuf.o)
+ .bss           0x000000004001edb8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-locale.o)
+ .bss           0x000000004001edb8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-fstatr.o)
+ .bss           0x000000004001edb8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-isattyr.o)
+ .bss           0x000000004001edb8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-assert.o)
+ .bss           0x000000004001edb8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-callocr.o)
+ .bss           0x000000004001edb8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-mbtowc_r.o)
+ .bss           0x000000004001edb8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-wctomb_r.o)
+ .bss           0x000000004001edb8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-fiprintf.o)
+ .bss           0x000000004001edb8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-vfiprintf.o)
+ .bss           0x000000004001edb8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-abort.o)
+ .bss           0x000000004001edb8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-signal.o)
+ .bss           0x000000004001edb8        0x0 /nix/store/326m521a9mipli339nmbzcgpglsj6py7-newlib-riscv64-none-elf-4.5.0.20241231/riscv64-none-elf/lib/libc.a(libc_a-signalr.o)
+ .bss           0x000000004001edb8        0x0 /nix/store/c231v52nr5smrzgygvpk0cs1f0336z0l-riscv64-none-elf-gcc-14.3.0/lib/gcc/riscv64-none-elf/14.3.0/libgcc.a(trunctfdf2.o)
  *(COMMON)
-                0x000000004001ecf0                . = ALIGN (0x10)
-                0x000000004001ecf0                _end = .
+                0x000000004001edc0                . = ALIGN (0x10)
+                0x000000004001edc0                _end = .
                 [!provide]                        PROVIDE (end = .)
 
 /DISCARD/

@@ -28,6 +28,7 @@ CFLAGS="-march=rv64imac_zicsr -mabi=lp64 -mcmodel=medany \
 	-Wall -Wextra -O2 -g"
 
 echo "== compile (freestanding, $TC) =="
+"$CC" $CFLAGS -c image_header.S -o image_header.o
 "$CC" $CFLAGS -c locore.S    -o locore.o
 "$CC" $CFLAGS -c trap.S      -o trap_asm.o
 "$CC" $CFLAGS -c swtch.S     -o swtch.o
@@ -57,7 +58,7 @@ echo "== compile (freestanding, $TC) =="
 "$CC" $CFLAGS -c main.c      -o main.o
 
 echo "== link (riscv.ld @ 0x80200000) =="
-"$LD" -T riscv.ld -o "$OUT" locore.o trap_asm.o swtch.o sbi.o trap.o \
+"$LD" -T riscv.ld -o "$OUT" image_header.o locore.o trap_asm.o swtch.o sbi.o trap.o \
 	hat_riscv.o timer.o plic.o aia.o fdt.o vm_page.o kmem.o proc.o \
 	as.o elf.o syscall.o uart.o sdhci.o uproc.o copy.o \
 	virtio.o vioblk.o blkfs.o vionet.o rootfs.o startup.o main.o

@@ -202,17 +202,87 @@ cross-compile clean).
 | **"it reaches a shell"** | K1 clock/reset shim (§6, no BSD crib) + wire the existing `uts/sdhci.c` to `spacemit,k1-x-sdhci` -> boot off eMMC/microSD | ~2 wk |
 | **"pixels on HDMI"** | inherit the U-Boot framebuffer if present (3-5 d) else port the custom SpaceMiT DPU (2-3 wk) | 1-3 wk |
 
+> **CORRECTION -- "everything before the board is done" was WRONG.** Building the
+> flashable payload (`src/riscv/uts/build-k1-payload.sh`, and the maintainer
+> runbook `docs/milkv-jupiter-bringup-runbook.md`) turned up **four defects in
+> committed code, each of which would on its own have prevented a boot on real
+> silicon.** All four are fixed and the seven gates measure **10/10 all-PASS**
+> afterwards, but the honest sequencing is that "it prints" was never one wrap
+> away. None of this has executed on K1 silicon.
+>
+> 1. **`0x80200000` is not DRAM on the K1.** `riscv.ld` hardcoded that ORIGIN
+>    (OpenSBI's payload address on qemu-virt). Mainline U-Boot's K1 support is
+>    unambiguous that K1 DRAM is `0x0..0x80000000` with SoC MMIO above it
+>    (`include/configs/bananapi-f3.h` `CFG_SYS_SDRAM_BASE = 0x0`;
+>    `arch/riscv/cpu/k1/dram.c` `gd->ram_base = 0x0`, bank0 capped at 2 GiB;
+>    `k1.dtsi` uart0 `0xd4017000` / PLIC `0xe0000000` / CLINT `0xe4000000`). So
+>    the compiled-in load address was inside a **hole**. `riscv.ld` now takes
+>    `KBASE`; the default is unchanged so the qemu gates are unaffected.
+> 2. **`booti` could never have booted our kernel**, contrary to the flash recipe
+>    in `docs/design-riscv-port.md` §R-P15.4. U-Boot's `arch/riscv/lib/image.c`
+>    `booti_setup()` rejects any image lacking magic `0x05435352` at offset
+>    `0x38`; a raw ELF has program-header bytes there. New `image_header.S`
+>    supplies the Linux RISC-V Image header with `code0 = j _start`, so it stays
+>    inert on the OpenSBI/qemu path that enters at the ELF entry point.
+> 3. **The runtime board-detect could never fire on the K1.** `fdt_k1_summary()`
+>    required `aplic_present && imsic_present` -- devices the K1 **cannot** have,
+>    since it is a PLIC SoC (the very correction `k1.dts` exists to make). The
+>    predicate was unsatisfiable, so on the board it would have reported "NOT K1"
+>    and driven the **in-kernel SDHCI model instead of real silicon**. This is
+>    also what the boot log's `[k1] WARN: embedded K1 DTB missing a signature
+>    device` line was -- a bug, not a bad DTB. Signature is now the two devices
+>    that actually identify the board (SpaceMiT/xscale UART + SDHCI MMC), and the
+>    qemu direction is negative-controlled (qemu-virt's DTB has `ns16550a` and
+>    zero MMC nodes, so it still correctly returns 0).
+> 4. **The boot page allocator pointed into the K1's MMIO hole**, and nothing
+>    clamped it to the mapped region. Its extent was hardcoded
+>    `[0x80000000, 0x88000000)`; it is now taken from the firmware `/memory` node.
+>    Worse, the boot map installs exactly **one** identity gigapage over the
+>    kernel while both the bump allocator and `page_init()` dereference pages as
+>    `VA==PA` -- so any board with more DRAM than one gigapage (the K1 has 2 GiB
+>    in bank 0) would fault while initializing `page_t`s. Both are now clamped to
+>    the gigapage end, negative-controlled in both directions (`-m 512M` -> clamp
+>    silent, 7/7; `-m 2G` -> clamp fires, boot healthy).
+>
+> **Remaining known ceiling, deliberately not attempted:** the clamp caps the
+> BOOT allocator, not total usable RAM. Using the rest of a 2/4/8 GiB K1 means
+> mapping the remaining DRAM gigapages -- a separate change that the board should
+> justify first.
+>
+> **VERIFIED-locally vs UNVERIFIED-until-hardware.** Verified locally: the payload
+> builds; the Image header is well-formed and its `text_offset` equals the link
+> address; `code0` disassembles to `j _start`; the DTB round-trips through `dtc`
+> still describing the K1 topology (PLIC, `ndev=159`, 8 harts,
+> `spacemit,k1-x-sdhci`, `reg-shift=2`, GPU disabled); and the OpenSBI
+> `fw_payload` **boots to a login prompt under QEMU**. Unverified until hardware:
+> everything about the K1 itself. A QEMU pass is **not** evidence the K1 boots --
+> `-machine virt` has a different DRAM base, a different UART, and different
+> firmware, and no instruction of ours has ever run on this SoC.
+
 Network (the custom `spacemit,k1x-emac`, no BSD crib, ~2-3 wk) is deliberately
 deferred -- a USB-Ethernet dongle or offline work covers the gap.
 
 ## What we need from the hardware to proceed on Track 3
 
+**The maintainer now physically has the board.** The handed-over procedure is
+`docs/milkv-jupiter-bringup-runbook.md`; the three items below are what it is
+built to answer.
+
 1. **A USB-to-UART serial adapter on the K1 debug UART.** Non-negotiable: the
    console is how every early-boot failure is diagnosed. (Every aarch64 advance
-   this project made came from reading a console.)
+   this project made came from reading a console.) 115200 8N1 on `uart0`
+   `0xd4017000`. **The physical header pin is NOT knowable from this repo** --
+   we know the SoC pads (68/69, function 2, from mainline `k1-pinctrl.dtsi`) but
+   not their board routing, so the runbook deliberately refuses to guess a
+   pinout and says what to look for instead.
 2. **Whether the board boots its stock vendor image.** Confirms U-Boot/OpenSBI are
    healthy, and -- critically -- tells us whether U-Boot leaves a live framebuffer.
    That single fact decides 3-5 days vs 2-3 weeks for "pixels on HDMI".
+   A prior worth having, but only a prior: **mainline** U-Boot's K1 support has no
+   display driver at all (`bananapi-f3_defconfig` sets no `CONFIG_*VIDEO*`, and
+   mainline `k1.dtsi` has zero display/DPU/HDMI nodes), so a framebuffer would
+   have to come from the **vendor (Bianbu)** U-Boot -- which is exactly why this
+   must be measured on the board rather than inferred.
 3. **Reachability**: whether the board can be driven directly, or whether the
    maintainer runs a handed-over runbook.
 

@@ -2252,6 +2252,25 @@ are dropped in. Exact external versions to use:
 
 ### R-P15.4 Flash-to-SD + boot procedure (for the maintainer's PHYSICAL board)
 
+> **⚠️ RETRACTED (superseded by `docs/milkv-jupiter-bringup-runbook.md`).** Step 5
+> below, `booti`-ing the raw `unix` ELF, **cannot work** and never could. U-Boot's
+> `arch/riscv/lib/image.c` `booti_setup()` rejects any image whose magic at offset
+> `0x38` is not `0x05435352` ("RSC\x05") with "Bad Linux RISCV Image magic!"; a
+> raw ELF has program-header bytes at that offset (measured). Two further reasons
+> this recipe would have failed on the board:
+>
+> * **`0x80200000` is not DRAM on the K1.** K1 DRAM is `0x0..0x80000000` with SoC
+>   MMIO above it (mainline `include/configs/bananapi-f3.h`
+>   `CFG_SYS_SDRAM_BASE = 0x0`, `arch/riscv/cpu/k1/dram.c`). The kernel must be
+>   relinked; `riscv.ld` now takes `KBASE`.
+> * **The `unix` ELF is not the artifact to copy.** Use `unix-k1.Image` from
+>   `src/riscv/uts/build-k1-payload.sh`, which carries the Image header.
+>
+> The layout/GPT/FAT-bootfs work described in §R-P15.3 stands. Use
+> `docs/milkv-jupiter-bringup-runbook.md` for the actual procedure -- it boots from
+> **microSD via the U-Boot prompt** so the eMMC vendor image stays recoverable,
+> rather than flashing a whole-disk image as step 4 here does.
+
 On a Linux host, with the SD card at `/dev/sdX` (VERIFY the device — this is
 destructive) and the two vendor blobs built:
 

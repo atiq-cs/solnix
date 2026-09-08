@@ -16,13 +16,25 @@
 OUTPUT_ARCH(riscv)
 ENTRY(_start)
 
-/* OpenSBI's default S-mode payload load/jump address on qemu virt. */
-BASE = 0x80200000;
+/*
+ * OpenSBI's default S-mode payload load/jump address on qemu virt.
+ *
+ * OVERRIDABLE (`ld --defsym KBASE=<addr>`) because 0x80200000 is NOT DRAM on
+ * every RISC-V platform. On the SpaceMiT K1 (Milk-V Jupiter / BPI-F3) DRAM is
+ * 0x0..0x80000000 and the 2-4 GiB physical window is SoC MMIO (uart0
+ * 0xd4017000, PLIC 0xe0000000, CLINT 0xe4000000), so 0x80200000 falls in a
+ * hole: mainline U-Boot's arch/riscv/cpu/k1/dram.c sets gd->ram_base = 0x0 and
+ * caps bank 0 at 2 GiB. build-k1-payload.sh therefore relinks with a KBASE
+ * inside K1 DRAM. Default is unchanged, so the qemu-virt gates are unaffected.
+ */
+BASE = DEFINED(KBASE) ? KBASE : 0x80200000;
 
 MEMORY
 {
-	/* RAM from the payload base up; qemu virt default has >=128M total. */
-	RAM (rwxa) : ORIGIN = 0x80200000, LENGTH = 120M
+	/* RAM from the payload base up; qemu virt default has >=128M total.
+	 * Kept (rather than dropped) so an over-large kernel still fails the link
+	 * instead of silently overflowing the region. */
+	RAM (rwxa) : ORIGIN = DEFINED(KBASE) ? KBASE : 0x80200000, LENGTH = 120M
 }
 
 SECTIONS
@@ -30,7 +42,15 @@ SECTIONS
 	. = BASE;
 
 	.text : {
-		*(.text.start)		/* _start MUST be first (OpenSBI jumps here) */
+		/*
+		 * The Linux RISC-V Image header (image_header.S) is byte 0 so that
+		 * U-Boot `booti` accepts the image; its code0 slot is `j _start`, so
+		 * entering at byte 0 still reaches _start. Firmware that honors the
+		 * ELF entry (OpenSBI fw_payload, qemu -kernel) jumps straight to
+		 * _start and never executes the header.
+		 */
+		*(.text.image_header)
+		*(.text.start)		/* _start (OpenSBI's ELF-entry target) */
 		*(.text .text.*)
 	} > RAM
 
@@ -54,6 +74,18 @@ SECTIONS
 		. = ALIGN(8);
 		__bss_end = .;
 	} > RAM
+
+	_end = .;
+
+	/*
+	 * Fed to the Image header. text_offset is what U-Boot adds to
+	 * gd->ram_base to decide where to relocate the image, so it must equal
+	 * the link base; taking both from the linker keeps them consistent by
+	 * construction. image_size covers BSS so U-Boot's lmb reservation does
+	 * not hand our BSS out to something else.
+	 */
+	_image_text_offset = BASE;
+	_image_size = _end - BASE;
 
 	/DISCARD/ : { *(.comment) *(.note*) *(.eh_frame) *(.riscv.attributes) }
 }

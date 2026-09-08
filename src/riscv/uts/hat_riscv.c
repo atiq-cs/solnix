@@ -82,21 +82,78 @@ static int boot_pt_next = 0;
  * pages for the high-VA hat and for allocating page-table pages once the
  * static boot pool is exhausted.
  *
- * RAM base/size: on qemu virt the DTB /memory node reports base 0x80000000
- * and size (default) 128 MiB. Full FDT parsing is R-P5 work; here we take the
- * conservative, provable path: start the bump watermark just above the kernel
- * BSS end (page-aligned) and cap it at a DTB-independent floor of RAM we know
- * qemu virt always has. Because the whole 0x80000000 GiB is identity-mapped
- * (VA==PA) by the R-P3 boot map, a bump-allocated physical address is directly
- * usable as a kernel pointer to zero/fill the page.
+ * RAM base/size: the bump watermark starts just above the kernel BSS end
+ * (page-aligned). The END of the pool comes from the /memory node the firmware
+ * handed us, via hat_phys_set_ram(), because a compiled-in extent is wrong on
+ * any board whose DRAM is not at 0x80000000 -- notably the SpaceMiT K1, where
+ * DRAM is 0x0..0x80000000 and 0x80000000..0x100000000 is SoC MMIO, so the old
+ * hardcoded [0x80000000, 0x88000000) pool was entirely inside a hole. The
+ * qemu-virt values remain the fallback for the case where the DTB parse fails.
+ * Because the kernel's own gigapage is identity-mapped (VA==PA) by the boot
+ * map, a bump-allocated physical address is directly usable as a kernel pointer.
  */
 #define	PHYS_RAM_BASE	0x80000000UL
-/* Conservative: qemu virt default is 128 MiB; we only ever nibble a few pages. */
+/* Fallback only: qemu virt default is 128 MiB; we only ever nibble a few pages. */
 #define	PHYS_RAM_END	(PHYS_RAM_BASE + 0x08000000UL)	/* 128 MiB */
 
 static unsigned long phys_bump;		/* next free physical address */
 static unsigned long phys_bump_end;	/* one past the last usable byte */
 static unsigned long phys_alloc_count;	/* pages handed out (diagnostics) */
+
+/*
+ * The DRAM extent the firmware reported, or the qemu-virt fallback until
+ * hat_phys_set_ram() is called. Set from the boot DTB before hat_phys_init().
+ */
+static unsigned long phys_ram_base = PHYS_RAM_BASE;
+static unsigned long phys_ram_end = PHYS_RAM_END;
+
+/*
+ * hat_phys_ram_limit — the highest physical address the boot identity map can
+ * safely dereference as VA==PA: the end of the kernel's identity gigapage.
+ * page_init() builds its page_t array AT the physical address it manages and
+ * writes every descriptor through VA==PA, so it must clamp to this too, or a
+ * board with more DRAM than one gigapage (the K1: 2 GiB in bank 0) faults while
+ * initializing pages beyond the mapping.
+ */
+unsigned long
+hat_phys_ram_limit(void)
+{
+	return (((unsigned long)_start & ~(GIGASIZE - 1)) + GIGASIZE);
+}
+
+/*
+ * hat_phys_set_ram — adopt the firmware-reported DRAM extent for the boot bump
+ * allocator. Called from mlsetup with the /memory node values BEFORE
+ * hat_phys_init(), so a board whose DRAM is not at 0x80000000 (the K1) does not
+ * bump-allocate into an MMIO hole. Ignores an extent that does not contain the
+ * running kernel, since that is a parse failure rather than a real map and the
+ * compiled-in fallback is strictly safer than a bogus one.
+ *
+ * CLAMPED to the end of the kernel's identity gigapage. The boot map installs
+ * exactly ONE identity gigapage over the kernel (see hat_boot_init), and every
+ * bump-allocated page is dereferenced as VA==PA to zero it — so a pool that ran
+ * past that gigapage would fault on first use. This matters on the K1, whose
+ * bank-0 DRAM is 0x0..0x80000000 (2 GiB) while the kernel gigapage covers only
+ * 1 GiB of it; on qemu-virt the 512 MiB extent already fits and the clamp is a
+ * no-op. NOTE: this caps the BOOT allocator only, not total usable RAM; lifting
+ * it means mapping the remaining DRAM gigapages, which is a separate change and
+ * needs the board to justify it.
+ */
+void
+hat_phys_set_ram(unsigned long base, unsigned long size)
+{
+	unsigned long kend = (unsigned long)__bss_end;
+	unsigned long kgiga_end = hat_phys_ram_limit();
+	unsigned long end;
+
+	if (size == 0 || base > kend || (base + size) <= kend)
+		return;
+	end = base + size;
+	if (end > kgiga_end)
+		end = kgiga_end;
+	phys_ram_base = base;
+	phys_ram_end = end;
+}
 
 /* The root table (set once alloc'd) and its PA, exported for satp. */
 static unsigned long *root_pt;
@@ -327,7 +384,7 @@ hat_phys_init(void)
 	    ~(PAGESIZE - 1);
 
 	phys_bump = kend;
-	phys_bump_end = PHYS_RAM_END;
+	phys_bump_end = phys_ram_end;
 	phys_alloc_count = 0;
 
 	sbi_console_puts("[hat] phys page allocator: free RAM ");
