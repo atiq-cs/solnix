@@ -89,11 +89,18 @@ tracing the actual dependency or measuring the actual value.
   `-I` to skip binaries, a **specific subdirectory**, a trailing `| head`, and an outer
   `timeout 60`. This is the same class of hazard as the ssh rules below: a command that cannot
   be interrupted is worse than one that fails.
-* **A wedged agent looks different from a truncated one.** Truncation ends the run; a wedge
-  leaves it `running` with a **frozen tool count**. Compare tool count across two checks a few
-  minutes apart — if it has not moved, it is wedged, not thinking. Cost-check, then re-dispatch
-  with the specific hazard named in the brief (an addendum describing exactly how the previous
-  agent died is more useful than a general warning).
+* **Do NOT diagnose a wedge from a frozen tool count over one interval.** The orchestrator did
+  exactly that and was **wrong**: an agent sat at 10 tool uses for ~15 minutes and looked
+  hung — the transcript even showed it had just issued an unbounded recursive grep, which made
+  the story compelling. It was merely SLOW; it went on to 32 tool uses and was the one actually
+  writing its checkpoint. The unbounded grep was real but not fatal.
+  This is the *general* rule failing on its author: **a plausible explanation is not a diagnosis
+  until the mechanism is observed.** Before declaring a wedge, require BOTH: a frozen tool count
+  across *several* well-separated checks, AND a stalled checkpoint file. On tasks whose steps are
+  long (reading multi-MB console logs, walking a 150G gate tree) minutes of silence are normal.
+  Cost of the false positive here was mild — a redundant agent queued 27 minutes and never ran,
+  so no spend and no file touched — but re-dispatching a duplicate onto a task that is already
+  progressing risks two agents fighting over the same files.
 * **Never** `zpool import` / `format` / chained disk probes over ssh — they block forever and
   the local `timeout` will not save you.
 * **`aws ec2 get-console-output --latest` is the only safe console read** — a plain API call
