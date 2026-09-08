@@ -66,21 +66,50 @@ struct callout {
 static struct callout callouts[CALLOUT_MAX];
 static volatile int callout_lock;
 
-static void
+/*
+ * callout_lock is taken BY THE TIMER INTERRUPT HANDLER itself (timer_intr walks
+ * the wheel under it), so it must be an interrupt-SAFE lock. It was a plain
+ * test-and-set spin that left sstatus.SIE untouched: any hart that took the lock
+ * from thread context -- callout_schedule() does, after clock_start() has enabled
+ * SIE -- could then take a timer interrupt while holding it, and timer_intr's own
+ * acquire would spin forever on a lock held by the very stack it interrupted.
+ * A SAME-HART SELF-DEADLOCK, observed as a 166-line boot stall with CPU#0 parked
+ * on the amoswap in timer_intr+0x2e.
+ *
+ * Save-and-disable SIE around the critical section. The saved flag is returned to
+ * the caller rather than kept in a global, because a global would itself be a
+ * race between harts (this is one lock shared by all of them) and would restore
+ * the wrong state on nesting.
+ */
+static unsigned long
 callout_lock_enter(void)
 {
+	unsigned long prev;
 	int old;
+
+	/* Clear SIE first and remember whether it was set. */
+	__asm__ __volatile__("csrrc %0, sstatus, %1"
+	    : "=r"(prev) : "r"((unsigned long)SSTATUS_SIE) : "memory");
+
 	do {
 		__asm__ __volatile__("amoswap.w.aq %0, %2, (%1)"
 		    : "=&r"(old) : "r"(&callout_lock), "r"(1) : "memory");
 	} while (old != 0);
+
+	return (prev & SSTATUS_SIE);
 }
 
 static void
-callout_lock_exit(void)
+callout_lock_exit(unsigned long sie)
 {
 	__asm__ __volatile__("amoswap.w.rl zero, zero, (%0)"
 	    :: "r"(&callout_lock) : "memory");
+
+	/* Only re-enable if it was enabled on entry -- never enable in a context
+	 * that had interrupts off for its own reasons (e.g. early boot). */
+	if (sie != 0)
+		__asm__ __volatile__("csrs sstatus, %0"
+		    :: "r"(sie) : "memory");
 }
 
 static void
@@ -135,6 +164,7 @@ gethrtime(void)
 void
 timer_intr(void)
 {
+	unsigned long co_sie = 0;
 	timer_ticks++;
 
 	/*
@@ -144,19 +174,19 @@ timer_intr(void)
 	 */
 	{
 		int i;
-		callout_lock_enter();
+		co_sie = callout_lock_enter();
 		for (i = 0; i < CALLOUT_MAX; i++) {
 			if (callouts[i].c_active &&
 			    timer_ticks >= callouts[i].c_expire_tick) {
 				callout_fn_t f = callouts[i].c_func;
 				void *a = callouts[i].c_arg;
 				callouts[i].c_active = 0;
-				callout_lock_exit();
+				callout_lock_exit(co_sie);
 				f(a);
-				callout_lock_enter();
+				co_sie = callout_lock_enter();
 			}
 		}
-		callout_lock_exit();
+		callout_lock_exit(co_sie);
 	}
 
 	if (timer_periodic) {
@@ -246,24 +276,25 @@ clock_prove(unsigned long nticks)
 int
 callout_schedule(unsigned long ms, callout_fn_t func, void *arg)
 {
+	unsigned long co_sie;
 	unsigned long delay_ticks = (ms * HZ + 999) / 1000;
 	int i;
 
 	if (delay_ticks == 0)
 		delay_ticks = 1;
 
-	callout_lock_enter();
+	co_sie = callout_lock_enter();
 	for (i = 0; i < CALLOUT_MAX; i++) {
 		if (!callouts[i].c_active) {
 			callouts[i].c_expire_tick = timer_ticks + delay_ticks;
 			callouts[i].c_func = func;
 			callouts[i].c_arg = arg;
 			callouts[i].c_active = 1;
-			callout_lock_exit();
+			callout_lock_exit(co_sie);
 			return (0);
 		}
 	}
-	callout_lock_exit();
+	callout_lock_exit(co_sie);
 	return (-1);
 }
 
