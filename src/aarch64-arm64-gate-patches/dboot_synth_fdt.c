@@ -844,6 +844,23 @@ synth_scan_crs(synth_crs_t *c)
 		off += 3 + dlen;
 	}
 
+	/*
+	 * The loop above stops at win[8]. That bound is correct (one nwin++ per
+	 * iteration under a `c->nwin < 8` guard, so no overflow), but hitting it is
+	 * SILENT: extra producer windows are simply dropped and the resulting FDT
+	 * describes less MMIO than the hardware actually decodes. Real c6g.metal has
+	 * roughly 20 PCIe bridges, and metal's DSDT has never been read, so this is a
+	 * live possibility rather than a theoretical one -- and a dropped window looks
+	 * exactly like a window the firmware never advertised.
+	 *
+	 * Warn on the boundary, matching what the GICR-region scan already does for
+	 * the same class of problem. A near-miss then shows up in the console log
+	 * before it becomes a truncation.
+	 */
+	if (c->nwin == 8)
+		dboot_printf("dboot: WARNING _CRS producer windows hit the "
+		    "%d-window limit; any further windows were DROPPED\n", 8);
+
 	if (c->nwin > 0)
 		c->have = true;
 }
