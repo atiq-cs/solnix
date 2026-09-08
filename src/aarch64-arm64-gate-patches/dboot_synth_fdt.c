@@ -1303,6 +1303,22 @@ dboot_synth_fdt(struct xboot_info *bi)
 		return (0);
 	}
 
+	/*
+	 * REPORT THE HEADROOM, because 71 of the 79 libfdt calls in this file are
+	 * (void)-cast and therefore discard -FDT_ERR_NOSPACE silently. fdt_finish()
+	 * above does catch a genuine overflow, but only AFTER the tree has been
+	 * built, and the failure surfaces as "some nodes are missing" -- which is
+	 * indistinguishable from a node the ACPI parse never emitted. That
+	 * ambiguity cost this project real money: an agent reasonably hypothesised
+	 * that SYNTH_FDT_MAX was overflowing on a 64-CPU Graviton (64 cpu@ nodes
+	 * versus QEMU's 2) and had to measure it statically to rule it out. Printing
+	 * the used/limit numbers makes the question answerable from any console log
+	 * for free, and makes a future near-miss visible BEFORE it truncates.
+	 */
+	dboot_printf("dboot: synth FDT %d of %d bytes used (%d free)\n",
+	    fdt_totalsize(fdt), SYNTH_FDT_MAX,
+	    SYNTH_FDT_MAX - fdt_totalsize(fdt));
+
 	nc = (int)bi->bi_cpuinfo_cnt;
 	dboot_printf("dboot: synthesised FDT from ACPI (%d cpu%s, gicd=0x%lx "
 	    "gicr=0x%lx%s, %d pcie rc, %s, %d _CRS win%s)\n", nc,
