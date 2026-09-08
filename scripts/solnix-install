@@ -780,22 +780,38 @@ build_ba() { run_to 300 sh -c 'bootadm update-archive -f -R "$1" 2>&1 | grep -vE
 # unused-at-boot sha1 hash (hash_load=NO) is irrelevant to validity.
 ba_ok() {
   [ -s "$BA" ] || return 1
+  # NOTE: illumos has NO stat(1) -- not /usr/bin/stat, not gstat (verified on a
+  # live node: only wc and ls are present). Every `stat -c %s` below therefore
+  # expanded to the fallback 0, which made the non-gzip branch's size gate
+  # ALWAYS FALSE: the `-ge 8388608` test failed, so the `&& file ...` check after
+  # it never ran and that branch validated NOTHING. It also made the success log
+  # read "boot_archive OK:  bytes" with an empty number -- the visible symptom of
+  # a check that was silently dead. `wc -c` is POSIX and present, so use it.
+  _fsize() {
+    # An absent file makes `wc -c` fail and print nothing, and an EMPTY string
+    # would make the caller's `[ "$(...)" -ge N ]` a syntax error rather than a
+    # false -- so normalise to 0. (The `|| echo 0` on the pipeline does NOT cover
+    # this: the pipeline's exit status is wc's, but its stdout is already empty.)
+    _n=$(wc -c < "$1" 2>/dev/null | tr -d ' ')
+    echo "${_n:-0}"
+  }
+
   # gzip magic 1f 8b -> validate the whole stream; else accept a bare CPIO/UFS.
   if [ "$(od -An -N2 -tx1 "$BA" 2>/dev/null | tr -d ' ')" = "1f8b" ]; then
     gzip -t "$BA" 2>/dev/null
   else
-    [ "$(stat -c %s "$BA" 2>/dev/null || echo 0)" -ge 8388608 ] && \
+    [ "$(_fsize "$BA")" -ge 8388608 ] && \
       file "$BA" 2>/dev/null | grep -qiE 'archive|cpio|ufs|boot'
   fi
 }
 build_ba
 if ! ba_ok; then
-  log "boot_archive incomplete ($(stat -c %s "$BA" 2>/dev/null||echo 0) bytes, gzip -t failed) — syncing + rebuilding once"
+  log "boot_archive incomplete ($(_fsize "$BA") bytes, gzip -t failed) — syncing + rebuilding once"
   sync; sleep 2
   build_ba
 fi
-ba_ok || die "boot_archive invalid/truncated after rebuild ($(stat -c %s "$BA" 2>/dev/null||echo 0) bytes) — gzip stream incomplete"
-log "boot_archive OK: $(stat -c %s "$BA" 2>/dev/null) bytes, $(file "$BA" 2>/dev/null)"
+ba_ok || die "boot_archive invalid/truncated after rebuild ($(_fsize "$BA") bytes) — gzip stream incomplete"
+log "boot_archive OK: $(_fsize "$BA") bytes, $(file "$BA" 2>/dev/null)"
 
 # ---------------------------------------------------------------------------
 # 10. loader: UEFI path (ESP) + BIOS/CSM path (pool boot area) + bootfs + menu.
