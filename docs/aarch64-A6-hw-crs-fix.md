@@ -36,7 +36,25 @@ Three additions, all self-contained in the dboot synth file (no new dboot deps):
 
 The virtio-mmio 32-slot block is now `if (qemu) { ... }`.
 
-### Ground truth (c6g.medium, us-east-2, real Nitro ACPI)
+### ⚠️ "Ground truth" below is from a c6g.medium -- a **VM**, NOT metal
+
+Every PCIe/UART address in the table below is **wrong for c6g.metal**, and the
+label "ground truth" caused it to be trusted for metal reasoning. Measured off
+real metal firmware (`src/aarch64-arm64-gate-patches/a6pcie-c6gmetal-firmware-tables.txt`):
+
+| quantity | this table (c6g.medium VM) | REAL c6g.metal |
+|---|---|---|
+| MCFG ECAM base | `0x20000000` | **`0xc000000000`** (48-bit) |
+| MEM64 window | `0x400000000000` | **`0x18000000000`** |
+| IO window | present, parent `0x1fff0000` | **absent entirely** |
+| SPCR UART base | `0x90a0000` | **`0x83e00000`** |
+
+The MADT/GIC data in this document IS from metal, so the two were silently mixed
+in one file -- which is how a VM ECAM base came to be used for metal enumeration.
+The metal boot is now known to be a silent RESET LOOP (not a hang), with these
+address errors as the leading suspect. Read the values below as VM-only.
+
+### Ground truth (c6g.medium, us-east-2, real Nitro ACPI) -- VM, see warning above
 
 ```
 OEM = AMAZON/AMZN ; MCFG ECAM base = 0x20000000, bus 0x00-0xff
