@@ -338,6 +338,31 @@ NC2 flipping 4/4 to the exact documented signature is what pins causation to the
 genuine-but-narrower hole that this workload does not reliably hit; it is kept
 because the window is real and the guard is one instruction.
 
+#### ⚠️ The pre-boot flake is BURSTY, not uniformly random (measured separately)
+
+Independent re-measurement by the orchestrator, after a full `build-user.sh`
+regeneration, hit **1/4** — then **8/8** immediately afterwards with no change to
+the tree, then **4/4 loaded and 4/4 idle**. Overall 17/20, but the three failures
+were **consecutive**.
+
+That distribution matters more than the ratio. "Judge a flaky thing by RATE over
+several attempts" implicitly assumes the attempts are INDEPENDENT, and these are
+not: failures arrive in bursts, so a 4-run sample taken inside a burst reports
+25% and one taken outside reports 100%. Both are real measurements of the same
+tree. Two consequences:
+
+* A small sample can indict a good change or exonerate a bad one. Prefer >=8 runs
+  and, if failures cluster, report the CLUSTERING rather than averaging it away.
+* Host CPU load is NOT the trigger — 4/4 under six spinning load generators and
+  4/4 idle. So the burst source is still unidentified; it is not simply "the dev
+  box was busy".
+
+Failure signature is unchanged and remains distinguishable from any userland bug:
+exactly 178 log lines, **zero `[exec]`**, dying inside the kernel dispatcher
+thread test before any userland runs, with interleaved output
+(`thread A: round 3thread B: round 3`) showing two harts writing the console
+concurrently. That interleaving is the most concrete lead on the flake so far.
+
 #### Measured rate after the fix (full regeneration, 12 runs)
 
 `bash user/build-user.sh` (full regeneration) then `bash build-scanout.sh`:
