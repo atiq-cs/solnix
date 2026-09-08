@@ -7,35 +7,35 @@
 # ---------------------------------------------------------------------------
 # WHY THIS IS A SEPARATE SCRIPT AND NOT PART OF build-user.sh
 # ---------------------------------------------------------------------------
-# Running build-user.sh regenerates EVERY program and rewrites user_elfs.h
-# wholesale. That regeneration is currently BROKEN in a way that has nothing to
-# do with newlib: it breaks the miniwl integration gate. Measured by bisection,
-# 3 boots each, same pinned gcc 14.3.0:
+# newlib is a DIFFERENT libc from user/libc.c: hard-float only, medlow only, and
+# therefore linked at a different base (see the flag notes below). Keeping it in
+# its own script keeps those three forced choices in one place instead of
+# branching the PROGS loop. build-user.sh CHAINS this script at the end, so a
+# plain `bash user/build-user.sh` is a COMPLETE regeneration -- required, because
+# rootfs.c references newlibtest_elf[] and will not compile without it.
 #
-#   committed user_elfs.h, untouched ............... 6/6 gates, twice
-#   regenerated + newlibtest embedded but NOT run .. MINIWL fails
-#   regenerated, ZERO newlib, stock build-user.sh .. MINIWL fails, identically
-#
-# So ANY regeneration breaks it, not this work and not the compiler. The failure
-# is always the same, immediately after miniwl forks its client:
+# HISTORY, because the splice below looks paranoid without it. Regeneration used
+# to break the miniwl gate, so this script rewrote only init_elf + newlibtest_elf
+# and left every other program's committed bytes untouched. That breakage is now
+# FIXED, and it was never about newlib OR the compiler. The failure was:
 #
 #   [fork] pid 20 -> child pid 21
 #     [ok] fork the client
 #   [trap] exception: scause=0xf (store page fault)
 #          sepc=0x8020019e stval=0xffffecb0 sstatus=0x200040020
 #
-# sepc 0x8020019e is `sd ra,0(sp)`, the FIRST store in _trap_entry (trap.S).
-# sstatus.SPP=0 means the trap came from U-mode; stval 0xffffecb0 is a USER stack
-# address (USTACK_TOP 0xfffff000, 64 KiB down). So sscratch held a USER sp where
-# it must hold the per-process KERNEL stack top -- a latent fork/sscratch bug that
-# any change to userland size/layout exposes. That is a real kernel bug and it
-# needs its own fix; it is NOT this program's business.
+# sepc 0x8020019e is `sd ra,0(sp)`, the first store in _trap_entry. The cause was
+# _trap_entry leaving the interrupted sp parked in sscratch for the whole of
+# trap(): its own from-U-vs-from-S discriminator is `sscratch != 0`, so any trap
+# taken while trap() ran was misclassified as from-U and built its frame at that
+# parked USER sp. Regeneration only shifted instruction counts, i.e. the clock's
+# phase against that window -- the committed blob was a lucky phase, not a
+# correct kernel. Fixed in trap.S by zeroing sscratch once it has been read;
+# negative-controlled (removing just that instruction reproduces the signature
+# above 4/4). See docs/riscv64-first-real-binary.md.
 #
-# Therefore this script is SURGICAL: it appends only the newlibtest_elf array to
-# the existing committed user_elfs.h, leaving every other program byte-identical,
-# so the new real-libc gate can run while the six existing gates stay green.
-# Once the fork/sscratch bug is fixed, fold this into build-user.sh and delete
-# the splice.
+# The splice is KEPT anyway: it makes this script idempotent and re-runnable on
+# its own without disturbing the other programs' bytes.
 #
 # ---------------------------------------------------------------------------
 # WHY THE ODD BUILD FLAGS (all three are measured, not preferences)
