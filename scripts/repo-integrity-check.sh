@@ -80,6 +80,31 @@ while IFS= read -r f; do
 done < <(git ls-files '*.sh' 'scripts/*' 2>/dev/null | ours)
 
 if [ "$fail" -eq 0 ]; then
+# --- a .patch file with no diff hunks is a TRAP -------------------------------
+# Scoped to OUR patch dirs, deliberately excluding artifacts/ -- that tree holds
+# extracted upstream sources (e.g. gawk's own vms/vax/*.patch) whose contents are
+# not ours to judge; flagging them would be noise that trains people to ignore
+# this check.
+#
+# Five files under rust-patches/ were prose notes wearing a .patch extension. A
+# derivation that globs *.patch either fails on them or -- far worse -- SILENTLY
+# NO-OPS and ships an unpatched binary that looks correct. Prose belongs in
+# .notes.md; .patch must mean appliable.
+hunkless=0
+while IFS= read -r pf; do
+	if ! grep -qE '^@@ ' "$pf" 2>/dev/null; then
+		echo "repo-integrity: FAIL -- $pf is a .patch with ZERO diff hunks (rename to .notes.md)"
+		hunkless=$((hunkless+1))
+	fi
+done <<EOF
+$(find . -name '*.patch' -not -path './.git/*' -not -path './artifacts/*' 2>/dev/null)
+EOF
+if [ "$hunkless" -gt 0 ]; then
+	echo "repo-integrity: $hunkless hunkless .patch file(s) -- a silent no-op waiting to happen"
+	exit 1
+fi
+
+
 	echo "repo-integrity: CLEAN"
 else
 	echo "repo-integrity: FINDINGS ABOVE"
