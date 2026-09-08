@@ -1,0 +1,707 @@
+Tianocore/EDK2 firmware version RELEASE 4.19.9
+Press ESCAPE for boot options ....  Booting `Amazon Linux
+(6.1.182-227.379.amzn2023.aarch64) 2023'
+
+[    2.501066] systemd[1]: Started systemd-journald.service - Journal Service.
+[    2.534147] systemd-journald[3453]: Received client request to flush runtime journal.
+[    2.651123] RPC: Registered named UNIX socket transport module.
+[    2.651538] RPC: Registered udp transport module.
+[    2.651921] RPC: Registered tcp transport module.
+[    2.652305] RPC: Registered tcp NFSv4.1 backchannel transport module.
+[    2.673540] input: Power Button as /devices/LNXSYSTM:00/LNXSYBUS:00/PNP0C0C:00/input/input0
+[    2.674256] ACPI: button: Power Button [PWRB]
+[    2.676001] graviton-rng AMZN0010:00: Graviton TRNG, SMC version 1.0
+[    2.679716] ena 0000:03:00.0: Adding to iommu group 54
+[    2.680280] ena 0000:03:00.0: Elastic Network Adapter (ENA) v2.17.2g
+[    2.686710] ena 0000:03:00.0: ENA device version: 0.10
+[    2.687050] ena 0000:03:00.0: ENA controller version: 0.0.1 implementation version 1
+[    2.786696] ena 0000:03:00.0: ENA Large LLQ is disabled
+[    2.798185] ena 0000:03:00.0: Elastic Network Adapter (ENA) found at mem 85e00000, mac addr 0a:6a:d8:36:b4:0d
+[    2.876768] ena 0000:03:00.0 enp3s0: renamed from eth0
+[    3.056760] zram_generator::config[5929]: zram0: system has too much memory (128549MB), limit is 800MB, ignoring.
+[    4.456316] cloud-init[6192]: Cloud-init v. 22.2.2 running 'init' at Tue, 08 Sep 2026 14:06:03 +0000. Up 4.42 seconds.
+[    4.540062] cloud-init[6192]: ci-info: ++++++++++++++++++++++++++++++++++++++Net device info+++++++++++++++++++++++++++++++++++++++
+[    4.570041] cloud-init[6192]: ci-info: +--------+------+-----------------------------+---------------+--------+-------------------+
+[    4.600035] cloud-init[6192]: ci-info: | Device |  Up  |           Address           |      Mask     | Scope  |     Hw-Address    |
+[    4.630060] cloud-init[6192]: ci-info: +--------+------+-----------------------------+---------------+--------+-------------------+
+[    4.660029] cloud-init[6192]: ci-info: | enp3s0 | True |         172.31.44.83        | 255.255.240.0 | global | 0a:6a:d8:36:b4:0d |
+[    4.690030] cloud-init[6192]: ci-info: | enp3s0 | True | fe80::86a:d8ff:fe36:b40d/64 |       .       |  link  | 0a:6a:d8:36:b4:0d |
+[    4.720036] cloud-init[6192]: ci-info: |   lo   | True |          127.0.0.1          |   255.0.0.0   |  host  |         .         |
+[    4.760029] cloud-init[6192]: ci-info: |   lo   | True |           ::1/128           |       .       |  host  |         .         |
+[    4.790032] cloud-init[6192]: ci-info: +--------+------+-----------------------------+---------------+--------+-------------------+
+[    4.820027] cloud-init[6192]: ci-info: ++++++++++++++++++++++++++++++Route IPv4 info++++++++++++++++++++++++++++++
+[    4.850030] cloud-init[6192]: ci-info: +-------+-------------+-------------+-----------------+-----------+-------+
+[    4.880034] cloud-init[6192]: ci-info: | Route | Destination |   Gateway   |     Genmask     | Interface | Flags |
+[    4.920044] cloud-init[6192]: ci-info: +-------+-------------+-------------+-----------------+-----------+-------+
+[    4.960035] cloud-init[6192]: ci-info: |   0   |   0.0.0.0   | 172.31.32.1 |     0.0.0.0     |   enp3s0  |   UG  |
+[    5.000033] cloud-init[6192]: ci-info: |   1   |  172.31.0.2 | 172.31.32.1 | 255.255.255.255 |   enp3s0  |  UGH  |
+[    5.030029] cloud-init[6192]: ci-info: |   2   | 172.31.32.0 |   0.0.0.0   |  255.255.240.0  |   enp3s0  |   U   |
+[    5.070029] cloud-init[6192]: ci-info: |   3   | 172.31.32.1 |   0.0.0.0   | 255.255.255.255 |   enp3s0  |   UH  |
+[    5.110030] cloud-init[6192]: ci-info: +-------+-------------+-------------+-----------------+-----------+-------+
+[    5.150034] cloud-init[6192]: ci-info: +++++++++++++++++++Route IPv6 info+++++++++++++++++++
+[    5.150697] cloud-init[6192]: ci-info: +-------+-------------+---------+-----------+-------+
+[    5.151397] cloud-init[6192]: ci-info: | Route | Destination | Gateway | Interface | Flags |
+[    5.152093] cloud-init[6192]: ci-info: +-------+-------------+---------+-----------+-------+
+[    5.152789] cloud-init[6192]: ci-info: |   0   |  fe80::/64  |    ::   |   enp3s0  |   U   |
+[    5.154023] cloud-init[6192]: ci-info: |   2   |    local    |    ::   |   enp3s0  |   U   |
+[    5.154695] cloud-init[6192]: ci-info: |   3   |  multicast  |    ::   |   enp3s0  |   U   |
+[    5.155392] cloud-init[6192]: ci-info: +-------+-------------+---------+-----------+-------+
+[    5.388199] cloud-init[6192]: Generating public/private ed25519 key pair.
+[    5.410046] cloud-init[6192]: Your identification has been saved in /etc/ssh/ssh_host_ed25519_key
+[    5.450031] cloud-init[6192]: Your public key has been saved in /etc/ssh/ssh_host_ed25519_key.pub
+[    5.480112] cloud-init[6192]: The key fingerprint is:
+[    5.520036] cloud-init[6192]: SHA256:qUu82mUzKIc7DSVO0DgNnJVSuT8xWXnbCWqpFY75XWg root@ip-172-31-44-83.us-east-2.compute.internal
+[    5.560052] cloud-init[6192]: The key's randomart image is:
+[    5.600047] cloud-init[6192]: +--[ED25519 256]--+
+[    5.640029] cloud-init[6192]: | ..Ooo   .       |
+[    5.670031] cloud-init[6192]: |  B =   + o      |
+[    5.710028] cloud-init[6192]: |   + . * = = .   |
+[    5.750029] cloud-init[6192]: |    + B *.E +    |
+[    5.790031] cloud-init[6192]: |   o + BSo .     |
+[    5.820038] cloud-init[6192]: |    oo+o. .      |
+[    5.850032] cloud-init[6192]: |    oo*.=        |
+[    5.880029] cloud-init[6192]: |    .*.= o       |
+[    5.910034] cloud-init[6192]: |    oo+          |
+[    5.940037] cloud-init[6192]: +----[SHA256]-----+
+[    5.970041] cloud-init[6192]: Generating public/private ecdsa key pair.
+[    6.010038] cloud-init[6192]: Your identification has been saved in /etc/ssh/ssh_host_ecdsa_key
+[    6.040029] cloud-init[6192]: Your public key has been saved in /etc/ssh/ssh_host_ecdsa_key.pub
+[    6.080029] cloud-init[6192]: The key fingerprint is:
+[    6.120027] cloud-init[6192]: SHA256:/o7wLmhDYaEklId2o3b8inl7kOi0yVVzTisCCFwU2cY root@ip-172-31-44-83.us-east-2.compute.internal
+[    6.160027] cloud-init[6192]: The key's randomart image is:
+[    6.160095] cloud-init[6192]: +---[ECDSA 256]---+
+[    6.160116] cloud-init[6192]: |o.=+=            |
+[    6.160136] cloud-init[6192]: |o=.=.E           |
+2026/09/08 14:06:05Z: SSM Agent unable to acquire credentials: <error>no valid credentials could be retrieved for ec2 identity. Default Host Management Err: error calling RequestManagedInstanceRoleToken: AccessDeniedException: Systems Manager's instance management role is not configured for account: 292759875395
+	status code: 400, request id: 28d62c36-3ffc-42dc-b5c0-05196f074f3a</error>
+[    6.160163] cloud-init[6192]: |+o=.o.           |
+[    6.220030] cloud-init[6192]: |.+.ooo o         |
+[    6.250028] cloud-init[6192]: |. +.+.= S        |
+[    6.280027] cloud-init[6192]: | o =.o +         |
+[    6.310028] cloud-init[6192]: |+ *.+.o .        |
+[    6.340028] cloud-init[6192]: | B o+..o o       |
+=====SOLNIX-PCIE-PROBE-BEGIN=====
+--- uname / instance ---
+Linux ip-172-31-44-83.us-east-2.compute.internal 6.1.182-227.379.amzn2023.aarch64 #1 SMP Tue Aug 25 19:18:54 UTC 2026 aarch64 aarch64 aarch64 GNU/Linux
+c6g.metal
+64
+--- ACPI tables present ---
+APIC
+DSDT
+FACP
+GTDT
+HEST
+IORT
+MCFG
+PPTT
+SDEI
+SLIT
+SPCR
+SRAT
+SSDT1
+SSDT2
+data
+dynamic
+--- MCFG (raw hexdump; the whole point of this boot) ---
+00000000  4d 43 46 47 3c 00 00 00  01 62 41 4d 41 5a 4f 4e  |MCFG<....bAMAZON|
+00000010  47 52 56 54 4e 30 30 32  00 00 00 00 41 4d 5a 4e  |GRVTN002....AMZN|
+00000020  22 04 20 20 00 00 00 00  00 00 00 00 00 00 00 00  |".  ............|
+00000030  c0 00 00 00 00 00 00 ff  00 00 00 00              |............|
+0000003c
+--- MCFG decoded: one allocation per 16 bytes after the 44-byte hdr + 8 rsvd ---
+[    6.340071] cloud-init[6192]: |  .oo. o+.o      |
+[    6.340097] cloud-init[6192]: +----[SHA256]-----+
+[    6.342709] cloud-init[6297]: Cloud-init v. 22.2.2 running 'modules:config' at Tue, 08 Sep 2026 14:06:05 +0000. Up 5.71 seconds.
+[    6.344181] cloud-init[6310]: Cloud-init v. 22.2.2 running 'modules:final' at Tue, 08 Sep 2026 14:06:05 +0000. Up 6.20 seconds.
+[    6.344222] cloud-init[6310]: =====SOLNIX-PCIE-PROBE-BEGIN=====
+[    6.344250] cloud-init[6310]: --- uname / instance ---
+[    6.344269] cloud-init[6310]: Linux ip-172-31-44-83.us-east-2.compute.internal 6.1.182-227.379.amzn2023.aarch64 #1 SMP Tue Aug 25 19:18:54 UTC 2026 aarch64 aarch64 aarch64 GNU/Linux
+[    6.344292] cloud-init[6310]: c6g.metal
+[    6.344311] cloud-init[6310]: 64
+[    6.344331] cloud-init[6310]: --- ACPI tables present ---
+[    6.344350] cloud-init[6310]: APIC
+[    6.344368] cloud-init[6310]: DSDT
+[    6.344386] cloud-init[6310]: FACP
+[    6.344406] cloud-init[6310]: GTDT
+[    6.344424] cloud-init[6310]: HEST
+[    6.344442] cloud-init[6310]: IORT
+[    6.344460] cloud-init[6310]: MCFG
+[    6.344482] cloud-init[6310]: PPTT
+[    6.344500] cloud-init[6310]: SDEI
+[    6.344518] cloud-init[6310]: SLIT
+[    6.344536] cloud-init[6310]: SPCR
+[    6.344556] cloud-init[6310]: SRAT
+[    6.344574] cloud-init[6310]: SSDT1
+[    6.344592] cloud-init[6310]: SSDT2
+[    6.344611] cloud-init[6310]: data
+[    6.344629] cloud-init[6310]: dynamic
+[    6.344647] cloud-init[6310]: --- MCFG (raw hexdump; the whole point of this boot) ---
+[    6.344666] cloud-init[6310]: 00000000  4d 43 46 47 3c 00 00 00  01 62 41 4d 41 5a 4f 4e  |MCFG<....bAMAZON|
+[    6.344685] cloud-init[6310]: 00000010  47 52 56 54 4e 30 30 32  00 00 00 00 41 4d 5a 4e  |GRVTN002....AMZN|
+[    6.344711] cloud-init[6310]: 00000020  22 04 20 20 00 00 00 00  00 00 00 00 00 00 00 00  |".  ............|
+[    6.344729] cloud-init[6310]: 00000030  c0 00 00 00 00 00 00 ff  00 00 00 00              |............|
+[    6.344747] cloud-init[6310]: 0000003c
+[    6.344768] cloud-init[6310]: --- MCFG decoded: one allocation per 16 bytes after the 44-byte hdr + 8 rsvd ---
+sig=MCFG len=60 oem=AMAZON
+  alloc[0] ECAM base=0xc000000000 segment=0 bus 0x00-0xff  (size=256 MiB)
+TOTAL ECAM ALLOCATIONS (== necam / number of root complexes) = 1
+[    6.352125] cloud-init[6310]: sig=MCFG len=60 oem=AMAZON
+[    6.352155] cloud-init[6310]:   alloc[0] ECAM base=0xc000000000 segment=0 bus 0x00-0xff  (size=256 MiB)
+[    6.352182] cloud-init[6310]: TOTAL ECAM ALLOCATIONS (== necam / number of root complexes) = 1
+--- SPCR (console UART; compare to committed a6hw-graviton-SPCR.bin) ---
+[    6.355586] cloud-init[6310]: --- SPCR (console UART; compare to committed a6hw-graviton-SPCR.bin) ---
+00000000  53 50 43 52 50 00 00 00  02 87 41 4d 41 5a 4f 4e  |SPCRP.....AMAZON|
+00000010  47 52 56 54 4e 30 30 32  00 00 00 00 41 4d 5a 4e  |GRVTN002....AMZN|
+00000020  22 04 20 20 00 00 00 00  00 08 00 01 00 00 e0 83  |".  ............|
+00000030  00 00 00 00 08 00 d8 00  00 00 07 00 01 00 03 00  |................|
+00000040  50 82 0f 1d 15 00 00 00  00 00 00 00 00 00 00 00  |P...............|
+00000050
+[    6.356550] cloud-init[6310]: 00000000  53 50 43 52 50 00 00 00  02 87 41 4d 41 5a 4f 4e  |SPCRP.....AMAZON|
+[    6.356576] cloud-init[6310]: 00000010  47 52 56 54 4e 30 30 32  00 00 00 00 41 4d 5a 4e  |GRVTN002....AMZN|
+[    6.356595] cloud-init[6310]: 00000020  22 04 20 20 00 00 00 00  00 08 00 01 00 00 e0 83  |".  ............|
+[    6.356616] cloud-init[6310]: 00000030  00 00 00 00 08 00 d8 00  00 00 07 00 01 00 03 00  |................|
+[    6.356636] cloud-init[6310]: 00000040  50 82 0f 1d 15 00 00 00  00 00 00 00 00 00 00 00  |P...............|
+[    6.356654] cloud-init[6310]: 00000050
+--- PL011 FR register live read (base from SPCR) : is FR really stuck at 0? ---
+[    6.356717] cloud-init[6310]: --- PL011 FR register live read (base from SPCR) : is FR really stuck at 0? ---
+SPCR InterfaceType=0x00 base=0x83e00000
+  live UART read failed: FileNotFoundError(2, 'No such file or directory') (kernel lockdown / no /dev/mem)
+[    6.376786] cloud-init[6310]: SPCR InterfaceType=0x00 base=0x83e00000
+[    6.376827] cloud-init[6310]:   live UART read failed: FileNotFoundError(2, 'No such file or directory') (kernel lockdown / no /dev/mem)
+--- kernel's own view of the PCI host bridges + _CRS windows ---
+[    6.380230] cloud-init[6310]: --- kernel's own view of the PCI host bridges + _CRS windows ---
+[    0.000000] ACPI: MCFG 0x0000000015E16A98 00003C (v01 AMAZON GRVTN002 00000000 AMZN 20200422)
+[    0.040896] acpiphp: ACPI Hot Plug PCI Controller Driver version: 0.5
+[    0.046174] ACPI: MCFG table detected, 1 entries
+[    0.071570] ACPI: PCI: Interrupt link L00A configured for IRQ 184
+[    0.071579] ACPI: PCI: Interrupt link L00B configured for IRQ 185
+[    0.071587] ACPI: PCI: Interrupt link L00C configured for IRQ 186
+[    0.071595] ACPI: PCI: Interrupt link L00D configured for IRQ 187
+[    0.071603] ACPI: PCI: Interrupt link L01A configured for IRQ 200
+[    0.071610] ACPI: PCI: Interrupt link L01B configured for IRQ 201
+[    0.071618] ACPI: PCI: Interrupt link L01C configured for IRQ 202
+[    0.071626] ACPI: PCI: Interrupt link L01D configured for IRQ 203
+[    0.071633] ACPI: PCI: Interrupt link L02A configured for IRQ 216
+[    0.071641] ACPI: PCI: Interrupt link L02B configured for IRQ 217
+[    0.071649] ACPI: PCI: Interrupt link L02C configured for IRQ 218
+[    0.071657] ACPI: PCI: Interrupt link L02D configured for IRQ 219
+[    0.071675] ACPI: PCI Root Bridge [PCI0] (domain 0000 [bus 00-ff])
+[    0.071769] acpi PNP0A08:00: _OSC: OS now controls [PCIeHotplug PME PCIeCapability]
+[    0.072071] acpi PNP0A08:00: ECAM area [mem 0xc000000000-0xc00fffffff] reserved by PNP0C02:00
+[    0.072082] acpi PNP0A08:00: ECAM at [mem 0xc000000000-0xc00fffffff] for [bus 00-ff]
+[    0.072138] pci_bus 0000:00: root bus resource [mem 0x80000000-0x9fffffff window]
+[    0.072140] pci_bus 0000:00: root bus resource [mem 0x18000000000-0x19fffffffff window]
+[    0.072142] pci_bus 0000:00: root bus resource [bus 00-ff]
+[    0.083730] pci_bus 0000:00: on NUMA node 0
+[    0.085316] pci_bus 0000:00: resource 4 [mem 0x80000000-0x9fffffff window]
+[    0.085318] pci_bus 0000:00: resource 5 [mem 0x18000000000-0x19fffffffff window]
+[    0.085320] pci_bus 0000:01: resource 1 [mem 0x84000000-0x85ffffff]
+[    0.085321] pci_bus 0000:01: resource 2 [mem 0x18020000000-0x1802fffffff 64bit pref]
+[    0.085323] pci_bus 0000:02: resource 1 [mem 0x84000000-0x85ffffff]
+[    0.085324] pci_bus 0000:02: resource 2 [mem 0x18020000000-0x1802fffffff 64bit pref]
+[    0.085326] pci_bus 0000:03: resource 1 [mem 0x85e00000-0x85ffffff]
+[    0.085327] pci_bus 0000:03: resource 2 [mem 0x1802f000000-0x1802fffffff 64bit pref]
+[    0.085329] pci_bus 0000:04: resource 1 [mem 0x85c00000-0x85dfffff]
+[    0.085330] pci_bus 0000:04: resource 2 [mem 0x1802e000000-0x1802effffff 64bit pref]
+[    0.085331] pci_bus 0000:05: resource 1 [mem 0x85a00000-0x85bfffff]
+[    0.085333] pci_bus 0000:05: resource 2 [mem 0x1802d000000-0x1802dffffff 64bit pref]
+[    0.085334] pci_bus 0000:06: resource 1 [mem 0x85800000-0x859fffff]
+[    0.085336] pci_bus 0000:06: resource 2 [mem 0x1802c000000-0x1802cffffff 64bit pref]
+[    0.085337] pci_bus 0000:07: resource 1 [mem 0x85600000-0x857fffff]
+[    0.085338] pci_bus 0000:07: resource 2 [mem 0x1802b000000-0x1802bffffff 64bit pref]
+[    0.085340] pci_bus 0000:08: resource 1 [mem 0x85400000-0x855fffff]
+[    0.085341] pci_bus 0000:08: resource 2 [mem 0x1802a000000-0x1802affffff 64bit pref]
+[    0.085343] pci_bus 0000:09: resource 1 [mem 0x85200000-0x853fffff]
+[    0.085344] pci_bus 0000:09: resource 2 [mem 0x18029000000-0x18029ffffff 64bit pref]
+[    0.085345] pci_bus 0000:0a: resource 1 [mem 0x85000000-0x851fffff]
+[    0.085347] pci_bus 0000:0a: resource 2 [mem 0x18028000000-0x18028ffffff 64bit pref]
+[    0.085348] pci_bus 0000:0b: resource 1 [mem 0x84e00000-0x84ffffff]
+[    0.085349] pci_bus 0000:0b: resource 2 [mem 0x18027000000-0x18027ffffff 64bit pref]
+[    0.085351] pci_bus 0000:0c: resource 1 [mem 0x84c00000-0x84dfffff]
+[    0.085352] pci_bus 0000:0c: resource 2 [mem 0x18026000000-0x18026ffffff 64bit pref]
+[    0.085354] pci_bus 0000:0d: resource 1 [mem 0x84a00000-0x84bfffff]
+[    0.085355] pci_bus 0000:0d: resource 2 [mem 0x18025000000-0x18025ffffff 64bit pref]
+[    0.085357] pci_bus 0000:0e: resource 1 [mem 0x84800000-0x849fffff]
+[    0.085358] pci_bus 0000:0e: resource 2 [mem 0x18024000000-0x18024ffffff 64bit pref]
+[    0.085359] pci_bus 0000:0f:[    6.390172] cloud-init[6310]: [    0.000000] ACPI: MCFG 0x0000000015E16A98 00003C (v01 AMAZON GRVTN002 00000000 AMZN 20200422)
+ resource 1 [mem 0x84600000-0x847fffff]
+[    0.085361] pci_bus 0000:0f: resource 2 [mem 0x18023000000-0x18023ffffff 64bit pref]
+[    0.085362] pci_bus 0000:10: resource 1 [mem 0x84400000-0x845fffff]
+[    0.085364] pci_bus 0000:10: resource 2 [mem 0x18022000000-0x18022ffffff 64bit pref]
+[    0.085365] pci_bus 0000:11: resource 1 [mem 0x84200000-0x843fffff]
+[    0.085366] pci_bus 0000:11: resource 2 [mem 0x18021000000-0x18021ffffff 64bit pref]
+[    0.085368] pci_bus 0000:12: resource 1 [mem 0x84000000-0x841fffff]
+--- root bus resources as Linux parsed them (the real _CRS) ---
+  == /sys/devices/pci0000:00 ==
+[    0.072136] PCI host bridge to bus 0000:00
+[    0.072138] pci_bus 0000:00: root bus resource [mem 0x80000000-0x9fffffff window]
+[    0.072140] pci_bus 0000:00: root bus resource [mem 0x18000000000-0x19fffffffff window]
+[    0.072142] pci_bus 0000:00: root bus resource [bus 00-ff]
+[    0.072165] pci 0000:00:00.0: [1d0f:0200] type 01 class 0x060400
+[    0.072184] pci 0000:00:00.0: supports D1
+[    0.072186] pci 0000:00:00.0: PME# supported from D0 D1 D3hot D3cold
+[    0.072235] pci 0000:00:02.0: [1d0f:0200] type 01 class 0x060400
+[    0.072250] pci 0000:00:02.0: supports D1
+[    0.072251] pci 0000:00:02.0: PME# supported from D0 D1 D3hot D3cold
+[    0.072333] pci 0000:01:00.0: [1d0f:bec2] type 01 class 0x060400
+[    0.072430] pci 0000:01:00.0: PME# supported from D0 D3hot D3cold
+[    0.072539] pci 0000:02:00.0: [1d0f:bec2] type 01 class 0x060400
+[    0.072630] pci 0000:02:00.0: PME# supported from D0 D3hot D3cold
+[    0.072711] pci 0000:02:01.0: [1d0f:bec2] type 01 class 0x060400
+[    0.072800] pci 0000:02:01.0: PME# supported from D0 D3hot D3cold
+[    0.072881] pci 0000:02:02.0: [1d0f:bec2] type 01 class 0x060400
+[    0.072969] pci 0000:02:02.0: PME# supported from D0 D3hot D3cold
+[    0.073050] pci 0000:02:03.0: [1d0f:bec2] type 01 class 0x060400
+[    0.073139] pci 0000:02:03.0: PME# supported from D0 D3hot D3cold
+[    0.073222] pci 0000:02:04.0: [1d0f:bec2] type 01 class 0x060400
+[    0.073311] pci 0000:02:04.0: PME# supported from D0 D3hot D3cold
+[    0.073393] pci 0000:02:05.0: [1d0f:bec2] type 01 class 0x060400
+[    0.073482] pci 0000:02:05.0: PME# supported from D0 D3hot D3cold
+[    0.073569] pci 0000:02:06.0: [1d0f:bec2] type 01 class 0x060400
+[    0.073658] pci 0000:02:06.0: PME# supported from D0 D3hot D3cold
+[    0.073743] pci 0000:02:07.0: [1d0f:bec2] type 01 class 0x060400
+[    0.073832] pci 0000:02:07.0: PME# supported from D0 D3hot D3cold
+[    0.073918] pci 0000:02:08.0: [1d0f:bec2] type 01 class 0x060400
+[    0.074007] pci 0000:02:08.0: PME# supported from D0 D3hot D3cold
+[    0.074094] pci 0000:02:09.0: [1d0f:bec2] type 01 class 0x060400
+--- lspci topology (how many RCs, where the NVMe is) ---
+[    6.417868] cloud-init[6310]: [    0.040896] acpiphp: ACPI Hot Plug PCI Controller Driver version: 0.5
+[    6.417889] cloud-init[6310]: [    0.046174] ACPI: MCFG table detected, 1 entries
+[    6.417908] cloud-init[6310]: [    0.071570] ACPI: PCI: Interrupt link L00A configured for IRQ 184
+[    6.417926] cloud-init[6310]: [    0.071579] ACPI: PCI: Interrupt link L00B configured for IRQ 185
+[    6.417944] cloud-init[6310]: [    0.071587] ACPI: PCI: Interrupt link L00C configured for IRQ 186
+[    6.417963] cloud-init[6310]: [    0.071595] ACPI: PCI: Interrupt link L00D configured for IRQ 187
+[    6.417981] cloud-init[6310]: [    0.071603] ACPI: PCI: Interrupt link L01A configured for IRQ 200
+[    6.418000] cloud-init[6310]: [    0.071610] ACPI: PCI: Interrupt link L01B configured for IRQ 201
+[    6.418023] cloud-init[6310]: [    0.071618] ACPI: PCI: Interrupt link L01C configured for IRQ 202
+[    6.418045] cloud-init[6310]: [    0.071626] ACPI: PCI: Interrupt link L01D configured for IRQ 203
+00:00.0 PCI bridge: Amazon.com, Inc. Device 0200 (rev 01) (prog-if 00 [Normal decode])
+	Capabilities: [70] Express (v2) Root Port (Slot-), MSI 00
+00:02.0 PCI bridge: Amazon.com, Inc. Device 0200 (rev 01) (prog-if 00 [Normal decode])
+	Capabilities: [70] Express (v2) Root Port (Slot-), MSI 00
+01:00.0 PCI bridge: Amazon.com, Inc. Device bec2 (prog-if 00 [Normal decode])
+	Capabilities: [70] Express (v2) Upstream Port, MSI 00
+	Capabilities: [b0] MSI: Enable- Count=1/1 Maskable- 64bit+
+02:00.0 PCI bridge: Amazon.com, Inc. Device bec2 (prog-if 00 [Normal decode])
+	Capabilities: [70] Express (v2) Downstream Port (Slot+), MSI 00
+	Capabilities: [b0] MSI: Enable+ Count=1/1 Maskable- 64bit+
+02:01.0 PCI bridge: Amazon.com, Inc. Device bec2 (prog-if 00 [Normal decode])
+	Capabilities: [70] Express (v2) Downstream Port (Slot+), MSI 00
+	Capabilities: [b0] MSI: Enable+ Count=1/1 Maskable- 64bit+
+02:02.0 PCI bridge: Amazon.com, Inc. Device bec2 (prog-if 00 [Normal decode])
+	Capabilities: [70] Express (v2) Downstream Port (Slot+), MSI 00
+	Capabilities: [b0] MSI: Enable+ Count=1/1 Maskable- 64bit+
+02:03.0 PCI bridge: Amazon.com, Inc. Device bec2 (prog-if 00 [Normal decode])
+	Capabilities: [70] Express (v2) Downstream Port (Slot+), MSI 00
+	Capabilities: [b0] MSI: Enable+ Count=1/1 Maskable- 64bit+
+02:04.0 PCI bridge: Amazon.com, Inc. Device bec2 (prog-if 00 [Normal decode])
+	Capabilities: [70] Express (v2) Downstream Port (Slot+), MSI 00
+	Capabilities: [b0] MSI: Enable+ Count=1/1 Maskable- 64bit+
+02:05.0 PCI bridge: Amazon.com, Inc. Device bec2 (prog-if 00 [Normal decode])
+	Capabilities: [70] Express (v2) Downstream Port (Slot+), MSI 00
+	Capabilities: [b0] MSI: Enable+ Count=1/1 Maskable- 64bit+
+02:06.0 PCI bridge: Amazon.com, Inc. Device bec2 (prog-if 00 [Normal decode])
+	Capabilities: [70] Express (v2) Downstream Port (Slot+), MSI 00
+	Capabilities: [b0] MSI: Enable+ Count=1/1 Maskable- 64bit+
+02:07.0 PCI bridge: Amazon.com, Inc. Device bec2 (prog-if 00 [Normal decode])
+	Capabilities: [70] Express (v2) Downstream Port (Slot+), MSI 00
+	Capabilities: [b0] MSI: Enable+ Count=1/1 Maskable- 64bit+
+02:08.0 PCI bridge: Amazon.com, Inc. Device bec2 (prog-if 00 [Normal decode])
+	Capabilities: [70] Express (v2) Downstream Port (Slot+), MSI 00
+	Capabilities: [b0] MSI: Enable+ Count=1/1 Maskable- 64bit+
+02:09.0 PCI bridge: Amazon.com, Inc. Device bec2 (prog-if 00 [Normal decode])
+	Capabilities: [70] Express (v2) Downstream Port (Slot+), MSI 00
+	Capabilities: [b0] MSI: Enable+ Count=1/1 Maskable- 64bit+
+02:0a.0 PCI bridge: Amazon.com, Inc. Device bec2 (prog-if 00 [Normal decode])
+	Capabilities: [70] Express (v2) Downstream Port (Slot+), MSI 00
+	Capabilities: [b0] MSI: Enable+ Count=1/1 Maskable- 64bit+
+02:0b.0 PCI bridge: Amazon.com, Inc. Device bec2 (prog-if 00 [Normal decode])
+	Capabilities: [70] Express (v2) Downstream Port (Slot+), MSI 00
+	Capabilities: [b0] MSI: Enable+ Count=1/1 Maskable- 64bit+
+02:0c.0 PCI bridge: Amazon.com, Inc. Device bec2 (prog-if 00 [Normal decode])
+	Capabilities: [70] Express (v2) Downstream Port (Slot+), MSI 00
+	Capabilities: [b0] MSI: Enable+ Count=1/1 Maskable- 64bit+
+02:0d.0 PCI bridge: Amazon.com, Inc. Device bec2 (prog-if 00 [Normal decode])
+	Capabilities: [70] Express (v2) Downstream Port (Slot+), MSI 00
+	Capabilities: [b0] MSI: Enable+ Count=1/1 Maskable- 64bit+
+02:0e.0 PCI bridge: Amazon.com, Inc. Device bec2 (prog-if 00 [Normal decode])
+	Capabilities: [70] Express (v2) Downstream Port (Slot+), MSI 00
+	Capabilities: [b0] MSI: Enable+ Count=1/1 Maskable- 64bit+
+02:0f.0 PCI bridge: Amazon.com, Inc. Device bec2 (prog-if 00 [Normal decode])
+	Capabilities: [70] Express (v2) Downstream Port (Slot+), MSI 00
+	Capabilities: [b0] MSI: Enable+ Count=1/1 Maskable- 64bit+
+03:00.0 Ethernet controller: Amazon.com, Inc. Elastic Network Adapter (ENA)
+	Region 0: Memory at 85e00000 (32-bit, non-prefetchable) [size=2M]
+	Region 2: Memory at 1802f000000 (64-bit, prefetchable) [size=16M]
+	Capabilities: [70] Express (v2) Endpoint, MSI 00
+	Capabilities: [b0] MSI-X: Enable+ Count=33 Masked-
+[    6.445638] cloud-init[6310]: [    0.071633] ACPI: PCI: Interrupt link L02A configured for IRQ 216
+--- lspci -tv ---
+-[0000:00]-+-00.0-[01-12]----00.0-[02-12]--+-00.0-[03]----00.0  Amazon.com, Inc. Elastic Network Adapter (ENA)
+           |                               +-01.0-[04]--
+           |                               +-02.0-[05]--
+           |                               +-03.0-[06]--
+           |                               +-04.0-[07]--
+           |                               +-05.0-[08]--
+           |                               +-06.0-[09]--
+           |                               +-07.0-[0a]--
+           |                               +-08.0-[0b]--
+           |                               +-09.0-[0c]--
+           |                               +-0a.0-[0d]--
+           |                               +-0b.0-[0e]--
+           |                               +-0c.0-[0f]--
+           |                               +-0d.0-[10]--
+           |                               +-0e.0-[11]--
+           |                               \-0f.0-[12]--
+           \-02.0-[13-34]----00.0-[14-34]--+-00.0-[15]----00.0  Amazon.com, Inc. Device 8250
+                                           +-01.0-[16]----00.0  Amazon.com, Inc. Device 0061
+                                           +-02.0-[17]--
+                                           +-03.0-[18]--
+                                           +-04.0-[19]--
+                                           +-05.0-[1a]--
+                                           +-06.0-[1b]--
+                                           +-07.0-[1c]--
+                                           +-08.0-[1d]--
+                                           +-09.0-[1e]--
+                                           +-0a.0-[1f]--
+                                           +-0b.0-[20]--
+                                           +-0c.0-[21]--
+                                           +-0d.0-[22]--
+                                           +-0e.0-[23]--
+                                           +-0f.0-[24]--
+                                           +-10.0-[25]--
+                                           +-11.0-[26]--
+                                           +-12.0-[27]--
+                                           +-13.0-[28]--
+                                           +-14.0-[29]--
+                                           +-15.0-[2a]--
+                                           +-16.0-[2b]--
+                                           +-17.0-[2c]--
+--- pci domains present ---
+/sys/class/pci_bus/0000:00
+/sys/class/pci_bus/0000:01
+/sys/class/pci_bus/0000:02
+/sys/class/pci_bus/0000:03
+/sys/class/pci_bus/0000:04
+/sys/class/pci_bus/0000:05
+/sys/class/pci_bus/0000:06
+/sys/class/pci_bus/0000:07
+/sys/class/pci_bus/0000:08
+/sys/class/pci_bus/0000:09
+/sys/class/pci_bus/0000:0a
+/sys/class/pci_bus/0000:0b
+/sys/class/pci_bus/0000:0c
+/sys/class/pci_bus/0000:0d
+/sys/class/pci_bus/0000:0e
+/sys/class/pci_bus/0000:0f
+/sys/class/pci_bus/0000:10
+/sys/class/pci_bus/0000:11
+/sys/class/pci_bus/0000:12
+/sys/class/pci_bus/0000:13
+/sys/class/pci_bus/0000:14
+/sys/class/pci_bus/0000:15
+/sys/class/pci_bus/0000:16
+/sys/class/pci_bus/0000:17
+/sys/class/pci_bus/0000:18
+/sys/class/pci_bus/0000:19
+/sys/class/pci_bus/0000:1a
+/sys/class/pci_bus/0000:1b
+/sys/class/pci_bus/0000:1c
+/sys/class/pci_bus/0000:1d
+/sys/class/pci_bus/0000:1e
+/sys/class/pci_bus/0000:1f
+/sys/class/pci_bus/0000:20
+/sys/class/pci_bus/0000:21
+/sys/class/pci_bus/0000:22
+/sys/class/pci_bus/0000:23
+/sys/class/pci_bus/0000:24
+/sys/class/pci_bus/0000:25
+/sys/class/pci_bus/0000:26
+/sys/class/pci_bus/0000:27
+/sys/class/pci_bus/0000:28
+/sys/class/pci_bus/0000:29
+/sys/class/pci_bus/0000:2a
+/sys/class/pci_bus/0000:2b
+/sys/class/pci_bus/0000:2c
+/sys/class/pci_bus/0000:2d
+/sys/class/pci_bus/0000:2e
+/sys/class/pci_bus/0000:2f
+/sys/class/pci_bus/0000:30
+/sys/class/pci_bus/0000:31
+/sys/class/pci_bus/0000:32
+/sys/class/pci_bus/0000:33
+/sys/class/pci_bus/0000:34
+--- MADT GICITS count (cross-check the committed MADT) ---
+MADT subtable type counts: {12: 1, 15: 4, 11: 64}
+GICC(11)=64 GICD(12)=1 GICMSI(13)=0 GICR(14)=0 GICITS(15)=4
+  ITS id=0 base=0xbc00040000
+  ITS id=1 base=0xbd00040000
+  ITS id=2 base=0xbe00040000
+  ITS id=3 base=0xbf00040000
+[    6.473294] cloud-init[6310]: [    0.071641] ACPI: PCI: Interrupt link L02B configured for IRQ 217
+--- ITS as Linux sees it (does it use all 4?) ---
+[    0.000000] GICv3: GIC: Using split EOI/Deactivate mode
+[    0.000000] GICv3: 960 SPIs implemented
+[    0.000000] GICv3: 0 Extended SPIs implemented
+[    0.000000] GICv3: GICv3 features: 16 PPIs
+[    0.000000] GICv3: CPU0: found redistributor 0 region 0:0x000000bc00080000
+[    0.000000] SRAT: PXM 0 -> ITS 0 -> Node 0
+[    0.000000] SRAT: PXM 0 -> ITS 1 -> Node 0
+[    0.000000] SRAT: PXM 0 -> ITS 2 -> Node 0
+[    0.000000] SRAT: PXM 0 -> ITS 3 -> Node 0
+[    0.000000] ITS [mem 0xbc00040000-0xbc0005ffff]
+[    0.000000] ITS@0x000000bc00040000: allocated 8192 Devices @1002d0000 (indirect, esz 8, psz 64K, shr 1)
+[    0.000000] ITS@0x000000bc00040000: allocated 32768 Interrupt Collections @1002e0000 (flat, esz 2, psz 64K, shr 1)
+[    0.000000] ITS [mem 0xbd00040000-0xbd0005ffff]
+[    0.000000] ITS@0x000000bd00040000: allocated 8192 Devices @100300000 (indirect, esz 8, psz 64K, shr 1)
+[    0.000000] ITS@0x000000bd00040000: allocated 32768 Interrupt Collections @100310000 (flat, esz 2, psz 64K, shr 1)
+[    0.000000] ITS [mem 0xbe00040000-0xbe0005ffff]
+[    0.000000] ITS@0x000000be00040000: allocated 8192 Devices @100330000 (indirect, esz 8, psz 64K, shr 1)
+[    0.000000] ITS@0x000000be00040000: allocated 32768 Interrupt Collections @100340000 (flat, esz 2, psz 64K, shr 1)
+[    0.000000] ITS [mem 0xbf00040000-0xbf0005ffff]
+[    0.000000] ITS@0x000000bf00040000: allocated 8192 Devices @100360000 (indirect, esz 8, psz 64K, shr 1)
+[    0.000000] ITS@0x000000bf00040000: allocated 32768 Interrupt Collections @100370000 (flat, esz 2, psz 64K, shr 1)
+[    0.000000] GICv3: using LPI property table @0x0000000100380000
+[    0.000000] GICv3: CPU0: using allocated LPI pending table @0x0000000100390000
+[    0.000000] sched_clock: 58 bits at 122MHz, resolution 8ns, wraps every 4398046511103ns
+[    0.001118] Platform MSI: ITS@0xbc00040000 domain created
+[    0.001120] Platform MSI: ITS@0xbd00040000 domain created
+[    0.001122] Platform MSI: ITS@0xbe00040000 domain created
+[    0.001123] Platform MSI: ITS@0xbf00040000 domain created
+[    0.001128] PCI/MSI: ITS@0xbc00040000 domain created
+[    0.001130] PCI/MSI: ITS@0xbd00040000 domain created
+=====SOLNIX-PCIE-PROBE-END=====
+ci-info: +++++++++++++++++++++++++++++++Authorized keys from /home/ec2-user/.ssh/authorized_keys for user ec2-user+++++++++++++++++++++++++++++++
+[    6.500956] cloud-init[6310]: [    0.071649] ACPI: PCI: Interrupt link L02C configured for IRQ 218
+[    6.580042] cloud-init[6310]: [    0.071657] ACPI: PCI: Interrupt link L02D configured for IRQ 219
+ci-info: +-------------+-------------------------------------------------------------------------------------------------+---------+------------+
+[    6.580077] cloud-init[6310]: [    0.071675] ACPI: PCI Root Bridge [PCI0] (domain 0000 [bus 00-ff])
+[    6.580101] cloud-init[6310]: [    0.071769] acpi PNP0A08:00: _OSC: OS now controls [PCIeHotplug PME PCIeCapability]
+ci-info: |   Keytype   |                                       Fingerprint (sha256)                                      | Options |  Comment   |
+[    6.610060] cloud-init[6310]: [    0.072071] acpi PNP0A08:00: ECAM area [mem 0xc000000000-0xc00fffffff] reserved by PNP0C02:00
+[    6.640030] cloud-init[6310]: [    0.072082] acpi PNP0A08:00: ECAM at [mem 0xc000000000-0xc00fffffff] for [bus 00-ff]
+ci-info: +-------------+-------------------------------------------------------------------------------------------------+---------+------------+
+[    6.640080] cloud-init[6310]: [    0.072138] pci_bus 0000:00: root bus resource [mem 0x80000000-0x9fffffff window]
+ci-info: | ssh-ed25519 | 9b:5f:50:3a:86:55:80:7a:18:6e:c4:d2:ef:69:2c:ca:a5:4d:e0:70:66:f8:58:70:48:a3:34:70:a0:0b:dc:8b |    -    | solnix-key |
+[    6.670056] cloud-init[6310]: [    0.072140] pci_bus 0000:00: root bus resource [mem 0x18000000000-0x19fffffffff window]
+[    6.700026] cloud-init[6310]: [    0.072142] pci_bus 0000:00: root bus resource [bus 00-ff]
+ci-info: +-------------+-------------------------------------------------------------------------------------------------+---------+------------+
+[    6.700060] cloud-init[6310]: [    0.083730] pci_bus 0000:00: on NUMA node 0
+[    6.702299] cloud-init[6310]: [    0.085316] pci_bus 0000:00: resource 4 [mem 0x80000000-0x9fffffff window]
+[    6.730037] cloud-init[6310]: [    0.085318] pci_bus 0000:00: resource 5 [mem 0x18000000000-0x19fffffffff window]
+[    6.730082] cloud-init[6310]: [    0.085320] pci_bus 0000:01: resource 1 [mem 0x84000000-0x85ffffff]
+[    6.730107] cloud-init[6310]: [    0.085321] pci_bus 0000:01: resource 2 [mem 0x18020000000-0x1802fffffff 64bit pref]
+<14>Sep  8 14:06:06 cloud-init: #############################################################
+<14>Sep  8 14:06:06 cloud-init: -----BEGIN SSH HOST KEY FINGERPRINTS-----
+<14>Sep  8 14:06:06 cloud-init: 256 SHA256:/o7wLmhDYaEklId2o3b8inl7kOi0yVVzTisCCFwU2cY root@ip-172-31-44-83.us-east-2.compute.internal (ECDSA)
+<14>Sep  8 14:06:06 cloud-init: 256 SHA256:qUu82mUzKIc7DSVO0DgNnJVSuT8xWXnbCWqpFY75XWg root@ip-172-31-44-83.us-east-2.compute.internal (ED25519)
+<14>Sep  8 14:06:06 cloud-init: -----END SSH HOST KEY FINGERPRINTS-----
+<14>Sep  8 14:06:06 cloud-init: #############################################################
+-----BEGIN SSH HOST KEY KEYS-----
+ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBOi653NFKM7/5PUYVmOwClWy6qKw3szhCWwQ5JwCge9gbRN7QwEF5aMdWrjkBwUYn7U/KSSGzzfUfc5g/s0K5NA= root@ip-172-31-44-83.us-east-2.compute.internal
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPxqug5f4YQcDBfVflt0XTdDCt535I6r29/J9WTEwFDz root@ip-172-31-44-83.us-east-2.compute.internal
+-----END SSH HOST KEY KEYS-----
+[    6.730351] cloud-init[6310]: [    0.085323] pci_bus 0000:02: resource 1 [mem 0x84000000-0x85ffffff]
+[    6.790036] cloud-init[6310]: [    0.085324] pci_bus 0000:02: resource 2 [mem 0x18020000000-0x1802fffffff 64bit pref]
+[    6.820040] cloud-init[6310]: [    0.085326] pci_bus 0000:03: resource 1 [mem 0x85e00000-0x85ffffff]
+[    6.850045] cloud-init[6310]: [    0.085327] pci_bus 0000:03: resource 2 [mem 0x1802f000000-0x1802fffffff 64bit pref]
+[    6.880028] cloud-init[6310]: [    0.085329] pci_bus 0000:04: resource 1 [mem 0x85c00000-0x85dfffff]
+[    6.910027] cloud-init[6310]: [    0.085330] pci_bus 0000:04: resource 2 [mem 0x1802e000000-0x1802effffff 64bit pref]
+[    6.940030] cloud-init[6310]: [    0.085331] pci_bus 0000:05: resource 1 [mem 0x85a00000-0x85bfffff]
+[    6.970027] cloud-init[6310]: [    0.085333] pci_bus 0000:05: resource 2 [mem 0x1802d000000-0x1802dffffff 64bit pref]
+[    7.000028] cloud-init[6310]: [    0.085334] pci_bus 0000:06: resource 1 [mem 0x85800000-0x859fffff]
+[    7.030029] cloud-init[6310]: [    0.085336] pci_bus 0000:06: resource 2 [mem 0x1802c000000-0x1802cffffff 64bit pref]
+[    7.060029] cloud-init[6310]: [    0.085337] pci_bus 0000:07: resource 1 [mem 0x85600000-0x857fffff]
+[    7.090028] cloud-init[6310]: [    0.085338] pci_bus 0000:07: resource 2 [mem 0x1802b000000-0x1802bffffff 64bit pref]
+[    7.120027] cloud-init[6310]: [    0.085340] pci_bus 0000:08: resource 1 [mem 0x85400000-0x855fffff]
+[    7.150027] cloud-init[6310]: [    0.085341] pci_bus 0000:08: resource 2 [mem 0x1802a000000-0x1802affffff 64bit pref]
+[    7.180028] cloud-init[6310]: [    0.085343] pci_bus 0000:09: resource 1 [mem 0x85200000-0x853fffff]
+[    7.210035] cloud-init[6310]: [    0.085344] pci_bus 0000:09: resource 2 [mem 0x18029000000-0x18029ffffff 64bit pref]
+[    7.240034] cloud-init[6310]: [    0.085345] pci_bus 0000:0a: resource 1 [mem 0x85000000-0x851fffff]
+[    7.270028] cloud-init[6310]: [    0.085347] pci_bus 0000:0a: resource 2 [mem 0x18028000000-0x18028ffffff 64bit pref]
+[    7.300028] cloud-init[6310]: [    0.085348] pci_bus 0000:0b: resource 1 [mem 0x84e00000-0x84ffffff]
+[    7.330027] cloud-init[6310]: [    0.085349] pci_bus 0000:0b: resource 2 [mem 0x18027000000-0x18027ffffff 64bit pref]
+[    7.360184] cloud-init[6310]: [    0.085351] pci_bus 0000:0c: resource 1 [mem 0x84c00000-0x84dfffff]
+[    7.390038] cloud-init[6310]: [    0.085352] pci_bus 0000:0c: resource 2 [mem 0x18026000000-0x18026ffffff 64bit pref]
+[    7.420046] cloud-init[6310]: [    0.085354] pci_bus 0000:0d: resource 1 [mem 0x84a00000-0x84bfffff]
+[    7.450031] cloud-init[6310]: [    0.085355] pci_bus 0000:0d: resource 2 [mem 0x18025000000-0x18025ffffff 64bit pref]
+[    7.480029] cloud-init[6310]: [    0.085357] pci_bus 0000:0e: resource 1 [mem 0x84800000-0x849fffff]
+[    7.510214] cloud-init[6310]: [    0.085358] pci_bus 0000:0e: resource 2 [mem 0x18024000000-0x18024ffffff 64bit pref]
+[    7.540035] cloud-init[6310]: [    0.085359] pci_bus 0000:0f: resource 1 [mem 0x84600000-0x847fffff]
+[    7.570034] cloud-init[6310]: [    0.085361] pci_bus 0000:0f: resource 2 [mem 0x18023000000-0x18023ffffff 64bit pref]
+[    7.600030] cloud-init[6310]: [    0.085362] pci_bus 0000:10: resource 1 [mem 0x84400000-0x845fffff]
+[    7.630029] cloud-init[6310]: [    0.085364] pci_bus 0000:10: resource 2 [mem 0x18022000000-0x18022ffffff 64bit pref]
+[    7.660037] cloud-init[6310]: [    0.085365] pci_bus 0000:11: resource 1 [mem 0x84200000-0x843fffff]
+[    7.690029] cloud-init[6310]: [    0.085366] pci_bus 0000:11: resource 2 [mem 0x18021000000-0x18021ffffff 64bit pref]
+[    7.720028] cloud-init[6310]: [    0.085368] pci_bus 0000:12: resource 1 [mem 0x84000000-0x841fffff]
+[    7.750034] cloud-init[6310]: --- root bus resources as Linux parsed them (the real _CRS) ---
+[    7.750696] cloud-init[6310]:   == /sys/devices/pci0000:00 ==
+[    7.751171] cloud-init[6310]: [    0.072136] PCI host bridge to bus 0000:00
+[    7.780029] cloud-init[6310]: [    0.072138] pci_bus 0000:00: root bus resource [mem 0x80000000-0x9fffffff window]
+[    7.810029] cloud-init[6310]: [    0.072140] pci_bus 0000:00: root bus resource [mem 0x18000000000-0x19fffffffff window]
+[    7.840027] cloud-init[6310]: [    0.072142] pci_bus 0000:00: root bus resource [bus 00-ff]
+[    7.870027] cloud-init[6310]: [    0.072165] pci 0000:00:00.0: [1d0f:0200] type 01 class 0x060400
+[    7.900027] cloud-init[6310]: [    0.072184] pci 0000:00:00.0: supports D1
+[    7.930027] cloud-init[6310]: [    0.072186] pci 0000:00:00.0: PME# supported from D0 D1 D3hot D3cold
+[    7.960026] cloud-init[6310]: [    0.072235] pci 0000:00:02.0: [1d0f:0200] type 01 class 0x060400
+[    7.990028] cloud-init[6310]: [    0.072250] pci 0000:00:02.0: supports D1
+[    8.020028] cloud-init[6310]: [    0.072251] pci 0000:00:02.0: PME# supported from D0 D1 D3hot D3cold
+[    8.050027] cloud-init[6310]: [    0.072333] pci 0000:01:00.0: [1d0f:bec2] type 01 class 0x060400
+[    8.080027] cloud-init[6310]: [    0.072430] pci 0000:01:00.0: PME# supported from D0 D3hot D3cold
+[    8.110035] cloud-init[6310]: [    0.072539] pci 0000:02:00.0: [1d0f:bec2] type 01 class 0x060400
+[    8.140038] cloud-init[6310]: [    0.072630] pci 0000:02:00.0: PME# supported from D0 D3hot D3cold
+[    8.170029] cloud-init[6310]: [    0.072711] pci 0000:02:01.0: [1d0f:bec2] type 01 class 0x060400
+[    8.200026] cloud-init[6310]: [    0.072800] pci 0000:02:01.0: PME# supported from D0 D3hot D3cold
+[    8.230027] cloud-init[6310]: [    0.072881] pci 0000:02:02.0: [1d0f:bec2] type 01 class 0x060400
+[    8.260027] cloud-init[6310]: [    0.072969] pci 0000:02:02.0: PME# supported from D0 D3hot D3cold
+[    8.290026] cloud-init[6310]: [    0.073050] pci 0000:02:03.0: [1d0f:bec2] type 01 class 0x060400
+[    8.321111] cloud-init[6310]: [    0.073139] pci 0000:02:03.0: PME# supported from D0 D3hot D3cold
+[    8.350050] cloud-init[6310]: [    0.073222] pci 0000:02:04.0: [1d0f:bec2] type 01 class 0x060400
+[    8.380142] cloud-init[6310]: [    0.073311] pci 0000:02:04.0: PME# supported from D0 D3hot D3cold
+[    8.410038] cloud-init[6310]: [    0.073393] pci 0000:02:05.0: [1d0f:bec2] type 01 class 0x060400
+[    8.440038] cloud-init[6310]: [    0.073482] pci 0000:02:05.0: PME# supported from D0 D3hot D3cold
+[    8.470040] cloud-init[6310]: [    0.073569] pci 0000:02:06.0: [1d0f:bec2] type 01 class 0x060400
+[    8.500031] cloud-init[6310]: [    0.073658] pci 0000:02:06.0: PME# supported from D0 D3hot D3cold
+[    8.530043] cloud-init[6310]: [    0.073743] pci 0000:02:07.0: [1d0f:bec2] type 01 class 0x060400
+[    8.560040] cloud-init[6310]: [    0.073832] pci 0000:02:07.0: PME# supported from D0 D3hot D3cold
+[    8.590033] cloud-init[6310]: [    0.073918] pci 0000:02:08.0: [1d0f:bec2] type 01 class 0x060400
+[    8.620030] cloud-init[6310]: [    0.074007] pci 0000:02:08.0: PME# supported from D0 D3hot D3cold
+[    8.650041] cloud-init[6310]: [    0.074094] pci 0000:02:09.0: [1d0f:bec2] type 01 class 0x060400
+[    8.680030] cloud-init[6310]: --- lspci topology (how many RCs, where the NVMe is) ---
+[    8.710036] cloud-init[6310]: 00:00.0 PCI bridge: Amazon.com, Inc. Device 0200 (rev 01) (prog-if 00 [Normal decode])
+[    8.740027] cloud-init[6310]: 	Capabilities: [70] Express (v2) Root Port (Slot-), MSI 00
+[    8.770028] cloud-init[6310]: 00:02.0 PCI bridge: Amazon.com, Inc. Device 0200 (rev 01) (prog-if 00 [Normal decode])
+[    8.800027] cloud-init[6310]: 	Capabilities: [70] Express (v2) Root Port (Slot-), MSI 00
+[    8.830028] cloud-init[6310]: 01:00.0 PCI bridge: Amazon.com, Inc. Device bec2 (prog-if 00 [Normal decode])
+[    8.860027] cloud-init[6310]: 	Capabilities: [70] Express (v2) Upstream Port, MSI 00
+[    8.890034] cloud-init[6310]: 	Capabilities: [b0] MSI: Enable- Count=1/1 Maskable- 64bit+
+[    8.920027] cloud-init[6310]: 02:00.0 PCI bridge: Amazon.com, Inc. Device bec2 (prog-if 00 [Normal decode])
+[    8.950046] cloud-init[6310]: 	Capabilities: [70] Express (v2) Downstream Port (Slot+), MSI 00
+[    8.950709] cloud-init[6310]: 	Capabilities: [b0] MSI: Enable+ Count=1/1 Maskable- 64bit+
+[    8.980030] cloud-init[6310]: 02:01.0 PCI bridge: Amazon.com, Inc. Device bec2 (prog-if 00 [Normal decode])
+[    9.010032] cloud-init[6310]: 	Capabilities: [70] Express (v2) Downstream Port (Slot+), MSI 00
+[    9.010696] cloud-init[6310]: 	Capabilities: [b0] MSI: Enable+ Count=1/1 Maskable- 64bit+
+[    9.040030] cloud-init[6310]: 02:02.0 PCI bridge: Amazon.com, Inc. Device bec2 (prog-if 00 [Normal decode])
+[    9.070027] cloud-init[6310]: 	Capabilities: [70] Express (v2) Downstream Port (Slot+), MSI 00
+[    9.070686] cloud-init[6310]: 	Capabilities: [b0] MSI: Enable+ Count=1/1 Maskable- 64bit+
+[    9.100033] cloud-init[6310]: 02:03.0 PCI bridge: Amazon.com, Inc. Device bec2 (prog-if 00 [Normal decode])
+[    9.130421] cloud-init[6310]: 	Capabilities: [70] Express (v2) Downstream Port (Slot+), MSI 00
+[    9.131102] cloud-init[6310]: 	Capabilities: [b0] MSI: Enable+ Count=1/1 Maskable- 64bit+
+[    9.160030] cloud-init[6310]: 02:04.0 PCI bridge: Amazon.com, Inc. Device bec2 (prog-if 00 [Normal decode])
+[    9.190026] cloud-init[6310]: 	Capabilities: [70] Express (v2) Downstream Port (Slot+), MSI 00
+[    9.190679] cloud-init[6310]: 	Capabilities: [b0] MSI: Enable+ Count=1/1 Maskable- 64bit+
+[    9.220028] cloud-init[6310]: 02:05.0 PCI bridge: Amazon.com, Inc. Device bec2 (prog-if 00 [Normal decode])
+[    9.250028] cloud-init[6310]: 	Capabilities: [70] Express (v2) Downstream Port (Slot+), MSI 00
+[    9.250689] cloud-init[6310]: 	Capabilities: [b0] MSI: Enable+ Count=1/1 Maskable- 64bit+
+[    9.280028] cloud-init[6310]: 02:06.0 PCI bridge: Amazon.com, Inc. Device bec2 (prog-if 00 [Normal decode])
+[    9.310028] cloud-init[6310]: 	Capabilities: [70] Express (v2) Downstream Port (Slot+), MSI 00
+[    9.310684] cloud-init[6310]: 	Capabilities: [b0] MSI: Enable+ Count=1/1 Maskable- 64bit+
+[    9.340026] cloud-init[6310]: 02:07.0 PCI bridge: Amazon.com, Inc. Device bec2 (prog-if 00 [Normal decode])
+[    9.370030] cloud-init[6310]: 	Capabilities: [70] Express (v2) Downstream Port (Slot+), MSI 00
+[    9.370690] cloud-init[6310]: 	Capabilities: [b0] MSI: Enable+ Count=1/1 Maskable- 64bit+
+[    9.400079] cloud-init[6310]: 02:08.0 PCI bridge: Amazon.com, Inc. Device bec2 (prog-if 00 [Normal decode])
+[    9.430032] cloud-init[6310]: 	Capabilities: [70] Express (v2) Downstream Port (Slot+), MSI 00
+[    9.430688] cloud-init[6310]: 	Capabilities: [b0] MSI: Enable+ Count=1/1 Maskable- 64bit+
+[    9.460028] cloud-init[6310]: 02:09.0 PCI bridge: Amazon.com, Inc. Device bec2 (prog-if 00 [Normal decode])
+[    9.490044] cloud-init[6310]: 	Capabilities: [70] Express (v2) Downstream Port (Slot+), MSI 00
+[    9.490703] cloud-init[6310]: 	Capabilities: [b0] MSI: Enable+ Count=1/1 Maskable- 64bit+
+[    9.520027] cloud-init[6310]: 02:0a.0 PCI bridge: Amazon.com, Inc. Device bec2 (prog-if 00 [Normal decode])
+[    9.550028] cloud-init[6310]: 	Capabilities: [70] Express (v2) Downstream Port (Slot+), MSI 00
+[    9.550686] cloud-init[6310]: 	Capabilities: [b0] MSI: Enable+ Count=1/1 Maskable- 64bit+
+[    9.580027] cloud-init[6310]: 02:0b.0 PCI bridge: Amazon.com, Inc. Device bec2 (prog-if 00 [Normal decode])
+[    9.610026] cloud-init[6310]: 	Capabilities: [70] Express (v2) Downstream Port (Slot+), MSI 00
+[    9.610676] cloud-init[6310]: 	Capabilities: [b0] MSI: Enable+ Count=1/1 Maskable- 64bit+
+[    9.640025] cloud-init[6310]: 02:0c.0 PCI bridge: Amazon.com, Inc. Device bec2 (prog-if 00 [Normal decode])
+[    9.670027] cloud-init[6310]: 	Capabilities: [70] Express (v2) Downstream Port (Slot+), MSI 00
+[    9.670683] cloud-init[6310]: 	Capabilities: [b0] MSI: Enable+ Count=1/1 Maskable- 64bit+
+[    9.700025] cloud-init[6310]: 02:0d.0 PCI bridge: Amazon.com, Inc. Device bec2 (prog-if 00 [Normal decode])
+[    9.730125] cloud-init[6310]: 	Capabilities: [70] Express (v2) Downstream Port (Slot+), MSI 00
+[    9.730799] cloud-init[6310]: 	Capabilities: [b0] MSI: Enable+ Count=1/1 Maskable- 64bit+
+[    9.760030] cloud-init[6310]: 02:0e.0 PCI bridge: Amazon.com, Inc. Device bec2 (prog-if 00 [Normal decode])
+[    9.790028] cloud-init[6310]: 	Capabilities: [70] Express (v2) Downstream Port (Slot+), MSI 00
+[    9.790685] cloud-init[6310]: 	Capabilities: [b0] MSI: Enable+ Count=1/1 Maskable- 64bit+
+[    9.820026] cloud-init[6310]: 02:0f.0 PCI bridge: Amazon.com, Inc. Device bec2 (prog-if 00 [Normal decode])
+[    9.850033] cloud-init[6310]: 	Capabilities: [70] Express (v2) Downstream Port (Slot+), MSI 00
+[    9.850692] cloud-init[6310]: 	Capabilities: [b0] MSI: Enable+ Count=1/1 Maskable- 64bit+
+[    9.880031] cloud-init[6310]: 03:00.0 Ethernet controller: Amazon.com, Inc. Elastic Network Adapter (ENA)
+[    9.910026] cloud-init[6310]: 	Region 0: Memory at 85e00000 (32-bit, non-prefetchable) [size=2M]
+[    9.940031] cloud-init[6310]: 	Region 2: Memory at 1802f000000 (64-bit, prefetchable) [size=16M]
+[    9.940694] cloud-init[6310]: 	Capabilities: [70] Express (v2) Endpoint, MSI 00
+[    9.941293] cloud-init[6310]: 	Capabilities: [b0] MSI-X: Enable+ Count=33 Masked-
+[    9.970043] cloud-init[6310]: --- lspci -tv ---
+[    9.970369] cloud-init[6310]: -[0000:00]-+-00.0-[01-12]----00.0-[02-12]--+-00.0-[03]----00.0  Amazon.com, Inc. Elastic Network Adapter (ENA)
+[   10.000049] cloud-init[6310]:            |                               +-01.0-[04]--
+[   10.030035] cloud-init[6310]:            |                               +-02.0-[05]--
+[   10.060028] cloud-init[6310]:            |                               +-03.0-[06]--
+[   10.090027] cloud-init[6310]:            |                               +-04.0-[07]--
+[   10.120027] cloud-init[6310]:            |                               +-05.0-[08]--
+[   10.150028] cloud-init[6310]:            |                               +-06.0-[09]--
+[   10.180040] cloud-init[6310]:            |                               +-07.0-[0a]--
+[   10.210028] cloud-init[6310]:            |                               +-08.0-[0b]--
+[   10.240027] cloud-init[6310]:            |                               +-09.0-[0c]--
+[   10.270034] cloud-init[6310]:            |                               +-0a.0-[0d]--
+[   10.300036] cloud-init[6310]:            |                               +-0b.0-[0e]--
+[   10.330028] cloud-init[6310]:            |                               +-0c.0-[0f]--
+[   10.360034] cloud-init[6310]:            |                               +-0d.0-[10]--
+[   10.390032] cloud-init[6310]:            |                               +-0e.0-[11]--
+[   10.420083] cloud-init[6310]:            |                               \-0f.0-[12]--
+[   10.450031] cloud-init[6310]:            \-02.0-[13-34]----00.0-[14-34]--+-00.0-[15]----00.0  Amazon.com, Inc. Device 8250
+[   10.480035] cloud-init[6310]:                                            +-01.0-[16]----00.0  Amazon.com, Inc. Device 0061
+[   10.510383] cloud-init[6310]:                                            +-02.0-[17]--
+[   10.540032] cloud-init[6310]:                                            +-03.0-[18]--
+[   10.570026] cloud-init[6310]:[   10.570108] cloud-init[6310]:                                            +-07.0-[1c]--
+[   10.640037] cloud-init[6310]:                                            +-08.0-[1d]--
+[   10.640093] cloud-init[6310]:                                            +-09.0-[1e]--
+[   10.640112] cloud-init[t[6310]: /sys/class/pci_bus/0000:2d
+[   10.641391] cloud-init[6310]: /sys/class/pci_bus/0000:2e
+[   10.641410] cloud-init[6310]: /sys/class/pci_bus/0000:2f
+[   10.641430] cloud-init[6310]: /sys/class/pci_bus/0000:30
+[   10.641449] cloud-init[6310]: /sys/class/pci_bus/0000:31
+[   10.641476] cloud-init[6310]: /sys/class/pci_bus/0000:32
+[   10.641500] cloud-init[6310]: /sys/class/pci_bus/0000:33
+[   10.641519] cloud-init[6310]: /sys/class/pci_bus/0000:34
+[   10.641538] cloud-init[6310]: --- MADT GICITS count (cross-check the committed MADT) ---
+[   10.641556] cloud-init[6310]: MADT subtable type counts: {12: 1, 15: 4, 11: 64}
+[   10.641577] cloud-init[6310]: GICC(11)=64 GICD(12)=1 GICMSI(13)=0 GICR(14)=0 GICITS(15)=4
+[   10.641596] cloud-init[6310]:   ITS id=0 base=0xbc00040000
+[   10.641615] cloud-init[6310]:   ITS id=1 base=0xbd00040000
+[   10.641633] cloud-init[6310]:   ITS id=2 base=0xbe00040000
+[   10.641652] cloud-init[6310]:   ITS id=3 base=0xbf00040000
+[   10.641671] cloud-init[6310]: --- ITS as Linux sees it (does it use all 4?) ---
+[   10.641689] cloud-init[6310]: [    0.000000] GICv3: GIC: Using split EOI/Deactivate mode
+[   10.641714] cloud-init[6310]: [    0.000000] GICv3: 960 SPIs implemented
+[   10.641732] cloud-init[6310]: [    0.000000] GICv3: 0 Extended SPIs implemented
+[   10.641751] cloud-init[6310]: [    0.000000] GICv3: GICv3 features: 16 PPIs
+[   10.641772] cloud-init[6310]: [    0.000000] GICv3: CPU0: found redistributor 0 region 0:0x000000bc00080000
+[   10.641791] cloud-init[6310]: [    0.000000] SRAT: PXM 0 -> ITS 0 -> Node 0
+[   10.641809] cloud-init[6310]: [    0.000000] SRAT: PXM 0 -> ITS 1 -> Node 0
+[   10.641829] cloud-init[6310]: [    0.000000] SRAT: PXM 0 -> ITS 2 -> Node 0
+[   10.641847] cloud-init[6310]: [    0.000000] SRAT: PXM 0 -> ITS 3 -> Node 0
+[   10.641867] cloud-init[6310]: [    0.000000] ITS [mem 0xbc00040000-0xbc0005ffff]
+[   10.641887] cloud-init[6310]: [    0.000000] ITS@0x000000bc00040000: allocated 8192 Devices @1002d0000 (indirect, esz 8, psz 64K, shr 1)
+[   10.641906] cloud-init[6310]: [    0.000000] ITS@0x000000bc00040000: allocated 32768 Interrupt Collections @1002e0000 (flat, esz 2, psz 64K, shr 1)
+[   10.641925] cloud-init[6310]: [    0.000000] ITS [mem 0xbd00040000-0xbd0005ffff]
+[   10.641946] cloud-init[6310]: [    0.000000] ITS@0x000000bd00040000: allocated 8192 Devices @100300000 (indirect, esz 8, psz 64K, shr 1)
+[   10.641966] cloud-init[6310]: [    0.000000] ITS@0x000000bd00040000: allocated 32768 Interrupt Collections @100310000 (flat, esz 2, psz 64K, shr 1)
+[   10.641992] cloud-init[6310]: [    0.000000] ITS [mem 0xbe00040000-0xbe0005ffff]
+[   10.642015] cloud-init[6310]: [    0.000000] ITS@0x000000be00040000: allocated 8192 Devices @100330000 (indirect, esz 8, psz 64K, shr 1)
+[   10.642035] cloud-init[6310]: [    0.000000] ITS@0x000000be00040000: allocated 32768 Interrupt Collections @100340000 (flat, esz 2, psz 64K, shr 1)
+[   10.642054] cloud-init[6310]: [    0.000000] ITS [mem 0xbf00040000-0xbf0005ffff]
+[   10.642075] cloud-init[6310]: [    0.000000] ITS@0x000000bf00040000: allocated 8192 Devices @100360000 (indirect, esz 8, psz 64K, shr 1)
+[   10.642095] cloud-init[6310]: [    0.000000] ITS@0x000000bf00040000: allocated 32768 Interrupt Collections @100370000 (flat, esz 2, psz 64K, shr 1)
+[   10.642114] cloud-init[6310]: [    0.000000] GICv3: using LPI property table @0x0000000100380000
+[   10.642135] cloud-init[6310]: [    0.000000] GICv3: CPU0: using allocated LPI pending table @0x0000000100390000
+[   10.642154] cloud-init[6310]: [    0.000000] sched_clock: 58 bits at 122MHz, resolution 8ns, wraps every 4398046511103ns
+[   10.642173] cloud-init[6310]: [    0.001118] Platform MSI: ITS@0xbc00040000 domain created
+[   10.642192] cloud-init[6310]: [    0.001120] Platform MSI: ITS@0xbd00040000 domain created
+[   10.642211] cloud-init[6310]: [    0.001122] Platform MSI: ITS@0xbe00040000 domain created
+[   10.642230] cloud-init[6310]: [    0.001123] Platform MSI: ITS@0xbf00040000 domain created
+[   10.642249] cloud-init[6310]: [    0.001128] PCI/MSI: ITS@0xbc00040000 domain created
+[   10.642267] cloud-init[6310]: [    0.001130] PCI/MSI: ITS@0xbd00040000 domain created
+[   10.669941] cloud-init[6310]: =====SOLNIX-PCIE-PROBE-END=====
+[   10.669966] cloud-init[6310]: Cloud-init v. 22.2.2 finished at Tue, 08 Sep 2026 14:06:06 +0000. Datasource DataSourceEc2.  Up 6.76 seconds
+
+Amazon Linux 2023.12.20260831
+Kernel 6.1.182-227.379.amzn2023.aarch64 on an aarch64 (-)
+
+
