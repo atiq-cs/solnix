@@ -389,8 +389,17 @@ chmod 1777 "$RDROOT/tmp" "$RDROOT/var/tmp" 2>/dev/null || true
 #     (the GLDv3 control node) which dlmgmtd opens at start -- without it
 #     network/datalink-management goes to maintenance and blocks ~52 dependent
 #     services (filesystem/minimal, milestone/devices, single-user, ...).
+# NOTE: illumos has NO readlink(1) -- /usr/bin/readlink is absent on the base
+# image, so `$(/usr/bin/readlink /dev/$n)` expanded to the empty string and the
+# `ln -sf "" ...` silently did nothing (errors swallowed by 2>/dev/null||true),
+# leaving the live ramdisk with NONE of these nodes. Derive the target from
+# `ls -ld` instead, the same idiom scripts/solnix-install uses (_readlink).
 for n in console msglog null zero tty syscon systty sysmsg random urandom poll dld dlpi; do
-  [ -L "/dev/$n" ] && ln -sf "$(/usr/bin/readlink /dev/$n)" "$RDROOT/dev/$n" 2>/dev/null || true
+  [ -L "/dev/$n" ] || continue
+  _t=$(ls -ld "/dev/$n" 2>/dev/null | sed -n 's/.* -> //p')
+  [ -n "$_t" ] || continue
+  rm -f "$RDROOT/dev/$n" 2>/dev/null || true
+  ln -s "$_t" "$RDROOT/dev/$n" 2>/dev/null || true
 done
 
 # 3b'. gcc runtime libs (libstdc++/libgcc_s, BOTH ABIs) that some 32-bit system
