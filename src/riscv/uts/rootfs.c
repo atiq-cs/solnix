@@ -295,6 +295,13 @@ static const struct vfile vfiles[] = {
 	{ "/bin/fptest", fptest_elf, 0 },	/* hard-float context-switch gate */
 	{ "/bin/porttest", porttest_elf, 0 },	/* event-ports gate */
 	{ "/bin/miniwl", miniwl_elf, 0 },	/* integration: all of it together */
+	/*
+	 * The REAL-libc gate: newlib 4.5.0 libc.a + newlib_glue.c. Unlike every
+	 * other entry here it is NOT linked against user/libc.c, and it loads at
+	 * 0x40010000 (Sv39 slot 1) rather than 0xC0010000 because newlib's
+	 * shipped libc.a is medlow code and cannot reach slot 3.
+	 */
+	{ "/bin/newlibtest", newlibtest_elf, 0 },
 };
 #define NVFILES (int)(sizeof (vfiles) / sizeof (vfiles[0]))
 
@@ -320,6 +327,7 @@ vfiles_init(void)
 	vfile_len[9] = fptest_elf_len;
 	vfile_len[10] = porttest_elf_len;
 	vfile_len[11] = miniwl_elf_len;
+	vfile_len[12] = newlibtest_elf_len;
 	vfiles_ready = 1;
 }
 

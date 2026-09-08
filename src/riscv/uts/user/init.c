@@ -583,6 +583,45 @@ fp_gate(void)
 }
 
 /*
+ * newlib_gate -- the REAL-LIBC gate. Every other program init runs was built
+ * against user/libc.c, a hand-written slice whose printf understands only
+ * %d/%u/%x/%s. /bin/newlibtest links newlib 4.5.0's libc.a instead -- genuine
+ * upstream libc code -- through the small OS port in user/newlib_glue.c.
+ *
+ * So this gate answers a different question from all the others: not "does our
+ * kernel support the userland we wrote for it", but "is the syscall surface
+ * genuinely adequate for a libc that was NOT written to its limitations". A real
+ * libc calls _sbrk with its own arithmetic, buffers stdio its own way, and
+ * formats %ld and %.3f through code we do not control.
+ *
+ * Forked and exec'd like the other gates so a failure cannot take init down.
+ * Note it is also HARD-FLOAT (newlib ships only an lp64d multilib), so it
+ * exercises FP state from inside library code.
+ */
+static void
+newlib_gate(void)
+{
+	int pid, st = 0;
+
+	puts("\n--- gate: REAL libc (newlib 4.5.0) on the solnix kernel ---\n");
+	pid = fork();
+	if (pid == 0) {
+		char *av[2];
+
+		av[0] = "newlibtest";
+		av[1] = 0;
+		execve("/bin/newlibtest", av, 0);
+		puts("newlib: exec /bin/newlibtest FAILED\n");
+		_exit(1);
+	}
+	if (pid < 0) {
+		puts("newlib: fork FAILED\n");
+		return;
+	}
+	waitpid(pid, &st, 0);
+}
+
+/*
  * scanout_gate -- R-P64. Run /bin/fbtest, the userland proof of the /dev/fb
  * scanout seam (open + FBIOGMODE + mmap + paint + FBIOFLUSH). Forked so a
  * failure in the test cannot take init down, and so the seam is exercised from
@@ -719,6 +758,14 @@ main(int argc, char **argv)
 	 * fbtest says so, and init carries on to the console. */
 	scanout_gate();
 	miniwl_gate();
+	/*
+	 * The real-libc gate runs LAST, after every pre-existing gate has already
+	 * reported. Two reasons: newlibtest is hard-float, so a plain FP
+	 * regression is described by the simpler fptest probe first; and running
+	 * it last means this newest, least-proven gate cannot perturb the six
+	 * established ones.
+	 */
+	newlib_gate();
 
 	printf("\n[R-P12] milestones reached; console login (passwd) follows\n");
 	login_console();	/* gate 3: /etc/passwd login; does not return */
