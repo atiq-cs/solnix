@@ -5,6 +5,33 @@ changed the shape of this goal, so this supersedes the sequencing implied by
 `docs/riscv-jupiter-driver-plan.md` (whose per-driver crib analysis remains
 correct and is still the reference for board bring-up).
 
+## ⚠️ SCOPE: "an ISO that boots and installs solnix on the K1" is MONTHS away, not weeks
+
+The board is now in hand, so this needs saying precisely rather than optimistically. What exists on
+riscv64 today is real: 45 syscalls, 30 kernel source files, a QEMU boot, seven green gates, a REAL
+newlib libc binary executing, and /dev/fb scanout proven against a host screendump.
+
+What an installable ISO additionally requires, none of which exists:
+
+| Requirement | Actual state |
+|---|---|
+| dynamic linking | `elf.c` accepts **static `ET_EXEC` only**; no `ld.so.1`, no `dlopen`. COSMIC is ~860 crates of dynamic Rust. |
+| a writable filesystem | `rootfs.c` is **in-memory READ-ONLY** — "no write/create/unlink". An installer must write a disk. |
+| ZFS | none. solnix installs into a ZFS boot environment. |
+| networking | no socket layer; `vionef.c` sends ONE hand-built ARP frame. |
+| SMF / packaging / nix | none on riscv64. The registry has **zero** riscv64 derivations. |
+| K1 hardware | **not one instruction has ever executed on the board.** |
+
+So the near-term deliverable for the board is **not** an installer. It is the checkpoint ladder
+below, starting at **"it prints"** — a console banner from our kernel on real K1 silicon. That is
+~1 week and everything preceding the board (corrected DTB, console bind, table-driven `fdt.c`) is
+already done. See `docs/milkv-jupiter-bringup-runbook.md` for the hands-on procedure.
+
+Stating this because three claims were retracted from this repo in a single session for exactly the
+opposite habit: a real result summarised one step too confidently, with the summary outliving the
+caveat.
+
+
 ## What changed
 
 The old assumption was that the desktop stack would be the hard part on RISC-V.
