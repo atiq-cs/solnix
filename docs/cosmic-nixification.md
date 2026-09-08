@@ -5,9 +5,12 @@ How COSMIC apps become **real Nix derivations** instead of `cargo` output in a
 
 Status of this document: the pattern is proven end to end through compilation of
 the full ~860-crate COSMIC/iced/winit/wayland graph, with a passing negative
-control. One dependency (`libxkbcommon`) does not yet build on the node because
-of a *tooling* bug unrelated to COSMIC; that blocker is named precisely in
-"Where it stops" below. Read that section before believing anything else here.
+control, and the vendor FOD has been independently reproduced on a second clean
+node. **No binary has been produced yet.** The `derivation-goal.cc:306`
+assertion that was believed to be the blocker is now solved (one flag -- see
+"Where it stops"); what remains is a dependency-porting problem (`cmake-minimal`
+via doxygen), not a Nix problem. Read "Where it stops" before believing anything
+else here.
 
 ## Why this was needed
 
@@ -160,50 +163,156 @@ committed note assumes.
 | Claim | Status |
 |---|---|
 | `nix-instantiate` yields a real `.drv` from a clean checkout | **VERIFIED** |
-| Vendor FOD builds, is content-addressed, has a real deriver | **VERIFIED** -- `/nix/store/dwaq7qxcc1ya7srvrqib21c1vhsy5l32-cosmic-term-vendor-1.5.0`, 861 entries, 1.34 GB |
+| Vendor FOD builds, is content-addressed, has a real deriver | **VERIFIED** -- `/nix/store/dwaq7qxcc1ya7srvrqib21c1vhsy5l32-cosmic-term-vendor-1.5.0`, 861 entries. **Independently reproduced** from scratch on a second clean node to the identical path (measured 623 MB on disk, not 1.34 GB) |
 | No hardcoded `/root/...` or `/nix/cosmic/...` path anywhere in the derivation | **VERIFIED** |
 | The ~860-crate graph compiles (libcosmic, iced, winit, wayland, softbuffer, alacritty_terminal) | **VERIFIED** through the point described below |
 | Negative control flips the check to FAIL | **VERIFIED** |
 | Final `cosmic-term` binary produced | **NOT REACHED** -- see below |
 | Binary is `ELFOSABI_SOLARIS` / `EM_AMD64` | **NOT VERIFIED** (no binary yet) |
 | Binary runs / paints under smallvil | **NOT VERIFIED** (no binary yet) |
+| The `derivation-goal.cc:306` assertion is avoidable | **VERIFIED** -- `--option substitute false`, 4/4 vs 4/4; see below |
+| The assertion is fixed by a newer nix | **REFUTED** -- 2.24.15 (the aborting version) *contains* it, as do 2.25-2.29 |
 
-Do not report the last three as done. They are not.
+Do not report the binary, the ELF check, or the run as done. They are not.
 
 ## Where it stops, exactly
 
-The remaining blocker is **not** in COSMIC and not in Rust. It is the bootstrap
-Nix on the node:
+What was recorded here as "the bootstrap Nix" is **two separate problems**, and
+the fix this document previously recommended was **wrong**. Both re-measured on
+a clean node.
+
+### 1. The assertion is AVOIDABLE WITH ONE FLAG (not fixable by upgrading)
 
 ```
 Assertion failed: false, file src/libstore/build/derivation-goal.cc, line 306,
 function outputsSubstitutionTried
 ```
 
-Reproduced **6/6** attempts, deterministically, whenever the build needs a large
-set of substituted paths -- which `libxkbcommon` triggers because it is a meson
-package and pulls python3 (`mpdecimal`, `sqlite`, `libxml2`, `bzip2`, `xz`,
-`libtool`). Characterisation done:
+Measured A/B on the recorded trigger (`libxkbcommon`), 4 runs per arm, with the
+existing `/nix-tools224` bootstrap nix:
 
-* It fires only in the **derivation** goal path. Realising bare store paths with
-  `nix-store -r <path>` does not hit it, which is how the rust seed and the
-  nixpkgs fork were staged successfully.
-* It is not a signature problem. Adding `require-sigs = false` does not change
-  it.
-* The abort correlates with paths reported as `don't know how to build`
-  (neither substitutable nor buildable), all of them python3 closure members.
-* The obvious fix -- use the from-source `nix-2.24.15`, which has the relevant
-  fixes -- **does not work on this AMI**: its RUNPATH wants
-  `libcrypto.so.1.1` / `libssl.so.1.1`, and the AMI ships only openssl 1.0 and
-  3. Rewriting the RUNPATH with `elfedit` gets `nix --version` to run but leaves
-  those two sonames unresolved.
+| arm | invocation | result |
+|---|---|---|
+| A | substituters ON | **ASSERT 4/4** |
+| B | `--option substitute false` | **no assert 4/4**, proceeds to build |
 
-So the precise next step for whoever picks this up is: **get a working nix on
-the node** (either build `nix-2.24.15` against the AMI's openssl 3, or bank a
-tarball whose RUNPATH matches), then build `libxkbcommon`, then re-run
-`nix-build -A cosmic-term`. No COSMIC-side work is known to remain before the
-binary appears; every COSMIC-side error encountered so far has been fixed and
-cleared.
+The earlier claim that the from-source `nix-2.24.15` "has the relevant fixes" is
+**refuted: line 306 of `derivation-goal.cc` in 2.24.15 IS that assertion**, and
+`/nix-tools224/bin/nix --version` reports `nix (Nix) 2.24.15` -- the aborting nix
+is already that version, so "upgrade to 2.24.15" is a no-op. Version sweep:
+
+| nix | assertion present? |
+|---|---|
+| 2.8.1 / 2.11.1 / 2.13.6 / 2.18.9 | **NO** -- plain `bool retrySubstitution`, no enum, no assert |
+| 2.24.15 | yes, line 306 |
+| 2.25.5 / 2.26.4 | yes, line 306 |
+| 2.28.4 | yes, line 293 |
+| 2.29.1 | yes, line 313 |
+
+Upgrading upstream does **not** help; only <= 2.18 is structurally immune.
+**Do not build a nix from source for this.**
+
+Mechanism, traced in the 2.24.15 source rather than inferred:
+
+* `haveDerivation()` (dg:249) creates substitution goals only
+  `if (settings.useSubstitutes && parsedDrv->substitutesAllowed())`.
+* `goal.cc:150-154` is the only place the counters move: `ecIncompleteClosure`
+  bumps both `nrIncompleteClosure` and `nrFailed`.
+* `YesNeed` is set at dg:302 only when the substitutes formed an **incomplete
+  closure** (`nrIncompleteClosure > 0 && == nrFailed`).
+* It is cleared **only** in `inputsRealised()` (dg:490-493).
+* Re-entering `outputsSubstitutionTried()` while still `YesNeed` -- via the
+  `needRestart` path (dg:316-318), armed by `addWantedOutputs()` when a second
+  consumer wants more outputs of the same **multi-output** drv, without passing
+  through `inputsRealised()` -- trips line 306.
+
+Disabling substituters removes the dg:249 branch, so `nrIncompleteClosure` stays
+0, `YesNeed` is never set, and 306 is unreachable. This matches
+`artifacts/cosmic-nix/xkbdrv.log`, whose 12 "don't know how to build these
+paths" entries are all multi-output python3-closure members.
+
+**The working recipe is two phases**, because the flag alone forces a
+from-source stdenv rebuild:
+
+1. **Warm from cache with BARE-PATH realisation.** `nix-store --realise <path>`
+   uses `PathSubstitutionGoal` only and never enters
+   `DerivationGoal::outputsSubstitutionTried`, so it cannot hit the assertion.
+   For every `.drv` in the closure, ask `nix-store -q --outputs` and realise
+   those paths. `nix-store -qR --include-outputs <drv>` is **not** sufficient --
+   it omitted `expand-response-params` in a measured run.
+2. **Build with `--option substitute false`.**
+
+(`nix-build` has no `--add-root`; use `-o`. A stale `/homeless-shelter` must be
+removed before each build.)
+
+### 2. What actually blocks the binary: cache coverage, not nix
+
+With the assertion avoided, the build walks into an unported dependency. Of
+`cosmic-term`'s 339 closure output paths, **180 are in no cache** and must be
+built locally, and **60 of those are the cmake / doxygen / libxcb / xorgproto /
+python3 graph**. `cmake-minimal-4.3.4` then fails:
+
+```
+ld: fatal: library -lkstat: not found
+ld: fatal: library -lsendfile: not found
+ld: fatal: file processing errors. No output written to cmake
+error: builder for '...-cmake-minimal-4.3.4.drv' failed with exit code 9
+```
+
+cascading through zstd, libarchive, python3, doxygen, libxcb, xorgproto and
+libxkbcommon. This is **pre-existing, known repo state** -- `solaris-overlay`
+says outright that "cmake is blocked on illumos (H26, -lkstat/-lsendfile)" and
+the `git` recipe deliberately routes around cmake for that reason.
+`libxkbcommon` pulls doxygen (verified with `nix-store -q --references` on its
+drv), and doxygen is what drags in cmake.
+
+**Shortest path next, in cost order:**
+
+1. Run on a node whose store already holds the cmake/python3/xcb graph (the
+   release-lineage build AMI does), or publish those 180 paths to the cache.
+   Nothing else in the derivation is known to be wrong.
+2. Or cut doxygen out of the libxkbcommon graph -- docs are not the deliverable
+   on a port, and that drops cmake, python3, libxcb and xorgproto at once.
+3. Only then port `cmake-minimal` (wire `extraSyslibs` in as the htop entry
+   does, plus the recorded `-DCMAKE_RANLIB`/`-DCMAKE_STRIP` -> `true` cracks).
+
+### 3. Four side blockers found and fixed on the way (all real)
+
+* **A dead GNU mirror broke EVAL**, before any derivation goal existed.
+  `ftpmirror.gnu.org` (first entry of `mirror://gnu`) serves a 502 nginx page;
+  `ftp.gnu.org`, nluug and kernel.org all serve 200. `builtins.tryEval` cannot
+  catch a `builtins.fetchurl` *download* failure (only `throw`/`assert`), so the
+  shim's fallback loop never ran and eval died in `hello`'s `src` and
+  `cosmic-term`'s `buildInputs`. Fixed with a `deadHosts` drop-filter in
+  `artifacts/fan224-stage/fetchurl-shim-qmvlnvf0.nix` -- the same crack and same
+  fix as the dead gnupg.org mirror in Wave 25, which had never been baked into
+  the committed shim.
+* **`library/mpfr` was not installed**, so the seed gawk could not run
+  `substituteAll` and the cc setup-hook shipped **unsubstituted** placeholders:
+  `export: NIX_@wrapperName@_TARGET_HOST_@suffixSalt@=1: not a valid identifier`.
+  `oi-fleet-bootstrap.sh` documents this dep; `nixboot-only.sh` skips the `pkg`
+  step, which suffices to *run* nix but not to *build* with it.
+* **`rhash`** (a cmake dep) needs the dotted triple
+  `--target=x86_64-pc-solaris2.11`, else `Checking for target OS ... UNKNOWN`.
+  Recorded in Wave 25, never baked in; now in the overlay and verified to build.
+* **`extraSyslibs` pointed at an unpublished tarball FOD**
+  (`qbl2q3v2...-extra-syslibs.tar.gz`) that does not exist and cannot rebuild --
+  exactly the documented `PS-FRED-STALE-EXTRASYSLIBS`. Rewritten as the
+  canonical `runCommand` linking from `seedSyslibs` / `/lib/amd64` with
+  loud-fail guards. **Necessary but not sufficient**: nothing wires it into
+  `cmakeMinimal` (only `htop` consumes it), so the cmake link error is
+  byte-identical before and after -- which is how we know it is unwired rather
+  than wrong.
+
+### 4. Independent confirmation of the vendor FOD
+
+Rebuilt from scratch on a clean node and landed on the **identical** store path
+recorded earlier,
+`/nix/store/dwaq7qxcc1ya7srvrqib21c1vhsy5l32-cosmic-term-vendor-1.5.0`, 861
+entries, `--check-validity` passing -- independently confirming
+`vendorSha256 = sha256-xim0P0/kMCU6bLb65xmUzRMBepXdV2qyKchEb2Vfzy0=`. Measured
+size on disk is **623 MB**, not the 1.34 GB claimed elsewhere in this document;
+the entry count matches exactly, so the size figure is the one to distrust.
 
 ## Doing the next app (this is meant to be mechanical)
 
