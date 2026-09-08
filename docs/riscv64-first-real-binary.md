@@ -240,42 +240,140 @@ dispatcher self-test (`thread B: round 3 (ctx-switch to A)`), which is
 **before any userland program is exec'd at all**. A boot that never reaches
 userland cannot have been broken by a userland program.
 
-### 6.2 Refuted: "regeneration under the pin measures 6/6"
+### 6.2 The regeneration breakage: root-caused and FIXED (was: "refuted")
 
-`build-user.sh`'s banner and the surrounding docs state that regenerating the
-userland under the gcc 14.3.0 pin measures 6/6, the old breakage having been three
-now-fixed kernel bugs. **Measured, that is no longer true.** Bisected, one boot
-each:
+This section previously reported that regenerating the userland broke the miniwl
+gate and concluded it was "a latent `sscratch`/kernel-stack-top bug on the fork
+path". The bisection stands, the conclusion was **half right**: it is a real
+kernel bug and it is an `sscratch` bug, but it is **not on the fork path**. The
+mechanism has now been observed and fixed. Two claims made here are also
+withdrawn as unmeasurable; see below.
 
-| Configuration | MINIWL |
-|---|---|
-| Committed `user_elfs.h`, untouched | **PASS** (twice) |
-| `bash user/build-user.sh` regeneration, `newlibtest` embedded but its gate call **removed** | **FAIL** |
-| `bash user/build-user.sh` regeneration, **zero** newlib involvement, stock unmodified script, same pinned gcc | **FAIL** |
+#### What was actually wrong
 
-So **any** full regeneration breaks the miniwl gate, independent of this work and
-independent of the compiler. The failure is identical every time and lands
-immediately after miniwl forks its client:
+`_trap_entry` (`trap.S`) discriminates a trap-from-U from a trap-from-S using
+**only** `sscratch != 0`:
 
 ```
-[fork] pid 20 -> child pid 21
-  [ok] fork the client
-[trap] exception: scause=0x000000000000000f (store page fault)
-       sepc=0x000000008020019e stval=0x00000000ffffecb0 sstatus=0x0000000200040020
-[trap] unexpected trap -> parking hart.
+csrrw sp, sscratch, sp
+bnez  sp, 1f            /* nonzero => "came from U-mode" */
 ```
 
-Decoded: `sepc 0x8020019e` is `sd ra,0(sp)` — the **first store in `_trap_entry`**
-(`trap.S`). `sstatus.SPP = 0`, so the trap came from U-mode. `stval 0xffffecb0` is
-a **user** stack address (`USTACK_TOP 0xfffff000`, 64 KiB stack), and
-`0xffffecb0 + 288 (TF_SIZE) = 0xffffedd0` is the `sp` the store used. So on that
-trap **`sscratch` held a user `sp` where it must hold the per-process kernel stack
-top**, and the kernel stored a trap frame onto the user stack.
+That is sound only if `sscratch` is zero for every S-mode instruction. It was
+not. The entry swap parks the interrupted `sp` **in `sscratch`** and the original
+code left it there for the entire duration of `trap()`. So any trap taken while
+`trap()` was running — the clock tick that arrives after a preemptive `swtch`,
+or any nested S-mode exception — saw a nonzero `sscratch`, was **misclassified as
+a trap from U-mode**, and built its frame at the parked value, which is a **user**
+stack address. The first store of the frame is `sd ra,0(sp)` at `0x8020019e`,
+which then faults with `scause=0xf` and a user-address `stval`. That is exactly
+the reported signature.
 
-That is a latent `sscratch`/kernel-stack-top bug on the fork path, exposed by any
-change to userland size or layout. It is a real kernel bug, it is **not** a
-compiler skew, and it deserves its own fix. It is out of scope here, so this work
-routes around it (§8) rather than papering over it.
+The same missing invariant has a second victim, `usermode_entry`, which sets
+`sscratch` in its first instruction and then runs ~31 more instructions loading
+the user GPR set before `sret`. Its `csrw sstatus` has already cleared `SPP` by
+then, so a misclassified trap in that window snapshots an `sstatus` with `SPP=0`
+and its `sret` drops to **U-mode at a kernel PC**.
+
+#### The mechanism, observed
+
+Captured with QEMU's own `-d int` trap log — a true observer: it lives on the
+QEMU side, adds no kernel code and perturbs no kernel timing, which matters here
+because the bug is a race (`/tmp/qtrace.log`, two **consecutive** records):
+
+```
+riscv_cpu_do_interrupt: async:1 cause:0x5  epc:0x802002ae  desc=s_timer
+riscv_cpu_do_interrupt: async:0 cause:0xc  epc:0x802002ae  tval:0x802002ae  desc=exec_page_fault
+```
+
+`0x802002ae` disassembles inside `usermode_entry`, 12 bytes past the `csrw
+sstatus,t0` that clears `SPP`:
+
+```
+802002a2: csrw sstatus,t0    <- SPP:=0, SPIE:=1, SUM:=1
+802002aa: csrw sepc,t0
+802002ae: ld   ra,0(a0)      <- timer lands HERE, still S-mode, sscratch nonzero
+802002b2: ld   sp,8(a0)      <- past here, x2 is the USER sp
+```
+
+A timer arrives at `0x802002ae`; the very next trap is an **instruction** page
+fault at that same address with `sepc == stval` and `SPP=0` — the kernel `sret`ed
+to its own PC in U-mode. This also **resolves a contradiction the old text could
+not**: `SPP=0` together with a kernel `sepc` is impossible for an ordinary fault.
+It is not an inconsistency in the report, it is the *signature* of this bug.
+
+#### Why regeneration looked like the cause (it is not)
+
+The race window is a fixed instruction count. Regenerating the userland changes
+program sizes and instruction counts, and therefore the **phase of the clock**
+relative to that window — nothing more. **The committed `user_elfs.h` was a lucky
+phase, not a correct kernel.** So this was never about the compiler (blamed
+first, wrongly) and never about the committed build outputs (blamed second, also
+wrongly). It is a third thing: a trap-vector reentrancy bug that a rebuild merely
+re-rolls the dice on.
+
+#### The fix
+
+Two instructions in `trap.S`, restoring the invariant the vector already assumed:
+
+1. `_trap_entry`: `csrw sscratch, zero` immediately after the parked `sp` has
+   been read out into `TF_SP`. After that point `sscratch == 0` for every S-mode
+   instruction, which is what makes the `bnez` discriminator sound. **This is the
+   load-bearing half.**
+2. `usermode_entry`: clear `sstatus.SIE` before touching `sscratch`, closing the
+   commit window. Free on exit — `sret` restores the U-mode interrupt state from
+   `SPIE`, which the same function sets to 1, so userland still runs with
+   interrupts enabled.
+
+#### Negative controls (both halves tested separately)
+
+| Kernel | MINIWL / all 7 gates | Signature |
+|---|---|---|
+| Both fixes | **PASS 10/12** (2 runs lost to the pre-existing pre-boot flake) | no trap in any of 12 |
+| **NC2**: remove *only* the `_trap_entry` `csrw sscratch, zero` | **FAIL 4/4** | `sepc=0x8020019e stval=0xffffecb0 sstatus=0x200040020`, at miniwl right after its fork — **bit-identical to the original report** |
+| **NC1**: remove *only* the `usermode_entry` SIE clear | PASS 4/4 | — |
+
+NC2 flipping 4/4 to the exact documented signature is what pins causation to the
+`_trap_entry` half. NC1 passing 4/4 says the `usermode_entry` window is a
+genuine-but-narrower hole that this workload does not reliably hit; it is kept
+because the window is real and the guard is one instruction.
+
+#### Measured rate after the fix (full regeneration, 12 runs)
+
+`bash user/build-user.sh` (full regeneration) then `bash build-scanout.sh`:
+
+* **10/12 runs: all seven gates PASS** (SOCKTEST, POLLTEST, PORTTEST, FPTEST,
+  MINIWL, NEWLIBTEST, SCANOUT), 544-line console.
+* **2/12 runs: the pre-existing flake described in §6.1** — console stops at line
+  178 inside the kernel dispatcher self-test, **zero** userland programs exec'd,
+  and no trap report. It fails every gate *together* because it never reaches
+  userland, which is the documented signature of that flake and is unrelated to
+  this fix.
+* **0/12 runs: the `sscratch` trap.** Before the fix it was deterministic on a
+  regenerated tree.
+
+#### Two claims from the old §6.2 withdrawn
+
+* "regenerated, **zero** newlib, stock unmodified `build-user.sh` → MINIWL FAIL"
+  **cannot have been a boot.** `rootfs.c` references `newlibtest_elf[]` and
+  `newlibtest_elf_len`; a stock `build-user.sh` run rewrites `user_elfs.h`
+  *without* those, so the kernel fails to **compile** (`error: 'newlibtest_elf'
+  undeclared`). That row was a build failure, not a gate failure.
+* "the failure is identical every time" and "lands immediately after miniwl forks
+  its client" — **not identical**. Reproduced twice with different victims: once
+  at the R-P12 pipes/dup2 gate (`scause=0xf`, `stval=0xffffed20`), once inside
+  `usermode_entry` (`scause=0xc`, `sepc=stval=0x802002ae`). The variation is the
+  tell that it is a race; a layout bug would land in the same place every time.
+  (It *is* reliably at miniwl in the NC2 configuration, which is presumably what
+  was originally sampled.)
+
+#### Regeneration is re-enabled
+
+`build-user.sh` now chains `build-newlibtest.sh` at the end, so a plain
+`bash user/build-user.sh` is a **complete** regeneration that compiles — the two
+scripts are no longer a trap for anyone touching userland. §8's surgical splice
+is kept (it makes `build-newlibtest.sh` idempotent and separately runnable), but
+it is no longer load-bearing and its banner no longer warns off regeneration.
 
 ---
 
@@ -308,17 +406,23 @@ question.
 
 ---
 
-## 8. How this avoids the regeneration regression (do not undo)
+## 8. How this avoids the regeneration regression (historical; now fixed)
 
-Because §6.2 shows a full regeneration breaks miniwl, the build here is
-deliberately **surgical**:
+**Status: the regeneration regression described here is FIXED (§6.2), and
+`build-user.sh` now chains `build-newlibtest.sh` so a plain `bash
+user/build-user.sh` is a complete regeneration.** The surgical behaviour below is
+kept because it makes `build-newlibtest.sh` idempotent and runnable on its own,
+not because regeneration is still dangerous.
+
+When §6.2's breakage was live, the build here was deliberately **surgical**:
 
 * `src/riscv/uts/user/build-newlibtest.sh` (new) builds `newlibtest.elf`, then
   **replaces only `init_elf[]`** (which must change — the gate call lives in
   `init.c`) and **appends `newlibtest_elf[]`** to the committed `user_elfs.h`.
   The other ten programs keep their committed bytes exactly.
-* `build-user.sh` is left **unmodified** (git-clean), so nobody inherits the
-  regeneration failure from this change.
+* `build-user.sh` **chains** `build-newlibtest.sh` as its final step, so one
+  command regenerates everything and the result compiles (`rootfs.c` needs
+  `newlibtest_elf[]`).
 * The rootfs member is added with `tar -r`, not by hand-splicing 512-byte blocks.
   An earlier version of the script scanned for a zero block to find the archive
   end; embedded ELF contents contain long zero runs, so it found a false end and
@@ -327,6 +431,10 @@ deliberately **surgical**:
 
 Once the `sscratch` fork bug is fixed, fold this into `build-user.sh` and delete
 the splice.
+
+**Update:** the bug is fixed (it was a trap-vector reentrancy bug, not a fork
+bug) and the chaining is done. The splice itself is retained deliberately, per
+the note above.
 
 ---
 
@@ -363,7 +471,7 @@ bash build-scanout.sh              # boot; check the console log for NEWLIBTEST 
 
 | # | Item | Effort | Why it is next |
 |---|---|---|---|
-| 1 | Fix the `sscratch`/kernel-stack-top fork bug (§6.2) | **0.5–1 d** | Unblocks `build-user.sh` regeneration, which is currently a trap for anyone touching userland. Fully diagnosed above; the fix is in `trap.S`/fork. |
+| ~~1~~ | ~~Fix the `sscratch`/kernel-stack-top fork bug (§6.2)~~ | **DONE** | Was a trap-vector reentrancy bug in `_trap_entry`, not a fork bug: `sscratch` was left holding the interrupted `sp` across `trap()`, breaking the vector's own from-U discriminator. Fixed + negative-controlled in §6.2; `build-user.sh` regeneration re-enabled and measured 10/12 (2 losses are the unrelated pre-boot flake). |
 | 2 | Real `fstat`/`stat` syscall over the vfs layer | **0.5–1 d** | Turns the two remaining STUBs REAL and lets newlib buffer stdio correctly; prerequisite for `fopen`. |
 | 3 | Wire `_open` to `openat(2)` | **~2 h** | Trivial once 2 lands; gives real file I/O through a real libc. |
 | 4 | Decide `medlow`-in-slot-1 vs rebuilding libc `medany` (§3.1) | **0.5 d decision, 1 d if rebuilding** | Every future real-libc program inherits this choice. |
@@ -373,3 +481,19 @@ bash build-scanout.sh              # boot; check the console log for NEWLIBTEST 
 
 Items 1–3 are small, well-diagnosed, and each removes a named stub or a named
 trap.
+
+---
+
+## 11. The pre-boot flake, quantified
+
+Separately from anything above, a boot occasionally dies **before userland**:
+the console stops at line 178 of 546, inside the kernel dispatcher self-test
+(`thread B: round 3 (ctx-switch to A)`), with **zero** `[exec]` lines and **no**
+trap report. Because it never reaches userland it fails all seven gates
+*together*, which is its distinguishing signature — any single-gate failure is a
+real bug, not this.
+
+Measured rate on the fixed kernel: **2 of 12** runs (`/tmp/fixrate-console-5.log`,
+`/tmp/final-console-6.log`). It predates the §6.2 fix and is unaffected by it.
+It is the next thing to chase for anyone who wants a green run every time; it is
+also why gates here must be judged by rate rather than by a single pass.

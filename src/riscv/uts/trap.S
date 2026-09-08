@@ -85,6 +85,21 @@ _trap_entry:
 	addi	t0, sp, TF_SIZE		/* S-mode: prior sp */
 2:
 	sd	t0,  TF_SP(sp)
+	/*
+	 * RESTORE THE KERNEL INVARIANT: sscratch is nonzero ONLY while the CPU is
+	 * in U-mode. The swap above parked the interrupted sp in sscratch, and the
+	 * original code left it there for the whole of trap(). That breaks the very
+	 * discriminator this vector opens with (`bnez sp` after the swap), because
+	 * any trap taken while trap() runs -- a clock tick after a preemptive swtch,
+	 * or any nested S-mode exception -- then sees a NONZERO sscratch and is
+	 * misclassified as a trap FROM U-MODE. It builds its frame at the parked
+	 * value (a USER stack address) and stores a trap frame onto the user stack:
+	 * `sd ra,0(sp)` at the top of this function faults with scause=0xf and a
+	 * user-address stval. The prior sp is already safe in TF_SP, so zero the CSR
+	 * as soon as it has been read -- after this, sscratch==0 for every S-mode
+	 * instruction, which is what makes the discriminator sound.
+	 */
+	csrw	sscratch, zero
 	sd	x3,  TF_GP(sp)
 	sd	x4,  TF_TP(sp)
 	/*
@@ -254,6 +269,27 @@ _trap_entry:
 	.globl usermode_entry
 	.type usermode_entry, @function
 usermode_entry:
+	/*
+	 * CLOSE THE COMMIT WINDOW. Everything from the sscratch write below to the
+	 * final `sret` runs in S-MODE with sscratch already NONZERO, and partway
+	 * through it sstatus.SPP has already been cleared and sp already holds the
+	 * USER stack pointer. An S-mode trap taken anywhere in that window is
+	 * therefore misclassified as a trap from U-mode by _trap_entry, and it
+	 * snapshots an sstatus whose SPP is already 0 -- so its `sret` drops to
+	 * U-MODE at the interrupted KERNEL pc, which faults as an instruction page
+	 * fault with sepc == stval inside this function.
+	 *
+	 * S-mode interrupts are live here: this path is reached from the dispatcher
+	 * with sstatus.SIE set, so the window is a real race against the clock, not
+	 * a theoretical one. Clearing SIE costs nothing on the way out because
+	 * `sret` sets SIE from SPIE, and the sstatus written below sets SPIE=1 -- so
+	 * userland still runs with interrupts enabled.
+	 *
+	 * Must precede the sscratch write: the window opens at that instruction.
+	 */
+	li	t0, SSTATUS_SIE
+	csrc	sstatus, t0
+
 	/* Install the kernel stack top for the next trap-from-U. */
 	csrw	sscratch, a1
 

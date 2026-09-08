@@ -66,13 +66,14 @@ echo "== emit user_elfs.h =="
 	echo " * $("$CC" -dumpversion). Pin that version when regenerating so the"
 	echo " * artifact is reproducible."
 	echo " *"
-	echo " * A regenerated userland breaking the boot was first blamed on a compiler"
-	echo " * skew (15.2.0 vs 14.x). That was WRONG -- 14.3.0 failed identically. The"
-	echo " * real cause was three pre-existing KERNEL bugs that ANY userland rebuild"
-	echo " * exposed: the second fork's COW dropping PTE_COW (hat_riscv.c), the"
-	echo " * copy_lofault redirect ignoring SPP (trap.c), and this_cpu() masking"
-	echo " * instead of validating the hart id (proc.c). All three are fixed, so the"
-	echo " * compiler was a red herring -- the pin is for reproducibility, not safety."
+	echo " * The regeneration that once broke the miniwl gate is FIXED: the cause was a"
+	echo " * trap-vector bug, not the compiler and not this artifact. _trap_entry left"
+	echo " * the interrupted sp parked in sscratch for the whole of trap(), so any trap"
+	echo " * taken while trap() ran was misclassified as a trap from U-mode and built"
+	echo " * its frame on the USER stack. Regeneration only changed instruction counts,"
+	echo " * i.e. the clock's phase against that window, so the committed blob was a"
+	echo " * lucky phase rather than a correct kernel. See trap.S and"
+	echo " * docs/riscv64-first-real-binary.md."
 	echo " *"
 	echo " * Always re-run the boot gate after regenerating, and judge by BOOT RATE"
 	echo " * across several attempts rather than one pass. This blob is a BUILD OUTPUT"
@@ -140,3 +141,12 @@ if [ "$pad" -ne 0 ]; then
 fi
 rm -rf "$STAGE"
 echo "  rootfs.img: $(wc -c < ../rootfs.img) bytes (ustar; +etc/motd +etc/inittab)"
+
+# --- the real-libc program. newlibtest links against newlib (a different libc,
+# hard-float, medlow, its own link base), so it keeps its own builder rather than
+# joining the PROGS loop. Chaining it here is what makes THIS script a full
+# regeneration: rootfs.c references newlibtest_elf[], so a run of build-user.sh
+# alone leaves the kernel unable to compile. ---
+echo "== build /bin/newlibtest (real newlib libc) =="
+# Both scripts cd to their own directory, so this one is a plain sibling name.
+bash ./build-newlibtest.sh
