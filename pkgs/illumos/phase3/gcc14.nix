@@ -38,12 +38,33 @@
 #      $lib/lib does not exist -> "mv: cannot stat libgcc_s.so". Drop the
 #      (unpopulated) libgcc output and blank the phase; libgcc_s.so stays in
 #      $out/lib{,/amd64} where the cc-wrapper RUNPATH points.
+#
+#   5. LIBGFORTRAN -Werror ON A PHANTOM -I (only when langFortran = true).
+#      libgfortran's kind-detection (libgfortran/mk-kinds-h.sh) runs the just-
+#      built `gfortran -S` on a per-kind probe using $(FCCOMPILE) = FC +
+#      AM_FCFLAGS. common/builder.nix's preUnpack sets
+#      NIX_FIXINC_DUMMY="$libc_devdir/include" and feeds it as a bare
+#      -I ${libc_dev}/include into CFLAGS_FOR_TARGET/FLAGS_FOR_TARGET. The seed
+#      libc slice keeps headers at usr/include (incdir=/usr/include, the FIX-2
+#      layout), so ${libc_dev}/include does NOT exist. C/C++ silently ignore a
+#      nonexistent -I dir, but libgfortran hardcodes
+#      AM_FCFLAGS="-I . -Wall -Werror ..." and the Fortran front-end emits
+#      -Wmissing-include-dirs for the phantom dir, which -Werror promotes to a
+#      FATAL error. Every kind probe then fails -> kinds.h is emitted empty ->
+#      libgfortran.h hits `#error "GFC_INTEGER_4 should be available"`. Strip
+#      -Werror from libgfortran's configure(.ac) via postPatch (the gcc build
+#      autoreconfs, so both the .ac and the checked-in configure need the edit).
+#      The phantom -I stays a harmless warning; kinds.h is populated and
+#      libgfortran (libgfortran.so.5) + libquadmath build cleanly. Proven:
+#      compiles a Fortran hello-world + a C-main/gfortran-subroutine link into
+#      working x86_64-solaris ELFs, and builds openblas 0.3.33 (BLAS+LAPACK).
 {
   lib,
   callPackage,
   path,       # the patched nixpkgs source root (gcc lives under it)
   stdenv,
   isl_0_20 ? null,
+  langFortran ? false,  # add the gfortran front-end + libgfortran (FIX 5)
 }:
 
 let
@@ -58,7 +79,7 @@ let
     noSysDirs = true;
     langC = true;
     langCC = true;
-    langFortran = false;
+    inherit langFortran;
     profiledCompiler = false;
     reproducibleBuild = true;
     enableMultilib = false; # LP64 only (illumos dropped i386 ~2018)
@@ -91,4 +112,14 @@ raw.overrideAttrs (old: {
   outputs = builtins.filter (o: o != "libgcc") (old.outputs or [ "out" ]);
   preFixupPhases = builtins.filter (p: p != "preFixupLibGccPhase") (old.preFixupPhases or [ ]);
   preFixupLibGccPhase = "";
+  # FIX 5 (fortran only): drop libgfortran's hardcoded -Werror so the phantom
+  # -I ${libc_dev}/include (nonexistent on illumos) stays a warning instead of
+  # failing every mk-kinds-h.sh kind probe. Patch configure.ac (source of truth
+  # for the build's autoreconf) AND the checked-in configure.
+  postPatch = (old.postPatch or "") + lib.optionalString langFortran ''
+    for f in libgfortran/configure.ac libgfortran/configure; do
+      substituteInPlace "$f" \
+        --replace-quiet '"-I . -Wall -Werror -fimplicit-none' '"-I . -Wall -fimplicit-none'
+    done
+  '';
 })
