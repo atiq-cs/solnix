@@ -81,6 +81,19 @@ tracing the actual dependency or measuring the actual value.
 * **Wrap every remote command**: `timeout -s KILL <n> setsid ssh` + ONE short
   non-interactive command. Background long work on-node (`nohup ... > /tmp/x.log 2>&1 &`) and
   poll the logfile with separate short reads.
+* **Never let an agent run an unbounded recursive `grep`/`find` over this repo.** One agent
+  wedged permanently — zero progress past tool use #10, ~15 minutes with no output — on
+  `grep -rn "driver_aliases" --include='*' -l .`. This repo holds multi-GB artifacts, committed
+  `.a` archives, a ~1MB generated header, and image/ISO blobs, so an unbounded walk never
+  returns and the harness has no timeout to save it. Require in every brief: `--exclude-dir=.git`,
+  `-I` to skip binaries, a **specific subdirectory**, a trailing `| head`, and an outer
+  `timeout 60`. This is the same class of hazard as the ssh rules below: a command that cannot
+  be interrupted is worse than one that fails.
+* **A wedged agent looks different from a truncated one.** Truncation ends the run; a wedge
+  leaves it `running` with a **frozen tool count**. Compare tool count across two checks a few
+  minutes apart — if it has not moved, it is wedged, not thinking. Cost-check, then re-dispatch
+  with the specific hazard named in the brief (an addendum describing exactly how the previous
+  agent died is more useful than a general warning).
 * **Never** `zpool import` / `format` / chained disk probes over ssh — they block forever and
   the local `timeout` will not save you.
 * **`aws ec2 get-console-output --latest` is the only safe console read** — a plain API call
