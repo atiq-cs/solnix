@@ -21,9 +21,11 @@ OUTDIR="${2:?usage: make-iso-usb.sh <tarball> <outdir>}"
 WORK="$(mktemp -d /tmp/solnix-iso.XXXXXX)"
 mkdir -p "$OUTDIR"
 # VARIANT names the media: minimal (console ISO) or graphical (live Xfce ISO).
-VARIANT="${VARIANT:-minimal}"
-ISO="$OUTDIR/solnix-x86_64-${VARIANT}.iso"
-USB="$OUTDIR/solnix-x86_64-${VARIANT}-usb.img"
+# VARIANT names the media; empty (the default) gives the plain deliverable names
+# solnix-x86_64.iso / solnix-x86_64-usb.img. VARIANT=graphical suffixes them.
+VARIANT="${VARIANT-}"
+ISO="$OUTDIR/solnix-x86_64${VARIANT:+-$VARIANT}.iso"
+USB="$OUTDIR/solnix-x86_64${VARIANT:+-$VARIANT}-usb.img"
 
 log() { printf '\n=== %s ===\n' "$*" >&2; }
 cleanup() { rm -rf "$WORK"; }
@@ -42,9 +44,16 @@ ISOROOT="$WORK/iso"
 #    module provided"). This file is tiny + known, so author it here authoritatively.
 # ---------------------------------------------------------------------------
 log "writing loader.conf"
-cat > "$ISOROOT/boot/loader.conf" <<'EOF'
+# NOTE: UNQUOTED heredoc on purpose. With <<'EOF' the ${SOLNIX_CONSOLE:-...}
+# below was written LITERALLY into loader.conf; the illumos loader has no shell
+# parameter expansion, so it answered "no valid consoles!" (observed) and fell
+# back. Only the console and boot-args lines contain '$'.
+# Console ORDER matters for the deliverable: real hardware (the X1 Carbon) has no
+# ttya at all, so the framebuffer console ("text") must lead, with ttya kept
+# second so a QEMU/EC2 serial capture still records the boot.
+cat > "$ISOROOT/boot/loader.conf" <<EOF
 loader_logo="illumos"
-console="${SOLNIX_CONSOLE:-ttya,text}"
+console="${SOLNIX_CONSOLE:-text,ttya}"
 ttya-mode="115200,8,n,1,-"
 autoboot_delay="5"
 boot_archive_load="YES"
@@ -53,8 +62,9 @@ boot_archive_name="/platform/i86pc/amd64/boot_archive"
 boot_archive.hash_load="NO"
 kernel="/platform/i86pc/kernel/amd64/unix"
 bootfile="unix"
-boot-args="-B console=ttya,input-console=ttya -v"
+boot-args="${SOLNIX_BOOTARGS:--v}"
 EOF
+cat "$ISOROOT/boot/loader.conf" >&2
 
 # ---------------------------------------------------------------------------
 # 1. build the EFI System Partition image (FAT) with EFI/BOOT/BOOTX64.EFI.
@@ -63,7 +73,9 @@ EOF
 # ---------------------------------------------------------------------------
 log "building EFI System Partition image (efiboot.img)"
 EFI_IMG="$ISOROOT/boot/efiboot.img"
-EFI_KB=$(( ( $(stat -c%s "$WORK/loader64.efi") / 1024 ) + 2048 ))   # loader + 2MB slack
+# wc -c, not stat -c%s: illumos has no stat(1) at all, so keep the size idiom
+# portable in case this step ever moves on-node.
+EFI_KB=$(( ( $(wc -c < "$WORK/loader64.efi") / 1024 ) + 2048 ))   # loader + 2MB slack
 # FAT needs a minimum; round to a 32KB-cluster-friendly size, min 4MB.
 [ "$EFI_KB" -lt 4096 ] && EFI_KB=4096
 rm -f "$EFI_IMG"
@@ -101,8 +113,8 @@ xorriso -as mkisofs \
   -b boot/cdboot -no-emul-boot -boot-load-size 4 -boot-info-table \
   -eltorito-alt-boot \
   -e boot/efiboot.img -no-emul-boot \
-  -isohybrid-gpt-basdat \
   -append_partition 2 0xef "$ISOROOT/boot/efiboot.img" \
+  -appended_part_as_gpt \
   "$ISOROOT" 2>&1 | tail -20
 
 ls -la "$ISO"
@@ -120,5 +132,13 @@ cp "$ISO" "$USB"
 echo "USB sha256:"; sha256sum "$USB"
 # verify GPT + partition table present (isohybrid-gpt)
 if command -v fdisk >/dev/null 2>&1; then fdisk -l "$USB" 2>/dev/null | head -20 || true; fi
+# HARD GATE: the .img must carry a real GPT ("EFI PART" magic at LBA 1) or UEFI
+# firmware booting the media as a DISK will not find the ESP. -isohybrid-gpt-basdat
+# alone did NOT write one (measured: LBA 1 was all zeros, MBR-only) -- which is
+# why -appended_part_as_gpt is used above.
+if [ "$(dd if="$USB" bs=512 skip=1 count=1 2>/dev/null | head -c 8)" != "EFI PART" ]; then
+  echo "FATAL: no GPT header at LBA 1 of $USB -- UEFI disk boot will fail" >&2; exit 1
+fi
+echo "GPT header present at LBA 1 (EFI PART)"
 
 log "DONE: $ISO + $USB"
