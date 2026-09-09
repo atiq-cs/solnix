@@ -447,13 +447,63 @@ chmod 1777 "$RDROOT/tmp" "$RDROOT/var/tmp" 2>/dev/null || true
 # `ln -sf "" ...` silently did nothing (errors swallowed by 2>/dev/null||true),
 # leaving the live ramdisk with NONE of these nodes. Derive the target from
 # `ls -ld` instead, the same idiom scripts/solnix-install uses (_readlink).
-for n in console msglog null zero tty syscon systty sysmsg random urandom poll dld dlpi; do
-  [ -L "/dev/$n" ] || continue
-  _t=$(ls -ld "/dev/$n" 2>/dev/null | sed -n 's/.* -> //p')
-  [ -n "$_t" ] || continue
-  rm -f "$RDROOT/dev/$n" 2>/dev/null || true
-  ln -s "$_t" "$RDROOT/dev/$n" 2>/dev/null || true
+#
+# THE ALLOWLIST WAS THE SECOND HALF OF THAT SAME DEFECT. The readlink fix
+# corrected HOW each node was derived and nobody questioned WHICH nodes the list
+# named. It held exactly 13 names, so the shipped media had 12 /dev entries and
+# was missing, among others, /dev/zfs (libzfs_init opens it -> "internal error:
+# failed to initialize ZFS library") and /dev/sad/user (ttymon/autopush open it
+# -> "ttymon: open /dev/sad/user failed"). Both errors are on the shipped
+# console log. Note `dlpi` was in the list and does not exist on the host at all,
+# which is the signature of a hand-maintained list: wrong in both directions.
+#
+# So DERIVE the set instead of naming it, the same principle COPY_DIRS already
+# applies to the kernel trees (whole trees, not a curated driver list).
+#
+# WHY NOT COPY /dev WHOLESALE: /dev mixes two kinds of entry. Nodes under
+# devices/pseudo/ are PSEUDO devices -- drivers with no hardware behind them
+# (zfs, sad, mm, log, conskbd, ...) which exist identically on every machine, so
+# staging them is safe and host-independent. But dsk/, rdsk/, net/, cfg/, term/,
+# the e1000g0/ena0 links and friends encode the BUILD HOST's own disk and NIC
+# INSTANCE numbers -- exactly the per-machine kernel state that must never ride
+# onto removable media (the same class of bug as shipping a populated
+# /etc/path_to_inst). Copying those would actively misinform the live kernel
+# about hardware the target does not have.
+#
+# Hence: stage EVERY pseudo-backed node, and ONLY pseudo-backed nodes. devfsadm
+# regenerates the hardware-specific ones at boot for whatever hardware is real.
+# Handles BOTH shapes /dev uses: a bare symlink (/dev/zfs) and a DIRECTORY of
+# symlinks (/dev/sad/{admin,user}). The old `[ -L ]` test silently skipped every
+# directory-shaped node, so simply adding "sad" to the list would have no-oped --
+# the recurring failure mode in this script.
+log "staging /dev pseudo-device nodes (derived from $SRC/dev, both shapes)"
+_devlink() {   # $1 = path; echo its symlink target ($SRC has no readlink(1))
+  ls -ld "$1" 2>/dev/null | sed -n 's/.* -> //p'
+}
+_stage_dev_link() {   # $1 = /dev-relative path ("zfs" or "sad/user")
+  _t=$(_devlink "$SRC/dev/$1")
+  case "$_t" in *devices/pseudo/*) ;; *) return 1 ;; esac
+  mkdir -p "$RDROOT/dev/$(dirname "$1")" 2>/dev/null || true
+  rm -f "$RDROOT/dev/$1" 2>/dev/null || true
+  ln -s "$_t" "$RDROOT/dev/$1" || return 1
+  return 0
+}
+_ndev=0
+for _e in "$SRC"/dev/*; do
+  _n=$(basename "$_e")
+  if [ -L "$_e" ]; then
+    _stage_dev_link "$_n" && _ndev=$((_ndev+1))
+  elif [ -d "$_e" ]; then
+    # directory shape: stage the pseudo-backed symlinks INSIDE it (sad/, lofi/,
+    # rlofi/, dtrace/). A dir whose entries are all hardware links (dsk/, net/)
+    # contributes nothing and is left for devfsadm.
+    for _s in "$_e"/*; do
+      [ -L "$_s" ] || continue
+      _stage_dev_link "$_n/$(basename "$_s")" && _ndev=$((_ndev+1))
+    done
+  fi
 done
+log "staged $_ndev /dev pseudo nodes"
 
 # 3b'. gcc runtime libs (libstdc++/libgcc_s, BOTH ABIs) that some 32-bit system
 #      daemons link (dlmgmtd links libstdc++ -> without it ld.so.1 fails to start
@@ -479,8 +529,17 @@ done
 # LSI mpt/mpt_sas, VMware pvscsi/vmxnet3s, virtio, ENA, igb/ixgbe/e1000g, bge,
 # rge, nge, sdhost, ...).
 mkdir -p "$RDROOT/etc/security"
+# path_to_inst is DELIBERATELY NOT in this list. It is per-machine kernel state
+# (its own header says "Caution! This file contains critical kernel state"): it
+# pins driver INSTANCE numbers to the build host's exact PCI topology. It used to
+# be copied here and then truncated ~80 lines below, which worked but read as a
+# contradiction and invited someone to "fix" the truncation. It is now created
+# empty in exactly one place, and gate (iv) asserts it shipped empty.
+# The files that REMAIN here are host-independent by nature: driver tables
+# (name_to_major, driver_aliases, ...) describe drivers, not this machine's
+# device instances.
 for f in name_to_major name_to_sysnum driver_aliases driver_classes minor_perm \
-         system path_to_inst vfstab nsswitch.conf passwd shadow group \
+         system vfstab nsswitch.conf passwd shadow group \
          hosts netconfig; do
   [ -e "/etc/$f" ] && cp "/etc/$f" "$RDROOT/etc/$f" 2>/dev/null || true
 done
@@ -874,8 +933,22 @@ PATH=/usr/sbin:/usr/bin:/sbin; export PATH
 {
   echo ""
   echo "[solnix] live-installer service starting (fs writable, devfsadm done)"
-  /usr/sbin/devfsadm 2>&1 || true
-  echo "[solnix] disks visible:"; ls /dev/dsk 2>/dev/null | head
+  # ⚠️ devfsadm and the disk listing go to the LOG, never to /dev/console.
+  #
+  # OBSERVED ON REAL HARDWARE: this block redirects to /dev/console (see the
+  # closing `} > /dev/console 2>&1`), and ttymon/login READS THAT SAME DEVICE. So
+  # `ls /dev/dsk` was delivered to login as if TYPED, and the console showed
+  #
+  #   solnix console login: c1t001B448B485502D1d0p0
+  #   c1t001B448B485502D1d0p1        <- consumed as usernames
+  #
+  # login then loops rejecting device names as users, and real keystrokes are lost
+  # in the flood. The maintainer reported this as "no keyboard" -- the keyboard was
+  # fine; the prompt was drowning. Anything chatty must NOT share the console with
+  # an interactive login.
+  /usr/sbin/devfsadm >>/var/log/solnix-live.log 2>&1 || true
+  { echo "[solnix] disks visible:"; ls /dev/dsk 2>/dev/null; } >>/var/log/solnix-live.log 2>&1
+  echo "[solnix] devfsadm done; disk list in /var/log/solnix-live.log"
   if [ -r /etc/solnix-autoinstall ]; then
     _tgt=$(cat /etc/solnix-autoinstall 2>/dev/null)
     if [ "$_tgt" = auto ] || [ -z "$_tgt" ]; then
@@ -1043,8 +1116,12 @@ built: $(date -u +%FT%TZ 2>/dev/null || date)
 host:  $(uname -a)
 EOF
 
-# path_to_inst so device enumeration works
-[ -f "$RDROOT/etc/path_to_inst" ] || cp /etc/path_to_inst "$RDROOT/etc/path_to_inst" 2>/dev/null || : > "$RDROOT/etc/path_to_inst"
+# path_to_inst must EXIST (devfsadm writes it) but must be EMPTY: it is
+# per-machine kernel state and the target's topology is not the build host's.
+# This used to fall back to `cp /etc/path_to_inst` when the file was absent,
+# which would have shipped the build host's PS/2 keyboard/mouse instance pins
+# onto media booted on unrelated hardware. Always empty, never copied.
+: > "$RDROOT/etc/path_to_inst"
 
 # 4g. root console login (oi-make-be.sh gotcha #9): clear root's password + point
 #     root's shell at ksh93 so the maintenance/console login works with an empty
@@ -1495,8 +1572,11 @@ PATH=/usr/sbin:/usr/bin:/sbin; export PATH
 {
   echo ""
   echo "[solnix] GRAPHICAL live media: fs writable, devfsadm done"
-  /usr/sbin/devfsadm 2>&1 || true
-  echo "[solnix] disks visible:"; ls /dev/dsk 2>/dev/null | head
+  # See the minimal method: chatty output must not go to /dev/console, which
+  # ttymon/login reads -- it is delivered to login as typed input.
+  /usr/sbin/devfsadm >>/var/log/solnix-live.log 2>&1 || true
+  { echo "[solnix] disks visible:"; ls /dev/dsk 2>/dev/null; } >>/var/log/solnix-live.log 2>&1
+  echo "[solnix] devfsadm done; disk list in /var/log/solnix-live.log"
   # honor AUTOINSTALL_DISK marker (same block as the minimal method) BEFORE the
   # desktop, so the automated install test completes headless. If no marker,
   # fall through to the live desktop.
@@ -1588,6 +1668,106 @@ find "$RDROOT" \( -name 'core' -o -name 'core.[0-9]*' \) -type f 2>/dev/null | w
   file "$_c" 2>/dev/null | grep -qi 'core file' && rm -f "$_c" && echo "  scrubbed core: ${_c#$RDROOT}" >&2 || true
 done
 [ -f "$RDROOT/etc/coreadm.conf" ] || { mkdir -p "$RDROOT/var/cores"; chmod 1777 "$RDROOT/var/cores" 2>/dev/null; printf 'COREADM_GLOB_PATTERN=/var/cores/core.%%f.%%p.%%t\nCOREADM_GLOB_ENABLED=yes\nCOREADM_PROC_ENABLED=no\n' > "$RDROOT/etc/coreadm.conf"; }
+# ---------------------------------------------------------------------------
+# 5a. HARD CLOSURE GATE: verify what we STAGED is actually THERE.
+#
+# The durable lesson of this script's whole bug history: every serious defect so
+# far was a silent staging failure, not a wrong decision. A missing readlink(1)
+# made `ln -sf ""` a no-op and shipped ZERO /dev nodes; a hardcoded 13-name /dev
+# allowlist shipped media with no /dev/zfs (libzfs_init fails) and no
+# /dev/sad/user (ttymon fails); a missing stat(1) made a size gate ALWAYS FALSE
+# so the check after its && never ran; illumos xargs split a tool list into
+# multiple tar streams and dropped whichever entries landed after the split.
+#
+# Every one of those would have been caught by asserting the RESULT instead of
+# trusting the copy. So: assert. Loudly, and before anything ships.
+#
+# These use `[ -e ]`/`ls` and `die`, never a tool that might be absent -- a gate
+# that depends on a missing tool is how the stat(1) gate silently passed for weeks.
+log "verifying live-root closure (loud-fail gates)"
+
+# (i) /dev nodes the live media's own services open. Each name here traces to an
+#     OBSERVED failure or to a service on the media, not to a guess:
+#       zfs        libzfs_init(3lib) -> zpool/zfs/solnix-install (rpool creation)
+#       sad/user   ttymon + autopush(8) STREAMS admin (observed console error)
+#       sad/admin  autopush -f at boot
+#       dld        dlmgmtd; absent -> datalink-management maintenance -> ~52 svcs
+#       console msglog syscon systty sysmsg  svc.startd/init stdio + logging
+#       null zero tty poll random urandom    libc/daemon basics
+#       conslog log  syslogd and anything calling syslog(3c)
+#       ptmx ptmajor pts/  pseudo-terminals: ssh sessions and script(1)
+#       kbd mouse  conskbd/consms console input aggregators
+#       lofictl    lofiadm, used by the installer to mount images
+#       crypto cryptoadm  cryptosvc; `digest` in bootadm's archive path
+_DEV_REQUIRED="zfs sad/user sad/admin dld console msglog syscon systty sysmsg
+  null zero tty poll random urandom conslog log ptmx ptmajor kbd mouse lofictl
+  crypto cryptoadm"
+_missing=""
+for _n in $_DEV_REQUIRED; do
+  # -e follows the symlink and its target is NOT in the ramdisk, so test -L too:
+  # these are dangling-by-design until devfsadm runs at boot.
+  [ -L "$RDROOT/dev/$_n" ] || [ -e "$RDROOT/dev/$_n" ] || _missing="$_missing $_n"
+done
+[ -z "$_missing" ] || die "live root missing required /dev nodes:$_missing
+  (the derived pseudo-node staging above should have created these; a name here
+   that does not exist on the build host at all means this list is wrong)"
+echo "  /dev gate OK: all $(echo $_DEV_REQUIRED | wc -w | tr -d ' ') required nodes present" >&2
+
+# (ii) DRIVER COVERAGE. Install media must boot on whatever hardware someone
+#      tries, so it ships the WHOLE kernel tree rather than a curated list --
+#      but "ships the whole tree" was an ASSUMPTION, and the ':476' comment
+#      approximating it as "~252 drivers" is how a shortfall could hide. Compare
+#      the ramdisk's count against the BUILD HOST's actual inventory per tree and
+#      fail on ANY difference. An exact match is the only claim worth making.
+_drvbad=""
+for _t in kernel/drv/amd64 kernel/strmod/amd64 kernel/misc/amd64 \
+          kernel/dacf/amd64 kernel/fs/amd64 kernel/sched/amd64 \
+          platform/i86pc/kernel/drv/amd64 platform/i86pc/kernel/dacf/amd64; do
+  [ -d "$SRC/$_t" ] || continue
+  _hn=$(ls "$SRC/$_t" 2>/dev/null | wc -l | tr -d ' ')
+  _rn=$(ls "$RDROOT/$_t" 2>/dev/null | wc -l | tr -d ' ')
+  echo "  $_t: host=$_hn ramdisk=$_rn" >&2
+  [ "$_hn" = "$_rn" ] || _drvbad="$_drvbad $_t(host=$_hn,rd=$_rn)"
+done
+[ -z "$_drvbad" ] || die "driver-tree coverage SHORTFALL:$_drvbad
+  install media must carry every driver the build host has (one image, any hardware)"
+
+# (iii) the kernel modules the USB keyboard chain needs. The chain is
+#       usb kbd -> hid -> usbkbm -> kbtrans -> conskbd -> wc/console, and a
+#       break anywhere in it kills EVERY keyboard identically. These are STREAMS
+#       modules and a dacf module, NOT drivers, so they are absent from
+#       name_to_major legitimately and would not show up in any driver check.
+#       NOTE: these were VERIFIED PRESENT in the 2026-09-09 media, so a missing
+#       module is NOT the X1 keyboard fault -- this gate exists to keep it that
+#       way, not because it ever fired.
+for _m in kernel/strmod/amd64/usbkbm kernel/strmod/amd64/ldterm \
+          kernel/misc/amd64/kbtrans kernel/misc/amd64/consconfig \
+          kernel/drv/amd64/hid kernel/drv/amd64/conskbd kernel/drv/amd64/consms \
+          kernel/drv/amd64/sad kernel/drv/amd64/zfs \
+          platform/i86pc/kernel/dacf/amd64/consconfig_dacf; do
+  [ -e "$RDROOT/$_m" ] || die "live root missing $_m (console input / zfs chain)"
+done
+echo "  console-input + zfs module gate OK" >&2
+
+# (iv) /etc files that must be EMPTY on removable media because they are
+#      per-machine kernel state. path_to_inst pins driver INSTANCE numbers to the
+#      build host's exact PCI topology; shipping a populated copy tells the live
+#      kernel about hardware the target does not have. :560 truncates it, but the
+#      copy loop at :483 lists it, so assert the ORDER actually held.
+for _f in path_to_inst mnttab; do
+  [ -f "$RDROOT/etc/$_f" ] || die "live root /etc/$_f missing (must exist and be empty)"
+  _sz=$(wc -c < "$RDROOT/etc/$_f" | tr -d ' ')
+  [ "$_sz" = 0 ] || die "live root /etc/$_f is $_sz bytes, must be EMPTY (per-machine state must not ship)"
+done
+echo "  per-machine-state gate OK: path_to_inst + mnttab are empty" >&2
+
+# (v) autoinstall must be OPT-IN. /etc/solnix-autoinstall makes the live media
+#     write to a disk with NO operator confirmation, so its mere presence on a
+#     public image would be a data-loss bug. Fail the build if it ever appears.
+[ -e "$RDROOT/etc/solnix-autoinstall" ] && \
+  die "/etc/solnix-autoinstall present in live root -- autoinstall MUST be opt-in (see docs/usb-install-media.md)"
+echo "  autoinstall gate OK: not enabled by default" >&2
+
 # HARD GATE on ramdisk occupancy. RD_MB is a boot constraint (see the header
 # comment: the EFI loader must AllocatePages the UNCOMPRESSED size contiguously
 # below 4 GB), so it is deliberately tight -- which means an over-full ramdisk
@@ -1644,8 +1824,34 @@ cp "$RDIMG.gz" "$OUT/iso/platform/i86pc/amd64/boot_archive"
 
 # 6d. loader.conf: text+ttya console, load our ramdisk as rootfs. STANDARD boot
 #     (no init override) so /sbin/init -> svc.startd runs the fs milestones.
+# 6c'. BRAND THE BOOT SCREEN "solnix".
+#      Two independent sources, both must be patched -- loader.conf alone is NOT
+#      enough:
+#        * boot/forth/menu.4th hardcodes `s" Welcome to illumos"` as the menu
+#          title, so setting loader_menu_title in loader.conf is ignored unless
+#          the fallback string is also replaced.
+#        * the ASCII logo word comes from boot/forth/logo-*.4th.
+#      Guarded: if the expected string is absent (upstream changed it), FAIL LOUDLY
+#      rather than silently shipping the illumos branding -- the silent-no-op class
+#      of bug that has bitten this script repeatedly (readlink, stat, the /dev list).
+_mt="$OUT/iso/boot/forth/menu.4th"
+if [ -f "$_mt" ]; then
+  if grep -q 'Welcome to illumos' "$_mt"; then
+    sed -i 's/Welcome to illumos/Welcome to solnix /' "$_mt"
+    grep -q 'Welcome to solnix' "$_mt" || { echo "FATAL: menu.4th rebrand did not apply" >&2; exit 1; }
+    log "boot menu rebranded: 'Welcome to illumos' -> 'Welcome to solnix'"
+  else
+    echo "WARNING: menu.4th has no 'Welcome to illumos' string -- upstream changed it;" >&2
+    echo "         the boot screen may still say illumos. Check boot/forth/menu.4th." >&2
+  fi
+else
+  echo "WARNING: $_mt absent -- cannot rebrand the boot menu title" >&2
+fi
+
 cat > "$OUT/iso/boot/loader.conf" <<'EOF'
 loader_logo="illumos"
+loader_brand="solnix"
+loader_menu_title="Welcome to solnix"
 console="text,ttya"
 ttya-mode="115200,8,n,1,-"
 autoboot_delay="5"
