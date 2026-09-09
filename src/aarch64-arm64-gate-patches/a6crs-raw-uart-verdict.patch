@@ -1,0 +1,78 @@
+diff --git a/src/aarch64-arm64-gate-patches/dboot_synth_fdt.c b/src/aarch64-arm64-gate-patches/dboot_synth_fdt.c
+index 9adac94c94..11d396f107 100644
+--- a/src/aarch64-arm64-gate-patches/dboot_synth_fdt.c
++++ b/src/aarch64-arm64-gate-patches/dboot_synth_fdt.c
+@@ -1336,6 +1336,73 @@ dboot_synth_fdt(struct xboot_info *bi)
+ 	    fdt_totalsize(fdt), SYNTH_FDT_MAX,
+ 	    SYNTH_FDT_MAX - fdt_totalsize(fdt));
+ 
++	/*
++	 * Repeat the verdict on the RAW SPCR UART, because dboot_printf() output
++	 * does not reach the console on real SBBR/Graviton at all.  Measured on a
++	 * c6g.metal boot: five [A6GIC] lines (emitted by synth_gicr_diag() through
++	 * synth_uart_puts(), the raw MMIO store below) arrive, while every dboot:
++	 * line from this same function is absent -- same boot, same file, differing
++	 * only in output path.  The cause is stated at the SPCR block above: the
++	 * loader finds "no compatible MMIO UARTs" in the ACPI namespace, so dboot's
++	 * own console was never wired up; the SPCR base is installed into
++	 * bi_bsvc_uart_mmio_base for the kernel's later boot_uart_init(), which is
++	 * why the kernel banner prints and dboot's does not.
++	 *
++	 * Without this, the _CRS-window count -- the value that decides whether the
++	 * pcie ranges came from the firmware or from the hardcoded QEMU-virt
++	 * fallback -- is unreadable on the only hardware where the answer matters.
++	 * Four metal console captures were taken before anyone noticed they
++	 * structurally could not contain it.
++	 *
++	 * Deliberately hex, no format strings, reusing the helpers synth_gicr_diag()
++	 * already proves work at this point in the boot.  One ~70-character line: on
++	 * a console measured well under 0.1 s/char this is free, but note that at the
++	 * old 13 s/char it would have cost ~15 minutes -- an instrument that changes
++	 * the system is not an observer.
++	 */
++	if (bi->bi_bsvc_uart_mmio_base != 0) {
++		volatile uint32_t *dr = (volatile uint32_t *)(uintptr_t)
++		    bi->bi_bsvc_uart_mmio_base;
++		int w;
++
++		synth_uart_puts(dr, "[A6CRS] crs_nwin=0x");
++		synth_uart_puthex(dr, (uint64_t)(uint32_t)crs.nwin);
++		synth_uart_puts(dr, " crs_have=0x");
++		synth_uart_puthex(dr, crs.have ? 1 : 0);
++		synth_uart_puts(dr, " necam=0x");
++		synth_uart_puthex(dr, (uint64_t)(uint32_t)necam);
++		synth_uart_puts(dr, " ecam0=0x");
++		synth_uart_puthex(dr, necam > 0 ? ecam[0].base : 0);
++		synth_uart_puts(dr, " qemu=0x");
++		synth_uart_puthex(dr, qemu ? 1 : 0);
++		synth_uart_puts(dr, " fdt_used=0x");
++		synth_uart_puthex(dr, (uint64_t)(uint32_t)fdt_totalsize(fdt));
++		synth_uart_puts(dr, " fdt_max=0x");
++		synth_uart_puthex(dr, (uint64_t)SYNTH_FDT_MAX);
++		synth_uart_puts(dr, "\n");
++
++		/*
++		 * The windows themselves, one line each.  If crs_nwin is 0 the
++		 * emitted ranges are the QEMU-virt constants (MEM32 0x10000000,
++		 * MEM64 0x8000000000, IO parent 0x3eff0000) and these lines say so
++		 * by their absence -- which distinguishes "firmware advertised
++		 * nothing" from "firmware advertised windows we mis-parsed".
++		 */
++		for (w = 0; w < crs.nwin; w++) {
++			synth_uart_puts(dr, "[A6CRS] win[");
++			synth_uart_puthex(dr, (uint64_t)(uint32_t)w);
++			synth_uart_puts(dr, "] space=0x");
++			synth_uart_puthex(dr, crs.win[w].space);
++			synth_uart_puts(dr, " child=0x");
++			synth_uart_puthex(dr, crs.win[w].child);
++			synth_uart_puts(dr, " parent=0x");
++			synth_uart_puthex(dr, crs.win[w].parent);
++			synth_uart_puts(dr, " size=0x");
++			synth_uart_puthex(dr, crs.win[w].size);
++			synth_uart_puts(dr, "\n");
++		}
++	}
++
+ 	nc = (int)bi->bi_cpuinfo_cnt;
+ 	dboot_printf("dboot: synthesised FDT from ACPI (%d cpu%s, gicd=0x%lx "
+ 	    "gicr=0x%lx%s, %d pcie rc, %s, %d _CRS win%s)\n", nc,

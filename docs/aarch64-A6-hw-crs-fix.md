@@ -7,7 +7,7 @@ No git commit (orchestrator commits). No SG/0.0.0.0/0 changes.
 
 | Item | Result |
 |---|---|
-| **_CRS/MCFG real-ecam fix** | **Done + validated.** `dboot_synth_fdt.c` now parses the PCIe host-bridge `_CRS` straight out of the DSDT AML (via the FADT->DSDT pointer) and emits the *real* `ranges` (MEM32/IO/MEM64) instead of the QEMU-virt constants. MCFG already gave the ECAM base; the `_CRS` gives the outbound windows the pcierc `ranges` needs. |
+| **_CRS/MCFG real-ecam fix** | **Done + validated *under QEMU only*.** `dboot_synth_fdt.c` now parses the PCIe host-bridge `_CRS` straight out of the DSDT AML (via the FADT->DSDT pointer) and emits the *real* `ranges` (MEM32/IO/MEM64) instead of the QEMU-virt constants. MCFG already gave the ECAM base; the `_CRS` gives the outbound windows the pcierc `ranges` needs. ⚠️ **"validated" means QEMU + a Python mirror against a *VM's* DSDT.** Whether the scan finds anything on real c6g.metal is **still unmeasured** — the `_CRS win` count it prints goes through `dboot_printf()`, which was measured to reach **no** metal console at all (`docs/aarch64-zfs-scan-is-pcie-enumeration.md`, Step 5). |
 | **Drop virtio-mmio on hw** | **Done.** virtio-mmio slots are now gated on a QEMU-virt OEM-ID check (`BOCHS`/`BXPC`/`QEMU`). Real Graviton (OEM `AMAZON`) emits **no** virtio-mmio; its boot disk is NVMe-over-PCIe enumerated through the pcie node. QEMU still gets its 32 slots (no regression). |
 | **QEMU virtio-ACPI regression** | **PASS.** Same synth path still reaches `root on armpool/ROOT/braich` -> SMF -> `Hostname: braich`, zero panics. Diagnostic line now reports `qemu virtio-mmio, 3 _CRS wins`. |
 | **QEMU NVMe-over-PCIe (cheap pre-metal)** | **The critical proof.** With an NVMe disk instead of virtio-blk: `ecam0 is /pcie@4010000000` (ranges from `_CRS`), the illumos EFI loader booted **from NVMe** (`Load Device .../NVMe(...)` -> `Trying ZFS` -> `currdev zfs:armpool/ROOT/braich`), kernel loaded `/platform/ARMH,sbbr/.../unix`, **`nvme0` attached (NVMe spec 1.4)**. Then a panic in `nvme_identify` (`invalid NS/format`) — a QEMU emulated-NVMe Identify quirk, **not** the synth/ranges. Proves NVMe-over-PCIe enumerates through the `_CRS`-derived pcie ranges. |
@@ -70,6 +70,13 @@ The parser was verified against this real DSDT by a Python mirror
 (`a6hw-test_crs_parse.py` + `a6hw-graviton-DSDT.bin`): it extracts exactly those
 three windows. On QEMU-EDK2 the same code found QEMU's own 3 `_CRS` windows and the
 boot still reached multi-user — so the `_CRS`-derived ranges are correct on both.
+
+⚠️ **`a6hw-graviton-DSDT.bin` is the *VM's* DSDT, not metal's** — it contains
+`0x20000000`. So "the parser was verified against this real DSDT" verifies the parser
+against **c6g.medium**, and "correct on both" means QEMU and a VM, not QEMU and metal.
+Metal's DSDT/SSDT *bodies* have never been dumped, so whether metal's PCI0 `_CRS` is even
+in the DSDT (metal also ships SSDT1 + SSDT2) is **UNVERIFIED**. Do not read this section
+as evidence about metal.
 
 ## 2. QEMU validation (console evidence, build node)
 

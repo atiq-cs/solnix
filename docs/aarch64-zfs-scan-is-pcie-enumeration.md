@@ -19,6 +19,7 @@ now dead. Everything below was measured, not reasoned.
 | H2: node emitted but malformed / truncated | **REFUTED** (Step 2, free) |
 | The box is hung at the ZFS scan | **REFUTED** — it is a repeating silent reset (Step 4) |
 | Committed PCIe ground truth is from Graviton metal | **FALSE** — it is from a c6g.medium VM (Step 3) |
+| "Read `_CRS wins` off metal — no rebuild needed" | **REFUTED** — that line cannot reach a metal console at all (Step 5) |
 
 ## Step 1 (free): "no driver binds the ECAM node" is REFUTED
 
@@ -176,23 +177,157 @@ that walks the synthesized tree and touches those windows.
 MMIO-fault **cause is INFERRED**, not observed. It is the leading hypothesis and Step 3
 makes it concrete and cheap to test. Do not report it as established.
 
+## Step 5 (one 6-minute metal boot): the `_CRS` verdict line **cannot reach a metal console**
+
+Step 1 of "Next actions" below was wrong, and the way it was wrong is the point.
+It asserted the decisive measurement needed **no rebuild**, because
+`dboot_synth_fdt.c` already prints `... %d _CRS win%s`. One `c6g.metal`
+(`i-0a5985dad01e786ae`, `ami-07bf2618a9405302e`, launched 10:39:19Z, console read
+10:42:42Z, terminated 10:45:25Z, ~$0.22) settled it:
+
+```
+$ grep -c 'dboot'  a6crs-metal-console-stripped.txt   -> 0
+$ grep -c 'A6GIC]' a6crs-metal-console-stripped.txt   -> 5
+```
+
+**Metal prints ZERO `dboot:` lines.** The answer is not `0 _CRS wins`; the line is
+absent entirely. And it was never a one-off — every metal capture in the tree shows
+the same split:
+
+| capture | `dboot:` lines | `[A6GIC]` lines |
+|---|---|---|
+| `a6crs-metal-console-stripped.txt` (this boot) | **0** | 5 |
+| `a6pcie-patience-test-console.txt` (the 32-min patience test) | **0** | 18 |
+| `artifacts/a6uart-metal-console-raw.txt` | **0** | 6 |
+| `artifacts/a6gicd-metal-console-GICV3-INIT-COMPLETE.txt` | **0** | 12 |
+
+### Mechanism (read out of the source, not inferred)
+
+`dboot_synth_fdt.c` has **two** output paths and they are not equivalent on metal:
+
+* `synth_gicr_diag()` (:410-427) branches explicitly. If
+  `bi->bi_bsvc_uart_mmio_base != 0` it emits the `[A6GIC]` text with
+  `synth_uart_puts()` — a **raw MMIO store to the SPCR UART** — and falls back to
+  `dboot_printf()` only when that base is 0.
+* The verdict lines — `%d _CRS win%s` (:1341), `synth FDT %d of %d bytes used`
+  (:1335) and the 8-window `WARNING` (:860) — use **`dboot_printf()` only**.
+
+On metal the `[A6GIC]` lines arrive, which proves two things at once:
+`bi_bsvc_uart_mmio_base` is non-zero, MMIO console writes work at that point in the
+boot — *and* `dboot_printf()` output does not reach the metal console.
+
+The reason is already written down at :938-955 of that same file: on real
+SBBR/Graviton the console UART is described **only** by the static SPCR table, the
+DSDT namespace carries no UART device, so the loader's namespace walk finds none —
+`WARNING: acpiuart: no compatible MMIO UARTs`, which is present in this capture —
+and never sets `bcons.uart.mmio_base`. dboot's own console is therefore never wired
+up. The SPCR base is installed into `bi_bsvc_uart_mmio_base` for the **kernel's**
+later `boot_uart_init()`, which is exactly why `illumos Version` and `mem =` print
+while the dboot lines that ran *earlier* do not.
+
+**Negative control, and it is built in.** `[A6GIC]` (raw path) appears; `dboot:`
+(printf path) does not — same file, same boot, same function-call depth, differing
+only in output path. If the cause were instead "the code never ran", `[A6GIC]`
+would also be missing: `synth_scan_madt()`/`synth_scan_crs()` run at :933-936 and
+the verdict prints at :1341, in the same function, so the `[A6GIC]` lines prove
+execution reached the code that must print the verdict.
+
+### Consequence for the leading hypothesis
+
+The QEMU-fallback hypothesis is **neither confirmed nor refuted** — it is still
+**untested**, and now for a known reason. Four metal captures were taken and
+reasoned over before anyone noticed they *structurally could not* contain the value
+being looked for. This is the same shape as the 27-second observation window and the
+VM "ground truth": the evidence was real, the question asked of it was not one it
+could answer. **Before believing an absent diagnostic means a zero value, verify the
+diagnostic can reach the console at all.**
+
+### Fix on disk (host-tested, NOT cross-built, NOT booted)
+
+* `src/aarch64-arm64-gate-patches/dboot_synth_fdt.c` — after :1338, emit the verdict
+  through the raw SPCR path that `[A6GIC]` proves works, guarded by
+  `bi->bi_bsvc_uart_mmio_base != 0`, reusing the existing `synth_uart_puts()` /
+  `synth_uart_puthex()` helpers (hex, no format strings, no new dependencies):
+
+  ```
+  [A6CRS] crs_nwin=0x0 crs_have=0x0 necam=0x1 ecam0=0xc000000000 qemu=0x0 fdt_used=0x23a5 fdt_max=0x4000
+  [A6CRS] win[0] space=0x2000000 child=0x80000000 parent=0x80000000 size=0x20000000
+  ```
+
+  Absence of `win[]` lines *is* the `nwin==0` signal, and `necam`/`ecam0` come along
+  free — so one boot distinguishes "firmware advertised nothing" from "firmware
+  advertised windows we mis-parsed".
+* Diff: `src/aarch64-arm64-gate-patches/a6crs-raw-uart-verdict.patch` (1 hunk — verified
+  non-empty; a `.patch` with no hunks silently no-ops).
+* Host check: `src/aarch64-arm64-gate-patches/a6crs-test_crs_diag.c` —
+  `gcc -std=c99 -Wall -Wextra -O2` clean, `ALL CHECKS PASS`. It compiles the **real**
+  `synth_uart_puts()`/`synth_uart_puthex()`/emit block verbatim and models only the MMIO
+  store. Cases: metal-with-empty-`_CRS` (asserts **no** `win[]` lines), metal-with-parsed-`_CRS`
+  using the real measured windows (MEM32 `0x80000000`, MEM64 `0x18000000000`, no IO),
+  QEMU's 3 windows including the non-identity IO translation `child 0 -> parent 0x3eff0000`,
+  and the 8-window boundary (`win[7]` present, `win[8]` absent). **Negative control:**
+  swapping child for parent makes the assertion flip to failing, so the checks are not vacuous.
+* Cost caveat respected: ~70 chars, negligible on this AMI (measured well under
+  0.1 s/char) but ~15 minutes at the old 13 s/char. An instrument that changes the
+  system is not an observer.
+
+**Still to do:** cross-build on `ami-054b0f50ccab2af88` with
+`bldenv -d -T aarch64 <gate>/env/aarch64` (without `-T aarch64`, MACH silently falls
+back to i386 and the build goes `-m32`) using `/usr/bin/make`, re-image, and one more
+metal boot to read `[A6CRS]`. Not attempted here.
+
+### Other facts from this capture (a single-cycle sample, deliberately)
+
+The window was 3m23s — **shorter than the ~8-10 min reset period on purpose**, since the
+reset loop is already established by Step 4 and re-observing it costs money. One EDK2
+banner, one scan line. Do not read this capture as "hung".
+
+* `WARNING: acpiuart: no compatible MMIO UARTs` (loader) — reproduced.
+* Loader boots off real NVMe-over-PCIe: `PcieRoot(0x0)/.../NVMe(0x1,...)`.
+* `[A6GIC] ngicc=0x40` (64 cpus), 4 GICR regions `0xbc/bd/be/bf00080000`, stride
+  `0x20000` — matches the committed metal MADT exactly.
+* `[A6KCON:BOP]` and `[A6KCON:BCONS]` both present.
+* Kernel: `illumos Version arm64-gate-0-gb0e9cd2f8d`, DEBUG, `mem = 134217728K`,
+  `root nexus = Amazon EC2`, `pseudo0`, `scsi_vhci0`, `gicthree0`, `arm_gtmr0`, then the
+  ZFS scan line and nothing further. No `panic`, no `Resetting`.
+* `ecam0` / `gicv3_its0` / `ns16550a`: absent, as in every prior cycle.
+* Raw/stripped console: `src/aarch64-arm64-gate-patches/a6crs-metal-console-raw.txt`,
+  `...-stripped.txt`.
+
 ## Next actions, cheapest-decisive first — do not skip to a fix
 
-1. **Read the synth's own diagnostic line on metal.** `dboot_synth_fdt.c:1307` already
-   prints `... N pcie rc, ... M _CRS wins`. If metal prints **`0 _CRS wins`**, the
-   QEMU-window fallback fired and the case is closed. This needs **no new instrumentation
-   and no rebuild** — it is the cheapest decisive measurement left. Do this first.
-2. **Dump metal's DSDT + SSDT1 + SSDT2 bodies** (one cheap Linux `c6g.metal`, reuse the
+1. ~~**Read the synth's own diagnostic line on metal.**~~ **DONE and REFUTED — see
+   Step 5.** `dboot_printf()` cannot reach a metal console, so this measurement was
+   never available for free. The rebuild is now unavoidable, but it is ~3 lines and
+   the patch is on disk and host-tested.
+2. **Cross-build the `[A6CRS]` patch and boot ONE metal to read it.** This is now the
+   cheapest decisive measurement. `crs_nwin=0x0` closes the case on the QEMU-fallback
+   hypothesis; non-zero refutes it and the `win[]` lines say what the firmware
+   actually advertised.
+3. **Dump metal's DSDT + SSDT1 + SSDT2 bodies** (one cheap Linux `c6g.metal`, reuse the
    `/tmp/solnix-pcie-probe-userdata.sh` pattern, ~3 min). Settles whether PCI0's `_CRS`
    lives in an SSDT, which would make defect 1 near-certain and name a one-line fix.
-3. **Only then patch**, smallest first: SSDT-aware `_CRS` scan; emit no IO window when the
+   Independent of (2) and can run in parallel — and it needs no illumos build at all,
+   so it is arguably cheaper than (2).
+4. **Only then patch**, smallest first: SSDT-aware `_CRS` scan; emit no IO window when the
    firmware declares none; ITS last-wins.
 
 ## Cost note
 
-Five agents have now been spent at this blocker. This pass used **two** instances
-(~$1.30 total): one 5-minute Linux table probe and one 32-minute metal patience test, both
-terminated and verified. Three hypotheses were refuted for free by re-reading committed
-logs and by static measurement, before any hardware was touched. The two most valuable
-results — the VM-vs-metal address discrepancy and the reset loop — both came from
-questioning what earlier evidence actually proved rather than from new instrumentation.
+Five agents were spent at this blocker before the reset loop was even identified. That pass
+used **two** instances (~$1.30): one 5-minute Linux table probe and one 32-minute metal
+patience test. Step 5 added **one** 6-minute `c6g.metal` (~$0.22), terminated and verified.
+Three hypotheses were refuted for free by re-reading committed logs and by static
+measurement, before any hardware was touched.
+
+The most valuable results here — the VM-vs-metal address discrepancy, the reset loop, and
+`dboot_printf()` being invisible on metal — all came from **questioning what earlier evidence
+actually proved** rather than from new instrumentation. All three are the same failure:
+asking a capture a question it structurally could not answer. Worth internalising, because it
+has now happened three times in a row:
+
+| the evidence | the question it could not answer |
+|---|---|
+| a 27-second console read | "is it hung?" (period is ~8-10 min) |
+| a c6g.medium ACPI dump | "what are metal's PCIe windows?" (it is a VM) |
+| four metal console captures | "how many `_CRS` wins?" (`dboot_printf` is silent on metal) |
