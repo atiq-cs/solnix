@@ -331,3 +331,56 @@ has now happened three times in a row:
 | a 27-second console read | "is it hung?" (period is ~8-10 min) |
 | a c6g.medium ACPI dump | "what are metal's PCIe windows?" (it is a VM) |
 | four metal console captures | "how many `_CRS` wins?" (`dboot_printf` is silent on metal) |
+
+## Step 6 (CONFIRMED, ~2 min of metal, ~$0.07): PCI0's `_CRS` IS in SSDT1 — hypothesis proven
+
+Step 3 guessed that PCI0's `_CRS` might live in an SSDT the scan never reads. **It does.** Settled
+by dumping the real tables off a **Linux** `c6g.metal` (no illumos build, console-only via
+user-data — the same trick that cracked GICv3 in ~4 minutes):
+
+| table | size | `PCI0` |
+|---|---|---|
+| DSDT | 23805 B | **absent** |
+| **SSDT1** | 1498 B | **PRESENT, with the host-bridge `_CRS`** |
+| SSDT2 | 74 B | absent |
+
+(The committed `a6hw-graviton-DSDT.bin` is 5046 B — it is the **VM's**.)
+
+`synth_scan_crs()` followed the FADT to the DSDT and scanned **only** that table, so on metal it
+always returned empty and the caller substituted the hardcoded **QEMU-virt** windows — mapping MMIO
+Graviton does not decode. **The descriptor parser was never wrong; the table SELECTION was.** That
+distinction matters, because earlier work suspected the QWord/DWord parsing — and that code
+correctly decoded these very descriptors.
+
+Decoded SSDT1 `_CRS`, matching the independently-captured firmware table exactly:
+
+| window | value |
+|---|---|
+| BUS | `0x00`–`0xff` |
+| MEM32 | `0x80000000`–`0x9fffffff` (len `0x20000000`) |
+| MEM64 | `0x18000000000`–`0x19fffffffff` (len `0x2000000000`) |
+| IO | **absent** |
+
+**Fixed** (`a6crs-ssdt-scan.patch`, 4 hunks): scan the DSDT *then every SSDT*, bounded at
+`SYNTH_MAX_SSDT=16` because this runs with the MMU off. Verified against the real metal blobs by
+`a6crs-test_ssdt_scan.c` — metal DSDT yields **0** windows (direct proof the old scan fell back),
+SSDT1 yields **2** with the values above, and a negative control (corrupting SSDT1's descriptors)
+yields 0.
+
+⚠️ Still **UNVERIFIED on hardware**: no metal boot has run this fix. It is now a *falsifiable
+prediction* — the raw-SPCR verdict from Step 5 makes `[A6CRS] crs_nwin=0x2` readable on a metal
+console, where the old code would print the QEMU windows. One boot decides it.
+
+### The pattern across all six steps, worth internalising
+
+Every wrong turn here was an **evidence-availability** failure, not a reasoning failure:
+
+| claim | why it was wrong |
+|---|---|
+| "it hangs" | a **27-second** window on an ~8–10 min reset period |
+| PCIe "ground truth" | measured on a **c6g.medium VM**, not metal |
+| "just read `_CRS wins`" | `dboot_printf` output **never reaches** a metal console |
+| "the DSDT has PCI0" | true on the VM; on metal PCI0 is in **SSDT1** |
+
+**Ask whether the evidence could even contain the answer before reasoning from it.** Four for four.
+
