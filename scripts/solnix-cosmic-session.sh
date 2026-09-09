@@ -5,13 +5,16 @@
 #
 #   solnix-cosmic-session.sh              # smallvil + the wl_shm test client
 #   solnix-cosmic-session.sh -c PROG      # run PROG as the Wayland client
-#   solnix-cosmic-session.sh --cosmic-term  # try cosmic-term (connects; SW-shm gated)
+#   solnix-cosmic-session.sh --cosmic-term  # cosmic-term (PAINTS: softbuffer POSIX-shm + tiny-skia)
 #
 # stop:  pkill -9 -f smallvil; pkill -9 x0vncserver; pkill -9 lo-relay; pkill -9 Xorg
 set -u
 
 DISP=:99
 BIN=/root/cosmic-gcroots/waveB2-bin
+# the softbuffer-POSIX-shm-patched cosmic-term that PAINTS in smallvil (tiny-skia SW path)
+PAINT_TERM=/nix/cosmic/cosmic-apps/cosmic-term/target/x86_64-unknown-illumos/release/cosmic-term
+PAINTING=0
 WLLIB=/nix/store/jp5g7biz7c2bsqz48awsd5qwa9asig73-wayland-1.26.0/lib
 XKB=/nix/store/qrlmmyrjgzff4nywbprq995lpfnfbb7l-xkeyboard-config-2.48/share/X11/xkb
 export XDG_RUNTIME_DIR=/tmp/xdg-runtime
@@ -51,7 +54,7 @@ sleep 10
 CLIENT="$BIN/../.. "   # placeholder
 case "${1:-}" in
   -c)            CLIENT="$2" ;;
-  --cosmic-term) CLIENT="$BIN/cosmic-term" ;;
+  --cosmic-term) CLIENT="$PAINT_TERM"; PAINTING=1 ;;
   --cosmic-files)CLIENT="$BIN/cosmic-files" ;;
   *)             CLIENT="/root/wlclient" ;;   # raw wl_shm proof (illumos-safe tmpfile shm)
 esac
@@ -62,10 +65,19 @@ esac
   unset DISPLAY
   if [ "$CLIENT" = "/root/wlclient" ]; then
     export LD_LIBRARY_PATH="$WLLIB:/usr/lib/64"
+    exec "$CLIENT"
   else
     export LD_LIBRARY_PATH="$BIN/lib:$WLLIB:/usr/lib/64"
+    # iced's fallback wgpu PANICS on illumos (no wgpu backend); force the
+    # tiny-skia SW renderer, which blits through the POSIX-shm-patched softbuffer.
+    export ICED_BACKEND=tiny-skia
+    export XKB_CONFIG_ROOT="$XKB"
+    if [ "$PAINTING" = "1" ]; then
+      exec "$CLIENT" --no-daemon
+    else
+      exec "$CLIENT"
+    fi
   fi
-  exec "$CLIENT"
 ) > /root/cosmic-client.log 2>&1 &
 sleep 4
 

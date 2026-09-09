@@ -3,14 +3,17 @@
 How COSMIC apps become **real Nix derivations** instead of `cargo` output in a
 `/root` checkout, what each illumos fix is for, and what is still ad-hoc.
 
-Status of this document: the pattern is proven end to end through compilation of
-the full ~860-crate COSMIC/iced/winit/wayland graph, with a passing negative
-control, and the vendor FOD has been independently reproduced on a second clean
-node. **No binary has been produced yet.** The `derivation-goal.cc:306`
-assertion that was believed to be the blocker is now solved (one flag -- see
-"Where it stops"); what remains is a dependency-porting problem (`cmake-minimal`
-via doxygen), not a Nix problem. Read "Where it stops" before believing anything
-else here.
+Status of this document: **`cosmic-term`, `cosmic-files` and `cosmic-edit` now
+build from the committed derivations on a clean node, and the binaries are
+genuine `ELFOSABI_SOLARIS` / `EM_AMD64` ELFs.** `cosmic-term` runs far enough to
+print its own `--help`/`--version` text. Two blockers had to be cleared to get
+there, neither of them in the COSMIC derivations and neither the one previously
+named here -- see "What actually blocked the binary". Read "Verified vs not
+verified" before believing anything else; in particular no app has yet been shown
+to paint a window.
+
+The previously-recorded blocker (`cmake-minimal` via doxygen) turned out **not to
+be in this closure at all** -- see the correction below.
 
 ## Why this was needed
 
@@ -163,17 +166,153 @@ committed note assumes.
 | Claim | Status |
 |---|---|
 | `nix-instantiate` yields a real `.drv` from a clean checkout | **VERIFIED** |
-| Vendor FOD builds, is content-addressed, has a real deriver | **VERIFIED** -- `/nix/store/dwaq7qxcc1ya7srvrqib21c1vhsy5l32-cosmic-term-vendor-1.5.0`, 861 entries. **Independently reproduced** from scratch on a second clean node to the identical path (measured 623 MB on disk, not 1.34 GB) |
+| Vendor FOD builds, is content-addressed, has a real deriver | **VERIFIED** -- `/nix/store/dwaq7qxcc1ya7srvrqib21c1vhsy5l32-cosmic-term-vendor-1.5.0`, 861 entries. Reproduced to the identical path on a **third** independent clean node |
 | No hardcoded `/root/...` or `/nix/cosmic/...` path anywhere in the derivation | **VERIFIED** |
-| The ~860-crate graph compiles (libcosmic, iced, winit, wayland, softbuffer, alacritty_terminal) | **VERIFIED** through the point described below |
+| The ~860-crate graph compiles | **VERIFIED** |
 | Negative control flips the check to FAIL | **VERIFIED** |
-| Final `cosmic-term` binary produced | **NOT REACHED** -- see below |
-| Binary is `ELFOSABI_SOLARIS` / `EM_AMD64` | **NOT VERIFIED** (no binary yet) |
-| Binary runs / paints under smallvil | **NOT VERIFIED** (no binary yet) |
-| The `derivation-goal.cc:306` assertion is avoidable | **VERIFIED** -- `--option substitute false`, 4/4 vs 4/4; see below |
-| The assertion is fixed by a newer nix | **REFUTED** -- 2.24.15 (the aborting version) *contains* it, as do 2.25-2.29 |
+| Final `cosmic-term` binary produced | **VERIFIED** -- `/nix/store/vn76gvljxp2hg8jh2pgp2sh1ljk3x508-cosmic-term-1.5.0`, `bin/.cosmic-term-wrapped` 130,943,216 bytes, `nix-build` rc 0 with substituters off. Deriver `sqx9fykqv41bjrbx61f36bb3vr5h5yw0-cosmic-term-1.5.0.drv` resolves |
+| Binary is `ELFOSABI_SOLARIS` / `EM_AMD64` | **VERIFIED** -- see the ELF evidence below |
+| `cosmic-term` starts and runs | **VERIFIED, NARROWLY** -- `--help` prints its real help text and `--version` prints `cosmic-term 1.5.0`, 8/8 runs from `env -i`. That is CLI-level only |
+| `cosmic-files` / `cosmic-edit` binaries produced | **VERIFIED** -- `71arxr76hc50b9hssllrasr7vsdilrhx-cosmic-files-1.5.0`, `qawkccvvjw8wbnim7hl4vqvz0vy5k41d-cosmic-edit-1.5.0`, both rc 0, both `ELFOSABI_SOLARIS`/`EM_AMD64`/`ET_EXEC` |
+| `cosmic-files` / `cosmic-edit` "run" | **WEAKER CLAIM** -- they exit rc 0 but print NOTHING: they do not implement `--version`/`--help`. "Starts and exits cleanly", not "prints its version". Do not upgrade this claim without evidence |
+| Any app paints a window / talks to a compositor | **NOT VERIFIED** -- not attempted. No compositor was run on this node |
+| The wayland-client / calloop runtime fixes work | **NOT VERIFIED** -- the bounded-poll edit is applied and guarded, but nothing exercised it |
+| The `derivation-goal.cc:306` assertion is avoidable | **VERIFIED** -- `--option substitute false` |
+| The assertion is fixed by a newer nix | **REFUTED** -- 2.24.15 (the aborting version) *contains* it |
+| `cmake`/`doxygen` is what blocks the binary | **REFUTED** -- neither is in the closure at all. See below |
 
-Do not report the binary, the ELF check, or the run as done. They are not.
+### The ELF evidence, verbatim
+
+```
+$ elfdump -e /nix/store/vn76gvljxp2hg8jh2pgp2sh1ljk3x508-cosmic-term-1.5.0/bin/.cosmic-term-wrapped
+ELF Header
+  ei_magic:   { 0x7f, E, L, F }
+  ei_class:   ELFCLASS64          ei_data:       ELFDATA2LSB
+  ei_osabi:   ELFOSABI_SOLARIS    ei_abiversion: EAV_SUNW_CURRENT
+  e_machine:  EM_AMD64            e_version:     EV_CURRENT
+  e_type:     ET_EXEC
+```
+
+`ldd` resolves 14 libraries with zero "not found". `NEEDED` is
+`libxkbcommon.so.0 libsocket.so.1 librt.so.1 libpthread.so.1 libnsl.so.1
+libumem.so.1 libgcc_s.so.1 libm.so.2 libc.so.1`.
+
+**Negative control on the ELF check itself**: the same `elfdump -e` run on the
+makeWrapper shell script beside it prints `invalid file type`. So the check can
+report a non-match and is not vacuous.
+
+### What actually blocked the binary (two things, neither previously named)
+
+**1. A declared-but-unproducible `debug` output.** `tranche-entry-224.nix`'s
+split-debug overlay declared a `debug` output for `ncurses` and `readline` and
+hardcoded `OBJCOPY=/usr/gnu/bin/objcopy`. objcopy is **absent on a fresh base
+AMI**, so the hook emitted nothing and nix failed the derivation with *failed to
+produce output path for output 'debug'*. Both `-debug` paths are in
+`cosmic-term`'s closure, so this blocked the entire graph for a reason unrelated
+to COSMIC. Note `pkg install developer/gnu-binutils` is **rejected** on the
+running BE by the 2025 `userland-incorporation`; it only installs after
+`pkg update` **and a reboot into the new BE**. The fix is therefore an eval-time
+gate: absent the tools, do not declare the output at all. Closure output paths
+went 274 -> 272 with zero `-debug`, and `ncurses`/`readline` then built.
+Requesting split-debug explicitly (`solnixRequireSplitDebug`, or
+`SOLNIX_REQUIRE_SPLIT_DEBUG=1`) while the tools are missing now **throws at eval**
+rather than skipping silently -- silent-skip is what caused this in the first
+place.
+
+**2. `-L/usr/lib/amd64` shadowing store libraries.** `bash-interactive` then
+failed to link:
+
+```
+Undefined                       first referenced
+ rl_full_quoting_desired             pcomplete.o
+ rl_print_keybinding                 ./builtins/libbuiltins.a(bind.o)
+ rl_macro_display_hook               bashline.o
+ rl_completion_rewrite_hook          bashline.o
+ld: fatal: symbol referencing errors. No output written to bash
+```
+
+Mechanism, observed: the stdenv-wide `fixAttrs` put `-L/lib/amd64
+-L/usr/lib/amd64` in **`NIX_LDFLAGS`**, and the bintools setup-hook *appends*
+each buildInput's `-L$dep/lib` to that same variable -- so the platform `-L` is
+always **earlier** on the link line than every store dependency. ld takes the
+first match, and `/usr/lib/amd64/libreadline.so.8` has **none** of those four
+symbols while store `readline-8.3p3` has **all four** (`nm -g`, checked both
+ways). Three-arm link control, same compiler and libraries, only `-L` order
+differing:
+
+| arm | order | result |
+|---|---|---|
+| A | platform `-L` first (the real build) | **rc 1**, fails on `rl_full_quoting_desired` |
+| B | store `-L` first | rc 0 |
+| C | platform without `/usr/lib/amd64` | rc 0 |
+
+So the **order**, not the presence, is the cause. Fix: move that pair to
+`NIX_LDFLAGS_AFTER`, which `ld-wrapper` emits strictly after both. `/usr/lib/amd64`
+is **kept** -- `liblgrp` and `libz` live only there and the illumos rustc target
+links `-llgrp`; of the 30 platform libs this port needs, only those two are
+`/usr/lib/amd64`-only. Regression control: `cmakeMinimal` still builds rc 0, which
+is the check that proves `NIX_LDFLAGS_AFTER` actually reaches ld (per
+`docs/cmake-on-illumos.md`'s `nc2`, cmake *fails* `-lkstat`/`-lsendfile` without
+that `-L`). About **13** libraries in `/usr/lib/amd64` are ones nix also builds
+(`readline ncurses history z sqlite3 xml2 expat ffi pcre2-8 ssl crypto bz2 lzma`),
+so this was a latent trap for all of them, not a COSMIC-specific bug.
+
+### The runtime bug that made the binary abort
+
+The first build produced a binary that **aborted immediately**:
+
+```
+memory allocation of 11 bytes failed
+memory allocation of 24 bytes failed
+```
+
+on a 31 GB machine. The illumos rustc target links `-lumem`, so `libumem.so.1`
+interposes malloc, and libumem's **default `sbrk` backend returns NULL** for the
+first allocation in these large `ET_EXEC` Rust images; Rust converts a NULL
+malloc into `rust_oom` -> `abort`. Observed with
+`truss -u libumem::malloc,umem_alloc`:
+
+```
+-> libumem:malloc(0xb, ...)          # 0xb = 11 = strlen("libX11.so.6")
+  -> libumem:umem_alloc(0x1b, ...)
+  <- libumem:umem_alloc() = 0        # NULL
+```
+
+with **no failing syscall anywhere** in a full `truss`. The 11 bytes are just the
+first `CString` tiny-xlib builds -- a red herring, not the cause. Measured, 8 runs
+per arm, deterministic (no clustering to report because there is no variation):
+
+| arm | result |
+|---|---|
+| default (libumem `sbrk`) | **0/8 pass** |
+| `UMEM_OPTIONS=backend=mmap` | **8/8 pass** |
+| explicit `UMEM_OPTIONS=backend=sbrk` | fails -- so it *is* the backend |
+| `LD_PRELOAD_64=/lib/amd64/libc.so.1` | 8/8 pass -- bypasses libumem entirely |
+
+Control that libumem is not simply broken here: `/usr/sbin/zpool` links it and
+works, and `LD_PRELOAD_64=libumem.so.1` onto `/usr/bin/ls` gives rc 0. The
+derivations now set `UMEM_OPTIONS=backend=mmap` via `makeWrapper --set-default`.
+Verified with the control that matters, under `env -i`: **wrapped 8/8, inner
+unwrapped binary 0/8**. The same control reproduces on `cosmic-files`, so this is
+stack-wide.
+
+**Honest limit:** *why* sbrk fails is **not** established. `brk(0)` returns an
+address just past the 131 MB image and the subsequent `brk()` calls return
+success, so a naive "brk is refused" story does **not** hold and is not asserted
+here. What is established is which backend works and which does not.
+
+### Correction: cmake/doxygen was never in this closure
+
+This document previously said 60 of cosmic-term's 180 uncached paths "are the
+cmake / doxygen / libxcb / xorgproto / python3 graph", which was then compressed
+elsewhere into "cmake/doxygen blocks cosmic-term". Measured on a clean node:
+cosmic-term's closure is **174 `.drv` / 274 output paths**, of which **36** are
+cache-fetchable and **238** must be built locally -- and `grep -c 'cmake|doxygen'`
+over the uncached list is **0**. `libxkbcommon`'s direct references are
+bash/bison/libx11/libxcb/libxml2/meson/ninja/pkg-config/xkeyboard-config, with
+**no doxygen**. The bulk of the uncached set is libxcb/xorgproto/python3 (python3
+arrives via meson). The `cmakeMinimal`-from-source work is real and useful, but it
+is **not** what unblocked this binary.
 
 ## Where it stops, exactly
 
@@ -245,7 +384,14 @@ from-source stdenv rebuild:
 (`nix-build` has no `--add-root`; use `-o`. A stale `/homeless-shelter` must be
 removed before each build.)
 
-### 2. What actually blocks the binary: cache coverage, not nix
+### 2. HISTORICAL: what was believed to block the binary (cache coverage)
+
+**Superseded.** This section records the state before the binary existed; it is
+kept because the cache-coverage point is still true and still worth acting on, but
+it is **not** where the build stops any more. See "What actually blocked the
+binary" above for the two real blockers (a declared-but-unproducible `debug`
+output, and `-L/usr/lib/amd64` shadowing store libraries) and the ELF evidence for
+the binary that now exists.
 
 With the assertion avoided, the build walks into an unported dependency. Of
 `cosmic-term`'s 339 closure output paths, **180 are in no cache** and must be
@@ -326,52 +472,190 @@ entries, `--check-validity` passing -- independently confirming
 size on disk is **623 MB**, not the 1.34 GB claimed elsewhere in this document;
 the entry count matches exactly, so the size figure is the one to distrust.
 
+## The desktop closure, and the seam to the install media
+
+`GRAPHICAL=1` in `scripts/oi-make-livecd.sh` layers a desktop closure onto the
+live root, reading a list of store paths from `GFX_CLOSURE` (one path per line;
+it `die`s if the file is absent, then tar-copies each entry into the live
+`/nix/store`). That list is the seam, and it now exists for COSMIC:
+
+```
+scripts/gen-cosmic-closure.sh                 # generator
+artifacts/cosmic-desktop-closure.txt          # 30 paths, all three apps
+
+GRAPHICAL=1 GFX_CLOSURE=artifacts/cosmic-desktop-closure.txt scripts/oi-make-livecd.sh
+```
+
+Thirty paths cover all three apps (28 each -- they share nearly everything). No
+`.drv` and no `-debug` entries leak in.
+
+**Why this does not reuse `scripts/gen-gfx-closure.sh`:** that script walks the
+ELF RUNPATH graph by hand because the *cross-built* store had an incomplete nix
+DB `Refs` table (75 edges for 460 paths), making `nix-store -qR` useless there.
+These COSMIC paths were built by nix **on** the host, so the DB reference graph is
+real and `-qR` is both correct and complete. The generator still guards the
+difference: if any root yields <= 1 path -- what an empty `Refs` table looks like --
+it aborts rather than emitting a uselessly short list.
+
+A sufficiency check resolved every `NEEDED` soname against **only** the listed
+paths plus the base platform. With `libxkbcommon` deleted from the list as a
+negative control the check reports the extra miss, so it can fail. It also
+reports `libgcc_s.so.1`, which is a **limitation of the checker, not a gap**: that
+library lives under `gcc-unwrapped/usr/gcc/10/lib/amd64`, which *is* a listed
+path but is not one of the `lib/` or `lib/amd64/` directories the probe looks in,
+and `oi-make-livecd.sh` already stages `libgcc_s`/`libstdc++` explicitly.
+
+That check was itself nearly worthless on the first attempt: it used
+`/usr/gnu/bin/awk`, which does not exist on this host, so the loop body never ran
+and **both** arms reported zero missing. Same shape as the `stat -c %s` gate that
+was always false. It only produced evidence after switching to `/usr/bin/nawk`.
+
+## Selecting the desktop declaratively
+
+`modules/config/cosmic-desktop.nix` (registered in `modules/module-list.nix`)
+adds `solnix.desktop.cosmic.{enable,apps,compositor,waylandDisplay}`. Enabling it
+appends the `cosmic-desktop` role, installs the app derivations, and exports
+`ICED_BACKEND=tiny-skia` and `UMEM_OPTIONS=backend=mmap` session-wide (the same
+two pins the wrappers set, repeated so a hand-launched binary in that session
+gets them too).
+
+`compositor` is a **string path, not a package**, deliberately: `smallvil` is
+still an unpackaged prebuilt binary and `cosmic-comp` does not build on illumos
+at all. Leaving it null installs the apps and warns that no session will start,
+rather than implying a working desktop. **This module has never been booted.**
+
+## Node setup this needs (all verified on a fresh `ami-014c4aaccd37b2356`)
+
+```
+nix 2.24.15 at /nix-tools224           (relocatable bootstrap tarball)
+PATH=/nix-tools224/bin:/usr/gnu/bin:/usr/bin:/usr/sbin
+NIX_CONF_DIR=/nix-tools224/etc/nix
+LD_LIBRARY_PATH=/nix-tools224/runtime-lib     (REQUIRED)
+HOME=/root
+/dev/fd mounted AND in /etc/vfstab            (else every stdenv build dies on /dev/fd/63)
+pkg install library/mpfr                      (else the seed gawk cannot run substituteAll)
+TMPDIR on the big pool, NOT /tmp              (see below)
+before each build: [ -d /homeless-shelter ] && find /homeless-shelter -delete
+build with: nix-build ... --option substitute false
+```
+
+Two substrate traps measured here, both of which cost a build:
+
+* **The root pool does not grow to match `--block-device-mappings`.** On this AMI
+  the OS root is a 20 GiB `xvda` holding `rpool`; a 320 GiB volume attached as
+  `/dev/sda1` arrives as a **separate, unused disk** (`c2t1d0`). `zpool online -e
+  rpool` therefore does nothing, and `/nix` stays on 19 GiB. You must
+  `zpool create` a pool on the extra disk and put `/nix` (and `TMPDIR`) there.
+  Asking for "root >= 300 GiB" does **not** by itself give you a big `/nix`.
+* **`/tmp` is a ~12.5 GB swap-backed tmpfs**, which a COSMIC Rust build tree
+  exhausts (`No space left on device` writing tokio's `.rmeta`). Point `TMPDIR`
+  and `--option build-dir` at a dataset on the big pool.
+
+Also note `developer/gnu-binutils` (the source of `objcopy`) is **rejected on a
+fresh AMI's running boot environment** by the 2025 `userland-incorporation`. It
+only installs after `pkg update --accept` **and a reboot into the new BE**, so do
+not plan work that assumes `objcopy` is one `pkg install` away -- see the
+split-debug gate above, which exists exactly so this does not block the graph.
+
 ## Doing the next app (this is meant to be mechanical)
 
 1. Pick the upstream tag. Fetch `Cargo.lock` from that tag and read the pins
    (`libcosmic` rev, `softbuffer` tag, `winit` tag, `wayland-backend` version).
-   Do not assume they match `cosmic-term`'s.
-2. Copy `cosmic-term.nix`, change `pname`/`version`/`tag`/`srcSha256`.
-3. Set `vendorSha256 = ""`, build `-A <app>.vendor`, copy the reported hash in.
+   Do not assume they match `cosmic-term`'s. **If it pins `smithay` (not
+   `smithay-client-toolkit`), STOP** -- that is the compositor-side crate and this
+   recipe does not apply. `cosmic-panel` is in that category.
+2. Add an entry to `cosmic/default.nix` calling `cosmic-illumos-common.nix` with
+   `pname`/`version`/`srcSha256` and `vendorSha256 = ""`. (Copying
+   `cosmic-term.nix` wholesale is no longer necessary -- it is kept as the
+   documented reference, but the shared recipe is the one to extend.)
+3. Build `-A <app>.vendor`; nix reports a hash mismatch against the empty hash,
+   and the `got:` line is the real hash. Paste it in.
 4. Build the app. For each error, add the illumos cut **with a guard** and quote
    the error next to it. The eight fixes above are likely to be a superset of
    what any single app needs; feature sets differ per app.
 5. If the app's lockfile pins `wayland-backend` at a version whose file layout
    differs, the cfg rewrites in fixes 4-5 still apply -- they key on gate text,
-   not line numbers.
+   not line numbers. Verified across 0.3.15 and 0.3.16.
+
+Measured doing exactly this for `cosmic-files` and `cosmic-edit`: both were pin-
+for-pin identical to `cosmic-term` at `epoch-1.5.0`, so the eight cuts applied
+unchanged and neither needed a new one. Two build-environment traps did bite,
+both worth knowing:
+
+* **`TMPDIR` must not be `/tmp`.** On this AMI `/tmp` is a ~12.5 GB swap-backed
+  tmpfs, and `cosmic-files` died with `No space left on device` writing tokio's
+  `.rmeta`. Put the build dir on the big pool (`TMPDIR=/bigtmp`,
+  `--option build-dir`).
+* **Do not wrap everything in `$out/bin`.** cargo installs a `<name>.d` depfile
+  beside the binary, and makeWrapper dies on it: *Cannot wrap '.../cosmic-edit.d'
+  because it is not an executable file*. The shared recipe now tests `-x` and
+  skips `*.d` and already-wrapped files.
 
 Time cost measured for `cosmic-term`: vendoring is 33 s / 366 MB with a warm
-cargo cache; the FOD is 1.34 GB in the store; a full crate compile on a 36-vCPU
-`c5.9xlarge` is a few minutes.
+cargo cache; the FOD is 623 MB in the store; a full crate compile on a 36-vCPU
+`c5.9xlarge` is a few minutes. On a 16-vCPU `c5.4xlarge` from a cold store the
+whole first build (238 uncached closure paths from source, then the ~860 crates)
+is a few hours; the second and third apps are ~15-25 minutes each once the
+dependency graph is warm.
 
 ## Honest list of what is still ad-hoc
 
-* **Every app except `cosmic-term` is still ad-hoc.** The ~25-36 binaries in
-  `docs/COSMIC-APPS-STATUS.md`, `cosmic-apps-wave*-paths.txt` and
-  `cosmic-apps-waveB2-paths.txt` remain hand-run `cargo` output in `/root`
-  checkouts. Nothing in this change makes them reproducible.
+* **Three apps are derivations; the other ~22-33 are still ad-hoc.**
+  `cosmic-term`, `cosmic-files` and `cosmic-edit` build from the committed tree.
+  The rest of the binaries in `docs/COSMIC-APPS-STATUS.md`,
+  `cosmic-apps-wave*-paths.txt` and `cosmic-apps-waveB2-paths.txt` remain hand-run
+  `cargo` output in `/root` checkouts. Nothing here makes those reproducible.
+* **`cosmic-panel` is NOT packaged, and that is a measurement, not an oversight.**
+  Its `epoch-1.5.0` `Cargo.lock` pins `smithay 0.7.0`
+  (`git+https://github.com/smithay/smithay?rev=f0992e7`) -- the *compositor-side*
+  crate, which is hard-coupled to DRM/GBM on illumos. It also pins a **different**
+  `libcosmic` rev (`20dfd7c2` vs `0ca1b784` for term/files/edit) and
+  `wayland-backend` 0.3.15, so it would not cleanly share the recipe either. Do
+  not add it without doing the smithay work first.
+* **No app has been shown to paint anything.** All three build and start; none
+  was run against a compositor. `cosmic-term` prints `--help`/`--version`;
+  `cosmic-files` and `cosmic-edit` exit 0 while printing nothing, because they do
+  not implement those flags. "Starts cleanly" is the whole claim.
 * **`smallvil`, the compositor substrate, is still ad-hoc** -- a prebuilt binary
   at `/root/cosmic-gcroots/waveB2-bin/smallvil`. It is the thing every app needs
-  at runtime, and it is not packaged.
+  at runtime, and it is not packaged. This is why
+  `modules/config/cosmic-desktop.nix`'s `compositor` option is a **string path**
+  rather than a package, and why enabling that module warns instead of pretending.
 * **`scripts/solnix-cosmic-session.sh` still hardcodes prebuilt paths.** It
   should take store paths, but it was left alone rather than half-converted.
+* **`modules/config/cosmic-desktop.nix` has never been booted.** It evaluates the
+  options and wires the closure; no installed system has run it.
 * **`cosmic-comp` remains out of scope** -- it is hard-coupled to DRM/GBM at
   compile time on illumos (`docs/cosmic-comp-illumos-finding.md`). Note that
   `cosmic-term` does **not** pull smithay at all (only
   `smithay-client-toolkit`), so the DRM wall is not in this app's graph.
+* **Why libumem needs `backend=mmap` is still unexplained.** The workaround is
+  measured and reliable (0/8 -> 8/8) but it removes a symptom; the underlying
+  reason libumem's sbrk backend fails in these images is unknown, and any
+  `posix_spawn`-style second-order effect is unexplored.
 * **Seven of the sixteen committed `rust-patches/*.patch` are prose notes, not
   appliable diffs** (zero real `@@` hunks): `softbuffer-illumos-posix-shm`,
   `calloop-wayland-source-illumos-timer-dispatch`,
   `cosmic-panel-illumos-embedded-server-timer-dispatch`,
   `smallvil-illumos-cascade-toplevels`, and all three
-  `wayland-client-*-blocking-read-timeout`. The softbuffer one says so itself:
-  "reconstruct the byte-exact diff ... from the node's vendored tree if a literal
-  apply is needed". The knowledge is committed; the patches are not. This
-  derivation re-expresses the softbuffer and wayland-backend ones as guarded
-  `substituteInPlace` edits. The `wayland-client` poll-timeout and
-  `calloop` timer-dispatch fixes are **not** re-expressed -- they were not needed
-  to compile `cosmic-term`, and they are runtime fixes whose absence will show up
-  as a hang, not a compile error. Expect to need them when the binary actually
-  talks to a compositor.
-* **The registry rows are not emitted** -- the app has no output path to record
-  yet. The vendor FOD does, and it is listed above.
+  `wayland-client-*-blocking-read-timeout`. The knowledge is committed; the
+  patches are not. The derivations re-express the softbuffer and wayland-backend
+  ones, plus **now** the `wayland-client` bounded-poll fix, as guarded
+  `substituteInPlace` edits. That last one is worth a warning to the next
+  reader: the prose note writes the call as `poll(&mut fds, -1)`, but
+  wayland-client 0.31.15's `blocking_read` actually reads
+  `rustix::event::poll(&mut fds, None)` -- where `None` *is* the infinite
+  timeout. An edit keyed on the note's literal string matches **nothing and
+  silently does nothing**, which is precisely the trap these prose "patches"
+  set. The guard caught it: the first build logged no success line, and the
+  corrected version now prints `illumos wayland-client bounded-poll fix applied
+  to vendor/wayland-client/src/conn.rs` and compiles (rc 0). **The edit is
+  applied and compiles; it has still never been exercised against a
+  compositor.**
+  The **`calloop` timer-dispatch fix is still NOT re-expressed**: it is a
+  structural change (a new struct field plus
+  register/reregister/unregister/process_events arms) that no safe
+  `substituteInPlace` can express. Its absence shows up as a **hang or a black
+  frame against a live compositor**, never as a build error -- so expect to need
+  it the moment an app actually talks to one.
+* **The registry rows are not emitted** for the three app output paths.

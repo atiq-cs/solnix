@@ -20,6 +20,7 @@
   ./config/users.nix
   ./config/system-path.nix
   ./config/pgfarm.nix
+  ./config/cosmic-desktop.nix
   ./config/shell-environment.nix
   ./config/nix.nix
   ./system/boot/init/smf.nix
