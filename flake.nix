@@ -73,6 +73,14 @@
           pkgs = pkgsFor "x86_64-solaris";
           modules = [ ./configurations/base.nix ];
         };
+
+        # The PostgreSQL build-farm animal + dev host role (base + pgfarm).
+        # This is what an installer selects for that machine.
+        pgfarm = solnixSystem {
+          system = "x86_64-solaris";
+          pkgs = pkgsFor "x86_64-solaris";
+          modules = [ ./configurations/pgfarm.nix ];
+        };
       };
 
       # Per-build-system image packages. The image builder (lib/make-be.nix)
@@ -83,6 +91,17 @@
       packages = lib.genAttrs buildSystems (_buildSystem: {
         # the full system closure (T2.8); realise on the illumos host.
         baseToplevel = self.solnixConfigurations.base.config.system.build.toplevel;
+        pgfarmToplevel = self.solnixConfigurations.pgfarm.config.system.build.toplevel;
+
+        # The pgfarm role's generated artifacts ALONE (build-farm.conf, the
+        # run_build.pl driver, the setup oneshot). These are plain text/script
+        # derivations with no dependency on the illumos gate proto, so they
+        # realise on any host — which is what makes the animal's acceptance test
+        # (a real run_build.pl run) runnable without first building a whole
+        # bootable world.
+        pgfarmConf = self.solnixConfigurations.pgfarm.config.solnix.pgfarm.buildFarmConf;
+        pgfarmRun = self.solnixConfigurations.pgfarm.config.solnix.pgfarm.runBuild;
+        pgfarmSetup = self.solnixConfigurations.pgfarm.config.solnix.pgfarm.setup;
       });
 
       # devShells: the build/ops toolchain used to DRIVE solnix builds from a

@@ -8,6 +8,136 @@
 > host). See `docs/durability-account-loss.md` for why this keeps happening and the rules
 > that limit the damage.
 
+## THE DECLARATIVE PATH (preferred; use this for new animals)
+
+The animal is now a solnix **role module + configuration**, so an installed system gets it
+from config instead of from a provisioning script:
+
+| what | where |
+|---|---|
+| the role module | `modules/config/pgfarm.nix` (option surface `solnix.pgfarm.*`) |
+| the configuration an installer selects | `configurations/pgfarm.nix` (= `base.nix` + the role) |
+| flake outputs | `solnixConfigurations.pgfarm`, `packages.*.pgfarmToplevel`, and `pgfarmConf` / `pgfarmRun` / `pgfarmSetup` |
+
+What the module makes declarative (this is `scripts/bene-provision-dixi.sh` steps 4+5):
+
+* the unprivileged **`pgbf` build user** via `users.users` (PostgreSQL's `initdb` and
+  `run_build.pl` both REFUSE to run as root),
+* **`build-farm.conf` generated from options** as a store path — only the keys
+  `run_build.pl` actually reads, instead of regex-patching the 500-line upstream sample,
+* the **GNU-diffutils PATH fix** (see the warning below) in all three places that matter,
+* **`run_build.pl` wired as an SMF service** through the existing `smf.services.*`
+  generator, so its manifest is DTD-validated at build time,
+* a scoped **`safe.directory` gitconfig** as a store path, instead of mutating
+  `git config --global`.
+
+Usage:
+
+```sh
+# evaluate/build the role's artifacts (works on the illumos target itself)
+nix-build lib/eval-host.nix -A toplevel --arg configModule ../configurations/pgfarm.nix
+
+# register the animal (a HUMAN step at buildfarm.postgresql.org), then set:
+#   solnix.pgfarm.animal = "..."; solnix.pgfarm.secret = "...";  (secret via sops, not inline)
+# and turn on the schedule:
+#   solnix.pgfarm.scheduled = true;
+```
+
+Until `animal`/`secret` are set, the generated run driver forces `--test`, so an
+unregistered animal builds and tests locally and reports nothing upstream.
+
+### ⚠️ The load-bearing detail: illumos `diff` breaks `test_json_parser`
+
+illumos `/usr/bin/diff` prints **"No differences encountered"** for identical files (rc=0).
+PostgreSQL's `src/test/modules/test_json_parser` TAP test asserts diff prints **NOTHING**,
+so with the illumos diff ahead on PATH it fails 4 subtests and the whole
+`module-test_json_parserCheck` stage — while the build itself looks fine. The fix has two
+halves:
+
+1. `text/gnu-diffutils` installed (**imperative**, IPS — see the gaps below), and
+2. **`/usr/gnu/bin` FIRST in PATH** (declarative: `solnix.pgfarm.gnuBinFirst`, default true).
+
+The module applies (2) in **three** places from that one option, because each covers a
+different execution path and missing any one reintroduces the bug:
+
+* `build-farm.conf`'s `build_env.PATH` — every configure/make/test child process;
+* the SMF `method_environment` — the scheduled animal run;
+* `environment.shellInit` — an **operator's interactive** `run_build.pl`.
+
+It also adds a loud runtime gate in the setup oneshot that fails immediately if the illumos
+diff is winning, rather than letting one stage go red 30 minutes later.
+
+> **Do not assume the base modules already cover this.**
+> `modules/config/shell-environment.nix` does list `/usr/gnu/bin` in its `basePathTail`, but
+> that only *appends* directories not already present, *after* the inherited PATH — so on a
+> stock login `/usr/bin` lands AHEAD of `/usr/gnu/bin`. Measured by sourcing the generated
+> profile under `env -i`: with `gnuBinFirst = true` `/usr/gnu/bin` is at position 1; with it
+> false, `/usr/bin` is at 7 and `/usr/gnu/bin` at 11 (bug live). The role module's own
+> `shellInit` is load-bearing, not redundant.
+>
+> Note also that `dixi` itself carries the fix in only ONE place (its `build_env.PATH`), so a
+> hand-run `run_build.pl` on dixi would still hit this. The declarative path is stricter than
+> the reference animal.
+
+### VERIFIED (x86_64, c5.4xlarge from `ami-014c4aaccd37b2356`)
+
+A real `run_build.pl` launched as the module-declared user, from the module-generated driver
+and config, reached the literal acceptance string:
+
+```
+CHANGEME:HEAD          [14:51:14] running make ecpg check ...
+CHANGEME:HEAD          [14:51:42] OK
+Branch: HEAD
+All stages succeeded
+```
+
+87 stages, zero failures, including `module-test_json_parser`. The whole configuration was
+evaluated and built **natively on the illumos target** with the node's own Nix 2.24.15, and
+the generated SMF manifests passed `xmllint --dtdvalid` against that node's real
+`/usr/share/lib/xml/dtd/service_bundle.dtd.1`.
+
+**Negative control** (a test that cannot fail proves nothing): rebuilding with
+`--arg gnuBinFirst false` flips `build_env.PATH` to `/usr/bin:/usr/sbin`, removes the setup
+script's diff gate, and drops `/usr/gnu/bin` from the interactive PATH — and the
+`module-test_json_parserCheck` stage then FAILS, which is exactly the failure recorded on
+dixi's first run (`Stage module-test_json_parserCheck failed with status 2`).
+
+### KNOWN GAPS — still imperative (a known gap beats a false claim)
+
+These are the remaining `scripts/bene-provision-dixi.sh` steps, and they are **not** yet
+declarative. The full list with upgrade paths is in the footer of `modules/config/pgfarm.nix`.
+
+1. **The IPS toolchain** (step 3). `pkg install developer/gcc-14 developer/build/gnu-make
+   developer/parser/bison developer/lexer/flex developer/versioning/git developer/ccache
+   library/perl-5/ipc-run-542 text/gnu-diffutils`. solnix has no declarative IPS mechanism
+   (there is no `ips.packages` option). The module declares the PATH ordering that makes
+   `gnu-diffutils` win; it cannot yet declare its installation. Note the animal needs the IPS
+   perl 5.42 that `ipc-run-542` was built against, so substituting the published
+   real-derivation perl/gcc rows is not a drop-in.
+   *Upgrade path:* an `ips.packages` option rendering a first-boot `pkg install` oneshot.
+2. **`pkg update` + the BE reboot** (step 2). The pristine base carries 2025 incorporations
+   while the catalog offers 2026 packages, so every toolchain install is rejected until a full
+   update — which creates a new BE needing the DHCP shim + `pit_is_broken` carried into its
+   boot_archive. A precondition of step 3.
+3. **The ZFS build pool** (step 1). `zpool create bfpool` + `/pgbf` + `/nix` datasets. No
+   filesystems/zpool module exists yet; pool creation is destructive and needs a
+   disk-selection policy. *Upgrade path:* a `solnix.storage.pools.*` module.
+4. **The Nix bootstrap** (step 6) — chicken-and-egg: it is what evaluates the config.
+5. **The buildfarm client checkout** is `git clone`d at runtime by the setup oneshot, not
+   pinned as a store path (it is a moving upstream HEAD the animal is expected to track).
+6. **No calendar schedule.** SMF has no periodic model, so the service is a fixed-interval
+   sleep/run loop (`solnix.pgfarm.intervalSeconds`), not a cron expression.
+7. **`animal`/`secret` in the store are world-readable.** Use a sops-managed secret for a
+   registered animal.
+
+A practical consequence: provisioning a new animal today is **imperative substrate, then
+declarative role** — pool + `pkg update` + toolchain + Nix by hand (or with
+`scripts/bene-provision-dixi.sh`), then build `configurations/pgfarm.nix` for everything else.
+
+---
+
+## Historical: the fully hand-provisioned recipe
+
 When the durable (non-burner) account is designated, provision the long-term solnix build-farm animals with
 this recipe. The technical capabilities are all PROVEN (Goals 2+3 done on x86; aarch64 QEMU-boot done).
 
