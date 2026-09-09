@@ -79,3 +79,37 @@ silently shipping illumos branding — the silent-no-op class that has bitten th
 * `hid1` (internal keyboard/trackpoint) genuinely fails `hidparser`. With the console readable and an
   external keyboard attaching, this drops from blocking to cosmetic — but it is a real illumos gap.
 * Whether `dev(7FS)` makes the staged `/dev` nodes inert. Unresolved and still worth answering.
+
+## ⚠️ Severity correction: the flood was in EVERY boot, not a third of them
+
+I reported the flood at **3/8** boots on image `c`. **Wrong — it is 8/8.**
+
+My grep was `console login: c[0-9]t`, which only matches when a device name lands *immediately* after
+the literal prompt string. Grepping for the device names themselves (`^c[0-9]t...d0`) finds **9–10
+typed device names in every one of image `c`'s logs**. Re-verified:
+
+```
+before-usb.clean.txt     10 device names
+usb-1.log.clean           9
+usb-2.log.clean           9
+usb-3.log.clean          10
+```
+
+So the maintainer's "no keyboard" symptom was present on **every** boot, and the honest comparison is
+**8/8 before versus 0/8 after** — not 3/8.
+
+**The error shape:** I measured a *narrower pattern than the phenomenon*. A device name interleaved
+three lines below the prompt is just as fatal to typing as one directly after it, and my pattern scored
+those as clean. Same family as the NUL-delimited driver grep that falsely reported `eedev` missing —
+an approximate instrument reported as a count.
+
+## A second defect found before the rebuild
+
+`scripts/make-iso-usb.sh` step 0 **rewrites `loader.conf` from its own heredoc**, and that heredoc
+lacked `loader_brand` / `loader_menu_title`. So the ISO assembler would have **silently reverted half
+the branding fix** — `menu.4th` patched correctly on the build host, `loader.conf` overwritten
+afterwards. Fixed, plus a **hard gate** that aborts the assembly if `menu.4th` still says
+`Welcome to illumos`.
+
+That is a two-stage pipeline where stage 2 quietly undoes stage 1's work. Worth remembering for
+anything else `oi-make-livecd.sh` authors and `make-iso-usb.sh` regenerates.

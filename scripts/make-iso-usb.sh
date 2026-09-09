@@ -51,8 +51,13 @@ log "writing loader.conf"
 # Console ORDER matters for the deliverable: real hardware (the X1 Carbon) has no
 # ttya at all, so the framebuffer console ("text") must lead, with ttya kept
 # second so a QEMU/EC2 serial capture still records the boot.
+# loader_brand/loader_menu_title: this rewrite REPLACES the loader.conf that
+# oi-make-livecd.sh authored, so omitting them silently reverted the boot-screen
+# branding to illumos even though menu.4th (patched on the build host) was fine.
 cat > "$ISOROOT/boot/loader.conf" <<EOF
 loader_logo="illumos"
+loader_brand="solnix"
+loader_menu_title="Welcome to solnix"
 console="${SOLNIX_CONSOLE:-text,ttya}"
 ttya-mode="115200,8,n,1,-"
 autoboot_delay="5"
@@ -140,5 +145,17 @@ if [ "$(dd if="$USB" bs=512 skip=1 count=1 2>/dev/null | head -c 8)" != "EFI PAR
   echo "FATAL: no GPT header at LBA 1 of $USB -- UEFI disk boot will fail" >&2; exit 1
 fi
 echo "GPT header present at LBA 1 (EFI PART)"
+
+# HARD GATE: the boot screen must say solnix. Both sources are load-bearing --
+# menu.4th's hardcoded title overrides loader_menu_title, so check both in the
+# tree that was just handed to xorriso.
+if grep -q 'Welcome to illumos' "$ISOROOT/boot/forth/menu.4th" 2>/dev/null; then
+  echo "FATAL: boot/forth/menu.4th still says 'Welcome to illumos'" >&2; exit 1
+fi
+grep -q 'Welcome to solnix' "$ISOROOT/boot/forth/menu.4th" 2>/dev/null || \
+  { echo "FATAL: boot/forth/menu.4th lacks 'Welcome to solnix'" >&2; exit 1; }
+grep -q '^loader_brand="solnix"' "$ISOROOT/boot/loader.conf" || \
+  { echo "FATAL: loader.conf lacks loader_brand=solnix" >&2; exit 1; }
+echo "branding gate OK: menu.4th + loader.conf both say solnix"
 
 log "DONE: $ISO + $USB"
