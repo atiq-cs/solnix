@@ -183,7 +183,7 @@ hardcodes three host tools. Verified on the node:
 | tool | state |
 |---|---|
 | `/usr/bin/elfedit` | present |
-| `/usr/gnu/bin/objcopy` | **absent, and not packaged** -- `pkg search basename:objcopy` returns nothing from the OI hipster publisher, and the store's own `binutils` is the illumos seed bintools (`ar as elfdump elfedit gas ld mcs nm`), no `objcopy` |
+| `/usr/gnu/bin/objcopy` | ⚠️ **CORRECTED: it IS packaged.** Absent on the FRESH base AMI (where this was measured), but present on a provisioned build host, provided by **`developer/gnu-binutils`**. The fix is an `pkg install`, not a port -- materially cheaper than this row originally implied. Original note follows: **absent, and not packaged** -- `pkg search basename:objcopy` returns nothing from the OI hipster publisher, and the store's own `binutils` is the illumos seed bintools (`ar as elfdump elfedit gas ld mcs nm`), no `objcopy` |
 | `/usr/bin/sha1sum` | **absent** (no `gsha1sum` either). Native equivalent exists and works: `/usr/bin/digest -a sha1` |
 
 `solnix-separate-debug-info.sh` swallows every `objcopy` failure with
