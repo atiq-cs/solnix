@@ -1,0 +1,196 @@
+diff --git a/src/aarch64-arm64-gate-patches/dboot_synth_fdt.c b/src/aarch64-arm64-gate-patches/dboot_synth_fdt.c
+index 11d396f107..0a04569ef1 100644
+--- a/src/aarch64-arm64-gate-patches/dboot_synth_fdt.c
++++ b/src/aarch64-arm64-gate-patches/dboot_synth_fdt.c
+@@ -181,6 +181,53 @@ synth_get_xsdt(void)
+ 	return (xsdt);
+ }
+ 
++/*
++ * synth_find_table_nth -- the `n`th XSDT entry whose signature matches `sig`
++ * (n == 0 is the first), or NULL.
++ *
++ * WHY THIS EXISTS: synth_find_table() returns only the FIRST match, which is
++ * correct for singleton tables (FADT/MADT/MCFG/SPCR) but wrong for SSDTs -- a
++ * platform may publish several, and real c6g.metal publishes SSDT1 and SSDT2.
++ * PCI0 and its PCIe host-bridge _CRS live in SSDT1 on that hardware (measured:
++ * DSDT 23805 bytes with no PCI0; SSDT1 1498 bytes with PCI0 + the _CRS carrying
++ * MEM32 0x80000000/0x20000000 and MEM64 0x18000000000/0x2000000000, no IO
++ * window), so a scan that cannot enumerate past the first SSDT cannot find the
++ * PCIe windows at all -- and then silently substitutes QEMU-virt constants the
++ * hardware does not decode.
++ */
++static const ACPI_TABLE_HEADER *
++synth_find_table_nth(const char *sig, UINT32 n)
++{
++	const ACPI_TABLE_XSDT *xsdt;
++	const ACPI_TABLE_HEADER *tab;
++	const UINT64 *entries;
++	UINT64 entry;
++	UINT32 nentries, i, seen = 0;
++	size_t slen;
++
++	if ((xsdt = synth_get_xsdt()) == NULL)
++		return (NULL);
++
++	slen = strlen(sig);
++	nentries = (xsdt->Header.Length -
++	    sizeof (xsdt->Header)) / ACPI_XSDT_ENTRY_SIZE;
++	entries = &xsdt->TableOffsetEntry[0];
++
++	for (i = 0; i < nentries; ++i) {
++		/* Unaligned: the MMU is off, SCTLR.A is ignored. */
++		memcpy(&entry, &entries[i], sizeof (entry));
++		if (entry == 0)
++			continue;
++		tab = (const ACPI_TABLE_HEADER *)entry;
++		if (strncmp(tab->Signature, sig, slen) != 0)
++			continue;
++		if (seen++ == n)
++			return (tab);
++	}
++
++	return (NULL);
++}
++
+ static const ACPI_TABLE_HEADER *
+ synth_find_table(const char *sig)
+ {
+@@ -706,6 +753,10 @@ typedef struct synth_crs {
+ #define	ACPI_LRES_WORD_ADDR	0x88	/* WordAddressSpace  (2-byte fields) */
+ #define	ACPI_LRES_DWORD_ADDR	0x87	/* DWordAddressSpace (4-byte fields) */
+ #define	ACPI_LRES_QWORD_ADDR	0x8a	/* QWordAddressSpace (8-byte fields) */
++/* Upper bound on SSDTs scanned for a PCIe _CRS: the MMU is off here, so a
++ * corrupt XSDT length must not turn into an unbounded walk. Metal publishes 2. */
++#define	SYNTH_MAX_SSDT	16
++
+ #define	ACPI_LRES_END_TAG	0x79	/* actually a small-res end tag */
+ 
+ /* Address-space resource types (byte 3 of the descriptor). */
+@@ -747,42 +798,25 @@ crs_read_fields(const uint8_t *base, uint32_t off, int fw, uint64_t out[5])
+  * resource-descriptor encoding -- not a general AML interpreter.
+  */
+ static void
+-synth_scan_crs(synth_crs_t *c)
++synth_scan_crs_table(synth_crs_t *c, const ACPI_TABLE_HEADER *tab)
+ {
+-	const ACPI_TABLE_FADT *fadt;
+-	const ACPI_TABLE_HEADER *dsdt;
+-	uint64_t dsdt_pa;
+-	uint32_t dsdt32;
+ 	const uint8_t *p;
+ 	uint32_t len, off;
+ 
+-	memset(c, 0, sizeof (*c));
+-
+ 	/*
+-	 * The DSDT is not listed in the XSDT; it is referenced by the FADT
+-	 * (XDsdt 64-bit, else Dsdt 32-bit).  Find the FADT, follow it.
++	 * NOTE: does NOT memset(c) -- the caller scans several tables in turn and
++	 * keeps the first that yields windows, so this must not erase a previous
++	 * table's result.
+ 	 */
+-	fadt = (const ACPI_TABLE_FADT *)synth_find_table(ACPI_SIG_FADT);
+-	if (fadt == NULL)
+-		return;
+-	memcpy(&dsdt_pa, &fadt->XDsdt, sizeof (dsdt_pa));
+-	if (dsdt_pa == 0) {
+-		memcpy(&dsdt32, &fadt->Dsdt, sizeof (dsdt32));
+-		dsdt_pa = dsdt32;
+-	}
+-	if (dsdt_pa == 0)
++	if (tab == NULL)
+ 		return;
+-	dsdt = (const ACPI_TABLE_HEADER *)(uintptr_t)dsdt_pa;
+-	if (strncmp(dsdt->Signature, ACPI_SIG_DSDT,
+-	    strlen(ACPI_SIG_DSDT)) != 0)
++	memcpy(&len, &tab->Length, sizeof (len));
++	if (len <= sizeof (*tab))
+ 		return;
+-	memcpy(&len, &dsdt->Length, sizeof (len));
+-	if (len <= sizeof (*dsdt))
+-		return;
+-	p = (const uint8_t *)dsdt;
++	p = (const uint8_t *)tab;
+ 
+ 	/* Find the bus-number WordAddressSpace producer (root bridge). */
+-	for (off = sizeof (*dsdt); off + 3 < len; off++) {
++	for (off = sizeof (*tab); off + 3 < len; off++) {
+ 		uint16_t dlen;
+ 		if (p[off] != ACPI_LRES_WORD_ADDR)
+ 			continue;
+@@ -865,6 +899,74 @@ synth_scan_crs(synth_crs_t *c)
+ 		c->have = true;
+ }
+ 
++/*
++ * synth_scan_crs -- find the PCIe host-bridge _CRS windows, wherever they live.
++ *
++ * The DSDT is reachable only via the FADT (it is not listed in the XSDT); SSDTs
++ * are listed in the XSDT and there may be several. Scan the DSDT first (that is
++ * where QEMU-EDK2 puts PCI0, and it preserves the previously-validated
++ * behaviour), then each SSDT in turn, stopping at the first table that yields
++ * windows.
++ *
++ * MEASURED ON REAL c6g.metal: the DSDT (23805 bytes) contains no PCI0 at all,
++ * while SSDT1 (1498 bytes) carries PCI0 and a _CRS whose windows match the
++ * hardware's MCFG/firmware tables exactly -- MEM32 0x80000000 size 0x20000000,
++ * MEM64 0x18000000000 size 0x2000000000, bus 0x00-0xff, and NO IO window. The
++ * old DSDT-only scan therefore always came back empty on metal and the caller
++ * silently substituted QEMU-virt constants (MEM32 0x10000000, MEM64
++ * 0x8000000000, IO 0x3eff0000), i.e. it mapped MMIO real Graviton does not
++ * decode. The descriptor parser itself was never wrong -- it decodes these very
++ * descriptors correctly; the table SELECTION was.
++ */
++static void
++synth_scan_crs(synth_crs_t *c)
++{
++	const ACPI_TABLE_FADT *fadt;
++	const ACPI_TABLE_HEADER *tab;
++	uint64_t dsdt_pa;
++	uint32_t dsdt32;
++	UINT32 n;
++
++	memset(c, 0, sizeof (*c));
++
++	/* 1. the DSDT, via the FADT. */
++	fadt = (const ACPI_TABLE_FADT *)synth_find_table(ACPI_SIG_FADT);
++	if (fadt != NULL) {
++		memcpy(&dsdt_pa, &fadt->XDsdt, sizeof (dsdt_pa));
++		if (dsdt_pa == 0) {
++			memcpy(&dsdt32, &fadt->Dsdt, sizeof (dsdt32));
++			dsdt_pa = dsdt32;
++		}
++		if (dsdt_pa != 0) {
++			tab = (const ACPI_TABLE_HEADER *)(uintptr_t)dsdt_pa;
++			if (strncmp(tab->Signature, ACPI_SIG_DSDT,
++			    strlen(ACPI_SIG_DSDT)) == 0) {
++				synth_scan_crs_table(c, tab);
++				if (c->nwin > 0) {
++					c->have = true;
++					return;
++				}
++			}
++		}
++	}
++
++	/*
++	 * 2. every SSDT. Bounded by SYNTH_MAX_SSDT rather than trusting the
++	 * table count, since this runs with the MMU off and a corrupt XSDT
++	 * length must not become an unbounded walk.
++	 */
++	for (n = 0; n < SYNTH_MAX_SSDT; n++) {
++		tab = synth_find_table_nth(ACPI_SIG_SSDT, n);
++		if (tab == NULL)
++			break;
++		synth_scan_crs_table(c, tab);
++		if (c->nwin > 0) {
++			c->have = true;
++			return;
++		}
++	}
++}
++
+ /*
+  * Distinguish QEMU virt from real SBBR/Graviton firmware by the ACPI OEM
+  * ID (FADT header): QEMU/EDK2 stamp "BOCHS "/"BXPC", real Nitro/Graviton
