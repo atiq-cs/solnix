@@ -90,3 +90,24 @@ wave12-work/
 # Scratch copies of the RISC-V phase trees; their unique content is merged into
 # the tracked src/riscv/rp*/ trees (verified: 0 sources missing).
 _rp[0-9][0-9]/
+
+# Photographs of hardware consoles. Console output belongs in the repo as TEXT
+# (transcribed, greppable, diffable); a phone photo is a large binary that cannot
+# be searched and may capture surroundings the maintainer did not intend to
+# publish. Transcribe the numbers into a doc instead.
+#
+# Scoped to OUR directories on purpose: artifacts/sparc-xbuild/ contains vendored
+# upstream source trees (libpng's pngbar.jpg, libuv's docs, texinfo test fixtures)
+# whose own .jpg files are legitimately tracked. A blanket *.jpg would fight them.
+docs/**/*.jpg
+docs/**/*.jpeg
+docs/**/*.heic
+artifacts/install-media/**/*.jpg
+artifacts/install-media/**/*.jpeg
+artifacts/install-media/**/*.heic
+artifacts/*.jpg
+artifacts/*.jpeg
+artifacts/*.heic
+/*.jpg
+/*.jpeg
+/*.heic

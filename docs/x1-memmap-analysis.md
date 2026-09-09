@@ -33,7 +33,8 @@ ALSO CONFIRMED from the same photo, so nobody re-derives it:
   * ls /platform/i86pc/amd64 lists boot_archive + boot_archive.hash -- filesystem reads work.
   * The smap line "type=01 base=...58000000 len=...200000" is that same 2 MiB region. smap collapses
     five EFI types into one and merges adjacent runs, which is exactly why it misled; memmap is the
-    correct instrument. Photo committed as artifacts/install-media/x1-memmap-photo.jpg.
+    correct instrument. (The source photo is deliberately NOT committed -- console output belongs
+    in the repo as transcribed text, and the figures above are that transcription.)
 
 The multiboot2 uint32_t constraint recorded earlier still stands and is still the reason the NixOS
 layout cannot be copied -- but it is no longer a blocker, because 778 MiB below 4 GiB is plenty once
