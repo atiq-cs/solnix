@@ -1,26 +1,74 @@
 # solnix x86_64 USB / ISO install media — how to build it, how to flash it, what is proven
 
-**Status 2026-09-09b: FLASH `usb-image-20260909b/`.** The `usb-image-20260909/` pair reached the EFI
-loader on a real Lenovo X1 Carbon and then **failed to stage its ramdisk** — the loader asked
-firmware for 820 MiB contiguous below 4 GiB and the machine's largest such block is 778.3 MiB. The
-`b` rebuild shrinks the ramdisk to 340 MiB (356,515,840 B uncompressed) and is the one to write to a
-stick. See [The X1 Carbon staging failure](#the-x1-carbon-staging-failure-and-the-fix).
+**Status 2026-09-09d: FLASH `usb-image-20260909d/`.** It is the **first image containing all three
+fixes**. `usb-image-20260909c/` was built from `49c111f765`, which predates `c2f9229e4f`, so it fixed
+the ZFS race and **still flooded the login prompt** — the exact symptom reported as "no keyboard".
+The "d" image is built from `740b1d6335`, which has `c2f9229e4f` as an ancestor.
 
 ## ⚠️ FLASH THIS FILE
 
 ```
-artifacts/install-media/usb-image-20260909c/solnix-x86_64-usb.img
+artifacts/install-media/usb-image-20260909d/solnix-x86_64-usb.img
 ```
 
-The **"b"** image booted a real X1 Carbon to `solnix console login:` (the RD_MB=340 staging fix
-worked) and then hit two faults. **"c"** fixes the ZFS one and one of the two symptoms behind the
-other; the **keyboard remains unexplained and unfixed**. See
-"[The two X1 login-prompt faults](#the-two-x1-login-prompt-faults)" before flashing, and
-[what is proven vs projected](#what-is-proven-vs-projected-for-the-c-image).
+Built from commit **`740b1d6335`**. Three fixes, one image:
+
+| fix | commit | in `b` | in `c` | in **`d`** |
+|---|---|---|---|---|
+| `RD_MB=340` — the EFI staging allocation fits the X1 | earlier | ✅ | ✅ | ✅ |
+| `/dev` node staging — closes the ZFS race | `740b1d6335` | ❌ | ✅ | ✅ |
+| **console-flood fix** — login was eating `/dev/dsk` names | `c2f9229e4f` | ❌ | ❌ | ✅ |
+| **`solnix` boot branding** | `c2f9229e4f` | ❌ | ❌ | ✅ |
+
+Measured on the shipped `d` bits, over **12 QEMU boots**:
+
+| counter | rate | previous image |
+|---|---|---|
+| reaches `solnix console login:` (UEFI USB) | **8 / 8** | 8/8 on `c` |
+| `failed to initialize ZFS library` | **0 / 8** | 0/8 on `c`, **4/8** on `b` |
+| login-prompt flood (device names typed into `login`) | **0 / 8** | **8/8** on `c` — see the correction below |
+| `panic[` / `failed to allocate` | **0 / 8** | 0/8 |
+| BIOS / El Torito reaches login | **4 / 4** | 4/4 |
+
+Zero failures on every counter, so there is no clustering to report — which matters, because
+failures here are bursty rather than independent and that is why the UEFI arm is 8 runs and not 4.
+Full per-run table, all verification commands, and an explicit list of what remains untested on
+hardware: `artifacts/install-media/usb-image-20260909d/README.md`.
+
+### ⚠️ Correction: the flood on image `c` was 8/8, not 3/8
+
+The previously recorded "3 of 8" counted only runs where a device name landed immediately after the
+literal `console login: ` on the same line. Counting the typed names themselves —
+`grep -cE '^c[0-9]t[0-9A-Z]+d0'` — finds **9 or 10 device names in all eight** of image `c`'s shipped
+logs. The symptom the maintainer reported was present on **every** `c` boot. Same recurring shape as
+the other retractions in this file: a real measurement summarised one step too confidently, by a grep
+sensitive to line breaks.
+
+### A defect caught before the `d` build, worth remembering
+
+`scripts/make-iso-usb.sh` step 0 **rewrites** `boot/loader.conf`, and its heredoc did not carry
+`loader_brand` / `loader_menu_title`. `oi-make-livecd.sh` writes them on the illumos host, and the
+assembler then overwrote the file — so half the branding fix would have been **silently reverted**
+while the build log reported the rebrand as successful. One script undoing another's work with no
+error anywhere: the same silent-no-op class as the `readlink` and `stat` bugs. Both keys are now in
+the assembler's heredoc, plus a hard gate that fails the build if `menu.4th` still says
+`Welcome to illumos`, or lacks `Welcome to solnix`, or `loader.conf` lacks `loader_brand="solnix"`.
+
+**Superseded — do not flash.** `usb-image-20260909c/` (no console-flood fix, no branding),
+`usb-image-20260909b/` (also missing the `/dev` staging fix; its 18-boot matrix is kept as the
+reference), `usb-image-20260909/` (the pair that failed on the X1 at 820 MiB).
 
 ## The artifacts
 
 **Current — use these:**
+
+| file | bytes | sha256 |
+|------|------:|--------|
+| `artifacts/install-media/usb-image-20260909d/solnix-x86_64.iso` | 101,533,696 | `9b4a8213cea26c708dea2fad226af57f196480a21d0b053cd34b226663ef1f6f` |
+| `artifacts/install-media/usb-image-20260909d/solnix-x86_64-usb.img` | 101,533,696 | `9b4a8213cea26c708dea2fad226af57f196480a21d0b053cd34b226663ef1f6f` |
+| `artifacts/install-media/usb-image-20260909d/solnix-iso-tree.tar.gz` | 86,569,015 | `f365be41083fcdd011f44cc0cf376d11de345e2980444687a133ac78f997d926` |
+
+**Superseded — the ZFS-fix image, kept for its logs:**
 
 | file | bytes | sha256 |
 |------|------:|--------|
@@ -192,7 +240,7 @@ Disklabel type: gpt
 `SHA256SUMS` sits beside them. Verify before flashing:
 
 ```sh
-cd artifacts/install-media/usb-image-20260909b && sha256sum -c SHA256SUMS
+cd artifacts/install-media/usb-image-20260909d && sha256sum -c SHA256SUMS
 ```
 
 ⚠️ **`*.iso` and `*.img` are gitignored** (`.gitignore:9` and `:6`), so these two files **cannot be
@@ -203,12 +251,12 @@ committed** and will not survive a fresh clone. `SHA256SUMS` and the boot logs u
 `solnix-x86_64-minimal-usb.img`, `solnix-x86_64-graphical-usb.img`, dated 2026-07-29/30). They are
 MBR-only pre-fix outputs, their provenance is unrecorded, and `solnix-x86_64-minimal.iso` in the
 repo root is a **broken symlink**. Only the `usb-image-20260909*/` pairs below were built and tested by
-a recorded run — and of those, only `usb-image-20260909b/` is safe on real firmware.
+a recorded run — and of those, only `usb-image-20260909d/` carries all three fixes.
 
 ## Flashing to a USB stick
 
 ```sh
-cd artifacts/install-media/usb-image-20260909b     # <-- the "b" dir, not usb-image-20260909
+cd artifacts/install-media/usb-image-20260909d     # <-- the "d" dir: the only one with all three fixes
 sha256sum -c SHA256SUMS                            # must print: OK
 # 1. IDENTIFY THE TARGET. Get this wrong and you erase the wrong disk, silently and completely.
 lsblk -o NAME,SIZE,MODEL,TRAN,MOUNTPOINTS      # find the stick, e.g. sdb / 32G / USB
