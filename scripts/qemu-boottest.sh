@@ -68,13 +68,28 @@ case "$MODE" in
       -cdrom "$ISO" -boot d
     ;;
   disk)
-    IMG="${2:?}"; LOG="${3:?}"; SECS="${4:-180}"; FW="${5:-bios}"
+    IMG="${2:?}"; LOG="${3:?}"; SECS="${4:-180}"; FW="${5:-bios}"; BUS="${6:-virtio}"
     set_firmware_args "$FW"
+    # BUS selects how the image is attached. virtio is the DEFAULT because
+    # illumos's nvme driver PANICS on qemu's NVMe emulation -- observed:
+    # "panic[cpu0]: nvme1: programming error: invalid NS/format in cmd" inside
+    # nvme_identify/nvme_init/nvme_attach, after an otherwise clean UEFI boot.
+    # That panic is a qemu-emulation artifact, not an image defect, so testing on
+    # nvme cannot answer "does this media boot". ahci = the closest analogue to a
+    # real USB stick presented as a block device.
+    DEVA=()
+    case "$BUS" in
+      virtio) DEVA=(-device virtio-blk-pci,drive=d0) ;;
+      nvme)   DEVA=(-device nvme,drive=d0,serial=solnix0) ;;
+      ahci)   DEVA=(-device ahci,id=ahci0 -device ide-hd,drive=d0,bus=ahci0.0) ;;
+      usb)    DEVA=(-device qemu-xhci,id=xhci -device usb-storage,bus=xhci.0,drive=d0) ;;
+      *) echo "unknown bus '$BUS' (virtio|nvme|ahci|usb)" >&2; exit 1 ;;
+    esac
     run_qemu "$LOG" "$SECS" \
       -m 6144 -smp 2 -machine q35 \
       "${FWA[@]}" \
       -drive file="$IMG",format=raw,if=none,id=d0 \
-      -device nvme,drive=d0,serial=solnix0 \
+      "${DEVA[@]}" \
       -boot c
     ;;
   install)

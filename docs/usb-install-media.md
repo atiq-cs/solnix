@@ -11,9 +11,21 @@ Nothing here has ever been booted on physical hardware. Read
 | `artifacts/install-media/usb-image-20260909/solnix-x86_64.iso` | 104,761,344 | `19d838554b392bd15ddc8da80ccb6ee05770b6d88ea444b704f28c43cbe1ae6d` |
 | `artifacts/install-media/usb-image-20260909/solnix-x86_64-usb.img` | 104,761,344 | `19d838554b392bd15ddc8da80ccb6ee05770b6d88ea444b704f28c43cbe1ae6d` |
 
-The two files are **byte-identical on purpose**: the isohybrid ISO *is* the disk image. The `.img`
-name exists so the deliverable is unambiguous, and `SHA256SUMS` sits beside them. Verify before
-flashing:
+The two files are **byte-identical on purpose** (same sha256 above — that is not a mistake): an
+isohybrid image *is* simultaneously a valid ISO9660 CD image and a valid partitioned disk image, so
+one file serves both. The `.img` name exists so the deliverable is unambiguous. Unlike the older
+July artifacts, this `.img` **does** carry a real partition table, so the name does not over-promise:
+
+```
+$ dd if=solnix-x86_64-usb.img bs=512 skip=1 count=1 | head -c 8
+EFI PART                       <- GPT header present at LBA 1
+$ fdisk -l solnix-x86_64-usb.img
+Disklabel type: gpt
+...img1     64 195755  195692 95.6M Microsoft basic data     <- the ISO9660 data
+...img2 195756 203947    8192     4M EFI System              <- the ESP, EFI/BOOT/BOOTX64.EFI
+```
+
+`SHA256SUMS` sits beside them. Verify before flashing:
 
 ```sh
 cd artifacts/install-media/usb-image-20260909 && sha256sum -c SHA256SUMS
@@ -51,10 +63,32 @@ On macOS the equivalent is `/dev/rdiskN` (raw node) after `diskutil unmountDisk`
 Because the image is smaller (100 MiB) than any real stick, the tail of the stick is left as-is;
 that is harmless, and `dd` does not need to fill the device.
 
+## ⚠️ Testing in QEMU REQUIRES `-cpu host` (or `-cpu Haswell`), not the default
+
+**Read this before believing any QEMU failure.** With QEMU's default CPU model the media does not
+boot, and the failure looks exactly like a broken image. It is not. Two distinct symptoms have been
+observed, both cured by the CPU model alone:
+
+| CPU model | symptom | verdict |
+|-----------|---------|---------|
+| `-cpu qemu64` (default) | `ld.so.1: mount: fatal: /lib/libc.so.1: hardware capability (CA_SUNW_HW_1) unsupported: 0x8  [ SEP ]`, repeating | libc needs `AV_386_SEP` (sysenter); qemu64 does not advertise it |
+| `-cpu qemu64` (default) | `WARNING: init(8) exited on fatal signal 9: restarting automatically`, in a loop | the default CPU also lacks `xsave` (CPUID.0xD=0), which SIGKILLs PID 1 |
+| **`-cpu host`** (KVM) | **boots to login** | what every PASS below used |
+| `-cpu Haswell` | boots (slow, TCG) | the no-KVM fallback |
+
+Both symptoms are **QEMU CPU-model artifacts, not image defects**: real X1 Carbon silicon has SEP
+and xsave, as does EC2. `scripts/qemu-boottest.sh` picks `-cpu host -accel kvm` automatically
+whenever `/dev/kvm` is writable and falls back to `-cpu max` otherwise, so it sidesteps this
+silently — which is precisely why the trap is worth writing down: a hand-rolled `qemu-system-x86_64`
+command line will hit it and the error message blames libc.
+
+Evidence: `boot-logs/expt-cpu-qemu64.clean.txt` (default CPU, my artifact, init SIGKILL loop, never
+reaches login) versus every PASS row below (`-cpu host`, reaches login).
+
 ## What boots — measured, in QEMU only
 
-All rows are `scripts/qemu-boottest.sh` runs on the exact artifact above. "reaches login" means the
-serial console printed `solnix console login:`. Logs in
+All rows are `scripts/qemu-boottest.sh` runs on the exact artifact above, **with `-cpu host`**.
+"reaches login" means the serial console printed `solnix console login:`. Logs in
 `artifacts/install-media/usb-image-20260909/boot-logs/`.
 
 | # | firmware | media + attachment | result | log |
@@ -65,6 +99,7 @@ serial console printed `solnix console login:`. Logs in
 | 4 | **BIOS** | `.iso` as CD-ROM (El Torito) | **PASS** — reaches login | `qemu-bios-iso.clean.txt` |
 | 5 | **BIOS** | `.img` as a **disk** (USB-stick path) | **FAIL — zero console output** | `qemu-bios-usbimg.clean.txt` |
 | 6 | UEFI | `.img` as **NVMe** | boots, then **panics in `nvme`** | (smoke image) |
+| 7 | UEFI | `.img` as virtio disk, **default `-cpu qemu64`** | **FAIL — `init(8)` SIGKILL loop** | `expt-cpu-qemu64.clean.txt` |
 
 Row 2 is the closest analogue to a USB stick in a laptop and it passes. The UEFI chain, quoted from
 row 1:
@@ -223,6 +258,37 @@ grep -c 'console login:' /tmp/u.log     # 1 = reached login
 3. **`stat -c%s` → `wc -c`.** illumos has no `stat(1)` at all, and a `stat`-based size gate has
    already silently evaluated to zero elsewhere in this project. Also `VARIANT` now defaults to
    empty, so the outputs are exactly `solnix-x86_64.iso` / `solnix-x86_64-usb.img`.
+
+## The graphical (live Xfce) ISO — separate artifact, boots, NOT rebuilt by this run
+
+`artifacts/install-media/solnix-x86_64-graphical.iso` (231,247,872 B, sha256 `cd3c8302e5ada09d…`,
+dated 2026-07-30) is a **different, older** artifact than the pair above. It was **not** rebuilt
+here, so it does not carry the three `make-iso-usb.sh` fixes or the `readlink` ramdisk fix. It was
+re-tested as-is under OVMF/UEFI with `-cpu host` (`boot-logs/expt-graphical-uefi.clean.txt`):
+
+```
+illumos/amd64 EFI loader, Revision 1.1 -> Loading unix... -> Booting...
+[solnix] starting live Xfce desktop (Xvfb software framebuffer)...
+[solnix] live Xfce desktop launching on :0 (Xvfb pid 579)
+[solnix] SESSION-STILL-UP-CHECK (t+85s):
+  solnix 599 597 ... xfce4-sess      <- SAME pid as at t+25s
+  solnix 609 599 ... xfsettingsd     <- SAME pid
+  solnix 618 599 ... xfce4-panel     <- SAME pid
+  root   579   1 ... Xvfb
+```
+
+**PASS**: the session comes up and *stays* up — same three pids across the 60 s window, which is the
+real pass condition. `CA_SUNW_HW_1` = 0, `panic[` = 0.
+
+The log's own last line says `SESSION-VERDICT: xfce4-session GONE`, and that is a **false negative**,
+not a failure: the check greps `xfce4-session` but `ps` truncates the argument to `xfce4-sess`, and
+pid 599 is demonstrably alive in the very snapshot above. `oi-make-livecd.sh:1484` already greps
+`xfce4-sess`, so the bug is fixed in the script and only persists in this pre-fix July media. Do not
+read that line as a regression.
+
+Still true of the graphical ISO: no GPT (it is a pre-fix build), so treat its `-usb.img` sibling as
+BIOS/El-Torito-only, and rebuild it with `VARIANT=graphical scripts/make-iso-usb.sh` before shipping
+it as a USB image.
 
 ## What is UNVERIFIED on real hardware
 
