@@ -48,10 +48,22 @@ graphics only `vgatext`. No amount of "include all available drivers" helps here
 exist to include. An X1 Carbon will therefore have **no wifi** and **no accelerated graphics** regardless
 of media policy — use USB-Ethernet, and expect console/VGA text.
 
-### 3. `eedev`
+### 3. ~~`eedev` is missing~~ — ⚠️ MY DETECTION METHOD WAS UNRELIABLE, not the copy
 
-One driver missing from the copy. Trivial, but it shows the copy is not literally complete, so a
-verification step is warranted rather than trusting the comment.
+I reported `eedev` as the one driver missing (215/216). **That was a measurement artifact.** `eedev`
+does exist on the build host at `/kernel/drv/amd64/eedev`, and in the shipped ramdisk it appears **10
+times as a raw substring but never NUL-delimited** — so my NUL-boundary matcher scored it absent while
+`nvme` (424 hits) and `conskbd` (93) matched cleanly.
+
+Searching for NUL-delimited names in a raw UFS image is a *heuristic*, not an inventory. Short names and
+names embedded in longer strings behave differently, and a filesystem image is not a symbol table. The
+215/216 figure should be read as **"at least 215 of 216, by a lossy method"** — the coverage conclusion
+stands, the precision does not.
+
+**This strengthens the case for the verification step rather than weakening it:** the right check runs
+*inside* the built image (mount it, `ls /kernel/drv/amd64`, diff against the host) and fails the build on
+a mismatch. Grepping bytes from outside is exactly the sort of approximate instrument that produced this
+error.
 
 ## Standing requirements for future media
 
