@@ -15,16 +15,33 @@ COPY_DIRS="
   ...
 ```
 
-Verified against the **shipped** `usb-image-20260909b` ramdisk (extracted the UFS image and matched
-NUL-delimited names against the build host's actual driver inventory):
+Verified against the **shipped** `usb-image-20260909b` ramdisk. ⚠️ **The counts below were first
+measured by matching NUL-delimited names in the raw image bytes, and that instrument was wrong.**
+Re-measured the correct way -- `lofiadm` + `mount` the UFS image and `diff` the actual directory
+listings against the build host's -- coverage is **EXACT**:
 
-| | count |
-|---|---|
-| drivers in `/kernel/drv/amd64` on the build host | **216** |
-| of those present in the shipped 340 MiB ramdisk | **215** |
-| missing | `eedev` (1) |
+| tree | build host | shipped ramdisk | difference |
+|---|---|---|---|
+| `kernel/drv/amd64` | **215** | **215** | none |
+| `kernel/strmod/amd64` | 32 | 32 | none |
+| `kernel/misc/amd64` | 69 | 69 | none |
+| `platform/i86pc/kernel/drv/amd64` | 15 | 15 | none |
+| `kernel/fs/amd64` | 21 | 21 | none |
 
-Plus 15 platform drivers, 32 STREAMS modules, 69 misc modules. The full kernel tree is only **~40 MiB**
+`diff` of the two listings is **empty**: every driver the build host has, the media has.
+
+About `eedev`: the byte-grep scored it missing, giving a "215 of 216" figure. Direct inspection of
+the build host finds **no** `/kernel/drv/amd64/eedev`, and no `eedev` in `/etc/name_to_major` or
+`/etc/driver_aliases`. Whatever the true story, the question is **moot**: the host-vs-ramdisk diff is
+empty, so there is nothing that could be added. This disagreement is recorded rather than resolved.
+
+**The lesson is the instrument, not the number.** Grepping bytes from outside an image is
+approximate; mounting it and listing directories is exact. `oi-make-livecd.sh` now enforces equality
+from **inside** the mounted ramdisk (gate (ii) of section 5a) and fails the build on ANY difference,
+so this can no longer be a matter of opinion. A negative control confirms the gate fires when a
+single driver is removed (215 vs 214).
+
+Plus the platform/STREAMS/misc trees above. The full kernel tree is only **~40 MiB**
 (`/kernel` 37.0 + `/platform/i86pc/kernel` 2.8), which is why this is affordable inside the ramdisk.
 
 **So "ship all drivers" is not the gap.** `nvme`, `ahci`, `xhci`, `ehci`, `uhci`, `usbkbm`, `kbtrans`,
@@ -33,13 +50,21 @@ Plus 15 platform drivers, 32 STREAMS modules, 69 misc modules. The full kernel t
 
 ## The real gaps, and they are different problems
 
-### 1. `/dev` nodes are a hardcoded 12-name allowlist
+### 1. `/dev` nodes are a hardcoded 12-name allowlist — **FIXED in `usb-image-20260909c`**
 
-`oi-make-livecd.sh:450` creates exactly 12 `/dev` symlinks. Drivers being present does nothing if the
+`oi-make-livecd.sh:450` created exactly 12 `/dev` symlinks. Drivers being present does nothing if the
 device node the userland opens is absent — which is precisely the `libzfs` (`/dev/zfs`) and `ttymon`
-(`/dev/sad/user`) failures on the X1. See `docs/x1-dev-node-allowlist.md`.
+(`/dev/sad/user`) failures on the X1.
 
-**This is the item that needs the "ship everything" treatment**, not the drivers.
+The allowlist is gone. The node set is now **derived**: every `/dev` entry whose symlink target points
+into `devices/pseudo/` is staged (194 nodes, up from 12), handling both the bare-symlink shape
+(`/dev/zfs`) and the directory-of-symlinks shape (`/dev/sad/{admin,user}`). Hardware-instance links
+(`dsk/`, `rdsk/`, `net/`, NIC names) are deliberately excluded as per-machine state. Details and the
+measured before/after fault rate: `artifacts/install-media/usb-image-20260909c/README.md`.
+
+Note the fault was a **race**, not permanent absence: `devfsadm` does create these nodes, just after
+`filesystem/local` and `ttymon` want them, and slower USB enumeration widens the window. Staging
+closes it by construction.
 
 ### 2. illumos simply has no driver for some hardware
 

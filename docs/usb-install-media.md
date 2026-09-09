@@ -9,11 +9,14 @@ stick. See [The X1 Carbon staging failure](#the-x1-carbon-staging-failure-and-th
 ## ⚠️ FLASH THIS FILE
 
 ```
-artifacts/install-media/usb-image-20260909b/solnix-x86_64-usb.img
+artifacts/install-media/usb-image-20260909c/solnix-x86_64-usb.img
 ```
 
-Nothing here has ever been booted **to login** on physical hardware. Read
-"[What is UNVERIFIED on real hardware](#what-is-unverified-on-real-hardware)" before flashing.
+The **"b"** image booted a real X1 Carbon to `solnix console login:` (the RD_MB=340 staging fix
+worked) and then hit two faults. **"c"** fixes the ZFS one and one of the two symptoms behind the
+other; the **keyboard remains unexplained and unfixed**. See
+"[The two X1 login-prompt faults](#the-two-x1-login-prompt-faults)" before flashing, and
+[what is proven vs projected](#what-is-proven-vs-projected-for-the-c-image).
 
 ## The artifacts
 
@@ -21,9 +24,149 @@ Nothing here has ever been booted **to login** on physical hardware. Read
 
 | file | bytes | sha256 |
 |------|------:|--------|
+| `artifacts/install-media/usb-image-20260909c/solnix-x86_64.iso` | 100,765,696 | `30e61f5c33419c180a58f95b759b9dd00bd0aa149765387f8bd723485618a6a6` |
+| `artifacts/install-media/usb-image-20260909c/solnix-x86_64-usb.img` | 100,765,696 | `30e61f5c33419c180a58f95b759b9dd00bd0aa149765387f8bd723485618a6a6` |
+| `artifacts/install-media/usb-image-20260909c/solnix-iso-tree.tar.gz` | 85,799,990 | `0bf5834d479d92db96e7d06982c03a65e138ae8c76a811395e54e77d8db7c440` |
+
+**Superseded — the boot-fix image, kept because its 18-boot QEMU matrix is the reference:**
+
+| file | bytes | sha256 |
+|------|------:|--------|
 | `artifacts/install-media/usb-image-20260909b/solnix-x86_64.iso` | 100,771,840 | `cc1c843556357ff544eec3dae7ca2c9939493b88c0759e4419cb222623b7b871` |
 | `artifacts/install-media/usb-image-20260909b/solnix-x86_64-usb.img` | 100,771,840 | `cc1c843556357ff544eec3dae7ca2c9939493b88c0759e4419cb222623b7b871` |
 | `artifacts/install-media/usb-image-20260909b/solnix-iso-tree.tar.gz` | 85,808,795 | `cca4fee3c73a1aadafd14b7cfddafb47ec2c5ddca05ce0aac7be3561a5438bf2` |
+
+## The two X1 login-prompt faults
+
+The "b" media reached the login prompt on real hardware and printed:
+
+```
+internal error: failed to initialize ZFS library
+svc:/system/filesystem/local:default: WARNING: /usr/sbin/zfs mount -a failed: exit status 1
+ttymon: open /dev/sad/user failed: No such file or directory
+```
+
+plus an endless `hid1: Invalid Report Descriptor` and **no working keyboard** — including an
+external USB keyboard, while the keyboard worked fine at the loader's `ok` prompt.
+
+### Root cause of the ZFS and `sad` faults: a hardcoded `/dev` allowlist
+
+`oi-make-livecd.sh` staged `/dev` from a **13-name hardcoded list**, so the live ramdisk shipped
+exactly **12** `/dev` entries. `libzfs_init(3lib)` opens `/dev/zfs`; `ttymon`/`autopush` open
+`/dev/sad/user`. Neither was in the list.
+
+The list was wrong in *both* directions — it also named `dlpi`, which does not exist on the build
+host at all. That is the signature of hand-maintained state. Drivers already shipped **wholesale**
+(whole kernel trees, an exact 215/215 match against the host); `/dev` did not. A present driver is
+useless if the node userland opens is absent.
+
+**The fix derives the set instead of naming it**: every `/dev` entry whose symlink target points into
+`devices/pseudo/` is staged — 194 nodes, up from 12. Pseudo devices are drivers with no hardware
+behind them, so they are identical on every machine. Both shapes are handled, which is where a naive
+fix silently no-ops:
+
+| node | shape |
+|---|---|
+| `/dev/zfs` | a bare **symlink** → `../devices/pseudo/zfs@0:zfs` |
+| `/dev/sad` | a **directory** of symlinks → `admin`, `user` |
+
+The old `[ -L ]` test is false for a directory, so merely appending `sad` to the list would have done
+**nothing**. Hardware-instance links (`dsk/`, `rdsk/`, `net/`, `cfg/`, `term/`, NIC names) are
+deliberately **not** staged: they encode the build host's own disk and NIC instance numbers, the same
+per-machine-state class as shipping a populated `/etc/path_to_inst`. `devfsadm` regenerates those at
+boot for the hardware actually present.
+
+### It was a RACE, not permanent absence
+
+This corrects the first diagnosis. On a failing-class boot, *after login*, `/dev/zfs` exists,
+`zpool list` works, and `truss` shows `open("/dev/zfs", O_RDWR) = 3` **succeeding**. `devfsadm` does
+create the nodes — just not before `filesystem/local` and `ttymon` want them. USB widens the window:
+`scsa2usb` + `sd` enumerate more slowly than virtio's `blkdev`, which is why the fault showed on USB
+boots and not on virtio/ahci/cdrom ones. **The X1 boots from USB.** Staging closes the race by
+construction — a node in the ramdisk exists at time zero, so nothing can lose a race to `devfsadm`.
+
+The fault is therefore **intermittent**, and a single pass proves nothing. Measured with
+`scripts/usb-rate.sh`:
+
+| image | ZFS fault rate over USB boots |
+|---|---|
+| `usb-image-20260909b` | **4 of 8** |
+| `usb-image-20260909c` | **0 of 8** |
+
+### Build gates now enforce all of this
+
+Every serious defect in this script's history was a **silent staging failure**, not a wrong decision:
+no `readlink(1)` made `ln -sf ""` a no-op and shipped zero `/dev` nodes; no `stat(1)` made a size
+gate always-false so the check after its `&&` never ran; illumos `xargs` split a tool list into
+multiple `tar` streams and dropped entries after the split. So `oi-make-livecd.sh` section 5a now
+**asserts the result** while the ramdisk is still mounted, and dies loudly:
+
+1. 24 required `/dev` nodes exist (including `zfs` and `sad/user`)
+2. driver-tree counts **equal** the build host's, per tree — measured from *inside* the mounted image
+3. the console-input and zfs kernel modules are present
+4. `path_to_inst` and `mnttab` ship at **0 bytes** (per-machine state must not ride along)
+5. `/etc/solnix-autoinstall` is **absent** (autoinstall stays opt-in)
+
+`scripts/dev-gate-negcontrol.sh` is the negative control: it sabotages each mechanism and asserts the
+gate flips to FAIL. Result on-node: **6 detected, 0 missed**. A gate that cannot fail proves nothing.
+
+## What is proven vs projected for the "c" image
+
+**PROVEN in QEMU** (8/8 USB boots, `usb-image-20260909c/boot-logs/RESULTS.txt`):
+
+* `zpool list` and `zfs list` run with no `internal error: failed to initialize ZFS library`
+* 0 ZFS faults in 8 USB boots, against 4-in-8 on the "b" image with the same harness
+* the staged nodes are reachable at runtime **and are demonstrably the staged ones**: `/dev/zfs`,
+  `/dev/sad/user`, `/dev/sad/admin` and `/dev/kbd` all carry the **build** mtime, not the boot mtime
+* `dev(7FS)` does **not** mount over `/dev` on live media (`mount -p` shows no `/dev` entry), so
+  staging is not masked. This was the one objection that could have rendered the whole fix inert, and
+  it is settled by measurement rather than by argument
+
+**PROJECTED, not proven:**
+
+* the `ttymon: open /dev/sad/user failed` error **never reproduced locally** in any run, though it is
+  in the shipped "b" console log. The node is now present by construction, so the repair is inferred
+
+**⚠️ NOT FIXED, NOT EXPLAINED — the keyboard.** QEMU presents a PS/2 keyboard (`kb8042`) on every
+storage bus, so **no QEMU boot exercises the X1's USB-HID input path** (`hid → usbkbm → kbtrans →
+conskbd → wc`). `/dev/kbd` and `/dev/mouse` are now staged, which *might* help if a missing `conskbd`
+node was the cause, but that is untested speculation — do not read the `/dev` fix as a keyboard fix.
+Two hypotheses were **refuted** by mounting the shipped media and looking:
+
+* `/etc/path_to_inst` pinning a PS/2 keyboard the X1 lacks — the shipped file was **already 0 bytes**
+  (see `docs/x1-path-to-inst-hypothesis.md`, annotated REFUTED)
+* missing STREAMS modules — `usbkbm`, `kbtrans`, `consconfig`, `consconfig_dacf`, `hid`, `conskbd`
+  and `consms` were **all already present**
+
+The next experiment worth running: QEMU with `-device usb-kbd` on the xhci bus, which *would* exercise
+the real HID chain. Not yet attempted.
+
+## Autoinstall is OFF by default — how to opt in
+
+This image never writes to a disk unasked, and build gate 5 fails the build if
+`/etc/solnix-autoinstall` is ever present by default. Opting in is a deliberate act performed **on the
+flashed media**, not in the build:
+
+```sh
+# with the media's root filesystem mounted, as root:
+echo auto     > /etc/solnix-autoinstall   # install to the first non-media disk found
+echo c1t1d0   > /etc/solnix-autoinstall   # or name the target disk explicitly
+```
+
+With that file present, `site/solnix-live` runs `solnix-install` unattended **and destroys the target
+disk**. It is the keyboard-free install path — which is exactly why it must be opt-in.
+
+## The size constraint, re-measured
+
+```
+gzip -dc boot_archive | wc -c   =   356,515,840 B   (340.0 MiB)
+X1 Carbon's measured ceiling    =   816,119,808 B   (778.3 MiB)
+=> 43.7% of ceiling, 438.3 MiB of headroom
+```
+
+**Unchanged from "b"**: 194 extra symlinks cost **zero** bytes of raw size. `RD_MB=340` is kept. That
+figure is what the EFI loader asks firmware for as one contiguous block below 4 GiB, so it is the
+acceptance metric for real-hardware boot (gzipped: 84,575,931 B).
 
 **Superseded — kept only for comparison, do NOT flash** (this is the pair that failed on the X1):
 

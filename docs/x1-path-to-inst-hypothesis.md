@@ -29,8 +29,42 @@ attached to it stops the next reader re-deriving it. The lesson is in the postsc
 
 ## Status of this document
 
-**STRONG HYPOTHESIS, mechanism NOT yet observed.** Recorded because it is concrete, cheap to test,
-and explains the symptom's shape. It has not been confirmed by a boot.
+**REFUTED BY MEASUREMENT. Do not act on this hypothesis.** Retained as a record of the
+reasoning and of how it failed, per the project rule that a retraction belongs at the SOURCE
+rather than only in the document that supersedes it.
+
+The fix this document proposes was **already in the shipped media**. The 2026-09-09 "b"
+boot_archive was mounted and read directly:
+
+```
+/etc/path_to_inst  =  0 bytes, 0 lines, zero occurrences of kb8042
+```
+
+`oi-make-livecd.sh:483` does copy the host's file, but `:560` then truncates it
+**unconditionally** (`: > "$RDROOT/etc/path_to_inst"`, landed in commit `90dec1a3dc`), and the
+`[ -f ... ] ||` guard at `:1047` makes the later `cp` a no-op. So the X1 booted with an EMPTY
+`path_to_inst`, and a stale PS/2 `kb8042` pin **cannot** be the keyboard cause.
+
+The copy-then-truncate contradiction has since been removed: `path_to_inst` is no longer in
+the copy list, it is created empty in one place, and a build gate asserts it ships at 0 bytes.
+
+**The keyboard fault remains unexplained.** Also refuted, by the same inspection: the
+competing "missing STREAMS modules" hypothesis -- `usbkbm`, `kbtrans`, `consconfig`,
+`consconfig_dacf`, `hid`, `conskbd` and `consms` were all already present on the media.
+
+What this document got RIGHT, and what turned out to matter: the **bug class**. "Build-host
+state copied to media, silently wrong on the target" was the correct lens, and its closing
+advice -- audit the whole list rather than fixing one entry -- found the real defect one
+directory over, in the hardcoded 13-name `/dev` allowlist that shipped no `/dev/zfs` and no
+`/dev/sad/user`. See `artifacts/install-media/usb-image-20260909c/README.md`.
+
+What it got WRONG, and the transferable lesson: it reasoned from the SOURCE of the build
+script instead of reading the ARTIFACT the script produced. One `lofiadm` + `mount` would
+have refuted it in two minutes.
+
+---
+
+## Original hypothesis (retained for the record; REFUTED above)
 
 ## What was ruled out first
 
