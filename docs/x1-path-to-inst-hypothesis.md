@@ -1,3 +1,30 @@
+# ⚠️ REFUTED — read this first
+
+**This hypothesis is WRONG.** An agent mounted the *shipped* `boot_archive` from
+`usb-image-20260909b` and measured `/etc/path_to_inst` inside it: **0 bytes, 0 lines, zero `kb8042`
+entries.**
+
+Mechanism: `oi-make-livecd.sh:483` does copy the file, but **`:560` then does
+`: > "$RDROOT/etc/path_to_inst"` unconditionally** (commit `90dec1a3dc`), and the `[ -f ] ||` guard at
+`:1047` makes its later `cp` a no-op. Independently verified — the comment there even explains the
+intent: *"assignments for whatever hardware it actually boots on (standard illumos install-media
+behavior)."*
+
+So the X1 booted with an **empty** `path_to_inst`, and a stale PS/2 `kb8042` pin cannot explain the
+dead keyboard.
+
+**The `usbkbm`/`kbtrans` STREAMS-module hypothesis is also refuted** by the same inspection: `usbkbm`,
+`usbms`, `usb_ah`, `kbtrans`, `consconfig`, `consconfig_dacf` and the `sad`/`hid`/`conskbd`/`consms`
+drivers are **all present** in the shipped ramdisk.
+
+**The actual defect found instead** — the hardcoded 12-name `/dev` allowlist at `oi-make-livecd.sh:450`
+which omits `/dev/zfs` and `/dev/sad` — is documented in `docs/x1-dev-node-allowlist.md`.
+
+**Why this document is kept:** the reasoning was plausible and cost real time; leaving the refutation
+attached to it stops the next reader re-deriving it. The lesson is in the postscript at the bottom.
+
+---
+
 # The keyboard fault: `/etc/path_to_inst` is per-machine state copied onto removable media
 
 ## Status of this document
@@ -75,3 +102,18 @@ staging allocation and the PS/2-vs-USB keyboard path itself.
 Same as the `readlink` defect that silently dropped all 13 `/dev` nodes: **build-host state copied to
 media, silently wrong on the target.** Worth auditing the whole `for f in ...` list at line 483 with
 that lens rather than fixing one entry.
+
+
+---
+
+## Postscript: why this was wrong, and what would have caught it sooner
+
+I reasoned from `oi-make-livecd.sh:483` (the copy) and never looked at `:560` (the truncation) — I read
+the source that *creates* the problem and not the source that *undoes* it. One `grep` for
+`path_to_inst` across the whole script, rather than reading the copy loop and stopping, would have
+shown both lines immediately.
+
+Worse, the artifact was sitting on disk the entire time. **The shipped `boot_archive` is the ground
+truth about what the X1 booted**, and I had it locally. Inspecting the artifact beats reasoning about
+the build that produced it — the fourth instance this campaign of measuring the wrong object (after the
+VM ACPI tables, `objcopy`-on-dixi, and the stale July `.iso`).
