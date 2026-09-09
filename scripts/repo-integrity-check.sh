@@ -80,6 +80,36 @@ while IFS= read -r f; do
 done < <(git ls-files '*.sh' 'scripts/*' 2>/dev/null | ours)
 
 if [ "$fail" -eq 0 ]; then
+# --- a .nix header naming a DIFFERENT file is a TRAP ---------------------------
+# A stale 267-line copy of tranche-entry-224.nix sat beside the real 1221-line
+# entry point, named "...-node-FIXED.nix" and with a header still calling itself
+# "tranche-entry-224.nix". Both signals pointed the wrong way, nothing imported it,
+# and an agent built against it, hit the H26 failure the live file already fixes,
+# and concluded the fix was missing from the tree. Warn (do not fail) so variants
+# stay allowed but must be labelled.
+mismatch=0
+while IFS= read -r nf; do
+	claim=$(head -6 "$nf" 2>/dev/null | grep -oE '#[[:space:]]*[A-Za-z0-9._-]+\.nix' | head -1 |
+	    grep -oE '[A-Za-z0-9._-]+\.nix')
+	[ -n "$claim" ] || continue
+	[ "$claim" = "$(basename "$nf")" ] && continue
+	grep -q 'SUPERSEDED\|UNREFERENCED VARIANT' "$nf" 2>/dev/null && continue
+	# Only a hazard if NOTHING imports it. A live file whose header names its
+	# generic base (openblas.nix -> openblas-solaris.nix, mesa-softpipe.nix ->
+	# mesa.nix) is a legitimate cross-reference, and warning on those produced 7
+	# findings of which 5 were noise -- a guard that cries wolf gets ignored,
+	# which is worse than no guard.
+	stem=$(basename "$nf" .nix)
+	refs=$(grep -rIl --exclude-dir=.git -F "$stem" ./pkgs ../solnix-pkgs/pkgs 2>/dev/null |
+	    grep -vc "/$stem.nix\$" || true)
+	[ "${refs:-0}" -gt 0 ] && continue
+	echo "repo-integrity: WARN -- $nf header names '$claim' (label it, or fix the header)"
+	mismatch=$((mismatch+1))
+done <<EOF
+$(find ./pkgs ../solnix-pkgs/pkgs -name '*.nix' -not -path '*/.git/*' 2>/dev/null)
+EOF
+[ "$mismatch" -gt 0 ] && echo "repo-integrity: $mismatch .nix file(s) whose header names another file"
+
 # --- a .patch file with no diff hunks is a TRAP -------------------------------
 # Scoped to OUR patch dirs, deliberately excluding artifacts/ -- that tree holds
 # extracted upstream sources (e.g. gawk's own vms/vax/*.patch) whose contents are
