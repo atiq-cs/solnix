@@ -252,6 +252,18 @@ With the assertion avoided, the build walks into an unported dependency. Of
 built locally, and **60 of those are the cmake / doxygen / libxcb / xorgproto /
 python3 graph**. `cmake-minimal-4.3.4` then fails:
 
+> ⚠️ **This sentence has been misread — including by a later brief of mine — as "the
+> cmake/doxygen graph is the blocker."** It is not. A clean-node re-measurement
+> (174 `.drv`, 274 output paths, 36 cache-fetchable, 238 local) found
+> `grep -c 'cmake|doxygen'` over the uncached set = **0**: neither is in
+> `cosmic-term`'s closure at all. `libxkbcommon-1.13.2`'s references are
+> meson/ninja/bison/libxcb/libx11/libxml2/xkeyboard-config. So the bulk of that 60
+> is **libxcb / xorgproto / python3**, and the `cmakeMinimal`-from-source win —
+> though real and independently valuable — is **not** what unblocks `cosmic-term`.
+> Compressing a mixed list into one component's name is how a figure becomes a
+> wrong diagnosis. The actual standing blocker is **A1** below.
+
+
 ```
 ld: fatal: library -lkstat: not found
 ld: fatal: library -lsendfile: not found

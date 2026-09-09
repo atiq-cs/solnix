@@ -218,3 +218,22 @@ batch instance (the batch stage terminates its own fleet as its last step).
 No security group was created or modified. Ingress is the pre-existing
 `<sg-id>` (:22 from the operator /24 only).
 `bash scripts/sg-guard.sh audit` -> CLEAN.
+
+## ⚠️ Disk sizing on `ami-014c4aaccd37b2356`: `--block-device-mappings` does NOT grow the root pool
+
+Measured, and it has now cost two agents time:
+
+* The base AMI's root pool is a **20 GiB `xvda`**. That is small for Rust/COSMIC work — the
+  cosmic-term vendor FOD alone is 623 MB and the build trees are far larger.
+* Launching with `--block-device-mappings /dev/sda1` and a larger size does **not** enlarge `rpool`.
+  The extra capacity appears as a **SEPARATE, UNUSED disk**, and `zpool online -e rpool` does
+  **nothing** — there is no free space adjacent to the existing vdev to expand into.
+* You must `zpool create` a new pool on the extra disk and build there (or add it as a second vdev,
+  accepting that it cannot then be removed).
+
+⚠️ Do **NOT** try to grow the mounted root slice in place. The standing rule applies: never
+live-`fdisk` or grow a MOUNTED zpool slice — doing so destroyed a node earlier in this project.
+Attach a separate volume and make a whole-disk pool.
+
+Practical consequence for briefs: asking for `root >=200 GiB` on this AMI does not give you a
+200 GiB `/`. Say explicitly "create a pool on the second disk and set TMPDIR/build dirs there."
