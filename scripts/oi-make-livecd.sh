@@ -23,7 +23,7 @@
 # (Kernel strings: "mounting ramdisk as hsfs" / "/ramdisk:a"; bootadm knows
 # mc_fstype=="ufs".) This is the OI/OmniOS text-install-media convention.
 #
-# The live root is a MINIMAL slice of the running illumos root (~600-800MB, not
+# The live root is a MINIMAL slice of the running illumos root (~195MB used, not
 # the full 10.7G): kernel + all drivers + core libc/rtld + zfs/zpool/format/
 # fmthard/installboot/bootadm + /sbin/sh + scripts/solnix-install. On boot it
 # drops to a root shell that prints a solnix banner and how to run solnix-install
@@ -36,13 +36,64 @@ set -euo pipefail
 export PATH=/usr/sbin:/usr/bin:/usr/gnu/bin:/sbin
 OUT="${OUT:-/var/tmp/solnix-media}"
 SRC="${SRC:-/}"                          # the running root we slice from
-# GRAPHICAL=1 layers the Xfce desktop closure on top of the minimal live root
-# (live Xfce ISO, the 2nd NixOS-style variant). It needs a much bigger ramdisk:
-# minimal root ~268MB + Xfce/xorg/gtk3 closure ~177MB = ~445MB used, so default
-# RD_MB to 900 for graphical, 450 for minimal.
+# RD_MB is the RAW (uncompressed) size of the UFS ramdisk, and it is a HARD
+# BOOT CONSTRAINT, not just a disk-space knob. The EFI loader's efi_loadaddr()
+# (usr/src/boot/efi/loader/copy.c) calls
+#   BS->AllocatePages(AllocateMaxAddress, EfiLoaderData, pages, &paddr)
+# with paddr = UINT32_MAX, i.e. it demands CONTIGUOUS pages BELOW 4 GB, and it
+# stat()s the file so it asks for the UNCOMPRESSED size, not the gzipped one.
+# Real Lenovo X1 Carbon firmware fragments the low 4 GB (runtime services,
+# ACPI NVS, framebuffer, reserved) and refused an 820 MB request:
+#   failed to allocate 859832320 bytes for staging area: 9  (EFI_OUT_OF_RESOURCES)
+#   Can not load environment module: out of memory
+#   No rootfs module provided, aborting
+# QEMU/OVMF hands out a clean memory map, so it never showed this (8/8 passes).
+# So RD_MB must track MEASURED usage, not be padded "to be safe" -- padding it
+# is what broke real hardware.
+#
+# Measured on the 820 MB minimal image (UFS superblock + cg summary of the
+# shipped 2026-09-09 boot_archive): 195.0 MiB of the 769.1 MiB data area used,
+# 3369 of 392000 inodes used -- a 4.2x overshoot. Confirmed by df on the build
+# host at RD_MB=320: 199686KB used / 307158KB total.
+#
+# The X1's real ceiling is now KNOWN, read off its own `memmap` at the ok prompt:
+# the largest free ConventionalMemory block below 4 GiB is 199248 pages at
+# physical 0x100000 = 816,119,808 B = 778.3 MiB. The 820.0 MiB request missed it
+# by 41.7 MiB (5.1%) -- a NEAR-MISS, not a wall. (`smap` was the wrong
+# instrument: it collapses and merges types, and the 0x58000000/2 MiB line it
+# showed is a small unrelated region. Use `memmap`.)
+#
+# 340 MB = 356,515,840 B therefore leaves ~438 MiB of headroom inside that block,
+# while holding the measured 195.0 MiB of content with ~145 MiB of filesystem
+# slack. The headroom is the point: 778.3 MiB is ONE machine's map and another
+# firmware will fragment differently. Do not raise RD_MB to "be safe" -- padding
+# it is exactly what broke real hardware. /tmp, /var/run and /system/volatile are
+# tmpfs at runtime and the installer writes to the TARGET disk, so the live root
+# barely grows after boot.
+#
+# GRAPHICAL=1 layers the Xfce desktop closure on top (~177 MB), so ~372 MiB of
+# content -> 500 MB (524,288,000 B, ~254 MiB of headroom under 778.3 MiB).
+# UNTESTED: no graphical media has been rebuilt or booted since this change; the
+# df/raw-size gates below are what protect it.
 GRAPHICAL="${GRAPHICAL:-0}"
-if [ "$GRAPHICAL" = 1 ]; then RD_MB="${RD_MB:-900}"; else RD_MB="${RD_MB:-820}"; fi
-                                          # ldd-closure tool set is ~130MB du, ~215MB on UFS.
+if [ "$GRAPHICAL" = 1 ]; then RD_MB="${RD_MB:-500}"; else RD_MB="${RD_MB:-340}"; fi
+# RD_NBPI: newfs -i bytes-per-inode. illumos newfs defaults to nbpi=2048 for an
+# image this size, which cost 20,522KB of inode tables at RD_MB=320 to hold 3369
+# used inodes out of 160000 -- ~7% of the whole image spent on a table that is
+# 98% empty. 8192 keeps a >10x inode margin and gives back ~15 MB, which matters
+# proportionally more now that the image is small. The inode gate below fails the
+# build if the margin is ever actually consumed.
+RD_NBPI="${RD_NBPI:-8192}"
+# RD_MAX_RAW_MB: refuse to ship a ramdisk whose UNCOMPRESSED size is above this,
+# because that is literally the byte count the loader asks EFI for below 4 GB.
+# 560 MB sits under the X1's measured 778.3 MiB largest low block with ~218 MiB
+# to spare, and still admits the 500 MB graphical variant.
+RD_MAX_RAW_MB="${RD_MAX_RAW_MB:-560}"
+# RD_MIN_FREE_MB / RD_MIN_FREE_INODES: refuse to ship a ramdisk with less slack
+# than this, so shrinking RD_MB or RD_NBPI can never silently produce a full or
+# truncated live root.
+RD_MIN_FREE_MB="${RD_MIN_FREE_MB:-32}"
+RD_MIN_FREE_INODES="${RD_MIN_FREE_INODES:-5000}"
 INSTALLER="${INSTALLER:-/var/tmp/solnix-install}"   # scripts/solnix-install, scp'd here
 LABEL="${LABEL:-SOLNIX_INSTALL}"
 GCP="${GCP:-/usr/gnu/bin/cp}"            # GNU cp (illumos cp -L differs)
@@ -77,8 +128,8 @@ RDIMG="$OUT/boot_archive"
 log "creating ${RD_MB}MB UFS ramdisk image (staging; right-sized + gzipped at the end)"
 mkfile "${RD_MB}m" "$RDIMG"
 LOFI=$(lofiadm -a "$RDIMG") || die "lofiadm -a failed"
-log "lofi = $LOFI ; newfs"
-yes | newfs -m 1 "${LOFI/dsk/rdsk}" >/dev/null 2>&1 || newfs -m 1 "$LOFI" >/dev/null 2>&1 || \
+log "lofi = $LOFI ; newfs (nbpi=$RD_NBPI)"
+yes | newfs -m 1 -i "$RD_NBPI" "${LOFI/dsk/rdsk}" >/dev/null 2>&1 || newfs -m 1 -i "$RD_NBPI" "$LOFI" >/dev/null 2>&1 || \
   newfs "$LOFI" >/dev/null 2>&1 || die "newfs failed"
 mount -F ufs -o nologging "$LOFI" "$RDROOT" || die "mount ramdisk failed"
 
@@ -87,9 +138,11 @@ mount -F ufs -o nologging "$LOFI" "$RDROOT" || die "mount ramdisk failed"
 #    NOT the whole 10.7G — just what boots + partitions + zpools + installs.
 # ---------------------------------------------------------------------------
 log "populating live root (MINIMAL essential subtrees from $SRC)"
-# The BIOS loader stages the WHOLE boot_archive into a limited heap; a 2.7G
-# image OOMs it ("No rootfs module provided"). So keep the live root tiny
-# (~350MB): drivers + libc closure + the zfs/format/installboot tools. Do NOT
+# BOTH loaders stage the WHOLE UNCOMPRESSED boot_archive into a limited region:
+# BIOS into a limited heap, UEFI into contiguous pages BELOW 4 GB (AllocatePages
+# with AllocateMaxAddress/UINT32_MAX). A 2.7G image OOMs BIOS and an 820MB one
+# was refused by real X1 Carbon firmware. So keep the live root tiny (~195MB
+# used): drivers + libc closure + the zfs/format/installboot tools. Do NOT
 # copy platform/i86pc/amd64 (it holds only the host's own boot_archive junk,
 # no drivers) or the desktop/scripting cruft in /usr/lib.
 #
@@ -1535,13 +1588,43 @@ find "$RDROOT" \( -name 'core' -o -name 'core.[0-9]*' \) -type f 2>/dev/null | w
   file "$_c" 2>/dev/null | grep -qi 'core file' && rm -f "$_c" && echo "  scrubbed core: ${_c#$RDROOT}" >&2 || true
 done
 [ -f "$RDROOT/etc/coreadm.conf" ] || { mkdir -p "$RDROOT/var/cores"; chmod 1777 "$RDROOT/var/cores" 2>/dev/null; printf 'COREADM_GLOB_PATTERN=/var/cores/core.%%f.%%p.%%t\nCOREADM_GLOB_ENABLED=yes\nCOREADM_PROC_ENABLED=no\n' > "$RDROOT/etc/coreadm.conf"; }
-df -k "$RDROOT" 2>/dev/null | awk 'NR==2{print "live root: "$3"KB used / "$2"KB total"}' >&2
+# HARD GATE on ramdisk occupancy. RD_MB is a boot constraint (see the header
+# comment: the EFI loader must AllocatePages the UNCOMPRESSED size contiguously
+# below 4 GB), so it is deliberately tight -- which means an over-full ramdisk
+# has to fail the BUILD rather than ship a live root with no room. df -k is used
+# because illumos has no stat(1) and df is already relied on here.
+set -- $(df -k "$RDROOT" 2>/dev/null | awk 'NR==2{print $2, $3, $4}')
+RD_TOTAL_KB="${1:-0}"; RD_USED_KB="${2:-0}"; RD_AVAIL_KB="${3:-0}"
+echo "live root: ${RD_USED_KB}KB used / ${RD_TOTAL_KB}KB total / ${RD_AVAIL_KB}KB avail (RD_MB=$RD_MB nbpi=$RD_NBPI)" >&2
+# inode occupancy too: shrinking nbpi trades table space for a smaller margin,
+# and running OUT of inodes mid-copy would truncate the live root quietly.
+# `df -F ufs -o i` columns are: Filesystem iused ifree %iused Mounted-on, so
+# ifree is $3 and iused is $2 (verified on-node against a scratch lofi UFS).
+RD_IUSED=$(df -F ufs -o i "$RDROOT" 2>/dev/null | awk 'NR==2{print $2}')
+RD_IFREE=$(df -F ufs -o i "$RDROOT" 2>/dev/null | awk 'NR==2{print $3}')
+echo "live root inodes: ${RD_IUSED:-?} used / ${RD_IFREE:-?} free" >&2
+[ "$RD_TOTAL_KB" -gt 0 ] || die "df -k $RDROOT gave no numbers -- cannot verify ramdisk occupancy"
+[ "$RD_AVAIL_KB" -ge $(( RD_MIN_FREE_MB * 1024 )) ] || \
+  die "ramdisk too full: ${RD_AVAIL_KB}KB avail < ${RD_MIN_FREE_MB}MB minimum (raise RD_MB, or drop content)"
+if [ -n "$RD_IFREE" ]; then
+  [ "$RD_IFREE" -ge "$RD_MIN_FREE_INODES" ] || \
+    die "ramdisk inodes nearly exhausted: $RD_IFREE free < $RD_MIN_FREE_INODES (lower RD_NBPI)"
+fi
 sync
 umount "$RDROOT" || die "umount ramdisk failed"
 lofiadm -d "$LOFI" || true
 log "gzipping ramdisk (loader auto-inflates)"
 gzip -1 -c "$RDIMG" > "$RDIMG.gz"
 ls -la "$RDIMG" "$RDIMG.gz" >&2
+# HARD GATE on the UNCOMPRESSED size -- the acceptance metric for real-hardware
+# boot, because efi_loadaddr() asks EFI for exactly this many bytes as ONE
+# contiguous block below 4 GB. wc -c, not stat(1) (illumos has none).
+RD_RAW_BYTES=$(wc -c < "$RDIMG" | tr -d ' ')
+RD_GZ_BYTES=$(wc -c < "$RDIMG.gz" | tr -d ' ')
+echo "boot_archive: $RD_GZ_BYTES bytes gzipped, $RD_RAW_BYTES bytes UNCOMPRESSED (what the EFI loader stages below 4GB)" >&2
+[ "$RD_RAW_BYTES" -gt 0 ] || die "could not size $RDIMG"
+[ "$RD_RAW_BYTES" -le $(( RD_MAX_RAW_MB * 1024 * 1024 )) ] || \
+  die "uncompressed ramdisk $RD_RAW_BYTES B exceeds RD_MAX_RAW_MB=${RD_MAX_RAW_MB}MB; real X1 firmware refused 859832320 B (EFI_OUT_OF_RESOURCES)"
 
 # ---------------------------------------------------------------------------
 # 6. assemble the ISO staging tree: loader + kernel + the ramdisk boot_archive

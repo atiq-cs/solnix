@@ -1,17 +1,38 @@
 # solnix x86_64 USB / ISO install media — how to build it, how to flash it, what is proven
 
-**Status 2026-09-09: a real, flashable pair of artifacts exists and boots under QEMU/OVMF.**
-Nothing here has ever been booted on physical hardware. Read
+**Status 2026-09-09b: FLASH `usb-image-20260909b/`.** The `usb-image-20260909/` pair reached the EFI
+loader on a real Lenovo X1 Carbon and then **failed to stage its ramdisk** — the loader asked
+firmware for 820 MiB contiguous below 4 GiB and the machine's largest such block is 778.3 MiB. The
+`b` rebuild shrinks the ramdisk to 340 MiB (356,515,840 B uncompressed) and is the one to write to a
+stick. See [The X1 Carbon staging failure](#the-x1-carbon-staging-failure-and-the-fix).
+
+## ⚠️ FLASH THIS FILE
+
+```
+artifacts/install-media/usb-image-20260909b/solnix-x86_64-usb.img
+```
+
+Nothing here has ever been booted **to login** on physical hardware. Read
 "[What is UNVERIFIED on real hardware](#what-is-unverified-on-real-hardware)" before flashing.
 
 ## The artifacts
+
+**Current — use these:**
+
+| file | bytes | sha256 |
+|------|------:|--------|
+| `artifacts/install-media/usb-image-20260909b/solnix-x86_64.iso` | 100,771,840 | `cc1c843556357ff544eec3dae7ca2c9939493b88c0759e4419cb222623b7b871` |
+| `artifacts/install-media/usb-image-20260909b/solnix-x86_64-usb.img` | 100,771,840 | `cc1c843556357ff544eec3dae7ca2c9939493b88c0759e4419cb222623b7b871` |
+| `artifacts/install-media/usb-image-20260909b/solnix-iso-tree.tar.gz` | 85,808,795 | `cca4fee3c73a1aadafd14b7cfddafb47ec2c5ddca05ce0aac7be3561a5438bf2` |
+
+**Superseded — kept only for comparison, do NOT flash** (this is the pair that failed on the X1):
 
 | file | bytes | sha256 |
 |------|------:|--------|
 | `artifacts/install-media/usb-image-20260909/solnix-x86_64.iso` | 104,761,344 | `19d838554b392bd15ddc8da80ccb6ee05770b6d88ea444b704f28c43cbe1ae6d` |
 | `artifacts/install-media/usb-image-20260909/solnix-x86_64-usb.img` | 104,761,344 | `19d838554b392bd15ddc8da80ccb6ee05770b6d88ea444b704f28c43cbe1ae6d` |
 
-The two files are **byte-identical on purpose** (same sha256 above — that is not a mistake): an
+In each pair the two files are **byte-identical on purpose** (same sha256 — that is not a mistake): an
 isohybrid image *is* simultaneously a valid ISO9660 CD image and a valid partitioned disk image, so
 one file serves both. The `.img` name exists so the deliverable is unambiguous. Unlike the older
 July artifacts, this `.img` **does** carry a real partition table, so the name does not over-promise:
@@ -28,7 +49,7 @@ Disklabel type: gpt
 `SHA256SUMS` sits beside them. Verify before flashing:
 
 ```sh
-cd artifacts/install-media/usb-image-20260909 && sha256sum -c SHA256SUMS
+cd artifacts/install-media/usb-image-20260909b && sha256sum -c SHA256SUMS
 ```
 
 ⚠️ **`*.iso` and `*.img` are gitignored** (`.gitignore:9` and `:6`), so these two files **cannot be
@@ -38,12 +59,14 @@ committed** and will not survive a fresh clone. `SHA256SUMS` and the boot logs u
 ⚠️ **Do not use the older files in `artifacts/install-media/`** (`solnix-x86_64-usb.img`,
 `solnix-x86_64-minimal-usb.img`, `solnix-x86_64-graphical-usb.img`, dated 2026-07-29/30). They are
 MBR-only pre-fix outputs, their provenance is unrecorded, and `solnix-x86_64-minimal.iso` in the
-repo root is a **broken symlink**. Only the `usb-image-20260909/` pair below was built and tested by
-a recorded run.
+repo root is a **broken symlink**. Only the `usb-image-20260909*/` pairs below were built and tested by
+a recorded run — and of those, only `usb-image-20260909b/` is safe on real firmware.
 
 ## Flashing to a USB stick
 
 ```sh
+cd artifacts/install-media/usb-image-20260909b     # <-- the "b" dir, not usb-image-20260909
+sha256sum -c SHA256SUMS                            # must print: OK
 # 1. IDENTIFY THE TARGET. Get this wrong and you erase the wrong disk, silently and completely.
 lsblk -o NAME,SIZE,MODEL,TRAN,MOUNTPOINTS      # find the stick, e.g. sdb / 32G / USB
 # 2. Make sure nothing on it is mounted.
@@ -60,8 +83,94 @@ internal disk on the next boot, or on a machine with a different disk count. Con
 immediately before each `dd`, matching on SIZE + MODEL + `TRAN=usb`, not on a remembered letter.
 On macOS the equivalent is `/dev/rdiskN` (raw node) after `diskutil unmountDisk`. There is no undo.
 
-Because the image is smaller (100 MiB) than any real stick, the tail of the stick is left as-is;
+Because the image is smaller (96 MiB) than any real stick, the tail of the stick is left as-is;
 that is harmless, and `dd` does not need to fill the device.
+
+## The X1 Carbon staging failure, and the fix
+
+The maintainer flashed `usb-image-20260909/solnix-x86_64-usb.img` and booted a Lenovo X1 Carbon. It
+got **further than QEMU could have promised** — illumos logo, EFI loader executing, media read — and
+then:
+
+```
+Loading /platform/i86pc/amd64/boot_archive...
+failed to allocate 859832320 bytes for staging area: 9
+Can not load environment module: out of memory
+No rootfs module provided, aborting
+ok
+```
+
+**Mechanism, traced through the gate source rather than guessed.**
+`usr/src/boot/efi/loader/copy.c:196` `efi_loadaddr()` calls
+`BS->AllocatePages(AllocateMaxAddress, EfiLoaderData, pages, &paddr)` with `paddr = UINT32_MAX`, so
+it demands **contiguous pages below 4 GiB**. It `stat()`s the file, so it asks for the
+**UNCOMPRESSED** size: `boot_archive` was 88,570,656 B gzipped but **859,832,320 B** raw — byte for
+byte the number in the error. Status `9` = `EFI_OUT_OF_RESOURCES`. Everything after is downstream of
+the failed staging. This is **not** the NVMe risk; it fails before any disk driver loads.
+
+**The ceiling is now measured, not assumed.** `memmap` at the `ok` prompt lists the machine's
+`ConventionalMemory` regions; the largest below 4 GiB is 199,248 pages at physical `0x100000` =
+**816,119,808 B (778.3 MiB)**. So the request missed by **43,712,512 B (41.7 MiB, 5.1%)** — a
+near-miss, which is why resizing the ramdisk is the right fix rather than patching the loader.
+
+⚠️ Use **`memmap`**, not `smap`, for this question. `smap` collapses several EFI types into one and
+merges adjacent runs; its `base=0x58000000 len=0x200000` line is a small unrelated 2 MiB region and
+reading it as the ceiling caused one wrong stand-down. Full transcription in
+`docs/x1-memmap-analysis.md`.
+
+**The ramdisk was 4.2x oversized.** `oi-make-livecd.sh` defaulted `RD_MB=820` while the populated
+UFS held only **195.0 MiB** (measured two ways: superblock + cylinder-group summary of the shipped
+image, and `df -k` on the mounted image during the build). The gzipped size hid it completely — the
+extra ~480 MB was zeros, so it compressed to nothing and the media size looked fine.
+
+**The fix**, in `scripts/oi-make-livecd.sh`:
+
+| knob | was | now | why |
+|---|---:|---:|---|
+| `RD_MB` (minimal) | 820 | **340** | 356,515,840 B: holds 195.0 MiB with 135 MiB of fs slack, and leaves 438.3 MiB of headroom inside the X1's 778.3 MiB block |
+| `RD_MB` (graphical) | 900 | **500** | would have failed identically or worse; **UNTESTED**, see below |
+| `RD_NBPI` (`newfs -i`) | default 2048 | **8192** | inode tables cost ~20 MB to hold 3,369 inodes out of 160,000; keeps a >10x margin and gives back ~15 MB |
+| `RD_MAX_RAW_MB` | — | **560** | new hard gate on the uncompressed size |
+| `RD_MIN_FREE_MB` / `RD_MIN_FREE_INODES` | — | **32 / 5000** | new hard gates so a tight `RD_MB` can never silently ship a full or truncated live root |
+
+Measured result, verified by extracting `boot_archive` from the shipped `.iso` itself:
+
+```sh
+$ xorriso -indev solnix-x86_64.iso -osirrox on \
+      -extract /platform/i86pc/amd64/boot_archive /tmp/ba
+$ gzip -dc /tmp/ba | wc -c
+356515840          # <-- what the loader asks EFI for. Ceiling is 816,119,808.
+```
+
+| | uncompressed | vs the X1's 778.3 MiB block |
+|---|---:|---|
+| old media | 859,832,320 B (820.0 MiB) | **41.7 MiB OVER** → refused |
+| new media | **356,515,840 B (340.0 MiB)** | 438.3 MiB spare, uses 43.7% |
+
+The three new gates were **negative-controlled** on the build host — each flips to FAIL when its
+threshold is moved past the real value (`RD_MAX_RAW_MB=100` → fail, `RD_MIN_FREE_MB=200` → fail,
+`RD_MIN_FREE_INODES=50000` → fail), so they are not checks that cannot fail.
+
+⚠️ **QEMU cannot validate this fix, only guard against regression.** OVMF hands out a clean
+low-4 GiB map and accepted the old 820 MiB image 8/8 times. The X1 itself is the only instrument
+that can confirm the allocation now succeeds.
+
+### The 2026-09-09b boot matrix — 18/18 PASS
+
+All runs `scripts/qemu-boottest.sh` on `usb-image-20260909b/`, logs in its `boot-logs/`
+(`RESULTS.txt` has the per-run counts, `*.clean.txt` the ANSI-stripped consoles):
+
+| runs | firmware | media + attachment | result |
+|---:|---|---|---|
+| 8 | UEFI (OVMF) | `.img` as virtio-blk disk | **8/8 login**, 0 panic |
+| 2 | UEFI (OVMF) | `.img` on a real USB bus (xhci + usb-storage) | **2/2 login**, 0 panic |
+| 4 | UEFI (OVMF) | `.iso` as CD-ROM | **4/4 login**, 0 panic |
+| 4 | BIOS | `.iso` as CD-ROM (El Torito) | **4/4 login**, 0 panic |
+
+`failed to allocate` appears **0 times in all 18**. Zero failures, so there is no clustering to
+report — which matters because flakiness here is bursty and a 4-run sample has lied before; that is
+why the UEFI arm is 8 runs and not 4. Row 5 of the older matrix (BIOS booting the `.img` off USB)
+was not retested: it fails for an unrelated, already-measured reason (no MBR boot code), below.
 
 ## ⚠️ Testing in QEMU REQUIRES `-cpu host` (or `-cpu Haswell`), not the default
 
@@ -85,9 +194,11 @@ command line will hit it and the error message blames libc.
 Evidence: `boot-logs/expt-cpu-qemu64.clean.txt` (default CPU, my artifact, init SIGKILL loop, never
 reaches login) versus every PASS row below (`-cpu host`, reaches login).
 
-## What boots — measured, in QEMU only
+## What boots — measured, in QEMU only (the older 2026-09-09 pair)
 
-All rows are `scripts/qemu-boottest.sh` runs on the exact artifact above, **with `-cpu host`**.
+All rows are `scripts/qemu-boottest.sh` runs on the **superseded** 2026-09-09 artifact, **with
+`-cpu host`**. Kept because the mechanisms (CPU model, GPT-vs-El-Torito, `nvme` panic) are unchanged
+by the ramdisk resize; for the current media see [the 18/18 matrix above](#the-2026-09-09b-boot-matrix--1818-pass).
 "reaches login" means the serial console printed `solnix console login:`. Logs in
 `artifacts/install-media/usb-image-20260909/boot-logs/`.
 
@@ -232,9 +343,24 @@ scripts/make-iso-usb.sh /tmp/usb-image/solnix-iso-tree.tar.gz /tmp/usb-image
 ```
 
 `oi-make-livecd.sh` emits a **staging tree + tarball, not an `.iso`** — a long-standing source of
-confusion. `make-iso-usb.sh` is the assembler. Verified rc=0 for both on 2026-09-09; the staging
-tarball measured 87,671,797 B, sha256
-`2ae3af3d89ac0cbd19abb26b85b7deccaa2a7acd4f9ad2ac6286fef550535580`.
+confusion. `make-iso-usb.sh` is the assembler. Verified rc=0 for both on 2026-09-09b; the staging
+tarball measured 85,808,795 B, sha256
+`cca4fee3c73a1aadafd14b7cfddafb47ec2c5ddca05ce0aac7be3561a5438bf2`. (Stage 1 does **not** need a
+>=200 GiB root: the 2026-09-09b build ran entirely in the base AMI's 20 GiB `rpool`, using <2 GiB.
+On `ami-014c4aaccd37b2356` an extra `--block-device-mappings` volume may not even enumerate — only
+`c1t1d0` appeared — and it does not grow `rpool` either way; see `docs/base-ami-rebuild-runbook.md`.)
+
+⚠️ **Check the size lines the build prints**, because they are the real-hardware acceptance metric:
+
+```
+live root: 199698KB used / 341558KB total / 138445KB avail (RD_MB=340 nbpi=8192)
+live root inodes: 3369 used / 38679 free
+boot_archive: 84581412 bytes gzipped, 356515840 bytes UNCOMPRESSED (what the EFI loader stages below 4GB)
+```
+
+The build now **fails** rather than shipping an oversized or over-full ramdisk (`RD_MAX_RAW_MB`,
+`RD_MIN_FREE_MB`, `RD_MIN_FREE_INODES`). Do not raise `RD_MB` "to be safe" — padding it is precisely
+what broke the X1.
 
 Testing:
 
@@ -260,6 +386,14 @@ grep -c 'console login:' /tmp/u.log     # 1 = reached login
    empty, so the outputs are exactly `solnix-x86_64.iso` / `solnix-x86_64-usb.img`.
 
 ## The graphical (live Xfce) ISO — separate artifact, boots, NOT rebuilt by this run
+
+⚠️ **The graphical ISO is UNTESTED against the staging bug and must not be flashed to the X1 yet.**
+The artifact below predates the `RD_MB` fix and was built at `RD_MB=900`, so its uncompressed
+`boot_archive` is larger than the 820 MiB the X1 already refused — it would fail identically or
+worse. `oi-make-livecd.sh` now defaults graphical to `RD_MB=500`, but **no graphical media has been
+rebuilt or booted since**, so that number is a projection from the minimal build's measurements
+(~195 MiB minimal + ~177 MiB Xfce closure = ~372 MiB of content), not a measurement. Rebuild with
+`GRAPHICAL=1` and check the printed `boot_archive: ... UNCOMPRESSED` line before trusting it.
 
 `artifacts/install-media/solnix-x86_64-graphical.iso` (231,247,872 B, sha256 `cd3c8302e5ada09d…`,
 dated 2026-07-30) is a **different, older** artifact than the pair above. It was **not** rebuilt
@@ -295,9 +429,15 @@ it as a USB image.
 **No solnix image has ever booted on any non-EC2 physical machine, including this one.** Every
 result above is QEMU with OVMF or SeaBIOS. Specifically untested:
 
-- **Booting on a Lenovo X1 Carbon, or any physical laptop.** No claim is made. QEMU/OVMF success
-  does not transfer: real firmware differs in USB enumeration, Secure Boot, and boot-entry
-  preference.
+- **Booting to login on a Lenovo X1 Carbon, or any physical laptop.** Partially answered now: on the
+  X1 the firmware *did* load `BOOTX64.EFI`, enumerate the USB stick (`lsdev` showed it as `disk1`,
+  `(removable) ISO9660`), and read the filesystem — then refused the 820 MiB staging allocation. With
+  340 MiB the request is 438 MiB inside the machine's measured largest low block, but **that boot has
+  not been run yet**. Everything after staging on real hardware remains unverified.
+- **The graphical variant, at any size.** Its `RD_MB` default is now 500 (was 900, which would have
+  hit the same wall), but **no graphical media was rebuilt or booted** for the 2026-09-09b run —
+  only the minimal variant was. Tagged **UNTESTED**; the `RD_MAX_RAW_MB`/`df`/inode gates are what
+  protect it, and they will fail the build loudly rather than ship an unbootable image.
 - **Secure Boot.** `loader64.efi` is unsigned, so Secure Boot must be **disabled** in firmware or
   the machine will refuse to load it. Untested either way.
 - **Real laptop hardware**: the framebuffer/`text` console on real graphics, the X1's NVMe SSD
