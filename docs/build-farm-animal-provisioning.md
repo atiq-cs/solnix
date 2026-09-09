@@ -75,6 +75,12 @@ diff is winning, rather than letting one stage go red 30 minutes later.
 > false, `/usr/bin` is at 7 and `/usr/gnu/bin` at 11 (bug live). The role module's own
 > `shellInit` is load-bearing, not redundant.
 >
+> Verified on the live host (2026-09-09): `/opt/pgbf/client-code/build-farm.conf` line 209 is the
+> only functional occurrence — the sole other `grep` hit is its explanatory comment. And dixi's
+> **login PATH does not contain `/usr/gnu/bin` at all** (`/usr/bin` at position 3), so outside that
+> one conf there is no GNU-diff precedence whatsoever. dixi stays green because `run_build.pl` reads
+> the conf; nothing else on the box is protected.
+>
 > Note also that `dixi` itself carries the fix in only ONE place (its `build_env.PATH`), so a
 > hand-run `run_build.pl` on dixi would still hit this. The declarative path is stricter than
 > the reference animal.
