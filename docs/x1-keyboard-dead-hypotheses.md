@@ -60,3 +60,56 @@ That single boot distinguishes (a) from (b).
 triggerable from a marker file on the USB stick's own filesystem, so the maintainer can install
 **without a keyboard** — opt-in, first non-removable disk, target printed with a countdown before any
 write. Viable only because ZFS now works on the media (0/8 faults, verified).
+
+## Update: the instrumentation knob was itself inert, and the fault space is now three paths
+
+### `consconfig_errlevel=0` does nothing on our kernel
+
+`consconfig_dprintf()` (`consconfig_dacf.c:305`) drops **every** `DPRINT_L0` message before it ever
+checks `consconfig_errlevel` when the kernel is built without `DEBUG`:
+
+```c
+#ifndef DEBUG
+	if (!l) {
+		return;
+	}
+#endif
+	if (l < consconfig_errlevel) return;
+```
+
+Our banner is `Version illumos-… 64-bit` — no `DEBUG`. So the `keyboard path = …` lines I promised
+would appear **cannot** appear. Same trap as `dboot_printf` output that never reaches a metal console:
+I chose an instrument that structurally could not carry the answer. Caught by reading the printf
+before shipping the image, not after.
+
+### Why the X1 has no console keyboard at boot — by design
+
+`plat_kbdpath()` on i86pc (`consplat.c:197-211`) returns the **`kb8042`** path or `NULL`. Nothing
+else. A machine with no i8042 therefore has **zero** console keyboards when `dynamic_console_config()`
+runs, and `conskbd` has no lower queue. Output works, input does not — **this is normal illumos
+behaviour on PS/2-less hardware**, not a bug in our media.
+
+The **only** way a USB keyboard becomes the console keyboard on such a machine is the DACF hotplug
+rule `hid:internal_keyboard → consconfig_dacf:kb_config`. QEMU and EC2 both emulate an i8042, so
+`kb8042` binds at boot and this path is never exercised there. That is why `dixi` reports
+`conskbd_lqueue_nums = 1` and `kbd -t` says "USB keyboard" with no physical keyboard attached — the
+emulated PS/2 is the console keyboard. Sixth emulator/target divergence.
+
+### The fault is in one of exactly three SILENT paths
+
+Every step of the DACF chain reports failure with `cmn_err(CE_WARN)` — `I_PUSH usbkbm` (`:1113`),
+`relink_conskbd` (`:1161-1190`), `relink_wc` (`:784-804`) — and **none appeared** on the X1. Three
+places fail without a message:
+
+| | path | userland test |
+|---|---|---|
+| **S1** | the DACF rule never matched hid2's post-attach | `internal_keyboard` minor absent under `/devices` for `keyboard@0` |
+| **S2** | `kb_config` ran, `space_fetch("consconfig") == NULL` → `DACF_FAILURE`, deliberately silent (`:1657`) | only if hid attached before console config — unlikely, the Kensington attached *after* login |
+| **S3** | `do_config`'s `ldi_open_by_dev()` on the hid minor failed → `DACF_FAILURE` at `:1583`, **no message** | the raw hid `:keyboard` minor cannot be opened from userland |
+
+And a single userland probe splits "linked" from "not linked": `conskbd`'s ioctl handler NAKs
+`KIOCTYPE` with `EINVAL` when `conskbd_lqueue_nums == 0` (`conskbd.c`, ioctl `default:`), so
+**`/usr/bin/kbd -t` errors if nothing is linked** and succeeds if something is. On dixi it succeeds.
+
+Verified in passing: `/etc/dacf.conf` **is** in the boot_archive (dirent and rule body found) and is
+opened via `kobj_open_file()` at `dacf_init()`, so the rule table loads early. Not the problem.
