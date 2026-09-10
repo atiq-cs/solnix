@@ -1,9 +1,59 @@
 # solnix x86_64 USB / ISO install media — how to build it, how to flash it, what is proven
 
-**Status 2026-09-10f: FLASH `usb-image-20260910f/`.** Same three fixes as `d` plus `console="text"`
-(as `e`), **plus** the `SOLNIX-KBDDIAG` console instrument and the media-root auto-install marker. This is
-the image whose single boot on the X1 says where console keyboard input breaks — and the image that can
-install **without a keyboard**. Full reading guide: `artifacts/install-media/usb-image-20260910f/README.md`.
+**Status 2026-09-10i: FLASH `usb-image-20260910i/`.** The image that **installs unattended with no
+keyboard at all** and also applies the console-keyboard override. Two independent things in one
+artifact, because the keyboard fix is untested and must not be load-bearing:
+
+* `set consconfig:usb_kb_path = "/pci@0,0/pci17aa,2267@14/device@2/keyboard@0"` in the ramdisk
+  `/etc/system` — the override `consconfig_state_init()` consults *before* `plat_kbdpath()`.
+  **PROJECTED, not verified**: QEMU always supplies a PS/2 `kb8042`, so the code path this targets is
+  never exercised in emulation.
+* `/etc/solnix-autoinstall` = `auto` baked into the ramdisk, so an install needs no device access, no
+  keyboard, and no rebuild. **4/4 end-to-end in QEMU**, 2/2 marker-less negative controls silent.
+
+Full operator instructions: `artifacts/install-media/usb-image-20260910i/README.md`.
+
+### Three defects this image fixes, all found by reading before building
+
+1. **`AUTOINSTALL_DISK=` could never be used.** Gate (v) in `oi-make-livecd.sh` failed the build
+   whenever `/etc/solnix-autoinstall` existed in the live root — but the marker is written earlier in
+   the same script, so the opt-in knob and its own safety gate were mutually exclusive. The gate is
+   now conditional on `AUTOINSTALL_DISK` being unset, and **inverts** when it is set: the build fails
+   unless the marker landed with the requested contents.
+2. **The media-exclusion guard was inert on the path we actually ship.** `auto` skips the disk named
+   in `/tmp/.solnix-media-disk`, but that file was only written while hunting for a marker on the
+   media. With the marker baked into the ramdisk that code never ran, the variable was empty, and the
+   "never erase the stick you booted from" guard silently no-opped. Boot-medium identification is now
+   **unconditional** and keyed on our own content (`/platform/i86pc/amd64/boot_archive` under a
+   read-only `hsfs` mount) rather than on the marker's location.
+3. **The installed system's console was hardcoded to serial.** `solnix-install` wrote `console="ttya"`
+   into the target's `loader.conf` and `bootenv.rc` with no knob. illumos derives **both stdin and
+   stdout** from that value, so an unattended install onto a laptop with no serial port would have
+   rebooted into a black screen that also took no input — *after* erasing the disk. Now
+   `SOLNIX_TARGET_CONSOLE`, default `ttya` (every automated install test captures serial), and the
+   auto-install path passes `text`.
+
+Both (2) and (3) are covered by checks whose sabotage controls confirm they can fail:
+`scripts/test-autoinstall-picker.sh` (7 cases; the both-guards-disabled control confirms the stick
+*would* be selected without them) and `scripts/test-target-console.sh` (renders both console values
+and asserts a quoting slip is caught).
+
+### Measuring a `console="text"` install in an emulator
+
+An installed system with `console="text"` writes **nothing** to the serial line, so the usual
+serial-log check cannot tell "booted fine on the framebuffer" from "did not boot". Judging it by the
+empty log would have been the same mistake as reading `consconfig_errlevel`'s silence as evidence.
+The framebuffer is measured directly instead (QMP `screendump` → PPM pixel counts,
+`artifacts/install-media/usb-image-20260910i/boot-logs/fb-*`), with three cases run identically:
+
+| case | serial | framebuffer ink | verdict |
+|---|---|---|---|
+| installed with `console="text"` (subject) | 1,021 B, loader only | 13,914 → **52,424**, then static at a login prompt | booted, output on screen |
+| installed with `console="ttya"` (positive control) | 15,556 B, `root on rpool/ROOT/solnix-1` | 17,268 static, **blank text area** | booted, output on serial |
+| blank disk (negative control) | 2,057 B, UEFI shell | 6,487, firmware text | nothing to boot |
+
+The two installs are exact inverses, which is what the console setting is supposed to do. **The X1's
+post-install console remains UNVERIFIED** — only that hardware can prove it.
 
 ## The X1 keyboard: four dead hypotheses, the DACF path, and what `f` measures
 
@@ -561,8 +611,24 @@ SunOS solnix 5.11 illumos-68259130da i86pc i386 i86pc
 
 There is **no interactive installer TUI on this media**. `solnix-install` is a command you run from
 that root shell. An automatic install happens only if `/etc/solnix-autoinstall` exists on the media
-(set `AUTOINSTALL_DISK=` when building) — deliberately **not** set here, so the media cannot erase a
-disk on its own.
+(set `AUTOINSTALL_DISK=` when building) — deliberately **not** set for a general-purpose image, so
+the media cannot erase a disk on its own. `usb-image-20260910i/` is the deliberate exception: it is
+built with `AUTOINSTALL_DISK=auto` for a machine that cannot type, and its README says so in the
+first screenful.
+
+### Building the unattended variant
+
+```sh
+# stage 1, on the illumos build host
+env RD_MB=340 \
+    SOLNIX_USB_KB_PATH=/pci@0,0/pci17aa,2267@14/device@2/keyboard@0 \
+    AUTOINSTALL_DISK=auto \
+    bash oi-make-livecd.sh
+```
+
+Both knobs are gated: the build fails if `SOLNIX_USB_KB_PATH` does not appear in the live root's
+`/etc/system`, or if the `AUTOINSTALL_DISK` marker does not land with exactly the requested contents.
+Omit `AUTOINSTALL_DISK` and the original opt-in gate applies unchanged.
 
 ### A full install from the media, and the installed disk booting on its own
 

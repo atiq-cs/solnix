@@ -1102,7 +1102,17 @@ PATH=/usr/sbin:/usr/bin:/sbin; export PATH
     if [ -n "$_tgt" ]; then
       _i=10; while [ $_i -gt 0 ]; do printf '[solnix] writing to %s in %2d s ...\r' "$_tgt" $_i; sleep 1; _i=$((_i-1)); done; echo
       echo "[solnix] AUTO-INSTALL starting on $_tgt"
-      SOLNIX_POOL=rpool SOLNIX_ALLOW_RPOOL=1 /usr/sbin/solnix-install "$_tgt" \
+      # ⚠️ SOLNIX_TARGET_CONSOLE=text, NOT the "ttya" default. illumos derives BOTH
+      # stdin and stdout from the console value, so an installed system pointed at
+      # a serial port the machine does not have boots to a BLACK SCREEN that also
+      # takes no input -- and by then the target disk is already erased. This path
+      # is by definition the keyboard-free one, i.e. a laptop with no serial port,
+      # so it must hand the framebuffer console to the installed system. "text" is
+      # exactly what this media ships and is the configuration the X1 Carbon has
+      # actually booted (it produced the KBDDIAG output); "text,ttya" is NOT used
+      # because only the single value has hardware evidence behind it.
+      SOLNIX_POOL=rpool SOLNIX_ALLOW_RPOOL=1 SOLNIX_TARGET_CONSOLE=text \
+        /usr/sbin/solnix-install "$_tgt" \
         && echo "SOLNIX_AUTOINSTALL_RESULT: DONE" \
         || echo "SOLNIX_AUTOINSTALL_RESULT: FAIL rc=$?"
     else
@@ -1747,7 +1757,11 @@ PATH=/usr/sbin:/usr/bin:/sbin; export PATH
     echo "[solnix] AUTO-INSTALL to ${_tgt:-<none found>} (media=${_media:-?})"
     /usr/sbin/format </dev/null 2>&1 || true
     if [ -n "$_tgt" ]; then
-      SOLNIX_POOL=rpool SOLNIX_ALLOW_RPOOL=1 /usr/sbin/solnix-install "$_tgt" \
+      # SOLNIX_TARGET_CONSOLE=text for the same reason as the minimal method: an
+      # unattended install must not leave the installed system talking to a
+      # serial port that may not exist.
+      SOLNIX_POOL=rpool SOLNIX_ALLOW_RPOOL=1 SOLNIX_TARGET_CONSOLE=text \
+        /usr/sbin/solnix-install "$_tgt" \
         && echo "SOLNIX_AUTOINSTALL_RESULT: DONE" \
         || echo "SOLNIX_AUTOINSTALL_RESULT: FAIL rc=$?"
     else

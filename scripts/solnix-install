@@ -41,6 +41,21 @@ BEDS="$POOL/ROOT/$BE"
 ALTROOT="${SOLNIX_ALTROOT:-/a}"
 SRCROOT="${SOLNIX_SRCROOT:-/}"     # the running root we copy as the base world
 
+# CONSOLE OF THE *INSTALLED* SYSTEM. Not the same question as the console of the
+# live media, and getting it wrong is unrecoverable without a keyboard.
+#
+# Default "ttya" (serial), because every automated install test in this repo
+# captures the installed system's first boot over the serial line -- changing the
+# default would blind them all.
+#
+# ⚠️ BUT a laptop has NO ttya. illumos derives BOTH stdin and stdout from this
+# value, so an installed system configured for a serial port that does not exist
+# boots to a black screen AND takes no input -- with the target disk already
+# erased. The unattended (keyboard-free) install path therefore passes "text",
+# the framebuffer console, which is the value the media itself ships and the only
+# one with real-hardware evidence behind it on the X1 Carbon.
+TARGET_CONSOLE="${SOLNIX_TARGET_CONSOLE:-ttya}"
+
 die() { echo "FATAL: $*" >&2; exit 1; }
 log() { printf '\n=== %s ===\n' "$*" >&2; }
 
@@ -613,21 +628,25 @@ fi
 fi   # end SELF_INSTALL=0 generation-registration block
 
 # ---------------------------------------------------------------------------
-# 8. ttya console + release stamp (make-be gotcha #1/#4). The copied root
-#    already has bootenv.rc/loader.conf, but re-assert (idempotent, cheap).
+# 8. installed-system console + release stamp (make-be gotcha #1/#4). The copied
+#    root already has bootenv.rc/loader.conf, but re-assert (idempotent, cheap).
+#    The console value is SOLNIX_TARGET_CONSOLE (default ttya; "text" for the
+#    keyboard-free install onto a machine with no serial port).
 # ---------------------------------------------------------------------------
-log "ttya console + release stamp"
+log "installed-system console=$TARGET_CONSOLE + release stamp"
 mkdir -p "$ALTROOT/boot/solaris"
-cat > "$ALTROOT/boot/solaris/bootenv.rc" <<'EOF'
-setprop console ttya
-setprop os_console ttya
+# the ttya-* props are kept unconditionally: they are inert when no serial port
+# exists and are needed whenever TARGET_CONSOLE is ttya.
+cat > "$ALTROOT/boot/solaris/bootenv.rc" <<EOF
+setprop console $TARGET_CONSOLE
+setprop os_console $TARGET_CONSOLE
 setprop ttya-mode 115200,8,n,1,-
 setprop ttya-ignore-cd true
 setprop ttya-rts-dtr-off false
 EOF
-cat > "$ALTROOT/boot/loader.conf" <<'EOF'
-console="ttya"
-os_console="ttya"
+cat > "$ALTROOT/boot/loader.conf" <<EOF
+console="$TARGET_CONSOLE"
+os_console="$TARGET_CONSOLE"
 boot-args="-v"
 loader_logo="illumos"
 autoboot_delay="3"
@@ -637,6 +656,18 @@ boot_archive_load="YES"
 boot_archive_name="/platform/i86pc/amd64/boot_archive"
 boot_archive.hash_load="NO"
 EOF
+# LOUD-FAIL GATE: the installed console is unrecoverable-if-wrong on a machine
+# with no keyboard, and both files are written by heredoc (a quoting slip would
+# ship the literal text). Assert what actually landed on the target.
+for _cf in "$ALTROOT/boot/loader.conf" "$ALTROOT/boot/solaris/bootenv.rc"; do
+  grep -q "$TARGET_CONSOLE" "$_cf" || die "installed console: $_cf does not mention $TARGET_CONSOLE"
+  grep -q '\$TARGET_CONSOLE' "$_cf" && die "installed console: $_cf contains an UNEXPANDED variable"
+done
+grep -q "^console=\"$TARGET_CONSOLE\"\$" "$ALTROOT/boot/loader.conf" || \
+  die "installed console: loader.conf lacks console=\"$TARGET_CONSOLE\""
+grep -q "^setprop console $TARGET_CONSOLE\$" "$ALTROOT/boot/solaris/bootenv.rc" || \
+  die "installed console: bootenv.rc lacks setprop console $TARGET_CONSOLE"
+echo "installed-console gate OK: console=$TARGET_CONSOLE in loader.conf + bootenv.rc" >&2
 # The illumos EFI loader's sanity_check_currdev() accepts a ZFS BE as bootable
 # ONLY if it can stat /boot/defaults/loader.conf OR /boot/loader.rc on that
 # dataset (verified in loader64.efi strings). The SELF-INSTALL live ramdisk root
