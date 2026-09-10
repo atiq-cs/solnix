@@ -41,18 +41,38 @@ So exactly two possibilities remain, and a photo cannot separate them:
   fault is downstream in `wc`/`conskbd`/`login`.
 * **(b)** `kb_config` was **never invoked** → the DACF rule did not fire for `hid2`'s minor node.
 
-## What the next image does
+## What image `f` does (`artifacts/install-media/usb-image-20260910f/`)
 
-Instrumentation, not a fifth guess:
+Instrumentation, not a fifth guess. **Two corrections to the plan above, both measured:**
 
-* `set consconfig:consconfig_errlevel = 0` in the ramdisk `/etc/system` → `consconfig_print_paths()`
-  announces `keyboard path = …` and the `do_config` decisions. (Already in `oi-make-livecd.sh` at HEAD;
-  image `e` did **not** get it because `e` was a local re-assembly of `d`'s ramdisk.)
-* A short `SOLNIX-KBDDIAG` block on the console after `devfsadm`: `/dev/kbd`, `/dev/conskbd`, the
-  `hid` minors, `modinfo` for the STREAMS modules, `strconf < /dev/kbd`, and the `hid:` lines of
-  `/etc/dacf.conf`.
+* ~~`set consconfig:consconfig_errlevel = 0` → `consconfig_print_paths()` announces `keyboard path = …`~~
+  **INERT.** `consconfig_dprintf()` drops every `DPRINT_L0` message before the errlevel check on a
+  non-DEBUG kernel, and ours is non-DEBUG. The line also named the wrong module (`consconfig:` — the
+  variable lives in `consconfig_dacf`), which `e`/first-`f` printed as
+  `sorry, variable 'consconfig_errlevel' is not defined in the 'consconfig' module`. Fixed to
+  `consconfig_dacf:` (harmless, still inert). Do not read its silence as evidence.
+* ~~`kbd -t` NAKs with EINVAL when nothing is linked under `conskbd`~~ **WRONG.** `kbtrans` answers
+  `KIOCTYPE` with `KB_USB` from `conskbd`'s own instance before `conskbd` consults its lower queues.
+  Measured in QEMU with `i8042=off` and **no keyboard at all**: `kbd -t` → `USB keyboard`. The probe that
+  does work is **`kbd -c off`** (`KIOCCMD`, which `kbtrans` does not handle): `conskbd` NAKs `EINVAL` with
+  nothing linked, forwards to `usbkbm` (ack) with a keyboard linked. Negative and positive controls in
+  `usb-image-20260910f/boot-logs/qemu-uefi-noi8042-{nokbd,usbkbd}-1.clean.txt`.
 
-That single boot distinguishes (a) from (b).
+The shipped `SOLNIX-KBDDIAG` block (printed twice, after `devfsadm` and ~20-80 s later): the `hid`
+`keyboard@N:keyboard` minor under `/devices`, **`kbd -c off`**, `kbd -t`/`-l` (kept, non-diagnostic), a
+`dd count=0` open of the raw hid minor (probes S3 from userland), `prtconf -D` filtered to hid/8042,
+`modinfo` filtered to the console-input modules, and the `hid:internal_keyboard` rule count in the live
+`/etc/dacf.conf`. Reading guide and decision table: the image's `README.md`.
+
+**A source observation that narrows the field before the photo (unverified on hardware):** the
+`"… (hid2) online"` line is printed by `i_ndi_devi_report_status_change` only after
+`i_ddi_attachchild` succeeds, which requires `postattach_node` → `dacfc_postattach` to return
+`DACF_SUCCESS` (`devcfg.c`). S2 and S3 both return `DACF_FAILURE`. The X1 photo shows `hid2 (keyboard@0)
+online`, so on that boot the post-attach op either **succeeded** or **was never reserved** (S1). `kbd -c
+off` separates exactly those two. (`DDM_INTERNAL_PATH` minors are hidden from userland lookups, so the
+`internal_keyboard` node itself cannot be listed from a shell; but `hid_attach` creates it right after the
+visible `:keyboard` minor and fails the attach if it cannot, so a visible `:keyboard` + `online` implies it
+was created and `dacfc_match_create_minor` ran for it.)
 
 ## And the way around it
 

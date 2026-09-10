@@ -263,6 +263,7 @@ LIVE_TOOLS="
   usr/bin/su usr/bin/login usr/bin/newtask
   usr/bin/digest usr/bin/openssl usr/bin/od usr/bin/xargs usr/bin/mkfile
   usr/bin/gzip
+  usr/bin/kbd usr/sbin/modinfo usr/sbin/strconf
   usr/bin/mdb usr/bin/adb usr/bin/truss usr/bin/pstack usr/bin/pargs
   usr/bin/pmap usr/bin/pfiles usr/bin/pgrep usr/bin/ptree usr/bin/gcore
   usr/bin/prstat usr/bin/snoop
@@ -905,7 +906,7 @@ touch "$RDROOT/etc/system"
 # Without this the console-input decision is completely silent, which is why the
 # X1's dead keyboard took several boots to localise. Cheap, one line of output.
 if ! grep -q 'consconfig_errlevel' "$RDROOT/etc/system" 2>/dev/null; then
-  printf 'set consconfig:consconfig_errlevel = 0\n' >> "$RDROOT/etc/system"
+  printf 'set consconfig_dacf:consconfig_errlevel = 0\n' >> "$RDROOT/etc/system"
 fi
 if ! grep -q 'zfs_arc_max' "$RDROOT/etc/system" 2>/dev/null; then
   printf '\n* solnix live-install: cap ZFS ARC so bootadm digest is not OOM-killed\nset zfs:zfs_arc_max = 0x20000000\n' >> "$RDROOT/etc/system"
@@ -956,17 +957,82 @@ PATH=/usr/sbin:/usr/bin:/sbin; export PATH
   /usr/sbin/devfsadm >>/var/log/solnix-live.log 2>&1 || true
   { echo "[solnix] disks visible:"; ls /dev/dsk 2>/dev/null; } >>/var/log/solnix-live.log 2>&1
   echo "[solnix] devfsadm done; disk list in /var/log/solnix-live.log"
+  # SOLNIX-KBDDIAG: console-keyboard probe for a machine with NO i8042. On i86pc
+  # plat_kbdpath() names kb8042 only, so such a machine has ZERO console keyboards
+  # at boot and a USB keyboard is wired in ONLY by the dacf rule
+  # hid:internal_keyboard -> consconfig_dacf:kb_config. Every failing step of that
+  # chain warns on the console EXCEPT: the rule never matching (S1), consconfig
+  # state not stored yet (S2), and ldi_open of the hid minor failing (S3). These
+  # ~12 lines probe those from userland. `kbd -c off` is the decisive one: it is
+  # KIOCCMD, which kbtrans does NOT answer, so conskbd NAKs it with EINVAL when
+  # nothing is linked under it and forwards it to usbkbm (which acks) when a USB
+  # keyboard is. (`kbd -t` is NOT usable for this: kbtrans answers KIOCTYPE with
+  # KB_USB from conskbd's own kbtrans instance, so it says "USB keyboard" even
+  # with zero keyboards linked -- measured in QEMU with i8042=off and no usb-kbd.)
+  # Run twice: USB enumeration on the X1 is slow
+  # and the external keyboard attached after the login prompt last time.
+  # NOTE: consconfig_errlevel=0 in /etc/system is INERT on a non-DEBUG kernel
+  # (DPRINT_L0 is dropped before the errlevel check), so no `keyboard path =`
+  # lines will appear; do not read their absence as evidence.
+  # NOTE: DDM_INTERNAL_PATH minors (internal_keyboard) are hidden from userland
+  # lookups, so only the :keyboard external minor is visible under /devices.
+  kbddiag() {
+    echo "SOLNIX-KBDDIAG-BEGIN pass=$1 $(date +%T)"
+    _kb=$(find /devices -name 'keyboard@*:keyboard' 2>/dev/null | head -3)
+    echo "hid-kbd-minors: ${_kb:-NONE}"
+    _t=$(/usr/bin/kbd -c off 2>&1); echo "kbd -c off: rc=$? ${_t:-ok}  (rc=0 => a keyboard IS linked under conskbd; rc=1 EINVAL => NONE linked)"
+    _t=$(/usr/bin/kbd -t 2>&1); echo "kbd -t: $_t rc=$? (always USB on this kernel; not diagnostic)"
+    _l=$(/usr/bin/kbd -l 2>&1 | head -2 | tr '\n' ' '); echo "kbd -l: $_l"
+    for _n in $_kb; do
+      _o=$(dd if="$_n" bs=1 count=0 2>&1); echo "open $_n: rc=$? ${_o}"
+    done
+    echo "prtconf: $(prtconf -D 2>/dev/null | grep -iE 'hid|conskbd|kb8042|8042' | sed 's/^ *//' | tr '\n' ';' | cut -c1-200)"
+    echo "modinfo: $(modinfo 2>/dev/null | grep -iE 'usbkbm|kbtrans|conskbd|consconfig|[^a-z]hid[^a-z]|kb8042' | awk '{print $6}' | tr '\n' ' ')"
+    echo "dacf.conf: $(grep -cE '^driver-minorname="hid:internal_keyboard"' /etc/dacf.conf 2>/dev/null) hid:internal_keyboard rule(s)"
+    echo "SOLNIX-KBDDIAG-END pass=$1"
+  }
+  kbddiag 1
+  # Media-root auto-install marker: a file the maintainer can create on the USB
+  # stick from another OS, so an install needs NO keyboard. Find the media by its
+  # ISO9660 volume label (SOLNIX_INSTALL) among the p0 whole-disk nodes; read-only
+  # mount, look for /solnix-autoinstall, unmount. Nothing here writes anywhere.
+  if [ ! -r /etc/solnix-autoinstall ]; then
+    _mediadisk=""
+    for _p0 in /dev/dsk/c*p0; do
+      [ -e "$_p0" ] || continue
+      case "$(/usr/sbin/fstyp "$_p0" 2>/dev/null)" in hsfs) ;; *) continue;; esac
+      mkdir -p /tmp/.media
+      if /usr/sbin/mount -F hsfs -o ro "$_p0" /tmp/.media 2>/dev/null; then
+        if [ -f /tmp/.media/solnix-autoinstall ]; then
+          _mediadisk=$(basename "$_p0" p0)
+          tr -d '\r' < /tmp/.media/solnix-autoinstall | head -1 > /etc/solnix-autoinstall
+          echo "[solnix] auto-install marker found on media $_mediadisk: '$(cat /etc/solnix-autoinstall)'"
+        fi
+        /usr/sbin/umount /tmp/.media 2>/dev/null
+      fi
+      [ -n "$_mediadisk" ] && break
+    done
+    echo "$_mediadisk" > /tmp/.solnix-media-disk
+  fi
   if [ -r /etc/solnix-autoinstall ]; then
     _tgt=$(cat /etc/solnix-autoinstall 2>/dev/null)
+    _media=$(cat /tmp/.solnix-media-disk 2>/dev/null)
     if [ "$_tgt" = auto ] || [ -z "$_tgt" ]; then
+      _tgt=""
       for _c in /dev/rdsk/c*t*d0s0 /dev/rdsk/c*d0s0; do
         [ -e "$_c" ] || continue
-        _d=$(basename "$_c"); _d=${_d%s0}; _tgt=$_d; break
+        _d=$(basename "$_c"); _d=${_d%s0}
+        # never the media itself, never a removable disk (rmformat lists them)
+        [ -n "$_media" ] && [ "$_d" = "$_media" ] && continue
+        case "$(/usr/sbin/fstyp "/dev/rdsk/${_d}p0" 2>/dev/null)" in hsfs) continue;; esac
+        _tgt=$_d; break
       done
     fi
-    echo "[solnix] AUTO-INSTALL to ${_tgt:-<none found>}"
-    /usr/sbin/format </dev/null 2>&1 || true
+    echo "[solnix] AUTO-INSTALL to ${_tgt:-<none found>} (media=${_media:-?}) -- THIS DISK WILL BE ERASED"
+    /usr/sbin/format </dev/null 2>&1 | grep -E '^ +[0-9]+\.' | head -8 || true
     if [ -n "$_tgt" ]; then
+      _i=10; while [ $_i -gt 0 ]; do printf '[solnix] writing to %s in %2d s ...\r' "$_tgt" $_i; sleep 1; _i=$((_i-1)); done; echo
+      echo "[solnix] AUTO-INSTALL starting on $_tgt"
       SOLNIX_POOL=rpool SOLNIX_ALLOW_RPOOL=1 /usr/sbin/solnix-install "$_tgt" \
         && echo "SOLNIX_AUTOINSTALL_RESULT: DONE" \
         || echo "SOLNIX_AUTOINSTALL_RESULT: FAIL rc=$?"
@@ -974,6 +1040,9 @@ PATH=/usr/sbin:/usr/bin:/sbin; export PATH
       echo "SOLNIX_AUTOINSTALL_RESULT: FAIL no-target-disk"
     fi
   fi
+  # second probe: give slow USB enumeration ~20 s more, then report again
+  sleep 20
+  kbddiag 2
 } > /dev/console 2>&1
 exit $SMF_EXIT_OK
 METHODEOF
@@ -1755,6 +1824,14 @@ for _m in kernel/strmod/amd64/usbkbm kernel/strmod/amd64/ldterm \
   [ -e "$RDROOT/$_m" ] || die "live root missing $_m (console input / zfs chain)"
 done
 echo "  console-input + zfs module gate OK" >&2
+# the userland probes the SOLNIX-KBDDIAG block depends on; kbd(1) is the one that
+# tells linked-or-not apart, and the whole diagnostic is inert without it.
+for _b in usr/bin/kbd usr/sbin/modinfo usr/sbin/prtconf usr/sbin/fstyp usr/bin/dd; do
+  [ -e "$RDROOT/$_b" ] || die "live root missing $_b (SOLNIX-KBDDIAG / media-marker probe)"
+done
+grep -q 'SOLNIX-KBDDIAG-BEGIN' "$RDROOT/lib/svc/method/solnix-live" || die "solnix-live method lacks the KBDDIAG block"
+grep -q '^driver-minorname="hid:internal_keyboard"' "$RDROOT/etc/dacf.conf" || die "ramdisk /etc/dacf.conf lacks the hid:internal_keyboard rule"
+echo "  KBDDIAG probe gate OK: kbd/modinfo/prtconf/fstyp/dd staged, dacf rule present" >&2
 
 # (iv) /etc files that must be EMPTY on removable media because they are
 #      per-machine kernel state. path_to_inst pins driver INSTANCE numbers to the

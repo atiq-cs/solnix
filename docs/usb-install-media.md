@@ -1,14 +1,91 @@
 # solnix x86_64 USB / ISO install media — how to build it, how to flash it, what is proven
 
-**Status 2026-09-09d: FLASH `usb-image-20260909d/`.** It is the **first image containing all three
+**Status 2026-09-10f: FLASH `usb-image-20260910f/`.** Same three fixes as `d` plus `console="text"`
+(as `e`), **plus** the `SOLNIX-KBDDIAG` console instrument and the media-root auto-install marker. This is
+the image whose single boot on the X1 says where console keyboard input breaks — and the image that can
+install **without a keyboard**. Full reading guide: `artifacts/install-media/usb-image-20260910f/README.md`.
+
+## The X1 keyboard: four dead hypotheses, the DACF path, and what `f` measures
+
+No keyboard works at `solnix console login:` on the X1 — internal or external. Four hypotheses are
+**dead** (details in `docs/x1-keyboard-dead-hypotheses.md`):
+
+| # | hypothesis | killed by |
+|---|---|---|
+| 1 | `hid` rejects every keyboard's descriptor | Kensington attaches: `hid2 (keyboard@0) online` |
+| 2 | STREAMS chain (`usbkbm`/`kbtrans`/`conskbd`) missing from media | all present on the ramdisk (build gate) |
+| 3 | `path_to_inst` pins a PS/2 `kb8042` the X1 lacks | shipped file is 0 bytes (build gate) |
+| 4 | `console="text,ttya"` makes stdin the nonexistent serial port | image `e` shipped `console="text"`; still dead |
+
+**The path a USB keyboard takes to become the console keyboard.** On i86pc `plat_kbdpath()` returns the
+`kb8042` path only (`consplat.c`). A machine with no i8042 therefore has **zero console keyboards at
+boot by design**, and the only way a USB keyboard is wired in is the DACF rule in `/etc/dacf.conf`:
+
+```
+driver-minorname="hid:internal_keyboard" consconfig_dacf:kb_config post-attach - pushmod="usbkbm"
+```
+
+`hid_attach` creates the `internal_keyboard` minor → rule fires `kb_config` → `do_config` →
+`ldi_open_by_dev` → `I_PUSH usbkbm` → `I_PLINK` under `conskbd`. Every failing step there warns with
+`cmn_err(CE_WARN)` except three silent ones: the rule never matching (S1), `space_fetch("consconfig")`
+returning NULL (S2), and the `ldi_open_by_dev` failing (S3). None of the warnings appeared on the X1.
+
+**What `f` prints** (twice, after `devfsadm` and again ~20-80 s later) and how to read it — the decisive
+line is **`kbd -c off`**: `conskbd` NAKs `KIOCCMD` with `EINVAL` when nothing is linked under it and
+forwards it to `usbkbm` when a keyboard is. `rc=0` = the DACF chain **succeeded** and the fault is
+downstream (`wc`/`login`); `rc=1 Invalid argument` = **nothing is linked**, S1 or S3. Verified as a
+negative/positive control in QEMU with `i8042=off` (no keyboard → `rc=1`; `usb-kbd` → `rc=0`).
+
+⚠️ Two instruments that **cannot** carry the answer, learned the hard way on this image:
+
+* `set consconfig_dacf:consconfig_errlevel = 0` is **inert on a non-DEBUG kernel** — `consconfig_dprintf`
+  drops every `DPRINT_L0` before checking the level. No `keyboard path =` line will ever print. (Image
+  `e`'s `/etc/system` also named the wrong module, `consconfig:`, which printed
+  `sorry, variable 'consconfig_errlevel' is not defined` on the console. Fixed.)
+* `kbd -t` is **not** a linked-or-not probe: `kbtrans` answers `KIOCTYPE` with `KB_USB` from `conskbd`'s
+  own state. Measured in QEMU with **no keyboard at all**: still `USB keyboard`. The brief's original
+  block used it; the shipped block uses `kbd -c off` instead. Refuting the brief was the right outcome.
+
+QEMU cannot test the X1's keyboard (PS/2 `kb8042` regardless of bus; the framebuffer harness hangs at the
+loader menu), but `-machine q35,i8042=off -device usb-kbd,bus=xhci.0` does exercise `hid → usbkbm →
+kbtrans → conskbd` via the DACF rule, on a machine with zero console keyboards at boot — which is the X1's
+situation. It proves the instrument distinguishes linked from not-linked; it proves nothing about Lenovo's
+xhci or the Kensington's descriptor.
+
+## Keyboard-free install: the media-root marker
+
+`site/solnix-live` now looks for `/solnix-autoinstall` at the **root of the media's own ISO9660
+filesystem** (found by `fstyp == hsfs` on a `p0` node, mounted read-only, unmounted again) and, if
+present, copies it to `/etc/solnix-autoinstall` and proceeds as before. The ISO9660 filesystem is not
+writable in place, so the marker goes in at assembly time:
+
+```sh
+mkdir -p /tmp/mk && tar -xzf artifacts/install-media/usb-image-20260910f/solnix-iso-tree.tar.gz -C /tmp/mk
+echo auto > /tmp/mk/iso/solnix-autoinstall      # or an explicit disk name
+tar -czf /tmp/mk-tree.tar.gz -C /tmp/mk . && scripts/make-iso-usb.sh /tmp/mk-tree.tar.gz /tmp/mk-out
+```
+
+`auto` = first disk that is **not the media** (excluded by identity, not by name) and not itself `hsfs`.
+The console prints `[solnix] AUTO-INSTALL to <disk> (media=<disk>) -- THIS DISK WILL BE ERASED`, then a
+**10-second countdown**, before any write. Verified end-to-end in QEMU
+(`usb-image-20260910f/boot-logs/qemu-autoinstall-marker.clean.txt`): marker found, media excluded, target
+installed, `SOLNIX_AUTOINSTALL_RESULT: DONE`, and the installed disk then boots alone without
+re-installing. Negative control: four marker-less boots printed zero `AUTO-INSTALL` lines. Still opt-in;
+build gate 5 still fails the build if `/etc/solnix-autoinstall` is present by default. `zpool list` runs
+clean on this media (`boot-logs/probe-zpool-media.txt`), which is what makes the path viable.
+
+---
+
+**Previous status 2026-09-09d** (kept for the fix table):
+**Status 2026-09-09d (superseded by `f` above): `usb-image-20260909d/`** was the **first image containing all three
 fixes**. `usb-image-20260909c/` was built from `49c111f765`, which predates `c2f9229e4f`, so it fixed
 the ZFS race and **still flooded the login prompt** — the exact symptom reported as "no keyboard".
 The "d" image is built from `740b1d6335`, which has `c2f9229e4f` as an ancestor.
 
-## ⚠️ FLASH THIS FILE
+## The `d` image (superseded — flash `f`)
 
 ```
-artifacts/install-media/usb-image-20260909d/solnix-x86_64-usb.img
+artifacts/install-media/usb-image-20260909d/solnix-x86_64-usb.img   # superseded by usb-image-20260910f
 ```
 
 Built from commit **`740b1d6335`**. Three fixes, one image:
@@ -175,8 +252,9 @@ gate flips to FAIL. Result on-node: **6 detected, 0 missed**. A gate that cannot
 * the `ttymon: open /dev/sad/user failed` error **never reproduced locally** in any run, though it is
   in the shipped "b" console log. The node is now present by construction, so the repair is inferred
 
-**⚠️ NOT FIXED, NOT EXPLAINED — the keyboard.** QEMU presents a PS/2 keyboard (`kb8042`) on every
-storage bus, so **no QEMU boot exercises the X1's USB-HID input path** (`hid → usbkbm → kbtrans →
+**⚠️ NOT FIXED, NOT EXPLAINED — the keyboard.** (Now instrumented in `f`; see the top of this file.)
+QEMU presents a PS/2 keyboard (`kb8042`) unless `-machine q35,i8042=off`, so the runs below did **not**
+exercise the X1's USB-HID input path (`hid → usbkbm → kbtrans →
 conskbd → wc`). `/dev/kbd` and `/dev/mouse` are now staged, which *might* help if a missing `conskbd`
 node was the cause, but that is untested speculation — do not read the `/dev` fix as a keyboard fix.
 Two hypotheses were **refuted** by mounting the shipped media and looking:
@@ -186,8 +264,8 @@ Two hypotheses were **refuted** by mounting the shipped media and looking:
 * missing STREAMS modules — `usbkbm`, `kbtrans`, `consconfig`, `consconfig_dacf`, `hid`, `conskbd`
   and `consms` were **all already present**
 
-The next experiment worth running: QEMU with `-device usb-kbd` on the xhci bus, which *would* exercise
-the real HID chain. Not yet attempted.
+QEMU with `-machine q35,i8042=off -device usb-kbd,bus=xhci.0` has since been run on `f` and does
+exercise the HID chain (see the top of this file and `usb-image-20260910f/README.md`).
 
 ## Autoinstall is OFF by default — how to opt in
 
