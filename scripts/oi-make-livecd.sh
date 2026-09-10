@@ -996,6 +996,27 @@ PATH=/usr/sbin:/usr/bin:/sbin; export PATH
   # stick from another OS, so an install needs NO keyboard. Find the media by its
   # ISO9660 volume label (SOLNIX_INSTALL) among the p0 whole-disk nodes; read-only
   # mount, look for /solnix-autoinstall, unmount. Nothing here writes anywhere.
+    # FIRST: a BOOT PROPERTY -- needs no media read and no rebuild.
+    #
+    # ⚠️ WHY THIS EXISTS. The media-root marker below CANNOT WORK on hardware where
+    # the live system never enumerates the boot medium. Measured on a real X1
+    # Carbon: the loader's `lsdev` shows the USB stick (disk1, ISO9660), but once
+    # the kernel roots on /ramdisk:a the stick has NO /dev/dsk nodes -- the only
+    # disk present is the internal NVMe. So `fstyp` over /dev/dsk/c*p0 finds
+    # nothing to mount and the marker is unreachable. QEMU hid this because its
+    # usb-storage device enumerates under sd as c1t0d0.
+    #
+    # A boot property comes from the kernel property list, not a device, so it
+    # works regardless. From the loader menu choose 3 (escape to loader prompt):
+    #     OK set solnix-autoinstall=auto
+    #     OK boot
+    if [ ! -r /etc/solnix-autoinstall ]; then
+      _bp=$(/usr/sbin/prtconf -v 2>/dev/null | sed -n '/solnix-autoinstall/{n;s/.*value=.\{0,1\}//;s/.$//p;}' | head -1)
+      if [ -n "$_bp" ]; then
+        echo "$_bp" > /etc/solnix-autoinstall
+        echo "[solnix] auto-install from BOOT PROPERTY solnix-autoinstall='$_bp'"
+      fi
+    fi
   if [ ! -r /etc/solnix-autoinstall ]; then
     _mediadisk=""
     for _p0 in /dev/dsk/c*p0; do
