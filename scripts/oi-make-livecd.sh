@@ -1022,10 +1022,10 @@ PATH=/usr/sbin:/usr/bin:/sbin; export PATH
     echo "SOLNIX-KBDDIAG-END pass=$1"
   }
   kbddiag 1
-  # Media-root auto-install marker: a file the maintainer can create on the USB
-  # stick from another OS, so an install needs NO keyboard. Find the media by its
-  # ISO9660 volume label (SOLNIX_INSTALL) among the p0 whole-disk nodes; read-only
-  # mount, look for /solnix-autoinstall, unmount. Nothing here writes anywhere.
+  # Auto-install target, from any of three marker sources: baked into the ramdisk
+  # at build time (AUTOINSTALL_DISK=), a kernel boot property, or a file at the
+  # root of the media's own ISO9660 filesystem. Nothing below writes to any disk
+  # until the target is printed and a 10 s countdown has elapsed.
     # FIRST: a BOOT PROPERTY -- needs no media read and no rebuild.
     #
     # ⚠️ WHY THIS EXISTS. The media-root marker below CANNOT WORK on hardware where
@@ -1047,24 +1047,39 @@ PATH=/usr/sbin:/usr/bin:/sbin; export PATH
         echo "[solnix] auto-install from BOOT PROPERTY solnix-autoinstall='$_bp'"
       fi
     fi
-  if [ ! -r /etc/solnix-autoinstall ]; then
-    _mediadisk=""
-    for _p0 in /dev/dsk/c*p0; do
-      [ -e "$_p0" ] || continue
-      case "$(/usr/sbin/fstyp "$_p0" 2>/dev/null)" in hsfs) ;; *) continue;; esac
-      mkdir -p /tmp/.media
-      if /usr/sbin/mount -F hsfs -o ro "$_p0" /tmp/.media 2>/dev/null; then
-        if [ -f /tmp/.media/solnix-autoinstall ]; then
-          _mediadisk=$(basename "$_p0" p0)
+  # IDENTIFY OUR OWN BOOT MEDIUM -- ALWAYS, not only when hunting for a marker.
+  #
+  # ⚠️ DATA-LOSS GUARD. The `auto` target picker below skips the disk named in
+  # /tmp/.solnix-media-disk. That file used to be written only inside the
+  # media-marker branch, so when the marker was BAKED INTO THE RAMDISK
+  # (AUTOINSTALL_DISK= at build time) the branch never ran, $_media was EMPTY and
+  # the media-exclusion silently no-opped -- leaving the hsfs check as the only
+  # thing between `auto` and erasing the USB stick the operator booted from.
+  # Identification is therefore unconditional and keyed on OUR OWN CONTENT
+  # (the boot_archive), not on the marker, so it holds for every marker source.
+  #
+  # The medium is found by ATTEMPTING a read-only hsfs mount rather than by
+  # fstyp, deliberately: the target-picker's own guard already uses fstyp, and
+  # two guards sharing one mechanism are one guard. mount -F hsfs -o ro fails
+  # harmlessly on anything that is not an ISO9660 filesystem and writes nothing.
+  _mediadisk=""
+  for _p0 in /dev/dsk/c*p0; do
+    [ -e "$_p0" ] || continue
+    mkdir -p /tmp/.media
+    if /usr/sbin/mount -F hsfs -o ro "$_p0" /tmp/.media 2>/dev/null; then
+      if [ -f /tmp/.media/platform/i86pc/amd64/boot_archive ]; then
+        _mediadisk=$(basename "$_p0" p0)
+        echo "[solnix] boot medium identified as $_mediadisk (solnix ISO9660) -- EXCLUDED from install targets"
+        if [ ! -r /etc/solnix-autoinstall ] && [ -f /tmp/.media/solnix-autoinstall ]; then
           tr -d '\r' < /tmp/.media/solnix-autoinstall | head -1 > /etc/solnix-autoinstall
           echo "[solnix] auto-install marker found on media $_mediadisk: '$(cat /etc/solnix-autoinstall)'"
         fi
-        /usr/sbin/umount /tmp/.media 2>/dev/null
       fi
-      [ -n "$_mediadisk" ] && break
-    done
-    echo "$_mediadisk" > /tmp/.solnix-media-disk
-  fi
+      /usr/sbin/umount /tmp/.media 2>/dev/null
+    fi
+    [ -n "$_mediadisk" ] && break
+  done
+  echo "$_mediadisk" > /tmp/.solnix-media-disk
   if [ -r /etc/solnix-autoinstall ]; then
     _tgt=$(cat /etc/solnix-autoinstall 2>/dev/null)
     _media=$(cat /tmp/.solnix-media-disk 2>/dev/null)
@@ -1073,7 +1088,10 @@ PATH=/usr/sbin:/usr/bin:/sbin; export PATH
       for _c in /dev/rdsk/c*t*d0s0 /dev/rdsk/c*d0s0; do
         [ -e "$_c" ] || continue
         _d=$(basename "$_c"); _d=${_d%s0}
-        # never the media itself, never a removable disk (rmformat lists them)
+        # TWO INDEPENDENT DATA-LOSS GUARDS, different mechanisms on purpose:
+        #   1. never the disk we booted from (identified above by content)
+        #   2. never a disk whose p0 is itself ISO9660 (catches a medium that
+        #      failed identification, e.g. mount refused)
         [ -n "$_media" ] && [ "$_d" = "$_media" ] && continue
         case "$(/usr/sbin/fstyp "/dev/rdsk/${_d}p0" 2>/dev/null)" in hsfs) continue;; esac
         _tgt=$_d; break
@@ -1709,13 +1727,24 @@ PATH=/usr/sbin:/usr/bin:/sbin; export PATH
   # fall through to the live desktop.
   if [ -r /etc/solnix-autoinstall ]; then
     _tgt=$(cat /etc/solnix-autoinstall 2>/dev/null)
+    _media=$(cat /tmp/.solnix-media-disk 2>/dev/null)
     if [ "$_tgt" = auto ] || [ -z "$_tgt" ]; then
+      _tgt=""
       for _c in /dev/rdsk/c*t*d0s0 /dev/rdsk/c*d0s0; do
         [ -e "$_c" ] || continue
-        _d=$(basename "$_c"); _d=${_d%s0}; _tgt=$_d; break
+        _d=$(basename "$_c"); _d=${_d%s0}
+        # same two data-loss guards as the minimal method. NOTE: this method does
+        # NOT run the boot-medium identification block, so /tmp/.solnix-media-disk
+        # is absent, $_media is empty and guard 1 is INERT here -- guard 2 (fstyp
+        # hsfs) is the only live one. Acceptable only because no graphical media
+        # has ever been shipped; copy the identification block up from the minimal
+        # method before shipping one.
+        [ -n "$_media" ] && [ "$_d" = "$_media" ] && continue
+        case "$(/usr/sbin/fstyp "/dev/rdsk/${_d}p0" 2>/dev/null)" in hsfs) continue;; esac
+        _tgt=$_d; break
       done
     fi
-    echo "[solnix] AUTO-INSTALL to ${_tgt:-<none found>}"
+    echo "[solnix] AUTO-INSTALL to ${_tgt:-<none found>} (media=${_media:-?})"
     /usr/sbin/format </dev/null 2>&1 || true
     if [ -n "$_tgt" ]; then
       SOLNIX_POOL=rpool SOLNIX_ALLOW_RPOOL=1 /usr/sbin/solnix-install "$_tgt" \
@@ -1898,10 +1927,32 @@ echo "  per-machine-state gate OK: path_to_inst + mnttab are empty" >&2
 
 # (v) autoinstall must be OPT-IN. /etc/solnix-autoinstall makes the live media
 #     write to a disk with NO operator confirmation, so its mere presence on a
-#     public image would be a data-loss bug. Fail the build if it ever appears.
-[ -e "$RDROOT/etc/solnix-autoinstall" ] && \
-  die "/etc/solnix-autoinstall present in live root -- autoinstall MUST be opt-in (see docs/usb-install-media.md)"
-echo "  autoinstall gate OK: not enabled by default" >&2
+#     public image would be a data-loss bug. Fail the build if it appears WITHOUT
+#     the operator having asked for it via AUTOINSTALL_DISK.
+#
+#     ⚠️ This gate used to be unconditional, which made AUTOINSTALL_DISK=... a
+#     build that ALWAYS died here (the marker is written at :1188, this runs
+#     after) -- the opt-in knob and its own safety gate were mutually exclusive.
+if [ -z "${AUTOINSTALL_DISK:-}" ]; then
+  [ -e "$RDROOT/etc/solnix-autoinstall" ] && \
+    die "/etc/solnix-autoinstall present in live root -- autoinstall MUST be opt-in (see docs/usb-install-media.md)"
+  echo "  autoinstall gate OK: not enabled by default" >&2
+else
+  # opt-in build: the marker is load-bearing, so fail loudly if it did not land.
+  _ai=$(cat "$RDROOT/etc/solnix-autoinstall" 2>/dev/null | tr -d ' \n')
+  [ "$_ai" = "$AUTOINSTALL_DISK" ] || \
+    die "AUTOINSTALL_DISK=$AUTOINSTALL_DISK requested but live root marker reads '${_ai:-<absent>}'"
+  echo "  autoinstall gate: DELIBERATE OPT-IN, /etc/solnix-autoinstall = '$_ai'" >&2
+fi
+
+# (v') the console-keyboard override is load-bearing when requested (it is the
+#      only thing that can give a PS/2-less laptop a console keyboard), and a
+#      typo in /etc/system is silently ignored by the kernel. Gate it.
+if [ -n "${SOLNIX_USB_KB_PATH:-}" ]; then
+  grep -q "^set consconfig:usb_kb_path = \"$SOLNIX_USB_KB_PATH\"\$" "$RDROOT/etc/system" || \
+    die "SOLNIX_USB_KB_PATH=$SOLNIX_USB_KB_PATH requested but not in live root /etc/system"
+  echo "  console-keyboard gate OK: consconfig:usb_kb_path = $SOLNIX_USB_KB_PATH" >&2
+fi
 
 # HARD GATE on ramdisk occupancy. RD_MB is a boot constraint (see the header
 # comment: the EFI loader must AllocatePages the UNCOMPRESSED size contiguously
