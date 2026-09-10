@@ -900,6 +900,13 @@ fi
 # hashing step always has headroom; the live install never needs a big ARC.
 # (Append, don't clobber, any /etc/system copied by COPY_DIRS.)
 touch "$RDROOT/etc/system"
+# consconfig_errlevel=0 makes consconfig_dacf PRINT the keyboard/mouse/fb paths it
+# selected (consconfig_print_paths, gated on consconfig_errlevel > DPRINT_L0).
+# Without this the console-input decision is completely silent, which is why the
+# X1's dead keyboard took several boots to localise. Cheap, one line of output.
+if ! grep -q 'consconfig_errlevel' "$RDROOT/etc/system" 2>/dev/null; then
+  printf 'set consconfig:consconfig_errlevel = 0\n' >> "$RDROOT/etc/system"
+fi
 if ! grep -q 'zfs_arc_max' "$RDROOT/etc/system" 2>/dev/null; then
   printf '\n* solnix live-install: cap ZFS ARC so bootadm digest is not OOM-killed\nset zfs:zfs_arc_max = 0x20000000\n' >> "$RDROOT/etc/system"
 fi
@@ -1822,7 +1829,27 @@ cp "$RDIMG.gz" "$OUT/iso/platform/i86pc/amd64/boot_archive"
   ( cd "$OUT/iso/platform/i86pc/amd64" && sha1sum boot_archive | awk '{print $1}' > boot_archive.hash ) || \
   : > "$OUT/iso/platform/i86pc/amd64/boot_archive.hash"
 
-# 6d. loader.conf: text+ttya console, load our ramdisk as rootfs. STANDARD boot
+# 6d. loader.conf: console + ramdisk rootfs. STANDARD boot
+#
+# ⚠️ CONSOLE INPUT: this was "text,ttya" and that is a LIST from which illumos
+#     derives BOTH stdin and stdout. consconfig_dacf.c:68-86 documents the
+#     consequence: if stdin does not resolve to a keyboard, the console becomes
+#     CONSOLE_SERIAL_KEYBOARD / CONSOLE_TIP and rconsvp is wired to the SERIAL
+#     device -- output still reaches the VGA text screen while NO keystroke is
+#     ever read. On a laptop with no physical serial port that presents exactly
+#     as "the keyboard does not work", for every keyboard, which is what the X1
+#     showed with both an internal and an external USB keyboard.
+#
+#     QEMU never exposed it because we boot with `-nographic -serial mon:stdio`,
+#     so there the serial line IS the keyboard and the setting is accidentally
+#     correct. Fourth instance of the emulator being more permissive than the
+#     target (after the 820 MiB staging allocation, PS/2-vs-USB keyboards, and
+#     the clean low-4GB memory map).
+#
+#     Default is now "text" (local framebuffer + local keyboard). Set
+#     SOLNIX_CONSOLE="text,ttya" to restore serial-console behaviour for headless
+#     EC2/QEMU work, or SOLNIX_CONSOLE="ttya" for serial-only.
+
 #     (no init override) so /sbin/init -> svc.startd runs the fs milestones.
 # 6c'. BRAND THE BOOT SCREEN "solnix".
 #      Two independent sources, both must be patched -- loader.conf alone is NOT
@@ -1852,7 +1879,7 @@ cat > "$OUT/iso/boot/loader.conf" <<'EOF'
 loader_logo="illumos"
 loader_brand="solnix"
 loader_menu_title="Welcome to solnix"
-console="text,ttya"
+console="${SOLNIX_CONSOLE:-text}"
 ttya-mode="115200,8,n,1,-"
 autoboot_delay="5"
 boot_archive_load="YES"

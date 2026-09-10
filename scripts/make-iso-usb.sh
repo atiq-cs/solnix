@@ -49,8 +49,25 @@ log "writing loader.conf"
 # parameter expansion, so it answered "no valid consoles!" (observed) and fell
 # back. Only the console and boot-args lines contain '$'.
 # Console ORDER matters for the deliverable: real hardware (the X1 Carbon) has no
-# ttya at all, so the framebuffer console ("text") must lead, with ttya kept
-# second so a QEMU/EC2 serial capture still records the boot.
+# ttya at all, so the framebuffer console ("text") must lead.
+#
+# ⚠️ ttya is NO LONGER kept second by default, and that is a deliberate change.
+#     `console=` is a LIST from which illumos derives BOTH stdin and stdout.
+#     consconfig_dacf.c:68-86: if stdin does not resolve to a keyboard, the console
+#     becomes CONSOLE_SERIAL_KEYBOARD / CONSOLE_TIP and rconsvp is wired to the
+#     SERIAL device -- output still reaches the VGA text screen while NO keystroke
+#     is ever read. On a machine with no physical serial port that presents as "the
+#     keyboard does not work", for EVERY keyboard, which is exactly what the X1
+#     showed with both its internal keyboard and an external USB one.
+#
+#     Keeping ttya "just for the capture" is therefore not free -- it may be the
+#     cause. QEMU hid this because we boot with `-nographic -serial mon:stdio`, so
+#     there the serial line IS the keyboard and the setting is accidentally right.
+#
+#     Set SOLNIX_CONSOLE="text,ttya" explicitly for headless QEMU/EC2 runs that
+#     need a serial capture. The DEFAULT now favours real hardware, matching
+#     oi-make-livecd.sh so stage 2 cannot silently override stage 1 (which is how
+#     the branding fix was reverted once already).
 # loader_brand/loader_menu_title: this rewrite REPLACES the loader.conf that
 # oi-make-livecd.sh authored, so omitting them silently reverted the boot-screen
 # branding to illumos even though menu.4th (patched on the build host) was fine.
@@ -58,7 +75,7 @@ cat > "$ISOROOT/boot/loader.conf" <<EOF
 loader_logo="illumos"
 loader_brand="solnix"
 loader_menu_title="Welcome to solnix"
-console="${SOLNIX_CONSOLE:-text,ttya}"
+console="${SOLNIX_CONSOLE:-text}"
 ttya-mode="115200,8,n,1,-"
 autoboot_delay="5"
 boot_archive_load="YES"
