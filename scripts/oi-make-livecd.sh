@@ -905,6 +905,36 @@ touch "$RDROOT/etc/system"
 # selected (consconfig_print_paths, gated on consconfig_errlevel > DPRINT_L0).
 # Without this the console-input decision is completely silent, which is why the
 # X1's dead keyboard took several boots to localise. Cheap, one line of output.
+# CONSOLE KEYBOARD OVERRIDE (SOLNIX_USB_KB_PATH).
+#
+# ⚠️ THE X1 CARBON FAULT THIS ADDRESSES. consconfig_state_init()
+# (consconfig_dacf.c:675-681) chooses the console keyboard like this:
+#
+#     if (consconfig_usb_kb_path != NULL)
+#             sp->cons_keyboard_path = consconfig_usb_kb_path;   <-- /etc/system wins
+#     else
+#             sp->cons_keyboard_path = plat_kbdpath();           <-- kb8042 (PS/2)
+#
+# and plat_kbdpath() on i86pc (consplat.c:197-211) returns the kb8042 path or NULL
+# -- it can NEVER return a USB keyboard. Measured on the X1: prtconf shows
+# "i8042, instance #0" and modinfo lists kb8042, so plat_kbdpath() returns a PS/2
+# keyboard that has no keys attached to it, and consconfig wires THAT as the
+# console keyboard. The DACF hotplug path then links the real USB keyboard as an
+# additional lower queue -- which is exactly why `kbd -c off` returns rc=0 while
+# nothing typed ever reaches the console. consconfig.c:62-66 says the intent
+# outright: "This module will override the firmware's values with these."
+#
+# Set SOLNIX_USB_KB_PATH to the DEVICE path (no /devices prefix, no :minor) of the
+# keyboard, e.g. for the observed Kensington on that machine:
+#   SOLNIX_USB_KB_PATH=/pci@0,0/pci17aa,2267@14/device@2/keyboard@0
+# The KBDDIAG block prints the matching /devices path each boot, so the value can
+# be read off the screen and fed back in.
+if [ -n "${SOLNIX_USB_KB_PATH:-}" ]; then
+  if ! grep -q 'consconfig:usb_kb_path' "$RDROOT/etc/system" 2>/dev/null; then
+    printf 'set consconfig:usb_kb_path = "%s"\n' "$SOLNIX_USB_KB_PATH" >> "$RDROOT/etc/system"
+    log "console keyboard override: consconfig:usb_kb_path = $SOLNIX_USB_KB_PATH"
+  fi
+fi
 if ! grep -q 'consconfig_errlevel' "$RDROOT/etc/system" 2>/dev/null; then
   printf 'set consconfig_dacf:consconfig_errlevel = 0\n' >> "$RDROOT/etc/system"
 fi
