@@ -12,6 +12,7 @@ next account loss a ~30-minute event instead of a multi-hour one.
 |---|---|---|
 | Kernel/driver source, patches, docs | **YES** | committed to git |
 | Bootable AMIs (x86 10/10 base, aarch64, GPU, gtk4, pgbf) | NO | account-scoped; AMI cross-account share is SCP-denied by the org guardrail |
+| **x86_64 base disk image (as of 2026-09-11)** | **YES** | **banked in R2 at `s3://solnix-cache/ami/x86_64-20260911/`, read-back verified, restore path tested (5/5 boots). This is the rule below finally being applied to an AMI.** |
 | Snapshots (arm64-gate build tree, desktop session, nixpool store) | NO | account-scoped (snapshot-share worked account→account, but only while BOTH were alive) |
 | The aarch64 cross toolchain + OmniOS gate env | NO | lived only on the build node's volume |
 | The RISC-V toolchain + prebuilt seed userland | NO | lived only on the dev node |
@@ -23,6 +24,14 @@ is cheaply rebuildable, or the artifact must be snapshotted.
 
 ## Rules
 
+0. **Bank the artifact off-account, and VERIFY IT BY READ-BACK.** A recipe alone is not
+   enough: a one-hour rebuild is still a bad day when it is the only copy, and three burner
+   losses were each answered with a *new per-account script* (`beef-`, `ouch-`,
+   `bene-make-base-ami.sh` — one per dead account) rather than a durable artifact. R2 is not
+   account-scoped; use it. `scripts/ami-bank.sh` is the worked example (bank / verify /
+   restore, all three tested). **Never trust an upload's exit status** —
+   `images/release-224-ena-mtufix/solnix-raw.img.gz` in that bucket is 20 bytes, a silently
+   truncated upload from a command that exited 0. Re-download and compare sha256.
 1. **Snapshot a toolchain the moment it works — before using it.** A cross
    toolchain (`make download` + `make setup`, or the RISC-V seed gcc) is hours of
    wall clock and is pure derived state. When it first builds clean: snapshot the
@@ -56,12 +65,17 @@ is cheaply rebuildable, or the artifact must be snapshotted.
 
 ## Rebuild starting points (keep these public + committed)
 
-- **x86_64 base**: OI Hipster cloudimage (public URL above) → `scripts/oi-make-ami.sh`
-  → the cold-boot fixes. ⚠️ The dominant cold-boot factor is the **AMI-build
-  method** (in-place boot_archive edits; a ZFS-import edit corrupts DHCP 0/6 vs
-  6/6) then the **single-DHCP-addrobj** shim; the ena MTU-1500 driver patch is
-  secondary. See `docs/ena-rx-coldboot-fix.md`, `docs/kernel-hang-tsc-pit-fix.md`
-  (`set pit_is_broken=1`).
+- **x86_64 base**: **fastest path is now the R2 bank** —
+  `scripts/ami-bank.sh verify ami/x86_64-20260911` then `restore` + `restore-reg`, which skips
+  the seed stage and was measured at 5/5 cold boots in a real account. The from-scratch
+  fallback remains the OI Hipster cloudimage (public URL) → `scripts/make-base-ami.sh`
+  (account-portable; supersedes the three per-account forks) → the cold-boot fixes.
+  ⚠️ The dominant cold-boot factor is the **AMI-build method** (in-place boot_archive edits; a
+  ZFS-import edit corrupts DHCP 0/6 vs 6/6) then the **single-DHCP-addrobj** shim; the ena
+  MTU-1500 driver patch is secondary. See `docs/ena-rx-coldboot-fix.md`,
+  `docs/kernel-hang-tsc-pit-fix.md` (`set pit_is_broken=1`), and
+  `docs/base-ami-rebuild-runbook.md` (which also retracts the "root pool is stuck at ~2 GiB"
+  claim — that was a silent no-op in the grow step, now fixed and asserted).
 - **aarch64 gate host**: OmniOS cloud raw image (downloads.omnios.org) → `make
   download` + `make setup` (the multi-hour cross toolchain — SNAPSHOT IT) →
   `bldenv -d -T aarch64 <env/aarch64>` (the `-T` flag is mandatory; without it
