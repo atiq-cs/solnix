@@ -157,3 +157,26 @@ room, that is a SUCCESS — report it and stop.
 Also: **"if a new blocker appears, capture its exact console text and STOP"** rather than
 chaining a second fix. On a deep bring-up, one fix reveals the next; a precisely-named next
 blocker is a better deliverable than a half-attempted second repair.
+
+## Never create a world-open SG rule, including to test a guard
+
+`0.0.0.0/0` / `::/0` ingress ends a burner account in minutes (T&C violation; fleets have been terminated).
+
+The orchestrator did this **three times** verifying that `sg-guard.sh` could detect one. The finding was
+real — the guard was blind — but the method risked the substrate the work depends on. Use
+`SG_GUARD_SELFTEST=1`, which injects a synthetic hit and creates no rule. `--dry-run` tests IAM permission,
+not the detector, so it is not a substitute.
+
+Generalised: **when verifying a safety mechanism, find a way to exercise the detector without performing
+the dangerous act.** If the only test you can think of is doing the dangerous thing, that is a signal the
+mechanism needs a test hook, not that the test is unavoidable.
+
+## A guard that cannot fail manufactures confidence
+
+`sg-guard.sh` reported CLEAN across this project's whole history while auditing nothing: it set no AWS
+profile, `describe-security-groups` failed with `NoCredentials`, and `2>/dev/null || true` converted that
+into "no violations". The hard no-world-open rule was in fact held by hand discipline.
+
+This is the same shape as several other errors here — the empty serial log indistinguishable from a hang,
+`consconfig_errlevel` inert on a non-DEBUG kernel, a byte-grep read as a driver inventory. **Ask whether
+the check could report failure at all**, and prove it with a negative control before trusting a pass.
