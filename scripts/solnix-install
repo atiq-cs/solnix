@@ -54,7 +54,14 @@ SRCROOT="${SOLNIX_SRCROOT:-/}"     # the running root we copy as the base world
 # erased. The unattended (keyboard-free) install path therefore passes "text",
 # the framebuffer console, which is the value the media itself ships and the only
 # one with real-hardware evidence behind it on the X1 Carbon.
-TARGET_CONSOLE="${SOLNIX_TARGET_CONSOLE:-ttya}"
+# ⚠️ DEFAULT IS "text", NOT "ttya". This defaulted to ttya so that headless EC2
+# serial captures kept working, but the consequence on real hardware is severe:
+# the maintainer installed interactively on an X1 Carbon -- which has NO serial
+# port -- rebooted, and got a dead keyboard, because the loader falls back for
+# OUTPUT while the kernel console INPUT stays on a nonexistent ttya. A laptop is
+# the common case for an interactive install; a headless server sets the variable.
+# Set SOLNIX_TARGET_CONSOLE=ttya explicitly for serial-console work.
+TARGET_CONSOLE="${SOLNIX_TARGET_CONSOLE:-text}"
 
 die() { echo "FATAL: $*" >&2; exit 1; }
 log() { printf '\n=== %s ===\n' "$*" >&2; }
@@ -687,6 +694,13 @@ EOF
 cat > "$ALTROOT/boot/loader.conf" <<EOF
 console="$TARGET_CONSOLE"
 os_console="$TARGET_CONSOLE"
+# Readable console on a HiDPI panel. MEASURED on the X1: EDID 3840x2160 and the
+# loader chose text mode 2 = 480 columns x 113 rows, which is unreadable. The
+# console font is a fixed 8x16 with no larger built-in, so rows/cols come from
+# screen size (common/font/font.c) and RESOLUTION is the only lever. The live
+# media already sets this; the installed system did not, so text was tiny again
+# after the first reboot.
+efi-max-resolution="${SOLNIX_TARGET_RESOLUTION:-800x600}"
 boot-args="-v"
 loader_logo="illumos"
 autoboot_delay="3"

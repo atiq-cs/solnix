@@ -384,8 +384,24 @@ done
 # There is NO poweradm and NO powertop on illumos -- those are Solaris 11 /
 # Linux tools respectively. cpupm/cpu-threshold in power.conf is the knob.
 for pp in usr/lib/power lib/svc/method/svc-power lib/svc/manifest/system/power.xml \
-          etc/power.conf usr/sbin/poweroff usr/sbin/halt usr/sbin/shutdown; do
+          etc/power.conf usr/sbin/poweroff usr/sbin/halt usr/sbin/shutdown \
+          usr/sbin/reboot usr/sbin/uadmin sbin/uadmin etc/halt etc/reboot \
+          usr/bin/pkill usr/bin/pgrep; do
   [ -e "$SRC/$pp" ] && echo "$pp" >> /tmp/solnix-tools.list
+done
+# ⚠️ reboot(1m) and poweroff(1m) are HARDLINKS to halt, not separate binaries:
+# usr/src/cmd/halt/Makefile:40 is `ROOTLINKS = $(ROOTUSRSBIN)/poweroff
+# $(ROOTUSRSBIN)/reboot`, and halt.c:49 dispatches on argv[0]. The loop above uses
+# `[ -e ] &&`, which SILENTLY SKIPS anything absent -- so a missing link produced
+# no warning and the maintainer booted an installed system with only `halt`, no way
+# to reboot or power off. Same silent-skip shape as the /dev allowlist and the nix
+# lib list. Report presence, and synthesise the argv[0] links if absent.
+for _pw in usr/sbin/halt usr/sbin/reboot usr/sbin/poweroff usr/sbin/shutdown; do
+  if [ -e "$SRC/$_pw" ]; then
+    echo "  power cmd: $_pw present on host" >&2
+  else
+    echo "  WARN: $_pw absent on the build host -- will link it to halt in the image" >&2
+  fi
 done
 # EXPAND DIRECTORY ENTRIES. ⚠️ `cpio -o` does NOT recurse into a directory named
 # on its stdin -- it archives the directory INODE only, so every directory listed
@@ -2284,6 +2300,38 @@ if [ "$STAGE_NIX" = 1 ] && [ -x "$RDROOT/nix-tools224/bin/nix" ]; then
     [ -x "$RDROOT/usr/bin/which" ] || [ -x "$RDROOT/usr/gnu/bin/which" ] \
       || die "which(1) absent from the live root -- it was missing from a shipped image and must not be again"
     echo "  tooling gate OK: which(1) present in the MOUNTED ramdisk" >&2
+
+    # reboot/poweroff are argv[0] links to halt (halt.c:49). Create them in the
+    # image if the host did not ship them, then GATE: an installed system with no
+    # way to reboot is what the maintainer actually hit.
+    if [ -f "$RDROOT/usr/sbin/halt" ]; then
+      for _ln in reboot poweroff; do
+        [ -e "$RDROOT/usr/sbin/$_ln" ] || \
+          ln "$RDROOT/usr/sbin/halt" "$RDROOT/usr/sbin/$_ln" 2>/dev/null || \
+          cp -p "$RDROOT/usr/sbin/halt" "$RDROOT/usr/sbin/$_ln" 2>/dev/null || true
+      done
+    fi
+    for _pw in halt reboot poweroff shutdown; do
+      [ -x "$RDROOT/usr/sbin/$_pw" ] || [ -x "$RDROOT/sbin/$_pw" ] \
+        || die "$_pw(1m) missing from the image -- an installed system must be able to reboot and power off"
+    done
+    echo "  power gate OK: halt + reboot + poweroff + shutdown all present" >&2
+
+    # The installer belongs in root's home: that is where an operator who just
+    # logged in will look, and `ls` there should show it without knowing a path.
+    # /usr/sbin/solnix-install stays as the canonical location (it is on PATH);
+    # this is a hardlink so both names are the same inode and cannot drift.
+    if [ -f "$RDROOT/usr/sbin/solnix-install" ]; then
+      mkdir -p "$RDROOT/root"
+      ln "$RDROOT/usr/sbin/solnix-install" "$RDROOT/root/solnix-install" 2>/dev/null \
+        || cp -p "$RDROOT/usr/sbin/solnix-install" "$RDROOT/root/solnix-install"
+      chmod 0755 "$RDROOT/root/solnix-install"
+      [ -x "$RDROOT/root/solnix-install" ] \
+        || die "solnix-install not executable in /root -- the operator lands there and must find it"
+      echo "  installer gate OK: /root/solnix-install present and executable" >&2
+    else
+      die "usr/sbin/solnix-install missing from the image -- nothing to install with"
+    fi
 
     # ⚠️ EXEC-TIME GATE, not a presence check. `vi` was PRESENT in image k and
     # still died: "ld.so.1: vi: fatal: libmapmalloc.so.1: open failed". A file
