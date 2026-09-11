@@ -1,7 +1,24 @@
 #!/usr/bin/env bash
-# bene-make-base-ami.sh — rebuild the x86_64 solnix/OpenIndiana base AMI in the
-# bene account from the PUBLIC OI cloud image, carrying BOTH documented cold-boot
-# fixes so the result is cold-launch reliable (the prior base measured 10/10).
+# make-base-ami.sh — rebuild the x86_64 solnix/OpenIndiana base AMI from the
+# PUBLIC OI cloud image, carrying BOTH documented cold-boot fixes so the result is
+# cold-launch reliable (the prior base measured 10/10).
+#
+# ACCOUNT-PORTABLE, and that is the whole point. This file supersedes
+# beef-make-base-ami.sh, ouch-make-base-ami.sh and bene-make-base-ami.sh —
+# three forks of ONE procedure, one per dead burner account, each stranded with
+# its account and each drifted from the others. A fourth fork was the obvious
+# move and would have repeated the mistake. Every account specific now comes
+# from the environment:
+#
+#   SOLNIX_PROFILE  aws cli profile AND the expected iam user name (default lava)
+#   REGION SG_ID SUBNET AZ KEY_NAME KEY   substrate ids
+#   HELPER_TYPE BOOT_TYPE                 instance types
+#   BASE_IMG_URL                          raw-image source (public OI, or a banked one)
+#
+# For a fresh account, prefer restoring from the R2-banked raw image
+# (scripts/ami-bank.sh restore) — that skips the seed stage entirely because the
+# banked image already carries the fixes. This script is the from-scratch path
+# and the ultimate fallback if R2 is ever lost too.
 #
 # Lineage: beef-make-base-ami.sh (proven 3-stage orchestrator) + the two fixes
 # that took the base from ~70% to 10/10:
@@ -41,25 +58,28 @@
 # helper and is polled from separate short reads (never block on a host op).
 set -euo pipefail
 cd "$(dirname "$0")/.."
-export AWS_PROFILE=bene
-REGION=us-east-2
-OI_URL="https://dlc.openindiana.org/isos/hipster/20251026/OI-hipster-cloudimage.img.zst"
-OI_VERSION="hipster-20251026"
+PROFILE="${SOLNIX_PROFILE:-lava}"
+export AWS_PROFILE="$PROFILE"
+REGION="${REGION:-us-east-2}"
+OI_URL="${BASE_IMG_URL:-https://dlc.openindiana.org/isos/hipster/20251026/OI-hipster-cloudimage.img.zst}"
+OI_VERSION="${OI_VERSION:-hipster-20251026}"
 AMI_NAME="solnix-base-x86_64-${OI_VERSION}-$(date +%Y%m%d)"
-DATA_VOL_GB=20                        # raw image is 1.95GiB; headroom for a later offline grow
-KEY_NAME="solnix-key"
-SG_ID="sg-07689ce3114d45ec9"          # solnix-sg (:22 from the operator /24 ONLY)
-SUBNET="subnet-0bfe4b750cdc33c45"     # bene us-east-2a; helpers pinned here (EBS is AZ-bound)
-AZ="us-east-2a"
-HELPER_TYPE="c5.4xlarge"              # fast dd + fast apt/zfs, minutes of runtime
+DATA_VOL_GB="${DATA_VOL_GB:-20}"      # raw image is 1.95GiB; headroom for a later offline grow
+KEY_NAME="${KEY_NAME:-solnix-lava}"
+SG_ID="${SG_ID:-sg-0d7ce9a7390bfadfe}"      # :22 from the operator /24 ONLY -- never world-open
+SUBNET="${SUBNET:-subnet-0230d1c45d8a098a7}" # us-east-2a; helpers pinned here (EBS is AZ-bound)
+AZ="${AZ:-us-east-2a}"
+HELPER_TYPE="${HELPER_TYPE:-c5.4xlarge}"    # fast dd + fast apt/zfs, minutes of runtime
 BOOT_TYPE="${BOOT_TYPE:-m5.4xlarge}"  # the type the prior 10/10 + 15/15 were measured on
-KEY="$HOME/.ssh/id_ed25519"           # solnix-key
-PUBKEY="$(cat "$HOME/.ssh/id_ed25519.pub")"
+KEY="${KEY:-$HOME/.ssh/${KEY_NAME}.pem}"
+# Derive the public half from the private key: a fresh account's EC2 keypair
+# arrives as a lone .pem with no .pub beside it.
+PUBKEY="$( [ -f "$KEY.pub" ] && cat "$KEY.pub" || ssh-keygen -y -f "$KEY" )"
 EXPIRY="$(date -d '+14 days' +%Y-%m-%d 2>/dev/null || date -v+14d +%Y-%m-%d)"
-ST=/tmp/bene-base-ami.state
-PROG=/tmp/base-ami-progress.txt
+ST="/tmp/${PROFILE}-base-ami.state"
+PROG="${PROG:-/tmp/base-ami-progress.txt}"
 
-aws() { command aws --profile bene --region "$REGION" "$@"; }
+aws() { command aws --profile "$PROFILE" --region "$REGION" "$@"; }
 log() { printf '\n=== %s ===\n' "$*" >&2; }
 note() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" | tee -a "$PROG" >&2; }
 kv()  { grep "^$1=" "$ST" 2>/dev/null | tail -1 | cut -d= -f2-; }
@@ -80,8 +100,8 @@ tags_for() { echo "${TAGS/NAMEHERE/$1}"; }
 
 # --- stage dd: public OI cloud image -> blank EBS volume ----------------------
 stage_dd() {
-  log "identity"; aws sts get-caller-identity --query Arn --output text | grep -q ':user/bene' \
-    || { echo "wrong account/profile (expected bene)"; exit 1; }
+  log "identity"; aws sts get-caller-identity --query Arn --output text | grep -q ":user/$PROFILE" \
+    || { echo "wrong account/profile (expected $PROFILE)"; exit 1; }
   AL2023="$(aws ec2 describe-images --owners amazon \
     --filters 'Name=name,Values=al2023-ami-2023.*-x86_64' 'Name=state,Values=available' \
     --query 'reverse(sort_by(Images,&CreationDate))[0].ImageId' --output text)"
@@ -151,7 +171,8 @@ stage_seed() {
   lscp artifacts/ena/ena artifacts/ena/ena.conf scripts/metadata-shim.sh \
        modules/config/solnix-nitro-pit.system.d ubuntu@"$SIP":/tmp/
   lssh ubuntu@"$SIP" "cat > /tmp/mypub" <<<"$PUBKEY"
-  lssh ubuntu@"$SIP" "sudo tee /tmp/seed-run.sh >/dev/null" < scripts/bene-base-seed.sh
+  lssh ubuntu@"$SIP" "sudo tee /tmp/seed-run.sh >/dev/null" < scripts/base-ami-seed.sh
+  lssh ubuntu@"$SIP" 'grep -c . /tmp/seed-run.sh; head -1 /tmp/seed-run.sh' || true
   lssh ubuntu@"$SIP" 'sudo bash -c "chmod +x /tmp/seed-run.sh; nohup /tmp/seed-run.sh </dev/null >/dev/null 2>&1 & echo started $!"'
   note "seed: running detached on $SEEDIID; poll with: $0 seed-poll"
 }

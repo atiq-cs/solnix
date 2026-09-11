@@ -1,5 +1,5 @@
 #!/bin/bash
-# bene-base-seed.sh — runs ON the Ubuntu 24.04 OpenZFS helper (as root, detached).
+# base-ami-seed.sh — runs ON the Ubuntu 24.04 OpenZFS helper (as root, detached).
 #
 # Turns a raw OpenIndiana cloud-image volume into the solnix x86_64 base:
 #   * grow the ZFS partition + pool to the whole disk (OFFLINE, before import)
@@ -54,7 +54,17 @@ sgdisk -p "$DATA" || true
 ZLINE=$(sfdisk -d "$DATA" | grep -i 'type=6A898CC3' | head -1)   # Solaris /usr & ZFS
 RLINE=$(sfdisk -d "$DATA" | grep -i 'type=6A945A3B' | head -1)   # Solaris reserved
 ZEND=$(echo "$ZLINE" | sed -n 's/.*start= *\([0-9]*\), *size= *\([0-9]*\).*/\1 \2/p' | awk '{print $1+$2}')
-LASTLBA=$(sfdisk -d "$DATA" | sed -n 's/^last-lba: *//p')
+# The device's REAL last usable LBA, from the kernel -- NOT from `sfdisk -d`.
+# MEASURED TRAP: the GPT here was dd'd from a 1.95GiB image onto a 20GiB volume, so
+# its header still claims last-lba=4095966 while the device has 41943040 sectors.
+# sfdisk even warns "GPT PMBR size mismatch (4095999 != 41943039) will be corrected
+# by write" and STILL reports the stale value. Trusting it made this test read
+# `[ 4079583 -lt 4030430 ]` = false, so the grow was skipped SILENTLY and the image
+# shipped with 188M free -- the documented "useless for Nix" failure. 34 sectors is
+# the secondary GPT reservation (33 + 1).
+DEVSZ=$(blockdev --getsz "$DATA")
+LASTLBA=$((DEVSZ - 34))
+echo "device sectors=$DEVSZ real last-lba=$LASTLBA (sfdisk claims $(sfdisk -d "$DATA" 2>/dev/null | sed -n 's/^last-lba: *//p'))"
 echo "zfs partition ends at $ZEND; last usable lba $LASTLBA"
 if [ -n "$ZLINE" ] && [ -n "$LASTLBA" ] && [ "$ZEND" -lt $((LASTLBA - 65536)) ]; then
   RESV_SECT=32768                                   # keep the 16MiB Solaris reserved slice
@@ -62,7 +72,14 @@ if [ -n "$ZLINE" ] && [ -n "$LASTLBA" ] && [ "$ZEND" -lt $((LASTLBA - 65536)) ];
   RSTART=$((LASTLBA - RESV_SECT))
   ZSIZE=$((RSTART - ZSTART))
   {
-    sfdisk -d "$DATA" | grep -viE 'type=6A898CC3|type=6A945A3B'
+    # Rewrite the stale `last-lba:` header to the device's real end. Without this
+    # sfdisk validates the new partition against the OLD 1.95GiB GPT and refuses:
+    #   "The last usable GPT sector is 4095966, but 41910237 is requested.
+    #    Failed to add #2 partition: Invalid argument / Leaving."
+    # It aborts WITHOUT writing, so the disk is unharmed but the grow silently
+    # does not happen -- which is why the assertion below is not optional.
+    sfdisk -d "$DATA" | grep -viE 'type=6A898CC3|type=6A945A3B' \
+      | sed "s/^last-lba:.*/last-lba: $LASTLBA/"
     echo "$ZLINE" | sed "s/size= *[0-9]*/size= $ZSIZE/"
     [ -n "$RLINE" ] && echo "$RLINE" | sed "s/start= *[0-9]*/start= $RSTART/"
   } > /tmp/tbl.sfdisk
@@ -70,8 +87,17 @@ if [ -n "$ZLINE" ] && [ -n "$LASTLBA" ] && [ "$ZEND" -lt $((LASTLBA - 65536)) ];
   sfdisk --no-reread --force "$DATA" < /tmp/tbl.sfdisk 2>&1 | tail -12
   partprobe "$DATA" 2>/dev/null || true
   sleep 3
+  # A silent no-op here is the failure mode that shipped a 188M-free image, so
+  # ASSERT the partition really grew rather than trusting the exit status.
+  NEWZ=$(sfdisk -d "$DATA" | grep -i 'type=6A898CC3' | sed -n 's/.*size= *\([0-9]*\).*/\1/p' | head -1)
+  echo "zfs partition sectors: was $(echo "$ZLINE" | sed -n 's/.*size= *\([0-9]*\).*/\1/p') now ${NEWZ:-UNKNOWN} (wanted $ZSIZE)"
+  if [ "${NEWZ:-0}" -lt $((ZSIZE - 1)) ]; then
+    echo "GROW_VERIFY_FAILED: zfs partition is ${NEWZ:-0} sectors, expected ~$ZSIZE"
+    echo SEED_FAILED_GROW; exit 1
+  fi
+  echo GROW_VERIFIED
 else
-  echo "zfs partition already fills the disk (or layout unrecognized) -- no repartition"
+  echo "zfs partition already fills the disk (ZEND=$ZEND LASTLBA=$LASTLBA) -- no repartition"
 fi
 sgdisk -p "$DATA" || true
 lsblk "$DATA"
