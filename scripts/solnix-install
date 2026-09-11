@@ -113,7 +113,47 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 [ "$(id -u)" = 0 ] || die "run as root"
-[ -n "$TARGET" ] || die "usage: solnix-install <target-disk> [toplevel]"
+# ⚠️ With no argument this used to print only a usage string, which reads on a
+# console as "no disks listed" -- the operator cannot act on it. List what is
+# actually enumerated, and name the boot medium so it is obvious which NOT to pick.
+if [ -z "$TARGET" ]; then
+  echo "usage: solnix-install <target-disk> [toplevel]" >&2
+  echo "" >&2
+  echo "Disks illumos has enumerated (whole-disk names, no sN suffix):" >&2
+  _found=0
+  for _d in /dev/rdsk/*s0; do
+    [ -e "$_d" ] || continue
+    _n=$(basename "$_d"); _n=${_n%s0}
+    # A disk with no label still has an s0 node, so report size when readable
+    # rather than skipping it -- an unlabelled target is the normal case here.
+    _sz=$(prtvtoc -h "/dev/rdsk/${_n}s2" 2>/dev/null | awk '$1==2{print $5}')
+    if [ -z "$_sz" ]; then
+      _sz=$(prtvtoc -h "$_d" 2>/dev/null | awk '$1==2{print $5}')
+    fi
+    if [ -n "$_sz" ]; then
+      _gb=$(( _sz / 2097152 ))
+      printf '  %-28s ~%s GiB\n' "$_n" "$_gb" >&2
+    else
+      printf '  %-28s (unlabelled -- fine, the installer labels it)\n' "$_n" >&2
+    fi
+    _found=$((_found + 1))
+  done
+  if [ "$_found" = 0 ]; then
+    echo "  NONE. illumos enumerated no disks at all." >&2
+    echo "" >&2
+    echo "  That is a driver/enumeration problem, not an installer one. Check:" >&2
+    echo "    prtconf -D | grep -i blkdev     # did the NVMe attach?" >&2
+    echo "    devfsadm -C                     # rebuild /dev, then re-run" >&2
+  else
+    echo "" >&2
+    # Identify the USB stick we booted from so it is not offered as a target by
+    # accident. On live media the boot device often has no /dev/dsk node at all.
+    _boot=$(df -n / 2>/dev/null | awk '{print $NF}')
+    echo "  (booted from: ${_boot:-unknown}. Do NOT pick a disk you need.)" >&2
+    echo "  Then run: solnix-install <one-of-the-names-above>" >&2
+  fi
+  exit 2
+fi
 [ -e "/dev/rdsk/${TARGET}s0" ] || die "target disk $TARGET not present (attach + reboot so illumos enumerates it)"
 
 # guards derived from the RUNNING root pool: never touch it or its disk.

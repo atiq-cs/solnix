@@ -701,6 +701,39 @@ for _l in \
   /usr/lib/64/libcom_err.so.3; do
   _copy_lib "$_l"
 done
+# ⚠️ CLOSE THE WHOLE CLASS: resolve every staged ELF's libraries with ldd(1)
+# rather than maintaining a list by hand. The hardcoded list above shipped a `vi`
+# that died with "ld.so.1: vi: fatal: libmapmalloc.so.1: open failed" -- the same
+# shape as the hardcoded 12-name /dev allowlist that omitted /dev/zfs and
+# /dev/sad. Enumerating real dependencies is the only version that cannot
+# silently omit something.
+#
+# ldd is illumos-native (SUNWcsu) but guard rather than assume -- the stat(1) and
+# readlink(1) lessons. Without it, fall back and SAY SO: a silent downgrade here
+# ships binaries that die at exec time.
+if [ -x /usr/bin/ldd ]; then
+  : > "$OUT/.ldd-added"
+  for _bin in "$RDROOT"/usr/bin/* "$RDROOT"/usr/sbin/* "$RDROOT"/usr/gnu/bin/* \
+              "$RDROOT"/usr/has/bin/* "$RDROOT"/sbin/* "$RDROOT"/usr/lib/*.so*; do
+    [ -f "$_bin" ] || continue
+    LC_ALL=C od -An -N4 -tx1 "$_bin" 2>/dev/null | grep -q '7f 45 4c 46' || continue
+    /usr/bin/ldd "$_bin" 2>/dev/null | while read -r _n _a _p _rest; do
+      case "$_p" in /*) ;; *) continue ;; esac
+      [ -f "$_p" ] || continue
+      _rel="${_p#/}"
+      [ -f "$RDROOT/$_rel" ] && continue
+      mkdir -p "$RDROOT/$(dirname "$_rel")"
+      cp -p "$_p" "$RDROOT/$_rel" 2>/dev/null && printf '%s\n' "$_rel" >> "$OUT/.ldd-added"
+    done
+  done
+  _ldd_n=$(sort -u "$OUT/.ldd-added" 2>/dev/null | wc -l | tr -d ' ')
+  echo "  ldd closure: added ${_ldd_n:-0} library file(s) missing from the manual list" >&2
+  rm -f "$OUT/.ldd-added"
+else
+  echo "WARN: no /usr/bin/ldd -- library staging falls back to the manual list;" >&2
+  echo "      expect 'ld.so.1: <cmd>: fatal: lib*.so: open failed' at runtime" >&2
+fi
+
 # NSS/NSPR (mps) tree -- dlopen'd by libsasl/libldap; copy both ABIs whole
 # (~7MB, but auth silently fails without it). Real files + soname symlinks.
 if [ -d "$SRC/usr/lib/mps" ]; then
@@ -2251,6 +2284,32 @@ if [ "$STAGE_NIX" = 1 ] && [ -x "$RDROOT/nix-tools224/bin/nix" ]; then
     [ -x "$RDROOT/usr/bin/which" ] || [ -x "$RDROOT/usr/gnu/bin/which" ] \
       || die "which(1) absent from the live root -- it was missing from a shipped image and must not be again"
     echo "  tooling gate OK: which(1) present in the MOUNTED ramdisk" >&2
+
+    # ⚠️ EXEC-TIME GATE, not a presence check. `vi` was PRESENT in image k and
+    # still died: "ld.so.1: vi: fatal: libmapmalloc.so.1: open failed". A file
+    # existing proves nothing about whether it can start, which is the same lesson
+    # as the nix runnability gate. chroot so the loader resolves inside the image.
+    # /devices is lofs-mounted because the image's /dev is symlinks into
+    # ../devices/pseudo that only a booted kernel populates.
+    if [ -x "$RDROOT/usr/bin/chroot" ] || [ -x /usr/sbin/chroot ]; then
+      _chr=$(command -v chroot 2>/dev/null || echo /usr/sbin/chroot)
+      mkdir -p "$RDROOT/devices"
+      mount -F lofs -o ro /devices "$RDROOT/devices" 2>/dev/null && _lofs=1 || _lofs=0
+      for _c in /usr/bin/vi /usr/bin/which /usr/bin/less /usr/bin/ldd; do
+        [ -f "$RDROOT$_c" ] || continue
+        _o=$("$_chr" "$RDROOT" "$_c" --version 2>&1 </dev/null | head -1)
+        case "$_o" in
+          *"fatal:"*|*"open failed"*)
+            [ "$_lofs" = 1 ] && umount "$RDROOT/devices" 2>/dev/null
+            die "$_c cannot start in the image: $_o
+    A library is missing from the ramdisk. The ldd closure should have caught this." ;;
+          *) echo "  exec gate OK: $_c starts in the image" >&2 ;;
+        esac
+      done
+      [ "$_lofs" = 1 ] && umount "$RDROOT/devices" 2>/dev/null || true
+    else
+      echo "WARN: no chroot -- cannot exec-test the staged binaries" >&2
+    fi
   # and the sibling commands must be argv[0] links to the same binary, not copies
   [ -L "$RDROOT/nix-tools224/bin/nix-store" ] || \
     die "nix-store is not a symlink -- the 12-full-copies pathology is back, +1.8GB"
