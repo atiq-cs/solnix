@@ -17,7 +17,7 @@ And the CPU topology contradicts every assumption in `src/riscv/uts/k1.dts`:
 | vendor id | — | `0x710` |
 | topology | uniform | **heterogeneous** (two core types, big.LITTLE-style) |
 | clock | — | X100 at 2200 MHz |
-| root device | microSD | `sda` 119.3 G + seven `mtdblock` SPI-flash devices |
+| root device | microSD | `sda` 119.3 G + seven `mtdblock` SPI-flash devices — **UFS, and the boot chain is in SPI NOR; there is no SD path at all** (see `k3-vendor-dtb-findings.md`) |
 | PCIe | none modelled | **`SpacemiT X100 PCIe Root Complex`**, two root complexes, 128 M windows at `0x1108000000` / `0x1110000000` |
 
 **So there is no image ready for this board, and I should not pretend otherwise.** `solnix-k1-sd.img`
