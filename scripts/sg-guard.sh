@@ -18,6 +18,14 @@
 # Uses the current AWS profile/creds in the environment. No creds are logged.
 set -euo pipefail
 
+# The audit is meaningless without credentials, and this script sets no
+# profile of its own -- so every "CLEAN" was reported from an account it
+# could not read. Default to the current build account; override with
+# AWS_PROFILE=... when auditing a different one.
+: "${AWS_PROFILE:=lava}"   # build account; bene expired 2026-09-11
+export AWS_PROFILE
+
+
 WORLD_V4="0.0.0.0/0"
 WORLD_V6="::/0"
 
@@ -57,6 +65,27 @@ cmd_authorize() {
 # Python -- robust against quoting). Emits one line per offending SG; empty = clean.
 audit_region() {  # $1=region -> returns 1 if any world-open rule found
   local region="$1" hits
+
+  # REACHABILITY PROBE FIRST. The describe calls below end in
+  # `2>/dev/null || true`, so an auth failure produced empty output and the
+  # guard reported CLEAN -- "I cannot see anything" was indistinguishable from
+  # "there is nothing to see". Confirmed by adding a real 0.0.0.0/0 rule and
+  # watching it still say CLEAN. A security check that cannot fail is worse than
+  # no check: it manufactures confidence.
+  local probe
+  if ! probe="$(aws ec2 describe-security-groups --region "$region" \
+      --query 'length(SecurityGroups)' --output text 2>&1)"; then
+    echo "  ERROR $region: cannot enumerate SGs -- $(echo "$probe" | tail -1)" >&2
+    echo "  sg-guard: REFUSING to report CLEAN on an unreadable account." >&2
+    return 2
+  fi
+  case "$probe" in
+    ''|*[!0-9]*)
+      echo "  ERROR $region: unexpected SG count '$probe' -- unreadable." >&2
+      return 2 ;;
+  esac
+  echo "  sg-guard: $region -- $probe security group(s) visible" >&2
+
   hits="$(aws ec2 describe-security-groups --region "$region" \
       --filters "Name=ip-permission.cidr,Values=0.0.0.0/0" \
       --query 'SecurityGroups[].[GroupId,GroupName]' --output text 2>/dev/null || true)"
