@@ -18,6 +18,17 @@ instruction on a K1. Every claim is tagged:
 > normal outcome, and section 7 is written for that case. The deliverable of the
 > sitting is *console text*, whatever it says.
 
+> **See also `docs/milkv-jupiter-first-boot.md`** for the microSD image recipe,
+> the `dd` command, the derived-vs-assumed address table, a three-way
+> expectation table, and the adapter-vs-dead-kernel negative control. It also
+> records a bug found in this code path after this runbook was written: the
+> kernel bound its console MMIO base to a **compile-time qemu address**, which
+> on the K1 is DRAM, so console input was dead and `uart_putc` would spin
+> forever. Fixed. That is why section 7.4's "only ever arithmetically verified"
+> note below is now out of date in one direction: the UART base is DTB-derived,
+> and `src/riscv/uts/console-bind-check.py` checks that precondition in both
+> directions with a working negative control.
+
 ---
 
 ## 0. What is NOT on the table
@@ -556,6 +567,18 @@ rather than re-diagnosed:
   `0xd4017000`) has only ever been **arithmetically** verified, never driven.
   The banner does not depend on it (it uses the SBI console), but anything that
   reads console *input* does.
+
+  **UPDATE — a real bug was found here, and fixed.** The console MMIO base was
+  not merely unverified, it was **wrong**: `startup.c` passed the hardcoded
+  compile-time `UART0_BASE` (`0x10000000`, the qemu-virt ns16550) on both
+  platforms, and `uart.c` rebound the console back to it after the self-test. On
+  the K1 that address is DRAM (bank 0 is `0x0..0x80000000`), which reads `0x00`,
+  so `LSR.THRE` never sets and `uart_putc` spins **forever** — a silent hang, not
+  a dead keyboard. Output was unaffected because it goes via SBI putchar, which
+  is exactly what hid it, and no QEMU gate could catch it because on `-machine
+  virt` `0x10000000` *is* a real ns16550. The base now comes from the live boot
+  DTB. Full write-up, and the second (property-order) bug the negative control
+  turned up: `docs/milkv-jupiter-first-boot.md` section 3.
 
 ### 7.5 It prints, then resets in a loop
 

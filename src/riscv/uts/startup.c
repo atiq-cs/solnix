@@ -242,16 +242,46 @@ startup_memlist(unsigned long dtb)
 		/* On real K1, use the sdhci base the FIRMWARE DTB reported; under
 		 * qemu-virt (model) use our embedded blob's K1 base 0xd4281000. */
 		sdhci_base = on_k1_silicon ? boot.sdhci_base : k1.sdhci_base;
-		/* Gate 2: prove the dw-apb-uart 8250 console driver TX/RX live
-		 * against the qemu 16550 (shift=0) — the SAME driver code binds
-		 * the K1 uart; then prove the K1's reg-shift=2 register math. */
-		dw_apb_uart_selftest(UART0_BASE, 0, 0);
+		/*
+		 * Gate 2: bind and prove the 16550 console against the UART the
+		 * FIRMWARE's OWN DTB names, not a compiled-in address.
+		 *
+		 * This line used to read dw_apb_uart_selftest(UART0_BASE, 0, 0),
+		 * i.e. the qemu-virt ns16550 at 0x10000000, on BOTH platforms --
+		 * and uart.c then rebound the console back to that same constant.
+		 * On the K1 that address is DRAM (bank 0 is 0x0..0x80000000), so
+		 * the TX loop would poll LSR.THRE in RAM that reads 0x00 and spin
+		 * forever, hanging the boot here; console INPUT (read(fd=0) ->
+		 * uart_getc) polled the same RAM. Kernel OUTPUT was unaffected
+		 * because it goes via SBI putchar, which is precisely what made
+		 * the bug invisible -- the output-fine/input-dead split of the
+		 * x86_64 `console` vs `os_console` bug -- and precisely why no
+		 * QEMU gate could catch it: on -machine virt, 0x10000000 IS a
+		 * real ns16550.
+		 *
+		 * `boot` is the live firmware DTB (a1). On the K1 it yields
+		 * 0xd4017000/shift=2/io32, reachable after paging via the
+		 * K1_DEV_GIGA identity gigapage; under qemu-virt it yields
+		 * 0x10000000/shift=0/byte. Same code, both boards, no recompile.
+		 * The `live` argument is nonzero only when the base came from the
+		 * boot DTB, so an unconfirmed address is reported without MMIO
+		 * rather than hung on.
+		 */
+		if (boot.uart_is_dw && boot.uart_base != 0) {
+			dw_apb_uart_selftest(boot.uart_base, boot.uart_shift,
+			    boot.uart_io32, 1);
+		} else {
+			sbi_console_puts("[dw-apb-uart] boot DTB named no "
+			    "16550-family console UART; console input "
+			    "unavailable (output still via SBI putchar)\n");
+		}
+		/* Arithmetic-only (no MMIO) proof of the K1 reg-shift math. */
 		uart_regshift_check(k1.uart_shift);
-		sbi_console_puts("[dw-apb-uart] K1 console is dw-apb-uart@");
-		kputhex(k1.uart_base);
-		sbi_console_puts(" reg-shift=");
-		kputdec(k1.uart_shift);
-		sbi_console_puts(" (bind + live drive on K1 silicon: R-P15)\n");
+		sbi_console_puts("[dw-apb-uart] console bound @");
+		kputhex(uart_current_base());
+		sbi_console_puts(on_k1_silicon ?
+		    " (K1 silicon, from boot DTB)\n" :
+		    " (qemu-virt, from boot DTB)\n");
 		/* Gate 1 (R-P15): prove the K1 device MMIO window is mapped. */
 		hat_k1_devmap_prove();
 		/* Gate 3: R-P15 mmc/sdhci BLOCK DRIVER + R-P16 runtime backend.

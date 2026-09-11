@@ -13,7 +13,8 @@
 struct k1_devs {
 	unsigned long mem_base, mem_size;
 	unsigned long uart_base;	unsigned int uart_shift;
-	int uart_is_dw;			/* snps,dw-apb-uart present */
+	int uart_is_dw;			/* 16550-family console UART present */
+	int uart_io32;			/* reg-io-width == 4 (32-bit MMIO) */
 	unsigned long sdhci_base;	int sdhci_present;
 	unsigned long aplic_base;	int aplic_present;
 	unsigned long imsic_base;	int imsic_present;
@@ -23,10 +24,13 @@ struct k1_devs {
  * the four K1 signature devices (dw-apb-uart, sdhci, aplic, imsic) are present. */
 extern int fdt_k1_summary(unsigned long dtb, struct k1_devs *out);
 
-/* uart.c: bind the console to base/reg-shift/io-width, and the gate-2 proof. */
+/* uart.c: bind the console to base/reg-shift/io-width, and the gate-2 proof.
+ * `live` nonzero => the base came from the firmware's own DTB and MMIO is safe;
+ * 0 => report the binding but issue NO MMIO (a TX to a non-UART spins forever
+ * on LSR.THRE rather than failing). */
 extern void uart_config(unsigned long base, unsigned int shift, int io32);
 extern void dw_apb_uart_selftest(unsigned long base, unsigned int shift,
-    int io32);
+    int io32, int live);
 
 /* sdhci.c: gate-3-alt register-level SDHCI/eMMC probe. */
 extern int sdhci_probe(unsigned long base);
@@ -41,5 +45,14 @@ extern void sdhci_model_selftest(void);
 
 /* uart.c: arithmetic proof of the reg-shift register-offset math (no MMIO). */
 extern void uart_regshift_check(unsigned int shift);
+
+/*
+ * uart.c: the base the console is CURRENTLY bound to. Exists so the boot log
+ * can state the bound address rather than the address someone believed was
+ * bound. Binding the console to a compiled-in constant instead of the live
+ * boot DTB is a silent infinite spin on any board whose UART is elsewhere
+ * (see the uart.c banner).
+ */
+extern unsigned long uart_current_base(void);
 
 #endif	/* _K1_H */

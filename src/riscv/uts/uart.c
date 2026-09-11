@@ -50,8 +50,31 @@ extern void sbi_console_puts(const char *s);
 
 /*
  * Live console binding. Defaults to the qemu-virt NS16550A (base UART0_BASE,
- * byte registers). uart_config() rebinds it to the FDT-discovered UART — on
- * the K1 that is the dw-apb-uart at 0xd4017000, reg-shift=2, 32-bit access.
+ * byte registers) purely as a pre-DTB fallback; uart_config() rebinds it to the
+ * UART the LIVE BOOT DTB describes -- on the K1 that is 0xd4017000, reg-shift=2,
+ * 32-bit access.
+ *
+ * WHY THIS DEFAULT IS DANGEROUS, AND WHY NOTHING MAY REBIND TO IT:
+ *
+ * Console OUTPUT for kernel messages does not come through here at all -- it
+ * goes out via sbi_console_puts (SBI legacy putchar), i.e. the FIRMWARE's own
+ * UART driver. Console INPUT (uart_getc, the read(fd=0) path in syscall.c) and
+ * uart_putc go through THIS base, configured SEPARATELY. That split is exactly
+ * the x86_64 `console` vs `os_console` bug: output worked, input was dead, and
+ * a silent console is indistinguishable from a hang.
+ *
+ * On the K1 it is worse than a dead keyboard. 0x10000000 is not a UART there;
+ * bank-0 DRAM is 0x0..0x80000000, so 0x10000000 is ordinary RAM. Freshly
+ * trained DRAM reads 0x00, so LSR.THRE (bit 5) never sets and uart_putc's
+ * `while ((uart_rd(UART_LSR) & LSR_THRE) == 0)` spins FOREVER, and uart_wr(THR)
+ * scribbles into RAM that page_init later manages. QEMU cannot exhibit this:
+ * on -machine virt 0x10000000 IS a real ns16550, so every gate passes 8/8 while
+ * proving nothing about metal.
+ *
+ * Hence: the base must always come from the boot DTB, and the check that
+ * matters is the PRECONDITION -- does the bound base resolve to 0xd4017000 on
+ * a K1 DTB and 0x10000000 on a virt DTB? -- not an attempt to reproduce the
+ * spin, which is unreproducible in emulation by construction.
  */
 static unsigned long uart_base = UART0_BASE;
 static unsigned int uart_shift = 0;	/* reg-shift: 0 = byte, 2 = 32-bit */
@@ -87,19 +110,35 @@ uart_wr(int idx, unsigned int v)
  * for the K1 dw-apb-uart), `io32` nonzero if `reg-io-width == 4`. After this,
  * every getc/putc/selftest below drives the newly-bound UART.
  *
- * NOTE (qemu-vs-real-silicon): on a real K1 the dw-apb-uart is at 0xd4017000
- * and this base must be identity-mapped by the low-MMIO map (R-P3 gigapage
- * covers 0x0..0x40000000; 0xd4017000 is above it, so booting on real silicon
- * needs an added device mapping — flagged in the R-P14 design notes). Under
- * qemu-virt the driver is proven against the NS16550 at 0x10000000, and the
- * K1 reg-shift math is proven by a self-test that pokes the shifted offsets.
+ * A zero base is REFUSED rather than installed: a DTB walk that found no UART
+ * node leaves base 0, and binding there would poll physical page 0 forever.
+ * Refusing keeps the previous binding, which is this fallback's only
+ * legitimate use.
+ *
+ * The K1's UART at 0xd4017000 is reachable after paging because hat_boot_init
+ * installs an identity gigapage over 0xc0000000..0x100000000 (K1_DEV_GIGA in
+ * hat_riscv.c) — the same one that covers sdhci/PLIC/CLINT.
  */
 void
 uart_config(unsigned long base, unsigned int shift, int io32)
 {
+	if (base == 0) {
+		sbi_console_puts("[uart] REFUSING to bind console to base 0 "
+		    "(no UART in the boot DTB); keeping @");
+		kputhex(uart_base);
+		sbi_console_puts("\n");
+		return;
+	}
 	uart_base = base;
 	uart_shift = shift;
 	uart_io32 = io32;
+}
+
+/* uart_current_base — the base the console is bound to RIGHT NOW. */
+unsigned long
+uart_current_base(void)
+{
+	return (uart_base);
 }
 
 /*
@@ -182,21 +221,20 @@ uart_putc(int ch)
 /*
  * dw_apb_uart_selftest — R-P14 gate 2 proof: a real 8250/16550 console driver
  * driving TX/RX through the FDT-bound UART, exercising the reg-shift math the
- * K1's dw-apb-uart needs. `base`/`shift`/`io32` come from the K1 (or qemu-virt)
- * FDT node discovered by fdt_k1_summary / fdt_attach_drivers.
+ * K1's UART needs. `base`/`shift`/`io32` come from the LIVE BOOT DTB discovered
+ * by fdt_k1_summary / fdt_attach_drivers — never from a compiled-in constant.
  *
- * We (1) bind the UART, (2) TX a proof string through uart_putc (which polls
- * LSR.THRE at the shifted LSR offset), (3) confirm the LSR reads back sane
- * (THRE set on an idle transmitter), and (4) report. Under qemu-virt this runs
- * against the NS16550 (shift 0); the SAME code with shift=2 is what drives the
- * K1 dw-apb-uart — proven by re-binding to a K1-shaped (shift=2) view of the
- * qemu UART and checking the shifted-offset LSR still reads a live THRE, i.e.
- * the reg-shift address arithmetic is correct.
+ * `live` says whether `base` is a UART on THIS board. When it is 0 the test
+ * binds and reports but does NOT touch MMIO, because a TX to a non-UART is not
+ * a failed test, it is an infinite spin: uart_putc polls LSR.THRE forever, and
+ * on the K1 the qemu-virt base 0x10000000 is DRAM, which reads 0x00 and never
+ * sets THRE. Skipping is the only safe behaviour for an address we did not get
+ * from the firmware.
  *
  * PROVE: "dw-apb-uart: console TX/RX on K1 uart (8250, reg-shift=2)".
  */
 void
-dw_apb_uart_selftest(unsigned long base, unsigned int shift, int io32)
+dw_apb_uart_selftest(unsigned long base, unsigned int shift, int io32, int live)
 {
 	unsigned int lsr;
 	const char *msg = "[dw-apb-uart] 8250 console TX self-test\n";
@@ -205,10 +243,22 @@ dw_apb_uart_selftest(unsigned long base, unsigned int shift, int io32)
 	uart_config(base, shift, io32);
 
 	sbi_console_puts("[dw-apb-uart] bind console @");
-	kputhex(base);
+	kputhex(uart_current_base());
 	sbi_console_puts(" reg-shift=");
 	kputdec(shift);
-	sbi_console_puts(io32 ? " io-width=4(32b)\n" : " io-width=1(8b)\n");
+	sbi_console_puts(io32 ? " io-width=4(32b)" : " io-width=1(8b)");
+	sbi_console_puts(" [from boot DTB]\n");
+
+	if (!live) {
+		/*
+		 * Deliberately no MMIO. See the banner: a TX to an address the
+		 * firmware did not report as a UART hangs rather than fails.
+		 */
+		sbi_console_puts("[dw-apb-uart] TX self-test SKIPPED: base not "
+		    "firmware-confirmed as a UART on this board (no MMIO "
+		    "issued; a TX here would spin on LSR.THRE forever)\n");
+		return;
+	}
 
 	/* TX a line straight through the bound UART's THR (shifted offset). */
 	for (q = msg; *q != '\0'; q++)
@@ -218,7 +268,7 @@ dw_apb_uart_selftest(unsigned long base, unsigned int shift, int io32)
 	lsr = uart_rd(UART_LSR);
 
 	if (lsr & LSR_THRE) {
-		sbi_console_puts("[dw-apb-uart] console TX/RX on K1 uart "
+		sbi_console_puts("[dw-apb-uart] console TX/RX on uart "
 		    "(8250, reg-shift=");
 		kputdec(shift);
 		sbi_console_puts("): LSR.THRE live @");
@@ -229,7 +279,13 @@ dw_apb_uart_selftest(unsigned long base, unsigned int shift, int io32)
 		    "shifted offset (reg-shift math?)\n");
 	}
 
-	/* Leave the console bound to the qemu-virt NS16550 for the rest of the
-	 * boot (real console I/O still uses SBI/putc at UART0_BASE). */
-	uart_config(UART0_BASE, 0, 0);
+	/*
+	 * The console stays bound to the UART the boot DTB named. It is NOT
+	 * rebound to UART0_BASE here: that rebind was the bug — it pointed
+	 * console INPUT (uart_getc, read(fd=0)) and uart_putc at the qemu-virt
+	 * ns16550 address, which on the K1 is DRAM. Output survived because
+	 * kernel messages go via SBI putchar, so the breakage was invisible
+	 * except as a hang: the same output-fine/input-dead split as the
+	 * x86_64 `console` vs `os_console` bug.
+	 */
 }

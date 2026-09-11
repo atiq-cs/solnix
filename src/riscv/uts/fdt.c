@@ -360,9 +360,28 @@ fdt_k1_summary(unsigned long dtb, struct k1_devs *out)
 	const unsigned char *stru, *strs, *p;
 	unsigned int addr_cells = 2, size_cells = 2;
 	int depth = 0, in_memory = 0;
-	/* Which device is the CURRENT node, so a following reg/reg-shift prop
-	 * (which comes AFTER compatible in the token stream) lands in it. */
+	/*
+	 * Which device the CURRENT node is. Decided at FDT_END_NODE, not at the
+	 * `compatible` property, because DTB PROPERTY ORDER IS NOT GUARANTEED and
+	 * real producers disagree:
+	 *
+	 *   our k1.dts     : compatible, reg, reg-shift, ...  (compatible FIRST)
+	 *   qemu -M virt   : interrupts, ..., reg, compatible (compatible LAST)
+	 *
+	 * The previous version classified on `compatible` and stored reg only
+	 * while a classification was already live, so on the qemu-virt DTB the
+	 * ns16550a's `reg` arrived BEFORE its `compatible` and was dropped:
+	 * uart_base came out 0. Same failure family as binding the console to a
+	 * compiled-in base -- a value that looks present and is not.
+	 *
+	 * So: latch this node's candidate reg/reg-shift/reg-io-width as they are
+	 * seen, latch what its compatible list says it is, and commit both when
+	 * the node closes. Order-independent by construction.
+	 */
 	int cur = 0;		/* 0 none, 1 uart, 2 sdhci, 3 aplic, 4 imsic */
+	unsigned long n_reg = 0;		/* this node's reg base */
+	unsigned int n_shift = 0;		/* this node's reg-shift */
+	int n_io32 = 0;				/* this node's reg-io-width == 4 */
 	struct k1_devs d;
 	int i;
 
@@ -391,14 +410,48 @@ fdt_k1_summary(unsigned long dtb, struct k1_devs *out)
 				len++;
 			p += (len + 4) & ~3U;
 			depth++;
+			/* New node: nothing classified, nothing latched yet. */
 			cur = 0;
+			n_reg = 0;
+			n_shift = 0;
+			n_io32 = 0;
 			if (is_memory_node(name))
 				in_memory = 1;
 			continue;
 		}
 		if (tok == FDT_END_NODE) {
+			/*
+			 * COMMIT POINT. Everything this node said has now been
+			 * seen, so classification and reg can be joined without
+			 * depending on which came first in the token stream.
+			 */
+			switch (cur) {
+			case 1:			/* 16550-family console UART */
+				d.uart_is_dw = 1;
+				d.uart_base = n_reg;
+				d.uart_shift = n_shift;
+				d.uart_io32 = n_io32;
+				break;
+			case 2:			/* SDHCI-standard MMC */
+				d.sdhci_present = 1;
+				d.sdhci_base = n_reg;
+				break;
+			case 3:
+				d.aplic_present = 1;
+				d.aplic_base = n_reg;
+				break;
+			case 4:
+				d.imsic_present = 1;
+				d.imsic_base = n_reg;
+				break;
+			default:
+				break;
+			}
 			in_memory = 0;
 			cur = 0;
+			n_reg = 0;
+			n_shift = 0;
+			n_io32 = 0;
 			depth--;
 			continue;
 		}
@@ -419,38 +472,39 @@ fdt_k1_summary(unsigned long dtb, struct k1_devs *out)
 				d.mem_size = be_cells(pdata + addr_cells * 4,
 				    size_cells);
 			}
-			/* Node classification comes from its compatible list. */
+			/*
+			 * Classify this node from its compatible list, and latch
+			 * its reg/reg-shift/reg-io-width, INDEPENDENTLY. Neither
+			 * is conditioned on the other having been seen, because
+			 * property order varies by producer (see the `cur` comment
+			 * at the top of this function). Both are joined at
+			 * FDT_END_NODE.
+			 */
 			if (namecmp(pname, "compatible") == 0) {
 				const char *cd = (const char *)pdata;
-				if (compat_is_ns16550_uart(cd, plen)) {
+				if (compat_is_ns16550_uart(cd, plen))
 					cur = 1;
-					/*
-					 * reg-shift (read below) carries the
-					 * stride; dw/pxa-class cores use 4-byte
-					 * registers (shift 2).
-					 */
-					d.uart_is_dw = 1;
-					d.uart_shift = 0;
-				} else if (compat_is_sdhci_mmc(cd, plen)) {
-					cur = 2; d.sdhci_present = 1;
-				} else if (compat_has(cd, plen, "riscv,aplic")) {
-					cur = 3; d.aplic_present = 1;
-				} else if (compat_has(cd, plen,
-				    "riscv,imsics")) {
-					cur = 4; d.imsic_present = 1;
-				}
+				else if (compat_is_sdhci_mmc(cd, plen))
+					cur = 2;
+				else if (compat_has(cd, plen, "riscv,aplic"))
+					cur = 3;
+				else if (compat_has(cd, plen, "riscv,imsics"))
+					cur = 4;
 			}
-			if (cur != 0 && namecmp(pname, "reg") == 0) {
-				unsigned long b =
-				    reg_base(pdata, plen, addr_cells);
-				if (cur == 1) d.uart_base = b;
-				else if (cur == 2) d.sdhci_base = b;
-				else if (cur == 3) d.aplic_base = b;
-				else if (cur == 4) d.imsic_base = b;
-			}
-			if (cur == 1 && namecmp(pname, "reg-shift") == 0 &&
-			    plen >= 4)
-				d.uart_shift = be32(pdata);
+			if (namecmp(pname, "reg") == 0)
+				n_reg = reg_base(pdata, plen, addr_cells);
+			if (namecmp(pname, "reg-shift") == 0 && plen >= 4)
+				n_shift = be32(pdata);
+			/*
+			 * reg-io-width MUST be carried, not assumed from
+			 * reg-shift: it selects 8- vs 32-bit MMIO in uart_rd/
+			 * uart_wr, and a 32-bit access to a byte-wide core (or
+			 * vice versa) reads a register that is not there. Absent
+			 * => 0 => the byte-wide 16550 baseline (qemu-virt), which
+			 * is the safe default.
+			 */
+			if (namecmp(pname, "reg-io-width") == 0 && plen >= 4)
+				n_io32 = (be32(pdata) == 4);
 			p += 8 + ((plen + 3) & ~3U);
 			continue;
 		}
