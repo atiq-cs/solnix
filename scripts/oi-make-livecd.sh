@@ -283,6 +283,24 @@ LIVE_TOOLS="
   usr/sbin/groupdel usr/sbin/groupmod usr/bin/passwd usr/sbin/pwconv
   usr/bin/chown usr/bin/chgrp usr/bin/mkdir
   usr/bin/kbd usr/sbin/modinfo usr/sbin/strconf
+  # Reported missing on the installed system: `which` was absent entirely, along
+  # with much of binutils. `which` in particular is depended on by countless
+  # scripts and by muscle memory, and its absence reads as a broken system.
+  usr/bin/which usr/bin/whence usr/bin/type
+  usr/bin/nm usr/bin/strip usr/bin/objdump usr/bin/size usr/bin/ar usr/bin/ranlib
+  usr/bin/ld usr/bin/as usr/bin/elfdump usr/bin/elfedit usr/bin/dump usr/bin/mcs
+  usr/bin/ldd usr/bin/nawk usr/bin/pgrep usr/bin/ptree usr/bin/pargs usr/bin/pmap
+  usr/bin/truss usr/bin/mdb usr/bin/gcore usr/bin/pstack usr/bin/pfiles
+  usr/bin/readlink usr/bin/realpath usr/bin/seq usr/bin/tac usr/bin/rev
+  usr/bin/md5sum usr/bin/sha1sum usr/bin/sha256sum usr/bin/cksum usr/bin/sum
+  usr/bin/base64 usr/bin/uudecode usr/bin/uuencode
+  usr/bin/getopt usr/bin/logger usr/bin/mesg usr/bin/tty usr/bin/who usr/bin/w
+  usr/bin/uptime usr/bin/vmstat usr/bin/iostat usr/bin/mpstat usr/bin/prstat
+  usr/bin/svcs usr/bin/svcprop usr/sbin/svcadm usr/sbin/svccfg
+  usr/gnu/bin/which usr/gnu/bin/readlink usr/gnu/bin/stat usr/gnu/bin/seq
+  usr/gnu/bin/find usr/gnu/bin/xargs usr/gnu/bin/tar usr/gnu/bin/awk
+  usr/gnu/bin/sort usr/gnu/bin/head usr/gnu/bin/tail usr/gnu/bin/wc
+  usr/gnu/bin/tr usr/gnu/bin/cut usr/gnu/bin/basename usr/gnu/bin/dirname
   usr/bin/mdb usr/bin/adb usr/bin/truss usr/bin/pstack usr/bin/pargs
   usr/bin/pmap usr/bin/pfiles usr/bin/pgrep usr/bin/ptree usr/bin/gcore
   usr/bin/prstat usr/bin/snoop
@@ -456,11 +474,30 @@ if [ "$STAGE_NIX" = 1 ] && [ -d /nix-tools224 ] && [ -x /nix-tools224/bin/nix ];
       nix-instantiate nix-prefetch-url nix-shell nix-store; do
         ln -s nix "$_a" 2>/dev/null || true; done )
   ( cd "$RDROOT/nix-tools224/libexec/nix" && ln -s ../../bin/nix build-remote 2>/dev/null || true )
-  for _l in /nix-tools224/lib/*.so; do
-    [ -f "$_l" ] || continue
-    cp "$_l" "$RDROOT/nix-tools224/lib/$(basename "$_l")" 2>/dev/null || true
-    [ -x /usr/bin/strip ] && /usr/bin/strip "$RDROOT/nix-tools224/lib/$(basename "$_l")" 2>/dev/null || true
-  done
+    # ⚠️ These cp's used to end in `|| true` with stderr discarded, so a failed
+    # copy was SILENT and the shipped image had ZERO libs in lib/, while the build
+    # log said "runtime-lib staged PASS 39 libs" -- that check looked at
+    # runtime-lib/ (a tar, which worked) and never at lib/ (this loop). nix then
+    # died on the installed system with:
+    #   ld.so.1: nix: fatal: libnixstore.so: open failed
+    _nlibs=0
+    for _l in /nix-tools224/lib/*.so /nix-tools224/lib/*.so.*; do
+      [ -f "$_l" ] || continue
+      if cp "$_l" "$RDROOT/nix-tools224/lib/$(basename "$_l")"; then
+        _nlibs=$((_nlibs + 1))
+        # strip is best-effort -- /usr/bin/strip is absent on fresh AMIs (same
+        # class as the documented objcopy/sha1sum absence). Failing to strip is
+        # fine; failing to COPY is not.
+        [ -x /usr/bin/strip ] && /usr/bin/strip "$RDROOT/nix-tools224/lib/$(basename "$_l")" 2>/dev/null || true
+      else
+        die "failed to copy nix library $_l into the ramdisk"
+      fi
+    done
+    echo "  nix-tools224/lib: staged $_nlibs library file(s)" >&2
+    [ "$_nlibs" -ge 4 ] || die "only $_nlibs nix libraries staged; nix needs libnixstore.so et al"
+    for _need in libnixstore.so libnixutil.so libnixexpr.so libnixmain.so; do
+      [ -f "$RDROOT/nix-tools224/lib/$_need" ] || die "nix-tools224/lib/$_need missing -- nix cannot start"
+    done
   ( cd /nix-tools224 && tar -cf - runtime-lib ) | ( cd "$RDROOT/nix-tools224" && tar -xf - ) \
     || echo "WARN: runtime-lib copy had errors" >&2
   [ -f /nix-tools224/ca-bundle.crt ] && cp /nix-tools224/ca-bundle.crt "$RDROOT/nix-tools224/ca-bundle.crt"
@@ -2374,6 +2411,28 @@ for _f in "$OUT/iso/boot/loader.conf" "$OUT/iso/boot/conf.d/console"; do
   fi
 done
 echo "  console gate OK: loader.conf + conf.d/console both = ${SOLNIX_CONSOLE:-text}" >&2
+
+# NIX RUNNABILITY GATE. The previous verification reported "runtime-lib staged
+# PASS 39 libs" while lib/ was EMPTY -- it measured a different directory than
+# the one nix loads from, so the image shipped a nix that could not start:
+#   ld.so.1: nix: fatal: libnixstore.so: open failed
+# Actually EXECUTE it, with only the ramdisk's own libraries visible.
+if [ -x "$RDROOT/nix-tools224/bin/nix" ]; then
+  _nixout="$(LD_LIBRARY_PATH="$RDROOT/nix-tools224/lib:$RDROOT/nix-tools224/runtime-lib" \
+             "$RDROOT/nix-tools224/bin/nix" --version 2>&1 || true)"
+  case "$_nixout" in
+    *"nix (Nix)"*) echo "  nix runnability gate OK: $_nixout" >&2 ;;
+    *) die "staged nix does not run: $_nixout" ;;
+  esac
+  # `which` was reported missing on a shipped image; it is depended on widely
+  # enough that its absence reads as a broken system.
+  for _t in which nm strip elfdump ldd; do
+    [ -x "$RDROOT/usr/bin/$_t" ] || [ -x "$RDROOT/usr/gnu/bin/$_t" ] \
+      || echo "WARN: $_t absent from the live root" >&2
+  done
+  [ -x "$RDROOT/usr/bin/which" ] || [ -x "$RDROOT/usr/gnu/bin/which" ] \
+    || die "which(1) is absent -- it was missing from a shipped image and must not be again"
+fi
 
 # 6e. copy the UEFI loader out so the assembler can build the ESP FAT image
 cp /boot/loader64.efi "$OUT/loader64.efi"
