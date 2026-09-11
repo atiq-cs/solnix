@@ -42,6 +42,9 @@ extern int fdt_get_memory(unsigned long dtb, unsigned long *base,
     unsigned long *size);
 extern void hat_highva_prove(void);
 extern void clock_prove(unsigned long nticks);
+extern void clock_set_timebase(unsigned long hz);
+extern unsigned long clock_timebase(void);
+extern unsigned long fdt_get_timebase(unsigned long dtb);
 extern unsigned long gethrtime(void);
 extern void plic_selftest(void);
 extern void plic_set_context(unsigned long boot_hartid);
@@ -56,8 +59,21 @@ extern volatile unsigned long timer_ticks;
 extern void _secondary_start(void);
 extern char secondary_stacks[];
 
-/* Max harts we support in R-P4 (matches the secondary_stacks pool in locore). */
-#define	MAXCPU		8
+/*
+ * Max harts we support (matches the secondary_stacks pool in locore.S -- keep
+ * the two in step, the pool is MAXCPU-1 stacks).
+ *
+ * 16, because the SpacemiT K3 Pico ITX has 16 harts (cpu@0..cpu@15, measured;
+ * see docs/k3-vendor-dtb-findings.md). This was 8, which was not merely "too
+ * small": it deterministically reinstated the bug-#9 hart-slot aliasing on any
+ * board with more than 8 harts. startup_boot_hartid clamped an out-of-range boot
+ * hartid to 0, and start_secondaries only skips h == boot_hartid, so with
+ * MAXCPU=8 and OpenSBI booting on hart 8..15 the boot hart would take slot 0
+ * while the REAL hart 0 was released as a secondary into dispatch_init_cpu(0) --
+ * two harts on one slot, exactly the failure in docs/riscv64-preboot-flake.md.
+ * On the K3 that is HALF the harts, not a one-in-three lottery.
+ */
+#define	MAXCPU		16
 #define	SECONDARY_STACK_SIZE	16384UL
 
 /*
@@ -228,7 +244,28 @@ start_secondaries(unsigned long boot_hartid)
 	int spin;
 	int online;
 
-	cpu_online[boot_hartid < MAXCPU ? boot_hartid : 0] = 1;
+	/*
+	 * No silent fold. This line used to read
+	 *   cpu_online[boot_hartid < MAXCPU ? boot_hartid : 0] = 1;
+	 * and that ternary WAS the bug-#9 aliasing mechanism: a boot hart at or
+	 * above MAXCPU folds onto slot 0 while the real hart 0 comes up as a
+	 * secondary and claims the same slot. main()'s MAXCPU panic cannot save us
+	 * here because mlsetup() -> start_secondaries() runs BEFORE main(), so the
+	 * alias is already installed by the time that check reports it.
+	 */
+	if (boot_hartid >= MAXCPU) {
+		sbi_console_puts("\n[PANIC] boot hart ");
+		putdec(boot_hartid);
+		sbi_console_puts(" >= MAXCPU ");
+		putdec(MAXCPU);
+		sbi_console_puts(" in start_secondaries -- refusing to fold to"
+		    " slot 0 (that is bug #9's aliasing).\n"
+		    "        Raise MAXCPU in main.c AND proc.c, and the"
+		    " secondary_stacks pool in locore.S.\n");
+		for (;;)
+			__asm__ __volatile__("wfi");
+	}
+	cpu_online[boot_hartid] = 1;
 
 	console_acquire();
 	sbi_console_puts("[smp] boot hart ");
@@ -402,7 +439,27 @@ mlsetup(unsigned long hartid, unsigned long dtb)
 	 * (the illumos clock/cyclic foundation). Note: SEIE is left enabled from
 	 * the PLIC step, so during the clock run the UART self-test source is
 	 * already quiesced; only timer interrupts fire here.
+	 *
+	 * Adopt the platform's `time` CSR rate from the DTB FIRST. timer.c's
+	 * default is qemu virt's 10 MHz, which is 2.4x wrong on the SpacemiT K3's
+	 * 24 MHz -- every interval too short, silently. clock_set_timebase
+	 * ignores an absent/unusable value, so a DTB without the property leaves
+	 * the default in place and clock_start says so on the console.
 	 */
+	{
+		unsigned long tb = fdt_get_timebase(dtb);
+
+		if (tb != 0) {
+			clock_set_timebase(tb);
+			sbi_console_puts("[mlsetup] DTB: timebase-frequency ");
+			putdec(tb);
+			sbi_console_puts(" Hz\n");
+		} else {
+			sbi_console_puts("[mlsetup] DTB: no timebase-frequency;"
+			    " keeping the built-in default\n");
+		}
+	}
+
 	clock_prove(10);
 	boot_cpu.bc_timer_online = (timer_ticks > 0);
 	boot_cpu.bc_hrtime = gethrtime();
@@ -501,9 +558,29 @@ main(void)
 	 * know which hart WE are. OpenSBI's boot-hart lottery makes this a
 	 * nonzero hart on roughly a third of qemu virt boots; assuming 0 aliased
 	 * the boot hart onto the real hart 0's slot (docs/riscv64-preboot-flake.md).
+	 *
+	 * A boot hartid at or past MAXCPU has no slot to claim. Folding it to 0 is
+	 * NOT a safe fallback -- slot 0 belongs to the real hart 0, which
+	 * start_secondaries will release as a secondary, so the fold RECREATES the
+	 * aliasing bug rather than containing it. Complain loudly instead: an
+	 * explicit message about an unsupported hart id is recoverable (raise
+	 * MAXCPU), a silent alias is a 178-line hang with no cause on screen.
 	 */
-	startup_boot_hartid = (int)(boot_cpu.bc_hartid < MAXCPU ?
-	    boot_cpu.bc_hartid : 0);
+	if (boot_cpu.bc_hartid >= MAXCPU) {
+		sbi_console_puts("\n[PANIC] boot hart ");
+		putdec(boot_cpu.bc_hartid);
+		sbi_console_puts(" is >= MAXCPU ");
+		putdec(MAXCPU);
+		sbi_console_puts(" -- no dispatcher slot for it.\n");
+		sbi_console_puts("        Raise MAXCPU in main.c AND proc.c,"
+		    " and the secondary_stacks pool in locore.S.\n");
+		sbi_console_puts("        Refusing to fold to slot 0: that"
+		    " aliases two harts onto one slot\n");
+		sbi_console_puts("        (docs/riscv64-preboot-flake.md).\n");
+		for (;;)
+			__asm__ __volatile__("wfi");
+	}
+	startup_boot_hartid = (int)boot_cpu.bc_hartid;
 	startup(boot_cpu.bc_dtb);
 
 	sbi_console_puts("\n");

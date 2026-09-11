@@ -191,6 +191,75 @@ fdt_get_memory(unsigned long dtb, unsigned long *base, unsigned long *size)
 extern void kputhex(unsigned long v);
 extern void kputdec(unsigned long v);
 
+/* Defined below, next to the of_utils-shaped node walkers. */
+static const unsigned char *fdt_struct(unsigned long dtb,
+    const unsigned char **strs_out);
+static const unsigned char *fdt_skip_name(const unsigned char *p);
+
+/*
+ * fdt_get_timebase -- read `timebase-frequency` (the rate of the `time` CSR and
+ * of the CLINT mtime comparator) out of the DTB. Returns the frequency in Hz,
+ * or 0 if the blob is bad or the property is absent.
+ *
+ * WHY THIS EXISTS: timer.c hardcoded qemu virt's 10 MHz. The value is a
+ * PLATFORM constant, not an architectural one:
+ *
+ *   qemu virt    10,000,000 Hz  (100 ns per tick)
+ *   SpacemiT K3   24,000,000 Hz  (41.67 ns per tick) -- measured from the
+ *                 board's own devicetree, /cpus/timebase-frequency = 0x16e3600
+ *
+ * A hardcoded 10 MHz on a 24 MHz part makes every interval 2.4x wrong in the
+ * dangerous direction: a requested 150 ms sleep returns after ~62 ms and every
+ * callout fires early. Nothing in the boot output looks wrong, which is exactly
+ * what makes it worth reading rather than assuming.
+ *
+ * The RISC-V devicetree binding puts this on /cpus, and it may also appear on
+ * individual cpu@N nodes. Since the property name has exactly one meaning in
+ * the spec, take the first occurrence anywhere rather than tracking depth --
+ * there is nothing else it could be.
+ */
+unsigned long
+fdt_get_timebase(unsigned long dtb)
+{
+	const unsigned char *stru, *strs, *p;
+
+	stru = fdt_struct(dtb, &strs);
+	if (stru == 0)
+		return (0);
+	p = stru;
+
+	for (;;) {
+		unsigned int tok = be32(p);
+		p += 4;
+
+		if (tok == FDT_END)
+			break;
+		if (tok == FDT_NOP)
+			continue;
+		if (tok == FDT_BEGIN_NODE) {
+			p = fdt_skip_name(p);
+			continue;
+		}
+		if (tok == FDT_END_NODE)
+			continue;
+		if (tok == FDT_PROP) {
+			unsigned int plen = be32(p);
+			unsigned int noff = be32(p + 4);
+			const char *pname = (const char *)strs + noff;
+
+			if (namecmp(pname, "timebase-frequency") == 0 &&
+			    plen >= 4)
+				return (be_cells(p + 8, plen >= 8 ? 2 : 1));
+
+			p += 8 + ((plen + 3) & ~3U);
+			continue;
+		}
+		/* Unknown token: bail rather than run off the blob. */
+		return (0);
+	}
+	return (0);
+}
+
 /* Does node name start with `pfx` (up to '@' or NUL)? */
 static int
 name_prefix(const char *name, const char *pfx)

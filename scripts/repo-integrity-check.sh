@@ -139,4 +139,23 @@ fi
 else
 	echo "repo-integrity: FINDINGS ABOVE"
 fi
+
+# A gate that references "$RDROOT" AFTER the ramdisk is unmounted is dead code: the
+# mountpoint is an empty directory, so any [ -x "$RDROOT/..." ] guard is always
+# false and any die() inside it can never fire. This shipped twice -- once as a nix
+# runnability gate, once as a which(1) check -- and both read like protection while
+# testing nothing.
+_lc=scripts/oi-make-livecd.sh
+if [ -f "$_lc" ]; then
+  _u=$(grep -n 'umount "$RDROOT" || die' "$_lc" 2>/dev/null | head -1 | cut -d: -f1)
+  if [ -n "$_u" ]; then
+    _bad=$(awk -v u="$_u" 'NR>u && /\$RDROOT\// && (/\[ -x/ || /\[ -f/ || /\[ -s/) {print NR": "$0}' "$_lc" | head -3)
+    if [ -n "$_bad" ]; then
+      echo "repo-integrity: FAIL -- post-umount \$RDROOT test(s) in $_lc are dead code:" >&2
+      echo "$_bad" >&2
+      exit 1
+    fi
+  fi
+fi
+
 exit "$fail"

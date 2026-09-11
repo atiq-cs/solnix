@@ -146,7 +146,13 @@ static int next_tid = 0;
 
 /* Per-cpu current thread + idle thread. Boot-cpu dispatch only in R-P5, but
  * indexed by hartid so the structure is already SMP-shaped. */
-#define	MAXCPU		8
+/*
+ * MUST match main.c's MAXCPU and the secondary_stacks pool in locore.S (which
+ * holds MAXCPU-1 stacks). 16 for the SpacemiT K3's 16 harts; see the MAXCPU
+ * comment in main.c for why a too-small value aliases harts onto one slot
+ * rather than merely limiting them.
+ */
+#define	MAXCPU		16
 static kthread_t *curthread[MAXCPU];
 static kthread_t *idlethread[MAXCPU];
 
@@ -204,11 +210,12 @@ runq_lock_exit(void)
  * WHY A RANGE CHECK, not a mask. This used to be `id & (MAXCPU - 1)`, which
  * turns ANY value in tp into a valid-looking cpu index. That is only safe while
  * nothing but the kernel ever writes tp. Now that userland owns tp in U-mode, a
- * stale or foreign value can reach here -- and MAXCPU is 8 while a typical boot
- * is -smp 4, so masking folds it into the 4..7 range whose curthread[] slots
- * stay NULL for the whole boot, giving a NULL dereference far from the cause.
- * (Measured: a userland tp of 0x5a5a0000deadbeef masks to 7 and killed
- * thread_preempt inside the timer trap.) Returning -1 makes an untrustworthy tp
+ * stale or foreign value can reach here -- and MAXCPU is larger than a typical
+ * boot's hart count (16 vs -smp 4), so masking folds it into a high range whose
+ * curthread[] slots stay NULL for the whole boot, giving a NULL dereference far
+ * from the cause.
+ * (Measured when MAXCPU was 8: a userland tp of 0x5a5a0000deadbeef masks to 7
+ * and killed thread_preempt inside the timer trap.) Returning -1 makes an untrustworthy tp
  * a condition callers can refuse to act on rather than a silent mis-index. Cost
  * is one compare-and-branch; still no memory traffic.
  */

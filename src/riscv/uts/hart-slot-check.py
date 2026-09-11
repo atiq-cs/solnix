@@ -33,6 +33,10 @@ import time
 
 KERNEL = os.environ.get("KERNEL", "unix-scanout")
 
+# MUST match MAXCPU in main.c / proc.c. The slot arrays are MAXCPU entries wide;
+# reading fewer silently cannot see an alias in the upper harts.
+MAXCPU = int(os.environ.get("MAXCPU", "16"))
+
 UTS = os.path.dirname(os.path.abspath(__file__))
 OUT = os.environ.get("OUT", "/tmp/hart-slot-check")
 os.makedirs(OUT, exist_ok=True)
@@ -159,9 +163,13 @@ def one(n, smp, S):
     res, detail = "NOBOOT", ""
     if ready:
         hmp(s, "stop")
-        idle = words(s, S["idlethread"], 8)
-        cur = words(s, S["curthread"], 8)
-        live = [h for h in range(8) if idle[h]]
+        # Read MAXCPU slots, not a hardcoded 8: MAXCPU is 16 (the SpacemiT K3
+        # has 16 harts), and reading only the first 8 would miss an alias
+        # involving a high hart entirely -- reporting CLEAN for the exact
+        # topology this check exists to cover.
+        idle = words(s, S["idlethread"], MAXCPU)
+        cur = words(s, S["curthread"], MAXCPU)
+        live = [h for h in range(MAXCPU) if idle[h]]
         detail = ("idlethread=[" +
                   " ".join("0" if not v else f"{v:#x}"[-4:] for v in idle[:smp])
                   + "] curthread=[" +

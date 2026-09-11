@@ -20,11 +20,20 @@
  *     the paths that do not need it, which is why adding it cannot regress the
  *     qemu gates.
  *
- * text_offset must equal the address riscv.ld linked the image at, because
- * booti_setup() computes the relocation target as gd->ram_base + text_offset
- * and K1's gd->ram_base is 0x0 (u-boot include/configs/bananapi-f3.h:
- * CFG_SYS_SDRAM_BASE 0x0). Both values come from the linker so they cannot
- * drift apart from riscv.ld.
+ * text_offset is an OFFSET FROM THE DRAM BASE, not an absolute address,
+ * because booti_setup() computes the relocation target as
+ * gd->ram_base + text_offset. riscv.ld computes it as BASE - DRAM_BASE and
+ * both values come from the linker, so they cannot drift apart from the link.
+ *
+ * ⚠️ This comment previously said text_offset "must equal the address riscv.ld
+ * linked the image at ... and K1's gd->ram_base is 0x0". That was correct code
+ * resting on a correctly-documented premise -- and the premise silently stopped
+ * holding when a second board appeared. The SpacemiT K3's gd->ram_base is
+ * 0x102000000 (DRAM 0x102000000..0x900000000, measured; see
+ * docs/k3-vendor-dtb-findings.md), so an absolute text_offset relocates the
+ * image ~4 GiB past where it was linked. Neither qemu virt nor the K1 can
+ * expose this, because gd->ram_base is 0 on both -- which is why it survived
+ * every gate.
  */
 
 	.section .text.image_header, "ax"
@@ -32,7 +41,7 @@
 _image_header:
 	j	_start			/* code0: 4 bytes, jumps past the header */
 	.word	0			/* code1 (unused; the j above is 4 B) */
-	.quad	_image_text_offset	/* text_offset: our link address */
+	.quad	_image_text_offset	/* text_offset: link base - DRAM base */
 	.quad	_image_size		/* image_size: bytes to relocate/reserve */
 	.quad	0			/* flags: 0 = LE, no constraints */
 	.word	2			/* version 0.2 (major<<16 | minor) */

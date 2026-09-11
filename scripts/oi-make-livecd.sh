@@ -2236,6 +2236,21 @@ if [ "$STAGE_NIX" = 1 ] && [ -x "$RDROOT/nix-tools224/bin/nix" ]; then
    open failed, the runtime-lib copy is incomplete -- those three are NOT
    satisfiable from the binary's RUNPATH alone, measured.)" ;;
   esac
+    # ⚠️ This gate lives HERE, before the umount, deliberately. An earlier version
+    # sat AFTER `umount "$RDROOT"`, so "$RDROOT/..." resolved inside an empty
+    # mountpoint: the outer [ -x ... ] was always false and the die() inside could
+    # never fire. Dead code that read like protection -- same class as a guard that
+    # reports success while measuring nothing. Verified on a build host: after the
+    # umount that directory has 0 entries and neither gate string appears in the log.
+    for _t in which nm strip elfdump ldd; do
+      [ -x "$RDROOT/usr/bin/$_t" ] || [ -x "$RDROOT/usr/gnu/bin/$_t" ] \
+        || echo "WARN: $_t absent from the live root" >&2
+    done
+    # which(1) is illumos-native (SUNWcsu), NOT part of the gnu-binutils package
+    # that userland-incorporation rejects, so its absence is our bug and is fatal.
+    [ -x "$RDROOT/usr/bin/which" ] || [ -x "$RDROOT/usr/gnu/bin/which" ] \
+      || die "which(1) absent from the live root -- it was missing from a shipped image and must not be again"
+    echo "  tooling gate OK: which(1) present in the MOUNTED ramdisk" >&2
   # and the sibling commands must be argv[0] links to the same binary, not copies
   [ -L "$RDROOT/nix-tools224/bin/nix-store" ] || \
     die "nix-store is not a symlink -- the 12-full-copies pathology is back, +1.8GB"

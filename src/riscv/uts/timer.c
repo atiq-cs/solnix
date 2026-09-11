@@ -8,9 +8,10 @@
  * timeouts, the scheduler tick, and time-of-day advancement.
  *
  * Mechanism (RISC-V Priv Spec + SBI TIME extension):
- *   - The `time` CSR is the platform monotonic counter. On qemu virt the CLINT
- *     runs at TIMEBASE_HZ = 10 MHz, so 1 tick of `time` = 100 ns.
- *   - We tick at HZ (100 Hz => a 10 ms period => TIMER_PERIOD `time`-ticks).
+ *   - The `time` CSR is the platform monotonic counter. Its rate is a PLATFORM
+ *     constant read from the devicetree (/cpus/timebase-frequency): 10 MHz on
+ *     qemu virt (100 ns/tick), 24 MHz on the SpacemiT K3 (41.67 ns/tick).
+ *   - We tick at HZ (100 Hz => a 10 ms period => timer_period `time`-ticks).
  *   - Each timer interrupt: bump the tick counter, advance the deadline by one
  *     period, and re-arm via SBI set_timer(next_deadline). set_timer clears the
  *     current STIP as a side effect, so rearming is also the acknowledgement.
@@ -25,13 +26,60 @@
 #include "sbi.h"
 #include "riscv_regs.h"
 
-/* qemu virt CLINT timebase: 10 MHz => 100 ns per `time` tick. */
-#define	TIMEBASE_HZ	10000000UL
+/*
+ * Timebase: the rate of the `time` CSR, in Hz.
+ *
+ * This was a hardcoded 10000000UL -- qemu virt's rate, correct there and wrong
+ * on real silicon. The SpacemiT K3 runs at 24 MHz (measured:
+ * /cpus/timebase-frequency = 0x16e3600), so the hardcoded value made every
+ * interval 2.4x too long in `time` ticks, i.e. every real interval 2.4x too
+ * SHORT: a 150 ms nanosleep returning in ~62 ms, callouts firing early, and
+ * gethrtime() reporting 2.4x more nanoseconds than elapsed. None of that
+ * announces itself in the boot log.
+ *
+ * The default remains qemu's 10 MHz so a kernel booted without a usable DTB
+ * still ticks (wrongly, but it ticks and says so); clock_set_timebase()
+ * overrides it from the DTB before the clock starts. asy_nsuart.c had the
+ * correct 24000000 for the UART reference clock all along -- the same number
+ * known in one file and wrong in another, which is the argument for reading
+ * both from the DTB rather than from a #define.
+ */
+#define	TIMEBASE_HZ_DEFAULT	10000000UL
 #define	NANOSEC		1000000000UL
 
 /* Clock rate. illumos default hz is 100; a 100 Hz tick = 10 ms period. */
 #define	HZ		100UL
-#define	TIMER_PERIOD	(TIMEBASE_HZ / HZ)	/* `time` ticks per clock tick */
+
+static unsigned long timebase_hz = TIMEBASE_HZ_DEFAULT;
+static unsigned long timer_period = TIMEBASE_HZ_DEFAULT / HZ;
+static int timebase_from_dtb = 0;
+
+/*
+ * clock_set_timebase -- adopt the platform's real timebase before the clock is
+ * started. Called from mlsetup with /cpus/timebase-frequency out of the DTB.
+ *
+ * Rejects 0 (absent property) and anything below HZ, because timer_period would
+ * become 0 and every deadline would already be in the past -- a timer interrupt
+ * storm rather than a clock. Refusing an unusable value and keeping the default
+ * is a wrong clock; adopting it is a wedged kernel.
+ */
+void
+clock_set_timebase(unsigned long hz)
+{
+	if (hz < HZ)
+		return;
+
+	timebase_hz = hz;
+	timer_period = hz / HZ;
+	timebase_from_dtb = 1;
+}
+
+/* The live timebase, for callers that report or scale by it. */
+unsigned long
+clock_timebase(void)
+{
+	return (timebase_hz);
+}
 
 volatile unsigned long timer_ticks = 0;		/* total periodic ticks */
 static volatile unsigned long timer_deadline = 0;	/* next fire (`time`) */
@@ -143,16 +191,18 @@ rd_time(void)
  * gethrtime — illumos high-resolution monotonic clock, in nanoseconds. Scales
  * the `time` CSR by the timebase. Split the multiply to avoid overflow on a
  * 64-bit counter: seconds part * 1e9 + fractional-ticks * ns-per-tick.
- * (100 ns/tick here, exact for a 10 MHz timebase.)
+ * Exact for any timebase that divides 1e9; at 24 MHz (41.666.. ns/tick) the
+ * integer division truncates, losing at most 1 ns per call -- and the seconds
+ * term carries the magnitude, so the error does not accumulate.
  */
 unsigned long
 gethrtime(void)
 {
 	unsigned long t = rd_time();
-	unsigned long sec = t / TIMEBASE_HZ;
-	unsigned long rem = t % TIMEBASE_HZ;
+	unsigned long sec = t / timebase_hz;
+	unsigned long rem = t % timebase_hz;
 
-	return (sec * NANOSEC + (rem * NANOSEC) / TIMEBASE_HZ);
+	return (sec * NANOSEC + (rem * NANOSEC) / timebase_hz);
 }
 
 /*
@@ -196,9 +246,9 @@ timer_intr(void)
 		 * If we've fallen behind, catch the deadline up to the future.
 		 */
 		unsigned long now = rd_time();
-		timer_deadline += TIMER_PERIOD;
+		timer_deadline += timer_period;
 		if (timer_deadline <= now)
-			timer_deadline = now + TIMER_PERIOD;
+			timer_deadline = now + timer_period;
 		(void) sbi_set_timer(timer_deadline);
 	} else {
 		/* One-shot legacy path: disarm. */
@@ -218,17 +268,18 @@ clock_start(void)
 	unsigned long now = rd_time();
 
 	timer_periodic = 1;
-	timer_deadline = now + TIMER_PERIOD;
+	timer_deadline = now + timer_period;
 
 	sbi_console_puts("[clock] starting periodic clock: hz=");
 	putdec(HZ);
 	sbi_console_puts(" period=");
-	putdec(TIMER_PERIOD);
+	putdec(timer_period);
 	sbi_console_puts(" time-ticks (");
 	putdec(NANOSEC / HZ);
 	sbi_console_puts(" ns), timebase=");
-	putdec(TIMEBASE_HZ);
-	sbi_console_puts(" Hz\n");
+	putdec(timebase_hz);
+	sbi_console_puts(timebase_from_dtb ? " Hz (from DTB)\n" :
+	    " Hz (DEFAULT -- no timebase-frequency in DTB)\n");
 
 	(void) sbi_set_timer(timer_deadline);
 	__asm__ __volatile__("csrs sie, %0" :: "r"(SIE_STIE));

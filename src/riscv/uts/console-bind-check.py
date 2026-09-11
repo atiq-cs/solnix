@@ -271,8 +271,22 @@ def main():
         dtc(d, b)
         cases.append((label, open(b, "rb").read(), K1_UART_ADDR, 2, 1))
 
-    # 4. qemu-virt's OWN DTB. The opposite direction: a kernel that hardcodes
-    #    0xd4017000 would pass the K1 cases and fail here.
+    # 4. The GENERATED K3 DTB. Same UART address as the K1, but reached
+    #    through a devicetree generated from the board's own vendor dump, and
+    #    with a different compatible list ("spacemit,k1-uart",
+    #    "intel,xscale-uart") -- both of which are in ns16550_uart_compat[].
+    k3_dtb = os.path.join(UTS, "k3.dtb")
+    if not os.path.exists(k3_dtb) and os.path.exists(os.path.join(UTS, "k3.dts")):
+        dtc(os.path.join(UTS, "k3.dts"), k3_dtb)
+    if os.path.exists(k3_dtb):
+        cases.append(("generated k3.dtb", open(k3_dtb, "rb").read(),
+                      K1_UART_ADDR, 2, 1))
+    else:
+        print("  WARN k3.dtb absent (run gen-k3-dts.py); K3 direction "
+              "UNCHECKED")
+
+    # 5. qemu-virt's OWN DTB. The opposite direction: a kernel that hardcodes
+    #    0xd4017000 would pass the K1/K3 cases and fail here.
     vp = os.path.join(tmp, "virt.dtb")
     try:
         qemu_virt_dtb(vp)
