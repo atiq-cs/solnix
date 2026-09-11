@@ -460,7 +460,26 @@ if [ "$STAGE_NIX" = 1 ] && [ -d /nix-tools224 ] && [ -x /nix-tools224/bin/nix ];
   log "staging SLIM /nix-tools224 into the live root (nix from first boot)"
   mkdir -p "$RDROOT/nix-tools224/bin" "$RDROOT/nix-tools224/lib" \
            "$RDROOT/nix-tools224/libexec/nix" "$RDROOT/nix-tools224/etc/nix"
-  cp /nix-tools224/bin/nix "$RDROOT/nix-tools224/bin/nix" || die "copy nix failed"
+  # ⚠️ STRIP OUTSIDE THE RAMDISK, NOT IN PLACE. This used to cp the 153,731,896 B
+  # unstripped binary straight in and strip afterwards, which cannot work: the
+  # ramdisk has ~145,880,064 B free at this point, so the FIRST cp dies with
+  # "No space left on device" -- 7.5 MiB short before strip ever runs. Image j
+  # only built because that host's /nix-tools224 happened to be pre-stripped,
+  # making an undocumented host prerequisite look like a working script.
+  # Staging via a temp copy costs one extra write and removes the prerequisite.
+  _nixstage="${TMPDIR:-/var/tmp}/solnix-nixstage.$$"
+  mkdir -p "$_nixstage"
+  cp /nix-tools224/bin/nix "$_nixstage/nix" || die "copy nix to staging failed"
+  if [ -x /usr/bin/strip ]; then
+    /usr/bin/strip "$_nixstage/nix" || echo "WARN: strip nix failed (will try to ship unstripped)" >&2
+  fi
+  # Refuse to even attempt a copy that cannot fit, so the failure names the cause
+  # instead of surfacing as a bare ENOSPC three steps later.
+  _nsz=$(( $(wc -c < "$_nixstage/nix") ))
+  echo "  staged nix binary: $_nsz B" >&2
+  [ "$_nsz" -lt 33554432 ] || die "staged nix is $_nsz B (>32 MiB) -- strip did not run; the ramdisk cannot hold an unstripped nix (needs ~154 MB, has ~146 MB)"
+  cp "$_nixstage/nix" "$RDROOT/nix-tools224/bin/nix" || die "copy nix failed"
+  rm -f "$_nixstage/nix"; rmdir "$_nixstage" 2>/dev/null || true
   # strip: the shipped binary is unstripped (153.7 MB -> 4.0 MB). /usr/bin/strip
   # exists on illumos; guard anyway rather than trusting it (the stat(1) lesson).
   if [ -x /usr/bin/strip ]; then
@@ -483,15 +502,25 @@ if [ "$STAGE_NIX" = 1 ] && [ -d /nix-tools224 ] && [ -x /nix-tools224/bin/nix ];
     _nlibs=0
     for _l in /nix-tools224/lib/*.so /nix-tools224/lib/*.so.*; do
       [ -f "$_l" ] || continue
-      if cp "$_l" "$RDROOT/nix-tools224/lib/$(basename "$_l")"; then
-        _nlibs=$((_nlibs + 1))
-        # strip is best-effort -- /usr/bin/strip is absent on fresh AMIs (same
-        # class as the documented objcopy/sha1sum absence). Failing to strip is
-        # fine; failing to COPY is not.
-        [ -x /usr/bin/strip ] && /usr/bin/strip "$RDROOT/nix-tools224/lib/$(basename "$_l")" 2>/dev/null || true
+      # Same staging discipline as bin/nix above: libnixstore.so is 169,169,752 B
+      # unstripped, larger than the whole ramdisk's free space, so stripping in
+      # place after the copy cannot work. Strip outside, then copy.
+      _lb=$(basename "$_l")
+      _lstage="${TMPDIR:-/var/tmp}/solnix-libstage.$$"
+      mkdir -p "$_lstage"
+      if cp "$_l" "$_lstage/$_lb"; then
+        [ -x /usr/bin/strip ] && /usr/bin/strip "$_lstage/$_lb" 2>/dev/null || true
+        if cp "$_lstage/$_lb" "$RDROOT/nix-tools224/lib/$_lb"; then
+          _nlibs=$((_nlibs + 1))
+        else
+          rm -f "$_lstage/$_lb"; rmdir "$_lstage" 2>/dev/null || true
+          die "failed to copy nix library $_l into the ramdisk (stripped size $(wc -c < "$_lstage/$_lb" 2>/dev/null) B)"
+        fi
+        rm -f "$_lstage/$_lb"
       else
-        die "failed to copy nix library $_l into the ramdisk"
+        die "failed to stage nix library $_l"
       fi
+      rmdir "$_lstage" 2>/dev/null || true
     done
     echo "  nix-tools224/lib: staged $_nlibs library file(s)" >&2
     [ "$_nlibs" -ge 4 ] || die "only $_nlibs nix libraries staged; nix needs libnixstore.so et al"
