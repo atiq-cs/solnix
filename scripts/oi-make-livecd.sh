@@ -76,7 +76,14 @@ SRC="${SRC:-/}"                          # the running root we slice from
 # UNTESTED: no graphical media has been rebuilt or booted since this change; the
 # df/raw-size gates below are what protect it.
 GRAPHICAL="${GRAPHICAL:-0}"
-if [ "$GRAPHICAL" = 1 ]; then RD_MB="${RD_MB:-500}"; else RD_MB="${RD_MB:-340}"; fi
+# RD_MB default. STAGE_NIX=1 (the default, see section 2) adds the SLIM nix tree:
+# 95,412,745 B measured with wc -c. Previous content measured 199,698 KB used, so
+# with nix + terminfo (3.9 MB) + /usr/gnu (~14 MB) + rsync/xz/top/wget the live
+# root lands near 306 MiB and 340 MB no longer leaves the required 32 MB of slack.
+# 420 MB = 440,401,920 B UNCOMPRESSED = 54.0% of the X1's MEASURED 816,119,808 B
+# largest low-4GB free block, i.e. ~358 MiB of headroom still under the ceiling.
+# Set STAGE_NIX=0 to build the old nix-less media, which fits in 340.
+if [ "$GRAPHICAL" = 1 ]; then RD_MB="${RD_MB:-500}"; else RD_MB="${RD_MB:-420}"; fi
 # RD_NBPI: newfs -i bytes-per-inode. illumos newfs defaults to nbpi=2048 for an
 # image this size, which cost 20,522KB of inode tables at RD_MB=320 to hold 3369
 # used inodes out of 160000 -- ~7% of the whole image spent on a table that is
@@ -209,6 +216,7 @@ log "copying ldd closure of installer tools from /usr/lib"
 # ldd-visible and are force-copied in a dedicated block further down.
 CLOSURE_TOOLS="/sbin/zpool /sbin/zfs /usr/sbin/format /usr/sbin/fmthard
   /usr/sbin/sshd /usr/bin/ssh-keygen /usr/bin/login /usr/bin/su
+  /usr/sbin/useradd /usr/sbin/usermod /usr/sbin/groupadd /usr/bin/passwd
   /usr/libexec/sshd-session /usr/libexec/sshd-auth
   /usr/libexec/ssh-keysign /usr/libexec/sftp-server
   /usr/sbin/prtvtoc /usr/sbin/newfs /usr/sbin/mkfs /usr/sbin/installboot
@@ -263,6 +271,17 @@ LIVE_TOOLS="
   usr/bin/su usr/bin/login usr/bin/newtask
   usr/bin/digest usr/bin/openssl usr/bin/od usr/bin/xargs usr/bin/mkfile
   usr/bin/gzip
+  usr/bin/bzip2 usr/bin/xz usr/bin/unxz usr/bin/xzcat
+  usr/bin/rsync
+  usr/bin/top
+  usr/bin/tput usr/bin/clear usr/bin/stty usr/bin/reset
+  usr/bin/diff3 usr/bin/sdiff usr/bin/cmp usr/bin/comm usr/bin/join
+  usr/bin/nl usr/bin/paste usr/bin/split usr/bin/uniq usr/bin/wget
+  usr/bin/ssh usr/bin/scp usr/bin/sftp usr/bin/ssh-add usr/bin/ssh-agent
+  usr/bin/ksh usr/bin/pkill usr/bin/nohup usr/bin/time
+  usr/sbin/useradd usr/sbin/userdel usr/sbin/usermod usr/sbin/groupadd
+  usr/sbin/groupdel usr/sbin/groupmod usr/bin/passwd usr/sbin/pwconv
+  usr/bin/chown usr/bin/chgrp usr/bin/mkdir
   usr/bin/kbd usr/sbin/modinfo usr/sbin/strconf
   usr/bin/mdb usr/bin/adb usr/bin/truss usr/bin/pstack usr/bin/pargs
   usr/bin/pmap usr/bin/pfiles usr/bin/pgrep usr/bin/ptree usr/bin/gcore
@@ -297,15 +316,89 @@ for t in $LIVE_TOOLS; do
   d=$(dirname "$t"); b=$(basename "$t")
   [ -e "$SRC/$d/amd64/$b" ] && echo "$d/amd64/$b" >> /tmp/solnix-tools.list
 done
-# MAN PAGES: the minimal install should ship `man` + pages for the staged tools
-# (NixOS parity — a base install has working man). /usr/share/man is ~82MB raw
-# but the ramdisk is right-sized + gzipped at the end (~4x), so it costs ~20MB
-# on media and lands in BOTH the ISO live-root AND the installed BE (the BE is
-# copied from the live-root). man(1) here uses mandoc (staged above), no nroff
-# pipeline needed. Include the man tree + man config if present.
-for mp in usr/share/man etc/man.conf usr/share/man/man.cf usr/share/mandoc; do
-  [ -e "$SRC/$mp" ] && echo "$mp" >> /tmp/solnix-tools.list
+# MAN PAGES: keep `man` + the pages (NixOS parity -- a base install has working
+# man), and they land in BOTH the ISO live-root and the installed BE.
+#
+# ⚠️ CORRECTION to the previous comment here, which claimed "~82MB raw ... costs
+# ~20MB on media". MEASURED with `wc -c`: /usr/share/man is 51,478,373 B, and
+# ramdisk cost is UNCOMPRESSED bytes -- the gzip only shrinks the on-media file,
+# not the allocation the EFI loader must make below 4 GB. So man costs ~49 MiB of
+# the ceiling, not ~20 MB.
+#
+# ⚠️ AND, until the find-expansion added below, NO shipped image contained a
+# single man page: cpio -o does not recurse into a listed directory, so
+# usr/share/man arrived EMPTY (host=127 entries, ramdisk=0, measured). The
+# "~20MB" figure was never real.
+#
+# It is kept (49 MiB is affordable at RD_MB=420: total lands at ~55% of ceiling),
+# but it is now the FIRST thing to drop if the ceiling is ever approached --
+# SOLNIX_NO_MAN=1 does that.
+if [ "${SOLNIX_NO_MAN:-0}" != 1 ]; then
+  for mp in usr/share/man etc/man.conf usr/share/man/man.cf usr/share/mandoc; do
+    [ -e "$SRC/$mp" ] && echo "$mp" >> /tmp/solnix-tools.list
+  done
+else
+  echo "SOLNIX_NO_MAN=1: man pages NOT staged (saves ~49 MiB uncompressed)" >&2
+fi
+# GNU DIFFUTILS + the rest of /usr/gnu/bin.
+#
+# ⚠️ LOAD-BEARING, not a nicety. illumos /usr/bin/diff prints
+#     "No differences encountered"
+# for identical files instead of staying silent, which has silently broken checks
+# in this project more than once (see docs/working-with-subagents.md). The
+# installed system therefore needs GNU diff, AND /usr/gnu/bin must come FIRST in
+# PATH so `diff` means the GNU one (wired in /etc/profile + the live shell below).
+# /usr/gnu is small: 4 diffutils bins = 641,160 B, +sed/grep = ~1.3 MB total.
+for gp in usr/gnu/bin usr/gnu/share; do
+  [ -e "$SRC/$gp" ] && echo "$gp" >> /tmp/solnix-tools.list
 done
+# TERMINFO: measured 3,871,847 B. Without it `less`, `top`, `vi` and any curses
+# tool die with "No terminal database found" / unusable output. Cheap, and an
+# installer whose pager does not work is not usable over a console.
+for tp in usr/share/lib/terminfo usr/share/lib/tabset etc/termcap; do
+  [ -e "$SRC/$tp" ] && echo "$tp" >> /tmp/solnix-tools.list
+done
+# POWER MANAGEMENT (modest, measured at 45,350 B total). illumos's PM is:
+#   * the `power` driver (already in the whole-kernel-tree copy)
+#   * /usr/lib/power/powerd, the daemon that acts on /etc/power.conf
+#   * svc:/system/power + its method script
+#   * /etc/power.conf itself
+# There is NO poweradm and NO powertop on illumos -- those are Solaris 11 /
+# Linux tools respectively. cpupm/cpu-threshold in power.conf is the knob.
+for pp in usr/lib/power lib/svc/method/svc-power lib/svc/manifest/system/power.xml \
+          etc/power.conf usr/sbin/poweroff usr/sbin/halt usr/sbin/shutdown; do
+  [ -e "$SRC/$pp" ] && echo "$pp" >> /tmp/solnix-tools.list
+done
+# EXPAND DIRECTORY ENTRIES. ⚠️ `cpio -o` does NOT recurse into a directory named
+# on its stdin -- it archives the directory INODE only, so every directory listed
+# above arrived in the ramdisk EMPTY. Measured on this build:
+#   usr/share/man          host=127 entries  ramdisk=0
+#   usr/gnu/bin            host=25            ramdisk=0
+#   usr/share/lib/terminfo host=42            ramdisk=0
+# and confirmed with a minimal control (one dir, one file, cpio -o | cpio -idm ->
+# 0 files copied). This is the SAME class as the xargs-split and readlink bugs
+# already documented here: the copy "succeeded" and shipped nothing.
+#
+# It is also PRE-EXISTING: the man-page block above has been listing
+# usr/share/man for several images, and the docs claim "~20MB on media" -- but no
+# shipped image can have contained a single man page. Caught only because the new
+# base-tooling gate asserts a FILE inside one of these dirs.
+#
+# Fix: expand every directory entry to its full file list with find(1) before
+# handing the list to cpio. find IS present on illumos (unlike readlink/stat).
+if [ -s /tmp/solnix-tools.list ]; then
+  : > /tmp/solnix-tools.list.exp
+  while read -r _e; do
+    [ -n "$_e" ] || continue
+    if [ -d "$SRC/$_e" ] && [ ! -h "$SRC/$_e" ]; then
+      ( cd "$SRC" && find "$_e" -print 2>/dev/null ) >> /tmp/solnix-tools.list.exp
+    else
+      echo "$_e" >> /tmp/solnix-tools.list.exp
+    fi
+  done < /tmp/solnix-tools.list
+  sort -u /tmp/solnix-tools.list.exp > /tmp/solnix-tools.list
+  echo "tool list expanded to $(wc -l < /tmp/solnix-tools.list | tr -d ' ') paths (dirs walked with find; cpio -o does not recurse)" >&2
+fi
 # Copy the curated list in ONE archive. NOTE: the earlier `xargs tar -cf -`
 # approach was BROKEN on illumos: illumos xargs honors a small -s command-size
 # cap and SPLITS a long list into multiple `tar -cf -` invocations, each
@@ -318,20 +411,145 @@ done
   | ( cd "$RDROOT" && cpio -idm -H ustar 2>/dev/null ) \
   || echo "WARN: tool copy had errors" >&2
 
-# --- 2.24 nix runtime into the live ramdisk (so nix works in the installer
-# shell: nix profile install by-name from cache.solnix.io, solnix-install). The
-# relocatable /nix-tools224 (bootstrap tarball) + its CA bundle. ~185MB — sized
-# into RD_MB. The full toolset closure is NOT baked (that is the installed
-# system's job, fetched from cache); the live media stays minimal.
-if [ -d /nix-tools224 ]; then
-  # build-host bootstrap only: if a /nix-tools224 exists on the BUILD host it may
-  # help stage, but it MUST NOT ship. The store nix (sw/bin/nix) is in the CS
-  # closure copied into the live ramdisk; nothing to stage here.
-  NIX224=/nix/store/jxn55a9725j8ba9hkqila89s66abszhr-nix-2.24.15
-  [ -x "$RDROOT$NIX224/bin/nix" ] || echo "WARN: store nix not in live closure ($NIX224)" >&2
+# --- 2.24 nix runtime into the live ramdisk, SLIMMED (STAGE_NIX=1, default).
+#
+# WHY this ships at all: solnix-install takes the SELF_INSTALL path on this media
+# (no CS toplevel), which copies the LIVE ROOT onto the target disk. So whatever
+# is in the ramdisk is what the installed system gets, and an installed system
+# with no `nix` cannot install anything. Staging /nix-tools224 here is what gives
+# a fresh install a working nix from first boot.
+#
+# ⚠️ WHY IT MUST BE SLIMMED, with the measured numbers. The relocatable bootstrap
+# tarball materialises nix-build/nix-store/nix-env/... as 12 FULL COPIES of one
+# 153,731,896 B UNSTRIPPED binary (all byte-identical: sha256
+# ef98273b2f97b39f58b421e0c4df114ad6986ff4a7d7b9ecab747656ef276226), plus a 13th
+# copy as libexec/nix/build-remote. Measured with `wc -c` sums:
+#   bin 1,844,782,752   lib 437,860,164   libexec 153,731,896   runtime-lib 77,452,384
+# i.e. ~2.5 GB, which is 3.1x the X1's ENTIRE 816,119,808 B low-memory ceiling.
+# Staging it verbatim could never have booted.
+#
+# ⚠️ AND WHY `du` MUST NOT BE USED TO CHECK THIS. The build host is ZFS with
+# compression on, so `du -sk /nix-tools224` reports ~1.1 GB and the tree was
+# previously described as "~185 MB". A UFS ramdisk pays the UNCOMPRESSED bytes.
+# This is the same wrong-unit error that let the original 820 MB overshoot hide
+# behind the gzipped boot_archive size. Use `wc -c`, never `du`, for ramdisk cost.
+#
+# Slim = ONE stripped nix (4,041,432 B) + 11 symlinks + stripped libs +
+# runtime-lib + etc + ca-bundle = 95,412,745 B measured. `nix --version` and
+# `nix-store --version` both return 0 from the slimmed tree.
+STAGE_NIX="${STAGE_NIX:-1}"
+if [ "$STAGE_NIX" = 1 ] && [ -d /nix-tools224 ] && [ -x /nix-tools224/bin/nix ]; then
+  log "staging SLIM /nix-tools224 into the live root (nix from first boot)"
+  mkdir -p "$RDROOT/nix-tools224/bin" "$RDROOT/nix-tools224/lib" \
+           "$RDROOT/nix-tools224/libexec/nix" "$RDROOT/nix-tools224/etc/nix"
+  cp /nix-tools224/bin/nix "$RDROOT/nix-tools224/bin/nix" || die "copy nix failed"
+  # strip: the shipped binary is unstripped (153.7 MB -> 4.0 MB). /usr/bin/strip
+  # exists on illumos; guard anyway rather than trusting it (the stat(1) lesson).
+  if [ -x /usr/bin/strip ]; then
+    /usr/bin/strip "$RDROOT/nix-tools224/bin/nix" || echo "WARN: strip nix failed (shipping unstripped)" >&2
+  else
+    echo "WARN: no /usr/bin/strip -- shipping UNSTRIPPED nix, expect +150MB" >&2
+  fi
+  # the 11 sibling commands are argv[0]-dispatched from the same binary.
+  ( cd "$RDROOT/nix-tools224/bin" && for _a in nix-build nix-channel \
+      nix-collect-garbage nix-copy-closure nix-daemon nix-env nix-hash \
+      nix-instantiate nix-prefetch-url nix-shell nix-store; do
+        ln -s nix "$_a" 2>/dev/null || true; done )
+  ( cd "$RDROOT/nix-tools224/libexec/nix" && ln -s ../../bin/nix build-remote 2>/dev/null || true )
+  for _l in /nix-tools224/lib/*.so; do
+    [ -f "$_l" ] || continue
+    cp "$_l" "$RDROOT/nix-tools224/lib/$(basename "$_l")" 2>/dev/null || true
+    [ -x /usr/bin/strip ] && /usr/bin/strip "$RDROOT/nix-tools224/lib/$(basename "$_l")" 2>/dev/null || true
+  done
+  ( cd /nix-tools224 && tar -cf - runtime-lib ) | ( cd "$RDROOT/nix-tools224" && tar -xf - ) \
+    || echo "WARN: runtime-lib copy had errors" >&2
+  [ -f /nix-tools224/ca-bundle.crt ] && cp /nix-tools224/ca-bundle.crt "$RDROOT/nix-tools224/ca-bundle.crt"
+
+  # nix.conf for the INSTALLED system (SELF_INSTALL copies this root verbatim).
+  cat > "$RDROOT/nix-tools224/etc/nix/nix.conf" <<'NT224CONF'
+substituters = https://cache.solnix.io https://s3.solnix.io/solnix-cache
+trusted-public-keys = cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk=
+ssl-cert-file = /nix-tools224/ca-bundle.crt
+sandbox = false
+build-users-group =
+experimental-features = nix-command flakes
+max-jobs = auto
+NT224CONF
+
+  # WRAPPERS in /usr/bin, NOT a global LD_LIBRARY_PATH.
+  #
+  # MEASURED MECHANISM: the top `nix` binary's RUNPATH is the absolute
+  # /nix-tools224/lib:/nix-tools224/lib/amd64:/nix-tools224/runtime-lib, but the
+  # TRANSITIVE libs carry BUILD-HOST RUNPATHs that do not exist on a target:
+  #   libnixstore.so  -> /usr/gcc/13/lib/amd64:/usr/openssl/3/lib/amd64:/var/tmp/libgit2-inst/lib:/nix-tools224/lib
+  #   libnixutil.so   -> /usr/gcc/13/lib/amd64:/usr/openssl/3/lib/amd64:/var/tmp/libgit2-inst/lib
+  # so libboost_context.so.1.78.0, libgit2.so.1.7 and libarchive.so.13 are NOT
+  # found from RUNPATH alone: `nix --version` dies
+  #   ld.so.1: nix: fatal: libboost_context.so.1.78.0: open failed
+  # (oi-fleet-bootstrap.sh documents the same thing for the build hosts.)
+  #
+  # A GLOBAL LD_LIBRARY_PATH would fix it and is the WRONG fix: runtime-lib holds
+  # libcrypto.so.3, libssl.so.3, libstdc++.so.6, libncurses.so.5, libxml2.so.16,
+  # libicuuc.so.78 -- exporting it system-wide would let nix's copies SHADOW the
+  # system libraries for every process on the installed machine. Scope it to the
+  # exec instead. VERIFIED: wrapper runs `nix (Nix) 2.24.15` rc=0 with no env set;
+  # negative control (wrapper pointed at a nonexistent lib dir) FAILS as expected.
+  for _n in nix nix-build nix-channel nix-collect-garbage nix-copy-closure \
+            nix-env nix-hash nix-instantiate nix-prefetch-url nix-shell nix-store; do
+    cat > "$RDROOT/usr/bin/$_n" <<WRAPEOF
+#!/sbin/sh
+# Scoped wrapper: nix's transitive libs carry build-host RUNPATHs, so
+# LD_LIBRARY_PATH is required -- but ONLY for this exec, never exported globally
+# (runtime-lib would shadow system libcrypto/libstdc++/libncurses otherwise).
+LD_LIBRARY_PATH=/nix-tools224/runtime-lib:/nix-tools224/lib:/nix-tools224/lib/amd64
+export LD_LIBRARY_PATH
+NIX_CONF_DIR=\${NIX_CONF_DIR:-/nix-tools224/etc/nix}; export NIX_CONF_DIR
+exec /nix-tools224/bin/$_n "\$@"
+WRAPEOF
+    chmod 0555 "$RDROOT/usr/bin/$_n"
+  done
+
+  # LOUD-FAIL GATES: a silent staging failure here ships an installer whose whole
+  # purpose (nix from first boot) is missing. Assert the RESULT, not the copy.
+  [ -x "$RDROOT/nix-tools224/bin/nix" ] || die "slim nix not staged at $RDROOT/nix-tools224/bin/nix"
+  [ -s "$RDROOT/nix-tools224/bin/nix" ] || die "staged nix is EMPTY"
+  _nb=$(wc -c < "$RDROOT/nix-tools224/bin/nix" | tr -d ' ')
+  [ "$_nb" -gt 1000000 ] || die "staged nix is only $_nb B -- strip destroyed it"
+  [ "$_nb" -lt 120000000 ] || die "staged nix is $_nb B -- NOT stripped, this will blow the ramdisk ceiling"
+  _rl=$(ls "$RDROOT/nix-tools224/runtime-lib" 2>/dev/null | wc -l | tr -d ' ')
+  [ "$_rl" -ge 30 ] || die "nix runtime-lib staged only $_rl libs (expect 39) -- nix will not run"
+  for _need in libboost_context.so.1.78.0 libgit2.so.1.7 libarchive.so.13 libstdc++.so.6; do
+    [ -f "$RDROOT/nix-tools224/runtime-lib/$_need" ] || \
+      die "nix runtime-lib missing $_need (measured as REQUIRED: build-host RUNPATHs cannot supply it)"
+  done
+  [ -x "$RDROOT/usr/bin/nix" ] || die "nix wrapper not staged in /usr/bin"
+  grep -q 'LD_LIBRARY_PATH=/nix-tools224/runtime-lib' "$RDROOT/usr/bin/nix" || \
+    die "nix wrapper lacks the scoped LD_LIBRARY_PATH -- nix would fail on libboost_context"
+  echo "  nix gate OK: slim nix ${_nb} B + $_rl runtime libs + 12 wrappers" >&2
+else
+  echo "WARN: NOT staging nix (STAGE_NIX=$STAGE_NIX, /nix-tools224 present=$([ -d /nix-tools224 ] && echo yes || echo no));" >&2
+  echo "      the installed system will have NO nix (SELF_INSTALL copies this root verbatim)." >&2
 fi
 # native ping (task requirement: curl + native ping present).
 [ -e "$RDROOT/usr/sbin/ping" ] || { [ -x /usr/sbin/ping ] && cp /usr/sbin/ping "$RDROOT/usr/sbin/ping" && chmod 4555 "$RDROOT/usr/sbin/ping" && chown root:bin "$RDROOT/usr/sbin/ping" 2>/dev/null; }
+
+# USER ADMINISTRATION. The image ships NO personal user by design, so the operator
+# must be able to create one on the installed system -- `useradd` + `passwd` are
+# therefore part of the base install, not extras. Whole set costs 190,920 B.
+#
+# ⚠️ passwd(1) is SETUID+SETGID root (mode 4555/2555 -> -r-sr-sr-x). It CANNOT
+# work without those bits, and an archive round-trip is exactly where they get
+# dropped. Re-assert them explicitly rather than trusting cpio, then GATE on it
+# below: a passwd that silently lost setuid fails only when the operator tries to
+# set a password, i.e. after the install.
+if [ -e "$RDROOT/usr/bin/passwd" ]; then
+  chown root:sys "$RDROOT/usr/bin/passwd" 2>/dev/null || true
+  chmod 6555 "$RDROOT/usr/bin/passwd" 2>/dev/null || true
+fi
+# /export/home is the illumos home-directory parent and useradd -m needs it to
+# exist (it does not create the parent). Absent from the curated tree.
+mkdir -p "$RDROOT/export/home" 2>/dev/null || true
+chmod 0755 "$RDROOT/export" "$RDROOT/export/home" 2>/dev/null || true
 
 # /sbin/sh ships as a symlink to the 32-bit ../usr/bin/i86/ksh93 (needs 32-bit
 # libs we don't carry). Repoint it at the 64-bit /usr/bin/ksh93 (which is the
@@ -1136,14 +1354,32 @@ INITEOF
 # a console banner shell for interactive use (invoked from console-login).
 cat > "$RDROOT/etc/solnix-live-shell" <<'SHELLEOF'
 #!/usr/bin/ksh93
-PATH=/run/current-system/sw/bin:/usr/sbin:/usr/bin:/sbin:/usr/gnu/bin:/usr/ccs/bin
-export PATH TERM=vt100 TMPDIR=/tmp
+# /usr/gnu/bin FIRST: illumos /usr/bin/diff prints "No differences encountered"
+# for identical files, which silently breaks scripted comparisons. GNU diffutils
+# is staged and must win the PATH lookup.
+PATH=/usr/gnu/bin:/run/current-system/sw/bin:/usr/sbin:/usr/bin:/sbin:/usr/ccs/bin
+export PATH TERM=${TERM:-vt100} TMPDIR=/tmp
 NIX_CONF_DIR=/etc/nix; export NIX_CONF_DIR
 NIX_PATH=nixpkgs=/run/current-system/solnix-flake; export NIX_PATH
 cat /etc/solnix-banner 2>/dev/null
 exec /usr/bin/ksh93 2>/dev/null || exec /sbin/sh
 SHELLEOF
 chmod 0555 "$RDROOT/etc/solnix-live-shell"
+
+# /etc/profile PATH: /usr/gnu/bin FIRST for every login shell (console + ssh) on
+# BOTH the live media and the installed system (SELF_INSTALL copies this root).
+# Appended, not rewritten, so the stock profile's other setup is preserved.
+if [ -f "$RDROOT/etc/profile" ] && ! grep -q 'solnix-gnu-path' "$RDROOT/etc/profile"; then
+  cat >> "$RDROOT/etc/profile" <<'PROFPATH'
+
+# solnix-gnu-path: /usr/gnu/bin FIRST. illumos /usr/bin/diff prints
+# "No differences encountered" for identical files rather than staying silent,
+# so scripts that test diff output silently misbehave. GNU diffutils is staged;
+# make it win. /nix-tools224/bin is wrapped into /usr/bin, so no entry needed.
+PATH=/usr/gnu/bin:/usr/sbin:/usr/bin:/sbin:/usr/ccs/bin
+export PATH
+PROFPATH
+fi
 # LIVE nix.conf (5HAV, s3-origin, flakes) so nix works in the installer shell
 # even when no full CS is baked (minimal ISO). solnix-install re-copies the
 # INSTALLED system's nix.conf from the toplevel it lays down.
@@ -1171,9 +1407,40 @@ cat > "$RDROOT/etc/solnix-banner" <<'BANNEREOF'
     2. Install:     solnix-install <target-disk>   e.g. c1t1d0
     3. Reboot:      init 6   (remove the install media)
 
+  This media does NOT install by itself. Nothing is written until you run
+  solnix-install yourself, and it will not touch the disk you booted from.
+
+  nix is staged: `nix --version` works here and on the installed system.
+  Editor: vi (native). Pager: less. GNU diffutils is first in PATH.
+
 BANNEREOF
 # autopush needs iu.ap; copy if present, else stub
 [ -e /etc/iu.ap ] && cp /etc/iu.ap "$RDROOT/etc/iu.ap" 2>/dev/null || : > "$RDROOT/etc/iu.ap"
+
+# POWER MANAGEMENT defaults for a laptop. The stock /etc/power.conf already has
+# `cpupm enable` + `cpu-threshold 1s`; add S3 and device/display idle-down, which
+# is what actually matters on battery. Deliberately MODEST -- these are config
+# lines, not packages, so the ramdisk does not grow.
+#
+# WHAT illumos DOES NOT HAVE, so it is not staged and not promised:
+#   * no poweradm(8)    -- that is Solaris 11 only
+#   * no powertop       -- Linux only; illumos has no equivalent
+#   * no tlp/thermald   -- no analog
+#   * cpu_deep_idle is a driver/kernel tunable, NOT a power.conf keyword; it is
+#     set via /etc/system on hardware that supports it, and is left alone here
+#     because enabling deep C-states blind on unknown hardware risks a hang.
+# So: cpupm + autopm + autoS3 + device idle, and the `power` driver (which comes
+# in with the whole-kernel-tree copy) plus /usr/lib/power/powerd.
+if [ -f "$RDROOT/etc/power.conf" ] && ! grep -q 'solnix-pm' "$RDROOT/etc/power.conf"; then
+  cat >> "$RDROOT/etc/power.conf" <<'PMEOF'
+
+# solnix-pm: laptop defaults. autopm/autoS3 `default` (above) means "enable on
+# hardware that reports support", which is the right call for unknown machines.
+# cpupm enable + a 1s threshold is already set above; add display/device idle.
+device-thresholds            /dev/fb          900s
+system-threshold             always-on
+PMEOF
+fi
 
 cat > "$RDROOT/etc/solnix-release" <<EOF
 The Solnix Operating System - live installer media
@@ -1841,6 +2108,73 @@ for _f in path_to_inst mnttab; do
 done
 echo "  per-machine-state gate OK: path_to_inst + mnttab are empty" >&2
 
+# (iv') BASE TOOLING the interactive installer promises. Each of these is a
+#       command the operator is told to use (README/banner) or that another
+#       staged tool depends on, so a silent copy failure must fail the BUILD.
+#       GNU diff is singled out because illumos /usr/bin/diff prints
+#       "No differences encountered" and has silently broken checks here before.
+for _t in usr/gnu/bin/diff usr/gnu/bin/cmp usr/gnu/bin/diff3 usr/gnu/bin/sdiff \
+          usr/bin/less usr/bin/curl usr/bin/tar usr/bin/gzip usr/sbin/format \
+          usr/sbin/solnix-install usr/bin/ksh93 usr/bin/vi; do
+  [ -e "$RDROOT/$_t" ] || die "live root missing base tool $_t (interactive installer needs it)"
+done
+# vi must RESOLVE, not merely exist: a dangling symlink passes -e on its own but
+# gives the operator a broken editor. -f follows the link to a real file.
+[ -f "$RDROOT/usr/bin/vi" ] || die "/usr/bin/vi does not resolve to a real file (dangling editor symlink)"
+# terminfo: without it less/top/vi print "No terminal database found".
+[ -d "$RDROOT/usr/share/lib/terminfo" ] || die "live root missing usr/share/lib/terminfo (curses tools unusable)"
+[ -e "$RDROOT/usr/share/lib/terminfo/v/vt100" ] || echo "WARN: terminfo has no v/vt100 entry" >&2
+# power management: the daemon + its config, per the requirement.
+[ -x "$RDROOT/usr/lib/power/powerd" ] || echo "WARN: /usr/lib/power/powerd not staged (no PM daemon)" >&2
+[ -f "$RDROOT/etc/power.conf" ] || echo "WARN: /etc/power.conf not staged" >&2
+[ -e "$RDROOT/kernel/drv/amd64/power" ] || echo "WARN: power driver absent from ramdisk" >&2
+# /usr/gnu/bin must WIN the PATH lookup, or staging GNU diff was pointless.
+grep -q 'solnix-gnu-path' "$RDROOT/etc/profile" || \
+  die "/etc/profile lacks the solnix-gnu-path block -- /usr/gnu/bin would not be first in PATH"
+grep -q '^PATH=/usr/gnu/bin' "$RDROOT/etc/solnix-live-shell" || \
+  die "live shell PATH does not start with /usr/gnu/bin"
+echo "  base-tooling gate OK: GNU diffutils + less + terminfo + power + gnu-first PATH" >&2
+
+# (iv''') USER CREATION must work on the installed system: the image ships no
+#         personal user, so if these are missing the operator cannot make one.
+for _u in usr/sbin/useradd usr/sbin/usermod usr/sbin/groupadd usr/bin/passwd; do
+  [ -e "$RDROOT/$_u" ] || die "live root missing $_u -- operator could not create a user"
+done
+[ -d "$RDROOT/export/home" ] || die "live root missing /export/home (useradd -m cannot create the parent)"
+# passwd MUST still be setuid after the archive round-trip. `ls -l` is used because
+# illumos has no stat(1); the mode string is the portable check.
+_pm=$(ls -l "$RDROOT/usr/bin/passwd" | awk '{print $1}')
+case "$_pm" in
+  -r-sr-sr-x|-r-sr-xr-x|*s*) echo "  passwd setuid gate OK: $_pm" >&2 ;;
+  *) die "/usr/bin/passwd lost its setuid bit (mode $_pm) -- passwd would fail for the operator AFTER install" ;;
+esac
+
+# (iv'') NIX MUST ACTUALLY RUN, not merely be present. This is the whole point of
+#        the image: SELF_INSTALL copies this live root onto disk, so if nix cannot
+#        execute here it cannot execute on the installed system either.
+#
+#        The ramdisk is still MOUNTED at this point, so the staged binary can be
+#        executed directly. Its RUNPATH is the absolute /nix-tools224/lib..., which
+#        on the BUILD HOST resolves to the build host's own (full) tree -- so an
+#        unqualified run here would be a DEAD TEST that proves nothing about the
+#        target. Point LD_LIBRARY_PATH at the RAMDISK's copies explicitly, exactly
+#        as the shipped wrapper does relative to the target's root.
+if [ "$STAGE_NIX" = 1 ] && [ -x "$RDROOT/nix-tools224/bin/nix" ]; then
+  _nixout=$( LD_LIBRARY_PATH="$RDROOT/nix-tools224/runtime-lib:$RDROOT/nix-tools224/lib" \
+             NIX_CONF_DIR="$RDROOT/nix-tools224/etc/nix" \
+             "$RDROOT/nix-tools224/bin/nix" --version 2>&1 | head -1 )
+  case "$_nixout" in
+    *"(Nix) "*) echo "  nix RUNS from the staged tree: $_nixout" >&2 ;;
+    *) die "staged nix does not run: '$_nixout'
+  (expected 'nix (Nix) 2.24.15'. If this says libboost_context/libgit2/libarchive
+   open failed, the runtime-lib copy is incomplete -- those three are NOT
+   satisfiable from the binary's RUNPATH alone, measured.)" ;;
+  esac
+  # and the sibling commands must be argv[0] links to the same binary, not copies
+  [ -L "$RDROOT/nix-tools224/bin/nix-store" ] || \
+    die "nix-store is not a symlink -- the 12-full-copies pathology is back, +1.8GB"
+fi
+
 # (v) autoinstall must be OPT-IN. /etc/solnix-autoinstall makes the live media
 #     write to a disk with NO operator confirmation, so its mere presence on a
 #     public image would be a data-loss bug. Fail the build if it appears WITHOUT
@@ -1853,6 +2187,15 @@ if [ -z "${AUTOINSTALL_DISK:-}" ]; then
   [ -e "$RDROOT/etc/solnix-autoinstall" ] && \
     die "/etc/solnix-autoinstall present in live root -- autoinstall MUST be opt-in (see docs/usb-install-media.md)"
   echo "  autoinstall gate OK: not enabled by default" >&2
+  # BELT AND BRACES: the brief for this image is explicitly "interactive", and the
+  # previous image (usb-image-20260910i) WAS an autoinstaller, so a stale marker
+  # or a copied tree is a real risk. Assert the absence a second way -- by
+  # LISTING, not by [ -e ] alone -- and also assert nothing else in the live root
+  # carries the marker name.
+  if ls "$RDROOT/etc/solnix-autoinstall" >/dev/null 2>&1; then
+    die "/etc/solnix-autoinstall EXISTS (ls) -- this image must be INTERACTIVE"
+  fi
+  echo "  autoinstall gate OK (2nd check, ls): marker absent" >&2
 else
   # opt-in build: the marker is load-bearing, so fail loudly if it did not land.
   _ai=$(cat "$RDROOT/etc/solnix-autoinstall" 2>/dev/null | tr -d ' \n')

@@ -73,3 +73,47 @@ A **USB-Ethernet dongle** remains the fastest, most boring option.
 
 Vendoring and the shim design start now; **it is not in the installer image being built today**, and
 saying otherwise would be the overclaiming this project has already had to retract three times.
+
+## Correction measured while building `usb-image-20260911j`: the 15 drivers are NOT ON THE MEDIA
+
+The section above says a USB adapter with an `urtw`/`rum`/`ural`/`zyd`/`atu` chipset "works today with
+no porting". That is true of illumos-the-project. It is **not** true of solnix's media, and the
+difference matters to anyone about to buy a dongle.
+
+Measured inside the SHIPPED ramdisk of `usb-image-20260911j` (extracted from the finished `.iso` and
+lofi-mounted, not read from a build log):
+
+| probe | result |
+|---|---|
+| 802.11 drivers in `kernel/drv/amd64` (`arn ath atu ipw iwh iwi iwk iwn mwl rtw rum ural urtw wpi zyd pcwl pcan`) | **ZERO** |
+| `kernel/misc/amd64/net80211` (the 802.11 framework) | **present** |
+| total drivers in the ramdisk | 215 |
+| `wificonfig(8)` | **absent** |
+| `dladm`, `ipadm`, `dhcpagent` | present |
+
+The media ships the whole driver tree of the build host and passes a host-vs-ramdisk equality gate, so
+this is not a staging shortfall -- **the OpenIndiana build host itself has no 802.11 drivers installed**,
+and the `hipster` catalog on it offers none: a full `pkg list -a` contains no `driver/network/` entry for
+any of the 15 names (only `pcwl`/`pcan`, both obsolete PCMCIA, neither installed nor in the ramdisk).
+`net80211` is present only because it belongs to `system/kernel`.
+
+WARNING on instrument choice: `pkg search -r` returned **empty even for `e1000g`**, a driver that is
+demonstrably installed. It is a dead instrument on this host, and an earlier draft of this note nearly
+concluded "no wifi packages exist at all" from it. `pkg list -a` is the one that works. This is the same
+measure-the-wrong-object failure that produced the original "illumos has zero wifi drivers" claim from
+grepping an EC2 VM's `/kernel/drv/amd64`.
+
+### So the honest buying advice is
+
+1. **USB-Ethernet is the only thing that works on this media today.** Verified present in the shipped
+   ramdisk: `axf` (ASIX AX88772 -- the chipset in most cheap USB2 dongles) and `usbecm` (CDC-ECM /
+   standards-class adapters). Wired NICs `atge`, `e1000g`, `igb`, `rge` are there too. **Buy an
+   AX88772-based USB-Ethernet dongle**; it should attach with no work.
+2. **A USB wifi dongle needs a driver-staging step first.** Even holding an `urtw`-class chipset, the
+   driver is neither on the media nor in the build host's catalog, so it must be built from
+   illumos-gate source and staged. Smaller than the `iwx` port, but **not** "works today".
+
+Both statements are about `usb-image-20260911j` specifically. Media built from a host that *does* have
+the wifi driver packages installed would ship them, because the driver-coverage gate copies whatever the
+host has -- so "install the wifi packages on the build host, rebuild" is the cheapest experiment if a
+USB wifi dongle is the goal.

@@ -48,3 +48,23 @@ Guard 1 should not depend on the media path having run. Either record the boot d
 the marker source, or drop guard 1 and rely on an explicit allow-list of non-removable disks. Noted
 rather than done — changing target selection while the maintainer is waiting on an install is the wrong
 moment, and the current behaviour is verified correct for this machine.
+
+## DONE in `usb-image-20260910i` — this section is superseded
+
+The recommendation above was implemented rather than deferred. Boot-medium identification in
+`oi-make-livecd.sh`'s `solnix-live` method is now **unconditional** and keyed on the medium's own
+content (a read-only `hsfs` mount containing `/platform/i86pc/amd64/boot_archive`), not on where the
+marker was found, so guard 1 is live for every marker source — including the ramdisk-baked one this
+image ships. Guard 2 (`fstyp` = `hsfs`) is unchanged, so the two guards still use different mechanisms.
+
+Both are exercised by `scripts/test-autoinstall-picker.sh`, which extracts the picker verbatim from the
+build script and runs 7 cases against a stubbed `/dev`. The load-bearing one is the control where
+**both guards are disabled and the stick IS selected** — without it, the passing cases would prove
+nothing about whether the guards are what excluded the medium. Observed live in QEMU with the media
+attached as USB: `boot medium identified as c1t0d0 (solnix ISO9660) -- EXCLUDED from install targets`,
+followed by installation to `c2t0d0`, in 4/4 runs.
+
+One further hazard, found while verifying this and **not** a target-selection bug: the installed
+system's console was hardcoded to `ttya`, which on a serial-less laptop is a black screen with no
+input *after* the disk has been erased. Fixed via `SOLNIX_TARGET_CONSOLE` (default `ttya`; the
+unattended path passes `text`). See `docs/usb-install-media.md`.

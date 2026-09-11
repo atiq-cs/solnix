@@ -81,6 +81,28 @@ triggerable from a marker file on the USB stick's own filesystem, so the maintai
 **without a keyboard** — opt-in, first non-removable disk, target printed with a countdown before any
 write. Viable only because ZFS now works on the media (0/8 faults, verified).
 
+### Update (`usb-image-20260910i`): the override exists, and it is the FIFTH hypothesis
+
+The fault is now understood as *design*, not breakage — `plat_kbdpath()` cannot return a USB keyboard —
+so image `i` stops guessing and sets the documented override in the ramdisk `/etc/system`:
+
+```
+set consconfig:usb_kb_path = "/pci@0,0/pci17aa,2267@14/device@2/keyboard@0"
+```
+
+`consconfig_state_init()` prefers this over `plat_kbdpath()`, which is exactly the choice that went
+wrong on this machine. Verified present in the ramdisk extracted from the shipped `.iso`, and
+build-gated so a typo fails the build.
+
+**It is hypothesis five, and it is UNTESTED on hardware.** Four predecessors were each plausible, each
+mechanistic, and each wrong; this one is better-grounded (it names the selecting function and the
+variable it consults) but that is not evidence. It cannot be tested in QEMU at all: QEMU always
+presents a PS/2 `kb8042`, so `plat_kbdpath()` succeeds there and the override never matters — the sixth
+emulator/target divergence, and the reason the same image also installs **unattended with no keyboard**.
+If the override fails, the install still completes and nothing is lost but a boot.
+
+The path is specific to that Kensington in that port. A different keyboard or port is a different path.
+
 ## Update: the instrumentation knob was itself inert, and the fault space is now three paths
 
 ### `consconfig_errlevel=0` does nothing on our kernel
