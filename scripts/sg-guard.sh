@@ -89,6 +89,15 @@ audit_region() {  # $1=region -> returns 1 if any world-open rule found
   hits="$(aws ec2 describe-security-groups --region "$region" \
       --filters "Name=ip-permission.cidr,Values=0.0.0.0/0" \
       --query 'SecurityGroups[].[GroupId,GroupName]' --output text 2>/dev/null || true)"
+
+  # SELF-TEST HOOK. Testing the detector previously meant creating a REAL
+  # 0.0.0.0/0 rule, which is the single action that gets a burner account shut
+  # down for a T&C violation -- minutes of exposure is enough. This injects a
+  # synthetic hit so detection can be proven without ever opening anything.
+  # Purely additive: it can only ever make the guard report DIRTY, never CLEAN.
+  if [ -n "${SG_GUARD_SELFTEST:-}" ]; then
+    hits="${hits}${hits:+$'\n'}sg-SELFTEST selftest-synthetic-not-a-real-sg"
+  fi
   local hits6
   hits6="$(aws ec2 describe-security-groups --region "$region" \
       --filters "Name=ip-permission.ipv6-cidr,Values=::/0" \
