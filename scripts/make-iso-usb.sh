@@ -76,6 +76,19 @@ loader_logo="illumos"
 loader_brand="solnix"
 loader_menu_title="Welcome to solnix"
 console="${SOLNIX_CONSOLE:-text}"
+# os_console pins the KERNEL console. PROVEN ON REAL HARDWARE: the X1 Carbon
+# had a dead keyboard until BOTH `set console=text` AND `set os_console=text`
+# were given at the loader prompt. multiboot2.c:468 reads os_console via
+# getenv and :598-603 only defaults it when unset AND several consoles exist,
+# so on this machine the kernel console was never pinned to the framebuffer:
+# output fell back to the screen while input stayed on a nonexistent ttya.
+# This one line is the only keyboard change with hardware evidence behind it.
+os_console="${SOLNIX_CONSOLE:-text}"
+# Readable console on a HiDPI panel. MEASURED on the X1: EDID 3840x2160, and
+# the loader picked text mode 2 = 480 columns x 113 rows -- unreadable. The
+# font is a FIXED 8x16 with no larger built-in, so rows/cols come from screen
+# size (font.c:232). GOP mode 2 (800x600) gives ~99x37, which is legible.
+efi-max-resolution="800x600"
 ttya-mode="115200,8,n,1,-"
 autoboot_delay="5"
 boot_archive_load="YES"

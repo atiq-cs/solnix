@@ -901,43 +901,6 @@ fi
 # hashing step always has headroom; the live install never needs a big ARC.
 # (Append, don't clobber, any /etc/system copied by COPY_DIRS.)
 touch "$RDROOT/etc/system"
-# consconfig_errlevel=0 makes consconfig_dacf PRINT the keyboard/mouse/fb paths it
-# selected (consconfig_print_paths, gated on consconfig_errlevel > DPRINT_L0).
-# Without this the console-input decision is completely silent, which is why the
-# X1's dead keyboard took several boots to localise. Cheap, one line of output.
-# CONSOLE KEYBOARD OVERRIDE (SOLNIX_USB_KB_PATH).
-#
-# ⚠️ THE X1 CARBON FAULT THIS ADDRESSES. consconfig_state_init()
-# (consconfig_dacf.c:675-681) chooses the console keyboard like this:
-#
-#     if (consconfig_usb_kb_path != NULL)
-#             sp->cons_keyboard_path = consconfig_usb_kb_path;   <-- /etc/system wins
-#     else
-#             sp->cons_keyboard_path = plat_kbdpath();           <-- kb8042 (PS/2)
-#
-# and plat_kbdpath() on i86pc (consplat.c:197-211) returns the kb8042 path or NULL
-# -- it can NEVER return a USB keyboard. Measured on the X1: prtconf shows
-# "i8042, instance #0" and modinfo lists kb8042, so plat_kbdpath() returns a PS/2
-# keyboard that has no keys attached to it, and consconfig wires THAT as the
-# console keyboard. The DACF hotplug path then links the real USB keyboard as an
-# additional lower queue -- which is exactly why `kbd -c off` returns rc=0 while
-# nothing typed ever reaches the console. consconfig.c:62-66 says the intent
-# outright: "This module will override the firmware's values with these."
-#
-# Set SOLNIX_USB_KB_PATH to the DEVICE path (no /devices prefix, no :minor) of the
-# keyboard, e.g. for the observed Kensington on that machine:
-#   SOLNIX_USB_KB_PATH=/pci@0,0/pci17aa,2267@14/device@2/keyboard@0
-# The KBDDIAG block prints the matching /devices path each boot, so the value can
-# be read off the screen and fed back in.
-if [ -n "${SOLNIX_USB_KB_PATH:-}" ]; then
-  if ! grep -q 'consconfig:usb_kb_path' "$RDROOT/etc/system" 2>/dev/null; then
-    printf 'set consconfig:usb_kb_path = "%s"\n' "$SOLNIX_USB_KB_PATH" >> "$RDROOT/etc/system"
-    log "console keyboard override: consconfig:usb_kb_path = $SOLNIX_USB_KB_PATH"
-  fi
-fi
-if ! grep -q 'consconfig_errlevel' "$RDROOT/etc/system" 2>/dev/null; then
-  printf 'set consconfig_dacf:consconfig_errlevel = 0\n' >> "$RDROOT/etc/system"
-fi
 if ! grep -q 'zfs_arc_max' "$RDROOT/etc/system" 2>/dev/null; then
   printf '\n* solnix live-install: cap ZFS ARC so bootadm digest is not OOM-killed\nset zfs:zfs_arc_max = 0x20000000\n' >> "$RDROOT/etc/system"
 fi
@@ -987,59 +950,7 @@ PATH=/usr/sbin:/usr/bin:/sbin; export PATH
   /usr/sbin/devfsadm >>/var/log/solnix-live.log 2>&1 || true
   { echo "[solnix] disks visible:"; ls /dev/dsk 2>/dev/null; } >>/var/log/solnix-live.log 2>&1
   echo "[solnix] devfsadm done; disk list in /var/log/solnix-live.log"
-  # SOLNIX-KBDDIAG: console-keyboard probe for a machine with NO i8042. On i86pc
-  # plat_kbdpath() names kb8042 only, so such a machine has ZERO console keyboards
-  # at boot and a USB keyboard is wired in ONLY by the dacf rule
-  # hid:internal_keyboard -> consconfig_dacf:kb_config. Every failing step of that
-  # chain warns on the console EXCEPT: the rule never matching (S1), consconfig
-  # state not stored yet (S2), and ldi_open of the hid minor failing (S3). These
-  # ~12 lines probe those from userland. `kbd -c off` is the decisive one: it is
-  # KIOCCMD, which kbtrans does NOT answer, so conskbd NAKs it with EINVAL when
-  # nothing is linked under it and forwards it to usbkbm (which acks) when a USB
-  # keyboard is. (`kbd -t` is NOT usable for this: kbtrans answers KIOCTYPE with
-  # KB_USB from conskbd's own kbtrans instance, so it says "USB keyboard" even
-  # with zero keyboards linked -- measured in QEMU with i8042=off and no usb-kbd.)
-  # Run twice: USB enumeration on the X1 is slow
-  # and the external keyboard attached after the login prompt last time.
-  # NOTE: consconfig_errlevel=0 in /etc/system is INERT on a non-DEBUG kernel
-  # (DPRINT_L0 is dropped before the errlevel check), so no `keyboard path =`
-  # lines will appear; do not read their absence as evidence.
-  # NOTE: DDM_INTERNAL_PATH minors (internal_keyboard) are hidden from userland
-  # lookups, so only the :keyboard external minor is visible under /devices.
-  kbddiag() {
-    echo "SOLNIX-KBDDIAG-BEGIN pass=$1 $(date +%T)"
-    _kb=$(find /devices -name 'keyboard@*:keyboard' 2>/dev/null | head -3)
-    echo "hid-kbd-minors: ${_kb:-NONE}"
-    _t=$(/usr/bin/kbd -c off 2>&1); echo "kbd -c off: rc=$? ${_t:-ok}  (rc=0 => a keyboard IS linked under conskbd; rc=1 EINVAL => NONE linked)"
-    _t=$(/usr/bin/kbd -t 2>&1); echo "kbd -t: $_t rc=$? (always USB on this kernel; not diagnostic)"
-    _l=$(/usr/bin/kbd -l 2>&1 | head -2 | tr '\n' ' '); echo "kbd -l: $_l"
-    for _n in $_kb; do
-      _o=$(dd if="$_n" bs=1 count=0 2>&1); echo "open $_n: rc=$? ${_o}"
-    done
-    echo "prtconf: $(prtconf -D 2>/dev/null | grep -iE 'hid|conskbd|kb8042|8042' | sed 's/^ *//' | tr '\n' ';' | cut -c1-200)"
-    echo "modinfo: $(modinfo 2>/dev/null | grep -iE 'usbkbm|kbtrans|conskbd|consconfig|[^a-z]hid[^a-z]|kb8042' | awk '{print $6}' | tr '\n' ' ')"
-    echo "dacf.conf: $(grep -cE '^driver-minorname="hid:internal_keyboard"' /etc/dacf.conf 2>/dev/null) hid:internal_keyboard rule(s)"
-    echo "SOLNIX-KBDDIAG-END pass=$1"
-  }
-  kbddiag 1
-  # Auto-install target, from any of three marker sources: baked into the ramdisk
-  # at build time (AUTOINSTALL_DISK=), a kernel boot property, or a file at the
-  # root of the media's own ISO9660 filesystem. Nothing below writes to any disk
-  # until the target is printed and a 10 s countdown has elapsed.
-    # FIRST: a BOOT PROPERTY -- needs no media read and no rebuild.
-    #
-    # ⚠️ WHY THIS EXISTS. The media-root marker below CANNOT WORK on hardware where
-    # the live system never enumerates the boot medium. Measured on a real X1
-    # Carbon: the loader's `lsdev` shows the USB stick (disk1, ISO9660), but once
-    # the kernel roots on /ramdisk:a the stick has NO /dev/dsk nodes -- the only
-    # disk present is the internal NVMe. So `fstyp` over /dev/dsk/c*p0 finds
-    # nothing to mount and the marker is unreachable. QEMU hid this because its
-    # usb-storage device enumerates under sd as c1t0d0.
-    #
-    # A boot property comes from the kernel property list, not a device, so it
-    # works regardless. From the loader menu choose 3 (escape to loader prompt):
-    #     OK set solnix-autoinstall=auto
-    #     OK boot
+
     if [ ! -r /etc/solnix-autoinstall ]; then
       _bp=$(/usr/sbin/prtconf -v 2>/dev/null | sed -n '/solnix-autoinstall/{n;s/.*value=.\{0,1\}//;s/.$//p;}' | head -1)
       if [ -n "$_bp" ]; then
@@ -1109,7 +1020,7 @@ PATH=/usr/sbin:/usr/bin:/sbin; export PATH
       # is by definition the keyboard-free one, i.e. a laptop with no serial port,
       # so it must hand the framebuffer console to the installed system. "text" is
       # exactly what this media ships and is the configuration the X1 Carbon has
-      # actually booted (it produced the KBDDIAG output); "text,ttya" is NOT used
+      # actually booted; "text,ttya" is NOT used
       # because only the single value has hardware evidence behind it.
       SOLNIX_POOL=rpool SOLNIX_ALLOW_RPOOL=1 SOLNIX_TARGET_CONSOLE=text \
         /usr/sbin/solnix-install "$_tgt" \
@@ -1121,7 +1032,6 @@ PATH=/usr/sbin:/usr/bin:/sbin; export PATH
   fi
   # second probe: give slow USB enumeration ~20 s more, then report again
   sleep 20
-  kbddiag 2
 } > /dev/console 2>&1
 exit $SMF_EXIT_OK
 METHODEOF
@@ -1918,14 +1828,6 @@ for _m in kernel/strmod/amd64/usbkbm kernel/strmod/amd64/ldterm \
   [ -e "$RDROOT/$_m" ] || die "live root missing $_m (console input / zfs chain)"
 done
 echo "  console-input + zfs module gate OK" >&2
-# the userland probes the SOLNIX-KBDDIAG block depends on; kbd(1) is the one that
-# tells linked-or-not apart, and the whole diagnostic is inert without it.
-for _b in usr/bin/kbd usr/sbin/modinfo usr/sbin/prtconf usr/sbin/fstyp usr/bin/dd; do
-  [ -e "$RDROOT/$_b" ] || die "live root missing $_b (SOLNIX-KBDDIAG / media-marker probe)"
-done
-grep -q 'SOLNIX-KBDDIAG-BEGIN' "$RDROOT/lib/svc/method/solnix-live" || die "solnix-live method lacks the KBDDIAG block"
-grep -q '^driver-minorname="hid:internal_keyboard"' "$RDROOT/etc/dacf.conf" || die "ramdisk /etc/dacf.conf lacks the hid:internal_keyboard rule"
-echo "  KBDDIAG probe gate OK: kbd/modinfo/prtconf/fstyp/dd staged, dacf rule present" >&2
 
 # (iv) /etc files that must be EMPTY on removable media because they are
 #      per-machine kernel state. path_to_inst pins driver INSTANCE numbers to the
@@ -1962,11 +1864,6 @@ fi
 # (v') the console-keyboard override is load-bearing when requested (it is the
 #      only thing that can give a PS/2-less laptop a console keyboard), and a
 #      typo in /etc/system is silently ignored by the kernel. Gate it.
-if [ -n "${SOLNIX_USB_KB_PATH:-}" ]; then
-  grep -q "^set consconfig:usb_kb_path = \"$SOLNIX_USB_KB_PATH\"\$" "$RDROOT/etc/system" || \
-    die "SOLNIX_USB_KB_PATH=$SOLNIX_USB_KB_PATH requested but not in live root /etc/system"
-  echo "  console-keyboard gate OK: consconfig:usb_kb_path = $SOLNIX_USB_KB_PATH" >&2
-fi
 
 # HARD GATE on ramdisk occupancy. RD_MB is a boot constraint (see the header
 # comment: the EFI loader must AllocatePages the UNCOMPRESSED size contiguously
@@ -2073,6 +1970,19 @@ loader_logo="illumos"
 loader_brand="solnix"
 loader_menu_title="Welcome to solnix"
 console="${SOLNIX_CONSOLE:-text}"
+# os_console pins the KERNEL console. PROVEN ON REAL HARDWARE: the X1 Carbon
+# had a dead keyboard until BOTH `set console=text` AND `set os_console=text`
+# were given at the loader prompt. multiboot2.c:468 reads os_console via
+# getenv and :598-603 only defaults it when unset AND several consoles exist,
+# so on this machine the kernel console was never pinned to the framebuffer:
+# output fell back to the screen while input stayed on a nonexistent ttya.
+# This one line is the only keyboard change with hardware evidence behind it.
+os_console="${SOLNIX_CONSOLE:-text}"
+# Readable console on a HiDPI panel. MEASURED on the X1: EDID 3840x2160, and
+# the loader picked text mode 2 = 480 columns x 113 rows -- unreadable. The
+# font is a FIXED 8x16 with no larger built-in, so rows/cols come from screen
+# size (font.c:232). GOP mode 2 (800x600) gives ~99x37, which is legible.
+efi-max-resolution="800x600"
 ttya-mode="115200,8,n,1,-"
 autoboot_delay="5"
 boot_archive_load="YES"
