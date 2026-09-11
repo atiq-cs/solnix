@@ -2308,7 +2308,12 @@ else
   echo "WARNING: $_mt absent -- cannot rebrand the boot menu title" >&2
 fi
 
-cat > "$OUT/iso/boot/loader.conf" <<'EOF'
+# ⚠️ UNQUOTED heredoc, deliberately. With <<'EOF' the ${SOLNIX_CONSOLE:-text}
+# below is written to loader.conf LITERALLY, and the loader has no shell-style
+# ${VAR} expansion -- so the kernel console was set to the 22-character string
+# "${SOLNIX_CONSOLE:-text}", which is not a console. That shipped in image j and
+# the keyboard was dead on real hardware again. Do not re-quote this heredoc.
+cat > "$OUT/iso/boot/loader.conf" <<EOF
 loader_logo="illumos"
 loader_brand="solnix"
 loader_menu_title="Welcome to solnix"
@@ -2338,6 +2343,37 @@ kernel="/platform/i86pc/kernel/amd64/unix"
 bootfile="unix"
 boot-args="-v"
 EOF
+
+# ⚠️ /boot/conf.d/ IS ALSO READ (support.4th:1207,1441 include_conf_files) and the
+# upstream OpenIndiana tree ships conf.d/console hardcoding console="ttya" and
+# os_console="ttya". Neither of our scripts created it, so it survived every
+# loader.conf fix and re-pinned the kernel console to a serial port the X1 does
+# not have -- the keyboard was dead in image j for this reason as well as the
+# unexpanded heredoc above. Rather than reason about which file wins, make them
+# AGREE: then the result is correct under either precedence order.
+_cd="$OUT/iso/boot/conf.d/console"
+if [ -f "$_cd" ]; then
+  sed -e "s/^console=.*/console=\"${SOLNIX_CONSOLE:-text}\"/" \
+      -e "s/^os_console=.*/os_console=\"${SOLNIX_CONSOLE:-text}\"/" \
+      "$_cd" > "$_cd.new" && mv "$_cd.new" "$_cd"
+  echo "  conf.d/console reconciled to ${SOLNIX_CONSOLE:-text}" >&2
+else
+  # Absent is fine, but say so -- a silently missing override file is exactly
+  # how the previous version of this bug hid.
+  echo "  note: $_cd absent (nothing to reconcile)" >&2
+fi
+
+# LOUD GATE: neither file may contain an unexpanded ${...} or a stale ttya.
+for _f in "$OUT/iso/boot/loader.conf" "$OUT/iso/boot/conf.d/console"; do
+  [ -f "$_f" ] || continue
+  if grep -q '\${' "$_f"; then
+    die "$_f contains an unexpanded \${...} -- the loader has no variable expansion, so this ships a literal string as the console"
+  fi
+  if [ "${SOLNIX_CONSOLE:-text}" = "text" ] && grep -qE '^(os_)?console="ttya"' "$_f"; then
+    die "$_f still pins console to ttya despite SOLNIX_CONSOLE=text"
+  fi
+done
+echo "  console gate OK: loader.conf + conf.d/console both = ${SOLNIX_CONSOLE:-text}" >&2
 
 # 6e. copy the UEFI loader out so the assembler can build the ESP FAT image
 cp /boot/loader64.efi "$OUT/loader64.efi"

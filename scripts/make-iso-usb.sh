@@ -99,6 +99,26 @@ kernel="/platform/i86pc/kernel/amd64/unix"
 bootfile="unix"
 boot-args="${SOLNIX_BOOTARGS:--v}"
 EOF
+# ⚠️ This script rewrites loader.conf but conf.d/ is ALSO read by the loader
+# (support.4th:1207,1441), and upstream ships conf.d/console pinning ttya. Left
+# alone it silently re-pins the kernel console after everything above -- which is
+# half of why the X1 keyboard was dead in image j. Reconcile, then gate.
+_cd="$ISOROOT/boot/conf.d/console"
+if [ -f "$_cd" ]; then
+  sed -e "s/^console=.*/console=\"${SOLNIX_CONSOLE:-text}\"/" \
+      -e "s/^os_console=.*/os_console=\"${SOLNIX_CONSOLE:-text}\"/" \
+      "$_cd" > "$_cd.new" && mv "$_cd.new" "$_cd"
+  echo "  conf.d/console reconciled to ${SOLNIX_CONSOLE:-text}" >&2
+fi
+for _f in "$ISOROOT/boot/loader.conf" "$ISOROOT/boot/conf.d/console"; do
+  [ -f "$_f" ] || continue
+  grep -q '\${' "$_f" && { echo "FATAL: $_f has an unexpanded \${...}; the loader does not expand variables" >&2; exit 1; }
+  if [ "${SOLNIX_CONSOLE:-text}" = "text" ] && grep -qE '^(os_)?console="ttya"' "$_f"; then
+    echo "FATAL: $_f still pins ttya despite SOLNIX_CONSOLE=text" >&2; exit 1
+  fi
+done
+echo "  console gate OK (stage 2): loader.conf + conf.d/console = ${SOLNIX_CONSOLE:-text}" >&2
+
 cat "$ISOROOT/boot/loader.conf" >&2
 
 # ---------------------------------------------------------------------------
