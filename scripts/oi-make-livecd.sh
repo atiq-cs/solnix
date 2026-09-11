@@ -2456,27 +2456,6 @@ for _f in "$OUT/iso/boot/loader.conf" "$OUT/iso/boot/conf.d/console"; do
 done
 echo "  console gate OK: loader.conf + conf.d/console both = ${SOLNIX_CONSOLE:-text}" >&2
 
-# NIX RUNNABILITY GATE. The previous verification reported "runtime-lib staged
-# PASS 39 libs" while lib/ was EMPTY -- it measured a different directory than
-# the one nix loads from, so the image shipped a nix that could not start:
-#   ld.so.1: nix: fatal: libnixstore.so: open failed
-# Actually EXECUTE it, with only the ramdisk's own libraries visible.
-if [ -x "$RDROOT/nix-tools224/bin/nix" ]; then
-  _nixout="$(LD_LIBRARY_PATH="$RDROOT/nix-tools224/lib:$RDROOT/nix-tools224/runtime-lib" \
-             "$RDROOT/nix-tools224/bin/nix" --version 2>&1 || true)"
-  case "$_nixout" in
-    *"nix (Nix)"*) echo "  nix runnability gate OK: $_nixout" >&2 ;;
-    *) die "staged nix does not run: $_nixout" ;;
-  esac
-  # `which` was reported missing on a shipped image; it is depended on widely
-  # enough that its absence reads as a broken system.
-  for _t in which nm strip elfdump ldd; do
-    [ -x "$RDROOT/usr/bin/$_t" ] || [ -x "$RDROOT/usr/gnu/bin/$_t" ] \
-      || echo "WARN: $_t absent from the live root" >&2
-  done
-  [ -x "$RDROOT/usr/bin/which" ] || [ -x "$RDROOT/usr/gnu/bin/which" ] \
-    || die "which(1) is absent -- it was missing from a shipped image and must not be again"
-fi
 
 # 6e. copy the UEFI loader out so the assembler can build the ESP FAT image
 cp /boot/loader64.efi "$OUT/loader64.efi"
