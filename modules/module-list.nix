@@ -16,6 +16,7 @@
   ./config/first-boot-defaults.nix
   ./config/mtu.nix
   ./config/firewall.nix
+  ./config/wireless-iwx.nix
   ./config/networking.nix
   ./config/users.nix
   ./config/system-path.nix

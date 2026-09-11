@@ -149,4 +149,17 @@
     "cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk="
     "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
   ];
+
+  # Intel AX2xx wireless. The installer opts in to Intel's proprietary firmware
+  # by default: this laptop class has no ethernet jack, so refusing the blob
+  # means the machine cannot be installed over the network at all.
+  #
+  # ⚠️ The DRIVER is not finished -- src/wifi-port/iwx/ has the vendored BSD
+  # source, the firmware package and the shim skeleton, but the mbuf and 802.11
+  # layers are unwritten, so nothing attaches yet. Enabling this stages the
+  # firmware so it is present when the driver lands; it does not make wifi work.
+  hardware.wirelessIwx = {
+    enable = false;
+    allowUnfreeFirmware = true;
+  };
 }
