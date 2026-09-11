@@ -683,6 +683,17 @@ tarball measured 85,808,795 B, sha256
 `cca4fee3c73a1aadafd14b7cfddafb47ec2c5ddca05ce0aac7be3561a5438bf2`. (Stage 1 does **not** need a
 >=200 GiB root: the 2026-09-09b build ran entirely in the base AMI's 20 GiB `rpool`, using <2 GiB.
 On `ami-014c4aaccd37b2356` an extra `--block-device-mappings` volume may not even enumerate — only
+
+> ⚠️ **RETRACTED 2026-09-11.** The "root pool does not grow" claim below was **wrong**, and it shaped a
+> whole workflow around living inside ~2 GiB. The offline grow in the seed stage had been **silently
+> no-opping**: it compared against `sfdisk -d`'s `last-lba`, which is stale after the GPT is `dd`'d from a
+> 1.95 GiB image onto a 20 GiB volume, so the test evaluated `4079583 -lt 4030430` = false and reported
+> "already fills the disk" about a disk that was **91% empty**. (`sfdisk` even warns `GPT PMBR size
+> mismatch ... will be corrected by write` and then still reports the old value.) A second defect was
+> hiding behind it: with that fixed the `sfdisk` write *failed* — inheriting the same stale header — and
+> **still exited 0**. Both are fixed in `scripts/base-ami-seed.sh`, gated by a `GROW_VERIFIED` assertion.
+> Measured result: **3,555,039 → 41,385,694 sectors (1.70 GiB → 19.73 GiB)**. The 20 GiB was always there.
+
 `c1t1d0` appeared — and it does not grow `rpool` either way; see `docs/base-ami-rebuild-runbook.md`.)
 
 ⚠️ **Check the size lines the build prints**, because they are the real-hardware acceptance metric:

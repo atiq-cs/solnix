@@ -541,6 +541,17 @@ build with: nix-build ... --option substitute false
 
 Two substrate traps measured here, both of which cost a build:
 
+
+> ⚠️ **RETRACTED 2026-09-11.** The "root pool does not grow" claim below was **wrong**, and it shaped a
+> whole workflow around living inside ~2 GiB. The offline grow in the seed stage had been **silently
+> no-opping**: it compared against `sfdisk -d`'s `last-lba`, which is stale after the GPT is `dd`'d from a
+> 1.95 GiB image onto a 20 GiB volume, so the test evaluated `4079583 -lt 4030430` = false and reported
+> "already fills the disk" about a disk that was **91% empty**. (`sfdisk` even warns `GPT PMBR size
+> mismatch ... will be corrected by write` and then still reports the old value.) A second defect was
+> hiding behind it: with that fixed the `sfdisk` write *failed* — inheriting the same stale header — and
+> **still exited 0**. Both are fixed in `scripts/base-ami-seed.sh`, gated by a `GROW_VERIFIED` assertion.
+> Measured result: **3,555,039 → 41,385,694 sectors (1.70 GiB → 19.73 GiB)**. The 20 GiB was always there.
+
 * **The root pool does not grow to match `--block-device-mappings`.** On this AMI
   the OS root is a 20 GiB `xvda` holding `rpool`; a 320 GiB volume attached as
   `/dev/sda1` arrives as a **separate, unused disk** (`c2t1d0`). `zpool online -e
