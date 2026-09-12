@@ -11,6 +11,20 @@
  *   bus_dmamap_*     50   -> ddi_dma_*
  *   task_/timeout_   69   -> ddi_taskq_* / timeout(9F)
  *
+ * CORRECTION, measured: the five counts above are `grep -c` LINE counts with
+ * UNANCHORED patterns, not call sites. `grep -c 'm_' if_iwx.c` is 309 and it
+ * also matches vm_size, rm_sta_cmd, um_tbs, EM_GROUP, im_interval. Real surface:
+ *
+ *   ieee80211_*    287 occurrences, 76 distinct symbols, 48 functions called
+ *   m_* (mbuf)     31 calls / 48 tokens / 12 distinct APIs   (not 309)
+ *   if_* (ifnet)   3 function calls + ~70 struct-member reads (not 97)
+ *   bus_*          56 calls, 12 distinct
+ *   task_/timeout_ 32 calls, 8 distinct
+ *
+ * The mbuf hazard described at the end of this file is unchanged and real; only
+ * its SIZE was overstated. STATUS.md has the full measurement and the 802.11
+ * route decision (route b, chosen on evidence).
+ *
  * STATUS: skeleton. The DMA, delay, register-access and lock layers below are
  * real; the mbuf and 802.11 layers are the hard part and are deliberately NOT
  * faked -- see the barrier note at the end of this file. Anything unimplemented
@@ -140,9 +154,22 @@ struct iwx_timeout {
  *      (a) adapt iwx's calls to illumos net80211  -- less code, more semantic risk
  *      (b) vendor OpenBSD's net80211 alongside    -- more code, far less risk
  *
+ *    MEASURED AND DECIDED: route (b). Route (a) is refuted -- 53 of 76 distinct
+ *    ieee80211_* symbols (70%) do not exist in illumos net80211 by name, 34 of
+ *    the 48 CALLED functions are absent, and struct ieee80211_node shares ZERO
+ *    member names between the two stacks (109 members ni_* vs 55 members in_*),
+ *    so all 182 ni_* accesses break and it is not a rename. Only 17 of 56 ic_*
+ *    field names exist. Where names DO match the signatures differ. Details and
+ *    the route-(b) cost (24,665 lines, ~3x this shim work, weeks) in STATUS.md.
+ *
  * Until both exist, this driver does not link, and that is the correct state:
  * a driver that half-works on a wifi-only laptop is worse than one that
  * visibly is not finished.
+ *
+ * PROGRESS: the mbuf layer of item 1 now EXISTS as iwx_mbuf.{h,c} + iwx_mlist.h
+ * (73 unit checks, 11 negative controls, compiles as a kernel object), and the
+ * compat layer took if_iwx.c from 364 errors to 30. It still does NOT link and
+ * does NOT load. See STATUS.md for the exact claim ladder.
  * ==================================================================== */
 
 #endif /* _IWX_ILLUMOS_H */
