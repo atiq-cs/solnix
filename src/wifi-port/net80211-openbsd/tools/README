@@ -1,0 +1,37 @@
+Measurement tools for the numbers in ../FINDINGS.md. Each exists because a
+naive grep produced a WRONG answer first; the wrong answer and its control are
+recorded in FINDINGS.md's harness-bugs section.
+
+strip.py <file>
+    Blank out C comments while preserving line count and line numbering.
+    Needed because `grep -v '\*'` (used to exclude pointer declarations when
+    hunting by-value `struct mbuf`) also excluded any line whose COMMENT
+    contained a '*', so a probe with two by-value declarations reported one.
+    Control: /tmp/nc_mbuf/probe.c -- must report 2 by-value hits after
+    stripping, and the pointer declaration must not appear.
+    Also asserted: output line count == input line count, 31/31 files.
+
+fnbody.py <stripped-file> <function>
+    Extract one top-level C function body by brace matching.
+    Needed because a line-range scan after each splnet() ran past the end of
+    the function into the NEXT function's DEFINITION and scored it as a CALL,
+    reporting 3 false splnet nests. The real count is 1.
+    Controls: (positive) a body that really does call another region's
+    function is found -- ieee80211_newstate -> ieee80211_free_allnodes;
+    (negative) ieee80211_clean_cached's extracted body provably does NOT
+    mention ieee80211_clean_nodes, whose definition immediately follows it.
+
+cryptocount.py
+    Count crypto primitive calls with MUTUALLY EXCLUSIVE family patterns.
+    Needed because \b-anchored patterns for rc4_* and arc4random* overlap, so
+    a per-family sum double-counted and three successive drafts of the same
+    sentence carried three different totals. Answer: 29 distinct primitives,
+    94 calls.
+
+Usage: run from a directory of comment-stripped sources, e.g.
+
+    mkdir /tmp/n80_stripped
+    for f in orig/*.c orig/*.h; do
+        python3 tools/strip.py "$f" > /tmp/n80_stripped/$(basename $f)
+    done
+    cd /tmp/n80_stripped && python3 /path/to/tools/cryptocount.py

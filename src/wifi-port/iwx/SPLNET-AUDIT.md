@@ -159,3 +159,33 @@ deliverable this file claims, and the lock work is not done. Specifically not do
 
 None of this is reachable before the driver attaches, and **all of it must land before it is
 loaded on hardware.** `hardware.wirelessIwx.enable` stays `false`.
+
+## Extended into net80211 -- see `../net80211-openbsd/FINDINGS.md`
+
+net80211 is now vendored and its `spl` usage audited on the same terms. Three results **narrow
+this file's conclusions rather than repeat them**:
+
+1. **Refutation 1 does not generalise.** This file refutes the mutex mapping because
+   `iwx_send_cmd` sleeps inside its `splnet` region. Measured across net80211's **24** regions:
+   **none of them sleeps** (no `tsleep`/`msleep`/`rw_enter`/`M_WAITOK`). The detector was
+   negative-controlled against `iwx_send_cmd`, where it does fire. So net80211's 24 regions **can**
+   become a mutex; only this driver's region 8 cannot.
+2. **One region would self-deadlock as a mutex.** `ieee80211_newstate` takes `splnet` and calls
+   `ieee80211_free_allnodes`, which takes it again. `spl` nests by saving an integer; a
+   non-recursive mutex does not. 1 of 24, and it needs an `_locked` inner form -- a change to
+   vendored logic, so it belongs in a patch with that file cited.
+3. **A hazard worse than the torn TX ring.** This file names a torn TX command ring as the visible
+   corruption. The traced ISR path `iwx_intr` (`:11425`) -> `iwx_notif_intr` (`:11551`) ->
+   `iwx_rx_mpdu_mq` (`:10935`) -> `iwx_rx_frame` (`:5342`) -> `ieee80211_find_rxnode` /
+   `ieee80211_release_node` reaches net80211's node cache, which is a **red-black tree** mutated by
+   `RBT_INSERT`/`RBT_REMOVE` inside `splnet` regions and walked by five more. Under the no-op that
+   is an **unserialised RB tree mutated from an interrupt handler**. A torn ring corrupts a frame; a
+   torn tree corrupts pointers and panics later, elsewhere.
+
+Also: **4 more `splassert(IPL_NET)`** (`ieee80211_node.c:1244`, `:1277`, `:1305`, `:2133`) join the
+8 here in silently ceasing to be checked, and `:2133` is the one guarding `RBT_REMOVE`.
+
+The proposed model there is `ioctl_rwl` -> `sc_lock` -> `ic_lock`, and it carries **one unverified
+premise** (that `ic_lock` is never held across a callback into the driver via `ic_newstate` /
+`ic_send_mgmt` / `ic_set_key` / `ic_ampdu_rx_start`). Until that is walked, it is a proposal and not
+a design. **Both fixes remain NOT IMPLEMENTED.**

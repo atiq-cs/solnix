@@ -334,12 +334,40 @@ diff` empty).
 
 ## Next, in dependency order
 
+⚠️ **Step 1 has been MEASURED and its sizing was too low. Read
+`../net80211-openbsd/FINDINGS.md` before acting on this list.** net80211 is now vendored
+(`src/wifi-port/net80211-openbsd/orig/`, 31 files, read-only, provenance recorded) and its error
+surface against illumos measured at **838**. Results that change this list:
+
+* **0 of the 43 blocking symbols are resolved.** Three files (`ieee80211_amrr.c`, `ieee80211_ra.c`,
+  `ieee80211_ra_vht.c`) now compile to **real objects**, and the 46 symbols they define include
+  **none** of the 43 -- they are the cheap files precisely because `iwx` does not call them.
+* **The mbuf layer is the bottleneck, at 8.4x.** net80211 needs **487** source lines rewritten
+  against the mbuf translation layer, versus **58** for `if_iwx.c`. The type alias holds (0
+  by-value, 0 `sizeof` across 198 tag uses -- re-verified), but the field-access volume is the cost.
+* **`ifmedia` and `ether_*` do not exist on illumos in any form** (checked in the gate, not
+  assumed), and `ieee80211_ioctl` -- one of the 43 -- is 536 lines / 36 `SIOC` cases of an OpenBSD
+  wireless ioctl ABI illumos userland does not speak. Scheduler and timer models **do** map; the
+  network-stack model does not.
+* **The locking picture improved.** None of net80211's 24 `splnet` regions sleeps (detector
+  negative-controlled against `iwx_send_cmd`, where it does fire), so those 24 **can** become a
+  mutex -- unlike this driver's region 8. But a new hazard is worse than the torn TX ring: the ISR
+  path `iwx_intr` -> `iwx_notif_intr` -> `iwx_rx_mpdu_mq` -> `iwx_rx_frame` ->
+  `ieee80211_find_rxnode`/`ieee80211_release_node` mutates an **unserialised red-black tree** under
+  the `splnet` no-op.
+
+Also corrected there: this document's **"14 `.c` files"** is wrong -- net80211 has **18** `.c` and
+**13** `.h`. The 31-file and 24,665-line totals are right.
+
 Steps 1 and 5 of the previous version are **done** (mbuf call sites rewritten; `splnet` audited). What
 remains, sized by the link measurement above:
 
-1. **Vendor OpenBSD net80211's 14 `.c` files** and shim their OpenBSD-kernel calls. **43 undefined
+1. **Vendor OpenBSD net80211's `.c` files** and shim their OpenBSD-kernel calls. **43 undefined
    symbols**, and it is the bulk of the remaining work. Route (b) is decided on measurement; route (a) is
-   refuted and must not be revisited.
+   refuted and must not be revisited. **VENDORED AND MEASURED: 838 errors, 0 of 43 resolved.** See
+   `../net80211-openbsd/FINDINGS.md`, which also prices an unmeasured alternative (net80211 as a
+   self-contained module presenting `mac_register` upward, rather than shimmed call-by-call into the
+   illumos stack) that the maintainer should weigh before committing weeks.
 2. **Implement the declared-only shims** -- `iwx_dma.c`, `iwx_pci.c`, `iwx_kcompat.c`. **50 symbols**,
    enumerated by class above. `bus_dmamap_load_mbuf` is the one with a written contract and the one that
    must return `EFBIG` distinctly.
@@ -347,6 +375,11 @@ remains, sized by the link measurement above:
    always, the `iwx_init_task` order inversion rewritten, `iwx_send_cmd`'s `tsleep_nsec` converted to
    `cv_timedwait_sig`, and the 8 `splassert(IPL_NET)` turned into `ASSERT(mutex_owned(&sc->sc_lock))`.
    See `SPLNET-AUDIT.md`. **This must land before the module is ever loaded**, not before it links.
+   **Plus net80211's 24 regions**, audited in `../net80211-openbsd/FINDINGS.md`: none of the 24 sleeps
+   so all 24 can take a mutex, exactly 1 nests (`ieee80211_newstate` -> `ieee80211_free_allnodes`) and
+   would self-deadlock, and 4 more `splassert(IPL_NET)` sites need converting. Proposed order
+   `ioctl_rwl` -> `sc_lock` -> `ic_lock`, with **one premise still unverified** (that `ic_lock` is never
+   held across a callback into the driver) -- named there rather than assumed.
 4. **The 9 named decisions** above (`loadfirmware`, `getmicrouptime`, `ether_sprintf`'s signature mismatch,
    `config_mountroot`, ...).
 5. **GLDv3 + DDI attach**: `_init`/`_info`/`_fini`, `mac_register`, `driver_aliases` (already emitted as
