@@ -158,4 +158,18 @@ if [ -f "$_lc" ]; then
   fi
 fi
 
+
+# A flashable kernel image in git is worse than none: someone flashes a stale
+# binary and debugs the wrong code on real hardware. .gitignore says exactly this
+# for unix-k1.Image, and unix-k3.Image was nevertheless committed by accident at
+# 90f0ac680d. Enforce the rule mechanically rather than by remembering it.
+_img=$(git ls-files 'src/riscv/uts/*.Image' 'src/riscv/uts/*.dtb' 2>/dev/null | head -5)
+if [ -n "$_img" ]; then
+  echo "repo-integrity: FAIL -- flashable kernel image / generated dtb is TRACKED:" >&2
+  echo "$_img" | sed 's/^/  /' >&2
+  echo "  These are build outputs of build-k{1,3}-payload.sh. Untrack with" >&2
+  echo "  git rm --cached, and keep the .gitignore entry." >&2
+  exit 1
+fi
+
 exit "$fail"
