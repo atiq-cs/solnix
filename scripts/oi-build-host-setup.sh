@@ -29,7 +29,29 @@ env PKG_CLIENT_CONNECT_TIMEOUT=60 \
     developer/build/gnu-make \
     developer/lexer/flex \
     developer/parser/bison-38 \
-    developer/versioning/git
+      developer/versioning/git \
+      developer/versioning/patch \
+      text/texinfo \
+      developer/object-file
+
+# FIVE host prereqs an aarch64 gate build needs that were absent here, each found
+# the expensive way -- the build printed FAILED and the cause was a missing host
+# tool rather than the port:
+#   patch(1)          arm64-gate applies patches during `make download`
+#   makeinfo/texinfo  gcc doc targets
+#   astdev / msgcc    ⚠️ WITHOUT IT every libast .mso target dies Error 127 and the
+#                     CHECK phase fails -- while uts/ has ALREADY staged a good
+#                     unix + genunix into proto. So "nightly FAILED" did NOT mean
+#                     the kernel failed. Inspect the proto on disk before
+#                     believing the summary line.
+#   illumos-closed    ON_CLOSED_BINS
+#   u-boot / dtc      image assembly
+# msgcc comes from onbld's own ast tree rather than a separately-named package, so
+# it is gated rather than installed: fail loudly here instead of at the check phase.
+if [ ! -x /usr/ast/bin/msgcc ] && [ ! -x /opt/onbld/bin/msgcc ]; then
+  echo "WARN: no msgcc -- libast .mso targets will die Error 127 and the gate will" >&2
+  echo "      report FAILED even when unix/genunix built fine. Check proto on disk." >&2
+fi
 
 # JDK for the gate's build tools (provides /usr/java/bin/javac)
 [ -x /usr/java/bin/javac ] || pkg install -v developer/java/openjdk8

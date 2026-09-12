@@ -1,5 +1,18 @@
 # solnix aarch64: honest readiness assessment + native-boot path (Goal 1)
 
+> ⚠️ **URL CORRECTION 2026-09-12.** Every `archive/aarch64/...` URL in this file is **wrong** — that entire
+> prefix does not exist in the bucket and returns **HTTP 404** (verified unauthenticated). The surviving
+> aarch64 assets are:
+>
+> | asset | key | size |
+> |---|---|---|
+> | cross seed | `seed/aarch64-solaris/aarch64-seed-cross-14.3.0.tar.gz` | **286,655,805 B**, HTTP 200 |
+> | **proto** | `ami/aarch64-proto-20260912/proto-root_aarch64.tar.gz` | **122,611,618 B**, HTTP 200 |
+>
+> The proto is newly rebuilt and banked; the older `aarch64-proto-73466454.tar.zst` is gone for good. An
+> agent lost time following the dead path, so this is corrected here rather than only in a new document.
+
+
 Node: i-0c94705fd4d3f3768 / 3.138.61.121 (solnix-aarch64-xbuild-2), left RUNNING.
 Substrate: x86 illumos build host, 16 vCPU / 64G RAM, nixpool 90G free.
 

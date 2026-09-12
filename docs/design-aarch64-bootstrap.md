@@ -1,5 +1,18 @@
 # Design: solnix on aarch64 — port assessment, substrate, and bootstrap plan (A1)
 
+> ⚠️ **URL CORRECTION 2026-09-12.** Every `archive/aarch64/...` URL in this file is **wrong** — that entire
+> prefix does not exist in the bucket and returns **HTTP 404** (verified unauthenticated). The surviving
+> aarch64 assets are:
+>
+> | asset | key | size |
+> |---|---|---|
+> | cross seed | `seed/aarch64-solaris/aarch64-seed-cross-14.3.0.tar.gz` | **286,655,805 B**, HTTP 200 |
+> | **proto** | `ami/aarch64-proto-20260912/proto-root_aarch64.tar.gz` | **122,611,618 B**, HTTP 200 |
+>
+> The proto is newly rebuilt and banked; the older `aarch64-proto-73466454.tar.zst` is gone for good. An
+> agent lost time following the dead path, so this is corrected here rather than only in a new document.
+
+
 Status: research + substrate decision + A2 started. This is the deliverable for
 task **A1** in `.kiro/specs/solnix-aarch64/tasks.md`. It (1) assesses the
 out-of-tree aarch64 illumos port, (2) fixes the build/test substrate with a
