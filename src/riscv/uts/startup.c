@@ -379,8 +379,19 @@ startup_dispatch(void)
 	sbi_console_puts(" idle thread; dispatcher online\n");
 	/* Release the secondary harts (spinning in smp_secondary_dispatch) now
 	 * that kmem + the dispatcher are up: they can safely alloc + run. */
-	smp_dispatch_open();
+	/* ⚠️ ORDER MATTERS. thread_ab_selftest() asserts an EXACT 3+3 ping-pong
+	 * count on two threads it creates. smp_dispatch_open() releases 15
+	 * secondaries into the GLOBAL runq, and any of them can steal those
+	 * threads, so running the assert afterwards is a race in the TEST, not a
+	 * dispatcher bug. Measured dose-response: 0/10 flakes at -smp 1 versus
+	 * 4/10 at -smp 16, with smp=1 as the negative control -- textbook
+	 * concurrency signature. A 30%-noise gate cannot detect a real dispatcher
+	 * regression, and on the K3's first boot it would read as a hardware
+	 * fault. So prove single-hart ping-pong FIRST, while this hart is the only
+	 * one that can run anything, then open the floodgates. smp_selftest()
+	 * below is the multi-hart proof and is unaffected. */
 	thread_ab_selftest();
+	smp_dispatch_open();
 
 	/* R-P13: physical-hart SMP — enqueue a thread on the shared runq and
 	 * IPI-wake the secondary harts (already in smp_secondary_dispatch) to
