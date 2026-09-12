@@ -55,6 +55,15 @@ typedef struct msgb {
 extern long iwx_test_allocs;
 extern long iwx_test_frees;
 
+/*
+ * Set when freemsg() is handed a message with b_prev still set. The real kernel
+ * ASSERTs exactly this (uts/common/io/stream.c:659) and compiles the ASSERT out
+ * on a non-DEBUG build, so the userland stub is where the condition can actually
+ * be observed. Used by iwx_mcookie_test.c: without it, a purge path that forgets
+ * to clear the cookie passes.
+ */
+extern int iwx_test_saw_dirty_free;
+
 static mblk_t *
 allocb(size_t size, unsigned int pri)
 {
@@ -82,6 +91,13 @@ allocb(size_t size, unsigned int pri)
 static void
 freeb(mblk_t *m)
 {
+	/*
+	 * Mirrors ASSERT(mp->b_next == NULL && mp->b_prev == NULL) in freeb()
+	 * and freemsg(), uts/common/io/stream.c:642 and :659. Recorded rather
+	 * than aborting so a test can assert on it either way.
+	 */
+	if (m->b_prev != NULL || m->b_next != NULL)
+		iwx_test_saw_dirty_free = 1;
 	if (--DB_REF(m) == 0) {
 		free(DB_BASE(m));
 		free(m->b_datap);

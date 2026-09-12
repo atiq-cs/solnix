@@ -108,6 +108,29 @@ extern mblk_t *iwx_m_defrag(mblk_t *m);
 /* m_copym(m, 0, M_COPYALL, M_DONTWAIT): deep copy of the whole chain. */
 extern mblk_t *iwx_m_copy(const mblk_t *m);
 
+/*
+ * The checked form of "memmove(m->m_data + n, m->m_data, len)" at
+ * if_iwx.c:5264, which shifts the 802.11 header right over the hardware's
+ * 2-byte alignment pad. OpenBSD relies on the cluster having slack at the tail;
+ * allocb() makes no such promise at the same offset, so the destination end
+ * (n + len) is checked against the cluster limit first. The write window is
+ * extended by n, because the frame just got n bytes longer -- omitting that is
+ * the subtle half of this bug: the memmove would succeed and the caller's
+ * following m_adj(m, 2) would then trim real header bytes.
+ *
+ * Returns B_FALSE with the buffer untouched if the shift does not fit.
+ */
+extern boolean_t iwx_m_shift_right(mblk_t *m, size_t len, size_t n);
+
+/*
+ * The checked form of "(struct T *)(m->m_data + offset)" at if_iwx.c:10882 and
+ * :10927, which steps through several firmware responses packed into one RX
+ * buffer. offset comes from a length the DEVICE reported, so it is bounds
+ * checked against the readable window; need is the number of bytes the caller
+ * is about to dereference. Returns NULL rather than a wild pointer.
+ */
+extern void *iwx_m_at(const mblk_t *m, size_t offset, size_t need);
+
 #ifdef __cplusplus
 }
 #endif

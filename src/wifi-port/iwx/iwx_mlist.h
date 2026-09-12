@@ -111,6 +111,17 @@ ml_purge(struct mbuf_list *ml)
 	for (m = ml->ml_head; m != NULL; m = n) {
 		n = m->b_next;
 		m->b_next = NULL;
+		/*
+		 * b_prev too, not only b_next. A queued management frame may be
+		 * carrying an ieee80211_node * in b_prev (see iwx_mcookie.h), and
+		 * freemsg() ASSERTs b_prev == NULL
+		 * (uts/common/io/stream.c:659). On a DEBUG kernel that is a panic
+		 * on any interface-down with a frame still queued; on a non-DEBUG
+		 * kernel the ASSERT is compiled out and it is silent. This is the
+		 * one path that frees without going through
+		 * iwx_m_take_cookie(), so it must clear the field itself.
+		 */
+		m->b_prev = NULL;
 		freemsg(m);	/* frees this packet's whole b_cont chain */
 	}
 	ml_init(ml);
@@ -157,8 +168,11 @@ mq_enqueue(struct mbuf_queue *mq, mblk_t *m)
 		ml_enqueue(&mq->mq_list, m);
 	}
 	mutex_exit(&mq->mq_mtx);
-	if (dropped)
+	if (dropped) {
+		/* Same reason as ml_purge: freemsg() ASSERTs b_prev == NULL. */
+		m->b_prev = NULL;
 		freemsg(m);
+	}
 	return (dropped);
 }
 

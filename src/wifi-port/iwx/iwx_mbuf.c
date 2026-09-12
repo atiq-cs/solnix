@@ -170,3 +170,51 @@ iwx_m_copy(const mblk_t *m)
 	/* copymsg() is a deep copy of the whole chain; dupmsg() would share. */
 	return (copymsg((mblk_t *)m));
 }
+
+boolean_t
+iwx_m_shift_right(mblk_t *m, size_t len, size_t n)
+{
+	unsigned char *src = m->b_rptr;
+
+	if (n == 0)
+		return (B_TRUE);
+
+	/*
+	 * OpenBSD's memmove(m->m_data + 2, m->m_data, hdrlen) writes hdrlen
+	 * bytes starting 2 past the read pointer, i.e. it needs len + n bytes of
+	 * cluster from b_rptr. On OpenBSD the RX cluster is oversized and that
+	 * slack is implicit; allocb() does not promise it at the same offset, so
+	 * check it. Overflow-safe form: compare against the remaining span
+	 * rather than computing src + len + n.
+	 */
+	if (len > (size_t)(DB_LIM(m) - src))
+		return (B_FALSE);
+	if (n > (size_t)(DB_LIM(m) - src) - len)
+		return (B_FALSE);
+
+	/* The source bytes must actually be readable, not merely allocated. */
+	if (len > (size_t)(m->b_wptr - src))
+		return (B_FALSE);
+
+	memmove(src + n, src, len);
+	/*
+	 * The frame is now n bytes longer. Without this the caller's following
+	 * m_adj(m, n) (if_iwx.c:5265) trims the pad AND n bytes of real payload
+	 * off the tail-derived length, and the corruption is silent.
+	 */
+	m->b_wptr += n;
+	return (B_TRUE);
+}
+
+void *
+iwx_m_at(const mblk_t *m, size_t offset, size_t need)
+{
+	size_t avail = (size_t)(m->b_wptr - m->b_rptr);
+
+	if (offset > avail)
+		return (NULL);
+	if (need > avail - offset)
+		return (NULL);
+	return ((void *)(m->b_rptr + offset));
+}
+

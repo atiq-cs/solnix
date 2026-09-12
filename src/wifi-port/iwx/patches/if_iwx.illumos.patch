@@ -1,0 +1,199 @@
+--- openbsd-orig/if_iwx.c
++++ build/if_iwx_illumos.c
+@@ -4611,26 +4611,22 @@
+ 	int err;
+ 	int fatal = 0;
+ 
+-	m = m_gethdr(M_DONTWAIT, MT_DATA);
++	/*
++	 * ILLUMOS: m_gethdr + MCLGET/MCLGETL + the (m_flags & M_EXT) test all
++	 * collapse into one allocation that opens the whole cluster for writing,
++	 * which is what "m->m_len = m->m_pkthdr.len = m->m_ext.ext_size" did.
++	 * allocb() either returns a cluster of the requested size or fails, so
++	 * there is no separate M_EXT case to test.
++	 */
++	m = iwx_m_alloc(size <= MCLBYTES ? MCLBYTES : IWX_RBUF_SIZE);
+ 	if (m == NULL)
+ 		return ENOBUFS;
+ 
+-	if (size <= MCLBYTES) {
+-		MCLGET(m, M_DONTWAIT);
+-	} else {
+-		MCLGETL(m, M_DONTWAIT, IWX_RBUF_SIZE);
+-	}
+-	if ((m->m_flags & M_EXT) == 0) {
+-		m_freem(m);
+-		return ENOBUFS;
+-	}
+-
+ 	if (data->m != NULL) {
+ 		bus_dmamap_unload(sc->sc_dmat, data->map);
+ 		fatal = 1;
+ 	}
+ 
+-	m->m_len = m->m_pkthdr.len = m->m_ext.ext_size;
+ 	err = bus_dmamap_load_mbuf(sc->sc_dmat, data->map, m,
+ 	    BUS_DMA_READ|BUS_DMA_NOWAIT);
+ 	if (err) {
+@@ -5232,8 +5228,18 @@
+ 		return;
+ 	}
+ 
+-	m->m_data = pktdata + desc_size;
+-	m->m_pkthdr.len = m->m_len = len;
++	/*
++	 * ILLUMOS: "m->m_data = pktdata + desc_size; m->m_pkthdr.len =
++	 * m->m_len = len" becomes one checked window move. len came from the
++	 * DEVICE (le16toh(desc->mpdu_len) above), so the bounds check is not
++	 * theoretical -- the unchecked form hands the 802.11 stack a window past
++	 * the end of the DMA buffer.
++	 */
++	if (!iwx_m_set_window(m, pktdata + desc_size, len)) {
++		IC2IFP(ic)->if_ierrors++;
++		m_freem(m);
++		return;
++	}
+ 
+ 	/* Account for padding following the frame header. */
+ 	if (desc->mac_flags2 & IWX_RX_MPDU_MFLG2_PAD) {
+@@ -5261,7 +5267,18 @@
+ 			hdrlen += IEEE80211_CCMP_HDRLEN;
+ 		}
+ 
+-		memmove(m->m_data + 2, m->m_data, hdrlen);
++		/*
++		 * ILLUMOS: the memmove needs 2 + hdrlen bytes of cluster from
++		 * b_rptr, which allocb() does not promise, and the frame gets 2
++		 * bytes longer so the write pointer must move with it. Both are
++		 * inside iwx_m_shift_right(). A failure here means the device
++		 * reported a header longer than the buffer it sent.
++		 */
++		if (!iwx_m_shift_right(m, hdrlen, 2)) {
++			IC2IFP(ic)->if_ierrors++;
++			m_freem(m);
++			return;
++		}
+ 		m_adj(m, 2);
+ 	}
+ 
+@@ -5287,12 +5304,12 @@
+ 		if (subframe_idx > 0)
+ 			rxi.rxi_flags |= IEEE80211_RXI_HWDEC_SAME_PN;
+ 		if (ieee80211_has_qos(wh) && ieee80211_has_addr4(wh) &&
+-		    m->m_len >= sizeof(struct ieee80211_qosframe_addr4)) {
++		    iwx_m_len(m) >= sizeof(struct ieee80211_qosframe_addr4)) {
+ 			struct ieee80211_qosframe_addr4 *qwh4 = mtod(m,
+ 			    struct ieee80211_qosframe_addr4 *);
+ 			qwh4->i_qos[0] &= htole16(~IEEE80211_QOS_AMSDU);
+ 		} else if (ieee80211_has_qos(wh) &&
+-		    m->m_len >= sizeof(struct ieee80211_qosframe)) {
++		    iwx_m_len(m) >= sizeof(struct ieee80211_qosframe)) {
+ 			struct ieee80211_qosframe *qwh = mtod(m,
+ 			    struct ieee80211_qosframe *);
+ 			qwh->i_qos[0] &= htole16(~IEEE80211_QOS_AMSDU);
+@@ -5878,7 +5895,8 @@
+ 			err = EINVAL;
+ 			goto out;
+ 		}
+-		m = MCLGETL(NULL, M_DONTWAIT, totlen);
++		/* ILLUMOS: MCLGETL(NULL, ...) is just an allocation. */
++		m = iwx_m_alloc(totlen);
+ 		if (m == NULL) {
+ 			printf("%s: could not get fw cmd mbuf (%zd bytes)\n",
+ 			    DEVNAME(sc), totlen);
+@@ -6332,7 +6350,7 @@
+ 	} else
+ 		flags |= IWX_TX_FLAGS_ENCRYPT_DIS;
+ 
+-	totlen = m->m_pkthdr.len;
++	totlen = iwx_m_pktlen(m);	/* ILLUMOS: m->m_pkthdr.len */
+ 
+ 	offload_assist |= IWX_TX_CMD_OFFLD_MH_SIZE((hdrlen / 2) &
+ 	    IWX_TX_CMD_OFFLD_MH_MASK);
+@@ -6374,11 +6392,17 @@
+ 		return err;
+ 	}
+ 	if (err) {
+-		/* Too many DMA segments, linearize mbuf. */
+-		if (m_defrag(m, M_DONTWAIT)) {
+-			m_freem(m);
++		/*
++		 * Too many DMA segments, linearize mbuf.
++		 *
++		 * ILLUMOS: the head can MOVE. OpenBSD's m_defrag() rewrites m in
++		 * place and returns an errno; msgpullup() returns a new head and
++		 * consumes the old one, so m must be reassigned or every later
++		 * use of m -- including data->m = m below -- is a dangling
++		 * pointer. iwx_m_defrag() frees the original on failure.
++		 */
++		if ((m = iwx_m_defrag(m)) == NULL)
+ 			return ENOBUFS;
+-		}
+ 		err = bus_dmamap_load_mbuf(sc->sc_dmat, data->map, m,
+ 		    BUS_DMA_NOWAIT | BUS_DMA_WRITE);
+ 		if (err) {
+@@ -10291,7 +10315,14 @@
+ 		/* need to send management frames even if we're not RUNning */
+ 		m = mq_dequeue(&ic->ic_mgtq);
+ 		if (m) {
+-			ni = m->m_pkthdr.ph_cookie;
++			/*
++			 * ILLUMOS: m_pkthdr.ph_cookie. mblk_t has no packet
++			 * header; the node pointer rides in b_prev for exactly
++			 * the enqueue->dequeue window on this private queue, and
++			 * is cleared as it is read. See iwx_mcookie.h -- the
++			 * field MUST be clear before any STREAMS call.
++			 */
++			ni = iwx_m_take_cookie(m);
+ 			goto sendit;
+ 		}
+ 
+@@ -10302,7 +10333,7 @@
+ 		m = ifq_dequeue(&ifp->if_snd);
+ 		if (!m)
+ 			break;
+-		if (m->m_len < sizeof (*eh) &&
++		if (iwx_m_len(m) < sizeof (*eh) &&	/* ILLUMOS: m->m_len */
+ 		    (m = m_pullup(m, sizeof (*eh))) == NULL) {
+ 			ifp->if_oerrors++;
+ 			continue;
+@@ -10879,7 +10910,15 @@
+ 
+ 	m0 = data->m;
+ 	while (m0 && offset + minsz < IWX_RBUF_SIZE) {
+-		pkt = (struct iwx_rx_packet *)(m0->m_data + offset);
++		/*
++		 * ILLUMOS: m0->m_data + offset. Several firmware responses are
++		 * packed into one RX buffer and offset advances by a length the
++		 * DEVICE reported, so the step is bounds checked. NULL here means
++		 * the buffer does not contain the header it claims to.
++		 */
++		pkt = iwx_m_at(m0, offset, minsz);
++		if (pkt == NULL)
++			break;
+ 		qid = pkt->hdr.qid;
+ 		idx = pkt->hdr.idx;
+ 
+@@ -10923,11 +10962,11 @@
+ 			size_t maxlen = IWX_RBUF_SIZE - offset - minsz;
+ 			nextoff = offset +
+ 			    roundup(len, IWX_FH_RSCSR_FRAME_ALIGN);
+-			nextpkt = (struct iwx_rx_packet *)
+-			    (m0->m_data + nextoff);
++			nextpkt = iwx_m_at(m0, nextoff, minsz);
+ 			/* AX210 devices ship only one packet per Rx buffer. */
+ 			if (sc->sc_device_family >= IWX_DEVICE_FAMILY_AX210 ||
+ 			    nextoff + minsz >= IWX_RBUF_SIZE ||
++			    nextpkt == NULL ||		/* ILLUMOS: bounds */
+ 			    !iwx_rx_pkt_valid(nextpkt)) {
+ 				/* No need to copy last frame in buffer. */
+ 				if (offset > 0)
+@@ -10940,7 +10979,7 @@
+ 				 * packet. Always copy from offset zero to
+ 				 * preserve m_pkthdr.
+ 				 */
+-				m = m_copym(m0, 0, M_COPYALL, M_DONTWAIT);
++				m = iwx_m_copy(m0);	/* ILLUMOS: m_copym */
+ 				if (m == NULL) {
+ 					ifp->if_ierrors++;
+ 					m_freem(m0);

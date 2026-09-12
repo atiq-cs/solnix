@@ -66,6 +66,21 @@ else
 	rc=1
 fi
 
+# The ph_cookie carrier (b_prev), spanning iwx_mcookie.h and iwx_mlist.h.
+if "$CC" -O1 -o "$work/base/tc" "$work/base/iwx_mbuf.c" "$here/iwx_mcookie_test.c" \
+    -I"$work/base" -I"$here" 2>"$work/base/errc"; then
+	if "$work/base/tc"; then
+		echo "  cookie suite: PASS"
+	else
+		echo "  cookie suite: TESTS FAILED  <-- real regression"
+		rc=1
+	fi
+else
+	echo "  cookie suite: DID NOT COMPILE"
+	head -5 "$work/base/errc"
+	rc=1
+fi
+
 # sabotage <name> <literal-search> <literal-replace>
 # Python does the substitution so the text is treated LITERALLY -- no delimiter
 # or regex-metacharacter surprises (an earlier sed version silently died on the
@@ -182,14 +197,19 @@ sabotage adj_ignores_failure \
 # --- mbuf_list negative controls. Header-only, so the sabotage patches the
 # --- header into the per-case directory and that copy shadows the real one.
 mlist_sabotage() {
-	local name needle repl d
+	local name needle repl tsrc hdr d
 	name=$1
 	needle=$2
 	repl=$3
+	# Explicit test source and target header. A sabotage aimed at a header that is
+	# not the one copied into $d patches NOTHING, the honest code gets built, and
+	# the case is reported "NOT CAUGHT" for a bug that was never there.
+	tsrc=${4:-iwx_mlist_test.c}
+	hdr=${5:-iwx_mlist.h}
 	d="$work/m_$name"
 	total=$((total + 1))
 	mkdir -p "$d"
-	if ! SRC=iwx_mlist.h DST="$d/iwx_mlist.h" NEEDLE="$needle" REPL="$repl" \
+	if ! SRC="$hdr" DST="$d/$hdr" NEEDLE="$needle" REPL="$repl" \
 	    python3 -c '
 import os, sys
 s = open(os.environ["SRC"]).read()
@@ -203,15 +223,24 @@ open(os.environ["DST"], "w").write(s.replace(n, os.environ["REPL"]))
 		rc=1
 		return
 	fi
+	if [ ! -f "$d/$hdr" ] || cmp -s "$hdr" "$d/$hdr"; then
+		echo "  mlist/$name: SABOTAGE WAS A NO-OP <-- test is blind"
+		rc=1
+		return
+	fi
 	cp iwx_mbuf.c "$d/"
-	# The test source must be copied INTO $d as well. `#include "iwx_mlist.h"`
-	# resolves against the INCLUDING FILE'S OWN DIRECTORY before any -I path, so
-	# compiling $here/iwx_mlist_test.c would pick up $here/iwx_mlist.h and the
-	# sabotage would silently not apply -- a blind test reporting NOT CAUGHT for
-	# a bug it never actually built. Copying the .c makes $d the quote-include
-	# directory so the patched header wins.
-	cp iwx_mlist_test.c iwx_mbuf.h iwx_mbuf_test_stubs.h "$d/"
-	if ! "$CC" -O1 -o "$d/t" "$d/iwx_mbuf.c" "$d/iwx_mlist_test.c" \
+	# The test source must be copied INTO $d as well. `#include "x.h"` resolves
+	# against the INCLUDING FILE'S OWN DIRECTORY before any -I path, so compiling
+	# $here/iwx_mlist_test.c would pick up $here/iwx_mlist.h and the sabotage
+	# would silently not apply -- a blind test reporting NOT CAUGHT for a bug it
+	# never actually built. Copying the .c makes $d the quote-include directory so
+	# the patched header wins. Every header EXCEPT the sabotaged one is copied, so
+	# the patched copy is not clobbered.
+	for h in iwx_mlist.h iwx_mcookie.h iwx_mbuf.h iwx_mbuf_test_stubs.h; do
+		[ "$h" = "$hdr" ] || cp "$h" "$d/"
+	done
+	cp iwx_mlist_test.c iwx_mcookie_test.c "$d/"
+	if ! "$CC" -O1 -o "$d/t" "$d/iwx_mbuf.c" "$d/$tsrc" \
 	    -I"$d" 2>"$d/err"; then
 		echo "  mlist/$name: INVALID -- did not compile, suite never asked"
 		echo "      $(grep -m1 -E 'error' "$d/err" | cut -c1-100)"
@@ -244,6 +273,30 @@ mlist_sabotage dequeue_no_detach \
 mlist_sabotage purge_leaks_batch \
 	'	for (m = ml->ml_head; m != NULL; m = n) {' \
 	'	for (m = ml->ml_head; m != NULL && m == ml->ml_head; m = n) {'
+
+# (l) THE COOKIE DISCIPLINE. ml_purge frees a still-queued management frame
+#     without going through iwx_m_take_cookie, so it must clear b_prev itself or
+#     freemsg() gets a message the kernel ASSERTs against
+#     (uts/common/io/stream.c:659) -- a DEBUG panic and a SILENT non-DEBUG bug.
+#     This sabotage is the code as it actually stood before the check was
+#     written: iwx_mcookie.h claimed ml_purge cleared the cookie and it did not.
+#     The first version of this test, which reimplemented the purge walk and
+#     inspected the list beforehand, PASSED against it.
+mlist_sabotage purge_leaves_cookie \
+	'		m->b_prev = NULL;
+		freemsg(m);	/* frees this' \
+	'		freemsg(m);	/* frees this' \
+	iwx_mcookie_test.c
+
+# (m) The consumer must CLEAR as it reads. A peek that leaves b_prev set sends
+#     the frame down the TX path still dirty.
+mlist_sabotage cookie_take_does_not_clear \
+	'	void *cookie = (void *)m->b_prev;
+
+	m->b_prev = NULL;
+	return (cookie);' \
+	'	return ((void *)m->b_prev);' \
+	iwx_mcookie_test.c iwx_mcookie.h
 
 echo "=== 3. verdict ==="
 echo "  sabotages caught: $caught/$total"

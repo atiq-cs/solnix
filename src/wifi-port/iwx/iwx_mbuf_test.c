@@ -22,6 +22,7 @@
 
 long iwx_test_allocs;
 long iwx_test_frees;
+int iwx_test_saw_dirty_free;
 
 static int failures;
 static int checks;
@@ -356,6 +357,120 @@ test_free_honours_refcount(void)
 	iwx_m_free(d);
 }
 
+/*
+ * if_iwx.c:5264 -- memmove(m->m_data + 2, m->m_data, hdrlen) shifts the 802.11
+ * header right over the hardware's 2-byte alignment pad, and the caller then
+ * does m_adj(m, 2). Two things must hold and only one of them is obvious.
+ */
+static void
+test_shift_right_moves_header_and_length(void)
+{
+	mblk_t *m = iwx_m_alloc(64);
+	unsigned char *p;
+	size_t before;
+	int i;
+
+	CHECK(m != NULL, "alloc");
+	if (m == NULL)
+		return;
+	/* A 24-byte 802.11 header of recognisable bytes in a 40-byte frame. */
+	CHECK(iwx_m_set_window(m, DB_BASE(m), 40), "set_window");
+	p = iwx_mtod(m);
+	for (i = 0; i < 40; i++)
+		p[i] = (unsigned char)(i + 1);
+	before = iwx_m_len(m);
+
+	CHECK(iwx_m_shift_right(m, 24, 2) == B_TRUE,
+	    "shift of 24 bytes by 2 must fit in a 64-byte cluster");
+	p = iwx_mtod(m);
+	CHECK(p[2] == 1 && p[25] == 24,
+	    "the 24 header bytes must appear 2 further along");
+	/*
+	 * THE NON-OBVIOUS HALF. The frame is 2 bytes longer, so the write window
+	 * must grow with it. If it does not, the caller's following m_adj(m, 2)
+	 * trims 2 bytes off a length that never accounted for them and the tail
+	 * of every padded frame is silently lost.
+	 */
+	CHECK(iwx_m_len(m) == before + 2,
+	    "shift must extend the write window (else m_adj(m,2) eats payload)");
+
+	/* And after the caller's m_adj(m, 2) the frame is back to its length. */
+	CHECK(iwx_m_adj(m, 2) == B_TRUE, "m_adj(m,2) after the shift");
+	CHECK(iwx_m_len(m) == before,
+	    "shift-then-adj must be length-neutral (if_iwx.c:5264-5265)");
+	p = iwx_mtod(m);
+	CHECK(p[0] == 1 && p[23] == 24,
+	    "after adj the header must start at the read pointer again");
+	iwx_m_free(m);
+}
+
+/*
+ * The bounds check OpenBSD gets for free from oversized clusters. hdrlen comes
+ * from ieee80211_get_hdrlen() on a header the DEVICE supplied, so a frame that
+ * fills its cluster must not be shifted past the end.
+ */
+static void
+test_shift_right_rejects_overflow(void)
+{
+	mblk_t *m = iwx_m_alloc(32);
+	unsigned char *base;
+	size_t len;
+
+	CHECK(m != NULL, "alloc");
+	if (m == NULL)
+		return;
+	base = DB_BASE(m);
+	len = iwx_m_clustersize(m);
+	/* Window covering the entire cluster: there is no slack to shift into. */
+	CHECK(iwx_m_set_window(m, base, len), "set_window full");
+	CHECK(iwx_m_shift_right(m, len, 2) == B_FALSE,
+	    "shifting a full cluster right by 2 must be refused");
+	CHECK(iwx_m_len(m) == len, "refused shift must leave the length alone");
+	CHECK(iwx_mtod(m) == base, "refused shift must leave the window alone");
+
+	/* A shift whose SOURCE is longer than the readable window is also bogus. */
+	CHECK(iwx_m_set_window(m, base, 4), "set_window short");
+	CHECK(iwx_m_shift_right(m, 8, 2) == B_FALSE,
+	    "shifting more bytes than are readable must be refused");
+	iwx_m_free(m);
+}
+
+/*
+ * if_iwx.c:10882 / :10927 -- "(struct iwx_rx_packet *)(m0->m_data + offset)"
+ * walks several firmware responses packed into one RX buffer, where offset
+ * advances by a length the device reported.
+ */
+static void
+test_at_bounds_checks_offset(void)
+{
+	mblk_t *m = iwx_m_alloc(128);
+
+	CHECK(m != NULL, "alloc");
+	if (m == NULL)
+		return;
+	CHECK(iwx_m_set_window(m, DB_BASE(m), 64), "set_window");
+
+	CHECK(iwx_m_at(m, 0, 8) == iwx_mtod(m), "offset 0 is the read pointer");
+	CHECK(iwx_m_at(m, 16, 8) == (unsigned char *)iwx_mtod(m) + 16,
+	    "in-range offset must be rptr + offset");
+	CHECK(iwx_m_at(m, 56, 8) != NULL, "a read ending exactly at the end is ok");
+	CHECK(iwx_m_at(m, 57, 8) == NULL,
+	    "a read running 1 byte past the frame must be refused");
+	CHECK(iwx_m_at(m, 65, 1) == NULL,
+	    "an offset past the frame must be refused, not wrapped");
+	/*
+	 * The cluster is 128 but only 64 bytes are readable. Offsets between the
+	 * two are the interesting case: allocated but not received. OpenBSD's
+	 * pointer arithmetic accepts them silently.
+	 */
+	CHECK(iwx_m_at(m, 100, 4) == NULL,
+	    "an offset inside the cluster but past the DATA must be refused");
+	/* Overflow: offset + need must not wrap to something in range. */
+	CHECK(iwx_m_at(m, 8, (size_t)-1) == NULL,
+	    "a need that overflows offset+need must be refused");
+	iwx_m_free(m);
+}
+
 static void
 test_no_leaks(void)
 {
@@ -379,6 +494,9 @@ main(void)
 	test_defrag_collapses_chain();
 	test_copy_is_deep_not_shared();
 	test_free_honours_refcount();
+	test_shift_right_moves_header_and_length();
+	test_shift_right_rejects_overflow();
+	test_at_bounds_checks_offset();
 	test_no_leaks();
 
 	(void) printf("%s: %d checks, %d failures\n",

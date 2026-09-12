@@ -1,27 +1,172 @@
 # iwx port status: what compiles, what does not, and the measured route decision
 
-Scope of this document: **one work session**, local cross-compile only, no hardware. It records what was
-measured. Where it corrects the earlier plan it says so, because the earlier numbers are cited elsewhere in
-this repo and the correction needs to be findable from the source, not only from here.
+Scope of this document: **two work sessions**, local cross-compile only, no hardware. It records what
+was measured. Where it corrects the earlier plan -- or an earlier version of itself -- it says so,
+because the earlier numbers are cited elsewhere in this repo and the correction needs to be findable
+from the source, not only from here.
 
-## Claim ladder — stated exactly, because these are not the same thing
+## Claim ladder -- stated exactly, because these are not the same thing
 
 | stage | status | evidence |
 |---|---|---|
-| **`iwx_mbuf.c` compiles as an illumos kernel object** | **YES** | `gcc -m64 -c -D_KERNEL` → ELF 64-bit relocatable, 11 text symbols, 6 undefined and all 6 genuine STREAMS entry points |
-| **mbuf translation layer behaves correctly** | **YES, tested** | 73 checks pass; **11/11 sabotages caught** |
-| **`if_iwx.c` compiles** | **NO — 30 errors at 24 lines** | all 30 are mbuf-class, all 24 lines enumerated in `iwx_mbuf_adapter.h` |
-| **`iwx` links** | **NO** | ~181 non-802.11 kernel calls plus OpenBSD net80211's 24,665 lines have declarations but no implementations |
+| **`iwx_mbuf.c` compiles as an illumos kernel object** | **YES** | `gcc -m64 -c -D_KERNEL` -> ELF 64-bit relocatable, 13 text symbols, 7 undefined and all 7 genuine kernel entry points |
+| **mbuf / mlist / cookie layers behave correctly** | **YES, tested** | **120 checks** pass; **13/13 sabotages caught**, each with a distinct failure count |
+| **`if_iwx.c` compiles to an object file** | **YES** | `build/if_iwx_illumos.o`, ELF 64-bit relocatable x86-64, 263 text symbols. Real `-c` codegen, not `-fsyntax-only` |
+| **the mbuf layer links** | **YES** | `ld -r` against a kernel-built `iwx_mbuf.o` resolves **all 11** `iwx_m_*`: 128 undefined -> 122 |
+| **`iwx` links as a module** | **NO -- 122 undefined** | 43 OpenBSD net80211, 50 declared-only shims, 20 illumos already provides, 9 need a named decision |
 | **module loads** | **NO** | no `_init`/`_info`/`_fini`, no `mac_register`, no DDI attach |
 | **attaches to the PCI device** | **NO** | not attempted |
 | **sees / associates with an AP** | **NO** | not attempted |
 
-Progress is real and partial: the error surface on `if_iwx.c` went **364 → 30**, and the remaining 30 are
-one named layer rather than a scatter. But **nothing links and nothing loads.** Do not read "compiles" as
-anything more than the first of six stages.
+The error surface on `if_iwx.c` went **364 -> 30 -> 0** and it now produces an object file. **Nothing
+links as a module and nothing loads.** "Compiles" is the second of seven rungs and the two that follow
+are the expensive ones.
+
+### Correction to this document's own previous version
+
+The first version recorded **"`if_iwx.c` compiles: NO -- 30 errors at 24 lines"**, all mbuf-class. That
+was correct when measured and is now **superseded**: the count is 0 and the file produces an object.
+Annotated here rather than only replaced, because the 30 figure was cited in the round-2 brief, and a
+reader who arrives at the old number needs to find the correction at its source rather than inherit it.
 
 `hardware.wirelessIwx.enable` remains **`false`** (`configurations/base.nix:162`). Verified, with a
 negative control confirming the grep can find an `enable = true`.
+
+## The lever that took 30 errors to 0: alias the TYPE, never the FIELDS
+
+The previous session left `struct mbuf` an **incomplete type** so every field access would be a compile
+error at its own line. Right instinct, and it worked -- but it also made the five *pointer-assignment*
+errors indistinguishable from the field errors, and the pointer assignments are not dangerous at all.
+
+`compat/sys/mbuf.h` now does `#define mbuf msgb`, aliasing the struct **tag** to illumos's `mblk_t`.
+Two measured facts make this sound rather than the very shortcut that file warns against:
+
+* **No `sizeof(struct mbuf)` and no by-value use** anywhere in `if_iwx.c` or `if_iwxvar.h`. All 20
+  occurrences of the tag are pointer declarations (8 prototypes, 5 locals, 2 struct members, 5
+  definitions). A layout difference is therefore unobservable.
+* **`struct msgb` has none of OpenBSD's field names**, so `m->m_len` is still a hard error, now phrased
+  "struct msgb has no member named m_len". The incomplete type was only ever a means to that end; the
+  alias keeps the end and drops the noise.
+
+The invariant is now stated rather than implied: a **type** alias cannot change the meaning of an
+assignment, a **field** alias can and does. `build-check.sh --self-test` carries a control
+(`field-is-unmapped`) that compiles `m->m_len` and **requires it to fail**, so a field macro creeping in
+later is caught here instead of on hardware.
+
+30 -> 25 from the alias, 25 -> 1 from the 12 patched call sites, 1 -> 0 from declaring
+`bus_dmamap_load_mbuf`.
+
+## `openbsd-orig/` is read-only, so the rewrite is a patch
+
+```
+openbsd-orig/if_iwx.c  +  patches/if_iwx.illumos.patch  ->  build/if_iwx_illumos.c
+                          (12 hunks)                        (generated, do not edit)
+```
+
+`gen-illumos-src.sh` materialises it and **`build-check.sh` regenerates before every build**, so a stale
+`build/` cannot be mistaken for a passing one. Verified byte-identical to the hand-edited version it was
+extracted from (`cmp`).
+
+Three ways this could silently ship an unpatched driver, each with a live control:
+
+| failure | control | result |
+|---|---|---|
+| a `.patch` that is really prose (no `@@`) | feed it one | refused, exit 2 |
+| a reversed / already-applied patch | feed it the reverse | refused, exit 1 |
+| hunks that apply cleanly and change nothing | remove a line, add it back | refused, exit 1, `cmp` message |
+
+Writing those found a **harness bug of exactly the shape this project keeps hitting**:
+`hunks=$(grep -c '^@@' f || echo 0)` yields the **two-line string `"0\n0"`**, because `grep -c` prints
+`0` *and* exits 1, so the following `[ -eq ]` died with "integer expected" and **the check was
+unreachable**. The no-hunk case then failed via a later error, which read as a pass.
+
+## The site with "no mechanical answer", answered -- and the refutation that shaped it
+
+`m_pkthdr.ph_cookie` (`:10294`) carries the `ieee80211_node *` alongside a queued management frame. One
+producer, one consumer (measured: `grep ph_cookie` = 1 line). `mblk_t` has no packet header.
+
+`b_prev` is the obvious carrier and it is **refuted as a general-purpose one**: the kernel asserts it is
+NULL on three paths -- `freeb` (`uts/common/io/stream.c:642`), `freemsg` (`:659`), `pullupmsg` (`:1586`).
+On a DEBUG kernel a leftover cookie is an assertion failure; on a non-DEBUG kernel the `ASSERT` compiles
+away and it is **silent**.
+
+It is nevertheless sound in one **narrow window**, and `iwx_mcookie.h` records the argument: the cookie
+lives only from enqueue to dequeue on `ic_mgtq`, a `struct mbuf_queue` this port owns which links with
+`b_next` **only**; nothing in STREAMS ever sees the message, so none of the three asserting paths can
+run. The consumer **clears as it reads** (`iwx_m_take_cookie` is the only read accessor, deliberately --
+a peek that left the field set is the bug), so the frame leaves the window clean and those three
+`ASSERT`s become a loud backstop instead of a hazard.
+
+### Where a negative control caught a real bug in the port's own code
+
+`iwx_mcookie.h` asserted that `ml_purge()` -- the path that frees a still-queued frame on
+interface-down -- clears the cookie before `freemsg()`, "and it does". **It did not.** `iwx_mlist.h`
+never touched `b_prev`. Consequence: `ifconfig down` with a management frame queued panics a DEBUG
+kernel and silently corrupts on a non-DEBUG one. Fixed in `ml_purge()` and in `mq_enqueue()`'s drop path.
+
+The instructive part is **how it was found**. The first version of the test walked the queue and
+inspected the cookies *before* calling `ml_purge`, then checked the free count -- and it **passed
+against the broken code**, because after the free there is nothing left to inspect. Only instrumenting
+the stub's `freemsg()` (`iwx_test_saw_dirty_free`, mirroring the kernel's own `ASSERT`) made the
+condition observable. The weak version is preserved in the test's comment as the shape to distrust:
+*a check that inspects the input instead of the operation.*
+
+## The `splnet()` audit -- done, and the standing framing was wrong
+
+Full writeup: **`SPLNET-AUDIT.md`**. Summary, because the conclusion matters more than the detail.
+
+**15 `splnet()` calls, 15 regions, 15 distinct functions** (verified: no function has two). The 31
+`splx` are exit paths, not leaks -- one region with four `return`s has four `splx`.
+
+The standing instruction was "audit every `splnet` region against `sc->ioctl_rwl`". That contains a
+**wrong premise**: `ioctl_rwl` is held in **3 of 15** regions and in **none** of them does it exclude
+the interrupt handler, because **`iwx_intr` never takes it** (measured: zero lock or `spl` calls in
+`:11425-11562`). Its own comment (`:10501`) says what it is for -- serialising ioctl entrants against
+each other. So **12 of 15 regions have no protection at all** under the no-op, and the other 3 protect
+the wrong thing.
+
+Mapping `splnet` to a mutex is **refuted by two observed mechanisms**, neither being the 15-vs-31
+arithmetic previously offered:
+
+1. **A `splnet` region sleeps.** `iwx_send_cmd` takes `splnet` at `:5849` and calls
+   `tsleep_nsec(desc, PCATCH, "iwxcmd", 1s)` at `:5952`, releasing at `:5970`. As a mutex that is
+   sleeping while holding an interrupt-cookie mutex -- a deadlock, not a style problem.
+2. **The lock order is already inverted in the vendored source.** `iwx_ioctl` takes `ioctl_rwl`
+   (`:10505`) *then* `splnet` (`:10512`); `iwx_init_task` takes `splnet` (`:12763`) *then* `ioctl_rwl`
+   (`:12767`). Harmless for a priority level, textbook AB/BA for a lock.
+
+**Consequence, stated plainly: with `splnet()` a no-op this driver has no mutual exclusion between its
+interrupt handler and its task/timeout/ioctl paths.** The visible corruption is a torn TX command ring.
+Unreachable before attach, and it **must** be fixed before load. `SPLNET-AUDIT.md` names the four
+specific pieces of work and tags the fix **NOT IMPLEMENTED**.
+
+## Route (b): what is actually left, measured at the link
+
+The driver object's undefined symbols are the honest size of the remainder. **122** after the mbuf layer
+is linked in, counted **by symbol**, not by `grep` line:
+
+| class | count | work |
+|---|---|---|
+| **illumos already provides** | **20** | **zero.** Spot-verified in the headers: `ddi_get32`/`put32`/`put8`, `drv_usecwait` (`sys/ddi.h`), `panic`/`snprintf` (`sys/cmn_err.h`), `memcmp` (`sys/sunddi.h`), `mutex_enter`, `memmove` (`sys/systm.h:509`) |
+| **`ieee80211_*`** | **43** | route (b) vendoring -- the bulk, unchanged |
+| declared-only shims | **50** | `bus_dma*` 11, `pci_*` 11, `if_`/`ifq_` 7, `task_`/`timeout_` 7, `refcnt_` 5, `iwx_bsd_*`/`iwx_rw_*`/`iwx_fls` 8, `systq` 1 |
+| named decisions | **9** | below |
+
+The nine, each with its illumos answer identified but **not implemented**:
+
+* `tsleep_nsec` + `wakeup` -> `cv_timedwait_sig` + `cv_broadcast`. **Coupled to the `splnet` audit**,
+  not an independent item -- see `SPLNET-AUDIT.md` region 8.
+* `loadfirmware` -> the `firmware_*(9F)` interfaces.
+* `getmicrouptime` -> `gethrtime()` (`sys/time.h:361`, verified present).
+* `ether_sprintf` -> **exists in illumos** (`sys/ethernet.h:147`) with a **different signature**:
+  `struct ether_addr *` vs OpenBSD's `uint8_t *`. A name match that is not a drop-in, the same trap as
+  `arpcom` below.
+* `config_mountroot` -> DDI attach deferral. Plus `etheranyaddr`, `etherbroadcastaddr`, `_pagesize`.
+
+`bus_dmamap_load_mbuf` is **declared only, on purpose** (`iwx_dma.h`), with its contract written down --
+including that it must return **`EFBIG` specifically**, because the TX path treats `EFBIG` as "linearize
+and retry" and any other errno as fatal. It fails at link with its own name rather than compiling
+against a plausible stub, which is the right failure mode for a DMA path.
 
 ## Correction: the five API counts in the plan are line counts, not call sites
 
@@ -71,8 +216,8 @@ shimmed — roughly **3× the shim work already done**, and the honest estimate 
 
 ## The mbuf layer: a real translation layer, not a `#define`
 
-`struct mbuf` is deliberately left an **incomplete type**, so every field access is a compile error at its
-own line. The three differences that make a macro mapping dangerous:
+`struct mbuf` is aliased to `struct msgb` (see the lever section above); no **field** name is ever
+`#define`d. The three differences that make a field mapping dangerous:
 
 1. **Two sources of truth for length.** OpenBSD *stores* `m_len` and `m_pkthdr.len`; illumos *derives* both
    from `b_wptr - b_rptr`. `#define m_len ...` makes `m->m_len = len` (`if_iwx.c:5236`, `:4633`) write a
@@ -84,28 +229,52 @@ own line. The three differences that make a macro mapping dangerous:
 `iwx_m_set_window()` also performs a bounds check a macro cannot: the frame length comes from the device, and
 the unchecked form hands the 802.11 stack a window past the end of the DMA buffer.
 
-**Test results** (`./run-mbuf-tests.sh`): 47 + 26 = **73 checks pass**, and **11/11 sabotages are caught**,
-each of which had to *compile first* — see below.
+**Two functions were added in session two, both because the mechanical translation was wrong:**
+
+* **`iwx_m_shift_right(m, len, n)`** for `memmove(m->m_data + 2, m->m_data, hdrlen)` (`:5264`). The
+  obvious translation gets the *bounds* right and the *length* wrong: the frame becomes 2 bytes longer,
+  so `b_wptr` must move with it, or the caller's following `m_adj(m, 2)` (`:5265`) trims real payload off
+  a length that never accounted for the pad. Both halves are checked, and the length half is the one a
+  reviewer would not think to look for.
+* **`iwx_m_at(m, offset, need)`** for `m0->m_data + offset` (`:10882`, `:10927`), which steps through
+  several firmware responses packed in one RX buffer with `offset` advancing by a device-reported length.
+  The interesting refusal is an offset **inside the cluster but past the received data** -- allocated but
+  never written -- which bare pointer arithmetic accepts silently.
+
+**Test results** (`./run-mbuf-tests.sh`): 71 + 26 + 23 = **120 checks pass**, and **13/13 sabotages are
+caught**, each having had to *compile* first, and each failing with a **distinct** check/failure count so
+no two are secretly the same test.
 
 The mbuf-list layer keeps `b_next` (separate packets) strictly apart from `b_cont` (segments of one packet);
 conflating them concatenates frames into one corrupt oversized frame, and that specific sabotage is one of
-the 11.
+the 13.
 
-## Three harness bugs found — each would have manufactured a green run
+## Five harness bugs found -- each would have manufactured a green run
 
-Worth recording because all three are the "a check that cannot fail" shape, and two were in checks written
-*during this session specifically to avoid it*.
+All of the "a check that cannot fail" shape. The first three are from session one; the last two were
+written in session two by someone who had just read the first three.
 
-1. **`local name=$1 d="$work/s_$name"`** — all words are expanded *before* `local` binds, and `$name` is
+1. **`local name=$1 d="$work/s_$name"`** -- all words are expanded *before* `local` binds, and `$name` is
    exported in this shell as `nix-shell-env`, so **all 8 sabotages shared one directory** and each rebuild
    re-tested the previous binary. Fixed with separate assignments; isolation then *proven* by counting 8
    distinct directories.
-2. **Three sabotages "passed" by failing to compile.** A build error is not a caught bug — it proves the
+2. **Three sabotages "passed" by failing to compile.** A build error is not a caught bug -- it proves the
    compiler works. The runner now requires each sabotage to **compile and then fail**, reporting `INVALID`
    otherwise. Relatedly, `sed` died on a `||` inside one search string and that death was being scored as
    "caught"; substitution is now literal and asserts the needle occurs exactly once.
 3. **The three mbuf-list controls were blind.** `#include "x.h"` resolves against the *including file's own
    directory* before any `-I`, so the patched header was never read. `-I` ordering cannot fix it.
+4. **`grep -c` prints `0` and exits `1`.** `$(grep -c '^@@' f || echo 0)` is the two-line string `"0\n0"`,
+   so `[ "$hunks" -eq 0 ]` died with "integer expected" and the no-hunk check was **unreachable**. Same
+   family as the line-count-vs-call-count errors this document already corrects, in a new shape.
+5. **A check that matched its own explanation.** The "no unrewritten mbuf fields remain" grep matched the
+   *rewrite comments*, which quote the old code (`"m->m_len = len" becomes...`). The first filter was
+   `grep -v ILLUMOS`, wrong in **both** directions -- it would also have hidden a genuine unrewritten
+   access on any line that happened to say ILLUMOS. It now greps a **comment-stripped** copy.
+
+Also in session two: a negative control for the cookie fix **failed to compile** on the first two
+attempts (a missing header, then a needle matching twice) and each time printed something that could have
+been misread as a result. Both were caught only because the runner distinguishes INVALID from CAUGHT.
 
 And in `build-check.sh`, the first ablation control was invalid twice: `sort -un` gives numeric order which
 `comm` rejects outright, and a no-compat build **dies fatally after one message** so its count goes *down*
@@ -116,17 +285,20 @@ single header and asserts no fatal error occurred.
 
 | file | status |
 |---|---|
-| `iwx_mbuf.{h,c}` | **REAL**, 47 checks, 8 negative controls, compiles as a kernel object |
+| `iwx_mbuf.{h,c}` | **REAL**, 71 checks, 8 negative controls, compiles as a kernel object |
 | `iwx_mlist.h` | **REAL**, 26 checks, 3 negative controls |
-| `iwx_mbuf_adapter.h` | **REAL** for the 12 function mappings; **enumerates** the 27 field sites it deliberately does not map |
+| `iwx_mcookie.h` | **REAL**, 23 checks, 2 negative controls. `ph_cookie` -> `b_prev`, sound only inside the enqueue/dequeue window; the argument and its three `ASSERT` citations are in the file and must be read before touching it |
+| `iwx_mbuf_adapter.h` | **REAL** for the function mappings; records the decision taken at each patched site |
+| `patches/if_iwx.illumos.patch` | **REAL**, 12 hunks. Regenerates `build/if_iwx_illumos.c` byte-identically; 3 no-op/prose controls |
+| `iwx_dma.h` | **ENOSYS** -- `bus_dmamap_load_mbuf` declared only, contract written, fails at link by name |
 | `compat/sys/iwx_bsdtypes.h` | **REAL** — `u_int8_t` and `uint8_t` are the same type |
 | `compat/sys/tree.h` | **REAL** — OpenBSD RB/RBT vendored verbatim; illumos `sys/queue.h` has TAILQ/LIST/SLIST but no red-black tree |
 | `compat/dev/pci/pcidevs.h` | **REAL** — 18 AX2xx IDs verified against OpenBSD's `pcidevs.h` |
 | `compat/dev/pci/pcireg.h` | **REAL** — architectural PCI/PCIe constants |
 | `compat/netinet/if_ether.h` | **REAL and load-bearing** — see the `arpcom` note below |
 | `compat/net/if.h` | **REAL** struct + mblk FIFO; illumos has no driver-facing `ifnet` |
-| `compat/sys/iwx_kernel.h` | mixed: `spl` is a **deliberate no-op**, the rest real declarations |
-| `compat/sys/mbuf.h` | **STUB BY DESIGN** — `struct mbuf` incomplete on purpose |
+| `compat/sys/iwx_kernel.h` | mixed: `spl` is a **deliberate no-op** (audited -- see `SPLNET-AUDIT.md`), the rest real declarations |
+| `compat/sys/mbuf.h` | **REAL** — aliases the struct *tag* to `struct msgb` and defines no field; the alias is argued from measurement and guarded by the `field-is-unmapped` control |
 | `compat/machine/bus.h`, `compat/dev/pci/pcivar.h`, `compat/net/if_media.h` | types real, functions **declared only** — they fail at LINK with their own names |
 | `compat/net/bpf.h` | **KNOWN GAP, tagged** — `NBPFILTER=0` compiles out every tap, so monitor mode does not work and nothing pretends otherwise |
 
@@ -137,37 +309,52 @@ single header and asserts no fatal error occurred.
 member — true in OpenBSD, **false in illumos**. The `memcpy` would have been the same 6 bytes and "worked",
 while reading the MAC from the wrong offset. OpenBSD's layout is now defined explicitly.
 
-**`splnet()` is mapped to a no-op, on purpose.** It raises the interrupt priority level on the *current CPU*;
-it does not exclude another CPU. What actually provides mutual exclusion in `iwx` is `sc->ioctl_rwl`. Mapping
-`splnet` to `mutex_enter` would add a second lock taken in 15 places and released in 31 (the counts differ
-because `splx` restores from nested saves) — a recursive-entry panic and a lock-order inversion waiting to
-happen. **Consequence: every `splnet` region must be audited to confirm it sits inside `sc_lock`. That audit
-is NOT done.** It is the largest un-discharged correctness risk in what exists so far.
+**`splnet()` is mapped to a no-op, on purpose**, and that decision is now **audited rather than asserted**.
+Session one's version of this paragraph said "what actually provides mutual exclusion in `iwx` is
+`sc->ioctl_rwl`" and justified the refusal by an acquire/release count of 15 vs 31. **Both were wrong**, and
+the correction is in `SPLNET-AUDIT.md`: `ioctl_rwl` never excludes the interrupt handler because `iwx_intr`
+does not take it, and the real refutation is that a `splnet` region **sleeps** (`:5849` -> `tsleep_nsec` at
+`:5952`) while the two lock orders are **already inverted** between `iwx_ioctl` and `iwx_init_task`. The
+audit is **DONE**; the fix is **NOT IMPLEMENTED** and is still the largest un-discharged correctness risk.
 
 ## Reproducing
 
 ```sh
 cd src/wifi-port/iwx
-./run-mbuf-tests.sh          # 73 checks + 11 negative controls; exit 0 = CLEAN
-./build-check.sh --self-test # error surface + 4 negative controls; exit 0 = OK
+./gen-illumos-src.sh         # openbsd-orig + patch -> build/if_iwx_illumos.c
+./run-mbuf-tests.sh          # 120 checks + 13 negative controls; exit 0 = CLEAN
+./build-check.sh --self-test # regenerate, compile to .o, + 8 negative controls; exit 0 = OK
 ```
 
-`build-check.sh` asserts every residual error is an *enumerated* site, not merely that the count is low, and
-that `openbsd-orig/` is unmodified (it is byte-identical; `git diff` is empty).
+`build-check.sh` regenerates the derived source first (so a stale `build/` cannot pass), asserts the driver
+reaches a real **object file** rather than only `-fsyntax-only`, asserts no OpenBSD mbuf field access
+survives in the generated source *and* that all 9 translation entry points are actually called (so deleting
+a site is not scored as translating it), and asserts `openbsd-orig/` is unmodified (byte-identical; `git
+diff` empty).
 
 ## Next, in dependency order
 
-1. **Rewrite the 24 mbuf sites** to call `iwx_mbuf.c`. Groups A–H in `iwx_mbuf_adapter.h`; group H
-   (`m_pkthdr.ph_cookie` carrying the `ieee80211_node *`, `:10294`) has **no mechanical answer** and needs a
-   side table or a prepended control block.
-2. **Implement the declared-only shims** — `iwx_dma.c`, `iwx_pci.c`, `iwx_kcompat.c`, `iwx_gld.c`. ~181 calls.
-3. **Vendor OpenBSD net80211's 14 `.c` files** and shim their 300-odd OpenBSD-kernel calls. The big one.
-4. **GLDv3 + DDI attach**: `_init`/`_info`/`_fini`, `mac_register`, `driver_aliases` (already emitted as
+Steps 1 and 5 of the previous version are **done** (mbuf call sites rewritten; `splnet` audited). What
+remains, sized by the link measurement above:
+
+1. **Vendor OpenBSD net80211's 14 `.c` files** and shim their OpenBSD-kernel calls. **43 undefined
+   symbols**, and it is the bulk of the remaining work. Route (b) is decided on measurement; route (a) is
+   refuted and must not be revisited.
+2. **Implement the declared-only shims** -- `iwx_dma.c`, `iwx_pci.c`, `iwx_kcompat.c`. **50 symbols**,
+   enumerated by class above. `bus_dmamap_load_mbuf` is the one with a written contract and the one that
+   must return `EFBIG` distinctly.
+3. **Apply the `splnet` fix** -- `sc_lock` with an interrupt block cookie, `ioctl_rwl` **before** `sc_lock`
+   always, the `iwx_init_task` order inversion rewritten, `iwx_send_cmd`'s `tsleep_nsec` converted to
+   `cv_timedwait_sig`, and the 8 `splassert(IPL_NET)` turned into `ASSERT(mutex_owned(&sc->sc_lock))`.
+   See `SPLNET-AUDIT.md`. **This must land before the module is ever loaded**, not before it links.
+4. **The 9 named decisions** above (`loadfirmware`, `getmicrouptime`, `ether_sprintf`'s signature mismatch,
+   `config_mountroot`, ...).
+5. **GLDv3 + DDI attach**: `_init`/`_info`/`_fini`, `mac_register`, `driver_aliases` (already emitted as
    `IWX_PCI_ALIASES`).
-5. **Audit every `splnet` region** against `sc_lock` before running on hardware.
 6. Only then: load, attach, and read the firmware-selection path (`if_iwx.c:12387-12421`).
 
-Steps 2–3 are the bulk. On the evidence here that is **weeks**, and the plan's "weeks, not one build"
-estimate is confirmed rather than overturned. What has changed is that the 802.11 route is now decided on
-measurement, and the mbuf layer — the one the plan called the place ports die — exists, is tested, and is
-the smallest of the remaining problems rather than the largest.
+Steps 1-2 are the bulk. On the evidence here that is **weeks**, and the plan's "weeks, not one build"
+estimate is confirmed rather than overturned. What has changed across the two sessions is that the 802.11
+route is decided on measurement, the mbuf layer -- the one the plan called the place ports die -- exists,
+is tested, and **links**, and the locking model is now audited rather than deferred. What has *not* changed
+is that nothing links as a module and nothing loads.

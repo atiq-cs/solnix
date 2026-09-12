@@ -15,6 +15,7 @@
 
 long iwx_test_allocs;
 long iwx_test_frees;
+int iwx_test_saw_dirty_free;
 
 static int failures;
 static int checks;
