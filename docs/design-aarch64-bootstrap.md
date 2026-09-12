@@ -1628,6 +1628,10 @@ published artifact):
   hash; gzip so the seed FOD unpacks with the seed's bundled gzip and does NOT
   pull the from-source `zstd` -> cmake -> ... -> perl closure that recurses in
   the cross package set). URL: `.../archive/aarch64/aarch64-seed-cross-14.3.0.tar.gz`.
+  ⚠️ **STALE PATH (measured 2026-09-12): that key 404s.** The live key is
+  `seed/aarch64-solaris/aarch64-seed-cross-14.3.0.tar.gz` (286,655,805 B, HTTP
+  200); the `archive/` prefix does not exist in the bucket. Same correction
+  applies to §14.5 below. See docs/aarch64-gicv3-crs-metal-CONFIRMED.md.
 
 ### 14.3 aarch64-cross.nix placeholders -> real slices
 
@@ -1671,6 +1675,9 @@ The pure hello closure (4 paths) signed (`cache.solnix.io-1`) + `nix copy`'d to
 `s3://solnix-cache`. The grown seed tarball + cross manifest at
 `archive/aarch64/aarch64-seed-cross-14.3.0.{tar.gz,tar.zst}` +
 `aarch64-seed-manifest-cross.txt`.
+⚠️ **STALE PATHS (measured 2026-09-12):** those `archive/aarch64/...` keys 404,
+as does `aarch64-seed-manifest-cross.txt`. The surviving artifact is
+`seed/aarch64-solaris/aarch64-seed-cross-14.3.0.tar.gz` only.
 
 ### 14.6 RUN verification (real aarch64 hardware — deferred)
 

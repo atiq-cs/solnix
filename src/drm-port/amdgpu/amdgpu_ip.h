@@ -37,6 +37,7 @@
 #include <sys/types.h>
 #include "amdgpu_priv.h"
 #include "ttm_priv.h"		/* struct amdgpu_bo, amdgpu_bo_create */
+#include "drm_sched.h"		/* struct drm_gpu_scheduler (C3-amdgpu-d) */
 
 struct amdgpu_softc;
 
@@ -206,12 +207,20 @@ struct amdgpu_ip {
 	/* SOC15 register-base table: reg_offset[hwip][inst] -> segment base[] */
 	const uint32_t		*reg_offset[MAX_HWIP][AMDGPU_MAX_INSTANCE];
 
-	struct amdgpu_wb	wb;
-	struct amdgpu_gmc	gmc;
-	struct amdgpu_ring	gfx_ring;
-	struct amdgpu_ring	sdma_ring;
-	struct amdgpu_ih	ih;
-	boolean_t		initialized;
+	struct amdgpu_wb		wb;
+	struct amdgpu_gmc		gmc;
+	struct amdgpu_ring		gfx_ring;
+	struct amdgpu_ring		sdma_ring;
+	struct amdgpu_ih		ih;
+	/*
+	 * C3-amdgpu-d: the per-device GPU scheduler wiring the ring to the C1c
+	 * drm_sched for the live EXECBUFFER path (amdgpu_job -> run_job ->
+	 * amdgpu_ib_schedule -> ring). sched_ready gates it; NULL/false off the
+	 * scheduler init.
+	 */
+	struct drm_gpu_scheduler	sched;
+	boolean_t			sched_ready;
+	boolean_t			initialized;
 };
 
 /* --- navi12 reg base (amdgpu_ip.c) --- */

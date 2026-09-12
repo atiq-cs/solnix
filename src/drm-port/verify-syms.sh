@@ -9,6 +9,9 @@
 set -e
 cd "$(dirname "$0")"
 
+# The module to audit (default `drm`; `make kfd` passes `drm-full`).
+MODULE="${1:-drm}"
+
 # comm(1) requires both inputs in the same collation order; force C locale so
 # the mixed-case kernel symbol list and the drm undef list sort identically.
 export LC_ALL=C
@@ -23,7 +26,7 @@ for m in $KMODS; do
 	elfdump -s "$m" 2>/dev/null | grep "GLOB" | grep -v UNDEF | awk '{print $NF}'
 done | sort -u > /tmp/kernel_syms.txt
 
-elfdump -s drm 2>/dev/null | grep UNDEF | awk '{print $NF}' \
+elfdump -s "$MODULE" 2>/dev/null | grep UNDEF | awk '{print $NF}' \
 	| grep -v '^UNDEF$' | grep -v '^$' | sort -u > /tmp/drm_undef.txt
 
 PHANTOM=$(comm -23 /tmp/drm_undef.txt /tmp/kernel_syms.txt || true)

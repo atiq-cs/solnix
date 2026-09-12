@@ -51,6 +51,9 @@
  * a forward-declared opaque type keeps drm_core.c independent of its internals.
  */
 struct virtio_gpu_softc;
+struct amdgpu_softc;
+extern struct amdgpu_softc *amdgpu_transport_attach(dev_info_t *,
+    struct drm_device *);
 extern struct virtio_gpu_softc *virtio_gpu_transport_attach(dev_info_t *,
     struct drm_device *);
 extern void virtio_gpu_transport_detach(struct virtio_gpu_softc *);
@@ -64,6 +67,17 @@ extern void virtio_gpu_transport_detach(struct virtio_gpu_softc *);
  */
 #define	DRM_MINOR_CARD		0	/* /dev/dri/card0    */
 #define	DRM_MINOR_RENDER	128	/* /dev/dri/renderD128 */
+#define	DRM_MINOR_KFD		64	/* /dev/kfd (the amdkfd compute node) */
+
+/*
+ * C3-KFD: the amdkfd (/dev/kfd) compute ioctl entry, defined in
+ * amdkfd/kfd_chardev.c and linked into the same `drm` module (amdgpu + KFD are
+ * built into the one ET_REL object). Declared extern here so cb_ioctl can
+ * route a call on the KFD minor to it. Left as a plain extern (not a weak
+ * symbol): when the KFD objects are in the module it resolves; the zero-phantom
+ * audit treats it as an intra-module symbol, not an external KPI.
+ */
+extern int	kfd_ioctl(dev_t, int, intptr_t, int, cred_t *, int *);
 
 /* per-instance soft state */
 static void *drm_state;
@@ -166,6 +180,17 @@ drm_ioctl(dev_t d, int cmd, intptr_t arg, int mode, cred_t *credp, int *rvalp)
 	if (dev == NULL)
 		return (ENXIO);
 	*rvalp = 0;
+
+	/*
+	 * C3-KFD: a call on the /dev/kfd minor is the ROCm/HSA compute path --
+	 * route it to the amdkfd ioctl surface (a distinct ABI, base 'K', not the
+	 * DRM 'd' ABI). The DRI minors (card0/renderD128) fall through to the DRM
+	 * dispatch below. This is how one shared char device presents both the
+	 * graphics DRM ABI and the compute KFD ABI, mirroring Linux's separate
+	 * /dev/dri/renderD* and /dev/kfd over the one amdgpu device.
+	 */
+	if (getminor((dev_t)d) == DRM_MINOR_KFD)
+		return (kfd_ioctl(d, cmd, arg, mode, credp, rvalp));
 
 	switch ((unsigned)cmd) {
 	case DRM_IOCTL_VERSION:
@@ -364,6 +389,19 @@ drm_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 		goto fail;
 
 	/*
+	 * C3-KFD: the /dev/kfd compute node -- a second minor on this same char
+	 * device for the ROCm/HSA compute ABI. Created unconditionally (the DRM
+	 * core owns the char device); the KFD state behind it is stood up by the
+	 * C3-amdgpu attach via kfd_chardev_bind only when an AMD GPU is present,
+	 * so on a non-amdgpu node the minor exists but every KFD ioctl returns
+	 * ENODEV (kfd_device_by_gpu_id NULL) -- a clean no-op, same contract as
+	 * the DRI nodes on a non-virtio parent.
+	 */
+	if (ddi_create_minor_node(dip, "kfd", S_IFCHR,
+	    DRM_MINOR_KFD, DDI_PSEUDO, 0) != DDI_SUCCESS)
+		goto fail;
+
+	/*
 	 * If this node is a virtio-gpu PCI child, bind the illumos virtio
 	 * framework + probe the display. On any other parent this returns NULL
 	 * and the node stays a bare drm core (dev->vgpu == NULL). The scanout
@@ -371,6 +409,14 @@ drm_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	 * failure -- this keeps the compile-only core loadable without a device.
 	 */
 	(void) virtio_gpu_transport_attach(dip, dev);
+
+	/*
+	 * On a non-virtio parent (e.g. the g4ad AMD V520 = pci1002,7362 =
+	 * Navi12), try the C3-amdgpu attach. Returns NULL on a non-AMD-GPU
+	 * parent, same clean no-op contract as the virtio path.
+	 */
+	if (dev->vgpu == NULL)
+		dev->amdgpu = amdgpu_transport_attach(dip, dev);
 
 	ddi_report_dev(dip);
 	return (DDI_SUCCESS);
@@ -447,6 +493,12 @@ static struct modldrv drm_modldrv = {
 	"illumos DRM core + GEM stub (C1a, virtio-gpu target)",
 	&drm_dev_ops,
 };
+
+/*
+ * The drm module links the virtio_gpu transport (virtio_* exports) -- declare
+ * the dependency so the loader pulls misc/virtio in before relocation.
+ */
+char _depends_on[] = "misc/virtio";
 
 static struct modlinkage drm_modlinkage = {
 	MODREV_1,

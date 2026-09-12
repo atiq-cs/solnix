@@ -70,7 +70,17 @@ enum amdgpu_asic_type {
  * ddi_regs_map_setup uses 1-based rnumber (rnumber 0 == PCI config space,
  * rnumber 1 == the first BAR = BAR0, etc). So BARn -> rnumber (n+1).
  */
-#define	AMDGPU_RNUM(bar)	((bar) + 1)
+/*
+ * illumos assigns reg rnumbers sequentially over the BARs that actually exist
+ * (config=0, then each present BAR in order), NOT by PCI BAR index. On Navi12
+ * (V520) the reg set is: cfg(0), BAR0/VRAM(1), BAR2/doorbell(2), BAR5/MMIO(3).
+ * So map each logical BAR to its real illumos rnumber directly.
+ * (Confirmed on the g4ad: nregs=4, and bar+1 put MMIO at rnum6 which is empty.)
+ */
+#define	AMDGPU_RNUM(bar)	\
+	((bar) == AMDGPU_BAR_VRAM ? 1 : \
+	 (bar) == AMDGPU_BAR_DOORBELL ? 2 : \
+	 (bar) == AMDGPU_BAR_MMIO ? 3 : ((bar) + 1))
 
 /*
  * struct amdgpu_softc - one attached AMD GPU. The reduced adev.
@@ -94,6 +104,16 @@ struct amdgpu_softc {
 	ddi_acc_handle_t	vram_hdl;
 	caddr_t			vram_base;
 	off_t			vram_size;
+
+	/*
+	 * Doorbell aperture (BAR2) -- the KFD (amdkfd) compute path carves
+	 * per-process doorbell pages out of this for user-mode queue submission.
+	 * Mapped by amdgpu_map_bars for the KFD; NULL/0 if the BAR is absent.
+	 */
+	ddi_acc_handle_t	doorbell_hdl;
+	caddr_t			doorbell_base_va;
+	uint64_t		doorbell_base;	/* BAR2 physical base */
+	off_t			doorbell_size;
 
 	/* interrupt (MSI/MSI-X) */
 	ddi_intr_handle_t	*intr_htable;

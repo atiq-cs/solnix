@@ -61,6 +61,7 @@ struct drm_device {
 	kmutex_t		lock;
 	uint64_t		next_mmap_offset;
 	void			*vgpu;		/* struct virtio_gpu_softc * */
+	void			*amdgpu;	/* struct amdgpu_softc * (C3 amdgpu bind) */
 	/*
 	 * C1c PRIME/dma-buf + sync_file fd sharing (drm_prime.c). prime_major
 	 * is this driver's major (ddi_driver_major(dip)); PRIME exports and

@@ -78,13 +78,42 @@ usage:
   console-bind-check.py [--sabotage]
 """
 
+import glob
 import os
+import shutil
 import struct
 import subprocess
 import sys
 import tempfile
 
 UTS = os.path.dirname(os.path.abspath(__file__))
+
+
+def dtc_path():
+    """Resolve dtc: $DTC, then PATH, then the nix store.
+
+    Hardcoded "dtc" made this abort with a FileNotFoundError TRACEBACK on a
+    normal dev-box PATH -- no verdict, no remedy, and a stack trace reads as
+    "the checker is broken" rather than "install dtc". Same defect this session
+    fixed in build-k3-payload.sh, so it is fixed the same way: a checker that
+    cannot run must say what is missing.
+    """
+    cand = os.environ.get("DTC") or shutil.which("dtc")
+    if cand:
+        # An EXPLICIT $DTC still has to exist. Trusting it unchecked reintroduced
+        # the traceback this function exists to prevent, just via a different
+        # input -- verified by DTC=/nonexistent/dtc.
+        if os.path.isabs(cand):
+            if os.access(cand, os.X_OK):
+                return cand
+        elif shutil.which(cand):
+            return shutil.which(cand)
+        sys.exit(f"dtc not usable: {cand!r} (from $DTC) is not an executable")
+    hits = sorted(glob.glob("/nix/store/*-dtc-1.7.*/bin/dtc"))
+    if hits:
+        return hits[-1]
+    sys.exit("dtc not found; set $DTC or put it on PATH "
+             "(nix: ls -d /nix/store/*-dtc-1.7.*/bin)")
 
 FDT_BEGIN_NODE = 1
 FDT_END_NODE = 2
@@ -202,7 +231,7 @@ def walk_uart_base(dtb, order_dependent=False):
 
 def dtc(dts_path, dtb_path):
     subprocess.run(
-        ["dtc", "-I", "dts", "-O", "dtb", "-o", dtb_path, dts_path],
+        [dtc_path(), "-I", "dts", "-O", "dtb", "-o", dtb_path, dts_path],
         check=True, capture_output=True,
     )
 

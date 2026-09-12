@@ -27,6 +27,14 @@
 #     (a) stock riscv64-unknown-elf-gcc 14.3.0 (the R-P64 virtio_gpu harness used
 #         this; fastest to obtain -- nix: nixpkgs#pkgsCross.riscv64-embedded.gcc,
 #         or a distro riscv64-elf-gcc). Set RISCV_GCC to its bin dir.
+#         ⚠️ nixpkgs installs this as riscv64-NONE-elf-*, not
+#         riscv64-unknown-elf-*. Both spellings now work (see the probe below),
+#         so no symlink farm is needed. The exact invocation that is known to
+#         work on the dev box:
+#           RISCV_GCC=/nix/store/<hash>-riscv64-none-elf-gcc-wrapper-14.3.0/bin \
+#             bash src/riscv/build-all.sh rp64
+#         Resolve <hash> with:
+#           ls -d /nix/store/*-riscv64-none-elf-gcc-wrapper-14.3.0/bin | tail -1
 #     (b) the solnix riscv64-solaris cross gcc (gcc-sol-cfg3) for a full
 #         Solaris-ABI userland. Build once from src/riscv/gcc/ (documented there);
 #         this is what a native K1 daily-driver eventually wants.
@@ -35,13 +43,60 @@ set -euo pipefail
 PHASE="${1:-rp64}"
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"        # solnix repo root
 SRC="$REPO/src/riscv"
+
+# TOOLCHAIN PREFIX: accept EITHER spelling.
+#
+# This script asked for riscv64-unknown-elf-* only. nixpkgs
+# pkgsCross.riscv64-embedded -- the toolchain the header itself recommends and
+# the one every gate script under uts/ defaults to -- installs
+# riscv64-none-elf-*. The mismatch is not a build failure but a `no gcc at ...`
+# exit, which reads as "toolchain missing" and sent one run off building a
+# symlink farm. Both prefixes name the same bare-metal ELF target, so probe.
+# TC= overrides for a third spelling (e.g. riscv64-elf from a distro package).
 : "${RISCV_GCC:?set RISCV_GCC to a riscv64 gcc bin dir (see header)}"
-GCC="$RISCV_GCC/riscv64-unknown-elf-gcc"
-LD="$RISCV_GCC/riscv64-unknown-elf-ld"
-[ -x "$GCC" ] || { echo "no gcc at $GCC"; exit 1; }
+if [ -n "${TC:-}" ]; then
+	PREFIXES="$TC"
+else
+	PREFIXES="riscv64-unknown-elf riscv64-none-elf riscv64-elf"
+fi
+GCC=""
+for p in $PREFIXES; do
+	if [ -x "$RISCV_GCC/$p-gcc" ]; then
+		TC="$p"; GCC="$RISCV_GCC/$p-gcc"; LD="$RISCV_GCC/$p-ld"
+		break
+	fi
+done
+[ -n "$GCC" ] || {
+	echo "no riscv64 gcc in $RISCV_GCC"
+	echo "  tried prefixes: $PREFIXES"
+	echo "  contents: $(ls "$RISCV_GCC" 2>/dev/null | head -5 | tr '\n' ' ')"
+	echo "  set TC=<prefix> if yours is spelled differently"
+	exit 1
+}
+echo "  toolchain prefix: $TC"
 
 CFLAGS="-march=rv64gc_zifencei -mabi=lp64d -mcmodel=medany -ffreestanding \
 	-fno-stack-protector -fno-pie -O2 -Wall -Wno-unused"
+
+# KERNEL OBJECT LIST -- EXPLICIT, NOT A GLOB.
+#
+# This was `for c in uts/*.c`, and the glob made the script unrunnable: uts/
+# also holds three files that are NOT part of the freestanding kernel and
+# cannot compile without the full illumos uts header tree (68 headers absent
+# here -- sys/stream.h, sys/regset.h, sys/sysmacros.h, ...):
+#
+#   asy_nsuart.c  vendored 8250/16550 STREAMS driver (needs sys/stream.h)
+#   fpu.c         needs sys/regset.h
+#   sendsig.c     needs sys/sysmacros.h
+#
+# They are staged for a later phase; the live console driver is uart.c. A glob
+# also silently picks up any future staged file, so the list is explicit and
+# matches uts/build-scanout.sh -- the build that is actually gated. Keep the two
+# in step: if a source is added to one, add it to the other.
+KSRCS="sbi trap hat_riscv timer plic aia fdt cmo vm_page kmem proc as elf
+	syscall uart sdhci uproc unixsock virtio vioblk blkfs vionet rootfs
+	fp port startup main"
+KASM="image_header fpsave locore trap swtch copy"
 QEMU="${QEMU:-qemu-system-riscv64}"
 BIOS="${OPENSBI:-/usr/share/qemu/opensbi-riscv64-generic-fw_dynamic.bin}"
 OUT="$REPO/artifacts/riscv-build"; mkdir -p "$OUT"
@@ -55,25 +110,52 @@ echo "  repo=$REPO  gcc=$GCC"
 build_kernel() {
 	echo "--- kernel: uts/unix ($PHASE) ---"
 	local objs=""
-	for c in "$SRC"/uts/*.c; do
-		o="$OUT/$(basename "${c%.c}").o"
-		$GCC $CFLAGS -I"$SRC/uts" -c "$c" -o "$o"; objs="$objs $o"
+	# .S first: riscv.ld wants .text.image_header at byte 0 of .text so the
+	# same kernel can also be booti'd by U-Boot on real silicon.
+	for b in $KASM; do
+		o="$OUT/$b.o"
+		[ "$b" = trap ] && o="$OUT/trap_asm.o"   # trap.S vs trap.c collide
+		$GCC $CFLAGS -I"$SRC/uts" -c "$SRC/uts/$b.S" -o "$o"
+		objs="$objs $o"
 	done
-	for s in "$SRC"/uts/*.S; do
-		[ -e "$s" ] || continue
-		o="$OUT/$(basename "${s%.S}").o"
-		$GCC $CFLAGS -I"$SRC/uts" -c "$s" -o "$o"; objs="$objs $o"
+	for b in $KSRCS; do
+		o="$OUT/$b.o"
+		$GCC $CFLAGS -I"$SRC/uts" -c "$SRC/uts/$b.c" -o "$o"
+		objs="$objs $o"
 	done
-	# R-P64: link in the virtio-gpu display driver (the COSMIC display seam)
-	if [ "$PHASE" = "rp64" ] && [ -f "$REPO/src/riscv-port/rp64/kernel/virtio_gpu.c" ]; then
-		echo "  + R-P64 virtio_gpu.c (2D display)"
-		$GCC $CFLAGS -I"$SRC/uts" -I"$REPO/src/riscv-port/rp64/kernel" \
-			-c "$REPO/src/riscv-port/rp64/kernel/virtio_gpu.c" -o "$OUT/virtio_gpu.o"
-		objs="$objs $OUT/virtio_gpu.o"
+	# R-P64: the scanout seam. BOTH objects are required -- uproc.c calls
+	# fb_open/fb_close/fb_ioctl/fb_mmap, so linking virtio_gpu.c without fb.c
+	# leaves four undefined symbols.
+	local RP64="$REPO/src/riscv-port/rp64/kernel"
+	if [ "$PHASE" = "rp64" ] && [ -f "$RP64/virtio_gpu.c" ]; then
+		echo "  + R-P64 virtio_gpu.c + fb.c (2D display / /dev/fb)"
+		for b in virtio_gpu fb; do
+			$GCC $CFLAGS -DGPU_IDENTITY_MAP -I"$SRC/uts" -I"$RP64" \
+				-c "$RP64/$b.c" -o "$OUT/$b.o"
+			objs="$objs $OUT/$b.o"
+		done
 	fi
-	$LD -T "$SRC/uts/unix.ld" -o "$OUT/unix.elf" $objs 2>/dev/null \
-		|| $LD -o "$OUT/unix.elf" $objs
-	echo "  unix.elf: $($GCC -print-file-name= >/dev/null; ls -l "$OUT/unix.elf" | awk '{print $5}')B"
+	# THE LINKER SCRIPT IS riscv.ld. This said unix.ld, which does not exist
+	# and never has (git has only uts/riscv.ld). The defect was LATENT: the
+	# glob above died on asy_nsuart.c first, so the link was never reached.
+	# The `2>/dev/null || <link with no -T>` fallback does not silently ship a
+	# bad kernel -- MEASURED: it exits 1, because riscv.ld is what defines
+	# __bss_end / _image_text_offset / _image_size. What it DOES do is discard
+	# the one useful line ("cannot open linker script file .../unix.ld") and
+	# replace it with a pile of undefined-reference errors pointing at
+	# __bss_end -- a wrong-cause diagnostic for a missing-file problem.
+	# No fallback: a link that needs riscv.ld must fail saying so.
+	$LD -T "$SRC/uts/riscv.ld" -o "$OUT/unix.elf" $objs
+	echo "  unix.elf: $(wc -c < "$OUT/unix.elf")B"
+	# Assert the layout, or a wrong-address link looks like a pass. 0x80200000
+	# is riscv.ld's default KBASE (qemu-virt / K1); the K3 relink lives in
+	# uts/build-k3-payload.sh, which passes --defsym KBASE/KDRAM_BASE.
+	local ent
+	ent=$("$RISCV_GCC/$TC-readelf" -h "$OUT/unix.elf" | awk '/Entry point/ {print $4}')
+	case $ent in
+	0x80200040) echo "  entry $ent (riscv.ld default KBASE) OK" ;;
+	*) echo "  FAIL entry $ent, want 0x80200040 -- wrong linker script?"; return 1 ;;
+	esac
 }
 
 # 2) USERLAND (libc.a + coreutils subset + ld.so.1). The build-*.sh recipes are in

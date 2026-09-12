@@ -11,7 +11,7 @@ Host: root@3.21.134.141. Built under /root/clc-toolchain/. Toolchain complete an
 | SPIRV-LLVM-Translator (llvm-spirv + libLLVMSPIRVLib.a) | DONE | built from source vs LLVM 20 |
 | libclc (spirv-mesa3d + spirv64-mesa3d + amdgcn) | DONE | built from source (llvm-project release/20.x) |
 | Satisfies Mesa 25.3.6 `-Dmesa-clc=enabled -Dllvm=enabled` | YES (pkg-config + llvm-config all resolve) | verified |
-| PowerVR .so linked | NO — Mesa tree not on this node | see finish command |
+| PowerVR .so linked | **DONE** — co-located CLC toolchain onto the Mesa node | `libvulkan_powervr_mesa.so` 25.3.6, BXE-2-32, zero-phantom, dlopen OK (POWERVR-STATUS.md C-PVR-d) |
 | AMDGPU target for GGML_HIP / hipcc | YES — amdgcn target in LLVM 20 + amdgcn libclc | in same LLVM |
 
 ## 1. LLVM / Clang — OI pkg, version 20.1.8

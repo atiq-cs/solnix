@@ -52,13 +52,80 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# ---------------------------------------------------------------------------
+# TOOL DISCOVERY -- because the RECIPE is the only deliverable
+# ---------------------------------------------------------------------------
+# unix-k3.Image and k3.dtb are deliberately NOT tracked (.gitignore:77-83: a
+# committed image that drifts from its source is worse than no image). That
+# makes this script the artifact, so it has to run from a clean checkout
+# without archaeology. It previously required riscv64-none-elf-* AND dtc to be
+# on PATH already, and failed with a bare `dtc: command not found` (rc=127) that
+# names no remedy -- MEASURED on a normal dev-box PATH.
+#
+# Two failure modes are being closed:
+#  - the toolchain PREFIX differs by provider: nixpkgs pkgsCross.riscv64-embedded
+#    installs riscv64-none-elf-*, other providers riscv64-unknown-elf-* or
+#    riscv64-elf-*. All three are the same bare-metal ELF target. Probe, do not
+#    assume; a symlink farm to paper over the spelling is not a recipe.
+#  - dtc absent from PATH while present in the nix store.
+# Everything stays overridable: TC=/CC=/DTC=... win over discovery.
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# nixstore <glob-under-/nix/store> <basename> -- newest match, or empty.
+nixstore() {
+	ls -d /nix/store/$1 2>/dev/null | tail -1
+}
+
+if [ -z "${TC:-}" ]; then
+	for p in riscv64-none-elf riscv64-unknown-elf riscv64-elf; do
+		have "$p-gcc" && { TC="$p"; break; }
+	done
+fi
+if [ -z "${TC:-}" ]; then
+	# Not on PATH: adopt the pinned gcc 14.3.0 from the nix store if present.
+	# 14.3.0 is the pin the committed userland (user_elfs.h) was built with.
+	_gccbin=$(nixstore '*-riscv64-none-elf-gcc-wrapper-14.3.0/bin')
+	[ -n "$_gccbin" ] && { PATH="$_gccbin:$PATH"; TC=riscv64-none-elf; }
+fi
 TC="${TC:-riscv64-none-elf}"
 CC="${CC:-${TC}-gcc}"
 LD="${LD:-${TC}-ld}"
 OBJCOPY="${OBJCOPY:-${TC}-objcopy}"
 OBJDUMP="${OBJDUMP:-${TC}-objdump}"
 READELF="${READELF:-${TC}-readelf}"
+
+if [ -z "${DTC:-}" ] && ! have dtc; then
+	_dtcbin=$(nixstore '*-dtc-1.7.*/bin')
+	[ -n "$_dtcbin" ] && PATH="$_dtcbin:$PATH"
+fi
 DTC="${DTC:-dtc}"
+
+# Fail with the REMEDY, not with `command not found`. A recipe that cannot say
+# what is missing is the same class of defect as a guard that cannot fail.
+_missing=""
+for t in "$CC" "$LD" "$OBJCOPY" "$OBJDUMP" "$READELF" "$DTC" python3; do
+	have "$t" || _missing="$_missing $t"
+done
+if [ -n "$_missing" ]; then
+	cat >&2 <<EOM
+build-k3-payload.sh: missing required tool(s):$_missing
+
+This needs a riscv64 bare-metal ELF gcc/binutils, dtc, and python3.
+On this dev box (nix), the exact working invocation is:
+
+  G=\$(ls -d /nix/store/*-riscv64-none-elf-gcc-wrapper-14.3.0/bin | tail -1)
+  D=\$(ls -d /nix/store/*-dtc-1.7.*/bin | tail -1)
+  PATH=\$G:\$D:\$PATH bash build-k3-payload.sh
+
+Or from anywhere with a network:
+  nix shell nixpkgs#pkgsCross.riscv64-embedded.buildPackages.gcc nixpkgs#dtc
+  (that provides the riscv64-NONE-elf-* prefix, which is probed for.)
+
+Override any tool explicitly: TC=<prefix> CC=... DTC=... bash build-k3-payload.sh
+EOM
+	exit 1
+fi
+echo "== toolchain: $(command -v "$CC") / $(command -v "$DTC") =="
 
 OUT="${OUT:-unix-k3}"
 DTS="${DTS:-k3.dts}"

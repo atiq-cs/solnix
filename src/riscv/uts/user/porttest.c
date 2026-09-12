@@ -292,7 +292,22 @@ main(int argc, char **argv)
 		/* SYS_pset(207), PSET_INFO=3: a3 = &numcpus. */
 		r2 = __sys6(207, 3, 0, 0, (long)&nc, 0, 0);
 		check(r2 == 0, "pset_info(PSET_INFO) succeeds");
-		check(nc >= 1 && nc <= 8,
+		/*
+		 * Upper bound is the kernel's MAXCPU, which is 16 (the SpacemiT K3
+		 * has 16 harts; see main.c). This read `nc <= 8` and so FAILED on a
+		 * -smp 16 boot while the kernel was reporting a perfectly correct
+		 * 16 -- MEASURED: PORTTEST FAIL at -smp 16 under BOTH the PLIC and
+		 * the APLIC machine, PASS at -smp 4 under both. A fourth copy of
+		 * MAXCPU that the 8->16 change missed, in userland where the other
+		 * three (main.c, proc.c, locore.S) are kernel-side.
+		 *
+		 * NOTE: hardcoded because this is a freestanding test binary with no
+		 * kernel headers; if MAXCPU changes again this must change with it.
+		 * A too-HIGH bound is the safe direction -- the check that matters is
+		 * "not 0", since callers size thread pools from this and 0 is the
+		 * value that breaks them.
+		 */
+		check(nc >= 1 && nc <= 16,
 		    "the reported CPU count is sane (1..MAXCPU, not 0)");
 		printf("  (online CPUs reported: %u)\n", nc);
 

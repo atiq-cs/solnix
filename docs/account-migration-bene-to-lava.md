@@ -8,14 +8,14 @@
 |---|---|
 | profile | `lava` |
 | region | `us-east-2` |
-| keypair | **`solnix-lava`** (private key `~/.ssh/solnix-lava.pem`, mode 600) |
+| keypair | **`solnix-lava2`** (private key `~/.ssh/solnix-lava2.pem`, mode 600) |
 | SG | **`sg-0d7ce9a7390bfadfe`** — tcp/22 from `73.4.58.0/24` **only** |
 | subnets | `subnet-0230d1c45d8a098a7` (2a), `subnet-01c9a1bb639c2f8ef` (2b), `subnet-0b90d606a743759f9` (2c) |
 | x86_64 base AMI | **`ami-0cb14e40f9355bd0c`** (`snap-0f7750c410a727fec`), 21/21 cold launches |
 | running instances | **none of ours** — the account is SHARED; `libdb-*`, `fts-*`, `a2abench*`, `xtc-*` etc. belong to other tenants and must never be touched |
 
 The keypair arrives as a lone `.pem` with no `.pub`; derive the public half with
-`ssh-keygen -y -f ~/.ssh/solnix-lava.pem` (the build recipe now does this itself).
+`ssh-keygen -y -f ~/.ssh/solnix-lava2.pem` (the build recipe now does this itself).
 
 ## ⚠️ What is stranded in `bene`, and the honest cost
 

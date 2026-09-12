@@ -45,8 +45,13 @@ built to completion, and could not be here without a multi-hour re-bootstrap.**
 State found on this node:
 - arm64-gate tree is NOT present (it lived on a prior build host, now gone).
 - The archived aarch64 **proto** (`aarch64-proto-73466454.tar.zst`) 404s.
-- What SURVIVES is the **cross seed** (`s3.solnix.io/.../aarch64-seed-cross-14.3.0.tar.gz`,
-  286 MB, HTTP 200) = the arm64-gate `make setup` output folded into a Nix FOD:
+- What SURVIVES is the **cross seed** (286 MB, HTTP 200). ⚠️ **URL CORRECTION
+  (measured 2026-09-12):** the key is
+  `https://s3.solnix.io/solnix-cache/seed/aarch64-solaris/aarch64-seed-cross-14.3.0.tar.gz`
+  (286,655,805 bytes). The `archive/aarch64/...` path this file used to cite
+  **404s** -- the `archive/` prefix does not exist in the bucket at all. The
+  asset claim was true; the address was wrong. See
+  docs/aarch64-gicv3-crs-metal-CONFIRMED.md. = the arm64-gate `make setup` output folded into a Nix FOD:
   cross **GCC 14.3.0**, the illumos **Solaris ld** (`sgs`, opt/onbld/bin/amd64/ld),
   cross binutils (`aarch64-unknown-solaris2.11-{as,ar,nm,...}`), and the aarch64
   **sysroot** (libc.so.1, ld.so.1, crt*.o, full usr/include).

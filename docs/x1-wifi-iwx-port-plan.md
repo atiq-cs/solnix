@@ -40,6 +40,14 @@ LinuxKPI path is the awkward one; **OpenBSD's is a clean BSD driver**.
 >
 > The "weeks, not one build" conclusion below still holds, and the mbuf *hazard* is real. But the mbuf layer
 > is an order of magnitude smaller than budgeted here, and it now exists and is tested.
+>
+> **UPDATE (second session).** `if_iwx.c` now **compiles to an object file** and the mbuf layer **links**.
+> The remainder is measured at the link rather than estimated by grep: **122 undefined symbols**, of which
+> **43** are `ieee80211_*` (the route-b vendoring, still the bulk), **50** are this port's declared-only
+> shims, **20** illumos already provides at zero cost, and **9** need a named decision. Two further
+> corrections to numbers on this page: the `splnet`/`splx` surface is **15 regions** (the 15-vs-31
+> asymmetry is `splx` on multiple exit paths, not a leak), and the claim that `sc->ioctl_rwl` provides the
+> mutual exclusion `splnet` stands in for is **wrong** -- see `src/wifi-port/iwx/SPLNET-AUDIT.md`.
 
 **~750 call sites across two different 802.11 stacks.** illumos *has* `net80211` (14 files, including
 `net80211_crypto_ccmp.c` and `net80211_ht.c`), so the stack exists — but OpenBSD's `ieee80211_*` and

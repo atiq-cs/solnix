@@ -371,6 +371,22 @@ yields 0.
 prediction* — the raw-SPCR verdict from Step 5 makes `[A6CRS] crs_nwin=0x2` readable on a metal
 console, where the old code would print the QEMU windows. One boot decides it.
 
+### ✅ RESOLVED 2026-09-12: the prediction was CORRECT, measured on c6g.metal
+
+The boot happened. `i-03526e3d3334a569e`, AMI `ami-04a384a52cfe7f52a`:
+
+```
+[A6CRS] crs_nwin=0x2 crs_have=0x1 necam=0x1 ecam0=0xc000000000 qemu=0x0 fdt_used=0x236d fdt_max=0x4000
+[A6CRS] win[0] space=0x2000000 child=0x80000000    parent=0x80000000    size=0x20000000
+[A6CRS] win[1] space=0x3000000 child=0x18000000000 parent=0x18000000000 size=0x2000000000
+```
+
+`crs_nwin=0x2`, `crs_have=0x1`, `ecam0=0xc000000000`, `qemu=0x0`, no IO window — every
+predicted value. The *same binary* under QEMU printed `crs_nwin=0x3 ecam0=0x4010000000
+qemu=0x1` with an IO window, so the instrument distinguishes the platforms rather than
+printing a constant. Full evidence: docs/aarch64-gicv3-crs-metal-CONFIRMED.md; console:
+`a6crs-metal-console-CONFIRMED.txt`.
+
 ### The pattern across all six steps, worth internalising
 
 Every wrong turn here was an **evidence-availability** failure, not a reasoning failure:

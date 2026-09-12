@@ -201,6 +201,14 @@ over-run, and the emitter's fallback still produces a valid single region.
 
 ## Status
 
+**UPDATE 2026-09-12: RE-CONFIRMED on a fresh gate + fresh c6g.metal boot.**
+`[A6GIC] ngicc=40 distinct_gicr_base=40 regions=4 stride=0x20000` with the four
+`0xbc/bd/be/bf00080000` regions of `ncpu=0x10`, and zero `gicthree` /
+`num_redistributors` occurrences in the console. The `_CRS`-in-SSDT fix was
+verified in the same boot (`crs_nwin=0x2`). Evidence + full console:
+docs/aarch64-gicv3-crs-metal-CONFIRMED.md and
+src/aarch64-arm64-gate-patches/a6crs-metal-console-CONFIRMED.txt.
+
 - Root cause: **identified from real hardware tables**, candidate (b).
 - Fix: **proven in logic** (harness reproduces old=16 and new=64) and
   **confirmed on real Graviton**: the `gicthree.c:1581` panic is gone and the
