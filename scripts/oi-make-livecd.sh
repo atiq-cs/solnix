@@ -80,10 +80,19 @@ GRAPHICAL="${GRAPHICAL:-0}"
 # 95,412,745 B measured with wc -c. Previous content measured 199,698 KB used, so
 # with nix + terminfo (3.9 MB) + /usr/gnu (~14 MB) + rsync/xz/top/wget the live
 # root lands near 306 MiB and 340 MB no longer leaves the required 32 MB of slack.
-# 420 MB = 440,401,920 B UNCOMPRESSED = 54.0% of the X1's MEASURED 816,119,808 B
-# largest low-4GB free block, i.e. ~358 MiB of headroom still under the ceiling.
+# 440 MB = 461,373,440 B UNCOMPRESSED = 56.5% of the X1's MEASURED 816,119,808 B
+# largest low-4GB free block, i.e. ~338 MiB of headroom still under the ceiling.
 # Set STAGE_NIX=0 to build the old nix-less media, which fits in 340.
-if [ "$GRAPHICAL" = 1 ]; then RD_MB="${RD_MB:-500}"; else RD_MB="${RD_MB:-420}"; fi
+#
+# 420 -> 440 is TRACKING MEASURED USAGE, not padding "to be safe" (which the
+# paragraph above rightly forbids). The ldd(1) closure that replaced the
+# hand-maintained library allowlist stages 24 real dependencies the list omitted
+# -- including usr/lib/libmapmalloc.so.1, whose absence is why vi died on real
+# hardware. MEASURED consequence: live-root usage 378,626 KB (image k) ->
+# 389,611 KB, which left 28,132 KB against the 32 MB RD_MIN_FREE_MB floor and
+# correctly FAILED the build. The content is load-bearing, so the image gets the
+# space; the occupancy gate stays where it is and did exactly its job.
+if [ "$GRAPHICAL" = 1 ]; then RD_MB="${RD_MB:-500}"; else RD_MB="${RD_MB:-440}"; fi
 # RD_NBPI: newfs -i bytes-per-inode. illumos newfs defaults to nbpi=2048 for an
 # image this size, which cost 20,522KB of inode tables at RD_MB=320 to hold 3369
 # used inodes out of 160000 -- ~7% of the whole image spent on a table that is
@@ -257,6 +266,13 @@ LIVE_TOOLS="
   usr/bin/awk usr/bin/gawk
   usr/bin/date usr/bin/id usr/bin/find usr/bin/sort usr/bin/head usr/bin/tail
   usr/bin/tr usr/bin/cut usr/bin/wc usr/bin/strings usr/bin/uname usr/bin/df
+  usr/sbin/df
+  # openssl's REAL target: usr/bin/openssl is a symlink into a versioned tree that
+  # was never staged, so the link dangles in the image. solnix-install now uses
+  # openssl to hash the admin password, so a dangling link would mean a LOCKED
+  # account on a freshly installed laptop. Stage the versioned tree; the installer
+  # still has fallbacks, but the primary path should work.
+  usr/openssl/1.0/bin/openssl usr/openssl/3/bin/openssl
   usr/bin/du usr/bin/echo usr/bin/printf usr/bin/expr usr/bin/dirname
   usr/bin/basename usr/bin/hostname usr/bin/sleep usr/bin/kill usr/bin/chmod
   usr/bin/chown usr/bin/chgrp usr/bin/mount usr/bin/umount usr/bin/sync
@@ -2263,6 +2279,45 @@ grep -q 'solnix-gnu-path' "$RDROOT/etc/profile" || \
 grep -q '^PATH=/usr/gnu/bin' "$RDROOT/etc/solnix-live-shell" || \
   die "live shell PATH does not start with /usr/gnu/bin"
 echo "  base-tooling gate OK: GNU diffutils + less + terminfo + power + gnu-first PATH" >&2
+
+# (iv'''') NO DANGLING SYMLINKS among the staged commands. This is its own bug
+#          CLASS, not a one-off: `usr/bin/df` was staged as a SYMLINK to
+#          ../sbin/df (= /usr/sbin/df) while the TARGET was never in the tool
+#          list, so the live root had a `df` that passed every `[ -e ]` presence
+#          check -- `-e` follows the link and the build host resolves it -- and
+#          then reported "df: not found" inside the image. MEASURED consequence:
+#          solnix-install:104 and :158 both call `df -n /`, so the installer's
+#          root-pool guard and its "booted from" line were both broken. Same
+#          shape as the dangling-vi check above, generalised: a symlink is only
+#          staged if its target is too. -L finds links, -e tests resolution.
+_dangle=""
+for _d in usr/bin usr/sbin sbin usr/gnu/bin usr/has/bin; do
+  [ -d "$RDROOT/$_d" ] || continue
+  for _f in "$RDROOT/$_d"/*; do
+    [ -L "$_f" ] || continue
+    [ -e "$_f" ] && continue
+    _dangle="$_dangle $_d/$(basename "$_f")"
+  done
+done
+if [ -n "$_dangle" ]; then
+  # openssl is a KNOWN packaging artifact on this AMI (usr/bin/openssl ->
+  # ../openssl/1.0/bin/openssl, an unshipped versioned tree) and nothing in the
+  # installer calls it, so it warns rather than dies. Anything else is our bug.
+  _fatal=""
+  for _x in $_dangle; do
+    case "$_x" in
+      usr/bin/openssl) echo "WARN: dangling symlink $_x (known packaging artifact, unused)" >&2 ;;
+      *) _fatal="$_fatal $_x" ;;
+    esac
+  done
+  [ -z "$_fatal" ] || die "dangling command symlink(s) in the live root:$_fatal
+  Each passes a [ -e ] presence check on the BUILD HOST (which resolves them) and
+  then reports 'not found' inside the image. Stage the TARGET, not just the link."
+fi
+echo "  dangling-symlink gate OK: every staged command symlink resolves in the image" >&2
+# df is called by solnix-install (root-pool guard + "booted from"), so assert it
+# RESOLVES rather than merely existing -- that is exactly what failed before.
+[ -f "$RDROOT/usr/bin/df" ] || die "/usr/bin/df does not resolve to a real file -- solnix-install's df -n / would fail"
 
 # (iv''') USER CREATION must work on the installed system: the image ships no
 #         personal user, so if these are missing the operator cannot make one.

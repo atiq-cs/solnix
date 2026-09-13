@@ -1125,6 +1125,96 @@ rm -f "$ALTROOT/etc/solnix-autoinstall" 2>/dev/null || true
 # Skipped entirely when non-interactive: an auto-install has no operator to ask,
 # and silently inventing an account with a guessed password would be worse than
 # none. SOLNIX_ADMIN_USER/SOLNIX_ADMIN_PW allow unattended use explicitly.
+# ---------------------------------------------------------------------------
+# 10a. ROOT PASSWORD + login hardening.
+#
+# ⚠️ THE LIVE MEDIA DELIBERATELY BLANKS root's PASSWORD so the operator can log in
+# to run this installer (oi-make-livecd.sh:1611 empties the shadow field, and :1614
+# sets PASSREQ=NO and comments out CONSOLE=). Correct for live media, and a real
+# hole once copied: step 3 copies /etc/{passwd,shadow,group} verbatim, so WITHOUT
+# THIS BLOCK the installed system ships with a passwordless root, empty passwords
+# permitted at login, and root allowed on any terminal.
+#
+# Hash helper shared with the admin-user block below.
+_hash_pw() {  # $1 = plaintext -> stdout = crypt string, empty on failure
+  for _o in openssl /usr/openssl/1.0/bin/openssl /usr/openssl/3/bin/openssl \
+            "$ALTROOT/usr/openssl/1.0/bin/openssl"; do
+    { command -v "$_o" >/dev/null 2>&1 || [ -x "$_o" ]; } || continue
+    _h=$(printf '%s' "$1" | "$_o" passwd -6 -stdin 2>/dev/null || true)
+    [ -n "$_h" ] && { printf '%s' "$_h"; return 0; }
+  done
+  return 1
+}
+
+_rootpw=""
+if [ -n "${SOLNIX_ROOT_PW:-}" ]; then
+  _rootpw="$SOLNIX_ROOT_PW"
+elif [ -t 0 ] && [ -t 1 ]; then
+  echo ""
+  echo "=== Set the root password =================================================="
+  echo "The install media runs with root passwordless so you can reach this"
+  echo "installer. The INSTALLED system must not, so set it now."
+  while : ; do
+    _oldstty=$(stty -g 2>/dev/null || true)
+    trap '[ -n "$_oldstty" ] && stty "$_oldstty" 2>/dev/null; echo ""' INT
+    printf 'Root password: '; stty -echo 2>/dev/null; read -r _rootpw || _rootpw=""; stty echo 2>/dev/null; echo ""
+    printf 'Confirm:       '; stty -echo 2>/dev/null; read -r _rp2 || _rp2=""; stty echo 2>/dev/null; echo ""
+    [ -n "$_oldstty" ] && stty "$_oldstty" 2>/dev/null
+    trap - INT
+    [ "$_rootpw" = "$_rp2" ] || { echo "  passwords do not match"; continue; }
+    [ -n "$_rootpw" ] || { echo "  empty root password refused -- that is the hole this step closes"; continue; }
+    [ ${#_rootpw} -ge 6 ] || { echo "  too short (illumos passwd requires >= 6)"; continue; }
+    break
+  done
+fi
+
+if [ -n "$_rootpw" ]; then
+  _rh=$(_hash_pw "$_rootpw" || true)
+  if [ -n "$_rh" ]; then
+    awk -F: -v h="$_rh" 'BEGIN{OFS=":"} $1=="root"{$2=h} {print}' \
+      "$ALTROOT/etc/shadow" > "$ALTROOT/etc/shadow.new" \
+      && mv "$ALTROOT/etc/shadow.new" "$ALTROOT/etc/shadow"
+    chmod 0400 "$ALTROOT/etc/shadow"
+    # Verify the hash actually landed: an empty field here is the whole defect.
+    _rf=$(awk -F: '$1=="root"{print $2}' "$ALTROOT/etc/shadow" 2>/dev/null)
+    case "$_rf" in
+      ''|'*'|'*LK*'|NP) die "root password did not land in the target /etc/shadow (field='$_rf')" ;;
+    esac
+    log "root password set on the target"
+  else
+    die "could not hash the root password -- refusing to install a passwordless root"
+  fi
+else
+  # No password supplied and non-interactive: LOCK root rather than leave it open.
+  # A locked root with an admin user able to pfexec is safe; a blank root is not.
+  awk -F: 'BEGIN{OFS=":"} $1=="root"{$2="*LK*"} {print}' \
+    "$ALTROOT/etc/shadow" > "$ALTROOT/etc/shadow.new" \
+    && mv "$ALTROOT/etc/shadow.new" "$ALTROOT/etc/shadow"
+  chmod 0400 "$ALTROOT/etc/shadow"
+  log "no root password given -> root LOCKED (*LK*) on the target, not left blank"
+fi
+
+# Undo the live media's login relaxations on the INSTALLED system.
+if [ -f "$ALTROOT/etc/default/login" ]; then
+  sed -e 's/^#*PASSREQ=.*/PASSREQ=YES/' \
+      -e 's,^#*CONSOLE=.*,CONSOLE=/dev/console,' \
+      "$ALTROOT/etc/default/login" > "$ALTROOT/etc/default/login.new" \
+    && mv "$ALTROOT/etc/default/login.new" "$ALTROOT/etc/default/login"
+  grep -q '^PASSREQ=YES' "$ALTROOT/etc/default/login" \
+    || die "PASSREQ=YES not set on the target -- empty passwords would be accepted"
+  grep -q '^CONSOLE=/dev/console' "$ALTROOT/etc/default/login" \
+    || die "CONSOLE= not restored -- root could log in on any terminal"
+  log "login hardened: PASSREQ=YES, root console-only"
+fi
+# sshd must not accept root with a password even so; only touch an existing file.
+if [ -f "$ALTROOT/etc/ssh/sshd_config" ]; then
+  sed -e 's/^#*PermitRootLogin.*/PermitRootLogin no/' \
+      -e 's/^#*PermitEmptyPasswords.*/PermitEmptyPasswords no/' \
+      "$ALTROOT/etc/ssh/sshd_config" > "$ALTROOT/etc/ssh/sshd_config.new" \
+    && mv "$ALTROOT/etc/ssh/sshd_config.new" "$ALTROOT/etc/ssh/sshd_config"
+  log "sshd: PermitRootLogin no, PermitEmptyPasswords no"
+fi
+
 _mkadmin=0
 if [ -n "${SOLNIX_ADMIN_USER:-}" ]; then
   _au="$SOLNIX_ADMIN_USER"; _apw="${SOLNIX_ADMIN_PW:-}"; _mkadmin=1
@@ -1212,8 +1302,22 @@ if [ "$_mkadmin" = 1 ]; then
   fi
   # Password: chroot passwd needs a tty, so set the hash directly. openssl is
   # staged and gives a portable SHA-512 crypt that illumos accepts.
-  _hash=$(printf '%s' "$_apw" | openssl passwd -6 -stdin 2>/dev/null || true)
-  if [ -n "$_hash" ]; then
+  # ⚠️ openssl is a DANGLING SYMLINK on this AMI (usr/bin/openssl ->
+  # ../openssl/1.0/bin/openssl, a versioned tree that is not staged), so it may not
+  # run in the image. A locked admin account on a laptop the operator just installed
+  # is a bad failure, so try openssl, then the versioned path directly, then let
+  # passwd(1) do it under chroot with a tty. Each is verified by the assertion below.
+  _hash=$(_hash_pw "$_apw" || true)
+  if [ -z "$_hash" ]; then
+    # Last resort: passwd inside the target. Needs a tty, which we have when
+    # interactive; it prompts the operator a second time and that is acceptable
+    # because the alternative is an account with no password at all.
+    if [ -t 0 ] && chroot "$ALTROOT" /usr/bin/passwd "$_au" </dev/tty >/dev/tty 2>&1; then
+      _hash="set-by-passwd"
+      log "password set via chroot passwd (openssl unavailable in the image)"
+    fi
+  fi
+  if [ -n "$_hash" ] && [ "$_hash" != set-by-passwd ]; then
     awk -F: -v u="$_au" -v h="$_hash" 'BEGIN{OFS=":"} \
       $1==u {$2=h} {print}' "$ALTROOT/etc/shadow" > "$ALTROOT/etc/shadow.new" \
       && mv "$ALTROOT/etc/shadow.new" "$ALTROOT/etc/shadow"
