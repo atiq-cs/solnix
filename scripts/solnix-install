@@ -366,10 +366,80 @@ run_to 30 zfs mount "$BEDS"
 #
 # The point of a shared store is that a BE rollback changes which SYSTEM you boot
 # without destroying the store that every generation references.
-for _ds in nix export export/home; do
+# HOME LAYOUT: /home by default, the Solaris /export/home only on request.
+#
+# FreeBSD's bsdinstall creates a plain `/home mountpoint=/home` dataset
+# (usr.sbin/bsdinstall/scripts/zfsboot:154) with the comment "Home directories
+# separated so they are common to all BEs" -- the same BE-sharing reason we want,
+# without the /export indirection. Solaris uses /export/home because
+# /etc/auto_master:31 maps `/home auto_home -nobrowse`, so autofs OWNS /home and
+# any local directory there is shadowed at boot.
+#
+# Measured on the maintainer's existing host `sun`, which already runs /home/gburd:
+# the autofs SERVICE is disabled (svc:/system/filesystem/autofs:default), a real
+# tank/home + tank/home/gburd dataset is mounted, and passwd points at /home/gburd.
+# The auto_master line is still present there and harmless ONLY because the service
+# is off -- so we do BOTH below: disable the service and comment the line, because
+# a future `svcadm enable autofs` would otherwise silently shadow every home dir.
+# CONSOLE TEXT SIZE. The console font is a FIXED 8x16 with no larger built-in, so
+# rows/cols come from dividing screen size by glyph size (common/font/font.c) and
+# RESOLUTION is the only lever. Measured on the maintainer's X1: EDID 3840x2160,
+# where the loader picked 480 columns x 113 rows -- unreadable. Default to 800x600
+# (~99x37): comfortably readable rather than maximising text on screen.
+TARGET_RESOLUTION="${SOLNIX_TARGET_RESOLUTION:-}"
+if [ -z "$TARGET_RESOLUTION" ] && [ -t 0 ] && [ -t 1 ]; then
+  echo ""
+  echo "=== Console text size ======================================================="
+  echo "  Larger text = lower framebuffer resolution (the font is a fixed 8x16)."
+  echo "  1) 640x480    ~79x29   largest text"
+  echo "  2) 800x600    ~99x37   readable        (default)"
+  echo "  3) 1024x768   ~127x47  medium"
+  echo "  4) 1280x1024  ~159x63  small"
+  echo "  5) native     tiny on a HiDPI panel -- 480x113 on a 4K screen"
+  printf 'Choice [1-5] (default 2): '
+  read -r _cr || _cr=2
+  case "$_cr" in
+    1) TARGET_RESOLUTION=640x480 ;;
+    3) TARGET_RESOLUTION=1024x768 ;;
+    4) TARGET_RESOLUTION=1280x1024 ;;
+    5) TARGET_RESOLUTION=native ;;
+    *) TARGET_RESOLUTION=800x600 ;;
+  esac
+fi
+[ -n "$TARGET_RESOLUTION" ] || TARGET_RESOLUTION=800x600
+log "console text size: $TARGET_RESOLUTION"
+
+HOME_STYLE="${SOLNIX_HOME_STYLE:-}"
+if [ -z "$HOME_STYLE" ] && [ -t 0 ] && [ -t 1 ]; then
+  echo ""
+  echo "=== Home directory layout ==================================================="
+  echo "  1) /home            (default) a real dataset, autofs disabled -- the"
+  echo "                      FreeBSD/Linux layout. Simple, nothing exported."
+  echo "  2) /export/home     traditional Solaris: autofs maps /home -> auto_home,"
+  echo "                      real homes live under /export/home and can be shared."
+  printf 'Choice [1/2] (default 1): '
+  read -r _hs || _hs=1
+  case "$_hs" in 2) HOME_STYLE=export ;; *) HOME_STYLE=home ;; esac
+fi
+[ -n "$HOME_STYLE" ] || HOME_STYLE=home
+case "$HOME_STYLE" in
+  home)   HOME_BASE=/home ;;
+  export) HOME_BASE=/export/home ;;
+  *) die "SOLNIX_HOME_STYLE must be 'home' or 'export' (got '$HOME_STYLE')" ;;
+esac
+log "home layout: $HOME_STYLE (homes under $HOME_BASE)"
+
+# Datasets outside the BE. /nix always; the home tree follows the chosen layout.
+_dslist="nix"
+case "$HOME_STYLE" in
+  home)   _dslist="$_dslist home" ;;
+  export) _dslist="$_dslist export export/home" ;;
+esac
+for _ds in $_dslist; do
   zfs list -H "$POOL/$_ds" >/dev/null 2>&1 && continue
   case "$_ds" in
     nix)         _mp=/nix ;;
+    home)        _mp=/home ;;
     export)      _mp=/export ;;
     export/home) _mp=/export/home ;;
   esac
@@ -389,7 +459,29 @@ zfs list -H -o name,mountpoint "$POOL/nix" >/dev/null 2>&1 \
 case "$(zfs list -H -o name "$POOL/nix" 2>/dev/null)" in
   "$POOL/ROOT/"*) die "$POOL/nix was created INSIDE the boot environment" ;;
 esac
-log "datasets: $POOL/nix + $POOL/export/home created outside $BEDS"
+# ⚠️ THE STEP THAT ACTUALLY MAKES /home WORK. Creating the dataset is not enough:
+# autofs owns /home via auto_master, so without this the mount is shadowed at boot
+# and every home directory silently vanishes. Verified on `sun`, which runs
+# /home/gburd today: the autofs service is DISABLED there. Belt and braces --
+# disable the service in the target repo AND comment the auto_master line, because
+# either alone is undone by a future svcadm enable or a package refresh of
+# auto_master.
+if [ "$HOME_STYLE" = home ]; then
+  if [ -f "$ALTROOT/etc/auto_master" ]; then
+    sed 's,^/home[[:space:]],#/home\t,' "$ALTROOT/etc/auto_master" > "$ALTROOT/etc/auto_master.new" \
+      && mv "$ALTROOT/etc/auto_master.new" "$ALTROOT/etc/auto_master"
+    grep -qE '^/home[[:space:]]' "$ALTROOT/etc/auto_master" \
+      && die "auto_master still maps /home -- the dataset would be shadowed at boot"
+  fi
+  # Disable the service in the TARGET repository, not the live one.
+  if [ -x /usr/sbin/svccfg ] && [ -f "$ALTROOT/etc/svc/repository.db" ]; then
+    SVCCFG_REPOSITORY="$ALTROOT/etc/svc/repository.db" \
+      /usr/sbin/svccfg -s system/filesystem/autofs setprop general/enabled = boolean: false \
+      2>/dev/null || log "note: could not preset autofs disabled; run 'svcadm disable autofs' after first boot"
+  fi
+  log "autofs: /home mapping commented out + service preset disabled"
+fi
+log "datasets: $POOL/nix + $POOL${HOME_BASE} created outside $BEDS"
 
 # ---------------------------------------------------------------------------
 # 3. copy the running root FS onto the target BE (the base world).
@@ -760,6 +852,13 @@ setprop ttya-mode 115200,8,n,1,-
 setprop ttya-ignore-cd true
 setprop ttya-rts-dtr-off false
 EOF
+# "native" means omit the knob entirely and let the loader pick the panel's own
+# mode; any other value pins it. Building the line here keeps the heredoc simple.
+if [ "$TARGET_RESOLUTION" = native ]; then
+  _efires="# efi-max-resolution unset: using the panel's native mode (text will be small)"
+else
+  _efires="efi-max-resolution=\"$TARGET_RESOLUTION\""
+fi
 cat > "$ALTROOT/boot/loader.conf" <<EOF
 console="$TARGET_CONSOLE"
 os_console="$TARGET_CONSOLE"
@@ -769,7 +868,7 @@ os_console="$TARGET_CONSOLE"
 # screen size (common/font/font.c) and RESOLUTION is the only lever. The live
 # media already sets this; the installed system did not, so text was tiny again
 # after the first reboot.
-efi-max-resolution="${SOLNIX_TARGET_RESOLUTION:-800x600}"
+${_efires}
 boot-args="-v"
 loader_logo="illumos"
 autoboot_delay="3"
@@ -1073,7 +1172,7 @@ if [ "$_mkadmin" = 1 ]; then
   echo ""
   echo "  About to create on $TARGET:"
   echo "    username    : $_au"
-  echo "    home        : /export/home/$_au  (on $POOL/export/home, outside the BE)"
+  echo "    home        : ${HOME_BASE}/$_au  (on $POOL/export/home, outside the BE)"
   echo "    shell       : /bin/bash"
   echo "    primary grp : staff (10)"
   echo "    secondary   : sysadmin (14)"
@@ -1087,16 +1186,16 @@ fi
 
 if [ "$_mkadmin" = 1 ]; then
   log "creating admin user $_au"
-  mkdir -p "$ALTROOT/export/home"
+  mkdir -p "$ALTROOT${HOME_BASE}"
   # Run useradd/passwd AGAINST THE TARGET ROOT (-R), not the live system, so the
   # account lands on the installed disk. Fall back to direct file edits if -R is
   # unsupported -- illumos useradd has carried -R for a long time, but a silent
   # no-op here would produce a machine with no way in.
   _ua_ok=0
-  if "$ALTROOT/usr/sbin/useradd" -R "$ALTROOT" -m -d "/export/home/$_au" \
+  if "$ALTROOT/usr/sbin/useradd" -R "$ALTROOT" -m -d "${HOME_BASE}/$_au" \
        -s /bin/bash -g staff -G sysadmin "$_au" 2>/dev/null; then
     _ua_ok=1
-  elif chroot "$ALTROOT" /usr/sbin/useradd -m -d "/export/home/$_au" \
+  elif chroot "$ALTROOT" /usr/sbin/useradd -m -d "${HOME_BASE}/$_au" \
        -s /bin/bash -g staff -G sysadmin "$_au" 2>/dev/null; then
     _ua_ok=1
   fi
@@ -1104,11 +1203,11 @@ if [ "$_mkadmin" = 1 ]; then
     # Documented fallback: append the entries by hand. Verified below either way.
     _uid=$(awk -F: '$3>=100 && $3<60000 {if ($3>m) m=$3} END {print (m<100?100:m+1)}' \
            "$ALTROOT/etc/passwd" 2>/dev/null)
-    printf '%s:x:%s:10:%s:/export/home/%s:/bin/bash\n' "$_au" "$_uid" "$_au" "$_au" \
+    printf '%s:x:%s:10:%s:%s/%s:/bin/bash\n' "$_au" "$_uid" "$_au" "$HOME_BASE" "$_au" \
       >> "$ALTROOT/etc/passwd"
     printf '%s:*LK*:::::::\n' "$_au" >> "$ALTROOT/etc/shadow"
-    mkdir -p "$ALTROOT/export/home/$_au"
-    chown "$_uid":10 "$ALTROOT/export/home/$_au" 2>/dev/null || true
+    mkdir -p "$ALTROOT${HOME_BASE}/$_au"
+    chown "$_uid":10 "$ALTROOT${HOME_BASE}/$_au" 2>/dev/null || true
     log "useradd -R unavailable; created $_au via direct /etc edits (uid $_uid)"
   fi
   # Password: chroot passwd needs a tty, so set the hash directly. openssl is
@@ -1136,12 +1235,12 @@ if [ "$_mkadmin" = 1 ]; then
   grep -q "^$_au:" "$ALTROOT/etc/passwd" || die "user $_au missing from target /etc/passwd"
   grep -q "^$_au:" "$ALTROOT/etc/shadow" || die "user $_au missing from target /etc/shadow"
   grep -q "^$_au:" "$ALTROOT/etc/user_attr" || die "user $_au has no RBAC entry"
-  [ -d "$ALTROOT/export/home/$_au" ] || die "home /export/home/$_au was not created"
+  [ -d "$ALTROOT${HOME_BASE}/$_au" ] || die "home ${HOME_BASE}/$_au was not created"
   if [ -n "$_hash" ]; then
     grep -q "^$_au:\$" "$ALTROOT/etc/shadow" || grep -q "^$_au:[^*!]" "$ALTROOT/etc/shadow" \
       || die "password hash for $_au did not land in target /etc/shadow"
   fi
-  log "admin user OK: $_au (staff+sysadmin, Primary Administrator, home on $POOL/export/home)"
+  log "admin user OK: $_au (staff+sysadmin, Primary Administrator, home on $POOL$HOME_BASE)"
   echo "  Created $_au. Log in and use: pfexec <command>   (or su - root)"
 fi
 
