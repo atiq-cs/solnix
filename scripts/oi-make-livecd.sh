@@ -2359,7 +2359,17 @@ if [ "$STAGE_NIX" = 1 ] && [ -x "$RDROOT/nix-tools224/bin/nix" ]; then
       mount -F lofs -o ro /devices "$RDROOT/devices" 2>/dev/null && _lofs=1 || _lofs=0
       for _c in /usr/bin/vi /usr/bin/which /usr/bin/less /usr/bin/ldd; do
         [ -f "$RDROOT$_c" ] || continue
-        _o=$("$_chr" "$RDROOT" "$_c" --version 2>&1 </dev/null | head -1)
+        # ⚠️ `|| true` is LOAD-BEARING, not sloppiness. `--version` is not a
+        # universal flag: MEASURED inside this image, vi exits 1 and which exits 2
+        # with "illegal option -- version", and ldd exits 1 with a usage message.
+        # Under `set -euo pipefail` the command substitution inherits that status
+        # and set -e KILLED THE WHOLE BUILD at the first probe -- no die(), no
+        # output, the gate written to prove "presence is not runnability" never
+        # ran to completion itself. The verdict here comes from the TEXT (the case
+        # below greps for the loader's "fatal:"/"open failed"), never from rc: a
+        # binary that reaches argument parsing has already been loaded by ld.so.1,
+        # which is exactly what this gate exists to establish.
+        _o=$( { "$_chr" "$RDROOT" "$_c" --version 2>&1 </dev/null || true; } | head -1 )
         case "$_o" in
           *"fatal:"*|*"open failed"*)
             [ "$_lofs" = 1 ] && umount "$RDROOT/devices" 2>/dev/null
