@@ -735,10 +735,24 @@ if [ -x /usr/bin/ldd ]; then
     LC_ALL=C od -An -N4 -tx1 "$_bin" 2>/dev/null | grep -q '7f 45 4c 46' || continue
     /usr/bin/ldd "$_bin" 2>/dev/null | while read -r _n _a _p _rest; do
       case "$_p" in /*) ;; *) continue ;; esac
+      # ldd resolves $ORIGIN-relative RUNPATHs against the STAGED binary, so it
+      # reports paths INSIDE the build tree. MEASURED: .ldd-added held
+      # var/tmp/solnix-media/rd/usr/bin/../../lib/libelf.so.1, and 1.8 MB of junk
+      # landed under $RDROOT/var/tmp/ while staging nothing useful -- the runtime
+      # resolves the SONAME on the real library path, not that one. Skip $OUT:
+      # anything already inside the ramdisk needs no staging.
+      case "$_p" in "$OUT"/*|"$RDROOT"/*) continue ;; esac
       [ -f "$_p" ] || continue
-      _rel="${_p#/}"
+      # /usr/lib/64 and /lib/64 are SYMLINKS to amd64 in the live root, and
+      # illumos `mkdir -p` FAILS rc=2 ("Exists but is not a directory") when the
+      # LAST component is a symlink-to-directory -- GNU mkdir succeeds, illumos
+      # does not. Under `set -e` that KILLED THE BUILD (vim -> /usr/lib/64/
+      # libncurses.so.5, zpool -> /lib/64/libzfs.so.1 both hit it). Normalise
+      # 64/ -> amd64/ exactly as _copy_lib() above already does, so the parent is
+      # a real directory; ld.so.1 still finds the file through the 64 symlink.
+      _rel=$(echo "${_p#/}" | sed -e 's,^usr/lib/64/,usr/lib/amd64/,' -e 's,^lib/64/,lib/amd64/,')
       [ -f "$RDROOT/$_rel" ] && continue
-      mkdir -p "$RDROOT/$(dirname "$_rel")"
+      mkdir -p "$RDROOT/$(dirname "$_rel")" 2>/dev/null || true
       cp -p "$_p" "$RDROOT/$_rel" 2>/dev/null && printf '%s\n' "$_rel" >> "$OUT/.ldd-added"
     done
   done
