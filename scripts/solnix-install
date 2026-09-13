@@ -356,6 +356,41 @@ zfs create -o canmount=noauto -o mountpoint=/ "$BEDS"
 run_to 30 zfs mount "$BEDS"
 [ -d "$ALTROOT/." ] || die "BE root not mounted at $ALTROOT"
 
+# ⚠️ /nix AND /export/home LIVE OUTSIDE THE BOOT ENVIRONMENT, deliberately.
+# Everything above this point is inside $BEDS, so a dataset created there would be
+# cloned by every `beadm create` and rolled back by every BE rollback. For a Nix
+# system that is actively wrong: the store would be duplicated per BE (gigabytes),
+# a rollback would silently revert the store and orphan user profiles, and nothing
+# would be shared between BEs so each switch re-downloads. NixOS and nixbsd both
+# put /nix on its own dataset for exactly this reason.
+#
+# The point of a shared store is that a BE rollback changes which SYSTEM you boot
+# without destroying the store that every generation references.
+for _ds in nix export export/home; do
+  zfs list -H "$POOL/$_ds" >/dev/null 2>&1 && continue
+  case "$_ds" in
+    nix)         _mp=/nix ;;
+    export)      _mp=/export ;;
+    export/home) _mp=/export/home ;;
+  esac
+  zfs create -o canmount=on -o mountpoint="$_mp" "$POOL/$_ds" \
+    || die "failed to create $POOL/$_ds (needed for the nix store / home dirs)"
+done
+# Mount them under the alt-root so the copy below populates the right datasets.
+for _ds in nix export/home; do
+  _t="$ALTROOT/${_ds#export/}"
+  case "$_ds" in export/home) _t="$ALTROOT/export/home" ;; nix) _t="$ALTROOT/nix" ;; esac
+  mkdir -p "$_t"
+done
+# Verify the store dataset is real and OUTSIDE the BE -- a silent fallback to a
+# plain directory inside the BE is the failure this block exists to prevent.
+zfs list -H -o name,mountpoint "$POOL/nix" >/dev/null 2>&1 \
+  || die "$POOL/nix missing after create"
+case "$(zfs list -H -o name "$POOL/nix" 2>/dev/null)" in
+  "$POOL/ROOT/"*) die "$POOL/nix was created INSIDE the boot environment" ;;
+esac
+log "datasets: $POOL/nix + $POOL/export/home created outside $BEDS"
+
 # ---------------------------------------------------------------------------
 # 3. copy the running root FS onto the target BE (the base world).
 #    The running root is a proven-booting proto-derived world (all 16 gotchas
@@ -661,6 +696,40 @@ fi   # end SELF_INSTALL=0 toplevel-staging block
 # ---------------------------------------------------------------------------
 if [ "$SELF_INSTALL" = 1 ]; then
   log "SELF-INSTALL: skipping generation/switch-tool registration (no nix toplevel)"
+  # ...but DO make the store usable, so the operator can run a real nix-config
+  # switch on the installed system. Without this the machine has a nix BINARY and
+  # no store to use it on, which is what the maintainer hit: nix ran, and there
+  # was nothing it could do. Single-user mode (no daemon) is deliberate -- it is
+  # far less to go wrong on a fresh install, and SMF service plumbing for
+  # nix-daemon is a separate piece of work.
+  mkdir -p "$ALTROOT/nix/var/nix/profiles/per-user/root" \
+           "$ALTROOT/nix/var/nix/gcroots" \
+           "$ALTROOT/nix/var/nix/temproots" \
+           "$ALTROOT/nix/var/nix/db" \
+           "$ALTROOT/nix/store"
+  # Root owns the store in single-user mode; 1775 with the sticky bit matches a
+  # stock Nix install so the daemon can be adopted later without a re-chmod.
+  chown -R 0:0 "$ALTROOT/nix" 2>/dev/null || true
+  chmod 1775 "$ALTROOT/nix/store" 2>/dev/null || true
+  # nix.conf for the INSTALLED system. The live-media copy under /nix-tools224
+  # is not on the path a normal `nix` invocation reads.
+  mkdir -p "$ALTROOT/etc/nix"
+  if [ ! -s "$ALTROOT/etc/nix/nix.conf" ]; then
+    cat > "$ALTROOT/etc/nix/nix.conf" <<'NIXCONF'
+experimental-features = nix-command flakes
+substituters = https://cache.solnix.io https://s3.solnix.io/solnix-cache https://cache.nixos.org
+trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
+# Single-user: no daemon, root owns /nix. build-users-group must be EMPTY or nix
+# refuses to build, looking for a nixbld group that does not exist here.
+build-users-group =
+NIXCONF
+  fi
+  # Gate: a store directory that is not on its own dataset would be cloned by
+  # every `beadm create` and rolled back with the BE, orphaning every profile.
+  case "$(zfs list -H -o name "$POOL/nix" 2>/dev/null)" in
+    "$POOL/nix") log "nix store: $POOL/nix dataset present, single-user store initialised" ;;
+    *) die "$POOL/nix dataset missing -- the store would live inside the BE" ;;
+  esac
 else
 log "registering generation 1 + installing switch tools"
 mkdir -p "$ALTROOT/nix/var/nix/profiles"
