@@ -1013,6 +1013,138 @@ EOF
 # scaffold only; it must never ship on the installed root/AMI. Also disable
 # the live-installer service in the target repo as belt-and-suspenders.
 rm -f "$ALTROOT/etc/solnix-autoinstall" 2>/dev/null || true
+# ---------------------------------------------------------------------------
+# 10b. INTERACTIVE ADMIN ACCOUNT.
+#
+# illumos has no `wheel`. The native equivalents are the `sysadmin` group (gid 14)
+# and RBAC's "Primary Administrator" profile, which prof_attr defines as
+# uid=0;gid=0 -- i.e. genuinely root-equivalent, unlike a bare group membership.
+# We grant BOTH plus `staff` (gid 10, the normal primary group), and add sudo's
+# wheel only if that group happens to exist, since sudo is not in illumos-gate
+# (OpenIndiana packages it separately) while pfexec is native.
+#
+# Skipped entirely when non-interactive: an auto-install has no operator to ask,
+# and silently inventing an account with a guessed password would be worse than
+# none. SOLNIX_ADMIN_USER/SOLNIX_ADMIN_PW allow unattended use explicitly.
+_mkadmin=0
+if [ -n "${SOLNIX_ADMIN_USER:-}" ]; then
+  _au="$SOLNIX_ADMIN_USER"; _apw="${SOLNIX_ADMIN_PW:-}"; _mkadmin=1
+elif [ -t 0 ] && [ -t 1 ]; then
+  echo ""
+  echo "=== Create an administrative user ==========================================="
+  echo "This account gets: primary group staff, secondary sysadmin, and the RBAC"
+  echo "\"Primary Administrator\" profile (root-equivalent via pfexec)."
+  echo "Press Enter with an empty name to skip."
+  while : ; do
+    printf 'Username: '; read -r _au || _au=""
+    [ -z "$_au" ] && break
+    # POSIX-portable name check: illumos useradd rejects names it dislikes only
+    # AFTER doing work, so validate first and re-ask rather than failing late.
+    case "$_au" in
+      [a-z_]*) : ;;
+      *) echo "  must start with a lowercase letter or underscore"; continue ;;
+    esac
+    case "$_au" in
+      *[!a-z0-9_-]*) echo "  only lowercase letters, digits, - and _"; continue ;;
+    esac
+    if [ ${#_au} -gt 32 ]; then echo "  too long (max 32)"; continue; fi
+    if grep -q "^$_au:" "$ALTROOT/etc/passwd" 2>/dev/null; then
+      echo "  $_au already exists on the target"; continue
+    fi
+    # Password twice, never echoed. stty -echo is the portable way here; the trap
+    # restores it even if the operator interrupts, so a Ctrl-C cannot leave the
+    # terminal silently echo-less.
+    _oldstty=$(stty -g 2>/dev/null || true)
+    trap '[ -n "$_oldstty" ] && stty "$_oldstty" 2>/dev/null; echo ""' INT
+    printf 'Password: '; stty -echo 2>/dev/null; read -r _apw || _apw=""; stty echo 2>/dev/null; echo ""
+    printf 'Confirm:  '; stty -echo 2>/dev/null; read -r _apw2 || _apw2=""; stty echo 2>/dev/null; echo ""
+    [ -n "$_oldstty" ] && stty "$_oldstty" 2>/dev/null
+    trap - INT
+    if [ "$_apw" != "$_apw2" ]; then echo "  passwords do not match -- try again"; continue; fi
+    if [ -z "$_apw" ]; then echo "  empty password refused (the account would be unusable over ssh)"; continue; fi
+    if [ ${#_apw} -lt 6 ]; then echo "  too short (illumos passwd requires >= 6)"; continue; fi
+    _mkadmin=1; break
+  done
+fi
+
+if [ "$_mkadmin" = 1 ]; then
+  # SHOW THE PLAN BEFORE DOING IT. An installer that silently creates accounts is
+  # the same class of surprise as one that silently picks a disk.
+  echo ""
+  echo "  About to create on $TARGET:"
+  echo "    username    : $_au"
+  echo "    home        : /export/home/$_au  (on $POOL/export/home, outside the BE)"
+  echo "    shell       : /bin/bash"
+  echo "    primary grp : staff (10)"
+  echo "    secondary   : sysadmin (14)"
+  echo "    RBAC profile: Primary Administrator  (root-equivalent via pfexec)"
+  echo "    password    : set (not shown)"
+  if [ -t 0 ]; then
+    printf '  Proceed? [y/N] '; read -r _yn || _yn=n
+    case "$_yn" in y|Y|yes|YES) : ;; *) echo "  skipped."; _mkadmin=0 ;; esac
+  fi
+fi
+
+if [ "$_mkadmin" = 1 ]; then
+  log "creating admin user $_au"
+  mkdir -p "$ALTROOT/export/home"
+  # Run useradd/passwd AGAINST THE TARGET ROOT (-R), not the live system, so the
+  # account lands on the installed disk. Fall back to direct file edits if -R is
+  # unsupported -- illumos useradd has carried -R for a long time, but a silent
+  # no-op here would produce a machine with no way in.
+  _ua_ok=0
+  if "$ALTROOT/usr/sbin/useradd" -R "$ALTROOT" -m -d "/export/home/$_au" \
+       -s /bin/bash -g staff -G sysadmin "$_au" 2>/dev/null; then
+    _ua_ok=1
+  elif chroot "$ALTROOT" /usr/sbin/useradd -m -d "/export/home/$_au" \
+       -s /bin/bash -g staff -G sysadmin "$_au" 2>/dev/null; then
+    _ua_ok=1
+  fi
+  if [ "$_ua_ok" != 1 ]; then
+    # Documented fallback: append the entries by hand. Verified below either way.
+    _uid=$(awk -F: '$3>=100 && $3<60000 {if ($3>m) m=$3} END {print (m<100?100:m+1)}' \
+           "$ALTROOT/etc/passwd" 2>/dev/null)
+    printf '%s:x:%s:10:%s:/export/home/%s:/bin/bash\n' "$_au" "$_uid" "$_au" "$_au" \
+      >> "$ALTROOT/etc/passwd"
+    printf '%s:*LK*:::::::\n' "$_au" >> "$ALTROOT/etc/shadow"
+    mkdir -p "$ALTROOT/export/home/$_au"
+    chown "$_uid":10 "$ALTROOT/export/home/$_au" 2>/dev/null || true
+    log "useradd -R unavailable; created $_au via direct /etc edits (uid $_uid)"
+  fi
+  # Password: chroot passwd needs a tty, so set the hash directly. openssl is
+  # staged and gives a portable SHA-512 crypt that illumos accepts.
+  _hash=$(printf '%s' "$_apw" | openssl passwd -6 -stdin 2>/dev/null || true)
+  if [ -n "$_hash" ]; then
+    awk -F: -v u="$_au" -v h="$_hash" 'BEGIN{OFS=":"} \
+      $1==u {$2=h} {print}' "$ALTROOT/etc/shadow" > "$ALTROOT/etc/shadow.new" \
+      && mv "$ALTROOT/etc/shadow.new" "$ALTROOT/etc/shadow"
+    chmod 400 "$ALTROOT/etc/shadow"
+  else
+    log "WARNING: could not hash the password; $_au is locked -- set it from a root login"
+  fi
+  # RBAC: Primary Administrator is prof_attr's uid=0;gid=0 entry, so this is real
+  # root-equivalence rather than a group that merely looks privileged.
+  printf '%s::::type=normal;profiles=Primary Administrator\n' "$_au" \
+    >> "$ALTROOT/etc/user_attr"
+  # sudo's wheel only if the group exists (sudo is not in illumos-gate).
+  if grep -q '^wheel:' "$ALTROOT/etc/group" 2>/dev/null; then
+    awk -F: -v u="$_au" 'BEGIN{OFS=":"} $1=="wheel" {$4=($4==""?u:$4","u)} {print}' \
+      "$ALTROOT/etc/group" > "$ALTROOT/etc/group.new" && mv "$ALTROOT/etc/group.new" "$ALTROOT/etc/group"
+  fi
+  # VERIFY, rather than trusting the tools. Each of these has silently no-opped in
+  # this project's history, so the account is checked in the target files.
+  grep -q "^$_au:" "$ALTROOT/etc/passwd" || die "user $_au missing from target /etc/passwd"
+  grep -q "^$_au:" "$ALTROOT/etc/shadow" || die "user $_au missing from target /etc/shadow"
+  grep -q "^$_au:" "$ALTROOT/etc/user_attr" || die "user $_au has no RBAC entry"
+  [ -d "$ALTROOT/export/home/$_au" ] || die "home /export/home/$_au was not created"
+  if [ -n "$_hash" ]; then
+    grep -q "^$_au:\$" "$ALTROOT/etc/shadow" || grep -q "^$_au:[^*!]" "$ALTROOT/etc/shadow" \
+      || die "password hash for $_au did not land in target /etc/shadow"
+  fi
+  log "admin user OK: $_au (staff+sysadmin, Primary Administrator, home on $POOL/export/home)"
+  echo "  Created $_au. Log in and use: pfexec <command>   (or su - root)"
+fi
+
 log "finalizing (export pool)"
 sync
 zfs set canmount=noauto "$BEDS"
@@ -1027,3 +1159,44 @@ log "DONE: solnix installed on $TARGET (pool $POOL, BE $BEDS, generation 1 = $TO
 echo "Detach $TARGET, snapshot it, register an AMI (boot-mode uefi, ena) and boot it,"
 echo "or attach it as the root disk of a new instance. It should boot to"
 echo "multi-user-server with /run-current-system -> $TOPLEVEL."
+
+# ---------------------------------------------------------------------------
+# 12. Offer to reboot or power off.
+#
+# The pool is already exported at this point, so both are safe: there is nothing
+# left to flush and no dataset still mounted. Only offered on a tty -- an
+# auto-install must never reboot a machine out from under whatever drove it, and
+# an EC2/AMI build would lose its own session.
+# ---------------------------------------------------------------------------
+if [ -t 0 ] && [ -t 1 ]; then
+  echo ""
+  echo "=== Installation complete =================================================="
+  echo "Remove the install media before booting from the new system."
+  echo ""
+  echo "  r) reboot now"
+  echo "  h) halt / power off now"
+  echo "  q) quit to the shell (do nothing)"
+  printf 'Choice [r/h/q]: '
+  read -r _fin || _fin=q
+  case "$_fin" in
+    r|R|reboot)
+      echo "Rebooting -- REMOVE THE USB MEDIA NOW or it will boot the installer again."
+      sync
+      # reboot(1m) and poweroff(1m) are argv[0] links to halt (halt.c dispatches on
+      # argv[0]); fall back through the family in case only one name is staged.
+      for _c in /usr/sbin/reboot /sbin/reboot /usr/sbin/shutdown; do
+        [ -x "$_c" ] || continue
+        case "$_c" in *shutdown) exec "$_c" -y -i 6 -g 0 ;; *) exec "$_c" ;; esac
+      done
+      echo "no reboot command found -- use: halt, then power-cycle" >&2 ;;
+    h|H|halt|poweroff)
+      echo "Powering off."
+      sync
+      for _c in /usr/sbin/poweroff /sbin/poweroff /usr/sbin/halt /sbin/halt; do
+        [ -x "$_c" ] && exec "$_c"
+      done
+      echo "no poweroff command found -- power-cycle the machine" >&2 ;;
+    *)
+      echo "Left running. Reboot with: reboot   (or power off with: poweroff)" ;;
+  esac
+fi
