@@ -199,4 +199,19 @@ if [ -n "$_sock" ]; then
   exit 1
 fi
 
+
+# ⚠️ filter-repo / checkout / restore RESET THE WORKTREE. This destroyed a
+# subagent's uncommitted rewrite of pkgs/illumos/gate.nix: filter-repo does not
+# only rewrite history, it resets tracked files to the rewritten HEAD, so every
+# tracked-and-uncommitted change vanished with zero dangling blobs to recover from.
+# UNTRACKED files survived. Warn when tracked modifications are sitting
+# uncommitted, so the next person is not one worktree operation from losing them.
+_dirty=$(git diff --name-only 2>/dev/null | head -5)
+if [ -n "$_dirty" ]; then
+  echo "repo-integrity: NOTE -- uncommitted tracked changes present:" >&2
+  echo "$_dirty" | sed 's/^/  /' >&2
+  echo "  These are destroyed by filter-repo/checkout/restore. Commit before any" >&2
+  echo "  history operation, or keep a copy outside the repo." >&2
+fi
+
 exit "$fail"

@@ -180,3 +180,24 @@ into "no violations". The hard no-world-open rule was in fact held by hand disci
 This is the same shape as several other errors here — the empty serial log indistinguishable from a hang,
 `consconfig_errlevel` inert on a non-DEBUG kernel, a byte-grep read as a driver inventory. **Ask whether
 the check could report failure at all**, and prove it with a negative control before trusting a pass.
+
+## ⚠️ `git filter-repo` RESETS THE WORKTREE — it destroys agents' uncommitted work
+
+The orchestrator ran `filter-repo` to expunge 37 GB of build blobs from history while a subagent was mid-task.
+filter-repo does not only rewrite history: **it resets tracked files to the rewritten HEAD.** The agent's
+rewritten `pkgs/illumos/gate.nix` was tracked-and-uncommitted and was silently reverted. Its two *untracked*
+scripts survived — filter-repo leaves untracked files alone.
+
+**It was unrecoverable.** `git fsck` showed **zero** dangling blobs (filter-repo repacks), and no clone had it
+because it was never committed.
+
+Rules that follow:
+
+1. **Never run `filter-repo`, `checkout -- .`, `restore` or `reset --hard` over the worktree while an agent is
+   running.** Ask it to checkpoint first, commit, *then* operate.
+2. **Commit agents' work as it appears**, which was already the rule — this is the demonstration of why. A
+   written-but-unproven file committed with an honest "not yet verified" note beats a perfect one that a
+   worktree operation eats.
+3. **Tell agents to keep a copy outside the repo** (`/tmp/<name>.WIP`). Untracked-and-external is immune to
+   anything done to git.
+4. `repo-integrity-check.sh` now warns when tracked modifications are uncommitted, naming this hazard.
