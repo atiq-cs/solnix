@@ -122,8 +122,65 @@ instead of failing loudly at build time. So `outputHash` in `gate.nix` is **opt-
 defaults to `null`**, i.e. a plain content-addressed derivation. It should be set only from a
 measured two-build comparison.
 
-Run 2 (identical inputs, forced into a separate store path so the cache cannot short-circuit
-the measurement) — see the "run 2" section appended below once complete.
+Both builds ran to completion. Run 2 used identical inputs, forced into a separate store path
+so the cache could not short-circuit the measurement.
+
+| | |
+|---|---|
+| A | `/nix/store/wn8w5j1pkc9k3zgkq3bsqxk285dqbi7m-illumos-gate-proto` — 24,927 files |
+| B | `/nix/store/3bbc2zcsswjcz9rw2cdk9gch9rcj5zi9-illumos-gate-proto-run2` — 28,069 files |
+
+**Verdict: NOT byte-reproducible.** 24,775 of 24,927 shared files are identical; **152 differ**
+and **3,142 exist only in B**. So `outputHash` stays `null`, and an FOD would be wrong today.
+
+Measured with `scripts/gatefod-repro-diff.sh`, which is itself negative-controlled: it detects
+an extra file, detects same-size content drift, and reports `BYTE-IDENTICAL` on a true copy.
+
+### The mechanisms, established by dumping bytes rather than assuming "timestamps"
+
+**1. 125 of the 152 are the derivation's own fault — a random build path in DWARF.**
+The builder used `mktemp -d "$buildRoot/gate-build.XXXXXX"`. Run A's objects embed
+`/var/tmp/gate-build.VPWgKb/illumos-gate/usr/src/common/avl/...`; run B's embed
+`/var/tmp/gate-build.mPafJD/...` — same length, same everything else:
+
+```
+A:  /   v   a   r   /   t   m   p   /   g   a   t   e   -   b   u   i   l   d   .   V P W g K b
+B:  /   v   a   r   /   t   m   p   /   g   a   t   e   -   b   u   i   l   d   .   m P a f J D
+```
+
+This is **not** an illumos or `nightly` problem — I introduced it. **Fixed:** the build path is
+now a fixed `$buildRoot/solnix-gate-build`, with an explicit `.lock` (a fixed path means two
+concurrent builds would collide) and a clean-before-build. That should make those 125
+reproducible for free; re-measuring is the obvious next step and is *not* claimed here.
+
+**2. 24 are jars and seed databases.** `usr/share/lib/java/dtrace.jar` (155,059 differing
+bytes), `opt/SUNWdtrt/tst/common/java_api/test.jar`, `lib/svc/seed/{global,nonglobal}.db`,
+`usr/lib/libzpool.so.1`. Zip/jar containers embed member mtimes; the SMF seed databases carry
+creation state. These need `SOURCE_DATE_EPOCH` plus jar normalisation.
+
+**3. Three differ in size**, two of them trivially: `slp.jar` and `slpd.jar` are off by exactly
+one byte, and `.nightly-log/nightly.log` is a log (124,737,710 vs 124,737,747 B) — that one is
+expected and could be excluded from the hash.
+
+**4. The 3,142 files only in B are the most interesting result**, and they are not drift:
+they are `usr/lib/iconv/*.so`. Run A's `nightly` died in the CHECK phase before staging them;
+run B got further. **The two runs were not the same build phase-for-phase**, which is a
+determinism problem in its own right and traces back to the missing `msgcc` (hazard 4 below).
+Fixing that is a prerequisite to any hash, independent of the DWARF paths.
+
+⚠️ `DT_SUNW_CHECKSUM` also differs (`elfdump`: `0x823f` vs `0x8240`), but it is a *consequence*
+of the content drift, not an independent cause. I checked rather than counting it as a fifth
+mechanism: **zero** files differ by checksum alone.
+
+### Recommendation
+
+Keep `gate.nix` a **plain (non-FOD) derivation** for now — which is what it is. It is
+content-addressed by its own NAR like any other derivation, it fails loudly at build time
+rather than at download time, and the proto assertions already guarantee the output is real.
+Revisit `outputHash` only after (a) the fixed build path is re-measured, (b) `msgcc` is present
+so both runs reach the same phase, and (c) `SOURCE_DATE_EPOCH` + jar normalisation land. The
+alternative the brief asked about — a non-FOD impure derivation — is exactly the current state
+and is the honest one.
 
 ## 5. Host prereqs — three corrections to `oi-build-host-setup.sh`
 
