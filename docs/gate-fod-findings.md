@@ -1,0 +1,171 @@
+# `pkgs/illumos/gate.nix`: the illumos gate as a real Nix derivation
+
+What was measured, on a fresh `m5.8xlarge` illumos node (`i-0c7f14c1a71bcc8e9`, AMI
+`ami-0cb14e40f9355bd0c`, Nix 2.24.15, `sandbox = false`, `system = x86_64-solaris`).
+
+## The claim ladder, stated honestly
+
+The brief asked for three distinct claims to be kept separate. They are:
+
+| claim | status |
+|---|---|
+| **WRITTEN** FOD | **YES** — `pkgs/illumos/gate.nix`, replacing the proto-ingest |
+| **BUILDING** FOD | **YES** — realised a store path from pinned source; see below |
+| **REPRODUCIBLE** FOD | **see §4** — measured, not assumed |
+
+## 1. The headline: `nightly` DOES tolerate running inside a Nix derivation
+
+The brief's open question was whether the gate can be built inside a derivation at all —
+sandbox, `SYS_spawn`, or absolute-path assumptions in `nightly` were the suspects. **None of
+those is the blocker.** The gate compiled normally under the Nix builder:
+
+```
+/opt/onbld/bin/i386/dmake -m serial install                     (x5 concurrently)
+.../onbld/bin/i386/cw --primary gcc10,/usr/gcc/10/bin/gcc ...    -mcmodel=kernel
+    -c -o debug64/aio.o ../../common/os/aio.c
+.../onbld/bin/i386/ctfconvert -X -l "5.11" debug64/aio.o
+```
+
+That is `onbld`'s own compiler driver invoking gcc-10 on `usr/src/uts/common/os/aio.c` and
+`ctfconvert` generating CTF, all inside the derivation. The precedent cited in the brief
+(`cmakeMinimal` 4.3.4 building from source on illumos under Nix) holds for the gate too.
+
+Result, run 1:
+
+| | |
+|---|---|
+| store path | `/nix/store/wn8w5j1pkc9k3zgkq3bsqxk285dqbi7m-illumos-gate-proto` |
+| `nix-store --query --deriver` | `/nix/store/7p4xnckxli48djlh6i6k3zx85y9qm5g2-illumos-gate-proto.drv` (resolves) |
+| size | **491 MB** (`du -sh`), 24,927 files |
+| `unix` | `platform/i86pc/kernel/amd64/unix`, 2,616,328 B, ELFCLASS64/EM_AMD64 |
+| `genunix` | `kernel/amd64/genunix`, 6,034,616 B, ELFCLASS64/EM_AMD64 |
+| `libc.so.1` | `lib/amd64/libc.so.1`, 2,013,192 B, ELFCLASS64/EM_AMD64 |
+| wall time | ~1 h 55 min (`dmake -m serial`), 13:49Z → 15:44Z |
+
+⚠️ **Size correction:** the brief expected ~1 GB. The proto measures **491 MB**.
+`nix path-info -S` reports 2,143,458,088 B, but that is the **closure** — it includes the
+pinned *source* store path, not just the proto. For the step-3 ramdisk work the number that
+matters is 491 MB.
+
+## 2. The two things that actually blocked it — both environment-shaped
+
+Neither was a sandbox or syscall problem. Both were found by running the build, not by
+reasoning about it.
+
+### Blocker 1: `Usage: su [-] [ username [ arg ... ] ]`
+
+`nightly` died before creating `proto/` at all.
+
+**Mechanism (observed):** `usr/src/tools/env/illumos.sh:217` does `export STAFFER="$LOGNAME"`.
+`nightly`'s `staffer()` function runs `eval su $STAFFER -c \'$arg\'` whenever it is root
+(`ISUSER -eq 0`). **Nix's builder environment contains no `LOGNAME` and no `USER`.** Proved
+with a probe derivation whose entire `env` is:
+
+```
+HOME=/homeless-shelter  NIX_BUILD_CORES  NIX_BUILD_TOP  NIX_LOG_FD  NIX_STORE
+PATH  PWD  SHLVL  TEMP  TEMPDIR  TERM  TMP  TMPDIR  builder  name  out  system
+```
+
+So `STAFFER` is empty, the command becomes `su -c <cmd>`, and illumos `su` reads `-c` as the
+*username*.
+
+**Fix:** export `LOGNAME`/`USER=root` and a real writable `HOME` in the builder (Nix's
+`/homeless-shelter` does not exist), and pin `STAFFER` in the generated `solnix.sh`.
+
+### Blocker 2: `nightly: Error: VERSION not set`
+
+**Mechanism:** `nightly:1645` does `git -C "$CODEMGR_WS" describe --long --all --dirty`, which
+printed `fatal: No tags can describe 'ac45d71fc2b04a5422e72a14b54dd1e746e7be07'`. This is
+**not** a missing `.git` — the build copy has one; I checked rather than assuming. `git
+describe` only considers refs that are *ancestors* of `HEAD`, and a pinned historical rev has
+none (`refs/heads/master` is a *descendant*).
+
+**Fix:** pin `export VERSION=solnix-<rev12>`. This is strictly *better* for reproducibility
+than the git-derived value, which embeds `--dirty` state and whatever refs the local clone
+happens to have. The string lands in `uname -v`.
+
+Also required: `CODEMGR_WS` retargeted from the template's `git rev-parse --show-toplevel` to
+the writable build copy.
+
+## 3. The proto assertion, and its negative control
+
+`nightly` **exits non-zero while still producing a good kernel** — confirmed on our own build,
+where run 1 exited non-zero and the proto was fine. So `|| true` is correct and the exit code
+cannot be the verdict. `gate.nix` therefore *inspects the proto*: `unix`, `genunix` and
+`libc.so.1` must exist **and** be ELFCLASS64/EM_AMD64, and `usr/include` must exist.
+
+`scripts/gatefod-assert-proto.sh` holds the identical logic plus a `selftest`:
+
+```
+complete proto ................ PASS    (positive control)
+empty proto ................... REJECT
+partial proto (no kernel) ..... REJECT
+wrong arch (ELFCLASS32/EM_386)  REJECT
+zero-byte genunix stub ........ REJECT
+selftest: 5/5 as expected
+```
+
+5/5 **on illumos** and 5/5 on the Linux dev box. Two further controls, because fabricated
+inputs alone are weak evidence:
+
+* **Real-data control:** `check /` against the node's live root accepts the actually-running
+  kernel (`unix` 2,328,608 B, `genunix` 4,633,584 B, `libc` 1,992,008 B).
+* **Production control:** the assertion **fired for real, twice**, on the two failed runs
+  above — `FATAL: no proto dir ... the build produced nothing`. Had `gate.nix` trusted
+  `nightly`'s exit code it would have installed an **empty `$out`** both times.
+
+## 4. Reproducibility
+
+An `outputHash` is only meaningful if the output is byte-reproducible, and **a wrong
+`outputHash` is worse than none** — it fails at *download* time with a confusing hash mismatch
+instead of failing loudly at build time. So `outputHash` in `gate.nix` is **opt-in and
+defaults to `null`**, i.e. a plain content-addressed derivation. It should be set only from a
+measured two-build comparison.
+
+Run 2 (identical inputs, forced into a separate store path so the cache cannot short-circuit
+the measurement) — see the "run 2" section appended below once complete.
+
+## 5. Host prereqs — three corrections to `oi-build-host-setup.sh`
+
+Measured on the base AMI, all three absent from the script until now:
+
+1. **`pkg install a b c` aborts the entire batch on one bad pattern.**
+   `developer/versioning/patch` does not exist (the real name is `text/gnu-patch`) and it took
+   all 15 other packages down with it. Install one at a time.
+2. **The base AMI ships no compiler at all.** `/usr/gcc/{10,14}` contain only `lib` —
+   runtime libraries, no `bin/gcc`.
+3. **`userland-incorporation@0.5.11-2025.0.0.31598` rejects most of the gate prereqs** —
+   `gcc-10`, `gnu-make`, `flex`, `bison-38`, `git`, `texinfo`, `cups`, each with
+   `Reason: This version is excluded by installed incorporation`. The brief flagged this for
+   `developer/gnu-binutils`; it is **not** specific to binutils. `pkg update` (new BE +
+   reboot) lifts it, after which every one of those installs cleanly.
+
+## 6. Four hazards worth carrying forward
+
+Each one produced a *confidently wrong* result before being caught.
+
+1. **An ssh mux master makes key auth untestable.** Every candidate key appeared to
+   authenticate because `~/.ssh/config` sets a `ControlPath` and the requests rode an existing
+   master. Only with `-o ControlPath=none -o ControlMaster=no` did the truth appear: **the AMI
+   trusts the OLD REVOKED keypair, not `solnix-lava2`** — the runbook's known caveat, still
+   live. (Re-seeded `authorized_keys`; `solnix-lava2` works now.)
+2. **`pgrep -f`/`pkill -f` match the polling command's own argv.** `pgrep -f gatefod-update`
+   reported `RUNNING` for seven minutes with no such process; worse, `pkill -f gatefod-pkgs`
+   *killed its own ssh shell* before the `nohup` ran, so the update silently never started.
+   Use `ps -ef | grep -c "[g]atefod-..."`.
+3. **illumos `od` zero-pads numeric output; GNU `od` does not.** The same byte reads `2` on
+   Linux and `002` on illumos (`e_machine`: `62` vs `00062`). My ELF check compared those as
+   *strings*, so it passed on the dev box and **failed on the real target** — the *positive*
+   control failed while all four negatives still "passed", reporting 4/5 and looking nearly
+   right. **An all-negative test suite would have reported a clean pass.** Fixed with `-eq`.
+   Note the first hypothesis (nested `printf` octal escapes) was **wrong**; `awk` produced a
+   correct 64-byte header on illumos. Only dumping the actual `od` output on the node found it.
+4. **A tool's absence is not the failure it looks like.** `nightly` reporting `FAILED` with
+   `msgcc` missing does not mean the kernel failed — `uts/` had already staged a good
+   `unix`+`genunix`. That is the whole reason the assertions exist.
+
+## 7. Scope
+
+This is **step 1 only**. Not attempted: proto slicing (`illumos-core-utils`,
+`illumos-oamuser`, …), the closure-built ramdisk, `solnix-install --config`. Those are steps
+2–4 of `docs/design-nixos-iso-methodology.md` §"Order of work", each its own run.

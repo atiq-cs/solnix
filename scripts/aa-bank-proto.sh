@@ -248,8 +248,19 @@ bank)
 
   # Refuse to bank something that is not a proto: the whole point of this
   # artifact is the kernel, and an archive without it is worthless.
-  UNIX="$PROTO/platform/armv8/kernel/aarch64/unix"
-  GENUNIX="$PROTO/kernel/aarch64/genunix"
+  #
+  # ARCH is a parameter, not a fork of this script. It was aarch64-only, and
+  # docs/account-migration-bene-to-lava.md records what forking-per-variant costs
+  # (three drifted copies of one procedure, each stranded). x86_64 stages the kernel
+  # at platform/i86pc/kernel/amd64/unix + kernel/amd64/genunix; aarch64 at
+  # platform/armv8/kernel/aarch64/unix + kernel/aarch64/genunix.
+  #   ARCH=aarch64 (default) | amd64
+  ARCH="${ARCH:-aarch64}"
+  case "$ARCH" in
+    aarch64) UNIX="$PROTO/platform/armv8/kernel/aarch64/unix"; GENUNIX="$PROTO/kernel/aarch64/genunix" ;;
+    amd64)   UNIX="$PROTO/platform/i86pc/kernel/amd64/unix";    GENUNIX="$PROTO/kernel/amd64/genunix" ;;
+    *) echo "FATAL: unknown ARCH=$ARCH (want aarch64 or amd64)" >&2; exit 2 ;;
+  esac
   [ -d "$PROTO" ]   || { echo "FATAL: no such proto dir: $PROTO" >&2; exit 2; }
   [ -f "$UNIX" ]    || { echo "FATAL: no aarch64 unix at $UNIX — refusing to bank" >&2; exit 2; }
   [ -f "$GENUNIX" ] || { echo "FATAL: no genunix at $GENUNIX — refusing to bank" >&2; exit 2; }
@@ -259,7 +270,8 @@ bank)
   [ "$USZ" -gt 100000 ] || { echo "FATAL: unix is only $USZ bytes — refusing" >&2; exit 2; }
   echo "proto gate OK: unix=$USZ bytes, genunix present"
 
-  TAR="$WORKDIR/proto-root_aarch64.tar.gz"
+  TARNAME="${TARNAME:-proto-$(basename "$PROTO").tar.gz}"
+  TAR="$WORKDIR/$TARNAME"
   echo "=== tar+gzip the proto (this is the expensive artifact) ==="
   # Solaris tar: -C works, but read/write stdin needs an explicit `f -`.
   ( cd "$(dirname "$PROTO")" && tar cf - "$(basename "$PROTO")" ) | gzip -6 > "$TAR"
@@ -267,7 +279,7 @@ bank)
 
   MAN="$WORKDIR/MANIFEST.txt"
   {
-    echo "solnix aarch64 illumos build proto — banked artifact"
+    echo "solnix $ARCH illumos build proto — banked artifact"
     echo "created:       $(date -u +%FT%TZ)"
     echo "host:          $(uname -a)"
     echo "proto path:    $PROTO"
@@ -284,7 +296,7 @@ bank)
     echo "RESTORE:"
     echo "  curl -fsSL https://$S3_HOST/$S3_BUCKET/$PREFIX/$(basename "$TAR") | gzip -dc | tar xpf -"
     echo "  (Solaris tar needs the explicit 'f -' to read stdin)"
-    echo "then point aa-make-image.sh PROTO= at the extracted root_aarch64."
+    echo "then point the image builder's PROTO= at the extracted proto root."
   } > "$MAN"
 
   rm -f "$WORKDIR/SHA256SUMS.$$"
