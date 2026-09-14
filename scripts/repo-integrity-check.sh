@@ -214,4 +214,21 @@ if [ -n "$_dirty" ]; then
   echo "  history operation, or keep a copy outside the repo." >&2
 fi
 
+
+# Hardware-console PHOTOS must never be tracked (maintainer instruction): transcribe
+# to text instead, because a pushed blob stays reachable in history. .gitignore has
+# the patterns, but artifacts/install-media/x1-memmap-photo.jpg was committed BEFORE
+# they existed and gitignore never applies retroactively -- the same trap as the
+# .iso/.img pair from usb-image-20260909. Check the tracked set, not the ignore file.
+_pho=$(git ls-files 'docs/**/*.jpg' 'docs/**/*.jpeg' 'docs/**/*.heic' \
+                    'artifacts/install-media/**/*.jpg' \
+                    'artifacts/install-media/**/*.jpeg' \
+                    'artifacts/install-media/**/*.heic' 2>/dev/null | head -5)
+if [ -n "$_pho" ]; then
+  echo "repo-integrity: FAIL -- hardware photo(s) TRACKED:" >&2
+  echo "$_pho" | sed 's/^/  /' >&2
+  echo "  Transcribe to text and untrack: a pushed blob stays in history forever." >&2
+  exit 1
+fi
+
 exit "$fail"
