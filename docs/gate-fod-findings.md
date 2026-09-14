@@ -172,15 +172,67 @@ Fixing that is a prerequisite to any hash, independent of the DWARF paths.
 of the content drift, not an independent cause. I checked rather than counting it as a fifth
 mechanism: **zero** files differ by checksum alone.
 
+### Re-measurement after the fixed-build-path fix (runs 3 and 4)
+
+Two more full builds of the *fixed-path* derivation, run sequentially:
+
+| | |
+|---|---|
+| r3 | `/nix/store/bl8xgamhfjdgryv1c3s3sv2yg8s6qha4-illumos-gate-proto-r3` — 28,069 files |
+| r4 | `/nix/store/6pn68bpyyrriyf7kqxjiaylzvp21r09j-illumos-gate-proto-r4` — 22,242 files |
+
+**The DWARF-path fix worked: differing shared files fell from 152 to 24**, and 22,218 of
+22,242 shared files are now byte-identical. What remains in that 24 is exactly the predicted
+residue — `libc.so.1`, `libc_hwcap{1,2,3}.so.1`, `libzpool.so.1`, the jars
+(`jdtrace.jar`, `test.jar`, `Audit.jar`, off by 1 byte at offset 11 — a zip mtime), the SMF
+seed DBs (`global.db`, `nonglobal.db`, differing at byte 61), `libssp_ns.a` (ar timestamp), and
+the log.
+
+**But the file-count divergence got worse, and it is the real blocker.** Across four builds
+of identical inputs, the count of staged `usr/lib/iconv` files was:
+
+| build | 1 | 2 | r3 | r4 |
+|---|---|---|---|---|
+| files total | 24,927 | 28,069 | 28,069 | 22,242 |
+| `usr/lib/iconv` files | 179 | 3,321 | 3,321 | **0** |
+
+That is **not** monotonic drift and not something the build-path fix influenced — r3 and r4 are
+the *same* derivation. It is bursty, which is this project's documented pattern for flaky
+things, and a two-build sample would have reported either "fixed" (r3 vs run 2, identical
+counts) or "much worse" (r3 vs r4) — **both honestly**.
+
+**What is established:** the two nightly logs are the same length (186,504 lines) and contain
+the *same* 3,789 `usr/lib/iconv` lines and the same `geniconvtbl` activity (257 each), so both
+runs did the same work. In r4 the entire `usr/lib/iconv` **directory is absent** from the
+output, not merely empty. The `libast`/`libcmd` targets that fail for want of `msgcc`
+(`Error 127`) issue `rm -f <proto>/usr/lib/...` against the proto as part of their
+rm-then-install idiom, and `usr/perl5/5.42/bin/i386/perl: not found` fails the same way in the
+`cmd/perl` tree.
+
+**What is NOT established:** the precise trigger that makes those removals win over the
+installs in some runs and not others. I can name the failing subsystem and show it is bursty; I
+cannot yet show the mechanism, and per this project's own rule a plausible story is not a
+diagnosis. **This is the precise next blocker**, and it is upstream of any `outputHash`: no
+hash can be pinned while the *file set* varies by 5,827 entries between runs.
+
 ### Recommendation
 
 Keep `gate.nix` a **plain (non-FOD) derivation** for now — which is what it is. It is
 content-addressed by its own NAR like any other derivation, it fails loudly at build time
 rather than at download time, and the proto assertions already guarantee the output is real.
-Revisit `outputHash` only after (a) the fixed build path is re-measured, (b) `msgcc` is present
-so both runs reach the same phase, and (c) `SOURCE_DATE_EPOCH` + jar normalisation land. The
-alternative the brief asked about — a non-FOD impure derivation — is exactly the current state
-and is the honest one.
+Revisit `outputHash` only after, in this order:
+
+1. **Install `msgcc` and a working `/usr/perl5/5.42/bin/i386/perl`** and re-measure the file
+   count over **>= 4 builds**, not two. This is the blocker; the iconv variance is 5,827 files
+   and no hash survives it. (`msgcc` is the one prereq `oi-build-host-setup.sh` gates rather
+   than installs, and this is the cost of that gap.)
+2. `SOURCE_DATE_EPOCH` + jar/ar normalisation for the 24 residual files.
+3. Only then compute the hash, from builds that already agree.
+
+The alternative the brief asked about — a **non-FOD impure derivation** — is exactly the
+current state, and on this evidence it is the correct one, not a fallback. It fails loudly at
+build time, the proto assertions guarantee the output is real, and it does not pretend to a
+reproducibility that four measured builds refute.
 
 ## 5. Host prereqs — three corrections to `oi-build-host-setup.sh`
 
