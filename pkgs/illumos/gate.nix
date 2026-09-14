@@ -138,10 +138,33 @@ derivation ({
 
     # The gate build WRITES into its source tree (proto/, log/, objects), so the
     # read-only store src must be copied out first.
-    WORK=$(mktemp -d "$buildRoot/gate-build.XXXXXX")
-    GATE="$WORK/illumos-gate"
+    # ⚠️ THE BUILD PATH MUST BE FIXED, NOT RANDOM. This was `mktemp -d
+    # "$buildRoot/gate-build.XXXXXX"`, and the measured cost was the single largest
+    # source of irreproducibility: 125 of 152 differing files in the two-build
+    # comparison differed ONLY because the random directory name is embedded in their
+    # DWARF/comment sections. Verified by dumping the bytes -- run A carried
+    # "/var/tmp/gate-build.VPWgKb/illumos-gate/usr/src/common/avl/..." where run B
+    # carried "/var/tmp/gate-build.mPafJD/...", same length, same everything else.
+    # A fixed path makes those 125 files reproducible for free. It also means two
+    # concurrent builds on one host would collide, which is why the lock is explicit.
+    GATE="$buildRoot/solnix-gate-build/illumos-gate"
+    WORK="$buildRoot/solnix-gate-build"
+    if [ -e "$WORK/.lock" ]; then
+      echo "FATAL: $WORK/.lock exists -- another gate build is using the fixed build" >&2
+      echo "       path. Wait for it, or remove the lock if it is stale." >&2
+      exit 1
+    fi
+    # A previous run's tree would make this build incremental (and its staleness has
+    # caused bogus link failures before), so start clean. find -delete, never a
+    # recursive force remove.
+    if [ -d "$WORK" ]; then
+      find "$WORK" -mindepth 1 -delete 2>/dev/null || true
+    fi
+    mkdir -p "$WORK"
+    : > "$WORK/.lock"
     # HOME=/homeless-shelter does not exist, and gate build tools write dot-files
-    # into $HOME. Point it at a real writable dir inside the build tree.
+    # into $HOME. Point it at a real writable dir inside the build tree (fixed path,
+    # so it cannot leak a random name into anything either).
     export HOME="$WORK/home"
     mkdir -p "$GATE" "$HOME"
     echo "=== copy pinned source -> $GATE ==="
@@ -263,10 +286,11 @@ derivation ({
 
     echo "=== gate proto installed: $(find "$out" -type f | wc -l | tr -d ' ') files ==="
 
-    # Reclaim the build tree. It is tens of GB and $buildRoot is a real filesystem,
-    # so leaving it behind fills the disk after a few builds (and the determinism
-    # measurement deliberately builds twice). find -delete, not a recursive force
-    # remove. Only on success: a failed build's tree is the evidence.
+    # Reclaim the build tree and release the lock. The tree is tens of GB and
+    # $buildRoot is a real filesystem, so leaving it behind fills the disk after a few
+    # builds (and the determinism measurement deliberately builds twice). find -delete,
+    # never a recursive force remove. Only on SUCCESS: a failed build's tree is the
+    # evidence, and its .lock deliberately stays so the failure is noticed.
     find "$WORK" -mindepth 1 -delete 2>/dev/null || true
     rmdir "$WORK" 2>/dev/null || true
   '' ];

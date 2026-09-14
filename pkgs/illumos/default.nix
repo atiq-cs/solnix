@@ -362,6 +362,28 @@ let
     ignoreCollisions = true; # slices are disjoint by design; last wins on clash.
   };
 
+  # ---------------------------------------------------------------------------
+  # PROTO SLICES with a COMPUTED library closure (./slices.nix + ./mk-proto-slice.nix).
+  #
+  # These are the illumos CORE-OS components that docs/image-nixification-gap.md
+  # measured as "NOT available as derivations": df, useradd/passwd,
+  # reboot/halt/poweroff, zpool/zfs, svcadm/svccfg, and the kernel. Each is a real
+  # derivation now.
+  #
+  # ⚠️ HOW THESE DIFFER FROM base-tools ABOVE, which is the whole point: base-tools
+  # uses mkIllumosComponent with `baseToolLibs`, a list of 60 sonames PASTED IN BY
+  # HAND from a scripts/oi-closure.sh run (its own comment says "Re-run that script
+  # if the tool set changes; paste the result here"). The slices below name only
+  # BINARIES; mk-proto-slice walks DT_NEEDED transitively IN THE BUILDER and FAILS
+  # on any soname it cannot resolve. Adding a binary pulls its libraries in
+  # automatically. That removes the "a human forgot a list entry" class which caused
+  # every image failure this campaign.
+  slices = import ./slices.nix {
+    inherit gate externalLibs;
+    libcSlice = libc;
+    rtldSlice = rtld;
+  };
+
   # Modern compiler toolchains (backlog PS-1 clang / PS-4 latest-GCC/GDB, pulled
   # forward): gcc14 + clang + gdb sliced from the OI host IPS install and RUNPATH-
   # relocated into the store, the foundation the package-batch work builds on.
@@ -396,4 +418,7 @@ in
 {
   inherit gate libc rtld ld sys base-tools systemPath externalLibs nix nix224 cached starter;
   inherit (toolchains) gcc14 clang gdb;
+  # the CORE-OS slices, each with a computed DT_NEEDED closure (./slices.nix).
+  inherit slices;
+  inherit (slices) core-utils oamuser halt smf zfs kernel;
 }

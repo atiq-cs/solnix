@@ -81,6 +81,19 @@
           pkgs = pkgsFor "x86_64-solaris";
           modules = [ ./configurations/pgfarm.nix ];
         };
+
+        # The maintainer's x86_64 workstation -- the target of
+        # `solnix-install --flake .#dixi`. See configurations/dixi.nix.
+        #
+        # ⚠️ configurations/dixi.nix deliberately sets NO system.stateVersion and NO
+        # solnix.home.style: neither option exists in this module set, and setting an
+        # undefined option is an eval error. Do not add them here either without first
+        # declaring the option in modules/config/.
+        dixi = solnixSystem {
+          system = "x86_64-solaris";
+          pkgs = pkgsFor "x86_64-solaris";
+          modules = [ ./configurations/dixi.nix ];
+        };
       };
 
       # Per-build-system image packages. The image builder (lib/make-be.nix)
@@ -92,6 +105,10 @@
         # the full system closure (T2.8); realise on the illumos host.
         baseToplevel = self.solnixConfigurations.base.config.system.build.toplevel;
         pgfarmToplevel = self.solnixConfigurations.pgfarm.config.system.build.toplevel;
+        # dixi: the maintainer's workstation. Same eval-split caveat as the others --
+        # this EVALUATES here and only BUILDS on the illumos host, because the gate
+        # proto and the slices carved from it are x86_64-solaris derivations.
+        dixiToplevel = self.solnixConfigurations.dixi.config.system.build.toplevel;
 
         # The pgfarm role's generated artifacts ALONE (build-farm.conf, the
         # run_build.pl driver, the setup oneshot). These are plain text/script

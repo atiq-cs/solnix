@@ -133,6 +133,10 @@ in
     # 3+7 (SMF): enable the stock base-OS services (ntp for time, ipfilter is
     # handled by modules/config/firewall.nix). These are ENABLED via the image's
     # site profile / first-boot activation (svcadm enable), NOT generated manifests.
-    solnix.enableStockServices = [ "network/ntp" ];
+    # ⚠️ The option is solnix.defaults.enableStockServices (declared above, and used
+    # with the full path by modules/config/firewall.nix:63). This line said
+    # `solnix.enableStockServices`, which does not exist -- an undefined-option eval
+    # error that broke EVERY toplevel, not just a new one.
+    solnix.defaults.enableStockServices = [ "network/ntp" ];
   };
 }

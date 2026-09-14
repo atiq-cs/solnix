@@ -10,6 +10,7 @@
 
 [
   ./nixos-compat.nix
+  ./config/assertions.nix
   ./config/edition.nix
   ./config/coreadm.nix
   ./config/libumem.nix

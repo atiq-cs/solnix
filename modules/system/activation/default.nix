@@ -417,7 +417,13 @@ let
   #   $out/kernel, $out/platform -> symlinks into systemPath so a make-be /
   #                           closure walker finds the kernel by a stable name
   #                           (mirrors NixOS's system/toplevel exposing `kernel`).
-  toplevel = pkgs.runCommand "solnix-system-${config.networking.hostName}" { } ''
+  # assertionsChecked is `true` or a throw (modules/config/assertions.nix). Forcing
+  # it in the toplevel's NAME is what makes `assertions` load-bearing rather than
+  # decorative: a false assertion aborts eval before any derivation is produced.
+  # (Interpolating it here rather than in the script body means it is forced during
+  # EVALUATION, so `nix eval .#dixiToplevel` fails too, not just `nix build`.)
+  toplevel = assert config.system.assertionsChecked;
+    pkgs.runCommand "solnix-system-${config.networking.hostName}" { } ''
     mkdir -p $out
     ln -s ${pkgs.solnix.systemPath}                 $out/systemPath
     # sw: the composed userland profile (environment.systemPackages via buildEnv)
