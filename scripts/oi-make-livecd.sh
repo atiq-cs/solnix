@@ -272,7 +272,22 @@ LIVE_TOOLS="
   # openssl to hash the admin password, so a dangling link would mean a LOCKED
   # account on a freshly installed laptop. Stage the versioned tree; the installer
   # still has fallbacks, but the primary path should work.
+  #
+  # ⚠️ THE BINARIES ARE NOT ENOUGH -- MEASURED IN THE SHIPPED IMAGE. Staging only
+  # the two binaries produced an openssl that RESOLVED but could not RUN:
+  #   ld.so.1: openssl: fatal: libssl.so.1.0.0: open failed
+  # usr/bin/openssl points at the 1.0 tree, which is 32-bit ELF, and /lib/
+  # libssl.so.1.0.0 is itself a symlink into usr/openssl/1.0/lib/ -- a SECOND-ORDER
+  # dangling link, in a LIBRARY directory that the command-symlink gate does not
+  # scan. Stage the two 32-bit libraries the 1.0 CLI actually needs, named
+  # individually: staging the whole usr/openssl/*/lib trees cost 30,239 KB (cmake
+  # files, engines, and amd64 copies of libs the ldd closure ALREADY places in
+  # usr/lib/amd64) and blew the occupancy gate at 15,805 KB free. These two files
+  # are 2,497,964 B total and are the whole fix. The openssl-3 CLI needs nothing
+  # here: it resolves via usr/lib/64 -> amd64, which the ldd closure populates
+  # (measured -- it ran correctly in a build that staged no versioned lib dir).
   usr/openssl/1.0/bin/openssl usr/openssl/3/bin/openssl
+  usr/openssl/1.0/lib/libssl.so.1.0.0 usr/openssl/1.0/lib/libcrypto.so.1.0.0
   usr/bin/du usr/bin/echo usr/bin/printf usr/bin/expr usr/bin/dirname
   usr/bin/basename usr/bin/hostname usr/bin/sleep usr/bin/kill usr/bin/chmod
   usr/bin/chown usr/bin/chgrp usr/bin/mount usr/bin/umount usr/bin/sync
@@ -2300,25 +2315,28 @@ for _d in usr/bin usr/sbin sbin usr/gnu/bin usr/has/bin; do
   done
 done
 if [ -n "$_dangle" ]; then
-  # openssl is a KNOWN packaging artifact on this AMI (usr/bin/openssl ->
-  # ../openssl/1.0/bin/openssl, an unshipped versioned tree) and nothing in the
-  # installer calls it, so it warns rather than dies. Anything else is our bug.
-  _fatal=""
-  for _x in $_dangle; do
-    case "$_x" in
-      usr/bin/openssl) echo "WARN: dangling symlink $_x (known packaging artifact, unused)" >&2 ;;
-      *) _fatal="$_fatal $_x" ;;
-    esac
-  done
-  [ -z "$_fatal" ] || die "dangling command symlink(s) in the live root:$_fatal
+  # ⚠️ openssl is NO LONGER EXEMPT. It used to warn here as an unused packaging
+  # artifact (usr/bin/openssl -> ../openssl/1.0/bin/openssl, a versioned tree that
+  # was not staged). It is now LOAD-BEARING: solnix-install's _hash_pw() uses it to
+  # produce the SHA-512 crypt for the root and admin passwords, so a dangling
+  # openssl means a LOCKED ADMIN ACCOUNT on a freshly installed laptop. The
+  # versioned targets are staged explicitly (see the tool list), and if that ever
+  # fails this gate must FAIL THE BUILD rather than warn. Nothing is exempt now:
+  # every staged command symlink must resolve inside the image.
+  die "dangling command symlink(s) in the live root:$_dangle
   Each passes a [ -e ] presence check on the BUILD HOST (which resolves them) and
-  then reports 'not found' inside the image. Stage the TARGET, not just the link."
+  then reports 'not found' inside the image. Stage the TARGET, not just the link.
+  If this names usr/bin/openssl, password hashing would fail and the admin account
+  would be locked -- stage usr/openssl/*/bin/openssl."
 fi
 echo "  dangling-symlink gate OK: every staged command symlink resolves in the image" >&2
 # df is called by solnix-install (root-pool guard + "booted from"), so assert it
 # RESOLVES rather than merely existing -- that is exactly what failed before.
 [ -f "$RDROOT/usr/bin/df" ] || die "/usr/bin/df does not resolve to a real file -- solnix-install's df -n / would fail"
-
+# openssl must RESOLVE AND RUN: _hash_pw() has no pure-shell fallback that can
+# produce a crypt, so this is the difference between a usable admin account and a
+# locked one. -f follows the symlink chain to a real file.
+[ -f "$RDROOT/usr/bin/openssl" ] || die "/usr/bin/openssl does not resolve -- solnix-install could not hash the root/admin password"
 # (iv''') USER CREATION must work on the installed system: the image ships no
 #         personal user, so if these are missing the operator cannot make one.
 for _u in usr/sbin/useradd usr/sbin/usermod usr/sbin/groupadd usr/bin/passwd; do
@@ -2412,7 +2430,7 @@ if [ "$STAGE_NIX" = 1 ] && [ -x "$RDROOT/nix-tools224/bin/nix" ]; then
       _chr=$(command -v chroot 2>/dev/null || echo /usr/sbin/chroot)
       mkdir -p "$RDROOT/devices"
       mount -F lofs -o ro /devices "$RDROOT/devices" 2>/dev/null && _lofs=1 || _lofs=0
-      for _c in /usr/bin/vi /usr/bin/which /usr/bin/less /usr/bin/ldd; do
+      for _c in /usr/bin/vi /usr/bin/which /usr/bin/less /usr/bin/ldd /usr/bin/openssl; do
         [ -f "$RDROOT$_c" ] || continue
         # ⚠️ `|| true` is LOAD-BEARING, not sloppiness. `--version` is not a
         # universal flag: MEASURED inside this image, vi exits 1 and which exits 2
