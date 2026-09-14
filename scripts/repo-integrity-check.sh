@@ -186,4 +186,17 @@ if [ -n "$_big" ]; then
   exit 1
 fi
 
+
+# Stray sockets/FIFOs break `nix flake` eval for the WHOLE repo with
+# "file '...' has an unsupported type" -- Nix copies the tree and cannot handle
+# them. Three leftover QEMU monitor sockets under artifacts/ami-build/install/ did
+# exactly this, and the error names the file but not the cause.
+_sock=$(find . -path ./.git -prune -o \( -type s -o -type p \) -print 2>/dev/null | head -5)
+if [ -n "$_sock" ]; then
+  echo "repo-integrity: FAIL -- socket/FIFO in the tree breaks nix flake eval:" >&2
+  echo "$_sock" | sed 's/^/  /' >&2
+  echo "  These are runtime leftovers (e.g. QEMU monitor sockets). Delete them." >&2
+  exit 1
+fi
+
 exit "$fail"
