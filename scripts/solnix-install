@@ -851,13 +851,44 @@ setprop os_console $TARGET_CONSOLE
 setprop ttya-mode 115200,8,n,1,-
 setprop ttya-ignore-cd true
 setprop ttya-rts-dtr-off false
+${_bootenv_geom}
 EOF
 # "native" means omit the knob entirely and let the loader pick the panel's own
 # mode; any other value pins it. Building the line here keeps the heredoc simple.
-if [ "$TARGET_RESOLUTION" = native ]; then
-  _efires="# efi-max-resolution unset: using the panel's native mode (text will be small)"
+# ⚠️ efi-max-resolution IS NOT A REAL LOADER VARIABLE. I invented it: grepping all
+# of usr/src/boot for efi-max-resolution / efi_max_resolution returns NOTHING, so
+# the line was inert on the media too -- the media only LOOKED right because
+# gop_default_mode() (efi/loader/framebuffer.c:708) picks a mode from EDID, and the
+# installed system gets the same EDID and the same native 3840x2160.
+#
+# The REAL knob is a pair of boot properties the kernel reads directly in
+# os/console.c:226-229 -- screen-#columns / screen-#rows (and screen-width /
+# screen-height in pixels). Those clamp between MINCOLS/MAXCOLS, so an
+# out-of-range value falls back rather than breaking the console.
+#
+# The font is a fixed 8x16 with no larger built-in, so cell counts ARE the font
+# size: 800x600 => 99x37. Set the cell counts, not a resolution string.
+# bootenv.rc is where boot properties belong -- setprop is the mechanism
+# os/console.c reads. loader.conf carries the same values for the loader's own tem.
+case "$TARGET_RESOLUTION" in
+  native) _cols=""; _rows="" ;;
+  *) _cols=$(( ${TARGET_RESOLUTION%x*} / 8 )); _rows=$(( ${TARGET_RESOLUTION#*x} / 16 )) ;;
+esac
+if [ -n "$_cols" ]; then
+  _efires="# console geometry: ${TARGET_RESOLUTION} with the fixed 8x16 font.
+# screen-#columns / screen-#rows are read by os/console.c:226-229. These are the
+# properties that actually work; efi-max-resolution does not exist in the loader.
+screen-#columns=\"$_cols\"
+screen-#rows=\"$_rows\""
 else
-  _efires="efi-max-resolution=\"$TARGET_RESOLUTION\""
+  _efires="# native panel geometry requested: no screen-#columns / screen-#rows set,
+# so the console uses the full EDID mode (tiny on a HiDPI panel)."
+fi
+if [ -n "$_cols" ]; then
+  _bootenv_geom="setprop screen-#columns $_cols
+setprop screen-#rows $_rows"
+else
+  _bootenv_geom="# native geometry: no screen-#columns/#rows setprop"
 fi
 cat > "$ALTROOT/boot/loader.conf" <<EOF
 console="$TARGET_CONSOLE"
@@ -887,6 +918,17 @@ for _cf in "$ALTROOT/boot/loader.conf" "$ALTROOT/boot/solaris/bootenv.rc"; do
 done
 grep -q "^console=\"$TARGET_CONSOLE\"\$" "$ALTROOT/boot/loader.conf" || \
   die "installed console: loader.conf lacks console=\"$TARGET_CONSOLE\""
+# Gate the console GEOMETRY too. The maintainer's installed system reverted to the
+# smallest font after reboot while the media was fine, because the only knob being
+# written (efi-max-resolution) does not exist in the loader at all. A gate on the
+# real property means that cannot recur silently.
+if [ "$TARGET_RESOLUTION" != native ]; then
+  grep -q "^setprop screen-#columns $_cols\$" "$ALTROOT/boot/solaris/bootenv.rc" \
+    || die "bootenv.rc lacks setprop screen-#columns $_cols -- the installed console would use the tiny native mode"
+  grep -q "^setprop screen-#rows $_rows\$" "$ALTROOT/boot/solaris/bootenv.rc" \
+    || die "bootenv.rc lacks setprop screen-#rows $_rows"
+  log "console geometry gate OK: ${_cols}x${_rows} cells written to bootenv.rc"
+fi
 grep -q "^setprop console $TARGET_CONSOLE\$" "$ALTROOT/boot/solaris/bootenv.rc" || \
   die "installed console: bootenv.rc lacks setprop console $TARGET_CONSOLE"
 echo "installed-console gate OK: console=$TARGET_CONSOLE in loader.conf + bootenv.rc" >&2

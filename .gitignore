@@ -126,3 +126,16 @@ artifacts/*.heic
 /*.jpg
 /*.jpeg
 /*.heic
+
+# ⚠️ BUILD SCRATCH -- NEVER COMMIT. artifacts/sparc-xbuild alone held 1,187,182
+# TRACKED files and 37 GB: extracted upstream sources with 24 copies of
+# gengetopt-2.23.tar.xz, 8 of cairo-1.16.0.tar.xz, plus compiled test binaries.
+# Nothing consumes it -- the only reference in the repo EXCLUDES it from integrity
+# checks. It grew a 3.19 GiB pack and is why pushes to Codeberg started failing.
+# The reusable part (build recipes, deduped failure lists, registry rows) is 192 KB
+# and lives in artifacts/sparc-xbuild-recipes/.
+artifacts/sparc-xbuild/
+artifacts/*-xbuild/work*/
+artifacts/*-xbuild/wave*/
+artifacts/*-xbuild/debugbackfill*/
+artifacts/ami-build/install/
