@@ -83,3 +83,30 @@ established, and illumos's userland has circular build-time relationships that `
 **This is the right direction and it is not a quick fix.** The current image ships because it works, not
 because it is right. Every gate added to `oi-make-livecd.sh` this campaign is a symptom of the shortcut, and
 the fix is to delete the path lists entirely — not to guard them better.
+
+---
+
+## CONFIRMED on hardware, 2026-09-13
+
+The maintainer booted image `l2`, found **`/nix` empty** and `ldd /usr/bin/ls` showing no nix-ified paths, and
+asked whether this is really a Nix-style illumos. **It is not.** Measured from the shipped 461,373,440 B ramdisk:
+
+| | |
+|---|---|
+| ELF binaries staged | **1,368**, all hand-copied from the OpenIndiana AMI |
+| `/nix` | **empty** |
+| nix itself | `/nix-tools224` — a relocatable tarball, not a closure |
+| `ldd /usr/bin/ls` | resolves to `/lib/*` because that is where the file came from |
+
+⚠️ **The 74 `/nix/store` paths in the image are residue, not a closure.** I checked what they *are* rather than
+counting them: `hello-2.10`, `chromium-unwrapped-86`, `libXdamage-1.1.5`, `libpfm-4.11.0` — **Linux** packages,
+left as strings in build logs. Counting occurrences would have let me report "136 hits" as if the image were
+nixified. That is the byte-grep-as-inventory error, third occurrence.
+
+⚠️ **And the review had already been done.** `docs/design-nixos-iso-methodology.md` was written *one turn
+earlier*: it records that NixOS's minimal ISO is 21 lines, that its content is `storeContents = [
+system.build.toplevel ]` with the closure **computed**, and that the fix here is *"delete the path lists, not
+guard them better."* Then `l2` was built with all 84 lines of path lists intact.
+
+**`l2` is a good OpenIndiana installer** — the interactive prompts, root-password hardening, `/home` layout and
+autofs fix are real. **It is not solnix-as-Nix**, and describing it as such would be overclaiming.
