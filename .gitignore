@@ -20,6 +20,12 @@ artifacts/sparc-xbuild/**/*.so*
 artifacts/sparc-toolchain/hello*
 artifacts/install-media/*.iso
 artifacts/install-media/*.img
+# solnix-iso-tree.tar.gz -- the unpacked ISO tree, ~150 MB per image and pure build
+# output of make-iso-usb.sh. TEN copies were tracked, ~1.1 GB on disk and a 3.19 GiB
+# pack, which is why pushes started failing. Same mistake as the committed
+# unix-k3.Image, an order of magnitude larger: a regenerable artifact in history that
+# also drifts from its source. The .iso and .img beside it were already ignored.
+artifacts/install-media/**/solnix-iso-tree.tar.gz
 artifacts/install-media/**/boot_archive*
 artifacts/install-media/*graphical*.iso
 artifacts/install-media/*graphical*.img

@@ -172,4 +172,18 @@ if [ -n "$_img" ]; then
   exit 1
 fi
 
+
+# Regenerable image build-output must never be tracked. Ten solnix-iso-tree.tar.gz
+# files (~150 MB each) reached history and grew the pack to 3.19 GiB, which is what
+# started breaking pushes. Same class as the committed unix-k3.Image, 10x the size.
+_big=$(git ls-files 'artifacts/install-media/**/solnix-iso-tree.tar.gz' \
+                    'artifacts/install-media/**/*.iso' \
+                    'artifacts/install-media/**/*.img' 2>/dev/null | head -5)
+if [ -n "$_big" ]; then
+  echo "repo-integrity: FAIL -- regenerable image artifact(s) TRACKED:" >&2
+  echo "$_big" | sed 's/^/  /' >&2
+  echo "  Untrack with git rm --cached; they are rebuilt by make-iso-usb.sh." >&2
+  exit 1
+fi
+
 exit "$fail"
