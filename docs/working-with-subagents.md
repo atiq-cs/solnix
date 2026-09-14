@@ -201,3 +201,25 @@ Rules that follow:
 3. **Tell agents to keep a copy outside the repo** (`/tmp/<name>.WIP`). Untracked-and-external is immune to
    anything done to git.
 4. `repo-integrity-check.sh` now warns when tracked modifications are uncommitted, naming this hazard.
+
+## ⚠️ Never exec-test a slice's binaries blindly — `svc.configd` corrupted a live repository
+
+An agent verifying that sliced binaries actually run executed **every** binary in each slice with no arguments.
+`illumos-smf` contains `lib/svc/bin/svc.configd`, so this started a **second** SMF repository daemon against the
+running system's `/etc/svc/repository.db`:
+
+```
+svc.configd: Fatal error: /etc/svc/repository.db: db error: database is locked
+svc.configd exited with database corrupt error after initialization
+```
+
+The node dropped to System Maintenance Mode. **"An instrument that changes the system is not an observer"** in
+its most literal form — and that rule was already in `COMMON.md`.
+
+The fix is a skip list (`svc.configd`, `svc.startd`, `init`, `reboot`, `halt`, `poweroff`, `zpool`, `devfsadm`,
+`format`) that reports **SKIP separately from EXEC**, so an unrun binary is never folded into a pass. A harness
+that counts "did not run" as "works" is the same failure shape as the seven checks-that-could-not-fail found this
+campaign.
+
+**Generalise:** before running an unknown binary to see whether it *loads*, ask what it does when it *succeeds*.
+`ldd` or `elfdump -d` answers "are its libraries present" without starting a daemon.
