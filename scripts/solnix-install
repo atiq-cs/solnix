@@ -33,8 +33,48 @@ set -u
 PATH=/usr/sbin:/usr/bin:/sbin
 export PATH
 
-TARGET="${1:-}"
-TOPLEVEL="${2:-}"
+# ---------------------------------------------------------------------------
+# ARGUMENT PARSING. Flags are additive: the historical positional form
+# `solnix-install <disk> [toplevel]` still works, so every existing caller and
+# every doc that predates this keeps functioning.
+#
+# The flake form the maintainer asked for:
+#   solnix-install --git https://github.com/gburd/nix-config.git --flake .#dixi
+#
+# ⚠️ HTTPS ON PURPOSE. A git@ URL needs an ssh key the live media does not have --
+# verified that his repo is anonymously clonable over https (info/refs returns 200),
+# so the installer never needs credentials. A git@ URL is accepted but warned about.
+GIT_URL=""; GIT_REF=""; FLAKE_REF=""; HOME_FLAKE=""; DO_HOME=1
+TARGET=""; TOPLEVEL=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --git)        GIT_URL="${2:-}"; shift 2 ;;
+    --ref)        GIT_REF="${2:-}"; shift 2 ;;
+    --flake)      FLAKE_REF="${2:-}"; shift 2 ;;
+    --home)       HOME_FLAKE="${2:-}"; shift 2 ;;
+    --home-base)  SOLNIX_HOME_STYLE=$(case "${2:-}" in /export/home|export) echo export;; *) echo home;; esac)
+                  export SOLNIX_HOME_STYLE; shift 2 ;;
+    --no-home)    DO_HOME=0; shift ;;
+    --disk)       TARGET="${2:-}"; shift 2 ;;
+    -h|--help)
+      cat <<'USAGE'
+usage: solnix-install [--disk <target>] [--flake <ref>#<attr>]
+                      [--git <https-url> [--ref <rev>]]
+                      [--home <ref>#<attr>] [--home-base /home|/export/home]
+                      [--no-home]
+       solnix-install <target-disk> [toplevel]      (legacy positional form)
+
+  --git    clone a config repo first, then resolve --flake inside it.
+           Use an https:// URL: the live media has no ssh key.
+  --flake  the system configuration to build, e.g. .#dixi
+  --home   a home-manager configuration, e.g. .#gburd@dixi
+           (auto-detected from the same flake when omitted)
+USAGE
+      exit 0 ;;
+    --*) echo "unknown option: $1" >&2; exit 2 ;;
+    *)   if [ -z "$TARGET" ]; then TARGET="$1"; else TOPLEVEL="$1"; fi; shift ;;
+  esac
+done
 POOL="${SOLNIX_POOL:-rpool}"       # target pool name; rpool for a real install
 BE="${SOLNIX_BE:-solnix-1}"
 BEDS="$POOL/ROOT/$BE"
@@ -120,6 +160,67 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 [ "$(id -u)" = 0 ] || die "run as root"
+
+# ---------------------------------------------------------------------------
+# 0b. FETCH THE CONFIG AND PROVE THE ATTR EXISTS -- before touching any disk.
+#
+# The maintainer's step 3 is "ensure the .#dixi profile exists". Doing that BEFORE
+# anything destructive is the point: a typo'd attr must fail with a list of what IS
+# available, not half an install.
+if [ -n "$GIT_URL" ]; then
+  case "$GIT_URL" in
+    git@*|ssh://*)
+      echo "WARNING: $GIT_URL needs an ssh key, and the install media has none." >&2
+      echo "         Use the https:// form, e.g. https://github.com/<u>/<r>.git" >&2 ;;
+  esac
+  command -v git >/dev/null 2>&1 || die "git is not on this media; cannot use --git"
+  CFGDIR="${SOLNIX_CFGDIR:-/var/tmp/solnix-config}"
+  # Move a previous clone aside rather than deleting it: on a live installer the
+  # operator may be retrying after a failure and the old tree can hold clues.
+  [ -d "$CFGDIR" ] && mv "$CFGDIR" "$CFGDIR.prev.$$" 2>/dev/null
+  log "cloning $GIT_URL"
+  if [ -n "$GIT_REF" ]; then
+    git clone --quiet "$GIT_URL" "$CFGDIR" || die "git clone failed: $GIT_URL"
+    ( cd "$CFGDIR" && git checkout --quiet "$GIT_REF" ) || die "git checkout $GIT_REF failed"
+  else
+    # --depth 1 keeps a slow USB-ethernet link honest; flakes need no history.
+    git clone --quiet --depth 1 "$GIT_URL" "$CFGDIR" || die "git clone failed: $GIT_URL"
+  fi
+  [ -f "$CFGDIR/flake.nix" ] || die "$GIT_URL has no flake.nix at its root"
+  log "cloned to $CFGDIR ($(cd "$CFGDIR" && git rev-parse --short HEAD 2>/dev/null))"
+  # A bare `.#attr` is relative to the CLONE, not to $PWD.
+  case "$FLAKE_REF" in .#*) FLAKE_REF="$CFGDIR#${FLAKE_REF#.#}" ;; esac
+  case "$HOME_FLAKE" in .#*) HOME_FLAKE="$CFGDIR#${HOME_FLAKE#.#}" ;; esac
+fi
+
+if [ -n "$FLAKE_REF" ]; then
+  command -v nix >/dev/null 2>&1 || die "nix is not on this media; cannot use --flake"
+  _fl="${FLAKE_REF%%#*}"; _at="${FLAKE_REF#*#}"
+  log "resolving $_at in $_fl"
+  # Try the solnix analog first, then the NixOS name, so either repo layout works:
+  # solnix owns solnixConfigurations; a nix-config may own nixosConfigurations.
+  _drv=""; _found=""
+  for _set in solnixConfigurations nixosConfigurations; do
+    if _drv=$(nix eval --raw "${_fl}#${_set}.\"${_at}\".config.system.build.toplevel.drvPath" 2>/dev/null) \
+       && [ -n "$_drv" ]; then _found="$_set"; break; fi
+    _drv=""
+  done
+  if [ -z "$_drv" ]; then
+    echo "" >&2
+    echo "FATAL: no system configuration named '$_at' in $_fl" >&2
+    echo "" >&2
+    for _set in solnixConfigurations nixosConfigurations homeConfigurations; do
+      echo "  $_set:" >&2
+      nix eval --raw "${_fl}#${_set}" --apply \
+        'x: builtins.concatStringsSep "\n" (builtins.attrNames x)' 2>/dev/null \
+        | sed 's/^/    /' >&2 || echo "    (none)" >&2
+    done
+    echo "" >&2
+    die "nothing to install -- refusing to touch ${TARGET:-the disk}"
+  fi
+  log "attr gate OK: ${_found}.\"$_at\" -> $_drv"
+fi
+
 # ⚠️ With no argument this used to print only a usage string, which reads on a
 # console as "no disks listed" -- the operator cannot act on it. List what is
 # actually enumerated, and name the boot medium so it is obvious which NOT to pick.
