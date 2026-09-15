@@ -30,8 +30,30 @@
 # Reuses the illumos gotchas learned in switch-to-configuration: ln -sfn follows
 # (use rm+ln), no readlink(1) (use ls -l|sed), cp dir tree = `cp -R -P` no slash.
 set -u
+# Deliberately minimal PATH: this runs in a bare proto world and must not pick up
+# whatever a build host happens to have.
 PATH=/usr/sbin:/usr/bin:/sbin
+# ...but --flake and --git need `nix` and `git`, and on real install media those are
+# NOT in /usr/bin. The bootstrap Nix installs relocatably to /nix-tools224 (and the
+# older classic one to /nix-tools), and the installed system's own nix lives in the
+# system profile. Append those, so `command -v nix` finds it instead of dying with
+# "nix is not on this media" on a machine that plainly has nix. APPEND, not prepend:
+# a store-resident nix on the installed system should still win over a bootstrap one.
+for _extra in /nix-tools224/bin /nix-tools/bin /nix/var/nix/profiles/default/bin \
+              /run/current-system/sw/bin /usr/gnu/bin; do
+  [ -d "$_extra" ] && PATH="$PATH:$_extra"
+done
 export PATH
+# The bootstrap Nix tarball needs its own runtime libs and cert bundle; without
+# these `nix` execs and then dies on a missing libstdc++ or an unverifiable TLS
+# cert, which reads as a network failure rather than a setup one.
+[ -d /nix-tools224/runtime-lib ] && \
+  LD_LIBRARY_PATH_64="/nix-tools224/runtime-lib${LD_LIBRARY_PATH_64:+:$LD_LIBRARY_PATH_64}" && \
+  export LD_LIBRARY_PATH_64
+[ -f /nix-tools224/ca-bundle.crt ] && [ -z "${NIX_SSL_CERT_FILE:-}" ] && \
+  NIX_SSL_CERT_FILE=/nix-tools224/ca-bundle.crt && export NIX_SSL_CERT_FILE
+[ -d /nix-tools224/etc/nix ] && [ -z "${NIX_CONF_DIR:-}" ] && \
+  NIX_CONF_DIR=/nix-tools224/etc/nix && export NIX_CONF_DIR
 
 # ---------------------------------------------------------------------------
 # ARGUMENT PARSING. Flags are additive: the historical positional form
@@ -51,7 +73,10 @@ while [ $# -gt 0 ]; do
     --git)        GIT_URL="${2:-}"; shift 2 ;;
     --ref)        GIT_REF="${2:-}"; shift 2 ;;
     --flake)      FLAKE_REF="${2:-}"; shift 2 ;;
-    --home)       HOME_FLAKE="${2:-}"; shift 2 ;;
+    # --home-manager is the spelling in the maintainer's own invocation; --home is
+    # the historical one. Both mean the same thing, and an unrecognised option here
+    # exits 2, so accepting only one of them would fail the documented command line.
+    --home|--home-manager) HOME_FLAKE="${2:-}"; shift 2 ;;
     --home-base)  SOLNIX_HOME_STYLE=$(case "${2:-}" in /export/home|export) echo export;; *) echo home;; esac)
                   export SOLNIX_HOME_STYLE; shift 2 ;;
     --no-home)    DO_HOME=0; shift ;;
@@ -67,7 +92,8 @@ usage: solnix-install [--disk <target>] [--flake <ref>#<attr>]
   --git    clone a config repo first, then resolve --flake inside it.
            Use an https:// URL: the live media has no ssh key.
   --flake  the system configuration to build, e.g. .#dixi
-  --home   a home-manager configuration, e.g. .#gburd@dixi
+  --home | --home-manager
+           a home-manager configuration, e.g. .#gburd@dixi
            (auto-detected from the same flake when omitted)
 USAGE
       exit 0 ;;
@@ -148,6 +174,9 @@ fi
 # pre-existing pool (e.g. the running root).
 PREEXISTING_POOLS=" $(zpool list -H -o name 2>/dev/null | tr '\n' ' ') "
 cleanup() {
+  # The encryption passphrase is written to a temp keyfile so `zfs create` can read
+  # it non-interactively; it must not survive this script under any exit path.
+  [ -n "${ENC_KEYFILE:-}" ] && rm -f "$ENC_KEYFILE" 2>/dev/null
   umount "$ALTROOT/esp" 2>/dev/null || true
   zfs unmount "$BEDS" 2>/dev/null || zfs unmount -f "$BEDS" 2>/dev/null || true
   for _p in "$POOL" $(zpool list -H -o name 2>/dev/null); do
@@ -167,6 +196,101 @@ trap cleanup EXIT INT TERM
 # The maintainer's step 3 is "ensure the .#dixi profile exists". Doing that BEFORE
 # anything destructive is the point: a typo'd attr must fail with a list of what IS
 # available, not half an install.
+# ---------------------------------------------------------------------------
+# 0a. INTERNET CHECK -- BEFORE the clone, because the clone is the first thing
+#     that needs it and "git clone failed" is a far worse diagnostic than this.
+#
+# TWO SEPARATE QUESTIONS, REPORTED SEPARATELY, because the fixes differ:
+#   does DNS resolve?  -> a resolver / DHCP problem
+#   does HTTPS fetch?  -> a routing / proxy / TLS problem
+# A check that only pings, or only resolves, PASSES on a box that cannot fetch --
+# which is the failure that matters here, since every later step fetches. So this
+# does a real HTTPS GET of a known-tiny, known-stable document and then requires
+# the BODY to look like that document. That is what makes a captive portal fail:
+# a portal answers 200 with an HTML login page, and a bare exit-code check would
+# call that success.
+#
+# WARNING: ON THE X1 THIS IS USB-ETHERNET OR IT IS NOTHING, and the failure text
+# below says so deliberately. There is no working wifi on this machine under
+# illumos and no prospect of any: the Intel AX2xx has no illumos driver, no
+# OpenSolaris-family fork has one (illumos-gate, omnios, joyent and nexenta all
+# checked -- the newest Intel support is the iwn/iwp 6000-series era and no fork
+# claims 0x2723/0x2725/0x02f0), and the OpenBSD iwx port was abandoned after
+# measuring that it needs a BSD network-interface layer illumos never had.
+# Telling the operator to "check the network" invites hours on wifi that cannot
+# ever work, so the message names the dongle instead.
+check_internet() {
+  _probe_url="${SOLNIX_NET_PROBE:-https://cache.nixos.org/nix-cache-info}"
+  _probe_host=$(echo "$_probe_url" | sed -e 's,^[a-z]*://,,' -e 's,/.*,,')
+  _dns_ok=0; _fetch_ok=0
+
+  # 1. DNS. getent is in the proto; nslookup is the fallback.
+  if command -v getent >/dev/null 2>&1; then
+    getent hosts "$_probe_host" >/dev/null 2>&1 && _dns_ok=1
+  fi
+  if [ "$_dns_ok" = 0 ] && command -v nslookup >/dev/null 2>&1; then
+    nslookup "$_probe_host" >/dev/null 2>&1 && _dns_ok=1
+  fi
+
+  # 2. A REAL FETCH, with a content assertion. run_to caps it so a black-holed
+  #    route cannot hang the installer (curl's own --max-time is belt-and-braces).
+  if command -v curl >/dev/null 2>&1; then
+    _body=$(run_to 40 curl -fsS --max-time 25 "$_probe_url" 2>/dev/null)
+  elif command -v wget >/dev/null 2>&1; then
+    _body=$(run_to 40 wget -qO- --timeout=25 "$_probe_url" 2>/dev/null)
+  else
+    log "neither curl nor wget on this media -- cannot verify internet access"
+    return 0   # do not block; the clone will fail with its own message
+  fi
+  case "$_body" in *StoreDir*|*Priority*) _fetch_ok=1 ;; esac
+
+  if [ "$_fetch_ok" = 1 ]; then
+    if [ "$_dns_ok" = 1 ]; then
+      log "internet OK: DNS resolved $_probe_host and the HTTPS fetch returned a real cache-info document"
+    else
+      log "internet OK: HTTPS fetch worked, but DNS lookup of $_probe_host did NOT -- check /etc/hosts or a stale resolver"
+    fi
+    return 0
+  fi
+
+  echo "" >&2
+  echo "=== NO INTERNET ACCESS =====================================================" >&2
+  if [ "$_dns_ok" = 1 ]; then
+    echo "  DNS RESOLVES $_probe_host but the HTTPS FETCH FAILED." >&2
+    echo "  Name service works; the route or TLS does not. Check:" >&2
+    echo "    netstat -rn                 # is there a default route?" >&2
+    echo "    ping -s 1.1.1.1 56 2        # does anything leave the machine?" >&2
+  else
+    echo "  DNS COULD NOT RESOLVE $_probe_host, and the fetch FAILED." >&2
+    echo "    ipadm show-addr             # did any interface get an address?" >&2
+    echo "    cat /etc/resolv.conf        # is there a nameserver at all?" >&2
+  fi
+  echo "" >&2
+  echo "  THIS IS ALMOST CERTAINLY THE USB-ETHERNET ADAPTER, NOT WIFI." >&2
+  echo "  There is no working wifi on this hardware under illumos and no driver" >&2
+  echo "  exists in ANY OpenSolaris-family fork for the Intel AX2xx. Do not spend" >&2
+  echo "  time configuring wifi -- it cannot be made to work. Check the dongle:" >&2
+  echo "    dladm show-phys             # is the adapter attached at all?" >&2
+  echo "    dladm show-link" >&2
+  echo "  illumos ships axf (ASIX AX88172/88178/88772), udmf (Davicom DM9601E)," >&2
+  echo "  upf (Prolific) and urf (Realtek RTL8150) -- all Fast Ethernet, and NONE" >&2
+  echo "  supports RTL8153, which is what most modern dongles are. If dladm lists" >&2
+  echo "  nothing, the adapter is unsupported; an ASIX AX88772 one is the safe buy." >&2
+  echo "" >&2
+  echo "  SOLNIX_SKIP_NET_CHECK=1 proceeds anyway (later fetches will just fail)." >&2
+  return 1
+}
+
+# Only gate on the network when something actually needs it. A purely local
+# install (positional toplevel, no --git/--flake) must still work offline.
+if [ -n "$GIT_URL" ] || [ -n "$FLAKE_REF" ]; then
+  if [ -n "${SOLNIX_SKIP_NET_CHECK:-}" ]; then
+    log "internet check SKIPPED (SOLNIX_SKIP_NET_CHECK set)"
+  else
+    check_internet || die "no internet access -- see above. NOTHING has been written to any disk."
+  fi
+fi
+
 if [ -n "$GIT_URL" ]; then
   case "$GIT_URL" in
     git@*|ssh://*)
@@ -219,6 +343,67 @@ if [ -n "$FLAKE_REF" ]; then
     die "nothing to install -- refusing to touch ${TARGET:-the disk}"
   fi
   log "attr gate OK: ${_found}.\"$_at\" -> $_drv"
+fi
+
+# ---------------------------------------------------------------------------
+# 0c. BUILD THE TOPLEVEL FROM THE FLAKE (step 7, the build half).
+#
+# This is what replaces the cpio path lists: instead of enumerating files to copy,
+# we realise a store path whose CLOSURE is the system, and later copy that closure.
+# The copy + activate halves are steps 4v and 7 further down; this part only has to
+# produce a toplevel and prove it looks like one.
+#
+# WARNING: THE ATTR GATE ABOVE PROVED THE ATTR EXISTS, NOT THAT IT BUILDS. Those are
+# different claims and this campaign has conflated them before. The gate ran
+# `nix eval ...drvPath`, which INSTANTIATES; this runs `nix build`, which REALISES.
+# An attr can instantiate and then fail to build -- measured on this very repo,
+# where the dixi toplevel instantiates and its external-libs derivation then dies
+# on a missing libxml2.so.16. So the build gets its own error path and its own
+# message, and a build failure must never leave a half-written disk: this runs
+# BEFORE the disk is touched, which is the whole reason it lives up here.
+if [ -n "$FLAKE_REF" ] && [ -z "$TOPLEVEL" ]; then
+  log "building the system toplevel from $FLAKE_REF (this is the long step)"
+  _fl="${FLAKE_REF%%#*}"; _at="${FLAKE_REF#*#}"
+  # The attr set was determined by the gate above ($_found); reuse it rather than
+  # guessing again, so build and gate cannot disagree about what they resolved.
+  _set="${_found:-solnixConfigurations}"
+  _outlink="/var/tmp/solnix-toplevel-$$"
+  if run_to "${SOLNIX_BUILD_TIMEOUT:-14400}" nix build \
+       "${_fl}#${_set}.\"${_at}\".config.system.build.toplevel" \
+       --out-link "$_outlink" 2>&1 | tail -40; then
+    TOPLEVEL=$(_readlink "$_outlink" 2>/dev/null || true)
+  fi
+  if [ -z "$TOPLEVEL" ] || [ ! -d "$TOPLEVEL" ]; then
+    echo "" >&2
+    echo "The attr ${_set}.\"$_at\" EXISTS (the gate above proved that) but its" >&2
+    echo "toplevel FAILED TO BUILD. Those are different claims; only the build" >&2
+    echo "failed. Nothing has been written to any disk." >&2
+    echo "" >&2
+    echo "Re-run the build by hand to see the full log:" >&2
+    echo "  nix build ${_fl}#${_set}.\\\"${_at}\\\".config.system.build.toplevel -L" >&2
+    die "toplevel build failed"
+  fi
+  log "toplevel built: $TOPLEVEL"
+
+  # Assert it LOOKS like a system before we start erasing a disk for it. Each of
+  # these has been absent in a real toplevel at some point in this repo's history,
+  # and every one of them is load-bearing at boot or at switch time.
+  _tl_missing=""
+  for _need in activate systemPath bin/switch-to-configuration; do
+    [ -e "$TOPLEVEL/$_need" ] || _tl_missing="$_tl_missing $_need"
+  done
+  if [ -n "$_tl_missing" ]; then
+    echo "toplevel $TOPLEVEL is missing:$_tl_missing" >&2
+    echo "It built, but it is not a bootable system -- refusing to install it." >&2
+    die "incomplete toplevel"
+  fi
+  # The kernel specifically: a toplevel with no unix/genunix cannot boot, and the
+  # failure would appear only as the loader saying "Failed to find bootable
+  # partition" long after the disk was erased.
+  for _need in systemPath/platform/i86pc/kernel/amd64/unix systemPath/kernel/amd64/genunix; do
+    [ -s "$TOPLEVEL/$_need" ] || die "toplevel has no $_need -- it cannot boot; refusing to install"
+  done
+  log "toplevel gate OK: activate + switch-to-configuration + unix + genunix all present"
 fi
 
 # ⚠️ With no argument this used to print only a usage string, which reads on a
@@ -439,7 +624,17 @@ log "creating pool $POOL on ${TARGET}s1 + BE dataset $BEDS"
 # bootable partition" (loader gets the right bootfs but can't read the kernel/
 # boot_archive from the BE) is under investigation -- likely the SELF-INSTALL BE
 # /platform layout. TODO: inspect installed BE via `zpool import -R /mnt` on illumos.
-run_to 60 zpool create -f -d -o altroot="$ALTROOT" -o cachefile=none \
+# WARNING: feature@encryption must be enabled AT CREATE TIME if any dataset will
+# be encrypted. On a `-d` pool it is NOT on by default and a later
+# `zfs create -o encryption=...` fails with "Encryption feature not enabled"
+# (measured, and used as this feature's negative control). Enabling the feature
+# does NOT encrypt anything by itself and does NOT affect bootability: the loader
+# only rejects features it cannot READ, and it lists com.datto:encryption in
+# features_for_read[]. The root/BE datasets stay plaintext regardless -- see the
+# encryption block above for why that is not negotiable.
+_encfeat=""
+[ "$ENCRYPT_MODE" != none ] && _encfeat="-o feature@encryption=enabled"
+run_to 60 zpool create -f -d $_encfeat -o altroot="$ALTROOT" -o cachefile=none \
   -O compression=on -O atime=off -m none "$POOL" "/dev/dsk/${TARGET}s1" || die "zpool create failed"
 # WHY the explicit feature list (not just -d): on modern illumos `zpool create`
 # AUTO-ACTIVATES com.delphix:log_spacemap (needed for the log spacemap) even under
@@ -510,6 +705,155 @@ fi
 [ -n "$TARGET_RESOLUTION" ] || TARGET_RESOLUTION=800x600
 log "console text size: $TARGET_RESOLUTION"
 
+# ---------------------------------------------------------------------------
+# ENCRYPTION. MEASURED ON THIS PLATFORM BEFORE BEING OFFERED, and the measurement
+# is why the root pool is NOT an option.
+#
+# WHAT WORKS (measured on ami-0cb14e40f9355bd0c, illumos ZFS):
+#   zpool create -O encryption=aes-256-gcm -O keyformat=passphrase  SUCCEEDS.
+#   keystatus becomes available, data reads back, children inherit, and
+#   load-key/unload-key round-trip. Algorithms: aes-{128,192,256}-{ccm,gcm}.
+#   Negative control: encryption=aes-999-bogus is REJECTED, so the capability
+#   test can fail and is therefore worth something.
+#   On a `-d` (loader-compatible) pool it additionally needs
+#   `-o feature@encryption=enabled`; negative control without it:
+#   "cannot create: Encryption feature not enabled".
+#
+# WHY THE ROOT/BE IS REFUSED ANYWAY -- THE LOADER CANNOT DECRYPT:
+#   usr/src/boot/.../zfsimpl.c lists "com.datto:encryption" in features_for_read[]
+#   (line ~125), so the loader ACCEPTS an encrypted pool as readable. But that file
+#   contains NO decryption code whatsoever: grep -E 'aes|gcm|pbkdf|hkdf|zio_crypt|
+#   decrypt' over all 3805 lines matches nothing, and the only crypt-ish token is
+#   the substring inside that allowlist string. loader64.efi and gptzfsboot carry
+#   SHA256/SHA512 for CHECKSUMS only -- no AES, no GCM, no key derivation.
+#
+#   WORSE, AND THIS IS THE POINT: there is no error path either. The loader has no
+#   ENCRYPT/encrypted/crypt_keydata handling at all, so it does not detect and
+#   refuse an encrypted BE -- it reads ciphertext as though it were data. And
+#   `zpool set bootfs=<encrypted dataset>` is ACCEPTED by ZFS (control: a plaintext
+#   BE on the same pool is also accepted, so that is not a quirk of the test).
+#
+#   So EVERY layer says yes -- zfs(8) says encryption is supported, zpool(8)
+#   accepts the bootfs, the loader accepts the pool -- and the machine simply does
+#   not boot, with no diagnostic anywhere. That is the worst failure shape there
+#   is, and it is why this installer will not build it even on request. An
+#   operator who read "illumos ZFS supports native encryption" is not wrong; the
+#   loader just silently disagrees.
+#
+# WHAT IS OFFERED: encryption of the datasets OUTSIDE the boot environment --
+# /home (where the operator's data actually is) and optionally /nix. The loader
+# never reads either one; only the kernel does, after it is already running.
+#
+# WARNING: /home ENCRYPTION AND BOOT. A passphrase-encrypted dataset needs its key
+# loaded before it can mount, and nothing in the boot path can prompt for it. So
+# the honest behaviour, stated to the operator at install time rather than
+# discovered later: the pool imports, the system boots to a login, and /home is
+# NOT mounted until someone runs `zfs load-key -a && zfs mount -a`. This installer
+# does NOT pretend to solve that with an SMF service -- an SMF method has no
+# controlling terminal to read a passphrase from.
+ENCRYPT_MODE="${SOLNIX_ENCRYPT:-}"
+
+# Capability probe. Ask the PLATFORM, do not assume from a version number: the
+# question is whether this ZFS accepts the property at all.
+zfs_can_encrypt() {
+  # `zpool upgrade -v` lists supported features by name; encryption is one row.
+  zpool upgrade -v 2>/dev/null | grep -q '^encryption' && return 0
+  # Fallback: does the zfs(8) property parser know the value? A bad value is
+  # rejected with a message that ENUMERATES the valid ones.
+  zfs create -o encryption=aes-256-gcm -n nonexistent/probe 2>&1 | grep -q 'aes-256-gcm' && return 0
+  return 1
+}
+
+if [ -z "$ENCRYPT_MODE" ] && [ -t 0 ] && [ -t 1 ]; then
+  if zfs_can_encrypt; then
+    echo ""
+    echo "=== Encryption =============================================================="
+    echo "  ZFS native encryption (aes-256-gcm, passphrase) is available on this"
+    echo "  platform -- MEASURED, not assumed."
+    echo ""
+    echo "  It is offered for /home and /nix ONLY. The root filesystem CANNOT be"
+    echo "  encrypted, and the reason is worth reading:"
+    echo ""
+    echo "    The boot loader accepts an encrypted pool but has NO decryption code"
+    echo "    at all, and no error path either -- it reads ciphertext as data. ZFS"
+    echo "    will happily let you set bootfs to an encrypted dataset. Every layer"
+    echo "    says yes and the machine then does not boot, with no message anywhere."
+    echo ""
+    echo "  Note: an encrypted /home does NOT auto-mount at boot -- nothing in the"
+    echo "  boot path can ask for a passphrase. You will run, after logging in:"
+    echo "      pfexec zfs load-key -a && pfexec zfs mount -a"
+    echo ""
+    echo "  1) no encryption                 (default)"
+    echo "  2) encrypt /home"
+    echo "  3) encrypt /home and /nix        (/nix is public store data; slower,"
+    echo "                                    and it must be unlocked before nix works)"
+    printf 'Choice [1-3] (default 1): '
+    read -r _ec || _ec=1
+    case "$_ec" in
+      2) ENCRYPT_MODE=home ;;
+      3) ENCRYPT_MODE=home+nix ;;
+      *) ENCRYPT_MODE=none ;;
+    esac
+  else
+    log "ZFS native encryption is NOT available on this platform -- offering nothing rather than a flag that silently does nothing"
+    ENCRYPT_MODE=none
+  fi
+fi
+[ -n "$ENCRYPT_MODE" ] || ENCRYPT_MODE=none
+
+# Refuse the root-pool case LOUDLY, including via the env var, quoting the
+# mechanism. Someone will try it; they deserve the reason, not a shrug.
+case "$ENCRYPT_MODE" in
+  root|rpool|all|everything)
+    echo "" >&2
+    echo "REFUSING to encrypt the root pool / boot environment." >&2
+    echo "" >&2
+    echo "  This is not caution -- it is measured. The illumos boot loader" >&2
+    echo "  (usr/src/boot/.../zfsimpl.c) lists com.datto:encryption in" >&2
+    echo "  features_for_read[] so it ACCEPTS the pool, but the file contains NO" >&2
+    echo "  decryption code and NO error path for encrypted datasets: it reads" >&2
+    echo "  ciphertext as though it were data. loader64.efi carries SHA256/SHA512" >&2
+    echo "  for checksums only -- no AES, no GCM, no key derivation." >&2
+    echo "" >&2
+    echo "  And 'zpool set bootfs=<encrypted dataset>' is ACCEPTED by ZFS, so" >&2
+    echo "  nothing stops you building this by hand. The result is an unbootable" >&2
+    echo "  disk with no diagnostic at any layer." >&2
+    echo "" >&2
+    die "use SOLNIX_ENCRYPT=home (or home+nix) to encrypt data datasets instead"
+    ;;
+  none|home|home+nix) : ;;
+  *) die "SOLNIX_ENCRYPT must be none|home|home+nix (got '$ENCRYPT_MODE')" ;;
+esac
+
+# Collect the passphrase now, once, before any destructive step -- so a mismatch
+# or a change of mind costs nothing. ZFS wants >= 8 characters.
+ENC_KEYFILE=""
+if [ "$ENCRYPT_MODE" != none ]; then
+  if [ -n "${SOLNIX_ENCRYPT_PASSPHRASE:-}" ]; then
+    _enc_pw="$SOLNIX_ENCRYPT_PASSPHRASE"
+  elif [ -t 0 ] && [ -t 1 ]; then
+    while : ; do
+      _oldstty=$(stty -g 2>/dev/null || true)
+      trap '[ -n "$_oldstty" ] && stty "$_oldstty" 2>/dev/null; echo ""' INT
+      printf 'Encryption passphrase: '; stty -echo 2>/dev/null; read -r _enc_pw || _enc_pw=""; stty echo 2>/dev/null; echo ""
+      printf 'Confirm:               '; stty -echo 2>/dev/null; read -r _enc_pw2 || _enc_pw2=""; stty echo 2>/dev/null; echo ""
+      [ -n "$_oldstty" ] && stty "$_oldstty" 2>/dev/null
+      trap - INT
+      [ "$_enc_pw" = "$_enc_pw2" ] || { echo "  passphrases do not match"; continue; }
+      [ ${#_enc_pw} -ge 8 ] || { echo "  too short (ZFS requires >= 8 characters)"; continue; }
+      break
+    done
+  else
+    die "SOLNIX_ENCRYPT=$ENCRYPT_MODE but no SOLNIX_ENCRYPT_PASSPHRASE and no tty to prompt on"
+  fi
+  # A key FILE, not a pipe: `zfs create -o keyformat=passphrase` reads from the
+  # terminal, and driving that from a script is fragile. keylocation is rewritten
+  # to prompt immediately afterwards so the passphrase is never persisted on disk.
+  ENC_KEYFILE="/tmp/solnix-enc.$$"
+  ( umask 077; printf '%s' "$_enc_pw" > "$ENC_KEYFILE" )
+  log "encryption: $ENCRYPT_MODE (aes-256-gcm, passphrase)"
+fi
+
 HOME_STYLE="${SOLNIX_HOME_STYLE:-}"
 if [ -z "$HOME_STYLE" ] && [ -t 0 ] && [ -t 1 ]; then
   echo ""
@@ -544,9 +888,43 @@ for _ds in $_dslist; do
     export)      _mp=/export ;;
     export/home) _mp=/export/home ;;
   esac
-  zfs create -o canmount=on -o mountpoint="$_mp" "$POOL/$_ds" \
+  # Encrypt this dataset? Only the data datasets are ever candidates; the BE was
+  # created above and is deliberately plaintext.
+  _encargs=""
+  case "$ENCRYPT_MODE:$_ds" in
+    home:home|home:export|home:export/home|home+nix:home|home+nix:export|home+nix:export/home|home+nix:nix)
+      _encargs="-o encryption=aes-256-gcm -o keyformat=passphrase -o keylocation=file://$ENC_KEYFILE" ;;
+  esac
+  zfs create $_encargs -o canmount=on -o mountpoint="$_mp" "$POOL/$_ds" \
     || die "failed to create $POOL/$_ds (needed for the nix store / home dirs)"
+  # VERIFY the encryption actually landed rather than trusting the flag. A silently
+  # unencrypted /home after the operator typed a passphrase is the worst outcome
+  # here -- they would believe their data is protected when it is not.
+  if [ -n "$_encargs" ]; then
+    _got=$(zfs get -H -o value encryption "$POOL/$_ds" 2>/dev/null)
+    [ "$_got" = "aes-256-gcm" ] \
+      || die "$POOL/$_ds was asked to be encrypted but reports encryption=$_got"
+    log "encrypted: $POOL/$_ds ($_got)"
+  fi
 done
+
+# Move every encrypted dataset off the install-time key FILE and onto an
+# interactive prompt. The file lives in the installer's /tmp (a ramdisk) and is
+# removed on exit, so a dataset left pointing at it would be unloadable after
+# reboot -- keylocation=prompt is what makes the passphrase the actual key.
+if [ "$ENCRYPT_MODE" != none ]; then
+  for _ds in $_dslist; do
+    _full="$POOL/$_ds"
+    [ "$(zfs get -H -o value encryption "$_full" 2>/dev/null)" = "aes-256-gcm" ] || continue
+    zfs set keylocation=prompt "$_full" 2>/dev/null \
+      || log "WARNING: could not set keylocation=prompt on $_full -- check it before rebooting"
+    _kl=$(zfs get -H -o value keylocation "$_full" 2>/dev/null)
+    case "$_kl" in
+      prompt) log "$_full keylocation=prompt (passphrase asked for at load-key time)" ;;
+      *) die "$_full still has keylocation=$_kl -- it points at the installer's temp keyfile and would be UNLOADABLE after reboot" ;;
+    esac
+  done
+fi
 # Mount them under the alt-root so the copy below populates the right datasets.
 for _ds in nix export/home; do
   _t="$ALTROOT/${_ds#export/}"
@@ -1292,12 +1670,35 @@ _hash_pw() {  # $1 = plaintext -> stdout = crypt string, empty on failure
 _rootpw=""
 if [ -n "${SOLNIX_ROOT_PW:-}" ]; then
   _rootpw="$SOLNIX_ROOT_PW"
+elif [ -n "${SOLNIX_ROOT_NO_PASSWORD:-}" ]; then
+  # Explicit unattended "lock root". Handled before the prompt so an automated
+  # install can select it without a tty.
+  _rootpw=""; _rootlock=1
+  log "SOLNIX_ROOT_NO_PASSWORD set -> root will be LOCKED (*LK*)"
 elif [ -t 0 ] && [ -t 1 ]; then
   echo ""
-  echo "=== Set the root password =================================================="
-  echo "The install media runs with root passwordless so you can reach this"
-  echo "installer. The INSTALLED system must not, so set it now."
-  while : ; do
+  echo "=== Root password =========================================================="
+  echo "The install media runs root PASSWORDLESS so you can reach this installer."
+  echo "The installed system must not inherit that -- copying it to disk was a real"
+  echo "defect, not a hypothetical one."
+  echo ""
+  echo "  1) set a root password        (default)"
+  echo "  2) NO root password -- lock the root account entirely"
+  echo ""
+  echo "  Option 2 writes *LK* to root's shadow field, which is NOT the same as"
+  echo "  blank: a locked account cannot be logged into at all, whereas a blank one"
+  echo "  lets anyone in. If you pick 2, make sure you create the admin user below"
+  echo "  -- it gets the RBAC Primary Administrator profile, so 'pfexec <cmd>' is"
+  echo "  your route to root, and 'su -' will not work."
+  printf 'Choice [1/2] (default 1): '
+  read -r _rpchoice || _rpchoice=1
+  case "$_rpchoice" in
+    2)
+      _rootpw=""; _rootlock=1
+      echo "  root will be LOCKED (*LK*). Use pfexec from the admin account."
+      ;;
+  esac
+  while [ "${_rootlock:-0}" != 1 ]; do
     _oldstty=$(stty -g 2>/dev/null || true)
     trap '[ -n "$_oldstty" ] && stty "$_oldstty" 2>/dev/null; echo ""' INT
     printf 'Root password: '; stty -echo 2>/dev/null; read -r _rootpw || _rootpw=""; stty echo 2>/dev/null; echo ""
@@ -1311,7 +1712,21 @@ elif [ -t 0 ] && [ -t 1 ]; then
   done
 fi
 
-if [ -n "$_rootpw" ]; then
+if [ "${_rootlock:-0}" = 1 ]; then
+  # DELIBERATE no-password install: lock root. *LK*, never blank -- the live media
+  # ships root with an EMPTY shadow field so the operator can run this installer,
+  # and step 3 copies /etc/shadow verbatim, so "no password" must mean LOCKED or it
+  # means "anyone can log in as root", which is the defect this whole block exists
+  # to close.
+  awk -F: 'BEGIN{OFS=":"} $1=="root"{$2="*LK*"} {print}' \
+    "$ALTROOT/etc/shadow" > "$ALTROOT/etc/shadow.new" \
+    && mv "$ALTROOT/etc/shadow.new" "$ALTROOT/etc/shadow"
+  chmod 0400 "$ALTROOT/etc/shadow"
+  # Verify: an EMPTY field here would be exactly the hole we think we just closed.
+  _rf=$(awk -F: '$1=="root"{print $2}' "$ALTROOT/etc/shadow" 2>/dev/null)
+  [ "$_rf" = "*LK*" ] || die "root lock did not land in the target /etc/shadow (field='$_rf', expected *LK*)"
+  log "root account LOCKED (*LK*) on the target -- not blank, not passwordless"
+elif [ -n "$_rootpw" ]; then
   _rh=$(_hash_pw "$_rootpw" || true)
   if [ -n "$_rh" ]; then
     awk -F: -v h="$_rh" 'BEGIN{OFS=":"} $1=="root"{$2=h} {print}' \
@@ -1505,6 +1920,79 @@ log "DONE: solnix installed on $TARGET (pool $POOL, BE $BEDS, generation 1 = $TO
 echo "Detach $TARGET, snapshot it, register an AMI (boot-mode uefi, ena) and boot it,"
 echo "or attach it as the root disk of a new instance. It should boot to"
 echo "multi-user-server with /run-current-system -> $TOPLEVEL."
+
+# ---------------------------------------------------------------------------
+# 13. HOME-MANAGER (step 8). Runs LAST, deliberately: it needs the system's users
+#     and datasets to exist, and a home-manager failure must not be able to leave
+#     the SYSTEM install half-done.
+#
+# WARNING: THIS ACTIVATES AGAINST THE TARGET, NOT THE LIVE MEDIA, and that is the
+# whole difficulty. home-manager's `switch` wants to write into the user's home and
+# register a profile generation, which on a fresh install means writing under the
+# target's dataset while the target is what we just exported. So the honest
+# behaviour is: BUILD the activation package now (it is the part that needs the
+# network and the flake, and the part that can fail for interesting reasons), copy
+# its closure onto the target, and leave a first-boot note telling the operator the
+# one command to run. Do NOT chroot and run the activation script -- it expects a
+# live session bus, a real $HOME on a mounted dataset and a working `nix` profile,
+# none of which are true in an exported-pool chroot.
+#
+# Building it here is still worth doing: it proves the attr resolves and that the
+# closure is fetchable BEFORE the operator reboots into a machine where fixing it
+# means having a working network on the new install.
+if [ "$DO_HOME" = 1 ] && [ -n "$HOME_FLAKE" ]; then
+  log "home-manager: $HOME_FLAKE"
+  _hfl="${HOME_FLAKE%%#*}"; _hat="${HOME_FLAKE#*#}"
+  if ! command -v nix >/dev/null 2>&1; then
+    log "no nix on this media -- skipping home-manager (run it after first boot)"
+  else
+    # Prove the attr exists first, and list what DOES exist if it does not. Same
+    # discipline as the system attr gate: a typo must not look like a build failure.
+    if ! nix eval --raw "${_hfl}#homeConfigurations.\"${_hat}\".activationPackage.drvPath" >/dev/null 2>&1; then
+      echo "" >&2
+      echo "No homeConfigurations.\"$_hat\" in $_hfl. Available:" >&2
+      nix eval --raw "${_hfl}#homeConfigurations" --apply \
+        'x: builtins.concatStringsSep "\n" (builtins.attrNames x)' 2>/dev/null \
+        | sed 's/^/    /' >&2 || echo "    (none)" >&2
+      log "WARNING: home-manager attr not found -- the SYSTEM install is complete and unaffected"
+    else
+      _hmlink="/var/tmp/solnix-hm-$$"
+      if run_to "${SOLNIX_HM_BUILD_TIMEOUT:-7200}" nix build \
+           "${_hfl}#homeConfigurations.\"${_hat}\".activationPackage" \
+           --out-link "$_hmlink" 2>&1 | tail -20; then
+        _hmout=$(_readlink "$_hmlink" 2>/dev/null || true)
+      fi
+      if [ -z "${_hmout:-}" ] || [ ! -d "$_hmout" ]; then
+        log "WARNING: home-manager activation package FAILED TO BUILD -- system install is complete and unaffected"
+        log "         re-run after first boot: home-manager switch --flake $HOME_FLAKE"
+      else
+        log "home-manager activation package built: $_hmout"
+        # The pool is exported by now, so the closure cannot be copied in. Record
+        # exactly what to run instead -- and record it where the operator will
+        # actually see it rather than only in this scrollback.
+        echo "$_hmout" > /var/tmp/solnix-hm-activation-path
+        log "NOTE: the target pool is already exported, so the home-manager closure was"
+        log "      NOT copied onto it. After first boot, on the installed system, run:"
+        log "        home-manager switch --flake $HOME_FLAKE"
+        log "      (its store paths will be fetched from the substituters then.)"
+      fi
+    fi
+  fi
+elif [ "$DO_HOME" = 1 ] && [ -n "$FLAKE_REF" ]; then
+  # No explicit --home: look for a matching homeConfigurations attr in the same
+  # flake, which is the maintainer's layout (.#dixi + .#gburd@dixi).
+  if command -v nix >/dev/null 2>&1; then
+    _fl="${FLAKE_REF%%#*}"; _at="${FLAKE_REF#*#}"
+    _cands=$(nix eval --raw "${_fl}#homeConfigurations" --apply \
+      'x: builtins.concatStringsSep "\n" (builtins.attrNames x)' 2>/dev/null | grep "@${_at}\$" || true)
+    if [ -n "$_cands" ]; then
+      echo ""
+      echo "This flake also has home-manager configurations for $_at:"
+      echo "$_cands" | sed 's/^/    /'
+      echo "  After first boot: home-manager switch --flake ${_fl}#<one-of-those>"
+    fi
+  fi
+fi
 
 # ---------------------------------------------------------------------------
 # 12. Offer to reboot or power off.
