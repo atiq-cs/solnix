@@ -315,7 +315,15 @@ evaluated for some time**, which no test would have caught because nothing evalu
    `base.nix`'s `with pkgs.solnix.starter; [ coreutils … ]` failed with
    `undefined variable 'coreutils'`. **0 packages before, 70 after.** Invisible from the
    flake side, which supplies `cached` but not `starter`.
-4. **`externalLibs` in `pkgs/illumos/default.nix` is stale against this AMI** — it names
+4. ⚠️ **CORRECTED 2026-09-15: `externalLibs` was NOT stale — it was AHEAD of the base AMI.**
+   `pkg update` on `ami-0cb14e40f9355bd0c` supplies every one of its twelve srcs, including
+   `libxml2.so.16` (SONAME confirmed with `elfdump -d`) and the `libicuuc`/`libicudata`
+   `.so.78` pair. `externalLibs` needed **no edit**, `external-libs.drv` builds, and the
+   `dixi` toplevel now BUILDS (`/nix/store/rk5mgx…-solnix-system-dixi`, rc=0). Calling it
+   stale pointed the next reader at the wrong file; the base AMI was the stale thing. The
+   original text follows for the record.
+
+   ~~**`externalLibs` in `pkgs/illumos/default.nix` is stale against this AMI**~~ — it names
    `libxml2.so.16` and `icu-78`; neither exists on it, so the slice fails with
    `extraFile src missing`.
 5. **`configurations/dixi.nix` used `with pkgs; [ git curl openssl ]`.** The host shim has
