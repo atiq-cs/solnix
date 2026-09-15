@@ -36,20 +36,45 @@
       # x86_64-solaris with the fork's illumos overlay (exposes pkgs.illumos.*).
       pkgsFor = system: import nixpkgs {
         inherit system;
-        overlays = [ solnix-pkgs.overlays.default cachedOverlay ];
+        overlays = [ solnix-pkgs.overlays.default worldOverlay ];
       };
 
-      # cachedOverlay — layer the wave-built cache index onto pkgs.solnix so a
-      # config can reference `pkgs.solnix.cached.<pname>` (store paths that
-      # substitute from cache.solnix.io at realise time). Only `cached` is added
-      # here: the rest of the gate-derived world (gate/libc/systemPath/...) is a
-      # host-local builtins.path proto that does not exist on the build system,
-      # so it stays in the host eval path (lib/eval-host.nix). cached.nix is pure
-      # (reads the manifest + builtins.storePath), so it evaluates anywhere.
-      cachedOverlay = _final: prev: {
-        solnix = prev.solnix // {
-          cached = import ./pkgs/illumos/cached.nix { system = "x86_64-solaris"; };
-        };
+      # worldOverlay — layer THIS REPO's pkgs/illumos onto pkgs.solnix.
+      #
+      # WARNING: WITHOUT THIS NO TOPLEVEL CAN EVALUATE, and that was the state of
+      # the repo. modules/system/activation/default.nix:428 reads
+      # pkgs.solnix.systemPath, but solnix-pkgs' overlay supplies only the
+      # BOOTSTRAP half of pkgs.solnix (seed, cc, bintools, libc, libcFromSource,
+      # aarch64Cross). systemPath, gate, base-tools, starter and the six proto
+      # slices are defined HERE, in pkgs/illumos/default.nix, and were never wired
+      # into the overlay at all -- so
+      #   nix eval .#solnixConfigurations.<any>.config.system.build.toplevel.drvPath
+      # failed with `attribute 'systemPath' missing` for base, pgfarm AND dixi
+      # alike. That is why the slices could build standalone while a toplevel
+      # referencing them could not, and why no toplevel here has ever been built.
+      #
+      # WARNING: THE GATE IS A HOST ARTIFACT, which is why it is an argument.
+      # pkgs/illumos/gate.nix asserts srcDir or srcHash (an unpinned network fetch
+      # is not reproducible), and the real proto is a 491 MB tree that exists only
+      # on an illumos build host. So:
+      #   * SOLNIX_GATE_PROTO=/var/tmp/proto-unpack/<hash>-illumos-gate-proto
+      #     points at an already-built proto (what the illumos host does);
+      #   * unset, gate stays null and gate.nix's own assertion throws WHEN FORCED,
+      #     rather than yielding a silently empty world.
+      # Forcing the toplevel's drvPath therefore needs the env var; reading cheap
+      # attrs (hostName, roles) does not, because Nix is lazy -- which is exactly
+      # how this bug hid. `builtins.attrNames` on the world lists all 21 attrs
+      # without forcing one of them.
+      #
+      # This makes the flake/host EVAL-SPLIT explicit instead of implicit: the host
+      # path (lib/eval-host.nix -> lib/host-pkgs.nix) already did precisely this via
+      # `import solnixDir`, which is why toplevels evaluated there and only there.
+      worldOverlay = _final: prev: {
+        solnix = prev.solnix // (import ./pkgs/illumos {
+          gate =
+            let p = builtins.getEnv "SOLNIX_GATE_PROTO";
+            in if p == "" then null else builtins.storePath p;
+        });
       };
     in
     {

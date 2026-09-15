@@ -14,16 +14,40 @@
 # `libc`/`rtld`/`ld`/`sys`/`base-tools` -> mkIllumosComponent calls in
 # default.nix's rec block; `systemPath` -> buildEnv (design §4.2).
 
+# THE GATE IS INJECTABLE, and it has to be. `import ./gate.nix { }` ALWAYS fails:
+# gate.nix:68 asserts `srcDir != null || srcHash != null` and both default to null,
+# deliberately (an unpinned network fetch is not reproducible). So every attr that
+# touches `gate` -- libc, rtld, base-tools, systemPath, every slice -- was
+# unevaluatable through a plain `import ./pkgs/illumos`, which is why NO toplevel
+# in this repo has ever built: modules/system/activation reads pkgs.solnix.systemPath.
+#
+# Nix's laziness hid this: `builtins.attrNames (import ./pkgs/illumos)` lists all 21
+# attrs happily, because forcing the NAMES does not force the VALUES. The failure
+# only appears when something forces systemPath, and then it surfaces one layer up
+# as `attribute 'systemPath' missing` from the overlay -- naming the consumer rather
+# than the cause.
+#
+#   gate      -- pass a store path / builtins.path of an ALREADY-BUILT proto (what
+#                the illumos host does: /var/tmp/proto-unpack/<hash>-illumos-gate-proto)
+#   gateArgs  -- or pass gate.nix's own args (srcDir/srcHash/rev) to BUILD it
+# Default: null/{} -> the old behaviour, which throws on use rather than silently
+# yielding an empty world.
+{
+  gate ? null,
+  gateArgs ? { },
+}:
+
 let
-  # GATE A: the gate proto as a store path (ingest variant; full build FOD later).
-  gate = import ./gate.nix { };
+  # GATE A: the gate proto as a store path. Injected if given, else built from
+  # gateArgs (which must carry srcDir or srcHash -- see the note above).
+  gate' = if gate != null then gate else import ./gate.nix gateArgs;
 
   # buildEnv — the symlink-farm merge, factored out of `systemPath` (below) into
   # lib/build-env.nix so the declarative userland (modules/config/system-path.nix)
   # composes its profile the same way. systemPath now CALLS it (design §B).
   buildEnv = import ../../lib/build-env.nix { };
 
-  mkIllumosComponent = args: import ./mk-illumos-component.nix ({ gate = gate; } // args);
+  mkIllumosComponent = args: import ./mk-illumos-component.nix ({ gate = gate'; } // args);
 
   # store libdirs of the libc slice, for cross-component RUNPATH baking. Both
   # ABIs: 64-bit libs in lib/amd64, 32-bit in lib. The loader is ABI-aware (a
@@ -379,7 +403,8 @@ let
   # automatically. That removes the "a human forgot a list entry" class which caused
   # every image failure this campaign.
   slices = import ./slices.nix {
-    inherit gate externalLibs;
+    inherit externalLibs;
+    gate = gate';
     libcSlice = libc;
     rtldSlice = rtld;
   };
@@ -416,7 +441,8 @@ let
   starter = import ./starter.nix { system = "x86_64-solaris"; };
 in
 {
-  inherit gate libc rtld ld sys base-tools systemPath externalLibs nix nix224 cached starter;
+  inherit libc rtld ld sys base-tools systemPath externalLibs nix nix224 cached starter;
+  gate = gate';
   inherit (toolchains) gcc14 clang gdb;
   # the CORE-OS slices, each with a computed DT_NEEDED closure (./slices.nix).
   inherit slices;
