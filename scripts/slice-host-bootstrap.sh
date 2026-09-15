@@ -15,11 +15,20 @@ ifconfig ena0 mtu 1400 2>/dev/null || true
 
 step "stage 1: minimal IPS prereqs (zstd for the tarballs, gnu-diffutils for real diff)"
 pkg set-publisher -G '*' -g https://pkg.openindiana.org/hipster/ openindiana.org 2>&1 | tail -2
-for p in compress/zstd text/gnu-diffutils; do
+# ⚠️ archiver/gnu-tar IS REQUIRED and was missing. Stage 3 unpacks the banked proto
+# with /usr/gnu/bin/tar, which is NOT on the base AMI and never was: measured on BOTH
+# boot environments via beadm mount, pre- and post-pkg-update, /usr/gnu/bin/tar is
+# ABSENT while /usr/bin/tar is present. So this script has been broken at stage 3 on
+# any FRESH AMI the whole time -- it only ever worked on a node where something else
+# had already pulled gnu-tar in. That is the "illumos lacks GNU-isms" class with a
+# twist worth recording: this one fails LOUDLY and was still never noticed, because
+# nobody had run the script on a genuinely clean host.
+for p in compress/zstd text/gnu-diffutils archiver/gnu-tar; do
   env PKG_CLIENT_CONNECT_TIMEOUT=60 PKG_CLIENT_LOWSPEED_TIMEOUT=180 \
       PKG_CLIENT_MAX_CONSECUTIVE_ERROR=10 PKG_CLIENT_MAX_TIMEOUT=20 \
     pkg install -v "$p" >> "$LOG/1-pkg.log" 2>&1
-  echo "pkg install $p exit=$?"
+    # exit=4 is pkg's "nothing to do" (already installed), NOT a failure.
+    _rc=$?; echo "pkg install $p exit=$_rc"
 done
 command -v zstd gzip 2>&1
 
