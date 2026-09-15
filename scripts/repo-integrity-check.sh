@@ -231,4 +231,22 @@ if [ -n "$_pho" ]; then
   exit 1
 fi
 
+
+# ⚠️ illumos cp REJECTS -L/-H/-P unless -r/-R is also given. usr/src/cmd/mv/mv.c:271
+# sets errflg when (Hflg||Lflg||Pflg) && !(Rflg||rflg), falling through to usage()
+# and exiting 2 WITHOUT creating the file. Usage string (mv.c:1339):
+#   cp [-r|-R [-H|-L|-P]] [-afinp@/] source... target
+# This shipped in switch-to-configuration: `beadm activate` SUCCEEDED, making a BE the
+# boot default, while its activate method was never staged -- bootable-but-broken, and
+# silent because the cp had `|| true`. Bare cp already dereferences a source symlink,
+# so -L is usually not needed at all; -RL is the legal spelling when it is.
+_cpl=$(grep -rnE 'cp +-[a-zA-Z]*L' --include='*.nix' --include='*.sh' . 2>/dev/null \
+       | grep -vE '^\./\.git|cp +-[a-zA-Z]*[rR][a-zA-Z]*L|cp +-[a-zA-Z]*L[a-zA-Z]*[rR]|^[^:]*:[0-9]+: *#' \
+       | head -5)
+if [ -n "$_cpl" ]; then
+  echo "repo-integrity: WARN -- 'cp -L' without -r/-R is invalid on illumos (mv.c:271):" >&2
+  echo "$_cpl" | sed 's/^/  /' >&2
+  echo "  Bare cp dereferences a source symlink already; use -RL if recursion is wanted." >&2
+fi
+
 exit "$fail"

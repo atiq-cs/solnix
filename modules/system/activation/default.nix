@@ -270,8 +270,22 @@ let
         mkdir -p "$BEROOT_MP/lib/svc/manifest/solnix"
         cp "$1/manifest/solnix/"*.xml "$BEROOT_MP/lib/svc/manifest/solnix/" 2>/dev/null || true
       fi
-      [ -e "$1/site-profile.xml" ] && { mkdir -p "$BEROOT_MP/etc/svc/profile/site"; cp -L "$1/site-profile.xml" "$BEROOT_MP/etc/svc/profile/site/solnix.xml"; }
-      [ -e "$1/activate" ] && { mkdir -p "$BEROOT_MP/lib/svc/method"; cp -L "$1/activate" "$BEROOT_MP/lib/svc/method/solnix-activate"; chmod 0555 "$BEROOT_MP/lib/svc/method/solnix-activate"; }
+      # ⚠️ NO `cp -L` HERE. illumos cp REJECTS -L unless -r/-R is also given:
+      # usr/src/cmd/mv/mv.c:271 sets errflg when (Hflg||Lflg||Pflg) && !(Rflg||rflg),
+      # which falls through to usage() and exits 2 without creating the file. The
+      # usage string (mv.c:1339) spells it out: cp [-r|-R [-H|-L|-P]] ...
+      #
+      # MEASURED CONSEQUENCE: `switch-to-configuration boot` registered a generation,
+      # created the BE, ran bootadm, and `beadm activate` SUCCEEDED -- so the BE became
+      # the boot default -- while /lib/svc/method/solnix-activate was NEVER STAGED and
+      # the script exited reporting success. A machine bootable-but-broken is worse than
+      # one that fails loudly. The `|| true` on these lines is what made it silent.
+      #
+      # -L was never needed anyway: bare cp DEREFERENCES a source symlink by default,
+      # verified rc=0 with real 1184 B content. (`cp -RL` also works and is the
+      # illumos-legal spelling, but it is not required for a single file.)
+      [ -e "$1/site-profile.xml" ] && { mkdir -p "$BEROOT_MP/etc/svc/profile/site"; cp "$1/site-profile.xml" "$BEROOT_MP/etc/svc/profile/site/solnix.xml"; }
+      [ -e "$1/activate" ] && { mkdir -p "$BEROOT_MP/lib/svc/method"; cp "$1/activate" "$BEROOT_MP/lib/svc/method/solnix-activate"; chmod 0555 "$BEROOT_MP/lib/svc/method/solnix-activate"; }
       bootadm update-archive -f -R "$BEROOT_MP" 2>&1 | tail -3 || true
 
       beadm unmount "$be" 2>/dev/null || beadm unmount -f "$be" 2>/dev/null || true
