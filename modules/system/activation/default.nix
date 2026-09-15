@@ -284,8 +284,24 @@ let
       # -L was never needed anyway: bare cp DEREFERENCES a source symlink by default,
       # verified rc=0 with real 1184 B content. (`cp -RL` also works and is the
       # illumos-legal spelling, but it is not required for a single file.)
-      [ -e "$1/site-profile.xml" ] && { mkdir -p "$BEROOT_MP/etc/svc/profile/site"; cp "$1/site-profile.xml" "$BEROOT_MP/etc/svc/profile/site/solnix.xml"; }
-      [ -e "$1/activate" ] && { mkdir -p "$BEROOT_MP/lib/svc/method"; cp "$1/activate" "$BEROOT_MP/lib/svc/method/solnix-activate"; chmod 0555 "$BEROOT_MP/lib/svc/method/solnix-activate"; }
+      if [ -e "$1/site-profile.xml" ]; then
+        mkdir -p "$BEROOT_MP/etc/svc/profile/site"
+        cp "$1/site-profile.xml" "$BEROOT_MP/etc/svc/profile/site/solnix.xml" \
+          || { echo "FATAL: failed to stage site-profile.xml into $BEROOT_MP" >&2; exit 1; }
+      fi
+      if [ -e "$1/activate" ]; then
+        mkdir -p "$BEROOT_MP/lib/svc/method"
+        cp "$1/activate" "$BEROOT_MP/lib/svc/method/solnix-activate" \
+          || { echo "FATAL: failed to stage the activate method into $BEROOT_MP" >&2; exit 1; }
+        chmod 0555 "$BEROOT_MP/lib/svc/method/solnix-activate" \
+          || { echo "FATAL: could not chmod the staged activate method" >&2; exit 1; }
+        # POST-CHECK, not a trusted exit status. The bug this replaces did not fail
+        # here at all: cp exited 2, the `&&` chain simply stopped, and the run went on
+        # to `beadm activate` -- making a BE the boot default with no activate method
+        # and printing success. So assert the file is really there before continuing.
+        [ -s "$BEROOT_MP/lib/svc/method/solnix-activate" ] \
+          || { echo "FATAL: activate method absent after staging -- refusing to activate a broken BE" >&2; exit 1; }
+      fi
       bootadm update-archive -f -R "$BEROOT_MP" 2>&1 | tail -3 || true
 
       beadm unmount "$be" 2>/dev/null || beadm unmount -f "$be" 2>/dev/null || true
