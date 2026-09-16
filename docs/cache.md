@@ -171,7 +171,20 @@ solnix uses the NixOS.org two-endpoint model:
     HTTP API (/nix-cache-info, /<hash>.narinfo, /nar/<file>.nar.xz), signed cache.solnix.io-1,
     anonymous read + signature verification.
   - **Trusted read pubkey (current): cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk=**
-    (the older 5HAV... key is superseded; verified 8UNrVA... realises with require-sigs).
+    - ⚠️ THE PARENTHETICAL THAT USED TO SIT HERE CONTRADICTED THE LINE ABOVE IT. It read
+      "(the older 5HAV... key is superseded; verified 8UNrVA... realises with require-sigs)",
+      naming 5HAV as current AND as superseded in one sentence. Commit 49d95060 ("CRITICAL
+      trusted-key correction") settles the direction: the LIVE read key is 5HAV..., NOT
+      8UNrVA... -- the handoff doc that said otherwise was wrong.
+    - ⚠️ STILL NOT VERIFIED CRYPTOGRAPHICALLY, and two easily-confused things are both true:
+      a real narinfo's `Sig:` line names cache.solnix.io-1, and a NAME MATCH IS NOT KEY
+      MATERIAL. The empirical test does not work on a dev box: `nix path-info` with
+      require-sigs=true returns SUCCESS even for a deliberately bogus key (negative-
+      controlled, so that test is inert), and `nix copy --from` fails IDENTICALLY for the
+      correct and the bogus key because this box's nix is a daemon client and silently
+      ignores --option substituters. Settling it needs a NON-DAEMON nix.
+      Until then publish nothing under an assumed key: a path signed with a key consumers
+      do not trust is WORSE than a 404, because it fails later and more confusingly.
 RULES: upload -> s3.solnix.io (unchanged); READ + durability-verify -> cache.solnix.io ONLY
 (never re-read the s3.solnix.io inbox to check durability). Narinfos carry a Torrent: field
 (opt-in BitTorrent package sharing, NixOS-model + P2P).
