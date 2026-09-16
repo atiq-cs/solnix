@@ -70,11 +70,10 @@
       # path (lib/eval-host.nix -> lib/host-pkgs.nix) already did precisely this via
       # `import solnixDir`, which is why toplevels evaluated there and only there.
       worldOverlay = _final: prev: {
-        solnix = prev.solnix // (import ./pkgs/illumos {
-          gate =
-            let p = builtins.getEnv "SOLNIX_GATE_PROTO";
-            in if p == "" then null else builtins.storePath p;
-        });
+        solnix = prev.solnix // (import ./pkgs/illumos (
+          let p = builtins.getEnv "SOLNIX_GATE_PROTO";
+          in if p == "" then { } else { gate = builtins.storePath p; }
+        ));
       };
     in
     {

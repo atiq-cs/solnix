@@ -52,6 +52,22 @@
 , srcHash ? null          # sha256 of the source tarball. null => srcDir required,
                           # since an unpinned network fetch is not reproducible.
 , srcDir ? null           # local illumos-gate checkout to build from
+
+  # protoUrl/protoHash — a PREBUILT proto, fetched by pinned hash. This is the
+  # only variant reachable from a PURE evaluation (`nix eval .#...`), which is
+  # what an installer front-end runs. Measured, not assumed:
+  #   * builtins.getEnv returns "" in pure mode, so SOLNIX_GATE_PROTO is INERT
+  #     there -- it works only under --impure or on the host eval path;
+  #   * builtins.storePath is a hard error in pure mode ("not allowed in pure
+  #     evaluation mode"), so falling through to a published store path does NOT
+  #     help a pure eval either, even once that path substitutes;
+  #   * builtins.fetchTarball WITH a sha256 IS pure-legal.
+  # So a hash-pinned fetch of the already-built proto is the pure-eval path. It
+  # differs from srcHash below in WHAT it fetches: srcHash fetches SOURCE and
+  # then runs a ~2h nightly build, whereas this fetches the BUILT proto and runs
+  # no build at all.
+, protoUrl ? "https://s3.solnix.io/solnix-cache/proto/x86_64-gate-ac45d71fc2-20260914/proto-root_i386-gate-ac45d71fc2.tar.gz"
+, protoHash ? "0f0jr9xlrc1a0xkpn4fqc4xsl9l2fhqmpxkwyl7pqf6yfvr3zn8x"
 , onbld ? "/opt/onbld"
 , gcc ? "/usr/gcc/10"     # primary compiler (the gate's own default at this rev)
 , javac ? "/usr/java/bin/javac"
@@ -65,7 +81,11 @@
                           # /tmp is tmpfs (RAM) and the tree grows tens of GB.
 }:
 
-assert srcDir != null || srcHash != null;
+# THE ASSERTION STAYS, and it still throws rather than yielding a silently empty
+# world -- it has just moved down one rung. protoUrl+protoHash is a THIRD way to
+# have a gate, so it joins the disjunction; with all three absent this fails
+# exactly as before, at eval time, naming the cause.
+assert srcDir != null || srcHash != null || (protoUrl != null && protoHash != null);
 
 let
   src =
@@ -104,7 +124,14 @@ let
         ${if fatal then ''exit 1'' else ":"}
       fi
     '') ps);
+  # PREBUILT path: fetch the already-built proto by pinned hash. No build runs,
+  # and this is the branch a pure eval takes.
+  prebuiltProto = builtins.fetchTarball { url = protoUrl; sha256 = protoHash; };
 in
+# Prefer a real BUILD when the caller pinned source (srcDir/srcHash); otherwise
+# use the hash-pinned prebuilt proto. The assertion above guarantees at least one
+# of the three exists, so there is no silent-empty-world branch here.
+if srcDir == null && srcHash == null then prebuiltProto else
 derivation ({
   name = "illumos-gate-proto";
   system = builtins.currentSystem; # x86_64-solaris; BUILDS only on illumos.
