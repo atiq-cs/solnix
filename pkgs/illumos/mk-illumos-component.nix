@@ -51,6 +51,17 @@
 , depRunpaths ? [ ]         # absolute store lib/amd64 dirs of cross-component deps
 , elfedit ? "/usr/bin/elfedit"  # host elfedit (has its dyn.so module; seed's lacks it)
 , elfdump ? "/usr/bin/elfdump"
+  # ⚠️ `system` IS AN ARGUMENT, NOT builtins.currentSystem. currentSystem DOES NOT
+  # EXIST in a pure evaluation -- it is a hard "attribute 'currentSystem' missing",
+  # not a wrong value -- so reading it here made this file unevaluable from
+  # `nix eval .#`, which is what an installer front-end runs. This was the FIRST of
+  # 16 such sites to bite when the toplevel is forced.
+  #
+  # The default keeps every existing impure caller working unchanged; a pure caller
+  # must pass it. Defaulting to the literal rather than to currentSystem is
+  # deliberate: a default that reads the evaluator would reintroduce the bug for
+  # anyone who simply omits the argument.
+, system ? "x86_64-solaris"
 }:
 
 let
@@ -72,7 +83,7 @@ derivation {
   # disambiguates. Canonical namespace is pkgs.solnix.* (see
   # .kiro/steering/nix-conventions.md "Package namespace").
   name = name;
-  system = builtins.currentSystem; # relocation runs on illumos.
+  inherit system; # passed in; see the argument comment above.
   builder = "/usr/bin/bash";
   PATH = "/usr/gnu/bin:/usr/bin:/usr/sbin";
 
