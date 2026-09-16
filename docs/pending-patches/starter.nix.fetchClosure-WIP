@@ -1,0 +1,57 @@
+# WIP: pkgs/illumos/starter.nix rewrite for blocker 6 (fetchClosure)
+#
+# DO NOT APPLY until the 8 missing closures are published (see
+# docs/... blocker-6 writeup). Applying now would trade a clear pure-eval
+# error for a confusing 404 fetch failure across EVERY configuration that
+# imports base.nix. The rewrite lands WITH the publish, not before.
+#
+# The change is ONE hunk: the `entry` binding's `value =` line. Everything
+# else (filtering: published + deriver_resolves=y + system match; last-wins;
+# row-shape validation) stays byte-for-byte identical, so base.nix and every
+# config keep the same package selection.
+#
+# ---- BEFORE (current repo, pkgs/illumos/starter.nix:68-72) ----
+#
+#   # key by the tsv's own pname column (col 0) — no parseDrvName guessing needed.
+#   entry = cols: {
+#     name = builtins.elemAt cols 0;
+#     value = builtins.storePath (builtins.elemAt cols 3);
+#   };
+#
+# ---- AFTER ----
+#
+#   # key by the tsv's own pname column (col 0) — no parseDrvName guessing needed.
+#   #
+#   # value is fetchClosure, not storePath: builtins.storePath is FORBIDDEN in
+#   # pure eval (nix eval .#), which blocks every toplevel from evaluating on a
+#   # flake-native host. fetchClosure is the pure-legal equivalent — it names the
+#   # substituter + the path, and Nix pulls the closure at eval time.
+#   #
+#   # inputAddressed = true is REQUIRED: our x86_64-solaris paths are
+#   # INPUT-addressed, and plain fetchClosure errors "fromPath ... is not
+#   # content-addressed" for that class. With inputAddressed = true, fetchClosure
+#   # does NOT re-verify content-addressing, so SIGNATURE TRUST does all the
+#   # integrity work: the path (and its whole closure) must be signed by a key in
+#   # trusted-public-keys (cache.solnix.io-1:5HAV..., baked into base.nix). A path
+#   # signed by an untrusted key is REFUSED at eval — which is why publishing only
+#   # under 5HAV... is load-bearing, not incidental.
+#   #
+#   # Needs the fetch-closure experimental feature on the evaluating Nix. Resolves
+#   # ONLY where the cache is trusted and the path + full closure are substitutable;
+#   # on a daemon-client Nix that cannot substitute foreign-system paths (e.g. a
+#   # Linux dev box) it fails at the daemon, which is expected and not a defect of
+#   # this expression.
+#   entry = cols: {
+#     name = builtins.elemAt cols 0;
+#     value = builtins.fetchClosure {
+#       fromStore = "https://cache.solnix.io";
+#       fromPath = builtins.elemAt cols 3;
+#       inputAddressed = true;
+#     };
+#   };
+#
+# NOTE the fromPath type: builtins.storePath took a STRING and returned a path;
+# fetchClosure's fromPath takes the store path as a STRING literal too (the tsv
+# column is already "/nix/store/...."), so `builtins.elemAt cols 3` is passed
+# unchanged — do NOT wrap it in storePath (that would re-introduce the forbidden
+# builtin) and do NOT coerce to a path with ./. .
