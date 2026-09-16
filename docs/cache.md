@@ -176,7 +176,18 @@ solnix uses the NixOS.org two-endpoint model:
       naming 5HAV as current AND as superseded in one sentence. Commit 49d95060 ("CRITICAL
       trusted-key correction") settles the direction: the LIVE read key is 5HAV..., NOT
       8UNrVA... -- the handoff doc that said otherwise was wrong.
-    - ⚠️ STILL NOT VERIFIED CRYPTOGRAPHICALLY, and two easily-confused things are both true:
+    - ✅ **RESOLVED 2026-09-15, cryptographically.** `secrets/cache-signing.yaml` holds
+      the `cache.solnix.io-1` PRIVATE key, and the trailing 32 bytes of that Ed25519
+      secret key -- which for Ed25519 *are* the public key -- base64-encode to
+      `5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk=`, matching the declared public key
+      byte for byte. So **we hold the key consumers trust**, and `5HAV...` is confirmed
+      as the live key by key material rather than by a name match or a doc claim.
+      Publishing is therefore NOT blocked on the signing key.
+      A spare pair `cache.solnix.io-2` exists in 1Password as a rotation key; it is
+      deliberately NOT wired into the publish path, because rotating would force every
+      consumer to add a key for no benefit.
+    - ⚠️ For the record, the earlier note (now superseded) read: STILL NOT VERIFIED
+      CRYPTOGRAPHICALLY, and two easily-confused things are both true:
       a real narinfo's `Sig:` line names cache.solnix.io-1, and a NAME MATCH IS NOT KEY
       MATERIAL. The empirical test does not work on a dev box: `nix path-info` with
       require-sigs=true returns SUCCESS even for a deliberately bogus key (negative-
