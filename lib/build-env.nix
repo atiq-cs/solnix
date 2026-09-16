@@ -31,6 +31,14 @@
   pathsToLink ? null,
   extraOutputsToInstall ? [ ],
   ignoreCollisions ? true,
+    # system IS AN ARGUMENT, defaulted to a literal -- NOT builtins.currentSystem.
+    # currentSystem does not EXIST in a pure evaluation (hard "attribute 'currentSystem'
+    # missing"), so reading it made the systemPath derivation unevaluable from
+    # `nix eval .#`, which is what an installer front-end runs. Same fix shape as
+    # pkgs/illumos/mk-illumos-component.nix (commit 4845812f): the literal default keeps
+    # impure/host callers working while a pure caller passes it; defaulting to the
+    # evaluator would reintroduce the bug.
+    system ? "x86_64-solaris",
 }:
 
 let
@@ -41,7 +49,7 @@ let
 in
 derivation {
   inherit name;
-  system = builtins.currentSystem; # x86_64-solaris on the host.
+    inherit system; # passed in; see the argument comment above.
   builder = "/usr/bin/bash";
   PATH = "/usr/gnu/bin:/usr/bin:/usr/sbin";
   paths = paths;

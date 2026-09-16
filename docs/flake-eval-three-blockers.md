@@ -91,3 +91,43 @@ cannot evaluate `zlib` cannot evaluate a toplevel, no matter what is published. 
 
 **Honest read: `--flake .#dixi` is not one publish run away.** It is a stdenv bootstrap fix away, and that is a
 different kind of job.
+
+---
+
+## Update 2026-09-16: blocker 4 refuted, blockers 5 and 6 found — eval now stops at `starter.nix`
+
+Re-measured with all three real fixes locked (`solnix-pkgs` input at `07e59bd`, which includes the stdenv fix
+`7ff01f8`). No AWS spend — the dev box completed in under a minute.
+
+**Blocker 4 is an ARTIFACT.** The `solnix-system-path → … → bash` recursion the earlier run captured does not
+reproduce with the real patch fix — it was an artifact of that agent's overlay stand-in. Proved at the stdenv level:
+`bash-interactive`, `bison`, `perl` (the exact cycle) all resolve at `x86_64-solaris` with `7ff01f8` and all recurse
+with the pre-fix `c73f24ae`. So blocker 3's fix is load-bearing and blocker 4 is closed.
+
+**Blocker 5 (fixed here): `lib/build-env.nix:44`** read `builtins.currentSystem` — the same class as blocker 2, in
+a file `4845812f` did not cover. Fixed the same way: `system` is now an argument defaulted to `"x86_64-solaris"`.
+
+**Blocker 6 (NEW, not fixed): `pkgs/illumos/starter.nix:71`** — `value = builtins.storePath (builtins.elemAt cols 3)`.
+`builtins.storePath` is forbidden in pure eval, so wiring the 175 published starter packages by absolute store path
+cannot work from `nix eval .#`. This is a **design change, not a one-liner**: the pure-legal equivalent is
+`builtins.fetchClosure { fromStore = "https://cache.solnix.io"; fromPath = <path>; }`, which works only if the path
+and its full closure are substitutable and signed by a **trusted** key.
+
+We are positioned for that: the signing key is settled (`cache.solnix.io-1` / `5HAV…`, held in
+`secrets/cache-signing.yaml`), so a `fetchClosure` rewrite of `starter.nix` is viable — but it depends on the 175
+paths actually being published and closure-complete, which loops back to the cache-publishing job (8 eval blockers +
+the proto). So blocker 6 and the publish job are the same work seen from two ends.
+
+### The honest ledger
+
+| # | blocker | status |
+|---|---|---|
+| 1 | gate proto in pure eval | ✅ `2ed40f30` |
+| 2 | `currentSystem` in `mk-illumos-component.nix` | ✅ `4845812f` |
+| 3 | `x86_64-solaris` stdenv recursion | ✅ `solnix-pkgs 7ff01f8` |
+| 4 | extra recursion | ✅ artifact — does not reproduce |
+| 5 | `currentSystem` in `lib/build-env.nix` | ✅ fixed here |
+| 6 | `storePath` in `starter.nix` | ❌ needs `fetchClosure` + published closure |
+
+**`--flake .#dixi` is now one design change (blocker 6) away, and that change is the same publishing work already
+scoped.** Not a recursion, not a mystery — a `fetchClosure` rewrite gated on a closure-complete cache.
