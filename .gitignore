@@ -144,3 +144,8 @@ artifacts/ami-build/install/
 artifacts/install-media/usb-image-20260917o/*.iso
 artifacts/install-media/usb-image-20260917o/*.img
 artifacts/install-media/usb-image-20260917o/*.tar.gz
+
+# usb-image-20260917p binaries -- banked in R2, never committed (image-trap rule)
+artifacts/install-media/usb-image-20260917p/*.iso
+artifacts/install-media/usb-image-20260917p/*.img
+artifacts/install-media/usb-image-20260917p/*.tar.gz
