@@ -237,7 +237,10 @@ CLOSURE_TOOLS="/sbin/zpool /sbin/zfs /usr/sbin/format /usr/sbin/fmthard
   /usr/sbin/fcadm /usr/sbin/cfgadm /usr/lib/sysevent/syseventd
   /usr/lib/cfgadm/fp.so.1 /sbin/dlmgmtd
   /usr/sbin/svccfg /usr/sbin/svcadm /usr/bin/svcprop /usr/bin/svcs
-  /lib/svc/bin/svc.configd /lib/svc/bin/svc.startd /lib/svc/bin/mfstscan"
+  /lib/svc/bin/svc.configd /lib/svc/bin/svc.startd /lib/svc/bin/mfstscan
+  /usr/bin/git /usr/bin/dig /usr/bin/nslookup /usr/bin/host /usr/sbin/route
+  /usr/libexec/git-core/git /usr/libexec/git-core/git-remote-https
+  /usr/libexec/git-core/git-remote-http /usr/libexec/git-core/git-http-fetch"
 for t in $CLOSURE_TOOLS; do
   [ -e "$SRC$t" ] && ldd "$SRC$t" 2>/dev/null | awk '{print $3}'
 done | grep '^/usr/lib' | sort -u | while read -r libpath; do
@@ -253,9 +256,13 @@ done
 # ramdisk. The ldd closure above already copied EXACTLY the libs the tools link.
 
 # the installer tools: copy ONLY the specific binaries solnix-install +
-# the live shell need, NOT all of /usr/bin (which holds git w/ 150 hardlinks
-# @5MB, ghostscript @34MB, etc — tar-without-hardlink-preservation would
-# explode git alone to ~800MB). Curated list keeps the ramdisk tiny.
+# the live shell need, NOT all of /usr/bin. The copy below cpio -o's the include
+# list in ONE archive, which PRESERVES hardlinks -- so git (150 hardlinks @5MB)
+# costs ~5MB here, not the ~800MB a per-file cp -L would have exploded it to.
+# That per-file hazard is why git was excluded historically; with the
+# single-archive cpio it is affordable, and --git / manual `git clone` on the
+# live media both want it. Still keep the list curated -- the ramdisk ceiling is
+# real (RD_MB budget), so add deliberately, not wholesale.
 LIVE_TOOLS="
   sbin/sh sbin/init sbin/zpool sbin/zfs sbin/mount sbin/umount sbin/uname
   sbin/autopush sbin/dhcpagent sbin/ifconfig
@@ -297,6 +304,11 @@ LIVE_TOOLS="
   usr/bin/man usr/bin/mandoc usr/bin/col usr/bin/nroff
   usr/bin/curl usr/bin/wget
   usr/sbin/ping usr/sbin/traceroute
+  # DNS diagnostics -- dig/nslookup/host from the bind package. Staged so the
+  # operator can debug name resolution (the live media's getent can stall on an
+  # mdns source with no responder, so a real resolver query tool is worth having).
+  # [ -e ] in the copy loop skips any the host lacks, so this is safe if absent.
+  usr/bin/dig usr/bin/nslookup usr/bin/host
   usr/has/bin/file etc/magic
   usr/bin/env usr/bin/test usr/bin/true usr/bin/false usr/bin/sh usr/bin/pfexec
   usr/bin/su usr/bin/login usr/bin/newtask
@@ -309,6 +321,11 @@ LIVE_TOOLS="
   usr/bin/diff3 usr/bin/sdiff usr/bin/cmp usr/bin/comm usr/bin/join
   usr/bin/nl usr/bin/paste usr/bin/split usr/bin/uniq usr/bin/wget
   usr/bin/ssh usr/bin/scp usr/bin/sftp usr/bin/ssh-add usr/bin/ssh-agent
+  # git -- for --git and manual `git clone` on the live media. Hardlinked heavily
+  # in /usr/bin (git-* subcommands), but the single-archive cpio preserves the
+  # links, so the real cost is ~5MB. git also lives in usr/libexec/git-core
+  # (find-expanded since cpio -o does not recurse); bring the dir.
+  usr/bin/git usr/libexec/git-core
   usr/bin/ksh usr/bin/pkill usr/bin/nohup usr/bin/time
   usr/sbin/useradd usr/sbin/userdel usr/sbin/usermod usr/sbin/groupadd
   usr/sbin/groupdel usr/sbin/groupmod usr/bin/passwd usr/sbin/pwconv
