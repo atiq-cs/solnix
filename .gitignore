@@ -139,3 +139,8 @@ artifacts/*-xbuild/work*/
 artifacts/*-xbuild/wave*/
 artifacts/*-xbuild/debugbackfill*/
 artifacts/ami-build/install/
+
+# usb-image-20260917o binaries -- banked in R2, never committed (image-trap rule)
+artifacts/install-media/usb-image-20260917o/*.iso
+artifacts/install-media/usb-image-20260917o/*.img
+artifacts/install-media/usb-image-20260917o/*.tar.gz

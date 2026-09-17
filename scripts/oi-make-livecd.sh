@@ -745,7 +745,9 @@ for _l in \
   /usr/lib/64/libcrypt.so.1 /usr/lib/64/libgss.so.1 \
   /usr/lib/64/gss/mech_krb5.so.1 /usr/lib/64/libkrb5.so.1 \
   /usr/lib/64/libk5crypto.so.3 /usr/lib/64/libkrb5support.so.1 \
-  /usr/lib/64/libcom_err.so.3; do
+  /usr/lib/64/libcom_err.so.3 \
+  /usr/lib/64/libssl.so.3 /usr/lib/64/libncurses.so.5 \
+  /usr/lib/libncurses.so.5; do
   _copy_lib "$_l"
 done
 # ⚠️ CLOSE THE WHOLE CLASS: resolve every staged ELF's libraries with ldd(1)
@@ -761,7 +763,8 @@ done
 if [ -x /usr/bin/ldd ]; then
   : > "$OUT/.ldd-added"
   for _bin in "$RDROOT"/usr/bin/* "$RDROOT"/usr/sbin/* "$RDROOT"/usr/gnu/bin/* \
-              "$RDROOT"/usr/has/bin/* "$RDROOT"/sbin/* "$RDROOT"/usr/lib/*.so*; do
+              "$RDROOT"/usr/has/bin/* "$RDROOT"/sbin/* "$RDROOT"/usr/lib/*.so* \
+              "$RDROOT"/usr/openssl/1.0/bin/* "$RDROOT"/usr/openssl/3/bin/*; do
     [ -f "$_bin" ] || continue
     LC_ALL=C od -An -N4 -tx1 "$_bin" 2>/dev/null | grep -q '7f 45 4c 46' || continue
     /usr/bin/ldd "$_bin" 2>/dev/null | while read -r _n _a _p _rest; do
