@@ -341,6 +341,7 @@ LIVE_TOOLS="
   usr/sbin/fstyp usr/sbin/clri
   usr/sbin/bootadm usr/sbin/lofiadm usr/sbin/devfsadm usr/sbin/dladm
   usr/sbin/ipadm usr/sbin/ifconfig usr/sbin/prtconf usr/sbin/init
+  usr/sbin/route
   usr/sbin/mount usr/sbin/umount usr/sbin/svcadm usr/sbin/svccfg usr/sbin/prtdiag
   usr/sbin/fdisk usr/sbin/format usr/sbin/zdb usr/sbin/dumpadm
   usr/sbin/fcadm usr/sbin/cfgadm usr/sbin/fcinfo
@@ -585,7 +586,7 @@ trusted-public-keys = cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjR
 ssl-cert-file = /nix-tools224/ca-bundle.crt
 sandbox = false
 build-users-group =
-experimental-features = nix-command flakes
+experimental-features = nix-command flakes fetch-closure
 max-jobs = auto
 NT224CONF
 
@@ -1134,8 +1135,9 @@ if [ -n "$CS" ]; then
   # INSTALLED system gets its own copy from $CS/etc/nix/nix.conf via solnix-install.
   mkdir -p "$RDROOT/etc/nix"
   if [ -f "$CS/etc/nix/nix.conf" ]; then
-    cp -L "$CS/etc/nix/nix.conf" "$RDROOT/etc/nix/nix.conf" 2>/dev/null \
-      || cp "$CS/etc/nix/nix.conf" "$RDROOT/etc/nix/nix.conf" 2>/dev/null || true
+    # bare cp (not cp -L): illumos /usr/bin/cp rejects -L on a single file (mv.c:271)
+    # and already dereferences a source symlink, so -L is both wrong and unneeded here.
+    cp "$CS/etc/nix/nix.conf" "$RDROOT/etc/nix/nix.conf" 2>/dev/null || true
   fi
   # FULL-CLOSURE store DB dump (NOT just the toplevel): --load-db needs every
   # referenced path registered or first boot fails 'path <dep> is not valid'.
@@ -1551,7 +1553,7 @@ if [ ! -f "$RDROOT/etc/nix/nix.conf" ]; then
   cat > "$RDROOT/etc/nix/nix.conf" <<'NIXCONF'
 substituters = https://s3.solnix.io/solnix-cache https://cache.solnix.io
 trusted-public-keys = cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk=
-experimental-features = nix-command flakes
+experimental-features = nix-command flakes fetch-closure
 ssl-cert-file = /nix/store/jxn55a9725j8ba9hkqila89s66abszhr-nix-2.24.15/etc/ssl/certs/ca-bundle.crt
 sandbox = false
 build-users-group =

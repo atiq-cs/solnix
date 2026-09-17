@@ -103,7 +103,10 @@ in
       max-jobs = lib.mkDefault "auto";
       cores = lib.mkDefault 0;               # use all cores per build (NixOS default).
       # flakes + the new CLI on by default (Nix 2.24). Matches the maintainer's floki.
-      experimental-features = lib.mkDefault "nix-command flakes";
+      # fetch-closure is REQUIRED: starter.nix / pkgs/illumos/default.nix wire the
+      # starter set and nix224 via builtins.fetchClosure, which is gated behind it;
+      # without it a --flake eval FATALs "attribute 'fetchClosure' missing".
+      experimental-features = lib.mkDefault "nix-command flakes fetch-closure";
       require-sigs = lib.mkDefault true;     # verify cache signatures (5HAV).
       # keep build inputs/outputs so `nix develop`/gc-roots behave like NixOS.
       keep-outputs = lib.mkDefault true;

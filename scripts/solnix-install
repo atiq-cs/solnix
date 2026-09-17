@@ -219,6 +219,81 @@ trap cleanup EXIT INT TERM
 # measuring that it needs a BSD network-interface layer illumos never had.
 # Telling the operator to "check the network" invites hours on wifi that cannot
 # ever work, so the message names the dongle instead.
+
+# bring_up_network -- plumb the first real wired NIC and get a DHCP lease, so the
+# operator does not have to run dladm/ipadm/route/resolv.conf by hand. This
+# automates exactly the manual sequence a fresh boot needs, and is idempotent:
+# re-running it does no harm. It is best-effort -- check_internet is still the
+# real gate, so if anything here is wrong the fetch test catches it.
+#
+# WHY THIS IS NEEDED: the live media has no auto-network service (nwam is not
+# staged), so a booted machine has only lo0 until something plumbs a NIC. And
+# ena0, if present, is the EC2 BUILD HOST's virtual NIC baked into the image --
+# it will never get a link on real hardware, so it is skipped explicitly.
+bring_up_network() {
+  command -v dladm >/dev/null 2>&1 || return 0   # nothing to do without the tools
+  command -v ipadm >/dev/null 2>&1 || return 0
+
+  # 1. Pick the first physical link that is NOT ena0 (cloud NIC) or lo0. dladm
+  #    show-phys lists real, attached datalinks -- a USB-ethernet dongle shows
+  #    here as e1000g0/axf0/usbecm0 once its driver bound.
+  _nic=$(dladm show-phys -p -o link 2>/dev/null \
+         | grep -v -E '^(ena[0-9]|lo[0-9])' | head -1)
+  if [ -z "$_nic" ]; then
+    log "no wired NIC found to auto-configure (dladm show-phys lists only cloud/loopback)"
+    return 0
+  fi
+  log "auto-configuring network on $_nic"
+
+  # 2. Plumb it and request DHCP. create-if/create-addr are no-ops-with-error if
+  #    already done, so swallow those; ipadm show-addr below is the real check.
+  pfexec ipadm create-if "$_nic" 2>/dev/null || true
+  pfexec ipadm create-addr -T dhcp "$_nic/v4" 2>/dev/null || true
+
+  # 3. Wait up to ~20s for a lease -- a slow dongle/switch can take a few seconds.
+  _got=""
+  _i=0
+  while [ "$_i" -lt 20 ]; do
+    _got=$(ipadm show-addr -p -o addr "$_nic/v4" 2>/dev/null | sed 's,/.*,,')
+    case "$_got" in ""|0.0.0.0) : ;; *) break ;; esac
+    sleep 1; _i=$((_i+1))
+  done
+  case "$_got" in
+    ""|0.0.0.0) log "no DHCP lease on $_nic after ${_i}s -- check the cable/dongle"; return 0 ;;
+    *) log "$_nic got $_got via DHCP" ;;
+  esac
+
+  # 4. STALE DEFAULT ROUTES. A baked-in image can carry a bogus default route
+  #    (seen: 192.168.1.5 from the build host) that wins over the real gateway,
+  #    so internet-bound packets black-hole while the LAN still works. Keep only
+  #    the DHCP-provided gateway (the router that answered our lease) and drop any
+  #    other default. The DHCP gateway is normally the .1 of our /24, but read it
+  #    from the routing table rather than guessing: keep the default whose gateway
+  #    is reachable on our NIC, delete the rest.
+  _keepgw=$(netstat -rn 2>/dev/null | awk '$1=="default"{print $2}' \
+            | while read -r _gw; do
+                # a gateway on our own subnet is the plausible real one; ping it
+                if ping -sn "$_gw" 56 1 >/dev/null 2>&1; then echo "$_gw"; break; fi
+              done)
+  if [ -n "$_keepgw" ]; then
+    netstat -rn 2>/dev/null | awk '$1=="default"{print $2}' | while read -r _gw; do
+      [ "$_gw" = "$_keepgw" ] && continue
+      log "removing stale default route via $_gw (keeping $_keepgw)"
+      pfexec route delete default "$_gw" >/dev/null 2>&1 || true
+    done
+  fi
+
+  # 5. RESOLVER. DHCP on this media does not always write /etc/resolv.conf, and
+  #    getent can stall on an mdns source with no responder. Ensure at least one
+  #    working nameserver: prefer the DHCP gateway, fall back to a public one.
+  if [ ! -s /etc/resolv.conf ] || ! grep -q '^nameserver' /etc/resolv.conf 2>/dev/null; then
+    _ns="${_keepgw:-1.1.1.1}"
+    log "writing /etc/resolv.conf (nameserver $_ns) -- DHCP left it empty"
+    printf 'nameserver %s\n' "$_ns" | pfexec tee /etc/resolv.conf >/dev/null 2>&1 || true
+  fi
+  return 0
+}
+
 check_internet() {
   _probe_url="${SOLNIX_NET_PROBE:-https://cache.nixos.org/nix-cache-info}"
   _probe_host=$(echo "$_probe_url" | sed -e 's,^[a-z]*://,,' -e 's,/.*,,')
@@ -287,6 +362,7 @@ if [ -n "$GIT_URL" ] || [ -n "$FLAKE_REF" ]; then
   if [ -n "${SOLNIX_SKIP_NET_CHECK:-}" ]; then
     log "internet check SKIPPED (SOLNIX_SKIP_NET_CHECK set)"
   else
+    bring_up_network
     check_internet || die "no internet access -- see above. NOTHING has been written to any disk."
   fi
 fi
@@ -297,7 +373,11 @@ if [ -n "$GIT_URL" ]; then
       echo "WARNING: $GIT_URL needs an ssh key, and the install media has none." >&2
       echo "         Use the https:// form, e.g. https://github.com/<u>/<r>.git" >&2 ;;
   esac
-  command -v git >/dev/null 2>&1 || die "git is not on this media; cannot use --git"
+  command -v git >/dev/null 2>&1 || die "git is not on this media; cannot use --git.
+  Use nix's own fetcher instead -- pass the repo URL directly to --flake, no git binary needed:
+    solnix-install --flake 'github:<user>/<repo>#<attr>'
+    solnix-install --flake 'git+https://host/user/repo.git#<attr>'
+  (the live media stages nix but not git, whose 150 hardlinks would bloat the ramdisk ~800MB)"
   CFGDIR="${SOLNIX_CFGDIR:-/var/tmp/solnix-config}"
   # Move a previous clone aside rather than deleting it: on a live installer the
   # operator may be retrying after a failure and the old tree can hold clues.
