@@ -425,7 +425,17 @@ let
   # NixOS way. This is the shipped nix (nix.package default), replacing the
   # /nix-tools224 bootstrap that must never appear on a shipped image PATH.
   # Substitutable from cache.solnix.io (5HAV-signed, durable).
-  nix224 = builtins.storePath /nix/store/w44py7y17i7z5c9mwhh62q5yzx681y1a-nix-2.24.15;
+  #
+  # fetchClosure, not storePath: builtins.storePath is forbidden in pure eval
+  # (nix eval .#), which blocked every toplevel via nix.package's default. Same
+  # rewrite as starter.nix — name the substituter + path and pull at eval time;
+  # inputAddressed = true because this path is input-addressed, so signature
+  # trust (cache.solnix.io-1:5HAV..., in base.nix) does the integrity work.
+  nix224 = builtins.fetchClosure {
+    fromStore = "https://cache.solnix.io";
+    fromPath = "/nix/store/w44py7y17i7z5c9mwhh62q5yzx681y1a-nix-2.24.15";
+    inputAddressed = true;
+  };
 
   # cached (pkgs.solnix.cached.<pname>) — every wave-built package in the cache
   # (docs/registry/arch-manifest.tsv), exposed as a store-path attr so a config

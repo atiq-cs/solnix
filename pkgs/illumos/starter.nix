@@ -66,9 +66,31 @@ let
   ) rows;
 
   # key by the tsv's own pname column (col 0) — no parseDrvName guessing needed.
+  #
+  # value is fetchClosure, not storePath: builtins.storePath is FORBIDDEN in
+  # pure eval (nix eval .#), which blocks every toplevel from evaluating on a
+  # flake-native host. fetchClosure is the pure-legal equivalent — it names the
+  # substituter + the path, and Nix pulls the closure at eval time.
+  #
+  # inputAddressed = true is REQUIRED: our x86_64-solaris paths are
+  # INPUT-addressed, and plain fetchClosure errors "fromPath ... is not
+  # content-addressed" for that class. With inputAddressed = true, fetchClosure
+  # does NOT re-verify content-addressing, so SIGNATURE TRUST does all the
+  # integrity work: the path (and its whole closure) must be signed by a key in
+  # trusted-public-keys (cache.solnix.io-1:5HAV..., baked into base.nix). A path
+  # signed by an untrusted key is REFUSED at eval — which is why publishing only
+  # under 5HAV... is load-bearing, not incidental.
+  #
+  # col 3 is a store path STRING ("/nix/store/...") passed unchanged; do NOT wrap
+  # it in storePath (re-introduces the forbidden builtin) or coerce with ./. .
+  # Needs the fetch-closure experimental feature on the evaluating Nix.
   entry = cols: {
     name = builtins.elemAt cols 0;
-    value = builtins.storePath (builtins.elemAt cols 3);
+    value = builtins.fetchClosure {
+      fromStore = "https://cache.solnix.io";
+      fromPath = builtins.elemAt cols 3;
+      inputAddressed = true;
+    };
   };
 in
 builtins.listToAttrs (map entry wanted)

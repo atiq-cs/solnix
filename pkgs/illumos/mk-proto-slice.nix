@@ -81,6 +81,12 @@
 , extraRunpaths ? [ ]         # absolute dirs appended to the RUNPATH verbatim.
 , elfedit ? "/usr/bin/elfedit"
 , elfdump ? "/usr/bin/elfdump"
+  # system IS AN ARGUMENT, defaulted to the literal -- NOT builtins.currentSystem.
+  # currentSystem does not EXIST in pure eval (hard "attribute 'currentSystem'
+  # missing"), which blocked the toplevel via the proto slices. Same fix class as
+  # mk-illumos-component.nix + lib/build-env.nix. The slice still builds ON illumos;
+  # naming the system as a literal is what lets a flake-native host EVALUATE it.
+, system ? "x86_64-solaris"
 }:
 
 let
@@ -91,7 +97,7 @@ let
 in
 derivation {
   inherit name;
-  system = builtins.currentSystem;   # elfdump/elfedit: this runs ON illumos.
+  inherit system;                    # arg (literal default), not currentSystem: elfdump/elfedit run ON illumos.
   builder = "/usr/bin/bash";
   PATH = "/usr/gnu/bin:/usr/bin:/usr/sbin:/sbin";
 

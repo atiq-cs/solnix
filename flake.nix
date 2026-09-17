@@ -36,7 +36,24 @@
       # x86_64-solaris with the fork's illumos overlay (exposes pkgs.illumos.*).
       pkgsFor = system: import nixpkgs {
         inherit system;
-        overlays = [ solnix-pkgs.overlays.default worldOverlay ];
+        overlays = [ solnix-pkgs.overlays.default shellPathOverlay worldOverlay ];
+      };
+
+      # shellPathOverlay — restore bashNonInteractive.shellPath on x86_64-solaris.
+      #
+      # On the fork's pinned nixpkgs, bashNonInteractive loses its shellPath
+      # passthru (lowPrio + the spliced package set), so nixpkgs'
+      #   runtimeShell = "${runtimeShellPackage}${runtimeShellPackage.shellPath}"
+      # throws "attribute 'shellPath' missing" the moment ANY trivial-builder
+      # (runCommand/writeShellScript — used by systemPath/activation) is forced.
+      # The phase3 tranche entry already carries this exact fix; the flake's
+      # pkgsFor was missing it, which blocked the toplevel at eval. Restore
+      # shellPath and pin runtimeShell to plain bash (matches
+      # solnix-pkgs .../phase3/tranche-224-node-FIXED.nix).
+      shellPathOverlay = _final: prev: {
+        bashNonInteractive = prev.bashNonInteractive // { shellPath = "/bin/bash"; };
+        runtimeShellPackage = prev.bash;
+        runtimeShell = "${prev.bash}/bin/bash";
       };
 
       # worldOverlay — layer THIS REPO's pkgs/illumos onto pkgs.solnix.
