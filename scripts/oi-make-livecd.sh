@@ -486,7 +486,16 @@ if [ -s /tmp/solnix-tools.list ]; then
       echo "$_e" >> /tmp/solnix-tools.list.exp
     fi
   done < /tmp/solnix-tools.list
-  sort -u /tmp/solnix-tools.list.exp > /tmp/solnix-tools.list
+  sort -u /tmp/solnix-tools.list.exp | grep -v '^/' > /tmp/solnix-tools.list
+  # grep -v '^/': every legitimate entry above is RELATIVE (echoed as usr/... or
+  # walked with `find` under `cd $SRC`). An ABSOLUTE entry can only point at the
+  # host, and cpio cannot preserve a hardlink between an absolute host path and a
+  # relative $RDROOT path -- it aborts the WHOLE stream with
+  #   cpio: Cannot link "/usr/bin/scalar" and "usr/libexec/git-core/scalar", errno 18
+  # dropping every entry after the failure (less/git/ls silently gone; 2>/dev/null
+  # hid it). This surfaced once git's 150-way /usr/bin/git-* <-> git-core hardlink
+  # group was added. Absolutes are never copyable into the ramdisk anyway, so
+  # filtering them is both the fix and correct on its own terms.
   echo "tool list expanded to $(wc -l < /tmp/solnix-tools.list | tr -d ' ') paths (dirs walked with find; cpio -o does not recurse)" >&2
 fi
 # Copy the curated list in ONE archive. NOTE: the earlier `xargs tar -cf -`
@@ -497,9 +506,20 @@ fi
 # usr/libexec/sshd-auth) silently vanished, and WHICH ones dropped depended on
 # where xargs split (intermittent). cpio -o reads the whole path list from
 # stdin in a SINGLE archive (preserves hardlinks), so nothing is dropped.
-( cd "$SRC" && cpio -o -H ustar < /tmp/solnix-tools.list 2>/dev/null ) \
-  | ( cd "$RDROOT" && cpio -idm -H ustar 2>/dev/null ) \
-  || echo "WARN: tool copy had errors" >&2
+#
+# stderr is captured (not sent to /dev/null) and scanned for REAL errors: a bare
+# 2>/dev/null once hid an errno-18 "Cannot link" that aborted the stream and
+# silently dropped less/git. cpio is noisy (block counts), so filter to the
+# lines that mean data loss and fail on them -- a copy that half-completes must
+# not pass as success.
+( cd "$SRC" && cpio -o -H ustar < /tmp/solnix-tools.list 2>/tmp/solnix-cpio-o.err ) \
+  | ( cd "$RDROOT" && cpio -idm -H ustar 2>/tmp/solnix-cpio-i.err ) \
+  || echo "WARN: tool copy pipeline returned nonzero" >&2
+if grep -qiE 'Cannot link|Cannot open|write error|No space' /tmp/solnix-cpio-o.err /tmp/solnix-cpio-i.err 2>/dev/null; then
+  echo "ERROR: cpio tool copy reported data-loss errors:" >&2
+  grep -iE 'Cannot link|Cannot open|write error|No space' /tmp/solnix-cpio-o.err /tmp/solnix-cpio-i.err >&2
+  die "tool copy incomplete -- refusing to ship a ramdisk missing tools"
+fi
 
 # --- 2.24 nix runtime into the live ramdisk, SLIMMED (STAGE_NIX=1, default).
 #
