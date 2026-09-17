@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# regen-starter-tsv.sh — MECHANICALLY regenerate docs/registry/real-derivations.tsv
-# from a live illumos build of the dixi starter roots.
+# regen-starter-tsv.sh — MECHANICALLY regenerate the x86_64-solaris dixi starter
+# rows of docs/registry/real-derivations.tsv from a live illumos build.
 #
 # WHY THIS EXISTS. starter.nix (pkgs/illumos/starter.nix) reads
 # docs/registry/real-derivations.tsv and exposes each row as
@@ -13,21 +13,28 @@
 #
 # THE FIX IS MECHANICAL, NOT MANUAL. This script is the source of truth; the tsv
 # is a DERIVED ARTIFACT. It builds the dixi starter roots from the CURRENT tree,
-# and emits:
-#   * one row per ROOT attr keyed by the attr name (col 0 == "git"/"curl"/… so
-#     base.nix's `with pkgs.solnix.starter; [ coreutils … git ]` resolves) whose
-#     col 3 is that root's MAIN output path;
-#   * one row per closure member (keyed by a nix-parsed pname) so the WHOLE
-#     closure is published and fetchClosure-complete.
-# Re-run it after any tree change and the tsv tracks reality — no hand-typed
-# store paths, ever.
+# walks each root's real closure with `nix-store -qR`, and emits tsv rows
+# straight from `nix-store --query` output. Re-run it after any tree change and
+# the x86_64-solaris starter rows track reality — no hand-typed store paths.
+#
+# ⚠️ ARCH SCOPE — THIS SCRIPT REGENERATES ONE SYSTEM (SYSTEM, default
+# x86_64-solaris). The registry also holds aarch64-solaris, sparcv9-solaris and
+# legacy "2.3.16" rows that this build does NOT reproduce. To avoid DELETING
+# those on every run, pass MERGE_TSV=<existing real-derivations.tsv>: the script
+# then emits (a) every existing row whose system column != SYSTEM, verbatim, then
+# (b) the freshly-built SYSTEM rows LAST. Within SYSTEM the fresh rows win
+# (starter.nix is last-wins on duplicate pname); other-arch rows are preserved
+# untouched. WITHOUT MERGE_TSV it emits only the freshly-built SYSTEM rows — use
+# that only when you truly want a SYSTEM-only tsv.
 #
 # RUN ON the illumos build node (Nix 2.24.15 at /nix-tools224), as root:
-#   TRANCHE_NIX=/root/tranche-224.nix ./regen-starter-tsv.sh > real-derivations.tsv
+#   TRANCHE_NIX=/root/tranche-224.nix MERGE_TSV=/path/to/old/real-derivations.tsv \
+#     ./regen-starter-tsv.sh > real-derivations.tsv
 set -euo pipefail
 
 TRANCHE_NIX="${TRANCHE_NIX:?set TRANCHE_NIX=/root/tranche-224.nix}"
 SYSTEM="${SYSTEM:-x86_64-solaris}"
+MERGE_TSV="${MERGE_TSV:-}"
 # The dixi starter roots: base.nix's set + dixi.nix's git/curl. Every attr name
 # the shipped configs reference through pkgs.solnix.starter.
 ROOTS="${ROOTS:-coreutils file gnugrep gnused bzip2 xz zlib pcre2 which nvi gdb curl git}"
@@ -45,7 +52,9 @@ pname_of() {
   printf '%s' "$name" | sed -E 's/-[0-9][0-9A-Za-z.+_]*(-[a-z]+)?$/\1/; s/^-//'
 }
 
-# emit one tsv row: pname outpath  (deriver_resolves + hermetic computed here).
+FRESH="$(mktemp)"; trap 'rm -f "$FRESH"' EXIT
+
+# emit one fresh tsv row into $FRESH (deriver_resolves + hermetic computed here).
 declare -A SEEN
 emit_row() {
   local pn="$1" sp="$2" force="${3:-}"
@@ -63,13 +72,8 @@ emit_row() {
   leak="$(nix-store -qR "$sp" 2>/dev/null | grep -v '^/nix/store/' || true)"
   [ -z "$leak" ] && herm=y || herm=n
   printf '%s\t%s\t%s\t%s\t%s\t%s\tpublished\t%s\tstarter\n' \
-    "$pn" "$ver" "$hash" "$sp" "$dres" "$herm" "$SYSTEM"
+    "$pn" "$ver" "$hash" "$sp" "$dres" "$herm" "$SYSTEM" >> "$FRESH"
 }
-
-# header — EXACTLY the columns starter.nix reads:
-#   0 pname  1 version  2 out_hash  3 out_path  4 deriver_resolves
-#   5 hermetic_closure  6 published  7 system  8 tranche
-printf 'pname\tversion\tout_hash\tout_path\tderiver_resolves\thermetic_closure\tpublished\tsystem\ttranche\n'
 
 declare -A ROOT_MAIN
 
@@ -101,3 +105,22 @@ done
 for A in $ROOTS; do
   emit_row "$A" "${ROOT_MAIN[$A]}" force
 done
+
+# ---- assemble the output ------------------------------------------------------
+# header — EXACTLY the columns starter.nix reads:
+#   0 pname  1 version  2 out_hash  3 out_path  4 deriver_resolves
+#   5 hermetic_closure  6 published  7 system  8 tranche
+printf 'pname\tversion\tout_hash\tout_path\tderiver_resolves\thermetic_closure\tpublished\tsystem\ttranche\n'
+
+# MERGE: preserve every EXISTING row whose system column (field 8) != SYSTEM, so
+# aarch64-solaris / sparcv9-solaris / legacy "2.3.16" rows survive. Emitted BEFORE
+# the fresh SYSTEM rows so, within SYSTEM, the fresh rows win last-wins. The old
+# SYSTEM rows are intentionally dropped (they are the orphaned lineage this regen
+# replaces). The header line ("pname\t...") is skipped.
+if [ -n "$MERGE_TSV" ]; then
+  [ -r "$MERGE_TSV" ] || { echo "FATAL: MERGE_TSV not readable: $MERGE_TSV" >&2; exit 2; }
+  awk -F'\t' -v sys="$SYSTEM" 'NR==1{next} $1=="pname"{next} $8!=sys' "$MERGE_TSV"
+fi
+
+# fresh SYSTEM rows LAST
+cat "$FRESH"
