@@ -96,7 +96,17 @@
     {
       # lib.solnixSystem — build a solnix system from modules. Analog of
       # nixpkgs' lib.nixosSystem.
-      lib = { inherit solnixSystem; };
+      #
+      # lib.overlays — the overlays a toplevel needs, exported so an EXTERNAL
+      # consumer (nix-config's mkSolnixHost) that builds its own pkgs set can
+      # apply the SAME layers this flake's pkgsFor does. Without worldOverlay
+      # `pkgs.solnix.systemPath` is missing (activation/default.nix:428) and the
+      # toplevel throws `attribute 'systemPath' missing`; without shellPathOverlay
+      # runtimeShell throws `attribute 'shellPath' missing`. A consumer applying
+      # only solnix-pkgs.overlays.default (the bootstrap half) hits both — which is
+      # why `solnix-install --flake .#dixi` failed against nix-config: it built
+      # pkgs its own way and inherited neither. Single source of truth here.
+      lib = { inherit solnixSystem shellPathOverlay worldOverlay; };
 
       # solnixConfigurations.<name> — the nixosConfigurations analog.
       #
