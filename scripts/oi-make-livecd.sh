@@ -245,6 +245,13 @@ for t in $CLOSURE_TOOLS; do
   [ -e "$SRC$t" ] && ldd "$SRC$t" 2>/dev/null | awk '{print $3}'
 done | grep '^/usr/lib' | sort -u | while read -r libpath; do
   rel="${libpath#/}"
+  # ICU DATA IS 33MB AND 64-BIT-ONLY IS ENOUGH. dig/host/nslookup pull
+  # libdns -> libicuuc -> libicudata.so.78 (33MB), and the ldd walk sees it in
+  # BOTH /usr/lib (32-bit) and /usr/lib/amd64 (64-bit) = ~66MB. Every live tool
+  # that needs ICU runs 64-bit (isaexec dispatches to amd64), so the 32-bit copy
+  # is dead weight that overflowed the ramdisk once. Skip the 32-bit libicudata;
+  # keep the amd64 one. (git itself pulls no ICU -- this is purely the DNS tools.)
+  case "$rel" in usr/lib/libicudata.so*) continue ;; esac
   # /usr/lib/64 is a symlink to amd64 in our tree; normalize the DEST so mkdir
   # doesn't try to mkdir over the symlink. Source read follows the symlink fine.
   dest_rel=$(echo "$rel" | sed 's,^usr/lib/64/,usr/lib/amd64/,')
