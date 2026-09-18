@@ -149,3 +149,8 @@ artifacts/install-media/usb-image-20260917o/*.tar.gz
 artifacts/install-media/usb-image-20260917p/*.iso
 artifacts/install-media/usb-image-20260917p/*.img
 artifacts/install-media/usb-image-20260917p/*.tar.gz
+
+# usb-image-20260918p2 binaries -- banked in R2, never committed (image-trap rule)
+artifacts/install-media/usb-image-20260918p2/*.iso
+artifacts/install-media/usb-image-20260918p2/*.img
+artifacts/install-media/usb-image-20260918p2/*.tar.gz

@@ -74,3 +74,16 @@ T&C-violation-kills-the-shared-account hazard the project guards against — so 
 * Our SG `sg-0ee29b5cff1de2cd0` (`solnix-ssh-operator`) is correctly scoped: tcp/22 from `73.4.58.0/24` ONLY.
 * The guard is NOT blind on hotdog (3 SGs visible; `SG_GUARD_SELFTEST=1` flips it DIRTY) — the DIRTY reading is a
   REAL foreign rule, not the silent-unreadable-account failure.
+
+## Restored hotdog x86_64 AMI (2026-09-18)
+
+**`ami-0fb304a6611ca577c`** (`solnix-base-x86_64-restored-hotdog-20260918`) — uefi + ENA + root `/dev/xvda`,
+restored from `s3://solnix-cache/ami/x86_64-20260911/solnix-base-raw.img.gz`. The written volume's read-back sha256
+== `b0f98e3c1660953281e9cba784b17626aa496cf57df9ab5087d026bd4023d956` (verified on the bytes, not pipe exit status).
+Backing snapshot `snap-0ea9fd3a22623aec6` kept. Login: root + `~/.ssh/solnix-lava.pem.AMI-BAKED-still-works` (the
+baked public key works regardless of account). This is the hotdog build AMI going forward; treat it as a cache with
+hotdog's TTL, re-restorable from R2.
+
+Note: a fresh restore still needs `pkg update` + reboot and git/bind/gnu-diffutils/zstd + a nix-2.24.15 bootstrap
+to `/nix-tools224` before `oi-make-livecd.sh` will run (the base image is bare hipster + the AMI fixes, not a
+build host).
