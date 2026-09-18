@@ -282,7 +282,7 @@ done
 # real (RD_MB budget), so add deliberately, not wholesale.
 LIVE_TOOLS="
   sbin/sh sbin/init sbin/zpool sbin/zfs sbin/mount sbin/umount sbin/uname
-  sbin/autopush sbin/dhcpagent sbin/ifconfig
+  sbin/autopush sbin/dhcpagent sbin/ifconfig sbin/dhcpinfo
   usr/bin/ksh93 usr/bin/bash usr/bin/cat usr/bin/ls usr/bin/cp usr/bin/mv
   usr/bin/mkdir usr/bin/rmdir usr/bin/rm usr/bin/ln usr/bin/sed usr/bin/nawk
   usr/bin/touch usr/bin/mktemp usr/bin/dd usr/bin/stat usr/bin/pwd

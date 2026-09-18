@@ -283,13 +283,30 @@ bring_up_network() {
     done
   fi
 
-  # 5. RESOLVER. DHCP on this media does not always write /etc/resolv.conf, and
-  #    getent can stall on an mdns source with no responder. Ensure at least one
-  #    working nameserver: prefer the DHCP gateway, fall back to a public one.
-  if [ ! -s /etc/resolv.conf ] || ! grep -q '^nameserver' /etc/resolv.conf 2>/dev/null; then
-    _ns="${_keepgw:-1.1.1.1}"
-    log "writing /etc/resolv.conf (nameserver $_ns) -- DHCP left it empty"
-    printf 'nameserver %s\n' "$_ns" | pfexec tee /etc/resolv.conf >/dev/null 2>&1 || true
+  # 5. RESOLVER. The live media can carry a STALE /etc/resolv.conf (e.g. the EC2
+  #    build host's nameservers baked into the image), which is non-empty and has
+  #    nameserver lines but points at servers unreachable on THIS network -- so a
+  #    "is it empty?" check leaves the wrong resolver in place and DNS fails. The
+  #    authoritative source is THIS network's DHCP lease. Take the DNS servers the
+  #    lease handed us (dhcpinfo DNSserv) and REPLACE resolv.conf with them; the
+  #    DHCP gateway and a public resolver are fallbacks. This overwrites stale
+  #    content rather than only filling an empty file.
+  _dns_servers=$(dhcpinfo -i "$_nic" DNSserv 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+\.' )
+  if [ -z "$_dns_servers" ]; then
+    # No DNS in the lease. Keep the existing resolv.conf ONLY if it actually
+    # resolves the probe host; otherwise fall back to the gateway / a public one.
+    _probe_h=$(echo "${SOLNIX_NET_PROBE:-https://cache.nixos.org/nix-cache-info}" | sed -e 's,^[a-z]*://,,' -e 's,/.*,,')
+    if [ -s /etc/resolv.conf ] && grep -q '^nameserver' /etc/resolv.conf 2>/dev/null \
+       && nslookup "$_probe_h" >/dev/null 2>&1; then
+      : # existing resolver works on this network -- leave it
+    else
+      _dns_servers="${_keepgw:-1.1.1.1}"
+    fi
+  fi
+  if [ -n "$_dns_servers" ]; then
+    log "writing /etc/resolv.conf from DHCP/lease resolvers: $(echo $_dns_servers | tr '\n' ' ')"
+    { for _s in $_dns_servers; do printf 'nameserver %s\n' "$_s"; done; } \
+      | pfexec tee /etc/resolv.conf >/dev/null 2>&1 || true
   fi
   return 0
 }
