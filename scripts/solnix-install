@@ -404,10 +404,18 @@ if [ -n "$FLAKE_REF" ]; then
   # Try the solnix analog first, then the NixOS name, so either repo layout works:
   # solnix owns solnixConfigurations; a nix-config may own nixosConfigurations.
   _drv=""; _found=""
+  # RAMDISK-SAFE ATTR GATE. builtins.fetchClosure (starter.nix, default.nix)
+  # SUBSTITUTES its paths AT EVAL TIME, so evaluating the toplevel's drvPath
+  # realizes the whole starter closure into /nix -- which on the live media is a
+  # ~620MB RAM ramdisk, and it fills it ("alloc: /: file system full"). A
+  # NAME-only eval (attrNames) is lazy and realizes NOTHING (measured: store
+  # delta 0), so it proves the attr EXISTS without touching disk. The real
+  # drvPath instantiation + build happen later, with the store on the target
+  # pool (see the build block), not the ramdisk.
   for _set in solnixConfigurations nixosConfigurations; do
-    if _drv=$(nix eval --raw "${_fl}#${_set}.\"${_at}\".config.system.build.toplevel.drvPath" 2>/dev/null) \
-       && [ -n "$_drv" ]; then _found="$_set"; break; fi
-    _drv=""
+    if nix eval "${_fl}#${_set}" --apply \
+         "x: if builtins.hasAttr \"${_at}\" x then \"yes\" else \"no\"" --raw 2>/dev/null \
+         | grep -q '^yes$'; then _found="$_set"; _drv="(name-verified; drvPath deferred to the pool-backed build)"; break; fi
   done
   if [ -z "$_drv" ]; then
     echo "" >&2
@@ -430,50 +438,65 @@ fi
 #
 # This is what replaces the cpio path lists: instead of enumerating files to copy,
 # we realise a store path whose CLOSURE is the system, and later copy that closure.
-# The copy + activate halves are steps 4v and 7 further down; this part only has to
-# produce a toplevel and prove it looks like one.
 #
-# WARNING: THE ATTR GATE ABOVE PROVED THE ATTR EXISTS, NOT THAT IT BUILDS. Those are
-# different claims and this campaign has conflated them before. The gate ran
-# `nix eval ...drvPath`, which INSTANTIATES; this runs `nix build`, which REALISES.
-# An attr can instantiate and then fail to build -- measured on this very repo,
-# where the dixi toplevel instantiates and its external-libs derivation then dies
-# on a missing libxml2.so.16. So the build gets its own error path and its own
-# message, and a build failure must never leave a half-written disk: this runs
-# BEFORE the disk is touched, which is the whole reason it lives up here.
-if [ -n "$FLAKE_REF" ] && [ -z "$TOPLEVEL" ]; then
+# ⚠️ STORE MUST BE ON REAL DISK, NOT THE RAMDISK. builtins.fetchClosure and the
+# build both realise gigabytes into /nix, and the live media's /nix is a ~620MB
+# RAM ramdisk ("alloc: /: file system full"). So the build is a FUNCTION invoked
+# AFTER the target pool exists, with the nix store + TMPDIR on the pool
+# ($ALTROOT/nix on the target disk). The ramdisk-safe NAME gate above already
+# proved the attr exists, so a typo still fails before any disk is touched; what
+# moves past the disk step is only the heavy realisation, which has nowhere else
+# to go. A build failure after this point is handled by build_toplevel's own
+# die(), and the pool it half-populated is on the target disk we are installing
+# to anyway, so nothing the operator wanted to keep is at risk.
+build_toplevel() {
+  [ -n "$FLAKE_REF" ] && [ -z "$TOPLEVEL" ] || return 0
   log "building the system toplevel from $FLAKE_REF (this is the long step)"
   _fl="${FLAKE_REF%%#*}"; _at="${FLAKE_REF#*#}"
   # The attr set was determined by the gate above ($_found); reuse it rather than
   # guessing again, so build and gate cannot disagree about what they resolved.
   _set="${_found:-solnixConfigurations}"
-  _outlink="/var/tmp/solnix-toplevel-$$"
-  if run_to "${SOLNIX_BUILD_TIMEOUT:-14400}" nix build \
+  _outlink="$ALTROOT/var/tmp/solnix-toplevel-$$"
+  mkdir -p "$ALTROOT/var/tmp" "$ALTROOT/nix/store" 2>/dev/null || true
+  # Store + TMPDIR on the target pool, NOT the ramdisk. The pool's store IS the
+  # installed system's store, so paths realised here need no later copy across a
+  # store boundary -- they are already where the booted system will find them.
+  if run_to "${SOLNIX_BUILD_TIMEOUT:-14400}" env TMPDIR="$ALTROOT/var/tmp" nix build \
+       --store "$ALTROOT" \
        "${_fl}#${_set}.\"${_at}\".config.system.build.toplevel" \
        --out-link "$_outlink" 2>&1 | tail -40; then
     TOPLEVEL=$(_readlink "$_outlink" 2>/dev/null || true)
+    # --store $ALTROOT prints a bare /nix/store/... path (the store's own view).
+    # KEEP it bare: the closure-verify and activation below all address paths as
+    # $ALTROOT$TOPLEVEL, matching the copy-based flow. Mark that the closure is
+    # already on the pool so the copy step is skipped.
+    TOPLEVEL_ON_POOL=1
   fi
-  if [ -z "$TOPLEVEL" ] || [ ! -d "$TOPLEVEL" ]; then
+  # Validate against the on-pool location ($ALTROOT + the bare store path).
+  if [ -z "$TOPLEVEL" ] || { [ ! -d "$TOPLEVEL" ] && [ ! -d "$ALTROOT$TOPLEVEL" ]; }; then
     echo "" >&2
-    echo "The attr ${_set}.\"$_at\" EXISTS (the gate above proved that) but its" >&2
+    echo "The attr ${_set}.\"$_at\" EXISTS (the name gate proved that) but its" >&2
     echo "toplevel FAILED TO BUILD. Those are different claims; only the build" >&2
-    echo "failed. Nothing has been written to any disk." >&2
+    echo "failed. The target pool may be partly populated, but nothing outside" >&2
+    echo "the disk you chose to install to has been touched." >&2
     echo "" >&2
     echo "Re-run the build by hand to see the full log:" >&2
-    echo "  nix build ${_fl}#${_set}.\\\"${_at}\\\".config.system.build.toplevel -L" >&2
+    echo "  TMPDIR=$ALTROOT/var/tmp nix build --store $ALTROOT ${_fl}#${_set}.\\\"${_at}\\\".config.system.build.toplevel -L" >&2
     die "toplevel build failed"
   fi
   log "toplevel built: $TOPLEVEL"
+  # Where the toplevel actually lives on disk: bare path if copy-flow, $ALTROOT+bare if on-pool.
+  _tlreal="$TOPLEVEL"; [ "${TOPLEVEL_ON_POOL:-0}" = 1 ] && _tlreal="$ALTROOT$TOPLEVEL"
 
-  # Assert it LOOKS like a system before we start erasing a disk for it. Each of
+  # Assert it LOOKS like a system before we rely on it. Each of
   # these has been absent in a real toplevel at some point in this repo's history,
   # and every one of them is load-bearing at boot or at switch time.
   _tl_missing=""
   for _need in activate systemPath bin/switch-to-configuration; do
-    [ -e "$TOPLEVEL/$_need" ] || _tl_missing="$_tl_missing $_need"
+    [ -e "$_tlreal/$_need" ] || _tl_missing="$_tl_missing $_need"
   done
   if [ -n "$_tl_missing" ]; then
-    echo "toplevel $TOPLEVEL is missing:$_tl_missing" >&2
+    echo "toplevel $_tlreal is missing:$_tl_missing" >&2
     echo "It built, but it is not a bootable system -- refusing to install it." >&2
     die "incomplete toplevel"
   fi
@@ -481,10 +504,10 @@ if [ -n "$FLAKE_REF" ] && [ -z "$TOPLEVEL" ]; then
   # failure would appear only as the loader saying "Failed to find bootable
   # partition" long after the disk was erased.
   for _need in systemPath/platform/i86pc/kernel/amd64/unix systemPath/kernel/amd64/genunix; do
-    [ -s "$TOPLEVEL/$_need" ] || die "toplevel has no $_need -- it cannot boot; refusing to install"
+    [ -s "$_tlreal/$_need" ] || die "toplevel has no $_need -- it cannot boot; refusing to install"
   done
   log "toplevel gate OK: activate + switch-to-configuration + unix + genunix all present"
-fi
+}
 
 # ⚠️ With no argument this used to print only a usage string, which reads on a
 # console as "no disks listed" -- the operator cannot act on it. List what is
@@ -1018,6 +1041,13 @@ zfs list -H -o name,mountpoint "$POOL/nix" >/dev/null 2>&1 \
 case "$(zfs list -H -o name "$POOL/nix" 2>/dev/null)" in
   "$POOL/ROOT/"*) die "$POOL/nix was created INSIDE the boot environment" ;;
 esac
+
+# NOW build the flake toplevel -- $ALTROOT/nix is a real-disk ZFS store, so the
+# fetchClosure realisation + build land on the target disk, not the ~620MB RAM
+# ramdisk that a build up front would overflow. The store IS the installed
+# system's store, so no cross-store copy is needed afterward. The ramdisk-safe
+# name gate near the top already proved the attr exists; this is the heavy half.
+build_toplevel
 # ⚠️ THE STEP THAT ACTUALLY MAKES /home WORK. Creating the dataset is not enough:
 # autofs owns /home via auto_master, so without this the mount is shadowed at boot
 # and every home directory silently vanishes. Verified on `sun`, which runs
@@ -1119,6 +1149,23 @@ done
 log "copying toplevel closure into target /nix/store"
 if [ "$SELF_INSTALL" = 1 ]; then
   log "SELF-INSTALL: skipping nix-closure copy (the copied live root IS the system)"
+elif [ "${TOPLEVEL_ON_POOL:-0}" = 1 ]; then
+  # The flake build ran with --store $ALTROOT, so its whole closure is ALREADY in
+  # $ALTROOT/nix/store -- there is nothing to copy across a store boundary. Copying
+  # would also double-prefix ($ALTROOT$ALTROOT/nix/...). Just compute CLOSURE (bare
+  # /nix/store paths) so the verify + DB-registration below still run.
+  log "FLAKE BUILD ON POOL: closure already in $ALTROOT/nix/store, skipping copy"
+  if command -v nix-store >/dev/null 2>&1; then
+    CLOSURE=$(nix-store --store "$ALTROOT" -qR "$TOPLEVEL" 2>/dev/null)
+  fi
+  # Fallback: content-scan the on-pool toplevel for bare /nix/store refs.
+  if [ -z "$CLOSURE" ]; then
+    CLOSURE=$(find "$ALTROOT$TOPLEVEL" 2>/dev/null | while read f; do
+        if [ -h "$f" ]; then ls -ld "$f" 2>/dev/null | sed -n 's/.* -> //p'
+        elif [ -f "$f" ]; then strings "$f" 2>/dev/null || cat "$f" 2>/dev/null; fi
+      done | grep -o '/nix/store/[a-z0-9]\{32\}-[^/" ]*' \
+        | sed 's,\(/nix/store/[^/]*\).*,\1,' | sort -u)
+  fi
 else
 mkdir -p "$ALTROOT/nix/store"
 CLOSURE=""
@@ -1158,6 +1205,13 @@ else
   done
   CLOSURE=$(echo "$seen" | tr ' ' '\n' | grep '^/nix/store/')
 fi
+# _TLD: the toplevel's path ON DISK for READS. For an on-pool flake build the
+# store is $ALTROOT/nix, so the real files are at $ALTROOT$TOPLEVEL; for the
+# copy-based flow the closure was copied under $ALTROOT too, so $ALTROOT$TOPLEVEL
+# is correct there as well. Symlink TARGETS below keep the bare $TOPLEVEL (a
+# /nix/store/... target is what the booted system resolves), but every `cp` or
+# `[ -e ]` that READS toplevel content must use $_TLD.
+_TLD="$ALTROOT$TOPLEVEL"; [ -e "$_TLD" ] || _TLD="$TOPLEVEL"
 relink "$TOPLEVEL" "$ALTROOT/run-current-system"
 # also the slash form /run/current-system (NixOS convention; the login env.sh +
 # switch-to-configuration look there). /run is a boot-time tmpfs on some setups,
@@ -1236,34 +1290,34 @@ if [ "$SELF_INSTALL" = 1 ]; then
   log "SELF-INSTALL: skipping toplevel manifest/etc staging (base root already carries the solnix SMF plumbing)"
 else
 mkdir -p "$ALTROOT/lib/svc/manifest/solnix" "$ALTROOT/lib/svc/method" "$ALTROOT/etc/svc/profile/site"
-if [ -d "$TOPLEVEL/manifest/solnix" ]; then
-  cp "$TOPLEVEL/manifest/solnix/"*.xml "$ALTROOT/lib/svc/manifest/solnix/" 2>/dev/null || true
+if [ -d "$_TLD/manifest/solnix" ]; then
+  cp "$_TLD/manifest/solnix/"*.xml "$ALTROOT/lib/svc/manifest/solnix/" 2>/dev/null || true
 fi
-[ -e "$TOPLEVEL/site-profile.xml" ] && cp "$TOPLEVEL/site-profile.xml" "$ALTROOT/etc/svc/profile/site/solnix.xml"
-[ -e "$TOPLEVEL/activate" ] && { cp "$TOPLEVEL/activate" "$ALTROOT/lib/svc/method/solnix-activate"; chmod 0555 "$ALTROOT/lib/svc/method/solnix-activate"; }
+[ -e "$_TLD/site-profile.xml" ] && cp "$_TLD/site-profile.xml" "$ALTROOT/etc/svc/profile/site/solnix.xml"
+[ -e "$_TLD/activate" ] && { cp "$_TLD/activate" "$ALTROOT/lib/svc/method/solnix-activate"; chmod 0555 "$ALTROOT/lib/svc/method/solnix-activate"; }
 
 # 6b. stage the toplevel's config-generated /etc overlay (T2.9: networking +
 #     users -> nodename/resolv.conf/defaultrouter/passwd/shadow/group) OVER the
 #     copied base /etc, so the installed system reflects THIS toplevel's config,
 #     not merely the installer env's. Merge declared users/groups (append any
 #     the base lacks); overwrite the pure-config files.
-if [ -d "$TOPLEVEL/etc" ]; then
+if [ -d "$_TLD/etc" ]; then
   for f in nodename resolv.conf defaultrouter solnix-release; do
-    [ -f "$TOPLEVEL/etc/$f" ] && cp "$TOPLEVEL/etc/$f" "$ALTROOT/etc/$f" 2>/dev/null || true
+    [ -f "$_TLD/etc/$f" ] && cp "$_TLD/etc/$f" "$ALTROOT/etc/$f" 2>/dev/null || true
   done
   for f in passwd shadow group; do
-    [ -f "$TOPLEVEL/etc/$f" ] || continue
+    [ -f "$_TLD/etc/$f" ] || continue
     while IFS=: read -r nm rest; do
       [ -n "$nm" ] || continue
       grep -q "^$nm:" "$ALTROOT/etc/$f" 2>/dev/null || echo "$nm:$rest" >> "$ALTROOT/etc/$f"
-    done < "$TOPLEVEL/etc/$f"
+    done < "$_TLD/etc/$f"
   done
   [ -f "$ALTROOT/etc/shadow" ] && chmod 0400 "$ALTROOT/etc/shadow"
 fi
 # 6c. seed each declared user's authorized_keys from the users module (T2.9),
 #     against the target BE root, so SSH login works on the installed disk.
-if [ -e "$TOPLEVEL/seed-authorized-keys" ] && [ -x /usr/bin/bash ]; then
-  ROOT="$ALTROOT" /usr/bin/bash "$TOPLEVEL/seed-authorized-keys" 2>/dev/null \
+if [ -e "$_TLD/seed-authorized-keys" ] && [ -x /usr/bin/bash ]; then
+  ROOT="$ALTROOT" /usr/bin/bash "$_TLD/seed-authorized-keys" 2>/dev/null \
     || echo "NOTE: authorized_keys seed had non-fatal errors" >&2
 fi
 
@@ -1271,17 +1325,22 @@ fi
 #     default profile + store-DB dump + first-boot register oneshot — same as
 #     make-be, but staged onto the target BE root.
 log "staging Stage-A userland (profile.d/solnix-env.sh, nix.conf, default profile, store-db dump)"
-if [ -f "$TOPLEVEL/etc/profile.d/solnix-env.sh" ]; then
+if [ -f "$_TLD/etc/profile.d/solnix-env.sh" ]; then
   mkdir -p "$ALTROOT/etc/profile.d"
-  cp "$TOPLEVEL/etc/profile.d/solnix-env.sh" "$ALTROOT/etc/profile.d/solnix-env.sh"; chmod 0644 "$ALTROOT/etc/profile.d/solnix-env.sh"
+  cp "$_TLD/etc/profile.d/solnix-env.sh" "$ALTROOT/etc/profile.d/solnix-env.sh"; chmod 0644 "$ALTROOT/etc/profile.d/solnix-env.sh"
 fi
-if [ -f "$TOPLEVEL/etc/nix/nix.conf" ]; then
+if [ -f "$_TLD/etc/nix/nix.conf" ]; then
   mkdir -p "$ALTROOT/etc/nix"
-  cp "$TOPLEVEL/etc/nix/nix.conf" "$ALTROOT/etc/nix/nix.conf"; chmod 0644 "$ALTROOT/etc/nix/nix.conf"
+  cp "$_TLD/etc/nix/nix.conf" "$ALTROOT/etc/nix/nix.conf"; chmod 0644 "$ALTROOT/etc/nix/nix.conf"
 fi
 mkdir -p "$ALTROOT/nix/var/nix/profiles"
 relink "$TOPLEVEL/sw" "$ALTROOT/nix/var/nix/profiles/default"
-if [ -n "${_NIXSTORE:-}" ]; then
+if [ "${TOPLEVEL_ON_POOL:-0}" = 1 ] && command -v nix-store >/dev/null 2>&1; then
+  # On-pool build: the store DB is the $ALTROOT store's OWN db, already populated
+  # by the build. Dump it via --store so first boot has every path registered.
+  nix-store --store "$ALTROOT" --dump-db > "$ALTROOT/nix/.solnix-registration" 2>/dev/null \
+    || echo "NOTE: nix-store --store $ALTROOT --dump-db failed; store DB not pre-dumped" >&2
+elif [ -n "${_NIXSTORE:-}" ]; then
   # dump the FULL CLOSURE DB, not just the toplevel: --load-db needs every
   # referenced path registered, else first boot fails 'path <dep> is not valid'
   # (the toplevel-only dump left nix-2.3.16 etc. unregistered -> nix unusable).
@@ -1387,10 +1446,10 @@ mkdir -p "$ALTROOT/nix/var/nix/profiles"
 relink "$TOPLEVEL" "$ALTROOT/nix/var/nix/profiles/system-1-link"
 relink "system-1-link" "$ALTROOT/nix/var/nix/profiles/system"
 printf '1\n' > "$ALTROOT/nix/var/nix/profiles/system.gen"
-if [ -e "$TOPLEVEL/bin/switch-to-configuration" ]; then
+if [ -e "$_TLD/bin/switch-to-configuration" ]; then
   relink "$TOPLEVEL/bin/switch-to-configuration" "$ALTROOT/usr/bin/switch-to-configuration"
   relink "$TOPLEVEL/bin/solnix-rebuild"          "$ALTROOT/usr/bin/solnix-rebuild"
-  [ -e "$TOPLEVEL/bin/solnix-install" ] && relink "$TOPLEVEL/bin/solnix-install" "$ALTROOT/usr/bin/solnix-install"
+  [ -e "$_TLD/bin/solnix-install" ] && relink "$TOPLEVEL/bin/solnix-install" "$ALTROOT/usr/bin/solnix-install"
 fi
 fi   # end SELF_INSTALL=0 generation-registration block
 
