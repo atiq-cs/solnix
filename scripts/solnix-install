@@ -461,16 +461,25 @@ build_toplevel() {
   # Store + TMPDIR on the target pool, NOT the ramdisk. The pool's store IS the
   # installed system's store, so paths realised here need no later copy across a
   # store boundary -- they are already where the booted system will find them.
+  #
+  # Log to a FILE and test nix build's OWN exit, not a pipe's. `if nix build ... |
+  # tail` would test tail (always 0), masking a build failure -- the same
+  # pipe-hides-exit trap that a 2>/dev/null once hid in the media cpio. /sbin/sh
+  # has no PIPESTATUS, so a logfile is the portable fix; tail it for the operator.
+  _buildlog="$ALTROOT/var/tmp/solnix-build-$$.log"
   if run_to "${SOLNIX_BUILD_TIMEOUT:-14400}" env TMPDIR="$ALTROOT/var/tmp" nix build \
        --store "$ALTROOT" \
        "${_fl}#${_set}.\"${_at}\".config.system.build.toplevel" \
-       --out-link "$_outlink" 2>&1 | tail -40; then
+       --out-link "$_outlink" > "$_buildlog" 2>&1; then
+    tail -40 "$_buildlog"
     TOPLEVEL=$(_readlink "$_outlink" 2>/dev/null || true)
     # --store $ALTROOT prints a bare /nix/store/... path (the store's own view).
     # KEEP it bare: the closure-verify and activation below all address paths as
     # $ALTROOT$TOPLEVEL, matching the copy-based flow. Mark that the closure is
     # already on the pool so the copy step is skipped.
     TOPLEVEL_ON_POOL=1
+  else
+    tail -40 "$_buildlog"   # show the failure tail before build_toplevel die()s below
   fi
   # Validate against the on-pool location ($ALTROOT + the bare store path).
   if [ -z "$TOPLEVEL" ] || { [ ! -d "$TOPLEVEL" ] && [ ! -d "$ALTROOT$TOPLEVEL" ]; }; then
@@ -2096,10 +2105,17 @@ if [ "$DO_HOME" = 1 ] && [ -n "$HOME_FLAKE" ]; then
       log "WARNING: home-manager attr not found -- the SYSTEM install is complete and unaffected"
     else
       _hmlink="/var/tmp/solnix-hm-$$"
+      # log to a file + test nix build's own exit (not tail's) -- same pipe-hides-
+      # exit fix as the system build above. This HM build is non-fatal, but a
+      # masked failure would still mislead.
+      _hmlog="/var/tmp/solnix-hm-$$.log"
       if run_to "${SOLNIX_HM_BUILD_TIMEOUT:-7200}" nix build \
            "${_hfl}#homeConfigurations.\"${_hat}\".activationPackage" \
-           --out-link "$_hmlink" 2>&1 | tail -20; then
+           --out-link "$_hmlink" > "$_hmlog" 2>&1; then
+        tail -20 "$_hmlog"
         _hmout=$(_readlink "$_hmlink" 2>/dev/null || true)
+      else
+        tail -20 "$_hmlog"
       fi
       if [ -z "${_hmout:-}" ] || [ ! -d "$_hmout" ]; then
         log "WARNING: home-manager activation package FAILED TO BUILD -- system install is complete and unaffected"
