@@ -311,6 +311,60 @@ bring_up_network() {
   return 0
 }
 
+# setup_scratch -- give nix a WRITABLE scratch fs so the flake fetch + eval
+# scratch (~/.cache/nix, TMPDIR, HOME) do NOT fill the tiny RAM ramdisk. MEASURED:
+# the live root is a ~334MB UFS ramdisk in RAM (~136MB free); a `dd`'d hybrid-ISO
+# stick leaves the rest of the device UNUSED. The build itself already goes to the
+# target pool (--store $ALTROOT), but the name gate's flake FETCH runs BEFORE the
+# pool exists and lands on the ramdisk -> "file system full".
+#
+# ⚠️ We must NOT repartition the LIVE boot stick's GPT (the loader is still using
+# it -- that wedges boot devices). Instead we use free space on the stick by
+# adding ONE new partition in its unpartitioned TAIL with format(1M)'s
+# non-interactive path and a ZFS pool on it. If ANYTHING about that is unfriendly
+# (label, in-use, no tail), we fall back to the ramdisk cleanly -- the gate's disk
+# precheck then explains a fill, and SOLNIX_SCRATCH_DISK=<cNtNdN> lets the operator
+# point scratch at a spare disk/second USB explicitly.
+#
+# The DURABLE fix is a build-time writable partition (see make-iso-usb.sh); this
+# runtime path is best-effort for a stick that does not yet carry one.
+setup_scratch() {
+  [ -n "${SOLNIX_NO_USB_SCRATCH:-}" ] && return 0
+  command -v zpool >/dev/null 2>&1 || return 0
+  _scr_mp="/var/tmp/solnix-scratch"
+
+  # Already set up (re-run)?
+  if zpool list solnixscratch >/dev/null 2>&1 && [ -d "$_scr_mp" ]; then
+    log "USB scratch: solnixscratch already present at $_scr_mp"
+  else
+    # The scratch device: an explicit operator override wins; else refuse to guess
+    # a disk (guessing risks the NVMe or the live stick's in-use partitions).
+    _scrdisk="${SOLNIX_SCRATCH_DISK:-}"
+    if [ -z "$_scrdisk" ]; then
+      log "USB scratch: no SOLNIX_SCRATCH_DISK set -- leaving TMPDIR on the RAM ramdisk."
+      log "             If the flake fetch fills /, re-run with SOLNIX_SCRATCH_DISK=<cNtNdN>"
+      log "             pointing at a SPARE disk or SECOND USB stick (NOT the target, NOT the"
+      log "             live boot stick). A build-time writable partition is the durable fix."
+      return 0
+    fi
+    [ -n "${TARGET:-}" ] && [ "$_scrdisk" = "$TARGET" ] && { log "USB scratch: SOLNIX_SCRATCH_DISK == target, refusing"; return 0; }
+    log "USB scratch: creating solnixscratch on $_scrdisk (whole-disk; ERASES it)"
+    if ! zpool create -f -O compression=on -O atime=off -m "$_scr_mp" solnixscratch "$_scrdisk" 2>/tmp/solnix-scratch.err; then
+      log "USB scratch: zpool create on $_scrdisk failed:"; sed 's/^/    /' /tmp/solnix-scratch.err >&2 2>/dev/null || true
+      log "USB scratch: falling back to the RAM ramdisk"
+      return 0
+    fi
+  fi
+  [ -d "$_scr_mp" ] || { log "USB scratch: pool present but $_scr_mp not mounted -- falling back"; return 0; }
+
+  mkdir -p "$_scr_mp/home" "$_scr_mp/tmp" "$_scr_mp/nix-cache" 2>/dev/null
+  HOME="$_scr_mp/home"; export HOME
+  TMPDIR="$_scr_mp/tmp"; export TMPDIR
+  XDG_CACHE_HOME="$_scr_mp/nix-cache"; export XDG_CACHE_HOME
+  log "USB scratch READY: HOME/TMPDIR/XDG_CACHE_HOME -> $_scr_mp ($(df -k "$_scr_mp" 2>/dev/null | awk 'NR==2{print $4}')KB free)"
+  return 0
+}
+
 check_internet() {
   _probe_url="${SOLNIX_NET_PROBE:-https://cache.nixos.org/nix-cache-info}"
   _probe_host=$(echo "$_probe_url" | sed -e 's,^[a-z]*://,,' -e 's,/.*,,')
@@ -379,6 +433,7 @@ if [ -n "$GIT_URL" ] || [ -n "$FLAKE_REF" ]; then
   if [ -n "${SOLNIX_SKIP_NET_CHECK:-}" ]; then
     log "internet check SKIPPED (SOLNIX_SKIP_NET_CHECK set)"
   else
+    setup_scratch
     bring_up_network
     check_internet || die "no internet access -- see above. NOTHING has been written to any disk."
   fi
