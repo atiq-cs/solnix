@@ -59,3 +59,18 @@ per the "AWS accounts are compute only, R2 is the asset store" rule):
 Shared account, 512 vCPU ceiling, re-check `describe-instances` before every launch. Tag `solnix-*`. NEVER a
 `0.0.0.0/0`/`::/0` rule. TERMINATE instances AND delete orphaned volumes; check the API, don't trust the report.
 The cache (`cache.solnix.io` / `s3.solnix.io`) is on R2, independent of any EC2 account — it survives every expiry.
+
+## ⚠️ Shared-account hazard on hotdog (observed 2026-09-17)
+
+A FOREIGN tenant's SG `sg-0a0fec26afe57cd43` (`osv-bench`) has a **world-open tcp/22 from `0.0.0.0/0`** ingress
+rule. This is NOT ours and must NOT be touched (it belongs to the `osv-*` tenant), but it is the exact
+T&C-violation-kills-the-shared-account hazard the project guards against — so `sg-guard audit` correctly reads
+**DIRTY** on hotdog entirely because of it.
+
+* It is currently **dormant** (not attached to any running instance — verified), so no live box is exposed through
+  it, but the rule's mere existence is the account-level risk.
+* **Action: ping the osv owner** to remove it. Until then, `sg-guard` will report DIRTY on hotdog even though every
+  solnix SG is clean.
+* Our SG `sg-0ee29b5cff1de2cd0` (`solnix-ssh-operator`) is correctly scoped: tcp/22 from `73.4.58.0/24` ONLY.
+* The guard is NOT blind on hotdog (3 SGs visible; `SG_GUARD_SELFTEST=1` flips it DIRTY) — the DIRTY reading is a
+  REAL foreign rule, not the silent-unreadable-account failure.
