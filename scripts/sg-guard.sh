@@ -22,7 +22,7 @@ set -euo pipefail
 # profile of its own -- so every "CLEAN" was reported from an account it
 # could not read. Default to the current build account; override with
 # AWS_PROFILE=... when auditing a different one.
-: "${AWS_PROFILE:=lava}"   # build account; bene expired 2026-09-11
+: "${AWS_PROFILE:=hotdog}"   # build account; lava expired 2026-09-17, bene 2026-09-11
 export AWS_PROFILE
 
 
