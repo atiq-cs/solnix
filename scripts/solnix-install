@@ -429,10 +429,41 @@ if [ -n "$FLAKE_REF" ]; then
   # delta 0), so it proves the attr EXISTS without touching disk. The real
   # drvPath instantiation + build happen later, with the store on the target
   # pool (see the build block), not the ramdisk.
+  # DISK PRECHECK: even this lazy name gate makes nix FETCH the flake into the
+  # ramdisk (~/.cache/nix), which fails on a full /. A previous failed --flake
+  # attempt (or an old drvPath-gate installer) can leave the ~620MB ramdisk full,
+  # and then this eval fails to WRITE, not because the attr is missing -- which
+  # used to misreport as "nothing to install". Check free space and say the real
+  # thing: reboot the live media (the ramdisk is RAM; a reboot gives a fresh one).
+  _freek=$(df -k / 2>/dev/null | awk 'NR==2{print $4}')
+  case "$_freek" in ''|*[!0-9]*) : ;; *) if [ "$_freek" -lt 51200 ]; then
+    echo "" >&2
+    echo "FATAL: only ${_freek}KB free on / -- too little for nix to even fetch the flake." >&2
+    echo "The live media's / is a ~620MB RAM ramdisk; a previous failed attempt likely" >&2
+    echo "filled it. REBOOT the installer (the ramdisk is RAM -- a reboot gives a fresh" >&2
+    echo "one), then re-run. The build itself goes to the target pool, not the ramdisk." >&2
+    die "insufficient ramdisk space to resolve the flake -- reboot and retry"
+  fi ;; esac
+
   for _set in solnixConfigurations nixosConfigurations; do
-    if nix eval "${_fl}#${_set}" --apply \
-         "x: if builtins.hasAttr \"${_at}\" x then \"yes\" else \"no\"" --raw 2>/dev/null \
-         | grep -q '^yes$'; then _found="$_set"; _drv="(name-verified; drvPath deferred to the pool-backed build)"; break; fi
+    # Capture stderr so we can tell "attr genuinely absent" from "eval FAILED"
+    # (disk full / no network / bad flake) -- the latter must not masquerade as
+    # "nothing to install".
+    _ev=$(nix eval "${_fl}#${_set}" --apply \
+         "x: if builtins.hasAttr \"${_at}\" x then \"yes\" else \"no\"" --raw 2>/tmp/solnix-gate.err)
+    _rc=$?
+    if [ "$_rc" = 0 ] && [ "$_ev" = yes ]; then
+      _found="$_set"; _drv="(name-verified; drvPath deferred to the pool-backed build)"; break
+    fi
+    # rc!=0 AND the attrset itself did not evaluate (not merely a missing member)
+    # means a real failure. If the err mentions space/network, surface THAT.
+    if [ "$_rc" != 0 ] && grep -qiE 'no space|file system full|could not resolve|unable to download|connection|SSL' /tmp/solnix-gate.err 2>/dev/null; then
+      echo "" >&2
+      echo "FATAL: could not evaluate '$_at' -- nix eval failed for a reason that is NOT a" >&2
+      echo "missing attribute. The error was:" >&2
+      tail -5 /tmp/solnix-gate.err | sed 's/^/  /' >&2
+      die "flake resolution failed (disk/network), NOT a missing config -- fix the above and retry"
+    fi
   done
   if [ -z "$_drv" ]; then
     echo "" >&2
