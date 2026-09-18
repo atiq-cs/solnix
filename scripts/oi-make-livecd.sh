@@ -92,7 +92,13 @@ GRAPHICAL="${GRAPHICAL:-0}"
 # 389,611 KB, which left 28,132 KB against the 32 MB RD_MIN_FREE_MB floor and
 # correctly FAILED the build. The content is load-bearing, so the image gets the
 # space; the occupancy gate stays where it is and did exactly its job.
-if [ "$GRAPHICAL" = 1 ]; then RD_MB="${RD_MB:-500}"; else RD_MB="${RD_MB:-440}"; fi
+# RD_MB default. The text installer now carries git + dig + the full tool
+# closure, which land a ~640 MiB ramdisk (image p/p2 shipped exactly this,
+# 82.2% of the X1's 778.3 MiB low block) -- so the text default is 640, not the
+# old 440 which pre-dated those tools and would drop them. The graphical variant
+# keeps its measured 500 (it does not add git/dig and has never needed more);
+# raise it only against a measured graphical build, not "to be safe".
+if [ "$GRAPHICAL" = 1 ]; then RD_MB="${RD_MB:-500}"; else RD_MB="${RD_MB:-640}"; fi
 # RD_NBPI: newfs -i bytes-per-inode. illumos newfs defaults to nbpi=2048 for an
 # image this size, which cost 20,522KB of inode tables at RD_MB=320 to hold 3369
 # used inodes out of 160000 -- ~7% of the whole image spent on a table that is
@@ -102,9 +108,13 @@ if [ "$GRAPHICAL" = 1 ]; then RD_MB="${RD_MB:-500}"; else RD_MB="${RD_MB:-440}";
 RD_NBPI="${RD_NBPI:-8192}"
 # RD_MAX_RAW_MB: refuse to ship a ramdisk whose UNCOMPRESSED size is above this,
 # because that is literally the byte count the loader asks EFI for below 4 GB.
-# 560 MB sits under the X1's measured 778.3 MiB largest low block with ~218 MiB
-# to spare, and still admits the 500 MB graphical variant.
-RD_MAX_RAW_MB="${RD_MAX_RAW_MB:-560}"
+# 700 MB (734,003,200 B) admits the RD_MB=640 text image the media now needs
+# (git + dig + the full tool closure land a ~671 MB / 640 MiB ramdisk, which
+# image p already shipped at 82.2% of the X1's measured 778.3 MiB low block)
+# with ~44 MiB of headroom under the ceiling, and still admits the 680 MB
+# graphical variant. The old 560 cap PRE-DATED git/dig and rejected the very
+# ramdisk p shipped -- it had drifted below the size the media requires.
+RD_MAX_RAW_MB="${RD_MAX_RAW_MB:-700}"
 # RD_MIN_FREE_MB / RD_MIN_FREE_INODES: refuse to ship a ramdisk with less slack
 # than this, so shrinking RD_MB or RD_NBPI can never silently produce a full or
 # truncated live root.
