@@ -147,6 +147,33 @@ mkdir -p "$ISOROOT/EFI/BOOT"
 cp "$WORK/loader64.efi" "$ISOROOT/EFI/BOOT/BOOTX64.EFI"
 
 # ---------------------------------------------------------------------------
+# 1b. WRITABLE SCRATCH PARTITION (design-two-installer-images.md #1). The live
+#     root is a small RAM ramdisk; `nix eval <user-flake>` fetches flake inputs
+#     into ~/.cache/nix and fills it. NixOS bakes its own closure into the media
+#     and mounts the target disk for the rest; we add a real WRITABLE partition
+#     on the stick so setup_scratch (in solnix-install) can mount it for the
+#     flake fetch/eval scratch AND root's home -- WITHOUT carving the live GPT at
+#     runtime (that wedges boot devices). It is a fixed-size blank partition here;
+#     first boot grows it to fill the stick.
+#
+#     WHAT KIND: a ZFS pool image. illumos mounts it with `zpool import` and grows
+#     it with `zpool online -e` (research: docs/design-two-installer-images.md,
+#     illumos has lofi+zpool, no overlayfs -- none needed). We ship a small (256MB)
+#     pool image, labeled solnixscratch, so a dd'd stick carries a ready pool the
+#     installer imports + expands. Building the pool image needs zpool, which the
+#     Linux build box lacks -- so we ship a BLANK partition (zeroed, type bf01
+#     Solaris) and let setup_scratch `zpool create` it on first use if no pool is
+#     found. Fixed 256MB in the image; grown to the stick tail at first use.
+SCRATCH_MB="${SCRATCH_MB:-256}"
+SCRATCH_IMG="$WORK/scratch.img"
+log "building blank writable scratch partition image (${SCRATCH_MB}MB, type Solaris)"
+rm -f "$SCRATCH_IMG"
+# a zeroed image; setup_scratch formats it (zpool create) on first boot and then
+# `zpool online -e` grows the pool into the stick's free tail. Sparse to keep the
+# shipped .img small (the ISO copy only carries the non-zero head).
+dd if=/dev/zero of="$SCRATCH_IMG" bs=1024k count=0 seek="$SCRATCH_MB" 2>/dev/null
+
+# ---------------------------------------------------------------------------
 # 2. assemble the hybrid ISO with xorriso.
 #    -b boot/cdboot          BIOS El Torito boot image (no-emulation)
 #    -e boot/efiboot.img     UEFI El Torito boot image (the ESP FAT)
@@ -159,6 +186,8 @@ log "assembling hybrid ISO -> $ISO"
 # -append_partition 2 0xef boot/efiboot.img  ALSO expose efiboot.img as GPT
 #                       partition 2 (type EF00 ESP) so UEFI firmware that boots
 #                       the media as a DISK (the USB path) finds the ESP.
+# -append_partition 3 0xbf scratch.img       the writable Solaris scratch part
+#                       (type bf01/Solaris) that setup_scratch mounts + grows.
 # -partition_offset 16  isohybrid MBR so BIOS USB boot works too.
 xorriso -as mkisofs \
   -o "$ISO" \
@@ -169,6 +198,7 @@ xorriso -as mkisofs \
   -eltorito-alt-boot \
   -e boot/efiboot.img -no-emul-boot \
   -append_partition 2 0xef "$ISOROOT/boot/efiboot.img" \
+  -append_partition 3 0xbf "$SCRATCH_IMG" \
   -appended_part_as_gpt \
   "$ISOROOT" 2>&1 | tail -20
 

@@ -314,20 +314,18 @@ bring_up_network() {
 # setup_scratch -- give nix a WRITABLE scratch fs so the flake fetch + eval
 # scratch (~/.cache/nix, TMPDIR, HOME) do NOT fill the tiny RAM ramdisk. MEASURED:
 # the live root is a ~334MB UFS ramdisk in RAM (~136MB free); a `dd`'d hybrid-ISO
-# stick leaves the rest of the device UNUSED. The build itself already goes to the
-# target pool (--store $ALTROOT), but the name gate's flake FETCH runs BEFORE the
-# pool exists and lands on the ramdisk -> "file system full".
+# stick would otherwise leave the rest of the device UNUSED. The build itself
+# already goes to the target pool (--store $ALTROOT), but the name gate's flake
+# FETCH runs BEFORE the pool exists and lands on the ramdisk -> "file system full".
 #
-# ⚠️ We must NOT repartition the LIVE boot stick's GPT (the loader is still using
-# it -- that wedges boot devices). Instead we use free space on the stick by
-# adding ONE new partition in its unpartitioned TAIL with format(1M)'s
-# non-interactive path and a ZFS pool on it. If ANYTHING about that is unfriendly
-# (label, in-use, no tail), we fall back to the ramdisk cleanly -- the gate's disk
-# precheck then explains a fill, and SOLNIX_SCRATCH_DISK=<cNtNdN> lets the operator
-# point scratch at a spare disk/second USB explicitly.
-#
-# The DURABLE fix is a build-time writable partition (see make-iso-usb.sh); this
-# runtime path is best-effort for a stick that does not yet carry one.
+# THE MEDIA NOW CARRIES A WRITABLE PARTITION (make-iso-usb.sh appends GPT
+# partition 3, type Solaris, as a blank scratch area). We find the boot stick by
+# its SOLNIX_INSTALL label, zpool-create the scratch pool ON THAT PRE-CARVED
+# PARTITION 3 (a real GPT slot the image built -- NOT live-repartitioning the
+# GPT, which wedges boot devices), grow it into the stick's free tail
+# (zpool online -e), and point HOME/TMPDIR/nix caches at it. SOLNIX_SCRATCH_DISK
+# still overrides for a spare disk / second stick. All best-effort: any failure
+# falls back to the ramdisk and the gate's disk precheck explains a fill.
 setup_scratch() {
   [ -n "${SOLNIX_NO_USB_SCRATCH:-}" ] && return 0
   command -v zpool >/dev/null 2>&1 || return 0
@@ -337,23 +335,45 @@ setup_scratch() {
   if zpool list solnixscratch >/dev/null 2>&1 && [ -d "$_scr_mp" ]; then
     log "USB scratch: solnixscratch already present at $_scr_mp"
   else
-    # The scratch device: an explicit operator override wins; else refuse to guess
-    # a disk (guessing risks the NVMe or the live stick's in-use partitions).
-    _scrdisk="${SOLNIX_SCRATCH_DISK:-}"
-    if [ -z "$_scrdisk" ]; then
-      log "USB scratch: no SOLNIX_SCRATCH_DISK set -- leaving TMPDIR on the RAM ramdisk."
-      log "             If the flake fetch fills /, re-run with SOLNIX_SCRATCH_DISK=<cNtNdN>"
-      log "             pointing at a SPARE disk or SECOND USB stick (NOT the target, NOT the"
-      log "             live boot stick). A build-time writable partition is the durable fix."
-      return 0
+    _scrpart=""
+    # Explicit override wins (whole-disk spare / second stick).
+    if [ -n "${SOLNIX_SCRATCH_DISK:-}" ]; then
+      _scrpart="${SOLNIX_SCRATCH_DISK}"
+      [ -n "${TARGET:-}" ] && [ "$_scrpart" = "$TARGET" ] && { log "USB scratch: SOLNIX_SCRATCH_DISK == target, refusing"; return 0; }
+      log "USB scratch: using operator-specified $_scrpart (ERASES it)"
+    else
+      # Find the boot stick: the disk whose partition 1 carries the SOLNIX_INSTALL
+      # ISO label, then use ITS partition 3 (the pre-carved scratch slot). p0 is
+      # the whole disk, pN the Nth partition, in illumos /dev/rdsk naming.
+      for _d in /dev/rdsk/*p0; do
+        [ -e "$_d" ] || continue
+        _n=$(basename "$_d"); _n=${_n%p0}
+        if dd if="/dev/rdsk/${_n}p1" bs=2048 count=64 2>/dev/null | strings 2>/dev/null | grep -q 'SOLNIX_INSTALL'; then
+          # partition 3 is our scratch slot (1=ISO, 2=ESP, 3=scratch).
+          [ -e "/dev/dsk/${_n}p3" ] && _scrpart="${_n}p3"
+          break
+        fi
+      done
+      if [ -z "$_scrpart" ]; then
+        log "USB scratch: no SOLNIX_INSTALL stick with a partition 3 found -- leaving TMPDIR on the ramdisk."
+        log "             (An older image without the scratch partition, or a non-USB boot. Re-run with"
+        log "             SOLNIX_SCRATCH_DISK=<cNtNdN> pointing at a spare disk/second stick if / fills.)"
+        return 0
+      fi
+      log "USB scratch: boot stick scratch partition is $_scrpart"
     fi
-    [ -n "${TARGET:-}" ] && [ "$_scrdisk" = "$TARGET" ] && { log "USB scratch: SOLNIX_SCRATCH_DISK == target, refusing"; return 0; }
-    log "USB scratch: creating solnixscratch on $_scrdisk (whole-disk; ERASES it)"
-    if ! zpool create -f -O compression=on -O atime=off -m "$_scr_mp" solnixscratch "$_scrdisk" 2>/tmp/solnix-scratch.err; then
-      log "USB scratch: zpool create on $_scrdisk failed:"; sed 's/^/    /' /tmp/solnix-scratch.err >&2 2>/dev/null || true
+    # Create the pool on the (pre-carved) partition or the override device.
+    if ! zpool create -f -O compression=on -O atime=off -m "$_scr_mp" solnixscratch "/dev/dsk/${_scrpart}" 2>/tmp/solnix-scratch.err \
+         && ! zpool create -f -O compression=on -O atime=off -m "$_scr_mp" solnixscratch "$_scrpart" 2>>/tmp/solnix-scratch.err; then
+      log "USB scratch: zpool create on $_scrpart failed:"; sed 's/^/    /' /tmp/solnix-scratch.err >&2 2>/dev/null || true
       log "USB scratch: falling back to the RAM ramdisk"
       return 0
     fi
+    # Grow the pool to fill the stick's free tail (the image shipped a small fixed
+    # partition; autoexpand + online -e claims the rest). Best-effort.
+    zpool set autoexpand=on solnixscratch 2>/dev/null || true
+    zpool online -e solnixscratch "/dev/dsk/${_scrpart}" 2>/dev/null \
+      || zpool online -e solnixscratch "$_scrpart" 2>/dev/null || true
   fi
   [ -d "$_scr_mp" ] || { log "USB scratch: pool present but $_scr_mp not mounted -- falling back"; return 0; }
 
