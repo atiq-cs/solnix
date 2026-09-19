@@ -159,3 +159,8 @@ artifacts/install-media/usb-image-20260918p2/*.tar.gz
 artifacts/install-media/usb-image-20260919-tui/*.iso
 artifacts/install-media/usb-image-20260919-tui/*.img
 artifacts/install-media/usb-image-20260919-tui/*.tar.gz
+
+# usb-image-20260919-tui2 binaries -- banked in R2, never committed (image-trap rule)
+artifacts/install-media/usb-image-20260919-tui2/*.iso
+artifacts/install-media/usb-image-20260919-tui2/*.img
+artifacts/install-media/usb-image-20260919-tui2/*.tar.gz

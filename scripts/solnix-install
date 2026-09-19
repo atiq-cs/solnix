@@ -311,6 +311,50 @@ bring_up_network() {
   return 0
 }
 
+# _grow_scratch_tail <disk cNtNdN> -- extend the scratch GPT partition (GPT index
+# 2, the SCRATCH_MB-sized one make-iso-usb.sh built) into the stick's UNPARTITIONED
+# FREE TAIL, so a single dd'd stick's scratch fills the device (NixOS-style
+# single-medium install, no second USB). Grows the label to the whole device
+# (format -e expand), then rewrites the partition map (fmthard) so part 2 fills
+# from its unchanged start to an EFI-reserved slice at the device end. p1(ISO)/
+# p2(ESP) are copied VERBATIM -- MEASURED byte-identical after (the grow claims
+# only free tail). Returns 0 on grow, non-zero if nothing to claim / tool missing.
+_grow_scratch_tail() {
+  _gd="$1"
+  _graw="/dev/rdsk/${_gd}p0"
+  command -v format  >/dev/null 2>&1 || return 1
+  command -v fmthard >/dev/null 2>&1 || return 1
+  command -v prtvtoc >/dev/null 2>&1 || return 1
+  [ -e "$_graw" ] || return 1
+  # expand the EFI label to the whole device (claims the free tail into the usable
+  # region + moves the backup GPT header to the device end; moves NO partition).
+  # Driven non-interactively; "1"=EFI label, "y"=confirm write.
+  printf 'partition\nexpand\nlabel\n1\ny\nquit\nquit\n' | format -e "$_graw" >/dev/null 2>&1
+  _acc=$(prtvtoc "$_graw" 2>/dev/null | awk '/accessible/{print $2}')
+  case "$_acc" in ''|*[!0-9]*) return 1 ;; esac
+  _p0=$(prtvtoc -h "$_graw" 2>/dev/null | awk '$1==0{print $4, $5}')
+  _p1=$(prtvtoc -h "$_graw" 2>/dev/null | awk '$1==1{print $4, $5}')
+  _p2start=$(prtvtoc -h "$_graw" 2>/dev/null | awk '$1==2{print $4}')
+  _built=$(prtvtoc -h "$_graw" 2>/dev/null | awk '$1==2{print $5}')
+  case "$_p2start$_built" in ''|*[!0-9]*) return 1 ;; esac
+  _lastu=$(( _acc - 34 ))              # leave room for the backup GPT header
+  _rstart=$(( _lastu - 16384 + 1 ))    # EFI reserved (tag 11) start
+  _p2cnt=$(( _rstart - _p2start ))     # scratch fills up to the reserved slice
+  # only rewrite if there is a meaningful gain (else keep the built size).
+  [ "$_p2cnt" -gt "$_built" ] || return 1
+  { echo "0 20 01 $_p0"
+    echo "1 12 00 $_p1"
+    echo "2 20 00 $_p2start $_p2cnt"
+    echo "8 11 00 $_rstart 16384"     # fmthard REQUIRES one reserved (tag 11)
+  } > /tmp/solnix-scratch-grow.spec
+  fmthard -s /tmp/solnix-scratch-grow.spec "$_graw" >/tmp/solnix-scratch-grow.err 2>&1 || {
+    log "USB scratch: fmthard grow failed:"; sed 's/^/    /' /tmp/solnix-scratch-grow.err >&2 2>/dev/null
+    return 1
+  }
+  log "USB scratch: grew scratch partition into free tail ($(( (_p2cnt*512)/1048576 ))MiB, was $(( (_built*512)/1048576 ))MiB)"
+  return 0
+}
+
 # setup_scratch -- give nix a WRITABLE scratch fs so the flake fetch + eval
 # scratch (~/.cache/nix, TMPDIR, HOME) do NOT fill the tiny RAM ramdisk. MEASURED:
 # the live root is a ~334MB UFS ramdisk in RAM (~136MB free); a `dd`'d hybrid-ISO
@@ -342,25 +386,34 @@ setup_scratch() {
       [ -n "${TARGET:-}" ] && [ "$_scrpart" = "$TARGET" ] && { log "USB scratch: SOLNIX_SCRATCH_DISK == target, refusing"; return 0; }
       log "USB scratch: using operator-specified $_scrpart (ERASES it)"
     else
-      # Find the boot stick: the disk whose partition 1 carries the SOLNIX_INSTALL
-      # ISO label, then use ITS partition 3 (the pre-carved scratch slot). p0 is
-      # the whole disk, pN the Nth partition, in illumos /dev/rdsk naming.
+      # Find the boot stick by its SOLNIX_INSTALL ISO label. MEASURED: the isohybrid
+      # ISO9660 volume descriptor (carrying volume-id SOLNIX_INSTALL) sits at sector
+      # 16 of the WHOLE DISK (p0), NOT inside p1 (p1 starts at LBA 64, past it) --
+      # reading p1 finds nothing, p0 matches. On an EFI/GPT disk the scratch is GPT
+      # partition 2 = slice s2 (the fdisk node p3 fails "No such device or address").
+      _scrdisk=""
       for _d in /dev/rdsk/*p0; do
         [ -e "$_d" ] || continue
         _n=$(basename "$_d"); _n=${_n%p0}
-        if dd if="/dev/rdsk/${_n}p1" bs=2048 count=64 2>/dev/null | strings 2>/dev/null | grep -q 'SOLNIX_INSTALL'; then
-          # partition 3 is our scratch slot (1=ISO, 2=ESP, 3=scratch).
-          [ -e "/dev/dsk/${_n}p3" ] && _scrpart="${_n}p3"
+        if dd if="/dev/rdsk/${_n}p0" bs=2048 count=64 2>/dev/null | strings 2>/dev/null | grep -q 'SOLNIX_INSTALL'; then
+          [ -e "/dev/dsk/${_n}s2" ] && { _scrdisk="$_n"; _scrpart="${_n}s2"; }
           break
         fi
       done
       if [ -z "$_scrpart" ]; then
-        log "USB scratch: no SOLNIX_INSTALL stick with a partition 3 found -- leaving TMPDIR on the ramdisk."
+        log "USB scratch: no SOLNIX_INSTALL stick with a scratch partition found -- leaving TMPDIR on the ramdisk."
         log "             (An older image without the scratch partition, or a non-USB boot. Re-run with"
         log "             SOLNIX_SCRATCH_DISK=<cNtNdN> pointing at a spare disk/second stick if / fills.)"
         return 0
       fi
       log "USB scratch: boot stick scratch partition is $_scrpart"
+      # SELF-GROW into the stick's free tail BEFORE creating the pool. A dd'd stick
+      # bigger than the image leaves UNPARTITIONED FREE SPACE after the scratch
+      # partition; claiming it does NOT move p1(ISO)/p2(ESP) -- the class of op
+      # NixOS's installer performs, so a SINGLE stick fills the device with no
+      # second USB. MEASURED SAFE: p1/p2 byte-identical after, stick still boots.
+      # (Growing UNDER a live pool suspends pool I/O, so grow FIRST, create after.)
+      _grow_scratch_tail "$_scrdisk" || log "USB scratch: tail grow skipped/failed (using built size)"
     fi
     # Create the pool on the (pre-carved) partition or the override device.
     if ! zpool create -f -O compression=on -O atime=off -m "$_scr_mp" solnixscratch "/dev/dsk/${_scrpart}" 2>/tmp/solnix-scratch.err \
@@ -369,13 +422,10 @@ setup_scratch() {
       log "USB scratch: falling back to the RAM ramdisk"
       return 0
     fi
-    # The pool lives on the fixed-size p3 the image carved. `zpool online -e`
-    # does NOT grow it on a dd'd stick (MEASURED: the p3 GPT partition stays the
-    # built size, so online -e sees no larger device). Growing requires extending
-    # the p3 GPT entry into the stick's free tail FIRST -- a deferred follow-up.
-    # So the partition is sized big at build time (SCRATCH_MB, make-iso-usb.sh)
-    # to cover the common flake fetch. We still try online -e in case the operator
-    # used SOLNIX_SCRATCH_DISK with a whole disk (there it does grow).
+    # The scratch partition was grown into the stick's free tail BEFORE the pool
+    # was created (_grow_scratch_tail above), so the pool already fills the device.
+    # autoexpand + online -e remain for the SOLNIX_SCRATCH_DISK whole-disk override
+    # path (a raw whole disk grows via online -e).
     zpool set autoexpand=on solnixscratch 2>/dev/null || true
     zpool online -e solnixscratch "/dev/dsk/${_scrpart}" 2>/dev/null \
       || zpool online -e solnixscratch "$_scrpart" 2>/dev/null || true
