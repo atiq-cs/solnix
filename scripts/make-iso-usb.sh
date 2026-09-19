@@ -153,25 +153,141 @@ cp "$WORK/loader64.efi" "$ISOROOT/EFI/BOOT/BOOTX64.EFI"
 #     and mounts the target disk for the rest; we add a real WRITABLE partition
 #     on the stick so setup_scratch (in solnix-install) can mount it for the
 #     flake fetch/eval scratch AND root's home -- WITHOUT carving the live GPT at
-#     runtime (that wedges boot devices). It is a fixed-size blank partition here;
-#     first boot grows it to fill the stick.
+#     runtime (that wedges boot devices).
 #
-#     WHAT KIND: a ZFS pool image. illumos mounts it with `zpool import` and grows
-#     it with `zpool online -e` (research: docs/design-two-installer-images.md,
-#     illumos has lofi+zpool, no overlayfs -- none needed). We ship a small (256MB)
-#     pool image, labeled solnixscratch, so a dd'd stick carries a ready pool the
-#     installer imports + expands. Building the pool image needs zpool, which the
-#     Linux build box lacks -- so we ship a BLANK partition (zeroed, type bf01
-#     Solaris) and let setup_scratch `zpool create` it on first use if no pool is
-#     found. Fixed 256MB in the image; grown to the stick tail at first use.
-SCRATCH_MB="${SCRATCH_MB:-256}"
+#     SIZE: fixed at build time (a dd'd stick cannot auto-grow the partition
+#     without a live-GPT edit -- MEASURED: `zpool online -e` sees the still-fixed
+#     p3 and does not expand; growing the p3 GPT entry first is a deferred
+#     follow-up). So SIZE IT BIG ENOUGH FOR THE COMMON USER-FLAKE FETCH here.
+#     The image is written SPARSE (dd seek, zeros), so a large partition costs
+#     almost nothing in the shipped .img yet gives real space on the stick.
+#     4GB covers most flake-input fetches; the base/default install needs almost
+#     none (step #2's media store serves the base closure locally).
+#
+#     WHAT KIND: type Solaris (bf01). setup_scratch `zpool create`s it on first
+#     use (the Linux build box has no zpool to pre-format it).
+SCRATCH_MB="${SCRATCH_MB:-4096}"
 SCRATCH_IMG="$WORK/scratch.img"
-log "building blank writable scratch partition image (${SCRATCH_MB}MB, type Solaris)"
+log "building blank writable scratch partition image (${SCRATCH_MB}MB sparse, type Solaris)"
 rm -f "$SCRATCH_IMG"
-# a zeroed image; setup_scratch formats it (zpool create) on first boot and then
-# `zpool online -e` grows the pool into the stick's free tail. Sparse to keep the
-# shipped .img small (the ISO copy only carries the non-zero head).
+# a zeroed SPARSE image; setup_scratch formats it (zpool create) on first boot.
+# Sparse (seek, no data blocks written) keeps the shipped .img small -- only the
+# GPT-declared size matters for the partition, not on-disk bytes here.
 dd if=/dev/zero of="$SCRATCH_IMG" bs=1024k count=0 seek="$SCRATCH_MB" 2>/dev/null
+
+# ---------------------------------------------------------------------------
+# 1c. READ-ONLY MEDIA STORE (design-two-installer-images.md #2). Seed the SOLNIX
+#     BASE closure + the common starter set into a read-only Nix binary cache and
+#     pack it as its OWN ISO9660 (hsfs) image dropped in the ISO tree at
+#     /solnix-store.iso. At boot, setup_media_store (solnix-install) lofiadm -a's
+#     it, mounts -F hsfs -o ro, and wires it as `--extra-substituters file://<mnt>`
+#     so a base `nix build` pulls store paths from the MEDIA, not the network.
+#
+#     WHY a file:// binary cache in ISO9660, not a raw /nix/store or a UFS image:
+#       * `--extra-substituters file://<dir>` reads the STANDARD binary-cache layout
+#         (nix-cache-info + <hash>.narinfo + nar/*.nar), which `nix copy --to
+#         file://<dir>` produces. That is exactly what a substituter consumes.
+#       * illumos has NO overlayfs and needs none (research, design doc). It DOES
+#         mount ISO9660 read-only via lofi + `mount -F hsfs` natively, and Linux
+#         builds ISO9660 with the xorriso this script already depends on -- so no
+#         UFS-on-Linux writer is needed. MEASURED on Linux: git's 75-path closure
+#         realises from file://<iso-mount> with the network substituter unreachable.
+#       * The image lives in the MEDIA filesystem (lofi-mounted), NOT unpacked into
+#         the RAM ramdisk -- so it does not re-fill RAM (the #2 constraint).
+#
+#     ⚠️ MEASURED distinction preserved: this serves STORE PATHS. It makes the
+#        DEFAULT/base install near-instant + offline. A user's github: flake still
+#        fetches its FLAKE INPUTS into the step-#1 scratch partition; the two caches
+#        are separate and not conflated here.
+#
+#     Set SOLNIX_NO_MEDIA_STORE=1 to skip (faster iteration / no-nix build box).
+#     STORE_CACHE names the upstream cache to seed FROM (default cache.solnix.io).
+if [ -z "${SOLNIX_NO_MEDIA_STORE:-}" ]; then
+  log "building read-only base-closure media store -> $ISOROOT/solnix-store.iso"
+  if ! command -v nix >/dev/null 2>&1; then
+    echo "FATAL: nix not on PATH; the media store needs \`nix copy\`. Install nix or set SOLNIX_NO_MEDIA_STORE=1." >&2
+    exit 1
+  fi
+  STORE_CACHE="${STORE_CACHE:-https://cache.solnix.io}"
+  STORE_KEY="${STORE_KEY:-cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk=}"
+  # The base-closure roots. Default: the x86_64-solaris published store paths for the
+  # pnames configurations/base.nix's system.build.toplevel references (its
+  # systemPackages starter set) + the common starter set the brief names. Passed as
+  # a newline-separated file so the caller can override for a different config.
+  #   SOLNIX_STORE_ROOTS=/path/to/roots.txt   (one /nix/store/... path per line)
+  STORE_ROOTS_FILE="${SOLNIX_STORE_ROOTS:-}"
+  if [ -z "$STORE_ROOTS_FILE" ]; then
+    _rd="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)/docs/registry/real-derivations.tsv"
+    STORE_ROOTS_FILE="$WORK/base-roots.txt"
+    if [ -f "$_rd" ]; then
+      # base.nix systemPackages + nix module deps + the brief's starter set, by pname.
+      awk -F'\t' '$8=="x86_64-solaris" && $7=="published" && \
+        ($1=="coreutils"||$1=="file"||$1=="gnugrep"||$1=="gnused"||$1=="bzip2"|| \
+         $1=="xz"||$1=="zlib"||$1=="pcre2"||$1=="nvi"||$1=="which"||$1=="gdb"|| \
+         $1=="openssl"||$1=="git"||$1=="ncurses"||$1=="curl") {print $4}' \
+        "$_rd" | sort -u > "$STORE_ROOTS_FILE"
+    fi
+  fi
+  if [ ! -s "$STORE_ROOTS_FILE" ]; then
+    echo "FATAL: no base-closure roots to seed (looked for docs/registry/real-derivations.tsv" >&2
+    echo "       x86_64-solaris published rows, or SOLNIX_STORE_ROOTS). Set SOLNIX_NO_MEDIA_STORE=1 to skip." >&2
+    exit 1
+  fi
+  echo "  base-closure roots ($(wc -l < "$STORE_ROOTS_FILE" | tr -d ' ') paths):" >&2
+  sed 's,^/nix/store/,    ,' "$STORE_ROOTS_FILE" >&2
+  STORE_DIR="$WORK/store"
+  mkdir -p "$STORE_DIR"
+  # nix copy: cache -> file:// binary cache, WITH closure, uncompressed (the media
+  # is already read-only + the ISO is not re-compressed here; NAR-level compression
+  # would only slow the boot-time substitution). Signatures are checked against the
+  # trusted key so a tampered upstream path is refused at seed time.
+  # shellcheck disable=SC2046
+  if ! nix copy \
+        --extra-experimental-features nix-command \
+        --from "$STORE_CACHE" \
+        --to "file://$STORE_DIR?compression=none" \
+        --option trusted-public-keys "$STORE_KEY cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=" \
+        $(cat "$STORE_ROOTS_FILE") 2>&1 | tail -8; then
+    echo "FATAL: nix copy of the base closure from $STORE_CACHE failed" >&2; exit 1
+  fi
+  # GATE: the binary-cache layout must be present, or file:// substitution silently
+  # finds nothing at boot (the empty-dir negative control -- proven to FAIL rc=1).
+  _ninfo=$(ls "$STORE_DIR"/*.narinfo 2>/dev/null | wc -l | tr -d ' ')
+  [ "$_ninfo" -ge 1 ] || { echo "FATAL: media store has 0 .narinfo files -- seed produced nothing" >&2; exit 1; }
+  [ -d "$STORE_DIR/nar" ] || { echo "FATAL: media store has no nar/ dir" >&2; exit 1; }
+  # nix-cache-info makes it a valid substituter root; nix copy writes it, assert it.
+  [ -f "$STORE_DIR/nix-cache-info" ] || { echo "FATAL: media store has no nix-cache-info" >&2; exit 1; }
+  echo "  media store seeded: $_ninfo narinfo, $(du -sh "$STORE_DIR" 2>/dev/null | awk '{print $1}')" >&2
+  # Pack the store dir as its OWN ISO9660 (Rock Ridge -R preserves the exact
+  # hash-named file names + case that narinfo lookups depend on). This image is
+  # what illumos lofi-mounts read-only at boot.
+  STORE_ISO="$ISOROOT/solnix-store.iso"
+  rm -f "$STORE_ISO"
+  xorriso -as mkisofs -R -V SOLNIXSTORE -o "$STORE_ISO" "$STORE_DIR" 2>&1 | tail -3
+  [ -f "$STORE_ISO" ] || { echo "FATAL: solnix-store.iso not produced" >&2; exit 1; }
+  echo "  media store image: $(wc -c < "$STORE_ISO" | tr -d ' ') B at $STORE_ISO" >&2
+  # Bank a copy of the store image beside the deliverables (read-back verify + R2).
+  cp "$STORE_ISO" "$OUTDIR/solnix-store.iso"
+else
+  echo "SOLNIX_NO_MEDIA_STORE=1: NOT seeding the base-closure media store" >&2
+fi
+
+# ---------------------------------------------------------------------------
+# 1d. IMAGE EDITION MARKER (design-two-installer-images.md #3, NixOS
+#     `isoImage.edition` parity). The two solnix installer images share one
+#     installation-device base (the live ramdisk oi-make-livecd.sh builds + the
+#     step-#1 scratch partition + this step-#2 media store) and differ only in a
+#     thin edition: `tui` (text console, RD_MB=640, base media store) vs `gui`
+#     (COSMIC, RD_MB layered, base+COSMIC media store). This run builds `tui`.
+#     Record it on the media so the shipped artifact is self-describing.
+#     GRAPHICAL builds set SOLNIX_IMAGE_EDITION=gui.
+SOLNIX_IMAGE_EDITION="${SOLNIX_IMAGE_EDITION:-tui}"
+mkdir -p "$ISOROOT/etc"
+printf 'EDITION=%s\nINSTALLER=solnix-install\nMEDIA_STORE=%s\nSCRATCH_PARTITION=gpt3\n' \
+  "$SOLNIX_IMAGE_EDITION" \
+  "$([ -f "$ISOROOT/solnix-store.iso" ] && echo present || echo absent)" \
+  > "$ISOROOT/etc/solnix-image-edition"
+echo "  image edition marker: $SOLNIX_IMAGE_EDITION (media store $([ -f "$ISOROOT/solnix-store.iso" ] && echo present || echo absent))" >&2
 
 # ---------------------------------------------------------------------------
 # 2. assemble the hybrid ISO with xorriso.

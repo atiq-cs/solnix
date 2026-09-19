@@ -369,8 +369,13 @@ setup_scratch() {
       log "USB scratch: falling back to the RAM ramdisk"
       return 0
     fi
-    # Grow the pool to fill the stick's free tail (the image shipped a small fixed
-    # partition; autoexpand + online -e claims the rest). Best-effort.
+    # The pool lives on the fixed-size p3 the image carved. `zpool online -e`
+    # does NOT grow it on a dd'd stick (MEASURED: the p3 GPT partition stays the
+    # built size, so online -e sees no larger device). Growing requires extending
+    # the p3 GPT entry into the stick's free tail FIRST -- a deferred follow-up.
+    # So the partition is sized big at build time (SCRATCH_MB, make-iso-usb.sh)
+    # to cover the common flake fetch. We still try online -e in case the operator
+    # used SOLNIX_SCRATCH_DISK with a whole disk (there it does grow).
     zpool set autoexpand=on solnixscratch 2>/dev/null || true
     zpool online -e solnixscratch "/dev/dsk/${_scrpart}" 2>/dev/null \
       || zpool online -e solnixscratch "$_scrpart" 2>/dev/null || true
@@ -382,6 +387,89 @@ setup_scratch() {
   TMPDIR="$_scr_mp/tmp"; export TMPDIR
   XDG_CACHE_HOME="$_scr_mp/nix-cache"; export XDG_CACHE_HOME
   log "USB scratch READY: HOME/TMPDIR/XDG_CACHE_HOME -> $_scr_mp ($(df -k "$_scr_mp" 2>/dev/null | awk 'NR==2{print $4}')KB free)"
+  return 0
+}
+
+# setup_media_store -- lofi-mount the READ-ONLY base-closure media store
+# (design-two-installer-images.md #2) and wire it as a file:// substituter, so a
+# base `nix build` pulls store paths from the MEDIA, not the network.
+#
+# make-iso-usb.sh packs the base closure + starter set into a standalone ISO9660
+# image at /solnix-store.iso INSIDE the boot medium's own ISO9660 filesystem.
+# Here we: mount the boot medium ro (same hsfs mount the live method already
+# uses to identify it), lofiadm -a the inner /solnix-store.iso, mount THAT ro,
+# and export MEDIA_STORE_MNT. build_toplevel adds `--extra-substituters
+# file://$MEDIA_STORE_MNT`; the store's paths are signed by cache.solnix.io-1
+# (5HAV..., already trusted), so signature trust does the integrity work.
+#
+# ⚠️ This serves STORE PATHS only. A user's github: flake still fetches its
+#    FLAKE INPUTS over the network into the step-#1 scratch partition; only the
+#    BASE/default install is made offline by this. All best-effort: any failure
+#    leaves MEDIA_STORE_MNT empty and the build falls back to the network cache.
+MEDIA_STORE_MNT=""
+setup_media_store() {
+  [ -n "${SOLNIX_NO_MEDIA_STORE:-}" ] && return 0
+  command -v lofiadm >/dev/null 2>&1 || return 0
+  _msrc=""
+  # Operator override: a path to an already-mounted store dir or a store image.
+  if [ -n "${SOLNIX_MEDIA_STORE:-}" ]; then
+    if [ -f "${SOLNIX_MEDIA_STORE}/nix-cache-info" ]; then
+      MEDIA_STORE_MNT="${SOLNIX_MEDIA_STORE}"
+      log "media store: using operator-mounted $MEDIA_STORE_MNT"
+      return 0
+    fi
+    [ -f "$SOLNIX_MEDIA_STORE" ] && _msrc="$SOLNIX_MEDIA_STORE"
+  fi
+  # Find /solnix-store.iso on the boot medium. Mount each cNtNdNp0 ro as hsfs and
+  # look for the store image. Keep the medium mounted (it is read-only; the live
+  # method mounts/umounts it transiently, our own ro mount is independent) and
+  # lofi-map the inner image IN PLACE -- no 1.3 GB copy into scratch. This is the
+  # same content-keyed identification the live method uses, not a device-name guess.
+  _medium_mnt=""
+  if [ -z "$_msrc" ]; then
+    _mm=/var/tmp/solnix-media-root
+    mkdir -p "$_mm" 2>/dev/null
+    for _p0 in /dev/dsk/c*p0; do
+      [ -e "$_p0" ] || continue
+      if mount -F hsfs -o ro "$_p0" "$_mm" 2>/dev/null; then
+        if [ -f "$_mm/solnix-store.iso" ]; then
+          _msrc="$_mm/solnix-store.iso"
+          _medium_mnt="$_mm"
+          log "media store: found /solnix-store.iso on boot medium $_p0 (mapped in place)"
+        else
+          umount "$_mm" 2>/dev/null || true
+        fi
+      fi
+      [ -n "$_msrc" ] && break
+    done
+  fi
+  if [ -z "$_msrc" ]; then
+    log "media store: no /solnix-store.iso on the boot medium -- base build will use the network cache"
+    return 0
+  fi
+  # lofiadm -a the store image, then mount it ro as hsfs.
+  _mdev=$(lofiadm -a "$_msrc" 2>/tmp/solnix-mediastore.err)
+  if [ -z "$_mdev" ]; then
+    log "media store: lofiadm -a failed:"; sed 's/^/    /' /tmp/solnix-mediastore.err >&2 2>/dev/null || true
+    [ -n "$_medium_mnt" ] && umount "$_medium_mnt" 2>/dev/null || true
+    return 0
+  fi
+  _smp=/var/tmp/solnix-media-store
+  mkdir -p "$_smp" 2>/dev/null
+  # lofiadm prints /dev/lofi/N (block); hsfs mounts off the block device.
+  if ! mount -F hsfs -o ro "$_mdev" "$_smp" 2>>/tmp/solnix-mediastore.err; then
+    log "media store: mount -F hsfs of $_mdev failed:"; sed 's/^/    /' /tmp/solnix-mediastore.err >&2 2>/dev/null || true
+    lofiadm -d "$_mdev" 2>/dev/null || true
+    [ -n "$_medium_mnt" ] && umount "$_medium_mnt" 2>/dev/null || true
+    return 0
+  fi
+  if [ ! -f "$_smp/nix-cache-info" ]; then
+    log "media store: $_smp mounted but has no nix-cache-info -- not a store image; ignoring"
+    umount "$_smp" 2>/dev/null || true; lofiadm -d "$_mdev" 2>/dev/null || true
+    return 0
+  fi
+  MEDIA_STORE_MNT="$_smp"
+  log "media store READY: file://$MEDIA_STORE_MNT ($(ls "$_smp"/*.narinfo 2>/dev/null | wc -l | tr -d ' ') narinfo) -> base build is offline-capable"
   return 0
 }
 
@@ -454,6 +542,7 @@ if [ -n "$GIT_URL" ] || [ -n "$FLAKE_REF" ]; then
     log "internet check SKIPPED (SOLNIX_SKIP_NET_CHECK set)"
   else
     setup_scratch
+    setup_media_store
     bring_up_network
     check_internet || die "no internet access -- see above. NOTHING has been written to any disk."
   fi
@@ -590,8 +679,17 @@ build_toplevel() {
   # pipe-hides-exit trap that a 2>/dev/null once hid in the media cpio. /sbin/sh
   # has no PIPESTATUS, so a logfile is the portable fix; tail it for the operator.
   _buildlog="$ALTROOT/var/tmp/solnix-build-$$.log"
+  # If the read-only media store is mounted, offer it as an EXTRA substituter so
+  # the base closure's store paths come from the media (offline) instead of the
+  # network. It is ADDITIVE: the network cache still fills anything the media
+  # lacks (e.g. a user flake's own inputs). Its paths are signed by the trusted
+  # cache.solnix.io-1 key, so no extra-trusted-public-keys flag is needed.
+  _extrasub=""
+  [ -n "${MEDIA_STORE_MNT:-}" ] && _extrasub="--extra-substituters file://$MEDIA_STORE_MNT"
+  [ -n "$_extrasub" ] && log "base build: using media store substituter file://$MEDIA_STORE_MNT (offline-capable)"
   if run_to "${SOLNIX_BUILD_TIMEOUT:-14400}" env TMPDIR="$ALTROOT/var/tmp" nix build \
        --store "$ALTROOT" \
+       $_extrasub \
        "${_fl}#${_set}.\"${_at}\".config.system.build.toplevel" \
        --out-link "$_outlink" > "$_buildlog" 2>&1; then
     tail -40 "$_buildlog"
