@@ -382,10 +382,19 @@ setup_scratch() {
   fi
   [ -d "$_scr_mp" ] || { log "USB scratch: pool present but $_scr_mp not mounted -- falling back"; return 0; }
 
-  mkdir -p "$_scr_mp/home" "$_scr_mp/tmp" "$_scr_mp/nix-cache" 2>/dev/null
+  mkdir -p "$_scr_mp/home" "$_scr_mp/tmp" "$_scr_mp/nix-cache" "$_scr_mp/nix" 2>/dev/null
   HOME="$_scr_mp/home"; export HOME
   TMPDIR="$_scr_mp/tmp"; export TMPDIR
   XDG_CACHE_HOME="$_scr_mp/nix-cache"; export XDG_CACHE_HOME
+  # SCRATCH_STORE: a chroot-store on the scratch pool for the NAME GATE's flake
+  # eval. `nix eval github:...` COPIES the flake + its (53) inputs into the nix
+  # STORE as store paths -- and the default store is the RAM ramdisk /nix, whose
+  # inode count is fixed (RD_NBPI). Thousands of small input files exhaust INODES
+  # ("/: out of inodes") before bytes, which HOME/TMPDIR redirection does NOT
+  # prevent because it does not move the store. Pointing the eval at
+  # `--store $SCRATCH_STORE` puts that flake+inputs copy on the scratch pool.
+  # (The real toplevel BUILD already uses --store $ALTROOT, the target pool.)
+  SCRATCH_STORE="$_scr_mp/nix"; export SCRATCH_STORE
   log "USB scratch READY: HOME/TMPDIR/XDG_CACHE_HOME -> $_scr_mp ($(df -k "$_scr_mp" 2>/dev/null | awk 'NR==2{print $4}')KB free)"
   return 0
 }
@@ -609,11 +618,33 @@ if [ -n "$FLAKE_REF" ]; then
     die "insufficient ramdisk space to resolve the flake -- reboot and retry"
   fi ;; esac
 
+  # The flake fetch + input copy the name gate triggers goes into the nix STORE.
+  # Default store = the RAM ramdisk /nix (fixed inode count) -> "/: out of inodes"
+  # when a flake's many inputs are copied in (measured: a real flake copies ~100k
+  # files into the store). Point the eval at the scratch-pool store when one is
+  # prepared. If NO scratch store (setup_scratch fell back to the ramdisk), the
+  # eval WILL exhaust the ramdisk -- so refuse rather than fail cryptically.
+  _gatestore=""
+  if [ -n "${SCRATCH_STORE:-}" ]; then
+    _gatestore="--store $SCRATCH_STORE"
+    log "name gate: flake eval store on scratch pool ($SCRATCH_STORE)"
+  else
+    echo "" >&2
+    echo "FATAL: no writable scratch store for the flake eval, and the live root is a" >&2
+    echo "small RAM ramdisk. Resolving a flake copies ~100k files into the nix store," >&2
+    echo "which would exhaust the ramdisk (\"/: out of inodes\"). setup_scratch did not" >&2
+    echo "prepare a scratch pool -- the media's scratch partition was not found or could" >&2
+    echo "not be formatted. Re-run with SOLNIX_SCRATCH_DISK=<cNtNdN> pointing at a spare" >&2
+    echo "disk or a SECOND USB stick (whole-disk; it will be ERASED), or use a media image" >&2
+    echo "whose scratch partition is large enough (SCRATCH_MB>=4096)." >&2
+    die "no scratch store for flake eval -- refusing to fill the ramdisk"
+  fi
+
   for _set in solnixConfigurations nixosConfigurations; do
     # Capture stderr so we can tell "attr genuinely absent" from "eval FAILED"
     # (disk full / no network / bad flake) -- the latter must not masquerade as
     # "nothing to install".
-    _ev=$(nix eval "${_fl}#${_set}" --apply \
+    _ev=$(nix eval $_gatestore "${_fl}#${_set}" --apply \
          "x: if builtins.hasAttr \"${_at}\" x then \"yes\" else \"no\"" --raw 2>/tmp/solnix-gate.err)
     _rc=$?
     if [ "$_rc" = 0 ] && [ "$_ev" = yes ]; then
@@ -621,7 +652,7 @@ if [ -n "$FLAKE_REF" ]; then
     fi
     # rc!=0 AND the attrset itself did not evaluate (not merely a missing member)
     # means a real failure. If the err mentions space/network, surface THAT.
-    if [ "$_rc" != 0 ] && grep -qiE 'no space|file system full|could not resolve|unable to download|connection|SSL' /tmp/solnix-gate.err 2>/dev/null; then
+    if [ "$_rc" != 0 ] && grep -qiE 'no space|file system full|out of inodes|could not resolve|unable to download|connection|SSL' /tmp/solnix-gate.err 2>/dev/null; then
       echo "" >&2
       echo "FATAL: could not evaluate '$_at' -- nix eval failed for a reason that is NOT a" >&2
       echo "missing attribute. The error was:" >&2
