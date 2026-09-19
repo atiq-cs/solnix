@@ -26,11 +26,11 @@
         "nixpkgs": "nixpkgs"
       },
       "locked": {
-        "lastModified": 1789576143,
-        "narHash": "sha256-WQUrbaB/6k/uzRRg/Pe50Znpl7KfrlPUwVCAUaZvkkw=",
+        "lastModified": 1789842231,
+        "narHash": "sha256-ugDvPuvEV98j71n7v+ihPthdjlB3MFuRoa0nyekWvLk=",
         "ref": "refs/heads/main",
-        "rev": "07e59bd19d3dc25792874d956b4a561a460e4951",
-        "revCount": 109,
+        "rev": "2678fafe6b517199cb35b90e52cbd09a0335fbdf",
+        "revCount": 110,
         "type": "git",
         "url": "file:///home/gburd/ws/solnix-pkgs"
       },

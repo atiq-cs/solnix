@@ -41,8 +41,18 @@
   # Debuggers: gdb (from-source real derivation) is in the profile; mdb (the
   # illumos native modular/post-mortem+kernel debugger) is base-OS-native at
   # /usr/bin/mdb (staged by the media). Both ship by default.
-  environment.systemPackages = with pkgs.solnix.starter; [
+  environment.systemPackages = (with pkgs.solnix.starter; [
     coreutils file gnugrep gnused bzip2 xz zlib pcre2 nvi which gdb
+  ]) ++ [
+    # uutils (Rust coreutils) -- ADDITIVE, per docs/design-two-installer-images.md
+    # §6: the illumos/GNU coreutils above stay the PATH default; uutils lands in
+    # the base closure alongside them as the multicall `coreutils` + `uu-*`
+    # applets (the same gradual-rollout convention Ubuntu uses). Measure before
+    # ever making uutils the default. Built via the seed-backed rustPlatform
+    # (solnix-pkgs rust-overlay.nix); published to cache.solnix.io under the
+    # 5HAV key; pulled here by fetchClosure like the rest of the starter set.
+    # Quoted attr because the pname carries a '-'.
+    pkgs.solnix.starter."uutils-coreutils"
   ];
 
   # Declarative networking (T2.9): the primary NIC via DHCP. This GENERATES the
