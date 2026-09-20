@@ -132,6 +132,60 @@ TARGET_CONSOLE="${SOLNIX_TARGET_CONSOLE:-text}"
 die() { echo "FATAL: $*" >&2; exit 1; }
 log() { printf '\n=== %s ===\n' "$*" >&2; }
 
+# ---------------------------------------------------------------------------
+# PROGRESS UX. The operator watches a framebuffer console (no serial, no smart
+# terminal), so this stays deliberately dumb: a step counter for orientation
+# and, for the LONG steps (flake eval, nix build, closure copy, bootadm), a
+# background spinner that prints \r[-\|/] + elapsed seconds. No cursor
+# addressing, no color, no width math -- only \r and plain ASCII, which the
+# illumos wscons framebuffer honors. All output goes to stderr (stdout may be
+# captured), and every helper is a no-op-safe pair so a killed spinner can never
+# wedge a step.
+#
+# STEP_TOTAL is the count the operator sees as [N/STEP_TOTAL]; it is a fixed
+# orientation number, not a promise every step runs (SELF_INSTALL skips some).
+STEP_TOTAL=9
+STEP_N=0
+step() {  # step "<human description>"
+  STEP_N=$((STEP_N + 1))
+  printf '\n=== [%d/%d] %s ===\n' "$STEP_N" "$STEP_TOTAL" "$*" >&2
+}
+
+# spin_start "<label>" -- start a background spinner on stderr. Returns
+# immediately; the PID is stashed in _SPIN_PID. spin_stop ends it and prints the
+# elapsed time. Safe if stderr is not a tty (it just prints a growing line);
+# safe if called without a matching stop (cleanup() kills it). Only ONE spinner
+# at a time -- a second spin_start stops the first.
+_SPIN_PID=""
+spin_start() {
+  spin_stop >/dev/null 2>&1
+  _spin_label="$1"
+  _spin_t0=$(_now_s)
+  (
+    _i=0
+    while : ; do
+      case $(( _i % 4 )) in 0) _c='-';; 1) _c='\\';; 2) _c='|';; 3) _c='/';; esac
+      _el=$(( $(_now_s) - _spin_t0 ))
+      printf '\r  [%s] %s  (%ds elapsed)   ' "$_c" "$_spin_label" "$_el" >&2
+      _i=$((_i + 1))
+      sleep 1
+    done
+  ) &
+  _SPIN_PID=$!
+}
+# spin_stop -- stop the spinner, clear its line, print the final elapsed time.
+spin_stop() {
+  [ -n "$_SPIN_PID" ] || return 0
+  kill "$_SPIN_PID" 2>/dev/null
+  wait "$_SPIN_PID" 2>/dev/null
+  _el=$(( $(_now_s) - ${_spin_t0:-$(_now_s)} ))
+  printf '\r  [done] %s  (%ds)                       \n' "${_spin_label:-step}" "$_el" >&2
+  _SPIN_PID=""
+}
+# _now_s -- seconds since epoch, POSIX (no GNU date -d, no %s guarantee issues on
+# illumos date which DOES support +%s). Fallback to 0 so arithmetic never breaks.
+_now_s() { date +%s 2>/dev/null || echo 0; }
+
 # illumos ln -sfn FOLLOWS an existing symlink-to-dir (rc=0, no-op); always rm+ln.
 relink() { rm -f "$2" 2>/dev/null; ln -s "$1" "$2"; }
 # minimal proto has no readlink(1); derive symlink target from ls -l.
@@ -174,6 +228,7 @@ fi
 # pre-existing pool (e.g. the running root).
 PREEXISTING_POOLS=" $(zpool list -H -o name 2>/dev/null | tr '\n' ' ') "
 cleanup() {
+  spin_stop 2>/dev/null || true
   # The encryption passphrase is written to a temp keyfile so `zfs create` can read
   # it non-interactively; it must not survive this script under any exit path.
   [ -n "${ENC_KEYFILE:-}" ] && rm -f "$ENC_KEYFILE" 2>/dev/null
@@ -406,11 +461,50 @@ setup_scratch() {
         fi
       done
       if [ -z "$_scrdisk" ]; then
-        log "USB scratch: no SOLNIX_INSTALL stick found -- leaving TMPDIR on the ramdisk."
-        log "             (A non-USB boot, or an older image. Re-run with"
-        log "             SOLNIX_SCRATCH_DISK=<cNtNdN> pointing at a spare disk/second stick if / fills.)"
-        return 0
-      fi
+        # NO USB scratch stick attached. On the X1's specific USB controller
+        # scsa2usb may never bind (measured: `devfsadm -i scsa2usb` fails to
+        # attach and no /dev/dsk USB node appears), so the boot stick is not a
+        # block device and cannot be found here. FALL BACK to a scratch pool on
+        # the TARGET NVMe -- the one device the kernel definitely sees -- created
+        # ONLY when the operator has already chosen a target (passed it on the
+        # command line), since the target is about to be wholly erased for the
+        # install anyway. The pool is DESTROYED in step-0 before the real install
+        # pool is created (SCRATCH_ON_TARGET below drives that teardown).
+        if [ -n "${TARGET:-}" ] && [ -e "/dev/rdsk/${TARGET}s0" ]; then
+          # never build scratch on the RUNNING root disk.
+          _rootdisk=$(zpool status "$ROOTPOOL" 2>/dev/null | awk '/[0-9]d[0-9]/{gsub(/s[0-9]+$/,"",$1); print $1; exit}')
+          if [ -n "$_rootdisk" ] && [ "$TARGET" = "$_rootdisk" ]; then
+            log "USB scratch: no stick, and TARGET==running root disk -- refusing NVMe-scratch."
+            return 0
+          fi
+          log "USB scratch: no SOLNIX_INSTALL stick found -- falling back to NVMe-scratch on the"
+          log "             chosen target $TARGET (whole-disk pool 'solnixscratch', DESTROYED before"
+          log "             the install pool is created; the target is erased for the install anyway)."
+          # A prior aborted run may have left solnixscratch imported/exported on
+          # the disk; clear it so the whole-disk create is not refused.
+          run_to 30 zpool destroy -f solnixscratch 2>/dev/null || run_to 30 zpool export -f solnixscratch 2>/dev/null || true
+          pfexec devfsadm -c disk 2>/dev/null || devfsadm -c disk 2>/dev/null || true
+          # Some virtual controllers refuse a whole-disk EFI label without an
+          # fdisk table first (same case the install pool create handles); lay
+          # one so the whole-disk `zpool create` can EFI-label the disk.
+          run_to 30 fdisk -B "/dev/rdsk/${TARGET}p0" >/dev/null 2>&1 || true
+          devfsadm >/dev/null 2>&1 || true; sync; sleep 1
+          if run_to 90 zpool create -f -O compression=on -O atime=off -m "$_scr_mp" solnixscratch "/dev/dsk/${TARGET}" 2>/tmp/solnix-scratch.err; then
+            SCRATCH_ON_TARGET=1; export SCRATCH_ON_TARGET
+            log "USB scratch: NVMe-scratch pool 'solnixscratch' created on $TARGET ($(df -k "$_scr_mp" 2>/dev/null | awk 'NR==2{print $4}')KB)"
+            _scrpart=""    # pool already created; skip the shared create below
+          else
+            log "USB scratch: NVMe-scratch create on $TARGET failed:"; sed 's/^/    /' /tmp/solnix-scratch.err >&2 2>/dev/null || true
+            log "USB scratch: falling back to the RAM ramdisk (the flake eval will refuse loudly if too big)"
+            return 0
+          fi
+        else
+          log "USB scratch: no SOLNIX_INSTALL stick found and no target chosen -- leaving TMPDIR on the ramdisk."
+          log "             (A non-USB boot, or an older image. Re-run with a target disk argument, or"
+          log "             SOLNIX_SCRATCH_DISK=<cNtNdN> pointing at a spare disk/second stick if / fills.)"
+          return 0
+        fi
+      else
       log "USB scratch: boot stick is $_scrdisk"
       # Ensure the disk's partition/slice nodes exist (a fresh dd may not have
       # triggered devfsadm for them yet).
@@ -438,8 +532,12 @@ setup_scratch() {
         return 0
       fi
       log "USB scratch: boot stick scratch slice is $_scrpart"
+      fi   # end: USB stick found (vs NVMe-scratch fallback)
     fi
-    # Create the pool on the (pre-carved) partition or the override device.
+    # Create the pool on the (pre-carved) partition or the override device --
+    # UNLESS the NVMe-scratch fallback above already created solnixscratch (then
+    # _scrpart is empty and SCRATCH_ON_TARGET=1).
+    if [ -n "$_scrpart" ]; then
     if ! zpool create -f -O compression=on -O atime=off -m "$_scr_mp" solnixscratch "/dev/dsk/${_scrpart}" 2>/tmp/solnix-scratch.err \
          && ! zpool create -f -O compression=on -O atime=off -m "$_scr_mp" solnixscratch "$_scrpart" 2>>/tmp/solnix-scratch.err; then
       log "USB scratch: zpool create on $_scrpart failed:"; sed 's/^/    /' /tmp/solnix-scratch.err >&2 2>/dev/null || true
@@ -453,6 +551,7 @@ setup_scratch() {
     zpool set autoexpand=on solnixscratch 2>/dev/null || true
     zpool online -e solnixscratch "/dev/dsk/${_scrpart}" 2>/dev/null \
       || zpool online -e solnixscratch "$_scrpart" 2>/dev/null || true
+    fi   # end: shared create (skipped for NVMe-scratch)
   fi
   [ -d "$_scr_mp" ] || { log "USB scratch: pool present but $_scr_mp not mounted -- falling back"; return 0; }
 
@@ -469,7 +568,8 @@ setup_scratch() {
   # `--store $SCRATCH_STORE` puts that flake+inputs copy on the scratch pool.
   # (The real toplevel BUILD already uses --store $ALTROOT, the target pool.)
   SCRATCH_STORE="$_scr_mp/nix"; export SCRATCH_STORE
-  log "USB scratch READY: HOME/TMPDIR/XDG_CACHE_HOME -> $_scr_mp ($(df -k "$_scr_mp" 2>/dev/null | awk 'NR==2{print $4}')KB free)"
+  _scr_kind="USB scratch"; [ "${SCRATCH_ON_TARGET:-0}" = 1 ] && _scr_kind="NVMe-scratch (on target $TARGET)"
+  log "$_scr_kind READY: HOME/TMPDIR/XDG_CACHE_HOME/SCRATCH_STORE -> $_scr_mp ($(df -k "$_scr_mp" 2>/dev/null | awk 'NR==2{print $4}')KB free)"
   return 0
 }
 
@@ -624,6 +724,7 @@ if [ -n "$GIT_URL" ] || [ -n "$FLAKE_REF" ]; then
   if [ -n "${SOLNIX_SKIP_NET_CHECK:-}" ]; then
     log "internet check SKIPPED (SOLNIX_SKIP_NET_CHECK set)"
   else
+    step "preparing scratch + media store + network"
     setup_scratch
     setup_media_store
     bring_up_network
@@ -664,7 +765,7 @@ fi
 if [ -n "$FLAKE_REF" ]; then
   command -v nix >/dev/null 2>&1 || die "nix is not on this media; cannot use --flake"
   _fl="${FLAKE_REF%%#*}"; _at="${FLAKE_REF#*#}"
-  log "resolving $_at in $_fl"
+  step "resolving $_at in $_fl"
   # Try the solnix analog first, then the NixOS name, so either repo layout works:
   # solnix owns solnixConfigurations; a nix-config may own nixosConfigurations.
   _drv=""; _found=""
@@ -707,10 +808,12 @@ if [ -n "$FLAKE_REF" ]; then
     echo "FATAL: no writable scratch store for the flake eval, and the live root is a" >&2
     echo "small RAM ramdisk. Resolving a flake copies ~100k files into the nix store," >&2
     echo "which would exhaust the ramdisk (\"/: out of inodes\"). setup_scratch did not" >&2
-    echo "prepare a scratch pool -- the media's scratch partition was not found or could" >&2
-    echo "not be formatted. Re-run with SOLNIX_SCRATCH_DISK=<cNtNdN> pointing at a spare" >&2
-    echo "disk or a SECOND USB stick (whole-disk; it will be ERASED), or use a media image" >&2
-    echo "whose scratch partition is large enough (SCRATCH_MB>=4096)." >&2
+    echo "prepare a scratch pool -- no USB scratch stick attached (scsa2usb may not bind on" >&2
+    echo "this USB controller) AND the NVMe-scratch-on-target fallback did not run (no target" >&2
+    echo "disk was chosen, or its create failed). Re-run PASSING THE TARGET DISK as the first" >&2
+    echo "argument (solnix-install <cNtNdN> --flake ...), which enables NVMe-scratch on it, or" >&2
+    echo "set SOLNIX_SCRATCH_DISK=<cNtNdN> to a spare disk / SECOND USB stick (whole-disk;" >&2
+    echo "ERASED), or use a media image whose scratch partition is large enough (SCRATCH_MB>=4096)." >&2
     die "no scratch store for flake eval -- refusing to fill the ramdisk"
   fi
 
@@ -718,9 +821,12 @@ if [ -n "$FLAKE_REF" ]; then
     # Capture stderr so we can tell "attr genuinely absent" from "eval FAILED"
     # (disk full / no network / bad flake) -- the latter must not masquerade as
     # "nothing to install".
+    # LONG STEP: the flake fetch + input copy can take minutes on a slow link.
+    spin_start "fetching + evaluating the flake ($_set)"
     _ev=$(nix eval $_gatestore "${_fl}#${_set}" --apply \
          "x: if builtins.hasAttr \"${_at}\" x then \"yes\" else \"no\"" --raw 2>/tmp/solnix-gate.err)
     _rc=$?
+    spin_stop
     if [ "$_rc" = 0 ] && [ "$_ev" = yes ]; then
       _found="$_set"; _drv="(name-verified; drvPath deferred to the pool-backed build)"; break
     fi
@@ -768,7 +874,7 @@ fi
 # to anyway, so nothing the operator wanted to keep is at risk.
 build_toplevel() {
   [ -n "$FLAKE_REF" ] && [ -z "$TOPLEVEL" ] || return 0
-  log "building the system toplevel from $FLAKE_REF (this is the long step)"
+  step "building the system toplevel from $FLAKE_REF (the long step)"
   _fl="${FLAKE_REF%%#*}"; _at="${FLAKE_REF#*#}"
   # The attr set was determined by the gate above ($_found); reuse it rather than
   # guessing again, so build and gate cannot disagree about what they resolved.
@@ -792,11 +898,25 @@ build_toplevel() {
   _extrasub=""
   [ -n "${MEDIA_STORE_MNT:-}" ] && _extrasub="--extra-substituters file://$MEDIA_STORE_MNT"
   [ -n "$_extrasub" ] && log "base build: using media store substituter file://$MEDIA_STORE_MNT (offline-capable)"
+  # LONG STEP: spinner + elapsed while nix build runs (minutes to ~1h). The build
+  # log grows in $_buildlog; a background tail feeds the spinner's last-line so
+  # the operator sees forward motion, not a frozen console. nix's own
+  # --log-format is deliberately NOT used for the display (bar/bar-with-logs
+  # assume a smart terminal that the framebuffer console is not); we show our
+  # own dumb spinner + the last log line instead.
+  spin_start "nix build system toplevel (this can take many minutes)"
+  ( while [ -f "$_buildlog" ]; do
+      _ll=$(tail -1 "$_buildlog" 2>/dev/null | cut -c1-70)
+      [ -n "$_ll" ] && printf '\r      %-72s' "$_ll" >&2
+      sleep 5
+    done ) &
+  _blt=$!
   if run_to "${SOLNIX_BUILD_TIMEOUT:-14400}" env TMPDIR="$ALTROOT/var/tmp" nix build \
        --store "$ALTROOT" \
        $_extrasub \
        "${_fl}#${_set}.\"${_at}\".config.system.build.toplevel" \
        --out-link "$_outlink" > "$_buildlog" 2>&1; then
+    kill "$_blt" 2>/dev/null; wait "$_blt" 2>/dev/null; spin_stop
     tail -40 "$_buildlog"
     TOPLEVEL=$(_readlink "$_outlink" 2>/dev/null || true)
     # --store $ALTROOT prints a bare /nix/store/... path (the store's own view).
@@ -805,6 +925,7 @@ build_toplevel() {
     # already on the pool so the copy step is skipped.
     TOPLEVEL_ON_POOL=1
   else
+    kill "$_blt" 2>/dev/null; wait "$_blt" 2>/dev/null; spin_stop
     tail -40 "$_buildlog"   # show the failure tail before build_toplevel die()s below
   fi
   # Validate against the on-pool location ($ALTROOT + the bare store path).
@@ -948,6 +1069,39 @@ log "base world = the running root ($SRCROOT); running root pool=$ROOTPOOL disk=
 # ---------------------------------------------------------------------------
 log "cleaning prior attempt on $TARGET (any pool, imported or not)"
 run_to 30 umount "$ALTROOT/esp" 2>/dev/null || true
+# 0-scratch. If setup_scratch built solnixscratch ON THIS TARGET disk (the
+#     NVMe-scratch fallback, when no USB scratch attached), tear it down NOW,
+#     explicitly and verifiably, BEFORE the fresh EFI label below. A leftover
+#     scratch pool would make `zpool create solnixtmp <wholedisk>` fail ("device
+#     is part of a pool") and strand the install. The generic 0a loop below also
+#     catches it, but this is the guaranteed, logged teardown the install pool
+#     create depends on -- and it unmounts the scratch mount + frees HOME/TMPDIR
+#     that were pointed at it.
+if zpool list solnixscratch >/dev/null 2>&1 \
+   && { [ "${SCRATCH_ON_TARGET:-0}" = 1 ] || zpool status solnixscratch 2>/dev/null | grep -q "$TARGET"; }; then
+  log "NVMe-scratch: destroying solnixscratch on $TARGET before the install pool create"
+  # move HOME/TMPDIR off the pool first so nothing holds it busy.
+  HOME=/root; TMPDIR=/tmp; XDG_CACHE_HOME=/root/.cache; SCRATCH_STORE=""
+  export HOME TMPDIR XDG_CACHE_HOME
+  run_to 30 zfs unmount solnixscratch 2>/dev/null || true
+  run_to 30 zpool destroy -f solnixscratch 2>/dev/null || run_to 30 zpool export -f solnixscratch 2>/dev/null || true
+  # VERIFY it is gone -- a silent failure here breaks the real create below.
+  if zpool list solnixscratch >/dev/null 2>&1; then
+    die "NVMe-scratch: could not destroy solnixscratch on $TARGET -- refusing to relabel a disk that still holds a pool"
+  fi
+  # DESTROY leaves the whole-disk pool's EFI label + ZFS vdev labels on the disk.
+  # A leftover label makes the install's `zpool create -f <wholedisk>` at step 1
+  # hit the documented "cannot label 'cNtNdN': try using fdisk(8)" refusal, or
+  # import the ghost pool. Clear ALL vdev labels (front + back copies) so the
+  # real create sees a clean disk, then zero the GPT header sectors as
+  # belt-and-braces (step 1's own fdisk -B then rewrites the table).
+  run_to 30 zpool labelclear -f "/dev/dsk/${TARGET}" 2>/dev/null || true
+  run_to 30 zpool labelclear -f "/dev/dsk/${TARGET}s0" 2>/dev/null || true
+  # front GPT (LBA 0-33) + a chunk; the backup GPT is rewritten by the fresh
+  # zpool create's EFI label. dd is bounded (count) so it cannot hang.
+  run_to 30 dd if=/dev/zero of="/dev/rdsk/${TARGET}p0" bs=512 count=64 conv=notrunc 2>/dev/null || true
+  log "NVMe-scratch: solnixscratch destroyed; target $TARGET is free for the install pool"
+fi
 # 0a. any IMPORTED pool whose vdev is on the target disk -> destroy it (frees
 #     the slice so the GPT relabel below can create the throwaway EFI pool).
 for _p in $(zpool list -H -o name 2>/dev/null); do
@@ -984,6 +1138,7 @@ mkdir -p "$ALTROOT"
 #    zpool-created EFI label is sector-addressed and takes fmthard.)
 # ---------------------------------------------------------------------------
 log "GPT-labelling $TARGET"
+step "partitioning target $TARGET (GPT label + ESP + pool slice)"
 # Clean EFI label via a throwaway pool. This intermittently fails when the target
 # device node isn't fully settled yet (fresh disk / just-attached), so retry a
 # few times with a devfsadm + settle between attempts rather than dying on the
@@ -1031,6 +1186,7 @@ prtvtoc -h "/dev/rdsk/${TARGET}"
 # 2. ESP FAT32 + the pool + BE dataset
 # ---------------------------------------------------------------------------
 log "mkfs pcfs ESP on ${TARGET}s0"
+step "formatting ESP + creating pool $POOL + datasets"
 # fresh slice nodes after fmthard: re-run devfsadm so /dev/rdsk/${TARGET}s0
 # reflects the new vtoc before mkfs_pcfs opens it (stale node = silent no-op).
 devfsadm >/dev/null 2>&1 || true
@@ -1417,6 +1573,7 @@ log "datasets: $POOL/nix + $POOL${HOME_BASE} created outside $BEDS"
 #    the altroot itself + the target's own mount.
 # ---------------------------------------------------------------------------
 log "copying running root -> target BE (tar | tar, minus pseudo fs + /nix)"
+step "copying the base world onto $TARGET"
 # tar from / with X exclude-list. Excludes are path prefixes relative to /.
 cat > /tmp/solnix-install.exclude <<EOF
 ./nix
@@ -1482,6 +1639,7 @@ done
 #    that are referenced only through illumos-system-path.)
 # ---------------------------------------------------------------------------
 log "copying toplevel closure into target /nix/store"
+step "placing the toplevel closure in $TARGET /nix/store"
 if [ "$SELF_INSTALL" = 1 ]; then
   log "SELF-INSTALL: skipping nix-closure copy (the copied live root IS the system)"
 elif [ "${TOPLEVEL_ON_POOL:-0}" = 1 ]; then
@@ -1621,6 +1779,7 @@ fi
 #    config-generated manifests so first boot imports them.
 # ---------------------------------------------------------------------------
 log "staging toplevel SMF manifests + site profile + activate"
+step "staging userland + SMF + boot loader"
 if [ "$SELF_INSTALL" = 1 ]; then
   log "SELF-INSTALL: skipping toplevel manifest/etc staging (base root already carries the solnix SMF plumbing)"
 else
@@ -1947,6 +2106,7 @@ EOF
 # 9. boot_archive (the ramdisk that mounts ZFS root) for the target BE.
 # ---------------------------------------------------------------------------
 log "building boot_archive on the target BE"
+step "building the boot archive (bootadm update-archive)"
 # WIDEST-HARDWARE FIRST BOOT: unconditionally EMPTY the target's path_to_inst so
 # the installed kernel REBUILDS device-instance assignments for whatever hardware
 # it actually boots on (the SELF-INSTALL source root may carry stale instance
@@ -2052,11 +2212,15 @@ ba_ok() {
       file "$BA" 2>/dev/null | grep -qiE 'archive|cpio|ufs|boot'
   fi
 }
+spin_start "bootadm update-archive (builds the boot_archive cpio)"
 build_ba
+spin_stop
 if ! ba_ok; then
   log "boot_archive incomplete ($(_fsize "$BA") bytes, gzip -t failed) — syncing + rebuilding once"
   sync; sleep 2
+  spin_start "bootadm update-archive (retry)"
   build_ba
+  spin_stop
 fi
 ba_ok || die "boot_archive invalid/truncated after rebuild ($(_fsize "$BA") bytes) — gzip stream incomplete"
 log "boot_archive OK: $(_fsize "$BA") bytes, $(file "$BA" 2>/dev/null)"

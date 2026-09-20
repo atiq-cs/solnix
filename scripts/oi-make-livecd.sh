@@ -2441,6 +2441,44 @@ for _m in kernel/strmod/amd64/usbkbm kernel/strmod/amd64/ldterm \
 done
 echo "  console-input + zfs module gate OK" >&2
 
+# (iii') USB-MASS-STORAGE ATTACH CHAIN. The single-stick self-grow + media store
+#        depend on the boot USB becoming a /dev/dsk disk, which requires scsa2usb
+#        to BIND to the mass-storage interface node. MEASURED (tui4, on a full-OI
+#        build host where USB storage attaches): scsa2usb needs its driver module,
+#        its .conf, the usba/usba10/scsi/cmlb framework, sd + scsi_vhci + cmlb, the
+#        USB HCI/hub drivers, AND the driver_aliases binding line
+#        `scsa2usb "usbif,class8"` + the usb_mid composite splitter. COPY_DIRS
+#        already tars these in (whole kernel tree + verbatim driver_aliases), so
+#        this gate does not ADD files -- it ASSERTS they shipped, so a future
+#        curation that trims the kernel tree cannot silently drop the USB-disk
+#        path and reintroduce the "USB stick never becomes a block device" fault.
+#        NOTE: presence != attach. On the X1's specific xHCI+composite hardware
+#        scsa2usb still failed to attach with ALL of these present (a hardware
+#        enumeration gap, not a file gap) -- which is why the installer also has
+#        an NVMe-scratch fallback. This gate guards the FILES; it does not claim
+#        attach on every controller.
+_usb_missing=""
+for _m in kernel/drv/amd64/scsa2usb kernel/drv/amd64/sd kernel/drv/amd64/scsi_vhci \
+          kernel/drv/amd64/usb_mid kernel/drv/amd64/hubd kernel/drv/amd64/ehci \
+          kernel/drv/amd64/xhci kernel/drv/amd64/uhci \
+          kernel/misc/amd64/usba kernel/misc/amd64/usba10 \
+          kernel/misc/amd64/scsi kernel/misc/amd64/cmlb \
+          kernel/drv/scsa2usb.conf kernel/drv/sd.conf kernel/drv/scsi_vhci.conf; do
+  [ -e "$RDROOT/$_m" ] || _usb_missing="$_usb_missing $_m"
+done
+[ -z "$_usb_missing" ] || die "live root missing USB-mass-storage attach chain:$_usb_missing
+  (scsa2usb cannot bind without these; the USB stick would never become a /dev/dsk disk)"
+# The BINDING alias is what makes scsa2usb attach to the mass-storage interface
+# node -- without it the driver module is present but never binds. Assert both
+# the class-8 interface binding and the usb_mid composite splitter shipped.
+grep -q 'scsa2usb .*usbif,class8' "$RDROOT/etc/driver_aliases" 2>/dev/null || \
+  die "live root /etc/driver_aliases lacks scsa2usb usbif,class8 -- scsa2usb would never bind to a mass-storage interface"
+grep -q 'usb_mid .*usb,device' "$RDROOT/etc/driver_aliases" 2>/dev/null || \
+  die "live root /etc/driver_aliases lacks usb_mid usb,device -- composite USB devices would not split into interface nodes"
+grep -q 'scsa2usb' "$RDROOT/etc/name_to_major" 2>/dev/null || \
+  die "live root /etc/name_to_major lacks scsa2usb -- the driver has no major number and cannot load"
+echo "  USB-mass-storage attach-chain gate OK (scsa2usb module+conf+aliases+usba/sd/cmlb staged)" >&2
+
 # (iv) /etc files that must be EMPTY on removable media because they are
 #      per-machine kernel state. path_to_inst pins driver INSTANCE numbers to the
 #      build host's exact PCI topology; shipping a populated copy tells the live
