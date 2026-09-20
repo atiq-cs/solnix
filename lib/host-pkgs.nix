@@ -13,10 +13,18 @@
 # nixpkgs stdenv (which does not exist on the host). buildPackages.libxml2 is a
 # no-op marker: the host ships xmllint at /usr/bin, put on PATH by runCommand.
 
-{ solnixDir ? ../pkgs/illumos }:
+# gateProto: an ALREADY-BUILT gate proto to hand to pkgs/illumos. On the illumos
+# host this is the real 491 MB tree ingested as a store path. pkgs/illumos takes
+# it as an argument because pkgs/illumos/gate.nix asserts srcDir-or-srcHash (an
+# unpinned network fetch is not reproducible), so a no-argument import throws the
+# moment anything forces gate/libc/systemPath.
+{ solnixDir ? ../pkgs/illumos
+, gateProto ? null
+, gateArgs ? { }
+}:
 
 let
-  solnix = import solnixDir;
+  solnix = import solnixDir { gate = gateProto; inherit gateArgs; };
 
   # writeText / writeScript: write $text to $out (executable if asked). Matches
   # nixpkgs' writeText/writeScript surface (name -> text -> store path).
@@ -30,6 +38,37 @@ let
       + (if executable then ''; chmod +x "$out"'' else "")
     ) ];
   };
+
+  # writeTextFile — the ATTRSET form of writeText, which several modules use instead
+  # of the curried one. modules/config/mtu.nix:18 calls
+  #   pkgs.writeTextFile { name = ...; text = ...; executable = true; }
+  # and this shim did not have it, so the host eval died with
+  # `error: attribute 'writeTextFile' missing`. Same contract as nixpkgs':
+  # `executable` chmods +x, and `destination` (when set) places the file at that
+  # path INSIDE $out rather than at $out itself.
+  writeTextFileImpl =
+    { name, text, executable ? false, destination ? "" }:
+    derivation {
+      inherit name text;
+      system = builtins.currentSystem;
+      builder = "/usr/bin/bash";
+      PATH = "/usr/gnu/bin:/usr/bin:/usr/sbin";
+      exe = if executable then "1" else "";
+      dest = destination;
+      args = [ "-c" ''
+        set -eu
+        if [ -n "$dest" ]; then
+          # destination is $out-relative (nixpkgs passes it with a leading /)
+          target="$out$dest"
+          mkdir -p "$(dirname "$target")"
+        else
+          target="$out"
+        fi
+        printf '%s' "$text" > "$target"
+        [ -n "$exe" ] && chmod +x "$target"
+        exit 0
+      '' ];
+    };
 
   # runCommand name env script -> store path. Runs `script` under bash with $out
   # set. nativeBuildInputs is ACCEPTED and IGNORED (host tools are on PATH); the
@@ -49,6 +88,10 @@ in
   illumos = solnix;
   writeText = mkWriter false;
   writeScript = mkWriter true;
+  writeTextFile = writeTextFileImpl;
+  # writeShellScript / writeScriptBin: the other two writer spellings modules reach
+  # for. Same mechanism, so they are aliases rather than new machinery.
+  writeShellScript = name: text: mkWriter true name text;
   runtimeShell = "/sbin/sh"; # the shell method scripts run under on-target
 
   # buildEnv — the symlink-farm merge (lib/build-env.nix). The declarative

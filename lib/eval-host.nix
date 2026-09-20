@@ -21,6 +21,14 @@
   libDir ? ./nixpkgs-lib/lib,
   # path to the standalone solnix world slices (pkgs/illumos).
   solnixDir ? ../pkgs/illumos,
+  # An ALREADY-BUILT gate proto, as a store path. pkgs/illumos/gate.nix asserts
+  # srcDir-or-srcHash, so without this every attr that touches the gate (libc,
+  # rtld, base-tools, systemPath, the slices) throws when forced. On the host:
+  #   nix store add-path /var/tmp/proto-unpack/<hash>-illumos-gate-proto
+  # and pass the resulting store path here.
+  gateProto ? null,
+  # Alternatively, gate.nix's own args (srcDir/srcHash/rev) to BUILD the gate.
+  gateArgs ? { },
   # the config to evaluate.
   configModule ? ../configurations/base.nix,
   system ? "x86_64-solaris",
@@ -28,7 +36,7 @@
 
 let
   lib = import libDir;
-  pkgs = import ./host-pkgs.nix { inherit solnixDir; };
+  pkgs = import ./host-pkgs.nix { inherit solnixDir gateProto gateArgs; };
   evalConfig = import ./eval-config.nix { inherit lib; };
   sys = evalConfig {
     inherit system pkgs;
