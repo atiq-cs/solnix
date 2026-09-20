@@ -396,24 +396,48 @@ setup_scratch() {
         [ -e "$_d" ] || continue
         _n=$(basename "$_d"); _n=${_n%p0}
         if dd if="/dev/rdsk/${_n}p0" bs=2048 count=64 2>/dev/null | strings 2>/dev/null | grep -q 'SOLNIX_INSTALL'; then
-          [ -e "/dev/dsk/${_n}s2" ] && { _scrdisk="$_n"; _scrpart="${_n}s2"; }
+          # Found the boot stick. Do NOT require the s2 slice node to pre-exist:
+          # on a freshly dd'd stick illumos has not necessarily created the GPT
+          # slice device nodes, and the EFI label the pool needs is written by the
+          # grow step below. Nudge /dev, let _grow_scratch_tail establish the
+          # label+slices, then derive the pool device AFTER.
+          _scrdisk="$_n"
           break
         fi
       done
-      if [ -z "$_scrpart" ]; then
-        log "USB scratch: no SOLNIX_INSTALL stick with a scratch partition found -- leaving TMPDIR on the ramdisk."
-        log "             (An older image without the scratch partition, or a non-USB boot. Re-run with"
+      if [ -z "$_scrdisk" ]; then
+        log "USB scratch: no SOLNIX_INSTALL stick found -- leaving TMPDIR on the ramdisk."
+        log "             (A non-USB boot, or an older image. Re-run with"
         log "             SOLNIX_SCRATCH_DISK=<cNtNdN> pointing at a spare disk/second stick if / fills.)"
         return 0
       fi
-      log "USB scratch: boot stick scratch partition is $_scrpart"
-      # SELF-GROW into the stick's free tail BEFORE creating the pool. A dd'd stick
-      # bigger than the image leaves UNPARTITIONED FREE SPACE after the scratch
-      # partition; claiming it does NOT move p1(ISO)/p2(ESP) -- the class of op
-      # NixOS's installer performs, so a SINGLE stick fills the device with no
-      # second USB. MEASURED SAFE: p1/p2 byte-identical after, stick still boots.
-      # (Growing UNDER a live pool suspends pool I/O, so grow FIRST, create after.)
+      log "USB scratch: boot stick is $_scrdisk"
+      # Ensure the disk's partition/slice nodes exist (a fresh dd may not have
+      # triggered devfsadm for them yet).
+      pfexec devfsadm -c disk 2>/dev/null || devfsadm -c disk 2>/dev/null || true
+      # SELF-GROW into the stick's free tail. This ALSO writes the EFI label that
+      # creates the s2 slice the pool lives on -- so it must run whether or not s2
+      # pre-exists. A dd'd stick bigger than the image leaves UNPARTITIONED FREE
+      # SPACE after the scratch partition; claiming it does NOT move p1(ISO)/
+      # p2(ESP) -- the class of op NixOS's installer performs, so a SINGLE stick
+      # fills the device with no second USB. MEASURED SAFE: p1/p2 byte-identical
+      # after, stick still boots. (Growing UNDER a live pool suspends pool I/O, so
+      # grow FIRST, create after.)
       _grow_scratch_tail "$_scrdisk" || log "USB scratch: tail grow skipped/failed (using built size)"
+      # NOW derive the pool device. Prefer s2 (present after the grow's EFI label);
+      # fall back to the fdisk p3 node (older-image compat) so we still get scratch
+      # even if the grow was a no-op.
+      pfexec devfsadm -c disk 2>/dev/null || devfsadm -c disk 2>/dev/null || true
+      if [ -e "/dev/dsk/${_scrdisk}s2" ]; then
+        _scrpart="${_scrdisk}s2"
+      elif [ -e "/dev/dsk/${_scrdisk}p3" ]; then
+        _scrpart="${_scrdisk}p3"
+      else
+        log "USB scratch: $_scrdisk has no s2/p3 scratch slice even after devfsadm+grow -- leaving TMPDIR on the ramdisk."
+        log "             (prtvtoc /dev/rdsk/${_scrdisk}p0 shows the layout; re-run with SOLNIX_SCRATCH_DISK if / fills.)"
+        return 0
+      fi
+      log "USB scratch: boot stick scratch slice is $_scrpart"
     fi
     # Create the pool on the (pre-carved) partition or the override device.
     if ! zpool create -f -O compression=on -O atime=off -m "$_scr_mp" solnixscratch "/dev/dsk/${_scrpart}" 2>/tmp/solnix-scratch.err \
