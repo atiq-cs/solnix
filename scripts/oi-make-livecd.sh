@@ -1133,6 +1133,16 @@ log "installing solnix-install + standard svc.startd boot"
 mkdir -p "$RDROOT/usr/sbin"
 cp "$INSTALLER" "$RDROOT/usr/sbin/solnix-install"
 chmod 0555 "$RDROOT/usr/sbin/solnix-install"
+# solnix-diag: push-diagnostics tool so an operator hitting an install wall can
+# send the exact bundle (disks/USB-attach/mounts/network/install-log) to the
+# maintainer instead of photographing the screen. Staged next to solnix-install.
+_DIAG="${SOLNIX_DIAG_SRC:-$(dirname "$INSTALLER")/solnix-diag}"
+if [ -f "$_DIAG" ]; then
+  cp "$_DIAG" "$RDROOT/usr/sbin/solnix-diag"; chmod 0555 "$RDROOT/usr/sbin/solnix-diag"
+  log "installed solnix-diag (push-diagnostics tool)"
+else
+  echo "WARN: solnix-diag not found at $_DIAG -- media will lack the push-diagnostics tool" >&2
+fi
 
 # 4-DECL. DECLARATIVE-Nix installed system (CS=<current-system store path>).
 #   When CS is set, bake the current-system closure into the live ramdisk

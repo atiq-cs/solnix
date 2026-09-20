@@ -1,0 +1,96 @@
+#!/sbin/sh
+# solnix-diag -- bundle the live-installer diagnostics and PUSH them to a
+# collector, so an operator hitting a wall does not have to photograph the
+# screen. Runs on the live media (curl + network are present). Read-only: it
+# COLLECTS and UPLOADS, it changes nothing on any disk.
+#
+# WHY THIS EXISTS: diagnosing install failures by photographs of the console is
+# slow and lossy (this cost a multi-day round-trip). The live media already has
+# a working network (the internet check proves it) and curl, so it can push a
+# text bundle straight to a URL the maintainer reads.
+#
+# WHERE IT UPLOADS (no baked write-creds in a public image):
+#   1. SOLNIX_DIAG_URL set  -> PUT the bundle there (a presigned R2 URL or a
+#      solnix.io collector the operator pastes in). This is the safe default:
+#      the operator generates a presigned PUT (short-lived, write-only, one
+#      object) on a trusted machine and pastes the URL. No standing creds on
+#      the media.
+#   2. else -> write the bundle to $SOLNIX_DIAG_OUT (default /tmp/solnix-diag-*.txt)
+#      and print the path + a one-line curl the operator can run to upload it
+#      from another shell. Falls back to "here is the file" so it is never a
+#      dead end offline.
+#
+# Usage:
+#   solnix-diag                       # collect -> /tmp, print path + upload hint
+#   SOLNIX_DIAG_URL=<presigned-PUT> solnix-diag   # collect -> PUT to that URL
+#
+# The bundle is the EXACT set of things repeatedly needed to diagnose a failed
+# install: disks, the USB/driver-attach state, mounts, the network, and the
+# install log. Add a probe here whenever a new class of failure needs one datum.
+
+set -u
+_out="${SOLNIX_DIAG_OUT:-/tmp/solnix-diag-$(date +%Y%m%d-%H%M%S).txt}"
+
+_section() { printf '\n===== %s =====\n' "$1"; }
+
+{
+  printf 'solnix-diag  %s  (uname: %s)\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null)" "$(uname -a 2>/dev/null)"
+
+  _section "DISKS (format)"
+  format </dev/null 2>&1 | sed -n '/AVAILABLE DISK/,/Specify disk/p'
+
+  _section "BLOCK DEVICE NODES (/dev/rdsk *p0)"
+  ls -l /dev/rdsk/ 2>/dev/null | grep -E 'p0$'
+
+  _section "USB DRIVERS IN RAMDISK"
+  ls /kernel/drv/amd64/ 2>/dev/null | grep -iE 'scsa2usb|usba|hubd|xhci|ehci|usb_mid|^sd$|scsi|cmlb'
+
+  _section "USB TREE (prtconf -D)"
+  prtconf -D 2>/dev/null | grep -iE 'usb|xhci|ehci|hub|storage|scsa2usb' | head -40
+
+  _section "scsa2usb ATTACH ATTEMPT"
+  pfexec devfsadm -i scsa2usb 2>&1
+  echo "-- /dev/rdsk p0 after attach --"
+  ls /dev/rdsk/ 2>/dev/null | grep -E 'p0$'
+
+  _section "DRIVER BINDING (aliases + scsa2usb.conf)"
+  grep -iE 'scsa2usb|usbif|usb,' /etc/driver_aliases 2>/dev/null
+  echo "-- scsa2usb.conf --"; cat /kernel/drv/scsa2usb.conf 2>/dev/null || echo "(absent)"
+
+  _section "DMESG (usb/scsi/attach warnings)"
+  dmesg 2>/dev/null | grep -iE 'usb|scsa2usb|scsi|cmlb|attach|WARNING|fatal' | tail -40
+
+  _section "MOUNTS + ROOT FS"
+  mount 2>/dev/null
+  echo "-- df -h / --"; df -h / 2>/dev/null
+
+  _section "NETWORK"
+  ipadm show-addr 2>/dev/null
+  echo "-- default route --"; netstat -rn 2>/dev/null | grep default
+  echo "-- resolv.conf --"; cat /etc/resolv.conf 2>/dev/null
+
+  _section "SCRATCH POOL"
+  zpool list 2>/dev/null
+  zfs list 2>/dev/null | head -20
+
+  _section "INSTALL LOG (tail)"
+  tail -80 /tmp/solnix-install.log 2>/dev/null || echo "(no /tmp/solnix-install.log)"
+} > "$_out" 2>&1
+
+echo "solnix-diag: bundle written to $_out ($(wc -l < "$_out" 2>/dev/null | tr -d ' ') lines)" >&2
+
+if [ -n "${SOLNIX_DIAG_URL:-}" ]; then
+  echo "solnix-diag: PUT -> $SOLNIX_DIAG_URL" >&2
+  if curl -fsS -T "$_out" "$SOLNIX_DIAG_URL" 2>/tmp/solnix-diag-put.err; then
+    echo "solnix-diag: uploaded OK." >&2
+  else
+    echo "solnix-diag: upload FAILED:" >&2; sed 's/^/  /' /tmp/solnix-diag-put.err >&2
+    echo "solnix-diag: the bundle is still at $_out -- upload it by hand:" >&2
+    echo "  curl -fsS -T $_out '<a-presigned-PUT-url>'" >&2
+  fi
+else
+  echo "solnix-diag: no SOLNIX_DIAG_URL set. To send it to the maintainer, either:" >&2
+  echo "  1. get a presigned PUT url and: SOLNIX_DIAG_URL=<url> solnix-diag" >&2
+  echo "  2. or upload $_out yourself: curl -fsS -T $_out '<url>'" >&2
+  echo "  3. or paste $_out (it is plain text, no secrets)." >&2
+fi
