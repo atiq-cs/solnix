@@ -72,40 +72,61 @@ and two thin edition files:
 
 Both set `storeContents`/media-store to the base closure (+ COSMIC closure for GUI).
 
-## 6. uutils (Rust coreutils) in BOTH closures — with the honest prerequisite
+## 6. uutils (Rust coreutils) in BOTH closures — the toolchain ALREADY EXISTS
 
 You want the **Rust coreutils (uutils, what Ubuntu now uses)** available and **in the closure of both images**,
 alongside the illumos utils.
 
-⚠️ **Measured prerequisite: there is NO Rust toolchain on the illumos fleet today** (C/C++ gcc-14/clang-21 only;
-COSMIC was cross-compiled from Linux). uutils is Rust, so it needs `rustc`/`cargo` targeting
-`x86_64-unknown-illumos` (a tier-3 Rust target) first. This is a **multi-day bootstrap milestone** (`post-stable-backlog.md`
-PS-2), not a package add. Plan:
+✅ **CORRECTION (verified 2026-09-19): Rust is NOT a blocker — it already WORKS on solnix.** An earlier note in
+`post-stable-backlog.md` said "no rustc/cargo"; that is **stale**. `docs/rust-illumos-bootstrap.md` +
+`solnix-pkgs/pkgs/os-specific/illumos/rust-illumos-seed.nix` document a WORKING, published toolchain: native
+`x86_64-unknown-illumos` **rustc 1.97.1 + cargo 1.97.1** (Tier-2; stage0 from OI Hipster `developer/lang/rustc`),
+proven to `cargo build` crates.io crates and compile pyo3 end-to-end. Published to the durable cache as
+`rust-illumos-1.97.1` (wrapped seed) + `rust-seed-stage` (raw tree).
 
-1. **Bootstrap Rust for illumos** — cross-compile `rustc`+`cargo` from the x86_64-linux box to
-   `x86_64-unknown-illumos`, wire as a `pkgs.illumos` derivation. (Prereq for uutils AND the wider Rust CLI
-   ecosystem the project wants anyway.)
-2. **Package uutils-coreutils** as a solnix derivation built with that toolchain.
-3. **Both illumos utils AND uutils in the closure**: ship them side by side. Decision needed (see questions) on
-   whether uutils is *additive* (both present, illumos utils are the default `PATH`) or *replaces* the GNU/illumos
-   coreutils as the default — Ubuntu made uutils the default; the safe first step is additive + opt-in, matching
-   "measure, don't cargo-cult."
+So uutils is **not** gated on a multi-day bootstrap. The remaining work is exactly `rust-illumos-bootstrap.md` §6.1:
 
-⚠️ This makes uutils-in-the-closure **gated on the Rust bootstrap**. The images can ship WITHOUT uutils first (TUI +
-GUI + install-from-flake working), then add uutils once Rust lands — or we hold the images for the bootstrap. See
-the questions.
+1. **Expose `rustc`/`cargo`/`rustPlatform` in the solaris-overlay** so `buildRustPackage` derivations resolve. The
+   seed's wrappers already give working binaries; the overlay just points `rustPlatform` at them. (De-ref the two
+   absolute host paths `/usr/gcc/14` to the tranche's nixpkgs gcc-14 for a hermetic closure — §6.2, optional first.)
+2. **Package uutils-coreutils** as a `buildRustPackage` solnix derivation.
+3. **Both illumos utils AND uutils in the closure**: ship side by side, illumos utils default on `PATH` (ADDITIVE,
+   per the maintainer's confirmation — measure before making uutils the default like Ubuntu did).
+
+⚠️ The images can ship WITHOUT uutils first (TUI + GUI + install-from-flake working — the TUI image is already
+built), then add uutils once the overlay exposes `rustPlatform`. This is now a **days**, not multi-day, task.
 
 ## 7. Order of work
 
-1. **#1 writable partition** (`make-iso-usb.sh` + `setup_scratch` mount-only) — small, universal, unblocks the
-   fetch on any machine. Testable first.
-2. **#2 base-closure media store** (seed base toplevel closure + starter set; `file://` substituter wiring).
-3. **TUI image** = base + #1 + #2, install-from-flake end to end.
-4. **Rust bootstrap for illumos** (multi-day; PS-2).
-5. **uutils packaged** + added to both closures.
-6. **GUI image**: COSMIC + a thin GUI installer front-end over the `solnix-install` core.
+1. **#1 writable partition + single-stick self-grow** — DONE + PROVEN on illumos (`ccb99d76`; `usb-image-20260919-tui2`).
+2. **#2 base-closure media store** — DONE (verified offline on illumos).
+3. **TUI image** — DONE (`usb-image-20260919-tui2`, self-grow + inode fix + media store).
+4. **Rust toolchain** — ALREADY DONE (`rust-illumos-1.97.1`).
+5. **uutils in both closures** — DONE (78 applets run, published, additive into base.nix; `46d53a53`).
+6. **GUI image**: COSMIC + a thin GUI installer front-end over the `solnix-install` core. ← IN PROGRESS.
 
-TUI (1–3) is near; GUI (6) and uutils (4–5) are each real milestones.
+## 8. GUI image (#6) scope — grounded in the measured COSMIC status
+
+MEASURED (`docs/desktop-connectable-status.md`): a Wayland compositor RUNS on x86_64-illumos (smallvil, smithay SW
+compositor, Mesa softpipe/llvmpipe), VNC-verified; the full COSMIC stack is built (cosmic-term/files/settings/
+launcher/session/panel + applets), and cosmic-term paints RELIABLY over time (byte-identical captures). What does
+NOT yet exist: a bare-metal login-straight-to-COSMIC path (it's been VNC/software-rendered, SSH-tunnel access).
+
+So the GUI image adapts the NixOS graphical-ISO pattern to that reality:
+* boots to a **COSMIC session** (or smallvil compositor hosting the installer) on the framebuffer via llvmpipe
+  where there is no GPU (the X1 is `vgatext`/llvmpipe at best — a genuine platform limit, not a shortcut).
+* runs a **thin GUI installer front-end** — NOT a Calamares port. It collects the SAME answers `solnix-install`
+  already prompts for (disk, encryption, /home layout, root pw, user, `--flake` ref) and drives the tested
+  `solnix-install` core. The risky OS-touching code stays in the one shared, verified path.
+* shares ALL of TUI's install machinery: single-stick self-grow scratch, base-closure media store,
+  store-on-pool build, uutils in the closure. The GUI image just adds COSMIC + the front-end + (per the
+  base+desktop seed decision) the COSMIC closure in the media store so desktop installs are fast/offline.
+
+⚠️ HONEST RISK: the GUI installer needs a compositor to have STARTED at boot on real (or QEMU) hardware — that
+login-to-desktop path has not been exercised end to end (only VNC/offscreen). The first bring-up may hit the
+framebuffer/seat/session plumbing that VNC bypassed. Build the front-end + wire the session, but VERIFY it actually
+reaches a visible installer on a framebuffer, and report honestly if it only reaches VNC. A GUI installer that only
+works over VNC is a real partial result, not a failure to hide.
 
 ## 8. CONFIRMED (maintainer approved the full plan)
 
