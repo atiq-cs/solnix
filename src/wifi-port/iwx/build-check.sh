@@ -83,6 +83,63 @@ else
 	rc=1
 fi
 
+# PHASE 1: the illumos-side attach + GLDv3 registration glue. This is the
+# mac_register-UPWARD boundary of the route-(b) driver -- the piece the vendored
+# OpenBSD if_iwx.c does not and cannot contain. It must compile to a real kernel
+# object whose GLDv3/DDI/module symbols are UNDEFINED (kernel supplies them at
+# load), and it must NOT reference any ieee80211_* symbol -- proving the
+# illumos-side attach builds INDEPENDENTLY of the (unfinished) net80211 link.
+ATTACH_SRC="$here/iwx_attach.c"
+ATTACH_OBJ="$here/build/iwx_attach.o"
+if [ -f "$ATTACH_SRC" ]; then
+	echo "=== iwx_attach.c -> kernel object (phase-1 GLDv3+DDI attach glue) ==="
+	rm -f "$ATTACH_OBJ"
+	if "$CC" -m64 -c -o "$ATTACH_OBJ" "$ATTACH_SRC" \
+	    -D_KERNEL -D_SYSCALL32 -ffreestanding -nostdinc \
+	    -I"$UTS/common" -I"$UTS/intel" -I"$UTS/i86pc" -Wno-format \
+	    2>/tmp/iwx_attach_gate.err && [ -s "$ATTACH_OBJ" ]; then
+		echo "  COMPILES: $(file -b "$ATTACH_OBJ" | cut -c1-46)"
+		echo "            $(nm "$ATTACH_OBJ" | grep -cE ' [Tt] ') text symbols"
+		# The GLDv3/module entry points MUST be present as defined text
+		# symbols, and the key GLDv3 calls MUST appear as undefined (the
+		# kernel resolves them). A stub that inlined or omitted mac_register
+		# would fail this.
+		# The module entry points must be GLOBAL text symbols (the kernel
+		# loader looks them up by name); the attach/detach ops are static and
+		# reached via iwx_devops, so they are LOCAL text symbols -- the
+		# correct illumos idiom (iwn is identical). Accept T for the module
+		# entries, t-or-T for the ops.
+		for sym in _init _fini _info; do
+			nm "$ATTACH_OBJ" | grep -q " T $sym\$" || {
+				echo "  MISSING global text symbol: $sym"; rc=1; }
+		done
+		for sym in iwx_attach iwx_detach; do
+			nm "$ATTACH_OBJ" | grep -qE " [Tt] $sym\$" || {
+				echo "  MISSING attach/detach text symbol: $sym"; rc=1; }
+		done
+		for u in mac_register mac_alloc mac_unregister ddi_regs_map_setup \
+		    pci_config_setup mod_install; do
+			nm "$ATTACH_OBJ" | awk '$1=="U"{print $2}' | grep -q "^$u\$" || {
+				echo "  EXPECTED undefined kernel symbol not referenced: $u"; rc=1; }
+		done
+		# Route-(b) independence: the illumos-side attach must NOT drag in
+		# net80211. Any ieee80211_* undefined here means the boundary was
+		# drawn wrong.
+		ie=$(nm "$ATTACH_OBJ" | awk '$1=="U"{print $2}' | grep -c '^ieee80211' || true)
+		if [ "$ie" -eq 0 ]; then
+			echo "  route-(b) boundary clean: 0 ieee80211_* references"
+			echo "  (the GLDv3 attach .o builds independently of the net80211 link)"
+		else
+			echo "  BOUNDARY LEAK: $ie ieee80211_* references in the attach glue"
+			rc=1
+		fi
+	else
+		echo "  DOES NOT COMPILE:"
+		grep -m3 'error:' /tmp/iwx_attach_gate.err | sed 's/^/    /'
+		rc=1
+	fi
+fi
+
 echo "=== if_iwx.c residual error surface ==="
 errs=$(compile_errs "" | grep 'error:' || true)
 n=$(printf '%s' "$errs" | grep -c 'error:' || true)
@@ -307,13 +364,34 @@ if [ "${1:-}" = "--self-test" ]; then
 	fi
 	rm -f "$nc6" "$nc6.o"
 
+	# 7. The phase-1 attach gate must be able to fail: the boundary-leak check
+	#    must actually fire when an ieee80211_* reference is present. Compile a
+	#    tiny TU that references one and confirm nm sees it -- proving the grep
+	#    that guards route-(b) independence is not blind.
+	if [ -f "$here/iwx_attach.c" ]; then
+		nc7=$(mktemp /tmp/iwx-nc7.XXXXXX.c)
+		printf 'extern int ieee80211_ifattach(void *);\nint iwx_negctl_leak(void *p){return ieee80211_ifattach(p);}\n' > "$nc7"
+		if "$CC" -m64 -c -o "$nc7.o" "$nc7" -D_KERNEL -ffreestanding \
+		    -nostdinc -I"$UTS/common" -I"$UTS/intel" -I"$UTS/i86pc" \
+		    2>/dev/null &&
+		   [ "$(nm "$nc7.o" | awk '$1=="U"{print $2}' | grep -c '^ieee80211' || true)" -ge 1 ]; then
+			echo "  attach boundary-leak control: an ieee80211_* ref IS detected"
+		else
+			echo "  attach boundary-leak control: THE ie80211 GREP CANNOT SEE A LEAK"
+			nc_rc=1
+		fi
+		rm -f "$nc7" "$nc7.o"
+	fi
+
 	[ "$nc_rc" -eq 0 ] && echo "  negative controls: all live" || rc=1
 fi
 
 echo "=== verdict ==="
 if [ "$rc" -eq 0 ]; then
-	echo "OK: $n residual errors; if_iwx.c compiles to an object file."
-	echo "    LADDER: compiles YES | links NO | loads NO | attaches NO | sees device NO"
+	echo "OK: $n residual errors; if_iwx.c compiles to an object file;"
+	echo "    iwx_attach.c (phase-1 GLDv3+DDI glue) compiles to a kernel object."
+	echo "    LADDER: if_iwx.c compiles YES | attach glue compiles YES |"
+	echo "            module links NO | loads NO | attaches NO | sees device NO"
 else
 	echo "PROBLEM: see above."
 fi

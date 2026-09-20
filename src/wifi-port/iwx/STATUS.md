@@ -18,6 +18,39 @@ from the source, not only from here.
 | **attaches to the PCI device** | **NO** | not attempted |
 | **sees / associates with an AP** | **NO** | not attempted |
 
+### Session-4 addition: the phase-1 illumos-side attach glue now compiles
+
+`iwx_attach.c` (new, 515 lines) is the illumos half of the driver -- the piece the vendored OpenBSD
+`if_iwx.c` does not and cannot contain. It **compiles to a real kernel object** (`build/iwx_attach.o`,
+ELF64 relocatable, 20 text symbols, `build-check.sh` exit 0, negative-controlled: deleting the
+`mac_register` call flips the gate to PROBLEM). It supplies:
+
+* `_init`/`_fini`/`_info` + `modlinkage` + `DDI_DEFINE_STREAM_OPS` (all global `T` where required),
+* `iwx_attach`/`iwx_detach`/`iwx_quiesce` doing `ddi_soft_state_*`, `pci_config_setup`,
+  `ddi_regs_map_setup` (BAR0), the `ddi_intr_*` allocation skeleton, `ddi_create_minor_node`,
+* `mac_alloc`/`mac_register`/`mac_unregister`/`mac_link_update` with a complete `mac_callbacks_t` vector,
+  modelled on illumos `iwn` (`if_iwn.c:765-1136`, `:396`, `:7696-7749`).
+
+**It references ZERO `ieee80211_*` symbols** (proven by the gate), so it builds **independently of the
+net80211 link**. This settles the dependency-order question: the `mac_register`-UPWARD boundary is NOT
+blocked on the 43-symbol net80211 gate. What the net80211 link DOES gate is the DOWNWARD bridge -- the
+`mc_ioctl`/`mc_setprop`/`mc_getprop`/`mc_tx` callbacks, which on an illumos wifi driver route into
+net80211 (iwn: `iwn_m_ioctl` -> `ieee80211_ioctl`, `if_iwn.c:4088`). In `iwx_attach.c` those are marked
+`IWX_NET80211_GATED` and fail closed (`ENOTSUP`/`miocnak`) until a route-(b) OpenBSD-net80211 adapter
+exists. They are stubs, tagged as such -- not implementations.
+
+**Phase 2 (firmware + alive) verified at compile+structure level.** All handshake functions are real
+text symbols in `build/if_iwx_illumos.o`: `iwx_read_firmware`, `iwx_load_firmware`, `iwx_start_fw`,
+`iwx_load_ucode_wait_alive`, `iwx_run_init_mvm_ucode`, `iwx_fw_version_str`, `iwx_lookup_notif_ver`,
+`iwx_lookup_cmd_ver`. The API-version contract is present and cited (all `openbsd-orig/if_iwx.c`):
+`:1239` magic check (`IWX_TLV_UCODE_MAGIC`) -> `EINVAL`; `:1246` version string via
+`IWX_UCODE_MAJOR/MINOR/API`; `:1365-1384` `IWX_UCODE_TLV_API_CHANGES_SET` capture with an `idx`
+bound-check -> `EINVAL`; `:540`/`:10982` `iwx_lookup_notif_ver` arbitrates the alive-response struct
+version; `:11013`/`:11037`/`:11049` only `IWX_ALIVE_STATUS_OK` (0xCAFE) sets `uc_ok`; `:4079`
+`iwx_start_fw` returns `EINVAL` on `!uc_ok`. So a version mismatch degrades to a clean `EINVAL`
+("could not load firmware"), not a crash. **True verification -- silicon accepts the blob, real
+`IWX_ALIVE` interrupt -- is HARDWARE-GATED (the X1) and cannot be reached off-hardware.**
+
 The error surface on `if_iwx.c` went **364 -> 30 -> 0** and it now produces an object file. **Nothing
 links as a module and nothing loads.** "Compiles" is the second of seven rungs and the two that follow
 are the expensive ones.
