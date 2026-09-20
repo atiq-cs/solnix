@@ -98,6 +98,16 @@ GRAPHICAL="${GRAPHICAL:-0}"
 # old 440 which pre-dated those tools and would drop them. The graphical variant
 # keeps its measured 500 (it does not add git/dig and has never needed more);
 # raise it only against a measured graphical build, not "to be safe".
+# COSMIC=1 selects the COSMIC/smallvil graphical variant (design-two-installer-
+# images.md #4) instead of the Xfce one. It implies GRAPHICAL=1 for the shared
+# desktop scaffolding (writable root, devfsadm, live user) but swaps the session
+# for smallvil + the thin solnix GUI installer front-end. The heavy COSMIC store
+# paths (smallvil is ~192MB NarSize alone) do NOT go in the RAM ramdisk -- they
+# ride in the MEDIA STORE (make-iso-usb.sh, SOLNIX_STORE_ROOTS) and are pulled
+# onto the writable scratch pool at session start, so the ramdisk stays small.
+# The ramdisk carries only the session LAUNCHER + the front-end wiring.
+COSMIC="${COSMIC:-0}"
+if [ "$COSMIC" = 1 ]; then GRAPHICAL=1; fi
 if [ "$GRAPHICAL" = 1 ]; then RD_MB="${RD_MB:-500}"; else RD_MB="${RD_MB:-640}"; fi
 # RD_NBPI: newfs -i bytes-per-inode. illumos newfs defaults to nbpi=2048 for an
 # image this size, which cost 20,522KB of inode tables at RD_MB=320 to hold 3369
@@ -1758,6 +1768,111 @@ fi
 #     enables the slim SMF service -- see DISPLAY-MANAGER.md).
 # ---------------------------------------------------------------------------
 if [ "$GRAPHICAL" = 1 ]; then
+ if [ "$COSMIC" = 1 ]; then
+  # ---- COSMIC / smallvil graphical variant (design #4) --------------------
+  # The heavy COSMIC store paths ride in the MEDIA STORE, not the ramdisk. Here
+  # we stage only: (1) the thin solnix GUI installer front-end binary +
+  # solnix-gui-handoff (from $COSMIC_FRONTEND_DIR, built against the illumos
+  # rust+libcosmic toolchain), and (2) the smallvil session launcher that brings
+  # up Xorg-dummy + smallvil + the front-end + x11vnc(127.0.0.1:5900). smallvil
+  # is smithay winit->X11 (there is NO bare-metal framebuffer/DRM path on illumos
+  # -- the console is vgatext; see docs), so the session is observed over VNC.
+  log "COSMIC: staging smallvil session launcher + thin GUI installer front-end"
+  mkdir -p "$RDROOT/usr/sbin" "$RDROOT/usr/lib/solnix-gui"
+  # front-end binaries (built on the host; staged if present, else the launcher
+  # falls back to the media-store copy pulled at session start).
+  COSMIC_FRONTEND_DIR="${COSMIC_FRONTEND_DIR:-/var/tmp/solnix-gui-frontend}"
+  _fe_staged=0
+  for _b in solnix-gui-installer solnix-gui-handoff; do
+    if [ -x "$COSMIC_FRONTEND_DIR/$_b" ]; then
+      cp "$COSMIC_FRONTEND_DIR/$_b" "$RDROOT/usr/lib/solnix-gui/$_b" && chmod 0555 "$RDROOT/usr/lib/solnix-gui/$_b" && _fe_staged=$((_fe_staged+1))
+    fi
+  done
+  log "COSMIC: front-end binaries staged: $_fe_staged (from $COSMIC_FRONTEND_DIR)"
+  # session launcher: Xorg:99-dummy + smallvil + the front-end + x11vnc, adapted
+  # from scripts/solnix-cosmic-session-node.sh (the VNC-verified session). The
+  # COSMIC store paths (smallvil, wayland, xkeyboard-config) are expected under
+  # /nix/store (pulled onto the scratch pool from the media store); the launcher
+  # resolves them at runtime so the ramdisk carries no 192MB compositor.
+  cat > "$RDROOT/usr/sbin/solnix-cosmic-session" <<'COSMICEOF'
+#!/sbin/sh
+# solnix live COSMIC session: Xorg:99-dummy + smallvil (smithay SW, softpipe) +
+# the thin GUI installer front-end + x11vnc(127.0.0.1:5900). VNC-only: illumos has
+# no bare-metal framebuffer/DRM path (console is vgatext); see the image README.
+set -u
+export XDG_RUNTIME_DIR=/tmp/xdg-runtime; mkdir -p "$XDG_RUNTIME_DIR"; chmod 700 "$XDG_RUNTIME_DIR"
+export WAYLAND_DISPLAY=wayland-1 DISPLAY=:99
+export GALLIUM_DRIVER=softpipe LIBGL_ALWAYS_SOFTWARE=1 ICED_BACKEND=tiny-skia
+export UMEM_OPTIONS=backend=mmap GDK_BACKEND=wayland
+_find() { ls -d /nix/store/*$1* 2>/dev/null | grep -v -- -debug | head -1; }
+SMALLVIL=$(ls /nix/store/*smallvil*/bin/smallvil /nix/store/*smallvil* 2>/dev/null | head -1)
+WLLIB=$(ls -d /nix/store/*wayland-1*/lib 2>/dev/null | head -1)
+XKB=$(_find xkeyboard-config-); [ -n "$XKB" ] && export XKB_CONFIG_ROOT="$XKB/share/X11/xkb"
+FE=/usr/lib/solnix-gui/solnix-gui-installer
+[ -x "$FE" ] || FE=$(ls /nix/store/*solnix-gui*/bin/solnix-gui-installer 2>/dev/null | head -1)
+if [ -z "$SMALLVIL" ] || [ ! -x /usr/bin/Xorg ]; then
+  echo "[solnix] COSMIC session prerequisites missing (smallvil=$SMALLVIL, Xorg=$( [ -x /usr/bin/Xorg ] && echo yes || echo NO))."
+  echo "[solnix] Falling back to the text installer front-end."
+  exec /usr/sbin/solnix-install-tui
+fi
+/usr/bin/Xorg :99 -config /root/xorg-dummy.conf -noreset -nolisten tcp >/tmp/solnix-xorg.log 2>&1 &
+sleep 3
+env LD_LIBRARY_PATH="$WLLIB:/usr/lib/64" "$SMALLVIL" >/tmp/solnix-smallvil.log 2>&1 &
+sleep 3
+[ -n "$FE" ] && env LD_LIBRARY_PATH="$WLLIB:/usr/lib/64" "$FE" >/tmp/solnix-frontend.log 2>&1 &
+sleep 2
+( unset WAYLAND_DISPLAY; exec /usr/bin/x11vnc -display :99 -localhost -rfbport 5900 -noipv6 -forever -shared -nopw -noxdamage ) >/tmp/solnix-x11vnc.log 2>&1 &
+echo "[solnix] COSMIC session up; VNC on 127.0.0.1:5900 (ssh -N -L 5900:127.0.0.1:5900 root@<ip>)"
+COSMICEOF
+  chmod 0555 "$RDROOT/usr/sbin/solnix-cosmic-session"
+  # text front-end fallback (same as the Xfce path) so a console install always works.
+  cat > "$RDROOT/usr/sbin/solnix-install-tui" <<'TUIEOF'
+#!/usr/bin/ksh93
+PATH=/usr/sbin:/usr/bin:/sbin; export PATH
+cat /etc/solnix-banner 2>/dev/null; echo
+echo "Detecting disks..."; /usr/sbin/devfsadm 2>/dev/null || true
+_disks=$(ls /dev/rdsk/c*t*d0s0 /dev/rdsk/c*d0s0 2>/dev/null | sed 's,.*/,,; s,s0$,,' | sort -u)
+[ -z "$_disks" ] && { echo "No target disks found."; echo "Press Enter to close."; read _; exit 1; }
+echo "Available target disks:"; i=1; for d in $_disks; do echo "  $i) $d"; i=$((i+1)); done
+echo; printf 'Install solnix to which disk (name, e.g. c1t0d0; q to quit)? '
+read _t; [ "$_t" = q ] && exit 0
+printf 'This ERASES %s. Type YES to proceed: ' "$_t"; read _c
+[ "$_c" = YES ] || { echo "Aborted."; exit 0; }
+SOLNIX_POOL=rpool SOLNIX_ALLOW_RPOOL=1 /usr/sbin/solnix-install "$_t"
+echo; echo "Press Enter to close."; read _
+TUIEOF
+  chmod 0555 "$RDROOT/usr/sbin/solnix-install-tui"
+  # rewrite the solnix-live method to start the COSMIC session after the banner.
+  cat > "$RDROOT/lib/svc/method/solnix-live" <<'CMETHODEOF'
+#!/sbin/sh
+. /lib/svc/share/smf_include.sh
+PATH=/usr/sbin:/usr/bin:/sbin; export PATH
+{
+  echo "[solnix] COSMIC live media: fs writable, devfsadm done"
+  /usr/sbin/devfsadm >>/var/log/solnix-live.log 2>&1 || true
+  echo "[solnix] starting live COSMIC session (smallvil + GUI installer front-end, VNC 127.0.0.1:5900)..."
+  /usr/sbin/solnix-cosmic-session 2>&1 || echo "[solnix] COSMIC session launcher returned non-zero"
+  sleep 20
+  echo "[solnix] session procs:"; ps -ef 2>/dev/null | grep -E 'smallvil|Xorg|x11vnc|solnix-gui' | grep -v grep
+} > /dev/console 2>&1
+exit $SMF_EXIT_OK
+CMETHODEOF
+  chmod 0555 "$RDROOT/lib/svc/method/solnix-live"
+  cat > "$RDROOT/etc/solnix-banner" <<'CBANNEREOF'
+
+  ############################################################
+  #  The Solnix Operating System - Live COSMIC + Installer   #
+  #                  (x86_64 / illumos)                      #
+  ############################################################
+
+  A live COSMIC session is starting (smallvil, software-rendered, VNC-only:
+  illumos has no bare-metal framebuffer path yet -- see the image README).
+  Connect:  ssh -N -L 5900:127.0.0.1:5900 root@<ip>  then  vncviewer localhost:5900
+  Or install from this console:  solnix-install-tui   OR   solnix-install <disk>
+
+CBANNEREOF
+  log "COSMIC: session layer baked (smallvil launcher + thin GUI front-end + VNC)"
+ else
   log "GRAPHICAL: baking Xfce desktop closure into live root"
   [ -f "$GFX_CLOSURE" ] || die "GRAPHICAL=1 but no closure list at $GFX_CLOSURE (generate with nix-store -qR)"
   mkdir -p "$RDROOT/nix/store"
@@ -2207,6 +2322,7 @@ GMETHODEOF
 GBANNEREOF
 
   log "GRAPHICAL: desktop layer baked (user solnix, .xinitrc, installer launcher, Xvfb autostart)"
+ fi
 fi
 
 # ---------------------------------------------------------------------------

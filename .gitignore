@@ -164,3 +164,9 @@ artifacts/install-media/usb-image-20260919-tui/*.tar.gz
 artifacts/install-media/usb-image-20260919-tui2/*.iso
 artifacts/install-media/usb-image-20260919-tui2/*.img
 artifacts/install-media/usb-image-20260919-tui2/*.tar.gz
+artifacts/riscv-build/
+
+# usb-image-20260919-gui binaries -- banked in R2, never committed (image-trap rule)
+artifacts/install-media/usb-image-20260919-gui/*.iso
+artifacts/install-media/usb-image-20260919-gui/*.img
+artifacts/install-media/usb-image-20260919-gui/*.tar.gz

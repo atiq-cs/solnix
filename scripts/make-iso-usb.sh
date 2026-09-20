@@ -233,6 +233,29 @@ if [ -z "${SOLNIX_NO_MEDIA_STORE:-}" ]; then
     echo "       x86_64-solaris published rows, or SOLNIX_STORE_ROOTS). Set SOLNIX_NO_MEDIA_STORE=1 to skip." >&2
     exit 1
   fi
+  # GUI edition (design #4): base closure + the COSMIC closure, so a desktop
+  # install is fast/offline. These are the x86_64-illumos COSMIC build outputs
+  # published to cache.solnix.io (verified reachable): the smallvil compositor,
+  # libcosmic + cosmic-toolkit rlibs, and the rust-illumos toolchain the front-end
+  # is built with. The cosmic-term APP output is NOT in the cache (its runnable
+  # binary lived only on the closed-account host); the seeded set is what SURVIVES
+  # and is what the smallvil session + the thin front-end need. Override with
+  # SOLNIX_COSMIC_ROOTS=<file> (one /nix/store path per line).
+  if [ "${SOLNIX_IMAGE_EDITION:-tui}" = gui ]; then
+    _cosmic_roots="${SOLNIX_COSMIC_ROOTS:-}"
+    if [ -z "$_cosmic_roots" ]; then
+      _cosmic_roots="$WORK/cosmic-roots.txt"
+      cat > "$_cosmic_roots" <<'COSMICROOTS'
+/nix/store/7qvqfz2wc82qi4v1k1hvvhrkwcs627gz-smallvil-x86_64-illumos
+/nix/store/rvzgiglmlsvxi6qnsgh6fwnxz8n0243p-libcosmic-x86_64-illumos.rlib
+/nix/store/591rk79s4adj5bx7lfpfg906ja1s8y7s-cosmic-toolkit-x86_64-illumos-rlibs
+/nix/store/cvs3wrjnadd8prryvhy37pyzzc8dy1cd-rust-illumos-1.97.1
+COSMICROOTS
+    fi
+    cat "$_cosmic_roots" >> "$STORE_ROOTS_FILE"
+    sort -u "$STORE_ROOTS_FILE" -o "$STORE_ROOTS_FILE"
+    echo "  GUI edition: added $(wc -l < "$_cosmic_roots" | tr -d ' ') COSMIC closure roots" >&2
+  fi
   echo "  base-closure roots ($(wc -l < "$STORE_ROOTS_FILE" | tr -d ' ') paths):" >&2
   sed 's,^/nix/store/,    ,' "$STORE_ROOTS_FILE" >&2
   STORE_DIR="$WORK/store"
