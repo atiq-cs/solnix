@@ -1391,6 +1391,19 @@ PATH=/usr/sbin:/usr/bin:/sbin; export PATH
 {
   echo ""
   echo "[solnix] live-installer service starting (fs writable, devfsadm done)"
+  # AUTO-NETWORK at boot, FAIL-SAFE: launch the bounded bring-up FIRST, in the
+  # BACKGROUND, BEFORE devfsadm / the disk listing. Those disk steps can BLOCK
+  # indefinitely (`ls /dev/dsk` stat()s device nodes whose controller nexus has
+  # not attached -- OBSERVED to hang this method in QEMU q35 with no disk), and
+  # auto-network must not be held hostage to disk enumeration. solnix-autonet
+  # has its own hard watchdog and needs no /dev/dsk, so a no-NIC / no-DHCP box
+  # simply gets a "down: ..." status line the motd reads. It also does NOT gate
+  # the console auto-login (a separate SMF service). Result lands in
+  # /var/run/solnix-net-status + /var/log/solnix-autonet.log.
+  if [ -x /lib/svc/method/solnix-autonet ]; then
+    /lib/svc/method/solnix-autonet >/dev/null 2>&1 &
+    echo "[solnix] auto-network bring-up started in the background (bounded; see solnix-net)"
+  fi
   # ⚠️ devfsadm and the disk listing go to the LOG, never to /dev/console.
   #
   # OBSERVED ON REAL HARDWARE: this block redirects to /dev/console (see the
@@ -1590,20 +1603,186 @@ cp "$SRC/etc/inittab" "$RDROOT/etc/inittab" 2>/dev/null || cat > "$RDROOT/etc/in
 ap::sysinit:/sbin/autopush -f /etc/iu.ap
 smf::sysinit:/lib/svc/bin/svc.startd >/dev/msglog 2>&1 </dev/console
 INITEOF
-# a console banner shell for interactive use (invoked from console-login).
+# a console banner shell for interactive use (invoked from the console auto-login).
 cat > "$RDROOT/etc/solnix-live-shell" <<'SHELLEOF'
 #!/usr/bin/ksh93
+# /etc/solnix-live-shell -- the live console session: set PATH/env, print the
+# accurate motd (which reads the boot-time auto-network result), then hand the
+# operator an interactive root shell. Invoked by the console auto-login method.
+#
 # /usr/gnu/bin FIRST: illumos /usr/bin/diff prints "No differences encountered"
 # for identical files, which silently breaks scripted comparisons. GNU diffutils
 # is staged and must win the PATH lookup.
 PATH=/usr/gnu/bin:/run/current-system/sw/bin:/usr/sbin:/usr/bin:/sbin:/usr/ccs/bin
-export PATH TERM=${TERM:-vt100} TMPDIR=/tmp
+export PATH TERM=${TERM:-vt100} TMPDIR=/tmp HOME=/root
 NIX_CONF_DIR=/etc/nix; export NIX_CONF_DIR
 NIX_PATH=nixpkgs=/run/current-system/solnix-flake; export NIX_PATH
-cat /etc/solnix-banner 2>/dev/null
+# accurate, dynamic motd (auto-detect disk, install command, net status, diag).
+/usr/sbin/solnix-motd 2>/dev/null || cat /etc/solnix-banner 2>/dev/null
 exec /usr/bin/ksh93 2>/dev/null || exec /sbin/sh
 SHELLEOF
 chmod 0555 "$RDROOT/etc/solnix-live-shell"
+
+# ---------------------------------------------------------------------------
+# tui5 first-boot UX: auto-login as root, auto-network at boot (fail-safe), and
+# an accurate motd. All three are LIVE-MEDIA ONLY (solnix-install does NOT copy
+# these overrides into the installed target).
+#
+# AUTO-LOGIN mechanism note (a real illumos constraint, stated honestly): illumos
+# login(1) has NO autologin flag -- its synopsis is
+#   login [-p] [-d device] [-R repo] [-s service] [-t term] [-u id] [-U ruser] ...
+# with no util-linux/BSD-style -f "already authenticated". And ttymon -g always
+# writes a prompt and waits for a carriage return before invoking its service.
+# So "land at a root shell with no prompt" is NOT reachable by configuring
+# ttymon/login; the illumos-native way is to REPLACE the console-login exec
+# method (see the svccfg override in section 4f) with a program that runs the
+# shell directly on /dev/console. autopush -f /etc/iu.ap already pushes
+# ldterm,ttcompat onto /dev/console at sysinit, so the tty is set up first.
+mkdir -p "$RDROOT/lib/svc/method" "$RDROOT/usr/sbin"
+cat > "$RDROOT/lib/svc/method/solnix-console-login" <<'CLEOF'
+#!/sbin/sh
+# solnix-console-login -- LIVE-MEDIA auto-login as root (no prompt, no password).
+# Runs the shell directly on /dev/console because illumos login(1) has no -f and
+# ttymon -g always prompts. The line discipline (ldterm ttcompat) is pushed by
+# autopush -f /etc/iu.ap at sysinit, so the console tty is already set up.
+# LIVE MEDIA ONLY -- the installed system keeps stock console-login.
+. /lib/svc/share/smf_include.sh 2>/dev/null
+exec </dev/console >/dev/console 2>&1
+while : ; do
+  echo
+  echo "[solnix] live console -- auto-login as root (no password)."
+  HOME=/root; export HOME
+  cd /root 2>/dev/null || cd /
+  /usr/bin/ksh93 /etc/solnix-live-shell || /sbin/sh
+  # if the shell exits (Ctrl-D), loop and present a fresh one -- never dead.
+  sleep 1
+done
+CLEOF
+chmod 0555 "$RDROOT/lib/svc/method/solnix-console-login"
+
+# AUTO-NETWORK at boot, BOUNDED. bring_up_network's logic (from solnix-install)
+# lifted to boot time, run under a hard watchdog so a hung DHCP/ping can never
+# wedge boot. The console auto-login does NOT depend on this, so a NIC-less box
+# still reaches the shell promptly. Writes /var/run/solnix-net-status for the motd.
+cat > "$RDROOT/lib/svc/method/solnix-autonet" <<'ANEOF'
+#!/sbin/sh
+set -u
+PATH=/usr/sbin:/usr/bin:/sbin; export PATH
+STATUS=/var/run/solnix-net-status
+LOG=/var/log/solnix-autonet.log
+TO=${SOLNIX_AUTONET_TIMEOUT:-45}
+log() { echo "[solnix-autonet] $*" >> "$LOG" 2>/dev/null; }
+_write_status() { echo "$1" > "$STATUS" 2>/dev/null; }
+# pessimistic default: if the watchdog kills us mid-run the motd still tells the
+# operator networking is not up and how to retry.
+_write_status "down: network bring-up did not complete (no NIC or no DHCP lease)"
+_do_net() {
+  command -v dladm >/dev/null 2>&1 || { log "no dladm"; return 0; }
+  command -v ipadm >/dev/null 2>&1 || { log "no ipadm"; return 0; }
+  _nic=$(dladm show-phys -p -o link 2>/dev/null | grep -v -E '^(ena[0-9]|lo[0-9])' | head -1)
+  if [ -z "$_nic" ]; then
+    log "no wired NIC found (dladm show-phys lists only cloud/loopback)"
+    _write_status "down: no supported wired NIC found -- plug a USB-ethernet dongle, then: solnix-net"
+    return 0
+  fi
+  log "auto-configuring network on $_nic"
+  ipadm create-if "$_nic" 2>/dev/null || true
+  ipadm create-addr -T dhcp "$_nic/v4" 2>/dev/null || true
+  _got=""; _i=0
+  while [ "$_i" -lt 20 ]; do
+    _got=$(ipadm show-addr -p -o addr "$_nic/v4" 2>/dev/null | sed 's,/.*,,')
+    case "$_got" in ""|0.0.0.0) : ;; *) break ;; esac
+    sleep 1; _i=$((_i+1))
+  done
+  case "$_got" in
+    ""|0.0.0.0)
+      log "no DHCP lease on $_nic after ${_i}s"
+      _write_status "down: $_nic has no DHCP lease yet -- check the cable/dongle, then: solnix-net"
+      return 0 ;;
+    *) log "$_nic got $_got via DHCP" ;;
+  esac
+  _keepgw=$(netstat -rn 2>/dev/null | awk '$1=="default"{print $2}' \
+            | while read -r _gw; do if ping -sn "$_gw" 56 1 >/dev/null 2>&1; then echo "$_gw"; break; fi; done)
+  if [ -n "$_keepgw" ]; then
+    netstat -rn 2>/dev/null | awk '$1=="default"{print $2}' | while read -r _gw; do
+      [ "$_gw" = "$_keepgw" ] && continue
+      log "removing stale default route via $_gw (keeping $_keepgw)"
+      route delete default "$_gw" >/dev/null 2>&1 || true
+    done
+  fi
+  _dns=$(dhcpinfo -i "$_nic" DNSserv 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+\.')
+  [ -z "$_dns" ] && _dns="${_keepgw:-1.1.1.1}"
+  if [ -n "$_dns" ]; then
+    log "writing /etc/resolv.conf resolvers: $(echo $_dns | tr '\n' ' ')"
+    { for _s in $_dns; do printf 'nameserver %s\n' "$_s"; done; } > /etc/resolv.conf 2>/dev/null || true
+  fi
+  _write_status "up: $_nic $_got via DHCP"
+  log "network up: $_nic $_got"
+  return 0
+}
+# hard watchdog (run_to pattern -- the env has no timeout(1)).
+_do_net &
+_pid=$!
+( sleep "$TO"; kill -TERM "$_pid" 2>/dev/null; sleep 3; kill -KILL "$_pid" 2>/dev/null ) &
+_watch=$!
+wait "$_pid" 2>/dev/null
+kill "$_watch" 2>/dev/null; wait "$_watch" 2>/dev/null
+exit 0
+ANEOF
+chmod 0555 "$RDROOT/lib/svc/method/solnix-autonet"
+
+# solnix-net -- on-demand retry of the bounded bring-up, prints the result.
+cat > "$RDROOT/usr/sbin/solnix-net" <<'NETEOF'
+#!/sbin/sh
+# solnix-net -- retry the boot-time auto-network on demand and print the result.
+/lib/svc/method/solnix-autonet
+echo
+cat /var/run/solnix-net-status 2>/dev/null
+echo
+tail -20 /var/log/solnix-autonet.log 2>/dev/null
+NETEOF
+chmod 0555 "$RDROOT/usr/sbin/solnix-net"
+
+# solnix-motd -- the CURRENT, accurate next-steps message shown at auto-login.
+# Reads the boot-time net status so the operator sees whether the network came
+# up. The disk is AUTO-DETECTED (tui4), so it does NOT tell the operator to list
+# or hand-type a disk (the old banner did -- that is now wrong).
+cat > "$RDROOT/usr/sbin/solnix-motd" <<'MOTDEOF'
+#!/sbin/sh
+STATUS=/var/run/solnix-net-status
+_net=$(cat "$STATUS" 2>/dev/null)
+case "$_net" in
+  up:*)   _netline="  network: ${_net#up: }" ;;
+  down:*) _netline="  network: NOT up (${_net#down: })" ;;
+  *)      _netline="  network: bringing up in the background... (run: solnix-net to retry)" ;;
+esac
+cat <<BANNER
+
+  ############################################################
+  #        The Solnix Operating System - Live Installer      #
+  #                  (x86_64 / illumos)                      #
+  ############################################################
+
+$_netline
+
+  Install to a disk (the target disk is AUTO-DETECTED -- no need to list it):
+
+    solnix-install --flake 'github:gburd/nix-config#dixi'   # your config
+    solnix-install                                          # base system (no --flake)
+
+  Then reboot and remove the media:  init 6
+
+  Nothing is written until you run solnix-install; it never touches the disk
+  you booted from.
+
+  Retry networking:  solnix-net
+  Get help / send a diagnostics bundle to the maintainer:
+    solnix-diag                 # push a bundle, prints an upload URL
+    solnix-diag fetch <url>     # run a maintainer-authored fix (URL from the maintainer)
+
+BANNER
+MOTDEOF
+chmod 0555 "$RDROOT/usr/sbin/solnix-motd"
 
 # /etc/profile PATH: /usr/gnu/bin FIRST for every login shell (console + ssh) on
 # BOTH the live media and the installed system (SELF_INSTALL copies this root).
@@ -1641,14 +1820,18 @@ cat > "$RDROOT/etc/solnix-banner" <<'BANNEREOF'
   #                  (x86_64 / illumos)                      #
   ############################################################
 
-  solnix live installer (ramdisk root). To install to a disk:
-    1. List disks:  format </dev/null   (Ctrl-D to exit)
-    2. Install:     solnix-install <target-disk>   e.g. c1t1d0
-    3. Reboot:      init 6   (remove the install media)
+  solnix live installer (ramdisk root). The target disk is AUTO-DETECTED --
+  you do NOT list or hand-type it. To install:
+
+    solnix-install --flake 'github:gburd/nix-config#dixi'   # your config
+    solnix-install                                          # base system (no --flake)
+
+  Then reboot and remove the media:  init 6
 
   This media does NOT install by itself. Nothing is written until you run
   solnix-install yourself, and it will not touch the disk you booted from.
 
+  Retry networking:  solnix-net    Help:  solnix-diag  /  solnix-diag fetch <url>
   nix is staged: `nix --version` works here and on the installed system.
   Editor: vi (native). Pager: less. GNU diffutils is first in PATH.
 
@@ -1762,6 +1945,19 @@ if [ -e "$RDROOT/etc/svc/repository.db" ]; then
     SVCCFG_REPOSITORY="$RDROOT/etc/svc/repository.db" \
       /usr/sbin/svccfg -s "$_svc" setprop general/enabled = boolean: false >/dev/null 2>&1 || true
   done
+  # tui5 AUTO-LOGIN: repoint console-login's start method at our
+  # solnix-console-login (runs a root shell directly on /dev/console -- illumos
+  # login(1) has no -f and ttymon -g always prompts, so this is the only route
+  # to a no-prompt auto-login). start/exec is a property group on the SERVICE
+  # (system/console-login), not the :default INSTANCE -- the instance inherits
+  # it -- so set it on the service or svccfg errors "No such property group".
+  # Set it OFFLINE in the same repository.db so the override is authoritative at
+  # first boot. LIVE MEDIA ONLY.
+  SVCCFG_REPOSITORY="$RDROOT/etc/svc/repository.db" \
+    /usr/sbin/svccfg -s system/console-login \
+      setprop start/exec = astring: '/lib/svc/method/solnix-console-login' >/dev/null 2>&1 \
+    && echo "console-login start method repointed to solnix-console-login (auto-login)" >&2 \
+    || echo "WARN: svccfg console-login override failed" >&2
   chmod 0600 "$RDROOT/etc/svc/repository.db"
 fi
 
@@ -2517,6 +2713,34 @@ grep -q 'solnix-gnu-path' "$RDROOT/etc/profile" || \
 grep -q '^PATH=/usr/gnu/bin' "$RDROOT/etc/solnix-live-shell" || \
   die "live shell PATH does not start with /usr/gnu/bin"
 echo "  base-tooling gate OK: GNU diffutils + less + terminfo + power + gnu-first PATH" >&2
+
+# tui5 FIRST-BOOT-UX gate: assert the auto-login method, the bounded auto-network
+# method, the retry command, and the accurate motd all shipped, and that the
+# console-login start method was repointed to the auto-login method in the
+# offline repository (so a future refactor cannot silently drop any of them and
+# regress to the ttymon prompt / the old "hand-type a disk" banner).
+for _f in lib/svc/method/solnix-console-login lib/svc/method/solnix-autonet \
+          usr/sbin/solnix-net usr/sbin/solnix-motd; do
+  [ -x "$RDROOT/$_f" ] || die "tui5 first-boot-ux gate: $_f missing or not executable"
+done
+grep -q 'solnix-motd' "$RDROOT/etc/solnix-live-shell" || \
+  die "tui5 gate: solnix-live-shell does not invoke solnix-motd"
+grep -q 'AUTO-DETECTED' "$RDROOT/usr/sbin/solnix-motd" && \
+  grep -q "github:gburd/nix-config#dixi" "$RDROOT/usr/sbin/solnix-motd" && \
+  grep -q 'solnix-diag fetch' "$RDROOT/usr/sbin/solnix-motd" || \
+  die "tui5 gate: motd missing auto-detect / install command / solnix-diag fetch"
+# the old banner must NOT tell the operator to list/hand-type a disk anymore.
+grep -q 'target-disk' "$RDROOT/etc/solnix-banner" && \
+  die "tui5 gate: static banner still tells the operator to hand-type a disk"
+if [ -e "$RDROOT/etc/svc/repository.db" ]; then
+  _clsvc=$(SVCCFG_REPOSITORY="$RDROOT/etc/svc/repository.db" \
+           /usr/sbin/svccfg -s system/console-login listprop start/exec 2>/dev/null)
+  case "$_clsvc" in
+    *solnix-console-login*) : ;;
+    *) die "tui5 gate: console-login start/exec not repointed to solnix-console-login (got: $_clsvc)" ;;
+  esac
+fi
+echo "  tui5 first-boot-ux gate OK: auto-login method + bounded auto-network + retry + accurate motd + console-login repointed" >&2
 
 # (iv'''') NO DANGLING SYMLINKS among the staged commands. This is its own bug
 #          CLASS, not a one-off: `usr/bin/df` was staged as a SYMLINK to
