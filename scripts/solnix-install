@@ -1287,7 +1287,15 @@ log "creating pool $POOL on ${TARGET}s1 + BE dataset $BEDS"
 # features_for_read[]. The root/BE datasets stay plaintext regardless -- see the
 # encryption block above for why that is not negotiable.
 _encfeat=""
-[ "$ENCRYPT_MODE" != none ] && _encfeat="-o feature@encryption=enabled"
+# ENCRYPT_MODE is DETERMINED later (the prompt at the encryption block below runs
+# after this pool create), but this line needs it. Under set -u an unset ref
+# aborts ("ENCRYPT_MODE parameter not set"). The pool FEATURE flag is harmless to
+# enable regardless -- it only lets the pool HOLD encrypted datasets; it encrypts
+# nothing itself, and the loader reads com.datto:encryption in features_for_read[]
+# so it never blocks boot. So: enable the feature whenever the platform CAN
+# encrypt (measured), independent of the not-yet-chosen mode. The actual encrypted
+# /home,/nix datasets are created later, after the mode prompt.
+if zpool upgrade -v 2>/dev/null | grep -q '^encryption'; then _encfeat="-o feature@encryption=enabled"; fi
 run_to 60 zpool create -f -d $_encfeat -o altroot="$ALTROOT" -o cachefile=none \
   -O compression=on -O atime=off -m none "$POOL" "/dev/dsk/${TARGET}s1" || die "zpool create failed"
 # WHY the explicit feature list (not just -d): on modern illumos `zpool create`
