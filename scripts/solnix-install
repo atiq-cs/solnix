@@ -1144,12 +1144,21 @@ fi
 # installer copies its closure into the target /nix/store + wires the Stage-A
 # userland (the activate-dependent steps self-guard on file presence below).
 SELF_INSTALL=0
-if [ -z "$TOPLEVEL" ]; then
+if [ -z "$TOPLEVEL" ] && [ -z "$FLAKE_REF" ]; then
   TOPLEVEL=$(_readlink /run-current-system 2>/dev/null || true)
 fi
-if [ -z "$TOPLEVEL" ]; then
+if [ -n "$FLAKE_REF" ]; then
+  # A --flake was given: the toplevel is BUILT from it by build_toplevel LATER,
+  # after the target pool is mounted at $ALTROOT (the flake build + eval-store
+  # need real disk). Do NOT decide SELF-INSTALL here on an empty $TOPLEVEL -- that
+  # is the ordering bug that made a --flake install silently fall into SELF-INSTALL
+  # (copy the live root) instead of building dixi. Defer: build_toplevel runs after
+  # the pool exists and sets $TOPLEVEL; the SELF-INSTALL/declarative branches below
+  # are re-evaluated against that real toplevel.
+  log "flake install: toplevel will be BUILT from $FLAKE_REF after the pool is ready (not SELF-INSTALL)"
+elif [ -z "$TOPLEVEL" ]; then
   SELF_INSTALL=1
-  log "no nix toplevel present -> SELF-INSTALL: install the running live root as the system"
+  log "no nix toplevel present and no --flake -> SELF-INSTALL: install the running live root as the system"
 elif [ -e "$TOPLEVEL/activate" ] || [ -e "$TOPLEVEL/sw/bin/nix-store" ] || [ -e "$TOPLEVEL/sw" ]; then
   # A solnix current-system carries sw/ (the composed userland profile). The
   # 2.24 release toplevel ships nix as the store package on sw/bin/nix-store (systemPackages), so
@@ -1165,10 +1174,14 @@ fi
 # add the nix userland layer. Repo-handling matches SELF-INSTALL (keep the
 # copied, working repository.db — do NOT reseed from the minimal global.db).
 OVERLAY=0
-if [ "$SELF_INSTALL" = 0 ] && [ ! -e "$TOPLEVEL/systemPath" ]; then
+if [ -z "$FLAKE_REF" ] && [ "$SELF_INSTALL" = 0 ] && [ ! -e "$TOPLEVEL/systemPath" ]; then
   OVERLAY=1
   log "declarative OVERLAY install (no systemPath): base OS from copied root + nix userland layer"
 fi
+# For a --flake install the OVERLAY decision is DEFERRED: $TOPLEVEL is empty until
+# build_toplevel runs (after the pool), so testing $TOPLEVEL/systemPath now would
+# wrongly force OVERLAY=1. build_toplevel + the post-build closure copy below key
+# off TOPLEVEL_ON_POOL and the real toplevel's systemPath instead.
 
 log "installing toplevel $TOPLEVEL onto $TARGET (pool $POOL, BE $BEDS)"
 log "base world = the running root ($SRCROOT); running root pool=$ROOTPOOL disk=${ROOTDISK:-unknown}"
@@ -1660,6 +1673,18 @@ esac
 # system's store, so no cross-store copy is needed afterward. The ramdisk-safe
 # name gate near the top already proved the attr exists; this is the heavy half.
 build_toplevel
+# Flake install: NOW that build_toplevel has set $TOPLEVEL from the flake, make the
+# SELF_INSTALL/OVERLAY decision that was DEFERRED earlier (it could not run before
+# the pool existed). A full flake toplevel (dixi) carries systemPath -> a real
+# system install, NOT overlay.
+if [ -n "$FLAKE_REF" ] && [ -n "$TOPLEVEL" ]; then
+  _tlreal="$TOPLEVEL"; [ "${TOPLEVEL_ON_POOL:-0}" = 1 ] && _tlreal="$ALTROOT$TOPLEVEL"
+  if [ -e "$_tlreal/systemPath" ]; then
+    OVERLAY=0; log "flake toplevel has systemPath -> full declarative system install (not overlay)"
+  elif [ -e "$_tlreal/sw" ] || [ -e "$_tlreal/activate" ]; then
+    OVERLAY=1; log "flake toplevel has sw/ but no systemPath -> declarative overlay install"
+  fi
+fi
 # ⚠️ THE STEP THAT ACTUALLY MAKES /home WORK. Creating the dataset is not enough:
 # autofs owns /home via auto_master, so without this the mount is shadowed at boot
 # and every home directory silently vanishes. Verified on `sun`, which runs
