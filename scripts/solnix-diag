@@ -23,12 +23,62 @@
 # Usage:
 #   solnix-diag                       # collect -> /tmp, print path + upload hint
 #   SOLNIX_DIAG_URL=<presigned-PUT> solnix-diag   # collect -> PUT to that URL
+#   solnix-diag fetch <url> [args...] # download a maintainer-authored script and
+#                                     # RUN it here (diagnostic or fix); prints the
+#                                     # sha256 + first line before running, keeps a
+#                                     # copy at /tmp. Runs REMOTE CODE deliberately.
 #
 # The bundle is the EXACT set of things repeatedly needed to diagnose a failed
 # install: disks, the USB/driver-attach state, mounts, the network, and the
 # install log. Add a probe here whenever a new class of failure needs one datum.
 
 set -u
+
+# ---------------------------------------------------------------------------
+# SUBCOMMAND: solnix-diag fetch <url> [args...]
+#   Download a script the maintainer authored and RUN it on this box. Lets the
+#   maintainer iterate a diagnostic/fix without the operator hand-typing it: the
+#   maintainer puts a script at a (short) URL, the operator runs one line.
+#
+#   ⚠️ This RUNS REMOTE CODE. That is the point (the operator asked for it), but
+#   it is guarded so it is deliberate + auditable, never silent:
+#     - the operator must type the literal word `fetch` + the URL (no auto-run),
+#     - the downloaded script is saved to a temp file, its sha256 + line count +
+#       first line are PRINTED before it runs (so a truncated/wrong download is
+#       visible), and a copy is kept at /tmp for post-mortem,
+#     - it runs under /sbin/sh with any extra args passed through,
+#     - a non-2xx download refuses to run (no executing an error page).
+#   Use https:// or a tinyurl the maintainer gives you.
+# ---------------------------------------------------------------------------
+if [ "${1:-}" = fetch ]; then
+  _furl="${2:-}"
+  [ -n "$_furl" ] || { echo "usage: solnix-diag fetch <url> [args...]" >&2; exit 2; }
+  shift 2
+  command -v curl >/dev/null 2>&1 || { echo "solnix-diag fetch: no curl on this media" >&2; exit 1; }
+  _fscript="/tmp/solnix-diag-fetch-$(date +%Y%m%d-%H%M%S).sh"
+  echo "solnix-diag fetch: downloading $_furl" >&2
+  # -fL: fail on HTTP error (no executing an error page), follow redirects
+  # (tinyurl). run_to-less here: curl's own --max-time bounds it.
+  if ! curl -fsSL --max-time 120 "$_furl" -o "$_fscript" 2>/tmp/solnix-diag-fetch.err; then
+    echo "solnix-diag fetch: download FAILED (no script run):" >&2
+    sed 's/^/  /' /tmp/solnix-diag-fetch.err >&2 2>/dev/null || true
+    exit 1
+  fi
+  if [ ! -s "$_fscript" ]; then
+    echo "solnix-diag fetch: downloaded an EMPTY file -- refusing to run" >&2; exit 1
+  fi
+  _fsum=$( (digest -a sha256 "$_fscript" 2>/dev/null || sha256sum "$_fscript" 2>/dev/null || openssl dgst -sha256 "$_fscript" 2>/dev/null) | awk '{print $NF}' )
+  echo "solnix-diag fetch: saved $_fscript ($(wc -l < "$_fscript" | tr -d ' ') lines, sha256 ${_fsum:-?})" >&2
+  echo "solnix-diag fetch: first line: $(head -1 "$_fscript")" >&2
+  echo "solnix-diag fetch: RUNNING it now (/sbin/sh) ..." >&2
+  echo "-----------------------------------------------------------------------" >&2
+  /sbin/sh "$_fscript" "$@"
+  _frc=$?
+  echo "-----------------------------------------------------------------------" >&2
+  echo "solnix-diag fetch: script exited rc=$_frc (saved at $_fscript)" >&2
+  exit "$_frc"
+fi
+
 _out="${SOLNIX_DIAG_OUT:-/tmp/solnix-diag-$(date +%Y%m%d-%H%M%S).txt}"
 
 _section() { printf '\n===== %s =====\n' "$1"; }
