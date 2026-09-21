@@ -130,7 +130,7 @@ SRCROOT="${SOLNIX_SRCROOT:-/}"     # the running root we copy as the base world
 TARGET_CONSOLE="${SOLNIX_TARGET_CONSOLE:-text}"
 
 die() { echo "FATAL: $*" >&2; exit 1; }
-log() { printf '\n=== %s ===\n' "$*" >&2; }
+log() { printf '\n=== %s ===\n' "$*" >&2; printf '\n=== %s ===\n' "$*" >> "${SOLNIX_INSTALL_LOG:-/tmp/solnix-install.log}" 2>/dev/null || true; }
 
 # ---------------------------------------------------------------------------
 # PROGRESS UX. The operator watches a framebuffer console (no serial, no smart
@@ -953,6 +953,19 @@ build_toplevel() {
   _extrasub=""
   [ -n "${MEDIA_STORE_MNT:-}" ] && _extrasub="--extra-substituters file://$MEDIA_STORE_MNT"
   [ -n "$_extrasub" ] && log "base build: using media store substituter file://$MEDIA_STORE_MNT (offline-capable)"
+  # ⚠️ REDIRECT EVERY NIX SCRATCH ONTO THE POOL for the build. MEASURED (X1
+  # build-inode diag): the live ramdisk / is ~99% full AT BOOT (only ~9M free of
+  # 629M -- 613M is the base media). --store/--eval-store $ALTROOT put the STORE
+  # on the pool, but nix ALSO writes its eval cache, flake registry, and flake
+  # source unpack under $HOME/.cache + $TMPDIR -- and if setup_scratch's scratch
+  # pool did NOT mount (it fell back to the ramdisk), those defaulted to / and
+  # tipped the 9M-free ramdisk over ("/: out of inodes / no space"). By build
+  # time the target pool IS mounted at $ALTROOT (928G), so point HOME + the nix
+  # caches THERE unconditionally -- independent of whether the earlier scratch
+  # pool mounted. This is the robust fix: the pool, not a maybe-mounted scratch.
+  mkdir -p "$ALTROOT/var/tmp" "$ALTROOT/root/.cache" 2>/dev/null || true
+  HOME="$ALTROOT/root"; export HOME
+  XDG_CACHE_HOME="$ALTROOT/root/.cache"; export XDG_CACHE_HOME
   # LONG STEP: spinner + elapsed while nix build runs (minutes to ~1h). The build
   # log grows in $_buildlog; a background tail feeds the spinner's last-line so
   # the operator sees forward motion, not a frozen console. nix's own
