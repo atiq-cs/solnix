@@ -968,6 +968,7 @@ build_toplevel() {
   _blt=$!
   if run_to "${SOLNIX_BUILD_TIMEOUT:-14400}" env TMPDIR="$ALTROOT/var/tmp" nix build \
        --store "$ALTROOT" \
+       --eval-store "$ALTROOT" \
        $_extrasub \
        "${_fl}#${_set}.\"${_at}\".config.system.build.toplevel" \
        --out-link "$_outlink" > "$_buildlog" 2>&1; then
@@ -992,7 +993,7 @@ build_toplevel() {
     echo "the disk you chose to install to has been touched." >&2
     echo "" >&2
     echo "Re-run the build by hand to see the full log:" >&2
-    echo "  TMPDIR=$ALTROOT/var/tmp nix build --store $ALTROOT ${_fl}#${_set}.\\\"${_at}\\\".config.system.build.toplevel -L" >&2
+    echo "  TMPDIR=$ALTROOT/var/tmp nix build --store $ALTROOT --eval-store $ALTROOT ${_fl}#${_set}.\\\"${_at}\\\".config.system.build.toplevel -L" >&2
     die "toplevel build failed"
   fi
   log "toplevel built: $TOPLEVEL"
@@ -2654,10 +2655,10 @@ if [ "$DO_HOME" = 1 ] && [ -n "$HOME_FLAKE" ]; then
   else
     # Prove the attr exists first, and list what DOES exist if it does not. Same
     # discipline as the system attr gate: a typo must not look like a build failure.
-    if ! nix eval --raw "${_hfl}#homeConfigurations.\"${_hat}\".activationPackage.drvPath" >/dev/null 2>&1; then
+    if ! nix eval --eval-store "$ALTROOT" --raw "${_hfl}#homeConfigurations.\"${_hat}\".activationPackage.drvPath" >/dev/null 2>&1; then
       echo "" >&2
       echo "No homeConfigurations.\"$_hat\" in $_hfl. Available:" >&2
-      nix eval --raw "${_hfl}#homeConfigurations" --apply \
+      nix eval --eval-store "$ALTROOT" --raw "${_hfl}#homeConfigurations" --apply \
         'x: builtins.concatStringsSep "\n" (builtins.attrNames x)' 2>/dev/null \
         | sed 's/^/    /' >&2 || echo "    (none)" >&2
       log "WARNING: home-manager attr not found -- the SYSTEM install is complete and unaffected"
@@ -2666,8 +2667,12 @@ if [ "$DO_HOME" = 1 ] && [ -n "$HOME_FLAKE" ]; then
       # log to a file + test nix build's own exit (not tail's) -- same pipe-hides-
       # exit fix as the system build above. This HM build is non-fatal, but a
       # masked failure would still mislead.
-      _hmlog="/var/tmp/solnix-hm-$$.log"
-      if run_to "${SOLNIX_HM_BUILD_TIMEOUT:-7200}" nix build \
+      _hmlog="$ALTROOT/var/tmp/solnix-hm-$$.log"
+      # --store/--eval-store $ALTROOT + TMPDIR on the pool: the HM flake eval also
+      # copies ~100k input source files into a store; without this they land on
+      # the RAM ramdisk /nix and exhaust inodes (same bug as the system build).
+      if run_to "${SOLNIX_HM_BUILD_TIMEOUT:-7200}" env TMPDIR="$ALTROOT/var/tmp" nix build \
+           --store "$ALTROOT" --eval-store "$ALTROOT" \
            "${_hfl}#homeConfigurations.\"${_hat}\".activationPackage" \
            --out-link "$_hmlink" > "$_hmlog" 2>&1; then
         tail -20 "$_hmlog"
