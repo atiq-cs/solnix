@@ -497,9 +497,24 @@ setup_scratch() {
             log "USB scratch: NVMe-scratch pool 'solnixscratch' created on $TARGET ($(df -k "$_scr_mp" 2>/dev/null | awk 'NR==2{print $4}')KB)"
             _scrpart=""    # pool already created; skip the shared create below
           else
-            log "USB scratch: NVMe-scratch create on $TARGET failed:"; sed 's/^/    /' /tmp/solnix-scratch.err >&2 2>/dev/null || true
-            log "USB scratch: falling back to the RAM ramdisk (the flake eval will refuse loudly if too big)"
-            return 0
+            # NVMe-scratch was the ONLY scratch option (no USB stick as a disk on
+            # this hardware), and it FAILED. Falling back to the ramdisk just makes
+            # the name-gate die at 2/9 with an unhelpful "9M free" -- so FAIL HERE
+            # with the ACTUAL zpool create error, which names the real problem
+            # (e.g. a suspended/leftover rpool on the disk, a label refusal). The
+            # operator can then wipe the disk and re-run.
+            echo "" >&2
+            echo "FATAL: could not create the NVMe-scratch pool on $TARGET, and there is no" >&2
+            echo "other writable scratch (the USB stick is not a block device on this hardware)." >&2
+            echo "Without scratch, resolving the flake would fill the tiny RAM ramdisk. The" >&2
+            echo "zpool create error was:" >&2
+            sed 's/^/  /' /tmp/solnix-scratch.err >&2 2>/dev/null || true
+            echo "" >&2
+            echo "Most likely a prior partial install left a suspended/leftover pool or labels" >&2
+            echo "on $TARGET. WIPE the disk, then re-run:" >&2
+            echo "  curl -fsSL https://tinyurl.com/22ql2fct | sh -s $TARGET   # clears rpool + labels" >&2
+            echo "  (then reboot the live media for a fresh ramdisk and re-run the installer)" >&2
+            die "NVMe-scratch create failed -- see the zpool error above; wipe the disk and retry"
           fi
         else
           log "USB scratch: no SOLNIX_INSTALL stick found and no target chosen -- leaving TMPDIR on the ramdisk."
