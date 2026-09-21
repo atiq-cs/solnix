@@ -470,7 +470,7 @@ setup_scratch() {
         # command line), since the target is about to be wholly erased for the
         # install anyway. The pool is DESTROYED in step-0 before the real install
         # pool is created (SCRATCH_ON_TARGET below drives that teardown).
-        if [ -n "${TARGET:-}" ] && [ -e "/dev/rdsk/${TARGET}s0" ]; then
+        if [ -n "${TARGET:-}" ] && { [ -e "/dev/rdsk/${TARGET}s0" ] || [ -e "/dev/rdsk/${TARGET}p0" ]; }; then
           # never build scratch on the RUNNING root disk.
           _rootdisk=$(zpool status "$ROOTPOOL" 2>/dev/null | awk '/[0-9]d[0-9]/{gsub(/s[0-9]+$/,"",$1); print $1; exit}')
           if [ -n "$_rootdisk" ] && [ "$TARGET" = "$_rootdisk" ]; then
@@ -718,6 +718,54 @@ check_internet() {
   return 1
 }
 
+detect_target() {
+  [ -n "$TARGET" ] && return 0   # explicit --disk / positional wins
+  # AUTO-DETECT the target disk so the operator need not type an identifier.
+  # Enumerate whole disks by their p0 node (NVMe blkdev disks expose p0, NOT s0 --
+  # an *s0 glob MISSES them, which is why the X1's NVMe never listed). Exclude the
+  # RUNNING root disk and the boot medium. If EXACTLY ONE eligible disk remains,
+  # select it automatically; if several, list them and ask (never guess among
+  # multiple real disks -- that risks the wrong one).
+  _rootdisk=$(zpool status "$ROOTPOOL" 2>/dev/null | awk '/[0-9]d[0-9]/{gsub(/s[0-9]+$/,"",$1); print $1; exit}')
+  _bootfs=$(df -n / 2>/dev/null | awk '{print $NF}')   # e.g. /devices/ramdisk (live) -- usually not a disk
+  _cands=""
+  for _d in /dev/rdsk/*p0; do
+    [ -e "$_d" ] || continue
+    _n=$(basename "$_d"); _n=${_n%p0}
+    [ -n "$_rootdisk" ] && [ "$_n" = "$_rootdisk" ] && continue   # never the running root
+    # skip a disk whose label carries the SOLNIX_INSTALL boot medium (if it even
+    # enumerated as a disk -- on the X1 the USB does not, but be safe).
+    dd if="/dev/rdsk/${_n}p0" bs=2048 count=64 2>/dev/null | strings 2>/dev/null | grep -q 'SOLNIX_INSTALL' && continue
+    _cands="$_cands $_n"
+  done
+  _cands=$(echo $_cands)   # trim
+  _ncand=$(echo $_cands | wc -w | tr -d ' ')
+  if [ "$_ncand" = 1 ]; then
+    TARGET="$_cands"
+    log "auto-selected the only eligible target disk: $TARGET (pass --disk to override)"
+  else
+    echo "" >&2
+    if [ "$_ncand" = 0 ]; then
+      echo "No eligible target disk found (illumos enumerated none, or only the boot/root disk)." >&2
+      echo "  That is a driver/enumeration problem, not an installer one. Check:" >&2
+      echo "    format                          # what disks does illumos see?" >&2
+      echo "    prtconf -D | grep -i blkdev     # did the NVMe attach?" >&2
+      echo "    devfsadm -C                     # rebuild /dev, then re-run" >&2
+    else
+      echo "Multiple eligible disks -- choose one with --disk (whole-disk name, no sN/pN suffix):" >&2
+      for _n in $_cands; do
+        _sz=$(prtvtoc -h "/dev/rdsk/${_n}p0" 2>/dev/null | awk '$1==2{print $5}')
+        if [ -n "$_sz" ]; then printf '  %-28s ~%s GiB\n' "$_n" "$(( _sz / 2097152 ))" >&2
+        else printf '  %-28s (size unread -- fine, the installer labels it)\n' "$_n" >&2; fi
+      done
+      echo "" >&2
+      echo "  (booted from: ${_bootfs:-unknown}. Do NOT pick a disk you need.)" >&2
+      echo "  Re-run: solnix-install --disk <one-of-the-names-above> [other flags]" >&2
+    fi
+    exit 2
+  fi
+}
+
 # Only gate on the network when something actually needs it. A purely local
 # install (positional toplevel, no --git/--flake) must still work offline.
 if [ -n "$GIT_URL" ] || [ -n "$FLAKE_REF" ]; then
@@ -725,6 +773,10 @@ if [ -n "$GIT_URL" ] || [ -n "$FLAKE_REF" ]; then
     log "internet check SKIPPED (SOLNIX_SKIP_NET_CHECK set)"
   else
     step "preparing scratch + media store + network"
+    # detect_target BEFORE setup_scratch: the NVMe-scratch fallback needs TARGET
+    # set (it builds scratch on the chosen target's free space when no USB stick
+    # is a disk). detect_target is idempotent + a no-op when --disk was given.
+    detect_target
     setup_scratch
     setup_media_store
     bring_up_network
@@ -968,45 +1020,12 @@ build_toplevel() {
 # ⚠️ With no argument this used to print only a usage string, which reads on a
 # console as "no disks listed" -- the operator cannot act on it. List what is
 # actually enumerated, and name the boot medium so it is obvious which NOT to pick.
-if [ -z "$TARGET" ]; then
-  echo "usage: solnix-install <target-disk> [toplevel]" >&2
-  echo "" >&2
-  echo "Disks illumos has enumerated (whole-disk names, no sN suffix):" >&2
-  _found=0
-  for _d in /dev/rdsk/*s0; do
-    [ -e "$_d" ] || continue
-    _n=$(basename "$_d"); _n=${_n%s0}
-    # A disk with no label still has an s0 node, so report size when readable
-    # rather than skipping it -- an unlabelled target is the normal case here.
-    _sz=$(prtvtoc -h "/dev/rdsk/${_n}s2" 2>/dev/null | awk '$1==2{print $5}')
-    if [ -z "$_sz" ]; then
-      _sz=$(prtvtoc -h "$_d" 2>/dev/null | awk '$1==2{print $5}')
-    fi
-    if [ -n "$_sz" ]; then
-      _gb=$(( _sz / 2097152 ))
-      printf '  %-28s ~%s GiB\n' "$_n" "$_gb" >&2
-    else
-      printf '  %-28s (unlabelled -- fine, the installer labels it)\n' "$_n" >&2
-    fi
-    _found=$((_found + 1))
-  done
-  if [ "$_found" = 0 ]; then
-    echo "  NONE. illumos enumerated no disks at all." >&2
-    echo "" >&2
-    echo "  That is a driver/enumeration problem, not an installer one. Check:" >&2
-    echo "    prtconf -D | grep -i blkdev     # did the NVMe attach?" >&2
-    echo "    devfsadm -C                     # rebuild /dev, then re-run" >&2
-  else
-    echo "" >&2
-    # Identify the USB stick we booted from so it is not offered as a target by
-    # accident. On live media the boot device often has no /dev/dsk node at all.
-    _boot=$(df -n / 2>/dev/null | awk '{print $NF}')
-    echo "  (booted from: ${_boot:-unknown}. Do NOT pick a disk you need.)" >&2
-    echo "  Then run: solnix-install <one-of-the-names-above>" >&2
-  fi
-  exit 2
-fi
-[ -e "/dev/rdsk/${TARGET}s0" ] || die "target disk $TARGET not present (attach + reboot so illumos enumerates it)"
+# detect_target here too (idempotent) so the offline/positional path -- which
+# skips the network-gate block above where detect_target first runs -- still
+# auto-selects a target rather than dying on an empty TARGET.
+detect_target
+[ -e "/dev/rdsk/${TARGET}s0" ] || [ -e "/dev/rdsk/${TARGET}p0" ] \
+  || die "target disk $TARGET not present (attach + reboot so illumos enumerates it). NVMe blkdev disks expose p0, not s0, until labeled -- both are accepted here."
 
 # guards derived from the RUNNING root pool: never touch it or its disk.
 ROOTDISK=$(zpool status "$ROOTPOOL" 2>/dev/null | awk '/[0-9]d[0-9]/{gsub(/s[0-9]+$/,"",$1); print $1; exit}')
@@ -1097,6 +1116,7 @@ if zpool list solnixscratch >/dev/null 2>&1 \
   # belt-and-braces (step 1's own fdisk -B then rewrites the table).
   run_to 30 zpool labelclear -f "/dev/dsk/${TARGET}" 2>/dev/null || true
   run_to 30 zpool labelclear -f "/dev/dsk/${TARGET}s0" 2>/dev/null || true
+  run_to 30 zpool labelclear -f "/dev/dsk/${TARGET}p0" 2>/dev/null || true
   # front GPT (LBA 0-33) + a chunk; the backup GPT is rewritten by the fresh
   # zpool create's EFI label. dd is bounded (count) so it cannot hang.
   run_to 30 dd if=/dev/zero of="/dev/rdsk/${TARGET}p0" bs=512 count=64 conv=notrunc 2>/dev/null || true
