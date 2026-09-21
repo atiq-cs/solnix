@@ -1,0 +1,23 @@
+--- orig/ieee80211_crypto.c
++++ build/ieee80211_crypto.c
+@@ -232,17 +232,17 @@
+ 		/* retrieve group data key id from IV field */
+ 		hdrlen = ieee80211_get_hdrlen(wh);
+ 		/* check that IV field is present */
+-		if (m->m_len < hdrlen + 4)
++		if (iwx_m_len(m) < hdrlen + 4)
+ 			return NULL;
+ 		ivp = (u_int8_t *)wh + hdrlen;
+ 		kid = ivp[3] >> 6;
+ 		k = &ic->ic_nw_keys[kid];
+ 	} else {
+ 		/* retrieve integrity group key id from MMIE */
+-		if (m->m_len < sizeof(*wh) + IEEE80211_MMIE_LEN)
++		if (iwx_m_len(m) < sizeof(*wh) + IEEE80211_MMIE_LEN)
+ 			return NULL;
+ 		/* it is assumed management frames are contiguous */
+-		mmie = (u_int8_t *)wh + m->m_len - IEEE80211_MMIE_LEN;
++		mmie = (u_int8_t *)wh + iwx_m_len(m) - IEEE80211_MMIE_LEN;
+ 		/* check that MMIE is valid */
+ 		if (mmie[0] != IEEE80211_ELEMID_MMIE || mmie[1] != 16)
+ 			return NULL;

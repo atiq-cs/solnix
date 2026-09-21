@@ -1,5 +1,19 @@
 # Vendoring OpenBSD `net80211`: what it costs, measured
 
+> **ROUND-5 UPDATE (supersedes the "0 of 43" headline below).** The link gate has since moved
+> **0 -> 27 -> 43 of 43** blocking `ieee80211_*` symbols resolved as real ELF .o global symbols, and
+> the error surface **838 -> 436 -> 250**, with **12 of 18** `.c` files now compiling. All 43 are
+> ELF-proven (`file` + `nm --print-size`): 38 text (sized 0x4a..0x1b73), 1 data (`state_name`), 4
+> read-only (the rateset tables). Reproduce and self-verify with
+> `measure-gate.sh --self-test` (carries a negative control: renaming `ieee80211_encap` drops the
+> count to 42/43). **This does NOT mean the module links** -- resolving the 43 iwx needs is necessary,
+> not sufficient; the 6 files still at errors (`ieee80211_crypto_{ccmp,tkip,wep,bip}.c`,
+> `ieee80211_pae_{input,output}.c`) define net80211's own internals and their crypto primitives + DECL'd
+> mbuf/stack adapters are still undefined. The round-5 work is recorded in
+> `../../docs/wifi-native-driver-plan.md` (net80211-link gate section) and the numbered tables below
+> are the round-3 baseline, kept for provenance. The "0 of 43" and "838" figures in this file are the
+> round-3 measurement, correct when taken; do not cite them as current.
+
 Scope: **one work session**, local cross-compile only, no hardware, no EC2. This file records what
 was measured after vendoring the 31 upstream files into `orig/`. It is the round-3 companion to
 `../iwx/STATUS.md` and `../iwx/SPLNET-AUDIT.md` and it **does not repeat** their findings.

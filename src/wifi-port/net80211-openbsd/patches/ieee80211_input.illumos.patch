@@ -1,0 +1,256 @@
+--- orig/ieee80211_input.c
++++ build/ieee80211_input.c
+@@ -287,8 +287,8 @@
+ 	 * Do not process frames without an Address 2 field any further.
+ 	 * Only CTS and ACK control frames do not have this field.
+ 	 */
+-	if (m->m_len < sizeof(struct ieee80211_frame_min)) {
+-		DPRINTF(("frame too short, len %u\n", m->m_len));
++	if (iwx_m_len(m) < sizeof(struct ieee80211_frame_min)) {
++		DPRINTF(("frame too short, len %u\n", iwx_m_len(m)));
+ 		ic->ic_stats.is_rx_tooshort++;
+ 		goto out;
+ 	}
+@@ -307,8 +307,8 @@
+ 
+ 	if (type != IEEE80211_FC0_TYPE_CTL) {
+ 		hdrlen = ieee80211_get_hdrlen(wh);
+-		if (m->m_len < hdrlen) {
+-			DPRINTF(("frame too short, len %u\n", m->m_len));
++		if (iwx_m_len(m) < hdrlen) {
++			DPRINTF(("frame too short, len %u\n", iwx_m_len(m)));
+ 			ic->ic_stats.is_rx_tooshort++;
+ 			goto err;
+ 		}
+@@ -798,7 +798,13 @@
+ 	/* strip 802.11 header and concatenate fragment */
+ 	m_adj(m, hdrlen);
+ 	m_cat(df->df_m, m);
+-	df->df_m->m_pkthdr.len += m->m_pkthdr.len;
++	/*
++	 * OpenBSD does "df->df_m->m_pkthdr.len += m->m_pkthdr.len" here; on
++	 * illumos the chain length is DERIVED from b_wptr-b_rptr and m_cat
++	 * (linkb) already links m onto df->df_m, so the accumulated length is
++	 * correct without an explicit store. Writing a derived field is the
++	 * exact hazard the mbuf adapter forbids -- dropped, not translated.
++	 */
+ 
+ 	if (wh->i_fc[1] & IEEE80211_FC1_MORE_FRAG)
+ 		return NULL;	/* MSDU or MMPDU not yet complete */
+@@ -1095,8 +1101,11 @@
+ 			m1 = m_dup_pkt(m, ETHER_ALIGN, M_DONTWAIT);
+ 			if (m1 == NULL)
+ 				ifp->if_oerrors++;
+-			else
+-				m1->m_flags |= M_MCAST;
++			/*
++			 * else m1->m_flags |= M_MCAST; -- illumos marks multicast
++			 * at the mac layer, not on the mblk, and net80211 never
++			 * reads this flag, so the tag write is dropped (no else).
++			 */
+ 		} else if (!mcast) {
+ 			ni1 = ieee80211_find_node(ic, eh->ether_dhost);
+ 			if (ni1 != NULL &&
+@@ -1139,7 +1148,7 @@
+ 	struct llc *llc;
+ 	int mcast;
+ 
+-	if (m->m_len < hdrlen + LLC_SNAPFRAMELEN &&
++	if (iwx_m_len(m) < hdrlen + LLC_SNAPFRAMELEN &&
+ 	    (m = m_pullup(m, hdrlen + LLC_SNAPFRAMELEN)) == NULL) {
+ 		ic->ic_stats.is_rx_decap++;
+ 		return;
+@@ -1175,7 +1184,7 @@
+ 		eh.ether_type = llc->llc_snap.ether_type;
+ 		m_adj(m, hdrlen + LLC_SNAPFRAMELEN - ETHER_HDR_LEN);
+ 	} else {
+-		eh.ether_type = htons(m->m_pkthdr.len - hdrlen);
++		eh.ether_type = htons(iwx_m_pktlen(m) - hdrlen);
+ 		m_adj(m, hdrlen - ETHER_HDR_LEN);
+ 	}
+ 	memcpy(mtod(m, caddr_t), &eh, ETHER_HDR_LEN);
+@@ -1255,7 +1264,7 @@
+ 	/* strip 802.11 header */
+ 	m_adj(m, hdrlen);
+ 
+-	while (m->m_pkthdr.len >= ETHER_HDR_LEN + LLC_SNAPFRAMELEN) {
++	while (iwx_m_pktlen(m) >= ETHER_HDR_LEN + LLC_SNAPFRAMELEN) {
+ 		/* process an A-MSDU subframe */
+ 		m = m_pullup(m, ETHER_HDR_LEN + LLC_SNAPFRAMELEN);
+ 		if (m == NULL)
+@@ -1288,7 +1297,7 @@
+ 			len -= LLC_SNAPFRAMELEN;
+ 		}
+ 		len += ETHER_HDR_LEN;
+-		if (len > m->m_pkthdr.len) {
++		if (len > iwx_m_pktlen(m)) {
+ 			/* stop processing A-MSDU subframes */
+ 			DPRINTF(("A-MSDU subframe too long (%d)\n", len));
+ 			ic->ic_stats.is_rx_decap++;
+@@ -1682,13 +1691,13 @@
+ 	}
+ #endif
+ 	/* make sure all mandatory fixed fields are present */
+-	if (m->m_len < sizeof(*wh) + 12) {
++	if (iwx_m_len(m) < sizeof(*wh) + 12) {
+ 		DPRINTF(("frame too short\n"));
+ 		return;
+ 	}
+ 	wh = mtod(m, struct ieee80211_frame *);
+ 	frm = (const u_int8_t *)&wh[1];
+-	efrm = mtod(m, u_int8_t *) + m->m_len;
++	efrm = mtod(m, u_int8_t *) + iwx_m_len(m);
+ 
+ 	tstamp  = frm; frm += 8;
+ 	bintval = LE_READ_2(frm); frm += 2;
+@@ -2149,7 +2158,7 @@
+ 
+ 	wh = mtod(m, struct ieee80211_frame *);
+ 	frm = (const u_int8_t *)&wh[1];
+-	efrm = mtod(m, u_int8_t *) + m->m_len;
++	efrm = mtod(m, u_int8_t *) + iwx_m_len(m);
+ 
+ 	ssid = rates = xrates = htcaps = vhtcaps = hecaps = NULL;
+ 	while (frm + 2 <= efrm) {
+@@ -2258,7 +2267,7 @@
+ 	u_int16_t algo, seq, status;
+ 
+ 	/* make sure all mandatory fixed fields are present */
+-	if (m->m_len < sizeof(*wh) + 6) {
++	if (iwx_m_len(m) < sizeof(*wh) + 6) {
+ 		DPRINTF(("frame too short\n"));
+ 		return;
+ 	}
+@@ -2321,13 +2330,13 @@
+ 		return;
+ 
+ 	/* make sure all mandatory fixed fields are present */
+-	if (m->m_len < sizeof(*wh) + (reassoc ? 10 : 4)) {
++	if (iwx_m_len(m) < sizeof(*wh) + (reassoc ? 10 : 4)) {
+ 		DPRINTF(("frame too short\n"));
+ 		return;
+ 	}
+ 	wh = mtod(m, struct ieee80211_frame *);
+ 	frm = (const u_int8_t *)&wh[1];
+-	efrm = mtod(m, u_int8_t *) + m->m_len;
++	efrm = mtod(m, u_int8_t *) + iwx_m_len(m);
+ 
+ 	if (!IEEE80211_ADDR_EQ(wh->i_addr3, ic->ic_bss->ni_bssid)) {
+ 		DPRINTF(("ignore other bss from %s\n",
+@@ -2677,13 +2686,13 @@
+ 	}
+ 
+ 	/* make sure all mandatory fixed fields are present */
+-	if (m->m_len < sizeof(*wh) + 6) {
++	if (iwx_m_len(m) < sizeof(*wh) + 6) {
+ 		DPRINTF(("frame too short\n"));
+ 		return;
+ 	}
+ 	wh = mtod(m, struct ieee80211_frame *);
+ 	frm = (const u_int8_t *)&wh[1];
+-	efrm = mtod(m, u_int8_t *) + m->m_len;
++	efrm = mtod(m, u_int8_t *) + iwx_m_len(m);
+ 
+ 	capinfo = LE_READ_2(frm); frm += 2;
+ 	status =  LE_READ_2(frm); frm += 2;
+@@ -2872,7 +2881,7 @@
+ 	u_int16_t reason;
+ 
+ 	/* make sure all mandatory fixed fields are present */
+-	if (m->m_len < sizeof(*wh) + 2) {
++	if (iwx_m_len(m) < sizeof(*wh) + 2) {
+ 		DPRINTF(("frame too short\n"));
+ 		return;
+ 	}
+@@ -2929,7 +2938,7 @@
+ 	u_int16_t reason;
+ 
+ 	/* make sure all mandatory fixed fields are present */
+-	if (m->m_len < sizeof(*wh) + 2) {
++	if (iwx_m_len(m) < sizeof(*wh) + 2) {
+ 		DPRINTF(("frame too short\n"));
+ 		return;
+ 	}
+@@ -2996,7 +3005,7 @@
+ 		    ether_sprintf(ni->ni_macaddr)));
+ 		return;
+ 	}
+-	if (m->m_len < sizeof(*wh) + 9) {
++	if (iwx_m_len(m) < sizeof(*wh) + 9) {
+ 		DPRINTF(("frame too short\n"));
+ 		return;
+ 	}
+@@ -3159,7 +3168,7 @@
+ 	u_int8_t token, tid;
+ 	int err = 0;
+ 
+-	if (m->m_len < sizeof(*wh) + 9) {
++	if (iwx_m_len(m) < sizeof(*wh) + 9) {
+ 		DPRINTF(("frame too short\n"));
+ 		return;
+ 	}
+@@ -3272,7 +3281,7 @@
+ 	u_int8_t tid;
+ 	int i;
+ 
+-	if (m->m_len < sizeof(*wh) + 6) {
++	if (iwx_m_len(m) < sizeof(*wh) + 6) {
+ 		DPRINTF(("frame too short\n"));
+ 		return;
+ 	}
+@@ -3350,7 +3359,7 @@
+ 		    ether_sprintf(ni->ni_macaddr)));
+ 		return;
+ 	}
+-	if (m->m_len < sizeof(*wh) + 4) {
++	if (iwx_m_len(m) < sizeof(*wh) + 4) {
+ 		DPRINTF(("frame too short\n"));
+ 		return;
+ 	}
+@@ -3387,7 +3396,7 @@
+ 		    ether_sprintf(ni->ni_macaddr)));
+ 		return;
+ 	}
+-	if (m->m_len < sizeof(*wh) + 4) {
++	if (iwx_m_len(m) < sizeof(*wh) + 4) {
+ 		DPRINTF(("frame too short\n"));
+ 		return;
+ 	}
+@@ -3417,7 +3426,7 @@
+ 	const struct ieee80211_frame *wh;
+ 	const u_int8_t *frm;
+ 
+-	if (m->m_len < sizeof(*wh) + 2) {
++	if (iwx_m_len(m) < sizeof(*wh) + 2) {
+ 		DPRINTF(("frame too short\n"));
+ 		return;
+ 	}
+@@ -3524,8 +3533,8 @@
+ 	    ni->ni_state != IEEE80211_STA_ASSOC)
+ 		return;
+ 
+-	if (m->m_len < sizeof(*psp)) {
+-		DPRINTF(("frame too short, len %u\n", m->m_len));
++	if (iwx_m_len(m) < sizeof(*psp)) {
++		DPRINTF(("frame too short, len %u\n", iwx_m_len(m)));
+ 		ic->ic_stats.is_rx_tooshort++;
+ 		return;
+ 	}
+@@ -3577,7 +3586,7 @@
+ 		    ether_sprintf(ni->ni_macaddr)));
+ 		return;
+ 	}
+-	if (m->m_len < sizeof(*wh) + 4) {
++	if (iwx_m_len(m) < sizeof(*wh) + 4) {
+ 		DPRINTF(("frame too short\n"));
+ 		return;
+ 	}
+@@ -3593,7 +3602,7 @@
+ 		/* Multi-TID BlockAckReq variant (PSMP only) */
+ 		ntids = tid + 1;
+ 
+-		if (m->m_len < sizeof(*wh) + 2 + 4 * ntids) {
++		if (iwx_m_len(m) < sizeof(*wh) + 2 + 4 * ntids) {
+ 			DPRINTF(("MTBAR frame too short\n"));
+ 			return;
+ 		}

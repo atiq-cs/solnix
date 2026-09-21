@@ -67,6 +67,8 @@ extern int     n80211_m_dup_pkthdr(mblk_t *to, mblk_t *from, int how);
 extern int     n80211_m_trailingspace(mblk_t *m);
 extern mblk_t *n80211_m_copym(mblk_t *m, int off, int len, int how);
 extern mblk_t *n80211_m_copyback(mblk_t *m, int off, int len, const void *src, int how);
+extern mblk_t *n80211_m_split(mblk_t *m, int len, int how);	/* m_split */
+extern mblk_t *n80211_m_dup_pkt(mblk_t *m, int align, int how);	/* m_dup_pkt */
 
 /*
  * The OpenBSD statement-macros. MGET/MGETHDR/MCLGET assign to their first arg;
@@ -88,5 +90,77 @@ extern mblk_t *n80211_m_copyback(mblk_t *m, int off, int len, const void *src, i
 	n80211_m_copym((m), (off), (len), (how))
 #define m_copyback(m, off, len, src, how) \
 	n80211_m_copyback((m), (off), (len), (src), (how))
+
+/*
+ * m_split (chain split at an offset) and m_dup_pkt (deep-copy a packet with a
+ * leading alignment pad -- the RX-to-host bounce in ieee80211_inputm). Both
+ * return a fresh chain; no field alias. DECL, resolved at LINK against
+ * n80211_mbuf.c. m_dup_pkt's `align` is ETHER_ALIGN (2), the 802.3 header pad.
+ */
+#define m_split(m, len, how)		n80211_m_split((m), (len), (how))
+#define m_dup_pkt(m, align, how)	n80211_m_dup_pkt((m), (align), (how))
+
+/*
+ * m_cat(dst, src) -- append src's chain to the tail of dst. illumos linkb()
+ * does exactly this (links via b_cont), and the resulting chain's derived
+ * length (iwx_m_pktlen, b_wptr-b_rptr summed) already includes src -- so the
+ * OpenBSD idiom "m_cat(a,b); a->m_pkthdr.len += b->m_pkthdr.len" drops its
+ * second statement here (the length is derived, never stored). No field alias;
+ * linkb is a real illumos STREAMS entry point. REAL.
+ */
+#define m_cat(dst, src)		linkb((dst), (src))
+extern void linkb(mblk_t *, mblk_t *);
+
+/*
+ * m_tag -- OpenBSD's per-mbuf metadata tags. net80211 uses exactly ONE tag,
+ * PACKET_TAG_DLT, to detect a raw 802.11 frame injected via a bpf write
+ * (ieee80211_output / ieee80211_encap). illumos has no bpf write-injection
+ * path on this driver (NBPFILTER=0, see iwx/compat/net/bpf.h), so no frame
+ * ever carries this tag: m_tag_find HONESTLY returns NULL and the injection
+ * block is skipped. struct m_tag must be COMPLETE (the `mtag + 1` payload read
+ * needs a known size) but is never populated. KNOWN GAP, tagged -- frame
+ * injection does not work, and nothing here pretends it does. m_tag_find is
+ * DECL (resolves to a NULL-returning shim in n80211_mbuf.c).
+ */
+#define PACKET_TAG_DLT	0x0040		/* OpenBSD's data-link-type tag id */
+struct m_tag {
+	uint16_t	m_tag_id;
+	uint16_t	m_tag_len;
+};
+extern struct m_tag *m_tag_find(mblk_t *, int, struct m_tag *);
+
+/*
+ * m_free(m) -- OpenBSD frees one mbuf and returns m->m_next (the rest of the
+ * chain). net80211 uses it only as `return m_free(m)` on a freshly-allocated
+ * SINGLE mgmt mbuf whose m_next is NULL, i.e. "free this and return NULL". On
+ * illumos freemsg() frees the whole chain and returns void, so the single-mbuf
+ * case is (freemsg(m), NULL). Verified: both call sites (ieee80211_output.c,
+ * ieee80211_pae_output.c) are exactly this pattern on a one-mbuf frame. REAL.
+ */
+#define m_free(m)	((freemsg((m)), (mblk_t *)NULL))
+
+/*
+ * m_align(m, len) -- OpenBSD right-aligns m_data so `len` bytes sit at the tail
+ * of the buffer (headroom for later prepends). On illumos a fresh allocb mblk
+ * has b_rptr==b_wptr==db_base with the whole cluster ahead; net80211 uses
+ * m_align only on just-allocated mgmt frames it then fills from mtod(m), so
+ * leaving the data at the start is correct and the subsequent
+ * iwx_m_set_window sets the length. No field alias; a no-op on this path.
+ * ponytail: no-op alignment, revisit if a prepend-after-align site appears.
+ */
+#define m_align(m, len)	((void)0)
+
+/*
+ * n80211_m_reserve(m, n) -- reserve n bytes of leading header space by advancing
+ * the read pointer (OpenBSD "m->m_data += n"). REAL: moves b_rptr; the frame
+ * body is then written from the new mtod(m) and iwx_m_set_window sets b_wptr.
+ */
+static __inline void
+n80211_m_reserve(mblk_t *m, size_t n)
+{
+	m->b_rptr += n;
+	if (m->b_wptr < m->b_rptr)
+		m->b_wptr = m->b_rptr;
+}
 
 #endif /* _N80211_MBUF_H */

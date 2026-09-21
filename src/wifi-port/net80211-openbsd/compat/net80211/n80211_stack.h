@@ -29,6 +29,28 @@
 #endif
 
 /*
+ * Generic OpenBSD macros net80211's RX-to-host path uses (ieee80211_inputm ->
+ * ieee80211_deliver_data / ieee80211_decap). REAL:
+ *   ETHER_ALIGN     the 2-byte pad that word-aligns the IP header after the
+ *                   14-byte 802.3 header (OpenBSD <net/if_ether.h>).
+ *   ALIGNED_POINTER (p is suitably aligned for type t) -- a bounce is taken
+ *                   when false. On x86 all accesses are unaligned-safe, so this
+ *                   is always true; the m_dup_pkt bounce is then never taken,
+ *                   which is correct behaviour on this ISA (OpenBSD makes the
+ *                   same reduction on i386/amd64).
+ *   ETHER_IS_EQ     6-byte MAC compare (OpenBSD ETHER_IS_EQ), 0 == equal.
+ */
+#ifndef ETHER_ALIGN
+#define ETHER_ALIGN	2
+#endif
+#ifndef ALIGNED_POINTER
+#define ALIGNED_POINTER(p, t)	1
+#endif
+#ifndef ETHER_IS_EQ
+#define ETHER_IS_EQ(a, b)	(memcmp((a), (b), ETHERADDRL) == 0)
+#endif
+
+/*
  * ether_* -- OpenBSD's ethernet glue. On illumos these responsibilities live in
  * GLDv3 (mac_register / mac_multicst / the mac_callbacks vector). DECL: the
  * route-(b) adapter maps them there.
@@ -59,6 +81,13 @@ extern int  if_addgroup(struct ifnet *, const char *);
 extern void if_deactivate(struct ifnet *);
 extern void if_link_state_change(struct ifnet *);
 extern void if_congestion(void);
+/*
+ * if_enqueue -- push a frame onto an interface send queue. On OpenBSD net80211
+ * calls it to loop a multicast frame back up (ieee80211_inputm). GLDv3 has no
+ * downward enqueue; the route-(b) adapter maps it to a mac_rx push or drops it.
+ * DECL -- fails at LINK by name.
+ */
+extern int  if_enqueue(struct ifnet *, mblk_t *);
 
 /*
  * rtm_80211info -- OpenBSD routing-socket wireless event. illumos has no

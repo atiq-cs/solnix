@@ -144,4 +144,28 @@ n80211_abs(int j) { return (j < 0 ? -j : j); }
 #define IFQ_MAXLEN	256
 #endif
 
+/*
+ * DiffServ codepoints (OpenBSD <netinet/ip.h>). ieee80211_classify() maps the
+ * IP DSCP to a WMM/802.11e access-category TID. These are the RFC 2474 / 4594
+ * standard codepoint VALUES shifted into the TOS byte (DSCP occupies the top 6
+ * bits, so codepoint<<2). REAL constants -- fixed by the standard, not an ABI
+ * guess. IPTOS_DSCP_VA is RFC 5865 voice-admit (44).
+ */
+#ifndef IPTOS_DSCP_CS1
+#define IPTOS_DSCP_CS1		0x20	/*  8 << 2 */
+#define IPTOS_DSCP_CS3		0x60	/* 24 << 2 */
+#define IPTOS_DSCP_CS4		0x80	/* 32 << 2 */
+#define IPTOS_DSCP_CS5		0xa0	/* 40 << 2 */
+#define IPTOS_DSCP_CS6		0xc0	/* 48 << 2 */
+#define IPTOS_DSCP_CS7		0xe0	/* 56 << 2 */
+#define IPTOS_DSCP_AF31		0x68	/* 26 << 2 */
+#define IPTOS_DSCP_AF32		0x70	/* 28 << 2 */
+#define IPTOS_DSCP_AF33		0x78	/* 30 << 2 */
+#define IPTOS_DSCP_AF41		0x88	/* 34 << 2 */
+#define IPTOS_DSCP_AF42		0x90	/* 36 << 2 */
+#define IPTOS_DSCP_AF43		0x98	/* 38 << 2 */
+#define IPTOS_DSCP_EF		0xb8	/* 46 << 2 */
+#define IPTOS_DSCP_VA		0xb0	/* 44 << 2 (RFC 5865 voice-admit) */
+#endif
+
 #endif /* _N80211_COMPAT_H */

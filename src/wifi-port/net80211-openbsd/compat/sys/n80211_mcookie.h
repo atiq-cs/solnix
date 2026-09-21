@@ -37,6 +37,19 @@ n80211_m_peek_cookie(const mblk_t *m)
 }
 
 /*
+ * Set the node cookie -- the PRODUCER side (ieee80211_output.c queues a mgmt
+ * frame with its destination ieee80211_node * in m_pkthdr.ph_cookie, consumed
+ * by iwx's mq_dequeue at if_iwx.c:10294). Mirrors iwx_m_set_cookie; b_prev is
+ * the carrier, sound only inside the enqueue->dequeue window (see the b_prev
+ * ASSERT argument in iwx/iwx_mcookie.h).
+ */
+static __inline void
+n80211_m_set_cookie(mblk_t *m, void *cookie)
+{
+	m->b_prev = (mblk_t *)cookie;
+}
+
+/*
  * Clear the cookie before freeing: freemsg() ASSERTs b_prev==NULL on a DEBUG
  * kernel (uts/common/io/stream.c:659) and silently corrupts on a non-DEBUG one.
  * Call this on the branch that is about to m_freem the frame.

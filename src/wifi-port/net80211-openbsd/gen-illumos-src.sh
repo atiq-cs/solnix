@@ -17,7 +17,7 @@ here=$(cd -- "$(dirname -- "$0")" && pwd)
 mkdir -p "$here/build" "$here/patches"
 
 # The files this port rewrites (each has orig/<f>.c + patches/<f>.illumos.patch).
-PATCHED="ieee80211_node"
+PATCHED="ieee80211_node ieee80211_crypto ieee80211_input ieee80211_output"
 
 check_hunks() {  # $1 = patch file; refuse a no-hunk (prose) patch
 	local hunks
@@ -53,6 +53,7 @@ for f in $PATCHED; do
 	[ -f "$pf" ]  || { echo "FAIL: missing patch $pf"; exit 2; }
 	hunks=$(check_hunks "$pf") || exit 2
 	cp -- "$src" "$out"
+	chmod u+w "$out"		# orig/ is read-only; the derived copy must be writable to patch
 	if ! patch --silent -p0 -N -r - -d "$here" -i "$pf" "build/$f.c" 2>/tmp/n80-gen.err; then
 		echo "FAIL: $pf did not apply cleanly"; cat /tmp/n80-gen.err; exit 1
 	fi

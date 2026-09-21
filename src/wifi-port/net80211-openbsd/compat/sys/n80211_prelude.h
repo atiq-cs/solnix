@@ -16,6 +16,16 @@
 #ifndef _N80211_PRELUDE_H
 #define _N80211_PRELUDE_H
 
+#include <sys/types.h>
+/*
+ * OpenBSD ethernet layout MUST win over illumos <sys/ethernet.h> for net80211,
+ * whose ether_dhost/ether_shost are byte arrays (illumos's are struct
+ * ether_addr). This header pre-sets illumos's include guard, so it must be
+ * pulled in FIRST -- before <sys/iwx_prelude.h> -> <sys/iwx_kernel.h> includes
+ * <sys/ethernet.h>. See compat/netinet/if_ether.h for why iwx is unaffected.
+ */
+#include <netinet/if_ether.h>
+
 #include <sys/iwx_prelude.h>		/* BSD types, queue/tree, spl/refcnt/timeout */
 #include <sys/mbuf.h>			/* struct mbuf->msgb alias, mbuf_list/mbuf_queue */
 #include "iwx_mbuf_adapter.h"		/* mtod, m_freem, m_pullup, m_adj -> mblk */
