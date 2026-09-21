@@ -1043,40 +1043,64 @@ ROOTDISK=$(zpool status "$ROOTPOOL" 2>/dev/null | awk '/[0-9]d[0-9]/{gsub(/s[0-9
 # target with no existing rpool proceeds. SOLNIX_ALLOW_RPOOL=1 forces past even an
 # existing one; SOLNIX_POOL=<name> picks a different name (the gate uses spool).
 if [ "$POOL" = "rpool" ] && [ -z "${SOLNIX_ALLOW_RPOOL:-}" ]; then
-  # Refuse ONLY if an rpool genuinely exists: imported now, OR offered by
-  # `zpool import` as a pool literally named rpool. The earlier heuristic (awk
-  # over vdev lines + a grep for $TARGET) MISFIRED -- it reported "exists" on the
-  # X1 where the probe proved NO rpool is imported or importable. Keep the check
-  # DUMB + correct: `zpool import` prints a "  pool: rpool" line only when one is
-  # actually importable.
+  # Detect an existing rpool: imported now, OR offered by `zpool import` as a pool
+  # literally named rpool. `zpool import` prints a "  pool: rpool" line only when
+  # one is actually importable (the earlier awk/grep heuristic misfired).
   _rpool_exists=0
+  _rpool_where=""
   if zpool list -H -o name rpool >/dev/null 2>&1; then
-    _rpool_exists=1
+    _rpool_exists=1; _rpool_where="imported"
   elif zpool import 2>/dev/null | grep -qE '^[[:space:]]*pool:[[:space:]]+rpool[[:space:]]*$'; then
-    # an importable rpool exists somewhere. If its vdev is our TARGET it is our
-    # prior-run leftover to clobber (allow); otherwise refuse. `zpool import rpool`
-    # prints the vdev as a device leaf that may be a SLICE (cNtNdNs1), a p-node
-    # (cNtNdNp0), or the bare disk -- so match the target disk AND any of its
-    # slice/partition forms, not just the bare name (the bare-name grep MISSED a
-    # leftover on the target and wrongly refused it).
-    _impout=$(zpool import rpool 2>&1)
-    if echo "$_impout" | grep -qE "${TARGET}(s[0-9]+|p[0-9]+)?([^0-9a-zA-Z]|\$)"; then
-      log "POOL=rpool: an importable rpool is on the target $TARGET (prior-run leftover) -- destroying it, then the pool create relabels the disk."
-      # It is our debris on the disk we are about to erase: import + destroy so
-      # the fresh whole-disk create is not refused by a lingering label.
-      run_to 60 zpool import -f rpool 2>/dev/null && run_to 60 zpool destroy -f rpool 2>/dev/null || true
-      # if it could not be imported/destroyed, labelclear the target's nodes.
-      for _tn in "${TARGET}s0" "${TARGET}s1" "${TARGET}p0" "${TARGET}"; do
-        [ -e "/dev/dsk/$_tn" ] && run_to 30 zpool labelclear -f "/dev/dsk/$_tn" 2>/dev/null || true
-      done
-    else
-      _rpool_exists=1
-    fi
+    _rpool_exists=1; _rpool_where="importable (on-disk label)"
   fi
   if [ "$_rpool_exists" = 1 ]; then
-    die "POOL=rpool but an rpool ALREADY EXISTS (imported, or importable on a non-target disk) -- refusing to clobber it. Set SOLNIX_ALLOW_RPOOL=1 to force, or SOLNIX_POOL=<name> for a different pool name."
+    # An rpool exists. Do NOT silently clobber, and do NOT demand an env var --
+    # ASK. Most often it is this operator's OWN prior-attempt leftover on the disk
+    # they are installing to; destroying + recreating it is exactly right. Show
+    # what it is and where, so the operator can refuse if it is a pool they need.
+    echo "" >&2
+    echo "=== An rpool ALREADY EXISTS ($_rpool_where) ===============================" >&2
+    echo "  This installer creates a pool named 'rpool' on the target disk:" >&2
+    echo "    target: $TARGET" >&2
+    echo "  and an rpool already exists. Its vdev(s):" >&2
+    { zpool status rpool 2>/dev/null || zpool import rpool 2>/dev/null || zpool import 2>/dev/null; } \
+      | sed 's/^/      /' >&2
+    echo "" >&2
+    echo "  If this is a PRIOR solnix install attempt on $TARGET, destroying it is" >&2
+    echo "  the right thing -- the disk is about to be erased for the install anyway." >&2
+    echo "  If it is a pool you NEED (a real root on another disk), answer no." >&2
+    if [ -t 0 ] && [ -t 1 ]; then
+      printf '  Destroy the existing rpool and recreate it for this install? [y/N]: ' >&2
+      read -r _dr || _dr=n
+    else
+      _dr="${SOLNIX_DESTROY_RPOOL:-n}"   # non-interactive: SOLNIX_DESTROY_RPOOL=y to allow
+      echo "  (non-interactive; SOLNIX_DESTROY_RPOOL=${_dr})" >&2
+    fi
+    case "$_dr" in
+      y|Y|yes|YES)
+        log "rpool: operator confirmed destroy+recreate -- tearing down the existing rpool."
+        run_to 30 zfs unmount -a 2>/dev/null || true
+        run_to 60 zpool destroy -f rpool 2>/dev/null \
+          || { run_to 60 zpool import -f rpool 2>/dev/null && run_to 60 zpool destroy -f rpool 2>/dev/null; } \
+          || true
+        # clear any surviving labels on the target so the fresh whole-disk create
+        # is not refused (belt-and-braces; pool create also relabels).
+        for _tn in "${TARGET}s0" "${TARGET}s1" "${TARGET}p0" "${TARGET}"; do
+          [ -e "/dev/dsk/$_tn" ] && run_to 30 zpool labelclear -f "/dev/dsk/$_tn" 2>/dev/null || true
+        done
+        # verify it is gone before proceeding.
+        if zpool list -H -o name rpool >/dev/null 2>&1; then
+          die "rpool: could not destroy the existing rpool (still imported) -- resolve it by hand, then re-run."
+        fi
+        log "rpool: existing pool destroyed; proceeding with a fresh rpool on $TARGET."
+        ;;
+      *)
+        die "rpool: operator declined to destroy the existing rpool. Choose a different SOLNIX_POOL=<name>, or install to a different target."
+        ;;
+    esac
+  else
+    log "POOL=rpool: no existing rpool -- fresh root install, proceeding (the standard illumos root pool name)."
   fi
-  log "POOL=rpool: no existing rpool -- fresh root install, proceeding (the standard illumos root pool name)."
 fi
 
 # default toplevel: the running system. If neither a toplevel arg nor a
