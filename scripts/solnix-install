@@ -1031,11 +1031,31 @@ detect_target
 ROOTDISK=$(zpool status "$ROOTPOOL" 2>/dev/null | awk '/[0-9]d[0-9]/{gsub(/s[0-9]+$/,"",$1); print $1; exit}')
 [ -n "$ROOTDISK" ] && [ "$TARGET" = "$ROOTDISK" ] && die "refusing to install onto the running root disk $TARGET (pool $ROOTPOOL)"
 [ "$POOL" = "$ROOTPOOL" ] && die "target pool '$POOL' == the RUNNING root pool; choose a different SOLNIX_POOL (the installed disk gets its own pool)"
-# refuse to install into a pool literally named 'rpool' unless explicitly allowed
-# (guards a fat-finger on a host whose root pool is NOT rpool but a stale rpool
-# label sits on some other disk). A real root install sets SOLNIX_ALLOW_RPOOL=1.
+# rpool is the CORRECT name for a fresh illumos root install (this is a laptop
+# getting its OS), so do NOT blanket-refuse it. Only refuse when an rpool ALREADY
+# EXISTS somewhere we would clobber -- imported, or a label on a disk that is NOT
+# our target -- which is the fat-finger this guards (a host whose real root pool
+# is not named rpool, but a stale rpool label sits on another disk). A fresh
+# target with no existing rpool proceeds. SOLNIX_ALLOW_RPOOL=1 forces past even an
+# existing one; SOLNIX_POOL=<name> picks a different name (the gate uses spool).
 if [ "$POOL" = "rpool" ] && [ -z "${SOLNIX_ALLOW_RPOOL:-}" ]; then
-  die "POOL=rpool but SOLNIX_ALLOW_RPOOL not set (refusing to clobber a pool named rpool). Set SOLNIX_POOL=spool for the gate, or SOLNIX_ALLOW_RPOOL=1 for a real root install."
+  # already imported?
+  _rpool_exists=0
+  zpool list -H -o name rpool >/dev/null 2>&1 && _rpool_exists=1
+  # a stale rpool label on a disk OTHER than our target? (zpool import lists
+  # importable pools by name; grep for one named rpool not on $TARGET).
+  if [ "$_rpool_exists" = 0 ]; then
+    if zpool import 2>/dev/null | awk '/pool:/{p=$2} /[0-9]d[0-9]/{print p, $1}' \
+         | grep -qw rpool 2>/dev/null; then
+      # an importable rpool exists; is its vdev our target (then it is ours to
+      # clobber) or another disk (then refuse)?
+      zpool import 2>/dev/null | grep -q "$TARGET" || _rpool_exists=1
+    fi
+  fi
+  if [ "$_rpool_exists" = 1 ]; then
+    die "POOL=rpool but an rpool ALREADY EXISTS (imported or labelled on another disk) -- refusing to clobber it. Set SOLNIX_ALLOW_RPOOL=1 to force, or SOLNIX_POOL=<name> for a different pool name."
+  fi
+  log "POOL=rpool: no existing rpool found -- fresh root install, proceeding (the standard illumos root pool name)."
 fi
 
 # default toplevel: the running system. If neither a toplevel arg nor a
