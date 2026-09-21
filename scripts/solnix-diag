@@ -81,7 +81,7 @@ echo "solnix-diag: bundle written to $_out ($(wc -l < "$_out" 2>/dev/null | tr -
 
 if [ -n "${SOLNIX_DIAG_URL:-}" ]; then
   echo "solnix-diag: PUT -> $SOLNIX_DIAG_URL" >&2
-  if curl -fsS -T "$_out" "$SOLNIX_DIAG_URL" 2>/tmp/solnix-diag-put.err; then
+  if curl -fsSL -T "$_out" "$SOLNIX_DIAG_URL" 2>/tmp/solnix-diag-put.err; then
     echo "solnix-diag: uploaded OK." >&2
   else
     echo "solnix-diag: upload FAILED:" >&2; sed 's/^/  /' /tmp/solnix-diag-put.err >&2
