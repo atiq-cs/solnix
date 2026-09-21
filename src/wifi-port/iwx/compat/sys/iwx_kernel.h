@@ -152,6 +152,19 @@ extern int timeout_add(struct timeout *, int);
 extern int timeout_del(struct timeout *);
 extern int timeout_pending(struct timeout *);
 
+/*
+ * timeout_initialized: OpenBSD tests whether timeout_set has been called on a
+ * timeout. net80211 uses it to decide whether to cancel a per-node addba timer.
+ * timeout_set installs to_func, so a non-NULL to_func is the initialised mark.
+ * REAL inline (no illumos analogue: the DDI uses bare timeout_id_t with no
+ * "is-set" query).
+ */
+static __inline int
+timeout_initialized(struct timeout *to)
+{
+	return (to->to_func != NULL);
+}
+
 /* ---- autoconf: types only. attach/detach are rewritten in iwx_gld.c. ---- */
 struct device {
 	char	dv_xname[16];
@@ -259,16 +272,26 @@ extern int iwx_flsl(long);
 #define ETHER_ADDR_LEN		6
 #endif
 #define IEEE80211_ADDR_LEN	6
-/* struct ifreq: iwx only takes sizeof() of it in its ioctl path. */
+/*
+ * struct ifreq: iwx only takes sizeof() of it in its ioctl path; net80211's
+ * ieee80211_ioctl.c reads ifr_data/ifr_mtu/ifr_flags out of the union, so those
+ * field-name accessors are mapped onto the existing union members. See
+ * FINDINGS.md Finding 2: the SIOCS/G80211* ABI this drives is not spoken by
+ * illumos userland; this exists so the ioctl switch COMPILES.
+ */
 struct ifreq {
 	char	ifr_name[IFNAMSIZ];
 	union {
 		struct { unsigned short sa_family; char sa_data[14]; } ifru_addr;
 		short	ifru_flags;
 		int	ifru_metric;
+		int	ifru_mtu;
 		caddr_t	ifru_data;
 	} ifr_ifru;
 };
+#define ifr_data	ifr_ifru.ifru_data
+#define ifr_mtu		ifr_ifru.ifru_mtu
+#define ifr_flags	ifr_ifru.ifru_flags
 #define IFM_MODE(x)		((x) & 0x00000000ff000000ULL)
 
 #endif /* _IWX_COMPAT_SYS_IWX_KERNEL_H */

@@ -29,4 +29,14 @@ typedef uint64_t	u_int64_t;
 #define betoh32(x)	BE_32(x)
 #define htobe16(x)	BE_16(x)
 #define htobe32(x)	BE_32(x)
+
+/*
+ * __BEGIN_DECLS / __END_DECLS: OpenBSD <sys/cdefs.h> C++-linkage guards. illumos
+ * <sys/cdefs.h> does not define them. Used by net80211's public headers
+ * (ieee80211_regdomain.h) around their extern blocks. Empty for C.
+ */
+#ifndef __BEGIN_DECLS
+#define __BEGIN_DECLS
+#define __END_DECLS
+#endif
 #endif

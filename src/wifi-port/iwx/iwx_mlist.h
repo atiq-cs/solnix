@@ -140,13 +140,35 @@ struct mbuf_queue {
 };
 
 static __inline void
-mq_init(struct mbuf_queue *mq, unsigned int maxlen)
+mq_init(struct mbuf_queue *mq, unsigned int maxlen, int ipl)
 {
+	/*
+	 * OpenBSD's third argument is the spl priority level at which the queue
+	 * is protected; illumos protects with a MUTEX_DRIVER lock and an
+	 * interrupt block cookie assigned at attach, so the ipl is not used
+	 * here. Accepted (not dropped from the prototype) so net80211's
+	 * 3-arg call sites -- ic_mgtq, ic_pwrsaveq and the per-node save queues
+	 * -- compile unchanged. if_iwx.c never calls mq_init (only mq_dequeue),
+	 * so widening the signature does not touch the driver build.
+	 */
+	(void) ipl;
 	mutex_init(&mq->mq_mtx, NULL, MUTEX_DRIVER, NULL);
 	ml_init(&mq->mq_list);
 	mq->mq_maxlen = maxlen;
 	mq->mq_drops = 0;
 }
+
+/*
+ * MBUF_QUEUE_INITIALIZER(maxlen, ipl): OpenBSD's static queue initialiser. The
+ * lock cannot be initialised statically on illumos (mutex_init is a call), so
+ * this leaves mq_mtx zeroed -- callers that use it MUST mutex_init before first
+ * use. net80211 uses it only for a stack-local scratch queue in
+ * ieee80211_node.c that it drains synchronously without cross-thread access;
+ * that single site is why this is sound as a zero-init. Tagged for review if a
+ * second, concurrent user appears.
+ */
+#define MBUF_QUEUE_INITIALIZER(_maxlen, _ipl)	\
+	{ { 0 }, MBUF_LIST_INITIALIZER(), (_maxlen), 0 }
 
 static __inline void
 mq_destroy(struct mbuf_queue *mq)
@@ -204,12 +226,16 @@ mq_empty(struct mbuf_queue *mq)
 	return (mq_len(mq) == 0);
 }
 
-static __inline void
+static __inline unsigned int
 mq_purge(struct mbuf_queue *mq)
 {
+	unsigned int n;
+
 	mutex_enter(&mq->mq_mtx);
+	n = mq->mq_list.ml_len;
 	ml_purge(&mq->mq_list);
 	mutex_exit(&mq->mq_mtx);
+	return (n);	/* OpenBSD returns the count purged; net80211 reads it */
 }
 #endif /* _KERNEL */
 

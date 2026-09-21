@@ -142,3 +142,23 @@ native AX2xx driver would be — but available now, with zero risk.
 
 **Recommendation: take the dongle for daily use, and treat the native driver as a deliberate project rather
 than a blocker.** Phase 1 (attach) is cheap and would tell us a lot; phase 2 is where the real answer lives.
+
+## net80211-link gate progress (measured, ELF-proven)
+
+Route (b) vendors OpenBSD net80211 as a self-contained module presenting GLDv3 `mac_register` upward. The gate is
+the 43 blocking `ieee80211_*` symbols iwx needs from net80211.
+
+* Baseline (prior): **0 of 43** resolved, 838 errors, 3 of 18 net80211 .c files -> .o (none of the 43).
+* Current (measured, ELF-proven via `file` + `nm --print-size`): **27 of 43** resolved, **436 errors** (down from
+  838), **9 of 18** net80211 .c -> REAL ELF64 relocatable .o (ieee80211/proto/ioctl/rssadapt/regdomain/node/
+  amrr/ra/ra_vht; e.g. node.o = 102 text syms, ieee80211_ifattach sized 0x185B).
+* The compat surface added (all in-repo under src/wifi-port/net80211-openbsd/compat/): n80211_prelude.h,
+  n80211_compat.h (ISSET/arc4random/ratecheck/timingsafe_bcmp/explicit_bzero), n80211_mbuf.h (MGET/MCLGET/
+  M_PREPEND/m_copydata), n80211_mcookie.h (ph_cookie PEEK, differs from iwx's take-and-clear), n80211_stack.h
+  (ether_/if_/ifmedia decls + SIOCS/G80211*), if_llc.h (verbatim). gen-illumos-src.sh + a 1-hunk ph_cookie patch;
+  orig/ stays read-only.
+* ⚠️ The iwx driver STILL builds green after these shared-header edits (build-check.sh: 0 residual errors,
+  if_iwx.c + iwx_attach.c both compile) -- verified, not assumed.
+* REMAINING on the link gate: ~16 of 43 (the 436 errors are dominated by direct mbuf-FIELD reads -- m->m_len (156),
+  m_pkthdr (77), m_next (37) -- which CANNOT be macros, so they need per-site patches -- plus ~52 crypto primitives
+  needing a self-contained crypto shim). Then the HARDWARE gate (firmware alive on the X1) remains as before.

@@ -46,8 +46,28 @@
 #define IFF_OACTIVE	0x0400
 #define IFF_SIMPLEX	0x0800
 #define IFF_MULTICAST	0x8000
+#define IFF_LINK0	0x1000
+#define IFF_LINK1	0x2000
+#define IFF_LINK2	0x4000
+
+/* Interface capability bits net80211 sets in ifp->if_capabilities. */
+#define IFCAP_VLAN_MTU		0x00000010
+#define IFCAP_VLAN_HWTAGGING	0x00000020
+
+/* net80211 sets a fixed queue priority for wireless interfaces. */
+#define IF_WIRELESS_DEFAULT_PRIORITY	4
+
+/* if_link_state values / test macro (OpenBSD <net/if.h>). */
+#define LINK_STATE_DOWN		2
+#define LINK_STATE_UP		4
+#define LINK_STATE_IS_UP(_s)	((_s) >= LINK_STATE_UP)
+
+/* IF_Mbps: encode a baud rate in bits/s (OpenBSD <net/if.h>). */
+#define IF_Mbps(x)	((uint64_t)(x) * 1000000ULL)
 
 struct ifnet;
+struct sockaddr;
+struct rtentry;
 
 /*
  * A real mblk FIFO. OpenBSD's ifqueue also carries a drop counter and a maxlen
@@ -79,10 +99,23 @@ struct ifnet {
 	void		(*if_start)(struct ifnet *);
 	void		(*if_watchdog)(struct ifnet *);
 	int		(*if_ioctl)(struct ifnet *, unsigned long, caddr_t);
-	int		(*if_output)(struct ifnet *, mblk_t *, void *, void *);
+	int		(*if_output)(struct ifnet *, mblk_t *, struct sockaddr *,
+				 struct rtentry *);
 	unsigned int	if_hardmtu;
 	uint8_t		if_lladdr[6];
 	void		*if_mac;		/* mac_handle_t, opaque here */
+	/*
+	 * Members net80211 touches beyond the 11 if_iwx.c needs. Kept in the
+	 * one shared struct rather than a net80211-private copy so the pointer
+	 * cast (struct ieee80211com *)ifp stays valid across both layers.
+	 */
+	int		if_hdrlen;	/* 802.11 header length */
+	int		if_link_state;	/* LINK_STATE_* */
+	unsigned int	if_mtu;
+	uint64_t	if_capabilities;
+	uint64_t	if_baudrate;
+	int		if_priority;
+	unsigned long	if_imcasts;	/* input multicast count */
 };
 
 /* OpenBSD ifq API. Implemented in iwx_gld.c against the FIFO above. */

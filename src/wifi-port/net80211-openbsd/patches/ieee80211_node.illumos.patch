@@ -1,0 +1,14 @@
+--- orig/ieee80211_node.c
++++ build/ieee80211_node.c
+@@ -3378,9 +3378,10 @@
+ 
+ 	/* Purge frames queued for transmission during DTIM. */
+ 	while ((m = mq_dequeue(&ic->ic_pwrsaveq)) != NULL) {
+-		if (m->m_pkthdr.ph_cookie == ni) {
++		if (n80211_m_peek_cookie(m) == ni) {
+ 			if (ni->ni_refcnt > 0)
+ 				ieee80211_node_decref(ni);
++			n80211_m_clear_cookie(m);
+ 			m_freem(m);
+ 		} else
+ 			mq_enqueue(&keep, m);
