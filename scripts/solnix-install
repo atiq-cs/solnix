@@ -164,8 +164,11 @@ spin_start() {
   (
     _i=0
     while : ; do
-      case $(( _i % 4 )) in 0) _c='-';; 1) _c='\\';; 2) _c='|';; 3) _c='/';; esac
+      case $(( _i % 4 )) in 0) _c='-';; 1) _c='\';; 2) _c='|';; 3) _c='/';; esac
       _el=$(( $(_now_s) - _spin_t0 ))
+      # %s prints _c verbatim; _c must be a SINGLE backslash for the spinner frame.
+      # In sh single-quotes '\' is TWO literal backslashes (no escaping happens),
+      # so it printed \. Use printf's %b-free single char: assign one backslash.
       printf '\r  [%s] %s  (%ds elapsed)   ' "$_c" "$_spin_label" "$_el" >&2
       _i=$((_i + 1))
       sleep 1
@@ -1050,9 +1053,21 @@ if [ "$POOL" = "rpool" ] && [ -z "${SOLNIX_ALLOW_RPOOL:-}" ]; then
     _rpool_exists=1
   elif zpool import 2>/dev/null | grep -qE '^[[:space:]]*pool:[[:space:]]+rpool[[:space:]]*$'; then
     # an importable rpool exists somewhere. If its vdev is our TARGET it is our
-    # leftover to clobber (allow); otherwise refuse.
-    if zpool import rpool 2>&1 | grep -q "$TARGET"; then
-      log "POOL=rpool: an importable rpool is on the target $TARGET (prior-run leftover) -- pool create will clear it; proceeding."
+    # prior-run leftover to clobber (allow); otherwise refuse. `zpool import rpool`
+    # prints the vdev as a device leaf that may be a SLICE (cNtNdNs1), a p-node
+    # (cNtNdNp0), or the bare disk -- so match the target disk AND any of its
+    # slice/partition forms, not just the bare name (the bare-name grep MISSED a
+    # leftover on the target and wrongly refused it).
+    _impout=$(zpool import rpool 2>&1)
+    if echo "$_impout" | grep -qE "${TARGET}(s[0-9]+|p[0-9]+)?([^0-9a-zA-Z]|\$)"; then
+      log "POOL=rpool: an importable rpool is on the target $TARGET (prior-run leftover) -- destroying it, then the pool create relabels the disk."
+      # It is our debris on the disk we are about to erase: import + destroy so
+      # the fresh whole-disk create is not refused by a lingering label.
+      run_to 60 zpool import -f rpool 2>/dev/null && run_to 60 zpool destroy -f rpool 2>/dev/null || true
+      # if it could not be imported/destroyed, labelclear the target's nodes.
+      for _tn in "${TARGET}s0" "${TARGET}s1" "${TARGET}p0" "${TARGET}"; do
+        [ -e "/dev/dsk/$_tn" ] && run_to 30 zpool labelclear -f "/dev/dsk/$_tn" 2>/dev/null || true
+      done
     else
       _rpool_exists=1
     fi
