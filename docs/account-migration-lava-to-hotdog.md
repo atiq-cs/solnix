@@ -87,3 +87,24 @@ hotdog's TTL, re-restorable from R2.
 Note: a fresh restore still needs `pkg update` + reboot and git/bind/gnu-diffutils/zstd + a nix-2.24.15 bootstrap
 to `/nix-tools224` before `oi-make-livecd.sh` will run (the base image is bare hipster + the AMI fixes, not a
 build host).
+
+## ⚠️ The restored base AMI has NO C toolchain (frozen userland-incorporation)
+
+`ami-0fb304a6611ca577c` (restored from the banked x86_64 base) has no `cc` and its
+`userland-incorporation@0.5.11` REJECTS installing one (`developer/gcc-14` rejected; no crt1.o, no /usr/include).
+This has blocked the GUI/COSMIC build TWICE (Xorg, then cargo linking) -- on-node you cannot:
+- link any cargo/rustc binary (rustc's linker `/usr/gcc/14/bin/gcc` is absent), so the iced GUI front-end can't be
+  natively built on the AMI;
+- build Xorg/Xvfb, so a live VNC COSMIC session can't be started on the AMI.
+
+WHY: the running BE's `userland-incorporation` pins the userland and rejects adding packages outside it (the same
+illumos constraint noted for gnu-tar/objcopy etc.). `pkg update` lifts it -- but that yields a NEW BE and needs a
+REBOOT.
+
+CONSEQUENCE + workarounds:
+- TUI images are FINE (no on-node compile -- just staging).
+- GUI/COSMIC/Rust on-node needs a build AMI with a real toolchain: bake one via `pkg update` (-> new BE) + reboot,
+  THEN install developer/gcc-14, and re-bank that as the "build" AMI (distinct from the "base/install" AMI). Until
+  then, Rust/COSMIC artifacts are cross-compiled or reused from the published cache, and GUI-installer front-end
+  logic is verified on the dev box (same cargo 1.97.1).
+- This is the gate on ever building COSMIC ON-NODE vs cross-compiling; flagged as a distinct AMI-prep milestone.
