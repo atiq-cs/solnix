@@ -189,6 +189,17 @@ spin_stop() {
 # illumos date which DOES support +%s). Fallback to 0 so arithmetic never breaks.
 _now_s() { date +%s 2>/dev/null || echo 0; }
 
+# have_intel_ax2xx -- is an Intel AX2xx-family wifi card present? illumos exposes
+# PCI device+vendor as pci8086,<dev> compatible strings in the device tree. The
+# device IDs below are the AX200/AX201/AX210/AX211 family (Cyclone/Quz/So/Ty);
+# grep the tree rather than trust a driver bind, since no driver attaches yet.
+have_intel_ax2xx() {
+  # pci8086,<id> nodes; ids: 2723 2725 02f0 06f0 34f0 3df0 43f0 a0f0 51f0 54f0 7af0 7e40
+  { prtconf -pv 2>/dev/null; ls -d /devices/pci* 2>/dev/null; } \
+    | grep -iE 'pci(ex)?8086,(2723|2725|02f0|06f0|34f0|3df0|43f0|a0f0|51f0|54f0|7af0|7e40)' \
+    >/dev/null 2>&1
+}
+
 # illumos ln -sfn FOLLOWS an existing symlink-to-dir (rc=0, no-op); always rm+ln.
 relink() { rm -f "$2" 2>/dev/null; ln -s "$1" "$2"; }
 # minimal proto has no readlink(1); derive symlink target from ls -l.
@@ -722,9 +733,17 @@ check_internet() {
   fi
   echo "" >&2
   echo "  THIS IS ALMOST CERTAINLY THE USB-ETHERNET ADAPTER, NOT WIFI." >&2
-  echo "  There is no working wifi on this hardware under illumos and no driver" >&2
-  echo "  exists in ANY OpenSolaris-family fork for the Intel AX2xx. Do not spend" >&2
-  echo "  time configuring wifi -- it cannot be made to work. Check the dongle:" >&2
+  if have_intel_ax2xx; then
+    echo "  An Intel AX2xx wifi card IS present in this machine. solnix's native" >&2
+    echo "  iwx driver is IN PROGRESS (src/wifi-port): the 802.11 layer compiles" >&2
+    echo "  and partial-links, but the module does not yet load/attach -- so wifi" >&2
+    echo "  cannot associate TODAY. The firmware blobs are already staged in the" >&2
+    echo "  image (hardware.wirelessIwx), so the card is ready the moment the" >&2
+    echo "  driver lands. For NOW, install over USB ethernet." >&2
+  else
+    echo "  No Intel AX2xx wifi card detected; this is the USB-ethernet dongle." >&2
+  fi
+  echo "  Check the dongle:" >&2
   echo "    dladm show-phys             # is the adapter attached at all?" >&2
   echo "    dladm show-link" >&2
   echo "  illumos ships axf (ASIX AX88172/88178/88772), udmf (Davicom DM9601E)," >&2

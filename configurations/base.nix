@@ -164,12 +164,18 @@
   # by default: this laptop class has no ethernet jack, so refusing the blob
   # means the machine cannot be installed over the network at all.
   #
-  # ⚠️ The DRIVER is not finished -- src/wifi-port/iwx/ has the vendored BSD
-  # source, the firmware package and the shim skeleton, but the mbuf and 802.11
-  # layers are unwritten, so nothing attaches yet. Enabling this stages the
-  # firmware so it is present when the driver lands; it does not make wifi work.
+  # ⚠️ The DRIVER is not finished. Claim ladder (src/wifi-port/iwx/STATUS.md):
+  # the mbuf/mlist layers compile + link and the net80211 802.11 layer now
+  # compiles (18/18 files, 0 errors) and partial-links (ld -r), but the full iwx
+  # module still does NOT link (122 undefined: net80211 GLDv3/stack adapters +
+  # shim decls), does NOT load, and does NOT attach. So nothing associates yet.
+  #
+  # Enabling this STAGES the firmware blobs into the closure so they are present
+  # the moment the driver reaches load+attach. It does NOT make wifi work today;
+  # USB ethernet (ASIX AX88772 -> axf) remains the working answer. Staged (not
+  # false-working) so the image already carries what a loadable driver needs.
   hardware.wirelessIwx = {
-    enable = false;
+    enable = true;
     allowUnfreeFirmware = true;
   };
 }
