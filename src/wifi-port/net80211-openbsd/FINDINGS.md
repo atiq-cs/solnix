@@ -1,5 +1,22 @@
 # Vendoring OpenBSD `net80211`: what it costs, measured
 
+> **ROUND-7 UPDATE (supersedes the round-6 "82 undefined / adapter .c not yet written" headline).** The
+> GLDv3-downward stack adapter and the mbuf-allocation `.c` are now WRITTEN, TESTED, and LINKED, and the
+> full driver module **links as a kmod**. An `ld -r` of the 18 net80211 objects + `n80211_crypto.c` + the
+> four new adapters (`n80211_rbtree.c`, `n80211_mbuf.c`, `n80211_kcompat.c`, `n80211_stack.c`) + the
+> driver's `iwx_mbuf.o` (24 objects, 0 compile errors) produces one ELF64 relocatable with **42 undefined
+> symbols, EVERY ONE kernel-supplied-at-load, and 0 non-kernel symbols remaining** (each of the 42 verified
+> against the illumos gate headers). The module's own internal cross-references -- the 43 blocking
+> `ieee80211_*`, the crypto primitives, the mbuf allocation layer, the RBT node-cache backing, and the
+> GLDv3-downward stack -- are all satisfied within the module. Reproduce + self-verify:
+> `measure-gate.sh --self-test` (now also compiles the four adapters, does the full-module `ld -r`, runs the
+> RB-tree and mbuf-alloc negative-controlled tests, and carries a module-link negative control that renames
+> `ifmedia_add` to prove the check can report an unresolved adapter). Provenance of the four adapters is in
+> `PROVENANCE.md`; the round-7 detail is in `../../docs/wifi-native-driver-plan.md` (the round-7 gate
+> section). **Still NOT a load and NOT an attach** -- phase-3 locking (Finding 3 below), the `iwx_gld.c`
+> attach wiring the BRIDGE points (`mac_register`/`mac_rx`/`mac_link_update`), and the HARDWARE gate all
+> remain. iwx stayed green (build-check.sh exit 0) before AND after; no iwx-shared header was touched.
+>
 > **ROUND-6 UPDATE (supersedes the "12 of 18 / 250 errors" round-5 headline).** All **18 of 18** net80211
 > `.c` files now compile to real ELF64 `.o` with **0 residual errors**. The six remaining cipher/pae files
 > (`ieee80211_crypto_{wep,tkip,ccmp,bip}.c`, `ieee80211_pae_{input,output}.c`) were brought up with per-site

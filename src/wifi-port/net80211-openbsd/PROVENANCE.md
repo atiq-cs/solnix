@@ -111,3 +111,28 @@ records why that distinction matters (grepping "GNU General Public" in `if_iwx.c
 
 Nothing in this directory is built by any Nix derivation or referenced by any build. It is
 measurement input and vendored reference.
+
+## Route-(b) adapter sources written for this port (NOT upstream)
+
+These `.c` files are **original work for this port**, not vendored from OpenBSD. They resolve the
+module's internal cross-references so the full driver LINKS as a kmod (measured: the `ld -r` of
+net80211 + crypto + these adapters + `iwx_mbuf.o` leaves only kernel-supplied-at-load symbols
+undefined — see `measure-gate.sh` and `FINDINGS.md`). Each is tested and negative-controlled.
+
+| file | what it defines | status / test |
+|---|---|---|
+| `n80211_crypto.c` | AES/RC4/MD5/SHA1/SHA256/HMAC/CMAC/AES-key-wrap/Michael | REAL kernel `.o`; 16 published vectors, sbox sabotage control |
+| `n80211_rbtree.c` | the 7 `_rb_*` (OpenBSD RBT out-of-line half; `tree.h` is header-only) | REAL kernel `.o`; CLRS red-black tree written from scratch against the vendored `tree.h` `rb_type`/`rb_tree`/`rb_entry` layout (NOT a copy of OpenBSD `subr_tree.c`, which could not be fetched on the dev box). Test: 2000 sequential inserts + 200k randomized churn, all RB invariants validated; nfind; duplicate-insert; hand-broken-tree + `-DN80211_RBTREE_SABOTAGE` negative controls |
+| `n80211_mbuf.c` | `n80211_m_gethdr/get/clget/prepend/copydata/split/dup_pkt`, `m_tag_find` | REAL kernel `.o`; allocb-backed single-cluster reduction, no mbuf field aliased; byte-verified split/copydata/dup_pkt, leak check, over-read guard sabotage control. `m_tag_find` returns NULL — a KNOWN GAP (frame injection, NBPFILTER=0), tagged |
+| `n80211_kcompat.c` | `timeout_*`, `task_*`, `systq`, `iwx_bsd_malloc/mallocarray/free`, `etherbroadcastaddr`, `etheranyaddr`, `suser`, `ratecheck`, `getmicrouptime`, `iwx_fls/flsl` | REAL kernel `.o`; OpenBSD kernel primitives mapped onto illumos `timeout(9F)`/`ddi_taskq(9F)`/`kmem(9F)`/`drv_priv`. `task_del` cannot truly cancel an in-flight `ddi_taskq` item — tagged (handlers re-check state) |
+| `n80211_stack.c` | `ifq_*`, `if_enqueue/start/input/link_state_change/addgroup/deactivate`, `ether_ifattach/ifdetach/addmulti/delmulti/ioctl/output/crc32_le`, `ifmedia_init/add/set/delete_instance/ioctl`, `rtm_80211info` | REAL kernel `.o`; three honest classes tagged per function — REAL (ifq FIFO, ifmedia list, if_enqueue/start), BRIDGE (`if_input`→`mac_rx`, `ether_ifattach`→`mac_register`: LINK now, need a live `mac_handle` from `iwx_gld.c` to move a real packet), DEAD-PATH (`ether_ioctl/addmulti/output`, `ifmedia_ioctl`: the SIOC ABI illumos userland does not issue) |
+
+Provenance of the algorithms: the red-black tree is the textbook CLRS insert/delete-fixup, the
+crypto primitives are the published FIPS/RFC algorithms, and the illumos mappings are the DDI/DDI
+facilities named above. None is copied verbatim from a licensed source; the licence of this port
+follows the repository.
+
+**These files link the module; they do NOT load or attach it.** The BRIDGE functions do the part
+that is correct without a live `mac_handle`; the `iwx_gld.c` attach must wire `mac_register` /
+`mac_rx` / `mac_link_update`, phase-3 locking (SPLNET-AUDIT + FINDINGS Finding 3) must land, and
+the HARDWARE gate (firmware alive on the X1) remains — none of which a compile-and-link can reach.

@@ -13,8 +13,8 @@ from the source, not only from here.
 | **mbuf / mlist / cookie layers behave correctly** | **YES, tested** | **120 checks** pass; **13/13 sabotages caught**, each with a distinct failure count |
 | **`if_iwx.c` compiles to an object file** | **YES** | `build/if_iwx_illumos.o`, ELF 64-bit relocatable x86-64, 263 text symbols. Real `-c` codegen, not `-fsyntax-only` |
 | **the mbuf layer links** | **YES** | `ld -r` against a kernel-built `iwx_mbuf.o` resolves **all 11** `iwx_m_*`: 128 undefined -> 122 |
-| **`iwx` links as a module** | **NO -- 122 undefined** | 43 OpenBSD net80211, 50 declared-only shims, 20 illumos already provides, 9 need a named decision |
-| **module loads** | **NO** | no `_init`/`_info`/`_fini`, no `mac_register`, no DDI attach |
+| **`iwx` links as a module** | **YES** | `ld -r` of net80211 + crypto + rbtree + mbuf + kcompat + stack + iwx_mbuf leaves **42 undefined, EVERY ONE kernel-supplied-at-load, 0 non-kernel remaining** (measure-gate.sh, negative-controlled). See ROUND 7 below. |
+| **module loads** | **NO** | needs phase-3 locking (SPLNET/Finding 3), `_init`/`_info`/`_fini`, `mac_register`, DDI attach |
 | **attaches to the PCI device** | **NO** | not attempted |
 | **sees / associates with an AP** | **NO** | not attempted |
 
@@ -401,6 +401,18 @@ Also corrected there: this document's **"14 `.c` files"** is wrong -- net80211 h
 > COMPILE-COMPLETE; what remains for a kmod link is step 2's adapter `.c` plus the mbuf-allocation `.c`.
 > See `../net80211-openbsd/measure-gate.sh --self-test` and the plan's 18/18 gate section. Still NOT a
 > kmod link and NOT a load.
+>
+> **ROUND 7 (measured): the full module LINKS as a kmod.** The DECL halves are now WRITTEN and TESTED --
+> `n80211_rbtree.c` (the 7 `_rb_*`, a from-scratch CLRS red-black tree, 2000 seq + 200k churn +
+> negative control), `n80211_mbuf.c` (the `n80211_m_*` allocation half, byte-verified + leak-checked +
+> negative control), `n80211_kcompat.c` (`timeout_*`/`task_*`/`malloc`/`suser`/... -> DDI/kmem), and
+> `n80211_stack.c` (the GLDv3-downward stack, REAL/BRIDGE/DEAD-PATH tagged per function). An `ld -r` of the
+> 18 net80211 objects + crypto + these four + the driver's `iwx_mbuf.o` (24 objects, 0 compile errors)
+> leaves **42 undefined, EVERY ONE kernel-supplied-at-load, 0 non-kernel remaining** -- i.e. the module
+> LINKS with only symbols the running kernel resolves at load. `measure-gate.sh --self-test` reports this
+> with a live module-link negative control. **Still NOT a load and NOT an attach:** phase-3 locking
+> (SPLNET-AUDIT + FINDINGS Finding 3), the `iwx_gld.c` attach wiring the BRIDGE points, and the HARDWARE
+> gate remain. iwx stayed green throughout.
 
 Steps 1 and 5 of the previous version are **done** (mbuf call sites rewritten; `splnet` audited). What
 remains, sized by the link measurement above:

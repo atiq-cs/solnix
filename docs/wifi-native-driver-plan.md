@@ -71,6 +71,20 @@ Precedent for the device-half size: **`iwn` is 10,337 lines total; `iwh` is 6,60
 carries the vendored 802.11 stack, so the total is larger than a from-scratch native driver would be -- the
 tradeoff bought by not re-implementing block-ack, RSN and the HT node model against illumos's diverged API.
 
+> **ROUND-6 UPDATE (supersedes the 250-errors / 12-of-18 figures below).** All **18 of 18** net80211
+> `.c` files now compile to real ELF64 `.o` with **0 residual errors** (was 12/18, 250 errors). The 6
+> remaining cipher/pae files were brought up with per-site mbuf patches (single-buffer cursor replacing
+> OpenBSD's fixed-cell segment allocator), and a self-contained **`n80211_crypto.c`** now DEFINES every
+> crypto primitive the ciphers call (AES/RC4/MD5/SHA1/SHA256/HMAC/CMAC/AES-key-wrap/Michael), each verified
+> against a published test vector (16/16 pass; negative-controlled). An **`ld -r` partial link now
+> succeeds**: the 43 blocking `ieee80211_*` symbols AND all crypto primitives resolve inside the module;
+> the 82 symbols still undefined are the kernel's own primitives (supplied at load), the mbuf layer
+> (`iwx_m_*`/`n80211_m_*`, DECL/tested), and the GLDv3/stack adapters (`ether_*`/`ifmedia_*`/`if_*`/
+> `timeout_*`/`_rb_*`, DECL -- the Finding-2 wall, not yet written). Reproduce + self-verify:
+> `src/wifi-port/net80211-openbsd/measure-gate.sh --self-test`. **This is still NOT a kmod link and NOT a
+> load** -- the GLDv3/stack adapter `.c`, the mbuf-allocation `.c`, phase-3 locking and the HARDWARE gate
+> all remain.
+
 ## 3. What we already have that carries over
 
 * `openbsd-orig/if_iwx.c` — **not as code to compile, as the reference manual.** It documents the AX2xx
@@ -216,3 +230,134 @@ REMAINING before the module links/loads: 250 errors in 6 files (crypto_{ccmp,tki
 mbuf-chain field access in the ciphers (the m_next walk) + crypto primitive IMPLEMENTATIONS (a self-contained .c,
 not yet written); then the phase-3 locking fix; then the HARDWARE gate (firmware alive on the X1) regardless. The
 module does NOT link or load yet -- this is compile progress, not a working driver.
+
+## net80211-link gate: 18/18 files compile, crypto written, `ld -r` links (round 6, measured)
+
+Advanced the six remaining cipher/pae files from 250 errors to **0**, so **all 18 of 18** net80211 `.c` now
+compile to real ELF64 `.o` (was 12/18). Wrote the self-contained crypto shim. An `ld -r` partial link of the
+whole module now succeeds with **no cipher primitive and none of the 43 blocking symbols left undefined**.
+
+**How the 6 files were brought up.** The cipher `encrypt`/`decrypt` functions REBUILD a frame into a fresh
+mbuf chain, growing the output one `MGET(n->m_next)` at a time and sizing each segment's `m_len` against
+OpenBSD's fixed ~256-byte cell -- an idiom that models nothing on illumos, where `allocb()` returns a single
+contiguous cluster of any size. The patches (`patches/ieee80211_crypto_{wep,tkip,ccmp,bip}.illumos.patch`,
+`ieee80211_pae_{input,output}.illumos.patch`, via `gen-illumos-src.sh`; `orig/` stays read-only and
+byte-identical) replace that segment dance with a **single-buffer write cursor** (`compat/sys/n80211_cipher.h`:
+`n80211_wcursor` writing linearly into one `iwx_m_alloc`'d cluster, length set once via bounds-checked
+`iwx_m_set_window`; `n80211_rcursor` walking the input `b_cont` chain). No mbuf FIELD is aliased -- the same
+invariant `iwx_mbuf_adapter.h` states. The corrupting `m->m_pkthdr.len = m->m_len = EXPR` writes in
+`pae_output` became `iwx_m_set_window`; the field reads became `iwx_m_len`/`iwx_m_pktlen`; BIP's MMIE tail
+append became `n80211_m_append`. Small shims added to `n80211_compat.h`: `swap16`, `getuptime` (->`gethrtime`),
+`log`/`LOG_WARNING` (->`cmn_err`), `ether_crc32_le_update` (CRC32-LE, verified vs 0xCBF43926).
+
+**The crypto shim (`n80211_crypto.c`).** illumos has AES/arcfour/MD5/SHA1/SHA2 but with different struct
+layouts and a KCF API, and NO AES-CMAC / AES-key-wrap / Michael (Finding 2). Because net80211 embeds the crypto
+contexts BY VALUE in its cipher structs against OpenBSD's exact layouts, the honest smaller path is a
+self-contained shim implementing the declared API against those layouts: AES-128/192/256 (FIPS-197), RC4, MD5,
+SHA-1, SHA-256, HMAC-MD5/SHA1/SHA256, AES-CMAC (RFC 4493), AES key wrap (RFC 3394), Michael MIC. It compiles as
+a REAL illumos kernel `.o` (all primitives defined `T`). Its `-DN80211_CRYPTO_TEST` self-test asserts **16
+published test vectors** (FIPS-197 AES128/256, RFC 6229 RC4, RFC 1321 MD5, RFC 3174 SHA-1, FIPS-180 SHA-256,
+RFC 2202/4231 HMAC, RFC 4493 AES-CMAC, RFC 3394 key-wrap, IEEE 802.11i Michael -- the last cross-checked
+against an independent reference), and carries a **negative control** (corrupting AES `sbox[0]` flips 8
+vectors to FAIL), so the crypto claim is not a check that cannot fail.
+
+**The `ld -r` link.** Combining all 18 net80211 objects + the crypto shim yields a single ELF64 relocatable
+with 82 undefined symbols, categorized honestly by the gate: **21** kernel primitives the running kernel
+supplies at load (`bcopy`/`bzero`/`mutex_*`/`freemsg`/`gethrtime`/`memcpy`/...), **14** mbuf-layer symbols
+(`iwx_m_*`/`n80211_m_*`, DECL and separately tested), and **43** GLDv3/stack-adapter symbols
+(`ether_*`/`ifmedia_*`/`if_*`/`timeout_*`/`task_*`/`_rb_*`/`rtm_*`, DECL -- the Finding-2 network-stack wall,
+which a route-(b) self-contained-module adapter `.c` must supply). **0** crypto primitives and **0** of the 43
+blocking `ieee80211_*` remain undefined.
+
+iwx safety held: `iwx/build-check.sh` = 0 residual errors, both `.o` compile, exit 0 -- verified AFTER the
+shared-prelude edits. No iwx-shared header was touched; the new net80211 headers shadow only on net80211's `-I`
+path. (`build-check.sh --self-test` reports PROBLEM ONLY via its pre-existing `dirty-detect` control, which
+needs `iwx/` itself to be dirty for input; this session touched only `net80211-openbsd/`, so `iwx/` is clean.
+Confirmed by making `iwx/` transiently dirty -> self-test goes fully green, "negative controls: all live".)
+
+Refuted brief assumption (good): the six cipher/pae files were dominated by mbuf FIELD access, NOT by the crypto
+primitives -- the primitives were DECL and produced ZERO compile errors; they only surfaced at LINK. So
+"getting the files compiling" and "resolving the crypto" were two independent problems, and the compile blocker
+was entirely the mbuf-chain rewrite.
+
+REMAINING before the module links as a kmod / loads: the GLDv3-downward + stack adapter `.c` (the 43 DECL
+`ether_*`/`ifmedia_*`/`if_*`/`timeout_*`/`_rb_*` symbols -- Finding 2), the mbuf-allocation `.c`
+(`n80211_m_*` -- the DECL half of `n80211_mbuf.h`), then the phase-3 locking fix (SPLNET-AUDIT + FINDINGS
+Finding 3), then the HARDWARE gate (firmware alive on the X1) regardless. The module does NOT link as a kmod
+or load yet -- this is compile + partial-link progress, not a working driver.
+
+## net80211-link gate: the FULL MODULE LINKS as a kmod (round 7, measured, ELF-proven)
+
+> **ROUND-7 UPDATE (supersedes the "82 undefined / adapter .c not yet written" round-6 headline above).**
+> The GLDv3-downward stack adapter and the mbuf-allocation `.c` are now WRITTEN, TESTED, and LINKED. The
+> full driver module **links as a kmod**: an `ld -r` of the 18 net80211 objects + the crypto shim + the
+> four new adapters + the driver's `iwx_mbuf.o` (24 objects, 0 compile errors) produces one ELF64
+> relocatable with **42 undefined symbols, EVERY ONE a genuine kernel-supplied-at-load symbol** and **0
+> non-kernel symbols remaining**. Reproduce + self-verify: `measure-gate.sh --self-test`. **This is a kmod
+> LINK, NOT a load and NOT an attach** -- phase-3 locking and the HARDWARE gate remain.
+
+The 82-undefined round-6 state split into: 21 kernel primitives (kernel supplies at load), 14 mbuf-layer
+(`iwx_m_*`/`n80211_m_*`, DECL), and 43 GLDv3/stack adapters (`ether_*`/`ifmedia_*`/`if_*`/`timeout_*`/
+`task_*`/`_rb_*`/`rtm_*`, DECL). This round WROTE the DECL halves as tested `.c`, dropping the module's
+undefined count **82 -> 42**. The four new adapters (all REAL illumos kernel `.o`, provenance in
+`PROVENANCE.md`):
+
+* **`n80211_rbtree.c`** -- the 7 `_rb_*` functions (`_rb_insert/remove/find/nfind/root/min/max/next/prev/
+  left/right/parent/set_*/poison/check`). OpenBSD's `tree.h` (already vendored) is header-only; its
+  out-of-line half is `subr_tree.c`, which could not be fetched on the dev box, so this is a
+  **from-scratch CLRS red-black tree** against the vendored `rb_type`/`rb_tree`/`rb_entry` layout. A wrong
+  RB tree corrupts the node cache silently (the hazard FINDINGS Finding 3 names for the unserialised
+  tree), so it is tested: **2000 sequential inserts + 200,000 randomized insert/remove churn**, validating
+  BST order, root-black, no-red-red, equal-black-height and parent back-pointers after every batch; plus
+  `nfind` and duplicate-insert. Negative control: a hand-broken tree makes the validator FAIL, and
+  `-DN80211_RBTREE_SABOTAGE` tampers then requires a non-zero exit.
+* **`n80211_mbuf.c`** -- the mbuf ALLOCATION half (`n80211_m_gethdr/get/clget/prepend/copydata/split/
+  dup_pkt` + `m_tag_find`). The single-contiguous-`allocb`-cluster reduction the port already uses; **no
+  mbuf field aliased** (the `iwx_mbuf.h` invariant). Tested: byte-verified split/copydata/dup_pkt, a leak
+  check (allocs==frees), and an over-read-guard negative control. `m_tag_find` returns NULL -- a KNOWN GAP
+  (frame injection, NBPFILTER=0), tagged, not pretended.
+* **`n80211_kcompat.c`** -- the OpenBSD kernel primitives (`timeout_*`->`timeout(9F)`, `task_*`->
+  `ddi_taskq(9F)`, `systq`, `iwx_bsd_malloc/free`->`kmem(9F)`, `etherbroadcastaddr`, `suser`->`drv_priv`,
+  `ratecheck`, `getmicrouptime`->`gethrtime`, `iwx_fls/flsl`). REAL mappings; every undefined it leaves is
+  a DDI/kmem primitive. `task_del` cannot truly cancel an in-flight `ddi_taskq` item -- tagged (net80211's
+  handlers re-check state).
+* **`n80211_stack.c`** -- the GLDv3-DOWNWARD stack (the Finding-2 wall). Three honest classes tagged per
+  function: **REAL** (the `ifq` FIFO, the `ifmedia` media list as a plain TAILQ, `if_enqueue`/`if_start`
+  driving the driver's own callback), **BRIDGE** (`if_input` must become `mac_rx` and `ether_ifattach`
+  must become `mac_register` -- they LINK and do the bookkeeping correct without a live `mac_handle`, with
+  a NOTE marking the `mac_*` call `iwx_gld.c` must add), and **DEAD-PATH** (`ether_ioctl`/`addmulti`/
+  `output`, `ifmedia_ioctl` -- reachable only via the SIOCS/G80211* ioctl ABI illumos userland does not
+  issue, honest not-supported stubs so the 36-case switch compiles).
+
+**The full-module link, measured.** `ld -r` of all 24 objects -> one ELF64 relocatable, **42 undefined,
+all 42 kernel-supplied-at-load** (verified by grepping each against the illumos gate headers: `adjmsg`/
+`allocb`/`copymsg`/`msgpullup`/`pullupmsg`/`freemsg` in `sys/stream.h`; `mutex_*` in `sys/mutex.h`;
+`kmem_*`/`ddi_taskq_*`/`gethrtime`/`drv_priv`/`drv_usectohz` in `sys/{kmem,sunddi,ddi}.h`; `timeout`/
+`untimeout`/`bcopy`/`memcpy`/`panic`/`strcmp` in `sys/systm.h`; `htons`/`ntohs` in `sys/byteorder.h`;
+`atomic_cas_uint` in `sys/atomic.h`; `random_get_pseudo_bytes` in `sys/random.h`; `ether_sprintf`
+illumos's OWN symbol in `sys/ethernet.h`; `threadp` the curthread global in `sys/thread.h`; and
+`_GLOBAL_OFFSET_TABLE_` a linker artifact). **0 non-kernel symbols remain.** The negative control is live:
+renaming `ifmedia_add` in a build copy makes it reappear as a non-kernel undefined (42 -> 43), so the
+module-link measurement can report an unresolved adapter and is not a check that cannot fail.
+
+iwx safety held: `iwx/build-check.sh` = 0 residual errors, both `.o` compile, exit 0 -- verified BEFORE and
+AFTER writing the adapters and editing the gate. **No iwx-shared header was touched** -- only new `.c`
+files were added under `net80211-openbsd/` and its `measure-gate.sh` was extended; the driver compiles in a
+separate TU with the iwx `-I` path only.
+
+Refuted brief assumptions (good): (1) the round-6 note called the 43 adapter symbols "the Finding-2
+network-stack wall" as if all 43 needed the `mac_*` bridge; in fact only ~10 (`ether_ifattach/ifdetach`,
+`if_input/link_state_change`) are true BRIDGE points, ~15 are OpenBSD kernel primitives that map cleanly to
+existing DDI facilities (`timeout_*`/`task_*`/`malloc`/`suser`/`ratecheck`), 7 are a self-contained RB tree
+(`_rb_*`, nothing to do with GLDv3), and the rest are REAL self-contained list/queue code -- so the "wall"
+is materially smaller than the symbol count suggested. (2) The RB tree needed writing from scratch because
+OpenBSD's `subr_tree.c` was not fetchable -- a real facility the vendored `tree.h` assumes present that had
+to be supplied, and the correctness risk was retired with an exhaustive + randomized negative-controlled
+test rather than a plausibility argument.
+
+**STILL NOT a load and NOT an attach.** The module LINKS; loading it requires the phase-3 locking fix
+(SPLNET-AUDIT + FINDINGS Finding 3 -- the interrupt handler takes no lock, and net80211 mutates an
+unserialised red-black tree from the ISR), the `iwx_gld.c` attach must wire the BRIDGE points
+(`mac_register`/`mac_rx`/`mac_link_update`) to a live `mac_handle`, and the HARDWARE gate (the X1's AX2xx
+firmware being accepted by the silicon and a real `IWX_ALIVE` interrupt) is unreachable off-hardware. This
+is a compile + kmod-LINK milestone, not a working driver.
