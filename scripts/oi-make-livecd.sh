@@ -263,7 +263,7 @@ CLOSURE_TOOLS="/sbin/zpool /sbin/zfs /usr/sbin/format /usr/sbin/fmthard
   /usr/libexec/git-core/git-remote-http /usr/libexec/git-core/git-http-fetch"
 for t in $CLOSURE_TOOLS; do
   [ -e "$SRC$t" ] && ldd "$SRC$t" 2>/dev/null | awk '{print $3}'
-done | grep '^/usr/lib' | sort -u | while read -r libpath; do
+done | grep -E '^(/usr)?/lib/' | sort -u | while read -r libpath; do
   rel="${libpath#/}"
   # ICU DATA IS 33MB AND 64-BIT-ONLY IS ENOUGH. dig/host/nslookup pull
   # libdns -> libicuuc -> libicudata.so.78 (33MB), and the ldd walk sees it in
@@ -272,9 +272,13 @@ done | grep '^/usr/lib' | sort -u | while read -r libpath; do
   # is dead weight that overflowed the ramdisk once. Skip the 32-bit libicudata;
   # keep the amd64 one. (git itself pulls no ICU -- this is purely the DNS tools.)
   case "$rel" in usr/lib/libicudata.so*) continue ;; esac
-  # /usr/lib/64 is a symlink to amd64 in our tree; normalize the DEST so mkdir
-  # doesn't try to mkdir over the symlink. Source read follows the symlink fine.
-  dest_rel=$(echo "$rel" | sed 's,^usr/lib/64/,usr/lib/amd64/,')
+  # /usr/lib/64 and /lib/64 are symlinks to amd64 in our tree; normalize the DEST
+  # so mkdir doesn't try to mkdir over the symlink. Source read follows the
+  # symlink fine. (dig/host/nslookup resolve libidn2/libz/libnghttp2/libxml2 under
+  # /lib -- the earlier grep '^/usr/lib' DROPPED those, so dig failed to run in the
+  # shipped media: ld.so.1 'libidn2.so.0: open failed'. The broadened grep above
+  # keeps the /lib half of the closure too.)
+  dest_rel=$(echo "$rel" | sed -e 's,^usr/lib/64/,usr/lib/amd64/,' -e 's,^lib/64/,lib/amd64/,')
   mkdir -p "$RDROOT/$(dirname "$dest_rel")"
   cp "$SRC/$rel" "$RDROOT/$dest_rel" 2>/dev/null || true
 done
