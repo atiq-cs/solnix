@@ -1,0 +1,112 @@
+#!/sbin/sh
+# solnix-zap -- nuke a disk's ZFS/pool state so a fresh install has a clean slate.
+#
+# Distilled from a real X1 install session where a failed run left a SUSPENDED /
+# FAULTED rpool that recurred across reboots. The full clean-slate recovery is
+# several fiddly commands (export the kernel ghost, clear the auto-import cache,
+# labelclear every disk node, 4K-aligned dd, verify); this bakes it into one.
+#
+# Usage:
+#   solnix-zap [<disk>]          # e.g. solnix-zap c1t001B448B485502D1d0
+#                                # no arg -> auto-detect the single non-root target
+#   solnix-zap --list            # show disks + imported pools, do nothing
+#
+# ⚠️ DESTRUCTIVE. It removes ALL pool labels + the front GPT/label region of the
+#    named disk. It REFUSES the running root disk/pool. It asks y/N first.
+#
+# WHAT IT DOES, in the order that actually works on illumos:
+#   1. export any FAULTED/UNAVAIL pool that names this disk (a suspended pool is a
+#      KERNEL GHOST once its labels are gone; export drops the kernel object AND
+#      its zpool.cache entry -- destroy/labelclear on a suspended pool D-state HANG).
+#   2. remove /etc/zfs/zpool.cache so a stale entry does not re-import the ghost at
+#      the next boot (the cause of "rpool FAULTED again after a clean reboot").
+#   3. zpool labelclear -f every disk node (whole-disk, p0, s0, p1) -- clears the
+#      ZFS vdev labels that make a fresh `zpool create` refuse or re-import a ghost.
+#   4. dd zero the front 34 MB with a 4K-aligned bs (NVMe logical block is often
+#      4096; bs=512 or conv flags give "invalid argument"). Covers GPT + ZFS L0/L1.
+#   5. verify: `zpool list` shows the disk in no pool; print the result.
+
+set -u
+die() { echo "solnix-zap: FATAL: $*" >&2; exit 1; }
+[ "$(id -u)" = 0 ] || die "run as root"
+
+_list() {
+  echo "=== disks (whole-disk nodes) ==="
+  ls /dev/dsk/*p0 2>/dev/null | sed 's,/dev/dsk/,,; s,p0$,,' | sort -u | sed 's/^/  /'
+  echo "=== imported pools ==="
+  zpool list 2>/dev/null | sed 's/^/  /' || echo "  (none)"
+}
+
+[ "${1:-}" = "--list" ] && { _list; exit 0; }
+
+DISK="${1:-}"
+ROOTPOOL="$(zpool list -H -o name 2>/dev/null | grep -x rpool | head -1)"
+# never touch the running root disk
+ROOTDISK=$(zpool status "$ROOTPOOL" 2>/dev/null | awk '/[0-9]d[0-9]/{gsub(/s[0-9]+$/,"",$1); print $1; exit}')
+
+if [ -z "$DISK" ]; then
+  # auto-detect: the single whole-disk node that is NOT the boot medium / root disk.
+  _cands=$(ls /dev/dsk/*p0 2>/dev/null | sed 's,/dev/dsk/,,; s,p0$,,' | sort -u)
+  _pick=""
+  for _d in $_cands; do
+    [ -n "$ROOTDISK" ] && [ "$_d" = "$ROOTDISK" ] && continue
+    _pick="${_pick:+$_pick }$_d"
+  done
+  set -- $_pick
+  [ "$#" = 1 ] || die "could not auto-pick a single target (candidates: ${_pick:-none}). Name one: solnix-zap <disk>  (solnix-zap --list to see them)"
+  DISK="$1"
+fi
+
+[ -e "/dev/dsk/${DISK}p0" ] || [ -e "/dev/dsk/${DISK}s0" ] || die "no such disk /dev/dsk/${DISK} (try: solnix-zap --list)"
+[ -n "$ROOTDISK" ] && [ "$DISK" = "$ROOTDISK" ] && die "refusing to zap the RUNNING root disk $DISK (pool $ROOTPOOL)"
+
+echo ""
+echo "=== solnix-zap: about to DESTROY all pool state on $DISK =================="
+echo "  This removes every ZFS pool label + the front GPT on /dev/dsk/$DISK."
+echo "  It is IRREVERSIBLE. Any data or pool on this disk is gone."
+zpool status 2>/dev/null | grep -B2 "$DISK" | sed 's/^/    /'
+printf '  Zap %s? [y/N]: ' "$DISK"
+read _ans
+case "$_ans" in y|Y|yes|YES) ;; *) echo "  aborted."; exit 1 ;; esac
+
+echo ""
+echo "1) exporting any pool that names $DISK (drops a kernel ghost + its cache entry)"
+# export by pool name for every pool whose vdev mentions this disk; a FAULTED pool
+# has no real I/O so export returns quickly. Bounded so a genuine hang is visible.
+for _p in $(zpool list -H -o name 2>/dev/null); do
+  [ "$_p" = "$ROOTPOOL" ] && continue
+  if zpool status "$_p" 2>/dev/null | grep -q "$DISK"; then
+    echo "   export $_p"
+    ( zpool export -f "$_p" 2>/dev/null ) &
+    _xp=$!; ( sleep 30; kill "$_xp" 2>/dev/null ) & _kx=$!
+    wait "$_xp" 2>/dev/null; kill "$_kx" 2>/dev/null
+  fi
+done
+
+echo "2) removing /etc/zfs/zpool.cache (stops stale auto-import at the next boot)"
+[ -f /etc/zfs/zpool.cache ] && cp /etc/zfs/zpool.cache /tmp/zpool.cache.zap.bak 2>/dev/null
+rm -f /etc/zfs/zpool.cache 2>/dev/null || true
+
+echo "3) labelclear every disk node"
+for _n in "$DISK" "${DISK}p0" "${DISK}s0" "${DISK}p1" "${DISK}s1"; do
+  [ -e "/dev/dsk/$_n" ] && { echo "   labelclear $_n"; zpool labelclear -f "/dev/dsk/$_n" 2>/dev/null || true; }
+done
+
+echo "4) zeroing the front 34 MB (4K-aligned; GPT + ZFS L0/L1 labels)"
+# NVMe logical block is commonly 4096; a non-4K bs gives "invalid argument".
+if [ -e "/dev/rdsk/${DISK}p0" ]; then
+  dd if=/dev/zero of="/dev/rdsk/${DISK}p0" bs=4096 count=8704 2>&1 | tail -1 | sed 's/^/   /'
+elif [ -e "/dev/rdsk/${DISK}" ]; then
+  dd if=/dev/zero of="/dev/rdsk/${DISK}" bs=4096 count=8704 2>&1 | tail -1 | sed 's/^/   /'
+fi
+
+echo ""
+echo "=== result ==="
+if zpool status 2>/dev/null | grep -q "$DISK"; then
+  echo "  ⚠️ $DISK still appears in a pool. If it is SUSPENDED/FAULTED, its kernel"
+  echo "     object survives -- REBOOT the live media (the labels+cache are now cleared,"
+  echo "     so after reboot it will NOT re-import), then re-run the installer."
+else
+  echo "  $DISK is clean: in no pool, labels + front GPT zeroed, cache removed."
+  echo "  Run the installer now:  solnix-install --flake 'github:gburd/nix-config#dixi'"
+fi

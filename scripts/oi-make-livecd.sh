@@ -1160,6 +1160,17 @@ if [ -f "$_DIAG" ]; then
 else
   echo "WARN: solnix-diag not found at $_DIAG -- media will lack the push-diagnostics tool" >&2
 fi
+  # solnix-zap: one-shot disk-nuke for a poisoned target (export a suspended/FAULTED
+  # pool, clear the auto-import zpool.cache, labelclear every disk node, 4K-aligned
+  # dd the front labels, verify clean). Distilled from the X1 session where a failed
+  # run left a FAULTED rpool that recurred across reboots. Staged next to the others.
+  _ZAP="${SOLNIX_ZAP_SRC:-$(dirname "$INSTALLER")/solnix-zap}"
+  if [ -f "$_ZAP" ]; then
+    cp "$_ZAP" "$RDROOT/usr/sbin/solnix-zap"; chmod 0555 "$RDROOT/usr/sbin/solnix-zap"
+    log "installed solnix-zap (disk-nuke tool)"
+  else
+    echo "WARN: solnix-zap not found at $_ZAP -- media will lack the disk-nuke tool" >&2
+  fi
 
 # 4-DECL. DECLARATIVE-Nix installed system (CS=<current-system store path>).
 #   When CS is set, bake the current-system closure into the live ramdisk
@@ -1808,6 +1819,9 @@ $_netline
   you booted from.
 
   Retry networking:  solnix-net
+  Wipe a disk that will not install (leftover/faulted pool):
+    solnix-zap                  # auto-nukes the single target disk (asks first)
+    solnix-zap <disk>           # or name it; solnix-zap --list shows disks+pools
   Get help / send a diagnostics bundle to the maintainer:
     solnix-diag                 # push a bundle, prints an upload URL
     solnix-diag fetch <url>     # run a maintainer-authored fix (URL from the maintainer)
