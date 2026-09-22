@@ -254,6 +254,21 @@ cleanup() {
     case "$PREEXISTING_POOLS" in *" $_p "*) continue;; esac
     zpool export "$_p" 2>/dev/null || true
   done
+  # ⚠️ NVMe-scratch on the TARGET must be DESTROYED (not just exported) on ANY exit,
+  # including a failed build. It is a WHOLE-DISK pool on the install target; if a run
+  # dies at (e.g.) the 5/9 build and only exports it, its ZFS label survives on the
+  # whole disk. The NEXT run's rpool detection then sees a leftover fragment whose
+  # backing was swallowed by that whole-disk claim and imports rpool FAULTED -- the
+  # recurring 'rpool health=FAULTED' loop (measured on the X1; disk itself is clean
+  # per iostat). Destroy + labelclear here so a failed run leaves the target clean.
+  if [ "${SCRATCH_ON_TARGET:-0}" = 1 ] && [ -n "${TARGET:-}" ]; then
+    HOME=/root; TMPDIR=/tmp; XDG_CACHE_HOME=/root/.cache; export HOME TMPDIR XDG_CACHE_HOME
+    run_to 20 zfs unmount solnixscratch 2>/dev/null || true
+    run_to 20 zpool destroy -f solnixscratch 2>/dev/null || run_to 20 zpool export -f solnixscratch 2>/dev/null || true
+    for _tn in "$TARGET" "${TARGET}p0" "${TARGET}s0"; do
+      [ -e "/dev/dsk/$_tn" ] && run_to 20 zpool labelclear -f "/dev/dsk/$_tn" 2>/dev/null || true
+    done
+  fi
 }
 trap cleanup EXIT INT TERM
 
@@ -1288,6 +1303,11 @@ if zpool list solnixscratch >/dev/null 2>&1 \
   # zpool create's EFI label. dd is bounded (count) so it cannot hang.
   run_to 30 dd if=/dev/zero of="/dev/rdsk/${TARGET}p0" bs=512 count=64 conv=notrunc 2>/dev/null || true
   log "NVMe-scratch: solnixscratch destroyed; target $TARGET is free for the install pool"
+  # scratch is now GONE and the target is about to hold the REAL rpool. Reset the
+  # flag so cleanup() on EXIT does NOT destroy/labelclear $TARGET (that would wreck
+  # a SUCCESSFUL install). cleanup's scratch-teardown is only for the FAILURE path,
+  # where we die BEFORE reaching here and the whole-disk scratch is still stranded.
+  SCRATCH_ON_TARGET=0; export SCRATCH_ON_TARGET
 fi
 # 0a. any IMPORTED pool whose vdev is on the target disk -> destroy it (frees
 #     the slice so the GPT relabel below can create the throwaway EFI pool).
