@@ -392,6 +392,16 @@ surface against illumos measured at **838**. Results that change this list:
 Also corrected there: this document's **"14 `.c` files"** is wrong -- net80211 has **18** `.c` and
 **13** `.h`. The 31-file and 24,665-line totals are right.
 
+> **ROUND 6 (measured):** all **18 of 18** net80211 `.c` compile to real ELF64 `.o` with 0 errors, a
+> self-contained `n80211_crypto.c` (AES/RC4/MD5/SHA1/SHA256/HMAC/CMAC/AES-key-wrap/Michael, 16 published
+> vectors, negative-controlled) resolves every cipher primitive, and an `ld -r` partial link SUCCEEDS with
+> 0 crypto + 0 of the 43 blocking `ieee80211_*` undefined. The 82 still-undefined symbols are kernel
+> primitives (load-time), the mbuf layer (`iwx_m_*`/`n80211_m_*`, DECL), and the GLDv3/stack adapters
+> (`ether_*`/`ifmedia_*`/`if_*`/`timeout_*`/`_rb_*`, DECL -- the Finding-2 wall). Step 1 below is therefore
+> COMPILE-COMPLETE; what remains for a kmod link is step 2's adapter `.c` plus the mbuf-allocation `.c`.
+> See `../net80211-openbsd/measure-gate.sh --self-test` and the plan's 18/18 gate section. Still NOT a
+> kmod link and NOT a load.
+
 Steps 1 and 5 of the previous version are **done** (mbuf call sites rewritten; `splnet` audited). What
 remains, sized by the link measurement above:
 

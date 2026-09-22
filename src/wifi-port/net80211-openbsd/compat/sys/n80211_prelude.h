@@ -30,6 +30,7 @@
 #include <sys/mbuf.h>			/* struct mbuf->msgb alias, mbuf_list/mbuf_queue */
 #include "iwx_mbuf_adapter.h"		/* mtod, m_freem, m_pullup, m_adj -> mblk */
 #include <sys/n80211_mbuf.h>		/* MGET/MGETHDR/MCLGET/M_PREPEND alloc adapter */
+#include <sys/n80211_cipher.h>		/* cipher output write-cursor + input read walker */
 #include <sys/n80211_mcookie.h>		/* ph_cookie peek/clear for the pwrsave purge */
 #include <sys/n80211_compat.h>		/* ISSET, arc4random, ratecheck, IFQ_MAXLEN */
 #include <net80211/n80211_stack.h>	/* ether, if_, ifmedia stack shims */

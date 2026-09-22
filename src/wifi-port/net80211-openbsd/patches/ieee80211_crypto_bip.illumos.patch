@@ -1,0 +1,66 @@
+--- orig/ieee80211_crypto_bip.c
++++ build/ieee80211_crypto_bip.c
+@@ -91,7 +91,6 @@
+ 	struct ieee80211_bip_frame aad;
+ 	struct ieee80211_frame *wh;
+ 	u_int8_t *mmie, mic[AES_CMAC_DIGEST_LENGTH];
+-	struct mbuf *m;
+ 
+ 	wh = mtod(m0, struct ieee80211_frame *);
+ 	KASSERT((wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) ==
+@@ -111,20 +110,14 @@
+ 	AES_CMAC_Init(&ctx->cmac);
+ 	AES_CMAC_Update(&ctx->cmac, (u_int8_t *)&aad, sizeof aad);
+ 	AES_CMAC_Update(&ctx->cmac, (u_int8_t *)&wh[1],
+-	    m0->m_len - sizeof(*wh));
++	    iwx_m_len(m0) - sizeof(*wh));
+ 
+-	m = m0;
+-	/* reserve trailing space for MMIE */
+-	if (m_trailingspace(m) < IEEE80211_MMIE_LEN) {
+-		MGET(m->m_next, M_DONTWAIT, m->m_type);
+-		if (m->m_next == NULL)
+-			goto nospace;
+-		m = m->m_next;
+-		m->m_len = 0;
+-	}
++	/* reserve trailing space for MMIE (mgmt frames are contiguous) */
++	mmie = n80211_m_append(m0, IEEE80211_MMIE_LEN);
++	if (mmie == NULL)
++		goto nospace;
+ 
+ 	/* construct Management MIC IE */
+-	mmie = mtod(m, u_int8_t *) + m->m_len;
+ 	mmie[0] = IEEE80211_ELEMID_MMIE;
+ 	mmie[1] = 16;
+ 	LE_WRITE_2(&mmie[2], k->k_id);
+@@ -136,9 +129,6 @@
+ 	/* truncate AES-128-CMAC to 64-bit */
+ 	memcpy(&mmie[10], mic, 8);
+ 
+-	m->m_len += IEEE80211_MMIE_LEN;
+-	m0->m_pkthdr.len += IEEE80211_MMIE_LEN;
+-
+ 	k->k_tsc++;
+ 
+ 	return m0;
+@@ -167,8 +157,8 @@
+ 	 * the mbuf length has already been checked to contain at least
+ 	 * a header and a MMIE (checked in ieee80211_decrypt()).
+ 	 */
+-	KASSERT(m0->m_len >= sizeof(*wh) + IEEE80211_MMIE_LEN);
+-	mmie = mtod(m0, u_int8_t *) + m0->m_len - IEEE80211_MMIE_LEN;
++	KASSERT(iwx_m_len(m0) >= sizeof(*wh) + IEEE80211_MMIE_LEN);
++	mmie = mtod(m0, u_int8_t *) + iwx_m_len(m0) - IEEE80211_MMIE_LEN;
+ 
+ 	ipn = LE_READ_6(&mmie[4]);
+ 	if (ipn <= k->k_mgmt_rsc) {
+@@ -195,7 +185,7 @@
+ 	AES_CMAC_Init(&ctx->cmac);
+ 	AES_CMAC_Update(&ctx->cmac, (u_int8_t *)&aad, sizeof aad);
+ 	AES_CMAC_Update(&ctx->cmac, (u_int8_t *)&wh[1],
+-	    m0->m_len - sizeof(*wh));
++	    iwx_m_len(m0) - sizeof(*wh));
+ 	AES_CMAC_Final(mic, &ctx->cmac);
+ 
+ 	/* check that MIC matches the one in MMIE */

@@ -1,0 +1,104 @@
+--- orig/ieee80211_pae_output.c
++++ build/ieee80211_pae_output.c
+@@ -95,7 +95,7 @@
+ 		info |= EAPOL_KEY_DESC_V1;
+ 	BE_WRITE_2(key->info, info);
+ 
+-	len = m->m_len - sizeof(struct ether_header);
++	len = iwx_m_len(m) - sizeof(struct ether_header);
+ 	BE_WRITE_2(key->paylen, len - sizeof(*key));
+ 	BE_WRITE_2(key->len, len - 4);
+ 
+@@ -110,8 +110,8 @@
+ 
+ 		if ((info & EAPOL_KEY_VERSION_MASK) != EAPOL_KEY_DESC_V1) {
+ 			/* AES Key Wrap adds 8 bytes + padding */
+-			m->m_pkthdr.len = m->m_len =
+-			    sizeof(*eh) + 4 + BE_READ_2(key->len);
++			(void) iwx_m_set_window(m, eh,
++			    sizeof(*eh) + 4 + BE_READ_2(key->len));
+ 		}
+ 	}
+ #endif
+@@ -240,11 +240,15 @@
+ 	if (m == NULL)
+ 		return NULL;
+ 	if (pktlen > MHLEN) {
+-		MCLGET(m, flags);
+-		if (!(m->m_flags & M_EXT))
++		/*
++		 * OpenBSD: MCLGET then test (m->m_flags & M_EXT). illumos:
++		 * n80211_m_clget returns 0 on success; the field test on
++		 * m_flags is what the mbuf adapter forbids.
++		 */
++		if (n80211_m_clget(m, flags) != 0)
+ 			return m_free(m);
+ 	}
+-	m->m_data += sizeof(struct ieee80211_frame) + LLC_SNAPFRAMELEN;
++	n80211_m_reserve(m, sizeof(struct ieee80211_frame) + LLC_SNAPFRAMELEN);
+ 	return m;
+ }
+ 
+@@ -289,7 +293,7 @@
+ 	    ieee80211_is_8021x_akm(ni->ni_rsnakms))
+ 		frm = ieee80211_add_pmkid_kde(frm, ni->ni_pmkid);
+ 
+-	m->m_pkthdr.len = m->m_len = frm - (u_int8_t *)key;
++	(void) iwx_m_set_window(m, key, frm - (u_int8_t *)key);
+ 
+ 	if (ic->ic_if.if_flags & IFF_DEBUG)
+ 		printf("%s: sending msg %d/%d of the %s handshake to %s\n",
+@@ -345,7 +349,7 @@
+ 	} else	/* RSN */
+ 		frm = ieee80211_add_rsn(frm, ic, ni);
+ 
+-	m->m_pkthdr.len = m->m_len = frm - (u_int8_t *)key;
++	(void) iwx_m_set_window(m, key, frm - (u_int8_t *)key);
+ 
+ 	if (ic->ic_if.if_flags & IFF_DEBUG)
+ 		printf("%s: sending msg %d/%d of the %s handshake to %s\n",
+@@ -423,7 +427,7 @@
+ 	/* write the key info field */
+ 	BE_WRITE_2(key->info, info);
+ 
+-	m->m_pkthdr.len = m->m_len = frm - (u_int8_t *)key;
++	(void) iwx_m_set_window(m, key, frm - (u_int8_t *)key);
+ 
+ 	if (ic->ic_if.if_flags & IFF_DEBUG)
+ 		printf("%s: sending msg %d/%d of the %s handshake to %s\n",
+@@ -468,7 +472,7 @@
+ 	BE_WRITE_2(key->info, info);
+ 
+ 	/* empty key data field */
+-	m->m_pkthdr.len = m->m_len = sizeof(*key);
++	(void) iwx_m_set_window(m, key, sizeof(*key));
+ 
+ 	if (ic->ic_if.if_flags & IFF_DEBUG)
+ 		printf("%s: sending msg %d/%d of the %s handshake to %s\n",
+@@ -547,7 +551,7 @@
+ 	/* write the key info field */
+ 	BE_WRITE_2(key->info, info);
+ 
+-	m->m_pkthdr.len = m->m_len = frm - (u_int8_t *)key;
++	(void) iwx_m_set_window(m, key, frm - (u_int8_t *)key);
+ 
+ 	if (ic->ic_if.if_flags & IFF_DEBUG)
+ 		printf("%s: sending msg %d/%d of the %s handshake to %s\n",
+@@ -590,7 +594,7 @@
+ 	BE_WRITE_2(key->info, info);
+ 
+ 	/* empty key data field */
+-	m->m_pkthdr.len = m->m_len = sizeof(*key);
++	(void) iwx_m_set_window(m, key, sizeof(*key));
+ 
+ 	if (ic->ic_if.if_flags & IFF_DEBUG)
+ 		printf("%s: sending msg %d/%d of the %s handshake to %s\n",
+@@ -630,7 +634,7 @@
+ 	ni->ni_reqreplaycnt++;
+ 
+ 	/* empty key data field */
+-	m->m_pkthdr.len = m->m_len = sizeof(*key);
++	(void) iwx_m_set_window(m, key, sizeof(*key));
+ 
+ 	if (ic->ic_if.if_flags & IFF_DEBUG)
+ 		printf("%s: sending EAPOL-Key request to %s\n",

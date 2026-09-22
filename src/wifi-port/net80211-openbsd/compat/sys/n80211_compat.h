@@ -19,6 +19,83 @@
 #define _N80211_COMPAT_H
 
 #include <sys/types.h>
+#include <sys/cmn_err.h>
+#include <sys/time.h>
+
+/*
+ * swap16: OpenBSD's 16-bit byte swap (libkern), used by the TKIP key-mixing
+ * S-box (ieee80211_crypto_tkip.c _S_). A pure value transform -- REAL.
+ */
+#ifndef swap16
+static __inline uint16_t
+n80211_swap16(uint16_t v) { return ((uint16_t)((v >> 8) | (v << 8))); }
+#define swap16(v)	n80211_swap16(v)
+#endif
+
+/*
+ * getuptime: OpenBSD returns seconds since boot (time_t). Used by TKIP's
+ * countermeasure throttle (two MIC failures within 60s disables the BSS).
+ * illumos gethrtime() is nanoseconds since an arbitrary epoch, but only the
+ * DIFFERENCE between two getuptime() calls is used, so the epoch is irrelevant
+ * and seconds = gethrtime()/NANOSEC is correct. REAL.
+ */
+static __inline time_t
+getuptime(void)
+{
+	return ((time_t)(gethrtime() / NANOSEC));
+}
+
+/*
+ * log(pri, fmt, ...) + LOG_WARNING: OpenBSD's kernel logger. illumos uses
+ * cmn_err with a level prefix, not a syslog priority. Map log() to cmn_err(CE_*)
+ * -- WARNING/ERR -> CE_WARN, else CE_NOTE -- discarding the numeric priority,
+ * which net80211 only uses for LOG_WARNING diagnostics. REAL (best-effort: the
+ * variadic cannot forward through a macro to cmn_err with full generality, so
+ * only the fixed-arg call shapes net80211 uses are covered; a new call shape
+ * would need extending).  LOG_* values are the syslog constants (BSD
+ * <sys/syslog.h>), kept so the priority argument still type-checks.
+ */
+#ifndef LOG_WARNING
+#define LOG_EMERG	0
+#define LOG_ALERT	1
+#define LOG_CRIT	2
+#define LOG_ERR		3
+#define LOG_WARNING	4
+#define LOG_NOTICE	5
+#define LOG_INFO	6
+#define LOG_DEBUG	7
+#endif
+#ifndef log
+#define log(pri, ...)	cmn_err(((pri) <= LOG_ERR ? CE_WARN : CE_NOTE), __VA_ARGS__)
+#endif
+
+/*
+ * ether_crc32_le_update: incremental little-endian CRC32 (Ethernet FCS
+ * polynomial), OpenBSD net/if_ethersubr.c. TKIP and WEP use it to compute the
+ * WEP ICV over the frame body. Standard reflected CRC32 (poly 0xEDB88320),
+ * seeded by the caller with ~0 and finalized with ~crc -- the exact contract
+ * net80211 relies on. REAL. (ether_crc32_le(buf,len) is the one-shot form
+ * declared in n80211_stack.h; this is the running form.)
+ */
+static __inline uint32_t
+ether_crc32_le_update(uint32_t crc, const void *buf, size_t len)
+{
+	static const uint32_t table[16] = {
+		0x00000000, 0x1db71064, 0x3b6e20c8, 0x26d930ac,
+		0x76dc4190, 0x6b6b51f4, 0x4db26158, 0x5005713c,
+		0xedb88320, 0xf00f9344, 0xd6d6a3e8, 0xcb61b38c,
+		0x9b64c2b0, 0x86d3d2d4, 0xa00ae278, 0xbdbdf21c
+	};
+	const uint8_t *p = buf;
+	size_t i;
+
+	for (i = 0; i < len; i++) {
+		crc ^= p[i];
+		crc = (crc >> 4) ^ table[crc & 0x0f];
+		crc = (crc >> 4) ^ table[crc & 0x0f];
+	}
+	return (crc);
+}
 
 /*
  * random_get_pseudo_bytes (uts/common/os/random.c) declared here rather than

@@ -1,0 +1,41 @@
+--- orig/ieee80211_pae_input.c
++++ build/ieee80211_pae_input.c
+@@ -82,7 +82,7 @@
+ 	u_int16_t info, desc;
+ 	int totlen, bodylen, paylen;
+ 
+-	ifp->if_ibytes += m->m_pkthdr.len;
++	ifp->if_ibytes += iwx_m_pktlen(m);
+ 
+ 	eh = mtod(m, struct ether_header *);
+ 	if (IEEE80211_IS_MULTICAST(eh->ether_dhost)) {
+@@ -91,9 +91,9 @@
+ 	}
+ 	m_adj(m, sizeof(*eh));
+ 
+-	if (m->m_pkthdr.len < sizeof(*key))
++	if (iwx_m_pktlen(m) < sizeof(*key))
+ 		goto done;
+-	if (m->m_len < sizeof(*key) &&
++	if (iwx_m_len(m) < sizeof(*key) &&
+ 	    (m = m_pullup(m, sizeof(*key))) == NULL) {
+ 		ic->ic_stats.is_rx_nombuf++;
+ 		goto done;
+@@ -113,7 +113,7 @@
+ 	/* check packet body length */
+ 	bodylen = BE_READ_2(key->len);
+ 	totlen = 4 + bodylen;
+-	if (m->m_pkthdr.len < totlen || totlen < sizeof(*key) ||
++	if (iwx_m_pktlen(m) < totlen || totlen < sizeof(*key) ||
+ 	    totlen > MCLBYTES)
+ 		goto done;
+ 
+@@ -139,7 +139,7 @@
+ 	}
+ 
+ 	/* make sure the key data field is contiguous */
+-	if (m->m_len < totlen && (m = m_pullup(m, totlen)) == NULL) {
++	if (iwx_m_len(m) < totlen && (m = m_pullup(m, totlen)) == NULL) {
+ 		ic->ic_stats.is_rx_nombuf++;
+ 		goto done;
+ 	}

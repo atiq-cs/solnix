@@ -17,7 +17,9 @@ here=$(cd -- "$(dirname -- "$0")" && pwd)
 mkdir -p "$here/build" "$here/patches"
 
 # The files this port rewrites (each has orig/<f>.c + patches/<f>.illumos.patch).
-PATCHED="ieee80211_node ieee80211_crypto ieee80211_input ieee80211_output"
+PATCHED="ieee80211_node ieee80211_crypto ieee80211_input ieee80211_output \
+ieee80211_crypto_wep ieee80211_crypto_tkip ieee80211_crypto_ccmp \
+ieee80211_crypto_bip ieee80211_pae_input ieee80211_pae_output"
 
 check_hunks() {  # $1 = patch file; refuse a no-hunk (prose) patch
 	local hunks

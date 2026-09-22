@@ -1,5 +1,19 @@
 # Vendoring OpenBSD `net80211`: what it costs, measured
 
+> **ROUND-6 UPDATE (supersedes the "12 of 18 / 250 errors" round-5 headline).** All **18 of 18** net80211
+> `.c` files now compile to real ELF64 `.o` with **0 residual errors**. The six remaining cipher/pae files
+> (`ieee80211_crypto_{wep,tkip,ccmp,bip}.c`, `ieee80211_pae_{input,output}.c`) were brought up with per-site
+> mbuf patches that replace OpenBSD's fixed-cell output-segment allocator with a single contiguous
+> `allocb`-backed write cursor (`compat/sys/n80211_cipher.h`). A self-contained **`n80211_crypto.c`** now
+> DEFINES every crypto primitive the ciphers call (AES/RC4/MD5/SHA1/SHA256/HMAC/CMAC/AES-key-wrap/Michael),
+> each verified against a published test vector (16/16, negative-controlled), and compiles as a real illumos
+> kernel `.o`. An **`ld -r` partial link now succeeds**: 0 crypto primitives and 0 of the 43 blocking
+> `ieee80211_*` remain undefined; the 82 that do are kernel primitives (load-time), the mbuf layer (DECL), and
+> the GLDv3/stack adapters (DECL -- the Finding-2 wall). Reproduce + self-verify with
+> `measure-gate.sh --self-test`. **Still NOT a kmod link and NOT a load** -- the GLDv3/stack adapter `.c`, the
+> mbuf-allocation `.c`, phase-3 locking, and the HARDWARE gate remain. The round-6 detail is in
+> `../../docs/wifi-native-driver-plan.md` (the 18/18 gate section).
+>
 > **ROUND-5 UPDATE (supersedes the "0 of 43" headline below).** The link gate has since moved
 > **0 -> 27 -> 43 of 43** blocking `ieee80211_*` symbols resolved as real ELF .o global symbols, and
 > the error surface **838 -> 436 -> 250**, with **12 of 18** `.c` files now compiling. All 43 are
@@ -337,9 +351,11 @@ until it is, this model is a proposal and not a design.
 | `ieee80211_ra_vht.c` -> `.o` | **REAL OBJECT**, 22 text symbols, 3 undefined (`..._11ac`, `memset`, `panic`) |
 | `ieee80211_rssadapt.c` | 1 error (`ratecheck`) — one shim from compiling |
 | `ieee80211_regdomain.c` | 2 errors, both in `ieee80211_regdomain.h:757/766` |
-| the other 13 `.c` | **DO NOT COMPILE**, 835 errors |
-| `compat/` (16 headers) | **PROBE STUBS**, tagged as such in-file. Created only to let the compiler reach function bodies so the error surface could be measured. **Not a port.** |
-| the 43 blocking symbols | **0 of 43 resolved** |
+| the other 13 `.c` | round-3: **DO NOT COMPILE**, 835 errors. **ROUND 6: all compile** (18/18, 0 errors). |
+| `compat/` (16 headers) | round-3 PROBE STUBS. **ROUND 6:** the crypto headers back a REAL shim (below); the mbuf/cipher adapters (`n80211_mbuf.h`, `n80211_cipher.h`) are REAL; the GLDv3/stack shims (`n80211_stack.h`) stay DECL (Finding 2 wall). |
+| `n80211_crypto.c` | **ROUND 6 -- REAL kernel `.o`.** AES/RC4/MD5/SHA1/SHA256/HMAC/CMAC/AES-key-wrap/Michael, all primitives defined `T`; 16 published test vectors pass (`-DN80211_CRYPTO_TEST`), negative-controlled (sabotage AES sbox[0] -> 8 vectors FAIL). |
+| `n80211_cipher.h` | **ROUND 6 -- REAL.** Single-buffer write cursor + input `b_cont` read walker; no mbuf field aliased; used by the 4 cipher patches + BIP tail-append. |
+| the 43 blocking symbols | round-3: 0 of 43. **ROUND 6: 43 of 43 resolved; `ld -r` links with 0 crypto + 0 of the 43 undefined.** |
 
 The 3 objects and the 2 near-misses are 2,086 lines of the 24,665 (8.5%), and they are the 5 files
 with **no mbuf use at all** — which is the same finding as Finding 1, seen from the other side.
