@@ -1361,6 +1361,21 @@ touch "$RDROOT/etc/system"
 if ! grep -q 'zfs_arc_max' "$RDROOT/etc/system" 2>/dev/null; then
   printf '\n* solnix live-install: cap ZFS ARC so bootadm digest is not OOM-killed\nset zfs:zfs_arc_max = 0x20000000\n' >> "$RDROOT/etc/system"
 fi
+# 4b*. QUIET the hid "Invalid Report Descriptor" console FLOOD. The X1's internal
+# keyboard is a USB HID device whose report descriptor illumos hidparser cannot
+# parse (hid.c:681, USB_DPRINTF_L1 "Invalid Report Descriptor"); hid_attach fails,
+# the USB framework retries forever, and each retry prints to /dev/console (no
+# syslogd on live media to absorb an L1 message). It does not BLOCK a stock-ttymon
+# login: prompt (tui4 booted fine with it), but it is noisy and it drowned tui5's
+# raw-console auto-login. MEASURED against illumos-gate: the print uses hid's own
+# log handle gated by `hid_errlevel` (hid.c:66-67, default USB_LOG_L4=4); a message
+# at level N prints when hid_errlevel >= N. "Invalid Report Descriptor" is
+# USB_DPRINTF_L1 (level 1). Set hid:hid_errlevel = 0 (USB_LOG_L0) so only L0
+# warnings print and the L1 retry flood is suppressed. Belt-and-braces on top of
+# keeping stock ttymon (the actual fix for the tui5 no-prompt regression).
+if ! grep -q 'hid:hid_errlevel' "$RDROOT/etc/system" 2>/dev/null; then
+  printf '\n* solnix live: quiet the hid Invalid-Report-Descriptor console retry flood (X1 internal kbd, hid.c L1)\nset hid:hid_errlevel = 0\n' >> "$RDROOT/etc/system"
+fi
 
 # 4b''. TRUE ROOT CAUSE of the boot_archive FAIL: bootadm's create_ramdisk runs
 # `digest -a sha1` over the target CPIO. `digest` uses the PKCS#11 framework,
@@ -1945,19 +1960,25 @@ if [ -e "$RDROOT/etc/svc/repository.db" ]; then
     SVCCFG_REPOSITORY="$RDROOT/etc/svc/repository.db" \
       /usr/sbin/svccfg -s "$_svc" setprop general/enabled = boolean: false >/dev/null 2>&1 || true
   done
-  # tui5 AUTO-LOGIN: repoint console-login's start method at our
-  # solnix-console-login (runs a root shell directly on /dev/console -- illumos
-  # login(1) has no -f and ttymon -g always prompts, so this is the only route
-  # to a no-prompt auto-login). start/exec is a property group on the SERVICE
-  # (system/console-login), not the :default INSTANCE -- the instance inherits
-  # it -- so set it on the service or svccfg errors "No such property group".
-  # Set it OFFLINE in the same repository.db so the override is authoritative at
-  # first boot. LIVE MEDIA ONLY.
-  SVCCFG_REPOSITORY="$RDROOT/etc/svc/repository.db" \
-    /usr/sbin/svccfg -s system/console-login \
-      setprop start/exec = astring: '/lib/svc/method/solnix-console-login' >/dev/null 2>&1 \
-    && echo "console-login start method repointed to solnix-console-login (auto-login)" >&2 \
-    || echo "WARN: svccfg console-login override failed" >&2
+  # tui5 AUTO-LOGIN -- DISABLED BY DEFAULT (regressed the X1 console). Repointing
+  # console-login at a shell run DIRECTLY on /dev/console loses ttymon's managed
+  # tty, so the kernel's continuous hid "Invalid Report Descriptor" spam (the X1's
+  # internal keyboard fails hidparser, retries forever, writes to /dev/console)
+  # DROWNS the raw-console shell -> no usable prompt. Stock ttymon console-login
+  # (what tui4 and every prior image used) presents a login: prompt that COEXISTS
+  # with the spam -- noisy but usable. So default to stock; only override when
+  # SOLNIX_AUTOLOGIN=1 is explicitly set (e.g. a serial/QEMU console with no hid
+  # spam). MEASURED: tui5's unconditional override is why the X1 never reached a
+  # prompt though tui4 did.
+  if [ "${SOLNIX_AUTOLOGIN:-0}" = 1 ]; then
+    SVCCFG_REPOSITORY="$RDROOT/etc/svc/repository.db" \
+      /usr/sbin/svccfg -s system/console-login \
+        setprop start/exec = astring: '/lib/svc/method/solnix-console-login' >/dev/null 2>&1 \
+      && echo "console-login repointed to solnix-console-login (SOLNIX_AUTOLOGIN=1)" >&2 \
+      || echo "WARN: svccfg console-login override failed" >&2
+  else
+    echo "console-login: stock ttymon (auto-login off by default -- survives hid console spam; SOLNIX_AUTOLOGIN=1 to force)" >&2
+  fi
   chmod 0600 "$RDROOT/etc/svc/repository.db"
 fi
 
