@@ -222,6 +222,19 @@ done
 # happened to have a poisoned init.state at copy time.
 rm -rf "$RDROOT"/etc/svc/volatile/* "$RDROOT"/etc/svc/volatile/.[!.]* 2>/dev/null || true
 
+# EC2 BUILD-HOST NETWORK STATE. COPY_DIRS grabs the build host's /etc wholesale,
+# which drags in the EC2 instance's /etc/resolv.conf (e.g. nameserver 10.0.0.2,
+# the VPC resolver) and its DHCP lease/hostname artifacts. On a NON-EC2 network
+# (a laptop on home wifi/ethernet) that stale resolver POISONS DNS until it is
+# hand-fixed -- measured on the X1: the ONLY networking issue was this leftover
+# EC2 resolv.conf. The installer's bring_up_network rewrites resolv.conf from the
+# DHCP lease, but only when it runs and only if the lease returns DNS; shipping
+# the EC2 file is wrong regardless. Remove it so the media starts with NO stale
+# resolver -- DHCP (installer or by-hand) then writes the correct one. Empty file
+# (not absent) so nsswitch's 'dns' source has something to open without erroring.
+: > "$RDROOT"/etc/resolv.conf 2>/dev/null || true
+rm -f "$RDROOT"/etc/dhcp/*.dhc "$RDROOT"/etc/dhcp/duid "$RDROOT"/etc/dhcp/*.leases 2>/dev/null || true
+
 # bootadm's filelist manifests (boot/solaris/filelist.{ramdisk,safe}) name the
 # paths packed into the INSTALLED boot_archive. COPY_DIRS grabs boot/solaris/bin
 # (create_ramdisk et al.) but NOT the parent boot/solaris/, so these files were
@@ -3033,6 +3046,46 @@ if [ -x /usr/bin/elfdump ]; then
     find "$RDROOT/usr/lib" "$RDROOT/lib" -name "$1" 2>/dev/null | grep -q . && return 0
     return 1
   }
+  # AUTHORITATIVE STAGING PASS (runs before the gate): the ldd-closure loop above
+  # is order/glob-fragile -- it walks $RDROOT globs mid-staging and a copy can be
+  # missed (curl/wget/rsync/vim/xz/git-http NEEDed libcurl/libidn2/liblzma/
+  # libsodium/libreadline/libzstd/libpsl/libunistring/libexpat and shipped without
+  # them). Rather than hand-maintain another tool list, resolve every staged ELF's
+  # DT_NEEDED here and, for any soname missing from the ramdisk, copy it from the
+  # host's real lib dirs (64-bit first: the staged tools are amd64). This closes
+  # the WHOLE class deterministically; the gate below then verifies the result.
+  _rd_stage_lib() {  # $1 = soname; copy the host's 64-bit lib into the ramdisk
+    for _hd in /usr/lib/64 /usr/lib/amd64 /lib/64 /lib/amd64 /usr/lib /lib; do
+      if [ -f "$_hd/$1" ]; then
+        # /usr/lib/64 and /lib/64 are symlinks to amd64 in the live root; land the
+        # real file under amd64 so mkdir does not collide with the symlink.
+        case "$_hd" in
+          /usr/lib/64|/usr/lib/amd64) _dst="$RDROOT/usr/lib/amd64" ;;
+          /lib/64|/lib/amd64)         _dst="$RDROOT/lib/amd64" ;;
+          /usr/lib)                   _dst="$RDROOT/usr/lib" ;;
+          *)                          _dst="$RDROOT/lib" ;;
+        esac
+        mkdir -p "$_dst" 2>/dev/null || true
+        cp -p "$_hd/$1" "$_dst/$1" 2>/dev/null && return 0
+      fi
+    done
+    return 1
+  }
+  _staged_now=0
+  for _bin in "$RDROOT"/usr/bin/* "$RDROOT"/usr/sbin/* "$RDROOT"/sbin/* \
+              "$RDROOT"/usr/gnu/bin/* "$RDROOT"/usr/has/bin/* \
+              "$RDROOT"/usr/libexec/* "$RDROOT"/usr/libexec/git-core/* \
+              "$RDROOT"/usr/openssl/1.0/bin/* "$RDROOT"/usr/openssl/3/bin/*; do
+    [ -f "$_bin" ] || continue
+    LC_ALL=C od -An -N4 -tx1 "$_bin" 2>/dev/null | grep -q '7f 45 4c 46' || continue
+    for _need in $(/usr/bin/elfdump -d "$_bin" 2>/dev/null \
+                   | awk '$2=="NEEDED"{print $NF}'); do
+      _sn=$(basename "$_need")
+      _rd_have_lib "$_sn" && continue
+      _rd_stage_lib "$_sn" && _staged_now=$(( _staged_now + 1 ))
+    done
+  done
+  echo "  runnability pre-stage: copied $_staged_now missing NEEDED library(ies) from the host" >&2
   _gate_missing=0
   for _bin in "$RDROOT"/usr/bin/* "$RDROOT"/usr/sbin/* "$RDROOT"/sbin/* \
               "$RDROOT"/usr/gnu/bin/* "$RDROOT"/usr/has/bin/* \
