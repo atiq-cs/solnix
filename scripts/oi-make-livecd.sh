@@ -3008,6 +3008,53 @@ if [ -n "$RD_IFREE" ]; then
     die "ramdisk inodes nearly exhausted: $RD_IFREE free < $RD_MIN_FREE_INODES (lower RD_NBPI)"
 fi
 sync
+
+# ==========================================================================
+# GATE: every staged ELF's NEEDED libraries must be PRESENT in the ramdisk.
+#
+# WHY: dig/nslookup/host shipped in a prior image but died at exec with
+# `ld.so.1: dig: fatal: libidn2.so.0: open failed` -- the ldd-closure copy
+# filtered `grep '^/usr/lib'` and dropped BIND's /lib deps. Nobody noticed
+# because the tool was STAGED and ASSUMED to run; it was never executed. This
+# gate closes exactly that hole: it reads each staged binary's DT_NEEDED and
+# fails the build if any named .so is not present somewhere in the ramdisk's
+# own lib tree. A staged-but-unrunnable tool now fails the build, not the user.
+#
+# Static (NEEDED-vs-present), so it works on the build node without booting.
+# Uses elfdump -d (illumos-native); guards its absence rather than assuming.
+if [ -x /usr/bin/elfdump ]; then
+  # Every place a NEEDED .so could legitimately live inside the ramdisk.
+  _rd_libdirs="$RDROOT/lib $RDROOT/lib/amd64 $RDROOT/usr/lib $RDROOT/usr/lib/amd64
+    $RDROOT/usr/gnu/lib $RDROOT/usr/gnu/lib/amd64
+    $RDROOT/lib/64 $RDROOT/usr/lib/64"
+  _rd_have_lib() {  # $1 = soname; is it present anywhere under the ramdisk lib dirs?
+    for _d in $_rd_libdirs; do [ -e "$_d/$1" ] && return 0; done
+    # also honour full-path NEEDED and the mps/openssl subtrees via a bounded find
+    find "$RDROOT/usr/lib" "$RDROOT/lib" -name "$1" 2>/dev/null | grep -q . && return 0
+    return 1
+  }
+  _gate_missing=0
+  for _bin in "$RDROOT"/usr/bin/* "$RDROOT"/usr/sbin/* "$RDROOT"/sbin/* \
+              "$RDROOT"/usr/gnu/bin/* "$RDROOT"/usr/has/bin/* \
+              "$RDROOT"/usr/libexec/* "$RDROOT"/usr/libexec/git-core/* \
+              "$RDROOT"/usr/openssl/1.0/bin/* "$RDROOT"/usr/openssl/3/bin/*; do
+    [ -f "$_bin" ] || continue
+    LC_ALL=C od -An -N4 -tx1 "$_bin" 2>/dev/null | grep -q '7f 45 4c 46' || continue
+    # DT_NEEDED sonames from the dynamic section.
+    for _need in $(/usr/bin/elfdump -d "$_bin" 2>/dev/null \
+                   | awk '$2=="NEEDED"{print $NF}'); do
+      _rd_have_lib "$(basename "$_need")" && continue
+      echo "  RUNNABILITY GATE: ${_bin#$RDROOT} NEEDs $_need -- NOT staged in the ramdisk" >&2
+      _gate_missing=$(( _gate_missing + 1 ))
+    done
+  done
+  [ "$_gate_missing" -eq 0 ] || \
+    die "runnability gate: $_gate_missing missing NEEDED library(ies) -- a staged tool would die at exec (the dig/libidn2 class). Stage the lib(s) or drop the tool."
+  echo "  runnability gate OK: every staged ELF's NEEDED libraries are present in the ramdisk" >&2
+else
+  echo "  WARN: /usr/bin/elfdump absent -- SKIPPING the runnability gate (a staged tool could die at exec unnoticed)" >&2
+fi
+
 umount "$RDROOT" || die "umount ramdisk failed"
 lofiadm -d "$LOFI" || true
 log "gzipping ramdisk (loader auto-inflates)"
