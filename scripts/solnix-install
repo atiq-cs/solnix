@@ -1134,17 +1134,43 @@ if [ "$POOL" = "rpool" ] && [ -z "${SOLNIX_ALLOW_RPOOL:-}" ]; then
     case "$_dr" in
       y|Y|yes|YES)
         log "rpool: operator confirmed destroy+recreate -- tearing down the existing rpool."
-        run_to 30 zfs unmount -a 2>/dev/null || true
-        run_to 60 zpool destroy -f rpool 2>/dev/null \
-          || { run_to 60 zpool import -f rpool 2>/dev/null && run_to 60 zpool destroy -f rpool 2>/dev/null; } \
-          || true
+        # ⚠️ A SUSPENDED or FAULTED / cannot-open pool must NOT be `zpool destroy`d:
+        # destroy blocks in an uninterruptible kernel I/O wait (D-state) that the
+        # run_to timeout CANNOT kill, wedging the installer forever at this line
+        # (measured on the X1: a prior-run rpool went SUSPENDED -> destroy hung).
+        # labelclear talks to the DISK, not the pool, so it never blocks on pool
+        # I/O. So: if the pool is unhealthy, SKIP destroy and clear labels directly.
+        _rpool_health=$(zpool list -H -o health rpool 2>/dev/null || echo UNKNOWN)
+        _rpool_suspended=0
+        case "$_rpool_health" in
+          ONLINE|DEGRADED) ;;   # healthy enough to destroy normally
+          *) _rpool_suspended=1 ;;   # SUSPENDED/FAULTED/UNAVAIL/UNKNOWN/cannot-open
+        esac
+        # also treat an explicit suspension message in status as unhealthy
+        zpool status rpool 2>/dev/null | grep -qiE 'suspended|UNAVAIL|FAULTED|cannot open' && _rpool_suspended=1
+        if [ "$_rpool_suspended" = 1 ]; then
+          log "rpool: pool is SUSPENDED/faulted (health=$_rpool_health) -- SKIPPING zpool destroy (it would hang on dead I/O); clearing disk labels directly."
+          # best-effort non-blocking export so ZFS drops its handle; -f, timed.
+          run_to 15 zpool export -f rpool 2>/dev/null || true
+        else
+          run_to 30 zfs unmount -a 2>/dev/null || true
+          run_to 60 zpool destroy -f rpool 2>/dev/null \
+            || { run_to 60 zpool import -f rpool 2>/dev/null && run_to 60 zpool destroy -f rpool 2>/dev/null; } \
+            || true
+        fi
         # clear any surviving labels on the target so the fresh whole-disk create
-        # is not refused (belt-and-braces; pool create also relabels).
+        # is not refused (belt-and-braces; pool create also relabels). This is the
+        # PRIMARY teardown for a suspended pool -- it does not touch pool I/O.
         for _tn in "${TARGET}s0" "${TARGET}s1" "${TARGET}p0" "${TARGET}"; do
           [ -e "/dev/dsk/$_tn" ] && run_to 30 zpool labelclear -f "/dev/dsk/$_tn" 2>/dev/null || true
         done
-        # verify it is gone before proceeding.
+        # verify it is gone before proceeding. A SUSPENDED pool may still show in
+        # `zpool list` even after labelclear (the in-kernel handle lingers); if so,
+        # a reboot is the only clean escape -- say so explicitly rather than hang.
         if zpool list -H -o name rpool >/dev/null 2>&1; then
+          if [ "$_rpool_suspended" = 1 ]; then
+            die "rpool: the existing pool is SUSPENDED and its in-kernel handle will not release. Its on-disk labels are cleared, but the live kernel still holds it. REBOOT the live media (the suspension lives only in kernel memory), then re-run -- the disk will come up clean with no imported pool."
+          fi
           die "rpool: could not destroy the existing rpool (still imported) -- resolve it by hand, then re-run."
         fi
         log "rpool: existing pool destroyed; proceeding with a fresh rpool on $TARGET."
