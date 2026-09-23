@@ -103,14 +103,25 @@ static_checks() {
     _fail "/etc/resolv.conf ships a nameserver (stale EC2 resolver -- poisons DNS off-EC2): $(grep -m1 nameserver "$R/etc/resolv.conf")"
   else _ok "/etc/resolv.conf is empty (no stale EC2 resolver)"; fi
 
-  # LESSON (2/9 SSL CA cert failure): nix's HTTPS flake fetch needs a real CA
-  # bundle at the ssl-cert-file path, or the eval dies with an SSL CA error.
-  local caf; caf=$(grep -h '^ssl-cert-file' "$R"/nix-tools224/etc/nix/nix.conf "$R"/etc/nix/nix.conf 2>/dev/null | head -1 | sed 's/.*= *//')
-  if [ -n "$caf" ] && [ -f "$R$caf" ]; then
-    local n; n=$(grep -c 'BEGIN CERTIFICATE' "$R$caf" 2>/dev/null || echo 0)
-    if [ "${n:-0}" -ge 20 ]; then _ok "CA bundle present at $caf ($n certs) (2/9 SSL-CA guard)"
-    else _fail "CA bundle at $caf has only ${n:-0} certs (too few -- flake fetch would fail SSL CA)"; fi
-  else _fail "ssl-cert-file '$caf' not found in the image (nix HTTPS fetch dies at 2/9)"; fi
+  # LESSON (2/9 SSL CA cert failure, reproduced under local KVM on tui7): nix's
+  # HTTPS flake fetch needs a real CA bundle at EVERY ssl-cert-file any nix.conf
+  # names. tui7 shipped TWO nix.conf files and BOTH named a file absent from the
+  # image (/nix-tools224/ca-bundle.crt, and a /nix/store/...-nix-2.24.15 path) ->
+  # curl 77 "Problem with the SSL CA cert". Checking only the first conf would
+  # miss a dangling second one, so check them all.
+  local conf caf n any=0
+  for conf in "$R"/nix-tools224/etc/nix/nix.conf "$R"/etc/nix/nix.conf; do
+    [ -f "$conf" ] || continue
+    caf=$(grep -h '^[[:space:]]*ssl-cert-file' "$conf" 2>/dev/null | tail -1 | sed 's/.*= *//')
+    [ -n "$caf" ] || continue
+    any=1
+    if [ -f "$R$caf" ]; then
+      n=$(grep -c 'BEGIN CERTIFICATE' "$R$caf" 2>/dev/null || echo 0)
+      if [ "${n:-0}" -ge 20 ]; then _ok "${conf#$R}: ssl-cert-file $caf present ($n certs) (2/9 SSL-CA guard)"
+      else _fail "${conf#$R}: ssl-cert-file $caf has only ${n:-0} certs (flake fetch would fail SSL CA)"; fi
+    else _fail "${conf#$R}: ssl-cert-file $caf is ABSENT from the image (nix HTTPS fetch dies at 2/9 with curl 77)"; fi
+  done
+  [ "$any" = 1 ] || _fail "no nix.conf in the image sets ssl-cert-file (nix HTTPS fetch has no CA)"
 
   # LESSON (this session): solnix-zap disk-nuke tool must be staged + runnable.
   if [ -x "$R/usr/sbin/solnix-zap" ] && head -1 "$R/usr/sbin/solnix-zap" | grep -q '/sbin/sh'; then
@@ -219,9 +230,12 @@ boot_checks() {
 selftest() {
   echo "=== SELF-TEST: proving the checks fail on the defects they guard ==="
   local T="$WORK/fake"; mkdir -p "$T/etc" "$T/usr/sbin" "$T/nix-tools224/etc/nix"
-  # a deliberately-DEFECTIVE fake root: EC2 resolv.conf, no hid_errlevel, no zap.
+  # a deliberately-DEFECTIVE fake root: EC2 resolv.conf, no hid_errlevel, no zap,
+  # and the tui7 defect -- a nix.conf naming a CA bundle that is not in the image.
   echo 'nameserver 10.0.0.2' > "$T/etc/resolv.conf"
   : > "$T/etc/system"
+  mkdir -p "$T/etc/nix"
+  echo 'ssl-cert-file = /nix/store/jxn55a9725j8ba9hkqila89s66abszhr-nix-2.24.15/etc/ssl/certs/ca-bundle.crt' > "$T/etc/nix/nix.conf"
   local before=$FAIL
   static_checks "$T" >/dev/null 2>&1 || true
   if [ "$FAIL" -gt "$before" ]; then

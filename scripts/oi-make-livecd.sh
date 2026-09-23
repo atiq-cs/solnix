@@ -1898,7 +1898,7 @@ if [ ! -f "$RDROOT/etc/nix/nix.conf" ]; then
 substituters = https://s3.solnix.io/solnix-cache https://cache.solnix.io
 trusted-public-keys = cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk=
 experimental-features = nix-command flakes fetch-closure
-ssl-cert-file = /nix/store/jxn55a9725j8ba9hkqila89s66abszhr-nix-2.24.15/etc/ssl/certs/ca-bundle.crt
+ssl-cert-file = /nix-tools224/ca-bundle.crt
 sandbox = false
 build-users-group =
 max-jobs = auto
