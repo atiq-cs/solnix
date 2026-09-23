@@ -1,0 +1,100 @@
+tui8 build progress -- solnix TUI installer image from HEAD 7be4aa05
+======================================================================
+REPO: /home/gburd/ws/solnix   HEAD: 7be4aa05e3f55874a649dc16a1779e38f2dcbc3b
+solnix-install HEAD blob sha256: 518f78dd6a2a729893c2d4445a4e40ac66d23b8065f9a040eacfa09f5f74396b
+AWS: profile hotdog, us-east-2, AMI ami-0fb304a6611ca577c, SG sg-0ee29b5cff1de2cd0
+     keypair ~/.ssh/solnix-lava.pem.AMI-BAKED-still-works
+     tag: solnix-tui8   node target: c7i.2xlarge (8 vCPU)
+DELIVERABLE DIR (planned): /home/gburd/ws/solnix/artifacts/install-media/usb-image-<date>-tui8/
+
+INSTANCE ID: i-0b00a83e36ab2f33f  (c7i.2xlarge, us-east-2, tag solnix-tui8, launched)
+  vCPU accounting at launch: foreign 480/512, +8 -> 488/512 SAFE
+  DeleteOnTermination=true on /dev/xvda (60GB gp3). SG sg-0ee29b5cff1de2cd0.
+  ⚠️ TERMINATE THIS + confirm volume deleted before writeup.
+  SSH: ssh -i ~/.ssh/solnix-lava.pem.AMI-BAKED-still-works -o ControlMaster=no -o IdentitiesOnly=yes root@<ip>
+
+STEP LOG
+--------
+[step 0] Read all briefs+docs+scripts. Verified at HEAD:
+  - assert_mounted_on_pool present (solnix-install:220, wired 1536 + 1828)
+  - resolv.conf preserve-if-nonempty (solnix-install:413)
+  - non-optional CA bundle in oi-make-livecd.sh:676-688 (fail-loud, >=20 certs)
+  - nsswitch hosts->files (oi-make-livecd.sh:929-935)
+  - hid_errlevel + stock ttymon (default, SOLNIX_AUTOLOGIN unset)
+  - solnix-zap staged (oi-make-livecd.sh:1208-1215)
+  - AX2xx advisory in solnix-install:785
+  - transitive/ABI runnability gate in image-acceptance-test.sh
+  DECISION: build RD_MB=680.
+
+  ⚠️ NOTED RISK (verify on-node): TWO nix.conf in image with DIFFERENT ssl-cert-file:
+    - /nix-tools224/etc/nix/nix.conf -> /nix-tools224/ca-bundle.crt (STAGED, good)
+    - /etc/nix/nix.conf -> /nix/store/jxn55a...-nix-2.24.15/.../ca-bundle.crt (NOT staged in ramdisk!)
+    The /usr/bin/nix wrapper forces NIX_CONF_DIR=/nix-tools224/etc/nix so it uses the good one.
+    Acceptance suite reads /nix-tools224 first via head -1. MUST verify a github HTTPS
+    fetch actually works with the shipped nix.conf/wrapper before shipping.
+
+NEXT: check-describe-instances capacity, then launch c7i.2xlarge if total+8 < 512.
+
+[step 1] LAUNCHED i-0b00a83e36ab2f33f (c7i.2xlarge) @ 13.58.208.125. SSH OK, root illumos.
+  Node is BARE 2022 userland: NO nix, NO git, NO bind(dig), NO gnu-diffutils.
+  Needs bootstrap: nix-2.24.15 tarball -> /nix-tools224, + pkg install git/bind/gnu-diffutils.
+
+[step 2] ✅✅ CA BUNDLE QUESTION ANSWERED ON SUBSTRATE (the tui7 blocker):
+  System bundle /etc/certs/ca-certificates.crt = 146 certs (2022-era, openssl 1.0.2u).
+  openssl s_client Verify return code: 0 (ok) for ALL nix-fetch domains:
+    github.com, api.github.com, codeload.github.com, objects.githubusercontent.com,
+    cache.solnix.io, s3.solnix.io -- Sectigo/LetsEncrypt/Google Trust roots all present.
+  => oi-make-livecd.sh will pick this bundle (>=20 certs) and stage it as
+     /nix-tools224/ca-bundle.crt. It VERIFIES github. tui7's blocker (missing/stale
+     bundle) does NOT recur with this bundle. STILL must prove nix-the-fetcher works
+     with it as ssl-cert-file end-to-end.
+
+NEXT: bootstrap node (nix tarball + pkg git/bind/gnu-diffutils), clone repo, prove
+  `nix flake metadata github:gburd/nix-config` succeeds with the staged bundle, then
+  run oi-make-livecd.sh (RD_MB=680) -> make-iso-usb.sh -> acceptance suite.
+
+[step 3] BOOTSTRAP nix done. nix-2.24.15 tarball -> /nix-tools224, runtime-lib copied
+  (bootstrap-register.sh's `cp -Pf` is broken on illumos -- used tar instead; NODE-PREP
+  issue, not a repo bug). `nix (Nix) 2.24.15` runs. Staged /nix-tools224/ca-bundle.crt
+  = 120 certs (from the tarball).
+
+[step 4] 🎯 CENTRAL PROOF -- github HTTPS fetch WORKS with the staged bundle (THE tui7 blocker):
+  nix.conf = exact oi-make-livecd template (ssl-cert-file=/nix-tools224/ca-bundle.crt).
+  POSITIVE: `nix flake metadata github:gburd/nix-config` -> RC=0. Unpacked the repo into
+    the git cache, resolved rev 6c491bc1, fetched ALL transitive flake inputs over HTTPS
+    (chaotic/colmena/home-manager/disko/nixpkgs/...). Each is its own github HTTPS fetch.
+  NEGATIVE CONTROL: same fetch (fresh url) with a BOGUS ca-bundle ->
+    "error: unable to download 'https://api.github.com/...': Problem with the SSL CA cert
+     (path? access rights?) (77)" == the EXACT tui7 2/9 error. The check can fail; pass is real.
+  CONCLUSION: the 120-cert bundle covers github's current Sectigo/LetsEncrypt/GoogleTrust
+    chains. tui7's SSL-CA blocker does NOT recur with tui8's staged bundle.
+
+NEXT: get repo onto node, run oi-make-livecd.sh RD_MB=680, make-iso-usb.sh, acceptance suite.
+
+[step 5] Scripts scp'd to node /var/tmp/: solnix-install, solnix-zap, oi-make-livecd.sh,
+  image-acceptance-test.sh, solnix-diag. GitHub-HTTPS proof SAVED LOCALLY (reboot-proof):
+  /tmp/tui8-artifacts/boot-logs/verify-github-https-fetch-works.txt (positive RC=0 + neg-ctl 77).
+
+⚠️ NODE PREP IN PROGRESS -- pkg update running (creates a NEW BE), then REBOOT required.
+  The bare 2022 userland-incorporation@0.5.11 rejects git/bind/gnu-diffutils; pkg update
+  lifts it. AFTER reboot: re-confirm on 2026 userland, install git/bind/gnu-diffutils,
+  THEN oi-make-livecd.sh (which stages git/dig from the running root).
+  ISO ASSEMBLY (make-iso-usb.sh) needs Linux tools (xorriso/mtools) -- NOT on the illumos
+  node. Plan: oi-make-livecd.sh on node -> tar.gz -> copy to dev box -> make-iso-usb.sh on
+  dev box -> copy image dir back to node -> run acceptance suite ON NODE (lofiadm/mount -F ufs).
+
+[step 6] pkg update DONE (RC=0), new BE openindiana-2026:09:23 = R (activate-on-reboot).
+  REBOOTING NOW to activate the 2026 userland. If SSH does not return in ~5 min, the box
+  may be wedged -- terminate i-0b00a83e36ab2f33f. Nix bootstrap (/nix-tools224) survives
+  reboot (it's in the shared rpool, not the BE... actually /nix-tools224 is on the ROOT
+  BE -- may need re-extract after BE switch; will re-verify post-reboot).
+
+[step 7] POST-REBOOT on 2026 BE openindiana-2026:09:23. userland-incorporation now
+  0.5.11-2026.0.0.34776. Installed + VERIFIED RUNNING (2026 versions):
+    git 2.55.0, dig 9.20.27, curl 8.22.0 (libcurl OpenSSL/3.5.8), gnu diff 3.12,
+    openssl CLI 1.0.2u (fine; libcurl uses OpenSSL3). git ldd clean.
+  System CA bundle refreshed to 120 certs (== tarball bundle). curl->github http=200,
+  git ls-remote->github returns rev 6c491bc1. /nix-tools224 survived reboot.
+
+NEXT: run oi-make-livecd.sh RD_MB=680 on node -> solnix-iso-tree.tar.gz.
+  Then: tar.gz -> dev box -> make-iso-usb.sh -> image dir -> node -> acceptance suite ON NODE.
