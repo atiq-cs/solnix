@@ -378,3 +378,22 @@ grep -q '^loader_brand="solnix"' "$ISOROOT/boot/loader.conf" || \
 echo "branding gate OK: menu.4th + loader.conf both say solnix"
 
 log "DONE: $ISO + $USB"
+
+# ACCEPTANCE GATE: run the image acceptance suite against the just-built media so
+# no image ships without passing every lesson-derived check (console-login, hid,
+# resolv.conf, CA bundle, solnix-zap, shipped-installer-sha, the transitive-lib
+# runnability closure, size ceiling). Non-fatal-by-default so a build on a host
+# lacking lofiadm still completes (checks SKIP), but on the illumos build node it
+# runs for real; set IMG_ACCEPT_STRICT=1 to make any FAIL abort the build.
+_accept="$(dirname "$0")/image-acceptance-test.sh"
+if [ -x "$_accept" ]; then
+  log "running image acceptance suite on $OUTDIR"
+  if "$_accept" "$OUTDIR"; then
+    log "image acceptance suite: PASS"
+  else
+    echo "WARN: image acceptance suite reported FAILURES on $OUTDIR (see output above)" >&2
+    [ "${IMG_ACCEPT_STRICT:-0}" = 1 ] && { echo "FATAL: IMG_ACCEPT_STRICT=1 and the acceptance suite failed" >&2; exit 1; }
+  fi
+else
+  echo "WARN: $_accept not found -- image shipped WITHOUT the acceptance suite" >&2
+fi
