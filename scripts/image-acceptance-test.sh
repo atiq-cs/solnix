@@ -46,32 +46,40 @@ cleanup() {
 trap cleanup EXIT
 
 find_boot_archive() {
-  # Return a path to a mounted boot_archive root in $RDMNT, or "" if we can't.
+  # Mount the image's boot_archive root at $RDMNT. Sets FOUND_RD on success.
+  # Runs in the PARENT shell (not $(...)) so LOFI_*/ISOMNT reach the cleanup trap.
+  # Returns 2 when this host cannot mount illumos filesystems (no lofiadm).
+  FOUND_RD="" BA_PATH=""
   local ba=""
-  if [ -f "$DIR" ] && file "$DIR" 2>/dev/null | grep -qi 'ufs'; then
-    ba="$DIR"                              # a raw boot_archive path
+  if [ -f "$DIR" ]; then
+    ba="$DIR"                              # a raw or gzipped boot_archive path
   elif [ -d "$DIR" ]; then
     local iso; iso=$(ls "$DIR"/*.iso 2>/dev/null | head -1)
     [ -n "$iso" ] || { echo "no .iso in $DIR" >&2; return 1; }
     command -v lofiadm >/dev/null || { echo "lofiadm absent (run the static phase on the illumos build node)" >&2; return 2; }
-    mkdir -p "$ISOMNT_D"; LOFI_ISO=$(lofiadm -a "$iso") || return 1
+    LOFI_ISO=$(lofiadm -a "$iso") || return 1
     ISOMNT="$WORK/iso"; mkdir -p "$ISOMNT"
-    mount -F hsfs -o ro "$LOFI_ISO" "$ISOMNT" 2>/dev/null || return 1
+    mount -F hsfs -o ro "$LOFI_ISO" "$ISOMNT" 2>/dev/null || { ISOMNT=""; return 1; }
     ba=$(ls "$ISOMNT"/platform/i86pc/amd64/boot_archive 2>/dev/null | head -1)
     [ -n "$ba" ] || { echo "no boot_archive in the iso" >&2; return 1; }
   fi
   [ -n "$ba" ] || return 1
   command -v lofiadm >/dev/null || return 2
-  LOFI_RD=$(lofiadm -a "$ba") || return 1
-  mkdir -p "$RDMNT"; mount -F ufs -o ro "$LOFI_RD" "$RDMNT" 2>/dev/null || {
-    # gzipped boot_archive: inflate first
+  # The media ships the boot_archive GZIPPED (the loader auto-inflates). lofiadm
+  # refuses a file whose size is not a multiple of 512, so inflate FIRST; a raw
+  # UFS archive is used as-is. (The first on-illumos run of this suite FAILED to
+  # mount every image because it tried lofiadm on the gzipped file first.)
+  if gzip -t "$ba" 2>/dev/null; then
     gzip -dc "$ba" > "$WORK/ba.ufs" 2>/dev/null || return 1
-    lofiadm -d "$LOFI_RD" 2>/dev/null; LOFI_RD=$(lofiadm -a "$WORK/ba.ufs") || return 1
-    mount -F ufs -o ro "$LOFI_RD" "$RDMNT" 2>/dev/null || return 1
-  }
-  echo "$RDMNT"
+    BA_PATH="$WORK/ba.ufs"
+  else
+    BA_PATH="$ba"
+  fi
+  LOFI_RD=$(lofiadm -a "$BA_PATH") || return 1
+  mkdir -p "$RDMNT"
+  mount -F ufs -o ro "$LOFI_RD" "$RDMNT" 2>/dev/null || return 1
+  FOUND_RD="$RDMNT"
 }
-ISOMNT_D="$WORK/iso"
 
 # =====================================================================
 # STATIC CHECKS -- each guards a specific lesson (incident cited).
@@ -143,6 +151,25 @@ static_checks() {
   # a disk unattended. It must be ABSENT on a normal installer image.
   if [ -e "$R/etc/solnix-autoinstall" ]; then _fail "/etc/solnix-autoinstall present (would auto-wipe a disk!)"
   else _ok "/etc/solnix-autoinstall absent (install is interactive)"; fi
+
+  # LESSON (login dns stall): a local console login needs no dns; the media keeps
+  # hosts/ipnodes = files. tui8's first build logged the rewrite but a LATER host
+  # /etc re-copy put 'files dns mdns' back -- a build-log line is not the artifact.
+  local ns; ns=$(grep -E '^[[:space:]]*hosts:' "$R/etc/nsswitch.conf" 2>/dev/null | head -1)
+  case "$ns" in
+    *dns*) _fail "nsswitch '$ns' -- dns in the live-media hosts lookup (console-login dns stall)" ;;
+    *files*) _ok "nsswitch hosts is files-only on the live media ($ns)" ;;
+    *) _fail "nsswitch.conf has no hosts: line" ;;
+  esac
+
+  # LESSON (tui8 KVM: auto-network DOWN): the build host's /etc/ipadm/ipadm.conf
+  # shipped its own persistent addrobj (vioif0/dhcp). On a same-named live NIC it
+  # stole the lease, the auto-network's vioif0/v4 stayed down, resolv.conf was never
+  # written, and every fetch failed "Could not resolve hostname". No persistent
+  # interfaces may ship on the live media.
+  if grep -qE '^_ifname=' "$R/etc/ipadm/ipadm.conf" 2>/dev/null; then
+    _fail "ipadm.conf ships build-host interfaces: $(grep -oE '_aobjname=[^;]+' "$R/etc/ipadm/ipadm.conf" | sort -u | tr '\n' ' ')"
+  else _ok "ipadm.conf carries no build-host interfaces (auto-network plumbs the NIC)"; fi
 
   # LESSON (dig/curl broken -- the SECOND-ORDER dangling lib, the openssl trap):
   # EVERY staged ELF's DT_NEEDED must be present in the ramdisk, TRANSITIVELY
@@ -236,6 +263,8 @@ selftest() {
   : > "$T/etc/system"
   mkdir -p "$T/etc/nix"
   echo 'ssl-cert-file = /nix/store/jxn55a9725j8ba9hkqila89s66abszhr-nix-2.24.15/etc/ssl/certs/ca-bundle.crt' > "$T/etc/nix/nix.conf"
+  echo 'hosts:      files dns mdns' > "$T/etc/nsswitch.conf"
+  mkdir -p "$T/etc/ipadm"; echo '_ifname=vioif0;_aobjname=vioif0/dhcp;_dhcp=30,no;' > "$T/etc/ipadm/ipadm.conf"
   local before=$FAIL
   static_checks "$T" >/dev/null 2>&1 || true
   if [ "$FAIL" -gt "$before" ]; then
@@ -252,7 +281,8 @@ selftest() {
 main() {
   if [ "$MODE" = selftest ]; then selftest; exit $?; fi
   echo "=== solnix image acceptance test: $DIR ==="
-  local R; R=$(find_boot_archive); local rc=$?
+  local rc=0; find_boot_archive || rc=$?
+  local R="$FOUND_RD"
   if [ "$rc" = 2 ]; then
     echo "STATIC checks need the illumos build node (lofiadm/mount -F ufs). Skipping mount-based checks." >&2
     _skip "boot_archive mount (not on an illumos host)"
@@ -261,8 +291,8 @@ main() {
   else
     echo "-- static checks (mounted boot_archive: $R) --"
     static_checks "$R"
-    local ba; ba=$(ls "$ISOMNT"/platform/i86pc/amd64/boot_archive 2>/dev/null | head -1)
-    [ -n "$ba" ] && size_check "$ba"
+    # size gate applies to the UNCOMPRESSED archive (what the EFI loader stages).
+    [ -n "$BA_PATH" ] && size_check "$BA_PATH"
   fi
   if [ "$MODE" = boot ]; then echo "-- boot phase (QEMU) --"; boot_checks; fi
   echo ""

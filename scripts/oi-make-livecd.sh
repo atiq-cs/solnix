@@ -234,6 +234,18 @@ rm -rf "$RDROOT"/etc/svc/volatile/* "$RDROOT"/etc/svc/volatile/.[!.]* 2>/dev/nul
 # (not absent) so nsswitch's 'dns' source has something to open without erroring.
 : > "$RDROOT"/etc/resolv.conf 2>/dev/null || true
 rm -f "$RDROOT"/etc/dhcp/*.dhc "$RDROOT"/etc/dhcp/duid "$RDROOT"/etc/dhcp/*.leases 2>/dev/null || true
+# BUILD-HOST PERSISTENT NETWORK CONFIG. /etc/ipadm/ipadm.conf carries the build
+# host's own interfaces (ena0/dhcp on EC2; vioif0/dhcp on a local KVM build host).
+# ipmgmtd re-creates those at boot. When the live NIC has the SAME name, the stale
+# persistent addrobj (e.g. vioif0/dhcp) grabs the lease and the auto-network's
+# vioif0/v4 collides and stays DOWN, so resolv.conf is never written and every
+# fetch fails "Could not resolve hostname" (MEASURED on tui8 under KVM). The live
+# media must boot with NO persistent interfaces: solnix-autonet plumbs the NIC.
+# Keep the file (ipmgmtd expects it) but empty of interface/address lines.
+if [ -f "$RDROOT/etc/ipadm/ipadm.conf" ]; then
+  grep -vE '^_ifname=' "$RDROOT/etc/ipadm/ipadm.conf" > "$RDROOT/etc/ipadm/ipadm.conf.new" 2>/dev/null
+  mv "$RDROOT/etc/ipadm/ipadm.conf.new" "$RDROOT/etc/ipadm/ipadm.conf"
+fi
 
 # bootadm's filelist manifests (boot/solaris/filelist.{ramdisk,safe}) name the
 # paths packed into the INSTALLED boot_archive. COPY_DIRS grabs boot/solaris/bin
@@ -917,23 +929,6 @@ fi
 # pam.conf + nsswitch already come via COPY_DIRS etc; sanity-check they landed.
 [ -s "$RDROOT/etc/pam.conf" ] || echo "WARN: /etc/pam.conf missing in live root (console auth needs it)" >&2
 
-# LOGIN DELAY: the media inherits the build host's nsswitch.conf, whose `hosts:`
-# line typically ends in `dns`. On the LIVE INSTALLER a root console login does a
-# hostname/getpeername lookup through nsswitch; with `dns` in the list and no
-# working resolver (resolv.conf is intentionally empty on the media), the dns
-# source stalls per attempt before falling back to files -- a multi-second login
-# delay. A local installer console needs NO dns, so drop it to `files` on the
-# media only (the INSTALLED system keeps its own nsswitch from the target config).
-# HONEST: dns-in-login is the PROBABLE cause of the reported delay, not proven on
-# the X1 -- but a console login needing no dns makes this safe regardless.
-if [ -f "$RDROOT/etc/nsswitch.conf" ]; then
-  # illumos sed has no reliable -i; rewrite via a temp file.
-  sed -e 's/^hosts:.*/hosts:      files/' \
-      -e 's/^ipnodes:.*/ipnodes:    files/' \
-      "$RDROOT/etc/nsswitch.conf" > "$RDROOT/etc/nsswitch.conf.new" 2>/dev/null \
-    && mv "$RDROOT/etc/nsswitch.conf.new" "$RDROOT/etc/nsswitch.conf"
-  echo "  live media: nsswitch hosts/ipnodes -> files (no dns stall at console login)" >&2
-fi
 
 # NOTE: gburd + sshd host-key baking is done LATER (section 3c'), AFTER the
 # passwd/shadow/group copy below re-copies those files from the build host --
@@ -1052,6 +1047,27 @@ for f in name_to_major name_to_sysnum driver_aliases driver_classes minor_perm \
          hosts netconfig; do
   [ -e "/etc/$f" ] && cp "/etc/$f" "$RDROOT/etc/$f" 2>/dev/null || true
 done
+
+# (Placed AFTER the host /etc re-copy above: that loop re-copies nsswitch.conf from the
+# build host, and an earlier placement of this rewrite was silently undone by it --
+# measured on tui8 under KVM: the shipped nsswitch still read 'hosts: files dns mdns'.)
+# LOGIN DELAY: the media inherits the build host's nsswitch.conf, whose `hosts:`
+# line typically ends in `dns`. On the LIVE INSTALLER a root console login does a
+# hostname/getpeername lookup through nsswitch; with `dns` in the list and no
+# working resolver (resolv.conf is intentionally empty on the media), the dns
+# source stalls per attempt before falling back to files -- a multi-second login
+# delay. A local installer console needs NO dns, so drop it to `files` on the
+# media only (the INSTALLED system keeps its own nsswitch from the target config).
+# HONEST: dns-in-login is the PROBABLE cause of the reported delay, not proven on
+# the X1 -- but a console login needing no dns makes this safe regardless.
+if [ -f "$RDROOT/etc/nsswitch.conf" ]; then
+  # illumos sed has no reliable -i; rewrite via a temp file.
+  sed -e 's/^hosts:.*/hosts:      files/' \
+      -e 's/^ipnodes:.*/ipnodes:    files/' \
+      "$RDROOT/etc/nsswitch.conf" > "$RDROOT/etc/nsswitch.conf.new" 2>/dev/null \
+    && mv "$RDROOT/etc/nsswitch.conf.new" "$RDROOT/etc/nsswitch.conf"
+  echo "  live media: nsswitch hosts/ipnodes -> files (no dns stall at console login)" >&2
+fi
 
 # 3c'. OPTIONAL personal-overlay user + sshd host keys. IDENTITY-FREE by default:
 #      a PUBLIC image bakes NO personal user/key/password (matching NixOS's
