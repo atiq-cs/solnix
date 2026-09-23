@@ -272,10 +272,18 @@ CLOSURE_TOOLS="/sbin/zpool /sbin/zfs /usr/sbin/format /usr/sbin/fmthard
   /usr/sbin/svccfg /usr/sbin/svcadm /usr/bin/svcprop /usr/bin/svcs
   /lib/svc/bin/svc.configd /lib/svc/bin/svc.startd /lib/svc/bin/mfstscan
   /usr/bin/git /usr/bin/dig /usr/bin/nslookup /usr/bin/host /usr/sbin/route
+  /usr/bin/curl /usr/bin/wget
   /usr/libexec/git-core/git /usr/libexec/git-core/git-remote-https
   /usr/libexec/git-core/git-remote-http /usr/libexec/git-core/git-http-fetch"
 for t in $CLOSURE_TOOLS; do
-  [ -e "$SRC$t" ] && ldd "$SRC$t" 2>/dev/null | awk '{print $3}'
+  # ⚠️ Resolve ldd with a CLEAN library environment. The build may run with
+  # LD_LIBRARY_PATH=/nix-tools224/runtime-lib:... (nix needs it), and runtime-lib
+  # contains COPIES of system libs (libcurl/libidn2/libcares/...). With that on the
+  # path, `ldd curl` resolves them to /nix-tools224/runtime-lib/* -- which the
+  # `^(/usr)?/lib/` filter below DROPS, so curl's libs never get staged and curl
+  # dies at exec (measured: libcurl.so.4 open failed). Unset the LD_LIBRARY_PATH
+  # vars for the ldd so resolution reflects the REAL system dirs (/usr/lib/64 etc).
+  [ -e "$SRC$t" ] && ( unset LD_LIBRARY_PATH LD_LIBRARY_PATH_32 LD_LIBRARY_PATH_64; ldd "$SRC$t" 2>/dev/null ) | awk '{print $3}'
 done | grep -E '^(/usr)?/lib/' | sort -u | while read -r libpath; do
   rel="${libpath#/}"
   # ICU DATA IS 33MB AND 64-BIT-ONLY IS ENOUGH. dig/host/nslookup pull
@@ -849,7 +857,7 @@ if [ -x /usr/bin/ldd ]; then
               "$RDROOT"/usr/openssl/1.0/bin/* "$RDROOT"/usr/openssl/3/bin/*; do
     [ -f "$_bin" ] || continue
     LC_ALL=C od -An -N4 -tx1 "$_bin" 2>/dev/null | grep -q '7f 45 4c 46' || continue
-    /usr/bin/ldd "$_bin" 2>/dev/null | while read -r _n _a _p _rest; do
+    ( unset LD_LIBRARY_PATH LD_LIBRARY_PATH_32 LD_LIBRARY_PATH_64; /usr/bin/ldd "$_bin" 2>/dev/null ) | while read -r _n _a _p _rest; do
       case "$_p" in /*) ;; *) continue ;; esac
       # ldd resolves $ORIGIN-relative RUNPATHs against the STAGED binary, so it
       # reports paths INSIDE the build tree. MEASURED: .ldd-added held
@@ -3050,14 +3058,25 @@ sync
 # Static (NEEDED-vs-present), so it works on the build node without booting.
 # Uses elfdump -d (illumos-native); guards its absence rather than assuming.
 if [ -x /usr/bin/elfdump ]; then
-  # Every place a NEEDED .so could legitimately live inside the ramdisk.
+  # Every place a NEEDED .so could legitimately live inside the ramdisk. Include
+  # /usr/lib/dns/amd64: BIND's dig/nslookup/host carry a RUNPATH of
+  # /usr/lib/dns/amd64 and NEED libisc/libisccfg/libdns/libns there (their own
+  # private libs), not in the standard dirs.
   _rd_libdirs="$RDROOT/lib $RDROOT/lib/amd64 $RDROOT/usr/lib $RDROOT/usr/lib/amd64
-    $RDROOT/usr/gnu/lib $RDROOT/usr/gnu/lib/amd64
+    $RDROOT/usr/gnu/lib $RDROOT/usr/gnu/lib/amd64 $RDROOT/usr/lib/dns/amd64
     $RDROOT/lib/64 $RDROOT/usr/lib/64"
-  _rd_have_lib() {  # $1 = soname; is it present anywhere under the ramdisk lib dirs?
-    for _d in $_rd_libdirs; do [ -e "$_d/$1" ] && return 0; done
-    # also honour full-path NEEDED and the mps/openssl subtrees via a bounded find
-    find "$RDROOT/usr/lib" "$RDROOT/lib" -name "$1" 2>/dev/null | grep -q . && return 0
+  _rd_is_elf64() {  # $1 = file; true if it is a 64-bit ELF (a 32-bit lib cannot
+    # satisfy a 64-bit binary's NEEDED -- the loader skips wrong-class libs, so a
+    # bitness-blind presence check falsely passes then curl dies at exec).
+    [ -f "$1" ] || return 1
+    /usr/bin/elfdump -e "$1" 2>/dev/null | grep -q ELFCLASS64
+  }
+  _rd_have_lib() {  # $1 = soname; present as a 64-bit lib in a ramdisk lib dir?
+    for _d in $_rd_libdirs; do _rd_is_elf64 "$_d/$1" && return 0; done
+    # also honour full-path NEEDED / mps/openssl subtrees, but ONLY 64-bit hits.
+    for _f in $(find "$RDROOT/usr/lib" "$RDROOT/lib" -name "$1" 2>/dev/null); do
+      _rd_is_elf64 "$_f" && return 0
+    done
     return 1
   }
   # AUTHORITATIVE STAGING PASS (runs before the gate): the ldd-closure loop above
@@ -3069,12 +3088,23 @@ if [ -x /usr/bin/elfdump ]; then
   # host's real lib dirs (64-bit first: the staged tools are amd64). This closes
   # the WHOLE class deterministically; the gate below then verifies the result.
   _rd_stage_lib() {  # $1 = soname; copy the host's 64-bit lib into the ramdisk
-    for _hd in /usr/lib/64 /usr/lib/amd64 /lib/64 /lib/amd64 /usr/lib /lib; do
+    # Search the standard 64-bit lib dirs first, THEN the gcc runtime trees. C++
+    # libs like libicuuc.so.78 NEED libstdc++.so.6 / libgcc_s.so.1, which on this
+    # host live ONLY under /usr/gcc/*/lib/amd64 (crle default is just /lib/64:
+    # /usr/lib/64), resolved via each lib's own RUNPATH -- so a standard-dir-only
+    # search misses them and the transitive gate (correctly) fails. gcc-14 matches
+    # what the host's own libicuuc resolves; gcc-13 is the fallback (libgcc_s is
+    # ABI-stable across gcc versions).
+    for _hd in /usr/lib/64 /usr/lib/amd64 /lib/64 /lib/amd64 /usr/lib /lib \
+               /usr/lib/dns/amd64 \
+               /usr/gcc/14/lib/amd64 /usr/gcc/13/lib/amd64 /usr/gcc/10/lib/amd64; do
       if [ -f "$_hd/$1" ]; then
         # /usr/lib/64 and /lib/64 are symlinks to amd64 in the live root; land the
-        # real file under amd64 so mkdir does not collide with the symlink.
+        # real file under amd64 so mkdir does not collide with the symlink. BIND's
+        # private libs must land under usr/lib/dns/amd64 to match dig's RUNPATH.
         case "$_hd" in
-          /usr/lib/64|/usr/lib/amd64) _dst="$RDROOT/usr/lib/amd64" ;;
+          /usr/lib/dns/amd64)         _dst="$RDROOT/usr/lib/dns/amd64" ;;
+          /usr/lib/64|/usr/lib/amd64|/usr/gcc/*) _dst="$RDROOT/usr/lib/amd64" ;;
           /lib/64|/lib/amd64)         _dst="$RDROOT/lib/amd64" ;;
           /usr/lib)                   _dst="$RDROOT/usr/lib" ;;
           *)                          _dst="$RDROOT/lib" ;;
@@ -3085,39 +3115,64 @@ if [ -x /usr/bin/elfdump ]; then
     done
     return 1
   }
-  _staged_now=0
-  for _bin in "$RDROOT"/usr/bin/* "$RDROOT"/usr/sbin/* "$RDROOT"/sbin/* \
+  # RUNNABILITY CLOSURE over 64-bit ELFs, seeded ONLY from the staged BINARIES.
+  #
+  # A binary's direct DT_NEEDED is NOT enough -- a NEEDED library pulls in its OWN
+  # NEEDED (measured: libcurl.so.4 NEEDs libcares.so.2/libnghttp2.so.14/libldap/
+  # libssh2/libbrotlidec, none named by any binary), so a binary-only scan is
+  # second-order-blind and curl dies at exec on the missing transitive lib.
+  #
+  # We must NOT just scan every usr/lib/*.so* -- illumos ships 32-bit libs there
+  # and following their 32-bit NEEDED stages the whole system (measured runaway:
+  # 3565 copies). The staged TOOLS are all amd64, so we walk ONLY the 64-bit
+  # closure: seed with the binaries, resolve each NEEDED to its 64-bit copy in the
+  # ramdisk (staging it from the host if absent), then recurse into that copy.
+  # Worklist + seen-set = a real transitive closure, bounded by the soname count.
+  _rd_bins() {
+    for _p in "$RDROOT"/usr/bin/* "$RDROOT"/usr/sbin/* "$RDROOT"/sbin/* \
               "$RDROOT"/usr/gnu/bin/* "$RDROOT"/usr/has/bin/* \
               "$RDROOT"/usr/libexec/* "$RDROOT"/usr/libexec/git-core/* \
               "$RDROOT"/usr/openssl/1.0/bin/* "$RDROOT"/usr/openssl/3/bin/*; do
-    [ -f "$_bin" ] || continue
-    LC_ALL=C od -An -N4 -tx1 "$_bin" 2>/dev/null | grep -q '7f 45 4c 46' || continue
-    for _need in $(/usr/bin/elfdump -d "$_bin" 2>/dev/null \
-                   | awk '$2=="NEEDED"{print $NF}'); do
-      _sn=$(basename "$_need")
-      _rd_have_lib "$_sn" && continue
-      _rd_stage_lib "$_sn" && _staged_now=$(( _staged_now + 1 ))
+      [ -f "$_p" ] || continue
+      LC_ALL=C od -An -N4 -tx1 "$_p" 2>/dev/null | grep -q '7f 45 4c 46' || continue
+      /usr/bin/elfdump -e "$_p" 2>/dev/null | grep -q ELFCLASS64 || continue
+      echo "$_p"
     done
-  done
-  echo "  runnability pre-stage: copied $_staged_now missing NEEDED library(ies) from the host" >&2
-  _gate_missing=0
-  for _bin in "$RDROOT"/usr/bin/* "$RDROOT"/usr/sbin/* "$RDROOT"/sbin/* \
-              "$RDROOT"/usr/gnu/bin/* "$RDROOT"/usr/has/bin/* \
-              "$RDROOT"/usr/libexec/* "$RDROOT"/usr/libexec/git-core/* \
-              "$RDROOT"/usr/openssl/1.0/bin/* "$RDROOT"/usr/openssl/3/bin/*; do
-    [ -f "$_bin" ] || continue
-    LC_ALL=C od -An -N4 -tx1 "$_bin" 2>/dev/null | grep -q '7f 45 4c 46' || continue
-    # DT_NEEDED sonames from the dynamic section.
-    for _need in $(/usr/bin/elfdump -d "$_bin" 2>/dev/null \
-                   | awk '$2=="NEEDED"{print $NF}'); do
-      _rd_have_lib "$(basename "$_need")" && continue
-      echo "  RUNNABILITY GATE: ${_bin#$RDROOT} NEEDs $_need -- NOT staged in the ramdisk" >&2
-      _gate_missing=$(( _gate_missing + 1 ))
+  }
+  _rd_find64() {  # $1 = soname; print the ramdisk path of its 64-bit copy, or nothing
+    for _d in $_rd_libdirs; do _rd_is_elf64 "$_d/$1" && { echo "$_d/$1"; return 0; }; done
+    for _f in $(find "$RDROOT/usr/lib" "$RDROOT/lib" -name "$1" 2>/dev/null); do
+      _rd_is_elf64 "$_f" && { echo "$_f"; return 0; }
     done
+    return 1
+  }
+  _needed_of() { /usr/bin/elfdump -d "$1" 2>/dev/null | awk '$2=="NEEDED"{print $NF}'; }
+  # Build the worklist of sonames from the binaries' NEEDED, then close over it.
+  _seen=" "; _work=""; _staged_now=0; _gate_missing=0
+  for _b in $(_rd_bins); do
+    for _n in $(_needed_of "$_b"); do _work="$_work $(basename "$_n")"; done
   done
+  while [ -n "$(echo $_work)" ]; do
+    set -- $_work; _sn="$1"; shift; _work="$*"
+    case "$_seen" in *" $_sn "*) continue;; esac
+    _seen="$_seen$_sn "
+    # Ensure a 64-bit copy of $_sn is in the ramdisk (stage from host if absent).
+    _lib=$(_rd_find64 "$_sn" || true)
+    if [ -z "$_lib" ]; then
+      if _rd_stage_lib "$_sn"; then
+        _staged_now=$(( _staged_now + 1 )); _lib=$(_rd_find64 "$_sn" || true)
+      else
+        echo "  RUNNABILITY GATE: a staged binary NEEDs $_sn (64-bit) -- NOT in the ramdisk and not stageable from the host" >&2
+        _gate_missing=$(( _gate_missing + 1 )); continue
+      fi
+    fi
+    # Recurse: add THIS lib's own NEEDED to the worklist (the second-order edge).
+    [ -n "$_lib" ] && for _n in $(_needed_of "$_lib"); do _work="$_work $(basename "$_n")"; done
+  done
+  echo "  runnability pre-stage: staged $_staged_now missing 64-bit NEEDED library(ies) from the host (transitive closure)" >&2
   [ "$_gate_missing" -eq 0 ] || \
     die "runnability gate: $_gate_missing missing NEEDED library(ies) -- a staged tool would die at exec (the dig/libidn2 class). Stage the lib(s) or drop the tool."
-  echo "  runnability gate OK: every staged ELF's NEEDED libraries are present in the ramdisk" >&2
+  echo "  runnability gate OK: every staged binary's NEEDED closure (64-bit, transitive) is present in the ramdisk" >&2
 else
   echo "  WARN: /usr/bin/elfdump absent -- SKIPPING the runnability gate (a staged tool could die at exec unnoticed)" >&2
 fi

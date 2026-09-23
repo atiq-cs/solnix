@@ -39,25 +39,62 @@ they are recorded so they are not retried.
 - "Swap destroy for export/labelclear on a suspended pool" — REFUTED: export + labelclear
   also D-state hang.
 
-## THE CURRENT OPEN BLOCKER (measured, not yet fixed)
+## THE CURRENT OPEN BLOCKER (measured on hardware; ROOT CAUSE CORRECTED 2026-09-22)
 
 At 5/9 the build runs `nix build --store /a` (`$ALTROOT=/a`). The manual substitution test
 showed:
 - `nix copy --to /a nixpkgs-solnix-patched` → **"No space left on device"**, and `df -h /a`
   → **`????????`** (not a healthy mount), while **`zpool list` shows rpool 928G / 926G free**.
 
-Interpretation: at build time `/a` is NOT on the big pool — it is a directory on the tiny
-RAM ramdisk (~9M free), so a 329MB substitute overflows it. The 928G pool sits unused.
-`solnixscratch` was NOT in the zpool list at test time (only rpool), so either scratch was
-never created this run or was already destroyed. detect_target DOES run before
-setup_scratch (ordering is fine), so the failure is elsewhere — scratch create/mount, or
-$ALTROOT not being pointed at the scratch/pool mount for the build.
+Interpretation (MEASURED FACTS, all still true): at that moment `/a` was NOT the big pool — it
+was a directory on the tiny RAM ramdisk (~9M free), so the substitute overflowed it while the
+928G pool sat unused/unmounted.
 
-NEXT DIAGNOSTIC NEEDED (from the X1, mid-install at the 5/9 failure, BEFORE any cleanup):
-`df -h /a`, `zpool list`, `mount | grep /a`, `echo $SCRATCH_STORE $ALTROOT`, and whether
-`solnixscratch` exists at that moment. The fix is almost certainly: ensure the 5/9 build's
-`--store`/HOME/TMPDIR point at the big scratch (or the pool), and fail LOUD if scratch is
-the ramdisk rather than silently building there.
+### ⚠️ CORRECTED ROOT CAUSE (the earlier "reorder needed / option D" recommendation was WRONG)
+
+The first write-up of this blocker recommended reordering the installer to create the pool
+before the build (option D) and described a "build into solnixscratch then lose it at teardown"
+DESIGN HAZARD. **Both were premised on a stale mental model of `scripts/solnix-install` and are
+WRONG against the actual source** — verified by reading HEAD, not by reasoning about plausibility:
+
+- Option D is **already implemented**. Commit `a26e5fb7` (Sep 18) moved `build_toplevel` to run
+  AFTER `zpool create rpool` + `zfs mount $BEDS`. Both the images the X1 actually booted —
+  tui5 (`9a0305e1`) and tui6 (`f693164d`) — build with `--store $ALTROOT` at step 5/9, which
+  runs after the pool is created at step 4/9. There is no reorder to do.
+- The installer has **never** built the toplevel into `solnixscratch` as the store; it has used
+  `--store $ALTROOT` (the pool, mounted at `/a`) since `a26e5fb7`. The DESIGN HAZARD's flow and
+  its line numbers (1295/1360/1881) do not match any real revision. There was no committed
+  "half fix" building into scratch to revert.
+
+**The REAL bug** (which reproduces every measured fact): after `zfs mount "$BEDS"` the guard was
+`[ -d "$ALTROOT/." ]`. That is TRUE whether or not the mount succeeded, because `$ALTROOT` (`/a`)
+is `mkdir -p`'d up front. So a **silent `zfs mount` failure** (a `run_to 30` timeout, an EBUSY
+race, a keyed dataset) passed the guard, left `/a` a bare dir on the ~9M RAM ramdisk, and the
+later `nix build --store /a` wrote the store there → "No space left on device", `df /a` = ramdisk,
+rpool 926G free but unmounted. `solnixscratch` was correctly absent at test time — it was never
+the issue; the unverified BE mount was.
+
+### THE FIX (landed post-2026-09-22, in `scripts/solnix-install`)
+
+Harden the mount verification — do NOT reorder anything (the order is already correct):
+
+- New helper `assert_mounted_on_pool <dataset> <mountpoint> [errfile]`: asserts the ZFS
+  `mounted` property == `yes` AND `df -n <mountpoint>` reports fstype `zfs` (a ramdisk dir
+  reports ufs/tmpfs, never zfs). Both signals are illumos-safe (no GNU `stat`/`readlink`).
+  Fails LOUD, naming the dataset, and prints the captured `zfs mount` stderr so the operator
+  sees WHY (busy mountpoint / needs load-key / EBUSY).
+- Wired at the BE mount (replacing the weak `[ -d "$ALTROOT/." ]`), capturing mount stderr to
+  `/tmp/solnix-be-mount.err`, and again for `$POOL/nix` (verified `mounted`, not just that
+  `zfs list` shows it).
+- Belt-and-braces AT THE BUILD SITE: `build_toplevel` re-asserts, right before `nix build`,
+  that `$ALTROOT` is a real zfs mount (fstype `zfs`) with a hard free-space floor (2 GiB —
+  a real 928G pool clears it trivially; the 9M ramdisk cannot). This is the doc's own "fail
+  LOUD rather than silently build on the ramdisk" note applied at the exact build site.
+
+Verified in isolation with negative controls (fake `zfs`/`df`): the guard fires when
+`mounted=no` (the X1 bug) and when the fstype is shadowed to ufs, and passes when mounted.
+End-to-end on illumos is verified-by-reasoning + the maintainer's next X1 run (single-user
+nix + diverted-store behavior is illumos-only and cannot be exercised off-hardware).
 
 ## Media tooling gaps found
 
@@ -69,34 +106,20 @@ the ramdisk rather than silently building there.
   PUTs 403 (rustfs rejects presigned SigV4); authenticated `aws s3 cp`/`nix copy` work.
 - The disk is HEALTHY (iostat -En all zeros) — every pool fault was install-caused.
 
-## ⚠️ DESIGN HAZARD found while fixing (must resolve, not patch around)
+## ~~DESIGN HAZARD found while fixing~~ — RETRACTED (premised on a stale model)
 
-The NVMe-scratch-on-target design has a fundamental ordering conflict:
-  5/9 build toplevel INTO solnixscratch (whole-disk pool on the TARGET)
-  ~1295 DESTROY solnixscratch (it occupies the target the real rpool needs)
-  1360-1408 partition + create rpool
-  1881 copy toplevel closure to rpool  <-- but scratch (holding it) was destroyed at 1295
+This section originally described an NVMe-scratch-on-target "ordering conflict" (build toplevel
+into `solnixscratch`, destroy scratch before rpool, then fail to copy the closure) and
+recommended reordering the installer (option D). **It is RETRACTED.** The installer never built
+the toplevel into `solnixscratch` as the store, and the pool-first ordering it recommended was
+already in place (commit `a26e5fb7`). The cited line numbers (1295/1360/1881) matched no real
+revision. The actual blocker was a silent `zfs mount` failure passing a directory-exists guard
+— see "CORRECTED ROOT CAUSE" above. Kept as a record so the retraction is annotated at the
+source, not only where it is superseded (per the campaign's "the summary outlives the caveat"
+rule).
 
-So building the toplevel into scratch-on-target LOSES it at the scratch teardown, because
-scratch and rpool cannot coexist on one disk. Options, in order of cleanliness:
-  A. Don't put scratch on the target at all. Require/prefer a second device (USB stick as a
-     real disk -- blocked on the X1 by scsa2usb; or a second USB/NVMe). Cleanest but needs
-     hardware the X1 lacks.
-  B. Partition the target ONCE up front: a small scratch slice + the rpool slice, build into
-     the scratch slice, then copy to rpool, then reclaim the scratch slice. Avoids the
-     whole-disk collision but complicates partitioning.
-  C. Build into scratch, then `nix copy` the toplevel closure to a HOLDING location that
-     survives the scratch destroy (there is none big enough except the target itself -> back
-     to the collision).
-  D. Create rpool FIRST (small), build toplevel with --store on rpool directly (no separate
-     scratch), accepting that eval+build share the final pool. Simplest if rpool-first works:
-     the pool is 928G, eval copy (~100k files) + build outputs fit, and it is a real chroot
-     store (substitution of nixpkgs-solnix-patched proven to work into a real store). This is
-     likely the RIGHT answer: skip the separate scratch entirely on a single-disk machine --
-     create the install pool first and build straight into it.
-
-RECOMMENDATION: option D. On a single-disk target with no usable second device, create the
-install pool first, then build the toplevel with --store <pool> (and HOME/TMPDIR on the pool).
-No separate scratch, no teardown collision, no ramdisk overflow. The name gate + substitution
-both proved a real chroot --store on the NVMe works. This removes the whole solnixscratch
-whole-disk-on-target mechanism and its FAULTED-loop failure mode.
+The one durable, still-true observation from the analysis: on a single-disk target,
+`solnixscratch` (a whole-disk pool on the target) and `rpool` cannot coexist, so `solnixscratch`
+is only ever a transient name-gate scratch that must be destroyed before the install pool is
+created — which the installer already does. It is NOT the toplevel build store; the build store
+is the mounted `rpool` at `$ALTROOT`.

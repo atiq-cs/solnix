@@ -207,6 +207,44 @@ _readlink() { [ -h "$1" ] || return 1; ls -ld "$1" 2>/dev/null | sed -n 's/.* ->
 # copy a store path into the target (illumos cp -R -P, parent dir no trailing /).
 copy_path() { [ -e "$ALTROOT$1" ] && return 0; d="$ALTROOT$(dirname "$1")"; mkdir -p "$d"; cp -R -P "$1" "$d" 2>/dev/null || true; }
 
+# assert_mounted_on_pool <dataset> <expected-mountpoint> -- prove a dataset is
+# ACTUALLY mounted on the target pool, not that its mountpoint DIRECTORY merely
+# exists. This is the guard the X1 5/9 failure needed: the old `[ -d "$ALTROOT/." ]`
+# check passes whether or not `zfs mount` succeeded, because $ALTROOT was mkdir'd
+# up front -- so a silent mount failure (timeout, transient) left $ALTROOT a bare
+# dir on the ~9M RAM ramdisk, and the build's `--store $ALTROOT` then overflowed
+# it ("No space left on device") while the 928G pool sat unmounted (measured:
+# `df /a` = ????????, rpool 928G free). Two independent signals, both illumos-safe
+# (no GNU stat/readlink): the ZFS `mounted` property == yes, AND the path's fstype
+# per `df -n` is zfs (a ramdisk dir reports ufs/tmpfs, never zfs). Fail LOUD.
+assert_mounted_on_pool() {
+  _amds="$1"; _ammp="$2"; _amerr="${3:-}"
+  _ammnt=$(run_to 15 zfs get -H -o value mounted "$_amds" 2>/dev/null || echo unknown)
+  _amfs=$(df -n "$_ammp" 2>/dev/null | sed -n 's/.*: *//p')
+  if [ "$_ammnt" != yes ]; then
+    echo "" >&2
+    echo "FATAL: dataset $_amds is NOT mounted (zfs mounted=$_ammnt)." >&2
+    echo "  $_ammp exists as a directory but the pool is not mounted on it, so the" >&2
+    echo "  toplevel build would write into the RAM ramdisk (~9M free) and fail with" >&2
+    echo "  'No space left on device' while the target pool sits unused. This is the" >&2
+    echo "  X1 5/9 failure. \`zfs mount $_amds\` likely timed out or raced -- retry, and" >&2
+    echo "  if it persists check \`zpool status $POOL\` and \`zfs get mounted $_amds\`." >&2
+    if [ -n "$_amerr" ] && [ -s "$_amerr" ]; then
+      echo "  The mount attempt reported:" >&2
+      sed 's/^/    /' "$_amerr" >&2 2>/dev/null || true
+    fi
+    die "target pool not mounted at $_ammp -- refusing to build into the ramdisk"
+  fi
+  case "$_amfs" in
+    *zfs*) : ;;
+    '' ) log "note: df -n $_ammp gave no fstype (df quirk); trusting zfs mounted=yes" ;;
+    *)  echo "" >&2
+        echo "FATAL: $_ammp reports fstype '$_amfs', not zfs -- the target pool is not" >&2
+        echo "  the filesystem at $_ammp (a stale ramdisk dir shadows the mount)." >&2
+        die "$_ammp is $_amfs, not the zfs pool -- refusing to build into it" ;;
+  esac
+}
+
 # run a command with a hard wall-clock timeout so no privileged step (a busy
 # zpool import, a wedged bootadm, a mkfs) hangs the install forever (the T2.7
 # hang was a re-run wedged on a target pool left imported). Uses a background
@@ -1015,6 +1053,39 @@ build_toplevel() {
   mkdir -p "$ALTROOT/var/tmp" "$ALTROOT/root/.cache" 2>/dev/null || true
   HOME="$ALTROOT/root"; export HOME
   XDG_CACHE_HOME="$ALTROOT/root/.cache"; export XDG_CACHE_HOME
+  # ⚠️ BELT-AND-BRACES, AT THE ACTUAL BUILD SITE. Even though the caller verified
+  # the mount before calling us, re-assert here that $ALTROOT is a REAL ZFS mount
+  # with real free space -- this is the last gate before `--store $ALTROOT` writes
+  # gigabytes. The X1 5/9 failure was writing the store into the ~9M RAM ramdisk
+  # because $ALTROOT looked like a directory but was not the mounted pool; catch
+  # that here with the mount property AND a hard free-space floor, and fail LOUD
+  # rather than let nix build fill the ramdisk and die with a cryptic ENOSPC.
+  _bt_mounted=$(run_to 15 zfs get -H -o value mounted "$BEDS" 2>/dev/null || echo unknown)
+  _bt_availk=$(df -k "$ALTROOT" 2>/dev/null | awk 'NR==2{print $4}')
+  _bt_fs=$(df -n "$ALTROOT" 2>/dev/null | sed -n 's/.*: *//p')
+  case "$_bt_fs" in *zfs*) : ;; *)
+    echo "" >&2
+    echo "FATAL: build store $ALTROOT is on fstype '${_bt_fs:-unknown}', not zfs" >&2
+    echo "  (zfs mounted=$_bt_mounted). The target pool is not mounted at $ALTROOT, so" >&2
+    echo "  \`nix build --store $ALTROOT\` would write into the RAM ramdisk and overflow it." >&2
+    echo "  Nothing outside the target disk has been touched. Re-run; if it persists," >&2
+    echo "  check \`zfs get mounted $BEDS\` and \`zpool status $POOL\`." >&2
+    die "refusing to build the toplevel into the ramdisk (store $ALTROOT is not the zfs pool)" ;;
+  esac
+  # Free-space floor: a full solnix toplevel closure is many GB; a store with only
+  # a few MB free is the ramdisk, not the 928G pool. 2 GiB is a conservative floor
+  # that a real pool clears trivially and the 9M ramdisk cannot.
+  case "$_bt_availk" in
+    ''|*[!0-9]*) log "note: could not read df -k avail for $ALTROOT; trusting zfs mounted=$_bt_mounted" ;;
+    *) if [ "$_bt_availk" -lt 2097152 ]; then
+         echo "" >&2
+         echo "FATAL: only ${_bt_availk}KB free at the build store $ALTROOT -- far too little" >&2
+         echo "  for the toplevel closure. That is the RAM ramdisk, not the target pool." >&2
+         echo "  The pool did not mount at $ALTROOT (zfs mounted=$_bt_mounted). Re-run." >&2
+         die "insufficient free space at $ALTROOT -- the target pool is not mounted there"
+       fi ;;
+  esac
+  log "build store OK: $ALTROOT is zfs (mounted=$_bt_mounted, ${_bt_availk:-?}KB free) -- building into the pool"
   # LONG STEP: spinner + elapsed while nix build runs (minutes to ~1h). The build
   # log grows in $_buildlog; a background tail feeds the spinner's last-line so
   # the operator sees forward motion, not a frozen console. nix's own
@@ -1458,8 +1529,16 @@ run_to 60 zpool create -f -d $_encfeat -o altroot="$ALTROOT" -o cachefile=none \
 # real root cause of the un-bootable installed disk (ESP+bootfs were always fine).
 zfs create -o canmount=off -o mountpoint=legacy "$POOL/ROOT"
 zfs create -o canmount=noauto -o mountpoint=/ "$BEDS"
-run_to 30 zfs mount "$BEDS"
-[ -d "$ALTROOT/." ] || die "BE root not mounted at $ALTROOT"
+# Capture the mount stderr so a failure surfaces WHY (busy mountpoint, a keyed
+# dataset needing load-key, an EBUSY race) instead of a bare "not mounted". 30s
+# is ample for a local ZFS mount of an empty BE; if it ever times out the retry
+# hint plus the captured error tell the operator what to look at.
+run_to 30 zfs mount "$BEDS" 2>/tmp/solnix-be-mount.err || true
+# PROVE the pool is actually mounted at $ALTROOT -- not merely that the directory
+# exists (it does: $ALTROOT was mkdir'd up front). A silent `zfs mount` failure
+# here is the X1 5/9 root cause: the build's `--store $ALTROOT` would land on the
+# 9M RAM ramdisk instead of the 928G pool. assert_mounted_on_pool fails LOUD.
+assert_mounted_on_pool "$BEDS" "$ALTROOT" /tmp/solnix-be-mount.err
 
 # ⚠️ /nix AND /export/home LIVE OUTSIDE THE BOOT ENVIRONMENT, deliberately.
 # Everything above this point is inside $BEDS, so a dataset created there would be
@@ -1747,6 +1826,11 @@ zfs list -H -o name,mountpoint "$POOL/nix" >/dev/null 2>&1 \
 case "$(zfs list -H -o name "$POOL/nix" 2>/dev/null)" in
   "$POOL/ROOT/"*) die "$POOL/nix was created INSIDE the boot environment" ;;
 esac
+# And PROVE $POOL/nix is mounted at $ALTROOT/nix -- the build's `--store $ALTROOT`
+# writes the store under $ALTROOT/nix, so if that dataset is unmounted the store
+# lands in the BE (or, worse, a ramdisk dir). Same ramdisk-overflow risk as the
+# BE mount above; fail LOUD before the long build rather than after it fills.
+assert_mounted_on_pool "$POOL/nix" "$ALTROOT/nix"
 
 # NOW build the flake toplevel -- $ALTROOT/nix is a real-disk ZFS store, so the
 # fetchClosure realisation + build land on the target disk, not the ~620MB RAM
