@@ -405,23 +405,18 @@ bring_up_network() {
     done
   fi
 
-  # 5. RESOLVER. The live media can carry a STALE /etc/resolv.conf (e.g. the EC2
-  #    build host's nameservers baked into the image), which is non-empty and has
-  #    nameserver lines but points at servers unreachable on THIS network -- so a
-  #    "is it empty?" check leaves the wrong resolver in place and DNS fails. The
-  #    authoritative source is THIS network's DHCP lease. Take the DNS servers the
-  #    lease handed us (dhcpinfo DNSserv) and REPLACE resolv.conf with them; the
-  #    DHCP gateway and a public resolver are fallbacks. This overwrites stale
-  #    content rather than only filling an empty file.
-  _dns_servers=$(dhcpinfo -i "$_nic" DNSserv 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+\.' )
-  if [ -z "$_dns_servers" ]; then
-    # No DNS in the lease. Keep the existing resolv.conf ONLY if it actually
-    # resolves the probe host; otherwise fall back to the gateway / a public one.
-    _probe_h=$(echo "${SOLNIX_NET_PROBE:-https://cache.nixos.org/nix-cache-info}" | sed -e 's,^[a-z]*://,,' -e 's,/.*,,')
-    if [ -s /etc/resolv.conf ] && grep -q '^nameserver' /etc/resolv.conf 2>/dev/null \
-       && nslookup "$_probe_h" >/dev/null 2>&1; then
-      : # existing resolver works on this network -- leave it
-    else
+  # 5. RESOLVER. The media now boots with an EMPTY /etc/resolv.conf (the stale EC2
+  #    build-host resolver is scrubbed at image build), so the common case is: fill
+  #    it from THIS network's DHCP lease. But DO NOT clobber a resolv.conf the
+  #    operator (or a prior step) already populated -- if it has a nameserver line,
+  #    respect it. Only write when it is empty / has no nameserver.
+  if [ -s /etc/resolv.conf ] && grep -q '^[[:space:]]*nameserver' /etc/resolv.conf 2>/dev/null; then
+    log "/etc/resolv.conf already has a nameserver -- leaving it as-is (not overwriting)"
+    _dns_servers=""
+  else
+    _dns_servers=$(dhcpinfo -i "$_nic" DNSserv 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+\.' )
+    if [ -z "$_dns_servers" ]; then
+      # empty resolv.conf AND no DNS in the lease -> fall back to the gateway / public.
       _dns_servers="${_keepgw:-1.1.1.1}"
     fi
   fi

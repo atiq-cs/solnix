@@ -666,7 +666,26 @@ if [ "$STAGE_NIX" = 1 ] && [ -d /nix-tools224 ] && [ -x /nix-tools224/bin/nix ];
     done
   ( cd /nix-tools224 && tar -cf - runtime-lib ) | ( cd "$RDROOT/nix-tools224" && tar -xf - ) \
     || echo "WARN: runtime-lib copy had errors" >&2
-  [ -f /nix-tools224/ca-bundle.crt ] && cp /nix-tools224/ca-bundle.crt "$RDROOT/nix-tools224/ca-bundle.crt"
+  # CA BUNDLE -- non-optional. nix's HTTPS fetch of a github: flake input verifies
+  # the server cert against ssl-cert-file (=/nix-tools224/ca-bundle.crt below); if
+  # that file is absent/empty/stale, the flake eval dies at 2/9 with "problem with
+  # the SSL CA cert" (MEASURED on the X1). The bootstrap tarball's copy may be
+  # missing or too old for github's current chain, so prefer a CURRENT source and
+  # FAIL LOUD if none is found rather than shipping an image that cannot fetch.
+  _ca=""
+  for _src in /nix-tools224/ca-bundle.crt \
+              /etc/certs/ca-certificates.crt \
+              /etc/openssl/certs/ca-certificates.crt \
+              /etc/ssl/certs/ca-certificates.crt \
+              /etc/ssl/cacert.pem; do
+    if [ -s "$_src" ] && [ "$(grep -c 'BEGIN CERTIFICATE' "$_src" 2>/dev/null)" -ge 20 ]; then
+      _ca="$_src"; break
+    fi
+  done
+  [ -n "$_ca" ] || die "no usable CA bundle found (checked /nix-tools224 + system trust stores) -- nix cannot verify HTTPS and the flake eval would die at 2/9. Provision a current ca-certificates bundle on the build host."
+  cp "$_ca" "$RDROOT/nix-tools224/ca-bundle.crt" || die "failed to stage the CA bundle from $_ca"
+  _cacount=$(grep -c 'BEGIN CERTIFICATE' "$RDROOT/nix-tools224/ca-bundle.crt" 2>/dev/null)
+  echo "  CA bundle: staged $_cacount certs from $_ca -> /nix-tools224/ca-bundle.crt" >&2
 
   # nix.conf for the INSTALLED system (SELF_INSTALL copies this root verbatim).
   cat > "$RDROOT/nix-tools224/etc/nix/nix.conf" <<'NT224CONF'
@@ -897,6 +916,24 @@ if [ -d "$SRC/usr/lib/mps" ]; then
 fi
 # pam.conf + nsswitch already come via COPY_DIRS etc; sanity-check they landed.
 [ -s "$RDROOT/etc/pam.conf" ] || echo "WARN: /etc/pam.conf missing in live root (console auth needs it)" >&2
+
+# LOGIN DELAY: the media inherits the build host's nsswitch.conf, whose `hosts:`
+# line typically ends in `dns`. On the LIVE INSTALLER a root console login does a
+# hostname/getpeername lookup through nsswitch; with `dns` in the list and no
+# working resolver (resolv.conf is intentionally empty on the media), the dns
+# source stalls per attempt before falling back to files -- a multi-second login
+# delay. A local installer console needs NO dns, so drop it to `files` on the
+# media only (the INSTALLED system keeps its own nsswitch from the target config).
+# HONEST: dns-in-login is the PROBABLE cause of the reported delay, not proven on
+# the X1 -- but a console login needing no dns makes this safe regardless.
+if [ -f "$RDROOT/etc/nsswitch.conf" ]; then
+  # illumos sed has no reliable -i; rewrite via a temp file.
+  sed -e 's/^hosts:.*/hosts:      files/' \
+      -e 's/^ipnodes:.*/ipnodes:    files/' \
+      "$RDROOT/etc/nsswitch.conf" > "$RDROOT/etc/nsswitch.conf.new" 2>/dev/null \
+    && mv "$RDROOT/etc/nsswitch.conf.new" "$RDROOT/etc/nsswitch.conf"
+  echo "  live media: nsswitch hosts/ipnodes -> files (no dns stall at console login)" >&2
+fi
 
 # NOTE: gburd + sshd host-key baking is done LATER (section 3c'), AFTER the
 # passwd/shadow/group copy below re-copies those files from the build host --
