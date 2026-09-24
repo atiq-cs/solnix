@@ -187,7 +187,7 @@ runnability_check() {
     local sn="$1" want="$2" d f cls
     for d in $libdirs; do
       f="$d/$sn"; [ -e "$f" ] || continue
-      cls=$(elfdump -e "$f" 2>/dev/null | awk '/ei_class/{print $NF}')
+      cls=$(elfdump -e "$f" 2>/dev/null | grep -oE 'ELFCLASS(32|64)' | head -1)
       case "$cls" in *64*) cls=64 ;; *32*) cls=32 ;; *) cls="?" ;; esac
       [ "$cls" = "$want" ] || [ "$cls" = "?" ] && return 0
     done
@@ -209,7 +209,9 @@ runnability_check() {
     local elf; elf=$(head -1 "$worklist"); sed -i '1d' "$worklist" 2>/dev/null || { tail -n +2 "$worklist" > "$worklist.n"; mv "$worklist.n" "$worklist"; }
     grep -qxF "$elf" "$seen" 2>/dev/null && continue
     echo "$elf" >> "$seen"
-    local cls; cls=$(elfdump -e "$elf" 2>/dev/null | awk '/ei_class/{print $NF}'); case "$cls" in *64*) cls=64 ;; *) cls=32 ;; esac
+    # elfdump -e prints "ei_class: ELFCLASS64  ei_data: ELFDATA2LSB" on ONE line; taking
+    # the last field ($NF) read ELFDATA2LSB and classified every ELF as 32-bit.
+    local cls; cls=$(elfdump -e "$elf" 2>/dev/null | grep -oE 'ELFCLASS(32|64)' | head -1); case "$cls" in *64*) cls=64 ;; *) cls=32 ;; esac
     checked=$((checked+1))
     local need
     for need in $(elfdump -d "$elf" 2>/dev/null | awk '$2=="NEEDED"{print $NF}'); do

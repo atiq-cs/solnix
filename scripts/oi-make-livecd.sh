@@ -286,7 +286,7 @@ CLOSURE_TOOLS="/sbin/zpool /sbin/zfs /usr/sbin/format /usr/sbin/fmthard
   /usr/bin/git /usr/bin/dig /usr/bin/nslookup /usr/bin/host /usr/sbin/route
   /usr/bin/curl /usr/bin/wget
   /usr/libexec/git-core/git /usr/libexec/git-core/git-remote-https
-  /usr/libexec/git-core/git-remote-http /usr/libexec/git-core/git-http-fetch"
+  /usr/libexec/git-core/git-remote-http /usr/libexec/git-core/git-http-fetch /usr/libexec/git-core/git-http-push"
 for t in $CLOSURE_TOOLS; do
   # ⚠️ Resolve ldd with a CLEAN library environment. The build may run with
   # LD_LIBRARY_PATH=/nix-tools224/runtime-lib:... (nix needs it), and runtime-lib

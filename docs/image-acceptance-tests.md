@@ -44,3 +44,23 @@ When a new defect is found on hardware:
 2. Make sure `selftest()`'s defective fake root triggers it (or add the trigger), so
    the check is proven non-vacuous — **a check that cannot fail proves nothing**.
 3. Add a row to the table above.
+
+## Open question: the late runnability gate reported a false PASS once
+
+tui8's second build logged `runnability pre-stage: staged 0` and `runnability gate OK`, yet the
+shipped ramdisk had **no 64-bit `libexpat.so.1`** while `/usr/libexec/git-core/git-http-push`
+NEEDs it. The acceptance suite (run on illumos against the finished image) caught it.
+
+Measured, so not speculation:
+- the gate's own `_rd_bins` seed, replayed against the shipped ramdisk, **does** include
+  `git-http-push` (331 seed binaries, 158 of them git-core), and `libexpat.so.1` **is** among the
+  seed's NEEDED sonames;
+- replaying the gate block verbatim against a writable copy of that ramdisk stages the lib and
+  reports `staged 1` — i.e. the gate logic is correct on the final tree;
+- the build host had a 64-bit `/usr/lib/64/libexpat.so.1` available the whole time.
+
+So the gate was correct in replay but reported 0 during the build. The build-time tree state cannot
+be reconstructed after the fact, so the cause is **not established**. Two layers now cover it:
+`git-http-push` was added to `CLOSURE_TOOLS` (the early ldd staging pass, which is order-robust),
+and the acceptance suite checks the finished artifact. Do not treat the late gate's OK as
+sufficient on its own — the artifact check is the one that found this.
