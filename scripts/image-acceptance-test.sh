@@ -173,6 +173,21 @@ static_checks() {
     _fail "ipadm.conf ships build-host addresses: $(grep -oE '_aobjname=[^;]+' "$R/etc/ipadm/ipadm.conf" | sort -u | tr '\n' ' ')"
   else _ok "ipadm.conf carries no build-host address objects (auto-network plumbs the NIC)"; fi
 
+  # LESSON (tui8 v3/v4 under KVM): the live media cannot create a PERSISTENT dhcp
+  # addrobj -- `ipadm create-addr -T dhcp` fails "Operation failed" on the ramdisk's
+  # persistent DB, so the auto-network left no lease and every fetch failed to
+  # resolve. The temporary form (-t) gets the lease. Both the boot-time autonet
+  # method and solnix-install must use -t.
+  local an="$R/lib/svc/method/solnix-autonet"
+  if [ -f "$an" ]; then
+    if grep -q 'create-addr -t -T dhcp' "$an"; then _ok "solnix-autonet creates a TEMPORARY dhcp addrobj (-t)"
+    else _fail "solnix-autonet uses a persistent create-addr -- fails on the live media's persistent DB (no lease)"; fi
+  else _fail "/lib/svc/method/solnix-autonet missing"; fi
+  if [ -f "$R/usr/sbin/solnix-install" ]; then
+    if grep -q 'create-addr -t -T dhcp' "$R/usr/sbin/solnix-install"; then _ok "solnix-install creates a TEMPORARY dhcp addrobj (-t)"
+    else _fail "solnix-install uses a persistent create-addr (no lease on the live media)"; fi
+  fi
+
   # LESSON (dig/curl broken -- the SECOND-ORDER dangling lib, the openssl trap):
   # EVERY staged ELF's DT_NEEDED must be present in the ramdisk, TRANSITIVELY
   # (a staged lib's own NEEDED too), ABI-matched (a 64-bit binary needs a 64-bit

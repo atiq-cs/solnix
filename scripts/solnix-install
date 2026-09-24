@@ -370,7 +370,9 @@ bring_up_network() {
   # 2. Plumb it and request DHCP. create-if/create-addr are no-ops-with-error if
   #    already done, so swallow those; ipadm show-addr below is the real check.
   pfexec ipadm create-if "$_nic" 2>/dev/null || true
-  pfexec ipadm create-addr -T dhcp "$_nic/v4" 2>/dev/null || true
+  # -t: temporary (this boot). A persistent addrobj fails on the live media's
+  # ramdisk persistent DB ("Operation failed"); the temporary form gets the lease.
+  pfexec ipadm create-addr -t -T dhcp "$_nic/v4" 2>/dev/null || true
 
   # 3. Wait up to ~20s for a lease -- a slow dongle/switch can take a few seconds.
   _got=""

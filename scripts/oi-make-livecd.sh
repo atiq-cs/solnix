@@ -1796,7 +1796,11 @@ _do_net() {
   fi
   log "auto-configuring network on $_nic"
   ipadm create-if "$_nic" 2>/dev/null || true
-  ipadm create-addr -T dhcp "$_nic/v4" 2>/dev/null || true
+  # -t = TEMPORARY (this boot only). MEASURED on the live media under KVM: a
+  # PERSISTENT `create-addr -T dhcp` fails "Operation failed" (the read-only-ish
+  # ramdisk persistent DB cannot take a new addrobj), while the temporary form gets
+  # the lease immediately. The live installer never wants a persistent address.
+  ipadm create-addr -t -T dhcp "$_nic/v4" 2>/dev/null || true
   _got=""; _i=0
   while [ "$_i" -lt 20 ]; do
     _got=$(ipadm show-addr -p -o addr "$_nic/v4" 2>/dev/null | sed 's,/.*,,')
