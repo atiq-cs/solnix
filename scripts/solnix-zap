@@ -40,9 +40,20 @@ _list() {
 [ "${1:-}" = "--list" ] && { _list; exit 0; }
 
 DISK="${1:-}"
-ROOTPOOL="$(zpool list -H -o name 2>/dev/null | grep -x rpool | head -1)"
-# never touch the running root disk
-ROOTDISK=$(zpool status "$ROOTPOOL" 2>/dev/null | awk '/[0-9]d[0-9]/{gsub(/s[0-9]+$/,"",$1); print $1; exit}')
+# Identify the RUNNING root by the device mounted at /, NOT by the pool name.
+# On the LIVE INSTALLER media / is a UFS RAMDISK, not a zpool -- so the old
+# `zpool list | grep -x rpool` matched the TARGET's LEFTOVER rpool and then
+# "protected" it, so zap cleared nothing and `zpool list` kept showing rpool
+# forever (measured on the X1). df -n / gives the real root device; only if that
+# is a ZFS pool is there a root POOL/DISK to protect.
+ROOTFS=$(df -n / 2>/dev/null | awk '{print $NF}')      # e.g. /devices/ramdisk:a (live) or a zfs dataset
+ROOTPOOL=""; ROOTDISK=""
+if df -n / 2>/dev/null | grep -qw zfs; then
+  ROOTPOOL=$(df -h / 2>/dev/null | awk 'NR==2{sub(/\/.*/,"",$1); print $1}')
+  ROOTDISK=$(zpool status "$ROOTPOOL" 2>/dev/null | awk '/[0-9]d[0-9]/{gsub(/s[0-9]+$/,"",$1); print $1; exit}')
+fi
+# else: root is the ramdisk -> NO pool/disk is off-limits; the target's rpool is
+# fair game (that is the whole point of running zap on the installer media).
 
 if [ -z "$DISK" ]; then
   # auto-detect: the single whole-disk node that is NOT the boot medium / root disk.
