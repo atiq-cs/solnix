@@ -167,9 +167,11 @@ static_checks() {
   # stole the lease, the auto-network's vioif0/v4 stayed down, resolv.conf was never
   # written, and every fetch failed "Could not resolve hostname". No persistent
   # interfaces may ship on the live media.
-  if grep -qE '^_ifname=' "$R/etc/ipadm/ipadm.conf" 2>/dev/null; then
-    _fail "ipadm.conf ships build-host interfaces: $(grep -oE '_aobjname=[^;]+' "$R/etc/ipadm/ipadm.conf" | sort -u | tr '\n' ' ')"
-  else _ok "ipadm.conf carries no build-host interfaces (auto-network plumbs the NIC)"; fi
+  # Check ADDRESS entries only: stripping the INTERFACE (_ifname=) entries breaks
+  # ipmgmtd entirely (measured on tui8 v3 -- `ipadm create-if` fails outright).
+  if grep -q '_aobjname=' "$R/etc/ipadm/ipadm.conf" 2>/dev/null; then
+    _fail "ipadm.conf ships build-host addresses: $(grep -oE '_aobjname=[^;]+' "$R/etc/ipadm/ipadm.conf" | sort -u | tr '\n' ' ')"
+  else _ok "ipadm.conf carries no build-host address objects (auto-network plumbs the NIC)"; fi
 
   # LESSON (dig/curl broken -- the SECOND-ORDER dangling lib, the openssl trap):
   # EVERY staged ELF's DT_NEEDED must be present in the ramdisk, TRANSITIVELY

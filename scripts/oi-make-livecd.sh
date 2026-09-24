@@ -242,8 +242,13 @@ rm -f "$RDROOT"/etc/dhcp/*.dhc "$RDROOT"/etc/dhcp/duid "$RDROOT"/etc/dhcp/*.leas
 # fetch fails "Could not resolve hostname" (MEASURED on tui8 under KVM). The live
 # media must boot with NO persistent interfaces: solnix-autonet plumbs the NIC.
 # Keep the file (ipmgmtd expects it) but empty of interface/address lines.
+# MEASURED (tui8 v3 under KVM): stripping EVERY _ifname= line breaks networking
+# outright -- ipmgmtd then refuses `ipadm create-if` ("Operation failed"), and with
+# the line restored the same call reports "disabled object", i.e. ipmgmtd needs the
+# INTERFACE entry. Only the ADDRESS entries (_aobjname=, the build host's dhcp/v4
+# addrobjs) cause the lease collision. So drop address lines, keep interface lines.
 if [ -f "$RDROOT/etc/ipadm/ipadm.conf" ]; then
-  grep -vE '^_ifname=' "$RDROOT/etc/ipadm/ipadm.conf" > "$RDROOT/etc/ipadm/ipadm.conf.new" 2>/dev/null
+  grep -v '_aobjname=' "$RDROOT/etc/ipadm/ipadm.conf" > "$RDROOT/etc/ipadm/ipadm.conf.new" 2>/dev/null
   mv "$RDROOT/etc/ipadm/ipadm.conf.new" "$RDROOT/etc/ipadm/ipadm.conf"
 fi
 
