@@ -157,7 +157,11 @@ static_checks() {
   # dns -- removing it cut the delay but broke nix's flake fetch ("Could not resolve
   # hostname") while dig still worked. Both conditions are checked.
   local nn; nn=$(cat "$R/etc/nodename" 2>/dev/null || echo solnix)
-  if grep -qw "$nn" "$R/etc/hosts" 2>/dev/null; then _ok "/etc/hosts answers for the live hostname '$nn' (no dns stall at login)"
+  # Guard the ordering bug too: an entry for the BUILD host's name ("unknown") does
+  # not help the live system, whose nodename is solnix.
+  if [ "$nn" = unknown ]; then
+    _fail "/etc/nodename is 'unknown' (build-host name shipped) -- the live hostname was never set"
+  elif grep -qw "$nn" "$R/etc/hosts" 2>/dev/null; then _ok "/etc/hosts answers for the live hostname '$nn' (no dns stall at login)"
   else _fail "/etc/hosts has no entry for '$nn' -- every login-path lookup hits DNS (~3.5s per NXDOMAIN)"; fi
   local ns; ns=$(grep -E '^[[:space:]]*hosts:' "$R/etc/nsswitch.conf" 2>/dev/null | head -1)
   case "$ns" in

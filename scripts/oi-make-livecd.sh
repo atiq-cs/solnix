@@ -1056,32 +1056,6 @@ done
 # (Placed AFTER the host /etc re-copy above: that loop re-copies nsswitch.conf from the
 # build host, and an earlier placement of this rewrite was silently undone by it --
 # measured on tui8 under KVM: the shipped nsswitch still read 'hosts: files dns mdns'.)
-# LOGIN DELAY -- ROOT CAUSE (measured under KVM, tui8 v5): the live hostname
-# (solnix) was NOT in /etc/hosts, so every lookup in the login path went to DNS and
-# cost ~3.5s per attempt (NXDOMAIN). An earlier attempt at this removed `dns` from
-# nsswitch entirely -- that DID cut the delay but broke ALL name resolution: nix's
-# flake fetch then failed "Could not resolve hostname" even though dig(1) (which
-# bypasses nsswitch) still worked. MEASURED both ways: with the hostname in
-# /etc/hosts the lookup is 0.03s AND api.github.com still resolves.
-# So: keep `files dns`, and make `files` answer for our own hostname.
-_nn=$(cat "$RDROOT/etc/nodename" 2>/dev/null || echo solnix)
-if [ -f "$RDROOT/etc/hosts" ]; then
-  # The stock table names the build host (often "unknown"); add OUR name to both
-  # loopback lines and append an explicit entry, idempotently.
-  if ! grep -qw "$_nn" "$RDROOT/etc/hosts" 2>/dev/null; then
-    printf '127.0.0.1\t%s %s.local\n::1\t%s\n' "$_nn" "$_nn" "$_nn" >> "$RDROOT/etc/hosts"
-  fi
-  echo "  live media: /etc/hosts answers for '$_nn' (no 3.5s dns stall in the login path)" >&2
-fi
-# Ensure nsswitch keeps dns (name resolution must work for the flake fetch) while
-# files wins for our own hostname.
-if [ -f "$RDROOT/etc/nsswitch.conf" ]; then
-  sed -e 's/^hosts:.*/hosts:      files dns/' \
-      -e 's/^ipnodes:.*/ipnodes:    files dns/' \
-      "$RDROOT/etc/nsswitch.conf" > "$RDROOT/etc/nsswitch.conf.new" 2>/dev/null \
-    && mv "$RDROOT/etc/nsswitch.conf.new" "$RDROOT/etc/nsswitch.conf"
-  echo "  live media: nsswitch hosts/ipnodes = files dns" >&2
-fi
 
 # 3c'. OPTIONAL personal-overlay user + sshd host keys. IDENTITY-FREE by default:
 #      a PUBLIC image bakes NO personal user/key/password (matching NixOS's
@@ -1137,6 +1111,35 @@ mkdir -p "$RDROOT/var/saf/zsmon" "$RDROOT/var/spool/cron/crontabs" \
 # brings the build host's /etc/nodename ("unknown"), so overwrite it. A first
 # boot on EC2 can still rename; this just gives a sane default hostname.
 echo solnix > "$RDROOT/etc/nodename"
+
+# (This block MUST come after /etc/nodename is written above: an earlier placement
+# read the BUILD HOST's nodename and added an /etc/hosts entry for 'unknown'.)
+# LOGIN DELAY -- ROOT CAUSE (measured under KVM, tui8 v5): the live hostname
+# (solnix) was NOT in /etc/hosts, so every lookup in the login path went to DNS and
+# cost ~3.5s per attempt (NXDOMAIN). An earlier attempt at this removed `dns` from
+# nsswitch entirely -- that DID cut the delay but broke ALL name resolution: nix's
+# flake fetch then failed "Could not resolve hostname" even though dig(1) (which
+# bypasses nsswitch) still worked. MEASURED both ways: with the hostname in
+# /etc/hosts the lookup is 0.03s AND api.github.com still resolves.
+# So: keep `files dns`, and make `files` answer for our own hostname.
+_nn=$(cat "$RDROOT/etc/nodename" 2>/dev/null || echo solnix)
+if [ -f "$RDROOT/etc/hosts" ]; then
+  # The stock table names the build host (often "unknown"); add OUR name to both
+  # loopback lines and append an explicit entry, idempotently.
+  if ! grep -qw "$_nn" "$RDROOT/etc/hosts" 2>/dev/null; then
+    printf '127.0.0.1\t%s %s.local\n::1\t%s\n' "$_nn" "$_nn" "$_nn" >> "$RDROOT/etc/hosts"
+  fi
+  echo "  live media: /etc/hosts answers for '$_nn' (no 3.5s dns stall in the login path)" >&2
+fi
+# Ensure nsswitch keeps dns (name resolution must work for the flake fetch) while
+# files wins for our own hostname.
+if [ -f "$RDROOT/etc/nsswitch.conf" ]; then
+  sed -e 's/^hosts:.*/hosts:      files dns/' \
+      -e 's/^ipnodes:.*/ipnodes:    files dns/' \
+      "$RDROOT/etc/nsswitch.conf" > "$RDROOT/etc/nsswitch.conf.new" 2>/dev/null \
+    && mv "$RDROOT/etc/nsswitch.conf.new" "$RDROOT/etc/nsswitch.conf"
+  echo "  live media: nsswitch hosts/ipnodes = files dns" >&2
+fi
 if [ ! -s "$RDROOT/etc/ssh/ssh_host_rsa_key" ]; then
   log "pre-generating sshd host keys into live root"
   for _t in rsa ecdsa ed25519; do
