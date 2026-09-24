@@ -202,7 +202,20 @@ dd if=/dev/zero of="$SCRATCH_IMG" bs=1024k count=0 seek="$SCRATCH_MB" 2>/dev/nul
 #
 #     Set SOLNIX_NO_MEDIA_STORE=1 to skip (faster iteration / no-nix build box).
 #     STORE_CACHE names the upstream cache to seed FROM (default cache.solnix.io).
-if [ -z "${SOLNIX_NO_MEDIA_STORE:-}" ]; then
+# SOLNIX_STORE_ISO=<path> reuses an ALREADY-BUILT media store instead of re-seeding
+# it from the cache. The media store is independent of the ramdisk (it is a separate
+# ISO9660 the live system lofi-mounts), so a verified one can be carried across
+# rebuilds. Needed when the upstream cache is temporarily missing a nar: tui8 v4 hit
+# `error: file 'nar/168cmpx8...nar.xz' does not exist in binary cache` (404 on BOTH
+# cache.solnix.io and the transit endpoint) for a closure member that the SAME
+# starter set had copied successfully hours earlier -- an upstream gap, not a
+# repo/media defect. Reusing a verified store keeps the ramdisk fixes shippable.
+if [ -n "${SOLNIX_STORE_ISO:-}" ]; then
+  [ -f "$SOLNIX_STORE_ISO" ] || { echo "FATAL: SOLNIX_STORE_ISO=$SOLNIX_STORE_ISO not found" >&2; exit 1; }
+  log "reusing prebuilt media store $SOLNIX_STORE_ISO ($(wc -c < "$SOLNIX_STORE_ISO" | tr -d ' ') B, sha256 $(sha256sum "$SOLNIX_STORE_ISO" | cut -c1-16)...)"
+  cp "$SOLNIX_STORE_ISO" "$ISOROOT/solnix-store.iso"
+  cp "$SOLNIX_STORE_ISO" "$OUTDIR/solnix-store.iso"
+elif [ -z "${SOLNIX_NO_MEDIA_STORE:-}" ]; then
   log "building read-only base-closure media store -> $ISOROOT/solnix-store.iso"
   if ! command -v nix >/dev/null 2>&1; then
     echo "FATAL: nix not on PATH; the media store needs \`nix copy\`. Install nix or set SOLNIX_NO_MEDIA_STORE=1." >&2

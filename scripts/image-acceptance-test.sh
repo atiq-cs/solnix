@@ -152,14 +152,17 @@ static_checks() {
   if [ -e "$R/etc/solnix-autoinstall" ]; then _fail "/etc/solnix-autoinstall present (would auto-wipe a disk!)"
   else _ok "/etc/solnix-autoinstall absent (install is interactive)"; fi
 
-  # LESSON (login dns stall): a local console login needs no dns; the media keeps
-  # hosts/ipnodes = files. tui8's first build logged the rewrite but a LATER host
-  # /etc re-copy put 'files dns mdns' back -- a build-log line is not the artifact.
+  # LESSON (login dns stall, measured): the live hostname must be in /etc/hosts, or
+  # every login-path lookup goes to DNS at ~3.5s per NXDOMAIN. And nsswitch MUST keep
+  # dns -- removing it cut the delay but broke nix's flake fetch ("Could not resolve
+  # hostname") while dig still worked. Both conditions are checked.
+  local nn; nn=$(cat "$R/etc/nodename" 2>/dev/null || echo solnix)
+  if grep -qw "$nn" "$R/etc/hosts" 2>/dev/null; then _ok "/etc/hosts answers for the live hostname '$nn' (no dns stall at login)"
+  else _fail "/etc/hosts has no entry for '$nn' -- every login-path lookup hits DNS (~3.5s per NXDOMAIN)"; fi
   local ns; ns=$(grep -E '^[[:space:]]*hosts:' "$R/etc/nsswitch.conf" 2>/dev/null | head -1)
   case "$ns" in
-    *dns*) _fail "nsswitch '$ns' -- dns in the live-media hosts lookup (console-login dns stall)" ;;
-    *files*) _ok "nsswitch hosts is files-only on the live media ($ns)" ;;
-    *) _fail "nsswitch.conf has no hosts: line" ;;
+    *dns*) _ok "nsswitch keeps dns for real resolution ($ns)" ;;
+    *) _fail "nsswitch '$ns' has no dns -- name resolution breaks (nix flake fetch fails to resolve)" ;;
   esac
 
   # LESSON (tui8 KVM: auto-network DOWN): the build host's /etc/ipadm/ipadm.conf
@@ -282,7 +285,8 @@ selftest() {
   : > "$T/etc/system"
   mkdir -p "$T/etc/nix"
   echo 'ssl-cert-file = /nix/store/jxn55a9725j8ba9hkqila89s66abszhr-nix-2.24.15/etc/ssl/certs/ca-bundle.crt' > "$T/etc/nix/nix.conf"
-  echo 'hosts:      files dns mdns' > "$T/etc/nsswitch.conf"
+  echo 'hosts:      files' > "$T/etc/nsswitch.conf"   # no dns -> resolution breaks
+  echo '::1 unknown localhost' > "$T/etc/hosts"; echo solnix > "$T/etc/nodename"
   mkdir -p "$T/etc/ipadm"; echo '_ifname=vioif0;_aobjname=vioif0/dhcp;_dhcp=30,no;' > "$T/etc/ipadm/ipadm.conf"
   local before=$FAIL
   static_checks "$T" >/dev/null 2>&1 || true
