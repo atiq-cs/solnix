@@ -1892,7 +1892,7 @@ $_netline
 
   Install to a disk (the target disk is AUTO-DETECTED -- no need to list it):
 
-    solnix-install --flake 'github:gburd/nix-config#dixi'   # your config
+    solnix-install --flake 'github:USER/REPO#HOST'         # your own flake config
     solnix-install                                          # base system (no --flake)
 
   Then reboot and remove the media:  init 6
@@ -1951,7 +1951,7 @@ cat > "$RDROOT/etc/solnix-banner" <<'BANNEREOF'
   solnix live installer (ramdisk root). The target disk is AUTO-DETECTED --
   you do NOT list or hand-type it. To install:
 
-    solnix-install --flake 'github:gburd/nix-config#dixi'   # your config
+    solnix-install --flake 'github:USER/REPO#HOST'         # your own flake config
     solnix-install                                          # base system (no --flake)
 
   Then reboot and remove the media:  init 6
@@ -2864,9 +2864,13 @@ done
 grep -q 'solnix-motd' "$RDROOT/etc/solnix-live-shell" || \
   die "tui5 gate: solnix-live-shell does not invoke solnix-motd"
 grep -q 'AUTO-DETECTED' "$RDROOT/usr/sbin/solnix-motd" && \
-  grep -q "github:gburd/nix-config#dixi" "$RDROOT/usr/sbin/solnix-motd" && \
+  grep -q "solnix-install --flake" "$RDROOT/usr/sbin/solnix-motd" && \
   grep -q 'solnix-diag fetch' "$RDROOT/usr/sbin/solnix-motd" || \
   die "tui5 gate: motd missing auto-detect / install command / solnix-diag fetch"
+  # public image must NOT hardcode a personal flake ref (github:USER/REPO#HOST is the
+  # placeholder); a real owner/repo here would leak identity into a public image.
+  grep -qE 'github:[^ ]*(gburd|nix-config)' "$RDROOT/usr/sbin/solnix-motd" && \
+    die "motd leaks a personal flake ref -- use the github:USER/REPO#HOST placeholder"
 # the old banner must NOT tell the operator to list/hand-type a disk anymore.
 grep -q 'target-disk' "$RDROOT/etc/solnix-banner" && \
   die "tui5 gate: static banner still tells the operator to hand-type a disk"

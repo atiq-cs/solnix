@@ -108,5 +108,5 @@ if zpool status 2>/dev/null | grep -q "$DISK"; then
   echo "     so after reboot it will NOT re-import), then re-run the installer."
 else
   echo "  $DISK is clean: in no pool, labels + front GPT zeroed, cache removed."
-  echo "  Run the installer now:  solnix-install --flake 'github:gburd/nix-config#dixi'"
+  echo "  Run the installer now (see solnix-install --help / the motd for the flake form)."
 fi

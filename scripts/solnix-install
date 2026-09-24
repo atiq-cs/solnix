@@ -61,7 +61,7 @@ export PATH
 # every doc that predates this keeps functioning.
 #
 # The flake form the maintainer asked for:
-#   solnix-install --git https://github.com/gburd/nix-config.git --flake .#dixi
+#   solnix-install --git https://github.com/USER/REPO.git --flake .#HOST
 #
 # ⚠️ HTTPS ON PURPOSE. A git@ URL needs an ssh key the live media does not have --
 # verified that his repo is anonymously clonable over https (info/refs returns 200),
@@ -91,9 +91,9 @@ usage: solnix-install [--disk <target>] [--flake <ref>#<attr>]
 
   --git    clone a config repo first, then resolve --flake inside it.
            Use an https:// URL: the live media has no ssh key.
-  --flake  the system configuration to build, e.g. .#dixi
+  --flake  the system configuration to build, e.g. .#HOST
   --home | --home-manager
-           a home-manager configuration, e.g. .#gburd@dixi
+           a home-manager configuration, e.g. .#USER@HOST
            (auto-detected from the same flake when omitted)
 USAGE
       exit 0 ;;
