@@ -1890,23 +1890,30 @@ cat <<BANNER
 
 $_netline
 
-  Install to a disk (the target disk is AUTO-DETECTED -- no need to list it):
+  ── STEPS ──────────────────────────────────────────────────────────────────
 
-    solnix-install --flake 'github:USER/REPO#HOST'         # your own flake config
-    solnix-install                                          # base system (no --flake)
+  1) Bring up networking (skip if the line above already says the network is up):
+       solnix-install --net           # plumb the NIC + DHCP, then report
+     No wired link? plug a USB-ethernet dongle (ASIX AX88772) and re-run it.
+     To also pull the latest installer once online:
+       solnix-install --net-update    # network up + re-fetch this installer
 
-  Then reboot and remove the media:  init 6
+  2) Install to a disk (the target is AUTO-DETECTED; scratch is set up for you):
+       solnix-install --flake 'github:USER/REPO#HOST'   # e.g. github:jdoe/nix-config#myhost
+       solnix-install                                    # base system (no flake)
 
-  Nothing is written until you run solnix-install; it never touches the disk
-  you booted from.
+  3) Reboot and remove the media:
+       init 6
 
-  Retry networking:  solnix-net
-  Wipe a disk that will not install (leftover/faulted pool):
-    solnix-zap                  # auto-nukes the single target disk (asks first)
-    solnix-zap <disk>           # or name it; solnix-zap --list shows disks+pools
-  Get help / send a diagnostics bundle to the maintainer:
-    solnix-diag                 # push a bundle, prints an upload URL
-    solnix-diag fetch <url>     # run a maintainer-authored fix (URL from the maintainer)
+  ── IF A DISK WILL NOT INSTALL (leftover/faulted pool from a prior attempt) ──
+       solnix-zap                     # export + clear the target disk (asks first)
+       solnix-zap <disk>              # name it; solnix-zap --list shows disks+pools
+     then go back to step 2. (If solnix-zap says to reboot, do so and retry.)
+
+  Nothing is written until step 2; the installer never touches the media you
+  booted from. Send a diagnostics bundle to the maintainer:
+       solnix-diag                    # writes a bundle + prints how to upload it
+       solnix-diag fetch <url>        # run a maintainer-authored fix script
 
 BANNER
 MOTDEOF

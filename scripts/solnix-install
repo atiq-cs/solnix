@@ -67,6 +67,7 @@ export PATH
 # verified that his repo is anonymously clonable over https (info/refs returns 200),
 # so the installer never needs credentials. A git@ URL is accepted but warned about.
 GIT_URL=""; GIT_REF=""; FLAKE_REF=""; HOME_FLAKE=""; DO_HOME=1
+DO_NET_ONLY=0; DO_NET_UPDATE=0
 TARGET=""; TOPLEVEL=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -81,6 +82,8 @@ while [ $# -gt 0 ]; do
                   export SOLNIX_HOME_STYLE; shift 2 ;;
     --no-home)    DO_HOME=0; shift ;;
     --disk)       TARGET="${2:-}"; shift 2 ;;
+    --net)        DO_NET_ONLY=1; shift ;;
+    --net-update) DO_NET_UPDATE=1; shift ;;
     -h|--help)
       cat <<'USAGE'
 usage: solnix-install [--disk <target>] [--flake <ref>#<attr>]
@@ -95,6 +98,12 @@ usage: solnix-install [--disk <target>] [--flake <ref>#<attr>]
   --home | --home-manager
            a home-manager configuration, e.g. .#USER@HOST
            (auto-detected from the same flake when omitted)
+  --net    bring the network up (if not already up) and report; do nothing else.
+           A quick "is my network working" action -- no disk is touched.
+  --net-update
+           bring the network up, re-fetch THIS installer from the release URL, and
+           re-exec it with the same args (minus --net-update). Use to pull the
+           latest installer without a reflash. No disk is touched by this step.
 USAGE
       exit 0 ;;
     --*) echo "unknown option: $1" >&2; exit 2 ;;
@@ -570,9 +579,21 @@ setup_scratch() {
           log "USB scratch: no SOLNIX_INSTALL stick found -- falling back to NVMe-scratch on the"
           log "             chosen target $TARGET (whole-disk pool 'solnixscratch', DESTROYED before"
           log "             the install pool is created; the target is erased for the install anyway)."
-          # A prior aborted run may have left solnixscratch imported/exported on
-          # the disk; clear it so the whole-disk create is not refused.
-          run_to 30 zpool destroy -f solnixscratch 2>/dev/null || run_to 30 zpool export -f solnixscratch 2>/dev/null || true
+          # A prior aborted run may have left solnixscratch OR a leftover rpool on
+          # this disk -- and a mounted/imported rpool makes the whole-disk
+          # `zpool create solnixscratch <disk>` fail ("device is part of a pool").
+          # This disk is about to be wholly erased for the install, so clear ANY
+          # pool on it now (export first -- works on a suspended/FAULTED pool where
+          # destroy would D-state hang), then labelclear the nodes.
+          for _p in solnixscratch rpool $(zpool list -H -o name 2>/dev/null); do
+            case "$_p" in "$ROOTPOOL"|"") continue;; esac
+            zpool status "$_p" 2>/dev/null | grep -q "$TARGET" || [ "$_p" = solnixscratch ] || continue
+            run_to 20 zpool destroy -f "$_p" 2>/dev/null || run_to 20 zpool export -f "$_p" 2>/dev/null || true
+          done
+          pfexec devfsadm -c disk 2>/dev/null || devfsadm -c disk 2>/dev/null || true
+          for _tn in "${TARGET}" "${TARGET}p0" "${TARGET}s0" "${TARGET}s1"; do
+            [ -e "/dev/dsk/$_tn" ] && run_to 20 zpool labelclear -f "/dev/dsk/$_tn" 2>/dev/null || true
+          done
           pfexec devfsadm -c disk 2>/dev/null || devfsadm -c disk 2>/dev/null || true
           # Some virtual controllers refuse a whole-disk EFI label without an
           # fdisk table first (same case the install pool create handles); lay
@@ -598,10 +619,11 @@ setup_scratch() {
             sed 's/^/  /' /tmp/solnix-scratch.err >&2 2>/dev/null || true
             echo "" >&2
             echo "Most likely a prior partial install left a suspended/leftover pool or labels" >&2
-            echo "on $TARGET. WIPE the disk, then re-run:" >&2
-            echo "  curl -fsSL https://tinyurl.com/22ql2fct | sh -s $TARGET   # clears rpool + labels" >&2
-            echo "  (then reboot the live media for a fresh ramdisk and re-run the installer)" >&2
-            die "NVMe-scratch create failed -- see the zpool error above; wipe the disk and retry"
+            echo "on $TARGET. Clear it, then re-run the installer:" >&2
+            echo "  solnix-zap $TARGET     # exports a leftover/faulted pool, clears cache + labels" >&2
+            echo "  (if solnix-zap says a reboot is needed, reboot -- labels+cache are already" >&2
+            echo "   cleared so it will not re-import -- then re-run the installer)" >&2
+            die "NVMe-scratch create failed -- see the zpool error above; run solnix-zap $TARGET and retry"
           fi
         else
           log "USB scratch: no SOLNIX_INSTALL stick found and no target chosen -- leaving TMPDIR on the ramdisk."
@@ -881,6 +903,38 @@ detect_target() {
 
 # Only gate on the network when something actually needs it. A purely local
 # install (positional toplevel, no --git/--flake) must still work offline.
+# --net / --net-update: network-only actions, no disk touched. Placed AFTER
+# bring_up_network + check_internet are defined and BEFORE any disk work.
+if [ "${DO_NET_ONLY:-0}" = 1 ] || [ "${DO_NET_UPDATE:-0}" = 1 ]; then
+  bring_up_network
+  if check_internet; then
+    log "network is up and reaches the internet."
+  else
+    die "network is NOT up -- see the guidance above (plug a USB-ethernet dongle if there is no wired link)."
+  fi
+  if [ "${DO_NET_UPDATE:-0}" = 1 ]; then
+    _self_url="${SOLNIX_INSTALLER_URL:-https://codeberg.org/gregburd/solnix/raw/branch/main/scripts/solnix-install}"
+    _newer="/tmp/solnix-install.updated"
+    log "re-fetching the installer from $_self_url"
+    if command -v curl >/dev/null 2>&1 && curl -fsSL --max-time 120 "$_self_url" -o "$_newer" 2>/dev/null && [ -s "$_newer" ]; then
+      : # fetched with curl
+    elif command -v nix >/dev/null 2>&1; then
+      _p=$(nix store prefetch-file --name solnix-install-updated "$_self_url" --json 2>/dev/null | sed -n 's/.*"storePath":"\([^"]*\)".*/\1/p')
+      [ -n "$_p" ] && cp "$_p" "$_newer" 2>/dev/null || true
+    fi
+    if [ -s "$_newer" ] && head -1 "$_newer" | grep -q '/sbin/sh'; then
+      chmod +x "$_newer"
+      log "installer updated -- re-exec'ing $_newer (network already up)."
+      # drop --net-update from the re-exec args so we do not loop.
+      set -- "$@"   # $@ is already stripped of --net-update by the parser
+      exec "$_newer" "$@"
+    fi
+    die "could not fetch a newer installer from $_self_url -- the current one still works; re-run without --net-update."
+  fi
+  log "--net: done (no disk was touched)."
+  exit 0
+fi
+
 if [ -n "$GIT_URL" ] || [ -n "$FLAKE_REF" ]; then
   if [ -n "${SOLNIX_SKIP_NET_CHECK:-}" ]; then
     log "internet check SKIPPED (SOLNIX_SKIP_NET_CHECK set)"
