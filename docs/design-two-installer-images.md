@@ -152,3 +152,26 @@ Maintainer said "yes, implement that plan" — proceeding with the recommended d
    node). OK?
 6. **Default flake**: when a user gives no `--flake`, both images install a **default solnix base** (the seeded
    base toplevel) so "just install" works offline. Confirm that default exists as `configurations/base.nix`.
+
+## USB scratch: prep-time grow (solnix-usb-grow.sh) + the X1 enumeration wall
+
+The .img is a hybrid ISO: p1 ISO9660 (boot, read-only) + p2 ESP + p3 scratch (4GB
+sparse, type Solaris). There is NO ZFS filesystem ON the stick to "extend" -- the
+live root is a UFS ramdisk and p3 is `zpool create`d FRESH at install time. So the
+only growable thing is the p3 PARTITION.
+
+`scripts/solnix-usb-grow.sh` grows p3 into the stick's free tail AFTER `dd` -- run it
+on the machine you dd'd from (Linux sgdisk / illumos format), where the USB is a real
+block device. This removes reliance on the boot-time `_grow_scratch_tail` and gives a
+roomier install scratch.
+
+⚠️ It does NOT unblock the X1 Carbon. Measured (diag bundle): the X1's boot stick never
+enumerates as a /dev/dsk device -- `devfsadm: driver failed to attach: scsa2usb`, and
+the stick is absent from the USB device tree entirely (the usb_mid/video nodes there
+are the webcam). This is a DEVICE-ENUMERATION gap, not a filesystem-grow gap: illumos
+can grow filesystems fine (that is what _grow_scratch_tail does); it just never sees
+the stick as a disk on this hardware, so there is nothing to grow or zpool-create on.
+A pre-grown p3 on the stick is still unreachable there. The X1 needs either scsa2usb
+to bind (open question -- pending a cfgadm -lav / prtconf -v capture of the stick's
+real state) or NVMe-scratch on the target (what the installer uses now; costs nothing
+since the target is erased for the install).
