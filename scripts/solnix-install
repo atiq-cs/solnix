@@ -67,7 +67,7 @@ export PATH
 # verified that his repo is anonymously clonable over https (info/refs returns 200),
 # so the installer never needs credentials. A git@ URL is accepted but warned about.
 GIT_URL=""; GIT_REF=""; FLAKE_REF=""; HOME_FLAKE=""; DO_HOME=1
-DO_NET_ONLY=0; DO_NET_UPDATE=0
+DO_NET_ONLY=0; DO_SELF_UPDATE=0
 TARGET=""; TOPLEVEL=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -83,7 +83,7 @@ while [ $# -gt 0 ]; do
     --no-home)    DO_HOME=0; shift ;;
     --disk)       TARGET="${2:-}"; shift 2 ;;
     --net)        DO_NET_ONLY=1; shift ;;
-    --net-update) DO_NET_UPDATE=1; shift ;;
+    --self-update) DO_SELF_UPDATE=1; shift ;;
     -h|--help)
       cat <<'USAGE'
 usage: solnix-install [--disk <target>] [--flake <ref>#<attr>]
@@ -100,9 +100,9 @@ usage: solnix-install [--disk <target>] [--flake <ref>#<attr>]
            (auto-detected from the same flake when omitted)
   --net    bring the network up (if not already up) and report; do nothing else.
            A quick "is my network working" action -- no disk is touched.
-  --net-update
+  --self-update
            bring the network up, re-fetch THIS installer from the release URL, and
-           re-exec it with the same args (minus --net-update). Use to pull the
+           re-exec it with the same args (minus --self-update). Use to pull the
            latest installer without a reflash. No disk is touched by this step.
 USAGE
       exit 0 ;;
@@ -903,16 +903,16 @@ detect_target() {
 
 # Only gate on the network when something actually needs it. A purely local
 # install (positional toplevel, no --git/--flake) must still work offline.
-# --net / --net-update: network-only actions, no disk touched. Placed AFTER
+# --net / --self-update: network-only actions, no disk touched. Placed AFTER
 # bring_up_network + check_internet are defined and BEFORE any disk work.
-if [ "${DO_NET_ONLY:-0}" = 1 ] || [ "${DO_NET_UPDATE:-0}" = 1 ]; then
+if [ "${DO_NET_ONLY:-0}" = 1 ] || [ "${DO_SELF_UPDATE:-0}" = 1 ]; then
   bring_up_network
   if check_internet; then
     log "network is up and reaches the internet."
   else
     die "network is NOT up -- see the guidance above (plug a USB-ethernet dongle if there is no wired link)."
   fi
-  if [ "${DO_NET_UPDATE:-0}" = 1 ]; then
+  if [ "${DO_SELF_UPDATE:-0}" = 1 ]; then
     _self_url="${SOLNIX_INSTALLER_URL:-https://codeberg.org/gregburd/solnix/raw/branch/main/scripts/solnix-install}"
     _newer="/tmp/solnix-install.updated"
     log "re-fetching the installer from $_self_url"
@@ -925,11 +925,11 @@ if [ "${DO_NET_ONLY:-0}" = 1 ] || [ "${DO_NET_UPDATE:-0}" = 1 ]; then
     if [ -s "$_newer" ] && head -1 "$_newer" | grep -q '/sbin/sh'; then
       chmod +x "$_newer"
       log "installer updated -- re-exec'ing $_newer (network already up)."
-      # drop --net-update from the re-exec args so we do not loop.
-      set -- "$@"   # $@ is already stripped of --net-update by the parser
+      # drop --self-update from the re-exec args so we do not loop.
+      set -- "$@"   # $@ is already stripped of --self-update by the parser
       exec "$_newer" "$@"
     fi
-    die "could not fetch a newer installer from $_self_url -- the current one still works; re-run without --net-update."
+    die "could not fetch a newer installer from $_self_url -- the current one still works; re-run without --self-update."
   fi
   log "--net: done (no disk was touched)."
   exit 0
