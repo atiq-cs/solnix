@@ -2894,16 +2894,16 @@ grep -q 'target-disk' "$RDROOT/etc/solnix-banner" && \
 if [ -e "$RDROOT/etc/svc/repository.db" ]; then
   _clsvc=$(SVCCFG_REPOSITORY="$RDROOT/etc/svc/repository.db" \
            /usr/sbin/svccfg -s system/console-login listprop start/exec 2>/dev/null)
-  if [ "${SOLNIX_AUTOLOGIN:-0}" = 1 ]; then
+  if [ "${SOLNIX_AUTOLOGIN:-1}" = 1 ]; then
     case "$_clsvc" in
       *solnix-console-login*) : ;;
-      *) die "tui6 gate (SOLNIX_AUTOLOGIN=1): console-login start/exec not repointed to solnix-console-login (got: $_clsvc)" ;;
+      *) die "tui6 gate (auto-login default): console-login start/exec not repointed to solnix-console-login (got: $_clsvc)" ;;
     esac
   else
-    # default: auto-login OFF -- console-login MUST remain stock ttymon so the
+    # SOLNIX_AUTOLOGIN=0 explicitly: console-login MUST remain stock ttymon so the
     # X1 hid console spam cannot drown a raw /dev/console shell (the tui5 regression).
     case "$_clsvc" in
-      *solnix-console-login*) die "tui6 gate: console-login repointed to solnix-console-login but SOLNIX_AUTOLOGIN is not 1 -- that is the tui5 no-login regression (got: $_clsvc)" ;;
+      *solnix-console-login*) die "tui6 gate: console-login repointed to solnix-console-login but SOLNIX_AUTOLOGIN=0 was set -- that is the tui5 no-login regression (got: $_clsvc)" ;;
       *) : ;;
     esac
   fi
@@ -2911,10 +2911,10 @@ fi
 # tui6: also assert the hid console-flood quieting landed in /etc/system.
 grep -q 'hid:hid_errlevel' "$RDROOT/etc/system" 2>/dev/null || \
   die "tui6 gate: /etc/system missing 'set hid:hid_errlevel' (X1 hid console-flood quieting)"
-if [ "${SOLNIX_AUTOLOGIN:-0}" = 1 ]; then
-  echo "  tui6 first-boot-ux gate OK: bounded auto-network + retry + accurate motd + hid_errlevel + console-login REPOINTED (SOLNIX_AUTOLOGIN=1)" >&2
+if [ "${SOLNIX_AUTOLOGIN:-1}" = 1 ]; then
+  echo "  tui6 first-boot-ux gate OK: bounded auto-network + retry + accurate motd + hid_errlevel + console-login REPOINTED (auto-login default; SOLNIX_AUTOLOGIN=0 for stock ttymon)" >&2
 else
-  echo "  tui6 first-boot-ux gate OK: bounded auto-network + retry + accurate motd + hid_errlevel + console-login STOCK ttymon (auto-login off, tui4 behavior)" >&2
+  echo "  tui6 first-boot-ux gate OK: bounded auto-network + retry + accurate motd + hid_errlevel + console-login STOCK ttymon (SOLNIX_AUTOLOGIN=0 set)" >&2
 fi
 
 # (iv'''') NO DANGLING SYMLINKS among the staged commands. This is its own bug
