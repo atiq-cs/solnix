@@ -2090,14 +2090,22 @@ if [ -e "$RDROOT/etc/svc/repository.db" ]; then
   # SOLNIX_AUTOLOGIN=1 is explicitly set (e.g. a serial/QEMU console with no hid
   # spam). MEASURED: tui5's unconditional override is why the X1 never reached a
   # prompt though tui4 did.
-  if [ "${SOLNIX_AUTOLOGIN:-0}" = 1 ]; then
+  # AUTO-LOGIN -- default ON (operator request). Repointing console-login at a shell
+  # on /dev/console loses ttymon's managed tty, which regressed the X1 in tui5
+  # BECAUSE the hid "Invalid Report Descriptor" flood drowned the raw shell. That
+  # flood is now QUIETED at the source: /etc/system sets hid:hid_errlevel=0 (see the
+  # hid_errlevel gate above), so the raw-console auto-login shell is usable. So
+  # default to auto-login; SOLNIX_AUTOLOGIN=0 forces stock ttymon back (a fallback
+  # if a machine still floods the console for some other reason). The auto-login
+  # method prints the motd, so the operator lands on the informative banner.
+  if [ "${SOLNIX_AUTOLOGIN:-1}" = 1 ]; then
     SVCCFG_REPOSITORY="$RDROOT/etc/svc/repository.db" \
       /usr/sbin/svccfg -s system/console-login \
         setprop start/exec = astring: '/lib/svc/method/solnix-console-login' >/dev/null 2>&1 \
-      && echo "console-login repointed to solnix-console-login (SOLNIX_AUTOLOGIN=1)" >&2 \
-      || echo "WARN: svccfg console-login override failed" >&2
+      && echo "console-login: auto-login as root (default; hid flood quieted via hid_errlevel=0; SOLNIX_AUTOLOGIN=0 for stock ttymon)" >&2 \
+      || echo "WARN: svccfg console-login auto-login override failed -- falling back to stock ttymon" >&2
   else
-    echo "console-login: stock ttymon (auto-login off by default -- survives hid console spam; SOLNIX_AUTOLOGIN=1 to force)" >&2
+    echo "console-login: stock ttymon (SOLNIX_AUTOLOGIN=0 set)" >&2
   fi
   chmod 0600 "$RDROOT/etc/svc/repository.db"
 fi

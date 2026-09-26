@@ -88,14 +88,20 @@ find_boot_archive() {
 static_checks() {
   local R="$1"
 
-  # LESSON (tui5 regression): auto-login on raw /dev/console let the X1 hid
-  # keyboard flood drown the prompt. The media MUST keep STOCK ttymon.
+  # LESSON (tui5 regression + its resolution): auto-login on raw /dev/console let the
+  # X1 hid keyboard flood drown the prompt. Auto-login is now the DEFAULT again, but
+  # it is SAFE ONLY BECAUSE the flood is quieted (hid:hid_errlevel=0). So the rule is
+  # a COUPLING: if console-login is repointed to the auto-login method, hid_errlevel
+  # MUST also be set. Stock ttymon is also acceptable (SOLNIX_AUTOLOGIN=0).
   if [ -e "$R/etc/svc/repository.db" ] && command -v svccfg >/dev/null; then
-    local cl
+    local cl hidq=0
+    grep -q 'set hid:hid_errlevel' "$R/etc/system" 2>/dev/null && hidq=1
     cl=$(SVCCFG_REPOSITORY="$R/etc/svc/repository.db" svccfg -s system/console-login listprop start/exec 2>/dev/null)
     case "$cl" in
-      *solnix-console-login*) _fail "console-login is repointed to solnix-console-login (auto-login) -- the tui5 no-login regression" ;;
-      *console-login*)        _ok  "console-login is stock ttymon (tui5 regression guard)" ;;
+      *solnix-console-login*)
+        if [ "$hidq" = 1 ]; then _ok "console-login is auto-login AND hid_errlevel is set (safe -- flood quieted)"
+        else _fail "console-login is auto-login BUT hid_errlevel is NOT set -- the tui5 no-login regression (flood would drown the raw shell)"; fi ;;
+      *console-login*)        _ok  "console-login is stock ttymon (auto-login off; also fine)" ;;
       *)                      _skip "console-login start/exec not readable" ;;
     esac
   else _skip "no repository.db / svccfg -- console-login check"; fi
