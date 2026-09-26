@@ -1724,12 +1724,12 @@ cp "$SRC/etc/inittab" "$RDROOT/etc/inittab" 2>/dev/null || cat > "$RDROOT/etc/in
 ap::sysinit:/sbin/autopush -f /etc/iu.ap
 smf::sysinit:/lib/svc/bin/svc.startd >/dev/msglog 2>&1 </dev/console
 INITEOF
-# a console banner shell for interactive use (invoked from the console auto-login).
+# a console banner shell: sets env + prints the motd for an interactive session.
 cat > "$RDROOT/etc/solnix-live-shell" <<'SHELLEOF'
 #!/usr/bin/ksh93
 # /etc/solnix-live-shell -- the live console session: set PATH/env, print the
 # accurate motd (which reads the boot-time auto-network result), then hand the
-# operator an interactive root shell. Invoked by the console auto-login method.
+# operator an interactive root shell. (Historically the auto-login method; now the motd also prints via /etc/profile.)
 #
 # /usr/gnu/bin FIRST: illumos /usr/bin/diff prints "No differences encountered"
 # for identical files, which silently breaks scripted comparisons. GNU diffutils
@@ -1746,41 +1746,13 @@ SHELLEOF
 chmod 0555 "$RDROOT/etc/solnix-live-shell"
 
 # ---------------------------------------------------------------------------
-# tui5 first-boot UX: auto-login as root, auto-network at boot (fail-safe), and
-# an accurate motd. All three are LIVE-MEDIA ONLY (solnix-install does NOT copy
-# these overrides into the installed target).
-#
-# AUTO-LOGIN mechanism note (a real illumos constraint, stated honestly): illumos
-# login(1) has NO autologin flag -- its synopsis is
-#   login [-p] [-d device] [-R repo] [-s service] [-t term] [-u id] [-U ruser] ...
-# with no util-linux/BSD-style -f "already authenticated". And ttymon -g always
-# writes a prompt and waits for a carriage return before invoking its service.
-# So "land at a root shell with no prompt" is NOT reachable by configuring
-# ttymon/login; the illumos-native way is to REPLACE the console-login exec
-# method (see the svccfg override in section 4f) with a program that runs the
-# shell directly on /dev/console. autopush -f /etc/iu.ap already pushes
-# ldterm,ttcompat onto /dev/console at sysinit, so the tty is set up first.
+# LIVE-MEDIA first-boot UX: auto-network at boot (fail-safe) + an accurate motd
+# shown on login. Both are LIVE-MEDIA ONLY (solnix-install does NOT copy these
+# into the installed target). Console login is STOCK ttymon -- auto-login was
+# REMOVED: a raw-/dev/console shell has no controlling terminal and wedged the X1
+# (Enter -> blank line, Ctrl-C dead). ttymon reaches a usable login: (tui4/tui6);
+# the operator types root (no password) and the motd shows via /etc/profile.
 mkdir -p "$RDROOT/lib/svc/method" "$RDROOT/usr/sbin"
-cat > "$RDROOT/lib/svc/method/solnix-console-login" <<'CLEOF'
-#!/sbin/sh
-# solnix-console-login -- LIVE-MEDIA auto-login as root (no prompt, no password).
-# Runs the shell directly on /dev/console because illumos login(1) has no -f and
-# ttymon -g always prompts. The line discipline (ldterm ttcompat) is pushed by
-# autopush -f /etc/iu.ap at sysinit, so the console tty is already set up.
-# LIVE MEDIA ONLY -- the installed system keeps stock console-login.
-. /lib/svc/share/smf_include.sh 2>/dev/null
-exec </dev/console >/dev/console 2>&1
-while : ; do
-  echo
-  echo "[solnix] live console -- auto-login as root (no password)."
-  HOME=/root; export HOME
-  cd /root 2>/dev/null || cd /
-  /usr/bin/ksh93 /etc/solnix-live-shell || /sbin/sh
-  # if the shell exits (Ctrl-D), loop and present a fresh one -- never dead.
-  sleep 1
-done
-CLEOF
-chmod 0555 "$RDROOT/lib/svc/method/solnix-console-login"
 
 # AUTO-NETWORK at boot, BOUNDED. bring_up_network's logic (from solnix-install)
 # lifted to boot time, run under a hard watchdog so a hung DHCP/ping can never
@@ -1869,7 +1841,7 @@ tail -20 /var/log/solnix-autonet.log 2>/dev/null
 NETEOF
 chmod 0555 "$RDROOT/usr/sbin/solnix-net"
 
-# solnix-motd -- the CURRENT, accurate next-steps message shown at auto-login.
+# solnix-motd -- the CURRENT, accurate next-steps message shown on login (via /etc/profile).
 # Reads the boot-time net status so the operator sees whether the network came
 # up. The disk is AUTO-DETECTED (tui4), so it does NOT tell the operator to list
 # or hand-type a disk (the old banner did -- that is now wrong).
@@ -1935,9 +1907,9 @@ if [ -f "$RDROOT/etc/profile" ] && ! grep -q 'solnix-gnu-path' "$RDROOT/etc/prof
 PATH=/usr/gnu/bin:/usr/sbin:/usr/bin:/sbin:/usr/ccs/bin
 export PATH
 # solnix-live-motd: show the informative installer banner on an INTERACTIVE login.
-# Under stock ttymon (the default) login(1) runs this profile, so the operator sees
-# the motd here; the auto-login method (SOLNIX_AUTOLOGIN=1) prints it itself and sets
-# SOLNIX_MOTD_SHOWN=1 to avoid a double-print. Live media only (the marker file).
+# Under stock ttymon login(1) runs this profile, so the operator sees
+# the motd here on login. (solnix-live-shell also sets SOLNIX_MOTD_SHOWN=1 if it
+# ran the motd, to avoid a double-print.) Live media only (the marker file).
 if [ -f /etc/solnix-live-shell ] && [ -z "$SOLNIX_MOTD_SHOWN" ]; then
   case "$-" in *i*) /usr/sbin/solnix-motd 2>/dev/null || true; SOLNIX_MOTD_SHOWN=1; export SOLNIX_MOTD_SHOWN ;; esac
 fi
@@ -2095,32 +2067,14 @@ if [ -e "$RDROOT/etc/svc/repository.db" ]; then
   # tty, so the kernel's continuous hid "Invalid Report Descriptor" spam (the X1's
   # internal keyboard fails hidparser, retries forever, writes to /dev/console)
   # DROWNS the raw-console shell -> no usable prompt. Stock ttymon console-login
-  # (what tui4 and every prior image used) presents a login: prompt that COEXISTS
-  # with the spam -- noisy but usable. So default to stock; only override when
-  # SOLNIX_AUTOLOGIN=1 is explicitly set (e.g. a serial/QEMU console with no hid
-  # spam). MEASURED: tui5's unconditional override is why the X1 never reached a
-  # prompt though tui4 did.
-  # AUTO-LOGIN -- default OFF again (X1 hardware verdict, tui10). Repointing
-  # console-login at a raw shell on /dev/console has TWO failure modes on the X1:
-  # (1) the hid flood drowning it (fixed by hid_errlevel=0), and (2) -- the one that
-  # WEDGED tui10 -- the raw `exec </dev/console` shell gets NO controlling terminal,
-  # so keystrokes are never delivered (Enter -> blank line, Ctrl-C ignored): running
-  # but deaf, never reaches a usable prompt. STOCK ttymon opens the console with a
-  # proper session + ctty and reaches a usable login: (measured on tui4/tui6 on the
-  # X1) -- type root, no password. A working login: beats a wedged auto-login. So
-  # default to stock; SOLNIX_AUTOLOGIN=1 opts into the raw-exec auto-login for
-  # serial/QEMU consoles where it works (it did in the tui10 KVM boot). A proper
-  # illumos console auto-login needs ttymon's own al_<user> autologin entry, not a
-  # raw exec -- deferred; ttymon-default is the reliable answer now.
-  if [ "${SOLNIX_AUTOLOGIN:-0}" = 1 ]; then
-    SVCCFG_REPOSITORY="$RDROOT/etc/svc/repository.db" \
-      /usr/sbin/svccfg -s system/console-login \
-        setprop start/exec = astring: '/lib/svc/method/solnix-console-login' >/dev/null 2>&1 \
-      && echo "console-login: auto-login as root (default; hid flood quieted via hid_errlevel=0; SOLNIX_AUTOLOGIN=0 for stock ttymon)" >&2 \
-      || echo "WARN: svccfg console-login auto-login override failed -- falling back to stock ttymon" >&2
-  else
-    echo "console-login: stock ttymon (SOLNIX_AUTOLOGIN=0 set)" >&2
-  fi
+  # CONSOLE LOGIN -- STOCK ttymon, always. (Auto-login was removed: repointing
+  # console-login at a raw shell on /dev/console WEDGED the X1 -- that shell gets no
+  # controlling terminal, so keystrokes are never delivered: Enter -> blank line,
+  # Ctrl-C ignored, never a usable prompt. hid_errlevel=0 fixed the separate flood.)
+  # Stock ttymon opens the console with a proper session + ctty and reaches a usable
+  # login: (measured on tui4/tui6 on the X1) -- the operator types root, no password.
+  # The motd shows after login via /etc/profile (see the solnix-live-motd block).
+  echo "console-login: stock ttymon (login: prompt -> root, no password; motd on login)" >&2
   chmod 0600 "$RDROOT/etc/svc/repository.db"
 fi
 
@@ -2877,57 +2831,40 @@ grep -q '^PATH=/usr/gnu/bin' "$RDROOT/etc/solnix-live-shell" || \
   die "live shell PATH does not start with /usr/gnu/bin"
 echo "  base-tooling gate OK: GNU diffutils + less + terminfo + power + gnu-first PATH" >&2
 
-# tui5 FIRST-BOOT-UX gate: assert the auto-login method, the bounded auto-network
-# method, the retry command, and the accurate motd all shipped, and that the
-# console-login start method matches the SELECTED mode in the offline repository
-# (so a future refactor cannot silently regress the motd / "hand-type a disk"
-# banner). tui6: auto-login is OFF by default (stock ttymon console-login, which
-# survives the X1 hid console spam; repointing at a raw /dev/console shell is the
-# tui5 regression). So the gate is SELECTED-MODE-aware: with SOLNIX_AUTOLOGIN!=1
-# it asserts console-login is STOCK (NOT repointed); only with SOLNIX_AUTOLOGIN=1
-# does it require the repoint to solnix-console-login.
-for _f in lib/svc/method/solnix-console-login lib/svc/method/solnix-autonet \
-          usr/sbin/solnix-net usr/sbin/solnix-motd; do
-  [ -x "$RDROOT/$_f" ] || die "tui5 first-boot-ux gate: $_f missing or not executable"
+# FIRST-BOOT-UX gate: assert the bounded auto-network method, the retry command, and
+# the accurate motd all shipped, and that console-login is STOCK ttymon (auto-login
+# was removed -- repointing at a raw /dev/console shell wedged the X1). The motd shows
+# after login via /etc/profile; solnix-live-shell remains as the interactive banner.
+for _f in lib/svc/method/solnix-autonet usr/sbin/solnix-net usr/sbin/solnix-motd; do
+  [ -x "$RDROOT/$_f" ] || die "first-boot-ux gate: $_f missing or not executable"
 done
 grep -q 'solnix-motd' "$RDROOT/etc/solnix-live-shell" || \
-  die "tui5 gate: solnix-live-shell does not invoke solnix-motd"
+  die "gate: solnix-live-shell does not invoke solnix-motd"
+grep -q 'solnix-motd' "$RDROOT/etc/profile" || \
+  die "gate: /etc/profile does not print solnix-motd on login (the motd would not show under stock ttymon)"
 grep -q 'AUTO-DETECTED' "$RDROOT/usr/sbin/solnix-motd" && \
   grep -q "solnix-install --flake" "$RDROOT/usr/sbin/solnix-motd" && \
   grep -q 'solnix-diag fetch' "$RDROOT/usr/sbin/solnix-motd" || \
-  die "tui5 gate: motd missing auto-detect / install command / solnix-diag fetch"
-  # public image must NOT hardcode a personal flake ref (github:USER/REPO#HOST is the
-  # placeholder); a real owner/repo here would leak identity into a public image.
-  grep -qE 'github:[^ ]*(gburd|nix-config)' "$RDROOT/usr/sbin/solnix-motd" && \
-    die "motd leaks a personal flake ref -- use the github:USER/REPO#HOST placeholder"
+  die "gate: motd missing auto-detect / install command / solnix-diag fetch"
+# public image must NOT hardcode a personal flake ref (github:USER/REPO#HOST is the
+# placeholder); a real owner/repo here would leak identity into a public image.
+grep -qE 'github:[^ ]*(gburd|nix-config)' "$RDROOT/usr/sbin/solnix-motd" && \
+  die "motd leaks a personal flake ref -- use the github:USER/REPO#HOST placeholder"
 # the old banner must NOT tell the operator to list/hand-type a disk anymore.
 grep -q 'target-disk' "$RDROOT/etc/solnix-banner" && \
-  die "tui5 gate: static banner still tells the operator to hand-type a disk"
+  die "gate: static banner still tells the operator to hand-type a disk"
 if [ -e "$RDROOT/etc/svc/repository.db" ]; then
   _clsvc=$(SVCCFG_REPOSITORY="$RDROOT/etc/svc/repository.db" \
            /usr/sbin/svccfg -s system/console-login listprop start/exec 2>/dev/null)
-  if [ "${SOLNIX_AUTOLOGIN:-0}" = 1 ]; then
-    case "$_clsvc" in
-      *solnix-console-login*) : ;;
-      *) die "tui6 gate (auto-login default): console-login start/exec not repointed to solnix-console-login (got: $_clsvc)" ;;
-    esac
-  else
-    # SOLNIX_AUTOLOGIN=0 explicitly: console-login MUST remain stock ttymon so the
-    # X1 hid console spam cannot drown a raw /dev/console shell (the tui5 regression).
-    case "$_clsvc" in
-      *solnix-console-login*) die "tui6 gate: console-login repointed to solnix-console-login but SOLNIX_AUTOLOGIN=0 was set -- that is the tui5 no-login regression (got: $_clsvc)" ;;
-      *) : ;;
-    esac
-  fi
+  case "$_clsvc" in
+    *solnix-console-login*) die "gate: console-login is repointed to a raw-shell auto-login (got: $_clsvc) -- that wedges the X1 console; must be stock ttymon" ;;
+    *) : ;;
+  esac
 fi
-# tui6: also assert the hid console-flood quieting landed in /etc/system.
+# also assert the hid console-flood quieting landed in /etc/system.
 grep -q 'hid:hid_errlevel' "$RDROOT/etc/system" 2>/dev/null || \
-  die "tui6 gate: /etc/system missing 'set hid:hid_errlevel' (X1 hid console-flood quieting)"
-if [ "${SOLNIX_AUTOLOGIN:-0}" = 1 ]; then
-  echo "  tui6 first-boot-ux gate OK: bounded auto-network + retry + accurate motd + hid_errlevel + console-login REPOINTED (auto-login default; SOLNIX_AUTOLOGIN=0 for stock ttymon)" >&2
-else
-  echo "  tui6 first-boot-ux gate OK: bounded auto-network + retry + accurate motd + hid_errlevel + console-login STOCK ttymon (SOLNIX_AUTOLOGIN=0 set)" >&2
-fi
+  die "gate: /etc/system missing 'set hid:hid_errlevel' (X1 hid console-flood quieting)"
+echo "  first-boot-ux gate OK: bounded auto-network + retry + accurate motd + hid_errlevel + console-login STOCK ttymon + motd-on-login" >&2
 
 # (iv'''') NO DANGLING SYMLINKS among the staged commands. This is its own bug
 #          CLASS, not a one-off: `usr/bin/df` was staged as a SYMLINK to
