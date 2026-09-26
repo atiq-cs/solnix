@@ -67,7 +67,7 @@ export PATH
 # verified that his repo is anonymously clonable over https (info/refs returns 200),
 # so the installer never needs credentials. A git@ URL is accepted but warned about.
 GIT_URL=""; GIT_REF=""; FLAKE_REF=""; HOME_FLAKE=""; DO_HOME=1
-DO_NET_ONLY=0; DO_SELF_UPDATE=0
+DO_NET_ONLY=0; DO_SELF_UPDATE=0; DO_SSHD=0
 TARGET=""; TOPLEVEL=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -83,6 +83,7 @@ while [ $# -gt 0 ]; do
     --no-home)    DO_HOME=0; shift ;;
     --disk)       TARGET="${2:-}"; shift 2 ;;
     --net)        DO_NET_ONLY=1; shift ;;
+    --ssh)        DO_SSHD=1; shift ;;
     --self-update) DO_SELF_UPDATE=1; shift ;;
     -h|--help)
       cat <<'USAGE'
@@ -99,7 +100,11 @@ usage: solnix-install [--disk <target>] [--flake <ref>#<attr>]
            a home-manager configuration, e.g. .#USER@HOST
            (auto-detected from the same flake when omitted)
   --net    bring the network up (if not already up) and report; do nothing else.
-           A quick "is my network working" action -- no disk is touched.
+           A quick "is my network working" action -- no disk is touched. It also
+           OFFERS to start sshd for a remote install.
+  --ssh    bring the network up and start sshd (root, empty password) so a remote
+           operator can ssh in and run this installer. Live media only; no disk
+           is touched. SOLNIX_SSHD=1 starts it without prompting.
   --self-update
            bring the network up, re-fetch THIS installer from the release URL, and
            re-exec it with the same args (minus --self-update). Use to pull the
@@ -138,7 +143,52 @@ SRCROOT="${SOLNIX_SRCROOT:-/}"     # the running root we copy as the base world
 # Set SOLNIX_TARGET_CONSOLE=ttya explicitly for serial-console work.
 TARGET_CONSOLE="${SOLNIX_TARGET_CONSOLE:-text}"
 
-die() { echo "FATAL: $*" >&2; exit 1; }
+# _upload_logs -- on failure, bundle the install + build logs + key diagnostics and
+# OFFER to upload them to a paste service so they can be debugged off-host. No creds
+# needed (public paste). curl is on the media; if it cannot reach the paste service
+# it says so and leaves the bundle on disk. Skips the prompt if SOLNIX_DIAG_AUTO=1.
+_upload_logs() {
+  _il="${SOLNIX_INSTALL_LOG:-/tmp/solnix-install.log}"
+  _bl=$(ls -t "$ALTROOT"/var/tmp/solnix-build-*.log 2>/dev/null | head -1)
+  _bundle=/tmp/solnix-fail-$$.txt
+  {
+    echo "===== solnix install failure bundle $(date -u '+%Y-%m-%dT%H:%M:%SZ') ====="
+    echo "--- uname / version ---"; uname -a 2>/dev/null; nix --version 2>/dev/null
+    echo "--- disks ---"; echo | format 2>/dev/null | grep -E '^ *[0-9]\.' || true
+    echo "--- pools ---"; zpool list 2>/dev/null; zpool status 2>/dev/null | head -30
+    echo "--- network ---"; ipadm show-addr 2>/dev/null; cat /etc/resolv.conf 2>/dev/null
+    echo "===== INSTALL LOG (${_il}) ====="; tail -200 "$_il" 2>/dev/null
+    if [ -n "$_bl" ]; then echo "===== BUILD LOG (${_bl}) ====="; tail -300 "$_bl" 2>/dev/null; fi
+  } > "$_bundle" 2>/dev/null
+  echo "" >&2
+  echo "  A failure bundle (install log + build log + disks/pools/network) is at:" >&2
+  echo "    $_bundle" >&2
+  if [ "${SOLNIX_DIAG_AUTO:-0}" != 1 ]; then
+    printf '  Upload it to paste.rs for off-host debugging? [Y/n]: ' >&2
+    read _ans 2>/dev/null || _ans=y
+    case "$_ans" in n|N|no|NO) echo "  not uploaded; the bundle is on disk above." >&2; return 0 ;; esac
+  fi
+  if command -v curl >/dev/null 2>&1; then
+    _url=$(curl -fsS --max-time 60 --data-binary @"$_bundle" https://paste.rs 2>/dev/null)
+    case "$_url" in
+      https://paste.rs/*)
+        echo "" >&2
+        echo "  #####################################################################" >&2
+        echo "  ##  UPLOADED. Send this URL to the maintainer:  $_url" >&2
+        echo "  #####################################################################" >&2
+        return 0 ;;
+    esac
+  fi
+  echo "  upload failed (no curl or no network). Read the bundle above, or by hand:" >&2
+  echo "    curl --data-binary @$_bundle https://paste.rs" >&2
+}
+
+die() {
+  echo "FATAL: $*" >&2
+  # Offer to ship the logs off-host for debugging (best-effort; never blocks the exit).
+  _upload_logs 2>/dev/null || true
+  exit 1
+}
 log() { printf '\n=== %s ===\n' "$*" >&2; printf '\n=== %s ===\n' "$*" >> "${SOLNIX_INSTALL_LOG:-/tmp/solnix-install.log}" 2>/dev/null || true; }
 
 # ---------------------------------------------------------------------------
@@ -767,6 +817,49 @@ setup_media_store() {
   return 0
 }
 
+# _start_sshd -- OFFER to start sshd after the network is up, so a remote operator
+# can ssh in and drive the install. The live media has no baked password by default
+# (matching NixOS), so this is opt-in and it enables ROOT login + an empty-password
+# login for the live session ONLY (this is throwaway installer media, not an installed
+# system). Skips the prompt if SOLNIX_SSHD=1. Best-effort; never fatal.
+_start_sshd() {
+  command -v sshd >/dev/null 2>&1 || { log "sshd not staged on this media -- cannot offer remote install"; return 0; }
+  if [ "${SOLNIX_SSHD:-0}" != 1 ] && [ "${DO_SSHD:-0}" != 1 ]; then
+    echo "" >&2
+    echo "  Start sshd so you can install REMOTELY (ssh in from another host)?" >&2
+    printf '  [y/N]: ' >&2
+    read _sa 2>/dev/null || _sa=n
+    case "$_sa" in y|Y|yes|YES) ;; *) return 0 ;; esac
+  fi
+  # host keys: generate if the baked ones are absent (a public image bakes none).
+  for _t in rsa ecdsa ed25519; do
+    _hk="/etc/ssh/ssh_host_${_t}_key"
+    [ -s "$_hk" ] || ssh-keygen -q -t "$_t" -f "$_hk" -N '' 2>/dev/null || true
+  done
+  # allow root login for the live session; the live root has no password, so permit
+  # empty-password auth for THIS throwaway media only.
+  _sc=/etc/ssh/sshd_config
+  if [ -f "$_sc" ]; then
+    grep -q '^PermitRootLogin yes' "$_sc" || echo 'PermitRootLogin yes' >> "$_sc"
+    grep -q '^PermitEmptyPasswords yes' "$_sc" || echo 'PermitEmptyPasswords yes' >> "$_sc"
+  fi
+  # enable the SMF service if present, else run sshd directly.
+  if svcadm enable -s svc:/network/ssh:default 2>/dev/null; then :; 
+  else /usr/lib/ssh/sshd 2>/dev/null || /usr/sbin/sshd 2>/dev/null || true; fi
+  sleep 1
+  _ip=$(ipadm show-addr -p -o addr 2>/dev/null | sed 's,/.*,,' | grep -vE '^(127\.|::1|0\.0\.0\.0)' | head -1)
+  if pgrep -x sshd >/dev/null 2>&1 || svcs -H network/ssh 2>/dev/null | grep -q online; then
+    echo "" >&2
+    echo "  #####################################################################" >&2
+    echo "  ##  sshd is up. From another host on this network:" >&2
+    echo "  ##      ssh root@${_ip:-<this-machine-ip>}       (root, empty password)" >&2
+    echo "  ##  then run:  solnix-install --flake 'github:USER/REPO#HOST'" >&2
+    echo "  #####################################################################" >&2
+  else
+    log "sshd did not come up -- check: svcs -x network/ssh"
+  fi
+}
+
 check_internet() {
   _probe_url="${SOLNIX_NET_PROBE:-https://cache.nixos.org/nix-cache-info}"
   _probe_host=$(echo "$_probe_url" | sed -e 's,^[a-z]*://,,' -e 's,/.*,,')
@@ -889,13 +982,17 @@ detect_target() {
 # install (positional toplevel, no --git/--flake) must still work offline.
 # --net / --self-update: network-only actions, no disk touched. Placed AFTER
 # bring_up_network + check_internet are defined and BEFORE any disk work.
-if [ "${DO_NET_ONLY:-0}" = 1 ] || [ "${DO_SELF_UPDATE:-0}" = 1 ]; then
+if [ "${DO_NET_ONLY:-0}" = 1 ] || [ "${DO_SELF_UPDATE:-0}" = 1 ] || [ "${DO_SSHD:-0}" = 1 ]; then
   bring_up_network
   if check_internet; then
     log "network is up and reaches the internet."
   else
     die "network is NOT up -- see the guidance above (plug a USB-ethernet dongle if there is no wired link)."
   fi
+  # remote-install: offer sshd once the network is up (explicit with --ssh, or offered
+  # by --net). --self-update skips the offer (it is about to re-exec).
+  if [ "${DO_SSHD:-0}" = 1 ]; then _start_sshd
+  elif [ "${DO_NET_ONLY:-0}" = 1 ]; then _start_sshd; fi
   if [ "${DO_SELF_UPDATE:-0}" = 1 ]; then
     _self_url="${SOLNIX_INSTALLER_URL:-https://codeberg.org/gregburd/solnix/raw/branch/main/scripts/solnix-install}"
     _newer="/tmp/solnix-install.updated"

@@ -1897,6 +1897,8 @@ $_netline
      No wired link? plug a USB-ethernet dongle (ASIX AX88772) and re-run it.
      To also pull the latest installer once online:
        solnix-install --self-update   # network up + re-fetch this installer
+     To install REMOTELY (ssh in from another host):
+       solnix-install --ssh           # network up + start sshd (root, empty pw)
 
   2) Install to a disk (the target is AUTO-DETECTED; scratch is set up for you):
        solnix-install --flake 'github:USER/REPO#HOST'   # e.g. github:jdoe/myrepo#myhost
