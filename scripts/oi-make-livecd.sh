@@ -1740,6 +1740,7 @@ NIX_CONF_DIR=/etc/nix; export NIX_CONF_DIR
 NIX_PATH=nixpkgs=/run/current-system/solnix-flake; export NIX_PATH
 # accurate, dynamic motd (auto-detect disk, install command, net status, diag).
 /usr/sbin/solnix-motd 2>/dev/null || cat /etc/solnix-banner 2>/dev/null
+SOLNIX_MOTD_SHOWN=1; export SOLNIX_MOTD_SHOWN   # avoid /etc/profile re-printing it
 exec /usr/bin/ksh93 2>/dev/null || exec /sbin/sh
 SHELLEOF
 chmod 0555 "$RDROOT/etc/solnix-live-shell"
@@ -1933,6 +1934,13 @@ if [ -f "$RDROOT/etc/profile" ] && ! grep -q 'solnix-gnu-path' "$RDROOT/etc/prof
 # make it win. /nix-tools224/bin is wrapped into /usr/bin, so no entry needed.
 PATH=/usr/gnu/bin:/usr/sbin:/usr/bin:/sbin:/usr/ccs/bin
 export PATH
+# solnix-live-motd: show the informative installer banner on an INTERACTIVE login.
+# Under stock ttymon (the default) login(1) runs this profile, so the operator sees
+# the motd here; the auto-login method (SOLNIX_AUTOLOGIN=1) prints it itself and sets
+# SOLNIX_MOTD_SHOWN=1 to avoid a double-print. Live media only (the marker file).
+if [ -f /etc/solnix-live-shell ] && [ -z "$SOLNIX_MOTD_SHOWN" ]; then
+  case "$-" in *i*) /usr/sbin/solnix-motd 2>/dev/null || true; SOLNIX_MOTD_SHOWN=1; export SOLNIX_MOTD_SHOWN ;; esac
+fi
 PROFPATH
 fi
 # LIVE nix.conf (5HAV, s3-origin, flakes) so nix works in the installer shell
@@ -2092,15 +2100,19 @@ if [ -e "$RDROOT/etc/svc/repository.db" ]; then
   # SOLNIX_AUTOLOGIN=1 is explicitly set (e.g. a serial/QEMU console with no hid
   # spam). MEASURED: tui5's unconditional override is why the X1 never reached a
   # prompt though tui4 did.
-  # AUTO-LOGIN -- default ON (operator request). Repointing console-login at a shell
-  # on /dev/console loses ttymon's managed tty, which regressed the X1 in tui5
-  # BECAUSE the hid "Invalid Report Descriptor" flood drowned the raw shell. That
-  # flood is now QUIETED at the source: /etc/system sets hid:hid_errlevel=0 (see the
-  # hid_errlevel gate above), so the raw-console auto-login shell is usable. So
-  # default to auto-login; SOLNIX_AUTOLOGIN=0 forces stock ttymon back (a fallback
-  # if a machine still floods the console for some other reason). The auto-login
-  # method prints the motd, so the operator lands on the informative banner.
-  if [ "${SOLNIX_AUTOLOGIN:-1}" = 1 ]; then
+  # AUTO-LOGIN -- default OFF again (X1 hardware verdict, tui10). Repointing
+  # console-login at a raw shell on /dev/console has TWO failure modes on the X1:
+  # (1) the hid flood drowning it (fixed by hid_errlevel=0), and (2) -- the one that
+  # WEDGED tui10 -- the raw `exec </dev/console` shell gets NO controlling terminal,
+  # so keystrokes are never delivered (Enter -> blank line, Ctrl-C ignored): running
+  # but deaf, never reaches a usable prompt. STOCK ttymon opens the console with a
+  # proper session + ctty and reaches a usable login: (measured on tui4/tui6 on the
+  # X1) -- type root, no password. A working login: beats a wedged auto-login. So
+  # default to stock; SOLNIX_AUTOLOGIN=1 opts into the raw-exec auto-login for
+  # serial/QEMU consoles where it works (it did in the tui10 KVM boot). A proper
+  # illumos console auto-login needs ttymon's own al_<user> autologin entry, not a
+  # raw exec -- deferred; ttymon-default is the reliable answer now.
+  if [ "${SOLNIX_AUTOLOGIN:-0}" = 1 ]; then
     SVCCFG_REPOSITORY="$RDROOT/etc/svc/repository.db" \
       /usr/sbin/svccfg -s system/console-login \
         setprop start/exec = astring: '/lib/svc/method/solnix-console-login' >/dev/null 2>&1 \
@@ -2894,7 +2906,7 @@ grep -q 'target-disk' "$RDROOT/etc/solnix-banner" && \
 if [ -e "$RDROOT/etc/svc/repository.db" ]; then
   _clsvc=$(SVCCFG_REPOSITORY="$RDROOT/etc/svc/repository.db" \
            /usr/sbin/svccfg -s system/console-login listprop start/exec 2>/dev/null)
-  if [ "${SOLNIX_AUTOLOGIN:-1}" = 1 ]; then
+  if [ "${SOLNIX_AUTOLOGIN:-0}" = 1 ]; then
     case "$_clsvc" in
       *solnix-console-login*) : ;;
       *) die "tui6 gate (auto-login default): console-login start/exec not repointed to solnix-console-login (got: $_clsvc)" ;;
@@ -2911,7 +2923,7 @@ fi
 # tui6: also assert the hid console-flood quieting landed in /etc/system.
 grep -q 'hid:hid_errlevel' "$RDROOT/etc/system" 2>/dev/null || \
   die "tui6 gate: /etc/system missing 'set hid:hid_errlevel' (X1 hid console-flood quieting)"
-if [ "${SOLNIX_AUTOLOGIN:-1}" = 1 ]; then
+if [ "${SOLNIX_AUTOLOGIN:-0}" = 1 ]; then
   echo "  tui6 first-boot-ux gate OK: bounded auto-network + retry + accurate motd + hid_errlevel + console-login REPOINTED (auto-login default; SOLNIX_AUTOLOGIN=0 for stock ttymon)" >&2
 else
   echo "  tui6 first-boot-ux gate OK: bounded auto-network + retry + accurate motd + hid_errlevel + console-login STOCK ttymon (SOLNIX_AUTOLOGIN=0 set)" >&2
