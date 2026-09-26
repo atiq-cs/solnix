@@ -210,21 +210,15 @@ have_intel_ax2xx() {
 }
 
 # illumos ln -sfn FOLLOWS an existing symlink-to-dir (rc=0, no-op); always rm+ln.
-# _solnix_locked_input <input-name> -- print the flake ref of the named LOCKED input
-# of the flake given as $2 (default: the config flake being installed). Used to reach
-# an input flake (inputs are not exposed as output attrs). PURE SHELL -- NO python/jq
-# (python3 is NOT on the install media; an earlier version depended on it and the
-# pre-copy silently no-op'd -> 5/9 hit the diverted-store error). `nix flake
-# metadata` (human form) prints a greppable tree with each input's locked URL.
-_solnix_locked_input() {
-  _lif_name="$1"; _lif_flake="${2:-.}"
-  # Strip ANSI, keep only lines naming this input, drop the deeper (indented) nested
-  # occurrences, take the first, and cut out the URL after "<name>: ".
-  run_to 120 nix flake metadata "$_lif_flake" 2>/dev/null \
-    | sed 's/\x1b\[[0-9;]*m//g' \
-    | grep "${_lif_name}:" \
-    | head -1 \
-    | sed -E "s/^.*${_lif_name}: *//; s/[[:space:]].*//"
+# _solnix_nixpkgs_src <flake-ref> -- print the store path of solnix-pkgs' patched
+# nixpkgs source (the applyPatches output the flake's `import "${nixpkgs}/lib"`
+# needs realised). Uses `nix eval builtins.getFlake` to read the config flake's
+# solnix-pkgs INPUT directly -- PURE NIX, no python/jq and no human-output parsing
+# (both earlier approaches were fragile on the media: python3 is absent, and
+# `nix flake metadata` tree-output parsing returned empty). nix is guaranteed here.
+_solnix_nixpkgs_src() {
+  run_to 180 nix eval --impure --raw --expr \
+    "(builtins.getFlake \"$1\").inputs.solnix-pkgs.lib.nixpkgsSrc" 2>/dev/null
 }
 relink() { rm -f "$2" 2>/dev/null; ln -s "$1" "$2"; }
 # minimal proto has no readlink(1); derive symlink target from ls -l.
@@ -1175,12 +1169,10 @@ build_toplevel() {
   # substitutes/realises normally AND still lands the eval source copy on the pool,
   # so the ramdisk-inode reason --eval-store was added for is already covered. The
   # name gate (step 2, --store $SCRATCH_STORE) already proved --store works on illumos.
-  # Resolve the patched-nixpkgs path via the flake's LOCKED solnix-pkgs INPUT (flake
-  # inputs are not output attrs, so `.#solnix-pkgs...` does not resolve; read the
-  # locked input URL from `nix flake metadata`, then eval nixpkgsSrc against it).
-  _pkgsurl=$(_solnix_locked_input solnix-pkgs "${_fl%#*}")
-  _pn=""
-  [ -n "$_pkgsurl" ] && _pn=$(run_to 120 nix eval --raw "${_pkgsurl}#lib.nixpkgsSrc" 2>/dev/null || true)
+  # Resolve the patched-nixpkgs store path directly from the config flake's
+  # solnix-pkgs input via getFlake (see _solnix_nixpkgs_src). Pre-copy it so eval
+  # substitutes it instead of building it in the diverted store.
+  _pn=$(_solnix_nixpkgs_src "${_fl%#*}")
   if [ -n "$_pn" ]; then
     log "pre-copying the patched nixpkgs source into the target store so eval need not build it: $_pn"
     run_to 900 nix copy --to "$ALTROOT" $_extrasub \
