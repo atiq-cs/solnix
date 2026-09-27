@@ -266,9 +266,20 @@ have_intel_ax2xx() {
 # solnix-pkgs INPUT directly -- PURE NIX, no python/jq and no human-output parsing
 # (both earlier approaches were fragile on the media: python3 is absent, and
 # `nix flake metadata` tree-output parsing returned empty). nix is guaranteed here.
+# ⚠️ getFlake UNPACKS nixpkgs into the Git tarball cache (XDG_CACHE_HOME) at eval
+# time. On the live media HOME=/root sits on the ramdisk root, which is 100% FULL
+# by design -- the unpack overflows and corrupts the cache, after which every read
+# fails "object not found - failed to find pack entry" and the eval returns EMPTY
+# (measured on the X1, tui11: paste.rs/P46jo). So point XDG_CACHE_HOME + TMPDIR at
+# the POOL ($ALTROOT/var/tmp, 928G) -- caller must have mounted it already -- and
+# clear any cache the ramdisk already corrupted. stderr is NOT swallowed: the
+# caller captures it so a failure is visible, never a silent empty.
 _solnix_nixpkgs_src() {
-  run_to 180 nix eval --impure --raw --expr \
-    "(builtins.getFlake \"$1\").inputs.solnix-pkgs.lib.nixpkgsSrc" 2>/dev/null
+  _sns_cache="$ALTROOT/var/tmp/solnix-nixcache"
+  rm -rf "$_sns_cache" 2>/dev/null; mkdir -p "$_sns_cache" "$ALTROOT/var/tmp" 2>/dev/null
+  run_to 300 env HOME="$ALTROOT/var/tmp" XDG_CACHE_HOME="$_sns_cache" TMPDIR="$ALTROOT/var/tmp" \
+    nix eval --impure --raw --expr \
+    "(builtins.getFlake \"$1\").inputs.solnix-pkgs.lib.nixpkgsSrc"
 }
 relink() { rm -f "$2" 2>/dev/null; ln -s "$1" "$2"; }
 # minimal proto has no readlink(1); derive symlink target from ls -l.
@@ -1269,17 +1280,32 @@ build_toplevel() {
   # Resolve the patched-nixpkgs store path directly from the config flake's
   # solnix-pkgs input via getFlake (see _solnix_nixpkgs_src). Pre-copy it so eval
   # substitutes it instead of building it in the diverted store.
-  _pn=$(_solnix_nixpkgs_src "${_fl%#*}")
-  if [ -n "$_pn" ]; then
-    log "pre-copying the patched nixpkgs source into the target store so eval need not build it: $_pn"
-    run_to 900 nix copy --to "$ALTROOT" $_extrasub \
-      --option substituters "https://cache.solnix.io https://s3.solnix.io/solnix-cache" \
-      "$_pn" >> "$_buildlog" 2>&1 \
-      || log "pre-copy of $_pn did not complete (the build will try to substitute/realise it itself)"
-  else
-    log "could not resolve the patched-nixpkgs path to pre-copy (eval will attempt it during the build)"
+  # Resolve WITH stderr captured to the build log -- the eval overflowing the
+  # ramdisk cache used to be invisible (paste.rs/P46jo: empty result -> pre-copy
+  # skipped -> the build hit "diverted store" and died). Pool-backed cache/tmp now.
+  log "resolving the patched-nixpkgs source path (getFlake, pool-backed cache)"
+  _pn=$(_solnix_nixpkgs_src "${_fl%#*}" 2>>"$_buildlog")
+  if [ -z "$_pn" ]; then
+    echo "" >&2
+    echo "FATAL: could not resolve the patched-nixpkgs source path via getFlake." >&2
+    echo "  This path MUST be pre-copied: the flake's \`import \"\${nixpkgs}/lib\"\`" >&2
+    echo "  forces realising an applyPatches derivation, and illumos single-user nix" >&2
+    echo "  REFUSES to build one in the target store (\"diverted store\"). Without the" >&2
+    echo "  pre-copy the toplevel build cannot succeed, so failing now rather than" >&2
+    echo "  letting the build die later with a misleading error." >&2
+    echo "  The eval's own error is in $_buildlog (tail below):" >&2
+    tail -20 "$_buildlog" 2>/dev/null | sed 's/^/    /' >&2 || true
+    die "patched-nixpkgs resolve failed -- see $_buildlog"
   fi
-  if run_to "${SOLNIX_BUILD_TIMEOUT:-14400}" env TMPDIR="$ALTROOT/var/tmp" nix build \
+  log "pre-copying the patched nixpkgs source into the target store so eval need not build it: $_pn"
+  run_to 900 nix copy --to "$ALTROOT" $_extrasub \
+    --option substituters "https://cache.solnix.io https://s3.solnix.io/solnix-cache" \
+    "$_pn" >> "$_buildlog" 2>&1 \
+    || die "pre-copy of $_pn failed -- the build would hit the diverted-store error; see $_buildlog"
+  [ -e "$ALTROOT$_pn" ] || die "pre-copy claimed success but $ALTROOT$_pn is absent -- see $_buildlog"
+  if run_to "${SOLNIX_BUILD_TIMEOUT:-14400}" env \
+       HOME="$ALTROOT/var/tmp" XDG_CACHE_HOME="$ALTROOT/var/tmp/solnix-nixcache" \
+       TMPDIR="$ALTROOT/var/tmp" nix build \
        --store "$ALTROOT" \
        $_extrasub \
        "${_fl}#${_set}.\"${_at}\".config.system.build.toplevel" \
