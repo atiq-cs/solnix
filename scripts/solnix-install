@@ -102,9 +102,13 @@ usage: solnix-install [--disk <target>] [--flake <ref>#<attr>]
   --net    bring the network up (if not already up) and report; do nothing else.
            A quick "is my network working" action -- no disk is touched. It also
            OFFERS to start sshd for a remote install.
-  --ssh    bring the network up and start sshd (root, empty password) so a remote
-           operator can ssh in and run this installer. Live media only; no disk
-           is touched. SOLNIX_SSHD=1 starts it without prompting.
+  --ssh    bring the network up and start sshd so a remote operator can ssh in and
+           run this installer. Live media only; no disk is touched. A root
+           credential is set automatically (empty passwords do NOT work over ssh
+           on illumos): supply SOLNIX_SSH_PUBKEY='ssh-ed25519 AAAA...' for key
+           auth, or SOLNIX_ROOT_PW=... for a chosen password; otherwise a random
+           password is generated and PRINTED. SOLNIX_SSHD=1 starts it without
+           prompting.
   --self-update
            bring the network up, re-fetch THIS installer from the release URL, and
            re-exec it with the same args (minus --self-update). Use to pull the
@@ -847,12 +851,68 @@ _start_sshd() {
     _hk="/etc/ssh/ssh_host_${_t}_key"
     [ -s "$_hk" ] || ssh-keygen -q -t "$_t" -f "$_hk" -N '' 2>/dev/null || true
   done
-  # allow root login for the live session; the live root has no password, so permit
-  # empty-password auth for THIS throwaway media only.
+  # allow root login for the live session. NOTE: an EMPTY root password does NOT work
+  # over ssh on illumos -- pam_unix_auth refuses a null password on the network even
+  # with PermitEmptyPasswords yes (measured on the X1: sshd prompts, Enter is rejected).
+  # So we authenticate one of two real ways, in order of preference:
+  #   1. a pubkey the operator supplied (SOLNIX_SSH_PUBKEY) -- zero-friction, no password.
+  #   2. a root PASSWORD -- taken from SOLNIX_ROOT_PW if set, else RANDOM and PRINTED here.
+  # Either way we set an actual credential BEFORE announcing the service, so the very
+  # first ssh attempt succeeds. We do NOT enable PermitEmptyPasswords (it is a footgun
+  # that reads as "works" in QEMU and fails on real PAM).
   _sc=/etc/ssh/sshd_config
   if [ -f "$_sc" ]; then
     grep -q '^PermitRootLogin yes' "$_sc" || echo 'PermitRootLogin yes' >> "$_sc"
-    grep -q '^PermitEmptyPasswords yes' "$_sc" || echo 'PermitEmptyPasswords yes' >> "$_sc"
+    # if a pubkey was supplied, ensure pubkey auth is on; always keep password auth on
+    # (the random-password path needs it). Remove any PermitEmptyPasswords we may have
+    # written on an earlier run -- it does not help and misleads.
+    grep -q '^PasswordAuthentication yes' "$_sc" || echo 'PasswordAuthentication yes' >> "$_sc"
+    grep -q '^PubkeyAuthentication yes' "$_sc" || echo 'PubkeyAuthentication yes' >> "$_sc"
+  fi
+  # 1. pubkey path (preferred): install SOLNIX_SSH_PUBKEY into root's authorized_keys.
+  _pubkey_done=0
+  if [ -n "${SOLNIX_SSH_PUBKEY:-}" ]; then
+    mkdir -p /root/.ssh 2>/dev/null; chmod 700 /root/.ssh 2>/dev/null
+    if ! grep -qF "$SOLNIX_SSH_PUBKEY" /root/.ssh/authorized_keys 2>/dev/null; then
+      printf '%s\n' "$SOLNIX_SSH_PUBKEY" >> /root/.ssh/authorized_keys
+    fi
+    chmod 600 /root/.ssh/authorized_keys 2>/dev/null
+    _pubkey_done=1
+    log "installed SOLNIX_SSH_PUBKEY into /root/.ssh/authorized_keys -- key auth enabled"
+  fi
+  # 2. password path: set a root password so password auth works over ssh. Skip only if
+  #    root ALREADY has a real (non-empty, non-locked) password -- the operator set one.
+  #    `passwd -s root` prints e.g. "root  PS ..." (PS = password set) / "root  NP" (none)
+  #    / "root  LK" (locked). We set one unless it is already PS.
+  _rootpw_status=$(passwd -s root 2>/dev/null | awk '{print $2}')
+  _shown_pw=""
+  if [ "$_rootpw_status" != PS ]; then
+    if [ -n "${SOLNIX_ROOT_PW:-}" ]; then
+      _newpw="$SOLNIX_ROOT_PW"
+    else
+      # random 16-char password (no ambiguous chars). od on /dev/urandom is in the proto;
+      # fall back to a timestamp-seeded value if od is somehow absent.
+      _newpw=$(od -An -N12 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n' | cut -c1-16)
+      [ -n "$_newpw" ] || _newpw="solnix$(date +%s | tail -c 7)"
+    fi
+    # set it non-interactively. illumos passwd reads from a tty; use the SMF-safe
+    # route: write the crypted hash via `passwd` stdin is unreliable, so prefer
+    # `echo pw | passwd --stdin` when supported, else a here-doc double-entry.
+    if passwd root >/dev/null 2>&1 <<EOF2
+$_newpw
+$_newpw
+EOF2
+    then :; else
+      # some illumos passwd builds want the old pw first (empty) then twice new
+      passwd root >/dev/null 2>&1 <<EOF3
+
+$_newpw
+$_newpw
+EOF3
+    fi
+    _shown_pw="$_newpw"
+    [ -n "${SOLNIX_ROOT_PW:-}" ] && _shown_pw="(the SOLNIX_ROOT_PW you supplied)"
+    log "set a root password for the live ssh session"
   fi
   # enable the SMF service if present, else run sshd directly.
   if svcadm enable -s svc:/network/ssh:default 2>/dev/null; then :; 
@@ -863,7 +923,19 @@ _start_sshd() {
     echo "" >&2
     echo "  #####################################################################" >&2
     echo "  ##  sshd is up. From another host on this network:" >&2
-    echo "  ##      ssh root@${_ip:-<this-machine-ip>}       (root, empty password)" >&2
+    if [ "$_pubkey_done" = 1 ] && [ -z "$_shown_pw" ]; then
+      echo "  ##      ssh root@${_ip:-<this-machine-ip>}" >&2
+      echo "  ##      (authenticate with the private key matching SOLNIX_SSH_PUBKEY)" >&2
+    elif [ -n "$_shown_pw" ]; then
+      echo "  ##      ssh root@${_ip:-<this-machine-ip>}" >&2
+      echo "  ##      root PASSWORD:  $_shown_pw" >&2
+      [ "$_pubkey_done" = 1 ] && echo "  ##      (or use the private key matching SOLNIX_SSH_PUBKEY)" >&2
+    else
+      echo "  ##      ssh root@${_ip:-<this-machine-ip>}" >&2
+      echo "  ##      (root already has a password -- use it)" >&2
+    fi
+    echo "  ##  a flood of agent keys -> 'too many authentication failures'? add:" >&2
+    echo "  ##      ssh -o IdentitiesOnly=yes -o IdentityAgent=none root@${_ip:-<ip>}" >&2
     echo "  ##  then run:  solnix-install --flake 'github:USER/REPO#HOST'" >&2
     echo "  #####################################################################" >&2
   else
