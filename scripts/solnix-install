@@ -3052,6 +3052,20 @@ fi
 
 if [ "$_mkadmin" = 1 ]; then
   log "creating admin user $_au"
+  # The home lives on the SEPARATE home dataset ($POOL/home or $POOL/export/home),
+  # which mounts at $HOME_BASE on the running system. During install that dataset is
+  # NOT mounted under $ALTROOT, so writing to $ALTROOT$HOME_BASE lands in the BE's
+  # own $HOME_BASE directory -- which is SHADOWED by the dataset at boot, so the
+  # home + authorized_keys silently vanish on first boot (measured on the X1: gburd
+  # had no ~/.ssh after reboot). Mount the home dataset under $ALTROOT first so the
+  # home + key land on the dataset that actually mounts at boot.
+  _homeds="$POOL/home"
+  case "$HOME_BASE" in */export/home) _homeds="$POOL/export/home" ;; esac
+  if zfs list -H "$_homeds" >/dev/null 2>&1; then
+    zfs set mountpoint="$ALTROOT$HOME_BASE" "$_homeds" 2>/dev/null || true
+    zfs mount "$_homeds" 2>/dev/null || true
+    log "mounted $_homeds at $ALTROOT$HOME_BASE so the admin home lands on the dataset (not the shadowed BE dir)"
+  fi
   mkdir -p "$ALTROOT${HOME_BASE}"
   # Run useradd/passwd AGAINST THE TARGET ROOT (-R), not the live system, so the
   # account lands on the installed disk. Fall back to direct file edits if -R is
@@ -3143,6 +3157,13 @@ fi
 log "finalizing (export pool)"
 sync
 zfs set canmount=noauto "$BEDS"
+# Reset the home dataset mountpoint to its boot-time path ($HOME_BASE), undoing the
+# temporary $ALTROOT$HOME_BASE mount used to land the admin home on the dataset.
+# Without this it would try to mount at /a/home at boot and the home would be lost.
+if [ "${_mkadmin:-0}" = 1 ] && [ -n "${_homeds:-}" ] && zfs list -H "$_homeds" >/dev/null 2>&1; then
+  run_to 20 zfs unmount "$_homeds" 2>/dev/null || true
+  zfs set mountpoint="$HOME_BASE" "$_homeds" 2>/dev/null || true
+fi
 run_to 30 umount "$ALTROOT/esp" 2>/dev/null || true
 # unmount the pool's own mountpoint (/a/$POOL from the menu.lst step) + the BE.
 run_to 30 zfs unmount "$POOL" 2>/dev/null || true
