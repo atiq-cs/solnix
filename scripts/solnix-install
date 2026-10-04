@@ -2647,17 +2647,24 @@ fi
 if [ -s /boot/loader.rc ]; then
   cp /boot/loader.rc "$ALTROOT/boot/loader.rc" 2>/dev/null || true
 fi
-if [ ! -s "$ALTROOT/boot/loader.rc" ] || ! grep -q 'initialize' "$ALTROOT/boot/loader.rc" 2>/dev/null; then
-  # No usable loader.rc, or one that never runs `initialize` (the word that
-  # reads /boot/defaults/loader.conf + /boot/loader.conf and thus sets $kernel).
-  # A bare `boot` rc leaves $kernel unset -> loader tries a module literally
-  # named 'kernel' -> "can't load 'kernel' / no bootable kernel". Write a
-  # self-contained rc that DOES run initialize, then boots the default BE.
-  # /boot/forth/loader.4th is staged into the ramdisk (oi-make-livecd 3d''), so
-  # the copied root carries it; warn (don't die) if somehow absent.
+# A USABLE loader.rc is one that `include`s the forth chain -- the STOCK illumos
+# loader.rc is `include /boot/forth/loader.4th` then `start` (or beastie-start),
+# and does NOT contain the literal word `initialize` (start runs it internally).
+# The old guard grepped for `initialize` and therefore REJECTED the good stock
+# loader.rc we just copied, overwriting it with a hand-written
+# `include loader.4th; initialize drop; boot` -- which, processed from the
+# installed pool, EXHAUSTS the forth dictionary ("Error: dictionary full" on every
+# word, before autoboot) and drops to the OK prompt. MEASURED on the dixi X1.
+# Correct test: a usable rc contains an `include` of the forth chain. Only if it
+# does NOT (or the file is empty/missing) do we synthesize one -- and we match the
+# STOCK pattern (`start`), never the dictionary-blowing `initialize drop; boot`.
+if [ ! -s "$ALTROOT/boot/loader.rc" ] || ! grep -q 'include' "$ALTROOT/boot/loader.rc" 2>/dev/null; then
   [ -f "$ALTROOT/boot/forth/loader.4th" ] || \
-    echo "WARN: BE lacks /boot/forth/loader.4th; loader.rc still runs initialize but forth menu absent" >&2
-  printf 'include /boot/forth/loader.4th\ninitialize drop\nboot\n' > "$ALTROOT/boot/loader.rc"
+    echo "WARN: BE lacks /boot/forth/loader.4th; the installed loader may not autoboot" >&2
+  # Stock illumos loader.rc: include the chain, then `start` (which runs
+  # initialize + the menu + autoboots via autoboot_delay). This is exactly what a
+  # working illumos install ships; do NOT add a second `initialize`/`boot`.
+  printf 'include /boot/forth/loader.4th\nstart\n' > "$ALTROOT/boot/loader.rc"
 fi
 # ensure autoboot actually fires even if the menu is absent: defaults/loader.conf
 # already sets kernel/bootfile; make sure autoboot_delay is a real number (set
