@@ -2552,16 +2552,9 @@ case "$TARGET_RESOLUTION" in
   *) _cols=$(( ${TARGET_RESOLUTION%x*} / 8 )); _rows=$(( ${TARGET_RESOLUTION#*x} / 16 )) ;;
 esac
 if [ -n "$_cols" ]; then
-  _efires="# console geometry: ${TARGET_RESOLUTION} with the fixed 8x16 font.
-# screen-#columns / screen-#rows are read by os/console.c:226-229. These are the
-# properties that actually work; efi-max-resolution does not exist in the loader.
-screen-#columns=\"$_cols\"
-screen-#rows=\"$_rows\""
   _bootenv_geom="setprop screen-#columns $_cols
 setprop screen-#rows $_rows"
 else
-  _efires="# native panel geometry requested: no screen-#columns / screen-#rows set,
-# so the console uses the full EDID mode (tiny on a HiDPI panel)."
   _bootenv_geom="# native geometry: no screen-#columns/#rows setprop"
 fi
 # the ttya-* props are kept unconditionally: they are inert when no serial port
@@ -2577,13 +2570,6 @@ EOF
 cat > "$ALTROOT/boot/loader.conf" <<EOF
 console="$TARGET_CONSOLE"
 os_console="$TARGET_CONSOLE"
-# Readable console on a HiDPI panel. MEASURED on the X1: EDID 3840x2160 and the
-# loader chose text mode 2 = 480 columns x 113 rows, which is unreadable. The
-# console font is a fixed 8x16 with no larger built-in, so rows/cols come from
-# screen size (common/font/font.c) and RESOLUTION is the only lever. The live
-# media already sets this; the installed system did not, so text was tiny again
-# after the first reboot.
-${_efires}
 boot-args="-v"
 loader_logo="illumos"
 autoboot_delay="3"
@@ -2593,6 +2579,17 @@ boot_archive_load="YES"
 boot_archive_name="/platform/i86pc/amd64/boot_archive"
 boot_archive.hash_load="NO"
 EOF
+# ⚠️ loader.conf is parsed by the loader as FORTH (var=value assignments). It must
+# contain NO '#' character: '#' is a Forth number-conversion word, so a line like
+# screen-#columns="100" (or even a '# comment') corrupts the dictionary -> "Error:
+# dictionary full" on EVERY word -> the loader drops to the OK prompt and NEVER
+# reads loader.conf (so the console geometry never applies -> tiny native text).
+# MEASURED on the dixi X1. The console GEOMETRY (screen-#columns/#rows) therefore
+# lives ONLY in bootenv.rc, which is key=value (not Forth) and handles '#' fine.
+# Gate it: loader.conf must have zero '#'.
+if grep -q '#' "$ALTROOT/boot/loader.conf" 2>/dev/null; then
+  die "loader.conf contains '#' -- the Forth parser will dictionary-full and drop to OK; screen-# geometry belongs in bootenv.rc only"
+fi
 # LOUD-FAIL GATE: the installed console is unrecoverable-if-wrong on a machine
 # with no keyboard, and both files are written by heredoc (a quoting slip would
 # ship the literal text). Assert what actually landed on the target.
