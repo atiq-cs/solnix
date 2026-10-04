@@ -1150,6 +1150,12 @@ fi
 if [ -f "$RDROOT/etc/ssh/sshd_config" ]; then
   grep -q '^PubkeyAuthentication' "$RDROOT/etc/ssh/sshd_config" || echo 'PubkeyAuthentication yes' >> "$RDROOT/etc/ssh/sshd_config"
   grep -q '^PasswordAuthentication' "$RDROOT/etc/ssh/sshd_config" || echo 'PasswordAuthentication yes' >> "$RDROOT/etc/ssh/sshd_config"
+  # ⚠️ UsePAM yes: without it OpenSSH 10 does its own crypt() password check, which
+  # FAILS OPEN on this illumos build -- every password (wrong/empty included)
+  # authenticates (MEASURED on the dixi X1 + under KVM: wrong-pw + pubkey-disabled
+  # returns rc=0). With UsePAM yes sshd consults the illumos PAM stack (pam_unix_auth,
+  # present + correct) so the shadow hash is actually enforced. Bake it into the media.
+  grep -q '^UsePAM' "$RDROOT/etc/ssh/sshd_config" || echo 'UsePAM yes' >> "$RDROOT/etc/ssh/sshd_config"
 fi
 # WIDEST-HARDWARE BOOT: /etc/path_to_inst binds specific driver INSTANCE numbers
 # to the BUILD HOST's exact PCI/device topology. Shipping the host's copy makes

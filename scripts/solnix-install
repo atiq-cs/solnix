@@ -872,6 +872,13 @@ _start_sshd() {
     # written on an earlier run -- it does not help and misleads.
     grep -q '^PasswordAuthentication yes' "$_sc" || echo 'PasswordAuthentication yes' >> "$_sc"
     grep -q '^PubkeyAuthentication yes' "$_sc" || echo 'PubkeyAuthentication yes' >> "$_sc"
+    # ⚠️ CRITICAL: UsePAM yes. Without it OpenSSH 10 defaults to its OWN password
+    # check (crypt() against shadow), which on this illumos build FAILS OPEN -- every
+    # password, incl. wrong and empty, authenticates root (MEASURED: wrong-pw +
+    # pubkey-disabled returns rc=0). With UsePAM yes sshd uses the illumos PAM auth
+    # stack (pam_unix_auth, which is present + correct), so the real $6$ hash is
+    # actually enforced. This is the single most important sshd setting on this media.
+    grep -q '^UsePAM yes' "$_sc" || echo 'UsePAM yes' >> "$_sc"
   fi
   # 1. pubkey path (preferred): install SOLNIX_SSH_PUBKEY into root's authorized_keys.
   _pubkey_done=0
@@ -2973,7 +2980,15 @@ if [ -f "$ALTROOT/etc/ssh/sshd_config" ]; then
       -e 's/^#*PermitEmptyPasswords.*/PermitEmptyPasswords no/' \
       "$ALTROOT/etc/ssh/sshd_config" > "$ALTROOT/etc/ssh/sshd_config.new" \
     && mv "$ALTROOT/etc/ssh/sshd_config.new" "$ALTROOT/etc/ssh/sshd_config"
-  log "sshd: PermitRootLogin no, PermitEmptyPasswords no"
+  # ⚠️ UsePAM yes on the installed system too. Without it OpenSSH 10 does its own
+  # crypt() password check, which FAILS OPEN on this illumos build (every password
+  # authenticates). With UsePAM yes the real PAM auth stack enforces the hash --
+  # essential since the admin user (gburd) logs in by password. MEASURED on the X1.
+  grep -q '^UsePAM yes' "$ALTROOT/etc/ssh/sshd_config" \
+    || echo 'UsePAM yes' >> "$ALTROOT/etc/ssh/sshd_config"
+  grep -q '^UsePAM yes' "$ALTROOT/etc/ssh/sshd_config" \
+    || die "sshd: UsePAM yes not set on target -- password auth would fail OPEN"
+  log "sshd: PermitRootLogin no, PermitEmptyPasswords no, UsePAM yes (password auth actually enforced)"
 fi
 # Ensure network/ssh is ENABLED in the target's SMF repository, so the installed
 # system comes up with sshd listening on first boot (needed for remote login).
