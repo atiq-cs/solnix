@@ -1871,7 +1871,8 @@ $_netline
      To also pull the latest installer once online:
        solnix-install --self-update   # network up + re-fetch this installer
      To install REMOTELY (ssh in from another host):
-       solnix-install --ssh           # network up + start sshd (root, empty pw)
+       solnix-install --ssh           # network up + start sshd; prints a root
+                                      # password to ssh with (or set SOLNIX_SSH_PUBKEY)
 
   2) Install to a disk (the target is AUTO-DETECTED; scratch is set up for you):
        solnix-install --flake 'github:USER/REPO#HOST'   # e.g. github:jdoe/myrepo#myhost
