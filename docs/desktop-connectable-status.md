@@ -8,6 +8,28 @@
 > host). See `docs/durability-account-loss.md` for why this keeps happening and the rules
 > that limit the damage.
 
+## GUI installer image gui3 (2026-10-04): live-boot renders the TEXT installer, not COSMIC
+
+The graphical installer image `usb-image-20261003-gui3` (built from HEAD 56fa4d9e via local
+KVM) was KVM-boot-verified on a framebuffer (`-vga std`, screendump). MEASURED, honest result:
+the shipped ISO boots UEFI -> loader -> kernel -> `solnix console login:` -> the live-boot SMF
+method runs `solnix-cosmic-session`, which **does not start a COSMIC session** and prints:
+
+    [solnix] COSMIC session prerequisites missing (smallvil=, Xorg=NO).
+    [solnix] Falling back to the text installer front-end.
+
+It then renders the **text installer** on the framebuffer (banner + disk detection + install
+prompt), steady across time. The MECHANISM: the live ramdisk stages NO smallvil compositor and
+NO Xorg server (`smallvil=` empty, `Xorg=NO`); those paths ride in the base+COSMIC *media store*
+(`solnix-store.iso`) and are pulled onto a scratch pool only *after* install, not on the live
+ISO. So the live launcher's own guard (`[ -z "$SMALLVIL" ] || [ ! -x /usr/bin/Xorg ]`) fires and
+falls back. This is distinct from (and upstream of) the vgatext/no-DRM framebuffer wall in
+`docs/bare-metal-gui-framebuffer-gap.md`: even if a framebuffer compositor backend existed, the
+live ISO carries no compositor to run. The VNC-COSMIC path below is reached on an INSTALLED
+system that has pulled the media store onto a pool, not on the live boot. Screenshot:
+`artifacts/install-media/usb-image-20261003-gui3/boot-logs/qemu-framebuffer-text-installer-fallback.png`.
+**gui3 does not claim bare-metal login-to-desktop and did not render a COSMIC app on the live boot.**
+
 ## What's REAL and verified (deterministic)
 A connectable solnix Wayland desktop on x86_64-illumos, on the 10/10-reliable base
 (ami-08028a88f6e53ff49, PIT-hang fixed). VNC-verified end-to-end:
