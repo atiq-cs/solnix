@@ -38,7 +38,21 @@
 #include <sys/cmn_err.h>
 #include <net/if.h>		/* IFNAMSIZ, struct ifnet */
 
-/* ---- spl: no-op. See the note above before changing this. ---- */
+/*
+ * ---- spl -> sc_lock. Read SPLNET-AUDIT.md before changing this. ----
+ *
+ * splnet()/splx() themselves stay NO-OPS: the audit refutes a blanket
+ * "#define splnet() mutex_enter(&sc->sc_lock)" because (a) THREE splnet
+ * regions sleep inside the bracket (iwx_send_cmd, iwx_load_pnvm,
+ * iwx_run_init_mvm_ucode -- measured; the audit's "only region 8" was wrong
+ * and is corrected in SPLNET-AUDIT.md) and (b) the lock order is already
+ * inverted between iwx_ioctl and iwx_init_task. A macro cannot see those and
+ * would deadlock. Instead the phase-3 fix converts each splnet region AT THE
+ * SITE in patches/if_iwx.illumos.patch: non-sleeping regions take IWX_SC_LOCK,
+ * the three sleepers use the condvar split (IWX_CMD_WAIT), and the three
+ * nesting callees (iwx_stop, iwx_sta_rx_agg) gain _locked inner forms. Any
+ * residual splnet()/splx() therefore stays a safe no-op.
+ */
 typedef int ipl_t;
 #define IPL_NONE	0
 #define IPL_NET		6
@@ -49,6 +63,32 @@ typedef int ipl_t;
 #define splx(s)		((void)(s))
 #define splassert(l)	((void)0)
 #define splsoftnet()	(0)
+
+/*
+ * sc_lock: the MUTEX_DRIVER mutex (iblock cookie) that restores the ISR
+ * exclusion splnet() provided. Declared on struct iwx_softc by the header
+ * patch (patches/if_iwxvar.illumos.patch). These wrappers keep the per-site
+ * conversion legible and give the assertion its single spelling.
+ */
+#define IWX_SC_LOCK(sc)		mutex_enter(&(sc)->sc_lock)
+#define IWX_SC_UNLOCK(sc)	mutex_exit(&(sc)->sc_lock)
+#define IWX_SC_ASSERT_LOCKED(sc)	ASSERT(mutex_owned(&(sc)->sc_lock))
+/*
+ * The condvar split for the three sleeping regions. The caller holds sc_lock;
+ * IWX_CMD_WAIT drops it across the wait (cv_timedwait_sig does this
+ * atomically) and re-takes it before returning, so the ISR -- which also takes
+ * sc_lock -- can run and cv_broadcast. Returns 0 on signal, EWOULDBLOCK on
+ * timeout, EINTR if interrupted (PCATCH-equivalent). The waker is IWX_CMD_WAKE
+ * under sc_lock. nsecs is a relative timeout; INFSLP (UINT64_MAX) = no timeout.
+ * The chan argument is advisory -- every wait site re-checks a while()
+ * predicate, so one shared condvar with cv_broadcast is correct.
+ */
+struct iwx_softc;
+extern int iwx_cmd_wait(struct iwx_softc *, const void *, int, uint64_t);
+extern void iwx_cmd_wake(struct iwx_softc *, const void *);
+#define IWX_CMD_WAIT(sc, chan, intr, nsecs) \
+	iwx_cmd_wait((sc), (chan), (intr), (nsecs))
+#define IWX_CMD_WAKE(sc, chan)	iwx_cmd_wake((sc), (chan))
 
 /* ---- rwlock: OpenBSD rw_* -> illumos krwlock_t. Flag names differ. ---- */
 #define RW_WRITE	RW_WRITER

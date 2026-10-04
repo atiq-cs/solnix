@@ -14,9 +14,42 @@ from the source, not only from here.
 | **`if_iwx.c` compiles to an object file** | **YES** | `build/if_iwx_illumos.o`, ELF 64-bit relocatable x86-64, 263 text symbols. Real `-c` codegen, not `-fsyntax-only` |
 | **the mbuf layer links** | **YES** | `ld -r` against a kernel-built `iwx_mbuf.o` resolves **all 11** `iwx_m_*`: 128 undefined -> 122 |
 | **`iwx` links as a module** | **YES** | `ld -r` of net80211 + crypto + rbtree + mbuf + kcompat + stack + iwx_mbuf leaves **42 undefined, EVERY ONE kernel-supplied-at-load, 0 non-kernel remaining** (measure-gate.sh, negative-controlled). See ROUND 7 below. |
-| **module loads** | **NO** | needs phase-3 locking (SPLNET/Finding 3), `_init`/`_info`/`_fini`, `mac_register`, DDI attach |
+| **module loads** | **NO** | needs phase-3 locking (SPLNET/Finding 3) -- the audited COARSE model is now REFUTED (deadlocks; see below); the FINE-GRAINED model is the real remaining work. The attach glue (`_init`/`_info`/`_fini`, `mac_register`, DDI attach) is DONE in `iwx_attach.c`. |
 | **attaches to the PCI device** | **NO** | not attempted |
 | **sees / associates with an AP** | **NO** | not attempted |
+
+### Session-5 addition: phase-3 locking -- safe subset landed, coarse model refuted
+
+This session applied phase-3 locking as the next rung. The headline is a **refutation**: the
+locking model audited in `SPLNET-AUDIT.md`/`FINDINGS.md` cannot be implemented as a coarse
+"hold `sc_lock` across each region" pass -- it deadlocks three different ways (sleep-under-lock on
+8/15 driver regions, 3 nesting pairs, and a reachable net80211 AB/BA). The brief's one remaining
+unverified premise -- that net80211's `ic_lock` is never held across a callback into the driver --
+was **walked and found false** (`ieee80211_clean_nodes` -> `ic_updateprot` at `ieee80211_node.c:2338`
+-> `iwx_updateprot` -> `iwx_add_task` -> `sc_lock`, i.e. `ic_lock -> sc_lock`, inverting the ISR's
+`sc_lock -> ic_lock`). Rather than ship a partial coarse model (which would be *actively unsafe*:
+ISR locked, 5 regions unlocked), only the **proven-safe, deadlock-free subset** landed:
+
+* **`sc_lock` (`kmutex_t`) + `sc_cmd_cv` (`kcondvar_t`) added to `struct iwx_softc`** via a NEW
+  header patch `patches/if_iwxvar.illumos.patch` -- the vendored `if_iwxvar.h` is read-only, so this
+  uses the same patch discipline as `if_iwx.c`; `gen-illumos-src.sh` materialises
+  `build/dev/pci/if_iwxvar.h` and `build-check.sh` puts `-Ibuild` first. **These fields are
+  SCAFFOLDING for the fine-grained model, not yet referenced by driver code** -- measured: the
+  generated `.c` compiles identically against the patched and unpatched header, so the fields are
+  declared-and-ready, not load-bearing yet. (Kept now because the patch machinery for a read-only
+  header is the awkward part, and the next rung needs exactly these.)
+* **`iwx_init_task` lock-order inversion fixed** (`ioctl_rwl` before the `splnet` region), in
+  `patches/if_iwx.illumos.patch`.
+* **`IWX_SC_LOCK`/`IWX_SC_UNLOCK`/`IWX_SC_ASSERT_LOCKED` + `iwx_cmd_wait`/`iwx_cmd_wake`
+  condvar-split declarations** added to `compat/sys/iwx_kernel.h`; `splnet`/`splx` and the 8
+  `splassert` **stay no-ops** (converting them now would panic -- see `SPLNET-AUDIT.md`).
+
+The driver still compiles to an object with **0 errors** (`build-check.sh --self-test` exit 0,
+including with the new header fields) and the net80211 module still links (`measure-gate.sh`: 42
+undefined, all kernel-supplied, 0 non-kernel). The concrete fine-grained model that *does* work is
+sketched in "Next, in dependency order" step 3 below. Files changed this session: `STATUS.md`,
+`SPLNET-AUDIT.md`, `../net80211-openbsd/FINDINGS.md`, `compat/sys/iwx_kernel.h`, `gen-illumos-src.sh`,
+`build-check.sh`, `patches/if_iwx.illumos.patch`, and the new `patches/if_iwxvar.illumos.patch`.
 
 ### Session-4 addition: the phase-1 illumos-side attach glue now compiles
 
@@ -330,7 +363,7 @@ single header and asserts no fatal error occurred.
 | `compat/dev/pci/pcireg.h` | **REAL** — architectural PCI/PCIe constants |
 | `compat/netinet/if_ether.h` | **REAL and load-bearing** — see the `arpcom` note below |
 | `compat/net/if.h` | **REAL** struct + mblk FIFO; illumos has no driver-facing `ifnet` |
-| `compat/sys/iwx_kernel.h` | mixed: `spl` is a **deliberate no-op** (audited -- see `SPLNET-AUDIT.md`), the rest real declarations |
+| `compat/sys/iwx_kernel.h` | mixed: `spl` is still a **deliberate no-op** (the blanket mutex mapping is refuted -- see `SPLNET-AUDIT.md`), now joined by the `IWX_SC_LOCK`/`IWX_CMD_WAIT` wrappers + `iwx_cmd_wait`/`iwx_cmd_wake` condvar-split **declarations** for the fine-grained model; the rest real declarations |
 | `compat/sys/mbuf.h` | **REAL** — aliases the struct *tag* to `struct msgb` and defines no field; the alias is argued from measurement and guarded by the `field-is-unmapped` control |
 | `compat/machine/bus.h`, `compat/dev/pci/pcivar.h`, `compat/net/if_media.h` | types real, functions **declared only** — they fail at LINK with their own names |
 | `compat/net/bpf.h` | **KNOWN GAP, tagged** — `NBPFILTER=0` compiles out every tap, so monitor mode does not work and nothing pretends otherwise |
@@ -426,23 +459,94 @@ remains, sized by the link measurement above:
 2. **Implement the declared-only shims** -- `iwx_dma.c`, `iwx_pci.c`, `iwx_kcompat.c`. **50 symbols**,
    enumerated by class above. `bus_dmamap_load_mbuf` is the one with a written contract and the one that
    must return `EFBIG` distinctly.
-3. **Apply the `splnet` fix** -- `sc_lock` with an interrupt block cookie, `ioctl_rwl` **before** `sc_lock`
-   always, the `iwx_init_task` order inversion rewritten, `iwx_send_cmd`'s `tsleep_nsec` converted to
-   `cv_timedwait_sig`, and the 8 `splassert(IPL_NET)` turned into `ASSERT(mutex_owned(&sc->sc_lock))`.
-   See `SPLNET-AUDIT.md`. **This must land before the module is ever loaded**, not before it links.
-   **Plus net80211's 24 regions**, audited in `../net80211-openbsd/FINDINGS.md`: none of the 24 sleeps
-   so all 24 can take a mutex, exactly 1 nests (`ieee80211_newstate` -> `ieee80211_free_allnodes`) and
-   would self-deadlock, and 4 more `splassert(IPL_NET)` sites need converting. Proposed order
-   `ioctl_rwl` -> `sc_lock` -> `ic_lock`, with **one premise still unverified** (that `ic_lock` is never
-   held across a callback into the driver) -- named there rather than assumed.
+3. **Phase-3 locking -- the audited COARSE model is REFUTED; a FINE-GRAINED model is the real
+   remaining work.** (Phase-3 session, measured.) Landed only the proven-safe, deadlock-free
+   subset; see `SPLNET-AUDIT.md` for the full correction and the per-region evidence.
+
+   **Why the coarse model ("hold `sc_lock` across regions 1-7, 9-15") cannot ship:**
+   * **8 of the 15 driver regions sleep under the lock.** Regions 6/7/8 (`iwx_load_pnvm`,
+     `iwx_run_init_mvm_ucode`, `iwx_send_cmd`) `tsleep_nsec` *inside* the bracket (woken by the
+     ISR at `:11194`/`:11366`/`:6079`); regions 10/12/13/14/15 call sleeping functions
+     (`iwx_mfp_leave`/`iwx_init`/`iwx_stop`/`refcnt_finalize`) while they would hold `sc_lock`.
+     Sleeping on an iblock-cookie mutex deadlocks the CPU. (The audit flagged only region 8.)
+   * **3 nesting self-deadlocks** under a non-recursive mutex: region 5 -> region 2, region 14
+     -> region 13, region 15 -> region 13.
+   * **An AB/BA deadlock with net80211**, reachable on any multi-CPU box in RUN state: the
+     node-cache timeout (`ieee80211_node.c:127`->`:131`) -> `ieee80211_clean_nodes` holds
+     `ic_lock` and calls `ic->ic_updateprot(ic)` (`:2338`) -> driver `iwx_updateprot`
+     (`if_iwx.c:3695`) -> `iwx_add_task` -> `sc_lock`, i.e. `ic_lock -> sc_lock`; while the ISR
+     runs `sc_lock -> ic_lock` (`iwx_intr` -> `ieee80211_find_rxnode`/`release_node`). The
+     FINDINGS.md premise "`ic_lock` is never held across a callback into the driver" is **false**.
+
+   **Landed this session (safe, gates stay green):** `sc_lock`+`sc_cmd_cv` on `struct iwx_softc`
+   (header patch `patches/if_iwxvar.illumos.patch`); the `IWX_SC_LOCK`/`IWX_CMD_WAIT` wrappers +
+   `iwx_cmd_wait`/`iwx_cmd_wake` condvar-split *declarations* in `compat/sys/iwx_kernel.h`; the
+   `iwx_init_task` order inversion fixed (`ioctl_rwl` before the `splnet` region). `splnet`/`splx`
+   stay no-ops; the 8 `splassert` stay no-ops (converting them now would panic -- their functions
+   sleep and cannot hold `sc_lock`).
+
+   **The FINE-GRAINED model to implement next (concrete enough to start from):**
+   * **Locks:** `sc->ioctl_rwl` (existing sleepable rwlock, serialises ioctl/init/stop entrants) ->
+     `sc->sc_lock` (new iblock `MUTEX_DRIVER`, guards ISR-shared data) -> `ic->ic_lock` (new iblock
+     `MUTEX_DRIVER` in net80211, guards the node-cache RB tree + BA/scan state). Order as written.
+   * **`sc_lock` is taken NARROWLY**, only around the ISR-shared data windows, never across a sleep
+     or a sub-call that sleeps: the TX command-ring pointers (`ring->cur`/`cur_hw`/`queued` + the
+     `IWX_HBUS_TARG_WRPTR` write), the `sc_cmd_resp_pkt[]`/`sc_cmd_resp_len[]` slots, the RX reorder
+     buffers, and the `sc_flags` bit updates. The ISR (`iwx_intr`/`iwx_intr_msix`) holds `sc_lock`
+     for its ring/notif reaping.
+   * **Regions that sleep (6,7,8) use the condvar split:** take `sc_lock` for the ring/doorbell
+     write, then `iwx_cmd_wait(sc, chan, intr, nsecs)` which `cv_timedwait_sig(&sc->sc_cmd_cv,
+     &sc->sc_lock, ...)` -- dropping `sc_lock` across the wait so the ISR can run. The ISR waker
+     (`iwx_cmd_done` for `desc`; `iwx_notif_intr` for `sc_init_complete`) calls
+     `iwx_cmd_wake(sc, chan)` -> `cv_broadcast(&sc->sc_cmd_cv)` under `sc_lock`. The existing
+     `while()` predicate loops absorb the shared-condvar broadcast correctly.
+   * **Regions that only call sleeping functions (10,12,13,14,15) do NOT hold `sc_lock` across the
+     region.** Their mutual exclusion is `ioctl_rwl` (which they already take). They take `sc_lock`
+     only for the specific field mutations, releasing it before `iwx_init`/`iwx_stop`/etc. Note
+     `iwx_stop`'s `refcnt_finalize` must drain tasks with NO lock held.
+   * **Nesting fixed with `_locked` inner forms:** `iwx_stop_locked`/`iwx_sta_rx_agg_locked`
+     (caller holds `sc_lock`), outer wrappers acquire. net80211's `ieee80211_free_allnodes` gets
+     the same split (its 1 self-nest from `ieee80211_newstate`).
+   * **Break the net80211 AB/BA edge (REQUIRED):** `ieee80211_clean_nodes` must not call
+     `ic_updateprot` while holding `ic_lock`. **Chosen fix: defer the callback.** Set a
+     `need_updateprot` flag under `ic_lock`, drop `ic_lock` (`splx`), then call
+     `ic->ic_updateprot(ic)` -- so the callback (and thus the driver's `sc_lock` acquisition) is
+     never nested under `ic_lock`. Rationale: it is a 1-site change, keeps the driver handler
+     unchanged, and removes the only `ic_lock`-held-across-callback edge the sweep found; the
+     alternative (make the driver post a lock-free task) spreads the change across every
+     `ic_update*` handler for no benefit. Belongs in a patch to `ieee80211_node.c`.
+   * **`splassert(IPL_NET)` conversions happen LAST, per site**, to whatever lock that site then
+     actually holds (`sc_lock` for ISR-reachable ones, `ioctl_rwl` for the init/stop ones), not a
+     blanket `mutex_owned(&sc->sc_lock)`.
+
+   This is more work than a mechanical `splnet`->`mutex` pass -- it is the per-field data-race
+   analysis the coarse model skipped -- but it is the only model that does not deadlock. **Must
+   land before the module is ever loaded**, not before it links.
 4. **The 9 named decisions** above (`loadfirmware`, `getmicrouptime`, `ether_sprintf`'s signature mismatch,
    `config_mountroot`, ...).
-5. **GLDv3 + DDI attach**: `_init`/`_info`/`_fini`, `mac_register`, `driver_aliases` (already emitted as
-   `IWX_PCI_ALIASES`).
+5. **GLDv3 + DDI attach**: `_init`/`_info`/`_fini`, `mac_register`, `driver_aliases`. **Largely
+   DONE** in `iwx_attach.c` (session 4): `_init`/`_fini`/`_info` + `modlinkage`, DDI
+   attach/detach/quiesce, `pci_config_setup`, `ddi_regs_map_setup` (BAR0), the `ddi_intr_*`
+   skeleton, `mac_alloc`/`mac_register`/`mac_unregister`/`mac_link_update` with a full
+   `mac_callbacks_t`, all compiling to a real kernel `.o`. `driver_aliases` emitted as
+   `IWX_PCI_ALIASES` (`compat/dev/pci/pcidevs.h`, 18 IDs). **Remaining:** merge the skeleton
+   `struct iwx_il_softc` into the real `struct iwx_softc` once net80211 links (the `ponytail:`
+   note in `iwx_attach.c`), and replace the `IWX_NET80211_GATED` mc_ callbacks with the real
+   OpenBSD-net80211 bridge.
 6. Only then: load, attach, and read the firmware-selection path (`if_iwx.c:12387-12421`).
 
 Steps 1-2 are the bulk. On the evidence here that is **weeks**, and the plan's "weeks, not one build"
-estimate is confirmed rather than overturned. What has changed across the two sessions is that the 802.11
+estimate is confirmed rather than overturned. What has changed across the sessions is that the 802.11
 route is decided on measurement, the mbuf layer -- the one the plan called the place ports die -- exists,
-is tested, and **links**, and the locking model is now audited rather than deferred. What has *not* changed
-is that nothing links as a module and nothing loads.
+is tested, and **links**, the full module **links as a kmod** (42 undefined, all kernel-supplied), the
+GLDv3/DDI attach glue is written and compiles, and the locking model is now not just audited but
+**partially implemented and, where the audit was wrong, refuted with a traced mechanism**.
+
+**The phase-3 locking headline (this session):** the audited coarse model does **not** work -- it
+deadlocks on 8 of 15 driver regions (sleep-under-lock), on 3 nesting pairs, and on a reachable AB/BA
+with net80211 (`ic_updateprot` under `ic_lock` vs the ISR's `sc_lock`->`ic_lock`). The brief's one
+remaining unverified premise (`ic_lock` never held across a driver callback) was walked and found
+**false**. Only the proven-safe subset landed (lock fields, condvar primitive, order-inversion fix);
+the fine-grained model is sketched concretely above as the next rung. What has *not* changed is that
+**nothing loads and nothing attaches** -- and now there is a precise, mechanism-backed reason the
+coarse shortcut to "loadable" would have been a multi-CPU deadlock, not a shortcut.

@@ -22,6 +22,14 @@ src="$here/openbsd-orig/if_iwx.c"
 patch_file="$here/patches/if_iwx.illumos.patch"
 out="$here/build/if_iwx_illumos.c"
 
+# The vendored softc header is read-only too, so the phase-3 lock fields
+# (sc_lock/sc_cmd_cv) added to struct iwx_softc live in a SECOND patch,
+# materialised into build/dev/pci/if_iwxvar.h. The gate puts -Ibuild first so
+# this patched copy wins over the compat/ symlink into openbsd-orig/.
+var_src="$here/openbsd-orig/if_iwxvar.h"
+var_patch="$here/patches/if_iwxvar.illumos.patch"
+var_out="$here/build/dev/pci/if_iwxvar.h"
+
 if [ ! -f "$src" ]; then
 	echo "FAIL: missing vendored source $src"
 	exit 2
@@ -64,6 +72,20 @@ if [ "${1:-}" = "--update" ]; then
 	fi
 	mv "$tmp" "$patch_file"
 	echo "updated $patch_file ($(grep -c '^@@' "$patch_file") hunks)"
+
+	# Refresh the header patch too if the generated header has been edited.
+	if [ -f "$var_out" ]; then
+		vtmp=$(mktemp /tmp/iwx-vpatch.XXXXXX)
+		diff -u "$var_src" "$var_out" |
+		    sed -e '1s|^--- .*|--- openbsd-orig/if_iwxvar.h|' \
+		        -e '2s|^+++ .*|+++ build/dev/pci/if_iwxvar.h|' > "$vtmp"
+		if [ "$(grep -c '^@@' "$vtmp" 2>/dev/null)" = "0" ]; then
+			echo "FAIL: regenerated header patch has no hunks"
+			rm -f "$vtmp"; exit 2
+		fi
+		mv "$vtmp" "$var_patch"
+		echo "updated $var_patch ($(grep -c '^@@' "$var_patch") hunks)"
+	fi
 	exit 0
 fi
 
@@ -87,3 +109,31 @@ if cmp -s "$src" "$out"; then
 fi
 
 echo "generated $out ($(wc -l < "$out") lines, $hunks hunks applied)"
+
+# Materialise the patched softc header (same no-op-patch guards as above).
+if [ -f "$var_patch" ]; then
+	vhunks=$(grep -c '^@@' "$var_patch" 2>/dev/null)
+	vhunks=${vhunks:-0}
+	if [ "$vhunks" -eq 0 ]; then
+		echo "FAIL: $var_patch has no diff hunks (@@) -- it would apply as a no-op"
+		exit 2
+	fi
+	mkdir -p "$here/build/dev/pci"
+	cp -- "$var_src" "$var_out"
+	chmod u+w "$var_out"
+	if ! patch --silent -p0 -N -r - -d "$here" -i "$var_patch" \
+	    "build/dev/pci/if_iwxvar.h" 2>/tmp/iwx-genvar.err; then
+		echo "FAIL: if_iwxvar.h patch did not apply cleanly"
+		cat /tmp/iwx-genvar.err
+		exit 1
+	fi
+	if cmp -s "$var_src" "$var_out"; then
+		echo "FAIL: $var_out is byte-identical to the vendored header -- the"
+		echo "      patch applied as a no-op."
+		exit 1
+	fi
+	# if_iwxreg.h is unchanged but the include <dev/pci/if_iwxreg.h> must
+	# resolve under -Ibuild too, so drop a copy alongside the patched var.
+	cp -- "$here/openbsd-orig/if_iwxreg.h" "$here/build/dev/pci/if_iwxreg.h"
+	echo "generated $var_out ($vhunks hunks applied)"
+fi

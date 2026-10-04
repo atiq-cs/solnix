@@ -53,6 +53,51 @@ raises the PIL, and `cv_wait`/`delay` at raised PIL deadlocks the CPU. There is 
 `splnet` as a mutex acquisition and keep this call site correct. **This alone refutes the mutex
 mapping**; the arithmetic about 15 acquires vs 31 releases was never the real objection.
 
+> **CORRECTION (phase-3 implementation session, measured — supersedes the scope implied above).**
+> This section presents `iwx_send_cmd` as *the* sleeping region and the phrase "this alone"
+> reads as "region 8 is the only one that sleeps." **That scope is wrong.** Scanning every one of
+> the 15 splnet regions' bodies for `tsleep`/`rw_enter`/`cv_wait` *inside* the `splnet()`/`splx()`
+> bracket (brace-matched, not line-range) finds **THREE** regions that sleep inside the bracket,
+> each traced to the ISR line that wakes it:
+>
+> | region | function | sleeps on | woken by (ISR) |
+> |---|---|---|---|
+> | 6 | `iwx_load_pnvm` (`:4401`) | `tsleep_nsec(&sc->sc_init_complete)` `:4419` | `iwx_notif_intr` `:11194` |
+> | 7 | `iwx_run_init_mvm_ucode` (`:4509`) | `tsleep_nsec(&sc->sc_init_complete)` `:4538` | `iwx_notif_intr` `:11366` |
+> | 8 | `iwx_send_cmd` (`:5849`) | `tsleep_nsec(desc, PCATCH)` `:5970` | `iwx_cmd_done` `:6079` |
+>
+> So the condvar split (`sc_cmd_cv`, `cv_timedwait_sig`) is needed for regions **6, 7 and 8**,
+> not region 8 alone. The whole firmware bring-up handshake (`sc_fw`/`sc_uc`/`sc_init_complete`/
+> `desc`, all woken by `iwx_notif_intr`) uses the same sleep-inside-splnet pattern. The
+> conclusion "splnet must not become a blanket mutex" is unchanged and strengthened — there are
+> three deadlock sites, not one.
+>
+> **And a second, worse problem the original audit missed entirely:** five further regions do not
+> sleep *inside their own* bracket but *call a function that sleeps* while they would hold
+> `sc_lock` — so a coarse "hold sc_lock across the region" is a deadlock for them too:
+>
+> | region | function | calls (sleeps) |
+> |---|---|---|
+> | 10 | `iwx_bgscan_done_task` | `iwx_mfp_leave` -> `tsleep_nsec(&sc->deauth_sent)` `:10407` |
+> | 12 | `iwx_newstate_task` | `iwx_run`/`iwx_run_stop` -> `iwx_send_cmd` (sleeps) |
+> | 13 | `iwx_stop` | `refcnt_finalize` (blocks until tasks drain), `iwx_mfp_leave` |
+> | 14 | `iwx_ioctl` | `iwx_init` -> `tsleep_nsec(&ic->ic_state)` `:10279`; `iwx_stop` |
+> | 15 | `iwx_init_task` | `iwx_init` (sleeps), `iwx_stop` |
+>
+> **Net: 8 of the 15 regions (6,7,8,10,12,13,14,15) cannot be "hold sc_lock across the region."**
+> Only 6 can (regions 1,3,4,9,11, plus region 2 as a `_locked` callee). The audited coarse model
+> is therefore refuted as an *implementation* even though its *direction* (restore ISR exclusion
+> with an iblock mutex) is right. The correct shape is **fine-grained**: `sc_lock` taken only
+> around the ISR-shared data windows (TX ring pointers, cmd-response slots, RX reorder buffers,
+> device-register sequences), released before any sleeping call; the ioctl/init/stop paths keep
+> their mutual exclusion on `ioctl_rwl`; regions 6/7/8 use the condvar split. See STATUS.md's
+> "fine-grained locking model" section for the concrete sketch.
+>
+> There are also 3 `sc_lock` **nesting** self-deadlocks under a coarse non-recursive mutex
+> (region 5 `iwx_ba_task` -> region 2 `iwx_sta_rx_agg`; region 14 `iwx_ioctl` -> region 13
+> `iwx_stop`; region 15 `iwx_init_task` -> region 13 `iwx_stop`), fixed by `_locked` inner forms.
+> (`iwx_newstate_task` only *mentions* `iwx_stop` in comments; not a real call.)
+
 ### Refutation 2: the two lock orders are already inverted in the vendored source
 
 `sc->ioctl_rwl` is a real sleepable rwlock and it interacts with `splnet` in **both orders**:
@@ -129,11 +174,19 @@ laptop with no serial console.
 
 ## The replacement, and why two locks
 
+> **CORRECTION (phase-3 session): this "taken across regions 1-7 and 9-15" prescription is
+> refuted — see the correction block after Refutation 1 and STATUS.md's fine-grained model.**
+> 8 of 15 regions cannot hold `sc_lock` across the region (3 sleep inside, 5 call sleeping
+> functions), and 3 more nest. The text below is kept for the reasoning trail; the *direction*
+> (iblock mutex restores ISR exclusion) is right, the *granularity* (whole-region) is wrong.
+
 `sc_lock` — a `MUTEX_DRIVER` mutex created with the interrupt block cookie, so `mutex_enter`
 raises the PIL to the interrupt's level and genuinely excludes `iwx_intr`:
 
 * taken by `iwx_intr` / `iwx_intr_msix` for the whole handler;
-* taken across regions 1-7 and 9-15 in place of `splnet`/`splx`;
+* ~~taken across regions 1-7 and 9-15 in place of `splnet`/`splx`~~ — **WRONG, see correction**:
+  taken only around the ISR-shared data windows inside the 6 safe regions (1,3,4,9,11 + region 2
+  as a `_locked` callee); the other 8 regions use the condvar split or stay on `ioctl_rwl`;
 * **order: `ioctl_rwl` before `sc_lock`, always** — the order `iwx_ioctl` already uses
   (`:10505` then `:10512`). `iwx_init_task` (`:12763`/`:12767`) uses the opposite order and
   **must be rewritten to take `ioctl_rwl` first**. This is a real change to the vendored logic
@@ -148,14 +201,42 @@ deadline. The waker is `iwx_cmd_done`, which must `cv_broadcast` under `sc_lock`
 
 ## STATUS
 
-**AUDIT: COMPLETE. FIX: NOT IMPLEMENTED.** Tagged this way deliberately — the audit is the
-deliverable this file claims, and the lock work is not done. Specifically not done:
+**AUDIT: COMPLETE. FIX: PARTIALLY IMPLEMENTED (safe subset only); the coarse model is
+REFUTED and the fine-grained model is NOT YET IMPLEMENTED.** Updated in the phase-3 session.
 
-1. `sc_lock` does not exist; `splnet`/`splx` remain no-ops in `compat/sys/iwx_kernel.h`.
-2. The `iwx_init_task` lock-order inversion (`:12763` before `:12767`) is **not** fixed.
-3. `iwx_send_cmd`'s `tsleep_nsec` is not converted to a condvar.
-4. `splassert(IPL_NET)` is a no-op at 8 sites, so the contract is unchecked. It should become
-   `ASSERT(mutex_owned(&sc->sc_lock))`, which restores the check with the same 8 call sites.
+Landed (the proven-safe, deadlock-free subset):
+
+1. `sc_lock` (`kmutex_t`) and `sc_cmd_cv` (`kcondvar_t`) **now exist** on `struct iwx_softc`,
+   added via `patches/if_iwxvar.illumos.patch` (the vendored header is read-only, so this uses
+   the same patch discipline as `if_iwx.c`; `gen-illumos-src.sh` materialises
+   `build/dev/pci/if_iwxvar.h`). The driver still compiles to an object with 0 errors.
+   **They are SCAFFOLDING, not yet referenced by driver code** -- the `.c` compiles identically
+   with or without the patched header (measured), because the fine-grained model that *uses*
+   them is the next rung. They are declared now so that rung starts from a buildable base.
+2. The `iwx_init_task` lock-order inversion **is fixed**: `ioctl_rwl` is now taken *before* the
+   `splnet` region, matching `iwx_ioctl`. In `patches/if_iwx.illumos.patch`.
+3. `compat/sys/iwx_kernel.h` gains the `IWX_SC_LOCK`/`IWX_SC_UNLOCK`/`IWX_SC_ASSERT_LOCKED`
+   wrappers and the `iwx_cmd_wait`/`iwx_cmd_wake` condvar-split primitive **declarations**
+   (the `tsleep_nsec`->`cv_timedwait_sig` mapping for regions 6/7/8). `splnet`/`splx` **stay
+   no-ops** — deliberately, because a blanket mapping is refuted (see the correction after
+   Refutation 1).
+
+**NOT** landed, and why — the coarse model deadlocks:
+
+4. The per-region `sc_lock` wraps are **not** applied. 8 of 15 regions cannot hold `sc_lock`
+   across the region (regions 6/7/8 sleep inside; 10/12/13/14/15 call sleeping functions), and
+   3 nest. Shipping a *partial* coarse model would be **actively unsafe**: the ISR would take
+   `sc_lock` while 5 regions mutate ISR-shared state unlocked. The correct fix is fine-grained
+   (STATUS.md).
+5. `iwx_send_cmd`/`iwx_load_pnvm`/`iwx_run_init_mvm_ucode`'s `tsleep_nsec` is **not** yet
+   converted to the condvar split — the primitive is declared but the call sites await the
+   fine-grained model (they must take `sc_lock` for the ring/doorbell window, then
+   `iwx_cmd_wait` which drops it across the wait).
+6. The 8 `splassert(IPL_NET)` are **left as no-ops on purpose**. Converting them to
+   `ASSERT(mutex_owned(&sc->sc_lock))` now would **panic**: they sit in `iwx_auth`/`iwx_run`/
+   `iwx_run_stop`/`iwx_load_firmware`/`iwx_flush_sta`/`iwx_sta_rx_agg_*` — paths that call
+   `iwx_send_cmd` (sleep) and so cannot hold `sc_lock`. The fine-grained model must decide what
+   each should assert (likely `ioctl_rwl`-held, or nothing); only then do they convert.
 
 None of this is reachable before the driver attaches, and **all of it must land before it is
 loaded on hardware.** `hardware.wirelessIwx.enable` stays `false`.
@@ -189,3 +270,15 @@ The proposed model there is `ioctl_rwl` -> `sc_lock` -> `ic_lock`, and it carrie
 premise** (that `ic_lock` is never held across a callback into the driver via `ic_newstate` /
 `ic_send_mgmt` / `ic_set_key` / `ic_ampdu_rx_start`). Until that is walked, it is a proposal and not
 a design. **Both fixes remain NOT IMPLEMENTED.**
+
+> **UPDATE (phase-3 session): the premise is now WALKED, and it is FALSE.** A brace-matched,
+> region-aware sweep of all 24 net80211 splnet regions for `ic->ic_*(` callbacks *inside* the
+> bracket found exactly one — and it sinks the order: `ieee80211_clean_nodes` holds `splnet`
+> (-> `ic_lock`) and calls `ic->ic_updateprot(ic)` at `ieee80211_node.c:2338`, whose driver
+> handler `iwx_updateprot` (`if_iwx.c:3695`) calls `iwx_add_task` (region 9) which takes
+> `sc_lock`. That is `ic_lock -> sc_lock`, the **opposite** of the ISR's `sc_lock -> ic_lock`
+> (`iwx_intr` -> `ieee80211_find_rxnode`/`release_node`). Reached from the node-cache timeout
+> (`ieee80211_node_cache_timeout`, `node.c:127` -> `:131`), which holds no `sc_lock`. **AB/BA
+> deadlock, reachable on any multi-CPU box in RUN state.** The proposed order cannot hold as
+> stated. The fix is to break that one edge — defer the `ic_updateprot` callback out from under
+> `ic_lock` — detailed in `../net80211-openbsd/FINDINGS.md` and STATUS.md's fine-grained model.

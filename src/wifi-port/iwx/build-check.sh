@@ -36,7 +36,7 @@ compile_errs() {  # $1 = extra cflags; prints the raw compiler stderr
 	"$CC" -m64 -fsyntax-only "$DRV" \
 	    -D_KERNEL -ffreestanding -nostdinc \
 	    -include sys/iwx_prelude.h -include "$here/iwx_mbuf_adapter.h" \
-	    -I"$here/compat" -I"$here/openbsd-orig" -I"$here" \
+	    -I"$here/build" -I"$here/compat" -I"$here/openbsd-orig" -I"$here" \
 	    -I"$UTS/common" -I"$UTS/intel" -I"$UTS/i86pc" \
 	    -Wno-format $1 2>&1
 }
@@ -153,7 +153,7 @@ rm -f "$DRVOBJ"
 if "$CC" -m64 -c -o "$DRVOBJ" "$DRV" \
     -D_KERNEL -ffreestanding -nostdinc \
     -include sys/iwx_prelude.h -include "$here/iwx_mbuf_adapter.h" \
-    -I"$here/compat" -I"$here/openbsd-orig" -I"$here" \
+    -I"$here/build" -I"$here/compat" -I"$here/openbsd-orig" -I"$here" \
     -I"$UTS/common" -I"$UTS/intel" -I"$UTS/i86pc" \
     -Wno-format 2>/tmp/iwx_drv.err; then
 	# An exit status of 0 with no object is possible if the output path is
@@ -253,7 +253,7 @@ if [ "${1:-}" = "--self-test" ]; then
 	ablerrs=$("$CC" -m64 -fsyntax-only "$DRV" \
 	    -D_KERNEL -ffreestanding -nostdinc \
 	    -include sys/iwx_prelude.h -include "$here/iwx_mbuf_adapter.h" \
-	    -I"$abl" -I"$here/compat" -I"$here/openbsd-orig" -I"$here" \
+	    -I"$abl" -I"$here/build" -I"$here/compat" -I"$here/openbsd-orig" -I"$here" \
 	    -I"$UTS/common" -I"$UTS/intel" -I"$UTS/i86pc" -Wno-format 2>&1)
 	ablfatal=$(printf '%s' "$ablerrs" | grep -c 'fatal error' || true)
 	abln=$(printf '%s' "$ablerrs" | grep -c 'error:' || true)
@@ -329,7 +329,7 @@ if [ "${1:-}" = "--self-test" ]; then
 	# rather than merely absent from the source.
 	if "$CC" -m64 -fsyntax-only "$nc4" -D_KERNEL -ffreestanding -nostdinc \
 	    -include sys/iwx_prelude.h -include "$here/iwx_mbuf_adapter.h" \
-	    -I"$here/compat" -I"$here/openbsd-orig" -I"$here" \
+	    -I"$here/build" -I"$here/compat" -I"$here/openbsd-orig" -I"$here" \
 	    -I"$UTS/common" -I"$UTS/intel" -I"$UTS/i86pc" -Wno-format \
 	    >/dev/null 2>&1; then
 		echo "  field-is-unmapped control: m->m_len COMPILED -- a field macro has"

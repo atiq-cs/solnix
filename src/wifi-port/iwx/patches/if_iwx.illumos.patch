@@ -197,3 +197,46 @@
  				if (m == NULL) {
  					ifp->if_ierrors++;
  					m_freem(m0);
+@@ -12760,14 +12799,28 @@
+ {
+ 	struct iwx_softc *sc = arg1;
+ 	struct ifnet *ifp = &sc->sc_ic.ic_if;
+-	int s = splnet();
+-	int generation = sc->sc_generation;
+-	int fatal = (sc->sc_flags & (IWX_FLAG_HW_ERR | IWX_FLAG_RFKILL));
++	int generation;
++	int fatal;
++	int s;
+ 
++	/*
++	 * ILLUMOS phase-3 (SPLNET-AUDIT.md): lock order is ioctl_rwl before
++	 * sc_lock, ALWAYS. The vendored source took splnet() (the sc_lock slot)
++	 * BEFORE ioctl_rwl here while iwx_ioctl takes them in the opposite order
++	 * -- a textbook AB/BA inversion once splnet becomes a real lock. Acquire
++	 * ioctl_rwl first so the order matches iwx_ioctl. splnet()/splx() remain
++	 * no-ops (the fine-grained sc_lock windows are applied per the audit's
++	 * corrected model), so this reordering is correct today and keeps the
++	 * order right when those windows land.
++	 */
+ 	rw_enter_write(&sc->ioctl_rwl);
++	s = splnet();
++	generation = sc->sc_generation;
++	fatal = (sc->sc_flags & (IWX_FLAG_HW_ERR | IWX_FLAG_RFKILL));
++
+ 	if (generation != sc->sc_generation) {
+-		rw_exit(&sc->ioctl_rwl);
+ 		splx(s);
++		rw_exit(&sc->ioctl_rwl);
+ 		return;
+ 	}
+ 
+@@ -12779,8 +12832,8 @@
+ 	if (!fatal && (ifp->if_flags & (IFF_UP | IFF_RUNNING)) == IFF_UP)
+ 		iwx_init(ifp);
+ 
+-	rw_exit(&sc->ioctl_rwl);
+ 	splx(s);
++	rw_exit(&sc->ioctl_rwl);
+ }
+ 
+ void

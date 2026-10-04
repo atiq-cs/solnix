@@ -13,7 +13,10 @@
 > RB-tree and mbuf-alloc negative-controlled tests, and carries a module-link negative control that renames
 > `ifmedia_add` to prove the check can report an unresolved adapter). Provenance of the four adapters is in
 > `PROVENANCE.md`; the round-7 detail is in `../../docs/wifi-native-driver-plan.md` (the round-7 gate
-> section). **Still NOT a load and NOT an attach** -- phase-3 locking (Finding 3 below), the `iwx_gld.c`
+> section). **Still NOT a load and NOT an attach** -- phase-3 locking (Finding 3 below, now with a
+> **phase-3-session update**: the `ic_lock` premise in the proposed model is REFUTED — a reachable
+> AB/BA deadlock via `ieee80211_clean_nodes` -> `ic_updateprot` -> driver -> `sc_lock`; see the
+> update box in Finding 3's "Proposed locking model"), the `iwx_gld.c`
 > attach wiring the BRIDGE points (`mac_register`/`mac_rx`/`mac_link_update`), and the HARDWARE gate all
 > remain. iwx stayed green (build-check.sh exit 0) before AND after; no iwx-shared header was touched.
 >
@@ -340,22 +343,60 @@ audit leaving the no-op. This is the model; **it is not implemented**, and the n
 2. **`ieee80211_newstate` must be de-nested** before (1) is safe: split
    `ieee80211_free_allnodes` into a `_locked` inner form. 1 site.
 3. **Order: `sc->ioctl_rwl` -> `sc->sc_lock` -> `ic->ic_lock`.** `ic_lock` is innermost and is
-   never held across a call back into the driver.
+   never held across a call back into the driver. ~~[premise unverified]~~ **— REFUTED, see the
+   update box below: `ic_lock` IS held across one callback (`ic_updateprot`), and that callback's
+   driver handler takes `sc_lock`, so the raw order inverts. This rule only holds once that one
+   edge is broken (rule 7).**
 4. **`iwx_intr` must take `sc_lock` and `ic_lock`** — today it takes nothing, which is why
    `ioctl_rwl` never excluded it (`SPLNET-AUDIT.md`'s central finding).
 5. **The 4 `splassert(IPL_NET)` become `ASSERT(mutex_owned(&ic->ic_lock))`**, restoring the
    machine-checked contract at the same 4 sites.
 6. **Region 8 of the driver audit (`iwx_send_cmd`) is unaffected** and still needs the condvar
    split; it is not a net80211 region.
+7. **(NEW, required by the refutation.) Break the `ic_updateprot` edge** so `ic_lock` is never
+   held across the callback: `ieee80211_clean_nodes` must NOT call `ic->ic_updateprot(ic)` while
+   holding `ic_lock`. The clean fix is to **defer it** — set a `need_updateprot` flag under
+   `ic_lock` and invoke the callback after `mutex_exit`, or have the driver's `iwx_updateprot`
+   be the only one allowed and make it schedule via a lock-free task post. Chosen approach and
+   rationale are in `../iwx/STATUS.md` (fine-grained model). This belongs in a patch to
+   `ieee80211_node.c` with this file cited.
 
-⚠️ **Unresolved and NOT hand-waved:** rule 3 says `ic_lock` is never held across a call back into
-the driver, and **that is not yet verified.** net80211 calls the driver through `ic_newstate`,
-`ic_send_mgmt`, `ic_set_key`, `ic_ampdu_rx_start` and others; if any of those is invoked with
-`ic_lock` held and the driver's handler takes `sc_lock`, the order in rule 3 inverts. Checking it
-means walking every `ic->ic_*(` indirect call inside the 24 regions. **That work is not done**, and
-until it is, this model is a proposal and not a design.
+> **UPDATE (phase-3 session): premise in rule 3 WALKED and FOUND FALSE — with a reachable AB/BA
+> deadlock.** The brief's one remaining unverified assumption was "`ic_lock` is never held across
+> a callback into the driver." It was verified the way the project demands — by tracing, not by
+> faith — and it is **false**:
+>
+> A brace-matched, region-aware sweep of all 24 splnet regions for `ic->ic_*(` callbacks *inside*
+> the bracket (not line-range — the same bug this file already caught once) found exactly **one**,
+> and it is sufficient to invert the order:
+>
+> ```
+> ieee80211_node_cache_timeout   ieee80211_node.c:127   (timeout cb, holds NO sc_lock)
+>   -> ieee80211_clean_nodes     ieee80211_node.c:131
+>        s = splnet();           ieee80211_node.c:2237   (-> ic_lock held)
+>        ...
+>        ic->ic_updateprot(ic);  ieee80211_node.c:2338   (callback, still under ic_lock)
+>          -> iwx_updateprot      if_iwx.c:3695
+>             -> iwx_add_task     if_iwx.c (splnet region 9)  -> takes sc_lock
+>        splx(s);                 ieee80211_node.c:2354
+> ```
+>
+> So this path runs **`ic_lock` -> `sc_lock`**. The ISR runs the **opposite** order
+> (`sc_lock` -> `ic_lock`): `iwx_intr` holds `sc_lock` and reaches `ic_lock` through
+> `ieee80211_find_rxnode` / `ieee80211_release_node`. Node-cache timeout on CPU A (holds ic_lock,
+> wants sc_lock) + ISR on CPU B (holds sc_lock, wants ic_lock) = **AB/BA deadlock, reachable on
+> any multi-CPU box in RUN state** the moment an HT/BA protection change (which sets
+> `ic_protmode` and calls `ic_updateprot`) coincides with RX. This is why rule 7 above is not
+> optional: the proposed order is a *design* only after the `ic_updateprot` edge is deferred out
+> from under `ic_lock`.
+>
+> The sweep was negative-controllable (it does find the site; a line-range scan would have
+> mis-reported more). The other named callbacks (`ic_newstate`, `ic_send_mgmt`, `ic_set_key`,
+> `ic_ampdu_rx_start`) are **not** invoked inside any of the 24 regions — they are called from the
+> input/output paths outside the splnet brackets — so `ic_updateprot` is the single edge to fix.
 
-**STATUS: AUDIT EXTENDED. FIX NOT IMPLEMENTED. MODEL PROPOSED BUT ONE PREMISE UNVERIFIED.**
+**STATUS: AUDIT EXTENDED. FIX NOT IMPLEMENTED. MODEL REFUTED AS STATED (the `ic_lock`
+premise is FALSE); CORRECTED MODEL = rules 1-6 PLUS rule 7 (break the `ic_updateprot` edge).**
 `hardware.wirelessIwx.enable` stays `false`.
 
 ## What compiles, what does not — REAL / STUB / PROBE
