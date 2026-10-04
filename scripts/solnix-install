@@ -1843,28 +1843,17 @@ assert_mounted_on_pool "$BEDS" "$ALTROOT" /tmp/solnix-be-mount.err
 # RESOLUTION is the only lever. Measured on the maintainer's X1: EDID 3840x2160,
 # where the loader picked 480 columns x 113 rows -- unreadable. Default to 800x600
 # (~99x37): comfortably readable rather than maximising text on screen.
-TARGET_RESOLUTION="${SOLNIX_TARGET_RESOLUTION:-}"
-if [ -z "$TARGET_RESOLUTION" ] && [ -t 0 ] && [ -t 1 ]; then
-  echo ""
-  echo "=== Console text size ======================================================="
-  echo "  Larger text = lower framebuffer resolution (the font is a fixed 8x16)."
-  echo "  1) 640x480    ~79x29   largest text"
-  echo "  2) 800x600    ~99x37   readable        (default)"
-  echo "  3) 1024x768   ~127x47  medium"
-  echo "  4) 1280x1024  ~159x63  small"
-  echo "  5) native     tiny on a HiDPI panel -- 480x113 on a 4K screen"
-  printf 'Choice [1-5] (default 2): '
-  read -r _cr || _cr=2
-  case "$_cr" in
-    1) TARGET_RESOLUTION=640x480 ;;
-    3) TARGET_RESOLUTION=1024x768 ;;
-    4) TARGET_RESOLUTION=1280x1024 ;;
-    5) TARGET_RESOLUTION=native ;;
-    *) TARGET_RESOLUTION=800x600 ;;
-  esac
-fi
-[ -n "$TARGET_RESOLUTION" ] || TARGET_RESOLUTION=800x600
-log "console text size: $TARGET_RESOLUTION"
+# Console text size is whatever the EFI firmware's chosen text mode gives:
+# efi_console.c:550 picks the mode with the most cols*rows automatically, and
+# there is NO loader.conf / bootenv.rc knob to override it. screen-#columns/#rows
+# CANNOT be set from any loader-parsed file -- '#' is a comment char in
+# boot/forth/support.4th, so such a line ESYNTAX-errors the loader to the OK
+# prompt (MEASURED on the dixi X1). On a HiDPI panel the firmware picks a large
+# mode = small text; a known illumos-loader limitation the installer cannot fix,
+# and SSH is the primary access path regardless. Do NOT prompt for a size we
+# cannot honor.
+TARGET_RESOLUTION=native
+log "console: firmware-selected EFI text mode (no loader-settable geometry)"
 
 # ---------------------------------------------------------------------------
 # ENCRYPTION. MEASURED ON THIS PLATFORM BEFORE BEING OFFERED, and the measurement
@@ -2539,33 +2528,26 @@ fi   # end SELF_INSTALL=0 generation-registration block
 # ---------------------------------------------------------------------------
 log "installed-system console=$TARGET_CONSOLE + release stamp"
 mkdir -p "$ALTROOT/boot/solaris"
-# Build the console-geometry lines BEFORE the heredocs that interpolate them.
-# (_bootenv_geom / _efires were previously assigned AFTER the bootenv.rc heredoc
-# that uses ${_bootenv_geom}, so under set -u the install died with
-# "_bootenv_geom: parameter not set" at the console step -- measured on the X1.)
-# "native" means omit the knob entirely and let the loader pick the panel's own
-# mode; any other value pins it. The font is a fixed 8x16 with no larger built-in,
-# so cell counts ARE the font size: 800x600 => 99x37. Set cell counts, not a
-# resolution string. os/console.c:226-229 reads screen-#columns / screen-#rows.
-case "$TARGET_RESOLUTION" in
-  native) _cols=""; _rows="" ;;
-  *) _cols=$(( ${TARGET_RESOLUTION%x*} / 8 )); _rows=$(( ${TARGET_RESOLUTION#*x} / 16 )) ;;
-esac
-if [ -n "$_cols" ]; then
-  _bootenv_geom="setprop screen-#columns $_cols
-setprop screen-#rows $_rows"
-else
-  _bootenv_geom="# native geometry: no screen-#columns/#rows setprop"
-fi
-# the ttya-* props are kept unconditionally: they are inert when no serial port
-# exists and are needed whenever TARGET_CONSOLE is ttya.
+# ⚠️ DO NOT set screen-#columns / screen-#rows in bootenv.rc OR loader.conf. Verified
+# against illumos-gate: the loader's config parser (boot/forth/support.4th:604,
+# `comment? = line_pointer c@ [char] # =`) treats '#' as a COMMENT, so a line like
+# `setprop screen-#columns 100` parses as `setprop screen-` + comment, leaving a
+# dangling token -> "Warning: syntax error on /boot/solaris/bootenv.rc" and the
+# loader bails to the OK prompt (MEASURED on the dixi X1: "syntax error ... at 100").
+# screen-#rows/#cols are RUNTIME env vars the EFI console sets automatically from
+# the firmware's chosen text mode (boot/efi/libefi/efi_console.c:553 setenv), NOT
+# file settings -- they CANNOT be set from any support.4th-parsed file. The live
+# media's bootenv.rc only does `setprop console text` and boots readable; match it.
+# (Console size on a HiDPI panel is a separate EFI-mode-selection concern, handled
+# by the firmware/loader, not by a bootenv.rc knob.)
+# The ttya-* props are inert when no serial port exists and needed when
+# TARGET_CONSOLE is ttya; keep them.
 cat > "$ALTROOT/boot/solaris/bootenv.rc" <<EOF
 setprop console $TARGET_CONSOLE
 setprop os_console $TARGET_CONSOLE
 setprop ttya-mode 115200,8,n,1,-
 setprop ttya-ignore-cd true
 setprop ttya-rts-dtr-off false
-${_bootenv_geom}
 EOF
 cat > "$ALTROOT/boot/loader.conf" <<EOF
 console="$TARGET_CONSOLE"
@@ -2579,16 +2561,14 @@ boot_archive_load="YES"
 boot_archive_name="/platform/i86pc/amd64/boot_archive"
 boot_archive.hash_load="NO"
 EOF
-# ⚠️ loader.conf is parsed by the loader as FORTH (var=value assignments). It must
-# contain NO '#' character: '#' is a Forth number-conversion word, so a line like
-# screen-#columns="100" (or even a '# comment') corrupts the dictionary -> "Error:
-# dictionary full" on EVERY word -> the loader drops to the OK prompt and NEVER
-# reads loader.conf (so the console geometry never applies -> tiny native text).
-# MEASURED on the dixi X1. The console GEOMETRY (screen-#columns/#rows) therefore
-# lives ONLY in bootenv.rc, which is key=value (not Forth) and handles '#' fine.
-# Gate it: loader.conf must have zero '#'.
+# ⚠️ loader.conf is parsed by the loader (boot/forth/support.4th) where '#' is a
+# COMMENT char: a line like screen-#columns="100" parses as `screen-` + comment and
+# ESYNTAX-errors (and a bare '# comment' truncates). So loader.conf must contain NO
+# '#'. Console GEOMETRY cannot be set from any support.4th-parsed file at all --
+# screen-#rows/#cols are runtime env vars the EFI console sets from the firmware's
+# chosen text mode (efi_console.c:553). Gate: loader.conf must have zero '#'.
 if grep -q '#' "$ALTROOT/boot/loader.conf" 2>/dev/null; then
-  die "loader.conf contains '#' -- the Forth parser will dictionary-full and drop to OK; screen-# geometry belongs in bootenv.rc only"
+  die "loader.conf contains '#' -- the loader parser treats it as a comment and ESYNTAX-errors"
 fi
 # LOUD-FAIL GATE: the installed console is unrecoverable-if-wrong on a machine
 # with no keyboard, and both files are written by heredoc (a quoting slip would
@@ -2599,20 +2579,16 @@ for _cf in "$ALTROOT/boot/loader.conf" "$ALTROOT/boot/solaris/bootenv.rc"; do
 done
 grep -q "^console=\"$TARGET_CONSOLE\"\$" "$ALTROOT/boot/loader.conf" || \
   die "installed console: loader.conf lacks console=\"$TARGET_CONSOLE\""
-# Gate the console GEOMETRY too. The maintainer's installed system reverted to the
-# smallest font after reboot while the media was fine, because the only knob being
-# written (efi-max-resolution) does not exist in the loader at all. A gate on the
-# real property means that cannot recur silently.
-if [ "$TARGET_RESOLUTION" != native ]; then
-  grep -q "^setprop screen-#columns $_cols\$" "$ALTROOT/boot/solaris/bootenv.rc" \
-    || die "bootenv.rc lacks setprop screen-#columns $_cols -- the installed console would use the tiny native mode"
-  grep -q "^setprop screen-#rows $_rows\$" "$ALTROOT/boot/solaris/bootenv.rc" \
-    || die "bootenv.rc lacks setprop screen-#rows $_rows"
-  log "console geometry gate OK: ${_cols}x${_rows} cells written to bootenv.rc"
+# GATE: neither boot file may contain a screen-# property. The loader's config
+# parser treats '#' as a comment, so `setprop screen-#columns N` is a syntax error
+# that bails the loader to the OK prompt (MEASURED on the dixi X1). Console size is
+# the firmware's EFI text mode, not a file knob -- assert these lines are ABSENT.
+if grep -q 'screen-#' "$ALTROOT/boot/solaris/bootenv.rc" "$ALTROOT/boot/loader.conf" 2>/dev/null; then
+  die "boot config contains a screen-# property -- '#' is a comment char in the loader parser; this ESYNTAX-errors to the OK prompt. Console geometry is set by the firmware, not here."
 fi
 grep -q "^setprop console $TARGET_CONSOLE\$" "$ALTROOT/boot/solaris/bootenv.rc" || \
   die "installed console: bootenv.rc lacks setprop console $TARGET_CONSOLE"
-echo "installed-console gate OK: console=$TARGET_CONSOLE in loader.conf + bootenv.rc" >&2
+echo "installed-console gate OK: console=$TARGET_CONSOLE in loader.conf + bootenv.rc, no screen-# property" >&2
 # The illumos EFI loader's sanity_check_currdev() accepts a ZFS BE as bootable
 # ONLY if it can stat /boot/defaults/loader.conf OR /boot/loader.rc on that
 # dataset (verified in loader64.efi strings). The SELF-INSTALL live ramdisk root
