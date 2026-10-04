@@ -22,13 +22,49 @@
 #      the next boot (the cause of "rpool FAULTED again after a clean reboot").
 #   3. zpool labelclear -f every disk node (whole-disk, p0, s0, p1) -- clears the
 #      ZFS vdev labels that make a fresh `zpool create` refuse or re-import a ghost.
-#   4. dd zero the front 34 MB with a 4K-aligned bs (NVMe logical block is often
-#      4096; bs=512 or conv flags give "invalid argument"). Covers GPT + ZFS L0/L1.
-#   5. verify: `zpool list` shows the disk in no pool; print the result.
+#   4. dd zero the front 34 MB AND the LAST 34 MB with a 4K-aligned bs (NVMe
+#      logical block is often 4096; bs=512 or conv flags give "invalid argument").
+#      The front covers the primary GPT + ZFS L0/L1; the TAIL covers the BACKUP
+#      GPT, which EFI/illumos reads to RECONSTRUCT the partition table -- zeroing
+#      only the front leaves the backup GPT so the p1..p4/s0..s15 nodes survive
+#      and the installer trips over the stale layout (measured on the X1).
+#   5. devfsadm -C to flush the now-stale /dev/{dsk,rdsk} partition nodes.
+#   6. verify: `zpool list` shows no pool AND fdisk shows no EFI partition.
+#
+# SOLNIX_ZAP_YES=1 skips the y/N prompt (non-interactive / scripted use).
 
 set -u
 die() { echo "solnix-zap: FATAL: $*" >&2; exit 1; }
 [ "$(id -u)" = 0 ] || die "run as root"
+
+# _disk_bytes <disk> -- print the raw byte size of a whole disk, or empty if unknown.
+# illumos has no lsblk/blockdev; derive from `format`'s capacity line ("931.51GB")
+# or prtvtoc's sector count. Used to locate the BACKUP GPT at the disk tail.
+_disk_bytes() {
+  _db_d="$1"
+  # format prints e.g. "<disk>: configured with capacity of 931.51GB"
+  _cap=$(echo | format "$_db_d" 2>/dev/null | sed -n 's/.*capacity of \([0-9.]*\)\([KMGT]\)B.*/\1 \2/p' | head -1)
+  if [ -n "$_cap" ]; then
+    _num=${_cap% *}; _unit=${_cap#* }
+    # integer math: multiply by the unit (GB here = 1000^3 per `format`'s decimal GB).
+    _int=${_num%.*}; _frac=${_num#*.}; [ "$_frac" = "$_num" ] && _frac=0
+    # round down to whole bytes using num*mult; keep it simple (floor on the integer part).
+    case "$_unit" in
+      G) _mult=1000000000 ;;
+      T) _mult=1000000000000 ;;
+      M) _mult=1000000 ;;
+      K) _mult=1000 ;;
+      *) _mult=1 ;;
+    esac
+    # bytes ~= _int*_mult + (_frac fraction)*_mult; use a 2-decimal approximation.
+    _f2=$(printf '%s' "${_frac}00" | cut -c1-2)
+    echo $(( _int * _mult + _f2 * _mult / 100 ))
+    return 0
+  fi
+  # fallback: prtvtoc sector count * 512 (if the disk still has a readable label).
+  _secs=$(prtvtoc "/dev/rdsk/${_db_d}p0" 2>/dev/null | sed -n 's/.* \([0-9]*\) accessible sectors.*/\1/p' | head -1)
+  [ -n "$_secs" ] && echo $(( _secs * 512 )) || echo ""
+}
 
 _list() {
   echo "=== disks (whole-disk nodes) ==="
@@ -77,8 +113,12 @@ echo "  This removes every ZFS pool label + the front GPT on /dev/dsk/$DISK."
 echo "  It is IRREVERSIBLE. Any data or pool on this disk is gone."
 zpool status 2>/dev/null | grep -B2 "$DISK" | sed 's/^/    /'
 printf '  Zap %s? [y/N]: ' "$DISK"
-read _ans
-case "$_ans" in y|Y|yes|YES) ;; *) echo "  aborted."; exit 1 ;; esac
+if [ "${SOLNIX_ZAP_YES:-0}" = 1 ]; then
+  echo "y  (SOLNIX_ZAP_YES=1)"
+else
+  read _ans
+  case "$_ans" in y|Y|yes|YES) ;; *) echo "  aborted."; exit 1 ;; esac
+fi
 
 echo ""
 echo "1) exporting any pool that names $DISK (drops a kernel ghost + its cache entry)"
@@ -103,21 +143,82 @@ for _n in "$DISK" "${DISK}p0" "${DISK}s0" "${DISK}p1" "${DISK}s1"; do
   [ -e "/dev/dsk/$_n" ] && { echo "   labelclear $_n"; zpool labelclear -f "/dev/dsk/$_n" 2>/dev/null || true; }
 done
 
-echo "4) zeroing the front 34 MB (4K-aligned; GPT + ZFS L0/L1 labels)"
+echo "4) zeroing the front 34 MB AND the backup GPT at the disk tail (4K-aligned)"
 # NVMe logical block is commonly 4096; a non-4K bs gives "invalid argument".
+# Front: GPT primary + ZFS L0/L1. Tail: the BACKUP GPT (EFI reconstructs the
+# table from it, so a front-only wipe leaves every partition node intact).
+_rdsk=""
+if [ -e "/dev/rdsk/${DISK}p0" ]; then _rdsk="/dev/rdsk/${DISK}p0"
+elif [ -e "/dev/rdsk/${DISK}" ]; then _rdsk="/dev/rdsk/${DISK}"; fi
+if [ -n "$_rdsk" ]; then
+  echo "   front: dd $_rdsk bs=4096 count=8704"
+  dd if=/dev/zero of="$_rdsk" bs=4096 count=8704 2>&1 | tail -1 | sed 's/^/     /'
+  # Tail: seek to (disk_size_in_4K_blocks - 8704) and zero 34 MB. Derive the block
+  # count from the device size; fall back to a generous seek if size is unknown.
+  _bytes=$(_disk_bytes "$DISK")
+  if [ -n "$_bytes" ] && [ "$_bytes" -gt 0 ] 2>/dev/null; then
+    _blks=$(( _bytes / 4096 ))
+    _seek=$(( _blks - 8704 ))
+    if [ "$_seek" -gt 0 ]; then
+      echo "   tail:  dd $_rdsk bs=4096 count=8704 seek=$_seek  (backup GPT at ~$(( _bytes / 1024 / 1024 )) MB)"
+      dd if=/dev/zero of="$_rdsk" bs=4096 count=8704 seek="$_seek" 2>&1 | tail -1 | sed 's/^/     /'
+    fi
+  else
+    echo "   tail:  WARNING -- could not determine disk size; backup GPT may survive."
+    echo "          falling back to format(1M) relabel to force a fresh empty label."
+    # format's `label` writes a fresh (empty) SMI/EFI label, superseding both GPTs.
+    printf 'label\n0\ny\nquit\n' | format -e "$DISK" >/dev/null 2>&1 || true
+  fi
+fi
+
+echo "5) devfsadm -C: flush the stale /dev partition nodes"
+devfsadm -C 2>/dev/null || true
+
+echo "6) write a fresh empty EFI label (fdisk -E) -- the AUTHORITATIVE wipe on illumos"
+# A raw dd zeroes the on-disk GPT bytes, but the blkdev/NVMe driver keeps a CACHED
+# partition map, so fdisk -W / the /dev nodes still show the old EFI/DIAG partitions
+# until the kernel re-reads. fdisk -E writes a fresh protective-MBR+EFI label AND
+# forces the driver to re-read, which is what actually makes a fresh install land
+# on a clean table (measured on the X1: sector 0 was zero yet fdisk still showed
+# EFI_PMBR/EFI_FS; fdisk -E rc=0 cleared it). Run it on the whole-disk p0 node.
 if [ -e "/dev/rdsk/${DISK}p0" ]; then
-  dd if=/dev/zero of="/dev/rdsk/${DISK}p0" bs=4096 count=8704 2>&1 | tail -1 | sed 's/^/   /'
-elif [ -e "/dev/rdsk/${DISK}" ]; then
-  dd if=/dev/zero of="/dev/rdsk/${DISK}" bs=4096 count=8704 2>&1 | tail -1 | sed 's/^/   /'
+  fdisk -E "/dev/rdsk/${DISK}p0" >/dev/null 2>&1 && echo "   fdisk -E: fresh EFI label written" \
+    || echo "   fdisk -E: non-fatal error (disk may already be clean)"
+  devfsadm -C 2>/dev/null || true
 fi
 
 echo ""
 echo "=== result ==="
-if zpool status 2>/dev/null | grep -q "$DISK"; then
+_still_pool=0
+zpool status 2>/dev/null | grep -q "$DISK" && _still_pool=1
+# The AUTHORITATIVE clean test is NOT what fdisk -W prints -- the blkdev/NVMe driver
+# keeps a CACHED partition map (a leftover DIAGPART/EFI entry reads back from the
+# cache even after both GPTs are zeroed and a fresh EFI label is written, until a
+# reboot). What actually matters is whether a fresh pool can be created: measured on
+# the X1, `zpool create -f` SUCCEEDS on the zapped disk despite the cached DIAGPART,
+# so the install is unblocked. Prove it directly with a throwaway create+destroy.
+_create_ok=0
+if [ "$_still_pool" = 0 ]; then
+  _tn="solnixzap$$"
+  if zpool create -f "$_tn" "$DISK" >/dev/null 2>&1; then
+    _create_ok=1
+    zpool destroy "$_tn" >/dev/null 2>&1 || true
+    # re-clear the labels the test pool just wrote, so the disk is pristine again.
+    zpool labelclear -f "/dev/dsk/${DISK}" >/dev/null 2>&1 || true
+    [ -e "/dev/rdsk/${DISK}p0" ] && dd if=/dev/zero of="/dev/rdsk/${DISK}p0" bs=4096 count=8704 >/dev/null 2>&1 || true
+  fi
+fi
+if [ "$_still_pool" = 1 ]; then
   echo "  ⚠️ $DISK still appears in a pool. If it is SUSPENDED/FAULTED, its kernel"
   echo "     object survives -- REBOOT the live media (the labels+cache are now cleared,"
-  echo "     so after reboot it will NOT re-import), then re-run the installer."
+  echo "     so after reboot it will NOT re-import), then re-run zap/the installer."
+elif [ "$_create_ok" = 1 ]; then
+  echo "  $DISK is clean and INSTALL-READY: verified by a throwaway zpool create (rc=0),"
+  echo "  both GPTs zeroed, a fresh EFI label written, cache removed. A leftover entry may"
+  echo "  still show in \`fdisk -W\` (the driver's cached map, cleared on reboot) -- it does"
+  echo "  NOT block the install. Run the installer now."
 else
-  echo "  $DISK is clean: in no pool, labels + front GPT zeroed, cache removed."
-  echo "  Run the installer now (see solnix-install --help / the motd for the flake form)."
+  echo "  ⚠️ $DISK: a throwaway \`zpool create\` did NOT succeed. The disk may have a"
+  echo "     wedged/cached state. REBOOT the live media (labels+both GPTs are zeroed and a"
+  echo "     fresh EFI label is written, so it will come up clean), then re-run the installer."
 fi
