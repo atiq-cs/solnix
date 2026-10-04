@@ -1,0 +1,62 @@
+Ap_Id                          Receptacle   Occupant     Condition  Information
+When         Type         Busy     Phys_Id
+usb1/1                         empty        unconfigured ok
+unavailable  unknown      n        /devices/pci@0,0/pci17aa,2267@14:1
+usb1/2                         empty        unconfigured ok
+unavailable  unknown      n        /devices/pci@0,0/pci17aa,2267@14:2
+usb1/3                         empty        unconfigured ok
+unavailable  unknown      n        /devices/pci@0,0/pci17aa,2267@14:3
+usb1/4                         empty        unconfigured ok
+unavailable  unknown      n        /devices/pci@0,0/pci17aa,2267@14:4
+usb1/5                         empty        unconfigured ok
+unavailable  unknown      n        /devices/pci@0,0/pci17aa,2267@14:5
+usb1/6                         empty        unconfigured ok
+unavailable  unknown      n        /devices/pci@0,0/pci17aa,2267@14:6
+usb1/7                         empty        unconfigured ok
+unavailable  unknown      n        /devices/pci@0,0/pci17aa,2267@14:7
+usb1/8                         connected    configured   ok         Mfg: Chicony Electronics Co.,Ltd.  Product: Integrated Camera  Serial: <undef>  NConfigs: 1  Config: 0  <no cfg str descr>
+unavailable  usb-miscell  n        /devices/pci@0,0/pci17aa,2267@14:8
+usb1/9                         connected    configured   ok         Mfg: <undef>  Product: <undef>  Serial: 9dc1a40f947c  NConfigs: 1  Config: 0  <no cfg str descr>
+unavailable  usb-device   n        /devices/pci@0,0/pci17aa,2267@14:9
+usb1/10                        connected    configured   ok         Mfg: Wacom Co.,Ltd.  Product: Pen and multitouch sensor  Serial: <undef>  NConfigs: 1  Config: 0  <no cfg str descr>
+unavailable  usb-device   n        /devices/pci@0,0/pci17aa,2267@14:10
+usb1/11                        empty        unconfigured ok
+unavailable  unknown      n        /devices/pci@0,0/pci17aa,2267@14:11
+usb1/12                        connected    configured   ok         Mfg: SunplusIT Inc  Product: Integrated IR Camera  Serial: <undef>  NConfigs: 1  Config: 0  <no cfg str descr>
+unavailable  usb-miscell  n        /devices/pci@0,0/pci17aa,2267@14:12
+usb1/13                        empty        unconfigured ok
+unavailable  unknown      n        /devices/pci@0,0/pci17aa,2267@14:13
+usb1/14                        connected    configured   ok         Mfg: <undef>  Product: <undef>  Serial: <undef>  NConfigs: 1  Config: 0  <no cfg str descr>
+unavailable  usb-device   n        /devices/pci@0,0/pci17aa,2267@14:14
+usb1/15                        empty        unconfigured ok
+unavailable  unknown      n        /devices/pci@0,0/pci17aa,2267@14:15
+usb1/16                        empty        unconfigured ok
+unavailable  unknown      n        /devices/pci@0,0/pci17aa,2267@14:16
+usb1/17                        empty        unconfigured ok
+unavailable  unknown      n        /devices/pci@0,0/pci17aa,2267@14:17
+usb1/18                        empty        unconfigured ok
+unavailable  unknown      n        /devices/pci@0,0/pci17aa,2267@14:18
+usb1/19                        empty        unconfigured ok
+unavailable  unknown      n        /devices/pci@0,0/pci17aa,2267@14:19
+usb1/20                        empty        unconfigured ok
+unavailable  unknown      n        /devices/pci@0,0/pci17aa,2267@14:20
+usb1/21                        empty        unconfigured ok
+unavailable  unknown      n        /devices/pci@0,0/pci17aa,2267@14:21
+usb1/22                        empty        unconfigured ok
+unavailable  unknown      n        /devices/pci@0,0/pci17aa,2267@14:22
+usb1/23                        empty        unconfigured ok
+unavailable  unknown      n        /devices/pci@0,0/pci17aa,2267@14:23
+usb1/24                        empty        unconfigured ok
+unavailable  unknown      n        /devices/pci@0,0/pci17aa,2267@14:24
+usb1/25                        empty        unconfigured ok
+unavailable  unknown      n        /devices/pci@0,0/pci17aa,2267@14:25
+usb1/26                        empty        unconfigured ok
+unavailable  unknown      n        /devices/pci@0,0/pci17aa,2267@14:26
+usb2/1                         empty        unconfigured ok
+unavailable  unknown      n        /devices/pci@0,0/pci8086,a32c@1b,4/pci8086,15ea@0/pci8086,15ea@2/pci17aa,2267@0:1
+usb2/2                         empty        unconfigured ok
+unavailable  unknown      n        /devices/pci@0,0/pci8086,a32c@1b,4/pci8086,15ea@0/pci8086,15ea@2/pci17aa,2267@0:2
+usb2/3                         empty        unconfigured ok
+unavailable  unknown      n        /devices/pci@0,0/pci8086,a32c@1b,4/pci8086,15ea@0/pci8086,15ea@2/pci17aa,2267@0:3
+usb2/4                         empty        unconfigured ok
+unavailable  unknown      n        /devices/pci@0,0/pci8086,a32c@1b,4/pci8086,15ea@0/pci8086,15ea@2/pci17aa,2267@0:4

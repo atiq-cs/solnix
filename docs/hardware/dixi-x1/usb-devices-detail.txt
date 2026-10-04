@@ -1,0 +1,15 @@
+=== usb1/9 ===
+Ap_Id                          Receptacle   Occupant     Condition  Information
+When         Type         Busy     Phys_Id
+usb1/9                         connected    configured   ok         Mfg: <undef>  Product: <undef>  Serial: 9dc1a40f947c  NConfigs: 1  Config: 0  <no cfg str descr>
+unavailable  usb-device   n        /devices/pci@0,0/pci17aa,2267@14:9
+=== usb1/14 ===
+Ap_Id                          Receptacle   Occupant     Condition  Information
+When         Type         Busy     Phys_Id
+usb1/14                        connected    configured   ok         Mfg: <undef>  Product: <undef>  Serial: <undef>  NConfigs: 1  Config: 0  <no cfg str descr>
+unavailable  usb-device   n        /devices/pci@0,0/pci17aa,2267@14:14
+=== USB device nodes with ids ===
+        name='compatible' type=string items=9
+        name='subsystem-vendor-id' type=int items=1
+        name='device-id' type=int items=1
+        name='vendor-id' type=int items=1

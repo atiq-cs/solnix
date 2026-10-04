@@ -1,0 +1,28 @@
+                    name='usb-product-name' type=string items=1
+                        value='Integrated Camera'
+                    name='usb-product-id' type=int items=1
+                        value=0000b614
+                    name='usb-vendor-id' type=int items=1
+                        value=000004f2
+                    name='usb-serialno' type=string items=1
+                        value='9dc1a40f947c'
+                    name='usb-product-id' type=int items=1
+                        value=0000009a
+                    name='usb-vendor-id' type=int items=1
+                        value=000006cb
+                    name='usb-product-name' type=string items=1
+                        value='Pen and multitouch sensor'
+                    name='usb-product-id' type=int items=1
+                        value=00005193
+                    name='usb-vendor-id' type=int items=1
+                        value=0000056a
+                    name='usb-product-name' type=string items=1
+                        value='Integrated IR Camera'
+                    name='usb-product-id' type=int items=1
+                        value=0000b615
+                    name='usb-vendor-id' type=int items=1
+                        value=000004f2
+                    name='usb-product-id' type=int items=1
+                        value=00000aaa
+                    name='usb-vendor-id' type=int items=1
+                        value=00008087

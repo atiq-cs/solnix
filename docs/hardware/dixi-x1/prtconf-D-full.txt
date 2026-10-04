@@ -1,0 +1,110 @@
+System Configuration:  LENOVO  i86pc
+Memory size: 64957 Megabytes
+System Peripherals (Software Nodes):
+
+i86pc (driver name: rootnex)
+    scsi_vhci, instance #0 (driver name: scsi_vhci)
+    ramdisk, instance #0 (driver name: ramdisk)
+    pci, instance #0 (driver name: npe)
+        pci17aa,2267
+        pci8086,1901, instance #0 (driver name: pcieb)
+            display, instance #1 (driver name: vgatext)
+            pci10de,fb9
+        display, instance #0 (driver name: vgatext)
+        pci17aa,2267
+        pci17aa,2267
+        pci17aa,2267
+        pci17aa,2267, instance #0 (driver name: xhci)
+            miscellaneous, instance #0 (driver name: usb_mid)
+                video, instance #0 (driver name: usb_ia)
+                    video-control
+                    video-stream
+            device, instance #1 (driver name: usb_mid)
+            device, instance #2 (driver name: usb_mid)
+                input, instance #0 (driver name: hid)
+                input (driver name: hid)
+            miscellaneous, instance #3 (driver name: usb_mid)
+                video, instance #1 (driver name: usb_ia)
+                    video-control
+                    video-stream
+            device, instance #4 (driver name: usb_mid)
+        pci17aa,2267
+        pci8086,30
+        pci17aa,2267
+        pci17aa,2267
+        pci17aa,2267, instance #0 (driver name: asy)
+        pci8086,a340, instance #1 (driver name: pcieb)
+            pci15b7,5009, instance #0 (driver name: nvme)
+                blkdev, instance #0 (driver name: blkdev)
+        pci8086,a32c, instance #2 (driver name: pcieb)
+            pci8086,15ea, instance #3 (driver name: pcieb)
+                pci8086,15ea, instance #4 (driver name: pcieb)
+                    pci17aa,2267
+                pci8086,15ea, instance #5 (driver name: pcieb)
+                pci8086,15ea, instance #6 (driver name: pcieb)
+                    pci17aa,2267, instance #1 (driver name: xhci)
+                pci8086,15ea, instance #7 (driver name: pcieb)
+        pci17aa,2267
+        isa, instance #0 (driver name: isa)
+            i8042, instance #0 (driver name: i8042)
+                keyboard, instance #0 (driver name: kb8042)
+                mouse, instance #0 (driver name: mouse8042)
+            pit_beep, instance #0 (driver name: pit_beep)
+        pci17aa,2267
+        pci17aa,2267
+        pci17aa,2267
+        pci17aa,2267, instance #0 (driver name: e1000g)
+    fw, instance #0 (driver name: acpinex)
+        sb, instance #1 (driver name: acpinex)
+            SNDW, instance #2 (driver name: acpinex)
+            cpu, instance #0 (driver name: cpudrv)
+            cpu, instance #1 (driver name: cpudrv)
+            cpu, instance #2 (driver name: cpudrv)
+            cpu, instance #3 (driver name: cpudrv)
+            cpu, instance #4 (driver name: cpudrv)
+            cpu, instance #5 (driver name: cpudrv)
+            cpu, instance #6 (driver name: cpudrv)
+            cpu, instance #7 (driver name: cpudrv)
+            cpu, instance #8 (driver name: cpudrv)
+            cpu, instance #9 (driver name: cpudrv)
+            cpu, instance #10 (driver name: cpudrv)
+            cpu, instance #11 (driver name: cpudrv)
+            usbroothub, instance #3 (driver name: acpinex)
+                port, instance #4 (driver name: acpinex)
+                port, instance #5 (driver name: acpinex)
+                port, instance #6 (driver name: acpinex)
+                port, instance #7 (driver name: acpinex)
+                port, instance #8 (driver name: acpinex)
+                port, instance #9 (driver name: acpinex)
+                port, instance #10 (driver name: acpinex)
+                port, instance #11 (driver name: acpinex)
+                    port, instance #30 (driver name: acpinex)
+                port, instance #12 (driver name: acpinex)
+                port, instance #13 (driver name: acpinex)
+                port, instance #14 (driver name: acpinex)
+                port, instance #15 (driver name: acpinex)
+                port, instance #16 (driver name: acpinex)
+                port, instance #17 (driver name: acpinex)
+                port, instance #18 (driver name: acpinex)
+                port, instance #19 (driver name: acpinex)
+                port, instance #20 (driver name: acpinex)
+                port, instance #21 (driver name: acpinex)
+                port, instance #22 (driver name: acpinex)
+                port, instance #23 (driver name: acpinex)
+                    port, instance #31 (driver name: acpinex)
+                port, instance #24 (driver name: acpinex)
+                port, instance #25 (driver name: acpinex)
+                port, instance #26 (driver name: acpinex)
+                port, instance #27 (driver name: acpinex)
+                port, instance #28 (driver name: acpinex)
+                port, instance #29 (driver name: acpinex)
+            usbroothub (driver name: acpinex)
+                port (driver name: acpinex)
+                port (driver name: acpinex)
+                port (driver name: acpinex)
+                port (driver name: acpinex)
+    used-resources
+    iscsi, instance #0 (driver name: iscsi)
+    options, instance #0 (driver name: options)
+    pseudo, instance #0 (driver name: pseudo)
+    xsvc, instance #0 (driver name: xsvc)

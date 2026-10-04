@@ -1,0 +1,37 @@
+    pci, instance #0 (driver name: npe)
+        pci17aa,2267
+        pci8086,1901, instance #0 (driver name: pcieb)
+            pci10de,fb9
+        pci17aa,2267
+        pci17aa,2267
+        pci17aa,2267
+        pci17aa,2267, instance #0 (driver name: xhci)
+            miscellaneous, instance #0 (driver name: usb_mid)
+                video, instance #0 (driver name: usb_ia)
+            device, instance #1 (driver name: usb_mid)
+            device, instance #2 (driver name: usb_mid)
+            miscellaneous, instance #3 (driver name: usb_mid)
+                video, instance #1 (driver name: usb_ia)
+            device, instance #4 (driver name: usb_mid)
+        pci17aa,2267
+        pci8086,30
+        pci17aa,2267
+        pci17aa,2267
+        pci17aa,2267, instance #0 (driver name: asy)
+        pci8086,a340, instance #1 (driver name: pcieb)
+            pci15b7,5009, instance #0 (driver name: nvme)
+        pci8086,a32c, instance #2 (driver name: pcieb)
+            pci8086,15ea, instance #3 (driver name: pcieb)
+                pci8086,15ea, instance #4 (driver name: pcieb)
+                    pci17aa,2267
+                pci8086,15ea, instance #5 (driver name: pcieb)
+                pci8086,15ea, instance #6 (driver name: pcieb)
+                    pci17aa,2267, instance #1 (driver name: xhci)
+                pci8086,15ea, instance #7 (driver name: pcieb)
+        pci17aa,2267
+        pci17aa,2267
+        pci17aa,2267
+        pci17aa,2267
+        pci17aa,2267, instance #0 (driver name: e1000g)
+            usbroothub, instance #3 (driver name: acpinex)
+            usbroothub (driver name: acpinex)

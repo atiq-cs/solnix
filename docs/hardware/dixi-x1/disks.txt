@@ -1,0 +1,5 @@
+Searching for disks...done
+AVAILABLE DISK SELECTIONS:
+       0. c1t001B448B485502D1d0 <WDC-WDS100T2B0C-00PXH0-211210WD-931.51GB>
+Specify disk (enter its number): 
+===nvme===

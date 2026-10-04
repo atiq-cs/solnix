@@ -1,0 +1,16 @@
+LINK         MEDIA                STATE      SPEED    DUPLEX   DEVICE
+e1000g0      Ethernet             up         1000     full     e1000g0
+===LINK===
+LINK        CLASS     MTU    STATE    BRIDGE     OVER
+e1000g0     phys      1500   up       --         --
+===PCI-NET===
+                    value='Network controller'
+                    value='Ethernet controller'
+                        value='Intel(r) Core(tm) i7-8850H CPU @ 2.60GHz'
+                        value='GenuineIntel'
+                        value='Intel(r) Core(tm) i7-8850H CPU @ 2.60GHz'
+                        value='GenuineIntel'
+                        value='Intel(r) Core(tm) i7-8850H CPU @ 2.60GHz'
+                        value='GenuineIntel'
+                        value='Intel(r) Core(tm) i7-8850H CPU @ 2.60GHz'
+                        value='GenuineIntel'
