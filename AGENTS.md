@@ -14,6 +14,15 @@ site's claimed phase states and flags drift (exit non-zero on drift). Fix drift
 by editing `data/roadmap.json` (states: `planned` | `in progress` | `done`);
 CI regenerates the page on push. Do NOT let the site fall behind reality again.
 
+## When a design decision comes up, check what NixOS does first
+
+solnix aims to be exactly Nix. For any question NixOS has already answered (store
+permissions, nix-daemon vs single-user, trusted-users, read-only store, what an
+installer image contains, how first boot activates a toplevel), find NixOS's default
+and use it. Depart from it only where illumos can't do the same thing (no Linux mount
+namespaces, no seccomp sandbox), and write down why. Don't invent a solnix-specific
+answer when NixOS has a working one.
+
 ## Dispatching sub-agents
 
 Read `docs/working-with-subagents.md` before writing a brief. Agents on this project have
