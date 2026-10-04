@@ -348,9 +348,16 @@ hat_boot_init(void)
 	 * the tables (not a passthrough) the alias resolves to the same phys
 	 * page and the bytes match. If satp were still 0 the alias VA would
 	 * fault (nothing at 0x40000000 physically) — so a clean match is proof.
+	 *
+	 * BOTH reads MUST hit the SAME page offset. The alias leaf maps
+	 * ALIAS_VA -> kfirst (both page-aligned), so *(ALIAS_VA) and *(kfirst)
+	 * are the same physical byte iff Sv39 translates. Using _start's page
+	 * offset on the alias side (but offset 0 on the ident side) read two
+	 * DIFFERENT bytes and reported a false MISMATCH once the image header
+	 * pushed _start off page offset 0.
 	 */
 	ident = (volatile unsigned char *)kfirst;
-	alias = (volatile unsigned char *)(ALIAS_VA | ((unsigned long)_start & (PAGESIZE - 1)));
+	alias = (volatile unsigned char *)ALIAS_VA;
 	sbi_console_puts("[hat] alias readback: *(ident VA ");
 	puthex((unsigned long)ident);
 	sbi_console_puts(")=");
