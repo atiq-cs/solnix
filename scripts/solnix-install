@@ -2234,6 +2234,35 @@ chown 0:3 "$ALTROOT/var/adm" 2>/dev/null || true   # root:sys
 for f in utmpx wtmpx; do : > "$ALTROOT/var/adm/$f" 2>/dev/null || true; done
 chmod 0644 "$ALTROOT/var/adm/utmpx" "$ALTROOT/var/adm/wtmpx" 2>/dev/null || true
 
+# STRIP LIVE-INSTALLER ARTIFACTS from the target. SELF-INSTALL copies the running
+# LIVE root verbatim, which carries installer-only files that must NOT ship on an
+# installed system (MEASURED on the dixi X1: the installer MOTD showed on every
+# login + the installer script sat in /root). Remove them from the TARGET:
+#   - /etc/solnix-live-shell : the live-media marker. /etc/profile's solnix-live-motd
+#     block is guarded by `[ -f /etc/solnix-live-shell ]`, so removing the marker
+#     stops the installer MOTD from printing on login. Also strip that profile block.
+#   - /usr/sbin/solnix-motd  : the installer's numbered-steps banner.
+#   - /usr/sbin/solnix-install, /usr/sbin/solnix-zap, /usr/sbin/solnix-diag :
+#     installer-ENVIRONMENT tools; not part of a running system.
+#   - /root/solnix-install, /root/run-install.sh : stray copies in root's home.
+#   - /etc/solnix-autoinstall is handled separately below.
+for _la in etc/solnix-live-shell usr/sbin/solnix-motd usr/sbin/solnix-install \
+           usr/sbin/solnix-zap usr/sbin/solnix-diag root/solnix-install \
+           root/run-install.sh var/tmp/run-install.sh; do
+  rm -f "$ALTROOT/$_la" 2>/dev/null || true
+done
+# Remove the solnix-live-motd block from the target's /etc/profile (comment line
+# through its closing `fi`), so no installer banner logic lingers on a clean system.
+if [ -f "$ALTROOT/etc/profile" ] && grep -q '^# solnix-live-motd:' "$ALTROOT/etc/profile" 2>/dev/null; then
+  awk '/^# solnix-live-motd:/{skip=1} skip&&/^fi$/{skip=0;next} !skip{print}' \
+    "$ALTROOT/etc/profile" > "$ALTROOT/etc/profile.new" \
+    && mv "$ALTROOT/etc/profile.new" "$ALTROOT/etc/profile"
+fi
+# Verify the two things the operator flagged are actually gone from the target.
+[ ! -f "$ALTROOT/etc/solnix-live-shell" ] || die "live-shell marker still on target -- installer MOTD would show on login"
+[ ! -f "$ALTROOT/root/solnix-install" ] || die "solnix-install still in target /root -- installer script leaked"
+log "stripped live-installer artifacts from the target (live-shell marker, solnix-motd/install/zap/diag, /etc/profile motd block)"
+
 # essential /dev symlinks (gotcha #6): tar may not carry them from a live /dev.
 log "seeding essential /dev symlinks"
 for n in console msglog null zero tty syscon systty sysmsg random urandom poll; do
