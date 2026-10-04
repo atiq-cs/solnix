@@ -2659,15 +2659,28 @@ EOF
 # ---------------------------------------------------------------------------
 log "building boot_archive on the target BE"
 step "building the boot archive (bootadm update-archive)"
-# WIDEST-HARDWARE FIRST BOOT: unconditionally EMPTY the target's path_to_inst so
-# the installed kernel REBUILDS device-instance assignments for whatever hardware
-# it actually boots on (the SELF-INSTALL source root may carry stale instance
-# bindings; a physical box or a different hypervisor has a different device tree).
-# Also drop a /reconfigure sentinel so the first boot runs a reconfiguration
-# (re-enumerate + attach all present devices) -- the standard illumos mechanism
-# for booting installed media on unknown hardware.
-: > "$ALTROOT/etc/path_to_inst"
-: > "$ALTROOT/reconfigure"
+# FIRST-BOOT DEVICE BINDINGS. For a SELF-INSTALL onto the SAME machine the
+# installer is running on (the common case: install the X1 from the X1's own live
+# media), the running system's /etc/path_to_inst already describes THIS hardware
+# correctly -- it is literally the device tree that just booted. Copy it, so the
+# installed kernel reuses known-good bindings and does NOT run a full re-probe.
+#
+# A forced /reconfigure + empty path_to_inst makes the kernel re-enumerate and
+# re-attach EVERY device on first boot, and on a complex laptop (Thunderbolt, a
+# discrete GPU, quirky HID) a single driver attach can WEDGE the boot -- MEASURED
+# on the dixi X1: first boot hung for 10+ min at the loader hand-off with an empty
+# path_to_inst + /reconfigure. So only force the re-probe when we genuinely cannot
+# trust the source bindings: set SOLNIX_FORCE_RECONFIGURE=1 for the
+# install-here-boot-elsewhere case (moving the disk to different hardware).
+if [ "${SOLNIX_FORCE_RECONFIGURE:-0}" = 1 ] || [ ! -s /etc/path_to_inst ]; then
+  : > "$ALTROOT/etc/path_to_inst"
+  : > "$ALTROOT/reconfigure"
+  log "first boot: forcing a device reconfigure (empty path_to_inst) -- SOLNIX_FORCE_RECONFIGURE or no source bindings"
+else
+  cp /etc/path_to_inst "$ALTROOT/etc/path_to_inst" 2>/dev/null || : > "$ALTROOT/etc/path_to_inst"
+  rm -f "$ALTROOT/reconfigure" 2>/dev/null || true
+  log "first boot: copied the running system's path_to_inst ($(wc -l < /etc/path_to_inst 2>/dev/null | tr -d ' ') bindings) -- no forced re-probe (same-hardware self-install)"
+fi
 # Remove the COPIED build-host zpool.cache: it names the HOST's rpool, so the
 # installed system tries to import a non-existent rpool at boot -> ZFS-8000-D3/CS
 # fmd faults + "pool: rpool UNAVAIL" noise. The target must only know its own
