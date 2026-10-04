@@ -2535,33 +2535,14 @@ fi   # end SELF_INSTALL=0 generation-registration block
 # ---------------------------------------------------------------------------
 log "installed-system console=$TARGET_CONSOLE + release stamp"
 mkdir -p "$ALTROOT/boot/solaris"
-# the ttya-* props are kept unconditionally: they are inert when no serial port
-# exists and are needed whenever TARGET_CONSOLE is ttya.
-cat > "$ALTROOT/boot/solaris/bootenv.rc" <<EOF
-setprop console $TARGET_CONSOLE
-setprop os_console $TARGET_CONSOLE
-setprop ttya-mode 115200,8,n,1,-
-setprop ttya-ignore-cd true
-setprop ttya-rts-dtr-off false
-${_bootenv_geom}
-EOF
+# Build the console-geometry lines BEFORE the heredocs that interpolate them.
+# (_bootenv_geom / _efires were previously assigned AFTER the bootenv.rc heredoc
+# that uses ${_bootenv_geom}, so under set -u the install died with
+# "_bootenv_geom: parameter not set" at the console step -- measured on the X1.)
 # "native" means omit the knob entirely and let the loader pick the panel's own
-# mode; any other value pins it. Building the line here keeps the heredoc simple.
-# ⚠️ efi-max-resolution IS NOT A REAL LOADER VARIABLE. I invented it: grepping all
-# of usr/src/boot for efi-max-resolution / efi_max_resolution returns NOTHING, so
-# the line was inert on the media too -- the media only LOOKED right because
-# gop_default_mode() (efi/loader/framebuffer.c:708) picks a mode from EDID, and the
-# installed system gets the same EDID and the same native 3840x2160.
-#
-# The REAL knob is a pair of boot properties the kernel reads directly in
-# os/console.c:226-229 -- screen-#columns / screen-#rows (and screen-width /
-# screen-height in pixels). Those clamp between MINCOLS/MAXCOLS, so an
-# out-of-range value falls back rather than breaking the console.
-#
-# The font is a fixed 8x16 with no larger built-in, so cell counts ARE the font
-# size: 800x600 => 99x37. Set the cell counts, not a resolution string.
-# bootenv.rc is where boot properties belong -- setprop is the mechanism
-# os/console.c reads. loader.conf carries the same values for the loader's own tem.
+# mode; any other value pins it. The font is a fixed 8x16 with no larger built-in,
+# so cell counts ARE the font size: 800x600 => 99x37. Set cell counts, not a
+# resolution string. os/console.c:226-229 reads screen-#columns / screen-#rows.
 case "$TARGET_RESOLUTION" in
   native) _cols=""; _rows="" ;;
   *) _cols=$(( ${TARGET_RESOLUTION%x*} / 8 )); _rows=$(( ${TARGET_RESOLUTION#*x} / 16 )) ;;
@@ -2572,16 +2553,23 @@ if [ -n "$_cols" ]; then
 # properties that actually work; efi-max-resolution does not exist in the loader.
 screen-#columns=\"$_cols\"
 screen-#rows=\"$_rows\""
-else
-  _efires="# native panel geometry requested: no screen-#columns / screen-#rows set,
-# so the console uses the full EDID mode (tiny on a HiDPI panel)."
-fi
-if [ -n "$_cols" ]; then
   _bootenv_geom="setprop screen-#columns $_cols
 setprop screen-#rows $_rows"
 else
+  _efires="# native panel geometry requested: no screen-#columns / screen-#rows set,
+# so the console uses the full EDID mode (tiny on a HiDPI panel)."
   _bootenv_geom="# native geometry: no screen-#columns/#rows setprop"
 fi
+# the ttya-* props are kept unconditionally: they are inert when no serial port
+# exists and are needed whenever TARGET_CONSOLE is ttya.
+cat > "$ALTROOT/boot/solaris/bootenv.rc" <<EOF
+setprop console $TARGET_CONSOLE
+setprop os_console $TARGET_CONSOLE
+setprop ttya-mode 115200,8,n,1,-
+setprop ttya-ignore-cd true
+setprop ttya-rts-dtr-off false
+${_bootenv_geom}
+EOF
 cat > "$ALTROOT/boot/loader.conf" <<EOF
 console="$TARGET_CONSOLE"
 os_console="$TARGET_CONSOLE"
