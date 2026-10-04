@@ -8,10 +8,16 @@
     # with flake-capable Nix). The BUILD path (illumos host, Nix 2.3.16 classic,
     # no flakes) uses lib/eval-host.nix — see the eval-split note below.
     solnix-pkgs.url = "git+https://codeberg.org/gregburd/solnix-pkgs.git?ref=main";
+    # Plain UPSTREAM nixpkgs, for the host-ops devShell ONLY. The fork's patched
+    # nixpkgs (solnix-pkgs.lib.nixpkgsSrc) rebuilds bison/perl/etc. from source
+    # (no binary cache for the applyPatches tree), which made `cd` into the repo
+    # recompile a toolchain on every cold direnv eval. Host tools (git/sops/
+    # awscli2/xorriso) come from this cached upstream pin instead.
+    nixpkgs-host.url = "github:NixOS/nixpkgs/nixos-unstable";
   };
 
   outputs =
-    { self, solnix-pkgs, ... }:
+    { self, solnix-pkgs, nixpkgs-host, ... }:
     let
       # nixpkgs lib comes from the fork's patched source (carries x86_64-solaris).
       nixpkgs = solnix-pkgs.lib.nixpkgsSrc;
@@ -176,8 +182,15 @@
       # flake-capable host (this is what `.envrc`'s `use flake` loads). Not the
       # target userland (that's x86_64-solaris) — just host-side tools: nix,
       # git, plus the cache publish/verify deps (sops, awscli2) and ISO tooling.
+      #
+      # IMPORTANT: use PLAIN nixpkgs for the host system here, NOT `pkgsFor`.
+      # `pkgsFor` applies solnix-pkgs' illumos cross-stdenv overlay, and
+      # instantiating even mkShellNoCC through that overlaid stdenv forces the
+      # illumos cross-GCC bootstrap to BUILD (gmp/mpfr/mpc/isl/perl/bison...),
+      # which made `cd` into the repo recompile a toolchain on every cold direnv
+      # eval. The ops shell needs none of that — plain nixpkgs tools only.
       devShells = lib.genAttrs buildSystems (buildSystem:
-        let pkgs = pkgsFor buildSystem; in {
+        let pkgs = nixpkgs-host.legacyPackages.${buildSystem}; in {
           default = pkgs.mkShellNoCC {
             packages = with pkgs; [ git sops age awscli2 xorriso jq curl ];
             shellHook = ''
