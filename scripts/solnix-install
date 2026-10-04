@@ -2141,6 +2141,37 @@ if [ "$HOME_STYLE" = home ]; then
   fi
   log "autofs: /home mapping commented out + service preset disabled"
 fi
+
+# ⚠️ BOOT-GATE FIX (MEASURED on the dixi X1: first boot reached single-user but STALLED
+# transitioning to multi-user). Two SMF issues gate milestone/multi-user[-server]:
+#
+#  1. autofs ENABLED gates milestone/multi-user. The block above only disables it for
+#     HOME_STYLE=home; disable it UNCONDITIONALLY here (a self-install's /home is a real
+#     dataset either way, and autofs stalling the boot is worse than no auto_home).
+#  2. inetd is DISABLED/broken on this media (missing libwrap.so.1), so every
+#     inetd-managed service (network/rpc/smserver, gss, rstat, the r-services, ...) sits
+#     UNINITIALIZED forever -- never reaching a terminal state. milestone/multi-user-server
+#     has an optional_all dependency on network/rpc/smserver, and optional_all is only
+#     satisfied when the dep is online OR TERMINAL (disabled/maintenance). An
+#     uninitialized dep holds multi-user-server OFFLINE indefinitely -> no console-login,
+#     no full boot. Fix: in the target repo, disable inetd + its managed services so they
+#     reach the terminal 'disabled' state, which satisfies the optional_all gate.
+# All against the TARGET repository (SVCCFG_REPOSITORY), idempotent, best-effort.
+if [ -x /usr/sbin/svccfg ] && [ -f "$ALTROOT/etc/svc/repository.db" ]; then
+  _tgtrepo="$ALTROOT/etc/svc/repository.db"
+  # autofs: always off (not just home-style) -- it gates multi-user.
+  SVCCFG_REPOSITORY="$_tgtrepo" /usr/sbin/svccfg -s system/filesystem/autofs \
+    setprop general/enabled = boolean: false 2>/dev/null || true
+  # inetd + the inetd-managed services that gate the boot: force terminal (disabled) so
+  # optional_all deps on them are satisfied and multi-user-server can come online.
+  for _svc in network/inetd network/rpc/smserver network/rpc/gss network/rpc/rstat \
+              network/rpc/rusers network/rpc/spray network/rpc/wall network/rpc/bind \
+              network/security/ktkt_warn; do
+    SVCCFG_REPOSITORY="$_tgtrepo" /usr/sbin/svccfg -s "$_svc" \
+      setprop general/enabled = boolean: false 2>/dev/null || true
+  done
+  log "boot-gate: autofs + inetd + inetd-managed RPC services preset DISABLED in target repo (so multi-user-server is not held OFFLINE by an uninitialized optional dep)"
+fi
 log "datasets: $POOL/nix + $POOL${HOME_BASE} created outside $BEDS"
 
 # ---------------------------------------------------------------------------
