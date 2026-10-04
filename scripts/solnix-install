@@ -2990,6 +2990,18 @@ if [ -f "$ALTROOT/etc/ssh/sshd_config" ]; then
     && mv "$ALTROOT/etc/ssh/sshd_config.new" "$ALTROOT/etc/ssh/sshd_config"
   log "sshd: PermitRootLogin no, PermitEmptyPasswords no"
 fi
+# Ensure network/ssh is ENABLED in the target's SMF repository, so the installed
+# system comes up with sshd listening on first boot (needed for remote login).
+# The target repository.db is the copied live one; network/ssh is normally enabled
+# there, but assert it explicitly against the target repo (SVCCFG_REPOSITORY), same
+# pattern as the autofs preset. A machine the operator installed to log into
+# remotely must not come up with sshd disabled.
+if [ -x /usr/sbin/svccfg ] && [ -f "$ALTROOT/etc/svc/repository.db" ]; then
+  SVCCFG_REPOSITORY="$ALTROOT/etc/svc/repository.db" \
+    /usr/sbin/svccfg -s network/ssh setprop general/enabled = boolean: true 2>/dev/null \
+    && log "target network/ssh preset ENABLED (sshd listens on first boot)" \
+    || log "note: could not preset network/ssh enabled; run 'svcadm enable network/ssh' after first boot"
+fi
 
 _mkadmin=0
 if [ -n "${SOLNIX_ADMIN_USER:-}" ]; then
@@ -3122,6 +3134,22 @@ if [ "$_mkadmin" = 1 ]; then
   fi
   log "admin user OK: $_au (staff+sysadmin, Primary Administrator, home on $POOL$HOME_BASE)"
   echo "  Created $_au. Log in and use: pfexec <command>   (or su - root)"
+  # Seed the admin user's SSH authorized_keys so key login works on first boot.
+  # Config-declared users get keys via seed-authorized-keys (step 6c); this
+  # runtime-created admin user does NOT, so without this it would have NO key and
+  # (with PermitRootLogin no) the machine could be unreachable by key.
+  # SOLNIX_ADMIN_SSHKEY may hold one or more keys (newline-separated).
+  if [ -n "${SOLNIX_ADMIN_SSHKEY:-}" ]; then
+    _assh="$ALTROOT${HOME_BASE}/$_au/.ssh"
+    mkdir -p "$_assh" 2>/dev/null
+    printf '%s\n' "$SOLNIX_ADMIN_SSHKEY" >> "$_assh/authorized_keys"
+    chmod 700 "$_assh" 2>/dev/null; chmod 600 "$_assh/authorized_keys" 2>/dev/null
+    _auid=$(awk -F: -v u="$_au" '$1==u{print $3}' "$ALTROOT/etc/passwd" 2>/dev/null)
+    [ -n "$_auid" ] && chown -R "$_auid":10 "$_assh" 2>/dev/null || true
+    grep -qF "$SOLNIX_ADMIN_SSHKEY" "$_assh/authorized_keys" 2>/dev/null \
+      && log "seeded $_au authorized_keys (SSH key login enabled)" \
+      || log "WARNING: $_au authorized_keys seed did not verify"
+  fi
 fi
 
 log "finalizing (export pool)"
