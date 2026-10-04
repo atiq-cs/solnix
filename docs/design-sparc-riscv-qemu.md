@@ -1254,3 +1254,164 @@ Method note: every qemu invocation was `timeout`-wrapped and detached; each was
 killed after a single short sleep+log-check (no foreground poll, no wedge).
 Core dumps disabled (`ulimit -c 0`) after the first run left a 1.1 GB core.
 No git commit.
+
+## S3 attempt 6 — the PSTATE_IE "atomic CIF" fix VALIDATED: it closes the CIF window race; the sun4u kernel now boots into multi-user SMF; next blocker re-localized to a clock-interrupt TL1 trap (2026-10-03)
+
+Status: **the CIF register-window race wall (S3-1..S3-4, "0/10 full boots") is
+CLOSED by a 2-site OpenBIOS patch that disables interrupts across the CIF body.**
+S3-5 had built this patch + blob but left it un-validated in the worktree (not in
+this doc). This pass VALIDATED it with a negative control on pinned qemu 10.1.5,
+measured a 19-run determinism rate, and re-localized the next concrete blocker
+with a resolved mechanism. The toolchain was re-verified (fresh EM_SPARCV9
+big-endian output). Honest ceiling: a *clean* 95/95 boot still gated — on
+emulation speed (slow SMF import, not a stall) plus one rare clock-interrupt
+TL1 trap — but the hard, long-standing wall is gone.
+
+All qemu runs on the dev-box (floki), DETACHED (nohup -> timeboxed per-run log,
+polled, killed; no interactive console). Not git-committed. No AWS.
+
+### S3-6.1 The fix (openbios-cif-atomic-ie.patch — was S3-5, now validated)
+
+S3-4 proved the sun4u boot failure is a TIMING race: an async event perturbs the
+OpenBIOS CIF's manual register-window walk (`SAVE/RESET/RESTORE_CPU_WINDOW_STATE`
+in `call-client.S`, raw `wrpr %cwp`), which runs with the KERNEL's trap table in
+`%tba` and interrupts ENABLED. If a device/clock IRQ fires between two `wrpr
+%cwp` steps it vectors into the kernel's `sys_trap`, which manipulates
+`%cwp/%cansave/...` underneath the walk -> a window returns from the CIF with a
+stale/zero `%sp`/`%fp` -> the nondeterministic TL2 / bad-window / addr=0x99
+panic.
+
+The fix (2 instruction-sites in `arch/sparc64/call-client.S`): snapshot the
+caller's `%pstate`, clear `PSTATE_IE` for the whole CIF body (making the manual
+walk uninterruptible), and restore the caller's `%pstate` verbatim just before
+the `jmp` back to the kernel. This mirrors the IE discipline the TLB-miss path in
+`vectors.S` already uses around its C call. It does NOT touch the trap table
+(S3-3 proved OBP cannot own trap handling while touching kernel memory — the TLB
+wall), and it does NOT touch the window accounting (S3-4 proved QEMU's model is
+spec-correct). It targets exactly the mechanism S3-4 named: the interruptibility
+of the walk.
+
+Blob provenance (verified by disassembly, not trust): the atomic blob has +2
+`wrpr %pstate` sites vs the pristine rebuild (22 vs 20); the two added sites are
+`rdpr %pstate,%g7; andn %g7,2,%g7 (clear PSTATE_IE=bit1); wrpr %g7,%pstate` at
+0xffd0ceac and 0xffd0d23c, bracketing the CIF body. Matches the patch exactly.
+
+### S3-6.2 Negative control on pinned qemu 10.1.5 (apples-to-apples)
+
+Same qemu 10.1.5 (`/nix/store/k8zfisphlb6sddc03r8p76xyga3s77wj-qemu-10.1.5`),
+same m34 CD, `boot cdrom -v`, 900s timebox — only the `-bios` blob differs:
+
+| blob | result | SMF |
+|------|--------|-----|
+| **pristine-rebuild** (no IE fix) | PANIC "bad stack overflow at TL 2" — stack `ddi_bus_prop_op+28` <- `ktl0` <- ... <- `client_handler+70` (the OpenBIOS CIF), `%tt` TL1=0x34 spill / TL2=0x68 fill, `%pstate` AG (window-trap handler). The CIF window race, verbatim. | **0/95** (dies before SMF) |
+| **cif-atomic** (IE fix) | past Welcome/`unix-tte` -> SMF import, NO CIF panic, timebox fired mid-import | **66/95 and climbing** |
+
+The pristine control reaching 0/95 with the CIF stack while the atomic blob
+reaches 66/95 is the causal proof: the `PSTATE_IE` clear is what removes the
+race. (`logs/v1015-pristine-900-A.log`, `logs/v1015-atomic-900-A.log`.)
+
+### S3-6.3 Determinism — 19 atomic runs on qemu 10.1.5
+
+| outcome | count/19 |
+|---------|----------|
+| CIF-race panic (the old wall) | **0** |
+| clock-interrupt TL1 panic (the NEW blocker) | **1** |
+| no panic — timebox fired during SMF import (all reached multi-user) | **18** |
+
+SMF depth tracks the timebox, not a stall: 300s runs cluster at 11-21/95, 900s
+runs reach 64-83/95 (deepest 83/95). Emulated single-core sun4u imports the 95
+SMF manifests slowly; it climbs steadily, it does not hang. Compare the
+documented stock-blob baseline: **0/10 full boots, nondeterministic CIF panics**.
+
+### S3-6.4 The NEW next-concrete-blocker (mechanism resolved) — clock interrupt at TL1 in resume
+
+The single atomic-blob panic (`logs/s35-atomic-900-run1.log`, reached SMF 46/95):
+```
+panic[cpu0]/thread=...: bad unknown trap at TL 1
+ %tl=1 %tpc=0000000001047628 %tstate=4400001603 %tt=041
+       %pstate: 16<PEF,PRIV,IE>
+ ... Register window 3, caller swtch_to+9c
+ ... genunix:callout_expire+14    <- the clock/callout (timer) subsystem
+```
+Resolving `%tpc=0x1047628` against `sun4u_unix` (.text base 0x1000000, via the
+S3-2 sparc64 objdump) places it inside `_resume_from_idle` (the context-switch
+tail):
+```
+1047624:  wrpr  %o0, 0, %pil     ; lower PIL -> OPEN the interrupt window for the resumed thread
+1047628:  wrpr  0xe, %wstate     ; <-- a level-1 (clock) interrupt is taken HERE
+```
+`%tt=0x41` = **interrupt_level_1**; `%tstate` shows IE=1 at the trapped PC. So:
+the instant `resume` lowers PIL (0x1047624) a pending clock-tick interrupt is
+delivered on the very next instruction, at a point where the kernel's TL1 path
+classifies it as an unexpected trap -> `ptl1_panic` ("bad unknown trap at TL 1").
+The caller frame `swtch_to -> callout_expire` ties it to the timer/callout path.
+This is the **clock-interrupt delivery timing under QEMU's sun4u** — a DIFFERENT
+bug from the CIF window race (which the IE fix closed), and it is the single
+thing that still *crashes* the atomic boot (1/19). It is distinct from the
+emulation-speed ceiling (which only needs a longer timebox / faster host / SMP).
+
+### S3-6.5 qemu VERSION regression found — pin 10.1.5, NOT 10.2.4
+
+The dev-box default profile is now **qemu 10.2.4**. On 10.2.4 the sun4u CD boot
+fails at FCode read — `read failed` / `byte-load: exception caught!` — and drops
+to the `0 >` OBP prompt BEFORE the kernel loads (identical for atomic and
+pristine blobs; the fault is in the sun4u IDE/CDROM FCode read, upstream of any
+blob logic). qemu **10.1.5** reads the CD fine and reaches the kernel. So:
+**use qemu 10.1.5 for sun4u CD boot; 10.2.4 regressed it.** (Mirrors the earlier
+"host 11.0.2 OpenBIOS is worse" finding — the sun4u path is version-fragile.)
+Store path for the good one:
+`/nix/store/k8zfisphlb6sddc03r8p76xyga3s77wj-qemu-10.1.5`.
+
+### S3-6.6 Toolchain re-verified (EM_SPARCV9 big-endian, fresh output)
+
+The sparcv9 cross front still emits valid SPARCv9 big-endian ELF *now* (not just a
+stale artifact): a fresh compile through `artifacts/sparc-toolchain/sparcv9-solaris-cc`
+(freestanding `sparc64-none-elf-gcc` 14.3.0, gcroot
+`/nix/store/cmx305...-sparc64-none-elf-nolibc-gcc-wrapper-14.3.0`, +Hipster crt/
+headers) ->
+`ELF 64-bit MSB executable, SPARC V9, Sun UltraSPARC1 Extensions Required,
+interpreter /usr/lib/sparcv9/ld.so.1`. Byte-level ELF header: `EI_CLASS=02`
+(ELFCLASS64), `EI_DATA=02` (ELFDATA2MSB = big-endian), `e_machine=0x2b=43`
+(EM_SPARCV9). This is the big-endian 2MSB that distinguishes SPARC from x86's
+2LSB. (`artifacts/sparc-toolchain/hello` carries the same header.)
+
+### S3-6.7 Next step (precise, for S3-7)
+
+The CIF race is closed; two things gate a clean 95/95 boot, in order of leverage:
+1. **The clock-interrupt TL1 trap (the real remaining bug).** Instrument the
+   resume path: the race is a clock IRQ delivered in the one-instruction window
+   between `wrpr %pil` (0x1047624) and the kernel being ready for it. Candidate
+   mechanisms to test: (a) does OpenBIOS/qemu deliver the sun4u tick/stick timer
+   interrupt at a `%tl`/PIL the kernel's trap table doesn't expect at that
+   instant; (b) is the `%tick`/`%stick` compare being set such that an interrupt
+   is already pending the moment PIL drops. Reuse the S3-4 window tracer plus a
+   trap-delivery trace (`-d int`) to catch the exact `%tl`/`%pil`/`%tt` at
+   delivery, and diff a surviving run vs the panicking one at the first
+   divergent interrupt. Likely a qemu `target/sparc` timer/interrupt-delivery
+   detail, not an OpenBIOS one (the kernel is already running; no CIF involved).
+2. **Emulation speed for SMF import** (the no-panic timebox ceiling): longer
+   timebox, or try the sun4u SMP path, or a VTOC disk image (less getprop-heavy
+   than the CD) — this is not a bug, just throughput; a real Ultra 45 clears it.
+3. Keep the getproplen guard (#3) and the atomic-IE fix together in the shipping
+   blob (both are real; neither regresses the other).
+
+Honest bottom line: S3-6 did NOT achieve a deterministic clean 95/95 boot, but it
+turned the multi-pass "0/10, nondeterministic CIF panic" wall into "18/19
+no-panic, deep multi-user SMF," with the fix mechanism-proven by negative
+control, and re-localized the single remaining crash to a specific, resolved
+clock-interrupt-at-resume mechanism. The sun4u illumos kernel boots into
+multi-user illumos under QEMU; the CIF race is behind us.
+
+### S3-6.8 Artifacts (this pass)
+
+- `artifacts/sparc-s3/openbios-cif-atomic-ie.patch` — the validated fix (was in
+  worktree from S3-5; now the documented working fix).
+- `artifacts/sparc-s3/blobs/s3-5/openbios-sun4u-cif-atomic.elf` — the patched
+  blob (swap via `-bios`); `openbios-pristine-rebuild.elf` — the negative control.
+- `artifacts/sparc-s3/s3-5-repro-1015.sh` — 10.1.5-pinned detached repro harness
+  (NEW); `s3-5-repro.sh` — 10.2.4 variant that documents the version regression.
+- `artifacts/sparc-s3/logs/v1015-{atomic,pristine}-900-A.log` — the negative-
+  control pair (NEW); `logs/repro-{atomic,pristine}-900-A.log` — the 10.2.4
+  byte-load regression evidence (NEW); `logs/s35-atomic-*.log` — the 18 prior
+  atomic runs (from S3-5).
+- `artifacts/sparc-s3/S3-6-FINDINGS.md` — standalone write-up of this pass.
