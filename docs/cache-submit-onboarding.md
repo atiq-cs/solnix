@@ -159,3 +159,40 @@ To add a genuinely separate builder later: generate a key, send the .pub, the
 operator runs `cache-builder.py enroll <new-id> <group>` and vets ownership.
 Re-keying an existing id = revoke + enroll under a NEW id (the schema refuses
 to overwrite an identity or re-register a key).
+
+## Client notes (build team, measured 2026-10-05)
+
+The sections above are the infra team's guide, copied for reference. solnix.io is
+theirs; we are a client of its public endpoints. Problems on their side go into a
+report under /tmp for the maintainer to route (see AGENTS.md). The current one is
+`/tmp/solnix-io-cache-client-report.md`.
+
+**Finding an object.** Nix looks up `https://cache.solnix.io/<hash>.narinfo`. The
+search API (`https://search.solnix.io/api/v1/packages?q=<name>`) lists names and
+versions, but its `storePath` is often empty and it lists packages that are not
+installable, so it is not evidence that something can be substituted.
+
+**Deciding that an object is installable.** Only this counts, with an empty Nix
+cache so a stale local narinfo cannot answer:
+
+    XDG_CACHE_HOME=$(mktemp -d) nix store verify --no-contents \
+      --store https://cache.solnix.io \
+      --trusted-public-keys 'cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8=' <path>
+
+rc=0 means trusted. Negative control: the same command with a key that signs
+nothing must report "is untrusted". On 2026-10-05 the CDN still served a 5HAV
+narinfo (cf-cache-status HIT, age ~14 h) for a path the origin had already
+re-signed with 8UNr, so this check failed for real clients while a cache-busted
+fetch passed. Test what Nix fetches (no query string), not the origin.
+
+**Before submitting anything.** Blocked until the infra team answers the report:
+`registry/recipes.tsv` is served empty (every submission would be rejected at the
+authority step), and the protocol questions in it (one store path per submission,
+the narinfo capability, the NAR key form, multi-output paths, status polling,
+removal of superseded paths) decide how the client is written. Every object we
+submit must also pass our own check first: store-only RUNPATH, no unresolved
+NEEDED, references complete, and installable on a Nix-managed system.
+
+**Using the cache from a solnix system.** Clients trust only the 8UNr key. 5HAV is
+the retired key that signed the objects the 2026-10-04 audit found broken; a
+client that trusts it can substitute them.
