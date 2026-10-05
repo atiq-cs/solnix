@@ -232,9 +232,18 @@ def classify(h, r):
         # Script interpreters: /bin/sh and /usr/bin/env are base illumos; anything else
         # outside /nix/store is a host-path leak (advisory -- it does not change class,
         # since python/perl module trees commonly carry unused test/example scripts).
+        # A /nix/store interpreter, by contrast, is a runtime dependency exactly like a
+        # store RUNPATH entry: Nix only substitutes what References names, so a script
+        # whose interpreter is not declared lands without it and cannot run. MEASURED:
+        # py313-json5 (References empty) has #!/nix/store/kvl140jb...-python3.13, that
+        # path 404s, and `nix copy` installs the package with no interpreter.
         for f, l in (d.get("shebang") or {}).items():
             i = l.split()[0] if l.split() else ""
-            if i and not i.startswith("/nix/store/") and i not in ("/bin/sh", "/usr/bin/env", "/sbin/sh"):
+            m = STORE.match(i)
+            if m:
+                if m.group(1) != h and m.group(1) not in refs:
+                    undecl[f"shebang:{m.group(1)}"] += 1
+            elif i and i not in ("/bin/sh", "/usr/bin/env", "/sbin/sh"):
                 notes["host-shebang"] += 1
         fams = set(FAM.get(m, m) for m in machines)
         if linux:
