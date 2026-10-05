@@ -1,34 +1,30 @@
 #!/sbin/sh
-# solnix-install — lay a solnix toplevel onto a BLANK target disk's ZFS root,
-# from a running solnix system (the "installer environment"). T2.7.
+# solnix-install -- install a solnix system onto a BLANK disk: the illumos analog
+# of nixos-install.
 #
-# The illumos analog of nixos-install. Unlike make-be (which runs on the OI
-# BUILD host and lays the gate PROTO down onto a scratch disk), solnix-install
-# runs INSIDE a booted solnix proto-root world and installs onto a SECOND
-# (target) disk — the real "install to a fresh disk" flow, not a re-dd of a
-# prebaked image.
+#   solnix-install [--disk <target>] [--flake <ref>#<attr>]   (see --help)
+#   solnix-install <target-disk> [toplevel]                    (positional form)
+#     <target-disk>  e.g. c1t1d0  (the BLANK disk; NOT the running root disk)
+#     [toplevel]     store path of the system to install. Default: --flake's
+#                    toplevel, else the running /run/current-system.
 #
-#   solnix-install <target-disk> [toplevel]
-#     <target-disk>  e.g. c1t1d0  (the BLANK disk; NOT the running rpool disk)
-#     [toplevel]     store path of the system to install (default: the running
-#                    /run-current-system). Its closure must exist in the local
-#                    /nix/store (the installer env is self-contained).
+# What it does (nixos-install's sequence; nothing is copied from the live root):
+#   1. GPT-label the target (ESP + ZFS + reserved)
+#   2. mkfs pcfs on the ESP; zpool create <POOL>; <pool>/ROOT/<be> (the BE),
+#      <pool>/nix and <pool>/home OUTSIDE the BE (shared by every generation)
+#   3. copy the media's own store closure into <pool>/nix, mount <pool>/nix over
+#      the live /nix, and build/realise the toplevel there (a real, non-diverted
+#      store, so illumos nix may build); set the system profile
+#      (/nix/var/nix/profiles/system -> system-1-link -> toplevel)
+#   4. write the machine inputs (console, device bindings, SMF presets) into the
+#      BE, then run the toplevel's own `switch-to-configuration install-be`,
+#      which lays the BE from the toplevel: early-boot set as real files, links
+#      into the store, /etc, SMF repository, /boot, boot_archive
+#   5. loader on the ESP + BIOS stage1/2 + bootfs; root password + admin user
+#   6. unmount, set <pool>/nix mountpoint=/nix, export
 #
-# What it does (mirrors make-be steps, but base = the RUNNING root, which is a
-# proven-booting proto-derived world with all 16 boot gotchas already applied):
-#   1. GPT-label the target (ESP + ZFS + reserved), like the OI rpool layout
-#   2. mkfs pcfs on the ESP; zpool create <POOL> on the ZFS slice
-#   3. rpool/ROOT/<be> = the boot environment (canmount=noauto mountpoint=/)
-#   4. copy the running root FS onto the target BE (tar | tar, minus pseudo fs +
-#      /nix, which is copied by closure below) — carries every gotcha fix
-#   5. copy the toplevel closure into the target's /nix/store (self-contained)
-#   6. seed the SMF repository + stage the toplevel's manifests/site/activate
-#   7. register generation 1 + switch tools on the target's PATH
-#   8. loader on ESP + bootfs + menu.lst (beadm-ready) + boot_archive
-#
-# Pure /sbin/sh + illumos tools (no nix, no GNU cp) — runs in the minimal proto.
-# Reuses the illumos gotchas learned in switch-to-configuration: ln -sfn follows
-# (use rm+ln), no readlink(1) (use ls -l|sed), cp dir tree = `cp -R -P` no slash.
+# Pure /sbin/sh + illumos tools + nix. illumos gotchas honoured throughout:
+# ln -sfn follows a symlink-to-dir (use rm+ln), no readlink(1) (use ls -l|sed).
 set -u
 # Deliberately minimal PATH: this runs in a bare proto world and must not pick up
 # whatever a build host happens to have.
@@ -91,7 +87,10 @@ usage: solnix-install [--disk <target>] [--flake <ref>#<attr>]
                       [--git <https-url> [--ref <rev>]]
                       [--home <ref>#<attr>] [--home-base /home|/export/home]
                       [--no-home]
-       solnix-install <target-disk> [toplevel]      (legacy positional form)
+       solnix-install <target-disk> [toplevel]      (positional form)
+  With no --flake and no toplevel, installs the system the media booted
+  (/run/current-system). The target is always built from a toplevel; the
+  running root is never copied.
 
   --git    clone a config repo first, then resolve --flake inside it.
            Use an https:// URL: the live media has no ssh key.
@@ -123,7 +122,6 @@ POOL="${SOLNIX_POOL:-rpool}"       # target pool name; rpool for a real install
 BE="${SOLNIX_BE:-solnix-1}"
 BEDS="$POOL/ROOT/$BE"
 ALTROOT="${SOLNIX_ALTROOT:-/a}"
-SRCROOT="${SOLNIX_SRCROOT:-/}"     # the running root we copy as the base world
 
 # CONSOLE OF THE *INSTALLED* SYSTEM. Not the same question as the console of the
 # live media, and getting it wrong is unrecoverable without a keyboard.
@@ -206,7 +204,7 @@ log() { printf '\n=== %s ===\n' "$*" >&2; printf '\n=== %s ===\n' "$*" >> "${SOL
 # wedge a step.
 #
 # STEP_TOTAL is the count the operator sees as [N/STEP_TOTAL]; it is a fixed
-# orientation number, not a promise every step runs (SELF_INSTALL skips some).
+# orientation number, not a promise every step runs.
 STEP_TOTAL=9
 STEP_N=0
 step() {  # step "<human description>"
@@ -268,32 +266,10 @@ have_intel_ax2xx() {
 }
 
 # illumos ln -sfn FOLLOWS an existing symlink-to-dir (rc=0, no-op); always rm+ln.
-# _solnix_nixpkgs_src <flake-ref> -- print the store path of solnix-pkgs' patched
-# nixpkgs source (the applyPatches output the flake's `import "${nixpkgs}/lib"`
-# needs realised). Uses `nix eval builtins.getFlake` to read the config flake's
-# solnix-pkgs INPUT directly -- PURE NIX, no python/jq and no human-output parsing
-# (both earlier approaches were fragile on the media: python3 is absent, and
-# `nix flake metadata` tree-output parsing returned empty). nix is guaranteed here.
-# ⚠️ getFlake UNPACKS nixpkgs into the Git tarball cache (XDG_CACHE_HOME) at eval
-# time. On the live media HOME=/root sits on the ramdisk root, which is 100% FULL
-# by design -- the unpack overflows and corrupts the cache, after which every read
-# fails "object not found - failed to find pack entry" and the eval returns EMPTY
-# (measured on the X1, tui11: paste.rs/P46jo). So point XDG_CACHE_HOME + TMPDIR at
-# the POOL ($ALTROOT/var/tmp, 928G) -- caller must have mounted it already -- and
-# clear any cache the ramdisk already corrupted. stderr is NOT swallowed: the
-# caller captures it so a failure is visible, never a silent empty.
-_solnix_nixpkgs_src() {
-  _sns_cache="$ALTROOT/var/tmp/solnix-nixcache"
-  rm -rf "$_sns_cache" 2>/dev/null; mkdir -p "$_sns_cache" "$ALTROOT/var/tmp" 2>/dev/null
-  run_to 300 env HOME="$ALTROOT/var/tmp" XDG_CACHE_HOME="$_sns_cache" TMPDIR="$ALTROOT/var/tmp" \
-    nix eval --impure --raw --expr \
-    "(builtins.getFlake \"$1\").inputs.solnix-pkgs.lib.nixpkgsSrc"
-}
 relink() { rm -f "$2" 2>/dev/null; ln -s "$1" "$2"; }
 # minimal proto has no readlink(1); derive symlink target from ls -l.
 _readlink() { [ -h "$1" ] || return 1; ls -ld "$1" 2>/dev/null | sed -n 's/.* -> //p'; }
-# copy a store path into the target (illumos cp -R -P, parent dir no trailing /).
-copy_path() { [ -e "$ALTROOT$1" ] && return 0; d="$ALTROOT$(dirname "$1")"; mkdir -p "$d"; cp -R -P "$1" "$d" 2>/dev/null || true; }
+
 
 # assert_mounted_on_pool <dataset> <expected-mountpoint> -- prove a dataset is
 # ACTUALLY mounted on the target pool, not that its mountpoint DIRECTORY merely
@@ -369,6 +345,10 @@ fi
 PREEXISTING_POOLS=" $(zpool list -H -o name 2>/dev/null | tr '\n' ' ') "
 cleanup() {
   spin_stop 2>/dev/null || true
+  # the target store may be mounted over the live /nix or at the copy root;
+  # release both before any pool export.
+  [ "${NIX_OVERLAID:-0}" = 1 ] && unoverlay_nix 2>/dev/null
+  umount "${NIXROOT:-/var/tmp/solnix-nixroot}/nix" 2>/dev/null || true
   # The encryption passphrase is written to a temp keyfile so `zfs create` can read
   # it non-interactively; it must not survive this script under any exit path.
   [ -n "${ENC_KEYFILE:-}" ] && rm -f "$ENC_KEYFILE" 2>/dev/null
@@ -761,7 +741,7 @@ setup_scratch() {
 # image at /solnix-store.iso INSIDE the boot medium's own ISO9660 filesystem.
 # Here we: mount the boot medium ro (same hsfs mount the live method already
 # uses to identify it), lofiadm -a the inner /solnix-store.iso, mount THAT ro,
-# and export MEDIA_STORE_MNT. build_toplevel adds `--extra-substituters
+# and export MEDIA_STORE_MNT. realise_toplevel adds `--extra-substituters
 # file://$MEDIA_STORE_MNT`; the store's paths are signed by cache.solnix.io-1
 # (5HAV..., already trusted), so signature trust does the integrity work.
 #
@@ -1251,195 +1231,134 @@ if [ -n "$FLAKE_REF" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 0c. BUILD THE TOPLEVEL FROM THE FLAKE (step 7, the build half).
+# 0c. REALISE THE TOPLEVEL'S CLOSURE INTO <pool>/nix (nixos-install steps 2+3).
 #
-# This is what replaces the cpio path lists: instead of enumerating files to copy,
-# we realise a store path whose CLOSURE is the system, and later copy that closure.
-#
-# ⚠️ STORE MUST BE ON REAL DISK, NOT THE RAMDISK. builtins.fetchClosure and the
-# build both realise gigabytes into /nix, and the live media's /nix is a ~620MB
-# RAM ramdisk ("alloc: /: file system full"). So the build is a FUNCTION invoked
-# AFTER the target pool exists, with the nix store + TMPDIR on the pool
-# ($ALTROOT/nix on the target disk). The ramdisk-safe NAME gate above already
-# proved the attr exists, so a typo still fails before any disk is touched; what
-# moves past the disk step is only the heavy realisation, which has nowhere else
-# to go. A build failure after this point is handled by build_toplevel's own
-# die(), and the pool it half-populated is on the target disk we are installing
-# to anyway, so nothing the operator wanted to keep is at risk.
-build_toplevel() {
-  [ -n "$FLAKE_REF" ] && [ -z "$TOPLEVEL" ] || return 0
-  step "building the system toplevel from $FLAKE_REF (the long step)"
-  _fl="${FLAKE_REF%%#*}"; _at="${FLAKE_REF#*#}"
-  # The attr set was determined by the gate above ($_found); reuse it rather than
-  # guessing again, so build and gate cannot disagree about what they resolved.
-  _set="${_found:-solnixConfigurations}"
-  _outlink="$ALTROOT/var/tmp/solnix-toplevel-$$"
-  mkdir -p "$ALTROOT/var/tmp" "$ALTROOT/nix/store" 2>/dev/null || true
-  # Store + TMPDIR on the target pool, NOT the ramdisk. The pool's store IS the
-  # installed system's store, so paths realised here need no later copy across a
-  # store boundary -- they are already where the booted system will find them.
-  #
-  # Log to a FILE and test nix build's OWN exit, not a pipe's. `if nix build ... |
-  # tail` would test tail (always 0), masking a build failure -- the same
-  # pipe-hides-exit trap that a 2>/dev/null once hid in the media cpio. /sbin/sh
-  # has no PIPESTATUS, so a logfile is the portable fix; tail it for the operator.
+# Called after the pool and $POOL/nix exist. $POOL/nix is mountpoint=legacy for
+# the whole install, so it is only ever mounted where this code puts it:
+#   seed_target_store  -- mount it at $NIXROOT/nix and `nix copy` the LIVE system's
+#                         closure (+ a positional toplevel) into it. Copying into a
+#                         chroot store is substitution, which illumos allows.
+#   overlay_nix        -- (overlay mode) mount it over the live /nix. From here on
+#                         /nix IS the target store, non-diverted, so nix may BUILD.
+#   realise_toplevel   -- build the flake toplevel (or verify the given one), then
+#                         set the system profile: system-1-link -> toplevel.
+# ---------------------------------------------------------------------------
+_nix_env() {  # run nix with HOME/TMPDIR/caches on the target pool, never the ramdisk
+  mkdir -p "$ALTROOT/var/tmp/solnix-nixcache" 2>/dev/null
+  env HOME="$ALTROOT/var/tmp" XDG_CACHE_HOME="$ALTROOT/var/tmp/solnix-nixcache" \
+      TMPDIR="$ALTROOT/var/tmp" "$@"
+}
+_nixroot_mount() {
+  mkdir -p "$NIXROOT/nix"
+  df -n "$NIXROOT/nix" 2>/dev/null | grep -q zfs && return 0
+  mount -F zfs "$POOL/nix" "$NIXROOT/nix" || die "could not mount $POOL/nix at $NIXROOT/nix"
+}
+_nixroot_umount() { umount "$NIXROOT/nix" 2>/dev/null || true; }
+
+seed_target_store() {
+  step "copying the media's store closure into $POOL/nix"
+  _nixroot_mount
+  _seed="$LIVE_SYSTEM"
+  [ -n "$TOPLEVEL" ] && [ "$TOPLEVEL" != "$LIVE_SYSTEM" ] && _seed="$_seed $TOPLEVEL"
+  _seed=$(echo $_seed)
+  if [ -z "$_seed" ]; then
+    log "no /run/current-system on this system: nothing to seed; the toplevel will come from substituters/build"
+    _nixroot_umount; return 0
+  fi
+  # --no-check-sigs: these paths are already VALID in the running store (they are
+  # what booted); signatures guard the network, not a copy between local stores.
+  _cplog="$ALTROOT/var/tmp/solnix-seed-$$.log"
+  spin_start "nix copy (media closure -> $POOL/nix)"
+  run_to "${SOLNIX_COPY_TIMEOUT:-7200}" _nix_env nix --extra-experimental-features nix-command \
+    copy --no-check-sigs --to "local?root=$NIXROOT" $_seed > "$_cplog" 2>&1
+  _rc=$?
+  spin_stop
+  [ "$_rc" = 0 ] || { tail -20 "$_cplog" >&2; die "nix copy of the media closure into $POOL/nix failed (rc=$_rc); log $_cplog"; }
+  for _p in $_seed; do
+    [ -e "$NIXROOT$_p" ] || die "nix copy reported success but $_p is absent from $POOL/nix"
+  done
+  log "seeded $POOL/nix with $(ls "$NIXROOT/nix/store" 2>/dev/null | wc -l | tr -d ' ') store entries from the media"
+  _nixroot_umount
+}
+
+overlay_nix() {
+  [ "$STORE_MODE" = overlay ] || return 0
+  # A nix-daemon serving the ramdisk store holds its DB open and would keep
+  # answering for the old store; stop it for the duration (-t: not persistent).
+  DAEMON_FMRI=$(svcs -H -o fmri 2>/dev/null | grep -i 'nix-daemon' | head -1)
+  [ -n "$DAEMON_FMRI" ] && { svcadm disable -st "$DAEMON_FMRI" 2>/dev/null || true; log "stopped $DAEMON_FMRI while /nix is overlaid"; }
+  mkdir -p /nix
+  # plain legacy mount over the non-empty ramdisk /nix: rc=0 and the pool's
+  # contents shadow the ramdisk's (measured; `zfs mount` refuses non-empty dirs).
+  mount -F zfs "$POOL/nix" /nix || die "could not mount $POOL/nix over the live /nix"
+  NIX_OVERLAID=1
+  case "$(df -n /nix 2>/dev/null)" in *zfs*) : ;; *) die "/nix is not the zfs pool after the overlay mount" ;; esac
+  [ -z "$LIVE_SYSTEM" ] || [ -e "$LIVE_SYSTEM" ] || die "live system $LIVE_SYSTEM not visible through the overlaid /nix -- seed failed"
+  NIX_REMOTE=local; export NIX_REMOTE
+  log "/nix is now $POOL/nix (overlay): builds run in a real, non-diverted store on the target"
+}
+unoverlay_nix() {
+  [ "$NIX_OVERLAID" = 1 ] || return 0
+  sync
+  umount /nix 2>/dev/null || { sleep 2; umount /nix 2>/dev/null; } || umount -f /nix 2>/dev/null || true
+  df -n /nix 2>/dev/null | grep -q zfs && log "WARNING: /nix still overlaid (a process started from it is running)"
+  NIX_OVERLAID=0
+  [ -n "$DAEMON_FMRI" ] && svcadm enable -t "$DAEMON_FMRI" 2>/dev/null || true
+}
+
+realise_toplevel() {
   _buildlog="$ALTROOT/var/tmp/solnix-build-$$.log"
-  # If the read-only media store is mounted, offer it as an EXTRA substituter so
-  # the base closure's store paths come from the media (offline) instead of the
-  # network. It is ADDITIVE: the network cache still fills anything the media
-  # lacks (e.g. a user flake's own inputs). Its paths are signed by the trusted
-  # cache.solnix.io-1 key, so no extra-trusted-public-keys flag is needed.
   _extrasub=""
   [ -n "${MEDIA_STORE_MNT:-}" ] && _extrasub="--extra-substituters file://$MEDIA_STORE_MNT"
-  [ -n "$_extrasub" ] && log "base build: using media store substituter file://$MEDIA_STORE_MNT (offline-capable)"
-  # ⚠️ REDIRECT EVERY NIX SCRATCH ONTO THE POOL for the build. MEASURED (X1
-  # build-inode diag): the live ramdisk / is ~99% full AT BOOT (only ~9M free of
-  # 629M -- 613M is the base media). --store $ALTROOT puts the STORE (both the
-  # flake+input eval copy AND the build outputs) on the pool, but nix ALSO writes its eval cache, flake registry, and flake
-  # source unpack under $HOME/.cache + $TMPDIR -- and if setup_scratch's scratch
-  # pool did NOT mount (it fell back to the ramdisk), those defaulted to / and
-  # tipped the 9M-free ramdisk over ("/: out of inodes / no space"). By build
-  # time the target pool IS mounted at $ALTROOT (928G), so point HOME + the nix
-  # caches THERE unconditionally -- independent of whether the earlier scratch
-  # pool mounted. This is the robust fix: the pool, not a maybe-mounted scratch.
-  mkdir -p "$ALTROOT/var/tmp" "$ALTROOT/root/.cache" 2>/dev/null || true
-  HOME="$ALTROOT/root"; export HOME
-  XDG_CACHE_HOME="$ALTROOT/root/.cache"; export XDG_CACHE_HOME
-  # ⚠️ BELT-AND-BRACES, AT THE ACTUAL BUILD SITE. Even though the caller verified
-  # the mount before calling us, re-assert here that $ALTROOT is a REAL ZFS mount
-  # with real free space -- this is the last gate before `--store $ALTROOT` writes
-  # gigabytes. The X1 5/9 failure was writing the store into the ~9M RAM ramdisk
-  # because $ALTROOT looked like a directory but was not the mounted pool; catch
-  # that here with the mount property AND a hard free-space floor, and fail LOUD
-  # rather than let nix build fill the ramdisk and die with a cryptic ENOSPC.
-  _bt_mounted=$(run_to 15 zfs get -H -o value mounted "$BEDS" 2>/dev/null || echo unknown)
-  _bt_availk=$(df -k "$ALTROOT" 2>/dev/null | awk 'NR==2{print $4}')
-  _bt_fs=$(df -n "$ALTROOT" 2>/dev/null | sed -n 's/.*: *//p')
-  case "$_bt_fs" in *zfs*) : ;; *)
-    echo "" >&2
-    echo "FATAL: build store $ALTROOT is on fstype '${_bt_fs:-unknown}', not zfs" >&2
-    echo "  (zfs mounted=$_bt_mounted). The target pool is not mounted at $ALTROOT, so" >&2
-    echo "  \`nix build --store $ALTROOT\` would write into the RAM ramdisk and overflow it." >&2
-    echo "  Nothing outside the target disk has been touched. Re-run; if it persists," >&2
-    echo "  check \`zfs get mounted $BEDS\` and \`zpool status $POOL\`." >&2
-    die "refusing to build the toplevel into the ramdisk (store $ALTROOT is not the zfs pool)" ;;
-  esac
-  # Free-space floor: a full solnix toplevel closure is many GB; a store with only
-  # a few MB free is the ramdisk, not the 928G pool. 2 GiB is a conservative floor
-  # that a real pool clears trivially and the 9M ramdisk cannot.
-  case "$_bt_availk" in
-    ''|*[!0-9]*) log "note: could not read df -k avail for $ALTROOT; trusting zfs mounted=$_bt_mounted" ;;
-    *) if [ "$_bt_availk" -lt 2097152 ]; then
-         echo "" >&2
-         echo "FATAL: only ${_bt_availk}KB free at the build store $ALTROOT -- far too little" >&2
-         echo "  for the toplevel closure. That is the RAM ramdisk, not the target pool." >&2
-         echo "  The pool did not mount at $ALTROOT (zfs mounted=$_bt_mounted). Re-run." >&2
-         die "insufficient free space at $ALTROOT -- the target pool is not mounted there"
-       fi ;;
-  esac
-  log "build store OK: $ALTROOT is zfs (mounted=$_bt_mounted, ${_bt_availk:-?}KB free) -- building into the pool"
-  # LONG STEP: spinner + elapsed while nix build runs (minutes to ~1h). The build
-  # log grows in $_buildlog; a background tail feeds the spinner's last-line so
-  # the operator sees forward motion, not a frozen console. nix's own
-  # --log-format is deliberately NOT used for the display (bar/bar-with-logs
-  # assume a smart terminal that the framebuffer console is not); we show our
-  # own dumb spinner + the last log line instead.
-  spin_start "nix build system toplevel (this can take many minutes)"
-  ( while [ -f "$_buildlog" ]; do
-      _ll=$(tail -1 "$_buildlog" 2>/dev/null | cut -c1-70)
-      [ -n "$_ll" ] && printf '\r      %-72s' "$_ll" >&2
-      sleep 5
-    done ) &
-  _blt=$!
-  # ⚠️ NO --eval-store. A separate --eval-store makes nix treat it as a DIVERTED
-  # store, and illumos single-user nix REFUSES to realise a derivation in a diverted
-  # store ("building using a diverted store is not supported on this platform"). The
-  # flake's `lib = import "${nixpkgs}/lib"` (nixpkgs = solnix-pkgs.lib.nixpkgsSrc, an
-  # applyPatches DERIVATION) forces exactly that realisation at eval time -> fatal on
-  # the X1. A plain --store $ALTROOT is a CHROOT store (not diverted): it
-  # substitutes/realises normally AND still lands the eval source copy on the pool,
-  # so the ramdisk-inode reason --eval-store was added for is already covered. The
-  # name gate (step 2, --store $SCRATCH_STORE) already proved --store works on illumos.
-  # Resolve the patched-nixpkgs store path directly from the config flake's
-  # solnix-pkgs input via getFlake (see _solnix_nixpkgs_src). Pre-copy it so eval
-  # substitutes it instead of building it in the diverted store.
-  # Resolve WITH stderr captured to the build log -- the eval overflowing the
-  # ramdisk cache used to be invisible (paste.rs/P46jo: empty result -> pre-copy
-  # skipped -> the build hit "diverted store" and died). Pool-backed cache/tmp now.
-  log "resolving the patched-nixpkgs source path (getFlake, pool-backed cache)"
-  _pn=$(_solnix_nixpkgs_src "${_fl%#*}" 2>>"$_buildlog")
-  if [ -z "$_pn" ]; then
-    echo "" >&2
-    echo "FATAL: could not resolve the patched-nixpkgs source path via getFlake." >&2
-    echo "  This path MUST be pre-copied: the flake's \`import \"\${nixpkgs}/lib\"\`" >&2
-    echo "  forces realising an applyPatches derivation, and illumos single-user nix" >&2
-    echo "  REFUSES to build one in the target store (\"diverted store\"). Without the" >&2
-    echo "  pre-copy the toplevel build cannot succeed, so failing now rather than" >&2
-    echo "  letting the build die later with a misleading error." >&2
-    echo "  The eval's own error is in $_buildlog (tail below):" >&2
-    tail -20 "$_buildlog" 2>/dev/null | sed 's/^/    /' >&2 || true
-    die "patched-nixpkgs resolve failed -- see $_buildlog"
-  fi
-  log "pre-copying the patched nixpkgs source into the target store so eval need not build it: $_pn"
-  run_to 900 nix copy --to "$ALTROOT" $_extrasub \
-    --option substituters "https://cache.solnix.io https://s3.solnix.io/solnix-cache" \
-    "$_pn" >> "$_buildlog" 2>&1 \
-    || die "pre-copy of $_pn failed -- the build would hit the diverted-store error; see $_buildlog"
-  [ -e "$ALTROOT$_pn" ] || die "pre-copy claimed success but $ALTROOT$_pn is absent -- see $_buildlog"
-  if run_to "${SOLNIX_BUILD_TIMEOUT:-14400}" env \
-       HOME="$ALTROOT/var/tmp" XDG_CACHE_HOME="$ALTROOT/var/tmp/solnix-nixcache" \
-       TMPDIR="$ALTROOT/var/tmp" nix build \
-       --store "$ALTROOT" \
-       $_extrasub \
-       "${_fl}#${_set}.\"${_at}\".config.system.build.toplevel" \
-       --out-link "$_outlink" > "$_buildlog" 2>&1; then
-    kill "$_blt" 2>/dev/null; wait "$_blt" 2>/dev/null; spin_stop
-    tail -40 "$_buildlog"
+  # host mode: everything happens in the host store, then is copied (nixos-install's model).
+  # overlay mode: /nix is the target store, so no --store anywhere.
+  if [ -n "$FLAKE_REF" ]; then
+    step "building the system toplevel from $FLAKE_REF (the long step)"
+    _fl="${FLAKE_REF%%#*}"; _at="${FLAKE_REF#*#}"; _set="${_found:-solnixConfigurations}"
+    _outlink="$ALTROOT/var/tmp/solnix-toplevel-$$"
+    spin_start "nix build system toplevel (can take a long time; log $_buildlog)"
+    run_to "${SOLNIX_BUILD_TIMEOUT:-14400}" _nix_env nix --extra-experimental-features 'nix-command flakes' \
+      build $_extrasub "${_fl}#${_set}.\"${_at}\".config.system.build.toplevel" \
+      --out-link "$_outlink" > "$_buildlog" 2>&1
+    _rc=$?
+    spin_stop
+    tail -30 "$_buildlog" >&2
+    [ "$_rc" = 0 ] || die "toplevel build failed (rc=$_rc); the attr exists (the name gate proved it). Full log: $_buildlog"
     TOPLEVEL=$(_readlink "$_outlink" 2>/dev/null || true)
-    # --store $ALTROOT prints a bare /nix/store/... path (the store's own view).
-    # KEEP it bare: the closure-verify and activation below all address paths as
-    # $ALTROOT$TOPLEVEL, matching the copy-based flow. Mark that the closure is
-    # already on the pool so the copy step is skipped.
-    TOPLEVEL_ON_POOL=1
+    rm -f "$_outlink"
   else
-    kill "$_blt" 2>/dev/null; wait "$_blt" 2>/dev/null; spin_stop
-    tail -40 "$_buildlog"   # show the failure tail before build_toplevel die()s below
+    step "realising toplevel $TOPLEVEL"
+    run_to "${SOLNIX_BUILD_TIMEOUT:-14400}" _nix_env nix-store --realise $_extrasub "$TOPLEVEL" > "$_buildlog" 2>&1 \
+      || { tail -20 "$_buildlog" >&2; die "could not realise $TOPLEVEL (not on the media and not substitutable); log $_buildlog"; }
   fi
-  # Validate against the on-pool location ($ALTROOT + the bare store path).
-  if [ -z "$TOPLEVEL" ] || { [ ! -d "$TOPLEVEL" ] && [ ! -d "$ALTROOT$TOPLEVEL" ]; }; then
-    echo "" >&2
-    echo "The attr ${_set}.\"$_at\" EXISTS (the name gate proved that) but its" >&2
-    echo "toplevel FAILED TO BUILD. Those are different claims; only the build" >&2
-    echo "failed. The target pool may be partly populated, but nothing outside" >&2
-    echo "the disk you chose to install to has been touched." >&2
-    echo "" >&2
-    echo "Re-run the build by hand to see the full log:" >&2
-    echo "  TMPDIR=$ALTROOT/var/tmp nix build --store $ALTROOT ${_fl}#${_set}.\\\"${_at}\\\".config.system.build.toplevel -L" >&2
-    die "toplevel build failed"
+  case "$TOPLEVEL" in /nix/store/*) : ;; *) die "build produced no toplevel store path (got '$TOPLEVEL')" ;; esac
+  if [ "$STORE_MODE" = host ]; then
+    _nixroot_mount
+    run_to "${SOLNIX_COPY_TIMEOUT:-7200}" _nix_env nix --extra-experimental-features nix-command \
+      copy --no-check-sigs --to "local?root=$NIXROOT" "$TOPLEVEL" >> "$_buildlog" 2>&1 \
+      || die "nix copy of $TOPLEVEL into $POOL/nix failed; log $_buildlog"
+    STORE_PREFIX="$NIXROOT"
+  else
+    STORE_PREFIX=""
   fi
-  log "toplevel built: $TOPLEVEL"
-  # Where the toplevel actually lives on disk: bare path if copy-flow, $ALTROOT+bare if on-pool.
-  _tlreal="$TOPLEVEL"; [ "${TOPLEVEL_ON_POOL:-0}" = 1 ] && _tlreal="$ALTROOT$TOPLEVEL"
-
-  # Assert it LOOKS like a system before we rely on it. Each of
-  # these has been absent in a real toplevel at some point in this repo's history,
-  # and every one of them is load-bearing at boot or at switch time.
-  _tl_missing=""
-  for _need in activate systemPath bin/switch-to-configuration; do
-    [ -e "$_tlreal/$_need" ] || _tl_missing="$_tl_missing $_need"
+  _tl="$STORE_PREFIX$TOPLEVEL"
+  # Assert it is a bootable system BEFORE anything is laid into the BE.
+  for _need in activate bin/switch-to-configuration systemPath/platform/i86pc/kernel/amd64/unix \
+               systemPath/kernel/amd64/genunix; do
+    [ -e "$_tl/$_need" ] || die "toplevel $TOPLEVEL has no $_need -- it is not a bootable solnix system"
   done
-  if [ -n "$_tl_missing" ]; then
-    echo "toplevel $_tlreal is missing:$_tl_missing" >&2
-    echo "It built, but it is not a bootable system -- refusing to install it." >&2
-    die "incomplete toplevel"
-  fi
-  # The kernel specifically: a toplevel with no unix/genunix cannot boot, and the
-  # failure would appear only as the loader saying "Failed to find bootable
-  # partition" long after the disk was erased.
-  for _need in systemPath/platform/i86pc/kernel/amd64/unix systemPath/kernel/amd64/genunix; do
-    [ -s "$_tlreal/$_need" ] || die "toplevel has no $_need -- it cannot boot; refusing to install"
-  done
-  log "toplevel gate OK: activate + switch-to-configuration + unix + genunix all present"
+  # The BE is populated by the toplevel's OWN code (the same step make-be and
+  # `switch-to-configuration boot` use), so install and switch cannot drift.
+  # A toplevel without it would need the live root copied in -- refuse instead.
+  grep -q 'install-be)' "$_tl/bin/switch-to-configuration" 2>/dev/null \
+    || die "toplevel $TOPLEVEL's switch-to-configuration has no 'install-be' action; this installer populates the BE only through it (it never copies the running root). Build the toplevel from a solnix revision that provides it."
+  # system profile: nixos-install step 3 (nix-env --set writes system-1-link + the gcroot).
+  _penv=""; [ "$STORE_MODE" = host ] && _penv="--store local?root=$NIXROOT"
+  _nix_env nix-env $_penv -p "$STORE_PREFIX/nix/var/nix/profiles/system" --set "$TOPLEVEL" >> "$_buildlog" 2>&1 \
+    || die "could not set the system profile to $TOPLEVEL; log $_buildlog"
+  [ "$(_readlink "$STORE_PREFIX/nix/var/nix/profiles/system" 2>/dev/null)" = system-1-link ] \
+    || die "system profile is not system-1-link after nix-env --set"
+  log "generation 1: /nix/var/nix/profiles/system -> system-1-link -> $TOPLEVEL"
 }
 
 # ⚠️ With no argument this used to print only a usage string, which reads on a
@@ -1558,60 +1477,53 @@ if [ "$POOL" = "rpool" ] && [ -z "${SOLNIX_ALLOW_RPOOL:-}" ]; then
   fi
 fi
 
-# default toplevel: the running system. If neither a toplevel arg nor a
-# /run-current-system link exists (the LIVE-INSTALLER case, where the ramdisk
-# root IS the complete bootable illumos world), fall back to SELF-INSTALL: copy
-# the running root as the installed system, skipping the nix-closure steps.
-# This is the offline-bakeable path — the baked "system" is the live root.
+# ---------------------------------------------------------------------------
+# WHAT IS INSTALLED: a toplevel, never the running root.
 #
-# DECLARATIVE toplevel detection: a full toplevel has activate/; the REDUCED
-# current-system (overlay path, scratch/current-system.nix) has NO activate but
-# IS declarative — it carries sw/ (userland+nix) + etc/nix/nix.conf. Treat a
-# toplevel with sw/bin/nix-store as declarative even without activate, so the
-# installer copies its closure into the target /nix/store + wires the Stage-A
-# userland (the activate-dependent steps self-guard on file presence below).
-SELF_INSTALL=0
-if [ -z "$TOPLEVEL" ] && [ -z "$FLAKE_REF" ]; then
-  TOPLEVEL=$(_readlink /run-current-system 2>/dev/null || true)
+# This is nixos-install's model: the target is BUILT from a configuration (or
+# given as a toplevel store path) and its closure is realised INTO the target
+# store; nothing on the target comes from copying the live root. The live
+# root's only contribution is its own store CLOSURE, copied path-by-path so the
+# install can run offline for anything the media already carries.
+#
+# Toplevel source, in order: --flake; the positional [toplevel]; else the
+# media's own system (/run/current-system), i.e. "install what booted".
+# ---------------------------------------------------------------------------
+command -v nix >/dev/null 2>&1 || die "nix is not on this system; solnix-install realises the toplevel's closure with nix and has no other way to populate a target"
+LIVE_SYSTEM=$(_readlink /run/current-system 2>/dev/null || true)
+if [ -z "$FLAKE_REF" ] && [ -z "$TOPLEVEL" ]; then
+  TOPLEVEL="$LIVE_SYSTEM"
+  [ -n "$TOPLEVEL" ] || die "no --flake, no toplevel argument, and no /run/current-system to default to -- nothing to install (this installer never copies the running root)"
+  log "no --flake/toplevel given: installing the media's own system $TOPLEVEL"
 fi
-if [ -n "$FLAKE_REF" ]; then
-  # A --flake was given: the toplevel is BUILT from it by build_toplevel LATER,
-  # after the target pool is mounted at $ALTROOT (the flake build + eval-store
-  # need real disk). Do NOT decide SELF-INSTALL here on an empty $TOPLEVEL -- that
-  # is the ordering bug that made a --flake install silently fall into SELF-INSTALL
-  # (copy the live root) instead of building dixi. Defer: build_toplevel runs after
-  # the pool exists and sets $TOPLEVEL; the SELF-INSTALL/declarative branches below
-  # are re-evaluated against that real toplevel.
-  log "flake install: toplevel will be BUILT from $FLAKE_REF after the pool is ready (not SELF-INSTALL)"
-elif [ -z "$TOPLEVEL" ]; then
-  SELF_INSTALL=1
-  log "no nix toplevel present and no --flake -> SELF-INSTALL: install the running live root as the system"
-elif [ -e "$TOPLEVEL/activate" ] || [ -e "$TOPLEVEL/sw/bin/nix-store" ] || [ -e "$TOPLEVEL/sw" ]; then
-  # A solnix current-system carries sw/ (the composed userland profile). The
-  # 2.24 release toplevel ships nix as the store package on sw/bin/nix-store (systemPackages), so
-  # accept a bare sw/ as a declarative(-overlay) toplevel -> copy its closure.
-  [ -d "$TOPLEVEL" ] || die "toplevel $TOPLEVEL not found"
-  [ -e "$TOPLEVEL/activate" ] || log "declarative overlay toplevel (sw/ present, no activate) -> installing declarative userland layer"
-else
-  SELF_INSTALL=1
-  log "toplevel $TOPLEVEL has neither activate/ nor sw/bin/nix-store -> SELF-INSTALL"
+if [ -n "$TOPLEVEL" ]; then
+  case "$TOPLEVEL" in /nix/store/*) : ;; *) die "toplevel '$TOPLEVEL' is not a /nix/store path" ;; esac
 fi
-# OVERLAY: a declarative toplevel with NO systemPath (the reduced overlay
-# current-system). Kernel/libc/SMF come from the copied illumos root; we only
-# add the nix userland layer. Repo-handling matches SELF-INSTALL (keep the
-# copied, working repository.db — do NOT reseed from the minimal global.db).
-OVERLAY=0
-if [ -z "$FLAKE_REF" ] && [ "$SELF_INSTALL" = 0 ] && [ ! -e "$TOPLEVEL/systemPath" ]; then
-  OVERLAY=1
-  log "declarative OVERLAY install (no systemPath): base OS from copied root + nix userland layer"
-fi
-# For a --flake install the OVERLAY decision is DEFERRED: $TOPLEVEL is empty until
-# build_toplevel runs (after the pool), so testing $TOPLEVEL/systemPath now would
-# wrongly force OVERLAY=1. build_toplevel + the post-build closure copy below key
-# off TOPLEVEL_ON_POOL and the real toplevel's systemPath instead.
 
-log "installing toplevel $TOPLEVEL onto $TARGET (pool $POOL, BE $BEDS)"
-log "base world = the running root ($SRCROOT); running root pool=$ROOTPOOL disk=${ROOTDISK:-unknown}"
+# STORE MODE. The install must realise the toplevel in a NON-diverted store,
+# because illumos nix refuses to BUILD into one (`nix-build --store /a`:
+# "building using a diverted store is not supported on this platform", measured
+# on bhost; same error on the X1, docs/x1-diverted-store-root-cause.md). Copying
+# (substitution) into a diverted store does work. So:
+#   overlay  -- the live root is the installer ramdisk (not zfs): copy the live
+#               closure into <pool>/nix, then mount <pool>/nix OVER the live
+#               /nix (a legacy zfs mount over the non-empty ramdisk dir). The
+#               build then runs in a real /nix whose store already holds every
+#               path the media had, and its outputs land on the pool. Measured on
+#               bhost: build rc=0, outputs on the pool, processes started from
+#               the ramdisk store before the overlay keep running, unmount
+#               restores the ramdisk view.
+#   host     -- the live root is a zfs install (installing from a build host):
+#               never cover the host's /nix; build there and copy the result.
+STORE_MODE="${SOLNIX_STORE_MODE:-}"
+if [ -z "$STORE_MODE" ]; then
+  case "$(df -n / 2>/dev/null)" in *zfs*) STORE_MODE=host ;; *) STORE_MODE=overlay ;; esac
+fi
+case "$STORE_MODE" in overlay|host) : ;; *) die "SOLNIX_STORE_MODE must be overlay or host (got '$STORE_MODE')" ;; esac
+NIXROOT=/var/tmp/solnix-nixroot   # chroot-store root while copying into <pool>/nix
+NIX_OVERLAID=0
+DAEMON_FMRI=""
+log "installing onto $TARGET (pool $POOL, BE $BEDS); store mode: $STORE_MODE"
 
 # ---------------------------------------------------------------------------
 # 0. tear down any prior attempt on the target (idempotent; the hang fix).
@@ -1898,7 +1810,9 @@ log "console: firmware-selected EFI text mode (no loader-settable geometry)"
 #   loader just silently disagrees.
 #
 # WHAT IS OFFERED: encryption of the datasets OUTSIDE the boot environment --
-# /home (where the operator's data actually is) and optionally /nix. The loader
+# /home (where the operator's data actually is). NOT /nix: every generation mounts
+# <pool>/nix from inittab before SMF starts, so nothing could ask for a passphrase
+# and the machine would not boot. The loader
 # never reads either one; only the kernel does, after it is already running.
 #
 # WARNING: /home ENCRYPTION AND BOOT. A passphrase-encrypted dataset needs its key
@@ -1928,7 +1842,7 @@ if [ -z "$ENCRYPT_MODE" ] && [ -t 0 ] && [ -t 1 ]; then
     echo "  ZFS native encryption (aes-256-gcm, passphrase) is available on this"
     echo "  platform -- MEASURED, not assumed."
     echo ""
-    echo "  It is offered for /home and /nix ONLY. The root filesystem CANNOT be"
+    echo "  It is offered for /home ONLY. The root filesystem and /nix CANNOT be"
     echo "  encrypted, and the reason is worth reading:"
     echo ""
     echo "    The boot loader accepts an encrypted pool but has NO decryption code"
@@ -1942,13 +1856,10 @@ if [ -z "$ENCRYPT_MODE" ] && [ -t 0 ] && [ -t 1 ]; then
     echo ""
     echo "  1) no encryption                 (default)"
     echo "  2) encrypt /home"
-    echo "  3) encrypt /home and /nix        (/nix is public store data; slower,"
-    echo "                                    and it must be unlocked before nix works)"
-    printf 'Choice [1-3] (default 1): '
+    printf 'Choice [1-2] (default 1): '
     read -r _ec || _ec=1
     case "$_ec" in
       2) ENCRYPT_MODE=home ;;
-      3) ENCRYPT_MODE=home+nix ;;
       *) ENCRYPT_MODE=none ;;
     esac
   else
@@ -1976,10 +1887,11 @@ case "$ENCRYPT_MODE" in
     echo "  nothing stops you building this by hand. The result is an unbootable" >&2
     echo "  disk with no diagnostic at any layer." >&2
     echo "" >&2
-    die "use SOLNIX_ENCRYPT=home (or home+nix) to encrypt data datasets instead"
+    die "use SOLNIX_ENCRYPT=home to encrypt the home dataset instead"
     ;;
-  none|home|home+nix) : ;;
-  *) die "SOLNIX_ENCRYPT must be none|home|home+nix (got '$ENCRYPT_MODE')" ;;
+  none|home) : ;;
+  home+nix) die "SOLNIX_ENCRYPT=home+nix is no longer offered: <pool>/nix is mounted from inittab before SMF, where no passphrase can be read, so an encrypted /nix cannot boot" ;;
+  *) die "SOLNIX_ENCRYPT must be none|home (got '$ENCRYPT_MODE')" ;;
 esac
 
 # Collect the passphrase now, once, before any destructive step -- so a mismatch
@@ -2040,7 +1952,7 @@ esac
 for _ds in $_dslist; do
   zfs list -H "$POOL/$_ds" >/dev/null 2>&1 && continue
   case "$_ds" in
-    nix)         _mp=/nix ;;
+    nix)         _mp=legacy ;;   # mounted explicitly: copy root, then over /nix
     home)        _mp=/home ;;
     export)      _mp=/export ;;
     export/home) _mp=/export/home ;;
@@ -2049,7 +1961,7 @@ for _ds in $_dslist; do
   # created above and is deliberately plaintext.
   _encargs=""
   case "$ENCRYPT_MODE:$_ds" in
-    home:home|home:export|home:export/home|home+nix:home|home+nix:export|home+nix:export/home|home+nix:nix)
+    home:home|home:export|home:export/home)
       _encargs="-o encryption=aes-256-gcm -o keyformat=passphrase -o keylocation=file://$ENC_KEYFILE" ;;
   esac
   zfs create $_encargs -o canmount=on -o mountpoint="$_mp" "$POOL/$_ds" \
@@ -2082,12 +1994,6 @@ if [ "$ENCRYPT_MODE" != none ]; then
     esac
   done
 fi
-# Mount them under the alt-root so the copy below populates the right datasets.
-for _ds in nix export/home; do
-  _t="$ALTROOT/${_ds#export/}"
-  case "$_ds" in export/home) _t="$ALTROOT/export/home" ;; nix) _t="$ALTROOT/nix" ;; esac
-  mkdir -p "$_t"
-done
 # Verify the store dataset is real and OUTSIDE the BE -- a silent fallback to a
 # plain directory inside the BE is the failure this block exists to prevent.
 zfs list -H -o name,mountpoint "$POOL/nix" >/dev/null 2>&1 \
@@ -2095,506 +2001,68 @@ zfs list -H -o name,mountpoint "$POOL/nix" >/dev/null 2>&1 \
 case "$(zfs list -H -o name "$POOL/nix" 2>/dev/null)" in
   "$POOL/ROOT/"*) die "$POOL/nix was created INSIDE the boot environment" ;;
 esac
-# And PROVE $POOL/nix is mounted at $ALTROOT/nix -- the build's `--store $ALTROOT`
-# writes the store under $ALTROOT/nix, so if that dataset is unmounted the store
-# lands in the BE (or, worse, a ramdisk dir). Same ramdisk-overflow risk as the
-# BE mount above; fail LOUD before the long build rather than after it fills.
-assert_mounted_on_pool "$POOL/nix" "$ALTROOT/nix"
+[ "$(zfs get -H -o value mountpoint "$POOL/nix" 2>/dev/null)" = legacy ] \
+  || die "$POOL/nix must be mountpoint=legacy during the install"
 
-# NOW build the flake toplevel -- $ALTROOT/nix is a real-disk ZFS store, so the
-# fetchClosure realisation + build land on the target disk, not the ~620MB RAM
-# ramdisk that a build up front would overflow. The store IS the installed
-# system's store, so no cross-store copy is needed afterward. The ramdisk-safe
-# name gate near the top already proved the attr exists; this is the heavy half.
-build_toplevel
-# Flake install: NOW that build_toplevel has set $TOPLEVEL from the flake, make the
-# SELF_INSTALL/OVERLAY decision that was DEFERRED earlier (it could not run before
-# the pool existed). A full flake toplevel (dixi) carries systemPath -> a real
-# system install, NOT overlay.
-if [ -n "$FLAKE_REF" ] && [ -n "$TOPLEVEL" ]; then
-  _tlreal="$TOPLEVEL"; [ "${TOPLEVEL_ON_POOL:-0}" = 1 ] && _tlreal="$ALTROOT$TOPLEVEL"
-  if [ -e "$_tlreal/systemPath" ]; then
-    OVERLAY=0; log "flake toplevel has systemPath -> full declarative system install (not overlay)"
-  elif [ -e "$_tlreal/sw" ] || [ -e "$_tlreal/activate" ]; then
-    OVERLAY=1; log "flake toplevel has sw/ but no systemPath -> declarative overlay install"
-  fi
-fi
-# ⚠️ THE STEP THAT ACTUALLY MAKES /home WORK. Creating the dataset is not enough:
-# autofs owns /home via auto_master, so without this the mount is shadowed at boot
-# and every home directory silently vanishes. Verified on `sun`, which runs
-# /home/gburd today: the autofs service is DISABLED there. Belt and braces --
-# disable the service in the target repo AND comment the auto_master line, because
-# either alone is undone by a future svcadm enable or a package refresh of
-# auto_master.
-if [ "$HOME_STYLE" = home ]; then
-  if [ -f "$ALTROOT/etc/auto_master" ]; then
-    sed 's,^/home[[:space:]],#/home\t,' "$ALTROOT/etc/auto_master" > "$ALTROOT/etc/auto_master.new" \
-      && mv "$ALTROOT/etc/auto_master.new" "$ALTROOT/etc/auto_master"
-    grep -qE '^/home[[:space:]]' "$ALTROOT/etc/auto_master" \
-      && die "auto_master still maps /home -- the dataset would be shadowed at boot"
-  fi
-  # Disable the service in the TARGET repository, not the live one.
-  if [ -x /usr/sbin/svccfg ] && [ -f "$ALTROOT/etc/svc/repository.db" ]; then
-    SVCCFG_REPOSITORY="$ALTROOT/etc/svc/repository.db" \
-      /usr/sbin/svccfg -s system/filesystem/autofs setprop general/enabled = boolean: false \
-      2>/dev/null || log "note: could not preset autofs disabled; run 'svcadm disable autofs' after first boot"
-  fi
-  log "autofs: /home mapping commented out + service preset disabled"
-fi
-
-# ⚠️ BOOT-GATE FIX (MEASURED on the dixi X1: first boot reached single-user but STALLED
-# transitioning to multi-user). Two SMF issues gate milestone/multi-user[-server]:
+# ---------------------------------------------------------------------------
+# 3. POPULATE THE STORE AND THE BOOT ENVIRONMENT FROM THE TOPLEVEL.
 #
-#  1. autofs ENABLED gates milestone/multi-user. The block above only disables it for
-#     HOME_STYLE=home; disable it UNCONDITIONALLY here (a self-install's /home is a real
-#     dataset either way, and autofs stalling the boot is worse than no auto_home).
-#  2. inetd is DISABLED/broken on this media (missing libwrap.so.1), so every
-#     inetd-managed service (network/rpc/smserver, gss, rstat, the r-services, ...) sits
-#     UNINITIALIZED forever -- never reaching a terminal state. milestone/multi-user-server
-#     has an optional_all dependency on network/rpc/smserver, and optional_all is only
-#     satisfied when the dep is online OR TERMINAL (disabled/maintenance). An
-#     uninitialized dep holds multi-user-server OFFLINE indefinitely -> no console-login,
-#     no full boot. Fix: in the target repo, disable inetd + its managed services so they
-#     reach the terminal 'disabled' state, which satisfies the optional_all gate.
-# All against the TARGET repository (SVCCFG_REPOSITORY), idempotent, best-effort.
-if [ -x /usr/sbin/svccfg ] && [ -f "$ALTROOT/etc/svc/repository.db" ]; then
-  _tgtrepo="$ALTROOT/etc/svc/repository.db"
-  # autofs: always off (not just home-style) -- it gates multi-user.
-  SVCCFG_REPOSITORY="$_tgtrepo" /usr/sbin/svccfg -s system/filesystem/autofs \
-    setprop general/enabled = boolean: false 2>/dev/null || true
-  # inetd + the inetd-managed services that gate the boot: force terminal (disabled) so
-  # optional_all deps on them are satisfied and multi-user-server can come online.
-  for _svc in network/inetd network/rpc/smserver network/rpc/gss network/rpc/rstat \
-              network/rpc/rusers network/rpc/spray network/rpc/wall network/rpc/bind \
-              network/security/ktkt_warn; do
-    SVCCFG_REPOSITORY="$_tgtrepo" /usr/sbin/svccfg -s "$_svc" \
-      setprop general/enabled = boolean: false 2>/dev/null || true
+#    Nothing here copies the running root. In order:
+#      a. the media's own store closure -> $POOL/nix (offline-capable seed)
+#      b. overlay $POOL/nix on the live /nix (overlay mode), then build/realise
+#         the toplevel there and set the system profile (generation 1)
+#      c. MACHINE INPUTS into the empty BE: the files that describe THIS
+#         machine and this install, not the configuration (the analog of
+#         NixOS's hardware-configuration.nix + the answers to the prompts):
+#         console (loader.conf/bootenv.rc), device bindings (path_to_inst),
+#         hostid, and the SMF presets as a site profile
+#      d. the toplevel's own install-be step lays the BE: early-boot set as real
+#         files at their store paths, links into the toplevel for /usr etc.,
+#         /etc, the SMF repository + manifests, /boot, the boot_archive
+#      e. verify what install-be produced (the installer does not trust it)
+# ---------------------------------------------------------------------------
+seed_target_store
+overlay_nix
+realise_toplevel
+_TLD="$STORE_PREFIX$TOPLEVEL"
+
+step "writing machine inputs into the boot environment"
+mkdir -p "$ALTROOT/boot/solaris" "$ALTROOT/etc/svc/profile/site" "$ALTROOT/nix" "$ALTROOT/var/tmp"
+# 3c-1. SMF PRESETS, as a SITE PROFILE (applied by manifest-import at first boot,
+# after the services exist). The old installer set these with
+# `svccfg -s <svc> setprop` against the repository it had COPIED from the live
+# root. A BE built from the toplevel starts from the gate seed (global.db), in
+# which autofs, inetd and ssh do not exist yet, so that setprop fails ("Pattern
+# ... doesn't match any instances", rc=1, measured on bhost) and the old
+# `2>/dev/null || true` hid it. A profile naming not-yet-imported services
+# applies rc=0 and takes effect once they are imported (measured).
+#   autofs: gates milestone/multi-user (MEASURED on the dixi X1) and, for
+#           HOME_STYLE=home, would shadow the /home dataset via auto_master.
+#   inetd + its RPC services: inetd's libwrap was missing on the media and every
+#           inetd-managed service sat uninitialized, holding
+#           multi-user-server's optional_all dep offline (MEASURED on the X1).
+#           Disabling them puts them in a terminal state either way.
+#   ssh: on, so the installed machine is reachable on first boot.
+_presets="$ALTROOT/etc/svc/profile/site/solnix-install.xml"
+{
+  echo '<?xml version="1.0"?>'
+  echo '<!DOCTYPE service_bundle SYSTEM "/usr/share/lib/xml/dtd/service_bundle.dtd.1">'
+  echo '<service_bundle type="profile" name="solnix-install">'
+  for _svc in system/filesystem/autofs network/inetd network/rpc/smserver network/rpc/gss \
+              network/rpc/rstat network/rpc/rusers network/rpc/spray network/rpc/wall \
+              network/rpc/bind network/security/ktkt_warn; do
+    echo "  <service name='$_svc' version='1' type='service'><instance name='default' enabled='false'/></service>"
   done
-  log "boot-gate: autofs + inetd + inetd-managed RPC services preset DISABLED in target repo (so multi-user-server is not held OFFLINE by an uninitialized optional dep)"
+  echo "  <service name='network/ssh' version='1' type='service'><instance name='default' enabled='true'/></service>"
+  echo '</service_bundle>'
+} > "$_presets"
+_dtd="$_TLD/systemPath/usr/share/lib/xml/dtd/service_bundle.dtd.1"
+if command -v xmllint >/dev/null 2>&1 && [ -f "$_dtd" ]; then
+  xmllint --noout --dtdvalid "$_dtd" "$_presets" || die "generated SMF preset profile is not DTD-valid: $_presets"
 fi
-log "datasets: $POOL/nix + $POOL${HOME_BASE} created outside $BEDS"
+log "SMF presets written as a site profile: autofs + inetd services off, ssh on ($_presets)"
 
-# ---------------------------------------------------------------------------
-# 3. copy the running root FS onto the target BE (the base world).
-#    The running root is a proven-booting proto-derived world (all 16 gotchas
-#    already applied: driver files, /dev symlinks, dir perms, external libs,
-#    OpenSSH, cryptosvc race fix, ttya console, DHCP netcfg, non-DEBUG kernel).
-#    Copying it is the install analog of `beadm create` cloning the running BE,
-#    but onto a fresh pool. Exclude pseudo filesystems + /nix (closure below) +
-#    the altroot itself + the target's own mount.
-# ---------------------------------------------------------------------------
-log "copying running root -> target BE (tar | tar, minus pseudo fs + /nix)"
-step "copying the base world onto $TARGET"
-# tar from / with X exclude-list. Excludes are path prefixes relative to /.
-cat > /tmp/solnix-install.exclude <<EOF
-./nix
-./proc
-./dev/fd
-./devices
-./system/contract
-./system/object
-./system/volatile
-./etc/svc/volatile
-./tmp
-./var/run
-./var/tmp
-./a
-./mnt
-.$ALTROOT
-EOF
-# SOLNIX_EXTRA_EXCLUDE: space-separated extra top-level paths to omit from the
-# base-root copy (build hosts accumulate huge non-OS trees like /aarch64,
-# /scratch, /code that must NOT ship in a clean image). Each is written as a
-# ./<path> exclude prefix. Also drop known build-junk parents unconditionally
-# (harmless if absent) so an image never carries the build environment.
-for _x in ${SOLNIX_EXTRA_EXCLUDE:-} aarch64 scratch code build; do
-  _x=${_x#/}; [ -n "$_x" ] || continue
-  echo "./$_x" >> /tmp/solnix-install.exclude
-done
-# illumos tar pairs key-letters to positional args IN ORDER: `tar cEfX -
-# <excludefile> .` means c(reate) E(xt-hdr) f(ile)=- X(exclude)=<file> then the
-# paths. The GNU `-cEf - -X file` form is NOT parsed correctly by illumos tar.
-( cd "$SRCROOT" && tar cEfX - /tmp/solnix-install.exclude . ) | ( cd "$ALTROOT" && tar xf - ) \
-  || die "root copy failed"
-# recreate the pseudo-fs mountpoints + writable dirs the exclude skipped.
-for d in proc dev devices system/contract system/object system/volatile \
-         etc/svc/volatile var/run var/tmp tmp mnt export export/home root nix \
-         var/adm var/adm/sa var/log var/spool var/saf; do
-  mkdir -p "$ALTROOT/$d"
-done
-chmod 1777 "$ALTROOT/tmp" "$ALTROOT/var/tmp" "$ALTROOT/system/volatile" 2>/dev/null || true
-# /var/adm must exist (mode 775 root:sys) so ttymon/SAC's `makeutx` can create
-# /var/adm/utmpx at first boot -- without it the console-login getty spins on
-# "makeutx failed: No such file or directory" and never presents a login prompt
-# (the curated live-ramdisk root that SELF-INSTALL copies may lack a proper
-# /var/adm). Pre-create the login-accounting files too (empty is correct; the
-# system rewrites them at boot).
-chmod 0775 "$ALTROOT/var/adm" 2>/dev/null || true
-chown 0:3 "$ALTROOT/var/adm" 2>/dev/null || true   # root:sys
-for f in utmpx wtmpx; do : > "$ALTROOT/var/adm/$f" 2>/dev/null || true; done
-chmod 0644 "$ALTROOT/var/adm/utmpx" "$ALTROOT/var/adm/wtmpx" 2>/dev/null || true
-
-# STRIP LIVE-INSTALLER ARTIFACTS from the target. SELF-INSTALL copies the running
-# LIVE root verbatim, which carries installer-only files that must NOT ship on an
-# installed system (MEASURED on the dixi X1: the installer MOTD showed on every
-# login + the installer script sat in /root). Remove them from the TARGET:
-#   - /etc/solnix-live-shell : the live-media marker. /etc/profile's solnix-live-motd
-#     block is guarded by `[ -f /etc/solnix-live-shell ]`, so removing the marker
-#     stops the installer MOTD from printing on login. Also strip that profile block.
-#   - /usr/sbin/solnix-motd  : the installer's numbered-steps banner.
-#   - /usr/sbin/solnix-install, /usr/sbin/solnix-zap, /usr/sbin/solnix-diag :
-#     installer-ENVIRONMENT tools; not part of a running system.
-#   - /root/solnix-install, /root/run-install.sh : stray copies in root's home.
-#   - /etc/solnix-autoinstall is handled separately below.
-for _la in etc/solnix-live-shell usr/sbin/solnix-motd usr/sbin/solnix-install \
-           usr/sbin/solnix-zap usr/sbin/solnix-diag root/solnix-install \
-           root/run-install.sh var/tmp/run-install.sh; do
-  rm -f "$ALTROOT/$_la" 2>/dev/null || true
-done
-# Remove the solnix-live-motd block from the target's /etc/profile (comment line
-# through its closing `fi`), so no installer banner logic lingers on a clean system.
-if [ -f "$ALTROOT/etc/profile" ] && grep -q '^# solnix-live-motd:' "$ALTROOT/etc/profile" 2>/dev/null; then
-  awk '/^# solnix-live-motd:/{skip=1} skip&&/^fi$/{skip=0;next} !skip{print}' \
-    "$ALTROOT/etc/profile" > "$ALTROOT/etc/profile.new" \
-    && mv "$ALTROOT/etc/profile.new" "$ALTROOT/etc/profile"
-fi
-# Verify the two things the operator flagged are actually gone from the target.
-[ ! -f "$ALTROOT/etc/solnix-live-shell" ] || die "live-shell marker still on target -- installer MOTD would show on login"
-[ ! -f "$ALTROOT/root/solnix-install" ] || die "solnix-install still in target /root -- installer script leaked"
-log "stripped live-installer artifacts from the target (live-shell marker, solnix-motd/install/zap/diag, /etc/profile motd block)"
-
-# essential /dev symlinks (gotcha #6): tar may not carry them from a live /dev.
-log "seeding essential /dev symlinks"
-for n in console msglog null zero tty syscon systty sysmsg random urandom poll; do
-  [ -L "/dev/$n" ] && relink "$(_readlink /dev/$n)" "$ALTROOT/dev/$n" 2>/dev/null || true
-done
-
-# ---------------------------------------------------------------------------
-# 4. copy the toplevel closure into the target's /nix/store (self-contained).
-#    Walk the toplevel's closure. If nix-store IS present (build host), use it.
-#    Else (the minimal proto installer env has no nix) compute the closure by a
-#    fixpoint scan: for each store path found, grep its symlink targets AND file
-#    contents for /nix/store/<hash>-... references, add any new ones, repeat.
-#    (A shallow one-level symlink walk MISSES transitive deps like illumos-sys
-#    that are referenced only through illumos-system-path.)
-# ---------------------------------------------------------------------------
-log "copying toplevel closure into target /nix/store"
-step "placing the toplevel closure in $TARGET /nix/store"
-if [ "$SELF_INSTALL" = 1 ]; then
-  log "SELF-INSTALL: skipping nix-closure copy (the copied live root IS the system)"
-elif [ "${TOPLEVEL_ON_POOL:-0}" = 1 ]; then
-  # The flake build ran with --store $ALTROOT, so its whole closure is ALREADY in
-  # $ALTROOT/nix/store -- there is nothing to copy across a store boundary. Copying
-  # would also double-prefix ($ALTROOT$ALTROOT/nix/...). Just compute CLOSURE (bare
-  # /nix/store paths) so the verify + DB-registration below still run.
-  log "FLAKE BUILD ON POOL: closure already in $ALTROOT/nix/store, skipping copy"
-  if command -v nix-store >/dev/null 2>&1; then
-    CLOSURE=$(nix-store --store "$ALTROOT" -qR "$TOPLEVEL" 2>/dev/null)
-  fi
-  # Fallback: content-scan the on-pool toplevel for bare /nix/store refs.
-  if [ -z "$CLOSURE" ]; then
-    CLOSURE=$(find "$ALTROOT$TOPLEVEL" 2>/dev/null | while read f; do
-        if [ -h "$f" ]; then ls -ld "$f" 2>/dev/null | sed -n 's/.* -> //p'
-        elif [ -f "$f" ]; then strings "$f" 2>/dev/null || cat "$f" 2>/dev/null; fi
-      done | grep -o '/nix/store/[a-z0-9]\{32\}-[^/" ]*' \
-        | sed 's,\(/nix/store/[^/]*\).*,\1,' | sort -u)
-  fi
-else
-mkdir -p "$ALTROOT/nix/store"
-CLOSURE=""
-# Prefer a real nix-store for the closure (fast, exact). SOLNIX_NIXSTORE lets a
-# build host point at its nix-store even though this script resets PATH; else
-# use nix-store if it is on PATH; else fall back to the fixpoint content scan
-# (the minimal proto installer env has no nix — slow but self-contained).
-_NIXSTORE=""
-if [ -n "${SOLNIX_NIXSTORE:-}" ] && [ -x "${SOLNIX_NIXSTORE}" ]; then _NIXSTORE="$SOLNIX_NIXSTORE"
-elif command -v nix-store >/dev/null 2>&1; then _NIXSTORE=nix-store; fi
-if [ -n "$_NIXSTORE" ]; then
-  log "closure via $_NIXSTORE -qR (fast path)"
-  CLOSURE=$("$_NIXSTORE" -qR "$TOPLEVEL")
-  for p in $CLOSURE; do copy_path "$p"; done
-else
-  # closure_refs <store-path>: emit every /nix/store/<hash>-name referenced by
-  # that path (symlink targets via ls -l, plus any string in regular files).
-  closure_refs() {
-    find "$1" 2>/dev/null | while read f; do
-      if [ -h "$f" ]; then ls -ld "$f" 2>/dev/null | sed -n 's/.* -> //p'
-      elif [ -f "$f" ]; then strings "$f" 2>/dev/null || cat "$f" 2>/dev/null
-      fi
-    done | grep -o '/nix/store/[a-z0-9]\{32\}-[^/" ]*' | sed 's,\(/nix/store/[^/]*\).*,\1,' | sort -u
-  }
-  # BFS fixpoint: seed with the toplevel, expand until no new paths appear.
-  seen=" "; queue="$TOPLEVEL"
-  while [ -n "$queue" ]; do
-    p=$(echo "$queue" | awk '{print $1}')
-    queue=$(echo "$queue" | cut -d' ' -f2-)
-    [ -n "$p" ] || continue
-    case "$seen" in *" $p "*) continue;; esac
-    seen="$seen$p "
-    copy_path "$p"
-    for r in $(closure_refs "$p"); do
-      case "$seen $queue" in *"$r"*) : ;; *) queue="$queue $r";; esac
-    done
-  done
-  CLOSURE=$(echo "$seen" | tr ' ' '\n' | grep '^/nix/store/')
-fi
-# _TLD: the toplevel's path ON DISK for READS. For an on-pool flake build the
-# store is $ALTROOT/nix, so the real files are at $ALTROOT$TOPLEVEL; for the
-# copy-based flow the closure was copied under $ALTROOT too, so $ALTROOT$TOPLEVEL
-# is correct there as well. Symlink TARGETS below keep the bare $TOPLEVEL (a
-# /nix/store/... target is what the booted system resolves), but every `cp` or
-# `[ -e ]` that READS toplevel content must use $_TLD.
-_TLD="$ALTROOT$TOPLEVEL"; [ -e "$_TLD" ] || _TLD="$TOPLEVEL"
-relink "$TOPLEVEL" "$ALTROOT/run-current-system"
-# also the slash form /run/current-system (NixOS convention; the login env.sh +
-# switch-to-configuration look there). /run is a boot-time tmpfs on some setups,
-# so ALSO drop it under /etc so it persists; the belt-and-suspenders symlink at
-# the real path is what env.sh resolves.
-mkdir -p "$ALTROOT/run"
-relink "$TOPLEVEL" "$ALTROOT/run/current-system"
-
-# 4v. VERIFY every closure path landed on the target (the T2.7 gate: prove all
-#     ~17-20 store paths are self-contained on the installed disk). Fail loudly
-#     rather than boot a system missing a slice (kernel/libc/rtld/system-path).
-log "verifying closure on target /nix/store"
-_missing=0; _count=0
-for p in $CLOSURE; do
-  _count=$((_count + 1))
-  if [ ! -e "$ALTROOT$p" ]; then echo "MISSING on target: $p" >&2; _missing=$((_missing + 1)); fi
-done
-echo "closure: $_count paths, $_missing missing" >&2
-[ "$_missing" = 0 ] || die "closure incomplete: $_missing/$_count store paths did not land on target"
-# the load-bearing slices must specifically be present + non-empty. This only
-# applies to a FULL toplevel that carries systemPath (kernel/libc/rtld baked into
-# /nix). The REDUCED overlay current-system has NO systemPath — its kernel/libc
-# come from the copied illumos root, not the closure — so skip the slice check
-# when the toplevel has no systemPath (declarative-userland overlay install).
-if [ -e "$TOPLEVEL/systemPath" ] || [ -e "$ALTROOT$TOPLEVEL/systemPath" ]; then
-for must in systemPath/platform/i86pc/kernel/amd64/unix \
-            systemPath/kernel/amd64/genunix \
-            systemPath/lib/svc/bin/svc.startd \
-            systemPath/lib/amd64/libc.so.1; do
-  t="$ALTROOT$TOPLEVEL/$must"
-  [ -s "$t" ] || [ -e "$t" ] || die "toplevel slice missing on target: $must"
-done
-else
-  echo "declarative overlay toplevel (no systemPath) — kernel/libc from the copied illumos root; skipping slice check" >&2
-fi
-echo "closure OK: $_count store paths self-contained on $TARGET" >&2
-fi   # end SELF_INSTALL=0 nix-closure block
-
-# ---------------------------------------------------------------------------
-# 5. seed the SMF repository fresh from the seed (so the target boots the stock
-#    milestone set + manifest-import ADDS all /lib/svc/manifest/** on first boot,
-#    incl. our solnix manifests). Do NOT copy the running repository.db — a fresh
-#    seed avoids carrying the installer env's live service state onto the target.
-# ---------------------------------------------------------------------------
-log "seeding SMF repository from seed/global.db"
-mkdir -p "$ALTROOT/etc/svc"
-if [ "$SELF_INSTALL" = 1 ] || [ "$OVERLAY" = 1 ]; then
-  # SELF-INSTALL / OVERLAY: the root copy already carried the LIVE root's
-  # /etc/svc/repository.db, which is FULLY PRE-IMPORTED (oi-make-livecd 4f) and
-  # proven to boot to multi-user (the live installer itself runs off it). Do NOT
-  # overwrite it with the minimal lib/svc/seed/global.db -- that minimal seed
-  # lacks the imported milestone instances, so first-boot manifest-import
-  # DELETES the orphaned svc:/milestone/{multi-user,single-user,devices,...}
-  # default instances -> "Console login service(s) cannot run" -> the system
-  # drops to maintenance mode instead of multi-user. Keep the good copied repo.
-  if [ -s "$ALTROOT/etc/svc/repository.db" ]; then
-    log "keeping the copied pre-imported repository.db (NOT reseeding from global.db)"
-  elif [ -e "$ALTROOT/lib/svc/seed/global.db" ]; then
-    log "no copied repo -> falling back to global.db seed"
-    cp "$ALTROOT/lib/svc/seed/global.db" "$ALTROOT/etc/svc/repository.db"
-    chmod 0600 "$ALTROOT/etc/svc/repository.db"
-  fi
-elif [ -e "$ALTROOT/lib/svc/seed/global.db" ]; then
-  cp "$ALTROOT/lib/svc/seed/global.db" "$ALTROOT/etc/svc/repository.db"
-  chmod 0600 "$ALTROOT/etc/svc/repository.db"
-fi
-
-# ---------------------------------------------------------------------------
-# 6. stage the toplevel's SMF manifests + site profile + activate (add-not-
-#    replace; design-smf-init §5). The boot-plumbing hello/netcfg + cryptosvc
-#    race fix already came from the copied root; here we install THIS toplevel's
-#    config-generated manifests so first boot imports them.
-# ---------------------------------------------------------------------------
-log "staging toplevel SMF manifests + site profile + activate"
-step "staging userland + SMF + boot loader"
-if [ "$SELF_INSTALL" = 1 ]; then
-  log "SELF-INSTALL: skipping toplevel manifest/etc staging (base root already carries the solnix SMF plumbing)"
-else
-mkdir -p "$ALTROOT/lib/svc/manifest/solnix" "$ALTROOT/lib/svc/method" "$ALTROOT/etc/svc/profile/site"
-if [ -d "$_TLD/manifest/solnix" ]; then
-  cp "$_TLD/manifest/solnix/"*.xml "$ALTROOT/lib/svc/manifest/solnix/" 2>/dev/null || true
-fi
-[ -e "$_TLD/site-profile.xml" ] && cp "$_TLD/site-profile.xml" "$ALTROOT/etc/svc/profile/site/solnix.xml"
-[ -e "$_TLD/activate" ] && { cp "$_TLD/activate" "$ALTROOT/lib/svc/method/solnix-activate"; chmod 0555 "$ALTROOT/lib/svc/method/solnix-activate"; }
-
-# 6b. stage the toplevel's config-generated /etc overlay (T2.9: networking +
-#     users -> nodename/resolv.conf/defaultrouter/passwd/shadow/group) OVER the
-#     copied base /etc, so the installed system reflects THIS toplevel's config,
-#     not merely the installer env's. Merge declared users/groups (append any
-#     the base lacks); overwrite the pure-config files.
-if [ -d "$_TLD/etc" ]; then
-  for f in nodename resolv.conf defaultrouter solnix-release; do
-    [ -f "$_TLD/etc/$f" ] && cp "$_TLD/etc/$f" "$ALTROOT/etc/$f" 2>/dev/null || true
-  done
-  for f in passwd shadow group; do
-    [ -f "$_TLD/etc/$f" ] || continue
-    while IFS=: read -r nm rest; do
-      [ -n "$nm" ] || continue
-      grep -q "^$nm:" "$ALTROOT/etc/$f" 2>/dev/null || echo "$nm:$rest" >> "$ALTROOT/etc/$f"
-    done < "$_TLD/etc/$f"
-  done
-  [ -f "$ALTROOT/etc/shadow" ] && chmod 0400 "$ALTROOT/etc/shadow"
-fi
-# 6c. seed each declared user's authorized_keys from the users module (T2.9),
-#     against the target BE root, so SSH login works on the installed disk.
-if [ -e "$_TLD/seed-authorized-keys" ] && [ -x /usr/bin/bash ]; then
-  ROOT="$ALTROOT" /usr/bin/bash "$_TLD/seed-authorized-keys" 2>/dev/null \
-    || echo "NOTE: authorized_keys seed had non-fatal errors" >&2
-fi
-
-# 6d. STAGE-A DECLARATIVE USERLAND (design §B/§C): the login env + nix.conf +
-#     default profile + store-DB dump + first-boot register oneshot — same as
-#     make-be, but staged onto the target BE root.
-log "staging Stage-A userland (profile.d/solnix-env.sh, nix.conf, default profile, store-db dump)"
-if [ -f "$_TLD/etc/profile.d/solnix-env.sh" ]; then
-  mkdir -p "$ALTROOT/etc/profile.d"
-  cp "$_TLD/etc/profile.d/solnix-env.sh" "$ALTROOT/etc/profile.d/solnix-env.sh"; chmod 0644 "$ALTROOT/etc/profile.d/solnix-env.sh"
-fi
-if [ -f "$_TLD/etc/nix/nix.conf" ]; then
-  mkdir -p "$ALTROOT/etc/nix"
-  cp "$_TLD/etc/nix/nix.conf" "$ALTROOT/etc/nix/nix.conf"; chmod 0644 "$ALTROOT/etc/nix/nix.conf"
-fi
-mkdir -p "$ALTROOT/nix/var/nix/profiles"
-relink "$TOPLEVEL/sw" "$ALTROOT/nix/var/nix/profiles/default"
-if [ "${TOPLEVEL_ON_POOL:-0}" = 1 ] && command -v nix-store >/dev/null 2>&1; then
-  # On-pool build: the store DB is the $ALTROOT store's OWN db, already populated
-  # by the build. Dump it via --store so first boot has every path registered.
-  nix-store --store "$ALTROOT" --dump-db > "$ALTROOT/nix/.solnix-registration" 2>/dev/null \
-    || echo "NOTE: nix-store --store $ALTROOT --dump-db failed; store DB not pre-dumped" >&2
-elif [ -n "${_NIXSTORE:-}" ]; then
-  # dump the FULL CLOSURE DB, not just the toplevel: --load-db needs every
-  # referenced path registered, else first boot fails 'path <dep> is not valid'
-  # (the toplevel-only dump left nix-2.3.16 etc. unregistered -> nix unusable).
-  "$_NIXSTORE" --dump-db $CLOSURE > "$ALTROOT/nix/.solnix-registration" 2>/dev/null \
-    || "$_NIXSTORE" --dump-db "$TOPLEVEL" > "$ALTROOT/nix/.solnix-registration" 2>/dev/null \
-    || echo "NOTE: nix-store --dump-db failed; store DB not pre-dumped" >&2
-fi
-# first-boot store-registration oneshot (fixed manifest + method; self-disables).
-mkdir -p "$ALTROOT/lib/svc/manifest/solnix" "$ALTROOT/lib/svc/method"
-cat > "$ALTROOT/lib/svc/manifest/solnix/solnix-nix-register.xml" <<'EOF'
-<?xml version="1.0"?>
-<!DOCTYPE service_bundle SYSTEM "/usr/share/lib/xml/dtd/service_bundle.dtd.1">
-<service_bundle type="manifest" name="solnix:nix-register">
-  <service name="site/solnix-nix-register" type="service" version="1">
-    <single_instance/>
-    <dependency name="fs" grouping="require_all" restart_on="none" type="service">
-      <service_fmri value="svc:/system/filesystem/local:default"/>
-    </dependency>
-    <exec_method type="method" name="start" exec="/lib/svc/method/solnix-nix-register" timeout_seconds="600">
-      <method_context><method_credential user="root"/></method_context>
-    </exec_method>
-    <exec_method type="method" name="stop" exec=":true" timeout_seconds="60">
-      <method_context><method_credential user="root"/></method_context>
-    </exec_method>
-    <property_group name="startd" type="framework">
-      <propval name="duration" type="astring" value="transient"/>
-    </property_group>
-    <instance name="default" enabled="true"/>
-    <template><common_name><loctext xml:lang="C">solnix nix store DB registration (first boot)</loctext></common_name></template>
-  </service>
-</service_bundle>
-EOF
-cat > "$ALTROOT/lib/svc/method/solnix-nix-register" <<'EOF'
-#!/sbin/sh
-. /lib/svc/share/smf_include.sh
-SENTINEL=/nix/.solnix-registered
-REG=/nix/.solnix-registration
-if [ -e "$SENTINEL" ]; then exit $SMF_EXIT_OK; fi
-NIXSTORE=""
-for d in /run/current-system/sw/bin /nix/var/nix/profiles/default/bin /usr/bin; do
-  [ -x "$d/nix-store" ] && { NIXSTORE="$d/nix-store"; break; }
-done
-# store nix is RUNPATH-correct: no LD_LIBRARY_PATH needed.
-if [ -z "$NIXSTORE" ]; then
-  echo "solnix-nix-register: nix-store not found; skipping" > /dev/console 2>&1
-  exit $SMF_EXIT_OK
-fi
-if [ -s "$REG" ]; then
-  "$NIXSTORE" --load-db < "$REG" > /dev/console 2>&1 \
-    && echo "solnix-nix-register: store DB loaded" > /dev/console 2>&1 \
-    || echo "solnix-nix-register: load-db failed" > /dev/console 2>&1
-else
-  "$NIXSTORE" --register-validity /run-current-system > /dev/console 2>&1 || true
-fi
-: > "$SENTINEL"
-exit $SMF_EXIT_OK
-EOF
-chmod 0555 "$ALTROOT/lib/svc/method/solnix-nix-register"
-fi   # end SELF_INSTALL=0 toplevel-staging block
-
-# ---------------------------------------------------------------------------
-# 7. register generation 1 + switch tools on the target's PATH (T2.5 layout).
-# ---------------------------------------------------------------------------
-if [ "$SELF_INSTALL" = 1 ]; then
-  log "SELF-INSTALL: skipping generation/switch-tool registration (no nix toplevel)"
-  # ...but DO make the store usable, so the operator can run a real nix-config
-  # switch on the installed system. Without this the machine has a nix BINARY and
-  # no store to use it on, which is what the maintainer hit: nix ran, and there
-  # was nothing it could do. Single-user mode (no daemon) is deliberate -- it is
-  # far less to go wrong on a fresh install, and SMF service plumbing for
-  # nix-daemon is a separate piece of work.
-  mkdir -p "$ALTROOT/nix/var/nix/profiles/per-user/root" \
-           "$ALTROOT/nix/var/nix/gcroots" \
-           "$ALTROOT/nix/var/nix/temproots" \
-           "$ALTROOT/nix/var/nix/db" \
-           "$ALTROOT/nix/store"
-  # Root owns the store in single-user mode; 1775 with the sticky bit matches a
-  # stock Nix install so the daemon can be adopted later without a re-chmod.
-  chown -R 0:0 "$ALTROOT/nix" 2>/dev/null || true
-  chmod 1775 "$ALTROOT/nix/store" 2>/dev/null || true
-  # nix.conf for the INSTALLED system. The live-media copy under /nix-tools224
-  # is not on the path a normal `nix` invocation reads.
-  mkdir -p "$ALTROOT/etc/nix"
-  if [ ! -s "$ALTROOT/etc/nix/nix.conf" ]; then
-    cat > "$ALTROOT/etc/nix/nix.conf" <<'NIXCONF'
-experimental-features = nix-command flakes
-substituters = https://cache.solnix.io https://s3.solnix.io/solnix-cache https://cache.nixos.org
-trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
-# Single-user: no daemon, root owns /nix. build-users-group must be EMPTY or nix
-# refuses to build, looking for a nixbld group that does not exist here.
-build-users-group =
-NIXCONF
-  fi
-  # Gate: a store directory that is not on its own dataset would be cloned by
-  # every `beadm create` and rolled back with the BE, orphaning every profile.
-  case "$(zfs list -H -o name "$POOL/nix" 2>/dev/null)" in
-    "$POOL/nix") log "nix store: $POOL/nix dataset present, single-user store initialised" ;;
-    *) die "$POOL/nix dataset missing -- the store would live inside the BE" ;;
-  esac
-else
-log "registering generation 1 + installing switch tools"
-mkdir -p "$ALTROOT/nix/var/nix/profiles"
-relink "$TOPLEVEL" "$ALTROOT/nix/var/nix/profiles/system-1-link"
-relink "system-1-link" "$ALTROOT/nix/var/nix/profiles/system"
-printf '1\n' > "$ALTROOT/nix/var/nix/profiles/system.gen"
-if [ -e "$_TLD/bin/switch-to-configuration" ]; then
-  relink "$TOPLEVEL/bin/switch-to-configuration" "$ALTROOT/usr/bin/switch-to-configuration"
-  relink "$TOPLEVEL/bin/solnix-rebuild"          "$ALTROOT/usr/bin/solnix-rebuild"
-  [ -e "$_TLD/bin/solnix-install" ] && relink "$TOPLEVEL/bin/solnix-install" "$ALTROOT/usr/bin/solnix-install"
-fi
-fi   # end SELF_INSTALL=0 generation-registration block
-
-# ---------------------------------------------------------------------------
-# 8. installed-system console + release stamp (make-be gotcha #1/#4). The copied
-#    root already has bootenv.rc/loader.conf, but re-assert (idempotent, cheap).
-#    The console value is SOLNIX_TARGET_CONSOLE (default ttya; "text" for the
-#    keyboard-free install onto a machine with no serial port).
-# ---------------------------------------------------------------------------
-log "installed-system console=$TARGET_CONSOLE + release stamp"
-mkdir -p "$ALTROOT/boot/solaris"
+# 3c-2. CONSOLE of the installed system: a machine input, not configuration.
 # ⚠️ DO NOT set screen-#columns / screen-#rows in bootenv.rc OR loader.conf. Verified
 # against illumos-gate: the loader's config parser (boot/forth/support.4th:604,
 # `comment? = line_pointer c@ [char] # =`) treats '#' as a COMMENT, so a line like
@@ -2603,12 +2071,10 @@ mkdir -p "$ALTROOT/boot/solaris"
 # loader bails to the OK prompt (MEASURED on the dixi X1: "syntax error ... at 100").
 # screen-#rows/#cols are RUNTIME env vars the EFI console sets automatically from
 # the firmware's chosen text mode (boot/efi/libefi/efi_console.c:553 setenv), NOT
-# file settings -- they CANNOT be set from any support.4th-parsed file. The live
-# media's bootenv.rc only does `setprop console text` and boots readable; match it.
-# (Console size on a HiDPI panel is a separate EFI-mode-selection concern, handled
-# by the firmware/loader, not by a bootenv.rc knob.)
-# The ttya-* props are inert when no serial port exists and needed when
-# TARGET_CONSOLE is ttya; keep them.
+# file settings. The ttya-* props are inert when no serial port exists and needed
+# when TARGET_CONSOLE is ttya; keep them.
+log "installed-system console=$TARGET_CONSOLE"
+mkdir -p "$ALTROOT/boot/solaris"
 cat > "$ALTROOT/boot/solaris/bootenv.rc" <<EOF
 setprop console $TARGET_CONSOLE
 setprop os_console $TARGET_CONSOLE
@@ -2628,245 +2094,127 @@ boot_archive_load="YES"
 boot_archive_name="/platform/i86pc/amd64/boot_archive"
 boot_archive.hash_load="NO"
 EOF
-# ⚠️ loader.conf is parsed by the loader (boot/forth/support.4th) where '#' is a
-# COMMENT char: a line like screen-#columns="100" parses as `screen-` + comment and
-# ESYNTAX-errors (and a bare '# comment' truncates). So loader.conf must contain NO
-# '#'. Console GEOMETRY cannot be set from any support.4th-parsed file at all --
-# screen-#rows/#cols are runtime env vars the EFI console sets from the firmware's
-# chosen text mode (efi_console.c:553). Gate: loader.conf must have zero '#'.
+# ⚠️ loader.conf must contain NO '#': support.4th treats it as a comment and a
+# screen-#columns="100" line ESYNTAX-errors the loader (MEASURED on the dixi X1).
 if grep -q '#' "$ALTROOT/boot/loader.conf" 2>/dev/null; then
   die "loader.conf contains '#' -- the loader parser treats it as a comment and ESYNTAX-errors"
 fi
-# LOUD-FAIL GATE: the installed console is unrecoverable-if-wrong on a machine
-# with no keyboard, and both files are written by heredoc (a quoting slip would
-# ship the literal text). Assert what actually landed on the target.
 for _cf in "$ALTROOT/boot/loader.conf" "$ALTROOT/boot/solaris/bootenv.rc"; do
   grep -q "$TARGET_CONSOLE" "$_cf" || die "installed console: $_cf does not mention $TARGET_CONSOLE"
   grep -q '\$TARGET_CONSOLE' "$_cf" && die "installed console: $_cf contains an UNEXPANDED variable"
 done
 grep -q "^console=\"$TARGET_CONSOLE\"\$" "$ALTROOT/boot/loader.conf" || \
   die "installed console: loader.conf lacks console=\"$TARGET_CONSOLE\""
-# GATE: neither boot file may contain a screen-# property. The loader's config
-# parser treats '#' as a comment, so `setprop screen-#columns N` is a syntax error
-# that bails the loader to the OK prompt (MEASURED on the dixi X1). Console size is
-# the firmware's EFI text mode, not a file knob -- assert these lines are ABSENT.
 if grep -q 'screen-#' "$ALTROOT/boot/solaris/bootenv.rc" "$ALTROOT/boot/loader.conf" 2>/dev/null; then
   die "boot config contains a screen-# property -- '#' is a comment char in the loader parser; this ESYNTAX-errors to the OK prompt. Console geometry is set by the firmware, not here."
 fi
 grep -q "^setprop console $TARGET_CONSOLE\$" "$ALTROOT/boot/solaris/bootenv.rc" || \
   die "installed console: bootenv.rc lacks setprop console $TARGET_CONSOLE"
 echo "installed-console gate OK: console=$TARGET_CONSOLE in loader.conf + bootenv.rc, no screen-# property" >&2
-# The illumos EFI loader's sanity_check_currdev() accepts a ZFS BE as bootable
-# ONLY if it can stat /boot/defaults/loader.conf OR /boot/loader.rc on that
-# dataset (verified in loader64.efi strings). The SELF-INSTALL live ramdisk root
-# does not carry those (they live in the ISO staging tree, not the ramdisk), so
-# the loader REJECTS zfs:rpool/ROOT/solnix-1 in sanity_check_currdev and cycles
-# to "Failed to find bootable partition" -- even though unix + boot_archive are
-# present + fine. Guarantee both sanity files exist on the BE (idempotent), and
-# stage /boot/forth/ (loader.rc includes /boot/forth/loader.4th at runtime for
-# the menu; without it the loader errors on the include). Root-caused via ZFS
-# import of an installed pool on the illumos host (2026-07-30).
-mkdir -p "$ALTROOT/boot/defaults"
-[ -s "$ALTROOT/boot/defaults/loader.conf" ] || cat > "$ALTROOT/boot/defaults/loader.conf" <<'EOF'
-kernel="/platform/i86pc/kernel/amd64/unix"
-bootfile="/platform/i86pc/kernel/amd64/unix"
-boot_archive_load="YES"
-boot_archive_name="/platform/i86pc/amd64/boot_archive"
-boot_archive.hash_load="NO"
-EOF
-# stage /boot/forth/ + the canonical /boot/loader.rc from the running root (/).
-# The illumos loader needs a PROPER loader.rc: `include loader.4th; initialize
-# drop; check-password; include beastie.4th; beastie-start` (autoboots via
-# autoboot_delay). A naive `include loader.4th\nstart` fails with "start not
-# found" (start isn't defined until the full include chain runs) -> the loader
-# drops to the OK prompt instead of booting. So COPY the host's real loader.rc
-# + the whole /boot/forth/ menu tree verbatim (they exist on the live root).
-if [ -d "/boot/forth" ] && [ ! -d "$ALTROOT/boot/forth" ]; then
-  ( cd / && tar -cf - boot/forth ) | ( cd "$ALTROOT" && tar -xf - ) 2>/dev/null || true
+
+# 3c-3. FIRST-BOOT DEVICE BINDINGS. Installing the machine from its own live media
+# (the common case), the running /etc/path_to_inst describes THIS hardware: it is
+# the device tree that just booted. Reusing it avoids a full re-probe; a forced
+# /reconfigure + empty path_to_inst made the dixi X1's first boot hang 10+ min at
+# the loader hand-off (MEASURED). SOLNIX_FORCE_RECONFIGURE=1 for install-here,
+# boot-elsewhere. This is hardware state, not system state, so it is copied.
+mkdir -p "$ALTROOT/etc"
+if [ "${SOLNIX_FORCE_RECONFIGURE:-0}" = 1 ] || [ ! -s /etc/path_to_inst ]; then
+  : > "$ALTROOT/etc/path_to_inst"; : > "$ALTROOT/reconfigure"
+  log "first boot: forcing a device reconfigure (empty path_to_inst)"
+else
+  cp /etc/path_to_inst "$ALTROOT/etc/path_to_inst" || die "could not write $ALTROOT/etc/path_to_inst"
+  log "first boot: reusing this machine's path_to_inst ($(wc -l < /etc/path_to_inst | tr -d ' ') bindings), no forced re-probe"
 fi
-# Console fonts. The EFI loader's autoload_font() reads /boot/fonts/fonts.dir and
-# set_font() takes the largest font that still fits an 80x34 grid; the kernel console
-# inherits it. Without /boot/fonts the builtin 8x16 is used: 478x134 cells on the
-# X1's 3840x2160 panel (MEASURED via mdb tems.ts_font; 16x32 once fonts were added).
-# The live media carries them, the target did not, so the install looked readable
-# and the installed system did not.
-if [ -s /boot/fonts/fonts.dir ]; then
-  ( cd / && tar -cf - boot/fonts ) | ( cd "$ALTROOT" && tar -xf - ) 2>/dev/null || true
-fi
-[ -s "$ALTROOT/boot/fonts/fonts.dir" ] || \
-  echo "WARN: target has no /boot/fonts/fonts.dir; the console will use the tiny builtin 8x16 font" >&2
-if [ -s /boot/loader.rc ]; then
-  cp /boot/loader.rc "$ALTROOT/boot/loader.rc" 2>/dev/null || true
-fi
-# A USABLE loader.rc is one that `include`s the forth chain -- the STOCK illumos
-# loader.rc is `include /boot/forth/loader.4th` then `start` (or beastie-start),
-# and does NOT contain the literal word `initialize` (start runs it internally).
-# The old guard grepped for `initialize` and therefore REJECTED the good stock
-# loader.rc we just copied, overwriting it with a hand-written
-# `include loader.4th; initialize drop; boot` -- which, processed from the
-# installed pool, EXHAUSTS the forth dictionary ("Error: dictionary full" on every
-# word, before autoboot) and drops to the OK prompt. MEASURED on the dixi X1.
-# Correct test: a usable rc contains an `include` of the forth chain. Only if it
-# does NOT (or the file is empty/missing) do we synthesize one -- and we match the
-# STOCK pattern (`start`), never the dictionary-blowing `initialize drop; boot`.
-if [ ! -s "$ALTROOT/boot/loader.rc" ] || ! grep -q 'include' "$ALTROOT/boot/loader.rc" 2>/dev/null; then
-  [ -f "$ALTROOT/boot/forth/loader.4th" ] || \
-    echo "WARN: BE lacks /boot/forth/loader.4th; the installed loader may not autoboot" >&2
-  # Stock illumos loader.rc: include the chain, then `start` (which runs
-  # initialize + the menu + autoboots via autoboot_delay). This is exactly what a
-  # working illumos install ships; do NOT add a second `initialize`/`boot`.
-  printf 'include /boot/forth/loader.4th\nstart\n' > "$ALTROOT/boot/loader.rc"
-fi
-# ensure autoboot actually fires even if the menu is absent: defaults/loader.conf
-# already sets kernel/bootfile; make sure autoboot_delay is a real number (set
-# above in loader.conf) so `initialize`/menu autoboots the default BE.
-cat > "$ALTROOT/etc/solnix-release" <<EOF
-NAME="The Solnix Operating System"
-EDITION=${SOLNIX_EDITION:-unstable}
-ARCH=x86_64
-solnix system (installed by solnix-install)
-installed: $(date -u +%FT%TZ 2>/dev/null || date)
-toplevel:  ${TOPLEVEL:-<self-install: live root>}
-installer: $(uname -a)
-target:    $TARGET pool $POOL BE $BEDS
-EOF
 [ -f "$ALTROOT/etc/hostid" ] || printf '0x1b0b57ec\n' > "$ALTROOT/etc/hostid"
 
-# ---------------------------------------------------------------------------
-# 9. boot_archive (the ramdisk that mounts ZFS root) for the target BE.
-# ---------------------------------------------------------------------------
-log "building boot_archive on the target BE"
-step "building the boot archive (bootadm update-archive)"
-# FIRST-BOOT DEVICE BINDINGS. For a SELF-INSTALL onto the SAME machine the
-# installer is running on (the common case: install the X1 from the X1's own live
-# media), the running system's /etc/path_to_inst already describes THIS hardware
-# correctly -- it is literally the device tree that just booted. Copy it, so the
-# installed kernel reuses known-good bindings and does NOT run a full re-probe.
-#
-# A forced /reconfigure + empty path_to_inst makes the kernel re-enumerate and
-# re-attach EVERY device on first boot, and on a complex laptop (Thunderbolt, a
-# discrete GPU, quirky HID) a single driver attach can WEDGE the boot -- MEASURED
-# on the dixi X1: first boot hung for 10+ min at the loader hand-off with an empty
-# path_to_inst + /reconfigure. So only force the re-probe when we genuinely cannot
-# trust the source bindings: set SOLNIX_FORCE_RECONFIGURE=1 for the
-# install-here-boot-elsewhere case (moving the disk to different hardware).
-if [ "${SOLNIX_FORCE_RECONFIGURE:-0}" = 1 ] || [ ! -s /etc/path_to_inst ]; then
-  : > "$ALTROOT/etc/path_to_inst"
-  : > "$ALTROOT/reconfigure"
-  log "first boot: forcing a device reconfigure (empty path_to_inst) -- SOLNIX_FORCE_RECONFIGURE or no source bindings"
-else
-  cp /etc/path_to_inst "$ALTROOT/etc/path_to_inst" 2>/dev/null || : > "$ALTROOT/etc/path_to_inst"
-  rm -f "$ALTROOT/reconfigure" 2>/dev/null || true
-  log "first boot: copied the running system's path_to_inst ($(wc -l < /etc/path_to_inst 2>/dev/null | tr -d ' ') bindings) -- no forced re-probe (same-hardware self-install)"
-fi
-# Remove the COPIED build-host zpool.cache: it names the HOST's rpool, so the
-# installed system tries to import a non-existent rpool at boot -> ZFS-8000-D3/CS
-# fmd faults + "pool: rpool UNAVAIL" noise. The target must only know its own
-# (exported-with-cachefile=none) pool, which the loader's bootfs selects; drop
-# the stale cache so no phantom rpool import is attempted.
-rm -f "$ALTROOT/etc/zfs/zpool.cache" 2>/dev/null || true
-# bootadm mkdirs <root>/platform/i86pc/amd64/archive_cache but does NOT create
-# the parent dir; the SELF-INSTALL live root has no platform/i86pc/amd64 (the
-# ramdisk installer env curates it out), so pre-create it or bootadm fails
-# "mkdir of .../archive_cache failed: No such file or directory".
-mkdir -p "$ALTROOT/platform/i86pc/amd64"
-# NOTE: create_hash (bootadm's sha1 step) is memory-hungry and gets OOM-killed on
-# small install VMs, leaving a TRUNCATED/empty boot_archive that [ -f ] passes but
-# the loader rejects ("Failed to find bootable partition"). So: build, then VERIFY
-# the archive is non-empty + a real archive; if it looks truncated, free memory
-# (sync) and rebuild ONCE. A boot_archive under ~8MB is not a valid solnix ramdisk.
-BA="$ALTROOT/platform/i86pc/amd64/boot_archive"
-# TRUE ROOT CAUSE of the truncated-archive FAIL: bootadm's create_hash runs
-# `digest -a sha1`, and the live PKCS#11 config enables the pkcs11_tpm.so
-# provider whose libtspi.so.1 dep is missing from the media -> ld.so fatal
-# relocation error -> `digest` dies with SIGKILL ("create_hash line 377
-# Killed") -> no hash -> truncated boot_archive. Misreads as OOM but is a
-# missing-lib abort (hence RAM-immune). Disable the TPM provider so digest
-# falls back to SW SHA1. Covers ISOs predating the oi-make-livecd.sh fix.
-for pk in /etc/crypto/pkcs11.conf "$ALTROOT/etc/crypto/pkcs11.conf"; do
-  [ -f "$pk" ] && grep -q '^/usr/lib/security/\$ISA/pkcs11_tpm.so' "$pk" 2>/dev/null \
-    && sed -i 's,^\(/usr/lib/security/\$ISA/pkcs11_tpm.so.*\)$,# solnix: disabled (libtspi.so.1 absent) \1,' "$pk" 2>/dev/null || true
-done
-# Belt-and-suspenders for the create_hash OOM: cap the live ZFS ARC at runtime
-# right before the archive build so `digest` has RAM even if this ISO predates
-# the /etc/system ARC cap. Harmless if already capped; mdb -kw is on the media.
-if command -v mdb >/dev/null 2>&1; then
-  echo 'zfs_arc_max/Z 0x20000000' | mdb -kw >/dev/null 2>&1 || true
-fi
-sync
-# DEFINITIVE root-agnostic fix for the truncated-boot_archive FAIL. bootadm's
-# create_ramdisk runs the hash via an ABSOLUTE path (`/usr/bin/digest -a sha1
-# $CPIO`), so a PATH-shadow can't intercept it. The real digest either OOMs on
-# the ~450MB CPIO, aborts on the missing libtspi/pkcs11_tpm provider, or (after
-# we disable that provider) reports "failed to find any cryptographic provider"
-# -- ALL leave a hashless -> truncated boot_archive -> FAIL rc=1. The loader does
-# NOT use this hash (loader.conf boot_archive.hash_load="NO"). So REPLACE the
-# digest BINARY itself (live + target) with an instant stub that emits a constant;
-# create_ramdisk's absolute-path call then succeeds immediately. Back up + restore.
-install_digest_stub() {
-  for _d in /usr/bin/digest "$ALTROOT/usr/bin/digest"; do
-    [ -e "$_d" ] || continue
-    [ -e "$_d.solnix-orig" ] || cp -p "$_d" "$_d.solnix-orig" 2>/dev/null || true
-    cat > "$_d" <<'DIGSTUB'
-#!/sbin/sh
-# solnix install-time stub for /usr/bin/digest: the real digest OOMs/aborts on the
-# 450MB boot_archive CPIO and the hash is unused at boot (hash_load=NO). Emit a
-# constant so create_ramdisk's `digest -a sha1 ... > $tarchive.hash` succeeds now.
-printf '0000000000000000000000000000000000000000\n'
-exit 0
-DIGSTUB
-    chmod 0755 "$_d" 2>/dev/null || true
-  done
-}
-install_digest_stub
-build_ba() { run_to 300 sh -c 'bootadm update-archive -f -R "$1" 2>&1 | grep -vE "^gzip:|cannot find" | tail -6' _ "$ALTROOT" || true; }
-# The target boot_archive is a GZIP of a curated CPIO (create_ramdisk's x86
-# path: cpio -H odc | gzip). A minimal target is legitimately much smaller
-# (~27MB) than the full live-ISO ramdisk (~117MB), so size is NOT a validity
-# signal -- `file` even reports it as "gzip compressed data" (which is why the
-# old archive|cpio|ufs|boot regex wrongly rejected VALID archives). The real
-# integrity test is `gzip -t`: it inflates the entire deflate stream and fails
-# iff the archive was truncated mid-write. That catches the true failure
-# (partial gzip) and passes any complete archive regardless of size. The
-# unused-at-boot sha1 hash (hash_load=NO) is irrelevant to validity.
-ba_ok() {
-  [ -s "$BA" ] || return 1
-  # NOTE: illumos has NO stat(1) -- not /usr/bin/stat, not gstat (verified on a
-  # live node: only wc and ls are present). Every `stat -c %s` below therefore
-  # expanded to the fallback 0, which made the non-gzip branch's size gate
-  # ALWAYS FALSE: the `-ge 8388608` test failed, so the `&& file ...` check after
-  # it never ran and that branch validated NOTHING. It also made the success log
-  # read "boot_archive OK:  bytes" with an empty number -- the visible symptom of
-  # a check that was silently dead. `wc -c` is POSIX and present, so use it.
-  _fsize() {
-    # An absent file makes `wc -c` fail and print nothing, and an EMPTY string
-    # would make the caller's `[ "$(...)" -ge N ]` a syntax error rather than a
-    # false -- so normalise to 0. (The `|| echo 0` on the pipeline does NOT cover
-    # this: the pipeline's exit status is wc's, but its stdout is already empty.)
-    _n=$(wc -c < "$1" 2>/dev/null | tr -d ' ')
-    echo "${_n:-0}"
-  }
-
-  # gzip magic 1f 8b -> validate the whole stream; else accept a bare CPIO/UFS.
-  if [ "$(od -An -N2 -tx1 "$BA" 2>/dev/null | tr -d ' ')" = "1f8b" ]; then
-    gzip -t "$BA" 2>/dev/null
-  else
-    [ "$(_fsize "$BA")" -ge 8388608 ] && \
-      file "$BA" 2>/dev/null | grep -qiE 'archive|cpio|ufs|boot'
-  fi
-}
-spin_start "bootadm update-archive (builds the boot_archive cpio)"
-build_ba
+# 3d. THE TOPLEVEL LAYS THE BE (IFACE-1: the same code make-be and
+#     `switch-to-configuration boot` run). It preserves the machine inputs above.
+step "laying the boot environment from the toplevel (install-be)"
+_belog="$ALTROOT/var/tmp/solnix-install-be-$$.log"
+spin_start "install-be (early-boot set, /etc, SMF, /boot, boot_archive)"
+SOLNIX_ROOT="$ALTROOT" SOLNIX_POOL="$POOL" SOLNIX_BE="$BE" SOLNIX_CONSOLE="$TARGET_CONSOLE" \
+  run_to "${SOLNIX_INSTALL_BE_TIMEOUT:-1800}" /sbin/sh "$_TLD/bin/switch-to-configuration" install-be "$TOPLEVEL" \
+  > "$_belog" 2>&1
+_rc=$?
 spin_stop
-if ! ba_ok; then
-  log "boot_archive incomplete ($(_fsize "$BA") bytes, gzip -t failed) — syncing + rebuilding once"
-  sync; sleep 2
-  spin_start "bootadm update-archive (retry)"
-  build_ba
-  spin_stop
+tail -20 "$_belog" >&2
+[ "$_rc" = 0 ] || die "install-be failed (rc=$_rc); log $_belog"
+
+# 3e. VERIFY THE BE. Each item has failed silently on a real install before.
+# _in_be <path-in-BE>: resolve symlinks INSIDE the BE (an absolute link target is
+# re-rooted at $ALTROOT), print the real file, fail if it does not exist there.
+# A plain [ -e "$ALTROOT/sbin/init" ] would follow /nix/store/... through the
+# LIVE root's /nix instead, which is not where the BE's early set lives.
+_in_be() {
+  _p="$ALTROOT/$1"; _n=0
+  while [ -h "$_p" ] && [ "$_n" -lt 16 ]; do
+    _t=$(_readlink "$_p")
+    case "$_t" in /*) _p="$ALTROOT$_t" ;; *) _p="$(dirname "$_p")/$_t" ;; esac
+    _n=$((_n + 1))
+  done
+  [ -e "$_p" ] && [ ! -h "$_p" ] && { echo "$_p"; return 0; }
+  return 1
+}
+_bad=""
+for _need in platform/i86pc/kernel/amd64/unix kernel/amd64/genunix platform/i86pc/amd64/boot_archive \
+             sbin/init etc/inittab lib/svc/bin/svc.startd etc/svc/repository.db \
+             boot/loader64.efi boot/pmbr boot/gptzfsboot boot/loader.rc boot/defaults/loader.conf \
+             boot/forth/loader.4th; do
+  _in_be "$_need" >/dev/null || _bad="$_bad $_need"
+done
+[ -z "$_bad" ] || die "install-be left the BE without:$_bad"
+grep -q "zfs mount -O $POOL/nix" "$ALTROOT/etc/inittab" 2>/dev/null \
+  || die "BE inittab has no stage-2 'zfs mount -O $POOL/nix' line: the BE could not reach the shared store at boot"
+# the early set must be REAL files: the loader and init run before $POOL/nix mounts.
+for _e in sbin/init sbin/sh platform/i86pc/kernel/amd64/unix platform/i86pc/amd64/boot_archive; do
+  _r=$(_in_be "$_e") || die "$_e resolves outside the BE or dangles -- it runs before $POOL/nix is mounted, so it must be a real file in the BE"
+  case "$_r" in "$ALTROOT"/nix/store/*|"$ALTROOT"/sbin/*|"$ALTROOT"/platform/*|"$ALTROOT"/usr/*|"$ALTROOT"/lib/*) : ;;
+    *) die "$_e resolves outside the BE ($_r)" ;; esac
+done
+[ -s "$ALTROOT/boot/fonts/fonts.dir" ] || \
+  echo "WARN: BE has no /boot/fonts/fonts.dir; the console will use the tiny builtin 8x16 font" >&2
+for _cf in boot/loader.conf boot/solaris/bootenv.rc etc/path_to_inst etc/svc/profile/site/solnix-install.xml; do
+  [ -e "$ALTROOT/$_cf" ] || die "install-be removed the machine input /$_cf"
+done
+grep -q "^console=\"$TARGET_CONSOLE\"\$" "$ALTROOT/boot/loader.conf" || die "install-be overwrote the installed console in loader.conf"
+for _f in passwd shadow group; do
+  [ -h "$ALTROOT/etc/$_f" ] && die "/etc/$_f is a symlink into the store; the installer must edit it (passwords, admin user)"
+  [ -f "$ALTROOT/etc/$_f" ] || die "BE has no /etc/$_f"
+done
+# What the brief calls "no live-root copy": the BE must not contain the live media's
+# own marker files. Their presence would mean something copied the running root.
+for _la in etc/solnix-live-shell usr/sbin/solnix-motd root/run-install.sh; do
+  [ -e "$ALTROOT/$_la" ] && die "BE contains the live-media file /$_la -- something copied the running root"
+done
+_BA=$(_in_be platform/i86pc/amd64/boot_archive)
+case "$(od -An -N2 -tx1 "$_BA" 2>/dev/null | tr -d ' ')" in
+  1f8b) gzip -t "$_BA" 2>/dev/null || die "boot_archive is a truncated gzip stream" ;;
+esac
+log "BE verified: kernel, early set, inittab stage-2 mount, SMF repository, /boot, boot_archive ($(wc -c < "$_BA" | tr -d ' ') B)"
+mkdir -p "$ALTROOT/run"
+rm -f "$ALTROOT/etc/zfs/zpool.cache" "$ALTROOT/etc/solnix-autoinstall" 2>/dev/null || true
+log "datasets: $POOL/nix + $POOL${HOME_BASE} created outside $BEDS"
+
+# ---------------------------------------------------------------------------
+# 3f. /home LAYOUT, on the BE that install-be just laid.
+# The autofs SERVICE is preset off by the site profile above. The auto_master line
+# is the belt to that brace: a future `svcadm enable autofs` would otherwise
+# silently shadow every home directory. Verified on `sun`, which runs /home/gburd
+# with autofs disabled and the line still present (harmless only while off).
+# When /etc/auto_master is a link into the store the configuration owns it; say so
+# rather than replacing a config file with a local edit.
+if [ "$HOME_STYLE" = home ] && [ -e "$ALTROOT/etc/auto_master" ]; then
+  if [ -h "$ALTROOT/etc/auto_master" ]; then
+    log "note: /etc/auto_master comes from the configuration; autofs is preset off, so /home is not shadowed"
+  else
+    sed 's,^/home[[:space:]],#/home\t,' "$ALTROOT/etc/auto_master" > "$ALTROOT/etc/auto_master.new" \
+      && mv "$ALTROOT/etc/auto_master.new" "$ALTROOT/etc/auto_master"
+    grep -qE '^/home[[:space:]]' "$ALTROOT/etc/auto_master" \
+      && die "auto_master still maps /home -- the dataset would be shadowed at boot"
+    log "autofs: /home mapping commented out (service preset off by the site profile)"
+  fi
 fi
-ba_ok || die "boot_archive invalid/truncated after rebuild ($(_fsize "$BA") bytes) — gzip stream incomplete"
-log "boot_archive OK: $(_fsize "$BA") bytes, $(file "$BA" 2>/dev/null)"
 
 # ---------------------------------------------------------------------------
 # 10. loader: UEFI path (ESP) + BIOS/CSM path (pool boot area) + bootfs + menu.
@@ -2906,15 +2254,6 @@ bootfs $BEDS
 EOF
 
 # ---------------------------------------------------------------------------
-# 11. finalize: export the pool so it's importable on the target machine.
-# ---------------------------------------------------------------------------
-# Remove the live-media auto-install marker from the INSTALLED BE so the
-# installed system does NOT re-run the live-installer (site/solnix-live) and
-# try to reinstall itself on every boot. The marker is a live-media test
-# scaffold only; it must never ship on the installed root/AMI. Also disable
-# the live-installer service in the target repo as belt-and-suspenders.
-rm -f "$ALTROOT/etc/solnix-autoinstall" 2>/dev/null || true
-# ---------------------------------------------------------------------------
 # 10b. INTERACTIVE ADMIN ACCOUNT.
 #
 # illumos has no `wheel`. The native equivalents are the `sysadmin` group (gid 14)
@@ -2933,9 +2272,10 @@ rm -f "$ALTROOT/etc/solnix-autoinstall" 2>/dev/null || true
 # ⚠️ THE LIVE MEDIA DELIBERATELY BLANKS root's PASSWORD so the operator can log in
 # to run this installer (oi-make-livecd.sh:1611 empties the shadow field, and :1614
 # sets PASSREQ=NO and comments out CONSOLE=). Correct for live media, and a real
-# hole once copied: step 3 copies /etc/{passwd,shadow,group} verbatim, so WITHOUT
-# THIS BLOCK the installed system ships with a passwordless root, empty passwords
-# permitted at login, and root allowed on any terminal.
+# hole when it reaches disk. The copy-the-live-root installer inherited it; a BE laid
+# from the toplevel gets root's field from users.users.root.hashedPassword, whose
+# default is "" (modules/config/users.nix), so WITHOUT THIS BLOCK the installed
+# system still ships a passwordless root.
 #
 # Hash helper shared with the admin-user block below.
 _hash_pw() {  # $1 = plaintext -> stdout = crypt string, empty on failure
@@ -3061,19 +2401,6 @@ if [ -f "$ALTROOT/etc/ssh/sshd_config" ]; then
     || die "sshd: UsePAM yes not set on target -- password auth would fail OPEN"
   log "sshd: PermitRootLogin no, PermitEmptyPasswords no, UsePAM yes (password auth actually enforced)"
 fi
-# Ensure network/ssh is ENABLED in the target's SMF repository, so the installed
-# system comes up with sshd listening on first boot (needed for remote login).
-# The target repository.db is the copied live one; network/ssh is normally enabled
-# there, but assert it explicitly against the target repo (SVCCFG_REPOSITORY), same
-# pattern as the autofs preset. A machine the operator installed to log into
-# remotely must not come up with sshd disabled.
-if [ -x /usr/sbin/svccfg ] && [ -f "$ALTROOT/etc/svc/repository.db" ]; then
-  SVCCFG_REPOSITORY="$ALTROOT/etc/svc/repository.db" \
-    /usr/sbin/svccfg -s network/ssh setprop general/enabled = boolean: true 2>/dev/null \
-    && log "target network/ssh preset ENABLED (sshd listens on first boot)" \
-    || log "note: could not preset network/ssh enabled; run 'svcadm enable network/ssh' after first boot"
-fi
-
 _mkadmin=0
 if [ -n "${SOLNIX_ADMIN_USER:-}" ]; then
   _au="$SOLNIX_ADMIN_USER"; _apw="${SOLNIX_ADMIN_PW:-}"; _mkadmin=1
@@ -3245,27 +2572,6 @@ if [ "$_mkadmin" = 1 ]; then
   fi
 fi
 
-log "finalizing (export pool)"
-sync
-zfs set canmount=noauto "$BEDS"
-# Unmount the home dataset (mounted under the pool altroot for the admin home) and
-# make sure its stored mountpoint is the boot-time $HOME_BASE.
-if [ "${_mkadmin:-0}" = 1 ] && [ -n "${_homeds:-}" ] && zfs list -H "$_homeds" >/dev/null 2>&1; then
-  run_to 20 zfs unmount "$_homeds" 2>/dev/null || true
-  zfs set mountpoint="$HOME_BASE" "$_homeds" 2>/dev/null || true   # already; kept as a guard
-fi
-run_to 30 umount "$ALTROOT/esp" 2>/dev/null || true
-# unmount the pool's own mountpoint (/a/$POOL from the menu.lst step) + the BE.
-run_to 30 zfs unmount "$POOL" 2>/dev/null || true
-run_to 30 zfs unmount "$BEDS" 2>/dev/null || run_to 30 zfs unmount -f "$BEDS" 2>/dev/null || true
-run_to 60 zpool export "$POOL" || run_to 60 zpool export -f "$POOL" || die "zpool export failed"
-trap - EXIT INT TERM   # clean exit: pool exported, nothing to clean up
-
-log "DONE: solnix installed on $TARGET (pool $POOL, BE $BEDS, generation 1 = $TOPLEVEL)"
-echo "Detach $TARGET, snapshot it, register an AMI (boot-mode uefi, ena) and boot it,"
-echo "or attach it as the root disk of a new instance. It should boot to"
-echo "multi-user-server with /run-current-system -> $TOPLEVEL."
-
 # ---------------------------------------------------------------------------
 # 13. HOME-MANAGER (step 8). Runs LAST, deliberately: it needs the system's users
 #     and datasets to exist, and a home-manager failure must not be able to leave
@@ -3293,10 +2599,10 @@ if [ "$DO_HOME" = 1 ] && [ -n "$HOME_FLAKE" ]; then
   else
     # Prove the attr exists first, and list what DOES exist if it does not. Same
     # discipline as the system attr gate: a typo must not look like a build failure.
-    if ! nix eval --store "$ALTROOT" --raw "${_hfl}#homeConfigurations.\"${_hat}\".activationPackage.drvPath" >/dev/null 2>&1; then
+    if ! _nix_env nix eval --raw "${_hfl}#homeConfigurations.\"${_hat}\".activationPackage.drvPath" >/dev/null 2>&1; then
       echo "" >&2
       echo "No homeConfigurations.\"$_hat\" in $_hfl. Available:" >&2
-      nix eval --store "$ALTROOT" --raw "${_hfl}#homeConfigurations" --apply \
+      _nix_env nix eval --raw "${_hfl}#homeConfigurations" --apply \
         'x: builtins.concatStringsSep "\n" (builtins.attrNames x)' 2>/dev/null \
         | sed 's/^/    /' >&2 || echo "    (none)" >&2
       log "WARNING: home-manager attr not found -- the SYSTEM install is complete and unaffected"
@@ -3311,8 +2617,7 @@ if [ "$DO_HOME" = 1 ] && [ -n "$HOME_FLAKE" ]; then
       # TMPDIR on the pool: the HM flake eval also copies ~100k input source files
       # into a store; --store $ALTROOT lands them on the pool, not the RAM ramdisk
       # /nix (same inode bug as the system build).
-      if run_to "${SOLNIX_HM_BUILD_TIMEOUT:-7200}" env TMPDIR="$ALTROOT/var/tmp" nix build \
-           --store "$ALTROOT" \
+      if run_to "${SOLNIX_HM_BUILD_TIMEOUT:-7200}" _nix_env nix build \
            "${_hfl}#homeConfigurations.\"${_hat}\".activationPackage" \
            --out-link "$_hmlink" > "$_hmlog" 2>&1; then
         tail -20 "$_hmlog"
@@ -3325,14 +2630,11 @@ if [ "$DO_HOME" = 1 ] && [ -n "$HOME_FLAKE" ]; then
         log "         re-run after first boot: home-manager switch --flake $HOME_FLAKE"
       else
         log "home-manager activation package built: $_hmout"
-        # The pool is exported by now, so the closure cannot be copied in. Record
-        # exactly what to run instead -- and record it where the operator will
-        # actually see it rather than only in this scrollback.
-        echo "$_hmout" > /var/tmp/solnix-hm-activation-path
-        log "NOTE: the target pool is already exported, so the home-manager closure was"
-        log "      NOT copied onto it. After first boot, on the installed system, run:"
-        log "        home-manager switch --flake $HOME_FLAKE"
-        log "      (its store paths will be fetched from the substituters then.)"
+        # Overlay mode built it straight into the target store; host mode copies it.
+        [ "$STORE_MODE" = host ] && _nix_env nix --extra-experimental-features nix-command \
+          copy --no-check-sigs --to "local?root=$NIXROOT" "$_hmout" >> "$_hmlog" 2>&1
+        log "home-manager closure is on $POOL/nix. After first boot, as the user:"
+        log "        home-manager switch --flake $HOME_FLAKE   (offline: the closure is already local)"
       fi
     fi
   fi
@@ -3351,6 +2653,37 @@ elif [ "$DO_HOME" = 1 ] && [ -n "$FLAKE_REF" ]; then
     fi
   fi
 fi
+
+
+log "finalizing (export pool)"
+sync
+# release the target store from the live /nix (or the copy root), then give it
+# its boot-time shape: mountpoint=/nix, canmount=noauto -- the BE's inittab
+# mounts it with `zfs mount -O` over the early set (no automount attempt over a
+# non-empty /nix, and `zfs mount -a` leaves it alone).
+find "$ALTROOT/var/tmp/solnix-nixcache" -delete 2>/dev/null || true
+unoverlay_nix
+_nixroot_umount
+df -n /nix 2>/dev/null | grep -q zfs && [ "$STORE_MODE" = overlay ] && die "/nix is still the target store; cannot export"
+zfs set canmount=noauto "$POOL/nix" && zfs set mountpoint=/nix "$POOL/nix" \
+  || die "could not set $POOL/nix to its boot-time mountpoint"
+zfs set canmount=noauto "$BEDS"
+# Unmount the home dataset (mounted under the pool altroot for the admin home) and
+# make sure its stored mountpoint is the boot-time $HOME_BASE.
+if [ "${_mkadmin:-0}" = 1 ] && [ -n "${_homeds:-}" ] && zfs list -H "$_homeds" >/dev/null 2>&1; then
+  run_to 20 zfs unmount "$_homeds" 2>/dev/null || true
+  zfs set mountpoint="$HOME_BASE" "$_homeds" 2>/dev/null || true   # already; kept as a guard
+fi
+run_to 30 umount "$ALTROOT/esp" 2>/dev/null || true
+# unmount the pool's own mountpoint (/a/$POOL from the menu.lst step) + the BE.
+run_to 30 zfs unmount "$POOL" 2>/dev/null || true
+run_to 30 zfs unmount "$BEDS" 2>/dev/null || run_to 30 zfs unmount -f "$BEDS" 2>/dev/null || true
+run_to 60 zpool export "$POOL" || run_to 60 zpool export -f "$POOL" || die "zpool export failed"
+trap - EXIT INT TERM   # clean exit: pool exported, nothing to clean up
+
+log "DONE: solnix installed on $TARGET (pool $POOL, BE $BEDS, generation 1 = $TOPLEVEL)"
+echo "Remove the install media and boot $TARGET. It should boot to"
+echo "multi-user-server with /run/current-system -> $TOPLEVEL."
 
 # ---------------------------------------------------------------------------
 # 12. Offer to reboot or power off.

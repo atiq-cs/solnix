@@ -8,9 +8,9 @@ SCRIPT="${1:-/home/gburd/ws/solnix/scripts/solnix-install}"
 W=$(mktemp -d /tmp/tcchk.XXXXXX)
 trap 'find "$W" -mindepth 1 -delete 2>/dev/null; rmdir "$W" 2>/dev/null' EXIT
 
-echo "=== default must still be ttya (every existing install test captures serial) ==="
-grep -q '^TARGET_CONSOLE="${SOLNIX_TARGET_CONSOLE:-ttya}"$' "$SCRIPT" \
-  && echo "PASS  default is ttya" || { echo "FAIL  default changed"; exit 1; }
+echo "=== default must be text (a laptop has no ttya; ttya input = dead keyboard on the X1) ==="
+grep -q '^TARGET_CONSOLE="${SOLNIX_TARGET_CONSOLE:-text}"$' "$SCRIPT" \
+  && echo "PASS  default is text" || { echo "FAIL  default changed"; exit 1; }
 
 # the writer block: from the log line through the gate.
 awk '/^log "installed-system console=/,/installed-console gate OK/' "$SCRIPT" > "$W/block.sh"
