@@ -51,6 +51,10 @@ let
       <service name="network/ipsec/ipsecalgs" version="1" type="service"><instance name="default" enabled="false"/></service>
       <service name="network/ipsec/policy" version="1" type="service"><instance name="default" enabled="false"/></service>
       <service name="system/filesystem/rmvolmgr" version="1" type="service"><instance name="default" enabled="false"/></service>
+      <service name="system/filesystem/autofs" version="1" type="service"><instance name="default" enabled="false"/></service>
+      <service name="network/rpc/smserver" version="1" type="service"><instance name="default" enabled="false"/></service>
+      <service name="network/ssh" version="1" type="service"><instance name="default" enabled="false"/></service>
+      <service name="system/power" version="1" type="service"><instance name="default" enabled="true"/></service>
     </service_bundle>
   '';
 
@@ -136,8 +140,8 @@ let
     case "$action" in
       list-generations|list) : ;;
       *)
-        [ -d "$target" ] || { echo "FATAL: target toplevel '$target' not found" >&2; exit 1; }
-        [ -e "$target/activate" ] || { echo "FATAL: $target has no activate script" >&2; exit 1; }
+        [ -d "''${SOLNIX_STORE_ROOT:-}$target" ] || { echo "FATAL: target toplevel '$target' not found" >&2; exit 1; }
+        [ -e "''${SOLNIX_STORE_ROOT:-}$target/activate" ] || { echo "FATAL: $target has no activate script" >&2; exit 1; }
         ;;
     esac
 
@@ -231,25 +235,11 @@ let
       mkdir -p "$BEROOT_MP"
       beadm mount "$be" "$BEROOT_MP" || { echo "FATAL: beadm mount $be failed" >&2; exit 1; }
 
-      echo "-- copying toplevel closure into $be:/nix/store"
-      mkdir -p "$BEROOT_MP/nix/store" "$BEROOT_MP/nix/var/nix/profiles" "$BEROOT_MP/run"
-      # The BE is a ZFS clone of the running BE, so its /nix/store already holds
-      # the running closure; copy only store paths the clone is MISSING. illumos
-      # cp needs `cp -R -P` for dirs (-P preserves symlinks); target is the parent
-      # dir WITHOUT a trailing slash (illumos cp rejects the slash form here).
-      copy_path() {   # $1 = /nix/store/<hash>-<name>
-        [ -e "$BEROOT_MP$1" ] && return 0
-        d="$BEROOT_MP$(dirname "$1")"; mkdir -p "$d"; cp -R -P "$1" "$d" 2>/dev/null || true
-      }
-      if command -v nix-store >/dev/null 2>&1; then
-        for p in $(nix-store -qR "$1"); do copy_path "$p"; done
-      else
-        copy_path "$1"
-        for dep in $(find "$1/" -type l 2>/dev/null | while read L; do ls -ld "$L" 2>/dev/null | sed -n 's/.* -> //p'; done | grep '^/nix/store/' | sort -u); do
-          copy_path "$(echo "$dep" | sed 's,\(/nix/store/[^/]*\).*,\1,')"
-        done
-      fi
-
+      # the same step install and image use (IFACE-1): early set into the BE's own
+      # /nix, links into the shared store, /etc, SMF, /boot, boot_archive.
+      SOLNIX_ROOT="$BEROOT_MP" SOLNIX_STORE_ROOT="" SOLNIX_POOL="$POOL" SOLNIX_BE="$be" \
+        /sbin/sh "$1/bin/install-be" "$1" || { echo "FATAL: install-be failed for $be" >&2; exit 1; }
+      mkdir -p "$BEROOT_MP/nix/var/nix/profiles"
       relink "$1" "$BEROOT_MP/run-current-system" 2>/dev/null || true
       relink "$1" "$BEROOT_MP/nix/var/nix/profiles/system-$gen-link" 2>/dev/null || true
       relink "system-$gen-link" "$BEROOT_MP/nix/var/nix/profiles/system" 2>/dev/null || true
@@ -330,8 +320,12 @@ let
       list-generations|list)
         list_generations
         ;;
+      install-be)
+        # IFACE-1: populate SOLNIX_ROOT from $target, read through SOLNIX_STORE_ROOT.
+        exec /sbin/sh "$(dirname "$0")/install-be" "$target"
+        ;;
       *)
-        echo "unknown action: $action (switch|boot|test|list-generations)" >&2; exit 1;;
+        echo "unknown action: $action (switch|boot|test|install-be|list-generations)" >&2; exit 1;;
     esac
   '';
 
@@ -452,10 +446,23 @@ let
   # decorative: a false assertion aborts eval before any derivation is produced.
   # (Interpolating it here rather than in the script body means it is forced during
   # EVALUATION, so `nix eval .#dixiToplevel` fails too, not just `nix build`.)
+  # install-be (IFACE-1): populate a BE from this toplevel. One script, called by
+  # lib/make-be.nix, scripts/solnix-install and do_boot below.
+  installBe = pkgs.writeScript "solnix-install-be" (builtins.readFile ./install-be.sh);
+
   toplevel = assert config.system.assertionsChecked;
-    pkgs.runCommand "solnix-system-${config.networking.hostName}" { } ''
+    pkgs.runCommand "solnix-system-${config.networking.hostName}" {
+      # closure of the boot-time set: what install-be copies as real files into
+      # each generation's BE (the kernel goes in as real trees separately).
+      exportReferencesGraph = [ "early-graph" pkgs.solnix.early ];
+    } ''
     mkdir -p $out
-    ln -s ${pkgs.solnix.systemPath}                 $out/systemPath
+    grep -h '^/nix/store/' early-graph | grep -v '\.drv$' | sort -u > $out/early-paths
+    ln -s ${pkgs.solnix.world}   $out/world
+    ln -s ${pkgs.solnix.kernel}  $out/kernel-slice
+    ln -s ${pkgs.solnix.early}   $out/early
+    ln -s ${pkgs.solnix.drivers} $out/drivers
+    ln -s ${pkgs.solnix.stock}   $out/stock
     # sw: the composed userland profile (environment.systemPackages via buildEnv)
     # -> /run/current-system/sw. SEPARATE from systemPath so a broken package set
     # can't drop the kernel (design §B). shell-environment puts sw/bin first on PATH.
@@ -474,22 +481,24 @@ let
     ln -s ${switchToConfiguration}                    $out/bin/switch-to-configuration
     ln -s ${solnixRebuild}                            $out/bin/solnix-rebuild
     ln -s ${solnixInstall}                            $out/bin/solnix-install
+    ln -s ${installBe}                                $out/bin/install-be
     # kernel + platform: stable-named entrypoints into systemPath (the closure
     # walker / make-be reads $out/kernel + $out/platform to find unix/genunix).
-    ln -s ${pkgs.solnix.systemPath}/kernel           $out/kernel
-    ln -s ${pkgs.solnix.systemPath}/platform         $out/platform
+    ln -s ${pkgs.solnix.kernel}/kernel               $out/kernel
+    ln -s ${pkgs.solnix.kernel}/platform             $out/platform
     # a manifest of what this system is (for `nix-store -q --tree` legibility).
     cat > $out/system-manifest <<EOF
     hostName=${config.networking.hostName}
     milestone=${targetMilestone}
-    systemPath=${pkgs.solnix.systemPath}
+    world=${pkgs.solnix.world}
     smfManifests=${config.system.build.smfManifests}
     EOF
     # sanity: the closure must have the kernel + a service manager + libc.
-    [ -e $out/systemPath/platform/i86pc/kernel/amd64/unix ] || { echo "FATAL: no unix in toplevel" >&2; exit 1; }
-    [ -e $out/systemPath/kernel/amd64/genunix ]             || { echo "FATAL: no genunix in toplevel" >&2; exit 1; }
-    [ -e $out/systemPath/lib/svc/bin/svc.startd ]           || { echo "FATAL: no svc.startd in toplevel" >&2; exit 1; }
-    [ -e $out/systemPath/lib/amd64/libc.so.1 ]              || { echo "FATAL: no libc in toplevel" >&2; exit 1; }
+    [ -e $out/platform/i86pc/kernel/amd64/unix ]            || { echo "FATAL: no unix in toplevel" >&2; exit 1; }
+    [ -e $out/kernel/amd64/genunix ]                        || { echo "FATAL: no genunix in toplevel" >&2; exit 1; }
+    [ -e $out/world/lib/svc/bin/svc.startd ]                || { echo "FATAL: no svc.startd in toplevel" >&2; exit 1; }
+    [ -e $out/world/lib/amd64/libc.so.1 ]                   || { echo "FATAL: no libc in toplevel" >&2; exit 1; }
+    [ -e $out/sw/bin/nix ]                                  || { echo "FATAL: no nix on the system PATH" >&2; exit 1; }
     [ -e $out/activate ]                                    || { echo "FATAL: no activate script" >&2; exit 1; }
     [ -e $out/bin/switch-to-configuration ]                 || { echo "FATAL: no switch-to-configuration" >&2; exit 1; }
     [ -e $out/bin/solnix-rebuild ]                          || { echo "FATAL: no solnix-rebuild" >&2; exit 1; }

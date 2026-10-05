@@ -1,0 +1,362 @@
+driver name=dump perms="dump 0660 root sys"
+driver name=eventfd perms="* 0666 root sys"
+driver name=fssnap policy="ctl read_priv_set=sys_config write_priv_set=sys_config" perms="* 0640 root sys" perms="ctl 0666 root sys"
+driver name=kstat perms="* 0666 root sys"
+driver name=ksyms perms="* 0666 root sys"
+driver name=logindmux
+driver name=ptm clone_perms="ptmx 0666 root sys"
+driver name=pts perms="* 0644 root sys" perms="0 0620 root tty" perms="1 0620 root tty" perms="2 0620 root tty" perms="3 0620 root tty"
+driver name=timerfd perms="* 0666 root sys"
+driver name=bofi perms="* 0600 bin bin"
+driver name=audio810 alias=pci1022,7445 alias=pci1022,746d alias=pci1039,7012 alias=pci10de,3a alias=pci10de,59 alias=pci10de,6a alias=pci10de,8a alias=pci10de,da alias=pci10de,ea alias=pci10de,1b1 alias=pci10de,26b alias=pci8086,2415 alias=pci8086,2425 alias=pci8086,2445 alias=pci8086,2485 alias=pci8086,24c5 alias=pci8086,24d5 alias=pci8086,25a6 alias=pci8086,266e alias=pci8086,2698 alias=pci8086,27de alias=pci8086,7195
+driver name=audiocmi alias=pci13f6,100 alias=pci13f6,101 alias=pci13f6,111
+driver name=audiocmihd alias=pci13f6,8788
+driver name=audioemu10k alias=pci1102,2 alias=pci1102,4 alias=pci1102,8
+driver name=audiohd alias=pci10de,371 alias=pci8086,2668 alias=pciclass,0403 alias=pciexclass,0403
+driver name=audioixp alias=pci1002,4341 alias=pci1002,4361 alias=pci1002,4370
+driver name=audiols alias=pci1102,7
+driver name=audiop16x alias=pci1102,6
+driver name=audiosolo alias=pci125d,1969
+driver name=audiovia823x alias=pci1106,3059
+driver name=audio perms="* 0666 root sys"
+driver name=audio1575 alias=pci10b9,5455
+driver name=audioens alias=pci1274,1371 alias=pci1274,5880
+driver name=audiopci alias=pci1274,5000
+driver name=audiots alias=pci10b9,5451
+driver name=amdzen
+driver name=amdzen_stub alias=pci1022,1122,p alias=pci1022,1248,p alias=pci1022,1249,p alias=pci1022,124a,p alias=pci1022,124b,p alias=pci1022,124c,p alias=pci1022,124d,p alias=pci1022,124e,p alias=pci1022,124f,p alias=pci1022,12b8,p alias=pci1022,12b9,p alias=pci1022,12ba,p alias=pci1022,12bb,p alias=pci1022,12bc,p alias=pci1022,12bd,p alias=pci1022,12be,p alias=pci1022,12bf,p alias=pci1022,12c0,p alias=pci1022,12c1,p alias=pci1022,12c2,p alias=pci1022,12c3,p alias=pci1022,12c4,p alias=pci1022,12c5,p alias=pci1022,12c6,p alias=pci1022,12c7,p alias=pci1022,12f8,p alias=pci1022,12f9,p alias=pci1022,12fa,p alias=pci1022,12fb,p alias=pci1022,12fc,p alias=pci1022,12fd,p alias=pci1022,12fe,p alias=pci1022,12ff,p alias=pci1022,1440,p alias=pci1022,1441,p alias=pci1022,1442,p alias=pci1022,1443,p alias=pci1022,1444,p alias=pci1022,1445,p alias=pci1022,1446,p alias=pci1022,1447,p alias=pci1022,1448,p alias=pci1022,1449,p alias=pci1022,144a,p alias=pci1022,144b,p alias=pci1022,144c,p alias=pci1022,144d,p alias=pci1022,144e,p alias=pci1022,144f,p alias=pci1022,1450,p alias=pci1022,1460,p alias=pci1022,1461,p alias=pci1022,1462,p alias=pci1022,1463,p alias=pci1022,1464,p alias=pci1022,1465,p alias=pci1022,1466,p alias=pci1022,1467,p alias=pci1022,1480,p alias=pci1022,1490,p alias=pci1022,1491,p alias=pci1022,1492,p alias=pci1022,1493,p alias=pci1022,1494,p alias=pci1022,1495,p alias=pci1022,1496,p alias=pci1022,1497,p alias=pci1022,14a4,p alias=pci1022,14ad,p alias=pci1022,14ae,p alias=pci1022,14af,p alias=pci1022,14b0,p alias=pci1022,14b1,p alias=pci1022,14b2,p alias=pci1022,14b3,p alias=pci1022,14b4,p alias=pci1022,14b5,p alias=pci1022,14d8,p alias=pci1022,14e0,p alias=pci1022,14e1,p alias=pci1022,14e2,p alias=pci1022,14e3,p alias=pci1022,14e4,p alias=pci1022,14e5,p alias=pci1022,14e6,p alias=pci1022,14e7,p alias=pci1022,14e8,p alias=pci1022,14f0,p alias=pci1022,14f1,p alias=pci1022,14f2,p alias=pci1022,14f3,p alias=pci1022,14f4,p alias=pci1022,14f5,p alias=pci1022,14f6,p alias=pci1022,14f7,p alias=pci1022,1507,p alias=pci1022,153a,p alias=pci1022,15d0,p alias=pci1022,15e8,p alias=pci1022,15e9,p alias=pci1022,15ea,p alias=pci1022,15eb,p alias=pci1022,15ec,p alias=pci1022,15ed,p alias=pci1022,15ee,p alias=pci1022,15ef,p alias=pci1022,1630,p alias=pci1022,1650,p alias=pci1022,1651,p alias=pci1022,1652,p alias=pci1022,1653,p alias=pci1022,1654,p alias=pci1022,1655,p alias=pci1022,1656,p alias=pci1022,1657,p alias=pci1022,166a,p alias=pci1022,166b,p alias=pci1022,166c,p alias=pci1022,166d,p alias=pci1022,166e,p alias=pci1022,166f,p alias=pci1022,1670,p alias=pci1022,1671,p alias=pci1022,1679,p alias=pci1022,167a,p alias=pci1022,167b,p alias=pci1022,167c,p alias=pci1022,167d,p alias=pci1022,167e,p alias=pci1022,167f,p alias=pci1022,1680,p alias=pci1022,16f8,p alias=pci1022,16f9,p alias=pci1022,16fa,p alias=pci1022,16fb,p alias=pci1022,16fc,p alias=pci1022,16fd,p alias=pci1022,16fe,p alias=pci1022,16ff,p alias=pci1022,1724,p alias=pci1022,1725,p alias=pci1022,1726,p alias=pci1022,1727,p alias=pci1022,1728,p alias=pci1022,1729,p alias=pci1022,172a,p alias=pci1022,172b,p
+driver name=zen_umc
+driver name=imc
+driver name=imcstub alias=pci8086,e1e,p alias=pci8086,e1f,p alias=pci8086,e60,p alias=pci8086,e68,p alias=pci8086,e6a,p alias=pci8086,e6b,p alias=pci8086,e6c,p alias=pci8086,e6d,p alias=pci8086,e71,p alias=pci8086,e79,p alias=pci8086,ea0,p alias=pci8086,ea8,p alias=pci8086,eaa,p alias=pci8086,eab,p alias=pci8086,eac,p alias=pci8086,ead,p alias=pci8086,ec8,p alias=pci8086,ec9,p alias=pci8086,eca,p alias=pci8086,2014,p alias=pci8086,2016,p alias=pci8086,2024,p alias=pci8086,2040,p alias=pci8086,2044,p alias=pci8086,2048,p alias=pci8086,2054,p alias=pci8086,2055,p alias=pci8086,2066,p alias=pci8086,208e,p alias=pci8086,2f1e,p alias=pci8086,2f1f,p alias=pci8086,2f28,p alias=pci8086,2f60,p alias=pci8086,2f68,p alias=pci8086,2f6a,p alias=pci8086,2f6b,p alias=pci8086,2f6c,p alias=pci8086,2f6d,p alias=pci8086,2f71,p alias=pci8086,2f79,p alias=pci8086,2fa0,p alias=pci8086,2fa8,p alias=pci8086,2faa,p alias=pci8086,2fab,p alias=pci8086,2fac,p alias=pci8086,2fad,p alias=pci8086,2ffc,p alias=pci8086,2ffd,p alias=pci8086,3c71,p alias=pci8086,3ca0,p alias=pci8086,3ca8,p alias=pci8086,3caa,p alias=pci8086,3cab,p alias=pci8086,3cac,p alias=pci8086,3cad,p alias=pci8086,3ce0,p alias=pci8086,3ce3,p alias=pci8086,3cf4,p alias=pci8086,3cf5,p alias=pci8086,3cf6,p alias=pci8086,6f1e,p alias=pci8086,6f1f,p alias=pci8086,6f28,p alias=pci8086,6f60,p alias=pci8086,6f68,p alias=pci8086,6f6a,p alias=pci8086,6f6b,p alias=pci8086,6f6c,p alias=pci8086,6f6d,p alias=pci8086,6f71,p alias=pci8086,6f79,p alias=pci8086,6fa0,p alias=pci8086,6fa8,p alias=pci8086,6faa,p alias=pci8086,6fab,p alias=pci8086,6fac,p alias=pci8086,6fad,p alias=pci8086,6ffc,p alias=pci8086,6ffd,p alias=pciex8086,e1e alias=pciex8086,e1f alias=pciex8086,e60 alias=pciex8086,e68 alias=pciex8086,e6a alias=pciex8086,e6b alias=pciex8086,e6c alias=pciex8086,e6d alias=pciex8086,e71 alias=pciex8086,e79 alias=pciex8086,ea0 alias=pciex8086,ea8 alias=pciex8086,eaa alias=pciex8086,eab alias=pciex8086,eac alias=pciex8086,ead alias=pciex8086,ec8 alias=pciex8086,ec9 alias=pciex8086,eca alias=pciex8086,2014 alias=pciex8086,2016 alias=pciex8086,2024 alias=pciex8086,2040 alias=pciex8086,2044 alias=pciex8086,2048 alias=pciex8086,2054 alias=pciex8086,2055 alias=pciex8086,2066 alias=pciex8086,208e alias=pciex8086,2f1e alias=pciex8086,2f1f alias=pciex8086,2f28 alias=pciex8086,2f60 alias=pciex8086,2f68 alias=pciex8086,2f6a alias=pciex8086,2f6b alias=pciex8086,2f6c alias=pciex8086,2f6d alias=pciex8086,2f71 alias=pciex8086,2f79 alias=pciex8086,2fa0 alias=pciex8086,2fa8 alias=pciex8086,2faa alias=pciex8086,2fab alias=pciex8086,2fac alias=pciex8086,2fad alias=pciex8086,2ffc alias=pciex8086,2ffd alias=pciex8086,3c71 alias=pciex8086,3ca0 alias=pciex8086,3ca8 alias=pciex8086,3caa alias=pciex8086,3cab alias=pciex8086,3cac alias=pciex8086,3cad alias=pciex8086,3ce0 alias=pciex8086,3ce3 alias=pciex8086,3cf4 alias=pciex8086,3cf5 alias=pciex8086,3cf6 alias=pciex8086,6f1e alias=pciex8086,6f1f alias=pciex8086,6f28 alias=pciex8086,6f60 alias=pciex8086,6f68 alias=pciex8086,6f6a alias=pciex8086,6f6b alias=pciex8086,6f6c alias=pciex8086,6f6d alias=pciex8086,6f71 alias=pciex8086,6f79 alias=pciex8086,6fa0 alias=pciex8086,6fa8 alias=pciex8086,6faa alias=pciex8086,6fab alias=pciex8086,6fac alias=pciex8086,6fad alias=pciex8086,6ffc alias=pciex8086,6ffd
+driver name=amdnbtemp alias=pci1022,1203,p alias=pci1022,1303,p alias=pci1022,1403,p alias=pci1022,141d,p alias=pci1022,1533,p alias=pci1022,1583,p alias=pci1022,1603,p alias=pci1022,1703,p
+driver name=coretemp
+driver name=pchtemp alias=pci8086,2f9,p alias=pci8086,6f9,p alias=pci8086,8c24,p alias=pci8086,8ca4,p alias=pci8086,8d24,p alias=pci8086,9ca4,p alias=pci8086,9d31,p alias=pci8086,9df9,p alias=pci8086,a131,p alias=pci8086,a1b1,p alias=pci8086,a231,p alias=pci8086,a2b1,p alias=pci8086,a379,p
+driver name=smntemp
+driver name=dca alias=pci108e,5454 alias=pci108e,5455 alias=pci108e,5456 alias=pci108e,5457 alias=pci14e4,5820 alias=pci14e4,5821 alias=pci14e4,5822 alias=pci14e4,5825
+driver name=tpm perms="* 0600 root sys" devlink=type=ddi_pseudo;name=tpm\t\D
+driver name=viorand alias=pci1af4,1005 alias=pci1af4,1044,p
+driver name=usmn
+driver name=zen_udf
+driver name=hci1394 perms="* 0600 root sys" alias=pciclass,0c0010
+driver name=atiatom perms="* 0644 root sys" alias=pci1002,4752
+driver name=av1394 perms="* 0600 root sys" alias=firewire00a02d,010000 alias=firewire00a02d,010001
+driver name=dcam1394 perms="* 0666 root sys" alias=firewire000104,000100 alias=firewire00a02d,000100
+driver name=usbvc perms="* 0666 root sys" alias=usbia46d,8c1.config1.0 alias=usbia46d,8c2.config1.0 alias=usbia46d,8c3.config1.0 alias=usbia46d,8c5.config1.0 alias=usbia,classe
+driver name=fipe alias=pci8086,25f0 alias=pci8086,360c
+driver name=ioat alias=pciex8086,1a38 alias=pciex8086,360b alias=pciex8086,402f
+driver name=asy alias=pci11c1,480 alias=pciclass,0700 perms="* 0666 root sys" perms="*,cu 0600 uucp uucp"
+driver name=cmdk perms="* 0640 root sys"
+driver name=ecpp perms="* 0666 root sys" alias=lp
+driver name=fd perms="* 0666 root sys"
+driver name=fdc
+driver name=ipmi perms="* 0600 root sys"
+driver name=ktest
+driver name=ccid perms="* 0600 root sys" class=misc alias=usbif,classb
+driver name=afe perms="* 0666 root sys" clone_perms="afe 0666 root sys" alias=pci10b7,9300 alias=pci1113,1216 alias=pci1317,981 alias=pci1317,985 alias=pci1317,1985 alias=pci1317,9511 alias=pci1317,9513 alias=pci13d1,ab02 alias=pci13d1,ab03 alias=pci13d1,ab08 alias=pci1737,ab08
+driver name=amd8111s alias=pci1022,7462
+driver name=arn perms="* 0666 root sys" clone_perms="arn 0666 root sys" alias=pciex168c,2a alias=pciex168c,2b
+driver name=atge alias=pciex1969,1026 alias=pciex1969,1048 alias=pciex1969,1062 alias=pciex1969,1063 alias=pciex1969,1073 alias=pciex1969,1083 alias=pciex1969,2060 alias=pciex1969,2062
+driver name=ath perms="* 0666 root sys" clone_perms="ath 0666 root sys" alias=pci168c,12 alias=pci168c,13 alias=pci168c,1a alias=pci168c,1b alias=pci168c,23 alias=pci168c,1014 alias=pciex168c,1c alias=pciex168c,24
+driver name=atu perms="* 0666 root sys" clone_perms="atu 0666 root sys" alias=usb1915,2233
+driver name=axf perms="* 0666 root sys" clone_perms="axf 0666 root sys" alias=usb411,3d alias=usb557,2009 alias=usb5ac,1402 alias=usb77b,2226 alias=usb7aa,17 alias=usb7b8,420a alias=usb7d1,3c05 alias=usb846,1040 alias=usb8dd,90ff alias=usbb95,1720 alias=usbb95,7720 alias=usbb95,772a alias=usb1189,893 alias=usb13b1,18 alias=usb1557,7720 alias=usb1631,6200 alias=usb2001,1a00 alias=usb2001,3c05 alias=usb6189,182d
+driver name=bfe alias=pci14e4,170c alias=pci14e4,4401 alias=pci14e4,4402
+driver name=bge perms="* 0666 root sys" clone_perms="bge 0666 root sys" alias=SUNW,bge alias=pci108e,1647 alias=pci108e,1648 alias=pci108e,16a7 alias=pci108e,16a8 alias=pci14e4,1600 alias=pci14e4,1601 alias=pci14e4,1644 alias=pci14e4,1645 alias=pci14e4,1647 alias=pci14e4,1648 alias=pci14e4,1649 alias=pci14e4,1653 alias=pci14e4,1654 alias=pci14e4,1659 alias=pci14e4,165d alias=pci14e4,165e alias=pci14e4,1668 alias=pci14e4,1669 alias=pci14e4,166a alias=pci14e4,166e alias=pci14e4,1677 alias=pci14e4,1678 alias=pci14e4,1679 alias=pci14e4,167d alias=pci14e4,1682 alias=pci14e4,1686 alias=pci14e4,1693 alias=pci14e4,1696 alias=pci14e4,1699 alias=pci14e4,169b alias=pci14e4,169c alias=pci14e4,16a6 alias=pci14e4,16a7 alias=pci14e4,16a8 alias=pci14e4,16b0 alias=pci14e4,16b1 alias=pci14e4,16b2 alias=pci14e4,16b3 alias=pci14e4,16b4 alias=pci14e4,16b5 alias=pci14e4,16b6 alias=pci14e4,16b7 alias=pci14e4,16c7 alias=pciex14e4,1643 alias=pciex14e4,1655 alias=pciex14e4,1656 alias=pciex14e4,1657 alias=pciex14e4,165a alias=pciex14e4,165b alias=pciex14e4,165c alias=pciex14e4,165f alias=pciex14e4,1665 alias=pciex14e4,1673 alias=pciex14e4,1674 alias=pciex14e4,1677 alias=pciex14e4,167a alias=pciex14e4,167b alias=pciex14e4,1680 alias=pciex14e4,1681 alias=pciex14e4,1682 alias=pciex14e4,1684 alias=pciex14e4,1686 alias=pciex14e4,1692 alias=pciex14e4,169d alias=pciex14e4,16b0 alias=pciex14e4,16b1 alias=pciex14e4,16b2 alias=pciex14e4,16b3 alias=pciex14e4,16b4 alias=pciex14e4,16b5 alias=pciex14e4,16b6 alias=pciex14e4,16b7 alias=pciex14e4,16f3 alias=pciex14e4,16fd alias=pciex14e4,1713
+driver name=bnx perms="* 0644 root sys" alias=pci14e4,1639 alias=pci14e4,163a alias=pci14e4,163b alias=pci14e4,163c alias=pci14e4,164a alias=pci14e4,164c alias=pci14e4,16aa alias=pci14e4,16ac
+driver name=bnxe perms="* 0666 root sys" alias=pci14e4,164e alias=pci14e4,164f alias=pci14e4,1650 alias=pciex14e4,164e alias=pciex14e4,164f alias=pciex14e4,1650 alias=pciex14e4,1662 alias=pciex14e4,1663 alias=pciex14e4,168a alias=pciex14e4,168d alias=pciex14e4,168e alias=pciex14e4,16a1 alias=pciex14e4,16a4 alias=pciex14e4,16a5 alias=pciex14e4,16ab alias=pciex14e4,16ae
+driver name=bpf perms="bpf 0666 root sys"
+driver name=chxge perms="* 0666 root sys" clone_perms="chxge 0666 root sys" alias=pci1425,7 alias=pci1425,a
+driver name=cxgbe perms="* 0666 root sys" clone_perms="cxgbe 0666 root sys"
+driver name=t4nex perms="* 0666 root sys" clone_perms="t4nex 0666 root sys" alias=pciex1425,4400 alias=pciex1425,4401 alias=pciex1425,4402 alias=pciex1425,4403 alias=pciex1425,4404 alias=pciex1425,4405 alias=pciex1425,4406 alias=pciex1425,4407 alias=pciex1425,4408 alias=pciex1425,4409 alias=pciex1425,440a alias=pciex1425,440d alias=pciex1425,440e alias=pciex1425,5400 alias=pciex1425,5401 alias=pciex1425,5402 alias=pciex1425,5403 alias=pciex1425,5404 alias=pciex1425,5405 alias=pciex1425,5406 alias=pciex1425,5407 alias=pciex1425,5408 alias=pciex1425,5409 alias=pciex1425,540a alias=pciex1425,540b alias=pciex1425,540c alias=pciex1425,540d alias=pciex1425,540e alias=pciex1425,540f alias=pciex1425,5410 alias=pciex1425,5411 alias=pciex1425,5412 alias=pciex1425,5413 alias=pciex1425,5414 alias=pciex1425,5415 alias=pciex1425,5416 alias=pciex1425,5417 alias=pciex1425,5418 alias=pciex1425,5480 alias=pciex1425,5481 alias=pciex1425,5482 alias=pciex1425,5486 alias=pciex1425,5487 alias=pciex1425,5488 alias=pciex1425,5489 alias=pciex1425,5490 alias=pciex1425,5491 alias=pciex1425,5492 alias=pciex1425,5493 alias=pciex1425,5494 alias=pciex1425,5495 alias=pciex1425,5496 alias=pciex1425,5497 alias=pciex1425,5498 alias=pciex1425,5499 alias=pciex1425,549a alias=pciex1425,549b alias=pciex1425,549c alias=pciex1425,549d alias=pciex1425,549e alias=pciex1425,549f alias=pciex1425,54a0 alias=pciex1425,54a1 alias=pciex1425,54a2 alias=pciex1425,54a3 alias=pciex1425,54a4 alias=pciex1425,54a5 alias=pciex1425,54a6 alias=pciex1425,54a7 alias=pciex1425,54a8 alias=pciex1425,54a9 alias=pciex1425,54aa alias=pciex1425,54ab alias=pciex1425,54ac alias=pciex1425,54ad alias=pciex1425,54ae alias=pciex1425,54af alias=pciex1425,54b0 alias=pciex1425,6400 alias=pciex1425,6401 alias=pciex1425,6402 alias=pciex1425,6403 alias=pciex1425,6404 alias=pciex1425,6405 alias=pciex1425,6406 alias=pciex1425,6407 alias=pciex1425,6408 alias=pciex1425,6409 alias=pciex1425,640d alias=pciex1425,6410 alias=pciex1425,6411 alias=pciex1425,6414 alias=pciex1425,6415 alias=pciex1425,6480 alias=pciex1425,6481 alias=pciex1425,6482 alias=pciex1425,6483 alias=pciex1425,6484 alias=pciex1425,6485 alias=pciex1425,6486 alias=pciex1425,6487 alias=pciex1425,6488 alias=pciex1425,6489 alias=pciex1425,648a alias=pciex1425,648b alias=pciex1425,6492 devlink=type=ddi_ctl:devctl;minor1=t4nex\tt4nex\M2
+driver name=dmfe perms="* 0666 root sys" clone_perms="dmfe 0666 root sys" alias=pci108e,9102 alias=pci1282,9102
+driver name=dnet perms="* 0666 root sys" clone_perms="dnet 0666 root sys" alias=pci1011,2 alias=pci1011,9 alias=pci1011,14 alias=pci1011,19 alias=pci10b8,2001 alias=pci1109,1400 alias=pci1109,2400 alias=pci2646,1
+driver name=e1000g perms="* 0666 root sys" clone_perms="e1000g 0666 root sys" alias=pci8086,d4c,p alias=pci8086,d4d,p alias=pci8086,d4e,p alias=pci8086,d4f,p alias=pci8086,d53,p alias=pci8086,d55,p alias=pci8086,dc5,p alias=pci8086,dc6,p alias=pci8086,dc7,p alias=pci8086,dc8,p alias=pci8086,1000 alias=pci8086,1001 alias=pci8086,1004.0e11.49 alias=pci8086,1004.0e11.b1a4 alias=pci8086,1004.1014.10f2 alias=pci8086,1004.8086.1004 alias=pci8086,1004.8086.2004 alias=pci8086,1008 alias=pci8086,1009 alias=pci8086,100c alias=pci8086,100d alias=pci8086,100e alias=pci8086,100f alias=pci8086,1010 alias=pci8086,1011 alias=pci8086,1012 alias=pci8086,1013 alias=pci8086,1014 alias=pci8086,1015 alias=pci8086,1016 alias=pci8086,1017 alias=pci8086,1018 alias=pci8086,1019 alias=pci8086,101a alias=pci8086,101d alias=pci8086,101e alias=pci8086,1026 alias=pci8086,1027 alias=pci8086,1028 alias=pci8086,1049 alias=pci8086,104a alias=pci8086,104b alias=pci8086,104c alias=pci8086,104d alias=pci8086,105a alias=pci8086,105b alias=pci8086,105c alias=pci8086,105e alias=pci8086,105f alias=pci8086,1060 alias=pci8086,1061 alias=pci8086,1062 alias=pci8086,1063 alias=pci8086,1075 alias=pci8086,1076 alias=pci8086,1077 alias=pci8086,1078 alias=pci8086,1079 alias=pci8086,107a alias=pci8086,107b alias=pci8086,107c alias=pci8086,107d alias=pci8086,107e alias=pci8086,107f alias=pci8086,108a alias=pci8086,108b alias=pci8086,108c alias=pci8086,1096 alias=pci8086,1098 alias=pci8086,1099 alias=pci8086,109a alias=pci8086,10a4 alias=pci8086,10a5 alias=pci8086,10b5 alias=pci8086,10b9 alias=pci8086,10ba alias=pci8086,10bb alias=pci8086,10bc alias=pci8086,10bd alias=pci8086,10bf alias=pci8086,10c0 alias=pci8086,10c2 alias=pci8086,10c3 alias=pci8086,10c4 alias=pci8086,10c5 alias=pci8086,10cb alias=pci8086,10cc alias=pci8086,10cd alias=pci8086,10ce alias=pci8086,10d3 alias=pci8086,10d5 alias=pci8086,10d9 alias=pci8086,10da alias=pci8086,10de alias=pci8086,10df alias=pci8086,10e5 alias=pci8086,10ea alias=pci8086,10eb alias=pci8086,10ef alias=pci8086,10f0 alias=pci8086,10f5 alias=pci8086,10f6 alias=pci8086,1502 alias=pci8086,1503 alias=pci8086,150c alias=pci8086,153a alias=pci8086,153b alias=pci8086,1559 alias=pci8086,155a alias=pci8086,156f alias=pci8086,1570 alias=pci8086,15a0 alias=pci8086,15a1 alias=pci8086,15a2 alias=pci8086,15a3 alias=pci8086,15b7 alias=pci8086,15b8 alias=pci8086,15b9 alias=pci8086,15bb alias=pci8086,15bc alias=pci8086,15bd alias=pci8086,15be alias=pci8086,15d6 alias=pci8086,15d7 alias=pci8086,15d8 alias=pci8086,15df alias=pci8086,15e0 alias=pci8086,15e1 alias=pci8086,15e2 alias=pci8086,15e3 alias=pci8086,15f4,p alias=pci8086,15f5,p alias=pci8086,15f9,p alias=pci8086,15fa,p alias=pci8086,15fb,p alias=pci8086,15fc,p alias=pci8086,1a1c,p alias=pci8086,1a1d,p alias=pci8086,1a1e,p alias=pci8086,1a1f,p alias=pci8086,294c alias=pci8086,550a,p alias=pci8086,550b,p alias=pci8086,550c,p alias=pci8086,550d,p alias=pci8086,550e,p alias=pci8086,550f,p alias=pci8086,5510,p alias=pci8086,5511,p alias=pci8086,57a0,p alias=pci8086,57a1,p alias=pci8086,57b3,p alias=pci8086,57b4,p alias=pci8086,57b5,p alias=pci8086,57b6,p alias=pci8086,57b7,p alias=pci8086,57b8,p alias=pci8086,57b9,p alias=pci8086,57ba,p alias=pci8086,f0fe alias=pciex8086,d4c alias=pciex8086,d4d alias=pciex8086,d4e alias=pciex8086,d4f alias=pciex8086,d53 alias=pciex8086,d55 alias=pciex8086,dc5 alias=pciex8086,dc6 alias=pciex8086,dc7 alias=pciex8086,dc8 alias=pciex8086,1049 alias=pciex8086,104a alias=pciex8086,104b alias=pciex8086,104c alias=pciex8086,104d alias=pciex8086,105e alias=pciex8086,105f alias=pciex8086,1060 alias=pciex8086,107d alias=pciex8086,107e alias=pciex8086,107f alias=pciex8086,108b alias=pciex8086,108c alias=pciex8086,1096 alias=pciex8086,1098 alias=pciex8086,109a alias=pciex8086,10a4 alias=pciex8086,10a5 alias=pciex8086,10b9 alias=pciex8086,10ba alias=pciex8086,10bb alias=pciex8086,10bc alias=pciex8086,10bd alias=pciex8086,10bf alias=pciex8086,10c0 alias=pciex8086,10c2 alias=pciex8086,10c3 alias=pciex8086,10c4 alias=pciex8086,10c5 alias=pciex8086,10cb alias=pciex8086,10cc alias=pciex8086,10cd alias=pciex8086,10ce alias=pciex8086,10d3 alias=pciex8086,10d5 alias=pciex8086,10d9 alias=pciex8086,10da alias=pciex8086,10de alias=pciex8086,10df alias=pciex8086,10e5 alias=pciex8086,10ea alias=pciex8086,10eb alias=pciex8086,10ef alias=pciex8086,10f0 alias=pciex8086,10f5 alias=pciex8086,10f6 alias=pciex8086,1502 alias=pciex8086,1503 alias=pciex8086,150c alias=pciex8086,153a alias=pciex8086,153b alias=pciex8086,1559 alias=pciex8086,155a alias=pciex8086,156f alias=pciex8086,1570 alias=pciex8086,15a0 alias=pciex8086,15a1 alias=pciex8086,15a2 alias=pciex8086,15a3 alias=pciex8086,15b7 alias=pciex8086,15b8 alias=pciex8086,15b9 alias=pciex8086,15bb alias=pciex8086,15bc alias=pciex8086,15bd alias=pciex8086,15be alias=pciex8086,15d6 alias=pciex8086,15d7 alias=pciex8086,15d8 alias=pciex8086,15df alias=pciex8086,15e0 alias=pciex8086,15e1 alias=pciex8086,15e2 alias=pciex8086,15e3 alias=pciex8086,15f4 alias=pciex8086,15f5 alias=pciex8086,15f9 alias=pciex8086,15fa alias=pciex8086,15fb alias=pciex8086,15fc alias=pciex8086,1a1c alias=pciex8086,1a1d alias=pciex8086,1a1e alias=pciex8086,1a1f alias=pciex8086,294c alias=pciex8086,550a alias=pciex8086,550b alias=pciex8086,550c alias=pciex8086,550d alias=pciex8086,550e alias=pciex8086,550f alias=pciex8086,5510 alias=pciex8086,5511 alias=pciex8086,57a0 alias=pciex8086,57a1 alias=pciex8086,57b3 alias=pciex8086,57b4 alias=pciex8086,57b5 alias=pciex8086,57b6 alias=pciex8086,57b7 alias=pciex8086,57b8 alias=pciex8086,57b9 alias=pciex8086,57ba alias=pciex8086,f0fe
+driver name=efe perms="* 0666 root sys" clone_perms="efe 0666 root sys" alias=pci10b8,5
+driver name=elxl perms="* 0666 root sys" clone_perms="elxl 0666 root sys" alias=pci10b7,9000 alias=pci10b7,9001 alias=pci10b7,9004 alias=pci10b7,9005 alias=pci10b7,9006 alias=pci10b7,9050 alias=pci10b7,9051 alias=pci10b7,9055 alias=pci10b7,9056 alias=pci10b7,905a alias=pci10b7,9200 alias=pci10b7,9201 alias=pci10b7,9202 alias=pci10b7,9800 alias=pci10b7,9805
+driver name=emlxs perms="* 0666 root sys" class=fibre-channel alias=lpfs alias=pci10df,f0a5 alias=pci10df,f800 alias=pci10df,f900 alias=pci10df,f980 alias=pci10df,fa00 alias=pci10df,fc00 alias=pci10df,fc10 alias=pci10df,fc20 alias=pci10df,fd00 alias=pci10df,fe00 alias=pciex10df,e200 alias=pciex10df,e300 alias=pciex10df,f100 alias=pciex10df,f111 alias=pciex10df,f112 alias=pciex10df,f400 alias=pciex10df,f410 alias=pciex10df,fc20 alias=pciex10df,fc40 alias=pciex10df,fe00 alias=pciex10df,fe05 alias=pciex117c,63 alias=pciex117c,64 alias=pciex117c,65 alias=pciex117c,94 alias=pciex19a2,704 alias=pciex19a2,714
+driver name=oce perms="* 0666 root sys" alias=pciex19a2,700 alias=pciex19a2,710
+driver name=ena perms="* 0666 root sys" clone_perms="ena 0666 root sys" alias=pciex1d0f,ec2 alias=pciex1d0f,1ec2 alias=pciex1d0f,ec20 alias=pciex1d0f,ec21
+driver name=eibnx perms="* 0666 root sys"
+driver name=eoib perms="* 0666 root sys" clone_perms="eoib 0666 root sys"
+driver name=fcip perms="* 0600 root sys"
+driver name=fcoe perms="* 0600 root sys"
+driver name=fcoei perms="* 0600 root sys"
+driver name=fcoet perms="* 0600 root sys"
+driver name=fcp perms="* 0600 root sys"
+driver name=fcsm perms="* 0600 root sys"
+driver name=fp perms="* 0600 root sys"
+driver name=hermon perms="* 0666 root sys" alias=pciex15b3,6340 alias=pciex15b3,634a alias=pciex15b3,6732 alias=pciex15b3,673c alias=pciex15b3,6746
+driver name=hme alias=pci108e,1001
+driver name=hxge perms="* 0600 root sys" alias=pci108e,aaaa
+driver name=i40e perms="* 0666 root sys" clone_perms="i40e 0666 root sys" alias=pciex8086,cf8 alias=pciex8086,d58 alias=pciex8086,101f alias=pciex8086,104e alias=pciex8086,104f alias=pciex8086,1572 alias=pciex8086,1580 alias=pciex8086,1581 alias=pciex8086,1583 alias=pciex8086,1584 alias=pciex8086,1585 alias=pciex8086,1586 alias=pciex8086,1589 alias=pciex8086,158a alias=pciex8086,158b alias=pciex8086,15ff alias=pciex8086,37ce alias=pciex8086,37cf alias=pciex8086,37d0 alias=pciex8086,37d1 alias=pciex8086,37d2 alias=pciex8086,37d3
+driver name=ib perms="* 0644 root sys"
+driver name=ibp perms="* 0666 root sys" clone_perms="ibp 0666 root sys" alias=ib.ipib
+driver name=igb perms="* 0666 root sys" clone_perms="igb 0666 root sys" alias=pciex8086,438 alias=pciex8086,10a7 alias=pciex8086,10a9 alias=pciex8086,10c9 alias=pciex8086,10d6 alias=pciex8086,10e6 alias=pciex8086,10e7 alias=pciex8086,10e8 alias=pciex8086,150a alias=pciex8086,150d alias=pciex8086,150e alias=pciex8086,150f alias=pciex8086,1510 alias=pciex8086,1511 alias=pciex8086,1516 alias=pciex8086,1518 alias=pciex8086,1521 alias=pciex8086,1522 alias=pciex8086,1523 alias=pciex8086,1524 alias=pciex8086,1526 alias=pciex8086,1533 alias=pciex8086,1534 alias=pciex8086,1535 alias=pciex8086,1536 alias=pciex8086,1537 alias=pciex8086,1538 alias=pciex8086,1539 alias=pciex8086,1546 alias=pciex8086,157b alias=pciex8086,157c alias=pciex8086,1f40 alias=pciex8086,1f41 alias=pciex8086,1f45
+driver name=igc alias=pciex8086,d9f alias=pciex8086,125b alias=pciex8086,125c alias=pciex8086,125d alias=pciex8086,125e alias=pciex8086,125f alias=pciex8086,15f2 alias=pciex8086,15f3 alias=pciex8086,15f7 alias=pciex8086,15f8 alias=pciex8086,15fd alias=pciex8086,3100 alias=pciex8086,3101 alias=pciex8086,3102 alias=pciex8086,5502 alias=pciex8086,5503
+driver name=iprb perms="* 0666 root sys" clone_perms="iprb 0666 root sys" alias=pci8086,1029 alias=pci8086,1030 alias=pci8086,1031 alias=pci8086,1032 alias=pci8086,1038 alias=pci8086,1039 alias=pci8086,103d alias=pci8086,1050 alias=pci8086,1059 alias=pci8086,1064 alias=pci8086,1068 alias=pci8086,1069 alias=pci8086,1092 alias=pci8086,1209 alias=pci8086,1229 alias=pci8086,2449 alias=pci8086,27dc
+driver name=ipw perms="* 0666 root sys" clone_perms="ipw 0666 root sys" alias=pci8086,1043
+driver name=iwh perms="* 0666 root sys" clone_perms="iwh 0666 root sys" alias=pciex8086,4232 alias=pciex8086,4235 alias=pciex8086,4237 alias=pciex8086,423a alias=pciex8086,423b alias=pciex8086,423c alias=pciex8086,423d
+driver name=iwi perms="* 0666 root sys" clone_perms="iwi 0666 root sys" alias=pci8086,4220 alias=pci8086,4223 alias=pci8086,4223.8086.1000 alias=pci8086,4223.8086.1001 alias=pci8086,4224 alias=pci8086,4224.8086.1010 alias=pci8086,4224.8086.1011
+driver name=iwk perms="* 0666 root sys" clone_perms="iwk 0666 root sys" alias=pciex8086,4229 alias=pciex8086,4230
+driver name=iwn perms="* 0666 root sys" clone_perms="iwn 0666 root sys" alias=pciex8086,82 alias=pciex8086,83 alias=pciex8086,84 alias=pciex8086,85 alias=pciex8086,87 alias=pciex8086,89 alias=pciex8086,8a alias=pciex8086,8b alias=pciex8086,8d alias=pciex8086,8e alias=pciex8086,90 alias=pciex8086,91 alias=pciex8086,887 alias=pciex8086,888 alias=pciex8086,88e alias=pciex8086,88f alias=pciex8086,890 alias=pciex8086,891 alias=pciex8086,892 alias=pciex8086,893 alias=pciex8086,894 alias=pciex8086,895 alias=pciex8086,896 alias=pciex8086,897 alias=pciex8086,8ae alias=pciex8086,8af alias=pciex8086,422b alias=pciex8086,422c alias=pciex8086,4236 alias=pciex8086,4238 alias=pciex8086,4239
+driver name=iwp perms="* 0666 root sys" clone_perms="iwp 0666 root sys"
+driver name=ixgb perms="* 0666 root root" alias=pci8086,1048 alias=pci8086,109e alias=pci8086,1a48 alias=pci8086,a11f
+driver name=ixgbe perms="* 0666 root sys" clone_perms="ixgbe 0666 root sys" alias=pciex8086,10b6 alias=pciex8086,10c6 alias=pciex8086,10c7 alias=pciex8086,10c8 alias=pciex8086,10db alias=pciex8086,10dd alias=pciex8086,10e1 alias=pciex8086,10ec alias=pciex8086,10f1 alias=pciex8086,10f4 alias=pciex8086,10f7 alias=pciex8086,10f8 alias=pciex8086,10f9 alias=pciex8086,10fb alias=pciex8086,10fc alias=pciex8086,1507 alias=pciex8086,1508 alias=pciex8086,150b alias=pciex8086,1514 alias=pciex8086,1517 alias=pciex8086,151c alias=pciex8086,1528 alias=pciex8086,154a alias=pciex8086,154d alias=pciex8086,1557 alias=pciex8086,1558 alias=pciex8086,1560 alias=pciex8086,1563 alias=pciex8086,15aa alias=pciex8086,15ab alias=pciex8086,15ac alias=pciex8086,15ad alias=pciex8086,15ae alias=pciex8086,15c2 alias=pciex8086,15c3 alias=pciex8086,15c4 alias=pciex8086,15c6 alias=pciex8086,15c7 alias=pciex8086,15c8 alias=pciex8086,15ca alias=pciex8086,15cc alias=pciex8086,15ce alias=pciex8086,15d1 alias=pciex8086,15e4 alias=pciex8086,15e5 alias=pciex8086,57ae alias=pciex8086,57af alias=pciex8086,57b0 alias=pciex8086,57b1 alias=pciex8086,57b2
+driver name=mlxcx alias=pciex15b3,1013 alias=pciex15b3,1014 alias=pciex15b3,1015 alias=pciex15b3,1016 alias=pciex15b3,1017 alias=pciex15b3,1018 alias=pciex15b3,1019 alias=pciex15b3,101a alias=pciex15b3,101b alias=pciex15b3,101c alias=pciex15b3,101d alias=pciex15b3,101e alias=pciex15b3,101f
+driver name=mwl perms="* 0666 root sys" clone_perms="mwl 0666 root sys" alias=pci11ab,2a0a alias=pci11ab,2a24
+driver name=mxfe perms="* 0666 root sys" clone_perms="mxfe 0666 root sys" alias=pci10d9,512 alias=pci10d9,531 alias=pci11ad,c115 alias=pci11fc,9881
+driver name=myri10ge perms="* 0666 root sys" clone_perms="myri10ge 0666 root sys" alias=pci14c1,8 alias=pci14c1,9 alias=pciex14c1,8 alias=pciex14c1,9
+driver name=nge perms="* 0666 root sys" clone_perms="nge 0666 root sys" alias=pci10de,37 alias=pci10de,38 alias=pci10de,56 alias=pci10de,57 alias=pci10de,df alias=pci10de,e6 alias=pci10de,268 alias=pci10de,269 alias=pci10de,372 alias=pci10de,373 alias=pci10de,3ee alias=pci10de,3ef alias=pci10de,760 alias=pci10de,ab0
+driver name=ntxn alias=pci4040,1 alias=pci4040,2 alias=pci4040,3 alias=pci4040,4 alias=pci4040,5 alias=pci4040,24 alias=pci4040,25 alias=pci4040,100
+driver name=nxge perms="* 0600 root sys" alias=SUNW,niusl alias=pciex108e,abcd
+driver name=sol_ucma perms="* 0666 root sys"
+driver name=sol_umad perms="* 0666 root sys"
+driver name=sol_uverbs perms="* 0666 root sys"
+driver name=pcn perms="* 0666 root sys" clone_perms="pcn 0666 root sys" alias=pci1022,2000 alias=pci103c,104c
+driver name=qede perms="* 0666 root sys" clone_perms="qede 0666 root sys" alias=pciex1077,1629 alias=pciex1077,1630 alias=pciex1077,1634 alias=pciex1077,1654 alias=pciex1077,1656 alias=pciex1077,1666 alias=pciex1077,8070 alias=pciex1077,8071 alias=pciex1077,8072 alias=pciex1077,8073
+driver name=qlc perms="* 0666 root sys" class=fibre-channel alias=pci1077,2200 alias=pci1077,2300 alias=pci1077,2312 alias=pci1077,2322 alias=pci1077,2422 alias=pciex1077,2031 alias=pciex1077,2071 alias=pciex1077,2261 alias=pciex1077,2432 alias=pciex1077,2532 alias=pciex1077,5432 alias=pciex1077,8001 alias=pciex1077,8021
+driver name=qlge perms="* 0666 root sys" alias=pciex1077,8000
+driver name=ral perms="* 0666 root sys" clone_perms="ral 0666 root sys" alias=pci1814,201
+driver name=rds perms="* 0644 root sys"
+driver name=rdsib perms="* 0644 root sys"
+driver name=rdsv3 perms="* 0644 root sys"
+driver name=rge perms="* 0666 root sys" clone_perms="rge 0666 root sys" alias=pci10ec,8136,p alias=pci10ec,8167,p alias=pci10ec,8168,p alias=pci10ec,8169,p alias=pci16ec,116,p alias=pciex10ec,8136 alias=pciex10ec,8168 alias=pciex10ec,8169
+driver name=rpcib perms="* 0644 root sys"
+driver name=rtls perms="* 0666 root sys" clone_perms="rtls 0666 root sys" alias=pci10ec,8139 alias=pci1113,1211 alias=pci1186,1300 alias=pci1186,1301
+driver name=rtw perms="* 0666 root sys" clone_perms="rtw 0666 root sys" alias=pci10ec,8180
+driver name=rum perms="* 0666 root sys" clone_perms="rum 0666 root sys" alias=usb7d1,3c03 alias=usb7d1,3c04 alias=usbb05,1723 alias=usb1044,800a alias=usb13b1,20 alias=usb148f,2573 alias=usb15a9,4
+driver name=rwd perms="* 0666 root sys" clone_perms="rwd 0666 root sys" alias=pci1814,401
+driver name=rwn perms="* 0666 root sys" clone_perms="rwn 0666 root sys" alias=pci1814,601 alias=pci1814,681 alias=pci1814,701 alias=pci1814,781 alias=pci1a3b,1059
+driver name=sdp perms="* 0644 root sys" perms="sdp 0666 root sys"
+driver name=sdpib perms="* 0644 root sys"
+driver name=sfe perms="* 0666 root root" alias=pci100b,20 alias=pci1039,900 alias=pci1039,7016
+driver name=sfxge perms="* 0666 root sys" clone_perms="sfxge 0666 root sys" alias=pci1924,803 alias=pci1924,810 alias=pci1924,813 alias=pci1924,901 alias=pci1924,903 alias=pci1924,923
+driver name=srpt perms="* 0644 root sys"
+driver name=tavor perms="* 0666 root sys" alias=pci15b3,5a44 alias=pci15b3,5a45 alias=pci15b3,6278 alias=pci15b3,6279 alias=pciex15b3,6278 alias=pciex15b3,6279
+driver name=uath perms="* 0666 root sys" clone_perms="uath 0666 root sys" alias=usbcf3,2 alias=usbcf3,3 alias=usb1385,4251 alias=usb1385,4252
+driver name=udmf perms="* 0666 root sys" clone_perms="udmf 0666 root sys" alias=usb7aa,9601 alias=usba46,268 alias=usba46,6688 alias=usba46,9601 alias=usbfe6,8101
+driver name=upf perms="* 0666 root sys" clone_perms="upf 0666 root sys" alias=usb334,1701 alias=usb3f0,811c alias=usb411,1 alias=usb411,5 alias=usb411,9 alias=usb45e,7a alias=usb49f,8511 alias=usb4bb,904 alias=usb4bb,913 alias=usb4bb,93a alias=usb506,4601 alias=usb50d,121 alias=usb557,2007 alias=usb56e,200c alias=usb56e,4002 alias=usb56e,4005 alias=usb56e,400b alias=usb56e,4010 alias=usb56e,abc1 alias=usb5cc,3000 alias=usb66b,8b4 alias=usb66b,200c alias=usb66b,2202 alias=usb66b,2203 alias=usb66b,2204 alias=usb66b,2206 alias=usb66b,400b alias=usb67c,1001 alias=usb707,200 alias=usb707,201 alias=usb7a6,986 alias=usb7a6,1986 alias=usb7a6,8511 alias=usb7a6,8513 alias=usb7a6,8515 alias=usb7aa,4 alias=usb7aa,d alias=usb7b8,110c alias=usb7b8,200c alias=usb7b8,4002 alias=usb7b8,4004 alias=usb7b8,4007 alias=usb7b8,400b alias=usb7b8,400c alias=usb7b8,4102 alias=usb7b8,4104 alias=usb7b8,abc1 alias=usb7c9,b100 alias=usb83a,1046 alias=usb83a,5046 alias=usb83a,b004 alias=usb846,1020 alias=usb8d1,3 alias=usb8dd,986 alias=usb8dd,987 alias=usb8dd,988 alias=usb8dd,8511 alias=usb951,a alias=usbb39,109 alias=usbb39,901 alias=usbdb7,2 alias=usbe66,400c alias=usb1044,8002 alias=usb1342,304 alias=usb15e8,9100 alias=usb15e8,9110 alias=usb2001,200c alias=usb2001,4001 alias=usb2001,4002 alias=usb2001,4003 alias=usb2001,400b alias=usb2001,4102 alias=usb2001,abc1
+driver name=ural perms="* 0666 root sys" clone_perms="ural 0666 root sys" alias=usb411,67 alias=usb1044,8007 alias=usb13b1,d alias=usb2001,3c00
+driver name=urf perms="* 0666 root sys" clone_perms="urf 0666 root sys" alias=usb411,12 alias=usb586,401a alias=usb7b8,401a alias=usbbda,8150 alias=usb1557,8150 alias=usb3980,3
+driver name=urtw perms="* 0666 root sys" clone_perms="urtw 0666 root sys" alias=usb50d,705e alias=usb769,11f2 alias=usb789,10c alias=usb846,4260 alias=usb846,6a00 alias=usbbda,8187 alias=usbbda,8189 alias=usbbda,8197 alias=usbbda,8198 alias=usbdf6,28 alias=usb114b,150 alias=usb1371,9401
+driver name=usbecm perms="* 0666 root sys" alias=usb430,a4a2 alias=usb,class2.6.0 alias=usbia,class2.6 alias=usbif,class2.6
+driver name=vioif perms="* 0666 root sys" alias=pci1af4,1 alias=pci1af4,1000,p alias=pci1af4,1041,p
+driver name=vmxnet3s perms="* 0666 root sys" clone_perms="vmxnet3s 0666 root sys" alias=pci15ad,7b0
+driver name=vr perms="* 0666 root sys" alias=pci1106,3043 alias=pci1106,3053 alias=pci1106,3065 alias=pci1106,3106
+driver name=wpi perms="* 0666 root sys" clone_perms="wpi 0666 root sys" alias=pciex8086,4222 alias=pciex8086,4222.8086.1000 alias=pciex8086,4222.8086.1001 alias=pciex8086,4222.8086.1005 alias=pciex8086,4222.8086.1034 alias=pciex8086,4222.8086.1040 alias=pciex8086,4222.8086.1041 alias=pciex8086,4222.8086.1044 alias=pciex8086,4222.8086.1050 alias=pciex8086,4222.8086.1053 alias=pciex8086,4227 alias=pciex8086,4227.8086.1011 alias=pciex8086,4227.8086.1012 alias=pciex8086,4227.8086.1014
+driver name=xge perms="* 0666 root sys" clone_perms="xge 0666 root sys" alias=pci17d5,5731 alias=pci17d5,5831 alias=pci17d5,5832
+driver name=yge perms="* 0666 root sys" alias=pciex1148,9e00 alias=pciex1186,4b00 alias=pciex11ab,4354 alias=pciex11ab,4355 alias=pciex11ab,4362 alias=pciex11ab,4363 alias=pciex11ab,4364 alias=pciex11ab,436a
+driver name=zyd perms="* 0666 root sys" clone_perms="zyd 0666 root sys" alias=usbace,1211 alias=usbace,1215 alias=usb13b1,24
+driver name=pcic class=pcmcia alias=pciclass,060500 alias=pciclass,060700
+driver name=pcs
+driver name=usbftdi perms="* 0666 root sys" alias=usb403,6001 alias=usb403,6014 alias=usb403,6015 alias=usb403,cc48 alias=usb403,cc49 alias=usb403,cc4a alias=usb403,e888 alias=usb403,e889 alias=usb403,e88b alias=usb403,e88c alias=usb403,fa00 alias=usb403,fa01 alias=usb403,fa02 alias=usb403,fa03 alias=usb403,fa04 alias=usb403,fc08 alias=usb403,fc09 alias=usb403,fc0b alias=usb403,fc0c alias=usb403,fc0d alias=usb403,fc82 alias=usb411,00b3 alias=usb7cc,0421 alias=usb856,ac01 alias=usb93c,0601 alias=usb93c,0701 alias=usbif403,6010.config1.1 alias=usbif9e88,9e8f.config1.1
+driver name=usbsacm perms="* 0666 root sys" alias=usbc88,17da alias=usb1410,1110 alias=usb,class2.2.0 alias=usbif,class2.2
+driver name=usbser_edge perms="* 0666 root sys" alias=usbif1608,1.100.config1.0 alias=usbif1608,1.config1.0 alias=usbif1608,3.config1.0 alias=usbif1608,4.config1.0 alias=usbif1608,5.config1.0 alias=usbif1608,6.config1.0 alias=usbif1608,7.config1.0 alias=usbif1608,c.config1.0 alias=usbif1608,d.config1.0 alias=usbif1608,e.config1.0 alias=usbif1608,f.config1.0 alias=usbif1608,10.config1.0 alias=usbif1608,11.config1.0 alias=usbif1608,12.config1.0 alias=usbif1608,13.config1.0 alias=usbif1608,14.config1.0 alias=usbif1608,201.config1.0 alias=usbif1608,205.config1.0 alias=usbif1608,206.config1.0 alias=usbif1608,207.config1.0 alias=usbif1608,20c.config1.0 alias=usbif1608,20d.config1.0 alias=usbif1608,215.config1.0 alias=usbif1608,217.config1.0 alias=usbif1608,21a.config1.0 alias=usbif1608,240.config1.0 alias=usbif1608,241.config1.0 alias=usbif1608,242.config1.0 alias=usbif1608,243.config1.0 alias=usbif1608,244.config1.0 alias=usbif1608,247.config1.0
+driver name=usbsksp perms="* 0666 root sys" alias=usb6cd,11a alias=usb6cd,121 alias=usb6cd,12a alias=usb6cd,131
+driver name=usbsprl perms="* 0666 root sys" alias=usb557,2008 alias=usb56e,5004 alias=usb5ad,fba alias=usb67b,2303 alias=usb67b,aaa2 alias=usb6189,2068
+driver name=aac class=scsi alias=pci1028,3 alias=pci1028,a alias=pci9005,285 alias=pci9005,286 alias=pciex9005,285 alias=pciex9005,286
+driver name=adpu320 perms="adpu320ctl 0666 root root" class=scsi alias=pci9005,8000 alias=pci9005,800f.9005.5f alias=pci9005,8010 alias=pci9005,8011 alias=pci9005,8012 alias=pci9005,8014 alias=pci9005,8015 alias=pci9005,8016 alias=pci9005,8017 alias=pci9005,801d alias=pci9005,801e alias=pci9005,801f alias=pci9005,808f
+driver name=ahci perms="* 0644 root sys" class=scsi-self-identifying alias=pci8086,2822,p alias=pci8086,282a,p alias=pciclass,010601
+driver name=amr class=scsi alias=pci1000,532 alias=pci1028,e alias=pci1028,f alias=pci1028,493 alias=pci1028,518 alias=pci1028,520
+driver name=arcmsr perms="* 0600 root sys" class=scsi alias=pci17d3,1110 alias=pci17d3,1120 alias=pci17d3,1130 alias=pci17d3,1160 alias=pci17d3,1170 alias=pci17d3,1201 alias=pci17d3,1210 alias=pci17d3,1220 alias=pci17d3,1230 alias=pci17d3,1260 alias=pci17d3,1270 alias=pci17d3,1280 alias=pci17d3,1380 alias=pci17d3,1381 alias=pci17d3,1680 alias=pci17d3,1681 alias=pci17d3,1880 alias=pci17d3,1882
+driver name=ata class=dada class=scsi alias=ide
+driver name=pci-ide
+driver name=bcm_sata perms="* 0644 root sys" class=scsi-self-identifying alias=pci1166,24a
+driver name=blkdev perms="* 0640 root root"
+driver name=cpqary3 class=scsi alias=pci103c,1920 alias=pci103c,1921 alias=pci103c,1922 alias=pci103c,1923 alias=pci103c,1924 alias=pci103c,1926 alias=pci103c,1928 alias=pci103c,21bd alias=pci103c,21be alias=pci103c,21bf alias=pci103c,21c0 alias=pci103c,21c1 alias=pci103c,21c2 alias=pci103c,21c3 alias=pci103c,21c5 alias=pci103c,21c6 alias=pci103c,21c7 alias=pci103c,21c8 alias=pci103c,21ca alias=pci103c,21cb alias=pci103c,21cc alias=pci103c,21cd alias=pci103c,21ce alias=pci103c,3211 alias=pci103c,3212 alias=pci103c,3223 alias=pci103c,3225 alias=pci103c,3234 alias=pci103c,3235 alias=pci103c,3237 alias=pci103c,323d alias=pci103c,3241 alias=pci103c,3243 alias=pci103c,3245 alias=pci103c,3247 alias=pci103c,3249 alias=pci103c,324a alias=pci103c,324b alias=pci103c,3350 alias=pci103c,3351 alias=pci103c,3352 alias=pci103c,3353 alias=pci103c,3354 alias=pci103c,3355 alias=pci103c,3356 alias=pcie11,4070 alias=pcie11,4080 alias=pcie11,4082 alias=pcie11,4083 alias=pcie11,4091 alias=pcie11,409a alias=pcie11,409b alias=pcie11,409c alias=pcie11,409d alias=pcie11,409e variant.smrt.aliases=false
+driver name=cpqary3 class=scsi alias=pci103c,3211 alias=pci103c,3212 alias=pci103c,3223 alias=pci103c,3225 alias=pci103c,3234 alias=pci103c,3235 alias=pci103c,3237 alias=pci103c,323d alias=pcie11,4070 alias=pcie11,4080 alias=pcie11,4082 alias=pcie11,4083 alias=pcie11,4091 alias=pcie11,409a alias=pcie11,409b alias=pcie11,409c alias=pcie11,409d alias=pcie11,409e variant.smrt.aliases=true
+driver name=glm perms="* 0755 root sys" class=scsi alias=pci1000,b
+driver name=lmrc class=scsi-self-identifying alias=pciex1000,14 alias=pciex1000,15 alias=pciex1000,16 alias=pciex1000,17 alias=pciex1000,1b alias=pciex1000,1c alias=pciex1000,10e0 alias=pciex1000,10e1 alias=pciex1000,10e2 alias=pciex1000,10e3 alias=pciex1000,10e4 alias=pciex1000,10e5 alias=pciex1000,10e6 alias=pciex1000,10e7
+driver name=lsimega class=scsi alias=pci1000,407 alias=pci1000,407.1000.532 alias=pci1000,408 alias=pci1000,408.1000.2 alias=pci1000,409 alias=pci1000,1960 alias=pci1028,13
+driver name=marvell88sx perms="* 0644 root sys" class=scsi-self-identifying alias=pci11ab,5040 alias=pci11ab,5041 alias=pci11ab,5080 alias=pci11ab,5081 alias=pci11ab,6041.9 alias=pci11ab,6081.9
+driver name=mega_sas class=scsi alias=pci1000,57.8086.3002 alias=pci1000,60.1000.1006 alias=pci1000,60.1000.100a alias=pci1000,60.1000.100e alias=pci1000,60.1000.100f alias=pci1000,60.1000.1010 alias=pci1000,60.1000.1011 alias=pci1000,60.1000.1012 alias=pci1000,60.1000.1013 alias=pci1000,60.1000.1014 alias=pci1000,60.1000.1015 alias=pci1000,60.1000.1016 alias=pci1000,60.1000.1017 alias=pci1000,60.1000.1018 alias=pci1000,60.1000.1019 alias=pci1000,60.1000.101a alias=pci1000,60.1000.101b alias=pci1000,60.1000.1021 alias=pci1000,60.1000.1022 alias=pci1000,60.1014.363 alias=pci1000,60.1014.364 alias=pci1000,60.1014.365 alias=pci1000,60.1014.379 alias=pci1000,60.1014.3a2 alias=pci1000,60.1014.3ac alias=pci1000,60.1028.1f0a alias=pci1000,60.1028.1f0b alias=pci1000,60.1028.1f0c alias=pci1000,60.1028.1f0d alias=pci1000,60.1028.1f11 alias=pci1000,60.1033.835a alias=pci1000,60.1033.836e alias=pci1000,60.1043.824d alias=pci1000,60.1054.3019 alias=pci1000,60.1170.2f alias=pci1000,60.1170.34 alias=pci1000,60.1170.36 alias=pci1000,60.1458.1000 alias=pci1000,60.15d9.c080 alias=pci1000,60.1734.10f9 alias=pci1000,60.1734.1102 alias=pci1000,60.1734.114b alias=pci1000,60.17aa.6b7c alias=pci1000,60.18a1.3 alias=pci1000,60.19e5.2001 alias=pci1000,60.19e5.2002 alias=pci1000,60.19e5.2003 alias=pci1000,60.19e5.2004 alias=pci1000,60.19e5.2005 alias=pci1000,60.19e5.2006 alias=pci1000,60.19e5.2010 alias=pci1000,60.19e5.2011 alias=pci1000,60.19e5.2012 alias=pci1000,60.19e5.2013 alias=pci1000,60.19e5.2014 alias=pci1000,60.19e5.2015 alias=pci1000,60.19e5.2016 alias=pci1000,60.19e5.2017 alias=pci1000,60.19e5.2018 alias=pci1000,60.19e5.2019 alias=pci1000,60.19e5.201a alias=pci1000,60.19e5.d203 alias=pci1000,60.1b0a.14 alias=pci1000,60.1fca.2163 alias=pci1000,60.1fca.2164 alias=pci1000,60.8086.1006 alias=pci1000,60.8086.100a alias=pci1000,60.8086.1010 alias=pci1000,60.8086.1013 alias=pci1000,60.8086.1021 alias=pci1000,60.8086.34cc alias=pci1000,60.8086.34cd alias=pci1000,60.8086.34e4 alias=pci1000,60.8086.3505 alias=pci1000,60.8086.3508 alias=pci1000,7c.1000.101c alias=pci1000,7c.1000.101d alias=pci1000,7c.1014.395 alias=pci1000,411.1000.1001 alias=pci1000,411.1000.1002 alias=pci1000,411.1000.1003 alias=pci1000,411.1000.1004 alias=pci1000,411.1000.1008 alias=pci1000,411.1000.100c alias=pci1000,411.1000.100d alias=pci1000,411.1000.2004 alias=pci1000,411.1000.2005 alias=pci1000,411.1033.8287 alias=pci1000,411.1054.3016 alias=pci1000,411.1734.1081 alias=pci1000,411.1734.10a3 alias=pci1000,411.8086.1001 alias=pci1000,411.8086.1003 alias=pci1000,411.8086.1008 alias=pci1000,411.8086.3490 alias=pci1000,411.8086.3500 alias=pci1000,411.8086.3501 alias=pci1000,411.8086.3504 alias=pci1000,411.8086.3507 alias=pci1000,413.1000.1005 alias=pci1028,15.1028.1f01 alias=pci1028,15.1028.1f02 alias=pci1028,15.1028.1f03
+driver name=mpt_sas class=scsi-self-identifying alias=pci1000,64 alias=pci1000,70 alias=pci1000,72 alias=pci1000,76 alias=pciex1000,64 alias=pciex1000,65 alias=pciex1000,6e alias=pciex1000,70 alias=pciex1000,72 alias=pciex1000,74 alias=pciex1000,76 alias=pciex1000,77 alias=pciex1000,7e alias=pciex1000,80 alias=pciex1000,81 alias=pciex1000,82 alias=pciex1000,83 alias=pciex1000,84 alias=pciex1000,85 alias=pciex1000,86 alias=pciex1000,87 alias=pciex1000,90 alias=pciex1000,91 alias=pciex1000,92 alias=pciex1000,93 alias=pciex1000,94 alias=pciex1000,95 alias=pciex1000,96 alias=pciex1000,97 alias=pciex1000,aa alias=pciex1000,ab alias=pciex1000,ac alias=pciex1000,ad alias=pciex1000,ae alias=pciex1000,af alias=pciex1000,c0 alias=pciex1000,c1 alias=pciex1000,c2 alias=pciex1000,c3 alias=pciex1000,c4 alias=pciex1000,c5 alias=pciex1000,c6 alias=pciex1000,c7 alias=pciex1000,c8 alias=pciex1000,c9 alias=pciex1000,d0 alias=pciex1000,d1 alias=pciex1000,d2 alias=pciex1000,e5 alias=pciex1000,e6
+driver name=mr_sas class=scsi-self-identifying alias=pciex1000,52 alias=pciex1000,53 alias=pciex1000,5b alias=pciex1000,5d alias=pciex1000,5f alias=pciex1000,71 alias=pciex1000,73 alias=pciex1000,78 alias=pciex1000,79 alias=pciex1000,ce alias=pciex1000,cf
+driver name=nv_sata perms="* 0644 root sys" class=scsi-self-identifying alias=pci10de,36 alias=pci10de,3e alias=pci10de,54 alias=pci10de,55 alias=pci10de,266 alias=pci10de,267 alias=pci10de,37e alias=pci10de,37f alias=pci10de,3f6 alias=pci10de,3f7
+driver name=nvme perms="* 0600 root sys" class=disk alias=pciclass,010802 alias=pciexclass,010802
+driver name=pmcs perms="* 0600 root sys" class=scsi-self-identifying alias=pciex11f8,8001
+driver name=pvscsi class=scsi-self-identifying alias=pci15ad,7c0
+driver name=scsa1394 perms="* 0666 root sys" alias=firewire00609e,010483
+driver name=sdhost perms="* 0644 root root" alias=pciclass,080500 alias=pciclass,080501
+driver name=ses perms="* 0666 bin bin" alias=scsiclass,03S alias=scsiclass,0d
+driver name=si3124 perms="* 0644 root sys" class=scsi-self-identifying alias=pci1095,3124 alias=pci1095,3132 alias=pci1095,3531
+driver name=skd perms="* 0600 root sys" class=disk alias=pciex1b39,1
+driver name=smartpqi class=scsi-self-identifying alias=pci9005,28f alias=pciex9005,28f
+driver name=smp perms="* 0644 root sys"
+driver name=smrt class=scsi-self-identifying alias=pci103c,1920 alias=pci103c,1921 alias=pci103c,1922 alias=pci103c,1923 alias=pci103c,1924 alias=pci103c,1926 alias=pci103c,1928 alias=pci103c,21bd alias=pci103c,21be alias=pci103c,21bf alias=pci103c,21c0 alias=pci103c,21c1 alias=pci103c,21c2 alias=pci103c,21c3 alias=pci103c,21c5 alias=pci103c,21c6 alias=pci103c,21c7 alias=pci103c,21c8 alias=pci103c,21ca alias=pci103c,21cb alias=pci103c,21cc alias=pci103c,21cd alias=pci103c,21ce alias=pci103c,3241 alias=pci103c,3243 alias=pci103c,3245 alias=pci103c,3247 alias=pci103c,3249 alias=pci103c,324a alias=pci103c,324b alias=pci103c,3350 alias=pci103c,3351 alias=pci103c,3352 alias=pci103c,3353 alias=pci103c,3354 alias=pci103c,3355 alias=pci103c,3356 variant.smrt.aliases=true
+driver name=smrt class=scsi-self-identifying variant.smrt.aliases=false
+driver name=vio9p perms="* 0600 root root" alias=pci1af4,9 alias=pci1af4,1049,p
+driver name=vioblk perms="* 0666 root sys" clone_perms="vioblk 0666 root sys" alias=pci1af4,1001 alias=pci1af4,1042,p
+driver name=vioscsi class=scsi-self-identifying alias=pci1af4,1004 alias=pci1af4,1048,p
+driver name=ugen perms="* 0644 root sys"
+driver name=ehci perms="* 0644 root sys" alias=pciclass,0c0320
+driver name=hid perms="* 0600 root sys" alias=usbif,class3
+driver name=hubd perms="* 0644 root sys" alias=usbif,class9
+driver name=ohci perms="* 0644 root sys" alias=pciclass,0c0310
+driver name=scsa2usb alias=usb584,222 alias=usbif,class8
+driver name=uhci perms="* 0644 root sys" alias=pciclass,0c0300
+driver name=usb_ac perms="* 0600 root sys" alias=usbif,class1.1
+driver name=usb_as perms="* 0600 root sys" alias=usbif,class1.2
+driver name=usb_ia alias=usb,ia
+driver name=usb_mid alias=usb,device
+driver name=usbprn perms="* 0666 root sys" alias=usbif,class7.1
+driver name=xhci perms="* 0644 root sys" alias=pciclass,0c0330
+driver name=xsvc devlink=type=ddi_pseudo;name=xsvc\t\M0
+driver name=xpv alias=pci5853,1.1
+driver name=ipd perms="* 0600 root sys"
+driver name=ipf perms="* 0666 root sys" policy="read_priv_set=sys_ip_config write_priv_set=sys_ip_config"
+driver name=iscsi perms="* 0600 root sys" class=scsi-self-identify
+driver name=iser perms="* 0600 root sys"
+driver name=iscsit perms="* 0600 root sys"
+driver name=fm perms="* 0644 root sys"
+driver name=smbsrv perms="* 0640 root sys"
+driver name=pool perms="pool 0666 root sys" perms="poolctl 0666 root sys"
+driver name=vscan perms="* 0640 root sys"
+driver name=fct perms="* 0666 root sys"
+driver name=pppt perms="* 0666 root sys"
+driver name=qlt perms="* 0666 root sys"
+driver name=stmf perms="* 0666 root sys"
+driver name=stmf_sbd perms="* 0666 root sys"
+driver name=vmm_drv_test perms="* 0666 root sys" policy="read_priv_set=sys_devices write_priv_set=sys_devices"
+driver name=ppt
+driver name=viona
+driver name=vmm
+driver name=nsmb perms="* 0666 root sys"
+driver name=zut perms="* 0666 root sys"
+driver name=zfs perms="* 0600 root sys" perms="zfs 0666 root sys"
+driver name=kgpio
+driver name=at24c alias=at24c01 alias=at24c016 alias=at24c02 alias=at24c04 alias=at24c08 alias=at24c1024 alias=at24c128 alias=at24c256 alias=at24c32 alias=at24c512 alias=at24c64 alias=atmel,at24c01 alias=atmel,at24c016 alias=atmel,at24c02 alias=atmel,at24c04 alias=atmel,at24c08 alias=atmel,at24c1024 alias=atmel,at24c128 alias=atmel,at24c256 alias=atmel,at24c32 alias=atmel,at24c512 alias=atmel,at24c64
+driver name=ee100x alias=ee1004
+driver name=i2cnex
+driver name=ismt alias=pci8086,c59 alias=pci8086,c5a alias=pci8086,18ac alias=pci8086,19ac alias=pci8086,1bff alias=pci8086,1f15 alias=pciex8086,c59 alias=pciex8086,c5a alias=pciex8086,18ac alias=pciex8086,19ac alias=pciex8086,1bff alias=pciex8086,1f15
+driver name=lm7x alias=lm75 alias=lm75a alias=lm75b alias=lm76 alias=lm77 alias=national,lm75 alias=national,lm75a alias=national,lm75b alias=national,lm76 alias=national,lm77
+driver name=ltc430x alias=lltc,ltc4305 alias=lltc,ltc4306 alias=ltc4305 alias=ltc4306
+driver name=pca953x alias=nxp,pca9505 alias=nxp,pca9506 alias=nxp,pca9535 alias=nxp,pca9539 alias=pca9505 alias=pca9506 alias=pca9535 alias=pca9539
+driver name=pca954x alias=nxp,pca9543 alias=nxp,pca9545 alias=nxp,pca9546 alias=nxp,pca9548 alias=nxp,pca9846 alias=nxp,pca9848 alias=pca9543 alias=pca9545 alias=pca9546 alias=pca9548 alias=pca9846 alias=pca9848
+driver name=pchsmbus alias=pci8086,2a3 alias=pci8086,6a3 alias=pci8086,f12 alias=pci8086,18df alias=pci8086,19df alias=pci8086,1bc9 alias=pci8086,1cc2 alias=pci8086,1d22 alias=pci8086,1d70 alias=pci8086,1d71 alias=pci8086,1d72 alias=pci8086,1e22 alias=pci8086,2330 alias=pci8086,23b0 alias=pci8086,2413 alias=pci8086,2423 alias=pci8086,2443 alias=pci8086,2483 alias=pci8086,24c3 alias=pci8086,24d3 alias=pci8086,25a4 alias=pci8086,266a alias=pci8086,269b alias=pci8086,27da alias=pci8086,283e alias=pci8086,2930 alias=pci8086,31d4 alias=pci8086,34a3 alias=pci8086,3a30 alias=pci8086,3a60 alias=pci8086,3b30 alias=pci8086,43a3 alias=pci8086,4b23 alias=pci8086,4da3 alias=pci8086,51a3 alias=pci8086,54a3 alias=pci8086,5ad4 alias=pci8086,6e23 alias=pci8086,7722 alias=pci8086,7a23 alias=pci8086,7aa3 alias=pci8086,7e22 alias=pci8086,7f23 alias=pci8086,8ca2 alias=pci8086,8cc2 alias=pci8086,8d22 alias=pci8086,8d7d alias=pci8086,8d7e alias=pci8086,8d7f alias=pci8086,9c22 alias=pci8086,9ca2 alias=pci8086,a0a3 alias=pci8086,a123 alias=pci8086,a1a3 alias=pci8086,a223 alias=pci8086,a2a3 alias=pci8086,a323 alias=pci8086,e322 alias=pci8086,e422
+driver name=spd511x alias=spd5118
+driver name=tmp43x alias=ti,tmp401 alias=ti,tmp411 alias=ti,tmp431 alias=ti,tmp432 alias=ti,tmp435 alias=tmp401 alias=tmp411 alias=tmp431 alias=tmp432 alias=tmp435
+driver name=ts511x alias=ts5110 alias=ts5111 alias=ts5210 alias=ts5211
+driver name=cpc perms="shared 0666 root sys"
+driver name=xdt
+driver name=dcpc
+driver name=dtrace perms="* 0666 root sys"
+driver name=fasttrap perms="fasttrap 0666 root sys"
+driver name=fbt perms="fbt 0644 root sys"
+driver name=lockstat perms="* 0644 root sys"
+driver name=profile perms="profile 0644 root sys"
+driver name=sdt perms="sdt 0644 root sys"
+driver name=systrace perms="systrace 0644 root sys"
+driver name=dr alias=acpidr_sbd
+driver name=acpinex alias=acpivirtnex
+driver name=acpippm
+driver name=amd_iommu perms="* 0644 root sys" alias=pci1002,5a23 alias=pci1022,11ff
+driver name=balloon perms="* 0444 root sys"
+driver name=cpudrv alias=cpu
+driver name=domcaps perms="* 0444 root sys"
+driver name=evtchn perms="* 0666 root sys"
+driver name=isa class=sysbus alias=pciclass,060100
+driver name=npe alias=pciex_root_complex
+driver name=pci class=pci
+driver name=pit_beep alias=SUNW,pit_beep
+driver name=ppm
+driver name=privcmd perms="* 0666 root sys"
+driver name=rootnex
+driver name=xdb
+driver name=xdf
+driver name=xenbus perms="* 0666 root sys"
+driver name=xencons
+driver name=xnbe alias=xnb,ioemu
+driver name=xnbo alias=xnb alias=xnb,SUNW_mac
+driver name=xnbu alias=xnb,netfront
+driver name=xnf
+driver name=xpvd
+driver name=xpvtap perms="* 0666 root sys"
+driver name=pm perms="* 0666 root sys"
+driver name=srn
+driver name=acpi_drv perms="* 0666 root sys"
+driver name=aggr perms="* 0666 root sys"
+driver name=arp perms="arp 0666 root sys"
+driver name=bl perms="* 0666 root sys"
+driver name=bridge clone_perms="bridge 0666 root sys" policy="read_priv_set=net_rawaccess write_priv_set=net_rawaccess"
+driver name=clone
+driver name=cn perms="* 0620 root tty"
+driver name=conskbd perms="kbd 0666 root sys"
+driver name=consms perms="mouse 0666 root sys"
+driver name=cpuid perms="self 0644 root sys"
+driver name=cpunex alias=cpus
+driver name=crypto perms="crypto 0666 root sys"
+driver name=cryptoadm perms="cryptoadm 0644 root sys"
+driver name=devinfo perms="devinfo 0640 root sys" perms="devinfo,ro 0444 root sys"
+driver name=dld perms="* 0666 root sys"
+driver name=dlpistub perms="* 0666 root sys"
+driver name=eedev
+driver name=i8042
+driver name=icmp perms="icmp 0666 root sys" policy="read_priv_set=net_icmpaccess write_priv_set=net_icmpaccess"
+driver name=icmp6 perms="icmp6 0666 root sys" policy="read_priv_set=net_icmpaccess write_priv_set=net_icmpaccess"
+driver name=intel_nb5000 alias=pci8086,25c0 alias=pci8086,25d0 alias=pci8086,25d4 alias=pci8086,25d8 alias=pci8086,3600 alias=pci8086,4000 alias=pci8086,4001 alias=pci8086,4003 alias=pci8086,65c0
+driver name=intel_nhm alias=pci8086,3423 alias=pci8086,372a
+driver name=intel_nhmex alias=pci8086,3438
+driver name=ip perms="ip 0666 root sys" policy="read_priv_set=net_rawaccess write_priv_set=net_rawaccess"
+driver name=ip6 perms="ip6 0666 root sys" policy="read_priv_set=net_rawaccess write_priv_set=net_rawaccess"
+driver name=ipnet perms="lo0 0666 root sys" policy="read_priv_set=net_observability write_priv_set=net_observability"
+driver name=ippctl
+driver name=ipsecah perms="ipsecah 0666 root sys" policy="read_priv_set=sys_ip_config write_priv_set=sys_ip_config"
+driver name=ipsecesp perms="ipsecesp 0666 root sys" policy="read_priv_set=sys_ip_config write_priv_set=sys_ip_config"
+driver name=iptun
+driver name=iwscn
+driver name=kb8042 alias=pnpPNP,303
+driver name=keysock perms="keysock 0666 root sys" policy="read_priv_set=sys_ip_config write_priv_set=sys_ip_config"
+driver name=kmdb
+driver name=llc1 clone_perms="llc1 0666 root sys"
+driver name=lofi perms="* 0600 root sys" perms="ctl 0644 root sys"
+driver name=log perms="conslog 0666 root sys" perms="log 0640 root sys"
+driver name=mc-amd alias=pci1022,1100 alias=pci1022,1101 alias=pci1022,1102
+driver name=mm perms="allkmem 0600 root sys" perms="full 0666 root sys" perms="kmem 0640 root sys" perms="mem 0640 root sys" perms="null 0666 root sys" perms="zero 0666 root sys" policy="allkmem read_priv_set=all write_priv_set=all" policy="kmem read_priv_set=none write_priv_set=all" policy="mem read_priv_set=none write_priv_set=all"
+driver name=mouse8042 alias=pnpPNP,f03
+driver name=mpt class=scsi alias=pci1000,30 alias=pci1000,50 alias=pci1000,54 alias=pci1000,56 alias=pci1000,58 alias=pci1000,62 alias=pciex1000,56 alias=pciex1000,58 alias=pciex1000,62
+driver name=nulldriver alias=scsa,nodev alias=scsa,probe
+driver name=openeepr perms="openprom 0640 root sys" policy=write_priv_set=all
+driver name=options
+driver name=pci_pci class=pci alias=pci1011,1 alias=pci1011,21 alias=pci1014,22 alias=pciclass,060400 alias=pciclass,060401
+driver name=pcieb alias=pciexclass,060400 alias=pciexclass,060401
+driver name=physmem perms="* 0600 root sys"
+driver name=poll perms="* 0666 root sys"
+driver name=power
+driver name=pseudo alias=zconsnex
+driver name=ptc perms="* 0666 root sys"
+driver name=ptsl perms="* 0666 root sys"
+driver name=ramdisk perms="* 0600 root sys" perms="ctl 0644 root sys"
+driver name=random perms="* 0644 root sys" policy=write_priv_set=sys_devices
+driver name=rts perms="rts 0666 root sys"
+driver name=sad perms="admin 0666 root sys" perms="user 0666 root sys"
+driver name=scsi_vhci perms="* 0666 root sys" class=scsi-self-identifying policy="devctl write_priv_set=sys_devices"
+driver name=sd perms="* 0640 root sys" alias=scsiclass,00 alias=scsiclass,05
+driver name=sgen perms="* 0600 root sys" alias=scsa,08.bfcp alias=scsa,08.bvhci
+driver name=signalfd perms="* 0666 root sys"
+driver name=simnet perms="* 0666 root sys" clone_perms="simnet 0666 root sys"
+driver name=smbios perms="smbios 0444 root sys"
+driver name=softmac
+driver name=spdsock perms="spdsock 0666 root sys" policy="read_priv_set=sys_ip_config write_priv_set=sys_ip_config"
+driver name=st perms="* 0666 root sys" alias=scsiclass,01
+driver name=sy perms="tty 0666 root tty"
+driver name=sysevent perms="* 0600 root sys"
+driver name=sysmsg perms="msglog 0600 root sys" perms="sysmsg 0600 root sys"
+driver name=tcp perms="tcp 0666 root sys"
+driver name=tcp6 perms="tcp6 0666 root sys"
+driver name=tl perms="* 0666 root sys" clone_perms="ticlts 0666 root sys" clone_perms="ticots 0666 root sys" clone_perms="ticotsord 0666 root sys"
+driver name=tzmon
+driver name=ucode perms="* 0644 root sys"
+driver name=udp perms="udp 0666 root sys"
+driver name=udp6 perms="udp6 0666 root sys"
+driver name=ufm perms="ufm 0666 root sys"
+driver name=vgatext alias=pciclass,000100 alias=pciclass,030000 alias=pciclass,030001
+driver name=vnic perms="* 0666 root sys" clone_perms="vnic 0666 root sys"
+driver name=wc perms="* 0600 root sys"
+driver name=ksensor
+driver name=overlay
+driver name=sppp
+driver name=sppptun
+driver name=daplt perms="* 0644 root sys"
+driver name=rsm perms="* 0666 root sys"
+driver name=i2csim
+driver name=zcons

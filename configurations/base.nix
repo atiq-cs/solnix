@@ -22,38 +22,18 @@
 
   networking.hostName = lib.mkDefault "solnix";
 
-  # Stage-A declarative userland (design §D). FIRST declarative image (assembly
-  # milestone): the STARTER set is the proven real-derivation cache packages
-  # (docs/registry/real-derivations.tsv -> pkgs.solnix.starter), each a real
-  # .drv-backed NAR published to cache.solnix.io that substitutes at realise
-  # time. nix itself is added by modules/config/nix.nix (nix.package ->
-  # systemPackages), so it is NOT re-listed here. base-tools (coreutils-equiv
-  # from the gate proto) is seeded by modules/config/system-path.nix.
-  #
-  # Kept deliberately small: coreutils/file/gnugrep/gnused/bzip2/xz/zlib/pcre2.
-  # OMITTED (not real derivations / not published to the cache yet): gettext
-  # (real-derivations row is a 1.0 placeholder, NAR absent from cache), less,
-  # vim, curl, htop, git. Add them here once they land as published real
-  # derivations in real-derivations.tsv.
-  #
-  # Editor: nvi (github.com/lichray/nvi2) is solnix's default vi — small, C++,
-  # wide-char, no vim dependency; /usr/bin/{vi,ex,view} link to nvi.
-  # Debuggers: gdb (from-source real derivation) is in the profile; mdb (the
-  # illumos native modular/post-mortem+kernel debugger) is base-OS-native at
-  # /usr/bin/mdb (staged by the media). Both ship by default.
-  environment.systemPackages = (with pkgs.solnix.starter; [
-    coreutils file gnugrep gnused bzip2 xz zlib pcre2 nvi which gdb
-  ]) ++ [
-    # uutils (Rust coreutils) -- ADDITIVE, per docs/design-two-installer-images.md
-    # §6: the illumos/GNU coreutils above stay the PATH default; uutils lands in
-    # the base closure alongside them as the multicall `coreutils` + `uu-*`
-    # applets (the same gradual-rollout convention Ubuntu uses). Measure before
-    # ever making uutils the default. Built via the seed-backed rustPlatform
-    # (solnix-pkgs rust-overlay.nix); published to cache.solnix.io under the
-    # 5HAV key; pulled here by fetchClosure like the rest of the starter set.
-    # Quoted attr because the pname carries a '-'.
-    pkgs.solnix.starter."uutils-coreutils"
-  ];
+  # The userland: the gate's whole userland (pkgs.solnix.world, seeded by
+  # modules/config/system-path.nix) plus the from-source packages. Every one is
+  # a derivation built in this repo. The 12 cache-only starter packages that
+  # used to be listed here are in configurations/extra-userland.nix (opt-in):
+  # docs/cache-integrity-audit.md found cache-only paths that are not
+  # installable (phantom narinfos, missing NARs), and they are not built here.
+  environment.systemPackages = with pkgs.solnix; [ openssh bash ];
+
+  # /etc/system fragment, appended once by install-be: the emulated i8254 PIT is
+  # unreliable under some hypervisors (see the fragment for the measurement).
+  environment.generatedEtc."system.d/solnix-nitro-pit" =
+    builtins.readFile ../modules/config/solnix-nitro-pit.system.d;
 
   # Declarative networking (T2.9): the primary NIC via DHCP. This GENERATES the
   # illumos bringup (ipadm create-if/create-addr with the legacy-ifconfig
@@ -61,7 +41,7 @@
   # plus /etc/resolv.conf from nameservers — replacing the ad-hoc solnix-netcfg
   # in oi-make-be.sh. "ena0" is the EC2 Nitro NIC; on other hardware set the
   # matching datalink name (dladm show-phys).
-  networking.interfaces.ena0.dhcp = true;
+  networking.interfaces.ena0.dhcp = lib.mkDefault true;
   networking.nameservers = [ "169.254.169.253" "8.8.8.8" ];
 
   # Declarative users (T2.9): a login user + root, both with the maintainer's
@@ -79,31 +59,29 @@
   # renders to a DTD-valid manifest in system.build.toplevel, which make-be
   # stages at /lib/svc/manifest/solnix and activation imports via svccfg.
   #
-  # sshd: a contract daemon (design-smf-init §1.3). Kept DISABLED because the
-  # image's real SSH is the stock modern-OpenSSH network/ssh make-be stages
-  # (gotchas #12-#15) which already owns port 22 — enabling this too would
-  # collide on :22. It is the canonical generator example; once pkgs.openssh
-  # lands in the fork (P1) this becomes the pure-closure sshd and network/ssh
-  # is dropped. enable=false keeps `svcs -x` clean while still generating the
-  # manifest into the toplevel (proves generation without a port clash).
+  # sshd from source (pkgs.solnix.openssh). UsePAM yes: without it OpenSSH on
+  # illumos accepts any password (docs/sshd-pam-fail-open.md). Host keys are
+  # generated on first start, as NixOS's sshd pre-start does.
   smf.services.sshd = {
-    enable = false;
+    enable = true;
     category = "network";
-    description = "OpenSSH server (generator example; stock network/ssh serves :22)";
+    description = "OpenSSH server";
     model = "contract";
     requires = [
       "svc:/milestone/network:default"
       "svc:/system/filesystem/local:default"
     ];
-    # TODO(P1): ${pkgs.openssh}/sbin/sshd once the fork ships openssh.
-    start.exec = "/usr/sbin/sshd -f /etc/ssh/sshd_config";
-    stop.exec = ":kill"; # svc.startd kills the contract
-    refresh.exec = ":kill -HUP"; # reload config
-    properties.config = {
-      listen_addr = "0.0.0.0";
-      port = "22";
-    };
+    start.exec = "/run/current-system/sw/bin/ssh-keygen -A; ${pkgs.solnix.openssh}/sbin/sshd -f /etc/ssh/sshd_config";
+    stop.exec = ":kill";
+    refresh.exec = ":kill -HUP";
   };
+  environment.generatedEtc."ssh/sshd_config" = ''
+    UsePAM yes
+    KbdInteractiveAuthentication yes
+    PasswordAuthentication yes
+    PermitRootLogin prohibit-password
+    Subsystem sftp ${pkgs.solnix.openssh}/libexec/sftp-server
+  '';
 
   # A transient oneshot (design-smf-init §1.4): the smallest ENABLED
   # config-generated service that actually runs on-target and reaches online
@@ -154,12 +132,6 @@
   # b2-mirror reconciler drains the inbox to B2 (~10min) then deletes from the
   # inbox -- so package objects correctly vanish from s3.solnix.io and live
   # permanently at cache.solnix.io. Consumers read cache.solnix.io ONLY.
-  nix.settings.substituters = [ "https://cache.solnix.io" "https://cache.nixos.org" ];
-  nix.settings.trusted-public-keys = [
-    "cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk="
-    "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
-  ];
-
   # Intel AX2xx wireless. The installer opts in to Intel's proprietary firmware
   # by default: this laptop class has no ethernet jack, so refusing the blob
   # means the machine cannot be installed over the network at all.
@@ -174,8 +146,13 @@
   # the moment the driver reaches load+attach. It does NOT make wifi work today;
   # USB ethernet (ASIX AX88772 -> axf) remains the working answer. Staged (not
   # false-working) so the image already carries what a loadable driver needs.
+  #
+  # OFF in the base: pkgs/illumos/iwx-firmware.nix is a nixpkgs stdenvNoCC
+  # derivation with `hash = lib.fakeHash`, so it cannot evaluate on the illumos
+  # build host (measured: "attribute 'callPackage' missing") nor fetch anywhere.
+  # A config for that laptop enables it once the derivation is real.
   hardware.wirelessIwx = {
-    enable = true;
+    enable = lib.mkDefault false;
     allowUnfreeFirmware = true;
   };
 }

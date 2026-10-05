@@ -50,6 +50,7 @@ derivation {
   name = "gcc-${version}";
   inherit system gate stage0 gccSrc gmpSrc mpfrSrc mpcSrc version;
   libcDir = "${libcSlice}/lib/amd64";
+  libcDir32 = "${libcSlice}/lib";
   outputs = [ "out" "lib" ];
   builder = "/usr/bin/bash";
   PATH = "/usr/gnu/bin:/usr/bin:/usr/sbin";
@@ -76,7 +77,7 @@ derivation {
     ../gcc-$version/configure \
       --prefix="$out" \
       --with-sysroot="$gate" --with-native-system-header-dir=/usr/include \
-      --enable-languages=c,c++ --disable-bootstrap --disable-multilib \
+      --enable-languages=c,c++ --disable-bootstrap --enable-multilib \
       --with-gnu-as --with-as=/usr/bin/gas --without-gnu-ld --with-ld=/usr/bin/ld \
       --enable-shared --enable-__cxa_atexit --enable-initfini-array \
       --without-zstd --disable-nls \
@@ -87,31 +88,39 @@ derivation {
     # no libgcc_s on its default path, so without this the probe dies in ld.so.1
     # ("libgcc_s.so.1: open failed") and configure reports "cannot run C compiled
     # programs" (measured). Build-time only; unset before the closure gate.
-    export LD_LIBRARY_PATH_64="$W/b/gcc"
+    export LD_LIBRARY_PATH_64="$W/b/gcc" LD_LIBRARY_PATH_32="$W/b/gcc/32"
     gmake -j"$(psrinfo | wc -l)" >&2 || gmake -j2 >&2
     gmake install >&2
-    unset LD_LIBRARY_PATH_64
+    unset LD_LIBRARY_PATH_64 LD_LIBRARY_PATH_32
 
-    # lib output: the runtime libraries, and nothing else.
-    mkdir -p "$lib/lib"
-    for d in "$out/lib/amd64" "$out/lib"; do
-      [ -d "$d" ] || continue
-      for f in "$d"/libstdc++.so* "$d"/libgcc_s.so*; do
+    # lib output: the runtime libraries, and nothing else. lib/ = 32-bit,
+    # lib/amd64 = 64-bit (the illumos layout, matching the gate's own libs).
+    #
+    # Debug info is stripped: the DWARF carries the sysroot include paths, which
+    # Nix's reference scan reads as a dependency on the whole gate proto (219 MB),
+    # so every C++ closure would drag the proto in (measured: 6 such strings in
+    # libstdc++.so.6.0.33, 3 in libgcc_s.so.1). Same as stdenv's strip phase.
+    for pair in "$out/lib/amd64:$lib/lib/amd64:$libcDir" "$out/lib:$lib/lib:$libcDir32"; do
+      src=''${pair%%:*}; rest=''${pair#*:}; dst=''${rest%%:*}; lc=''${rest#*:}
+      mkdir -p "$dst"
+      # libatomic: configure scripts that probe GCC_ATOMIC_BUILTINS add -latomic.
+      for f in "$src"/libstdc++.so* "$src"/libgcc_s.so* "$src"/libatomic.so*; do
         [ -e "$f" ] || continue
         case "$f" in *.py) continue;; esac
-        cp -P "$f" "$lib/lib/"
+        cp -P "$f" "$dst/"
       done
-    done
-    [ -e "$lib/lib/libstdc++.so.6" ] || { echo "FATAL: no libstdc++.so.6 in lib output" >&2; exit 1; }
-    [ -e "$lib/lib/libgcc_s.so.1" ] || { echo "FATAL: no libgcc_s.so.1 in lib output" >&2; exit 1; }
-    for f in "$lib"/lib/*; do
-      [ -f "$f" ] && [ ! -L "$f" ] || continue
-      chmod u+w "$f"
-      /usr/bin/elfedit -e "dyn:runpath $lib/lib:$libcDir" "$f"
+      for f in "$dst"/*; do
+        [ -f "$f" ] && [ ! -L "$f" ] || continue
+        chmod u+w "$f"
+        /usr/bin/gstrip --strip-debug "$f"
+        /usr/bin/elfedit -e "dyn:runpath $dst:$lc" "$f"
+        if grep -q "$gate" "$f"; then echo "FATAL: $f still names the gate proto" >&2; exit 1; fi
+      done
+      [ -e "$dst/libstdc++.so.6" ] && [ -e "$dst/libgcc_s.so.1" ] || { echo "FATAL: runtime libs missing in $dst" >&2; exit 1; }
     done
     # Gate: the runtime libs resolve inside /nix/store with no LD_LIBRARY_PATH.
-    unset LD_LIBRARY_PATH LD_LIBRARY_PATH_64 || true
-    bad=$(for f in "$lib"/lib/libstdc++.so.6 "$lib"/lib/libgcc_s.so.1; do
+    unset LD_LIBRARY_PATH LD_LIBRARY_PATH_64 LD_LIBRARY_PATH_32 || true
+    bad=$(for f in "$lib"/lib/libstdc++.so.6 "$lib"/lib/libgcc_s.so.1 "$lib"/lib/amd64/libstdc++.so.6 "$lib"/lib/amd64/libgcc_s.so.1; do
       /usr/bin/ldd "$f" 2>&1 | awk -v f="$f" '/not found/ || (/=>/ && $NF !~ /^\/nix\/store\//) {print f": "$0}'
     done)
     [ -z "$bad" ] || { echo "FATAL: runtime libs leave the store:" >&2; echo "$bad" >&2; exit 1; }

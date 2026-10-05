@@ -4,6 +4,8 @@
 # openssl + openssh replace make-be's host sshd copy, bash replaces nothing (the
 # gate has no bash) but is a login shell users expect.
 { gate, libcSlice, world ? null, gcc ? "/usr/gcc/14" }:
+# gcc: the from-source gcc derivation (gcc-src.nix). Everything here is compiled
+# by it, both ABIs; the IPS seed only compiled gcc itself.
 
 let
   mkSrcPkg = import ./mk-src-pkg.nix {
@@ -13,6 +15,11 @@ let
   needWorld = if world == null then throw "base-src: this package needs the userland world" else world;
 in
 rec {
+  inherit mkSrcPkg;
+
+  # Nix 2.24.15 + its dependency chain (./nix-src.nix).
+  nixChain = import ./nix-src.nix { inherit mkSrcPkg zlib openssl libcSlice; system = "x86_64-solaris"; gccLib = gcc.lib; };
+
   # libz.so.1 with the illumos symbol versions (SUNW_1.1 .. ILLUMOS_0.2). The
   # gate's libzfs/libzpool record `libz.so.1 SUNW_1.1` as a needed version, so an
   # unversioned upstream libz would fail to load there. The mapfile is
@@ -50,7 +57,8 @@ rec {
     pname = "openssl"; version = "3.4.0";
     src = { url = "https://github.com/openssl/openssl/releases/download/openssl-3.4.0/openssl-3.4.0.tar.gz";
             sha256 = "e15dda82fe2fe8139dc2ac21a36d4ca01d5313c75f99f46c4e8a27709b7294bf"; };
-    deps = [ needWorld ];
+    # libc only (runtimeLibDirs): no world dep, so nix's closure does not pull
+    # the whole userland in through libcrypto.
     build = ''
       ./Configure solaris64-x86_64-gcc --prefix="$out" --libdir=lib/amd64 --openssldir=/etc/openssl \
         shared no-tests no-docs
@@ -70,6 +78,10 @@ rec {
     deps = [ needWorld zlib openssl ];
     build = ''
       DP=/run/current-system/sw/bin:/usr/bin:/usr/sbin:/sbin
+      # GCC 14 makes -Wincompatible-pointer-types an error; illumos PAM declares
+      # pam_get_item(..., void **) and a non-const conversation callback, where
+      # OpenSSH assumes Linux-PAM's const forms (measured: auth-pam.c:480 etc).
+      CFLAGS="-O2 -Wno-error=incompatible-pointer-types" \
       ./configure --prefix="$out" --sysconfdir=/etc/ssh --with-pam \
         --with-solaris-contracts --with-solaris-projects --with-solaris-privs \
         --with-privsep-path=/var/empty --with-privsep-user=sshd \
@@ -89,6 +101,9 @@ rec {
             sha256 = "9599b22ecd1d5787ad7d3b7bf0c59f312b3396d1e281175dd1f8a4014da621ff"; };
     deps = [ needWorld ];
     build = ''
+      # illumos curses declares tputs(..., int (*)(char)); GCC 14 errors on the
+      # mismatch with bash's int (*)(int) putc callback (display.c:2839, measured).
+      CFLAGS="-O2 -Wno-error=incompatible-pointer-types" \
       ./configure --prefix="$out" --without-bash-malloc --disable-nls
       gmake -j6
       gmake install

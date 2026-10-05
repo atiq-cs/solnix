@@ -41,7 +41,7 @@
 { gate
 , libcSlice        # the existing pkgs.illumos.libc slice (C runtime, both ABIs)
 , rtldSlice        # the existing pkgs.illumos.rtld slice (ld.so.1 + its libs)
-, externalLibs     # non-proto libs (libxml2/libz/ICU/libstdc++) for the SMF stack
+, externalLibs     # LIST of from-source libs (zlib, libxml2) for the SMF stack's non-proto edges
 }:
 
 let
@@ -230,7 +230,7 @@ rec {
   # svccfg outside Nix. It is inside now.
   smf = mkSlice {
     name = "illumos-smf";
-    deps = baseDeps ++ [ externalLibs ];
+    deps = baseDeps ++ externalLibs;
     bins = [
       "usr/sbin/svcadm" "usr/sbin/svccfg" "usr/bin/svcs" "usr/bin/svcprop"
       "lib/svc/bin/svc.startd" "lib/svc/bin/svc.configd"

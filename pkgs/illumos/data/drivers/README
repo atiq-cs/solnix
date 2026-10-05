@@ -1,0 +1,7 @@
+The files here are generated, not hand-written: the `driver` actions of every
+illumos-gate usr/src/pkg/manifests/*.p5m at the pinned gate rev ac45d71f
+(gate-drivers.txt, one action per line) rendered into the /etc driver database
+format that pkg(5) would write on install. The gate proto itself ships only a
+4-entry name_to_major, so before this the database was copied from the build host.
+Majors: the gate proto's own 4 entries keep their numbers, the rest are assigned in
+manifest order.

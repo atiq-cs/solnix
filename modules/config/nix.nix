@@ -45,9 +45,9 @@ in
 
     package = mkOption {
       type = types.package;
-      default = pkgs.solnix.nix224;
-      defaultText = lib.literalExpression "pkgs.solnix.nix224";
-      description = "The Nix package that ships on the image (store-path Nix 2.24.15, RUNPATH-correct; on PATH via the system profile, NixOS-style).";
+      default = pkgs.solnix.nixSrc;
+      defaultText = lib.literalExpression "pkgs.solnix.nixSrc";
+      description = "The Nix that ships on the image: 2.24.15 built from source with its whole dependency chain (pkgs/illumos/nix-src.nix).";
     };
 
     # nix.settings: the freeform /etc/nix/nix.conf attrs. Real declaration lives
@@ -86,19 +86,17 @@ in
     # (freeform attrset merge); base.nix already sets substituters + keys.
     nix.settings = {
       substituters = lib.mkDefault [ "https://cache.solnix.io" "https://cache.nixos.org" ];
+      # ONLY the cache.solnix.io-1 signing key (plus nixos.org's). The earlier
+      # 5HAV key is retired: nothing this system needs is signed by it.
       trusted-public-keys = lib.mkDefault [
-        # cache.solnix.io = the durable public read cache (Cloudflare -> B2), NixOS-style.
-        # Uploads go to the transient s3.solnix.io inbox; the b2-mirror reconciler drains
-        # it to B2. Consumers read cache.solnix.io ONLY (never the s3.solnix.io inbox).
-        "cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk="
+        "cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8="
         "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
       ];
+      # illumos ships per-CA PEMs and no bundle; nix gets the Mozilla bundle.
+      ssl-cert-file = lib.mkDefault "${pkgs.solnix.nixChain.cacert}/etc/ssl/certs/ca-bundle.crt";
       sandbox = lib.mkDefault false;         # illumos has no Linux namespaces.
-      build-users-group = lib.mkDefault "";  # single-user Stage A.
-      # single-user Stage A: no remote/local build hook (the store nix is
-      # RUNPATH-correct, but the default build-hook spawns a nix child that can
-      # trip its lib preload under a stripped env). No remote builders either.
-      build-hook = lib.mkDefault "";
+      # NixOS default: multi-user, builds run as nixbld* through nix-daemon.
+      build-users-group = lib.mkDefault "nixbld";
       builders = lib.mkDefault "";
       max-jobs = lib.mkDefault "auto";
       cores = lib.mkDefault 0;               # use all cores per build (NixOS default).
@@ -106,7 +104,7 @@ in
       # fetch-closure is REQUIRED: starter.nix / pkgs/illumos/default.nix wire the
       # starter set and nix224 via builtins.fetchClosure, which is gated behind it;
       # without it a --flake eval FATALs "attribute 'fetchClosure' missing".
-      experimental-features = lib.mkDefault "nix-command flakes fetch-closure";
+      experimental-features = lib.mkDefault "nix-command flakes";
       require-sigs = lib.mkDefault true;     # verify cache signatures (5HAV).
       # keep build inputs/outputs so `nix develop`/gc-roots behave like NixOS.
       keep-outputs = lib.mkDefault true;
@@ -124,5 +122,26 @@ in
 
     # ship nix on the image.
     environment.systemPackages = [ cfg.package ];
+
+    # NixOS: nixbld group (gid 30000) + nixbld1..32 (uid 30001..), and
+    # nix-daemon as a system service. trusted-users=root, allowed-users=*.
+    users.groups.nixbld.gid = 30000;
+    users.users = lib.listToAttrs (map (n: {
+      name = "nixbld${toString n}";
+      value = {
+        uid = 30000 + n; group = "nixbld"; extraGroups = [ "nixbld" ];
+        description = "Nix build user ${toString n}"; home = "/var/empty";
+        shell = "/bin/false"; hashedPassword = null;
+      };
+    }) (lib.range 1 32));
+    smf.services.nix-daemon = {
+      enable = true;
+      category = "system";
+      description = "Nix daemon";
+      model = "contract";
+      requires = [ "svc:/system/filesystem/local:default" ];
+      start.exec = "${cfg.package}/bin/nix-daemon --daemon &";
+      stop.exec = ":kill";
+    };
   };
 }

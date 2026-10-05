@@ -26,7 +26,7 @@ in
 
     pathsToLink = mkOption {
       type = types.listOf types.str;
-      default = [ "/bin" "/sbin" "/lib" "/lib/amd64" "/share/man" "/share/info" ];
+      default = [ "/bin" "/sbin" "/share/man" "/share/info" ];
       description = ''
         Subtrees of each package linked into the system profile. Prefixes match
         the leading path component(s) of a package's files (e.g. "/bin" links
@@ -62,9 +62,8 @@ in
       ignoreCollisions = true;
     };
 
-    # Seed the minimal required set at low priority so a config's own
-    # systemPackages merge on top. base-tools IS the coreutils-equiv here (ls/cp/
-    # mv/cat/rm/mkdir/ln + the SMF stack + the shell), so do NOT re-list coreutils.
-    environment.systemPackages = lib.mkBefore [ pkgs.solnix.base-tools ];
+    # Seed the gate's whole userland first, so a config's own systemPackages
+    # (later in the list) win on a name clash. /usr/bin links to sw/bin.
+    environment.systemPackages = lib.mkBefore [ pkgs.solnix.world ];
   };
 }

@@ -1,0 +1,3 @@
+type=ddi_pseudo;name=tpmtD
+type=ddi_ctl:devctl;minor1=t4nextt4nexM2
+type=ddi_pseudo;name=xsvctM0
