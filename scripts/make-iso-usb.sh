@@ -84,11 +84,14 @@ console="${SOLNIX_CONSOLE:-text}"
 # output fell back to the screen while input stayed on a nonexistent ttya.
 # This one line is the only keyboard change with hardware evidence behind it.
 os_console="${SOLNIX_CONSOLE:-text}"
-# Readable console on a HiDPI panel. MEASURED on the X1: EDID 3840x2160, and
-# the loader picked text mode 2 = 480 columns x 113 rows -- unreadable. The
-# font is a FIXED 8x16 with no larger built-in, so rows/cols come from screen
-# size (font.c:232). GOP mode 2 (800x600) gives ~99x37, which is legible.
-efi-max-resolution="800x600"
+# Console font. MEASURED on the X1 (3840x2160 EDID): with no /boot/fonts the loader
+# falls back to its builtin 8x16 font (478x134 cells, unreadable). With the gate
+# fonts present, autoload_font() (efi/loader/main.c) loads /boot/fonts/fonts.dir and
+# set_font() (common/font/font.c) walks them largest-first, taking the first that
+# fits the default 80x34 grid: 16x32 on this panel (239x67), confirmed via mdb
+# tems.ts_font after a reboot. The kernel console inherits it (module.c
+# "console-font"). Pin a size with screen-font="WxH" if ever needed.
+# efi-max-resolution is NOT a loader variable (no reference in usr/src/boot).
 ttya-mode="115200,8,n,1,-"
 autoboot_delay="5"
 boot_archive_load="YES"

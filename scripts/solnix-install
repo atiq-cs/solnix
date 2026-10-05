@@ -2684,6 +2684,17 @@ EOF
 if [ -d "/boot/forth" ] && [ ! -d "$ALTROOT/boot/forth" ]; then
   ( cd / && tar -cf - boot/forth ) | ( cd "$ALTROOT" && tar -xf - ) 2>/dev/null || true
 fi
+# Console fonts. The EFI loader's autoload_font() reads /boot/fonts/fonts.dir and
+# set_font() takes the largest font that still fits an 80x34 grid; the kernel console
+# inherits it. Without /boot/fonts the builtin 8x16 is used: 478x134 cells on the
+# X1's 3840x2160 panel (MEASURED via mdb tems.ts_font; 16x32 once fonts were added).
+# The live media carries them, the target did not, so the install looked readable
+# and the installed system did not.
+if [ -s /boot/fonts/fonts.dir ]; then
+  ( cd / && tar -cf - boot/fonts ) | ( cd "$ALTROOT" && tar -xf - ) 2>/dev/null || true
+fi
+[ -s "$ALTROOT/boot/fonts/fonts.dir" ] || \
+  echo "WARN: target has no /boot/fonts/fonts.dir; the console will use the tiny builtin 8x16 font" >&2
 if [ -s /boot/loader.rc ]; then
   cp /boot/loader.rc "$ALTROOT/boot/loader.rc" 2>/dev/null || true
 fi

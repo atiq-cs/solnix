@@ -201,6 +201,16 @@ static_checks() {
     else _fail "solnix-install uses a persistent create-addr (no lease on the live media)"; fi
   fi
 
+  # LESSON (X1 tiny console): the installed BE is copied from this root, and its loader
+  # picks the largest /boot/fonts font that fits 80x34. No fonts.dir = builtin 8x16 =
+  # 478x134 cells on a 4K panel. efi-max-resolution is not a loader variable at all.
+  if [ -s "$R/boot/fonts/fonts.dir" ] && [ -s "$R/boot/fonts/16x32.fnt" ]; then
+    _ok "/boot/fonts (fonts.dir + 16x32) present -- installed console gets a readable font"
+  else _fail "/boot/fonts/fonts.dir or 16x32.fnt missing -- installed console falls back to the builtin 8x16"; fi
+  if grep -qs '^efi-max-resolution' "$R/boot/loader.conf"; then
+    _fail "loader.conf sets efi-max-resolution (not a loader variable; does nothing)"
+  else _ok "loader.conf has no inert efi-max-resolution"; fi
+
   # LESSON (dig/curl broken -- the SECOND-ORDER dangling lib, the openssl trap):
   # EVERY staged ELF's DT_NEEDED must be present in the ramdisk, TRANSITIVELY
   # (a staged lib's own NEEDED too), ABI-matched (a 64-bit binary needs a 64-bit
