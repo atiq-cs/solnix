@@ -151,3 +151,21 @@ lib/make-be.nix (image) and `switch-to-configuration boot` (new generation) both
 The shared `<pool>/nix` is filled with `nix copy --to local?root=...` (copying into a non-default root
 works on illumos; building there does not), so the store DB is written directly and no first-boot
 registration is needed.
+
+## Build state (2026-10-05, REAL unless marked)
+
+- Base toplevel `/nix/store/vkyzzm120qz9gwngnn22idiyh8az2qvs-solnix-system-solnix`, closure 493,743,744 B,
+  no gate proto, compiler or boost in it (the toplevel fails to build if it would contain the gate proto or
+  gcc; negative control: adding an old gate-carrying libxml2 made it fail with
+  "runtime closure contains build-only ...-illumos-gate-proto").
+- make-be produced a disk from a test variant of it: loader, kernel, root from the BE, the inittab
+  `zfs mount -O <pool>/nix`, svc.startd and all 174 manifests import from the shared store.
+- Kernel slice bug found by that boot: relocating RUNPATH into kernel modules (ET_REL objects whose
+  .dynamic carries their depends_on list as NEEDED) overwrote specfs's `NEEDED fs/fifofs`, so krtld could
+  not load specfs. Kernel objects are now left byte-identical to the gate (0 of 890 differ).
+- Next blocker (PLANNED to fix): the gate proto's kernel is a DEBUG build, and every boot panics right after
+  "Hostname:" in the DEBUG-only `so_integrity_check()` (sockcommon_subr.c:2235, via `so_tpi_fallback`).
+  docs/design-make-be.md already requires a non-DEBUG kernel; it has to become a derivation built from
+  source, since the old host copy (`NDPROTO`) is gone.
+- Not yet measured: checks a-g (store paths on PATH, read-only/daemon behaviour, generation switch, boot
+  fixes, power management) need a boot that reaches login.

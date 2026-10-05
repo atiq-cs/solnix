@@ -125,12 +125,6 @@ chmod 0400 etc/shadow
 for f in name_to_major driver_aliases minor_perm driver_classes; do cp "$R$DRV/$f" "etc/$f"; done
 grep -q '^# solnix drivers' etc/security/device_policy || \
   { echo '# solnix drivers'; cat "$R$DRV/device_policy.add"; } >> etc/security/device_policy
-# /etc/system fragments, each applied once.
-for f in "$R$ETC"/system.d/*; do
-  [ -e "$f" ] || continue
-  tag="* solnix: $(basename "$f")"
-  grep -qF "$tag" etc/system || { echo "$tag"; cat "$f"; } >> etc/system
-done
 [ -e etc/path_to_inst ] || : > etc/path_to_inst
 [ -e etc/hostid ] || printf '0x1b0b57ec\n' > etc/hostid
 
