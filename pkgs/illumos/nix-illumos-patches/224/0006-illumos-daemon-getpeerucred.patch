@@ -1,0 +1,31 @@
+illumos has no SO_PEERCRED/LOCAL_PEERCRED; without a branch the daemon
+learns no peer uid, so trusted-users never matches (root is untrusted) and
+allowed-users can only be "*". getpeerucred(3C) is the illumos equivalent.
+
+--- a/src/nix/unix/daemon.cc	2026-10-05 12:13:53.337629329 -0400
++++ b/src/nix/unix/daemon.cc	2026-10-05 12:13:53.339629300 -0400
+@@ -26,6 +26,9 @@
+ #include <sys/wait.h>
+ #include <sys/stat.h>
+ #include <sys/socket.h>
++#ifdef __sun
++#include <ucred.h>
++#endif
+ #include <sys/un.h>
+ #include <sys/select.h>
+ #include <errno.h>
+@@ -225,6 +228,14 @@
+         throw SysError("getting peer credentials");
+     peer = { false, 0, true, cred.cr_uid, false, 0 };
+ 
++#elif defined(__sun)
++
++    ucred_t * uc = nullptr;
++    if (getpeerucred(remote, &uc) == -1)
++        throw SysError("getting peer credentials");
++    peer = { true, ucred_getpid(uc), true, ucred_geteuid(uc), true, ucred_getegid(uc) };
++    ucred_free(uc);
++
+ #endif
+ 
+     return peer;

@@ -22,8 +22,10 @@
 #          the only output a shipped binary may reference.
 #
 # Configure line follows OpenIndiana's gcc-14 (`/usr/gcc/14/bin/gcc -v` on the
-# build host): illumos ld (not GNU ld), GNU as, dragonfly clocale,
-# __cxa_atexit, initfini-array. Languages cut to c,c++, multilib off (64-bit only),
+# build host): illumos ld (not GNU ld), GNU as, __cxa_atexit, initfini-array.
+# Not OI's --enable-clocale=dragonfly: that model is an OI patch, and upstream
+# libstdc++ configure rejects it ("Unknown argument to enable/disable clocale",
+# measured), so the upstream default (generic on solaris) is used. Languages cut to c,c++, multilib off (64-bit only),
 # and the libraries nothing here needs (sanitizers, gomp, itm, vtv) are dropped to
 # keep the build short.
 { gate                    # gate proto store path (the sysroot)
@@ -77,11 +79,18 @@ derivation {
       --enable-languages=c,c++ --disable-bootstrap --disable-multilib \
       --with-gnu-as --with-as=/usr/bin/gas --without-gnu-ld --with-ld=/usr/bin/ld \
       --enable-shared --enable-__cxa_atexit --enable-initfini-array \
-      --enable-clocale=dragonfly --without-zstd --disable-nls \
+      --without-zstd --disable-nls \
       --disable-libsanitizer --disable-libgomp --disable-libitm --disable-libvtv \
       --with-pkgversion="solnix ${version}" >&2
+    # The target-library configure scripts (libstdc++) RUN test programs linked
+    # by the new xgcc, which NEED the just-built libgcc_s.so.1. The build host has
+    # no libgcc_s on its default path, so without this the probe dies in ld.so.1
+    # ("libgcc_s.so.1: open failed") and configure reports "cannot run C compiled
+    # programs" (measured). Build-time only; unset before the closure gate.
+    export LD_LIBRARY_PATH_64="$W/b/gcc"
     gmake -j"$(psrinfo | wc -l)" >&2 || gmake -j2 >&2
     gmake install >&2
+    unset LD_LIBRARY_PATH_64
 
     # lib output: the runtime libraries, and nothing else.
     mkdir -p "$lib/lib"
