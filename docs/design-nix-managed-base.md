@@ -1,7 +1,8 @@
 # Nix-managed base: /nix layout, decided by measurement
 
-Status: the layout decision below is measured. Building and booting a disk from a toplevel is the next step
-and is not done yet.
+Status: the layout decision is measured; the from-source package chain (gcc, world, openssh, bash, nix) is
+built; the toplevel, `install-be` and the new make-be are written and the toplevel evaluates. Building the
+toplevel, making a disk and booting it are in progress (see "Build state" at the end, tagged REAL/PLANNED).
 
 ## The question
 
@@ -69,3 +70,84 @@ What the installer and `switch-to-configuration` must therefore agree on:
 
 Test BEs ctA and ctB1-ctB4 on the bhost rpool are measurement scaffolding and are to be destroyed once the
 real base boots.
+
+## The read-only store question (measured 2026-10-05)
+
+NixOS mounts `/nix/store` read-only and gives nix-daemon a private mount namespace in which it is
+writable. illumos has no mount namespaces, so the question was whether a read-only view plus a writable
+real path could work instead.
+
+| test (bhost) | result |
+|---|---|
+| dataset at a root-only `X/.rw` (0700), `mount -F lofs -o ro X/.rw/store X/store` | rc=0 |
+| root `touch X/store/x` | "Read-only file system" |
+| write via `X/.rw/store`, read via `X/store` | rc=0, visible |
+| user nobody reads `X/store`, lists `X/.rw` | reads OK, `X/.rw` Permission denied |
+| `nix-build --store 'local?real=/var/tmp/dv/store'` (store dir /nix/store, real path elsewhere) | "error: building using a diverted store is not supported on this platform" |
+
+The view works, but Nix refuses to build when the store's logical and real paths differ, and that is
+exactly what a read-only `/nix/store` with writes through another path is. So on illumos a read-only
+`/nix/store` and "nix builds through the daemon" are mutually exclusive.
+
+Decision: the installed system's store is writable by root and the daemon only, with NixOS's permissions
+(`root:nixbld`, mode 1775), and normal users go through nix-daemon. The secondary reference agrees: NixBSD
+(nix-community/nixbsd) also leaves `/nix/store` writable on an installed system; its `readOnlyNixStore`
+module (modules/tasks/nix-store.nix, nullfs/unionfs) is enabled only for VM and netboot images
+(modules/virtualisation/qemu-vm.nix, configurations/freebsd-netboot), and nix-daemon runs as a plain init
+service with nixbld users (modules/services/system/nix-daemon.nix).
+
+## Everything on the target is built from source
+
+The maintainer's rule: every file on the target is a derivation built from source by a recipe in this
+repo; the one exception is the gate proto (pkgs/illumos/gate.nix, from illumos-gate source) and its slices.
+That rules out host copies of any kind (the old `externalLibs`, the host sshd/bash, `/nix-tools224`, the
+host `/etc` driver files). How each was replaced:
+
+| was | now |
+|---|---|
+| host IPS gcc-14 runtime (libstdc++, libgcc_s) | `pkgs/illumos/gcc-src.nix`: gcc 14.3.0 from source, stage0 = host gcc used only to compile it (the NixOS bootstrap shape); multilib; `gcc.lib` is the only output a shipped binary references |
+| externalLibs (host libxml2, zlib, ICU, libstdc++) | `base-src.nix` zlib 1.3.2 (with OpenIndiana's symbol-version mapfile, which libzfs requires) and libxml2 2.14.6 |
+| host sshd + libcrypto | `base-src.nix` openssl 3.4.0, openssh 10.2p1 (`--with-pam`, sshd_config `UsePAM yes`) |
+| (none) bash | `base-src.nix` bash 5.2.37 |
+| /nix-tools224 nix with LD_LIBRARY_PATH wrapper | `nix-src.nix`: boost, sqlite, xz, libsodium, curl, libarchive, brotli, editline, nlohmann_json, toml11, libgit2, nix 2.24.15 (patches 0001-0006) |
+| host /etc/{name_to_major,driver_aliases,minor_perm,...} | `data/drivers/`, rendered by `data/drivers/gen.py` from the 362 `driver` actions of illumos-gate's own pkg manifests at the pinned rev |
+| gate userland as hand-picked slices | `mk-proto-world.nix`: the whole gate userland in one store path, one libc per process |
+
+Pass rule per package: `ldd` with `LD_LIBRARY_PATH` unset shows no "not found" and no path outside
+/nix/store. mk-src-pkg.nix enforces it in the builder, and also fails the build if a shipped ELF still
+names the gate proto or the compiler.
+
+Problems hit on the way, each measured:
+- gcc: the libstdc++ configure runs test programs that need the just-built libgcc_s (host has none on
+  its default path), and upstream libstdc++ rejects OpenIndiana's `--enable-clocale=dragonfly` (an OI patch).
+- DWARF in the runtime libs records the sysroot include paths, which Nix's reference scan turns into a
+  runtime dependency on the 219 MB gate proto. Fixed by `strip --strip-debug` (stdenv's strip phase).
+- GCC 14 makes `-Wincompatible-pointer-types` an error; illumos PAM and curses prototypes trip it in
+  openssh and bash.
+- nix: illumos has neither `SO_PEERCRED` nor `LOCAL_PEERCRED`, so without patch 0006 (getpeerucred) the
+  daemon never learns the client uid and `trusted-users = root` cannot match.
+- nix: header-only deps leave their store paths in assert strings and DWARF; the first nix build's
+  closure carried 150 MB of boost headers.
+- the world: 69 of 17,428 relocated objects NEED libraries the gate does not build (dbus/glib for hal,
+  NSS/NSPR, OpenSSL 1.0 for sendmail/wpad/bhyve, net-snmp, python 3.9, libtspi, jvm, and the C++ runtime
+  for make/audioconvert/libfru/yp). None is on the boot path; they are listed in the world's
+  `.world/ldd-bad`. 149 more resolve only through subdirectories (usr/lib/krb5, smbsrv, scsi, ...) the
+  flat lib dirs do not cover yet.
+
+## Generations: install-be (one step for image, installer and switch)
+
+`<toplevel>/bin/switch-to-configuration install-be <toplevel>` (modules/system/activation/install-be.sh)
+fills a mounted BE from the toplevel alone, reading every store path through `SOLNIX_STORE_ROOT`:
+the early set (`<toplevel>/early-paths`, the closure of pkgs.solnix.early: init, sh, zfs, mount, ld.so.1,
+libc and their libs) copied as real files to the same store paths in the BE's own /nix; kernel trees as
+real files (bootadm walks them); `/usr/bin` -> sw/bin; `/lib`, `/usr/lib`, `/sbin` as per-entry link
+farms into the userland, with ld.so.1 and the four early tools pointing at the in-BE copies; `/etc` from
+the gate's stock tree with the toplevel's files and users over it; the driver database; `/etc/system`
+fragments applied once; inittab gains `zfs mount -O <pool>/nix` as its first sysinit entry; a fresh SMF
+seed, the solnix manifests and the site profile (presets as a site profile, because `svccfg setprop` on a
+fresh seed is a silent no-op for services not yet imported); /boot from the kernel slice; boot_archive.
+lib/make-be.nix (image) and `switch-to-configuration boot` (new generation) both call it.
+
+The shared `<pool>/nix` is filled with `nix copy --to local?root=...` (copying into a non-default root
+works on illumos; building there does not), so the store DB is written directly and no first-boot
+registration is needed.

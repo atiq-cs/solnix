@@ -454,10 +454,17 @@ let
     pkgs.runCommand "solnix-system-${config.networking.hostName}" {
       # closure of the boot-time set: what install-be copies as real files into
       # each generation's BE (the kernel goes in as real trees separately).
-      exportReferencesGraph = [ "early-graph" pkgs.solnix.early ];
+      exportReferencesGraph = [ "early-graph" pkgs.solnix.early "sw-graph" config.system.path ];
+      # build-only inputs that must never reach the runtime closure (the analog of
+      # nixpkgs' disallowedReferences): the gate proto (219 MB, build headers and
+      # link libs) and the from-source compiler. Checked over the sw closure below.
+      disallowed = "${pkgs.solnix.gate} ${pkgs.solnix.gcc}";
     } ''
     mkdir -p $out
     grep -h '^/nix/store/' early-graph | grep -v '\.drv$' | sort -u > $out/early-paths
+    for x in $disallowed; do
+      if grep -qx "$x" early-graph sw-graph; then echo "FATAL: runtime closure contains build-only $x" >&2; exit 1; fi
+    done
     ln -s ${pkgs.solnix.world}   $out/world
     ln -s ${pkgs.solnix.kernel}  $out/kernel-slice
     ln -s ${pkgs.solnix.early}   $out/early

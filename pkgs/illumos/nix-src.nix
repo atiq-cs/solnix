@@ -211,6 +211,12 @@ rec {
       gmake install ERROR_SWITCH_ENUM= sysconfdir="$out/etc" >&2
       unset LD_LIBRARY_PATH LD_LIBRARY_PATH_64 || true
       "$out/bin/nix" --version >&2
+      # strip first (mk-src-pkg strips again later; idempotent): DWARF names the
+      # headers too, and only what survives the strip is a real reference.
+      find "$out" -type f | while read -r f; do
+        [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] && { chmod u+w "$f"; /usr/bin/gstrip --strip-debug "$f"; }
+        true
+      done
       for x in ${boost} ${nlohmann_json} ${toml11}; do
         if grep -rlq "$x" "$out"; then echo "FATAL: nix still references build-only $x" >&2; exit 1; fi
       done

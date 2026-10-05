@@ -90,7 +90,9 @@ let
     log "finalize"
     zfs umount "$POOL/nix"; zfs set mountpoint=/nix "$POOL/nix"
     rmdir "$S/nix" "$S" 2>/dev/null || true
-    sync; zfs umount "$POOL/ROOT/$BE"; zpool export "$POOL" || die "export"
+    # the pool dataset (menu.lst home) is mounted INSIDE the BE under the altroot; unmount it first.
+    sync; zfs umount "$POOL" 2>/dev/null || true
+    zfs umount "$POOL/ROOT/$BE"; zpool export "$POOL" || die "export"
     log "DONE: $DISK pool=$POOL be=$BE toplevel=$TOP"
   '';
 in

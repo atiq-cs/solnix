@@ -92,7 +92,7 @@ done
 # filelist dirs; a `kernel -> store` link would leave the modules out). Re-copied
 # only when the generation's kernel slice changes (marker file).
 if [ "$(cat .solnix-kernel 2>/dev/null)" != "$KERNEL" ]; then
-  for t in kernel usr/kernel platform/i86pc/kernel; do
+  for t in kernel usr/kernel platform/i86pc/kernel platform/i86pc/amd64; do
     [ -e "$t" ] && find "$t" -depth -delete
     [ -e "$R$KERNEL/$t" ] && { mkdir -p "$(dirname "$t")"; ( cd "$R$KERNEL" && tar cf - "$t" ) | tar xf -; }
   done
@@ -102,7 +102,7 @@ fi
 # /boot: real files (loader64.efi, pmbr, gptzfsboot, forth, fonts, loader.rc) from the kernel slice;
 # machine inputs the installer already wrote (loader.conf, bootenv.rc) are preserved.
 for e in $(ls "$R$KERNEL/boot"); do
-  case $e in solaris) mkdir -p boot/solaris; cp -R "$R$KERNEL/boot/solaris/." boot/solaris/ ;;
+  case $e in solaris) mkdir -p boot/solaris; ( cd "$R$KERNEL/boot" && tar cf - solaris ) | ( cd boot && tar xf - ) ;;
              *) [ -e "boot/$e" ] || cp -R "$R$KERNEL/boot/$e" boot/ ;; esac
 done
 chmod -R u+w boot platform/i86pc/amd64 2>/dev/null
@@ -133,6 +133,9 @@ for f in "$R$ETC"/system.d/*; do
 done
 [ -e etc/path_to_inst ] || : > etc/path_to_inst
 [ -e etc/hostid ] || printf '0x1b0b57ec\n' > etc/hostid
+
+# declared users' authorized_keys (users.users.<n>.openssh.authorizedKeys).
+[ -e "$R$TOP/seed-authorized-keys" ] && ROOT="$ROOT" /usr/bin/bash "$R$TOP/seed-authorized-keys" >&2
 
 # 4. inittab: mount the shared store FIRST (before autopush/soconfig, which live in
 #    the shared store, and before svc.startd; measured ctB4 + M4).

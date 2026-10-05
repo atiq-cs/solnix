@@ -375,6 +375,15 @@ derivation {
     # through a link would rewrite the target twice.
     find "$out" -type f 2>/dev/null | while read -r f; do
       "$elfdump" -d "$f" 2>/dev/null | grep -Eq 'SONAME|NEEDED|RUNPATH|RPATH' || continue
+      # Kernel modules are ET_REL (e_type 1) and DO carry a .dynamic with NEEDED
+      # (their depends_on list, e.g. specfs NEEDs fs/fifofs). Adding a RUNPATH
+      # string there overwrote that NEEDED and krtld then failed every symbol
+      # (measured on boot: "specfs: undefined symbol ... cannot load module").
+      # Only executables and shared objects (ET_EXEC 2, ET_DYN 3) are relocated.
+      [ "$(od -An -tu1 -j16 -N1 "$f" | tr -d ' ')" = 1 ] && continue
+      # unix itself is ET_EXEC with a .dynamic (it is linked against genunix); it
+      # is loaded by the boot loader, never by ld.so.1, so no RUNPATH either.
+      case "$f" in */platform/*/kernel/*|*/kernel/*/genunix) continue;; esac
       chmod u+w "$f" 2>/dev/null || true
       if ! "$elfedit" -e "dyn:runpath $rp" "$f" 2>elferr.txt; then
         echo "FATAL: elfedit runpath failed on $f" >&2

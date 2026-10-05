@@ -26,16 +26,21 @@
 , name ? "illumos-userland"
 , dirs ? [ "usr" "lib" "sbin" "opt" ]
 , exclude ? [ "usr/kernel" "usr/share/man" ]   # kernel modules are the kernel slice's
+  # opt/: everything there is a test suite (os-tests, zfs-tests, test-runner,
+  # SUNWdtrt, ...), 56 MB, none of it a runtime component. Off in the base world.
+, withTests ? false
 , system ? "x86_64-solaris"
 }:
 
 derivation {
   inherit name system gate;
+  # NixOS convention: headers + link-time files in `dev`, out of the runtime closure.
+  outputs = [ "out" "dev" ];
   builder = "/usr/bin/bash";
   PATH = "/usr/gnu/bin:/usr/bin:/usr/sbin";
   libc = libcSlice;
   dirsArg = builtins.concatStringsSep " " dirs;
-  excludeArg = builtins.concatStringsSep " " exclude;
+  excludeArg = builtins.concatStringsSep " " (exclude ++ (if withTests then [ ] else [ "opt" ]));
   depsArg = builtins.concatStringsSep " " deps;
   args = [ "-c" ''
     set -eu
@@ -46,6 +51,9 @@ derivation {
     cd "$out"
     for x in $excludeArg; do [ -e "$x" ] && find "$x" -depth -delete; done
     chmod -R u+w "$out"
+    # dev output: the C headers (usr/include) and the lint/link-only bits.
+    mkdir -p "$dev/usr"
+    [ -d usr/include ] && mv usr/include "$dev/usr/include"
 
     # setuid/setgid: record, then strip.
     find . -type f \( -perm -4000 -o -perm -2000 \) | sed 's,^\./,,' | sort > .world/setuid
