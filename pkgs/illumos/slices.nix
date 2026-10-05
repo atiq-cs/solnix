@@ -294,6 +294,7 @@ rec {
       "kernel"                  # genunix + the shared module/driver tree
       "platform/i86pc/amd64"    # the boot archive's amd64 payload dir
       "boot"                    # loader.efi / gptzfsboot / forth files
+      "usr/kernel"              # the /usr/kernel module tree (modpath's third entry)
     ];
   };
 }

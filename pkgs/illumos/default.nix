@@ -415,6 +415,31 @@ let
   # See ./toolchains.nix + docs/design-toolchains.md.
   toolchains = import ./toolchains.nix { inherit mkIllumosComponent libc; };
 
+  # gcc built FROM SOURCE (./gcc-src.nix): the NixOS bootstrap step. The host's
+  # IPS gcc-14 is only the stage0 seed that compiles it; gcc.lib (libstdc++,
+  # libgcc_s) is the C++/unwind runtime every shipped C++ binary links.
+  gcc = import ./gcc-src.nix { gate = gate'; libcSlice = libc; };
+
+  # From-source packages the gate does not provide (./base-src.nix). zlib and
+  # libxml2 replace the host-copied externalLibs; world is built on top of them.
+  srcPkgs = import ./base-src.nix { gate = gate'; libcSlice = libc; inherit world; };
+
+  # The whole gate userland, relocated into the store (./mk-proto-world.nix).
+  world = import ./mk-proto-world.nix {
+    gate = gate'; libcSlice = libc;
+    deps = [ srcPkgs.zlib srcPkgs.libxml2 ];
+  };
+
+  # The boot-time set: what must run before the shared /nix is mounted (init,
+  # the shell inittab uses, zfs to mount /nix). Lives as real files at these
+  # store paths inside each generation's BE (docs/design-nix-managed-base.md).
+  early = import ./mk-proto-slice.nix {
+    gate = gate'; name = "illumos-early";
+    deps = [ libc rtld srcPkgs.zlib srcPkgs.libxml2 ];
+    bins = [ "sbin/init" "sbin/sh" "sbin/zfs" "sbin/mount" ];
+    allowUnresolved = [ ];
+  };
+
   # nix (pkgs.solnix.nix) — the classic Nix 2.3.16 the host runs, ingested so it
   # ships on the image (design §C). First cut = host /nix-tools ingest; see the
   # TODO in ./nix.nix for the proper mk-illumos-component slice.
@@ -451,7 +476,8 @@ let
   starter = import ./starter.nix { system = "x86_64-solaris"; };
 in
 {
-  inherit libc rtld ld sys base-tools systemPath externalLibs nix nix224 cached starter;
+  inherit libc rtld ld sys base-tools systemPath externalLibs nix nix224 cached starter gcc world early;
+  inherit (srcPkgs) zlib libxml2 openssl openssh bash;
   gate = gate';
   inherit (toolchains) gcc14 clang gdb;
   # the CORE-OS slices, each with a computed DT_NEEDED closure (./slices.nix).
