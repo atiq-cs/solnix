@@ -3142,12 +3142,20 @@ if [ "$_mkadmin" = 1 ]; then
   # home + authorized_keys silently vanish on first boot (measured on the X1: gburd
   # had no ~/.ssh after reboot). Mount the home dataset under $ALTROOT first so the
   # home + key land on the dataset that actually mounts at boot.
+  # The pool is created with -o altroot=$ALTROOT, so ZFS ALREADY prefixes every
+  # mountpoint with $ALTROOT. Setting mountpoint=$ALTROOT$HOME_BASE doubled it
+  # (MEASURED on bhost: the dataset mounted at /a/a/home), the key went into the
+  # BE's /a/home, and the dataset shadowed it at boot. Leave the mountpoint at
+  # $HOME_BASE and just mount it; then PROVE it is the dataset that is mounted there.
   _homeds="$POOL/home"
   case "$HOME_BASE" in */export/home) _homeds="$POOL/export/home" ;; esac
   if zfs list -H "$_homeds" >/dev/null 2>&1; then
-    zfs set mountpoint="$ALTROOT$HOME_BASE" "$_homeds" 2>/dev/null || true
-    zfs mount "$_homeds" 2>/dev/null || true
-    log "mounted $_homeds at $ALTROOT$HOME_BASE so the admin home lands on the dataset (not the shadowed BE dir)"
+    zfs set mountpoint="$HOME_BASE" "$_homeds" 2>/dev/null || true
+    [ "$(zfs get -H -o value mounted "$_homeds" 2>/dev/null)" = yes ] || zfs mount "$_homeds" 2>/dev/null || true
+    _hm=$(df -h "$ALTROOT$HOME_BASE" 2>/dev/null | awk 'NR==2{print $1}')
+    [ "$_hm" = "$_homeds" ] \
+      || die "$_homeds is not mounted at $ALTROOT$HOME_BASE (df says '$_hm'); the admin home would land in the BE and be shadowed at boot"
+    log "mounted $_homeds at $ALTROOT$HOME_BASE (verified by df) so the admin home lands on the dataset"
   fi
   mkdir -p "$ALTROOT${HOME_BASE}"
   # Run useradd/passwd AGAINST THE TARGET ROOT (-R), not the live system, so the
@@ -3240,12 +3248,11 @@ fi
 log "finalizing (export pool)"
 sync
 zfs set canmount=noauto "$BEDS"
-# Reset the home dataset mountpoint to its boot-time path ($HOME_BASE), undoing the
-# temporary $ALTROOT$HOME_BASE mount used to land the admin home on the dataset.
-# Without this it would try to mount at /a/home at boot and the home would be lost.
+# Unmount the home dataset (mounted under the pool altroot for the admin home) and
+# make sure its stored mountpoint is the boot-time $HOME_BASE.
 if [ "${_mkadmin:-0}" = 1 ] && [ -n "${_homeds:-}" ] && zfs list -H "$_homeds" >/dev/null 2>&1; then
   run_to 20 zfs unmount "$_homeds" 2>/dev/null || true
-  zfs set mountpoint="$HOME_BASE" "$_homeds" 2>/dev/null || true
+  zfs set mountpoint="$HOME_BASE" "$_homeds" 2>/dev/null || true   # already; kept as a guard
 fi
 run_to 30 umount "$ALTROOT/esp" 2>/dev/null || true
 # unmount the pool's own mountpoint (/a/$POOL from the menu.lst step) + the BE.
