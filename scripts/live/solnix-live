@@ -1,0 +1,121 @@
+#!/sbin/sh
+# solnix-live -- SMF start method of site/solnix-live on the installer media (configurations/installer.nix).
+# @autonet@ / @install@ are replaced with store paths by the configuration.
+. /lib/svc/share/smf_include.sh
+PATH=/usr/sbin:/usr/bin:/sbin; export PATH
+{
+  echo ""
+  echo "[solnix] live-installer service starting (fs writable, devfsadm done)"
+  # AUTO-NETWORK at boot, FAIL-SAFE: launch the bounded bring-up FIRST, in the
+  # BACKGROUND, BEFORE devfsadm / the disk listing. Those disk steps can BLOCK
+  # indefinitely (`ls /dev/dsk` stat()s device nodes whose controller nexus has
+  # not attached -- OBSERVED to hang this method in QEMU q35 with no disk), and
+  # auto-network must not be held hostage to disk enumeration. solnix-autonet
+  # has its own hard watchdog and needs no /dev/dsk, so a no-NIC / no-DHCP box
+  # simply gets a "down: ..." status line the motd reads. It also does NOT gate
+  # the console auto-login (a separate SMF service). Result lands in
+  # /var/run/solnix-net-status + /var/log/solnix-autonet.log.
+  if [ -x @autonet@ ]; then
+    @autonet@ >/dev/null 2>&1 &
+    echo "[solnix] auto-network bring-up started in the background (bounded; see solnix-net)"
+  fi
+  # ⚠️ devfsadm and the disk listing go to the LOG, never to /dev/console.
+  #
+  # OBSERVED ON REAL HARDWARE: this block redirects to /dev/console (see the
+  # closing `} > /dev/console 2>&1`), and ttymon/login READS THAT SAME DEVICE. So
+  # `ls /dev/dsk` was delivered to login as if TYPED, and the console showed
+  #
+  #   solnix console login: c1t001B448B485502D1d0p0
+  #   c1t001B448B485502D1d0p1        <- consumed as usernames
+  #
+  # login then loops rejecting device names as users, and real keystrokes are lost
+  # in the flood. The maintainer reported this as "no keyboard" -- the keyboard was
+  # fine; the prompt was drowning. Anything chatty must NOT share the console with
+  # an interactive login.
+  /usr/sbin/devfsadm >>/var/log/solnix-live.log 2>&1 || true
+  { echo "[solnix] disks visible:"; ls /dev/dsk 2>/dev/null; } >>/var/log/solnix-live.log 2>&1
+  echo "[solnix] devfsadm done; disk list in /var/log/solnix-live.log"
+
+    if [ ! -r /etc/solnix-autoinstall ]; then
+      _bp=$(/usr/sbin/prtconf -v 2>/dev/null | sed -n '/solnix-autoinstall/{n;s/.*value=.\{0,1\}//;s/.$//p;}' | head -1)
+      if [ -n "$_bp" ]; then
+        echo "$_bp" > /etc/solnix-autoinstall
+        echo "[solnix] auto-install from BOOT PROPERTY solnix-autoinstall='$_bp'"
+      fi
+    fi
+  # IDENTIFY OUR OWN BOOT MEDIUM -- ALWAYS, not only when hunting for a marker.
+  #
+  # ⚠️ DATA-LOSS GUARD. The `auto` target picker below skips the disk named in
+  # /tmp/.solnix-media-disk. That file used to be written only inside the
+  # media-marker branch, so when the marker was BAKED INTO THE RAMDISK
+  # (AUTOINSTALL_DISK= at build time) the branch never ran, $_media was EMPTY and
+  # the media-exclusion silently no-opped -- leaving the hsfs check as the only
+  # thing between `auto` and erasing the USB stick the operator booted from.
+  # Identification is therefore unconditional and keyed on OUR OWN CONTENT
+  # (the boot_archive), not on the marker, so it holds for every marker source.
+  #
+  # The medium is found by ATTEMPTING a read-only hsfs mount rather than by
+  # fstyp, deliberately: the target-picker's own guard already uses fstyp, and
+  # two guards sharing one mechanism are one guard. mount -F hsfs -o ro fails
+  # harmlessly on anything that is not an ISO9660 filesystem and writes nothing.
+  _mediadisk=""
+  for _p0 in /dev/dsk/c*p0; do
+    [ -e "$_p0" ] || continue
+    mkdir -p /tmp/.media
+    if /usr/sbin/mount -F hsfs -o ro "$_p0" /tmp/.media 2>/dev/null; then
+      if [ -f /tmp/.media/platform/i86pc/amd64/boot_archive ]; then
+        _mediadisk=$(basename "$_p0" p0)
+        echo "[solnix] boot medium identified as $_mediadisk (solnix ISO9660) -- EXCLUDED from install targets"
+        if [ ! -r /etc/solnix-autoinstall ] && [ -f /tmp/.media/solnix-autoinstall ]; then
+          tr -d '\r' < /tmp/.media/solnix-autoinstall | head -1 > /etc/solnix-autoinstall
+          echo "[solnix] auto-install marker found on media $_mediadisk: '$(cat /etc/solnix-autoinstall)'"
+        fi
+      fi
+      /usr/sbin/umount /tmp/.media 2>/dev/null
+    fi
+    [ -n "$_mediadisk" ] && break
+  done
+  echo "$_mediadisk" > /tmp/.solnix-media-disk
+  if [ -r /etc/solnix-autoinstall ]; then
+    _tgt=$(cat /etc/solnix-autoinstall 2>/dev/null)
+    _media=$(cat /tmp/.solnix-media-disk 2>/dev/null)
+    if [ "$_tgt" = auto ] || [ -z "$_tgt" ]; then
+      _tgt=""
+      for _c in /dev/rdsk/c*t*d0s0 /dev/rdsk/c*d0s0; do
+        [ -e "$_c" ] || continue
+        _d=$(basename "$_c"); _d=${_d%s0}
+        # TWO INDEPENDENT DATA-LOSS GUARDS, different mechanisms on purpose:
+        #   1. never the disk we booted from (identified above by content)
+        #   2. never a disk whose p0 is itself ISO9660 (catches a medium that
+        #      failed identification, e.g. mount refused)
+        [ -n "$_media" ] && [ "$_d" = "$_media" ] && continue
+        case "$(/usr/sbin/fstyp "/dev/rdsk/${_d}p0" 2>/dev/null)" in hsfs) continue;; esac
+        _tgt=$_d; break
+      done
+    fi
+    echo "[solnix] AUTO-INSTALL to ${_tgt:-<none found>} (media=${_media:-?}) -- THIS DISK WILL BE ERASED"
+    /usr/sbin/format </dev/null 2>&1 | grep -E '^ +[0-9]+\.' | head -8 || true
+    if [ -n "$_tgt" ]; then
+      _i=10; while [ $_i -gt 0 ]; do printf '[solnix] writing to %s in %2d s ...\r' "$_tgt" $_i; sleep 1; _i=$((_i-1)); done; echo
+      echo "[solnix] AUTO-INSTALL starting on $_tgt"
+      # ⚠️ SOLNIX_TARGET_CONSOLE=text, NOT the "ttya" default. illumos derives BOTH
+      # stdin and stdout from the console value, so an installed system pointed at
+      # a serial port the machine does not have boots to a BLACK SCREEN that also
+      # takes no input -- and by then the target disk is already erased. This path
+      # is by definition the keyboard-free one, i.e. a laptop with no serial port,
+      # so it must hand the framebuffer console to the installed system. "text" is
+      # exactly what this media ships and is the configuration the X1 Carbon has
+      # actually booted; "text,ttya" is NOT used
+      # because only the single value has hardware evidence behind it.
+      SOLNIX_POOL=rpool SOLNIX_ALLOW_RPOOL=1 SOLNIX_TARGET_CONSOLE=text \
+        @install@ "$_tgt" \
+        && echo "SOLNIX_AUTOINSTALL_RESULT: DONE" \
+        || echo "SOLNIX_AUTOINSTALL_RESULT: FAIL rc=$?"
+    else
+      echo "SOLNIX_AUTOINSTALL_RESULT: FAIL no-target-disk"
+    fi
+  fi
+  # second probe: give slow USB enumeration ~20 s more, then report again
+  sleep 20
+} > /dev/console 2>&1
+exit $SMF_EXIT_OK

@@ -138,15 +138,16 @@ static_checks() {
   [ "$any" = 1 ] || _fail "no nix.conf in the image sets ssl-cert-file (nix HTTPS fetch has no CA)"
 
   # LESSON (this session): solnix-zap disk-nuke tool must be staged + runnable.
-  if [ -x "$R/usr/sbin/solnix-zap" ] && head -1 "$R/usr/sbin/solnix-zap" | grep -q '/sbin/sh'; then
+  local ZAP INST AUTONET; ZAP=$(_tool "$R" solnix-zap); INST=$(_tool "$R" solnix-install); AUTONET=$(_tool "$R" solnix-autonet)
+  if [ -n "$ZAP" ] && head -1 "$ZAP" | grep -q '/sbin/sh'; then
     _ok "solnix-zap present + #!/sbin/sh (disk-nuke recovery tool)"
   else _fail "solnix-zap missing or wrong shebang"; fi
 
   # LESSON (committed != shipped): the shipped solnix-install must match a known
   # HEAD blob (the mount-guard fix etc. must actually be IN the image binary).
-  if [ -x "$R/usr/sbin/solnix-install" ]; then
+  if [ -n "$INST" ]; then
     local ish gsh
-    ish=$(sha256sum "$R/usr/sbin/solnix-install" 2>/dev/null | awk '{print $1}')
+    ish=$(sha256sum "$INST" 2>/dev/null | awk '{print $1}')
     gsh=$(cd "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null && git show HEAD:scripts/solnix-install 2>/dev/null | sha256sum | awk '{print $1}')
     if [ -n "$gsh" ] && [ "$ish" = "$gsh" ]; then _ok "shipped solnix-install sha == git HEAD blob ($ish)"
     elif [ -n "$gsh" ]; then _fail "shipped solnix-install sha ($ish) != HEAD blob ($gsh) -- image predates a committed fix"
@@ -191,13 +192,13 @@ static_checks() {
   # persistent DB, so the auto-network left no lease and every fetch failed to
   # resolve. The temporary form (-t) gets the lease. Both the boot-time autonet
   # method and solnix-install must use -t.
-  local an="$R/lib/svc/method/solnix-autonet"
-  if [ -f "$an" ]; then
+  local an="$AUTONET"
+  if [ -n "$an" ] && [ -f "$an" ]; then
     if grep -q 'create-addr -t -T dhcp' "$an"; then _ok "solnix-autonet creates a TEMPORARY dhcp addrobj (-t)"
     else _fail "solnix-autonet uses a persistent create-addr -- fails on the live media's persistent DB (no lease)"; fi
   else _fail "/lib/svc/method/solnix-autonet missing"; fi
-  if [ -f "$R/usr/sbin/solnix-install" ]; then
-    if grep -q 'create-addr -t -T dhcp' "$R/usr/sbin/solnix-install"; then _ok "solnix-install creates a TEMPORARY dhcp addrobj (-t)"
+  if [ -n "$INST" ]; then
+    if grep -q 'create-addr -t -T dhcp' "$INST"; then _ok "solnix-install creates a TEMPORARY dhcp addrobj (-t)"
     else _fail "solnix-install uses a persistent create-addr (no lease on the live media)"; fi
   fi
 
@@ -211,6 +212,8 @@ static_checks() {
     _fail "loader.conf sets efi-max-resolution (not a loader variable; does nothing)"
   else _ok "loader.conf has no inert efi-max-resolution"; fi
 
+  closure_contract_checks "$R"
+
   # LESSON (dig/curl broken -- the SECOND-ORDER dangling lib, the openssl trap):
   # EVERY staged ELF's DT_NEEDED must be present in the ramdisk, TRANSITIVELY
   # (a staged lib's own NEEDED too), ABI-matched (a 64-bit binary needs a 64-bit
@@ -218,9 +221,99 @@ static_checks() {
   runnability_check "$R"
 }
 
+# =====================================================================
+# THE CLOSURE CONTRACT (media built FROM A TOPLEVEL, scripts/make-installer-image.sh).
+# NixOS's iso-image.nix: storeContents = [ toplevel ]. These hold for that media and
+# fail on media made by copying a host root (oi-make-livecd.sh), by design.
+# =====================================================================
+_rl() { ls -ld "$1" 2>/dev/null | sed -n 's/.* -> //p'; }
+# _inr <root> <path>: resolve <path> INSIDE <root> (absolute link targets re-rooted),
+# print the real file. A plain [ -e "$R/usr/bin/x" ] on closure media follows
+# /nix/store/... through the BUILD host's store, which proves nothing about the image.
+_inr() {
+  local p="$1/$2" n=0 t
+  while [ -h "$p" ] && [ $n -lt 32 ]; do
+    t=$(_rl "$p"); case "$t" in /*) p="$1$t" ;; *) p="$(dirname "$p")/$t" ;; esac; n=$((n+1))
+  done
+  [ -e "$p" ] && [ ! -h "$p" ] && echo "$p"
+}
+# _tool <root> <name>: an installer tool, wherever this media kind puts it
+# (closure media: the system profile's sw/bin; host-copied media: /usr/sbin).
+_tool() { _inr "$1" "run/current-system/sw/bin/$2" || _inr "$1" "usr/sbin/$2" || _inr "$1" "lib/svc/method/$2"; }
+closure_contract_checks() {
+  local R="$1" top cs
+  # 1. /run/current-system is a toplevel IN the media's own store, and the system
+  #    profile points at it (generation 1).
+  top=$(_rl "$R/run/current-system")
+  case "$top" in
+    /nix/store/*-solnix-system-*)
+      if [ -d "$R$top" ] && [ -e "$R$top/bin/install-be" ]; then _ok "/run/current-system -> $top, present in the media store"
+      else _fail "/run/current-system -> $top, but that toplevel is not in the media's store"; fi ;;
+    *) _fail "/run/current-system is '${top:-absent}', not a solnix toplevel in /nix/store (media not built from a closure)" ;;
+  esac
+  local sp; sp=$(_rl "$R/nix/var/nix/profiles/system")
+  if [ -n "$top" ] && [ "$(_rl "$R/nix/var/nix/profiles/$sp")" = "$top" ]; then _ok "system profile -> $sp -> the toplevel"
+  else _fail "system profile does not resolve to /run/current-system ($sp)"; fi
+  # 2. the media's store is a registered store: every closure path valid in its own DB.
+  if [ -f "$R/nix/var/nix/db/db.sqlite" ]; then
+    if command -v nix-store >/dev/null && [ -n "$top" ]; then
+      if nix-store --store "local?root=$R" --verify-path $(nix-store --store "local?root=$R" -qR "$top" 2>/dev/null) >/dev/null 2>&1
+      then _ok "every closure path of the toplevel is VALID in the media's store DB"
+      else _fail "the media's store DB does not register the whole toplevel closure"; fi
+    else _skip "nix-store absent -- store DB validity"; fi
+  else _fail "no /nix/var/nix/db/db.sqlite -- the media store is unregistered"; fi
+  # 3. the userland resolves INTO the store: /usr/bin and /usr/sbin are links into a
+  #    store path, not host directories.
+  local d t
+  for d in usr/bin usr/sbin; do
+    t=$(_rl "$R/$d")
+    case "$t" in /nix/store/*) _ok "/$d -> $t (resolves into the store)" ;;
+      *) _fail "/$d is ${t:-a real directory}, not a link into /nix/store (copied from a host root)" ;; esac
+  done
+  # 4. nothing outside the store, the generated root skeleton and mutable state is
+  #    an ELF: binaries copied from a host land as real files in /usr, /lib, /sbin.
+  local stray
+  # (/usr/kernel is excluded: install-be copies kernel modules as real files on purpose,
+  #  because bootadm walks real dirs to build the boot_archive)
+  stray=$(find "$R/usr" "$R/lib" "$R/sbin" "$R/opt" -path "$R/usr/kernel" -prune -o -type f -print 2>/dev/null | while read -r f; do
+            LC_ALL=C od -An -N4 -tx1 "$f" 2>/dev/null | grep -q '7f 45 4c 46' && echo "${f#$R}"; done | head -5)
+  if [ -z "$stray" ]; then _ok "no ELF outside /nix/store under /usr /lib /sbin /opt (no host-copied binaries)"
+  else _fail "ELF files outside the store (host copies): $(echo $stray)"; fi
+  # 5. no live-root-copy step left in the shipped installer.
+  if [ -n "$top" ] && [ -f "$R$top/bin/solnix-install" ] || [ -h "$R$top/bin/solnix-install" ]; then
+    local si; si="$R$(_rl "$R$top/bin/solnix-install")"; [ -f "$si" ] || si="$R$top/bin/solnix-install"
+    if grep -qE 'tar cEfX|SELF_INSTALL=|copy the running root FS' "$si" 2>/dev/null; then _fail "shipped solnix-install still has the live-root copy step"
+    elif grep -q 'install-be' "$si" 2>/dev/null; then _ok "shipped solnix-install populates the BE through install-be (no live-root copy)"
+    else _fail "shipped solnix-install has neither install-be nor a copy step -- unrecognised installer"; fi
+  else _fail "toplevel carries no bin/solnix-install"; fi
+  # 6. the media's nix.conf: cache.solnix.io trusted ONLY by the 8UNr key (+ cache.nixos.org).
+  local nc="$R/etc/nix/nix.conf" keys
+  if [ -f "$nc" ]; then
+    # strip only up to the FIRST '=': base64 keys end in '=', so a greedy s/.*=// eats them all.
+    keys=$(grep -E '^[[:space:]]*trusted-public-keys' "$nc" | sed 's/^[^=]*= *//')
+    case " $keys " in
+      *" cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8= "*)
+        if echo "$keys" | tr ' ' '\n' | grep -v -e '^cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8=$' -e '^cache.nixos.org-1:' -e '^$' | grep -q .
+        then _fail "nix.conf trusts keys other than 8UNr/cache.nixos.org: $keys"
+        else _ok "nix.conf trusts only cache.solnix.io-1:8UNr... (+ cache.nixos.org-1)"; fi ;;
+      *) _fail "nix.conf does not trust cache.solnix.io-1:8UNr... ($keys)" ;;
+    esac
+    grep -qE '^[[:space:]]*substituters.*https://cache\.solnix\.io' "$nc" && _ok "nix.conf substitutes from https://cache.solnix.io"       || _fail "nix.conf has no https://cache.solnix.io substituter"
+  else _fail "no /etc/nix/nix.conf on the media"; fi
+  # 7. generic media: no personal identity baked in.
+  local who
+  who=$(awk -F: '$3>=100 && $3<60000 {print $1}' "$R/etc/passwd" 2>/dev/null | grep -v -E '^(nobody|noaccess|nobody4|nixbld[0-9]+|sshd|dladm|netadm|netcfg|pkg5srv|upnp|smmsp|svctag|zfssnap|unknown)$' | head -3)
+  if [ -z "$who" ]; then _ok "no personal login accounts on the media"
+  else _fail "personal account(s) baked into the media: $(echo $who)"; fi
+  if find "$R/root" "$R/etc/ssh" -name 'authorized_keys*' -size +0 2>/dev/null | grep -q .; then
+    _fail "an authorized_keys file is baked into the media"
+  else _ok "no authorized_keys baked into the media"; fi
+}
+
 # Transitive, ABI-aware NEEDED-closure check over every staged ELF.
 runnability_check() {
   local R="$1"
+  if [ -n "$(_rl "$R/run/current-system")" ]; then runnability_check_closure "$R"; return; fi
   command -v elfdump >/dev/null || { _skip "elfdump absent -- runnability (NEEDED-closure) check (run on the illumos node)"; return; }
   local libdirs="$R/lib $R/lib/amd64 $R/usr/lib $R/usr/lib/amd64 $R/usr/gnu/lib $R/usr/gnu/lib/amd64"
   _have() {  # $1 soname, $2 wanted ELFCLASS (32|64)
@@ -265,10 +358,30 @@ runnability_check() {
   [ "$missing" = 0 ] && _ok "runnability: all $checked staged ELFs' NEEDED libs present, ABI-matched, transitive (dig/curl/openssl guard)"
 }
 
+# Closure media: every binary on the system profile's PATH resolves its libraries
+# INSIDE the image. ldd runs under chroot so absolute store paths resolve against the
+# image, not this host. ldd only loads the object; it never runs it (unlike the
+# svc.configd exec-test incident, docs/working-with-subagents.md).
+runnability_check_closure() {
+  local R="$1" b n=0 bad=0 out
+  command -v chroot >/dev/null && [ -n "$(_inr "$R" usr/bin/ldd)" ] || { _skip "no chroot/ldd in the image -- closure runnability"; return; }
+  for b in "$R"/run/current-system/sw/bin/* "$R"/usr/sbin/zpool "$R"/usr/sbin/zfs "$R"/usr/sbin/svccfg; do
+    local rel="/${b#$R/}" real; real=$(_inr "$R" "${rel#/}") || continue
+    LC_ALL=C od -An -N4 -tx1 "$real" 2>/dev/null | grep -q '7f 45 4c 46' || continue
+    n=$((n+1))
+    out=$(chroot "$R" /usr/bin/ldd "$rel" 2>&1 | grep -E 'not found|open failed|wrong ELF class')
+    [ -z "$out" ] || { _fail "runnability: $rel -- $(echo "$out" | head -2 | tr '\n' ' ')"; bad=$((bad+1)); }
+  done
+  [ "$n" -gt 0 ] || { _fail "runnability: no ELF binaries found on the system profile PATH"; return; }
+  [ "$bad" = 0 ] && _ok "runnability (closure): all $n profile/core binaries resolve every library inside the image (chroot ldd)"
+}
+
 # boot_archive size ceiling (the X1 firmware refused an oversized raw archive).
 size_check() {
   local ba="$1" cap="${RD_MAX_RAW_BYTES:-816119808}"   # measured X1 EFI hard limit
-  local sz; sz=$(stat -c %s "$ba" 2>/dev/null || stat -f %z "$ba" 2>/dev/null)
+  # wc -c, not stat: illumos has no stat(1) at all, so a stat-based size read was
+  # empty on the one platform this runs on (STATIC phase) and the check only SKIPped.
+  local sz; sz=$(wc -c < "$ba" 2>/dev/null | tr -d ' ')
   if [ -n "$sz" ] && [ "$sz" -lt "$cap" ]; then _ok "boot_archive raw size $sz < $cap (X1 EFI ceiling)"
   elif [ -n "$sz" ]; then _fail "boot_archive raw size $sz >= $cap -- the X1 firmware will refuse it"
   else _skip "could not stat boot_archive size"; fi
@@ -308,7 +421,30 @@ selftest() {
   echo 'hosts:      files' > "$T/etc/nsswitch.conf"   # no dns -> resolution breaks
   echo '::1 unknown localhost' > "$T/etc/hosts"; echo solnix > "$T/etc/nodename"
   mkdir -p "$T/etc/ipadm"; echo '_ifname=vioif0;_aobjname=vioif0/dhcp;_dhcp=30,no;' > "$T/etc/ipadm/ipadm.conf"
-  local before=$FAIL
+  # closure-contract defects: a host-copied /usr/bin with an ELF in it, no
+  # /run/current-system, a nix.conf trusting the retired 5HAV key, a personal user.
+  mkdir -p "$T/usr/bin"; printf '\177ELF\002\001\001' > "$T/usr/bin/ls"
+  printf 'trusted-public-keys = cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk=\nsubstituters = https://cache.nixos.org\n' >> "$T/etc/nix/nix.conf"
+  echo 'jdoe:x:1000:10::/home/jdoe:/bin/sh' > "$T/etc/passwd"
+  local before=$FAIL cbefore
+  cbefore=$FAIL; closure_contract_checks "$T" >/dev/null 2>&1 || true
+  echo "  closure-contract checks fired on the defective root: $((FAIL-cbefore)) (expect >= 8)"
+  [ $((FAIL-cbefore)) -ge 8 ] || { echo "  FAIL: closure-contract checks are vacuous"; return 1; }
+  # and a GOOD closure root passes them all (positive control).
+  local G="$WORK/good" TL=/nix/store/00000000000000000000000000000000-solnix-system-x
+  mkdir -p "$G$TL/bin" "$G/nix/store/11111111111111111111111111111111-w/bin" "$G/run" "$G/nix/var/nix/profiles" "$G/usr" "$G/etc/nix" "$G/nix/var/nix/db"
+  echo 'install-be' > "$G$TL/bin/solnix-install"; : > "$G$TL/bin/install-be"; : > "$G/nix/var/nix/db/db.sqlite"
+  ln -s "$TL" "$G/run/current-system"; ln -s "$TL" "$G/nix/var/nix/profiles/system-1-link"; ln -s system-1-link "$G/nix/var/nix/profiles/system"
+  ln -s /nix/store/11111111111111111111111111111111-w/bin "$G/usr/bin"; ln -s /nix/store/11111111111111111111111111111111-w/bin "$G/usr/sbin"
+  printf 'substituters = https://cache.solnix.io https://cache.nixos.org\ntrusted-public-keys = cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8= cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=\n' > "$G/etc/nix/nix.conf"
+  echo 'root:x:0:0::/root:/bin/sh' > "$G/etc/passwd"
+  local gb=$FAIL; closure_contract_checks "$G" > "$WORK/good.out" 2>&1 || true
+  # the store-DB validity check needs a real store; on a fake root it may only SKIP or FAIL that one line
+  local gfails; gfails=$(grep -c 'FAIL:' "$WORK/good.out"); grep 'FAIL:' "$WORK/good.out" | grep -v 'store DB' | sed 's/^/    good-root /'
+  if [ "$(grep 'FAIL:' "$WORK/good.out" | grep -vc 'store DB')" != 0 ]; then echo "  FAIL: a GOOD closure root fails the contract (checks are wrong)"; return 1; fi
+  FAIL=$gb
+  echo "  positive control: a good closure root passes the contract (store-DB line aside: $gfails)"
+  before=$FAIL
   static_checks "$T" >/dev/null 2>&1 || true
   if [ "$FAIL" -gt "$before" ]; then
     echo "  PASS: the suite FAILED on a deliberately-defective root ($((FAIL-before)) checks fired)"

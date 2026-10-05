@@ -94,7 +94,7 @@ usage: solnix-install [--disk <target>] [--flake <ref>#<attr>]
 
   --git    clone a config repo first, then resolve --flake inside it.
            Use an https:// URL: the live media has no ssh key.
-  --flake  the system configuration to build, e.g. .#HOST
+  --flake  the system configuration to build, e.g. 'github:<you>/<repo>#<host>'
   --home | --home-manager
            a home-manager configuration, e.g. .#USER@HOST
            (auto-detected from the same flake when omitted)
@@ -383,8 +383,7 @@ trap cleanup EXIT INT TERM
 # ---------------------------------------------------------------------------
 # 0b. FETCH THE CONFIG AND PROVE THE ATTR EXISTS -- before touching any disk.
 #
-# The maintainer's step 3 is "ensure the .#dixi profile exists". Doing that BEFORE
-# anything destructive is the point: a typo'd attr must fail with a list of what IS
+# Proving the requested configuration exists BEFORE anything destructive is the point: a typo'd attr must fail with a list of what IS
 # available, not half an install.
 # ---------------------------------------------------------------------------
 # 0a. INTERNET CHECK -- BEFORE the clone, because the clone is the first thing
@@ -927,7 +926,7 @@ EOF3
     fi
     echo "  ##  a flood of agent keys -> 'too many authentication failures'? add:" >&2
     echo "  ##      ssh -o IdentitiesOnly=yes -o IdentityAgent=none root@${_ip:-<ip>}" >&2
-    echo "  ##  then run:  solnix-install --flake 'github:USER/REPO#HOST'" >&2
+    echo "  ##  then run:  solnix-install --flake 'github:<you>/<repo>#<host>'" >&2
     echo "  #####################################################################" >&2
   else
     log "sshd did not come up -- check: svcs -x network/ssh"
@@ -1114,7 +1113,7 @@ if [ -n "$GIT_URL" ]; then
   esac
   command -v git >/dev/null 2>&1 || die "git is not on this media; cannot use --git.
   Use nix's own fetcher instead -- pass the repo URL directly to --flake, no git binary needed:
-    solnix-install --flake 'github:<user>/<repo>#<attr>'
+    solnix-install --flake 'github:<you>/<repo>#<host>'
     solnix-install --flake 'git+https://host/user/repo.git#<attr>'
   (the live media stages nix but not git, whose 150 hardlinks would bloat the ramdisk ~800MB)"
   CFGDIR="${SOLNIX_CFGDIR:-/var/tmp/solnix-config}"
@@ -2133,7 +2132,11 @@ fi
 step "laying the boot environment from the toplevel (install-be)"
 _belog="$ALTROOT/var/tmp/solnix-install-be-$$.log"
 spin_start "install-be (early-boot set, /etc, SMF, /boot, boot_archive)"
-SOLNIX_ROOT="$ALTROOT" SOLNIX_POOL="$POOL" SOLNIX_BE="$BE" SOLNIX_CONSOLE="$TARGET_CONSOLE" \
+# overlay mode: the target store IS /nix, so install-be reads it directly; host
+# mode: it lives under $NIXROOT, and install-be must read every toplevel path
+# through that root (STORE_PREFIX), or absolute /nix/store links would resolve
+# against the build host's own store.
+SOLNIX_ROOT="$ALTROOT" SOLNIX_STORE_ROOT="$STORE_PREFIX" SOLNIX_POOL="$POOL" SOLNIX_BE="$BE" SOLNIX_CONSOLE="$TARGET_CONSOLE" \
   run_to "${SOLNIX_INSTALL_BE_TIMEOUT:-1800}" /sbin/sh "$_TLD/bin/switch-to-configuration" install-be "$TOPLEVEL" \
   > "$_belog" 2>&1
 _rc=$?
@@ -2640,7 +2643,7 @@ if [ "$DO_HOME" = 1 ] && [ -n "$HOME_FLAKE" ]; then
   fi
 elif [ "$DO_HOME" = 1 ] && [ -n "$FLAKE_REF" ]; then
   # No explicit --home: look for a matching homeConfigurations attr in the same
-  # flake, which is the maintainer's layout (.#dixi + .#gburd@dixi).
+  # flake (the common layout: .#<host> next to .#<user>@<host>).
   if command -v nix >/dev/null 2>&1; then
     _fl="${FLAKE_REF%%#*}"; _at="${FLAKE_REF#*#}"
     _cands=$(nix eval --raw "${_fl}#homeConfigurations" --apply \

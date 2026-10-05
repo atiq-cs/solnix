@@ -146,6 +146,14 @@
         # solnix.home.style: neither option exists in this module set, and setting an
         # undefined option is an eval error. Do not add them here either without first
         # declaring the option in modules/config/.
+        # The installer media's own system: generic (no personal users, keys or
+        # flake refs). scripts/make-installer-image.sh puts its closure on the media.
+        installer = solnixSystem {
+          system = "x86_64-solaris";
+          pkgs = pkgsFor "x86_64-solaris";
+          modules = [ ./configurations/installer.nix ];
+        };
+
         dixi = solnixSystem {
           system = "x86_64-solaris";
           pkgs = pkgsFor "x86_64-solaris";
@@ -166,6 +174,7 @@
         # this EVALUATES here and only BUILDS on the illumos host, because the gate
         # proto and the slices carved from it are x86_64-solaris derivations.
         dixiToplevel = self.solnixConfigurations.dixi.config.system.build.toplevel;
+        installerToplevel = self.solnixConfigurations.installer.config.system.build.toplevel;
 
         # The pgfarm role's generated artifacts ALONE (build-farm.conf, the
         # run_build.pl driver, the setup oneshot). These are plain text/script

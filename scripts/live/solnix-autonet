@@ -1,0 +1,68 @@
+#!/sbin/sh
+# solnix-autonet -- bounded DHCP bring-up of the first wired NIC at boot (installer media).
+set -u
+PATH=/usr/sbin:/usr/bin:/sbin; export PATH
+STATUS=/var/run/solnix-net-status
+LOG=/var/log/solnix-autonet.log
+TO=${SOLNIX_AUTONET_TIMEOUT:-45}
+log() { echo "[solnix-autonet] $*" >> "$LOG" 2>/dev/null; }
+_write_status() { echo "$1" > "$STATUS" 2>/dev/null; }
+# pessimistic default: if the watchdog kills us mid-run the motd still tells the
+# operator networking is not up and how to retry.
+_write_status "down: network bring-up did not complete (no NIC or no DHCP lease)"
+_do_net() {
+  command -v dladm >/dev/null 2>&1 || { log "no dladm"; return 0; }
+  command -v ipadm >/dev/null 2>&1 || { log "no ipadm"; return 0; }
+  _nic=$(dladm show-phys -p -o link 2>/dev/null | grep -v -E '^(ena[0-9]|lo[0-9])' | head -1)
+  if [ -z "$_nic" ]; then
+    log "no wired NIC found (dladm show-phys lists only cloud/loopback)"
+    _write_status "down: no supported wired NIC found -- plug a USB-ethernet dongle, then: solnix-net"
+    return 0
+  fi
+  log "auto-configuring network on $_nic"
+  ipadm create-if "$_nic" 2>/dev/null || true
+  # -t = TEMPORARY (this boot only). MEASURED on the live media under KVM: a
+  # PERSISTENT `create-addr -T dhcp` fails "Operation failed" (the read-only-ish
+  # ramdisk persistent DB cannot take a new addrobj), while the temporary form gets
+  # the lease immediately. The live installer never wants a persistent address.
+  ipadm create-addr -t -T dhcp "$_nic/v4" 2>/dev/null || true
+  _got=""; _i=0
+  while [ "$_i" -lt 20 ]; do
+    _got=$(ipadm show-addr -p -o addr "$_nic/v4" 2>/dev/null | sed 's,/.*,,')
+    case "$_got" in ""|0.0.0.0) : ;; *) break ;; esac
+    sleep 1; _i=$((_i+1))
+  done
+  case "$_got" in
+    ""|0.0.0.0)
+      log "no DHCP lease on $_nic after ${_i}s"
+      _write_status "down: $_nic has no DHCP lease yet -- check the cable/dongle, then: solnix-net"
+      return 0 ;;
+    *) log "$_nic got $_got via DHCP" ;;
+  esac
+  _keepgw=$(netstat -rn 2>/dev/null | awk '$1=="default"{print $2}' \
+            | while read -r _gw; do if ping -sn "$_gw" 56 1 >/dev/null 2>&1; then echo "$_gw"; break; fi; done)
+  if [ -n "$_keepgw" ]; then
+    netstat -rn 2>/dev/null | awk '$1=="default"{print $2}' | while read -r _gw; do
+      [ "$_gw" = "$_keepgw" ] && continue
+      log "removing stale default route via $_gw (keeping $_keepgw)"
+      route delete default "$_gw" >/dev/null 2>&1 || true
+    done
+  fi
+  _dns=$(dhcpinfo -i "$_nic" DNSserv 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+\.')
+  [ -z "$_dns" ] && _dns="${_keepgw:-1.1.1.1}"
+  if [ -n "$_dns" ]; then
+    log "writing /etc/resolv.conf resolvers: $(echo $_dns | tr '\n' ' ')"
+    { for _s in $_dns; do printf 'nameserver %s\n' "$_s"; done; } > /etc/resolv.conf 2>/dev/null || true
+  fi
+  _write_status "up: $_nic $_got via DHCP"
+  log "network up: $_nic $_got"
+  return 0
+}
+# hard watchdog (run_to pattern -- the env has no timeout(1)).
+_do_net &
+_pid=$!
+( sleep "$TO"; kill -TERM "$_pid" 2>/dev/null; sleep 3; kill -KILL "$_pid" 2>/dev/null ) &
+_watch=$!
+wait "$_pid" 2>/dev/null
+kill "$_watch" 2>/dev/null; wait "$_watch" 2>/dev/null
+exit 0
