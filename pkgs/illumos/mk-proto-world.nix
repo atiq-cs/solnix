@@ -85,8 +85,19 @@ derivation {
       cl=$(elfclass "$1"); [ "$cl" = none ] && return 0
       [ -e "lib-$cl/$(basename "$1")" ] || ln -s "$1" "lib-$cl/$(basename "$1")"
     }
+    # The gate's own private library dirs too: binaries there are built with a
+    # RUNPATH naming them (kinit: /usr/lib/gss, smbd: /usr/lib/smbsrv, ...), which
+    # the single relocated RUNPATH replaces. Measured: 22 of the 31 sonames left
+    # unresolved after relocation live in exactly these dirs (mech_krb5.so.1 in
+    # usr/lib/gss, libkadm5clnt/libss/libkdb in usr/lib/krb5, libsmb/libsmbns/
+    # libmlsvc in usr/lib/smbsrv, libscsi/libses/libsmp in usr/lib/scsi, ...).
     for sub in lib lib/amd64 usr/lib usr/lib/amd64 lib/fm lib/fm/amd64 usr/lib/fm usr/lib/fm/amd64 \
-               lib/secure lib/secure/amd64 usr/lib/secure usr/lib/secure/amd64 usr/lib/mps usr/lib/mps/amd64; do
+               lib/secure lib/secure/amd64 usr/lib/secure usr/lib/secure/amd64 usr/lib/mps usr/lib/mps/amd64 \
+               usr/lib/gss usr/lib/amd64/gss usr/lib/krb5 usr/lib/krb5/amd64 \
+               usr/lib/smbsrv usr/lib/smbsrv/amd64 usr/lib/smbfs usr/lib/smbfs/amd64 \
+               usr/lib/scsi usr/lib/scsi/amd64 usr/lib/vscan usr/lib/vscan/amd64 \
+               usr/lib/fs/smbfs usr/lib/fs/smbfs/amd64 \
+               usr/lib/print usr/lib/print/amd64 usr/lib/nfs usr/lib/nfs/amd64; do
       [ -d "$sub" ] || continue
       for s in "$sub"/*.so*; do [ -e "$s" ] && link_flat "$out/$s"; done
     done

@@ -95,7 +95,7 @@ static_checks() {
   # MUST also be set. Stock ttymon is also acceptable (SOLNIX_AUTOLOGIN=0).
   if [ -e "$R/etc/svc/repository.db" ] && command -v svccfg >/dev/null; then
     local cl hidq=0
-    grep -q 'set hid:hid_errlevel' "$R/etc/system" 2>/dev/null && hidq=1
+    cat "$R/etc/system" "$R"/etc/system.d/* 2>/dev/null | grep -q 'set hid:hid_errlevel' && hidq=1
     cl=$(SVCCFG_REPOSITORY="$R/etc/svc/repository.db" svccfg -s system/console-login listprop start/exec 2>/dev/null)
     case "$cl" in
       *solnix-console-login*)
@@ -107,7 +107,9 @@ static_checks() {
   else _skip "no repository.db / svccfg -- console-login check"; fi
 
   # LESSON (X1 hid flood): /etc/system must quiet the hid Invalid-Report-Descriptor spam.
-  if grep -q 'set hid:hid_errlevel' "$R/etc/system" 2>/dev/null; then
+  # bootadm assembles /etc/system.d/* into the kernel's view of /etc/system
+  # (.self-assembly), so a tunable set in a system.d fragment counts.
+  if cat "$R/etc/system" "$R"/etc/system.d/* 2>/dev/null | grep -q 'set hid:hid_errlevel'; then
     _ok "/etc/system sets hid:hid_errlevel (X1 hid console-flood guard)"
   else _fail "/etc/system missing 'set hid:hid_errlevel' (X1 hid flood would drown the console)"; fi
 
@@ -257,9 +259,18 @@ closure_contract_checks() {
   # 2. the media's store is a registered store: every closure path valid in its own DB.
   if [ -f "$R/nix/var/nix/db/db.sqlite" ]; then
     if command -v nix-store >/dev/null && [ -n "$top" ]; then
-      if nix-store --store "local?root=$R" --verify-path $(nix-store --store "local?root=$R" -qR "$top" 2>/dev/null) >/dev/null 2>&1
-      then _ok "every closure path of the toplevel is VALID in the media's store DB"
+      # nix opens <root>/nix/var/nix/db/big-lock even to read, so a read-only mount
+      # of the image cannot answer this (measured: "opening lock file ... Read-only
+      # file system", which made this check fail on a correct image). Read a COPY of
+      # the DB instead, against the image's store, without writing the image.
+      local _dbc; _dbc=$(mktemp -d /tmp/img-accept-db.XXXXXX)
+      mkdir -p "$_dbc/nix/var/nix" && cp -R "$R/nix/var/nix/db" "$_dbc/nix/var/nix/db" 2>/dev/null
+      ln -s "$R/nix/store" "$_dbc/nix/store" 2>/dev/null
+      local _cl; _cl=$(nix-store --store "local?root=$_dbc" -qR "$top" 2>/dev/null)
+      if [ -n "$_cl" ] && nix-store --store "local?root=$_dbc" --verify-path $_cl >/dev/null 2>&1
+      then _ok "every closure path of the toplevel is VALID in the media's store DB ($(echo "$_cl" | wc -l | tr -d ' ') paths)"
       else _fail "the media's store DB does not register the whole toplevel closure"; fi
+      find "$_dbc" -depth -delete 2>/dev/null
     else _skip "nix-store absent -- store DB validity"; fi
   else _fail "no /nix/var/nix/db/db.sqlite -- the media store is unregistered"; fi
   # 3. the userland resolves INTO the store: /usr/bin and /usr/sbin are links into a
