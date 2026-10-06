@@ -302,3 +302,14 @@ Fix: OpenIndiana/OmniOS gcc patch 0032 (`-D_TS_ERRNO` for libstdc++ on solaris2)
 libstdc++ has more than 4 global-errno references (negative control: the unpatched lib fails at 86, OI's
 passes at 1). Rebuilt gcc-14.3.0-lib `hca690ff...`: 1 global reference, 141 `___errno`; the same probe
 linked against it: 16000 ok, 0 thrown.
+
+Verified end to end on bhost (multi-path `nix copy --from https://cache.nixos.org` of hello's 5-path
+closure into a fresh local store, `auto-optimise-store = true`, trusting only cache.nixos.org-1):
+
+| nix | libstdc++ | result |
+|---|---|---|
+| `898j9w7y...` (has zstd, unpatched libstdc++ `jpjqmqjq`) | 86 global-errno refs | 0/4, `symlink_status: Error 0 [.../.links/...]` |
+| `2zqyafk6...` (has zstd, patched libstdc++ `hca690ff`) | 1 global-errno ref | 4/4 and 6/6 |
+
+Negative control on signatures in the same run: an unrelated trusted key gives "cannot add path ...
+because it lacks a signature by a trusted key".
