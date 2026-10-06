@@ -270,3 +270,35 @@ sampled `keep` objects carry the old signature at the plain URL. With a cache-bu
 under 8UNr at the origin. Content-addressed objects work because nix trusts them by content. That is also why
 `scripts/cache-retire-verify.sh` showed 2 "keep PASS": both were CA rows. It now reports them as
 `CA-any-key`. Reported to the infra team in `/tmp/solnix-io-edge-stale-narinfo-report.md`.
+
+## How the references handle installing a store (NixOS primary, NixBSD secondary)
+
+Read from source: NixOS `nixos/modules/installer/tools/nixos-install.sh` and `cd-dvd/iso-image.nix`;
+NixBSD at 1a5550d `modules/installer/tools/nixos-install.sh`, `lib/make-cd9660-image.nix`,
+`lib/make-partition-image.nix`, `modules/system/boot/initmd.nix`, `modules/tasks/nix-store.nix`.
+
+| question | NixOS | NixBSD | solnix |
+|---|---|---|---|
+| how the target's store is filled | `nix build --store $mnt` with the live store as a trusted substituter | on FreeBSD the same (`--store $mountPoint --extra-substituters`); on other hosts, `nix copy` nix and git into the target, then build inside a chroot through a socat-forwarded daemon socket | media closure `nix copy`d into `<pool>/nix`, then `<pool>/nix` mounted over the live `/nix` so builds are not diverted (illumos refuses to build in a diverted store, measured M10); from a ZFS host, build in the host store and `nix copy` |
+| system profile | `nix-env --store $mnt -p .../profiles/system --set` | identical | identical (`system-N-link` per generation) |
+| boot entries | `switch-to-configuration boot` in the target | the same | `switch-to-configuration install-be` / `boot`; one BE per generation |
+| installer media store | squashfs on the ISO, overlaid by tmpfs at /nix/store | `make-cd9660-image`: closure copied into the image with `closureInfo` registration; netboot uses an md (initmd) UFS image | closure inside the ramdisk boot_archive (UFS), the initmd analog. The store cannot live on the stick: the X1 does not enumerate it after the kernel starts (scsa2usb) |
+| read-only store on an installed system | yes, via a private mount namespace for the daemon | no; `readOnlyNixStore` is for VM/netboot images only | no, like NixBSD: root:nixbld 1775 (measured M10) |
+
+## libstdc++ must use the per-thread errno (measured 2026-10-06)
+
+Symptom: with `auto-optimise-store = true`, every multi-path substitution failed (6/6) with
+`filesystem error: symlink_status: Error 0 [/nix/store/.links/<hash>]`; with it off, 6/6 succeeded.
+
+Mechanism: illumos `<errno.h>` makes `errno` a global int unless `_REENTRANT`, `_TS_ERRNO` or
+`_POSIX_C_SOURCE >= 199506` is defined, and g++ defines none of them by default. The from-source
+libstdc++ therefore read the global errno in `std::filesystem` (86 `errno@SUNW_0.7` references, 22
+`___errno` calls; OpenIndiana's lib: 1 and 141). An 8-thread `symlink_status()` probe on a missing path
+threw "Error 0" 16000/16000 times; the main thread was fine. nix optimises the store from its
+substitution worker threads.
+
+Fix: OpenIndiana/OmniOS gcc patch 0032 (`-D_TS_ERRNO` for libstdc++ on solaris2), vendored as
+`pkgs/illumos/patches/gcc-14/0032-libstdc-must-use-thread-local-errno.patch`. A build gate fails if
+libstdc++ has more than 4 global-errno references (negative control: the unpatched lib fails at 86, OI's
+passes at 1). Rebuilt gcc-14.3.0-lib `hca690ff...`: 1 global reference, 141 `___errno`; the same probe
+linked against it: 16000 ok, 0 thrown.
