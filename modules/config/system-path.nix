@@ -26,7 +26,7 @@ in
 
     pathsToLink = mkOption {
       type = types.listOf types.str;
-      default = [ "/bin" "/sbin" "/share/man" "/share/info" ];
+      default = [ ];
       description = ''
         Subtrees of each package linked into the system profile. Prefixes match
         the leading path component(s) of a package's files (e.g. "/bin" links
@@ -61,6 +61,14 @@ in
       inherit (config.environment) pathsToLink extraOutputsToInstall;
       ignoreCollisions = true;
     };
+
+    # The base subtrees, as a definition rather than the option default, so a
+    # config's own `environment.pathsToLink = [ ... ]` ADDS to them (list options
+    # merge definitions; a default is replaced). NixOS does the same in
+    # nixos/modules/config/system-path.nix. Measured: setting the option in
+    # configurations/installer.nix replaced the default and dropped /bin, so the
+    # toplevel failed with "no nix on the system PATH".
+    environment.pathsToLink = [ "/bin" "/sbin" "/share/man" "/share/info" ];
 
     # Seed the gate's whole userland first, so a config's own systemPackages
     # (later in the list) win on a name clash. /usr/bin links to sw/bin.

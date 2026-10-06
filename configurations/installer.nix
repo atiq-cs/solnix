@@ -70,6 +70,11 @@ in
   # to /usr/sbin by the image builder), curl for the internet check and the
   # failure-bundle upload, openssl for hashing the passwords the operator types,
   # and the core-OS slices zpool/zfs/format/installboot/useradd/reboot come from.
+  # sw/share/solnix/live-methods is read by the image builder; the default
+  # pathsToLink (/bin /sbin /share/man /share/info) would leave it out of sw/, as
+  # NixOS modules add their own subtrees to environment.pathsToLink.
+  environment.pathsToLink = [ "/share/solnix" ];
+
   environment.systemPackages = [
     live.nixChain.curl
     live.openssl

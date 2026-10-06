@@ -65,16 +65,26 @@ NPATHS=$(wc -l < "$OUT.closure" | tr -d ' ')
 : > "$OUT.sizes"
 while read -r p; do echo "$(nix-store -q --size "$p") $p" >> "$OUT.sizes"; done < "$OUT.closure"
 NAR=$(awk '{s+=$1} END {printf "%d", s}' "$OUT.sizes")
-NEED=$(( NAR + NAR * UFS_OVERHEAD_PCT / 100 + RD_MIN_FREE_KB * 1024 ))
-echo "closure: $NPATHS paths, $NAR B NAR; with ${UFS_OVERHEAD_PCT}% UFS overhead + ${RD_MIN_FREE_KB} KB slack: $NEED B; cap $RD_MAX_RAW B" >&2
+# install-be also lays REAL copies outside /nix/store: the kernel trees, /boot, the
+# early set and the stock /etc+/var (bootadm walks real files; nothing earlier than
+# the store can be a link into it). Measured on the first image build: the closure
+# alone (542 MB ramdisk) filled up during install-be ("No space left on device" on
+# kernel/, /boot/fonts, /dev) and bootadm then read a truncated unix. Count those
+# copies explicitly, from the same store paths install-be copies them from.
+RT_COPY=0
+for p in $(grep -E -- '-(illumos-kernel|illumos-early|illumos-stock-etc-var)$' "$OUT.closure"); do
+  RT_COPY=$(( RT_COPY + $(nix-store -q --size "$p") ))
+done
+NEED=$(( NAR + RT_COPY + (NAR + RT_COPY) * UFS_OVERHEAD_PCT / 100 + RD_MIN_FREE_KB * 1024 ))
+echo "closure: $NPATHS paths, $NAR B NAR; + $RT_COPY B install-be real copies; with ${UFS_OVERHEAD_PCT}% UFS overhead + ${RD_MIN_FREE_KB} KB slack: $NEED B; cap $RD_MAX_RAW B" >&2
 if [ "$NEED" -gt "$RD_MAX_RAW" ]; then
   echo "" >&2
   echo "The installer closure does not fit the boot_archive the EFI loader can stage." >&2
   echo "Largest store paths (NAR bytes):" >&2
-  sort -rn "$OUT.sizes" | head -10 | awk '{printf "  %12d  %s\n", $1, $2}' >&2
+  sort -rn "$OUT.sizes" | awk 'NR<=10' | awk '{printf "  %12d  %s\n", $1, $2}' >&2
   die "closure needs $NEED B > cap $RD_MAX_RAW B (RD_MAX_RAW). Shrink the closure; do NOT raise the cap past the measured 816,119,808 B X1 block."
 fi
-sort -rn "$OUT.sizes" | head -5 | awk '{printf "  %12d  %s\n", $1, $2}' >&2
+sort -rn "$OUT.sizes" | awk 'NR<=5' | awk '{printf "  %12d  %s\n", $1, $2}' >&2
 
 # ---------------------------------------------------------------------------
 # 2. UFS ramdisk sized from the measurement, mounted via lofi.
@@ -90,7 +100,12 @@ mkfile "${RD_MB}m" "$RDIMG"
 LOFI=$(lofiadm -a "$RDIMG")
 cleanup() { umount "$RD" 2>/dev/null; lofiadm -d "$LOFI" 2>/dev/null; true; }
 trap cleanup EXIT
-yes | newfs -m 1 -i "$RD_NBPI" "${LOFI/dsk/rdsk}" >/dev/null 2>&1 || die "newfs failed"
+# newfs asks "Construct a new file system? (y/n)" on a tty only; with stdin from
+# /dev/null it does not prompt. NOT `yes | newfs`: under `set -o pipefail` the
+# pipeline returns 141 because yes dies of SIGPIPE when newfs exits, so a
+# SUCCESSFUL newfs read as a failure (measured: PIPESTATUS=141 0).
+newfs -m 1 -i "$RD_NBPI" "${LOFI/dsk/rdsk}" </dev/null >"$OUT/newfs.out" 2>&1 \
+  || { cat "$OUT/newfs.out" >&2; die "newfs failed"; }
 mount -F ufs -o nologging "$LOFI" "$RD" || die "mount ramdisk failed"
 
 # ---------------------------------------------------------------------------

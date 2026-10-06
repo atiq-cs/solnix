@@ -187,11 +187,29 @@ relink "$TOP" run/current-system; relink "$TOP" run/booted-system
 # activation-script.nix).
 G="$R/nix/var/nix/gcroots"; mkdir -p "$G"
 relink /nix/var/nix/profiles "$G/profiles"
+# `nix-env --store local?root=<staging> -p <staging>/nix/var/nix/profiles/system`
+# records an INDIRECT root in gcroots/auto naming the staging path (measured:
+# auto/a15k9a7j... -> /var/tmp/ii/media/rd/nix/var/nix/profiles/system-1-link),
+# which dangles once the store is mounted at /nix. gcroots/profiles above already
+# keeps every system-N-link, as on NixOS, so drop auto roots that point outside
+# this system's own /nix.
+if [ -d "$G/auto" ]; then
+  for a in "$G"/auto/*; do
+    [ -h "$a" ] || continue
+    case "$(rl "$a")" in /nix/*|/run/*) : ;; *) rm -f "$a" ;; esac
+  done
+fi
 relink /run/current-system "$G/current-system"; relink /run/booted-system "$G/booted-system"
 
 # 8. console + boot archive.
 [ -e boot/loader.conf ] || printf 'console="%s"\nos_console="%s"\n' "$CONS" "$CONS" > boot/loader.conf
 [ -e boot/solaris/bootenv.rc ] || printf 'setprop console %s\nsetprop ttya-mode 115200,8,n,1,-\n' "$CONS" > boot/solaris/bootenv.rc
-bootadm update-archive -f -R "$ROOT" >&2 || die "bootadm update-archive failed"
-[ -s platform/i86pc/amd64/boot_archive ] || die "no boot_archive"
+# A live root (SOLNIX_LIVE=1, the installer media) IS the boot_archive: the image
+# builder turns this whole tree into it. An inner archive would be a ~150 MB copy
+# of the same files inside the ramdisk, which does not fit (measured: cpio "End of
+# medium on output" filled the 654 MB ramdisk) and is deleted right after anyway.
+if [ -z "${SOLNIX_LIVE:-}" ]; then
+  bootadm update-archive -f -R "$ROOT" >&2 || die "bootadm update-archive failed"
+  [ -s platform/i86pc/amd64/boot_archive ] || die "no boot_archive"
+fi
 say "BE $POOL/ROOT/$BE populated from $TOP"
