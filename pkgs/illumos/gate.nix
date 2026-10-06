@@ -126,7 +126,15 @@ let
     '') ps);
   # PREBUILT path: fetch the already-built proto by pinned hash. No build runs,
   # and this is the branch a pure eval takes.
-  prebuiltProto = builtins.fetchTarball { url = protoUrl; sha256 = protoHash; };
+  # name: fetchTarball's default store name is "source", which gives the same
+  # bytes a different store path from the host's `nix store add-path` copy
+  # (...-illumos-gate-proto). MEASURED: identical NAR hash
+  # (sha256-Hdk/8nbe..., 679,840,760 B) at /nix/store/swgg9jyp...-source on the
+  # dev box and /nix/store/wn8w5j1p...-illumos-gate-proto on bhost, so EVERY
+  # derivation hash differed between a flake eval and a host build, and a
+  # `--flake` install would rebuild the whole chain (gcc included) instead of
+  # reusing it. Naming it makes both evaluations agree.
+  prebuiltProto = builtins.fetchTarball { url = protoUrl; sha256 = protoHash; name = "illumos-gate-proto"; };
 in
 # Prefer a real BUILD when the caller pinned source (srcDir/srcHash); otherwise
 # use the hash-pinned prebuilt proto. The assertion above guarantees at least one
