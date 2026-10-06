@@ -28,7 +28,9 @@ while IFS=$'\t' read -r c k; do
       --trusted-public-keys 'x-1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' "$sp" >/dev/null 2>&1 && v=CA-any-key
   fi
   case "$c" in
-    keep) [ "$plain" = 200 ] && [ "$v" = 8UNr ] && r=PASS || r=FAIL ;;
+    # A content-addressed object (CA: fixed:...) is trusted by its content, not a
+    # signature, so "verifies under any key" is correct for it and counts as a pass.
+    keep) [ "$plain" = 200 ] && { [ "$v" = 8UNr ] || [ "$v" = CA-any-key ]; } && r=PASS || r=FAIL ;;
     *)    [ "$plain" = 404 ] && r=PASS || r=FAIL ;;
   esac
   [ "$r" = FAIL ] && fail=$((fail+1))
