@@ -47,7 +47,12 @@ derivation {
   gccLib = if builtins.isAttrs gcc then "${gcc.lib}/lib" else "";
   builder = "/usr/bin/bash";
   PATH = "/usr/gnu/bin:/usr/bin:/usr/sbin";
-  srcUrl = src.url;
+  # The source is a fixed-output store path (NixOS: fetchurl), fetched once by Nix
+  # and verified against the pinned sha256, not downloaded by the builder. A
+  # builder-side curl was invisible to Nix: no retry, no cache, no substitution,
+  # and one flaky mirror (ftp.gnu.org timed out after 81 s, measured) failed the
+  # build. The hash check below stays as a second, independent verification.
+  srcTar = builtins.fetchurl { inherit (src) url sha256; };
   srcSha256 = src.sha256;
   abisArg = builtins.concatStringsSep " " abis;
   depsArg = builtins.concatStringsSep " " deps;
@@ -58,7 +63,7 @@ derivation {
     set -eu
     export PATH=/usr/gnu/bin:/usr/bin:/usr/sbin
     W=$(mktemp -d /var/tmp/srcpkg.XXXXXX)
-    /usr/bin/curl -fsSL "$srcUrl" -o "$W/src.tar"
+    cp "$srcTar" "$W/src.tar"
     got=$(sha256sum "$W/src.tar" | awk '{print $1}')
     [ "$got" = "$srcSha256" ] || { echo "FATAL: sha256 want $srcSha256 got $got" >&2; exit 1; }
     # RUNPATH: store dirs only, per ELF class.
