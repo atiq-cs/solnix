@@ -1,0 +1,73 @@
+Subject: illumos: find runtime GC roots through /proc/<pid>/path
+
+findRuntimeRoots() reads /proc/<pid>/{exe,cwd,fd/*,maps,environ}, the Linux
+procfs layout. On illumos every nix-store --gc / --print-dead / --query
+--roots aborted with
+
+  error: filesystem error: read_symlink: File name too long [/proc/0/cwd]
+
+because /proc/<pid>/cwd is a symlink whose readlink(2) returns 0 bytes (any
+buffer size), which libstdc++'s read_symlink reports as ENAMETOOLONG, and
+readProcLink() rethrows everything but ENOENT/EACCES/ESRCH. Also, fd/N are not
+symlinks (readlink: EINVAL), exe/maps/environ do not exist.
+
+illumos exposes the same information as readable symlinks under
+/proc/<pid>/path/: a.out, cwd, root, one entry per open fd and one per mapped
+object. Walk that directory under __sun, and have readProcLink() skip
+ENAMETOOLONG/EINVAL entries instead of aborting the whole root scan. The
+process environment is not scanned on illumos (no /proc/<pid>/environ).
+
+--- a/src/libstore/gc.cc
++++ b/src/libstore/gc.cc
+@@ -319,7 +319,12 @@
+     } catch (std::filesystem::filesystem_error & e) {
+         if (e.code() == std::errc::no_such_file_or_directory
+                 || e.code() == std::errc::permission_denied
+-                || e.code() == std::errc::no_such_process)
++                || e.code() == std::errc::no_such_process
++                /* illumos: readlink(2) of /proc/<pid>/cwd returns 0 bytes, which
++                   libstdc++ reports as ENAMETOOLONG; /proc/<pid>/fd/N are not
++                   symlinks (EINVAL). Neither is a root; skip them. */
++                || e.code() == std::errc::filename_too_long
++                || e.code() == std::errc::invalid_argument)
+             return;
+         throw;
+     }
+@@ -359,6 +364,29 @@
+             checkInterrupt();
+             if (std::regex_match(ent->d_name, digitsRegex)) {
+                 try {
++#if __sun
++                    /* illumos has no /proc/<pid>/{exe,maps,environ}, and its
++                       /proc/<pid>/cwd and fd/N do not readlink to a path. The
++                       targets are under /proc/<pid>/path/: a.out, cwd, root,
++                       one entry per open fd and one per mapped object. */
++                    auto pathStr = fmt("/proc/%s/path", ent->d_name);
++                    auto pathDir = AutoCloseDir(opendir(pathStr.c_str()));
++                    if (!pathDir) {
++                        if (errno == ENOENT || errno == EACCES)
++                            continue;
++                        throw SysError("opening %1%", pathStr);
++                    }
++                    struct dirent * path_ent;
++                    while (errno = 0, path_ent = readdir(pathDir.get())) {
++                        if (path_ent->d_name[0] != '.')
++                            readProcLink(fmt("%s/%s", pathStr, path_ent->d_name), unchecked);
++                    }
++                    if (errno) {
++                        if (errno == ESRCH)
++                            continue;
++                        throw SysError("iterating %1%", pathStr);
++                    }
++#else
+                     readProcLink(fmt("/proc/%s/exe" ,ent->d_name), unchecked);
+                     readProcLink(fmt("/proc/%s/cwd", ent->d_name), unchecked);
+ 
+@@ -394,6 +422,7 @@
+                     auto env_end = std::sregex_iterator{};
+                     for (auto i = std::sregex_iterator{envString.begin(), envString.end(), storePathRegex}; i != env_end; ++i)
+                         unchecked[i->str()].emplace(envFile);
++#endif
+                 } catch (SystemError & e) {
+                     if (errno == ENOENT || errno == EACCES || errno == ESRCH)
+                         continue;

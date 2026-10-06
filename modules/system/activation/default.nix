@@ -100,9 +100,10 @@ let
   # just its own build-time self), and calls that target's own `activate` script
   # — the shared activation logic (svccfg import + svcadm) is not duplicated here.
   #
-  # Pure /sbin/sh + beadm + cp: it does NOT require `nix` on the running system
-  # (the proto-root world has no nix binary). The generation registry is plain
-  # symlinks under /nix/var/nix/profiles that this script maintains itself.
+  # /sbin/sh + beadm + cp + nix-env. The generation registry is the NixOS one:
+  # `nix-env -p /nix/var/nix/profiles/system --set <toplevel>` makes
+  # system-<N>-link (a GC root until `nix-collect-garbage -d`), and generation N
+  # boots from BE <pool>/ROOT/solnix-<N>.
   switchToConfiguration = pkgs.writeScript "switch-to-configuration" ''
     #!/sbin/sh
     # solnix switch-to-configuration (T2.5). NixOS analog, illumos/beadm-native.
@@ -148,32 +149,17 @@ let
         ;;
     esac
 
-    # --- generation registry (plain symlinks; no nix-env needed) -------------
-    # /nix/var/nix/profiles/system-<N>-link -> <toplevel>, and `system` -> the
-    # highest. Mirrors NixOS's profile layout enough to list + roll back.
-    next_gen() {
-      hi=0
-      for l in "$PROFILES"/system-*-link; do
-        [ -L "$l" ] || continue
-        n=$(echo "$l" | sed -n 's,.*/system-\([0-9]*\)-link$,\1,p')
-        [ -n "$n" ] && [ "$n" -gt "$hi" ] && hi=$n
-      done
-      # also never collide with an existing beadm BE named solnix-<n>.
-      for b in $(beadm list -H 2>/dev/null | awk -F';' '{print $1}' | sed -n 's,^solnix-\([0-9]*\)$,\1,p'); do
-        [ "$b" -gt "$hi" ] && hi=$b
-      done
-      echo $((hi + 1))
-    }
+    # --- generation registry: the nix profile, as NixOS -----------------------
+    # nix-env adds system-<N>-link (N = last + 1; none if <toplevel> is already
+    # the last generation) and points `system` at it; sets $gen to N.
     register_generation() {   # $1 = toplevel path
-      mkdir -p "$PROFILES"
-      cur=$(_readlink "$PROFILES/system" 2>/dev/null || true)
-      curtop=""; [ -n "$cur" ] && curtop=$(_readlink "$PROFILES/$cur" 2>/dev/null || true)
-      if [ "$curtop" = "$1" ]; then echo "already generation $(cat "$PROFILES/system.gen" 2>/dev/null || echo '?')"; return; fi
-      g=$(next_gen)
-      relink "$1" "$PROFILES/system-$g-link"
-      relink "system-$g-link" "$PROFILES/system"
-      printf '%s\n' "$g" > "$PROFILES/system.gen" 2>/dev/null || true
-      echo "registered generation $g -> $1"
+      ne=$(command -v nix-env 2>/dev/null); [ -n "$ne" ] || ne="$1/sw/bin/nix-env"
+      [ -x "$ne" ] || { echo "FATAL: no nix-env to record the generation" >&2; exit 1; }
+      "$ne" -p "$PROFILES/system" --set "$1" || { echo "FATAL: nix-env --set $1 failed" >&2; exit 1; }
+      gen=$(_readlink "$PROFILES/system" | sed -n 's,^system-\([0-9]*\)-link$,\1,p')
+      [ -n "$gen" ] && [ "$(_readlink "$PROFILES/system-$gen-link")" = "$1" ] \
+        || { echo "FATAL: $PROFILES/system does not name a generation of $1" >&2; exit 1; }
+      echo "generation $gen -> $1"
     }
 
     list_generations() {
@@ -221,18 +207,20 @@ let
 
     do_boot() {   # $1 = toplevel
       register_generation "$1"
-      gen=$(cat "$PROFILES/system.gen" 2>/dev/null || echo 0)
       be="solnix-$gen"
-      # never reuse the currently-running BE's name (can't destroy the active BE).
+      ensure_menu
+      # generation N is BE solnix-N. The running BE already is this generation
+      # when <toplevel> is the running one (nix-env added nothing): only make it
+      # the boot default. Any other BE of that name is stale and is re-created.
       running_be=$(beadm list -H 2>/dev/null | awk -F';' '$3 ~ /N/ {print $1}' | head -1)
       if [ "$be" = "$running_be" ]; then
-        gen=$(next_gen); be="solnix-$gen"
-        relink "$1" "$PROFILES/system-$gen-link"; relink "system-$gen-link" "$PROFILES/system"
-        printf '%s\n' "$gen" > "$PROFILES/system.gen"
-        echo "(bumped to generation $gen to avoid running BE $running_be)"
+        [ "$(_readlink /run/current-system)" = "$1" ] \
+          || { echo "FATAL: generation $gen is $1 but the running BE $be runs $(_readlink /run/current-system)" >&2; exit 1; }
+        beadm activate "$be" || { echo "FATAL: beadm activate $be failed" >&2; exit 1; }
+        echo "== generation $gen (running BE $be) is the boot default =="
+        return
       fi
       echo "== creating boot environment $be for generation $gen =="
-      ensure_menu
       beadm list "$be" >/dev/null 2>&1 && { echo "BE $be exists; destroying to re-create"; beadm destroy -f -F "$be" 2>/dev/null || true; }
       beadm create "$be" || { echo "FATAL: beadm create $be failed" >&2; exit 1; }
 
@@ -245,10 +233,7 @@ let
       # /nix, links into the shared store, /etc, SMF, /boot, boot_archive.
       SOLNIX_ROOT="$BEROOT_MP" SOLNIX_STORE_ROOT="" SOLNIX_POOL="$POOL" SOLNIX_BE="$be" \
         /sbin/sh "$1/bin/install-be" "$1" || { echo "FATAL: install-be failed for $be" >&2; exit 1; }
-      mkdir -p "$BEROOT_MP/nix/var/nix/profiles"
       relink "$1" "$BEROOT_MP/run-current-system" 2>/dev/null || true
-      relink "$1" "$BEROOT_MP/nix/var/nix/profiles/system-$gen-link" 2>/dev/null || true
-      relink "system-$gen-link" "$BEROOT_MP/nix/var/nix/profiles/system" 2>/dev/null || true
 
       # stage the target's SMF manifests + site profile + activate into the BE so
       # first boot of the new BE imports them (add-not-replace; design-smf §5).
@@ -315,9 +300,9 @@ let
         echo "== switch complete: generation active now AND set for next boot =="
         ;;
       test)
+        # as nixos-rebuild test: no new profile generation (it would have no BE).
         do_activate "$target"
         set_current_system "$target"
-        register_generation "$target"
         echo "== test complete: active now; boot default UNCHANGED =="
         ;;
       boot)

@@ -67,7 +67,12 @@ let
 
     log "nix copy closure of $TOP -> $POOL/nix"
     nix copy --no-check-sigs --to "local?root=$S" "$TOP" || die "nix copy"
-    nix-env --store "local?root=$S" -p /nix/var/nix/profiles/system --set "$TOP" || die "system profile"
+    # the profile lives in the TARGET's store ($S/...), as nixos-install's
+    # `-p "$mountPoint"/nix/var/nix/profiles/system`; a bare /nix/var/... path is the
+    # build host's own profile (measured: gen 1 never reached the disk).
+    nix-env --store "local?root=$S" -p "$S/nix/var/nix/profiles/system" --set "$TOP" || die "system profile"
+    [ "$(ls -ld "$S/nix/var/nix/profiles/system" | sed -n 's/.* -> //p')" = system-1-link ] \
+      || die "system profile is not system-1-link after nix-env --set"
     mkdir -p "$S/nix/var/nix/daemon-socket"
     # NixOS store permissions: root:nixbld 1775 (the daemon builds as nixbld*;
     # a normal user cannot write). NOT read-only: on illumos the daemon has no

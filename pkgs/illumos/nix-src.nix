@@ -101,15 +101,54 @@ rec {
     '';
   };
 
+  # zstd and bzip2 for libarchive, which nix uses for every compression filter.
+  # Without them nix cannot substitute: cache.solnix.io serves its 404 bodies
+  # with `Content-Encoding: zstd` (nix asks for it, filetransfer.cc), and nix
+  # writes build logs bzip2-compressed (compress-build-log, derivation-goal.cc).
+  # Measured: "failed to get libarchive filter by name: Using external zstd
+  # program" and "couldn't initialize compression (Using external bzip2 program)".
+  zstd = mkSrcPkg {
+    pname = "zstd"; version = "1.5.6";
+    src = { url = "https://github.com/facebook/zstd/releases/download/v1.5.6/zstd-1.5.6.tar.gz";
+            sha256 = "8c29e06cf42aacc1eafc4077ae2ec6c6fcb96a626157e0593d5e82a34fd403c1"; };
+    # library only (multi-threaded, as nixpkgs' default); the zstd CLI is not needed.
+    build = ''
+      gmake -C lib -j4 CC="$CC" PREFIX="$out" LIBDIR="$out/lib/amd64" libzstd libzstd.pc
+      gmake -C lib CC="$CC" PREFIX="$out" LIBDIR="$out/lib/amd64" INSTALL=ginstall install-shared install-includes install-pc
+    '';
+  };
+
+  bzip2 = mkSrcPkg {
+    pname = "bzip2"; version = "1.0.8";
+    src = { url = "https://sourceware.org/pub/bzip2/bzip2-1.0.8.tar.gz";
+            sha256 = "ab5a03176ee106d3f0fa90e381da478ddae405918153cca248e682cd0c4a2269"; };
+    # Makefile-libbz2_so builds the shared lib with soname libbz2.so.1.0 (as
+    # nixpkgs and every distro ship it); headers are the one bzlib.h.
+    build = ''
+      gmake -f Makefile-libbz2_so CC="$CC" >&2
+      mkdir -p "$out/lib/amd64" "$out/include"
+      cp libbz2.so.1.0.8 "$out/lib/amd64/"
+      ln -s libbz2.so.1.0.8 "$out/lib/amd64/libbz2.so.1.0"
+      ln -s libbz2.so.1.0.8 "$out/lib/amd64/libbz2.so.1"
+      ln -s libbz2.so.1.0.8 "$out/lib/amd64/libbz2.so"
+      cp bzlib.h "$out/include/"
+    '';
+  };
+
   libarchive = mkSrcPkg {
     pname = "libarchive"; version = "3.7.6";
     src = { url = "https://www.libarchive.org/downloads/libarchive-3.7.6.tar.xz";
             sha256 = "0a2efdcb185da2eb1e7cd8421434cb9a6119f72417a13335cca378d476fd3ba0"; };
-    deps = [ zlib xz ];
+    deps = [ zlib xz zstd bzip2 ];
     build = ''
       ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-bsdtar \
         --disable-bsdcpio --disable-bsdcat --disable-bsdunzip --without-xml2 --without-expat \
-        --disable-acl --disable-xattr --without-openssl --without-bz2lib --without-zstd --without-lz4 --without-libb2 --with-zlib --with-lzma
+        --disable-acl --disable-xattr --without-openssl --without-lz4 --without-libb2 \
+        --with-zlib --with-lzma --with-zstd --with-bz2lib
+      # configure silently drops a library it cannot find; insist on all four.
+      for h in HAVE_ZSTD_H HAVE_LIBZSTD HAVE_ZSTD_compressStream HAVE_BZLIB_H HAVE_LIBBZ2 HAVE_LZMA_H HAVE_ZLIB_H; do
+        grep -q "^#define $h 1" config.h || { echo "FATAL: libarchive configured without $h" >&2; exit 1; }
+      done
       gmake -j4; gmake install
     '';
   };

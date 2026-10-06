@@ -1,8 +1,10 @@
 # Nix-managed base: /nix layout, decided by measurement
 
 Status: the layout decision is measured. The from-source chain, a non-DEBUG kernel derivation, the
-toplevel, install-be and make-be are built, and the disk boots to login under KVM with two generations
-selectable from the loader. Check (d) is partial because nix cannot substitute yet (see the end).
+toplevel, install-be and make-be are built. The disk boots to login under KVM with two generations
+selectable from the loader. nix substitutes (zstd, bzip2 and xz), each generation is a GC root, and
+`nix-collect-garbage` runs. One blocker is on the cache side: cache.solnix.io's CDN still serves
+narinfos from before the re-sign (see the end).
 
 ## The question
 
@@ -214,7 +216,7 @@ With the non-DEBUG kernel the panic is gone. These turned up next, each traced t
 | a | 1138/1139 entries of /usr/bin, /usr/sbin, /sbin, /lib resolve into /nix/store. The remainder is /lib/amd64, a real dir of links. `nix-store -q --deriver` on the resolved /usr/bin/ls gives the illumos-userland .drv | /etc counted the same way: 17/195 |
 | b | /run/current-system = /run/booted-system = the toplevel; an ssh password login as a normal user gets PATH starting /run/current-system/sw/bin | /etc is not a toplevel |
 | c | a normal user cannot write /nix/store (root:nixbld 1775). Root can, because the store cannot be read-only and still build (see above) | the same user can write /var/tmp |
-| d | PARTIAL. A non-root `nix-build` goes through the daemon (root-owned output), and `nix profile install` works, but only with `substituters` empty. With the shipped nix.conf every build fails: `failed to get libarchive filter by name: Using external zstd program` (cache.solnix.io), `couldn't initialize compression (Using external bzip2 program)` (cache.nixos.org). nix-src.nix builds libarchive `--without-zstd --without-bz2lib`, so nix cannot substitute | daemon disabled: "cannot connect to socket ... Connection refused" |
+| d | A non-root `nix-build` goes through the daemon (root-owned output), and `nix profile install` works, with the shipped nix.conf (both substituters on). Fixed 2026-10-06 (next section); before that it worked only with `substituters` empty | daemon disabled: "cannot connect to socket ... Connection refused" |
 | e | a second config (kvm-test-gen2.nix, adds sqlite) imported, then `switch-to-configuration boot` created BE solnix-2. The loader's BE menu lists solnix-2 and solnix-1. Default boot = gen 2 (sqlite3 runs). Picking solnix-1 in the menu booted gen 1 (its toplevel, no sqlite3), and bootfs stayed solnix-2 | the same probe on the default boot reported gen 2 |
 | f | no screen-#, no /reconfigure, autofs and smserver disabled with multi-user online, `UsePAM yes`, pit_is_broken once in /etc/system and 1 in `mdb -k`, /boot/fonts has 22 entries | a copy with the line doubled counts 2 |
 | g | system/power online, pmconfig rc 0, `cpupm_policy` = 1 (`mdb -k`). Checking the clock speed needs real hardware | - |
@@ -222,10 +224,49 @@ With the non-DEBUG kernel the panic is gone. These turned up next, each traced t
 
 Bug found by (e): switch-to-configuration defaulted POOL to "spool". On pool tpool, `bootfs` came back empty,
 and `ensure_menu` overwrote `do_boot`'s `$be` with "." (sh has no locals), so it created and activated a BE
-named `tpool/ROOT/.`. The fix (pool taken from the running root dataset, `_mbe`, FATAL on an empty bootfs) is
-written, but no toplevel built with it has been tested yet. (e) passed with `SOLNIX_POOL=tpool` set explicitly.
+named `tpool/ROOT/.`. Fixed: the pool now comes from the running root dataset, the menu code uses `_mbe`, and
+an empty bootfs is FATAL. Tested in the section below.
 
-## Next blocker
+The tables above were measured on the disk from 2026-10-05. The next section re-ran all of a-g on a fresh disk
+with the fixes below, on both generations. Every result held, and (d) now passes with substituters on.
 
-nix cannot substitute because libarchive is built without zstd and bzip2 (nixpkgs builds it with both). The
-fix is zstd and bzip2 from source, then libarchive `--with-zstd --with-bz2lib`, then a nix rebuild.
+## Substitution, generations as GC roots, and GC (measured 2026-10-06)
+
+### What was wrong
+
+| defect | mechanism (measured) | fix |
+|---|---|---|
+| no substitution | nix decompresses every HTTP body by its `Content-Encoding` through libarchive, and it asks for zstd (filetransfer.cc). cache.solnix.io answers a narinfo miss with a 404 that has `Content-Encoding: zstd`. nix also writes build logs bzip2-compressed (`compress-build-log`). libarchive was built `--without-zstd --without-bz2lib`, so the first cache miss killed the build: `failed to get libarchive filter by name: Using external zstd program`. cache.solnix.io's NARs are xz (31/31 sampled), and cache.nixos.org's are zstd | `nix-src.nix`: zstd 1.5.6 and bzip2 1.0.8 from source. libarchive is built `--with-zstd --with-bz2lib`, and its builder fails unless config.h shows all of zstd, bzip2, lzma and zlib |
+| generation 1 not a GC root | make-be ran `nix-env --store local?root=$S -p /nix/var/nix/profiles/system`. The `-p` path is a path on the build host, so generation 1 went into bhost's own profile (bhost had system-1..6-link, one per disk made). switch-to-configuration wrote plain links and a `system.gen` counter | make-be uses `-p $S/nix/var/nix/profiles/system`, as nixos-install passes `-p "$mountPoint"/...`. switch-to-configuration records each generation with `nix-env -p /nix/var/nix/profiles/system --set <toplevel>`, and generation N boots BE `solnix-N`. `boot` on the toplevel that is already running re-activates its BE and adds no generation |
+| `gcroots/profiles -> /a/.solnix-store/...` | nix's LocalStore creates `gcroots/profiles -> <stateDir>/profiles` the first time it opens a store, and under `?root=` that names the staging path | install-be (used by make-be, solnix-install and `boot`) sets `gcroots/profiles -> /nix/var/nix/profiles`, plus `current-system` and `booted-system` -> `/run/...` (NixOS nix-daemon.nix, activation-script.nix) |
+| `nix-store --gc` aborts | `error: filesystem error: read_symlink: File name too long [/proc/0/cwd]`. On illumos, `readlink(2)` of `/proc/<pid>/cwd` returns 0 bytes for any buffer size, and libstdc++ reports that as ENAMETOOLONG. `fd/N` are not symlinks (EINVAL), and there is no `exe`, `maps` or `environ`. The real targets are readable under `/proc/<pid>/path/` (`a.out`, `cwd`, one entry per fd and per mapping) | `nix-illumos-patches/224/0007-illumos-gc-proc-path-roots.patch`: on `__sun` walk `/proc/<pid>/path/*`, and skip ENAMETOOLONG and EINVAL in readProcLink |
+
+### Results on a fresh make-be disk
+
+Generation 1: kvm-test, `cbi86xid...`. Generation 2: kvm-test-gen2 (adds sqlite), `hxlzb246...`. Both run nix
+`898j9w7y...`.
+
+| check | result | negative control |
+|---|---|---|
+| substitution | `nix copy --from https://cache.nixos.org` of a zstd-compressed NAR (bzip2-1.0.8.tar.gz, hello-2.12.3.tar.gz): valid, `nix store verify` rc 0. An 8UNr-signed input-addressed cache.solnix.io path (libsrtp2-2.6.0, xz NAR) substitutes from an exact copy of the origin's response | the CDN's copy of the same narinfo (old key) is rejected: "lacks a signature by a trusted key" |
+| zstd 404 | a non-root daemon build of a trivial derivation with both substituters on succeeds. Its log is stored as `.drv.bz2` and `nix log` reads it back | the previous nix, same command: `Using external zstd program` |
+| switch pool | `switch-to-configuration boot` with no `SOLNIX_*` set made `tpool/ROOT/solnix-2` and activated it | `SOLNIX_POOL=spool`: "FATAL: pool spool has no bootfs", no BE made |
+| GC roots | `nix-store --gc --print-dead` rc 0, with both toplevels live while gen 1 runs and while gen 2 runs | gen 2 running, `system-1-link` moved aside: gen 1's toplevel is listed dead. Put back: live |
+| GC | `nix-collect-garbage` freed 4 unreferenced paths. All 47 closure paths of both generations stay valid | a process with its cwd in a store path, or its stdin open on one, keeps that path live (`/proc/<pid>/path/cwd`, `/path/0`). Kill it and the path is dead |
+| e | default boot -> gen 2. Choosing solnix-1 in the loader's BE menu boots gen 1, and bootfs stays solnix-2. The next default boot is gen 2 | the probe tells the generations apart (toplevel, sqlite3) |
+| a-g | identical to the tables above on both generations, and (d) now passes with substituters on | as above |
+
+Known leftovers: a `boot` that fails after `nix-env --set` leaves a profile generation with no BE. NixOS has the
+same order (nixos-rebuild sets the profile before switch-to-configuration). On a non-Linux host, GC tries to run
+`lsof`, which is not installed, and prints `error: executing 'lsof'`; nix catches it and the rc is unaffected.
+kmdb is still not built. kmdbmod needs libstand, libstandctf and mdb_ks from cmd/mdb, plus the standalone
+umem, disasm and saveargs libraries from usr/src/lib, which is a separate sub-build.
+
+## Next blocker (cache side)
+
+No input-addressed object substitutes from https://cache.solnix.io for a client that trusts only 8UNr.
+Cloudflare serves narinfos last modified 2026-10-04 (`cf-cache-status: HIT`, age about 28 h). 400 of 400
+sampled `keep` objects carry the old signature at the plain URL. With a cache-busted request, 30 of 47 verify
+under 8UNr at the origin. Content-addressed objects work because nix trusts them by content. That is also why
+`scripts/cache-retire-verify.sh` showed 2 "keep PASS": both were CA rows. It now reports them as
+`CA-any-key`. Reported to the infra team in `/tmp/solnix-io-edge-stale-narinfo-report.md`.

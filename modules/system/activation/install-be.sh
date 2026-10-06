@@ -180,6 +180,14 @@ for d in dsk fd ipnet net pts rdsk rmt sad swap term vt zcons; do mkdir -p "dev/
 
 # 7. this BE is one generation: /run/{current,booted}-system are fixed for it.
 relink "$TOP" run/current-system; relink "$TOP" run/booted-system
+# GC roots in the shared store, as NixOS has them: gcroots/profiles names the
+# store's own profiles dir (nix creates it as <store root>/nix/var/nix/profiles
+# when the store is first opened under a chroot root, which is wrong once booted),
+# and the running/booted generation are indirect roots (nix-daemon.nix,
+# activation-script.nix).
+G="$R/nix/var/nix/gcroots"; mkdir -p "$G"
+relink /nix/var/nix/profiles "$G/profiles"
+relink /run/current-system "$G/current-system"; relink /run/booted-system "$G/booted-system"
 
 # 8. console + boot archive.
 [ -e boot/loader.conf ] || printf 'console="%s"\nos_console="%s"\n' "$CONS" "$CONS" > boot/loader.conf

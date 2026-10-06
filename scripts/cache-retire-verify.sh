@@ -22,6 +22,10 @@ while IFS=$'\t' read -r c k; do
   if [ "$plain" = 200 ]; then
     sp=$(sed -n 's/^StorePath: //p' "$W/$k")
     XDG_CACHE_HOME=$W/xc nix store verify --no-contents --store "file://$W" --trusted-public-keys "$K8" "$sp" >/dev/null 2>&1 && v=8UNr || v=not-8UNr
+    # a content-addressed path (narinfo CA:) verifies under ANY key, so a pass on it
+    # says nothing about the signature (measured: both 'keep PASS' rows were CA).
+    [ "$v" = 8UNr ] && XDG_CACHE_HOME=$W/xc nix store verify --no-contents --store "file://$W" \
+      --trusted-public-keys 'x-1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' "$sp" >/dev/null 2>&1 && v=CA-any-key
   fi
   case "$c" in
     keep) [ "$plain" = 200 ] && [ "$v" = 8UNr ] && r=PASS || r=FAIL ;;
@@ -31,7 +35,7 @@ while IFS=$'\t' read -r c k; do
   printf '%s\t%s\tplain=%s\torigin=%s\tsig=%s\n' "$r" "$c" "$plain" "$origin" "$v"
 done < "$S" | tee "$W/res" | awk -F'\t' '{print $1, $2, $3, $4, $5}' | sort | uniq -c
 fail=$(grep -c '^FAIL' "$W/res")
-k=$(awk -F'\t' '$1=="keep"{print $2; exit}' "$S")
+k=$(awk -F'\t' '$1=="keep"{print $2}' "$S" | while read -r x; do grep -q '^CA:' "$W/$x" 2>/dev/null || { echo "$x"; break; }; done)
 if [ -s "$W/$k" ]; then
   sp=$(sed -n 's/^StorePath: //p' "$W/$k")
   XDG_CACHE_HOME=$W/xc2 nix store verify --no-contents --store "file://$W" \
