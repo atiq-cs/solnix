@@ -1,0 +1,53 @@
+illumos: libstdc++ must use the thread-local errno.
+
+Without _TS_ERRNO (or _REENTRANT), illumos <errno.h> makes errno a global int.
+libstdc++ is built without either, so std::filesystem reads the global errno
+after a failing lstat() in a thread, gets 0, and throws "Error 0" instead of
+returning not_found. MEASURED: our gcc-14.3.0-lib had 86 references to the
+global errno@SUNW_0.7 and 22 to ___errno; OpenIndiana's libstdc++ has 1 and 141.
+An 8-thread symlink_status() probe on a missing path threw 16000/16000; nix's
+optimise-store hit it on every multi-path substitution.
+
+Taken verbatim from OpenIndiana oi-userland components/developer/gcc-14/
+patches/0032-libstdc-must-use-thread-local-errno.patch (Andy Fiddaman, OmniOS),
+with the a/ b/ prefixes normalised for patch -p1.
+
+From 09e1d8748f9321bae39811e0f51683d330098cf0 Mon Sep 17 00:00:00 2001
+From: Andy Fiddaman <omnios@citrus-it.co.uk>
+Date: Tue, 31 Aug 2021 21:40:48 +0000
+Subject: libstdc++ must use thread-local errno
+
+---
+ libstdc++-v3/configure    | 6 ++++++
+ libstdc++-v3/configure.ac | 5 +++++
+ 2 files changed, 11 insertions(+)
+
+--- a/libstdc++-v3/configure
++++ b/libstdc++-v3/configure
+@@ -55105,6 +55105,12 @@
+ tmake_file="${tmake_file_}"
+ 
+ 
++case "${target}" in *-*-solaris2*)
++	EXTRA_CFLAGS="$EXTRA_CFLAGS -D_TS_ERRNO"
++	EXTRA_CXX_FLAGS="$EXTRA_CXX_FLAGS -D_TS_ERRNO"
++esac
++
++
+ # Add CET specific flags if Intel CET is enabled.
+  # Check whether --enable-cet was given.
+ if test "${enable_cet+set}" = set; then :
+--- a/libstdc++-v3/configure.ac
++++ b/libstdc++-v3/configure.ac
+@@ -658,6 +658,11 @@
+ tmake_file="${tmake_file_}"
+ AC_SUBST(tmake_file)
+ 
++case "${target}" in *-*-solaris2*)
++	EXTRA_CFLAGS="$EXTRA_CFLAGS -D_TS_ERRNO"
++	EXTRA_CXX_FLAGS="$EXTRA_CXX_FLAGS -D_TS_ERRNO"
++esac
++
+ # Add CET specific flags if Intel CET is enabled.
+ GCC_CET_FLAGS(CET_FLAGS)
+ EXTRA_CXX_FLAGS="$EXTRA_CXX_FLAGS $CET_FLAGS"

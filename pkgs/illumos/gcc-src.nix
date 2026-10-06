@@ -49,6 +49,9 @@ in
 derivation {
   name = "gcc-${version}";
   inherit system gate stage0 gccSrc gmpSrc mpfrSrc mpcSrc version;
+  # OpenIndiana/OmniOS gcc patch 0032: libstdc++ built with -D_TS_ERRNO so it
+  # reads the per-thread errno. See the patch header for the measurement.
+  tsErrnoPatch = ./patches/gcc-14/0032-libstdc-must-use-thread-local-errno.patch;
   libcDir = "${libcSlice}/lib/amd64";
   libcDir32 = "${libcSlice}/lib";
   outputs = [ "out" "lib" ];
@@ -60,6 +63,7 @@ derivation {
     W=$(mktemp -d /var/tmp/gccsrc.XXXXXX); cd "$W"
     tar xf "$gccSrc"
     cd "gcc-$version"
+    patch -p1 < "$tsErrnoPatch" >&2
     # GMP/MPFR/MPC in-tree: linked statically into cc1, so the compiler carries
     # no host math libs either.
     tar xf "$gmpSrc"; mv gmp-6.3.0 gmp
@@ -124,6 +128,14 @@ derivation {
       /usr/bin/ldd "$f" 2>&1 | awk -v f="$f" '/not found/ || (/=>/ && $NF !~ /^\/nix\/store\//) {print f": "$0}'
     done)
     [ -z "$bad" ] || { echo "FATAL: runtime libs leave the store:" >&2; echo "$bad" >&2; exit 1; }
+    # Gate: libstdc++ must read the per-thread errno (___errno), never the global
+    # errno symbol. Without the 0032 patch the 64-bit lib had 86 references to
+    # errno@SUNW_0.7 and std::filesystem threw "Error 0" from worker threads; OI's
+    # patched libstdc++ has 1 (measured). Allow a handful for code that takes
+    # errno's ADDRESS legitimately, fail on anything near the unpatched count.
+    nglob=$(/usr/gnu/bin/objdump -d --no-show-raw-insn "$lib/lib/amd64/libstdc++.so.6" | grep -c 'errno@SUNW' || true)
+    echo "=== libstdc++ global-errno references: $nglob ===" >&2
+    [ "$nglob" -le 4 ] || { echo "FATAL: libstdc++ uses the GLOBAL errno ($nglob refs); -D_TS_ERRNO missing" >&2; exit 1; }
     echo "=== gcc-$version: lib output resolves inside /nix/store ===" >&2
   '' ];
 }
