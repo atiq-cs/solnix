@@ -58,6 +58,8 @@ mkdir -p nix/var
 chmod 1777 tmp
 # /var and /etc start from the gate's stock tree (mutable state, as on a pkg install).
 [ -e var/svc ] || ( cd "$R$STOCK" && tar cf - var ) | tar xf -
+# the proto ships every dir 0555 (gotcha #7); /var/tmp must be world-writable+sticky
+chmod 1777 var/tmp
 [ -e etc/passwd ] || ( cd "$R$STOCK" && tar cf - etc ) | tar xf -
 chmod -R u+w etc var
 relink() { rm -f "$2"; ln -s "$1" "$2"; }
@@ -126,7 +128,13 @@ for f in name_to_major driver_aliases minor_perm driver_classes; do cp "$R$DRV/$
 grep -q '^# solnix drivers' etc/security/device_policy || \
   { echo '# solnix drivers'; cat "$R$DRV/device_policy.add"; } >> etc/security/device_policy
 [ -e etc/path_to_inst ] || : > etc/path_to_inst
-[ -e etc/hostid ] || printf '0x1b0b57ec\n' > etc/hostid
+# pkcs11_tpm.so NEEDs libtspi (trousers), which is not built: every libpkcs11
+# consumer that loads it dies in ld.so.1 (measured: `digest -a sha1` killed, so
+# bootadm writes an empty boot_archive.hash). Drop the provider that cannot load.
+grep -v 'pkcs11_tpm' etc/crypto/pkcs11.conf > etc/crypto/pkcs11.conf.new && mv etc/crypto/pkcs11.conf.new etc/crypto/pkcs11.conf
+# no /etc/hostid (NixOS writes one only when networking.hostId is set): the kernel
+# then derives the hostid from the SMBIOS UUID and system/hostid (svc-hostid)
+# persists it in the rot47-quoted form the kernel's reader expects.
 
 # declared users' authorized_keys (users.users.<n>.openssh.authorizedKeys).
 [ -e "$R$TOP/seed-authorized-keys" ] && ROOT="$ROOT" /usr/bin/bash "$R$TOP/seed-authorized-keys" >&2
@@ -148,10 +156,27 @@ cp "$R$TOP/site-profile.xml" etc/svc/profile/site/solnix.xml
 # 6. /dev: the nodes needed before devfsadm runs, generated (never copied from the running /dev).
 for n in console:cn@0:console msglog:sysmsg@0:msglog null:mm@0:null zero:mm@0:zero tty:sy@0:tty \
          syscon:cn@0:syscon systty:cn@0:systty sysmsg:sysmsg@0:sysmsg random:random@0:random \
-         urandom:random@0:urandom poll:poll@0:poll conslog:log@0:conslog log:log@0:log zfs:zfs@0:zfs; do
+         urandom:random@0:urandom poll:poll@0:poll conslog:log@0:conslog log:log@0:log zfs:zfs@0:zfs \
+         ticotsord:tl@0:ticotsord ticots:tl@0:ticots ticlts:tl@0:ticlts keysock:keysock@0:keysock \
+         spdsock:spdsock@0:spdsock cryptoadm:cryptoadm@0:cryptoadm crypto:crypto@0:crypto pm:pm@0:pm \
+         tcp:tcp@0:tcp tcp6:tcp6@0:tcp6 udp:udp@0:udp udp6:udp6@0:udp6 icmp:icmp@0:icmp icmp6:icmp6@0:icmp6 \
+         rawip:icmp@0:icmp rawip6:icmp6@0:icmp6 ip:ip@0:ip ip6:ip6@0:ip6 arp:arp@0:arp; do
   relink "../devices/pseudo/${n#*:}" "dev/${n%%:*}"
 done
 for i in 0 1 2; do relink "./fd/$i" "dev/$(echo stdin stdout stderr | cut -d' ' -f$((i+1)))"; done
+# The tl/keysock/spdsock links are the /dev paths sock2path.d maps AF_UNIX and
+# PF_KEY/PF_POLICY to, and tcp/udp/icmp are the TPI fallback devices sockfs opens
+# for a STREAMS ioctl on an AF_INET socket ("Failed to convert socket to TPI
+# (err=2)" when absent) -- inittab's soconfig runs before devfsadmd makes them;
+# measured: AF_UNIX unmapped -> nix-daemon cannot listen); cryptoadm/crypto/pm
+# are opened by cryptosvc and pmconfig before devfsadmd catches up (gotcha #11).
+# NOTE: a hand list of early pseudo nodes; a full first-boot `devfsadm` would
+# replace it, at the price of the forced reconfigure check (f) forbids.
+# the rest of the gate pkg manifests' dev/ actions (system-kernel.p5m, SUNWcsd.p5m).
+# Without dev/dld, dlmgmtd exits 1 -> datalink-management fails -> system/device/local
+# (devfsadm, then the soconfig rerun that maps AF_UNIX to /dev/ticotsord) never runs.
+relink ../devices/pseudo/dld@0:ctl dev/dld
+for d in dsk fd ipnet net pts rdsk rmt sad swap term vt zcons; do mkdir -p "dev/$d"; done
 
 # 7. this BE is one generation: /run/{current,booted}-system are fixed for it.
 relink "$TOP" run/current-system; relink "$TOP" run/booted-system

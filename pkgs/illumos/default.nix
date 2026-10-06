@@ -338,7 +338,12 @@ let
   # on any soname it cannot resolve. Adding a binary pulls its libraries in
   # automatically. That removes the "a human forgot a list entry" class which caused
   # every image failure this campaign.
+  # The NON-DEBUG kernel, built from illumos-gate source (./kernel-nd.nix). The
+  # gate proto's own kernel is DEBUG (nightly -F) and panics in DEBUG-only checks.
+  kernelNd = import ./kernel-nd.nix { gate = gate'; };
+
   slices = import ./slices.nix {
+    kernelTree = kernelNd;
     # from-source zlib + libxml2 (./base-src.nix) satisfy the SMF stack's
     # libxml2.so.16 / libz.so.1 edges that host copies used to fill.
     externalLibs = [ srcPkgs.zlib srcPkgs.libxml2 ];
@@ -424,7 +429,7 @@ let
   starter = import ./starter.nix { system = "x86_64-solaris"; };
 in
 {
-  inherit libc rtld ld sys base-tools systemPath nix nix224 cached starter gcc world early stock drivers;
+  inherit libc rtld ld sys base-tools systemPath nix nix224 cached starter gcc world early stock drivers kernelNd;
   inherit (srcPkgs) zlib libxml2 openssl openssh bash;
   # nix 2.24.15 and its dependency chain, from source (./nix-src.nix).
   nixChain = srcPkgs.nixChain;

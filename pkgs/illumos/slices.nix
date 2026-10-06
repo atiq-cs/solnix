@@ -39,6 +39,7 @@
 # near the size of the union instead of N times it.
 
 { gate
+, kernelTree ? gate  # where the kernel slice's trees come from (pkgs.solnix.kernelNd)
 , libcSlice        # the existing pkgs.illumos.libc slice (C runtime, both ABIs)
 , rtldSlice        # the existing pkgs.illumos.rtld slice (ld.so.1 + its libs)
 , externalLibs     # LIST of from-source libs (zlib, libxml2) for the SMF stack's non-proto edges
@@ -286,7 +287,11 @@ rec {
   # from the `depends_on` field, not by ld.so.1. So `bins` is empty and everything
   # rides as extraPaths (cp -a, which also preserves the .SUNW_ctf sections mdb and
   # dtrace need; a strip or an ELF "fixup" would corrupt them).
+  # The trees come from kernelTree (the non-DEBUG kernel derivation), not the gate
+  # proto, whose kernel is DEBUG. All three module trees switch together
+  # (docs/design-make-be.md gotcha #5: one DEBUG-ness for every module tree).
   kernel = mkSlice {
+    gate = kernelTree;
     name = "illumos-kernel";
     bins = [ ];
     extraPaths = [

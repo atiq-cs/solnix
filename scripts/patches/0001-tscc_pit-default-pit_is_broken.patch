@@ -29,7 +29,7 @@ MEASURED: m6i.large batch success (booted to multi-user-server):
 
 --- a/usr/src/uts/i86pc/os/tscc_pit.c
 +++ b/usr/src/uts/i86pc/os/tscc_pit.c
-@@ -48,7 +48,12 @@
+@@ -48,7 +48,13 @@
   * history built up using the alternative calibration sources.
   */
  uint64_t pit_tsc_hz;

@@ -114,7 +114,10 @@ let
     set -u
     PATH=/usr/sbin:/usr/bin:/sbin:$PATH
     PROFILES=/nix/var/nix/profiles
-    POOL="''${SOLNIX_POOL:-spool}"          # the rpool holding rpool/ROOT/<be>
+    # the pool holding <pool>/ROOT/<be>: the running root's pool, not a fixed name
+    # (a fixed "spool" made `boot` look up bootfs on a pool that does not exist).
+    _rootds=$(zfs list -H -o name / 2>/dev/null)
+    POOL="''${SOLNIX_POOL:-''${_rootds%%/*}}"
     BEROOT_MP="''${SOLNIX_BEROOT:-/a}"      # temp mountpoint for a new BE
 
     # helpers (defined before use — POSIX sh needs this order).
@@ -207,9 +210,12 @@ let
       fi
       mkdir -p "$mp/boot" 2>/dev/null || true
       if [ ! -f "$mp/boot/menu.lst" ]; then
+        # _mbe, not be: POSIX sh has no locals, and do_boot's $be must survive this
+        # (measured: an empty bootfs made be="." and `beadm create .` ran).
         bootfs=$(zpool get -H -o value bootfs "$POOL" 2>/dev/null)
-        be=$(basename "$bootfs")
-        printf 'title %s\nbootfs %s\n' "$be" "$bootfs" > "$mp/boot/menu.lst"
+        [ -n "$bootfs" ] || { echo "FATAL: pool $POOL has no bootfs" >&2; exit 1; }
+        _mbe=$(basename "$bootfs")
+        printf 'title %s\nbootfs %s\n' "$_mbe" "$bootfs" > "$mp/boot/menu.lst"
       fi
     }
 
