@@ -32,7 +32,12 @@ let
   # oi-make-be.sh §8). Generated from smf.services.* so the config drives it,
   # rather than the hand-written XML in the script. sendmail/hal/keymap/intrd/
   # ipmp/ipsecalgs are peripheral services that fail cleanly on headless EC2;
-  # network/location drives dns/client online. These are NOT in smf.services
+  # network/location drives dns/client online. update-man-index rewrites
+  # usr/has/man/whatis in place, and /usr/has is a link into the world's store
+  # path, so it modified a store path (measured on the media: nix-store
+  # --verify-path failed on the world, and seeding the target store with it failed
+  # "hash mismatch importing path"); NixOS builds its man index into the profile
+  # (documentation.man.generateCaches) rather than writing the store. These are NOT in smf.services
   # (they are world-stock), so they stay as fixed profile lines here.
   siteProfile = pkgs.writeText "solnix-site.xml" ''
     <?xml version="1.0"?>
@@ -55,6 +60,7 @@ let
       <service name="network/rpc/smserver" version="1" type="service"><instance name="default" enabled="false"/></service>
       <service name="network/ssh" version="1" type="service"><instance name="default" enabled="false"/></service>
       <service name="system/power" version="1" type="service"><instance name="default" enabled="true"/></service>
+      <service name="system/update-man-index" version="1" type="service"><instance name="default" enabled="false"/></service>
     </service_bundle>
   '';
 

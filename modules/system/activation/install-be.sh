@@ -76,9 +76,18 @@ for d in usr opt; do
   done
 done
 # per-entry farms for lib dirs whose ld.so.1 must resolve before /nix is mounted.
+# usr/lib/libc is left out: fs-root's libc_mount lofs-mounts the
+# hardware-capability libc found there (32-bit libc_hwcapN.so.1, -xtarget
+# pentium_pro builds) over /lib/libc.so.1, which here is a link into the libc
+# store path, so the mount landed ON the store path and changed it (measured on
+# the media: nix-store --verify-path failed on libc until the lofs mount was
+# removed; seeding a target store from it failed "hash mismatch importing
+# path"). Without the directory `moe` finds no variant and nothing is mounted;
+# 32-bit processes use the plain libc, 64-bit ones never had a variant.
 farm() {   # $1 = dir relative to /, mirrors $WORLD/$1
   mkdir -p "$1"
   for e in $(ls -A "$R$WORLD/$1"); do
+    [ "$1/$e" = usr/lib/libc ] && { rm -f usr/lib/libc; continue; }
     if [ "$e" = amd64 ] && [ -d "$R$WORLD/$1/amd64" ]; then farm "$1/amd64"; continue; fi
     relink "$WORLD/$1/$e" "$1/$e"   # relink, not skip: a cloned BE points at the old generation
   done

@@ -1114,7 +1114,10 @@ if [ -n "$FLAKE_REF" ]; then
   # and then this eval fails to WRITE, not because the attr is missing -- which
   # used to misreport as "nothing to install". Check free space and say the real
   # thing: reboot the live media (the ramdisk is RAM; a reboot gives a fresh one).
+  # Only when no scratch pool holds HOME/XDG_CACHE_HOME/the eval store: with one,
+  # the fetch never touches the ramdisk (which boots with ~50 MB free).
   _freek=$(df -k / 2>/dev/null | awk 'NR==2{print $4}')
+  [ -n "${SCRATCH_STORE:-}" ] && _freek=""
   case "$_freek" in ''|*[!0-9]*) : ;; *) if [ "$_freek" -lt 51200 ]; then
     echo "" >&2
     echo "FATAL: only ${_freek}KB free on / -- too little for nix to even fetch the flake." >&2
@@ -1203,7 +1206,7 @@ fi
 #                         set the system profile: system-1-link -> toplevel.
 # ---------------------------------------------------------------------------
 _nix_env() {  # run nix with HOME/TMPDIR/caches on the target pool, never the ramdisk
-  mkdir -p "$ALTROOT/var/tmp/solnix-nixcache" 2>/dev/null
+  mkdir -p "$ALTROOT/var/tmp/solnix-nixcache" || die "cannot create $ALTROOT/var/tmp on the target BE"
   env HOME="$ALTROOT/var/tmp" XDG_CACHE_HOME="$ALTROOT/var/tmp/solnix-nixcache" \
       TMPDIR="$ALTROOT/var/tmp" "$@"
 }
@@ -1226,6 +1229,7 @@ seed_target_store() {
   fi
   # --no-check-sigs: these paths are already VALID in the running store (they are
   # what booted); signatures guard the network, not a copy between local stores.
+  mkdir -p "$ALTROOT/var/tmp"   # the BE is still empty here; logs + nix's HOME live in it
   _cplog="$ALTROOT/var/tmp/solnix-seed-$$.log"
   spin_start "nix copy (media closure -> $POOL/nix)"
   run_to "${SOLNIX_COPY_TIMEOUT:-7200}" _nix_env nix --extra-experimental-features nix-command \
