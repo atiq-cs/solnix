@@ -2102,9 +2102,12 @@ spin_start "install-be (early-boot set, /etc, SMF, /boot, boot_archive)"
 # mode: it lives under $NIXROOT, and install-be must read every toplevel path
 # through that root (STORE_PREFIX), or absolute /nix/store links would resolve
 # against the build host's own store.
-SOLNIX_ROOT="$ALTROOT" SOLNIX_STORE_ROOT="$STORE_PREFIX" SOLNIX_POOL="$POOL" SOLNIX_BE="$BE" SOLNIX_CONSOLE="$TARGET_CONSOLE" \
-  run_to "${SOLNIX_INSTALL_BE_TIMEOUT:-1800}" /sbin/sh "$_TLD/bin/switch-to-configuration" install-be "$TOPLEVEL" \
-  > "$_belog" 2>&1
+# env(1), not `VAR=x run_to ...`: run_to is a shell function, and prefix
+# assignments before a function call are not exported to the commands it runs
+# (measured: install-be saw "SOLNIX_ROOT unset").
+run_to "${SOLNIX_INSTALL_BE_TIMEOUT:-1800}" env SOLNIX_ROOT="$ALTROOT" SOLNIX_STORE_ROOT="$STORE_PREFIX" \
+  SOLNIX_POOL="$POOL" SOLNIX_BE="$BE" SOLNIX_CONSOLE="$TARGET_CONSOLE" \
+  /sbin/sh "$_TLD/bin/switch-to-configuration" install-be "$TOPLEVEL" > "$_belog" 2>&1
 _rc=$?
 spin_stop
 tail -20 "$_belog" >&2
