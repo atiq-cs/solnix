@@ -62,6 +62,18 @@ chmod 1777 tmp
 chmod 1777 var/tmp
 [ -e etc/passwd ] || ( cd "$R$STOCK" && tar cf - etc ) | tar xf -
 chmod -R u+w etc var
+# The store hard-links identical files (auto-optimise-store), and tar keeps hard
+# links, so the stock tree arrived with e.g. eleven empty files sharing one inode
+# (etc/driver_classes, etc/versions/build, etc/mnttab, etc/security/dev/*, ...).
+# Writing one then rewrote all of them: the driver database copy below changed
+# etc/versions/build, a boot-archive file, so every boot found the archive stale,
+# rebuilt it and rebooted, forever (measured on the first KVM-installed disk: 26
+# "WARNING: Reboot required" cycles in system-filesystem-usr's log). Mutable
+# state must be separate files, so break every link in /etc and /var.
+find etc var -type f -links +1 | while read -r f; do
+  cp -p "$f" "$f.unlink" && mv -f "$f.unlink" "$f" || die "cannot break the hard link on /$f"
+done
+[ -z "$(find etc var -type f -links +1 | head -1)" ] || die "/etc or /var still has hard-linked files"
 relink() { rm -f "$2"; ln -s "$1" "$2"; }
 relink "$TOP/sw/bin" usr/bin;  relink "$WORLD/usr/sbin" usr/sbin;  relink usr/bin bin
 # the rest of /usr and /opt: links into the userland; the gate's own relative

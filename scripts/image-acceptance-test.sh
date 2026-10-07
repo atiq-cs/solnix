@@ -374,6 +374,14 @@ closure_contract_checks() {
   if grep -q "system/update-man-index.*enabled=.false" "$R/etc/svc/profile/site/solnix.xml" 2>/dev/null; then
     _ok "update-man-index is preset off (it rewrites usr/has/man/whatis in the store)"
   else _fail "update-man-index is not preset off: it rewrites usr/has/man/whatis inside the world's store path"; fi
+  # 12. mutable /etc and /var files are not hard links of each other. The store
+  #     hard-links identical files and tar keeps links, so a write to one empty
+  #     file (etc/driver_classes) rewrote ten others, including the boot-archive
+  #     file etc/versions/build: the installed disk rebuilt its archive and
+  #     rebooted every boot (measured, 26 cycles).
+  local hl; hl=$(find "$R/etc" "$R/var" -xdev -type f -links +1 2>/dev/null | head -3)
+  if [ -z "$hl" ]; then _ok "no hard-linked files in /etc or /var"
+  else _fail "hard-linked files in /etc or /var (a write to one rewrites the rest): $(echo $hl | sed "s,$R,,g")"; fi
   # 10. /dev/sad/admin exists before devfsadm: inittab's autopush opens it to push
   #     ldterm onto the console; without it every boot line is a bare line feed.
   case "$(_rl "$R/dev/sad/admin")" in

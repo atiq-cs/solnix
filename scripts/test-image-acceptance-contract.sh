@@ -50,6 +50,7 @@ no-sad-admin|rm dev/sad/admin|no /dev/sad/admin
 no-ca-link|rm etc/ssl/certs/ca-certificates.crt|no /etc/ssl/certs/ca-certificates.crt link
 usr-lib-libc|mkdir -p usr/lib; ln -s /nix/store/x/usr/lib/libc usr/lib/libc|/usr/lib/libc exists
 man-index-on|: > etc/svc/profile/site/solnix.xml|update-man-index is not preset off
+etc-hardlink|: > etc/a; ln etc/a etc/b|hard-linked files in /etc or /var
 CASES
 g="$W/good"; good "$g"; gout=$(closure_contract_checks "$g" 2>&1 | grep '^FAIL:' | grep -v 'store DB')
 [ -z "$gout" ] && echo "PASS  good root: no FAIL" || { echo "MISS  good root fails: $gout"; bad=$((bad+1)); }
