@@ -108,11 +108,23 @@ static_checks() {
   else _skip "no repository.db / svccfg -- console-login check"; fi
 
   # LESSON (X1 hid flood): /etc/system must quiet the hid Invalid-Report-Descriptor spam.
-  # bootadm assembles /etc/system.d/* into the kernel's view of /etc/system
-  # (.self-assembly), so a tunable set in a system.d fragment counts.
-  if cat "$R/etc/system" "$R"/etc/system.d/* 2>/dev/null | grep -q 'set hid:hid_errlevel'; then
-    _ok "/etc/system sets hid:hid_errlevel (X1 hid console-flood guard)"
-  else _fail "/etc/system missing 'set hid:hid_errlevel' (X1 hid flood would drown the console)"; fi
+  # The kernel reads /etc/system and /etc/system.d/.self-assembly ONLY (modsysfile.c);
+  # the fragments count only once assembled. Counting the fragments themselves passed
+  # while the media's kernel never saw them (crash dump: zfs_arc_max 0, the ARC
+  # uncapped, a ZFS deadman panic mid-install).
+  if cat "$R/etc/system" "$R/etc/system.d/.self-assembly" 2>/dev/null | grep -q 'set hid:hid_errlevel'; then
+    _ok "the kernel's /etc/system view sets hid:hid_errlevel (X1 hid console-flood guard)"
+  else _fail "neither /etc/system nor /etc/system.d/.self-assembly sets hid:hid_errlevel (X1 hid flood would drown the console)"; fi
+  # every system.d fragment is in .self-assembly (else the kernel ignores it)
+  local frag miss=""
+  for frag in "$R"/etc/system.d/*; do
+    [ -f "$frag" ] || continue
+    while IFS= read -r l; do
+      case "$l" in set\ *) grep -qxF "$l" "$R/etc/system.d/.self-assembly" 2>/dev/null || miss="$miss ${frag##*/}:'$l'" ;; esac
+    done < "$frag"
+  done
+  if [ -z "$miss" ]; then _ok "every /etc/system.d tunable is in .self-assembly (the file the kernel reads)"
+  else _fail "/etc/system.d tunables the kernel will not see (not in .self-assembly):$miss"; fi
 
   # LESSON (EC2 resolv.conf poisoned DNS on a home network): the media must NOT
   # ship the build host's resolver -- resolv.conf must be empty.

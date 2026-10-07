@@ -247,6 +247,23 @@ if [ -d "$G/auto" ]; then
 fi
 relink /run/current-system "$G/current-system"; relink /run/booted-system "$G/booted-system"
 
+# 7b. /etc/system.d: the kernel reads only /etc/system.d/.self-assembly (modsysfile.c),
+#     which `bootadm update-archive` assembles from the directory. A live root skips
+#     bootadm, so its system.d tunables never applied (measured in a crash dump of the
+#     media: zfs_arc_max 0 and hid_errlevel unset despite system.d/solnix-live-arc and
+#     solnix-hid-quiet; the uncapped ARC starved the installer until the ZFS deadman
+#     panicked "I/O to pool 'rpool' appears to be hung"). Assemble it here for every
+#     root, the way bootadm's build_etc_system_dir does (sorted, dot files skipped).
+if [ -d etc/system.d ]; then
+  : > etc/system.d/.self-assembly.new
+  for f in $(ls etc/system.d | LC_ALL=C sort); do
+    case $f in .*) continue ;; esac
+    cat "etc/system.d/$f" >> etc/system.d/.self-assembly.new
+  done
+  if [ -s etc/system.d/.self-assembly.new ]; then mv etc/system.d/.self-assembly.new etc/system.d/.self-assembly
+  else rm -f etc/system.d/.self-assembly.new etc/system.d/.self-assembly; fi
+fi
+
 # 8. console + boot archive.
 [ -e boot/loader.conf ] || printf 'console="%s"\nos_console="%s"\n' "$CONS" "$CONS" > boot/loader.conf
 [ -e boot/solaris/bootenv.rc ] || printf 'setprop console %s\nsetprop ttya-mode 115200,8,n,1,-\n' "$CONS" > boot/solaris/bootenv.rc
