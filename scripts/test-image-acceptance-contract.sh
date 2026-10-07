@@ -18,6 +18,8 @@ good() { local G=$1 TL=/nix/store/00000000000000000000000000000000-solnix-system
   me=$(id -u); printf 'dladm:x:%s:65::/:\nnetadm:x:%s:65::/:\n' "$me" "$me" >> "$G/etc/passwd"
   mkdir -p "$G/etc/dladm" "$G/etc/ipadm" "$G/dev/sad"; : > "$G/etc/dladm/datalink.conf"
   ln -s ../../devices/pseudo/sad@0:admin "$G/dev/sad/admin"
+  mkdir -p "$G/etc/svc/profile/site"
+  echo '<service name="system/update-man-index" version="1" type="service"><instance name="default" enabled="false"/></service>' > "$G/etc/svc/profile/site/solnix.xml"
   mkdir -p "$G/etc/ssl/certs" "$G/nix/store/22222222222222222222222222222222-cacert/etc/ssl/certs"
   echo '-----BEGIN CERTIFICATE-----' > "$G/nix/store/22222222222222222222222222222222-cacert/etc/ssl/certs/ca-bundle.crt"
   ln -s /nix/store/22222222222222222222222222222222-cacert/etc/ssl/certs/ca-bundle.crt "$G/etc/ssl/certs/ca-certificates.crt"; }
@@ -46,6 +48,8 @@ dladm-root-owned|sed -i 's/^dladm:x:[0-9]*:/dladm:x:0:/' etc/passwd|datalink.con
 ipadm-wrong-owner|sed -i 's/^netadm:x:[0-9]*:/netadm:x:4242:/' etc/passwd|/etc/ipadm is owned by uid
 no-sad-admin|rm dev/sad/admin|no /dev/sad/admin
 no-ca-link|rm etc/ssl/certs/ca-certificates.crt|no /etc/ssl/certs/ca-certificates.crt link
+usr-lib-libc|mkdir -p usr/lib; ln -s /nix/store/x/usr/lib/libc usr/lib/libc|/usr/lib/libc exists
+man-index-on|: > etc/svc/profile/site/solnix.xml|update-man-index is not preset off
 CASES
 g="$W/good"; good "$g"; gout=$(closure_contract_checks "$g" 2>&1 | grep '^FAIL:' | grep -v 'store DB')
 [ -z "$gout" ] && echo "PASS  good root: no FAIL" || { echo "MISS  good root fails: $gout"; bad=$((bad+1)); }

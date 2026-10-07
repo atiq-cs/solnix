@@ -353,6 +353,15 @@ closure_contract_checks() {
     elif [ -n "$uid" ] && [ "$got" = "$uid" ]; then _ok "/$p is owned by $u (uid $uid), as the gate's manifests give it"
     else _fail "/$p is owned by uid $got, not $u (${uid:-no such account}): $u's daemon cannot write it"; fi
   done
+  # 11. no boot service can write into a store path through a link (measured on the
+  #     media: fs-root's libc_mount lofs-mounted over the libc store path via
+  #     /usr/lib/libc, and update-man-index rewrote usr/has/man/whatis in the world).
+  if [ -e "$R/usr/lib/libc" ] || [ -h "$R/usr/lib/libc" ]; then
+    _fail "/usr/lib/libc exists: fs-root's libc_mount would lofs-mount over the libc store path"
+  else _ok "no /usr/lib/libc (fs-root mounts no hwcap libc over the store)"; fi
+  if grep -q "system/update-man-index.*enabled=.false" "$R/etc/svc/profile/site/solnix.xml" 2>/dev/null; then
+    _ok "update-man-index is preset off (it rewrites usr/has/man/whatis in the store)"
+  else _fail "update-man-index is not preset off: it rewrites usr/has/man/whatis inside the world's store path"; fi
   # 10. /dev/sad/admin exists before devfsadm: inittab's autopush opens it to push
   #     ldterm onto the console; without it every boot line is a bare line feed.
   case "$(_rl "$R/dev/sad/admin")" in
