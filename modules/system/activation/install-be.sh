@@ -132,6 +132,28 @@ for f in passwd shadow group user_attr; do
            END{for(u in own) if (own[u]!="") print own[u]}' "$R$ETC/$f" "etc/$f" > "etc/$f.new" && mv "etc/$f.new" "etc/$f"
 done
 chmod 0400 etc/shadow
+# Ownership and modes of the stock /etc and /var, from the gate's pkg(5) manifests
+# (pkgs/illumos/data/drivers/etc-var-attrs.tsv). The store keeps no owners, so without this
+# the whole tree is root-owned, and daemons that drop privilege cannot write their
+# own state: dlmgmtd (dladm:netadm) failed to persist a new link to a root-owned
+# /etc/dladm/datalink.conf, so the NIC never appeared in `dladm show-phys` and the
+# installer found no network (measured on the media; the same steps with the gate's
+# owners list e1000g0). Only entries present in the BE are touched, so a config that
+# replaced a file keeps it. Names resolve through this BE's own passwd/group.
+if [ -e "$R$DRV/etc-var-attrs.tsv" ]; then
+  awk -F'\t' 'FILENAME=="etc/passwd"{split($0,a,":"); u[a[1]]=a[3]; next}
+       FILENAME=="etc/group"{split($0,a,":"); g[a[1]]=a[3]; next}
+       { if (!($3 in u) || !($4 in g)) { miss[$3":"$4]++; next }
+         print $5, u[$3]":"g[$4], $2 }
+       END { for (k in miss) printf "install-be: no account for %s (%d entries left root-owned)\n", k, miss[k] > "/dev/stderr" }' \
+    etc/passwd etc/group "$R$DRV/etc-var-attrs.tsv" |
+  while read -r m o p; do
+    [ -e "$p" ] && [ ! -h "$p" ] || continue
+    chown "$o" "$p" && chmod "$m" "$p" || die "cannot set $o $m on /$p"
+  done
+else
+  die "$DRV has no etc-var-attrs.tsv (drivers db older than this install-be)"
+fi
 # driver database rendered from the gate's pkg manifests (pkgs/illumos/data/drivers).
 for f in name_to_major driver_aliases minor_perm driver_classes; do cp "$R$DRV/$f" "etc/$f"; done
 grep -q '^# solnix drivers' etc/security/device_policy || \
@@ -186,6 +208,12 @@ for i in 0 1 2; do relink "./fd/$i" "dev/$(echo stdin stdout stderr | cut -d' ' 
 # (devfsadm, then the soconfig rerun that maps AF_UNIX to /dev/ticotsord) never runs.
 relink ../devices/pseudo/dld@0:ctl dev/dld
 for d in dsk fd ipnet net pts rdsk rmt sad swap term vt zcons; do mkdir -p "dev/$d"; done
+# inittab's `autopush -f /etc/iu.ap` runs before devfsadm and opens /dev/sad/admin;
+# without the link it configures nothing, ldterm is never pushed on the console,
+# and every boot message is a line feed with no carriage return (the staircase
+# console seen on the X1 and under KVM; running autopush by hand fixed it).
+relink ../../devices/pseudo/sad@0:admin dev/sad/admin
+relink ../../devices/pseudo/sad@0:user dev/sad/user
 
 # 7. this BE is one generation: /run/{current,booted}-system are fixed for it.
 relink "$TOP" run/current-system; relink "$TOP" run/booted-system

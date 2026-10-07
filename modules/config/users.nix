@@ -241,6 +241,9 @@ in
       daemon.gid = lib.mkDefault 12;
       staff.gid = lib.mkDefault 10;
       sshd.gid = lib.mkDefault 22;
+      # pkg(5) creates smmsp from the sendmail manifest (it is not in the gate's
+      # stock group); var/spool/clientmqueue is smmsp:smmsp 0770.
+      smmsp.gid = lib.mkDefault 25;
       nobody.gid = lib.mkDefault 60001;
     };
     users.users = {
@@ -276,6 +279,16 @@ in
         description = lib.mkDefault "sshd privsep";
         home = lib.mkDefault "/var/empty";
         shell = lib.mkDefault "/bin/false";
+        hashedPassword = lib.mkDefault null;
+      };
+      # sendmail's message submission account (service-network-smtp-sendmail.p5m
+      # `user username=smmsp uid=25 group=smmsp password=NP`).
+      smmsp = {
+        uid = lib.mkDefault 25;
+        group = lib.mkDefault "smmsp";
+        description = lib.mkDefault "SendMail Message Submission Program";
+        home = lib.mkDefault "/";
+        shell = lib.mkDefault "";
         hashedPassword = lib.mkDefault null;
       };
       nobody = {

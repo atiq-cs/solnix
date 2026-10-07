@@ -100,6 +100,18 @@ in
     stop.exec = ":true";
   };
 
+  # sshd runs on the media with root login allowed, as NixOS's installation-device
+  # profile sets (services.openssh.enable, settings.PermitRootLogin = "yes"). Nobody
+  # can log in until root has a password or a key: the media bakes neither, and
+  # `solnix-install --ssh` sets one and prints it.
+  environment.generatedEtc."ssh/sshd_config" = lib.mkForce ''
+    UsePAM yes
+    KbdInteractiveAuthentication yes
+    PasswordAuthentication yes
+    PermitRootLogin yes
+    Subsystem sftp ${live.openssh}/libexec/sftp-server
+  '';
+
   # Substitute from cache.solnix.io (trusting only its 8UNr key) or BUILD; plus
   # cache.nixos.org for architecture-independent sources. These are already
   # modules/config/nix.nix's defaults; restated so the media's contract is

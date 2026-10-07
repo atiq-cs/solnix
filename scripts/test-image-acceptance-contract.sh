@@ -12,7 +12,15 @@ good() { local G=$1 TL=/nix/store/00000000000000000000000000000000-solnix-system
   ln -s "$TL" "$G/run/current-system"; ln -s "$TL" "$G/nix/var/nix/profiles/system-1-link"; ln -s system-1-link "$G/nix/var/nix/profiles/system"
   ln -s /nix/store/11111111111111111111111111111111-w/bin "$G/usr/bin"; ln -s /nix/store/11111111111111111111111111111111-w/bin "$G/usr/sbin"
   printf 'substituters = https://cache.solnix.io https://cache.nixos.org\ntrusted-public-keys = cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8= cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=\n' > "$G/etc/nix/nix.conf"
-  echo 'root:x:0:0::/root:/bin/sh' > "$G/etc/passwd"; }
+  echo 'root:x:0:0::/root:/bin/sh' > "$G/etc/passwd"
+  # pkg(5) ownership + the early /dev/sad link (checks 9 and 10): owners are this
+  # user's uid, so the test runs unprivileged.
+  me=$(id -u); printf 'dladm:x:%s:65::/:\nnetadm:x:%s:65::/:\n' "$me" "$me" >> "$G/etc/passwd"
+  mkdir -p "$G/etc/dladm" "$G/etc/ipadm" "$G/dev/sad"; : > "$G/etc/dladm/datalink.conf"
+  ln -s ../../devices/pseudo/sad@0:admin "$G/dev/sad/admin"
+  mkdir -p "$G/etc/ssl/certs" "$G/nix/store/22222222222222222222222222222222-cacert/etc/ssl/certs"
+  echo '-----BEGIN CERTIFICATE-----' > "$G/nix/store/22222222222222222222222222222222-cacert/etc/ssl/certs/ca-bundle.crt"
+  ln -s /nix/store/22222222222222222222222222222222-cacert/etc/ssl/certs/ca-bundle.crt "$G/etc/ssl/certs/ca-certificates.crt"; }
 TL=/nix/store/00000000000000000000000000000000-solnix-system-x
 tot=0; bad=0
 while IFS='|' read -r name break want; do
@@ -34,6 +42,10 @@ extra-key|sed -i 's/^trusted-public-keys = /trusted-public-keys = evil-1:AAAA= /
 no-solnix-subst|sed -i 's,https://cache.solnix.io ,,' etc/nix/nix.conf|no https://cache.solnix.io substituter
 personal-user|echo 'jdoe:x:1000:10::/home/jdoe:/bin/sh' >> etc/passwd|personal account
 baked-key|mkdir -p root/.ssh; echo ssh-ed25519 AAAA > root/.ssh/authorized_keys|authorized_keys file is baked
+dladm-root-owned|sed -i 's/^dladm:x:[0-9]*:/dladm:x:0:/' etc/passwd|datalink.conf is owned by uid
+ipadm-wrong-owner|sed -i 's/^netadm:x:[0-9]*:/netadm:x:4242:/' etc/passwd|/etc/ipadm is owned by uid
+no-sad-admin|rm dev/sad/admin|no /dev/sad/admin
+no-ca-link|rm etc/ssl/certs/ca-certificates.crt|no /etc/ssl/certs/ca-certificates.crt link
 CASES
 g="$W/good"; good "$g"; gout=$(closure_contract_checks "$g" 2>&1 | grep '^FAIL:' | grep -v 'store DB')
 [ -z "$gout" ] && echo "PASS  good root: no FAIL" || { echo "MISS  good root fails: $gout"; bad=$((bad+1)); }

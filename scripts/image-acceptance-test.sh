@@ -340,6 +340,25 @@ closure_contract_checks() {
                   else _fail "/etc/ssl/certs/ca-certificates.crt names a store path the media does not hold"; fi ;;
     *) _fail "no /etc/ssl/certs/ca-certificates.crt link into the store (curl/git HTTPS fail with rc 77)" ;;
   esac
+  # 9. state the gate gives to a non-root owner is owned by it (pkg(5) ownership,
+  #    applied by install-be from pkgs/illumos/data/drivers/etc-var-attrs.tsv).
+  #    Root-owned /etc/dladm: dlmgmtd (dladm) cannot record a new link and the NIC
+  #    never shows in `dladm show-phys` (X1 and KVM media, 20261007).
+  local own
+  for own in etc/dladm/datalink.conf:dladm etc/dladm:dladm etc/ipadm:netadm; do
+    local p=${own%%:*} u=${own##*:} uid got
+    uid=$(awk -F: -v u="$u" '$1==u{print $3}' "$R/etc/passwd" 2>/dev/null)
+    got=$(ls -lnd "$R/$p" 2>/dev/null | awk '{print $3}')
+    if [ -z "$got" ]; then _fail "/$p is missing"
+    elif [ -n "$uid" ] && [ "$got" = "$uid" ]; then _ok "/$p is owned by $u (uid $uid), as the gate's manifests give it"
+    else _fail "/$p is owned by uid $got, not $u (${uid:-no such account}): $u's daemon cannot write it"; fi
+  done
+  # 10. /dev/sad/admin exists before devfsadm: inittab's autopush opens it to push
+  #     ldterm onto the console; without it every boot line is a bare line feed.
+  case "$(_rl "$R/dev/sad/admin")" in
+    *devices/pseudo/sad@0:admin) _ok "/dev/sad/admin exists for inittab's autopush (console line discipline)" ;;
+    *) _fail "no /dev/sad/admin: autopush configures nothing and the boot console staircases" ;;
+  esac
   [ "${MODE:-}" = selftest ] || https_check "$R"
 }
 

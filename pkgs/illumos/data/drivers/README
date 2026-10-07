@@ -5,3 +5,10 @@ format that pkg(5) would write on install. The gate proto itself ships only a
 4-entry name_to_major, so before this the database was copied from the build host.
 Majors: the gate proto's own 4 entries keep their numbers, the rest are assigned in
 manifest order.
+
+etc-var-attrs.tsv (gen-etc-var-attrs.sh <gate checkout>) is the owner, group and
+mode of every etc/ and var/ dir and file in the same manifests, with the
+transforms/defaults defaults (root, bin, 0644/0755). install-be applies it to the
+stock /etc and /var it lays into a BE, as pkg(5) would: the store keeps no owners,
+and daemons that drop privilege (dlmgmtd as dladm, ipmgmtd as netadm) cannot write
+their state into a root-owned tree.
