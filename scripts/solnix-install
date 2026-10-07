@@ -1306,8 +1306,10 @@ realise_toplevel() {
   fi
   _tl="$STORE_PREFIX$TOPLEVEL"
   # Assert it is a bootable system BEFORE anything is laid into the BE.
-  for _need in activate bin/switch-to-configuration systemPath/platform/i86pc/kernel/amd64/unix \
-               systemPath/kernel/amd64/genunix; do
+  # The toplevel's own layout (modules/system/activation/default.nix): the kernel
+  # slice the loader reads, the install-be step, and the early-boot set.
+  for _need in activate bin/switch-to-configuration bin/install-be early-paths \
+               kernel-slice/platform/i86pc/kernel/amd64/unix kernel-slice/kernel/amd64/genunix; do
     [ -e "$_tl/$_need" ] || die "toplevel $TOPLEVEL has no $_need -- it is not a bootable solnix system"
   done
   # The BE is populated by the toplevel's OWN code (the same step make-be and
@@ -2005,7 +2007,8 @@ mkdir -p "$ALTROOT/boot/solaris" "$ALTROOT/etc/svc/profile/site" "$ALTROOT/nix" 
 #           inetd-managed service sat uninitialized, holding
 #           multi-user-server's optional_all dep offline (MEASURED on the X1).
 #           Disabling them puts them in a terminal state either way.
-#   ssh: on, so the installed machine is reachable on first boot.
+#   sshd is the configuration's own (smf.services.sshd, svc:/network/sshd); the
+#   gate's network/ssh is not shipped, so nothing is preset for it here.
 _presets="$ALTROOT/etc/svc/profile/site/solnix-install.xml"
 {
   echo '<?xml version="1.0"?>'
@@ -2016,14 +2019,13 @@ _presets="$ALTROOT/etc/svc/profile/site/solnix-install.xml"
               network/rpc/bind network/security/ktkt_warn; do
     echo "  <service name='$_svc' version='1' type='service'><instance name='default' enabled='false'/></service>"
   done
-  echo "  <service name='network/ssh' version='1' type='service'><instance name='default' enabled='true'/></service>"
   echo '</service_bundle>'
 } > "$_presets"
-_dtd="$_TLD/systemPath/usr/share/lib/xml/dtd/service_bundle.dtd.1"
+_dtd="$_TLD/world/usr/share/lib/xml/dtd/service_bundle.dtd.1"
 if command -v xmllint >/dev/null 2>&1 && [ -f "$_dtd" ]; then
   xmllint --noout --dtdvalid "$_dtd" "$_presets" || die "generated SMF preset profile is not DTD-valid: $_presets"
 fi
-log "SMF presets written as a site profile: autofs + inetd services off, ssh on ($_presets)"
+log "SMF presets written as a site profile: autofs + inetd services off ($_presets)"
 
 # 3c-2. CONSOLE of the installed system: a machine input, not configuration.
 # ⚠️ DO NOT set screen-#columns / screen-#rows in bootenv.rc OR loader.conf. Verified

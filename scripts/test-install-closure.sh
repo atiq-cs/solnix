@@ -22,8 +22,10 @@ bash -n "$W/populate.sh" && bash -n "$W/realise.sh" || { echo "FAIL  extracted b
 # The stub lays what IFACE-1 promises; SABOTAGE selects one way to get it wrong.
 mk_toplevel() {  # $1 = store root; prints the toplevel path
   local SR="$1" TL=/nix/store/00000000000000000000000000000000-solnix-system-test
-  mkdir -p "$SR$TL/bin" "$SR$TL/systemPath/platform/i86pc/kernel/amd64" "$SR$TL/systemPath/kernel/amd64"
-  : > "$SR$TL/activate"; : > "$SR$TL/systemPath/platform/i86pc/kernel/amd64/unix"; : > "$SR$TL/systemPath/kernel/amd64/genunix"
+  # the real toplevel's layout (modules/system/activation/default.nix)
+  mkdir -p "$SR$TL/bin" "$SR$TL/kernel-slice/platform/i86pc/kernel/amd64" "$SR$TL/kernel-slice/kernel/amd64"
+  : > "$SR$TL/activate"; : > "$SR$TL/early-paths"; : > "$SR$TL/bin/install-be"
+  : > "$SR$TL/kernel-slice/platform/i86pc/kernel/amd64/unix"; : > "$SR$TL/kernel-slice/kernel/amd64/genunix"
   cat > "$SR$TL/bin/switch-to-configuration" <<'STC'
 #!/bin/sh
 # test stub of IFACE-1 install-be
@@ -94,8 +96,8 @@ run_populate() {
 
 echo "=== populate + BE verification: correct install-be ==="
 run_populate good ok x
-grep -q "name='system/filesystem/autofs'.*enabled='false'" "$W/presets.xml" && grep -q "name='network/ssh'.*enabled='true'" "$W/presets.xml" \
-  && echo "PASS  presets profile: autofs off, ssh on" || { echo "FAIL  presets profile content"; FAILED=1; }
+grep -q "name='system/filesystem/autofs'.*enabled='false'" "$W/presets.xml" && ! grep -q "name='network/ssh'" "$W/presets.xml" \
+  && echo "PASS  presets profile: autofs off, nothing for the unshipped network/ssh" || { echo "FAIL  presets profile content"; FAILED=1; }
 grep -q '#' "$W/loader.conf" && { echo "FAIL  loader.conf contains '#'"; FAILED=1; } || echo "PASS  loader.conf has no '#'"
 echo "=== NEGATIVE CONTROLS: each sabotage of install-be's output must be refused ==="
 while read -r s re; do
