@@ -22,6 +22,8 @@
 # store (NixOS's security.wrappers, /run/wrappers/bin).
 { gate
 , libcSlice                  # pkgs.solnix.libc
+, sharedLibs ? [ ]           # more gate-lib copies (libthread, libkstat) that from-source deps
+                             # link; the world's own copies become links to them, like libc
 , deps ? [ ]                 # from-source libs the proto NEEDs but does not ship (libz, libxml2)
 , name ? "illumos-userland"
 , dirs ? [ "usr" "lib" "sbin" "opt" ]
@@ -39,6 +41,7 @@ derivation {
   builder = "/usr/bin/bash";
   PATH = "/usr/gnu/bin:/usr/bin:/usr/sbin";
   libc = libcSlice;
+  sharedLibsArg = builtins.concatStringsSep " " sharedLibs;
   dirsArg = builtins.concatStringsSep " " dirs;
   excludeArg = builtins.concatStringsSep " " (exclude ++ (if withTests then [ ] else [ "opt" ]));
   depsArg = builtins.concatStringsSep " " deps;
@@ -69,15 +72,18 @@ derivation {
 
     # one libc: every libc-slice soname here becomes a link to the slice's file.
     n=0
+    for L in "$libc" $sharedLibsArg; do
     for sub in lib lib/amd64; do
-      for s in "$libc/$sub"/*.so*; do
+      for s in "$L/$sub"/*.so*; do
+        [ -L "$s" ] && continue
         b=$(basename "$s")
         for t in "$sub/$b" "usr/$sub/$b"; do
           if [ -f "$t" ] && [ ! -L "$t" ]; then rm -f "$t"; ln -s "$s" "$t"; n=$((n+1)); fi
         done
       done
     done
-    echo "replaced $n libc-slice objects with links into $libc" >&2
+    done
+    echo "replaced $n libc-slice objects with links into $libc $sharedLibsArg" >&2
 
     # flat per-ABI lib dirs: every shared object here + the deps', one RUNPATH entry per ABI.
     mkdir -p lib-32 lib-64
@@ -110,11 +116,21 @@ derivation {
     RP="$out/lib-32:$out/lib-64"
 
     # relocate every dynamic object (not symlinks; hardlinks are visited per name, idempotent).
+    # Two trees keep a private dir first, because their sonames clash with the
+    # flat dirs: the BSD-compat tools (usr/ucb) need usr/ucblib's libtermcap and
+    # libcurses (SUNW_1.1 versions the core libtermcap filter lacks) and libucb;
+    # fwflash's verify plugins NEED their identify plugin (hermon.so) by name.
     : > .world/relocfail
     find . -type f ! -path './lib-*' | while read -r f; do
       /usr/bin/elfdump -d "$f" 2>/dev/null | grep -Eq 'NEEDED|SONAME' || continue
+      rp=$RP
+      case "$f" in
+        ./usr/ucb/*|./usr/ucblib/*)
+          if [ "$(elfclass "$f")" = 64 ]; then rp="$out/usr/ucblib/amd64:$RP"; else rp="$out/usr/ucblib:$RP"; fi ;;
+        ./usr/lib/fwflash/verify/*) rp="$out/usr/lib/fwflash/identify:$RP" ;;
+      esac
       chmod u+w "$f"
-      /usr/bin/elfedit -e "dyn:runpath $RP" "$f" 2>/dev/null || echo "$f" >> .world/relocfail
+      /usr/bin/elfedit -e "dyn:runpath $rp" "$f" 2>/dev/null || echo "$f" >> .world/relocfail
     done
     if [ -s .world/relocfail ]; then
       echo "FATAL: elfedit failed on $(wc -l < .world/relocfail) objects:" >&2; head .world/relocfail >&2; exit 1

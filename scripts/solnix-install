@@ -949,7 +949,8 @@ check_internet() {
   # 2. A REAL FETCH, with a content assertion. run_to caps it so a black-holed
   #    route cannot hang the installer (curl's own --max-time is belt-and-braces).
   if command -v curl >/dev/null 2>&1; then
-    _body=$(run_to 40 curl -fsS --max-time 25 "$_probe_url" 2>/dev/null)
+    _body=$(run_to 40 curl -fsS --max-time 25 "$_probe_url" 2>/tmp/solnix-netcheck.err)
+    _fetch_rc=$?
   elif command -v wget >/dev/null 2>&1; then
     _body=$(run_to 40 wget -qO- --timeout=25 "$_probe_url" 2>/dev/null)
   else
@@ -969,6 +970,14 @@ check_internet() {
 
   echo "" >&2
   echo "=== NO INTERNET ACCESS =====================================================" >&2
+  # curl's own words first: a TLS/CA failure (rc 60/77) is not a network failure.
+  if [ -s /tmp/solnix-netcheck.err ]; then
+    echo "  curl $_probe_url -> rc=${_fetch_rc:-?}: $(head -2 /tmp/solnix-netcheck.err | tr '\n' ' ')" >&2
+    case "${_fetch_rc:-}" in
+      35|51|58|60|77|83) echo "  That is a TLS/certificate error, NOT a network outage: the link and DNS may be fine." >&2
+                         echo "  Check: ls -l /etc/ssl/certs/ca-certificates.crt   curl -v $_probe_url" >&2 ;;
+    esac
+  fi
   if [ "$_dns_ok" = 1 ]; then
     echo "  DNS RESOLVES $_probe_host but the HTTPS FETCH FAILED." >&2
     echo "  Name service works; the route or TLS does not. Check:" >&2
@@ -2427,7 +2436,7 @@ elif [ -t 0 ] && [ -t 1 ]; then
     esac
     if [ ${#_au} -gt 32 ]; then echo "  too long (max 32)"; continue; fi
     if grep -q "^$_au:" "$ALTROOT/etc/passwd" 2>/dev/null; then
-      echo "  $_au already exists on the target"; continue
+      echo "  $_au is declared by the configuration: setting its password and admin rights"
     fi
     # Password twice, never echoed. stty -echo is the portable way here; the trap
     # restores it even if the operator interrupts, so a Ctrl-C cannot leave the
@@ -2493,7 +2502,15 @@ if [ "$_mkadmin" = 1 ]; then
   # unsupported -- illumos useradd has carried -R for a long time, but a silent
   # no-op here would produce a machine with no way in.
   _ua_ok=0
-  if "$ALTROOT/usr/sbin/useradd" -R "$ALTROOT" -m -d "${HOME_BASE}/$_au" \
+  if grep -q "^$_au:" "$ALTROOT/etc/passwd" 2>/dev/null; then
+    # declared in the configuration (users.users): its passwd/group lines came from
+    # the toplevel; only the home, the password and the RBAC entry are machine state.
+    _ua_ok=1
+    _ahome=$(awk -F: -v u="$_au" '$1==u{print $6}' "$ALTROOT/etc/passwd")
+    _auid=$(awk -F: -v u="$_au" '$1==u{print $3":"$4}' "$ALTROOT/etc/passwd")
+    mkdir -p "$ALTROOT$_ahome" && chown "$_auid" "$ALTROOT$_ahome"
+    log "admin user $_au is declared by the configuration (home $_ahome)"
+  elif "$ALTROOT/usr/sbin/useradd" -R "$ALTROOT" -m -d "${HOME_BASE}/$_au" \
        -s /bin/bash -g staff -G sysadmin "$_au" 2>/dev/null; then
     _ua_ok=1
   elif chroot "$ALTROOT" /usr/sbin/useradd -m -d "${HOME_BASE}/$_au" \
@@ -2538,8 +2555,8 @@ if [ "$_mkadmin" = 1 ]; then
   fi
   # RBAC: Primary Administrator is prof_attr's uid=0;gid=0 entry, so this is real
   # root-equivalence rather than a group that merely looks privileged.
-  printf '%s::::type=normal;profiles=Primary Administrator\n' "$_au" \
-    >> "$ALTROOT/etc/user_attr"
+  grep -q "^$_au:.*Primary Administrator" "$ALTROOT/etc/user_attr" 2>/dev/null || \
+    printf '%s::::type=normal;profiles=Primary Administrator\n' "$_au" >> "$ALTROOT/etc/user_attr"
   # sudo's wheel only if the group exists (sudo is not in illumos-gate).
   if grep -q '^wheel:' "$ALTROOT/etc/group" 2>/dev/null; then
     awk -F: -v u="$_au" 'BEGIN{OFS=":"} $1=="wheel" {$4=($4==""?u:$4","u)} {print}' \
@@ -2550,7 +2567,8 @@ if [ "$_mkadmin" = 1 ]; then
   grep -q "^$_au:" "$ALTROOT/etc/passwd" || die "user $_au missing from target /etc/passwd"
   grep -q "^$_au:" "$ALTROOT/etc/shadow" || die "user $_au missing from target /etc/shadow"
   grep -q "^$_au:" "$ALTROOT/etc/user_attr" || die "user $_au has no RBAC entry"
-  [ -d "$ALTROOT${HOME_BASE}/$_au" ] || die "home ${HOME_BASE}/$_au was not created"
+  _ahome=$(awk -F: -v u="$_au" '$1==u{print $6}' "$ALTROOT/etc/passwd")
+  [ -d "$ALTROOT$_ahome" ] || die "home $_ahome was not created"
   if [ -n "$_hash" ]; then
     grep -q "^$_au:\$" "$ALTROOT/etc/shadow" || grep -q "^$_au:[^*!]" "$ALTROOT/etc/shadow" \
       || die "password hash for $_au did not land in target /etc/shadow"

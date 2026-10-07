@@ -1,0 +1,13 @@
+# From OpenIndiana oi-userland components/library/mozilla-nss/patches/09-fix-missing-headers.patch.
+# NSS builds with -Werror-implicit-function-declaration, and on illumos alloca()
+# is declared only in <alloca.h>, which Hacl_Bignum_Base.h does not include.
+--- old/nss/lib/freebl/verified/internal/Hacl_Bignum_Base.h	2024-02-28 10:54:35.558759786 +0100
++++ new/nss/lib/freebl/verified/internal/Hacl_Bignum_Base.h	2024-02-28 10:54:19.590808084 +0100
+@@ -29,6 +29,7 @@
+ extern "C" {
+ #endif
+ 
++#include <alloca.h>
+ #include <string.h>
+ #include "krml/internal/types.h"
+ #include "krml/internal/builtin.h"

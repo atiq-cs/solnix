@@ -272,7 +272,10 @@ in
       # references the standard /usr/share path (correct on the running system).
       # VERIFY(§5.4): the exact pkgs.solnix attr that should expose it — for now
       # read it out of the gate proto store path.
-      dtdFile = "${pkgs.solnix.gate}/usr/share/lib/xml/dtd/service_bundle.dtd.1";
+      # From the world (the same file, relocated with the userland), not the gate
+      # proto: a config built on the installer media has the world but not the
+      # 680 MB proto, and xmllint below is the from-source libxml2's, not the host's.
+      dtdFile = "${pkgs.solnix.world}/usr/share/lib/xml/dtd/service_bundle.dtd.1";
 
       # only enabled services get manifests + methods generated.
       enabledServices = filterAttrs (_: s: s.enable) config.smf.services;
@@ -298,13 +301,12 @@ in
       # a malformed manifest fails the BUILD, not the boot. Proven on the host:
       # lib/smf/tests.nix builds the sshd+oneshot manifests and this exact
       # xmllint invocation PASSES (GATE 2).
-      checkedManifests = pkgs.runCommand "solnix-smf-manifests-checked"
-        { nativeBuildInputs = [ pkgs.buildPackages.libxml2 ]; } ''
+      checkedManifests = pkgs.runCommand "solnix-smf-manifests-checked" { } ''
         cp -r ${smfManifests} $out
         chmod -R u+w $out
         for m in $out/manifest/solnix/*.xml; do
           echo "validating $m" >&2
-          xmllint --noout --dtdvalid ${dtdFile} "$m"
+          ${pkgs.solnix.libxml2}/bin/xmllint --noout --dtdvalid ${dtdFile} "$m"
         done
       '';
     in

@@ -92,6 +92,11 @@ derivation {
     # then uts. bldenv's default t points ONBLD_TOOLS at that tools proto.
     cat > "$WORK/uts.sh" <<'EOS'
     set -eu
+    # bldenv exports TMPDIR=/tmp, and gcc writes its .s temporaries there. /tmp on
+    # the build host is swap-backed (~0.7-1.2 GB), so a kernel build that overlaps
+    # another build dies "error writing to /tmp/cc*.s: No space left on device"
+    # (measured, ipnet.c and emlxs_thread.c). Use the build tree's disk instead.
+    export TMPDIR="$CODEMGR_WS/../tmp"; mkdir -p "$TMPDIR"
     echo "RELEASE_BUILD=[''${RELEASE_BUILD-unset}] ONBLD_TOOLS=$ONBLD_TOOLS ROOT=$ROOT"
     [ "''${RELEASE_BUILD+set}" = set ] || { echo "FATAL: bldenv did not select non-DEBUG" >&2; exit 1; }
     M=/opt/onbld/bin/i386/dmake

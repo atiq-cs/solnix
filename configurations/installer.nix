@@ -78,6 +78,10 @@ in
   environment.systemPackages = [
     live.nixChain.curl
     live.openssl
+    # git: `solnix-install --git`, and a config that lists git (NixOS's installer
+    # enables programs.git) then finds it already in the store instead of
+    # building it, which the media cannot (no compiler on it).
+    live.git
     liveTools
   ];
 

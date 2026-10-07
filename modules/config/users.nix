@@ -95,6 +95,16 @@ let
           default = [ ];
           description = "Supplementary groups (added to the members field of each).";
         };
+        profiles = mkOption {
+          type = types.listOf types.str;
+          default = [ ];
+          example = [ "Primary Administrator" ];
+          description = ''
+            RBAC execution profiles (user_attr(5) `profiles=`). illumos has no wheel;
+            "Primary Administrator" (prof_attr: uid=0;gid=0) makes `pfexec <cmd>`
+            root-equivalent, the analog of NixOS's extraGroups = [ "wheel" ].
+          '';
+        };
         openssh.authorizedKeys.keys = mkOption {
           type = types.listOf types.str;
           default = [ ];
@@ -159,6 +169,8 @@ let
 
   groupLine = gname: g: "${gname}::${toString g.gid}:${concatStringsSep "," (membersOf gname)}";
 
+  userAttrLine = name: u: "${name}::::type=normal;profiles=${concatStringsSep "," u.profiles}";
+  userAttrFile = concatStringsSep "\n" (mapAttrsToList userAttrLine (filterAttrs (_: u: u.profiles != [ ]) cfg.users)) + "\n";
   passwdFile = concatStringsSep "\n" (mapAttrsToList passwdLine cfg.users) + "\n";
   shadowFile = concatStringsSep "\n" (mapAttrsToList shadowLine cfg.users) + "\n";
   groupFile = concatStringsSep "\n" (mapAttrsToList groupLine cfg.groups) + "\n";
@@ -180,6 +192,8 @@ let
         ''mkdir -p "$ROOT/${u.home}/.ssh" && chmod 700 "$ROOT/${u.home}/.ssh"''
         ''printf '%s' ${keysArg} > "$ROOT/${u.home}/.ssh/authorized_keys"''
         ''chmod 600 "$ROOT/${u.home}/.ssh/authorized_keys"''
+        # sshd opens authorized_keys with the USER's uid: a root-owned 0700 ~/.ssh is unreadable to it.
+        ''chown ${toString u.uid}:${toString (gidOf u.group)} "$ROOT/${u.home}" "$ROOT/${u.home}/.ssh" "$ROOT/${u.home}/.ssh/authorized_keys"''
       ]
     ) usersWithKeys
   );
@@ -277,6 +291,7 @@ in
       passwd = passwdFile;
       shadow = shadowFile;
       group = groupFile;
+      user_attr = userAttrFile;
     };
     users.authorizedKeysSetup = authKeysSetup;
   };

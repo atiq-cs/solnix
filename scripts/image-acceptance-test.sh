@@ -33,7 +33,8 @@ _skip() { echo "  SKIP: $*"; SKIP=$((SKIP+1)); }
 # Locate + mount the boot_archive (the live root UFS image inside the media).
 # The static checks inspect the ROOT FILESYSTEM the machine actually boots.
 # ---------------------------------------------------------------------------
-WORK="$(mktemp -d /tmp/img-accept.XXXXXX)"
+# the inflated boot_archive is ~700 MB: on the build host /tmp is swap-backed, so honour TMPDIR
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/img-accept.XXXXXX")"
 RDMNT="$WORK/rd"
 LOFI_RD="" LOFI_ISO="" ISOMNT=""
 cleanup() {
@@ -265,11 +266,21 @@ closure_contract_checks() {
       # the DB instead, against the image's store, without writing the image.
       local _dbc; _dbc=$(mktemp -d /tmp/img-accept-db.XXXXXX)
       mkdir -p "$_dbc/nix/var/nix" && cp -R "$R/nix/var/nix/db" "$_dbc/nix/var/nix/db" 2>/dev/null
-      ln -s "$R/nix/store" "$_dbc/nix/store" 2>/dev/null
-      local _cl; _cl=$(nix-store --store "local?root=$_dbc" -qR "$top" 2>/dev/null)
-      if [ -n "$_cl" ] && nix-store --store "local?root=$_dbc" --verify-path $_cl >/dev/null 2>&1
-      then _ok "every closure path of the toplevel is VALID in the media's store DB ($(echo "$_cl" | wc -l | tr -d ' ') paths)"
+      # nix refuses a store dir that is a symlink ("is a symlink; this is not
+      # allowed for the Nix store"), which made this check fail on every image;
+      # loopback-mount the image's store there instead (read-only).
+      mkdir -p "$_dbc/nix/store"
+      local _lofs=0; mount -F lofs -o ro "$R/nix/store" "$_dbc/nix/store" 2>/dev/null && _lofs=1
+      # Verify every path PRESENT in the image's store, plus the toplevel's closure.
+      # The DB's own closure alone cannot fail: a deleted ValidPaths row also drops
+      # that path's Refs, so -qR silently omits it (measured: 55 -> 54, rc 0).
+      local _cl; _cl=$( { nix-store --store "local?root=$_dbc" -qR "$top" 2>/dev/null
+                          ls "$R/nix/store" | grep -v '^\.' | sed 's,^,/nix/store/,'; } | sort -u)
+      if [ "$_lofs" = 0 ]; then _skip "cannot lofs-mount the image store -- store DB validity"
+      elif [ -n "$_cl" ] && nix-store --store "local?root=$_dbc" --verify-path $_cl >/dev/null 2>&1
+      then _ok "every store path on the media is VALID in its store DB ($(echo "$_cl" | wc -l | tr -d ' ') paths, toplevel closure included)"
       else _fail "the media's store DB does not register the whole toplevel closure"; fi
+      [ "$_lofs" = 1 ] && umount "$_dbc/nix/store"
       find "$_dbc" -depth -delete 2>/dev/null
     else _skip "nix-store absent -- store DB validity"; fi
   else _fail "no /nix/var/nix/db/db.sqlite -- the media store is unregistered"; fi
@@ -319,6 +330,40 @@ closure_contract_checks() {
   if find "$R/root" "$R/etc/ssh" -name 'authorized_keys*' -size +0 2>/dev/null | grep -q .; then
     _fail "an authorized_keys file is baked into the media"
   else _ok "no authorized_keys baked into the media"; fi
+  # 8. a TLS trust store at the names curl/git/openssl look for (NixOS security/ca.nix),
+  #    resolving into the media's store. Without it the media's curl failed every HTTPS
+  #    fetch with rc 77 and the installer reported "network is NOT up" (X1, closure1).
+  local ca; ca=$(_inr "$R" etc/ssl/certs/ca-certificates.crt)
+  case "$(_rl "$R/etc/ssl/certs/ca-certificates.crt")" in
+    /nix/store/*) if [ -n "$ca" ] && grep -q 'BEGIN CERTIFICATE' "$ca" 2>/dev/null
+                  then _ok "/etc/ssl/certs/ca-certificates.crt -> a CA bundle in the media's store"
+                  else _fail "/etc/ssl/certs/ca-certificates.crt names a store path the media does not hold"; fi ;;
+    *) _fail "no /etc/ssl/certs/ca-certificates.crt link into the store (curl/git HTTPS fail with rc 77)" ;;
+  esac
+  [ "${MODE:-}" = selftest ] || https_check "$R"
+}
+
+# The media's own curl, chrooted, fetches over HTTPS with NO CA environment, and the
+# same fetch with a bogus CA file fails (negative control: the check can fail). The
+# media's resolv.conf is empty by design, so the name is pinned with --resolve; this
+# tests TLS trust, not DNS.
+https_check() {
+  local R="$1" url="${ACCEPT_HTTPS_URL:-https://cache.solnix.io/nix-cache-info}" h ip body rc
+  command -v chroot >/dev/null && [ -n "$(_inr "$R" run/current-system/sw/bin/curl)" ] \
+    || { _skip "no chroot or no curl on the media profile -- HTTPS fetch check"; return; }
+  h=$(echo "$url" | sed -e 's,^https://,,' -e 's,/.*,,')
+  ip=$(getent hosts "$h" 2>/dev/null | awk '{print $1; exit}')
+  [ -n "$ip" ] || { _skip "build host cannot resolve $h -- HTTPS fetch check"; return; }
+  body=$(chroot "$R" /usr/bin/env -i PATH=/run/current-system/sw/bin:/usr/bin \
+           /run/current-system/sw/bin/curl -fsS --max-time 30 --resolve "$h:443:$ip" "$url" 2>&1); rc=$?
+  case "$rc:$body" in
+    0:*StoreDir*) _ok "media curl (chroot, no CA env) fetched $url" ;;
+    *) _fail "media curl (chroot, no CA env) could not fetch $url: rc=$rc $(echo "$body" | head -1)"; return ;;
+  esac
+  chroot "$R" /usr/bin/env -i PATH=/run/current-system/sw/bin:/usr/bin CURL_CA_BUNDLE=/etc/nonexistent.pem \
+    /run/current-system/sw/bin/curl -fsS --max-time 30 --resolve "$h:443:$ip" "$url" >/dev/null 2>&1 \
+    && _fail "negative control: media curl fetched $url with a bogus CA bundle (check is vacuous)" \
+    || _ok "negative control: the same fetch with a bogus CA bundle fails"
 }
 
 # Transitive, ABI-aware NEEDED-closure check over every staged ELF.
@@ -439,8 +484,13 @@ selftest() {
   echo 'jdoe:x:1000:10::/home/jdoe:/bin/sh' > "$T/etc/passwd"
   local before=$FAIL cbefore
   cbefore=$FAIL; closure_contract_checks "$T" >/dev/null 2>&1 || true
-  echo "  closure-contract checks fired on the defective root: $((FAIL-cbefore)) (expect >= 8)"
-  [ $((FAIL-cbefore)) -ge 8 ] || { echo "  FAIL: closure-contract checks are vacuous"; return 1; }
+  echo "  closure-contract checks fired on the defective root: $((FAIL-cbefore)) (expect >= 9)"
+  [ $((FAIL-cbefore)) -ge 9 ] || { echo "  FAIL: closure-contract checks are vacuous"; return 1; }
+  # the CA-store check alone, on the defective root (no /etc/ssl) and on a dangling link
+  cbefore=$FAIL; ( closure_contract_checks "$T" 2>&1 ) | grep -q 'no /etc/ssl/certs/ca-certificates.crt link' \
+    && echo "  CA-store check fires on a root with no /etc/ssl/certs/ca-certificates.crt" \
+    || { echo "  FAIL: CA-store check did not fire on a root without the bundle"; return 1; }
+  FAIL=$cbefore
   # and a GOOD closure root passes them all (positive control).
   local G="$WORK/good" TL=/nix/store/00000000000000000000000000000000-solnix-system-x
   mkdir -p "$G$TL/bin" "$G/nix/store/11111111111111111111111111111111-w/bin" "$G/run" "$G/nix/var/nix/profiles" "$G/usr" "$G/etc/nix" "$G/nix/var/nix/db"
@@ -449,6 +499,9 @@ selftest() {
   ln -s /nix/store/11111111111111111111111111111111-w/bin "$G/usr/bin"; ln -s /nix/store/11111111111111111111111111111111-w/bin "$G/usr/sbin"
   printf 'substituters = https://cache.solnix.io https://cache.nixos.org\ntrusted-public-keys = cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8= cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=\n' > "$G/etc/nix/nix.conf"
   echo 'root:x:0:0::/root:/bin/sh' > "$G/etc/passwd"
+  mkdir -p "$G/etc/ssl/certs" "$G/nix/store/22222222222222222222222222222222-cacert/etc/ssl/certs"
+  echo '-----BEGIN CERTIFICATE-----' > "$G/nix/store/22222222222222222222222222222222-cacert/etc/ssl/certs/ca-bundle.crt"
+  ln -s /nix/store/22222222222222222222222222222222-cacert/etc/ssl/certs/ca-bundle.crt "$G/etc/ssl/certs/ca-certificates.crt"
   local gb=$FAIL; closure_contract_checks "$G" > "$WORK/good.out" 2>&1 || true
   # the store-DB validity check needs a real store; on a fake root it may only SKIP or FAIL that one line
   local gfails; gfails=$(grep -c 'FAIL:' "$WORK/good.out"); grep 'FAIL:' "$WORK/good.out" | grep -v 'store DB' | sed 's/^/    good-root /'

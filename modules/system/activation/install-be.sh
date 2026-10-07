@@ -113,14 +113,23 @@ chmod -R u+w boot platform/i86pc/amd64 2>/dev/null
 # 3. /etc from the toplevel over the stock tree.
 ( cd "$R$ETC" && find . -type f -o -type l ) | while read -r f; do
   f=${f#./}; mkdir -p "etc/$(dirname "$f")"
-  case $f in passwd|shadow|group) continue;; esac
-  rm -f "etc/$f"; cp "$R$ETC/$f" "etc/$f"
+  case $f in passwd|shadow|group|user_attr) continue;; esac
+  rm -f "etc/$f"
+  # links stay links (etc/ssl/certs/* -> the cacert store path, as NixOS's /etc does)
+  if [ -h "$R$ETC/$f" ]; then ln -s "$(ls -ld "$R$ETC/$f" | sed -n 's/.* -> //p')" "etc/$f"
+  else cp "$R$ETC/$f" "etc/$f"; fi
 done
 # accounts: stock lines stay; the toplevel's users (users.users) replace same-named ones.
-for f in passwd shadow group; do
+# A declared user with no hashedPassword (shadow "NP") keeps the password already
+# set on this BE (NixOS users.mutableUsers: the installer or `passwd` owns it), so a
+# new generation does not lock out the user the installer gave a password.
+for f in passwd shadow group user_attr; do
   [ -e "$R$ETC/$f" ] || continue
-  awk -F: 'NR==FNR{own[$1]=$0; next} ($1 in own){print own[$1]; delete own[$1]; next} {print}
-           END{for(u in own) print own[u]}' "$R$ETC/$f" "etc/$f" > "etc/$f.new" && mv "etc/$f.new" "etc/$f"
+  [ -e "etc/$f" ] || : > "etc/$f"
+  awk -F: -v f="$f" 'NR==FNR{own[$1]=$0; np[$1]=($2=="NP"); next}
+           ($1 in own){ if (f=="shadow" && np[$1] && $2!="NP" && $2!="") print; else print own[$1]; delete own[$1]; next}
+           {print}
+           END{for(u in own) if (own[u]!="") print own[u]}' "$R$ETC/$f" "etc/$f" > "etc/$f.new" && mv "etc/$f.new" "etc/$f"
 done
 chmod 0400 etc/shadow
 # driver database rendered from the gate's pkg manifests (pkgs/illumos/data/drivers).

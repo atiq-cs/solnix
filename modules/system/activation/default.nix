@@ -407,6 +407,12 @@ let
     ${concatStringsSep "\n    " (mapAttrsToList (fname: content:
       "mkdir -p $out/etc/$(dirname ${fname}); cp ${pkgs.writeText "solnix-etc-${builtins.replaceStrings ["/"] ["-"] fname}" content} $out/etc/${fname}")
       configEtc)}
+    # TLS trust store (NixOS security/ca.nix: environment.etc."ssl/certs/ca-certificates.crt"
+    # and "ssl/certs/ca-bundle.crt" from the cacert package). illumos ships per-CA PEMs
+    # and no bundle; curl, git and openssl look for these names.
+    mkdir -p $out/etc/ssl/certs
+    ln -s ${pkgs.solnix.nixChain.cacert}/etc/ssl/certs/ca-bundle.crt $out/etc/ssl/certs/ca-certificates.crt
+    ln -s ${pkgs.solnix.nixChain.cacert}/etc/ssl/certs/ca-bundle.crt $out/etc/ssl/certs/ca-bundle.crt
     # /etc/shadow must be root-only (0400) or login refuses it.
     [ -e $out/etc/shadow ] && chmod 0400 $out/etc/shadow || true
   '';
@@ -449,7 +455,10 @@ let
       # build-only inputs that must never reach the runtime closure (the analog of
       # nixpkgs' disallowedReferences): the gate proto (219 MB, build headers and
       # link libs) and the from-source compiler. Checked over the sw closure below.
-      disallowed = "${pkgs.solnix.gate} ${pkgs.solnix.gcc}";
+      # Names only (context discarded): interpolating them would make the gate and
+      # the from-source gcc BUILD INPUTS of every toplevel, so a config built on the
+      # installer media would have to build gcc there (no stage0 compiler on it).
+      disallowed = builtins.unsafeDiscardStringContext "${pkgs.solnix.gate} ${pkgs.solnix.gcc}";
     } ''
     mkdir -p $out
     grep -h '^/nix/store/' early-graph | grep -v '\.drv$' | sort -u > $out/early-paths

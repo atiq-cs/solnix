@@ -368,9 +368,13 @@ let
   srcPkgs = import ./base-src.nix { gate = gate'; libcSlice = libc; inherit world gcc; };
 
   # The whole gate userland, relocated into the store (./mk-proto-world.nix).
+  # deps: nspr + nss for the gate's LDAP client stack (libldap.so.5), and gcc.lib
+  # for the gate's few C++ objects (make, audioconvert, libfru*, libsun_fc, the
+  # NIS yp servers), which NEED libstdc++.so.6 + libgcc_s.so.1.
   world = import ./mk-proto-world.nix {
     gate = gate'; libcSlice = libc;
-    deps = [ srcPkgs.zlib srcPkgs.libxml2 ];
+    sharedLibs = [ srcPkgs.libcExtra ];
+    deps = [ srcPkgs.zlib srcPkgs.libxml2 srcPkgs.nspr srcPkgs.nss gcc.lib ];
   };
 
   # The boot-time set: what must run before the shared /nix is mounted (init,
@@ -430,7 +434,8 @@ let
 in
 {
   inherit libc rtld ld sys base-tools systemPath nix nix224 cached starter gcc world early stock drivers kernelNd;
-  inherit (srcPkgs) zlib libxml2 openssl openssh bash;
+  inherit (srcPkgs) zlib libxml2 openssl openssh bash nspr nss git libcExtra;
+  curl = srcPkgs.nixChain.curl;
   # nix 2.24.15 and its dependency chain, from source (./nix-src.nix).
   nixChain = srcPkgs.nixChain;
   nixSrc = srcPkgs.nixChain.nix;

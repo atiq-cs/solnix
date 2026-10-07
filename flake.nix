@@ -21,7 +21,15 @@
     let
       # nixpkgs lib comes from the fork's patched source (carries x86_64-solaris).
       nixpkgs = solnix-pkgs.lib.nixpkgsSrc;
-      lib = import "${nixpkgs}/lib";
+      # lib for EVALUATING solnix systems: the pinned nixpkgs source itself, not
+      # solnix-pkgs' patched copy. That copy is an x86_64-linux applyPatches
+      # derivation, so importing from it is import-from-derivation: measured on
+      # illumos, `nix eval .#solnixConfigurations.<x>...drvPath` died with "a
+      # 'x86_64-linux' is required to build ...-nixpkgs-solnix-patched.drv", and
+      # its output is in no cache. The patches touch lib/systems (the *-solaris
+      # platforms), which nothing here reads: system = "x86_64-solaris" is a
+      # plain string. NixOS evaluates a system without IFD; so does this.
+      lib = import "${solnix-pkgs.inputs.nixpkgs}/lib";
 
       # The canonical Nix system for illumos is x86_64-solaris (GNU triple
       # x86_64-unknown-solaris2.11); "illumos" is branding at the attribute layer.
@@ -44,6 +52,17 @@
         inherit system;
         overlays = [ solnix-pkgs.overlays.default shellPathOverlay worldOverlay ];
       };
+
+      # mkPkgs: the pkgs a solnix SYSTEM is evaluated with -- lib/host-pkgs.nix,
+      # the same shim the illumos host's lib/eval-host.nix uses: pkgs.solnix.* from
+      # this repo's pkgs/illumos plus plain-derivation writers. Not pkgsFor: the
+      # nixpkgs writers there are built with nixpkgs' x86_64-solaris stdenv, so every
+      # toplevel dragged ~200 bootstrap derivations (perl, bison, texinfo, bash 5.3,
+      # libxml2 2.15 ...) that are in no cache and that the installer media cannot
+      # build. With the shim, a flake eval and a host eval give the SAME toplevel
+      # derivation, so what bhost built is what an install substitutes or reuses.
+      # The gate proto comes from gate.nix's own pinned, named fetch (pure-legal).
+      mkPkgs = { system ? "x86_64-solaris" }: import ./lib/host-pkgs.nix { inherit system; };
 
       # shellPathOverlay — restore bashNonInteractive.shellPath on x86_64-solaris.
       #
@@ -112,7 +131,11 @@
       # only solnix-pkgs.overlays.default (the bootstrap half) hits both — which is
       # why `solnix-install --flake .#dixi` failed against nix-config: it built
       # pkgs its own way and inherited neither. Single source of truth here.
-      lib = { inherit solnixSystem shellPathOverlay worldOverlay; };
+      # mkPkgs + solnixSystem are what an external flake (nix-config's mkSolnixHost)
+      # should use: solnixSystem { pkgs = solnix.lib.mkPkgs { }; modules = [...]; }.
+      # The overlays stay exported for consumers that build nixpkgs packages for
+      # x86_64-solaris (home-manager), which is a separate, cache-dependent path.
+      lib = { inherit solnixSystem mkPkgs shellPathOverlay worldOverlay; };
 
       # solnixConfigurations.<name> — the nixosConfigurations analog.
       #
@@ -127,7 +150,7 @@
       solnixConfigurations = {
         base = solnixSystem {
           system = "x86_64-solaris";
-          pkgs = pkgsFor "x86_64-solaris";
+          pkgs = mkPkgs { };
           modules = [ ./configurations/base.nix ];
         };
 
@@ -135,7 +158,7 @@
         # This is what an installer selects for that machine.
         pgfarm = solnixSystem {
           system = "x86_64-solaris";
-          pkgs = pkgsFor "x86_64-solaris";
+          pkgs = mkPkgs { };
           modules = [ ./configurations/pgfarm.nix ];
         };
 
@@ -150,13 +173,13 @@
         # flake refs). scripts/make-installer-image.sh puts its closure on the media.
         installer = solnixSystem {
           system = "x86_64-solaris";
-          pkgs = pkgsFor "x86_64-solaris";
+          pkgs = mkPkgs { };
           modules = [ ./configurations/installer.nix ];
         };
 
         dixi = solnixSystem {
           system = "x86_64-solaris";
-          pkgs = pkgsFor "x86_64-solaris";
+          pkgs = mkPkgs { };
           modules = [ ./configurations/dixi.nix ];
         };
       };

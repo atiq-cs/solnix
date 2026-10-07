@@ -21,6 +21,9 @@
 { solnixDir ? ../pkgs/illumos
 , gateProto ? null
 , gateArgs ? { }
+  # a literal, not builtins.currentSystem: that does not exist in a pure (flake)
+  # eval, and the flake evaluates solnix systems with this same shim.
+, system ? "x86_64-solaris"
 }:
 
 let
@@ -30,7 +33,7 @@ let
   # nixpkgs' writeText/writeScript surface (name -> text -> store path).
   mkWriter = executable: name: text: derivation {
     inherit name text;
-    system = builtins.currentSystem; # x86_64-solaris on the host
+    inherit system;
     builder = "/usr/bin/bash";
     PATH = "/usr/gnu/bin:/usr/bin:/usr/sbin";
     args = [ "-c" (
@@ -50,7 +53,7 @@ let
     { name, text, executable ? false, destination ? "" }:
     derivation {
       inherit name text;
-      system = builtins.currentSystem;
+      inherit system;
       builder = "/usr/bin/bash";
       PATH = "/usr/gnu/bin:/usr/bin:/usr/sbin";
       exe = if executable then "1" else "";
@@ -76,7 +79,7 @@ let
   # attrs are threaded through as derivation attrs (so e.g. inputs are refs).
   runCommand = name: env: script: derivation ({
     inherit name;
-    system = builtins.currentSystem;
+    inherit system;
     builder = "/usr/bin/bash";
     PATH = "/usr/gnu/bin:/usr/bin:/usr/sbin";
     args = [ "-c" script ];

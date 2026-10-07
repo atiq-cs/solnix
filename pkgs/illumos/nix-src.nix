@@ -96,8 +96,12 @@ rec {
       ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static \
         --with-openssl=${openssl} --with-zlib=${zlib} --without-libpsl --without-brotli \
         --without-zstd --without-libidn2 --without-nghttp2 --without-libssh2 --disable-ldap \
-        --with-ca-bundle=/etc/ssl/certs/ca-certificates.crt --without-ca-path
+        --with-ca-bundle=${cacert}/etc/ssl/certs/ca-bundle.crt --without-ca-path
       gmake -j4; gmake install
+      # curl --version's CA line comes from the compiled default; a wrong one
+      # reads as "network is NOT up" (rc 77) on a root with no /etc/ssl bundle.
+      grep -q '#define CURL_CA_BUNDLE "${cacert}/etc/ssl/certs/ca-bundle.crt"' lib/curl_config.h \
+        || { echo "FATAL: curl CA bundle default is not the store cacert" >&2; exit 1; }
     '';
   };
 
