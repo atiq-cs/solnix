@@ -1,0 +1,82 @@
+{
+  "nodes": {
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1784905249,
+        "narHash": "sha256-1qcuoASnpgjW0DmxwgZupT+uHUhRMlSasBSeYaTRfmU=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "7f81d69cbd67048635c5d30cd2649e4d018976bc",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "7f81d69cbd67048635c5d30cd2649e4d018976bc",
+        "type": "github"
+      }
+    },
+    "nixpkgs-host": {
+      "locked": {
+        "lastModified": 1791048980,
+        "narHash": "sha256-KgItSKML8Xvte0B7/uGnBDsYzSnnKHcOaiUbgWBXLXw=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "a7868a727837f3c09cee2ce0ca671c76b1589fed",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "solnix": "solnix"
+      }
+    },
+    "solnix": {
+      "inputs": {
+        "nixpkgs-host": "nixpkgs-host",
+        "solnix-pkgs": "solnix-pkgs"
+      },
+      "locked": {
+        "lastModified": 1791376530,
+        "narHash": "sha256-3MY5kiW/FxC3vhbopkwnxlgeUrImy1+L6/cWHgPUazc=",
+        "ref": "main",
+        "rev": "5917518ca9ea9933ae524e0b2ee56b38fc42f642",
+        "revCount": 1750,
+        "type": "git",
+        "url": "https://codeberg.org/gregburd/solnix.git"
+      },
+      "original": {
+        "ref": "main",
+        "type": "git",
+        "url": "https://codeberg.org/gregburd/solnix.git"
+      }
+    },
+    "solnix-pkgs": {
+      "inputs": {
+        "nixpkgs": "nixpkgs"
+      },
+      "locked": {
+        "lastModified": 1789842231,
+        "narHash": "sha256-ugDvPuvEV98j71n7v+ihPthdjlB3MFuRoa0nyekWvLk=",
+        "ref": "main",
+        "rev": "2678fafe6b517199cb35b90e52cbd09a0335fbdf",
+        "revCount": 110,
+        "type": "git",
+        "url": "https://codeberg.org/gregburd/solnix-pkgs.git"
+      },
+      "original": {
+        "ref": "main",
+        "type": "git",
+        "url": "https://codeberg.org/gregburd/solnix-pkgs.git"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}

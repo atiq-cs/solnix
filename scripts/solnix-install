@@ -587,6 +587,14 @@ setup_scratch() {
         [ -e "$_d" ] || continue
         _n=$(basename "$_d"); _n=${_n%p0}
         if dd if="/dev/rdsk/${_n}p0" bs=2048 count=64 2>/dev/null | strings 2>/dev/null | grep -q 'SOLNIX_INSTALL'; then
+          # A boot medium that is a CD/DVD drive (SCSI inquiry type 5: a VM's ide-cd,
+          # a real optical drive) is read-only; zpool create on it dies in
+          # libdiskmgt (measured under KVM: Memory fault in match_fixed_name).
+          # Treat it as "no stick", so the target-disk scratch below is used.
+          if prtconf -v "/dev/rdsk/${_n}p0" 2>/dev/null | awk '/inquiry-device-type/{getline; print}' | grep -q 'value=00000005'; then
+            log "USB scratch: boot medium $_n is an optical drive (read-only) -- not used for scratch"
+            continue
+          fi
           # Found the boot stick. Do NOT require the s2 slice node to pre-exist:
           # on a freshly dd'd stick illumos has not necessarily created the GPT
           # slice device nodes, and the EFI label the pool needs is written by the
@@ -1155,12 +1163,14 @@ if [ -n "$FLAKE_REF" ]; then
     fi
     # rc!=0 AND the attrset itself did not evaluate (not merely a missing member)
     # means a real failure. If the err mentions space/network, surface THAT.
-    if [ "$_rc" != 0 ] && grep -qiE 'no space|file system full|out of inodes|could not resolve|unable to download|connection|SSL' /tmp/solnix-gate.err 2>/dev/null; then
+    # rc!=0 means the flake or the attrset did not evaluate (a missing member is
+    # rc 0 with "no"), so it is never "nothing to install": show nix's own error.
+    # A set this flake does not define is the one benign case; try the next name.
+    if [ "$_rc" != 0 ] && ! grep -qE "does not provide attribute|attribute '${_set}' missing" /tmp/solnix-gate.err 2>/dev/null; then
       echo "" >&2
-      echo "FATAL: could not evaluate '$_at' -- nix eval failed for a reason that is NOT a" >&2
-      echo "missing attribute. The error was:" >&2
-      tail -5 /tmp/solnix-gate.err | sed 's/^/  /' >&2
-      die "flake resolution failed (disk/network), NOT a missing config -- fix the above and retry"
+      echo "FATAL: could not evaluate '${_fl}#${_set}'. nix eval said:" >&2
+      grep -v '^ *$' /tmp/solnix-gate.err | tail -8 | sed 's/^/  /' >&2
+      die "flake resolution failed -- this is the flake fetch or evaluation, not a missing config"
     fi
   done
   if [ -z "$_drv" ]; then
