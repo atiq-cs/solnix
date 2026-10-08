@@ -47,7 +47,7 @@ log "writing loader.conf"
 # NOTE: UNQUOTED heredoc on purpose. With <<'EOF' the ${SOLNIX_CONSOLE:-...}
 # below was written LITERALLY into loader.conf; the illumos loader has no shell
 # parameter expansion, so it answered "no valid consoles!" (observed) and fell
-# back. Only the console and boot-args lines contain '$'.
+# back. Only the console lines contain '$'.
 # Console ORDER matters for the deliverable: real hardware (the X1 Carbon) has no
 # ttya at all, so the framebuffer console ("text") must lead.
 #
@@ -100,8 +100,11 @@ boot_archive_name="/platform/i86pc/amd64/boot_archive"
 boot_archive.hash_load="NO"
 kernel="/platform/i86pc/kernel/amd64/unix"
 bootfile="unix"
-boot-args="${SOLNIX_BOOTARGS:--v}"
 EOF
+# Verbose boot (-v) is OFF by default: on a 4K panel the early-boot framebuffer
+# scrolls pixel by pixel, so each of its ~100 extra lines is visibly slow (the X1).
+# SOLNIX_BOOTARGS=-v brings it back for a debugging run.
+[ -n "${SOLNIX_BOOTARGS:-}" ] && printf 'boot-args="%s"\n' "$SOLNIX_BOOTARGS" >> "$ISOROOT/boot/loader.conf"
 # ⚠️ This script rewrites loader.conf but conf.d/ is ALSO read by the loader
 # (support.4th:1207,1441), and upstream ships conf.d/console pinning ttya. Left
 # alone it silently re-pins the kernel console after everything above -- which is

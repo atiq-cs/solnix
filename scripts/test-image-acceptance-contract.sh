@@ -55,6 +55,7 @@ usr-lib-libc|mkdir -p usr/lib; ln -s /nix/store/x/usr/lib/libc usr/lib/libc|/usr
 man-index-on|: > etc/svc/profile/site/solnix.xml|update-man-index is not preset off
 etc-hardlink|: > etc/a; ln etc/a etc/b|hard-linked files in /etc or /var
 no-wrapper|rm run/wrappers/bin/ping|setuid programs missing from /run/wrappers/bin
+verbose-boot|mkdir -p boot; echo 'boot-args="-v"' > boot/loader.conf|loader.conf boots verbose
 wrapper-not-setuid|chmod 0555 run/wrappers/bin/su|setuid programs missing from /run/wrappers/bin
 CASES
 g="$W/good"; good "$g"; gout=$(closure_contract_checks "$g" 2>&1 | grep '^FAIL:' | grep -v 'store DB')

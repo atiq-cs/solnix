@@ -2051,10 +2051,14 @@ setprop ttya-mode 115200,8,n,1,-
 setprop ttya-ignore-cd true
 setprop ttya-rts-dtr-off false
 EOF
+# No boot-args: "-v" (verbose boot) prints ~100 extra lines (x86_feature, cpuN,
+# devices) while the console is still the early-boot framebuffer, whose scroll
+# copies the whole screen pixel by pixel (uts/i86pc/boot/boot_fb.c boot_fb_cpy,
+# into the framebuffer and its shadow). On the X1's 3840x2160 panel that is ~33 MB
+# per line, visibly slow for each one. NixOS does not boot verbose by default.
 cat > "$ALTROOT/boot/loader.conf" <<EOF
 console="$TARGET_CONSOLE"
 os_console="$TARGET_CONSOLE"
-boot-args="-v"
 loader_logo="illumos"
 loader_menu_title="Welcome to solnix"
 autoboot_delay="3"

@@ -394,6 +394,12 @@ closure_contract_checks() {
   done
   if [ -z "$miss" ]; then _ok "setuid programs are installed in /run/wrappers/bin (passwd su ping w crontab login)"
   else _fail "setuid programs missing from /run/wrappers/bin:$miss"; fi
+  # 14. no verbose boot by default. -v prints ~100 extra lines while the console is
+  #     the early-boot framebuffer, which scrolls pixel by pixel: on the X1's 4K
+  #     panel every x86_feature line crawled (measured on the first NVMe boot).
+  if grep -qE '^boot-args=.*-v' "$R/boot/loader.conf" 2>/dev/null; then
+    _fail "loader.conf boots verbose (boot-args -v): each early console line scrolls a 4K framebuffer"
+  else _ok "loader.conf does not boot verbose"; fi
   # 10. /dev/sad/admin exists before devfsadm: inittab's autopush opens it to push
   #     ldterm onto the console; without it every boot line is a bare line feed.
   case "$(_rl "$R/dev/sad/admin")" in
