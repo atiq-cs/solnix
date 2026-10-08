@@ -238,6 +238,27 @@ relink ../../devices/pseudo/sad@0:user dev/sad/user
 
 # 7. this BE is one generation: /run/{current,booted}-system are fixed for it.
 relink "$TOP" run/current-system; relink "$TOP" run/booted-system
+# setuid/setgid programs (NixOS security.wrappers, /run/wrappers/bin). The store
+# keeps no setuid bits, so the world's copies of the gate's setuid programs
+# (pkgs/illumos/data/drivers/setuid.tsv, from the pkg(5) manifests) ran
+# unprivileged: `w`/`uptime` "failed to enable privilege bracketing", `ping`
+# "socket Permission denied", passwd/su/crontab/at not setuid (measured on the
+# first installed disk; a setuid copy of each worked). Each one is copied out of
+# the world with the manifest's owner, group and mode. Its RUNPATH already pins its
+# libraries into the store, so the copy is the program itself. /run is a per-BE
+# directory, so the copies belong to this generation.
+WR=run/wrappers/bin
+[ -d run/wrappers ] && find run/wrappers -depth -delete
+mkdir -p "$WR"; chmod 0755 run/wrappers "$WR"
+[ -e "$R$DRV/setuid.tsv" ] || die "$DRV has no setuid.tsv (drivers db older than this install-be)"
+while IFS="$(printf '\t')" read -r m o g p; do
+  src="$R$WORLD/$p"; [ -f "$src" ] || continue        # not built into this world
+  b=$(basename "$p")
+  [ -e "$WR/$b" ] && { say "setuid: $p and an earlier entry share the name $b; keeping the first"; continue; }
+  cp "$src" "$WR/$b" && chmod 0000 "$WR/$b" && chown "$o:$g" "$WR/$b" && chmod "$m" "$WR/$b" \
+    || die "cannot install the setuid copy of /$p"
+done < "$R$DRV/setuid.tsv"
+say "setuid: $(ls "$WR" | wc -l | tr -d ' ') privileged programs in /$WR"
 # GC roots in the shared store, as NixOS has them: gcroots/profiles names the
 # store's own profiles dir (nix creates it as <store root>/nix/var/nix/profiles
 # when the store is first opened under a chroot root, which is wrong once booted),

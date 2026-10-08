@@ -5,7 +5,8 @@ set -u
 S=${1:-$(dirname "$0")/image-acceptance-test.sh}
 W=$(mktemp -d /tmp/acc.XXXXXX); trap 'find "$W" -mindepth 1 -delete; rmdir "$W"' EXIT
 eval "$(awk '/^_rl\(\) \{/,/^\}/' "$S")"; eval "$(awk '/^closure_contract_checks\(\) \{/,/^\}$/' "$S")"
-PASS=0 FAIL=0 SKIP=0; _ok() { echo "ok: $*"; }; _fail() { echo "FAIL: $*"; }; _skip() { echo "skip: $*"; }
+# the fixture is built unprivileged, so its "root-owned" files belong to this user
+ACCEPT_ROOT_UID=$(id -u); PASS=0 FAIL=0 SKIP=0; _ok() { echo "ok: $*"; }; _fail() { echo "FAIL: $*"; }; _skip() { echo "skip: $*"; }
 good() { local G=$1 TL=/nix/store/00000000000000000000000000000000-solnix-system-x
   mkdir -p "$G$TL/bin" "$G/nix/store/11111111111111111111111111111111-w/bin" "$G/run" "$G/nix/var/nix/profiles" "$G/usr" "$G/etc/nix" "$G/nix/var/nix/db" "$G/lib"
   echo 'install-be' > "$G$TL/bin/solnix-install"; : > "$G$TL/bin/install-be"; : > "$G/nix/var/nix/db/db.sqlite"
@@ -18,6 +19,8 @@ good() { local G=$1 TL=/nix/store/00000000000000000000000000000000-solnix-system
   me=$(id -u); printf 'dladm:x:%s:65::/:\nnetadm:x:%s:65::/:\n' "$me" "$me" >> "$G/etc/passwd"
   mkdir -p "$G/etc/dladm" "$G/etc/ipadm" "$G/dev/sad"; : > "$G/etc/dladm/datalink.conf"
   ln -s ../../devices/pseudo/sad@0:admin "$G/dev/sad/admin"
+  mkdir -p "$G/run/wrappers/bin"
+  for w in passwd su ping w crontab login; do : > "$G/run/wrappers/bin/$w"; chmod 4555 "$G/run/wrappers/bin/$w"; done
   mkdir -p "$G/etc/svc/profile/site"
   echo '<service name="system/update-man-index" version="1" type="service"><instance name="default" enabled="false"/></service>' > "$G/etc/svc/profile/site/solnix.xml"
   mkdir -p "$G/etc/ssl/certs" "$G/nix/store/22222222222222222222222222222222-cacert/etc/ssl/certs"
@@ -51,6 +54,8 @@ no-ca-link|rm etc/ssl/certs/ca-certificates.crt|no /etc/ssl/certs/ca-certificate
 usr-lib-libc|mkdir -p usr/lib; ln -s /nix/store/x/usr/lib/libc usr/lib/libc|/usr/lib/libc exists
 man-index-on|: > etc/svc/profile/site/solnix.xml|update-man-index is not preset off
 etc-hardlink|: > etc/a; ln etc/a etc/b|hard-linked files in /etc or /var
+no-wrapper|rm run/wrappers/bin/ping|setuid programs missing from /run/wrappers/bin
+wrapper-not-setuid|chmod 0555 run/wrappers/bin/su|setuid programs missing from /run/wrappers/bin
 CASES
 g="$W/good"; good "$g"; gout=$(closure_contract_checks "$g" 2>&1 | grep '^FAIL:' | grep -v 'store DB')
 [ -z "$gout" ] && echo "PASS  good root: no FAIL" || { echo "MISS  good root fails: $gout"; bad=$((bad+1)); }

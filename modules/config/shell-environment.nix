@@ -83,6 +83,11 @@ let
       # ~/.nix-profile -> /nix/var/nix/profiles/per-user/<user>/profile (single-user).
       case ":''${PATH}:" in *":''${HOME}/.nix-profile/bin:"*) : ;; *) PATH="''${HOME}/.nix-profile/bin:''${PATH}" ;; esac
 
+      # setuid programs first (NixOS: environment.extraInit puts
+      # security.wrapperDir ahead of every other bin dir): the store's copies of
+      # passwd/su/ping/w/... carry no setuid bit. install-be lays /run/wrappers/bin.
+      case ":''${PATH}:" in *":/run/wrappers/bin:"*) : ;; *) PATH="/run/wrappers/bin:''${PATH}" ;; esac
+
       # Guaranteed base PATH tail: Nix tooling + illumos base OS dirs ALWAYS present
       # (append only dirs not already in PATH, so both nix-profile tools and native
       # ping/getent/format resolve in bash + ksh93).

@@ -382,6 +382,18 @@ closure_contract_checks() {
   local hl; hl=$(find "$R/etc" "$R/var" -xdev -type f -links +1 2>/dev/null | head -3)
   if [ -z "$hl" ]; then _ok "no hard-linked files in /etc or /var"
   else _fail "hard-linked files in /etc or /var (a write to one rewrites the rest): $(echo $hl | sed "s,$R,,g")"; fi
+  # 13. the gate's setuid programs exist as privileged copies outside the store
+  #     (/run/wrappers/bin, NixOS security.wrappers). The store has no setuid bits:
+  #     without these, `w` failed "privilege bracketing" and `ping` "socket
+  #     Permission denied" for a normal user (measured on the installed disk).
+  local wb miss="" b
+  for b in passwd su ping w crontab login; do
+    wb="$R/run/wrappers/bin/$b"
+    if [ ! -f "$wb" ]; then miss="$miss $b(missing)"
+    elif ! ls -ln "$wb" | awk -v r="${ACCEPT_ROOT_UID:-0}" '{exit !($1 ~ /^-..[sS]/ && $3 == r)}'; then miss="$miss $b(not setuid root)"; fi
+  done
+  if [ -z "$miss" ]; then _ok "setuid programs are installed in /run/wrappers/bin (passwd su ping w crontab login)"
+  else _fail "setuid programs missing from /run/wrappers/bin:$miss"; fi
   # 10. /dev/sad/admin exists before devfsadm: inittab's autopush opens it to push
   #     ldterm onto the console; without it every boot line is a bare line feed.
   case "$(_rl "$R/dev/sad/admin")" in
