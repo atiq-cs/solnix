@@ -1,0 +1,16 @@
+139a140,144
+>     # grep's status is checked, not piped away: 0 = hits, 1 = none, anything else
+>     # (an option this grep rejects, an unreadable file) fails the build. Piping
+>     # grep into the loop with 2>/dev/null turned an error into "no hits": on a
+>     # system without GNU grep, --binary-files is rejected (illumos grep, measured)
+>     # and the guard checked nothing. -rl is POSIX-enough for both greps.
+141c146,148
+<       grep -rl --binary-files=binary "$x" "$out" 2>/dev/null | while read -r f; do
+---
+>       rc=0; grep -rl "$x" "$out" > "$W/hits" || rc=$?
+>       [ "$rc" -le 1 ] || { echo "FATAL: build-time-path guard: grep -rl exited $rc" >&2; exit 1; }
+>       while read -r f; do
+144c151
+<       done
+---
+>       done < "$W/hits"
