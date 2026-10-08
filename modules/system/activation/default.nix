@@ -333,13 +333,17 @@ let
     #!/sbin/sh
     # solnix-rebuild — convenience over switch-to-configuration + beadm.
     #   solnix-rebuild switch|boot|test [toplevel]   (default toplevel = system profile)
+    #   solnix-rebuild switch|boot|test --flake <ref>#<host>
     #   solnix-rebuild rollback                       (beadm activate previous BE)
     #   solnix-rebuild list-generations
+    # --flake follows nixos-rebuild: build <ref>#solnixConfigurations.<host>, add it
+    # to the system profile (switch/boot; not for test), then hand it to that
+    # generation's own switch-to-configuration.
     set -u
-    PATH=/usr/sbin:/usr/bin:/sbin:$PATH
-    # STC = sibling switch-to-configuration in the same bin/ dir.
-    STC="$(dirname "$0")/switch-to-configuration"
-    [ -x "$STC" ] || STC="$(dirname "$0")/switch-to-configuration"
+    PATH=/run/current-system/sw/bin:/usr/sbin:/usr/bin:/sbin:$PATH
+    # STC = the running generation's switch-to-configuration (solnix-rebuild is
+    # called from sw/bin, not from the toplevel's bin/).
+    STC=/run/current-system/bin/switch-to-configuration
     PROFILES=/nix/var/nix/profiles
     action="''${1:-switch}"; shift 2>/dev/null || true
 
@@ -354,8 +358,25 @@ let
 
     case "$action" in
       switch|boot|test)
+        if [ "''${1:-}" = --flake ]; then
+          ref="''${2:?--flake needs <ref>#<host>}"
+          case "$ref" in *#*) ;; *) ref="$ref#$(hostname)" ;; esac
+          fl="''${ref%%#*}"; host="''${ref#*#}"
+          [ "$(id -u)" = 0 ] || { echo "solnix-rebuild $action --flake: run as root (pfexec)" >&2; exit 1; }
+          out=$(nix --extra-experimental-features 'nix-command flakes' build --no-link --print-out-paths \
+                "$fl#solnixConfigurations.\"$host\".config.system.build.toplevel") \
+            || { echo "FATAL: building $ref failed" >&2; exit 1; }
+          [ -x "$out/bin/switch-to-configuration" ] || { echo "FATAL: $out is not a solnix toplevel" >&2; exit 1; }
+          if [ "$action" != test ]; then
+            nix-env -p "$PROFILES/system" --set "$out" || { echo "FATAL: nix-env --set $out failed" >&2; exit 1; }
+          fi
+          # the NEW generation's own switch-to-configuration, as nixos-rebuild runs
+          # the new toplevel's, so a change to activation takes effect with it.
+          exec /sbin/sh "$out/bin/switch-to-configuration" "$action" "$out"
+        fi
         top="''${1:-$(default_top)}"
         [ -n "$top" ] || { echo "no toplevel given and no registered generation" >&2; exit 1; }
+        [ -x "$top/bin/switch-to-configuration" ] && STC="$top/bin/switch-to-configuration"
         exec /sbin/sh "$STC" "$action" "$top"
         ;;
       rollback)
@@ -570,4 +591,12 @@ in
     smfSiteProfile = siteProfile;
     seedAuthorizedKeys = authKeysSetupScript;
   };
+
+  # solnix-rebuild on PATH, as NixOS puts nixos-rebuild in system.path. The script
+  # itself does not depend on the toplevel, so this adds no cycle.
+  config.environment.systemPackages = [
+    (pkgs.runCommand "solnix-rebuild-bin" { } ''
+      mkdir -p $out/bin; ln -s ${solnixRebuild} $out/bin/solnix-rebuild
+    '')
+  ];
 }

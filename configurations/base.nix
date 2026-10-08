@@ -78,10 +78,14 @@
     stop.exec = ":kill";
     refresh.exec = ":kill -HUP";
   };
+  # PrintMotd no: /etc/profile prints /etc/motd for every login shell, so sshd
+  # printing it too showed it twice per ssh login (NixOS's sshd defaults
+  # PrintMotd to false for the same reason; pam_motd/the shell owns it).
   environment.generatedEtc."ssh/sshd_config" = ''
     UsePAM yes
     KbdInteractiveAuthentication yes
     PasswordAuthentication yes
+    PrintMotd no
     PermitRootLogin prohibit-password
     Subsystem sftp ${pkgs.solnix.openssh}/libexec/sftp-server
   '';

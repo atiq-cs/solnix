@@ -90,6 +90,7 @@ let
   # interfaces that actually declare something (dhcp or a static addr).
   activeIfs = filterAttrs (_: i: i.dhcp || i.ipv4.addresses != [ ]) cfg.interfaces;
   hasNetworking = activeIfs != { } || cfg.nameservers != [ ] || cfg.defaultGateway != null;
+  dhcpIfs = lib.attrNames (filterAttrs (_: i: i.dhcp) activeIfs);
 
   # Per-interface bringup shell. ipadm first (clean path), ifconfig fallback
   # (the path that works on the gate ena — gotcha #15). One function, both NIC
@@ -134,6 +135,25 @@ let
       echo "-- default route via ${cfg.defaultGateway}"
       /usr/sbin/route -p add default ${cfg.defaultGateway} 2>&1 || \
         /usr/sbin/route add default ${cfg.defaultGateway} 2>&1 || true
+    ''}
+    ${optionalString (cfg.nameservers == [ ] && dhcpIfs != [ ]) ''
+      # No static nameservers: take them from the DHCP lease, as NixOS's dhcpcd
+      # does through resolvconf. The gate's network/service (net-svc) would do it
+      # too, but it runs before this service has a lease and finds none (measured
+      # on the X1: net-svc at 12:21:35, the lease at 12:22:37, no /etc/resolv.conf,
+      # dns/client offline "Dependency file://localhost/etc/resolv.conf is absent").
+      __ns=""; __dom=""
+      for __if in ${concatStringsSep " " dhcpIfs}; do
+        __ns=$(/sbin/dhcpinfo -i $__if DNSserv 2>/dev/null); __dom=$(/sbin/dhcpinfo -i $__if DNSdmain 2>/dev/null)
+        [ -n "$__ns" ] && break
+      done
+      if [ -n "$__ns" ]; then
+        { [ -n "$__dom" ] && echo "domain $__dom"; for __s in $__ns; do echo "nameserver $__s"; done; } > /etc/resolv.conf.dhcp
+        chmod 0644 /etc/resolv.conf.dhcp; mv -f /etc/resolv.conf.dhcp /etc/resolv.conf
+        echo "-- resolv.conf from the DHCP lease: $(echo $__ns)"
+      else
+        echo "-- no DNS servers in the DHCP lease; /etc/resolv.conf left as it is"
+      fi
     ''}
     /usr/bin/hostname ${cfg.hostName} 2>/dev/null || true
     # nudge dns/client online (its refresh-dep on network/location may miss the
@@ -213,7 +233,10 @@ in
         start.exec = "${pkgs.writeScript "solnix-net-bringup" ''
           #!/sbin/sh
           . /lib/svc/share/smf_include.sh
-          { ${netBringup} } > /dev/console 2>&1
+          # /dev/msglog, as the gate's own methods use: a direct open of
+          # /dev/console bypasses the console's STREAMS line discipline, so the
+          # bring-up lines landed without carriage returns (skewed on the X1).
+          { ${netBringup} } > /dev/msglog 2>&1
           exit $SMF_EXIT_OK
         ''}";
         start.timeoutSeconds = 180;

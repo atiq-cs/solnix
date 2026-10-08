@@ -108,6 +108,7 @@ in
     UsePAM yes
     KbdInteractiveAuthentication yes
     PasswordAuthentication yes
+    PrintMotd no
     PermitRootLogin yes
     Subsystem sftp ${live.openssh}/libexec/sftp-server
   '';

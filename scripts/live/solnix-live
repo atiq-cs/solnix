@@ -22,7 +22,7 @@ PATH=/usr/sbin:/usr/bin:/sbin; export PATH
   # ⚠️ devfsadm and the disk listing go to the LOG, never to /dev/console.
   #
   # OBSERVED ON REAL HARDWARE: this block redirects to /dev/console (see the
-  # closing `} > /dev/console 2>&1`), and ttymon/login READS THAT SAME DEVICE. So
+  # closing `} > /dev/msglog`), and ttymon/login READS THE SAME CONSOLE. So
   # `ls /dev/dsk` was delivered to login as if TYPED, and the console showed
   #
   #   solnix console login: c1t001B448B485502D1d0p0
@@ -117,5 +117,5 @@ PATH=/usr/sbin:/usr/bin:/sbin; export PATH
   fi
   # second probe: give slow USB enumeration ~20 s more, then report again
   sleep 20
-} > /dev/console 2>&1
+} > /dev/msglog 2>&1   # msglog, not console: a direct console open skips its line discipline
 exit $SMF_EXIT_OK
