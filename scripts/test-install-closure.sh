@@ -58,6 +58,10 @@ install-be)
     no-loader)    rm -f "$R/boot/loader64.efi" ;;
     trunc-ba)     head -c 10 "$R/platform/i86pc/amd64/boot_archive" > "$R/ba.t"; mv "$R/ba.t" "$R/platform/i86pc/amd64/boot_archive" ;;
     drop-presets) rm -f "$R/etc/svc/profile/site/solnix-install.xml" ;;
+    # the real-world defect: the stock /etc laid OVER the installer's machine inputs
+    # (the X1's NVMe boot hung after cpu5 with the stock bootstrap path_to_inst).
+    stock-pti)    echo '#path_to_inst_bootstrap_1' > "$R/etc/path_to_inst" ;;
+    stock-hostid) echo '' > "$R/etc/hostid" ;;
     fail)         exit 3 ;;
   esac ;;
 *) exit 0 ;;
@@ -105,13 +109,15 @@ while read -r s re; do
 done <<'CASES'
 no-stage2    no stage-2 'zfs mount -O
 live-copy    live-media file /etc/solnix-live-shell
-clobber-cons overwrote the installed console
+clobber-cons (overwrote the installed console|replaced the machine input /boot/loader.conf)
 shadow-link  /etc/shadow is a symlink into the store
 init-shared  left the BE without: sbin/init
 init-odd     sbin/init resolves outside the BE
 no-loader    left the BE without: boot/loader64.efi
 trunc-ba     truncated gzip
 drop-presets removed the machine input /etc/svc/profile/site/solnix-install.xml
+stock-pti    replaced the machine input /etc/path_to_inst
+stock-hostid replaced the machine input /etc/hostid
 fail         install-be failed \(rc=3\)
 CASES
 

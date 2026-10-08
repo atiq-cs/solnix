@@ -57,10 +57,30 @@ for d in dev devices proc system/contract system/object system/boot system/volat
 mkdir -p nix/var
 chmod 1777 tmp
 # /var and /etc start from the gate's stock tree (mutable state, as on a pkg install).
-[ -e var/svc ] || ( cd "$R$STOCK" && tar cf - var ) | tar xf -
+# Laid into a staging dir, then merged WITHOUT replacing any file already in the BE:
+# the installer writes the machine inputs (etc/path_to_inst, etc/hostid,
+# etc/svc/profile/site/solnix-install.xml) before this runs, and a plain tar over
+# them restored the stock ones. The X1's first boot from NVMe then hung after cpu5:
+# its path_to_inst was the stock "#path_to_inst_bootstrap_1" instead of the 91
+# bindings the installer copied (measured on the disk, and in its boot_archive).
+_stage=.solnix-stock.$$
+if [ ! -e var/svc ] || [ ! -e etc/passwd ]; then
+  mkdir -p "$_stage"
+  ( cd "$R$STOCK" && tar cf - etc var ) | ( cd "$_stage" && tar xf - ) || die "stage the stock /etc and /var"
+  chmod -R u+w "$_stage"
+  for _t in etc var; do
+    # files and links not already in the BE move in; directories are created
+    # (their owners and modes are set by the ownership pass below).
+    ( cd "$_stage" && find "$_t" ! -type d -print ) | while read -r _p; do
+      if [ -e "$_p" ] || [ -h "$_p" ]; then continue; fi    # the BE's own file wins
+      mkdir -p "$(dirname "$_p")" && mv "$_stage/$_p" "$_p" || { echo "install-be: FATAL: lay /$_p" >&2; exit 1; }
+    done || die "merging the stock /$_t"
+    ( cd "$_stage" && find "$_t" -type d -print ) | while read -r _p; do mkdir -p "$_p"; done
+  done
+  find "$_stage" -depth -delete
+fi
 # the proto ships every dir 0555 (gotcha #7); /var/tmp must be world-writable+sticky
 chmod 1777 var/tmp
-[ -e etc/passwd ] || ( cd "$R$STOCK" && tar cf - etc ) | tar xf -
 chmod -R u+w etc var
 # The store hard-links identical files (auto-optimise-store), and tar keeps hard
 # links, so the stock tree arrived with e.g. eleven empty files sharing one inode

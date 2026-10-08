@@ -2102,6 +2102,18 @@ else
 fi
 [ -f "$ALTROOT/etc/hostid" ] || printf '0x1b0b57ec\n' > "$ALTROOT/etc/hostid"
 
+# Snapshot the machine inputs written above, so the check after install-be can
+# prove it kept them byte for byte. Existence is not enough: install-be once laid
+# the stock /etc over them, the file was still there with the stock
+# "#path_to_inst_bootstrap_1" content, and the X1's first NVMe boot hung after
+# cpu5 (measured on the disk).
+_minputs="boot/loader.conf boot/solaris/bootenv.rc etc/path_to_inst etc/hostid etc/svc/profile/site/solnix-install.xml"
+_msnap=/tmp/solnix-machine-inputs.$$
+mkdir -p "$_msnap"
+for _cf in $_minputs; do
+  [ -f "$ALTROOT/$_cf" ] && { mkdir -p "$_msnap/$(dirname "$_cf")"; cp -p "$ALTROOT/$_cf" "$_msnap/$_cf"; }
+done
+
 # 3d. THE TOPLEVEL LAYS THE BE (IFACE-1: the same code make-be and
 #     `switch-to-configuration boot` run). It preserves the machine inputs above.
 step "laying the boot environment from the toplevel (install-be)"
@@ -2155,9 +2167,13 @@ for _e in sbin/init sbin/sh platform/i86pc/kernel/amd64/unix platform/i86pc/amd6
 done
 [ -s "$ALTROOT/boot/fonts/fonts.dir" ] || \
   echo "WARN: BE has no /boot/fonts/fonts.dir; the console will use the tiny builtin 8x16 font" >&2
-for _cf in boot/loader.conf boot/solaris/bootenv.rc etc/path_to_inst etc/svc/profile/site/solnix-install.xml; do
+for _cf in $_minputs; do
+  [ -f "$_msnap/$_cf" ] || continue
   [ -e "$ALTROOT/$_cf" ] || die "install-be removed the machine input /$_cf"
+  cmp -s "$_msnap/$_cf" "$ALTROOT/$_cf" || die "install-be replaced the machine input /$_cf (first line now: $(head -1 "$ALTROOT/$_cf"))"
 done
+find "$_msnap" -depth -delete 2>/dev/null
+log "machine inputs kept by install-be: $_minputs"
 grep -q "^console=\"$TARGET_CONSOLE\"\$" "$ALTROOT/boot/loader.conf" || die "install-be overwrote the installed console in loader.conf"
 for _f in passwd shadow group; do
   [ -h "$ALTROOT/etc/$_f" ] && die "/etc/$_f is a symlink into the store; the installer must edit it (passwords, admin user)"
