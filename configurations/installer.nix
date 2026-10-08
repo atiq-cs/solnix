@@ -82,6 +82,9 @@ in
     # enables programs.git) then finds it already in the store instead of
     # building it, which the media cannot (no compiler on it).
     live.git
+    # home-manager, so a user can set up their home from the live system; it
+    # brings the GNU coreutils/findutils/sed/grep/gettext/jq its scripts need.
+    live.home-manager
     liveTools
   ];
 

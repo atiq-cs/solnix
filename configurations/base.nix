@@ -28,7 +28,10 @@
   # used to be listed here are in configurations/extra-userland.nix (opt-in):
   # docs/cache-integrity-audit.md found cache-only paths that are not
   # installable (phantom narinfos, missing NARs), and they are not built here.
-  environment.systemPackages = with pkgs.solnix; [ openssh bash ];
+  # vi/ex/view (the gate's POSIX vi), less, htop and top (= htop): the interactive
+  # basics a NixOS base has on PATH. A compiler is NOT here (NixOS's base has
+  # none); pkgs.solnix.solnix-dev provides one on demand.
+  environment.systemPackages = with pkgs.solnix; [ openssh bash vi less htop top ];
 
   # /etc/system is generated, NixOS-style: this is its only source, so each
   # tunable is set exactly once. The emulated i8254 PIT is unreliable under some

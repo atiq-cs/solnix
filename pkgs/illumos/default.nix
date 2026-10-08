@@ -435,6 +435,8 @@ in
 {
   inherit libc rtld ld sys base-tools systemPath nix nix224 cached starter gcc world early stock drivers kernelNd;
   inherit (srcPkgs) zlib libxml2 openssl openssh bash nspr nss git libcExtra binutils gnumake gccWrapper vi;
+  inherit (srcPkgs) ncurses less htop top libevent tmux coreutils gnugrep gnused gnutar findutils diffutils jq gettext home-manager;
+  xz = srcPkgs.nixChain.xz;
   # A C/C++ toolchain to put on PATH (nix-shell / nix profile install), the
   # solnix analog of nixpkgs' stdenv.cc: the wrapped gcc, gas, GNU make. The
   # link-editor (ld) and ar/nm/strip are the gate's, in every system profile;

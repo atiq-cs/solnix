@@ -316,6 +316,240 @@ rec {
     '' ];
   };
 
+  # ---- command-line packages (the NixOS base userland's interactive tools) ----
+
+  # ncurses, wide-character. Headers go straight into include/ (--enable-overwrite)
+  # with ncursesw/ and ncurses/ pointing back at it, and the unsuffixed names
+  # (libncurses, libcurses, ncurses.pc) link to the w library: the nixpkgs layout,
+  # so a consumer finds this ncurses whichever name it asks for rather than the
+  # gate's SVR4 libcurses. The terminfo database is this package's
+  # share/terminfo (compiled in, as on NixOS); TERMINFO_DIRS adds others at run time.
+  ncurses = mkSrcPkg {
+    pname = "ncurses"; version = "6.5";
+    src = { url = "https://ftp.gnu.org/gnu/ncurses/ncurses-6.5.tar.gz";
+            sha256 = "136d91bc269a9a5785e5f9e980bc76ab57428f604ce3e5a5a90cebc767971cc6"; };
+    build = ''
+      L="$out/lib/amd64"
+      ./configure --prefix="$out" --libdir="$L" --with-shared --without-normal --without-debug \
+        --enable-widec --enable-overwrite --enable-pc-files --with-pkg-config-libdir="$L/pkgconfig" \
+        --without-ada --without-tests --without-cxx-binding --disable-stripping \
+        --with-default-terminfo-dir="$out/share/terminfo" --with-terminfo-dirs="$out/share/terminfo"
+      gmake -j4
+      gmake install
+      ln -s . "$out/include/ncursesw"; ln -s . "$out/include/ncurses"
+      for l in ncurses curses tinfo; do ln -s libncursesw.so "$L/lib$l.so"; done
+      ln -s ncursesw.pc "$L/pkgconfig/ncurses.pc"
+      for t in xterm-256color sun-color vt100 screen-256color tmux-256color; do
+        [ -n "$(find "$out/share/terminfo" -name "$t")" ] || { echo "FATAL: terminfo $t missing" >&2; exit 1; }
+      done
+      [ "$(TERM=xterm-256color "$out/bin/tput" colors)" = 256 ] || { echo "FATAL: tput colors" >&2; exit 1; }
+    '';
+  };
+
+  less = mkSrcPkg {
+    pname = "less"; version = "679";
+    src = { url = "https://www.greenwoodsoftware.com/less/less-679.tar.gz";
+            sha256 = "9b68820c34fa8a0af6b0e01b74f0298bcdd40a0489c61649b47058908a153d78"; };
+    deps = [ ncurses ];
+    build = ''
+      ./configure --prefix="$out" --with-regex=posix
+      gmake -j4
+      gmake install
+      # configure takes -ltinfo first, which is ncurses' libtinfo.so alias; the
+      # gate's SVR4 libcurses/libtermcap must not be what it linked.
+      /usr/bin/elfdump -d "$out/bin/less" | grep -q 'NEEDED.*libncursesw\.so' \
+        || { echo "FATAL: less does not NEED libncursesw" >&2; /usr/bin/elfdump -d "$out/bin/less" | grep NEEDED >&2; exit 1; }
+    '';
+  };
+
+  # htop, with its upstream solaris backend (kstat + libproc, both from the gate,
+  # so the world is a dependency: libkstat/libproc are not in the libc slice).
+  htop = mkSrcPkg {
+    pname = "htop"; version = "3.4.1";
+    src = { url = "https://github.com/htop-dev/htop/releases/download/3.4.1/htop-3.4.1.tar.xz";
+            sha256 = "904f7d4580fc11cffc7e0f06895a4789e0c1c054435752c151e812fead9f6220"; };
+    deps = [ needWorld ncurses ];
+    build = ''
+      # illumos <math.h> exposes NAN/isgreater only under __C99FEATURES__.
+      CFLAGS="-O2 -D__EXTENSIONS__ -D__C99FEATURES__" ./configure --prefix="$out" --enable-unicode
+      grep -q '^my_htop_platform=solaris\|^HTOP_PLATFORM.*solaris\|solaris/Platform' Makefile config.log \
+        || { echo "FATAL: htop did not select its solaris backend" >&2; exit 1; }
+      gmake -j4
+      gmake install
+    '';
+  };
+
+  # top: htop under the name. The SunOS top (unixtop 3.8) last released in 2008;
+  # htop is maintained and carries an upstream illumos/Solaris backend. prstat is
+  # the native illumos equivalent and stays in the world.
+  top = derivation {
+    name = "top-htop-3.4.1"; system = "x86_64-solaris"; inherit htop;
+    builder = "/usr/bin/bash";
+    args = [ "-c" "/usr/bin/mkdir -p $out/bin && /usr/bin/ln -s $htop/bin/htop $out/bin/top" ];
+  };
+
+  libevent = mkSrcPkg {
+    pname = "libevent"; version = "2.1.12";
+    src = { url = "https://github.com/libevent/libevent/releases/download/release-2.1.12-stable/libevent-2.1.12-stable.tar.gz";
+            sha256 = "92e6de1be9ec176428fd2367677e61ceffc2ee1cb119035037a27d346b0403bb"; };
+    deps = [ needWorld ];  # libsendfile.so.1 (the gate's), not in the libc slice
+    build = ''
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-samples \
+        --disable-openssl --disable-libevent-regress --disable-debug-mode
+      gmake -j4
+      gmake install
+    '';
+  };
+
+  tmux = mkSrcPkg {
+    pname = "tmux"; version = "3.5a";
+    src = { url = "https://github.com/tmux/tmux/releases/download/3.5a/tmux-3.5a.tar.gz";
+            sha256 = "16216bd0877170dfcc64157085ba9013610b12b082548c7c9542cc0103198951"; };
+    deps = [ needWorld libevent ncurses ];  # libxnet.so.1 is the gate's
+    build = ''
+      # cmd-parse.c ships pre-generated; configure only checks that a yacc exists.
+      ./configure --prefix="$out" --disable-utf8proc
+      gmake -j4
+      gmake install
+    '';
+  };
+
+  # GNU tools: home-manager's script uses GNU options (mktemp --tmpdir, readlink -f,
+  # realpath: none of them in the illumos tools, measured), and so do most build
+  # systems. gnulib in these tarballs declares getlocalename_l non-const, which
+  # clashes with illumos <locale.h>; the sed is packages.nix's gnulibFix. The
+  # world is a dependency: ls/find/sed/tar link libsec (ACLs), libgen and their
+  # gate dependencies, which the libc slice does not carry (the closure gate
+  # caught them resolving from /lib/64).
+  gnuTool = { pname, version, url, sha256, flags ? "", deps ? [ needWorld ] }: mkSrcPkg {
+    inherit pname version deps; src = { inherit url sha256; };
+    build = ''
+      for f in $(find . \( -name 'localename*.[ch]' -o -name 'getlocalename_l*.[ch]' -o -name 'setlocale_null*.c' \)); do
+        sed -i 's/extern char \* *getlocalename_l/extern const char *getlocalename_l/;s/^char \* *getlocalename_l/const char *getlocalename_l/' "$f"
+      done
+      FORCE_UNSAFE_CONFIGURE=1 MAKEINFO=true ./configure --prefix="$out" --disable-nls ${flags}
+      gmake -j4 MAKEINFO=true
+      gmake install MAKEINFO=true
+    '';
+  };
+  coreutils = gnuTool {
+    pname = "coreutils"; version = "9.7";
+    url = "https://ftp.gnu.org/gnu/coreutils/coreutils-9.7.tar.xz";
+    sha256 = "e8bb26ad0293f9b5a1fc43fb42ba970e312c66ce92c1b0b16713d7500db251bf";
+    flags = "--without-selinux --disable-gcc-warnings --without-openssl --without-libgmp";
+  };
+  gnugrep = gnuTool {
+    pname = "gnugrep"; version = "3.11";
+    url = "https://ftp.gnu.org/gnu/grep/grep-3.11.tar.xz";
+    sha256 = "1db2aedde89d0dea42b16d9528f894c8d15dae4e190b59aecc78f5a951276eab";
+    flags = "--disable-perl-regexp --disable-gcc-warnings";
+  };
+  gnused = gnuTool {
+    pname = "gnused"; version = "4.9";
+    url = "https://ftp.gnu.org/gnu/sed/sed-4.9.tar.xz";
+    sha256 = "6e226b732e1cd739464ad6862bd1a1aba42d7982922da7a53519631d24975181";
+    flags = "--disable-gcc-warnings";
+  };
+  gnutar = gnuTool {
+    pname = "gnutar"; version = "1.35";
+    url = "https://ftp.gnu.org/gnu/tar/tar-1.35.tar.xz";
+    sha256 = "4d62ff37342ec7aed748535323930c7cf94acf71c3591882b26a7ea50f3edc16";
+    flags = "--disable-gcc-warnings";
+  };
+  findutils = gnuTool {
+    pname = "findutils"; version = "4.10.0";
+    url = "https://ftp.gnu.org/gnu/findutils/findutils-4.10.0.tar.xz";
+    sha256 = "1387e0b67ff247d2abde998f90dfbf70c1491391a59ddfecb8ae698789f0a4f5";
+    flags = "--disable-gcc-warnings";
+  };
+  diffutils = gnuTool {
+    pname = "diffutils"; version = "3.10";
+    url = "https://ftp.gnu.org/gnu/diffutils/diffutils-3.10.tar.xz";
+    sha256 = "90e5e93cc724e4ebe12ede80df1634063c7a855692685919bfe60b556c9bd09e";
+    flags = "--disable-gcc-warnings";
+  };
+
+  # gettext: home-manager prints its messages through gettext/ngettext (the
+  # illumos world has gettext and msgfmt but no ngettext, measured) and its
+  # build runs msgfmt. Only the runtime tools are built (gettext-runtime, plus
+  # msgfmt from gettext-tools); NLS stays on, it is the point of the package.
+  gettext = mkSrcPkg {
+    pname = "gettext"; version = "0.22.5";
+    src = { url = "https://ftp.gnu.org/gnu/gettext/gettext-0.22.5.tar.xz";
+            sha256 = "fe10c37353213d78a5b83d48af231e005c4da84db5ce88037d88355938259640"; };
+    deps = [ needWorld ];
+    build = ''
+      for f in $(find . \( -name 'localename*.[ch]' -o -name 'getlocalename_l*.[ch]' -o -name 'setlocale_null*.c' \)); do
+        sed -i 's/extern char \* *getlocalename_l/extern const char *getlocalename_l/;s/^char \* *getlocalename_l/const char *getlocalename_l/' "$f"
+      done
+      # ac_cv_func_memset_s=no: gnulib's memset_explicit.c defines __STDC_WANT_LIB_EXT1__
+      # after config.h has already pulled in illumos <sys/feature_tests.h>, so
+      # memset_s stays undeclared (gcc 14: implicit declaration error, measured);
+      # without it gnulib uses its memset + compiler-barrier fallback.
+      ac_cv_func_memset_s=no MAKEINFO=true ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-java \
+        --disable-csharp --disable-openmp --disable-acl --disable-curses --without-emacs --without-git \
+        --without-cvs --without-xz --without-bzip2 --with-included-libxml --with-included-libunistring \
+        --with-included-gettext --disable-c++
+      gmake -j4 MAKEINFO=true
+      gmake install MAKEINFO=true
+      for t in gettext ngettext envsubst msgfmt; do [ -x "$out/bin/$t" ] || { echo "FATAL: no $t" >&2; exit 1; }; done
+      [ "$("$out/bin/ngettext" one many 2)" = many ] || { echo "FATAL: ngettext self-check" >&2; exit 1; }
+    '';
+  };
+
+  # jq, without oniguruma (no regex builtins: test/match/sub). home-manager
+  # only uses @uri and -r.
+  jq = mkSrcPkg {
+    pname = "jq"; version = "1.7.1";
+    src = { url = "https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-1.7.1.tar.gz";
+            sha256 = "478c9ca129fd2e3443fe27314b455e211e0d8c60bc8ff7df703873deeee580c2"; };
+    build = ''
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-docs --disable-static --without-oniguruma
+      gmake -j4
+      gmake install
+      [ "$(echo '{"a":[1,2]}' | "$out/bin/jq" -c '.a|add')" = 3 ] || { echo "FATAL: jq self-check" >&2; exit 1; }
+    '';
+  };
+
+  # home-manager (the command), pinned to the release-26.05 commit the
+  # maintainer's nix-config locks. nixpkgs builds it with runCommand +
+  # substituteInPlace; this does the same five substitutions with sed, so it
+  # needs no stdenv. Its runtime PATH is the solnix GNU tools above: the script
+  # and its activation use readlink -e, realpath -m, mktemp --tmpdir, find -printf
+  # and ngettext, none of which the illumos tools provide (measured). The
+  # source is also installed as share/home-manager, the <home-manager> path the
+  # script's non-flake build resolves its modules from. nixos-option and
+  # inetutils are not on the path: `home-manager option` and the flake-mode
+  # `hostname -f` lookup are the two features that lose.
+  home-manager = derivation {
+    name = "home-manager-26.05-db7d5e2"; system = "x86_64-solaris";
+    hmSrc = builtins.fetchTarball {
+      url = "https://github.com/nix-community/home-manager/archive/db7d5e2332710f5abb088f6b5de927d7f9511b35.tar.gz";
+      sha256 = "1vy9bsc0wgz9ccgghpv4vn0z077j486il9jhrld78llf9720xsbz";
+    };
+    inherit bash;
+    depPath = builtins.concatStringsSep ":" (map (p: "${p}/bin") [ coreutils findutils gettext gnused gnugrep jq less ncurses ]);
+    msgfmt = "${gettext}/bin/msgfmt";
+    builder = "/usr/bin/bash";
+    args = [ "-c" ''
+      set -eu; export PATH=/usr/bin
+      mkdir -p $out/bin $out/share/bash
+      ln -s $hmSrc $out/share/home-manager
+      cp $hmSrc/lib/bash/home-manager.sh $out/share/bash/home-manager.sh
+      sed -e "s|@bash@|$bash|g" -e "s|@DEP_PATH@|$depPath|g" \
+          -e "s|@HOME_MANAGER_LIB@|$out/share/bash/home-manager.sh|g" \
+          -e "s|@HOME_MANAGER_PATH@|$out/share/home-manager|g" -e "s|@OUT@|$out|g" \
+          $hmSrc/home-manager/home-manager > $out/bin/home-manager
+      chmod 555 $out/bin/home-manager
+      if grep -n '@[A-Za-z_]*@' $out/bin/home-manager; then echo "FATAL: unsubstituted @var@" >&2; exit 1; fi
+      for f in $hmSrc/home-manager/po/*.po; do
+        l=''${f##*/}; l=''${l%.po}; mkdir -p $out/share/locale/$l/LC_MESSAGES
+        $msgfmt -o $out/share/locale/$l/LC_MESSAGES/home-manager.mo $f
+      done
+      [ "$($out/bin/home-manager --version)" = 26.05-pre ] || { echo "FATAL: home-manager --version" >&2; exit 1; }
+    '' ];
+  };
+
   bash = mkSrcPkg {
     pname = "bash"; version = "5.2.37";
     src = { url = "https://ftp.gnu.org/gnu/bash/bash-5.2.37.tar.gz";
