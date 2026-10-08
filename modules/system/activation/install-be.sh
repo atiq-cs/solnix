@@ -170,8 +170,8 @@ if [ -e "$R$DRV/etc-var-attrs.tsv" ]; then
     etc/passwd etc/group "$R$DRV/etc-var-attrs.tsv" |
   while read -r m o p; do
     [ -e "$p" ] && [ ! -h "$p" ] || continue
-    chown "$o" "$p" && chmod "$m" "$p" || die "cannot set $o $m on /$p"
-  done
+    chown "$o" "$p" && chmod "$m" "$p" || { echo "install-be: FATAL: cannot set $o $m on /$p" >&2; exit 1; }
+  done || die "ownership pass failed"   # the loop runs in a pipeline subshell: its exit status is the only signal
 else
   die "$DRV has no etc-var-attrs.tsv (drivers db older than this install-be)"
 fi
@@ -251,13 +251,20 @@ WR=run/wrappers/bin
 [ -d run/wrappers ] && find run/wrappers -depth -delete
 mkdir -p "$WR"; chmod 0755 run/wrappers "$WR"
 [ -e "$R$DRV/setuid.tsv" ] || die "$DRV has no setuid.tsv (drivers db older than this install-be)"
-while IFS="$(printf '\t')" read -r m o g p; do
+# owner and group by NUMBER from this BE's passwd/group: chown by name resolves
+# against the running system's databases, which on a build host or the media need
+# not have the BE's accounts (measured: "chown: unknown group id smmsp").
+awk -F'\t' 'FILENAME=="etc/passwd"{split($0,a,":"); u[a[1]]=a[3]; next}
+     FILENAME=="etc/group"{split($0,a,":"); g[a[1]]=a[3]; next}
+     { if (!($2 in u) || !($3 in g)) { printf "install-be: setuid: no account for %s:%s, skipping /%s\n", $2, $3, $4 > "/dev/stderr"; next }
+       print $1, u[$2]":"g[$3], $4 }' etc/passwd etc/group "$R$DRV/setuid.tsv" |
+while read -r m o p; do
   src="$R$WORLD/$p"; [ -f "$src" ] || continue        # not built into this world
   b=$(basename "$p")
   [ -e "$WR/$b" ] && { say "setuid: $p and an earlier entry share the name $b; keeping the first"; continue; }
-  cp "$src" "$WR/$b" && chmod 0000 "$WR/$b" && chown "$o:$g" "$WR/$b" && chmod "$m" "$WR/$b" \
-    || die "cannot install the setuid copy of /$p"
-done < "$R$DRV/setuid.tsv"
+  cp "$src" "$WR/$b" && chmod 0000 "$WR/$b" && chown "$o" "$WR/$b" && chmod "$m" "$WR/$b" \
+    || { echo "install-be: FATAL: cannot install the setuid copy of /$p" >&2; exit 1; }
+done || die "setuid pass failed"   # pipeline subshell: die inside it would not stop install-be
 say "setuid: $(ls "$WR" | wc -l | tr -d ' ') privileged programs in /$WR"
 # GC roots in the shared store, as NixOS has them: gcroots/profiles names the
 # store's own profiles dir (nix creates it as <store root>/nix/var/nix/profiles
