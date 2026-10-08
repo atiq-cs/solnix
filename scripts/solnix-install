@@ -2003,10 +2003,14 @@ mkdir -p "$ALTROOT/boot/solaris" "$ALTROOT/etc/svc/profile/site" "$ALTROOT/nix" 
 # applies rc=0 and takes effect once they are imported (measured).
 #   autofs: gates milestone/multi-user (MEASURED on the dixi X1) and, for
 #           HOME_STYLE=home, would shadow the /home dataset via auto_master.
-#   inetd + its RPC services: inetd's libwrap was missing on the media and every
-#           inetd-managed service sat uninitialized, holding
-#           multi-user-server's optional_all dep offline (MEASURED on the X1).
-#           Disabling them puts them in a terminal state either way.
+#   the RPC services inetd runs (smserver, gss, rstat, ...): off. inetd itself
+#           stays ON, as on every illumos install: it is the restarter of those
+#           services, and with inetd disabled they sat "uninitialized", which
+#           kept multi-user-server's optional_all dependency unsatisfied and the
+#           milestone offline (measured on the KVM-installed dixi; `svcadm
+#           enable network/inetd` brought multi-user-server online, svcs -x
+#           empty). The old reason for disabling it, a missing libwrap on the
+#           media, is gone: the world now ships it.
 #   sshd is the configuration's own (smf.services.sshd, svc:/network/sshd); the
 #   gate's network/ssh is not shipped, so nothing is preset for it here.
 _presets="$ALTROOT/etc/svc/profile/site/solnix-install.xml"
@@ -2014,7 +2018,7 @@ _presets="$ALTROOT/etc/svc/profile/site/solnix-install.xml"
   echo '<?xml version="1.0"?>'
   echo '<!DOCTYPE service_bundle SYSTEM "/usr/share/lib/xml/dtd/service_bundle.dtd.1">'
   echo '<service_bundle type="profile" name="solnix-install">'
-  for _svc in system/filesystem/autofs network/inetd network/rpc/smserver network/rpc/gss \
+  for _svc in system/filesystem/autofs network/rpc/smserver network/rpc/gss \
               network/rpc/rstat network/rpc/rusers network/rpc/spray network/rpc/wall \
               network/rpc/bind network/security/ktkt_warn; do
     echo "  <service name='$_svc' version='1' type='service'><instance name='default' enabled='false'/></service>"
@@ -2025,7 +2029,7 @@ _dtd="$_TLD/world/usr/share/lib/xml/dtd/service_bundle.dtd.1"
 if command -v xmllint >/dev/null 2>&1 && [ -f "$_dtd" ]; then
   xmllint --noout --dtdvalid "$_dtd" "$_presets" || die "generated SMF preset profile is not DTD-valid: $_presets"
 fi
-log "SMF presets written as a site profile: autofs + inetd services off ($_presets)"
+log "SMF presets written as a site profile: autofs + inetd-run RPC services off ($_presets)"
 
 # 3c-2. CONSOLE of the installed system: a machine input, not configuration.
 # ⚠️ DO NOT set screen-#columns / screen-#rows in bootenv.rc OR loader.conf. Verified
@@ -2052,6 +2056,7 @@ console="$TARGET_CONSOLE"
 os_console="$TARGET_CONSOLE"
 boot-args="-v"
 loader_logo="illumos"
+loader_menu_title="Welcome to solnix"
 autoboot_delay="3"
 kernel="/platform/i86pc/kernel/amd64/unix"
 bootfile="/platform/i86pc/kernel/amd64/unix"
