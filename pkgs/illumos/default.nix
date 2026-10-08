@@ -434,7 +434,17 @@ let
 in
 {
   inherit libc rtld ld sys base-tools systemPath nix nix224 cached starter gcc world early stock drivers kernelNd;
-  inherit (srcPkgs) zlib libxml2 openssl openssh bash nspr nss git libcExtra;
+  inherit (srcPkgs) zlib libxml2 openssl openssh bash nspr nss git libcExtra binutils gnumake gccWrapper vi;
+  # A C/C++ toolchain to put on PATH (nix-shell / nix profile install), the
+  # solnix analog of nixpkgs' stdenv.cc: the wrapped gcc, gas, GNU make. The
+  # link-editor (ld) and ar/nm/strip are the gate's, in every system profile;
+  # headers, crt objects and libc come from the gcc's sysroot, the gate proto.
+  # Not in any system's packages: NixOS does not ship a compiler in its base.
+  solnix-dev = buildEnv {
+    name = "solnix-dev";
+    paths = [ srcPkgs.gccWrapper srcPkgs.binutils srcPkgs.gnumake ];
+    pathsToLink = [ "/bin" "/share/man" ];
+  };
   curl = srcPkgs.nixChain.curl;
   # nix 2.24.15 and its dependency chain, from source (./nix-src.nix).
   nixChain = srcPkgs.nixChain;

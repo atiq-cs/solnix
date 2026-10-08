@@ -209,6 +209,113 @@ rec {
     '';
   };
 
+  # GNU binutils, for its assembler. The gcc above was configured
+  # --with-as=/usr/bin/gas, the build host's IPS gas; an installed solnix system has
+  # no assembler at all (not in the gate, the world or the store), so its gcc can
+  # emit .s but not .o. gas is C, so this can only be built where an assembler
+  # already exists (the build host), then copied. ld is NOT built: gcc links with
+  # the gate's link-editor (--with-ld=/usr/bin/ld). The other binutils tools are
+  # installed with a g prefix (gstrip, gobjdump, ...), the OpenIndiana layout, so
+  # they never shadow the gate's ar/nm/strip; bin/as is gas under its plain name,
+  # which is what gcc -B<dir>/ looks for.
+  binutils = mkSrcPkg {
+    pname = "binutils"; version = "2.46.1";
+    src = { url = "https://ftp.gnu.org/gnu/binutils/binutils-2.46.1.tar.xz";
+            sha256 = "e127a709cba24c76de8936cb7083dd768f28cd37eb010492e2f19b71eb1294e4"; };
+    build = ''
+      T=x86_64-pc-solaris2.11
+      # no -g: DWARF names the gate proto and the compiler, and the stripper only
+      # touches ELF files, so debug info in an installed .a would pull both into
+      # the runtime closure. --disable-install-libbfd keeps libbfd.a/bfd.h out.
+      CFLAGS=-O2 CXXFLAGS=-O2 MAKEINFO=true ./configure --prefix="$out" --build=$T --host=$T --target=$T \
+        --program-prefix=g --disable-ld --disable-gold --disable-gprof --disable-gprofng \
+        --disable-libctf --disable-shared --disable-install-libbfd --disable-nls --disable-werror --without-zstd
+      # LEXLIB empty: configure finds the build host's lex library (-ll) and links
+      # gar/granlib to libl.so.1 from /usr/lib (the closure gate caught it). The
+      # shipped arlex.c is pre-generated with yywrap() defined as a macro, so
+      # nothing from libl is used.
+      gmake -j4 MAKEINFO=true LEXLIB=
+      gmake install MAKEINFO=true LEXLIB=
+      ln -s gas "$out/bin/as"
+      # the native tooldir duplicates bin/ under unprefixed names; nothing uses it.
+      find "$out/$T" -delete 2>/dev/null || true
+      # self-check: the new gas assembles both ELF classes gcc asks for.
+      printf '.text\n.globl f\nf: ret\n' > t.s
+      for c in 64 32; do
+        "$out/bin/as" --$c -o t$c.o t.s
+        [ "$(od -An -tx1 -N4 t$c.o | tr -d ' \n')" = 7f454c46 ] || { echo "FATAL: gas --$c made no ELF" >&2; exit 1; }
+      done
+    '';
+  };
+
+  # GNU make. The gate's make is illumos make (`make -v` = "illumos make"); GNU
+  # build systems want GNU make, which OpenIndiana ships as gmake. Both names here.
+  gnumake = mkSrcPkg {
+    pname = "gnumake"; version = "4.4.1";
+    src = { url = "https://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz";
+            sha256 = "dd16fb1d67bfab79a72f5e8390735c49e3e8e70b4945a15ab1f81ddb78658fb3"; };
+    build = ''
+      ./configure --prefix="$out" --without-guile --disable-nls
+      gmake -j4
+      gmake install
+      ln -s make "$out/bin/gmake"
+      "$out/bin/make" --version | head -1 | grep -q '^GNU Make 4.4.1' || { echo "FATAL: make --version" >&2; exit 1; }
+    '';
+  };
+
+  # gcc + binutils' gas, the stdenv cc-wrapper's job reduced to what illumos needs:
+  #   -B<binutils>/bin/  gcc finds `as` there when its configured /usr/bin/gas is
+  #                      absent (gcc -B fakeas/ -c ran fakeas/as, measured).
+  #   -Wl,-R,<gcc.lib>   C++ (and libgcc_s) programs find their runtime: no
+  #                      libstdc++ is on the system's default search path.
+  # Linking uses the gcc's built-in /usr/bin/ld (the gate's link-editor in the
+  # system profile); headers and crt objects come from its sysroot, the gate proto.
+  gccWrapper = derivation {
+    name = "gcc-wrapper-14.3.0"; system = "x86_64-solaris";
+    inherit gcc binutils; gccLib = gcc.lib;
+    builder = "/usr/bin/bash";
+    args = [ "-c" ''
+      set -eu; export PATH=/usr/bin
+      mkdir -p $out/bin
+      for t in gcc:gcc cc:gcc g++:g++ c++:g++ cpp:cpp; do
+        f="$out/bin/''${t%%:*}"; real="$gcc/bin/''${t#*:}"
+        if [ "''${t#*:}" = cpp ]; then
+          printf '#!/usr/bin/bash\nexec %s -B%s/bin/ "$@"\n' "$real" "$binutils" > "$f"
+        else
+          printf '#!/usr/bin/bash\nexec %s -B%s/bin/ -Wl,-R,%s/lib/amd64:%s/lib "$@"\n' \
+            "$real" "$binutils" "$gccLib" "$gccLib" > "$f"
+        fi
+        chmod +x "$f"
+      done
+      # self-check: a C and a C++ program compile, link and run, both ABIs for C.
+      cd "$(mktemp -d /var/tmp/gccwrap.XXXXXX)"
+      printf '#include <stdio.h>\nint main(void){puts("hello c");return 0;}\n' > h.c
+      printf '#include <iostream>\nint main(){std::cout<<"hello c++"<<std::endl;}\n' > h.cc
+      for m in 64 32; do $out/bin/cc -m$m -o hc$m h.c; [ "$(./hc$m)" = "hello c" ]; done
+      $out/bin/c++ -m64 -o hcc h.cc; [ "$(./hcc)" = "hello c++" ]
+      echo "=== gcc-wrapper: C (64/32) and C++ hello run ===" >&2
+    '' ];
+  };
+
+  # vi, ex, view: the gate already builds vi (the Sun/BSD ex/vi, 32-bit, curses
+  # from the world), in two variants: usr/has/bin (the historical one) and
+  # usr/xpg4/bin (built for the XPG4/POSIX behaviour). The gate's manifests put
+  # neither at usr/bin/vi (IPS mediates that name; measured: no usr/bin/vi in any
+  # gate .p5m), so a solnix PATH had no vi. This links the POSIX one, which is
+  # what a NixOS user's vi (vim in vi mode, or nvi) behaves closest to.
+  vi = derivation {
+    name = "illumos-vi"; system = "x86_64-solaris"; world = needWorld;
+    builder = "/usr/bin/bash";
+    args = [ "-c" ''
+      set -eu
+      /usr/bin/mkdir -p $out/bin
+      for n in vi ex view; do
+        [ -x $world/usr/xpg4/bin/$n ] || { echo "FATAL: no $n in the world" >&2; exit 1; }
+        /usr/bin/ln -s $world/usr/xpg4/bin/$n $out/bin/$n
+      done
+    '' ];
+  };
+
   bash = mkSrcPkg {
     pname = "bash"; version = "5.2.37";
     src = { url = "https://ftp.gnu.org/gnu/bash/bash-5.2.37.tar.gz";
