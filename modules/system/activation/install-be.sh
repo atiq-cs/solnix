@@ -81,7 +81,11 @@ if [ ! -e var/svc ] || [ ! -e etc/passwd ]; then
 fi
 # the proto ships every dir 0555 (gotcha #7); /var/tmp must be world-writable+sticky
 chmod 1777 var/tmp
-chmod -R u+w etc var
+# NOT chmod -R: illumos chmod -R follows symbolic links, so on a BE that already
+# has /etc links into the store it made the store files writable (measured on the
+# X1: the cacert bundle /etc/ssl/certs links to was the one 0644 file in its store
+# path, changed when solnix-2 was laid).
+find etc var ! -type l -exec chmod u+w {} + || die "chmod u+w /etc /var"
 # The store hard-links identical files (auto-optimise-store), and tar keeps hard
 # links, so the stock tree arrived with e.g. eleven empty files sharing one inode
 # (etc/driver_classes, etc/versions/build, etc/mnttab, etc/security/dev/*, ...).
@@ -319,14 +323,19 @@ relink /nix/var/nix/profiles "$G/profiles"
 # records an INDIRECT root in gcroots/auto naming the staging path (measured:
 # auto/a15k9a7j... -> /var/tmp/ii/media/rd/nix/var/nix/profiles/system-1-link),
 # which dangles once the store is mounted at /nix. gcroots/profiles above already
-# keeps every system-N-link, as on NixOS, so drop auto roots that point outside
-# this system's own /nix.
-if [ -d "$G/auto" ]; then
-  for a in "$G"/auto/*; do
+# keeps every system-N-link, as on NixOS, so drop the auto roots that point INTO
+# the staging root. Only those, and only when there is one: with the live store
+# (R="", switch-to-configuration boot) every auto root is a real user's
+# (nix-build's ./result, home-manager's generations), and dropping the ones outside
+# /nix lets the next GC delete their closures (measured on the X1: 17 of 49).
+drop_staging_roots() {   # $1 = gcroots dir, $2 = staging store root ("" = none)
+  [ -n "$2" ] && [ -d "$1/auto" ] || return 0
+  for a in "$1"/auto/*; do
     [ -h "$a" ] || continue
-    case "$(rl "$a")" in /nix/*|/run/*) : ;; *) rm -f "$a" ;; esac
+    case "$(rl "$a")" in "$2"/*) rm -f "$a" ;; esac
   done
-fi
+}
+drop_staging_roots "$G" "$R"
 relink /run/current-system "$G/current-system"; relink /run/booted-system "$G/booted-system"
 
 # 7b. /etc/system.d: the kernel reads only /etc/system.d/.self-assembly (modsysfile.c),
