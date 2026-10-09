@@ -296,6 +296,23 @@ if [ -z "${SOLNIX_LIVE:-}" ] && ! grep -q '^nx::sysinit' etc/inittab; then
   awk -v p="$POOL" '/::sysinit:/ && !d {print "nx::sysinit:/sbin/zfs mount -O " p "/nix >/dev/msglog 2<>/dev/msglog </dev/console"; d=1} {print}' \
     etc/inittab > etc/inittab.new && mv etc/inittab.new etc/inittab
 fi
+# 4a. right after it, the shared /var state (docs/design-var-state.md): every
+#    canmount=noauto dataset under <pool>/var is mounted with -O over the BE's own
+#    directory, so logs, /var/tmp, /var/lib and the spools are one copy for every
+#    generation and a rollback does not revert them (NixOS: /var is not part of a
+#    generation). Here, not in filesystem/local: svc.startd writes /var/svc/log and
+#    utmpx/wtmpx as soon as filesystem/minimal is online, before `zfs mount -a`, and
+#    noauto keeps `zfs mount -a` from trying a non-empty BE directory. A pool
+#    without <pool>/var mounts nothing and the BE keeps its own /var.
+if [ -z "${SOLNIX_LIVE:-}" ] && ! grep -q '^vr::sysinit' etc/inittab; then
+  _vr="vr::sysinit:/sbin/sh -c '/sbin/zfs list -H -o canmount,name -r -t filesystem $POOL/var 2>/dev/null | while read c n; do [ \"\$c\" = noauto ] && /sbin/zfs mount -O \"\$n\"; done; exit 0' >/dev/msglog 2<>/dev/msglog </dev/console"
+  awk -v l="$_vr" '{print} /^nx::sysinit:/ && !d {print l; d=1}' etc/inittab > etc/inittab.new && mv etc/inittab.new etc/inittab
+  grep -q '^vr::sysinit' etc/inittab || die "inittab has no nx line to put the shared /var mount after"
+fi
+# their mountpoints exist in the BE (zfs mount creates a missing one, which a BE
+# cloned before the dataset existed may lack); the dataset name is the path.
+[ -n "${SOLNIX_LIVE:-}" ] || zfs list -H -o name -r -t filesystem "$POOL/var" 2>/dev/null \
+  | while read -r _n; do mkdir -p "${_n#"$POOL"/}"; done
 
 # 5. SMF: fresh seed repository + solnix manifests (site dir, real files) + site profile.
 [ -e etc/svc/repository.db ] || { cp "$R$WORLD/lib/svc/seed/global.db" etc/svc/repository.db; chmod 0600 etc/svc/repository.db; }

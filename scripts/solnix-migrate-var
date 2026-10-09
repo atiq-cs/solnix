@@ -1,0 +1,146 @@
+#!/sbin/sh
+# solnix-migrate-var -- move an installed system's /var state out of its boot
+# environments onto shared datasets, the layout solnix-install now creates
+# (docs/design-var-state.md).
+#
+#   solnix-migrate-var            dry run: print every step, change nothing
+#   solnix-migrate-var --apply    do it; then reboot right away
+#   solnix-migrate-var --revert   take the vr line out of every BE again
+#
+# --apply, for each /var subtree in VAR_SHARED (the list solnix-install uses):
+#   1. creates <pool>/var/<x> (canmount=noauto) under <pool>/var (canmount=off,
+#      mountpoint=/var), unless it already exists (a re-run skips it);
+#   2. mounts it at a staging directory and copies the running BE's /var/<x> in
+#      (tar: owners, modes, links, mtimes, ACLs; sockets are not copied);
+#   3. gives it its real mountpoint (/var/<x>, inherited) and leaves it unmounted;
+#   4. adds install-be's vr line to /etc/inittab of the running BE and of every
+#      other BE (beadm mount), so whichever BE boots mounts the shared copy.
+# Nothing is deleted: each BE keeps its own /var/<x> underneath the mount. That is
+# what makes it reversible: --revert removes the vr line from every BE, and the
+# next boot uses each BE's own copy again (written up to the migration). The
+# datasets stay until you remove them: zfs destroy -r <pool>/var.
+#
+# Anything written to /var between --apply and the reboot goes to the running
+# BE's own copy, not the shared one: stop what writes there (builds in /var/tmp)
+# first, and reboot right after.
+#
+# Test hooks (scratch pools only): SOLNIX_MIGRATE_POOL names the pool,
+# SOLNIX_MIGRATE_ROOT the mounted BE root to copy from (default /), and
+# SOLNIX_MIGRATE_BEROOTS the mounted BE roots to edit instead of asking beadm.
+set -u
+PATH=/usr/sbin:/usr/bin:/sbin
+# the same list as solnix-install's dataset block
+VAR_SHARED="adm cores crash cron fm lib log logadm mail saf spool tmp svc/log"
+MODE=dry
+case "${1:-}" in
+  --apply) MODE=apply ;; --revert) MODE=revert ;; "") : ;;
+  *) echo "usage: solnix-migrate-var [--apply|--revert]" >&2; exit 2 ;;
+esac
+die() { echo "solnix-migrate-var: FATAL: $*" >&2; exit 1; }
+say() { echo "solnix-migrate-var: $*"; }
+run() { if [ "$MODE" = dry ]; then echo "  would: $*"; else "$@" || die "failed: $*"; fi; }
+ROOT=${SOLNIX_MIGRATE_ROOT:-/}
+_rootds=$(zfs list -H -o name "$ROOT" 2>/dev/null)
+POOL=${SOLNIX_MIGRATE_POOL:-${_rootds%%/*}}
+[ -n "$POOL" ] || die "cannot tell the pool of $ROOT"
+zpool list -H "$POOL" >/dev/null 2>&1 || die "no pool $POOL"
+[ "$MODE" = dry ] || [ "$(id -u 2>/dev/null)" = 0 ] || die "run as root (pfexec)"
+
+# install-be's line, byte for byte (modules/system/activation/install-be.sh, step 4a).
+VR="vr::sysinit:/sbin/sh -c '/sbin/zfs list -H -o canmount,name -r -t filesystem $POOL/var 2>/dev/null | while read c n; do [ \"\$c\" = noauto ] && /sbin/zfs mount -O \"\$n\"; done; exit 0' >/dev/msglog 2<>/dev/msglog </dev/console"
+
+# edit_be <mounted BE root> add|remove
+edit_be() {
+  _r=$1; set -- "$1/etc/inittab" "$2"
+  if [ "$2" = add ]; then
+    # the mountpoints, in case this BE predates a subtree (an old BE may have no
+    # var/lib); zfs mount would have to create it at boot, on a root not yet writable.
+    for x in $VAR_SHARED; do [ -d "$_r/var/$x" ] || run mkdir -p "$_r/var/$x"; done
+    grep -q '^vr::sysinit' "$1" && { say "$1 already has the vr line"; return 0; }
+    grep -q '^nx::sysinit' "$1" || die "$1 has no nx line (not a solnix BE?)"
+    if [ "$MODE" = dry ]; then echo "  would: add the vr line after nx in $1"; return 0; fi
+    awk -v l="$VR" '{print} /^nx::sysinit:/ && !d {print l; d=1}' "$1" > "$1.vr" \
+      && cat "$1.vr" > "$1" && rm -f "$1.vr" || die "editing $1"
+    grep -q '^vr::sysinit' "$1" || die "$1 still has no vr line"
+  else
+    grep -q '^vr::sysinit' "$1" || { say "$1 has no vr line"; return 0; }
+    if [ "$MODE" = dry ]; then echo "  would: remove the vr line from $1"; return 0; fi
+    grep -v '^vr::sysinit' "$1" > "$1.vr" && cat "$1.vr" > "$1" && rm -f "$1.vr" || die "editing $1"
+  fi
+  say "$1: vr line $2"
+}
+
+# every BE's inittab: the running one in place, the others through beadm mount.
+each_inittab() {   # $1 = add|remove
+  if [ -n "${SOLNIX_MIGRATE_BEROOTS:-}" ]; then
+    for r in $SOLNIX_MIGRATE_BEROOTS; do edit_be "$r" "$1"; done; return
+  fi
+  edit_be "$ROOT" "$1"
+  beadm list -H 2>/dev/null | awk -F';' '$3 !~ /N/ {print $1}' | while read -r be; do
+    # beadm lists the BEs of every imported pool (measured: a scratch pool's showed up)
+    zfs list -H "$POOL/ROOT/$be" >/dev/null 2>&1 || { say "skipping BE $be: not on $POOL"; continue; }
+    mp=/tmp/solnix-migrate-var.be.$$
+    if [ "$MODE" = dry ]; then echo "  would: beadm mount $be $mp; edit $mp/etc/inittab; beadm unmount $be"; continue; fi
+    mkdir -p "$mp" && beadm mount "$be" "$mp" || die "beadm mount $be"
+    edit_be "$mp" "$1"
+    beadm unmount "$be" || die "beadm unmount $be"
+    rmdir "$mp" 2>/dev/null
+  done || exit 1
+}
+
+if [ "$MODE" = revert ]; then
+  say "removing the vr line from every BE (the datasets under $POOL/var stay)"
+  each_inittab remove
+  say "done: after the next boot each BE uses its own /var again"
+  exit 0
+fi
+
+[ "$MODE" = dry ] && say "DRY RUN (nothing changes; --apply to do it). pool $POOL, copying from $ROOT"
+zfs list -H "$POOL/var" >/dev/null 2>&1 || run zfs create -o canmount=off -o mountpoint=/var "$POOL/var"
+zfs list -H "$POOL/var/svc" >/dev/null 2>&1 || run zfs create -o canmount=off "$POOL/var/svc"
+STAGE=/tmp/solnix-migrate-var.$$
+for x in $VAR_SHARED; do
+  ds="$POOL/var/$x"
+  # solnix:migrate=done is set only after a verified copy, so an interrupted run
+  # is not mistaken for a finished one.
+  if zfs list -H "$ds" >/dev/null 2>&1; then
+    [ "$(zfs get -H -o value solnix:migrate "$ds")" = done ] \
+      || die "$ds exists but its copy never finished (interrupted run?): zfs destroy $ds, then re-run"
+    say "$ds already migrated"; continue
+  fi
+  [ -d "$ROOT/var/$x" ] || { say "$ROOT/var/$x absent; $ds starts empty"; }
+  if [ "$MODE" = dry ]; then
+    echo "  would: zfs create -o canmount=noauto -o mountpoint=$STAGE/$x $ds"
+    echo "  would: copy $ROOT/var/$x/. ($(du -sk "$ROOT/var/$x" 2>/dev/null | cut -f1) KB) into it with tar"
+    echo "  would: zfs unmount $ds; zfs inherit mountpoint $ds   (-> /var/$x)"
+    continue
+  fi
+  run zfs create -o canmount=noauto -o mountpoint="$STAGE/$x" "$ds"
+  run zfs mount "$ds"
+  dst=$(zfs get -H -o value mountpoint "$ds")   # altroot-prefixed on a scratch pool
+  stg=${dst%/"$x"}
+  if [ -d "$ROOT/var/$x" ]; then
+    # tar of "." also gives the dataset's root the directory's owner and mode
+    # (measured: a 1777 source onto a 0700 target came out 1777).
+    ( cd "$ROOT/var/$x" && tar cEf - . 2> "$STAGE.tar.err" ) | ( cd "$dst" && tar xpf - ) \
+      || die "unpacking $ROOT/var/$x into $dst"
+    # tar does not archive sockets ("is not a file. Not dumped"); anything else is a failure.
+    if grep -v 'is not a file. Not dumped' "$STAGE.tar.err" | grep -q .; then
+      cat "$STAGE.tar.err" >&2; die "archiving $ROOT/var/$x"
+    fi
+    rm -f "$STAGE.tar.err"
+    _a=$(cd "$ROOT/var/$x" && find . ! -type s | wc -l); _b=$(cd "$dst" && find . | wc -l)
+    [ "$_a" -eq "$_b" ] || die "$ds holds $_b entries, $ROOT/var/$x $_a (sockets excluded)"
+    say "$ds: $_b entries copied from $ROOT/var/$x"
+  fi
+  run zfs unmount "$ds"
+  run zfs inherit mountpoint "$ds"
+  run zfs set solnix:migrate=done "$ds"
+  case "$(zfs get -H -o value mountpoint "$ds")" in */var/"$x") : ;; *) die "$ds did not take /var/$x" ;; esac
+  rmdir "$dst" 2>/dev/null
+done
+[ -n "${stg:-}" ] && rmdir "$stg/svc" "$stg" 2>/dev/null
+each_inittab add
+[ "$MODE" = dry ] && { say "dry run done; nothing changed"; exit 0; }
+say "done. Reboot now: every BE mounts $POOL/var/* at boot (vr line, after nx)."
+say "undo: solnix-migrate-var --revert (then optionally zfs destroy -r $POOL/var)"

@@ -40,13 +40,15 @@ install-be)
   echo sh > "$R/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-illumos-early/sbin/sh"
   ln -s /nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-illumos-early/sbin/init "$R/sbin/init"
   ln -s ../nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-illumos-early/sbin/sh "$R/sbin/sh"
-  printf 'nx::sysinit:/sbin/zfs mount -O %s/nix\nsmf::sysinit:/lib/svc/bin/svc.startd\n' "$P" > "$R/etc/inittab"
+  printf 'nx::sysinit:/sbin/zfs mount -O %s/nix\nvr::sysinit:/sbin/sh -c '"'"'/sbin/zfs list -H -o canmount,name -r -t filesystem %s/var 2>/dev/null | ...'"'"'\nsmf::sysinit:/lib/svc/bin/svc.startd\n' "$P" "$P" > "$R/etc/inittab"
   : > "$R/lib/svc/bin/svc.startd"; : > "$R/etc/svc/repository.db"
   for f in loader64.efi pmbr gptzfsboot loader.rc defaults/loader.conf forth/loader.4th; do : > "$R/boot/$f"; done
   echo x > "$R/boot/fonts/fonts.dir"
   for f in passwd shadow group; do echo "root:x:0:0::/root:/bin/sh" > "$R/etc/$f"; done
   case "${SABOTAGE:-}" in
     no-stage2)    sed -i '/zfs mount -O/d' "$R/etc/inittab" ;;
+    # /var state left inside the BE: a switch loses it and a rollback reverts it.
+    no-vr)        sed -i '/^vr::/d' "$R/etc/inittab" ;;
     live-copy)    : > "$R/etc/solnix-live-shell" ;;
     clobber-cons) echo 'console="ttya"' > "$R/boot/loader.conf" ;;
     shadow-link)  rm -f "$R/etc/shadow"; ln -s /nix/store/x-etc/etc/shadow "$R/etc/shadow" ;;
@@ -108,6 +110,7 @@ while read -r s re; do
   run_populate "$s" die "$re" SABOTAGE="$s"
 done <<'CASES'
 no-stage2    no stage-2 'zfs mount -O
+no-vr        no 'vr' line mounting rpool/var
 live-copy    live-media file /etc/solnix-live-shell
 clobber-cons (overwrote the installed console|replaced the machine input /boot/loader.conf)
 shadow-link  /etc/shadow is a symlink into the store
@@ -152,6 +155,11 @@ run_realise() {  # <label> <expect> [env...]
 run_realise with-install-be ok
 grep -q PROFILE-OK "$W/rr.with-install-be.out" || { echo "FAIL  system profile not system-1-link -> toplevel"; FAILED=1; }
 run_realise without-install-be die NO_INSTALL_BE=1
+
+echo "=== shared /var: the installer and the migration create the same datasets ==="
+_vi=$(sed -n 's/^VAR_SHARED="\(.*\)"$/\1/p' "$SCRIPT"); _vm=$(sed -n 's/^VAR_SHARED="\(.*\)"$/\1/p' "$(dirname "$SCRIPT")/solnix-migrate-var")
+if [ -n "$_vi" ] && [ "$_vi" = "$_vm" ]; then echo "PASS  VAR_SHARED matches: $_vi"
+else echo "FAIL  VAR_SHARED differs: solnix-install '$_vi', solnix-migrate-var '$_vm'"; FAILED=1; fi
 
 echo "=== the live-root copy is gone from the script ==="
 for pat in 'tar cEfX' 'SELF_INSTALL' 'OVERLAY=1' 'cd "\$SRCROOT"' 'copy the running root'; do
