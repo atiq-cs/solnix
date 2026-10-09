@@ -12,6 +12,9 @@
 # media only (installation-device.nix sets initialHashedPassword = "" for root);
 # the installer then makes the operator choose a root password or lock root on
 # the target, so that never reaches disk.
+# Accepted deviation from NixOS (maintainer, 2026-10-09): no `nixos` user and no
+# console autologin. The user logs in as root with no password and installs from
+# there (docs/installer-contract.md, "Accepted deviations").
 #
 # Hardware: the world's whole kernel tree and the full gate driver database
 # (pkgs/illumos/data/drivers, 362 majors / 2,124 aliases), the analog of NixOS's

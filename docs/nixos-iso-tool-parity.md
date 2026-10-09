@@ -59,7 +59,7 @@ Raw data: `/tmp/streamI1.WIP/solnix-media-programs.txt`.
 |---|---|---|---|
 | root password | empty (`installation-device.nix:49`) | empty (`make-installer-image.sh` 5b) | same |
 | unprivileged user | `nixos`, empty password, wheel, passwordless sudo (`:37-58`) | none: you log in as root | NOTE: no `nixos` user. illumos RBAC `pfexec` would be the analog of passwordless sudo. Left as a decision for the maintainer (adding the user changes the login flow every install test drives). |
-| console autologin | `services.getty.autologinUser = "nixos"` (`:61`) | login prompt, root, no password | illumos ttymon has no autologin flag. An `-a` equivalent needs a console-login method override. Not changed. |
+| console autologin | `services.getty.autologinUser = "nixos"` (`:61`) | login prompt, root, no password | Accepted deviation (maintainer, 2026-10-09): log in as root with no password and install from there; no `nixos` user, no autologin. See docs/installer-contract.md. |
 | help text | `services.getty.helpLine` (`:64-72`): empty passwords, how to ssh, `nmtui` | `solnix-motd` banner, which now points at **/root/README** | same purpose; README is new |
 | sshd | enabled, `PermitRootLogin yes` (`:84-87`) | enabled (svc:/network/sshd), `PermitRootLogin yes` (installer.nix) | same. NixOS's empty password cannot be used over ssh either. `solnix-install --ssh` sets a password or key. |
 | networking | NetworkManager + wpa_supplicant, `useDHCP=false`, dhcpcd on (eval) | solnix-autonet: first wired NIC by DHCP at boot, in the background | no NetworkManager on illumos. Wifi: `dladm connect-wifi`, but no Intel wifi driver attaches yet. |

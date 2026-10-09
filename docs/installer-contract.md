@@ -31,14 +31,21 @@ thing, and write down why.
 | 16 | Reboot | user: `reboot` (manual:487) | installer offers reboot or power off; user: `init 6`, remove the media | same |
 | 17 | First boot | GRUB menu, one generation (manual:491-497) | illumos loader menu, generation 1 = BE `solnix-1` | same model: each generation is a menu entry (a BE) |
 
+## Accepted deviations (maintainer decisions)
+
+- **Log in as root with no password; no `nixos` user, no console autologin.**
+  NixOS's media autologins as an unprivileged `nixos` user with passwordless sudo
+  (profiles/installation-device.nix:46-61). The solnix media shows a login prompt;
+  the user logs in as `root` with an empty password and runs the install from
+  there. Decided by the maintainer (2026-10-09): no `nixos` user is required.
+  The empty password is media-only: solnix-install sets or locks root on the
+  target, and the installed system's root has no declared password
+  (modules/config/users.nix), so a switch keeps whatever the installer set.
+
 ## Departures from NixOS that have no illumos reason (open)
 
 These are recorded here rather than silently kept.
 
-- **No `nixos` user, no console autologin.** NixOS logs in as an unprivileged user
-  with passwordless sudo. solnix logs in as root. The console autologin needs a
-  console-login method override (ttymon has no `-a`), and every automated install
-  test drives the root login prompt. This is a maintainer decision.
 - **No `nixos-enter` analog.** `chroot /a /usr/bin/bash` covers `passwd`, but there
   are no `/dev`, `/proc` or `/run` bind mounts the way nixos-enter sets them up.
   Low priority: step 14 is done by the installer.
