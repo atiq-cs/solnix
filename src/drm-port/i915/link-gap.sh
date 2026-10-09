@@ -27,7 +27,8 @@ ok=$(ls "$out"/obj/*.o 2>/dev/null | wc -l)
 for k in /platform/i86pc/kernel/amd64/unix /kernel/amd64/genunix; do
 	$NM -g --defined-only "$k" | awk '{print $3}'
 done | sort -u > "$out/kernel.txt"
-for o in "$out"/obj/*.o "$compat/obsd_kern.o"; do
+# every compat-layer kernel object (obsd_kern.o, obsd_time.o, ...)
+for o in "$out"/obj/*.o "$compat"/obsd_*.o; do
 	$NM -g --defined-only "$o" | awk '{print $3}'
 done | sort -u > "$out/defined.txt"
 for o in "$out"/obj/*.o; do $NM -u "$o" | awk '{print $2}'; done | sort | uniq -c |

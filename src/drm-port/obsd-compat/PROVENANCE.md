@@ -11,3 +11,10 @@ read-only. Each one passed `src/drm-port/license-audit.sh` as PERM.
 
 The OpenBSD drm sources the layer compiles (sys/dev/pci/drm at 37a498de) are not copied here.
 Measurement and status are in docs/x1-gpu-route.md section 5.4.
+
+The OpenBSD kernel sources read while writing `obsd_time.c` (kern/kern_synch.c, the sleep-queue model),
+`obsd_bus.c` (dev/pci/pci.c, pci_map.c) and `obsd_vm.c` (uvm/uvm_object.c) were references only: no code
+from them is copied. The two kernel prototype blocks in `obsd_vm.c` and `obsd_glue.c` (xc_call,
+invalidate_cache, hat_kpm_pfn2va, kernel_fpu_begin/end, KFPU_NO_STATE, HAT_PLAT_NOCACHE) restate
+illumos-gate interfaces whose headers the installed proto does not ship; the running kernel exports
+every one of them (measured).

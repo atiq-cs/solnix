@@ -12,6 +12,12 @@
 
 /* Called once from the driver's _init (obsd_kern.c). */
 extern void obsd_compat_init(void);
+extern void obsd_sleepq_init(void);	/* obsd_time.c */
+extern void obsd_sleepq_fini(void);
+extern void obsd_compat_fini(void);
+extern void obsd_glue_init(void);	/* obsd_glue.c */
+struct device;
+extern void obsd_config_free(struct device *);
 
 /* ---- scalar types (REAL: the same widths on both systems) ---- */
 typedef uint8_t		u_int8_t;
@@ -246,8 +252,11 @@ extern int obsd_rw_status(struct rwlock *);
 #define KERNEL_LOCK()		((void)0)
 #define KERNEL_UNLOCK()		((void)0)
 #define KERNEL_ASSERT_LOCKED()	((void)0)
-#define SCHED_LOCK()		((void)0)
-#define SCHED_UNLOCK()		((void)0)
+/* SCHED_LOCK (REAL): the one lock of the sleep queue in obsd_time.c, as on
+ * OpenBSD. drm_linux.c holds it around unsleep() and wakeup_proc(). */
+extern kmutex_t obsd_sched_lock;
+#define SCHED_LOCK()		mutex_enter(&obsd_sched_lock)
+#define SCHED_UNLOCK()		mutex_exit(&obsd_sched_lock)
 
 /* ---- processes (DECL: obsd_curproc() returns a per-kthread shadow object
  * kept in TSD; OpenBSD code reads p_p->ps_pid/ps_comm and compares owners) ---- */
@@ -263,10 +272,14 @@ struct proc {			/* struct obsd_proc, see obsd_prelude.h */
 	struct process	*p_p;
 	struct filedesc	*p_fd;
 	struct vmspace	*p_vmspace;
-	const volatile void *p_wchan;
+	const volatile void *p_wchan;	/* sleep channel; NULL = awake */
 	int		p_flag;
-	char		p_stat;
+	char		p_stat;		/* SONPROC or SSLEEP (illumos values) */
 	kthread_t	*p_thread;	/* the illumos thread it shadows */
+	/* obsd_time.c sleep queue, all under obsd_sched_lock */
+	TAILQ_ENTRY(proc) p_runq;
+	kcondvar_t	p_cv;
+	const char	*p_wmesg;
 };
 extern struct proc *obsd_curproc(void);
 #define curproc		obsd_curproc()
@@ -386,6 +399,13 @@ USEC_TO_TIMEVAL(uint64_t us, struct timeval *tv)
 /* OpenBSD tick = microseconds per hardclock tick; ticks = tick counter. */
 #define tick		usec_per_tick
 #define ticks		((int)ddi_get_lbolt())
+/* jiffies (REAL): linux/jiffies.h declares "extern volatile unsigned long
+ * jiffies", an OpenBSD kernel variable that hardclock() increments hz times
+ * a second. obsd_time.c defines it and a ddi_periodic at the tick rate
+ * copies illumos lbolt (the same counter at the same rate) into it. It has
+ * to be a variable, not a macro over ddi_get_lbolt(): linux/processor.h
+ * does jiffies++ and inline helpers use "jiffies" as a parameter name
+ * (measured: a macro broke 379/391 files). */
 /* OpenBSD cold is 1 until the scheduler runs; a DDI driver never attaches
  * that early (MAP, the iwx port makes the same choice). */
 #define cold		0

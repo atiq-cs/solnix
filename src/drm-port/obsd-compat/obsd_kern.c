@@ -120,141 +120,7 @@ obsd_rw_status(struct rwlock *rwl)
 	return (0);
 }
 
-/* ---------------------------------------------------------- sleep/wakeup */
-/*
- * OpenBSD sleeps on an arbitrary address. Here the address hashes into one
- * of 64 (mutex, condvar) buckets; wakeup broadcasts its bucket. Every
- * OpenBSD caller re-checks its condition after waking, so a wakeup of an
- * unrelated channel in the same bucket is a spurious wakeup, which is
- * allowed. MAP.
- */
-#define OBSD_SLPQ	64
-static struct obsd_slpq {
-	kmutex_t	sq_lock;
-	kcondvar_t	sq_cv;
-} obsd_slpq[OBSD_SLPQ];
-int nowake;
-
-static struct obsd_slpq *
-obsd_slpq_of(const volatile void *chan)
-{
-	return (&obsd_slpq[((uintptr_t)chan >> 6) % OBSD_SLPQ]);
-}
-
-static void
-obsd_slpq_init(void)
-{
-	int i;
-
-	for (i = 0; i < OBSD_SLPQ; i++) {
-		mutex_init(&obsd_slpq[i].sq_lock, NULL, MUTEX_DRIVER, NULL);
-		cv_init(&obsd_slpq[i].sq_cv, NULL, CV_DRIVER, NULL);
-	}
-}
-
-/*
- * Wait on chan for up to nsecs (INFSLP: forever). interlock, if non-NULL,
- * is released while asleep and re-taken before returning (unless
- * PNORELOCK). Returns 0 when woken, EWOULDBLOCK on timeout, EINTR on a
- * signal with PCATCH.
- */
-static int
-obsd_sleep(const volatile void *chan, kmutex_t *interlock, int prio,
-    uint64_t nsecs)
-{
-	struct obsd_slpq *sq = obsd_slpq_of(chan);
-	hrtime_t deadline;
-	int r, err = 0;
-
-	mutex_enter(&sq->sq_lock);
-	if (interlock != NULL)
-		mutex_exit(interlock);
-	if (nsecs == INFSLP) {
-		if (prio & PCATCH) {
-			if (cv_wait_sig(&sq->sq_cv, &sq->sq_lock) == 0)
-				err = EINTR;
-		} else {
-			cv_wait(&sq->sq_cv, &sq->sq_lock);
-		}
-	} else {
-		deadline = gethrtime() + (hrtime_t)MIN(nsecs, (uint64_t)INT64_MAX / 2);
-		if (prio & PCATCH) {
-			r = cv_timedwait_sig_hrtime(&sq->sq_cv, &sq->sq_lock,
-			    deadline);
-			if (r == 0)
-				err = EINTR;
-			else if (r < 0)
-				err = EWOULDBLOCK;
-		} else {
-			r = cv_timedwait_hires(&sq->sq_cv, &sq->sq_lock,
-			    deadline, 1, CALLOUT_FLAG_ABSOLUTE);
-			if (r < 0)
-				err = EWOULDBLOCK;
-		}
-	}
-	mutex_exit(&sq->sq_lock);
-	if (interlock != NULL && !(prio & PNORELOCK))
-		mutex_enter(interlock);
-	return (err);
-}
-
-int
-tsleep_nsec(const volatile void *chan, int prio, const char *wmesg,
-    uint64_t nsecs)
-{
-	(void) wmesg;
-	return (obsd_sleep(chan, NULL, prio, nsecs));
-}
-
-int
-tsleep(const volatile void *chan, int prio, const char *wmesg, int timo)
-{
-	(void) wmesg;
-	return (obsd_sleep(chan, NULL, prio,
-	    timo == 0 ? INFSLP : (uint64_t)timo * (uint64_t)nsec_per_tick));
-}
-
-int
-msleep_nsec(const volatile void *chan, struct mutex *mtx, int prio,
-    const char *wmesg, uint64_t nsecs)
-{
-	(void) wmesg;
-	return (obsd_sleep(chan, mtx, prio, nsecs));
-}
-
-int
-msleep(const volatile void *chan, struct mutex *mtx, int prio,
-    const char *wmesg, int timo)
-{
-	(void) wmesg;
-	return (obsd_sleep(chan, mtx, prio,
-	    timo == 0 ? INFSLP : (uint64_t)timo * (uint64_t)nsec_per_tick));
-}
-
-int
-rwsleep_nsec(const volatile void *chan, struct rwlock *rwl, int prio,
-    const char *wmesg, uint64_t nsecs)
-{
-	int write = rw_write_held(&rwl->rwl_lock), err;
-
-	(void) wmesg;
-	rw_exit(&rwl->rwl_lock);
-	err = obsd_sleep(chan, NULL, prio, nsecs);
-	if (!(prio & PNORELOCK))
-		rw_enter(&rwl->rwl_lock, write ? RW_WRITER : RW_READER);
-	return (err);
-}
-
-void
-wakeup_n(const volatile void *chan, int n)
-{
-	struct obsd_slpq *sq = obsd_slpq_of(chan);
-
-	(void) n;		/* MAP: bucket broadcast, see above */
-	mutex_enter(&sq->sq_lock);
-	cv_broadcast(&sq->sq_cv);
-	mutex_exit(&sq->sq_lock);
-}
+/* sleep/wakeup: obsd_time.c */
 
 /* ------------------------------------------------------------------ time */
 void
@@ -567,7 +433,10 @@ struct obsd_proc_shadow {
 static void
 obsd_proc_free(void *p)
 {
-	kmem_free(p, sizeof (struct obsd_proc_shadow));
+	struct obsd_proc_shadow *s = p;
+
+	cv_destroy(&s->ps_proc.p_cv);
+	kmem_free(s, sizeof (*s));
 }
 
 struct proc *
@@ -580,6 +449,8 @@ obsd_curproc(void)
 		s = kmem_zalloc(sizeof (*s), KM_SLEEP);
 		s->ps_proc.p_p = &s->ps_process;
 		s->ps_proc.p_thread = curthread;
+		s->ps_proc.p_stat = SONPROC;
+		cv_init(&s->ps_proc.p_cv, NULL, CV_DRIVER, NULL);
 		(void) tsd_set(obsd_proc_key, s);
 	}
 	s->ps_process.ps_pid = ip->p_pidp->pid_id;
@@ -628,10 +499,22 @@ obsd_cpu_init(void)
 void
 obsd_compat_init(void)
 {
-	obsd_slpq_init();
+	obsd_sleepq_init();
+	obsd_vm_init();
+	obsd_glue_init();
 	obsd_cpu_init();
 	obsd_systq = taskq_create("obsd_systq", 1, minclsyspri, 1, 64,
 	    TASKQ_PREPOPULATE);
+}
+
+/* Called once from the driver's _fini, after every other entry point. */
+void
+obsd_compat_fini(void)
+{
+	obsd_sleepq_fini();
+	if (obsd_systq != NULL)
+		taskq_destroy(obsd_systq);
+	obsd_systq = NULL;
 }
 
 int
@@ -721,45 +604,7 @@ pool_setipl(struct pool *pp, int ipl)
 	(void) ipl;
 }
 
-/* ------------------------------------------------------------- km_alloc */
-/*
- * The modes drm uses on the R1a path are kernel VA + dirty or zeroed
- * kernel pages (kv_any/kv_page + kp_dirty/kp_zero): that is kmem_alloc of a
- * page-multiple, which is page-aligned. kp_none (VA only, the caller maps
- * pages itself) and the DMA modes are PLANNED: they panic by name rather
- * than return memory with the wrong properties.
- */
-const struct kmem_va_mode kv_any = { 0 };
-const struct kmem_va_mode kv_intrsafe = { 0 };
-const struct kmem_va_mode kv_page = { .kv_singlepage = 1 };
-const struct kmem_pa_mode kp_dirty = { 0 };
-const struct kmem_pa_mode kp_zero = { .kp_zero = 1 };
-const struct kmem_pa_mode kp_none = { .kp_nomem = 1 };
-const struct kmem_dyn_mode kd_waitok = { .kd_waitok = 1 };
-const struct kmem_dyn_mode kd_nowait = { 0 };
-const struct kmem_dyn_mode kd_trylock = { .kd_trylock = 1 };
-
-void *
-km_alloc(size_t sz, const struct kmem_va_mode *kv,
-    const struct kmem_pa_mode *kp, const struct kmem_dyn_mode *kd)
-{
-	int km = kd->kd_waitok ? KM_SLEEP : KM_NOSLEEP;
-
-	(void) kv;
-	if (kp->kp_nomem || kp->kp_constraint != NULL)
-		panic("km_alloc: VA-only / constrained mode not implemented");
-	sz = P2ROUNDUP(sz, PAGESIZE);
-	return (kp->kp_zero ? kmem_zalloc(sz, km) : kmem_alloc(sz, km));
-}
-
-void
-km_free(void *va, size_t sz, const struct kmem_va_mode *kv,
-    const struct kmem_pa_mode *kp)
-{
-	(void) kv;
-	(void) kp;
-	kmem_free(va, P2ROUNDUP(sz, PAGESIZE));
-}
+/* km_alloc/km_free: obsd_vm.c */
 
 /* ------------------------------------------------------------------- PCI */
 /*
@@ -863,6 +708,14 @@ pci_mapreg_info(pci_chipset_tag_t pc, pcitag_t tag, int reg, pcireg_t type,
 	int is64 = PCI_MAPREG_TYPE(type) == PCI_MAPREG_TYPE_MEM &&
 	    PCI_MAPREG_MEM_TYPE(type) == PCI_MAPREG_MEM_TYPE_64BIT;
 
+	/*
+	 * The attached device: read the BAR from the DDI's assigned-addresses
+	 * property. The all-ones probe below would point a live BAR at
+	 * garbage while it decodes, and on dixi BAR2 (GMADR) is the console
+	 * framebuffer gfxp_bitmap is drawing into.
+	 */
+	if (pc != NULL && pc->pc_dip != NULL && tag == pc->pc_self)
+		return (obsd_pci_bar(pc->pc_dip, reg, basep, sizep, flagsp));
 	lo = pci_conf_read(pc, tag, reg);
 	pci_conf_write(pc, tag, reg, 0xffffffff);
 	mlo = pci_conf_read(pc, tag, reg);

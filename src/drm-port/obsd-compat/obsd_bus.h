@@ -25,6 +25,7 @@ typedef uint64_t	bus_size_t;
 struct obsd_bus_space {
 	ddi_acc_handle_t	bs_acc;		/* NULL: direct volatile access */
 	int			bs_io;		/* 1: x86 I/O port space */
+	dev_info_t		*bs_dip;	/* device whose BARs it maps */
 };
 typedef struct obsd_bus_space	*bus_space_tag_t;
 typedef uintptr_t		bus_space_handle_t;
@@ -121,6 +122,8 @@ typedef struct {
 	pcitag_t	tag;
 	int		line, pin;
 	ddi_intr_handle_t ih;
+	int		type;		/* DDI_INTR_TYPE_MSI or _FIXED */
+	dev_info_t	*dip;
 } pci_intr_handle_t;
 struct extent;
 struct pci_attach_args {
@@ -197,6 +200,10 @@ extern void *pci_intr_establish(pci_chipset_tag_t, pci_intr_handle_t, int,
     int (*)(void *), void *, const char *);
 extern void pci_intr_disestablish(pci_chipset_tag_t, void *);
 extern int pci_set_powerstate(pci_chipset_tag_t, pcitag_t, int);
+/* obsd_bus.c: a BAR of an attached illumos device, from its
+ * "assigned-addresses" property (no config-space writes). */
+extern int obsd_pci_bar(dev_info_t *, int, bus_addr_t *, bus_size_t *,
+    int *);
 extern int pci_get_powerstate(pci_chipset_tag_t, pcitag_t);
 
 /* PCI config registers and decoders (REAL: the PCI spec values, with the

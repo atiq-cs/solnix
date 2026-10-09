@@ -81,6 +81,8 @@ struct vm_page {
 	uint32_t		wire_count;
 	paddr_t			phys_addr;
 	ulong_t			pg_pfn;		/* illumos pfn */
+	struct obsd_pgchunk	*pg_chunk;	/* RAM: the allocation it is
+						   part of (obsd_vm.c) */
 };
 #define PG_BUSY		0x00000001
 #define PG_WANTED	0x00000002
@@ -93,12 +95,11 @@ struct vm_page {
 #define PG_PMAP2	0x08000000
 #define PG_PMAP_WC	PG_PMAP2
 #define VM_PAGE_TO_PHYS(pg)	((pg)->phys_addr)
-/* PLANNED: a lookup of a solnix vm_page descriptor by physical address
- * (the dma-mapping and scatterlist helpers call it on pages the driver
- * allocated itself, which is the only case that must work). */
+/* DECL (obsd_vm.c): the vm_page of a physical address, for every page
+ * uvm_pglistalloc/uao handed out and every uvm_page_physload range
+ * (aperture, stolen); NULL for any other address. */
 extern struct vm_page *PHYS_TO_VM_PAGE(paddr_t);
-/* PLANNED: kernel VA of a page-aligned km_alloc/kmem allocation -> its
- * descriptor (virt_to_page). */
+/* DECL: kernel VA -> its vm_page (virt_to_page); NULL if not one of ours. */
 extern struct vm_page *uvm_atopg(vaddr_t);
 extern int uvm_pglistalloc(psize_t, paddr_t, paddr_t, paddr_t, paddr_t,
     struct pglist *, int, int);
@@ -114,7 +115,8 @@ extern struct uvm_constraint_range no_constraint;
 extern struct uvm_constraint_range dma_constraint;
 
 /* uvmexp: drm reads free/npages/swpages/swpginuse for its shrinker sizing.
- * DECL: obsd_kern.c keeps it from freemem/physmem. */
+ * DECL: obsd_vm.c fills it from physmem/freemem at init. */
+extern void obsd_vm_init(void);
 struct uvmexp {
 	int	pagesize;
 	int	pagemask;

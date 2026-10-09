@@ -135,6 +135,15 @@
  * linked module would define AND the kernel already defines. */
 #define pool_init		obsd_pool_init
 #define pool_destroy		obsd_pool_destroy
+/* malloc(9): the loaded ufs module exports a global free() (its block
+ * free, ufs_alloc.c), measured by i915/build-module.sh's /dev/ksyms gate on
+ * dixi; krtld would bind the module's free() calls to it. The token
+ * rename keeps drm's ->free member names consistent (tags and members are
+ * renamed alike). malloc/mallocarray follow for symmetry: no kernel
+ * defines them today, a later module might. */
+#define malloc			obsd_malloc
+#define mallocarray		obsd_mallocarray
+#define free			obsd_free
 /* rw_*: illumos rw_enter(krwlock_t *, krw_t) returns void; OpenBSD's takes a
  * struct rwlock and flags and returns an error. Function-like, so the
  * already-parsed illumos prototypes are untouched. */
