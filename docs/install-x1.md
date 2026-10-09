@@ -4,25 +4,24 @@ This is the procedure for the maintainer's Lenovo X1 Carbon ("dixi"). The media 
 generic: it carries no personal users, keys or flakes. The machine's identity comes
 from the nix-config flake you name at install time.
 
-Status: every step below was run under KVM (UEFI, e1000 NIC, virtio disk), from
-the booted media. That covers the generic example flake and dixi from a local
-clone of nix-config carrying the change below. The X1 itself is the next run.
-Measurements are in `/tmp/x1-installer-progress.txt` (sections "ORCHESTRATOR").
+Status (2026-10-09): the X1 was installed from usb-image-20261008a and runs
+generation 3 (BE solnix-3) built from github nix-config. The current media is
+`artifacts/install-media/usb-image-20261009b-x1` (sha256 7a6f6bb0..., README there
+has the measurements): under KVM it installs `examples/minimal-flake#example` end
+to end and the installed disk boots clean (svcs -x empty, DHCP, DNS, nix-env -iA
+solnix.htop). Log in on the media as root with no password (an accepted deviation
+from NixOS: no `nixos` user, docs/installer-contract.md); /root/README lists the
+install tools (lsblk, lspci, nvmeadm, smartctl, nano, rsync, ...).
 
-## 0. Before you start: the nix-config change
+## 0. Before you start: nix-config
 
-dixi only installs once nix-config has the change in
-`/tmp/nix-config-dixi-changes.md` (a `git apply`-able diff). It contains:
-
-- `mkSolnixHost` on `solnix.lib.mkPkgs`. No import-from-derivation; the old
-  path cannot evaluate on illumos.
-- dixi.nix imports solnix's `configurations/base.nix`.
-- `profiles = [ "Primary Administrator" ]`.
-- git and curl from `pkgs.solnix`.
-- The NIC `e1000g0`.
-
-Then run `nix flake update solnix`, so the lock points at a solnix revision that
-has `lib.mkPkgs`. The tested clone used solnix 8f450135.
+nix-config's `solnixConfigurations.dixi` (nixos/solnix/dixi.nix via mkSolnixHost
+on `solnix.lib.mkPkgs`) is what the installer builds. It is in nix-config main
+(3b840e5 and later): base.nix, `profiles = [ "Primary Administrator" ]`, git, curl
+and home-manager from `pkgs.solnix`, the NIC `e1000g0`, DNS from the LAN's DHCP.
+Keep its `solnix` input current with `nix flake update solnix`: the installer
+runs the TARGET generation's own install-be (as nixos-install does), so fixes to
+install-be reach the install only through that lock.
 
 ## 1. Write the stick (on the Linux box)
 
