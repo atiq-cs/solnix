@@ -477,6 +477,61 @@ rec {
     flags = "--disable-gcc-warnings";
   };
 
+  # Install-media tools NixOS's minimal ISO ships (profiles/base.nix,
+  # installation-cd-base.nix defaultPackages) that the illumos world lacks
+  # (docs/nixos-iso-tool-parity.md). gzip: no gzip(1) anywhere in the world, and
+  # solnix-install's boot_archive check calls gzip -t.
+  gzip = gnuTool {
+    pname = "gzip"; version = "1.13";
+    url = "https://ftp.gnu.org/gnu/gzip/gzip-1.13.tar.xz";
+    sha256 = "7454eb6935db17c6655576c2e1b0fabefd38b4d0936e0f87f48cd062ce91a057";
+    flags = "--disable-gcc-warnings";
+  };
+  # nano: NixOS's manual edits configuration.nix with nano; vi is the only editor
+  # in the world.
+  nano = gnuTool {
+    pname = "nano"; version = "8.4";
+    url = "https://www.nano-editor.org/dist/v8/nano-8.4.tar.xz";
+    sha256 = "5ad29222bbd55624d87ea677928b3106a743114d6c6f9b41f36c97be2a8e628d";
+    flags = "--disable-libmagic --disable-speller";
+    deps = [ needWorld ncurses ];
+  };
+  # rsync (NixOS installation-cd-base.nix defaultPackages). The bundled popt,
+  # zlib-free (no -z), no optional hash/compression libraries: the media links
+  # nothing it does not already carry.
+  rsync = mkSrcPkg {
+    pname = "rsync"; version = "3.4.1";
+    src = { url = "https://download.samba.org/pub/rsync/src/rsync-3.4.1.tar.gz";
+            sha256 = "2924bcb3a1ed8b551fc101f740b9f0fe0a202b115027647cf69850d65fd88c52"; };
+    deps = [ needWorld ];
+    build = ''
+      ./configure --prefix="$out" --with-included-popt --with-included-zlib --disable-openssl \
+        --disable-xxhash --disable-zstd --disable-lz4 --disable-md2man --disable-debug
+      gmake -j4
+      gmake install
+      "$out/bin/rsync" --version | grep -q '^rsync  *version 3.4.1' || { echo "FATAL: rsync --version" >&2; exit 1; }
+    '';
+  };
+  # smartctl: its os_solaris backend speaks ATA/SCSI through USCSI (SATA/SAS
+  # disks); it has no NVMe path on illumos, where nvmeadm get-logpage is the tool.
+  # configure adds -fstack-protector-strong when it links, which NEEDs libssp.so.0;
+  # gcc.lib does not ship libssp, so smartctl failed to load (measured). An -f
+  # option in CXXFLAGS makes configure skip that probe (configure.ac:802).
+  smartmontools = mkSrcPkg {
+    pname = "smartmontools"; version = "7.4";
+    src = { url = "https://downloads.sourceforge.net/project/smartmontools/smartmontools/7.4/smartmontools-7.4.tar.gz";
+            sha256 = "e9a61f641ff96ca95319edfb17948cd297d0cd3342736b2c49c99d4716fb993d"; };
+    deps = [ needWorld ];
+    build = ''
+      CXXFLAGS="-g -O2 -fno-stack-protector" ./configure --prefix="$out" --without-update-smart-drivedb --without-initscriptdir \
+        --without-systemdsystemunitdir --without-smartdplugindir --without-libcap-ng --without-selinux
+      gmake -j4
+      gmake install
+      ${dropDocs}
+      "$out/sbin/smartctl" --version | grep -q '^smartctl 7.4' || { echo "FATAL: smartctl --version" >&2; exit 1; }
+    '';
+  };
+
   # GNU libiconv, for gettext. The world's iconv(3) modules are the gate proto's
   # usr/lib/iconv, which has no amd64/ directory and no UTF-8%UTF-16 or
   # UTF-8%8859-1 converters, so a 64-bit msgfmt cannot read a UTF-8 .po file

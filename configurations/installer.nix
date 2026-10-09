@@ -49,9 +49,28 @@ let
     ln -s ${diag} $out/bin/solnix-diag
     ln -s ${motd} $out/bin/solnix-motd
     ln -s ${autonet} $out/bin/solnix-autonet
+    ln -s ${generateConfig} $out/bin/solnix-generate-config
+    # Linux-named wrappers over the illumos tools (docs/nixos-iso-tool-parity.md).
+    ${lib.concatMapStrings (w: "ln -s ${w} $out/bin/${w.name}\n") compat}
+    # GNU coreutils names the illumos world does not have at all (shred, stat,
+    # readlink, realpath, timeout, sha256sum ...). Only these: the full set would
+    # replace ls/cp/dd/df on /usr/bin, which links to sw/bin. coreutils is already
+    # in the closure (home-manager's dependency), so this adds no bytes.
+    for t in ${lib.concatStringsSep " " gnuOnly}; do
+      [ -e ${live.coreutils}/bin/$t ] || { echo "FATAL: coreutils has no $t" >&2; exit 1; }
+      ln -s ${live.coreutils}/bin/$t $out/bin/$t
+    done
     mkdir -p $out/share/solnix
     ln -s ${liveMethods} $out/share/solnix/live-methods
+    # /root/README on the media (make-installer-image.sh copies it there).
+    ln -s ${readme} $out/share/solnix/README
   '';
+  generateConfig = pkgs.writeScript "solnix-generate-config" (builtins.readFile ../scripts/solnix-generate-config);
+  readme = pkgs.writeText "solnix-installer-README" (builtins.readFile ../scripts/live/README);
+  compat = map (n: pkgs.writeScript n (builtins.readFile (../scripts/live/compat + "/${n}")))
+    [ "lsblk" "lspci" "lsusb" "ip" ];
+  gnuOnly = [ "shred" "stat" "readlink" "realpath" "timeout" "truncate" "nproc" "seq" "tac"
+              "sha1sum" "sha256sum" "sha512sum" "md5sum" "b2sum" "base64" "numfmt" "stdbuf" "whoami" ];
 in
 {
   imports = [ ./base.nix ];
@@ -85,6 +104,18 @@ in
     # home-manager, so a user can set up their home from the live system; it
     # brings the GNU coreutils/findutils/sed/grep/gettext/jq its scripts need.
     live.home-manager
+    # NixOS minimal-ISO tools the illumos world lacks (profiles/base.nix,
+    # installation-cd-base.nix; table in docs/nixos-iso-tool-parity.md). jq and
+    # xz are already in the closure (home-manager, nix); tmux + libevent add
+    # ~2.7 MB, gzip/nano/rsync/smartmontools ~3 MB. gzip's zcat/uncompress replace
+    # the world's (they read .Z as well as .gz).
+    live.jq
+    live.xz
+    live.tmux
+    live.gzip
+    live.nano
+    live.rsync
+    live.smartmontools
     liveTools
   ];
 

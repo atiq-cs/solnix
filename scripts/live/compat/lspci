@@ -1,0 +1,14 @@
+#!/sbin/sh
+# lspci -- a Linux-named WRAPPER over illumos pcieadm(8) show-devs (the PCI
+# database names, BDF, and the bound driver instance). -n adds vendor:device ids,
+# -k is accepted (the driver is always shown). For the full tree: prtconf -D.
+# pcieadm lives in /usr/lib/pci, off the default PATH.
+PATH=/usr/sbin:/usr/bin:/sbin; export PATH
+P=/usr/lib/pci/pcieadm
+[ -x "$P" ] || { echo "lspci: $P not on this system; use prtconf -D" >&2; exit 1; }
+case "${1:-}" in
+  -h|--help) echo "usage: lspci [-n] [-k]   (wrapper over: /usr/lib/pci/pcieadm show-devs; see /root/README)"; exit 0 ;;
+  -n|-nn) exec "$P" show-devs -o bdf,vid,did,driver,instance,device ;;
+  ''|-k|-v) exec "$P" show-devs ;;
+  *) echo "lspci: only -n/-k supported (wrapper over pcieadm show-devs)" >&2; exit 2 ;;
+esac

@@ -1,0 +1,11 @@
+#!/sbin/sh
+# lsusb -- a Linux-named WRAPPER over illumos cfgadm(8): one line per attached
+# USB device (attachment point, manufacturer, product). -t shows the driver tree
+# (prtconf -D, the usb/xhci/ehci nodes).
+PATH=/usr/sbin:/usr/bin:/sbin; export PATH
+case "${1:-}" in
+  -h|--help) echo "usage: lsusb [-t]   (wrapper over: cfgadm -l -s select=type(usb-device); see /root/README)"; exit 0 ;;
+  -t) prtconf -D | awk '/xhci|ehci|ohci|uhci|usb/' ; exit 0 ;;
+  '') exec cfgadm -l -s 'cols=ap_id:info,select=type(usb-device)' ;;
+  *) echo "lsusb: only -t is supported (wrapper over cfgadm)" >&2; exit 2 ;;
+esac

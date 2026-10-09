@@ -1,0 +1,139 @@
+Welcome to Solnix
+=================
+
+Solnix is illumos managed the way NixOS manages Linux. One Nix configuration
+(a flake) declares the whole system. Each change builds a new generation, and
+each generation is a ZFS boot environment, so you can always boot the previous
+one from the loader menu. Commands and layout follow NixOS where illumos allows:
+solnix-install is nixos-install, solnix-rebuild is nixos-rebuild, the system is
+/run/current-system, and packages live in /nix/store.
+
+This live system runs from RAM. Nothing touches a disk until you run
+solnix-install. You are root, with an empty password (as on the NixOS media).
+
+
+Installing (the NixOS manual's steps, the solnix way)
+-----------------------------------------------------
+
+ NixOS                                  Solnix
+ 1. sudo -i                             already root
+ 2. networking: ip a / nmtui            solnix-install --net (wired DHCP; it starts
+                                        at boot). Check: ip a  (= ipadm show-addr)
+ 3. remote install: passwd + sshd       solnix-install --ssh (sets a root password
+                                        or your SOLNIX_SSH_PUBKEY, starts sshd)
+ 4. partition (parted), format          solnix-install does it: GPT label, ESP
+    (mkfs.ext4, mkfs.fat), mount /mnt   (pcfs), a ZFS pool, the boot environment
+                                        mounted at /a. Pick the disk with --disk
+                                        (list: lsblk, or diskinfo).
+ 5. nixos-generate-config --root /mnt   solnix-generate-config --dir /var/tmp/cfg
+                                        (writes flake.nix, configuration.nix,
+                                        hardware-configuration.nix)
+ 6. nano /mnt/etc/nixos/configuration.nix
+                                        nano /var/tmp/cfg/configuration.nix
+ 7. nixos-install [--flake ...]         solnix-install --flake '/var/tmp/cfg#HOST'
+                                        or --flake 'github:YOU/REPO#HOST'
+                                        or no --flake: the base system
+ 8. set the root password (prompt)      same prompt, plus an optional admin user
+                                        (pfexec is the illumos sudo)
+ 9. reboot                              init 6, and remove the media
+
+A local --flake directory is copied to /etc/nixos on the installed system, so
+solnix-rebuild switch finds it there, as nixos-rebuild does.
+
+If a disk still holds an old pool and the install refuses it: solnix-zap.
+If the install fails: solnix-diag writes a diagnostics bundle.
+
+
+Tools on this media
+-------------------
+Linux name -> what to run here. "wrapper" means a small Solnix script with the
+Linux name over the illumos tool. It takes only the common flags and says so.
+
+Disks
+  lsblk                 lsblk (wrapper: diskinfo + prtvtoc + fstyp), or diskinfo
+  fdisk -l / blkid      format </dev/null (lists disks), fstyp /dev/rdsk/<disk>s0
+  hdparm -I / sdparm    iostat -En (model, serial, size, errors), diskinfo -c
+  smartctl              smartctl -a -d sat /dev/rdsk/<disk>  (SATA/SAS only;
+                        on NVMe it says "Unable to detect device type")
+  nvme list / smart-log nvmeadm list, nvmeadm get-logpage <ctl> health
+  dd                    dd (illumos dd; use bs=1M, no status=progress)
+  rmformat / eject      rmformat (removable media), eject
+
+Partitions and labels
+  parted / sgdisk       format -e <disk> (interactive; EFI/GPT labels), or let
+                        zpool create <pool> <disk> write a whole-disk GPT
+  sfdisk -d / partx     prtvtoc /dev/rdsk/<disk> (dump), fmthard -s (restore)
+  fdisk (MBR)           fdisk /dev/rdsk/<disk>p0
+  partprobe             devfsadm (rescan devices after a relabel)
+
+Wiping
+  wipefs / zap labels   solnix-zap <disk> (pool labels + GPT, front and back)
+                        zpool labelclear -f /dev/dsk/<disk>s0
+  blkdiscard            zpool trim <pool> (TRIM within a pool),
+                        nvmeadm format <ctl>/<ns> (erases an NVMe namespace)
+  shred / secure erase  nvmeadm secure-erase <ctl>/<ns> (NVMe), shred (GNU,
+                        files; not reliable on SSDs), dd if=/dev/zero
+  ddrescue / testdisk   not on the media (see docs/nixos-iso-tool-parity.md)
+
+Filesystems and ZFS
+  mkfs.fat              mkfs -F pcfs -o fat=32 /dev/rdsk/<disk>s0
+  mkfs.ext4 / xfs       ZFS is the native root (zpool create, zfs create).
+                        UFS: newfs /dev/rdsk/<disk>s0
+  mount / umount        mount -F <fs> (zfs, pcfs, ufs, hsfs, smbfs, nfs, tmpfs)
+  cryptsetup (LUKS)     zfs create -o encryption=on -o keyformat=passphrase ...
+  mkswap / swapon       zfs create -V 4G <pool>/swap; swap -a /dev/zvol/dsk/<pool>/swap
+  mdadm / lvm           ZFS mirror/raidz vdevs (zpool create <pool> mirror d1 d2)
+
+Network and wifi
+  ip a / ip link        ip a, ip link, ip route (read-only wrapper), or
+                        ipadm show-addr, dladm show-phys, netstat -rn
+  dhcpcd / dhclient     solnix-install --net, or
+                        ipadm create-if <nic>; ipadm create-addr -T dhcp <nic>/v4
+  nmtui / wpa_cli / iw  dladm scan-wifi, dladm connect-wifi (needs an attached
+                        wifi driver; Intel AX2xx/AC9560 do not attach yet, so use
+                        a wired or USB-ethernet link)
+  ping / traceroute     ping, traceroute
+  dig / nslookup        getent hosts <name>
+  tcpdump               snoop -d <nic>
+  curl / wget           curl
+  ssh / scp / sftp      ssh, scp, sftp; sshd: solnix-install --ssh
+  rsync                 rsync
+
+Hardware info
+  lspci                 lspci (wrapper: pcieadm show-devs), prtconf -D
+  lsusb                 lsusb (wrapper: cfgadm), cfgadm -al
+  lscpu / free          psrinfo -vp, prtconf | grep Memory, kstat
+  dmidecode             smbios
+  dmesg                 dmesg
+  efibootmgr            illumos loader on the ESP; bootadm, beadm (boot
+                        environments). No EFI variable editor on the media.
+  lsmod / modprobe      modinfo, modload, add_drv
+
+Editors, shell, files
+  vim / vi / nano       vi, nano
+  less / more           less, more
+  tmux / screen         tmux
+  htop / top            htop, top (= htop), prstat
+  strace                truss
+  gzip / xz             gzip, gunzip, xz, unxz; tar
+  jq                    jq
+  sha256sum             sha256sum (GNU), digest -a sha256
+  stat / readlink / realpath / timeout
+                        GNU versions on PATH
+  git                   git
+  sudo                  you are root; on the installed system: pfexec or sudo
+
+Nix
+  nix, nix-build, nix-env, nix-store, nix-shell, home-manager
+  solnix-install        nixos-install
+  solnix-generate-config  nixos-generate-config
+  solnix-rebuild        nixos-rebuild (on the installed system)
+  solnix-version        nixos-version
+
+
+Where to read more
+------------------
+  <tool> --help / -h         (the media carries no illumos manual pages;
+                             https://illumos.org/man/ has format, zpool, ipadm ...)
+  solnix-install --help
+  https://solnix.io

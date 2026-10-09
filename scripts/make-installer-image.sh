@@ -194,9 +194,15 @@ awk -F: 'BEGIN{OFS=":"} $1=="root"{$2=""} {print}' "$RD/etc/shadow" > "$RD/etc/s
 chmod 0400 "$RD/etc/shadow"
 [ -f "$RD/etc/default/login" ] && sed -i 's/^CONSOLE=/#CONSOLE=/; s/^PASSREQ=YES/PASSREQ=NO/' "$RD/etc/default/login"
 # 5c. installer entry points: on PATH via /run/current-system/sw/bin (5f).
-for t in solnix-install solnix-zap solnix-diag solnix-motd; do
+for t in solnix-install solnix-zap solnix-diag solnix-motd solnix-generate-config; do
   [ -e "$RD$TOP/sw/bin/$t" ] || die "toplevel sw/bin lacks $t"
 done
+# 5c'. /root/README: the welcome + install steps + tools table (scripts/live/README),
+#      a real file so it reads the same with the store unmounted. NixOS's analog
+#      is the getty helpLine; solnix-motd points here.
+_rm=$(rl "$RD$TOP/sw/share/solnix/README")
+[ -n "$_rm" ] && [ -f "$RD$_rm" ] || die "toplevel has no sw/share/solnix/README"
+mkdir -p "$RD/root" && cp "$RD$_rm" "$RD/root/README" && chmod 0644 "$RD/root/README" || die "writing /root/README"
 # 5d. the live hostname answers locally (login-path DNS stall, measured ~3.5 s per lookup).
 grep -qw solnix-installer "$RD/etc/hosts" 2>/dev/null || echo "127.0.0.1 solnix-installer" >> "$RD/etc/hosts"
 # 5e. the media starts with NO resolver and NO persistent addresses; solnix-autonet

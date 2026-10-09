@@ -1,0 +1,153 @@
+#!/sbin/sh
+# solnix-generate-config -- the nixos-generate-config analog: detect this
+# machine's hardware and write a starting configuration the operator edits and
+# then installs with `solnix-install --flake <dir>#<host>`.
+#
+#   solnix-generate-config [--dir DIR] [--root ROOT] [--host NAME] [--force]
+#                          [--show-hardware-config]
+#
+# Writes (as nixos-generate-config --flake does):
+#   DIR/hardware-configuration.nix  ALWAYS regenerated: what was detected (wired
+#                                   NICs -> networking.interfaces.<n>.dhcp, the
+#                                   Intel wifi chip -> hardware.wirelessIw[mx]).
+#   DIR/configuration.nix           only if absent (or --force): hostname, an admin
+#                                   user to fill in, systemPackages.
+#   DIR/flake.nix                   only if absent (or --force): solnixConfigurations.<host>.
+# DIR defaults to ROOT/etc/nixos, ROOT to / (nixos-generate-config's defaults;
+# use --root /a after solnix-install has mounted a target, or --dir anywhere).
+#
+# What NixOS puts in hardware-configuration.nix and solnix does NOT, and why:
+#   fileSystems / swapDevices: the solnix layout is fixed by the installer
+#     (<pool>/ROOT/<be> is the BE, <pool>/nix and <pool>/home outside it; ZFS
+#     mounts them), so there is nothing per-machine to declare.
+#   boot.initrd.availableKernelModules: illumos has no initrd module list; the
+#     installer copies the machine's device bindings (/etc/path_to_inst) into
+#     the BE, and the media carries the whole driver database.
+#   boot.loader: one loader (illumos loader on the ESP + BIOS stage2), set up
+#     by solnix-install; nothing to choose.
+#   networking.hostId: solnix-install writes /etc/hostid on the target.
+set -u
+PATH=/usr/sbin:/usr/bin:/sbin; export PATH
+ROOT=""; DIR=""; HOST="${SOLNIX_HOSTNAME:-}"; FORCE=0; SHOW=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --dir)  DIR="${2:?--dir needs an argument}"; shift 2 ;;
+    --root) ROOT="${2:?--root needs an argument}"; shift 2 ;;
+    --host) HOST="${2:?--host needs an argument}"; shift 2 ;;
+    --force) FORCE=1; shift ;;
+    --show-hardware-config) SHOW=1; shift ;;
+    -h|--help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "solnix-generate-config: unknown argument $1 (see --help)" >&2; exit 2 ;;
+  esac
+done
+[ "$ROOT" = / ] && ROOT=""
+[ -n "$DIR" ] || DIR="$ROOT/etc/nixos"
+# absolute: a bare "dir#host" is read by nix as a flake REGISTRY name, not a path
+case "$DIR" in /*) : ;; *) DIR="$(pwd)/$DIR" ;; esac
+[ -n "$HOST" ] || HOST=$(hostname 2>/dev/null)
+case "$HOST" in ''|solnix-installer|unknown) HOST=solnix ;; esac
+case "$HOST" in *[!A-Za-z0-9-]*) echo "solnix-generate-config: host name '$HOST' must be letters, digits, '-'" >&2; exit 2 ;; esac
+
+# --- detection -----------------------------------------------------------
+# Wired NICs: every physical Ethernet datalink (dladm show-phys).
+_nics=$(dladm show-phys -p -o link,media 2>/dev/null | awk -F: '$2=="Ethernet"{print $1}')
+# Wifi datalinks that already attached (a driver with firmware).
+_wlinks=$(dladm show-phys -p -o link,media 2>/dev/null | awk -F: '$2=="WiFi"{print $1}')
+# Intel wifi chips by PCI id, whether or not a driver attached (none does yet).
+# pcieadm reads the PCI tree without privilege; prtconf -pv needs /dev/openprom
+# (root only, measured), so it is only the fallback.
+_ids=$( { /usr/lib/pci/pcieadm show-devs -p -o vid,did 2>/dev/null | tr 'A-F' 'a-f' | sed 's/:/,/'
+          prtconf -pv 2>/dev/null | grep -ioE "pci(ex)?8086,[0-9a-f]{4}" | sed 's/^pci\(ex\)\{0,1\}//'; } | sort -u)
+_intelwifi=$(echo "$_ids" | grep -xE '8086,(2723|2725|02f0|06f0|34f0|3df0|43f0|a0f0|51f0|54f0|7af0|7e40|a370|9df0|31dc|08b1|08b2|095a|095b|3165|3166|24f3|24fd|2526|30dc)')
+_disk=$(diskinfo -Hp 2>/dev/null | awk -F'\t' '{print $2" ("$3" "$4", "$1")"}' | head -4)
+
+_hw() {
+  echo "# Do not modify this file: solnix-generate-config regenerates it, and"
+  echo "# configuration.nix imports it (the NixOS hardware-configuration.nix shape)."
+  echo "# Detected on $(hostname 2>/dev/null) $(date -u +%Y-%m-%dT%H:%MZ 2>/dev/null)."
+  [ -n "$_disk" ] && echo "$_disk" | sed 's/^/#   disk: /'
+  echo "{ lib, ... }:"
+  echo "{"
+  echo "  # Wired NICs found by dladm show-phys, each brought up by DHCP; set"
+  echo "  # ipv4.addresses + networking.defaultGateway in configuration.nix for static."
+  echo "  # mkOverride 900: above base.nix's mkDefault (it enables ena0, the EC2 NIC),"
+  echo "  # below a plain setting in configuration.nix, which therefore wins."
+  echo "  networking.interfaces = {"
+  case " $(echo $_nics) " in *" ena0 "*) : ;; *) echo "    ena0.dhcp = lib.mkOverride 900 false;" ;; esac
+  for _n in $_nics; do echo "    $_n.dhcp = lib.mkOverride 900 true;"; done
+  [ -n "$_nics" ] || echo "    # no wired Ethernet datalink found (USB dongle unplugged?)"
+  echo "  };"
+  echo "  # Name servers: base.nix sets EC2's (169.254.169.253, 8.8.8.8). For your own,"
+  echo "  # in configuration.nix: networking.nameservers = lib.mkForce [ \"1.1.1.1\" ];"
+  if [ -n "$_intelwifi" ]; then
+    echo "  # Intel wifi found by PCI id: $(echo $_intelwifi). Firmware-only options exist"
+    echo "  # (modules/config/wireless-iwx.nix); no driver attaches yet, so none is enabled:"
+    echo "  # hardware.wirelessIwx.enable = true;   # AX2xx (iwx)"
+    echo "  # hardware.wirelessIwm.enable = true;   # AC 7260-9560 (iwm; the X1's 8086:a370)"
+  fi
+  [ -n "$_wlinks" ] && echo "  # wifi datalinks attached now: $(echo $_wlinks)"
+  echo "}"
+}
+
+if [ "$SHOW" = 1 ]; then _hw; exit 0; fi
+
+mkdir -p "$DIR" || { echo "solnix-generate-config: cannot create $DIR" >&2; exit 1; }
+echo "writing $DIR/hardware-configuration.nix..." >&2
+_hw > "$DIR/hardware-configuration.nix" || exit 1
+
+_fn="$DIR/configuration.nix"
+if [ "$FORCE" = 1 ] || [ ! -e "$_fn" ]; then
+  echo "writing $_fn..." >&2
+  cat > "$_fn" <<EOF
+# Edit this configuration file to define what should be installed on this
+# system, then install it:
+#   solnix-install --flake '$DIR#$HOST'
+# Options are the solnix modules' (modules/), which follow NixOS's names.
+{ config, lib, pkgs, ... }:
+{
+  imports = [ ./hardware-configuration.nix ];
+
+  networking.hostName = "$HOST";
+
+  # An administrator. solnix-install also offers to create one interactively;
+  # declare it here instead to keep it in the configuration (NixOS: users.users).
+  # users.users.alice = {
+  #   uid = 1000;
+  #   group = "staff";
+  #   home = "/home/alice";
+  #   extraGroups = [ "sysadmin" ];
+  #   profiles = [ "Primary Administrator" ];   # pfexec, the illumos sudo
+  # };
+
+  # Packages on PATH (pkgs.solnix.*, built from source in the solnix repo).
+  environment.systemPackages = with pkgs.solnix; [ git tmux ];
+}
+EOF
+else
+  echo "warning: not overwriting existing $_fn" >&2
+fi
+
+_fn="$DIR/flake.nix"
+if [ "$FORCE" = 1 ] || [ ! -e "$_fn" ]; then
+  echo "writing $_fn..." >&2
+  cat > "$_fn" <<EOF
+{
+  inputs.solnix.url = "git+https://codeberg.org/gregburd/solnix.git?ref=main";
+
+  outputs = { solnix, ... }: {
+    solnixConfigurations.$HOST = solnix.lib.solnixSystem {
+      system = "x86_64-solaris";
+      pkgs = solnix.lib.mkPkgs { };
+      modules = [
+        "\${solnix}/configurations/base.nix"
+        ./configuration.nix
+      ];
+    };
+  };
+}
+EOF
+else
+  echo "warning: not overwriting existing $_fn" >&2
+fi
+echo "" >&2
+echo "Edit $DIR/configuration.nix, then:  solnix-install --flake '$DIR#$HOST'" >&2

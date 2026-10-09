@@ -94,7 +94,10 @@ usage: solnix-install [--disk <target>] [--flake <ref>#<attr>]
 
   --git    clone a config repo first, then resolve --flake inside it.
            Use an https:// URL: the live media has no ssh key.
-  --flake  the system configuration to build, e.g. 'github:<you>/<repo>#<host>'
+  --flake  the system configuration to build, e.g. 'github:<you>/<repo>#<host>',
+           or a local directory: solnix-generate-config --dir /var/tmp/cfg writes
+           one from this machine's hardware ('/var/tmp/cfg#<host>'); a local
+           directory is copied to /etc/nixos on the target
   --home | --home-manager
            a home-manager configuration, e.g. .#USER@HOST
            (auto-detected from the same flake when omitted)
@@ -2199,6 +2202,27 @@ log "BE verified: kernel, early set, inittab stage-2 mount, SMF repository, /boo
 mkdir -p "$ALTROOT/run"
 rm -f "$ALTROOT/etc/zfs/zpool.cache" "$ALTROOT/etc/solnix-autoinstall" 2>/dev/null || true
 log "datasets: $POOL/nix + $POOL${HOME_BASE} created outside $BEDS"
+
+# 3e'. /etc/nixos: a configuration that came from a LOCAL directory (a
+# solnix-generate-config output, or the --git clone) goes onto the target, as
+# NixOS's manual has the user write /mnt/etc/nixos, so solnix-rebuild finds
+# /etc/nixos/flake.nix with no --flake. A remote ref (github:, git+https:) is
+# not copied: its source of truth is the remote. A path:/ prefix is a local dir too.
+_cfgsrc=""
+if [ -n "$FLAKE_REF" ]; then
+  _cfgsrc="${FLAKE_REF%%#*}"; _cfgsrc="${_cfgsrc#path:}"
+  case "$_cfgsrc" in /*) [ -f "$_cfgsrc/flake.nix" ] || _cfgsrc="" ;; *) _cfgsrc="" ;; esac
+fi
+if [ -n "$_cfgsrc" ]; then
+  if [ -h "$ALTROOT/etc/nixos" ] || { [ -e "$ALTROOT/etc/nixos" ] && [ ! -d "$ALTROOT/etc/nixos" ]; }; then
+    log "note: /etc/nixos on the target is not a directory (the configuration manages it); the local flake was not copied"
+  else
+    mkdir -p "$ALTROOT/etc/nixos" && ( cd "$_cfgsrc" && tar cf - . ) | ( cd "$ALTROOT/etc/nixos" && tar xf - ) \
+      && [ -f "$ALTROOT/etc/nixos/flake.nix" ] \
+      && log "copied the configuration $_cfgsrc to /etc/nixos on the target (solnix-rebuild switch uses it)" \
+      || log "WARNING: could not copy $_cfgsrc to the target's /etc/nixos; copy it after first boot"
+  fi
+fi
 
 # ---------------------------------------------------------------------------
 # 3f. /home LAYOUT, on the BE that install-be just laid.

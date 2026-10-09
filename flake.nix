@@ -203,6 +203,7 @@
           "bash" "coreutils" "diffutils" "findutils" "gettext" "git" "gnugrep" "gnumake"
           "gnused" "gnutar" "home-manager" "htop" "jq" "less" "libiconv" "lndir" "ncurses"
           "openssh" "tmux" "top" "vi" "xz" "binutils" "gccWrapper" "solnix-dev"
+          "gzip" "nano" "rsync" "smartmontools"
         ] (mkPkgs { }).solnix;
       } // lib.genAttrs buildSystems (_buildSystem: {
         # the full system closure (T2.8); realise on the illumos host.

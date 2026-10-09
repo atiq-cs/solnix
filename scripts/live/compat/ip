@@ -1,0 +1,14 @@
+#!/sbin/sh
+# ip -- a Linux-named WRAPPER for the read-only iproute2 forms the NixOS manual
+# uses ("check ip a"), over illumos dladm(8)/ipadm(8)/netstat(8). Changing the
+# network is done with ipadm/dladm directly (see /root/README) or
+# `solnix-install --net`.
+PATH=/usr/sbin:/usr/bin:/sbin; export PATH
+case "${1:-} ${2:-}" in
+  "a "*|"addr "*|"address "*) exec ipadm show-addr ;;
+  "l "*|"link "*)             dladm show-phys; echo; exec dladm show-link ;;
+  "r "*|"route "*)            exec netstat -rn ;;
+  "n "*|"neigh "*)            exec arp -an ;;
+  *) echo "usage: ip {a|link|route|neigh}   (read-only wrapper over ipadm/dladm/netstat; see /root/README)" >&2
+     [ -z "${1:-}" ] || exit 2 ;;
+esac

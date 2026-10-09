@@ -1,0 +1,32 @@
+#!/sbin/sh
+# lsblk -- a Linux-named WRAPPER over illumos diskinfo(8) + prtvtoc(8) + fstyp(8),
+# for NixOS-manual muscle memory on the solnix installer media. It is not
+# util-linux lsblk: it prints one line per disk and one per labelled slice, and
+# takes only -d (disks only) and -h. illumos names disks cXtYdZ (no /dev/sdX);
+# a slice is cXtYdZsN, the whole disk for zpool/format is the bare cXtYdZ.
+PATH=/usr/sbin:/usr/bin:/sbin; export PATH
+case "${1:-}" in
+  -h|--help) echo "usage: lsblk [-d]   (wrapper over: diskinfo, prtvtoc, fstyp; see /root/README)"; exit 0 ;;
+  -d|--nodeps) _nodeps=1 ;;
+  '') _nodeps=0 ;;
+  *) echo "lsblk: only -d is supported (this is a wrapper over diskinfo/prtvtoc)" >&2; exit 2 ;;
+esac
+# bytes -> a short human size (awk: no GNU numfmt on the world)
+_h() { awk -v b="$1" 'BEGIN{ split("B K M G T P",u," "); i=1; while (b>=1024 && i<6) { b/=1024; i++ } printf (i==1?"%d%s":"%.1f%s"), b, u[i] }'; }
+# disks imported in a pool, for the MOUNTPOINT/POOL column
+# (illumos zpool status prints vdevs as bare cXtYdZsN, measured; -P adds nothing)
+_pools=$(zpool status 2>/dev/null | awk '/^ *pool:/{p=$2} $1 ~ /^(\/dev\/dsk\/)?c[0-9]+(t[0-9A-Fa-f]+)?d[0-9]+/ {n=$1; sub(".*/","",n); print n, p}')
+printf '%-28s %8s %-5s %-8s %-4s %s\n' NAME SIZE TYPE FSTYPE RM MODEL
+diskinfo -Hp 2>/dev/null | while IFS='	' read -r _type _disk _vid _pid _size _rmv _ssd; do
+  printf '%-28s %8s %-5s %-8s %-4s %s\n' "$_disk" "$(_h "$_size")" disk "" "$_rmv" "$_vid $_pid ($_type${_ssd:+, ssd=$_ssd})"
+  [ "$_nodeps" = 1 ] && continue
+  # slices from the label (VTOC/EFI). prtvtoc needs read access to the raw disk.
+  _bps=$(prtvtoc "/dev/rdsk/$_disk" 2>/dev/null | awk '/bytes\/sector/{print $2; exit}')
+  prtvtoc -h "/dev/rdsk/$_disk" 2>/dev/null | while read -r _s _tag _fl _first _count _last _mnt; do
+    _sz=$(( _count * ${_bps:-512} ))
+    _fs=$(fstyp "/dev/rdsk/${_disk}s$_s" 2>/dev/null | head -1)
+    _p=$(echo "$_pools" | awk -v d="${_disk}s$_s" '$1==d{print "pool="$2}')
+    printf '  %-26s %8s %-5s %-8s %-4s %s\n' "${_disk}s$_s" "$(_h "$_sz")" part "${_fs:--}" "" "tag=$_tag $_p${_mnt:+ $_mnt}"
+  done
+done
+[ -n "$(diskinfo -Hp 2>/dev/null | head -1)" ] || { echo "lsblk: diskinfo listed no disks (run as root; 'format </dev/null' lists them too)" >&2; exit 1; }

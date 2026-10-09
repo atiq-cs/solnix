@@ -174,6 +174,8 @@ static_checks() {
   if [ -e "$R/etc/solnix-autoinstall" ]; then _fail "/etc/solnix-autoinstall present (would auto-wipe a disk!)"
   else _ok "/etc/solnix-autoinstall absent (install is interactive)"; fi
 
+  install_tools_check "$R"
+
   # LESSON (login dns stall, measured): the live hostname must be in /etc/hosts, or
   # every login-path lookup goes to DNS at ~3.5s per NXDOMAIN. And nsswitch MUST keep
   # dns -- removing it cut the delay but broke nix's flake fetch ("Could not resolve
@@ -507,6 +509,58 @@ runnability_check_closure() {
   [ "$bad" = 0 ] && _ok "runnability (closure): all $n profile/core binaries resolve every library inside the image (chroot ldd)"
 }
 
+# INSTALL TOOLS (NixOS minimal-ISO parity, docs/nixos-iso-tool-parity.md): every
+# tool /root/README promises is on the media's PATH and resolves INSIDE the image.
+# ELFs: chroot ldd (loads, never runs: the svc.configd lesson); scripts: a #!
+# line. /root/README itself must be a real file naming the wrappers.
+INSTALL_TOOLS="lsblk lspci lsusb ip solnix-generate-config nano rsync gzip gunzip xz jq tmux smartctl
+  shred stat readlink realpath timeout sha256sum less htop git curl ssh scp nix"
+# _inr_walk <root> <path>: like _inr, but re-roots EVERY absolute link on the way
+# (run/current-system and sw are links mid-path; _inr follows only the last one,
+# so through them it read the BUILD host's store).
+_inr_walk() {
+  local R="$1" rest="$2" cur="$1" c t n=0
+  while [ -n "$rest" ]; do
+    c=${rest%%/*}; [ "$c" = "$rest" ] && rest="" || rest=${rest#*/}
+    [ -z "$c" ] || [ "$c" = . ] && continue
+    cur="$cur/$c"
+    while [ -h "$cur" ] && [ $n -lt 40 ]; do
+      t=$(_rl "$cur"); n=$((n+1))
+      case "$t" in /*) cur="$R"; rest="${t#/}${rest:+/$rest}"; continue 2 ;;
+                   *)  cur=$(dirname "$cur"); rest="$t${rest:+/$rest}"; continue 2 ;; esac
+    done
+  done
+  [ -e "$cur" ] && [ ! -h "$cur" ] && echo "$cur"
+}
+install_tools_check() {
+  local R="$1" t real bad=0 n=0 rel out
+  for t in $INSTALL_TOOLS; do
+    real=""
+    for rel in run/current-system/sw/bin/$t run/current-system/sw/sbin/$t; do
+      real=$(_inr_walk "$R" "$rel") && break
+    done
+    if [ -z "$real" ]; then _fail "install tool $t: not on the media's PATH (/run/current-system/sw/{bin,sbin})"; bad=$((bad+1)); continue; fi
+    n=$((n+1))
+    if LC_ALL=C od -An -N4 -tx1 "$real" 2>/dev/null | grep -q '7f 45 4c 46'; then
+      if command -v chroot >/dev/null && [ -n "$(_inr "$R" usr/bin/ldd)" ]; then
+        out=$(chroot "$R" /usr/bin/ldd "/$rel" 2>&1 | grep -E 'not found|open failed|wrong ELF class')
+        [ -z "$out" ] || { _fail "install tool $t: $(echo "$out" | head -1)"; bad=$((bad+1)); }
+      fi
+    elif [ "$(head -c 2 "$real" 2>/dev/null)" != '#!' ]; then
+      _fail "install tool $t: neither an ELF nor a #! script"; bad=$((bad+1))
+    fi
+  done
+  [ "$bad" = 0 ] && _ok "install tools: all $n README tools on PATH, resolving inside the image (lsblk/lspci/nano/rsync ... parity)"
+  if [ -s "$R/root/README" ] && [ ! -h "$R/root/README" ]; then
+    local miss=""
+    for t in lsblk lspci lsusb solnix-generate-config solnix-install nano rsync; do
+      grep -q "$t" "$R/root/README" || miss="$miss $t"
+    done
+    if [ -z "$miss" ]; then _ok "/root/README present (a real file) and names the install tools"
+    else _fail "/root/README does not mention:$miss"; fi
+  else _fail "/root/README missing (or a link): the welcome + tools page the motd points at"; fi
+}
+
 # boot_archive size ceiling (the X1 firmware refused an oversized raw archive).
 size_check() {
   local ba="$1" cap="${RD_MAX_RAW_BYTES:-816119808}"   # measured X1 EFI hard limit
@@ -557,12 +611,19 @@ selftest() {
   mkdir -p "$T/usr/bin"; printf '\177ELF\002\001\001' > "$T/usr/bin/ls"
   printf 'trusted-public-keys = cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk=\nsubstituters = https://cache.nixos.org\n' >> "$T/etc/nix/nix.conf"
   echo 'jdoe:x:1000:10::/home/jdoe:/bin/sh' > "$T/etc/passwd"
+  # install tools: the defective root has no /run/current-system and no /root/README,
+  # so every README tool and the README itself must FAIL (one per tool + 1).
+  local ib=$FAIL; install_tools_check "$T" >/dev/null 2>&1
+  local _nt; _nt=$(echo $INSTALL_TOOLS | wc -w | tr -d ' ')
+  echo "  install-tools check fired on the defective root: $((FAIL-ib)) (expect $((_nt+1)))"
+  [ $((FAIL-ib)) -eq $((_nt+1)) ] || { echo "  FAIL: install-tools check is vacuous"; return 1; }
+  FAIL=$ib
   local before=$FAIL cbefore
   cbefore=$FAIL; closure_contract_checks "$T" >/dev/null 2>&1 || true
   echo "  closure-contract checks fired on the defective root: $((FAIL-cbefore)) (expect >= 9)"
   [ $((FAIL-cbefore)) -ge 9 ] || { echo "  FAIL: closure-contract checks are vacuous"; return 1; }
   # the CA-store check alone, on the defective root (no /etc/ssl) and on a dangling link
-  cbefore=$FAIL; ( closure_contract_checks "$T" 2>&1 ) | grep -q 'no /etc/ssl/certs/ca-certificates.crt link' \
+  cbefore=$FAIL; _cao=$( closure_contract_checks "$T" 2>&1 ); echo "$_cao" | grep -q 'no /etc/ssl/certs/ca-certificates.crt resolving' \
     && echo "  CA-store check fires on a root with no /etc/ssl/certs/ca-certificates.crt" \
     || { echo "  FAIL: CA-store check did not fire on a root without the bundle"; return 1; }
   FAIL=$cbefore
@@ -577,7 +638,21 @@ selftest() {
   mkdir -p "$G/etc/ssl/certs" "$G/nix/store/22222222222222222222222222222222-cacert/etc/ssl/certs"
   echo '-----BEGIN CERTIFICATE-----' > "$G/nix/store/22222222222222222222222222222222-cacert/etc/ssl/certs/ca-bundle.crt"
   ln -s /nix/store/22222222222222222222222222222222-cacert/etc/ssl/certs/ca-bundle.crt "$G/etc/ssl/certs/ca-certificates.crt"
-  local gb=$FAIL; closure_contract_checks "$G" > "$WORK/good.out" 2>&1 || true
+  # what checks 9-14 require of a real image (install-be lays all of it): pkg(5)
+  # ownership of the dladm/ipadm state, update-man-index preset off, the setuid
+  # copies, the /dev/sad link autopush needs.
+  printf 'root:x:0:0::/root:/bin/sh\ndladm:x:15:65::/:\nnetadm:x:16:65::/:\n' > "$G/etc/passwd"
+  mkdir -p "$G/etc/dladm" "$G/etc/ipadm" "$G/etc/svc/profile/site" "$G/run/wrappers/bin" "$G/dev/sad"
+  : > "$G/etc/dladm/datalink.conf"
+  if [ "$(id -u)" = 0 ]; then chown 15 "$G/etc/dladm" "$G/etc/dladm/datalink.conf"; chown 16 "$G/etc/ipadm"
+  else  # unprivileged: give the accounts this user's uid, so ownership still matches
+    _me=$(id -u); printf 'root:x:0:0::/root:/bin/sh\ndladm:x:%s:65::/:\nnetadm:x:%s:65::/:\n' "$_me" "$_me" > "$G/etc/passwd"
+  fi
+  echo '<service name="system/update-man-index" version="1" type="service"><instance name="default" enabled="false"/></service>' \
+    > "$G/etc/svc/profile/site/solnix.xml"
+  for _b in passwd su ping w crontab login; do : > "$G/run/wrappers/bin/$_b"; chmod 4555 "$G/run/wrappers/bin/$_b"; done
+  ln -s ../../devices/pseudo/sad@0:admin "$G/dev/sad/admin"
+  local gb=$FAIL; ACCEPT_ROOT_UID=$(id -u) closure_contract_checks "$G" > "$WORK/good.out" 2>&1 || true
   # the store-DB validity check needs a real store; on a fake root it may only SKIP or FAIL that one line
   local gfails; gfails=$(grep -c 'FAIL:' "$WORK/good.out"); grep 'FAIL:' "$WORK/good.out" | grep -v 'store DB' | sed 's/^/    good-root /'
   if [ "$(grep 'FAIL:' "$WORK/good.out" | grep -vc 'store DB')" != 0 ]; then echo "  FAIL: a GOOD closure root fails the contract (checks are wrong)"; return 1; fi
