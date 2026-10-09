@@ -147,6 +147,14 @@ in
     set hid:hid_errlevel = 0
   '';
 
+  # No automatic GC on the media. The ramdisk runs with ~44 MB free, below the
+  # 128 MB min-free first-boot-defaults.nix sets, so the first nix command at boot
+  # (solnix-channel-init's nix-env) started a GC on the live store (measured
+  # under KVM: "error: executing 'lsof'" on the console at the login prompt). The
+  # media's store is fixed, and the installer writes to the target pool's store.
+  nix.settings.min-free = 0;
+  nix.settings.max-free = 0;
+
   # The live root is a RAM ramdisk: cap the ARC so the target's bootadm/digest
   # always has memory (measured: an uncapped ARC OOM-killed digest on install).
   environment.generatedEtc."system.d/solnix-live-arc" = ''

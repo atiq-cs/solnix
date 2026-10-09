@@ -345,13 +345,22 @@ closure_contract_checks() {
   # 8. a TLS trust store at the names curl/git/openssl look for (NixOS security/ca.nix),
   #    resolving into the media's store. Without it the media's curl failed every HTTPS
   #    fetch with rc 77 and the installer reported "network is NOT up" (X1, closure1).
-  local ca; ca=$(_inr "$R" etc/ssl/certs/ca-certificates.crt)
-  case "$(_rl "$R/etc/ssl/certs/ca-certificates.crt")" in
-    /nix/store/*) if [ -n "$ca" ] && grep -q 'BEGIN CERTIFICATE' "$ca" 2>/dev/null
-                  then _ok "/etc/ssl/certs/ca-certificates.crt -> a CA bundle in the media's store"
-                  else _fail "/etc/ssl/certs/ca-certificates.crt names a store path the media does not hold"; fi ;;
-    *) _fail "no /etc/ssl/certs/ca-certificates.crt link into the store (curl/git HTTPS fail with rc 77)" ;;
-  esac
+  #    The file is a link chain: etc/ssl/certs/ca-certificates.crt -> ../../static/...
+  #    (managed /etc, install-be) -> etc/static -> <toplevel etc> -> the cacert store
+  #    path. What matters is that the chain ends, inside the media, at a real bundle
+  #    in the media's store.
+  local ca cr; ca=$(_inr "$R" etc/ssl/certs/ca-certificates.crt)
+  cr=$ca
+  if [ -z "$ca" ]; then
+    _fail "no /etc/ssl/certs/ca-certificates.crt resolving in the media (curl/git HTTPS fail with rc 77)"
+  else
+    case "${cr#"$R"}" in
+      /nix/store/*) if grep -q 'BEGIN CERTIFICATE' "$ca" 2>/dev/null
+                    then _ok "/etc/ssl/certs/ca-certificates.crt -> a CA bundle in the media's store (${cr#"$R"})"
+                    else _fail "/etc/ssl/certs/ca-certificates.crt resolves to a file with no certificate"; fi ;;
+      *) _fail "/etc/ssl/certs/ca-certificates.crt is a plain file outside the store (${cr#"$R"})" ;;
+    esac
+  fi
   # 9. state the gate gives to a non-root owner is owned by it (pkg(5) ownership,
   #    applied by install-be from pkgs/illumos/data/drivers/etc-var-attrs.tsv).
   #    Root-owned /etc/dladm: dlmgmtd (dladm) cannot record a new link and the NIC
