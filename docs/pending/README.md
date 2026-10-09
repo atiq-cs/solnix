@@ -16,3 +16,8 @@ batched so that rebuild happens once.
   "Not supported UTF-8 to UTF-16" (measured on dixi). Needs a gate proto rebuild
   (with the iconv_modules output kept) -- the same full rebuild as the item above.
   Until then gettext links GNU libiconv, as nixpkgs does off glibc.
+- builders-need-store-tools.md: the builders run with PATH=/usr/gnu/bin:/usr/bin:/usr/sbin
+  and call GNU tools and /usr/gcc/14 from the OpenIndiana build host. A solnix system has
+  none of them, so `nix build` of any solnix package fails there (measured on dixi:
+  "sha256sum: command not found"). The fix is a store-tool stdenv; it changes every
+  hash, so it joins the same rebuild.
