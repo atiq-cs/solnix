@@ -46,22 +46,13 @@ in
       TZ = cfg.timeZone;
     };
 
-    # 5. `sudo` -> pfexec: illumos uses RBAC/pfexec for privilege escalation, but
-    # muscle-memory + many scripts type `sudo`. A shell FUNCTION only helps
-    # interactive shells that source this (not scripts or exec'd programs, and
-    # ksh93 doesn't inherit it), so the image ALSO installs a real /usr/bin/sudo
-    # wrapper file (see oi-make-declarative-be.sh). The function below is a
-    # belt-and-suspenders for interactive shells; the wrapper is the real mechanism.
-    # Only active if a real sudo isn't on PATH (a user who installs the sudo pkg wins).
-    environment.shellInit = ''
-      if ! command -v sudo >/dev/null 2>&1; then
-        sudo() { pfexec "$@"; }
-      fi
-    '';
+    # 5. `sudo`: a real command in system.path (modules/config/sudo.nix), RBAC
+    # underneath. It replaces the shell function that was here, which only
+    # interactive shells that sourced this file saw.
 
-    # 4. MOTD — a helpful first-login message (edition + how to install + docs).
+    # 4. MOTD — a helpful first-login message (release + how to install + docs).
     environment.generatedEtc."motd" = ''
-      solnix ${config.solnix.edition or "unstable"} (illumos + Nix)
+      solnix ${config.solnix.release} (illumos + Nix), version ${config.solnix.version}
 
         install a package:   nix profile install nixpkgs#<name>
         list installed:      nix profile list

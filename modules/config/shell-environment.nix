@@ -99,6 +99,10 @@ let
 
       export NIX_PROFILES="${nixProfiles}"
 
+      # NixOS runs extraInit for every shell, after the variables are set
+      # (shells-environment.nix's set-environment), not only interactive ones.
+      ${cfg.extraInit}
+
       ${cfg.shellInit}
     fi
 
@@ -110,7 +114,6 @@ let
     if [ -n "''${PS1:-}" ]; then
       :
 ${aliasLines}
-      ${cfg.extraInit}
     fi
   '';
 

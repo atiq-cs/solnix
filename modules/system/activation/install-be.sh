@@ -67,7 +67,7 @@ _stage=.solnix-stock.$$
 if [ ! -e var/svc ] || [ ! -e etc/passwd ]; then
   mkdir -p "$_stage"
   ( cd "$R$STOCK" && tar cf - etc var ) | ( cd "$_stage" && tar xf - ) || die "stage the stock /etc and /var"
-  chmod -R u+w "$_stage"
+  find "$_stage" ! -type l -exec chmod u+w {} + || die "chmod u+w the stock stage"
   for _t in etc var; do
     # files and links not already in the BE move in; directories are created
     # (their owners and modes are set by the ownership pass below).
@@ -170,21 +170,62 @@ for e in $(ls "$R$KERNEL/boot"); do
   case $e in solaris) mkdir -p boot/solaris; ( cd "$R$KERNEL/boot" && tar cf - solaris ) | ( cd boot && tar xf - ) ;;
              *) [ -e "boot/$e" ] || cp -R "$R$KERNEL/boot/$e" boot/ ;; esac
 done
-chmod -R u+w boot 2>/dev/null
+# find ! -type l, not chmod -R, which follows links: boot/solaris/bin/root_archive
+# -> ../../../usr/sbin/root_archive resolves into the userland store path, and
+# chmod -R made that store file 0755 (measured on the X1's live store).
+find boot ! -type l -exec chmod u+w {} + 2>/dev/null
 # platform/i86pc/amd64 holds bootadm's boot_archive: writable on a real BE. On a live
 # root its files are hard links into the store, so a chmod would make the STORE
 # writable; the live root builds no boot_archive there (step 8), so leave it.
-[ -n "${SOLNIX_LIVE:-}" ] || chmod -R u+w platform/i86pc/amd64 2>/dev/null
+[ -n "${SOLNIX_LIVE:-}" ] || find platform/i86pc/amd64 ! -type l -exec chmod u+w {} + 2>/dev/null
 [ -d boot/fonts ] || die "/boot/fonts missing after copy"
 
-# 3. /etc from the toplevel over the stock tree.
+# 3. /etc from the toplevel over the stock tree, as NixOS's setup-etc.pl lays it:
+#    etc/static is the generation's etc store path, and each managed file is a
+#    link into it, so the generation owns the file and the next one replaces it.
+#    The links are relative (etc/ssh/sshd_config -> ../static/ssh/sshd_config;
+#    NixOS writes /etc/static/...) so they also resolve under an altroot.
+#    etc/static itself names the store path; nothing reads a managed file before
+#    inittab's first sysinit line mounts <pool>/nix (step 4).
+# etc_copy: the files that stay REAL copies, NixOS's environment.etc.<n>.mode.
+#    The store is writable by root here (no read-only bind mount on illumos), and a
+#    root write THROUGH a link rewrites the store file (measured: `cp` and `>>` onto
+#    a link to a 0444 file), so anything written in place must be a copy.
+etc_copy() {
+  case $1 in
+    # replaced from the DHCP lease (solnix-net, net-svc, dns-install).
+    resolv.conf) return 0 ;;
+    # net-loc and dns-install `cp` a template over it in place.
+    nsswitch.conf) return 0 ;;
+    # solnix-install edits it on the target (PermitRootLogin, UsePAM).
+    ssh/sshd_config) return 0 ;;
+    # init reads it before inittab mounts <pool>/nix.
+    default/init) return 0 ;;
+    # boot-archive inputs: the kernel reads them from the archive, where a link
+    # into /nix would dangle.
+    system|system.d/*) return 0 ;;
+    # `coreadm -U` imports it into SMF and renames it to coreadm.conf.old.
+    coreadm.conf) return 0 ;;
+    # install-be filters pkcs11.conf below; cryptoadm rewrites it.
+    crypto/*) return 0 ;;
+  esac
+  return 1
+}
+relink "$ETC" etc/static
 ( cd "$R$ETC" && find . -type f -o -type l ) | while read -r f; do
   f=${f#./}; mkdir -p "etc/$(dirname "$f")"
-  case $f in passwd|shadow|group|user_attr) continue;; esac
+  case $f in passwd|shadow|group|user_attr) continue;; esac   # merged below
   rm -f "etc/$f"
-  # links stay links (etc/ssl/certs/* -> the cacert store path, as NixOS's /etc does)
-  if [ -h "$R$ETC/$f" ]; then ln -s "$(ls -ld "$R$ETC/$f" | sed -n 's/.* -> //p')" "etc/$f"
-  else cp "$R$ETC/$f" "etc/$f"; fi
+  if etc_copy "$f"; then
+    if [ -h "$R$ETC/$f" ]; then ln -s "$(rl "$R$ETC/$f")" "etc/$f"; else cp "$R$ETC/$f" "etc/$f"; fi
+  else
+    ln -s "$(echo "$f" | sed 's,[^/]*/,../,g; s,[^/]*$,,')static/$f" "etc/$f"
+  fi || { echo "install-be: FATAL: lay /etc/$f" >&2; exit 1; }
+done || die "laying the managed /etc"
+# links into etc/static that this generation no longer has (a file a previous
+# generation managed): removed, as setup-etc.pl's cleanup does.
+find etc -type l ! -name static | while read -r l; do
+  case "$(rl "$l")" in *static/"${l#etc/}") [ -e "$R$ETC/${l#etc/}" ] || [ -h "$R$ETC/${l#etc/}" ] || rm -f "$l" ;; esac
 done
 # accounts: stock lines stay; the toplevel's users (users.users) replace same-named ones.
 # A declared user with no hashedPassword (shadow "NP") keeps the password already
@@ -246,8 +287,26 @@ fi
 
 # 5. SMF: fresh seed repository + solnix manifests (site dir, real files) + site profile.
 [ -e etc/svc/repository.db ] || { cp "$R$WORLD/lib/svc/seed/global.db" etc/svc/repository.db; chmod 0600 etc/svc/repository.db; }
-mkdir -p var/svc/manifest/site/solnix etc/svc/profile/site
-cp "$R$TOP"/manifest/solnix/*.xml var/svc/manifest/site/solnix/ 2>/dev/null
+# The manifests are REAL copies in a real /var/svc/manifest/site/solnix holding
+# exactly this generation's set. svccfg records a manifest by its realpath, and
+# `svccfg cleanup` (manifest-import's last step) deletes a service only when
+# every recorded manifest is gone AND under lib/svc/manifest or var/svc/manifest
+# (svccfg_libscf.c lscf_service_cleanup); a store path makes it skip the service.
+# Measured with a private repository: a manifest dir that is a link into the
+# store kept a removed service forever; real copies here dropped it at cleanup.
+# NOT /lib/svc/manifest/solnix: /lib/svc links into the userland store path, so a
+# write there lands in the store.
+_sm=var/svc/manifest/site/solnix
+[ -h "$_sm" ] && rm -f "$_sm"
+mkdir -p "$_sm" etc/svc/profile/site
+for _m in "$_sm"/*.xml; do
+  [ -e "$_m" ] || continue
+  [ -e "$R$TOP/manifest/solnix/${_m##*/}" ] || rm -f "$_m"   # a service this generation dropped
+done
+for _m in "$R$TOP"/manifest/solnix/*.xml; do
+  [ -e "$_m" ] || continue
+  rm -f "$_sm/${_m##*/}"; cp "$_m" "$_sm/" || die "copy the manifest ${_m##*/}"
+done
 cp "$R$TOP/site-profile.xml" etc/svc/profile/site/solnix.xml
 ( cd etc/svc/profile && relink generic_limited_net.xml generic.xml && relink platform_none.xml platform.xml && relink ns_files.xml name_service.xml )
 
@@ -337,6 +396,13 @@ drop_staging_roots() {   # $1 = gcroots dir, $2 = staging store root ("" = none)
 }
 drop_staging_roots "$G" "$R"
 relink /run/current-system "$G/current-system"; relink /run/booted-system "$G/booted-system"
+# root's channel subscription, as NixOS's tmpfiles rule `f /root/.nix-channels`:
+# written when absent, never overwritten (the admin's nix-channel --add wins).
+# /root lives in the BE, so a new BE starts from the previous one's copy.
+if [ -e "$R$ETC/solnix/root-nix-channels" ] && [ ! -e root/.nix-channels ]; then
+  mkdir -p root && cp "$R$ETC/solnix/root-nix-channels" root/.nix-channels && chmod 0644 root/.nix-channels \
+    || die "writing /root/.nix-channels"
+fi
 
 # 7b. /etc/system.d: the kernel reads only /etc/system.d/.self-assembly (modsysfile.c),
 #     which `bootadm update-archive` assembles from the directory. A live root skips

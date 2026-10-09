@@ -241,22 +241,14 @@ let
         /sbin/sh "$1/bin/install-be" "$1" || { echo "FATAL: install-be failed for $be" >&2; exit 1; }
       relink "$1" "$BEROOT_MP/run-current-system" 2>/dev/null || true
 
-      # stage the target's SMF manifests + site profile + activate into the BE so
-      # first boot of the new BE imports them (add-not-replace; design-smf §5).
-      # First drop stale solnix-generated manifests the target no longer declares
-      # (removal-on-switch across BEs), keeping the boot-plumbing hello/netcfg.
-      if [ -d "$BEROOT_MP/lib/svc/manifest/solnix" ] && [ -d "$1/manifest/solnix" ]; then
-        for old in "$BEROOT_MP/lib/svc/manifest/solnix/"*.xml; do
-          [ -e "$old" ] || continue
-          b=$(basename "$old")
-          case "$b" in solnix-hello.xml|solnix-netcfg.xml) continue;; esac
-          [ -e "$1/manifest/solnix/$b" ] || rm -f "$old"
-        done
-      fi
-      if [ -d "$1/manifest/solnix" ]; then
-        mkdir -p "$BEROOT_MP/lib/svc/manifest/solnix"
-        cp "$1/manifest/solnix/"*.xml "$BEROOT_MP/lib/svc/manifest/solnix/" 2>/dev/null || true
-      fi
+      # The target's SMF manifests are staged by install-be (real copies in the BE's
+      # /var/svc/manifest/site/solnix, exactly this generation's set), not here:
+      # the BE's /lib/svc is a link into the userland store path, so writing
+      # lib/svc/manifest/solnix or lib/svc/method/solnix-activate through it changed
+      # the store (measured on the X1: nix-store --verify-path of the userland
+      # failed "was modified!" after solnix-2 was laid). No manifest names
+      # /lib/svc/method/solnix-activate; manifest-import + the site profile activate
+      # a new BE at its first boot.
       # ⚠️ NO `cp -L` HERE. illumos cp REJECTS -L unless -r/-R is also given:
       # usr/src/cmd/mv/mv.c:271 sets errflg when (Hflg||Lflg||Pflg) && !(Rflg||rflg),
       # which falls through to usage() and exits 2 without creating the file. The
@@ -275,19 +267,6 @@ let
         mkdir -p "$BEROOT_MP/etc/svc/profile/site"
         cp "$1/site-profile.xml" "$BEROOT_MP/etc/svc/profile/site/solnix.xml" \
           || { echo "FATAL: failed to stage site-profile.xml into $BEROOT_MP" >&2; exit 1; }
-      fi
-      if [ -e "$1/activate" ]; then
-        mkdir -p "$BEROOT_MP/lib/svc/method"
-        cp "$1/activate" "$BEROOT_MP/lib/svc/method/solnix-activate" \
-          || { echo "FATAL: failed to stage the activate method into $BEROOT_MP" >&2; exit 1; }
-        chmod 0555 "$BEROOT_MP/lib/svc/method/solnix-activate" \
-          || { echo "FATAL: could not chmod the staged activate method" >&2; exit 1; }
-        # POST-CHECK, not a trusted exit status. The bug this replaces did not fail
-        # here at all: cp exited 2, the `&&` chain simply stopped, and the run went on
-        # to `beadm activate` -- making a BE the boot default with no activate method
-        # and printing success. So assert the file is really there before continuing.
-        [ -s "$BEROOT_MP/lib/svc/method/solnix-activate" ] \
-          || { echo "FATAL: activate method absent after staging -- refusing to activate a broken BE" >&2; exit 1; }
       fi
       bootadm update-archive -f -R "$BEROOT_MP" 2>&1 | tail -3 || true
 
@@ -326,77 +305,140 @@ let
     esac
   '';
 
-  # solnix-rebuild (T2.5): the convenience wrapper (switch|boot|test|rollback|
-  # list-generations). rollback = beadm activate the PREVIOUS BE (+ live-activate
-  # the previous toplevel if present) — NixOS's `nixos-rebuild --rollback` analog.
+  # solnix-rebuild (T2.5): nixos-rebuild's command line over switch-to-configuration
+  # and beadm. `nixos-rebuild` is the same script (system.path links both names),
+  # so scripts and habits written for NixOS work. rollback = beadm activate the
+  # PREVIOUS BE -- nixos-rebuild --rollback's analog.
   solnixRebuild = pkgs.writeScript "solnix-rebuild" ''
     #!/sbin/sh
-    # solnix-rebuild — convenience over switch-to-configuration + beadm.
-    #   solnix-rebuild switch|boot|test [toplevel]   (default toplevel = system profile)
-    #   solnix-rebuild switch|boot|test --flake <ref>#<host>
-    #   solnix-rebuild rollback                       (beadm activate previous BE)
+    # solnix-rebuild / nixos-rebuild -- build and activate a solnix configuration.
+    #   solnix-rebuild switch|boot|test [--flake <ref>[#<host>]] [toplevel]
+    #   solnix-rebuild build|dry-build  [--flake <ref>[#<host>]]
+    #   solnix-rebuild switch|boot --rollback       (also: solnix-rebuild rollback)
     #   solnix-rebuild list-generations
-    # --flake follows nixos-rebuild: build <ref>#solnixConfigurations.<host>, add it
-    # to the system profile (switch/boot; not for test), then hand it to that
-    # generation's own switch-to-configuration.
+    # As nixos-rebuild: with no --flake and no toplevel, /etc/nixos/flake.nix (if it
+    # exists) names the flake and the host name the configuration; --flake without
+    # #<host> means #$(hostname). switch and boot add the build to the system
+    # profile, then the NEW generation's own switch-to-configuration activates it.
+    # build leaves ./result and needs no root, as nixos-rebuild build does.
+    # Accepted and ignored for nixos-rebuild compatibility: --install-bootloader
+    # (every boot/switch writes the BE menu), --use-remote-sudo, --no-build-nix,
+    # --fast, --upgrade, --upgrade-all, --no-reexec. nix build options
+    # (--show-trace, -L, --option N V, --override-input I R, --impure, ...) are
+    # passed to nix build.
     set -u
-    PATH=/run/current-system/sw/bin:/usr/sbin:/usr/bin:/sbin:$PATH
-    # STC = the running generation's switch-to-configuration (solnix-rebuild is
-    # called from sw/bin, not from the toplevel's bin/).
+    PATH=/run/wrappers/bin:/run/current-system/sw/bin:/usr/sbin:/usr/bin:/sbin:$PATH
+    me=$(basename "$0")
+    # STC = the running generation's switch-to-configuration (this script runs from
+    # sw/bin, not from a toplevel's bin/).
     STC=/run/current-system/bin/switch-to-configuration
     PROFILES=/nix/var/nix/profiles
-    action="''${1:-switch}"; shift 2>/dev/null || true
-
+    usage() {
+      echo "usage: $me switch|boot|test|build|dry-build [--flake <ref>[#<host>]] [toplevel]" >&2
+      echo "       $me switch|boot --rollback | rollback | list-generations" >&2
+    }
     # default toplevel: the highest registered generation, else run-current-system.
-    # this minimal proto has no readlink(1); derive target via ls -l.
+    # illumos has no readlink(1); derive the target via ls -l.
     _readlink() { [ -h "$1" ] || return 1; ls -ld "$1" 2>/dev/null | sed -n 's/.* -> //p'; }
     default_top() {
       s=$(_readlink "$PROFILES/system" 2>/dev/null)
       [ -n "$s" ] && _readlink "$PROFILES/$s" 2>/dev/null && return
       _readlink /run-current-system 2>/dev/null
     }
+    need_root() { [ "$(id -u)" = 0 ] || { echo "$me $action: run as root (sudo or pfexec)" >&2; exit 1; }; }
 
-    case "$action" in
-      switch|boot|test)
-        if [ "''${1:-}" = --flake ]; then
-          ref="''${2:?--flake needs <ref>#<host>}"
-          case "$ref" in *#*) ;; *) ref="$ref#$(hostname)" ;; esac
-          fl="''${ref%%#*}"; host="''${ref#*#}"
-          [ "$(id -u)" = 0 ] || { echo "solnix-rebuild $action --flake: run as root (pfexec)" >&2; exit 1; }
-          out=$(nix --extra-experimental-features 'nix-command flakes' build --no-link --print-out-paths \
-                "$fl#solnixConfigurations.\"$host\".config.system.build.toplevel") \
-            || { echo "FATAL: building $ref failed" >&2; exit 1; }
-          [ -x "$out/bin/switch-to-configuration" ] || { echo "FATAL: $out is not a solnix toplevel" >&2; exit 1; }
-          if [ "$action" != test ]; then
-            nix-env -p "$PROFILES/system" --set "$out" || { echo "FATAL: nix-env --set $out failed" >&2; exit 1; }
-          fi
-          # the NEW generation's own switch-to-configuration, as nixos-rebuild runs
-          # the new toplevel's, so a change to activation takes effect with it.
-          exec /sbin/sh "$out/bin/switch-to-configuration" "$action" "$out"
-        fi
-        top="''${1:-$(default_top)}"
-        [ -n "$top" ] || { echo "no toplevel given and no registered generation" >&2; exit 1; }
-        [ -x "$top/bin/switch-to-configuration" ] && STC="$top/bin/switch-to-configuration"
-        exec /sbin/sh "$STC" "$action" "$top"
-        ;;
-      rollback)
-        # find the previous BE = the non-active BE that boots (highest solnix-<n>
-        # below the active one, or the other BE if only two). Simplest correct
-        # rule: the BE with the second-newest creation that is NOT active-on-reboot.
-        active_reboot=$(beadm list -H 2>/dev/null | awk -F';' '$3 ~ /R/ {print $1}')
-        prev=$(beadm list -H 2>/dev/null | awk -F';' -v a="$active_reboot" '$1!=a {print $1" "$6}' | sort -k2 | tail -1 | awk '{print $1}')
-        [ -n "$prev" ] || { echo "no previous BE to roll back to" >&2; beadm list 2>&1; exit 1; }
-        echo "rolling back: beadm activate $prev (was: $active_reboot)"
-        beadm activate "$prev" || { echo "FATAL: beadm activate $prev failed" >&2; exit 1; }
-        echo "== rolled back to BE $prev. Reboot to run it. =="
-        beadm list 2>&1 || true
-        ;;
-      list-generations|list)
-        exec /sbin/sh "$STC" list-generations
-        ;;
-      *)
-        echo "usage: solnix-rebuild switch|boot|test|rollback|list-generations [toplevel]" >&2; exit 1;;
+    # Parse by rotation: each original word is shifted off the front once; the
+    # words meant for nix build are appended at the back, so afterwards "$@" is
+    # exactly the nix build options, each still one word.
+    action=""; flake=""; top=""; rollback=0
+    n=$#
+    while [ "$n" -gt 0 ]; do
+      a=$1; shift; n=$((n - 1))
+      case $a in
+        switch|boot|test|build|dry-build|dry-run|dry-activate|list-generations|list|rollback)
+          [ -z "$action" ] || { echo "$me: two actions: $action and $a" >&2; exit 1; }
+          action=$a ;;
+        --flake)
+          [ "$n" -ge 1 ] || { echo "$me: --flake needs <ref>[#<host>]" >&2; exit 1; }
+          flake=$1; shift; n=$((n - 1)) ;;
+        --flake=*) flake=''${a#--flake=} ;;
+        --rollback) rollback=1 ;;
+        --install-bootloader|--use-remote-sudo|--no-build-nix|--fast|--upgrade|--upgrade-all|--no-reexec) : ;;
+        --option|--override-input)
+          [ "$n" -ge 2 ] || { echo "$me: $a needs two arguments" >&2; exit 1; }
+          set -- "$@" "$a" "$1" "$2"; shift 2; n=$((n - 2)) ;;
+        --max-jobs|-j|--cores|--builders|--log-format|-I|--include|--update-input)
+          [ "$n" -ge 1 ] || { echo "$me: $a needs an argument" >&2; exit 1; }
+          set -- "$@" "$a" "$1"; shift; n=$((n - 1)) ;;
+        --show-trace|-L|--print-build-logs|--impure|--refresh|--offline|--keep-going|-k|--keep-failed|-K|--fallback|--repair|-v|--verbose|--quiet|--accept-flake-config|--no-update-lock-file|--no-write-lock-file|--recreate-lock-file|--commit-lock-file|--no-registries)
+          set -- "$@" "$a" ;;
+        -h|--help) usage; exit 0 ;;
+        -*) echo "$me: unknown option $a" >&2; usage; exit 1 ;;
+        *) [ -z "$top" ] || { echo "$me: unexpected argument $a" >&2; usage; exit 1; }
+          top=$a ;;
+      esac
+    done
+    [ -n "$action" ] || action=switch
+    [ "$action" = dry-run ] && action=dry-build
+    [ "$action" = list ] && action=list-generations
+    [ "$action" = rollback ] && { action=boot; rollback=1; }
+
+    case $action in
+      list-generations) exec /sbin/sh "$STC" list-generations ;;
+      dry-activate) echo "$me: dry-activate is not supported on solnix (no activation diff yet)" >&2; exit 1 ;;
     esac
+    if [ "$rollback" = 1 ]; then
+      case $action in boot|switch) : ;; *) echo "$me: --rollback works with switch or boot" >&2; exit 1 ;; esac
+      need_root
+      # the previous BE: the newest one that is not active on reboot.
+      active_reboot=$(beadm list -H 2>/dev/null | awk -F';' '$3 ~ /R/ {print $1}')
+      prev=$(beadm list -H 2>/dev/null | awk -F';' -v a="$active_reboot" '$1!=a {print $1" "$6}' | sort -k2 | tail -1 | awk '{print $1}')
+      [ -n "$prev" ] || { echo "no previous BE to roll back to" >&2; beadm list 2>&1; exit 1; }
+      echo "rolling back: beadm activate $prev (was: $active_reboot)"
+      beadm activate "$prev" || { echo "FATAL: beadm activate $prev failed" >&2; exit 1; }
+      echo "== rolled back to BE $prev. Reboot to run it. =="
+      beadm list 2>&1 || true
+      exit 0
+    fi
+
+    # nixos-rebuild: no --flake and no toplevel, but /etc/nixos/flake.nix -> that flake
+    # (the directory the link points into, as nixos-rebuild resolves it).
+    if [ -z "$flake" ] && [ -z "$top" ] && [ -e /etc/nixos/flake.nix ]; then
+      flake=/etc/nixos
+      d=$(_readlink /etc/nixos/flake.nix 2>/dev/null) && case $d in /*) flake=$(dirname "$d") ;; esac
+    fi
+
+    if [ -n "$flake" ]; then
+      case $flake in *#*) ;; *) flake="$flake#$(hostname)" ;; esac
+      fl=''${flake%%#*}; host=''${flake#*#}
+      attr="$fl#solnixConfigurations.\"$host\".config.system.build.toplevel"
+      NIX="nix --extra-experimental-features nix-command --extra-experimental-features flakes"
+      case $action in
+        dry-build) exec $NIX build --dry-run --no-link "$@" "$attr" ;;
+        build)     exec $NIX build --out-link result --print-out-paths "$@" "$attr" ;;
+      esac
+      need_root
+      out=$($NIX build --no-link --print-out-paths "$@" "$attr") \
+        || { echo "FATAL: building $flake failed" >&2; exit 1; }
+      [ -x "$out/bin/switch-to-configuration" ] || { echo "FATAL: $out is not a solnix toplevel" >&2; exit 1; }
+      if [ "$action" != test ]; then
+        nix-env -p "$PROFILES/system" --set "$out" || { echo "FATAL: nix-env --set $out failed" >&2; exit 1; }
+      fi
+      # the NEW generation's own switch-to-configuration, as nixos-rebuild runs
+      # the new toplevel's, so a change to activation takes effect with it.
+      exec /sbin/sh "$out/bin/switch-to-configuration" "$action" "$out"
+    fi
+
+    case $action in
+      build|dry-build)
+        echo "$me $action: needs --flake <ref>[#<host>] (or /etc/nixos/flake.nix)" >&2; exit 1 ;;
+    esac
+    [ $# -eq 0 ] || { echo "$me: nix build options need --flake" >&2; exit 1; }
+    [ -n "$top" ] || top=$(default_top)
+    [ -n "$top" ] || { echo "no toplevel given and no registered generation" >&2; exit 1; }
+    need_root
+    [ -x "$top/bin/switch-to-configuration" ] && STC="$top/bin/switch-to-configuration"
+    exec /sbin/sh "$STC" "$action" "$top"
   '';
 
   # solnix-install (T2.7) — the nixos-install analog. Lays THIS toplevel (or any
@@ -430,7 +472,6 @@ let
   etc = pkgs.runCommand "solnix-etc" { } ''
     mkdir -p $out/etc
     printf '%s\n' '${config.networking.hostName}' > $out/etc/nodename
-    printf 'solnix system toplevel\nhostname: %s\n' '${config.networking.hostName}' > $out/etc/solnix-release
     ${concatStringsSep "\n    " (mapAttrsToList (fname: content:
       "mkdir -p $out/etc/$(dirname ${fname}); cp ${pkgs.writeText "solnix-etc-${builtins.replaceStrings ["/"] ["-"] fname}" content} $out/etc/${fname}")
       configEtc)}
@@ -597,6 +638,7 @@ in
   config.environment.systemPackages = [
     (pkgs.runCommand "solnix-rebuild-bin" { } ''
       mkdir -p $out/bin; ln -s ${solnixRebuild} $out/bin/solnix-rebuild
+      ln -s ${solnixRebuild} $out/bin/nixos-rebuild
     '')
   ];
 }

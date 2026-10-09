@@ -44,7 +44,13 @@
       # solnixSystem: the nixosSystem analog. Thin wrapper over lib/eval-config.nix
       # (a fork of NixOS's nixos/lib/eval-config.nix). Kept out here so both the
       # flake and out-of-tree callers use one entrypoint.
-      solnixSystem = import ./lib/eval-config.nix { inherit lib; };
+      # The revision is passed in as nixpkgs' flake sets system.nixos.revision: the
+      # flake's source copy has no .git for modules/config/release.nix to read.
+      solnixSystem = args: import ./lib/eval-config.nix { inherit lib; } (args // {
+        modules = (args.modules or [ ]) ++ [
+          { solnix.revision = lib.mkDefault (self.rev or self.dirtyRev or null); }
+        ];
+      });
 
       # pkgs for a solnix system: the pinned nixpkgs instantiated for
       # x86_64-solaris with the fork's illumos overlay (exposes pkgs.illumos.*).

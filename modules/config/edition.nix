@@ -23,7 +23,8 @@
 
   options.solnix.edition = lib.mkOption {
     type = lib.types.str;
-    default = "unstable";
+    default = config.solnix.release;
+    defaultText = lib.literalExpression "config.solnix.release";
     example = "26.11";
     description = ''
       solnix release edition. "unstable" = rolling (moving nixpkgs pin +
@@ -32,11 +33,5 @@
     '';
   };
 
-  config.environment.generatedEtc."solnix-release" = ''
-    NAME=solnix
-    ID=solnix
-    EDITION=${config.solnix.edition}
-    VERSION_ID=${config.solnix.edition}
-    ROLES=${lib.concatStringsSep "," config.solnix.roles}
-  '';
+  # /etc/solnix-release (EDITION=, ROLES=) is written by modules/config/release.nix.
 }

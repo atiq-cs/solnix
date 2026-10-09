@@ -12,6 +12,9 @@
   ./nixos-compat.nix
   ./config/assertions.nix
   ./config/edition.nix
+  ./config/release.nix
+  ./config/nix-channel.nix
+  ./config/sudo.nix
   ./config/coreadm.nix
   ./config/libumem.nix
   ./config/first-boot-defaults.nix

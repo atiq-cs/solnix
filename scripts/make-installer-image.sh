@@ -175,6 +175,19 @@ for m in fs-root fs-usr svc-dlmgmtd manifest-import; do
   [ -e "$RD$LM/$m" ] || die "live-methods lacks $m"
   rm -f "$_md/$m"; ln -s "$LM/$m" "$_md/$m"
 done
+# 5a'. /etc/profile, /etc/hosts and /etc/default/login are links into the generation's etc (install-be, NixOS-style /etc/static);
+# a write through it would modify the store -- on the build host, the HOST's store,
+# since the link resolves there. Replace the link with a copy before appending, the
+# media's own live overlay (as materialize does for lib/svc/method).
+own_etc() {   # $1 = path under etc/: make it a real file holding what the link pointed at
+  [ -h "$RD/etc/$1" ] || return 0
+  _t=$(rl "$RD/etc/$1"); case "$_t" in /*) _src="$RD$_t" ;; *) _src="$RD/etc/$(dirname "$1")/$_t" ;; esac
+  # a relative link into ../static resolves through etc/static -> <store>/etc
+  [ -e "$_src" ] || _src="$RD$(rl "$RD/etc/static")/$1"
+  cp "$_src" "$RD/etc/$1.own" && rm -f "$RD/etc/$1" && mv "$RD/etc/$1.own" "$RD/etc/$1" || die "copying /etc/$1 out of the store"
+  chmod 0644 "$RD/etc/$1"
+}
+for _f in profile hosts default/login; do own_etc "$_f"; done
 # 5b. root on the media logs in without a password (NixOS installation-device.nix:
 #     initialHashedPassword = ""); solnix-install refuses to carry that to a disk.
 awk -F: 'BEGIN{OFS=":"} $1=="root"{$2=""} {print}' "$RD/etc/shadow" > "$RD/etc/shadow.new" && mv "$RD/etc/shadow.new" "$RD/etc/shadow"
