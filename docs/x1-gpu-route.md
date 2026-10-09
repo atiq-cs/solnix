@@ -367,7 +367,9 @@ volume across all 377 files.
 * 48 empty stub headers get all 377 `files.drm` sources (inteldrm + `drm`) past the header wall.
   The stub set converged in 2 rounds.
 * With `-fsyntax-only -include sys/stdbool.h`, 1 of the 377 files compiles clean, and there are
-  129,793 error lines in total.
+  129,793 error lines in total. **Correction (5.4): the clean count was 0/377, not 1/377.**
+  `union-pass2.sh` counted every `*.err` in its log dir, and the one "clean" file was `all.err`,
+  the empty concatenation that `union-gap.sh` left there.
 * **Distinct names: 223 OpenBSD kernel functions/macros, 22 types, 139 identifiers.** There is
   **1** illumos-header collision: illumos `sys/list.h` `list_move_tail(list_t *, list_t *)` against
   Linux's `list_move_tail`, 42 sites.
@@ -446,17 +448,87 @@ This is the device table, not a driver. Nothing has been loaded into the kernel.
 
 ### 5.3 Next steps for rung 1 (PLANNED, in order)
 
-1. `i915/compat/`: the OpenBSD-on-illumos headers for the 72 header-borne functions, the 22
-   types and the constants, with `-include` of a prelude, the same shape as
-   `src/wifi-port/net80211-openbsd/compat/sys/n80211_prelude.h`. Resolve the `list_move_tail`
-   collision by renaming (the wifi port's `n80211_symrename.h` pattern). Re-run
-   `union-pass2.sh` and track "files with zero errors" (1/377 today).
+1. ~~`i915/compat/`: the OpenBSD-on-illumos headers~~ Done as `src/drm-port/obsd-compat/`, see 5.4.
 2. Compile `intel_device_info.c`, `intel_step.c`, `intel_uncore.c` (MMIO + forcewake), then
    `display/intel_display_device.c`. These are the first files a probe needs.
 3. An illumos `i915_attach`: `pci_config_setup`, `ddi_regs_map_setup` BAR0 (GTTMMADR,
    `reg` rnumber from `assigned-addresses`), `intel_uncore_init`, then read `GEN6_GT_THREAD_STATUS`
    / the `PCH` id as the first live register read. **This needs a module load, which needs the
    dump device the maintainer has not yet approved. Not done.**
+
+### 5.4 The OpenBSD-kernel-API compat layer: every file compiles (REAL, dixi)
+
+`src/drm-port/obsd-compat/` is route (a) from section 5: the OpenBSD kernel API on illumos.
+OpenBSD's `include/linux` and `include/asm` stay unmodified. Every OpenBSD source compiles
+unmodified with `-include obsd_prelude.h`. The parts:
+
+* **`obsd_prelude.h`** includes the illumos headers first, under their own names. Then it renames
+  the tags and functions that collide, for the rest of the translation unit: `struct proc`,
+  `struct task`, `struct pool`, `struct file`, `list_move_tail`, `resume`, `rw_*`. It renames the
+  kernel-exported names whose signatures differ (`taskq_create`, `suser`, `pool_init`,
+  `pool_destroy`), because krtld would bind them to the kernel's own definitions. It also defines
+  `__OpenBSD__` and `I915`, the two macros OpenBSD's own amd64 kernel build defines
+  (`option I915` is in `GENERIC`).
+* **`obsd_kern.h`**: types, malloc, mutex (OpenBSD's `struct mutex` is illumos `kmutex_t`),
+  rwlock, sleep/wakeup, timeout, task/taskq, atomics, time, curproc/curcpu, autoconf, select/kqueue,
+  the OpenBSD `struct file`, pool and firmware.
+* **`obsd_vm.h`**: the UVM/pmap/km_alloc types and declarations.
+* **`obsd_bus.h`**: bus_space, bus_dma, PCI and i2c.
+* About 60 one-line forwarders for OpenBSD host headers that illumos lacks.
+* Vendored, all permissive and read-only: `sys/tree.h` (BSD-2, the same file as the wifi port's
+  copy), and `dev/acpi/acpireg.h` and `dev/acpi/amltypes.h` (ISC, data definitions only).
+* **`obsd_kern.c`** holds the bodies: malloc/free, rwlock, sleep/wakeup on hashed condvars, time,
+  timeout(9F), tasks via `taskq_dispatch_ent`, the curproc shadow in TSD, the cpu_info table,
+  `loadfirmware` through firmware(9F), pool through kmem_cache, km_alloc for the kv/kp_dirty/kp_zero
+  modes, PCI config space, capability lists and the BAR probe.
+
+Harness: `src/drm-port/i915/union-probe.sh`, with the clean-count bug fixed. Missing headers are
+stubbed and reported, so a clean count cannot hide one. `SET=full` adds the 13 `ttm` sources
+(files.drm makes inteldrm depend on ttm) and `drm_drv.c`, which `sys/conf/files` lists as
+`drm needs-flag`. **The 377 set from 5.1 left out the drm driver entry point itself.**
+`src/drm-port/i915/link-gap.sh` compiles the clean files to real `-O2` kernel objects and lists
+every undefined symbol that no object, `obsd_kern.o` or the running dixi kernel defines.
+
+| run (dixi, OpenBSD 37a498de) | files | clean | error lines | stubbed headers |
+|---|---:|---:|---:|---:|
+| E2 baseline (5.1, recounted) | 377 | **0** | 129,793 | 48 |
+| batch 1 (prelude + kern/vm/bus) | 377 | 339 | 311 | 3 |
+| batch 2 (`I915`, OpenBSD file/UVM shapes, wscons types) | 377 | 374 | 18 | 0 |
+| batch 5, ACPI off | 377 | 376 | 16 | 0 |
+| batch 5, `SET=full`, ACPI off | 391 | 390 | 16 | 0 |
+| **batch 5, `SET=full`, `-D__HAVE_ACPI -DNACPI=1` (OpenBSD amd64's own config)** | **391** | **391** | **0** | **0** |
+| negative control: `mtx_enter` mapping deleted + `sys/tree.h` removed | 391 | 0 | 16,973 | 1 (`sys/tree.h`) |
+
+With ACPI off, the one file that does not compile is `display/intel_opregion.c`. With
+`CONFIG_ACPI` unset, its own header declares static-inline stubs that collide with the .c file,
+which files.drm builds unconditionally. OpenBSD amd64 always defines `__HAVE_ACPI`, so that
+configuration is not one upstream builds either.
+
+`obsd_kern.o`: `make obj` (`-Werror`) gives an ELF64 ET_REL AMD64 object. `make syms` finds 60
+undefined symbols, 0 of which are missing from dixi's running `unix` + `genunix`. `make negctl`
+adds a call to a nonexistent function, and the check fails on that name as required.
+
+**A file that parses is not a body.** `link-gap.sh`, with all 391 objects built and 0 module/kernel
+name collisions after the `pool_*` rename, finds **114 symbols defined nowhere**
+(`/tmp/streamE3.WIP/gap-users.txt`, with the objects that use each one). By area:
+
+| area | symbols | needed for R1a (modeset + dumb buffer on eDP)? |
+|---|---|---|
+| VM: `PHYS_TO_VM_PAGE`(12 objs), `uao_*`, `uvm_obj_*`, `uvm_map`, `uvm_pglist*`, `pmap_*`, `uvmfault_unlockall`, `uvmexp`, `kernel_map` | 31 | **partly**: `PHYS_TO_VM_PAGE` is in `intel_ggtt.c` and `i915_gem_stolen.c`; dumb buffers go through `drm_gem` → `uao_create` |
+| bus_space map + bus_dma | 15 | **yes** for `bus_space_map` (ggtt, stolen); bus_dma is for GEM pages (R2) |
+| sleep: `sleep_setup`/`sleep_finish` (14 objs), `jiffies` (28 objs), `wakeup_proc`, `unsleep` | 5 | **yes**: `jiffies` is in intel_dp, link training, hotplug, drm_vblank |
+| PCI interrupts + `pci_mapreg_map`/`pci_find_device`/`pci_enumerate_bus` | 8 | **yes** (attach, vblank and hotplug interrupts) |
+| i2c bit-bang + `iic_exec` | 6 | **yes** for DDC/EDID over GMBUS on external outputs; the eDP panel's EDID comes over DP-AUX |
+| file descriptors (`fnew`, `fd*`), `knote`/`klist`/`selwakeup` | 13 | no (dma-buf/sync_file fds, poll); needed for userland PRIME |
+| wsdisplay/rasops/vga console glue | 15 | no: the illumos console stays vgatext, so `i915_driver.c`'s wsdisplay attach is replaced, not linked |
+| ACPI AML + `acpi_softc` | 7 | no (VBT can come from the OpRegion mailbox) |
+| autoconf `config_*`, `kthread_*`, `extent_*`, `fpu_kernel_*`, `wbinvd_on_all_cpus`, `mem_range_attr_set`, sysctl `hw_*`/`cpuspeed`, `obsd_cdevsw`, ISA hole | 14 | some: `fpu_kernel_*` (i915_memcpy), `wbinvd` (ggtt) |
+
+So the next measured step is the R1a subset of this table: `bus_space_map`, `jiffies`,
+`sleep_setup`/`sleep_finish`, PCI interrupts, `PHYS_TO_VM_PAGE` for GGTT/stolen, and enough
+`uao_*` for dumb buffers. Then an `i915_attach` that replaces `i915_driver.c`'s OpenBSD autoconf
+attach. Nothing in this section was loaded into a kernel, because the dump device is still not
+approved (section 6).
 
 ## 6. Open questions for the maintainer
 
