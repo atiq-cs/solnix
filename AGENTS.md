@@ -2,6 +2,19 @@
 
 See .agent-steering-domains.md for domain-specific steering (local).
 
+## Where work runs: EC2 solnix instances or dixi, never floki
+
+Builds, image builds, VMs (KVM/QEMU, bhost) and boot tests run on EC2 instances
+(solnix instances where possible) or on dixi, the maintainer's X1. Not on floki,
+the dev box: floki is for editing, git, evaluation (`nix eval`), reading sources,
+and driving remote machines over ssh. No local qemu guests there, bhost included.
+The maintainer restated this on 2026-10-09 after a session ran bhost and KVM
+boot tests on floki. When no EC2 account works (burner accounts expire:
+docs/account-expiry-hotdog.md), say so and ask for one rather than falling back
+to floki. Image builds that need an OpenIndiana host go on an EC2 OI builder
+restored from R2 (docs/account-migration-lava-to-hotdog.md), and KVM boot tests
+go on an EC2 metal instance (nested virtualization) or real hardware.
+
 ## solnix.io belongs to the infra team; we are a client of its APIs
 
 The site, the binary cache (cache.solnix.io), the search API (search.solnix.io),
