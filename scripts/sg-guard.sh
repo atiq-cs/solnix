@@ -18,12 +18,16 @@
 # Uses the current AWS profile/creds in the environment. No creds are logged.
 set -euo pipefail
 
-# The audit is meaningless without credentials, and this script sets no
-# profile of its own -- so every "CLEAN" was reported from an account it
-# could not read. Default to the current build account; override with
-# AWS_PROFILE=... when auditing a different one.
-: "${AWS_PROFILE:=hotdog}"   # build account; lava expired 2026-09-17, bene 2026-09-11
-export AWS_PROFILE
+# The audit is meaningless without credentials. The profile is named explicitly
+# (no default): burner accounts expire (bene 2026-09-11, lava 2026-09-17, hotdog
+# 2026-10-10, docs/account-expiry-hotdog.md), and a default naming a dead account
+# reads nothing. Every region is also probed below, so an unreadable account is
+# refused, never reported CLEAN.
+case "${1:-}" in
+  selftest) : ;;
+  *) [ -n "${AWS_PROFILE:-}" ] || { echo "sg-guard: FATAL: set AWS_PROFILE to the account to audit (no default: burner accounts expire)" >&2; exit 2; }
+     export AWS_PROFILE ;;
+esac
 
 
 WORLD_V4="0.0.0.0/0"
