@@ -185,13 +185,19 @@ narinfo (cf-cache-status HIT, age ~14 h) for a path the origin had already
 re-signed with 8UNr, so this check failed for real clients while a cache-busted
 fetch passed. Test what Nix fetches (no query string), not the origin.
 
-**Before submitting anything.** Blocked until the infra team answers the report:
-`registry/recipes.tsv` is served empty (every submission would be rejected at the
-authority step), and the protocol questions in it (one store path per submission,
-the narinfo capability, the NAR key form, multi-output paths, status polling,
-removal of superseded paths) decide how the client is written. Every object we
-submit must also pass our own check first: store-only RUNPATH, no unresolved
-NEEDED, references complete, and installable on a Nix-managed system.
+**Submitting.** `scripts/cache-submit.py` implements the flow above (one store path
+per submission, deps first, NAR + unsigned narinfo as two objects, signed status
+poll). Its default is a dry run. `--probe-auth` makes one signed, read-only status
+request: 404 "no such submission" means the key authenticates, and a random key gets
+403. The client plans only against the served `registry/recipes.tsv`, because the
+site authorizes a path only when it is an `out` row of the served copy, and our rows
+are published from `docs/registry/recipes.tsv`. Leaves with references are held until
+the infra team confirms how they are staged (report
+`/tmp/solnix-io-dixi-closure-recipes-report.md`, item 3a). Every object we submit
+must also pass our own check first: store-only RUNPATH, no unresolved NEEDED,
+references complete, and installable on a Nix-managed system. Packages that
+reference illumos-userland are held until the world fixes in
+`docs/pending/world-unresolved-needed.md` land.
 
 **Using the cache from a solnix system.** Clients trust only the 8UNr key. 5HAV is
 the retired key that signed the objects the 2026-10-04 audit found broken; a

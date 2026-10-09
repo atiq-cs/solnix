@@ -21,3 +21,14 @@ batched so that rebuild happens once.
   none of them, so `nix build` of any solnix package fails there (measured on dixi:
   "sha256sum: command not found"). The fix is a store-tool stdenv; it changes every
   hash, so it joins the same rebuild.
+- world-unresolved-needed.md: three world outputs fail the publish gate (store-only
+  RUNPATH, every NEEDED resolved in the store), measured on dixi. illumos-userland
+  has 56 ELFs with unresolved NEEDED: HAL/rmvolmgr/polkit need dbus+glib, FMA SNMP
+  needs net-snmp, bhyve/wpad/kmf/sendmail/pkinit need the host's libcrypto.so.1.0.0,
+  python 3.9 bindings, TPM 1.2, poold needs a JVM, and libkcfd's softtoken filtee
+  is off the search path. minconn.so keeps RUNPATH /usr/gcc/10/lib. The kernel
+  slice's grub and symdef, and stock-etc-var's four etc/fs/*/mount, resolve via /lib.
+  mk-proto-world records .world/ldd-bad (1080 lines) and never fails. Each item is
+  proposed as drop / build from source / relocation fix, with the reason. Every
+  userland-linked package (bash, coreutils, git, tmux, openssh, ...) is blocked from
+  the cache until this lands.
