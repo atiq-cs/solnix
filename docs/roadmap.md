@@ -187,3 +187,20 @@ Boot + run + expose ALL hardware on AWS/EC2, Azure, GCP across all architectures
 - **CH-8** upstream collaboration (drivers land in illumos, not a solnix fork)
 Mostly post-stable; x86 Azure/GCP driver work can start pre-stable to make solnix
 a first-class guest on all three clouds' x86 before the ARM port lands.
+
+## Builder federation (spec: .kiro/specs/solnix-builder-federation)
+
+A daily, LLM-free builder that drains solnix.io's work queue and publishes through the
+signed submit flow (contract and measured deviations: .kiro/steering/builder-queue.md).
+- **B1** queue credential + contract alignment with the infra team: the queue's POSTs
+  are gated by a shared secret, not the ed25519 builder identity; `manpage-missing` is
+  not an allowed reason; GET returns counts only.
+- **B2** `scripts/solnix-builder.py`: claim -> recipe -> nix build -> publish gate ->
+  cache-submit.py -> complete, heartbeat on a thread; dry-run against a local queue.
+- **B3** where it runs: bhost/EC2 OpenIndiana until the store-tool stdenv lands
+  (docs/pending/builders-need-store-tools.md), then any solnix system from cron.
+- **B4** the man-page corpus the infra team asked for: illumos-man (the gate's
+  /usr/share/man, reviewed for solnix), coreutils + userland with man pages, distro
+  pages where solnix ships that distro's tool.
+- **B5** federation pieces that are ours (fetch shim, attestations) after the infra
+  team's signed work-queue.json and reputation feeds.

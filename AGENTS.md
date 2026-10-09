@@ -13,6 +13,12 @@ When something on their side is wrong or missing, write a report to
 `/tmp/solnix-io-<topic>-report.md` (what we observed, the exact request and
 response, what we need) and hand it to the maintainer, who routes it to that team.
 
+Publishing to the cache and draining solnix.io's work queue follow
+`.kiro/steering/builder-queue.md` (the infra team's builder contract plus what we
+measured against the deployed service): no waivers on the publish gate, nothing
+host- or user-specific in the public cache, submit only what the served
+recipes.tsv authorizes, and prove installability with the 8UNr client check.
+
 ## Keep the public roadmap current
 
 The published roadmap at https://solnix.io/roadmap is generated from the infra
