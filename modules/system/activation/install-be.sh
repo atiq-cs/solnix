@@ -166,10 +166,22 @@ fi
 [ -e platform/i86pc/kernel/amd64/unix ] || die "no unix after kernel copy"
 # /boot: real files (loader64.efi, pmbr, gptzfsboot, forth, fonts, loader.rc) from the kernel slice;
 # machine inputs the installer already wrote (loader.conf, bootenv.rc) are preserved.
-for e in $(ls "$R$KERNEL/boot"); do
-  case $e in solaris) mkdir -p boot/solaris; ( cd "$R$KERNEL/boot" && tar cf - solaris ) | ( cd boot && tar xf - ) ;;
-             *) [ -e "boot/$e" ] || cp -R "$R$KERNEL/boot/$e" boot/ ;; esac
-done
+# /boot from the kernel slice, merging over what is already there (machine inputs).
+lay_boot() {
+  for e in $(ls "$R$KERNEL/boot"); do
+    # boot/solaris: merged entry by entry. A tar copy of the whole directory replaced
+    # the installer's bootenv.rc (its console setprop) with the stock one (measured
+    # under KVM: solnix-install's machine-input check failed "first line now: #").
+    case $e in solaris) mkdir -p boot/solaris
+                        for _s in $(ls -A "$R$KERNEL/boot/solaris"); do
+                          if [ -e "boot/solaris/$_s" ] || [ -h "boot/solaris/$_s" ]; then continue; fi
+                          ( cd "$R$KERNEL/boot/solaris" && tar cf - "$_s" ) | ( cd boot/solaris && tar xf - ) \
+                            || die "copy boot/solaris/$_s"
+                        done ;;
+               *) [ -e "boot/$e" ] || cp -R "$R$KERNEL/boot/$e" boot/ ;; esac
+  done
+}
+lay_boot
 # find ! -type l, not chmod -R, which follows links: boot/solaris/bin/root_archive
 # -> ../../../usr/sbin/root_archive resolves into the userland store path, and
 # chmod -R made that store file 0755 (measured on the X1's live store).
