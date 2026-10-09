@@ -91,6 +91,7 @@ extern void iwm_attach(struct device *, struct device *, void *);
 extern int iwm_ioctl(struct ifnet *, u_long, caddr_t);
 extern void iwm_start(struct ifnet *);
 extern void iwm_stop(struct ifnet *);
+extern int iwm_init(struct ifnet *);
 extern void iwm_free_tx_ring(struct iwm_softc *, struct iwm_tx_ring *);
 extern void iwm_free_rx_ring(struct iwm_softc *, struct iwm_rx_ring *);
 extern void iwm_dma_contig_free(struct iwm_dma_info *);
@@ -193,20 +194,217 @@ iwm_il_stop(void *arg)
 }
 
 /*
- * mc_tx: queue on if_snd and kick iwm_start, which dequeues, encapsulates
- * through net80211 and maps the frame. Returns the chain it could not queue.
- * The mblks arrive as 802.11 frames built by the wifi plugin
- * (mac_wifi_header); OpenBSD's iwm_start expects Ethernet frames on if_snd
- * and calls ieee80211_encap. NOTE: that framing mismatch is the GATED TX
- * bridge: until it is written, frames are dropped here rather than handed to
- * an encapsulation that would double the header.
+ * mc_tx: the chain arrives as Ethernet frames (iwm_gld.c converted the wifi
+ * plugin's 802.11+LLC header back, with headroom for ieee80211_encap's
+ * M_PREPEND). Queue each on if_snd and run iwm_start, which dequeues,
+ * encapsulates through net80211 and maps the frame, exactly the OpenBSD
+ * if_enqueue path. Frames are dropped, not returned, when the link is not
+ * associated, as illumos iwn does (if_iwn.c:4010-4013); returning them would
+ * make mac retry a link that has no BSS.
  */
 mblk_t *
 iwm_il_tx(void *arg, mblk_t *mp)
 {
-	(void) arg;
-	freemsgchain(mp);
+	struct iwm_softc *sc = arg;
+	struct ifnet *ifp = IC2IFP(&sc->sc_ic);
+	mblk_t *next;
+
+	n80211_giant_enter();
+	if (!(ifp->if_flags & IFF_RUNNING) ||
+	    sc->sc_ic.ic_state != IEEE80211_S_RUN) {
+		n80211_giant_exit();
+		freemsgchain(mp);
+		return (NULL);
+	}
+	for (; mp != NULL; mp = next) {
+		next = mp->b_next;
+		mp->b_next = NULL;
+		(void) ifq_enqueue(&ifp->if_snd, mp);	/* frees on overflow */
+	}
+	iwm_start(ifp);
+	n80211_giant_exit();
 	return (NULL);
+}
+
+/* ------------------------------------- WLDP bridge, OpenBSD-side half --- */
+
+/*
+ * The illumos side (iwm_gld.c) speaks WLDP (<inet/wifi_ioctl.h>) and cannot
+ * see struct ieee80211com; this side cannot see WLDP. These functions read
+ * and write OpenBSD net80211 state the way OpenBSD's own ieee80211_ioctl
+ * does, and hand back the plain structs of iwm_il.h. Each expects giant held
+ * (the caller is a GLDv3 entry point that took it).
+ */
+#include "iwm_il.h"
+
+/* RSSI on the WLDP 0..15 scale, as illumos wifi_getrssi scales its own. */
+static uint8_t
+iwm_il_rssi(struct ieee80211com *ic, struct ieee80211_node *ni)
+{
+	uint32_t r = ni->ni_rssi, max = ic->ic_max_rssi;
+
+	if (max == 0 || r == 0)
+		return (0);
+	if (r >= max)
+		return (15);
+	return ((uint8_t)(r * 15 / max + 1));
+}
+
+static void
+iwm_il_fill_node(struct ieee80211com *ic, struct ieee80211_node *ni,
+    struct iwm_il_node *n)
+{
+	int i, nr;
+
+	bzero(n, sizeof (*n));
+	IEEE80211_ADDR_COPY(n->n_bssid, ni->ni_bssid);
+	n->n_esslen = MIN(ni->ni_esslen, sizeof (n->n_essid));
+	bcopy(ni->ni_essid, n->n_essid, n->n_esslen);
+	n->n_rssi = iwm_il_rssi(ic, ni);
+	if (ni->ni_chan != NULL && ni->ni_chan != IEEE80211_CHAN_ANYC) {
+		n->n_chan = (uint8_t)ieee80211_chan2ieee(ic, ni->ni_chan);
+		n->n_freq = ni->ni_chan->ic_freq;
+		n->n_5ghz = IEEE80211_IS_CHAN_5GHZ(ni->ni_chan) ? 1 : 0;
+	}
+	n->n_privacy = (ni->ni_capinfo & IEEE80211_CAPINFO_PRIVACY) ? 1 : 0;
+	n->n_ess = (ni->ni_capinfo & IEEE80211_CAPINFO_ESS) ? 1 : 0;
+	n->n_rsn = (ni->ni_rsnprotos != IEEE80211_PROTO_NONE) ? 1 : 0;
+	n->n_ht = (ni->ni_flags & IEEE80211_NODE_HT) ? 1 : 0;
+	nr = MIN(ni->ni_rates.rs_nrates, (int)sizeof (n->n_rates));
+	for (i = 0; i < nr; i++)	/* highest first, as wifi_read_ap */
+		n->n_rates[i] = ni->ni_rates.rs_rates[
+		    ni->ni_rates.rs_nrates - i - 1] & IEEE80211_RATE_VAL;
+	n->n_nrates = (uint8_t)nr;
+}
+
+void
+iwm_il_getstate(void *arg, struct iwm_il_state *s)
+{
+	struct iwm_softc *sc = arg;
+	struct ieee80211com *ic = &sc->sc_ic;
+	struct ieee80211_node *ni = ic->ic_bss;
+
+	bzero(s, sizeof (*s));
+	s->s_running = (ic->ic_if.if_flags & IFF_RUNNING) ? 1 : 0;
+	/* as illumos wl_get_linkstatus: with RSN, connected once keyed */
+	s->s_connected = (ic->ic_state == IEEE80211_S_RUN) && (ni != NULL) &&
+	    (!(ic->ic_flags & IEEE80211_F_RSNON) || ni->ni_port_valid);
+	s->s_rsn = (ic->ic_flags & IEEE80211_F_RSNON) ? 1 : 0;
+	/* SIOCG80211NWID (ieee80211_ioctl.c:511): desired until associated */
+	if (ic->ic_state == IEEE80211_S_INIT ||
+	    ic->ic_state == IEEE80211_S_SCAN || ni == NULL) {
+		s->s_esslen = MIN(ic->ic_des_esslen, sizeof (s->s_essid));
+		bcopy(ic->ic_des_essid, s->s_essid, s->s_esslen);
+		if (ic->ic_flags & IEEE80211_F_DESBSSID)
+			IEEE80211_ADDR_COPY(s->s_bssid, ic->ic_des_bssid);
+	} else {
+		s->s_esslen = MIN(ni->ni_esslen, sizeof (s->s_essid));
+		bcopy(ni->ni_essid, s->s_essid, s->s_esslen);
+		IEEE80211_ADDR_COPY(s->s_bssid, ni->ni_bssid);
+		s->s_rssi = iwm_il_rssi(ic, ni);
+		if (ni->ni_txrate >= 0 && ni->ni_txrate < ni->ni_rates.rs_nrates)
+			s->s_rate = ni->ni_rates.rs_rates[ni->ni_txrate] &
+			    IEEE80211_RATE_VAL;
+	}
+}
+
+/* Copy the node tree (scan results) into n[0..max). Returns the count. */
+int
+iwm_il_nodes(void *arg, struct iwm_il_node *n, int max)
+{
+	struct iwm_softc *sc = arg;
+	struct ieee80211com *ic = &sc->sc_ic;
+	struct ieee80211_node *ni;
+	int cnt = 0;
+
+	RBT_FOREACH(ni, ieee80211_tree, &ic->ic_tree) {
+		if (cnt >= max)
+			break;
+		/* the placeholder BSS node carries our own address */
+		if (IEEE80211_ADDR_EQ(ni->ni_macaddr, ic->ic_myaddr))
+			continue;
+		if (ni->ni_esslen == 0 && ni->ni_rssi == 0)
+			continue;
+		iwm_il_fill_node(ic, ni, &n[cnt++]);
+	}
+	return (cnt);
+}
+
+/*
+ * WL_SCAN. OpenBSD runs scans from iwm_init (IFF_UP) and never "finishes"
+ * one without a target: ieee80211_end_scan with no candidate resets and
+ * rescans forever, bumping ic_scan_count once per all-band pass
+ * (ieee80211_node.c:1554-1560; iwm sets IEEE80211_C_SCANALLBAND,
+ * if_iwm.c:11995). So: make sure the radio runs, wait until one more pass
+ * has completed (tsleep drops giant like OpenBSD's drops kernel_lock), and
+ * snapshot the tree, because the dladm caller closes the link right after
+ * the ioctl (mac_stop -> iwm_stop -> INIT frees every node,
+ * ieee80211_proto.c:1207) before reading MAC_PROP_WL_ESS_LIST.
+ * Returns 0 or an errno; *cnt = number of nodes copied.
+ */
+int
+iwm_il_scan(void *arg, struct iwm_il_node *n, int max, int *cnt)
+{
+	struct iwm_softc *sc = arg;
+	struct ieee80211com *ic = &sc->sc_ic;
+	struct ifnet *ifp = &ic->ic_if;
+	uint8_t start;
+	int i, err = 0;
+
+	*cnt = 0;
+	if (ic->ic_state == IEEE80211_S_RUN) {
+		/* as illumos wifi_cmd_scan: never leave the AP's channel */
+		*cnt = iwm_il_nodes(sc, n, max);
+		return (0);
+	}
+	if (!(ifp->if_flags & IFF_RUNNING)) {
+		ifp->if_flags |= IFF_UP;
+		err = iwm_ioctl(ifp, SIOCSIFFLAGS, NULL);
+		if (err != 0)
+			return (err);
+	}
+	/*
+	 * iwm_init calls ieee80211_begin_scan synchronously (if_iwm.c:10415),
+	 * which zeroes ic_scan_count, but the INIT -> SCAN transition itself
+	 * runs later from iwm_newstate_task: wait through INIT as well.
+	 */
+	start = ic->ic_scan_count;
+	for (i = 0; i < 100 && ic->ic_scan_count == start &&
+	    ic->ic_state <= IEEE80211_S_SCAN &&
+	    (ifp->if_flags & IFF_RUNNING); i++)
+		(void) tsleep_nsec(&ic->ic_scan_count, 0, "iwmscan",
+		    MSEC_TO_NSEC(100));
+	*cnt = iwm_il_nodes(sc, n, max);
+	return (0);
+}
+
+/*
+ * MAC_PROP_WL_ESSID set: OpenBSD SIOCS80211NWID (ieee80211_ioctl.c:487-509),
+ * including its ENETRESET -> iwm_stop/iwm_init restart (iwm_ioctl,
+ * if_iwm.c:10701-10708) when the interface is running.
+ */
+int
+iwm_il_set_essid(void *arg, const uint8_t *essid, int len)
+{
+	struct iwm_softc *sc = arg;
+	struct ieee80211com *ic = &sc->sc_ic;
+	struct ifnet *ifp = &ic->ic_if;
+
+	if (len < 0 || len > IEEE80211_NWID_LEN)
+		return (EINVAL);
+	memset(ic->ic_des_essid, 0, IEEE80211_NWID_LEN);
+	ic->ic_des_esslen = len;
+	if (len > 0)
+		memcpy(ic->ic_des_essid, essid, len);
+	if (len > 0)
+		ic->ic_flags &= ~IEEE80211_F_AUTO_JOIN;
+	ieee80211_disable_rsn(ic);
+	ieee80211_disable_wep(ic);
+	if ((ifp->if_flags & (IFF_UP | IFF_RUNNING)) == (IFF_UP | IFF_RUNNING)) {
+		iwm_stop(ifp);
+		return (iwm_init(ifp));
+	}
+	return (0);
 }
 
 /* ---------------------------------------------------------- DDI attach --- */

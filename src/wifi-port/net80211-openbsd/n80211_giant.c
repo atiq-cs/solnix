@@ -126,6 +126,34 @@ n80211_giant_enter(void)
  * The deferred state is detached under giant, so a concurrent producer starts
  * a fresh batch rather than racing this one.
  */
+/*
+ * Optional per-driver translation at the delivery point, run with giant
+ * dropped. OpenBSD net80211 hands up Ethernet frames (ieee80211_decap), and a
+ * GLDv3 mac registered with the wifi plugin expects 802.11 + LLC/SNAP
+ * (mac_wifi_header_info); iwm registers the converter (iwm_gld.c). The link
+ * hook runs before mac_link_update so the plugin's TX header data (the
+ * BSSID) is current when the link is reported up. NULL hooks deliver as is.
+ */
+mblk_t	*(*n80211_rx_xlate)(void *, mblk_t *);
+void	(*n80211_link_hook)(void *, int);
+void	*n80211_xlate_arg;
+
+static mblk_t *
+n80211_xlate_chain(mblk_t *chain)
+{
+	mblk_t *head = NULL, **tailp = &head, *m, *next;
+
+	for (m = chain; m != NULL; m = next) {
+		next = m->b_next;
+		m->b_next = NULL;
+		if ((m = n80211_rx_xlate(n80211_xlate_arg, m)) != NULL) {
+			*tailp = m;
+			tailp = &m->b_next;
+		}
+	}
+	return (head);
+}
+
 void
 n80211_giant_exit(void)
 {
@@ -138,10 +166,18 @@ n80211_giant_exit(void)
 	n80211_link_pending = -1;
 	mutex_exit(&n80211_giant);
 
-	if (link != -1 && lmh != NULL)
+	if (link != -1 && lmh != NULL) {
+		if (n80211_link_hook != NULL)
+			n80211_link_hook(n80211_xlate_arg,
+			    link == (int)LINK_STATE_UP);
 		mac_link_update(lmh, (link_state_t)link);
+	}
 	if (chain != NULL) {
-		if (rmh != NULL) {
+		if (rmh != NULL && n80211_rx_xlate != NULL)
+			chain = n80211_xlate_chain(chain);
+		if (chain == NULL) {
+			/* every frame was dropped by the translation */
+		} else if (rmh != NULL) {
 			mac_rx(rmh, NULL, chain);
 		} else {
 			freemsgchain(chain);
