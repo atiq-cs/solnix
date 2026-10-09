@@ -17,6 +17,9 @@
 #define _N80211_PRELUDE_H
 
 #include <sys/types.h>
+#ifdef N80211_GIANT
+#include <sys/n80211_symrename.h>	/* kernel-name collisions, see file */
+#endif
 /*
  * OpenBSD ethernet layout MUST win over illumos <sys/ethernet.h> for net80211,
  * whose ether_dhost/ether_shost are byte arrays (illumos's are struct

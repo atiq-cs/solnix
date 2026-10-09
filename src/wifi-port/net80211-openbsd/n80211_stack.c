@@ -206,6 +206,42 @@ if_start(struct ifnet *ifp)
  * LINKS and is safe; it moves packets to the host only once attach wires
  * if_mac. NOTE: iwx_gld.c must set ifp->if_mac and this must call mac_rx.
  */
+#ifdef N80211_GIANT
+/*
+ * Giant build: the live bridge. The chain is handed to mac_rx() only after
+ * the entry boundary drops giant (n80211_giant.c n80211_giant_exit), because
+ * mac_rx can loop a frame back into mc_tx, which takes giant.
+ */
+extern void freemsgchain(mblk_t *);	/* sys/strsubr.h, not includable here */
+extern void n80211_defer_rx(void *, mblk_t *);
+extern void n80211_defer_link(void *, int);
+
+void
+if_input(struct ifnet *ifp, void *mlp)
+{
+	struct mbuf_list *ml = mlp;
+	mblk_t *chain, *m;
+
+	chain = ml_dechain(ml);
+	if (chain == NULL)
+		return;
+	for (m = chain; m != NULL; m = m->b_next)
+		m->b_prev = NULL;	/* cookie window must be closed */
+	if (ifp->if_mac == NULL) {
+		freemsgchain(chain);
+		return;
+	}
+	n80211_defer_rx(ifp->if_mac, chain);
+}
+
+void
+if_link_state_change(struct ifnet *ifp)
+{
+	if (ifp->if_mac != NULL)
+		n80211_defer_link(ifp->if_mac,
+		    LINK_STATE_IS_UP(ifp->if_link_state));
+}
+#else /* !N80211_GIANT */
 void
 if_input(struct ifnet *ifp, void *mlp)
 {
@@ -254,6 +290,7 @@ if_link_state_change(struct ifnet *ifp)
 	 * without the live mac handle. ponytail: mac_link_update once wired. */
 	(void) ifp;
 }
+#endif /* !N80211_GIANT */
 
 /*
  * if_addgroup / if_deactivate: OpenBSD interface-group membership and detach

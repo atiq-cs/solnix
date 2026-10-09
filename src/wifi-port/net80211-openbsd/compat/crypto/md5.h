@@ -6,6 +6,14 @@
 #define _N80211_COMPAT_CRYPTO_MD5_H
 
 #include <sys/types.h>
+/*
+ * The kernel exports these names (dixi: misc/kcf-era genunix/unix symbols),
+ * and krtld binds a module's same-named global to the kernel copy
+ * (krtld/kobj.c:3020). Private names keep this implementation in use.
+ */
+#define MD5Init	n80211_MD5Init
+#define MD5Update	n80211_MD5Update
+#define MD5Final	n80211_MD5Final
 
 #define MD5_BLOCK_LENGTH	64
 #define MD5_DIGEST_LENGTH	16

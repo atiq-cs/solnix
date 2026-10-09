@@ -34,6 +34,12 @@
 
 #include <sys/iwx_kernel.h>
 
+#ifndef N80211_GIANT
+/*
+ * The ddi_taskq / timeout(9F) mapping below runs handlers WITHOUT any lock,
+ * which is the iwx route's state. A build with -DN80211_GIANT (iwm) gets the
+ * big-lock versions from n80211_giant.c instead.
+ */
 /* ---------------------------------------------------------------- taskq --- */
 
 /*
@@ -230,6 +236,8 @@ timeout_pending(struct timeout *to)
 {
 	return (to->to_pending);
 }
+
+#endif /* !N80211_GIANT */
 
 /* --------------------------------------------------------------- malloc --- */
 

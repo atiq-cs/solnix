@@ -61,7 +61,19 @@ typedef int ipl_t;
 #define splbio()	(0)
 #define spltty()	(0)
 #define splx(s)		((void)(s))
+#ifdef N80211_GIANT
+/*
+ * The big-lock model (net80211-openbsd/n80211_giant.c): splnet stays a
+ * no-op because the module giant lock already excludes the ISR on every cpu,
+ * and splassert(IPL_NET) checks that giant is held, warning once if not.
+ */
+extern int n80211_giant_owned(void);
+extern void n80211_splassert_fail(const char *);
+#define splassert(l)	do { if (!n80211_giant_owned()) \
+	n80211_splassert_fail(__func__); } while (0)
+#else
 #define splassert(l)	((void)0)
+#endif
 #define splsoftnet()	(0)
 
 /*
@@ -107,9 +119,17 @@ extern void iwx_cmd_wake(struct iwx_softc *, const void *);
  * are redirected to iwx_rw_* wrappers that carry the struct, and the illumos
  * rw_enter/rw_exit are left untouched underneath. REAL.
  */
+#ifdef N80211_GIANT
+/* Under the giant model the rwlock is an owner word on the giant sleep. */
+struct rwlock {
+	void		*rwl_owner;
+};
+extern int iwx_rw_write_held(struct rwlock *);
+#else
 struct rwlock {
 	krwlock_t	rwl_lock;
 };
+#endif
 extern void iwx_rw_init(struct rwlock *, const char *);
 extern void iwx_rw_destroy(struct rwlock *);
 extern int iwx_rw_enter(struct rwlock *, int);
@@ -119,8 +139,13 @@ extern void iwx_rw_exit(struct rwlock *);
 #define rw_exit(l)		iwx_rw_exit(l)
 #define rw_enter_write(l)	(void) iwx_rw_enter((l), RW_WRITE)
 #define rw_enter_read(l)	(void) iwx_rw_enter((l), RW_READ)
+#ifdef N80211_GIANT
+#define rw_assert_wrlock(l)	ASSERT(iwx_rw_write_held(l))
+#define rw_assert_anylock(l)	ASSERT(iwx_rw_write_held(l))
+#else
 #define rw_assert_wrlock(l)	ASSERT(RW_WRITE_HELD(&(l)->rwl_lock))
 #define rw_assert_anylock(l)	ASSERT(RW_LOCK_HELD(&(l)->rwl_lock))
+#endif
 
 
 /* ---- sleep / wakeup -> condition variables. Implemented in iwx_kcompat.c. ---- */
@@ -166,6 +191,9 @@ struct task {
 	void	*t_arg;
 	volatile unsigned int t_state;
 	struct taskq *t_tq;
+#ifdef N80211_GIANT
+	TAILQ_ENTRY(task) t_entry;	/* taskq FIFO link, under giant */
+#endif
 };
 extern struct taskq *systq;
 extern struct taskq *iwx_taskq_create(const char *, unsigned int, int,
@@ -183,6 +211,10 @@ struct timeout {
 	void		(*to_func)(void *);
 	void		*to_arg;
 	volatile int	to_pending;
+#ifdef N80211_GIANT
+	uint64_t	to_seq;		/* bumped by del/re-arm, under giant */
+	void		*to_token;	/* the live arm's trampoline token */
+#endif
 };
 extern void timeout_set(struct timeout *, void (*)(void *), void *);
 extern int timeout_add_msec(struct timeout *, int);

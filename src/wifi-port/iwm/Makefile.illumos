@@ -1,0 +1,111 @@
+# Native illumos build of the iwm kernel module (OpenBSD iwm(4) + OpenBSD
+# net80211 + the illumos glue), on the target machine, with gmake.
+#
+#   gmake -f Makefile.illumos [UTSINC=/path/to/gate-proto/usr/include]
+#
+# Inputs are the files under src/wifi-port/. The four patched OpenBSD sources
+# (build/if_iwm_illumos.c and ../net80211-openbsd/build/*.c) are GENERATED on
+# a machine with patch(1)/python by gen-illumos-src.sh and
+# ../net80211-openbsd/gen-illumos-src.sh; dixi has neither, so they are
+# copied over with the tree (see build-dixi.sh).
+#
+# Compiler flags are the illumos-gate kernel set, from usr/src/Makefile.master
+# and usr/src/uts/Makefile.uts, with cw(1)'s Sun-to-gcc translation applied
+# by hand (tools/cw/cw.c:787 -xmodel=kernel => -ffreestanding -mno-red-zone
+# -mcmodel=kernel):
+#   ALWAYS_DEFS_64      -D_KERNEL -D_SYSCALL32 -D_SYSCALL32_IMPL -D_ELF64
+#                       -D_DDI_STRICT -Dsun -D__sun -D__SVR4  (Makefile.uts:141)
+#   amd64_STAND_FLAGS   -xmodel=kernel + NO_SIMD -mno-mmx -mno-sse (Master:414)
+#   COPTFLAG            -xO3, which cw limits to -O2 (cw.c:818)
+#   CCNOAUTOINLINE etc  (Master:325-356) minus -fno-clone-functions, which is
+#                       an illumos-gcc patch option the upstream gcc 14.3.0 in
+#                       solnix-dev rejects (measured: "unrecognized option")
+#   -fno-asynchronous-unwind-tables                          (Makefile.uts:212)
+#   -mindirect-branch=thunk-extern -mindirect-branch-register (Makefile.uts:193)
+#     the running unix exports __x86_indirect_thunk_* (measured: 45 symbols)
+#   STACKPROTECT        -fstack-protector-strong (Master:380); the kernel
+#                       exports __stack_chk_fail/__stack_chk_guard (measured)
+#   -fno-builtin is NOT in the gate set; kept off so memcpy/memset can be
+#   inlined as the gate does.
+
+CC	?= gcc
+LD	?= /usr/bin/ld
+UTSINC	?= /nix/store/s7zkx8nx5sfxixmyqmlnrybrrh14jkmb-illumos-gate-proto/usr/include
+
+W	= ..
+N	= $(W)/net80211-openbsd
+X	= $(W)/iwx
+O	= obj
+
+KDEFS	= -D_KERNEL -D_SYSCALL32 -D_SYSCALL32_IMPL -D_ELF64 -D_DDI_STRICT \
+	  -Dsun -D__sun -D__SVR4 -D_ASM_INLINES -DN80211_GIANT
+KFLAGS	= -m64 -O2 -ffreestanding -mno-red-zone -mcmodel=kernel \
+	  -mno-mmx -mno-sse -fno-asynchronous-unwind-tables \
+	  -mindirect-branch=thunk-extern -mindirect-branch-register \
+	  -fstack-protector-strong \
+	  -fno-inline-small-functions -fno-inline-functions-called-once \
+	  -fno-ipa-cp -fno-ipa-icf \
+	  -fno-reorder-functions -fno-reorder-blocks-and-partition \
+	  -fno-aggressive-loop-optimizations \
+	  --param=max-inline-insns-single=450 \
+	  -fno-strict-aliasing -fno-common -nostdinc \
+	  -Wno-format -Wno-unknown-pragmas
+SYSINC	= -I$(UTSINC)
+
+# The three include worlds (see each file's header for why they differ).
+INC_IWM	= -include sys/iwm_prelude.h -include $(X)/iwx_mbuf_adapter.h \
+	  -Icompat -I$(X)/compat -I$(X) $(SYSINC)
+INC_N80	= -include sys/n80211_prelude.h -Icompat -I$(N)/compat -I$(X)/compat \
+	  -I$(X) $(SYSINC)
+# sys/mac_wifi.h is a gate-internal header (not installed in the proto);
+# compat-illumos/ carries a verbatim copy (CDDL, see its PROVENANCE note).
+INC_ILL	= -Icompat-illumos $(SYSINC)
+
+N80_SRC	= $(notdir $(wildcard $(N)/orig/*.c))
+N80_OBJ	= $(addprefix $(O)/n80/,$(N80_SRC:.c=.o))
+
+OBJS	= $(O)/if_iwm.o $(O)/iwm_attach.o $(O)/iwm_bus.o $(O)/iwm_gld.o \
+	  $(O)/n80211_giant.o $(O)/n80211_layout.o $(O)/iwx_mbuf.o \
+	  $(O)/n80211_crypto.o $(O)/n80211_rbtree.o $(O)/n80211_mbuf.o \
+	  $(O)/n80211_kcompat.o $(O)/n80211_stack.o $(N80_OBJ)
+
+all: iwm
+
+iwm: $(OBJS)
+	$(LD) -r -o $@ $(OBJS) -dy -N misc/mac
+
+$(O) $(O)/n80:
+	mkdir -p $@
+
+# OpenBSD driver: the generated patched source.
+$(O)/if_iwm.o: build/if_iwm_illumos.c | $(O)
+	$(CC) $(KFLAGS) $(KDEFS) $(INC_IWM) -c -o $@ $<
+
+$(O)/iwm_attach.o $(O)/iwm_bus.o: $(O)/%.o: %.c | $(O)
+	$(CC) $(KFLAGS) $(KDEFS) $(INC_IWM) -c -o $@ $<
+
+# illumos-only translation units (GLDv3 headers, no OpenBSD prelude).
+$(O)/iwm_gld.o: iwm_gld.c | $(O)
+	$(CC) $(KFLAGS) $(KDEFS) $(INC_ILL) -c -o $@ $<
+$(O)/n80211_giant.o: $(N)/n80211_giant.c | $(O)
+	$(CC) $(KFLAGS) $(KDEFS) $(INC_ILL) -c -o $@ $<
+
+# net80211 + its adapters, in the net80211 world.
+$(O)/n80211_layout.o $(O)/n80211_crypto.o $(O)/n80211_rbtree.o \
+$(O)/n80211_mbuf.o $(O)/n80211_kcompat.o $(O)/n80211_stack.o: \
+    $(O)/%.o: $(N)/%.c | $(O)
+	$(CC) $(KFLAGS) $(KDEFS) $(INC_N80) -c -o $@ $<
+
+# the mbuf layer compiles in its own TU (iwx -I only), as in measure-gate.sh
+$(O)/iwx_mbuf.o: $(X)/iwx_mbuf.c | $(O)
+	$(CC) $(KFLAGS) $(KDEFS) -I$(X) $(SYSINC) -c -o $@ $<
+
+# prefer the patched/generated source when one exists (measure-gate.sh:31)
+$(O)/n80/%.o: $(N)/orig/%.c | $(O)/n80
+	$(CC) $(KFLAGS) $(KDEFS) $(INC_N80) -c -o $@ \
+	    $(if $(wildcard $(N)/build/$*.c),$(N)/build/$*.c,$<)
+
+clean:
+	rm -f iwm $(OBJS)
+
+.PHONY: all clean

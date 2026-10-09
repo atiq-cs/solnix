@@ -9,6 +9,14 @@
 #define _N80211_COMPAT_CRYPTO_SHA1_H
 
 #include <sys/types.h>
+/*
+ * The kernel exports these names (dixi: misc/kcf-era genunix/unix symbols),
+ * and krtld binds a module's same-named global to the kernel copy
+ * (krtld/kobj.c:3020). Private names keep this implementation in use.
+ */
+#define SHA1Init	n80211_SHA1Init
+#define SHA1Update	n80211_SHA1Update
+#define SHA1Final	n80211_SHA1Final
 
 #define SHA1_BLOCK_LENGTH	64
 #define SHA1_DIGEST_LENGTH	20
