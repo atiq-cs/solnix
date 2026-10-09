@@ -117,9 +117,17 @@ let
         group = lib.mkDefault "root";
         home = lib.mkDefault "/root";
         shell = lib.mkDefault "/usr/bin/ksh93";
-        # root default: empty password (console login), matching the proven
-        # make-be root-console behaviour. ssh key auth is the real login path.
-        hashedPassword = lib.mkDefault "";
+        # root has no declared password, as on NixOS (users-groups.nix declares
+        # root with no hashedPassword): null -> "NP" in the generated shadow, and
+        # install-be then KEEPS the password already on the system (set by the
+        # installer or `passwd`). The default used to be "" (an empty password),
+        # and since install-be replaces a declared hash, every switch and boot
+        # reset root to passwordless: measured on the X1, solnix-2 and solnix-3
+        # had an empty root field after solnix-1's root password was set. Only the
+        # installer media wants an empty root password, and it sets one itself
+        # (make-installer-image.sh 5b), as NixOS's installation-device.nix sets
+        # initialHashedPassword = "".
+        hashedPassword = lib.mkDefault null;
       };
     }
   );
