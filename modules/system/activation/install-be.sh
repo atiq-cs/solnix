@@ -404,6 +404,21 @@ if [ -e "$R$ETC/solnix/root-nix-channels" ] && [ ! -e root/.nix-channels ]; then
     || die "writing /root/.nix-channels"
 fi
 
+# 7a. the initial PATH. sshd (read_etc_default_login, for sessions that never source
+#     /etc/profile: `ssh host cmd`), su and login all start a session with PATH
+#     (SUPATH for root) from /etc/default/login. The stock value has neither the
+#     setuid copies nor the system profile, so `ssh dixi uptime` ran the store's
+#     non-setuid uptime: "failed to enable privilege bracketing" (measured on the
+#     X1). Same order as /etc/profile.d/solnix-env.sh: wrappers first, then sw.
+if [ -f etc/default/login ]; then
+  _p=/run/wrappers/bin:/run/current-system/sw/bin:/usr/bin:/usr/sbin:/sbin:/usr/gnu/bin
+  _sp=/run/wrappers/bin:/run/current-system/sw/bin:/usr/sbin:/sbin:/usr/bin:/usr/gnu/bin
+  sed -e "s,^#*PATH=.*,PATH=$_p," -e "s,^#*SUPATH=.*,SUPATH=$_sp," etc/default/login > etc/default/login.new \
+    && mv etc/default/login.new etc/default/login || die "setting PATH in /etc/default/login"
+  grep -q "^PATH=$_p\$" etc/default/login && grep -q "^SUPATH=$_sp\$" etc/default/login \
+    || die "/etc/default/login has no PATH=/SUPATH= line to set"
+fi
+
 # 7b. /etc/system.d: the kernel reads only /etc/system.d/.self-assembly (modsysfile.c),
 #     which `bootadm update-archive` assembles from the directory. A live root skips
 #     bootadm, so its system.d tunables never applied (measured in a crash dump of the

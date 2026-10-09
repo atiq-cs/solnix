@@ -914,6 +914,13 @@ check_internet() {
     else
       log "internet OK: HTTPS fetch worked, but DNS lookup of $_probe_host did NOT -- check /etc/hosts or a stale resolver"
     fi
+    # The login banner (solnix-motd) reads this file. solnix-autonet writes
+    # "down: ..." when the boot-time bring-up gets no lease; without this the
+    # banner kept saying "network: NOT up" after --net had brought it up (X1).
+    if [ -d /var/run ]; then
+      _ifs=$(ipadm show-addr -p -o addrobj,addr 2>/dev/null | awk -F: '$1 !~ /^lo/ && $2 != "" {sub("/.*","",$1); print $1" "$2; exit}')
+      echo "up: ${_ifs:-network} (checked by solnix-install: $_probe_host reachable)" > /var/run/solnix-net-status 2>/dev/null || true
+    fi
     return 0
   fi
 
@@ -2649,7 +2656,10 @@ elif [ "$DO_HOME" = 1 ] && [ -n "$FLAKE_REF" ]; then
   # flake (the common layout: .#<host> next to .#<user>@<host>).
   if command -v nix >/dev/null 2>&1; then
     _fl="${FLAKE_REF%%#*}"; _at="${FLAKE_REF#*#}"
-    _cands=$(nix eval --raw "${_fl}#homeConfigurations" --apply \
+    # _nix_env: HOME and the fetcher cache on the target pool. With HOME=/root
+    # (set when the scratch pool is torn down) nix's git cache for the flake landed
+    # in the RAM ramdisk (measured on the X1: a 116 MB pack under /root/.cache).
+    _cands=$(_nix_env nix eval --raw "${_fl}#homeConfigurations" --apply \
       'x: builtins.concatStringsSep "\n" (builtins.attrNames x)' 2>/dev/null | grep "@${_at}\$" || true)
     if [ -n "$_cands" ]; then
       echo ""

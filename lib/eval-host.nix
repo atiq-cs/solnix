@@ -32,6 +32,10 @@
   # the config to evaluate.
   configModule ? ../configurations/base.nix,
   system ? "x86_64-solaris",
+  # the solnix git revision (the flake passes self.rev): with it the host eval
+  # gives the same toplevel as `nix build .#solnixConfigurations.<x>...`, whose
+  # /etc/os-release carries BUILD_ID. Without it os-release has no BUILD_ID.
+  revision ? null,
 }:
 
 let
@@ -40,7 +44,7 @@ let
   evalConfig = import ./eval-config.nix { inherit lib; };
   sys = evalConfig {
     inherit system pkgs;
-    modules = [ configModule ];
+    modules = [ configModule ] ++ lib.optional (revision != null) { solnix.revision = revision; };
   };
   makeBe = import ./make-be.nix {
     inherit pkgs;
