@@ -189,7 +189,16 @@
       # run in a Nix sandbox — see lib/make-be.nix header + design-make-be.md §7),
       # so what we expose here is that script + the toplevel it consumes. Realise
       # on the illumos host; run the script as root against a scratch disk.
-      packages = lib.genAttrs buildSystems (_buildSystem: {
+      packages = {
+        # The from-source userland, for nix build .#<name> / nix shell .#<name> on
+        # an illumos host (NixOS: packages.<system> = the package set). Only these
+        # build on x86_64-solaris; solnix-dev is the C/C++ toolchain (gcc, gas, make).
+        x86_64-solaris = lib.getAttrs [
+          "bash" "coreutils" "diffutils" "findutils" "gettext" "git" "gnugrep" "gnumake"
+          "gnused" "gnutar" "home-manager" "htop" "jq" "less" "libiconv" "lndir" "ncurses"
+          "openssh" "tmux" "top" "vi" "xz" "binutils" "gccWrapper" "solnix-dev"
+        ] (mkPkgs { }).solnix;
+      } // lib.genAttrs buildSystems (_buildSystem: {
         # the full system closure (T2.8); realise on the illumos host.
         baseToplevel = self.solnixConfigurations.base.config.system.build.toplevel;
         pgfarmToplevel = self.solnixConfigurations.pgfarm.config.system.build.toplevel;

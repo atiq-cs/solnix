@@ -35,7 +35,7 @@ classify() {
 		sub(/[ \t]*(\*\/|-->)?[ \t]*$/, "", s); spdx = s
 	}
 	/Permission is hereby granted, (free of charge|without written agreement)/ { perm = 1 }
-	/Permission to use, copy, modify, (and\/or )?distribute/ { perm = 1 }
+	/Permission to use, copy, modify, (and(\/or)? )?distribute/ { perm = 1 }
 	/Redistribution and use in source and binary forms/ { perm = 1 }
 	/GNU (Lesser |Library )?General Public License/ { gpl = 1 }
 	/[Pp]ublic [Dd]omain/ { pd = 1 }

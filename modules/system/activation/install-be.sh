@@ -134,10 +134,28 @@ done
 # kernel trees as REAL files (bootadm builds the boot_archive by walking the
 # filelist dirs; a `kernel -> store` link would leave the modules out). Re-copied
 # only when the generation's kernel slice changes (marker file).
+# A live root (the installer media) holds its own store on the same filesystem:
+# there the trees are HARD LINKS to the store's files (real files to bootadm and
+# the kernel, no second copy). The copy was 94.5 MB of a ramdisk capped at 700 MiB
+# (measured on the installer toplevel). An installed BE's /nix is a separate
+# dataset, so it keeps real copies. The store's files are read-only and the trees
+# are only read, so sharing the inode cannot change the store.
+_ktree() {   # $1 = tree relative to the kernel slice
+  if [ -n "${SOLNIX_LIVE:-}" ] && [ "$ROOT" = "$R" ]; then
+    ( cd "$R$KERNEL" && find "$1" -print ) | while read -r _e; do
+      if [ -d "$R$KERNEL/$_e" ] && [ ! -h "$R$KERNEL/$_e" ]; then mkdir -p "$_e"
+      elif [ -h "$R$KERNEL/$_e" ]; then ln -s "$(rl "$R$KERNEL/$_e")" "$_e"
+      else ln "$R$KERNEL/$_e" "$_e" || { echo "install-be: FATAL: hard link /$_e" >&2; exit 1; }
+      fi
+    done || die "linking the kernel tree $1"
+  else
+    ( cd "$R$KERNEL" && tar cf - "$1" ) | tar xf - || die "copying the kernel tree $1"
+  fi
+}
 if [ "$(cat .solnix-kernel 2>/dev/null)" != "$KERNEL" ]; then
   for t in kernel usr/kernel platform/i86pc/kernel platform/i86pc/amd64; do
     [ -e "$t" ] && find "$t" -depth -delete
-    [ -e "$R$KERNEL/$t" ] && { mkdir -p "$(dirname "$t")"; ( cd "$R$KERNEL" && tar cf - "$t" ) | tar xf -; }
+    [ -e "$R$KERNEL/$t" ] && { mkdir -p "$(dirname "$t")"; _ktree "$t"; }
   done
   echo "$KERNEL" > .solnix-kernel
 fi
@@ -148,7 +166,11 @@ for e in $(ls "$R$KERNEL/boot"); do
   case $e in solaris) mkdir -p boot/solaris; ( cd "$R$KERNEL/boot" && tar cf - solaris ) | ( cd boot && tar xf - ) ;;
              *) [ -e "boot/$e" ] || cp -R "$R$KERNEL/boot/$e" boot/ ;; esac
 done
-chmod -R u+w boot platform/i86pc/amd64 2>/dev/null
+chmod -R u+w boot 2>/dev/null
+# platform/i86pc/amd64 holds bootadm's boot_archive: writable on a real BE. On a live
+# root its files are hard links into the store, so a chmod would make the STORE
+# writable; the live root builds no boot_archive there (step 8), so leave it.
+[ -n "${SOLNIX_LIVE:-}" ] || chmod -R u+w platform/i86pc/amd64 2>/dev/null
 [ -d boot/fonts ] || die "/boot/fonts missing after copy"
 
 # 3. /etc from the toplevel over the stock tree.

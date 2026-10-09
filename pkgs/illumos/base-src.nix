@@ -421,6 +421,11 @@ rec {
   # world is a dependency: ls/find/sed/tar link libsec (ACLs), libgen and their
   # gate dependencies, which the libc slice does not carry (the closure gate
   # caught them resolving from /lib/64).
+  # NOTE: mk-src-pkg builds one output. nixpkgs moves share/doc and share/info to
+  # doc/info outputs, which a system profile does not install; with one output
+  # the equivalent is to not ship them. man pages stay (NixOS installs man
+  # outputs by default, documentation.man.enable).
+  dropDocs = ''find "$out/share/doc" "$out/share/info" -delete 2>/dev/null || true'';
   gnuTool = { pname, version, url, sha256, flags ? "", deps ? [ needWorld ] }: mkSrcPkg {
     inherit pname version deps; src = { inherit url sha256; };
     build = ''
@@ -430,13 +435,16 @@ rec {
       FORCE_UNSAFE_CONFIGURE=1 MAKEINFO=true ./configure --prefix="$out" --disable-nls ${flags}
       gmake -j4 MAKEINFO=true
       gmake install MAKEINFO=true
+      ${dropDocs}
     '';
   };
   coreutils = gnuTool {
     pname = "coreutils"; version = "9.7";
     url = "https://ftp.gnu.org/gnu/coreutils/coreutils-9.7.tar.xz";
     sha256 = "e8bb26ad0293f9b5a1fc43fb42ba970e312c66ce92c1b0b16713d7500db251bf";
-    flags = "--without-selinux --disable-gcc-warnings --without-openssl --without-libgmp";
+    # one multicall binary with a symlink per tool, nixpkgs' default (singleBinary =
+    # "symlinks"): the separate binaries repeat the same gnulib code ~100 times.
+    flags = "--without-selinux --disable-gcc-warnings --without-openssl --without-libgmp --enable-single-binary=symlinks";
   };
   gnugrep = gnuTool {
     pname = "gnugrep"; version = "3.11";
@@ -469,6 +477,25 @@ rec {
     flags = "--disable-gcc-warnings";
   };
 
+  # GNU libiconv, for gettext. The world's iconv(3) modules are the gate proto's
+  # usr/lib/iconv, which has no amd64/ directory and no UTF-8%UTF-16 or
+  # UTF-8%8859-1 converters, so a 64-bit msgfmt cannot read a UTF-8 .po file
+  # ("invalid multibyte sequence", measured). nixpkgs links gettext to libiconv
+  # on every non-glibc platform; same here.
+  libiconv = mkSrcPkg {
+    pname = "libiconv"; version = "1.17";
+    src = { url = "https://ftp.gnu.org/gnu/libiconv/libiconv-1.17.tar.gz";
+            sha256 = "8f74213b56238c85a50a5329f77e06198771e70dd9a739779f4c02f65d971313"; };
+    build = ''
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-nls
+      gmake -j4
+      gmake install
+      find "$out/share/doc" -delete 2>/dev/null || true
+      [ "$(printf '\303\251' | "$out/bin/iconv" -f UTF-8 -t UTF-16LE | od -An -tx1 | tr -d ' ')" = e900 ] \
+        || { echo "FATAL: libiconv UTF-8 -> UTF-16LE self-check" >&2; exit 1; }
+    '';
+  };
+
   # gettext: home-manager prints its messages through gettext/ngettext (the
   # illumos world has gettext and msgfmt but no ngettext, measured) and its
   # build runs msgfmt. Only the runtime tools are built (gettext-runtime, plus
@@ -477,7 +504,7 @@ rec {
     pname = "gettext"; version = "0.22.5";
     src = { url = "https://ftp.gnu.org/gnu/gettext/gettext-0.22.5.tar.xz";
             sha256 = "fe10c37353213d78a5b83d48af231e005c4da84db5ce88037d88355938259640"; };
-    deps = [ needWorld ];
+    deps = [ needWorld libiconv ];
     build = ''
       for f in $(find . \( -name 'localename*.[ch]' -o -name 'getlocalename_l*.[ch]' -o -name 'setlocale_null*.c' \)); do
         sed -i 's/extern char \* *getlocalename_l/extern const char *getlocalename_l/;s/^char \* *getlocalename_l/const char *getlocalename_l/' "$f"
@@ -489,11 +516,20 @@ rec {
       ac_cv_func_memset_s=no MAKEINFO=true ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-java \
         --disable-csharp --disable-openmp --disable-acl --disable-curses --without-emacs --without-git \
         --without-cvs --without-xz --without-bzip2 --with-included-libxml --with-included-libunistring \
-        --with-included-gettext --disable-c++
+        --with-included-gettext --disable-c++ --with-libiconv-prefix=${libiconv}
       gmake -j4 MAKEINFO=true
       gmake install MAKEINFO=true
+      ${dropDocs}
+      # share/gettext/archive.dir.tar.gz is autopoint's/gettextize's m4 archive
+      # (6.7 MB), for maintainers regenerating a package's build system; nothing at
+      # run time reads it, so it and the two tools that need it are not shipped.
+      find "$out/share/gettext/archive.dir.tar.gz" "$out/bin/autopoint" "$out/bin/gettextize" -delete
       for t in gettext ngettext envsubst msgfmt; do [ -x "$out/bin/$t" ] || { echo "FATAL: no $t" >&2; exit 1; }; done
       [ "$("$out/bin/ngettext" one many 2)" = many ] || { echo "FATAL: ngettext self-check" >&2; exit 1; }
+      # msgfmt must read UTF-8 (home-manager's .po files): the failure mode above.
+      printf 'msgid ""\nmsgstr "Content-Type: text/plain; charset=UTF-8\\n"\n\nmsgid "a"\nmsgstr "\303\251"\n' > t.po
+      "$out/bin/msgfmt" -o t.mo t.po || { echo "FATAL: msgfmt cannot read UTF-8" >&2; exit 1; }
+      /usr/bin/elfdump -d "$out/bin/msgfmt" | grep -q 'NEEDED.*libiconv' || { echo "FATAL: msgfmt not linked to libiconv" >&2; exit 1; }
     '';
   };
 
@@ -508,7 +544,61 @@ rec {
       gmake -j4
       gmake install
       [ "$(echo '{"a":[1,2]}' | "$out/bin/jq" -c '.a|add')" = 3 ] || { echo "FATAL: jq self-check" >&2; exit 1; }
+      ${dropDocs}
     '';
+  };
+
+  # lndir (X.org util), which home-manager's home-files derivation runs to merge
+  # the generated tree, as on NixOS (xorg.lndir). Its build needs only
+  # xorgproto's headers and xproto.pc, which install without compiling anything.
+  xorgproto = mkSrcPkg {
+    pname = "xorgproto"; version = "2024.1";
+    src = { url = "https://www.x.org/releases/individual/proto/xorgproto-2024.1.tar.xz";
+            sha256 = "372225fd40815b8423547f5d890c5debc72e88b91088fbfb13158c20495ccb59"; };
+    build = ''
+      ./configure --prefix="$out" --datarootdir="$out/share" --without-xmlto --without-fop --disable-legacy
+      gmake install
+    '';
+  };
+  lndir = mkSrcPkg {
+    pname = "lndir"; version = "1.0.5";
+    src = { url = "https://www.x.org/releases/individual/util/lndir-1.0.5.tar.xz";
+            sha256 = "3b65577a5575cce095664f5492164a96941800fe6290a123731d47f3e7104ddb"; };
+    linkDeps = [ xorgproto ];
+    build = ''
+      ./configure --prefix="$out"
+      gmake -j4
+      gmake install
+      # self-check: a tree of links that mirrors the source tree.
+      mkdir -p t/s/a t/d; echo x > t/s/a/f
+      "$out/bin/lndir" -silent "$PWD/t/s" t/d
+      [ -L t/d/a/f ] && [ "$(cat t/d/a/f)" = x ] || { echo "FATAL: lndir self-check" >&2; exit 1; }
+    '';
+  };
+
+  # hostname with -f: home-manager's flake mode looks up "$USER@$(hostname -f)"
+  # (then $(hostname), $(hostname -s)) to pick a homeConfigurations entry, and
+  # illumos hostname has no -f (usage: hostname [-s], measured). -f prints the
+  # name plus the DNS domain when one is configured (domainname), else the
+  # bare name: the same fallback GNU inetutils' hostname -f gives an
+  # unresolvable host. Every other use goes to the system's hostname.
+  hostname = derivation {
+    name = "hostname-f"; system = "x86_64-solaris";
+    builder = "/usr/bin/bash";
+    args = [ "-c" ''
+      /usr/bin/mkdir -p $out/bin
+      /usr/bin/cat > $out/bin/hostname <<'EOF'
+    #!/usr/bin/bash
+    if [ "$#" = 1 ] && { [ "$1" = -f ] || [ "$1" = --fqdn ]; }; then
+      h=$(/usr/bin/hostname); d=$(/usr/bin/domainname 2>/dev/null)
+      [ -n "$d" ] && case "$h" in *.*) ;; *) h="$h.$d";; esac
+      echo "$h"; exit 0
+    fi
+    exec /usr/bin/hostname "$@"
+    EOF
+      /usr/bin/chmod 555 $out/bin/hostname
+      [ "$($out/bin/hostname -f)" = "$(/usr/bin/hostname)" ] || [ -n "$(/usr/bin/domainname)" ]
+    '' ];
   };
 
   # home-manager (the command), pinned to the release-26.05 commit the
@@ -518,17 +608,20 @@ rec {
   # and its activation use readlink -e, realpath -m, mktemp --tmpdir, find -printf
   # and ngettext, none of which the illumos tools provide (measured). The
   # source is also installed as share/home-manager, the <home-manager> path the
-  # script's non-flake build resolves its modules from. nixos-option and
-  # inetutils are not on the path: `home-manager option` and the flake-mode
-  # `hostname -f` lookup are the two features that lose.
+  # script's non-flake build resolves its modules from. nixos-option is not on
+  # the path, so the home-manager option subcommand is the one that is missing;
+  # inetutils' role (hostname -f) is the hostname shim above.
   home-manager = derivation {
     name = "home-manager-26.05-db7d5e2"; system = "x86_64-solaris";
-    hmSrc = builtins.fetchTarball {
+    # tests/ (1.9 MB, ~2,700 files) is dropped: only the module tree, lib and the
+    # script are read at run time. nixpkgs' package keeps the whole source as
+    # HOME_MANAGER_PATH; this departs from it to fit the installer media.
+    hmSrc = let src = builtins.fetchTarball {
       url = "https://github.com/nix-community/home-manager/archive/db7d5e2332710f5abb088f6b5de927d7f9511b35.tar.gz";
       sha256 = "1vy9bsc0wgz9ccgghpv4vn0z077j486il9jhrld78llf9720xsbz";
-    };
+    }; in builtins.path { path = src; name = "home-manager-source"; filter = p: _: p != "${src}/tests"; };
     inherit bash;
-    depPath = builtins.concatStringsSep ":" (map (p: "${p}/bin") [ coreutils findutils gettext gnused gnugrep jq less ncurses ]);
+    depPath = builtins.concatStringsSep ":" (map (p: "${p}/bin") [ coreutils findutils gettext gnused gnugrep jq less ncurses hostname ]);
     msgfmt = "${gettext}/bin/msgfmt";
     builder = "/usr/bin/bash";
     args = [ "-c" ''

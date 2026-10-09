@@ -71,8 +71,11 @@ NAR=$(awk '{s+=$1} END {printf "%d", s}' "$OUT.sizes")
 # alone (542 MB ramdisk) filled up during install-be ("No space left on device" on
 # kernel/, /boot/fonts, /dev) and bootadm then read a truncated unix. Count those
 # copies explicitly, from the same store paths install-be copies them from.
+# The kernel trees are hard links into the ramdisk's own store on the live root
+# (install-be, SOLNIX_LIVE), so they add no bytes; the early set and the stock
+# /etc+/var are still real copies.
 RT_COPY=0
-for p in $(grep -E -- '-(illumos-kernel|illumos-early|illumos-stock-etc-var)$' "$OUT.closure"); do
+for p in $(grep -E -- '-(illumos-early|illumos-stock-etc-var)$' "$OUT.closure"); do
   RT_COPY=$(( RT_COPY + $(nix-store -q --size "$p") ))
 done
 NEED=$(( NAR + RT_COPY + (NAR + RT_COPY) * UFS_OVERHEAD_PCT / 100 + RD_MIN_FREE_KB * 1024 ))
