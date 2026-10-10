@@ -27,10 +27,9 @@ s3.solnix.io) is independent of every EC2 account.
   check `sts get-caller-identity` first and fail. It now requires an explicit
   `AWS_PROFILE` (no default), so a stale default can't make it look clean.
 - Every other script reads `$AWS_PROFILE` or takes `--profile`.
-- No other profile in ~/.aws/config authenticates today (default, numa, ouch, cracker,
-  beef, chiuso, mala: no credentials; cache: InvalidClientTokenId). **There is no
-  replacement EC2 account yet.** EC2 work (aarch64 in the cloud, SPARC/T-series
-  rentals, metal benchmarks) waits for the maintainer to provide one.
+- Replaced by **kiwi** (`830118047484`, 2026-10-10, docs/account-migration-hotdog-to-kiwi.md):
+  32 vCPU standard on-demand (far below hotdog's 1152; metal needs a quota case). hotdog is
+  still usable until 14:43 UTC today.
 
 ## When the next account arrives
 

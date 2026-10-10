@@ -15,6 +15,13 @@ to floki. Image builds that need an OpenIndiana host go on an EC2 OI builder
 restored from R2 (docs/account-migration-lava-to-hotdog.md), and KVM boot tests
 go on an EC2 metal instance (nested virtualization) or real hardware.
 
+The current EC2 account is **kiwi** (`AWS_PROFILE=kiwi`, `830118047484`, us-east-2,
+32 vCPU; docs/account-migration-hotdog-to-kiwi.md); hotdog expired 2026-10-10. Name
+`AWS_PROFILE` explicitly (sg-guard has no default), re-check `describe-instances`
+before a launch, never a `0.0.0.0/0`/`::/0` rule, and terminate instances plus
+their volumes after. kiwi's 32-vCPU quota suits a build host; metal benchmarks need
+a quota-increase case first.
+
 ## solnix.io belongs to the infra team; we are a client of its APIs
 
 The site, the binary cache (cache.solnix.io), the search API (search.solnix.io),
