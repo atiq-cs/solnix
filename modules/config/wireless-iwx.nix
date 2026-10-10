@@ -25,6 +25,35 @@
 let
   cfg = config.hardware.wirelessIwx;
   iwm = config.hardware.wirelessIwm;
+
+  # Networks highest priority first; each line "SSID<TAB>pskFile".
+  iwmNets = lib.sort (a: b: a.priority > b.priority)
+    (lib.mapAttrsToList (ssid: n: { inherit ssid; inherit (n) pskFile priority; }) iwm.networks);
+  wifiJoinScript = pkgs.writeText "solnix-wifi-join.sh" ''
+    # Join the first configured SSID that is in range. PSKs are read at RUN
+    # time from their 0600 files (never baked into this store-readable script).
+    # illumos joins a WPA network via a secure object: create-secobj -c wpa
+    # from the key file, then connect-wifi -k <obj> -s wpa. Runs as root (SMF).
+    set -u
+    PATH=/usr/sbin:/usr/bin:/sbin:/bin
+    link=iwm0
+    dladm show-phys "$link" >/dev/null 2>&1 || { echo "solnix-wifi-join: no $link"; exit 0; }
+    scan=$(dladm scan-wifi -p -o essid "$link" 2>/dev/null)
+    try() {
+      ssid="$1"; pskfile="$2"
+      printf '%s\n' "$scan" | grep -Fxq "$ssid" || return 1
+      [ -r "$pskfile" ] || { echo "solnix-wifi-join: $pskfile unreadable"; return 1; }
+      obj="solnix_$ssid"
+      dladm delete-secobj -t "$obj" 2>/dev/null
+      dladm create-secobj -t -c wpa -f "$pskfile" "$obj" || return 1
+      if dladm connect-wifi -k "$obj" -s wpa -e "$ssid" "$link"; then
+        echo "solnix-wifi-join: connected $ssid"; return 0
+      fi
+      return 1
+    }
+    ${lib.concatMapStringsSep "\n    " (n: ''try ${lib.escapeShellArg n.ssid} ${lib.escapeShellArg n.pskFile} && exit 0'') iwmNets}
+    echo "solnix-wifi-join: no configured SSID in range"; exit 0
+  '';
 in
 {
   options.hardware.wirelessIwm = {
@@ -38,6 +67,47 @@ in
         (iwlwifi-9000-pu-b0-jf-b0-46.ucode, installed as iwm-9000-46). The
         driver is BSD-licensed; the firmware is redistributable but not open.
       '';
+    };
+
+    attachAtBoot = lib.mkOption {
+      type = lib.types.bool;
+      default = iwm.enable;
+      defaultText = "config.hardware.wirelessIwm.enable";
+      description = ''
+        Bind the iwm driver at boot: emit the name_to_major / driver_aliases /
+        minor_perm lines so the AC 9560 (pciex8086,a370) attaches as iwm0
+        without a manual add_drv. Requires the iwm module built into the BE
+        kernel tree (pkgs.solnix.iwm-driver); until that derivation exists this
+        only records intent and the install-be driver-DB merge is a no-op.
+      '';
+    };
+
+    networks = lib.mkOption {
+      default = { };
+      description = ''
+        WPA2 networks to join automatically at boot, by SSID. The driver scans
+        on boot and joins the first configured SSID that is in range.
+
+        The pre-shared key is NOT stored here (it would land world-readable in
+        the Nix store). Set pskFile to a path, present on the installed system,
+        that holds the passphrase on its first line, mode 0600. On NixOS this is
+        networking.wireless secrets; the analog here is a plain root-owned file
+        (sops/agenix can render it).
+      '';
+      type = lib.types.attrsOf (lib.types.submodule {
+        options = {
+          pskFile = lib.mkOption {
+            type = lib.types.str;
+            description = "Path to a 0600 file whose first line is the WPA2 passphrase for this SSID.";
+          };
+          priority = lib.mkOption {
+            type = lib.types.int;
+            default = 0;
+            description = "Higher wins when several configured SSIDs are in range at boot.";
+          };
+        };
+      });
+      example = lib.literalExpression ''{ sedgwick.pskFile = "/etc/wifi/sedgwick.psk"; }'';
     };
   };
 
@@ -84,6 +154,24 @@ in
         acceptFirmwareLicense = iwm.allowUnfreeFirmware;
       })
     ];
+
+    # Boot auto-join: scan, pick the highest-priority configured SSID in range,
+    # read its PSK from the 0600 file, dladm connect-wifi. Transient run-once.
+    # The driver-DB lines that make iwm attach at boot are emitted by
+    # pkgs.solnix.iwm-driver via install-be (hardware.wirelessIwm.attachAtBoot);
+    # this service runs after the card is up, by boot-attach or by hand.
+    smf.services.solnix-wifi-join = lib.mkIf (iwm.networks != { }) {
+      enable = true;
+      category = "site";
+      description = "solnix iwm wifi auto-join";
+      model = "transient";
+      start = {
+        exec = "/bin/sh ${wifiJoinScript}";
+        timeoutSeconds = 120;
+      };
+      stop.exec = ":true";
+      requires = [ "svc:/network/physical:default" ];
+    };
   })
   (lib.mkIf cfg.enable (lib.mkMerge [
     {
