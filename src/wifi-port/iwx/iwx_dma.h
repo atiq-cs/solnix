@@ -27,6 +27,18 @@
  *     but the TX case has already had its 802.11 header trimmed with m_adj()
  *     and mapping from b_datap->db_base would DMA the trimmed header.
  *
+ * CONTIGUOUS BUFFERS (the iwm bug, latent here too): iwx_m_alloc() is backed
+ * by allocb(), whose buffers are not page-aligned and can bind to TWO cookies.
+ * The RX descriptor and the oversized firmware-command descriptor each store a
+ * SINGLE address (dm_segs[0].ds_addr), so those buffers must be physically
+ * contiguous and single-cookie. iwm fixed this by allocating the DMA-destined
+ * buffers with iwm_dma_mblk_alloc() (DDI-contiguous memory wrapped in an
+ * esballoc mblk; see iwm/iwm_bus.c), NOT iwx_m_alloc(). When iwx's bus_dma
+ * layer is written it must do the same: route the RX refill and the fw-command
+ * buffer through a contiguous allocator, not iwx_m_alloc(), or the first attach
+ * fails with "could not allocate RX ring" exactly as iwm did on the X1
+ * (docs/iwm-rx-contiguous-dma.md).
+ *
  * STATUS: ENOSYS -- not implemented, not stubbed, fails at link.
  */
 #ifndef _IWX_DMA_H

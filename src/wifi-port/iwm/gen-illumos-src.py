@@ -28,12 +28,17 @@ rep('''	m = m_gethdr(M_DONTWAIT, MT_DATA);
 	}
 ''', '''	/*
 	 * ILLUMOS: m_gethdr + MCLGET/MCLGETL + the (m_flags & M_EXT) test all
-	 * collapse into one allocation that opens the whole cluster for writing,
-	 * which is what "m->m_len = m->m_pkthdr.len = m->m_ext.ext_size" did.
-	 * allocb() either returns a cluster of the requested size or fails, so
-	 * there is no separate M_EXT case to test. Same rewrite as iwx.
+	 * collapse into one allocation. This buffer is DMA'd and its RX
+	 * descriptor stores a single address (dm_segs[0].ds_addr), so it must be
+	 * physically contiguous and bind as one cookie; allocb()'s 4 KiB buffers
+	 * can straddle a page and bind as two, which failed the nsegs == 1 map
+	 * with EFBIG and lost the RX ring. iwm_dma_mblk_alloc() returns an mblk
+	 * backed by DDI-contiguous memory, and opens the whole buffer as the
+	 * write window, which is what "m->m_len = m->m_pkthdr.len =
+	 * m->m_ext.ext_size" did.
 	 */
-	m = iwx_m_alloc(size <= MCLBYTES ? MCLBYTES : IWM_RBUF_SIZE);
+	m = iwm_dma_mblk_alloc(sc->sc_dmat,
+	    size <= MCLBYTES ? MCLBYTES : IWM_RBUF_SIZE);
 	if (m == NULL)
 		return ENOBUFS;
 ''')
@@ -82,8 +87,14 @@ rep('''		    m->m_len >= sizeof(struct ieee80211_qosframe_addr4)) {''',
 rep('''		    m->m_len >= sizeof(struct ieee80211_qosframe)) {''',
     '''		    iwx_m_len(m) >= sizeof(struct ieee80211_qosframe)) {''')
 rep('''		m = MCLGETL(NULL, M_DONTWAIT, totlen);''',
-    '''		/* ILLUMOS: MCLGETL(NULL, ...) is just an allocation. */
-		m = iwx_m_alloc(totlen);''')
+    '''		/*
+		 * ILLUMOS: MCLGETL(NULL, ...) is an allocation, but this buffer
+		 * is DMA'd below (bus_dmamap_load) and its TX descriptor stores a
+		 * single address with num_tbs = 1, so it must be contiguous and
+		 * single-cookie -- the same reason as the RX refill. allocb() does
+		 * not promise that; iwm_dma_mblk_alloc() does.
+		 */
+		m = iwm_dma_mblk_alloc(sc->sc_dmat, totlen);''')
 rep('''	totlen = m->m_pkthdr.len;
 
 	if (ic->ic_opmode''', '''	totlen = iwx_m_pktlen(m);	/* ILLUMOS: m->m_pkthdr.len */

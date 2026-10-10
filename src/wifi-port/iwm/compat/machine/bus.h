@@ -131,4 +131,18 @@ extern void bus_space_unmap(bus_space_tag_t, bus_space_handle_t, bus_size_t);
  * Declared in iwx_dma.h.
  */
 
+/*
+ * Allocate an mblk whose data buffer is physically contiguous DDI-DMA memory,
+ * aligned so it binds as exactly ONE cookie through a bus_dmamap. The RX
+ * refill buffers and the oversized firmware-command buffer are DMA'd and their
+ * hardware descriptors store a single address (dm_segs[0].ds_addr), so the
+ * backing memory must not straddle a page: allocb() does not promise that,
+ * ddi_dma_mem_alloc with dma_attr_align == IWM_RBUF_SIZE does. The mblk is
+ * esballoc()'d over the DDI memory with a free callback, so net80211/GLDv3
+ * still see a plain mblk and the DMA memory is released when the last freemsg()
+ * drops it. Returns NULL on failure. Lives in iwm_bus.c because it needs the
+ * DDI DMA tag, which the mbuf translation layer deliberately does not carry.
+ */
+extern mblk_t *iwm_dma_mblk_alloc(bus_dma_tag_t, size_t);
+
 #endif /* _IWM_COMPAT_MACHINE_BUS_H */

@@ -306,6 +306,69 @@ bus_dmamem_unmap(bus_dma_tag_t tag, caddr_t kva, size_t size)
 	(void) size;		/* the mapping lives until bus_dmamem_free */
 }
 
+/*
+ * esballoc free_arg: owns the DDI-contiguous buffer that backs one RX or
+ * firmware-command mblk. Freed when the last freemsg() on that mblk fires the
+ * free callback. The frtn_t is embedded so the whole thing is one allocation.
+ */
+struct iwm_dmabuf {
+	bus_dma_tag_t		db_tag;
+	bus_dma_segment_t	db_seg;
+	frtn_t			db_frtn;
+};
+
+static void
+iwm_dmabuf_free(caddr_t arg)
+{
+	struct iwm_dmabuf *db = (struct iwm_dmabuf *)(void *)arg;
+
+	bus_dmamem_free(db->db_tag, &db->db_seg, 1);
+	kmem_free(db, sizeof (*db));
+}
+
+/*
+ * Physically contiguous, single-cookie mblk for the DMA paths. bus_dmamem_alloc
+ * requests one segment (sgllen == 1), so DDI must place the memory contiguously
+ * and a later bus_dmamap bind returns exactly one cookie -- unlike allocb(),
+ * whose 4 KiB buffers can straddle a page and bind as two. The 256-byte align
+ * matches what the ring descriptors already use (iwm_dma_contig_alloc).
+ */
+mblk_t *
+iwm_dma_mblk_alloc(bus_dma_tag_t tag, size_t size)
+{
+	struct iwm_dmabuf *db;
+	bus_dma_segment_t seg;
+	int rseg;
+	mblk_t *m;
+
+	if (size == 0)
+		return (NULL);
+	if (bus_dmamem_alloc(tag, (bus_size_t)size, 256, 0, &seg, 1, &rseg,
+	    BUS_DMA_NOWAIT) != 0)
+		return (NULL);
+	db = kmem_zalloc(sizeof (*db), KM_NOSLEEP);
+	if (db == NULL) {
+		bus_dmamem_free(tag, &seg, 1);
+		return (NULL);
+	}
+	db->db_tag = tag;
+	db->db_seg = seg;
+	db->db_frtn.free_func = iwm_dmabuf_free;
+	db->db_frtn.free_arg = (caddr_t)db;
+	m = esballoc((unsigned char *)seg.ds_kva, size, BPRI_MED, &db->db_frtn);
+	if (m == NULL) {
+		bus_dmamem_free(tag, &seg, 1);
+		kmem_free(db, sizeof (*db));
+		return (NULL);
+	}
+	/*
+	 * Open the write window to the whole buffer, as iwx_m_alloc does: the
+	 * device DMAs into [b_rptr, b_wptr) and the length is corrected after.
+	 */
+	m->b_wptr = m->b_rptr + size;
+	return (m);
+}
+
 void
 bus_space_unmap(bus_space_tag_t t, bus_space_handle_t h, bus_size_t size)
 {
