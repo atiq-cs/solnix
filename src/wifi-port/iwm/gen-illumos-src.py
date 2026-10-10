@@ -133,8 +133,27 @@ rep('''			nextpkt = (struct iwm_rx_packet *)
 ''')
 rep('''				m = m_copym(m0, 0, M_COPYALL, M_DONTWAIT);''',
     '''				m = iwx_m_copy(m0);	/* ILLUMOS: m_copym */''')
+# ILLUMOS double-free fix: iwm_free_rx_ring is called twice on the attach error
+# path -- once at iwm_alloc_rx_ring's own `fail:`, then again by iwm_attach's
+# cleanup. OpenBSD's bus_dmamap_destroy tolerates a second call; illumos'
+# ddi_dma_free_handle does not (it mutex_destroy()s an already-freed handle ->
+# "mutex_destroy: bad mutex" panic, root-caused from a dixi crash dump). NULL the
+# per-buffer map after destroying it so the second pass is a no-op. The contig
+# frees above are already idempotent (iwm_dma_contig_free NULLs dma->map).
+rep("""		if (data->map != NULL)
+			bus_dmamap_destroy(sc->sc_dmat, data->map);
+	}
+}""",
+    """		if (data->map != NULL) {
+			bus_dmamap_destroy(sc->sc_dmat, data->map);
+			data->map = NULL;	/* ILLUMOS: free_{rx,tx}_ring runs twice on the error path */
+		}
+	}
+}""", count=2)
+
+# rep() has already asserted each needle's exact count; replace all of them.
 for o, n in R:
-    src = src.replace(o, n, 1)
+    src = src.replace(o, n)
 os.makedirs(os.path.join(here, 'build'), exist_ok=True)
 out = os.path.join(here, 'build/if_iwm_illumos.c')
 open(out, 'w').write(src)

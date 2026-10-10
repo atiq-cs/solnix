@@ -1,6 +1,30 @@
 --- a/if_iwm.c
 +++ b/if_iwm.c
-@@ -4557,26 +4557,22 @@
+@@ -1404,8 +1404,10 @@
+ 			m_freem(data->m);
+ 			data->m = NULL;
+ 		}
+-		if (data->map != NULL)
++		if (data->map != NULL) {
+ 			bus_dmamap_destroy(sc->sc_dmat, data->map);
++			data->map = NULL;	/* ILLUMOS: free_{rx,tx}_ring runs twice on the error path */
++		}
+ 	}
+ }
+ 
+@@ -1543,8 +1545,10 @@
+ 			m_freem(data->m);
+ 			data->m = NULL;
+ 		}
+-		if (data->map != NULL)
++		if (data->map != NULL) {
+ 			bus_dmamap_destroy(sc->sc_dmat, data->map);
++			data->map = NULL;	/* ILLUMOS: free_{rx,tx}_ring runs twice on the error path */
++		}
+ 	}
+ }
+ 
+@@ -4557,26 +4561,22 @@
  	int err;
  	int fatal = 0;
  
@@ -35,7 +59,7 @@
  	err = bus_dmamap_load_mbuf(sc->sc_dmat, data->map, m,
  	    BUS_DMA_READ|BUS_DMA_NOWAIT);
  	if (err) {
-@@ -4920,8 +4916,16 @@
+@@ -4920,8 +4920,16 @@
  		return; /* drop */
  	}
  
@@ -54,7 +78,7 @@
  
  	if (iwm_rx_hwdecrypt(sc, m, rx_pkt_status, &rxi)) {
  		m_freem(m);
-@@ -5377,8 +5381,12 @@
+@@ -5377,8 +5385,12 @@
  		return;
  	}
  
@@ -69,7 +93,7 @@
  
  	/* Account for padding following the frame header. */
  	if (desc->mac_flags2 & IWM_RX_MPDU_MFLG2_PAD) {
-@@ -5406,7 +5414,18 @@
+@@ -5406,7 +5418,18 @@
  			hdrlen += IEEE80211_CCMP_HDRLEN;
  		}
  	
@@ -89,7 +113,7 @@
  		m_adj(m, 2);
  	}
  
-@@ -5425,7 +5444,7 @@
+@@ -5425,7 +5448,7 @@
  		if (subframe_idx > 0)
  			rxi.rxi_flags |= IEEE80211_RXI_HWDEC_SAME_PN;
  		if (ieee80211_has_qos(wh) && ieee80211_has_addr4(wh) &&
@@ -98,7 +122,7 @@
  			struct ieee80211_qosframe_addr4 *qwh4 = mtod(m,
  			    struct ieee80211_qosframe_addr4 *);
  			qwh4->i_qos[0] &= htole16(~IEEE80211_QOS_AMSDU);
-@@ -5434,7 +5453,7 @@
+@@ -5434,7 +5457,7 @@
  			iwm_flip_address(qwh4->i_addr3);
  			iwm_flip_address(qwh4->i_addr4);
  		} else if (ieee80211_has_qos(wh) &&
@@ -107,7 +131,7 @@
  			struct ieee80211_qosframe *qwh = mtod(m,
  			    struct ieee80211_qosframe *);
  			qwh->i_qos[0] &= htole16(~IEEE80211_QOS_AMSDU);
-@@ -6334,7 +6353,8 @@
+@@ -6334,7 +6357,8 @@
  			err = EINVAL;
  			goto out;
  		}
@@ -117,7 +141,7 @@
  		if (m == NULL) {
  			printf("%s: could not get fw cmd mbuf (%zd bytes)\n",
  			    DEVNAME(sc), totlen);
-@@ -6816,7 +6836,7 @@
+@@ -6816,7 +6840,7 @@
  		    m, BPF_DIRECTION_OUT);
  	}
  #endif
@@ -126,7 +150,7 @@
  
  	if (ic->ic_opmode != IEEE80211_M_MONITOR &&
  	    (wh->i_fc[1] & IEEE80211_FC1_PROTECTED)) {
-@@ -6827,7 +6847,7 @@
+@@ -6827,7 +6851,7 @@
  				return ENOBUFS;
  			/* 802.11 header may have moved. */
  			wh = mtod(m, struct ieee80211_frame *);
@@ -135,7 +159,7 @@
  			k = NULL; /* skip hardware crypto below */
  		} else {
  			/* HW appends CCMP MIC */
-@@ -6932,11 +6952,16 @@
+@@ -6932,11 +6956,16 @@
  		return err;
  	}
  	if (err) {
@@ -156,7 +180,7 @@
  		err = bus_dmamap_load_mbuf(sc->sc_dmat, data->map, m,
  		    BUS_DMA_NOWAIT | BUS_DMA_WRITE);
  		if (err) {
-@@ -10459,7 +10484,12 @@
+@@ -10459,7 +10488,12 @@
  		/* need to send management frames even if we're not RUNning */
  		m = mq_dequeue(&ic->ic_mgtq);
  		if (m) {
@@ -170,7 +194,7 @@
  			goto sendit;
  		}
  
-@@ -10470,7 +10500,7 @@
+@@ -10470,7 +10504,7 @@
  		m = ifq_dequeue(&ifp->if_snd);
  		if (!m)
  			break;
@@ -179,7 +203,7 @@
  		    (m = m_pullup(m, sizeof (*eh))) == NULL) {
  			ifp->if_oerrors++;
  			continue;
-@@ -11024,7 +11054,13 @@
+@@ -11024,7 +11058,13 @@
  
  	m0 = data->m;
  	while (m0 && offset + minsz < IWM_RBUF_SIZE) {
@@ -194,7 +218,7 @@
  		qid = pkt->hdr.qid;
  		idx = pkt->hdr.idx;
  
-@@ -11055,9 +11091,9 @@
+@@ -11055,9 +11095,9 @@
  			size_t maxlen = IWM_RBUF_SIZE - offset - minsz;
  			nextoff = offset +
  			    roundup(len, IWM_FH_RSCSR_FRAME_ALIGN);
@@ -206,7 +230,7 @@
  			    !iwm_rx_pkt_valid(nextpkt)) {
  				/* No need to copy last frame in buffer. */
  				if (offset > 0)
-@@ -11075,7 +11111,7 @@
+@@ -11075,7 +11115,7 @@
  				 * packet. Always copy from offset zero to
  				 * preserve m_pkthdr.
  				 */
