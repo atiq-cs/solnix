@@ -4,6 +4,25 @@ Status of this document: PLANNED. Nothing here has been run beyond the load test
 changes dixi is marked; nothing in this plan is to be run until the maintainer approves the dump device AND the
 alias/attach step, in that order.
 
+## Prerequisite before loading alongside i915: symbol scoping (REAL, done)
+
+iwm and i915 both carry an OpenBSD-kernel-API compat layer and used to export the SAME ~870 global names
+(tsleep, wakeup, bus_dmamap_*, timeout_*, task_*, pci_conf_read, loadfirmware, systq, ...). krtld binds a
+loading module's non-local symbols to any existing definition (uts/common/krtld/kobj.c do_symbols), so whichever
+of the two loaded second had its compat references cross-wired into the first module's copies -- two unproven
+drivers sharing one driver's internals. Measured on dixi: pre-fix iwm exported 871 globals; its intersection
+with pre-fix i915's 4643 globals, minus the module interface, was 33 (bus_dma*, timeout_*, task_*, pci_*,
+tsleep, loadfirmware, config_mountroot, systq, ...).
+
+Fix: a linker mapfile at the `ld -r` step (src/wifi-port/iwm/iwm.mapfile, applied by Makefile.illumos with
+-Breduce) scopes every symbol local except the kernel-loader interface iwm defines -- _init, _fini, _info (iwm
+has no _depends_on; it links -N misc/mac). The equivalent lands in i915 (src/drm-port/i915/i915.mapfile, which
+also keeps _depends_on). After the fix iwm exports exactly _init/_fini/_info, i915 exactly
+_init/_fini/_info/_depends_on, and their exported-global intersection minus the interface is 0; the 33 compat
+collisions are 0. build-dixi.sh fails the build if iwm ever exports a non-interface global again
+(scripts/check-compat-local.sh is the standalone gate; its negative control is that the pre-fix module fails).
+BOTH modules must be symbol-scoped before either is loaded while the other is resident.
+
 ## 0. Already measured (REAL, 2026-10-09, dixi solnix-2 BE, kernel solnix-ac45d71fc2b0)
 
 - Module: dixi:/var/tmp/streamD2/solnix/src/wifi-port/iwm/iwm (rebuild with

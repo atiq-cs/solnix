@@ -1,0 +1,49 @@
+# iwm.mapfile -- scope every symbol of the linked iwm module local except the
+# module interface krtld resolves by name.
+#
+# WHY: iwm and i915 both carry an OpenBSD-kernel-API compat layer, and both
+# define the SAME global names (tsleep, wakeup, bus_dmamap_*, timeout_*,
+# task_*, pci_conf_read, loadfirmware, systq, ...). krtld binds a loading
+# module's non-local symbols to an existing definition (uts/common/krtld/
+# kobj.c do_symbols -> kobj_lookup_all), so whichever of the two loads second
+# gets its compat references cross-wired into the first module's copies -- two
+# unproven drivers sharing one driver's internals. Measured on dixi: with iwm
+# loaded, 33 i915 references resolved into iwm's address range.
+#
+# The fix is to export nothing from either module except what the kernel loader
+# actually looks up by name. krtld/modctl resolve exactly:
+#   _init  (modctl.c mod_init -> kobj_lookup(mp, "_init"))
+#   _fini
+#   _info  (modctl.c -> kobj_lookup(mp, "_info"))
+#   _depends_on (krtld kobj.c depends_on -> lookup_one(mp, "_depends_on"));
+#             iwm has NO _depends_on symbol -- it links -N misc/mac instead.
+#             It is therefore NOT listed in global: below. Measured on dixi
+#             (stream W2): listing a global: name the module does not define
+#             makes ld -Breduce create a STRONG UNDEF reference to it
+#             (elfdump -s: _depends_on NOTY GLOB UNDEF) and emit "symbol
+#             referencing errors", taking iwm from 0 unresolved to 1 and
+#             failing the unresolved gate. So global: must list only symbols
+#             the module actually defines. (i915 DOES define _depends_on and
+#             lists it; see i915.mapfile.)
+# Everything else -- modlinkage, dev_ops, every compat global -- is referenced
+# only from inside the module (via mod_install) and is resolved at link time by
+# the module's own symbol table, so it can be local.
+#
+# Pattern and syntax copied from the gate's own kernel-module mapfiles
+# (uts/common/zmod/mapfile and uts/common/ctf/mapfile): a version-2 mapfile
+# with SYMBOL_SCOPE { global: <interface>; local: *; }, applied at the
+# `ld -r` step together with -Breduce so the reduction takes effect in a
+# relocatable object.
+#
+# NOTE: new solnix build glue, not derived from any GPL source.
+
+$mapfile_version 2
+
+SYMBOL_SCOPE {
+	global:
+		_init;
+		_fini;
+		_info;
+	local:
+		*;
+};

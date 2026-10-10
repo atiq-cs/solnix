@@ -4,6 +4,26 @@ Status: PLANNED. Nothing here has been run. Nothing is to be run until the maint
 then the no-alias load (step 3), then the alias (step 5), each separately. Same shape as
 `src/wifi-port/iwm/ATTACH-PLAN.md`, which was carried out for iwm up to its step 3.
 
+## Prerequisite before loading alongside iwm: symbol scoping (REAL, done)
+
+i915 and iwm both carry an OpenBSD-kernel-API compat layer and used to export the SAME global names (tsleep,
+wakeup, bus_dmamap_*, timeout_*, task_*, pci_conf_read, loadfirmware, systq, ...). krtld binds a loading module's
+non-local symbols to any existing definition (uts/common/krtld/kobj.c do_symbols), so whichever of the two loaded
+second had its compat references cross-wired into the first module's copies. Measured on dixi: pre-fix i915
+exported 4643 globals; its intersection with pre-fix iwm's 871 globals, minus the module interface, was 33
+(the bus_dma*/timeout_*/task_*/pci_*/tsleep/loadfirmware/config_mountroot/systq set -- the 33 that resolved into
+loaded iwm in stream G).
+
+Fix: a linker mapfile at the `ld -r` step (src/drm-port/i915/i915.mapfile, applied by build-module.sh with
+-Breduce) scopes every symbol local except the kernel-loader interface i915 defines -- _init, _fini, _info and
+_depends_on (char _depends_on[] = "misc/gfx_private", which krtld reads by name). The equivalent lands in iwm
+(src/wifi-port/iwm/iwm.mapfile, which has no _depends_on). After the fix i915 exports exactly
+_init/_fini/_info/_depends_on, iwm exactly _init/_fini/_info, and their exported-global intersection minus the
+interface is 0; the 33 compat collisions are 0 (post-fix module 4,810,080 B vs pre-fix 5,535,936 B, the local
+symbols dropped from the symtab). build-module.sh fails the build if i915 ever exports a non-interface global
+again (scripts/check-compat-local.sh is the standalone gate; its negative control is that the pre-fix module
+fails). BOTH modules must be symbol-scoped before either is loaded while the other is resident.
+
 ## 0. What exists (REAL, 2026-10-09, dixi BE solnix-3, kernel solnix-ac45d71fc2b0)
 
 - Module: dixi:/home/gburd/streamE4/mod3/i915, ELF64 ET_REL AMD64, 5,523,936 bytes (text 3,236,200, data 2,152,

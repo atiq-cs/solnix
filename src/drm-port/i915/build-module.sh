@@ -50,7 +50,13 @@ grep -E 'i915_drmglue.c:[0-9]+:[0-9]+: warning' "$out/drmglue.log"
 $CC -m64 -mcmodel=kernel -mno-red-zone -D_KERNEL -ffreestanding -nostdinc \
     -std=gnu11 -O2 -Wall -Werror -I$port/i915/openbsd-orig/include -I$port/i915 \
     -I$GATE_INC -c "$port/i915/i915_pciid.c" -o "$out/i915_pciid.o" || exit 1
-$LD -r -o "$out/i915" "$out"/obj/*.o "$compat"/obsd_*.o "$out/i915_illumos.o" \
+# -Breduce + the mapfile scope every symbol local except the module interface
+# krtld looks up by name (_init/_fini/_info/_depends_on). Without this the
+# OpenBSD-compat globals (tsleep, bus_dmamap_*, timeout_*, ...) stay global and
+# krtld cross-wires them against any other loaded compat module (iwm). See
+# i915.mapfile. Path is relative to this script, found via the port dir.
+mapfile=$port/i915/i915.mapfile
+$LD -r -Breduce -M "$mapfile" -o "$out/i915" "$out"/obj/*.o "$compat"/obsd_*.o "$out/i915_illumos.o" \
     "$out/i915_drmglue.o" "$out/i915_pciid.o" > "$out/ld.log" 2>&1 || { cat "$out/ld.log"; exit 1; }
 for k in /platform/i86pc/kernel/amd64/unix /kernel/amd64/genunix \
     /platform/i86pc/kernel/misc/amd64/gfx_private; do
@@ -68,11 +74,19 @@ fi
 $NM -u "$out/i915" | awk '{print $2}' | sort -u > "$out/undef.txt"
 $NM -g --defined-only "$out/i915" | awk '{print $3}' | sort -u > "$out/defined.txt"
 comm -23 "$out/undef.txt" "$out/kernel.txt" > "$out/unresolved.txt"
-comm -12 "$out/defined.txt" "$out/ksyms-all.txt" | grep -v -x -E '_init|_fini|_info' > "$out/collide.txt"
+comm -12 "$out/defined.txt" "$out/ksyms-all.txt" | grep -v -E '^(_init|_fini|_info)$' > "$out/collide.txt"
+# Load-order-independent gate: the linked module must export NOTHING but the
+# kernel loader interface (_init/_fini/_info/_depends_on). This proves the
+# i915.mapfile reduction took effect and catches the OpenBSD-compat global
+# cross-wiring defect even when the other compat module (iwm) is not loaded.
+# Same logic as scripts/check-compat-local.sh, inlined so the build is self-
+# contained on dixi (the port tree is scp'd without the repo's scripts/).
+grep -v -E '^(_init|_fini|_info|_depends_on)$' "$out/defined.txt" > "$out/compat-local.txt" || true
 echo "drm objects: $nobj  module: $(ls -l "$out/i915" | awk '{print $5}') bytes" \
     " text+data+bss: $(size "$out/i915" 2>/dev/null | tail -1)"
 echo "undefined: $(wc -l < "$out/undef.txt")  unresolved vs running unix+genunix:" \
     "$(wc -l < "$out/unresolved.txt")  name collisions vs /dev/ksyms" \
-    "($(wc -l < "$out/ksyms-all.txt") syms): $(wc -l < "$out/collide.txt")"
-cat "$out/unresolved.txt" "$out/collide.txt"
-test ! -s "$out/unresolved.txt" && test ! -s "$out/collide.txt"
+    "($(wc -l < "$out/ksyms-all.txt") syms): $(wc -l < "$out/collide.txt")" \
+    " non-interface exported globals: $(wc -l < "$out/compat-local.txt")"
+cat "$out/unresolved.txt" "$out/collide.txt" "$out/compat-local.txt"
+test ! -s "$out/unresolved.txt" && test ! -s "$out/collide.txt" && test ! -s "$out/compat-local.txt"

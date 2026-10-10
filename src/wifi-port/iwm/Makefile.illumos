@@ -71,8 +71,13 @@ OBJS	= $(O)/if_iwm.o $(O)/iwm_attach.o $(O)/iwm_bus.o $(O)/iwm_gld.o \
 
 all: iwm
 
-iwm: $(OBJS)
-	$(LD) -r -o $@ $(OBJS) -dy -N misc/mac
+# -Breduce + the mapfile scope every symbol local except the module interface
+# krtld looks up by name. For iwm that is _init/_fini/_info (iwm has no
+# _depends_on; it links -N misc/mac). Without this the OpenBSD-compat globals
+# (tsleep, bus_dmamap_*, timeout_*, ...) stay global and krtld cross-wires them
+# against any other loaded compat module (i915). See iwm.mapfile.
+iwm: $(OBJS) iwm.mapfile
+	$(LD) -r -Breduce -M iwm.mapfile -o $@ $(OBJS) -dy -N misc/mac
 
 $(O) $(O)/n80:
 	mkdir -p $@

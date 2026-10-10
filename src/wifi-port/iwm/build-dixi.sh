@@ -53,7 +53,15 @@ cat $out/iwm-unresolved.txt
 # krtld rebinds a module global to the kernel's same-named symbol (kobj.c:3020);
 # only the module linkage entry points may share a name with the kernel.
 nm -p iwm | awk '\$2 ~ /^[TDBRC]\$/ {print \$3}' | sort -u > $out/iwm-defined.txt
-comm -12 $out/iwm-defined.txt $out/ksyms-unix-genunix-mac.txt | grep -v -x -E '_init|_fini|_info' > $out/iwm-collide.txt || true
+comm -12 $out/iwm-defined.txt $out/ksyms-unix-genunix-mac.txt | grep -v -E '^(_init|_fini|_info)\$' > $out/iwm-collide.txt || true
 echo \"kernel-name collisions: \$(wc -l < $out/iwm-collide.txt)\"; cat $out/iwm-collide.txt
-test ! -s $out/iwm-unresolved.txt && test ! -s $out/iwm-collide.txt
+# Load-order-independent gate: the linked module must export NOTHING but the
+# kernel loader interface (_init/_fini/_info/_depends_on). This proves the
+# iwm.mapfile reduction took effect and catches the OpenBSD-compat global
+# cross-wiring defect even when the other compat module (i915) is not loaded.
+# Same logic as scripts/check-compat-local.sh, inlined so the build is self-
+# contained on dixi.
+grep -v -E '^(_init|_fini|_info|_depends_on)\$' $out/iwm-defined.txt > $out/iwm-compat-local.txt || true
+echo \"non-interface exported globals: \$(wc -l < $out/iwm-compat-local.txt)\"; cat $out/iwm-compat-local.txt
+test ! -s $out/iwm-unresolved.txt && test ! -s $out/iwm-collide.txt && test ! -s $out/iwm-compat-local.txt
 "
