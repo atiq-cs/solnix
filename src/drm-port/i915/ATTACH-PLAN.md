@@ -26,6 +26,37 @@ then the no-alias load (step 3), then the alias (step 5), each separately. Same 
 What has NOT run anywhere: any kernel code path of this module. `ddi_regs_map_setup` offsets, MSI allocation, the
 device-tree walk, `hat_devload` attributes, contig_alloc and the OpenBSD attach itself are unexecuted.
 
+## 0b. The cdev and the console (REAL build, dixi generation after solnix-3; nothing run)
+
+Module dixi:/home/gburd/streamE5/full/i915, clean rebuild of all 391 drm objects (`-D__HAVE_ACPI -DNACPI=1`):
+5,536,008 bytes (text 3,241,816), sha1 d2a541ecc9e97db7e41a5512e20756a813ed60ac. Gates: 202 undefined, **0 not
+exported by unix + genunix + misc/gfx_private** (the module's `_depends_on`, as vgatext's), **0 collisions** with the
+25,267 globals of /dev/ksyms. Both negative controls fail by name.
+
+- **F2 fixed:** `rasops_init` (obsd_glue.c) sets `ri_font` to a metrics-only 8x16 font, so the attachhook's
+  `ri->ri_font->fontwidth` no longer dereferences NULL. Control: the E4 module's rasops_init is `mov $0x30,%eax; ret`;
+  the new one stores `ri_font` (+0x20).
+- **Attach order (F1):** DDI attach does `gfxp_fb_attach` and creates `text-0` (DDI_NT_DISPLAY) before `card0` and
+  `renderD128` (DDI_NT_DISPLAY_DRM), so tem's "first minor" is the gfxp console, as on vgatext. The OpenBSD
+  inteldrm attach (the modeset) runs from the first open of card0/renderD128 (`inteldrm_ca` is referenced only from
+  `i915_il_open`, gobjdump). So **binding i915 instead of vgatext keeps the same console**, which answers 4(b):
+  no new console code, the vgatext one, **until the first drm open**. While a DRM master exists, text-0 goes
+  KD_GRAPHICS; when it goes, `drm_client_dev_restore` then KD_TEXT repaints from gfxp_bitmap's shadow copy.
+  OPEN RISK (not verified): gfxp draws into the GOP buffer at `fb_info.paddr` (GMADR offset 0). After the OpenBSD
+  modeset that buffer is still on screen only if `intel_fbdev` inherits the BIOS plane's stolen-memory object
+  (intel_plane_initial.c) and `drm_client_dev_restore` puts that framebuffer back. If it allocates a new one
+  instead, KD_TEXT repaints memory nobody scans out: the console is invisible but alive, and ssh still works.
+  The first load must check this, and must have a dump device ready.
+- **Minors (F3):** kind(7:0) | instance(15:8) | clone(31:16); `minor()` for OpenBSD code is `getminor`
+  (obsd_kern.h). Test: 524,280 opens -> 524,280 distinct drm_file keys; with the SVR3 `x & 0xff`: 8.
+- **ioctl (F4):** Linux _IOC decoded, OpenBSD's re-encoded (i915_drmioc.h); 152/152 OpenBSD uapi ioctls match
+  OpenBSD's own encoding, all 21 R1a ioctls present, none has an argument >= 256 bytes; reading the Linux bits as BSD
+  fails 90 checks. 8/8 runs.
+- **devmap (F6/F7):** the MAP_DUMB offset is looked up as OpenBSD's i915_gem_mmap does; only WC offsets (Gen9 dumb)
+  are served: `pin_map(I915_MAP_WC)` -> `gfxp_umem_cookie_init` (KMEM_NON_PAGEABLE) -> `gfxp_devmap_umem_setup`
+  with DDI_MERGING_OK_ACC (write-combining); unpinned on the last devmap_unmap. Other mmap types: ENOTSUP (R2).
+- `selwakeup` is now `pollwakeup` on the drm_file's pollhead (was a no-op), so poll(2) on a vblank/flip event wakes.
+
 ## 1. Prerequisite: a crash dump device (needs maintainer approval; NOT done)
 
 Same as iwm section 1, and the same request (/tmp/streamD-dump-request.md):
@@ -105,6 +136,9 @@ initial plane config is read back by `intel_initial_plane_config` only to inheri
    `gfxp_bitmap` provides one (illumos `sys/visual_io.h`), so tem moves to i915 at attach. (b) is the illumos-native
    answer and the equivalent of OpenBSD's `wsdisplay_cnattach`. It is PLANNED and is the console handover work item.
 
+(Section 0b supersedes (b) for the boot console: i915 hosts the vgatext console itself. The open risk there is
+what the screen shows after the first modeset.)
+
 **Therefore the order is:** step 3 (load, no alias) → write the (b) console handover → step 5 (alias) at a reboot,
 with ssh open, a dump device, and the BE to roll back to (`beadm activate solnix-3`). Not before (b): without it, a
 successful i915 attach is indistinguishable from a hang on the laptop's own screen.
@@ -126,7 +160,10 @@ selecting the previous generation; solnix should do the same once this works (iw
 
 ## 6. Known gaps that a first attach will hit (PLANNED, from the code)
 
-- `drmopen`/`drmioctl`/`drmmmap` are not wired to cb_ops: `/dev/dri/card0` returns ENXIO.
+- cdev (written, never run): open/close/read/ioctl/chpoll/devmap are wired (section 0b), but no path of it has executed.
+  Known ceilings: a failed `devmap_device` after `i915_il_devmap` leaks the pin and its cookie (bounded by failed mmap
+  calls); KDSETMODE switches only on open/close/SET_MASTER/DROP_MASTER, not on the master's process dying without a
+  close (the close does run on exit, so this is the same path).
 - bus_dma is a stub (ENOTSUP): any GEM object that needs `drm_dmamem_alloc` (phys objects, cursor on old gens) fails.
   CFL cursor and fbdev use stolen/shmem objects (uao + GGTT through BAR0), which are implemented.
 - `pci_find_device` walks the whole illumos tree (MAP); `intr_barrier` is a disable/enable pair (MAP).

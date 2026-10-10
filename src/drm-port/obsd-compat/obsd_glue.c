@@ -275,10 +275,11 @@ obsd_isa_hole_vaddr(paddr_t pa)
 	return (hole == NULL ? NULL : hole + (pa - 0xa0000));
 }
 
-/* ------------------------------------------------- kqueue / select: STUB */
-/* drm event poll and dma-buf/sync_file kqueue filters. R1a STUB: the
- * device poll(9E) is not wired yet, so there is nobody to notify. */
-void selwakeup(struct selinfo *si) { (void) si; }
+/* ------------------------------------------------- kqueue / select */
+/* selwakeup (REAL): the i915 cdev's chpoll(9E) hands poll the selinfo's
+ * pollhead (i915_drmglue.c), so a drm event wakes poll(2)/port waiters.
+ * kqueue filters stay STUB: illumos has no kqueue. */
+void selwakeup(struct selinfo *si) { pollwakeup(&si->si_ph, POLLIN | POLLRDNORM); }
 void knote_locked(struct klist *kl, long hint) { (void) kl; (void) hint; }
 void klist_insert_locked(struct klist *kl, struct knote *kn)
 { (void) kl; (void) kn; }
@@ -395,8 +396,32 @@ int wsemuldisplaydevprint(void *a, const char *p)
 { (void) a; (void) p; return (UNCONF); }
 int wsemuldisplaydevsubmatch(struct device *p, void *m, void *a)
 { (void) p; (void) m; (void) a; return (0); }
+/*
+ * rasops_init (STUB with metrics): inteldrm_attachhook ignores the return
+ * value and reads ri->ri_font->fontwidth/fontheight right after the call,
+ * so a NULL ri_font is a NULL dereference on the first successful
+ * i915_driver_probe. The font below has metrics and no glyphs: its only
+ * readers are that copy into inteldrm_stdscreen and the wsdisplay
+ * accessops, and wsdisplay never attaches here (wsemuldisplaydevsubmatch
+ * returns 0). ri_ops stays zeroed; its one caller (pack_attr) runs only
+ * when dev_priv->console is set, which needs vga_is_console or efifb,
+ * both 0 on illumos. The illumos console is gfxp_fb, never rasops.
+ */
+static struct wsdisplay_font obsd_rasops_font = {
+	.name = "obsd-metrics-8x16",
+	.fontwidth = 8,
+	.fontheight = 16,
+	.stride = 1,
+};
 int rasops_init(struct rasops_info *ri, int r, int c)
-{ (void) ri; (void) r; (void) c; return (ENOTSUP); }
+{
+	(void) r; (void) c;
+	ri->ri_font = &obsd_rasops_font;
+	ri->ri_cols = ri->ri_width / obsd_rasops_font.fontwidth;
+	ri->ri_rows = ri->ri_height / obsd_rasops_font.fontheight;
+	ri->ri_caps = 0;
+	return (ENOTSUP);
+}
 int rasops_alloc_screen(void *v, void **c, int *x, int *y, uint32_t *a)
 { (void) v; (void) c; (void) x; (void) y; (void) a; return (ENOTSUP); }
 void rasops_free_screen(void *v, void *c) { (void) v; (void) c; }

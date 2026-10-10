@@ -50,6 +50,11 @@ test-ioc:
 	    echo "NEGATIVE CONTROL DID NOT FAIL"; exit 1; \
 	 else echo "negative control (Linux dir bits read as BSD): FAILS as required, \
 	    `grep -c ^FAIL test/drmioc_neg.out` checks"; fi
+	$(CC) $(TFLAGS) -Werror -DI915_MINOR_SABOTAGE -o test/test_minor_neg test/test_drmioc.c test/tbl_*.o
+	@if ./test/test_minor_neg > test/minor_neg.out; then \
+	    echo "NEGATIVE CONTROL (minor) DID NOT FAIL"; exit 1; \
+	 else echo "negative control (SVR3 minor x & 0xff): FAILS as required:"; \
+	    grep ^FAIL test/minor_neg.out; fi
 
 PROBE_FILES = i915/i915_pci.c i915/intel_device_info.c
 probe:

@@ -2,7 +2,9 @@
 # build-module.sh -- link the i915 kernel module on dixi and check it against
 # the running kernel, the same gates as src/wifi-port/iwm/build-dixi.sh:
 #   1. every undefined symbol of the module is defined by the running
-#      kernel (unix + genunix);
+#      kernel (unix + genunix) or by a module named in the i915 module's
+#      _depends_on (misc/gfx_private, the console framebuffer code krtld
+#      loads before i915);
 #   2. no global the module defines is already defined by the kernel or by
 #      ANY loaded module (/dev/ksyms): krtld would bind the module's
 #      references to the kernel's copy (kobj.c do_symbols); only _init,
@@ -39,12 +41,19 @@ nobj=$(ls "$out"/obj/*.o | wc -l)
 (cd "$compat" && gmake obj > "$out/compat.log" 2>&1) || { tail "$out/compat.log"; exit 1; }
 $CC $F -I$port/i915 -I$port/i915/openbsd-orig/include -Werror -Wall \
     -c "$port/i915/i915_illumos.c" -o "$out/i915_illumos.o" || exit 1
+# i915_drmglue.c includes OpenBSD's drm/i915 headers, so it is built the way
+# the OpenBSD objects are (their headers do not pass -Wall -Werror here:
+# the OpenBSD kprintf format attribute, redefined Linux macros).
+$CC $F -I$port/i915 -c "$port/i915/i915_drmglue.c" -o "$out/i915_drmglue.o" \
+    > "$out/drmglue.log" 2>&1 || { grep -E 'error|Error' "$out/drmglue.log"; exit 1; }
+grep -E 'i915_drmglue.c:[0-9]+:[0-9]+: warning' "$out/drmglue.log"
 $CC -m64 -mcmodel=kernel -mno-red-zone -D_KERNEL -ffreestanding -nostdinc \
     -std=gnu11 -O2 -Wall -Werror -I$port/i915/openbsd-orig/include -I$port/i915 \
     -I$GATE_INC -c "$port/i915/i915_pciid.c" -o "$out/i915_pciid.o" || exit 1
 $LD -r -o "$out/i915" "$out"/obj/*.o "$compat"/obsd_*.o "$out/i915_illumos.o" \
-    "$out/i915_pciid.o" > "$out/ld.log" 2>&1 || { cat "$out/ld.log"; exit 1; }
-for k in /platform/i86pc/kernel/amd64/unix /kernel/amd64/genunix; do
+    "$out/i915_drmglue.o" "$out/i915_pciid.o" > "$out/ld.log" 2>&1 || { cat "$out/ld.log"; exit 1; }
+for k in /platform/i86pc/kernel/amd64/unix /kernel/amd64/genunix \
+    /platform/i86pc/kernel/misc/amd64/gfx_private; do
 	$NM -g --defined-only "$k" | awk '{print $3}'
 done | sort -u > "$out/kernel.txt"
 # /dev/ksyms is the symbol table of the kernel AND every loaded module.

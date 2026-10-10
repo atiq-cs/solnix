@@ -71,4 +71,38 @@ i915_ioc_xlate(uint32_t lcmd, struct i915_ioc *x)
 	return (0);
 }
 
+/*
+ * Minor numbers. illumos gives a driver a 32-bit minor (getminor); the
+ * i915 module lays it out as
+ *	bits 7:0   kind: I915_IL_CARD 0, I915_IL_TEXT 64, I915_IL_RENDER 128
+ *	bits 15:8  driver instance
+ *	bits 31:16 clone index (0 = the node itself; open(9E) of card0 or
+ *	           renderD128 returns a fresh one per open, as a clone device)
+ * OpenBSD's drm_drv.c reads its own minor as (clone << CLONE_SHIFT) |
+ * realminor, realminor = drm unit (+128 for render; 64..127 is refused
+ * with ENXIO, so the text kind can never be mistaken for a drm node), and
+ * keys each open's drm_file by the whole value. i915_il_ominor builds that
+ * value; the cdev passes drm a dev_t carrying it.
+ */
+#define I915_IL_CARD		0u
+#define I915_IL_TEXT		64u
+#define I915_IL_RENDER		128u
+#define I915_IL_KIND(m)		((m) & 0xffu)
+#define I915_IL_INST(m)		(((m) >> 8) & 0xffu)
+#define I915_IL_CLONE(m)	((m) >> 16)
+#define I915_IL_CLONE_MAX	0xffffu
+#define I915_IL_MINOR(inst, kind, clone) \
+	(((uint32_t)(clone) << 16) | ((uint32_t)(inst) << 8) | (kind))
+
+static inline uint32_t
+i915_il_ominor(uint32_t m, uint32_t drmunit)
+{
+#ifdef I915_MINOR_SABOTAGE
+	/* negative control: the illumos SVR3 minor() (x & 0xff) */
+	m &= 0xffu;
+#endif
+	return ((I915_IL_CLONE(m) << 8) |
+	    (drmunit + (I915_IL_KIND(m) == I915_IL_RENDER ? 128u : 0u)));
+}
+
 #endif /* _I915_DRMIOC_H */

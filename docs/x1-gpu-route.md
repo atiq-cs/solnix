@@ -602,3 +602,20 @@ Design that follows: clone minors (c<<8 | 0 card, | 128 render) per open; a "tex
 created FIRST so tem lands on it, served by gfxp_fb_open/ioctl/devmap; OpenBSD's inteldrm attach
 (the modeset) deferred to the first open of card0 or renderD128; the console goes KD_GRAPHICS
 while a DRM master exists and back to KD_TEXT (plus drm_client_dev_restore) when it drops.
+
+### 5.7 The cdev and the console written into the module (stream E5b; REAL build, nothing loaded)
+
+All five facts above now have code, in a module that still passes both gates. dixi, clean rebuild of all 391 objects:
+5,536,008 bytes, 202 undefined, 0 not exported by unix + genunix + misc/gfx_private, 0 collisions with /dev/ksyms;
+both gate negative controls fail by name. Details and the controls: `src/drm-port/i915/ATTACH-PLAN.md` section 0b.
+
+| fact | code | measured |
+|---|---|---|
+| F2 | `obsd_glue.c` rasops_init sets a metrics-only `ri_font` | E4 rasops_init never stores ri_font; the new one does (disassembly) |
+| F3 | `obsd_kern.h` minor() = getminor; minor layout in `i915_drmioc.h`; clone index from an id_space in open(9E) | 524,280 opens give 524,280 distinct drm_file keys; with SVR3 x & 0xff, 8 |
+| F4 | `i915_il_ioctl`: Linux _IOC -> OpenBSD's, copyin/copyout as OpenBSD's sys_ioctl does | 152/152 ioctls, 21/21 R1a; sabotage fails 90 checks; 8/8 runs |
+| F6/F7 | `i915_il_devmap` + `i915_drmglue.c`: WC mmap offset -> pin_map WC -> KMEM_NON_PAGEABLE cookie -> devmap_umem_setup (write-combining) | compiles and links; not run |
+| F1 | DDI attach: gfxp_fb_attach + `text-0` before `card0`/`renderD128`; OpenBSD attach deferred to the first drm open; KD_GRAPHICS while a master exists | attach references gfxp_fb_attach, then text-0, then the drm minors; `inteldrm_ca` is referenced only from open |
+
+Open risk: after the first modeset, gfxp's console buffer (GOP, GMADR offset 0) is visible only if i915's fbdev
+inherits the BIOS plane. Not verified; the first load must check it.

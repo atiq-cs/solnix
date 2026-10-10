@@ -77,7 +77,7 @@ main(void)
 	for (j = 0; j < sizeof (r1a) / sizeof (r1a[0]); j++)
 		for (i = 0; i < tbl_linux_n; i++)
 			if (strcmp(tbl_linux_name[i], r1a[j]) == 0) {
-				struct i915_ioc x;
+				struct i915_ioc x = { 0 };
 
 				(void) i915_ioc_xlate(tbl_linux_cmd[i], &x);
 				printf("R1a %-34s linux 0x%08x obsd 0x%08x "
@@ -97,6 +97,43 @@ main(void)
 		    25, "8 KB argument accepted");
 		CHECK(i915_ioc_xlate((4u << 16) | 0x641e, &x) == 25,
 		    "_IO with a size accepted");
+	}
+	{	/*
+		 * Minors: decode i915_il_ominor exactly as OpenBSD's drm_drv.c
+		 * does (drm_get_device_from_kdev, drmopen's realminor), for drm
+		 * units 0-3, card and render, clones 1..I915_IL_CLONE_MAX of
+		 * instance 0. Every open must get its own fminor key.
+		 */
+		uint32_t u, k, c, kinds[2] = { I915_IL_CARD, I915_IL_RENDER };
+		size_t nkeys = 0, bad = 0;
+		static unsigned char seen[1u << 24];
+
+		for (u = 0; u < 4; u++)
+			for (k = 0; k < 2; k++)
+				for (c = 1; c <= I915_IL_CLONE_MAX; c++) {
+					uint32_t m = I915_IL_MINOR(0, kinds[k], c);
+					uint32_t om = i915_il_ominor(m, u);
+					int real = om & ((1 << 8) - 1), unit = real;
+
+					if (unit >= 128)
+						unit -= 128;
+					if ((uint32_t)unit != u || (real >= 128) != (k == 1) ||
+					    (real >= 64 && real < 128) || om >= (1u << 24))
+						bad++;
+					if (!seen[om])
+						nkeys++;
+					seen[om] = 1;
+				}
+		CHECK(bad == 0, "minors: %zu wrong unit/type", bad);
+		CHECK(nkeys == 4u * 2u * I915_IL_CLONE_MAX,
+		    "minors: %zu distinct drm_file keys for %u opens", nkeys,
+		    4u * 2u * I915_IL_CLONE_MAX);
+		CHECK(I915_IL_INST(I915_IL_MINOR(7, I915_IL_TEXT, 5)) == 7 &&
+		    I915_IL_KIND(I915_IL_MINOR(7, I915_IL_TEXT, 5)) == I915_IL_TEXT &&
+		    I915_IL_CLONE(I915_IL_MINOR(7, I915_IL_TEXT, 5)) == 5,
+		    "minor field round trip");
+		printf("minors: %zu opens -> %zu distinct drm_file keys, %zu bad\n",
+		    (size_t)(4u * 2u * I915_IL_CLONE_MAX), nkeys, bad);
 	}
 	printf("%zu ioctls, %zu with a >= 256-byte argument; %s: %d failure(s)\n",
 	    tbl_linux_n, wide, fails ? "FAIL" : "PASS", fails);

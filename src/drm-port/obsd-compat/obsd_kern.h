@@ -714,8 +714,9 @@ extern int hw_ver_unused;
 extern char *hw_vendor, *hw_prod, *hw_ver;
 extern int cpuspeed;
 /* clone devices: drm_drv.c splits minor(dev) into unit and clone index.
- * PLANNED: on illumos the per-open minor comes from the driver's own
- * clone minor allocation in open(9E); the layout below is kept. */
+ * On illumos the per-open minor comes from i915_illumos.c's open(9E),
+ * which allocates the clone index and returns the new dev_t (the minor
+ * layout is i915_drmioc.h's). */
 #define CLONE_SHIFT	8
 #define CLONE_MAPSZ	128
 #define IO_NDELAY	0x10
@@ -725,7 +726,18 @@ extern int cpuspeed;
  * which is UIO_READ. MAP: a future caller that copies in must not use this. */
 #define uiomove(b, n, uio)	uiomove((b), (n), UIO_READ, (uio))
 #define IOCPARM_LEN(x)	(((x) >> 16) & IOCPARM_MASK)
-/* minor()/major(): illumos sys/mkdev.h macros, same meaning. */
+/*
+ * minor()/major(): OpenBSD's minor() keeps the clone index above
+ * CLONE_SHIFT, and drm_drv.c uses the whole value as the per-open
+ * drm_file key (fminor = minor(kdev)). illumos's _KERNEL minor() is the
+ * SVR3 one, x & O_MAXMIN (0xff): it cuts the clone index, so every open of
+ * one node would share a key. The OpenBSD code gets the full illumos
+ * minor instead.
+ */
+#undef minor
+#undef major
+#define minor(x)	((int)getminor(x))
+#define major(x)	((int)getmajor(x))
 
 /* ---- firmware (DECL: firmware(9F), as the C3 amdgpu port does) ---- */
 extern int loadfirmware(const char *, u_char **, size_t *);
