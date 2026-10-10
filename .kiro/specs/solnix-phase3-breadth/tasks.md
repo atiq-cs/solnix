@@ -141,3 +141,41 @@ The packages for a modern graphical desktop on solnix:
   are genuinely hard illumos gaps — inventory realistically, build the tractable
   CPU/software paths first, flag the multi-quarter porting efforts as tracked
   sub-projects, don't pretend they're a quick package build.
+
+## T3.6 — LX-branded zones: run Linux ELF binaries unchanged (MUST-HAVE, maintainer 2026-10-10)
+
+The maintainer's directive: one illumos distro runs Linux binaries unchanged via the
+LX brand; solnix MUST include it, enabled by default. This is the illumos answer to
+"run a Linux binary on solnix" and the native alternative to a VM. It is NOT in our
+pinned illumos-gate (which has only the sn1/solaris10 brands); the LX brand lives in
+illumos-joyent / SmartOS, with pieces upstreamed over time.
+
+- **LX-1 Source + licence survey.** Locate the lx brand: usr/src/uts/common/brand/lx
+  (kernel: lx_brand, the syscall translation table, lx_proc/lx_sysfs/lx_cgroup
+  emulated filesystems, lx_ptm/devfs shims) and usr/src/lib/brand/lx (userland:
+  lx_init, lx_brand.so.1, zone templates) in illumos-joyent (github.com/joyent/
+  illumos-joyent) or smartos-live. Record the delta vs our gate (ac45d71), and the
+  licence of each file (CDDL expected; the no-GPL rule applies to anything linked
+  into the kernel/base).
+- **LX-2 Kernel brand module.** Port the lx brand kernel module to build against the
+  solnix kernel (the same gate the i915/iwm ports target). The syscall emulation is
+  the bulk; many lx syscalls map to illumos equivalents, a tail are emulated. Gate:
+  the brand loads (modload lx_brand) with 0 unresolved symbols, as the driver ports do.
+- **LX-3 Userland + zone brand.** lx_brand.so.1 and the brand scripts; a declarative
+  solnix module (modules/virtualisation/lx-zones.nix?) that installs the brand and the
+  zone tooling. A Linux root filesystem image (a distro tarball) is the zone's content;
+  NixOS's analog is none (Linux runs Linux), so this is illumos-specific -- document why.
+- **LX-4 Prove it.** Create an lx zone from a small Linux rootfs (Alpine/Debian tarball)
+  and run a dynamically-linked Linux x86_64 ELF (e.g. /bin/busybox, a glibc hello) to
+  completion, measured, with a negative control (the same binary refused in a native
+  solnix zone with SIGSYS, as the Oct-8 coreutils core showed). Gate: a Linux binary
+  runs unchanged in an lx zone on solnix.
+- **LX-5 Default-on.** Enable the brand by default (the maintainer's requirement),
+  behind a module option so it can be turned off, with the brand package in the base
+  closure. Decide: is a Linux rootfs shipped on the media, or fetched/supplied by the
+  user (likely the latter -- the media stays generic). Document.
+
+Cost: multi-quarter (the syscall-emulation surface is large and tracks the Linux ABI).
+Upstream-first where possible: prefer landing fixes in illumos over a solnix fork.
+This is the native-Linux-binary feature; it pairs with, and is preferred over, running
+a full Linux VM under bhyve for the same purpose.

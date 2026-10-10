@@ -188,6 +188,16 @@ Boot + run + expose ALL hardware on AWS/EC2, Azure, GCP across all architectures
 Mostly post-stable; x86 Azure/GCP driver work can start pre-stable to make solnix
 a first-class guest on all three clouds' x86 before the ARM port lands.
 
+## LX-branded zones: run Linux binaries unchanged (MUST-HAVE, maintainer 2026-10-10)
+
+Spec T3.6 (.kiro/specs/solnix-phase3-breadth). The illumos LX brand runs Linux ELF
+binaries natively, no VM; the maintainer requires it in solnix, enabled by default.
+Not in our pinned gate (sn1/solaris10 only) -- it lives in illumos-joyent/SmartOS.
+LX-1 source+licence survey, LX-2 kernel brand module (loads, 0 unresolved), LX-3
+userland + a declarative lx-zones module, LX-4 prove a Linux x86_64 binary runs in an
+lx zone (negative control: SIGSYS in a native zone), LX-5 default-on behind an option.
+Multi-quarter (the Linux syscall-emulation surface); upstream-first.
+
 ## Builder federation (spec: .kiro/specs/solnix-builder-federation)
 
 A daily, LLM-free builder that drains solnix.io's work queue and publishes through the
