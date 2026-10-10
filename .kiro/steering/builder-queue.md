@@ -17,12 +17,18 @@ measurement wins and the difference goes to them in a /tmp/solnix-io-<topic>-rep
   says how each package is built for each system. The `out` column is the authority
   anchor: solnix.io accepts a submission only for a path the SERVED copy lists. Our
   repo's file is the source of truth; the infra team reviews and publishes it.
-- **Submit is mechanical.** Signed challenge (ed25519, the enrolled `site-team`
-  identity), /begin -> PUT unsigned NAR + narinfo to staging -> /finalize -> poll
-  /status. We never sign narinfos and never hold the cache key: the site signs with
-  `cache.solnix.io-1:8UNr...`. Client: `scripts/cache-submit.py` (dry-run default).
-- **Failures are queue states.** retry/backoff/attempts live in the queue; a human
-  looks only at `failed` rows.
+- **Submit is mechanical, ONE LEAF PER SUBMISSION** (infra 2026-10-09, option c): stage
+  only the leaf's NAR + its one unsigned narinfo. The SITE walks the published dependency
+  closure itself from the leaf's References; never re-stage an already-published dep. An
+  unpublished reference is rejected (deps-first). So a leaf is submittable the moment ALL
+  its references are published -- walk the DAG (libc/cacert/hostname-f first, zero refs;
+  then rtld, gcc-lib, ... as their refs go live). Signed challenge (ed25519, the enrolled
+  `site-team` identity), /begin -> PUT to staging -> /finalize -> poll /status. We never
+  sign narinfos and never hold the cache key: the site signs with 8UNr. Client:
+  `scripts/cache-submit.py` (dry-run default).
+- **Failures are queue states.** retry is `POST /api/v1/build-queue/<id>/complete` with
+  `{"status":"failed","error":...}` (there is no /retry endpoint); backoff/attempts live
+  in the queue; a human looks only at `failed` rows.
 - **Security.** Build in a sandbox and never run upstream build scripts as root on the
   host. Record real reproducibility (drv, out, narhash) and never claim a hash we did
   not produce. The submit key is our identity: sops only, 0600 decrypted copies under
@@ -42,8 +48,8 @@ ssh-ed25519 identity used for submit)". What is deployed:
 | heartbeat | `rebuild_heartbeat(job, agent, token)` | `POST /api/v1/build-queue/<id>/heartbeat` |
 | complete | `rebuild_complete(job, agent, token, result)` | `POST /api/v1/build-queue/<id>/complete`; `result.status` must be `done` or `failed` (failed calls rebuild_retry inside) |
 | retry | `rebuild_retry(job, message)` callable | not an endpoint: send `complete` with `{"status":"failed","error":...}` |
-| auth | ssh-ed25519 builder identity | a shared bearer secret in header `X-Solnix-Build` (BuildQueueBoundary, 32..256 bytes); POST without it -> 403 (measured). We do not have this secret. |
-| reasons | includes `manpage-missing` | the SQL CHECK allows only manual, policy-refresh, dep-rebuilt, upstream-newer, validation-failed; `manpage-missing` cannot be enqueued |
+| auth | ssh-ed25519 builder identity | TODAY a shared bearer secret in header `X-Solnix-Build` (403 without it). Infra confirmed (2026-10-09 reply) and will issue a per-builder token for site-team via the maintainer (interim); target state is the submit Ed25519 challenge on the queue too. |
+| reasons | includes `manpage-missing` | ENQUEUABLE in production: manpage-pipeline.sql extends the CHECK to 6 reasons incl. manpage-missing (19 such jobs queued). The base rebuild-queue.sql we first read is pre-migration. |
 | work-queue.json (federation doc) | signed snapshot at cache.solnix.io | listed as "build" (not live) |
 
 So the builder cannot claim today: it needs the queue credential (or the promised

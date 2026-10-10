@@ -9,7 +9,15 @@ Prereqs: the signed submit client (`scripts/cache-submit.py`, 8090cf52); recipe 
 in `docs/registry/recipes.tsv` (28 gate-clean x86_64 rows, 8090cf52); the infra team
 publishing them.
 
-## B1 — Queue credential and contract alignment (blocked on the infra team)
+## B1 — Queue credential and contract alignment (infra answered 2026-10-09)
+
+Infra reply builder-reports-reply-2026-10-09.md: an interim per-builder bearer token for
+site-team comes via the maintainer (target state = the submit Ed25519 challenge on the
+queue). manpage-missing IS enqueuable (manpage-pipeline.sql migration, live). Submit is
+one-leaf-per-submission (option c): stage only the leaf; the site walks the published
+closure; retry = complete with status failed. The 28 recipe rows are committed and pushed
+(8090cf52); the served recipes.tsv (sha256 841aff93) picks them up on the infra sync.
+Remaining open:
 
 - The claim/heartbeat/complete endpoints are live (`/api/v1/build-queue/...`) but gated
   by a shared secret header (`X-Solnix-Build`), not the ed25519 builder identity the
