@@ -29,6 +29,28 @@ test:
 	 else echo "negative control (CFL-H GT2 list removed): FAILS as required"; \
 	    grep FAIL test_pciid_neg.out; fi
 
+# test-ioc: the Linux -> OpenBSD DRM ioctl translation (i915_drmioc.h)
+# against OpenBSD's own uapi headers. OBSD = the OpenBSD sys/dev/pci/drm
+# tree; ANV = the dir with linux-ioctl-compat.h (the encoding solnix
+# libdrm/Mesa are built with).
+ANV ?= ../anv
+UAPI = $(OBSD)/include/uapi/drm
+TFLAGS = -m64 -O2 -Wall -D__OpenBSD__ -Itest -I$(UAPI) -I$(ANV)
+test-ioc:
+	$(CC) -E -dM -D__OpenBSD__ -I$(UAPI) $(UAPI)/i915_drm.h | \
+	    awk '$$1 == "\#define" && $$2 ~ /^DRM_IOCTL_/ && $$3 ~ /^DRM_IO(W|R|WR)?\(/ {print "M(" $$2 ")"}' | \
+	    sort -u > test/ioc_list.h
+	@echo "ioctls in OpenBSD uapi drm.h + i915_drm.h: `wc -l < test/ioc_list.h`"
+	for e in LINUX OBSD ILLUMOS; do \
+	    $(CC) $(TFLAGS) -DTBL_$$e -c test/drmioc_tbl.c -o test/tbl_$$e.o || exit 1; done
+	$(CC) $(TFLAGS) -Werror -o test/test_drmioc test/test_drmioc.c test/tbl_*.o
+	./test/test_drmioc
+	$(CC) $(TFLAGS) -Werror -DI915_DRMIOC_SABOTAGE -o test/test_drmioc_neg test/test_drmioc.c test/tbl_*.o
+	@if ./test/test_drmioc_neg > test/drmioc_neg.out; then \
+	    echo "NEGATIVE CONTROL DID NOT FAIL"; exit 1; \
+	 else echo "negative control (Linux dir bits read as BSD): FAILS as required, \
+	    `grep -c ^FAIL test/drmioc_neg.out` checks"; fi
+
 PROBE_FILES = i915/i915_pci.c i915/intel_device_info.c
 probe:
 	sh ./probe-headers.sh $(OBSD) $(PROBE_FILES)
@@ -36,4 +58,4 @@ probe:
 clean:
 	rm -f $(OBJS) test_pciid test_pciid_neg test_pciid_neg.out
 
-.PHONY: obj test probe clean
+.PHONY: obj test test-ioc probe clean

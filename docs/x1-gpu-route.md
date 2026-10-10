@@ -453,8 +453,8 @@ This is the device table, not a driver. Nothing has been loaded into the kernel.
    `display/intel_display_device.c`. These are the first files a probe needs.
 3. An illumos `i915_attach`: `pci_config_setup`, `ddi_regs_map_setup` BAR0 (GTTMMADR,
    `reg` rnumber from `assigned-addresses`), `intel_uncore_init`, then read `GEN6_GT_THREAD_STATUS`
-   / the `PCH` id as the first live register read. **This needs a module load, which needs the
-   dump device the maintainer has not yet approved. Not done.**
+   / the `PCH` id as the first live register read. **Written and linked (5.5); running it needs a module
+   load, which needs the dump device the maintainer has not yet approved. Not loaded.**
 
 ### 5.4 The OpenBSD-kernel-API compat layer: every file compiles (REAL, dixi)
 
@@ -530,6 +530,36 @@ So the next measured step is the R1a subset of this table: `bus_space_map`, `jif
 attach. Nothing in this section was loaded into a kernel, because the dump device is still not
 approved (section 6).
 
+### 5.5 Link gap closed; one i915 module that links against the running kernel (REAL, dixi solnix-3)
+
+New compat files, each with a userland test and a negative control where the logic is testable:
+
+| file | what | tag |
+|---|---|---|
+| `obsd-compat/obsd_time.c` | OpenBSD's sleep queue (`sleep_setup`/`sleep_finish`, `tsleep`/`msleep`/`rwsleep` + `_nsec`, `wakeup_n`, `wakeup_proc`, `unsleep`) on one kmutex + a per-thread kcondvar, the kern_synch.c model; `jiffies` as a variable refreshed from lbolt by a `ddi_periodic` | REAL |
+| `obsd-compat/obsd_bus.c` | `bus_space_map` over `ddi_regs_map_setup` (BAR found from `reg` + `assigned-addresses`; prefetchable = `DDI_MERGING_OK_ACC`), non-BAR ranges over `psm_map_phys_new`; `pci_mapreg_map`; `pci_intr_*` over `ddi_intr_*` (MSI first); `pci_find_device` as a device-tree walk | REAL (walk: MAP) |
+| `obsd-compat/obsd_vm.c` | `vm_page` registry (AVL of pfn intervals) for pages this layer allocates and `uvm_page_physload` ranges; `PHYS_TO_VM_PAGE`, `uvm_pglistalloc`, `uao_*` (wired at create), `uvm_obj_wire`, kernel `pmap_*` over `hat_devload`, `km_alloc`, `wbinvd_on_all_cpus` | REAL; user mappings ENOTSUP |
+| `obsd-compat/obsd_glue.c` | autoconf `config_found_sm` (runs `drm_attach`), kthreads, kernel FPU, SMBIOS `hw_*` | REAL |
+| `obsd-compat/obsd_glue.c` | bus_dma, dma-buf/sync_file fds, kqueue, i2c bit-bang, ACPI AML, wsdisplay/rasops/vga | **STUB** (fail, never fake success) |
+| `i915/i915_illumos.c` | modlinkage/dev_ops for `i915`; attach builds an illumos-backed `pci_attach_args` and runs OpenBSD's `inteldrm_ca` match + attach; `/dev/dri/card0` minor | REAL, not loaded |
+
+Measured:
+
+* `link-gap.sh` "defined nowhere": 114 (5.4) → 109 (obsd_time) → 98 (obsd_bus) → 68 (obsd_vm) → **0** (glue +
+  stubs), 391/391 objects, 0 kernel-name collisions.
+* `i915/build-module.sh`: the `ld -r` module is 5,523,936 bytes (text 3,236,200), **178 undefined, 0 not exported
+  by the running unix + genunix, 0 collisions with the 27,540 globals of /dev/ksyms** (kernel + loaded modules). The
+  collision gate first found `free`, exported by the loaded `ufs` module; malloc(9) is now `obsd_*`. A first version
+  of the gate ran `nm` on the `/dev/ksyms` character device, read 0 symbols and passed vacuously; it now copies the
+  device and refuses a snapshot under 10,000 symbols. Both gates have negative controls that fail by name.
+* Tests (`obsd-compat`, `gmake test`): sleep 8/8, BARs from dixi's real iGPU properties 4/4, vm/uao 14/14; 8 runs
+  each all PASS; 4 negative controls FAIL as required.
+
+Nothing was loaded. The load plan, including what happens to the gfxp_bitmap console when i915 takes display@2, is
+`src/drm-port/i915/ATTACH-PLAN.md`. Short answer: illumos has no console handover, vgatext cannot detach from the
+console node, so binding i915 takes a reboot and leaves no tem console until i915 provides a `visual_io`
+polled-I/O console of its own (PLANNED).
+
 ## 6. Open questions for the maintainer
 
 1. The licence rule's scope: is GPL-3 COSMIC acceptable as a separately packaged application
@@ -537,3 +567,38 @@ approved (section 6).
 2. The project licence, so the 36 header-less files can get headers.
 3. The dump device, which gates every kernel-module step from R1a on.
 4. Whether the X1's dGPU stays unbound (recommended: yes) or a nouveau port is wanted (R3).
+
+## 5.6 Facts for the cdev and console step (stream E5, read from source + measured, 2026-10-09)
+
+Read from illumos ac45d71 and OpenBSD 37a498de; F8 measured on the X1 with mdb.
+
+- F1. The kernel terminal emulator (tem) opens the FIRST minor of the console display node
+  (devcfg.c resolve_pathname: DDM_DEFAULT, else the first devi_minor) and sends VIS_DEVINIT
+  with FKIOCTL. gfx_private's gfxp_fb_attach/ioctl/devmap/open (exported; 77 globals in
+  /dev/ksyms) are the whole vgatext console: vgatext.c is a ~400-line wrapper around them. So i915
+  can host the same bitmap console vgatext hosts today, on a text minor created first.
+- F2. Would-panic in the E4 module: inteldrm_attachhook calls rasops_init(ri), then reads
+  ri->ri_font->fontwidth. The E4 rasops_init stub leaves ri_font NULL, so the first SUCCESSFUL
+  i915_driver_probe dereferences NULL. Must be fixed before any load (stub rasops with a font,
+  or skip the wsdisplay attach path).
+- F3. illumos _KERNEL minor(x) is x & 0xff (SVR3 O_MAXMIN), not OpenBSD's 24-bit minor:
+  drm_drv.c's clone bits (CLONE_SHIFT 8) are cut, and every open would get the same file minor.
+  The "same meaning" note in obsd_kern.h is wrong.
+- F4. The Linux _IOC direction bits (WRITE = 1<<30 means copyin) are the opposite of BSD and
+  illumos (IOC_IN 0x80000000, IOC_OUT 0x40000000), and illumos IOCPARM_MASK is 0xff where OpenBSD
+  has 0x1fff. solnix's libdrm emits the Linux encoding (radv/build-libdrm.sh), so i915's ioctl
+  entry must decode Linux _IOC and re-encode OpenBSD's for drm_ioctl.
+- F5. x86 consconfig picks the console framebuffer by device_type and PCI IO (plat_fbpath),
+  independent of the bound driver; there is no tem-support check on x86.
+- F6. Dumb mmap on Gen9 (no LMEM, PAT enabled): I915_MMAP_TYPE_WC, which faults in the object's
+  SYSTEM pages write-combined (pmap_enter with PMAP_WC), not the GTT aperture.
+- F7. i915_gem_object_pin_map_unlocked(obj, I915_MAP_WC) gives a contiguous kernel VA, so a
+  KMEM_NON_PAGEABLE ddi_umem cookie over that VA works with devmap_umem_setup. A cookie straight
+  on the uao chunks would be wrong (their VAs are not contiguous).
+- F8. The X1's fb_info (mdb): RGB, paddr 0x4000000000, size 0x1fa4000, pitch 0x3c00, 4 bytes per
+  pixel, depth 32.
+
+Design that follows: clone minors (c<<8 | 0 card, | 128 render) per open; a "text-0" minor
+created FIRST so tem lands on it, served by gfxp_fb_open/ioctl/devmap; OpenBSD's inteldrm attach
+(the modeset) deferred to the first open of card0 or renderD128; the console goes KD_GRAPHICS
+while a DRM master exists and back to KD_TEXT (plus drm_client_dev_restore) when it drops.
