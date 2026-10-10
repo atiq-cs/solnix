@@ -218,6 +218,8 @@ etc_copy() {
     system|system.d/*) return 0 ;;
     # `coreadm -U` imports it into SMF and renames it to coreadm.conf.old.
     coreadm.conf) return 0 ;;
+    # dumpadm(8) rewrites /etc/dumpadm.conf (and svc:/system/dumpadm reads it).
+    dumpadm.conf) return 0 ;;
     # install-be filters pkcs11.conf below; cryptoadm rewrites it.
     crypto/*) return 0 ;;
   esac
@@ -425,6 +427,22 @@ drop_staging_roots() {   # $1 = gcroots dir, $2 = staging store root ("" = none)
 }
 drop_staging_roots "$G" "$R"
 relink /run/current-system "$G/current-system"; relink /run/booted-system "$G/booted-system"
+# per-user core directories (modules/config/coreadm.nix developerUsers): the
+# per-process core pattern writes /var/cores/<uid>/core.* with the crashing
+# process's credentials, so each listed user needs a directory they own there.
+# Created when absent; a user's existing cores are left alone. /var/cores is a
+# shared dataset on <pool>/var systems, so this persists across generations.
+if [ -s "$R$ETC/solnix/core-users" ]; then
+  mkdir -p var/cores && chmod 0755 var/cores
+  while read -r _cu; do
+    [ -n "$_cu" ] || continue
+    _cg=$(awk -F: -v u="$_cu" '$3==u{print $4; exit}' etc/passwd)
+    [ -n "$_cg" ] || die "core-users: uid $_cu is not in this BE's passwd"
+    [ -d "var/cores/$_cu" ] || mkdir -p "var/cores/$_cu"
+    chown "$_cu:$_cg" "var/cores/$_cu" && chmod 0700 "var/cores/$_cu" \
+      || die "core-users: chown var/cores/$_cu"
+  done < "$R$ETC/solnix/core-users"
+fi
 # root's channel subscription, as NixOS's tmpfiles rule `f /root/.nix-channels`:
 # written when absent, never overwritten (the admin's nix-channel --add wins).
 # /root lives in the BE, so a new BE starts from the previous one's copy.
