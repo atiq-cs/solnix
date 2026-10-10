@@ -578,6 +578,14 @@ pci_intr_establish(pci_chipset_tag_t pc, pci_intr_handle_t ih, int level,
 	if (ddi_intr_add_handler(ih->ih_table[0], iwm_intr_trampoline,
 	    (caddr_t)ih, NULL) != DDI_SUCCESS)
 		goto fail_intr;
+	/* MSI/MSI-X handles that advertise DDI_INTR_FLAG_BLOCK MUST be enabled
+	 * with ddi_intr_block_enable, not ddi_intr_enable -- calling the wrong
+	 * one returns failure. Record the capability so iwm_intr_{enable,disable}
+	 * pick the matching call. (The AC 9560 uses MSI with the block cap;
+	 * measured on the X1: ddi_intr_enable returned !=DDI_SUCCESS -> attach
+	 * failed in iwm_intr_enable with every earlier stage succeeding.) */
+	if (ddi_intr_get_cap(ih->ih_table[0], &ih->ih_cap) != DDI_SUCCESS)
+		ih->ih_cap = 0;
 	ih->ih_count = 1;
 	return (ih);
 
@@ -593,7 +601,13 @@ fail_free:
 int
 iwm_intr_enable(pci_intr_handle_t ih)
 {
-	return (ddi_intr_enable(ih->ih_table[0]) == DDI_SUCCESS ? 0 : EIO);
+	int r;
+
+	if (ih->ih_cap & DDI_INTR_FLAG_BLOCK)
+		r = ddi_intr_block_enable(ih->ih_table, ih->ih_count);
+	else
+		r = ddi_intr_enable(ih->ih_table[0]);
+	return (r == DDI_SUCCESS ? 0 : EIO);
 }
 
 void
@@ -603,7 +617,11 @@ iwm_intr_disestablish(pci_intr_handle_t ih)
 		return;
 	if (ih->ih_table != NULL) {
 		if (ih->ih_count > 0) {
-			(void) ddi_intr_disable(ih->ih_table[0]);
+			if (ih->ih_cap & DDI_INTR_FLAG_BLOCK)
+				(void) ddi_intr_block_disable(ih->ih_table,
+				    ih->ih_count);
+			else
+				(void) ddi_intr_disable(ih->ih_table[0]);
 			(void) ddi_intr_remove_handler(ih->ih_table[0]);
 		}
 		(void) ddi_intr_free(ih->ih_table[0]);

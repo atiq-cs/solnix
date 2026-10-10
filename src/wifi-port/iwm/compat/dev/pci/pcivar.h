@@ -59,6 +59,7 @@ typedef struct iwx_pci_intr {
 	ddi_intr_handle_t	*ih_table;
 	int			ih_count;
 	int			ih_type;	/* DDI_INTR_TYPE_MSIX/MSI/FIXED */
+	int			ih_cap;		/* ddi_intr_get_cap bits (DDI_INTR_FLAG_BLOCK) */
 	uint_t			ih_pri;
 	dev_info_t		*ih_dip;	/* iwm: allocation target */
 	int			(*ih_fn)(void *);	/* iwm: OpenBSD handler */
