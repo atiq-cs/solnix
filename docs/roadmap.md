@@ -198,6 +198,36 @@ userland + a declarative lx-zones module, LX-4 prove a Linux x86_64 binary runs 
 lx zone (negative control: SIGSYS in a native zone), LX-5 default-on behind an option.
 Multi-quarter (the Linux syscall-emulation surface); upstream-first.
 
+## Desktop & graphics — honest gated bring-up (spec: .kiro/specs/solnix-desktop)
+
+The published site claims a hardware-accelerated RADV/Vulkan COSMIC desktop. The
+audit `docs/graphics-claims-audit.md` (2026-10-10) measured reality: a single
+COSMIC **app** paints under a **software** compositor (smallvil, Mesa
+softpipe/llvmpipe) over **VNC** — not hardware GPU acceleration, not RADV, not
+Vulkan, not cosmic-comp, not login-to-desktop. The Aug-18 "demo" ran on an
+x86_64 EC2 instance with llvmpipe, not a real GPU. These tasks turn each gap into
+a gated item; none claims runtime until its gate is green:
+- **D1** bare-metal framebuffer compositor backend (software desktop, no DRM) —
+  the smallest bare-metal-GUI step; `/dev/fb` mmap already works.
+- **D2** i915 modeset on hardware → `/dev/dri/card0` → a smithay DRM backend
+  (i915 links today but is **not loaded**).
+- **D3** Mesa iris (GL) + anv (Vulkan) on real i915 (route R2).
+- **D4** RADV only matters on an AMD GPU — name the target machine (the X1 has
+  none; amdgpu walls at the PSP mailbox on EC2 g4ad).
+- **D5** a graphical install ISO that actually boots to a compositor (gui3 boots
+  the text installer).
+- **D6** the COSMIC shell composites (panel + apps), gated on a Mesa EGL-wayland
+  platform.
+- **D7** daily-driver desktop: libinput input, seat management, cosmic-greeter
+  (Solaris-PAM port), multi-app session reliability.
+- **D8** cosmic-comp (the real compositor), optional parity — needs a rustix
+  `solarish` ioctl arm to even compile.
+
+Honesty rule: a compile-phase port is not a runtime capability; software
+rendering is not GPU acceleration; VNC is not login-to-desktop. Keep the site in
+sync via `scripts/roadmap-sync-check.sh`; softened wording for the infra team is
+in `/tmp/solnix-io-graphics-claims-report.md`.
+
 ## Builder federation (spec: .kiro/specs/solnix-builder-federation)
 
 A daily, LLM-free builder that drains solnix.io's work queue and publishes through the
