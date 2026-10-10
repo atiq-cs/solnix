@@ -1,5 +1,33 @@
 # X1 graphics route: a modern GPU stack on solnix without GPL code in the base
 
+## GPU program scope (maintainer, 2026-10-10)
+
+solnix must drive either-or-both GPUs on the X1, and a growing set of modern GPUs
+over time. Order:
+
+1. **Intel i915 (UHD 630, 8086:3e9b)** -- the X1's iGPU, FIRST. R1a load is next
+   (gated on the inter-module symbol-scoping fix, stream S, and then the attach).
+2. **The X1's discrete GPU is NVIDIA, not AMD** (GP107M / GTX 1050 Ti Mobile,
+   10de:1c8c, Pascal). The maintainer asked for "the AMD"; the X1 has no AMD part.
+   NVIDIA Pascal has no open-source reclocking (no PMU firmware), so nouveau on it
+   is a basic KMS/display driver at best, not an accelerator. Either-or-both means:
+   i915 alone, nouveau alone (display), or hybrid (i915 primary + nvidia offload).
+3. **AMD (amdgpu)** is for the maintainer's OTHER machines and EC2 g4ad, where
+   src/drm-port/amdgpu already binds (walls at the PSP mailbox). Kept on the
+   program for when an AMD machine is the target.
+4. **Imagination PowerVR (img,rgx)** -- the RISC-V board's GPU (Milk-V Jupiter;
+   src/drm-port/powervr, the Mesa userspace Vulkan driver already links). The
+   RISC-V GPU bring-up is its own track (docs/riscv-jupiter-driver-plan.md).
+5. **Beyond these first ones:** a general modern-GPU program -- newer Intel (Xe),
+   newer AMD (RDNA), and others as hardware arrives. Each is a DRM/KMS port on the
+   same OpenBSD-crib + no-GPL-in-base model, with Mesa userspace (iris/anv/radv/nvk/
+   powervr already compile-phase ported in src/drm-port).
+
+The either-or-both requirement makes the inter-module symbol-scoping fix (two DRM
+drivers coexisting in one kernel) a hard prerequisite, not an optimisation.
+
+
+
 This is the route from today's firmware console on the X1 ("dixi") to Vulkan, Wayland and COSMIC
 on real GPUs. It covers the Intel iGPU, AMD GPUs, hybrid i915 + discrete setups, and GPU LLM
 inference. It covers the X1's iGPU first, then the AMD and hybrid cases.
