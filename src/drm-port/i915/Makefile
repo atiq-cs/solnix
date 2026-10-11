@@ -60,7 +60,28 @@ PROBE_FILES = i915/i915_pci.c i915/intel_device_info.c
 probe:
 	sh ./probe-headers.sh $(OBSD) $(PROBE_FILES)
 
-clean:
-	rm -f $(OBJS) test_pciid test_pciid_neg test_pciid_neg.out
+# test-console: the fbdev draw arithmetic AND tem's modechange-callback contract
+# (the "handover succeeded" claim). Two negative controls, each must FAIL:
+#   SABOTAGE     -- a top-down overlapping copy (wrong scroll direction)
+#   SABOTAGE_TEM -- the refuted belief that a same-mode modechg_cb repaints
+#                   and takes over the panic/kmdb polled console
+test-console:
+	$(CC) $(UFLAGS) -o test/test_console test/test_console.c
+	./test/test_console
+	$(CC) $(UFLAGS) -DSABOTAGE -o test/test_console_neg test/test_console.c
+	@if ./test/test_console_neg > test/test_console_neg.out 2>&1; then \
+	    echo "NEGATIVE CONTROL (draw) DID NOT FAIL"; exit 1; \
+	 else echo "negative control (top-down overlapping copy): FAILS as required"; \
+	    grep ^FAIL test/test_console_neg.out; fi
+	$(CC) $(UFLAGS) -DSABOTAGE_TEM -o test/test_console_tem_neg test/test_console.c
+	@if ./test/test_console_tem_neg > test/test_console_tem_neg.out 2>&1; then \
+	    echo "NEGATIVE CONTROL (tem) DID NOT FAIL"; exit 1; \
+	 else echo "negative control (same-mode callback assumed to repaint): FAILS as required"; \
+	    grep ^FAIL test/test_console_tem_neg.out; fi
 
-.PHONY: obj test test-ioc probe clean
+clean:
+	rm -f $(OBJS) test_pciid test_pciid_neg test_pciid_neg.out \
+	    test/test_console test/test_console_neg test/test_console_neg.out \
+	    test/test_console_tem_neg test/test_console_tem_neg.out
+
+.PHONY: obj test test-ioc test-console probe clean

@@ -1,15 +1,39 @@
 /*
- * test_console.c -- userland self-check of the fbdev console draw arithmetic
- * in i915_illumos.c (i915_cons_display / i915_cons_copy / i915_cons_clear).
- * The kernel routines are static and draw into a device framebuffer; this
- * test reimplements the SAME offset math against a RAM buffer and asserts
- * the pixels land where the kernel code would put them, with a negative
- * control (SABOTAGE) that must FAIL.
+ * test_console.c -- userland characterization of two things the recovered
+ * i915 console-handover code depends on:
+ *
+ *   PART A: the fbdev console draw arithmetic in the recovered i915_illumos.c
+ *     (i915_cons_display / i915_cons_copy / i915_cons_clear). The kernel
+ *     routines are static and draw into a device framebuffer; this test
+ *     reimplements the SAME offset math against a RAM buffer and asserts the
+ *     pixels land where the kernel code would put them.
+ *
+ *   PART B: tem's modechange-callback CONTRACT, so the claim "the console
+ *     handover succeeded" is executable rather than merely logged. The
+ *     recovered i915_cons_modeset_done hands tem a new vis_devinit through
+ *     tems_modechange_callback and logs success. The runtime audit
+ *     (docs/x1-gpu-runtime-audit.md section 4(b)) found this is WRONG for the
+ *     common same-mode handover. Part B encodes tem's actual decision so that
+ *     the wrong assumption fails a check instead of printing a success line.
+ *
+ *     tem.c is PINNED, not matched to the live kernel yet:
+ *       reference /tmp/streamE5-illumos/tem.c
+ *       sha256 3d925906b4534635795c16f5a96c0fd9080ae6709c6fb6084a7bbad614d301fa
+ *     The tems_check_videomode comparison below is transcribed verbatim from
+ *     that file's lines 538-558; the modechange control flow mirrors lines
+ *     669-731; the fact that ts_fb_polledio is assigned ONLY in VIS_DEVINIT
+ *     is from line 484 (it is NOT touched by the modechange path). This is a
+ *     MODEL of tem, labelled as such: tem_impl.h (tem_state_t) is a private
+ *     kernel header absent from the gate proto, so compiling tem's real body
+ *     would need the whole tem emulator the audit said to avoid. The model
+ *     reads the same five fields the real tems_check_videomode reads and
+ *     applies the same comparison, so a wrong handover assumption is caught.
  *
  *   cc -m64 -O2 -Wall -o test_console test/test_console.c && ./test_console
- *   cc -DSABOTAGE ... ./test_console   # must report FAIL
+ *   cc -DSABOTAGE     ... ./test_console   # draw-math control: must FAIL
+ *   cc -DSABOTAGE_TEM ... ./test_console   # tem-contract control: must FAIL
  *
- * This mirrors the geometry handling only (NULL/negative/clip, scan-line
+ * Part A mirrors the geometry handling only (NULL/negative/clip, scan-line
  * advance, overlap direction); it does not need the kernel headers.
  */
 #include <stdio.h>
@@ -74,6 +98,163 @@ cons_copy(struct fb *f, struct copy *ca)
 static int fails;
 #define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d %s\n", __FILE__, __LINE__, #c); fails++; } } while (0)
 
+/* ---------------------------------------------------------------- PART B
+ * tem's modechange-callback contract, modelled from pinned tem.c.
+ *
+ * Only the state tems_check_videomode (tem.c:538) and the modechange path
+ * (tem.c:669) actually read is modelled. The handover gives tem a vis_devinit
+ * for the new (fbdev) buffer; tem decides whether to repaint and NEVER moves
+ * its polled-I/O pointer in this path -- ts_fb_polledio is set only by
+ * VIS_DEVINIT (tem.c:484), which the handover does not reissue.
+ */
+struct tem_dim { int width, height; };
+struct tem_model {
+	int ts_pdepth;			/* current pixel depth */
+	struct tem_dim ts_c_dimension;	/* text (char) geometry */
+	struct tem_dim ts_p_dimension;	/* pixel geometry */
+	void *ts_fb_polledio;		/* panic/kmdb console pointer */
+	int repainted;			/* set when tem reinits/repaints */
+};
+
+/* VIS_TEXT=0, VIS_PIXEL=1 (sys/visual_io.h). The handover uses VIS_PIXEL. */
+struct tem_devinit { int depth, mode, width, height; void *polledio; };
+
+#define TEMS_DEPTH_DIFF     0x01
+#define TEMS_DIMENSION_DIFF 0x02
+
+/* Transcribed verbatim from tem.c:538-558 (tems_check_videomode). */
+static unsigned char
+model_check_videomode(struct tem_model *tems, struct tem_devinit *tp)
+{
+	unsigned char result = 0;
+
+	if (tems->ts_pdepth != tp->depth)
+		result |= TEMS_DEPTH_DIFF;
+	if (tp->mode == 0 /* VIS_TEXT */) {
+		if (tems->ts_c_dimension.width != tp->width ||
+		    tems->ts_c_dimension.height != tp->height)
+			result |= TEMS_DIMENSION_DIFF;
+	} else {
+		if (tems->ts_p_dimension.width != tp->width ||
+		    tems->ts_p_dimension.height != tp->height)
+			result |= TEMS_DIMENSION_DIFF;
+	}
+	return (result);
+}
+
+/*
+ * tem.c:669 tems_modechange_callback, control flow mirrored:
+ *   diff = check_videomode(); if (diff == 0) return;         (no repaint)
+ *   diff &= TEMS_DIMENSION_DIFF;
+ *   if (diff == 0) { ts_pdepth = depth; reinit active; return; }  (depth-only)
+ *   else { setup_terminal + reinit all; }                     (full repaint)
+ * In NO branch is ts_fb_polledio reassigned -- that happens only at
+ * VIS_DEVINIT (tem.c:484). SABOTAGE_TEM models the WRONG belief that a
+ * same-mode callback repaints and swaps the polled pointer.
+ */
+static void
+model_modechange_callback(struct tem_model *tems, struct tem_devinit *di)
+{
+#ifdef SABOTAGE_TEM
+	/* the refuted assumption: handover always repaints and takes over
+	 * the panic/kmdb console. */
+	tems->repainted = 1;
+	tems->ts_fb_polledio = di->polledio;
+	tems->ts_pdepth = di->depth;
+	return;
+#else
+	unsigned char diff = model_check_videomode(tems, di);
+
+	if (diff == 0)
+		return;			/* same mode: tem returns, no repaint */
+	diff &= TEMS_DIMENSION_DIFF;
+	if (diff == 0) {
+		tems->ts_pdepth = di->depth;	/* depth-only: reinit active */
+		tems->repainted = 1;
+		return;
+	}
+	/* dimension changed: full setup_terminal + reinit all */
+	tems->ts_p_dimension.width = di->width;
+	tems->ts_p_dimension.height = di->height;
+	tems->ts_pdepth = di->depth;
+	tems->repainted = 1;
+#endif
+}
+
+/* VIS_DEVINIT (tem.c:460-484): the ONLY place ts_fb_polledio is set. */
+static void
+model_vis_devinit(struct tem_model *tems, struct tem_devinit *di)
+{
+	tems->ts_fb_polledio = di->polledio;
+	tems->ts_pdepth = di->depth;
+	tems->ts_p_dimension.width = di->width;
+	tems->ts_p_dimension.height = di->height;
+}
+
+static void
+test_tem_contract(void)
+{
+	/* GOP console established via VIS_DEVINIT at 3840x2160/32bpp pixel mode,
+	 * polled console = the GOP (gfxp) buffer. */
+	int gop_poll = 1, fbdev_poll = 2;
+	struct tem_model tems = {0};
+	struct tem_devinit gop = { 32, 1, 3840, 2160, &gop_poll };
+
+	model_vis_devinit(&tems, &gop);
+	CHECK(tems.ts_fb_polledio == &gop_poll);	/* polled = GOP buffer */
+
+	/* CASE 1 -- the common handover: i915_cons_modeset_done passes tem a
+	 * NEW buffer at the SAME 3840x2160/32bpp. tems_check_videomode == 0,
+	 * so tem returns with NO repaint and the polled console STAYS on the
+	 * GOP buffer. This is the handover the recovered code logs as success.
+	 * The non-sabotage model must show the handover did NOT take effect. */
+	tems.repainted = 0;
+	{
+		struct tem_devinit fbdev = { 32, 1, 3840, 2160, &fbdev_poll };
+		model_modechange_callback(&tems, &fbdev);
+		CHECK(tems.repainted == 0);		/* no repaint on same mode */
+		CHECK(tems.ts_fb_polledio == &gop_poll);/* polled NOT moved */
+		CHECK(tems.ts_fb_polledio != &fbdev_poll);
+	}
+
+	/* CASE 2 -- changed geometry: the dimension differs, so tem takes the
+	 * full setup_terminal + reinit (repaint) branch. The point being checked
+	 * is which BRANCH tem takes (repaint vs early return), not tem's exact
+	 * recomputed geometry -- real tem derives ts_p_dimension inside
+	 * tems_setup_terminal, which this model does not reproduce. It still does
+	 * NOT move ts_fb_polledio. */
+	tems.repainted = 0;
+	{
+		struct tem_devinit fbdev = { 32, 1, 1920, 1080, &fbdev_poll };
+		CHECK((model_check_videomode(&tems, &fbdev) &
+		    TEMS_DIMENSION_DIFF) != 0);		/* dimension differs */
+		model_modechange_callback(&tems, &fbdev);
+		CHECK(tems.repainted == 1);		/* -> repaint branch */
+		CHECK(tems.ts_fb_polledio == &gop_poll);/* still not moved */
+	}
+
+	/* CASE 3 -- changed depth, same geometry: TEMS_DEPTH_DIFF only. tem
+	 * reinits the active tem and updates ts_pdepth; dimension path skipped. */
+	tems.ts_pdepth = 32;
+	tems.ts_p_dimension.width = 1920; tems.ts_p_dimension.height = 1080;
+	tems.repainted = 0;
+	{
+		struct tem_devinit fbdev = { 16, 1, 1920, 1080, &fbdev_poll };
+		CHECK((model_check_videomode(&tems, &fbdev) & TEMS_DEPTH_DIFF) != 0);
+		model_modechange_callback(&tems, &fbdev);
+		CHECK(tems.ts_pdepth == 16);		/* depth adopted */
+		CHECK(tems.repainted == 1);		/* active tem reinit */
+	}
+
+	/* CASE 4 -- the only safe way to move the polled console is a fresh
+	 * VIS_DEVINIT, which the recovered handover does NOT issue. */
+	{
+		struct tem_devinit fbdev = { 32, 1, 3840, 2160, &fbdev_poll };
+		model_vis_devinit(&tems, &fbdev);
+		CHECK(tems.ts_fb_polledio == &fbdev_poll);	/* now moved */
+	}
+}
+
 static uint32_t
 px(struct fb *f, int x, int y)
 {
@@ -129,7 +310,10 @@ main(void)
 		CHECK(px(&f, 0, 13) == m12);
 	}
 
-	if (fails == 0) printf("PASS: console draw math (9 checks)\n");
+	/* PART B: tem's modechange-callback contract (the handover claim). */
+	test_tem_contract();
+
+	if (fails == 0) printf("PASS: console draw math + tem handover contract\n");
 	else printf("%d CHECK(s) FAILED\n", fails);
 	free(f.bits); free(data);
 	return (fails != 0);
