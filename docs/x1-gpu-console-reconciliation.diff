@@ -1,0 +1,611 @@
+--- a/src/drm-port/i915/i915_illumos.c
++++ b/src/drm-port/i915/i915_illumos.c
+@@ -36,6 +36,7 @@
+ #include <sys/conf.h>
+ #include <sys/stat.h>
+ #include <sys/kd.h>
++#include <sys/visual_io.h>
+ #include <sys/gfx_private.h>
+ #include <sys/ddidevmap.h>
+ #include <sys/id_space.h>
+@@ -47,6 +48,36 @@
+ /* OpenBSD's inteldrm autoconf glue (i915_driver.c). */
+ extern const struct cfattach inteldrm_ca;
+ extern int inteldrm_fatal_error;
++
++/*
++ * The text-0 console. Before the first modeset the console is gfxp_fb (the
++ * firmware GOP framebuffer, exactly vgatext's console), so a boot that never
++ * modesets shows the boot image on gfxp. When the OpenBSD modeset finishes
++ * (i915_il_drm_attach, drm_i915_private->ro.ri_bits != NULL) the console is
++ * handed over to i915's own fbdev framebuffer with tem's own mechanism: the
++ * vis_devinit modechg_cb tem passed at VIS_DEVINIT is called with a new
++ * vis_devinit describing i915's buffer and polled-I/O routines, and tem
++ * re-reads the geometry and repaints onto the i915 plane
++ * (tems_modechange_callback). This is the illumos-native equivalent of
++ * OpenBSD's wsdisplay_cnattach: gfxp owns the GOP console, i915 owns the
++ * fbdev console, and modechg_cb moves tem from one to the other at modeset.
++ *
++ * ic_switched gates every per-op path: 0 => the GOP phase, forward VIS_* to
++ * gfxp_fb; 1 => the fbdev phase, serve VIS_* from i915's own routines against
++ * ic_fb. The polled-I/O routines (display/copy/cursor) must run from panic
++ * and kmdb context, so they take no locks and only touch ic_fb and the
++ * framebuffer bytes.
++ */
++struct i915_console {
++	kmutex_t		ic_lock;	/* ioctl path; polled path lock-free */
++	int			ic_switched;	/* 0 GOP (gfxp), 1 fbdev (i915) */
++	int			ic_mode;	/* KD_TEXT / KD_GRAPHICS */
++	/* tem's handover callback, captured from the vis_devinit it sent. */
++	vis_modechg_cb_t	ic_modechg_cb;
++	struct vis_modechg_arg	*ic_modechg_arg;
++	struct vis_polledio	ic_polledio;	/* handed to tem after switch */
++	struct i915_fb_desc	ic_fb;		/* the fbdev buffer + geometry */
++};
+ 
+ struct i915_il {
+ 	dev_info_t		*il_dip;
+@@ -59,7 +90,8 @@
+ 	struct device		*il_self;	/* drm_i915_private */
+ 	int			il_bus, il_dev, il_fn;
+ 	const struct i915_pciid_info *il_id;
+-	gfxp_fb_softc_ptr_t	il_gfxp;	/* the text-0 console */
++	gfxp_fb_softc_ptr_t	il_gfxp;	/* the GOP-phase console */
++	struct i915_console	il_cons;	/* the fbdev-phase console */
+ 	kmutex_t		il_lock;	/* drm attach, console mode */
+ 	int			il_drm_state;	/* 0 not tried, 1 up, -1 failed */
+ 	int			il_drmunit;	/* drm_cd unit */
+@@ -87,6 +119,381 @@
+ 	*fn = (reg[0] >> 8) & 0x7;
+ 	ddi_prop_free(reg);
+ 	return (DDI_SUCCESS);
++}
++
++/* ------------------------------------------------- the fbdev console
++ *
++ * i915's own visual_io console on the fbdev framebuffer, used after the first
++ * modeset. tem drives it exactly as it drives gfxp_bitmap: VIS_DEVINIT once,
++ * then VIS_CONSDISPLAY / VIS_CONSCOPY / VIS_CONSCURSOR / VIS_CONSCLEAR for
++ * normal output and the vis_polledio display/copy/cursor from panic and kmdb
++ * context. The buffer is drm_i915_private->ro.ri_bits (ic_fb.fb_bits), a
++ * kernel VA onto the GGTT-pinned scanout object, 32bpp XRGB8888 on CFL.
++ *
++ * These routines mirror gfxp_bitmap's bitmap_cons_* and bitmap_polled_*: a
++ * row-at-a-time blit for display, a byte copy with overlap handling for
++ * copy, an XOR block for the cursor, a fill for clear. They take no locks
++ * (the polled path cannot) and are written to the write-combining mapping
++ * only (never read it back: x1-gpu-route.md measured framebuffer reads at
++ * about 67 MB/s). NOTE: new solnix code, not derived from gfxp (CDDL) or any
++ * GPL source; it implements the documented visual_io contract.
++ */
++
++/* The pixel for a tem color_t at this depth. CFL is 32bpp XRGB8888, which is
++ * the only depth the fbdev buffer uses on Gen9 (intel_fbdev.c). The 8bpp and
++ * 16bpp arms are kept minimal for completeness; tem sends pixels already in
++ * the device format in VIS_PIXEL mode, so display/copy move bytes verbatim
++ * and only clear/cursor need to synthesize a pixel from a color_t. */
++static uint32_t
++i915_cons_pixel(struct i915_fb_desc *fb, color_t c)
++{
++	switch (fb->fb_depth) {
++	case 32:
++	case 24:
++		return (((uint32_t)c.thirtytwo[0]) |
++		    ((uint32_t)c.thirtytwo[1] << 8) |
++		    ((uint32_t)c.thirtytwo[2] << 16) |
++		    ((uint32_t)c.thirtytwo[3] << 24));
++	case 16:
++		return ((uint32_t)c.sixteen[0] | ((uint32_t)c.sixteen[1] << 8));
++	default:
++		return (c.eight);
++	}
++}
++
++/* Bytes per pixel for the fbdev depth. */
++static int
++i915_cons_bpp(struct i915_fb_desc *fb)
++{
++	return ((fb->fb_depth + 7) / 8);
++}
++
++/*
++ * VIS_CONSDISPLAY: tem hands a width x height block of already-formatted
++ * pixels (da->data, row-major, da->width*bpp bytes per row) to place at
++ * (row,col). Blit it row by row into the framebuffer. Clipped to the buffer.
++ */
++static void
++i915_cons_display(struct i915_fb_desc *fb, struct vis_consdisplay *da)
++{
++	int bpp = i915_cons_bpp(fb);
++	int rowbytes = (int)da->width * bpp;
++	uint8_t *dst;
++	const uint8_t *src = da->data;
++	int y, maxw, maxh;
++
++	if (fb->fb_bits == NULL || src == NULL)
++		return;
++	if (da->row < 0 || da->col < 0)
++		return;
++	maxw = fb->fb_width - da->col;
++	maxh = fb->fb_height - da->row;
++	if (maxw <= 0 || maxh <= 0)
++		return;
++	if ((int)da->width > maxw)
++		rowbytes = maxw * bpp;
++	dst = (uint8_t *)fb->fb_bits + (size_t)da->row * fb->fb_stride +
++	    (size_t)da->col * bpp;
++	for (y = 0; y < da->height && y < maxh; y++) {
++		(void) memcpy(dst, src, rowbytes);
++		dst += fb->fb_stride;
++		src += (int)da->width * bpp;
++	}
++}
++
++/*
++ * VIS_CONSCOPY: move the rectangle (s_row,s_col)-(e_row,e_col) to
++ * (t_row,t_col), handling overlap. Scroll uses this. Copy whole scan-line
++ * runs; walk bottom-up when moving down so an overlapping copy is correct.
++ */
++static void
++i915_cons_copy(struct i915_fb_desc *fb, struct vis_conscopy *ca)
++{
++	int bpp = i915_cons_bpp(fb);
++	int w = (int)ca->e_col - (int)ca->s_col + 1;
++	int h = (int)ca->e_row - (int)ca->s_row + 1;
++	int rowbytes, y;
++	uint8_t *base = fb->fb_bits;
++
++	if (base == NULL || w <= 0 || h <= 0)
++		return;
++	rowbytes = w * bpp;
++	if (ca->t_row <= ca->s_row) {
++		for (y = 0; y < h; y++) {
++			uint8_t *s = base +
++			    (size_t)(ca->s_row + y) * fb->fb_stride +
++			    (size_t)ca->s_col * bpp;
++			uint8_t *t = base +
++			    (size_t)(ca->t_row + y) * fb->fb_stride +
++			    (size_t)ca->t_col * bpp;
++			(void) memmove(t, s, rowbytes);
++		}
++	} else {
++		for (y = h - 1; y >= 0; y--) {
++			uint8_t *s = base +
++			    (size_t)(ca->s_row + y) * fb->fb_stride +
++			    (size_t)ca->s_col * bpp;
++			uint8_t *t = base +
++			    (size_t)(ca->t_row + y) * fb->fb_stride +
++			    (size_t)ca->t_col * bpp;
++			(void) memmove(t, s, rowbytes);
++		}
++	}
++}
++
++/*
++ * VIS_CONSCURSOR: show or hide the text cursor by inverting the fg/bg of a
++ * width x height block at (row,col). tem calls hide before moving and show
++ * after, so an invert each way restores the pixels. Clipped to the buffer.
++ */
++static void
++i915_cons_cursor(struct i915_fb_desc *fb, struct vis_conscursor *cc)
++{
++	int bpp = i915_cons_bpp(fb);
++	int x, y, maxw, maxh;
++	uint8_t *row;
++
++	if (fb->fb_bits == NULL || cc->action == VIS_GET_CURSOR)
++		return;
++	if (cc->row < 0 || cc->col < 0)
++		return;
++	maxw = fb->fb_width - cc->col;
++	maxh = fb->fb_height - cc->row;
++	if (maxw <= 0 || maxh <= 0)
++		return;
++	for (y = 0; y < cc->height && y < maxh; y++) {
++		row = (uint8_t *)fb->fb_bits +
++		    (size_t)(cc->row + y) * fb->fb_stride +
++		    (size_t)cc->col * bpp;
++		for (x = 0; x < cc->width && x < maxw; x++) {
++			int b;
++			for (b = 0; b < bpp; b++)
++				row[x * bpp + b] = (uint8_t)~row[x * bpp + b];
++		}
++	}
++}
++
++/*
++ * VIS_CONSCLEAR: fill the whole framebuffer with the background color.
++ */
++static void
++i915_cons_clear(struct i915_fb_desc *fb, struct vis_consclear *cl)
++{
++	int bpp = i915_cons_bpp(fb);
++	uint32_t px = i915_cons_pixel(fb, cl->bg_color);
++	int x, y;
++	uint8_t *row;
++
++	if (fb->fb_bits == NULL)
++		return;
++	for (y = 0; y < fb->fb_height; y++) {
++		row = (uint8_t *)fb->fb_bits + (size_t)y * fb->fb_stride;
++		if (bpp == 4) {
++			uint32_t *p = (uint32_t *)row;
++			for (x = 0; x < fb->fb_width; x++)
++				p[x] = px;
++		} else {
++			for (x = 0; x < fb->fb_width; x++)
++				(void) memcpy(row + (size_t)x * bpp, &px, bpp);
++		}
++	}
++}
++
++/*
++ * The polled-I/O entry points tem calls with no system services (panic,
++ * kmdb). vis_polledio_arg is our i915_console. No locks, no DDI; the
++ * cons_* routines above already satisfy that, so these forward to them.
++ */
++static void
++i915_cons_polled_display(struct vis_polledio_arg *arg,
++    struct vis_consdisplay *da)
++{
++	struct i915_console *ic = (struct i915_console *)arg;
++	if (ic->ic_mode == KD_TEXT)
++		i915_cons_display(&ic->ic_fb, da);
++}
++
++static void
++i915_cons_polled_copy(struct vis_polledio_arg *arg, struct vis_conscopy *ca)
++{
++	struct i915_console *ic = (struct i915_console *)arg;
++	if (ic->ic_mode == KD_TEXT)
++		i915_cons_copy(&ic->ic_fb, ca);
++}
++
++static void
++i915_cons_polled_cursor(struct vis_polledio_arg *arg,
++    struct vis_conscursor *cc)
++{
++	struct i915_console *ic = (struct i915_console *)arg;
++	if (ic->ic_mode == KD_TEXT)
++		i915_cons_cursor(&ic->ic_fb, cc);
++}
++
++/* Fill a vis_devinit for the fbdev buffer, as bitmap_devinit does for the
++ * GOP buffer, keeping the modechg_cb/modechg_arg tem gave us so tem can be
++ * moved again (e.g. a later resolution change). */
++static void
++i915_cons_fill_devinit(struct i915_console *ic, struct vis_devinit *d)
++{
++	d->version = VIS_CONS_REV;
++	d->width = (screen_size_t)ic->ic_fb.fb_width;
++	d->height = (screen_size_t)ic->ic_fb.fb_height;
++	d->linebytes = (screen_size_t)ic->ic_fb.fb_stride;
++	d->depth = ic->ic_fb.fb_depth;
++	d->color_map = NULL;
++	d->mode = VIS_PIXEL;
++	d->polledio = &ic->ic_polledio;
++	d->modechg_cb = ic->ic_modechg_cb;
++	d->modechg_arg = ic->ic_modechg_arg;
++}
++
++/*
++ * The console handover, called once from i915_il_drm_attach after a
++ * successful modeset. Read the fbdev buffer out of the OpenBSD softc, point
++ * the console at it, and tell tem to re-read the geometry and repaint with
++ * modechg_cb (tems_modechange_callback). If tem never sent VIS_DEVINIT (this
++ * device is not the console) ic_modechg_cb is NULL and nothing happens: the
++ * device simply has no console, as a secondary GPU would. il_lock is held.
++ */
++static void
++i915_cons_modeset_done(struct i915_il *il)
++{
++	struct i915_console *ic = &il->il_cons;
++	struct i915_fb_desc fb;
++	struct vis_devinit devinit;
++
++	if (il->il_self == NULL ||
++	    i915_glue_fbinfo(il->il_self, &fb) != 0)
++		return;
++	if (fb.fb_depth != 32 && fb.fb_depth != 24 && fb.fb_depth != 16) {
++		cmn_err(CE_WARN, "!i915%d: fbdev depth %d unsupported by the "
++		    "console; staying on the firmware framebuffer",
++		    ddi_get_instance(il->il_dip), fb.fb_depth);
++		return;
++	}
++	mutex_enter(&ic->ic_lock);
++	ic->ic_fb = fb;
++	ic->ic_polledio.arg = (struct vis_polledio_arg *)ic;
++	ic->ic_polledio.display = i915_cons_polled_display;
++	ic->ic_polledio.copy = i915_cons_polled_copy;
++	ic->ic_polledio.cursor = i915_cons_polled_cursor;
++	ic->ic_switched = 1;
++	if (ic->ic_modechg_cb != NULL) {
++		i915_cons_fill_devinit(ic, &devinit);
++		ic->ic_modechg_cb(ic->ic_modechg_arg, &devinit);
++	}
++	mutex_exit(&ic->ic_lock);
++	cmn_err(CE_CONT, "?i915%d: console on fbdev framebuffer %dx%d %dbpp\n",
++	    ddi_get_instance(il->il_dip), fb.fb_width, fb.fb_height,
++	    fb.fb_depth);
++}
++
++/*
++ * The text-minor ioctl. Before the switch (GOP phase) VIS_* go to gfxp_fb,
++ * but VIS_DEVINIT is intercepted first to capture tem's modechg_cb so the
++ * handover can call it later; gfxp still fills the geometry and polledio for
++ * the GOP buffer, so tem binds normally. After the switch (fbdev phase) the
++ * VIS console ioctls are served from i915's own routines against ic_fb;
++ * KDSETMODE/KDGETMODE are handled in both phases so a DRM master still
++ * blanks the console. Returns -1 if not a console ioctl this layer handles,
++ * so the caller forwards it (to gfxp in the GOP phase).
++ */
++static int
++i915_cons_ioctl(struct i915_il *il, dev_t dev, int cmd, intptr_t arg,
++    int mode, cred_t *cr, int *rval, int *handled)
++{
++	struct i915_console *ic = &il->il_cons;
++
++	*handled = 1;
++	switch (cmd) {
++	case VIS_DEVINIT: {
++		struct vis_devinit di;
++		int err;
++
++		if (ddi_copyin((void *)arg, &di, sizeof (di), mode) != 0)
++			return (EFAULT);
++		mutex_enter(&ic->ic_lock);
++		ic->ic_modechg_cb = di.modechg_cb;
++		ic->ic_modechg_arg = di.modechg_arg;
++		if (ic->ic_switched) {
++			/* post-modeset bind: our own buffer + polledio */
++			i915_cons_fill_devinit(ic, &di);
++			mutex_exit(&ic->ic_lock);
++			if (ddi_copyout(&di, (void *)arg, sizeof (di), mode)
++			    != 0)
++				return (EFAULT);
++			return (0);
++		}
++		mutex_exit(&ic->ic_lock);
++		/* GOP phase: let gfxp fill geometry+polledio for the GOP fb */
++		err = gfxp_fb_ioctl(dev, cmd, arg, mode, cr, rval,
++		    il->il_gfxp);
++		return (err);
++	}
++	case VIS_CONSDISPLAY:
++		if (ic->ic_switched) {
++			struct vis_consdisplay da;
++			if (ddi_copyin((void *)arg, &da, sizeof (da), mode) != 0)
++				return (EFAULT);
++			if (ic->ic_mode == KD_TEXT)
++				i915_cons_display(&ic->ic_fb, &da);
++			return (0);
++		}
++		break;
++	case VIS_CONSCOPY:
++		if (ic->ic_switched) {
++			struct vis_conscopy ca;
++			if (ddi_copyin((void *)arg, &ca, sizeof (ca), mode) != 0)
++				return (EFAULT);
++			if (ic->ic_mode == KD_TEXT)
++				i915_cons_copy(&ic->ic_fb, &ca);
++			return (0);
++		}
++		break;
++	case VIS_CONSCURSOR:
++		if (ic->ic_switched) {
++			struct vis_conscursor cc;
++			if (ddi_copyin((void *)arg, &cc, sizeof (cc), mode) != 0)
++				return (EFAULT);
++			if (ic->ic_mode == KD_TEXT)
++				i915_cons_cursor(&ic->ic_fb, &cc);
++			return (0);
++		}
++		break;
++	case VIS_CONSCLEAR:
++		if (ic->ic_switched) {
++			struct vis_consclear cl;
++			if (ddi_copyin((void *)arg, &cl, sizeof (cl), mode) != 0)
++				return (EFAULT);
++			if (ic->ic_mode == KD_TEXT)
++				i915_cons_clear(&ic->ic_fb, &cl);
++			return (0);
++		}
++		break;
++	case KDSETMODE:
++		ic->ic_mode = (int)arg;
++		if (!ic->ic_switched)
++			break;	/* let gfxp track the GOP-phase mode too */
++		*rval = 0;
++		return (0);
++	case KDGETMODE:
++		if (ic->ic_switched) {
++			if (ddi_copyout(&ic->ic_mode, (void *)arg,
++			    sizeof (int), mode) != 0)
++				return (EFAULT);
++			return (0);
++		}
++		break;
++	case VIS_DEVFINI:
++		if (ic->ic_switched)
++			return (0);
++		break;
++	default:
++		break;
++	}
++	*handled = 0;
++	return (0);
+ }
+ 
+ static int
+@@ -123,6 +530,8 @@
+ 	il->il_fn = fn;
+ 	il->il_id = id;
+ 	mutex_init(&il->il_lock, NULL, MUTEX_DRIVER, NULL);
++	mutex_init(&il->il_cons.ic_lock, NULL, MUTEX_DRIVER, NULL);
++	il->il_cons.ic_mode = KD_TEXT;
+ 	il->il_drmunit = -1;
+ 
+ 	/*
+@@ -230,6 +639,13 @@
+ 		return (ENXIO);
+ 	}
+ 	il->il_drm_state = 1;
++	/*
++	 * The modeset is done and drm_i915_private->ro now holds the fbdev
++	 * framebuffer. Move tem's console onto it (the firmware GOP buffer is
++	 * no longer scanned out). This is the console handover; it is a no-op
++	 * if this device is not the console (tem never sent VIS_DEVINIT).
++	 */
++	i915_cons_modeset_done(il);
+ 	return (0);
+ }
+ 
+@@ -288,22 +704,38 @@
+ 
+ /*
+  * Keep the text console out of the way while a DRM master owns the
+- * display (F1): KD_GRAPHICS stops tem drawing into the firmware
+- * framebuffer (gfxp_bitmap then only updates its shadow copy); KD_TEXT,
+- * after drm_client_dev_restore has put the kernel configuration back,
+- * repaints the console from that shadow. Called with il_lock held after
+- * every open, close and SET/DROP_MASTER. gfxp_fb ignores the request when
+- * this device is not the console.
++ * display (F1): KD_GRAPHICS stops tem drawing into the console framebuffer;
++ * KD_TEXT, after drm_client_dev_restore has put the kernel configuration
++ * back, repaints the console. Called with il_lock held after every open,
++ * close and SET/DROP_MASTER. In the GOP phase (pre-modeset) gfxp_fb owns the
++ * console and the mode goes to it (it ignores the request when this device
++ * is not the console). In the fbdev phase (post-modeset) i915 owns the
++ * console: KD_GRAPHICS just stops i915's own draw path, and KD_TEXT asks tem
++ * to repaint onto the fbdev buffer via modechg_cb (drm_client_dev_restore
++ * has already put the fbdev plane back on screen).
+  */
+ static void
+ i915_il_console_sync(struct i915_il *il, dev_t odev)
+ {
+ 	int master = i915_glue_has_master(odev), rval;
++	struct i915_console *ic = &il->il_cons;
+ 
+ 	if (master == il->il_graphics)
+ 		return;
+ 	if (!master)
+ 		i915_glue_restore(odev);
++	if (ic->ic_switched) {
++		struct vis_devinit devinit;
++		mutex_enter(&ic->ic_lock);
++		ic->ic_mode = master ? KD_GRAPHICS : KD_TEXT;
++		if (!master && ic->ic_modechg_cb != NULL) {
++			i915_cons_fill_devinit(ic, &devinit);
++			ic->ic_modechg_cb(ic->ic_modechg_arg, &devinit);
++		}
++		mutex_exit(&ic->ic_lock);
++		il->il_graphics = master;
++		return;
++	}
+ 	if (gfxp_fb_ioctl(odev, KDSETMODE, master ? KD_GRAPHICS : KD_TEXT,
+ 	    FKIOCTL, kcred, &rval, il->il_gfxp) == 0)
+ 		il->il_graphics = master;
+@@ -431,9 +863,17 @@
+ 
+ 	if (il == NULL)
+ 		return (ENXIO);
+-	if (I915_IL_KIND(getminor(dev)) == I915_IL_TEXT)
++	if (I915_IL_KIND(getminor(dev)) == I915_IL_TEXT) {
++		int handled, cerr;
++		cerr = i915_cons_ioctl(il, dev, cmd, arg, mode, cr, rval,
++		    &handled);
++		if (handled)
++			return (cerr);
++		/* GOP phase or an ioctl i915's console does not handle:
++		 * forward to gfxp, which owns the firmware-framebuffer console */
+ 		return (gfxp_fb_ioctl(dev, cmd, arg, mode, cr, rval,
+ 		    il->il_gfxp));
++	}
+ 	if (i915_il_drmfile(dev) == NULL)
+ 		return (ENXIO);
+ 	if (i915_ioc_xlate((uint32_t)cmd, &x) != 0)
+--- a/src/drm-port/i915/i915_drmglue.c
++++ b/src/drm-port/i915/i915_drmglue.c
+@@ -174,3 +174,40 @@
+ 	if (fp != NULL)
+ 		pollhead_clean(&fp->rsel.si_ph);
+ }
++
++/*
++ * The fbdev framebuffer for i915_illumos.c's visual_io console. The OpenBSD
++ * modeset (i915_driver_probe, called from inteldrm_attachhook) fills
++ * drm_i915_private->ro (a struct rasops_info) in intelfb_create: ri_bits is
++ * the kernel VA of the GGTT-pinned fbdev scanout buffer (info->screen_base),
++ * ri_width/ri_height/ri_stride/ri_depth and the RGB field layout come from
++ * the chosen framebuffer (XRGB8888 on CFL). ri_bits is NULL until the first
++ * modeset has run, which is exactly the console-handover trigger. The GMADR
++ * physical base is not recorded in ri (the console draws through the VA), so
++ * fb_paddr is left 0.
++ */
++int
++i915_glue_fbinfo(void *self, struct i915_fb_desc *d)
++{
++	struct drm_i915_private *i915 = self;
++	struct rasops_info *ri;
++
++	if (i915 == NULL)
++		return (ENXIO);
++	ri = &i915->ro;
++	if (ri->ri_bits == NULL)
++		return (ENXIO);
++	d->fb_bits = ri->ri_bits;
++	d->fb_paddr = 0;
++	d->fb_width = ri->ri_width;
++	d->fb_height = ri->ri_height;
++	d->fb_stride = ri->ri_stride;
++	d->fb_depth = ri->ri_depth;
++	d->fb_rnum = ri->ri_rnum;
++	d->fb_gnum = ri->ri_gnum;
++	d->fb_bnum = ri->ri_bnum;
++	d->fb_rpos = ri->ri_rpos;
++	d->fb_gpos = ri->ri_gpos;
++	d->fb_bpos = ri->ri_bpos;
++	return (0);
++}
+--- a/src/drm-port/i915/i915_drmglue.h
++++ b/src/drm-port/i915/i915_drmglue.h
+@@ -5,6 +5,27 @@
+ #ifndef _I915_DRMGLUE_H
+ #define _I915_DRMGLUE_H
+ struct pollhead;
++
++/*
++ * The fbdev framebuffer the OpenBSD modeset leaves in drm_i915_private->ro
++ * (a struct rasops_info, filled by intelfb_create during i915_driver_probe).
++ * i915_illumos.c's visual_io console draws into fb_bits with these metrics;
++ * it is plain C so the DDI file needs no drm headers. All fields describe the
++ * post-modeset scanout buffer: a kernel VA (fb_bits) onto the GGTT-pinned
++ * stolen object, its GMADR physical base (fb_paddr), geometry, and the 32bpp
++ * RGB field positions (XRGB8888 on CFL).
++ */
++struct i915_fb_desc {
++	void		*fb_bits;	/* kernel VA (rasops ri_bits) */
++	uint64_t	fb_paddr;	/* GMADR phys base, 0 if unknown */
++	int		fb_width;	/* pixels */
++	int		fb_height;	/* pixels */
++	int		fb_stride;	/* bytes per scan line */
++	int		fb_depth;	/* bits per pixel */
++	uint8_t		fb_rnum, fb_gnum, fb_bnum;	/* bits per channel */
++	uint8_t		fb_rpos, fb_gpos, fb_bpos;	/* channel shift */
++};
++
+ extern int i915_glue_has_master(dev_t);
+ extern void i915_glue_restore(dev_t);
+ extern int i915_glue_dumb_map(dev_t, uint64_t, size_t, void **, size_t *,
+@@ -13,4 +34,11 @@
+ extern int i915_glue_chpoll(dev_t, short, int, short *, struct pollhead **);
+ extern int i915_glue_drm_unit(void *);
+ extern void i915_glue_pollhead_clean(dev_t);
++/*
++ * Read the fbdev framebuffer out of the OpenBSD softc (drm_i915_private->ro).
++ * Returns 0 and fills *d after a successful modeset, or non-zero before the
++ * first modeset / if there is no fbdev buffer (ri_bits NULL). self is the
++ * struct device * i915_illumos.c passed to inteldrm_ca.ca_attach.
++ */
++extern int i915_glue_fbinfo(void *self, struct i915_fb_desc *d);
+ #endif
