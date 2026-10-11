@@ -534,7 +534,12 @@ let
       # Names only (context discarded): interpolating them would make the gate and
       # the from-source gcc BUILD INPUTS of every toplevel, so a config built on the
       # installer media would have to build gcc there (no stage0 compiler on it).
-      disallowed = builtins.unsafeDiscardStringContext "${pkgs.solnix.gate} ${pkgs.solnix.gcc}";
+      # buildCapable images (installer, dixi) deliberately ship the compiler + its
+      # gate-proto sysroot ("build host in the image"). For them the proto/gcc are
+      # INTENTIONAL runtime refs, dropped from the disallowed set. Minimal/production
+      # images keep the full gate (the 219 MB build-only proto must never leak in).
+      disallowed = if config.system.buildCapable then ""
+                   else builtins.unsafeDiscardStringContext "${pkgs.solnix.gate} ${pkgs.solnix.gcc}";
     } ''
     mkdir -p $out
     grep -h '^/nix/store/' early-graph | grep -v '\.drv$' | sort -u > $out/early-paths
@@ -589,6 +594,20 @@ let
   '';
 in
 {
+  options.system.buildCapable = mkOption {
+    type = types.bool;
+    default = false;
+    description = ''
+      This system intentionally ships a working build toolchain (the from-source
+      gcc + its gate-proto sysroot) in its runtime closure -- the "build host in
+      the image" role (configurations/installer.nix, dixi). When true, the toplevel
+      closure gate does NOT treat pkgs.solnix.gate / pkgs.solnix.gcc as disallowed
+      runtime references (they are present on purpose). When false (the default,
+      for minimal/production images), the gate still FATALs if the 219 MB build-only
+      gate proto or the from-source compiler leaks into the runtime closure.
+    '';
+  };
+
   options.system.build = {
     driversDb = mkOption {
       type = types.package;

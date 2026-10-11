@@ -80,6 +80,12 @@ in
 
   networking.hostName = "solnix-installer";
 
+  # This image ships solnix-dev-full (gcc + binutils + make + pkgconf): the "build
+  # host in the image" role. Declaring buildCapable exempts the compiler + its
+  # gate-proto sysroot from the toplevel's disallowed-runtime-refs gate (they are
+  # present on purpose). See modules/system/activation/default.nix.
+  system.buildCapable = true;
+
   # base.nix configures an EC2 Nitro NIC and resolver; the media boots anywhere,
   # so it carries no interface or resolver of its own: the live method plumbs the
   # first wired NIC by DHCP and writes resolv.conf from the lease (solnix-install

@@ -212,6 +212,9 @@ rec {
       mkdir b; cd b
       cmake .. -DCMAKE_INSTALL_PREFIX="$out" -DCMAKE_INSTALL_LIBDIR=lib/amd64 -DCMAKE_C_COMPILER="$CC" \
         -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF -DBUILD_CLI=OFF -DUSE_SSH=OFF -DUSE_HTTPS=OpenSSL \
+        -DOPENSSL_ROOT_DIR=${openssl} -DOPENSSL_INCLUDE_DIR=${openssl}/include \
+        -DOPENSSL_CRYPTO_LIBRARY=${openssl}/lib/amd64/libcrypto.so \
+        -DOPENSSL_SSL_LIBRARY=${openssl}/lib/amd64/libssl.so -DOPENSSL_USE_STATIC_LIBS=OFF \
         -DUSE_BUNDLED_ZLIB=OFF -DREGEX_BACKEND=builtin -DUSE_HTTP_PARSER=builtin -DUSE_NTLMCLIENT=OFF \
         -DCMAKE_SKIP_RPATH=ON >&2
       gmake -j4; gmake install
