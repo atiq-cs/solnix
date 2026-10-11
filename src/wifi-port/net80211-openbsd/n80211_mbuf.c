@@ -133,6 +133,33 @@ n80211_m_prepend(mblk_t *m, int len, int how)
 }
 
 /*
+ * m_align: right-align a `len`-byte body at the end of the cluster, so there is
+ * maximal LEADING headroom for the header prepends net80211 does right after
+ * (ieee80211_mgmt_output M_PREPENDs the 24-byte 802.11 header; the data path
+ * prepends a header too). OpenBSD's m_align/MH_ALIGN does the same on a fresh
+ * mbuf. b_rptr and b_wptr both move to db_lim - len (an empty window at the
+ * aligned position); the caller then writes `len` body bytes from mtod(m),
+ * advancing b_wptr, and the later M_PREPEND moves b_rptr back into the
+ * reserved headroom. If len exceeds the cluster, clamp to db_base (no room,
+ * but never underflow); the mgmt paths use len <= 6 so this never clamps.
+ */
+void
+n80211_m_align(mblk_t *m, size_t len)
+{
+	unsigned char *base, *lim;
+
+	if (m == NULL)
+		return;
+	base = DB_BASE(m);
+	lim = DB_LIM(m);
+	if ((size_t)(lim - base) < len)
+		m->b_rptr = base;
+	else
+		m->b_rptr = lim - len;
+	m->b_wptr = m->b_rptr;
+}
+
+/*
  * m_copydata: copy `len` bytes starting at byte `off` from the chain into dst.
  * Walks the b_cont chain, honouring each segment's derived length. Returns 0 on
  * success, -1 if the chain is shorter than off+len (OpenBSD panics; returning

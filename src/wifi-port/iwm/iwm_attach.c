@@ -157,10 +157,24 @@ if_attach(struct ifnet *ifp)
 	return (0);
 }
 
+/*
+ * if_setlladdr records the MAC address. OpenBSD's if_setlladdr (net/if.c)
+ * updates the arpcom's ac_enaddr as well as the link-layer address; mirror
+ * that here. iwm_preinit runs once per bring-up (iwm_init), and on every call
+ * after the first it refreshes ic_myaddr from ac_enaddr
+ * (if_iwm.c iwm_preinit, "Update MAC in case the upper layers changed it").
+ * ieee80211_ifattach seeds ac_enaddr from ic_myaddr while that is still zero
+ * (the NVM MAC is not read until the deferred iwm_preinit), so unless
+ * if_setlladdr also writes ac_enaddr, the second and later bring-ups copy a
+ * stale zero back into ic_myaddr and every management frame goes out with
+ * addr2 (the transmitter address) all zeros, which no AP answers. Keeping
+ * ac_enaddr in sync, as OpenBSD does, preserves the real MAC across re-init.
+ */
 int
 if_setlladdr(struct ifnet *ifp, const uint8_t *lladdr)
 {
 	bcopy(lladdr, ifp->if_lladdr, ETHER_ADDR_LEN);
+	bcopy(lladdr, ((struct arpcom *)ifp)->ac_enaddr, ETHER_ADDR_LEN);
 	return (0);
 }
 
@@ -405,6 +419,111 @@ iwm_il_set_essid(void *arg, const uint8_t *essid, int len)
 		return (iwm_init(ifp));
 	}
 	return (0);
+}
+
+/*
+ * WPA2/CCMP/PSK join, OpenBSD's own in-kernel supplicant. This is the
+ * SIOCS80211WPAPARMS + SIOCS80211WPAPSK path that OpenBSD's ifconfig uses
+ * (ieee80211_ioctl.c:633-655): set the desired SSID, the RSN protocol/akm/
+ * cipher parameters, and the 32-byte PMK, then bring the interface up so the
+ * state machine runs scan -> auth -> assoc and ieee80211_recv_4way_msg1..4
+ * completes the 4-way handshake and installs the pairwise/group CCMP keys
+ * through ic_set_key (= iwm_set_key, if_iwm.c:12073, which programs the
+ * firmware). No frame of the handshake and no key crosses into userland;
+ * wpad is not involved.
+ *
+ * This is a SELF-CONTAINED trigger: illumos connect-wifi refuses a WPA network
+ * without a -k secobj (it would spawn wpad), so the WLDP ENCRYPTION/ESSID path
+ * never starts the radio for us. Instead the single _wpa_psk private-property
+ * set (iwm_gld.c) carries both the SSID and the PMK here, and this function
+ * sets the SSID, enables RSN, installs the PMK, and brings the interface up
+ * itself -- the one action that drives the whole keyed join.
+ *
+ * The PMK (32 bytes) is computed by a thin userland tool with PBKDF2 (RFC
+ * 2898) from the passphrase and SSID, so the passphrase never enters the
+ * kernel. A wrong PMK associates then fails the 4-way (MIC check), ending in
+ * disassociation, not a panic.
+ */
+int
+iwm_il_join(void *arg, const uint8_t *essid, int esslen,
+    const uint8_t *pmk, int pmklen, const uint8_t *bssid)
+{
+	struct iwm_softc *sc = arg;
+	struct ieee80211com *ic = &sc->sc_ic;
+	struct ifnet *ifp = &ic->ic_if;
+	struct ieee80211_wpaparams wpa;
+	struct ieee80211_wpapsk psk;
+	int err;
+
+	if (pmklen != IEEE80211_PMK_LEN || esslen < 0 ||
+	    esslen > IEEE80211_NWID_LEN)
+		return (EINVAL);
+	if (!(ic->ic_caps & IEEE80211_C_RSN))
+		return (ENODEV);
+
+	/*
+	 * Drive everything through iwm_ioctl (the proven path): it holds
+	 * sc->ioctl_rwl that iwm_init asserts, forces the firmware reload on
+	 * the down->up transition, and runs the ENETRESET restart. The round-2
+	 * bug called iwm_init directly, skipping all three; it returned 0 but
+	 * no scan ran. Set the desired SSID + RSN + PSK while the radio is
+	 * down (ENETRESET is a no-op then), then one SIOCSIFFLAGS up runs
+	 * iwm_init -> ieee80211_begin_scan; end_scan auto-selects the BSS and
+	 * runs auth -> assoc -> 4-way.
+	 */
+	memset(ic->ic_des_essid, 0, IEEE80211_NWID_LEN);
+	ic->ic_des_esslen = esslen;
+	if (esslen > 0) {
+		memcpy(ic->ic_des_essid, essid, esslen);
+		ic->ic_flags &= ~IEEE80211_F_AUTO_JOIN;
+	}
+
+	/*
+	 * Optional BSSID pin (SIOCS80211BSSID semantics). "sedgwick" is served
+	 * by several APs of mixed security (WPA and WEP) and bands; without a
+	 * pin, ieee80211_node_choose_bss selects by RSSI and may try to
+	 * associate to a WEP or distant/5GHz AP that never completes the WPA2
+	 * handshake. A BSSID pin makes the join deterministic against one
+	 * known WPA2/CCMP AP.
+	 */
+	if (bssid != NULL) {
+		IEEE80211_ADDR_COPY(ic->ic_des_bssid, bssid);
+		ic->ic_flags |= IEEE80211_F_DESBSSID;
+	} else {
+		ic->ic_flags &= ~IEEE80211_F_DESBSSID;
+	}
+
+	/* WPA2 (RSN) / CCMP / PSK -- the sedgwick profile. */
+	bzero(&wpa, sizeof (wpa));
+	wpa.i_enabled = 1;
+	wpa.i_protos = IEEE80211_WPA_PROTO_WPA2;
+	wpa.i_akms = IEEE80211_WPA_AKM_PSK;
+	wpa.i_ciphers = IEEE80211_WPA_CIPHER_CCMP;
+	wpa.i_groupcipher = IEEE80211_WPA_CIPHER_CCMP;
+	err = iwm_ioctl(ifp, SIOCS80211WPAPARMS, (caddr_t)&wpa);
+	if (err != 0)
+		return (err);
+
+	bzero(&psk, sizeof (psk));
+	psk.i_enabled = 1;
+	memcpy(psk.i_psk, pmk, IEEE80211_PMK_LEN);
+	err = iwm_ioctl(ifp, SIOCS80211WPAPSK, (caddr_t)&psk);
+	bzero(&psk, sizeof (psk));
+	if (err != 0)
+		return (err);
+
+	/* if a prior scan left the radio up, cycle it so iwm_init re-runs */
+	if (ifp->if_flags & IFF_RUNNING) {
+		ifp->if_flags &= ~IFF_UP;
+		(void) iwm_ioctl(ifp, SIOCSIFFLAGS, NULL);
+	}
+	ifp->if_flags |= IFF_UP;
+	err = iwm_ioctl(ifp, SIOCSIFFLAGS, NULL);
+	cmn_err(CE_NOTE, "!iwm: WPA join ssid_len=%d rsn=0x%x running=%d "
+	    "state=%d siocflags=%d", esslen,
+	    ic->ic_flags & IEEE80211_F_RSNON,
+	    (ifp->if_flags & IFF_RUNNING) ? 1 : 0, ic->ic_state, err);
+	return (err);
 }
 
 /* ---------------------------------------------------------- DDI attach --- */

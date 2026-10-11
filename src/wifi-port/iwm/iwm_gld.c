@@ -72,6 +72,77 @@ struct iwm_gld {
 #define	IWM_TX_HEADROOM	64
 
 /*
+ * Private link property that carries the WPA2 PMK and SSID into OpenBSD's
+ * in-kernel RSN supplicant. A thin userland tool computes the 32-byte PMK
+ * with PBKDF2 (RFC 2898, HMAC-SHA1, 4096 iterations) from the passphrase and
+ * SSID and sets it with the SSID appended:
+ *   dladm set-linkprop -t -p _wpa_psk=<64hex>:<ssid> iwm0
+ * The passphrase never enters the kernel; wpad is not involved. This single
+ * set is the whole join trigger (iwm_il_join in iwm_attach.c): connect-wifi
+ * refuses a WPA network without a -k secobj, so there is no keyless assoc path
+ * to lean on, and this set brings the radio up and starts scan/assoc/4-way.
+ */
+#define	IWM_PRIV_WPA_PSK	"_wpa_psk"
+#define	IWM_PMK_LEN		32
+
+static char *iwm_priv_props[] = {
+	IWM_PRIV_WPA_PSK,
+	NULL
+};
+
+/* 64 hex chars -> 32 bytes. Returns 0 on success. */
+static int
+iwm_hexdigit(char c)
+{
+	if (c >= '0' && c <= '9')
+		return (c - '0');
+	if (c >= 'a' && c <= 'f')
+		return (c - 'a' + 10);
+	if (c >= 'A' && c <= 'F')
+		return (c - 'A' + 10);
+	return (-1);
+}
+
+static int
+iwm_hex2pmk(const char *s, uint_t slen, uint8_t pmk[IWM_PMK_LEN])
+{
+	uint_t i;
+
+	if (slen < IWM_PMK_LEN * 2)
+		return (EINVAL);
+	for (i = 0; i < IWM_PMK_LEN; i++) {
+		int hi, lo;
+
+		hi = iwm_hexdigit(s[2 * i]);
+		lo = iwm_hexdigit(s[2 * i + 1]);
+		if (hi < 0 || lo < 0)
+			return (EINVAL);
+		pmk[i] = (uint8_t)((hi << 4) | lo);
+	}
+	return (0);
+}
+
+/* Parse "aa:bb:cc:dd:ee:ff" (len bytes, no NUL assumed) into 6 bytes. 0 on ok. */
+static int
+iwm_parse_bssid(const char *s, int len, uint8_t out[6])
+{
+	int i, hi, lo;
+
+	if (len < 17)
+		return (EINVAL);
+	for (i = 0; i < 6; i++) {
+		hi = iwm_hexdigit(s[i * 3]);
+		lo = iwm_hexdigit(s[i * 3 + 1]);
+		if (hi < 0 || lo < 0)
+			return (EINVAL);
+		if (i < 5 && s[i * 3 + 2] != ':')
+			return (EINVAL);
+		out[i] = (uint8_t)((hi << 4) | lo);
+	}
+	return (0);
+}
+
+/*
  * 802.11 + LLC (as built by the wifi plugin) -> Ethernet, in a new leading
  * mblk with headroom. mac_header_info parses the frame with the plugin's own
  * header_info, so this accepts exactly what the plugin produces.
@@ -498,7 +569,13 @@ iwm_m_getprop(void *arg, const char *name, mac_prop_id_t id, uint_t sz,
 			err = EINVAL;
 			break;
 		}
-		((wl_capability_t *)val)->caps = 0;
+		/*
+		 * Advertise WPA2 so a WPA client is not refused up front
+		 * (libdlwlan do_connect checks caps & IEEE80211_C_WPA). The
+		 * join itself is OpenBSD's in-kernel RSN supplicant, driven
+		 * by the _wpa_psk private property below; wpad is not used.
+		 */
+		((wl_capability_t *)val)->caps = IEEE80211_C_WPA2;
 		break;
 	default:
 		err = ENOTSUP;
@@ -553,6 +630,70 @@ iwm_m_setprop(void *arg, const char *name, mac_prop_id_t id, uint_t sz,
 			return (EINVAL);
 		return (*(const wl_bss_type_t *)val == WL_BSS_BSS ?
 		    0 : ENOTSUP);
+	case MAC_PROP_PRIVATE: {
+		uint8_t pmk[IWM_PMK_LEN];
+		uint8_t bssid[6];
+		const uint8_t *bssidp = NULL;
+		const char *s = val;
+		const char *essid;
+		int esslen;
+
+		if (name == NULL || strcmp(name, IWM_PRIV_WPA_PSK) != 0)
+			return (ENOTSUP);
+		/*
+		 * Value is "<64 hex PMK>:<bssid-or-->:<ssid>": the 32-byte PMK
+		 * (fixed 64 hex) and a colon, then a fixed-position BSSID field
+		 * that is either 17 chars "aa:bb:cc:dd:ee:ff" or a single '-'
+		 * (no pin), another colon, then the SSID (last, may contain any
+		 * byte including ':'). dladm rejects '|' in a value, and the SSID
+		 * may contain ':', so the BSSID is placed at a FIXED position
+		 * rather than used as a suffix. This single set carries key +
+		 * optional AP pin + network and drives the keyed join (connect-wifi
+		 * will not do WPA without wpad). sz is the value length; dladm may
+		 * or may not include the trailing NUL.
+		 */
+		if (sz < IWM_PMK_LEN * 2 + 3 || s[IWM_PMK_LEN * 2] != ':') {
+			cmn_err(CE_NOTE, "!iwm: _wpa_psk bad format sz=%u", sz);
+			return (EINVAL);
+		}
+		if (iwm_hex2pmk(s, sz, pmk) != 0) {
+			cmn_err(CE_NOTE, "!iwm: _wpa_psk bad hex");
+			return (EINVAL);
+		}
+		{
+			const char *f2 = s + IWM_PMK_LEN * 2 + 1;
+			int rem = (int)(sz - (IWM_PMK_LEN * 2 + 1));
+
+			/* field 2: "-" (no pin) or a 17-char BSSID, then ':' */
+			if (rem >= 2 && f2[0] == '-' && f2[1] == ':') {
+				essid = f2 + 2;
+				esslen = rem - 2;
+			} else if (rem >= 18 && f2[17] == ':' &&
+			    iwm_parse_bssid(f2, 17, bssid) == 0) {
+				bssidp = bssid;
+				essid = f2 + 18;
+				esslen = rem - 18;
+			} else {
+				cmn_err(CE_NOTE, "!iwm: _wpa_psk bad bssid field");
+				bzero(pmk, sizeof (pmk));
+				return (EINVAL);
+			}
+		}
+		while (esslen > 0 && (essid[esslen - 1] == '\0' ||
+		    essid[esslen - 1] == '\n'))
+			esslen--;
+		if (esslen < 1 || esslen > 32) {
+			cmn_err(CE_NOTE, "!iwm: _wpa_psk bad ssid len=%d", esslen);
+			bzero(pmk, sizeof (pmk));
+			return (EINVAL);
+		}
+		n80211_giant_enter();
+		err = iwm_il_join(g->g_sc, (const uint8_t *)essid, esslen,
+		    pmk, IWM_PMK_LEN, bssidp);
+		n80211_giant_exit();
+		bzero(pmk, sizeof (pmk));
+		return (err);
+	}
 	default:
 		return (ENOTSUP);
 	}
@@ -563,7 +704,7 @@ static void
 iwm_m_propinfo(void *arg, const char *name, mac_prop_id_t id,
     mac_prop_info_handle_t ph)
 {
-	(void) arg; (void) name;
+	(void) arg;
 	switch (id) {
 	case MAC_PROP_WL_LINKSTATUS:
 	case MAC_PROP_WL_ESS_LIST:
@@ -573,6 +714,10 @@ iwm_m_propinfo(void *arg, const char *name, mac_prop_id_t id,
 	case MAC_PROP_WL_SCANRESULTS:
 	case MAC_PROP_WL_CREATE_IBSS:
 		mac_prop_info_set_perm(ph, MAC_PROP_PERM_READ);
+		break;
+	case MAC_PROP_PRIVATE:
+		if (name != NULL && strcmp(name, IWM_PRIV_WPA_PSK) == 0)
+			mac_prop_info_set_perm(ph, MAC_PROP_PERM_WRITE);
 		break;
 	default:
 		break;
@@ -621,6 +766,7 @@ iwm_gld_register(dev_info_t *dip, void *sc, const uint8_t *addr, void **gp)
 	macp->m_max_sdu = IEEE80211_MTU;
 	macp->m_pdata = &g->g_wd;
 	macp->m_pdata_size = sizeof (g->g_wd);
+	macp->m_priv_props = iwm_priv_props;
 	err = mac_register(macp, &g->g_mh);
 	mac_free(macp);
 	if (err != 0) {

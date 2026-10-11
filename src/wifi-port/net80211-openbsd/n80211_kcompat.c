@@ -286,16 +286,20 @@ const uint8_t etherbroadcastaddr[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 const uint8_t etheranyaddr[6] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
 
 /*
- * suser: OpenBSD privilege check, 0 == permitted. illumos uses secpolicy/cred;
- * net80211 only calls it on the SIOCS80211* ioctl path (which illumos userland
- * does not issue -- FINDINGS Finding 2), so the honest mapping is drv_priv on
- * the passed cred. The arg is a `struct proc *`/cred on OpenBSD; the ioctl
- * bridge passes the illumos cred_t through it.
+ * suser: OpenBSD privilege check, 0 == permitted. net80211 calls suser(curproc)
+ * on the SIOCS80211* ioctl path. On illumos curproc is ttoproc(curthread) -- a
+ * proc_t, NOT a cred_t -- so the OpenBSD-style argument cannot be handed to
+ * drv_priv() directly (that would reinterpret a proc_t as a cred_t). The
+ * faithful mapping is the privilege of the CURRENT thread's credential; the
+ * WLDP bridge reaches this only after secpolicy_dl_config() has already
+ * gated the dladm caller (iwm_gld.c mc_ioctl / the privileged set-linkprop
+ * path), so CRED() is the right subject. The arg is ignored.
  */
 int
 suser(void *cr)
 {
-	return (drv_priv((struct cred *)cr));
+	(void) cr;
+	return (drv_priv(CRED()));
 }
 
 /*

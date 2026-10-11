@@ -191,7 +191,49 @@
  		err = bus_dmamap_load_mbuf(sc->sc_dmat, data->map, m,
  		    BUS_DMA_NOWAIT | BUS_DMA_WRITE);
  		if (err) {
-@@ -10459,7 +10499,12 @@
+@@ -7177,9 +7217,12 @@
+ 	struct iwm_device_power_cmd cmd = { };
+ 	struct ieee80211com *ic = &sc->sc_ic;
+ 
+-	if (ic->ic_opmode != IEEE80211_M_MONITOR)
+-		cmd.flags = htole16(IWM_DEVICE_POWER_FLAGS_POWER_SAVE_ENA_MSK);
+-
++	/*
++	 * ILLUMOS: do NOT set IWM_DEVICE_POWER_FLAGS_POWER_SAVE_ENA_MSK. On the
++	 * 9000 family with MSI under the giant model, device PS parks the
++	 * firmware at time-event expiry before association completes; see
++	 * gen-illumos-src.py for the DTrace evidence.
++	 */
+ 	return iwm_send_cmd_pdu(sc,
+ 	    IWM_POWER_TABLE_CMD, 0, sizeof(cmd), &cmd);
+ }
+@@ -8802,10 +8845,23 @@
+ 	 * Prevent the FW from wandering off channel during association
+ 	 * by "protecting" the session with a time event.
+ 	 */
++	/*
++	 * ILLUMOS: hold the firmware on the BSS channel through the WHOLE
++	 * auth + assoc + 4-way exchange. Measured on dixi (DTrace): with the
++	 * stock ~200ms (2 x beacon interval) aggressive-assoc time event the
++	 * fw stops delivering RX/interrupts right after the auth commands and
++	 * the AP auth response is never received, so association never leaves
++	 * AUTH. Under our giant-lock + deferred-task model the exchange takes
++	 * longer than OpenBSD's, so (a) clear any stale IWM_FLAG_TE_ACTIVE so a
++	 * fresh TE is armed on every attempt (the TE-end notification that
++	 * would clear it arrives via an interrupt that stops once the fw goes
++	 * quiet), and (b) request a much longer duration.
++	 */
++	sc->sc_flags &= ~IWM_FLAG_TE_ACTIVE;
+ 	if (in->in_ni.ni_intval)
+-		duration = in->in_ni.ni_intval * 2;
++		duration = in->in_ni.ni_intval * 25;
+ 	else
+-		duration = IEEE80211_DUR_TU; 
++		duration = IEEE80211_DUR_TU * 25;
+ 	iwm_protect_session(sc, in, duration, in->in_ni.ni_intval / 2);
+ 
+ 	return 0;
+@@ -10459,7 +10515,12 @@
  		/* need to send management frames even if we're not RUNning */
  		m = mq_dequeue(&ic->ic_mgtq);
  		if (m) {
@@ -205,7 +247,7 @@
  			goto sendit;
  		}
  
-@@ -10470,7 +10515,7 @@
+@@ -10470,7 +10531,7 @@
  		m = ifq_dequeue(&ifp->if_snd);
  		if (!m)
  			break;
@@ -214,7 +256,7 @@
  		    (m = m_pullup(m, sizeof (*eh))) == NULL) {
  			ifp->if_oerrors++;
  			continue;
-@@ -11024,7 +11069,13 @@
+@@ -11024,7 +11085,13 @@
  
  	m0 = data->m;
  	while (m0 && offset + minsz < IWM_RBUF_SIZE) {
@@ -229,7 +271,7 @@
  		qid = pkt->hdr.qid;
  		idx = pkt->hdr.idx;
  
-@@ -11055,9 +11106,9 @@
+@@ -11055,9 +11122,9 @@
  			size_t maxlen = IWM_RBUF_SIZE - offset - minsz;
  			nextoff = offset +
  			    roundup(len, IWM_FH_RSCSR_FRAME_ALIGN);
@@ -241,7 +283,7 @@
  			    !iwm_rx_pkt_valid(nextpkt)) {
  				/* No need to copy last frame in buffer. */
  				if (offset > 0)
-@@ -11075,7 +11126,7 @@
+@@ -11075,7 +11142,7 @@
  				 * packet. Always copy from offset zero to
  				 * preserve m_pkthdr.
  				 */

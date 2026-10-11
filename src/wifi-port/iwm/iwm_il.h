@@ -46,6 +46,8 @@ extern void iwm_il_getstate(void *, struct iwm_il_state *);
 extern int iwm_il_nodes(void *, struct iwm_il_node *, int);
 extern int iwm_il_scan(void *, struct iwm_il_node *, int, int *);
 extern int iwm_il_set_essid(void *, const uint8_t *, int);
+extern int iwm_il_join(void *, const uint8_t *, int, const uint8_t *, int,
+    const uint8_t *);
 
 extern void n80211_giant_enter(void);
 extern void n80211_giant_exit(void);

@@ -20,6 +20,7 @@ extern mblk_t *n80211_m_gethdr(int, int);
 extern mblk_t *n80211_m_get(int, int);
 extern int     n80211_m_clget(mblk_t *, int);
 extern mblk_t *n80211_m_prepend(mblk_t *, int, int);
+extern void    n80211_m_align(mblk_t *, size_t);
 extern int     n80211_m_copydata(mblk_t *, int, int, void *);
 extern mblk_t *n80211_m_split(mblk_t *, int, int);
 extern mblk_t *n80211_m_dup_pkt(mblk_t *, int, int);
@@ -90,6 +91,27 @@ main(void)
 		assert(r == NULL);
 		assert(iwx_test_frees > f0);		/* it freed on failure */
 		printf("ok 2b prepend underflow returns NULL and frees\n");
+	}
+
+	/* --- 2c. m_align + prepend: the auth-frame path (regression test) ---
+	 * ieee80211_get_auth does MGETHDR; m_align(m, 6); write 6 body bytes;
+	 * then ieee80211_mgmt_output M_PREPENDs the 24-byte 802.11 header. If
+	 * m_align leaves no leading headroom the prepend underflows and the
+	 * frame is dropped (ENOMEM), which silently breaks all association.
+	 * This proves m_align reserves enough leading room for the header. */
+	{
+		mblk_t *m = n80211_m_gethdr(M_DONTWAIT, MT_DATA);
+		assert(m != NULL);
+		n80211_m_align(m, 6);
+		/* body sits at the tail with the whole cluster as headroom */
+		assert((size_t)(m->b_rptr - DB_BASE(m)) >= 24);
+		m->b_wptr = m->b_rptr + 6;		/* open a 6-byte window */
+		m->b_rptr[0]=0x11; m->b_rptr[1]=0x22; m->b_rptr[5]=0x66;
+		m = n80211_m_prepend(m, 24, M_DONTWAIT);
+		assert(m != NULL);			/* prepend MUST succeed */
+		assert(m->b_rptr[24]==0x11 && m->b_rptr[29]==0x66);
+		freemsg(m);
+		printf("ok 2c m_align leaves header room; auth prepend succeeds\n");
 	}
 
 	/* --- 3. copydata across a multi-segment chain --- */

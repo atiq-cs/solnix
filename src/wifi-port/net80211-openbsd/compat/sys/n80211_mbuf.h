@@ -141,14 +141,17 @@ extern struct m_tag *m_tag_find(mblk_t *, int, struct m_tag *);
 
 /*
  * m_align(m, len) -- OpenBSD right-aligns m_data so `len` bytes sit at the tail
- * of the buffer (headroom for later prepends). On illumos a fresh allocb mblk
- * has b_rptr==b_wptr==db_base with the whole cluster ahead; net80211 uses
- * m_align only on just-allocated mgmt frames it then fills from mtod(m), so
- * leaving the data at the start is correct and the subsequent
- * iwx_m_set_window sets the length. No field alias; a no-op on this path.
- * ponytail: no-op alignment, revisit if a prepend-after-align site appears.
+ * of the buffer, leaving the maximum LEADING headroom for later header
+ * prepends. net80211 builds every management frame as MGETHDR + m_align(body)
+ * + fill, then ieee80211_mgmt_output M_PREPENDs the 24-byte 802.11 header in
+ * front; ieee80211_output.c:720 prepends a data header the same way. If m_align
+ * leaves the body at db_base (no leading room) the prepend underflows and the
+ * frame is freed (ENOMEM), which silently drops every auth/assoc/probe frame
+ * and makes association impossible. So this MUST reserve leading headroom, not
+ * be a no-op. Implemented in n80211_mbuf.c against DB_LIM/DB_BASE.
  */
-#define m_align(m, len)	((void)0)
+extern void n80211_m_align(mblk_t *m, size_t len);
+#define m_align(m, len)	(n80211_m_align((m), (size_t)(len)))
 
 /*
  * n80211_m_reserve(m, n) -- reserve n bytes of leading header space by advancing

@@ -162,6 +162,35 @@ rep("""		if (data->map != NULL)
 	}
 }""", count=2)
 
+# ILLUMOS: on the AC 9560 (9000 fw 46.x) with MSI (not MSI-X) under the giant
+# model, enabling device-level dynamic power save parks the firmware the moment
+# the aggressive-assoc time event expires (~2 x beacon interval), before the
+# AUTH/ASSOC exchange completes: measured on dixi via DTrace -- interrupts and
+# RX stop ~200 ms after iwm_protect_session and the AP's auth response is never
+# received, so association never advances past AUTH. Keep device PS off so the
+# firmware stays on the BSS channel through the full auth/assoc/4-way exchange.
+# A focused divergence from OpenBSD (which does not hit this on its own
+# interrupt/scheduling model); revisit if a later firmware or an MSI-X path
+# removes the need.
+rep("""	if (ic->ic_opmode != IEEE80211_M_MONITOR)
+		cmd.flags = htole16(IWM_DEVICE_POWER_FLAGS_POWER_SAVE_ENA_MSK);
+
+	return iwm_send_cmd_pdu(sc,
+	    IWM_POWER_TABLE_CMD, 0, sizeof(cmd), &cmd);""",
+    """	/*
+	 * ILLUMOS: do NOT set IWM_DEVICE_POWER_FLAGS_POWER_SAVE_ENA_MSK. On the
+	 * 9000 family with MSI under the giant model, device PS parks the
+	 * firmware at time-event expiry before association completes; see
+	 * gen-illumos-src.py for the DTrace evidence.
+	 */
+	return iwm_send_cmd_pdu(sc,
+	    IWM_POWER_TABLE_CMD, 0, sizeof(cmd), &cmd);""")
+
+
+rep('\tif (in->in_ni.ni_intval)\n\t\tduration = in->in_ni.ni_intval * 2;\n\telse\n\t\tduration = IEEE80211_DUR_TU; \n\tiwm_protect_session(sc, in, duration, in->in_ni.ni_intval / 2);',
+    "\t/*\n\t * ILLUMOS: hold the firmware on the BSS channel through the WHOLE\n\t * auth + assoc + 4-way exchange. Measured on dixi (DTrace): with the\n\t * stock ~200ms (2 x beacon interval) aggressive-assoc time event the\n\t * fw stops delivering RX/interrupts right after the auth commands and\n\t * the AP auth response is never received, so association never leaves\n\t * AUTH. Under our giant-lock + deferred-task model the exchange takes\n\t * longer than OpenBSD's, so (a) clear any stale IWM_FLAG_TE_ACTIVE so a\n\t * fresh TE is armed on every attempt (the TE-end notification that\n\t * would clear it arrives via an interrupt that stops once the fw goes\n\t * quiet), and (b) request a much longer duration.\n\t */\n\tsc->sc_flags &= ~IWM_FLAG_TE_ACTIVE;\n\tif (in->in_ni.ni_intval)\n\t\tduration = in->in_ni.ni_intval * 25;\n\telse\n\t\tduration = IEEE80211_DUR_TU * 25;\n\tiwm_protect_session(sc, in, duration, in->in_ni.ni_intval / 2);")
+
+
 # rep() has already asserted each needle's exact count; replace all of them.
 for o, n in R:
     src = src.replace(o, n)
