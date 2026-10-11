@@ -188,3 +188,9 @@ src/wifi-port/net80211-openbsd/build/
 artifacts/install-media/usb-image-20260921-tui5/*.iso
 artifacts/install-media/usb-image-20260921-tui5/*.img
 artifacts/install-media/usb-image-20260921-tui5/*.tar.gz
+
+# Build artifacts belong in the solnix.io cache, not git history (repo-bloat cleanup 2026-10-11).
+/artifacts/
+docs/registry/AUDIT-*.tsv
+docs/registry/CACHE-RETIRE-*.tsv
+docs/registry/*-manifest.tsv
