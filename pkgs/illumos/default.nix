@@ -397,6 +397,139 @@ let
   # the /etc driver database rendered from the gate's pkg manifests (./data/drivers).
   drivers = builtins.path { path = ./data/drivers; name = "illumos-driver-db"; };
 
+  # pkgs.solnix.iwm-driver -- the Intel AC 7260..9560 wireless kernel module
+  # (OpenBSD iwm(4)) + the wpa-pmk userland PMK deriver, built from
+  # src/ports/wifi/iwm as a pure derivation (./iwm-driver.nix). Output:
+  #   $out/kernel/drv/amd64/iwm   the loadable module
+  #   $out/usr/lib/inet/wpa-pmk   the WPA2 PMK deriver (solnix-wifi-join calls it)
+  # Only materialised when a config enables hardware.wirelessIwm.attachAtBoot;
+  # the module build is dixi/EC2-only (illumos toolchain), so no amd64-cross
+  # config forces it unless the wifi is actually wanted.
+  iwm-driver = import ./iwm-driver.nix {
+    gate = gate';
+    # the same C/C++ toolchain profile as `solnix-dev` (gcc 14.3.0 + gas + GNU
+    # make); built inline here because solnix-dev itself is defined in the output
+    # attrset, not this let, so it is not referenceable by name from here.
+    solnixDev = buildEnv {
+      name = "solnix-dev";
+      paths = [ srcPkgs.gccWrapper srcPkgs.binutils srcPkgs.gnumake ];
+      pathsToLink = [ "/bin" "/share/man" ];
+    };
+    inherit ld;
+  };
+
+  # wpa-pmk on the system PATH: a bin/-shaped view of iwm-driver's
+  # usr/lib/inet/wpa-pmk, so environment.systemPackages puts it at sw/bin ->
+  # /usr/bin/wpa-pmk, which the solnix-wifi-join service's PATH finds. (The join
+  # script's PATH leads with /usr/lib/inet, the canonical illumos home for this
+  # tool, and also carries /usr/bin, which this covers via sw/bin.)
+  wpa-pmk = derivation {
+    name = "wpa-pmk";
+    system = "x86_64-solaris";
+    builder = "/usr/bin/bash";
+    PATH = "/usr/bin";
+    driver = iwm-driver;
+    args = [ "-c" ''
+      set -eu
+      mkdir -p "$out/bin"
+      cp "$driver/usr/lib/inet/wpa-pmk" "$out/bin/wpa-pmk"
+      chmod 0555 "$out/bin/wpa-pmk"
+    '' ];
+  };
+
+  # iwm-firmware -- the proprietary (redistributable) iwlwifi blob + licence
+  # (./iwm-firmware.nix), gated on the unfree opt-in. Threaded through here so
+  # mkIwmKernel can lay it into the BE kernel tree alongside the module. The
+  # acceptFirmwareLicense arg is passed by the config (hardware.wirelessIwm.
+  # allowUnfreeFirmware); default false keeps the blob out of any closure that
+  # did not opt in.
+  iwmFirmware = acceptFirmwareLicense:
+    import ./iwm-firmware.nix { inherit acceptFirmwareLicense; };
+
+  # mkIwmDriversDb -- the /etc driver database with the iwm lines merged in, so
+  # install-be lays an iwm-aware DB into the BE with NO install-be change (it
+  # copies name_to_major/driver_aliases/minor_perm verbatim; the config renders
+  # the final DB, the NixOS way). Returns a store path shaped exactly like
+  # `drivers` (./data/drivers) with iwm appended:
+  #   name_to_major  iwm <N>              N = the LOWEST unused major (NOT a
+  #                                       hardcoded 362; computed in the builder
+  #                                       as the gate's own gen.py does)
+  #   driver_aliases iwm "pciex8086,a370"  the AC 9560 PCI id (STATUS.md)
+  #   minor_perm     iwm:* 0666 root sys  and  clone:iwm 0666 root sys
+  mkIwmDriversDb = derivation {
+    name = "illumos-driver-db-iwm";
+    system = "x86_64-solaris";
+    builder = "/usr/bin/bash";
+    PATH = "/usr/bin:/usr/sbin";
+    base = drivers;
+    args = [ "-c" ''
+      set -eu
+      mkdir -p "$out"
+      cp "$base"/* "$out"/
+      chmod u+w "$out"/name_to_major "$out"/driver_aliases "$out"/minor_perm
+      # already present (idempotent)? then nothing to do.
+      if awk '{print $1}' "$out/name_to_major" | grep -qx iwm; then
+        echo "iwm already in name_to_major" >&2
+      else
+        # lowest unused major, exactly as data/drivers/gen.py assigns new ones.
+        used=$(awk '{print $2}' "$out/name_to_major" | sort -n)
+        n=0
+        for m in $used; do if [ "$m" = "$n" ]; then n=$((n+1)); fi; done
+        # the loop stops at the first gap; keep stepping past contiguous highs.
+        while printf '%s\n' $used | grep -qx "$n"; do n=$((n+1)); done
+        echo "iwm $n" >> "$out/name_to_major"
+        echo "iwm: allocated major $n (lowest free)" >&2
+      fi
+      grep -q '^iwm ' "$out/driver_aliases" || \
+        printf 'iwm "pciex8086,a370"\n' >> "$out/driver_aliases"
+      grep -q '^iwm:' "$out/minor_perm" || \
+        { printf 'iwm:* 0666 root sys\n'; printf 'clone:iwm 0666 root sys\n'; } >> "$out/minor_perm"
+      # sanity: the three lines are present
+      awk '{print $1}' "$out/name_to_major" | grep -qx iwm || { echo "FATAL: no iwm major" >&2; exit 1; }
+      grep -q '^iwm "pciex8086,a370"' "$out/driver_aliases" || { echo "FATAL: no iwm alias" >&2; exit 1; }
+      grep -q '^iwm:\*' "$out/minor_perm" || { echo "FATAL: no iwm minor_perm" >&2; exit 1; }
+    '' ];
+  };
+
+  # mkIwmKernel -- the kernel slice with the iwm module and its firmware laid
+  # into the kernel tree, so a BE populated from this slice has
+  #   kernel/drv/amd64/iwm          the module install-be copies as a real file
+  #   kernel/firmware/iwm/iwm-9000-46   the blob loadfirmware() opens
+  # install-be copies the whole kernel tree verbatim, so no install-be change is
+  # needed. Takes acceptFirmwareLicense so the blob is only pulled on opt-in.
+  mkIwmKernel = acceptFirmwareLicense: derivation {
+    name = "illumos-kernel-iwm";
+    system = "x86_64-solaris";
+    builder = "/usr/bin/bash";
+    PATH = "/usr/bin:/usr/sbin";
+    base = slices.kernel;
+    module = iwm-driver;
+    firmware = iwmFirmware acceptFirmwareLicense;
+    args = [ "-c" ''
+      set -eu
+      mkdir -p "$out"
+      # copy the base kernel slice, then overlay iwm's module + firmware.
+      ( cd "$base" && tar cf - . ) | ( cd "$out" && tar xf - )
+      # NOT chmod -R: the kernel slice has relative symlinks (e.g.
+      # boot/solaris/bin/root_archive) that dangle in this isolated tree, and
+      # chmod -R FOLLOWS symlinks -> errors on the broken link (same hazard
+      # install-be.sh documents). Make writable only the real dirs we add into,
+      # walking the chain (store dirs arrive 0555).
+      for d in "$out" "$out/kernel" "$out/kernel/drv" "$out/kernel/drv/amd64" "$out/kernel/firmware"; do
+        [ -d "$d" ] && [ ! -h "$d" ] && chmod u+w "$d" 2>/dev/null || true
+      done
+      mkdir -p "$out/kernel/drv/amd64" "$out/kernel/firmware/iwm"
+      cp "$module/kernel/drv/amd64/iwm" "$out/kernel/drv/amd64/iwm"
+      cp "$firmware/kernel/firmware/iwm/"* "$out/kernel/firmware/iwm/"
+      chmod 0555 "$out/kernel/drv/amd64/iwm"
+      [ -f "$out/kernel/drv/amd64/iwm" ] || { echo "FATAL: iwm module not laid in" >&2; exit 1; }
+      [ -f "$out/kernel/firmware/iwm/iwm-9000-46" ] || { echo "FATAL: iwm firmware not laid in" >&2; exit 1; }
+      # the base kernel's unix must still be there (we only added files).
+      [ -e "$out/platform/i86pc/kernel/amd64/unix" ] || { echo "FATAL: base kernel clobbered" >&2; exit 1; }
+    '' ];
+  };
+
+
   # worldMan: the gate's base man pages as a doc-only store path (the illumos
   # analog of NixOS delivering man pages through a profile package rather than
   # the kernel/libc closure). mk-proto-world EXCLUDES usr/share/man to keep the
@@ -462,6 +595,12 @@ let
 in
 {
   inherit libc rtld ld sys base-tools systemPath nix nix224 cached starter gcc world early stock drivers kernelNd worldMan;
+  # iwm wifi: the driver module + wpa-pmk (iwm-driver), and the augmentation
+  # helpers wireless-iwx.nix uses to render an iwm-aware driver DB and kernel
+  # tree when hardware.wirelessIwm.attachAtBoot. mkIwmKernel/iwmFirmware take
+  # the unfree opt-in so the blob stays out of any non-opted closure.
+  inherit iwm-driver mkIwmDriversDb mkIwmKernel iwmFirmware wpa-pmk;
+
   inherit (srcPkgs) zlib libxml2 openssl openssh bash nspr nss git libcExtra binutils gnumake gccWrapper vi pkgconf;
   inherit (srcPkgs) ncurses less htop top libevent tmux coreutils gnugrep gnused gnutar findutils diffutils jq gettext home-manager xorgproto lndir hostname libiconv;
   inherit (srcPkgs) gzip nano rsync smartmontools;

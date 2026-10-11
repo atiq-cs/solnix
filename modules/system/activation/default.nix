@@ -515,6 +515,14 @@ let
   # lib/make-be.nix, scripts/solnix-install and do_boot below.
   installBe = pkgs.writeScript "solnix-install-be" (builtins.readFile ./install-be.sh);
 
+  # The driver database and the kernel tree the toplevel ships to install-be.
+  # Default to the base ones; a hardware module (modules/config/wireless-iwx.nix)
+  # overrides them with an iwm-augmented variant when a card is enabled, so the
+  # config renders the final DB (the NixOS way) and install-be needs no change --
+  # it copies name_to_major/driver_aliases/minor_perm and the kernel tree verbatim.
+  driversDb = config.system.build.driversDb;
+  kernelTree = config.system.build.kernelTree;
+
   toplevel = assert config.system.assertionsChecked;
     pkgs.runCommand "solnix-system-${config.networking.hostName}" {
       # closure of the boot-time set: what install-be copies as real files into
@@ -534,9 +542,9 @@ let
       if grep -qx "$x" early-graph sw-graph; then echo "FATAL: runtime closure contains build-only $x" >&2; exit 1; fi
     done
     ln -s ${pkgs.solnix.world}   $out/world
-    ln -s ${pkgs.solnix.kernel}  $out/kernel-slice
+    ln -s ${kernelTree}          $out/kernel-slice
     ln -s ${pkgs.solnix.early}   $out/early
-    ln -s ${pkgs.solnix.drivers} $out/drivers
+    ln -s ${driversDb}           $out/drivers
     ln -s ${pkgs.solnix.stock}   $out/stock
     # sw: the composed userland profile (environment.systemPackages via buildEnv)
     # -> /run/current-system/sw. SEPARATE from systemPath so a broken package set
@@ -559,8 +567,8 @@ let
     ln -s ${installBe}                                $out/bin/install-be
     # kernel + platform: stable-named entrypoints into systemPath (the closure
     # walker / make-be reads $out/kernel + $out/platform to find unix/genunix).
-    ln -s ${pkgs.solnix.kernel}/kernel               $out/kernel
-    ln -s ${pkgs.solnix.kernel}/platform             $out/platform
+    ln -s ${kernelTree}/kernel               $out/kernel
+    ln -s ${kernelTree}/platform             $out/platform
     # a manifest of what this system is (for `nix-store -q --tree` legibility).
     cat > $out/system-manifest <<EOF
     hostName=${config.networking.hostName}
@@ -582,6 +590,29 @@ let
 in
 {
   options.system.build = {
+    driversDb = mkOption {
+      type = types.package;
+      default = pkgs.solnix.drivers;
+      defaultText = lib.literalExpression "pkgs.solnix.drivers";
+      description = ''
+        The /etc driver database (name_to_major, driver_aliases, minor_perm,
+        driver_classes) install-be copies into each BE. Defaults to the gate's
+        rendered database; a hardware module overrides it to add driver lines
+        (e.g. hardware.wirelessIwm.attachAtBoot adds iwm) so the config renders
+        the final DB rather than install-be hand-merging lines.
+      '';
+    };
+    kernelTree = mkOption {
+      type = types.package;
+      default = pkgs.solnix.kernel;
+      defaultText = lib.literalExpression "pkgs.solnix.kernel";
+      description = ''
+        The kernel slice (unix/genunix + the module and firmware trees) the
+        toplevel ships to install-be. Defaults to the base non-DEBUG kernel; a
+        hardware module overrides it to add a driver module + its firmware into
+        kernel/drv and kernel/firmware (e.g. the iwm module + iwm-9000-46 blob).
+      '';
+    };
     toplevel = mkOption {
       type = types.package;
       description = ''

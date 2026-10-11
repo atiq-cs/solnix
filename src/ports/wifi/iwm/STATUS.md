@@ -36,7 +36,8 @@ GATED = deliberately fails closed (ENOTSUP / refused). PLANNED = not written.
 | 22 | detach once attached | GATED | iwm_il_detach refuses; a live attach is backed out by removing the alias and rebooting |
 | 23 | suspend/resume, quiesce beyond stop-DMA | GATED | DDI_RESUME refused |
 | 24 | Attach on dixi | PLANNED | needs the dump device (maintainer) and an alias approval; /tmp/streamD2-attach-plan.md |
-| 25 | Declarative module (name_to_major/aliases/minor_perm + kernel/drv + kernel/firmware in the BE) | PLANNED | attach plan section 6 |
+| 25 | Declarative module (name_to_major/aliases/minor_perm + kernel/drv + kernel/firmware in the BE) | BUILT | pkgs/illumos/iwm-driver.nix (pure derivation; git-apply gen, no python/patch) + default.nix mkIwmDriversDb/mkIwmKernel + wireless-iwx.nix attachAtBoot -> system.build.driversDb/kernelTree. Built on dixi: module 393128 B, undefined=131 unresolved=0 (vs gate-proto AND running kernel) non-interface-globals=0; negative control (mapfile removed) -> globals=870 FATAL. DB: iwm major 362 (lowest free), alias pciex8086,a370, minor_perm iwm:*/clone:iwm. kernel-iwm lays module + iwm-9000-46 firmware. dixi toplevel + iwm-enabled toplevel both eval to a drv. Module reproducible (2 builds identical); sha differs from the earlier proven run (non-semantic ld -r bytes; source byte-identical to the python/patch gen) |
+
 
 ## How the ladder was checked
 

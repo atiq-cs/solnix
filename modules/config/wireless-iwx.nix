@@ -10,16 +10,21 @@
 # not set allowUnfree globally, which would silently permit unrelated unfree
 # packages.
 #
-# wirelessIwm today only puts the firmware in the system closure (built and
-# kept). NOT yet emitted (PLANNED; needs install-be.sh to merge extra
-# driver-database lines, since it copies pkgs.solnix.drivers verbatim at
-# install-be.sh:221, and the driver to be packaged):
-#   name_to_major  iwm <N>
+# wirelessIwm puts the firmware in the system closure (built and kept) and, when
+# hardware.wirelessIwm.attachAtBoot is set, binds the card at boot by rendering
+# the final driver database and kernel tree that install-be lays into the BE
+# (it copies pkgs.solnix.drivers and the kernel slice verbatim, so the config
+# renders the final DB -- the NixOS way -- rather than install-be merging lines):
+#   name_to_major  iwm <lowest-free-major>   (allocated like the gate's gen.py)
 #   driver_aliases iwm "pciex8086,a370"
 #   minor_perm     iwm:* 0666 root sys   and   clone:iwm 0666 root sys
-#   kernel/drv/amd64/iwm and kernel/firmware/iwm/iwm-9000-46 in the BE's kernel tree.
-# Those make the card attach at boot; the driver has never attached on hardware,
-# so a config option that binds it at boot is deliberately not offered yet.
+#   kernel/drv/amd64/iwm and kernel/firmware/iwm/iwm-9000-46 in the BE kernel tree.
+# The module itself is pkgs.solnix.iwm-driver, a pure derivation built from
+# src/ports/wifi/iwm (see pkgs/illumos/iwm-driver.nix). The driver attaches,
+# loads firmware, associates (WPA2/CCMP) and passes traffic on the X1 (measured),
+# but it is still young, so attachAtBoot is opt-in and defaults to false -- a
+# fresh solnix install does not auto-bind an experimental driver. Set it true
+# per host (e.g. dixi) to bind the card at boot.
 { config, lib, pkgs, ... }:
 
 let
@@ -81,14 +86,20 @@ in
 
     attachAtBoot = lib.mkOption {
       type = lib.types.bool;
-      default = iwm.enable;
-      defaultText = "config.hardware.wirelessIwm.enable";
+      default = false;
       description = ''
-        Bind the iwm driver at boot: emit the name_to_major / driver_aliases /
-        minor_perm lines so the AC 9560 (pciex8086,a370) attaches as iwm0
-        without a manual add_drv. Requires the iwm module built into the BE
-        kernel tree (pkgs.solnix.iwm-driver); until that derivation exists this
-        only records intent and the install-be driver-DB merge is a no-op.
+        Bind the iwm driver at boot: render the name_to_major / driver_aliases /
+        minor_perm lines and lay the module + firmware into the BE kernel tree
+        (via system.build.driversDb / system.build.kernelTree), so the AC 9560
+        (pciex8086,a370) attaches as iwm0 without a manual add_drv. The module is
+        pkgs.solnix.iwm-driver, built from src/ports/wifi/iwm.
+
+        Defaults to false (opt-in): the driver has never attached on hardware
+        (src/ports/wifi/iwm/STATUS.md rung 24 is PLANNED), and the module build
+        needs the illumos toolchain (dixi/EC2), so a config does not pull it
+        unless the wifi is actually wanted. Requires allowUnfreeFirmware (the
+        firmware is laid into the kernel tree). Set it true on a system where the
+        attach has been approved.
       '';
     };
 
@@ -158,18 +169,46 @@ in
         hardware.wirelessIwm.allowUnfreeFirmware = true to accept
         LICENCE.iwlwifi_firmware.
       '';
+    }
+    {
+      # attachAtBoot lays the firmware blob into the BE kernel tree (mkIwmKernel
+      # pulls iwm-firmware, which throws without the opt-in), so it cannot be set
+      # without accepting the licence.
+      assertion = !iwm.attachAtBoot || iwm.allowUnfreeFirmware;
+      message = ''
+        hardware.wirelessIwm.attachAtBoot lays Intel's firmware into the BE
+        kernel tree. Set hardware.wirelessIwm.allowUnfreeFirmware = true.
+      '';
     }];
+
     environment.systemPackages = [
       (import ../../pkgs/illumos/iwm-firmware.nix {
         acceptFirmwareLicense = iwm.allowUnfreeFirmware;
       })
-    ];
+    ]
+    # When the card attaches at boot, ship wpa-pmk on the system PATH
+    # (sw/bin -> /usr/bin/wpa-pmk) so solnix-wifi-join finds it. Only when
+    # attachAtBoot: without the driver bound there is nothing for it to talk to.
+    ++ lib.optional iwm.attachAtBoot pkgs.solnix.wpa-pmk;
+
+    # attachAtBoot: render the FINAL driver DB and kernel tree so install-be lays
+    # an iwm-aware system with no manual add_drv and no install-be change (it
+    # copies name_to_major/driver_aliases/minor_perm and the kernel tree
+    # verbatim). The DB gets name_to_major iwm <lowest-free-major>, driver_aliases
+    # iwm "pciex8086,a370" and minor_perm iwm:*/clone:iwm; the kernel tree gets
+    # kernel/drv/amd64/iwm and kernel/firmware/iwm/iwm-9000-46. This is the NixOS
+    # model: the config renders the database, the activation step just copies it.
+    system.build.driversDb = lib.mkIf iwm.attachAtBoot pkgs.solnix.mkIwmDriversDb;
+    system.build.kernelTree = lib.mkIf iwm.attachAtBoot
+      (pkgs.solnix.mkIwmKernel iwm.allowUnfreeFirmware);
 
     # Boot auto-join: scan, pick the highest-priority configured SSID in range,
-    # read its PSK from the 0600 file, dladm connect-wifi. Transient run-once.
-    # The driver-DB lines that make iwm attach at boot are emitted by
-    # pkgs.solnix.iwm-driver via install-be (hardware.wirelessIwm.attachAtBoot);
-    # this service runs after the card is up, by boot-attach or by hand.
+    # read its PSK from the 0600 file, join. Transient run-once. The driver-DB
+    # lines + the module/firmware that make iwm attach at boot are rendered into
+    # system.build.{driversDb,kernelTree} above (hardware.wirelessIwm.attachAtBoot);
+    # this service runs after the card is up and calls wpa-pmk (on /usr/bin via
+    # pkgs.solnix.wpa-pmk) ESSID-only with a bounded retry.
+
     smf.services.solnix-wifi-join = lib.mkIf (iwm.networks != { }) {
       enable = true;
       category = "site";
