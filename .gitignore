@@ -194,3 +194,6 @@ artifacts/install-media/usb-image-20260921-tui5/*.tar.gz
 docs/registry/AUDIT-*.tsv
 docs/registry/CACHE-RETIRE-*.tsv
 docs/registry/*-manifest.tsv
+
+# nvidia-oss RM source (107M generated GSP-as-C) is a pinned FOD, not vendored -- see src-FETCH.md
+src/drm-port/nvidia-oss/src/
