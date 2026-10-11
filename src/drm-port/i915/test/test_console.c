@@ -29,12 +29,27 @@
  *     reads the same five fields the real tems_check_videomode reads and
  *     applies the same comparison, so a wrong handover assumption is caught.
  *
+ *   PART C: the VIS_DEVINIT ownership contract -- the CORRECT mechanism, the
+ *     one the design (CONSOLE-HANDOVER-DESIGN.md) says is the ONLY path that
+ *     sets up / takes over the tem console. Two facts, modelled verbatim from
+ *     pinned source:
+ *       (1) gfxp_fb.c do_gfx_ioctl L354-367: VIS_DEVINIT from userland (no
+ *           FKIOCTL) returns ENXIO and captures NOTHING. This is the hole the
+ *           recovered i915_cons_ioctl reopened (arbitrary modechg_cb from a
+ *           userland arg = kernel code-exec); the model proves it stays shut.
+ *       (2) tem.c L466/L484: a kernel (FKIOCTL) VIS_DEVINIT is the ONLY place
+ *           ts_fb_polledio is set and the ONLY path that establishes/moves the
+ *           console. Part B proves the modechange callback does NOT; Part C
+ *           proves VIS_DEVINIT does, and that userland cannot reach it.
+ *
  *   cc -m64 -O2 -Wall -o test_console test/test_console.c && ./test_console
- *   cc -DSABOTAGE     ... ./test_console   # draw-math control: must FAIL
- *   cc -DSABOTAGE_TEM ... ./test_console   # tem-contract control: must FAIL
+ *   cc -DSABOTAGE         ... ./test_console  # draw-math control: must FAIL
+ *   cc -DSABOTAGE_TEM     ... ./test_console  # tem-contract control: must FAIL
+ *   cc -DSABOTAGE_DEVINIT ... ./test_console  # devinit-gate control: must FAIL
  *
  * Part A mirrors the geometry handling only (NULL/negative/clip, scan-line
- * advance, overlap direction); it does not need the kernel headers.
+ * advance, overlap direction); it does not need the kernel headers. Parts B
+ * and C are MODELs of private-header kernel state, labelled as such.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -255,6 +270,91 @@ test_tem_contract(void)
 	}
 }
 
+/* ---------------------------------------------------------------- PART C
+ * The VIS_DEVINIT ownership gate (gfxp_fb.c do_gfx_ioctl, L354-367), modelled
+ * verbatim. This is the SECURITY contract the recovered i915_cons_ioctl broke:
+ * a userland VIS_DEVINIT must be refused with ENXIO and must capture no
+ * pointer; only a kernel (FKIOCTL) VIS_DEVINIT may establish the console and
+ * adopt the driver's polledio. Combined with Part B this is the whole truth:
+ * the CORRECT mechanism (VIS_DEVINIT, kernel-only) both moves the polled
+ * pointer and repaints; the modechange callback does neither.
+ */
+#define MODEL_FKIOCTL 0x80000000u	/* sys/file.h FKIOCTL, value irrelevant */
+#define MODEL_ENXIO   6		/* value irrelevant; nonzero == rejected */
+
+/*
+ * model_gfx_devinit: returns 0 and installs polledio on success, or an errno
+ * and installs NOTHING on rejection. Transcribed from gfxp_fb.c:
+ *   case VIS_DEVINIT:
+ *       if (!(mode & FKIOCTL)) { "kernel only"; return ENXIO; }
+ *       err = devinit(...);  // installs data->polledio into the fb softc,
+ *                            // tem then does ts_fb_polledio = data->polledio
+ */
+static int
+model_gfx_devinit(struct tem_model *tems, struct tem_devinit *di, unsigned mode)
+{
+#ifdef SABOTAGE_DEVINIT
+	/* the recovered bug: capture the caller's pointer BEFORE the FKIOCTL
+	 * check (i915_cons_ioctl stored di.modechg_cb/arg unconditionally).
+	 * A userland open thereby hands the kernel a pointer it later calls. */
+	tems->ts_fb_polledio = di->polledio;
+	if (!(mode & MODEL_FKIOCTL))
+		return (MODEL_ENXIO);
+	tems->repainted = 1;
+	return (0);
+#else
+	if (!(mode & MODEL_FKIOCTL))
+		return (MODEL_ENXIO);	/* userland: reject, capture nothing */
+	/* kernel path: devinit installs polledio, tem adopts it and repaints */
+	tems->ts_fb_polledio = di->polledio;
+	tems->ts_pdepth = di->depth;
+	tems->ts_p_dimension.width = di->width;
+	tems->ts_p_dimension.height = di->height;
+	tems->repainted = 1;
+	return (0);
+#endif
+}
+
+static void
+test_devinit_gate(void)
+{
+	int gop_poll = 1, attacker_poll = 0xdead, kernel_poll = 2;
+	struct tem_model tems = {0};
+	struct tem_devinit gop = { 32, 1, 3840, 2160, &gop_poll };
+
+	/* console already up on the GOP buffer (kernel VIS_DEVINIT at boot). */
+	(void) model_gfx_devinit(&tems, &gop, MODEL_FKIOCTL);
+	CHECK(tems.ts_fb_polledio == &gop_poll);
+
+	/* ATTACK -- a userland process opens text-0 and issues VIS_DEVINIT with
+	 * its own polledio pointer. gfxp rejects it: ENXIO, and the kernel's
+	 * polled console pointer is NOT replaced by the attacker's. This is the
+	 * exact RCE the recovered i915_cons_ioctl reopened; the model proves the
+	 * supported path keeps it shut. (SABOTAGE_DEVINIT flips both checks.) */
+	tems.repainted = 0;
+	{
+		struct tem_devinit evil = { 32, 1, 3840, 2160, &attacker_poll };
+		int rv = model_gfx_devinit(&tems, &evil, 0 /* no FKIOCTL */);
+		CHECK(rv == MODEL_ENXIO);		/* userland rejected */
+		CHECK(tems.ts_fb_polledio == &gop_poll);/* pointer NOT captured */
+		CHECK(tems.ts_fb_polledio != &attacker_poll);
+		CHECK(tems.repainted == 0);		/* no console action */
+	}
+
+	/* KERNEL -- the supported takeover: a kernel-context VIS_DEVINIT (as tem
+	 * issues from WC_OPEN_FB, FWRITE|FKIOCTL) DOES move the polled pointer and
+	 * repaint. This is the only path that does both -- contrast Part B, where
+	 * the modechange callback at the same mode does neither. */
+	tems.repainted = 0;
+	{
+		struct tem_devinit kern = { 32, 1, 3840, 2160, &kernel_poll };
+		int rv = model_gfx_devinit(&tems, &kern, MODEL_FKIOCTL);
+		CHECK(rv == 0);				/* kernel accepted */
+		CHECK(tems.ts_fb_polledio == &kernel_poll);/* polled moved */
+		CHECK(tems.repainted == 1);		/* repaint happened */
+	}
+}
+
 static uint32_t
 px(struct fb *f, int x, int y)
 {
@@ -310,10 +410,13 @@ main(void)
 		CHECK(px(&f, 0, 13) == m12);
 	}
 
-	/* PART B: tem's modechange-callback contract (the handover claim). */
+	/* PART B: tem's modechange-callback contract (refutes the recovered
+	 * handover). PART C: the VIS_DEVINIT ownership gate (the correct,
+	 * FKIOCTL-only mechanism; proves userland cannot inject a pointer). */
 	test_tem_contract();
+	test_devinit_gate();
 
-	if (fails == 0) printf("PASS: console draw math + tem handover contract\n");
+	if (fails == 0) printf("PASS: console draw math + tem handover contract + devinit gate\n");
 	else printf("%d CHECK(s) FAILED\n", fails);
 	free(f.bits); free(data);
 	return (fails != 0);
