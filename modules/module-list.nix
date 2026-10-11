@@ -25,6 +25,8 @@
   ./config/networking.nix
   ./config/users.nix
   ./config/system-path.nix
+  ./config/documentation.nix
+  ./config/debug-info.nix
   ./config/pgfarm.nix
   ./config/cosmic-desktop.nix
   ./config/shell-environment.nix

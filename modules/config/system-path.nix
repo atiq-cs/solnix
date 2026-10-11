@@ -11,6 +11,22 @@
 
 let
   inherit (lib) mkOption types;
+
+  # extraOutputPaths: systemPackages plus each requested extra output that a
+  # package actually HAS. lib/build-env.nix only merges the paths it is handed
+  # (its own extraOutputsToInstall is a no-op on single-output slices), so to
+  # deliver a package's `debug`/`man`/`dev` output into the profile the way NixOS
+  # does (environment.extraOutputsToInstall), the extra outputs must be added to
+  # `paths` here. `pkg ? <output>` guards packages that lack a given output (a
+  # single-output slice has no `.debug`), so it is safe across the mixed set
+  # (mk-userland-pkg packages carry a `debug` output; mk-src-pkg ones do not).
+  extraOutputPaths =
+    config.environment.systemPackages
+    ++ lib.concatMap
+      (pkg: lib.concatMap
+        (o: lib.optional (pkg ? ${o}) pkg.${o})
+        config.environment.extraOutputsToInstall)
+      config.environment.systemPackages;
 in
 {
   options.environment = {
@@ -39,9 +55,12 @@ in
       default = [ ];
       example = [ "man" "dev" ];
       description = ''
-        Extra package outputs to install into the system profile. No-op for the
-        single-output solnix slices today (see lib/build-env.nix); kept for
-        nixpkgs-compat + future multi-output packages.
+        Extra package outputs to install into the system profile (NixOS's
+        environment.extraOutputsToInstall). For each systemPackage that HAS the
+        named output (e.g. a mk-userland-pkg package's `debug` output), that
+        output is added to the composed profile (see extraOutputPaths above).
+        Packages lacking the output are skipped. `debug` is set by
+        modules/config/debug-info.nix when environment.enableDebugInfo is on.
       '';
     };
   };
@@ -57,7 +76,7 @@ in
   config = {
     system.path = pkgs.buildEnv {
       name = "solnix-system-path";
-      paths = config.environment.systemPackages;
+      paths = extraOutputPaths;
       inherit (config.environment) pathsToLink extraOutputsToInstall;
       ignoreCollisions = true;
     };

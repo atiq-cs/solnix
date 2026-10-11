@@ -263,6 +263,26 @@ rec {
     '';
   };
 
+  # pkgconf -- the pkg-config implementation (pkg-config is unmaintained; pkgconf
+  # is the one every distro ships now). Pure C, no perl/m4; its release tarball
+  # carries a pre-generated ./configure, so it builds with just the solnix cc +
+  # GNU make (no autotools at build time). Installs the `pkgconf` binary and a
+  # `pkg-config` compat symlink, the name autotools/meson/cargo-build scripts
+  # probe. Part of solnix-dev-full so an on-image build host can resolve
+  # library flags the NixOS way (pkg-config on PATH).
+  pkgconf = mkSrcPkg {
+    pname = "pkgconf"; version = "2.3.0";
+    src = { url = "https://distfiles.ariadne.space/pkgconf/pkgconf-2.3.0.tar.xz";
+            sha256 = "3a9080ac51d03615e7c1910a0a2a8df08424892b5f13b0628a204d3fcce0ea8b"; };
+    build = ''
+      ./configure --prefix="$out" --disable-static
+      gmake -j4
+      gmake install
+      ln -s pkgconf "$out/bin/pkg-config"
+      "$out/bin/pkgconf" --version >/dev/null || { echo "FATAL: pkgconf --version" >&2; exit 1; }
+    '';
+  };
+
   # gcc + binutils' gas, the stdenv cc-wrapper's job reduced to what illumos needs:
   #   -B<binutils>/bin/  gcc finds `as` there when its configured /usr/bin/gas is
   #                      absent (gcc -B fakeas/ -c ran fakeas/as, measured).

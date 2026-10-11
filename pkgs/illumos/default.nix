@@ -397,6 +397,34 @@ let
   # the /etc driver database rendered from the gate's pkg manifests (./data/drivers).
   drivers = builtins.path { path = ./data/drivers; name = "illumos-driver-db"; };
 
+  # worldMan: the gate's base man pages as a doc-only store path (the illumos
+  # analog of NixOS delivering man pages through a profile package rather than
+  # the kernel/libc closure). mk-proto-world EXCLUDES usr/share/man to keep the
+  # runtime closure lean, so the base pages (ls(1), zfs(1M), ...) are not in the
+  # installed BE. This slice carries them under $out/share/man so the existing
+  # MANPATH=.../sw/share/man finds them once a config adds it to the system
+  # profile (modules/config/documentation.nix). It also keeps the gate's
+  # etc/man.conf. Copies files OUT of the gate (like `stock`), so it carries NO
+  # reference back to the gate -> the toplevel's build-only-closure check still
+  # passes. No ELF here, so no RUNPATH/relocation pass is needed.
+  worldMan = derivation {
+    name = "illumos-world-man"; system = "x86_64-solaris"; gate = gate';
+    builder = "/usr/bin/bash";
+    args = [ "-c" ''
+      set -eu
+      /usr/bin/mkdir -p "$out/share/man" "$out/etc"
+      if [ -d "$gate/usr/share/man" ]; then
+        ( cd "$gate/usr/share/man" && /usr/bin/tar cf - . ) \
+          | ( cd "$out/share/man" && /usr/bin/tar xf - )
+      fi
+      [ -e "$gate/etc/man.conf" ] && /usr/bin/cp "$gate/etc/man.conf" "$out/etc/man.conf" || true
+      # a real count so a zero (empty gate man tree) is visible, not silent.
+      n=$(/usr/bin/find "$out/share/man" -type f 2>/dev/null | /usr/bin/wc -l | /usr/bin/tr -d ' ')
+      printf '%s\n' "$n" > "$out/.manifest-man"
+      echo "world-man: $n base man files" >&2
+    '' ];
+  };
+
   # nix (pkgs.solnix.nix) — the classic Nix 2.3.16 the host runs, ingested so it
   # ships on the image (design §C). First cut = host /nix-tools ingest; see the
   # TODO in ./nix.nix for the proper mk-illumos-component slice.
@@ -433,8 +461,8 @@ let
   starter = import ./starter.nix { system = "x86_64-solaris"; };
 in
 {
-  inherit libc rtld ld sys base-tools systemPath nix nix224 cached starter gcc world early stock drivers kernelNd;
-  inherit (srcPkgs) zlib libxml2 openssl openssh bash nspr nss git libcExtra binutils gnumake gccWrapper vi;
+  inherit libc rtld ld sys base-tools systemPath nix nix224 cached starter gcc world early stock drivers kernelNd worldMan;
+  inherit (srcPkgs) zlib libxml2 openssl openssh bash nspr nss git libcExtra binutils gnumake gccWrapper vi pkgconf;
   inherit (srcPkgs) ncurses less htop top libevent tmux coreutils gnugrep gnused gnutar findutils diffutils jq gettext home-manager xorgproto lndir hostname libiconv;
   inherit (srcPkgs) gzip nano rsync smartmontools;
   xz = srcPkgs.nixChain.xz;
@@ -446,6 +474,30 @@ in
   solnix-dev = buildEnv {
     name = "solnix-dev";
     paths = [ srcPkgs.gccWrapper srcPkgs.binutils srcPkgs.gnumake ];
+    pathsToLink = [ "/bin" "/share/man" ];
+  };
+
+  # solnix-dev-full -- the "build host in the image" profile: the solnix-dev C/C++
+  # toolchain PLUS pkg-config, so an installed/booted solnix system can rebuild
+  # autotools/meson/cargo packages (the maintainer directive: ship enough on the
+  # image to rebuild everything). gcc + gas + GNU make come from solnix-dev;
+  # pkgconf adds pkg-config (library-flag resolution).
+  #
+  # DELIBERATELY NOT INCLUDED (see docs/devtools-in-closure.md for why + how to add):
+  #   * autoconf/automake/libtool -- perl programs, and solnix has no from-source
+  #     perl yet (an installed solnix has no /usr/bin/perl; base-src.nix has no
+  #     perl package). A separate work item (perl + m4 from source). Most release
+  #     tarballs ship a pre-generated ./configure, so gcc + make + pkg-config
+  #     already build the common autotools-packaged source without them.
+  #   * Rust (cargo/rustc) -- the cached seed cvs3wrjn...-rust-illumos-1.97.1 is a
+  #     dangling wrapper whose 288 MB payload (rust-seed-stage) was retired from
+  #     cache.solnix.io (narinfo 404) and is not a declared Nix reference, so it
+  #     realises but cannot run. Infra report: the retired payload must be
+  #     re-published store-correct. From-source Rust needs a bootstrap rustc that
+  #     does not exist on illumos outside that seed -- a separate multi-day item.
+  solnix-dev-full = buildEnv {
+    name = "solnix-dev-full";
+    paths = [ srcPkgs.gccWrapper srcPkgs.binutils srcPkgs.gnumake srcPkgs.pkgconf ];
     pathsToLink = [ "/bin" "/share/man" ];
   };
   curl = srcPkgs.nixChain.curl;
