@@ -119,6 +119,16 @@ in
     live.nano
     live.rsync
     live.smartmontools
+    # The build toolchain, so the booted installer/system can rebuild solnix
+    # packages on the image (the "build host in the image" capability): gcc
+    # 14.3.0 + gas (binutils) + GNU make + pkg-config, all real from-source
+    # derivations (keeps this media reproducible-from-source). This is the solnix
+    # analog of a NixOS build host; NixOS's base ISO omits a compiler, but solnix
+    # ships one because an illumos system cannot otherwise build its own packages
+    # (docs/pending/builders-need-store-tools.md, docs/devtools-in-closure.md).
+    # NOT included: Rust (cached seed payload retired from the cache, 404 -- see
+    # the devtools doc) and autoconf/automake/libtool (need from-source perl).
+    live.solnix-dev-full
     liveTools
   ];
 
