@@ -27,7 +27,22 @@
 }:
 
 let
-  solnix = import solnixDir { gate = gateProto; inherit gateArgs; };
+  # Two-phase import so a solnix SYSTEM builds its from-source packages with the
+  # store build-tools on PATH (the NixOS stdenv model), while the gate/bhost
+  # build -- which imports pkgs/illumos directly with the buildTools=[] default
+  # -- stays byte-identical.
+  #
+  #   seedPkgs : buildTools=[] (default). Realises `seedBuildTools`, the seed
+  #              build-tool farm, bootstrapped the OI/bhost way (no self-cycle).
+  #   solnix   : buildTools=seedBuildTools. Its srcPkgs (and nixChain) build with
+  #              store gmake/tar/grep/sed/gstrip/gzip/xz on PATH, so a bare system
+  #              (dixi, EC2; no /usr/gnu) can realise them. See
+  #              docs/pending/builders-need-store-tools.md.
+  seedPkgs = import solnixDir { gate = gateProto; inherit gateArgs; };
+  solnix = import solnixDir {
+    gate = gateProto; inherit gateArgs;
+    buildTools = [ seedPkgs.seedBuildTools ];
+  };
 
   # writeText / writeScript: write $text to $out (executable if asked). Matches
   # nixpkgs' writeText/writeScript surface (name -> text -> store path).

@@ -374,6 +374,74 @@ let
   # libxml2 replace the host-copied externalLibs; world is built on top of them.
   srcPkgs = import ./base-src.nix { gate = gate'; libcSlice = libc; inherit world gcc buildTools; };
 
+  # ---------------------------------------------------------------------------
+  # seedBuildTools -- the DEFAULT build-tool set that lets a BARE solnix system
+  # (dixi, an EC2 solnix instance; no /usr/gnu, no host gcc/gstrip/gzip/xz)
+  # build from-source packages. A buildEnv symlink-farm whose bin/ carries every
+  # NAME the mk-src-pkg builder resolves from PATH, aliased to the from-source
+  # store tools. See docs/pending/builders-need-store-tools.md.
+  #
+  # Names the builder resolves from PATH (mk-src-pkg.nix):
+  #   tar   -- `tar xf src.tar` (GNU tar auto-decompresses .gz/.xz/.bz2 by
+  #            shelling out to gzip/xz/bzip2 ON PATH; illumos SVR4 tar cannot)
+  #   grep  -- the build-time-path guard (`grep -rl`)
+  #   gmake -- every build script's `gmake -j4`
+  #   sed   -- build scripts' `sed -i`
+  #   gstrip-- the --strip-debug pass (binutils' GNU strip; SVR4 strip no-ops)
+  #   gzip/xz/bzip2 -- GNU tar's decompressor shellouts for each archive type
+  # cc/gcc/g++/cpp are NOT here: the builder makes its own wrapper scripts that
+  # exec $gcc/bin (the gcc arg, gcc-src.nix), never PATH. ld is the gate's in
+  # the system profile; digest is native /usr/bin/digest (always on illumos).
+  #
+  # NO mk-src-pkg->mk-src-pkg CYCLE: the seed's member tools are built from
+  # `seedSrcPkgs`, a base-src.nix instance pinned to buildTools=[] (the OI/bhost
+  # bootstrap path), INDEPENDENT of whatever buildTools this world was given. So
+  # a system can set buildTools=seedBuildTools for its OWN srcPkgs while the seed
+  # itself was bootstrapped the bhost way. (dixi's store already holds every one
+  # of these from the bhost build; a fresh system substitutes them from cache.)
+  #
+  # NOT PROVIDED FROM SOURCE (would 127 if a build invoked them):
+  #   * bzip2 CLI -- nixChain.bzip2 ships libbz2.so only, no bzip2 binary. Only a
+  #     .tar.bz2 source needs it; in this repo that is boost (nix-chain) alone.
+  #   * cmake -- no from-source cmake in the mk-src-pkg chain (packages.nix' cmake
+  #     is the OI-host mk-userland-pkg path). Only brotli + nlohmann_json (both
+  #     nix-chain) call cmake. docs/devtools-in-closure.md tracks both gaps.
+  # The seed is COMPLETE for the trivial proof (pkgconf) and the base userland
+  # (.tar.gz/.tar.xz sources: the GNU tools, nix minus boost/brotli/json).
+  seedSrcPkgs = import ./base-src.nix {
+    gate = gate'; libcSlice = libc; inherit world gcc;
+    buildTools = [ ];   # bootstrap: always the OI/bhost path, so no self-cycle.
+  };
+
+  # alias farm: the one name the mk-src-pkg chain could call that the pkgs do not
+  # install under that name. gnutar installs `tar`; the builder uses bare `tar`,
+  # but build scripts and docs also name `gnutar`, so expose both. (gmake/make,
+  # xz/xzcat, grep, sed, gzip, gstrip are already the installed names.)
+  seedTarAlias = derivation {
+    name = "seed-tar-alias"; system = "x86_64-solaris";
+    gnutar = seedSrcPkgs.gnutar;
+    builder = "/usr/bin/bash";
+    args = [ "-c" ''
+      set -eu; mkdir -p "$out/bin"
+      /usr/bin/ln -s "$gnutar/bin/tar" "$out/bin/gnutar"
+    '' ];
+  };
+
+  seedBuildTools = buildEnv {
+    name = "solnix-seed-build-tools";
+    paths = [
+      seedSrcPkgs.gnumake    # make, gmake
+      seedSrcPkgs.gnutar     # tar
+      seedSrcPkgs.gnugrep    # grep
+      seedSrcPkgs.gnused     # sed
+      seedSrcPkgs.gzip       # gzip, gunzip, zcat
+      seedSrcPkgs.binutils   # gstrip, gas, gar, gnm, gobjdump, greadelf, as
+      seedSrcPkgs.nixChain.xz # xz, xzcat
+      seedTarAlias           # gnutar -> tar
+    ];
+    pathsToLink = [ "/bin" ];
+  };
+
   # The whole gate userland, relocated into the store (./mk-proto-world.nix).
   # deps: nspr + nss for the gate's LDAP client stack (libldap.so.5), and gcc.lib
   # for the gate's few C++ objects (make, audioconvert, libfru*, libsun_fc, the
@@ -602,6 +670,11 @@ let
 in
 {
   inherit libc rtld ld sys base-tools systemPath nix nix224 cached starter gcc world early stock drivers kernelNd worldMan;
+  # seedBuildTools -- the default build-tool set a bare solnix system passes as
+  # buildTools so from-source builds resolve gmake/tar/grep/sed/gstrip/gzip/xz
+  # from the store (not /usr/gnu). host-pkgs.nix wires it as the default for a
+  # system eval; the gate/bhost build keeps buildTools=[] (byte-identical).
+  inherit seedBuildTools;
   # iwm wifi: the driver module + wpa-pmk (iwm-driver), and the augmentation
   # helpers wireless-iwx.nix uses to render an iwm-aware driver DB and kernel
   # tree when hardware.wirelessIwm.attachAtBoot. mkIwmKernel/iwmFirmware take
