@@ -13,7 +13,7 @@
  * 0:0.0 for the MCHBAR and the ISA bridge for the PCH id) goes through
  * the illumos pci_getl_func/pci_putl_func hooks that the PCI nexus exports.
  *
- * bus_dma: PLANNED, the shape is src/wifi-port/iwx/compat/machine/bus.h
+ * bus_dma: PLANNED, the shape is src/ports/wifi/iwx/compat/machine/bus.h
  * (one map = ddi_dma_handle_t + ddi_acc_handle_t + the cookie list).
  */
 #ifndef _OBSD_BUS_H

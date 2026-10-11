@@ -1,1 +1,0 @@
-../../../openbsd-orig/if_iwmvar.h

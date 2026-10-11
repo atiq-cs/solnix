@@ -181,8 +181,8 @@ artifacts/install-media/usb-image-20260920-tui4/*.iso
 artifacts/install-media/usb-image-20260920-tui4/*.img
 artifacts/install-media/usb-image-20260920-tui4/*.tar.gz
 
-# net80211-openbsd build products (gen-illumos-src.sh output + .o) -- regenerated, not source
-src/wifi-port/net80211-openbsd/build/
+# net80211 build products (gen-illumos-src.sh output + .o) -- regenerated, not source
+src/ports/wifi/net80211/build/
 
 # usb-image-20260921-tui5 binaries -- banked in R2, never committed (image-trap rule)
 artifacts/install-media/usb-image-20260921-tui5/*.iso

@@ -33,7 +33,7 @@ This is the reference for driver work (wifi, fingerprint, GPU) on the real targe
 | internal | ELAN/unparseable HID keyboard | -- | hid.c:2156 flood; quieted by set hid:hid_errlevel=0 in /etc/system |
 
 ## Driver-work implications (ACTIONABLE)
-1. **Wi-Fi is CNVi (a370), not discrete AX200.** The iwx port (src/wifi-port) + its firmware staging
+1. **Wi-Fi is CNVi (a370), not discrete AX200.** The iwx port (src/ports/wifi) + its firmware staging
    target the discrete PCIe ids (2723/2725/02f0). CNVi binds under the PCH id a370 at _SB_.PCI0.CNVW,
    with the MAC in the PCH and only the RF/CRF on M.2 -- OpenBSD's iwx DOES support CNVi but via a
    different attach/PNVM path. The driver's device match + firmware selection + attach must handle

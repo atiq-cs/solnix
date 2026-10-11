@@ -125,7 +125,7 @@
 /*
  * Kernel-exported illumos names with a different OpenBSD signature. krtld
  * binds a module's reference to a name the kernel defines to the kernel's
- * definition (src/wifi-port/net80211-openbsd/compat/sys/n80211_symrename.h),
+ * definition (src/ports/wifi/net80211/compat/sys/n80211_symrename.h),
  * so these must never reach the object file under their OpenBSD spelling.
  */
 #define taskq_create		obsd_taskq_create

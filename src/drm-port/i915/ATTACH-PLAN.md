@@ -30,7 +30,7 @@ loaded iwm in stream G).
 Fix: a linker mapfile at the `ld -r` step (src/drm-port/i915/i915.mapfile, applied by build-module.sh with
 -Breduce) scopes every symbol local except the kernel-loader interface i915 defines -- _init, _fini, _info and
 _depends_on (char _depends_on[] = "misc/gfx_private", which krtld reads by name). The equivalent lands in iwm
-(src/wifi-port/iwm/iwm.mapfile, which has no _depends_on). After the fix i915 exports exactly
+(src/ports/wifi/iwm/iwm.mapfile, which has no _depends_on). After the fix i915 exports exactly
 _init/_fini/_info/_depends_on, iwm exactly _init/_fini/_info, and their exported-global intersection minus the
 interface is 0; the 33 compat collisions are 0 (post-fix module 4,810,080 B vs pre-fix 5,535,936 B, the local
 symbols dropped from the symtab). build-module.sh fails the build if i915 ever exports a non-interface global

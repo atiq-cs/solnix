@@ -1,4 +1,4 @@
-# Intel firmware for the OpenBSD iwm(4) port (src/wifi-port/iwm) -- the AC 9560
+# Intel firmware for the OpenBSD iwm(4) port (src/ports/wifi/iwm) -- the AC 9560
 # in the ThinkPad X1 Extreme Gen 1 ("dixi": 8086:a370 subsystem 8086:0030,
 # Cannon Lake CNVi + Jefferson Peak RF, iwlwifi device family 9000).
 #

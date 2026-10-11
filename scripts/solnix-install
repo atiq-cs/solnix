@@ -951,7 +951,7 @@ check_internet() {
   echo "  THIS IS ALMOST CERTAINLY THE USB-ETHERNET ADAPTER, NOT WIFI." >&2
   if have_intel_ax2xx; then
     echo "  An Intel AX2xx wifi card IS present in this machine. solnix's native" >&2
-    echo "  iwx driver is IN PROGRESS (src/wifi-port): the 802.11 layer compiles" >&2
+    echo "  iwx driver is IN PROGRESS (src/ports/wifi): the 802.11 layer compiles" >&2
     echo "  and partial-links, but the module does not yet load/attach -- so wifi" >&2
     echo "  cannot associate TODAY. The firmware blobs are already staged in the" >&2
     echo "  image (hardware.wirelessIwx), so the card is ready the moment the" >&2

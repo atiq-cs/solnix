@@ -1,9 +1,9 @@
 # Intel wireless via the OpenBSD driver ports, + their proprietary firmware.
 #
-#   hardware.wirelessIwx  AX2xx (OpenBSD iwx, src/wifi-port/iwx)
-#   hardware.wirelessIwm  AC 7260..9560 (OpenBSD iwm, src/wifi-port/iwm). The X1
+#   hardware.wirelessIwx  AX2xx (OpenBSD iwx, src/ports/wifi/iwx)
+#   hardware.wirelessIwm  AC 7260..9560 (OpenBSD iwm, src/ports/wifi/iwm). The X1
 #                         "dixi" carries an AC 9560 (8086:a370), an iwm device,
-#                         not iwx; see src/wifi-port/iwm/STATUS.md.
+#                         not iwx; see src/ports/wifi/iwm/STATUS.md.
 #
 # The firmware blobs are unfree-redistributable, so they sit behind the standard
 # Nix unfree gate. Enabling this option opts in for THIS package only -- it does

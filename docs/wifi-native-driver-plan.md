@@ -35,7 +35,7 @@ There were two candidate routes for the 802.11 layer, and this is the single mos
 decision in the project, so it is stated at the top rather than buried:
 
 * **Route (a) -- adapt `iwx`'s `ieee80211_*` calls to illumos's OWN `net80211`.** This is the intuitive
-  "keep illumos's stack" plan, and it is **REFUTED by measurement** (`src/wifi-port/iwx/STATUS.md`,
+  "keep illumos's stack" plan, and it is **REFUTED by measurement** (`src/ports/wifi/iwx/STATUS.md`,
   `iwx_illumos.h`). Do not revisit it:
     - Of the 76 distinct `ieee80211_*` symbols `iwx` uses, **53 (70%) do not exist in illumos net80211 by
       name at all**; of the 48 it *calls*, **34 are absent** (the entire block-ack machinery, HT/VHT node
@@ -51,13 +51,13 @@ decision in the project, so it is stated at the top rather than buried:
   `struct ieee80211com`) and to illumos GLDv3 above. The cost is real -- 24,665 lines of net80211 to bring
   up. First measured at 838 compile errors with 0 of the 43 blocking `ieee80211_*` symbols resolved; **now at 250
   errors with all 43 of 43 resolved as real ELF .o symbols** (see the net80211-link gate section at the bottom and
-  `src/wifi-port/net80211-openbsd/FINDINGS.md`) -- but the semantic risk of route (a) is avoided entirely.
+  `src/ports/wifi/net80211/FINDINGS.md`) -- but the semantic risk of route (a) is avoided entirely.
 
 | layer | native driver (route b) |
 |---|---|
 | 802.11 state machine, crypto, nodes, HT | **vendored OpenBSD `net80211`** (24,665 lines) -- illumos's own net80211 is NOT used |
 | MAC registration, TX/RX | **GLDv3 `mac_*`** -- the mac_register-upward boundary; `iwn` uses 9 such calls |
-| DMA, interrupts, register access, DDI attach | **`ddi_*`** -- shimmed in `iwx_illumos.h`; the DDI+GLDv3 attach glue is `src/wifi-port/iwx/iwx_attach.c` |
+| DMA, interrupts, register access, DDI attach | **`ddi_*`** -- shimmed in `iwx_illumos.h`; the DDI+GLDv3 attach glue is `src/ports/wifi/iwx/iwx_attach.c` |
 | **firmware load, queues, commands, PHY** | the vendored `if_iwx.c`, translated (mbuf layer done, compiles to a `.o`) |
 
 > WARNING: **the `iwn`-style attach that calls illumos `ieee80211_attach(ieee80211com_t *)` does NOT apply
@@ -81,13 +81,13 @@ tradeoff bought by not re-implementing block-ack, RSN and the HT node model agai
 > the 82 symbols still undefined are the kernel's own primitives (supplied at load), the mbuf layer
 > (`iwx_m_*`/`n80211_m_*`, DECL/tested), and the GLDv3/stack adapters (`ether_*`/`ifmedia_*`/`if_*`/
 > `timeout_*`/`_rb_*`, DECL -- the Finding-2 wall, not yet written). Reproduce + self-verify:
-> `src/wifi-port/net80211-openbsd/measure-gate.sh --self-test`. **This is still NOT a kmod link and NOT a
+> `src/ports/wifi/net80211/measure-gate.sh --self-test`. **This is still NOT a kmod link and NOT a
 > load** -- the GLDv3/stack adapter `.c`, the mbuf-allocation `.c`, phase-3 locking and the HARDWARE gate
 > all remain.
 
 ## 3. What we already have that carries over
 
-* `openbsd-orig/if_iwx.c` — **not as code to compile, as the reference manual.** It documents the AX2xx
+* `upstream/if_iwx.c` — **not as code to compile, as the reference manual.** It documents the AX2xx
   firmware handshake, queue layout and command set. That knowledge is the expensive part and it is BSD-licensed.
 * **Firmware names and selection logic** — `iwx-cc-a0-77` (AX200), `iwx-QuZ-a0-hr-b0-77` / `iwx-Qu-{b0,c0}-hr-b0-77`
   (AX201), chosen at attach from PCI id + revision (`if_iwx.c:12387-12421`).
@@ -115,7 +115,7 @@ most plausibly stalls, and it is not visible until hardware.
 ## 5. Plan, in dependency order -- with MEASURED status
 
 Status is compile+structure only (no hardware). "compiles" means a real ELF kernel object against illumos
-headers; it is NOT "links as a module" and NOT "runs". See `src/wifi-port/iwx/STATUS.md` for the full ladder.
+headers; it is NOT "links as a module" and NOT "runs". See `src/ports/wifi/iwx/STATUS.md` for the full ladder.
 
 | phase | deliverable | gate | measured status |
 |---|---|---|---|
@@ -136,7 +136,7 @@ Route (b) has two distinct walls, and confusing them muddies the plan:
 1. **The net80211-LINK gate.** The vendored OpenBSD net80211 must compile and LINK, resolving the **43
    blocking `ieee80211_*` symbols** `if_iwx.c` needs. Latest measured: **all 43 of 43 resolved** as real ELF .o
    global symbols, 250 errors, 12 of 18 `.c` files compile (up from 0/43, 838 errors, 3/18 --
-   `src/wifi-port/net80211-openbsd/FINDINGS.md` and the gate section at the bottom of this file). Resolving the 43
+   `src/ports/wifi/net80211/FINDINGS.md` and the gate section at the bottom of this file). Resolving the 43
    is NECESSARY but NOT sufficient for a link: the 6 files still at errors define net80211's own internals (the
    crypto ciphers and the DECL'd mbuf/stack adapters remain undefined), so the module does not link yet. The work
    remaining is more per-site mbuf rewriting, dominated as before by the mbuf layer (the cipher `m_next` chain walk
@@ -175,11 +175,11 @@ the 43 blocking `ieee80211_*` symbols iwx needs from net80211.
   0xe2d, `ieee80211_encap` 0x81c -- real functions, not stubs), 1 data `D` (`ieee80211_state_name`), 4 read-only `R`
   (`ieee80211_std_rateset_11{a,b,g}`, `..._11n`). The 6 objects defining the 43 are
   ieee80211{,_node,_proto,_input,_output,_crypto}.o.
-* Reproduce + self-verify: `src/wifi-port/net80211-openbsd/measure-gate.sh --self-test`. It compiles every .c to a
+* Reproduce + self-verify: `src/ports/wifi/net80211/measure-gate.sh --self-test`. It compiles every .c to a
   real .o, computes resolved-of-43 by the honest link criterion (defined global T/D/R/B, never a local `t`), prints
   the per-symbol ELF proof, and carries a **negative control** (rename `ieee80211_encap` in a build copy -> it
   vanishes from the .o -> the gate would report 42/43), so the 43/43 cannot be a check-that-cannot-fail.
-* Compat surface added this round (all net80211-only, under src/wifi-port/net80211-openbsd/compat/):
+* Compat surface added this round (all net80211-only, under src/ports/wifi/net80211/compat/):
   the crypto shim headers (`crypto/{aes,arc4,hmac,cmac,key_wrap,michael}.h` with accurate OpenBSD struct layouts --
   AES/RC4/HMAC/AES-CMAC/key-wrap/Michael contexts COMPLETE so cipher structs embed them by value; primitives DECL,
   resolve at LINK against a future self-contained crypto shim .c); a net80211-only `netinet/if_ether.h` giving
@@ -272,7 +272,7 @@ blocking `ieee80211_*` remain undefined.
 iwx safety held: `iwx/build-check.sh` = 0 residual errors, both `.o` compile, exit 0 -- verified AFTER the
 shared-prelude edits. No iwx-shared header was touched; the new net80211 headers shadow only on net80211's `-I`
 path. (`build-check.sh --self-test` reports PROBLEM ONLY via its pre-existing `dirty-detect` control, which
-needs `iwx/` itself to be dirty for input; this session touched only `net80211-openbsd/`, so `iwx/` is clean.
+needs `iwx/` itself to be dirty for input; this session touched only `net80211/`, so `iwx/` is clean.
 Confirmed by making `iwx/` transiently dirty -> self-test goes fully green, "negative controls: all live".)
 
 Refuted brief assumption (good): the six cipher/pae files were dominated by mbuf FIELD access, NOT by the crypto
@@ -342,7 +342,7 @@ module-link measurement can report an unresolved adapter and is not a check that
 
 iwx safety held: `iwx/build-check.sh` = 0 residual errors, both `.o` compile, exit 0 -- verified BEFORE and
 AFTER writing the adapters and editing the gate. **No iwx-shared header was touched** -- only new `.c`
-files were added under `net80211-openbsd/` and its `measure-gate.sh` was extended; the driver compiles in a
+files were added under `net80211/` and its `measure-gate.sh` was extended; the driver compiles in a
 separate TU with the iwx `-I` path only.
 
 Refuted brief assumptions (good): (1) the round-6 note called the 43 adapter symbols "the Finding-2

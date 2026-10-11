@@ -1,7 +1,7 @@
 /*
  * OpenBSD sys/tree.h -- the SPLAY/RB/RBT macros, VENDORED VERBATIM from
  * OpenBSD sys/sys/tree.h rev 1.31 (BSD-2-Clause, Niels Provos; header-only
- * macros). Same file as src/wifi-port/iwx/compat/sys/tree.h. illumos has no
+ * macros). Same file as src/ports/wifi/iwx/compat/sys/tree.h. illumos has no
  * red-black or splay tree macros; OpenBSD's linux/rbtree.h, idr.h and
  * xarray.h are built on these. REAL, not a stub.
  */

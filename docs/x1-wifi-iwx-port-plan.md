@@ -31,7 +31,7 @@ LinuxKPI path is the awkward one; **OpenBSD's is a clean BSD driver**.
 | `bus_dmamap_*` | **50** | `ddi_dma_*` |
 | `task_*` / `timeout_*` | **69** | `ddi_taskq_*` / `timeout(9F)` |
 
-> **⚠ CORRECTION (measured later — see `src/wifi-port/iwx/STATUS.md`).** All five numbers above are
+> **⚠ CORRECTION (measured later — see `src/ports/wifi/iwx/STATUS.md`).** All five numbers above are
 > `grep -c` **line** counts with **unanchored** patterns, not call sites. `grep -c 'm_' if_iwx.c` = 309 and
 > also matches `vm_size`, `rm_sta_cmd`, `um_tbs`, `EM_GROUP`, `im_interval`; only **48** of the file's 580
 > raw `m_` occurrences are mbuf tokens. The real surface is **31 mbuf calls across 12 distinct APIs**, **3**
@@ -47,7 +47,7 @@ LinuxKPI path is the awkward one; **OpenBSD's is a clean BSD driver**.
 > shims, **20** illumos already provides at zero cost, and **9** need a named decision. Two further
 > corrections to numbers on this page: the `splnet`/`splx` surface is **15 regions** (the 15-vs-31
 > asymmetry is `splx` on multiple exit paths, not a leak), and the claim that `sc->ioctl_rwl` provides the
-> mutual exclusion `splnet` stands in for is **wrong** -- see `src/wifi-port/iwx/SPLNET-AUDIT.md`.
+> mutual exclusion `splnet` stands in for is **wrong** -- see `src/ports/wifi/iwx/SPLNET-AUDIT.md`.
 
 **~750 call sites across two different 802.11 stacks.** illumos *has* `net80211` (14 files, including
 `net80211_crypto_ccmp.c` and `net80211_ht.c`), so the stack exists — but OpenBSD's `ieee80211_*` and
@@ -64,7 +64,7 @@ port must include a firmware-loading path and the blob must land on the media.
 
 ## Staged plan
 
-1. **Vendor the OpenBSD source** into `src/wifi-port/iwx/` unmodified, with provenance — same pattern as
+1. **Vendor the OpenBSD source** into `src/ports/wifi/iwx/` unmodified, with provenance — same pattern as
    `src/aarch64-arm64-gate-patches/` and the DRM port. Read-only reference.
 2. **Write the shim layer** (`iwx_illumos.h`): mbuf→mblk, ifnet→GLDv3, `bus_dma`→`ddi_dma`,
    `task`/`timeout`. This is the bulk of the work and it is where a port either survives or dies.
@@ -76,7 +76,7 @@ port must include a firmware-loading path and the blob must land on the media.
    `ieee80211_*` symbols `iwx` uses do not exist in illumos by name, and `struct ieee80211_node` shares
    **zero** member names between the two stacks. Route (b) also turned out *cheaper* at the header level than
    expected: staging the 13 OpenBSD headers reduced the 802.11 error surface on `if_iwx.c` to ~4 errors. Its
-   real cost is the 14 `.c` files (24,665 lines) at link time. Numbers in `src/wifi-port/iwx/STATUS.md`.
+   real cost is the 14 `.c` files (24,665 lines) at link time. Numbers in `src/ports/wifi/iwx/STATUS.md`.
 4. **Firmware plumbing** + the blob on the media.
 5. **Bring-up on the X1**, which is the only machine that can test it.
 

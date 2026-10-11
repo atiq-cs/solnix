@@ -2,7 +2,7 @@
 # check-compat-local.sh -- fail if a linked kernel module exports any global
 # symbol other than the module interface krtld resolves by name.
 #
-# WHY: iwm (src/wifi-port) and i915 (src/drm-port) both carry an OpenBSD-
+# WHY: iwm (src/ports/wifi) and i915 (src/drm-port) both carry an OpenBSD-
 # kernel-API compat layer and both define the SAME global names (tsleep,
 # wakeup, bus_dmamap_*, timeout_*, task_*, pci_conf_read, loadfirmware,
 # systq, ...). krtld binds a loading module's non-local symbols to any

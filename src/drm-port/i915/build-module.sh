@@ -1,6 +1,6 @@
 #!/bin/sh
 # build-module.sh -- link the i915 kernel module on dixi and check it against
-# the running kernel, the same gates as src/wifi-port/iwm/build-dixi.sh:
+# the running kernel, the same gates as src/ports/wifi/iwm/build-dixi.sh:
 #   1. every undefined symbol of the module is defined by the running
 #      kernel (unix + genunix) or by a module named in the i915 module's
 #      _depends_on (misc/gfx_private, the console framebuffer code krtld

@@ -1,0 +1,25 @@
+--- upstream/if_iwxvar.h
++++ build/dev/pci/if_iwxvar.h
+@@ -759,6 +759,22 @@
+ 
+ 	struct rwlock ioctl_rwl;
+ 
++	/*
++	 * ILLUMOS phase-3 locking (SPLNET-AUDIT.md). OpenBSD's splnet() is a
++	 * priority level and is a no-op on illumos; the mutual exclusion it
++	 * provided between iwx_intr and the task/timeout/ioctl paths is
++	 * restored by sc_lock -- a MUTEX_DRIVER mutex created with the
++	 * interrupt block cookie, so mutex_enter raises the PIL and genuinely
++	 * excludes the ISR. Lock order is ioctl_rwl -> sc_lock (-> ic_lock in
++	 * net80211). sc_cmd_cv replaces iwx_send_cmd's tsleep_nsec: that region
++	 * sleeps, so it cannot hold sc_lock across the wait and uses the
++	 * standard condvar split instead (cv_timedwait_sig drops sc_lock while
++	 * waiting). These are added by the port -- the vendored header is
++	 * read-only, so this field pair lives in patches/if_iwxvar.illumos.patch.
++	 */
++	kmutex_t		sc_lock;
++	kcondvar_t		sc_cmd_cv;
++
+ 	int sc_cap_off; /* PCIe caps */
+ 
+ 	const char *sc_fwname;

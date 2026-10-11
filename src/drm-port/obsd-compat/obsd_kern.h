@@ -160,7 +160,7 @@ extern void free(void *, int, size_t);
 
 /* ---- spl / IPL (MAP: no-ops. illumos excludes an interrupt handler by
  * taking the mutex the handler takes, initialised at its priority; see
- * src/wifi-port/iwx/compat/sys/iwx_kernel.h for the same argument) ---- */
+ * src/ports/wifi/iwx/compat/sys/iwx_kernel.h for the same argument) ---- */
 #define IPL_NONE	0
 #define IPL_SOFTCLOCK	1
 #define IPL_SOFTNET	2

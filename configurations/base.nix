@@ -146,7 +146,7 @@
   # by default: this laptop class has no ethernet jack, so refusing the blob
   # means the machine cannot be installed over the network at all.
   #
-  # ⚠️ The DRIVER is not finished. Claim ladder (src/wifi-port/iwx/STATUS.md):
+  # ⚠️ The DRIVER is not finished. Claim ladder (src/ports/wifi/iwx/STATUS.md):
   # the mbuf/mlist layers compile + link and the net80211 802.11 layer now
   # compiles (18/18 files, 0 errors) and partial-links (ld -r), but the full iwx
   # module still does NOT link (122 undefined: net80211 GLDv3/stack adapters +

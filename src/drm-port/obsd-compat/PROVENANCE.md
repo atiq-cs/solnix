@@ -5,7 +5,7 @@ read-only. Each one passed `src/drm-port/license-audit.sh` as PERM.
 
 | file | upstream | rev | licence | sha256 (first 16) |
 |---|---|---|---|---|
-| sys/tree.h | OpenBSD sys/sys/tree.h | 1.31 (also `src/wifi-port/iwx/compat/sys/tree.h`; only the leading comment differs) | BSD-2-Clause, Niels Provos | 89729f918b3848ed |
+| sys/tree.h | OpenBSD sys/sys/tree.h | 1.31 (also `src/ports/wifi/iwx/compat/sys/tree.h`; only the leading comment differs) | BSD-2-Clause, Niels Provos | 89729f918b3848ed |
 | dev/acpi/acpireg.h | OpenBSD sys/dev/acpi/acpireg.h | 1.65 | ISC | f7be3f3327295477 |
 | dev/acpi/amltypes.h | OpenBSD sys/dev/acpi/amltypes.h | 1.53 | ISC | d5530d4747829e3a |
 

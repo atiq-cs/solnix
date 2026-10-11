@@ -62,7 +62,7 @@ pitch 15360, `fb_size=0x1fa4000`.
 2. **Dual-licensed files** (`GPL-2.0 OR MIT`, `GPL-2.0-or-later OR BSD-2-Clause`, ...) are used
    under the permissive option, and their header is kept verbatim. Grepping for "GNU General
    Public" will hit these files. That is a dual grant, not contamination (same note as
-   `src/wifi-port/iwx/PROVENANCE.md`).
+   `src/ports/wifi/iwx/PROVENANCE.md`).
 3. **Separately packaged programs** are packaged under their own licences, the way NixOS packages
    any GPL program. This clause matters because **COSMIC itself is GPL-3.0** (REAL, GitHub API
    `license` field, 2026-10-08): cosmic-comp, cosmic-session, cosmic-panel, cosmic-term,
@@ -358,7 +358,7 @@ Facts (REAL, dixi, OpenBSD rev 37a498de copied to `/var/tmp/streamE2/obsd-drm`):
   (`/tmp/streamE2-work/gap.py`).
 * solnix C1 linux-compat covers the API family of 13 of those 252: kref, idr, mutex, spinlock,
   slab, workqueue, kthread, completion, rwsem, dma-fence, ww_mutex, dma-resv and uaccess.
-  The wifi port's OpenBSD compat (`src/wifi-port/iwx/compat/sys`) already covers 6 of the host
+  The wifi port's OpenBSD compat (`src/ports/wifi/iwx/compat/sys`) already covers 6 of the host
   headers: `_null`, `endian`, `malloc`, `task`, `timeout` and `tree`.
 * `i915_pci.c` (the 0x3E9B device table) needs 35 empty stub headers. That leaves 1001 errors,
   most of them a `bool` cascade. With `-include sys/stdbool.h`, 380 errors remain:
@@ -412,7 +412,7 @@ The 223 functions by OpenBSD subsystem:
 | subsystem | n | illumos mapping (PLANNED) |
 |---|---:|---|
 | VM: `uvm_*`, `uao_*`, `pmap_*`, `km_*`, `PHYS_TO_VM_PAGE` | 30 | `page_t`/`page_create_va`, `hat_devload`, `ddi_umem_*`, `devmap_*`. The largest and riskiest part: GEM's shmem objects and GTT page tables live here |
-| trees: `RB_*`, `SPLAY_*` | 17 | header-only. `src/wifi-port/iwx/compat/sys/tree.h` is already OpenBSD's tree.h on illumos |
+| trees: `RB_*`, `SPLAY_*` | 17 | header-only. `src/ports/wifi/iwx/compat/sys/tree.h` is already OpenBSD's tree.h on illumos |
 | pci: `pci_conf_*`, `pci_mapreg_*`, `pci_get_capability`, ... | 17 | `pci_config_get*`/`put*`, `ddi_regs_map_setup`, `ddi_prop_lookup` on `reg` / `assigned-addresses` |
 | bus_space / bus_dma | 14 | `ddi_get32`/`ddi_put32` on a BAR handle; `ddi_dma_alloc_handle`/`ddi_dma_mem_alloc`/`ddi_dma_addr_bind_handle` |
 | sleep/wakeup: `tsleep_nsec`, `msleep`, `wakeup`, `sleep_setup` | 12 | `cv_timedwait_sig` on a wait channel hashed to a `kcondvar_t` |
