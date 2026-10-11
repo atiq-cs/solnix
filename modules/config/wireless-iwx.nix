@@ -32,23 +32,33 @@ let
   wifiJoinScript = pkgs.writeText "solnix-wifi-join.sh" ''
     # Join the first configured SSID that is in range. PSKs are read at RUN
     # time from their 0600 files (never baked into this store-readable script).
-    # illumos joins a WPA network via a secure object: create-secobj -c wpa
-    # from the key file, then connect-wifi -k <obj> -s wpa. Runs as root (SMF).
+    #
+    # Mechanism: the OpenBSD iwm port runs WPA2's 4-way handshake IN-KERNEL
+    # (not via wpad). wpa-pmk derives the PMK (PBKDF2) from the passphrase and
+    # sets it on the link via the _wpa_psk private property; the driver then
+    # scans, associates to the strongest matching WPA/CCMP AP, and runs the
+    # 4-way. ESSID-only: do NOT pin a BSSID -- a hard pin turns one AP's
+    # transient 802.11 status-30 (TRY_AGAIN_LATER) into a persistent cascade,
+    # whereas ESSID-only lets the driver pick another AP of the same ESSID
+    # (match_bss already excludes WEP/open when RSN is on). The AP's residual
+    # occasional status-30 is handled by a bounded retry. Runs as root (SMF).
     set -u
-    PATH=/usr/sbin:/usr/bin:/sbin:/bin
+    PATH=/usr/lib/inet:/usr/sbin:/usr/bin:/sbin:/bin
     link=iwm0
     dladm show-phys "$link" >/dev/null 2>&1 || { echo "solnix-wifi-join: no $link"; exit 0; }
     scan=$(dladm scan-wifi -p -o essid "$link" 2>/dev/null)
+    joined() { [ "$(dladm show-wifi -p -o status "$link" 2>/dev/null)" = connected ]; }
     try() {
       ssid="$1"; pskfile="$2"
       printf '%s\n' "$scan" | grep -Fxq "$ssid" || return 1
       [ -r "$pskfile" ] || { echo "solnix-wifi-join: $pskfile unreadable"; return 1; }
-      obj="solnix_$ssid"
-      dladm delete-secobj -t "$obj" 2>/dev/null
-      dladm create-secobj -t -c wpa -f "$pskfile" "$obj" || return 1
-      if dladm connect-wifi -k "$obj" -s wpa -e "$ssid" "$link"; then
-        echo "solnix-wifi-join: connected $ssid"; return 0
-      fi
+      # up to 4 attempts to ride through the AP's intermittent status-30.
+      i=0
+      while [ $i -lt 4 ]; do
+        wpa-pmk -f "$pskfile" "$ssid" "$link" >/dev/null 2>&1
+        j=0; while [ $j -lt 8 ]; do joined && { echo "solnix-wifi-join: connected $ssid"; return 0; }; sleep 2; j=$((j+1)); done
+        i=$((i+1))
+      done
       return 1
     }
     ${lib.concatMapStringsSep "\n    " (n: ''try ${lib.escapeShellArg n.ssid} ${lib.escapeShellArg n.pskFile} && exit 0'') iwmNets}
