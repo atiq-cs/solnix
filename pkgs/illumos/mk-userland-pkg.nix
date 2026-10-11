@@ -130,7 +130,9 @@ derivation {
 
     echo "=== fetch $srcUrl ===" >&2
     /usr/bin/curl -fsSL "$srcUrl" -o src.tar
-    got=$(/usr/bin/sha256sum src.tar | awk '{print $1}')
+    # illumos has no sha256sum; /usr/bin/digest -a sha256 emits lowercase hex,
+    # matching the plain-hex srcSha256 (verified on dixi). Always present on illumos.
+    got=$(/usr/bin/digest -a sha256 src.tar)
     if [ "$srcSha256" != "SKIP" ] && [ "$got" != "$srcSha256" ]; then
       echo "FATAL: sha256 mismatch: want $srcSha256 got $got" >&2; exit 1
     fi

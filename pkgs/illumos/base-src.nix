@@ -3,13 +3,17 @@
 # the build host: zlib + libxml2 replace externalLibs (host /usr/lib copies),
 # openssl + openssh replace make-be's host sshd copy, bash replaces nothing (the
 # gate has no bash) but is a login shell users expect.
-{ gate, libcSlice, world ? null, gcc ? "/usr/gcc/14" }:
+{ gate, libcSlice, world ? null, gcc ? "/usr/gcc/14", buildTools ? [ ] }:
 # gcc: the from-source gcc derivation (gcc-src.nix). Everything here is compiled
 # by it, both ABIs; the IPS seed only compiled gcc itself.
+# buildTools: store paths whose bin/ go first on every mk-src-pkg builder PATH
+# (store gmake/gnutar/gzip/xz/bzip2/gnugrep/gnused/gstrip). Default [] keeps the
+# OI buildhost path (/usr/gnu + host decompressors). A solnix system passes the
+# store set so it can build with no /usr/gnu. Threaded to mkSrcPkg below.
 
 let
   mkSrcPkg = import ./mk-src-pkg.nix {
-    inherit gate gcc;
+    inherit gate gcc buildTools;
     runtimeLibDirs = [ "${libcSlice}/lib/amd64" "${libcSlice}/lib" ];
   };
   needWorld = if world == null then throw "base-src: this package needs the userland world" else world;

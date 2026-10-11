@@ -35,6 +35,13 @@
 {
   gate ? null,
   gateArgs ? { },
+  # buildTools: store paths whose bin/ go first on every from-source builder
+  # PATH (store gmake/gnutar/gzip/xz/bzip2/gnugrep/gnused/gstrip). Default []
+  # keeps the OI buildhost path (/usr/gnu + host decompressors), so NO hash
+  # changes for a bhost build beyond the sha256sum->digest + guard-grep fix.
+  # A solnix system (dixi, EC2) injects the store set so it can build with no
+  # /usr/gnu, no host sha256sum/gstrip/gzip. See docs/pending/builders-need-store-tools.md.
+  buildTools ? [ ],
 }:
 
 let
@@ -365,7 +372,7 @@ let
 
   # From-source packages the gate does not provide (./base-src.nix). zlib and
   # libxml2 replace the host-copied externalLibs; world is built on top of them.
-  srcPkgs = import ./base-src.nix { gate = gate'; libcSlice = libc; inherit world gcc; };
+  srcPkgs = import ./base-src.nix { gate = gate'; libcSlice = libc; inherit world gcc buildTools; };
 
   # The whole gate userland, relocated into the store (./mk-proto-world.nix).
   # deps: nspr + nss for the gate's LDAP client stack (libldap.so.5), and gcc.lib

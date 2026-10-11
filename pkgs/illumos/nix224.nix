@@ -84,7 +84,7 @@ derivation {
     fetch() { # url out sha
       /usr/bin/curl -fsSL --cacert "$CABUNDLE" -o "$2" "$1"
       if [ "$3" != "SKIP" ]; then
-        got=$(/usr/bin/sha256sum "$2" | awk '{print $1}')
+        got=$(/usr/bin/digest -a sha256 "$2")  # illumos-native; lowercase hex matches sha
         [ "$got" = "$3" ] || { echo "FATAL sha256 $2: want $3 got $got" >&2; exit 1; }
       fi
     }

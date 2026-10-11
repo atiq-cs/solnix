@@ -27,6 +27,14 @@
                              # or a host path (then it is a build tool only, as stage0 below)
 , stage0 ? "/usr/gcc/14"     # IPS seed: used only when gcc is a host path (and for its
                              # freestanding include dir in that mode). Nothing of it ships.
+, buildTools ? [ ]           # store paths whose bin/ go FIRST on the builder PATH, so the
+                             # build names store gmake/gnutar/gzip/xz/bzip2/gnugrep/gnused/
+                             # gstrip instead of an OI host's /usr/gnu + decompressors. Each
+                             # is a real Nix reference (baked into the drv), pulled into the
+                             # build-time closure. Default [] => builder PATH is byte-for-byte
+                             # the old /usr/gnu:/usr/bin:/usr/sbin (the OI buildhost path),
+                             # so this arg changes NO hash for the bhost build. A solnix
+                             # system (no /usr/gnu, no gstrip, no gzip) passes the store set.
 }:
 
 { pname, version, src, build
@@ -40,11 +48,27 @@
 , system ? "x86_64-solaris"
 }:
 
+let
+  # bin/ dirs of each buildTools store path, joined with ':'. Empty list -> "",
+  # and the "${btPath:+$btPath:}" guards below then collapse to the original
+  # /usr/gnu/bin:/usr/bin:/usr/sbin, so a default (bhost) build is unchanged.
+  btPath = builtins.concatStringsSep ":" (map (d: "${d}/bin") buildTools);
+  # gstrip: binutils ships it in a buildTools entry on a solnix system; on the
+  # OI host it is /usr/bin/gstrip. Pick a store gstrip if a buildTools bin/ has
+  # one, else the host path. (illumos /usr/bin/strip is SVR4 strip and does not
+  # take --strip-debug; using it would be a silent no-op, so never fall to it.)
+  gstripCands = (map (d: "${d}/bin/gstrip") buildTools) ++ [ "/usr/bin/gstrip" ];
+in
 derivation {
   name = "${pname}-${version}";
   inherit system gate gcc stage0 build pname;
   # the from-source gcc's runtime dir (lib = 32-bit, lib/amd64 = 64-bit); empty for a host compiler.
   gccLib = if builtins.isAttrs gcc then "${gcc.lib}/lib" else "";
+  # buildTools' bin/ dirs on PATH (btPath) and the gstrip candidates both
+  # interpolate each store path, so buildTools become real Nix references and
+  # are pulled into the build-time closure.
+  btPath = btPath;
+  gstripCands = builtins.concatStringsSep " " gstripCands;
   builder = "/usr/bin/bash";
   PATH = "/usr/gnu/bin:/usr/bin:/usr/sbin";
   # The source is a fixed-output store path (NixOS: fetchurl), fetched once by Nix
@@ -61,10 +85,15 @@ derivation {
   rtDirs = builtins.concatStringsSep " " runtimeLibDirs;
   args = [ "-c" ''
     set -eu
-    export PATH=/usr/gnu/bin:/usr/bin:/usr/sbin
+    # buildTools store bin/ dirs go first (store gmake/gnutar/gzip/xz/bzip2/
+    # gnugrep/gnused/gstrip on a solnix system). Empty $btPath collapses this to
+    # the old /usr/gnu/bin:/usr/bin:/usr/sbin, so the bhost build is unchanged.
+    export PATH="''${btPath:+$btPath:}/usr/gnu/bin:/usr/bin:/usr/sbin"
     W=$(mktemp -d /var/tmp/srcpkg.XXXXXX)
     cp "$srcTar" "$W/src.tar"
-    got=$(sha256sum "$W/src.tar" | awk '{print $1}')
+    # illumos has no sha256sum; /usr/bin/digest -a sha256 is always present and
+    # emits lowercase hex, matching the plain-hex src.sha256 (verified on dixi).
+    got=$(/usr/bin/digest -a sha256 "$W/src.tar")
     [ "$got" = "$srcSha256" ] || { echo "FATAL: sha256 want $srcSha256 got $got" >&2; exit 1; }
     # RUNPATH: store dirs only, per ELF class.
     rp_for() {
@@ -130,18 +159,31 @@ derivation {
     # dependencies on the whole compiler and gate proto. libtool .la files name
     # build-time paths too and nothing at run time reads them.
     find "$out" -name '*.la' -type f -delete
+    # GNU strip (gstrip) does --strip-debug; the OI host has /usr/bin/gstrip,
+    # a solnix system gets it from a buildTools entry (binutils). illumos
+    # /usr/bin/strip is SVR4 strip and silently ignores --strip-debug, so it is
+    # NOT a fallback. Resolve the first candidate that exists.
+    GSTRIP=""; for g in $gstripCands; do [ -x "$g" ] && { GSTRIP="$g"; break; }; done
+    [ -n "$GSTRIP" ] || { echo "FATAL: no gstrip (GNU strip) on this host or in buildTools" >&2; exit 1; }
     find "$out" -type f | while read -r f; do
       [ "$(od -An -tx1 -N4 "$f" 2>/dev/null | tr -d ' \n')" = 7f454c46 ] || continue
-      chmod u+w "$f"; /usr/bin/gstrip --strip-debug "$f" 2>/dev/null || true
+      chmod u+w "$f"; "$GSTRIP" --strip-debug "$f" 2>/dev/null || true
     done
     : > "$W/fail"
     # the two big build-time-only paths (gate proto, compiler) must not appear in
     # any shipped ELF, or the runtime closure silently grows by ~400 MB.
+    # grep's status is checked, not piped away: 0 = hits, 1 = none, anything else
+    # (an option this grep rejects, an unreadable file) FAILS the build. Piping
+    # grep into the loop with 2>/dev/null turned an error into "no hits": on a
+    # system without GNU grep, --binary-files is rejected (illumos grep, measured)
+    # and the guard checked nothing. -rl is POSIX-enough for both greps.
     for x in "$gate" $([ -n "$gccLib" ] && echo "$gcc"); do
-      grep -rl --binary-files=binary "$x" "$out" 2>/dev/null | while read -r f; do
+      rc=0; grep -rl "$x" "$out" > "$W/hits" || rc=$?
+      [ "$rc" -le 1 ] || { echo "FATAL: build-time-path guard: grep -rl exited $rc" >&2; exit 1; }
+      while read -r f; do
         [ "$(od -An -tx1 -N4 "$f" 2>/dev/null | tr -d ' \n')" = 7f454c46 ] && echo "$f: names build-time path $x" >> "$W/fail"
         true
-      done
+      done < "$W/hits"
     done
     find "$out" -type f | while read -r f; do
       /usr/bin/elfdump -d "$f" 2>/dev/null | grep -Eq 'NEEDED|SONAME' || continue
