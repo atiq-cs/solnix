@@ -268,7 +268,7 @@ elif [ -z "${SOLNIX_NO_MEDIA_STORE:-}" ]; then
 /nix/store/7qvqfz2wc82qi4v1k1hvvhrkwcs627gz-smallvil-x86_64-illumos
 /nix/store/rvzgiglmlsvxi6qnsgh6fwnxz8n0243p-libcosmic-x86_64-illumos.rlib
 /nix/store/591rk79s4adj5bx7lfpfg906ja1s8y7s-cosmic-toolkit-x86_64-illumos-rlibs
-/nix/store/cvs3wrjnadd8prryvhy37pyzzc8dy1cd-rust-illumos-1.97.1
+/nix/store/8daydacsqmkzi72zfa3dmi9pp98d6hmj-rust-illumos-1.97.1
 COSMICROOTS
     fi
     cat "$_cosmic_roots" >> "$STORE_ROOTS_FILE"

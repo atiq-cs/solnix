@@ -31,5 +31,6 @@ nss	3.98	https://ftp.mozilla.org/pub/security/nss/releases/NSS_3_98_RTM/src/nss-
 ncurses	6.5	https://ftp.gnu.org/gnu/ncurses/ncurses-6.5.tar.gz	136d91bc269a9a5785e5f9e980bc76ab57428f604ce3e5a5a90cebc767971cc6	autotools	gcc,libc		x86_64-solaris	/nix/store/hwl9ysq1m1dg0p00w943w7zqr2i9afpa-ncurses-6.5	
 less	679	https://www.greenwoodsoftware.com/less/less-679.tar.gz	9b68820c34fa8a0af6b0e01b74f0298bcdd40a0489c61649b47058908a153d78	autotools	gcc,libc,ncurses		x86_64-solaris	/nix/store/mln80qqkn451n9677f04pj98zx8qf38z-less-679	
 hostname-f	1	-	-	script			x86_64-solaris	/nix/store/q8ndin5kir7ml8068lr9z25hbq0nj19y-hostname-f	
-rust-seed-stage	1.97.1	-	-	ips-extract			x86_64-solaris	/nix/store/q3r5dh1m5ylwkpd9w6jk6ivqd3m3ic05-rust-seed-stage	
+rust-seed-stage	1.97.1	-	-	ips-extract			x86_64-solaris	/nix/store/c821qgb6z0z6dj8qnrf7q50yxydzq28l-rust-seed-stage	
+rust-illumos-1.97.1	1.97.1	-	-	seed-wrap	rust-seed-stage		x86_64-solaris	/nix/store/8daydacsqmkzi72zfa3dmi9pp98d6hmj-rust-illumos-1.97.1	
 illumos-gate-proto	ac45d71fc2-20260914	https://cache.solnix.io/proto/x86_64-gate-ac45d71fc2-20260914/proto-root_i386-gate-ac45d71fc2.tar.gz	-	gate-proto			x86_64-solaris	/nix/store/s7zkx8nx5sfxixmyqmlnrybrrh14jkmb-illumos-gate-proto	

@@ -1544,7 +1544,7 @@ Nix, compositor-pending). The nix-pure COSMIC session lands when stage 6 (cosmic
 artifacts/SOLNIX-ISO.md.
 
 ## PS-X86-COSMIC-STAGE6 (2026-08-18): native x86 rust + the COSMIC toolkit (389 rlibs) + a SW Wayland compositor that RUNS
-Native x86 rust WORKING: the published seed cvs3wrjn...-rust-illumos-1.97.1 realized from cache (no build),
+Native x86 rust WORKING: the published seed 8daydacsqmkzi72zfa3dmi9pp98d6hmj...-rust-illumos-1.97.1 realized from cache (no build),
 rustc/cargo 1.97.1 host=x86_64-unknown-illumos, cargo new -> running AMD64 ELF (native, the seed's own std,
 no cross -- simpler than aarch64 build-std). COSMIC/wayland crates: 389 rlibs x86_64-illumos --
 wayland-backend/client/server/calloop (the epoll+CMSG_CLOEXEC patch), cosmic-text/iced_core, smithay 0.7.0

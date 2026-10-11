@@ -11,14 +11,14 @@ no claim that COSMIC runs.
 independent walls, measured on dixi:
 
 1. **Rust is unavailable.** The cached seed wrapper
-   `/nix/store/cvs3wrjnadd8prryvhy37pyzzc8dy1cd-rust-illumos-1.97.1` realises
+   `/nix/store/8daydacsqmkzi72zfa3dmi9pp98d6hmj-rust-illumos-1.97.1` realises
    (419-byte shell scripts), but its payload
    `/nix/store/q3r5dh1m5ylwkpd9w6jk6ivqd3m3ic05-rust-seed-stage` is **gone**
    (retired from cache.solnix.io). `rustc --version` and `cargo --version` both
    fail to exec:
 
    ```
-   $ /nix/store/cvs3wrjn…-rust-illumos-1.97.1/bin/rustc --version
+   $ /nix/store/8daydacsqmkzi72zfa3dmi9pp98d6hmj…-rust-illumos-1.97.1/bin/rustc --version
    …/rust-illumos-1.97.1/bin/rustc[5]: exec:
      /nix/store/q3r5dh1m…-rust-seed-stage/bin/rustc: not found
    ```
@@ -101,7 +101,7 @@ The wrapper realises and the scripts are present and executable, so the failure
 is specifically the *missing payload*, not a missing wrapper:
 
 ```
-$ ls /nix/store/cvs3wrjn…-rust-illumos-1.97.1/bin
+$ ls /nix/store/8daydacsqmkzi72zfa3dmi9pp98d6hmj…-rust-illumos-1.97.1/bin
 cargo  rustc  rustdoc            # present, -r-xr-xr-x, 419 bytes each
 $ ls /nix/store/q3r5dh1m…-rust-seed-stage
 ls: … No such file or directory  # the payload the wrappers exec — gone

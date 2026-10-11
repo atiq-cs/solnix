@@ -708,12 +708,13 @@ in
   #     perl package). A separate work item (perl + m4 from source). Most release
   #     tarballs ship a pre-generated ./configure, so gcc + make + pkg-config
   #     already build the common autotools-packaged source without them.
-  #   * Rust (cargo/rustc) -- the cached seed cvs3wrjn...-rust-illumos-1.97.1 is a
-  #     dangling wrapper whose 288 MB payload (rust-seed-stage) was retired from
-  #     cache.solnix.io (narinfo 404) and is not a declared Nix reference, so it
-  #     realises but cannot run. Infra report: the retired payload must be
-  #     re-published store-correct. From-source Rust needs a bootstrap rustc that
-  #     does not exist on illumos outside that seed -- a separate multi-day item.
+  #   * Rust (cargo/rustc) -- the seed wrapper 8daydac...-rust-illumos-1.97.1
+  #     execs the re-pinned seed c821qgb6...-rust-seed-stage (re-extracted from
+  #     OI rustc@1.97.1 by a REPRODUCIBLE staging script, 2026-10-11; rustc
+  #     1.97.1 + cargo build a native illumos ELF). Re-published store-correct
+  #     via the signed submit (recipes.tsv rust-seed-stage + rust-illumos-1.97.1
+  #     rows). From-source Rust still needs a bootstrap rustc that does not exist
+  #     on illumos outside this seed -- a separate item.
   solnix-dev-full = buildEnv {
     name = "solnix-dev-full";
     paths = [ srcPkgs.gccWrapper srcPkgs.binutils srcPkgs.gnumake srcPkgs.pkgconf ];

@@ -16,7 +16,7 @@ Patch notes: `/root/cosmic-illumos-patches.txt` (+ `/root/patch-wayland-backend.
 ## TASK 1 — native x86 rust: YES
 
 - Realised the published seed from the cache (no build):
-  `nix-store --realise /nix/store/cvs3wrjnadd8prryvhy37pyzzc8dy1cd-rust-illumos-1.97.1`
+  `nix-store --realise /nix/store/8daydacsqmkzi72zfa3dmi9pp98d6hmj-rust-illumos-1.97.1`
   (+ rustc/cargo/syslibs/raw-tree). All from `cache.solnix.io`, key in nix.conf.
 - `rustc --version` -> rustc 1.97.1 (8bab26f4f); `cargo --version` -> 1.97.1.
   `rustc -vV` host = **x86_64-unknown-illumos**, std present (Tier-2 native).
@@ -79,7 +79,7 @@ verdict the aarch64 stage reached. The smithay SW compositor is the fallback.
 | smallvil compositor | 7qvqfz2wc82qi4v1k1hvvhrkwcs627gz-smallvil-x86_64-illumos | AMD64 ELF (SW-render Wayland compositor) |
 | libcosmic rlib | rvzgiglmlsvxi6qnsgh6fwnxz8n0243p-libcosmic-x86_64-illumos.rlib | the toolkit rlib |
 | smithay rlib | 6k3x5v6ac3nd1r5z5xi918zfga9y1acp-smithay-x86_64-illumos.rlib | wayland+pixman (no DRM) rlib |
-| rust seed (from cache) | cvs3wrjnadd8prryvhy37pyzzc8dy1cd-rust-illumos-1.97.1 | native rustc/cargo (durable) |
+| rust seed (from cache) | 8daydacsqmkzi72zfa3dmi9pp98d6hmj-rust-illumos-1.97.1 | native rustc/cargo (durable) |
 
 Published via `oi-publish-wave.sh /root/x86-cosmic-stage6-paths.txt`:
 published=4 skipped=7 (seed paths already durable) failed=0.

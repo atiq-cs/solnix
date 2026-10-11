@@ -121,7 +121,7 @@ as from-source `mkSrcPkg` derivations in `base-src.nix`, then extend
 ### Rust (cargo / rustc) — the cached seed is a retired-payload stub (infra P1)
 
 The seed documented as cached,
-`/nix/store/cvs3wrjnadd8prryvhy37pyzzc8dy1cd-rust-illumos-1.97.1`
+`/nix/store/8daydacsqmkzi72zfa3dmi9pp98d6hmj-rust-illumos-1.97.1`
 (`real-derivations-224.tsv`, `published`), realises from cache.solnix.io
 (narinfo 200) but is a **2.1 KiB wrapper only**. Its `rustc`/`cargo` `exec` into
 `/nix/store/q3r5dh1m5ylwkpd9w6jk6ivqd3m3ic05-rust-seed-stage` (the 288 MB payload),

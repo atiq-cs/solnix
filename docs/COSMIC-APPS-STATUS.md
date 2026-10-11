@@ -3,7 +3,7 @@
 Native `x86_64-unknown-illumos` (no cross). Toolkit reused: the already-built
 `/root/libcosmic` (pop-os git, rev 1f8d878, 1.0.0) + `/root/cosmic-cargo-home`
 (the shared registry/git cache with the illumos patches baked in). Rust seed:
-`/nix/store/cvs3wrjnadd8prryvhy37pyzzc8dy1cd-rust-illumos-1.97.1` (rustc/cargo
+`/nix/store/8daydacsqmkzi72zfa3dmi9pp98d6hmj-rust-illumos-1.97.1` (rustc/cargo
 1.97.1, native x86_64-illumos, realised from cache). Linker: OpenIndiana gcc
 14.3.0 (no lld needed; the config.toml lld flag is not required on this host).
 
@@ -18,7 +18,7 @@ Native `x86_64-unknown-illumos` (no cross). Toolkit reused: the already-built
 ## Build recipe (per app)
 
 ```sh
-RUST=/nix/store/cvs3wrjnadd8prryvhy37pyzzc8dy1cd-rust-illumos-1.97.1
+RUST=/nix/store/8daydacsqmkzi72zfa3dmi9pp98d6hmj-rust-illumos-1.97.1
 export PATH=$RUST/bin:$PATH
 export CARGO_HOME=/root/cosmic-cargo-home
 cd /root/cosmic-apps/<app>

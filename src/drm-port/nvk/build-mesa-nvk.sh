@@ -10,14 +10,14 @@
 #
 # RUST WIRED: NVK's shader compiler NAK (src/nouveau/compiler/nak) is Rust.
 #   rustc/cargo  = the native x86_64-illumos OI seed 1.97.1 (>> NAK's 1.73 min)
-#                  /nix/store/cvs3wrjnadd8prryvhy37pyzzc8dy1cd-rust-illumos-1.97.1
+#                  /nix/store/8daydacsqmkzi72zfa3dmi9pp98d6hmj-rust-illumos-1.97.1
 #   bindgen      = bindgen-cli 0.69.4, built once via the seed cargo
 #                  /var/tmp/bindgen-out/bin/bindgen
 #   libclang     = /usr/clang/21/lib/libclang.so.21.1.8 (OI runtime/clang-21 pkg)
 #   syn/quote/proc-macro2/unicode-ident = crate tarballs pre-fetched into
 #                  subprojects/packagecache (offline; --wrap-mode=nodownload)
 set -u
-SEED=/nix/store/cvs3wrjnadd8prryvhy37pyzzc8dy1cd-rust-illumos-1.97.1
+SEED=/nix/store/8daydacsqmkzi72zfa3dmi9pp98d6hmj-rust-illumos-1.97.1
 CLANG=/usr/clang/21
 BINDGEN=/var/tmp/bindgen-out/bin/bindgen
 export PATH="$SEED/bin:/var/tmp/bindgen-out/bin:/root/mesa-venv/bin:/usr/gnu/bin:/usr/bin:$PATH"

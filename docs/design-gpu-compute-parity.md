@@ -499,7 +499,7 @@ away. Persisted src/drm-port/nvk/.
 ## C5-NVK COMPLETE (compile-phase) (2026-08-18): the OPEN-VULKAN TRIAD is COMPLETE on illumos
 NVK (NVIDIA's open Vulkan driver) COMPILED + LINKED -- libvulkan_nouveau.so (17.6MB ELF64 AMD64, ~54,245
 LOC = 31,133 C + 23,112 Rust NAK). The rust wiring was CLEAN (not a rabbit hole): the x86 rust seed 1.97.1
-realized from cache (cvs3wrjn...-rust-illumos-1.97.1); bindgen/libclang turned out ALREADY ON THE NODE
+realized from cache (8daydacsqmkzi72zfa3dmi9pp98d6hmj...-rust-illumos-1.97.1); bindgen/libclang turned out ALREADY ON THE NODE
 (/usr/clang/21/lib/libclang.so -- OI's clang-21 pkg, NO LLVM build needed); bindgen 0.69.4 built in 35s via
 the seed cargo, emitted nak_bindings.rs; NAK's proc-macro deps (syn/quote/proc-macro2) pre-fetched offline.
 NAK compiled (23,112 LOC Rust -> libnak.a via libclang-parsed bindings + a syn proc-macro). libvulkan_
