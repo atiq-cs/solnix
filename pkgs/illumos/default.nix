@@ -421,6 +421,7 @@ let
     name = "seed-tar-alias"; system = "x86_64-solaris";
     gnutar = seedSrcPkgs.gnutar;
     builder = "/usr/bin/bash";
+    PATH = "/usr/bin";
     args = [ "-c" ''
       set -eu; mkdir -p "$out/bin"
       /usr/bin/ln -s "$gnutar/bin/tar" "$out/bin/gnutar"
