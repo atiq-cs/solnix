@@ -183,6 +183,21 @@
           modules = [ ./configurations/installer.nix ];
         };
 
+        # The MINIMAL live-ramdisk edition (installation-cd-minimal.nix analog):
+        # installer.nix with system.buildCapable=false, so solnix-dev-full (gcc +
+        # the ~1.2 GB gate-proto sysroot) is dropped from the LIVE closure and the
+        # ramdisk fits under the X1's 816 MB block ceiling. dev-full + the base
+        # closure ride in the read-only media store (make-iso-usb.sh
+        # SOLNIX_STORE_ROOTS = installerToplevel closure); install-from-flake
+        # builds the target FROM the media store, so the shipped system is still
+        # fully build-capable. See docs/design-two-installer-images.md #1+#2 and
+        # configurations/installer-live.nix.
+        installer-live = solnixSystem {
+          system = "x86_64-solaris";
+          pkgs = mkPkgs { };
+          modules = [ ./configurations/installer-live.nix ];
+        };
+
         dixi = solnixSystem {
           system = "x86_64-solaris";
           pkgs = mkPkgs { };
@@ -214,6 +229,7 @@
         # proto and the slices carved from it are x86_64-solaris derivations.
         dixiToplevel = self.solnixConfigurations.dixi.config.system.build.toplevel;
         installerToplevel = self.solnixConfigurations.installer.config.system.build.toplevel;
+        installerLiveToplevel = self.solnixConfigurations.installer-live.config.system.build.toplevel;
 
         # The pgfarm role's generated artifacts ALONE (build-farm.conf, the
         # run_build.pl driver, the setup oneshot). These are plain text/script

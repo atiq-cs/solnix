@@ -84,7 +84,13 @@ in
   # host in the image" role. Declaring buildCapable exempts the compiler + its
   # gate-proto sysroot from the toplevel's disallowed-runtime-refs gate (they are
   # present on purpose). See modules/system/activation/default.nix.
-  system.buildCapable = true;
+  #
+  # mkDefault so the MINIMAL live edition (installer-live.nix) can set it false:
+  # then solnix-dev-full is dropped from the live ramdisk closure (it rides in the
+  # read-only media store instead) and the disallowed-refs gate stays ACTIVE --
+  # a free check that the 219 MB build-only gate proto does NOT leak into the
+  # minimal ramdisk by accident.
+  system.buildCapable = lib.mkDefault true;
 
   # base.nix configures an EC2 Nitro NIC and resolver; the media boots anywhere,
   # so it carries no interface or resolver of its own: the live method plumbs the
@@ -134,9 +140,15 @@ in
     # (docs/pending/builders-need-store-tools.md, docs/devtools-in-closure.md).
     # NOT included: Rust (cached seed payload retired from the cache, 404 -- see
     # the devtools doc) and autoconf/automake/libtool (need from-source perl).
-    live.solnix-dev-full
+    #
+    # GATED ON buildCapable: solnix-dev-full (gcc + gate-proto sysroot, ~1.2 GB)
+    # is the single largest thing in the closure, 2.5x the live-ramdisk ceiling.
+    # The MINIMAL live edition (installer-live.nix) sets buildCapable=false, which
+    # drops it HERE and moves it to the read-only media store; install-from-flake
+    # then builds the target FROM that media store, so the SHIPPED system is still
+    # fully build-capable while the LIVE ramdisk fits (design doc #1+#2).
     liveTools
-  ];
+  ] ++ lib.optional config.system.buildCapable live.solnix-dev-full;
 
   # The installer's own services (NixOS: installation-device.nix's units).
   # site/solnix-live: banner, auto-network kick-off, devfsadm, and the opt-in

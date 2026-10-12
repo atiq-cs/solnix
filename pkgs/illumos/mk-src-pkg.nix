@@ -169,6 +169,37 @@ derivation {
       [ "$(od -An -tx1 -N4 "$f" 2>/dev/null | tr -d ' \n')" = 7f454c46 ] || continue
       chmod u+w "$f"; "$GSTRIP" --strip-debug "$f" 2>/dev/null || true
     done
+    # BUILD-TOOL PATHS BAKED INTO GENERATED SCRIPTS (the stdenv patchShebangs /
+    # --replace analog). A package's own ./configure can hardcode the ABSOLUTE path
+    # of a build tool it found on PATH into a generated SHELL SCRIPT: gzip's
+    # configure writes GREP=<grep-on-PATH> into bin/zgrep, and on a solnix system
+    # that PATH leads with the seedBuildTools farm (btPath). The result: the ~239 MB
+    # SEED world (its own illumos-userland + the seed GNU tools -- a SECOND copy of
+    # what the system already ships) becomes a RUNTIME reference of gzip and rides
+    # into every toplevel closure. Measured on the installer-live toplevel: that
+    # duplicate illumos-userland was 57% of the live-ramdisk closure and by itself
+    # pushed it 207 MB over the X1 boot_archive ceiling -- caused by this one zgrep
+    # line. The ELF/RUNPATH guard below never saw it (zgrep is text, not an ELF).
+    #
+    # Fix it the stdenv way: a generated script must resolve its tools from the
+    # RUNTIME PATH, not a build-time absolute path. Strip each buildTools bin/
+    # prefix from every NON-ELF file in $out, so "<store>/bin/grep" becomes "grep"
+    # (the system has gnugrep on PATH as grep). ELF files are left to the RUNPATH
+    # pass + ldd gate; only text scripts are touched. Empty btPath (the bhost
+    # buildTools=[] build) makes this a no-op, so that path stays byte-identical.
+    if [ -n "''${btPath:-}" ]; then
+      _oldifs=$IFS; IFS=:
+      for _btd in $btPath; do
+        [ -n "$_btd" ] || continue
+        find "$out" -type f | while read -r f; do
+          [ "$(od -An -tx1 -N4 "$f" 2>/dev/null | tr -d ' \n')" = 7f454c46 ] && continue  # skip ELF
+          grep -q "$_btd/" "$f" 2>/dev/null || continue
+          chmod u+w "$f"; sed "s@$_btd/@@g" "$f" > "$f.btfix" && mv "$f.btfix" "$f" \
+            || { echo "FATAL: could not de-bake build-tool path $_btd in $f" >&2; exit 1; }
+        done
+      done
+      IFS=$_oldifs
+    fi
     : > "$W/fail"
     # the two big build-time-only paths (gate proto, compiler) must not appear in
     # any shipped ELF, or the runtime closure silently grows by ~400 MB.
