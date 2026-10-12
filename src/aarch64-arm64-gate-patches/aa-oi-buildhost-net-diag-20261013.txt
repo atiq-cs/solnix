@@ -1,0 +1,22 @@
+[44mBooting...
+OpenIndiana Hipster 2025.10 Version illumos-68259130da 64-bit
+is used during the early boot sequence. To avoid booting and
+WARNING: xnf has no quiesce()
+WARNING: xnf has no quiesce()
+rebooting...
+[44mBooting...
+OpenIndiana Hipster 2025.10 Version illumos-68259130da 64-bit
+
+DIAGNOSIS (20261013, kiwi acct 830118047484):
+- stock OI hipster-20251026 cloud image has NO ena driver -> on Nitro (c5):
+  AA-NETFIX "NO NIC - ena not attached" (dladm show-phys empty, waited 60s).
+- on Xen (m4, boot-mode uefi-preferred): xnf DOES attach ("WARNING: xnf has no
+  quiesce()") but DHCP did not bind in the window observed; shim's bounded reboot
+  fired. Needs more iteration on the xnf DHCP binding (the metadata-shim's
+  in-place recovery loop was tuned for bene's customized image, not stock OI).
+- CRITICAL PRESEED BUG FOUND+FIXED: `zpool import -R /mnt rpool` (altroot) makes
+  `zfs set mountpoint=/mnt/be` resolve to /mnt/mnt/be, so seed writes silently
+  land in the wrong path. FIX: import WITHOUT altroot + `mountpoint=legacy` +
+  explicit `mount -t zfs <be> /mnt/be`. (preseed v1 shipped unseeded because of this.)
+NEXT: either (a) solve xnf DHCP on stock OI (Xen m4/c4), or (b) build an ena-capable
+OI/solnix base (the bene recipe baked ena + a working shim into the image itself).

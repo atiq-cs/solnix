@@ -1,5 +1,18 @@
 # solnix aarch64: honest readiness assessment + native-boot path (Goal 1)
 
+> ⛔ **VERDICT SUPERSEDED 2026-10-13.** The headline conclusion below — "Native aarch64 EC2
+> (Graviton) boot = BLOCKED at the port ... Do not plan an aarch64 AMI" — is **WRONG and
+> superseded**. Every blocker it names was subsequently resolved and CONFIRMED on real
+> `c6g.metal`: GICv3 multi-region redistributors, ACPI/`_CRS`-in-SSDT, the SPCR/PL011
+> console (AMAZON quirk + bounded FR poll), and the EFI-loader ZFS read off real NVMe.
+> A patched aarch64 illumos kernel boots on real Graviton through GICv3 init, `root nexus =
+> Amazon EC2`, 128 GiB memory, and into device probe. Authoritative frontier docs:
+> `docs/aarch64-gicv3-crs-metal-CONFIRMED.md`, `docs/aarch64-metal-r2-restore-reproduced.md`.
+> Reproduced again 2026-10-13 in a fresh account (kiwi) from the R2-banked boot image →
+> arm64/uefi AMI → `c6g.metal` (GICv3/_CRS/BOP/BCONS all present). The remaining gap to
+> login is a build-image/console-marker matter, NOT a port-level GIC/ACPI/driver block.
+> Do NOT reason from the "BLOCKED / do not plan an AMI" verdict below.
+
 > ⚠️ **URL CORRECTION 2026-09-12.** Every `archive/aarch64/...` URL in this file is **wrong** — that entire
 > prefix does not exist in the bucket and returns **HTTP 404** (verified unauthenticated). The surviving
 > aarch64 assets are:
