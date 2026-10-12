@@ -38,3 +38,5 @@ rust-1.98.0-stage	1.98.0	-	-	fromsrc-stage			x86_64-solaris	/nix/store/pngbrvmx7
 rust-illumos-1.98.0	1.98.0	-	-	seed-wrap	rust-1.98.0-stage		x86_64-solaris	/nix/store/ygnypz368rmf5nz4fgzq1540vbr58124-rust-illumos-1.98.0	
 rust-1.99.0-stage	1.99.0	-	-	fromsrc-stage			x86_64-solaris	/nix/store/xp2sv9n9zpi2bm1w1rc7djx6d8akifbd-rust-1.99.0-stage	
 rust-illumos-1.99.0	1.99.0	-	-	seed-wrap	rust-1.99.0-stage		x86_64-solaris	/nix/store/mxn53s79f118a50af3jx68aswdlcgkw5-rust-illumos-1.99.0	
+mesa-lavapipe	25.1.4	https://archive.mesa3d.org/mesa-25.1.4.tar.xz	TBD	hostbuild-stage	llvm-18-or-20 vulkan-loader zlib expat glslang	-Dvulkan-drivers=swrast -Dgallium-drivers=llvmpipe -Dllvm=enabled -Dosmesa=true (software Vulkan lavapipe + llvmpipe GL; NOT hw accel; BUILT+PROVEN 2026-10-12 on ami-0aa1f6ac952e3408d: libvulkan_lvp.so Vk1.4.311 enumerates llvmpipe + compute runs; nix-store --add pending a loader-capable node)	x86_64-solaris	TBD-build-on-clean-node	
+mesa-lavapipe-illumos	25.1.4	-	-	staged-wrap	mesa-lavapipe vulkan-loader		x86_64-solaris	TBD-wrap-of-staged	

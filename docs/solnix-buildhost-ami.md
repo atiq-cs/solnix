@@ -3,9 +3,27 @@
 Maintainer-approved (2026-10-11): one reusable AMI so every build/GPU stream skips
 the ~1h OpenIndiana 2025->2026 pkg-update + toolchain-install tax.
 
-## The AMI
-- id: ami-0e344991f2f44b11d  (us-east-2, account kiwi 830118047484)
-- name: solnix-buildhost-2026-20261011
+## The AMI (CLEAN, boot-verified -- use THIS one)
+- id: **ami-0aa1f6ac952e3408d**  (solnix-buildhost-x86-clean-20261012, us-east-2,
+  kiwi 830118047484, x86_64/uefi, Project=solnix)
+- snapshot: snap-05ac68deae082b989
+- boot-verified: a FRESH launch gets a DHCP lease (ena0/dhcp ok), SSHes (key
+  solnix-baked, root), has internet, re-runs the lavapipe proofs PASS.
+- baked the RIGHT way (the fix for the broken predecessor): R2 networking-good
+  base -> provision -> SCRUB instance state (devid/nodename/ssh-keys/dhcp/nwam) ->
+  STOP -> image-from-stopped -> boot-verify a fresh launch networks. Recipe +
+  provisioning in scripts/build-mesa-lavapipe-illumos.sh era + the infra report
+  /tmp/solnix-io-buildhost-ami-report.md.
+
+### DO NOT USE: ami-0e344991f2f44b11d (BROKEN)
+The earlier solnix-buildhost-2026-20261011 was create-image'd from a RUNNING
+MUTATED instance and baked a stale device identity: it boots illumos but ENA
+NEVER attaches -> no network, SSH times out, "Hostname: unknown". Confirmed over
+many launches by 3 independent streams (GPU, aarch64, RISC-V). Deregister it.
+The LESSON: a build-host AMI must be clean-baked (scrub + image a STOPPED
+instance + boot-verify a fresh launch networks) -- never create-image a running one.
+
+### Legacy content (toolchain shape -- the clean AMI carries the same tools)
 - base: OpenIndiana Hipster realigned to the 2026 catalog (via pkg update)
 - toolchain: gcc 14.3.0 (/usr/gcc/14), gmake 4.4.1, cmake 4.4.4, gnu-tar/coreutils,
   onbld, gcc-10, autotools/bison/flex/git
@@ -18,7 +36,7 @@ the ~1h OpenIndiana 2025->2026 pkg-update + toolchain-install tax.
 
 ## Usage (zero provisioning)
     AWS_PROFILE=kiwi aws ec2 run-instances --region us-east-2 \
-      --image-id ami-0e344991f2f44b11d --instance-type c5.4xlarge \
+      --image-id ami-0aa1f6ac952e3408d --instance-type c5.4xlarge \
       --key-name solnix-baked --security-group-ids <operator-/24 SG> \
       --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=<stream>-<date>},{Key=Owner,Value=gregburd}]'
 Then: ssh root@<ip> with the baked key -> `nix build` / `gmake` work immediately.

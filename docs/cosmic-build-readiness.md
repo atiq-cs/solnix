@@ -1,3 +1,40 @@
+# COSMIC build readiness — re-checked at HEAD `828b883`, 2026-10-12
+
+> **Update 2026-10-12 (Rust 1.99 landed):** the Rust wall below has MOVED but not
+> vanished. Re-measured at HEAD `828b883`:
+>
+> | wall (from the ba1b4e4 measurement) | status at 828b883 | evidence |
+> |---|---|---|
+> | 1. Rust unavailable (seed payload 404) | **LIFTED (toolchain)** | `docs/rust-illumos-bootstrap.md`: native `x86_64-unknown-illumos` **rustc/cargo 1.99.0** built FROM SOURCE and banked (`rust-1.99.0-stage` → `/nix/store/xp2sv9n9…`, NarHash `sha256-JH3xRNk/…`; wrapper `rust-illumos-1.99.0` → `/nix/store/mxn53s79…`). recipes.tsv carries the rows (committed `828b883`). Verified general-purpose: `cargo new`+build+run → native illumos ELF, `cargo add serde --features derive` (crates.io + a proc-macro) builds. **No longer seed-404-blocked.** |
+> | 2. COSMIC app derivations not committed | **STILL OPEN** | `git ls-files \| grep -i cosmic` at `828b883` = only `modules/config/cosmic-desktop.nix`. `git log --all -- '**/cosmic-term.nix'` is **empty** — the app `.nix` were NEVER committed (not lost to a rewrite; never in git). `docs/cosmic-nixification.md`'s "build from the committed derivations" line is **stale/wrong** at this HEAD. |
+> | 3. C deps not reachable from `mkPkgs` | **STILL OPEN** | `libxkbcommon` is defined in `pkgs/illumos/phase3/tranche-entry-224.nix:732` but that file is **not wired into** `pkgs/illumos/default.nix` or `lib/mkPkgs` — grep for `tranche-entry-224`/`phase3` in those finds nothing. So `mkPkgs.libxkbcommon`/`mesa`/`wayland` are still unreachable from a clean toplevel. |
+> | 4. rust-overlay wiring (`rustPlatform` → the 1.99 wrapper) | **NOT in git** | `git grep -l rust-overlay -- '*.nix'` = none; the wrapper/overlay `.nix` live on build nodes (`docs/rust-illumos-bootstrap.md` §"Banking"). So even though 1.99 the *toolchain* is banked, nothing in the committed tree points `rustPlatform` at it. |
+>
+> **Honest verdict for "are the COSMIC apps buildable now against 1.99?":** the
+> **toolchain** gate is cleared — Rust 1.99 builds general Rust (serde + proc-macros)
+> on illumos today. But the apps are **NOT buildable from the committed tree** because
+> the app derivations, the C-dep overlay wiring, and the rust-overlay are all
+> uncommitted — the exact source-incompleteness the ba1b4e4 measurement named, and it
+> has not been fixed. These are **missing-commit / wiring gaps, not capability gaps**:
+> nothing illumos- or Rust-blocks them. The not-Rust-gated steps (1,2 below:
+> re-commit the app `.nix`, wire the C deps into `mkPkgs`) could be done today and are
+> now the *only* thing between a banked 1.99 and a `cosmic-term` build.
+>
+> **What a COSMIC-app build needs, in order, now that 1.99 is banked:**
+> 1. Re-commit `pkgs/os-specific/illumos/cosmic/{cosmic-term,cosmic-files,cosmic-edit,cosmic-illumos-common,default}.nix` from the build nodes / `docs/cosmic-nixification.md` (not Rust-gated).
+> 2. Wire the C deps (`libxkbcommon`, `wayland`, Mesa software stack incl. the new
+>    `mesa-lavapipe-illumos` for wgpu-GL) into `mkPkgs` (not Rust-gated).
+> 3. Point `rustPlatform` at the banked `rust-illumos-1.99.0` wrapper in a committed overlay.
+> 4. Build `cosmic-term.vendor` (cargo) → `cosmic-term` (rustc) — now unblocked by (1-3).
+>
+> This stream (software-Vulkan) does NOT re-commit the COSMIC derivations (out of
+> scope — a desktop-stream task), but it RECORDS that the single remaining COSMIC
+> wall at this HEAD is committing what already builds on nodes, no longer the Rust seed.
+> The claim surface stays exactly as `docs/graphics-claims-audit.md` requires: COSMIC
+> *apps* under a software compositor over VNC; no hardware accel; the shell does not composite.
+
+---
+
 # COSMIC build readiness — measured at HEAD `ba1b4e4`, 2026-10-11
 
 Can each piece of the COSMIC desktop be **built now** on a solnix host (dixi,

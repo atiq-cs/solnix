@@ -646,3 +646,54 @@ The north star is "as fast as Linux" for BOTH graphics AND LLMs. When GPU hardwa
 3. VERDICT: report Linux numbers + how close solnix gets + what closes the last gap. Both graphics
    (a real app rendering on the GPU) AND LLM (real tok/s) must be validated, per vendor (AMD/RADV first).
 Current chiuso GPU quota: 8 G/VT vCPU (us-east-2) = one g4ad.2xlarge (AMD V520/RADV) or g4dn (NVIDIA/NVK).
+
+## C2-SW-VULKAN RUNTIME-PROVEN (2026-10-12): lavapipe is a REAL working CPU Vulkan device on solnix
+The software Vulkan substrate is no longer just compile-complete -- it RUNS and is negative-controlled on
+x86_64-illumos. This is the honest, non-hardware C2 win the north star's "Vulkan-compute FIRST" vector needs:
+one API that reaches every vendor once a DRM render node lands, proven working in SOFTWARE today.
+
+MEASURED (clean build-host AMI ami-0aa1f6ac952e3408d, a fresh c7i instance, 2026-10-12):
+- Mesa 25.1.4 lavapipe (`-Dvulkan-drivers=swrast -Dgallium-drivers=llvmpipe -Dllvm=enabled`) BUILT on
+  illumos with gcc-14 + LLVM 20.1.8 -> `libvulkan_lvp.so` (15.6MB, Vulkan 1.4.311 ICD) + `lvp_icd.x86_64.json`.
+- ENUMERATION (lvp-direct-proof): a dlopen of the ICD + vkCreateInstance + vkEnumeratePhysicalDevices reports
+  ONE device: **"llvmpipe (LLVM 20.1.8, 256 bits)", apiVersion 1.4.311** -> LAVAPIPE_ENUMERATED_PASS.
+  NEGATIVE CONTROL: pointing the harness at libc/libz (non-ICD) finds no vk_icdGetInstanceProcAddr and NO
+  device -> the enumeration is lavapipe-specific, not a false pass.
+- COMPUTE (lvp-compute-proof): a real Vulkan compute shader (out[i]=in[i]*2, SPIR-V from glslang, dispatched
+  via the full pipeline/descriptor/queue chain) runs on lavapipe and VERIFIES over 1024 elements ->
+  COMPUTE_VERIFY_PASS. NEGATIVE CONTROLS: a wrong expected multiplier makes the checker report
+  COMPUTE_VERIFY_FAIL (it CAN fail -> the PASS means something); a non-ICD lib yields no device (no silent pass).
+- Survives the AMI bake: a FRESH instance from ami-0aa1f6ac952e3408d re-runs both proofs PASS.
+=> SOFTWARE VULKAN WORKS ON SOLNIX NOW. HONEST SCOPE: this is lavapipe (CPU/LLVM-JIT), NOT hardware
+acceleration -- no /dev/dri, no GPU. It is the exact API substrate COSMIC (wgpu-GL) and llama.cpp GGML_VULKAN
+consume; the SAME ICD mechanism binds a real GPU once a hardware DRM render node exists (the C1 keystone +
+RADV/ANV/NVK). This neither claims nor approaches hardware Vulkan (which graphics-claims-audit.md REFUTED).
+
+REPRODUCIBLE DERIVATION (the C2 recipe, no longer prose): scripts/build-mesa-lavapipe-illumos.sh builds it;
+pkgs/mesa-lavapipe-illumos.nix (in solnix-pkgs, eval-checked) wraps the staged tree; recipes.tsv rows
+(mesa-lavapipe + mesa-lavapipe-illumos). Mesa+LLVM don't build through the nixpkgs fork, so it is a
+host-build-then-bank derivation (same pattern as the from-source Rust toolchain). illumos cuts for Mesa 25.1.4
+(beyond the softpipe 24.0.9 set): remove 'sunos' from system_has_kms_drm (no libdrm on the SW path);
+renderdoc_app.h RENDERDOC_CC empty on __sun; -DHAVE_STRUCT_TIMESPEC/-DHAVE_SECURE_GETENV; the int8_t-vs-
+signed-char -Wno-error (same as RADV); -Dgallium-rusticl=false (drops the Rust requirement). Build-tool note:
+meson/ninja drive the build; the scratch-2026 cmake binary SIGSYS's on the 2025 kernel for dependency
+scanning (so the Vulkan-Loader + llama.cpp GGML_VULKAN runtime measurement, both cmake, are a follow-up on a
+pkg-update'd 2026-kernel node OR via the already-published vulkan-loader-1.3.280 store path).
+
+LLM VULKAN-COMPUTE PATH (tok/s) -- STATUS: HARNESS READY, MEASUREMENT PENDING (honest).
+scripts/llama-vulkan-lavapipe-bench.sh wires the proven lavapipe ICD under llama.cpp GGML_VULKAN
+(--list-devices should now show the llvmpipe device, not the "(none)" the prior build reported for lack of a
+loaded ICD) and measures tok/s (ngl=99 Vulkan vs ngl=0 CPU, vs the ~70 tok/s C0 CPU baseline). It was NOT run
+this session: it needs the Vulkan loader (libvulkan.so.1) + a llama.cpp GGML_VULKAN build, both blocked on the
+clean node by the 2026-cmake/2025-kernel SIGSYS. HONEST EXPECTATION (do not assume): software Vulkan JITs on
+the CPU, so lavapipe may be SLOWER than llama.cpp's tuned AVX2 CPU backend -- the point is that the
+Vulkan-compute PATH runs end-to-end in software NOW, so the SAME binary uses a real GPU when hardware DRM
+lands. The number must be MEASURED and reported honestly (faster or slower) on a loader-capable node.
+
+THE CLEAN X86 BUILD-HOST (substrate fix, this session): the former build-host AMI ami-0e344991f2f44b11d does
+NOT network (no ENA attach, "Hostname: unknown", stale baked device identity -- it was create-image'd from a
+running mutated instance). Replaced by **ami-0aa1f6ac952e3408d** (solnix-buildhost-x86-clean-20261012):
+R2-networking-good base (restored x86_64-20260911, ena/DHCP cold-boot fix) + the full toolchain, SCRUBBED
+(ssh host keys/nodename/dhcp leases/logs) and imaged from the STOPPED instance. Boot-verified: a fresh launch
+gets a DHCP lease (172.31.x), SSHes, has internet, and re-runs the lavapipe proofs PASS. This replaces ami-0e34
+for every x86 stream (also unblocks priority #1 boot-verify).
