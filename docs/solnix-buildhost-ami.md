@@ -49,3 +49,32 @@ Add an illumos-gate source tree for ILLUMOS_SRC:
 ## Rebake
 When the toolchain/gate proto moves: launch from this AMI (or a bare OI), update,
 nix store optimise, then create-image a new solnix-buildhost-2026-<date>; update this doc.
+
+## Per-arch build-host AMIs (update 2026-10-13)
+
+The build-host story has been corrected several times; the honest current state:
+
+### aarch64 cross-build host -- READY (boot-verified both ways)
+- id: **ami-06583907ca11a0ab1** (solnix-arm64-buildhost-20261013, us-east-2 kiwi,
+  x86_64 host that CROSS-builds aarch64, key solnix-baked, Project=solnix)
+- clean-baked (scrub instance state -> stop -> create-image) and BOOT-VERIFIED on a
+  FRESH launch: networks (ena/dhcp) + SSHes + cross-compiles aarch64 ELF + `bldenv
+  -T aarch64` drives a `unix` build. Carries the arm64-gate cross tree (gate
+  @6cd2521c1e + a6 fixes + drain-drop + SError-vector), build/cross + build/sysroot
+  + stamps, the banked proto/seed/braich-libs/driver-tables, and the assembly
+  scripts. This is the durable arm64 cross-build substrate (ends the
+  lost-to-closed-accounts problem for arm64).
+
+### x86_64 flake-nix build host -- IN PROGRESS (being clean-baked)
+- NEITHER prior x86 AMI is complete: ami-0e344991f2f44b11d has nix 2.24.15 + gate
+  proto + toolchain but does NOT network; ami-0aa1f6ac952e3408d
+  (solnix-buildhost-x86-clean-20261012) networks but is the Mesa/GPU host (only
+  pre-flakes nix-2.3, empty store, no gate proto). A COMPLETE x86 build-host AMI
+  (networks AND flake-`nix build` AND gate proto) is being clean-baked by the
+  installer-rebuild work (combine the networking base + the baked toolchain store).
+  Until it is boot-verified BOTH ways on a FRESH launch, treat x86 substrate as
+  not-yet-solved; use the combine-recipe in the meantime.
+
+RULE (learned the hard way, 3x): a build-host AMI is only "done" when a FRESH
+launch is boot-verified to BOTH network AND build (nix/bldenv) -- never trust a
+create-image of a running mutated instance, and never trust the filename.
