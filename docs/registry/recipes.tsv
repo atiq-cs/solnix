@@ -34,3 +34,7 @@ hostname-f	1	-	-	script			x86_64-solaris	/nix/store/q8ndin5kir7ml8068lr9z25hbq0n
 rust-seed-stage	1.97.1	-	-	ips-extract			x86_64-solaris	/nix/store/c821qgb6z0z6dj8qnrf7q50yxydzq28l-rust-seed-stage	
 rust-illumos-1.97.1	1.97.1	-	-	seed-wrap	rust-seed-stage		x86_64-solaris	/nix/store/8daydacsqmkzi72zfa3dmi9pp98d6hmj-rust-illumos-1.97.1	
 illumos-gate-proto	ac45d71fc2-20260914	https://cache.solnix.io/proto/x86_64-gate-ac45d71fc2-20260914/proto-root_i386-gate-ac45d71fc2.tar.gz	-	gate-proto			x86_64-solaris	/nix/store/s7zkx8nx5sfxixmyqmlnrybrrh14jkmb-illumos-gate-proto	
+rust-1.98.0-stage	1.98.0	-	-	fromsrc-stage			x86_64-solaris	/nix/store/pngbrvmx7kf79n0sq5bv1hkmw8ad05wa-rust-1.98.0-stage	
+rust-illumos-1.98.0	1.98.0	-	-	seed-wrap	rust-1.98.0-stage		x86_64-solaris	/nix/store/ygnypz368rmf5nz4fgzq1540vbr58124-rust-illumos-1.98.0	
+rust-1.99.0-stage	1.99.0	-	-	fromsrc-stage			x86_64-solaris	/nix/store/xp2sv9n9zpi2bm1w1rc7djx6d8akifbd-rust-1.99.0-stage	
+rust-illumos-1.99.0	1.99.0	-	-	seed-wrap	rust-1.99.0-stage		x86_64-solaris	/nix/store/mxn53s79f118a50af3jx68aswdlcgkw5-rust-illumos-1.99.0	
