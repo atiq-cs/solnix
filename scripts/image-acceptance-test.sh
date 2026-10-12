@@ -585,6 +585,15 @@ boot_checks() {
   if grep -qiE 'solnix console login:|login:' "$log" 2>/dev/null; then
     _ok "QEMU boot reached a login prompt (stock ttymon)"
   else _fail "QEMU boot did NOT reach a login prompt (see $log)"; fi
+  # LESSON (streamVERIFY false-green): "a login prompt appeared" is NOT "the system
+  # works". The live UFS ramdisk ran out of space because /etc/svc/volatile was not
+  # tmpfs; svc.configd's nonpersistent repository + a daemon core filled the root
+  # and SMF died BEHIND the prompt. The prompt still showed, so a prompt-only check
+  # passed a broken image. Guard the SMF-full signature as a hard NEGATIVE marker:
+  # its presence in the console means the repository backend died.
+  if grep -qiE 'no space left on device|realloccg .*file system full|Repository server out of resources|svc\.configd.*core' "$log" 2>/dev/null; then
+    _fail "console shows the SMF-repository-out-of-space signature (live ramdisk filled; svc.configd died behind the login prompt): $(grep -iE 'no space left|file system full|Repository server out of resources' "$log" | head -1 | tr -d '\r')"
+  else _ok "no file-system-full / SMF-out-of-resources signature in the console (SMF repository survived boot)"; fi
   # NOTE: curl/dig/nix RUN checks require an interactive/expect login; the static
   # runnability_check already proves their NEEDED closure. A full exec check is a
   # future addition (expect-driven), tracked as a KNOWN GAP here rather than faked.

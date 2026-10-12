@@ -209,6 +209,32 @@ grep -qw solnix-installer "$RD/etc/hosts" 2>/dev/null || echo "127.0.0.1 solnix-
 #     plumbs the first wired NIC by DHCP (the build host's would poison DNS elsewhere).
 : > "$RD/etc/resolv.conf"
 [ -f "$RD/etc/ipadm/ipadm.conf" ] && { grep -v '_aobjname=' "$RD/etc/ipadm/ipadm.conf" > "$RD/etc/ipadm/ipadm.conf.n"; mv "$RD/etc/ipadm/ipadm.conf.n" "$RD/etc/ipadm/ipadm.conf"; }
+# 5e'. MOUNT /etc/svc/volatile + /system/volatile AS TMPFS BEFORE svc.startd.
+#     On a normal illumos root these ARE swap/tmpfs (measured on the build host:
+#     "/etc/svc/volatile on swap"), where svc.configd keeps its NONPERSISTENT
+#     repository (repository_door) and its core path (/etc/svc/volatile/core.configd.%p).
+#     svc.startd mounts them early -- but its mount depends on first remounting the
+#     root read-write, and on this UFS RAMDISK the stock mountpoint-only remount
+#     FAILS (the very reason fs-root is patched). So on the live root volatile was
+#     left a plain directory ON the 37-MB UFS ramdisk; svc.configd's working repo +
+#     a daemon core then filled it and SMF died behind the login prompt (MEASURED:
+#     "svc.configd no space left on device" -> "ufs realloccg /: file system full"
+#     -> "svc.startd: Repository server out of resources").
+#     Fix: an inittab sysinit entry, which init(1M) runs in order BEFORE
+#     smf::sysinit:svc.startd, mounts both as swap/tmpfs. A tmpfs mount over a
+#     directory needs no writable backing fs, so it works on the still-RO ramdisk.
+#     This is the structural root cause (volatile belongs in RAM, as on any illumos
+#     root), not symptom relief.
+if ! grep -q '^vol::sysinit' "$RD/etc/inittab"; then
+  _volcmd='/sbin/mount -F tmpfs -o size=256m swap /system/volatile >/dev/msglog 2>&1; /sbin/mount -F tmpfs -o size=256m swap /etc/svc/volatile >/dev/msglog 2>&1'
+  awk -v c="$_volcmd" '
+    /::sysinit:/ && !d { print "vol::sysinit:" c " </dev/console"; d=1 }
+    { print }
+    END { if (!d) exit 7 }
+  ' "$RD/etc/inittab" > "$RD/etc/inittab.n" && mv "$RD/etc/inittab.n" "$RD/etc/inittab" \
+    || die "could not insert the volatile-tmpfs sysinit line into inittab"
+  grep -q '^vol::sysinit' "$RD/etc/inittab" || die "volatile-tmpfs sysinit line not present after edit"
+fi
 # 5f. login motd + PATH (GNU tools first: illumos diff prints "No differences encountered").
 cat >> "$RD/etc/profile" <<'EOF'
 # solnix installer media

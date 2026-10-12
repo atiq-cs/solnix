@@ -222,4 +222,13 @@ in
   environment.generatedEtc."system.d/solnix-live-arc" = ''
     set zfs:zfs_arc_max = 0x20000000
   '';
+
+  # No GLOBAL core dumps on the installer media. The live root is a tight RAM UFS
+  # ramdisk; a daemon core written to /var/cores there (e.g. an aborting
+  # svc.configd) fills the filesystem and takes the SMF repository down behind the
+  # login prompt -- measured: "svc.configd no space left on device" -> "ufs
+  # realloccg /: file system full" -> "svc.startd: Repository server out of
+  # resources." An installed system on a real pool keeps global cores on (base.nix
+  # default). This is a live-media setting like the empty resolv.conf.
+  solnix.coreadm.globalEnabled = false;
 }

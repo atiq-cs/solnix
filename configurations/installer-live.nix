@@ -37,4 +37,15 @@
   # stays active -- a free assertion that the build-only gate proto did not leak
   # into the minimal ramdisk. dev-full is still SHIPPED, in the media store.
   system.buildCapable = lib.mkForce false;
+
+  # Drop the base illumos man pages (pkgs.solnix.worldMan, ~37 MB) from the LIVE
+  # RAMDISK ONLY. The RAM root is a tight UFS ramdisk (measured ~37 MB free with
+  # man present); svc.configd's nonpersistent repository + any boot-time write
+  # then filled it and SMF died behind the login prompt. Man pages belong on the
+  # INSTALLED system, not in a RAM installer root -- so this is dropped HERE only.
+  # The FULL installer toplevel (installer.nix) keeps documentation.man.enable, so
+  # the media store carries worldMan and install-from-flake lays man pages onto
+  # the target. (NixOS's minimal installation ISO likewise omits man pages that
+  # the installed system then gets.) See docs/design-two-installer-images.md.
+  documentation.man.enable = lib.mkForce false;
 }

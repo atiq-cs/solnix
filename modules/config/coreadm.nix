@@ -42,6 +42,16 @@ in
         copy). This is what lets a developer read the cores of programs they run.
       '';
     };
+    globalEnabled = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = ''
+        Enable the GLOBAL (every-crash) core pattern. The installer LIVE media
+        sets this false: its root is a tight RAM UFS ramdisk, and a daemon core
+        dumped there (e.g. an aborting svc.configd) fills the filesystem and takes
+        SMF down with it (measured). An installed system on a real pool keeps it on.
+      '';
+    };
     developerUsers = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ ];
@@ -65,7 +75,7 @@ in
       COREADM_GLOB_CONTENT=default
       COREADM_INIT_PATTERN=/var/cores/%u/core.%f.%p.%t
       COREADM_INIT_CONTENT=default
-      COREADM_GLOB_ENABLED=yes
+      COREADM_GLOB_ENABLED=${if cfg.globalEnabled then "yes" else "no"}
       COREADM_PROC_ENABLED=${if cfg.perProcess then "yes" else "no"}
       COREADM_GLOB_SETID_ENABLED=no
       COREADM_PROC_SETID_ENABLED=no
