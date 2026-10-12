@@ -92,6 +92,18 @@ in
 
   config = {
     environment.generatedEtc."os-release" = attrsToText osRelease;
+    # /etc/release -- the illumos-native release file. Many illumos tools and admin
+    # scripts read it (pkg, prtconf -v, beadm, the `head -1 /etc/release` idiom,
+    # Python platform / facter facts). The format is the SVR4 convention: the
+    # first line is the distro identity INDENTED (traditionally centred ~), then a
+    # SunOS line. A closure-model solnix root ships NO upstream /etc/release, so we
+    # must write our OWN -- an absent file misreports the system to every tool that
+    # reads it, and a leaked OpenIndiana one misbrands it. This is solnix's.
+    environment.generatedEtc."release" =
+      "                        ${prettyName}\n"
+      + "  SunOS 5.11 solnix-${cfg.version} "
+      + "${optionalString (cfg.revision != null) shortRev}\n"
+      + "  https://solnix.io/\n";
     # the shell-sourceable stamp scripts read (scripts/solnix-selftest: EDITION;
     # pgfarm: ROLES).
     environment.generatedEtc."solnix-release" = ''
