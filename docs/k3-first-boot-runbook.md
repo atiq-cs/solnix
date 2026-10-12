@@ -68,11 +68,99 @@ reg-shift 2, and refuses to write a file if the dump disagrees. Re-dump the
 board and regenerate any time the firmware changes:
 
 ```sh
-# on the board
-sudo dtc -I fs -O dts /proc/device-tree > /tmp/dts
+# on the board (NO sudo needed — /proc/device-tree is user-readable here)
+dtc -I fs -O dts /proc/device-tree > /tmp/dts
 # on the dev box
 python3 gen-k3-dts.py /tmp/dts k3.dts
 ```
+
+> **Verified 2026-10-12:** regenerating from a fresh board dump produces a
+> `k3.dts` **byte-identical** to the committed `src/riscv/uts/k3.dts`. The
+> committed devicetree matches the live hardware exactly — 16 harts
+> (8× `rv64imafdcv` A100 + 8× `rv64imafdcvh` X100), DRAM `0x102000000`,
+> console `serial@d4017000`, APLIC `0xe0804000` + IMSIC `0xe0400000`, all three
+> `spacemit,k3-sdhci` disabled.
+
+---
+
+## 1b. Building NATIVELY on the K3 board (no cross toolchain, no QEMU)
+
+**This is the preferred build path.** The board runs Bianbu 4.0.6 with a native
+`riscv64-linux-gnu` toolchain — **gcc 15.2.0, binutils 2.46, dtc 1.7.2,
+python 3.14** — all preinstalled, no sudo required to build. Building the solnix
+kernel *on the target architecture* removes the cross toolchain and the
+qemu-TCG round-trip entirely. **Verified 2026-10-12: `K3 PAYLOAD BUILD PASS`.**
+
+SSH to the board needs `IdentitiesOnly` or the agent offers too many keys and
+hits “Too many authentication failures” before the right one:
+
+```sh
+SSH='ssh -o BatchMode=yes -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519 gburd@192.168.1.179'
+RSH='ssh -o BatchMode=yes -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519'
+```
+
+**1. Copy the kernel source up** (exclude the heavy build artifacts; the source
+is small). Both the `uts/` tree and the RP64 scanout objects it links are needed:
+
+```sh
+cd <repo>
+$SSH 'mkdir -p ~/streamK3/src/riscv/uts ~/streamK3/src/riscv-port/rp64/kernel'
+rsync -az --delete -e "$RSH" \
+  --exclude='*.o' --exclude='*.log' --exclude='*.img' --exclude='*.fat' \
+  --exclude='unix' --exclude='unix-*' --exclude='*.decompiled.dts' \
+  src/riscv/uts/ gburd@192.168.1.179:~/streamK3/src/riscv/uts/
+rsync -az --delete -e "$RSH" --exclude='*.o' \
+  src/riscv-port/rp64/kernel/ gburd@192.168.1.179:~/streamK3/src/riscv-port/rp64/kernel/
+```
+
+**2. Build on the board.** The build scripts default to the `riscv64-none-elf-`
+cross prefix; override every tool to the board’s native (unprefixed) binaries.
+The freestanding kernel flags (`-ffreestanding -nostdlib -mcmodel=medany`,
+`rv64imac`/`lp64` for the payload, `rv64gc`/`lp64d` for qemu-virt) work unchanged
+under the Linux-targeted native gcc because the kernel is freestanding:
+
+```sh
+$SSH 'cd ~/streamK3/src/riscv/uts && \
+  CC=gcc LD=ld OBJCOPY=objcopy OBJDUMP=objdump READELF=readelf DTC=dtc TC=native \
+  bash build-k3-payload.sh'
+```
+
+Expect `K3 PAYLOAD BUILD PASS` and the full self-check green — **all 12 checks**:
+Image magic `05435352` @ 0x38, `text_offset = KBASE-KDRAM_BASE = 0x200000`,
+`gd->ram_base + text_offset = 0x102200000 == KBASE`, `KBASE` inside DRAM,
+`code0 = j _start`, and the 8 DTB-topology checks (APLIC, IMSIC, CLINT, 24 MHz,
+DRAM@0x102000000, UART bind string, reg-shift 2, 16 harts). The native build
+emits `unix-k3.Image` (~619 KB with gcc 15.2; the cross gcc 14.3 build is
+~626 KB — the size differs by toolchain, both are valid) + `k3.dtb` (6156 bytes).
+One benign `ld` note — “LOAD segment with RWX permissions” — is expected for a
+single-image freestanding kernel and appears on both toolchains.
+
+**3. The qemu-virt regression target also builds natively** (same source, so a
+clean native link is the regression signal that nothing was broken for
+qemu-virt). The board has no qemu, so run the build-only step (set `QEMU` to a
+no-op); the authoritative qemu *boot* gate (142 PASS, 8/8) runs on a host that
+has qemu:
+
+```sh
+$SSH 'cd ~/streamK3/src/riscv/uts && \
+  CC=gcc LD=ld OBJCOPY=objcopy OBJDUMP=objdump READELF=readelf DTC=dtc TC=native QEMU=/bin/false \
+  bash build-unix.sh'
+# links clean: _start @ 0x80200000, entry 0x80200040
+```
+
+**4. Fetch the artifacts back** (or build straight on the board and load from
+there — see §4):
+
+```sh
+rsync -az -e "$RSH" \
+  gburd@192.168.1.179:'~/streamK3/src/riscv/uts/unix-k3.Image' \
+  gburd@192.168.1.179:'~/streamK3/src/riscv/uts/k3.dtb' .
+```
+
+> **sudo on this board needs a password** (contrary to an earlier assumption) —
+> so this native path deliberately needs **no** sudo: the source rsync, the
+> build, and reading `/proc/device-tree` all run as the normal user. Only the
+> steps that touch `/boot` (§4) use sudo.
 
 ---
 
@@ -208,24 +296,62 @@ interrupt prompt actually says** — you need it in the next step.
 
 ---
 
-## 4. Copy the artifacts onto the board
+## 4. Copy the artifacts onto the board — the SAFE no-reflash vehicle
 
-The board runs a healthy Linux with `/boot` already mounted (sda2, 256 MB, and
-it is the partition the vendor U-Boot loads from). Copy over the network:
+**This path touches nothing in SPI NOR and nothing in the Bianbu rootfs.** The
+board already mounts `/boot` (sda2) from its own running Linux, and the vendor
+U-Boot loads the vendor kernel from exactly that partition. We add two files
+next to the vendor ones and load them at the interactive U-Boot prompt. The
+BootROM → FSBL → OpenSBI → U-Boot chain in NOR, the vendor kernel, and `/` are
+all untouched — **recovery from any failure is a power cycle.**
+
+MEASURED layout (2026-10-12), so you are not guessing where things live:
+
+```
+sda1   256M vfat   (unmounted)        <- U-Boot/ESP FAT partition
+sda2   256M ext4   /boot              <- the partition U-Boot loads the kernel from
+sda3  118.8G ext4  /                  <- Bianbu rootfs (DO NOT TOUCH)
+mtd0..6  SPI NOR: bootinfo/fsbl/env/esos/opensbi/uboot  (the boot chain — DO NOT TOUCH)
+
+/boot/ (ext4):
+  vmlinuz-6.18.3-generic       vendor kernel
+  initrd.img-6.18.3-generic    vendor initramfs
+  env_k3.txt                   vendor U-Boot env fragment (see below)
+  spacemit/6.18.3-generic/     vendor DTBs incl k3-pico-itx.dtb (THIS board's own DT — the source of k3.dts)
+```
+
+The vendor `env_k3.txt` tells you the addresses U-Boot already uses, which
+confirm our choices are safe:
+
+```
+knl_name=vmlinuz-6.18.3-generic
+ramdisk_name=initrd.img-6.18.3-generic
+dtb_dir=spacemit/6.18.3-generic
+ramdisk_addr=0x130000000        <- vendor loads its initrd here (well above our kernel+dtb)
+```
+
+Copy our two files in next to the vendor ones:
 
 ```sh
-# from the dev box
-scp src/riscv/uts/unix-k3.Image src/riscv/uts/k3.dtb gburd@milkv:/tmp/
-# on the board
+# from the dev box (or build straight on the board per §1b and skip the scp)
+scp -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519 \
+    src/riscv/uts/unix-k3.Image src/riscv/uts/k3.dtb gburd@192.168.1.179:/tmp/
+# on the board (this is the ONE place sudo is needed — writing the root-owned /boot;
+# it prompts for a password on this board)
 sudo cp /tmp/unix-k3.Image /tmp/k3.dtb /boot/
 sync
 ls -l /boot/unix-k3.Image /boot/k3.dtb
 ```
 
-Nothing else changes. The vendor kernel, its DTB, `/boot`'s existing contents,
-the U-Boot environment in NOR: all untouched. **Do not edit the U-Boot
-environment**; everything below is typed at the interactive prompt so a power
-cycle restores normal boot.
+Nothing else changes. `/boot`'s existing contents, the vendor kernel/DTB, the
+U-Boot environment in NOR: all untouched. **Do not edit the U-Boot environment
+and do not `saveenv`** — everything in §5 is typed at the interactive prompt so a
+plain power cycle restores the normal vendor boot.
+
+> If you would rather not use sudo at all: `/tmp` on the board is a 16 GiB
+> tmpfs you own, and U-Boot can also load off the **FAT `sda1`** or over
+> **tftp** (§5.1). But the ext4 `/boot` copy is the simplest and is what the
+> vendor U-Boot is already configured to read.
 
 ---
 
@@ -237,46 +363,67 @@ cycle restores normal boot.
    **Press a key immediately** (spacebar is fine). The window is short; it is
    normal to miss it and need another power cycle. Holding a key down from the
    moment you power on also works.
-3. You should get a `=>` prompt. Confirm U-Boot can see the partition:
-
-```
-=> ls mmc 0:2
-```
-
-⚠️ **`mmc` is very likely wrong on this board** — the SD/MMC controllers are all
-disabled and the disk is UFS, so the vendor U-Boot uses some other interface for
-`/boot`. Discover it rather than guessing:
+3. You should get a `=>` prompt. The partition we want is **sda2, ext4,
+   `/boot`**. The authoritative loader command is whatever the vendor already
+   uses — read it, do not guess:
 
 ```
 => printenv bootcmd
 => printenv bootargs
 ```
 
-`bootcmd` is the vendor's own working recipe for loading from `/boot` — it names
-the exact interface and partition, and it is the authority here. Whatever device
-argument it uses (`scsi 0:2`, `ufs 0:2`, `nvme 0:2`, `mmc 0:2` …), use the same
-one below. `printenv` only reads; it changes nothing.
+⚠️ **`mmc` is wrong on this board** — all three SD/MMC controllers are
+`disabled` and `/` is UFS. The vendor `bootcmd` names the exact interface and
+partition it loads `/boot` from; use the *same* interface argument below.
+MEASURED facts that narrow it: `/boot` is **ext4 on `sda2`**, so the load uses
+`ext4load <iface> <dev>:2` (or the generic `load`, which auto-detects the fs).
+The disk is a SCSI/UFS-class block device, so the interface is most likely
+`scsi` (try `scsi` first; `ls scsi 0:2` should list the vendor `vmlinuz-*`).
+Confirm the device is visible before loading:
 
-4. Load and boot, substituting the device argument from `bootcmd`:
+```
+=> scsi scan            # or: usb start / nvme scan — whatever bootcmd implies
+=> ls scsi 0:2          # MUST list vmlinuz-6.18.3-generic, unix-k3.Image, k3.dtb
+```
+
+4. Load and boot, substituting the interface/device from `bootcmd` and using
+   `ext4load` (or `load`) since `/boot` is ext4:
 
 ```
 => setenv kaddr 0x102200000
 => setenv fdtaddr 0x110000000
-=> load scsi 0:2 ${kaddr} unix-k3.Image
-=> load scsi 0:2 ${fdtaddr} k3.dtb
+=> ext4load scsi 0:2 ${kaddr} unix-k3.Image
+=> ext4load scsi 0:2 ${fdtaddr} k3.dtb
 => booti ${kaddr} - ${fdtaddr}
 ```
 
 | address | value | measured or chosen |
 |---|---|---|
 | `kaddr` | `0x102200000` | **DERIVED** — must equal `KBASE`; `booti` relocates to `gd->ram_base + text_offset` = this |
-| `fdtaddr` | `0x110000000` | **CHOSEN** — 224 MiB above the kernel: clear of the kernel's ~9.5 MB image+BSS, 2 MiB aligned, inside the 32 GiB bank |
+| `fdtaddr` | `0x110000000` | **CHOSEN** — 224 MiB above the kernel: clear of the kernel's ~9.5 MB image+BSS, 2 MiB aligned, inside the 32 GiB bank. (Vendor loads its initrd at `0x130000000`, higher still — confirms this region is free DRAM.) |
 | the `-` | required | no-initrd placeholder; `booti <kernel> - <dtb>` gives `a0=hartid, a1=dtb`, which is exactly the ABI `locore.S` expects |
 
 `booti` will refuse an image whose magic at offset 0x38 is not `0x05435352`
 ("Bad Linux RISCV Image magic!"). Ours has it — `build-k3-payload.sh` verifies
 that, `code0 = j _start`, and the `text_offset` arithmetic before you ever get
 here.
+
+### 5.1 If `/boot` (ext4 sda2) will not load — two no-reflash fallbacks
+
+Both leave NOR and the rootfs untouched:
+
+* **FAT `sda1`** (256 MB, vfat, unmounted). Mount it under Linux
+  (`sudo mount /dev/sda1 /mnt && sudo cp unix-k3.Image k3.dtb /mnt && sync`),
+  then in U-Boot `fatload scsi 0:1 ${kaddr} unix-k3.Image`. FAT is the format
+  U-Boot reads most reliably.
+* **tftp over the network** — nothing written to the board at all. Serve the two
+  files from the dev box (`dnsmasq --enable-tftp --tftp-root=...` or any TFTP
+  server), then in U-Boot: `setenv ipaddr <board-ip>; setenv serverip <devbox-ip>;
+  tftpboot ${kaddr} unix-k3.Image; tftpboot ${fdtaddr} k3.dtb; booti ${kaddr} - ${fdtaddr}`.
+  Use the vendor NIC U-Boot already knows (`printenv ethact`).
+
+To restore normal boot after any attempt: `reset`, or power-cycle and let
+autoboot run — nothing of ours is persistent.
 
 To restore normal boot: `reset`, or just power-cycle and let autoboot run.
 
@@ -370,10 +517,44 @@ instruction of ours has ever executed on this SoC.
   (`MAXCPU=16`, `-smp 16`) 4/10. Non-fatal — the scanout gate passes in both
   cases — and no worse after these changes, so it is not a regression. Captured,
   not chained onto this work.
-* `build-unix.sh` does not link at HEAD (undefined `unsock_*`, `cmo_init`,
-  `virtio_gpu_init`, `fb_*`). Verified broken *before* these changes on a clean
-  `git archive HEAD` tree. `build-scanout.sh` and the payload scripts are the
-  working builds.
+* ~~`build-unix.sh` does not link at HEAD (undefined `unsock_*`, `cmo_init`,
+  `virtio_gpu_init`, `fb_*`).~~ **RESOLVED (verified 2026-10-12).** This was true
+  when written, but `build-unix.sh` was updated on Oct 3 to compile and link the
+  scanout/unixsock/cmo objects (`cmo.o`, `unixsock.o`, `virtio_gpu.o`, `fb.o` —
+  see lines 48/51/76/77/81/85). It now **links clean at HEAD**: built natively on
+  the K3 board (gcc 15.2.0, Bianbu 4.0.6) it produces `unix` with `_start`
+  at `0x80200000`, entry `0x80200040`. `build-scanout.sh` and the payload scripts
+  are also working builds. (The qemu *boot* gate — 142 PASS, 8/8 — still runs via
+  `build-unix.sh` on a host with qemu; the board has no qemu and sudo there needs
+  a password, so the board is used for the native *build*, not the emulated boot.)
+* **`aia.c` hard-codes QEMU-virt MMIO bases — the AIA self-test will not fully
+  pass on K3 silicon, and that is expected (not a boot blocker).** Found
+  2026-10-12. `src/riscv/uts/aia.c` uses `IMSIC_S_BASE = 0x28000000`,
+  `APLIC_S_BASE = 0x0d000000`, `UART0_BASE = 0x10000000`, `UART0_IRQ = 10` — all
+  QEMU-virt values. On the K3 the real bases are **IMSIC `0xe0400000`, APLIC
+  `0xe0804000`, UART `0xd4017000`, UART IRQ 42**. `fdt.c` already *parses* the
+  real `imsic_base`/`aplic_base` from the DTB (into the `k1_dtb` summary struct),
+  but **`aia.c` never consumes them** — it still pokes the QEMU addresses.
+  Consequence on K3:
+    - The console (line 3, `[mlsetup]`) and the whole early banner are via **SBI**
+      (`sbi_console_putchar`), which is address-independent — so **the board still
+      prints and still reaches the banner regardless of this.**
+    - The IMSIC *claim* path (`imsic_claim` via the `stopei` CSR) and delivery
+      enable are **CSR-based, address-independent** — so the core S-mode IRQ
+      model is not wrong, only the device-side MMIO is.
+    - The AIA self-test (`aia_selftest`) programs the APLIC and pokes a UART at
+      the QEMU addresses, which do not exist on K3. Expect it to hit its
+      “APLIC wired leg silent” fallback and then WARN; line 9 should still say
+      `AIA (APLIC+IMSIC)` (that comes from `fdt_intc_is_aia`, which reads the real
+      DTB correctly). A WARN here is **not** a boot failure.
+  **What remains to drive real K3 device interrupts** (UART RX, and later SDHCI/
+  UFS/NIC): thread the DTB-parsed `imsic_base`/`aplic_base`/UART base+IRQ into
+  `aia.c` (replace the four `#define`s with values set from the `fdt.c` summary
+  at init) so `aplic_init`/`aplic_route`/`imsic_send` target the K3 controllers.
+  This is a bounded change (the parse already exists; only the consumer is
+  missing) and is **not needed for “it prints” / the banner** — it is needed for
+  interrupt-driven I/O past the SBI console. Same shape as the `timer.c` 10 MHz
+  hardcode that was fixed by reading the timebase from the DTB.
 
 ---
 

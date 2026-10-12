@@ -1,5 +1,12 @@
 # Milk-V Jupiter (SpacemiT K1) — the hardware-iteration loop
 
+> **⚠️ The maintainer's actual board is a SpacemiT K3 Pico ITX, not a K1.** For
+> that board use **`docs/k3-first-boot-runbook.md`** — it has the native-on-board
+> build recipe (gcc 15.2), the correct DRAM base (`0x102000000`), 16 harts, the
+> AIA interrupt path, and the safe no-reflash NOR→U-Boot→`/boot` load path. This
+> K1 document is retained for the K1/Jupiter hardware and as the shared loop
+> doctrine (serial console, negative controls, what to capture).
+
 **Audience:** the maintainer with the physical Milk-V Jupiter about to go on the
 desk, plus whoever drives the build box. This is the **loop**: build → flash →
 wire the console → power → read serial → capture → feed back → rebuild. It is the
