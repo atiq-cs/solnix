@@ -18,6 +18,12 @@
   # IMDS first-boot keypair fetch: ON (the whole point of a loginnable public AMI).
   solnix.cloud.ec2.firstBootAuthKeys = true;
 
+  # The published-AMI edition label. Without this, solnix.release defaults to
+  # "unstable" and /etc/solnix-release reports RELEASE=unstable even though the
+  # AMI is named "Solnix 2026.11 (DP)" -- the mismatch that shipped on the first
+  # (stale) build. Pin the DP edition so a clean-HEAD build is self-consistent.
+  solnix.release = "26.11";
+
   # MTU self-raise + reboot: OFF for cloud images (reboot-loop hazard above).
   solnix.mtu.enable = false;
 }
