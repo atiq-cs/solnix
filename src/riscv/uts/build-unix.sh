@@ -63,6 +63,17 @@ echo "== compile (freestanding, $TC) =="
 "$CC" $CFLAGS -c vioblk.c    -o vioblk.o
 "$CC" $CFLAGS -c blkfs.c     -o blkfs.o
 "$CC" $CFLAGS -c vionet.c    -o vionet.o
+"$CC" $CFLAGS -c gmac.c      -o gmac.o
+"$CC" $CFLAGS -c k3i2c.c     -o k3i2c.o
+"$CC" $CFLAGS -c k3spi.c     -o k3spi.o
+"$CC" $CFLAGS -c k3dma.c     -o k3dma.o
+"$CC" $CFLAGS -c k3pwm.c     -o k3pwm.o
+"$CC" $CFLAGS -c k3usb.c     -o k3usb.o
+"$CC" $CFLAGS -c k3pcie.c    -o k3pcie.o
+"$CC" $CFLAGS -c k3efuse.c   -o k3efuse.o
+"$CC" $CFLAGS -c k3rtc.c     -o k3rtc.o
+"$CC" $CFLAGS -c k3misc.c    -o k3misc.o
+"$CC" $CFLAGS -c k3dev.c     -o k3dev.o
 "$CC" $CFLAGS -c rootfs.c    -o rootfs.o
 "$CC" $CFLAGS -c startup.c   -o startup.o
 "$CC" $CFLAGS -c main.c      -o main.o
@@ -82,6 +93,8 @@ echo "== link (riscv.ld @ 0x80200000) =="
 	fdt.o vm_page.o kmem.o proc.o \
 	as.o elf.o syscall.o uart.o sdhci.o uproc.o copy.o \
 	virtio.o vioblk.o blkfs.o vionet.o rootfs.o startup.o main.o \
+	gmac.o k3i2c.o k3spi.o k3dma.o k3pwm.o k3usb.o k3pcie.o k3efuse.o \
+	k3rtc.o k3misc.o k3dev.o \
 	virtio_gpu.o fb.o
 
 echo "== image info =="

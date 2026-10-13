@@ -71,6 +71,9 @@ extern void smp_dispatch_open(void);
 
 /* R-P14: SpaceMiT K1 board bring-up (DTB ingest + dw-apb-uart + sdhci). */
 #include "k1.h"
+
+/* K3 Pico ITX peripheral bring-up dispatcher (k3dev.c). */
+extern void k3_bringup(unsigned long dtb, int live);
 #include "k1_dtb.h"		/* the embedded, dtc-compiled K1 board DTB */
 
 /* R-P15: hat gate-1 proof — the K1 device gigapage is mapped + readable. */
@@ -291,6 +294,17 @@ startup_memlist(unsigned long dtb)
 		 * the boot DTB, so the SAME code path serves qemu-virt and K1. */
 		sdhci_model_selftest();
 		(void) sdhci_probe(sdhci_base);
+
+		/*
+		 * K3 Pico ITX peripheral bring-up (DTB-driven). Runs here while
+		 * the low-MMIO gigapage is still identity-mapped and before
+		 * page_init. `live` is the runtime board detect: on real K3
+		 * silicon (boot DTB names SpaceMiT devices) a driver may issue
+		 * read-only identity MMIO; under qemu-virt it binds+reports only.
+		 * Each peripheral driver lives in its own src/riscv/uts/k3*.c /
+		 * gmac.c and is dispatched from k3dev.c.
+		 */
+		k3_bringup(dtb, on_k1_silicon);
 	}
 
 	/*

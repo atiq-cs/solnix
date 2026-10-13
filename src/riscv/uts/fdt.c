@@ -686,6 +686,7 @@ static const char *ns16550_uart_compat[] = {
  * NOT to the dw-mmc driver.
  */
 static const char *sdhci_mmc_compat[] = {
+	"spacemit,k3-sdhci",	/* K3 (Pico ITX): eMMC + SD (3 controllers) */
 	"spacemit,k1-x-sdhci",	/* K1 (Milk-V Jupiter): eMMC + SD */
 	"snps,dwcmshc-sdhci",
 	"sdhci",
