@@ -32,6 +32,11 @@ extern int k3pcie_probe(unsigned long dtb, int live);
 extern int k3efuse_probe(unsigned long dtb, int live);
 extern int k3rtc_probe(unsigned long dtb, int live);
 extern int k3misc_probe(unsigned long dtb, int live);
+/* k3ufs.c: THE root storage device (UFS). set_platform picks live-vs-model,
+ * model_selftest proves the UFSHCI state machine, probe does the real attach. */
+extern void k3ufs_set_platform(int is_k3);
+extern void k3ufs_model_selftest(void);
+extern int k3ufs_probe(unsigned long dtb, int live);
 
 void
 k3_bringup(unsigned long dtb, int live)
@@ -42,6 +47,20 @@ k3_bringup(unsigned long dtb, int live)
 	sbi_console_puts(live ? "LIVE board DTB, read-only MMIO" :
 	    "bind-only, no MMIO");
 	sbi_console_puts("):\n");
+
+	/*
+	 * Tier 1 — UFS: THE root storage device. All three SD/MMC controllers
+	 * are disabled in the K3 DTB; the okay on-disk root lives on UFS
+	 * (ufshc@0xc0e00000). Bring it up FIRST so the console shows the storage
+	 * path before the Tier-2/3 peripherals. The backend (live MMIO vs the
+	 * faithful UFSHCI model) is chosen at runtime from `live`, exactly like
+	 * sdhci. The model selftest proves the driver's HCE/DME/UTRL/READ(10)
+	 * state machine on every boot; k3ufs_probe does the real DTB-driven
+	 * attach that rootfs.c then reads the filesystem from.
+	 */
+	k3ufs_set_platform(live);
+	k3ufs_model_selftest();
+	n += k3ufs_probe(dtb, live);
 
 	/* Tier 2: a useful networked system. */
 	n += gmac_probe(dtb, live);

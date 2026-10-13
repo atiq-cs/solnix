@@ -73,6 +73,7 @@ echo "== compile (freestanding, $TC) =="
 "$CC" $CFLAGS -c k3efuse.c   -o k3efuse.o
 "$CC" $CFLAGS -c k3rtc.c     -o k3rtc.o
 "$CC" $CFLAGS -c k3misc.c    -o k3misc.o
+"$CC" $CFLAGS -c k3ufs.c     -o k3ufs.o
 "$CC" $CFLAGS -c k3dev.c     -o k3dev.o
 "$CC" $CFLAGS -c rootfs.c    -o rootfs.o
 "$CC" $CFLAGS -c startup.c   -o startup.o
@@ -94,7 +95,7 @@ echo "== link (riscv.ld @ 0x80200000) =="
 	as.o elf.o syscall.o uart.o sdhci.o uproc.o copy.o \
 	virtio.o vioblk.o blkfs.o vionet.o rootfs.o startup.o main.o \
 	gmac.o k3i2c.o k3spi.o k3dma.o k3pwm.o k3usb.o k3pcie.o k3efuse.o \
-	k3rtc.o k3misc.o k3dev.o \
+	k3rtc.o k3misc.o k3ufs.o k3dev.o \
 	virtio_gpu.o fb.o
 
 echo "== image info =="

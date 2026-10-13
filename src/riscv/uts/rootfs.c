@@ -37,6 +37,16 @@ extern int vioblk_fs_attach(void);
 extern int vioblk_fs_present(void);
 extern int vioblk_fs_read_sector(unsigned long sector, void *buf);
 
+/*
+ * From k3ufs.c: the UFS host controller (THE K3 root device). On the K3 Pico
+ * ITX all SD/MMC controllers are disabled and the root filesystem lives on
+ * UFS, so the root-mount path prefers UFS when a LUN is online. k3ufs_probe
+ * runs in startup.c (via k3_bringup) BEFORE mountroot, so by the time we get
+ * here k3ufs_present() already reflects whether a readable LUN came up.
+ */
+extern int k3ufs_present(void);
+extern int ufs_read_sector(unsigned long sector, void *buf);
+
 /* kmem.c: allocate the tar staging buffer. */
 extern void *kmem_alloc(unsigned long size);
 
@@ -114,21 +124,29 @@ mountroot(void)
 
 	rootvfs.vfs_root = &rootvnode;
 	rootvfs.vfs_type = "ramdisk";		/* in-memory root vfs */
-	if (vioblk_present())
+	if (k3ufs_present())
+		rootvfs.vfs_dev = "/dev/dsk/c0t0d0 (UFS, ufshc@0xc0e00000)";
+	else if (vioblk_present())
 		rootvfs.vfs_dev = "/dev/dsk/c0t0d0 (virtio-blk)";
 	else
 		rootvfs.vfs_dev = "ramdisk";
 	rootvfs.vfs_mounted = 1;
 
 	/*
-	 * R-P9 gate 4: try to mount a REAL on-disk root FS (a ustar archive on a
-	 * second virtio-blk). If present, /sbin/init + /bin/* are served off it
-	 * (vfs_lookup consults the disk FS first); otherwise the embedded ELFs
-	 * are used. This is the seed of a blk-backed rootvfs.
+	 * R-P9 gate 4: try to mount a REAL on-disk root FS (a ustar archive on
+	 * the root block device — UFS on the K3, a second virtio-blk under
+	 * qemu). If present, /sbin/init + /bin/<name> are served off it (vfs_lookup
+	 * consults the disk FS first); otherwise the embedded ELFs are used.
+	 * This is the seed of a blk-backed rootvfs.
 	 */
 	if (rootfs_mount_ondisk()) {
 		rootvfs.vfs_type = "ustar";
-		rootvfs.vfs_dev = "/dev/dsk/c1t0d0 (virtio-blk, ustar)";
+		if (k3ufs_present())
+			rootvfs.vfs_dev =
+			    "/dev/dsk/c0t0d0 (UFS, ustar)";
+		else
+			rootvfs.vfs_dev =
+			    "/dev/dsk/c1t0d0 (virtio-blk, ustar)";
 	}
 
 	sbi_console_puts("[rootfs] rootvfs -> ");
@@ -199,8 +217,9 @@ single_user_thread(void *arg)
 		 */
 		if (rootfs_is_ondisk() &&
 		    vfs_lookup("/sbin/init", &img, &len)) {
-			sbi_console_puts("root: exec'd /sbin/init from vioblk "
-			    "(FS type=ustar)\n");
+			sbi_console_puts("root: exec'd /sbin/init from ");
+			sbi_console_puts(k3ufs_present() ? "UFS" : "vioblk");
+			sbi_console_puts(" (FS type=ustar)\n");
 			pid = proc_first("/sbin/init", img, len);
 		} else {
 			pid = proc_first("/sbin/init", init_elf, init_elf_len);
@@ -373,6 +392,23 @@ static int ndiskfile;
 static int rootfs_ondisk;		/* 1 once the tar FS is mounted */
 static unsigned char *rootfs_buf;	/* kmem staging of the whole archive */
 
+/*
+ * rootfs_blk_read — read one 512-byte sector from the backing root block
+ * device. On the K3 the root lives on UFS (ufs_read_sector); the virtio-blk FS
+ * disk is the qemu-virt path. Prefer UFS when a LUN is online, else fall back
+ * to the virtio-blk FS disk. One seam so rootfs_mount_ondisk is device-agnostic
+ * (the same shape vioblk/sdhci present: sector -> 512 bytes).
+ */
+static int rootfs_src_ufs;		/* 1 = reading off UFS, 0 = vioblk */
+
+static int
+rootfs_blk_read(unsigned long sector, void *buf)
+{
+	if (rootfs_src_ufs)
+		return (ufs_read_sector(sector, buf));
+	return (vioblk_fs_read_sector(sector, buf));
+}
+
 /* Parse an octal ASCII field of `n` bytes into an unsigned long. */
 static unsigned long
 tar_octal(const unsigned char *p, int n)
@@ -400,8 +436,22 @@ rootfs_mount_ondisk(void)
 	unsigned long off = 0;
 	unsigned long sector = 0;
 
-	if (!vioblk_fs_attach())
-		return (0);		/* no second disk */
+	/*
+	 * Pick the backing block device. On the K3 the root is UFS: if a LUN
+	 * came online (k3ufs_probe ran in startup before mountroot), read the
+	 * archive off UFS. Otherwise fall back to the virtio-blk FS disk
+	 * (vioblk_fs_attach) — the qemu-virt path. Either way the sector read
+	 * below goes through rootfs_blk_read, which is device-agnostic.
+	 */
+	if (k3ufs_present()) {
+		rootfs_src_ufs = 1;
+		sbi_console_puts("[rootfs] root block device: UFS LUN0 "
+		    "(ufshc@0xc0e00000)\n");
+	} else if (vioblk_fs_attach()) {
+		rootfs_src_ufs = 0;
+	} else {
+		return (0);		/* no root block device */
+	}
 
 	rootfs_buf = kmem_alloc(ROOTFS_MAX_BYTES);
 	if (rootfs_buf == 0)
@@ -416,7 +466,7 @@ rootfs_mount_ondisk(void)
 	 * images are small (bounded by ROOTFS_MAX_BYTES).
 	 */
 	while (off + TAR_BLOCK <= ROOTFS_MAX_BYTES) {
-		if (!vioblk_fs_read_sector(sector, rootfs_buf + off))
+		if (!rootfs_blk_read(sector, rootfs_buf + off))
 			break;		/* end of disk / read error */
 		off += TAR_BLOCK;
 		sector++;
@@ -469,7 +519,8 @@ rootfs_mount_ondisk(void)
 	rootfs_ondisk = 1;
 	sbi_console_puts("[rootfs] on-disk ustar root FS: ");
 	kputdec((unsigned long)ndiskfile);
-	sbi_console_puts(" files off vioblk:");
+	sbi_console_puts(rootfs_src_ufs ? " files off UFS:" :
+	    " files off vioblk:");
 	{
 		int i;
 		for (i = 0; i < ndiskfile; i++) {

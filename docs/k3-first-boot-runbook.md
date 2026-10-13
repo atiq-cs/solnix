@@ -589,3 +589,148 @@ The precisely-named next blocker is worth more than a guess at a second fix:
 
 Items 3–6 each isolate a different subsystem, and all seven are cheap to
 capture while the console is still in front of you.
+
+---
+
+## 9. UFS is the root path — the storage driver that mounts `/`
+
+Everything above gets the kernel *running*; this section is how it mounts a
+root filesystem and reaches login. On this board that is **UFS**, not SD/eMMC.
+
+### 9.0 Why UFS and not SDHCI
+
+| measured fact | value | source |
+|---|---|---|
+| `mmc@d4280000/0800/1000` | all three `status = "disabled"` | `k3-pico-itx.dts` |
+| `ufshc@0xc0e00000` | `compatible = "spacemit,k3-ufshcd"`, `status = "okay"` | `k3-pico-itx.dts:8076` |
+| root block device | `sda` 119.3 G (sda2 `/boot`, sda3 `/`) | board `lsblk` |
+
+The SDHCI driver (`sdhci.c`) is kept for register-model completeness, but on
+this board it binds nothing live — the controllers are off. **UFS is the only
+okay mass-storage controller**, so `src/riscv/uts/k3ufs.c` is the driver that
+takes the K3 from "kernel runs" to "mounts a root".
+
+### 9.1 The exact ufshc devicetree facts (MEASURED)
+
+```
+ufshc@0xc0e00000 {
+    compatible    = "spacemit,k3-ufshcd";
+    reg           = <0x00 0xc0e00000 0x00 0x40000>;   // base 0xc0e00000, 256 KiB
+    interrupt-parent = <0x83>;    // APLIC @0xe0804000
+    interrupts    = <0x87 0x04>;  // hwirq 0x87 = 135, level-high
+    clocks        = <0x05 0x37 0x05 0x38>;   // clk-ctrl ph 0x05; ids 0x37, 0x38
+    clock-names   = "ufs-aclk", "ref_clk";
+    resets        = <0x05 0x3b>;             // reset id 0x3b
+    reset-names   = "ufs-aclk-rst";
+    clock-freq    = <0x1d4c0000>;            // 491.52 MHz aclk
+    freq-table-hz = <0x1d4c0000 0x1d4c0000 0x124f800 0x124f800>;
+    lanes-per-direction = <0x02>;            // 2 MPHY lanes each direction
+    status        = "okay";
+};
+```
+
+> **There is no separate PHY node.** The ufshc node carries no `phys`/
+> `phy-names` property; grep finds no `phy@c0e*` / `k3-ufs-phy` node. The
+> `0x37`/`0x38`/`0x3b` cells are clock/reset **indices** inside the k3-pll
+> clock-controller (phandle `0x05`), *not* a phandle to a PHY. The MPHY is
+> embedded and configured through UIC DME attributes + undocumented SpacemiT
+> vendor register pokes — **this is the on-silicon unknown** (§9.4).
+
+### 9.2 The boot sequence: kernel → UFSHCI → read root FS → mount → init
+
+`k3ufs_probe(dtb, live)` runs from `k3dev.c:k3_bringup()` (called in
+`startup_memlist` while the low-MMIO gigapage is still identity-mapped, so the
+UFSHCI base `0xc0e00000` is reachable VA==PA). It is the **first** driver
+`k3_bringup` touches, because it is the root device. The flow:
+
+```
+mlsetup -> startup -> startup_memlist
+   k3_bringup(dtb, live)
+     k3ufs_set_platform(live)          runtime backend select (live MMIO vs model)
+     k3ufs_model_selftest()            prove the UFSHCI state machine (every boot)
+     k3ufs_probe(dtb, live)
+       1. fdt_find_compatible("spacemit,k3-ufshcd") -> reg/irq/clk/reset/lanes
+       2. ufshci_enable()              HCE: write 0, write 1, poll HCE==1
+       3. ufshci_link_startup(lanes)   MPHY cal (PA_* DME_SET) + UIC DME_LINKSTARTUP,
+                                       poll HCS.DP (device present) + HCS.UTRLRDY
+       4. program UTRLBA/U = ring PA, UTRLRSR.bit0 = 1   (run the transfer list)
+       5. INQUIRY + READ CAPACITY(10)  identify LUN 0
+       6. READ(10) block 0             the DMA/device-I/O crux -> "ufs: LUN0 online ..."
+...later...
+startup_root -> mountroot -> rootfs_mount_ondisk()
+   k3ufs_present()?  -> read the ustar archive off UFS (ufs_read_sector)
+                        else fall back to vioblk_fs (qemu-virt path)
+   parse ustar -> vfs_lookup serves /sbin/init + /bin/* off the DISK
+single_user -> proc_first("/sbin/init") -> "root: exec'd /sbin/init from UFS"
+```
+
+### 9.3 How UFS plugs into the EXISTING root-mount path (no new mount code)
+
+The root-mount path (`rootfs.c`) already knew how to read a ustar archive off a
+block device sector-by-sector (that was the vioblk path). UFS reuses it exactly:
+
+* `k3ufs.c` exports `ufs_read_sector(sector, buf)` — the **same shape** as
+  `vioblk_fs_read_sector` / `mmc_read_sector` (one 512-byte sector → `buf`).
+* `rootfs_mount_ondisk()` now has one device-agnostic `rootfs_blk_read()` seam:
+  it reads off UFS when `k3ufs_present()`, else off vioblk. Nothing else in the
+  ustar parser, `vfs_lookup`, exec, or `single_user` changed — UFS is just the
+  new byte source. This is the vioblk → rootfs integration with UFS swapped in
+  as the sector source.
+* DMA is trivial, as for vioblk: `page_alloc()` returns an identity-mapped
+  (VA==PA) frame directly usable as both kernel pointer and DMA address, so the
+  UTP ring, command descriptor (UPIU+PRDT) and data buffer need no IOMMU setup.
+
+### 9.4 What the UFS driver still has to PROVE on silicon
+
+`k3ufs.c` is a **DTB-driven UFSHCI driver that compiles and wires into the root
+path**; the parts that need the booted board (the serial loop with the
+maintainer) are, in priority order:
+
+1. **HCE enable** — does `HCE` read back `1`? If not, the `ufs-aclk`/`ref_clk`
+   clocks are gated or `ufs-aclk-rst` is asserted. U-Boot usually leaves UFS
+   clocked (it booted off it), so this likely works; if `HCE enable FAILED`
+   appears, add the k3-pll clock ungate / reset-deassert before `ufshci_enable`.
+2. **DME_LINKSTARTUP + MPHY calibration** — the one genuine unknown. UFSHCI
+   standardises the host controller, but the **SpacemiT k3-ufs-phy** RMMI
+   register sequence before `DME_LINKSTARTUP` is not in the JEDEC spec and has
+   no public BSD crib for this part. `ufshci_mphy_calibrate()` issues the
+   standard `PA_*` DME attributes a generic UFS link needs; the vendor pokes are
+   marked `ponytail:` and left as the **calibration knob**. The symptom of a
+   wrong/absent MPHY cal is `DME_LINKSTARTUP: no device present (HCS.DP not
+   set)`.
+3. **A real block read** — once `HCS.DP` sets, the UTP transfer-request path
+   (UTRD + command UPIU + PRDT + `UTRLDBR` doorbell, polled) does a READ(10) of
+   block 0. On silicon the proof is a *real* MBR / filesystem superblock, not
+   the model's synthetic `0x55aa` sector.
+
+### 9.5 Serial-console milestones to watch (the on-silicon bring-up)
+
+In boot order, after the `[k3dev]` banner:
+
+| console line | what it proves |
+|---|---|
+| `[ufs] model selftest: PASS (HCE + DME_LINKSTARTUP + UTRL + READ(10) block0 0x55aa)` | the driver's UFSHCI state machine is sound (model-backed, every boot). A **FAIL** here is a code regression, not a hardware fault. |
+| `[ufs] UFSHCI @0xc0e00000 [K3 silicon: live MMIO]` | the runtime board detect routed to **live** MMIO (not the model). If it says `[emulation: faithful UFSHCI+UFS model]` on the board, the boot DTB was not recognised as K3 — the ufshc node is absent/pruned and it fell back to the DTS base. |
+| `[ufs] CAP=... (NUTRS N) VER=0x...0210 (UFSHCI 2.1)` | the register block is really mapped at `0xc0e00000` — a plausible `CAP`/`VER` is the first useful live fact (the UFS analog of gmac's `MAC_VERSION`). All-ones or zero = wrong base / clock gated. |
+| `[ufs] HCE enabled (host controller ready)` | milestone 1 passed (clocks + reset OK). |
+| `[ufs] link up: HCS.DP + UTRLRDY set (device present)` | ⭐ milestone 2 — **the MPHY link came up and a UFS device answered.** The make-or-break line; if instead you see `DME_LINKSTARTUP: no device present ... MPHY calibration is the on-silicon unknown`, §9.4(2) is the work. |
+| `[ufs] INQUIRY: periph-type 0 vendor/product '...'` | the LUN identified itself over a real UTP transfer request (SCSI worked end to end). |
+| `[ufs] READ CAPACITY: last-LBA 0x... block-len 512` | the LUN geometry read back. |
+| `ufs: LUN0 online, READ(10) block 0 OK (512 bytes, MBR/magic=0x...)` | ⭐⭐ **the crux: a real block came off UFS via DMA.** On silicon the magic is the real disk's, not `0x55aa`. |
+| `[rootfs] root block device: UFS LUN0 (ufshc@0xc0e00000)` + `[rootfs] on-disk ustar root FS: N files off UFS:` | the root-mount path read the filesystem **off UFS**. |
+| `root: exec'd /sbin/init from UFS (FS type=ustar)` | ⭐⭐⭐ init came off UFS — the K3 mounted a root and reached userland. |
+
+### 9.6 What QEMU cannot tell us about UFS
+
+Identical honesty boundary to SDHCI: the qemu `virt` machine has **no UFS
+controller**, so no live UFSHCI exists to drive end-to-end under qemu. The
+driver is therefore exercised against a **faithful in-kernel UFSHCI+UFS register
+model** (`ufsm_*` in `k3ufs.c`), compiled in and marked, implementing exactly
+the registers and the one UTP ring the driver touches (HCE, HCS DP/UTRLRDY, the
+UICCMD DME_LINKSTARTUP handshake, UTRLBA/U + UTRLRSR + the UTRLDBR doorbell, and
+a UTRD whose READ(10) streams a backing sector 0 with the `0x55aa` MBR). The
+**driver code is identical** on model and silicon — only `mmio_rd`/`mmio_wr`
+switch targets, chosen at runtime from the board detect. So qemu-virt proves the
+UFSHCI *logic* (and keeps the regression green); the three milestones in §9.4
+need the board. This is the same seam, and the same limitation, as §7 states for
+`text_offset` and the AIA bases.

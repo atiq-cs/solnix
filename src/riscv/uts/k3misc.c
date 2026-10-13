@@ -8,8 +8,11 @@
  *   "spacemit,k3-rproc"     remote-processor (RCPU)
  *   "spacemit,k3-tsensor"   thermal sensor
  *   "spacemit,dpu-saturn"   display (large, deferred per plan)
- *   "spacemit,k3-ufshcd"    UFS host — THE REAL ROOT DEVICE (okay in DT)
  * Each is a one-line presence report; no MMIO. Implementing any is future work.
+ *
+ * NOTE: "spacemit,k3-ufshcd" (the UFS host = THE root device) used to be
+ * reported here; it now has a REAL driver (k3ufs.c, probed first in k3dev.c),
+ * so it is no longer a presence-only line.
  */
 
 #include "sbi.h"
@@ -37,8 +40,6 @@ k3misc_probe(unsigned long dtb, int live)
 	int found = 0;
 
 	(void) live;
-	found += present(dtb, "spacemit,k3-ufshcd",
-	    "UFS host = REAL ROOT DEVICE (next storage target after SDHCI)");
 	found += present(dtb, "spacemit,k1-flexcan", "CAN (crib flexcan.c)");
 	found += present(dtb, "spacemit,k3-ri2s", "audio I2S (ri2s)");
 	found += present(dtb, "spacemit,k1-i2s", "audio I2S (i2s)");
