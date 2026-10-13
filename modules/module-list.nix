@@ -19,6 +19,7 @@
   ./config/coreadm.nix
   ./config/libumem.nix
   ./config/first-boot-defaults.nix
+  ./config/ec2-first-boot.nix
   ./config/mtu.nix
   ./config/firewall.nix
   ./config/wireless-iwx.nix

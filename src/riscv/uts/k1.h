@@ -15,6 +15,7 @@ struct k1_devs {
 	unsigned long uart_base;	unsigned int uart_shift;
 	int uart_is_dw;			/* 16550-family console UART present */
 	int uart_io32;			/* reg-io-width == 4 (32-bit MMIO) */
+	unsigned long uart_irq;		/* first `interrupts' cell (APLIC source) */
 	unsigned long sdhci_base;	int sdhci_present;
 	unsigned long aplic_base;	int aplic_present;
 	unsigned long imsic_base;	int imsic_present;
@@ -23,6 +24,18 @@ struct k1_devs {
 /* fdt.c: walk a K1 DTB, fill *out, print the gate-1 proof line. Returns 1 iff
  * the four K1 signature devices (dw-apb-uart, sdhci, aplic, imsic) are present. */
 extern int fdt_k1_summary(unsigned long dtb, struct k1_devs *out);
+
+/*
+ * aia.c: bind the AIA driver's IMSIC/APLIC/UART MMIO bases + UART IRQ to the
+ * values the boot DTB reported, instead of the compiled-in qemu-virt constants.
+ * `uart_shift`/`uart_io32` carry the UART's reg-shift and reg-io-width so the
+ * self-test pokes the right register offsets (K3 UART is shift=2, 32-bit).
+ * Any base/irq given as 0 keeps that device's qemu-virt fallback (so a DTB that
+ * omits a node still boots on qemu-virt). Call once, before aia_selftest().
+ */
+extern void aia_configure(unsigned long imsic_base, unsigned long aplic_base,
+    unsigned long uart_base, unsigned long uart_irq,
+    unsigned int uart_shift, int uart_io32);
 
 /* uart.c: bind the console to base/reg-shift/io-width, and the gate-2 proof.
  * `live` nonzero => the base came from the firmware's own DTB and MMIO is safe;

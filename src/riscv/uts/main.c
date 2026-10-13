@@ -27,6 +27,7 @@
 
 #include "sbi.h"
 #include "riscv_regs.h"
+#include "k1.h"
 
 /* SunOS release identity — matches the illumos convention (utsname). */
 #define	SOLNIX_RELEASE	"5.11"
@@ -421,8 +422,31 @@ mlsetup(unsigned long hartid, unsigned long dtb)
 	 * IMSIC MSIs (stopei claim); otherwise use the legacy PLIC path.
 	 */
 	if (fdt_intc_is_aia(dtb)) {
+		struct k1_devs d;
+
 		sbi_console_puts("[mlsetup] DTB: interrupt controller is AIA "
 		    "(APLIC+IMSIC) -> MSI IRQ model\n");
+		/*
+		 * DTB-driven AIA bases (R-P17). fdt_k1_summary parses the boot
+		 * DTB's IMSIC/APLIC/UART bases + the UART's APLIC source number;
+		 * aia_configure adopts them so aia_selftest targets the REAL
+		 * controllers — K3's IMSIC 0xe0400000 / APLIC 0xe0804000 / UART
+		 * 0xd4017000 (shift=2, 32-bit) IRQ 42, or qemu-virt's bases when
+		 * the DTB names those. Any base the DTB omits keeps aia.c's
+		 * compiled-in qemu-virt fallback, so this never regresses qemu.
+		 */
+		(void) fdt_k1_summary(dtb, &d);
+		aia_configure(d.imsic_base, d.aplic_base, d.uart_base,
+		    d.uart_irq, d.uart_shift, d.uart_io32);
+		sbi_console_puts("[mlsetup] AIA bases from DTB: IMSIC@");
+		puthex64(d.imsic_base);
+		sbi_console_puts(" APLIC@");
+		puthex64(d.aplic_base);
+		sbi_console_puts(" UART@");
+		puthex64(d.uart_base);
+		sbi_console_puts(" IRQ ");
+		putdec(d.uart_irq);
+		sbi_console_puts("\n");
 		aia_selftest(hartid);
 		boot_cpu.bc_plic_online = aia_is_active();
 	} else {

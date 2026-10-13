@@ -451,6 +451,7 @@ fdt_k1_summary(unsigned long dtb, struct k1_devs *out)
 	unsigned long n_reg = 0;		/* this node's reg base */
 	unsigned int n_shift = 0;		/* this node's reg-shift */
 	int n_io32 = 0;				/* this node's reg-io-width == 4 */
+	unsigned long n_irq = 0;		/* this node's first `interrupts' cell */
 	struct k1_devs d;
 	int i;
 
@@ -484,6 +485,7 @@ fdt_k1_summary(unsigned long dtb, struct k1_devs *out)
 			n_reg = 0;
 			n_shift = 0;
 			n_io32 = 0;
+			n_irq = 0;
 			if (is_memory_node(name))
 				in_memory = 1;
 			continue;
@@ -500,6 +502,7 @@ fdt_k1_summary(unsigned long dtb, struct k1_devs *out)
 				d.uart_base = n_reg;
 				d.uart_shift = n_shift;
 				d.uart_io32 = n_io32;
+				d.uart_irq = n_irq;
 				break;
 			case 2:			/* SDHCI-standard MMC */
 				d.sdhci_present = 1;
@@ -521,6 +524,7 @@ fdt_k1_summary(unsigned long dtb, struct k1_devs *out)
 			n_reg = 0;
 			n_shift = 0;
 			n_io32 = 0;
+			n_irq = 0;
 			depth--;
 			continue;
 		}
@@ -574,6 +578,15 @@ fdt_k1_summary(unsigned long dtb, struct k1_devs *out)
 			 */
 			if (namecmp(pname, "reg-io-width") == 0 && plen >= 4)
 				n_io32 = (be32(pdata) == 4);
+			/*
+			 * First `interrupts' cell = the APLIC source number the
+			 * wired line uses (K3 UART: <42 4>). Latched here and
+			 * committed to d.uart_irq at FDT_END_NODE if this node
+			 * classified as the console UART, so aia.c can route the
+			 * real K3 UART source instead of the compiled-in qemu 10.
+			 */
+			if (namecmp(pname, "interrupts") == 0 && plen >= 4)
+				n_irq = be32(pdata);
 			p += 8 + ((plen + 3) & ~3U);
 			continue;
 		}

@@ -64,7 +64,58 @@ mmio_wr32(unsigned long a, unsigned int v)
  * IMSIC — the S-mode interrupt file for a hart.
  * ---------------------------------------------------------------------------
  */
-#define	IMSIC_S_BASE		0x28000000UL	/* qemu virt S-mode IMSIC */
+/*
+ * ---------------------------------------------------------------------------
+ * DTB-driven MMIO bases (R-P17). aia.c no longer hard-codes the qemu-virt
+ * addresses: aia_configure() (called from mlsetup before aia_selftest) sets
+ * these from the boot DTB that fdt_k1_summary() parsed, so the SAME kernel
+ * targets qemu-virt's APLIC/IMSIC/UART and the K3's (IMSIC 0xe0400000, APLIC
+ * 0xe0804000, UART 0xd4017000, IRQ 42). The compiled-in constants below are
+ * the LAST-RESORT fallback: used only when the DTB lacked that node (base 0),
+ * which keeps qemu-virt booting even on a DTB that omits a controller.
+ *
+ * Why runtime vars and not a second set of #defines: swapping one hardcode for
+ * another breaks whichever board you didn't pick. The DTB is the single source
+ * of truth on BOTH boards — same shape as the timer.c 10 MHz -> DTB fix and
+ * the uart.c uart_config() console binding.
+ * ---------------------------------------------------------------------------
+ */
+#define	IMSIC_S_BASE_QEMU	0x28000000UL	/* qemu virt S-mode IMSIC */
+#define	APLIC_S_BASE_QEMU	0x0d000000UL	/* qemu virt S-mode APLIC */
+#define	UART0_BASE_QEMU		0x10000000UL	/* qemu virt NS16550A UART */
+#define	UART0_IRQ_QEMU		10UL		/* qemu virt UART APLIC source */
+
+static unsigned long aia_imsic_base = IMSIC_S_BASE_QEMU;
+static unsigned long aia_aplic_base = APLIC_S_BASE_QEMU;
+static unsigned long aia_uart_base = UART0_BASE_QEMU;
+static unsigned long aia_uart_irq = UART0_IRQ_QEMU;
+static unsigned int aia_uart_shift = 0;		/* 0 = byte regs (qemu NS16550) */
+static int aia_uart_io32 = 0;			/* reg-io-width == 4 (K3) */
+
+/*
+ * aia_configure — adopt the IMSIC/APLIC/UART bases + UART IRQ the boot DTB
+ * reported. A 0 base/irq keeps that device's qemu-virt fallback (a DTB missing
+ * the node must not zero a base and then poke page 0). uart_shift/uart_io32
+ * select the UART register stride (K3: shift=2, 32-bit; qemu: shift=0, byte).
+ * Must run before aia_selftest / imsic_init, which read these.
+ */
+void
+aia_configure(unsigned long imsic_base, unsigned long aplic_base,
+    unsigned long uart_base, unsigned long uart_irq,
+    unsigned int uart_shift, int uart_io32)
+{
+	if (imsic_base != 0)
+		aia_imsic_base = imsic_base;
+	if (aplic_base != 0)
+		aia_aplic_base = aplic_base;
+	if (uart_base != 0)
+		aia_uart_base = uart_base;
+	if (uart_irq != 0)
+		aia_uart_irq = uart_irq;
+	aia_uart_shift = uart_shift;
+	aia_uart_io32 = uart_io32;
+}
+
 #define	IMSIC_HART_STRIDE	0x1000UL	/* one interrupt file per hart */
 
 /* The only MMIO register in an interrupt file we use: the SETEIPNUM doorbell.
@@ -130,7 +181,7 @@ aia_is_active(void)
 void
 imsic_init(unsigned long hartidx)
 {
-	imsic_hartbase = IMSIC_S_BASE + hartidx * IMSIC_HART_STRIDE;
+	imsic_hartbase = aia_imsic_base + hartidx * IMSIC_HART_STRIDE;
 
 	/* Accept every priority (threshold 0) and enable delivery to the hart. */
 	imsic_ind_write(ISEL_EITHRESHOLD, 0);
@@ -180,8 +231,6 @@ imsic_claim(void)
  * APLIC — S-mode domain, MSI-delivery mode. Routes wired IRQ lines to IMSIC.
  * ---------------------------------------------------------------------------
  */
-#define	APLIC_S_BASE		0x0d000000UL	/* qemu virt S-mode APLIC */
-
 #define	APLIC_DOMAINCFG		0x0000		/* domain config */
 #define	APLIC_SOURCECFG(i)	(0x0004 + ((i) - 1) * 4)	/* per source 1.. */
 #define	APLIC_MMSIADDRCFG	0x1bc0		/* (M) MSI addr; we set S below */
@@ -230,22 +279,22 @@ static int aplic_msiaddr_writable;		/* did the write stick? */
 void
 aplic_init(void)
 {
-	unsigned int lo = (unsigned int)(IMSIC_S_BASE >> 12);
+	unsigned int lo = (unsigned int)(aia_imsic_base >> 12);
 	/* LHXW=2 covers hart indices 0..3 (four harts); LHXS=0 => 4 KiB stride. */
 	unsigned int hi = (2U << APLIC_MSIADDRCFGH_LHXW_SHIFT) |
 	    (0U << APLIC_MSIADDRCFGH_LHXS_SHIFT);
 
-	mmio_wr32(APLIC_S_BASE + APLIC_SMSIADDRCFG, lo);
-	mmio_wr32(APLIC_S_BASE + APLIC_SMSIADDRCFGH, hi);
+	mmio_wr32(aia_aplic_base + APLIC_SMSIADDRCFG, lo);
+	mmio_wr32(aia_aplic_base + APLIC_SMSIADDRCFGH, hi);
 
 	/* Read the fields back: if the parent (M) domain locked them, the write
 	 * is dropped and we learn the exact reason the wired leg stays silent. */
-	aplic_smsiaddr_rb = mmio_rd32(APLIC_S_BASE + APLIC_SMSIADDRCFG);
-	aplic_smsiaddrh_rb = mmio_rd32(APLIC_S_BASE + APLIC_SMSIADDRCFGH);
+	aplic_smsiaddr_rb = mmio_rd32(aia_aplic_base + APLIC_SMSIADDRCFG);
+	aplic_smsiaddrh_rb = mmio_rd32(aia_aplic_base + APLIC_SMSIADDRCFGH);
 	aplic_msiaddr_writable = (aplic_smsiaddr_rb == lo);
 
 	/* Enable the domain in MSI delivery mode. */
-	mmio_wr32(APLIC_S_BASE + APLIC_DOMAINCFG,
+	mmio_wr32(aia_aplic_base + APLIC_DOMAINCFG,
 	    APLIC_DOMAINCFG_IE | APLIC_DOMAINCFG_DM);
 }
 
@@ -261,13 +310,13 @@ aplic_init(void)
 void
 aplic_route(unsigned long src, unsigned long hartidx, unsigned long eiid)
 {
-	mmio_wr32(APLIC_S_BASE + APLIC_SOURCECFG(src), APLIC_SM_LEVEL_HIGH);
-	mmio_wr32(APLIC_S_BASE + APLIC_TARGET(src),
+	mmio_wr32(aia_aplic_base + APLIC_SOURCECFG(src), APLIC_SM_LEVEL_HIGH);
+	mmio_wr32(aia_aplic_base + APLIC_TARGET(src),
 	    (unsigned int)((hartidx << 18) | (eiid & 0x7ff)));
 	/* Also make sure this identity is enabled in the target IMSIC file. */
 	imsic_enable_id(eiid);
 	/* Enable the source in the APLIC by number. */
-	mmio_wr32(APLIC_S_BASE + APLIC_SETIENUM, (unsigned int)src);
+	mmio_wr32(aia_aplic_base + APLIC_SETIENUM, (unsigned int)src);
 }
 
 /*
@@ -276,20 +325,37 @@ aplic_route(unsigned long src, unsigned long hartidx, unsigned long eiid)
  * path, exactly as plic.c did for the PLIC). Same registers as plic.c.
  * ---------------------------------------------------------------------------
  */
-#define	UART_IER	(UART0_BASE + 1)
-#define	UART_IIR	(UART0_BASE + 2)
-#define	UART_LCR	(UART0_BASE + 3)
+/*
+ * NS16550A UART register access. Logical register indices scaled by the DTB
+ * reg-shift (qemu NS16550 = byte regs at shift 0; K3 dw-apb-uart = 32-bit regs
+ * at shift 2) and widened per reg-io-width. The base + stride both come from
+ * the boot DTB via aia_configure, so this self-test pokes the real UART on
+ * whichever board we are on — not a compiled-in qemu address at a byte stride.
+ */
+#define	UART_IER	1	/* interrupt enable */
+#define	UART_IIR	2	/* interrupt ident (read) */
+#define	UART_LCR	3	/* line control */
 #define	UART_IER_THRE	0x02
 
-static inline unsigned char
-uart_rd8(unsigned long a)
+static inline unsigned long
+uart_off(int idx)
 {
-	return (*(volatile unsigned char *)a);
+	return (aia_uart_base + ((unsigned long)idx << aia_uart_shift));
+}
+static inline unsigned int
+uart_rd8(int idx)
+{
+	if (aia_uart_io32)
+		return (*(volatile unsigned int *)uart_off(idx) & 0xff);
+	return (*(volatile unsigned char *)uart_off(idx));
 }
 static inline void
-uart_wr8(unsigned long a, unsigned char v)
+uart_wr8(int idx, unsigned int v)
 {
-	*(volatile unsigned char *)a = v;
+	if (aia_uart_io32)
+		*(volatile unsigned int *)uart_off(idx) = v & 0xff;
+	else
+		*(volatile unsigned char *)uart_off(idx) = (unsigned char)v;
 }
 
 /* The MSI identity we assign the UART wired line for the S IMSIC. */
@@ -354,7 +420,7 @@ aia_selftest(unsigned long hartidx)
 
 	imsic_init(hartidx);
 	aplic_init();
-	aplic_route(UART0_IRQ, hartidx, UART_EIID);
+	aplic_route(aia_uart_irq, hartidx, UART_EIID);
 	aia_active = 1;			/* trap() now uses aia_extintr */
 
 	/* R-P14: report the APLIC MSI-addr programming read-back — the direct
@@ -368,15 +434,15 @@ aia_selftest(unsigned long hartidx)
 	    " (S-domain MSI-addr WRITABLE)\n" :
 	    " (S-domain MSI-addr READ-ONLY: locked by M-mode APLIC)\n");
 	sbi_console_puts("[aia] APLIC DOMAINCFG readback=");
-	kputhex(mmio_rd32(APLIC_S_BASE + APLIC_DOMAINCFG));
+	kputhex(mmio_rd32(aia_aplic_base + APLIC_DOMAINCFG));
 	sbi_console_puts("\n");
 
 	sbi_console_puts("[aia] IMSIC S-file @");
 	kputhex(imsic_hartbase);
 	sbi_console_puts(", APLIC S-domain @");
-	kputhex(APLIC_S_BASE);
+	kputhex(aia_aplic_base);
 	sbi_console_puts(" (MSI mode), UART src ");
-	kputdec(UART0_IRQ);
+	kputdec(aia_uart_irq);
 	sbi_console_puts(" -> eiid ");
 	kputdec(UART_EIID);
 	sbi_console_puts("\n");

@@ -449,6 +449,7 @@ UART driver binding later is a separate, later question.
 | 7 | `[smp] boot hart N starting secondaries via SBI HSM` | note the value of N — see below |
 | 8 | `[smp] hart K online (secondary, ...)` × up to 15 | SBI HSM brings up the other harts |
 | 9 | `[mlsetup] DTB: interrupt controller is AIA (APLIC+IMSIC) -> MSI IRQ model` | **the K3-specific path** — if this says PLIC instead, the wrong DTB got loaded |
+| 9b | `[mlsetup] AIA bases from DTB: IMSIC@0xe0400000 APLIC@0xe0804000 UART@0xd4017000 IRQ 42` | ⭐ the DTB-driven AIA fix is live. **If these show the qemu values (`0x28000000`/`0x0d000000`/`0x10000000`/`10`), the DTB did not reach `aia_configure`.** The `[aia]` self-test lines that follow now target these K3 controllers; `[aia] self-test OK` means a live MSI was delivered, an `APLIC wired leg silent` WARN is still non-fatal (report the `SMSIADDRCFG` read-back). |
 | 10 | `[mlsetup] DTB: timebase-frequency 24000000 Hz` | ⭐ the 24 MHz fix is live. **If this says 10000000, the DTB did not reach us.** |
 | 11 | `[clock] starting periodic clock: hz=100 period=240000 time-ticks (10000000 ns), timebase=24000000 Hz (from DTB)` | period 240000 = 24 MHz / 100 Hz. `(from DTB)` not `(DEFAULT ...)` |
 | 12 | `[clock] N ticks, hrtime=... -> periodic clock running.` | the CLINT timer actually fires on this SoC |
@@ -527,34 +528,50 @@ instruction of ours has ever executed on this SoC.
   are also working builds. (The qemu *boot* gate — 142 PASS, 8/8 — still runs via
   `build-unix.sh` on a host with qemu; the board has no qemu and sudo there needs
   a password, so the board is used for the native *build*, not the emulated boot.)
-* **`aia.c` hard-codes QEMU-virt MMIO bases — the AIA self-test will not fully
-  pass on K3 silicon, and that is expected (not a boot blocker).** Found
-  2026-10-12. `src/riscv/uts/aia.c` uses `IMSIC_S_BASE = 0x28000000`,
-  `APLIC_S_BASE = 0x0d000000`, `UART0_BASE = 0x10000000`, `UART0_IRQ = 10` — all
-  QEMU-virt values. On the K3 the real bases are **IMSIC `0xe0400000`, APLIC
-  `0xe0804000`, UART `0xd4017000`, UART IRQ 42**. `fdt.c` already *parses* the
-  real `imsic_base`/`aplic_base` from the DTB (into the `k1_dtb` summary struct),
-  but **`aia.c` never consumes them** — it still pokes the QEMU addresses.
-  Consequence on K3:
-    - The console (line 3, `[mlsetup]`) and the whole early banner are via **SBI**
-      (`sbi_console_putchar`), which is address-independent — so **the board still
-      prints and still reaches the banner regardless of this.**
-    - The IMSIC *claim* path (`imsic_claim` via the `stopei` CSR) and delivery
-      enable are **CSR-based, address-independent** — so the core S-mode IRQ
-      model is not wrong, only the device-side MMIO is.
-    - The AIA self-test (`aia_selftest`) programs the APLIC and pokes a UART at
-      the QEMU addresses, which do not exist on K3. Expect it to hit its
-      “APLIC wired leg silent” fallback and then WARN; line 9 should still say
-      `AIA (APLIC+IMSIC)` (that comes from `fdt_intc_is_aia`, which reads the real
-      DTB correctly). A WARN here is **not** a boot failure.
-  **What remains to drive real K3 device interrupts** (UART RX, and later SDHCI/
-  UFS/NIC): thread the DTB-parsed `imsic_base`/`aplic_base`/UART base+IRQ into
-  `aia.c` (replace the four `#define`s with values set from the `fdt.c` summary
-  at init) so `aplic_init`/`aplic_route`/`imsic_send` target the K3 controllers.
-  This is a bounded change (the parse already exists; only the consumer is
-  missing) and is **not needed for “it prints” / the banner** — it is needed for
-  interrupt-driven I/O past the SBI console. Same shape as the `timer.c` 10 MHz
-  hardcode that was fixed by reading the timebase from the DTB.
+* **`aia.c` AIA MMIO bases are now DTB-driven — FIXED 2026-10-12 (R-P17).** `aia.c`
+  previously hard-coded the QEMU-virt bases `IMSIC_S_BASE = 0x28000000`,
+  `APLIC_S_BASE = 0x0d000000`, `UART0_BASE = 0x10000000`, `UART0_IRQ = 10`, which
+  do not exist on the K3 (real bases **IMSIC `0xe0400000`, APLIC `0xe0804000`,
+  UART `0xd4017000`, UART IRQ 42**). The fix makes `aia.c` **consume** the
+  bases `fdt.c` already parses, so the *same* kernel targets qemu-virt's
+  controllers under qemu and the K3's on silicon — DTB-driven, not a hardcode
+  swap. Mechanism:
+    - `fdt_k1_summary()` now also latches the console UART node's first
+      `interrupts` cell into `k1_devs.uart_irq` (K3 `serial@d4017000` carries
+      `interrupts = <42 4>`), alongside the `imsic_base`/`aplic_base`/`uart_base`/
+      `uart_shift`/`uart_io32` it already parsed.
+    - `mlsetup()` (main.c) parses the **boot DTB** (a1) with `fdt_k1_summary`
+      and calls new `aia_configure(imsic, aplic, uart, irq, shift, io32)` BEFORE
+      `aia_selftest`. It prints `[mlsetup] AIA bases from DTB: IMSIC@.. APLIC@..
+      UART@.. IRQ ..` so the console states the live bases.
+    - `aia.c` replaced the four `#define`s with runtime vars
+      (`aia_imsic_base`/`aia_aplic_base`/`aia_uart_base`/`aia_uart_irq` +
+      `aia_uart_shift`/`aia_uart_io32`); `imsic_init`/`aplic_init`/`aplic_route`/
+      `aia_selftest` now target those. The old qemu values survive **only** as a
+      last-resort fallback (`*_QEMU`): any base the DTB omits (base 0) keeps the
+      qemu-virt fallback, so a DTB without an AIA node still boots on qemu-virt.
+      The UART self-test poke is now reg-shift/io32-aware, so on K3 it hits the
+      32-bit registers at the correct offsets rather than byte offsets.
+  **Regression stays green by construction:** on the qemu-virt boot DTB,
+  `fdt_k1_summary` finds the qemu ns16550/APLIC/IMSIC, so `aia_configure` is
+  handed the qemu bases and the AIA path is byte-for-byte the old behaviour.
+  **Built natively on the board (gcc 15.2):** `K3 PAYLOAD BUILD PASS` (12 checks)
+  with the change compiled in, and `build-unix.sh` links the qemu-virt target
+  clean (`_start @ 0x80200000`, entry `0x80200040`). The qemu-virt *boot* gate
+  must still be run on a host with qemu (the board has none, sudo needs a
+  password) — the `unix` ELF is handed back for that boot-verify since `aia.c`
+  changed. Same shape as the `timer.c` 10 MHz -> DTB fix.
+
+  **NEXT on-silicon milestone:** does the K3 AIA actually take *live* IRQs?
+  Now that `aplic_init`/`aplic_route`/`imsic_send` target the real `0xe0804000`/
+  `0xe0400000` controllers, the on-board test is whether a wired source
+  (UART RX, line 9/the `[aia]` self-test block) delivers an MSI through
+  APLIC -> IMSIC -> `stopei` on real silicon — watch for `[aia] self-test OK`
+  vs the `APLIC wired leg silent` WARN, and report the `SMSIADDRCFG` read-back
+  (whether OpenSBI's M-mode APLIC locked the S-domain MSI-addr config). If the
+  wired leg is locked, the direct IMSIC doorbell leg is the device-driver path;
+  proving *that* on silicon is the gate to interrupt-driven **SDHCI/UFS/NIC**
+  I/O past the SBI console.
 
 ---
 
