@@ -1,0 +1,23 @@
+# configurations/cloud-ec2.nix — the public-cloud (EC2 AMI) solnix system.
+#
+# base.nix + the public-AMI deltas: the IMDS first-boot keypair fetch stays ON
+# (so a launcher's EC2 keypair logs in), and the evidence-based MTU raise is OFF.
+#
+# WHY MTU OFF: solnix-mtu reboots to apply a jumbo-MTU ena.conf change
+# (scripts/solnix-mtu.sh), and on a fresh public AMI whose /var/lib/solnix stamp
+# does not persist across that reboot it reboot-LOOPS (measured on m5.large: 12
+# cycles, "reboot: initiated by root" every ~30s). The MTU raise is an opt-in
+# optimization, not needed for a working cloud image, so a public AMI ships with
+# the boot-safe 1500 MTU and no self-reboot. (This is the only delta vs base.)
+
+{ lib, ... }:
+
+{
+  imports = [ ./base.nix ];
+
+  # IMDS first-boot keypair fetch: ON (the whole point of a loginnable public AMI).
+  solnix.cloud.ec2.firstBootAuthKeys = true;
+
+  # MTU self-raise + reboot: OFF for cloud images (reboot-loop hazard above).
+  solnix.mtu.enable = false;
+}

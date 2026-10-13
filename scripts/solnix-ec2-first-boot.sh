@@ -27,14 +27,19 @@ STATE=/var/lib/solnix
 STAMP="$STATE/ec2-authkey-instance-id"   # the instance-id we last seeded for
 mkdir -p "$STATE" 2>/dev/null || true
 
-# curl is on the system PATH (same tool solnix-mtu.sh uses). Keep timeouts short
-# so an off-EC2 boot (no 169.254.169.254 responder) returns fast, not after a
-# long TCP wait.
+# illumos ships NO curl in the base world, so the SMF method hands us one by
+# absolute store path in SOLNIX_CURL (modules/config/ec2-first-boot.nix). Fall
+# back to a PATH `curl` for manual/off-EC2 use. A missing HTTP client is the one
+# way this silently installs no key, so resolve it explicitly.
+CURL="${SOLNIX_CURL:-curl}"
+# the world's tools (getent, sort, grep, chown, ...) live here.
+PATH=/usr/sbin:/usr/bin:/sbin:$PATH
+export PATH
 IMDS=http://169.254.169.254/latest
 
 # IMDSv2: PUT a session token (this account class enforces v2; v1 GETs 401/empty).
 imds_token() {
-	curl -s --connect-timeout 2 --max-time 5 -X PUT \
+	"$CURL" -s --connect-timeout 2 --max-time 5 -X PUT \
 	    -H 'X-aws-ec2-metadata-token-ttl-seconds: 300' \
 	    "$IMDS/api/token" 2>/dev/null
 }
@@ -42,20 +47,35 @@ imds_token() {
 imds() {
 	_t=$(imds_token)
 	if [ -n "$_t" ]; then
-		curl -s --connect-timeout 2 --max-time 5 \
+		"$CURL" -s --connect-timeout 2 --max-time 5 \
 		    -H "X-aws-ec2-metadata-token: $_t" "$IMDS/$1" 2>/dev/null
 	else
-		curl -s --connect-timeout 2 --max-time 5 "$IMDS/$1" 2>/dev/null
+		"$CURL" -s --connect-timeout 2 --max-time 5 "$IMDS/$1" 2>/dev/null
 	fi
 }
 
 # --- fail-safe gate: are we on EC2 at all? ----------------------------------
-IID=$(imds meta-data/instance-id)
+# RETRY: svc:/milestone/network going online does NOT guarantee the DHCP lease /
+# route is up yet (illumos: the solnix-net transient oneshot may still be running
+# when a require_all dependent starts). IMDS at 169.254.169.254 is link-local, so
+# it answers as soon as an interface is plumbed -- but if we run a hair too early
+# the token PUT times out and a single probe would wrongly conclude "off-EC2" and
+# no-op, leaving a PUBLIC AMI unloginnable (measured: boot-verify v5 came up clean
+# but my key was absent because the one-shot ran before the lease settled). So
+# probe up to ~60s; only after that give up as genuinely off-EC2 (bare metal/X1).
+IID=""
+_tries=0
+while [ "$_tries" -lt 20 ]; do
+	IID=$(imds meta-data/instance-id)
+	case "$IID" in i-*) break ;; esac
+	_tries=$((_tries + 1))
+	sleep 3
+done
 case "$IID" in
 	i-*) : ;;                                 # looks like a real instance-id
-	*)   echo "no EC2 instance metadata (got '$IID'); off-EC2 no-op"; exit 0 ;;
+	*)   echo "no EC2 instance metadata after ${_tries} tries (got '$IID'); off-EC2 no-op"; exit 0 ;;
 esac
-echo "instance-id: $IID"
+echo "instance-id: $IID (after ${_tries} retries)"
 
 # --- idempotency: skip only if we already seeded for THIS instance-id -------
 if [ "$(cat "$STAMP" 2>/dev/null)" = "$IID" ]; then

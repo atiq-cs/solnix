@@ -160,6 +160,15 @@
           modules = [ ./configurations/base.nix ];
         };
 
+        # The public-cloud (EC2 AMI) role: base + IMDS first-boot keypair fetch,
+        # MTU self-raise off (reboot-loop hazard). The toplevel the public
+        # x86_64 AMI is built from.
+        cloud-ec2 = solnixSystem {
+          system = "x86_64-solaris";
+          pkgs = mkPkgs { };
+          modules = [ ./configurations/cloud-ec2.nix ];
+        };
+
         # The PostgreSQL build-farm animal + dev host role (base + pgfarm).
         # This is what an installer selects for that machine.
         pgfarm = solnixSystem {
@@ -223,6 +232,7 @@
       } // lib.genAttrs buildSystems (_buildSystem: {
         # the full system closure (T2.8); realise on the illumos host.
         baseToplevel = self.solnixConfigurations.base.config.system.build.toplevel;
+        cloudEc2Toplevel = self.solnixConfigurations.cloud-ec2.config.system.build.toplevel;
         pgfarmToplevel = self.solnixConfigurations.pgfarm.config.system.build.toplevel;
         # dixi: the maintainer's workstation. Same eval-split caveat as the others --
         # this EVALUATES here and only BUILDS on the illumos host, because the gate

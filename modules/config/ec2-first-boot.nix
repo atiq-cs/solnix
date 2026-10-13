@@ -29,6 +29,12 @@ let
     executable = true;
     text = builtins.readFile ../../scripts/solnix-ec2-first-boot.sh;
   };
+
+  # illumos ships NO curl/wget in the base world (measured: the public image has
+  # ftp/nc but no HTTP client), so the script must be handed one by store path or
+  # its IMDS calls silently no-op and the launch key is never installed. Pass the
+  # from-source curl's absolute path via SOLNIX_CURL.
+  curlBin = "${pkgs.solnix.curl}/bin/curl";
 in
 {
   options.solnix.cloud.ec2.firstBootAuthKeys = lib.mkOption {
@@ -53,8 +59,8 @@ in
       # run-once per boot: fetch the launch key, install it, exit.
       model = "transient";
       start = {
-        exec = "/bin/sh ${firstBootScript}";
-        timeoutSeconds = 60;
+        exec = "/bin/sh -c 'SOLNIX_CURL=${curlBin} ${firstBootScript}'";
+        timeoutSeconds = 120;
       };
       stop.exec = ":true";
       # The network must be up (DHCP done) before 169.254.169.254 answers; the

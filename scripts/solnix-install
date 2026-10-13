@@ -146,7 +146,16 @@ ALTROOT="${SOLNIX_ALTROOT:-/a}"
 # OUTPUT while the kernel console INPUT stays on a nonexistent ttya. A laptop is
 # the common case for an interactive install; a headless server sets the variable.
 # Set SOLNIX_TARGET_CONSOLE=ttya explicitly for serial-console work.
-TARGET_CONSOLE="${SOLNIX_TARGET_CONSOLE:-text}"
+# PUBLIC CLOUD AMI (SOLNIX_CLOUD_IMAGE=1): default to ttya. A cloud instance is
+# headless and its console IS the serial line (EC2 serial console / get-console-
+# output read ttya); console=text would send kernel output to an invisible VGA
+# framebuffer, so the instance looks dead on the serial console and is
+# undiagnosable (measured: boot-verify #1 showed only the loader, then nothing).
+if [ -n "${SOLNIX_CLOUD_IMAGE:-}" ]; then
+  TARGET_CONSOLE="${SOLNIX_TARGET_CONSOLE:-ttya}"
+else
+  TARGET_CONSOLE="${SOLNIX_TARGET_CONSOLE:-text}"
+fi
 
 # _upload_logs -- on failure, bundle the install + build logs + key diagnostics and
 # OFFER to upload them to a paste service so they can be debugged off-host. No creds
@@ -1222,8 +1231,23 @@ _nix_env() {  # run nix with HOME/TMPDIR/caches on the target pool, never the ra
 }
 _nixroot_mount() {
   mkdir -p "$NIXROOT/nix"
-  df -n "$NIXROOT/nix" 2>/dev/null | grep -q zfs && return 0
+  # Idempotency guard: return only if $POOL/nix is ALREADY mounted here. The old
+  # test `df -n ... | grep -q zfs` matched ANY zfs filesystem -- and on a zfs
+  # BUILD HOST (host mode) $NIXROOT/nix inherits the host's rpool, so the grep
+  # was a false positive: the mount was skipped and `nix copy` wrote the whole
+  # closure to a plain directory on rpool instead of into $POOL/nix. The target
+  # image's $POOL/nix stayed EMPTY, so it booted with no shared store -- init's
+  # `/sbin/sh` (a link into /nix/store) could not exec and the box wedged in an
+  # inittab exec-fail loop (measured on EC2: errno 2 on every sysinit line).
+  # Check the mounted DATASET name, not just the fstype.
+  if df -n "$NIXROOT/nix" 2>/dev/null | grep -q zfs; then
+    _m=$(zfs list -H -o name "$NIXROOT/nix" 2>/dev/null)
+    [ "$_m" = "$POOL/nix" ] && return 0
+  fi
   mount -F zfs "$POOL/nix" "$NIXROOT/nix" || die "could not mount $POOL/nix at $NIXROOT/nix"
+  # Prove it: a false-positive idempotency check here is exactly the bug above.
+  _m=$(zfs list -H -o name "$NIXROOT/nix" 2>/dev/null)
+  [ "$_m" = "$POOL/nix" ] || die "$NIXROOT/nix is '$_m', not $POOL/nix -- the store copy would land on the wrong filesystem"
 }
 _nixroot_umount() { umount "$NIXROOT/nix" 2>/dev/null || true; }
 
@@ -2346,7 +2370,19 @@ _hash_pw() {  # $1 = plaintext -> stdout = crypt string, empty on failure
 }
 
 _rootpw=""
-if [ -n "${SOLNIX_ROOT_PW:-}" ]; then
+if [ -n "${SOLNIX_CLOUD_IMAGE:-}" ]; then
+  # PUBLIC CLOUD AMI mode (NixOS amazon-image model). The login identity comes
+  # from the launcher's EC2 keypair, fetched into root's authorized_keys at first
+  # boot by svc:/site/solnix-ec2-first-boot (modules/config/ec2-first-boot.nix).
+  # So: root is PASSWORDLESS-LOCKED FOR PASSWORD AUTH ("NP": no password login)
+  # but NOT "*LK*" -- *LK* makes PAM deny even a valid ssh key (users.nix GATE B),
+  # which would make the public AMI unloginnable. sshd stays PermitRootLogin
+  # prohibit-password (key-only root), as base.nix ships it; the hardening block
+  # below must NOT rewrite it to "no". No admin user is created: a public image is
+  # identity-free and the operator is whoever launches it with their keypair.
+  _rootpw=""; _rootcloud=1
+  log "SOLNIX_CLOUD_IMAGE set -> root NP (key-only via IMDS first-boot), sshd prohibit-password"
+elif [ -n "${SOLNIX_ROOT_PW:-}" ]; then
   _rootpw="$SOLNIX_ROOT_PW"
 elif [ -n "${SOLNIX_ROOT_NO_PASSWORD:-}" ]; then
   # Explicit unattended "lock root". Handled before the prompt so an automated
@@ -2390,7 +2426,18 @@ elif [ -t 0 ] && [ -t 1 ]; then
   done
 fi
 
-if [ "${_rootlock:-0}" = 1 ]; then
+if [ "${_rootcloud:-0}" = 1 ]; then
+  # PUBLIC CLOUD AMI: root field = "NP" (no password login, account NOT locked, so
+  # a valid ssh key through PermitRootLogin prohibit-password still authenticates).
+  # The launcher's key is installed at first boot from IMDS (ec2-first-boot).
+  awk -F: 'BEGIN{OFS=":"} $1=="root"{$2="NP"} {print}' \
+    "$ALTROOT/etc/shadow" > "$ALTROOT/etc/shadow.new" \
+    && mv "$ALTROOT/etc/shadow.new" "$ALTROOT/etc/shadow"
+  chmod 0400 "$ALTROOT/etc/shadow"
+  _rf=$(awk -F: '$1=="root"{print $2}' "$ALTROOT/etc/shadow" 2>/dev/null)
+  [ "$_rf" = "NP" ] || die "cloud root field did not land as NP (field='$_rf')"
+  log "root account NP on the target (key-only login via IMDS first-boot; not blank, not *LK*)"
+elif [ "${_rootlock:-0}" = 1 ]; then
   # DELIBERATE no-password install: lock root. *LK*, never blank -- the live media
   # ships root with an EMPTY shadow field so the operator can run this installer,
   # and step 3 copies /etc/shadow verbatim, so "no password" must mean LOCKED or it
@@ -2443,8 +2490,12 @@ if [ -f "$ALTROOT/etc/default/login" ]; then
   log "login hardened: PASSREQ=YES, root console-only"
 fi
 # sshd must not accept root with a password even so; only touch an existing file.
+# PUBLIC CLOUD AMI: keep PermitRootLogin prohibit-password (key-only root) so the
+# IMDS-fetched launch key logs in; otherwise harden to "no" (attended install, where
+# the admin user + pfexec is the route to root). PermitEmptyPasswords no in both.
 if [ -f "$ALTROOT/etc/ssh/sshd_config" ]; then
-  sed -e 's/^#*PermitRootLogin.*/PermitRootLogin no/' \
+  _prl=no; [ "${_rootcloud:-0}" = 1 ] && _prl=prohibit-password
+  sed -e "s/^#*PermitRootLogin.*/PermitRootLogin $_prl/" \
       -e 's/^#*PermitEmptyPasswords.*/PermitEmptyPasswords no/' \
       "$ALTROOT/etc/ssh/sshd_config" > "$ALTROOT/etc/ssh/sshd_config.new" \
     && mv "$ALTROOT/etc/ssh/sshd_config.new" "$ALTROOT/etc/ssh/sshd_config"
@@ -2456,7 +2507,7 @@ if [ -f "$ALTROOT/etc/ssh/sshd_config" ]; then
     || echo 'UsePAM yes' >> "$ALTROOT/etc/ssh/sshd_config"
   grep -q '^UsePAM yes' "$ALTROOT/etc/ssh/sshd_config" \
     || die "sshd: UsePAM yes not set on target -- password auth would fail OPEN"
-  log "sshd: PermitRootLogin no, PermitEmptyPasswords no, UsePAM yes (password auth actually enforced)"
+  log "sshd: PermitRootLogin $_prl, PermitEmptyPasswords no, UsePAM yes (password auth actually enforced)"
 fi
 _mkadmin=0
 if [ -n "${SOLNIX_ADMIN_USER:-}" ]; then
