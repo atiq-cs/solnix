@@ -695,7 +695,7 @@ maintainer) are, in priority order:
    register sequence before `DME_LINKSTARTUP` is not in the JEDEC spec and has
    no public BSD crib for this part. `ufshci_mphy_calibrate()` issues the
    standard `PA_*` DME attributes a generic UFS link needs; the vendor pokes are
-   marked `ponytail:` and left as the **calibration knob**. The symptom of a
+   marked `NOTE:` and left as the **calibration knob**. The symptom of a
    wrong/absent MPHY cal is `DME_LINKSTARTUP: no device present (HCS.DP not
    set)`.
 3. **A real block read** — once `HCS.DP` sets, the UTP transfer-request path
