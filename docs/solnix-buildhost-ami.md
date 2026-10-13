@@ -3,25 +3,43 @@
 Maintainer-approved (2026-10-11): one reusable AMI so every build/GPU stream skips
 the ~1h OpenIndiana 2025->2026 pkg-update + toolchain-install tax.
 
-## The AMI (CLEAN, boot-verified -- use THIS one)
-- id: **ami-0aa1f6ac952e3408d**  (solnix-buildhost-x86-clean-20261012, us-east-2,
+## The AMI (COMPLETE: networks AND nix-builds -- use THIS one)
+- id: **ami-0bd0fa73200305fd1**  (solnix-buildhost-x86-COMPLETE-20261013, us-east-2,
   kiwi 830118047484, x86_64/uefi, Project=solnix)
-- snapshot: snap-05ac68deae082b989
-- boot-verified: a FRESH launch gets a DHCP lease (ena0/dhcp ok), SSHes (key
-  solnix-baked, root), has internet, re-runs the lavapipe proofs PASS.
-- baked the RIGHT way (the fix for the broken predecessor): R2 networking-good
-  base -> provision -> SCRUB instance state (devid/nodename/ssh-keys/dhcp/nwam) ->
-  STOP -> image-from-stopped -> boot-verify a fresh launch networks. Recipe +
-  provisioning in scripts/build-mesa-lavapipe-illumos.sh era + the infra report
-  /tmp/solnix-io-buildhost-ami-report.md.
+- boot-verified (2026-10-13, the completeness gate): a FRESH c5.2xlarge launch
+  (1) NETWORKS -- ena0 up inside illumos, SSHes (key solnix-baked, root), internet
+  reaches cache.solnix.io (200); AND (2) NIX-BUILDS A FLAKE -- nix 2.24.15 with
+  flakes, gate proto s7zkx8nx...-illumos-gate-proto in the store, `nix build` of a
+  flake output succeeds (BUILD_RC=0). This is the networking + full-toolchain host
+  every x86 stream actually needs, in one AMI.
+- carries: nix 2.24.15 (/usr/local/bin/nix) + gate proto + from-source gcc-14
+  toolchain + a warm /nix/store with the HEAD solnix installer closures.
+- clean-baked the RIGHT way: start from the ami-0e34 lineage (which DOES carry
+  nix+gate+toolchain), prove it networks AND nix-builds on a fresh launch, then
+  SCRUB instance state (ssh host keys / nodename / dladm+ipadm persistent conf /
+  devid caches / zpool.cache / logs+history) -> export any scratch pool + detach
+  its volume -> STOP -> image-from-STOPPED -> boot-verify a fresh launch networks
+  AND nix-builds. (Built by the streamREBUILD installer-image run, 2026-10-13.)
 
-### DO NOT USE: ami-0e344991f2f44b11d (BROKEN)
-The earlier solnix-buildhost-2026-20261011 was create-image'd from a RUNNING
-MUTATED instance and baked a stale device identity: it boots illumos but ENA
-NEVER attaches -> no network, SSH times out, "Hostname: unknown". Confirmed over
-many launches by 3 independent streams (GPU, aarch64, RISC-V). Deregister it.
-The LESSON: a build-host AMI must be clean-baked (scrub + image a STOPPED
-instance + boot-verify a fresh launch networks) -- never create-image a running one.
+### PARTIAL AMIs -- each is missing half; do NOT reach for them directly
+- **ami-0aa1f6ac952e3408d** (solnix-buildhost-x86-clean-20261012): NETWORKS + has
+  gcc/clang/meson, but it is the **Mesa/lavapipe GPU build host** -- it has NO
+  flake-capable nix (only a pre-flakes nix-2.3.16 tarball at /root), an EMPTY
+  /nix store, and NO gate proto. `nix build .#solnixConfigurations...` CANNOT run
+  on it as-is. (This doc previously listed it as THE build host with "nix 2.24.15
+  + gate proto" -- that was wrong; those are not baked here. Use it for GPU work.)
+- **ami-0e344991f2f44b11d** (solnix-buildhost-2026-20261011): has nix 2.24.15 +
+  gate proto + from-source gcc-14 toolchain, and -- CONTRARY to this doc's earlier
+  "ENA never attaches" claim -- it DID network on a fresh c5.4xlarge launch
+  (2026-10-13): ena0 up, DHCP, internet. The networking defect reported by the
+  GPU/aarch64/RISC-V streams was not reproduced this launch (possibly
+  instance-type or AZ specific). It remains the toolchain source the COMPLETE AMI
+  above was baked from; prefer the COMPLETE AMI, which is boot-verified for BOTH
+  networking and nix-build.
+The LESSON stands: a build-host AMI must be clean-baked (scrub + image a STOPPED
+instance + boot-verify a fresh launch) -- and the verify must prove BOTH networking
+AND a flake nix-build, not just one of them. An AMI that networks but cannot
+nix-build (the GPU host) is as unusable for package work as one that cannot network.
 
 ### Legacy content (toolchain shape -- the clean AMI carries the same tools)
 - base: OpenIndiana Hipster realigned to the 2026 catalog (via pkg update)
@@ -36,10 +54,12 @@ instance + boot-verify a fresh launch networks) -- never create-image a running 
 
 ## Usage (zero provisioning)
     AWS_PROFILE=kiwi aws ec2 run-instances --region us-east-2 \
-      --image-id ami-0aa1f6ac952e3408d --instance-type c5.4xlarge \
+      --image-id ami-0bd0fa73200305fd1 --instance-type c5.4xlarge \
       --key-name solnix-baked --security-group-ids <operator-/24 SG> \
       --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=<stream>-<date>},{Key=Owner,Value=gregburd}]'
-Then: ssh root@<ip> with the baked key -> `nix build` / `gmake` work immediately.
+Then: ssh root@<ip> with the baked key -> `nix build` of a solnix flake works
+immediately (nix 2.24.15 + gate proto baked; set SOLNIX_GATE_PROTO=/nix/store/
+s7zkx8nx5sfxixmyqmlnrybrrh14jkmb-illumos-gate-proto and build --impure).
 
 ## First-use TODO for DRIVER compile gates (not needed for Nix package builds)
 Add an illumos-gate source tree for ILLUMOS_SRC:
@@ -65,15 +85,17 @@ The build-host story has been corrected several times; the honest current state:
   scripts. This is the durable arm64 cross-build substrate (ends the
   lost-to-closed-accounts problem for arm64).
 
-### x86_64 flake-nix build host -- IN PROGRESS (being clean-baked)
-- NEITHER prior x86 AMI is complete: ami-0e344991f2f44b11d has nix 2.24.15 + gate
-  proto + toolchain but does NOT network; ami-0aa1f6ac952e3408d
-  (solnix-buildhost-x86-clean-20261012) networks but is the Mesa/GPU host (only
-  pre-flakes nix-2.3, empty store, no gate proto). A COMPLETE x86 build-host AMI
-  (networks AND flake-`nix build` AND gate proto) is being clean-baked by the
-  installer-rebuild work (combine the networking base + the baked toolchain store).
-  Until it is boot-verified BOTH ways on a FRESH launch, treat x86 substrate as
-  not-yet-solved; use the combine-recipe in the meantime.
+### x86_64 flake-nix build host -- DONE (clean-baked + boot-verified 2026-10-13)
+- **ami-0bd0fa73200305fd1** (solnix-buildhost-x86-COMPLETE-20261013) is the
+  complete x86 build host: a FRESH launch is boot-verified to BOTH network (ena0
+  up, internet) AND flake-`nix build` (nix 2.24.15 + gate proto s7zkx8nx in store,
+  BUILD_RC=0). See "The AMI" at the top. Use this; do not reach for either partial.
+- Why neither prior x86 AMI was complete: ami-0e344991f2f44b11d has nix 2.24.15 +
+  gate proto + toolchain (and DID network on a fresh c5.4xlarge launch 2026-10-13,
+  contrary to the old "never networks" claim), it is the lineage the COMPLETE AMI
+  was baked from; ami-0aa1f6ac952e3408d (solnix-buildhost-x86-clean-20261012)
+  networks but is the Mesa/GPU host (only pre-flakes nix-2.3, empty store, no gate
+  proto -- cannot nix-build solnix flakes).
 
 RULE (learned the hard way, 3x): a build-host AMI is only "done" when a FRESH
 launch is boot-verified to BOTH network AND build (nix/bldenv) -- never trust a
