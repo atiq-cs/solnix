@@ -131,6 +131,20 @@ in
     live.nano
     live.rsync
     live.smartmontools
+    # The maintainer-required interactive CLI set (curl above; vi/nano editors).
+    # All real from-source derivations in pkgs.solnix (base-src.nix), so they
+    # close in the media's from-source store like everything else here. Each
+    # ships its own man page under share/man (worldMan carries the base pages),
+    # so `man wget`, `man tree`, `man top`, `man htop`, `man less`, `man vi` work
+    # through the system MANPATH. (BSD fetch is NOT yet packaged -- curl + wget
+    # cover the fetch-a-file need; nvi is deferred -- see the report in /tmp. The
+    # gate's POSIX vi (live.vi) is the shipped vi.)
+    live.vi
+    live.top
+    live.htop
+    live.less
+    live.tree
+    live.wget
     # The build toolchain, so the booted installer/system can rebuild solnix
     # packages on the image (the "build host in the image" capability): gcc
     # 14.3.0 + gas (binutils) + GNU make + pkg-config, all real from-source

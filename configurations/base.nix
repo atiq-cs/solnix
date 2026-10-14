@@ -31,7 +31,18 @@
   # vi/ex/view (the gate's POSIX vi), less, htop and top (= htop): the interactive
   # basics a NixOS base has on PATH. A compiler is NOT here (NixOS's base has
   # none); pkgs.solnix.solnix-dev provides one on demand.
-  environment.systemPackages = with pkgs.solnix; [ openssh bash vi less htop top ];
+  #
+  # The maintainer-required CLI set on every shipped system (incl. the public
+  # AMI, which imports this via cloud-ec2.nix): curl + wget (file transfer),
+  # tree, nano, and the vi/less/htop/top above. Each is a real from-source
+  # pkgs.solnix derivation and ships its own man page under share/man, so with
+  # documentation.man.enable (default true) `man curl`, `man wget`, `man tree`,
+  # `man nano`, `man vi`, ... all work. (BSD fetch is not yet packaged -- curl +
+  # wget cover it; nvi is deferred -- see /tmp report.)
+  environment.systemPackages = with pkgs.solnix; [
+    openssh bash vi less htop top
+    nixChain.curl wget tree nano
+  ];
 
   # /etc/system is generated, NixOS-style: this is its only source, so each
   # tunable is set exactly once. The emulated i8254 PIT is unreliable under some

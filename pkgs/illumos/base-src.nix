@@ -556,6 +556,58 @@ rec {
     '';
   };
 
+  # tree: the directory lister the maintainer's required set names. Plain
+  # make (no autotools). illumos declares `struct comment` in a system header
+  # pulled in via tree's includes; tree.h defines its own `struct comment` ->
+  # redefinition error, so rename tree's struct throughout (packages.nix' fix).
+  # Installs its own man page at share/man/man1/tree.1 (MANDIR), so `man tree`
+  # works through the system MANPATH. 64-bit build; __EXTENSIONS__ for strcasecmp.
+  tree = mkSrcPkg {
+    pname = "tree"; version = "2.1.3";
+    src = { url = "https://gitlab.com/OldManProgrammer/unix-tree/-/archive/2.1.3/unix-tree-2.1.3.tar.gz";
+            sha256 = "f554a1b62233b96fa8eaa2d85e91bc62cad80ee441fd591380f16cdfbe3e8868"; };
+    deps = [ needWorld ];
+    build = ''
+      for f in *.c *.h; do
+        [ -f "$f" ] || continue
+        sed -i 's/struct comment/struct tree_comment/g' "$f"
+      done
+      gmake -j4 CC="$CC" CFLAGS="-D__EXTENSIONS__ -O2 -m64" MANDIR="$out/share/man" PREFIX="$out"
+      gmake install PREFIX="$out" MANDIR="$out/share/man"
+      "$out/bin/tree" --version | grep -q '^tree v2.1.3' || { echo "FATAL: tree --version" >&2; exit 1; }
+      [ -f "$out/share/man/man1/tree.1" ] || { echo "FATAL: tree ships no man page" >&2; exit 1; }
+    '';
+  };
+
+  # wget: the maintainer's required file-transfer tool (alongside curl). GNU
+  # autotools; TLS via the from-source openssl, gzip via zlib. No libpsl / pcre2
+  # here (not in base-src), so --without-libpsl and no PCRE URL filtering; neither
+  # is needed for `wget <url>`. gnulibFix for the getlocalename_l clash,
+  # illumosExt for strcasecmp/_XOPEN_SOURCE. Installs share/man/man1/wget.1, so
+  # `man wget` works through the system MANPATH.
+  wget = mkSrcPkg {
+    pname = "wget"; version = "1.24.5";
+    src = { url = "https://mirrors.kernel.org/gnu/wget/wget-1.24.5.tar.gz";
+            sha256 = "fa2dc35bab5184ecbc46a9ef83def2aaaa3f4c9f3c97d4bd19dcb07d4da637de"; };
+    deps = [ needWorld zlib openssl ];
+    build = ''
+      for f in $(find . \( -name 'localename*.[ch]' -o -name 'getlocalename_l*.[ch]' -o -name 'setlocale_null*.c' \)); do
+        sed -i 's/extern char \* *getlocalename_l/extern const char *getlocalename_l/;s/^char \* *getlocalename_l/const char *getlocalename_l/' "$f"
+      done
+      CFLAGS="''${CFLAGS:-} -D__EXTENSIONS__ -D_XOPEN_SOURCE=600 -D_XOPEN_SOURCE_EXTENDED=1" \
+      CPPFLAGS="''${CPPFLAGS:-} -D__EXTENSIONS__ -D_XOPEN_SOURCE=600 -I${openssl}/include" \
+      LDFLAGS="''${LDFLAGS:-} -L${openssl}/lib/amd64 -R${openssl}/lib/amd64 -L${zlib}/lib/amd64 -R${zlib}/lib/amd64" \
+        ./configure --prefix="$out" --with-ssl=openssl --with-libssl-prefix=${openssl} \
+          --with-zlib --disable-nls --without-libpsl --disable-pcre --disable-pcre2
+      gmake -j4
+      gmake install
+      ${dropDocs}
+      "$out/bin/wget" --version | grep -q '^GNU Wget 1.24.5' || { echo "FATAL: wget --version" >&2; exit 1; }
+      [ -f "$out/share/man/man1/wget.1" ] || { echo "FATAL: wget ships no man page" >&2; exit 1; }
+      /usr/bin/elfdump -d "$out/bin/wget" | grep -q 'NEEDED.*libssl' || { echo "FATAL: wget not linked to openssl" >&2; /usr/bin/elfdump -d "$out/bin/wget" | grep NEEDED >&2; exit 1; }
+    '';
+  };
+
   # GNU libiconv, for gettext. The world's iconv(3) modules are the gate proto's
   # usr/lib/iconv, which has no amd64/ directory and no UTF-8%UTF-16 or
   # UTF-8%8859-1 converters, so a 64-bit msgfmt cannot read a UTF-8 .po file
