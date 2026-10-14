@@ -105,8 +105,18 @@ in
   config = mkIf cfg.enable {
     system.build.solnixChannel = channelSrc;
 
+    # The `solnix` indirect flake ref: `nix ... solnix#<name>` resolves to the
+    # install-root flake (pkgs.solnix.<name>) served from git.solnix.io over
+    # anonymous-read HTTPS. The install root is solnix.git (it composes the full
+    # pkgs.solnix.* world; solnix-pkgs.git is only its bootstrap-overlay input).
+    # ref tracks the SUPPORTED EDITION so `solnix#tmux` gives the edition's build;
+    # it follows solnix.release (26.11, ...) and falls to the rolling `unstable`
+    # branch only for an unstable system. Infra ships the mirror + the edition
+    # branches on git.solnix.io (/tmp/to-solnix-builder/...install-root...reply).
     nix.registry.solnix.to = lib.mkDefault {
-      type = "git"; url = "https://codeberg.org/gregburd/solnix.git";
+      type = "git";
+      url = "https://git.solnix.io/solnix.git";
+      ref = if config.solnix.release == "unstable" then "unstable" else config.solnix.release;
     };
 
     # NixOS: environment.sessionVariables.NIX_PATH = nix.nixPath, plus the
