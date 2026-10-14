@@ -75,7 +75,15 @@ cat > "$ISOROOT/boot/loader.conf" <<EOF
 loader_logo="illumos"
 loader_brand="solnix"
 loader_menu_title="Welcome to solnix"
-console="${SOLNIX_CONSOLE:-text}"
+# console: text PRIMARY (keyboard input stays on the framebuffer -- the X1 Carbon
+# Gen1 keyboard needed `text`, hardware-proven) with ttya as a MIRROR so a boot that
+# dies on the Iris Xe GOP framebuffer console (X1 Extreme Gen5, see
+# docs/hardware/x1-gen5-install/x1-gen5-boot-crash-analysis.md) still prints the
+# kernel's last line / panic to serial. Serial mirror is free on working hardware;
+# on the X1E it turns a silent freeze into a captured fault. Override with
+# SOLNIX_CONSOLE=text for the old pure-framebuffer behaviour, or =ttya for a
+# serial-only diagnostic boot (Test B in the crash analysis).
+console="${SOLNIX_CONSOLE:-text,ttya}"
 # os_console pins the KERNEL console. PROVEN ON REAL HARDWARE: the X1 Carbon
 # had a dead keyboard until BOTH `set console=text` AND `set os_console=text`
 # were given at the loader prompt. multiboot2.c:468 reads os_console via
@@ -83,7 +91,8 @@ console="${SOLNIX_CONSOLE:-text}"
 # so on this machine the kernel console was never pinned to the framebuffer:
 # output fell back to the screen while input stayed on a nonexistent ttya.
 # This one line is the only keyboard change with hardware evidence behind it.
-os_console="${SOLNIX_CONSOLE:-text}"
+# text PRIMARY + ttya MIRROR for the same X1E GOP-capture reason as console= above.
+os_console="${SOLNIX_CONSOLE:-text,ttya}"
 # Console font. MEASURED on the X1 (3840x2160 EDID): with no /boot/fonts the loader
 # falls back to its builtin 8x16 font (478x134 cells, unreadable). With the gate
 # fonts present, autoload_font() (efi/loader/main.c) loads /boot/fonts/fonts.dir and
@@ -111,8 +120,8 @@ EOF
 # half of why the X1 keyboard was dead in image j. Reconcile, then gate.
 _cd="$ISOROOT/boot/conf.d/console"
 if [ -f "$_cd" ]; then
-  sed -e "s/^console=.*/console=\"${SOLNIX_CONSOLE:-text}\"/" \
-      -e "s/^os_console=.*/os_console=\"${SOLNIX_CONSOLE:-text}\"/" \
+  sed -e "s/^console=.*/console=\"${SOLNIX_CONSOLE:-text,ttya}\"/" \
+      -e "s/^os_console=.*/os_console=\"${SOLNIX_CONSOLE:-text,ttya}\"/" \
       "$_cd" > "$_cd.new" && mv "$_cd.new" "$_cd"
   echo "  conf.d/console reconciled to ${SOLNIX_CONSOLE:-text}" >&2
 fi

@@ -129,14 +129,17 @@ nix-env --store "local?root=$RD" -p "$RD/nix/var/nix/profiles/system" --set "$TO
 # ---------------------------------------------------------------------------
 mkdir -p "$RD/boot/solaris" "$RD/etc"
 cat > "$RD/boot/solaris/bootenv.rc" <<EOF
-setprop console text
-setprop os_console text
+setprop console text,ttya
+setprop os_console text,ttya
 setprop ttya-mode 115200,8,n,1,-
 EOF
-printf 'console="text"\nos_console="text"\n' > "$RD/boot/loader.conf"
+# text PRIMARY (keyboard stays on the framebuffer) + ttya MIRROR so a boot that
+# dies on the X1 Extreme Gen5 Iris Xe GOP framebuffer console still prints the
+# kernel's last line to serial (docs/hardware/x1-gen5-install/x1-gen5-boot-crash-analysis.md).
+printf 'console="text,ttya"\nos_console="text,ttya"\n' > "$RD/boot/loader.conf"
 : > "$RD/etc/path_to_inst"   # the media boots on unknown hardware: probe everything
 log "install-be (SOLNIX_LIVE=1)"
-SOLNIX_ROOT="$RD" SOLNIX_STORE_ROOT="$RD" SOLNIX_POOL="$POOL_NAME" SOLNIX_BE=live SOLNIX_CONSOLE=text SOLNIX_LIVE=1 \
+SOLNIX_ROOT="$RD" SOLNIX_STORE_ROOT="$RD" SOLNIX_POOL="$POOL_NAME" SOLNIX_BE=live SOLNIX_CONSOLE=text,ttya SOLNIX_LIVE=1 \
   /sbin/sh "$RD$TOP/bin/install-be" "$TOP" >&2 || die "install-be failed"
 grep -q 'zfs mount -O' "$RD/etc/inittab" && die "live root got a stage-2 zfs mount line (SOLNIX_LIVE ignored)"
 # install-be builds an installed BE's boot_archive; the live root is itself the
