@@ -133,9 +133,9 @@ setprop console text,ttya
 setprop os_console text,ttya
 setprop ttya-mode 115200,8,n,1,-
 EOF
-# text PRIMARY (keyboard stays on the framebuffer) + ttya MIRROR so a boot that
-# dies on the X1 Extreme Gen5 Iris Xe GOP framebuffer console still prints the
-# kernel's last line to serial (docs/hardware/x1-gen5-install/x1-gen5-boot-crash-analysis.md).
+# The loader mirrors to both consoles; the kernel uses only the first name (text).
+# ttya is the legacy 0x3f8 UART, absent on laptops like the X1 Extreme Gen5, so
+# there it reaches nothing (see make-iso-usb.sh console= for the source reasoning).
 printf 'console="text,ttya"\nos_console="text,ttya"\n' > "$RD/boot/loader.conf"
 : > "$RD/etc/path_to_inst"   # the media boots on unknown hardware: probe everything
 log "install-be (SOLNIX_LIVE=1)"

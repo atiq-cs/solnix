@@ -75,14 +75,14 @@ cat > "$ISOROOT/boot/loader.conf" <<EOF
 loader_logo="illumos"
 loader_brand="solnix"
 loader_menu_title="Welcome to solnix"
-# console: text PRIMARY (keyboard input stays on the framebuffer -- the X1 Carbon
-# Gen1 keyboard needed `text`, hardware-proven) with ttya as a MIRROR so a boot that
-# dies on the Iris Xe GOP framebuffer console (X1 Extreme Gen5, see
-# docs/hardware/x1-gen5-install/x1-gen5-boot-crash-analysis.md) still prints the
-# kernel's last line / panic to serial. Serial mirror is free on working hardware;
-# on the X1E it turns a silent freeze into a captured fault. Override with
-# SOLNIX_CONSOLE=text for the old pure-framebuffer behaviour, or =ttya for a
-# serial-only diagnostic boot (Test B in the crash analysis).
+# console: the LOADER mirrors to every console in this list, so text,ttya puts the
+# loader menu on the panel and on COM1. The KERNEL is different: boot_console.c
+# lookup_console_device() stops at the first ',' so its console is the first name
+# only (text), and the kernel mirrors to a second device only via diag-device.
+# ttya is the legacy I/O-port UART at 0x3f8; laptops without a COM port (the X1
+# Extreme Gen5) have no ttya, so this mirror reaches nothing there. Capture on such
+# machines comes from the network + a crash dump on the media, not serial.
+# SOLNIX_CONSOLE overrides (=text pure framebuffer, =ttya serial-only boot).
 console="${SOLNIX_CONSOLE:-text,ttya}"
 # os_console pins the KERNEL console. PROVEN ON REAL HARDWARE: the X1 Carbon
 # had a dead keyboard until BOTH `set console=text` AND `set os_console=text`
@@ -91,7 +91,8 @@ console="${SOLNIX_CONSOLE:-text,ttya}"
 # so on this machine the kernel console was never pinned to the framebuffer:
 # output fell back to the screen while input stayed on a nonexistent ttya.
 # This one line is the only keyboard change with hardware evidence behind it.
-# text PRIMARY + ttya MIRROR for the same X1E GOP-capture reason as console= above.
+# The kernel reads only the first name here (see console= above), so this is
+# effectively os_console=text with the ttya suffix ignored.
 os_console="${SOLNIX_CONSOLE:-text,ttya}"
 # Console font. MEASURED on the X1 (3840x2160 EDID): with no /boot/fonts the loader
 # falls back to its builtin 8x16 font (478x134 cells, unreadable). With the gate

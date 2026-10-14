@@ -80,6 +80,10 @@ in
 
   networking.hostName = "solnix-installer";
 
+  # The edition this media ships (same pin as cloud-ec2.nix); without it the
+  # release label falls back to "unstable" and /etc/release misreports the image.
+  solnix.release = "26.11";
+
   # This image ships solnix-dev-full (gcc + binutils + make + pkgconf): the "build
   # host in the image" role. Declaring buildCapable exempts the compiler + its
   # gate-proto sysroot from the toplevel's disallowed-runtime-refs gate (they are
