@@ -197,3 +197,16 @@ docs/registry/*-manifest.tsv
 
 # nvidia-oss RM source (107M generated GSP-as-C) is a pinned FOD, not vendored -- see src-FETCH.md
 src/drm-port/nvidia-oss/src/
+
+# Purged from history (Codeberg quota): regenerated audit output + binaries that
+# churned to hundreds of MB. The two LOAD-BEARING tables stay tracked (force-added):
+# arch-manifest.tsv (cached.nix) + real-derivations.tsv (starter.nix). The rest of
+# docs/registry/*.tsv is audit output nothing evaluates -- keep untracked.
+# (*-manifest.tsv and unix-k*.Image are already ignored above.)
+docs/registry/cached-paths.tsv
+docs/registry/build-ledger.tsv
+docs/registry/hipster-packages.tsv
+docs/registry/real-derivations-224.tsv
+src/drm-port/nvidia-oss/nouveau/*.ods
+installer/screenshot-*.png
+docs/hardware/x1-gen5-install/*.png
