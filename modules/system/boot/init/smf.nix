@@ -191,6 +191,20 @@ let
           '';
         };
 
+        # SMF <dependent>: make another service (typically a milestone) depend
+        # on this one, so svc.startd starts this service whenever that milestone
+        # is the target -- e.g. in `boot -s`, where only single-user's subgraph
+        # runs (startd graph.c should_be_in_subgraph).
+        dependents = mkOption {
+          type = types.listOf types.str;
+          default = [ ];
+          example = [ "svc:/milestone/single-user" ];
+          description = ''
+            FMRIs that get an optional_all dependency on this service
+            (SMF <dependent>, restart_on none), one group per FMRI.
+          '';
+        };
+
         # --- application config ---------------------------------------------
         properties = mkOption {
           type = types.attrsOf (types.attrsOf types.str);

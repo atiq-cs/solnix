@@ -109,6 +109,40 @@ in
   sshdStartMethod = smf.mkMethod "sshd" sshd "start" sshd.start;
   oneshotStartMethod = smf.mkMethod "cleantmp" oneshot "start" oneshot.start;
 
+  # <dependent>: an agent that a milestone (single-user) must optionally depend
+  # on, so it starts under `boot -s`. The DTD orders dependency* before
+  # dependent* before exec_method*; checked by string position. Fails eval if
+  # the element is missing or out of order.
+  _dependentCheck =
+    let
+      agentDep = oneshot // {
+        category = "site";
+        description = "agent";
+        allDependencies = sshd.allDependencies;
+        dependents = [ "svc:/milestone/single-user" ];
+      };
+      xml = (smf.mkManifest "agent" agentDep).content;
+      # first index of a literal substring (no regex), or throw.
+      pos = needle:
+        let
+          n = builtins.stringLength needle;
+          L = builtins.stringLength xml;
+          go = i: if i + n > L then throw "dependent test: '${needle}' missing"
+                  else if builtins.substring i n xml == needle then i else go (i + 1);
+        in go 0;
+      dep = pos "<dependency ";
+      dnt = pos "<dependent name='agent-dep0' grouping='optional_all' restart_on='none'>";
+      fmri = pos "<service_fmri value='svc:/milestone/single-user'/>";
+      ex = pos "<exec_method ";
+    in
+    if dep < dnt && dnt < fmri && fmri < ex then "dependent-ok"
+    else throw "dependent test: element order wrong";
+
+  # no dependents -> no <dependent> element (existing manifests unchanged)
+  _noDependentCheck =
+    if builtins.match ".*<dependent .*" (smf.mkManifest "sshd" sshd).content == null
+    then "no-dependent-ok" else throw "sshd manifest unexpectedly has a <dependent>";
+
   # escaping self-check as a Nix assert (fails eval if xmlEscape regresses):
   #   "a & <b> 'c' \"d\"" -> "a &amp; &lt;b&gt; &apos;c&apos; &quot;d&quot;"
   _escCheck =

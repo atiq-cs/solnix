@@ -219,6 +219,8 @@ etc_copy() {
     # read by the kernel (usba_devdb.c kobj_open_file) when USB hubs attach,
     # which can precede the /nix mount -- same reason as system.d.
     usb/config_map.conf) return 0 ;;
+    # boot -a alternate system files are assembled from these below.
+    system.alt/*) return 0 ;;
     # `coreadm -U` imports it into SMF and renames it to coreadm.conf.old.
     coreadm.conf) return 0 ;;
     # dumpadm(8) rewrites /etc/dumpadm.conf (and svc:/system/dumpadm reads it).
@@ -484,6 +486,19 @@ if [ -d etc/system.d ]; then
   done
   if [ -s etc/system.d/.self-assembly.new ]; then mv etc/system.d/.self-assembly.new etc/system.d/.self-assembly
   else rm -f etc/system.d/.self-assembly.new etc/system.d/.self-assembly; fi
+fi
+# Alternate system files for `boot -a` ("Name of system file"). Naming one replaces
+# BOTH /etc/system and the self-assembly (modctl.c mod_askparams), so each is the
+# full normal configuration plus its extra lines: etc/system.alt/<name>.extra ->
+# etc/system.alt/<name>. Real files: the kernel opens them before /nix is reachable.
+if [ -d etc/system.alt ]; then
+  for _x in etc/system.alt/*.extra; do
+    [ -e "$_x" ] || continue
+    _alt=${_x%.extra}
+    { cat etc/system 2>/dev/null; cat etc/system.d/.self-assembly 2>/dev/null
+      echo "* --- $(basename "$_alt") (boot -a alternate) ---"; cat "$_x"; } > "$_alt.new" \
+      && rm -f "$_alt" && mv "$_alt.new" "$_alt" || die "assembling $_alt"
+  done
 fi
 
 # 8. console + boot archive.

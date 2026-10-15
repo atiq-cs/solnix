@@ -6,7 +6,7 @@
 #
 # Three capture channels, independent so one failing does not blind the others:
 #   1. LOG ON THE STICK: /var/x1ediag/<bootid>/ on p3. A heartbeat line every
-#      $SOLNIX_X1EDIAG_PERIOD s (default 10), fsync'd, plus copies of
+#      $SOLNIX_X1EDIAG_PERIOD s (default 1), fsync'd, plus copies of
 #      /var/adm/messages and fmdump -e. Survives the reboot; the last heartbeat
 #      bounds the time of death and the pattern (steady vs degrading) separates a
 #      hang from an instant reset.
@@ -20,10 +20,9 @@
 #
 # Knobs (bisect without a new image): boot property / loader variable
 #   solnix-x1ediag-knobs = comma list of: nodeepc nodeadman nocpupm nohalt
-#     nodeepc   -> needs idle_cpu_no_deep_c=1 at BOOT (mp_machdep.c reads it in
-#                  startup); set at the loader prompt: set idle_cpu_no_deep_c=1
-#                  is NOT a loader variable, so the menu entry boots with the
-#                  system.d fragment solnix-x1ediag-nodeepc enabled instead.
+#     nodeepc   -> CPU deep C-states off at runtime (pmconfig cpu_deep_idle
+#                  disable). Boot-time equivalent: boot -a, then name
+#                  /etc/system.alt/nodeepc at the "Name of system file" prompt.
 #     nodeadman -> zfs_deadman_enabled=0 at runtime (spa_misc.c:609 checks it per run)
 #     nocpupm   -> cpupm disable via pmconfig (power.conf)
 #     nohalt    -> halt_on_panic=0 at runtime (auto-reboot on panic, the default)
@@ -31,7 +30,7 @@
 # (the MilkV lixr on the maintainer's LAN; floki's firewall only admits ssh).
 set -u
 PATH=/usr/sbin:/usr/bin:/sbin:/run/current-system/sw/bin; export PATH
-PERIOD=${SOLNIX_X1EDIAG_PERIOD:-10}
+PERIOD=${SOLNIX_X1EDIAG_PERIOD:-1}
 MNT=/var/x1ediag
 POOL=x1ediag
 CAP_MB=${SOLNIX_X1EDIAG_CAP_MB:-1024}
@@ -127,14 +126,21 @@ apply_knob() {
                  sed 's/^cpupm.*/cpupm disable/' /etc/power.conf > /tmp/power.conf.x1e && cp /tmp/power.conf.x1e /etc/power.conf
                fi
                pmconfig >/dev/null 2>&1; log "knob nocpupm applied" ;;
-    nodeepc)   log "knob nodeepc: boot-time only (idle_cpu_no_deep_c); active=$(echo idle_cpu_no_deep_c/D | mdb -k 2>/dev/null | awk 'NR==2{print $2}')" ;;
+    nodeepc)   # runtime: power.conf cpu_deep_idle disable -> PM_DISABLE_CPU_DEEP_IDLE
+               # (cmd/power handlers.c cpuidle) -> cpu_idle.c cpu_deep_idle_callb
+               # switches the global idle_cpu to the non-deep loop. Boot-time
+               # equivalent: boot -a /etc/system.alt/nodeepc.
+               printf 'cpu_deep_idle disable\n' > /tmp/power.conf.nodeepc
+               pmconfig -f /tmp/power.conf.nodeepc >>"$LOG" 2>&1 && log "knob nodeepc applied (cpu_deep_idle disable)" \
+                 || log "knob nodeepc: pmconfig failed" ;;
     "") : ;;
     *) log "unknown knob '$1'" ;;
   esac
 }
 for _k in $(echo "$KNOBS" | tr ',' ' '); do apply_knob "$_k"; done
 mdbval() { echo "$1/D" | mdb -k 2>/dev/null | awk 'NR==2{print $2}'; }
-KNOBLINE="knobs=${KNOBS:-none} halt_on_panic=$(mdbval halt_on_panic) deepc_off=$(mdbval idle_cpu_no_deep_c) deadman=$(mdbval zfs_deadman_enabled)"
+IDLEFN=$(echo 'idle_cpu/p' | mdb -k 2>/dev/null | awk 'NR==2{print $2}')
+KNOBLINE="knobs=${KNOBS:-none} halt_on_panic=$(mdbval halt_on_panic) no_deep_c=$(mdbval idle_cpu_no_deep_c) prefer_mwait=$(mdbval idle_cpu_prefer_mwait) deadman=$(mdbval zfs_deadman_enabled) idle_cpu=$IDLEFN"
 log "$KNOBLINE"
 
 # --- 2. receiver -------------------------------------------------------------
@@ -162,8 +168,8 @@ flush() {
 
 # --- 3. payoff: the previous boot's evidence goes first -----------------------
 if [ -n "$PREV" ] && [ -d "$MNT/$PREV" ]; then
-  { echo "=== previous boot $PREV: last 60 heartbeats ==="
-    tail -60 "$MNT/$PREV/heartbeat.log" 2>/dev/null
+  { echo "=== previous boot $PREV: last 300 heartbeats (1/s) ==="
+    tail -300 "$MNT/$PREV/heartbeat.log" 2>/dev/null
     echo; echo "=== previous boot $PREV: messages tail ==="
     tail -200 "$MNT/$PREV/messages" 2>/dev/null
     echo; echo "=== previous boot $PREV: fmdump -e tail ==="
@@ -197,7 +203,7 @@ inv() { echo "### $*"; run_to 30 "$@" 2>&1; echo; }
   inv fmdump -eV
   inv zpool status
   inv eeprom
-  inv sh -c 'for f in /etc/system /etc/system.d/*; do echo "--- $f"; cat "$f"; done'
+  inv sh -c 'for f in /etc/system /etc/system.d/* /etc/system.d/.self-assembly /etc/system.alt/*; do echo "--- $f"; cat "$f"; done'
   inv cat /etc/power.conf
   inv cat /etc/usb/config_map.conf
   inv sh -c 'dtrace -qn "sdt:::tz-temp { printf(\"zone=%s tmp=%d crt=%d hot=%d (tenths of K)\n\", stringof(arg3), arg0, arg1, arg2); }" -c "sleep 25"'
@@ -222,10 +228,17 @@ while :; do
   _free=$(kstat -p unix:0:system_pages:freemem 2>/dev/null | awk '{printf "%d", $2*4/1024}')
   _lbolt=$(kstat -p unix:0:system_misc:lbolt 2>/dev/null | awk '{print $2}')
   _zp=$(zpool status -x 2>/dev/null | head -1)
-  _line="$(date -u +%Y-%m-%dT%H:%M:%SZ) up=$(uptime | sed 's/.*up *//;s/,  *[0-9]* user.*//') lbolt=$_lbolt load=$(uptime | sed 's/.*average: *//') freeMB=$_free arcMB=$_arc zpool='$_zp' $KNOBLINE"
+  # current_cstate per CPU (cpu_info kstat) as a histogram, e.g. "C1:4 C3:16"
+  _cst=$(kstat -p cpu_info:::current_cstate 2>/dev/null | awk '{c[$2]++} END {for (k in c) printf "C%s:%d ", k, c[k]}')
+  _line="$(date -u +%Y-%m-%dT%H:%M:%SZ) up=$(uptime | sed 's/.*up *//;s/,  *[0-9]* user.*//') lbolt=$_lbolt load=$(uptime | sed 's/.*average: *//') freeMB=$_free arcMB=$_arc cstate=[${_cst% }] zpool='$_zp' $KNOBLINE"
   echo "$_line" >> "$HB"
   sync
-  echo "$_line" > "$DIR/hb.cur"; post hb "$DIR/hb.cur"
+  # LAN: one batched upload of the last 10 heartbeats every 10 ticks, so the
+  # 1 s stick log does not become 1 POST/s (the stick copy is the authoritative one).
+  echo "$_line" >> "$DIR/hb.batch"
+  _tick=$((_tick + 1))
+  [ $((_tick % 10)) -ne 0 ] && { sleep "$PERIOD"; continue; }
+  mv "$DIR/hb.batch" "$DIR/hb.cur" 2>/dev/null && post hb "$DIR/hb.cur"
   # message + FMA deltas
   if [ -r /var/adm/messages ]; then
     _sz=$(wc -c < /var/adm/messages)
@@ -235,8 +248,7 @@ while :; do
       _msgoff=$_sz
     fi
   fi
-  _tick=$((_tick + 1))
-  if [ $((_tick % 6)) -eq 0 ]; then
+  if [ $((_tick % 60)) -eq 0 ]; then
     run_to 20 fmdump -e > "$DIR/fmdump-e.txt" 2>&1
     _fsz=$(wc -c < "$DIR/fmdump-e.txt")
     [ "$_fsz" -ne "$_fmoff" ] && { post fma "$DIR/fmdump-e.txt"; _fmoff=$_fsz; }

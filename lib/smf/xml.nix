@@ -106,6 +106,17 @@ let
               props)}
           </property_group>'';
 
+      # SMF <dependent>: one optional_all group per target FMRI. The group name
+      # must be unique within the target, so it is derived from this service.
+      renderDependent = i: f: ''
+      <dependent name='${esc name}-dep${toString i}' grouping='optional_all' restart_on='none'>
+            <service_fmri value='${esc f}'/>
+          </dependent>'';
+      depList = svc.dependents or [ ];
+      dependentsXml = concatStringsSep "" (builtins.genList
+        (i: "\n          " + renderDependent i (builtins.elemAt depList i))
+        (builtins.length depList));
+
       deps = svc.allDependencies or svc.dependencies;
     in
     writeText "${name}.xml" ''
@@ -114,7 +125,7 @@ let
       <service_bundle type='manifest' name='solnix:${esc name}'>
         <service name='${esc svc.category}/${esc name}' type='service' version='1'>
           <single_instance/>${
-            concatStringsSep "" (map (d: "\n          " + renderDep d) deps)}
+            concatStringsSep "" (map (d: "\n          " + renderDep d) deps)}${dependentsXml}
           ${renderMethod "start" startExec svc.start.timeoutSeconds}
           ${renderMethod "stop" stopExec svc.stop.timeoutSeconds}${
             optionalString (svc.refresh != null)
