@@ -138,7 +138,7 @@ driver name=upf perms="* 0666 root sys" clone_perms="upf 0666 root sys" alias=us
 driver name=ural perms="* 0666 root sys" clone_perms="ural 0666 root sys" alias=usb411,67 alias=usb1044,8007 alias=usb13b1,d alias=usb2001,3c00
 driver name=urf perms="* 0666 root sys" clone_perms="urf 0666 root sys" alias=usb411,12 alias=usb586,401a alias=usb7b8,401a alias=usbbda,8150 alias=usb1557,8150 alias=usb3980,3
 driver name=urtw perms="* 0666 root sys" clone_perms="urtw 0666 root sys" alias=usb50d,705e alias=usb769,11f2 alias=usb789,10c alias=usb846,4260 alias=usb846,6a00 alias=usbbda,8187 alias=usbbda,8189 alias=usbbda,8197 alias=usbbda,8198 alias=usbdf6,28 alias=usb114b,150 alias=usb1371,9401
-driver name=usbecm perms="* 0666 root sys" alias=usb430,a4a2 alias=usb,class2.6.0 alias=usbia,class2.6 alias=usbif,class2.6
+driver name=usbecm perms="* 0666 root sys" alias=usb430,a4a2 alias=usbbda,8153.2 alias=usb,class2.6.0 alias=usbia,class2.6 alias=usbif,class2.6
 driver name=vioif perms="* 0666 root sys" alias=pci1af4,1 alias=pci1af4,1000,p alias=pci1af4,1041,p
 driver name=vmxnet3s perms="* 0666 root sys" clone_perms="vmxnet3s 0666 root sys" alias=pci15ad,7b0
 driver name=vr perms="* 0666 root sys" alias=pci1106,3043 alias=pci1106,3053 alias=pci1106,3065 alias=pci1106,3106

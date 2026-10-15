@@ -12,3 +12,15 @@ transforms/defaults defaults (root, bin, 0644/0755). install-be applies it to th
 stock /etc and /var it lays into a BE, as pkg(5) would: the store keeps no owners,
 and daemons that drop privilege (dlmgmtd as dladm, ipmgmtd as netadm) cannot write
 their state into a root-owned tree.
+
+Local additions to gate-drivers.txt (not in the gate manifests; regenerate with
+`python3 gen.py`, which reproduces the committed files byte for byte):
+  usbecm alias=usbbda,8153.2  Realtek RTL8153 USB gigabit adapters in their
+      standard CDC-ECM configuration (config value 2). That configuration splits
+      control and data across two interfaces with no interface association, so
+      usbecm must own the whole device: bound per interface, usb_set_alt_if on
+      the data interface returns USB_INVALID_PERM (usbai_util.c). The ".2" suffix
+      is the usbVID,PID.configCN compatible name (usba.c), so config 1 (vendor,
+      Linux r8152 only) never matches. Same whole-device binding as the Sun SP
+      alias usb430,a4a2. Pairs with /etc/usb/config_map.conf (configurations/
+      base.nix), which makes illumos select config 2.
