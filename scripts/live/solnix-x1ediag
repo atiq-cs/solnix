@@ -27,7 +27,8 @@
 #     nodeadman -> zfs_deadman_enabled=0 at runtime (spa_misc.c:609 checks it per run)
 #     nocpupm   -> cpupm disable via pmconfig (power.conf)
 #     nohalt    -> halt_on_panic=0 at runtime (auto-reboot on panic, the default)
-# Receiver: boot property solnix-x1ediag-url, default http://192.168.1.151:8099
+# Receiver: boot property solnix-x1ediag-url, default http://192.168.1.179:8099
+# (the MilkV lixr on the maintainer's LAN; floki's firewall only admits ssh).
 set -u
 PATH=/usr/sbin:/usr/bin:/sbin:/run/current-system/sw/bin; export PATH
 PERIOD=${SOLNIX_X1EDIAG_PERIOD:-10}
@@ -137,7 +138,7 @@ KNOBLINE="knobs=${KNOBS:-none} halt_on_panic=$(mdbval halt_on_panic) deepc_off=$
 log "$KNOBLINE"
 
 # --- 2. receiver -------------------------------------------------------------
-URL=$(bootprop solnix-x1ediag-url); URL=${URL:-http://192.168.1.151:8099}
+URL=$(bootprop solnix-x1ediag-url); URL=${URL:-http://192.168.1.179:8099}
 QUEUE="$DIR/outbox"; mkdir -p "$QUEUE"
 # post KIND FILE -- queue FILE for upload as KIND; flush() sends what it can.
 _seq=0
