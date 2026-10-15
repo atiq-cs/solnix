@@ -77,6 +77,14 @@ setup_store() {
     zfs mount solnixscratch/x1ediag 2>/dev/null || true
     [ -d "$MNT" ] && { log "store: dataset solnixscratch/x1ediag"; return 0; }
   fi
+  # In `boot -s` the agent starts as soon as milestone/devices is online, before
+  # devfsadmd has made the /dev/dsk links (measured under KVM: start 19:21:04,
+  # links 19:21:05.47), so the import and find_stick both saw no disk. Make the
+  # links, and give USB enumeration up to 30 s to produce the stick.
+  _w=0
+  until devfsadm -c disk >/dev/null 2>&1; find_stick >/dev/null; do
+    _w=$((_w + 1)); [ "$_w" -ge 30 ] && break; sleep 1
+  done
   if zpool list "$POOL" >/dev/null 2>&1 || run_to 60 zpool import -f -N "$POOL" 2>/dev/null; then
     zfs set mountpoint="$MNT" "$POOL" 2>/dev/null; zfs mount "$POOL" 2>/dev/null || true
     [ -d "$MNT" ] && { log "store: existing pool $POOL"; return 0; }
@@ -91,9 +99,15 @@ setup_store() {
     ""|unknown*) : ;;
     *) log "store: ${_stick}s2 is not blank ($(fstyp /dev/rdsk/${_stick}s2 2>&1)); not touching it"; return 1 ;;
   esac
-  if run_to 90 zpool create -f -O compression=on -O atime=off -O sync=always \
-       -m "$MNT" "$POOL" "$_dev" 2>>"$LOG"; then
-    log "store: created pool $POOL on $_dev"; return 0
+  run_to 90 zpool create -f -O compression=on -O atime=off -O sync=always \
+       -m "$MNT" "$POOL" "$_dev" 2>>"$LOG"
+  # Judge by the result, not create's exit status: the agent no longer waits for
+  # multi-user, so fs-local's `zfs mount -va` runs alongside and can mount the new
+  # pool first; create then fails "mountpoint or dataset is busy" with the pool
+  # created and mounted (measured under KVM, iteration 2).
+  if zpool list "$POOL" >/dev/null 2>&1; then
+    zfs mount "$POOL" 2>/dev/null || true
+    [ "$(zfs get -H -o value mounted "$POOL" 2>/dev/null)" = yes ] && { log "store: created pool $POOL on $_dev"; return 0; }
   fi
   log "store: zpool create on $_dev failed"; return 1
 }
