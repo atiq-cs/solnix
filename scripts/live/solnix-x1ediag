@@ -1,0 +1,247 @@
+#!/sbin/sh
+# solnix-x1ediag -- diagnostic agent for chasing an unexplained reboot/shutdown on
+# real hardware (first target: ThinkPad X1 Extreme Gen5). Started by the
+# site/solnix-x1ediag SMF service on the installer media. Read-only on every disk
+# except the boot stick's scratch partition (GPT p3), which it uses as a log store.
+#
+# Three capture channels, independent so one failing does not blind the others:
+#   1. LOG ON THE STICK: /var/x1ediag/<bootid>/ on p3. A heartbeat line every
+#      $SOLNIX_X1EDIAG_PERIOD s (default 10), fsync'd, plus copies of
+#      /var/adm/messages and fmdump -e. Survives the reboot; the last heartbeat
+#      bounds the time of death and the pattern (steady vs degrading) separates a
+#      hang from an instant reset.
+#   2. LAN STREAM: POST each heartbeat + message deltas + the boot inventory to a
+#      receiver (scripts/x1ediag-receiver.py). On the boot after a death, upload
+#      the previous boot's heartbeat tail + messages first. Buffered; never blocks.
+#   3. PANIC ON SCREEN: halt_on_panic=1 (system.d) makes a panic print its message
+#      and stack, then wait at "Press any key to reboot." (panic.c:405 ->
+#      prom_reboot_prompt). The maintainer photographs it. A crash dump to the stick
+#      is impossible (scsa2usb drops all I/O while in panic).
+#
+# Knobs (bisect without a new image): boot property / loader variable
+#   solnix-x1ediag-knobs = comma list of: nodeepc nodeadman nocpupm nohalt
+#     nodeepc   -> needs idle_cpu_no_deep_c=1 at BOOT (mp_machdep.c reads it in
+#                  startup); set at the loader prompt: set idle_cpu_no_deep_c=1
+#                  is NOT a loader variable, so the menu entry boots with the
+#                  system.d fragment solnix-x1ediag-nodeepc enabled instead.
+#     nodeadman -> zfs_deadman_enabled=0 at runtime (spa_misc.c:609 checks it per run)
+#     nocpupm   -> cpupm disable via pmconfig (power.conf)
+#     nohalt    -> halt_on_panic=0 at runtime (auto-reboot on panic, the default)
+# Receiver: boot property solnix-x1ediag-url, default http://192.168.1.151:8099
+set -u
+PATH=/usr/sbin:/usr/bin:/sbin:/run/current-system/sw/bin; export PATH
+PERIOD=${SOLNIX_X1EDIAG_PERIOD:-10}
+MNT=/var/x1ediag
+POOL=x1ediag
+CAP_MB=${SOLNIX_X1EDIAG_CAP_MB:-1024}
+LOG=/var/log/solnix-x1ediag.log
+log() { echo "[x1ediag] $(date -u +%Y-%m-%dT%H:%M:%SZ) $*" >> "$LOG" 2>/dev/null; }
+
+# bootprop NAME -> value of a boot property / loader env var, or empty.
+bootprop() {
+  prtconf -v /devices 2>/dev/null | awk -v n="name='$1'" '
+    index($0, n) { getline; sub(/^[^=]*=/, ""); gsub(/^'"'"'|'"'"'$/, ""); print; exit }'
+}
+
+# run_to SECS CMD... -- bounded run (the live env has no timeout(1) on PATH
+# reliably; same watchdog pattern as solnix-autonet).
+run_to() {
+  _t=$1; shift
+  "$@" &
+  _p=$!
+  ( sleep "$_t"; kill -TERM "$_p" 2>/dev/null; sleep 2; kill -KILL "$_p" 2>/dev/null ) &
+  _w=$!
+  wait "$_p" 2>/dev/null; _rc=$?
+  kill "$_w" 2>/dev/null; wait "$_w" 2>/dev/null
+  return $_rc
+}
+
+# --- 1. find the boot stick's p3 and put a pool on it -------------------------
+# The stick carries the SOLNIX_INSTALL ISO9660 label at sector 16 of p0 (see
+# setup_scratch in solnix-install); p3 is GPT slice s2 there. If solnix-install
+# already made its own 'solnixscratch' pool on p3, reuse it as a dataset.
+find_stick() {
+  for _d in /dev/rdsk/*p0; do
+    [ -e "$_d" ] || continue
+    _n=$(basename "$_d"); _n=${_n%p0}
+    if dd if="/dev/rdsk/${_n}p0" bs=2048 count=64 2>/dev/null | strings 2>/dev/null | grep -q SOLNIX_INSTALL; then
+      echo "$_n"; return 0
+    fi
+  done
+  return 1
+}
+
+setup_store() {
+  if zpool list solnixscratch >/dev/null 2>&1; then
+    zfs create -p -o mountpoint="$MNT" solnixscratch/x1ediag 2>/dev/null || true
+    zfs mount solnixscratch/x1ediag 2>/dev/null || true
+    [ -d "$MNT" ] && { log "store: dataset solnixscratch/x1ediag"; return 0; }
+  fi
+  if zpool list "$POOL" >/dev/null 2>&1 || run_to 60 zpool import -f -N "$POOL" 2>/dev/null; then
+    zfs set mountpoint="$MNT" "$POOL" 2>/dev/null; zfs mount "$POOL" 2>/dev/null || true
+    [ -d "$MNT" ] && { log "store: existing pool $POOL"; return 0; }
+  fi
+  _stick=$(find_stick) || { log "store: boot stick not found (USB storage not attached?)"; return 1; }
+  _dev="/dev/dsk/${_stick}s2"
+  devfsadm -c disk >/dev/null 2>&1
+  [ -e "$_dev" ] || { log "store: $_dev missing"; return 1; }
+  # Only a BLANK p3 is formatted. Anything already there (another pool, a
+  # filesystem) is left alone and the store falls back to the ramdisk.
+  case "$(fstyp "/dev/rdsk/${_stick}s2" 2>/dev/null)" in
+    ""|unknown*) : ;;
+    *) log "store: ${_stick}s2 is not blank ($(fstyp /dev/rdsk/${_stick}s2 2>&1)); not touching it"; return 1 ;;
+  esac
+  if run_to 90 zpool create -f -O compression=on -O atime=off -O sync=always \
+       -m "$MNT" "$POOL" "$_dev" 2>>"$LOG"; then
+    log "store: created pool $POOL on $_dev"; return 0
+  fi
+  log "store: zpool create on $_dev failed"; return 1
+}
+
+if ! setup_store; then
+  MNT=/var/tmp/x1ediag-ramdisk   # still useful for the LAN stream this boot
+  mkdir -p "$MNT"
+  log "store: FALLBACK to ramdisk $MNT (lost on reboot)"
+fi
+zfs set sync=always "$POOL" 2>/dev/null || true
+
+# --- boot identity -----------------------------------------------------------
+_n=$(cat "$MNT/boot-counter" 2>/dev/null || echo 0)
+_n=$((_n + 1)); echo "$_n" > "$MNT/boot-counter"; sync
+BOOTID=$(printf 'b%04d-%s' "$_n" "$(date -u +%Y%m%dT%H%M%SZ)")
+DIR="$MNT/$BOOTID"; mkdir -p "$DIR"
+PREV=$(cat "$MNT/last-bootid" 2>/dev/null || true)
+echo "$BOOTID" > "$MNT/last-bootid"; sync
+HOST=$(hostname 2>/dev/null || echo solnix)
+log "boot $BOOTID (previous: ${PREV:-none}) store=$MNT"
+
+# --- knobs -------------------------------------------------------------------
+KNOBS=$(bootprop solnix-x1ediag-knobs)
+[ -r /etc/solnix-x1ediag-knobs ] && KNOBS="${KNOBS:+$KNOBS,}$(cat /etc/solnix-x1ediag-knobs)"
+apply_knob() {
+  case "$1" in
+    nodeadman) echo 'zfs_deadman_enabled/W 0' | mdb -kw >/dev/null 2>&1 && log "knob nodeadman applied" ;;
+    nohalt)    echo 'halt_on_panic/W 0' | mdb -kw >/dev/null 2>&1 && log "knob nohalt applied" ;;
+    nocpupm)   if [ -w /etc/power.conf ]; then
+                 sed 's/^cpupm.*/cpupm disable/' /etc/power.conf > /tmp/power.conf.x1e && cp /tmp/power.conf.x1e /etc/power.conf
+               fi
+               pmconfig >/dev/null 2>&1; log "knob nocpupm applied" ;;
+    nodeepc)   log "knob nodeepc: boot-time only (idle_cpu_no_deep_c); active=$(echo idle_cpu_no_deep_c/D | mdb -k 2>/dev/null | awk 'NR==2{print $2}')" ;;
+    "") : ;;
+    *) log "unknown knob '$1'" ;;
+  esac
+}
+for _k in $(echo "$KNOBS" | tr ',' ' '); do apply_knob "$_k"; done
+mdbval() { echo "$1/D" | mdb -k 2>/dev/null | awk 'NR==2{print $2}'; }
+KNOBLINE="knobs=${KNOBS:-none} halt_on_panic=$(mdbval halt_on_panic) deepc_off=$(mdbval idle_cpu_no_deep_c) deadman=$(mdbval zfs_deadman_enabled)"
+log "$KNOBLINE"
+
+# --- 2. receiver -------------------------------------------------------------
+URL=$(bootprop solnix-x1ediag-url); URL=${URL:-http://192.168.1.151:8099}
+QUEUE="$DIR/outbox"; mkdir -p "$QUEUE"
+# post KIND FILE -- queue FILE for upload as KIND; flush() sends what it can.
+_seq=0
+post() {
+  _seq=$((_seq + 1))
+  cp "$2" "$QUEUE/$(printf '%06d' $_seq).$1" 2>/dev/null
+}
+flush() {
+  for _f in "$QUEUE"/*; do
+    [ -f "$_f" ] || return 0
+    _kind=${_f##*.}
+    if run_to 15 curl -sf -m 10 -X POST --data-binary @"$_f" \
+         -H "X-Host: $HOST" -H "X-Boot: $BOOTID" -H "X-Kind: $_kind" \
+         "$URL/x1ediag" >/dev/null 2>&1; then
+      rm -f "$_f"
+    else
+      return 0     # receiver down or no network: keep the queue, try next tick
+    fi
+  done
+}
+
+# --- 3. payoff: the previous boot's evidence goes first -----------------------
+if [ -n "$PREV" ] && [ -d "$MNT/$PREV" ]; then
+  { echo "=== previous boot $PREV: last 60 heartbeats ==="
+    tail -60 "$MNT/$PREV/heartbeat.log" 2>/dev/null
+    echo; echo "=== previous boot $PREV: messages tail ==="
+    tail -200 "$MNT/$PREV/messages" 2>/dev/null
+    echo; echo "=== previous boot $PREV: fmdump -e tail ==="
+    tail -80 "$MNT/$PREV/fmdump-e.txt" 2>/dev/null
+    echo; echo "=== this boot $BOOTID: fmdump -eV (FMA error log persists in /var/fm only if /var is on the stick; usually empty on the live ramdisk) ==="
+  } > "$DIR/previous-boot.txt" 2>&1
+  post previous "$DIR/previous-boot.txt"
+fi
+
+# --- 4. one-shot inventory ---------------------------------------------------
+inv() { echo "### $*"; run_to 30 "$@" 2>&1; echo; }
+{
+  echo "x1ediag inventory host=$HOST boot=$BOOTID $KNOBLINE"
+  inv uname -a
+  inv cat /etc/release
+  inv psrinfo -vp
+  inv prtdiag -v
+  inv smbios
+  inv prtconf -vp
+  inv prtconf -D
+  inv modinfo
+  inv kstat -m cpu_info
+  inv kstat -m cpu_idle -n cpu_idle
+  inv intrstat 5 1
+  inv cfgadm -al
+  inv dladm show-phys
+  inv dladm show-link
+  inv ipadm show-addr
+  inv svcs -xv
+  inv fmadm faulty
+  inv fmdump -eV
+  inv zpool status
+  inv eeprom
+  inv sh -c 'for f in /etc/system /etc/system.d/*; do echo "--- $f"; cat "$f"; done'
+  inv cat /etc/power.conf
+  inv cat /etc/usb/config_map.conf
+  inv sh -c 'dtrace -qn "sdt:::tz-temp { printf(\"zone=%s tmp=%d crt=%d hot=%d (tenths of K)\n\", stringof(arg3), arg0, arg1, arg2); }" -c "sleep 25"'
+} > "$DIR/inventory.txt" 2>&1
+post inventory "$DIR/inventory.txt"
+( mkdir -p "$DIR/acpi" && cd "$DIR/acpi" && run_to 60 acpidump -o tables.dat >/dev/null 2>&1 ) && post acpi "$DIR/acpi/tables.dat"
+sync
+
+# --- 5. heartbeat loop -------------------------------------------------------
+HB="$DIR/heartbeat.log"
+_msgoff=0
+_fmoff=0
+_tick=0
+cap_store() {
+  _used=$(du -sm "$MNT" 2>/dev/null | awk '{print $1}')
+  [ "${_used:-0}" -lt "$CAP_MB" ] && return 0
+  _old=$(ls -d "$MNT"/b[0-9]* 2>/dev/null | head -1)
+  [ -n "$_old" ] && [ "$_old" != "$DIR" ] && rm -rf "$_old" && log "cap: removed $_old"
+}
+while :; do
+  _arc=$(kstat -p zfs:0:arcstats:size 2>/dev/null | awk '{printf "%d", $2/1048576}')
+  _free=$(kstat -p unix:0:system_pages:freemem 2>/dev/null | awk '{printf "%d", $2*4/1024}')
+  _lbolt=$(kstat -p unix:0:system_misc:lbolt 2>/dev/null | awk '{print $2}')
+  _zp=$(zpool status -x 2>/dev/null | head -1)
+  _line="$(date -u +%Y-%m-%dT%H:%M:%SZ) up=$(uptime | sed 's/.*up *//;s/,  *[0-9]* user.*//') lbolt=$_lbolt load=$(uptime | sed 's/.*average: *//') freeMB=$_free arcMB=$_arc zpool='$_zp' $KNOBLINE"
+  echo "$_line" >> "$HB"
+  sync
+  echo "$_line" > "$DIR/hb.cur"; post hb "$DIR/hb.cur"
+  # message + FMA deltas
+  if [ -r /var/adm/messages ]; then
+    _sz=$(wc -c < /var/adm/messages)
+    if [ "$_sz" -gt "$_msgoff" ]; then
+      tail -c +$((_msgoff + 1)) /var/adm/messages > "$DIR/msg.delta"
+      cat "$DIR/msg.delta" >> "$DIR/messages"; post messages "$DIR/msg.delta"
+      _msgoff=$_sz
+    fi
+  fi
+  _tick=$((_tick + 1))
+  if [ $((_tick % 6)) -eq 0 ]; then
+    run_to 20 fmdump -e > "$DIR/fmdump-e.txt" 2>&1
+    _fsz=$(wc -c < "$DIR/fmdump-e.txt")
+    [ "$_fsz" -ne "$_fmoff" ] && { post fma "$DIR/fmdump-e.txt"; _fmoff=$_fsz; }
+    cap_store
+  fi
+  sync
+  flush
+  sleep "$PERIOD"
+done

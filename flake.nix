@@ -207,6 +207,15 @@
           modules = [ ./configurations/installer-live.nix ];
         };
 
+        # installer-live + a diagnostic agent (stick log, LAN stream, halt on
+        # panic) for chasing an unexplained reboot on real hardware.
+        # See configurations/installer-x1ediag.nix.
+        installer-x1ediag = solnixSystem {
+          system = "x86_64-solaris";
+          pkgs = mkPkgs { };
+          modules = [ ./configurations/installer-x1ediag.nix ];
+        };
+
         dixi = solnixSystem {
           system = "x86_64-solaris";
           pkgs = mkPkgs { };
@@ -240,6 +249,7 @@
         dixiToplevel = self.solnixConfigurations.dixi.config.system.build.toplevel;
         installerToplevel = self.solnixConfigurations.installer.config.system.build.toplevel;
         installerLiveToplevel = self.solnixConfigurations.installer-live.config.system.build.toplevel;
+        installerX1ediagToplevel = self.solnixConfigurations.installer-x1ediag.config.system.build.toplevel;
 
         # The pgfarm role's generated artifacts ALONE (build-farm.conf, the
         # run_build.pl driver, the setup oneshot). These are plain text/script

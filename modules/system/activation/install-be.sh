@@ -216,6 +216,9 @@ etc_copy() {
     # boot-archive inputs: the kernel reads them from the archive, where a link
     # into /nix would dangle.
     system|system.d/*) return 0 ;;
+    # read by the kernel (usba_devdb.c kobj_open_file) when USB hubs attach,
+    # which can precede the /nix mount -- same reason as system.d.
+    usb/config_map.conf) return 0 ;;
     # `coreadm -U` imports it into SMF and renames it to coreadm.conf.old.
     coreadm.conf) return 0 ;;
     # dumpadm(8) rewrites /etc/dumpadm.conf (and svc:/system/dumpadm reads it).
