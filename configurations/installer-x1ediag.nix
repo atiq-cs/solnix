@@ -23,6 +23,7 @@
 
 let
   agent = pkgs.writeScript "solnix-x1ediag" (builtins.readFile ../scripts/live/solnix-x1ediag);
+  watch = pkgs.writeScript "solnix-x1ewatch" (builtins.readFile ../scripts/live/solnix-x1ewatch);
 in
 {
   imports = [ ./installer-live.nix ];
@@ -50,6 +51,24 @@ in
     * ZFS deadman off (spa_misc.c zfs_deadman_enabled)
     set zfs:zfs_deadman_enabled = 0
   '';
+
+  # Iteration 3. The X1E stops at a bare "Press any key to reboot." ~6 min after
+  # boot: an AD_POWEROFF/suspend request whose firmware entry did not take, from a
+  # requester that printed nothing. powerd (svc:/system/power) is the prime
+  # suspect, so it is off here; solnix-x1ewatch names the requester on the
+  # console if it is something else.
+  solnix.powerManagement.enable = false;
+
+  smf.services.solnix-x1ewatch = {
+    enable = true;
+    category = "site";
+    description = "solnix x1ewatch: name the power-off/suspend requester on the console";
+    model = "contract";
+    requires = [ "svc:/system/filesystem/minimal:default" ];
+    dependents = [ "svc:/milestone/single-user" ];
+    start.exec = "${watch} &";
+    start.timeoutSeconds = 60;
+  };
 
   smf.services.solnix-x1ediag = {
     enable = true;

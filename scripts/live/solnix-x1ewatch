@@ -1,0 +1,48 @@
+#!/sbin/sh
+# solnix-x1ewatch -- name whoever asks the kernel to power off, halt, suspend or
+# reboot, on the console, before anything is torn down.
+#
+# Why: on the X1 Extreme Gen5 the machine stops at a bare "Press any key to
+# reboot." a few minutes after boot, with no panic line. On x86 that bare prompt
+# is mdboot -> halt(NULL) after an AD_POWEROFF / CPR (suspend) request whose
+# firmware S5/S3 entry did not take (machdep.c, apic_common.c, cpr_mod.c). The
+# requester printed nothing. dtrace probes fire in the requester's context:
+#   syscall::uadmin:entry    userland callers (powerd, poweroff, sys-suspend...)
+#   fbt::kadmin:entry        every admin request, kernel callers included
+#   fbt::mdboot:entry        the last stop before power-off/halt/reboot
+#   fbt::cpr:entry           the suspend (CPR) entry point
+# and print execname/pid/ppid/args and a kernel stack straight to the console
+# (this script's stdout), framed so it stands out in a photo. kadmin runs
+# killall() only after these probes fire, so the record reaches the screen.
+# Also copied to /var/tmp/x1ewatch.log (ramdisk; the screen is the record that
+# survives).
+PATH=/usr/sbin:/usr/bin:/sbin; export PATH
+exec >/dev/console 2>&1
+dtrace -q -Z -x bufsize=1m -x switchrate=10hz -n '
+syscall::uadmin:entry
+{
+	printf("\n\n################ X1E WATCH: uadmin(cmd=%d fcn=%d) ################\n", arg0, arg1);
+	printf("### by %s pid=%d ppid=%d  (2=SHUTDOWN 1=REBOOT 3=FREEZE; fcn 6=POWEROFF 20=S3)\n",
+	    execname, pid, ppid);
+	printf("### user stack:\n"); ustack(12);
+}
+fbt::kadmin:entry
+{
+	printf("\n################ X1E WATCH: kadmin(cmd=%d fcn=%d) by %s pid=%d ################\n",
+	    arg0, arg1, execname, pid);
+	stack(20);
+}
+fbt::mdboot:entry
+{
+	printf("\n################ X1E WATCH: mdboot(cmd=%d fcn=%d) by %s pid=%d ################\n",
+	    arg0, arg1, execname, pid);
+	stack(20);
+	printf("################ photograph this screen ################\n");
+}
+fbt::cpr:entry
+{
+	printf("\n################ X1E WATCH: cpr(fcn=%d) suspend by %s pid=%d ################\n",
+	    arg0, execname, pid);
+	stack(20);
+}
+' 2>&1 | tee /var/tmp/x1ewatch.log

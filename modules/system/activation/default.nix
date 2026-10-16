@@ -59,7 +59,7 @@ let
       <service name="system/filesystem/autofs" version="1" type="service"><instance name="default" enabled="false"/></service>
       <service name="network/rpc/smserver" version="1" type="service"><instance name="default" enabled="false"/></service>
       <service name="network/ssh" version="1" type="service"><instance name="default" enabled="false"/></service>
-      <service name="system/power" version="1" type="service"><instance name="default" enabled="true"/></service>
+      <service name="system/power" version="1" type="service"><instance name="default" enabled="${if config.solnix.powerManagement.enable then "true" else "false"}"/></service>
       <service name="system/update-man-index" version="1" type="service"><instance name="default" enabled="false"/></service>
     </service_bundle>
   '';
@@ -594,6 +594,16 @@ let
   '';
 in
 {
+  # svc:/system/power: pmconfig applies /etc/power.conf (cpupm, autoS3, autopm)
+  # and starts powerd, which may suspend or power off an idle machine and handles
+  # the power button. NixOS has no single equivalent (powerManagement.enable is
+  # the closest). Off is for hardware where that machinery misbehaves.
+  options.solnix.powerManagement.enable = mkOption {
+    type = types.bool;
+    default = true;
+    description = "Enable svc:/system/power (pmconfig + powerd).";
+  };
+
   options.system.buildCapable = mkOption {
     type = types.bool;
     default = false;
