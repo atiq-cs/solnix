@@ -11,38 +11,57 @@
 #   fbt::kadmin:entry        every admin request, kernel callers included
 #   fbt::mdboot:entry        the last stop before power-off/halt/reboot
 #   fbt::cpr:entry           the suspend (CPR) entry point
-# and print execname/pid/ppid/args and a kernel stack straight to the console
-# (this script's stdout), framed so it stands out in a photo. kadmin runs
-# killall() only after these probes fire, so the record reaches the screen.
-# Also copied to /var/tmp/x1ewatch.log (ramdisk; the screen is the record that
-# survives).
+#
+# kadmin(A_SHUTDOWN) calls killall() microseconds after entry, and killall
+# SIGKILLs this dtrace before it copies anything out (measured under KVM: a
+# watcher without the chill left only "syncing file systems... done"). So the
+# killall probe chill()s the requester for 350 ms while the consumer, on another
+# CPU, prints the uadmin + kadmin records; the consumer then dies, so mdboot
+# prints only when a kernel caller reaches it without killall.
+#
+# libctf reads the kernel's compressed CTF through /usr/lib/64/libz.so.1, which
+# this world lacks: without LIBCTF_DECOMPRESSOR every dtrace that names a kernel
+# type fails ("Decompression package SUNWzlib not installed").
+# Records also go to /var/tmp/x1ewatch.log (ramdisk; the screen is the record
+# that survives). A_CONFIG and the other boot-time admin calls get one line.
 PATH=/usr/sbin:/usr/bin:/sbin; export PATH
+LIBCTF_DECOMPRESSOR=/run/current-system/world/lib-64/libz.so.1; export LIBCTF_DECOMPRESSOR
 exec >/dev/console 2>&1
-dtrace -q -Z -x bufsize=1m -x switchrate=10hz -n '
+D=/var/tmp/x1ewatch.d
+cat > $D <<'DSCRIPT'
 syscall::uadmin:entry
+/arg0 == 1 || arg0 == 2 || arg0 == 3 || arg0 == 5/
 {
-	printf("\n\n################ X1E WATCH: uadmin(cmd=%d fcn=%d) ################\n", arg0, arg1);
-	printf("### by %s pid=%d ppid=%d  (2=SHUTDOWN 1=REBOOT 3=FREEZE; fcn 6=POWEROFF 20=S3)\n",
-	    execname, pid, ppid);
-	printf("### user stack:\n"); ustack(12);
+	printf("\n######## X1E WATCH: uadmin(cmd=%d fcn=%d) by %s pid=%d ppid=%d\n", arg0, arg1, execname, pid, ppid);
+	printf("######## args: %s\n", curpsinfo->pr_psargs);
+	printf("######## (cmd 1=REBOOT 2=SHUTDOWN 3=FREEZE 5=DUMP; fcn 6=POWEROFF 20=S3)\n");
 }
-fbt::kadmin:entry
+
+syscall::uadmin:entry
+/!(arg0 == 1 || arg0 == 2 || arg0 == 3 || arg0 == 5)/
 {
-	printf("\n################ X1E WATCH: kadmin(cmd=%d fcn=%d) by %s pid=%d ################\n",
-	    arg0, arg1, execname, pid);
-	stack(20);
+	printf("X1E WATCH: uadmin(cmd=%d fcn=%d) by %s pid=%d\n", arg0, arg1, execname, pid);
 }
-fbt::mdboot:entry
+
+fbt::kadmin:entry, fbt::mdboot:entry, fbt::cpr:entry
+/probefunc != "kadmin" || arg0 == 1 || arg0 == 2 || arg0 == 3 || arg0 == 5/
 {
-	printf("\n################ X1E WATCH: mdboot(cmd=%d fcn=%d) by %s pid=%d ################\n",
-	    arg0, arg1, execname, pid);
-	stack(20);
-	printf("################ photograph this screen ################\n");
+	printf("######## X1E WATCH: %s(%d,%d) by %s pid=%d -- photograph this screen. kernel stack:", probefunc, arg0, arg1, execname, pid);
+	stack(12);
+	chill(100000000);
 }
-fbt::cpr:entry
+
+fbt::killall:entry, fbt::stop_other_cpus:entry
 {
-	printf("\n################ X1E WATCH: cpr(fcn=%d) suspend by %s pid=%d ################\n",
-	    arg0, execname, pid);
-	stack(20);
+	chill(350000000);
 }
-' 2>&1 | tee /var/tmp/x1ewatch.log
+DSCRIPT
+# NOTE: the first start after boot was seen to die at once (svc log "all processes
+# in service exited", then a restart that held); restart here and keep the error.
+n=0
+while [ $n -lt 30 ]; do
+	dtrace -q -w -Z -x bufsize=1m -x switchrate=50hz -s $D 2>&1 | tee -a /var/tmp/x1ewatch.log
+	n=$((n + 1))
+	echo "X1E WATCH: dtrace exited; restart $n" | tee -a /var/tmp/x1ewatch.log
+	sleep 1
+done

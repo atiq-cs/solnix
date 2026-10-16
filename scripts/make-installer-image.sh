@@ -258,15 +258,29 @@ SVCCFG="$WORLD/usr/sbin/svccfg"; SVCCFG_CONFIGD_PATH="$WORLD/lib/svc/bin/svc.con
 [ -x "$SVCCFG" ] && [ -x "$SVCCFG_CONFIGD_PATH" ] || die "world has no svccfg/svc.configd"
 _dtd="$RD/usr/share/lib/xml/dtd/service_bundle.dtd.1"
 _nimp=0; _nfail=0
+# PKG_INSTALL_ROOT="$RD" on import AND apply: the hash key is realpath() with that
+# prefix stripped (manifest_hash.c mhash_filename_to_propname), which is the name
+# boot's manifest-import looks up. Without it the solnix site manifests (real files
+# under $RD; the world's are /nix/store symlinks) got build-path keys and were
+# re-imported every boot, and no profile hash was stored at all, so every boot
+# re-applied generic.xml (enabling system/power, ssh, hal, intrd, sendmail) and then
+# site/solnix.xml (disabling them). svc.startd started them in between, and powerd
+# outlived its disabled service (measured, x1ediag iteration 3).
 for _m in $(find -L "$RD/lib/svc/manifest" "$RD/var/svc/manifest" -name '*.xml' 2>/dev/null); do
-  if SVCCFG_CHECKHASH=1 SVCCFG_DTD="$_dtd" SVCCFG_REPOSITORY="$RD/etc/svc/repository.db" "$SVCCFG" import "$_m" >/dev/null 2>&1
+  if SVCCFG_CHECKHASH=1 PKG_INSTALL_ROOT="$RD" SVCCFG_DTD="$_dtd" SVCCFG_REPOSITORY="$RD/etc/svc/repository.db" "$SVCCFG" import "$_m" >/dev/null 2>&1
   then _nimp=$((_nimp+1)); else _nfail=$((_nfail+1)); echo "WARN: import failed: ${_m#$RD}" >&2; fi
 done
 for _p in generic.xml platform.xml name_service.xml site/solnix.xml; do
   [ -e "$RD/etc/svc/profile/$_p" ] || continue
-  SVCCFG_DTD="$_dtd" SVCCFG_REPOSITORY="$RD/etc/svc/repository.db" "$SVCCFG" apply "$RD/etc/svc/profile/$_p" \
-    || die "svccfg apply $_p failed"
+  SVCCFG_CHECKHASH=1 PKG_INSTALL_ROOT="$RD" SVCCFG_DTD="$_dtd" SVCCFG_REPOSITORY="$RD/etc/svc/repository.db" \
+    "$SVCCFG" apply "$RD/etc/svc/profile/$_p" || die "svccfg apply $_p failed"
 done
+_pgs=$(SVCCFG_REPOSITORY="$RD/etc/svc/repository.db" "$SVCCFG" -s smf/manifest listpg 2>/dev/null)
+_nprof=$(printf '%s\n' "$_pgs" | grep -c '^etc_svc_profile_' || true)
+_nbuild=$(printf '%s\n' "$_pgs" | grep -c "^$(printf '%s' "${RD#/}" | tr / _)" || true)
+[ "$_nprof" -ge 2 ] || die "only $_nprof SMF profile hashes stored: every boot would re-apply generic.xml"
+[ "$_nbuild" = 0 ] || die "$_nbuild SMF hash keys carry the build path: every boot would re-import them"
+echo "SMF hashes: $_nprof profiles, 0 build-path keys" >&2
 echo "pre-imported $_nimp manifests ($_nfail failed)" >&2
 [ "$_nimp" -gt 50 ] || die "only $_nimp manifests imported -- the live root would not reach single-user"
 # importing ran a private svc.configd: purge the runtime state it left (a stale
