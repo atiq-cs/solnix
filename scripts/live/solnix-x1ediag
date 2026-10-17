@@ -145,8 +145,12 @@ apply_knob() {
                # switches the global idle_cpu to the non-deep loop. Boot-time
                # equivalent: boot -a /etc/system.alt/nodeepc.
                printf 'cpu_deep_idle disable\n' > /tmp/power.conf.nodeepc
-               pmconfig -f /tmp/power.conf.nodeepc >>"$LOG" 2>&1 && log "knob nodeepc applied (cpu_deep_idle disable)" \
-                 || log "knob nodeepc: pmconfig failed" ;;
+               _b=$(echo 'idle_cpu/p' | mdb -k 2>/dev/null | awk 'NR==2{print $2}')
+               pmconfig -f /tmp/power.conf.nodeepc >>"$LOG" 2>&1 || log "knob nodeepc: pmconfig failed"
+               _a=$(echo 'idle_cpu/p' | mdb -k 2>/dev/null | awk 'NR==2{print $2}')
+               # pmconfig succeeds even when no deep-idle callback is registered
+               # (no _CST C-states), so report the idle loop it actually left.
+               log "knob nodeepc: idle_cpu $_b -> $_a" ;;
     "") : ;;
     *) log "unknown knob '$1'" ;;
   esac
