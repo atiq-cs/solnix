@@ -7,7 +7,9 @@ scrub_cores() {
   # 1. delete every stray core file in the image (build-time crashes leave these).
   # NOTE: no -xdev — /export/home and other child datasets are separate ZFS
   # filesystems; -xdev would skip them and leave cores behind (the v3 image bug).
-  find "$r" -type f -name core -exec file {} \; 2>/dev/null | grep -i "core file" | cut -d: -f1 | while read -r c; do
+  # The grep finds nothing when there are no cores (the normal case) and exits 1,
+  # which under a caller's pipefail aborted the whole image build here.
+  find "$r" -type f -name core -exec file {} \; 2>/dev/null | { grep -i "core file" || true; } | cut -d: -f1 | while read -r c; do
     rm -f "$c" && echo "  scrubbed core: ${c#$r}"
   done
   # also the classic 'core' + core.<pid> patterns without the file(1) check (belt+braces)

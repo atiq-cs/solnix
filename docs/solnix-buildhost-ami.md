@@ -4,6 +4,27 @@ Maintainer-approved (2026-10-11): one reusable AMI so every build/GPU stream ski
 the ~1h OpenIndiana 2025->2026 pkg-update + toolchain-install tax.
 
 ## The AMI (COMPLETE: networks AND nix-builds -- use THIS one)
+- id: **ami-02365f53edd7fd297** (solnix-buildhost-x86-COMPLETE-20261017, us-east-2,
+  kiwi 505435643998, x86_64/uefi, Project=solnix), snapshot snap-084934cc709c5f3a0.
+  Rebuilt on the new kiwi after the old one (830118047484) closed and took
+  ami-0bd0fa73200305fd1 with it (docs/account-migration-kiwi-to-kiwi2.md).
+- backup (off-account, the burner rule): floki
+  /home/gburd/solnix-bank/ami/x86_64-buildhost-20261017/solnix-base-raw.img.gz,
+  7,214,995,566 B, gz sha256 502098a5d8d162cb23104f719641663701357190bb6680f13f4c861a34bbc919,
+  raw sha256 c1bd97b2779e53a24af984bcf2cf6ce6d3193ff1e64010e8ef66fb5ac7f6017f, MANIFEST.txt has the
+  restore steps. Not on R2: s3.solnix.io refused writes (HTTP 405) on 2026-10-17.
+- built from the R2 base ami/x86_64-20260911 (ami-bank.sh restore), then pkg update + reboot,
+  the build packages (oi-build-host-setup.sh's list, with text/gnu-patch for the retired
+  developer/versioning/patch and no nspr header), nix 2.24.15, gate proto, warm store.
+- boot-verified (2026-10-17) on a FRESH c5.4xlarge launch: (1) networks -- ssh as root with the
+  baked key within a minute, ena0 DHCP, new host keys, cache.solnix.io 200; (2) nix-builds a flake
+  from a clean git archive -- packages.x86_64-solaris.bash RC=0 (warm), and .less built ncurses +
+  less from source RC=0 (ppsm8crr...-less-679, deriver resolves).
+- GOTCHA: ftp.gnu.org times out from EC2 us-east-2, and the GNU sources in pkgs/ point there.
+  Prefetch the same tarballs from mirrors.kernel.org/gnu into the store first (identical hashes,
+  so identical store paths): scripts/gnu-mirror-prefetch.sh, run from the source tree.
+
+## History (dead with the accounts that owned them)
 - id: **ami-0bd0fa73200305fd1**  (solnix-buildhost-x86-COMPLETE-20261013, us-east-2,
   kiwi 830118047484, x86_64/uefi, Project=solnix)
 - boot-verified (2026-10-13, the completeness gate): a FRESH c5.2xlarge launch
@@ -54,7 +75,7 @@ nix-build (the GPU host) is as unusable for package work as one that cannot netw
 
 ## Usage (zero provisioning)
     AWS_PROFILE=kiwi aws ec2 run-instances --region us-east-2 \
-      --image-id ami-0bd0fa73200305fd1 --instance-type c5.4xlarge \
+      --image-id ami-02365f53edd7fd297 --instance-type c5.4xlarge \
       --key-name solnix-baked --security-group-ids <operator-/24 SG> \
       --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=<stream>-<date>},{Key=Owner,Value=gregburd}]'
 Then: ssh root@<ip> with the baked key -> `nix build` of a solnix flake works

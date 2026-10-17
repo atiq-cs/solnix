@@ -376,7 +376,13 @@ cmd_restore_reg() {
   snap="$(aws ec2 create-snapshot --volume-id "$vol" --description "solnix base restored from $RESTORE_PREFIX" \
     --query SnapshotId --output text)"
   note "restore-reg: snapshot $snap"
-  aws ec2 wait snapshot-completed --snapshot-ids "$snap"
+  # The waiter gives up after 10 min; a 20 GiB snapshot of a freshly written
+  # volume took ~25 min (2026-10-17), so retry it until the snapshot completes.
+  until aws ec2 wait snapshot-completed --snapshot-ids "$snap" 2>/dev/null; do
+    st="$(aws ec2 describe-snapshots --snapshot-ids "$snap" --query 'Snapshots[0].State' --output text)"
+    [ "$st" = error ] && { note "restore-reg: snapshot $snap failed"; exit 1; }
+    note "restore-reg: snapshot $snap still $st"
+  done
   ami="$(aws ec2 register-image --name "$RESTORE_NAME" \
     --description "solnix x86_64 base restored from s3://$S3_BUCKET/$RESTORE_PREFIX" \
     --architecture x86_64 --root-device-name /dev/xvda --ena-support \
