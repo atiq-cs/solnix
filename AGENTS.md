@@ -15,12 +15,21 @@ to floki. Image builds that need an OpenIndiana host go on an EC2 OI builder
 restored from R2 (docs/account-migration-lava-to-hotdog.md), and KVM boot tests
 go on an EC2 metal instance (nested virtualization) or real hardware.
 
-The current EC2 account is **kiwi** (`AWS_PROFILE=kiwi`, `830118047484`, us-east-2,
-32 vCPU; docs/account-migration-hotdog-to-kiwi.md); hotdog expired 2026-10-10. Name
+The current EC2 account is **kiwi** (`AWS_PROFILE=kiwi`, `505435643998`, us-east-2,
+32 vCPU; docs/account-migration-kiwi-to-kiwi2.md). The previous kiwi (`830118047484`)
+closed 2026-10-17 and took the build-host AMIs and the DP AMIs with it. Name
 `AWS_PROFILE` explicitly (sg-guard has no default), re-check `describe-instances`
 before a launch, never a `0.0.0.0/0`/`::/0` rule, and terminate instances plus
-their volumes after. kiwi's 32-vCPU quota suits a build host; metal benchmarks need
-a quota-increase case first.
+their volumes after. A foreign `pcompress-dev` instance lives there too; do not touch
+it. us-east-2 has 640 vCPU (enough for metal); the other publish regions have 384-vCPU
+requests pending (2026-10-17).
+
+**Burner accounts live about 7 days.** Anything that took more than an hour to make, or
+that someone depends on (boot-verified AMIs as raw disk images, build hosts, toolchains,
+installer images, test evidence), is backed up OFF the account the same day it is
+verified: to floki `/home/gburd/solnix-bank/` and, for AMI images, the R2 bank
+(`scripts/ami-bank.sh`), each read back and sha256-compared. An AMI id is not a backup.
+See .kiro/steering/burner-account-backups.md.
 
 ## solnix.io belongs to the infra team; we are a client of its APIs
 
