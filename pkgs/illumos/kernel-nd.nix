@@ -15,7 +15,9 @@
 # headers (same source rev; headers do not depend on DEBUG).
 # Applied on top of the pinned source: scripts/patches/0001-tscc_pit-default-
 # pit_is_broken.patch (gotcha #10; must be a source default, /etc/system is read
-# too late).
+# too late), and 0002-tzmon-thinkpad-hkey-enable.patch (ThinkPads halt at a false
+# 128 C critical temperature unless the HKEY event interface is enabled; the
+# patch header has the DSDT evidence).
 #
 # OUTPUT: kernel/, platform/i86pc/{kernel,amd64}/, usr/kernel/ from the
 # non-DEBUG build, plus boot/ (loader, forth, fonts) copied from the gate proto,
@@ -24,7 +26,8 @@
 { gate                    # the gate proto (headers + boot/)
 , rev ? "ac45d71fc2b04a5422e72a14b54dd1e746e7be07"
 , srcHash ? "1yhpjbxjynjrwd11vf456aw9hln3ydbc9qsgd5a0k73l8hfsmq87"  # nix-prefetch-url --unpack
-, patches ? [ ../../scripts/patches/0001-tscc_pit-default-pit_is_broken.patch ]
+, patches ? [ ../../scripts/patches/0001-tscc_pit-default-pit_is_broken.patch
+              ../../scripts/patches/0002-tzmon-thinkpad-hkey-enable.patch ]
 , onbld ? "/opt/onbld"
 , gcc ? "/usr/gcc/10"
 , perlVersion ? "5.42"
@@ -62,6 +65,8 @@ derivation {
     for p in $patches; do echo "=== patch $p"; patch -p1 --fuzz=0 < "$p"; done
     grep -q '^int pit_is_broken = 1;' usr/src/uts/i86pc/os/tscc_pit.c \
       || { echo "FATAL: pit_is_broken default not applied" >&2; exit 1; }
+    grep -q '^	tzmon_hkey_enable();' usr/src/uts/i86pc/io/tzmon/tzmon.c \
+      || { echo "FATAL: tzmon ThinkPad HKEY patch not applied" >&2; exit 1; }
 
     # env file: the gate.nix edits, plus no smatch (its binary lives in the
     # workspace tools proto, which +t does not build).
