@@ -31,6 +31,59 @@
   # opt/: everything there is a test suite (os-tests, zfs-tests, test-runner,
   # SUNWdtrt, ...), 56 MB, none of it a runtime component. Off in the base world.
 , withTests ? false
+  # Objects whose DT_NEEDED names a library nothing in the base builds, so they
+  # cannot load (ld.so.1 kills them). The gate ships them because IPS satisfies
+  # the library from a separate package; the base does not have that package.
+  # Keeping an unloadable binary is worse than dropping it -- it fails the image
+  # acceptance suite's runnability check and misleads anyone who runs it. So the
+  # build DELETES exactly these and asserts the set it found equals this list, so
+  # a newly-broken binary (a dropped library, a new consumer) fails the build
+  # instead of shipping dead. Each entry names the missing soname and why the
+  # base lacks it; to keep one, build its library and remove it here. Measured
+  # with scripts/world-unloadable.sh (identical logic + a self-test).
+  #   libdbus-1 / libglib-2.0 / libdbus-glib-1 / libgobject-2.0 / libexpat:
+  #     hal + polkit + the volume manager (rmvolmgr/vold tools). solnix disables
+  #     system/hal, network-discovery and rmvolmgr; glib is LGPL (not in base).
+  #   libtspi: trousers (TPM 1.2 stack), not ported; pkcs11_tpm is already
+  #     dropped from etc/crypto/pkcs11.conf by install-be.
+  #   libcrypto/libssl .so.1.0.0: OpenSSL 1.0, EOL; the base builds OpenSSL 3.
+  #     wpad (we join wifi via wpa-pmk, not wpad), bhyve, sendmail, pkinit,
+  #     kmf_openssl link it. bhyve + sendmail come back when they relink to 3.
+  #   libnetsnmp*.so.40: net-snmp, not ported (fault-management SNMP notify).
+  #   libpython3.9: the gate's Python is not in the base world (libbe/zfs/solaris
+  #     .so python bindings); the base uses nixpkgs python.
+  #   libjvm: the JDK is a host build input, not in the runtime world (poold).
+, dropUnloadable ? [
+    "lib/crypto/amd64/kmf_openssl.so.1" "lib/crypto/kmf_openssl.so.1"
+    "usr/bin/cdrw" "usr/bin/latencytop" "usr/bin/rmmount" "usr/bin/tpmadm"
+    "usr/bin/volcheck" "usr/bin/volrmmount"
+    "usr/lib/amd64/libhal-storage.so.1.0.0" "usr/lib/amd64/libhal.so.1.0.0"
+    "usr/lib/fm/amd64/libfmd_snmp.so.1" "usr/lib/fm/libfmd_snmp.so.1"
+    "usr/lib/fm/notify/snmp-notify"
+    "usr/lib/hal/hal-is-caller-privileged"
+    "usr/lib/hal/hal-storage-cleanup-all-mountpoints"
+    "usr/lib/hal/hal-storage-cleanup-mountpoint" "usr/lib/hal/hal-storage-closetray"
+    "usr/lib/hal/hal-storage-eject" "usr/lib/hal/hal-storage-mount"
+    "usr/lib/hal/hal-storage-unmount" "usr/lib/hal/hal-storage-zpool-export"
+    "usr/lib/hal/hal-storage-zpool-import" "usr/lib/hal/hald"
+    "usr/lib/hal/hald-addon-acpi" "usr/lib/hal/hald-addon-cpufreq"
+    "usr/lib/hal/hald-addon-network-discovery" "usr/lib/hal/hald-addon-storage"
+    "usr/lib/hal/hald-probe-acpi" "usr/lib/hal/hald-probe-network-printer"
+    "usr/lib/hal/hald-probe-printer" "usr/lib/hal/hald-probe-storage"
+    "usr/lib/hal/hald-probe-volume" "usr/lib/hal/hald-probe-xkb"
+    "usr/lib/hal/hald-runner" "usr/lib/inet/wpad"
+    "usr/lib/krb5/plugins/preauth/pkinit.so.1"
+    "usr/lib/libhal-storage.so.1.0.0" "usr/lib/libhal.so.1.0.0"
+    "usr/lib/libpolkit.so.0.0.0" "usr/lib/pool/poold"
+    "usr/lib/python3.9/vendor-packages/libbe_py.so"
+    "usr/lib/python3.9/vendor-packages/solaris/misc.so"
+    "usr/lib/python3.9/vendor-packages/zfs/ioctl.so"
+    "usr/lib/rmvolmgr" "usr/lib/security/amd64/pkcs11_tpm.so.1"
+    "usr/lib/security/pkcs11_tpm.so.1" "usr/lib/smtp/sendmail/sendmail"
+    "usr/sbin/bhyve" "usr/sbin/hal-device" "usr/sbin/hal-find-by-capability"
+    "usr/sbin/hal-find-by-property" "usr/sbin/hal-get-property"
+    "usr/sbin/hal-set-property" "usr/sbin/lshal" "usr/sbin/polkit-is-privileged"
+  ]
 , system ? "x86_64-solaris"
 }:
 
@@ -44,6 +97,7 @@ derivation {
   sharedLibsArg = builtins.concatStringsSep " " sharedLibs;
   dirsArg = builtins.concatStringsSep " " dirs;
   excludeArg = builtins.concatStringsSep " " (exclude ++ (if withTests then [ ] else [ "opt" ]));
+  dropArg = builtins.concatStringsSep " " dropUnloadable;
   depsArg = builtins.concatStringsSep " " deps;
   args = [ "-c" ''
     set -eu
@@ -145,10 +199,32 @@ derivation {
     : > .world/ldd-bad
     find . -type f ! -path './lib-*' | while read -r f; do
       /usr/bin/elfdump -d "$f" 2>/dev/null | grep -q NEEDED || continue
-      /usr/bin/ldd "$f" 2>&1 | awk -v f="$f" '/not found/ || (/=>/ && $NF !~ /^\/nix\/store\//) {print f": "$0}' >> .world/ldd-bad
+      /usr/bin/ldd "$f" 2>&1 | awk -v f="$f" '/not found/ || (/=>/ && $NF !~ /^\/nix\/store\//) {print f}' >> .world/ldd-bad
     done
-    printf 'objects_relocated=%s ldd_bad_lines=%s setuid=%s\n' \
-      "$(find . -type f ! -path './lib-*' | wc -l | tr -d ' ')" "$(wc -l < .world/ldd-bad | tr -d ' ')" \
+    sort -u .world/ldd-bad | sed 's,^\./,,' > .world/ldd-bad.sorted
+
+    # Drop the objects that cannot load (their library is not in the base), and
+    # ASSERT the found set equals dropUnloadable: a binary that newly cannot load,
+    # or one on the list that now resolves, fails the build instead of shipping a
+    # dead binary or silently masking a fixed one.
+    printf '%s\n' $dropArg | sort -u > .world/drop.expected
+    if ! cmp -s .world/ldd-bad.sorted .world/drop.expected; then
+      echo "FATAL: unloadable-object set changed. diff (< found  > expected):" >&2
+      diff .world/ldd-bad.sorted .world/drop.expected >&2 || true
+      echo "Update dropUnloadable in mk-proto-world.nix (name the missing soname + why)." >&2
+      exit 1
+    fi
+    while read -r d; do
+      [ -n "$d" ] || continue
+      [ -e "$d" ] || { echo "FATAL: dropUnloadable names a missing path: $d" >&2; exit 1; }
+      rm -f "$d"
+      b=$(basename "$d"); [ -L "bin/$b" ] && rm -f "bin/$b"
+      [ -L "lib-32/$b" ] && rm -f "lib-32/$b"; [ -L "lib-64/$b" ] && rm -f "lib-64/$b"
+    done < .world/drop.expected
+    echo "dropped $(grep -c . .world/drop.expected) unloadable objects (dbus/glib/hal/tspi/net-snmp/openssl-1.0/python3.9/jvm consumers)" >&2
+
+    printf 'objects_relocated=%s dropped_unloadable=%s setuid=%s\n' \
+      "$(find . -type f ! -path './lib-*' | wc -l | tr -d ' ')" "$(grep -c . .world/drop.expected | tr -d ' ')" \
       "$(wc -l < .world/setuid | tr -d ' ')" > .world/summary
     cat .world/summary >&2
   '' ];
