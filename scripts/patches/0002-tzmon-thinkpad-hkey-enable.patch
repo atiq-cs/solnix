@@ -1,37 +1,68 @@
-solnix: tzmon -- enable the ThinkPad HKEY event interface before reading THM0.
+solnix: tzmon -- survive the ThinkPad false-128C thermal reading on the X1E.
 
-SYMPTOM (ThinkPad X1 Extreme Gen5, 21DE): the machine stops at "Press any key
-to reboot." from seconds to minutes after boot, in multi-user and in boot -s.
-The console line just before the prompt (photographed 2026-10-17):
+SYMPTOM (ThinkPad X1 Extreme Gen5, 21DE001EUS): the live image boots to a
+multi-user login, runs for ~40 s, then at the next thermal poll the console
+prints and the machine halts (photographed 2026-10-18 18:50:51):
 
   tzmon: WARNING: tzmon: Thermal zone (\_TZ_.THM0) is critically hot (128 C);
   initiating rapid shutdown
+  Press any key to reboot.
 
-ROOT CAUSE: tzmon's _CRT handling calls mdboot(A_REBOOT, AD_HALT) when _TMP >=
-_CRT. In the ThinkPad DSDTs read for this (P1 Gen 4i 20Y4 and X1 Carbon Gen 11
-21HN, from linuxhw/ACPI; the X1E Gen5's own tables are not dumped yet, but 128 C
-is exactly TCRT, which no real sensor reports), \_TZ.THM0._TMP returns TCRT
-whenever the EC sets its TSL2 "sensor critically hot" level while HKEY.DHKC is
-0, that is while no OS driver has enabled the hotkey/event interface. The Linux
-thinkpad_acpi driver sets DHKC with HKEY.MHKC(1) at load; illumos has no
-ThinkPad driver, so DHKC stays 0 and the first TSL2 event halts the system.
-With DHKC=1 the firmware reports TSL2 as HKEY event 0x6022 instead (Linux logs
-"THERMAL EMERGENCY: a sensor reports something is extremely hot" and keeps
-running) and _TMP returns the real temperature. _TMP still returns TCRT for
-TSL3, the EC's shutdown level, regardless of DHKC, so tzmon still halts there,
-and the EC's own thermal protection is unchanged.
+tzmon's _CRT handler calls mdboot(A_REBOOT, AD_HALT) when _TMP >= _CRT.
 
-FIX: in tzmon_attach, before the zones are enumerated, find the HKEY device
-(_HID LEN0268/LEN0068/IBM0068), install a notify handler that drains MHKP and
-logs the thermal alarm events (0x6011/0x6012/0x6021/0x6022) with the EC's
-TSL0-TSL3 sensor bitmaps, then call MHKC(1). Detach and the attach failure
-paths call MHKC(0) and remove the handler. Without an HKEY device (every
-non-ThinkPad) nothing changes. Side effect, as under Linux: with DHKC=1 the
-firmware routes hotkeys such as Fn+F4 (sleep) to HKEY events instead of the
-SLPB notify; the handler ignores them.
+WHY 128 C IS NOT REAL. On this hardware \_TZ.THM0._CRT (TCRT) is exactly 128 C
+(confirmed live on lixi: acpitz critical trip = 128000). _TMP returns a real
+temperature via _C2K(sensor) OR exactly TCRT via two EC-level paths. The second
+EC sensor level reads the 0x80 "sensor not populated" sentinel: lixi's
+thinkpad_acpi reports `49 46 45 0 46 45 44 -128` (-128 = 0x80), and the DSDT
+already special-cases 0x80 for the main sensor but not for the TSLx level
+fields, so a level field at 0x80 drives _TMP straight to TCRT. illumos never ran
+the ThinkPad EC/HKEY init Linux's thinkpad_acpi does, so it reads the raw
+sentinel. A genuine overheat instead arrives as a rising _C2K() gradient and
+crosses _HOT first; it never jumps straight to exactly _CRT from a cold idle.
 
---- a/usr/src/uts/i86pc/io/tzmon/tzmon.c	2026-10-17 16:58:08.989267967 -0400
-+++ b/usr/src/uts/i86pc/io/tzmon/tzmon.c	2026-10-17 17:54:33.271974485 -0400
+TWO-PART FIX, both inside tzmon so they run before the first poll (no boot-order
+race), and gated so non-ThinkPads are unaffected:
+
+1. ThinkPad init (the platform shim): tzmon_attach finds the HKEY device
+   (_HID LEN0268/LEN0068/IBM0068), installs a notify handler that drains MHKP
+   and logs the real thermal-alarm events (0x6011/0x6012/0x6021/0x6022) with the
+   EC's TSL0-TSL3 bitmaps, then calls MHKC(1) -- the init Linux does. Detach and
+   the attach-failure paths undo it. No HKEY device -> nothing changes.
+
+2. Sentinel guard (platform-general safety): tzmon_eval_zone refuses to shut
+   down on a _TMP that reads back EXACTLY _CRT when the previous reading was not
+   already at/approaching _CRT. That is the firmware's "sensor unreadable"
+   signal, not a temperature. It logs once per zone and keeps polling; the EC's
+   own thermal cutoff (below the OS) remains the real last line of defence, and a
+   true sustained-critical reading still halts.
+
+The maintainer's design goal is per-platform init discovered at boot. illumos's
+standard mechanism for that is driver binding by ACPI _HID; part 1 is the first
+such shim (it binds on the ThinkPad HKEY _HID, present only on ThinkPads). As
+more platforms need init, each gets its own _HID-bound shim; part 2 is the
+model-independent floor that keeps a bad sensor from powering a machine off.
+
+--- a/usr/src/uts/i86pc/io/tzmon/tzmon.h	2026-10-18 16:55:36.453652659 -0400
++++ b/usr/src/uts/i86pc/io/tzmon/tzmon.h	2026-10-18 16:55:36.474914085 -0400
+@@ -56,6 +56,15 @@
+ 
+ 	int			polling_period;
+ 	int			current_level;
++
++	/*
++	 * solnix: last _TMP (tenths of a degree Kelvin), -1 before the first
++	 * read; and whether the "_TMP == _CRT sentinel" message has been logged
++	 * for this zone, so it is printed once not every poll. See
++	 * tzmon_eval_zone() in tzmon.c.
++	 */
++	int			last_tmp;
++	boolean_t		crt_sentinel_logged;
+ } thermal_zone_t;
+ 
+ 
+--- a/usr/src/uts/i86pc/io/tzmon/tzmon.c	2026-10-18 16:54:28.099639020 -0400
++++ b/usr/src/uts/i86pc/io/tzmon/tzmon.c	2026-10-18 16:55:36.492169458 -0400
 @@ -88,6 +88,8 @@
  static void tzmon_set_power(ACPI_BUFFER devlist, int on_off, char *tz_name);
  static void tzmon_eval_zone(thermal_zone_t *tzp);
@@ -84,7 +115,50 @@ SLPB notify; the handler ignores them.
  
  	ddi_remove_minor_node(dip, NULL);
  	tzmon_dip = NULL;
-@@ -745,3 +758,130 @@
+@@ -321,6 +334,7 @@
+ 
+ 	tzp = kmem_zalloc(sizeof (thermal_zone_t), KM_SLEEP);
+ 	mutex_init(&tzp->lock, NULL, MUTEX_DRIVER, NULL);
++	tzp->last_tmp = -1;	/* no reading yet (kmem_zalloc leaves 0) */
+ 
+ 	return (tzp);
+ }
+@@ -670,6 +684,34 @@
+ 	DTRACE_PROBE4(tz__temp, int, tmp, int, tzp->crt, int, tzp->hot,
+ 	    char *, (char *)tzp->zone_name);
+ 
++	/*
++	 * A _TMP that reads back EXACTLY _CRT, when the previous reading was not
++	 * already approaching _CRT, is a firmware "sensor unreadable" sentinel,
++	 * not a real temperature. On ThinkPads \_TZ.THM0._TMP returns TCRT (== _CRT)
++	 * when an EC level field reads 0x80 (sensor not populated); a genuine
++	 * overheat arrives as a rising gradient through _HOT first (the DSDT's
++	 * normal path is _C2K(temp)). Acting on the sentinel is what powered the
++	 * X1 Extreme Gen5 off ~40 s after boot. Refuse to shut down on it: log
++	 * once and keep the hardware's own EC thermal cutoff (below the OS) as the
++	 * real last line of defence. tzp->last_tmp tracks the previous poll.
++	 */
++	if (tzp->crt > 0 && tmp == tzp->crt &&
++	    (tzp->last_tmp < 0 || tzp->last_tmp < tzp->crt)) {
++		if (!tzp->crt_sentinel_logged) {
++			cmn_err(CE_WARN,
++			    "tzmon: Thermal zone (%s) _TMP reads exactly _CRT "
++			    "(%d C) with no approach through _HOT; treating as a "
++			    "firmware sensor-unreadable sentinel, NOT shutting "
++			    "down (the EC's own thermal cutoff still applies)",
++			    (char *)tzp->zone_name, K_TO_C(tmp));
++			tzp->crt_sentinel_logged = B_TRUE;
++		}
++		tzp->last_tmp = tmp;
++		mutex_exit(&tzp->lock);
++		return;
++	}
++	tzp->last_tmp = tmp;
++
+ 	/* _HOT handling */
+ 	if (tzp->hot > 0 && tmp >= tzp->hot) {
+ 		cmn_err(CE_WARN,
+@@ -745,3 +787,130 @@
  	/* graceful shutdown with inittab and all getting involved */
  	psignal(initpp, SIGPWR);
  }

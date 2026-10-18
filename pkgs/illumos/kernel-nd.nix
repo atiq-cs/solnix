@@ -15,9 +15,10 @@
 # headers (same source rev; headers do not depend on DEBUG).
 # Applied on top of the pinned source: scripts/patches/0001-tscc_pit-default-
 # pit_is_broken.patch (gotcha #10; must be a source default, /etc/system is read
-# too late), and 0002-tzmon-thinkpad-hkey-enable.patch (ThinkPads halt at a false
-# 128 C critical temperature unless the HKEY event interface is enabled; the
-# patch header has the DSDT evidence).
+# too late), and 0002-tzmon-thinkpad-hkey-enable.patch (the X1E halts on a false
+# 128 C _TMP: the patch does the ThinkPad HKEY init AND makes tzmon refuse to act
+# on a _TMP that equals _CRT exactly without approaching through _HOT -- a sensor
+# sentinel, not heat. The patch header has the DSDT + live-hardware evidence).
 #
 # OUTPUT: kernel/, platform/i86pc/{kernel,amd64}/, usr/kernel/ from the
 # non-DEBUG build, plus boot/ (loader, forth, fonts) copied from the gate proto,
@@ -67,6 +68,8 @@ derivation {
       || { echo "FATAL: pit_is_broken default not applied" >&2; exit 1; }
     grep -q '^	tzmon_hkey_enable();' usr/src/uts/i86pc/io/tzmon/tzmon.c \
       || { echo "FATAL: tzmon ThinkPad HKEY patch not applied" >&2; exit 1; }
+    grep -q 'crt_sentinel_logged' usr/src/uts/i86pc/io/tzmon/tzmon.c \
+      || { echo "FATAL: tzmon _CRT sentinel guard not applied" >&2; exit 1; }
 
     # env file: the gate.nix edits, plus no smatch (its binary lives in the
     # workspace tools proto, which +t does not build).
