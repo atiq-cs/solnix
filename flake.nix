@@ -7,7 +7,7 @@
     # docs/design-nixpkgs-illumos.md §5. This is the flake-native path (dev boxes
     # with flake-capable Nix). The BUILD path (illumos host, Nix 2.3.16 classic,
     # no flakes) uses lib/eval-host.nix — see the eval-split note below.
-    solnix-pkgs.url = "git+https://codeberg.org/gregburd/solnix-pkgs.git?ref=main";
+    solnix-pkgs.url = "git+https://git.solnix.io/solnix-pkgs.git?ref=main";
     # Plain UPSTREAM nixpkgs, for the host-ops devShell ONLY. The fork's patched
     # nixpkgs (solnix-pkgs.lib.nixpkgsSrc) rebuilds bison/perl/etc. from source
     # (no binary cache for the applyPatches tree), which made `cd` into the repo

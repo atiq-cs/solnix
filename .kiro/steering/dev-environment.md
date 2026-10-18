@@ -51,7 +51,7 @@ re-extractable via the committed scripts.
 
 ## Git
 
-- Remote: `ssh://git@codeberg.org/gregburd/solnix.git` (`origin`), branch `main`.
+- Remote: `ssh://git@codeberg.org/solnix/solnix.git` (`origin`), branch `main`.
 - **Push as work progresses** (maintainer's standing instruction). Small, coherent
   commits; present-tense imperative subject ≤72 chars; body explains *why*.
 - Never force-push, never rewrite pushed history, never push to `main` on shared

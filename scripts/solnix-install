@@ -1044,7 +1044,7 @@ if [ "${DO_NET_ONLY:-0}" = 1 ] || [ "${DO_SELF_UPDATE:-0}" = 1 ] || [ "${DO_SSHD
   if [ "${DO_SSHD:-0}" = 1 ]; then _start_sshd
   elif [ "${DO_NET_ONLY:-0}" = 1 ]; then _start_sshd; fi
   if [ "${DO_SELF_UPDATE:-0}" = 1 ]; then
-    _self_url="${SOLNIX_INSTALLER_URL:-https://codeberg.org/gregburd/solnix/raw/branch/main/scripts/solnix-install}"
+    _self_url="${SOLNIX_INSTALLER_URL:-https://codeberg.org/solnix/solnix/raw/branch/main/scripts/solnix-install}"
     _newer="/tmp/solnix-install.updated"
     log "re-fetching the installer from $_self_url"
     if command -v curl >/dev/null 2>&1 && curl -fsSL --max-time 120 "$_self_url" -o "$_newer" 2>/dev/null && [ -s "$_newer" ]; then

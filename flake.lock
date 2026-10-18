@@ -49,12 +49,12 @@
         "rev": "2678fafe6b517199cb35b90e52cbd09a0335fbdf",
         "revCount": 110,
         "type": "git",
-        "url": "https://codeberg.org/gregburd/solnix-pkgs.git"
+        "url": "https://git.solnix.io/solnix-pkgs.git"
       },
       "original": {
         "ref": "main",
         "type": "git",
-        "url": "https://codeberg.org/gregburd/solnix-pkgs.git"
+        "url": "https://git.solnix.io/solnix-pkgs.git"
       }
     }
   },

@@ -132,7 +132,7 @@ if [ "$FORCE" = 1 ] || [ ! -e "$_fn" ]; then
   echo "writing $_fn..." >&2
   cat > "$_fn" <<EOF
 {
-  inputs.solnix.url = "git+https://codeberg.org/gregburd/solnix.git?ref=main";
+  inputs.solnix.url = "git+https://git.solnix.io/solnix.git?ref=main";
 
   outputs = { solnix, ... }: {
     solnixConfigurations.$HOST = solnix.lib.solnixSystem {

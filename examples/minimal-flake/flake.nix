@@ -5,7 +5,7 @@
 #
 # or from a git host: --flake 'github:<you>/<repo>#example'.
 {
-  inputs.solnix.url = "git+https://codeberg.org/gregburd/solnix.git?ref=main";
+  inputs.solnix.url = "git+https://git.solnix.io/solnix.git?ref=main";
 
   outputs = { solnix, ... }: {
     solnixConfigurations.example = solnix.lib.solnixSystem {

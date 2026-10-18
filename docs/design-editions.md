@@ -53,9 +53,9 @@ rebuild, GATE 1b-PURE, the AMIs in progress, all become "solnix unstable". The
 A downstream config selects its edition purely by the flake input:
 ```nix
 # unstable
-inputs.solnix-pkgs.url = "git+https://codeberg.org/gregburd/solnix-pkgs";
+inputs.solnix-pkgs.url = "git+https://git.solnix.io/solnix-pkgs.git?ref=unstable";
 # 26.11
-inputs.solnix-pkgs.url = "git+https://codeberg.org/gregburd/solnix-pkgs?ref=v26.11";
+inputs.solnix-pkgs.url = "git+https://git.solnix.io/solnix-pkgs.git?ref=26.11";
 ```
 
 ## Release criteria (when unstable → 26.11 freeze is allowed)

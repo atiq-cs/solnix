@@ -28,7 +28,7 @@ let
     VERSION_ID = cfg.release;
     PRETTY_NAME = prettyName;
     HOME_URL = "https://solnix.io/";
-    BUG_REPORT_URL = "https://codeberg.org/gregburd/solnix/issues";
+    BUG_REPORT_URL = "https://codeberg.org/solnix/solnix/issues";
     DEFAULT_HOSTNAME = "solnix";
   } // optionalAttrs (cfg.revision != null) { BUILD_ID = shortRev; };
 

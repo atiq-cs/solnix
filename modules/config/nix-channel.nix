@@ -79,7 +79,7 @@ in
     nix.registry = mkOption {
       type = types.attrsOf (types.attrsOf types.anything);
       default = { };
-      example = lib.literalExpression ''{ solnix.to = { type = "git"; url = "https://codeberg.org/gregburd/solnix.git"; }; }'';
+      example = lib.literalExpression ''{ solnix.to = { type = "git"; url = "git+https://git.solnix.io/solnix.git"; }; }'';
       description = ''
         The system flake registry, written to /etc/nix/registry.json (NixOS
         nix.registry). Each entry is <name>.to = <flake reference attrs>.
@@ -88,8 +88,8 @@ in
     system.defaultChannel = mkOption {
       internal = true;
       type = types.str;
-      default = "https://codeberg.org/gregburd/solnix/archive/${
-        if config.solnix.release == "unstable" then "main" else "release-${config.solnix.release}"}.tar.gz";
+      default = "https://codeberg.org/solnix/solnix/archive/${
+        if config.solnix.release == "unstable" then "unstable" else config.solnix.release}.tar.gz";
       description = ''
         The channel root is subscribed to (NixOS system.defaultChannel). "unstable"
         follows main, a dated release its release-YY.MM branch.
