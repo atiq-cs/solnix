@@ -522,6 +522,23 @@ let
   iwmFirmware = acceptFirmwareLicense:
     import ./iwm-firmware.nix { inherit acceptFirmwareLicense; };
 
+  # pkgs.solnix.nvidia-oss-modules -- the NVIDIA open GPU kernel modules
+  # (nvidia, nvidia_modeset, nvidia_i2c; MIT), built from the pinned upstream
+  # tree with its RM source and checked unresolved=0 against kernelNd
+  # (./nvidia-oss.nix). Headers come from kernelNd's own illumos-gate source.
+  # No config installs or binds these: first attach is supervised by hand
+  # (nvidia before nvidia_modeset; see X1E-NVIDIA-STATUS.md).
+  nvidia-oss-modules = (import ./nvidia-oss.nix {
+    illumosSrc = kernelNd.src;
+    kernel = kernelNd;
+    gate = gate';
+    solnixDev = null;
+  }).nvidia-oss-modules;
+  # nvidia-gsp-firmware 615.71.09 (GSP + ucodes for TU10X/GA10X), unfree,
+  # redistributable for open-source kernels; gated on the explicit opt-in.
+  nvidiaGspFirmware = acceptFirmwareLicense:
+    import ./nvidia-gsp-firmware.nix { inherit acceptFirmwareLicense; };
+
   # mkIwmDriversDb -- the /etc driver database with the iwm lines merged in, so
   # install-be lays an iwm-aware DB into the BE with NO install-be change (it
   # copies name_to_major/driver_aliases/minor_perm verbatim; the config renders
@@ -681,6 +698,7 @@ in
   # tree when hardware.wirelessIwm.attachAtBoot. mkIwmKernel/iwmFirmware take
   # the unfree opt-in so the blob stays out of any non-opted closure.
   inherit iwm-driver mkIwmDriversDb mkIwmKernel iwmFirmware wpa-pmk;
+  inherit nvidia-oss-modules nvidiaGspFirmware;
 
   inherit (srcPkgs) zlib libxml2 openssl openssh bash nspr nss git libcExtra binutils gnumake gccWrapper vi pkgconf;
   inherit (srcPkgs) ncurses less htop top libevent tmux coreutils gnugrep gnused gnutar findutils diffutils jq gettext home-manager xorgproto lndir hostname libiconv;
