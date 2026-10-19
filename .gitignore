@@ -60,6 +60,8 @@ src/riscv/**/*.elf
 src/drm-port/**/*.o
 src/drm-port/netbsd-ref/src/
 src/drm-port/**/drm
+# the vendored upstream id list i915_pciid.c builds from (openbsd-orig is read-only upstream)
+!src/drm-port/i915/openbsd-orig/include/drm
 src/riscv/**/*.linked
 src/riscv/**/toolchain-sol/
 src/riscv/**/sysroot-riscv-sol/

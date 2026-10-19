@@ -4,8 +4,9 @@
  *
  * Expectations come from upstream, not from this table: 0x3E9B is listed
  * under INTEL_CFL_H_GT2_IDS ("Halo GT2") and 0x591B under INTEL_KBL_GT2_IDS in
- * pciids.h; 0x9A49 is Tiger Lake (outside the Gen9 first target); 10de:1c8c is
- * the X1's NVIDIA GP107M; an i915 id with a non-display class must not match.
+ * pciids.h; 0x46A6 (the X1E) under INTEL_ADLP_IDS; 0x9A49 is Tiger Lake (not
+ * matched); 10de:1c8c is the X1's NVIDIA GP107M; an i915 id with a non-display
+ * class must not match.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -45,7 +46,9 @@ main(int argc, char **argv)
 	expect(0x8086, 0x3e9b, 0x030000, "coffeelake", 2);	/* the X1 */
 	expect(0x8086, 0x591b, 0x030000, "kabylake", 2);
 	expect(0x8086, 0x3e9b, 0x040300, NULL, 0);	/* audio class: no */
-	expect(0x8086, 0x9a49, 0x030000, NULL, 0);	/* TGL: not first target */
+	expect(0x8086, 0x46a6, 0x030000, "alderlake_p", 0);	/* the X1E */
+	expect(0x8086, 0x46a6, 0x040300, NULL, 0);	/* audio class: no */
+	expect(0x8086, 0x9a49, 0x030000, NULL, 0);	/* TGL: not matched */
 	expect(0x10de, 0x1c8c, 0x030200, NULL, 0);	/* NVIDIA GP107M */
 	for (k = 0; k < n; k++)
 		seen += i915_pciid_device(k) == 0x3e9b;

@@ -16,6 +16,8 @@
 #   env: GATE_INC, JOBS (4), XFLAGS, CC, NM (gnm), LD (/usr/bin/ld).
 #   OBJS_FROM=DIR reuses the drm objects link-gap.sh left in DIR/obj.
 set -u
+# KROOT: root of the target kernel tree (default the running one, /).
+: "${KROOT:=}"
 obsd=$1 port=$2 out=$3 files=$4
 compat=$port/obsd-compat
 : "${GATE_INC:=/nix/store/s7zkx8nx5sfxixmyqmlnrybrrh14jkmb-illumos-gate-proto/usr/include}"
@@ -58,14 +60,15 @@ $CC -m64 -mcmodel=kernel -mno-red-zone -D_KERNEL -ffreestanding -nostdinc \
 mapfile=$port/i915/i915.mapfile
 $LD -r -Breduce -M "$mapfile" -o "$out/i915" "$out"/obj/*.o "$compat"/obsd_*.o "$out/i915_illumos.o" \
     "$out/i915_drmglue.o" "$out/i915_pciid.o" > "$out/ld.log" 2>&1 || { cat "$out/ld.log"; exit 1; }
-for k in /platform/i86pc/kernel/amd64/unix /kernel/amd64/genunix \
-    /platform/i86pc/kernel/misc/amd64/gfx_private; do
+for k in $KROOT/platform/i86pc/kernel/amd64/unix $KROOT/kernel/amd64/genunix \
+    $KROOT/platform/i86pc/kernel/misc/amd64/gfx_private; do
 	$NM -g --defined-only "$k" | awk '{print $3}'
 done | sort -u > "$out/kernel.txt"
 # /dev/ksyms is the symbol table of the kernel AND every loaded module.
 # gnm cannot read the character device itself (measured: 0 symbols, which
 # would make the collision gate pass vacuously), so copy it to a file first.
-cat /dev/ksyms > "$out/ksyms.elf"
+# KSYMS: a saved copy of the target's /dev/ksyms (default: read it live).
+cat "${KSYMS:-/dev/ksyms}" > "$out/ksyms.elf"
 $NM -g --defined-only "$out/ksyms.elf" | awk '{print $3}' | sort -u > "$out/ksyms-all.txt"
 if [ "$(wc -l < "$out/ksyms-all.txt")" -lt 10000 ]; then
 	echo "ksyms snapshot has only $(wc -l < "$out/ksyms-all.txt") symbols: refusing a vacuous collision gate"

@@ -632,7 +632,7 @@ char _depends_on[] = "misc/gfx_private";
 
 static struct modldrv i915_il_modldrv = {
 	&mod_driverops,
-	"i915 (OpenBSD inteldrm, Gen9)",
+	"i915 (inteldrm Gen9, ADL-P)",
 	&i915_il_dev_ops,
 };
 
