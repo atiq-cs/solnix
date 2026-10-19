@@ -1,119 +1,85 @@
-# Intel wireless firmware for the iwx driver.
+# Intel AX2xx firmware for the OpenBSD iwx(4) port (src/ports/wifi/iwx).
 #
-# These are PROPRIETARY, redistributable-but-not-open blobs from Intel. They are
-# gated behind the standard Nix unfree mechanism, so a user who has not opted in
-# gets a clear evaluation error naming the licence rather than a silent download.
+# PROPRIETARY but redistributable: linux-firmware's LICENCE.iwlwifi_firmware
+# permits "Redistribution and use in binary form, without modification" with
+# the copyright notice and disclaimer reproduced. The licence ships beside the
+# blobs, as for ./iwm-firmware.nix.
 #
-# The blobs come from the linux-firmware tree, which is where Intel publishes
-# them. OpenBSD RENAMES them (iwx-cc-a0-77 rather than iwlwifi-cc-a0-77.ucode),
-# and the driver looks for the OpenBSD names, so the install phase maps them.
-{ lib
-, stdenvNoCC
-, fetchurl
-  # Explicit opt-in. This is the REAL gate -- see the meta.license note below for
-  # why the licence attribute alone does not stop evaluation.
+# Which blob the X1E needs (measured): its AX211 is PCI 8086:51f0, subsystem
+# 8086:0090, no CDB. iwx has no explicit iwx_dev_info row for it, so
+# iwx_find_device_cfg matches the MAC_TYPE_SO + RF_TYPE_GF + NO_CDB wildcard ->
+# iwx_2ax_cfg_so_gf_a0 -> "iwx-so-a0-gf-a0-77" + "iwx-so-a0-gf-a0.pnvm" (Linux
+# runs so-a0-gf-a0-89 on lixi). gf4 is the AX411 (CDB) pair; ty is the AX210.
+# Every AX210-generation cfg needs BOTH a ucode and a PNVM (if_iwxvar.h).
+#
+# Name mapping: OpenBSD keeps the iwx- prefix (iwx-so-a0-gf-a0-77, not
+# iwlwifi-so-a0-gf-a0-77.ucode), and the driver asks for the OpenBSD names.
+#
+# Where it goes: loadfirmware() calls firmware_open("iwx", name), which opens
+# "firmware/iwx/<name>" on the kernel module path (uts/common/os/firmload.c),
+# i.e. /kernel/firmware/iwx/<name>.
+#
+# Plain derivation + builtins.fetchurl (fixed-output, flat sha256), the same
+# pattern as ./iwm-firmware.nix, so it evaluates and builds on the illumos host
+# without a nixpkgs stdenv. The hashes are the same blobs the earlier stdenvNoCC
+# version pinned (its SRI hashes decode to these hex digests) and match the
+# off-account copy in solnix-bank/firmware/iwx-ax210-api77-20241017/SHA256SUMS.
+{ system ? "x86_64-solaris"
+  # Explicit opt-in: the blobs are not open source.
 , acceptFirmwareLicense ? false
-  # The firmware API revision the vendored driver was written against. Bumping
-  # this without re-reading if_iwxvar.h will produce blobs the driver rejects:
-  # iwx checks the API version and refuses a mismatch (if_iwx.c:1229-1241).
+  # The firmware API revision the vendored driver was written against. iwx
+  # checks the API version and refuses a mismatch (if_iwx.c iwx_read_firmware).
 , apiRev ? "77"
 }:
 
 let
-  # linux-firmware pinned by commit, not a branch. A moving ref would change the
-  # hash under us and, worse, could silently ship a different API revision.
   rev = "20241017";
+  base = "https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain";
+  fetch = lf: sha256: builtins.fetchurl { url = "${base}/${lf}?id=${rev}"; name = lf; inherit sha256; };
 
-  # Map: OpenBSD iwx's expected name <- the linux-firmware filename + its pinned
-  # sha256. The vendored driver is API rev 77 (if_iwxvar.h IWX_*_FW), and the
-  # AX210 "SO"/"TY" + "GF"/"GF4" device family is the one solnix targets: the
-  # X1 Extreme Gen5's AX211 (PCI 8086:51f0, subsystem 8086:0090, no CDB) has no
-  # explicit iwx_dev_info row, so iwx_find_device_cfg matches the MAC_TYPE_SO +
-  # RF_TYPE_GF + NO_CDB wildcard -> iwx_2ax_cfg_so_gf_a0 -> "iwx-so-a0-gf-a0-77"
-  # + "iwx-so-a0-gf-a0.pnvm". Measured on lixi: Linux (ethtool -i) runs
-  # so-a0-gf-a0-89.uc. gf4 is the AX411 (CDB) pair, shipped for that SKU. Each
-  # AX210 device needs BOTH a ucode and a PNVM
-  # (if_iwxvar.h: every SO/TY/MA cfg has a .pnvm_name). The older Qu/HR/JF
-  # families (different, pre-AX210 hardware) are intentionally NOT pinned here;
-  # add them with real hashes when a Qu device is actually targeted, rather than
-  # carry fakeHash placeholders that break eval. Hashes from the pinned
-  # linux-firmware commit 20241017 via nix-prefetch-url.
+  # OpenBSD name -> linux-firmware file, pinned. Only the api-77 blobs exist here.
   blobs = {
-    # AX411 (CDB) pair.
-    "iwx-so-a0-gf4-a0-${apiRev}" = { lf = "iwlwifi-so-a0-gf4-a0-${apiRev}.ucode"; hash = "sha256-2UW85TnueAM6hcKI2puYiyZRoWI8X2CBt9tRDTln33Y="; };
-    "iwx-so-a0-gf4-a0.pnvm"      = { lf = "iwlwifi-so-a0-gf4-a0.pnvm";            hash = "sha256-8Lm/2ToXsDEzEptJrGhx1HpR1NKBv37LZ7My9uMX/cI="; };
-    # AX211 (no CDB; the X1E) and AX210 (TY) pairs.
-    "iwx-so-a0-gf-a0-${apiRev}"  = { lf = "iwlwifi-so-a0-gf-a0-${apiRev}.ucode";  hash = "sha256-h1kOqVNaiTn92ylrx2IvOpAPKPR7RctOQ1oqHV9JbM0="; };
-    "iwx-so-a0-gf-a0.pnvm"       = { lf = "iwlwifi-so-a0-gf-a0.pnvm";             hash = "sha256-DqWurBB8iP9zcRiNki/lM3xQYOfhtMZQUzmNt5jZwP0="; };
-    "iwx-ty-a0-gf-a0-${apiRev}"  = { lf = "iwlwifi-ty-a0-gf-a0-${apiRev}.ucode";  hash = "sha256-/Yl32/rP5QuKZgFHmqn/0h0B4nTkqe/ROTXdnWZ/1Fs="; };
-    "iwx-ty-a0-gf-a0.pnvm"       = { lf = "iwlwifi-ty-a0-gf-a0.pnvm";             hash = "sha256-bsdpu1FEnB8cuw1SjY1fPcid51RidJE0YOEaSw2hnmw="; };
+    "iwx-so-a0-gf-a0-${apiRev}" = fetch "iwlwifi-so-a0-gf-a0-${apiRev}.ucode" "87590ea9535a8939fddb296bc7622f3a900f28f47b45cb4e435a2a1d5f496ccd";
+    "iwx-so-a0-gf-a0.pnvm"      = fetch "iwlwifi-so-a0-gf-a0.pnvm"            "0ea5aeac107c88ff7371188d922fe5337c5060e7e1b4c65053398db798d9c0fd";
+    "iwx-so-a0-gf4-a0-${apiRev}" = fetch "iwlwifi-so-a0-gf4-a0-${apiRev}.ucode" "d945bce539ee78033a85c288da9b988b2651a1623c5f6081b7db510d3967df76";
+    "iwx-so-a0-gf4-a0.pnvm"      = fetch "iwlwifi-so-a0-gf4-a0.pnvm"            "f0b9bfd93a17b03133129b49ac6871d47a51d4d281bf7ecb67b332f6e317fdc2";
+    "iwx-ty-a0-gf-a0-${apiRev}" = fetch "iwlwifi-ty-a0-gf-a0-${apiRev}.ucode" "fd8977dbfacfe50b8a6601479aa9ffd21d01e274e4a9efd13935dd9d667fd45b";
+    "iwx-ty-a0-gf-a0.pnvm"      = fetch "iwlwifi-ty-a0-gf-a0.pnvm"            "6ec769bb51449c1f1cbb0d528d8d5f3dc89de7546274913460e11a4b0da19e6c";
   };
-
-  # Index-matched target names for the install phase (the OpenBSD names, with the
-  # iwx- prefix loadfirmware() asks for). lib.attrNames and lib.mapAttrsToList
-  # iterate attrs in the same (sorted) order, so names[i] pairs with srcs[i].
-  obsdNames = lib.attrNames blobs;
+  licence = fetch "LICENCE.iwlwifi_firmware" "16d5040c7cf851fc693b7542e20870935b99802533ea1bfd231c377a2305e5c5";
+  names = builtins.attrNames blobs;
 in
-# ⚠️ MEASURED, not assumed: nixpkgs defines unfreeRedistributableFirmware WITHOUT
-# `free = false`, so it evaluates as free=true and does NOT trip allowUnfree.
-# That is deliberate upstream -- it lets linux-firmware install by default. It
-# also means tagging this package with that licence provides NO gate at all, so
-# the block below is what actually enforces the opt-in.
-lib.throwIf (!acceptFirmwareLicense) ''
-  iwx-firmware requires proprietary Intel firmware blobs.
-
-  AX2xx wireless hardware does not function without them, and no free
-  alternative exists on any operating system.
-
-  Set hardware.wirelessIwx.allowUnfreeFirmware = true (which passes
-  acceptFirmwareLicense here) to accept Intel's redistributable-firmware
-  licence terms.
-''
-stdenvNoCC.mkDerivation {
-  pname = "iwx-firmware";
-  version = "${rev}-api${apiRev}";
-
-  srcs = lib.mapAttrsToList (obsdName: b: fetchurl {
-    name = obsdName;
-    url = "https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/${b.lf}?id=${rev}";
-    inherit (b) hash;
-  }) blobs;
-
-  dontUnpack = true;
-  dontBuild = true;
-
-  # srcs (above) is already a derivation attribute, so the builder sees $srcs.
-  # Add the index-matched target names: srcs[i] installs as $out/firmware/<names[i]>,
-  # the exact name iwx's loadfirmware(sc_fwname) and the PNVM load ask for (OpenBSD
-  # keeps the iwx- prefix, e.g. "iwx-so-a0-gf4-a0-77" and "iwx-so-a0-gf4-a0.pnvm").
-  names = obsdNames;
-
-  installPhase = ''
-    runHook preInstall
-    mkdir -p $out/firmware
+if apiRev != "77" then
+  throw "iwx-firmware: only apiRev 77 is pinned (the vendored driver's API); got ${apiRev}"
+else if !acceptFirmwareLicense then
+  throw ''
+    iwx-firmware is Intel's proprietary (redistributable) iwlwifi firmware.
+    AX2xx hardware does not work without it and no free alternative exists.
+    Set hardware.wirelessIwx.allowUnfreeFirmware = true to accept
+    LICENCE.iwlwifi_firmware.
+  ''
+else
+derivation {
+  name = "iwx-firmware-${rev}-api${apiRev}";
+  inherit system licence names;
+  srcs = map (n: blobs.${n}) names;   # index-matched with names
+  builder = "/usr/bin/bash";
+  PATH = "/usr/bin";
+  args = [ "-c" ''
+    set -eu
+    d=$out/kernel/firmware/iwx
+    mkdir -p $d
     set -- $srcs
     for nm in $names; do
-      f=$1; shift
-      install -m 0444 "$f" "$out/firmware/$nm"
+      cp "$1" "$d/$nm"; shift
     done
-    # The X1E's AX211 needs BOTH its ucode and its PNVM; a missing one presents as
-    # "wifi does not work" much later, on hardware. Fail loudly here instead.
+    cp $licence $d/iwx-license
+    chmod 0444 $d/*
+    # the X1E's AX211 needs BOTH; a missing one shows up much later as "no wifi".
     for need in iwx-so-a0-gf-a0-${apiRev} iwx-so-a0-gf-a0.pnvm; do
-      [ -f "$out/firmware/$need" ] || { echo "iwx-firmware: missing $need" >&2; exit 1; }
+      [ -s "$d/$need" ] || { echo "iwx-firmware: missing $need" >&2; exit 1; }
     done
-    n=$(ls -1 "$out/firmware" | wc -l)
-    echo "iwx-firmware: installed $n blob(s)" >&2
-    runHook postInstall
-  '';
-
-  meta = with lib; {
-    description = "Intel AX2xx (iwlwifi) firmware, named for the OpenBSD iwx driver";
-    homepage = "https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git";
-    # Accurate licence tag. NOTE it is NOT the gate: nixpkgs gives this licence
-    # free=true so that linux-firmware works out of the box, so allowUnfree does
-    # not bite here. The acceptFirmwareLicense throw above is the enforcement.
-    license = licenses.unfreeRedistributableFirmware;
-    sourceProvenance = with sourceTypes; [ binaryFirmware ];
-    platforms = [ "x86_64-solaris" ];
-  };
+    n=$(ls -1 $d | grep -c '^iwx-[st]')
+    [ "$n" -eq 6 ] || { echo "iwx-firmware: $n blobs, want 6" >&2; exit 1; }
+  '' ];
 }

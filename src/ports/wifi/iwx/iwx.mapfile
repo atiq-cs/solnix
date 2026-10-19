@@ -1,0 +1,24 @@
+# iwx.mapfile -- scope every symbol of the linked iwx module local except the
+# module interface krtld resolves by name: _init, _fini, _info. iwx has no
+# _depends_on (it links -N misc/mac), so it is not listed: naming a symbol the
+# module does not define makes ld -Breduce emit a strong UNDEF for it.
+#
+# WHY: iwx, iwm and i915 each carry an OpenBSD-kernel-API compat layer with the
+# same global names (tsleep, wakeup, bus_dmamap_*, timeout_*, task_*,
+# loadfirmware, systq, ...). krtld binds a loading module's non-local symbols
+# to an existing definition (uts/common/krtld/kobj.c do_symbols), so a second
+# module would get its compat references cross-wired into the first one's.
+# The full rationale is in ../iwm/iwm.mapfile; this is the same mapfile.
+#
+# NOTE: new solnix build glue, not derived from any GPL source.
+
+$mapfile_version 2
+
+SYMBOL_SCOPE {
+	global:
+		_init;
+		_fini;
+		_info;
+	local:
+		*;
+};

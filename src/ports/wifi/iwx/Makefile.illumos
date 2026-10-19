@@ -1,0 +1,124 @@
+# Native illumos build of the iwx kernel module (OpenBSD iwx(4) + OpenBSD
+# net80211 + the illumos glue) under the giant-lock model, with gmake.
+#
+#   gmake -f Makefile.illumos [UTSINC=/path/to/gate-proto/usr/include]
+#
+# Same compiler flags and include worlds as ../iwm/Makefile.illumos (see that
+# file for where each flag comes from). The generated sources must exist:
+#   build/if_iwx_illumos.c, build/dev/pci/if_iwxvar.h   (gen-illumos-src.sh,
+#     or git apply of patches/*.patch as pkgs/illumos/iwx-driver.nix does)
+#   ../net80211/build/*.c                               (net80211 gen)
+#
+# Reused from iwm unchanged: ../iwm/iwm_bus.c (bus_dma/pci_intr on DDI, the
+# giant interrupt trampoline) and ../iwm/iwm_gld.c (GLDv3 + WLDP bridge).
+# iwx_glue.c implements the iwm_il_* calls iwm_gld.c makes. The RENAME set
+# below gives every module-global name that came from an iwm file an iwx name,
+# so the linked module carries no iwm_* symbol, local or not.
+
+CC	?= gcc
+LD	?= /usr/bin/ld
+UTSINC	?= /nix/store/s7zkx8nx5sfxixmyqmlnrybrrh14jkmb-illumos-gate-proto/usr/include
+
+W	= ..
+N	= $(W)/net80211
+M	= $(W)/iwm
+O	= obj
+
+RENAME	= -Diwm_gld_register=iwx_gld_register \
+	  -Diwm_gld_unregister=iwx_gld_unregister \
+	  -Diwm_gld_mac_handle=iwx_gld_mac_handle \
+	  -Diwm_gld_init_ops=iwx_gld_init_ops \
+	  -Diwm_gld_fini_ops=iwx_gld_fini_ops \
+	  -Diwm_il_start=iwx_il_start -Diwm_il_stop=iwx_il_stop \
+	  -Diwm_il_tx=iwx_il_tx -Diwm_il_getstate=iwx_il_getstate \
+	  -Diwm_il_nodes=iwx_il_nodes -Diwm_il_scan=iwx_il_scan \
+	  -Diwm_il_set_essid=iwx_il_set_essid -Diwm_il_join=iwx_il_join \
+	  -Diwm_dma_mblk_alloc=iwx_dma_mblk_alloc \
+	  -Diwm_intr_enable=iwx_intr_enable \
+	  -Diwm_intr_disestablish=iwx_intr_disestablish
+
+# IWX_TFH_NUM_TBS (if_iwxreg.h): iwx TX maps are created with 25 - 2 segments
+# (if_iwx.c iwx_alloc_tx_ring), above iwm's 20, so the map array is sized here.
+KDEFS	= -D_KERNEL -D_SYSCALL32 -D_SYSCALL32_IMPL -D_ELF64 -D_DDI_STRICT \
+	  -Dsun -D__sun -D__SVR4 -D_ASM_INLINES -DN80211_GIANT \
+	  -DIWX_DMA_MAX_SEGS=25 '-DN80211_FW_MODULE="iwx"' $(RENAME)
+KFLAGS	= -m64 -O2 -ffreestanding -mno-red-zone -mcmodel=kernel \
+	  -mno-mmx -mno-sse -fno-asynchronous-unwind-tables \
+	  -mindirect-branch=thunk-extern -mindirect-branch-register \
+	  -fstack-protector-strong \
+	  -fno-inline-small-functions -fno-inline-functions-called-once \
+	  -fno-ipa-cp -fno-ipa-icf \
+	  -fno-reorder-functions -fno-reorder-blocks-and-partition \
+	  -fno-aggressive-loop-optimizations \
+	  --param=max-inline-insns-single=450 \
+	  -fno-strict-aliasing -fno-common -nostdinc \
+	  -Wno-format -Wno-unknown-pragmas
+SYSINC	= -I$(UTSINC)
+
+# iwx world: build/ first (the patched if_iwxvar.h), then the iwm compat
+# headers for bus.h/pcivar.h (the DDI-memory segment + interrupt handle fields
+# iwm_bus.c needs), then iwx's own compat. iwm's pcidevs.h is NOT wanted: the
+# iwm compat tree is searched for machine/ and dev/pci/pcivar.h only, through
+# a private include dir assembled by the build (obj/inc).
+INC_IWX	= -include $(M)/compat/sys/iwm_prelude.h -include iwx_mbuf_adapter.h \
+	  -Ibuild -I$(O)/inc -Icompat -I. $(SYSINC)
+# Same order as iwm's: net80211's compat (its if_llc.h, ...) before iwx's
+# (whose if_llc.h is an empty stub), the iwm bus/pcivar copies ahead of iwx's.
+INC_N80	= -include sys/n80211_prelude.h -I$(O)/inc -I$(N)/compat -Icompat \
+	  -I. $(SYSINC)
+INC_ILL	= -I$(M)/compat-illumos $(SYSINC)
+
+N80_SRC	= $(notdir $(wildcard $(N)/orig/*.c))
+N80_OBJ	= $(addprefix $(O)/n80/,$(N80_SRC:.c=.o))
+
+OBJS	= $(O)/if_iwx.o $(O)/iwx_glue.o $(O)/iwx_bus.o $(O)/iwx_gld.o \
+	  $(O)/n80211_giant.o $(O)/n80211_layout.o $(O)/iwx_mbuf.o \
+	  $(O)/n80211_crypto.o $(O)/n80211_rbtree.o $(O)/n80211_mbuf.o \
+	  $(O)/n80211_kcompat.o $(O)/n80211_stack.o $(N80_OBJ)
+
+all: iwx
+
+# -Breduce + the mapfile scope every symbol local except _init/_fini/_info
+# (see iwx.mapfile). iwx has no _depends_on; it links -N misc/mac.
+iwx: $(OBJS) iwx.mapfile
+	$(LD) -r -Breduce -M iwx.mapfile -o $@ $(OBJS) -dy -N misc/mac
+
+$(O) $(O)/n80:
+	mkdir -p $@
+
+# the two iwm compat headers iwx needs, without iwm's pcidevs.h / if_iwm*.h
+$(O)/inc/.stamp: $(M)/compat/machine/bus.h $(M)/compat/dev/pci/pcivar.h | $(O)
+	mkdir -p $(O)/inc/machine $(O)/inc/dev/pci
+	cp $(M)/compat/machine/bus.h $(O)/inc/machine/bus.h
+	cp $(M)/compat/dev/pci/pcivar.h $(O)/inc/dev/pci/pcivar.h
+	touch $@
+
+$(O)/if_iwx.o: build/if_iwx_illumos.c $(O)/inc/.stamp | $(O)
+	$(CC) $(KFLAGS) $(KDEFS) $(INC_IWX) -c -o $@ $<
+$(O)/iwx_glue.o: iwx_glue.c $(O)/inc/.stamp | $(O)
+	$(CC) $(KFLAGS) $(KDEFS) $(INC_IWX) -c -o $@ $<
+$(O)/iwx_bus.o: $(M)/iwm_bus.c $(O)/inc/.stamp | $(O)
+	$(CC) $(KFLAGS) $(KDEFS) $(INC_IWX) -c -o $@ $<
+
+# illumos-only translation units (GLDv3 headers, no OpenBSD prelude).
+$(O)/iwx_gld.o: $(M)/iwm_gld.c | $(O)
+	$(CC) $(KFLAGS) $(KDEFS) $(INC_ILL) -c -o $@ $<
+$(O)/n80211_giant.o: $(N)/n80211_giant.c | $(O)
+	$(CC) $(KFLAGS) $(KDEFS) $(INC_ILL) -c -o $@ $<
+
+$(O)/n80211_layout.o $(O)/n80211_crypto.o $(O)/n80211_rbtree.o \
+$(O)/n80211_mbuf.o $(O)/n80211_kcompat.o $(O)/n80211_stack.o: \
+    $(O)/%.o: $(N)/%.c $(O)/inc/.stamp | $(O)
+	$(CC) $(KFLAGS) $(KDEFS) $(INC_N80) -c -o $@ $<
+
+$(O)/iwx_mbuf.o: iwx_mbuf.c | $(O)
+	$(CC) $(KFLAGS) $(KDEFS) -I. $(SYSINC) -c -o $@ $<
+
+$(O)/n80/%.o: $(N)/orig/%.c $(O)/inc/.stamp | $(O)/n80
+	$(CC) $(KFLAGS) $(KDEFS) $(INC_N80) -c -o $@ \
+	    $(if $(wildcard $(N)/build/$*.c),$(N)/build/$*.c,$<)
+
+clean:
+	rm -rf iwx $(O)
+
+.PHONY: all clean

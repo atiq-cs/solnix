@@ -494,6 +494,20 @@ let
     inherit ld;
   };
 
+  # pkgs.solnix.iwx-driver -- the Intel AX2xx wireless kernel module (OpenBSD
+  # iwx(4)) under the giant-lock model, built from src/ports/wifi/iwx as a pure
+  # derivation (./iwx-driver.nix). $out/kernel/drv/amd64/iwx. Its gate checks
+  # symbol resolution against both the gate proto and kernelNd.
+  iwx-driver = import ./iwx-driver.nix {
+    gate = gate';
+    inherit kernelNd ld;
+    solnixDev = buildEnv {
+      name = "solnix-dev";
+      paths = [ srcPkgs.gccWrapper srcPkgs.binutils srcPkgs.gnumake ];
+      pathsToLink = [ "/bin" "/share/man" ];
+    };
+  };
+
   # wpa-pmk on the system PATH: a bin/-shaped view of iwm-driver's
   # usr/lib/inet/wpa-pmk, so environment.systemPackages puts it at sw/bin ->
   # /usr/bin/wpa-pmk, which the solnix-wifi-join service's PATH finds. (The join
@@ -584,6 +598,35 @@ let
     '' ];
   };
 
+  # mkIwmDriversDbUnbound -- mkIwmDriversDb without the driver_aliases line:
+  # iwm has a major and minor_perm (modload and a runtime `update_drv -a`
+  # work) but binds nothing at boot. For installer media
+  # (hardware.wirelessIntel.onMedia). A separate derivation so the bound one
+  # above stays byte-identical.
+  mkIwmDriversDbUnbound = derivation {
+    name = "illumos-driver-db-iwm-unbound";
+    system = "x86_64-solaris";
+    builder = "/usr/bin/bash";
+    PATH = "/usr/bin:/usr/sbin";
+    base = drivers;
+    args = [ "-c" ''
+      set -eu
+      mkdir -p "$out"
+      cp "$base"/* "$out"/
+      chmod u+w "$out"/name_to_major "$out"/driver_aliases "$out"/minor_perm
+      if ! awk '{print $1}' "$out/name_to_major" | grep -qx iwm; then
+        used=$(awk '{print $2}' "$out/name_to_major" | sort -n)
+        n=0
+        while printf '%s\n' $used | grep -qx "$n"; do n=$((n+1)); done
+        echo "iwm $n" >> "$out/name_to_major"
+      fi
+      grep -q '^iwm:' "$out/minor_perm" || \
+        { printf 'iwm:* 0666 root sys\n'; printf 'clone:iwm 0666 root sys\n'; } >> "$out/minor_perm"
+      awk '{print $1}' "$out/name_to_major" | grep -qx iwm || { echo "FATAL: no iwm major" >&2; exit 1; }
+      if grep -q '^iwm ' "$out/driver_aliases"; then echo "FATAL: unbound DB has an iwm alias" >&2; exit 1; fi
+    '' ];
+  };
+
   # mkIwmKernel -- the kernel slice with the iwm module and its firmware laid
   # into the kernel tree, so a BE populated from this slice has
   #   kernel/drv/amd64/iwm          the module install-be copies as a real file
@@ -618,6 +661,90 @@ let
       [ -f "$out/kernel/drv/amd64/iwm" ] || { echo "FATAL: iwm module not laid in" >&2; exit 1; }
       [ -f "$out/kernel/firmware/iwm/iwm-9000-46" ] || { echo "FATAL: iwm firmware not laid in" >&2; exit 1; }
       # the base kernel's unix must still be there (we only added files).
+      [ -e "$out/platform/i86pc/kernel/amd64/unix" ] || { echo "FATAL: base kernel clobbered" >&2; exit 1; }
+    '' ];
+  };
+
+  # iwx-firmware -- the AX2xx blobs + licence (./iwx-firmware.nix), gated on
+  # the unfree opt-in like iwmFirmware.
+  iwxFirmware = acceptFirmwareLicense:
+    import ./iwx-firmware.nix { inherit acceptFirmwareLicense; };
+
+  # The AX210/AX211 ids iwx claims (src/ports/wifi/iwx/compat/dev/pci/
+  # pcidevs.h WL_22500_9..17), in the illumos pciex spelling. 51f0 is the X1E.
+  iwxAliases = [ "pciex8086,2725" "pciex8086,2726" "pciex8086,51f0"
+    "pciex8086,51f1" "pciex8086,54f0" "pciex8086,7a70" "pciex8086,7af0"
+    "pciex8086,7e40" "pciex8086,7f70" ];
+
+  # mkIwxDriversDb base bind -- the /etc driver database with iwx merged in,
+  # the mkIwmDriversDb way: name_to_major iwx <lowest free major>, minor_perm
+  # iwx:* + clone:iwx, and driver_aliases for iwxAliases ONLY when bind is
+  # true. bind = false gives a database that knows the driver (so modload and
+  # a runtime `update_drv -a` work) but never attaches it at boot. `base` is
+  # the DB to extend (pkgs.solnix.drivers, or mkIwmDriversDb to carry both).
+  mkIwxDriversDb = base: bind: derivation {
+    name = "illumos-driver-db-iwx${if bind then "-bound" else ""}";
+    system = "x86_64-solaris";
+    builder = "/usr/bin/bash";
+    PATH = "/usr/bin:/usr/sbin";
+    inherit base;
+    aliases = if bind then iwxAliases else [ ];
+    args = [ "-c" ''
+      set -eu
+      mkdir -p "$out"
+      cp "$base"/* "$out"/
+      chmod u+w "$out"/name_to_major "$out"/driver_aliases "$out"/minor_perm
+      if ! awk '{print $1}' "$out/name_to_major" | grep -qx iwx; then
+        used=$(awk '{print $2}' "$out/name_to_major" | sort -n)
+        n=0
+        while printf '%s\n' $used | grep -qx "$n"; do n=$((n+1)); done
+        echo "iwx $n" >> "$out/name_to_major"
+        echo "iwx: allocated major $n (lowest free)" >&2
+      fi
+      for a in $aliases; do
+        grep -qx "iwx \"$a\"" "$out/driver_aliases" || printf 'iwx "%s"\n' "$a" >> "$out/driver_aliases"
+      done
+      grep -q '^iwx:' "$out/minor_perm" || \
+        { printf 'iwx:* 0666 root sys\n'; printf 'clone:iwx 0666 root sys\n'; } >> "$out/minor_perm"
+      # every major unique, iwx present, aliases exactly as asked
+      [ "$(awk '{print $2}' "$out/name_to_major" | sort | uniq -d | wc -l)" -eq 0 ] || { echo "FATAL: duplicate major" >&2; exit 1; }
+      awk '{print $1}' "$out/name_to_major" | grep -qx iwx || { echo "FATAL: no iwx major" >&2; exit 1; }
+      na=$(grep -c '^iwx ' "$out/driver_aliases" || true)
+      want=$(set -- $aliases; echo $#)
+      [ "$na" -eq "$want" ] || { echo "FATAL: $na iwx aliases, want $want" >&2; exit 1; }
+      grep -q '^iwx:\*' "$out/minor_perm" || { echo "FATAL: no iwx minor_perm" >&2; exit 1; }
+    '' ];
+  };
+
+  # mkIwxKernel base acceptFirmwareLicense -- `base` (a kernel slice, e.g.
+  # slices.kernel or mkIwmKernel) with the iwx module and its firmware laid in:
+  #   kernel/drv/amd64/iwx
+  #   kernel/firmware/iwx/<name>   where loadfirmware() opens them:
+  #     firmware_open("iwx", name) -> "firmware/iwx/<name>" on the module path
+  mkIwxKernel = base: acceptFirmwareLicense: derivation {
+    name = "illumos-kernel-iwx";
+    system = "x86_64-solaris";
+    builder = "/usr/bin/bash";
+    PATH = "/usr/bin:/usr/sbin";
+    inherit base;
+    module = iwx-driver;
+    firmware = iwxFirmware acceptFirmwareLicense;
+    args = [ "-c" ''
+      set -eu
+      mkdir -p "$out"
+      ( cd "$base" && tar cf - . ) | ( cd "$out" && tar xf - )
+      # NOT chmod -R (it follows the slice's dangling relative symlinks).
+      for d in "$out" "$out/kernel" "$out/kernel/drv" "$out/kernel/drv/amd64" "$out/kernel/firmware"; do
+        [ -d "$d" ] && [ ! -h "$d" ] && chmod u+w "$d" 2>/dev/null || true
+      done
+      mkdir -p "$out/kernel/drv/amd64" "$out/kernel/firmware/iwx"
+      cp "$module/kernel/drv/amd64/iwx" "$out/kernel/drv/amd64/iwx"
+      cp "$firmware/kernel/firmware/iwx/"* "$out/kernel/firmware/iwx/"
+      chmod 0555 "$out/kernel/drv/amd64/iwx"
+      [ -f "$out/kernel/drv/amd64/iwx" ] || { echo "FATAL: iwx module not laid in" >&2; exit 1; }
+      for f in iwx-so-a0-gf-a0-77 iwx-so-a0-gf-a0.pnvm; do
+        [ -f "$out/kernel/firmware/iwx/$f" ] || { echo "FATAL: iwx firmware $f not laid in" >&2; exit 1; }
+      done
       [ -e "$out/platform/i86pc/kernel/amd64/unix" ] || { echo "FATAL: base kernel clobbered" >&2; exit 1; }
     '' ];
   };
@@ -697,7 +824,9 @@ in
   # helpers wireless-iwx.nix uses to render an iwm-aware driver DB and kernel
   # tree when hardware.wirelessIwm.attachAtBoot. mkIwmKernel/iwmFirmware take
   # the unfree opt-in so the blob stays out of any non-opted closure.
-  inherit iwm-driver mkIwmDriversDb mkIwmKernel iwmFirmware wpa-pmk;
+  inherit iwm-driver mkIwmDriversDb mkIwmDriversDbUnbound mkIwmKernel iwmFirmware wpa-pmk;
+  # iwx wifi (AX2xx): module only; mkIwxDriversDb/mkIwxKernel below.
+  inherit iwx-driver iwxFirmware iwxAliases mkIwxDriversDb mkIwxKernel;
   inherit nvidia-oss-modules nvidiaGspFirmware;
 
   inherit (srcPkgs) zlib libxml2 openssl openssh bash nspr nss git libcExtra binutils gnumake gccWrapper vi pkgconf;

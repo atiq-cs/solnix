@@ -25,11 +25,41 @@
 # but it is still young, so attachAtBoot is opt-in and defaults to false -- a
 # fresh solnix install does not auto-bind an experimental driver. Set it true
 # per host (e.g. dixi) to bind the card at boot.
+#
+# wirelessIwx mirrors it: hardware.wirelessIwx.attachAtBoot renders iwx's
+# name_to_major/driver_aliases/minor_perm lines and lays kernel/drv/amd64/iwx +
+# kernel/firmware/iwx/* (pkgs.solnix.iwx-driver, iwx-firmware). The iwx module
+# loads on the solnix kernel but has never attached to an AX2xx, so this is
+# opt-in too.
+#
+# hardware.wirelessIntel.onMedia (installer media): both modules and both
+# firmware sets are laid into the kernel tree and both drivers get a major and
+# minor_perm, but NO alias, so nothing binds at boot (an unproven driver that
+# panicked at attach would make the media unusable). One command binds a card
+# at run time: `update_drv -a -i '"pciex8086,51f0"' iwx` (see
+# docs/x1e-wifi-runtime-bind.md).
 { config, lib, pkgs, ... }:
 
 let
   cfg = config.hardware.wirelessIwx;
   iwm = config.hardware.wirelessIwm;
+  media = config.hardware.wirelessIntel.onMedia;
+  s = pkgs.solnix;
+
+  # The final driver DB and kernel tree, composed from whichever of the three
+  # switches are on. iwm first (its helpers take no base), then iwx on top.
+  # bind decides only whether the alias lines are written.
+  iwmBound = iwm.enable && iwm.attachAtBoot;
+  iwxBound = cfg.enable && cfg.attachAtBoot;
+  wantIwm = iwmBound || media;
+  wantIwx = iwxBound || media;
+  iwmDb = if iwmBound then s.mkIwmDriversDb else s.mkIwmDriversDbUnbound;
+  dbWithIwm = if wantIwm then iwmDb else s.drivers;
+  # the firmware licence opt-in: the per-driver option, or onMedia (whose
+  # description says it accepts the licence for the media).
+  kernWithIwm = if wantIwm then s.mkIwmKernel (iwm.allowUnfreeFirmware || media) else s.kernel;
+  finalDb = if wantIwx then s.mkIwxDriversDb dbWithIwm iwxBound else dbWithIwm;
+  finalKern = if wantIwx then s.mkIwxKernel kernWithIwm (cfg.allowUnfreeFirmware || media) else kernWithIwm;
 
   # Networks highest priority first; each line "SSID<TAB>pskFile".
   iwmNets = lib.sort (a: b: a.priority > b.priority)
@@ -132,8 +162,35 @@ in
     };
   };
 
+  options.hardware.wirelessIntel.onMedia = lib.mkOption {
+    type = lib.types.bool;
+    default = false;
+    description = ''
+      Put BOTH Intel wifi drivers (iwm: AC 7260-9560; iwx: AX210/AX211) and
+      their firmware into the kernel tree, with a name_to_major and minor_perm
+      entry each but NO driver_aliases line, so neither attaches at boot.
+      For installer media: the drivers are present for a one-command runtime
+      bind (update_drv -a -i '"pciex8086,51f0"' iwx) without risking a boot-time
+      attach of a driver that has never run on that silicon. Accepts Intel's
+      redistributable firmware licence (the firmware is laid into the tree).
+    '';
+  };
+
   options.hardware.wirelessIwx = {
     enable = lib.mkEnableOption "Intel AX2xx wireless via the iwx driver";
+
+    attachAtBoot = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Bind the iwx driver at boot: render name_to_major / driver_aliases
+        (the AX210/AX211 pciex ids, pkgs.solnix.iwxAliases) / minor_perm and
+        lay kernel/drv/amd64/iwx + kernel/firmware/iwx/* into the BE kernel
+        tree, as hardware.wirelessIwm.attachAtBoot does for iwm. Defaults to
+        false: the module loads on the solnix kernel but has never attached to
+        an AX2xx. Requires allowUnfreeFirmware.
+      '';
+    };
 
     allowUnfreeFirmware = lib.mkOption {
       type = lib.types.bool;
@@ -198,9 +255,8 @@ in
     # iwm "pciex8086,a370" and minor_perm iwm:*/clone:iwm; the kernel tree gets
     # kernel/drv/amd64/iwm and kernel/firmware/iwm/iwm-9000-46. This is the NixOS
     # model: the config renders the database, the activation step just copies it.
-    system.build.driversDb = lib.mkIf iwm.attachAtBoot pkgs.solnix.mkIwmDriversDb;
-    system.build.kernelTree = lib.mkIf iwm.attachAtBoot
-      (pkgs.solnix.mkIwmKernel iwm.allowUnfreeFirmware);
+    # (system.build.driversDb / kernelTree are set in the shared block below,
+    # which composes iwm and iwx.)
 
     # Boot auto-join: scan, pick the highest-priority configured SSID in range,
     # read its PSK from the 0600 file, join. Transient run-once. The driver-DB
@@ -242,7 +298,7 @@ in
       }];
 
       environment.systemPackages = [
-        (pkgs.callPackage ../../pkgs/illumos/iwx-firmware.nix {
+        (import ../../pkgs/illumos/iwx-firmware.nix {
           apiRev = cfg.apiRev;
           # Threads the opt-in through to the real gate in the derivation.
           acceptFirmwareLicense = cfg.allowUnfreeFirmware;
@@ -250,5 +306,16 @@ in
       ];
     }
   ]))
+  # The driver DB and kernel tree, rendered from iwm/iwx/onMedia together so
+  # the two drivers compose instead of overriding each other.
+  (lib.mkIf (wantIwm || wantIwx) {
+    system.build.driversDb = finalDb;
+    system.build.kernelTree = finalKern;
+  })
+  # With the drivers on the media for a runtime bind, the WPA2 join tool must be
+  # there too: docs/x1e-wifi-runtime-bind.md runs wpa-pmk right after update_drv.
+  (lib.mkIf media {
+    environment.systemPackages = [ pkgs.solnix.wpa-pmk ];
+  })
   ];
 }

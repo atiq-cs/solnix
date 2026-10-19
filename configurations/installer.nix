@@ -80,6 +80,13 @@ in
 
   networking.hostName = "solnix-installer";
 
+  # Both Intel wifi drivers on the media (iwm: AC 7260-9560, the X1; iwx:
+  # AX210/AX211, the X1E) with their firmware in the kernel tree, but bound to
+  # NO device at boot: neither has a proven attach on that silicon, and a panic
+  # at boot would make the media unusable. Bind at run time with one command
+  # (docs/x1e-wifi-runtime-bind.md), e.g. update_drv -a -i '"pciex8086,51f0"' iwx.
+  hardware.wirelessIntel.onMedia = true;
+
   # The edition this media ships (same pin as cloud-ec2.nix); without it the
   # release label falls back to "unstable" and /etc/release misreports the image.
   solnix.release = "26.11";
