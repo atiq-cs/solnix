@@ -1932,6 +1932,12 @@ State today (measured, src/ports/wifi/iwx/STATUS.md):
   the FINE-GRAINED locking model is the real remaining work. This mirrors the iwm effort in size.
 - Three concrete gaps to "on the media and binding":
   1. FINISH LOCKING so the module loads + attaches (the hard part; STATUS.md ROUND 7 + Session-5 have the map).
+  CAPTURED FROM lixi (live, Pop!_OS, 2026-10-18) -- the facts the wifi work starts from:
+     - device: PCI 8086:51f0 (Alder Lake-P PCH CNVi WiFi = AX211), subsystem 8086:0090.
+     - firmware family: iwlwifi-so-a0-gf4-a0 (NOTE gf4, not gf). Linux carries api revs 72..89;
+       it loaded so-a0-gf4-a0-89 (sha256 0771e0150047901990dc641f17b269c5e1e9240c3c1ef37fc95c0d349cfd3d10).
+       OpenBSD iwx caps at a fixed api rev (if_iwx.c IWX_*_UCODE_API_MAX); pin the rev that iwx verifies,
+       not necessarily 89. The current iwx-firmware.nix names the gf (not gf4) family -- wrong for this device.
   2. FIRMWARE: pkgs/illumos/iwx-firmware.nix currently has hash = lib.fakeHash and is a nixpkgs stdenvNoCC
      derivation that cannot eval on the illumos build host ("callPackage missing"). Make it a real pinned FOD
      (like iwm-firmware.nix / iwx-firmware fetchurl), with the AX211 blobs (iwlwifi-so-a0-gf-a0 / ty-a0-gf-a0 /
