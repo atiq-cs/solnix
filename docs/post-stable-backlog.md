@@ -1934,13 +1934,12 @@ State today (measured, src/ports/wifi/iwx/STATUS.md):
   1. FINISH LOCKING so the module loads + attaches (the hard part; STATUS.md ROUND 7 + Session-5 have the map).
   CAPTURED FROM lixi (live, Pop!_OS, 2026-10-18) -- the facts the wifi work starts from:
      - device: PCI 8086:51f0 (Alder Lake-P PCH CNVi WiFi = AX211), subsystem 8086:0090.
-     - firmware family: iwlwifi-so-a0-gf4-a0 (NOTE gf4, not gf). Linux carries api revs 72..89;
-       it loaded so-a0-gf4-a0-89 (sha256 0771e0150047901990dc641f17b269c5e1e9240c3c1ef37fc95c0d349cfd3d10).
-       OpenBSD iwx caps at a fixed api rev (if_iwx.c IWX_*_UCODE_API_MAX); pin the rev that iwx verifies,
-       not necessarily 89. The current iwx-firmware.nix names the gf (not gf4) family -- wrong for this device.
-  2. FIRMWARE: DONE (commit cd9983a). iwx-firmware.nix now pins the AX210 SO/TY GF family (gf4 ucode + PNVM,
+     - firmware family: iwlwifi-so-a0-gf-a0 (CORRECTED: ethtool -i on lixi shows Linux runs
+       so-a0-gf-a0-89.uc; iwx maps AX211/no-CDB -> so_gf_a0, and gf4 is the AX411/CDB pair). An earlier
+       note here said gf4, from reading a directory listing instead of the loaded firmware. iwx is api rev 77.
+  2. FIRMWARE: DONE (commit cd9983a). iwx-firmware.nix now pins the AX210 SO/TY GF family (gf + gf4 ucode + PNVM,
      api rev 77) with real sha256s from linux-firmware 20241017, installs each under the exact iwx- name, and
-     builds (6 blobs, gf4 pair asserted present). Banked off-account: floki /home/gburd/solnix-bank/firmware/
+     builds (6 blobs, the X1E's gf pair asserted present). Banked off-account: floki /home/gburd/solnix-bank/firmware/
      iwx-ax210-api77-20241017/ (SHA256SUMS + MANIFEST, read-back verified). WAS: hash = lib.fakeHash and is a nixpkgs stdenvNoCC
      derivation that cannot eval on the illumos build host ("callPackage missing"). Make it a real pinned FOD
      (like iwm-firmware.nix / iwx-firmware fetchurl), with the AX211 blobs (iwlwifi-so-a0-gf-a0 / ty-a0-gf-a0 /

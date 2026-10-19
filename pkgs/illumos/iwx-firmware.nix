@@ -27,20 +27,22 @@ let
   # Map: OpenBSD iwx's expected name <- the linux-firmware filename + its pinned
   # sha256. The vendored driver is API rev 77 (if_iwxvar.h IWX_*_FW), and the
   # AX210 "SO"/"TY" + "GF"/"GF4" device family is the one solnix targets: the
-  # X1 Extreme Gen5's AX211 (PCI 8086:51f0) selects iwx_2ax_cfg_so_gf4_a0 ->
-  # IWX_SO_A_GF4_A_FW "iwx-so-a0-gf4-a0-77" + IWX_SO_A_GF4_A_PNVM
-  # "iwx-so-a0-gf4-a0.pnvm" (measured live on lixi: subsystem 8086:0090, Linux
-  # loads iwlwifi-so-a0-gf4-a0). Each AX210 device needs BOTH a ucode and a PNVM
+  # X1 Extreme Gen5's AX211 (PCI 8086:51f0, subsystem 8086:0090, no CDB) has no
+  # explicit iwx_dev_info row, so iwx_find_device_cfg matches the MAC_TYPE_SO +
+  # RF_TYPE_GF + NO_CDB wildcard -> iwx_2ax_cfg_so_gf_a0 -> "iwx-so-a0-gf-a0-77"
+  # + "iwx-so-a0-gf-a0.pnvm". Measured on lixi: Linux (ethtool -i) runs
+  # so-a0-gf-a0-89.uc. gf4 is the AX411 (CDB) pair, shipped for that SKU. Each
+  # AX210 device needs BOTH a ucode and a PNVM
   # (if_iwxvar.h: every SO/TY/MA cfg has a .pnvm_name). The older Qu/HR/JF
   # families (different, pre-AX210 hardware) are intentionally NOT pinned here;
   # add them with real hashes when a Qu device is actually targeted, rather than
   # carry fakeHash placeholders that break eval. Hashes from the pinned
   # linux-firmware commit 20241017 via nix-prefetch-url.
   blobs = {
-    # X1E AX211 (gf4): the pair the hardware actually loads.
+    # AX411 (CDB) pair.
     "iwx-so-a0-gf4-a0-${apiRev}" = { lf = "iwlwifi-so-a0-gf4-a0-${apiRev}.ucode"; hash = "sha256-2UW85TnueAM6hcKI2puYiyZRoWI8X2CBt9tRDTln33Y="; };
     "iwx-so-a0-gf4-a0.pnvm"      = { lf = "iwlwifi-so-a0-gf4-a0.pnvm";            hash = "sha256-8Lm/2ToXsDEzEptJrGhx1HpR1NKBv37LZ7My9uMX/cI="; };
-    # SO/TY "gf" (non-4) siblings in the same AX210 family (other AX210/AX211 SKUs).
+    # AX211 (no CDB; the X1E) and AX210 (TY) pairs.
     "iwx-so-a0-gf-a0-${apiRev}"  = { lf = "iwlwifi-so-a0-gf-a0-${apiRev}.ucode";  hash = "sha256-h1kOqVNaiTn92ylrx2IvOpAPKPR7RctOQ1oqHV9JbM0="; };
     "iwx-so-a0-gf-a0.pnvm"       = { lf = "iwlwifi-so-a0-gf-a0.pnvm";             hash = "sha256-DqWurBB8iP9zcRiNki/lM3xQYOfhtMZQUzmNt5jZwP0="; };
     "iwx-ty-a0-gf-a0-${apiRev}"  = { lf = "iwlwifi-ty-a0-gf-a0-${apiRev}.ucode";  hash = "sha256-/Yl32/rP5QuKZgFHmqn/0h0B4nTkqe/ROTXdnWZ/1Fs="; };
@@ -94,9 +96,9 @@ stdenvNoCC.mkDerivation {
       f=$1; shift
       install -m 0444 "$f" "$out/firmware/$nm"
     done
-    # The AX211 needs BOTH its ucode and its PNVM; a missing one presents as
+    # The X1E's AX211 needs BOTH its ucode and its PNVM; a missing one presents as
     # "wifi does not work" much later, on hardware. Fail loudly here instead.
-    for need in iwx-so-a0-gf4-a0-${apiRev} iwx-so-a0-gf4-a0.pnvm; do
+    for need in iwx-so-a0-gf-a0-${apiRev} iwx-so-a0-gf-a0.pnvm; do
       [ -f "$out/firmware/$need" ] || { echo "iwx-firmware: missing $need" >&2; exit 1; }
     done
     n=$(ls -1 "$out/firmware" | wc -l)
