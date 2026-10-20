@@ -15,10 +15,10 @@
 # headers (same source rev; headers do not depend on DEBUG).
 # Applied on top of the pinned source: scripts/patches/0001-tscc_pit-default-
 # pit_is_broken.patch (gotcha #10; must be a source default, /etc/system is read
-# too late), and 0002-tzmon-thinkpad-hkey-enable.patch (the X1E halts on a false
-# 128 C _TMP: the patch does the ThinkPad HKEY init AND makes tzmon refuse to act
-# on a _TMP that equals _CRT exactly without approaching through _HOT -- a sensor
-# sentinel, not heat. The patch header has the DSDT + live-hardware evidence), and
+# too late), and 0002-tzmon-thinkpad-hkey-enable.patch (ThinkPad HKEY init, and
+# _HOT/_CRT acted on after 3 consecutive readings with a clean power-off and the EC
+# sensors on the console; _TMP == _CRT on a ThinkPad is the EC's critical alarm,
+# never skipped. The patch header has the DSDT + live-hardware evidence), and
 # 0003-usbecm-usb-pipe-xopen.patch (usbecm opened its data pipes with
 # usb_pipe_open(), which USBA refuses on a USB 3 device, so RTL8153 USB-C
 # adapters attached but never passed a frame).
@@ -72,8 +72,12 @@ derivation {
       || { echo "FATAL: pit_is_broken default not applied" >&2; exit 1; }
     grep -q '^	tzmon_hkey_enable();' usr/src/uts/i86pc/io/tzmon/tzmon.c \
       || { echo "FATAL: tzmon ThinkPad HKEY patch not applied" >&2; exit 1; }
-    grep -q 'crt_sentinel_logged' usr/src/uts/i86pc/io/tzmon/tzmon.c \
-      || { echo "FATAL: tzmon _CRT sentinel guard not applied" >&2; exit 1; }
+    # tzmon must act on _CRT (debounced), never skip it: the X1E's "_TMP == _CRT"
+    # is the EC's critical alarm, and skipping it left the hardware cutoff to act.
+    grep -q 'tzp->validchecks >= TZ_VALIDCHECKS' usr/src/uts/i86pc/io/tzmon/tzmon.c \
+      || { echo "FATAL: tzmon debounced _HOT/_CRT not applied" >&2; exit 1; }
+    if grep -qE 'crt_sentinel|NOT shutting down' usr/src/uts/i86pc/io/tzmon/tzmon.c; then
+      echo "FATAL: tzmon still skips a _CRT reading" >&2; exit 1; fi
     E=usr/src/uts/common/io/usb/clients/usbecm/usbecm.c
     if ! grep -q 'usb_pipe_xopen(ecmp->ecm_dip, &in_xdesc' $E || grep -q 'usb_pipe_open(ecmp->ecm_dip' $E; then
       echo "FATAL: usbecm usb_pipe_xopen patch not applied" >&2; exit 1; fi
