@@ -454,12 +454,14 @@ let
   };
 
   # The boot-time set: what must run before the shared /nix is mounted (init,
-  # the shell inittab uses, zfs to mount /nix). Lives as real files at these
-  # store paths inside each generation's BE (docs/design-nix-managed-base.md).
+  # the shell inittab uses, zfs to mount /nix, and autopush, which must run
+  # before anything opens the console or the console never gets ldterm). Lives
+  # as real files at these store paths inside each generation's BE
+  # (docs/design-nix-managed-base.md).
   early = import ./mk-proto-slice.nix {
     gate = gate'; name = "illumos-early";
     deps = [ libc rtld srcPkgs.zlib srcPkgs.libxml2 ];
-    bins = [ "sbin/init" "sbin/sh" "sbin/zfs" "sbin/mount" ];
+    bins = [ "sbin/init" "sbin/sh" "sbin/zfs" "sbin/mount" "sbin/autopush" ];
     allowUnresolved = [ ];
   };
 

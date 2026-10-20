@@ -971,10 +971,11 @@ check_internet() {
   echo "  Check the dongle:" >&2
   echo "    dladm show-phys             # is the adapter attached at all?" >&2
   echo "    dladm show-link" >&2
-  echo "  illumos ships axf (ASIX AX88172/88178/88772), udmf (Davicom DM9601E)," >&2
-  echo "  upf (Prolific) and urf (Realtek RTL8150) -- all Fast Ethernet, and NONE" >&2
-  echo "  supports RTL8153, which is what most modern dongles are. If dladm lists" >&2
-  echo "  nothing, the adapter is unsupported; an ASIX AX88772 one is the safe buy." >&2
+  echo "  Supported adapters: Realtek RTL8153 gigabit (most USB-C ones, e.g." >&2
+  echo "  Belkin, Apple-store and Anker) via usbecm; ASIX AX88172/88178/88772 via" >&2
+  echo "  axf; Davicom DM9601E (udmf), Prolific (upf), Realtek RTL8150 (urf)." >&2
+  echo "  If dladm lists nothing, the adapter is unsupported. If it lists usbecm0" >&2
+  echo "  but no lease arrives, check the cable and the switch port." >&2
   echo "" >&2
   echo "  SOLNIX_SKIP_NET_CHECK=1 proceeds anyway (later fetches will just fail)." >&2
   return 1
@@ -2222,8 +2223,12 @@ grep -q "zfs mount -O $POOL/nix" "$ALTROOT/etc/inittab" 2>/dev/null \
   || die "BE inittab has no stage-2 'zfs mount -O $POOL/nix' line: the BE could not reach the shared store at boot"
 grep -q "^vr::sysinit:.* $POOL/var " "$ALTROOT/etc/inittab" 2>/dev/null \
   || die "BE inittab has no 'vr' line mounting $POOL/var: /var state would stay inside the BE"
+# autopush must be the first sysinit line: an earlier line opens the console before
+# autopush loads iu.ap, and the console then has no ldterm for the whole boot.
+[ "$(grep -E '^[^#:]*:[^:]*:sysinit:' "$ALTROOT/etc/inittab" 2>/dev/null | head -1 | cut -d: -f1)" = ap ] \
+  || die "BE inittab's first sysinit line is not ap (autopush): the installed console would staircase"
 # the early set must be REAL files: the loader and init run before $POOL/nix mounts.
-for _e in sbin/init sbin/sh platform/i86pc/kernel/amd64/unix platform/i86pc/amd64/boot_archive; do
+for _e in sbin/init sbin/sh sbin/autopush platform/i86pc/kernel/amd64/unix platform/i86pc/amd64/boot_archive; do
   _r=$(_in_be "$_e") || die "$_e resolves outside the BE or dangles -- it runs before $POOL/nix is mounted, so it must be a real file in the BE"
   case "$_r" in "$ALTROOT"/nix/store/*|"$ALTROOT"/sbin/*|"$ALTROOT"/platform/*|"$ALTROOT"/usr/*|"$ALTROOT"/lib/*) : ;;
     *) die "$_e resolves outside the BE ($_r)" ;; esac

@@ -38,9 +38,11 @@ install-be)
   echo ba | gzip > "$R/platform/i86pc/amd64/boot_archive"
   echo init > "$R/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-illumos-early/sbin/init"
   echo sh > "$R/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-illumos-early/sbin/sh"
+  echo ap > "$R/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-illumos-early/sbin/autopush"
+  ln -s /nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-illumos-early/sbin/autopush "$R/sbin/autopush"
   ln -s /nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-illumos-early/sbin/init "$R/sbin/init"
   ln -s ../nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-illumos-early/sbin/sh "$R/sbin/sh"
-  printf 'nx::sysinit:/sbin/zfs mount -O %s/nix\nvr::sysinit:/sbin/sh -c '"'"'/sbin/zfs list -H -o canmount,name -r -t filesystem %s/var 2>/dev/null | ...'"'"'\nsmf::sysinit:/lib/svc/bin/svc.startd\n' "$P" "$P" > "$R/etc/inittab"
+  printf 'ap::sysinit:/sbin/autopush -f /etc/iu.ap\nnx::sysinit:/sbin/zfs mount -O %s/nix\nvr::sysinit:/sbin/sh -c '"'"'/sbin/zfs list -H -o canmount,name -r -t filesystem %s/var 2>/dev/null | ...'"'"'\nsmf::sysinit:/lib/svc/bin/svc.startd\n' "$P" "$P" > "$R/etc/inittab"
   : > "$R/lib/svc/bin/svc.startd"; : > "$R/etc/svc/repository.db"
   for f in loader64.efi pmbr gptzfsboot loader.rc defaults/loader.conf forth/loader.4th; do : > "$R/boot/$f"; done
   echo x > "$R/boot/fonts/fonts.dir"
@@ -49,6 +51,10 @@ install-be)
     no-stage2)    sed -i '/zfs mount -O/d' "$R/etc/inittab" ;;
     # /var state left inside the BE: a switch loses it and a rollback reverts it.
     no-vr)        sed -i '/^vr::/d' "$R/etc/inittab" ;;
+    # a sysinit line ahead of autopush opens the console first: no ldterm all boot.
+    ap-late)      sed -i '/^ap::/d' "$R/etc/inittab"; echo 'ap::sysinit:/sbin/autopush -f /etc/iu.ap' >> "$R/etc/inittab" ;;
+    # autopush linked into the shared store, which is not mounted when ap:: runs
+    ap-shared)    rm -f "$R/sbin/autopush"; ln -s /nix/store/ffffffffffffffffffffffffffffffff-userland/sbin/autopush "$R/sbin/autopush" ;;
     live-copy)    : > "$R/etc/solnix-live-shell" ;;
     clobber-cons) echo 'console="ttya"' > "$R/boot/loader.conf" ;;
     shadow-link)  rm -f "$R/etc/shadow"; ln -s /nix/store/x-etc/etc/shadow "$R/etc/shadow" ;;
@@ -111,6 +117,8 @@ while read -r s re; do
 done <<'CASES'
 no-stage2    no stage-2 'zfs mount -O
 no-vr        no 'vr' line mounting rpool/var
+ap-late      first sysinit line is not ap
+ap-shared    sbin/autopush resolves outside the BE or dangles
 live-copy    live-media file /etc/solnix-live-shell
 clobber-cons (overwrote the installed console|replaced the machine input /boot/loader.conf)
 shadow-link  /etc/shadow is a symlink into the store

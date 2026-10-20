@@ -129,8 +129,8 @@ farm() {   # $1 = dir relative to /, mirrors $WORLD/$1
   done
 }
 farm lib; farm usr/lib; farm sbin
-# the four early tools are real files in the BE; the rest of /sbin resolves after the mount.
-for b in init sh zfs mount; do relink "$EARLY/sbin/$b" "sbin/$b"; done
+# the early tools are real files in the BE; the rest of /sbin resolves after the mount.
+for b in init sh zfs mount autopush; do relink "$EARLY/sbin/$b" "sbin/$b"; done
 RT=$(grep -- '-rtld$' "$R$TOP/early-paths")
 for l in lib/ld.so.1 usr/lib/ld.so.1 lib/amd64/ld.so.1 usr/lib/amd64/ld.so.1; do
   case $l in *amd64*) relink "$RT/lib/amd64/ld.so.1" $l;; *) relink "$RT/lib/ld.so.1" $l;; esac
@@ -297,12 +297,12 @@ grep -v 'pkcs11_tpm' etc/crypto/pkcs11.conf > etc/crypto/pkcs11.conf.new && mv e
 # declared users' authorized_keys (users.users.<n>.openssh.authorizedKeys).
 [ -e "$R$TOP/seed-authorized-keys" ] && ROOT="$ROOT" /usr/bin/bash "$R$TOP/seed-authorized-keys" >&2
 
-# 4. inittab: mount the shared store FIRST (before autopush/soconfig, which live in
-#    the shared store, and before svc.startd; measured ctB4 + M4).
-if [ -z "${SOLNIX_LIVE:-}" ] && ! grep -q '^nx::sysinit' etc/inittab; then
-  awk -v p="$POOL" '/::sysinit:/ && !d {print "nx::sysinit:/sbin/zfs mount -O " p "/nix >/dev/msglog 2<>/dev/msglog </dev/console"; d=1} {print}' \
-    etc/inittab > etc/inittab.new && mv etc/inittab.new etc/inittab
-fi
+# 4. inittab: mount the shared store right AFTER autopush (ap::, from the early set)
+#    and before soconfig, which lives in the shared store, and svc.startd
+#    (measured ctB4 + M4). Not before ap::: autopush applies only to streams built
+#    after it runs, and these lines' msglog/console redirects open the console, so
+#    ahead of ap:: the console never gets ldterm and every boot message is a bare
+#    line feed (the staircase console). Stock illumos keeps ap:: first for this.
 # 4a. right after it, the shared /var state (docs/design-var-state.md): every
 #    canmount=noauto dataset under <pool>/var is mounted with -O over the BE's own
 #    directory, so logs, /var/tmp, /var/lib and the spools are one copy for every
@@ -311,10 +311,15 @@ fi
 #    utmpx/wtmpx as soon as filesystem/minimal is online, before `zfs mount -a`, and
 #    noauto keeps `zfs mount -a` from trying a non-empty BE directory. A pool
 #    without <pool>/var mounts nothing and the BE keeps its own /var.
-if [ -z "${SOLNIX_LIVE:-}" ] && ! grep -q '^vr::sysinit' etc/inittab; then
+# A BE laid by an older install-be has nx:: and vr:: ahead of ap::; both are moved.
+if [ -z "${SOLNIX_LIVE:-}" ]; then
+  grep -q '^ap::sysinit' etc/inittab || die "inittab has no ap::sysinit (autopush) line to mount the store after"
+  _nx="nx::sysinit:/sbin/zfs mount -O $POOL/nix >/dev/msglog 2<>/dev/msglog </dev/console"
   _vr="vr::sysinit:/sbin/sh -c '/sbin/zfs list -H -o canmount,name -r -t filesystem $POOL/var 2>/dev/null | while read c n; do [ \"\$c\" = noauto ] && /sbin/zfs mount -O \"\$n\"; done; exit 0' >/dev/msglog 2<>/dev/msglog </dev/console"
-  awk -v l="$_vr" '{print} /^nx::sysinit:/ && !d {print l; d=1}' etc/inittab > etc/inittab.new && mv etc/inittab.new etc/inittab
-  grep -q '^vr::sysinit' etc/inittab || die "inittab has no nx line to put the shared /var mount after"
+  awk -v n="$_nx" -v v="$_vr" '/^(nx|vr)::sysinit/ {next} {print} /^ap::sysinit/ && !d {print n; print v; d=1}' \
+    etc/inittab > etc/inittab.new && mv etc/inittab.new etc/inittab
+  [ "$(grep -E '^[^#:]*:[^:]*:sysinit:' etc/inittab | head -3 | cut -d: -f1 | tr '\n' ' ')" = "ap nx vr " ] \
+    || die "inittab sysinit order is not ap, nx, vr"
 fi
 # their mountpoints exist in the BE (zfs mount creates a missing one, which a BE
 # cloned before the dataset existed may lack); the dataset name is the path.

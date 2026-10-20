@@ -417,6 +417,14 @@ closure_contract_checks() {
     *devices/pseudo/sad@0:admin) _ok "/dev/sad/admin exists for inittab's autopush (console line discipline)" ;;
     *) _fail "no /dev/sad/admin: autopush configures nothing and the boot console staircases" ;;
   esac
+  # 10a. ...and autopush is the FIRST sysinit line: autopush applies only to a
+  #      stream built after it ran, and any earlier sysinit line opens the console
+  #      (a </dev/console or >/dev/msglog redirect), building its stream without
+  #      ldterm for the whole boot. The installed BE's nx::/vr:: lines are added
+  #      by install-be at install time, not on the media.
+  _first=$(grep -E '^[^#:]*:[^:]*:sysinit:' "$R/etc/inittab" 2>/dev/null | head -1 | cut -d: -f1)
+  if [ "$_first" = ap ]; then _ok "inittab runs autopush first (the console gets ldterm)"
+  else _fail "inittab's first sysinit line is '${_first:-none}', not ap: the console is opened before autopush and staircases"; fi
   [ "${MODE:-}" = selftest ] || https_check "$R"
 }
 

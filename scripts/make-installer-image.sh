@@ -228,11 +228,20 @@ grep -qw solnix-installer "$RD/etc/hosts" 2>/dev/null || echo "127.0.0.1 solnix-
 #     directory needs no writable backing fs, so it works on the still-RO ramdisk.
 #     This is the structural root cause (volatile belongs in RAM, as on any illumos
 #     root), not symptom relief.
+#     AFTER ap::sysinit (autopush): the first open of the console builds its
+#     stream, and autopush modules are pushed only when a stream is built. A
+#     sysinit line ahead of ap:: opens the console (its </dev/console, and its
+#     >/dev/msglog too: sysmsg's first open vn_opens /dev/console, sysmsg.c) before
+#     autopush has loaded iu.ap, which leaves the console without ldterm for the
+#     whole boot, so every kernel and service message is a bare line feed (the
+#     staircase console; measured: aligned before this line was first inserted
+#     ahead of ap::, stepped after). Stock illumos has ap:: as the first sysinit
+#     line for this reason; stdin is /dev/null because nothing here reads it.
 if ! grep -q '^vol::sysinit' "$RD/etc/inittab"; then
   _volcmd='/sbin/mount -F tmpfs -o size=256m swap /system/volatile >/dev/msglog 2>&1; /sbin/mount -F tmpfs -o size=256m swap /etc/svc/volatile >/dev/msglog 2>&1'
   awk -v c="$_volcmd" '
-    /::sysinit:/ && !d { print "vol::sysinit:" c " </dev/console"; d=1 }
     { print }
+    /^ap::sysinit:/ && !d { print "vol::sysinit:" c " </dev/null"; d=1 }
     END { if (!d) exit 7 }
   ' "$RD/etc/inittab" > "$RD/etc/inittab.n" && mv "$RD/etc/inittab.n" "$RD/etc/inittab" \
     || die "could not insert the volatile-tmpfs sysinit line into inittab"

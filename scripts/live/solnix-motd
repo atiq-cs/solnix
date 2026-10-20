@@ -24,7 +24,7 @@ $_netline
 
   1) Bring up networking (skip if the line above already says the network is up):
        solnix-install --net           # plumb the NIC + DHCP, then report
-     No wired link? plug a USB-ethernet dongle (ASIX AX88772) and re-run it.
+     No wired link? plug a USB-ethernet dongle (RTL8153 or ASIX) and re-run it.
      To also pull the latest installer once online:
        solnix-install --self-update   # network up + re-fetch this installer
      To install REMOTELY (ssh in from another host):

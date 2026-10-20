@@ -23,4 +23,7 @@ Local additions to gate-drivers.txt (not in the gate manifests; regenerate with
       is the usbVID,PID.configCN compatible name (usba.c), so config 1 (vendor,
       Linux r8152 only) never matches. Same whole-device binding as the Sun SP
       alias usb430,a4a2. Pairs with /etc/usb/config_map.conf (configurations/
-      base.nix), which makes illumos select config 2.
+      base.nix), which makes illumos select config 2. On a USB 3 port it also
+      needs scripts/patches/0003-usbecm-usb-pipe-xopen.patch: the stock usbecm
+      opens its pipes with usb_pipe_open(), which USBA refuses for SuperSpeed
+      devices, so the link attached but never passed a frame.

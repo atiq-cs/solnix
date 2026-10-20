@@ -18,7 +18,10 @@
 # too late), and 0002-tzmon-thinkpad-hkey-enable.patch (the X1E halts on a false
 # 128 C _TMP: the patch does the ThinkPad HKEY init AND makes tzmon refuse to act
 # on a _TMP that equals _CRT exactly without approaching through _HOT -- a sensor
-# sentinel, not heat. The patch header has the DSDT + live-hardware evidence).
+# sentinel, not heat. The patch header has the DSDT + live-hardware evidence), and
+# 0003-usbecm-usb-pipe-xopen.patch (usbecm opened its data pipes with
+# usb_pipe_open(), which USBA refuses on a USB 3 device, so RTL8153 USB-C
+# adapters attached but never passed a frame).
 #
 # OUTPUT: kernel/, platform/i86pc/{kernel,amd64}/, usr/kernel/ from the
 # non-DEBUG build, plus boot/ (loader, forth, fonts) copied from the gate proto,
@@ -28,7 +31,8 @@
 , rev ? "ac45d71fc2b04a5422e72a14b54dd1e746e7be07"
 , srcHash ? "1yhpjbxjynjrwd11vf456aw9hln3ydbc9qsgd5a0k73l8hfsmq87"  # nix-prefetch-url --unpack
 , patches ? [ ../../scripts/patches/0001-tscc_pit-default-pit_is_broken.patch
-              ../../scripts/patches/0002-tzmon-thinkpad-hkey-enable.patch ]
+              ../../scripts/patches/0002-tzmon-thinkpad-hkey-enable.patch
+              ../../scripts/patches/0003-usbecm-usb-pipe-xopen.patch ]
 , onbld ? "/opt/onbld"
 , gcc ? "/usr/gcc/10"
 , perlVersion ? "5.42"
@@ -70,6 +74,9 @@ derivation {
       || { echo "FATAL: tzmon ThinkPad HKEY patch not applied" >&2; exit 1; }
     grep -q 'crt_sentinel_logged' usr/src/uts/i86pc/io/tzmon/tzmon.c \
       || { echo "FATAL: tzmon _CRT sentinel guard not applied" >&2; exit 1; }
+    E=usr/src/uts/common/io/usb/clients/usbecm/usbecm.c
+    if ! grep -q 'usb_pipe_xopen(ecmp->ecm_dip, &in_xdesc' $E || grep -q 'usb_pipe_open(ecmp->ecm_dip' $E; then
+      echo "FATAL: usbecm usb_pipe_xopen patch not applied" >&2; exit 1; fi
 
     # env file: the gate.nix edits, plus no smatch (its binary lives in the
     # workspace tools proto, which +t does not build).
@@ -134,6 +141,12 @@ derivation {
     sec=$(elfdump -s $U | awk '$NF=="pit_is_broken"{print $(NF-1)}' | head -1)
     case "$sec" in .data*) echo "OK pit_is_broken in $sec";;
       *) echo "FATAL: pit_is_broken in [$sec], expected .data" >&2; exit 1;; esac
+    # usbecm imports usb_pipe_xopen and no longer imports usb_pipe_open (USB 3 adapters)
+    M=$ROOT/kernel/drv/amd64/usbecm
+    elfdump -s $M | awk '$NF=="usb_pipe_xopen"' | grep -q . \
+      || { echo "FATAL: $M does not import usb_pipe_xopen" >&2; exit 1; }
+    if elfdump -s $M | awk '$NF=="usb_pipe_open"' | grep -q .; then
+      echo "FATAL: $M still imports usb_pipe_open" >&2; exit 1; fi
 
     mkdir -p "$out/platform/i86pc" "$out/usr"
     cp -a "$ROOT/kernel" "$out/kernel"
