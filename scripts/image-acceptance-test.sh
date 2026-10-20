@@ -628,6 +628,8 @@ selftest() {
   mkdir -p "$T/usr/bin"; printf '\177ELF\002\001\001' > "$T/usr/bin/ls"
   printf 'trusted-public-keys = cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk=\nsubstituters = https://cache.nixos.org\n' >> "$T/etc/nix/nix.conf"
   echo 'jdoe:x:1000:10::/home/jdoe:/bin/sh' > "$T/etc/passwd"
+  # the staircase-console defect: a sysinit line that opens the console ahead of autopush
+  printf 'vol::sysinit:/sbin/mount -F tmpfs swap /system/volatile </dev/console\nap::sysinit:/sbin/autopush -f /etc/iu.ap\n' > "$T/etc/inittab"
   # install tools: the defective root has no /run/current-system and no /root/README,
   # so every README tool and the README itself must FAIL (one per tool + 1).
   local ib=$FAIL; install_tools_check "$T" >/dev/null 2>&1
@@ -643,6 +645,9 @@ selftest() {
   cbefore=$FAIL; _cao=$( closure_contract_checks "$T" 2>&1 ); echo "$_cao" | grep -q 'no /etc/ssl/certs/ca-certificates.crt resolving' \
     && echo "  CA-store check fires on a root with no /etc/ssl/certs/ca-certificates.crt" \
     || { echo "  FAIL: CA-store check did not fire on a root without the bundle"; return 1; }
+  echo "$_cao" | grep -q "first sysinit line is 'vol', not ap" \
+    && echo "  autopush-first check fires on an inittab with a sysinit line ahead of ap" \
+    || { echo "  FAIL: autopush-first check did not fire on vol:: ahead of ap::"; return 1; }
   FAIL=$cbefore
   # and a GOOD closure root passes them all (positive control).
   local G="$WORK/good" TL=/nix/store/00000000000000000000000000000000-solnix-system-x
@@ -669,6 +674,7 @@ selftest() {
     > "$G/etc/svc/profile/site/solnix.xml"
   for _b in passwd su ping w crontab login; do : > "$G/run/wrappers/bin/$_b"; chmod 4555 "$G/run/wrappers/bin/$_b"; done
   ln -s ../../devices/pseudo/sad@0:admin "$G/dev/sad/admin"
+  printf 'ap::sysinit:/sbin/autopush -f /etc/iu.ap\nvol::sysinit:/sbin/mount -F tmpfs swap /system/volatile </dev/null\n' > "$G/etc/inittab"
   local gb=$FAIL; ACCEPT_ROOT_UID=$(id -u) closure_contract_checks "$G" > "$WORK/good.out" 2>&1 || true
   # the store-DB validity check needs a real store; on a fake root it may only SKIP or FAIL that one line
   local gfails; gfails=$(grep -c 'FAIL:' "$WORK/good.out"); grep 'FAIL:' "$WORK/good.out" | grep -v 'store DB' | sed 's/^/    good-root /'
