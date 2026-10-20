@@ -629,6 +629,27 @@ let
     '' ];
   };
 
+  # stripSliceRefs -- run after a wrapper tar-copies a kernel slice. The copy
+  # keeps the slice's own store path in boot/grub/bin/grub and
+  # boot/solaris/bin/symdef (RUNPATH entries naming the slice's EMPTY
+  # lib-32/lib-64) and in .slice/runpath.txt, so the wrapper referenced the slice
+  # it copied and the kernel shipped twice (measured: +94.5 MB in the installer
+  # ramdisk closure, which then failed its size cap). Each hash in $strip is
+  # overwritten in place, same length, as nixpkgs' remove-references-to does;
+  # the entries named empty dirs, so nothing resolves differently. Nix enforces
+  # the result through disallowedReferences.
+  stripSliceRefs = ''
+      [ -x /usr/bin/perl ] || { echo "FATAL: /usr/bin/perl needed to strip slice references" >&2; exit 1; }
+      for sp in $strip; do
+        bh=$(basename "$sp" | cut -c1-32)
+        grep -rl "$bh" "$out" 2>/dev/null | while read -r f; do
+          [ -h "$f" ] && continue
+          chmod u+w "$f" "$(dirname "$f")"
+          /usr/bin/perl -0777 -pi -e "s/$bh/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee/g" "$f"
+        done
+      done
+  '';
+
   # mkIwmKernel -- the kernel slice with the iwm module and its firmware laid
   # into the kernel tree, so a BE populated from this slice has
   #   kernel/drv/amd64/iwm          the module install-be copies as a real file
@@ -643,11 +664,14 @@ let
     base = slices.kernel;
     module = iwm-driver;
     firmware = iwmFirmware acceptFirmwareLicense;
+    strip = [ slices.kernel ];
+    disallowedReferences = [ slices.kernel ];
     args = [ "-c" ''
       set -eu
       mkdir -p "$out"
       # copy the base kernel slice, then overlay iwm's module + firmware.
       ( cd "$base" && tar cf - . ) | ( cd "$out" && tar xf - )
+      ${stripSliceRefs}
       # NOT chmod -R: the kernel slice has relative symlinks (e.g.
       # boot/solaris/bin/root_archive) that dangle in this isolated tree, and
       # chmod -R FOLLOWS symlinks -> errors on the broken link (same hazard
@@ -731,10 +755,13 @@ let
     inherit base;
     module = iwx-driver;
     firmware = iwxFirmware acceptFirmwareLicense;
+    strip = [ base slices.kernel ];
+    disallowedReferences = [ base slices.kernel ];
     args = [ "-c" ''
       set -eu
       mkdir -p "$out"
       ( cd "$base" && tar cf - . ) | ( cd "$out" && tar xf - )
+      ${stripSliceRefs}
       # NOT chmod -R (it follows the slice's dangling relative symlinks).
       for d in "$out" "$out/kernel" "$out/kernel/drv" "$out/kernel/drv/amd64" "$out/kernel/firmware"; do
         [ -d "$d" ] && [ ! -h "$d" ] && chmod u+w "$d" 2>/dev/null || true
