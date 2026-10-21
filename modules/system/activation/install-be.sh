@@ -225,6 +225,8 @@ etc_copy() {
     coreadm.conf) return 0 ;;
     # dumpadm(8) rewrites /etc/dumpadm.conf (and svc:/system/dumpadm reads it).
     dumpadm.conf) return 0 ;;
+    # svc:/system/power's method appends a statefile line to it in place.
+    power.conf) return 0 ;;
     # install-be filters pkcs11.conf below; cryptoadm rewrites it.
     crypto/*) return 0 ;;
   esac

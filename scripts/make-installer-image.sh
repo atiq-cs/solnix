@@ -292,6 +292,16 @@ _nbuild=$(printf '%s\n' "$_pgs" | grep -c "^$(printf '%s' "${RD#/}" | tr / _)" |
 echo "SMF hashes: $_nprof profiles, 0 build-path keys" >&2
 echo "pre-imported $_nimp manifests ($_nfail failed)" >&2
 [ "$_nimp" -gt 50 ] || die "only $_nimp manifests imported -- the live root would not reach single-user"
+# sshd on the LIVE root starts only once the network has a lease (solnix-live ->
+# solnix-install --sshd-now sets a one-time root password first). Disabled here in
+# the ramdisk's repository only: an installed system keeps the site profile's sshd.
+_sshd=svc:/network/sshd:default
+SVCCFG_REPOSITORY="$RD/etc/svc/repository.db" "$SVCCFG" -s "$_sshd" setprop general/enabled = boolean: false \
+  && SVCCFG_REPOSITORY="$RD/etc/svc/repository.db" "$SVCCFG" -s "$_sshd" refresh \
+  || die "could not disable $_sshd in the live repository"
+_en=$(SVCCFG_REPOSITORY="$RD/etc/svc/repository.db" "$SVCCFG" -s "$_sshd" listprop general/enabled 2>/dev/null | awk '{print $3}')
+[ "$_en" = false ] || die "$_sshd general/enabled is '$_en' in the live repository, not false"
+echo "live sshd: disabled until a DHCP lease ($_sshd general/enabled=$_en)" >&2
 # importing ran a private svc.configd: purge the runtime state it left (a stale
 # init.state makes PID 1 re-exit in a SIGKILL loop, measured on earlier media).
 find "$RD/etc/svc/volatile" -mindepth 1 -delete 2>/dev/null || true

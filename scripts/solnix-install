@@ -63,7 +63,7 @@ export PATH
 # verified that his repo is anonymously clonable over https (info/refs returns 200),
 # so the installer never needs credentials. A git@ URL is accepted but warned about.
 GIT_URL=""; GIT_REF=""; FLAKE_REF=""; HOME_FLAKE=""; DO_HOME=1
-DO_NET_ONLY=0; DO_SELF_UPDATE=0; DO_SSHD=0
+DO_NET_ONLY=0; DO_SELF_UPDATE=0; DO_SSHD=0; DO_SSHD_NOW=0
 TARGET=""; TOPLEVEL=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -80,6 +80,7 @@ while [ $# -gt 0 ]; do
     --disk)       TARGET="${2:-}"; shift 2 ;;
     --net)        DO_NET_ONLY=1; shift ;;
     --ssh)        DO_SSHD=1; shift ;;
+    --sshd-now)   DO_SSHD_NOW=1; shift ;;   # live media boot: network already up (solnix-live)
     --self-update) DO_SELF_UPDATE=1; shift ;;
     -h|--help)
       cat <<'USAGE'
@@ -840,6 +841,26 @@ setup_media_store() {
   return 0
 }
 
+# _media_authorized_keys -- copy /solnix/authorized_keys from the boot stick's ESP
+# (GPT partition 2, FAT) to a temp file and print its path; nothing if absent. The
+# stick is the disk solnix-live identified by its boot_archive (/tmp/.solnix-media-disk).
+# The ESP is mounted read-only and unmounted again.
+_media_authorized_keys() {
+  _md=$(cat /tmp/.solnix-media-disk 2>/dev/null)
+  [ -n "$_md" ] || return 0
+  _mp=/tmp/.solnix-esp; mkdir -p "$_mp"
+  for _s in s1 p2; do
+    [ -e "/dev/dsk/${_md}$_s" ] || continue
+    if mount -F pcfs -o ro "/dev/dsk/${_md}$_s" "$_mp" 2>/dev/null; then
+      if [ -s "$_mp/solnix/authorized_keys" ]; then
+        _t=$(mktemp /tmp/.solnix-ak.XXXXXX) && cp "$_mp/solnix/authorized_keys" "$_t" && echo "$_t"
+      fi
+      umount "$_mp" 2>/dev/null
+      return 0
+    fi
+  done
+}
+
 # _start_sshd -- after the network is up (--ssh, or offered by --net), make sure
 # the media's sshd is online and give root a credential, so a remote operator can
 # ssh in and drive the install. Best-effort; never fatal.
@@ -854,8 +875,22 @@ _start_sshd() {
   if [ "$(svcs -H -o state "$_sv" 2>/dev/null)" != online ]; then
     log "sshd is not online -- check: svcs -xv $_sv"; return 0
   fi
-  # 1. a key the operator supplied (SOLNIX_SSH_PUBKEY).
+  # 1. a key the operator supplied: SOLNIX_SSH_PUBKEY, or /solnix/authorized_keys
+  #    on the boot stick's ESP (FAT, writable from any OS; docs/installer-ssh.md).
   _pubkey_done=0
+  _ak=$(_media_authorized_keys)
+  if [ -n "$_ak" ]; then
+    mkdir -p /root/.ssh; chmod 700 /root/.ssh
+    tr -d '\r' < "$_ak" | grep -v -e '^[[:space:]]*#' -e '^[[:space:]]*$' > "$_ak.keys"
+    while IFS= read -r _k; do
+      grep -qxF "$_k" /root/.ssh/authorized_keys 2>/dev/null || printf '%s\n' "$_k" >> /root/.ssh/authorized_keys
+    done < "$_ak.keys"
+    chmod 600 /root/.ssh/authorized_keys
+    _pubkey_done=1
+    log "installed $(grep -c . "$_ak.keys") key(s) from the boot medium's /solnix/authorized_keys"
+    rm -f "$_ak.keys"
+    rm -f "$_ak"
+  fi
   if [ -n "${SOLNIX_SSH_PUBKEY:-}" ]; then
     mkdir -p /root/.ssh; chmod 700 /root/.ssh
     grep -qF "$SOLNIX_SSH_PUBKEY" /root/.ssh/authorized_keys 2>/dev/null \
@@ -1031,6 +1066,15 @@ detect_target() {
 # install (positional toplevel, no --git/--flake) must still work offline.
 # --net / --self-update: network-only actions, no disk touched. Placed AFTER
 # bring_up_network + check_internet are defined and BEFORE any disk work.
+# --sshd-now: the live media's boot service calls this once solnix-autonet has a
+# lease. Start sshd and give root a credential; no internet check, no disk.
+if [ "${DO_SSHD_NOW:-0}" = 1 ]; then
+  _start_sshd 2>&1 | tee -a /var/run/solnix-sshd-banner >&2
+  # ttymon prints /etc/issue above the console login prompt, so the password
+  # stays readable at the console after the boot messages scroll away.
+  grep '##' /var/run/solnix-sshd-banner >> /etc/issue 2>/dev/null || true
+  exit 0
+fi
 if [ "${DO_NET_ONLY:-0}" = 1 ] || [ "${DO_SELF_UPDATE:-0}" = 1 ] || [ "${DO_SSHD:-0}" = 1 ]; then
   bring_up_network
   if check_internet; then

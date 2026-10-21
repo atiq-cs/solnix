@@ -17,7 +17,19 @@ PATH=/usr/sbin:/usr/bin:/sbin; export PATH
   # /var/run/solnix-net-status + /var/log/solnix-autonet.log.
   if [ -x @autonet@ ]; then
     @autonet@ >/dev/null 2>&1 &
+    _autonet_pid=$!
     echo "[solnix] auto-network bring-up started in the background (bounded; see solnix-net)"
+    # ssh from first boot: once the bring-up has a lease, start sshd with a random
+    # one-time root password (and a key from the stick's ESP /solnix/authorized_keys,
+    # if any), printed with the address on the console and in the motd. Before the
+    # lease sshd is not running, so port 22 refuses. Background: never delays boot.
+    (
+      wait "$_autonet_pid" 2>/dev/null
+      while [ -e /proc/"$_autonet_pid" ]; do sleep 1; done
+      case "$(cat /var/run/solnix-net-status 2>/dev/null)" in
+        up:*) [ -x @install@ ] && @install@ --sshd-now ;;
+      esac
+    ) </dev/null >/dev/msglog 2>&1 &
   fi
   # ⚠️ devfsadm and the disk listing go to the LOG, never to /dev/console.
   #

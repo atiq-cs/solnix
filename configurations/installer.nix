@@ -33,6 +33,10 @@ let
   motd = pkgs.writeScript "solnix-motd" (builtins.readFile ../scripts/live/solnix-motd);
   zap = pkgs.writeScript "solnix-zap" (builtins.readFile ../scripts/solnix-zap);
   diag = pkgs.writeScript "solnix-diag" (builtins.readFile ../scripts/solnix-diag);
+  # the console temperature line (svc:/site/solnix-templine below)
+  templine = pkgs.writeScript "solnix-templine"
+    (builtins.replaceStrings [ "@cputemp@" ] [ "${live.solnix-cputemp}/bin/solnix-cputemp" ]
+      (builtins.readFile ../scripts/live/solnix-templine));
   liveMethod = pkgs.writeScript "solnix-live"
     (builtins.replaceStrings [ "@autonet@" "@install@" ]
       [ "${autonet}" "${config.system.build.solnixInstall}" ]
@@ -50,6 +54,7 @@ let
     ln -s ${config.system.build.solnixInstall} $out/bin/solnix-install
     ln -s ${zap} $out/bin/solnix-zap
     ln -s ${diag} $out/bin/solnix-diag
+    ln -s ${templine} $out/bin/solnix-templine
     ln -s ${motd} $out/bin/solnix-motd
     ln -s ${autonet} $out/bin/solnix-autonet
     ln -s ${generateConfig} $out/bin/solnix-generate-config
@@ -190,10 +195,31 @@ in
     stop.exec = ":true";
   };
 
+  # One console line every 30 s with the CPU, thermal-zone and ThinkPad EC
+  # temperatures (scripts/live/solnix-templine). If the machine powers off by
+  # itself, the last readings are still on the screen to photograph. It only
+  # reads (one ioctl per CPU sensor, one kstat read per zone); `svcadm disable
+  # solnix-templine` silences it.
+  smf.services.solnix-templine = {
+    enable = true;
+    category = "site";
+    description = "solnix live temperature line";
+    model = "contract";
+    requires = [ "svc:/milestone/multi-user:default" ];
+    start.exec = "${templine} &";
+    stop.exec = ":kill";
+  };
+
   # sshd runs on the media with root login allowed, as NixOS's installation-device
   # profile sets (services.openssh.enable, settings.PermitRootLogin = "yes"). Nobody
-  # can log in until root has a password or a key: the media bakes neither, and
-  # `solnix-install --ssh` sets one and prints it.
+  # can log in until root has a password or a key: the media bakes neither. On the
+  # LIVE root it is not started at boot (make-installer-image.sh disables it in the
+  # ramdisk's repository; an installed system keeps it on): solnix-live starts it
+  # once solnix-autonet has a DHCP lease (`solnix-install --sshd-now`), which sets a
+  # random one-time root password and prints it with the address on the console,
+  # above the login prompt and in the motd. A key in the stick's ESP at
+  # /solnix/authorized_keys is installed for root too. Before that, port 22 is
+  # closed. `solnix-install --ssh` does the same by hand.
   environment.generatedEtc."ssh/sshd_config" = lib.mkForce ''
     UsePAM yes
     KbdInteractiveAuthentication yes
@@ -241,6 +267,23 @@ in
   # media's store is fixed, and the installer writes to the target pool's store.
   nix.settings.min-free = 0;
   nix.settings.max-free = 0;
+
+  # CPU power management on the media (svc:/system/power is on: solnix.
+  # powerManagement.enable). The stock power.conf has `cpupm enable` (cpupm_default_
+  # mode = event: the kernel's elastic P-state policy, falling back to polling where
+  # PAD is unavailable, pm.c) and leaves autoS3 / autoshutdown at "default"; on a
+  # laptop that answers estar_v2/v3 the default may suspend or power off an idle
+  # machine. A live installer must never do that, so both are pinned off here.
+  # speedstep (P-states via _PSS + IA32_PERF_CTL) supports family 6 model >= 0xe
+  # with CPUID EST, i.e. Alder Lake too (speedstep.c speedstep_supported).
+  environment.generatedEtc."power.conf" = ''
+    device-dependency-property removable-media /dev/fb
+    autopm                  default
+    autoS3                  disable
+    autoshutdown            30 9:00 9:00 noshutdown
+    cpupm                   enable
+    cpu-threshold           1s
+  '';
 
   # The live root is a RAM ramdisk: cap the ARC so the target's bootadm/digest
   # always has memory (measured: an uncapped ARC OOM-killed digest on install).

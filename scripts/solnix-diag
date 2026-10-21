@@ -110,6 +110,27 @@ _section() { printf '\n===== %s =====\n' "$1"; }
   _section "DMESG (usb/scsi/attach warnings)"
   dmesg 2>/dev/null | grep -iE 'usb|scsa2usb|scsi|cmlb|attach|WARNING|fatal' | tail -40
 
+  # X1E: the left USB-C ports' USB 3 lines are on the Thunderbolt 4 xHCI
+  # (8086:1138 at 56:00.0, behind TB bridges 00:1d.0 -> 20:00.0 -> 21:02.0, PCIe
+  # hotplug ports). These say whether xhci attached there and saw the device.
+  _section "TB4 / PCIe HOTPLUG USB (prtconf -D, xhci props, cfgadm)"
+  prtconf -D 2>/dev/null
+  echo "-- prtconf -v for xhci nodes (compatible, reg, acpi-namespace) --"
+  prtconf -vp 2>/dev/null | grep -n -i -B2 -A2 'pciex8086,1138\|pci8086,1138' | head -30
+  prtconf -v 2>/dev/null | awk '/xhci, instance/{p=1} p&&/(compatible|acpi-namespace|reg|assigned-addresses)/{print; getline; print} /instance #/&&!/xhci/{p=0}' | head -60
+  echo "-- cfgadm -al --"; cfgadm -al 2>&1 | head -60
+  echo "-- dmesg xhci/usba/pcieb/hotplug --"
+  dmesg 2>/dev/null | grep -iE 'xhci|usba|pcieb|hotplug|pciehpc|pcie_hp' | tail -40
+  echo "-- modinfo xhci/usbecm/pcieb --"; modinfo 2>/dev/null | grep -iE 'xhci|usbecm|pcieb'
+  echo "-- dladm show-phys --"; dladm show-phys 2>&1
+
+  _section "TEMPERATURES + POWER"
+  solnix-templine once 2>&1
+  kstat -p tzmon 2>&1 | head -30
+  kstat -p -m cpu_info -s 'current_clock_Hz|supported_frequencies_Hz' 2>&1 | head -8
+  svcs -H power 2>&1; grep -v '^#' /etc/power.conf 2>/dev/null | grep .
+  dmesg 2>/dev/null | grep -i 'solnix-dgpu-off\|tzmon' | tail -10
+
   _section "MOUNTS + ROOT FS"
   mount 2>/dev/null
   echo "-- df -h / --"; df -h / 2>/dev/null

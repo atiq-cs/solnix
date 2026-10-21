@@ -21,7 +21,11 @@
 # never skipped. The patch header has the DSDT + live-hardware evidence), and
 # 0003-usbecm-usb-pipe-xopen.patch (usbecm opened its data pipes with
 # usb_pipe_open(), which USBA refuses on a USB 3 device, so RTL8153 USB-C
-# adapters attached but never passed a frame).
+# adapters attached but never passed a frame), 0004-tzmon-zone-kstat.patch (kstat
+# tzmon:<n>:<zone> with the zone temperature and the ThinkPad EC sensors, for the
+# live media's temperature line without dtrace), and 0005-tzmon-thinkpad-dgpu-off.patch
+# (opt-in, -B solnix-dgpu-off=1: a ThinkPad dGPU with no driver goes to D3hot and
+# its root port's _PR3 power resource is turned off, as Linux's D3cold does).
 #
 # OUTPUT: kernel/, platform/i86pc/{kernel,amd64}/, usr/kernel/ from the
 # non-DEBUG build, plus boot/ (loader, forth, fonts) copied from the gate proto,
@@ -32,7 +36,9 @@
 , srcHash ? "1yhpjbxjynjrwd11vf456aw9hln3ydbc9qsgd5a0k73l8hfsmq87"  # nix-prefetch-url --unpack
 , patches ? [ ../../scripts/patches/0001-tscc_pit-default-pit_is_broken.patch
               ../../scripts/patches/0002-tzmon-thinkpad-hkey-enable.patch
-              ../../scripts/patches/0003-usbecm-usb-pipe-xopen.patch ]
+              ../../scripts/patches/0003-usbecm-usb-pipe-xopen.patch
+              ../../scripts/patches/0004-tzmon-zone-kstat.patch
+              ../../scripts/patches/0005-tzmon-thinkpad-dgpu-off.patch ]
 , onbld ? "/opt/onbld"
 , gcc ? "/usr/gcc/10"
 , perlVersion ? "5.42"
@@ -74,10 +80,16 @@ derivation {
       || { echo "FATAL: tzmon ThinkPad HKEY patch not applied" >&2; exit 1; }
     # tzmon must act on _CRT (debounced), never skip it: the X1E's "_TMP == _CRT"
     # is the EC's critical alarm, and skipping it left the hardware cutoff to act.
-    grep -q 'tzp->validchecks >= TZ_VALIDCHECKS' usr/src/uts/i86pc/io/tzmon/tzmon.c \
-      || { echo "FATAL: tzmon debounced _HOT/_CRT not applied" >&2; exit 1; }
+    # ... and act ONCE per episode: re-sending SIGPWR on every 2 s re-poll flooded
+    # the console through a 61 s shutdown (measured under KVM).
+    grep -q 'tzp->validchecks == TZ_VALIDCHECKS && !tzp->acted' usr/src/uts/i86pc/io/tzmon/tzmon.c \
+      || { echo "FATAL: tzmon debounced, act-once _HOT/_CRT not applied" >&2; exit 1; }
     if grep -qE 'crt_sentinel|NOT shutting down' usr/src/uts/i86pc/io/tzmon/tzmon.c; then
       echo "FATAL: tzmon still skips a _CRT reading" >&2; exit 1; fi
+    grep -q 'kstat_create("tzmon"' usr/src/uts/i86pc/io/tzmon/tzmon.c \
+      || { echo "FATAL: tzmon zone kstat patch not applied" >&2; exit 1; }
+    grep -q '^	tzmon_dgpu_off(dip);' usr/src/uts/i86pc/io/tzmon/tzmon.c \
+      || { echo "FATAL: tzmon dGPU power-off patch not applied" >&2; exit 1; }
     E=usr/src/uts/common/io/usb/clients/usbecm/usbecm.c
     if ! grep -q 'usb_pipe_xopen(ecmp->ecm_dip, &in_xdesc' $E || grep -q 'usb_pipe_open(ecmp->ecm_dip' $E; then
       echo "FATAL: usbecm usb_pipe_xopen patch not applied" >&2; exit 1; fi

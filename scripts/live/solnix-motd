@@ -7,6 +7,10 @@ case "$_net" in
   down:*) _netline="  network: NOT up (${_net#down: })" ;;
   *)      _netline="  network: bringing up in the background... (run: solnix-net to retry)" ;;
 esac
+# ssh from first boot: solnix-install --sshd-now (run by solnix-live once the
+# network has a lease) leaves the address and one-time root password here.
+_sshline=""
+[ -s /var/run/solnix-sshd-banner ] && _sshline=$(grep '##' /var/run/solnix-sshd-banner)
 cat <<BANNER
 
   ############################################################
@@ -14,11 +18,13 @@ cat <<BANNER
   #                  (x86_64 / illumos)                      #
   ############################################################
 
-  Root has an empty password on this media (as on NixOS's). Read /root/README
+  Root has an empty password at this console (as on NixOS's media); ssh gets a
+  random one-time password once the network is up (shown below). Read /root/README
   for what Solnix is, the install steps, and the tools here (lsblk, lspci,
   nano, rsync ...):   less /root/README
 
 $_netline
+$_sshline
 
   ── STEPS ──────────────────────────────────────────────────────────────────
 

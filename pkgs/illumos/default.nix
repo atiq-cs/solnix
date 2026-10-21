@@ -529,6 +529,29 @@ let
     '' ];
   };
 
+  # solnix-cputemp -- the coretemp ksensor reader the live media's temperature
+  # line uses (src/live/solnix-cputemp.c): one ioctl per /dev/sensors/temperature/
+  # cpu node. Built like wpa-pmk (the solnix-dev gcc), self-test at build time.
+  solnix-cputemp = derivation {
+    name = "solnix-cputemp";
+    system = "x86_64-solaris";
+    builder = "/usr/bin/bash";
+    PATH = "/usr/bin";
+    src = ../../src/live/solnix-cputemp.c;
+    solnixDev = buildEnv {
+      name = "solnix-dev";
+      paths = [ srcPkgs.gccWrapper srcPkgs.binutils srcPkgs.gnumake ];
+      pathsToLink = [ "/bin" "/share/man" ];
+    };
+    args = [ "-c" ''
+      set -eu
+      export PATH="$solnixDev/bin:/usr/bin"
+      mkdir -p "$out/bin"
+      gcc -O2 -Wall -Werror -o "$out/bin/solnix-cputemp" "$src"
+      "$out/bin/solnix-cputemp" -t || { echo "FATAL: solnix-cputemp self-test failed" >&2; exit 1; }
+    '' ];
+  };
+
   # iwm-firmware -- the proprietary (redistributable) iwlwifi blob + licence
   # (./iwm-firmware.nix), gated on the unfree opt-in. Threaded through here so
   # mkIwmKernel can lay it into the BE kernel tree alongside the module. The
@@ -853,7 +876,7 @@ in
   # helpers wireless-iwx.nix uses to render an iwm-aware driver DB and kernel
   # tree when hardware.wirelessIwm.attachAtBoot. mkIwmKernel/iwmFirmware take
   # the unfree opt-in so the blob stays out of any non-opted closure.
-  inherit iwm-driver mkIwmDriversDb mkIwmDriversDbUnbound mkIwmKernel iwmFirmware wpa-pmk;
+  inherit iwm-driver mkIwmDriversDb mkIwmDriversDbUnbound mkIwmKernel iwmFirmware wpa-pmk solnix-cputemp;
   # iwx wifi (AX2xx): module only; mkIwxDriversDb/mkIwxKernel below.
   inherit iwx-driver iwxFirmware iwxAliases mkIwxDriversDb mkIwxKernel;
   inherit nvidia-oss-modules nvidiaGspFirmware;
