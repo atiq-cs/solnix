@@ -2196,7 +2196,16 @@ echo "installed-console gate OK: console=$TARGET_CONSOLE in loader.conf + booten
 # /reconfigure + empty path_to_inst made the dixi X1's first boot hang 10+ min at
 # the loader hand-off (MEASURED). SOLNIX_FORCE_RECONFIGURE=1 for install-here,
 # boot-elsewhere. This is hardware state, not system state, so it is copied.
+# A PUBLIC CLOUD IMAGE is built on one instance type and booted on all of them, so
+# the build host's bindings are wrong for the image: on a c7i the ENA sits at
+# /pci@2,0/pci1d0f,200@0/.../pci1d0f,ec20@0, not the c5 build host's
+# /pci@0,0/pci1d0f,ec20@5, became ena1 against the copied binding, and ena0 (what
+# the networking module plumbs) did not exist (measured 2026-10-21, 0/4 c7i boots).
+# NixOS's amazon image ships no machine-specific device state either. An empty
+# file makes the kernel rebuild instance data on first boot (instance.c
+# PTI_NOT_FOUND -> RB_RECONFIG), so the first ENA found is ena0 on every type.
 mkdir -p "$ALTROOT/etc"
+if [ -n "${SOLNIX_CLOUD_IMAGE:-}" ]; then SOLNIX_FORCE_RECONFIGURE=1; fi
 if [ "${SOLNIX_FORCE_RECONFIGURE:-0}" = 1 ] || [ ! -s /etc/path_to_inst ]; then
   : > "$ALTROOT/etc/path_to_inst"; : > "$ALTROOT/reconfigure"
   log "first boot: forcing a device reconfigure (empty path_to_inst)"
