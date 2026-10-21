@@ -84,7 +84,14 @@ SOLNIX_POOL="$POOL" SOLNIX_ALLOW_RPOOL="" SOLNIX_NIXSTORE="$SOLNIX_NIXSTORE" \
 log "core-scrub the installed BE (no core files shipped)"
 ALT=/a-scrub
 mkdir -p "$ALT"
-if zpool import -N -f -R "$ALT" "$POOL" 2>/dev/null; then
+# Import the pool solnix-install just made BY ID: a build host can hold a second
+# importable pool of the same name (a prior run's disk), and a by-name import then
+# fails and this whole scrub was skipped silently (measured 2026-10-21).
+_pid=$(zpool import 2>/dev/null | awk -v p="$POOL" '$1=="pool:"{n=$2} $1=="id:" && n==p {print $2}' | tail -1)
+[ -n "$_pid" ] || die "core-scrub: no importable pool named $POOL (solnix-install should have exported it)"
+[ "$(zpool import 2>/dev/null | awk -v p="$POOL" '$1=="pool:" && $2==p' | wc -l | tr -d ' ')" = 1 ] \
+  || die "core-scrub: more than one importable pool named $POOL; destroy or detach the stale one first"
+if zpool import -N -f -R "$ALT" "$_pid" 2>/dev/null; then
   BE=$(zfs list -H -o name -r "$POOL/ROOT" 2>/dev/null | grep -v '/ROOT$' | head -1)
   if [ -n "$BE" ]; then
     zfs set canmount=noauto "$BE" 2>/dev/null || true
@@ -127,9 +134,13 @@ if zpool import -N -f -R "$ALT" "$POOL" 2>/dev/null; then
       # store nix ships in the CS closure (sw/bin/nix); no /nix-tools224 stage.
       :
     fi
-    if [ -f "$CS/etc/nix/registry.json" ]; then
+    # install-be already lays /etc/nix/registry.json from the toplevel (/etc/static,
+    # NixOS's managed /etc). This copy over it exited 2 and aborted the script under
+    # set -e on the 2026-10-17 and 2026-10-21 AMI builds (cause not isolated). Stage
+    # the file only when install-be did not lay one.
+    if [ -f "$CS/etc/nix/registry.json" ] && [ ! -e "$BEROOT/etc/nix/registry.json" ]; then
       mkdir -p "$BEROOT/etc/nix"
-      cp -L "$CS/etc/nix/registry.json" "$BEROOT/etc/nix/registry.json" 2>/dev/null || cp "$CS/etc/nix/registry.json" "$BEROOT/etc/nix/registry.json"
+      cp -L "$CS/etc/nix/registry.json" "$BEROOT/etc/nix/registry.json"
     fi
     if [ ! -e "$BEROOT/usr/sbin/ping" ] && [ -x /usr/sbin/ping ]; then
       cp /usr/sbin/ping "$BEROOT/usr/sbin/ping" 2>/dev/null && chmod 4555 "$BEROOT/usr/sbin/ping" && chown root:bin "$BEROOT/usr/sbin/ping" 2>/dev/null || true
