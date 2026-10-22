@@ -120,6 +120,13 @@ A6/A8 **hybrid** on the clean x86 build host (`ami-0aa1f6ac952e3408d`), cross-bu
 
 ## SError-handler fix attempted (metal boot 2) — refined the mechanism, did NOT get past
 
+> ⚠️ **2026-10-22: this boot did not test what it says.** `aa-assemble-metal.sh` step 2 copied only
+> `kernel/aarch64` (genunix) and `platform/armv8/kernel` from the fresh build, never `kernel/drv` or
+> `kernel/misc`, so every loadable driver in the image (ecam, pcierc, nvme, ena) was the banked
+> Sep-12 build. The SError change lived in `unix`, so that half did ship; any driver-side change
+> would not have. Fixed, with a byte-compare gate, in `aa64-assemble.sh`; see
+> `docs/aarch64-ecam-ontrap-metal-result.md`.
+
 Following the "install an early SError handler to localize the fault" lead, a targeted
 kernel fix was built and booted on a second `c6g.metal` (`i-00f284c4bb494dfec`, terminated):
 
@@ -155,7 +162,8 @@ likely a **synchronous external abort** — `EC=0x25` data abort with `DFSC` = e
 abort — which goes through `from_current_el_sync` → `trap()` T_DATA_ABORT, where the
 existing `t_lofault` recovery *would* fire **if** the config read set `t_lofault`). So
 the single highest-value next change is: **set `t_lofault`/`on_trap` around the ecam
-config read** so the existing data-abort recovery catches the external abort. That is a
+config read** (⛔ **built and booted 2026-10-22: did NOT help, and the ECAM read is never reached** before
+the reset; `docs/aarch64-ecam-ontrap-metal-result.md`) so the existing data-abort recovery catches the external abort. That is a
 bounded, named, one-file change for the next kernel-focused run; it was out of scope
 here (image-assembly stream, time-boxed).
 

@@ -8,9 +8,15 @@
  *
  *   gcc -std=c99 -Wall -Wextra -O2 aa-ecam-test_ontrap.c -o /tmp/t && /tmp/t
  *
- * NEGATIVE CONTROL built in: flip SIMULATE_ABORT off and the read must return the
- * real value, not all-1s; with it on, the clean-path asserts would fire if the
- * guard were a no-op.
+ * NEGATIVE CONTROL: -DBREAK_RECOVERY drops the all-1s assignments in the recovery
+ * branch; the abort-path asserts must then FAIL (measured 2026-10-21: rc 134).
+ *
+ * CORRECTED 2026-10-21: the version committed in e9be6e5 modelled on_trap() as a
+ * C function wrapping setjmp, which returns before the longjmp (undefined
+ * behaviour). It HUNG at -O2 and FAILED an assert at -O0, so its "ALL CHECKS PASS"
+ * had never been observed. on_trap is now a macro, matching the kernel's tail call.
+ * This checks the recovery LOGIC only; it says nothing about whether Graviton's
+ * fault ever reaches ecam_cfgspace_acc (it did not: docs/aarch64-ecam-ontrap-metal-result.md).
  */
 #include <stdio.h>
 #include <stdint.h>
@@ -45,7 +51,13 @@ typedef struct {
 /* on_trap(): arms protection, returns 0 the first time.  A simulated abort does
  * longjmp(1), so on_trap "returns" non-zero (the __RETURNS_TWICE semantics). */
 static on_trap_data_t *g_otd;
-static int on_trap(on_trap_data_t *otd, unsigned prot) { (void)prot; g_otd = otd; return setjmp(otd->jb); }
+/*
+ * The kernel's on_trap() (uts/armv8/ml/aarch64_subr.S) ends in `b setjmp`, a
+ * TAIL CALL, so setjmp records the CALLER's frame.  Model that with a macro.
+ * (The original model wrapped setjmp in a C function that returned before the
+ * longjmp -- undefined behaviour: it hung at -O2 and failed at -O0.)
+ */
+#define on_trap(otd, prot) ((void)(prot), g_otd = (otd), setjmp((otd)->jb))
 static void no_trap(void) { g_otd = NULL; }
 
 /* The MMIO accessors.  When SIMULATE_ABORT, the FIRST load/store longjmps as the
@@ -69,7 +81,11 @@ static void ecam_access(req_t *req, void *addr)
 
 	if (on_trap(&otd, OT_DATA_ACCESS) != 0) {
 		no_trap();
+#ifndef BREAK_RECOVERY
 		if (!req->write) {
+#else
+		if (0) {
+#endif
 			switch (req->size) {
 			case PCI_CFG_SIZE_BYTE:  VAL16(req) = PCI_EINVAL8;  break;
 			case PCI_CFG_SIZE_WORD:  VAL16(req) = PCI_EINVAL16; break;

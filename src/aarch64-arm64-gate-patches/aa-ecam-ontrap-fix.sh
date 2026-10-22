@@ -2,6 +2,11 @@
 # aa-ecam-ontrap-fix.sh — THE named PCIe-config-read fix for the Graviton ZFS/PCIe-scan
 # silent reset.
 #
+# ⛔ BOOT-TESTED 2026-10-22: does NOT stop the reset loop (c6g.metal i-06729f50676ec9979,
+#    2 cycles). With aa-ecam-diag.py on top, ZERO [AAECAM] lines: ecam_cfgspace_acc was never
+#    entered before the reset. The "confirmed" mechanism below was code-read only; the fault
+#    is earlier. Kept as a correct hardening, not as the fix. docs/aarch64-ecam-ontrap-metal-result.md
+#
 # MECHANISM (confirmed by code-read on the gate @ 6cd2521c1, this stream):
 #   The ZFS device scan drives PCIe config-space enumeration.  Each probe lands in
 #   ecam_cfgspace_acc() (usr/src/uts/aarch64/io/pciex/ecam/ecam.c), which does a RAW,
