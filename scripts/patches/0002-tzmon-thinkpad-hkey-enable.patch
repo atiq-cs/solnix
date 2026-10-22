@@ -28,18 +28,21 @@ THE CHANGE
    - one bogus EC read no longer takes the machine down, and a sustained alarm still does.
 3. Both limits power off through init (SIGPWR -> inittab powerfail -> shutdown -i5), so filesystems sync. Before this
    patch, _CRT halted at "Press any key to reboot." and left a hot machine running.
-   tzmon acts ONCE per episode, on the third reading (FreeBSD: tz_validchecks == TZ_VALIDCHECKS), then polls at the
-   normal period and stays quiet. Measured under KVM with _TMP == _CRT held: acting on every later reading re-sent
-   SIGPWR and printed two lines every 2 s through the whole 61 s shutdown, burying its messages. Dropping below the
-   limit ends the episode.
+   tzmon acts on the third reading (FreeBSD: tz_validchecks == TZ_VALIDCHECKS) and then re-sends the power-off
+   request every TZ_RESEND_PERIOD (30) seconds while the episode lasts. Dropping below the limit ends the episode.
+   - Re-sending on every 2 s poll printed two lines every 2 s through a 61 s shutdown (KVM).
+   - Sending only once is UNSAFE. init(8) masks inittab's "s1234:powerfail" entry with the current run level,
+     which is 0 until svc.startd reports one. So a SIGPWR early in boot is dropped (init.c spawn_processes), and
+     the machine stayed up at 128 C (measured under KVM). A SIGPWR during a shutdown already under way is
+     harmless: init skips an entry that is still running.
 4. Every over-limit poll prints one console line: the reading, _HOT/_CRT, the count, the EC's sensor temperatures
    TMP0-7 (0 and +/-128 = no sensor, as FreeBSD acpi_ibm.c reads them) and TSL0-3. The console then names the sensor
    behind the alarm.
 
 The model-independent part is (2)-(3). (1) binds on the ThinkPad HKEY _HID and is a no-op elsewhere.
---- a/usr/src/uts/i86pc/io/tzmon/tzmon.h	2026-10-20 20:11:53.929417430 -0400
-+++ b/usr/src/uts/i86pc/io/tzmon/tzmon.h	2026-10-20 20:11:31.691364303 -0400
-@@ -35,6 +35,10 @@
+--- a/usr/src/uts/i86pc/io/tzmon/tzmon.h
++++ b/usr/src/uts/i86pc/io/tzmon/tzmon.h
+@@ -35,6 +35,12 @@
  #define	TZ_DEFAULT_PERIOD	30
  
  #define	TZ_NUM_LEVELS		10
@@ -47,10 +50,12 @@ The model-independent part is (2)-(3). (1) binds on the ThinkPad HKEY _HID and i
 +#define	TZ_VALIDCHECKS		3
 +/* poll period while a zone is over a limit, so confirming takes seconds */
 +#define	TZ_CONFIRM_PERIOD	2
++/* seconds between repeated power-off requests while an episode lasts */
++#define	TZ_RESEND_PERIOD	30
  
  typedef struct thermal_zone {
  	struct thermal_zone	*next;
-@@ -56,6 +60,15 @@
+@@ -56,6 +62,15 @@
  
  	int			polling_period;
  	int			current_level;
@@ -62,12 +67,12 @@ The model-independent part is (2)-(3). (1) binds on the ThinkPad HKEY _HID and i
 +	 * acpi_thermal.c tz_validchecks).
 +	 */
 +	int			validchecks;
-+	int			acted;		/* shutdown already requested */
++	hrtime_t		acted;		/* last power-off request, 0 = none */
  } thermal_zone_t;
  
  
---- a/usr/src/uts/i86pc/io/tzmon/tzmon.c	2026-10-20 20:11:53.929417430 -0400
-+++ b/usr/src/uts/i86pc/io/tzmon/tzmon.c	2026-10-20 20:11:31.690910403 -0400
+--- a/usr/src/uts/i86pc/io/tzmon/tzmon.c
++++ b/usr/src/uts/i86pc/io/tzmon/tzmon.c
 @@ -88,6 +88,9 @@
  static void tzmon_set_power(ACPI_BUFFER devlist, int on_off, char *tz_name);
  static void tzmon_eval_zone(thermal_zone_t *tzp);
@@ -121,7 +126,7 @@ The model-independent part is (2)-(3). (1) binds on the ThinkPad HKEY _HID and i
  
  	ddi_remove_minor_node(dip, NULL);
  	tzmon_dip = NULL;
-@@ -589,6 +603,10 @@
+@@ -589,6 +603,14 @@
  		/* Go back to sleep */
  		mutex_enter(&tzp->lock);
  		ticks = drv_usectohz(tzp->polling_period * 1000000);
@@ -129,10 +134,14 @@ The model-independent part is (2)-(3). (1) binds on the ThinkPad HKEY _HID and i
 +		    tzp->validchecks < TZ_VALIDCHECKS &&
 +		    tzp->polling_period > TZ_CONFIRM_PERIOD)
 +			ticks = drv_usectohz(TZ_CONFIRM_PERIOD * 1000000);
++		/* while acting, poll at least as often as the re-send period */
++		else if (ticks > 0 && tzp->acted != 0 &&
++		    tzp->polling_period > TZ_RESEND_PERIOD)
++			ticks = drv_usectohz(TZ_RESEND_PERIOD * 1000000);
  		if (ticks > 0)
  			(void) cv_reltimedwait(&zone_list_condvar,
  			    &tzp->lock, ticks, TR_CLOCK_TICK);
-@@ -670,25 +688,50 @@
+@@ -670,25 +692,56 @@
  	DTRACE_PROBE4(tz__temp, int, tmp, int, tzp->crt, int, tzp->hot,
  	    char *, (char *)tzp->zone_name);
  
@@ -169,20 +178,26 @@ The model-independent part is (2)-(3). (1) binds on the ThinkPad HKEY _HID and i
 +	if ((tzp->hot > 0 && tmp >= tzp->hot) ||
 +	    (tzp->crt > 0 && tmp >= tzp->crt)) {
 +		/*
-+		 * Act once, on the TZ_VALIDCHECKS-th reading, as FreeBSD does
-+		 * (tz_validchecks == TZ_VALIDCHECKS). Measured under KVM with
-+		 * _TMP == _CRT held: acting on every later poll re-sent SIGPWR
-+		 * and printed two lines every 2 s through a 61 s shutdown,
-+		 * burying its messages. After acting, poll at the normal period
-+		 * and stay quiet; a new episode (back below the limit, then over
-+		 * it again) acts again.
++		 * Act on the TZ_VALIDCHECKS-th reading, as FreeBSD does
++		 * (tz_validchecks == TZ_VALIDCHECKS), and then again every
++		 * TZ_RESEND_PERIOD seconds while the episode lasts. Re-sending
++		 * on every 2 s poll printed two lines every 2 s through a 61 s
++		 * shutdown (KVM). Sending only ONCE is unsafe: init(8) honours
++		 * SIGPWR only once it is past boot (spawn_processes() masks
++		 * inittab's "s1234:powerfail" entry with the current run level,
++		 * which is 0 until svc.startd reports one), so an alarm early
++		 * in boot was dropped and the machine stayed up at 128 C
++		 * (measured under KVM). A repeated SIGPWR during a shutdown
++		 * already under way is harmless: init skips a living entry.
 +		 */
 +		if (tzp->validchecks < TZ_VALIDCHECKS) {
 +			tzp->validchecks++;
 +			tzmon_report(tzp, tmp);
 +		}
-+		if (tzp->validchecks == TZ_VALIDCHECKS && !tzp->acted) {
-+			tzp->acted = 1;
++		if (tzp->validchecks == TZ_VALIDCHECKS && (tzp->acted == 0 ||
++		    gethrtime() - tzp->acted >=
++		    (hrtime_t)TZ_RESEND_PERIOD * NANOSEC)) {
++			tzp->acted = gethrtime();
 +			cmn_err(CE_WARN, "tzmon: Thermal zone (%s) is %s (%d C) "
 +			    "for %d consecutive readings; powering off",
 +			    (char *)tzp->zone_name,
@@ -202,7 +217,7 @@ The model-independent part is (2)-(3). (1) binds on the ThinkPad HKEY _HID and i
  	}
  
  	/*
-@@ -725,6 +768,44 @@
+@@ -725,6 +778,44 @@
  
  
  /*
@@ -247,7 +262,7 @@ The model-independent part is (2)-(3). (1) binds on the ThinkPad HKEY _HID and i
   * tzmon_do_shutdown
   * Initiates shutdown by sending a SIGPWR signal to init.
   */
-@@ -745,3 +826,130 @@
+@@ -745,3 +836,130 @@
  	/* graceful shutdown with inittab and all getting involved */
  	psignal(initpp, SIGPWR);
  }

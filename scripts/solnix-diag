@@ -123,6 +123,18 @@ _section() { printf '\n===== %s =====\n' "$1"; }
   dmesg 2>/dev/null | grep -iE 'xhci|usba|pcieb|hotplug|pciehpc|pcie_hp' | tail -40
   echo "-- modinfo xhci/usbecm/pcieb --"; modinfo 2>/dev/null | grep -iE 'xhci|usbecm|pcieb'
   echo "-- dladm show-phys --"; dladm show-phys 2>&1
+  # Raw root-port state of every xhci instance (illumos's own PORTSC dump ioctl):
+  # CCS = device connected, PED = enabled, PLS = link state (U0 = trained;
+  # Inactive/Compliance or CAS = a USB 3 link that needs a warm reset), speed.
+  echo "-- xhci root ports (PORTSC, /usr/lib/xhci/xhci_portsc -v) --"
+  if [ -x /usr/lib/xhci/xhci_portsc ]; then
+    for _x in $(/usr/lib/xhci/xhci_portsc -l 2>&1); do
+      echo "== $_x"; /usr/lib/xhci/xhci_portsc -v -d "$_x" 2>&1
+    done
+  else
+    echo "(no /usr/lib/xhci/xhci_portsc)"
+  fi
+  echo "-- xhci warm resets this boot --"; dmesg 2>/dev/null | grep -i 'warm reset' | tail -10
 
   _section "TEMPERATURES + POWER"
   solnix-templine once 2>&1

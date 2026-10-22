@@ -22,12 +22,12 @@ THE CHANGE (applies on top of 0002-tzmon-thinkpad-hkey-enable.patch)
   (lines 67457-67490) reads TMP0, TSL2 and TSL3, maps a 0x80 TMP0 to 0x30 (48 C), and returns TCRT only when TSL3 is
   set, or TSL2 while HKEY.DHKC is 0. TC2K clamps out-of-range values to 48 C. That is the same logic as the P1 Gen4
   sibling that 0002's header describes. TMP1-7 therefore read -1 on the X1E, and ec_gput carries the dGPU reading.
---- a/usr/src/uts/i86pc/io/tzmon/tzmon.h	2026-10-20 20:11:31.691364303 -0400
-+++ b/usr/src/uts/i86pc/io/tzmon/tzmon.h	2026-10-20 20:11:31.709231089 -0400
-@@ -69,6 +69,14 @@
+--- a/usr/src/uts/i86pc/io/tzmon/tzmon.h
++++ b/usr/src/uts/i86pc/io/tzmon/tzmon.h
+@@ -71,6 +71,14 @@
  	 */
  	int			validchecks;
- 	int			acted;		/* shutdown already requested */
+ 	hrtime_t		acted;		/* last power-off request, 0 = none */
 +
 +	/*
 +	 * solnix: kstat tzmon:<instance>:zone<instance> -- the last polled
@@ -39,8 +39,8 @@ THE CHANGE (applies on top of 0002-tzmon-thinkpad-hkey-enable.patch)
  } thermal_zone_t;
  
  
---- a/usr/src/uts/i86pc/io/tzmon/tzmon.c	2026-10-20 20:11:31.690910403 -0400
-+++ b/usr/src/uts/i86pc/io/tzmon/tzmon.c	2026-10-20 20:11:31.708790867 -0400
+--- a/usr/src/uts/i86pc/io/tzmon/tzmon.c
++++ b/usr/src/uts/i86pc/io/tzmon/tzmon.c
 @@ -41,6 +41,7 @@
  #include <sys/acpi/acpi.h>
  #include <sys/acpica.h>
@@ -79,7 +79,7 @@ THE CHANGE (applies on top of 0002-tzmon-thinkpad-hkey-enable.patch)
  	} else {
  		/* Existing zone - toss out allocated items */
  		mutex_enter(&tzp->lock);
-@@ -685,6 +695,7 @@
+@@ -689,6 +699,7 @@
  
  	/* get the current temperature from ACPI */
  	tzmon_eval_int(tzp->obj, "_TMP", &tmp);
@@ -87,7 +87,7 @@ THE CHANGE (applies on top of 0002-tzmon-thinkpad-hkey-enable.patch)
  	DTRACE_PROBE4(tz__temp, int, tmp, int, tzp->crt, int, tzp->hot,
  	    char *, (char *)tzp->zone_name);
  
-@@ -777,23 +788,9 @@
+@@ -787,23 +798,9 @@
  static void
  tzmon_report(thermal_zone_t *tzp, int tmp)
  {
@@ -113,7 +113,7 @@ THE CHANGE (applies on top of 0002-tzmon-thinkpad-hkey-enable.patch)
  	cmn_err(CE_WARN, "tzmon: Thermal zone (%s) reads %d C (_HOT %d, _CRT %d); "
  	    "over-limit reading %d of %d; EC TMP0-7: %d %d %d %d %d %d %d %d; "
  	    "TSL0-3: %x %x %x %x", (char *)tzp->zone_name, K_TO_C(tmp),
-@@ -805,6 +802,105 @@
+@@ -815,6 +812,105 @@
  }
  
  

@@ -136,21 +136,21 @@ done
 echo "  console gate OK (stage 2): loader.conf + conf.d/console = ${SOLNIX_CONSOLE:-text}" >&2
 
 # Boot menu item 4 (free on the live media: 1 boot, 2 single user, 3 loader prompt,
-# 5+ options): boot with the ThinkPad dGPU powered off. The loader passes every
-# environment variable to the kernel as a boot property (module.c
-# build_environment_module -> fakebop.c process_boot_environment), the same as
-# -B solnix-dgpu-off=1; tzmon then runs its opt-in dGPU power-off
-# (scripts/patches/0005-tzmon-thinkpad-dgpu-off.patch). Elsewhere it logs one line.
+# 5+ options): boot with the ThinkPad dGPU left ON. tzmon powers off a driverless
+# ThinkPad dGPU by default (scripts/patches/0005-tzmon-thinkpad-dgpu-off.patch);
+# this item is the opt-out. The loader passes every environment variable to the
+# kernel as a boot property (module.c build_environment_module -> fakebop.c
+# process_boot_environment), the same as -B solnix-dgpu-off=0. Elsewhere it is inert.
 # A menu command runs with the item number on the stack, as `boot` (item 1) expects;
 # the word sets the variable and hands that stack to boot unchanged.
 cat > "$ISOROOT/boot/menu.rc.local" <<'MENU'
-: solnix_dgpu_off_boot ( N -- NOTREACHED ) s" set solnix-dgpu-off=1" evaluate boot ;
-set mainmenu_caption[4]="Boot, ThinkPad [D]GPU off"
-set mainmenu_command[4]="solnix_dgpu_off_boot"
+: solnix_dgpu_on_boot ( N -- NOTREACHED ) s" set solnix-dgpu-off=0" evaluate boot ;
+set mainmenu_caption[4]="Boot, ThinkPad dGPU ON (no power-off)"
+set mainmenu_command[4]="solnix_dgpu_on_boot"
 set mainmenu_keycode[4]=100
-set mainansi_caption[4]="Boot, ThinkPad ^[1mD^[mGPU off"
+set mainansi_caption[4]="Boot, ThinkPad ^[1md^[mGPU ON (no power-off)"
 MENU
-grep -q 'solnix-dgpu-off=1' "$ISOROOT/boot/menu.rc.local" || { echo "FATAL: menu.rc.local lacks the dGPU-off entry" >&2; exit 1; }
+grep -q 'solnix-dgpu-off=0' "$ISOROOT/boot/menu.rc.local" || { echo "FATAL: menu.rc.local lacks the dGPU-ON (opt-out) entry" >&2; exit 1; }
 
 cat "$ISOROOT/boot/loader.conf" >&2
 

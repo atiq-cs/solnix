@@ -23,9 +23,13 @@
 # usb_pipe_open(), which USBA refuses on a USB 3 device, so RTL8153 USB-C
 # adapters attached but never passed a frame), 0004-tzmon-zone-kstat.patch (kstat
 # tzmon:<n>:<zone> with the zone temperature and the ThinkPad EC sensors, for the
-# live media's temperature line without dtrace), and 0005-tzmon-thinkpad-dgpu-off.patch
-# (opt-in, -B solnix-dgpu-off=1: a ThinkPad dGPU with no driver goes to D3hot and
-# its root port's _PR3 power resource is turned off, as Linux's D3cold does).
+# live media's temperature line without dtrace), 0005-tzmon-thinkpad-dgpu-off.patch
+# (ON by default, -B solnix-dgpu-off=0 opts out: a ThinkPad NVIDIA dGPU that only a
+# generic driver holds -- vgatext, audiohd -- is offlined, put in D3hot and its root
+# port's _PR3 power resource turned off, as Linux's D3cold does; idle in D0 it heated
+# the X1E to the EC's cutoff), and 0006-xhci-ss-warm-reset.patch (a USB 3 root port
+# whose link did not train -- SS.Inactive, Compliance, Cold Attach -- reads as
+# connected and gets a warm reset, so a device plugged in before boot enumerates).
 #
 # OUTPUT: kernel/, platform/i86pc/{kernel,amd64}/, usr/kernel/ from the
 # non-DEBUG build, plus boot/ (loader, forth, fonts) copied from the gate proto,
@@ -38,7 +42,8 @@
               ../../scripts/patches/0002-tzmon-thinkpad-hkey-enable.patch
               ../../scripts/patches/0003-usbecm-usb-pipe-xopen.patch
               ../../scripts/patches/0004-tzmon-zone-kstat.patch
-              ../../scripts/patches/0005-tzmon-thinkpad-dgpu-off.patch ]
+              ../../scripts/patches/0005-tzmon-thinkpad-dgpu-off.patch
+              ../../scripts/patches/0006-xhci-ss-warm-reset.patch ]
 , onbld ? "/opt/onbld"
 , gcc ? "/usr/gcc/10"
 , perlVersion ? "5.42"
@@ -82,14 +87,32 @@ derivation {
     # is the EC's critical alarm, and skipping it left the hardware cutoff to act.
     # ... and act ONCE per episode: re-sending SIGPWR on every 2 s re-poll flooded
     # the console through a 61 s shutdown (measured under KVM).
-    grep -q 'tzp->validchecks == TZ_VALIDCHECKS && !tzp->acted' usr/src/uts/i86pc/io/tzmon/tzmon.c \
-      || { echo "FATAL: tzmon debounced, act-once _HOT/_CRT not applied" >&2; exit 1; }
+    # ... and RE-SEND it every TZ_RESEND_PERIOD while the episode lasts: init drops a
+    # SIGPWR that arrives before svc.startd reports a run level, so acting only once
+    # left an early-boot alarm unanswered at 128 C (measured under KVM).
+    grep -q '(hrtime_t)TZ_RESEND_PERIOD \* NANOSEC' usr/src/uts/i86pc/io/tzmon/tzmon.c \
+      && grep -q '^#define	TZ_RESEND_PERIOD	30' usr/src/uts/i86pc/io/tzmon/tzmon.h \
+      || { echo "FATAL: tzmon debounced _HOT/_CRT with periodic re-send not applied" >&2; exit 1; }
+    if grep -q '&& !tzp->acted' usr/src/uts/i86pc/io/tzmon/tzmon.c; then
+      echo "FATAL: tzmon still acts only once (an early-boot SIGPWR is dropped by init)" >&2; exit 1; fi
     if grep -qE 'crt_sentinel|NOT shutting down' usr/src/uts/i86pc/io/tzmon/tzmon.c; then
       echo "FATAL: tzmon still skips a _CRT reading" >&2; exit 1; fi
     grep -q 'kstat_create("tzmon"' usr/src/uts/i86pc/io/tzmon/tzmon.c \
       || { echo "FATAL: tzmon zone kstat patch not applied" >&2; exit 1; }
     grep -q '^	tzmon_dgpu_off(dip);' usr/src/uts/i86pc/io/tzmon/tzmon.c \
       || { echo "FATAL: tzmon dGPU power-off patch not applied" >&2; exit 1; }
+    # ... ON by default (unset = on, "0" opts out), and allowed to detach the generic
+    # drivers that bind a driverless dGPU; the opt-in-only version did neither.
+    T=usr/src/uts/i86pc/io/tzmon/tzmon.c
+    grep -q '"solnix-dgpu-off", -1);' $T && grep -q 'v = (strcmp(s, "0") != 0);' $T \
+      && grep -q '{ "vgatext", "audiohd", NULL }' $T && grep -q 'TZMON_DGPU_VENDOR	0x10de' $T \
+      || { echo "FATAL: tzmon dGPU power-off is not default-on / generic-driver aware" >&2; exit 1; }
+    if grep -q 'opt-in with -B solnix-dgpu-off=1' $T; then
+      echo "FATAL: tzmon dGPU power-off is still opt-in only" >&2; exit 1; fi
+    X=usr/src/uts/common/io/usb/hcd/xhci/xhci_hub.c
+    grep -q '^uint_t xhci_ss_warm_reset = 1;' $X && grep -q 'reg |= XHCI_PS_WPR;' $X \
+      && grep -q 'xhci_port_needs_warm_reset(reg))' $X \
+      || { echo "FATAL: xhci USB 3 warm-reset patch not applied" >&2; exit 1; }
     E=usr/src/uts/common/io/usb/clients/usbecm/usbecm.c
     if ! grep -q 'usb_pipe_xopen(ecmp->ecm_dip, &in_xdesc' $E || grep -q 'usb_pipe_open(ecmp->ecm_dip' $E; then
       echo "FATAL: usbecm usb_pipe_xopen patch not applied" >&2; exit 1; fi
