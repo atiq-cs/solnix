@@ -1,0 +1,234 @@
+solnix: the solnix: flake input scheme
+
+  nix shell solnix:#hello                 the supported edition (the repo's default branch)
+  nix shell solnix:unstable#hello         a branch
+  nix shell solnix:v2026.08.07#hello      a tag
+  nix shell solnix:f368c25#hello          a commit id, full or abbreviated (>= 7 hex digits)
+  nix shell solnix:solnix-pkgs/main#x     another repository on the same host
+
+Each form is rewritten to an ordinary git input (git+https://git.solnix.io/<repo>.git, or $NIX_SOLNIX_GIT_URL),
+so lock files, caching and `nix flake metadata` are those of git+https, and a lock written on solnix reads back on
+any Nix. The scheme does only what a registry entry cannot: a tag (Nix 2.24 fetches a bare ref as refs/heads/) and
+an abbreviated commit id (the git fetcher needs 40 hex digits). Both are resolved once at parse time against the
+remote with git ls-remote, or a fetch of the branches plus rev-parse for an id below a branch tip.
+
+fetchers.cc: Input::fromURL no longer overwrites the scheme of an input whose inputFromURL already bound one, so
+the rewritten input keeps the git scheme.
+
+solnix: is the explicit, OS-independent spelling. On a solnix system `nixpkgs#hello` also means solnix's package
+set, through the system flake registry (modules/config/nix-channel.nix), the way NixOS points `nixpkgs` at its own.
+
+--- a/src/libfetchers/fetchers.cc
++++ b/src/libfetchers/fetchers.cc
+@@ -59,7 +59,10 @@
+         auto res = inputScheme->inputFromURL(settings, url, requireTree);
+         if (res) {
+             experimentalFeatureSettings.require(inputScheme->experimentalFeature());
+-            res->scheme = inputScheme;
++            /* An alias scheme (solnix:) returns an input already bound by
++               fromAttrs to the scheme it rewrote to (git); keep that one. */
++            if (!res->scheme)
++                res->scheme = inputScheme;
+             fixupInput(*res);
+             return std::move(*res);
+         }
+--- /dev/null
++++ b/src/libfetchers/solnix.cc
+@@ -0,0 +1,197 @@
++/*
++ * solnix: the `solnix:` flake input scheme.
++ *
++ *   solnix:#hello                      the supported edition (the repo's default branch)
++ *   solnix:unstable#hello              a branch
++ *   solnix:v2026.08.07#hello           a tag (tried as refs/heads/ first, then refs/tags/)
++ *   solnix:f368c25#hello               a commit id, full or abbreviated (>= 7 hex digits)
++ *   solnix:solnix-pkgs/main#overlay    another repo on the same host, with "<repo>/<ref>"
++ *
++ * Each form rewrites to an ordinary git input on the solnix git host
++ * (default https://git.solnix.io, setting `solnix-git-url`), so locking,
++ * caching and `nix flake metadata` behave exactly as for `git+https://`. The
++ * scheme only does what a registry entry cannot: a ref that is a tag, and an
++ * abbreviated commit id, both resolved once at parse time with `git ls-remote`
++ * and `git rev-parse` against the remote, then pinned as `rev`.
++ *
++ * `solnix:` is NOT `nixpkgs`. On a solnix system `nixpkgs#hello` also means
++ * solnix's package set, through the system flake registry (the NixOS way:
++ * nixos/modules/misc/nixpkgs-flake.nix). This scheme is the explicit,
++ * OS-independent spelling that works on Linux and macOS too.
++ */
++
++#include "fetchers.hh"
++#include "fetch-settings.hh"
++#include "url-parts.hh"
++#include "processes.hh"
++#include "users.hh"
++#include "util.hh"
++#include "environment-variables.hh"
++#include "file-system.hh"
++
++#include <regex>
++
++namespace nix::fetchers {
++
++static const std::string solnixDefaultHost = "https://git.solnix.io";
++static const std::string solnixDefaultRepo = "solnix";
++
++static std::string solnixHost()
++{
++    if (auto e = getEnvNonEmpty("NIX_SOLNIX_GIT_URL"))
++        return *e;
++    return solnixDefaultHost;
++}
++
++/* `git ls-remote <url>` once, as (sha, refname) pairs. Throws on failure:
++   a ref that cannot be resolved must not silently become a branch name. */
++static std::vector<std::pair<std::string, std::string>> lsRemote(const std::string & url)
++{
++    auto [status, output] = runProgram(RunOptions {
++        .program = "git",
++        .args = {"ls-remote", url},
++        .isInteractive = true,
++    });
++    if (status != 0)
++        throw Error("solnix: 'git ls-remote %s' failed", url);
++    std::vector<std::pair<std::string, std::string>> res;
++    for (auto & line : tokenizeString<std::vector<std::string>>(output, "\n")) {
++        auto tab = line.find('\t');
++        if (tab == std::string::npos) continue;
++        res.emplace_back(line.substr(0, tab), line.substr(tab + 1));
++    }
++    return res;
++}
++
++struct SolnixInputScheme : InputScheme
++{
++    std::optional<Input> inputFromURL(
++        const Settings & settings,
++        const ParsedURL & url, bool requireTree) const override
++    {
++        if (url.scheme != "solnix") return {};
++
++        /* solnix:<a>[/<b>]: one element is a ref or rev of the default repo;
++           two are <repo>/<ref-or-rev>. An empty path is the default branch. */
++        auto path = tokenizeString<std::vector<std::string>>(url.path, "/");
++        std::string repo = solnixDefaultRepo;
++        std::optional<std::string> spec;
++        if (path.size() == 1)
++            spec = path[0];
++        else if (path.size() == 2) {
++            repo = path[0];
++            spec = path[1];
++        } else if (path.size() > 2)
++            throw BadURL("solnix URL '%s' is invalid: use solnix:<ref> or solnix:<repo>/<ref>", url.url);
++
++        static std::regex repoRegex("[a-zA-Z0-9][a-zA-Z0-9_.-]*", std::regex::ECMAScript);
++        if (!std::regex_match(repo, repoRegex))
++            throw BadURL("in solnix URL '%s', '%s' is not a repository name", url.url, repo);
++
++        auto gitUrl = solnixHost() + "/" + repo + ".git";
++
++        Attrs attrs;
++        attrs.emplace("type", "git");
++        attrs.emplace("url", gitUrl);
++
++        for (auto & [name, value] : url.query) {
++            if (name == "rev" || name == "ref" || name == "narHash")
++                attrs.insert_or_assign(name, value);
++            else if (name == "shallow" || name == "submodules" || name == "allRefs")
++                attrs.insert_or_assign(name, Explicit<bool> { value == "1" });
++        }
++
++        if (spec) {
++            static std::regex shortRevRegex("[0-9a-fA-F]{7,39}", std::regex::ECMAScript);
++            if (std::regex_match(*spec, revRegex))
++                attrs.insert_or_assign("rev", *spec);
++            else if (std::regex_match(*spec, shortRevRegex))
++                attrs.insert_or_assign("rev", resolveShortRev(gitUrl, *spec));
++            else if (std::regex_match(*spec, refRegex))
++                attrs.insert_or_assign("ref", resolveRef(gitUrl, *spec));
++            else
++                throw BadURL("in solnix URL '%s', '%s' is not a commit id or branch/tag name", url.url, *spec);
++        }
++
++        auto res = Input::fromAttrs(settings, std::move(attrs));
++        return res;
++    }
++
++    /* A branch stays a plain name, so the git fetcher's ref handling (and
++       `nix flake update`) work as for git+https. A tag becomes refs/tags/<t>,
++       which the git fetcher fetches as-is. */
++    static std::string resolveRef(const std::string & gitUrl, const std::string & ref)
++    {
++        if (hasPrefix(ref, "refs/")) return ref;
++        auto refs = lsRemote(gitUrl);
++        for (auto & [sha, name] : refs)
++            if (name == "refs/heads/" + ref) return ref;
++        for (auto & [sha, name] : refs)
++            if (name == "refs/tags/" + ref) return "refs/tags/" + ref;
++        throw Error("solnix: '%s' is neither a branch nor a tag of %s", ref, gitUrl);
++    }
++
++    /* An abbreviated commit id must name exactly one commit the remote
++       advertises or that a fetch of all refs reaches. ls-remote covers branch
++       and tag tips cheaply; anything else needs the history, fetched into a
++       bare temp repo. No --filter: git.solnix.io is a dumb-HTTP host, which has
++       no partial clone, and the filtered fallback failed there (HTTP 416 on a
++       pack); the plain fetch of the branches is ~15 MB and took 5 s. */
++    static std::string resolveShortRev(const std::string & gitUrl, const std::string & prefix)
++    {
++        auto lower = toLower(prefix);
++        std::set<std::string> hits;
++        for (auto & [sha, name] : lsRemote(gitUrl))
++            if (hasPrefix(sha, lower)) hits.insert(sha);
++        if (hits.size() == 1) return *hits.begin();
++        if (hits.size() > 1)
++            throw Error("solnix: commit id '%s' is ambiguous in %s", prefix, gitUrl);
++
++        auto tmp = createTempDir("", "nix-solnix-rev");
++        AutoDelete del(tmp, true);
++        auto run = [&](Strings args) {
++            auto [status, out] = runProgram(RunOptions {
++                .program = "git", .args = args, .isInteractive = true });
++            return std::make_pair(status, out);
++        };
++        if (run({"-C", tmp, "init", "--bare", "-q"}).first != 0
++            || run({"-C", tmp, "fetch", "-q", gitUrl,
++                    "+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*"}).first != 0)
++            throw Error("solnix: could not fetch %s to resolve '%s'", gitUrl, prefix);
++        auto [status, out] = run({"-C", tmp, "rev-parse", "--verify", "--quiet",
++                                  prefix + "^{commit}"});
++        auto sha = trim(out);
++        if (status != 0 || !std::regex_match(sha, revRegex))
++            throw Error("solnix: '%s' does not name exactly one commit of %s", prefix, gitUrl);
++        return sha;
++    }
++
++    std::string_view schemeName() const override
++    {
++        return "solnix";
++    }
++
++    /* Only URLs are accepted: the parsed input is a type = "git" input, so
++       lock files and `nix flake metadata` show the git URL, and a lock file
++       written on solnix reads back on any Nix. */
++    StringSet allowedAttrs() const override
++    {
++        return {};
++    }
++
++    std::optional<Input> inputFromAttrs(
++        const Settings & settings,
++        const Attrs & attrs) const override
++    {
++        return {};
++    }
++
++    std::pair<ref<SourceAccessor>, Input> getAccessor(ref<Store> store, const Input & input) const override
++    {
++        throw Error("solnix: input '%s' should have been rewritten to a git input", input.to_string());
++    }
++};
++
++static auto rSolnixInputScheme = OnStartup([] { registerInputScheme(std::make_unique<SolnixInputScheme>()); });
++
++}

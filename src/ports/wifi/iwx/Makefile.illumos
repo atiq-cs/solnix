@@ -41,7 +41,7 @@ RENAME	= -Diwm_gld_register=iwx_gld_register \
 # (if_iwx.c iwx_alloc_tx_ring), above iwm's 20, so the map array is sized here.
 KDEFS	= -D_KERNEL -D_SYSCALL32 -D_SYSCALL32_IMPL -D_ELF64 -D_DDI_STRICT \
 	  -Dsun -D__sun -D__SVR4 -D_ASM_INLINES -DN80211_GIANT \
-	  -DIWX_DMA_MAX_SEGS=25 '-DN80211_FW_MODULE="iwx"' $(RENAME)
+	  -DIWX_DMA_MAX_SEGS=25 '-DN80211_FW_MODULE="iwx"' '-DN80211_DRV_NAME="iwx"' $(RENAME)
 KFLAGS	= -m64 -O2 -ffreestanding -mno-red-zone -mcmodel=kernel \
 	  -mno-mmx -mno-sse -fno-asynchronous-unwind-tables \
 	  -mindirect-branch=thunk-extern -mindirect-branch-register \

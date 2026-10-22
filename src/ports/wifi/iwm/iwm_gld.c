@@ -805,10 +805,20 @@ iwm_gld_mac_handle(void *gp)
 	return (((struct iwm_gld *)gp)->g_mh);
 }
 
+/*
+ * The GLDv3 driver name: mac_init_ops marks THIS name's major as a GLDv3
+ * driver, and mac_register refuses (EINVAL) a dip whose major is not marked.
+ * The iwx build compiles this file too and must pass "iwx" (its own major),
+ * the same #ifndef default pattern as N80211_FW_MODULE in n80211_giant.c.
+ */
+#ifndef N80211_DRV_NAME
+#define	N80211_DRV_NAME	"iwm"
+#endif
+
 void
 iwm_gld_init_ops(struct dev_ops *ops)
 {
-	mac_init_ops(ops, "iwm");
+	mac_init_ops(ops, N80211_DRV_NAME);
 }
 
 /*

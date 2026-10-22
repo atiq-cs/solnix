@@ -158,6 +158,18 @@ derivation {
     niwm=$($NM -p iwx | awk '$2 ~ /^[TDBRCU]$/ {print $3}' | grep -c '^iwm_' || true)
     [ "$niwm" -eq 0 ] || { echo "FATAL: $niwm global/undefined iwm_* symbols in the iwx module" >&2; $NM -p iwx | awk '$2 ~ /^[TDBRCU]$/ {print $3}' | grep '^iwm_' >&2; exit 1; }
 
+    # The module must register as GLDv3 under its OWN name: mac_init_ops("iwm")
+    # marks iwm's major, and mac_register then refuses iwx's dip with EINVAL
+    # (measured on the X1E: firmware and NVM loaded, attach failed). The shared
+    # iwm_gld.c takes the name from N80211_DRV_NAME. The linker merges identical
+    # strings, so the fixed module still has two "iwx"; what distinguishes it is
+    # that no bare "iwm" is left (the shipped broken module had exactly one).
+    # strings -n 3: the default minimum length (4) hides a 3-letter name.
+    strings -a -n 3 obj/iwx_gld.o | grep -qx iwx \
+      || { echo "FATAL: iwx_gld.o does not name iwx (N80211_DRV_NAME not applied)" >&2; exit 1; }
+    if strings -a -n 3 iwx | grep -qx iwm; then
+      echo "FATAL: the iwx module still passes \"iwm\" as a driver name (mac_init_ops)" >&2; exit 1; fi
+
     mkdir -p "$out/kernel/drv/amd64"
     cp iwx "$out/kernel/drv/amd64/iwx"
     chmod 0555 "$out/kernel/drv/amd64/iwx"

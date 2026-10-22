@@ -141,7 +141,21 @@
       # should use: solnixSystem { pkgs = solnix.lib.mkPkgs { }; modules = [...]; }.
       # The overlays stay exported for consumers that build nixpkgs packages for
       # x86_64-solaris (home-manager), which is a separate, cache-dependent path.
-      lib = { inherit solnixSystem mkPkgs shellPathOverlay worldOverlay; };
+      # nixpkgs' lib plus solnix's own. On a solnix system the `nixpkgs` registry
+      # name resolves to THIS flake (modules/config/nix-channel.nix, as NixOS points
+      # it at the system's nixpkgs), so a third-party flake that leaves its nixpkgs
+      # input unnamed gets this flake: it must find nixpkgs.lib.* here. No name in
+      # the solnix half shadows a nixpkgs lib attribute (checked at the pinned rev).
+      lib = lib // { inherit solnixSystem mkPkgs shellPathOverlay worldOverlay; };
+
+      # legacyPackages, nixpkgs' shape: x86_64-solaris is solnix's whole package
+      # set (pkgs.solnix.*, from source); every other system is plain nixpkgs at the
+      # same pin, so `nixpkgs#hello` from a flake that resolved nixpkgs here still
+      # works on Linux and macOS. Lazy: a Linux eval never touches the illumos set.
+      # x86_64-solaris is not in nixpkgs' flakeExposed list, so it is added here.
+      legacyPackages = lib.genAttrs (lib.unique (lib.systems.flakeExposed ++ solnixSystems)) (system:
+        if system == "x86_64-solaris" then (mkPkgs { }).solnix
+        else (import solnix-pkgs.inputs.nixpkgs { inherit system; }));
 
       # solnixConfigurations.<name> — the nixosConfigurations analog.
       #
@@ -230,14 +244,17 @@
       # on the illumos host; run the script as root against a scratch disk.
       packages = {
         # The from-source userland, for nix build .#<name> / nix shell .#<name> on
-        # an illumos host (NixOS: packages.<system> = the package set). Only these
-        # build on x86_64-solaris; solnix-dev is the C/C++ toolchain (gcc, gas, make).
-        x86_64-solaris = lib.getAttrs [
-          "bash" "coreutils" "diffutils" "findutils" "gettext" "git" "gnugrep" "gnumake"
-          "gnused" "gnutar" "home-manager" "htop" "jq" "less" "libiconv" "lndir" "ncurses"
-          "openssh" "tmux" "top" "vi" "xz" "binutils" "gccWrapper" "solnix-dev"
-          "gzip" "nano" "rsync" "smartmontools"
-        ] (mkPkgs { }).solnix;
+        # an illumos host (NixOS: packages.<system> = the package set): every
+        # derivation in pkgs.solnix, so `nix shell solnix#<name>` reaches whatever
+        # the set builds. Builder functions (mkIwxKernel ...) and nested sets
+        # (cached, starter, slices) stay reachable through legacyPackages, as in
+        # nixpkgs. An attribute that throws at eval is left out, not fatal.
+        # Not filtered by tryEval alone: nix224 is a fetchClosure (an
+        # experimental builtin whose absence tryEval cannot catch), so the
+        # system-only attributes are named and dropped first.
+        x86_64-solaris = lib.filterAttrs (_: v:
+          let r = builtins.tryEval (lib.isDerivation v); in r.success && r.value)
+          (removeAttrs (mkPkgs { }).solnix [ "nix224" "cached" "starter" ]);
       } // lib.genAttrs buildSystems (_buildSystem: {
         # the full system closure (T2.8); realise on the illumos host.
         baseToplevel = self.solnixConfigurations.base.config.system.build.toplevel;
