@@ -48,11 +48,13 @@
         "ref": "main",
         "rev": "2678fafe6b517199cb35b90e52cbd09a0335fbdf",
         "revCount": 110,
+        "shallow": false,
         "type": "git",
         "url": "https://git.solnix.io/solnix-pkgs.git"
       },
       "original": {
         "ref": "main",
+        "shallow": false,
         "type": "git",
         "url": "https://git.solnix.io/solnix-pkgs.git"
       }
