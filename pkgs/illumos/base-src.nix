@@ -520,6 +520,10 @@ rec {
     flags = "--disable-libmagic --disable-speller";
     deps = [ needWorld ncurses ];
   };
+  # nvi (nvi2) and the BSD DB 1.85 it edits through: the maintainer-required nvi,
+  # and solnix's vi (bin/vi, ex, view link to nvi). See ./nvi2.nix and ./db1.nix.
+  db1 = import ./db1.nix { inherit mkSrcPkg; };
+  nvi = import ./nvi2.nix { inherit mkSrcPkg ncurses db1 libiconv; };
   # rsync (NixOS installation-cd-base.nix defaultPackages). The bundled popt,
   # zlib-free (no -z), no optional hash/compression libraries: the media links
   # nothing it does not already carry.

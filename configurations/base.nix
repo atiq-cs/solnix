@@ -38,9 +38,10 @@
   # pkgs.solnix derivation and ships its own man page under share/man, so with
   # documentation.man.enable (default true) `man curl`, `man wget`, `man tree`,
   # `man nano`, `man vi`, ... all work. (BSD fetch is not yet packaged -- curl +
-  # wget cover it; nvi is deferred -- see /tmp report.)
+  # wget cover it.) nvi (nvi2) is the vi: its bin/vi, ex and view replace the
+  # gate's XPG4 ones, so `vi` and `nvi` are the same editor, as on the BSDs.
   environment.systemPackages = with pkgs.solnix; [
-    openssh bash vi less htop top
+    openssh bash nvi less htop top
     nixChain.curl wget tree nano
   ];
 

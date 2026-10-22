@@ -153,9 +153,9 @@ in
     # ships its own man page under share/man (worldMan carries the base pages),
     # so `man wget`, `man tree`, `man top`, `man htop`, `man less`, `man vi` work
     # through the system MANPATH. (BSD fetch is NOT yet packaged -- curl + wget
-    # cover the fetch-a-file need; nvi is deferred -- see the report in /tmp. The
-    # gate's POSIX vi (live.vi) is the shipped vi.)
-    live.vi
+    # cover the fetch-a-file need.) nvi (nvi2) is the shipped vi: live.nvi carries
+    # bin/nvi plus vi/ex/view links to it.
+    live.nvi
     live.top
     live.htop
     live.less
