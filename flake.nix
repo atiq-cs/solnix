@@ -7,7 +7,12 @@
     # docs/design-nixpkgs-illumos.md §5. This is the flake-native path (dev boxes
     # with flake-capable Nix). The BUILD path (illumos host, Nix 2.3.16 classic,
     # no flakes) uses lib/eval-host.nix — see the eval-split note below.
-    solnix-pkgs.url = "git+https://git.solnix.io/solnix-pkgs.git?ref=main";
+    # shallow=0: Nix fetches flake inputs as shallow clones (git fetch --depth 1), and
+    # git.solnix.io serves dumb HTTP, which cannot ("dumb http transport does not support
+    # shallow capabilities"). Without it every machine whose store lacks this input
+    # fails with "Cannot find Git revision ... in ref 'main'" (measured: stock Nix 2.35
+    # and 2.24 into an empty store). A full clone is ~1 MB.
+    solnix-pkgs.url = "git+https://git.solnix.io/solnix-pkgs.git?ref=main&shallow=0";
     # Plain UPSTREAM nixpkgs, for the host-ops devShell ONLY. The fork's patched
     # nixpkgs (solnix-pkgs.lib.nixpkgsSrc) rebuilds bison/perl/etc. from source
     # (no binary cache for the applyPatches tree), which made `cd` into the repo
