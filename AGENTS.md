@@ -15,14 +15,14 @@ to floki. Image builds that need an OpenIndiana host go on an EC2 OI builder
 restored from R2 (docs/account-migration-lava-to-hotdog.md), and KVM boot tests
 go on an EC2 metal instance (nested virtualization) or real hardware.
 
-The current EC2 account is **kiwi** (`AWS_PROFILE=kiwi`, `505435643998`, us-east-2,
-32 vCPU; docs/account-migration-kiwi-to-kiwi2.md). The previous kiwi (`830118047484`)
-closed 2026-10-17 and took the build-host AMIs and the DP AMIs with it. Name
+The current EC2 account is **kiwi** (`AWS_PROFILE=kiwi`, `437803535746`, us-east-2), **expiring
+2026-10-30 19:14:53 UTC**; docs/account-migration-kiwi2-to-kiwi3.md. The previous kiwi (`505435643998`)
+closed 2026-10-23 19:33 UTC and took the dde2cbe AMIs and both build-host AMIs with it. Name
 `AWS_PROFILE` explicitly (sg-guard has no default), re-check `describe-instances`
 before a launch, never a `0.0.0.0/0`/`::/0` rule, and terminate instances plus
-their volumes after. A foreign `pcompress-dev` instance lives there too; do not touch
-it. us-east-2 has 640 vCPU (enough for metal); the other publish regions have 384-vCPU
-requests pending (2026-10-17).
+their volumes after. The account is shared with other tenants (about 1032 of the 1152 us-east-2
+vCPU were theirs on 2026-10-23); touch only Project=solnix resources, and check free vCPU before a
+metal launch.
 
 **Burner accounts live about 7 days.** Anything that took more than an hour to make, or
 that someone depends on (boot-verified AMIs as raw disk images, build hosts, toolchains,

@@ -101,7 +101,7 @@ cmd_bank() {
   local vol
   vol="$(aws ec2 create-volume --availability-zone "$AZ" --snapshot-id "$snap" \
     --volume-type gp3 --tag-specifications \
-    "ResourceType=volume,Tags=[{Key=Name,Value=solnix-amibank-src},{Key=Owner,Value=gregburd},{Key=Purpose,Value=solnix-amibuild},{Key=Expiry,Value=$EXPIRY}]" \
+    "ResourceType=volume,Tags=[{Key=Name,Value=solnix-amibank-src},{Key=Project,Value=solnix},{Key=Owner,Value=gregburd},{Key=Purpose,Value=solnix-amibuild},{Key=Expiry,Value=$EXPIRY}]" \
     --query VolumeId --output text)"
   note "bank: volume $vol from $snap"
   aws ec2 wait volume-available --volume-ids "$vol"
@@ -114,7 +114,7 @@ cmd_bank() {
   iid="$(aws ec2 run-instances --image-id "$al2023" --instance-type "$HELPER_TYPE" \
     --key-name "$KEY_NAME" --security-group-ids "$SG_ID" --subnet-id "$SUBNET" \
     --block-device-mappings '[{"DeviceName":"/dev/xvda","Ebs":{"VolumeSize":80,"VolumeType":"gp3","DeleteOnTermination":true}}]' \
-    --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=solnix-amibank},{Key=Owner,Value=gregburd},{Key=Purpose,Value=solnix-amibuild},{Key=Expiry,Value=$EXPIRY}]" \
+    --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=solnix-amibank},{Key=Project,Value=solnix},{Key=Owner,Value=gregburd},{Key=Purpose,Value=solnix-amibuild},{Key=Expiry,Value=$EXPIRY}]" \
     --query 'Instances[0].InstanceId' --output text)"
   note "bank: helper $iid"
   aws ec2 wait instance-running --instance-ids "$iid"
@@ -352,7 +352,7 @@ EOF
     --key-name "$KEY_NAME" --security-group-ids "$SG_ID" --subnet-id "$SUBNET" \
     --block-device-mappings '[{"DeviceName":"/dev/xvdb","Ebs":{"VolumeSize":20,"VolumeType":"gp3","DeleteOnTermination":false}}]' \
     --user-data "$ud" \
-    --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=solnix-amirestore},{Key=Owner,Value=gregburd},{Key=Purpose,Value=solnix-amibuild},{Key=Expiry,Value=$EXPIRY}]" \
+    --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=solnix-amirestore},{Key=Project,Value=solnix},{Key=Owner,Value=gregburd},{Key=Purpose,Value=solnix-amibuild},{Key=Expiry,Value=$EXPIRY}]" \
     --query 'Instances[0].InstanceId' --output text)"
   note "restore: helper $iid — poll with: $0 restore-poll $iid"
   printf 'RESTORE_IID=%s\nRESTORE_PREFIX=%s\nRESTORE_NAME=%s\n' "$iid" "$prefix" "$name" > /tmp/ami-restore.state
