@@ -1,0 +1,21 @@
+--- a/lib/libfetch/common.c
++++ b/lib/libfetch/common.c
+@@ -1118,6 +1118,18 @@
+ 	if (getenv("SSL_NO_VERIFY_PEER") == NULL) {
+ 		ca_cert_file = getenv("SSL_CA_CERT_FILE");
+ 		ca_cert_path = getenv("SSL_CA_CERT_PATH");
++		/*
++		 * solnix: with neither set, use the system CA bundle the way the rest of
++		 * the system does (NixOS: SSL_CERT_FILE / NIX_SSL_CERT_FILE, else
++		 * /etc/ssl/certs/ca-certificates.crt). OpenSSL's compiled-in default
++		 * is a store path with no certificates.
++		 */
++		if (ca_cert_file == NULL && ca_cert_path == NULL) {
++			if ((ca_cert_file = getenv("SSL_CERT_FILE")) == NULL &&
++			    (ca_cert_file = getenv("NIX_SSL_CERT_FILE")) == NULL &&
++			    access("/etc/ssl/certs/ca-certificates.crt", R_OK) == 0)
++				ca_cert_file = "/etc/ssl/certs/ca-certificates.crt";
++		}
+ 		if (verbose) {
+ 			fetch_info("Peer verification enabled");
+ 			if (ca_cert_file != NULL)

@@ -1,0 +1,47 @@
+--- a/lib/libfetch/ftp.c
++++ b/lib/libfetch/ftp.c
+@@ -133,7 +133,6 @@
+ 	sin4->sin_addr.s_addr = addr;
+ 	sin4->sin_port = port;
+ 	sin4->sin_family = AF_INET;
+-	sin4->sin_len = sizeof(struct sockaddr_in);
+ }
+ 
+ /*
+@@ -770,7 +769,7 @@
+ 		if (bindaddr != NULL && *bindaddr != '\0' &&
+ 		    (e = fetch_bind(sd, sa.ss_family, bindaddr)) != 0)
+ 			goto ouch;
+-		if (connect(sd, (struct sockaddr *)&sa, sa.ss_len) == -1)
++		if (connect(sd, (struct sockaddr *)&sa, BSDFETCH_SALEN(&sa)) == -1)
+ 			goto sysouch;
+ 
+ 		/* make the server initiate the transfer */
+@@ -799,15 +798,17 @@
+ 			break;
+ 		case AF_INET:
+ 			((struct sockaddr_in *)&sa)->sin_port = 0;
++#ifdef IP_PORTRANGE
+ 			arg = low ? IP_PORTRANGE_DEFAULT : IP_PORTRANGE_HIGH;
+ 			if (setsockopt(sd, IPPROTO_IP, IP_PORTRANGE,
+ 				(char *)&arg, sizeof(arg)) == -1)
+ 				goto sysouch;
++#endif
+ 			break;
+ 		}
+ 		if (verbose)
+ 			fetch_info("binding data socket");
+-		if (bind(sd, (struct sockaddr *)&sa, sa.ss_len) == -1)
++		if (bind(sd, (struct sockaddr *)&sa, BSDFETCH_SALEN(&sa)) == -1)
+ 			goto sysouch;
+ 		if (listen(sd, 1) == -1)
+ 			goto sysouch;
+@@ -830,7 +831,7 @@
+ 			e = -1;
+ 			sin6 = (struct sockaddr_in6 *)&sa;
+ 			sin6->sin6_scope_id = 0;
+-			if (getnameinfo((struct sockaddr *)&sa, sa.ss_len,
++			if (getnameinfo((struct sockaddr *)&sa, BSDFETCH_SALEN(&sa),
+ 				hname, sizeof(hname),
+ 				NULL, 0, NI_NUMERICHOST) == 0) {
+ 				e = ftp_cmd(conn, "EPRT |%d|%s|%d|", 2, hname,

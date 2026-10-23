@@ -500,6 +500,12 @@ let
   # iwx(4)) under the giant-lock model, built from src/ports/wifi/iwx as a pure
   # derivation (./iwx-driver.nix). $out/kernel/drv/amd64/iwx. Its gate checks
   # symbol resolution against both the gate proto and kernelNd.
+  # BSD fetch(1) (+ libfetch), from FreeBSD source: the last of the maintainer-required CLI set.
+  bsdfetch = import ./bsdfetch.nix {
+    gate = gate'; libcSlice = libc;
+    inherit (srcPkgs) gccWrapper openssl;
+  };
+
   iwx-driver = import ./iwx-driver.nix {
     gate = gate';
     inherit kernelNd ld;
@@ -871,6 +877,7 @@ in
   inherit (srcPkgs) zlib libxml2 openssl openssh bash nspr nss git libcExtra binutils gnumake gccWrapper vi pkgconf;
   inherit (srcPkgs) ncurses less htop top libevent tmux coreutils gnugrep gnused gnutar findutils diffutils jq gettext home-manager xorgproto lndir hostname libiconv;
   inherit (srcPkgs) gzip nano rsync smartmontools tree wget db1 nvi;
+  inherit bsdfetch;
   xz = srcPkgs.nixChain.xz;
   # A C/C++ toolchain to put on PATH (nix-shell / nix profile install), the
   # solnix analog of nixpkgs' stdenv.cc: the wrapped gcc, gas, GNU make. The

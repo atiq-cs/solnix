@@ -1,0 +1,25 @@
+--- a/lib/libfetch/http.c
++++ b/lib/libfetch/http.c
+@@ -1461,8 +1461,10 @@
+ 		goto ouch;
+ 	}
+ 
++#ifdef TCP_NOPUSH
+ 	val = 1;
+ 	setsockopt(conn->sd, IPPROTO_TCP, TCP_NOPUSH, &val, sizeof(val));
++#endif
+ 
+ 	clean_http_headerbuf(&headerbuf);
+ 	return (conn);
+@@ -1765,9 +1767,11 @@
+ 		 * be compatible with such configurations, fiddle with socket
+ 		 * options to force the pending data to be written.
+ 		 */
++#ifdef TCP_NOPUSH
+ 		val = 0;
+ 		setsockopt(conn->sd, IPPROTO_TCP, TCP_NOPUSH, &val,
+ 			   sizeof(val));
++#endif
+ 		val = 1;
+ 		setsockopt(conn->sd, IPPROTO_TCP, TCP_NODELAY, &val,
+ 			   sizeof(val));

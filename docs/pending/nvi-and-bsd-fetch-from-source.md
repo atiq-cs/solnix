@@ -1,11 +1,12 @@
 # nvi (nvi2) and BSD fetch in the from-source closure
 
-Status: **nvi DONE** (db1df81: pkgs.solnix.nvi + db1, built from source without cmake; base.nix and installer.nix
-use it as vi/ex/view; the build's own edit test gates it). **BSD fetch still DEFERRED**: see "Why BSD fetch is not
-packaged" below. The nvi sections that follow are kept as the history of why it took a rewrite.
+Status: **both DONE.** nvi: db1df81 (pkgs.solnix.nvi + db1, from source, no cmake; vi/ex/view on base and the
+installer). BSD fetch: pkgs.solnix.bsdfetch (FreeBSD fetch(1) + libfetch at e48eb1c5, vendored in
+src/ports/bsdfetch with illumos shims, a funopen(3) shim and three small patches; on base and the installer).
+The sections below are the history of why each took real work.
 
-The maintainer-required CLI set is curl, wget, BSD fetch, top, tree, htop, nano, vi, nvi. All but **BSD fetch**
-now resolve as `pkgs.solnix.*` from source and are in the installer and AMI closures.
+The maintainer-required CLI set is curl, wget, BSD fetch, top, tree, htop, nano, vi, nvi. All now resolve as
+`pkgs.solnix.*` from source and are in the installer and AMI closures.
 
 ## Why nvi2 is not wired into `pkgs.solnix` today
 
