@@ -99,7 +99,10 @@ derivation {
       done
       wait
       [ "$bad" -eq 0 ] || { echo "FATAL: fetch failed $bad of 40 back-to-back runs (exit-time race?)" >&2; exit 1; }
-      echo "bsdfetch: 40/40 back-to-back http fetches exited 0" >&2
+      # the loop really ran: 40 outputs, each identical to the served file
+      nr=0; for r in "$W"/r*.txt; do [ -f "$r" ] && cmp -s "$W/www.txt" "$r" && nr=$((nr + 1)); done
+      [ "$nr" -eq 40 ] || { echo "FATAL: $nr of 40 fetch outputs present and correct" >&2; exit 1; }
+      echo "bsdfetch: 40/40 back-to-back http fetches exited 0 ($nr r*.txt match)" >&2
     fi
     echo "bsdfetch: built, links clean, file:// round-trip ok, missing-file negative control ok" >&2
   '' ];
