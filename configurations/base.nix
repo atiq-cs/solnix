@@ -39,9 +39,14 @@
   # documentation.man.enable (default true) `man curl`, `man wget`, `man tree`,
   # `man nano`, `man vi`, ... all work. (BSD fetch is not yet packaged -- curl +
   # wget cover it; nvi is deferred -- see /tmp report.)
+  #
+  # git: nix 2.24 fetches git+https flake inputs by running the git CLI, and the
+  # system registry maps nixpkgs/solnix to git+https://git.solnix.io/solnix.git.
+  # Without git on PATH, `nix build nixpkgs#<x>` fails with "resolving Git
+  # reference '26.11': revspec not found" (measured on the dde2cbe AMI, 2026-10-23).
   environment.systemPackages = with pkgs.solnix; [
     openssh bash vi less htop top
-    nixChain.curl wget tree nano
+    nixChain.curl wget tree nano git
   ];
 
   # /etc/system is generated, NixOS-style: this is its only source, so each
