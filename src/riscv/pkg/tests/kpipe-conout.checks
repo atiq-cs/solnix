@@ -1,0 +1,3 @@
+# defect 2: after dup3(pipe,1) the child write(1) goes to the CONSOLE; then (defect 1) no EOF
+kernel-hang-conout|0|/bin/kpipeprobe|kpipeprobe|conout
+@kernel-hang-conout|^conout-bytes$

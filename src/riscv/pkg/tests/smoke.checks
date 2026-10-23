@@ -1,0 +1,5 @@
+hello|0|/bin/hello|hello|a b
+@hello|^HELLO PASS mono=
+@hello|PATH=/bin
+missing|127|/bin/nonexistent|x
+@missing|RVPKG EXECFAIL /bin/nonexistent

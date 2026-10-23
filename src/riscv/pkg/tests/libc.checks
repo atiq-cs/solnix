@@ -1,0 +1,12 @@
+hello|0|/bin/hello|hello|a b
+@hello|^HELLO PASS mono=
+@hello|PATH=/bin
+sigtest|0|/bin/sigtest|sigtest
+@sigtest|^SIGTEST PASS$
+# negative control: pass-through signal numbers must break SIGUSR1/SIGCHLD
+xfail-sigtest-noxlate|0|/bin/sigtest-nc|sigtest-nc
+@xfail-sigtest-noxlate|^SIGTEST PASS$
+fstest|0|/bin/fstest|fstest
+@fstest|^FSTEST PASS$
+pipetest|0|/bin/pipetest|pipetest
+@pipetest|^PIPETEST PASS$

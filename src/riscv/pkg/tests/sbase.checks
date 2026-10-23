@@ -1,0 +1,60 @@
+# sbase checks. Each util runs as /bin/sbase-box with argv[0] = the util name.
+# % lines: the SAME sbase source built for Linux on the build host is the oracle
+# (H = host sbase-box applet dir); the guest block must match its stdout exactly.
+echo|0|/bin/sbase-box|echo|hello|riscv64|world
+%echo|$H/echo hello riscv64 world
+cat|0|/bin/sbase-box|cat|/etc/words
+%cat|cat etc/words
+wc|0|/bin/sbase-box|wc|/etc/words
+%wc|$H/wc etc/words | sed 's| etc/words| /etc/words|'
+head|0|/bin/sbase-box|head|-n|3|/etc/words
+%head|$H/head -n 3 etc/words
+tail|0|/bin/sbase-box|tail|-n|2|/etc/words
+%tail|$H/tail -n 2 etc/words
+sort|0|/bin/sbase-box|sort|/etc/words
+%sort|$H/sort etc/words
+sort-rn|0|/bin/sbase-box|sort|-n|-r|/etc/nums
+%sort-rn|$H/sort -n -r etc/nums
+uniq-c|0|/bin/sbase-box|uniq|-c|/etc/dups
+%uniq-c|$H/uniq -c etc/dups
+cut|0|/bin/sbase-box|cut|-d|:|-f|1,3|/etc/passwd
+%cut|$H/cut -d : -f 1,3 etc/passwd
+grep|0|/bin/sbase-box|grep|-n|^b|/etc/words
+%grep|$H/grep -n '^b' etc/words
+grep-E|0|/bin/sbase-box|grep|-E|-c|(an){2,}|/etc/words
+%grep-E|$H/grep -E -c '(an){2,}' etc/words
+grep-nomatch|1|/bin/sbase-box|grep|zzzz|/etc/words
+sed|0|/bin/sbase-box|sed|-n|s/^\(b.*\)a/[\1]/p|/etc/words
+%sed|$H/sed -n 's/^\(b.*\)a/[\1]/p' etc/words
+od|0|/bin/sbase-box|od|-A|x|-t|x|/etc/nums
+%od|$H/od -A x -t x etc/nums
+cksum|0|/bin/sbase-box|cksum|/etc/words
+%cksum|$H/cksum etc/words | sed 's| etc/words| /etc/words|'
+sha256sum|0|/bin/sbase-box|sha256sum|/etc/words
+%sha256sum|sha256sum etc/words | sed 's|  etc/words|  /etc/words|'
+md5sum|0|/bin/sbase-box|md5sum|/etc/words
+%md5sum|md5sum etc/words | sed 's|  etc/words|  /etc/words|'
+expr|0|/bin/sbase-box|expr|6|*|7
+%expr|echo 42
+seq|0|/bin/sbase-box|seq|-s|,|1|3|10
+%seq|echo 1,4,7,10
+printf|0|/bin/sbase-box|printf|%05d-%s-%x\n|42|riscv|255
+%printf|printf '%05d-%s-%x\n' 42 riscv 255
+basename|0|/bin/sbase-box|basename|/usr/lib/ld.so.1
+%basename|echo ld.so.1
+dirname|0|/bin/sbase-box|dirname|/usr/lib/ld.so.1
+%dirname|echo /usr/lib
+test-true|0|/bin/sbase-box|test|abc|=|abc
+test-false|1|/bin/sbase-box|test|abc|=|abd
+true|0|/bin/sbase-box|true
+false|1|/bin/sbase-box|false
+uname|0|/bin/sbase-box|uname|-s|-m
+@uname|^SunOS riscv64$
+whoami|0|/bin/sbase-box|whoami
+@whoami|^root$
+pwd|0|/bin/sbase-box|pwd
+@pwd|^/$
+# xfail-*: harness negative controls. They MUST fail.
+xfail-wrong-oracle|0|/bin/sbase-box|echo|hello
+%xfail-wrong-oracle|echo goodbye
+xfail-wrong-exit|1|/bin/sbase-box|true

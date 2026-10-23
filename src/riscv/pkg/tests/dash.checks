@@ -1,0 +1,46 @@
+# dash checks. % oracle: the HOST's dash (Bianbu, dash 0.5.12-x) running the same input.
+dash-script|0|/bin/dash|dash|/etc/dash-test.sh
+%dash-script|dash etc/dash-test.sh
+dash-c-exit|7|/bin/dash|dash|-c|echo before; exit 7
+@dash-c-exit|^before$
+dash-exec-external|0|/bin/dash|dash|-c|/bin/sbase-box wc -l /etc/words; echo "rc=$?"
+@dash-exec-external|^9 /etc/words$
+@dash-exec-external|^rc=0$
+dash-exec-notfound|127|/bin/dash|dash|-c|nosuchcmd
+@dash-exec-notfound|nosuchcmd: not found
+# reads its commands from the CONSOLE (STDIN_FILE line 1-3): the interactive path
+dash-interactive|5|/bin/dash|dash|-i
+@dash-interactive|interactive-2
+# ed: commands from the console (STDIN_FILE), file + scratch file in the ramfs
+ed-edit|0|/bin/sbase-box|ed|/etc/words
+@ed-edit|^cherry$
+@ed-edit|^bandana$
+@ed-edit|^FIG$
+ed-readback|0|/bin/sbase-box|cat|/tmp/ed.out
+@ed-readback|^FIG$
+@ed-readback|^apple$
+!ed-readback|^fig$
+# Pipes/redirection between BUILTINS (one process) work through the glue's fd table.
+# (%7C is a literal '|': pkginit splits on '|'.)
+dash-pipe-builtin|0|/bin/dash|dash|-c|echo piped %7C { read x; echo "got:$x"; }
+@dash-pipe-builtin|^got:piped$
+dash-pipe-3|0|/bin/dash|dash|-c|echo a b c %7C { read x y z; echo "$z$y$x"; } %7C { read w; echo "w=$w"; }
+@dash-pipe-3|^w=cba$
+dash-redirect-builtin|0|/bin/dash|dash|-c|echo redir-text > /tmp/r; /bin/sbase-box wc -c /tmp/r
+@dash-redirect-builtin|^11 /tmp/r$
+!dash-redirect-builtin|^redir-text$
+dash-redirect-in-builtin|0|/bin/dash|dash|-c|read l < /etc/words; echo "first=$l"
+@dash-redirect-in-builtin|^first=cherry$
+# KERNEL LIMITS (named kernel-limit-*: PASS == the documented limit is present).
+# The kernel's exec drops every fd and hardwires fd 0/1 to the console, so an
+# exec'd program never sees the shell's pipe or redirection.
+kernel-limit-exec-stdout|0|/bin/dash|dash|-c|n=$(/bin/sbase-box echo inner); echo "n=[$n]"
+@kernel-limit-exec-stdout|^inner$
+@kernel-limit-exec-stdout|^n=\[\]$
+kernel-limit-exec-stdin|0|/bin/dash|dash|-c|/bin/sbase-box head -n 1 < /etc/words
+@kernel-limit-exec-stdin|^FROM-CONSOLE$
+!kernel-limit-exec-stdin|^cherry$
+# NEGATIVE CONTROL: dash linked against the pass-through glue (no user fd table).
+# Pipelines must then break (kernel fd 1 = console, pipe refs leak): xfail.
+xfail-novfd-pipe|0|/bin/dash-novfd|dash|-c|echo piped %7C { read x; echo "got:$x"; }
+@xfail-novfd-pipe|^got:piped$

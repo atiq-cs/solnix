@@ -1,0 +1,3 @@
+# defect 1: the only writer sits in the childs slot 1; close(1)+exit never release it
+kernel-hang-leak|0|/bin/kpipeprobe|kpipeprobe|leak
+!kernel-hang-leak|then EOF

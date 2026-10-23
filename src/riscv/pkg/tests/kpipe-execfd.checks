@@ -1,0 +1,3 @@
+# defect 3: the execd image write to the inherited pipe fd returns -1; then no EOF
+kernel-hang-execfd|0|/bin/kpipeprobe|kpipeprobe|execfd
+@kernel-hang-execfd|execchild: write\(fd [0-9]+\) = -1

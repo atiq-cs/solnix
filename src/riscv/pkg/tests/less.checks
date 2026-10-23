@@ -1,0 +1,21 @@
+# less: TERM=vt100 (compiled-in ncurses fallback). Keys come from the console via
+# fd 2 (open_tty falls back to fd 2: no /dev/tty node). The console is LINE mode
+# (kernel echoes and returns on newline), so each key is followed by a newline,
+# which less treats as "forward one line".
+# -X keeps the screen. Page 1 shows lines 1..23; "G" jumps to the end;
+# "?line 077" searches BACKWARD with the POSIX regex (a forward search from the
+# end correctly says "Pattern not found"); "q" quits.
+# NEGATIVE CONTROL xfail-less-nomatch: a pattern absent from the file must not be
+# reported as found.
+less-page|0|/bin/less|less|-X|/etc/lines.txt
+@less-page|line 001 the first line
+@less-page|line 023
+@less-page|line 100 the last line
+# the match is shown highlighted: ESC[7m line 077 ESC[m " searched"
+@less-page|.\[7mline 077.\[m searched
+less-pipe-mode|0|/bin/less|less|-F|-X|/etc/short.txt
+@less-pipe-mode|short file line 1$
+@less-pipe-mode|short file line 3
+xfail-less-nomatch|0|/bin/less|less|-X|/etc/lines.txt
+@xfail-less-nomatch|.\[7mline 077.\[m searched
+!xfail-less-nomatch|Pattern not found

@@ -1,0 +1,15 @@
+zlib-example|0|/bin/example|example|/tmp/foo.gz
+@zlib-example|^zlib version 1\.3\.2
+@zlib-example|^uncompress\(\): hello, hello!
+@zlib-example|^gzread\(\): hello, hello!
+@zlib-example|^gzgets\(\) after gzseek:  hello!
+@zlib-example|^inflate\(\): hello, hello!
+@zlib-example|^large_inflate\(\): OK
+@zlib-example|^after inflateSync\(\): hello, hello!
+@zlib-example|^inflate with dictionary: hello, hello!
+!zlib-example|error|bad
+zlib-gunzip-interop|0|/bin/minigzip|minigzip|-d|-c|/etc/hello.txt.gz
+@zlib-gunzip-interop|^solnix riscv64 zlib interop line 1: the quick brown fox$
+@zlib-gunzip-interop|^line 200: jumps over the lazy dog$
+zlib-negctl-badcrc|1|/bin/minigzip|minigzip|-d|-c|/etc/badcrc.txt.gz
+@zlib-negctl-badcrc|incorrect data check

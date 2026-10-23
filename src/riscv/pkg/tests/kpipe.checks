@@ -1,0 +1,6 @@
+# Raw-syscall kernel probes (tests/kpipeprobe.c): no glue fd table involved.
+# Each defect is its own boot (stage-kpipe.sh + kpipe-<m>.checks), because a
+# hang ends the boot. kpipe-ctl is the CONTROL: same probe, pipe kept at fds >= 3,
+# it MUST reach EOF -- otherwise the probe, not the kernel, is broken.
+kpipe-ctl|0|/bin/kpipeprobe|kpipeprobe|ctl
+@kpipe-ctl|parent read 10 bytes then EOF
