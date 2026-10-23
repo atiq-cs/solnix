@@ -1,8 +1,12 @@
 # pkgs/illumos/cached.nix — every wave-built package in the cache, exposed as a
 # referenceable Nix attribute keyed by pname.
 #
-# The wave build (docs/registry/arch-manifest.tsv) produced ~10k packages whose
-# NARs live in the cache (cache.solnix.io). This turns that manifest into
+# The wave build produced ~10k packages; the infra team's 2026-10-05 retirement
+# removed about half of them from the cache. docs/registry/arch-manifest.tsv now
+# lists only the rows that cache.solnix.io actually serves: narinfo 200, NAR 200,
+# StorePath matching, and the whole References closure served too (regenerated
+# 2026-10-23 by probing every row; 3928 x86_64-solaris paths). Rows are not added
+# here by hand: re-probe and filter again. This turns that manifest into
 # `pkgs.solnix.cached.<pname>` so a config can do
 #   environment.systemPackages = with pkgs.solnix.cached; [ vim curl htop ... ];
 # and each name resolves to the concrete /nix/store/... path via
@@ -12,7 +16,7 @@
 # CHECK (pname keying, offline): the hash-strip + parseDrvName split is the only
 # non-trivial logic. Verify it without touching the store:
 #   nix eval --impure --expr 'let c = import ./pkgs/illumos/cached.nix {}; in
-#     builtins.all (n: c ? ${n}) [ "file" "less" "vim" "curl" "htop" "git" ]'
+#     builtins.all (n: c ? ${n}) [ "file" "less" "curl" "htop" ]'
 # -> true.
 #
 # CAVEATS (read before relying on this):
@@ -36,7 +40,7 @@
 #          sets cache.solnix.io as a substituter, so evaluating the real system
 #          works; a bare `nix eval` needs
 #          `--option substituters https://cache.solnix.io
-#           --option trusted-public-keys cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk=`.
+#           --option trusted-public-keys cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8=`.
 #  (d) pname keying is BEST-EFFORT via builtins.parseDrvName (the same splitter
 #      Nix itself uses: cut at the first "-" followed by a digit). Odd names
 #      (git-tagged "v0.x", "master", date stamps) land a slightly-off key; the
