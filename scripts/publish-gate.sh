@@ -1,0 +1,59 @@
+#!/usr/bin/bash
+# publish-gate.sh <store path>... -- the solnix-cache-publish skill's gate, on illumos.
+# A path passes only if: deriver resolves to an existing .drv; it is not host/user
+# specific; every ELF has a store-only RUNPATH and ldd (no LD_LIBRARY_PATH) resolves
+# every NEEDED inside /nix/store; the declared references cover every store path the
+# NAR names, counting only names inside the deriver's input closure (a store-path
+# string outside it, such as nix's --help examples, is text, not a dependency).
+# Prints PASS/FAIL per path; exit 1 if any FAIL. --selftest proves the reference rule.
+# shortcut: the reference scan greps /nix/store/<hash>- strings in the NAR, so a reference
+# written without the /nix/store/ prefix would go unseen; Nix's own scan is per-hash.
+
+# --selftest: prove the undeclared-reference rule bites without the store. A path
+# NAMED in the NAR is a violation iff it is in the deriver's input closure and not
+# declared; help-text strings (outside the inputs) and declared refs are not.
+if [ "${1:-}" = "--selftest" ]; then
+  chk() { for n in $1; do echo "$2" | grep -qx "$n" && continue; echo "$3" | grep -qx "$n" && echo "undeclared $n"; done; }
+  I=$'/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+  R='/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+  r1=$(chk /nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb "$R" "$I")
+  r2=$(chk /nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa "$R" "$I")
+  r3=$(chk /nix/store/cccccccccccccccccccccccccccccccc "$R" "$I")
+  [ -n "$r1" ] && [ -z "$r2" ] && [ -z "$r3" ] && { echo "SELFTEST PASS"; exit 0; }
+  echo "SELFTEST FAIL: [$r1] [$r2] [$r3]"; exit 1
+fi
+
+PATH=/usr/gnu/bin:/usr/bin:/usr/sbin:$PATH
+unset LD_LIBRARY_PATH LD_LIBRARY_PATH_64 LD_LIBRARY_PATH_32
+rc=0
+for p in "$@"; do
+  why=""
+  d=$(nix-store -q --deriver "$p" 2>/dev/null)
+  case "$d" in /nix/store/*.drv) [ -e "$d" ] || why="$why deriver $d not in store;";; *) why="$why no deriver;";; esac
+  case "$(basename "$p")" in *-solnix-system-*|*-etc|*-system-path|*home-manager-generation*|*home-files*) why="$why host/user-specific;";; esac
+  while IFS= read -r f; do
+    [ "$(od -An -tx1 -N4 "$f" 2>/dev/null | tr -d ' \n')" = 7f454c46 ] || continue
+    elfdump -d "$f" 2>/dev/null | grep -q NEEDED || continue
+    rp=$(elfdump -d "$f" | awk '$2=="RUNPATH"||$2=="RPATH"{print $4}')
+    for e in $(echo "$rp" | tr ':' ' '); do
+      case "$e" in /nix/store/*|'$ORIGIN'*) ;; *) why="$why $f RUNPATH $e;";; esac
+    done
+    bad=$(ldd "$f" 2>&1 | awk '/not found/ || (/=>/ && $NF !~ /^\/nix\/store\//)' | head -2 | tr '\n' ' ')
+    [ -n "$bad" ] && why="$why $f ldd: $bad;"
+  done < <(find "$p" -type f)
+  refs=$(nix-store -q --references "$p" | sort -u)
+  named=$(nix-store --dump "$p" | grep -a -o -E '/nix/store/[0-9a-df-np-sv-z]{32}-[A-Za-z0-9+._?=-]+' | cut -c1-44 | sort -u)
+  # A reference is a path the build could see: Nix scans the output only for the
+  # hashes of the derivation's input closure. A store-path string outside that
+  # closure (nix's own --help examples: /nix/store/0i2jd...-hello-2.10) is text,
+  # not a dependency, and upstream nix ships the same strings. Flag a named path
+  # only if it is in the input closure and was NOT declared.
+  drv=$(nix-store -q --deriver "$p")
+  inputs=$(nix-store -qR "$drv" 2>/dev/null | cut -c1-44 | sort -u)
+  for n in $named; do
+    echo "$refs" | grep -q "^$n" && continue
+    echo "$inputs" | grep -qx "$n" && why="$why undeclared ref $n;"
+  done
+  if [ -z "$why" ]; then echo "PASS $p ($(echo "$refs" | grep -c . ) refs)"; else echo "FAIL $p:$why" | cut -c1-600; rc=1; fi
+done
+exit $rc

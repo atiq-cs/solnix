@@ -240,3 +240,13 @@ the script is described at the top of this file) on the new illumos-userland,
 illumos-kernel and illumos-stock-etc-var. Each must report `GATE PASS`, and the
 world's `.world/ldd-bad` must be empty or contain only an explicit, reviewed
 allowUnresolved list.
+
+## gcc-14.3.0 main output: shared libs under $out/lib carry no RUNPATH (found 2026-10-23, cache2 gate)
+
+The `lib` output (gcc-14.3.0-lib, w00yl57k) is correct: its libstdc++, libgcc_s and libatomic get
+`RUNPATH $lib/lib/amd64:<libc>` (gcc-src.nix) and pass the publish gate. The MAIN output (1n24r6d3) keeps its own
+copies under `$out/lib{,/amd64}` with no RUNPATH: `ldd libatomic.so.1.2.0` -> `libgcc_s.so.1 => (file not
+found)`. libcc1*/libcp1plugin carry RUNPATH /usr/gcc/14/lib/amd64 (the bootstrap compiler). Nothing links those
+copies (the cc wrapper points at the lib output), so it breaks no program, but it fails the gate, so gcc and
+gcc-wrapper are not offered to the cache. Fix at the source: in gcc-src.nix, run the same elfedit RUNPATH pass over
+`$out/lib{,/amd64}/*.so*` (and rewrite libcc1* to the store), then rebuild gcc (~1 h on c5.4xlarge).
