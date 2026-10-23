@@ -11,12 +11,20 @@
  *     the bytes to writefn; the caller's fclose() closes its end, the thread sees EOF.
  * Streams with both callbacks (none in libfetch's GET/PUT paths) are opened read-only.
  * seekfn is unsupported (libfetch passes NULL for HTTP; FTP's seek is only used for restarts
- * that fetch(1) does not request through the stream). fclose() returns at once; the thread
- * finishes the transfer, then calls closefn.
+ * that fetch(1) does not request through the stream).
+ *
+ * Ordering, so the process never exits while a pump is still inside libfetch/OpenSSL (measured:
+ * fetch(1) segfaulted at exit 1 in 10 first-boot runs, pump in SSL_CTX_free while main's exit()
+ * ran OPENSSL_cleanup):
+ *   - read stream: the pump calls closefn BEFORE it closes its end, so the caller's EOF (and
+ *     therefore its fclose/exit) comes after the connection is torn down;
+ *   - every stream: an atexit handler waits for live pumps, which covers write streams (the
+ *     caller's fclose() is what ends them) and a caller that exits without reading to EOF.
  *
  * shortcut: fclose() on a read stream that the caller abandons early leaves the pump blocked
- * in readfn until the peer closes; fine for fetch(1), which reads to EOF. Upgrade to a
- * stdio-level hook if libfetch is ever used by a long-running program.
+ * in readfn until the peer closes, and the atexit wait then waits for it; fine for fetch(1),
+ * which reads to EOF. Upgrade to a stdio-level hook if libfetch is ever used by a long-running
+ * program.
  */
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -30,6 +38,13 @@
 typedef int (*rdfn_t)(void *, char *, int);
 typedef int (*wrfn_t)(void *, const char *, int);
 typedef int (*clfn_t)(void *);
+
+static pthread_mutex_t live_mtx = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t live_cv = PTHREAD_COND_INITIALIZER;
+static int live;			/* pump threads not yet finished */
+static pthread_once_t atexit_once = PTHREAD_ONCE_INIT;
+static void wait_pumps(void);
+static void reg_atexit(void) { (void) atexit(wait_pumps); }
 
 struct fo {
 	void	*cookie;
@@ -83,11 +98,26 @@ pump(void *arg)
 		}
 	}
 done:
-	(void) close(f->fd);
+	/* Tear the connection down first, then signal EOF (read stream) by closing. */
 	if (f->cl != NULL)
 		(void) f->cl(f->cookie);
+	(void) close(f->fd);
 	free(f);
+	(void) pthread_mutex_lock(&live_mtx);
+	if (--live == 0)
+		(void) pthread_cond_broadcast(&live_cv);
+	(void) pthread_mutex_unlock(&live_mtx);
 	return (NULL);
+}
+
+/* exit() must not run library destructors under a pump that is still freeing state. */
+static void
+wait_pumps(void)
+{
+	(void) pthread_mutex_lock(&live_mtx);
+	while (live > 0)
+		(void) pthread_cond_wait(&live_cv, &live_mtx);
+	(void) pthread_mutex_unlock(&live_mtx);
 }
 
 FILE *
@@ -125,9 +155,16 @@ funopen(const void *cookie, rdfn_t readfn, wrfn_t writefn,
 	}
 	/* A pump writing to a reader that closed early must not kill the process. */
 	(void) sigignore(SIGPIPE);
+	(void) pthread_once(&atexit_once, reg_atexit);
+	(void) pthread_mutex_lock(&live_mtx);
+	live++;
+	(void) pthread_mutex_unlock(&live_mtx);
 	(void) pthread_attr_init(&a);
 	(void) pthread_attr_setdetachstate(&a, PTHREAD_CREATE_DETACHED);
 	if (pthread_create(&t, &a, pump, f) != 0) {
+		(void) pthread_mutex_lock(&live_mtx);
+		live--;
+		(void) pthread_mutex_unlock(&live_mtx);
 		(void) pthread_attr_destroy(&a);
 		(void) fclose(fp);
 		(void) close(sv[1]);

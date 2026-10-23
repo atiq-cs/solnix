@@ -80,6 +80,26 @@ derivation {
       cmp -s "$W/www.txt" "$W/http-out.txt" || { echo "FATAL: fetch http:// round-trip differs" >&2; exit 1; }
       wait
       echo "bsdfetch: http:// round-trip ok (port $port)" >&2
+      # Exit-time race: the funopen pump must finish its close before exit() runs library
+      # destructors (measured: a SIGSEGV at exit in 1/10 runs before the fix). 40 back-to-back
+      # fetches from a server that answers 40 times; any non-zero status (a crash is 128+sig)
+      # fails the build.
+      : > "$W/port"
+      perl -MIO::Socket::INET -e '
+        my $s = IO::Socket::INET->new(LocalAddr => "127.0.0.1", LocalPort => 0, Listen => 8, ReuseAddr => 1) or die;
+        open(my $pf, ">", $ARGV[1]) or die; print $pf $s->sockport, "\n"; close $pf;
+        open(my $f, "<", $ARGV[0]) or die; local $/; my $d = <$f>;
+        for (1..40) { my $c = $s->accept or die; local $/ = "\n"; while (<$c>) { last if /^\r?$/ }
+          print $c "HTTP/1.0 200 OK\r\nContent-Length: " . length($d) . "\r\n\r\n" . $d; close $c; }' \
+        "$W/www.txt" "$W/port" &
+      for i in 1 2 3 4 5 6 7 8 9 10; do [ -s "$W/port" ] && break; sleep 0.5; done
+      port=$(cat "$W/port"); bad=0
+      i=0; while [ "$i" -lt 40 ]; do i=$((i + 1))
+        "$out/bin/fetch" -q -o "$W/r$i.txt" "http://127.0.0.1:$port/www.txt" || bad=$((bad + 1))
+      done
+      wait
+      [ "$bad" -eq 0 ] || { echo "FATAL: fetch failed $bad of 40 back-to-back runs (exit-time race?)" >&2; exit 1; }
+      echo "bsdfetch: 40/40 back-to-back http fetches exited 0" >&2
     fi
     echo "bsdfetch: built, links clean, file:// round-trip ok, missing-file negative control ok" >&2
   '' ];
