@@ -1,13 +1,11 @@
-# nvi (nvi2) and BSD fetch in the from-source closure — deferred, scaffolded
+# nvi (nvi2) and BSD fetch in the from-source closure
 
-Status: DEFERRED (reported, not dangling-referenced). Opened by the
-required-CLI-set stream (installer + AMI), HEAD a05e934.
+Status: **nvi DONE** (db1df81: pkgs.solnix.nvi + db1, built from source without cmake; base.nix and installer.nix
+use it as vi/ex/view; the build's own edit test gates it). **BSD fetch still DEFERRED**: see "Why BSD fetch is not
+packaged" below. The nvi sections that follow are kept as the history of why it took a rewrite.
 
-The maintainer-required CLI set is curl, wget, BSD fetch, top, tree, htop, nano,
-vi, nvi. All but **nvi** and **BSD fetch** now resolve as `pkgs.solnix.*`
-from-source and are in the installer + AMI closures (base-src.nix: tree, wget;
-already present: curl=nixChain.curl, top, htop, less, nano, vi=gate xpg4 vi).
-This doc is why the last two are not yet in, and the concrete path to add them.
+The maintainer-required CLI set is curl, wget, BSD fetch, top, tree, htop, nano, vi, nvi. All but **BSD fetch**
+now resolve as `pkgs.solnix.*` from source and are in the installer and AMI closures.
 
 ## Why nvi2 is not wired into `pkgs.solnix` today
 

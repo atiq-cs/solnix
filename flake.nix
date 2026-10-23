@@ -254,12 +254,12 @@
         # the set builds. Builder functions (mkIwxKernel ...) and nested sets
         # (cached, starter, slices) stay reachable through legacyPackages, as in
         # nixpkgs. An attribute that throws at eval is left out, not fatal.
-        # Not filtered by tryEval alone: nix224 is a fetchClosure (an
-        # experimental builtin whose absence tryEval cannot catch), so the
-        # system-only attributes are named and dropped first.
+        # cached and starter are store-path imports (builtins.storePath /
+        # fetchClosure), not builds, and fetchClosure needs an experimental feature
+        # whose absence tryEval cannot catch, so they are named and dropped first.
         x86_64-solaris = lib.filterAttrs (_: v:
           let r = builtins.tryEval (lib.isDerivation v); in r.success && r.value)
-          (removeAttrs (mkPkgs { }).solnix [ "nix224" "cached" "starter" ]);
+          (removeAttrs (mkPkgs { }).solnix [ "cached" "starter" ]);
       } // lib.genAttrs buildSystems (_buildSystem: {
         # the full system closure (T2.8); realise on the illumos host.
         baseToplevel = self.solnixConfigurations.base.config.system.build.toplevel;

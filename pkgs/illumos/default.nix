@@ -835,22 +835,9 @@ let
   # TODO in ./nix.nix for the proper mk-illumos-component slice.
   nix = import ./nix.nix { };
 
-  # nix224 (pkgs.solnix.nix224) — the store-path Nix 2.24.15, RUNPATH-correct
-  # (runs with no LD_LIBRARY_PATH), ships on PATH via the system profile the
-  # NixOS way. This is the shipped nix (nix.package default), replacing the
-  # /nix-tools224 bootstrap that must never appear on a shipped image PATH.
-  # Substitutable from cache.solnix.io (5HAV-signed, durable).
-  #
-  # fetchClosure, not storePath: builtins.storePath is forbidden in pure eval
-  # (nix eval .#), which blocked every toplevel via nix.package's default. Same
-  # rewrite as starter.nix — name the substituter + path and pull at eval time;
-  # inputAddressed = true because this path is input-addressed, so signature
-  # trust (cache.solnix.io-1:5HAV..., in base.nix) does the integrity work.
-  nix224 = builtins.fetchClosure {
-    fromStore = "https://cache.solnix.io";
-    fromPath = "/nix/store/w44py7y17i7z5c9mwhh62q5yzx681y1a-nix-2.24.15";
-    inputAddressed = true;
-  };
+  # nix224 is retired: it was a fetchClosure of a cache path nobody can rebuild
+  # bit-for-bit, and the infra team hid it in the 10-05 cache retirement. The
+  # shipped Nix is nixSrc (./nix-src.nix, nix.package's default).
 
   # cached (pkgs.solnix.cached.<pname>) — every wave-built package in the cache
   # (docs/registry/arch-manifest.tsv), exposed as a store-path attr so a config
@@ -866,7 +853,7 @@ let
   starter = import ./starter.nix { system = "x86_64-solaris"; };
 in
 {
-  inherit libc rtld ld sys base-tools systemPath nix nix224 cached starter gcc world early stock drivers kernelNd worldMan;
+  inherit libc rtld ld sys base-tools systemPath nix cached starter gcc world early stock drivers kernelNd worldMan;
   # seedBuildTools -- the default build-tool set a bare solnix system passes as
   # buildTools so from-source builds resolve gmake/tar/grep/sed/gstrip/gzip/xz
   # from the store (not /usr/gnu). host-pkgs.nix wires it as the default for a
