@@ -137,6 +137,22 @@ derivation {
         /usr/bin/elfedit -e "dyn:runpath $d:$lc" "$f"
       done
     done
+    # The compiler binaries (bin/, libexec/gcc/) and the cc1 plugins
+    # (lib/gcc/*/plugin) link the seed's C++ runtime statically and NEED only
+    # libc/libm/libsocket/libnsl, but the bootstrap compiler left RUNPATH
+    # /usr/gcc/14/lib/amd64 on every one. Point it at the store libc instead, so
+    # nothing in $out names the build host.
+    find "$out" -type f | while read -r f; do
+      [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] || continue
+      cur=$(/usr/bin/elfdump -d "$f" 2>/dev/null | awk '$2=="RUNPATH"{print $4}')
+      case "$cur" in /usr/gcc/*) chmod u+w "$f"; /usr/bin/elfedit -e "dyn:runpath $libcDir" "$f";; esac
+    done
+    if find "$out" -type f | while read -r f; do
+         [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] || continue
+         /usr/bin/elfdump -d "$f" 2>/dev/null | awk '$2=="RUNPATH"{print $4}'
+       done | grep -q '/usr/gcc'; then
+      echo "FATAL: an ELF in $out still has a /usr/gcc RUNPATH" >&2; exit 1
+    fi
     unset LD_LIBRARY_PATH LD_LIBRARY_PATH_64 LD_LIBRARY_PATH_32 || true
     bad=$(for f in "$out"/lib/*.so* "$out"/lib/amd64/*.so*; do
       [ -f "$f" ] && [ ! -L "$f" ] || continue
