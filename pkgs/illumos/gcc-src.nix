@@ -122,6 +122,28 @@ derivation {
       done
       [ -e "$dst/libstdc++.so.6" ] && [ -e "$dst/libgcc_s.so.1" ] || { echo "FATAL: runtime libs missing in $dst" >&2; exit 1; }
     done
+    # The main output keeps its own copies of the runtime libs under $out/lib
+    # (gcc's install layout; nothing links them, the wrapper uses $lib) and the
+    # plugin libs libcc1*/libcp1plugin. Give every shared object in $out a store
+    # RUNPATH as well: without it libatomic's NEEDED libgcc_s does not resolve and
+    # libcc1* name the bootstrap compiler's /usr/gcc/14 (measured by the publish gate).
+    for pair in "$out/lib/amd64:$libcDir" "$out/lib:$libcDir32"; do
+      d=''${pair%%:*}; lc=''${pair#*:}
+      for f in "$d"/*.so*; do
+        [ -f "$f" ] && [ ! -L "$f" ] || continue
+        case "$f" in *.py) continue;; esac
+        /usr/bin/elfdump -d "$f" 2>/dev/null | grep -q NEEDED || continue
+        chmod u+w "$f"
+        /usr/bin/elfedit -e "dyn:runpath $d:$lc" "$f"
+      done
+    done
+    unset LD_LIBRARY_PATH LD_LIBRARY_PATH_64 LD_LIBRARY_PATH_32 || true
+    bad=$(for f in "$out"/lib/*.so* "$out"/lib/amd64/*.so*; do
+      [ -f "$f" ] && [ ! -L "$f" ] || continue
+      case "$f" in *.py) continue;; esac
+      /usr/bin/ldd "$f" 2>&1 | awk -v f="$f" '/not found/ || (/=>/ && $NF !~ /^\/nix\/store\//) {print f": "$0}'
+    done)
+    [ -z "$bad" ] || { echo "FATAL: $out shared libs leave the store:" >&2; echo "$bad" >&2; exit 1; }
     # Gate: the runtime libs resolve inside /nix/store with no LD_LIBRARY_PATH.
     unset LD_LIBRARY_PATH LD_LIBRARY_PATH_64 LD_LIBRARY_PATH_32 || true
     bad=$(for f in "$lib"/lib/libstdc++.so.6 "$lib"/lib/libgcc_s.so.1 "$lib"/lib/amd64/libstdc++.so.6 "$lib"/lib/amd64/libgcc_s.so.1; do
