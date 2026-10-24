@@ -37,13 +37,13 @@
 let
   version = "14.3.0";
   fetch = url: sha256: builtins.fetchurl { inherit url sha256; };
-  gccSrc = fetch "https://ftp.gnu.org/gnu/gcc/gcc-${version}/gcc-${version}.tar.xz"
+  gccSrc = fetch "https://mirrors.kernel.org/gnu/gcc/gcc-${version}/gcc-${version}.tar.xz"
     "e0dc77297625631ac8e50fa92fffefe899a4eb702592da5c32ef04e2293aca3a";
-  gmpSrc = fetch "https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz"
+  gmpSrc = fetch "https://mirrors.kernel.org/gnu/gmp/gmp-6.3.0.tar.xz"
     "a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898";
-  mpfrSrc = fetch "https://ftp.gnu.org/gnu/mpfr/mpfr-4.2.1.tar.xz"
+  mpfrSrc = fetch "https://mirrors.kernel.org/gnu/mpfr/mpfr-4.2.1.tar.xz"
     "277807353a6726978996945af13e52829e3abd7a9a5b7fb2793894e18f1fcbb2";
-  mpcSrc = fetch "https://ftp.gnu.org/gnu/mpc/mpc-1.3.1.tar.gz"
+  mpcSrc = fetch "https://mirrors.kernel.org/gnu/mpc/mpc-1.3.1.tar.gz"
     "ab642492f5cf882b74aa0cb730cd410a81edcdbec895183ce930e706c1c759b8";
 in
 derivation {

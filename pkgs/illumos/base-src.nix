@@ -224,7 +224,7 @@ rec {
   # which is what gcc -B<dir>/ looks for.
   binutils = mkSrcPkg {
     pname = "binutils"; version = "2.46.1";
-    src = { url = "https://ftp.gnu.org/gnu/binutils/binutils-2.46.1.tar.xz";
+    src = { url = "https://mirrors.kernel.org/gnu/binutils/binutils-2.46.1.tar.xz";
             sha256 = "e127a709cba24c76de8936cb7083dd768f28cd37eb010492e2f19b71eb1294e4"; };
     build = ''
       T=x86_64-pc-solaris2.11
@@ -256,7 +256,7 @@ rec {
   # build systems want GNU make, which OpenIndiana ships as gmake. Both names here.
   gnumake = mkSrcPkg {
     pname = "gnumake"; version = "4.4.1";
-    src = { url = "https://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz";
+    src = { url = "https://mirrors.kernel.org/gnu/make/make-4.4.1.tar.gz";
             sha256 = "dd16fb1d67bfab79a72f5e8390735c49e3e8e70b4945a15ab1f81ddb78658fb3"; };
     build = ''
       ./configure --prefix="$out" --without-guile --disable-nls
@@ -350,7 +350,7 @@ rec {
   # share/terminfo (compiled in, as on NixOS); TERMINFO_DIRS adds others at run time.
   ncurses = mkSrcPkg {
     pname = "ncurses"; version = "6.5";
-    src = { url = "https://ftp.gnu.org/gnu/ncurses/ncurses-6.5.tar.gz";
+    src = { url = "https://mirrors.kernel.org/gnu/ncurses/ncurses-6.5.tar.gz";
             sha256 = "136d91bc269a9a5785e5f9e980bc76ab57428f604ce3e5a5a90cebc767971cc6"; };
     build = ''
       L="$out/lib/amd64"
@@ -464,7 +464,7 @@ rec {
   };
   coreutils = gnuTool {
     pname = "coreutils"; version = "9.7";
-    url = "https://ftp.gnu.org/gnu/coreutils/coreutils-9.7.tar.xz";
+    url = "https://mirrors.kernel.org/gnu/coreutils/coreutils-9.7.tar.xz";
     sha256 = "e8bb26ad0293f9b5a1fc43fb42ba970e312c66ce92c1b0b16713d7500db251bf";
     # one multicall binary with a symlink per tool, nixpkgs' default (singleBinary =
     # "symlinks"): the separate binaries repeat the same gnulib code ~100 times.
@@ -472,31 +472,31 @@ rec {
   };
   gnugrep = gnuTool {
     pname = "gnugrep"; version = "3.11";
-    url = "https://ftp.gnu.org/gnu/grep/grep-3.11.tar.xz";
+    url = "https://mirrors.kernel.org/gnu/grep/grep-3.11.tar.xz";
     sha256 = "1db2aedde89d0dea42b16d9528f894c8d15dae4e190b59aecc78f5a951276eab";
     flags = "--disable-perl-regexp --disable-gcc-warnings";
   };
   gnused = gnuTool {
     pname = "gnused"; version = "4.9";
-    url = "https://ftp.gnu.org/gnu/sed/sed-4.9.tar.xz";
+    url = "https://mirrors.kernel.org/gnu/sed/sed-4.9.tar.xz";
     sha256 = "6e226b732e1cd739464ad6862bd1a1aba42d7982922da7a53519631d24975181";
     flags = "--disable-gcc-warnings";
   };
   gnutar = gnuTool {
     pname = "gnutar"; version = "1.35";
-    url = "https://ftp.gnu.org/gnu/tar/tar-1.35.tar.xz";
+    url = "https://mirrors.kernel.org/gnu/tar/tar-1.35.tar.xz";
     sha256 = "4d62ff37342ec7aed748535323930c7cf94acf71c3591882b26a7ea50f3edc16";
     flags = "--disable-gcc-warnings";
   };
   findutils = gnuTool {
     pname = "findutils"; version = "4.10.0";
-    url = "https://ftp.gnu.org/gnu/findutils/findutils-4.10.0.tar.xz";
+    url = "https://mirrors.kernel.org/gnu/findutils/findutils-4.10.0.tar.xz";
     sha256 = "1387e0b67ff247d2abde998f90dfbf70c1491391a59ddfecb8ae698789f0a4f5";
     flags = "--disable-gcc-warnings";
   };
   diffutils = gnuTool {
     pname = "diffutils"; version = "3.10";
-    url = "https://ftp.gnu.org/gnu/diffutils/diffutils-3.10.tar.xz";
+    url = "https://mirrors.kernel.org/gnu/diffutils/diffutils-3.10.tar.xz";
     sha256 = "90e5e93cc724e4ebe12ede80df1634063c7a855692685919bfe60b556c9bd09e";
     flags = "--disable-gcc-warnings";
   };
@@ -507,7 +507,7 @@ rec {
   # solnix-install's boot_archive check calls gzip -t.
   gzip = gnuTool {
     pname = "gzip"; version = "1.13";
-    url = "https://ftp.gnu.org/gnu/gzip/gzip-1.13.tar.xz";
+    url = "https://mirrors.kernel.org/gnu/gzip/gzip-1.13.tar.xz";
     sha256 = "7454eb6935db17c6655576c2e1b0fabefd38b4d0936e0f87f48cd062ce91a057";
     flags = "--disable-gcc-warnings";
   };
@@ -615,7 +615,7 @@ rec {
   # on every non-glibc platform; same here.
   libiconv = mkSrcPkg {
     pname = "libiconv"; version = "1.17";
-    src = { url = "https://ftp.gnu.org/gnu/libiconv/libiconv-1.17.tar.gz";
+    src = { url = "https://mirrors.kernel.org/gnu/libiconv/libiconv-1.17.tar.gz";
             sha256 = "8f74213b56238c85a50a5329f77e06198771e70dd9a739779f4c02f65d971313"; };
     build = ''
       ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-nls
@@ -633,7 +633,7 @@ rec {
   # msgfmt from gettext-tools); NLS stays on, it is the point of the package.
   gettext = mkSrcPkg {
     pname = "gettext"; version = "0.22.5";
-    src = { url = "https://ftp.gnu.org/gnu/gettext/gettext-0.22.5.tar.xz";
+    src = { url = "https://mirrors.kernel.org/gnu/gettext/gettext-0.22.5.tar.xz";
             sha256 = "fe10c37353213d78a5b83d48af231e005c4da84db5ce88037d88355938259640"; };
     deps = [ needWorld libiconv ];
     build = ''
@@ -776,7 +776,7 @@ rec {
 
   bash = mkSrcPkg {
     pname = "bash"; version = "5.2.37";
-    src = { url = "https://ftp.gnu.org/gnu/bash/bash-5.2.37.tar.gz";
+    src = { url = "https://mirrors.kernel.org/gnu/bash/bash-5.2.37.tar.gz";
             sha256 = "9599b22ecd1d5787ad7d3b7bf0c59f312b3396d1e281175dd1f8a4014da621ff"; };
     deps = [ needWorld ];
     build = ''
