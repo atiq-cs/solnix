@@ -2,7 +2,7 @@
 
 See .agent-steering-domains.md for domain-specific steering (local).
 
-## Where work runs: EC2 solnix instances or dixi, never floki
+## Where work runs: EC2 solnix instances or arnold, never floki
 
 Host names (maintainer, 2026-10-24; d = EC2, l = local hardware):
 - **dixi**: x86_64 EC2 host. **dixr**: aarch64 EC2 Graviton. **dixa**: aarch64 EC2.
