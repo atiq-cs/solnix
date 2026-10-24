@@ -125,6 +125,8 @@ derivation {
       done
       # deps only: no host .pc file or cmake package can be picked up.
       export PKG_CONFIG_LIBDIR="''${PCD#:}" PKG_CONFIG_PATH="" CMAKE_PREFIX_PATH="''${CPP_#;}"
+      # -D_TS_ERRNO in both wrappers: errno is per-thread, as in illumos-gate (DTS_ERRNO).
+      # Without it errno is the main thread's global and other threads clobber it (./ts-errno-gate.sh).
       if [ -n "$gccLib" ]; then
         # The from-source gcc: its sysroot is the gate proto, so its default headers,
         # crt objects and libs are the gate's. The final RUNPATH is baked at link
@@ -134,7 +136,7 @@ derivation {
         for t in gcc:cc g++:c++; do
           cat > "$W/''${t#*:}$ABI" <<EOF
     #!/usr/bin/bash
-    exec $gcc/bin/''${t%%:*} -m$ABI $DI $DL -Wl,-R,$RP "\$@"
+    exec $gcc/bin/''${t%%:*} -m$ABI -D_TS_ERRNO $DI $DL -Wl,-R,$RP "\$@"
     EOF
           chmod +x "$W/''${t#*:}$ABI"
         done
@@ -142,7 +144,7 @@ derivation {
       else
         cat > "$W/cc$ABI" <<EOF
     #!/usr/bin/bash
-    exec $stage0/bin/gcc -m$ABI -nostdinc $DI -isystem $GI -isystem $gate/usr/include -B$(echo $GL | awk '{print $2}')/ $DL -static-libgcc "\$@"
+    exec $stage0/bin/gcc -m$ABI -D_TS_ERRNO -nostdinc $DI -isystem $GI -isystem $gate/usr/include -B$(echo $GL | awk '{print $2}')/ $DL -static-libgcc "\$@"
     EOF
         chmod +x "$W/cc$ABI"
       fi
@@ -201,6 +203,8 @@ derivation {
       IFS=$_oldifs
     fi
     : > "$W/fail"
+    # no shipped ELF may reference the global errno (the wrappers pass -D_TS_ERRNO)
+    /usr/bin/bash ${./ts-errno-gate.sh} "$out" 2>> "$W/fail" || echo "ts-errno gate failed for $out" >> "$W/fail"
     # the two big build-time-only paths (gate proto, compiler) must not appear in
     # any shipped ELF, or the runtime closure silently grows by ~400 MB.
     # grep's status is checked, not piped away: 0 = hits, 1 = none, anything else
