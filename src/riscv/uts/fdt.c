@@ -1303,3 +1303,93 @@ fdt_of_utils_selftest(unsigned long dtb)
 	sbi_console_puts(" (parsed from DT via merged of_utils accessors)\n");
 	return (have_reg);
 }
+
+/*
+ * rvsrv: fdt_get_reserved -- the physical ranges the firmware says the kernel
+ * must not allocate: the header's memory-reservation block plus every `reg` of
+ * a /reserved-memory child (OpenSBI's mmode_resv*, the K3's framebuffer@3fe000000),
+ * and the DTB blob itself. Fills up to `max` (base, size) pairs; returns how many.
+ * A child with no `reg` (a dynamic pool like linux,cma) reserves nothing here.
+ */
+int
+fdt_get_reserved(unsigned long dtb, unsigned long *rbase, unsigned long *rsize,
+    int max)
+{
+	const struct fdt_header *h = (const struct fdt_header *)dtb;
+	const unsigned char *strs, *p, *rsv;
+	unsigned int ac = 2, sc = 2;	/* /reserved-memory's own cells */
+	int depth = 0, in_rsv = 0, n = 0;
+
+	if (max < 1 || be32((const unsigned char *)&h->magic) != FDT_MAGIC)
+		return (0);
+	rbase[n] = dtb;
+	rsize[n++] = be32((const unsigned char *)&h->totalsize);
+
+	rsv = (const unsigned char *)dtb +
+	    be32((const unsigned char *)&h->off_mem_rsvmap);
+	for (; n < max; rsv += 16) {
+		unsigned long b = be_cells(rsv, 2), sz = be_cells(rsv + 8, 2);
+		if (b == 0 && sz == 0)
+			break;
+		rbase[n] = b;
+		rsize[n++] = sz;
+	}
+
+	strs = (const unsigned char *)dtb +
+	    be32((const unsigned char *)&h->off_dt_strings);
+	p = (const unsigned char *)dtb +
+	    be32((const unsigned char *)&h->off_dt_struct);
+	for (;;) {
+		unsigned int tok = be32(p);
+
+		p += 4;
+		if (tok == FDT_END)
+			break;
+		if (tok == FDT_NOP)
+			continue;
+		if (tok == FDT_BEGIN_NODE) {
+			const char *name = (const char *)p;
+			int len = 0;
+
+			while (name[len] != '\0')
+				len++;
+			p += (len + 4) & ~3U;
+			depth++;
+			if (depth == 2 && namecmp(name, "reserved-memory") == 0)
+				in_rsv = 1;
+			continue;
+		}
+		if (tok == FDT_END_NODE) {
+			if (depth == 2)
+				in_rsv = 0;
+			depth--;
+			continue;
+		}
+		if (tok == FDT_PROP) {
+			unsigned int plen = be32(p);
+			const char *pname = (const char *)strs + be32(p + 4);
+			const unsigned char *pd = p + 8;
+
+			if (in_rsv && depth == 2 && plen >= 4 &&
+			    namecmp(pname, "#address-cells") == 0)
+				ac = be32(pd);
+			if (in_rsv && depth == 2 && plen >= 4 &&
+			    namecmp(pname, "#size-cells") == 0)
+				sc = be32(pd);
+			if (in_rsv && depth == 3 && namecmp(pname, "reg") == 0 &&
+			    ac >= 1 && ac <= 2 && sc >= 1 && sc <= 2) {
+				unsigned int off;
+
+				for (off = 0; off + (ac + sc) * 4 <= plen &&
+				    n < max; off += (ac + sc) * 4) {
+					rbase[n] = be_cells(pd + off, ac);
+					rsize[n++] = be_cells(pd + off + ac * 4, sc);
+				}
+			}
+			p += 8 + ((plen + 3) & ~3U);
+			continue;
+		}
+		break;		/* unknown token: stop, keep what we have */
+	}
+	return (n);
+}

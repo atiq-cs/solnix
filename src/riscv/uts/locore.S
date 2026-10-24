@@ -217,16 +217,8 @@ boot_stack:
 boot_stack_top:
 
 	/*
-	 * Per-secondary-hart boot stacks (R-P4 SMP). One 16 KiB stack per
-	 * possible secondary hart (MAXCPU-1). The boot hart uses boot_stack;
-	 * secondaries are handed secondary_stacks[i]+16384 as their sp via the
-	 * SBI hart_start opaque arg.
-	 *
-	 * MUST stay in step with MAXCPU in main.c and proc.c. Sized for the
-	 * SpacemiT K3's 16 harts (15 secondaries = 240 KiB of BSS); qemu virt
-	 * -smp 4..8 simply uses fewer of them.
+	 * The per-secondary-hart boot stacks (secondary_stacks) live in main.c,
+	 * sized from MAXCPU in <sys/machtypes.h>, so the pool cannot drift from
+	 * the hart limit. Secondaries are handed secondary_stacks[i]+16384 as
+	 * their sp via the SBI hart_start opaque arg.
 	 */
-	.align 16
-	.globl secondary_stacks
-secondary_stacks:
-	.skip 16384 * 15		/* MAXCPU(16) - 1 boot hart */

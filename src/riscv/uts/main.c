@@ -28,6 +28,7 @@
 #include "sbi.h"
 #include "riscv_regs.h"
 #include "k1.h"
+#include <sys/machtypes.h>	/* MAXCPU */
 
 /* SunOS release identity — matches the illumos convention (utsname). */
 #define	SOLNIX_RELEASE	"5.11"
@@ -58,24 +59,19 @@ extern volatile unsigned long timer_ticks;
 
 /* SMP: secondary-hart entry (locore.S) + its per-cpu stack pool. */
 extern void _secondary_start(void);
-extern char secondary_stacks[];
 
 /*
- * Max harts we support (matches the secondary_stacks pool in locore.S -- keep
- * the two in step, the pool is MAXCPU-1 stacks).
- *
- * 16, because the SpacemiT K3 Pico ITX has 16 harts (cpu@0..cpu@15, measured;
- * see docs/k3-vendor-dtb-findings.md). This was 8, which was not merely "too
- * small": it deterministically reinstated the bug-#9 hart-slot aliasing on any
- * board with more than 8 harts. startup_boot_hartid clamped an out-of-range boot
- * hartid to 0, and start_secondaries only skips h == boot_hartid, so with
- * MAXCPU=8 and OpenSBI booting on hart 8..15 the boot hart would take slot 0
- * while the REAL hart 0 was released as a secondary into dispatch_init_cpu(0) --
- * two harts on one slot, exactly the failure in docs/riscv64-preboot-flake.md.
- * On the K3 that is HALF the harts, not a one-in-three lottery.
+ * MAXCPU comes from <sys/machtypes.h> (64), the single definition proc.c uses
+ * too. It used to be a private #define here, in proc.c AND a hand-counted
+ * `.skip 16384 * 15` in locore.S, kept in step by comment; a too-small value
+ * does not merely limit harts, it aliases them (bug #9, see the boot-hart
+ * check in start_secondaries). One secondary stack per possible secondary
+ * hart, sized from MAXCPU here so the pool cannot drift: 63 x 16 KiB = 1 MiB
+ * of BSS, which the -m 128M qemu default and every board absorb.
  */
-#define	MAXCPU		16
 #define	SECONDARY_STACK_SIZE	16384UL
+char secondary_stacks[(MAXCPU - 1) * SECONDARY_STACK_SIZE]
+    __attribute__((aligned(16)));
 
 /*
  * cpu_online[] — R-P4 per-hart online bitmap (seed of the cpu_t[] array /
@@ -261,8 +257,7 @@ start_secondaries(unsigned long boot_hartid)
 		putdec(MAXCPU);
 		sbi_console_puts(" in start_secondaries -- refusing to fold to"
 		    " slot 0 (that is bug #9's aliasing).\n"
-		    "        Raise MAXCPU in main.c AND proc.c, and the"
-		    " secondary_stacks pool in locore.S.\n");
+		    "        Raise NCPU in sys/machtypes.h.\n");
 		for (;;)
 			__asm__ __volatile__("wfi");
 	}
@@ -374,6 +369,19 @@ mlsetup(unsigned long hartid, unsigned long dtb)
 	 * keeps PC/sp/data at the same addresses). hat_boot_init prints the
 	 * post-paging banner + alias-readback proof and returns the live satp.
 	 */
+	/*
+	 * rvsrv: adopt the firmware's /memory extent BEFORE paging. hat_boot_init
+	 * now maps every DRAM gigapage, so it needs the extent, and the DTB itself
+	 * may live outside every boot gigapage: qemu virt puts it 2 MiB below the
+	 * top of RAM, which past -m 2G is a slot the old boot map never covered
+	 * (fdt_get_memory load-faulted at -m 3G..16G). In Bare mode it is
+	 * reachable wherever it is.
+	 */
+	{
+		unsigned long rb = 0, rs = 0;
+		if (fdt_get_memory(dtb, &rb, &rs))
+			hat_phys_set_ram(rb, rs);
+	}
 	boot_cpu.bc_satp = hat_boot_init();
 	boot_cpu.bc_vm_online = 1;
 
@@ -397,11 +405,6 @@ mlsetup(unsigned long hartid, unsigned long dtb)
 	 * wrong on the SpaceMiT K1, whose DRAM is 0x0..0x80000000 with SoC MMIO
 	 * above it -- bump-allocating there would hand out MMIO as page tables.
 	 */
-	{
-		unsigned long rb = 0, rs = 0;
-		if (fdt_get_memory(dtb, &rb, &rs))
-			hat_phys_set_ram(rb, rs);
-	}
 	hat_phys_init();
 	hat_highva_prove();
 	boot_cpu.bc_highva_online = 1;
@@ -596,8 +599,7 @@ main(void)
 		sbi_console_puts(" is >= MAXCPU ");
 		putdec(MAXCPU);
 		sbi_console_puts(" -- no dispatcher slot for it.\n");
-		sbi_console_puts("        Raise MAXCPU in main.c AND proc.c,"
-		    " and the secondary_stacks pool in locore.S.\n");
+		sbi_console_puts("        Raise NCPU in sys/machtypes.h.\n");
 		sbi_console_puts("        Refusing to fold to slot 0: that"
 		    " aliases two harts onto one slot\n");
 		sbi_console_puts("        (docs/riscv64-preboot-flake.md).\n");

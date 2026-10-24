@@ -82,11 +82,15 @@ typedef struct _label_t {
 #define	LABEL_S0	4	/* s0..s11 occupy slots 4..15 */
 
 /*
- * Reset vector / boot magic and the maximum number of harts (CPUs) this port
- * supports at bring-up. MAXCPU here matches the secondary_stacks pool sizing
- * in locore.S (8 harts total = 1 boot + 7 secondaries for the K1 8-core X60).
+ * The maximum number of harts (CPUs) this port supports, and THE one place it
+ * is set: main.c (cpu_online[], the secondary_stacks pool, start_secondaries)
+ * and proc.c (curthread[], idlethread[], the idle_harts bitmap) both take it
+ * from here. 64 for a server-scale qemu virt (-smp 64, its maximum); the K3
+ * has 16 and the K1 8. A hart id >= MAXCPU is refused at boot, never folded
+ * onto slot 0 (docs/riscv64-preboot-flake.md). Cannot exceed 64 while
+ * idle_harts and the SBI IPI hart_mask are one unsigned long (proc.c asserts).
  */
-#define	NCPU		8
+#define	NCPU		64
 #define	MAXCPU		NCPU
 
 #ifdef	__cplusplus

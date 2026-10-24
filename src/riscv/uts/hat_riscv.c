@@ -108,6 +108,28 @@ static unsigned long phys_ram_base = PHYS_RAM_BASE;
 static unsigned long phys_ram_end = PHYS_RAM_END;
 
 /*
+ * rvsrv: the WHOLE DRAM extent the firmware reported (phys_ram_end above is the
+ * boot bump allocator's, clamped to the kernel gigapage). hat_boot_init maps
+ * every gigapage of it identity (VA==PA) in every address space except the two
+ * Sv39 root slots userland owns, so page_init can manage all of DRAM and every
+ * existing `(T *)pa` dereference keeps working above the boot gigapage.
+ *
+ * HAT_USER_SLOT: root slots 1 (VA 0x40000000.., the newlib packages at
+ * 0x40010000) and 3 (VA 0xC0000000.., the uts user text, fb, mmap arena and
+ * stack). DRAM whose PA falls in those slots cannot be identity-mapped in a
+ * process's address space, so it is a hole page_init never frees.
+ * shortcut: on qemu virt that is PA 0xC0000000..0xFFFFFFFF (1 GiB of a >= 2 GiB
+ * guest); reclaim it by moving the user regions out of slot 3 or by giving the
+ * kernel a non-identity physmap (segkpm) for all of DRAM.
+ * HAT_IDENT_LIMIT: slots >= 256 are the KERNELBASE high half, so DRAM above
+ * 256 GiB PA is not managed (shortcut: the same physmap lifts it).
+ */
+#define	HAT_USER_SLOT(s)	((s) == 1 || (s) == 3)
+#define	HAT_IDENT_LIMIT		(256UL << GIGASHIFT)
+static unsigned long dram_base;
+static unsigned long dram_end;	/* 0 until hat_phys_set_ram */
+
+/*
  * hat_phys_ram_limit — the highest physical address the boot identity map can
  * safely dereference as VA==PA: the end of the kernel's identity gigapage.
  * page_init() builds its page_t array AT the physical address it manages and
@@ -149,6 +171,8 @@ hat_phys_set_ram(unsigned long base, unsigned long size)
 	if (size == 0 || base > kend || (base + size) <= kend)
 		return;
 	end = base + size;
+	dram_base = base;
+	dram_end = end < HAT_IDENT_LIMIT ? end : HAT_IDENT_LIMIT;
 	if (end > kgiga_end)
 		end = kgiga_end;
 	phys_ram_base = base;
@@ -292,6 +316,35 @@ hat_boot_init(void)
 	 * on K1 silicon it makes the K1 uart/sdhci/aplic/imsic MMIO reachable. */
 	map_gigapage(K1_DEV_GIGA, K1_DEV_GIGA, PTE_R | PTE_W);
 
+	/*
+	 * 5. rvsrv: every other gigapage of DRAM, identity R/W (no X, no U), so
+	 * page_init can manage all of it (mlsetup read the /memory extent before
+	 * paging, via hat_phys_set_ram). Slots already holding a leaf (the
+	 * kernel's, MMIO) are kept; user slots are holes (HAT_USER_SLOT).
+	 * shortcut: a DRAM end that is not GiB-aligned maps the rest of its last
+	 * GiB too; page_init never manages past dram_end, so nothing touches it.
+	 * Use megapages for the tail if a board's DRAM ever needs it.
+	 */
+	if (dram_end != 0) {
+		unsigned long s;
+
+		for (s = dram_base >> GIGASHIFT;
+		    s <= (dram_end - 1) >> GIGASHIFT; s++) {
+			if (HAT_USER_SLOT(s) || (root_pt[s] & PTE_V))
+				continue;
+#ifdef RVSRV_SABOTAGE_ALIAS
+			/* negative control: every GiB from 5 aliases GiB 4,
+			 * except the last (it holds the DTB startup re-reads) */
+			map_gigapage(s << GIGASHIFT, (s < 5 ||
+			    s == (dram_end - 1) >> GIGASHIFT ? s : 4UL) <<
+			    GIGASHIFT, PTE_R | PTE_W);
+#else
+			map_gigapage(s << GIGASHIFT, s << GIGASHIFT,
+			    PTE_R | PTE_W);
+#endif
+		}
+	}
+
 	/* Compose satp: MODE=Sv39, ASID=0, PPN = root table PA >> 12. */
 	ppn = (unsigned long)root_pt >> PAGESHIFT;
 	satp = SATP_MAKE(SATP_MODE_SV39, 0, ppn);
@@ -317,6 +370,11 @@ hat_boot_init(void)
 	sbi_console_puts("      K1 dev giga    VA=");
 	puthex(K1_DEV_GIGA);
 	sbi_console_puts(" -> PA 0xc0000000 (uart/sdhci/aplic/imsic, RW)\n");
+	sbi_console_puts("      DRAM giga(s)   PA ");
+	puthex(dram_base);
+	sbi_console_puts(" .. ");
+	puthex(dram_end);
+	sbi_console_puts(" identity RW, except user slots 1,3\n");
 	sbi_console_puts("      root PT PA=");
 	puthex((unsigned long)root_pt);
 	sbi_console_puts(" satp=");
@@ -491,17 +549,14 @@ hat_as_newroot(void)
 	 * PTE_U, so U-mode still cannot reach the kernel through the shared
 	 * slots.
 	 */
+	/*
+	 * rvsrv: every slot except the two user slots (HAT_USER_SLOT), so the
+	 * DRAM identity gigapages (slots 4+ on qemu, and the K3's kernel slot 4)
+	 * are reachable on a process satp exactly as on the kernel's. Kernel
+	 * leaves lack PTE_U, so U-mode still cannot reach them.
+	 */
 	for (i = 0; i < PTES_PER_TABLE; i++)
-		nr[i] = 0;
-	nr[0] = root_pt[0];			/* low MMIO giga (UART) */
-	nr[2] = root_pt[2];			/* kernel RAM giga */
-	/* NOT slot 3: on K1 the device giga lives at 0xc0000000 (VPN2=3), but
-	 * userland ALSO lives in slot 3 (text @0xC0010000, stack @0xfffff000).
-	 * The K1 device window is only touched on the KERNEL satp during boot
-	 * (sdhci probe / aplic), never from a user process, so leave slot 3
-	 * free for user mappings and avoid the kernel-leaf collision. */
-	for (i = 256; i < PTES_PER_TABLE; i++)	/* KERNELBASE high half */
-		nr[i] = root_pt[i];
+		nr[i] = HAT_USER_SLOT(i) ? 0 : root_pt[i];
 	return ((unsigned long)nr);
 }
 
@@ -644,8 +699,8 @@ hat_as_walk_leaves(unsigned long root,
 		unsigned long *l1;
 		int i1;
 
-		/* Only user slots: skip kernel slot 0 (MMIO), 2 (RAM), 256+. */
-		if (i2 == 0 || i2 == 2 || i2 >= 256)
+		/* Only user slots (rvsrv: the DRAM gigapages are kernel too). */
+		if (!HAT_USER_SLOT(i2))
 			continue;
 		if ((l2[i2] & PTE_V) == 0 || (l2[i2] & PTE_RWX))
 			continue;	/* empty or (unexpected) megapage */
@@ -717,7 +772,7 @@ hat_as_cow_share(unsigned long dstroot, unsigned long srcroot)
 		unsigned long *l1;
 		int i1;
 
-		if (i2 == 0 || i2 == 2 || i2 >= 256)
+		if (!HAT_USER_SLOT(i2))
 			continue;
 		if ((l2[i2] & PTE_V) == 0 || (l2[i2] & PTE_RWX))
 			continue;
@@ -883,8 +938,8 @@ hat_as_freeuser(unsigned long root)
 		unsigned long *l1;
 		int i1;
 
-		if (i2 == 2)
-			continue;
+		if (!HAT_USER_SLOT(i2))
+			continue;	/* kernel slots are aliases, not ours */
 		if ((l2[i2] & PTE_V) == 0 || (l2[i2] & PTE_RWX))
 			continue;
 		l1 = (unsigned long *)PTE_TO_PA(l2[i2]);
@@ -990,3 +1045,63 @@ hat_highva_prove(void)
 	    "  MISMATCH -> high-VA map BROKEN\n");
 }
 
+
+/*
+ * rvsrv: hat_phys_identity -- 1 if physical page `pa` is identity-mapped
+ * (VA==PA) in EVERY address space (the kernel's and each process's), which is
+ * what page_alloc's callers assume when they dereference the PA it returns.
+ */
+int
+hat_phys_identity(unsigned long pa)
+{
+	unsigned long s = pa >> GIGASHIFT;
+
+	if (pa >= HAT_IDENT_LIMIT || HAT_USER_SLOT(s))
+		return (0);
+	return ((root_pt[s] & PTE_V) != 0 && (root_pt[s] & PTE_RWX) != 0);
+}
+
+/* rvsrv: the DRAM end hat_boot_init mapped (capped at HAT_IDENT_LIMIT). */
+unsigned long
+hat_dram_end(void)
+{
+	return (dram_end);
+}
+
+/*
+ * rvsrv: hat_user_range_ok -- 1 if [va, va+len) lies inside ONE user slot, so
+ * a brk, mmap or ELF segment cannot reach a kernel slot (hat_as_map panics on a
+ * kernel leaf). Reachable once RAM is large: a 1 GiB brk from 0x40010000 runs
+ * into the kernel slot 2.
+ */
+int
+hat_user_range_ok(unsigned long va, unsigned long len)
+{
+	unsigned long end = va + len;
+
+	if (len == 0)
+		return (1);
+	if (end < va || end > (4UL << GIGASHIFT))
+		return (0);
+	return (HAT_USER_SLOT(va >> GIGASHIFT) &&
+	    (va >> GIGASHIFT) == ((end - 1) >> GIGASHIFT));
+}
+
+/*
+ * rvsrv: hat_peek_highva -- read the word at `pa + off` through a fresh
+ * KERNELBASE+PAGESIZE mapping (a real 3-level walk, not the identity gigapage),
+ * then remove the mapping. The high-RAM self-test uses it to show the identity
+ * map and the page tables agree on what lives at a PA.
+ */
+unsigned long
+hat_peek_highva(unsigned long pa, unsigned long off)
+{
+	unsigned long va = KERNELBASE + PAGESIZE;
+	unsigned long v;
+
+	hat_kmap_page(va, pa, PTE_R | PTE_W);
+	v = *(volatile unsigned long *)(va + off);
+	(void) hat_as_unmap((unsigned long)root_pt, va);
+	__asm__ __volatile__("sfence.vma %0, zero" :: "r"(va) : "memory");
+	return (v);
+}

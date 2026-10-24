@@ -48,9 +48,16 @@ struct virtio_net_hdr {
 	unsigned short	num_buffers;	/* used only if MRG_RXBUF negotiated */
 } __attribute__((packed));
 
-#define	VIONET_HDR_LEN	10	/* legacy hdr (no num_buffers) = 10 bytes;
-				 * modern w/o MRG_RXBUF also 10. qemu accepts
-				 * either when MRG_RXBUF is not negotiated. */
+/*
+ * 12, not 10. With VIRTIO_F_VERSION_1 negotiated (virtio_set_features always
+ * sets it) the header ALWAYS includes num_buffers (spec 1.2 §5.1.6: "the
+ * num_buffers field is ... present with VIRTIO_F_VERSION_1"); the 10-byte form
+ * is legacy-only. rvsrv found this with a qemu filter-dump pcap: at 10, qemu
+ * read 2 frame bytes as header, so the attach ARP left the guest as 58 bytes
+ * with dst ff:ff:ff:ff:52:54 -- every TX frame since R-P6 was malformed, which
+ * is why slirp "may not reply" (it never could).
+ */
+#define	VIONET_HDR_LEN	12
 
 static struct virtio_dev *vionet_dev;
 static struct virtq vionet_rxq;		/* queue 0 */
@@ -249,4 +256,125 @@ vionet_attach(void)
 		return (1);
 	}
 	return (0);
+}
+
+/*
+ * ---------------------------------------------------------------------------
+ * rvsrv: the frame interface the IPv4 stack (inet.c) drives. The attach proof
+ * above leaves one RX buffer posted and the RX/TX queues live; vionet_net_start
+ * re-arms RX with VIONET_NRX buffers (one 2 KiB half-page each) so a burst of
+ * frames is not dropped, and vionet_rx_poll / vionet_tx hand whole Ethernet
+ * frames (no virtio-net header) across. Polled, like the rest of this driver:
+ * inet.c's netd thread calls vionet_rx_poll. Caller serializes (inet netlock).
+ * ---------------------------------------------------------------------------
+ */
+#define	VIONET_NRX	((int)VIRTQ_SIZE - 1)	/* keep one desc spare (attach) */
+static unsigned long vionet_rxpage[VIONET_NRX];
+static int vionet_rxdesc[VIONET_NRX];
+static int vionet_started;
+
+int
+vionet_present(void)
+{
+	return (vionet_ready);
+}
+
+void
+vionet_get_mac(unsigned char *mac)
+{
+	int i;
+
+	for (i = 0; i < 6; i++)
+		mac[i] = vionet_mac[i];
+}
+
+static void
+vionet_rx_arm(int k)
+{
+	int d = vionet_rxdesc[k];
+
+	vionet_rxq.vq_desc[d].addr = vionet_rxpage[k];
+	vionet_rxq.vq_desc[d].len = 2048;
+	vionet_rxq.vq_desc[d].flags = VIRTQ_DESC_F_WRITE;
+	vionet_rxq.vq_desc[d].next = 0;
+	virtq_submit(&vionet_rxq, d);
+}
+
+int
+vionet_net_start(void)
+{
+	int k;
+
+	if (!vionet_ready)
+		return (0);
+	if (vionet_started)
+		return (1);
+	for (k = 0; k < VIONET_NRX; k++) {
+		vionet_rxpage[k] = page_alloc();
+		vionet_rxdesc[k] = virtq_alloc_desc(&vionet_rxq);
+		if (vionet_rxpage[k] == 0 || vionet_rxdesc[k] < 0)
+			return (0);
+		vionet_rx_arm(k);
+	}
+	vionet_started = 1;
+	return (1);
+}
+
+/*
+ * vionet_rx_poll -- if a frame has landed, copy up to `max` bytes of it (the
+ * Ethernet frame, header stripped) into `buf`, re-post its buffer, and return
+ * the frame length; 0 if nothing is pending. Non-blocking.
+ */
+unsigned int
+vionet_rx_poll(unsigned char *buf, unsigned int max)
+{
+	struct virtq_used_elem *ue;
+	unsigned int len, i;
+	unsigned char *src;
+	int id, k;
+
+	if (!vionet_started)
+		return (0);
+	__asm__ __volatile__("fence ir, ir" ::: "memory");
+	if (vionet_rxq.vq_used->idx == vionet_rxq.vq_last_used)
+		return (0);
+	ue = &vionet_rxq.vq_used->ring[vionet_rxq.vq_last_used %
+	    vionet_rxq.vq_num];
+	id = (int)ue->id;
+	len = ue->len;
+	vionet_rxq.vq_last_used++;
+
+	for (k = 0; k < VIONET_NRX; k++)
+		if (vionet_rxdesc[k] == id)
+			break;
+	if (k == VIONET_NRX) {
+		/* attach's one-shot buffer: retire it, nothing to deliver */
+		virtq_free_desc(&vionet_rxq, id);
+		return (0);
+	}
+	len = len > VIONET_HDR_LEN ? len - VIONET_HDR_LEN : 0;
+	if (len > max)
+		len = max;
+	src = (unsigned char *)(vionet_rxpage[k] + VIONET_HDR_LEN);
+	for (i = 0; i < len; i++)
+		buf[i] = src[i];
+	vionet_rx_arm(k);
+	return (len);
+}
+
+/* vionet_tx -- transmit one Ethernet frame (<= 1514 bytes). 1 on completion. */
+int
+vionet_tx(const unsigned char *frame, unsigned int len)
+{
+	unsigned char *dst;
+	unsigned int i;
+
+	if (!vionet_ready || len > 2048 - VIONET_HDR_LEN)
+		return (0);
+	dst = (unsigned char *)(vionet_txbuf + VIONET_HDR_LEN);
+	for (i = 0; i < len; i++)
+		dst[i] = frame[i];
+	for (; i < 60; i++)
+		dst[i] = 0;		/* pad a runt to the Ethernet minimum */
+	return (vionet_tx_frame(len < 60 ? 60 : len));
 }

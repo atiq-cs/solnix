@@ -95,6 +95,12 @@ extern long sys_bind(int fd, unsigned long uaddr, unsigned int ulen);
 extern long sys_listen(int fd, int backlog);
 extern long sys_accept(int fd, unsigned long uaddr, unsigned long ulenp);
 extern long sys_connect(int fd, unsigned long uaddr, unsigned int ulen);
+extern long sys_sendto(int fd, const char *ubuf, unsigned long n, int flags,
+    unsigned long usa, unsigned int salen);
+extern long sys_recvfrom(int fd, char *ubuf, unsigned long n, int flags,
+    unsigned long usa, unsigned long ulenp);
+extern long sys_getname(int fd, unsigned long usa, unsigned long ulenp,
+    int peer);
 extern long sys_getsockopt(int fd, int level, int name, unsigned long uval,
     unsigned long ulenp);
 extern long sys_setsockopt(int fd, int level, int name, unsigned long uval,
@@ -227,6 +233,15 @@ extern long proc_port_send(int pfd, unsigned long user);
 #define	SYS_connect	203
 #define	SYS_getsockopt	209
 #define	SYS_setsockopt	208
+/*
+ * rvsrv: AF_INET. getsockname/getpeername/sendto are Linux's numbers; recvfrom
+ * is NOT (Linux's 207 is SYS_pset here, an illumos call), so it takes 520 in
+ * this kernel's private range next to the event ports.
+ */
+#define	SYS_getsockname	204
+#define	SYS_getpeername	205
+#define	SYS_sendto	206
+#define	SYS_recvfrom	520
 #define	SYS_sendmsg	211
 #define	SYS_recvmsg	212
 
@@ -325,6 +340,12 @@ syscall_trap(struct regs *tf)
 	unsigned long num = tf->r_a7;
 	long ret;
 
+#ifdef RVSRV_CURPROC_CHECK
+	{
+		extern void proc_check_current(unsigned long);
+		proc_check_current(num);
+	}
+#endif
 	switch (num) {
 	case SYS_write:
 		ret = sys_write((int)tf->r_a0, (const char *)tf->r_a1,
@@ -540,6 +561,19 @@ syscall_trap(struct regs *tf)
 	case SYS_setsockopt:
 		ret = sys_setsockopt((int)tf->r_a0, (int)tf->r_a1,
 		    (int)tf->r_a2, tf->r_a3, (unsigned int)tf->r_a4);
+		break;
+	case SYS_sendto:
+		ret = sys_sendto((int)tf->r_a0, (const char *)tf->r_a1, tf->r_a2,
+		    (int)tf->r_a3, tf->r_a4, (unsigned int)tf->r_a5);
+		break;
+	case SYS_recvfrom:
+		ret = sys_recvfrom((int)tf->r_a0, (char *)tf->r_a1, tf->r_a2,
+		    (int)tf->r_a3, tf->r_a4, tf->r_a5);
+		break;
+	case SYS_getsockname:
+	case SYS_getpeername:
+		ret = sys_getname((int)tf->r_a0, tf->r_a1, tf->r_a2,
+		    tf->r_a7 == SYS_getpeername);
 		break;
 	case SYS_sendmsg:
 		/* a0=fd a1=buf a2=len a3=int* fds a4=nfds (see uproc.c) */

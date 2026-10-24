@@ -36,6 +36,7 @@ extern void hat_as_walk_leaves(unsigned long root,
 extern void hat_as_freeuser(unsigned long root);
 extern unsigned long hat_as_va2pa(unsigned long root, unsigned long va);
 extern unsigned long hat_as_unmap(unsigned long root, unsigned long va);
+extern int hat_user_range_ok(unsigned long va, unsigned long len);
 
 /* vm_page.c */
 extern void page_free(unsigned long pa);
@@ -186,6 +187,10 @@ as_anon_map(as_t *as, unsigned long len)
 	end = va + len;
 	if (end < va)
 		return (0);		/* length overflowed the arena */
+	/* rvsrv: with GiBs of RAM page_alloc no longer fails first; stay below
+	 * the user stack (USTACK_TOP - 64 KiB in uproc.c) and inside slot 3. */
+	if (end > 0xfffff000UL - 16 * PAGESIZE || !hat_user_range_ok(va, len))
+		return (0);
 
 	for (p = va; p < end; p += PAGESIZE) {
 		unsigned long pa = page_alloc();	/* zeroed */
@@ -286,6 +291,9 @@ as_map(as_t *as, unsigned long va, unsigned long len, const void *data,
 	unsigned long end = (va + len + PAGESIZE - 1) & ~(PAGESIZE - 1);
 	unsigned long p;
 
+	/* rvsrv: an ELF segment must lie in a user slot, not on a kernel leaf. */
+	if (end < start || !hat_user_range_ok(start, end - start))
+		return (0);
 	for (p = start; p < end; p += PAGESIZE) {
 		unsigned long pa = page_alloc();	/* zeroed */
 		unsigned long off, n;
@@ -479,6 +487,9 @@ as_grow(as_t *as, unsigned long newbrk)
 		as->a_brk = newbrk;		/* shrink: keep pages, lower brk */
 		return (as->a_brk);
 	}
+	/* rvsrv: a brk past its user slot would map onto a kernel leaf. */
+	if (!hat_user_range_ok(oldtop, newtop - oldtop))
+		return (0);
 	for (p = oldtop; p < newtop; p += PAGESIZE) {
 		unsigned long pa = page_alloc();	/* zeroed */
 

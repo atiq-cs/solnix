@@ -150,6 +150,25 @@ extern long unsock_recv(int si, char *ubuf, unsigned long n, int *outfds,
 extern int unsock_socketpair(int domain, int type, int *sa, int *sb);
 extern void unsock_ref(int si);
 extern void unsock_close(int si);
+/* inet.c: AF_INET sockets. Their index in fd_sock carries INET_SI_FLAG. */
+extern int inet_is(int si);
+extern int inet_socket(int type, int protocol);
+extern int inet_bind(int si, const void *ksa, unsigned int len);
+extern int inet_listen(int si, int backlog);
+extern int inet_accept(int si, void *ksa_out);
+extern int inet_connect(int si, const void *ksa, unsigned int len);
+extern long inet_send(int si, const unsigned char *kbuf, unsigned long n,
+    const void *ksa, unsigned int salen);
+extern long inet_recv(int si, unsigned char *kbuf, unsigned long n,
+    void *ksa_out);
+extern int inet_poll(int si);
+extern void inet_ref(int si);
+extern void inet_close(int si);
+extern int inet_getsockname(int si, void *ksa_out, int peer);
+static long inet_uread(int si, char *ubuf, unsigned long n, unsigned long usa,
+    unsigned long ulenp);
+static long inet_uwrite(int si, const char *ubuf, unsigned long n,
+    unsigned long usa, unsigned int salen);
 /* Defined at the bottom of this file (the SCM_RIGHTS capture/install helpers). */
 int unsock_fd_dup_into(int fd);
 int unsock_fd_install_slot(int ri);
@@ -570,6 +589,39 @@ proc_set_current(void *p)
 	curproc = (proc_t *)p;
 }
 
+/*
+ * rvsrv diagnostic: is the global curproc the process that owns the thread
+ * running on THIS hart? Called at syscall entry. Prints the first few
+ * mismatches (the mechanism being tested: one curproc shared by every hart).
+ */
+extern void *curthread_ptr(void);
+static volatile int curproc_mismatch;
+
+void
+proc_check_current(unsigned long sysno)
+{
+	void *t = curthread_ptr();
+	int i;
+
+	if (curproc != 0 && curproc->p_thread == t)
+		return;
+	for (i = 0; i < NPROC; i++) {
+		if (proctab[i].p_inuse && proctab[i].p_thread == t)
+			break;
+	}
+	if (i == NPROC)
+		return;		/* a kernel thread making a syscall: not ours */
+	if (__sync_fetch_and_add(&curproc_mismatch, 1) < 8) {
+		sbi_console_puts("[rvsrv] CURPROC MISMATCH: syscall ");
+		kputdec(sysno);
+		sbi_console_puts(" by pid ");
+		kputdec((unsigned long)proctab[i].p_pid);
+		sbi_console_puts(" but curproc is pid ");
+		kputdec(curproc != 0 ? (unsigned long)curproc->p_pid : 0);
+		sbi_console_puts("\n");
+	}
+}
+
 /* COW fork stats (as.c) for the gate banner. */
 extern unsigned long as_cow_shared_total;
 extern unsigned long as_cow_copied_total;
@@ -648,6 +700,8 @@ proc_fread(int fd, char *ubuf, unsigned long n)
 	/* An AF_UNIX endpoint: read(2) is recvmsg with no ancillary data. Rights
 	 * sent by the peer stay queued for a real recvmsg rather than being
 	 * silently discarded here. */
+	if (p->p_fd[fd].fd_sock >= 0 && inet_is(p->p_fd[fd].fd_sock))
+		return (inet_uread(p->p_fd[fd].fd_sock, ubuf, n, 0, 0));
 	if (p->p_fd[fd].fd_sock >= 0)
 		return (unsock_recv(p->p_fd[fd].fd_sock, ubuf, n, 0, 0));
 	/* R-P12: on-disk SNFS file. */
@@ -710,7 +764,9 @@ fd_hold(proc_t *p, int fd)
 		return;
 	if (p->p_fd[fd].fd_pipe >= 0)
 		pipe_ref(p->p_fd[fd].fd_pipe, p->p_fd[fd].fd_pipe_w);
-	if (p->p_fd[fd].fd_sock >= 0)
+	if (p->p_fd[fd].fd_sock >= 0 && inet_is(p->p_fd[fd].fd_sock))
+		inet_ref(p->p_fd[fd].fd_sock);
+	else if (p->p_fd[fd].fd_sock >= 0)
 		unsock_ref(p->p_fd[fd].fd_sock);
 	if (p->p_fd[fd].fd_port >= 0)
 		port_hold(p->p_fd[fd].fd_port);
@@ -754,7 +810,10 @@ fd_release(proc_t *p, int fd)
 		p->p_fd[fd].fd_port = -1;
 	}
 	if (p->p_fd[fd].fd_sock >= 0) {
-		unsock_close(p->p_fd[fd].fd_sock);
+		if (inet_is(p->p_fd[fd].fd_sock))
+			inet_close(p->p_fd[fd].fd_sock);
+		else
+			unsock_close(p->p_fd[fd].fd_sock);
 		p->p_fd[fd].fd_sock = -1;
 		p->p_fd[fd].fd_port = -1;
 	}
@@ -2693,6 +2752,8 @@ proc_fwrite(int fd, const char *ubuf, unsigned long n)
 	if (p->p_fd[fd].fd_pipe >= 0)
 		return (pipe_write(p->p_fd[fd].fd_pipe, ubuf, n));
 	/* An AF_UNIX endpoint: write(2) is sendmsg with no ancillary data. */
+	if (p->p_fd[fd].fd_sock >= 0 && inet_is(p->p_fd[fd].fd_sock))
+		return (inet_uwrite(p->p_fd[fd].fd_sock, ubuf, n, 0, 0));
 	if (p->p_fd[fd].fd_sock >= 0)
 		return (unsock_send(p->p_fd[fd].fd_sock, ubuf, n, 0, 0));
 	/* O_APPEND: the cursor moves to EOF before each write (POSIX). */
@@ -3318,7 +3379,10 @@ fd_ready(proc_t *p, int fd)
 		return (POLLNVAL);
 
 	if (p->p_fd[fd].fd_sock >= 0) {
-		int m = unsock_poll(p->p_fd[fd].fd_sock);
+		/* inet_poll returns the same RD/WR/HUP bits (1/2/4). */
+		int m = inet_is(p->p_fd[fd].fd_sock) ?
+		    inet_poll(p->p_fd[fd].fd_sock) :
+		    unsock_poll(p->p_fd[fd].fd_sock);
 
 		if (m & UNPOLL_RD)
 			r |= POLLIN | POLLRDNORM;
@@ -3856,7 +3920,10 @@ copy_sun_path(unsigned long uaddr, unsigned int ulen, char *kpath,
 long
 sys_socket(int domain, int type, int protocol)
 {
-	int si = unsock_socket(domain, type, protocol);
+	/* type may carry SOCK_CLOEXEC/SOCK_NONBLOCK flag bits: keep the type. */
+	int si = domain == 2 /* AF_INET */ ?
+	    inet_socket(type & 0xf, protocol) :
+	    unsock_socket(domain, type, protocol);
 	int fd;
 
 	if (si < 0)
@@ -3878,6 +3945,13 @@ sys_bind(int fd, unsigned long uaddr, unsigned int ulen)
 
 	if (si < 0)
 		return (-88 /* ENOTSOCK */);
+	if (inet_is(si)) {
+		unsigned char sa[16];
+
+		if (ulen < sizeof (sa) || copyin((void *)uaddr, sa, sizeof (sa)))
+			return (ulen < sizeof (sa) ? -22 : -14);
+		return (inet_bind(si, sa, sizeof (sa)));
+	}
 	r = copy_sun_path(uaddr, ulen, path, sizeof (path));
 	if (r != 0)
 		return (r);
@@ -3891,6 +3965,8 @@ sys_listen(int fd, int backlog)
 
 	if (si < 0)
 		return (-88 /* ENOTSOCK */);
+	if (inet_is(si))
+		return (inet_listen(si, backlog));
 	return (unsock_listen(si, backlog));
 }
 
@@ -3903,6 +3979,13 @@ sys_connect(int fd, unsigned long uaddr, unsigned int ulen)
 
 	if (si < 0)
 		return (-88 /* ENOTSOCK */);
+	if (inet_is(si)) {
+		unsigned char sa[16];
+
+		if (ulen < sizeof (sa) || copyin((void *)uaddr, sa, sizeof (sa)))
+			return (ulen < sizeof (sa) ? -22 : -14);
+		return (inet_connect(si, sa, sizeof (sa)));
+	}
 	r = copy_sun_path(uaddr, ulen, path, sizeof (path));
 	if (r != 0)
 		return (r);
@@ -3927,6 +4010,27 @@ sys_accept(int fd, unsigned long uaddr, unsigned long ulenp)
 
 	if (si < 0)
 		return (-88 /* ENOTSOCK */);
+	if (inet_is(si)) {
+		unsigned char sa[16];
+		unsigned int ulen = 0;
+
+		peer = inet_accept(si, sa);
+		if (peer < 0)
+			return (peer);
+		nfd = sock_fd_install(peer);
+		if (nfd < 0) {
+			inet_close(peer);
+			return (nfd);
+		}
+		if (uaddr != 0 && ulenp != 0 &&
+		    copyin((void *)ulenp, &ulen, sizeof (ulen)) == 0 &&
+		    ulen >= sizeof (sa)) {
+			ulen = sizeof (sa);
+			(void) copyout(sa, (void *)uaddr, sizeof (sa));
+			(void) copyout(&ulen, (void *)ulenp, sizeof (ulen));
+		}
+		return (nfd);
+	}
 	peer = unsock_accept(si);
 	if (peer < 0)
 		return (peer);
@@ -4288,4 +4392,126 @@ sock_report(void)
 	sbi_console_puts(", bound names ");
 	kputdec((unsigned long)nb);
 	sbi_console_puts("\n");
+}
+
+/*
+ * ---------------------------------------------------------------------------
+ * rvsrv: AF_INET data path. inet.c works on kernel memory under its lock, so
+ * user data crosses through a bounce buffer here (copyin/copyout catch a bad
+ * user pointer as EFAULT instead of a kernel fault).
+ * ---------------------------------------------------------------------------
+ */
+#define	INET_BOUNCE	1472
+
+static long
+inet_uread(int si, char *ubuf, unsigned long n, unsigned long usa,
+    unsigned long ulenp)
+{
+	unsigned char kb[INET_BOUNCE];
+	unsigned char sa[16];
+	long r;
+
+	if (n > sizeof (kb))
+		n = sizeof (kb);
+	r = inet_recv(si, kb, n, usa != 0 ? sa : 0);
+	if (r > 0 && copyout(kb, ubuf, (unsigned long)r) != 0)
+		return (-14 /* EFAULT */);
+	if (r >= 0 && usa != 0 && ulenp != 0) {
+		unsigned int ulen = sizeof (sa);
+
+		(void) copyout(sa, (void *)usa, sizeof (sa));
+		(void) copyout(&ulen, (void *)ulenp, sizeof (ulen));
+	}
+	return (r);
+}
+
+static long
+inet_uwrite(int si, const char *ubuf, unsigned long n, unsigned long usa,
+    unsigned int salen)
+{
+	unsigned char kb[INET_BOUNCE];
+	unsigned char sa[16];
+	unsigned long done = 0;
+
+	if (usa != 0) {
+		if (salen < sizeof (sa) || copyin((void *)usa, sa, sizeof (sa)))
+			return (salen < sizeof (sa) ? -22 : -14);
+		if (n > sizeof (kb))
+			return (-90 /* EMSGSIZE */);
+	}
+	do {
+		unsigned long chunk = n - done < sizeof (kb) ? n - done :
+		    sizeof (kb);
+		long r;
+
+		if (copyin(ubuf + done, kb, chunk) != 0)
+			return (done > 0 ? (long)done : -14 /* EFAULT */);
+		r = inet_send(si, kb, chunk, usa != 0 ? sa : 0,
+		    usa != 0 ? sizeof (sa) : 0);
+		if (r < 0)
+			return (done > 0 ? (long)done : r);
+		done += (unsigned long)r;
+		if ((unsigned long)r < chunk)
+			break;
+	} while (done < n);
+	return ((long)done);
+}
+
+/* sendto(2): a0=fd a1=buf a2=len a3=flags a4=sockaddr* a5=addrlen */
+long
+sys_sendto(int fd, const char *ubuf, unsigned long n, int flags,
+    unsigned long usa, unsigned int salen)
+{
+	int si = sock_of_fd(fd);
+
+	(void) flags;
+	if (si < 0)
+		return (-88 /* ENOTSOCK */);
+	if (!inet_is(si)) {
+		if (usa != 0)
+			return (-106 /* EISCONN: AF_UNIX stream */);
+		return (unsock_send(si, ubuf, n, 0, 0));
+	}
+	return (inet_uwrite(si, ubuf, n, usa, salen));
+}
+
+/* recvfrom(2): a0=fd a1=buf a2=len a3=flags a4=sockaddr* a5=socklen_t* */
+long
+sys_recvfrom(int fd, char *ubuf, unsigned long n, int flags,
+    unsigned long usa, unsigned long ulenp)
+{
+	int si = sock_of_fd(fd);
+
+	(void) flags;
+	if (si < 0)
+		return (-88 /* ENOTSOCK */);
+	if (!inet_is(si))
+		return (unsock_recv(si, ubuf, n, 0, 0));
+	return (inet_uread(si, ubuf, n, usa, ulenp));
+}
+
+/* getsockname(2) / getpeername(2) for AF_INET: a0=fd a1=sockaddr* a2=len* */
+long
+sys_getname(int fd, unsigned long usa, unsigned long ulenp, int peer)
+{
+	int si = sock_of_fd(fd);
+	unsigned char sa[16];
+	unsigned int ulen = 0;
+	int r;
+
+	if (si < 0)
+		return (-88 /* ENOTSOCK */);
+	if (!inet_is(si))
+		return (-95 /* EOPNOTSUPP: AF_UNIX names are not tracked */);
+	if (copyin((void *)ulenp, &ulen, sizeof (ulen)) != 0)
+		return (-14);
+	if (ulen < sizeof (sa))
+		return (-22);
+	if ((r = inet_getsockname(si, sa, peer)) != 0)
+		return (r);
+	ulen = sizeof (sa);
+	if (copyout(sa, (void *)usa, sizeof (sa)) != 0 ||
+	    copyout(&ulen, (void *)ulenp, sizeof (ulen)) != 0)
+		return (-14);
+	return (0);
 }

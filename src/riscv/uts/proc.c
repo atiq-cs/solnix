@@ -147,12 +147,11 @@ static int next_tid = 0;
 /* Per-cpu current thread + idle thread. Boot-cpu dispatch only in R-P5, but
  * indexed by hartid so the structure is already SMP-shaped. */
 /*
- * MUST match main.c's MAXCPU and the secondary_stacks pool in locore.S (which
- * holds MAXCPU-1 stacks). 16 for the SpacemiT K3's 16 harts; see the MAXCPU
- * comment in main.c for why a too-small value aliases harts onto one slot
- * rather than merely limiting them.
+ * MAXCPU is <sys/machtypes.h>'s, the one main.c uses for cpu_online[] and the
+ * secondary_stacks pool; see the MAXCPU comment there for why a too-small value
+ * aliases harts onto one slot rather than merely limiting them.
  */
-#define	MAXCPU		16
+#include <sys/machtypes.h>
 static kthread_t *curthread[MAXCPU];
 static kthread_t *idlethread[MAXCPU];
 
@@ -641,6 +640,12 @@ thread_exit(void)
 /*
  * curthread_id — the current thread's id (for proc bookkeeping / diagnostics).
  */
+void *
+curthread_ptr(void)
+{
+	return (curthread[this_cpu_ok()]);
+}
+
 int
 curthread_id(void)
 {
@@ -676,7 +681,10 @@ idle_body(void *arg)
 {
 	(void) arg;
 	for (;;) {
+		extern void inet_idle_poll(void);
+
 		__asm__ __volatile__("wfi");
+		inet_idle_poll();	/* rvsrv: network RX + timers when idle */
 		thread_yield();
 	}
 }
@@ -821,6 +829,8 @@ thread_ab_selftest(void)
  */
 
 #define	HARTBIT(h)	(1UL << (h))
+/* idle_harts and the SBI IPI hart_mask (base 0) hold one bit per hart. */
+_Static_assert(MAXCPU <= 64, "idle_harts is one unsigned long: MAXCPU <= 64");
 extern long sbi_send_ipi(unsigned long hart_mask, unsigned long hart_mask_base);
 
 /* Bitmap of harts currently in their idle wfi (candidates to IPI-wake). */
@@ -913,9 +923,12 @@ smp_secondary_dispatch(unsigned long hartid)
 			curthread[cpu] = self;	/* idle is current again */
 			set_this_cpu(hartid);	/* restore tp (idle ran with it) */
 		} else {
+			extern void inet_idle_poll(void);
+
 			__sync_fetch_and_or(&idle_harts, HARTBIT(hartid));
 			__asm__ __volatile__("wfi");
 			__sync_fetch_and_and(&idle_harts, ~HARTBIT(hartid));
+			inet_idle_poll();	/* rvsrv: whichever hart is idle */
 		}
 	}
 }

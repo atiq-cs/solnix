@@ -29,8 +29,8 @@ LOG="${LOG:-unix-qemu-boot.log}"
 # lp64d — the kernel ABI must match. zifencei: ld.so.1's I-cache coherence
 # (fence.i) on the first-map path. Mirrors build-all.sh / build-scanout.sh.
 CFLAGS="-march=rv64gc_zifencei -mabi=lp64d -mcmodel=medany \
-	-ffreestanding -nostdlib -fno-stack-protector -fno-pic \
-	-Wall -Wextra -O2 -g"
+	-ffreestanding -nostdlib -fno-stack-protector -fno-pic -Iriscv64 \
+	-Wall -Wextra -O2 -g ${EXTRA_CFLAGS:-}"
 
 echo "== compile (freestanding, $TC) =="
 "$CC" $CFLAGS -c image_header.S -o image_header.o
@@ -63,6 +63,7 @@ echo "== compile (freestanding, $TC) =="
 "$CC" $CFLAGS -c vioblk.c    -o vioblk.o
 "$CC" $CFLAGS -c blkfs.c     -o blkfs.o
 "$CC" $CFLAGS -c vionet.c    -o vionet.o
+. ./lwip-objs.sh		# rvsrv: lwIP + inet.c -> $LWIPOBJS
 "$CC" $CFLAGS -c gmac.c      -o gmac.o
 "$CC" $CFLAGS -c k3i2c.c     -o k3i2c.o
 "$CC" $CFLAGS -c k3spi.c     -o k3spi.o
@@ -93,7 +94,7 @@ echo "== link (riscv.ld @ 0x80200000) =="
 	sbi.o trap.o hat_riscv.o timer.o plic.o aia.o cmo.o fp.o port.o unixsock.o \
 	fdt.o vm_page.o kmem.o proc.o \
 	as.o elf.o syscall.o uart.o sdhci.o uproc.o copy.o \
-	virtio.o vioblk.o blkfs.o vionet.o rootfs.o startup.o main.o \
+	virtio.o vioblk.o blkfs.o vionet.o $LWIPOBJS rootfs.o startup.o main.o \
 	gmac.o k3i2c.o k3spi.o k3dma.o k3pwm.o k3usb.o k3pcie.o k3efuse.o \
 	k3rtc.o k3misc.o k3ufs.o k3dev.o \
 	virtio_gpu.o fb.o

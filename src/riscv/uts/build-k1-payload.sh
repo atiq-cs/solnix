@@ -107,7 +107,7 @@ echo "   $DTB: $(wc -c < "$DTB") bytes, dtc round-trip OK"
 
 echo "== [2/6] compile the kernel (freestanding, $TC @ KBASE=$KBASE) =="
 CFLAGS="-march=rv64imac_zicsr_zifencei -mabi=lp64 -mcmodel=medany \
-	-ffreestanding -nostdlib -fno-stack-protector -fno-pic \
+	-ffreestanding -nostdlib -fno-stack-protector -fno-pic -Iriscv64 \
 	-Wall -Wextra -O2 -g"
 RP64="${RP64:-../../riscv-port/rp64/kernel}"
 GPUFLAGS="-DGPU_IDENTITY_MAP -I. -I$RP64"
@@ -132,6 +132,8 @@ done
 "$CC" $CFLAGS $GPUFLAGS -c "$RP64/virtio_gpu.c" -o virtio_gpu.o
 "$CC" $CFLAGS $GPUFLAGS -c "$RP64/fb.c"         -o fb.o
 KOBJS="$KOBJS virtio_gpu.o fb.o"
+. ./lwip-objs.sh		# rvsrv: inet.c needs lwIP; startup_root calls inet_init
+KOBJS="$KOBJS $LWIPOBJS"
 
 echo "== [3/6] link at KBASE + emit the booti Image =="
 "$LD" --defsym KBASE="$KBASE" -T riscv.ld -o "$OUT.elf" $KOBJS
