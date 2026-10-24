@@ -123,6 +123,7 @@ for src in image_header.S fpsave.S locore.S trap.S swtch.S copy.S; do
 done
 for src in sbi trap hat_riscv timer plic aia fdt cmo vm_page kmem proc as elf \
 	   syscall uart sdhci uproc unixsock virtio vioblk blkfs vionet rootfs \
+	   gmac k3i2c k3spi k3dma k3pwm k3usb k3pcie k3efuse k3rtc k3misc k3ufs k3dev \
 	   fp port startup main; do
 	"$CC" $CFLAGS -c "$src.c" -o "$src.o"
 	KOBJS="$KOBJS $src.o"
