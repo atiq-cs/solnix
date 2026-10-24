@@ -19,7 +19,7 @@
 # "firmware/iwx/<name>" on the kernel module path (uts/common/os/firmload.c),
 # i.e. /kernel/firmware/iwx/<name>.
 #
-# Plain derivation + builtins.fetchurl (fixed-output, flat sha256), the same
+# Plain derivation + <nix/fetchurl.nix> (fixed-output, flat sha256), the same
 # pattern as ./iwm-firmware.nix, so it evaluates and builds on the illumos host
 # without a nixpkgs stdenv. The hashes are the same blobs the earlier stdenvNoCC
 # version pinned (its SRI hashes decode to these hex digests) and match the
@@ -35,7 +35,7 @@
 let
   rev = "20241017";
   base = "https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain";
-  fetch = lf: sha256: builtins.fetchurl { url = "${base}/${lf}?id=${rev}"; name = lf; inherit sha256; };
+  fetch = lf: sha256: import <nix/fetchurl.nix> { url = "${base}/${lf}?id=${rev}"; name = lf; inherit sha256; };
 
   # OpenBSD name -> linux-firmware file, pinned. Only the api-77 blobs exist here.
   blobs = {

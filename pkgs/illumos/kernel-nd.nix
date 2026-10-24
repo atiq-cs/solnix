@@ -38,6 +38,7 @@
 { gate                    # the gate proto (headers + boot/)
 , rev ? "ac45d71fc2b04a5422e72a14b54dd1e746e7be07"
 , srcHash ? "1yhpjbxjynjrwd11vf456aw9hln3ydbc9qsgd5a0k73l8hfsmq87"  # nix-prefetch-url --unpack
+, tarHash ? "37684f1076bf971c598e618cb4efd31f16e6f0742c9077c20d927a21dd368d7c" # sha256 of the .tar.gz
 , patches ? [ ../../scripts/patches/0001-tscc_pit-default-pit_is_broken.patch
               ../../scripts/patches/0002-tzmon-thinkpad-hkey-enable.patch
               ../../scripts/patches/0003-usbecm-usb-pipe-xopen.patch
@@ -56,9 +57,9 @@ derivation {
   system = "x86_64-solaris";
   builder = "/usr/bin/bash";
   PATH = "/usr/gnu/bin:/usr/bin:/usr/sbin:/sbin";
-  src = builtins.fetchTarball {
+  src = import ./fetch-tarball.nix {
     url = "https://github.com/illumos/illumos-gate/archive/${rev}.tar.gz";
-    sha256 = srcHash;
+    sha256 = tarHash; narHash = srcHash;
   };
   inherit gate rev onbld gcc perlVersion perlVariant buildRoot;
   patches = builtins.concatStringsSep " " (map (p: "${p}") patches);

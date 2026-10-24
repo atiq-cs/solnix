@@ -62,9 +62,10 @@
 , kernelGcc ? "/usr/gcc/14"
   # The upstream tree at the pin, which carries the RM source src/ (107 MB, not
   # vendored; src-FETCH.md). nix-prefetch-url --unpack of the archive URL.
-, rmSrc ? builtins.fetchTarball {
+, rmSrc ? import ./fetch-tarball.nix {
     url = "https://github.com/nwilkens/open-gpu-kernel-modules/archive/8da2326c626cdd08130538f0f5f9a1f985054f4a.tar.gz";
-    sha256 = "19r6wrm4067pq89nr63dppnbv85q5rmpwb2pp0kz85ymn69lg4lh";
+    sha256 = "386540bc01e99bae3bc1d7a137fa04969e33f77bb3e2eb9991445947806ceb00";
+    narHash = "19r6wrm4067pq89nr63dppnbv85q5rmpwb2pp0kz85ymn69lg4lh";
   }
 , patchDir ? ../../src/drm-port/nvidia-oss/patches
 , binutils ? null            # GNU binutils slice (gld/gobjcopy). null => host g*.

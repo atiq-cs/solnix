@@ -76,7 +76,8 @@ derivation {
   # builder-side curl was invisible to Nix: no retry, no cache, no substitution,
   # and one flaky mirror (ftp.gnu.org timed out after 81 s, measured) failed the
   # build. The hash check below stays as a second, independent verification.
-  srcTar = builtins.fetchurl { inherit (src) url sha256; };
+  # <nix/fetchurl.nix>: a builtin:fetchurl FOD, so eval downloads nothing (same store path).
+  srcTar = import <nix/fetchurl.nix> { inherit (src) url sha256; };
   srcSha256 = src.sha256;
   abisArg = builtins.concatStringsSep " " abis;
   depsArg = builtins.concatStringsSep " " deps;

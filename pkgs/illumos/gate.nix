@@ -61,12 +61,16 @@
   #   * builtins.storePath is a hard error in pure mode ("not allowed in pure
   #     evaluation mode"), so falling through to a published store path does NOT
   #     help a pure eval either, even once that path substitutes;
-  #   * builtins.fetchTarball WITH a sha256 IS pure-legal.
-  # So a hash-pinned fetch of the already-built proto is the pure-eval path. It
+  #   * a fixed-output derivation IS pure-legal, and evaluating it downloads
+  #     nothing (builtins.fetchTarball, used here before, fetched 679 MB at eval).
+  # So a hash-pinned FOD of the already-built proto is the pure-eval path. It
   # differs from srcHash below in WHAT it fetches: srcHash fetches SOURCE and
   # then runs a ~2h nightly build, whereas this fetches the BUILT proto and runs
-  # no build at all.
+  # no build at all. protoUrl is the banked proto tarball, protoTarHash its flat
+  # sha256, protoHash the NAR hash of the unpacked tree (fetch-tarball.nix, the
+  # nixpkgs fetchzip shape).
 , protoUrl ? "https://s3.solnix.io/solnix-cache/proto/x86_64-gate-ac45d71fc2-20260914/proto-root_i386-gate-ac45d71fc2.tar.gz"
+, protoTarHash ? "2abbfda8ebcfd755dfad0b8065499f1b11a7957497a49c05679ce03af6da7325"
 , protoHash ? "0f0jr9xlrc1a0xkpn4fqc4xsl9l2fhqmpxkwyl7pqf6yfvr3zn8x"
 , onbld ? "/opt/onbld"
 , gcc ? "/usr/gcc/10"     # primary compiler (the gate's own default at this rev)
@@ -124,8 +128,11 @@ let
         ${if fatal then ''exit 1'' else ":"}
       fi
     '') ps);
-  # PREBUILT path: fetch the already-built proto by pinned hash. No build runs,
-  # and this is the branch a pure eval takes.
+  # PREBUILT path: the already-built proto as a fixed-output derivation. No gate
+  # build runs and eval downloads nothing. The output path is
+  # /nix/store/s7zkx8nx...-illumos-gate-proto (name + NAR hash): Nix substitutes
+  # it from a cache that has it, else downloads and unpacks the tarball. This is
+  # the branch a pure eval takes.
   # name: fetchTarball's default store name is "source", which gives the same
   # bytes a different store path from the host's `nix store add-path` copy
   # (...-illumos-gate-proto). MEASURED: identical NAR hash
@@ -134,7 +141,9 @@ let
   # derivation hash differed between a flake eval and a host build, and a
   # `--flake` install would rebuild the whole chain (gcc included) instead of
   # reusing it. Naming it makes both evaluations agree.
-  prebuiltProto = builtins.fetchTarball { url = protoUrl; sha256 = protoHash; name = "illumos-gate-proto"; };
+  prebuiltProto = import ./fetch-tarball.nix {
+    url = protoUrl; sha256 = protoTarHash; narHash = protoHash; name = "illumos-gate-proto";
+  };
 in
 # Prefer a real BUILD when the caller pinned source (srcDir/srcHash); otherwise
 # use the hash-pinned prebuilt proto. The assertion above guarantees at least one

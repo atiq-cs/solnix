@@ -36,7 +36,7 @@
 
 let
   version = "14.3.0";
-  fetch = url: sha256: builtins.fetchurl { inherit url sha256; };
+  fetch = url: sha256: import <nix/fetchurl.nix> { inherit url sha256; };
   gccSrc = fetch "https://mirrors.kernel.org/gnu/gcc/gcc-${version}/gcc-${version}.tar.xz"
     "e0dc77297625631ac8e50fa92fffefe899a4eb702592da5c32ef04e2293aca3a";
   gmpSrc = fetch "https://mirrors.kernel.org/gnu/gmp/gmp-6.3.0.tar.xz"

@@ -26,7 +26,7 @@
 
 let
   version = "615.71.09";
-  run = builtins.fetchurl {
+  run = import <nix/fetchurl.nix> {
     url = "https://download.nvidia.com/XFree86/Linux-x86_64/${version}/NVIDIA-Linux-x86_64-${version}.run";
     name = "NVIDIA-Linux-x86_64-${version}.run";
     sha256 = "cdceed22bbeb61248d1a6deabc2596673e3a6501698ee71ac8d2fdc28f3b70fe";

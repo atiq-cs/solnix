@@ -49,7 +49,7 @@ rec {
   # Mozilla CA bundle (curl.se's extract), for nix's ssl-cert-file.
   cacert = derivation {
     name = "cacert-2024-09-24"; inherit system;
-    pem = builtins.fetchurl { url = "https://curl.se/ca/cacert-2024-09-24.pem";
+    pem = import <nix/fetchurl.nix> { url = "https://curl.se/ca/cacert-2024-09-24.pem";
             sha256 = "189d3cf6d103185fba06d76c1af915263c6d42225481a1759e853b33ac857540"; };
     builder = "/usr/bin/bash";
     args = [ "-c" "/usr/bin/mkdir -p $out/etc/ssl/certs && /usr/bin/cp $pem $out/etc/ssl/certs/ca-bundle.crt" ];

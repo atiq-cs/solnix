@@ -751,10 +751,13 @@ rec {
     # tests/ (1.9 MB, ~2,700 files) is dropped: only the module tree, lib and the
     # script are read at run time. nixpkgs' package keeps the whole source as
     # HOME_MANAGER_PATH; this departs from it to fit the installer media.
-    hmSrc = let src = builtins.fetchTarball {
+    # narHash is of the tree WITHOUT tests/ (the store path the old eval-time filter gave).
+    hmSrc = import ./fetch-tarball.nix {
       url = "https://github.com/nix-community/home-manager/archive/db7d5e2332710f5abb088f6b5de927d7f9511b35.tar.gz";
-      sha256 = "1vy9bsc0wgz9ccgghpv4vn0z077j486il9jhrld78llf9720xsbz";
-    }; in builtins.path { path = src; name = "home-manager-source"; filter = p: _: p != "${src}/tests"; };
+      sha256 = "63657a72baa6fda8bfdb5a2d5e530bbcce0b087dfb23be5d7598626d61870941";
+      narHash = "08l22vv66hzgg3am7hs2vjxgdhgpr0wpizxf71fyfp9z4sycwv1s";
+      name = "home-manager-source"; exclude = [ "tests" ];
+    };
     inherit bash;
     depPath = builtins.concatStringsSep ":" (map (p: "${p}/bin") [ coreutils findutils gettext gnused gnugrep jq less ncurses hostname ]);
     msgfmt = "${gettext}/bin/msgfmt";
