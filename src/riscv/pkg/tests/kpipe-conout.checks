@@ -1,3 +1,4 @@
-# defect 2: after dup3(pipe,1) the child write(1) goes to the CONSOLE; then (defect 1) no EOF
-kernel-hang-conout|0|/bin/kpipeprobe|kpipeprobe|conout
-@kernel-hang-conout|^conout-bytes$
+# defect 2 (fixed by rvsh): after dup3(pipe,1) the child's write(1) must reach the PIPE, not the console.
+kpipe-conout|0|/bin/kpipeprobe|kpipeprobe|conout
+@kpipe-conout|kpipe conout: parent read 13 bytes then EOF
+!kpipe-conout|^conout-bytes

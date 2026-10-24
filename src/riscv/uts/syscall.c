@@ -52,6 +52,7 @@ extern int proc_signal(int pid, int sig);
 extern long proc_open(const char *path);
 extern long proc_fread(int fd, char *ubuf, unsigned long n);
 extern long proc_close(int fd);
+extern int proc_fd_open(int fd);
 extern int proc_fork(struct regs *tf);
 extern int proc_execve(const char *path, char *const argv[],
     char *const envp[]);
@@ -68,11 +69,23 @@ extern long sys_getuid(void);
 extern void proc_sigreturn(struct regs *tf);
 extern void proc_deliver_signals(struct regs *tf);
 extern long proc_openat_w(const char *path, int flags);
+extern long proc_openat(int dirfd, const char *path, int flags);
+extern long proc_fstatat(int dirfd, const char *path, unsigned long ustat,
+    int flags);
+extern long proc_fstat(int fd, unsigned long ustat);
+extern long proc_getdents64(int fd, unsigned long ubuf, unsigned long n);
+extern long proc_mkdirat(int dirfd, const char *path, int mode);
+extern long proc_unlinkat(int dirfd, const char *path, int flags);
+extern long proc_renameat(int ofd, const char *opath, int nfd,
+    const char *npath);
+extern long proc_chdir(const char *path);
+extern long proc_getcwd(unsigned long ubuf, unsigned long size);
 extern long proc_fwrite(int fd, const char *ubuf, unsigned long n);
 extern long proc_lseek(int fd, long off, int whence);
 /* R-P12: pipes, dup2, on-disk FS sync/remount. */
 extern long proc_pipe(int *ufds);
 extern long proc_dup2(int oldfd, int newfd);
+extern long proc_fcntl(int fd, int cmd, long arg);
 extern long sys_sync(void);
 extern long sys_remount(void);
 /* AF_UNIX sockets (uproc.c: the fd-table half; unixsock.c: the protocol). */
@@ -150,6 +163,15 @@ extern long copyout(const void *kaddr, void *uaddr, unsigned long n);
  * time-of-day source on this platform yet, so REALTIME is monotonic-since-boot
  * and says so rather than inventing an epoch).
  */
+#define	SYS_fcntl	25
+#define	SYS_getcwd	17
+#define	SYS_mkdirat	34
+#define	SYS_unlinkat	35
+#define	SYS_renameat	38
+#define	SYS_chdir	49
+#define	SYS_getdents64	61
+#define	SYS_newfstatat	79
+#define	SYS_fstat	80
 #define	SYS_clock_gettime	113
 #define	SYS_exit	93
 #define	SYS_kill	129
@@ -221,9 +243,12 @@ sys_write(int fd, const char *ubuf, unsigned long n)
 
 	if (ubuf == 0)
 		return (-EFAULT);
-	if (fd >= 3)
+	/* Any slot holding an object (fd 0..2 too, after dup2) goes through the
+	 * fd table, as fd_ready does for poll; an empty 0..2 is the console. */
+	if (fd >= 3 || proc_fd_open(fd))
 		return (proc_fwrite(fd, ubuf, n));	/* writable file (R-P11) */
-	if (fd != 1 && fd != 2)
+	/* the console tty: writable on an empty 0, 1 or 2 */
+	if (fd < 0 || fd > 2)
 		return (-1);
 	/* Bounce the user buffer through the kernel in chunks via fault-safe
 	 * copyin. A bad user pointer returns EFAULT instead of panicking. */
@@ -254,10 +279,12 @@ sys_read(int fd, char *ubuf, unsigned long n)
 	if (ubuf == 0 || n == 0)
 		return (-EFAULT);
 
-	if (fd >= 3)
+	if (fd >= 3 || proc_fd_open(fd))
 		return (proc_fread(fd, ubuf, n));	/* vfs file (copyout inside) */
 
-	if (fd != 0)
+	/* An empty fd 0, 1 or 2 is the console tty, readable on all three
+	 * (less reads its keys from fd 2, as on any Unix terminal). */
+	if (fd < 0 || fd > 2)
 		return (-1);
 
 	/* Console: blocking, cooked-lite. Copy each byte out fault-safely so a
@@ -307,9 +334,38 @@ syscall_trap(struct regs *tf)
 		ret = sys_read((int)tf->r_a0, (char *)tf->r_a1, tf->r_a2);
 		break;
 	case SYS_openat:
-		/* a0=dirfd (ignored), a1=path, a2=flags. R-P11: honor write/
-		 * create flags against the writable ramfs. */
-		ret = proc_openat_w((const char *)tf->r_a1, (int)tf->r_a2);
+		/* a0=dirfd, a1=path, a2=flags (rvsh: dirfd and the cwd are
+		 * honoured; R-P11 write/create flags against the ramfs). */
+		ret = proc_openat((int)tf->r_a0, (const char *)tf->r_a1,
+		    (int)tf->r_a2);
+		break;
+	case SYS_newfstatat:
+		ret = proc_fstatat((int)tf->r_a0, (const char *)tf->r_a1,
+		    tf->r_a2, (int)tf->r_a3);
+		break;
+	case SYS_fstat:
+		ret = proc_fstat((int)tf->r_a0, tf->r_a1);
+		break;
+	case SYS_getdents64:
+		ret = proc_getdents64((int)tf->r_a0, tf->r_a1, tf->r_a2);
+		break;
+	case SYS_mkdirat:
+		ret = proc_mkdirat((int)tf->r_a0, (const char *)tf->r_a1,
+		    (int)tf->r_a2);
+		break;
+	case SYS_unlinkat:
+		ret = proc_unlinkat((int)tf->r_a0, (const char *)tf->r_a1,
+		    (int)tf->r_a2);
+		break;
+	case SYS_renameat:
+		ret = proc_renameat((int)tf->r_a0, (const char *)tf->r_a1,
+		    (int)tf->r_a2, (const char *)tf->r_a3);
+		break;
+	case SYS_chdir:
+		ret = proc_chdir((const char *)tf->r_a0);
+		break;
+	case SYS_getcwd:
+		ret = proc_getcwd(tf->r_a0, tf->r_a1);
 		break;
 	case SYS_lseek:
 		ret = proc_lseek((int)tf->r_a0, (long)tf->r_a1, (int)tf->r_a2);
@@ -324,6 +380,9 @@ syscall_trap(struct regs *tf)
 	case SYS_dup3:
 		/* a0 = oldfd, a1 = newfd, a2 = flags (ignored). dup2 semantics. */
 		ret = proc_dup2((int)tf->r_a0, (int)tf->r_a1);
+		break;
+	case SYS_fcntl:
+		ret = proc_fcntl((int)tf->r_a0, (int)tf->r_a1, (long)tf->r_a2);
 		break;
 	case SYS_sync:
 		ret = sys_sync();

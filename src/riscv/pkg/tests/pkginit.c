@@ -20,6 +20,7 @@
  * table on exec (uts/uproc.c load_elf_into). So the console log IS the record.
  */
 #include <stdio.h>
+#include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -39,6 +40,9 @@ main(void)
 		printf("RVPKG FATAL no /etc/rvpkg.tests\n");
 		return (1);
 	}
+	/* the checks' programs must not inherit the list now that the kernel
+	 * keeps fds across exec (rvsh): close-on-exec, as init should */
+	(void) fcntl(fileno(f), F_SETFD, FD_CLOEXEC);
 	while (fgets(line, sizeof (line), f) != NULL) {
 		char *fld[40], *p = line, *s;
 		int nf = 0, want, st = 0, pid, code;

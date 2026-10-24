@@ -49,6 +49,7 @@ typedef struct port_event {
  * same encapsulation used for the FP context hooks.
  */
 extern int port_alloc(void *owner);
+extern void port_hold(int port);
 extern void port_free(int port);
 extern int port_assoc_add(int port, int fd, int events, unsigned long user);
 extern int port_assoc_del(int port, int fd);

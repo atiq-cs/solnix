@@ -1,6 +1,6 @@
 /*
- * The solnix riscv64 kernel has no getdents and no directory vnodes reachable
- * from userland, so opendir() fails ENOSYS (glue.c). Declared so code compiles.
+ * Directories: the solnix riscv64 kernel's getdents64 (rvsh). DIR is the glue's
+ * opaque handle (glue.c struct sdir); d_ino is the kernel's path hash.
  */
 #ifndef _SYS_DIRENT_H
 #define	_SYS_DIRENT_H

@@ -1,0 +1,67 @@
+# rvsh step 5: filesystem syscalls (getdents64, newfstatat/fstat, mkdirat, unlinkat, renameat,
+# chdir/getcwd, openat O_TRUNC/O_DIRECTORY). % oracle: the HOST's sbase (same source, Linux
+# build, $H) over the same stage tree; mutating checks run the same command on a host copy of
+# that check's own subtree. Listings are sorted: readdir order is the fs's (ext4 hash vs this
+# kernel's table order), and POSIX does not fix it. ls sorts by itself.
+ls-t|0|/bin/sbase-box|ls|/t
+%ls-t|$H/ls t
+ls-R|0|/bin/sbase-box|ls|-R|/t
+%ls-R|$H/ls -R t | sed 's|^t/|/t/|'
+find-t|0|/bin/dash|dash|-c|/bin/sbase-box find /t %7C /bin/sbase-box sort
+%find-t|$H/find t | sort | sed 's|^|/|'
+find-type-f|0|/bin/dash|dash|-c|/bin/sbase-box find /t -type f %7C /bin/sbase-box sort
+%find-type-f|$H/find t -type f | sort | sed 's|^|/|'
+find-type-d-name|0|/bin/dash|dash|-c|/bin/sbase-box find /t -type d -name b
+%find-type-d-name|$H/find t -type d -name b | sed 's|^|/|'
+# du: block counts are the fs's own (ext4 4 KiB vs 512 B here), so the PATHS are compared with
+# the host and the sizes with st_blocks = ceil(size/512): 4 one-block files, dirs 0 blocks.
+du-a|0|/bin/dash|dash|-c|/bin/sbase-box du -a /t %7C /bin/sbase-box cut -f 2 %7C /bin/sbase-box sort
+%du-a|$H/du -a t | cut -f 2 | sort | sed 's|^|/|'
+du-s|0|/bin/sbase-box|du|-s|/t
+@du-s|^4[[:space:]]+/t$
+pwd-cd|0|/bin/dash|dash|-c|cd /t/a && /bin/sbase-box pwd && /bin/sbase-box ls && cd .. && /bin/sbase-box pwd
+@pwd-cd|^/t/a$
+@pwd-cd|^b$
+@pwd-cd|^f2$
+@pwd-cd|^/t$
+mkdir-p|0|/bin/dash|dash|-c|/bin/sbase-box mkdir -p /m/n/o && /bin/sbase-box find /m %7C /bin/sbase-box sort
+%mkdir-p|T=$(mktemp -d); cp -r m $T/; cd $T; $H/mkdir -p m/n/o; $H/find m | sort | sed 's|^|/|'; cd /; rm -r $T
+rm-file|0|/bin/dash|dash|-c|/bin/sbase-box rm /r1/f1 && /bin/sbase-box ls /r1
+%rm-file|T=$(mktemp -d); cp -r r1 $T/; cd $T; $H/rm r1/f1; $H/ls r1; cd /; rm -r $T
+rm-r|0|/bin/dash|dash|-c|/bin/sbase-box rm -r /r2/a && /bin/sbase-box find /r2 %7C /bin/sbase-box sort
+%rm-r|T=$(mktemp -d); cp -r r2 $T/; cd $T; $H/rm -r r2/a; $H/find r2 | sort | sed 's|^|/|'; cd /; rm -r $T
+mv-file|0|/bin/dash|dash|-c|/bin/sbase-box mv /v1/f1 /v1/c/moved && /bin/sbase-box find /v1 %7C /bin/sbase-box sort && /bin/sbase-box cat /v1/c/moved
+%mv-file|T=$(mktemp -d); cp -r v1 $T/; cd $T; $H/mv v1/f1 v1/c/moved; $H/find v1 | sort | sed 's|^|/|'; cat v1/c/moved; cd /; rm -r $T
+mv-dir|0|/bin/dash|dash|-c|/bin/sbase-box mv /v2/a /v2/z && /bin/sbase-box find /v2 %7C /bin/sbase-box sort
+%mv-dir|T=$(mktemp -d); cp -r v2 $T/; cd $T; $H/mv v2/a v2/z; $H/find v2 | sort | sed 's|^|/|'; cd /; rm -r $T
+rmdir-empty|0|/bin/dash|dash|-c|/bin/sbase-box mkdir /e/new && /bin/sbase-box ls /e && /bin/sbase-box rmdir /e/new && /bin/sbase-box rm /e/a/b/f3 && /bin/sbase-box rmdir /e/a/b && /bin/sbase-box find /e %7C /bin/sbase-box sort
+%rmdir-empty|T=$(mktemp -d); cp -r e $T/; cd $T; $H/mkdir e/new && $H/ls e && $H/rmdir e/new && $H/rm e/a/b/f3 && $H/rmdir e/a/b && $H/find e | sort | sed 's|^|/|'; cd /; rm -r $T
+redirect-new|0|/bin/dash|dash|-c|echo hi > /t/c/new; /bin/sbase-box ls /t/c; /bin/sbase-box cat /t/c/new
+@redirect-new|^new$
+@redirect-new|^hi$
+trunc|0|/bin/dash|dash|-c|echo longer-line > /t/c/w; echo s > /t/c/w; /bin/sbase-box wc -c /t/c/w
+@trunc|^2 /t/c/w$
+cow-edit|0|/bin/dash|dash|-c|echo appended >> /etc/nums; /bin/sbase-box cat /etc/nums; /bin/sbase-box ls /etc %7C /bin/sbase-box grep -c nums
+%cow-edit|cat etc/nums; echo appended; echo 1
+append-exec|0|/bin/dash|dash|-c|/bin/sbase-box echo one > /t/c/ap; /bin/sbase-box echo two >> /t/c/ap; /bin/sbase-box cat /t/c/ap
+@append-exec|^one$
+@append-exec|^two$
+# NEGATIVE CONTROLS: the operation must fail (exit status is the oracle) and say why.
+rm-missing|1|/bin/sbase-box|rm|/t/nosuch
+@rm-missing|nosuch
+ls-missing|1|/bin/sbase-box|ls|/t/nosuchdir
+@ls-missing|nosuchdir
+rmdir-nonempty|1|/bin/sbase-box|rmdir|/t/a
+@rmdir-nonempty|[Nn]ot empty
+rmdir-file|1|/bin/sbase-box|rmdir|/t/f1
+@rmdir-file|[Nn]ot a directory
+mkdir-exists|1|/bin/sbase-box|mkdir|/t/a
+@mkdir-exists|[Ff]ile exists
+mkdir-noparent|1|/bin/sbase-box|mkdir|/t/x/y
+@mkdir-noparent|[Nn]o such file
+cd-missing|2|/bin/dash|dash|-c|cd /t/nosuch
+mv-missing|1|/bin/sbase-box|mv|/t/nosuch|/t/x
+# harness controls: a wrong oracle / exit must FAIL
+xfail-fs-oracle|0|/bin/sbase-box|ls|/t
+%xfail-fs-oracle|$H/ls t/a
+xfail-fs-exit|0|/bin/sbase-box|rm|/t/nosuch2

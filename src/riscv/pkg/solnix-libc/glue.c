@@ -53,6 +53,22 @@ struct rusage;
 #define	K_execve	221
 #define	K_wait4		260
 
+#define	K_fcntl		25
+#define	K_getcwd	17
+#define	K_mkdirat	34
+#define	K_unlinkat	35
+#define	K_renameat	38
+#define	K_chdir		49
+#define	K_getdents64	61
+#define	K_fstatat	79
+#define	K_fstat		80
+#define	K_AT_FDCWD	(-100)
+#define	K_O_EXCL	0x80
+#define	K_O_TRUNC	0x200
+#define	K_O_DIRECTORY	0x10000
+#define	K_O_CLOEXEC	0x80000
+#define	K_O_APPEND	0x400
+#define	K_ioctl		29
 #define	K_O_WRONLY	0x1
 #define	K_O_RDWR	0x2
 #define	K_O_CREAT	0x40
@@ -80,7 +96,9 @@ static long
 kret(long r, int dflt)
 {
 	if (r < 0 && r > -4096) {
-		errno = (r == -1) ? dflt : (int)-r;
+		/* Linux errno = newlib's for 1..34; the kernel uses two above */
+		errno = (r == -1) ? dflt : r == -36 ? ENAMETOOLONG :
+		    r == -39 ? ENOTEMPTY : (int)-r;
 		return (-1);
 	}
 	return (r);
@@ -163,10 +181,12 @@ static int
 vk(int u, int out)
 {
 #ifdef SOLNIX_NO_VFD
-	/* Negative-control build ONLY: hand the kernel its own fd numbers. */
+	/* No userland table: hand the kernel its own fd numbers, ANY fd (one
+	 * inherited across exec included); the kernel says EBADF. */
 	vt_init();
-	if (u >= 0 && u < K_NOFILE && vt[u].k == VF_CON) {
-		vt[u].k = u;
+	if (u >= 0 && u < K_NOFILE) {
+		if (vt[u].k < 0)
+			vt[u].k = u;
 		return (u);
 	}
 #endif
@@ -208,6 +228,13 @@ k_free(void)
 static int
 vt_bind(int k, int app)
 {
+#ifdef SOLNIX_NO_VFD
+	/* No userland table: the program's fd IS the kernel fd. */
+	vt_init();
+	vt[k].k = k;
+	vt[k].app = (unsigned char)app;
+	return (k);
+#endif
 	int u = vt_alloc(0);
 
 	if (u < 0) {
@@ -224,6 +251,9 @@ vt_close_all(void)
 {
 	int u;
 
+#ifdef SOLNIX_NO_VFD
+	return;		/* the kernel releases every fd at exit, CLOEXEC ones at exec */
+#endif
 	vt_init();
 	for (u = 0; u < K_NOFILE; u++) {
 		if (vt[u].k >= 0)
@@ -259,10 +289,9 @@ _read(int fd, void *buf, size_t n)
 }
 
 /*
- * [REAL] open via openat. newlib's O_* values are translated to the kernel's.
- * O_TRUNC is NOT honoured: the kernel ramfs has no truncate, so reopening a file
- * for write overwrites in place and keeps the old tail. O_EXCL is honoured by a
- * probe open. Directories cannot be opened (no getdents/vnode dirs).
+ * [REAL] open via openat. newlib's O_* values are translated to the kernel's;
+ * the kernel honours O_EXCL, O_TRUNC and O_DIRECTORY, and opens directories
+ * (an fd for getdents64) since rvsh.
  */
 int
 _open(const char *path, int flags, ...)
@@ -275,14 +304,16 @@ _open(const char *path, int flags, ...)
 		kf |= K_O_RDWR;
 	if (flags & O_CREAT)
 		kf |= K_O_CREAT;
-	if ((flags & O_CREAT) && (flags & O_EXCL)) {
-		r = ksys(K_openat, -100, (long)path, 0, 0);
-		if (r >= 0) {
-			(void) ksys(K_close, r, 0, 0, 0);
-			errno = EEXIST;
-			return (-1);
-		}
-	}
+	if (flags & O_EXCL)
+		kf |= K_O_EXCL;
+	if (flags & O_TRUNC)
+		kf |= K_O_TRUNC;
+	if (flags & O_DIRECTORY)
+		kf |= K_O_DIRECTORY;
+	if (flags & O_CLOEXEC)
+		kf |= K_O_CLOEXEC;
+	if (flags & O_APPEND)
+		kf |= K_O_APPEND;	/* the kernel keeps it across dup2/exec */
 	r = kret(ksys(K_openat, -100, (long)path, kf, 0), ENOENT);
 	if (r < 0)
 		return (-1);
@@ -320,80 +351,62 @@ _lseek(int fd, _off_t off, int whence)
 	return (kret(ksys(K_lseek, k, off, whence, 0), ESPIPE));
 }
 
-/*
- * [DERIVED] fstat. The kernel has no stat. The console is S_IFCHR. A seekable
- * kernel fd is a regular file whose size lseek(SEEK_END) reports; an unseekable
- * one is a pipe/socket (S_IFIFO). Mode bits are 0755 guesses; no uid/gid/times.
- */
+/* Linux riscv64 struct stat (asm-generic), what newfstatat/fstat fill. */
+struct kstat {
+	unsigned long dev, ino;
+	unsigned int mode, nlink, uid, gid;
+	unsigned long rdev, pad1;
+	long size;
+	int blksize, pad2;
+	long blocks;
+	long atime, atime_ns, mtime, mtime_ns, ctime, ctime_ns;
+	unsigned int unused4, unused5;
+};
+static void
+kstat2(const struct kstat *k, struct stat *st)
+{
+	memset(st, 0, sizeof (*st));
+	st->st_dev = k->dev;
+	st->st_ino = k->ino;
+	st->st_mode = k->mode;
+	st->st_nlink = k->nlink;
+	st->st_size = k->size;
+	st->st_blksize = k->blksize;
+	st->st_blocks = k->blocks;
+}
+
+/* [REAL] fstat: the kernel's fstat(80); the console is a char device. */
 int
 _fstat(int fd, struct stat *st)
 {
-	long cur, end;
-	int k = vk(fd, 1);
+	struct kstat k;
+	int kf = vk(fd, 1);
 
-	if (k < 0)
+	if (kf < 0)
 		return (-1);
-	memset(st, 0, sizeof (*st));
 	if (vt[fd].k == VF_CON) {
+		memset(st, 0, sizeof (*st));
 		st->st_mode = S_IFCHR | 0620;
 		return (0);
 	}
-	cur = ksys(K_lseek, k, 0, SEEK_CUR, 0);
-	if (cur < 0) {
-		st->st_mode = S_IFIFO | 0600;
-		return (0);
-	}
-	end = ksys(K_lseek, k, 0, SEEK_END, 0);
-	(void) ksys(K_lseek, k, cur, SEEK_SET, 0);
-	st->st_mode = S_IFREG | 0755;
-	st->st_size = end < 0 ? 0 : end;
-	st->st_nlink = 1;
-	st->st_blksize = 512;
-	st->st_blocks = (st->st_size + 511) / 512;
+	if (kret(ksys(K_fstat, kf, (long)&k, 0, 0), EBADF) < 0)
+		return (-1);
+	kstat2(&k, st);
 	return (0);
 }
 int fstat(int fd, struct stat *st) __attribute__((alias("_fstat")));
 
-static int
-is_known_dir(const char *p)
-{
-	static const char *const d[] = { "/", "/bin", "/etc", "/dev", "/sbin",
-	    "/var", "/tmp", "/data", NULL };
-	size_t l = strlen(p);
-	int i;
-
-	while (l > 1 && p[l - 1] == '/')
-		l--;
-	for (i = 0; d[i] != NULL; i++)
-		if (strlen(d[i]) == l && strncmp(d[i], p, l) == 0)
-			return (1);
-	return (0);
-}
-
-/* [DERIVED] stat = open + fstat + close. Directories -> ENOENT (see _open). */
+/* [REAL] stat: newfstatat(AT_FDCWD); the kernel resolves the cwd. No symlinks,
+ * so lstat is stat. */
 int
 _stat(const char *path, struct stat *st)
 {
-	int fd, r;
+	struct kstat k;
 
-	/*
-	 * Directories exist only as path prefixes: the ustar root is a flat file
-	 * table and the ramfs names files by full path (uts/rootfs.c, uproc.c
-	 * ramfiles). The kernel's root vnode lists /etc /dev /sbin /var /tmp, plus
-	 * the ustar /bin; any of those, with or without a trailing '/', is a dir.
-	 */
-	if (path != NULL && is_known_dir(path)) {
-		memset(st, 0, sizeof (*st));
-		st->st_mode = S_IFDIR | 0755;
-		st->st_nlink = 2;
-		return (0);
-	}
-	fd = _open(path, O_RDONLY);
-	if (fd < 0)
+	if (kret(ksys(K_fstatat, K_AT_FDCWD, (long)path, (long)&k, 0), ENOENT) < 0)
 		return (-1);
-	r = _fstat(fd, st);
-	(void) _close(fd);
-	return (r);
+	kstat2(&k, st);
+	return (0);
 }
 int stat(const char *p, struct stat *s) __attribute__((alias("_stat")));
 int lstat(const char *p, struct stat *s) __attribute__((alias("_stat")));
@@ -402,6 +415,15 @@ int lstat(const char *p, struct stat *s) __attribute__((alias("_stat")));
 int
 _isatty(int fd)
 {
+#ifdef SOLNIX_NO_VFD
+	char tb[64];
+
+	/* Ask the kernel: TCGETS succeeds only on a console slot. */
+	if (fd >= 0 && ksys(K_ioctl, fd, 0x5401 /* TCGETS */, (long)tb, 0) == 0)
+		return (1);
+	errno = ENOTTY;
+	return (0);
+#endif
 	if (vk(fd, 1) >= 0 && vt[fd].k == VF_CON)
 		return (1);
 	errno = ENOTTY;
@@ -482,9 +504,13 @@ dup2(int o, int n)
 }
 
 /* [REAL] dup = dup2 onto the lowest free user fd. */
+int _fcntl(int fd, int cmd, ...);
 int
 dup(int o)
 {
+#ifdef SOLNIX_NO_VFD
+	return (_fcntl(o, F_DUPFD, 0));	/* the kernel knows which fds are free */
+#endif
 	int n = vt_alloc(0);
 	return (n < 0 ? -1 : dup2(o, n));
 }
@@ -506,6 +532,22 @@ _fcntl(int fd, int cmd, ...)
 	va_end(ap);
 	if (vk(fd, 1) < 0)
 		return (-1);
+#ifdef SOLNIX_NO_VFD
+	/* The kernel owns the table: descriptor flags and F_DUPFD go to it
+	 * (Linux numbering: F_DUPFD_CLOEXEC 1030; FD_CLOEXEC is 1 in both). */
+	switch (cmd) {
+	case F_DUPFD:
+	case F_DUPFD_CLOEXEC:
+		n = (int)kret(ksys(K_fcntl, vk(fd, 1), cmd == F_DUPFD ? 0 : 1030,
+		    arg, 0), EBADF);
+		if (n >= 0)
+			vt[n].k = n;
+		return (n);
+	case F_GETFD:
+	case F_SETFD:
+		return ((int)kret(ksys(K_fcntl, vk(fd, 1), cmd, arg, 0), EBADF));
+	}
+#endif
 	switch (cmd) {
 	case F_DUPFD:
 	case F_DUPFD_CLOEXEC:
@@ -894,7 +936,7 @@ gethostname(char *n, size_t l)
 	return (0);
 }
 
-/* [REAL by construction] there is no chdir, so the cwd is always "/". */
+/* [REAL] the kernel's getcwd (17) and chdir (49). */
 char *
 getcwd(char *buf, size_t sz)
 {
@@ -907,28 +949,20 @@ getcwd(char *buf, size_t sz)
 		errno = ERANGE;
 		return (NULL);
 	}
-	strcpy(buf, "/");
+	if (kret(ksys(K_getcwd, (long)buf, (long)sz, 0, 0), ERANGE) < 0)
+		return (NULL);
 	return (buf);
 }
 int
 chdir(const char *p)
 {
-	if (strcmp(p, "/") == 0)
-		return (0);
-	errno = ENOSYS;
-	return (-1);
+	return ((int)kret(ksys(K_chdir, (long)p, 0, 0, 0), ENOENT));
 }
 
 /* ---- [ENOSYS]: no kernel facility at all ---------------------------------- */
 #define	NOSYS(proto) proto { errno = ENOSYS; return (-1); }
 NOSYS(int _link(const char *a, const char *b))
 NOSYS(int link(const char *a, const char *b))
-NOSYS(int _unlink(const char *a))
-NOSYS(int unlink(const char *a))
-NOSYS(int rmdir(const char *a))
-NOSYS(int _mkdir(const char *a, mode_t m))
-NOSYS(int mkdir(const char *a, mode_t m))
-NOSYS(int _rename(const char *a, const char *b))
 NOSYS(int chmod(const char *a, mode_t m))
 NOSYS(int fchmod(int f, mode_t m))
 NOSYS(int chown(const char *a, uid_t u, gid_t g))
@@ -992,13 +1026,89 @@ poll(void *fds, unsigned long n, int timeout)
 	return ((int)r);
 }
 
-/* [ENOSYS] no getdents in the kernel. */
-void *opendir(const char *p) { (void) p; errno = ENOSYS; return (NULL); }
-void *fdopendir(int f) { (void) f; errno = ENOSYS; return (NULL); }
-void *readdir(void *d) { (void) d; return (NULL); }
-int closedir(void *d) { (void) d; return (0); }
-void rewinddir(void *d) { (void) d; }
-int dirfd(void *d) { (void) d; errno = ENOSYS; return (-1); }
+/*
+ * [REAL] directories: the kernel's getdents64 (61) over an fd from openat
+ * (O_DIRECTORY). The DIR is malloc'd with its own record buffer.
+ */
+#include <dirent.h>
+struct sdir { DIR d; int fd; long n, off; struct dirent ent; char buf[2048]; };
+DIR *
+fdopendir(int fd)
+{
+	struct sdir *sd;
+	struct stat st;
+
+	if (_fstat(fd, &st) < 0)
+		return (NULL);
+	if (!S_ISDIR(st.st_mode)) {
+		errno = ENOTDIR;
+		return (NULL);
+	}
+	if ((sd = malloc(sizeof (*sd))) == NULL)
+		return (NULL);
+	sd->d.dd_fd = fd;
+	sd->fd = fd;
+	sd->n = sd->off = 0;
+	return (&sd->d);
+}
+DIR *
+opendir(const char *p)
+{
+	int fd = _open(p, O_RDONLY | O_DIRECTORY);
+	DIR *d;
+
+	if (fd < 0)
+		return (NULL);
+	if ((d = fdopendir(fd)) == NULL)
+		(void) _close(fd);
+	return (d);
+}
+struct dirent *
+readdir(DIR *d)
+{
+	struct sdir *sd = (struct sdir *)d;
+	unsigned short reclen;
+	int kf;
+
+	if (sd->off >= sd->n) {
+		if ((kf = vk(sd->fd, 0)) < 0)
+			return (NULL);
+		sd->n = kret(ksys(K_getdents64, kf, (long)sd->buf,
+		    sizeof (sd->buf), 0), EBADF);
+		sd->off = 0;
+		if (sd->n <= 0)
+			return (NULL);
+	}
+	/* linux_dirent64: u64 ino, s64 off, u16 reclen, u8 type, name[] */
+	memcpy(&sd->ent.d_ino, sd->buf + sd->off, sizeof (sd->ent.d_ino));
+	memcpy(&reclen, sd->buf + sd->off + 16, sizeof (reclen));
+	strncpy(sd->ent.d_name, sd->buf + sd->off + 19, sizeof (sd->ent.d_name) - 1);
+	sd->ent.d_name[sizeof (sd->ent.d_name) - 1] = 0;
+	sd->off += reclen;
+	return (&sd->ent);
+}
+int
+closedir(DIR *d)
+{
+	struct sdir *sd = (struct sdir *)d;
+	int r = _close(sd->fd);
+
+	free(sd);
+	return (r);
+}
+int dirfd(DIR *d) { return (((struct sdir *)d)->fd); }
+void rewinddir(DIR *d) { (void) _lseek(((struct sdir *)d)->fd, 0, SEEK_SET); ((struct sdir *)d)->n = 0; }
+
+/* [REAL] the namespace calls, all relative to the kernel's cwd. */
+int _mkdir(const char *a, mode_t m) { return ((int)kret(ksys(K_mkdirat, K_AT_FDCWD, (long)a, m, 0), ENOENT)); }
+int mkdir(const char *a, mode_t m) { return (_mkdir(a, m)); }
+int _unlink(const char *a) { return ((int)kret(ksys(K_unlinkat, K_AT_FDCWD, (long)a, 0, 0), ENOENT)); }
+int unlink(const char *a) { return (_unlink(a)); }
+int rmdir(const char *a) { return ((int)kret(ksys(K_unlinkat, K_AT_FDCWD, (long)a, 0x200 /* AT_REMOVEDIR */, 0), ENOENT)); }
+int _rename(const char *a, const char *b) { return ((int)kret(ksys(K_renameat, K_AT_FDCWD, (long)a, K_AT_FDCWD, (long)b), ENOENT)); }
+/* newlib's libc.a is built without HAVE_RENAME (rename = link + unlink, and
+ * there is no link): provide rename itself so stdio's rename is the kernel's. */
+int rename(const char *a, const char *b) { return (_rename(a, b)); }
 
 int tcflush(int f, int q) { (void) f; (void) q; errno = ENOTTY; return (-1); }
 int tcdrain(int f) { (void) f; errno = ENOTTY; return (-1); }
@@ -1010,27 +1120,75 @@ int cfsetispeed(void *t, unsigned s) { (void) t; (void) s; return (0); }
 NOSYS(int mknod(const char *a, mode_t m, dev_t d))
 NOSYS(int mkfifo(const char *a, mode_t m))
 
-/* ---- *at() family: only AT_FDCWD (or an absolute path) is meaningful, because
- * the kernel has no directory fds and no chdir (cwd is always "/"). ------------ */
+/* ---- *at() family: the kernel resolves a dirfd (or AT_FDCWD = the cwd). ---- */
 #define	AT_FDCWD_	(-2)		/* newlib's AT_FDCWD */
 static int
-at_ok(int dfd, const char *p)
+kdirfd(int d)
 {
-	if (dfd == AT_FDCWD_ || (p != NULL && p[0] == '/'))
-		return (1);
-	errno = ENOSYS;
+	return (d == AT_FDCWD_ ? K_AT_FDCWD : vk(d, 0));
+}
+int
+fstatat(int d, const char *p, struct stat *s, int f)
+{
+	struct kstat k;
+
+	(void) f;		/* no symlinks: AT_SYMLINK_NOFOLLOW is moot */
+	if (kret(ksys(K_fstatat, kdirfd(d), (long)p, (long)&k, 0), ENOENT) < 0)
+		return (-1);
+	kstat2(&k, s);
 	return (0);
 }
-int fstatat(int d, const char *p, struct stat *s, int f) { (void) f; return (at_ok(d, p) ? _stat(p, s) : -1); }
-int faccessat(int d, const char *p, int m, int f) { (void) f; return (at_ok(d, p) ? access(p, m) : -1); }
-int openat(int d, const char *p, int fl, ...)
+int
+faccessat(int d, const char *p, int m, int f)
+{
+	struct stat st;
+
+	(void) m;		/* no permission bits to check */
+	return (fstatat(d, p, &st, f));
+}
+int
+openat(int d, const char *p, int fl, ...)
 {
 	va_list ap; int m;
 	va_start(ap, fl); m = va_arg(ap, int); va_end(ap);
-	return (at_ok(d, p) ? _open(p, fl, m) : -1);
+	if (d == AT_FDCWD_ || (p != NULL && p[0] == '/'))
+		return (_open(p, fl, m));
+	{
+		long kf = 0, r;
+
+		if ((fl & O_ACCMODE) == O_WRONLY)
+			kf |= K_O_WRONLY;
+		else if ((fl & O_ACCMODE) == O_RDWR)
+			kf |= K_O_RDWR;
+		if (fl & O_CREAT)
+			kf |= K_O_CREAT;
+		if (fl & O_EXCL)
+			kf |= K_O_EXCL;
+		if (fl & O_TRUNC)
+			kf |= K_O_TRUNC;
+		if (fl & O_DIRECTORY)
+			kf |= K_O_DIRECTORY;
+		if (fl & O_CLOEXEC)
+			kf |= K_O_CLOEXEC;
+		if (fl & O_APPEND)
+			kf |= K_O_APPEND;
+		r = kret(ksys(K_openat, kdirfd(d), (long)p, kf, 0), ENOENT);
+		return (r < 0 ? -1 : vt_bind((int)r, (fl & O_APPEND) != 0));
+	}
+}
+int
+unlinkat(int d, const char *p, int f)
+{
+	return ((int)kret(ksys(K_unlinkat, kdirfd(d), (long)p,
+	    (f & AT_REMOVEDIR) ? 0x200 : 0, 0), ENOENT));
+}
+int
+renameat(int a, const char *p, int b, const char *q)
+{
+	return ((int)kret(ksys(K_renameat, kdirfd(a), (long)p, kdirfd(b),
+	    (long)q), ENOENT));
 }
 int creat(const char *p, mode_t m) { return (_open(p, O_WRONLY | O_CREAT | O_TRUNC, m)); }
-NOSYS(int unlinkat(int d, const char *p, int f))
 NOSYS(int linkat(int a, const char *b, int c, const char *e, int f))
 NOSYS(int symlinkat(const char *a, int b, const char *c))
 NOSYS(int fchmodat(int d, const char *p, mode_t m, int f))

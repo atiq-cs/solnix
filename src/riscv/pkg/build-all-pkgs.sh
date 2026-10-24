@@ -3,7 +3,7 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 OUT="${OUT:-$HOME/scratch/rvpkg/out}"; mkdir -p "$OUT"
-bash "$HERE/build-sysroot.sh"
+GLUE_DEFS="${GLUE_DEFS--DSOLNIX_NO_VFD}" bash "$HERE/build-sysroot.sh"
 "$HERE/solnix-cc" -O2 -Wall -o "$OUT/pkginit" "$HERE/tests/pkginit.c"
 "$HERE/solnix-cc" -O2 -Wall -o "$OUT/hello" "$HERE/tests/hello.c"
 "$HERE/solnix-cc" -O2 -Wall -o "$OUT/sigtest" "$HERE/tests/sigtest.c"
@@ -16,4 +16,5 @@ SOLNIX_GLUE="$OUT/glue-noxlate.o" "$HERE/solnix-cc" -O2 -o "$OUT/sigtest-nc" "$H
 bash "$HERE/build-zlib.sh"
 bash "$HERE/build-sbase.sh"
 for p in ${EXTRA_PKGS:-}; do bash "$HERE/build-$p.sh"; done
+[ -z "${EXTRA_PKGS:-}" ] || bash "$HERE/build-vfd.sh"	# vfd.checks negative-control builds
 echo ALL_PKGS_DONE

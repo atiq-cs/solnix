@@ -7,7 +7,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 RUNS="${1:-3}"; W="${W:-$HOME/scratch/rvpkg}"; T="$HERE/tests"
 cd "$W"; mkdir -p logs/all
 for r in $(seq 1 "$RUNS"); do
-	for s in libc zlib sbase dash ncurses less; do
+	for s in libc zlib sbase dash ncurses less ${EXTRA_SUITES:-vfd fs}; do
 		st="$W/stage-all-$s-$r"; mkdir -p "$st"
 		bash "$HERE/stage-$s.sh" "$st" >/dev/null
 		in=""; [ -f "$T/$s.stdin" ] && in="$T/$s.stdin"

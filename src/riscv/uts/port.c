@@ -67,6 +67,7 @@ typedef struct port_assoc {
 
 typedef struct port {
 	int		p_used;
+	int		p_refs;		/* fds naming this port (fork shares them) */
 	void		*p_owner;	/* proc_t *: only the owner may use it */
 	port_assoc_t	p_assoc[PORT_NASSOC];
 	/*
@@ -93,6 +94,7 @@ port_alloc(void *owner)
 		if (porttab[i].p_used)
 			continue;
 		porttab[i].p_used = 1;
+		porttab[i].p_refs = 1;
 		porttab[i].p_owner = owner;
 		porttab[i].p_nuser = 0;
 		for (j = 0; j < PORT_NASSOC; j++)
@@ -102,10 +104,21 @@ port_alloc(void *owner)
 	return (-1);
 }
 
+/* A forked child's copy of the port fd is a second reference (illumos: the port
+ * is destroyed on last close), so its exit must not free the parent's port. */
+void
+port_hold(int port)
+{
+	if (port >= 0 && port < PORT_NPORT && porttab[port].p_used)
+		porttab[port].p_refs++;
+}
+
 void
 port_free(int port)
 {
 	if (port < 0 || port >= PORT_NPORT)
+		return;
+	if (--porttab[port].p_refs > 0)
 		return;
 	porttab[port].p_used = 0;
 	porttab[port].p_owner = 0;

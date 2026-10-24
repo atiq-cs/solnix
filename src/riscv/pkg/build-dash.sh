@@ -12,7 +12,6 @@ CC="$HERE/solnix-cc" CFLAGS="-O2 -D_GNU_SOURCE" ./configure --host=riscv64-unkno
 for h in HAVE_BSEARCH HAVE_STRTOD HAVE_KILLPG HAVE_GETPWNAM; do grep -q "#define $h 1" config.h; done
 make -j8
 mkdir -p "$OUT"; cp src/dash "$OUT/dash"
-# negative control: the same dash objects linked against a glue WITHOUT the user fd table
-"$HERE/solnix-cc" -O2 -DSOLNIX_NO_VFD -c "$HERE/solnix-libc/glue.c" -o "$OUT/glue-novfd.o"
-( cd src && SOLNIX_GLUE="$OUT/glue-novfd.o" "$HERE/solnix-cc" -O2 -o "$OUT/dash-novfd" *.o bltin/*.o )
+# negative control (rvsh): build-vfd.sh relinks these objects against the glue WITH the
+# userland fd table (dash-vfd, sbase-box-vfd) for vfd.checks.
 echo DASH_DONE

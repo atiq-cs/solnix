@@ -1,0 +1,13 @@
+# NEGATIVE CONTROL (stage-vfd.sh): dash + sbase-box linked against the glue WITH rvpkg's userland
+# fd table (the STUB for kernel defects 1-2). The same command lines as dash.checks' dash-exec-*,
+# which pass with the -DSOLNIX_NO_VFD glue every package now uses. With the STUB the exec'd program
+# still sees the console (the glue hides kernel slots 0-2 and closes its fds before execve), so
+# the xfail-* must FAIL: the kernel's fd table, not the glue, carries the redirections now.
+# Order matters: xfail-vfd-exec-stdin reads the CONSOLE (vfd.stdin feeds it one line).
+# the builtin pipeline works with the STUB too (one process, the glue's table): must PASS
+vfd-pipe-builtin|0|/bin/dash|dash|-c|echo piped %7C { read x; echo "got:$x"; }
+@vfd-pipe-builtin|^got:piped$
+xfail-vfd-exec-subst|0|/bin/dash|dash|-c|n=$(/bin/sbase-box echo inner); echo "n=[$n]"
+@xfail-vfd-exec-subst|^n=\[inner\]$
+xfail-vfd-exec-stdin|0|/bin/dash|dash|-c|/bin/sbase-box head -n 1 < /etc/words
+@xfail-vfd-exec-stdin|^cherry$

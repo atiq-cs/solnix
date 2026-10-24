@@ -25,7 +25,10 @@ cp --no-preserve=mode "$NEWLIB/lib/libc.a" "$NEWLIB/lib/libm.a" "$SR/lib/"
 cp "$HERE/solnix-libc/solnix-pkg.ld" "$SR/lib/solnix.ld"
 export SOLNIX_SYSROOT="$SR"
 "$CC" -c "$HERE/solnix-libc/crt0.S" -o "$SR/lib/crt0.o"
-"$CC" -O2 -Wall -c "$HERE/solnix-libc/glue.c" -o "$SR/lib/glue.o"
+# GLUE_DEFS=-DSOLNIX_NO_VFD (rvsh): no userland fd table -- the kernel's fd table is the
+# only one (needs the rvsh kernel: pipe refs released, fd 0-2 through the table, fds kept
+# across exec). Empty = rvpkg's userland-fd-table STUB, for the rvpkg kernel.
+"$CC" -O2 -Wall ${GLUE_DEFS:-} -c "$HERE/solnix-libc/glue.c" -o "$SR/lib/glue.o"
 P="$NEWLIB_SRC/newlib/libc/posix"
 for f in regcomp regexec regerror regfree collate collcmp fnmatch; do
 	"$CC" -O2 -w -I"$P" -D_GNU_SOURCE -c "$P/$f.c" -o "$SR/obj/$f.o"

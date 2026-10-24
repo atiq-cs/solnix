@@ -112,6 +112,8 @@ extern void usermode_entry(struct regs *tf, unsigned long kstacktop);
 
 /* rootfs.c: resolve a path to file bytes (regular files + exec images). */
 extern int vfs_lookup(const char *path, const void **datap, unsigned long *lenp);
+struct proc;
+static int ns_execpath(struct proc *p, const char *upath, char *out);
 
 /* blkfs.c: on-disk writable SNFS over the block cache (R-P12). */
 extern int snfs_open(const char *name, int create, unsigned long *lenp);
@@ -464,7 +466,12 @@ typedef struct proc {
 		int		fd_fb;		/* 1 = the /dev/fb scanout node */
 		int		fd_sock;	/* AF_UNIX socket index, else -1 */
 		int		fd_port;	/* event-port index, else -1 */
+		int		fd_cloexec;	/* FD_CLOEXEC: exec releases the slot */
+		int		fd_dir;		/* 1 = a directory (getdents) */
+		int		fd_append;	/* O_APPEND: every write goes at EOF */
+		char		fd_path[128];	/* the name opened (dir fds, st_ino) */
 	} p_fd[NOFILE];
+	char		p_cwd[128];	/* rvsh: working directory, canonical */
 } proc_t;
 
 #define	NPROC	16
@@ -511,7 +518,13 @@ proc_alloc(void)
 				p->p_fd[k].fd_sock = -1;
 				p->p_fd[k].fd_port = -1;
 				p->p_fd[k].fd_fb = 0;
+				p->p_fd[k].fd_cloexec = 0;
+				p->p_fd[k].fd_dir = 0;
+				p->p_fd[k].fd_append = 0;
+				p->p_fd[k].fd_path[0] = 0;
 			}
+			p->p_cwd[0] = '/';
+			p->p_cwd[1] = 0;
 			return (p);
 		}
 	}
@@ -615,9 +628,9 @@ proc_open(const char *path)
 }
 
 /*
- * proc_fread — read from an open regular-file fd (>= 3) into the user buffer
- * `ubuf`. Returns bytes read (0 at EOF), or -1 for a bad/closed fd. Console fds
- * (0/1/2) are handled by the syscall layer (uart), not here.
+ * proc_fread — read from an open fd (any slot holding an object) into the user
+ * buffer `ubuf`. Returns bytes read (0 at EOF), or -1 for a bad/closed fd. An
+ * empty fd 0/1/2 is the console, handled by the syscall layer (uart).
  */
 long
 proc_fread(int fd, char *ubuf, unsigned long n)
@@ -627,7 +640,7 @@ proc_fread(int fd, char *ubuf, unsigned long n)
 	const unsigned char *src;
 	unsigned long len;
 
-	if (p == 0 || fd < 3 || fd >= NOFILE || !p->p_fd[fd].fd_used)
+	if (p == 0 || fd < 0 || fd >= NOFILE || !p->p_fd[fd].fd_used)
 		return (-1);
 	/* R-P12: pipe read end. */
 	if (p->p_fd[fd].fd_pipe >= 0)
@@ -673,17 +686,55 @@ proc_fread(int fd, char *ubuf, unsigned long n)
 	return ((long)n);
 }
 
-/* proc_close — close a regular-file fd. Console fds 0/1/2 always "succeed". */
-long
-proc_close(int fd)
+/*
+ * proc_fd_open -- 1 if slot `fd` holds an object. For fd 0..2 that means dup2
+ * put a pipe/file/socket there; an empty 0..2 is the console (syscall.c).
+ */
+int
+proc_fd_open(int fd)
 {
 	proc_t *p = curproc;
 
-	if (fd >= 0 && fd <= 2)
-		return (0);
-	if (p == 0 || fd < 3 || fd >= NOFILE || !p->p_fd[fd].fd_used)
-		return (-1);
+	return (p != 0 && fd >= 0 && fd < NOFILE && p->p_fd[fd].fd_used);
+}
+
+/*
+ * fd_hold -- take the reference a NEW copy of slot `fd` owns (fork, dup2). The
+ * mirror of fd_release: every object kind that fd_release drops is held here,
+ * so a copied descriptor can never release a reference it did not take.
+ */
+static void
+fd_hold(proc_t *p, int fd)
+{
+	if (!p->p_fd[fd].fd_used)
+		return;
+	if (p->p_fd[fd].fd_pipe >= 0)
+		pipe_ref(p->p_fd[fd].fd_pipe, p->p_fd[fd].fd_pipe_w);
+	if (p->p_fd[fd].fd_sock >= 0)
+		unsock_ref(p->p_fd[fd].fd_sock);
+	if (p->p_fd[fd].fd_port >= 0)
+		port_hold(p->p_fd[fd].fd_port);
+	if (p->p_fd[fd].fd_fb) {
+		extern long fb_open(void);
+		(void) fb_open();
+	}
+}
+
+/*
+ * fd_release -- drop the reference slot `fd` holds and empty the slot. Every
+ * path that empties a slot comes here (close, dup2 onto an open fd, exit,
+ * exec), any slot 0..NOFILE-1: a pipe end that sat in fd 1 is released exactly
+ * like one in fd 7, so its reader sees EOF when the last writer goes.
+ */
+static void
+fd_release(proc_t *p, int fd)
+{
+	if (!p->p_fd[fd].fd_used)
+		return;
 	p->p_fd[fd].fd_used = 0;
+	p->p_fd[fd].fd_cloexec = 0;
+	p->p_fd[fd].fd_dir = 0;
+	p->p_fd[fd].fd_append = 0;
 	p->p_fd[fd].fd_wnode = 0;	/* R-P11: clear so a reused slot is clean */
 	/* R-P12: releasing a pipe end drops one reference on the pipe. */
 	if (p->p_fd[fd].fd_pipe >= 0)
@@ -718,7 +769,23 @@ proc_close(int fd)
 	p->p_fd[fd].fd_snfs = -1;
 	p->p_fd[fd].fd_pipe = -1;
 	p->p_fd[fd].fd_sock = -1;
-		p->p_fd[fd].fd_port = -1;
+	p->p_fd[fd].fd_port = -1;
+}
+
+/*
+ * proc_close -- close(2). A console fd (0/1/2 with nothing dup2'd into it) has
+ * no object and always "succeeds"; anything else, in any slot, is released.
+ */
+long
+proc_close(int fd)
+{
+	proc_t *p = curproc;
+
+	if (p == 0 || fd < 0 || fd >= NOFILE)
+		return (-1);
+	if (!p->p_fd[fd].fd_used)
+		return (fd <= 2 ? 0 : -1);
+	fd_release(p, fd);
 	return (0);
 }
 
@@ -805,14 +872,11 @@ load_elf_into(proc_t *p, const char *path, const void *img, unsigned long len,
 	p->p_uframe.r_a0 = (unsigned long)snap->argc;	/* argc */
 	p->p_uframe.r_a1 = sp + 8;			/* argv (past argc) */
 
-	/* exec starts with a clean fd table (only console fds 0/1/2 implicit). */
+	/* POSIX: open fds survive exec, except those marked FD_CLOEXEC. A slot
+	 * that is released drops its reference (a pipe end must not leak). */
 	for (i = 0; i < NOFILE; i++) {
-		p->p_fd[i].fd_used = 0;
-		p->p_fd[i].fd_snfs = -1;
-		p->p_fd[i].fd_pipe = -1;
-		p->p_fd[i].fd_sock = -1;
-		p->p_fd[i].fd_port = -1;
-		p->p_fd[i].fd_fb = 0;
+		if (p->p_fd[i].fd_cloexec)
+			fd_release(p, i);
 	}
 	/* R-P11: exec resets caught signals to default (POSIX); ignored stay
 	 * ignored. No handler survives an image replacement. */
@@ -948,6 +1012,12 @@ proc_fork(struct regs *tf)
 	if (child == 0)
 		return (-1);
 	child->p_ppid = parent->p_pid;
+	{
+		int c;
+
+		for (c = 0; c < (int)sizeof (child->p_cwd); c++)
+			child->p_cwd[c] = parent->p_cwd[c];
+	}
 	child->p_uid = parent->p_uid;	/* R-P11: inherit credentials */
 	child->p_gid = parent->p_gid;
 	{
@@ -966,14 +1036,9 @@ proc_fork(struct regs *tf)
 	 * the refcount on any inherited pipe end so close accounting is right. */
 	for (i = 0; i < NOFILE; i++) {
 		child->p_fd[i] = parent->p_fd[i];
-		if (parent->p_fd[i].fd_used && parent->p_fd[i].fd_pipe >= 0)
-			pipe_ref(parent->p_fd[i].fd_pipe,
-			    parent->p_fd[i].fd_pipe_w);
-		/* Same for an inherited AF_UNIX endpoint: the child's copy of the
-		 * descriptor is a second reference, so the socket must outlive
-		 * whichever process closes first. */
-		if (parent->p_fd[i].fd_used && parent->p_fd[i].fd_sock >= 0)
-			unsock_ref(parent->p_fd[i].fd_sock);
+		/* Pipe, AF_UNIX endpoint, port, fb: the child's copy is a second
+		 * reference, so the object outlives whichever process closes first. */
+		fd_hold(child, i);
 	}
 
 	/* Clone the parent's user frame; child returns 0 from fork. */
@@ -1085,18 +1150,17 @@ proc_execve(const char *path, char *const uargv[], char *const uenvp[])
 	char kpath[128];
 	unsigned long i;
 
-	if (path == 0)
+	if (path == 0 || curproc == 0)
 		return (-1);
-	/* Fault-safe copy of the path from user space. */
-	for (i = 0; i < sizeof (kpath) - 1; i++) {
-		if (copyin(path + i, &kpath[i], 1) != 0)
-			return (-14);		/* EFAULT */
-		if (kpath[i] == 0)
-			break;
+	/* Fault-safe copy of the path, made absolute against the cwd (rvsh). */
+	if (ns_execpath(curproc, path, kpath) != 0)
+		return (-14);			/* EFAULT / too long */
+	if (!vfs_lookup(kpath, &img, &len)) {
+		/* A ramfs copy of an image is not executable: no exec from the
+		 * writable fs (ramfs files are data). */
+		return (-1);
 	}
-	kpath[i] = 0;
-	if (!vfs_lookup(kpath, &img, &len))
-		return (-1);
+	(void) i;
 
 	/* Snapshot argv/envp from the CALLER's AS before it is torn down. If
 	 * uargv is NULL, fall back to argv[0]=path so the new image still sees
@@ -1147,6 +1211,12 @@ proc_exit(int status)
 	__asm__ __volatile__("csrw sscratch, zero" ::: "memory");
 
 	if (p != 0) {
+		int fd;
+
+		/* Release every fd (POSIX _exit): a pipe end this process held,
+		 * in any slot, must not keep its reader from seeing EOF. */
+		for (fd = 0; fd < NOFILE; fd++)
+			fd_release(p, fd);
 		p->p_status = status;
 		p->p_state = PS_ZOMBIE;
 	}
@@ -1461,12 +1531,13 @@ proc_sigreturn(struct regs *tf)
  * the cursor and grows the buffer, lseek() moves the cursor, read() reads back.
  * This gives real write-back + seek semantics (the gate) without a full on-disk
  * FS; a block-cache-backed vioblk FS is the R-P12 upgrade.
- * NOTE (R-P11 ceiling): in-memory, fixed file count, no dirs/unlink/persistence;
+ * NOTE (R-P11 ceiling): in-memory, fixed file count, no persistence (rvsh added
+ * dirs, unlink and rename in the namespace layer below);
  * a vnode + block cache over vioblk with write-back is R-P12.
  * ===========================================================================
  */
-#define	NRAMFILE	8
-#define	RAMFILE_MAX	(64UL * 1024)	/* 64 KiB per file cap */
+#define	NRAMFILE	64		/* rvsh: a session's scratch + edits */
+#define	RAMFILE_MAX	(256UL * 1024)	/* 256 KiB per file cap (kmem at create) */
 #define	O_CREAT		0x40		/* matches libc O_CREAT */
 #define	O_WRONLY	0x1
 #define	O_RDWR		0x2
@@ -1507,7 +1578,9 @@ ramfs_create(const char *path)
 	for (i = 0; i < NRAMFILE; i++) {
 		if (!ramfiles[i].rf_used) {
 			struct ramfile *r = &ramfiles[i];
-			r->rf_data = kmem_alloc(RAMFILE_MAX);
+			/* an unlinked slot keeps its buffer for the next create */
+			if (r->rf_data == 0)
+				r->rf_data = kmem_alloc(RAMFILE_MAX);
 			if (r->rf_data == 0)
 				return (0);
 			r->rf_cap = RAMFILE_MAX;
@@ -1523,29 +1596,985 @@ ramfs_create(const char *path)
 }
 
 /*
+ * ===========================================================================
+ * rvsh: the directory namespace -- getdents64, mkdirat, unlinkat, renameat,
+ * newfstatat/fstat, chdir/getcwd, and openat relative to a dirfd. Linux riscv
+ * syscall numbers, errno values and struct stat, like the rest of this table.
+ *
+ * There is no vnode tree to walk. A name exists if one of the three flat tables
+ * holds it: the root fs (rootfs_path: fixed top-level dirs, ustar files and the
+ * embedded images), the ramfs files, or nsdirs (directories made by mkdir). Any
+ * proper prefix of an existing name is a directory too, which is how a ustar
+ * root's /usr/share/terminfo/v/vt100 makes /usr and /usr/share real. getdents
+ * scans all three for the direct children of a directory. Small tables, linear
+ * scans: the namespace is a few hundred names at most.
+ *
+ * NOTE: /data (the on-disk SNFS) is listed as a directory but its files are
+ * reached only by name (open/read/write), not by getdents/unlink/rename.
+ * ===========================================================================
+ */
+#define	NS_PATHMAX	128
+#define	NNSDIR		64
+#define	NS_ENOENT	2
+#define	NS_EBADF	9
+#define	NS_EFAULT	14
+#define	NS_EEXIST	17
+#define	NS_EXDEV	18
+#define	NS_ENOTDIR	20
+#define	NS_EISDIR	21
+#define	NS_EINVAL	22
+#define	NS_ENOSPC	28
+#define	NS_EROFS	30
+#define	NS_ENAMETOOLONG	36
+#define	NS_ENOTEMPTY	39
+#define	AT_FDCWD_K	(-100)
+#define	AT_REMOVEDIR_K	0x200
+
+static char nsdirs[NNSDIR][NS_PATHMAX];	/* mkdir'd directories ("" = free) */
+
+extern int rootfs_path(int i, const char **pp, int *dirp);
+extern char *rootfs_wpath(int i, int *capp);
+
+static int
+ns_len(const char *s)
+{
+	int n = 0;
+
+	while (s[n] != 0)
+		n++;
+	return (n);
+}
+
+/* 1 if `name` is `dir` itself or lies below it ("/" contains everything). */
+static int
+ns_under(const char *name, const char *dir, int dl)
+{
+	int i;
+
+	if (dl == 1)
+		return (name[0] == '/');
+	for (i = 0; i < dl; i++)
+		if (name[i] != dir[i])
+			return (0);
+	return (name[dl] == 0 || name[dl] == '/');
+}
+
+/*
+ * Visit every name in the namespace: fn(arg, path, isdir, kind) where kind is
+ * 1 = ustar file (index ix), 2 = immutable, 3 = ramfs file, 4 = nsdir. fn
+ * returning nonzero stops the walk and is returned.
+ */
+typedef int (*ns_fn_t)(void *, const char *, int, int, int);
+
+static int
+ns_walk(ns_fn_t fn, void *arg)
+{
+	int i, k, d, r;
+	const char *pp;
+
+	for (i = 0; (k = rootfs_path(i, &pp, &d)) >= 0; i++)
+		if (k > 0 && (r = fn(arg, pp, d, k, i)) != 0)
+			return (r);
+	for (i = 0; i < NRAMFILE; i++)
+		if (ramfiles[i].rf_used &&
+		    (r = fn(arg, ramfiles[i].rf_path, 0, 3, i)) != 0)
+			return (r);
+	for (i = 0; i < NNSDIR; i++)
+		if (nsdirs[i][0] != 0 && (r = fn(arg, nsdirs[i], 1, 4, i)) != 0)
+			return (r);
+	return (0);
+}
+
+struct ns_q { const char *path; int len; int isdir; int found; };
+
+static int
+ns_stat_cb(void *a, const char *name, int isdir, int kind, int ix)
+{
+	struct ns_q *q = a;
+
+	(void) kind; (void) ix;
+	if (q->len == 1) {		/* "/" */
+		q->found = 1;
+		q->isdir = 1;
+		return (1);
+	}
+	if (!ns_under(name, q->path, q->len))
+		return (0);
+	q->found = 1;
+	if (name[q->len] == '/' || isdir) {
+		q->isdir = 1;		/* a prefix of a name, or a dir itself */
+		return (1);
+	}
+	return (0);			/* a file: keep looking for a dir */
+}
+
+/* Does `path` exist? Returns 0 = no, 1 = file, 2 = directory. */
+static int
+ns_kind(const char *path)
+{
+	struct ns_q q;
+
+	q.path = path;
+	q.len = ns_len(path);
+	q.isdir = 0;
+	q.found = 0;
+	(void) ns_walk(ns_stat_cb, &q);
+	if (!q.found)
+		return (0);
+	return (q.isdir ? 2 : 1);
+}
+
+/*
+ * Make `upath` (a user pointer) absolute and canonical in `out` (NS_PATHMAX):
+ * relative to dirfd (AT_FDCWD = the cwd), "." and ".." folded, no trailing or
+ * doubled '/'. Returns 0 or a negative errno.
+ */
+static int
+ns_abspath(proc_t *p, int dirfd, const char *upath, char *out)
+{
+	char in[NS_PATHMAX];
+	char tmp[2 * NS_PATHMAX];
+	const char *base;
+	int i, n, o;
+
+	for (i = 0; i < NS_PATHMAX - 1; i++) {
+		if (copyin(upath + i, &in[i], 1) != 0)
+			return (-NS_EFAULT);
+		if (in[i] == 0)
+			break;
+	}
+	if (i == NS_PATHMAX - 1)
+		return (-NS_ENAMETOOLONG);
+	in[i] = 0;
+	if (in[0] == 0)
+		return (-NS_ENOENT);
+	n = 0;
+	if (in[0] != '/') {
+		if (dirfd == AT_FDCWD_K)
+			base = p->p_cwd;
+		else if (dirfd >= 0 && dirfd < NOFILE &&
+		    p->p_fd[dirfd].fd_used && p->p_fd[dirfd].fd_dir)
+			base = p->p_fd[dirfd].fd_path;
+		else
+			return (dirfd >= 0 && dirfd < NOFILE &&
+			    p->p_fd[dirfd].fd_used ? -NS_ENOTDIR : -NS_EBADF);
+		while (*base != 0)
+			tmp[n++] = *base++;
+		tmp[n++] = '/';
+	}
+	for (i = 0; in[i] != 0; i++)
+		tmp[n++] = in[i];
+	tmp[n] = 0;
+
+	/* Fold the components into out. */
+	o = 0;
+	i = 0;
+	while (tmp[i] != 0) {
+		int s, l;
+
+		while (tmp[i] == '/')
+			i++;
+		if (tmp[i] == 0)
+			break;
+		s = i;
+		while (tmp[i] != 0 && tmp[i] != '/')
+			i++;
+		l = i - s;
+		if (l == 1 && tmp[s] == '.')
+			continue;
+		if (l == 2 && tmp[s] == '.' && tmp[s + 1] == '.') {
+			while (o > 0 && out[o - 1] != '/')
+				o--;
+			if (o > 0)
+				o--;
+			continue;
+		}
+		if (o + 1 + l >= NS_PATHMAX)
+			return (-NS_ENAMETOOLONG);
+		out[o++] = '/';
+		while (s < i)
+			out[o++] = tmp[s++];
+	}
+	if (o == 0)
+		out[o++] = '/';
+	out[o] = 0;
+	return (0);
+}
+
+/* exec's path resolution: ns_abspath against the cwd (out is NS_PATHMAX). */
+static int
+ns_execpath(struct proc *p, const char *upath, char *out)
+{
+	return (ns_abspath((proc_t *)p, AT_FDCWD_K, upath, out));
+}
+
+/* FNV-1a of the path: a stable inode number (find/du/ls -i compare them). */
+static unsigned long
+ns_ino(const char *path)
+{
+	unsigned long h = 1469598103934665603UL;
+
+	while (*path != 0)
+		h = (h ^ (unsigned char)*path++) * 1099511628211UL;
+	return (h == 0 ? 1 : h);
+}
+
+/* Linux riscv64 struct stat (asm-generic/stat.h), 128 bytes. */
+struct kstat_k {
+	unsigned long	st_dev;
+	unsigned long	st_ino;
+	unsigned int	st_mode;
+	unsigned int	st_nlink;
+	unsigned int	st_uid;
+	unsigned int	st_gid;
+	unsigned long	st_rdev;
+	unsigned long	__pad1;
+	long		st_size;
+	int		st_blksize;
+	int		__pad2;
+	long		st_blocks;
+	long		st_atime_k, st_atime_nsec;
+	long		st_mtime_k, st_mtime_nsec;
+	long		st_ctime_k, st_ctime_nsec;
+	unsigned int	__unused4, __unused5;
+};
+
+static long
+ns_statout(const char *path, int kind, long size, unsigned int fmt,
+    unsigned long ustat)
+{
+	struct kstat_k st;
+	unsigned char *b = (unsigned char *)&st;
+	int i;
+
+	for (i = 0; i < (int)sizeof (st); i++)
+		b[i] = 0;
+	st.st_dev = 1;
+	st.st_ino = ns_ino(path);
+	if (fmt == 0)
+		fmt = (kind == 2) ? 0040000 : 0100000;	/* S_IFDIR : S_IFREG */
+	st.st_mode = fmt | ((fmt == 0040000 || fmt == 0100000) ? 0755 : 0620);
+	st.st_nlink = (kind == 2) ? 2 : 1;
+	st.st_size = (kind == 2) ? 0 : size;
+	st.st_blksize = 512;
+	st.st_blocks = (st.st_size + 511) / 512;
+	if (copyout(&st, (void *)ustat, sizeof (st)) != 0)
+		return (-NS_EFAULT);
+	return (0);
+}
+
+/* Size of the file at `path`, wherever it lives. */
+static long
+ns_fsize(const char *path)
+{
+	const void *d;
+	unsigned long l;
+	struct ramfile *r = ramfs_find(path);
+
+	if (r != 0)
+		return ((long)r->rf_len);
+	if (vfs_lookup(path, &d, &l))
+		return ((long)l);
+	return (0);
+}
+
+/* newfstatat(dirfd, path, statbuf, flags) */
+long
+proc_fstatat(int dirfd, const char *upath, unsigned long ustat, int flags)
+{
+	proc_t *p = curproc;
+	char path[NS_PATHMAX];
+	int r, kind;
+
+	(void) flags;			/* no symlinks: NOFOLLOW is moot */
+	if (p == 0)
+		return (-NS_EINVAL);
+	if ((r = ns_abspath(p, dirfd, upath, path)) != 0)
+		return (r);
+	/* /data/<name>: an SNFS file is reachable by name only. */
+	if (path[0] == '/' && ns_under(path, "/data", 5) && path[5] == '/') {
+		unsigned long len;
+		int slot = snfs_open(path + 6, 0, &len);
+
+		if (slot < 0)
+			return (-NS_ENOENT);
+		return (ns_statout(path, 1, (long)len, 0, ustat));
+	}
+	if (str_eq_uproc(path, "/dev/fb"))
+		return (ns_statout(path, 1, 0, 0020000, ustat));
+	kind = ns_kind(path);
+	if (kind == 0)
+		return (-NS_ENOENT);
+	return (ns_statout(path, kind, kind == 1 ? ns_fsize(path) : 0, 0,
+	    ustat));
+}
+
+/* fstat(fd, statbuf) */
+long
+proc_fstat(int fd, unsigned long ustat)
+{
+	proc_t *p = curproc;
+	struct ramfile *r;
+
+	if (p == 0 || fd < 0 || fd >= NOFILE)
+		return (-NS_EBADF);
+	if (!p->p_fd[fd].fd_used) {
+		if (fd <= 2)		/* the console */
+			return (ns_statout("/dev/console", 1, 0, 0020000, ustat));
+		return (-NS_EBADF);
+	}
+	if (p->p_fd[fd].fd_pipe >= 0 || p->p_fd[fd].fd_sock >= 0 ||
+	    p->p_fd[fd].fd_port >= 0)
+		return (ns_statout("", 1, 0, p->p_fd[fd].fd_sock >= 0 ?
+		    0140000 : 0010000, ustat));	/* S_IFSOCK : S_IFIFO */
+	if (p->p_fd[fd].fd_fb)
+		return (ns_statout("/dev/fb", 1, 0, 0020000, ustat));
+	if (p->p_fd[fd].fd_dir)
+		return (ns_statout(p->p_fd[fd].fd_path, 2, 0, 0, ustat));
+	r = (struct ramfile *)p->p_fd[fd].fd_wnode;
+	if (p->p_fd[fd].fd_snfs >= 0)
+		return (ns_statout(p->p_fd[fd].fd_path, 1,
+		    (long)snfs_len(p->p_fd[fd].fd_snfs), 0, ustat));
+	return (ns_statout(p->p_fd[fd].fd_path, 1, r != 0 ? (long)r->rf_len :
+	    (long)p->p_fd[fd].fd_len, 0, ustat));
+}
+
+/* Open directory `path` (already canonical) as an fd for getdents. */
+static long
+ns_opendir(proc_t *p, const char *path)
+{
+	int fd, i;
+
+	for (fd = 3; fd < NOFILE; fd++) {
+		if (p->p_fd[fd].fd_used)
+			continue;
+		p->p_fd[fd].fd_used = 1;
+		p->p_fd[fd].fd_dir = 1;
+		p->p_fd[fd].fd_pos = 0;
+		p->p_fd[fd].fd_len = 0;
+		p->p_fd[fd].fd_data = 0;
+		p->p_fd[fd].fd_wnode = 0;
+		p->p_fd[fd].fd_snfs = -1;
+		p->p_fd[fd].fd_pipe = -1;
+		p->p_fd[fd].fd_sock = -1;
+		p->p_fd[fd].fd_port = -1;
+		p->p_fd[fd].fd_fb = 0;
+		p->p_fd[fd].fd_cloexec = 0;
+		for (i = 0; path[i] != 0; i++)
+			p->p_fd[fd].fd_path[i] = path[i];
+		p->p_fd[fd].fd_path[i] = 0;
+		return (fd);
+	}
+	return (-24 /* EMFILE */);
+}
+
+/* A read-only fd over image bytes (a ustar or embedded root file). */
+static long
+ns_openimg(proc_t *p, const void *data, unsigned long len)
+{
+	int fd;
+
+	for (fd = 3; fd < NOFILE; fd++) {
+		if (p->p_fd[fd].fd_used)
+			continue;
+		p->p_fd[fd].fd_used = 1;
+		p->p_fd[fd].fd_data = (const unsigned char *)data;
+		p->p_fd[fd].fd_len = len;
+		p->p_fd[fd].fd_pos = 0;
+		p->p_fd[fd].fd_wnode = 0;
+		p->p_fd[fd].fd_snfs = -1;
+		p->p_fd[fd].fd_pipe = -1;
+		p->p_fd[fd].fd_sock = -1;
+		p->p_fd[fd].fd_port = -1;
+		p->p_fd[fd].fd_fb = 0;
+		p->p_fd[fd].fd_dir = 0;
+		p->p_fd[fd].fd_cloexec = 0;
+		return (fd);
+	}
+	return (-24 /* EMFILE */);
+}
+
+struct ns_find { const char *path; int kind; int ix; };
+
+static int
+ns_find_cb(void *a, const char *name, int isdir, int kind, int ix)
+{
+	struct ns_find *f = a;
+
+	(void) isdir;
+	if (!str_eq_uproc(name, f->path))
+		return (0);
+	f->kind = kind;
+	f->ix = ix;
+	return (1);
+}
+
+/* The ramfs copy of a ustar file replaces it: drop the ustar name so the
+ * namespace names the file once (ls, rm, mv see one entry). */
+static void
+ns_hide(const char *path)
+{
+	struct ns_find f;
+	int cap;
+	char *w;
+
+	f.path = path;
+	f.kind = 0;
+	if (ns_walk(ns_find_cb, &f) && f.kind == 1 &&
+	    (w = rootfs_wpath(f.ix, &cap)) != 0)
+		w[0] = 0;
+}
+
+/* Record `path` as the name behind a file fd (fstat's st_ino). */
+static void
+ns_setpath(proc_t *p, long fd, const char *path)
+{
+	int i;
+
+	if (fd < 0 || fd >= NOFILE)
+		return;
+	for (i = 0; path[i] != 0 && i < NS_PATHMAX - 1; i++)
+		p->p_fd[fd].fd_path[i] = path[i];
+	p->p_fd[fd].fd_path[i] = 0;
+}
+
+/* Extract the child component of `name` under dir (length; 0 if none). */
+static int
+ns_comp(const char *name, const char *dir, int dl, const char **cp, int *isdir,
+    int nameisdir)
+{
+	const char *c;
+	int l;
+
+	if (!ns_under(name, dir, dl))
+		return (0);
+	c = name + (dl == 1 ? 0 : dl);
+	if (*c != '/')
+		return (0);		/* the dir itself */
+	c++;
+	for (l = 0; c[l] != 0 && c[l] != '/'; l++)
+		;
+	if (l == 0)
+		return (0);
+	*cp = c;
+	*isdir = (c[l] == '/') || nameisdir;
+	return (l);
+}
+
+/* A name's stable slot id: removing a name never renumbers the others, so a
+ * directory cursor survives `rm -r` unlinking entries while it lists them. */
+static long
+ns_id(int kind, int ix)
+{
+	return (kind <= 2 ? ix : (kind == 3 ? 100000L : 200000L) + ix);
+}
+
+struct ns_first { const char *dir; int dl; const char *cand; int cl;
+	long stop; int found; };
+
+/* Is child (cand, cl) produced by a name at a walk position before `stop`? */
+static int
+ns_first_cb(void *a, const char *name, int isdir, int kind, int ix)
+{
+	struct ns_first *f = a;
+	const char *c;
+	int l, d, i;
+
+	if (ns_id(kind, ix) >= f->stop)
+		return (1);
+	l = ns_comp(name, f->dir, f->dl, &c, &d, isdir);
+	if (l != f->cl)
+		return (0);
+	for (i = 0; i < l; i++)
+		if (c[i] != f->cand[i])
+			return (0);
+	f->found = 1;
+	return (1);
+}
+
+/*
+ * getdents64 state. The directory cursor (fd_pos) is 0 = ".", 1 = "..", else
+ * 2 + the slot id of the next name to examine; a child is emitted at the FIRST
+ * name that produces it (a dir named by many deeper paths appears once). A
+ * listing costs O(names^2) string compares: fine for a few hundred names.
+ */
+struct ns_gd { proc_t *p; int fd; const char *dir; int dl; long start;
+	unsigned long ubuf, n, off; int err; };
+
+static int
+ns_emit(struct ns_gd *g, const char *nm, int nl, int isdir, long next)
+{
+	unsigned char rec[24 + NS_PATHMAX];
+	char full[NS_PATHMAX];
+	unsigned long ino;
+	int reclen, i, k = 0;
+	const char *dp = g->dir;
+
+	reclen = (19 + nl + 1 + 7) & ~7;
+	if (g->off + (unsigned long)reclen > g->n) {
+		if (g->off == 0)
+			g->err = -NS_EINVAL;	/* buffer too small */
+		return (1);
+	}
+	while (*dp != 0)
+		full[k++] = *dp++;
+	if (k > 1)
+		full[k++] = '/';
+	for (i = 0; i < nl && k < NS_PATHMAX - 1; i++)
+		full[k++] = nm[i];
+	full[k] = 0;
+	ino = ns_ino(full);
+	for (i = 0; i < reclen; i++)
+		rec[i] = 0;
+	for (i = 0; i < 8; i++) {
+		rec[i] = (unsigned char)(ino >> (8 * i));		/* d_ino */
+		rec[8 + i] = (unsigned char)((unsigned long)next >> (8 * i));
+	}
+	rec[16] = (unsigned char)reclen;			/* d_reclen */
+	rec[17] = (unsigned char)(reclen >> 8);
+	rec[18] = isdir ? 4 : 8;				/* DT_DIR : DT_REG */
+	for (i = 0; i < nl; i++)
+		rec[19 + i] = (unsigned char)nm[i];
+	if (copyout(rec, (void *)(g->ubuf + g->off), reclen) != 0) {
+		g->err = -NS_EFAULT;
+		return (1);
+	}
+	g->off += reclen;
+	g->p->p_fd[g->fd].fd_pos = (unsigned long)next;
+	return (0);
+}
+
+static int
+ns_gd_cb(void *a, const char *name, int isdir, int kind, int ix)
+{
+	struct ns_gd *g = a;
+	struct ns_first f;
+	const char *c;
+	int l, d;
+	long pos = ns_id(kind, ix);
+
+	if (pos < g->start)
+		return (0);
+	l = ns_comp(name, g->dir, g->dl, &c, &d, isdir);
+	if (l == 0) {
+		g->p->p_fd[g->fd].fd_pos = (unsigned long)(pos + 3);
+		return (0);
+	}
+	f.dir = g->dir; f.dl = g->dl; f.cand = c; f.cl = l;
+	f.stop = pos; f.found = 0;
+	(void) ns_walk(ns_first_cb, &f);
+	if (f.found) {
+		g->p->p_fd[g->fd].fd_pos = (unsigned long)(pos + 3);
+		return (0);
+	}
+	return (ns_emit(g, c, l, d, pos + 3));
+}
+
+long
+proc_getdents64(int fd, unsigned long ubuf, unsigned long n)
+{
+	proc_t *p = curproc;
+	struct ns_gd g;
+
+	if (p == 0 || fd < 0 || fd >= NOFILE || !p->p_fd[fd].fd_used)
+		return (-NS_EBADF);
+	if (!p->p_fd[fd].fd_dir)
+		return (-NS_ENOTDIR);
+	g.p = p; g.fd = fd; g.dir = p->p_fd[fd].fd_path; g.dl = ns_len(g.dir);
+	g.ubuf = ubuf; g.n = n; g.off = 0; g.err = 0;
+	if (p->p_fd[fd].fd_pos == 0 && ns_emit(&g, ".", 1, 1, 1))
+		return (g.err != 0 ? g.err : (long)g.off);
+	if (p->p_fd[fd].fd_pos == 1 && ns_emit(&g, "..", 2, 1, 2))
+		return (g.err != 0 ? g.err : (long)g.off);
+	g.start = (long)p->p_fd[fd].fd_pos - 2;
+	(void) ns_walk(ns_gd_cb, &g);
+	return (g.err != 0 ? g.err : (long)g.off);
+}
+
+static int
+ns_any_cb(void *a, const char *name, int isdir, int kind, int ix)
+{
+	struct ns_q *q = a;
+	const char *c;
+	int d;
+
+	(void) kind; (void) ix;
+	return (ns_comp(name, q->path, q->len, &c, &d, isdir) != 0);
+}
+
+/* 1 if directory `path` has any child. */
+static int
+ns_has_child(const char *path)
+{
+	struct ns_q q;
+
+	q.path = path;
+	q.len = ns_len(path);
+	return (ns_walk(ns_any_cb, &q) != 0);
+}
+
+/* The parent of canonical `path` must be an existing directory. */
+static int
+ns_parent_ok(const char *path)
+{
+	char par[NS_PATHMAX];
+	int i, l = ns_len(path);
+
+	for (i = l - 1; i > 0 && path[i] != '/'; i--)
+		;
+	if (i == 0)
+		return (1);		/* parent is "/" */
+	for (l = 0; l < i; l++)
+		par[l] = path[l];
+	par[i] = 0;
+	return (ns_kind(par) == 2);
+}
+
+long
+proc_mkdirat(int dirfd, const char *upath, int mode)
+{
+	proc_t *p = curproc;
+	char path[NS_PATHMAX];
+	int r, i, j;
+
+	(void) mode;
+	if (p == 0)
+		return (-NS_EINVAL);
+	if ((r = ns_abspath(p, dirfd, upath, path)) != 0)
+		return (r);
+	if (ns_kind(path) != 0)
+		return (-NS_EEXIST);
+	if (!ns_parent_ok(path))
+		return (ns_kind(path) == 0 ? -NS_ENOENT : -NS_ENOTDIR);
+	for (i = 0; i < NNSDIR; i++) {
+		if (nsdirs[i][0] != 0)
+			continue;
+		for (j = 0; path[j] != 0; j++)
+			nsdirs[i][j] = path[j];
+		nsdirs[i][j] = 0;
+		return (0);
+	}
+	return (-NS_ENOSPC);
+}
+
+/*
+ * A directory that existed only as the prefix of its children would vanish
+ * with its last child; POSIX leaves it, empty. Record it before that happens.
+ */
+static void
+ns_keep_parent(const char *path)
+{
+	char par[NS_PATHMAX];
+	int i, j, l = ns_len(path);
+
+	for (i = l - 1; i > 0 && path[i] != '/'; i--)
+		;
+	if (i <= 0)
+		return;			/* parent is "/" */
+	for (j = 0; j < i; j++)
+		par[j] = path[j];
+	par[i] = 0;
+	{
+		struct ns_find f;
+
+		f.path = par;
+		f.kind = 0;
+		if (ns_walk(ns_find_cb, &f))
+			return;		/* named explicitly already */
+	}
+	for (i = 0; i < NNSDIR; i++) {
+		if (nsdirs[i][0] != 0)
+			continue;
+		for (j = 0; par[j] != 0; j++)
+			nsdirs[i][j] = par[j];
+		nsdirs[i][j] = 0;
+		return;
+	}
+}
+
+/* Remove the exact name `path` from whichever table holds it. */
+static int
+ns_remove(const char *path)
+{
+	struct ns_find f;
+	int cap;
+	char *w;
+
+	f.path = path;
+	f.kind = 0;
+	if (!ns_walk(ns_find_cb, &f))
+		return (-NS_ENOENT);
+	if (f.kind != 2)
+		ns_keep_parent(path);
+	switch (f.kind) {
+	case 1:
+		w = rootfs_wpath(f.ix, &cap);
+		if (w == 0)
+			return (-NS_EROFS);
+		w[0] = 0;
+		return (0);
+	case 3:
+		/* the buffer stays with the slot: ramfs_create reuses it */
+		ramfiles[f.ix].rf_used = 0;
+		return (0);
+	case 4:
+		nsdirs[f.ix][0] = 0;
+		return (0);
+	}
+	return (-NS_EROFS);
+}
+
+long
+proc_unlinkat(int dirfd, const char *upath, int flags)
+{
+	proc_t *p = curproc;
+	char path[NS_PATHMAX];
+	int r, kind;
+
+	if (p == 0)
+		return (-NS_EINVAL);
+	if ((r = ns_abspath(p, dirfd, upath, path)) != 0)
+		return (r);
+	kind = ns_kind(path);
+	if (kind == 0)
+		return (-NS_ENOENT);
+	if (flags & AT_REMOVEDIR_K) {
+		if (kind != 2)
+			return (-NS_ENOTDIR);
+		if (ns_has_child(path))
+			return (-NS_ENOTEMPTY);
+		r = ns_remove(path);
+		return (r == -NS_ENOENT ? -NS_EROFS : r);	/* implicit dir */
+	}
+	if (kind == 2)
+		return (-NS_EISDIR);
+	return (ns_remove(path));
+}
+
+struct ns_ren { const char *from; int fl; const char *to; int tl; int err; };
+
+/* Rewrite every name at or under `from` to live under `to`. */
+static int
+ns_ren_cb(void *a, const char *name, int isdir, int kind, int ix)
+{
+	struct ns_ren *rn = a;
+	char nn[NS_PATHMAX];
+	char *dst;
+	int cap, i, k;
+
+	(void) isdir;
+	if (!ns_under(name, rn->from, rn->fl))
+		return (0);
+	k = 0;
+	for (i = 0; i < rn->tl; i++)
+		nn[k++] = rn->to[i];
+	for (i = rn->fl; name[i] != 0; i++) {
+		if (k >= NS_PATHMAX - 1) {
+			rn->err = -NS_ENAMETOOLONG;
+			return (1);
+		}
+		nn[k++] = name[i];
+	}
+	nn[k] = 0;
+	switch (kind) {
+	case 1: dst = rootfs_wpath(ix, &cap); break;
+	case 3: dst = ramfiles[ix].rf_path; cap = 64; break;
+	case 4: dst = nsdirs[ix]; cap = NS_PATHMAX; break;
+	default: rn->err = -NS_EROFS; return (1);
+	}
+	if (dst == 0 || k >= cap) {
+		rn->err = dst == 0 ? -NS_EROFS : -NS_ENAMETOOLONG;
+		return (1);
+	}
+	for (i = 0; i <= k; i++)
+		dst[i] = nn[i];
+	return (0);
+}
+
+/* Pre-check: every name the rename would move must be movable. */
+static int
+ns_ren_chk(void *a, const char *name, int isdir, int kind, int ix)
+{
+	struct ns_ren *rn = a;
+	int i, l = ns_len(name);
+
+	(void) isdir; (void) ix;
+	if (!ns_under(name, rn->from, rn->fl))
+		return (0);
+	if (kind == 2) {
+		rn->err = -NS_EROFS;
+		return (1);
+	}
+	i = rn->tl + l - rn->fl;
+	if (i >= (kind == 3 ? 64 : (kind == 1 ? 100 : NS_PATHMAX))) {
+		rn->err = -NS_ENAMETOOLONG;
+		return (1);
+	}
+	return (0);
+}
+
+long
+proc_renameat(int ofd, const char *uold, int nfd, const char *unew)
+{
+	proc_t *p = curproc;
+	char from[NS_PATHMAX], to[NS_PATHMAX];
+	int r, fk, tk;
+	struct ns_ren rn;
+
+	if (p == 0)
+		return (-NS_EINVAL);
+	if ((r = ns_abspath(p, ofd, uold, from)) != 0)
+		return (r);
+	if ((r = ns_abspath(p, nfd, unew, to)) != 0)
+		return (r);
+	fk = ns_kind(from);
+	if (fk == 0)
+		return (-NS_ENOENT);
+	if (str_eq_uproc(from, to))
+		return (0);
+	rn.from = from; rn.fl = ns_len(from);
+	rn.to = to; rn.tl = ns_len(to);
+	rn.err = 0;
+	if (fk == 2 && ns_under(to, from, rn.fl))
+		return (-NS_EINVAL);		/* into its own subtree */
+	if (!ns_parent_ok(to))
+		return (-NS_ENOENT);
+	tk = ns_kind(to);
+	if (tk == 2 && fk != 2)
+		return (-NS_EISDIR);
+	if (tk == 1 && fk == 2)
+		return (-NS_ENOTDIR);
+	if (tk == 2 && ns_has_child(to))
+		return (-NS_ENOTEMPTY);
+	(void) ns_walk(ns_ren_chk, &rn);
+	if (rn.err != 0)
+		return (rn.err);
+	if (tk != 0 && (r = ns_remove(to)) != 0 && r != -NS_ENOENT)
+		return (r);			/* replace the target */
+	ns_keep_parent(from);		/* the source dir stays, maybe empty */
+	(void) ns_walk(ns_ren_cb, &rn);
+	return (rn.err);
+}
+
+long
+proc_chdir(const char *upath)
+{
+	proc_t *p = curproc;
+	char path[NS_PATHMAX];
+	int r, i;
+
+	if (p == 0)
+		return (-NS_EINVAL);
+	if ((r = ns_abspath(p, AT_FDCWD_K, upath, path)) != 0)
+		return (r);
+	r = ns_kind(path);
+	if (r == 0)
+		return (-NS_ENOENT);
+	if (r != 2)
+		return (-NS_ENOTDIR);
+	for (i = 0; path[i] != 0; i++)
+		p->p_cwd[i] = path[i];
+	p->p_cwd[i] = 0;
+	return (0);
+}
+
+/* getcwd(buf, size): Linux returns the length including the NUL. */
+long
+proc_getcwd(unsigned long ubuf, unsigned long size)
+{
+	proc_t *p = curproc;
+	int l;
+
+	if (p == 0)
+		return (-NS_EINVAL);
+	l = ns_len(p->p_cwd) + 1;
+	if ((unsigned long)l > size)
+		return (-34 /* ERANGE */);
+	if (copyout(p->p_cwd, (void *)ubuf, l) != 0)
+		return (-NS_EFAULT);
+	return (l);
+}
+
+/*
  * proc_openat_w — open supporting O_CREAT/O_WRONLY/O_RDWR against the ramfs.
  * If the flags request write/create and the path is not a read-only vfs file,
  * back the fd with a ramfs node (creating it on O_CREAT). Read-only opens fall
  * through to the existing proc_open (vfs image). Returns fd or negative errno.
  */
+#define	O_EXCL_K	0x80
+#define	O_TRUNC_K	0x200
+#define	O_DIRECTORY_K	0x10000
+#define	O_CLOEXEC_K	0x80000
+#define	O_APPEND_K	0x400
+
+static long proc_openat_ns(const char *kpath, int flags);
+
+/*
+ * openat(dirfd, path, flags): resolve `path` against dirfd/the cwd, then open a
+ * directory (an fd for getdents) or a file. O_EXCL, O_TRUNC, O_DIRECTORY and
+ * O_CLOEXEC are honoured here; the file kinds are proc_openat_ns's.
+ */
+long
+proc_openat(int dirfd, const char *upath, int flags)
+{
+	proc_t *p = curproc;
+	char path[NS_PATHMAX];
+	int r, kind;
+	long fd;
+
+	if (p == 0 || upath == 0)
+		return (-NS_EFAULT);
+	if ((r = ns_abspath(p, dirfd, upath, path)) != 0)
+		return (r);
+	/* /dev/fb and /data/<name> (SNFS) are reached by name, not listed. */
+	if (str_eq_uproc(path, "/dev/fb") || (ns_under(path, "/data", 5) &&
+	    path[5] == '/'))
+		return (proc_openat_ns(path, flags));
+	kind = ns_kind(path);
+	if (kind != 0 && (flags & O_CREAT) && (flags & O_EXCL_K))
+		return (-NS_EEXIST);
+	if (kind == 2) {
+		if (flags & (O_WRONLY | O_RDWR))
+			return (-NS_EISDIR);
+		fd = ns_opendir(p, path);
+	} else {
+		if (flags & O_DIRECTORY_K)
+			return (kind == 0 ? -NS_ENOENT : -NS_ENOTDIR);
+		if (kind == 0 && !(flags & O_CREAT))
+			return (-NS_ENOENT);
+		if (kind == 0 && !ns_parent_ok(path))
+			return (-NS_ENOENT);
+		fd = proc_openat_ns(path, flags);
+		if (fd >= 0)
+			ns_setpath(p, fd, path);
+	}
+	if (fd >= 0 && (flags & O_CLOEXEC_K))
+		p->p_fd[fd].fd_cloexec = 1;
+	if (fd >= 0 && (flags & O_APPEND_K))
+		p->p_fd[fd].fd_append = 1;
+	return (fd);
+}
+
+/* proc_openat_w -- the pre-rvsh entry (absolute path, flags), kept for callers
+ * that pass a user pointer and no dirfd. */
 long
 proc_openat_w(const char *path, int flags)
 {
+	return (proc_openat(AT_FDCWD_K, path, flags));
+}
+
+/*
+ * proc_openat_ns -- open canonical kernel path `kpath`: /data -> SNFS, /dev/fb
+ * -> the scanout node, else the ramfs (writable) or the read-only image. A
+ * write open of a read-only root file copies it into the ramfs first (copy on
+ * write), so editing /etc/words in place works; O_TRUNC empties the file.
+ */
+static long
+proc_openat_ns(const char *kpath, int flags)
+{
 	proc_t *p = curproc;
-	char kpath[64];
-	unsigned long i;
 	int fd;
 	struct ramfile *r;
-
-	if (p == 0 || path == 0)
-		return (-1);
-	for (i = 0; i < sizeof (kpath) - 1; i++) {
-		if (copyin(path + i, &kpath[i], 1) != 0)
-			return (-14);
-		if (kpath[i] == 0)
-			break;
-	}
-	kpath[i] = 0;
 
 	/* R-P12: paths under /data/ live on the on-disk SNFS (block-cached). */
 	if (kpath[0] == '/' && kpath[1] == 'd' && kpath[2] == 'a' &&
@@ -1592,20 +2621,42 @@ proc_openat_w(const char *path, int flags)
 		return (-1);			/* fd table full */
 	}
 
-	/* Read-only open of an existing file: route to the read-only vfs path
-	 * unless it already exists in the ramfs. */
-	if ((flags & (O_CREAT | O_WRONLY | O_RDWR)) == 0 &&
-	    ramfs_find(kpath) == 0)
-		return (proc_open(path));
+	/* Read-only open of an existing file: the read-only image path
+	 * unless the ramfs holds it. */
+	if ((flags & (O_WRONLY | O_RDWR)) == 0 && ramfs_find(kpath) == 0) {
+		const void *d;
+		unsigned long l;
+
+		if (vfs_lookup(kpath, &d, &l))
+			return (ns_openimg(p, d, l));
+	}
 
 	r = ramfs_find(kpath);
 	if (r == 0) {
-		if (!(flags & O_CREAT))
-			return (-1);		/* ENOENT-ish */
+		const void *d;
+		unsigned long l;
+		int have = vfs_lookup(kpath, &d, &l);
+
+		if (!have && !(flags & O_CREAT))
+			return (-NS_ENOENT);
+		if (have && l > RAMFILE_MAX)
+			return (-27 /* EFBIG: past the ramfs file cap */);
+		if (ns_len(kpath) >= (int)sizeof (r->rf_path))
+			return (-NS_ENAMETOOLONG);
 		r = ramfs_create(kpath);
 		if (r == 0)
-			return (-1);
+			return (-NS_ENOSPC);
+		if (have) {		/* copy on write of a root image file */
+			unsigned long k;
+
+			for (k = 0; k < l; k++)
+				r->rf_data[k] = ((const unsigned char *)d)[k];
+			r->rf_len = l;
+			ns_hide(kpath);
+		}
 	}
+	if (flags & O_TRUNC_K)
+		r->rf_len = 0;
 	for (fd = 3; fd < NOFILE; fd++) {
 		if (!p->p_fd[fd].fd_used) {
 			p->p_fd[fd].fd_used = 1;
@@ -1626,7 +2677,7 @@ proc_openat_w(const char *path, int flags)
 /*
  * proc_fwrite — write to an open writable (ramfs) fd. Copies from the user
  * buffer into the file buffer at the cursor, growing rf_len, and advances the
- * cursor. Console fds (1/2) are handled by the syscall layer. Returns bytes
+ * cursor. An empty fd 1/2 is the console (syscall layer). Returns bytes
  * written or negative errno.
  */
 long
@@ -1636,7 +2687,7 @@ proc_fwrite(int fd, const char *ubuf, unsigned long n)
 	struct ramfile *r;
 	unsigned long pos;
 
-	if (p == 0 || fd < 3 || fd >= NOFILE || !p->p_fd[fd].fd_used)
+	if (p == 0 || fd < 0 || fd >= NOFILE || !p->p_fd[fd].fd_used)
 		return (-1);
 	/* R-P12: pipe write end. */
 	if (p->p_fd[fd].fd_pipe >= 0)
@@ -1644,6 +2695,14 @@ proc_fwrite(int fd, const char *ubuf, unsigned long n)
 	/* An AF_UNIX endpoint: write(2) is sendmsg with no ancillary data. */
 	if (p->p_fd[fd].fd_sock >= 0)
 		return (unsock_send(p->p_fd[fd].fd_sock, ubuf, n, 0, 0));
+	/* O_APPEND: the cursor moves to EOF before each write (POSIX). */
+	if (p->p_fd[fd].fd_append) {
+		if (p->p_fd[fd].fd_snfs >= 0)
+			p->p_fd[fd].fd_pos = snfs_len(p->p_fd[fd].fd_snfs);
+		else if (p->p_fd[fd].fd_wnode != 0)
+			p->p_fd[fd].fd_pos =
+			    ((struct ramfile *)p->p_fd[fd].fd_wnode)->rf_len;
+	}
 	/* R-P12: on-disk SNFS file. */
 	if (p->p_fd[fd].fd_snfs >= 0) {
 		unsigned char kb[256];
@@ -1694,7 +2753,7 @@ proc_lseek(int fd, long off, int whence)
 	unsigned long base, len;
 	long np;
 
-	if (p == 0 || fd < 3 || fd >= NOFILE || !p->p_fd[fd].fd_used)
+	if (p == 0 || fd < 0 || fd >= NOFILE || !p->p_fd[fd].fd_used)
 		return (-1);
 	if (p->p_fd[fd].fd_pipe >= 0)
 		return (-1);		/* pipes are not seekable */
@@ -1948,19 +3007,67 @@ proc_dup2(int oldfd, int newfd)
 		return (newfd);
 	if (oldfd >= 3 && !p->p_fd[oldfd].fd_used)
 		return (-1);
-	/* Close the target first (drops a pipe ref if it held one). */
-	if (newfd >= 3 && p->p_fd[newfd].fd_used)
-		proc_close(newfd);
-	/* Duplicate oldfd's slot into newfd. For a console source (0/1/2) there
-	 * is no slot object; but the only use is dup2(pipe_fd, 0|1), i.e. old is
-	 * a real fd >=3, new is a console fd — copy the object down. */
-	if (oldfd >= 3) {
+	/* Close the target first (drops its reference, any slot). */
+	fd_release(p, newfd);
+	/* Duplicate oldfd's slot into newfd and take the copy's reference. A
+	 * console source (0/1/2 holding no object) has nothing to copy: newfd is
+	 * left empty, which is the console again. */
+	if (p->p_fd[oldfd].fd_used) {
 		p->p_fd[newfd] = p->p_fd[oldfd];
-		if (p->p_fd[oldfd].fd_pipe >= 0)
-			pipe_ref(p->p_fd[oldfd].fd_pipe,
-			    p->p_fd[oldfd].fd_pipe_w);
+		p->p_fd[newfd].fd_cloexec = 0;	/* POSIX: dup2 clears FD_CLOEXEC */
+		fd_hold(p, newfd);
 	}
 	return (newfd);
+}
+
+/*
+ * proc_fcntl -- fcntl(2), the descriptor commands only (Linux riscv numbering,
+ * as the rest of this syscall table): F_DUPFD/F_DUPFD_CLOEXEC (lowest free fd
+ * >= arg) and F_GETFD/F_SETFD (FD_CLOEXEC). An empty fd 0..2 is the console,
+ * which is not an object: F_GETFD/F_SETFD on it succeed, F_DUPFD of it is EBADF.
+ * shortcut: the console is not a slot object, so it cannot be dup'd above fd 2
+ * (dash's savefd then treats it as closed and close() restores the console);
+ * make it an fd kind when `exec 3>&1` on an unredirected stdout is needed.
+ */
+#define	F_DUPFD_K		0
+#define	F_GETFD_K		1
+#define	F_SETFD_K		2
+#define	F_DUPFD_CLOEXEC_K	1030
+#define	FD_CLOEXEC_K		1
+long
+proc_fcntl(int fd, int cmd, long arg)
+{
+	proc_t *p = curproc;
+	int nfd;
+
+	if (p == 0 || fd < 0 || fd >= NOFILE)
+		return (-9 /* EBADF */);
+	if (!p->p_fd[fd].fd_used && fd > 2)
+		return (-9 /* EBADF */);
+	switch (cmd) {
+	case F_GETFD_K:
+		return (p->p_fd[fd].fd_cloexec ? FD_CLOEXEC_K : 0);
+	case F_SETFD_K:
+		if (p->p_fd[fd].fd_used)
+			p->p_fd[fd].fd_cloexec = (arg & FD_CLOEXEC_K) != 0;
+		return (0);
+	case F_DUPFD_K:
+	case F_DUPFD_CLOEXEC_K:
+		if (arg < 0 || arg >= NOFILE)
+			return (-22 /* EINVAL */);
+		if (!p->p_fd[fd].fd_used)
+			return (-9 /* EBADF: the console is not dup-able */);
+		for (nfd = (int)arg; nfd < NOFILE; nfd++)
+			if (!p->p_fd[nfd].fd_used && nfd > 2)
+				break;
+		if (nfd >= NOFILE)
+			return (-24 /* EMFILE */);
+		p->p_fd[nfd] = p->p_fd[fd];
+		p->p_fd[nfd].fd_cloexec = (cmd == F_DUPFD_CLOEXEC_K);
+		fd_hold(p, nfd);
+		return (nfd);
+	}
+	return (-22 /* EINVAL */);
 }
 
 /*
@@ -2039,7 +3146,19 @@ proc_ioctl(int fd, int cmd, unsigned long arg)
 {
 	proc_t *p = curproc;
 
-	if (p == 0 || fd < 3 || fd >= NOFILE || !p->p_fd[fd].fd_used)
+	/* An empty fd 0..2 is the console, the one tty: TCGETS (Linux 0x5401)
+	 * succeeds there, so isatty() can ask the kernel. No termios yet: the
+	 * struct termios (36 bytes) is returned zeroed. */
+	if (p != 0 && fd >= 0 && fd <= 2 && !p->p_fd[fd].fd_used) {
+		static const char zt[36];
+
+		if (cmd != 0x5401)
+			return (-ENOTTY_UPROC);
+		if (arg != 0 && copyout(zt, (void *)arg, sizeof (zt)) != 0)
+			return (-14 /* EFAULT */);
+		return (0);
+	}
+	if (p == 0 || fd < 0 || fd >= NOFILE || !p->p_fd[fd].fd_used)
 		return (-9 /* EBADF */);
 	if (p->p_fd[fd].fd_fb)
 		return (fb_ioctl(cmd, arg));
@@ -2064,7 +3183,7 @@ proc_mmap(int fd, unsigned long len)
 
 	if (p == 0 || p->p_as == 0)
 		return (-22 /* EINVAL */);
-	if (fd < 3 || fd >= NOFILE || !p->p_fd[fd].fd_used)
+	if (fd < 0 || fd >= NOFILE || !p->p_fd[fd].fd_used)
 		return (-9 /* EBADF */);
 	if (!p->p_fd[fd].fd_fb)
 		return (-19 /* ENODEV: only /dev/fb is mappable */);
@@ -2694,7 +3813,7 @@ sock_of_fd(int fd)
 {
 	proc_t *p = curproc;
 
-	if (p == 0 || fd < 3 || fd >= NOFILE || !p->p_fd[fd].fd_used)
+	if (p == 0 || fd < 0 || fd >= NOFILE || !p->p_fd[fd].fd_used)
 		return (-1);
 	return (p->p_fd[fd].fd_sock);
 }

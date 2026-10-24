@@ -31,16 +31,19 @@ dash-redirect-builtin|0|/bin/dash|dash|-c|echo redir-text > /tmp/r; /bin/sbase-b
 !dash-redirect-builtin|^redir-text$
 dash-redirect-in-builtin|0|/bin/dash|dash|-c|read l < /etc/words; echo "first=$l"
 @dash-redirect-in-builtin|^first=cherry$
-# KERNEL LIMITS (named kernel-limit-*: PASS == the documented limit is present).
-# The kernel's exec drops every fd and hardwires fd 0/1 to the console, so an
-# exec'd program never sees the shell's pipe or redirection.
-kernel-limit-exec-stdout|0|/bin/dash|dash|-c|n=$(/bin/sbase-box echo inner); echo "n=[$n]"
-@kernel-limit-exec-stdout|^inner$
-@kernel-limit-exec-stdout|^n=\[\]$
-kernel-limit-exec-stdin|0|/bin/dash|dash|-c|/bin/sbase-box head -n 1 < /etc/words
-@kernel-limit-exec-stdin|^FROM-CONSOLE$
-!kernel-limit-exec-stdin|^cherry$
-# NEGATIVE CONTROL: dash linked against the pass-through glue (no user fd table).
-# Pipelines must then break (kernel fd 1 = console, pipe refs leak): xfail.
-xfail-novfd-pipe|0|/bin/dash-novfd|dash|-c|echo piped %7C { read x; echo "got:$x"; }
-@xfail-novfd-pipe|^got:piped$
+# EXEC'D PROGRAMS SEE THE SHELL'S PIPES AND REDIRECTS. rvsh fixed kernel defects 1-3 and builds
+# the packages with the glue -DSOLNIX_NO_VFD (build-sysroot.sh GLUE_DEFS): no userland fd table,
+# the kernel's is the only one. On rvpkg's kernel + glue these were kernel-limit-* (console).
+dash-exec-subst|0|/bin/dash|dash|-c|n=$(/bin/sbase-box echo inner); echo "n=[$n]"
+@dash-exec-subst|^n=\[inner\]$
+!dash-exec-subst|^inner$
+dash-exec-stdin|0|/bin/dash|dash|-c|/bin/sbase-box head -n 1 < /etc/words
+@dash-exec-stdin|^cherry$
+!dash-exec-stdin|^FROM-CONSOLE$
+dash-exec-pipe|0|/bin/dash|dash|-c|echo a %7C /bin/sbase-box tr a b
+@dash-exec-pipe|^b$
+dash-exec-pipe3|0|/bin/dash|dash|-c|/bin/sbase-box sort /etc/words %7C /bin/sbase-box uniq %7C /bin/sbase-box wc -l
+@dash-exec-pipe3|^8$
+dash-exec-redirect|0|/bin/dash|dash|-c|/bin/sbase-box grep an /etc/words > /tmp/g; /bin/sbase-box wc -l < /tmp/g
+@dash-exec-redirect|^3$
+!dash-exec-redirect|^banana$

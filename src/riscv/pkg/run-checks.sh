@@ -5,8 +5,9 @@
 #   run-checks.sh <stage-dir> <checks-file> <log>
 #
 # <stage-dir>   files for the ustar root (sbin/init must be pkginit). The kernel
-#               reads at most 16 regular files / 2 MiB (uts/rootfs.c NDISKFILE,
-#               ROOTFS_MAX_BYTES): this script refuses a root over either limit,
+#               reads at most 256 names / 8 MiB since rvsh (uts/rootfs.c NDISKFILE,
+#               ROOTFS_MAX_BYTES; rvpkg's kernel: 16 / 2 MiB, set NDISKFILE=16
+#               ROOTFS_MIB=2 for it): this script refuses a root over either limit,
 #               because the kernel silently drops what does not fit.
 # <checks-file> lines "name|want_exit|path|argv0|...": copied to etc/rvpkg.tests.
 #               Optional expectation lines "@name|ERE": the ERE must match a line
@@ -30,13 +31,15 @@ WORK="$(mktemp -d)"
 trap 'find "$WORK" -delete' EXIT
 
 grep -v '^[@!%]' "$CHECKS" > "$STAGE/etc/rvpkg.tests"
-( cd "$STAGE" && find . -type f | sed 's|^\./||' | sort > "$WORK/list" )
+# Files AND directories (ustar '5' entries, so an empty dir exists in the guest);
+# --no-recursion because the list already names everything once.
+( cd "$STAGE" && find . -mindepth 1 \( -type f -o -type d \) | sed 's|^\./||' | sort > "$WORK/list" )
 nf=$(wc -l < "$WORK/list")
-( cd "$STAGE" && tar --format=ustar --owner=0 --group=0 -cf "$WORK/root.img" -T "$WORK/list" )
+( cd "$STAGE" && tar --format=ustar --owner=0 --group=0 --no-recursion -cf "$WORK/root.img" -T "$WORK/list" )
 sz=$(wc -c < "$WORK/root.img")
-echo "root: $nf files, $sz bytes"
-[ "$nf" -le 16 ] || { echo "REFUSE: $nf files > NDISKFILE 16"; exit 2; }
-[ "$sz" -le $((2*1024*1024)) ] || { echo "REFUSE: $sz bytes > ROOTFS_MAX_BYTES 2 MiB"; exit 2; }
+echo "root: $nf names, $sz bytes"
+[ "$nf" -le "${NDISKFILE:-256}" ] || { echo "REFUSE: $nf names > NDISKFILE ${NDISKFILE:-256}"; exit 2; }
+[ "$sz" -le $((${ROOTFS_MIB:-8}*1024*1024)) ] || { echo "REFUSE: $sz bytes > ROOTFS_MAX_BYTES ${ROOTFS_MIB:-8} MiB"; exit 2; }
 truncate -s $(( (sz + 511) / 512 * 512 )) "$WORK/root.img"
 dd if=/dev/zero of="$WORK/disk.img" bs=512 count=2048 status=none
 printf '\x55\xaa' | dd of="$WORK/disk.img" bs=1 seek=510 conv=notrunc status=none

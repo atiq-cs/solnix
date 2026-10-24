@@ -82,6 +82,9 @@ Each mode gets its own boot, because a hang ends the boot:
 | `execfd` | child `execve`s itself; the new image writes to the inherited fd 4 | `execchild: write(fd 4) = -1`, then no EOF |
 | `leak` | child `dup3(wfd,1)`, closes wfd, exits; parent reads | never returns |
 
+> **2026-10-23 update:** kernel defects 1-3 below are FIXED, and getdents/mkdir/unlink/rename and a larger root
+> are in. See `docs/riscv64-shell-session-2026-10-23.md`. The glue's fd table is gone; packages build -DSOLNIX_NO_VFD.
+
 ## 4. Kernel defect 1: pipe references leak on close(0–2), exit and exec
 
 **Where.** `uts/uproc.c`:
