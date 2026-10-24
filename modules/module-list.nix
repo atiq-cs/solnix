@@ -23,6 +23,7 @@
   ./config/mtu.nix
   ./config/firewall.nix
   ./config/wireless-iwx.nix
+  ./config/graphics-gpu.nix
   ./config/networking.nix
   ./config/users.nix
   ./config/system-path.nix

@@ -516,6 +516,21 @@ let
     };
   };
 
+  # pkgs.solnix.i915-driver -- the Intel iGPU kernel module (OpenBSD inteldrm +
+  # drm via src/drm-port), a pure derivation (./i915-driver.nix) on the
+  # iwx-driver pattern: $out/kernel/drv/amd64/i915. Its gate checks symbols
+  # against the gate proto and kernelNd and that SIMD appears only inside
+  # fpu_kernel_enter/exit sections (src/drm-port/i915/simd-gate.sh).
+  i915-driver = import ./i915-driver.nix {
+    gate = gate';
+    inherit kernelNd ld;
+    solnixDev = buildEnv {
+      name = "solnix-dev";
+      paths = [ srcPkgs.gccWrapper srcPkgs.binutils srcPkgs.gnumake ];
+      pathsToLink = [ "/bin" "/share/man" ];
+    };
+  };
+
   # wpa-pmk on the system PATH: a bin/-shaped view of iwm-driver's
   # usr/lib/inet/wpa-pmk, so environment.systemPackages puts it at sw/bin ->
   # /usr/bin/wpa-pmk, which the solnix-wifi-join service's PATH finds. (The join
@@ -808,6 +823,102 @@ let
   };
 
 
+  # i915Aliases -- the iGPUs hardware.graphics.i915.attachAtBoot binds: the
+  # X1E's Alder Lake-P Iris Xe and the X1's Coffee Lake-H UHD 630 (the two the
+  # staged attach plan covers, src/drm-port/i915/STAGED-ATTACH-PLAN.md).
+  i915Aliases = [ "pciex8086,46a6" "pciex8086,3e9b" ];
+
+  # mkDriversDbWith base drivers -- `base` (a driver DB shaped like `drivers`)
+  # with each of `drivers` ({ name; perm; aliases; }) added the mkIwxDriversDb
+  # way: name_to_major at the lowest free major, "minor_perm <name>:* <perm>"
+  # unless perm is null, and one driver_aliases line per alias. No aliases =
+  # the system knows the driver (modload, a runtime update_drv -a work) but
+  # binds it to nothing at boot.
+  mkDriversDbWith = base: drivers: derivation {
+    name = "illumos-driver-db-gpu";
+    system = "x86_64-solaris";
+    builder = "/usr/bin/bash";
+    PATH = "/usr/bin:/usr/sbin";
+    inherit base;
+    spec = builtins.concatStringsSep "\n" (map (d:
+      "${d.name}|${if d.perm == null then "" else d.perm}|${builtins.concatStringsSep " " d.aliases}") drivers);
+    args = [ "-c" ''
+      set -eu
+      mkdir -p "$out"
+      cp "$base"/* "$out"/
+      chmod u+w "$out"/name_to_major "$out"/driver_aliases "$out"/minor_perm
+      printf '%s\n' "$spec" | while IFS='|' read -r name perm aliases; do
+        [ -n "$name" ] || continue
+        if ! awk '{print $1}' "$out/name_to_major" | grep -qx "$name"; then
+          used=$(awk '{print $2}' "$out/name_to_major" | sort -n)
+          n=0
+          while printf '%s\n' $used | grep -qx "$n"; do n=$((n+1)); done
+          echo "$name $n" >> "$out/name_to_major"
+          echo "$name: allocated major $n (lowest free)" >&2
+        fi
+        [ -z "$perm" ] || grep -q "^$name:" "$out/minor_perm" || printf '%s:* %s\n' "$name" "$perm" >> "$out/minor_perm"
+        for a in $aliases; do
+          grep -qx "$name \"$a\"" "$out/driver_aliases" || printf '%s "%s"\n' "$name" "$a" >> "$out/driver_aliases"
+        done
+        na=$(grep -c "^$name " "$out/driver_aliases" || true)
+        want=$(set -- $aliases; echo $#)
+        [ "$na" -eq "$want" ] || { echo "FATAL: $name has $na aliases, want $want" >&2; exit 1; }
+        [ -z "$perm" ] || grep -q "^$name:\*" "$out/minor_perm" || { echo "FATAL: no $name minor_perm" >&2; exit 1; }
+      done
+      [ "$(awk '{print $2}' "$out/name_to_major" | sort | uniq -d | wc -l)" -eq 0 ] || { echo "FATAL: duplicate major" >&2; exit 1; }
+    '' ];
+  };
+
+  # mkGpuKernel base { nvidia; gspFirmware; } -- `base` (a kernel slice, e.g.
+  # mkIwxKernel's) with kernel/drv/amd64/i915 laid in, plus nvidia,
+  # nvidia_modeset and nvidia_i2c when nvidia = true, plus NVIDIA's GSP
+  # firmware (kernel/firmware/nvidia/<version>/) when gspFirmware is the
+  # licence-accepted nvidiaGspFirmware. No driver.conf is laid: nvidia.conf
+  # and nvidia_i2c.conf declare pseudo children (nvidia_i2c with
+  # ddi-forceattach=1) that boot would configure, loading nvidia unasked.
+  # The nvidia modules embed __FILE__ paths into kernelNd's illumos source
+  # (908 MB); they are rewritten like stripSliceRefs so that tree stays out of
+  # the closure.
+  mkGpuKernel = base: { nvidia ? false, gspFirmware ? null }: derivation {
+    name = "illumos-kernel-gpu";
+    system = "x86_64-solaris";
+    builder = "/usr/bin/bash";
+    PATH = "/usr/bin:/usr/sbin";
+    inherit base;
+    i915 = i915-driver;
+    nv = if nvidia then nvidia-oss-modules else "";
+    gsp = if gspFirmware == null then "" else gspFirmware;
+    strip = [ base slices.kernel kernelNd.src ];
+    disallowedReferences = [ base slices.kernel kernelNd.src kernelNd i915-driver ]
+      ++ (if nvidia then [ nvidia-oss-modules ] else [ ]);
+    args = [ "-c" ''
+      set -eu
+      mkdir -p "$out"
+      ( cd "$base" && tar cf - . ) | ( cd "$out" && tar xf - )
+      for d in "$out" "$out/kernel" "$out/kernel/drv" "$out/kernel/drv/amd64" "$out/kernel/firmware"; do
+        [ -d "$d" ] && [ ! -h "$d" ] && chmod u+w "$d" 2>/dev/null || true
+      done
+      mkdir -p "$out/kernel/drv/amd64"
+      mods=i915
+      cp "$i915/kernel/drv/amd64/i915" "$out/kernel/drv/amd64/i915"
+      if [ -n "$nv" ]; then
+        mods="$mods nvidia nvidia_modeset nvidia_i2c"
+        for m in nvidia nvidia_modeset nvidia_i2c; do cp "$nv/kernel/drv/amd64/$m" "$out/kernel/drv/amd64/$m"; done
+      fi
+      if [ -n "$gsp" ]; then
+        mkdir -p "$out/kernel/firmware"
+        cp -R "$gsp/kernel/firmware/nvidia" "$out/kernel/firmware/"
+      fi
+      ${stripSliceRefs}
+      for m in $mods; do
+        chmod 0555 "$out/kernel/drv/amd64/$m"
+        [ ! -e "$out/kernel/drv/$m.conf" ] || { echo "FATAL: $m.conf in the tree would attach $m at boot" >&2; exit 1; }
+      done
+      [ -e "$out/platform/i86pc/kernel/amd64/unix" ] || { echo "FATAL: base kernel clobbered" >&2; exit 1; }
+      echo "gpu kernel: $mods''${gsp:+ + GSP firmware}" >&2
+    '' ];
+  };
+
   # worldMan: the gate's base man pages as a doc-only store path (the illumos
   # analog of NixOS delivering man pages through a profile package rather than
   # the kernel/libc closure). mk-proto-world EXCLUDES usr/share/man to keep the
@@ -873,6 +984,8 @@ in
   # iwx wifi (AX2xx): module only; mkIwxDriversDb/mkIwxKernel below.
   inherit iwx-driver iwxFirmware iwxAliases mkIwxDriversDb mkIwxKernel;
   inherit nvidia-oss-modules nvidiaGspFirmware;
+  # Intel iGPU (i915) and the GPU driver-DB/kernel helpers (modules/config/graphics-gpu.nix).
+  inherit i915-driver i915Aliases mkDriversDbWith mkGpuKernel;
 
   inherit (srcPkgs) zlib libxml2 openssl openssh bash nspr nss git libcExtra binutils gnumake gccWrapper vi pkgconf;
   inherit (srcPkgs) ncurses less htop top libevent tmux coreutils gnugrep gnused gnutar findutils diffutils jq gettext home-manager xorgproto lndir hostname libiconv;

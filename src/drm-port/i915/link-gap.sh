@@ -14,7 +14,8 @@ obsd=$1 compat=$2 out=$3 files=$4
 : "${GATE_INC:=/nix/store/s7zkx8nx5sfxixmyqmlnrybrrh14jkmb-illumos-gate-proto/usr/include}"
 : "${JOBS:=4}" "${XFLAGS:=}" "${CC:=gcc}" "${NM:=gnm}"
 mkdir -p "$out/obj"
-F="-m64 -mcmodel=kernel -mno-red-zone -D_KERNEL -ffreestanding -nostdinc -std=gnu11 \
+# -mno-mmx -mno-sse: the gate kernel's NO_SIMD, as build-module.sh.
+F="-m64 -mcmodel=kernel -mno-red-zone -mno-mmx -mno-sse -D_KERNEL -ffreestanding -nostdinc -std=gnu11 \
  -O2 -fno-strict-aliasing $XFLAGS -include $compat/obsd_prelude.h -I$compat \
  -I$obsd/include -I$obsd/include/uapi -I$obsd -I$obsd/i915 -I$GATE_INC"
 cd "$obsd" || exit 1

@@ -92,6 +92,14 @@ in
   # (docs/x1e-wifi-runtime-bind.md), e.g. update_drv -a -i '"pciex8086,51f0"' iwx.
   hardware.wirelessIntel.onMedia = true;
 
+  # The GPU drivers on the media the same way: i915 (the X1E's Iris Xe, the X1's
+  # UHD 630) and the NVIDIA open modules (the X1E's RTX 3080 Ti) have a major
+  # and minor_perm but no alias, so the console stays on vgatext and nothing
+  # attaches at boot. Load-test them at run time (docs/x1e-gpu-runtime-bind.md).
+  # The GSP firmware is unfree, so it is not on the media: an nvidia attach
+  # needs hardware.graphics.nvidia.acceptFirmwareLicense in a later image.
+  hardware.graphics.onMedia = true;
+
   # The edition this media ships (same pin as cloud-ec2.nix); without it the
   # release label falls back to "unstable" and /etc/release misreports the image.
   solnix.release = "26.11";

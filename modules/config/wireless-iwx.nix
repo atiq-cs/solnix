@@ -58,8 +58,24 @@ let
   # the firmware licence opt-in: the per-driver option, or onMedia (whose
   # description says it accepts the licence for the media).
   kernWithIwm = if wantIwm then s.mkIwmKernel (iwm.allowUnfreeFirmware || media) else s.kernel;
-  finalDb = if wantIwx then s.mkIwxDriversDb dbWithIwm iwxBound else dbWithIwm;
-  finalKern = if wantIwx then s.mkIwxKernel kernWithIwm (cfg.allowUnfreeFirmware || media) else kernWithIwm;
+  wifiDb = if wantIwx then s.mkIwxDriversDb dbWithIwm iwxBound else dbWithIwm;
+  wifiKern = if wantIwx then s.mkIwxKernel kernWithIwm (cfg.allowUnfreeFirmware || media) else kernWithIwm;
+  # GPU drivers (options in ./graphics-gpu.nix) on top of the wifi DB/kernel:
+  # i915 always when wanted, nvidia only on media; aliases only when bound.
+  gfx = config.hardware.graphics;
+  i915Bound = gfx.i915.attachAtBoot;
+  wantGpu = gfx.onMedia || i915Bound;
+  gpuDrivers = [ { name = "i915"; perm = "0666 root sys"; aliases = if i915Bound then s.i915Aliases else [ ]; } ]
+    ++ lib.optionals gfx.onMedia [
+      { name = "nvidia"; perm = "0666 root sys"; aliases = [ ]; }
+      { name = "nvidia_modeset"; perm = "0666 root sys"; aliases = [ ]; }
+      { name = "nvidia_i2c"; perm = null; aliases = [ ]; }
+    ];
+  finalDb = if wantGpu then s.mkDriversDbWith wifiDb gpuDrivers else wifiDb;
+  finalKern = if wantGpu then s.mkGpuKernel wifiKern {
+    nvidia = gfx.onMedia;
+    gspFirmware = if gfx.onMedia && gfx.nvidia.acceptFirmwareLicense then s.nvidiaGspFirmware true else null;
+  } else wifiKern;
 
   # Networks highest priority first; each line "SSID<TAB>pskFile".
   iwmNets = lib.sort (a: b: a.priority > b.priority)
@@ -306,9 +322,9 @@ in
       ];
     }
   ]))
-  # The driver DB and kernel tree, rendered from iwm/iwx/onMedia together so
-  # the two drivers compose instead of overriding each other.
-  (lib.mkIf (wantIwm || wantIwx) {
+  # The driver DB and kernel tree, rendered from iwm/iwx/onMedia and the GPU
+  # options together so the drivers compose instead of overriding each other.
+  (lib.mkIf (wantIwm || wantIwx || wantGpu) {
     system.build.driversDb = finalDb;
     system.build.kernelTree = finalKern;
   })

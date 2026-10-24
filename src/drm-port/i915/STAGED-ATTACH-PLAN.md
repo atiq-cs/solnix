@@ -10,6 +10,17 @@ This supersedes the "alias = attach = modeset" expectation. The two phases are p
 separate and must be tested separately, with the DDI/text-console phase proven on the real panel
 *before* any DRM open is attempted.
 
+> **DO NOT USE modules 229d0e54 or 614a0cba (built with SIMD outside FPU sections).** Both were
+> compiled without `-mno-mmx -mno-sse`, unlike every illumos kernel module (Makefile.master
+> `NO_SIMD`): the banked 614a0cba has 6150 SIMD instructions, 6120 of them outside any
+> `fpu_kernel_enter`/`fpu_kernel_exit` section (measured with `simd-gate.sh`), and 229d0e54 was
+> built by the same scripts. Kernel threads run with CR0.TS set, so the first such instruction is a
+> `#NM` panic, and in a user thread's kernel context it corrupts that thread's FPU state. Use the
+> module from `pkgs.solnix.i915-driver` (pkgs/illumos/i915-driver.nix), whose build fails unless
+> SIMD appears only in `i915_memcpy.o`/`drm_cache.o` and only between those calls. Its sha256 is
+> in the image's boot sheet; confirm it before each stage. The text below names 229d0e54 as it
+> was written; read it as "the i915-driver module".
+
 Module to attach: the gate-green repo-source module built in this stream
 (dixi:`/home/gburd/streamI915-build-r2/out/i915`, sha256
 `229d0e544c86b35532f8b9fc27dcd0ab17e09b171b473e30bef8eb6122187643`, built with
