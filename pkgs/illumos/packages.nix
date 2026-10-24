@@ -1517,7 +1517,7 @@ EOF
     # redecl is fixed by gnulibFix. 1.9 is hipster-current.
     datamash = pkg {
       pname = "datamash"; version = "1.9";
-      src = { url = "https://ftp.gnu.org/gnu/datamash/datamash-1.9.tar.gz";
+      src = { url = "https://mirrors.kernel.org/gnu/datamash/datamash-1.9.tar.gz";
               sha256 = "f382ebda03650dd679161f758f9c0a6cc9293213438d4a77a8eda325aacb87d2"; };
       preConfigure = gnulibFix;
     };
@@ -1559,7 +1559,7 @@ EOF
     # its bundled gnulib.
     wdiff = pkg {
       pname = "wdiff"; version = "1.2.2";
-      src = { url = "https://ftp.gnu.org/gnu/wdiff/wdiff-1.2.2.tar.gz";
+      src = { url = "https://mirrors.kernel.org/gnu/wdiff/wdiff-1.2.2.tar.gz";
               sha256 = "34ff698c870c87e6e47a838eeaaae729fa73349139fc8db12211d2a22b78af6b"; };
       deps = [ self.ncurses.gcc ];
       preConfigure = gnulibFix;
@@ -1626,7 +1626,7 @@ EOF
     # test macros are the shared fix. ---------------------------------------
     coreutils = pkg {
       pname = "coreutils"; version = "9.7";
-      src = { url = "https://ftp.gnu.org/gnu/coreutils/coreutils-9.7.tar.xz";
+      src = { url = "https://mirrors.kernel.org/gnu/coreutils/coreutils-9.7.tar.xz";
               sha256 = "e8bb26ad0293f9b5a1fc43fb42ba970e312c66ce92c1b0b16713d7500db251bf"; };
       preConfigure = gnulibFix + illumosExt;
       # coreutils' gnulib is large; --disable-gcc-warnings avoids any -Werror
@@ -1639,7 +1639,7 @@ EOF
 
     gnuindent = pkg {
       pname = "indent"; version = "2.2.13";
-      src = { url = "https://ftp.gnu.org/gnu/indent/indent-2.2.13.tar.xz";
+      src = { url = "https://mirrors.kernel.org/gnu/indent/indent-2.2.13.tar.xz";
               sha256 = "1b81ba4e9a006ca8e6eb5cbbe4cf4f75dfc1fc9301b459aa0d40393e85590a0b"; };
       buildSystem = "custom";
       # indent compiles clean with gnulibFix; only its doc/ dir needs makeinfo
@@ -1659,7 +1659,7 @@ EOF
 
     gnuunits = pkg {
       pname = "units"; version = "2.24";
-      src = { url = "https://ftp.gnu.org/gnu/units/units-2.24.tar.gz";
+      src = { url = "https://mirrors.kernel.org/gnu/units/units-2.24.tar.gz";
               sha256 = "1e502c4edfacf20b29284716c72e5ddb51a495a2365d7b03e7960494c4a0c902"; };
       deps = [ self.readline.gcc self.ncurses.gcc ];
       preConfigure = gnulibFix + illumosExt;
@@ -1668,7 +1668,7 @@ EOF
 
     sharutils = pkg {
       pname = "sharutils"; version = "4.15.2";
-      src = { url = "https://ftp.gnu.org/gnu/sharutils/sharutils-4.15.2.tar.xz";
+      src = { url = "https://mirrors.kernel.org/gnu/sharutils/sharutils-4.15.2.tar.xz";
               sha256 = "2b05cff7de5d7b646dc1669bc36c35fdac02ac6ae4b6c19cb3340d87ec553a9a"; };
       # sharutils bundles old gnulib whose manywarnings -Werror + a printf
       # redefinition break on illumos; disable warnings + feature-test macros.
@@ -1741,7 +1741,7 @@ EOF
     # illumosExt for POSIX getopt. Distinct from the already-cached shell/which.
     gnuwhich = pkg {
       pname = "gnu-which"; version = "2.21";
-      src = { url = "https://ftp.gnu.org/gnu/which/which-2.21.tar.gz";
+      src = { url = "https://mirrors.kernel.org/gnu/which/which-2.21.tar.gz";
               sha256 = "f4a245b94124b377d8b49646bf421f9155d36aa7614b6ebf83705d3ffc76eaad"; };
       preConfigure = illumosExt;
       env = { CFLAGS = "-fcommon"; MAKEINFO = "true"; };
@@ -1802,7 +1802,7 @@ EOF
     # <linux/*.h>.
     parted = pkg {
       pname = "parted"; version = "3.6";
-      src = { url = "https://ftp.gnu.org/gnu/parted/parted-3.6.tar.xz";
+      src = { url = "https://mirrors.kernel.org/gnu/parted/parted-3.6.tar.xz";
               sha256 = "3b43dbe33cca0f9a18601ebab56b7852b128ec1a3df3a9b30ccde5e73359e612"; };
       deps = [ self.readline.gcc self.ncurses.gcc ];
       preConfigure = gnulibFix + illumosExt;
