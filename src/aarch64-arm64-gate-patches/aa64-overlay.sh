@@ -13,7 +13,9 @@ done
 # libs: copy every braich lib the world lacks (by soname), never overwrite world libs
 for d in lib usr/lib; do
   for l in $B/$d/*.so.*; do
-    n=$(basename $l); [ -e "$R/$d/$n" ] || [ -L "$R/$d/$n" ] || cp -P "$l" "$R/$d/$n"
+    # GNU cp: illumos /usr/bin/cp has no -P, failed all 106 copies, and so svccfg (libxml2) and sshd
+    # (libcrypto) could not run on metal (docs/aarch64-postmount-metal-result.md). Fail loudly now.
+    n=$(basename $l); [ -e "$R/$d/$n" ] || [ -L "$R/$d/$n" ] || /usr/gnu/bin/cp -P "$l" "$R/$d/$n" || { echo "FATAL: copy $l" >&2; exit 1; }
   done
 done
 [ -e $R/lib/libgcc_s.so.1 ] || cp -p $B/usr/lib/libgcc_s.so.1 $R/lib/libgcc_s.so.1

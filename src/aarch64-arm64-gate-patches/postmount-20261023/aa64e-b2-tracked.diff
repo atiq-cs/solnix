@@ -1,0 +1,870 @@
+--- /build/aa64e-b2base/exceptions.S	Sat Oct 24 04:18:11 2026
++++ usr/src/uts/armv8/ml/exceptions.S	Sat Oct 24 04:18:11 2026
+@@ -60,8 +60,11 @@
+ 	.data
+ .unexpected_exception:	.asciz "unexpected exception type"
+ 
+-#define UNEXPECTED()				\
++#define UNEXPECTED_N(n)				\
+ 	clrex;					\
++	mov x0, #(n);				\
++	mov x1, sp;				\
++	bl aa64e_unexpected;			\
+ 	adrp x0, .unexpected_exception;		\
+ 	add x0, x0, :lo12:.unexpected_exception;	\
+ 	bl panic
+@@ -85,25 +88,25 @@
+ 	 */
+ 	.balign	VECTOR_ENTRY_SIZE
+ ALTENTRY(from_current_el_sp0_sync)
+-	UNEXPECTED()
++	UNEXPECTED_N(0)
+ 	CHECK_VECTOR_ENTRY(from_current_el_sp0_sync)
+ SET_SIZE(from_current_el_sp0_sync)
+ 
+ 	.balign	VECTOR_ENTRY_SIZE
+ ALTENTRY(from_current_el_sp0_irq)
+-	UNEXPECTED()
++	UNEXPECTED_N(1)
+ 	CHECK_VECTOR_ENTRY(from_current_el_sp0_irq)
+ SET_SIZE(from_current_el_sp0_irq)
+ 
+ 	.balign	VECTOR_ENTRY_SIZE
+ ALTENTRY(from_current_el_sp0_fiq)
+-	UNEXPECTED()
++	UNEXPECTED_N(2)
+ 	CHECK_VECTOR_ENTRY(from_current_el_sp0_fiq)
+ 	SET_SIZE(from_current_el_sp0_fiq)
+ 
+ 	.balign	VECTOR_ENTRY_SIZE
+ ALTENTRY(from_current_el_sp0_error)
+-	UNEXPECTED()
++	UNEXPECTED_N(3)
+ 	CHECK_VECTOR_ENTRY(from_current_el_sp0_error)
+ SET_SIZE(from_current_el_sp0_error)
+ 
+@@ -127,7 +130,7 @@
+ 	SET_SIZE(from_current_el_irq)
+ 	.balign	VECTOR_ENTRY_SIZE
+ ALTENTRY(from_current_el_fiq)
+-	UNEXPECTED()
++	UNEXPECTED_N(6)
+ 	CHECK_VECTOR_ENTRY(from_current_el_fiq)
+ SET_SIZE(from_current_el_fiq)
+ 
+@@ -175,13 +178,13 @@
+ 
+ 	.balign	VECTOR_ENTRY_SIZE
+ ALTENTRY(from_lower_el_aarch64_fiq)
+-	UNEXPECTED()
++	UNEXPECTED_N(10)
+ 	CHECK_VECTOR_ENTRY(from_lower_el_aarch64_fiq)
+ SET_SIZE(from_lower_el_aarch64_fiq)
+ 
+ 	.balign	VECTOR_ENTRY_SIZE
+ ALTENTRY(from_lower_el_aarch64_error)
+-	UNEXPECTED()
++	UNEXPECTED_N(11)
+ 	CHECK_VECTOR_ENTRY(from_lower_el_aarch64_error)
+ SET_SIZE(from_lower_el_aarch64_error)
+ 
+@@ -190,25 +193,25 @@
+ 	 */
+ 	.balign	VECTOR_ENTRY_SIZE
+ ALTENTRY(from_lower_el_aarch32_sync)
+-	UNEXPECTED()
++	UNEXPECTED_N(12)
+ 	CHECK_VECTOR_ENTRY(from_lower_el_aarch32_sync)
+ SET_SIZE(from_lower_el_aarch32_sync)
+ 
+ 	.balign	VECTOR_ENTRY_SIZE
+ ALTENTRY(from_lower_el_aarch32_irq)
+-	UNEXPECTED()
++	UNEXPECTED_N(13)
+ 	CHECK_VECTOR_ENTRY(from_lower_el_aarch32_irq)
+ SET_SIZE(from_lower_el_aarch32_irq)
+ 
+ 	.balign	VECTOR_ENTRY_SIZE
+ ALTENTRY(from_lower_el_aarch32_fiq)
+-	UNEXPECTED()
++	UNEXPECTED_N(14)
+ 	CHECK_VECTOR_ENTRY(from_lower_el_aarch32_fiq)
+ SET_SIZE(from_lower_el_aarch32_fiq)
+ 
+ 	.balign	VECTOR_ENTRY_SIZE
+ ALTENTRY(from_lower_el_aarch32_error)
+-	UNEXPECTED()
++	UNEXPECTED_N(15)
+ 	CHECK_VECTOR_ENTRY(from_lower_el_aarch32_error)
+ SET_SIZE(from_lower_el_aarch32_error)
+ 
+--- /build/aa64e-b2base/trap.c	Sat Oct 24 04:18:11 2026
++++ usr/src/uts/armv8/os/trap.c	Sat Oct 24 04:18:11 2026
+@@ -465,10 +465,14 @@
+ volatile uintptr_t aa_ot_far;
+ volatile uint32_t aa_ot_count;
+ 
++extern void aa64e_trap_rec(uint64_t, uint64_t, uint64_t);
++
+ int
+ trap(uint16_t ec, uint64_t esr, caddr_t addr, struct regs *rp)
+ {
+ 	kthread_t *ct = curthread;
++
++	aa64e_trap_rec(esr, (uint64_t)(uintptr_t)addr, rp->r_pc);	/* NOTE: observer */
+ 	enum seg_rw rw;
+ 	proc_t *p = ttoproc(ct);
+ 	klwp_t *lwp = ttolwp(ct);
+--- /build/aa64e-base/machdep.c	Sat Oct 24 02:41:22 2026
++++ usr/src/uts/armv8/os/machdep.c	Sat Oct 24 04:18:11 2026
+@@ -63,6 +63,17 @@
+ #include <sys/efirt.h>
+ 
+ #include <c2/audit.h>
++#include <sys/proc.h>
++#include <sys/cpuvar.h>
++#include <sys/ontrap.h>
++#include <sys/mman.h>
++#include <sys/console.h>
++#include <sys/atomic.h>
++#include <sys/kmem.h>
++#include <sys/user.h>
++#include <sys/thread.h>
++#include <sys/varargs.h>
++#include <sys/cmn_err.h>
+ 
+ int maxphys = MMU_PAGESIZE * 16;	/* 128k */
+ int klustsize = MMU_PAGESIZE * 16;	/* 128k */
+@@ -682,6 +693,385 @@
+ 	hr_clock_unlock(s);
+ }
+ 
++/*
++ * NOTE: post-mount observer, output only.  consconfig() ends with
++ * prom_io_use_kernel(), after which sysp_putchar() drops every character when
++ * no polled putchar exists, and wcuwsrv() frees console text when there is no
++ * tem.  The helpers below write the SPCR UART directly through a kernel-VA
++ * device mapping made at S1 (before release_bootstrap() removes the boot
++ * identity map), echo what the two drop points discard ("|D| " and "|W| "
++ * prefixes), print stage markers and a 15 s heartbeat, and read the SBSA
++ * generic watchdog control frame through a read-only mapping.  The refresh
++ * frame is never mapped.
++ */
++extern uint_t nproc;			/* common/conf/param.c */
++uint64_t aa64e_uart_pa;			/* set by bop_init() */
++static volatile uint32_t *aa64e_uart;	/* UART KVA, NULL until S1 */
++static volatile uint32_t aa64e_lock;
++volatile uint32_t aa64e_stage;
++volatile uint64_t aa64e_ndrop_d;
++volatile uint64_t aa64e_ndrop_w;
++static int aa64e_bol_d = 1;
++static int aa64e_bol_w = 1;
++volatile uint32_t *aa64e_ena_state;	/* ena0's ena_state, set by ena */
++volatile int *aa64e_ena_link;		/* ena0's ena_link_state */
++volatile int aa64e_ena_seq;		/* last completed ena0 attach step */
++volatile int aa64e_ena_fail;		/* failed ena0 attach step + 1 */
++
++#define	AA64E_NWD	2
++static volatile uint32_t *aa64e_wd[AA64E_NWD];	/* control frames, RO */
++static int aa64e_nwd;
++static int aa64e_wd_dead;
++static uint_t aa64e_hbn;
++
++static void
++aa64e_putc_raw(int c)
++{
++	volatile uint32_t *u = aa64e_uart;
++	uint32_t cap;
++
++	/* Same policy as boot_uart_putchar(): bounded TXFF wait, no drain. */
++	for (cap = 0; (u[0x18 / 4] & (1u << 5)) && cap < 10000u; cap++)
++		__asm__ volatile("isb sy":::"memory");
++	u[0] = (uint32_t)(c & 0xff);
++}
++
++static void aa64e_write1(const char *, int *, const char *, size_t);
++
++/* At most 32 characters per interrupts-off section. */
++static void
++aa64e_write(const char *tag, int *bol, const char *s, size_t n)
++{
++	while (n > 0) {
++		size_t k = MIN(n, 32);
++
++		aa64e_write1(tag, bol, s, k);
++		s += k;
++		n -= k;
++	}
++}
++
++static void
++aa64e_write1(const char *tag, int *bol, const char *s, size_t n)
++{
++	uint64_t daif, t0, lim;
++	int held = 1;
++
++	if (aa64e_uart == NULL)
++		return;
++	daif = disable_interrupts();
++	t0 = arch_timer_count();
++	lim = arch_timer_freq() / 20;
++	while (atomic_cas_32(&aa64e_lock, 0, 1) != 0) {
++		/* never hang the caller: after 50 ms write unlocked */
++		if (arch_timer_count() - t0 > lim) {
++			held = 0;
++			break;
++		}
++	}
++	for (; n > 0; n--, s++) {
++		if (tag != NULL && bol != NULL && *bol) {
++			const char *p;
++			for (p = tag; *p != '\0'; p++)
++				aa64e_putc_raw(*p);
++			*bol = 0;
++		}
++		if (*s == '\n') {
++			aa64e_putc_raw('\r');
++			if (bol != NULL)
++				*bol = 1;
++		}
++		aa64e_putc_raw(*s);
++	}
++	if (held) {
++		membar_exit();
++		aa64e_lock = 0;
++	}
++	restore_interrupts(daif);
++}
++
++void
++aa64e_printf(const char *fmt, ...)
++{
++	char buf[256];
++	va_list ap;
++	size_t n;
++
++	va_start(ap, fmt);
++	n = vsnprintf(buf, sizeof (buf), fmt, ap);
++	va_end(ap);
++	if (n >= sizeof (buf))
++		n = sizeof (buf) - 1;
++	if (aa64e_uart != NULL)
++		aa64e_write(NULL, NULL, buf, n);
++	else
++		prom_printf("%s", buf);
++}
++
++void
++aa64e_echo_d(int c)
++{
++	char ch = (char)c;
++
++	atomic_inc_64(&aa64e_ndrop_d);
++	aa64e_write("|D| ", &aa64e_bol_d, &ch, 1);
++}
++
++void
++aa64e_echo_w(const char *s, size_t n)
++{
++	atomic_add_64(&aa64e_ndrop_w, (int64_t)n);
++	aa64e_write("|W| ", &aa64e_bol_w, s, n);
++}
++
++static uint32_t
++aa64e_rd32(const uint8_t *p)
++{
++	uint32_t v;
++	bcopy(p, &v, sizeof (v));
++	return (v);
++}
++
++static uint64_t
++aa64e_rd64(const uint8_t *p)
++{
++	uint64_t v;
++	bcopy(p, &v, sizeof (v));
++	return (v);
++}
++
++/* Append "wdN wcs/wor/wcv" for each mapped watchdog; READS ONLY. */
++static size_t
++aa64e_wd_fmt(char *b, size_t sz)
++{
++	size_t o = 0;
++	int i;
++
++	for (i = 0; i < aa64e_nwd && i < AA64E_NWD && o < sz; i++) {
++		volatile uint32_t *w = aa64e_wd[i];
++		on_trap_data_t otd;
++		uint32_t wcs = 0, worl = 0, worh = 0, wcvl = 0, wcvh = 0;
++		uint32_t iidr = 0;
++		uint64_t cnt, wcv;
++
++		if (w == NULL || aa64e_wd_dead) {
++			o += snprintf(b + o, sz - o, " wd%d -", i);
++			continue;
++		}
++		if (on_trap(&otd, OT_DATA_ACCESS) == 0) {
++			wcs = w[0];
++			worl = w[2];
++			worh = w[3];
++			wcvl = w[4];
++			wcvh = w[5];
++			iidr = w[0xfcc / 4];
++			__asm__ volatile("dsb sy; isb":::"memory");
++		} else {
++			aa64e_wd_dead = 1;
++		}
++		no_trap();
++		cnt = arch_timer_count();
++		wcv = ((uint64_t)wcvh << 32) | wcvl;
++		o += snprintf(b + o, sz - o,
++		    " wd%d%s wcs %x wor %x:%x wcv-cnt %ld iidr %x", i,
++		    aa64e_wd_dead ? " TRAPPED" : "", wcs, worh, worl,
++		    (long)(wcv - cnt), iidr);
++	}
++	return (MIN(o, sz));
++}
++
++static void
++aa64e_gtdt(void)
++{
++	pnode_t root = prom_rootnode();
++	int len = prom_getproplen(root, "solnix,acpi-gtdt");
++	uint8_t *t;
++	uint32_t cnt, off, i, o;
++	char b[200];
++
++	if (len < 96) {
++		aa64e_printf("[AA64E] GTDT none (len %d)\n", len);
++		return;
++	}
++	t = kmem_zalloc(len, KM_SLEEP);
++	(void) prom_getprop(root, "solnix,acpi-gtdt", (caddr_t)t);
++	cnt = aa64e_rd32(t + 88);
++	off = aa64e_rd32(t + 92);
++	aa64e_printf("[AA64E] GTDT rev %u len %d ntimers %u off %u "
++	    "gsiv s-el1 %u ns-el1 %u virt %u ns-el2 %u cntfrq %lu\n",
++	    t[8], len, cnt, off, aa64e_rd32(t + 48), aa64e_rd32(t + 56),
++	    aa64e_rd32(t + 64), aa64e_rd32(t + 72), read_cntfrq());
++	for (i = 0, o = off; i < cnt && o + 3 <= (uint32_t)len; i++) {
++		uint8_t type = t[o];
++		uint32_t l = t[o + 1] | ((uint32_t)t[o + 2] << 8);
++
++		if (l < 4 || o + l > (uint32_t)len)
++			break;
++		if (type == 1 && l >= 28) {
++			uint64_t rf = aa64e_rd64(t + o + 4);
++			uint64_t cf = aa64e_rd64(t + o + 12);
++			uint32_t gsiv = aa64e_rd32(t + o + 20);
++			uint32_t fl = aa64e_rd32(t + o + 24);
++
++			aa64e_printf("[AA64E] GTDT wd%d refresh 0x%lx control "
++			    "0x%lx gsiv %u flags 0x%x\n", aa64e_nwd, rf, cf,
++			    gsiv, fl);
++			if (aa64e_nwd < AA64E_NWD && cf != 0 &&
++			    (fl & 4) == 0) {
++				/* PROT_READ only: the PTE is read-only */
++				aa64e_wd[aa64e_nwd] = (volatile uint32_t *)
++				    psm_map_phys(cf, 0x1000, PROT_READ);
++			}
++			aa64e_nwd++;
++		} else if (type == 0 && l >= 20) {
++			aa64e_printf("[AA64E] GTDT timer-block 0x%lx n %u\n",
++			    aa64e_rd64(t + o + 4), aa64e_rd32(t + o + 12));
++		} else {
++			aa64e_printf("[AA64E] GTDT type %u len %u\n", type, l);
++		}
++		o += l;
++	}
++	kmem_free(t, len);
++	(void) aa64e_wd_fmt(b, sizeof (b));
++	aa64e_printf("[AA64E] S1 watchdog:%s\n", b);
++}
++
++static void
++aa64e_hb(void *arg __unused)
++{
++	char b[448];
++	size_t o = 0, sz = sizeof (b) - 2;
++	proc_t *p;
++	int i;
++
++#define	AA64E_AP(...)	do { if (o < sz) o += snprintf(b + o, sz - o, \
++	__VA_ARGS__); } while (0)
++	AA64E_AP("[AA64E-HB] #%u %lus S%u cpu %d/%d np %u fm %lu dD %lu "
++	    "dW %lu pio %d%d tq %d rc %d", aa64e_hbn++,
++	    (ulong_t)(gethrtime() / NANOSEC), aa64e_stage, ncpus_online,
++	    ncpus, nproc, (ulong_t)freemem, (ulong_t)aa64e_ndrop_d,
++	    (ulong_t)aa64e_ndrop_w, cons_polledio != NULL,
++	    cons_polledio != NULL &&
++	    cons_polledio->cons_polledio_putchar != NULL,
++	    console_taskq != NULL, rconsvp != NULL);
++	AA64E_AP(" ena0 seq %d fail %d st %x link %d", aa64e_ena_seq,
++	    aa64e_ena_fail, aa64e_ena_state != NULL ? *aa64e_ena_state : 0xff,
++	    aa64e_ena_link != NULL ? *aa64e_ena_link : -9);
++	if (mutex_tryenter(&pidlock)) {
++		proc_t *ip = proc_init;
++
++		if (ip != NULL && mutex_tryenter(&ip->p_lock)) {
++			if (ip->p_tlist != NULL) {
++				AA64E_AP(" init %s ts %x sys %d",
++				    PTOU(ip)->u_comm, ip->p_tlist->t_state,
++				    ip->p_tlist->t_sysnum);
++			}
++			mutex_exit(&ip->p_lock);
++		}
++		AA64E_AP(" new");
++		for (i = 0, p = practive; p != NULL && i < 4;
++		    i++, p = p->p_next) {
++			AA64E_AP(" %d:%s", p->p_pidp->pid_id,
++			    PTOU(p)->u_comm);
++		}
++		mutex_exit(&pidlock);
++	} else {
++		AA64E_AP(" pidlock-busy");
++	}
++	if (o < sz)
++		o += aa64e_wd_fmt(b + o, sz - o);
++	o = MIN(o, sz);
++	b[o++] = '\n';
++	aa64e_write(NULL, NULL, b, o);
++#undef	AA64E_AP
++	(void) realtime_timeout(aa64e_hb, NULL, 15 * hz);
++}
++
++/* S1: called from main() right after vfs_mountroot(). */
++void
++aa64e_init(void)
++{
++	if (aa64e_uart_pa != 0) {
++		aa64e_uart = (volatile uint32_t *)psm_map_phys(aa64e_uart_pa,
++		    0x1000, PROT_READ | PROT_WRITE);
++	}
++	aa64e_printf("\n[AA64E] observer up: uart pa 0x%lx kva %p boot-el %lu "
++	    "cntfrq %lu ncpus %d\n", aa64e_uart_pa, (void *)aa64e_uart,
++	    CPU->cpu_m.mcpu_boot_el, read_cntfrq(), ncpus);
++	aa64e_gtdt();
++	(void) realtime_timeout(aa64e_hb, NULL, 15 * hz);
++}
++
++void
++aa64e_mark(uint32_t n, const char *what)
++{
++	aa64e_stage = n;
++	aa64e_printf("[AA64E] S%u %s t=%lums cpus %d np %u\n", n, what,
++	    (ulong_t)(gethrtime() / 1000000), ncpus_online, nproc);
++	/* control: the old prom path; dropped (and echoed |D|) after S6 */
++	prom_printf("[AA64E-P] S%u\n", n);
++}
++
++/* NOTE: observer.  Last 4 trap() entries per CPU, printed by aa64e_unexpected(). */
++typedef struct aa64e_tr {
++	uint64_t	at_esr;
++	uint64_t	at_far;
++	uint64_t	at_pc;
++	uint64_t	at_t;
++} aa64e_tr_t;
++aa64e_tr_t aa64e_trace[NCPU][4];
++uint8_t aa64e_trace_i[NCPU];
++
++void
++aa64e_trap_rec(uint64_t esr, uint64_t far, uint64_t pc)
++{
++	int c = CPU->cpu_id;
++	aa64e_tr_t *t;
++
++	if (c < 0 || c >= NCPU)
++		return;
++	t = &aa64e_trace[c][aa64e_trace_i[c]++ & 3];
++	t->at_esr = esr;
++	t->at_far = far;
++	t->at_pc = pc;
++	t->at_t = arch_timer_count();
++}
++
++static const char *aa64e_vname[16] = {
++	"cur-sp0-sync", "cur-sp0-irq", "cur-sp0-fiq", "cur-sp0-serror",
++	"cur-spx-sync", "cur-spx-irq", "cur-spx-fiq", "cur-spx-serror",
++	"low64-sync", "low64-irq", "low64-fiq", "low64-serror",
++	"low32-sync", "low32-irq", "low32-fiq", "low32-serror"
++};
++
++void
++aa64e_unexpected(uint64_t vec, uint64_t sp)
++{
++	uint64_t esr, elr, far, spsr, daif, isr;
++	int c = CPU->cpu_id, i;
++
++	__asm__ volatile("mrs %0, esr_el1" : "=r"(esr));
++	__asm__ volatile("mrs %0, elr_el1" : "=r"(elr));
++	__asm__ volatile("mrs %0, far_el1" : "=r"(far));
++	__asm__ volatile("mrs %0, spsr_el1" : "=r"(spsr));
++	__asm__ volatile("mrs %0, daif" : "=r"(daif));
++	__asm__ volatile("mrs %0, isr_el1" : "=r"(isr));
++	aa64e_printf("\n[AA64E-UNEXP] cpu%d vec %lu %s esr 0x%lx (ec 0x%lx iss 0x%lx) "
++	    "elr 0x%lx far 0x%lx spsr 0x%lx sp 0x%lx daif 0x%lx isr 0x%lx "
++	    "thread %p comm %s\n", c, vec, aa64e_vname[vec & 15], esr,
++	    (esr >> 26) & 0x3f, esr & 0x1ffffff, elr, far, spsr, sp, daif, isr,
++	    (void *)curthread, PTOU(curproc)->u_comm);
++	if (c >= 0 && c < NCPU) {
++		for (i = 1; i <= 4; i++) {
++			aa64e_tr_t *t =
++			    &aa64e_trace[c][(aa64e_trace_i[c] - i) & 3];
++			aa64e_printf("[AA64E-UNEXP] cpu%d trap-%d esr 0x%lx far "
++			    "0x%lx pc 0x%lx t %lu\n", c, i, t->at_esr,
++			    t->at_far, t->at_pc, t->at_t);
++		}
++	}
++}
++
+ static int
+ sysp_getchar(void)
+ {
+@@ -711,8 +1101,10 @@
+ 	 * We have no alternative but to drop the output on the floor.
+ 	 */
+ 	if (cons_polledio == NULL ||
+-	    cons_polledio->cons_polledio_putchar == NULL)
++	    cons_polledio->cons_polledio_putchar == NULL) {
++		aa64e_echo_d(c);	/* NOTE: observer echo of the drop */
+ 		return;
++	}
+ 
+ 	s = disable_interrupts();
+ 	cons_polledio->cons_polledio_putchar(
+--- /build/aa64e-base/ena.c	Sat Oct 24 02:41:22 2026
++++ usr/src/uts/common/io/ena/ena.c	Sat Oct 24 04:18:11 2026
+@@ -16,7 +16,20 @@
+ #include "ena_hw.h"
+ #include "ena.h"
+ 
++#if defined(__aarch64__)
+ /*
++ * NOTE: post-mount observer (armv8/os/machdep.c).  Weak: ena links
++ * with -z defs and the DDI mapfiles; krtld binds these from unix.
++ */
++extern volatile uint32_t *aa64e_ena_state __attribute__((weak));
++extern volatile int *aa64e_ena_link __attribute__((weak));
++extern volatile int aa64e_ena_seq __attribute__((weak));
++extern volatile int aa64e_ena_fail __attribute__((weak));
++extern void aa64e_printf(const char *, ...) __attribute__((weak));
++#define	AA64E_HAVE	(&aa64e_ena_seq != NULL && &aa64e_printf != NULL)
++#endif
++
++/*
+  * Elastic Network Adapter (ENA) Driver
+  * ------------------------------------
+  *
+@@ -1885,6 +1898,19 @@
+ 		resetting = true;
+ 	}
+ 
++#if defined(__aarch64__)
++	if (AA64E_HAVE)
++		aa64e_printf("[AA64E] ena%d rx sizing: rxqs %u descs %u (dev max %u) "
++		    "buf %u B mtu %u (max %u) sgl %u page %lu -> %lu bytes of "
++		    "streaming DMA via ddi_dma_mem_alloc/kalloca; txqs %u descs %u "
++		    "buf %u B\n", ena->ena_instance, ena->ena_num_rxqs,
++		    ena->ena_rxq_num_descs, ena->ena_rx_max_sq_num_descs,
++		    ena->ena_rx_buf_sz, ena->ena_mtu, ena->ena_max_mtu,
++		    ena->ena_rx_sgl_max_sz, (ulong_t)ena->ena_page_sz,
++		    (ulong_t)ena->ena_num_rxqs * ena->ena_rxq_num_descs *
++		    ena->ena_rx_buf_sz, ena->ena_num_txqs,
++		    ena->ena_txq_num_descs, ena->ena_tx_buf_sz);
++#endif
+ 	for (uint_t i = 0; i < ena->ena_num_rxqs; i++) {
+ 		ena_rxq_t *rxq = &ena->ena_rxqs[i];
+ 
+@@ -2308,6 +2334,10 @@
+ 		if (!(success = desc->ead_attach_fn(ena))) {
+ 			ena_err(ena, "attach sequence failed: %s (%d)",
+ 			    desc->ead_name, i);
++#if defined(__aarch64__)
++			if (AA64E_HAVE && ena->ena_instance == 0)
++				aa64e_ena_fail = i + 1;
++#endif
+ 
+ 			if (ena->ena_attach_seq == ENA_ATTACH_MAC_REGISTER) {
+ 				/*
+@@ -2366,6 +2396,14 @@
+ 		}
+ 
+ 		ena->ena_attach_seq = desc->ead_seq;
++#if defined(__aarch64__)
++		if (AA64E_HAVE) {
++			aa64e_printf("[AA64E] ena%d attach %d %s ok\n",
++			    ena->ena_instance, i, desc->ead_name);
++			if (ena->ena_instance == 0)
++				aa64e_ena_seq = desc->ead_seq;
++		}
++#endif
+ 	}
+ 
+ 	/*
+@@ -2379,6 +2417,12 @@
+ 	ena_aenq_enable(ena);
+ 
+ 	ddi_set_driver_private(dip, ena);
++#if defined(__aarch64__)
++	if (AA64E_HAVE && ena->ena_instance == 0) {
++		aa64e_ena_link = (volatile int *)&ena->ena_link_state;
++		aa64e_ena_state = &ena->ena_state;
++	}
++#endif
+ 
+ 	ena_update_regcache(ena);
+ 
+@@ -2424,6 +2468,12 @@
+ 	 */
+ 	ena->ena_attach_seq = ENA_ATTACH_RXQS_ALLOC;
+ 	ena_cleanup(ena);
++#if defined(__aarch64__)
++	if (AA64E_HAVE && ena->ena_instance == 0) {
++		aa64e_ena_state = NULL;
++		aa64e_ena_link = NULL;
++	}
++#endif
+ 	ddi_set_driver_private(dip, NULL);
+ 	kmem_free(ena, sizeof (ena_t));
+ 	return (DDI_SUCCESS);
+--- /build/aa64e-base/fakebop.c	Sat Oct 24 02:41:22 2026
++++ usr/src/uts/armv8/os/fakebop.c	Sat Oct 24 04:18:11 2026
+@@ -248,6 +248,12 @@
+ 	}
+ 
+ 	bsvc_init(xbp);
++	{
++		/* NOTE: observer: UART PA for the post-mount mapping */
++		extern uint64_t aa64e_uart_pa;
++		if (xbp != NULL)
++			aa64e_uart_pa = xbp->bi_bsvc_uart_mmio_base;
++	}
+ 
+ 	bootops = &bootop;
+ 	xbootp = xbp;
+--- /build/aa64e-base/mp_startup.c	Sat Oct 24 02:41:22 2026
++++ usr/src/uts/armv8/os/mp_startup.c	Sat Oct 24 04:18:11 2026
+@@ -895,8 +895,15 @@
+ 		 * XXXARM: The error path here needs to be tightened up, as
+ 		 * when this fails we will crash shortly thereafter.
+ 		 */
+-		if (start_cpu(ci) != 0)
+-			CPUSET_DEL(mp_cpus, ci->ci_id);
++		{
++			extern void aa64e_printf(const char *, ...);
++			int aa64e_rc;
++
++			aa64e_printf(">%d ", ci->ci_id);
++			if ((aa64e_rc = start_cpu(ci)) != 0)
++				CPUSET_DEL(mp_cpus, ci->ci_id);
++			aa64e_printf("<%d:%d ", ci->ci_id, aa64e_rc);
++		}
+ 		cpu_state_change_notify(ci->ci_id, CPU_SETUP);
+ 		mutex_exit(&cpu_lock);
+ 		mutex_enter(&cpu_lock);
+--- /build/aa64e-base/main.c	Sat Oct 24 02:41:22 2026
++++ usr/src/uts/common/os/main.c	Sat Oct 24 04:18:11 2026
+@@ -85,6 +85,12 @@
+ #include <c2/audit.h>
+ #include <sys/bootprops.h>
+ 
++#if defined(__aarch64__)
++/* NOTE: post-mount observer (armv8/os/machdep.c) */
++extern void aa64e_init(void);
++extern void aa64e_mark(uint32_t, const char *);
++#endif
++
+ /* well known processes */
+ proc_t *proc_sched;		/* memory scheduler */
+ proc_t *proc_init;		/* init */
+@@ -516,6 +522,12 @@
+ 	    0, NULL, NULL, NULL, NULL, NULL, 0);
+ 
+ 	vfs_mountroot();	/* Mount the root file system */
++#if defined(__aarch64__)
++	aa64e_init();
++#endif
++#if defined(__aarch64__)
++	aa64e_mark(1, "root mounted");
++#endif
+ 	errorq_init();		/* after vfs_mountroot() so DDI root is ready */
+ 	cpu_kstat_init(CPU);	/* after vfs_mountroot() so TOD is valid */
+ 	ddi_walk_devs(ddi_root_node(), pm_adjust_timestamps, NULL);
+@@ -523,6 +535,9 @@
+ 
+ 	post_startup();
+ 	swaploaded = 1;
++#if defined(__aarch64__)
++	aa64e_mark(2, "post_startup done");
++#endif
+ 
+ 	/*
+ 	 * Initialize Solaris Audit Subsystem
+@@ -536,6 +551,9 @@
+ 	 * without the rescale.
+ 	 */
+ 	vmem_update(NULL);
++#if defined(__aarch64__)
++	aa64e_mark(3, "strplumb next");
++#endif
+ 
+ 	/*
+ 	 * Plumb the protocol modules and drivers only if we are not
+@@ -543,6 +561,9 @@
+ 	 */
+ 	if (netboot == 0 && iscsiboot_prop == NULL)
+ 		(void) strplumb();
++#if defined(__aarch64__)
++	aa64e_mark(4, "strplumb done");
++#endif
+ 
+ 	gethrestime(&PTOU(curproc)->u_start);
+ 	curthread->t_start = PTOU(curproc)->u_start.tv_sec;
+@@ -552,10 +573,19 @@
+ 	 * Perform setup functions that can only be done after root
+ 	 * and swap have been set up.
+ 	 */
++#if defined(__aarch64__)
++	aa64e_mark(5, "consconfig next");
++#endif
+ 	consconfig();
++#if defined(__aarch64__)
++	aa64e_mark(6, "consconfig done");
++#endif
+ #if !defined(__sparc)
+ 	release_bootstrap();
+ #endif
++#if defined(__aarch64__)
++	aa64e_mark(7, "release_bootstrap done");
++#endif
+ 
+ 	/*
+ 	 * attach drivers with ddi-forceattach prop
+@@ -564,6 +594,9 @@
+ 	 * available before I/O subsystem is fully initialized.
+ 	 */
+ 	i_ddi_forceattach_drivers();
++#if defined(__aarch64__)
++	aa64e_mark(8, "forceattach done");
++#endif
+ 
+ 	/*
+ 	 * Set the scan rate and other parameters of the paging subsystem.
+@@ -598,11 +631,17 @@
+ 	 * start_other_cpus()
+ 	 */
+ 	lgrp_init(LGRP_INIT_STAGE4);
++#if defined(__aarch64__)
++	aa64e_mark(9, "start_other_cpus next");
++#endif
+ 
+ 	/*
+ 	 * Perform MP initialization, if any.
+ 	 */
+ 	start_other_cpus(0);
++#if defined(__aarch64__)
++	aa64e_mark(10, "start_other_cpus done");
++#endif
+ 
+ #if defined(__sparc)
+ 	/*
+@@ -634,6 +673,9 @@
+ 	 * These must be called after start_other_cpus
+ 	 */
+ 	pm_cfb_setup_intr();
++#if defined(__aarch64__)
++	aa64e_mark(11, "mp_init done, init next");
++#endif
+ #if defined(__x86)
+ 	fastboot_post_startup();
+ 
+@@ -652,6 +694,9 @@
+ 	if (newproc(start_init, NULL, defaultcid, 59, NULL,
+ 	    FAMOUS_PID_INIT))
+ 		panic("main: unable to fork init.");
++#if defined(__aarch64__)
++	aa64e_mark(12, "init forked");
++#endif
+ 
+ 	/* create pageout daemon */
+ 	if (newproc(pageout, NULL, syscid, maxclsyspri - 1, NULL,
+@@ -662,6 +707,9 @@
+ 	if (newproc(fsflush, NULL, syscid, minclsyspri, NULL,
+ 	    FAMOUS_PID_FSFLUSH))
+ 		panic("main: unable to fork fsflush()");
++#if defined(__aarch64__)
++	aa64e_mark(13, "pageout+fsflush forked");
++#endif
+ 
+ 	/* create cluster process if we're a member of one */
+ 	if (cluster_bootflags & CLUSTER_BOOTED) {
+@@ -684,6 +732,9 @@
+ 	    NULL, 0, &p0, TS_RUN, minclsyspri);
+ 
+ 	pid_setmin();
++#if defined(__aarch64__)
++	aa64e_mark(14, "sched");
++#endif
+ 
+ 	/* system is now ready */
+ 	mutex_exit(&ualock);
+--- /build/aa64e-base/wscons.c	Sat Oct 24 02:41:22 2026
++++ usr/src/uts/common/io/wscons.c	Sat Oct 24 04:18:11 2026
+@@ -131,6 +131,11 @@
+ #include <sys/wscons.h>
+ #include <sys/vt_impl.h>
+ 
++#if defined(__aarch64__)
++/* NOTE: post-mount observer (armv8/os/machdep.c) */
++extern void aa64e_echo_w(const char *, size_t);
++#endif
++
+ /* streams stuff */
+ _NOTE(SCHEME_PROTECTS_DATA("Unshared data", copyreq))
+ _NOTE(SCHEME_PROTECTS_DATA("Unshared data", copyresp))
+@@ -557,6 +562,15 @@
+ 			ptem = wc_get_screen_tem(pvc);
+ 
+ 			if (ptem == NULL) {
++#if defined(__aarch64__)
++				for (mblk_t *nbp = mp; nbp != NULL;
++				    nbp = nbp->b_cont) {
++					if (nbp->b_wptr > nbp->b_rptr)
++						aa64e_echo_w(
++						    (const char *)nbp->b_rptr,
++						    nbp->b_wptr - nbp->b_rptr);
++				}
++#endif
+ 				freemsg(mp);
+ 				continue;
+ 			}
+--- /build/aa64e-base/ena_dma.c	Sat Oct 24 02:41:22 2026
++++ usr/src/uts/common/io/ena/ena_dma.c	Sat Oct 24 04:18:11 2026
+@@ -130,7 +130,7 @@
+ 	ret = ddi_dma_alloc_handle(ena->ena_dip, &attr, DDI_DMA_DONTWAIT, NULL,
+ 	    &edb->edb_dma_hdl);
+ 	if (ret != DDI_SUCCESS) {
+-		ena_err(ena, "!failed to allocate DMA handle: %d", ret);
++		ena_err(ena, "failed to allocate DMA handle: %d", ret);
+ 		return (false);
+ 	}
+ 
+@@ -138,7 +138,7 @@
+ 	    DDI_DMA_DONTWAIT, NULL, &edb->edb_va, &size_allocated,
+ 	    &edb->edb_acc_hdl);
+ 	if (ret != DDI_SUCCESS) {
+-		ena_err(ena, "!failed to allocate %lu bytes of DMA "
++		ena_err(ena, "failed to allocate %lu bytes of DMA "
+ 		    "memory: %d", size, ret);
+ 		ena_dma_free(edb);
+ 		return (false);
+@@ -150,7 +150,7 @@
+ 	    size_allocated, DDI_DMA_RDWR | flags, DDI_DMA_DONTWAIT, NULL, NULL,
+ 	    NULL);
+ 	if (ret != DDI_SUCCESS) {
+-		ena_err(ena, "!failed to bind %lu bytes of DMA "
++		ena_err(ena, "failed to bind %lu bytes of DMA "
+ 		    "memory: %d", size_allocated, ret);
+ 		ena_dma_free(edb);
+ 		return (false);

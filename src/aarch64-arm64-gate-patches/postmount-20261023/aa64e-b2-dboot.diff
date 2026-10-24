@@ -1,0 +1,25 @@
+--- /build/dboot_synth_fdt.c.b2	Sat Oct 24 02:35:05 2026
++++ usr/src/uts/armv8/dboot/dboot_synth_fdt.c	Sat Oct 24 04:18:11 2026
+@@ -1216,6 +1216,22 @@
+ 	(void) fdt_property_cell(fdt, "#size-cells", 2);
+ 	(void) fdt_property_cell(fdt, "interrupt-parent", SYNTH_PHANDLE_GIC);
+ 	(void) fdt_property_string(fdt, "compatible", "solnix,acpi-synth");
++	{
++		/*
++		 * NOTE: diagnostic.  Copy the raw ACPI GTDT so the kernel can
++		 * report the SBSA watchdog read-only.  Capped at 1 KiB.
++		 */
++		const ACPI_TABLE_HEADER *gtdt =
++		    synth_find_table(ACPI_SIG_GTDT);
++		if (gtdt != NULL) {
++			UINT32 glen;
++			memcpy(&glen, &gtdt->Length, sizeof (glen));
++			if (glen > 1024)
++				glen = 1024;
++			(void) fdt_property(fdt, "solnix,acpi-gtdt",
++			    gtdt, (int)glen);
++		}
++	}
+ 	synth_emit_phandle(fdt);
+ 
+ 	/* /chosen -- build_firmware_properties_fdt walks this. */
