@@ -568,7 +568,7 @@ let
       set -eu
       export PATH="$solnixDev/bin:/usr/bin"
       mkdir -p "$out/bin"
-      gcc -O2 -Wall -Werror -o "$out/bin/solnix-cputemp" "$src"
+      cp "$src" solnix-cputemp.c; gcc -O2 -Wall -Werror -Wl,-R,${libc}/lib/amd64 -o "$out/bin/solnix-cputemp" solnix-cputemp.c
       "$out/bin/solnix-cputemp" -t || { echo "FATAL: solnix-cputemp self-test failed" >&2; exit 1; }
     '' ];
   };
