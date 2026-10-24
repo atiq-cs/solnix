@@ -25,7 +25,9 @@ good() { local G=$1 TL=/nix/store/00000000000000000000000000000000-solnix-system
   echo '<service name="system/update-man-index" version="1" type="service"><instance name="default" enabled="false"/></service>' > "$G/etc/svc/profile/site/solnix.xml"
   mkdir -p "$G/etc/ssl/certs" "$G/nix/store/22222222222222222222222222222222-cacert/etc/ssl/certs"
   echo '-----BEGIN CERTIFICATE-----' > "$G/nix/store/22222222222222222222222222222222-cacert/etc/ssl/certs/ca-bundle.crt"
-  ln -s /nix/store/22222222222222222222222222222222-cacert/etc/ssl/certs/ca-bundle.crt "$G/etc/ssl/certs/ca-certificates.crt"; }
+  ln -s /nix/store/22222222222222222222222222222222-cacert/etc/ssl/certs/ca-bundle.crt "$G/etc/ssl/certs/ca-certificates.crt"
+  printf 'ap::sysinit:/sbin/autopush -f /etc/iu.ap\nvol::sysinit:/sbin/mount -F tmpfs swap /system/volatile </dev/null\nls::sysinit:/sbin/sh /nix/store/33333333333333333333333333333333-solnix-live-store >/dev/msglog 2>&1 </dev/null\n' > "$G/etc/inittab"
+  : > "$G/nix/store/33333333333333333333333333333333-solnix-live-store"; mkdir -p "$G/nix/.rw-store"; }
 TL=/nix/store/00000000000000000000000000000000-solnix-system-x
 tot=0; bad=0
 while IFS='|' read -r name break want; do
@@ -50,13 +52,16 @@ baked-key|mkdir -p root/.ssh; echo ssh-ed25519 AAAA > root/.ssh/authorized_keys|
 dladm-root-owned|sed -i 's/^dladm:x:[0-9]*:/dladm:x:0:/' etc/passwd|datalink.conf is owned by uid
 ipadm-wrong-owner|sed -i 's/^netadm:x:[0-9]*:/netadm:x:4242:/' etc/passwd|/etc/ipadm is owned by uid
 no-sad-admin|rm dev/sad/admin|no /dev/sad/admin
-no-ca-link|rm etc/ssl/certs/ca-certificates.crt|no /etc/ssl/certs/ca-certificates.crt link
+no-ca-link|rm etc/ssl/certs/ca-certificates.crt|no /etc/ssl/certs/ca-certificates.crt resolving
 usr-lib-libc|mkdir -p usr/lib; ln -s /nix/store/x/usr/lib/libc usr/lib/libc|/usr/lib/libc exists
 man-index-on|: > etc/svc/profile/site/solnix.xml|update-man-index is not preset off
 etc-hardlink|: > etc/a; ln etc/a etc/b|hard-linked files in /etc or /var
 no-wrapper|rm run/wrappers/bin/ping|setuid programs missing from /run/wrappers/bin
 verbose-boot|mkdir -p boot; echo 'boot-args="-v"' > boot/loader.conf|loader.conf boots verbose
 wrapper-not-setuid|chmod 0555 run/wrappers/bin/su|setuid programs missing from /run/wrappers/bin
+no-ls-line|sed -i '/^ls::/d' etc/inittab|no RAM store for nix
+no-rw-store|rmdir nix/.rw-store|no RAM store for nix
+ls-not-in-store|rm nix/store/33333333333333333333333333333333-solnix-live-store|no RAM store for nix
 CASES
 g="$W/good"; good "$g"; gout=$(closure_contract_checks "$g" 2>&1 | grep '^FAIL:' | grep -v 'store DB')
 [ -z "$gout" ] && echo "PASS  good root: no FAIL" || { echo "MISS  good root fails: $gout"; bad=$((bad+1)); }

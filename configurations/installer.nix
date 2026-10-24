@@ -48,6 +48,10 @@ let
   liveMethods = pkgs.runCommand "solnix-live-methods" { } ''
     /sbin/sh ${../scripts/live/mk-live-methods.sh} ${live.world} $out
   '';
+  # The live root's writable store: a tmpfs upper with the ramdisk's store paths
+  # lofs-mounted into it read-only (NixOS: /nix/.rw-store + overlay). Run from
+  # inittab, which make-installer-image.sh points at share/solnix/live-store.
+  liveStore = pkgs.writeScript "solnix-live-store" (builtins.readFile ../scripts/live/solnix-live-store);
   # /run/current-system/sw/bin carries these by name, like any systemPackage.
   liveTools = pkgs.runCommand "solnix-live-tools" { } ''
     mkdir -p $out/bin
@@ -70,6 +74,7 @@ let
     done
     mkdir -p $out/share/solnix
     ln -s ${liveMethods} $out/share/solnix/live-methods
+    ln -s ${liveStore} $out/share/solnix/live-store
     # /root/README on the media (make-installer-image.sh copies it there).
     ln -s ${readme} $out/share/solnix/README
   '';

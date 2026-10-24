@@ -425,6 +425,17 @@ closure_contract_checks() {
   _first=$(grep -E '^[^#:]*:[^:]*:sysinit:' "$R/etc/inittab" 2>/dev/null | head -1 | cut -d: -f1)
   if [ "$_first" = ap ]; then _ok "inittab runs autopush first (the console gets ldterm)"
   else _fail "inittab's first sysinit line is '${_first:-none}', not ap: the console is opened before autopush and staircases"; fi
+  # 15. the live store is writable in RAM (docs/design-live-nix-store.md): with the
+  #     ramdisk's fixed slack (~45 MB) as the only writable store, `nix shell
+  #     nixpkgs#...` and the registry fetch died "No space left on device" (measured
+  #     on the 1c9b149 media). inittab must run live-store after vol:: and before
+  #     svc.startd, the script must be in the media's store, and /nix/.rw-store must exist.
+  local _sys _ls
+  _sys=$(grep -E '^[^#:]*:[^:]*:sysinit:' "$R/etc/inittab" 2>/dev/null | head -3 | cut -d: -f1 | tr '\n' ' ')
+  _ls=$(grep '^ls::sysinit:' "$R/etc/inittab" 2>/dev/null | sed -n 's,.*/sbin/sh \(/nix/store/[^ ]*\) .*,\1,p')
+  if [ "$_sys" = "ap vol ls " ] && [ -n "$_ls" ] && _inr "$R" "$_ls" >/dev/null && [ -d "$R/nix/.rw-store" ] && [ ! -h "$R/nix/.rw-store" ]; then
+    _ok "inittab mounts the RAM store (ls:: after ap, vol; $(basename "$_ls") in the media's store; /nix/.rw-store present)"
+  else _fail "no RAM store for nix: sysinit order '${_sys}' (want 'ap vol ls '), live-store '${_ls:-none}', /nix/.rw-store $([ -d "$R/nix/.rw-store" ] && echo present || echo missing)"; fi
   [ "${MODE:-}" = selftest ] || https_check "$R"
 }
 
@@ -648,6 +659,9 @@ selftest() {
   echo "$_cao" | grep -q "first sysinit line is 'vol', not ap" \
     && echo "  autopush-first check fires on an inittab with a sysinit line ahead of ap" \
     || { echo "  FAIL: autopush-first check did not fire on vol:: ahead of ap::"; return 1; }
+  echo "$_cao" | grep -q "no RAM store for nix" \
+    && echo "  RAM-store check fires on a root without the ls:: line and /nix/.rw-store" \
+    || { echo "  FAIL: RAM-store check did not fire on a root without it"; return 1; }
   FAIL=$cbefore
   # and a GOOD closure root passes them all (positive control).
   local G="$WORK/good" TL=/nix/store/00000000000000000000000000000000-solnix-system-x
@@ -674,7 +688,8 @@ selftest() {
     > "$G/etc/svc/profile/site/solnix.xml"
   for _b in passwd su ping w crontab login; do : > "$G/run/wrappers/bin/$_b"; chmod 4555 "$G/run/wrappers/bin/$_b"; done
   ln -s ../../devices/pseudo/sad@0:admin "$G/dev/sad/admin"
-  printf 'ap::sysinit:/sbin/autopush -f /etc/iu.ap\nvol::sysinit:/sbin/mount -F tmpfs swap /system/volatile </dev/null\n' > "$G/etc/inittab"
+  printf 'ap::sysinit:/sbin/autopush -f /etc/iu.ap\nvol::sysinit:/sbin/mount -F tmpfs swap /system/volatile </dev/null\nls::sysinit:/sbin/sh /nix/store/33333333333333333333333333333333-solnix-live-store >/dev/msglog 2>&1 </dev/null\n' > "$G/etc/inittab"
+  : > "$G/nix/store/33333333333333333333333333333333-solnix-live-store"; mkdir -p "$G/nix/.rw-store"
   local gb=$FAIL; ACCEPT_ROOT_UID=$(id -u) closure_contract_checks "$G" > "$WORK/good.out" 2>&1 || true
   # the store-DB validity check needs a real store; on a fake root it may only SKIP or FAIL that one line
   local gfails; gfails=$(grep -c 'FAIL:' "$WORK/good.out"); grep 'FAIL:' "$WORK/good.out" | grep -v 'store DB' | sed 's/^/    good-root /'

@@ -130,6 +130,11 @@ Nix
   solnix-rebuild        nixos-rebuild (on the installed system)
   solnix-version        nixos-version
 
+  The store is writable in RAM, as on NixOS's live ISO: new store paths, /nix/var
+  and /root (~/.cache/nix) live on a tmpfs of half the memory, and the media's own
+  paths stay read-only. So `nix shell nixpkgs#htop` and `nix-env -iA nixos.htop`
+  work with the network up; everything they fetch is gone at reboot.
+
 
 Where to read more
 ------------------
