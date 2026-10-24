@@ -1,4 +1,6 @@
-# dixi (ThinkPad X1 / P-series) hardware inventory
+# arnold (ThinkPad X1 Extreme Gen 1) hardware inventory
+
+> **Naming (2026-10-24):** this machine was called "dixi" when measured; it is **arnold**. dixi is now the EC2 host.
 
 Measured 2026-10-04 over SSH from the live installer + the installed system, root@192.168.1.124.
 Raw dumps are in this directory (prtconf-dv.txt, cfgadm-lav.txt, usb-vidpid-raw.txt, etc.).

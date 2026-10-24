@@ -1,16 +1,18 @@
-# configurations/dixi.nix -- the maintainer's Lenovo X1 Carbon: base.nix plus the
-# gburd account, the X1's wired NIC and the tools a nix-config checkout needs.
+# configurations/arnold.nix -- arnold, the maintainer's ThinkPad X1 Extreme Gen 1 (i7-8850H, UHD 630, GTX 1050 Ti,
+# AC 9560, I219-LM): base.nix plus the gburd account, the wired NIC and the tools a nix-config checkout needs.
+# It was called "dixi" until 2026-10-24; dixi is now the EC2 host, and solnixConfigurations.dixi /
+# dixiToplevel remain as aliases of this config so older scripts and docs keep working.
 #
-# The maintainer's own copy lives in his nix-config (nixos/solnix/dixi.nix); this
+# The maintainer's own copy lives in his nix-config (nixos/solnix/arnold.nix); this
 # one is what solnix tests the install path with. Build or install it as
-#   nix build .#dixiToplevel
-#   solnix-install --flake '<this repo>#dixi' <disk>
+#   nix build .#arnoldToplevel
+#   solnix-install --flake '<this repo>#arnold' <disk>
 { config, lib, pkgs, ... }:
 
 {
   imports = [ ./base.nix ];
 
-  networking.hostName = "dixi";
+  networking.hostName = "arnold";
 
   # illumos has no wheel and no sudo in the gate. RBAC's "Primary Administrator"
   # profile (prof_attr: uid=0;gid=0) makes `pfexec <cmd>` root-equivalent; sysadmin

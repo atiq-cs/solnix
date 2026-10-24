@@ -1,5 +1,10 @@
 # arnold: install solnix on the Ampere RTX 3080 Ti machine (dual-boot, keep Fedora)
 
+> **Naming (2026-10-24):** this machine, the ThinkPad X1 Extreme Gen 5, is **lixi**. It was called "arnold" when
+> this plan was written. **arnold** is now the X1 Extreme Gen 1 (i7-8850H, UHD 630, GTX 1050 Ti), which earlier docs
+> call "dixi"; **dixi** is now the EC2 x86_64 host.
+
+
 Status: PLAN (read-only facts gathered; no changes made to arnold). Maintainer runs
 the privileged + physical steps (sudo needs a password; drive install is physical).
 

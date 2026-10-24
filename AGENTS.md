@@ -4,8 +4,15 @@ See .agent-steering-domains.md for domain-specific steering (local).
 
 ## Where work runs: EC2 solnix instances or dixi, never floki
 
+Host names (maintainer, 2026-10-24; d = EC2, l = local hardware):
+- **dixi**: x86_64 EC2 host. **dixr**: aarch64 EC2 Graviton. **dixa**: aarch64 EC2.
+- **lixi**: ThinkPad X1 Extreme Gen 5 (192.168.1.11; i9-12900H, Iris Xe, RTX 3080 Ti, AX211).
+- **arnold**: ThinkPad X1 Extreme Gen 1 (192.168.1.37; i7-8850H, UHD 630, GTX 1050 Ti, AC 9560). It runs Fedora today.
+- **lixr**: Milk-V K3, riscv64 (192.168.1.179).
+Docs older than 2026-10-24 say "dixi" for arnold and "arnold" for lixi.
+
 Builds, image builds, VMs (KVM/QEMU, bhost) and boot tests run on EC2 instances
-(solnix instances where possible) or on dixi, the maintainer's X1. Not on floki,
+(solnix instances where possible) or on arnold, the maintainer's X1 (called dixi before 2026-10-24). Not on floki,
 the dev box: floki is for editing, git, evaluation (`nix eval`), reading sources,
 and driving remote machines over ssh. No local qemu guests there, bhost included.
 The maintainer restated this on 2026-10-09 after a session ran bhost and KVM

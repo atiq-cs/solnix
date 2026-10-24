@@ -196,10 +196,10 @@
           modules = [ ./configurations/pgfarm.nix ];
         };
 
-        # The maintainer's x86_64 workstation -- the target of
-        # `solnix-install --flake .#dixi`. See configurations/dixi.nix.
+        # arnold, the maintainer's ThinkPad X1 Extreme Gen 1 -- the target of
+        # `solnix-install --flake .#arnold`. See configurations/arnold.nix.
         #
-        # ⚠️ configurations/dixi.nix deliberately sets NO system.stateVersion and NO
+        # ⚠️ configurations/arnold.nix deliberately sets NO system.stateVersion and NO
         # solnix.home.style: neither option exists in this module set, and setting an
         # undefined option is an eval error. Do not add them here either without first
         # declaring the option in modules/config/.
@@ -235,11 +235,14 @@
           modules = [ ./configurations/installer-x1ediag.nix ];
         };
 
-        dixi = solnixSystem {
+        arnold = solnixSystem {
           system = "x86_64-solaris";
           pkgs = mkPkgs { };
-          modules = [ ./configurations/dixi.nix ];
+          modules = [ ./configurations/arnold.nix ];
         };
+        # dixi: the old name of arnold's config (2026-10-24 rename), kept so scripts and
+        # docs that say .#dixi still evaluate the same system.
+        dixi = self.solnixConfigurations.arnold;
       };
 
       # Per-build-system image packages. The image builder (lib/make-be.nix)
@@ -265,10 +268,11 @@
         baseToplevel = self.solnixConfigurations.base.config.system.build.toplevel;
         cloudEc2Toplevel = self.solnixConfigurations.cloud-ec2.config.system.build.toplevel;
         pgfarmToplevel = self.solnixConfigurations.pgfarm.config.system.build.toplevel;
-        # dixi: the maintainer's workstation. Same eval-split caveat as the others --
+        # arnold (formerly dixi): the maintainer's X1 Extreme Gen 1. Same eval-split caveat as the others --
         # this EVALUATES here and only BUILDS on the illumos host, because the gate
         # proto and the slices carved from it are x86_64-solaris derivations.
-        dixiToplevel = self.solnixConfigurations.dixi.config.system.build.toplevel;
+        arnoldToplevel = self.solnixConfigurations.arnold.config.system.build.toplevel;
+        dixiToplevel = self.solnixConfigurations.arnold.config.system.build.toplevel;  # old name, same system
         installerToplevel = self.solnixConfigurations.installer.config.system.build.toplevel;
         installerLiveToplevel = self.solnixConfigurations.installer-live.config.system.build.toplevel;
         installerX1ediagToplevel = self.solnixConfigurations.installer-x1ediag.config.system.build.toplevel;
