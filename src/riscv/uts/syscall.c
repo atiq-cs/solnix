@@ -340,12 +340,6 @@ syscall_trap(struct regs *tf)
 	unsigned long num = tf->r_a7;
 	long ret;
 
-#ifdef RVSRV_CURPROC_CHECK
-	{
-		extern void proc_check_current(unsigned long);
-		proc_check_current(num);
-	}
-#endif
 	switch (num) {
 	case SYS_write:
 		ret = sys_write((int)tf->r_a0, (const char *)tf->r_a1,

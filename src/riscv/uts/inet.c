@@ -227,9 +227,6 @@ net_sleep(void *chan, unsigned long sie)
 	void *self = unsock_curproc();
 
 	(void) chan;
-#ifndef RVSRV_NETD
-	(void) inet_poll_locked();	/* the waiter drives the stack itself */
-#endif
 	net_exit(sie);
 	thread_yield();
 	unsock_setcurproc(self);
@@ -304,7 +301,6 @@ inet_poll_locked(void)
 	return (n);
 }
 
-#ifdef RVSRV_NETD
 static void
 netd_body(void *arg)
 {
@@ -316,7 +312,6 @@ netd_body(void *arg)
 		thread_yield();
 	}
 }
-#endif
 
 /*
  * inet_init -- bring lwIP up on vionet and start DHCP. Called from
@@ -352,44 +347,9 @@ inet_init(void)
 		net_exit(sie);
 	}
 	if (!inet_have_lease)
-		sbi_console_puts("[inet] no DHCP lease within 3 s (the idle "
-		    "poll keeps trying)\n");
-	/*
-	 * shortcut: no netd thread by default. An always-runnable kernel thread
-	 * made every timer tick preempt the running user process, and that
-	 * exposed a pre-existing user-heap corruption under preemption (zlib
-	 * example: 3/6 with netd, 0/6 without; result doc). Instead a blocked
-	 * socket caller polls (net_sleep)
-	 * and every idle hart polls after each wfi (inet_idle_poll; idle harts
-	 * wake at least every 10 ms tick), so there is no always-runnable thread.
-	 * Restore netd (-DRVSRV_NETD) once the preemption bug is fixed.
-	 */
-#ifdef RVSRV_NETD
+		sbi_console_puts("[inet] no DHCP lease within 3 s (netd keeps "
+		    "trying)\n");
 	(void) thread_create(netd_body, 0);
-#endif
-}
-
-/* From the boot hart's idle loop (proc.c idle_body): one poll if free. */
-void
-inet_idle_poll(void)
-{
-	unsigned long prev;
-	int old;
-
-	if (!inet_up)
-		return;
-	__asm__ __volatile__("csrrc %0, sstatus, %1"
-	    : "=r"(prev) : "r"((unsigned long)SSTATUS_SIE) : "memory");
-	__asm__ __volatile__("amoswap.w.aq %0, %2, (%1)"
-	    : "=&r"(old) : "r"(&netlock), "r"(1) : "memory");
-	if (old == 0) {
-		(void) inet_poll_locked();
-		__asm__ __volatile__("amoswap.w.rl zero, zero, (%0)"
-		    :: "r"(&netlock) : "memory");
-	}
-	if (prev & SSTATUS_SIE)
-		__asm__ __volatile__("csrs sstatus, %0" :: "r"(SSTATUS_SIE) :
-		    "memory");
 }
 
 /* ---- socket slots ------------------------------------------------------ */

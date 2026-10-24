@@ -332,16 +332,8 @@ hat_boot_init(void)
 		    s <= (dram_end - 1) >> GIGASHIFT; s++) {
 			if (HAT_USER_SLOT(s) || (root_pt[s] & PTE_V))
 				continue;
-#ifdef RVSRV_SABOTAGE_ALIAS
-			/* negative control: every GiB from 5 aliases GiB 4,
-			 * except the last (it holds the DTB startup re-reads) */
-			map_gigapage(s << GIGASHIFT, (s < 5 ||
-			    s == (dram_end - 1) >> GIGASHIFT ? s : 4UL) <<
-			    GIGASHIFT, PTE_R | PTE_W);
-#else
 			map_gigapage(s << GIGASHIFT, s << GIGASHIFT,
 			    PTE_R | PTE_W);
-#endif
 		}
 	}
 

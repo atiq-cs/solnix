@@ -25,15 +25,40 @@
  * long copyin (const void *uaddr, void *kaddr, unsigned long n);
  * long copyout(const void *kaddr, void *uaddr, unsigned long n);
  *   Return 0 on success, -1 if a fault was taken (EFAULT to the caller).
+ *
+ * USER RANGE CHECK. A fault only catches an UNMAPPED address. Every address
+ * space also maps the kernel image and all of DRAM (identity, no PTE_U), and
+ * S-mode may touch those, so without a range check a user pointer into a
+ * kernel slot was read or written by the kernel. Each routine therefore
+ * refuses, before arming copy_lofault, any [uaddr, uaddr+n) that is not inside
+ * one user root slot (1 or 3), the same rule as hat_user_range_ok(). The
+ * illumos analog is the kernelbase compare at the top of copyin/copyout.
  */
 
 	.section .text
 	.align 2
 
+	/* Branch to _copy_efault unless [\ua, \ua+a2) is in one user slot. */
+	.macro	URANGE ua
+	beqz	a2, 9f			/* n == 0: nothing is touched */
+	add	t3, \ua, a2
+	addi	t3, t3, -1		/* last byte */
+	bltu	t3, \ua, _copy_efault	/* wraps */
+	srli	t4, \ua, 30		/* Sv39 root slot of the first byte */
+	srli	t3, t3, 30
+	bne	t3, t4, _copy_efault	/* crosses a slot */
+	li	t3, 1
+	beq	t4, t3, 9f
+	li	t3, 3
+	bne	t4, t3, _copy_efault	/* not slot 1 or 3: a kernel address */
+9:
+	.endm
+
 	.globl copyin
 	.type copyin, @function
 copyin:
 	/* a0 = uaddr (src), a1 = kaddr (dst), a2 = n. */
+	URANGE	a0
 	la	t0, _copy_fault
 	la	t1, copy_lofault
 	sd	t0, 0(t1)		/* arm the recovery label */
@@ -57,6 +82,7 @@ copyin:
 	.type copyout, @function
 copyout:
 	/* a0 = kaddr (src), a1 = uaddr (dst), a2 = n. */
+	URANGE	a1
 	la	t0, _copy_fault
 	la	t1, copy_lofault
 	sd	t0, 0(t1)		/* arm the recovery label */
@@ -89,3 +115,11 @@ _copy_fault:
 	li	a0, -1
 	ret
 	.size _copy_fault, . - _copy_fault
+
+	/* A refused range: copy_lofault was never armed, so nothing to clear. */
+	.globl _copy_efault
+	.type _copy_efault, @function
+_copy_efault:
+	li	a0, -1
+	ret
+	.size _copy_efault, . - _copy_efault

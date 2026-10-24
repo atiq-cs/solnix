@@ -589,39 +589,6 @@ proc_set_current(void *p)
 	curproc = (proc_t *)p;
 }
 
-/*
- * rvsrv diagnostic: is the global curproc the process that owns the thread
- * running on THIS hart? Called at syscall entry. Prints the first few
- * mismatches (the mechanism being tested: one curproc shared by every hart).
- */
-extern void *curthread_ptr(void);
-static volatile int curproc_mismatch;
-
-void
-proc_check_current(unsigned long sysno)
-{
-	void *t = curthread_ptr();
-	int i;
-
-	if (curproc != 0 && curproc->p_thread == t)
-		return;
-	for (i = 0; i < NPROC; i++) {
-		if (proctab[i].p_inuse && proctab[i].p_thread == t)
-			break;
-	}
-	if (i == NPROC)
-		return;		/* a kernel thread making a syscall: not ours */
-	if (__sync_fetch_and_add(&curproc_mismatch, 1) < 8) {
-		sbi_console_puts("[rvsrv] CURPROC MISMATCH: syscall ");
-		kputdec(sysno);
-		sbi_console_puts(" by pid ");
-		kputdec((unsigned long)proctab[i].p_pid);
-		sbi_console_puts(" but curproc is pid ");
-		kputdec(curproc != 0 ? (unsigned long)curproc->p_pid : 0);
-		sbi_console_puts("\n");
-	}
-}
-
 /* COW fork stats (as.c) for the gate banner. */
 extern unsigned long as_cow_shared_total;
 extern unsigned long as_cow_copied_total;

@@ -681,10 +681,7 @@ idle_body(void *arg)
 {
 	(void) arg;
 	for (;;) {
-		extern void inet_idle_poll(void);
-
 		__asm__ __volatile__("wfi");
-		inet_idle_poll();	/* rvsrv: network RX + timers when idle */
 		thread_yield();
 	}
 }
@@ -923,12 +920,9 @@ smp_secondary_dispatch(unsigned long hartid)
 			curthread[cpu] = self;	/* idle is current again */
 			set_this_cpu(hartid);	/* restore tp (idle ran with it) */
 		} else {
-			extern void inet_idle_poll(void);
-
 			__sync_fetch_and_or(&idle_harts, HARTBIT(hartid));
 			__asm__ __volatile__("wfi");
 			__sync_fetch_and_and(&idle_harts, ~HARTBIT(hartid));
-			inet_idle_poll();	/* rvsrv: whichever hart is idle */
 		}
 	}
 }

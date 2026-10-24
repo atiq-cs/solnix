@@ -255,8 +255,8 @@ page_init(unsigned long rambase, unsigned long ramsize,
  * through a fresh KERNELBASE mapping of that PA (an independent page-table
  * walk). Runs single-hart, before anything allocates (the secondaries are
  * parked on smp_dispatch_ready), so borrowing free pages is safe; page_alloc
- * zeroes them on hand-out. Negative control: -DRVSRV_SABOTAGE_ALIAS maps every
- * high GiB onto one PA, which this must report as FAIL.
+ * zeroes them on hand-out. A build that mapped every high GiB onto one PA made
+ * this report FAIL (docs/riscv64-server-2026-10-24.md).
  */
 #define	HIGHRAM_SIG	0x4849474852414d00UL	/* "HIGHRAM\0" */
 
