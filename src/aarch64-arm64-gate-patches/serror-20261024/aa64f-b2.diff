@@ -1,0 +1,24 @@
+--- /build/aa64f-b2base-rootnex.c	Sat Oct 24 21:03:51 2026
++++ usr/src/uts/armv8/io/rootnex.c	Sat Oct 24 21:03:51 2026
+@@ -924,7 +924,9 @@
+ 			hat_acc_flags = HAT_LOADCACHING_OK;
+ 			break;
+ 		case DDI_STORECACHING_OK_ACC:
+-			hat_acc_flags = HAT_STORECACHING_OK;
++			/* aa64f: device regs are never cacheable on arm64: */
++			/* write-combining = Normal-NC, as Linux ioremap_wc */
++			hat_acc_flags = HAT_MERGING_OK;
+ 			break;
+ 		default:
+ 			return (DDI_ME_INVAL);
+@@ -1108,7 +1110,9 @@
+ 		hp->ah_hat_flags |= HAT_LOADCACHING_OK;
+ 		break;
+ 	case DDI_STORECACHING_OK_ACC:
+-		hp->ah_hat_flags |= HAT_STORECACHING_OK;
++		/* aa64f: device regs are never cacheable on arm64: */
++		/* write-combining = Normal-NC, as Linux ioremap_wc */
++		hp->ah_hat_flags |= HAT_MERGING_OK;
+ 		break;
+ 	default:
+ 		return (DDI_FAILURE);

@@ -1,0 +1,308 @@
+--- /build/aa64f-b1base/exceptions.S	Sat Oct 24 20:21:25 2026
++++ usr/src/uts/armv8/ml/exceptions.S	Sat Oct 24 20:21:25 2026
+@@ -168,7 +168,7 @@
+ 	msr	mdscr_el1, x1
+ 
+ 	// Enable debug exceptions
+-	msr DAIFClr, #DAIF_SETCLEAR_DEBUG
++	msr DAIFClr, #(DAIF_SETCLEAR_DEBUG | DAIF_SETCLEAR_SERROR)
+ 
+ 	mov	x0, sp
+ 	bl	do_interrupt
+@@ -219,6 +219,10 @@
+ 	SET_SIZE(exception_vector)
+ 
+ 	ENTRY(from_current_el_sync_handler)
++	ldr	x9, [sp, #REGOFF_SPSR]	// aa64f: unmask A if interrupted ctx had A=0
++	tbnz	x9, #8, 7f		// SPSR.A is bit 8 (PSR_A)
++	msr	DAIFClr, #DAIF_SETCLEAR_SERROR
++7:
+ 	mrs	x1, esr_el1
+ 	lsr	w0, w1, #ESR_EC_SHIFT	// w0 <- EC, no need to mask.
+ 	mrs	x2, far_el1
+@@ -229,6 +233,7 @@
+ 	cbz	x0, 1f
+ 	b	_sys_rtt
+ 1:
++	msr	DAIFSet, #DAIF_SETCLEAR_SERROR	// aa64f
+ 	__RESTORE_REGS_EL1
+ 	eret
+ 	SET_SIZE(from_current_el_sync_handler)
+@@ -249,6 +254,7 @@
+ 	cbz	x0, 1f
+ 	b	_sys_rtt
+ 1:
++	msr	DAIFSet, #DAIF_SETCLEAR_SERROR	// aa64f
+ 	__RESTORE_REGS_EL1
+ 	eret
+ 	SET_SIZE(from_current_el_error_handler)
+@@ -256,6 +262,10 @@
+ 	ENTRY(from_current_el_irq_handler)
+ 	__SAVE_REGS_EL1
+ 	__SAVE_FRAME
++	ldr	x9, [sp, #REGOFF_SPSR]	// aa64f: unmask A if interrupted ctx had A=0
++	tbnz	x9, #8, 7f		// SPSR.A is bit 8 (PSR_A)
++	msr	DAIFClr, #DAIF_SETCLEAR_SERROR
++7:
+ 	mov	x0, sp
+ 	bl	do_interrupt
+ 	b	_sys_rtt
+@@ -268,7 +278,7 @@
+ 	msr	mdscr_el1, x1
+ 
+ 	// Enable debug exceptions
+-	msr DAIFClr, #DAIF_SETCLEAR_DEBUG
++	msr DAIFClr, #(DAIF_SETCLEAR_DEBUG | DAIF_SETCLEAR_SERROR)
+ 
+ 	mrs	x1, esr_el1
+ 	lsr	w0, w1, #ESR_EC_SHIFT	// w0 <- EC, no need to mask
+@@ -358,7 +368,7 @@
+ 	mov	w1, #LMS_USER
+ 	bl	syscall_mstate
+ 
+-	msr	DAIFSet, #DAIF_SETCLEAR_IRQ
++	msr	DAIFSet, #(DAIF_SETCLEAR_IRQ | DAIF_SETCLEAR_SERROR)
+ 
+ 	ldr	w9, [x21, #T_POST_SYS_AST]
+ 	cbnz	w9, _syscall_post
+@@ -377,7 +387,7 @@
+ 	eret
+ 
+ _user_rtt:
+-	msr	DAIFSet, #(DAIF_SETCLEAR_IRQ | DAIF_SETCLEAR_DEBUG)
++	msr	DAIFSet, #(DAIF_SETCLEAR_IRQ | DAIF_SETCLEAR_DEBUG | DAIF_SETCLEAR_SERROR)
+ 
+ 	// if we've been requested to single-step in user-land, set this now
+ 	// that debug exceptions are masked and won't be taken in the kernel
+@@ -402,6 +412,7 @@
+ 	eret
+ 
+ 3:
++	msr	DAIFClr, #DAIF_SETCLEAR_SERROR	// aa64f
+ 	mov	x0, #T_AST
+ 	mov	x1, #0
+ 	mov	x2, #0
+@@ -425,7 +436,7 @@
+ 	b	_syscall_post_call
+ 
+ _syscall_post:
+-	msr	DAIFClr, #DAIF_SETCLEAR_IRQ
++	msr	DAIFClr, #(DAIF_SETCLEAR_IRQ | DAIF_SETCLEAR_SERROR)
+ 
+ 	// syscall_mstate(LMS_USER, LMS_SYSTEM);
+ 	mov	w0, #LMS_USER
+@@ -464,7 +475,7 @@
+ 
+ 	msr	DAIFClr, #DAIF_SETCLEAR_IRQ
+ 	blr	x9
+-	msr	DAIFSet, #DAIF_SETCLEAR_IRQ
++	msr	DAIFSet, #(DAIF_SETCLEAR_IRQ | DAIF_SETCLEAR_SERROR)
+ 
+ 	ldp	x17, x18, [sp, #REGOFF_PC]
+ 	msr	elr_el1, x17
+@@ -514,7 +525,7 @@
+ 	cmp	x2, #PSR_M_EL0t
+ 	b.eq	user_rtt
+ 
+-	msr	DAIFSet, #DAIF_SETCLEAR_IRQ
++	msr	DAIFSet, #(DAIF_SETCLEAR_IRQ | DAIF_SETCLEAR_SERROR)
+ 
+ 	CPUP(x21)
+ 	ldrb	w0, [x21, #CPU_KPRUNRUN]
+@@ -543,9 +554,13 @@
+ 	mov	w0, #1
+ 	strb	w0, [x20, #T_PREEMPT_LK]
+ 
++	ldr	x9, [sp, #REGOFF_SPSR]	// aa64f
++	tbnz	x9, #8, 7f
++	msr	DAIFClr, #DAIF_SETCLEAR_SERROR
++7:
+ 	msr	DAIFClr, #DAIF_SETCLEAR_IRQ
+ 	bl	kpreempt
+-	msr	DAIFSet, #DAIF_SETCLEAR_IRQ
++	msr	DAIFSet, #(DAIF_SETCLEAR_IRQ | DAIF_SETCLEAR_SERROR)
+ 
+ 	strb	wzr, [x20, #T_PREEMPT_LK]
+ 	b	_sys_rtt_preempt_ret
+--- /build/aa64f-b1base/mp_startup.c	Sat Oct 24 20:21:25 2026
++++ usr/src/uts/armv8/os/mp_startup.c	Sat Oct 24 20:21:25 2026
+@@ -584,7 +584,8 @@
+ 	/* The base spl should still be at LOCK LEVEL here */
+ 	ASSERT(cp->cpu_base_spl == ipltospl(LOCK_LEVEL));
+ 	set_base_spl();		/* Restore the spl to its proper value */
+-	clear_daif(DAIF_SETCLEAR_IRQ);
++	/* aa64f: unmask SError too, as the boot CPU does (startup.c) */
++	clear_daif(DAIF_SETCLEAR_IRQ | DAIF_SETCLEAR_SERROR);
+ 
+ 	pghw_physid_create(cp);
+ 	/*
+--- /build/aa64f-b1base/machdep.c	Sat Oct 24 20:21:25 2026
++++ usr/src/uts/armv8/os/machdep.c	Sat Oct 24 20:21:25 2026
+@@ -936,6 +936,8 @@
+ 	aa64e_printf("[AA64E] S1 watchdog:%s\n", b);
+ }
+ 
++extern uint8_t aa64f_tdaif[], aa64f_tspsr[];
++
+ static void
+ aa64e_hb(void *arg __unused)
+ {
+@@ -983,6 +985,21 @@
+ 	o = MIN(o, sz);
+ 	b[o++] = '\n';
+ 	aa64e_write(NULL, NULL, b, o);
++	{	/* aa64f: DAIF samples */
++		uint64_t d;
++		__asm__ volatile("mrs %0, daif" : "=r"(d));
++		o = 0;
++		AA64E_AP("[AA64F-DAIF] #%u hb cpu%d daif 0x%lx trap", aa64e_hbn,
++		    CPU->cpu_id, d);
++		for (i = 0; i < ncpus && i < 64; i++)
++			AA64E_AP("%x", aa64f_tdaif[i]);
++		AA64E_AP(" spsr ");
++		for (i = 0; i < ncpus && i < 64; i++)
++			AA64E_AP("%x", aa64f_tspsr[i]);
++		o = MIN(o, sz);
++		b[o++] = '\n';
++		aa64e_write(NULL, NULL, b, o);
++	}
+ #undef	AA64E_AP
+ 	(void) realtime_timeout(aa64e_hb, NULL, 15 * hz);
+ }
+@@ -1022,7 +1039,23 @@
+ aa64e_tr_t aa64e_trace[NCPU][4];
+ uint8_t aa64e_trace_i[NCPU];
+ 
++/* aa64f: DAIF nibble at the last trap() entry per CPU (live, and SPSR) */
++uint8_t aa64f_tdaif[NCPU], aa64f_tspsr[NCPU];
++
+ void
++aa64f_daif_rec(uint64_t spsr)
++{
++	uint64_t d;
++	int c = CPU->cpu_id;
++
++	__asm__ volatile("mrs %0, daif" : "=r"(d));
++	if (c >= 0 && c < NCPU) {
++		aa64f_tdaif[c] = (d >> 6) & 0xf;
++		aa64f_tspsr[c] = (spsr >> 6) & 0xf;
++	}
++}
++
++void
+ aa64e_trap_rec(uint64_t esr, uint64_t far, uint64_t pc)
+ {
+ 	int c = CPU->cpu_id;
+--- /build/aa64f-b1base/trap.c	Sat Oct 24 20:21:25 2026
++++ usr/src/uts/armv8/os/trap.c	Sat Oct 24 20:21:25 2026
+@@ -466,7 +466,23 @@
+ volatile uint32_t aa_ot_count;
+ 
+ extern void aa64e_trap_rec(uint64_t, uint64_t, uint64_t);
++extern void aa64f_daif_rec(uint64_t);
++extern void aa64e_printf(const char *, ...);
++extern char *kobj_getsymname(uintptr_t, ulong_t *);
+ 
++static void
++aa64f_kserror(uint64_t esr, caddr_t addr, struct regs *rp, const char *br)
++{
++	ulong_t off = 0;
++	char *sym = kobj_getsymname((uintptr_t)rp->r_pc, &off);
++
++	aa64e_printf("\n[AA64F-KSERR] cpu%d esr 0x%lx elr 0x%lx %s+0x%lx far 0x%lx "
++	    "spsr 0x%lx lr 0x%lx thread %p comm %s -> %s\n", CPU->cpu_id, esr,
++	    (uint64_t)rp->r_pc, sym != NULL ? sym : "?", off, (uint64_t)addr,
++	    (uint64_t)rp->r_spsr, (uint64_t)rp->r_lr, (void *)curthread,
++	    PTOU(curproc)->u_comm, br);
++}
++
+ int
+ trap(uint16_t ec, uint64_t esr, caddr_t addr, struct regs *rp)
+ {
+@@ -473,6 +489,7 @@
+ 	kthread_t *ct = curthread;
+ 
+ 	aa64e_trap_rec(esr, (uint64_t)(uintptr_t)addr, rp->r_pc);	/* NOTE: observer */
++	aa64f_daif_rec(rp->r_spsr);	/* aa64f: observer */
+ 	enum seg_rw rw;
+ 	proc_t *p = ttoproc(ct);
+ 	klwp_t *lwp = ttolwp(ct);
+@@ -911,6 +928,10 @@
+ 		 * silent-reset the box).  An unguarded kernel SError still dies.
+ 		 */
+ 		case T_SERROR:
++			aa64f_kserror(esr, addr, rp,
++			    (ct->t_ontrap != NULL &&
++			    (ct->t_ontrap->ot_prot & OT_DATA_ACCESS)) ? "ontrap" :
++			    ct->t_lofault != 0 ? "lofault" : "die");
+ 			if ((ct->t_ontrap != NULL) &&
+ 			    (ct->t_ontrap->ot_prot & OT_DATA_ACCESS)) {
+ 				aa_ot_ec = ec; aa_ot_esr = esr; aa_ot_far = (uintptr_t)addr; aa_ot_count++;
+--- /build/aa64f-b1base/rootnex.c	Sat Oct 24 20:21:25 2026
++++ usr/src/uts/armv8/io/rootnex.c	Sat Oct 24 20:21:25 2026
+@@ -68,6 +68,9 @@
+ #include <sys/ddi_subrdefs.h>
+ #include <sys/spl.h>
+ #include <sys/controlregs.h>
++#include <sys/archsystm.h>
++extern void aa64e_printf(const char *, ...) __attribute__((weak));
++#define	AA64F_PR(...) do { cmn_err(CE_CONT, __VA_ARGS__); if (&aa64e_printf != NULL) aa64e_printf(__VA_ARGS__); } while (0)
+ 
+ /*
+  * enable/disable extra checking of function parameters. Useful for debugging
+@@ -965,7 +968,24 @@
+ 		    mmu_btop(pbase), mp->map_prot | hat_acc_flags,
+ 		    HAT_LOAD_LOCK);
+ 		*vaddrp = (caddr_t)cvaddr + pgoffset;
++		if ((hat_acc_flags & HAT_ORDER_MASK) != HAT_STRICTORDER) {
++			uint64_t mair, par, d;	/* aa64f: observer */
+ 
++			/* measured: PAR_EL1.ATTR is the MAIR byte the MMU uses */
++			d = disable_interrupts();
++			__asm__ volatile("at s1e1r, %1; isb; mrs %0, par_el1"
++			    : "=r"(par) : "r"(cvaddr) : "memory");
++			restore_interrupts(d);
++			__asm__ volatile("mrs %0, mair_el1" : "=r"(mair));
++			AA64F_PR("[AA64F-MAP] %s%d pa 0x%lx size 0x%lx hat 0x%x "
++			    "par 0x%lx attr 0x%02lx mair 0x%lx va %p\n",
++			    hp != NULL ? ddi_driver_name(hp->ah_dip) : "-",
++			    hp != NULL ? ddi_get_instance(hp->ah_dip) : -1,
++			    (ulong_t)pbase, (ulong_t)rp->regspec_size,
++			    hat_acc_flags, par, (par & 1) ? 0xffUL : par >> 56,
++			    mair, (void *)cvaddr);
++		}
++
+ 		/* save away pfn and npages for FMA */
+ 		hp = mp->map_handlep;
+ 		if (hp) {
+--- /build/aa64f-b1base/ena_tx.c	Sat Oct 24 20:21:25 2026
++++ usr/src/uts/common/io/ena/ena_tx.c	Sat Oct 24 20:21:25 2026
+@@ -15,6 +15,10 @@
+ 
+ #include <sys/atomic.h>
+ #include "ena.h"
++#include <sys/cpuvar.h>
++extern void aa64e_printf(const char *, ...) __attribute__((weak));
++#define	AA64F_PR(...) do { cmn_err(CE_CONT, __VA_ARGS__); if (&aa64e_printf != NULL) aa64e_printf(__VA_ARGS__); } while (0)
++static volatile uint32_t aa64f_llq1;
+ 
+ void
+ ena_free_tx_dma(ena_txq_t *txq)
+@@ -459,9 +463,17 @@
+ 	dst = (volatile uint64_t *)((caddr_t)txq->et_sq_llq_addr + dst_offset);
+ 	src = (const uint64_t *)buf;
+ 	count = entry_size / sizeof (uint64_t);
++	if (aa64f_llq1 == 0)	/* aa64f: observer */
++		AA64F_PR("[AA64F-LLQ] first write cpu%d dst %p n %u\n",
++		    CPU->cpu_id, (void *)dst, count);
+ 
+ 	for (i = 0; i < count; i++)
+ 		dst[i] = src[i];
++	if (aa64f_llq1 == 0 && atomic_cas_32(&aa64f_llq1, 0, 1) == 0) {
++		__asm__ volatile("dsb sy" ::: "memory");
++		AA64F_PR("[AA64F-LLQ] first write done cpu%d dst %p n %u\n",
++		    CPU->cpu_id, (void *)dst, count);
++	}
+ }
+ 
+ static void
