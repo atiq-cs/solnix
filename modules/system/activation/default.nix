@@ -459,6 +459,7 @@ let
   #   defaultrouter   <- networking.defaultGateway
   #   passwd/group    <- users.users / users.groups
   #   shadow          <- users.users.*.hashedPassword (0400, root-only)
+  #   ssh/authorized_keys.d/<user> <- users.users.*.openssh.authorizedKeys.keys
   # networking.generatedEtc / users.generatedEtc are the internal carriers the
   # config-surface modules populate; folded in here so the toplevel /etc is a
   # pure function of the options, not hardcoded. shell-environment + nix add
@@ -483,17 +484,6 @@ let
     ln -s ${pkgs.solnix.nixChain.cacert}/etc/ssl/certs/ca-bundle.crt $out/etc/ssl/certs/ca-bundle.crt
     # /etc/shadow must be root-only (0400) or login refuses it.
     [ -e $out/etc/shadow ] && chmod 0400 $out/etc/shadow || true
-  '';
-
-  # users.users.*.openssh.authorizedKeys seed script (T2.9): a store-path shell
-  # snippet make-be sources to write each user's authorized_keys under $ROOT.
-  # Driven by the users module option, not a hand-written ROOT_AUTHKEY copy.
-  authKeysSetupScript = pkgs.writeScript "solnix-seed-authorized-keys" ''
-    #!/usr/bin/env bash
-    # solnix authorized_keys seed (T2.9). ROOT = the BE root (default /).
-    set -eu
-    ROOT="''${ROOT:-/}"
-    ${config.users.authorizedKeysSetup or ""}
   '';
 
   # THE TOPLEVEL — the derivation whose closure is the bootable world.
@@ -560,10 +550,6 @@ let
     ln -s ${activate}                                 $out/activate
     ln -s ${siteProfile}                              $out/site-profile.xml
     ln -s ${etc}/etc                                  $out/etc
-    # users.users.*.openssh.authorizedKeys seed script (T2.9). make-be runs it
-    # against the BE root ($ROOT) to seed ~/.ssh/authorized_keys per user, from
-    # the OPTIONS (replacing the ad-hoc ROOT_AUTHKEY path).
-    ln -s ${authKeysSetupScript}                      $out/seed-authorized-keys
     # bin/: the switch-to-configuration + solnix-rebuild runtime tools (T2.5).
     mkdir -p $out/bin
     ln -s ${switchToConfiguration}                    $out/bin/switch-to-configuration
@@ -681,16 +667,11 @@ in
       type = types.package;
       description = "The solnix-install tool (nixos-install analog; install to a blank disk).";
     };
-    seedAuthorizedKeys = mkOption {
-      type = types.package;
-      description = "The users.users.*.openssh.authorizedKeys seed script (T2.9).";
-    };
   };
 
   config.system.build = {
     inherit toplevel activate etc switchToConfiguration solnixRebuild solnixInstall;
     smfSiteProfile = siteProfile;
-    seedAuthorizedKeys = authKeysSetupScript;
   };
 
   # solnix-rebuild on PATH, as NixOS puts nixos-rebuild in system.path. The script

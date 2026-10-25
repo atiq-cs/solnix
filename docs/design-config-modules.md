@@ -97,9 +97,10 @@ see them:
   keeps only `systemd.*` + `nix.settings.*`.
 - **`modules/system/activation/default.nix`** — the `etc` derivation folds
   `networking.generatedEtc` + `users.generatedEtc` into `/etc` (shadow forced
-  0400), and exposes a `seed-authorized-keys` store-path script + a
-  `system.build.seedAuthorizedKeys` attr. The toplevel gains `$out/etc/*` +
-  `$out/seed-authorized-keys`.
+  0400). Declared keys are `/etc/ssh/authorized_keys.d/<user>` (root, 0444, as
+  NixOS's sshd.nix); an earlier `seed-authorized-keys` script wrote them into the
+  BE's own /home, which hid the shared /home dataset at boot (removed). The
+  toplevel gains `$out/etc/*`.
 - **`configurations/base.nix`** — uses the new options: `networking.hostName`,
   `networking.interfaces.ena0.dhcp = true`, `networking.nameservers`,
   `users.users.{root,greg}` with the maintainer's ssh key.

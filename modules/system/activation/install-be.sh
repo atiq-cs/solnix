@@ -229,6 +229,9 @@ etc_copy() {
     power.conf) return 0 ;;
     # install-be filters pkcs11.conf below; cryptoadm rewrites it.
     crypto/*) return 0 ;;
+    # sshd's safe_path() walks the key file's realpath and refuses a group-writable
+    # directory; /nix/store is 1775 root:nixbld. NixOS copies these too (mode 0444).
+    ssh/authorized_keys.d/*) return 0 ;;
   esac
   return 1
 }
@@ -296,8 +299,17 @@ grep -v 'pkcs11_tpm' etc/crypto/pkcs11.conf > etc/crypto/pkcs11.conf.new && mv e
 # then derives the hostid from the SMBIOS UUID and system/hostid (svc-hostid)
 # persists it in the rot47-quoted form the kernel's reader expects.
 
-# declared users' authorized_keys (users.users.<n>.openssh.authorizedKeys).
-[ -e "$R$TOP/seed-authorized-keys" ] && ROOT="$ROOT" /usr/bin/bash "$R$TOP/seed-authorized-keys" >&2
+# declared users' authorized_keys (users.users.<n>.openssh.authorizedKeys): the
+# copies laid above, root-owned and read-only as NixOS's sshd.nix makes them.
+# Keys the previous generation had and this one does not are dropped with it.
+if [ -d etc/ssh/authorized_keys.d ]; then
+  for _k in etc/ssh/authorized_keys.d/*; do
+    [ -e "$_k" ] || continue
+    [ -e "$R$ETC/ssh/authorized_keys.d/${_k##*/}" ] || { rm -f "$_k"; continue; }
+    chown 0:0 "$_k" && chmod 0444 "$_k" || die "cannot set root 0444 on /$_k"
+  done
+  chown 0:0 etc/ssh/authorized_keys.d && chmod 0755 etc/ssh/authorized_keys.d || die "cannot set root 0755 on /etc/ssh/authorized_keys.d"
+fi
 
 # 4. inittab: mount the shared store right AFTER autopush (ap::, from the early set)
 #    and before soconfig, which lives in the shared store, and svc.startd
@@ -506,6 +518,32 @@ if [ -d etc/system.alt ]; then
       echo "* --- $(basename "$_alt") (boot -a alternate) ---"; cat "$_x"; } > "$_alt.new" \
       && rm -f "$_alt" && mv "$_alt.new" "$_alt" || die "assembling $_alt"
   done
+fi
+
+# 7c. Nothing in this BE under a shared dataset that `zfs mount -a` mounts without
+#     -O (/home, /export, ... : canmount=on, mountpoint not legacy/none, outside
+#     $POOL/ROOT). zfs mount refuses a non-empty directory, so a file left there makes
+#     filesystem/local fail to mount the real dataset at boot and the BE's stale copy
+#     shows instead (measured on lixi: a seeded <BE>/home/gburd). The -O datasets
+#     (<pool>/nix, <pool>/var/*) and the live root have no such problem. Checked on
+#     the BE dataset's own files (its .zfs snapshot), since on the running system the
+#     shared dataset may be mounted over the path and hide them.
+if [ -z "${SOLNIX_LIVE:-}" ]; then
+  _snap="install-be-shared-$$"
+  zfs snapshot "$POOL/ROOT/$BE@$_snap" || die "cannot snapshot $POOL/ROOT/$BE to check shared mountpoints"
+  _sd="$ROOT/.zfs/snapshot/$_snap"
+  _alt=$(zpool get -H -o value altroot "$POOL" 2>/dev/null); [ "$_alt" = - ] && _alt=""
+  _shared_bad=$(zfs list -H -o name,canmount,mountpoint -t filesystem -r "$POOL" 2>/dev/null |
+    while read -r _n _c _m; do
+      case "$_n" in "$POOL/ROOT"|"$POOL/ROOT/"*) continue ;; esac
+      [ "$_c" = on ] || continue
+      case "$_m" in legacy|none|-) continue ;; esac
+      _m=${_m#"$_alt"}; [ -n "$_m" ] && [ "$_m" != / ] || continue
+      [ -d "$_sd$_m" ] && [ -n "$(ls -A "$_sd$_m" 2>/dev/null)" ] && echo "$_m ($_n)"
+    done)
+  [ -d "$_sd" ] || { zfs destroy "$POOL/ROOT/$BE@$_snap"; die "BE snapshot $_sd not visible; cannot check shared mountpoints"; }
+  zfs destroy "$POOL/ROOT/$BE@$_snap" || die "cannot destroy $POOL/ROOT/$BE@$_snap"
+  [ -z "$_shared_bad" ] || die "this BE holds files under shared dataset mountpoint(s), which zfs mount -a would refuse to mount over at boot: $_shared_bad"
 fi
 
 # 8. console + boot archive.

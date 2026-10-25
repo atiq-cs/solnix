@@ -180,10 +180,10 @@ log "creating SMF profile symlinks"
 # ones the host has that the BE lacks.
 #
 # SUPERSEDED (T2.9): declarative users now come from modules/config/users.nix
-# (users.users.<name> -> /etc/{passwd,shadow,group} + seed-authorized-keys). The
+# (users.users.<name> -> /etc/{passwd,shadow,group} + /etc/ssh/authorized_keys.d/<user>). The
 # nixified build lib/make-be.nix merges the toplevel's generated user files over
-# these stock proto accounts and runs the generated authorized_keys seed instead
-# of the ROOT_AUTHKEY copy. This block is the standalone-path fallback that keeps
+# these stock proto accounts and lays the generated /etc/ssh/authorized_keys.d
+# instead of the ROOT_AUTHKEY copy. This block is the standalone-path fallback that keeps
 # only the stock-account merge (which the module also preserves as defaults).
 log "adding missing users/groups from host"
 for u in $(comm -23 <(cut -d: -f1 /etc/passwd | sort) <(cut -d: -f1 "$BEROOT/etc/passwd" | sort) 2>/dev/null); do

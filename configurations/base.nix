@@ -84,7 +84,7 @@
 
   # Declarative users (T2.9): a login user + root, both with the maintainer's
   # ssh key. This GENERATES /etc/{passwd,shadow,group} entries (illumos format)
-  # merged over the base system accounts, and seeds ~/.ssh/authorized_keys.
+  # merged over the base system accounts, and /etc/ssh/authorized_keys.d/<user>.
   #
   # IDENTITY-FREE DEFAULT: base.nix defines NO personal user, key, or password
   # (matching NixOS's identity-free installer image). The public AMI/ISO/IMG ship
@@ -113,6 +113,8 @@
     stop.exec = ":kill";
     refresh.exec = ":kill -HUP";
   };
+  # AuthorizedKeysFile: NixOS's default (sshd.nix authorizedKeysFiles): the user's
+  # own file, then the declared keys users.nix renders into /etc (never into a home).
   # PrintMotd no: /etc/profile prints /etc/motd for every login shell, so sshd
   # printing it too showed it twice per ssh login (NixOS's sshd defaults
   # PrintMotd to false for the same reason; pam_motd/the shell owns it).
@@ -122,6 +124,7 @@
     PasswordAuthentication yes
     PrintMotd no
     PermitRootLogin prohibit-password
+    AuthorizedKeysFile .ssh/authorized_keys /etc/ssh/authorized_keys.d/%u
     Subsystem sftp ${pkgs.solnix.openssh}/libexec/sftp-server
   '';
 

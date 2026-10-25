@@ -9,8 +9,11 @@
 #     -> one /etc/passwd, /etc/shadow, /etc/group line each (illumos formats),
 #        MERGED over the base system accounts (root/daemon/bin/sys/... — the
 #        stock ones the SMF stack needs, docs/design-make-be.md gotcha #9).
-#   openssh.authorizedKeys.keys -> ~<home>/.ssh/authorized_keys (root's keys,
-#        previously injected by the metadata-shim / ROOT_AUTHKEY, now declarative).
+#   openssh.authorizedKeys.keys -> /etc/ssh/authorized_keys.d/<name> (NixOS's
+#        sshd.nix: root-owned, 0444, listed in sshd_config's AuthorizedKeysFile).
+#        Activation never writes into a home: /home is a dataset shared by every
+#        boot environment, and a file written into a new BE's own /home made
+#        `zfs mount -a` refuse to mount the real one ("directory is not empty").
 #
 # The generated files land in the solnix /etc overlay (activation folds them in).
 # make-be already carries the stock proto accounts forward; this module OWNS the
@@ -109,7 +112,7 @@ let
           type = types.listOf types.str;
           default = [ ];
           example = literalExpression ''[ "ssh-ed25519 AAAA... user@host" ]'';
-          description = "SSH public keys written to ~<home>/.ssh/authorized_keys.";
+          description = "SSH public keys written to /etc/ssh/authorized_keys.d/<name>.";
         };
       };
       config = mkIf config.isRoot {
@@ -183,28 +186,13 @@ let
   shadowFile = concatStringsSep "\n" (mapAttrsToList shadowLine cfg.users) + "\n";
   groupFile = concatStringsSep "\n" (mapAttrsToList groupLine cfg.groups) + "\n";
 
-  # authorized_keys: only for users that declare keys. Emitted as a shell snippet
-  # the activation/make-be side runs to seed ~<home>/.ssh/authorized_keys with
-  # the right perms (0700 dir, 0600 file) — mirrors the ROOT_AUTHKEY path but
-  # driven by the option, for any user. Keys are written with `printf` (one per
-  # line) rather than a heredoc so Nix string indentation cannot corrupt them.
+  # authorized_keys: one /etc/ssh/authorized_keys.d/<name> per user that declares
+  # keys, as NixOS's sshd.nix does. The user's own ~/.ssh/authorized_keys still works
+  # (base.nix's AuthorizedKeysFile lists both).
   usersWithKeys = filterAttrs (_: u: u.openssh.authorizedKeys.keys != [ ]) cfg.users;
-  authKeysSetup = concatStringsSep "\n" (
-    mapAttrsToList (
-      name: u:
-      let
-        keysArg = lib.escapeShellArg (concatStringsSep "\n" u.openssh.authorizedKeys.keys + "\n");
-      in
-      concatStringsSep "\n" [
-        "# ${name}: seed authorized_keys under ${u.home}"
-        ''mkdir -p "$ROOT/${u.home}/.ssh" && chmod 700 "$ROOT/${u.home}/.ssh"''
-        ''printf '%s' ${keysArg} > "$ROOT/${u.home}/.ssh/authorized_keys"''
-        ''chmod 600 "$ROOT/${u.home}/.ssh/authorized_keys"''
-        # sshd opens authorized_keys with the USER's uid: a root-owned 0700 ~/.ssh is unreadable to it.
-        ''chown ${toString u.uid}:${toString (gidOf u.group)} "$ROOT/${u.home}" "$ROOT/${u.home}/.ssh" "$ROOT/${u.home}/.ssh/authorized_keys"''
-      ]
-    ) usersWithKeys
-  );
+  authKeysEtc = lib.mapAttrs' (name: u:
+    lib.nameValuePair "ssh/authorized_keys.d/${name}" (concatStringsSep "\n" u.openssh.authorizedKeys.keys + "\n")
+  ) usersWithKeys;
 in
 {
   options.users = {
@@ -224,13 +212,7 @@ in
       type = types.attrsOf types.str;
       internal = true;
       default = { };
-      description = "user-derived /etc files (passwd, shadow, group). Read by activation.";
-    };
-    authorizedKeysSetup = mkOption {
-      type = types.str;
-      internal = true;
-      default = "";
-      description = "shell snippet seeding ~/.ssh/authorized_keys (rooted at $ROOT). Read by make-be.";
+      description = "user-derived /etc files (passwd, shadow, group, user_attr, ssh/authorized_keys.d/*). Read by activation.";
     };
   };
 
@@ -313,7 +295,6 @@ in
       shadow = shadowFile;
       group = groupFile;
       user_attr = userAttrFile;
-    };
-    users.authorizedKeysSetup = authKeysSetup;
+    } // authKeysEtc;
   };
 }

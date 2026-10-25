@@ -2298,6 +2298,24 @@ for _f in passwd shadow group; do
   [ -h "$ALTROOT/etc/$_f" ] && die "/etc/$_f is a symlink into the store; the installer must edit it (passwords, admin user)"
   [ -f "$ALTROOT/etc/$_f" ] || die "BE has no /etc/$_f"
 done
+# declared users' keys: a root-owned 0444 real file per user in the BE's /etc
+# (sshd's safe_path() refuses a group-writable /nix/store parent), as NixOS lays
+# /etc/ssh/authorized_keys.d. The keys never go into a home: /home is shared.
+# The toplevel's etc is an absolute store link: read it through STORE_PREFIX.
+# Owner: the BE's /etc owner (root on a real install).
+_tetc=$(_readlink "$_TLD/etc") && _tetc="$STORE_PREFIX$_tetc"
+if [ -n "$_tetc" ] && [ -d "$_tetc/ssh/authorized_keys.d" ]; then
+  _eown=$(ls -lnd "$ALTROOT/etc" | awk '{print $3}')
+  for _k in "$_tetc"/ssh/authorized_keys.d/*; do
+    [ -e "$_k" ] || continue
+    _kb="$ALTROOT/etc/ssh/authorized_keys.d/${_k##*/}"
+    [ -f "$_kb" ] && [ ! -h "$_kb" ] || die "BE has no real /etc/ssh/authorized_keys.d/${_k##*/}"
+    [ "$(ls -ln "$_kb" | awk '{print $1, $3}')" = "-r--r--r-- $_eown" ] \
+      || die "/etc/ssh/authorized_keys.d/${_k##*/} is not root-owned 0444 ($(ls -ln "$_kb" | awk '{print $1, $3}'))"
+  done
+  grep -q '^AuthorizedKeysFile.*/etc/ssh/authorized_keys.d/%u' "$ALTROOT/etc/ssh/sshd_config" 2>/dev/null \
+    || die "BE sshd_config does not read /etc/ssh/authorized_keys.d/%u: declared users' keys would be ignored"
+fi
 # What the brief calls "no live-root copy": the BE must not contain the live media's
 # own marker files. Their presence would mean something copied the running root.
 for _la in etc/solnix-live-shell usr/sbin/solnix-motd root/run-install.sh; do
@@ -2738,9 +2756,10 @@ if [ "$_mkadmin" = 1 ]; then
   log "admin user OK: $_au (staff+sysadmin, Primary Administrator, home on $POOL$HOME_BASE)"
   echo "  Created $_au. Log in and use: pfexec <command>   (or su - root)"
   # Seed the admin user's SSH authorized_keys so key login works on first boot.
-  # Config-declared users get keys via seed-authorized-keys (step 6c); this
+  # Config-declared users get keys in /etc/ssh/authorized_keys.d (install-be); this
   # runtime-created admin user does NOT, so without this it would have NO key and
-  # (with PermitRootLogin no) the machine could be unreachable by key.
+  # (with PermitRootLogin no) the machine could be unreachable by key. The home
+  # dataset is mounted under $ALTROOT here (above), so this lands in the real home.
   # SOLNIX_ADMIN_SSHKEY may hold one or more keys (newline-separated).
   if [ -n "${SOLNIX_ADMIN_SSHKEY:-}" ]; then
     _assh="$ALTROOT${HOME_BASE}/$_au/.ssh"
