@@ -168,7 +168,14 @@ _trap_entry:
 	 * Restore. sepc/sstatus may have been updated by trap(); write them
 	 * back to the CSRs so sret returns to the (possibly advanced) PC with
 	 * the restored interrupt-enable state.
+	 *
+	 * rvsmp-e: mask SIE first. trap() may have switched threads and resumed
+	 * here on a hart whose idle loop set SIE (sstatus is per hart, not in
+	 * the thread context); an interrupt between the sepc and sstatus writes
+	 * would clobber sepc (U-mode fetch at the kernel PC). The saved sstatus
+	 * has SIE=0 (hardware cleared it on entry); sret re-enables via SPIE.
 	 */
+	csrci	sstatus, 0x2		/* clear sstatus.SIE */
 	ld	t0, TF_SEPC(sp)
 	csrw	sepc, t0
 	ld	t0, TF_SSTATUS(sp)

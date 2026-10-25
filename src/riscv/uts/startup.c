@@ -474,7 +474,7 @@ startup_root(void)
 	/* R-P12: writable on-disk FS (FDT summary already printed at memlist). */
 	(void) vioblk_data_attach();
 	(void) snfs_init();
-	(void) single_user(rootdev_name());
+	/* single_user() is called from main() after the boot banner (rvsmp-e). */
 }
 
 /*

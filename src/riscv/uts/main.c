@@ -177,6 +177,8 @@ putdec(unsigned long v)
 
 /* From startup.c: the MI startup()-analog + its cpu count input. */
 extern void startup(unsigned long dtb);
+extern int single_user(const char *rootdev);
+extern const char *rootdev_name(void);
 extern int startup_ncpu;
 extern int startup_boot_hartid;
 
@@ -618,6 +620,12 @@ main(void)
 	    "vioblk + userland/init exec.\n");
 	sbi_console_puts("[R-P8] boot cpu is cpu0 idle thread; entering the "
 	    "dispatcher (yield loop) so userland runs.\n");
+
+	/*
+	 * rvsmp-e: start /sbin/init only now. At -smp N another hart runs init
+	 * at once, so any boot line printed after this lands in userland output.
+	 */
+	(void) single_user(rootdev_name());
 
 	/*
 	 * R-P8: the boot cpu is cpu0's idle thread. Drive the cooperative

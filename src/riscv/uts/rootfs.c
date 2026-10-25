@@ -176,7 +176,6 @@ mountroot(void)
  * this proves the kernel mounts root and reaches the single-user milestone.
  * ---------------------------------------------------------------------------
  */
-static volatile int single_user_reached;
 
 static void
 single_user_thread(void *arg)
@@ -202,8 +201,6 @@ single_user_thread(void *arg)
 	 * embedded ELFs (user_elfs.h) are only the fallback when no disk FS is
 	 * present. proc_waitpid now blocks on a real sleep queue, not a spin.
 	 */
-	single_user_reached = 1;
-
 	{
 		const void *img;
 		unsigned long len;
@@ -256,6 +253,11 @@ single_user(const char *rootdev)
 {
 	void *t;
 
+	/* rvsmp-e: print before init exists (another hart may run it at once). */
+	sbi_console_puts("\n[R-P6] root on ");
+	sbi_console_puts(rootdev);
+	sbi_console_puts(", starting single-user\n");
+
 	t = thread_create(single_user_thread, 0);
 	if (t == 0) {
 		sbi_console_puts("[init] FAILED to create single-user thread\n");
@@ -264,15 +266,7 @@ single_user(const char *rootdev)
 
 	/* Yield so the single-user thread runs and prints its prompt. */
 	thread_yield();
-
-	if (single_user_reached) {
-		sbi_console_puts("\n[R-P6] root on ");
-		sbi_console_puts(rootdev);
-		sbi_console_puts(", single-user reached\n");
-		return (1);
-	}
-	sbi_console_puts("[init] single-user thread did not report in\n");
-	return (0);
+	return (1);
 }
 
 /* The mounted root device string, for the milestone banner. */
