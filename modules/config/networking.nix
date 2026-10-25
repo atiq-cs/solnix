@@ -89,8 +89,17 @@ let
 
   # interfaces that actually declare something (dhcp or a static addr).
   activeIfs = filterAttrs (_: i: i.dhcp || i.ipv4.addresses != [ ]) cfg.interfaces;
-  hasNetworking = activeIfs != { } || cfg.nameservers != [ ] || cfg.defaultGateway != null;
+  hasNetworking = activeIfs != { } || cfg.nameservers != [ ] || cfg.defaultGateway != null || cfg.useDHCP;
   dhcpIfs = lib.attrNames (filterAttrs (_: i: i.dhcp) activeIfs);
+  # Names a config has decided about (any entry, dhcp or not): useDHCP leaves these alone.
+  namedIfs = lib.attrNames cfg.interfaces;
+
+  # How long a DHCP interface may take to appear. NixOS's dhcpcd waits for links
+  # through its hotplug handling; this path has no hotplug hook, so each DHCP
+  # interface polls for its datalink, bounded. A USB NIC attaches after
+  # network/physical has run: the X1E's usbecm0 (RTL8153 on the TB4 xHCI) came up
+  # 2 min after multi-user (17:10:27 -> 17:12:29).
+  linkWaitSeconds = 300;
 
   # Per-interface bringup shell. ipadm first (clean path), ifconfig fallback
   # (the path that works on the gate ena — gotcha #15). One function, both NIC
@@ -100,9 +109,27 @@ let
     if i.dhcp then
       ''
         echo "-- ${ifname}: DHCP"
-        /usr/sbin/ipadm create-if ${ifname} 2>/dev/null && \
+        __w=0
+        until /usr/sbin/dladm show-phys ${ifname} >/dev/null 2>&1; do
+          [ $__w -ge ${toString linkWaitSeconds} ] && break
+          sleep 2; __w=$((__w + 2))
+        done
+        [ $__w -gt 0 ] && echo "   ${ifname}: waited $__w s for the datalink"
+        # A link that appeared after network/physical has its persistent ipadm
+        # config (made by create-if below on an earlier boot) still disabled:
+        # enable it as net-physical's bringup_ipif does. create-if then reports
+        # the interface exists, and the existing addrobj gets its lease.
+        /usr/sbin/ipadm enable-if -t ${ifname} 2>/dev/null
+        /usr/sbin/ipadm create-if ${ifname} 2>/dev/null
+        /usr/sbin/ipadm show-addr -p -o type ${ifname}/ 2>/dev/null | grep -q '^dhcp$' || \
           /usr/sbin/ipadm create-addr -T dhcp -w 60 ${ifname}/dhcp 2>/dev/null
-        if ! /usr/sbin/ipadm show-addr ${ifname}/dhcp 2>/dev/null | grep -q ok; then
+        __w=0
+        until /usr/sbin/ipadm show-addr -p -o type,state ${ifname}/ 2>/dev/null | grep -q '^dhcp:ok$'; do
+          /usr/sbin/ipadm show-addr -p -o type ${ifname}/ 2>/dev/null | grep -q '^dhcp$' || break
+          [ $__w -ge 60 ] && break
+          sleep 2; __w=$((__w + 2))
+        done
+        if ! /usr/sbin/ipadm show-addr -p -o type,state ${ifname}/ 2>/dev/null | grep -q '^dhcp:ok$'; then
           echo "   ipadm failed (ena link STATE unknown?); using legacy ifconfig"
           /usr/sbin/ifconfig ${ifname} plumb 2>&1
           /usr/sbin/ifconfig ${ifname} dhcp start wait 60 2>&1
@@ -122,28 +149,55 @@ let
         }
       '') i.ipv4.addresses;
 
+  # networking.useDHCP: DHCP on every wired datalink the config does not name, as
+  # NixOS's dhcpcd does for interfaces without static addresses. Instance numbers
+  # are not stable on illumos (the X1E's Belkin RTL8153 came up as usbecm1 on a
+  # boot where its first connect failed and it re-enumerated on another port), so
+  # a config cannot name a USB NIC reliably. Waits (bounded) for at least one such
+  # link, then runs the same per-interface bringup on each.
+  anyBringup = ''
+    __w=0; __links=""
+    while :; do
+      __links=$(/usr/sbin/dladm show-phys -p -o link,media 2>/dev/null \
+        | awk -F: '$2 == "Ethernet" { print $1 }' \
+        | grep -vxE '${concatStringsSep "|" (namedIfs ++ [ "lo0" ])}')
+      [ -n "$__links" ] && break
+      [ $__w -ge ${toString linkWaitSeconds} ] && break
+      sleep 2; __w=$((__w + 2))
+    done
+    [ -z "$__links" ] && echo "-- useDHCP: no unnamed wired link after $__w s"
+    for __l in $__links; do
+      ( ${ifBringup "$__l" { dhcp = true; ipv4.addresses = [ ]; }} ) &
+    done
+    wait
+  '';
+
   # The complete first-boot bringup body: every active interface, then the
   # default route + hostname + the dns/client nudge (gotcha #16). Logged to
   # /dev/console so a failed bringup is VISIBLE (the old netcfg silenced errors).
   # resolv.conf itself is generated into /etc statically below; network/location
   # (enabled in the site profile) drives dns/client online — we nudge it here in
   # case its refresh-dep on location missed the boot-time state change.
+  # Interfaces come up in parallel, one subshell each, so one late or missing
+  # link does not hold the others back.
   netBringup = ''
     echo "=== solnix networking bringup $(date) ==="
-    ${concatStringsSep "\n" (mapAttrsToList ifBringup activeIfs)}
+    ${concatStringsSep "\n" (mapAttrsToList (n: i: "( ${ifBringup n i} ) &") activeIfs)}
+    ${optionalString cfg.useDHCP "( ${anyBringup} ) &"}
+    wait
     ${optionalString (cfg.defaultGateway != null) ''
       echo "-- default route via ${cfg.defaultGateway}"
       /usr/sbin/route -p add default ${cfg.defaultGateway} 2>&1 || \
         /usr/sbin/route add default ${cfg.defaultGateway} 2>&1 || true
     ''}
-    ${optionalString (cfg.nameservers == [ ] && dhcpIfs != [ ]) ''
+    ${optionalString (cfg.nameservers == [ ] && (dhcpIfs != [ ] || cfg.useDHCP)) ''
       # No static nameservers: take them from the DHCP lease, as NixOS's dhcpcd
       # does through resolvconf. The gate's network/service (net-svc) would do it
       # too, but it runs before this service has a lease and finds none (measured
       # on the X1: net-svc at 12:21:35, the lease at 12:22:37, no /etc/resolv.conf,
       # dns/client offline "Dependency file://localhost/etc/resolv.conf is absent").
       __ns=""; __dom=""
-      for __if in ${concatStringsSep " " dhcpIfs}; do
+      for __if in ${concatStringsSep " " dhcpIfs} $(/usr/sbin/ipadm show-addr -p -o addrobj,type 2>/dev/null | awk -F: '$2 == "dhcp" { sub("/.*", "", $1); print $1 }'); do
         __ns=$(/sbin/dhcpinfo -i $__if DNSserv 2>/dev/null); __dom=$(/sbin/dhcpinfo -i $__if DNSdmain 2>/dev/null)
         [ -n "$__ns" ] && break
       done
@@ -195,6 +249,18 @@ in
       description = "DNS servers written to /etc/resolv.conf.";
     };
 
+    useDHCP = mkOption {
+      type = types.bool;
+      default = false;
+      description = ''
+        DHCP on every wired (Ethernet) datalink that networking.interfaces does
+        not name, whatever its instance number (NixOS: networking.useDHCP). For
+        machines whose NIC name is not known in advance: a USB adapter's instance
+        changes when it re-enumerates. Off by default, because a solnix system
+        names its interfaces (EC2's ena0) the way NixOS configs usually do.
+      '';
+    };
+
     defaultGateway = mkOption {
       type = types.nullOr types.str;
       default = null;
@@ -221,7 +287,7 @@ in
     # The DHCP/static bringup runs as an SMF transient oneshot built through the
     # EXISTING smf.services.* module — no new init concept. Only emitted when the
     # config actually declares an interface (YAGNI: no service for an empty net).
-    (mkIf (activeIfs != { }) {
+    (mkIf (activeIfs != { } || cfg.useDHCP) {
       smf.services.solnix-net = {
         enable = true;
         category = "site";
@@ -239,7 +305,9 @@ in
           { ${netBringup} } > /dev/msglog 2>&1
           exit $SMF_EXIT_OK
         ''}";
-        start.timeoutSeconds = 180;
+        # the link wait, then create-addr (60 s), the lease poll (60 s) and the
+        # ifconfig fallback (60 s), with room to spare
+        start.timeoutSeconds = linkWaitSeconds + 240;
         stop.exec = ":true";
       };
     })
