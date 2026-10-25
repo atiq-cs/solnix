@@ -54,13 +54,20 @@
 9:
 	.endm
 
+	/* rvsmp-b: t1 = &copy_lofault[tp] (per-hart slot; tp = S-mode hart id). */
+	.macro	LOFAULT r
+	la	\r, copy_lofault
+	slli	t5, tp, 3
+	add	\r, \r, t5
+	.endm
+
 	.globl copyin
 	.type copyin, @function
 copyin:
 	/* a0 = uaddr (src), a1 = kaddr (dst), a2 = n. */
 	URANGE	a0
 	la	t0, _copy_fault
-	la	t1, copy_lofault
+	LOFAULT	t1
 	sd	t0, 0(t1)		/* arm the recovery label */
 	mv	t2, zero		/* i = 0 */
 1:
@@ -72,7 +79,7 @@ copyin:
 	addi	t2, t2, 1
 	j	1b
 2:
-	la	t1, copy_lofault
+	LOFAULT	t1
 	sd	zero, 0(t1)		/* disarm */
 	li	a0, 0			/* success */
 	ret
@@ -84,7 +91,7 @@ copyout:
 	/* a0 = kaddr (src), a1 = uaddr (dst), a2 = n. */
 	URANGE	a1
 	la	t0, _copy_fault
-	la	t1, copy_lofault
+	LOFAULT	t1
 	sd	t0, 0(t1)		/* arm the recovery label */
 	mv	t2, zero		/* i = 0 */
 1:
@@ -96,7 +103,7 @@ copyout:
 	addi	t2, t2, 1
 	j	1b
 2:
-	la	t1, copy_lofault
+	LOFAULT	t1
 	sd	zero, 0(t1)		/* disarm */
 	li	a0, 0
 	ret

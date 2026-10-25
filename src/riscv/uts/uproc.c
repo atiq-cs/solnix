@@ -497,8 +497,24 @@ typedef struct proc {
 static proc_t proctab[NPROC];
 static int next_pid = 1;
 
-/* Per-cpu current user process (boot-cpu dispatch only in R-P8). */
-static proc_t *curproc;
+/*
+ * rvsmp-b: per-hart current user process, indexed by tp (the S-mode hart id).
+ * One global was shared by every hart, so a fork or fault on one hart resolved
+ * against another hart's proc. swtch saves/restores it per thread (t_curproc).
+ * The asm is volatile so a read after a sleep re-reads tp (the thread may have
+ * moved harts).
+ */
+#include <sys/machtypes.h>
+static proc_t *curproc_hart[MAXCPU];
+static inline proc_t **
+curproc_slot(void)
+{
+	unsigned long id;
+
+	__asm__ __volatile__("mv %0, tp" : "=r"(id));
+	return (&curproc_hart[id < MAXCPU ? id : 0]);
+}
+#define	curproc	(*curproc_slot())
 
 volatile int userland_active = 0;
 
@@ -510,15 +526,16 @@ proc_alloc(void)
 	int i;
 
 	for (i = 0; i < NPROC; i++) {
-		if (!proctab[i].p_inuse) {
+		/* rvsmp-d: claim slot + pid atomically (forks on many harts) */
+		if (!proctab[i].p_inuse &&
+		    !__atomic_exchange_n(&proctab[i].p_inuse, 1, __ATOMIC_ACQUIRE)) {
 			proc_t *p = &proctab[i];
 			int k;
 			unsigned char *fp = (unsigned char *)&p->p_uframe;
 
 			for (k = 0; k < (int)sizeof (p->p_uframe); k++)
 				fp[k] = 0;
-			p->p_inuse = 1;
-			p->p_pid = next_pid++;
+			p->p_pid = __atomic_fetch_add(&next_pid, 1, __ATOMIC_RELAXED);
 			p->p_ppid = 0;
 			p->p_state = PS_RUN;
 			p->p_status = 0;
@@ -2834,8 +2851,9 @@ pipe_alloc(void)
 {
 	int i;
 	for (i = 0; i < NPIPE; i++)
-		if (!pipetab[i].pp_used) {
-			pipetab[i].pp_used = 1;
+		/* rvsmp-d: claim atomically; two harts' pipe2 took one slot */
+		if (!pipetab[i].pp_used &&
+		    !__atomic_exchange_n(&pipetab[i].pp_used, 1, __ATOMIC_ACQUIRE)) {
 			pipetab[i].pp_rpos = 0;
 			pipetab[i].pp_wpos = 0;
 			pipetab[i].pp_readers = 1;

@@ -121,7 +121,10 @@ volatile unsigned long trap_probe_scause = 0;
  * R-P9, so one global is correct; a per-thread t_lofault is the SMP-userland
  * upgrade. (NOTE: the ceiling — one global lofault — is documented above.)
  */
-volatile unsigned long copy_lofault = 0;
+/* rvsmp-b: one slot per hart, indexed by tp (copy.S/swtch.S); swtch saves and
+ * restores it per thread, so it is the thread's t_lofault. */
+#include <sys/machtypes.h>
+volatile unsigned long copy_lofault[MAXCPU];
 
 static void
 puthex(unsigned long v)
@@ -341,11 +344,14 @@ trap(struct regs *tf)
 	 * thread, which is a hint that making copy_lofault per-thread outright is
 	 * the real upgrade.
 	 */
-	if (copy_lofault != 0 && (tf->r_sstatus & SSTATUS_SPP) != 0 &&
+	unsigned long lfh;	/* rvsmp-b: this hart's slot (SPP=1: tp is ours) */
+	__asm__ __volatile__("mv %0, tp" : "=r"(lfh));
+	lfh = lfh < MAXCPU ? lfh : 0;
+	if (copy_lofault[lfh] != 0 && (tf->r_sstatus & SSTATUS_SPP) != 0 &&
 	    (code == EXC_LOAD_PAGE_FAULT || code == EXC_STORE_PAGE_FAULT ||
 	    code == EXC_LOAD_ACCESS || code == EXC_STORE_ACCESS)) {
-		tf->r_sepc = copy_lofault;
-		copy_lofault = 0;
+		tf->r_sepc = copy_lofault[lfh];
+		copy_lofault[lfh] = 0;
 		return;
 	}
 

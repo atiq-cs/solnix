@@ -86,6 +86,8 @@ rv_swtch:
 	 * clobber it, and it is restored when we are switched back to.
 	 */
 	la	t1, copy_lofault
+	slli	t2, tp, 3		/* rvsmp-b: per-hart slot */
+	add	t1, t1, t2
 	ld	t0, 0(t1)
 	sd	t0, C_LOFAULT(a0)
 
@@ -120,6 +122,8 @@ rv_swtch:
 1:
 	/* Restore the incoming thread's copy_lofault into the global (R-P10). */
 	la	t1, copy_lofault
+	slli	t2, tp, 3		/* rvsmp-b: tp = new's c_tp = this hart */
+	add	t1, t1, t2
 	ld	t0, C_LOFAULT(a1)
 	sd	t0, 0(t1)
 
@@ -139,6 +143,7 @@ rv_swtch:
 	.globl rv_thread_start
 	.type rv_thread_start, @function
 rv_thread_start:
+	call	swtch_tail		/* rvsmp-a: enqueue a yielder now saved */
 	mv	a0, s1			/* arg */
 	jalr	s0			/* call entry(arg) */
 	call	thread_exit		/* entry returned: exit the thread */

@@ -25,6 +25,7 @@
 
 #include "sbi.h"
 #include "riscv_regs.h"
+#include <sys/machtypes.h>	/* MAXCPU */
 
 /*
  * Timebase: the rate of the `time` CSR, in Hz.
@@ -84,6 +85,9 @@ clock_timebase(void)
 volatile unsigned long timer_ticks = 0;		/* total periodic ticks */
 static volatile unsigned long timer_deadline = 0;	/* next fire (`time`) */
 static volatile int timer_periodic = 0;		/* 1 = rearm each tick */
+/* rvsmp-1b: per-secondary-hart next deadline; 0 = this hart is not a secondary
+ * ticker (the boot hart uses timer_deadline). */
+static volatile unsigned long hart_deadline[MAXCPU];
 
 /*
  * ---------------------------------------------------------------------------
@@ -215,6 +219,19 @@ void
 timer_intr(void)
 {
 	unsigned long co_sie = 0;
+	unsigned long hart;
+
+	/* rvsmp-1b: a secondary's tick only rearms its own deadline; timer_ticks
+	 * and the callout wheel stay on the boot hart. trap() then preempts. */
+	__asm__ __volatile__("mv %0, tp" : "=r"(hart));
+	if (hart < MAXCPU && hart_deadline[hart] != 0) {
+		unsigned long now = rd_time();
+		hart_deadline[hart] += timer_period;
+		if (hart_deadline[hart] <= now)
+			hart_deadline[hart] = now + timer_period;
+		(void) sbi_set_timer(hart_deadline[hart]);
+		return;
+	}
 	timer_ticks++;
 
 	/*
@@ -284,6 +301,21 @@ clock_start(void)
 	(void) sbi_set_timer(timer_deadline);
 	__asm__ __volatile__("csrs sie, %0" :: "r"(SIE_STIE));
 	__asm__ __volatile__("csrs sstatus, %0" :: "r"(SSTATUS_SIE));
+}
+
+/*
+ * clock_start_secondary — rvsmp-1b: start this secondary hart's own HZ tick
+ * (each hart's stimecmp is private) so a user thread on it is preempted and
+ * gets async signal delivery as on the boot hart. SIE is enabled by the caller.
+ */
+void
+clock_start_secondary(unsigned long hartid)
+{
+	if (hartid >= MAXCPU)
+		return;
+	hart_deadline[hartid] = rd_time() + timer_period;
+	(void) sbi_set_timer(hart_deadline[hartid]);
+	__asm__ __volatile__("csrs sie, %0" :: "r"(SIE_STIE));
 }
 
 /*
