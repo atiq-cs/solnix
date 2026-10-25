@@ -56,7 +56,7 @@ extern void thread_yield(void);
 
 /* From uproc.c: the R-P8 process model. */
 extern int proc_first(const char *path, const void *img, unsigned long len);
-extern int proc_waitpid(int pid, int *statusp);
+extern int proc_waitpid(int pid, int *statusp, int nohang);
 
 /* Defined below: on-disk ustar root FS mount + query (R-P9 gate 4). */
 int rootfs_mount_ondisk(void);
@@ -226,7 +226,7 @@ single_user_thread(void *arg)
 			sbi_console_puts("[init] proc_first(/sbin/init) "
 			    "FAILED\n");
 		} else {
-			rpid = proc_waitpid(-1, &st);
+			rpid = proc_waitpid(-1, &st, 0);
 			sbi_console_puts("\n[init] reaped /sbin/init pid ");
 			kputdec((unsigned long)rpid);
 			sbi_console_puts(" status ");

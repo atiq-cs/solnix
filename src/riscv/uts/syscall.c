@@ -56,7 +56,7 @@ extern int proc_fd_open(int fd);
 extern int proc_fork(struct regs *tf);
 extern int proc_execve(const char *path, char *const argv[],
     char *const envp[]);
-extern int proc_waitpid(int pid, int *statusp);
+extern int proc_waitpid(int pid, int *statusp, int nohang);
 extern long proc_brk(unsigned long newbrk);
 extern unsigned long proc_cow_shared(void);
 extern unsigned long proc_cow_copied(void);
@@ -186,11 +186,20 @@ extern long copyout(const void *kaddr, void *uaddr, unsigned long n);
 #define	SYS_setgid	144
 #define	SYS_setuid	146
 #define	SYS_getuid	174
+#define	SYS_getgid	176	/* rvlogin */
+#define	SYS_geteuid	175
+#define	SYS_getegid	177
+#define	SYS_setresuid	147
+#define	SYS_setresgid	149
 #define	SYS_getpid	172
 #define	SYS_brk		214
 #define	SYS_fork	220
 #define	SYS_execve	221
 #define	SYS_wait4	260
+#define	SYS_getrandom	278	/* rvlogin: viornd.c */
+#define	SYS_getpgid	155	/* rvlogin */
+#define	SYS_getsid	156
+#define	SYS_setsid	157
 /* solnix-private diagnostic: print the kernel COW-fork stats line (R-P9). */
 #define	SYS_cowreport	500
 /* solnix-private diagnostic: print the clock-preemption count (R-P9 gate 5). */
@@ -596,7 +605,13 @@ syscall_trap(struct regs *tf)
 		break;
 	case SYS_wait4: {
 		int status = 0;
-		int rpid = proc_waitpid((int)tf->r_a0, &status);
+		int rpid;
+
+		if (tf->r_a2 & ~1UL) {
+			ret = -22;	/* EINVAL: only WNOHANG (1) is known */
+			break;
+		}
+		rpid = proc_waitpid((int)tf->r_a0, &status, (int)(tf->r_a2 & 1));
 		int *usp = (int *)tf->r_a1;
 		if (usp != 0 && rpid > 0) {
 			if (copyout(&status, usp, sizeof (status)) != 0) {
@@ -634,7 +649,37 @@ syscall_trap(struct regs *tf)
 		break;
 	case SYS_getuid:
 		ret = sys_getuid();
-		break;	case SYS_cowreport: {
+		break;
+	case SYS_getgid:
+	case SYS_geteuid:
+	case SYS_getegid: {
+		extern long sys_getid(int which);
+		ret = sys_getid(tf->r_a7 == SYS_geteuid ? 1 : tf->r_a7 == SYS_getgid ? 2 : 3);
+		break;
+	}
+	case SYS_setresuid:
+	case SYS_setresgid: {
+		extern long sys_setres(int, unsigned long, unsigned long, unsigned long);
+		ret = sys_setres(tf->r_a7 == SYS_setresgid, tf->r_a0, tf->r_a1, tf->r_a2);
+		break;
+	}
+	case SYS_setsid: {
+		extern long sys_setsid(void);
+		ret = sys_setsid();
+		break;
+	}
+	case SYS_getsid:
+	case SYS_getpgid: {
+		extern long sys_getsid(int pid, int pg);
+		ret = sys_getsid((int)tf->r_a0, tf->r_a7 == SYS_getpgid);
+		break;
+	}
+	case SYS_getrandom: {
+		extern long sys_getrandom(unsigned long, unsigned long, unsigned int);
+		ret = sys_getrandom(tf->r_a0, tf->r_a1, (unsigned int)tf->r_a2);
+		break;
+	}
+	case SYS_cowreport: {
 		extern void kputdec(unsigned long v);
 		sbi_console_puts("COW fork OK: ");
 		kputdec(proc_cow_shared());

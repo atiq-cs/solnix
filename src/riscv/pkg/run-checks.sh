@@ -72,7 +72,7 @@ timeout -s KILL "$TMO" "$QEMU" -machine virt -smp "${SMP:-4}" -m 512M -nographic
 	-drive file="$WORK/disk.img",if=none,id=hd0,format=raw -device virtio-blk-device,drive=hd0 \
 	-drive file="$WORK/root.img",if=none,id=fs0,format=raw -device virtio-blk-device,drive=fs0 \
 	-drive file="$WORK/data.img",if=none,id=data0,format=raw -device virtio-blk-device,drive=data0 \
-	-netdev user,id=n0 -device virtio-net-device,netdev=n0 \
+	-netdev user,id=n0${HOSTFWD:-} -device virtio-net-device,netdev=n0 ${QEMU_EXTRA--device virtio-rng-device} \
 	< "$IN" > "$LOG" 2>&1 &
 QP=$!
 for _ in $(seq 1 "$TMO"); do

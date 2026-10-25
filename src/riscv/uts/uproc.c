@@ -130,6 +130,7 @@ extern int snfs_ready_p(void);
 static void pipe_close(int pi, int is_write);
 static void pipe_ref(int pi, int is_write);
 static long pipe_read(int pi, char *ubuf, unsigned long n);
+static short fd_ready(struct proc *p, int fd);	/* rvlogin: O_NONBLOCK gate */
 static long pipe_write(int pi, const char *ubuf, unsigned long n);
 
 /*
@@ -466,6 +467,10 @@ typedef struct proc {
 	int		p_inuse;
 	unsigned int	p_uid;		/* R-P11: /etc/passwd login sets these */
 	unsigned int	p_gid;
+	unsigned int	p_euid, p_suid;	/* rvlogin: effective + saved (p_uid = real) */
+	unsigned int	p_egid, p_sgid;
+	int		p_sid;		/* rvlogin: session id (setsid) */
+	int		p_pgid;		/* rvlogin: process group (= sid here) */
 	unsigned long	p_sigpend;	/* R-P11: pending-signal bitmask */
 	unsigned long	p_sighand[NSIG];/* disposition per signal */
 	int		p_insig;	/* currently in a handler (frame saved) */
@@ -488,6 +493,7 @@ typedef struct proc {
 		int		fd_cloexec;	/* FD_CLOEXEC: exec releases the slot */
 		int		fd_dir;		/* 1 = a directory (getdents) */
 		int		fd_append;	/* O_APPEND: every write goes at EOF */
+		int		fd_nonblock;	/* rvlogin: O_NONBLOCK (EAGAIN, not block) */
 		char		fd_path[128];	/* the name opened (dir fds, st_ino) */
 	} p_fd[NOFILE];
 	char		p_cwd[128];	/* rvsh: working directory, canonical */
@@ -541,8 +547,10 @@ proc_alloc(void)
 			p->p_status = 0;
 			p->p_as = 0;
 			p->p_thread = 0;
-			p->p_uid = 0;
-			p->p_gid = 0;
+			p->p_uid = p->p_euid = p->p_suid = 0;
+			p->p_gid = p->p_egid = p->p_sgid = 0;
+			p->p_sid = p->p_pid;	/* fork overwrites; init leads its own */
+			p->p_pgid = p->p_pid;
 			p->p_sigpend = 0;
 			p->p_insig = 0;
 			for (k = 0; k < NSIG; k++)
@@ -557,6 +565,7 @@ proc_alloc(void)
 				p->p_fd[k].fd_cloexec = 0;
 				p->p_fd[k].fd_dir = 0;
 				p->p_fd[k].fd_append = 0;
+				p->p_fd[k].fd_nonblock = 0;
 				p->p_fd[k].fd_path[0] = 0;
 			}
 			p->p_cwd[0] = '/';
@@ -678,6 +687,10 @@ proc_fread(int fd, char *ubuf, unsigned long n)
 
 	if (p == 0 || fd < 0 || fd >= NOFILE || !p->p_fd[fd].fd_used)
 		return (-1);
+	/* rvlogin: O_NONBLOCK on a pipe/socket: EAGAIN instead of blocking. */
+	if (p->p_fd[fd].fd_nonblock && n > 0 && (p->p_fd[fd].fd_pipe >= 0 ||
+	    p->p_fd[fd].fd_sock >= 0) && (fd_ready(p, fd) & 0x0019) == 0)
+		return (-11 /* EAGAIN */);
 	/* R-P12: pipe read end. */
 	if (p->p_fd[fd].fd_pipe >= 0)
 		return (pipe_read(p->p_fd[fd].fd_pipe, ubuf, n));
@@ -775,6 +788,7 @@ fd_release(proc_t *p, int fd)
 	p->p_fd[fd].fd_cloexec = 0;
 	p->p_fd[fd].fd_dir = 0;
 	p->p_fd[fd].fd_append = 0;
+	p->p_fd[fd].fd_nonblock = 0;
 	p->p_fd[fd].fd_wnode = 0;	/* R-P11: clear so a reused slot is clean */
 	/* R-P12: releasing a pipe end drops one reference on the pipe. */
 	if (p->p_fd[fd].fd_pipe >= 0)
@@ -1063,6 +1077,12 @@ proc_fork(struct regs *tf)
 	}
 	child->p_uid = parent->p_uid;	/* R-P11: inherit credentials */
 	child->p_gid = parent->p_gid;
+	child->p_euid = parent->p_euid;
+	child->p_suid = parent->p_suid;
+	child->p_egid = parent->p_egid;
+	child->p_sgid = parent->p_sgid;
+	child->p_sid = parent->p_sid;	/* rvlogin: same session + group */
+	child->p_pgid = parent->p_pgid;
 	{
 		int s;
 		for (s = 0; s < NSIG; s++)
@@ -1303,7 +1323,7 @@ proc_exit(int status)
 static int waitq_slept_once;
 
 int
-proc_waitpid(int pid, int *statusp)
+proc_waitpid(int pid, int *statusp, int nohang)
 {
 	proc_t *self = curproc;
 	int mypid = (self != 0) ? self->p_pid : 0;
@@ -1337,6 +1357,10 @@ proc_waitpid(int pid, int *statusp)
 		if (!haskid) {
 			curproc = self;
 			return (-1);		/* no matching child */
+		}
+		if (nohang) {			/* rvlogin: WNOHANG */
+			curproc = self;
+			return (0);
 		}
 		/*
 		 * A matching child exists but is not yet a ZOMBIE: block on the
@@ -1471,28 +1495,147 @@ sys_sigaction(int sig, unsigned long handler, unsigned long restorer)
 /* sys_setuid / sys_setgid — set the process credentials (login uses these
  * after reading /etc/passwd). No privilege check yet (single-user trust model);
  * a real cred/uid==0 gate is R-P12. */
+/*
+ * rvlogin: real/effective/saved ids with the POSIX rules. Privilege is euid 0.
+ * setuid(u): privileged sets all three; otherwise u must be the real or saved id
+ * and only the effective id changes. setresuid(r, e, s): -1 keeps a field; an
+ * unprivileged caller may only pick among its current three. Same for gids.
+ */
+static long
+cred_setres(unsigned int *c, long r, long e, long s, int priv)
+{
+	long v[3];
+	int i, j, ok;
+
+	v[0] = r; v[1] = e; v[2] = s;
+	for (i = 0; i < 3 && !priv; i++) {
+		if (v[i] == -1)
+			continue;
+		for (ok = 0, j = 0; j < 3; j++)
+			ok |= (unsigned int)v[i] == c[j];
+		if (!ok)
+			return (-1 /* EPERM */);
+	}
+	for (i = 0; i < 3; i++)
+		if (v[i] != -1)
+			c[i] = (unsigned int)v[i];
+	return (0);
+}
+
+static long
+cred_set(int gid, long r, long e, long s)
+{
+	proc_t *p = curproc;
+	unsigned int c[3];
+	long rv;
+
+	if (p == 0)
+		return (-1);
+	c[0] = gid ? p->p_gid : p->p_uid;
+	c[1] = gid ? p->p_egid : p->p_euid;
+	c[2] = gid ? p->p_sgid : p->p_suid;
+	if ((rv = cred_setres(c, r, e, s, p->p_euid == 0)) != 0)
+		return (rv);
+	if (gid) {
+		p->p_gid = c[0]; p->p_egid = c[1]; p->p_sgid = c[2];
+	} else {
+		p->p_uid = c[0]; p->p_euid = c[1]; p->p_suid = c[2];
+	}
+	return (0);
+}
+
 long
 sys_setuid(unsigned int uid)
 {
-	if (curproc == 0)
-		return (-1);
-	curproc->p_uid = uid;
-	return (0);
+	if (curproc != 0 && curproc->p_euid == 0)
+		return (cred_set(0, uid, uid, uid));
+	return (cred_set(0, -1, uid, -1));	/* EPERM unless uid is real or saved */
 }
 
 long
 sys_setgid(unsigned int gid)
 {
-	if (curproc == 0)
-		return (-1);
-	curproc->p_gid = gid;
-	return (0);
+	if (curproc != 0 && curproc->p_euid == 0)
+		return (cred_set(1, gid, gid, gid));
+	return (cred_set(1, -1, gid, -1));
+}
+
+/* setresuid/setresgid: -1 (as the u32 0xffffffff the ABI passes) = unchanged. */
+long
+sys_setres(int gid, unsigned long r, unsigned long e, unsigned long s)
+{
+	return (cred_set(gid, (unsigned int)r == 0xffffffffU ? -1 : (long)(unsigned int)r,
+	    (unsigned int)e == 0xffffffffU ? -1 : (long)(unsigned int)e,
+	    (unsigned int)s == 0xffffffffU ? -1 : (long)(unsigned int)s));
+}
+
+/* which: 0 uid, 1 euid, 2 gid, 3 egid */
+long
+sys_getid(int which)
+{
+	proc_t *p = curproc;
+
+	if (p == 0)
+		return (0);
+	return ((long)(which == 0 ? p->p_uid : which == 1 ? p->p_euid :
+	    which == 2 ? p->p_gid : p->p_egid));
 }
 
 long
 sys_getuid(void)
 {
 	return (curproc != 0 ? (long)curproc->p_uid : 0);
+}
+
+/*
+ * rvlogin: setsid/getsid/getpgid (Linux 157/156/155). A session leader cannot
+ * start a new session (EPERM, as POSIX says). No controlling tty exists yet, so
+ * there is nothing to detach; process groups are only as fine as sessions.
+ */
+long
+sys_setsid(void)
+{
+	proc_t *p = curproc;
+
+	if (p == 0 || p->p_pgid == p->p_pid)
+		return (-1 /* EPERM */);
+	p->p_sid = p->p_pid;
+	p->p_pgid = p->p_pid;
+	return (p->p_pid);
+}
+
+long
+sys_getsid(int pid, int pg)
+{
+	int i;
+
+	if (pid == 0 && curproc != 0)
+		return (pg ? curproc->p_pgid : curproc->p_sid);
+	for (i = 0; i < NPROC; i++)
+		if (proctab[i].p_inuse && proctab[i].p_pid == pid &&
+		    proctab[i].p_state != PS_ZOMBIE)
+			return (pg ? proctab[i].p_pgid : proctab[i].p_sid);
+	return (-3 /* ESRCH */);
+}
+
+/*
+ * rvlogin: would a pending signal do something on return to U-mode (a handler or
+ * a default kill)? Then a blocking call returns EINTR so it gets the chance, as
+ * POSIX says; dropbear's SIGCHLD handler is what tells it a session's child died.
+ */
+static int
+proc_sig_wakes(proc_t *p)
+{
+	int sig;
+
+	if (p == 0 || p->p_insig)
+		return (0);
+	for (sig = 1; sig < NSIG; sig++)
+		if ((p->p_sigpend & (1UL << sig)) != 0 &&
+		    p->p_sighand[sig] != SIG_IGN_VAL &&
+		    !(p->p_sighand[sig] == SIG_DFL_VAL && sig == SIGCHLD))
+			return (1);
+	return (0);
 }
 
 /*
@@ -2732,6 +2875,9 @@ proc_fwrite(int fd, const char *ubuf, unsigned long n)
 
 	if (p == 0 || fd < 0 || fd >= NOFILE || !p->p_fd[fd].fd_used)
 		return (-1);
+	if (p->p_fd[fd].fd_nonblock && n > 0 && (p->p_fd[fd].fd_pipe >= 0 ||
+	    p->p_fd[fd].fd_sock >= 0) && (fd_ready(p, fd) & 0x001c) == 0)
+		return (-11 /* EAGAIN */);
 	/* R-P12: pipe write end. */
 	if (p->p_fd[fd].fd_pipe >= 0)
 		return (pipe_write(p->p_fd[fd].fd_pipe, ubuf, n));
@@ -3078,6 +3224,9 @@ proc_dup2(int oldfd, int newfd)
 #define	F_DUPFD_K		0
 #define	F_GETFD_K		1
 #define	F_SETFD_K		2
+#define	F_GETFL_K		3
+#define	F_SETFL_K		4
+#define	O_NONBLOCK_K		0x800
 #define	F_DUPFD_CLOEXEC_K	1030
 #define	FD_CLOEXEC_K		1
 long
@@ -3096,6 +3245,16 @@ proc_fcntl(int fd, int cmd, long arg)
 	case F_SETFD_K:
 		if (p->p_fd[fd].fd_used)
 			p->p_fd[fd].fd_cloexec = (arg & FD_CLOEXEC_K) != 0;
+		return (0);
+	case F_GETFL_K:		/* rvlogin: status flags; an empty 0..2 is the console */
+		return (2 /* O_RDWR */ | (p->p_fd[fd].fd_used && p->p_fd[fd].fd_append ?
+		    O_APPEND_K : 0) | (p->p_fd[fd].fd_used && p->p_fd[fd].fd_nonblock ?
+		    O_NONBLOCK_K : 0));
+	case F_SETFL_K:
+		if (!p->p_fd[fd].fd_used)
+			return (-19 /* ENODEV: the console is always blocking */);
+		p->p_fd[fd].fd_append = (arg & O_APPEND_K) != 0;
+		p->p_fd[fd].fd_nonblock = (arg & O_NONBLOCK_K) != 0;
 		return (0);
 	case F_DUPFD_K:
 	case F_DUPFD_CLOEXEC_K:
@@ -3491,6 +3650,8 @@ proc_poll(unsigned long ufds, int nfds, int timeout)
 			break;			/* immediate: 0 ready is the answer */
 		if (timeout > 0 && gethrtime() >= deadline)
 			break;			/* timed out: return 0 */
+		if (proc_sig_wakes(p))
+			return (-4 /* EINTR: the handler runs on the way out */);
 
 		/*
 		 * Wait. thread_yield gives the cpu to whoever might make us ready

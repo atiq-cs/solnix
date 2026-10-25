@@ -53,6 +53,7 @@ extern void thread_ab_selftest(void);
 extern int virtio_discover(void);
 extern int vioblk_attach(void);
 extern int vionet_attach(void);
+extern int viornd_attach(void);
 extern int mountroot(void);
 extern int single_user(const char *rootdev);
 extern const char *rootdev_name(void);
@@ -446,6 +447,7 @@ startup_root(void)
 	(void) virtio_discover();
 	(void) vioblk_attach();
 	(void) vionet_attach();
+	(void) viornd_attach();	/* rvlogin: entropy for getrandom */
 	inet_init();		/* rvsrv: lwIP IPv4 on vionet (DHCP) */
 
 	/*

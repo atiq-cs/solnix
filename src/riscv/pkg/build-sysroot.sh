@@ -33,6 +33,7 @@ P="$NEWLIB_SRC/newlib/libc/posix"
 for f in regcomp regexec regerror regfree collate collcmp fnmatch; do
 	"$CC" -O2 -w -I"$P" -D_GNU_SOURCE -c "$P/$f.c" -o "$SR/obj/$f.o"
 done
+"$CC" -O2 -Wall -c "$HERE/solnix-libc/net.c" -o "$SR/obj/net.o"	# rvlogin: sockets, select, resolver
 rm -f "$SR/lib/libsolnix.a"
 ar rcs "$SR/lib/libsolnix.a" "$SR/obj/"*.o
 echo "libsolnix.a: $(ar t "$SR/lib/libsolnix.a" | tr '\n' ' ')"

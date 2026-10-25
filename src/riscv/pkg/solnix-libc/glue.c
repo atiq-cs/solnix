@@ -546,6 +546,13 @@ _fcntl(int fd, int cmd, ...)
 	case F_GETFD:
 	case F_SETFD:
 		return ((int)kret(ksys(K_fcntl, vk(fd, 1), cmd, arg, 0), EBADF));
+	case F_GETFL:	/* [REAL] rvlogin: the kernel keeps O_APPEND/O_NONBLOCK per fd */
+		n = (int)kret(ksys(K_fcntl, vk(fd, 1), 3, 0, 0), EBADF);
+		return (n < 0 ? -1 : O_RDWR | ((n & 0x400) ? O_APPEND : 0) |
+		    ((n & 0x800) ? O_NONBLOCK : 0));
+	case F_SETFL:	/* ENODEV for the console, which never blocks on write */
+		return ((int)kret(ksys(K_fcntl, vk(fd, 1), 4, ((arg & O_APPEND) ?
+		    0x400 : 0) | ((arg & O_NONBLOCK) ? 0x800 : 0), 0), EBADF));
 	}
 #endif
 	switch (cmd) {
@@ -686,8 +693,7 @@ waitpid(pid_t pid, int *status, int options)
 	int raw = 0;
 	long r;
 
-	(void) options;
-	r = ksys(K_wait4, pid, (long)&raw, 0, 0);
+	r = ksys(K_wait4, pid, (long)&raw, options & WNOHANG, 0);	/* rvlogin: WNOHANG */
 	if (r < 0) {
 		errno = ECHILD;
 		return (-1);
@@ -910,9 +916,16 @@ usleep(useconds_t us)
 /* ---- identity ----------------------------------------------------------- */
 
 uid_t getuid(void) { return ((uid_t)ksys(K_getuid, 0, 0, 0, 0)); }	/* [REAL] */
-uid_t geteuid(void) { return (getuid()); }	/* [REAL]: one uid per proc */
-gid_t getgid(void) { return (0); }		/* [STUB] no getgid syscall */
-gid_t getegid(void) { return (0); }		/* [STUB] */
+uid_t geteuid(void) { return ((uid_t)ksys(175, 0, 0, 0, 0)); }	/* [REAL] rvlogin */
+gid_t getgid(void) { return ((gid_t)ksys(176, 0, 0, 0, 0)); }	/* [REAL] rvlogin */
+gid_t getegid(void) { return ((gid_t)ksys(177, 0, 0, 0, 0)); }	/* [REAL] rvlogin */
+/* [REAL] rvlogin: real/effective/saved ids (setresuid 147, setresgid 149). */
+/* newlib's uid_t/gid_t are u16: (uid_t)-1 is 0xffff and must reach the kernel as -1 ("unchanged") */
+#define	KID(x) ((x) == (__typeof__(x))-1 ? -1L : (long)(x))
+int setresuid(uid_t r, uid_t e, uid_t s) { return ((int)kret(ksys(147, KID(r), KID(e), KID(s), 0), EPERM)); }
+int setresgid(gid_t r, gid_t e, gid_t s) { return ((int)kret(ksys(149, KID(r), KID(e), KID(s), 0), EPERM)); }
+int seteuid(uid_t u) { return (setresuid((uid_t)-1, u, (uid_t)-1)); }
+int setegid(gid_t g) { return (setresgid((gid_t)-1, g, (gid_t)-1)); }
 int setuid(uid_t u) { return ((int)kret(ksys(K_setuid, u, 0, 0, 0), EPERM)); }
 int setgid(gid_t g) { return ((int)kret(ksys(K_setgid, g, 0, 0, 0), EPERM)); }
 mode_t umask(mode_t m) { (void) m; return (022); }	/* [STUB] no modes */
@@ -971,9 +984,22 @@ NOSYS(ssize_t readlink(const char *a, char *b, size_t n))
 NOSYS(int ftruncate(int f, off_t l))
 NOSYS(int fsync(int f))
 NOSYS(int setpgid(pid_t a, pid_t b))
-NOSYS(int _getentropy(void *b, size_t n))
-pid_t getpgrp(void) { return (_getpid()); }	/* [STUB] no process groups */
-pid_t setsid(void) { errno = ENOSYS; return (-1); }
+pid_t getpgrp(void) { return (getpgid(0)); }	/* [REAL] rvlogin: group = session */
+pid_t setsid(void) { return ((pid_t)kret(ksys(157, 0, 0, 0, 0), EPERM)); }	/* [REAL] rvlogin */
+pid_t getsid(pid_t p) { return ((pid_t)kret(ksys(156, p, 0, 0, 0), ESRCH)); }	/* [REAL] */
+pid_t getpgid(pid_t p) { return ((pid_t)kret(ksys(155, p, 0, 0, 0), ESRCH)); }	/* [REAL] */
+/* [REAL] rvlogin: the kernel's virtio-rng (viornd.c); ENOSYS when qemu has no rng device. */
+ssize_t getrandom(void *b, size_t n, unsigned int f) { return ((ssize_t)kret(ksys(278, (long)b, (long)n, f, 0), EIO)); }
+int
+getentropy(void *b, size_t n)
+{
+	if (n > 256) {
+		errno = EIO;
+		return (-1);
+	}
+	return (getrandom(b, n, 0) == (ssize_t)n ? 0 : -1);
+}
+int _getentropy(void *b, size_t n) { return (getentropy(b, n)); }
 
 /* No termios: the console is the kernel's fixed line-mode echoing reader. */
 int tcgetattr(int f, void *t) { (void) f; (void) t; errno = ENOTTY; return (-1); }
