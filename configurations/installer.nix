@@ -33,10 +33,6 @@ let
   motd = pkgs.writeScript "solnix-motd" (builtins.readFile ../scripts/live/solnix-motd);
   zap = pkgs.writeScript "solnix-zap" (builtins.readFile ../scripts/solnix-zap);
   diag = pkgs.writeScript "solnix-diag" (builtins.readFile ../scripts/solnix-diag);
-  # the console temperature line (svc:/site/solnix-templine below)
-  templine = pkgs.writeScript "solnix-templine"
-    (builtins.replaceStrings [ "@cputemp@" ] [ "${live.solnix-cputemp}/bin/solnix-cputemp" ]
-      (builtins.readFile ../scripts/live/solnix-templine));
   liveMethod = pkgs.writeScript "solnix-live"
     (builtins.replaceStrings [ "@autonet@" "@install@" ]
       [ "${autonet}" "${config.system.build.solnixInstall}" ]
@@ -58,7 +54,6 @@ let
     ln -s ${config.system.build.solnixInstall} $out/bin/solnix-install
     ln -s ${zap} $out/bin/solnix-zap
     ln -s ${diag} $out/bin/solnix-diag
-    ln -s ${templine} $out/bin/solnix-templine
     ln -s ${motd} $out/bin/solnix-motd
     ln -s ${autonet} $out/bin/solnix-autonet
     ln -s ${generateConfig} $out/bin/solnix-generate-config
@@ -207,21 +202,6 @@ in
     start.exec = "${liveMethod}";
     start.timeoutSeconds = 1800;
     stop.exec = ":true";
-  };
-
-  # One console line every 30 s with the CPU, thermal-zone and ThinkPad EC
-  # temperatures (scripts/live/solnix-templine). If the machine powers off by
-  # itself, the last readings are still on the screen to photograph. It only
-  # reads (one ioctl per CPU sensor, one kstat read per zone); `svcadm disable
-  # solnix-templine` silences it.
-  smf.services.solnix-templine = {
-    enable = true;
-    category = "site";
-    description = "solnix live temperature line";
-    model = "contract";
-    requires = [ "svc:/milestone/multi-user:default" ];
-    start.exec = "${templine} &";
-    stop.exec = ":kill";
   };
 
   # sshd runs on the media with root login allowed, as NixOS's installation-device

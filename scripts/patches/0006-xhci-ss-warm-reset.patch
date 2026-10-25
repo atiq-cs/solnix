@@ -21,14 +21,15 @@ THE CHANGE (xhci_hub.c only; hubd's own reset/enumerate path is unchanged)
 - GET_STATUS reports such a port as connected (PORT_STATUS_CCS), so hubd's attach-time scan
   (hubd_determine_port_connection) and its hotplug thread call hubd_handle_port_connect.
 - SET_FEATURE(PORT_RESET) on such a port sets WPR instead of PR. hubd already waits for the reset change and
-  clears C_BH_PORT_RESET (hubdi.c hubd_reset_port). One console NOTE per warm reset with the raw PORTSC.
+  clears C_BH_PORT_RESET (hubdi.c hubd_reset_port). One system-log NOTE ("!", not the console) per warm
+  reset with the raw PORTSC.
 - Tunable xhci_ss_warm_reset (default 1). 0 is the old behaviour, which is the negative control.
 RUNG: compiles with the gate's warning set, and is modelled under KVM with a QEMU qemu-xhci patched to hold a
 present-at-boot SuperSpeed device in SS.Inactive with CAS until a warm reset. NOT measured on the X1E; the
 solnix-diag PORTSC dump (/usr/lib/xhci/xhci_portsc) is what shows whether the X1E's port is in that state.
 
---- a/usr/src/uts/common/io/usb/hcd/xhci/xhci_hub.c	2026-10-21 14:43:39.255384808 -0400
-+++ b/usr/src/uts/common/io/usb/hcd/xhci/xhci_hub.c	2026-10-21 14:46:18.852050651 -0400
+--- a/usr/src/uts/common/io/usb/hcd/xhci/xhci_hub.c
++++ b/usr/src/uts/common/io/usb/hcd/xhci/xhci_hub.c
 @@ -22,6 +22,34 @@
  #include <sys/usb/hcd/xhci/xhci.h>
  
@@ -88,7 +89,7 @@ solnix-diag PORTSC dump (/usr/lib/xhci/xhci_portsc) is what shows whether the X1
  	case CFS_PORT_RESET:
 -		reg |= XHCI_PS_PR;
 +		if (xhci_port_needs_warm_reset(raw)) {
-+			xhci_log(xhcip, "port %d: USB 3 link not trained "
++			xhci_log(xhcip, "!port %d: USB 3 link not trained "
 +			    "(PORTSC 0x%x, link state %d%s); warm reset", port,
 +			    raw, XHCI_PS_PLS_GET(raw),
 +			    (raw & XHCI_PS_CAS) ? ", cold attach" : "");

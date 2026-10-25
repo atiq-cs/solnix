@@ -16,14 +16,12 @@
 # Applied on top of the pinned source: scripts/patches/0001-tscc_pit-default-
 # pit_is_broken.patch (gotcha #10; must be a source default, /etc/system is read
 # too late), and 0002-tzmon-thinkpad-hkey-enable.patch (ThinkPad HKEY init, and
-# _HOT/_CRT acted on after 3 consecutive readings with a clean power-off and the EC
-# sensors on the console; _TMP == _CRT on a ThinkPad is the EC's critical alarm,
-# never skipped. The patch header has the DSDT + live-hardware evidence), and
+# _HOT/_CRT acted on after 3 consecutive readings with a clean power-off;
+# _TMP == _CRT on a ThinkPad is the EC's critical alarm, never skipped. The patch
+# header has the DSDT + live-hardware evidence), and
 # 0003-usbecm-usb-pipe-xopen.patch (usbecm opened its data pipes with
 # usb_pipe_open(), which USBA refuses on a USB 3 device, so RTL8153 USB-C
-# adapters attached but never passed a frame), 0004-tzmon-zone-kstat.patch (kstat
-# tzmon:<n>:<zone> with the zone temperature and the ThinkPad EC sensors, for the
-# live media's temperature line without dtrace), 0005-tzmon-thinkpad-dgpu-off.patch
+# adapters attached but never passed a frame), 0005-tzmon-thinkpad-dgpu-off.patch
 # (ON by default, -B solnix-dgpu-off=0 opts out: a ThinkPad NVIDIA dGPU that only a
 # generic driver holds -- vgatext, audiohd -- is offlined, put in D3hot and its root
 # port's _PR3 power resource turned off, as Linux's D3cold does; idle in D0 it heated
@@ -42,7 +40,6 @@
 , patches ? [ ../../scripts/patches/0001-tscc_pit-default-pit_is_broken.patch
               ../../scripts/patches/0002-tzmon-thinkpad-hkey-enable.patch
               ../../scripts/patches/0003-usbecm-usb-pipe-xopen.patch
-              ../../scripts/patches/0004-tzmon-zone-kstat.patch
               ../../scripts/patches/0005-tzmon-thinkpad-dgpu-off.patch
               ../../scripts/patches/0006-xhci-ss-warm-reset.patch ]
 , onbld ? "/opt/onbld"
@@ -98,8 +95,13 @@ derivation {
       echo "FATAL: tzmon still acts only once (an early-boot SIGPWR is dropped by init)" >&2; exit 1; fi
     if grep -qE 'crt_sentinel|NOT shutting down' usr/src/uts/i86pc/io/tzmon/tzmon.c; then
       echo "FATAL: tzmon still skips a _CRT reading" >&2; exit 1; fi
-    grep -q 'kstat_create("tzmon"' usr/src/uts/i86pc/io/tzmon/tzmon.c \
-      || { echo "FATAL: tzmon zone kstat patch not applied" >&2; exit 1; }
+    # the diagnosis-only output is gone: the EC sensor dump on every over-limit line,
+    # the zone kstat that carried the EC fields, and the dGPU "nothing done" notes.
+    if grep -qE 'EC TMP0-7|TSL0-3|kstat_create\("tzmon"|ec_gput|nothing done' usr/src/uts/i86pc/io/tzmon/tzmon.c; then
+      echo "FATAL: tzmon still has the thermal-diagnosis output (EC dump, zone kstat, dGPU skip notes)" >&2; exit 1; fi
+    grep -q '"!tzmon: solnix-dgpu-off: %s: %d function(s) at "' usr/src/uts/i86pc/io/tzmon/tzmon.c \
+      && grep -q '"!tzmon: Thermal zone (%s) back to "' usr/src/uts/i86pc/io/tzmon/tzmon.c \
+      || { echo "FATAL: tzmon dGPU-off / back-to notes are not log-only" >&2; exit 1; }
     grep -q '^	tzmon_dgpu_off(dip);' usr/src/uts/i86pc/io/tzmon/tzmon.c \
       || { echo "FATAL: tzmon dGPU power-off patch not applied" >&2; exit 1; }
     # ... ON by default (unset = on, "0" opts out), and allowed to detach the generic

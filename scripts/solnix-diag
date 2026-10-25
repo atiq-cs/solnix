@@ -137,8 +137,6 @@ _section() { printf '\n===== %s =====\n' "$1"; }
   echo "-- xhci warm resets this boot --"; dmesg 2>/dev/null | grep -i 'warm reset' | tail -10
 
   _section "TEMPERATURES + POWER"
-  solnix-templine once 2>&1
-  kstat -p tzmon 2>&1 | head -30
   kstat -p -m cpu_info -s 'current_clock_Hz|supported_frequencies_Hz' 2>&1 | head -8
   svcs -H power 2>&1; grep -v '^#' /etc/power.conf 2>/dev/null | grep .
   dmesg 2>/dev/null | grep -i 'solnix-dgpu-off\|tzmon' | tail -10
