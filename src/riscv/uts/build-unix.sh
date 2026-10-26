@@ -49,6 +49,7 @@ echo "== compile (freestanding, $TC) =="
 "$CC" $CFLAGS -c fp.c        -o fp.o
 "$CC" $CFLAGS -c port.c      -o port.o
 "$CC" $CFLAGS -c unixsock.c  -o unixsock.o
+"$CC" $CFLAGS -c pty.c       -o pty.o
 "$CC" $CFLAGS -c fdt.c       -o fdt.o
 "$CC" $CFLAGS -c vm_page.c   -o vm_page.o
 "$CC" $CFLAGS -c kmem.c      -o kmem.o
@@ -92,7 +93,7 @@ RP64="$(cd "$(dirname "$0")/../../riscv-port/rp64/kernel" && pwd)"
 
 echo "== link (riscv.ld @ 0x80200000) =="
 "$LD" -T riscv.ld -o "$OUT" image_header.o locore.o trap_asm.o swtch.o fpsave.o \
-	sbi.o trap.o hat_riscv.o timer.o plic.o aia.o cmo.o fp.o port.o unixsock.o \
+	sbi.o trap.o hat_riscv.o timer.o plic.o aia.o cmo.o fp.o port.o unixsock.o pty.o \
 	fdt.o vm_page.o kmem.o proc.o \
 	as.o elf.o syscall.o uart.o sdhci.o uproc.o copy.o \
 	virtio.o vioblk.o blkfs.o vionet.o viornd.o $LWIPOBJS rootfs.o startup.o main.o \

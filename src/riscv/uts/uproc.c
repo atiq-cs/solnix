@@ -131,7 +131,22 @@ static void pipe_close(int pi, int is_write);
 static void pipe_ref(int pi, int is_write);
 static long pipe_read(int pi, char *ubuf, unsigned long n);
 static short fd_ready(struct proc *p, int fd);	/* rvlogin: O_NONBLOCK gate */
+static long pty_uio(struct proc *p, int fd, char *ubuf, unsigned long n, int wr);
 static long pipe_write(int pi, const char *ubuf, unsigned long n);
+
+/* pty.c (rvtty): pairs on kernel buffers, never blocking; fd_pty = 1 + (N<<1 | master). */
+extern int pty_alloc(unsigned int uid, unsigned int gid);
+extern int pty_open_slave(int n, unsigned int uid);
+extern void pty_ref(int n, int master);
+extern void pty_close(int n, int master);
+extern long pty_read(int n, int master, char *kbuf, unsigned long len);
+extern long pty_write(int n, int master, const char *kbuf, unsigned long len);
+extern int pty_poll(int n, int master);
+extern long pty_ioctl(int n, int master, int cmd, unsigned long uarg,
+    unsigned int uid);
+extern int pty_owner(int n, unsigned int *uid, unsigned int *gid);
+#define	PTY_N(v)	(((v) - 1) >> 1)
+#define	PTY_M(v)	(((v) - 1) & 1)
 
 /*
  * The AF_UNIX socket layer (unixsock.c). Declared here because the fd table --
@@ -494,6 +509,7 @@ typedef struct proc {
 		int		fd_dir;		/* 1 = a directory (getdents) */
 		int		fd_append;	/* O_APPEND: every write goes at EOF */
 		int		fd_nonblock;	/* rvlogin: O_NONBLOCK (EAGAIN, not block) */
+		int		fd_pty;		/* rvtty: 1 + (N<<1 | master), 0 = not a pty */
 		char		fd_path[128];	/* the name opened (dir fds, st_ino) */
 	} p_fd[NOFILE];
 	char		p_cwd[128];	/* rvsh: working directory, canonical */
@@ -566,6 +582,7 @@ proc_alloc(void)
 				p->p_fd[k].fd_dir = 0;
 				p->p_fd[k].fd_append = 0;
 				p->p_fd[k].fd_nonblock = 0;
+				p->p_fd[k].fd_pty = 0;
 				p->p_fd[k].fd_path[0] = 0;
 			}
 			p->p_cwd[0] = '/';
@@ -692,6 +709,8 @@ proc_fread(int fd, char *ubuf, unsigned long n)
 	    p->p_fd[fd].fd_sock >= 0) && (fd_ready(p, fd) & 0x0019) == 0)
 		return (-11 /* EAGAIN */);
 	/* R-P12: pipe read end. */
+	if (p->p_fd[fd].fd_pty)
+		return (pty_uio(p, fd, ubuf, n, 0));
 	if (p->p_fd[fd].fd_pipe >= 0)
 		return (pipe_read(p->p_fd[fd].fd_pipe, ubuf, n));
 	/* An AF_UNIX endpoint: read(2) is recvmsg with no ancillary data. Rights
@@ -767,6 +786,8 @@ fd_hold(proc_t *p, int fd)
 		unsock_ref(p->p_fd[fd].fd_sock);
 	if (p->p_fd[fd].fd_port >= 0)
 		port_hold(p->p_fd[fd].fd_port);
+	if (p->p_fd[fd].fd_pty)
+		pty_ref(PTY_N(p->p_fd[fd].fd_pty), PTY_M(p->p_fd[fd].fd_pty));
 	if (p->p_fd[fd].fd_fb) {
 		extern long fb_open(void);
 		(void) fb_open();
@@ -793,6 +814,10 @@ fd_release(proc_t *p, int fd)
 	/* R-P12: releasing a pipe end drops one reference on the pipe. */
 	if (p->p_fd[fd].fd_pipe >= 0)
 		pipe_close(p->p_fd[fd].fd_pipe, p->p_fd[fd].fd_pipe_w);
+	if (p->p_fd[fd].fd_pty) {	/* rvtty: the last close is EOF on the other end */
+		pty_close(PTY_N(p->p_fd[fd].fd_pty), PTY_M(p->p_fd[fd].fd_pty));
+		p->p_fd[fd].fd_pty = 0;
+	}
 	/*
 	 * An AF_UNIX endpoint is reference-counted the same way: the socket is torn
 	 * down (and its peer told, so a blocked reader sees EOF rather than hanging)
@@ -1639,6 +1664,49 @@ proc_sig_wakes(proc_t *p)
 }
 
 /*
+ * rvtty: read(2)/write(2) on a pty end. pty.c never blocks; this waits like
+ * proc_poll (thread_yield: a sleep_on wakeup from the peer's hart could be
+ * lost, see inet.c net_sleep), returns EINTR on a waking signal, and bounces
+ * the user buffer through 256 bytes of kernel stack.
+ */
+static long
+pty_uio(proc_t *p, int fd, char *ubuf, unsigned long n, int wr)
+{
+	int v = p->p_fd[fd].fd_pty, nb = p->p_fd[fd].fd_nonblock;
+	unsigned long done = 0;
+	char kb[256];
+	long r;
+
+	while (done < n) {
+		unsigned long c = n - done > sizeof (kb) ? sizeof (kb) : n - done;
+
+		if (wr && copyin(ubuf + done, kb, c) != 0)
+			return (done > 0 ? (long)done : -14 /* EFAULT */);
+		r = wr ? pty_write(PTY_N(v), PTY_M(v), kb, c) :
+		    pty_read(PTY_N(v), PTY_M(v), kb, c);
+		if (r == -11 /* EAGAIN */) {
+			if (done > 0 && !wr)
+				break;		/* a read returns what it has */
+			if (nb)
+				return (done > 0 ? (long)done : r);
+			if (proc_sig_wakes(p))
+				return (done > 0 ? (long)done : -4 /* EINTR */);
+			thread_yield();
+			curproc = p;
+			continue;
+		}
+		if (r <= 0)
+			return (done > 0 ? (long)done : r);	/* EOF / EIO */
+		if (!wr && copyout(kb, ubuf + done, (unsigned long)r) != 0)
+			return (done > 0 ? (long)done : -14 /* EFAULT */);
+		done += (unsigned long)r;
+		if (!wr && (unsigned long)r < c)
+			break;
+	}
+	return ((long)done);
+}
+
+/*
  * proc_deliver_signals — deliver at most one pending signal to the current
  * process on the way back to U-mode. `tf` is the trap frame we are about to
  * sret through (the process's live register state). Called from the trap
@@ -2064,6 +2132,37 @@ ns_fsize(const char *path)
 	return (0);
 }
 
+/*
+ * rvtty: stat of a pty end or of /dev/pts/N: a character device whose st_rdev
+ * minor is N (libc's ptsname builds /dev/pts/N from it), owned by the pair's
+ * grantpt owner with mode 0620. A master fd stats as mode 0666 with the same
+ * minor N, which is how ptsname(masterfd) finds its slave; /dev/ptmx is N = 0.
+ */
+static long
+pty_statout(int n, int master, unsigned long ustat)
+{
+	struct kstat_k st;
+	unsigned char *b = (unsigned char *)&st;
+	unsigned int uid = 0, gid = 0;
+	int i;
+
+	if (!master && pty_owner(n, &uid, &gid) != 0)
+		return (-NS_ENOENT);
+	for (i = 0; i < (int)sizeof (st); i++)
+		b[i] = 0;
+	st.st_dev = 1;
+	st.st_ino = 0x7700 + (master ? 0x80 : n);
+	st.st_mode = 0020000 | (master ? 0666 : 0620);
+	st.st_nlink = 1;
+	st.st_uid = uid;
+	st.st_gid = gid;
+	st.st_rdev = (unsigned long)n;
+	st.st_blksize = 512;
+	if (copyout(&st, (void *)ustat, sizeof (st)) != 0)
+		return (-NS_EFAULT);
+	return (0);
+}
+
 /* newfstatat(dirfd, path, statbuf, flags) */
 long
 proc_fstatat(int dirfd, const char *upath, unsigned long ustat, int flags)
@@ -2088,6 +2187,11 @@ proc_fstatat(int dirfd, const char *upath, unsigned long ustat, int flags)
 	}
 	if (str_eq_uproc(path, "/dev/fb"))
 		return (ns_statout(path, 1, 0, 0020000, ustat));
+	if (str_eq_uproc(path, "/dev/ptmx"))
+		return (pty_statout(0, 1, ustat));
+	if (ns_under(path, "/dev/pts", 8) && path[8] == '/' && path[9] >= '0' &&
+	    path[9] <= '7' && path[10] == 0)
+		return (pty_statout(path[9] - '0', 0, ustat));
 	kind = ns_kind(path);
 	if (kind == 0)
 		return (-NS_ENOENT);
@@ -2109,6 +2213,9 @@ proc_fstat(int fd, unsigned long ustat)
 			return (ns_statout("/dev/console", 1, 0, 0020000, ustat));
 		return (-NS_EBADF);
 	}
+	if (p->p_fd[fd].fd_pty)
+		return (pty_statout(PTY_N(p->p_fd[fd].fd_pty),
+		    PTY_M(p->p_fd[fd].fd_pty), ustat));
 	if (p->p_fd[fd].fd_pipe >= 0 || p->p_fd[fd].fd_sock >= 0 ||
 	    p->p_fd[fd].fd_port >= 0)
 		return (ns_statout("", 1, 0, p->p_fd[fd].fd_sock >= 0 ?
@@ -2696,6 +2803,45 @@ proc_getcwd(unsigned long ubuf, unsigned long size)
 static long proc_openat_ns(const char *kpath, int flags);
 
 /*
+ * rvtty: /dev/ptmx makes a new pair and returns its master; /dev/pts/N opens
+ * slave N (after unlockpt). Names only, like /dev/fb: there is no devfs.
+ * Returns the fd, -ENOENT for any other /dev/pts name, or a negative errno.
+ */
+static long
+pty_fd_open(proc_t *p, const char *path)
+{
+	int n = -1, fd, v;
+
+	if (str_eq_uproc(path, "/dev/ptmx")) {
+		if ((n = pty_alloc(p->p_euid, p->p_egid)) < 0)
+			return (n);
+		v = 1 + ((n << 1) | 1);
+	} else {
+		if (path[8] != '/' || path[9] < '0' || path[9] > '9' || path[10] != 0)
+			return (-NS_ENOENT);	/* /dev/pts/N, N < NPTY = 8 */
+		n = path[9] - '0';
+		if ((v = pty_open_slave(n, p->p_euid)) < 0)
+			return (v);
+		v = 1 + (n << 1);
+	}
+	for (fd = 3; fd < NOFILE; fd++) {
+		if (p->p_fd[fd].fd_used)
+			continue;
+		p->p_fd[fd].fd_used = 1;
+		p->p_fd[fd].fd_data = 0;
+		p->p_fd[fd].fd_len = p->p_fd[fd].fd_pos = 0;
+		p->p_fd[fd].fd_wnode = 0;
+		p->p_fd[fd].fd_snfs = p->p_fd[fd].fd_pipe = -1;
+		p->p_fd[fd].fd_sock = p->p_fd[fd].fd_port = -1;
+		p->p_fd[fd].fd_fb = 0;
+		p->p_fd[fd].fd_pty = v;
+		return (fd);
+	}
+	pty_close(PTY_N(v), PTY_M(v));
+	return (-24 /* EMFILE */);
+}
+
+/*
  * openat(dirfd, path, flags): resolve `path` against dirfd/the cwd, then open a
  * directory (an fd for getdents) or a file. O_EXCL, O_TRUNC, O_DIRECTORY and
  * O_CLOEXEC are honoured here; the file kinds are proc_openat_ns's.
@@ -2712,6 +2858,14 @@ proc_openat(int dirfd, const char *upath, int flags)
 		return (-NS_EFAULT);
 	if ((r = ns_abspath(p, dirfd, upath, path)) != 0)
 		return (r);
+	if (str_eq_uproc(path, "/dev/ptmx") || ns_under(path, "/dev/pts", 8)) {
+		fd = pty_fd_open(p, path);	/* rvtty; O_NOCTTY is moot: no ctty yet */
+		if (fd >= 0 && (flags & O_CLOEXEC_K))
+			p->p_fd[fd].fd_cloexec = 1;
+		if (fd >= 0 && (flags & 0x800 /* O_NONBLOCK */))
+			p->p_fd[fd].fd_nonblock = 1;
+		return (fd);
+	}
 	/* /dev/fb and /data/<name> (SNFS) are reached by name, not listed. */
 	if (str_eq_uproc(path, "/dev/fb") || (ns_under(path, "/data", 5) &&
 	    path[5] == '/'))
@@ -2879,6 +3033,8 @@ proc_fwrite(int fd, const char *ubuf, unsigned long n)
 	    p->p_fd[fd].fd_sock >= 0) && (fd_ready(p, fd) & 0x001c) == 0)
 		return (-11 /* EAGAIN */);
 	/* R-P12: pipe write end. */
+	if (p->p_fd[fd].fd_pty)
+		return (pty_uio(p, fd, (char *)ubuf, n, 1));
 	if (p->p_fd[fd].fd_pipe >= 0)
 		return (pipe_write(p->p_fd[fd].fd_pipe, ubuf, n));
 	/* An AF_UNIX endpoint: write(2) is sendmsg with no ancillary data. */
@@ -3367,6 +3523,9 @@ proc_ioctl(int fd, int cmd, unsigned long arg)
 		return (-9 /* EBADF */);
 	if (p->p_fd[fd].fd_fb)
 		return (fb_ioctl(cmd, arg));
+	if (p->p_fd[fd].fd_pty)
+		return (pty_ioctl(PTY_N(p->p_fd[fd].fd_pty),
+		    PTY_M(p->p_fd[fd].fd_pty), cmd, arg, p->p_euid));
 	return (-ENOTTY_UPROC);
 }
 
@@ -3521,6 +3680,15 @@ fd_ready(proc_t *p, int fd)
 
 	if (!p->p_fd[fd].fd_used)
 		return (POLLNVAL);
+
+	if (p->p_fd[fd].fd_pty) {	/* rvtty: the same RD/WR/HUP bits */
+		int m = pty_poll(PTY_N(p->p_fd[fd].fd_pty),
+		    PTY_M(p->p_fd[fd].fd_pty));
+
+		return ((short)(((m & UNPOLL_RD) ? POLLIN | POLLRDNORM : 0) |
+		    ((m & UNPOLL_WR) ? POLLOUT : 0) |
+		    ((m & UNPOLL_HUP) ? POLLHUP : 0)));
+	}
 
 	if (p->p_fd[fd].fd_sock >= 0) {
 		/* inet_poll returns the same RD/WR/HUP bits (1/2/4). */
@@ -4433,6 +4601,7 @@ struct sock_rights {
 	int	r_pipe_w;
 	int	r_fb;
 	int	r_sock;
+	int	r_pty;		/* rvtty: fd_pty */
 };
 
 #define	NRIGHTS	16
@@ -4459,6 +4628,9 @@ unsock_fd_dup_into(int fd)
 		rightstab[i].r_pipe_w = p->p_fd[fd].fd_pipe_w;
 		rightstab[i].r_fb = p->p_fd[fd].fd_fb;
 		rightstab[i].r_sock = p->p_fd[fd].fd_sock;
+		rightstab[i].r_pty = p->p_fd[fd].fd_pty;
+		if (rightstab[i].r_pty)
+			pty_ref(PTY_N(rightstab[i].r_pty), PTY_M(rightstab[i].r_pty));
 		/*
 		 * Hold a reference for the in-flight entry so the sender may
 		 * close its own descriptor immediately after sendmsg (exactly
@@ -4501,6 +4673,7 @@ unsock_fd_install_slot(int ri)
 		p->p_fd[fd].fd_pipe_w = rightstab[ri].r_pipe_w;
 		p->p_fd[fd].fd_fb = rightstab[ri].r_fb;
 		p->p_fd[fd].fd_sock = rightstab[ri].r_sock;
+		p->p_fd[fd].fd_pty = rightstab[ri].r_pty;
 		rightstab[ri].r_used = 0;	/* reference moves to the fd */
 		return (fd);
 	}
@@ -4521,6 +4694,8 @@ unsock_rights_drop(int ri)
 		pipe_close(rightstab[ri].r_pipe, rightstab[ri].r_pipe_w);
 	if (rightstab[ri].r_sock >= 0)
 		unsock_close(rightstab[ri].r_sock);
+	if (rightstab[ri].r_pty)
+		pty_close(PTY_N(rightstab[ri].r_pty), PTY_M(rightstab[ri].r_pty));
 	rightstab[ri].r_used = 0;
 }
 
