@@ -48,10 +48,15 @@ struct pty {
 	unsigned char	pt_termios[36];	/* illumos struct termios (the line discipline reads it) */
 	unsigned long	pt_llen;	/* ICANON: bytes of the open line at the m2s tail */
 	unsigned short	pt_winsz[4];	/* ws_row, ws_col, ws_xpixel, ws_ypixel */
+	int		pt_sid;		/* session whose ctty this slave is; 0 = none */
+	int		pt_pgrp;	/* foreground process group (TIOCSPGRP) */
+	int		pt_sigpend;	/* ISIG: signal for pt_pgrp, posted after unlock */
 	struct ptyring	pt_m2s;		/* master -> slave */
 	struct ptyring	pt_s2m;		/* slave -> master */
 };
 
+extern int proc_signal_pgrp(int pgid, int sig);	/* uproc.c */
+extern int proc_signal(int pid, int sig);
 static struct pty ptytab[NPTY];
 
 static void
@@ -155,6 +160,13 @@ ld_in(struct pty *pt, const char *kbuf, unsigned long n)
 		pt->pt_llen = canon ? r->r_wpos - r->r_rpos : 0;
 	for (i = 0; i < n; i++) {
 		c = (unsigned char)kbuf[i];
+		if ((PTY_LFLAG(pt) & 01) && (LD_IS(pt, c, 0) || LD_IS(pt, c, 1))) {
+			/* ISIG: VINTR -> SIGINT, VQUIT -> SIGQUIT; the open line is flushed */
+			r->r_wpos -= canon ? pt->pt_llen : 0, pt->pt_llen = 0;
+			pt->pt_sigpend = LD_IS(pt, c, 0) ? 2 : 3;
+			LD_ECHO(pt, LD_IS(pt, c, 0) ? "^C\n" : "^\\\n", 3);
+			continue;
+		}
 		if (!canon || c == '\n' || LD_IS(pt, c, 4)) {	/* raw, or a line's end */
 			if (ring_put(r, kbuf + i, 1) == 0)
 				break;
@@ -228,6 +240,7 @@ pty_alloc(unsigned int uid, unsigned int gid)
 			continue;
 		}
 		pt->pt_used = 1;
+		pt->pt_sid = 0, pt->pt_pgrp = 0;
 		pt->pt_mref = 1;
 		pt->pt_sref = pt->pt_ever = 0;
 		pt->pt_locked = 1;
@@ -299,15 +312,20 @@ void
 pty_close(int n, int master)
 {
 	struct pty *pt = &ptytab[n];
+	int hup = 0;
 
 	pty_lock(pt);
 	if (master && pt->pt_mref > 0)
 		pt->pt_mref--;
 	else if (!master && pt->pt_sref > 0)
 		pt->pt_sref--;
+	if (master && pt->pt_mref == 0 && pt->pt_sid != 0)
+		hup = pt->pt_sid, pt->pt_sid = pt->pt_pgrp = 0;	/* hangup: the ctty is gone */
 	if (pt->pt_mref == 0 && pt->pt_sref == 0)
 		pt->pt_used = 0;
 	pty_unlock(pt);
+	if (hup != 0)
+		(void) proc_signal(hup, 1 /* SIGHUP, to the session leader */);
 }
 
 /*
@@ -347,6 +365,7 @@ pty_write(int n, int master, const char *kbuf, unsigned long len)
 {
 	struct pty *pt = &ptytab[n];
 	long r;
+	int sig, pg;
 
 	pty_lock(pt);
 	if (master ? (pt->pt_ever && pt->pt_sref == 0) : pt->pt_mref == 0)
@@ -356,7 +375,10 @@ pty_write(int n, int master, const char *kbuf, unsigned long len)
 		if (r == 0 && len > 0)
 			r = -PTY_EAGAIN;
 	}
+	sig = pt->pt_sigpend, pg = pt->pt_pgrp, pt->pt_sigpend = 0;
 	pty_unlock(pt);
+	if (sig != 0 && pg > 0)
+		(void) proc_signal_pgrp(pg, sig);
 	return (r);
 }
 
@@ -392,6 +414,59 @@ pty_poll(int n, int master)
 #define	PTY_TCSETSF	0x5410
 #define	PTY_TIOCSWINSZ	0x5467
 #define	PTY_TIOCGWINSZ	0x5468
+#define	PTY_TIOCGPGRP	0x7414	/* illumos tIOC|20 */
+#define	PTY_TIOCSPGRP	0x7415
+#define	PTY_TIOCGSID	0x7416
+#define	PTY_TIOCNOTTY	0x7471	/* tIOC|113 */
+#define	PTY_TIOCSCTTY	0x7484	/* tIOC|132 */
+
+/* Become `sid`'s controlling tty, with `pgid` in the foreground (session leaders only, from open or TIOCSCTTY). */
+int
+pty_set_ctty(int n, int sid, int pgid)
+{
+	struct pty *pt = &ptytab[n];
+	int r = -1;
+
+	pty_lock(pt);
+	if (pt->pt_sid == 0 || pt->pt_sid == sid) {
+		pt->pt_sid = sid, pt->pt_pgrp = pgid, r = 0;
+	}
+	pty_unlock(pt);
+	return (r);
+}
+
+/* The ctty session of slave n (0 = none) and its foreground group; and set the foreground group. */
+int
+pty_ctty(int n, int *pgrp)
+{
+	*pgrp = ptytab[n].pt_pgrp;
+	return (ptytab[n].pt_sid);
+}
+
+void
+pty_set_pgrp(int n, int pgrp)
+{
+	ptytab[n].pt_pgrp = pgrp;
+}
+
+int
+pty_drop_ctty(int n)
+{
+	ptytab[n].pt_sid = ptytab[n].pt_pgrp = 0;
+	return (0);
+}
+
+/* The slave that is session `sid`'s ctty, or -1. */
+int
+pty_session_ctty(int sid)
+{
+	int n;
+
+	for (n = 0; n < NPTY; n++)
+		if (ptytab[n].pt_used && ptytab[n].pt_sid == sid)
+			return (n);
+	return (-1);
+}
 
 extern long copyin(const void *uaddr, void *kaddr, unsigned long n);
 extern long copyout(const void *kaddr, void *uaddr, unsigned long n);

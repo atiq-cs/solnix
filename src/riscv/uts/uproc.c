@@ -145,6 +145,11 @@ extern int pty_poll(int n, int master);
 extern long pty_ioctl(int n, int master, int cmd, unsigned long uarg,
     unsigned int uid);
 extern int pty_owner(int n, unsigned int *uid, unsigned int *gid);
+extern int pty_set_ctty(int n, int sid, int pgid);
+extern int pty_ctty(int n, int *pgrp);
+extern void pty_set_pgrp(int n, int pgrp);
+extern int pty_drop_ctty(int n);
+extern int pty_session_ctty(int sid);
 #define	PTY_N(v)	(((v) - 1) >> 1)
 #define	PTY_M(v)	(((v) - 1) & 1)
 
@@ -1487,11 +1492,34 @@ proc_signal(int pid, int sig)
 	return (-1);
 }
 
-/* sys_kill — the kill(2) backing: post `sig` to pid. */
+/* Post `sig` to every live process in group `pgid`. 0 if any got it, else -1 (ESRCH). */
+int
+proc_signal_pgrp(int pgid, int sig)
+{
+	int i, hit = 0;
+
+	if (sig <= 0 || sig >= NSIG)
+		return (-1);
+	for (i = 0; i < NPROC; i++) {
+		if (proctab[i].p_inuse && proctab[i].p_pgid == pgid &&
+		    proctab[i].p_state == PS_RUN) {
+			proctab[i].p_sigpend |= (1UL << sig);
+			wakeup(&proctab[i]);
+			hit = 1;
+		}
+	}
+	return (hit ? 0 : -1);
+}
+
+/* sys_kill -- kill(2): pid > 0 one process; pid < -1 the process group -pid; 0 the caller's group. */
 long
 sys_kill(int pid, int sig)
 {
-	return (proc_signal(pid, sig));
+	if (pid > 0)
+		return (proc_signal(pid, sig));
+	if (pid == 0 && curproc != 0)
+		pid = -curproc->p_pgid;
+	return (pid < -1 ? proc_signal_pgrp(-pid, sig) : -1);
 }
 
 /*
@@ -1627,6 +1655,39 @@ sys_setsid(void)
 	p->p_sid = p->p_pid;
 	p->p_pgid = p->p_pid;
 	return (p->p_pid);
+}
+
+/*
+ * setpgid(pid, pgid) (Linux 154): pid 0 = self, pgid 0 = pid. Only the caller or its child, in the caller's
+ * session, and not a session leader; the target group must be new (== pid) or exist in the session.
+ */
+long
+sys_setpgid(int pid, int pgid)
+{
+	proc_t *self = curproc, *t = 0;
+	int i, ok = 0;
+
+	if (self == 0 || pgid < 0)
+		return (-22 /* EINVAL */);
+	if (pid == 0)
+		pid = self->p_pid;
+	for (i = 0; i < NPROC; i++)
+		if (proctab[i].p_inuse && proctab[i].p_pid == pid &&
+		    proctab[i].p_state != PS_ZOMBIE)
+			t = &proctab[i];
+	if (t == 0 || (t != self && t->p_ppid != self->p_pid))
+		return (-3 /* ESRCH */);
+	if (t->p_sid != self->p_sid || t->p_sid == t->p_pid)
+		return (-1 /* EPERM */);
+	if (pgid == 0)
+		pgid = pid;
+	for (i = 0; i < NPROC && !ok; i++)
+		ok = proctab[i].p_inuse && proctab[i].p_pgid == pgid &&
+		    proctab[i].p_sid == self->p_sid;
+	if (pgid != pid && !ok)
+		return (-1 /* EPERM */);
+	t->p_pgid = pgid;
+	return (0);
 }
 
 long
@@ -2846,6 +2907,23 @@ pty_fd_open(proc_t *p, const char *path)
  * directory (an fd for getdents) or a file. O_EXCL, O_TRUNC, O_DIRECTORY and
  * O_CLOEXEC are honoured here; the file kinds are proc_openat_ns's.
  */
+/* /dev/tty: a new descriptor on the caller's controlling tty (its session's pty slave), else ENXIO. */
+static long
+pty_open_ctty(proc_t *p, int flags)
+{
+	char name[11] = "/dev/pts/0";
+	int n = pty_session_ctty(p->p_sid);
+	long fd;
+
+	if (n < 0)
+		return (-6 /* ENXIO */);
+	name[9] = (char)('0' + n);
+	fd = pty_fd_open(p, name);
+	if (fd >= 0 && (flags & O_CLOEXEC_K))
+		p->p_fd[fd].fd_cloexec = 1;
+	return (fd);
+}
+
 long
 proc_openat(int dirfd, const char *upath, int flags)
 {
@@ -2858,8 +2936,14 @@ proc_openat(int dirfd, const char *upath, int flags)
 		return (-NS_EFAULT);
 	if ((r = ns_abspath(p, dirfd, upath, path)) != 0)
 		return (r);
+	if (str_eq_uproc(path, "/dev/tty"))
+		return (pty_open_ctty(p, flags));
 	if (str_eq_uproc(path, "/dev/ptmx") || ns_under(path, "/dev/pts", 8)) {
-		fd = pty_fd_open(p, path);	/* rvtty; O_NOCTTY is moot: no ctty yet */
+		fd = pty_fd_open(p, path);
+		/* A session leader with no ctty acquires the slave it opens without O_NOCTTY (0x100). */
+		if (fd >= 0 && !(flags & 0x100) && p->p_sid == p->p_pid && !PTY_M(p->p_fd[fd].fd_pty) &&
+		    pty_session_ctty(p->p_sid) < 0)
+			(void) pty_set_ctty(PTY_N(p->p_fd[fd].fd_pty), p->p_sid, p->p_pgid);
 		if (fd >= 0 && (flags & O_CLOEXEC_K))
 			p->p_fd[fd].fd_cloexec = 1;
 		if (fd >= 0 && (flags & 0x800 /* O_NONBLOCK */))
@@ -3502,6 +3586,36 @@ extern unsigned long as_root(as_t *as);
  * ioctls; every other fd kind gets ENOTTY, which is the correct POSIX answer
  * for "this fd is not a device that understands ioctls".
  */
+/*
+ * Job-control ioctls on a pty slave, which need the caller's session: TIOCSCTTY, TIOCNOTTY, TIOCGPGRP,
+ * TIOCSPGRP, TIOCGSID (illumos numbers). Returns 1 for "not mine" (pty_ioctl handles it), else 0 or -errno.
+ */
+static long
+pty_jobctl(proc_t *p, int n, int master, int cmd, unsigned long arg)
+{
+	int sid, pg;
+
+	if (master || (cmd != 0x7484 && cmd != 0x7471 && cmd != 0x7414 && cmd != 0x7415 && cmd != 0x7416))
+		return (1);
+	if (cmd == 0x7484)		/* TIOCSCTTY: a session leader only */
+		return (p->p_sid == p->p_pid && pty_set_ctty(n, p->p_sid, p->p_pgid) == 0 ? 0 : -1);
+	sid = pty_ctty(n, &pg);
+	if (sid == 0 || sid != p->p_sid)
+		return (-25 /* ENOTTY: not our ctty */);
+	if (cmd == 0x7471)		/* TIOCNOTTY: the session leader gives the ctty up */
+		return (p->p_sid == p->p_pid ? pty_drop_ctty(n) : 0);
+	if (cmd == 0x7415) {		/* TIOCSPGRP: arg points at the pid_t */
+		int v;
+
+		if (copyin((void *)arg, &v, sizeof (v)) != 0)
+			return (-14);
+		pty_set_pgrp(n, v);
+		return (0);
+	}
+	pg = cmd == 0x7416 ? sid : pg;	/* TIOCGSID or TIOCGPGRP */
+	return (copyout(&pg, (void *)arg, sizeof (pg)) != 0 ? -14 : 0);
+}
+
 long
 proc_ioctl(int fd, int cmd, unsigned long arg)
 {
@@ -3523,9 +3637,15 @@ proc_ioctl(int fd, int cmd, unsigned long arg)
 		return (-9 /* EBADF */);
 	if (p->p_fd[fd].fd_fb)
 		return (fb_ioctl(cmd, arg));
-	if (p->p_fd[fd].fd_pty)
+	if (p->p_fd[fd].fd_pty) {
+		long jc = pty_jobctl(p, PTY_N(p->p_fd[fd].fd_pty),
+		    PTY_M(p->p_fd[fd].fd_pty), cmd, arg);
+
+		if (jc != 1)
+			return (jc);
 		return (pty_ioctl(PTY_N(p->p_fd[fd].fd_pty),
 		    PTY_M(p->p_fd[fd].fd_pty), cmd, arg, p->p_euid));
+	}
 	return (-ENOTTY_UPROC);
 }
 

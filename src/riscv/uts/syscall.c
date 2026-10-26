@@ -197,6 +197,7 @@ extern long copyout(const void *kaddr, void *uaddr, unsigned long n);
 #define	SYS_execve	221
 #define	SYS_wait4	260
 #define	SYS_getrandom	278	/* rvlogin: viornd.c */
+#define	SYS_setpgid	154	/* rvtty3b */
 #define	SYS_getpgid	155	/* rvlogin */
 #define	SYS_getsid	156
 #define	SYS_setsid	157
@@ -666,6 +667,11 @@ syscall_trap(struct regs *tf)
 	case SYS_setsid: {
 		extern long sys_setsid(void);
 		ret = sys_setsid();
+		break;
+	}
+	case SYS_setpgid: {
+		extern long sys_setpgid(int, int);
+		ret = sys_setpgid((int)tf->r_a0, (int)tf->r_a1);
 		break;
 	}
 	case SYS_getsid:
