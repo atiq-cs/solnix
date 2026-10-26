@@ -6,6 +6,8 @@
  *   TCSETS/TCGETS round trip; 10000 bytes (> the 4 KiB ring) from a fork child
  *   through the slave; closing the slave = EOF + EIO at the master, and closing
  *   a master = EOF at its slave.
+ *   Line discipline: ICANON (VERASE, VKILL, one line per read), ECHO (VERASE as
+ *   "\b \b"), OPOST|ONLCR on slave output; with ICANON/OPOST off, bytes raw.
  * prints PTYTEST PASS / PTYTEST FAIL <why>
  */
 #include <stdio.h>
@@ -72,6 +74,21 @@ op(const char *path)
 	return (ks4(K_openat, AT_FDCWD, (long)path, O_RDWR | O_NOCTTY, 0));
 }
 
+/* One read of fd within 1 s must give exactly want[0..n); else print FAIL, return 1. */
+static int
+expect(long fd, const char *want, long n, const char *what)
+{
+	static unsigned char b[512];
+	struct kpfd pf;
+	long r;
+
+	pf.fd = (int)fd; pf.ev = 1; pf.rev = 0;
+	if ((r = ks(K_poll, (long)&pf, 1, 1000)) != 1)
+		return (fail(what, -1000));	/* nothing readable */
+	r = ks(K_read, fd, (long)b, sizeof (b));
+	return (r == n && __builtin_memcmp(b, want, n) == 0 ? 0 : fail(what, r));
+}
+
 int
 main(void)
 {
@@ -82,7 +99,7 @@ main(void)
 	unsigned short ws[4] = { 33, 111, 0, 0 }, wg[4];
 	unsigned char t[36], tg[36], buf[512];
 	char sp[12] = "/dev/pts/0";
-	int i, got = 0, wst = 0;
+	int i, got = 0, wst = 0, bad = 0;
 
 	(void) own;
 	if ((m = op("/dev/ptmx")) < 0)
@@ -130,6 +147,40 @@ main(void)
 	    (r = ks(K_ioctl, m, TCGETS, (long)tg)) != 0 ||
 	    __builtin_memcmp(t, tg, 36) != 0)
 		return (fail("TCSETS slave -> TCGETS master", r));
+	/* Line discipline. ICANON|ECHO, OPOST|ONLCR; VERASE DEL, VKILL ^U, VEOF ^D. */
+	t[4] = 05; t[12] = 012; t[18] = 0x7f; t[19] = 0x15; t[20] = 4;
+	if ((r = ks(K_ioctl, s, TCSETS, (long)t)) != 0 ||
+	    (r = ks(K_write, m, (long)"ab\x7f", 3)) != 3)
+		return (fail("set ICANON|ECHO, write a part line", r));
+	pf.fd = (int)s; pf.ev = 1; pf.rev = 0;
+	if ((r = ks(K_poll, (long)&pf, 1, 0)) != 0)
+		bad |= fail("ICANON: a part line must not be readable", r);
+	if ((r = ks(K_write, m, (long)"c\n", 2)) != 2)
+		return (fail("write the line's end", r));
+	bad |= expect(s, "ac\n", 3, "ICANON+VERASE: slave reads ac\\n");
+	bad |= expect(m, "ab\b \bc\r\n", 8, "ECHO: master sees ab\\b \\bc\\r\\n");
+	if ((r = ks(K_write, m, (long)"k\x15q\nr\n", 6)) != 6)
+		return (fail("write VKILL + two lines", r));
+	bad |= expect(s, "q\n", 2, "VKILL, one line per read: q\\n");
+	bad |= expect(s, "r\n", 2, "second line r\\n");
+	bad |= expect(m, "kq\r\nr\r\n", 7, "ECHO of the VKILL lines");
+	if ((r = ks(K_write, s, (long)"o\n", 2)) != 2)
+		return (fail("slave write o\\n", r));
+	bad |= expect(m, "o\r\n", 3, "ONLCR: master reads o\\r\\n");
+	/* ICANON, ECHO and OPOST off: raw both ways, as before. */
+	t[4] = 0; t[12] = 0;
+	if ((r = ks(K_ioctl, s, TCSETS, (long)t)) != 0 ||
+	    (r = ks(K_write, m, (long)"ab\x7f\x15\n", 5)) != 5)
+		return (fail("set raw, write", r));
+	bad |= expect(s, "ab\x7f\x15\n", 5, "raw: slave reads the bytes unchanged");
+	pf.fd = (int)m; pf.ev = 1; pf.rev = 0;
+	if ((r = ks(K_poll, (long)&pf, 1, 0)) != 0)
+		bad |= fail("raw: no echo at the master", r);
+	if ((r = ks(K_write, s, (long)"o\n", 2)) != 2)
+		return (fail("raw slave write", r));
+	bad |= expect(m, "o\n", 2, "raw: master reads o\\n");
+	if (bad)
+		return (1);
 	if (ks(K_fork, 0, 0, 0) == 0) {
 		for (i = 0; i < (int)sizeof (buf); i++)
 			buf[i] = (unsigned char)i;
