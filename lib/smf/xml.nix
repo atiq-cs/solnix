@@ -117,7 +117,19 @@ let
         (i: "\n          " + renderDependent i (builtins.elemAt depList i))
         (builtins.length depList));
 
-      deps = svc.allDependencies or svc.dependencies;
+      # Every generated service waits for manifest-import, as illumos's network/location and routing-setup do ("the
+      # boot after upgrade"). Without it the first boot of a new generation starts services from the repository BEFORE
+      # manifest-import re-reads this generation's manifests: lixi ran solnix-net's previous method (06ryp6gk,
+      # 2026-10-25) and a dropped service (solnix-mtu, 2026-10-26) once more, then import deleted it. Except services
+      # that manifest-import itself (or single-user, which it needs) must precede: those name a milestone dependent.
+      importDep = {
+        name = "solnix-manifest-import";
+        grouping = "require_all";
+        restartOn = "none";
+        fmris = [ "svc:/system/manifest-import:default" ];
+      };
+      deps = (svc.allDependencies or svc.dependencies)
+        ++ (if (svc.dependents or [ ]) == [ ] then [ importDep ] else [ ]);
     in
     writeText "${name}.xml" ''
       <?xml version="1.0"?>
