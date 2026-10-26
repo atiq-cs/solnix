@@ -373,6 +373,8 @@ let
   # From-source packages the gate does not provide (./base-src.nix). zlib and
   # libxml2 replace the host-copied externalLibs; world is built on top of them.
   srcPkgs = import ./base-src.nix { gate = gate'; libcSlice = libc; inherit world gcc buildTools; };
+  # The Wayland + Mesa userland (./graphics), built like srcPkgs.
+  graphics = import ./graphics { inherit (srcPkgs) mkSrcPkg pkgconf zlib; };
 
   # ---------------------------------------------------------------------------
   # seedBuildTools -- the DEFAULT build-tool set that lets a BARE solnix system
@@ -990,6 +992,7 @@ in
   inherit (srcPkgs) zlib libxml2 openssl openssh bash nspr nss git libcExtra binutils gnumake gccWrapper vi pkgconf;
   inherit (srcPkgs) ncurses less htop top libevent tmux coreutils gnugrep gnused gnutar findutils diffutils jq gettext home-manager xorgproto lndir hostname libiconv;
   inherit (srcPkgs) gzip nano rsync smartmontools tree wget db1 nvi;
+  inherit (graphics) meson samurai expat libffi wayland wayland-protocols libdrm mesa;
   inherit bsdfetch;
   xz = srcPkgs.nixChain.xz;
   # A C/C++ toolchain to put on PATH (nix-shell / nix profile install), the

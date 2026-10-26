@@ -31,6 +31,7 @@
   ./config/debug-info.nix
   ./config/pgfarm.nix
   ./config/cosmic-desktop.nix
+  ./config/desktop-cosmic.nix
   ./config/shell-environment.nix
   ./config/nix.nix
   ./system/boot/init/smf.nix

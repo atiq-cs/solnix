@@ -1,0 +1,14 @@
+diff -ruN ma/meson-1.4.2/mesonbuild/scripts/depfixer.py mb/meson-1.4.2/mesonbuild/scripts/depfixer.py
+--- a/mesonbuild/scripts/depfixer.py
++++ b/mesonbuild/scripts/depfixer.py
+@@ -327,7 +327,9 @@
+             # added by get_link_dep_subdirs() or
+             # specified by user with build_rpath.
+             for rpath_dir in old_rpath.split(b':'):
+-                if not (rpath_dir in rpath_dirs_to_remove or
++                # solnix (cf. nixpkgs meson 001-fix-rpath.patch): a /nix/store dir is a
++                # dependency's lib dir, needed at run time, never a build-only rpath.
++                if rpath_dir.startswith(b'/nix/store/') or not (rpath_dir in rpath_dirs_to_remove or
+                         rpath_dir == (b'X' * len(rpath_dir))):
+                     if rpath_dir:
+                         new_rpaths.add(rpath_dir)
