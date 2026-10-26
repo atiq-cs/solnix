@@ -44,9 +44,20 @@ in
       default = true;
       description = "Save dumps compressed (vmdump.N, expanded with savecore -f).";
     };
+    deadman = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Arm the illumos deadman timer (`set snooping=1`, uts/common/os/clock.c deadman_init): a CPU
+        whose clock interrupt stops for snoop_interval (50 s) panics, so a hard hang leaves a dump
+        instead of a frozen machine. Off by default, as on illumos. Turn it on for driver bring-up
+        (the staged GPU attach requires it) and to diagnose hangs.
+      '';
+    };
   };
 
   config = lib.mkIf cfg.enable {
+    environment.generatedEtc."system.d/solnix-deadman" = lib.mkIf cfg.deadman "set snooping=1\n";
     # dumpadm(8) rewrites this file, so install-be keeps it a real copy
     # (etc_copy), not a link into the store.
     environment.generatedEtc."dumpadm.conf" = ''
