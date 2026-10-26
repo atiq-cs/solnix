@@ -2056,6 +2056,16 @@ esac
 # after <pool>/nix (install-be's vr line), before svc.startd writes its logs.
 # Never encrypted: nothing at that point of boot can ask for a passphrase.
 # Mounted now at $ALTROOT/var/<x>, so install-be's stock /var lands in them.
+# The crash-dump zvol, as every illumos installer creates one (OpenIndiana/OmniOS: rpool/dump). Outside every BE, so
+# a panic in any generation leaves a dump for savecore. Without it dumpadm falls back to swap, and a solnix install has
+# no swap: a panic left nothing (measured on lixi, 2026-10-25: "Dump device: none (dumps disabled)"). Sized like
+# OpenIndiana's installer: half of RAM, between 1 and 16 GiB. solnix.dumpadm (modules/config/dumpadm.nix) names it.
+if ! zfs list -H "$POOL/dump" >/dev/null 2>&1; then
+  _ramk=$(prtconf 2>/dev/null | awk '/^Memory size/ { print $3 * 1024 }')
+  _dumpg=$(( ${_ramk:-2097152} / 2 / 1048576 )); [ "$_dumpg" -lt 1 ] && _dumpg=1; [ "$_dumpg" -gt 16 ] && _dumpg=16
+  zfs create -V ${_dumpg}G "$POOL/dump" || die "failed to create the dump zvol $POOL/dump"
+  log "created $POOL/dump (${_dumpg} GiB) for kernel crash dumps"
+fi
 VAR_SHARED="adm cores crash cron fm lib log logadm mail saf spool tmp svc/log"
 zfs list -H "$POOL/var" >/dev/null 2>&1 \
   || zfs create -o canmount=off -o mountpoint=/var "$POOL/var" || die "failed to create $POOL/var"

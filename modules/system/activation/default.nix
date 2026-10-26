@@ -61,6 +61,20 @@ let
       <service name="network/ssh" version="1" type="service"><instance name="default" enabled="false"/></service>
       <service name="system/power" version="1" type="service"><instance name="default" enabled="${if config.solnix.powerManagement.enable then "true" else "false"}"/></service>
       <service name="system/update-man-index" version="1" type="service"><instance name="default" enabled="false"/></service>
+      <!-- A host, not a router (NixOS runs no routing daemon unless asked). net-routing-setup turns IPv4 routing
+           (in.routed, RIP) ON when it finds no default route at boot -- always the case when the lease comes late, as
+           on a USB NIC -- and then accepts routes any RIP speaker on the LAN advertises. Measured on lixi: a second
+           default via 192.168.1.5, 50% loss and duplicates. ipv4-routing-set=true records an admin choice, so
+           routing-setup keeps routing OFF (what `routeadm -d ipv4-routing` persists). -->
+      <service name="network/routing-setup" version="1" type="service">
+        <instance name="default" enabled="true">
+          <property_group name="routeadm" type="framework">
+            <propval name="ipv4-routing-set" type="boolean" value="true"/>
+            <propval name="default-ipv4-routing" type="boolean" value="false"/>
+          </property_group>
+        </instance>
+      </service>
+      <service name="network/routing/route" version="1" type="service"><instance name="default" enabled="false"/></service>
     </service_bundle>
   '';
 
