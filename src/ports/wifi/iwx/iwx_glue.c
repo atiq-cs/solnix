@@ -250,6 +250,12 @@ iwm_il_getstate(void *arg, struct iwm_il_state *s)
 		if (ni->ni_txrate >= 0 && ni->ni_txrate < ni->ni_rates.rs_nrates)
 			s->s_rate = ni->ni_rates.rs_rates[ni->ni_txrate] &
 			    IEEE80211_RATE_VAL;
+		if (ni->ni_chan != NULL && ni->ni_chan != IEEE80211_CHAN_ANYC) {
+			s->s_chan = (uint8_t)ieee80211_chan2ieee(ic, ni->ni_chan);
+			s->s_freq = ni->ni_chan->ic_freq;
+			s->s_5ghz = IEEE80211_IS_CHAN_5GHZ(ni->ni_chan) ? 1 : 0;
+		}
+		s->s_ht = (ni->ni_flags & IEEE80211_NODE_HT) ? 1 : 0;
 	}
 }
 

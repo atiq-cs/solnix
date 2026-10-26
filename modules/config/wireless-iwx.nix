@@ -38,7 +38,7 @@
 # panicked at attach would make the media unusable). One command binds a card
 # at run time: `update_drv -a -i '"pciex8086,51f0"' iwx` (see
 # docs/x1e-wifi-runtime-bind.md).
-{ config, lib, pkgs, ... }:
+{ config, lib, pkgs, options, ... }:
 
 let
   cfg = config.hardware.wirelessIwx;
@@ -78,9 +78,11 @@ let
   } else wifiKern;
 
   # Networks highest priority first; each line "SSID<TAB>pskFile".
-  iwmNets = lib.sort (a: b: a.priority > b.priority)
-    (lib.mapAttrsToList (ssid: n: { inherit ssid; inherit (n) pskFile priority; }) iwm.networks);
-  wifiJoinScript = pkgs.writeText "solnix-wifi-join.sh" ''
+  sortNets = nets: lib.sort (a: b: a.priority > b.priority)
+    (lib.mapAttrsToList (ssid: n: { inherit ssid; inherit (n) pskFile priority; }) nets);
+  # One join script per driver: the link (iwm0 / iwx0) and that driver's networks. Both drivers run WPA2's 4-way
+  # in-kernel through the same OpenBSD net80211 port, so the mechanism below is shared.
+  mkWifiJoinScript = link: nets: pkgs.writeText "solnix-wifi-join-${link}.sh" ''
     # Join the first configured SSID that is in range. PSKs are read at RUN
     # time from their 0600 files (never baked into this store-readable script).
     #
@@ -95,7 +97,7 @@ let
     # occasional status-30 is handled by a bounded retry. Runs as root (SMF).
     set -u
     PATH=/usr/lib/inet:/usr/sbin:/usr/bin:/sbin:/bin
-    link=iwm0
+    link=${link}
     dladm show-phys "$link" >/dev/null 2>&1 || { echo "solnix-wifi-join: no $link"; exit 0; }
     scan=$(dladm scan-wifi -p -o essid "$link" 2>/dev/null)
     joined() { [ "$(dladm show-wifi -p -o status "$link" 2>/dev/null)" = connected ]; }
@@ -112,7 +114,7 @@ let
       done
       return 1
     }
-    ${lib.concatMapStringsSep "\n    " (n: ''try ${lib.escapeShellArg n.ssid} ${lib.escapeShellArg n.pskFile} && exit 0'') iwmNets}
+    ${lib.concatMapStringsSep "\n    " (n: ''try ${lib.escapeShellArg n.ssid} ${lib.escapeShellArg n.pskFile} && exit 0'') (sortNets nets)}
     echo "solnix-wifi-join: no configured SSID in range"; exit 0
   '';
 in
@@ -230,6 +232,19 @@ in
         a corresponding driver update yields a card that never associates.
       '';
     };
+
+    networks = lib.mkOption {
+      default = { };
+      description = ''
+        WPA2 networks for the AX2xx (iwx0) to join at boot, by SSID: the same shape as
+        hardware.wirelessIwm.networks. The passphrase is never in the store: pskFile names
+        a root-owned 0600 file on the installed system whose first line is the passphrase.
+        Needs attachAtBoot. After the join, iwx0 gets DHCP from the solnix-wifi-join
+        service (DNS from the lease when networking.nameservers is empty).
+      '';
+      type = options.hardware.wirelessIwm.networks.type;
+      example = lib.literalExpression ''{ sedgwick.pskFile = "/etc/wifi/sedgwick.psk"; }'';
+    };
   };
 
   config = lib.mkMerge [
@@ -287,7 +302,7 @@ in
       description = "solnix iwm wifi auto-join";
       model = "transient";
       start = {
-        exec = "/bin/sh ${wifiJoinScript}";
+        exec = "/bin/sh ${mkWifiJoinScript "iwm0" iwm.networks}";
         timeoutSeconds = 120;
       };
       stop.exec = ":true";
@@ -319,8 +334,42 @@ in
           # Threads the opt-in through to the real gate in the derivation.
           acceptFirmwareLicense = cfg.allowUnfreeFirmware;
         })
-      ];
+      ]
+      # The join tool, whenever the card is bound at boot (as for iwm).
+      ++ lib.optional cfg.attachAtBoot pkgs.solnix.wpa-pmk;
     }
+    {
+      assertions = [{
+        assertion = cfg.networks == { } || cfg.attachAtBoot;
+        message = "hardware.wirelessIwx.networks needs hardware.wirelessIwx.attachAtBoot: an unbound card has no iwx0 to join.";
+      }];
+    }
+    # Boot auto-join on iwx0, then DHCP on it (the join must come first: a lease on an unassociated link never comes).
+    (lib.mkIf (cfg.networks != { }) {
+      smf.services.solnix-wifi-join-iwx = {
+        enable = true;
+        category = "site";
+        description = "solnix iwx wifi auto-join + DHCP";
+        model = "transient";
+        start = {
+          exec = "/bin/sh ${pkgs.writeText "solnix-wifi-join-iwx-dhcp.sh" ''
+            /bin/sh ${mkWifiJoinScript "iwx0" cfg.networks} || exit 0
+            [ "$(/usr/sbin/dladm show-wifi -p -o status iwx0 2>/dev/null)" = connected ] || exit 0
+            /usr/sbin/ipadm create-if iwx0 2>/dev/null
+            /usr/sbin/ipadm show-addr -p -o type iwx0/ 2>/dev/null | grep -q '^dhcp$' \
+              || /usr/sbin/ipadm create-addr -T dhcp -w 60 iwx0/dhcp 2>&1
+            ${lib.optionalString (config.networking.nameservers == [ ]) ''
+              ns=$(/sbin/dhcpinfo -i iwx0 DNSserv 2>/dev/null)
+              [ -n "$ns" ] && [ ! -s /etc/resolv.conf ] && { for x in $ns; do echo "nameserver $x"; done > /etc/resolv.conf; }
+            ''}
+            exit 0
+          ''}";
+          timeoutSeconds = 240;
+        };
+        stop.exec = ":true";
+        requires = [ "svc:/network/physical:default" ];
+      };
+    })
   ]))
   # The driver DB and kernel tree, rendered from iwm/iwx/onMedia and the GPU
   # options together so the drivers compose instead of overriding each other.
