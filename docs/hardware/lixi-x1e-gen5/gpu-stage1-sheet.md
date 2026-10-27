@@ -51,3 +51,21 @@ A plain reboot boots solnix-7 again. To drop the stage-1 BE afterwards: `pfexec 
 
 **Stage 2** is the first explicit open of card0, the inteldrm modeset. It's another boot-once BE plus one test
 program. After that, cosmic-comp (solnix 0f051d2, built) can take the panel.
+
+## Result (2026-10-27)
+
+- **Stage 1 passed** on BE solnix-8 (after 91fe7f0 created the /dev/dri links: devlink.tab
+  `type=ddi_display:drm<TAB>dri/\M0`). i915 attached; `/dev/dri/card0` and `renderD128` exist and nothing
+  holds them open. ssh, both links and `svcs -x` are unaffected.
+- **Stage 2, first try (solnix-8), panicked.** `#gp` in `obsd_enum_walk <- pci_find_device <-
+  intel_pch_detect`: pci_find_device used inteldrm's uninitialised `pa` as a template. The deadman and
+  dump worked: the machine came back on the default BE, and vmdump.0 and the mdb output are banked at
+  `~/solnix-bank/lixi-gpu-stage2-20261027/`. Fixed in 25c3c18.
+- **Stage 2 passed** on solnix-10 (25c3c18). `open(/dev/dri/card0)` ran the inteldrm attach:
+  `inteldrm0: msi, ALDERLAKE_P, gen 12`, `inteldrm0: 3840x2400, 32bpp`. DRM_IOCTL_VERSION returned
+  i915 1.6.0.
+- **Default since 2026-10-27:** solnix-11 (nix-config c14ab1c: i915 bound at boot, i915 firmware). The
+  same open shows no DMC/GuC errors.
+- **Who may open /dev/dri:** the stock /etc/logindevperm gives `/dev/dri/*` 0600 to the console user,
+  and login/logout move it (illumos's seat model; NixOS does the same with logind ACLs). A compositor
+  started from a console login owns card0. Outside a console session, card0 is root-only.
