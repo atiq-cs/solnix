@@ -1,0 +1,23 @@
+--- a/common/drm.c
++++ b/common/drm.c
+@@ -26,7 +26,19 @@
+ 	return ioctl(fd, DRM_IOCTL_DROP_MASTER, 0);
+ }
+ 
+-#if defined(__linux__) || defined(__NetBSD__) || defined(__sun)
++#if defined(__sun)
++/* seat_open_device realpath()s first: on illumos /dev/dri/card0 resolves to
++ * the /devices node, e.g. /devices/pci@0,0/display@2:card0 (the i915 minor
++ * names card<N> and renderD<N>). */
++int path_is_drm(const char *path) {
++	const char *m;
++	if (STR_HAS_PREFIX("/dev/dri/", path))
++		return 1;
++	if (!STR_HAS_PREFIX("/devices/", path) || (m = strrchr(path, ':')) == NULL)
++		return 0;
++	return STR_HAS_PREFIX(":card", m) || STR_HAS_PREFIX(":renderD", m);
++}
++#elif defined(__linux__) || defined(__NetBSD__)
+ int path_is_drm(const char *path) {
+ 	if (STR_HAS_PREFIX("/dev/dri/", path))
+ 		return 1;

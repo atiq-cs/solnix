@@ -18,7 +18,7 @@ KERNEL  = /platform/i86pc/kernel/amd64/unix /kernel/amd64/genunix
 UCC     = gcc
 UFLAGS  = -m64 -O2 -Wall -Werror -DOBSD_USERTEST -D_REENTRANT
 ULIBS   = -lpthread
-KOBJS   = obsd_kern.o obsd_time.o obsd_bus.o obsd_vm.o obsd_glue.o
+KOBJS   = obsd_kern.o obsd_time.o obsd_bus.o obsd_vm.o obsd_glue.o obsd_file.o
 # Symbols the compat objects use that OpenBSD's drm objects define (the
 # autoconf glue runs drm_attach through drm_ca/drm_cd, drm_drv.c); they
 # resolve inside the module, not against the kernel.

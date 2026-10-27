@@ -86,6 +86,26 @@ if [ -n "${NO_SOFTBUFFER_KMS:-}" ]; then
   edit softbuffer Cargo.toml "'default = [\n    \"kms\",\n'" "'default = [\n'"
 fi
 
+# 8. drm-rs 0.14 node (smithay's DrmNode): on non-Linux is_device_drm is `major == 226` and the
+#    node type comes from the minor, but the illumos i915 cdev has a name_to_major major and
+#    clone minors (clone<<16 | instance<<8 | kind 0 card / 128 render, i915_drmioc.h). Normalise
+#    the dev_t to the /dev/dri node it came from (clone 0), so DrmNode equality and dev_path work.
+#    Same mapping as pkgs/illumos/graphics/patches/libdrm-2.4.120-illumos-device.patch.
+edit drm src/node/mod.rs "'    pub fn from_dev_id(dev: dev_t) -> Result<Self, CreateDrmNodeError> {\n'" \
+  "'    pub fn from_dev_id(dev: dev_t) -> Result<Self, CreateDrmNodeError> {\n        #[cfg(target_os = \"illumos\")]\n        let dev = illumos_node_dev(dev).ok_or(CreateDrmNodeError::NotDrmNode)?;\n'"
+edit drm src/node/mod.rs "'        let ty = match minor(dev) >> 6 {'" \
+  "'        #[cfg(target_os = \"illumos\")]\n        let ty = if minor(dev) & 0xff == 128 { NodeType::Render } else { NodeType::Primary };\n        #[cfg(not(target_os = \"illumos\"))]\n        let ty = match minor(dev) >> 6 {'"
+edit drm src/node/mod.rs "'#[cfg(not(any(target_os = \"linux\", target_os = \"freebsd\")))]\npub fn is_device_drm(dev: dev_t) -> bool {\n    major(dev) == DRM_MAJOR\n}'" \
+  "'#[cfg(target_os = \"illumos\")]\nfn illumos_node_dev(dev: dev_t) -> Option<dev_t> {\n    let m = minor(dev) & 0xffff; // drop the clone index\n    if m & 0xff != 0 && m & 0xff != 128 {\n        return None; // the console text minor (64) is not a DRM node\n    }\n    let d = rustix::fs::makedev(major(dev), m);\n    let id = ((m >> 8) & 0xff) + (m & 0xff); // instance + 0 (card) / 128 (renderD)\n    let p = format!(\"/dev/dri/{}{}\", if m & 0xff == 128 { RENDER_NAME } else { PRIMARY_NAME }, id);\n    (stat(p.as_str()).ok()?.st_rdev == d).then_some(d) // the named node must be this device\n}\n\n/// Returns if the given device by major:minor pair is a DRM device.\n#[cfg(target_os = \"illumos\")]\npub fn is_device_drm(dev: dev_t) -> bool {\n    illumos_node_dev(dev).is_some()\n}\n\n#[cfg(not(any(target_os = \"linux\", target_os = \"freebsd\", target_os = \"illumos\")))]\npub fn is_device_drm(dev: dev_t) -> bool {\n    major(dev) == DRM_MAJOR\n}'"
+edit drm src/node/mod.rs "'    let old_id = minor(dev);\n    let id_mask = 0b11_1111;\n    let id = old_id & id_mask + ty.minor_base();'" \
+  "'    #[cfg(target_os = \"illumos\")]\n    let id = ((minor(dev) >> 8) & 0xff) + ty.minor_base(); // instance + 0 / 128\n    #[cfg(not(target_os = \"illumos\"))]\n    let id = {\n        let old_id = minor(dev);\n        let id_mask = 0b11_1111;\n        old_id & id_mask + ty.minor_base()\n    };'"
+
+# 9. smithay SealedFile (dmabuf feedback format table, keymaps): its non-Linux arm shm_open()s
+#    "name-XXXXXXX"; illumos shm_open needs a leading '/' (EINVAL otherwise, measured
+#    /scratch/solnix/gpu3/t/shm.c), the same fix as softbuffer's (item 7).
+edit smithay src/utils/sealed_file.rs "'            let mut shm_name = name.to_bytes().to_owned();'" \
+  "'            let mut shm_name = b\"/\".to_vec();\n            shm_name.extend_from_slice(name.to_bytes());'"
+
 # Required per app: fail if an expected crate was not vendored at all.
 for c in ${REQUIRED:-}; do have $c || { echo "FATAL: required crate $c not vendored" >&2; exit 1; }; done
 

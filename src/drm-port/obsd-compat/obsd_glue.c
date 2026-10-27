@@ -286,22 +286,8 @@ void klist_insert_locked(struct klist *kl, struct knote *kn)
 void klist_remove_locked(struct klist *kl, struct knote *kn)
 { (void) kl; (void) kn; }
 
-/* ------------------------------------------------ file descriptors: STUB */
-/* dma-buf / sync_file fds (PRIME export, explicit fencing): R2. Each
- * allocation entry point fails, so no fd is ever half-made. */
-int fdalloc(struct proc *p, int want, int *fd)
-{ (void) p; (void) want; (void) fd; return (ENOTSUP); }
-void fdremove(struct filedesc *fdp, int fd) { (void) fdp; (void) fd; }
-void fdinsert(struct filedesc *fdp, int fd, int flags, struct file *fp)
-{ (void) fdp; (void) fd; (void) flags; (void) fp; }
-void fdexpand(struct proc *p) { (void) p; }
-void fdplock(struct filedesc *fdp) { (void) fdp; }
-void fdpunlock(struct filedesc *fdp) { (void) fdp; }
-struct file *fd_getfile(struct filedesc *fdp, int fd)
-{ (void) fdp; (void) fd; return (NULL); }
-struct file *fnew(struct proc *p) { (void) p; return (NULL); }
-int obsd_frele(struct file *fp, struct proc *p)
-{ (void) fp; (void) p; return (0); }
+/* ------------------------------------------------ file descriptors */
+/* dma-buf / sync_file fds: REAL, obsd_file.c (falloc + spec vnode). */
 
 /* --------------------------------------------------------- bus_dma: STUB */
 /* GEM DMA objects (drm_dmamem_alloc, dma_alloc_coherent, ttm_pool): R2,

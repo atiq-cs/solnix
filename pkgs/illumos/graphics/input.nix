@@ -70,6 +70,8 @@ rec {
             sha256 = "819979c922a0be258aed133d93920bce6a3d3565a60588d6d372ce9db2712cd3"; };
     build = ''
       patch -p1 < ${./patches/seatd-0.9.1-illumos.patch}
+      # realpath(/dev/dri/card0) is a /devices/...:card0 node on illumos: still DRM.
+      patch -p1 < ${./patches/seatd-0.9.1-illumos-devices-path.patch}
       sed -i "s|link_args: symbols_flag,||" meson.build   # no --version-script on illumos ld
       ${pc}
       ${m "-Dlibseat-logind=disabled -Dlibseat-seatd=enabled -Dlibseat-builtin=enabled -Dserver=enabled -Dexamples=disabled -Dman-pages=disabled '-Dc_link_args=-lsocket -lnsl'"}

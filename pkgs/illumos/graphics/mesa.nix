@@ -34,6 +34,10 @@ mkSrcPkg {
   linkDeps = [ wayland-protocols libffi ];
   build = ''
     patch -p1 < ${./patches/mesa-24.0.9-illumos.patch}
+    # illumos ld has no --build-id: anv's UUIDs and iris's disk cache need one (fallback note).
+    patch -p1 < ${./patches/mesa-24.0.9-illumos-build-id.patch}
+    # PIPE_CAP_DMABUF on illumos (dma-buf fds, src/drm-port obsd_file.c): EGL_EXT_image_dma_buf_import.
+    patch -p1 < ${./patches/mesa-24.0.9-illumos-dmabuf.patch}
     export PATH=${pkgconf}/bin:${glslang}/bin:${wayland}/bin:$PATH
     export PYTHONPATH=${tools.mako}/lib/python:${tools.markupsafe}/lib/python
     ${tools.mesonBuild (builtins.concatStringsSep " " [

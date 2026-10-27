@@ -1,0 +1,45 @@
+--- a/src/util/build_id.c
++++ b/src/util/build_id.c
+@@ -29,6 +29,7 @@
+ 
+ #include "build_id.h"
+ #include "macros.h"
++#include "mesa-sha1.h"
+ 
+ #ifndef NT_GNU_BUILD_ID
+ #define NT_GNU_BUILD_ID 3
+@@ -115,10 +116,31 @@
+       .note = NULL,
+    };
+ 
+-   if (!dl_iterate_phdr(build_id_find_nhdr_callback, &data))
+-      return NULL;
++   if (dl_iterate_phdr(build_id_find_nhdr_callback, &data))
++      return data.note;
+ 
+-   return data.note;
++#ifdef __sun
++   /* illumos ld has no --build-id, so the object carries no GNU note. Stand
++    * in a sha1 of its path: a /nix/store path changes with every input, as a
++    * build-id does, which is what the users (driver UUIDs, the shader disk
++    * cache key) rely on.
++    * shortcut: one slot per copy of this file (each driver .so links its own
++    * libmesa_util and asks for itself); a second object would overwrite it. */
++   static struct {
++      struct build_id_note n;
++      uint8_t sha1[20];
++   } fallback;
++   if (!info.dli_fname)
++      return NULL;
++   fallback.n.nhdr.n_namesz = 4;
++   fallback.n.nhdr.n_descsz = 20;
++   fallback.n.nhdr.n_type = NT_GNU_BUILD_ID;
++   memcpy(fallback.n.name, "GNU", 4);
++   _mesa_sha1_compute(info.dli_fname, strlen(info.dli_fname), fallback.sha1);
++   return &fallback.n;
++#else
++   return NULL;
++#endif
+ }
+ 
+ unsigned

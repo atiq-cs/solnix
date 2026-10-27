@@ -14,6 +14,8 @@
 #include <drm/drm_file.h>
 #include <drm/drm_vma_manager.h>
 #include <drm/drm_client_event.h>
+#include <drm/drm_prime.h>
+#include <linux/dma-buf.h>
 #include "i915_drv.h"
 #include "gem/i915_gem_object.h"
 #include "gem/i915_gem_mman.h"
@@ -67,12 +69,14 @@ i915_glue_restore(dev_t odev)
  * pmap_enter = hat_devload on kas), whose VA becomes a KMEM_NON_PAGEABLE
  * umem cookie: segdev resolves each user fault with hat_getpfnum on that
  * VA. The pin lasts until i915_glue_dumb_unmap.
- * Returns 0 or an errno; only WC mmap offsets are served (GTT/WB/UC are
- * the R2 GEM paths: ENOTSUP).
+ * WB offsets (iris/anv on an LLC part, Alder Lake included) are served the
+ * same way with a cached pin_map, and *wbp tells the caller to map the user
+ * side cached too, as OpenBSD's fault handler does (no PMAP_WC/NOCACHE).
+ * Returns 0 or an errno; GTT and UC offsets are not served (ENOTSUP).
  */
 int
 i915_glue_dumb_map(dev_t odev, uint64_t off, size_t len, void **kvap,
-    size_t *sizep, int *readonlyp, void **objp)
+    size_t *sizep, int *readonlyp, int *wbp, void **objp)
 {
 	struct drm_device *dev = NULL;
 	struct drm_file *fp = glue_file(odev, &dev);
@@ -96,11 +100,14 @@ i915_glue_dumb_map(dev_t odev, uint64_t off, size_t len, void **kvap,
 	rcu_read_unlock();
 	if (obj == NULL)
 		return (EINVAL);
-	if (mmo->mmap_type != I915_MMAP_TYPE_WC) {
+	if (mmo->mmap_type != I915_MMAP_TYPE_WC &&
+	    mmo->mmap_type != I915_MMAP_TYPE_WB) {
 		i915_gem_object_put(obj);
 		return (ENOTSUP);
 	}
-	va = i915_gem_object_pin_map_unlocked(obj, I915_MAP_WC);
+	*wbp = mmo->mmap_type == I915_MMAP_TYPE_WB;
+	va = i915_gem_object_pin_map_unlocked(obj,
+	    *wbp ? I915_MAP_WB : I915_MAP_WC);
 	if (IS_ERR(va)) {
 		i915_gem_object_put(obj);
 		return (-PTR_ERR(va));
@@ -173,4 +180,98 @@ i915_glue_pollhead_clean(dev_t odev)
 
 	if (fp != NULL)
 		pollhead_clean(&fp->rsel.si_ph);
+}
+
+/*
+ * dma-buf fds (obsd_compat obsd_file.c): i915_illumos.c's open/close/devmap/
+ * prop_op for a DMABUF-kind minor come here with the minor's slot. Only
+ * DTYPE_DMABUF files are served; a sync_file slot is not mappable.
+ */
+static struct dma_buf *
+glue_dmabuf(uint32_t slot, struct file **fpp)
+{
+	struct file *fp = obsd_file_get(slot);
+
+	if (fp == NULL)
+		return (NULL);
+	if (fp->f_type != DTYPE_DMABUF || fp->f_data == NULL) {
+		FRELE(fp, curproc);
+		return (NULL);
+	}
+	*fpp = fp;
+	return (fp->f_data);
+}
+
+/* open(9E) from fdinsert's VOP_OPEN: only a live slot opens. */
+int
+i915_glue_dmabuf_open(uint32_t slot)
+{
+	struct file *fp = obsd_file_get(slot);
+
+	if (fp == NULL)
+		return (ENXIO);
+	FRELE(fp, curproc);
+	return (0);
+}
+
+/* last close(9E) of the slot: drop the fds' references. */
+void
+i915_glue_dmabuf_close(uint32_t slot)
+{
+	obsd_file_lastclose(slot);
+}
+
+int64_t
+i915_glue_dmabuf_size(uint32_t slot)
+{
+	struct file *fp;
+	struct dma_buf *db = glue_dmabuf(slot, &fp);
+	int64_t sz;
+
+	if (db == NULL)
+		return (-1);
+	sz = (int64_t)db->size;
+	FRELE(fp, curproc);
+	return (sz);
+}
+
+/*
+ * mmap of the fd: the exported object's pages, pinned into a kernel mapping
+ * like a dumb map (i915_glue_dumb_map), *wbp telling the caller which cache
+ * attribute it got. Unpinned and unreferenced by i915_glue_dumb_unmap. Only
+ * dma-bufs i915 exported are mapped (db->priv is a GEM object).
+ */
+int
+i915_glue_dmabuf_map(uint32_t slot, void **kvap, size_t *sizep, int *wbp,
+    void **objp)
+{
+	struct file *fp;
+	struct dma_buf *db = glue_dmabuf(slot, &fp);
+	struct drm_i915_gem_object *obj;
+	void *va;
+
+	if (db == NULL)
+		return (ENXIO);
+	/* drm_gem_dmabuf_release: a GEM export, priv is the drm_gem_object */
+	if (db->ops == NULL || db->ops->release != drm_gem_dmabuf_release) {
+		FRELE(fp, curproc);
+		return (ENOTSUP);
+	}
+	obj = i915_gem_object_get(to_intel_bo(db->priv));
+	FRELE(fp, curproc);
+	/* WB as Linux's shmem-backed dma-buf mmap; WC if a WC pin holds it */
+	*wbp = 1;
+	va = i915_gem_object_pin_map_unlocked(obj, I915_MAP_WB);
+	if (va == ERR_PTR(-EBUSY)) {
+		*wbp = 0;
+		va = i915_gem_object_pin_map_unlocked(obj, I915_MAP_WC);
+	}
+	if (IS_ERR(va)) {
+		i915_gem_object_put(obj);
+		return (-PTR_ERR(va));
+	}
+	*kvap = va;
+	*sizep = obj->base.size;
+	*objp = obj;
+	return (0);
 }

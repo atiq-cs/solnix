@@ -59,6 +59,8 @@ rec {
             sha256 = "3bf55363f76c7250946441ab51d3a6cc0ae518055c0ff017324ab76cdefb327a"; };
     build = ''
       patch -p1 < ${./patches/libdrm-2.4.120-illumos-ioctl.patch}
+      # drmGetDevice2 & co. on illumos (no DRM major 226, clone minors): Mesa's loader needs it.
+      patch -p1 < ${./patches/libdrm-2.4.120-illumos-device.patch}
       ${pc}
       ${m "-Dintel=disabled -Dradeon=disabled -Damdgpu=disabled -Dnouveau=disabled -Dvmwgfx=disabled -Dfreedreno=disabled -Dvc4=disabled -Detnaviv=disabled -Dcairo-tests=disabled -Dman-pages=disabled -Dvalgrind=disabled -Dtests=false -Dudev=false -Dc_args=-D__EXTENSIONS__"}
     '';

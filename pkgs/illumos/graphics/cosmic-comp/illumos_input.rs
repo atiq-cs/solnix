@@ -14,8 +14,11 @@ use smithay::reexports::calloop::{generic::Generic, EventSource, Interest, Mode,
 // Values MEASURED from the gate headers by a C program (cosmic2/evidence-vuid-const.txt):
 // KIOCTRANS = KIOC|30 and VUIDSFORMAT = VUIOC|11 on x86 (the "avoid conflict with VT" arms).
 const KIOCTRANS: i32 = 27422;
+const KIOCGTRANS: i32 = 27427; // KIOC|35
+const TR_ASCII: i32 = 1;
 const TR_UNTRANS_EVENT: i32 = 3;
 const VUIDSFORMAT: i32 = 30219;
+const VUIDGFORMAT: i32 = 30220; // VUIOC|12
 const VUID_FIRM_EVENT: i32 = 1;
 const LOC_X_DELTA: u16 = 32640;
 const LOC_Y_DELTA: u16 = 32641;
@@ -138,15 +141,92 @@ pub fn translate(dev: VuidDevice, f: Firm) -> Option<InputEvent<VuidInput>> {
     }
 }
 
-use smithay::reexports::rustix::{fs::OFlags, ioctl::{ioctl, Opcode, Setter}};
+use smithay::reexports::rustix::{fs::OFlags, ioctl::{ioctl, Getter, Opcode, Setter}};
+use std::os::fd::{AsRawFd, BorrowedFd};
+use std::sync::atomic::{AtomicI32, Ordering::SeqCst};
+
+// /dev/kbd and /dev/mouse are conskbd/consms: ONE translation mode / format shared with the
+// console (kbtrans upper), and conskbdclose() does not reset it (conskbd.c:598). A compositor
+// that exits without restoring leaves the console reading raw Firm_events (garbage). So the
+// mode found at open is put back, on the compositor's own fd (a second open of /dev/kbd would
+// take the stream over), by Drop, by the panic hook and by the SIGTERM/SIGINT/SIGHUP handler.
+static KBD_FD: AtomicI32 = AtomicI32::new(-1);
+static KBD_MODE: AtomicI32 = AtomicI32::new(TR_ASCII);
+static MOUSE_FD: AtomicI32 = AtomicI32::new(-1);
+static MOUSE_FMT: AtomicI32 = AtomicI32::new(VUID_FIRM_EVENT);
+
+/// Put the console modes back (async-signal-safe: two ioctl(2)s on saved fds). Idempotent.
+pub fn restore_console_input() {
+    let k = KBD_FD.swap(-1, SeqCst);
+    if k >= 0 {
+        let fd = unsafe { BorrowedFd::borrow_raw(k) };
+        let _ = unsafe { ioctl(fd, Setter::<{ KIOCTRANS as Opcode }, i32>::new(KBD_MODE.load(SeqCst))) };
+    }
+    let m = MOUSE_FD.swap(-1, SeqCst);
+    if m >= 0 {
+        let fd = unsafe { BorrowedFd::borrow_raw(m) };
+        let _ = unsafe { ioctl(fd, Setter::<{ VUIDSFORMAT as Opcode }, i32>::new(MOUSE_FMT.load(SeqCst))) };
+    }
+}
+
+// libc's signal(3C)/raise(3C), declared here: cosmic-comp has no libc crate dependency and a
+// new one would change Cargo.lock (the vendor FOD). Values from illumos <sys/iso/signal_iso.h>.
+extern "C" {
+    fn signal(sig: i32, handler: usize) -> usize;
+    fn raise(sig: i32) -> i32;
+    fn atexit(f: extern "C" fn()) -> i32;
+}
+
+// std::process::exit (main's error path, the kiosk exit code) runs no Drop; atexit(3C) does run.
+extern "C" fn restore_at_exit() {
+    restore_console_input();
+}
+const SIG_DFL: usize = 0;
+const SIGHUP: i32 = 1;
+const SIGINT: i32 = 2;
+const SIGQUIT: i32 = 3;
+const SIGTERM: i32 = 15;
+
+extern "C" fn restore_on_signal(sig: i32) {
+    restore_console_input();
+    unsafe {
+        signal(sig, SIG_DFL);
+        raise(sig);
+    }
+}
+
+fn install_restore_hooks() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            restore_console_input();
+            prev(info);
+        }));
+        for sig in [SIGTERM, SIGINT, SIGHUP, SIGQUIT] {
+            unsafe { signal(sig, restore_on_signal as usize) };
+        }
+        unsafe { atexit(restore_at_exit) };
+    });
+}
 
 pub fn open_kbd() -> std::io::Result<File> {
-    let f = open_nb("/dev/kbd")?; // KIOCTRANS takes an int* (kbio.h)
+    let f = open_nb("/dev/kbd")?; // KIOCTRANS/KIOCGTRANS take an int* (kbio.h)
+    let mode = unsafe { ioctl(&f, Getter::<{ KIOCGTRANS as Opcode }, i32>::new()) }.unwrap_or(TR_ASCII);
+    // a compositor that died before this one may have left raw mode set: restore the console's
+    let mode = if mode == TR_UNTRANS_EVENT { TR_ASCII } else { mode };
+    KBD_MODE.store(mode, SeqCst);
+    KBD_FD.store(f.as_raw_fd(), SeqCst);
+    install_restore_hooks();
     unsafe { ioctl(&f, Setter::<{ KIOCTRANS as Opcode }, i32>::new(TR_UNTRANS_EVENT))? };
     Ok(f)
 }
 pub fn open_mouse() -> std::io::Result<File> {
-    let f = open_nb("/dev/mouse")?; // VUIDSFORMAT takes an int* (vuid_event.h)
+    let f = open_nb("/dev/mouse")?; // VUIDSFORMAT/VUIDGFORMAT take an int* (vuid_event.h)
+    let fmt = unsafe { ioctl(&f, Getter::<{ VUIDGFORMAT as Opcode }, i32>::new()) }.unwrap_or(VUID_FIRM_EVENT);
+    MOUSE_FMT.store(fmt, SeqCst);
+    MOUSE_FD.store(f.as_raw_fd(), SeqCst);
+    install_restore_hooks();
     unsafe { ioctl(&f, Setter::<{ VUIDSFORMAT as Opcode }, i32>::new(VUID_FIRM_EVENT))? };
     Ok(f)
 }
@@ -173,6 +253,12 @@ pub fn read_events(f: &mut File, dev: VuidDevice, out: &mut Vec<InputEvent<VuidI
 /// calloop source over /dev/kbd + /dev/mouse. A missing device is skipped with a warning
 /// (a headless box has neither); the source still registers, so a later hotplug is the gap.
 pub struct VuidSource { kbd: Option<Generic<File>>, mouse: Option<Generic<File>>, added: bool }
+
+impl Drop for VuidSource {
+    fn drop(&mut self) {
+        restore_console_input(); // before the fds close
+    }
+}
 
 impl VuidSource {
     pub fn new() -> Self {
