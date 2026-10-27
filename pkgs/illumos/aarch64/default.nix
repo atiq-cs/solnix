@@ -23,10 +23,15 @@
 #     x86_64: the mechanism is arch-independent, the host tool edits the aarch64
 #     ELF's DT_RUNPATH string in place. (mk-illumos-component default elfedit.)
 
+# gate: an already-built aarch64 proto store path (pass it; the default ingests the build
+# host's proto dir). system: aarch64-solaris when built ON aarch64 (aa64nix, native);
+# the old cross default (the x86 host's currentSystem) is kept for the slices-on-x86 path.
+{ gate ? null, protoDir ? null, system ? builtins.currentSystem }:
 let
-  gate = import ./gate.nix { };
+  gate' = if gate != null then gate
+          else import ./gate.nix ({ inherit system; } // (if protoDir == null then { } else { inherit protoDir; }));
 
-  mkIllumosComponent = args: import ../mk-illumos-component.nix ({ gate = gate; } // args);
+  mkIllumosComponent = args: import ../mk-illumos-component.nix ({ gate = gate'; inherit system; } // args);
 
   # aarch64 libc lib dir (single ABI, no amd64). Baked as a cross-component
   # RUNPATH entry for consumers (rtld/ld). lib/64 -> . so "${libc}/lib" covers 64.
@@ -137,9 +142,15 @@ let
   # Plain derivation (no nixpkgs buildEnv) that symlink-merges the component
   # store paths with the runtime /usr,/lib,/sbin,/kernel,/platform layout.
   # aarch64 sanity paths (armv8 unix + aarch64 genunix, no amd64).
+  # gcc FROM SOURCE on aarch64 (./gcc-src.nix): gcc.lib is the C++/unwind runtime.
+  gcc = import ./gcc-src.nix { gate = gate'; libcSlice = libc; inherit system; };
+
+  # nix 2.24.15 and its chain, from source with that gcc (./src.nix).
+  srcPkgs = import ./src.nix { gate = gate'; libcSlice = libc; inherit gcc system; };
+
   systemPath = derivation {
     name = "system-path";
-    system = builtins.currentSystem;
+    inherit system;
     builder = "/usr/bin/bash";
     PATH = "/usr/gnu/bin:/usr/bin:/usr/sbin";
     paths = [ sys rtld libc ld ];
@@ -162,5 +173,11 @@ let
   };
 in
 {
-  inherit gate libc rtld ld sys systemPath;
+  gate = gate';
+  inherit libc rtld ld sys systemPath gcc srcPkgs;
+  inherit (srcPkgs) zlib openssl nixChain git tree ncurses less nano nvi htop top wget gateLibs bsdfetch gccWrapper;
+  nix = srcPkgs.nixChain.nix;
+  # minimal /run/current-system for the aarch64 image (./system.nix; not the module toplevel).
+  systemToplevel = import ./system.nix { pkgs = { inherit (srcPkgs) nixChain; nix = srcPkgs.nixChain.nix; };
+                                         extraPaths = [ srcPkgs.nixChain.curl srcPkgs.git srcPkgs.tree srcPkgs.less srcPkgs.nano srcPkgs.nvi srcPkgs.htop srcPkgs.top srcPkgs.wget srcPkgs.bsdfetch ]; inherit system; };
 }

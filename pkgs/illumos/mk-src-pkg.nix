@@ -35,6 +35,8 @@
                              # the old /usr/gnu:/usr/bin:/usr/sbin (the OI buildhost path),
                              # so this arg changes NO hash for the bhost build. A solnix
                              # system (no /usr/gnu, no gstrip, no gzip) passes the store set.
+, aarch64 ? false           # native aarch64 illumos (aa64nix): LP64 only, libs in lib/ (lib/64 -> .).
+                             # false = the x86 text byte-for-byte, so no x86 drv hash moves.
 }:
 
 { pname, version, src, build
@@ -58,10 +60,50 @@ let
   # one, else the host path. (illumos /usr/bin/strip is SVR4 strip and does not
   # take --strip-debug; using it would be a silent no-op, so never fall to it.)
   gstripCands = (map (d: "${d}/bin/gstrip") buildTools) ++ [ "/usr/bin/gstrip" ];
+  # aarch64: rewrite the x86 builder text (lib/amd64 -> lib, -m$ABI -> the arm64-gate target
+  # flags: illumos aarch64 ld has no TLSDESC relocs and shared links miss libgcc.a's outline
+  # atomics, both measured on nix), plus the bootstrap box's autotools/config.guess quirks.
+  # shortcut: aclocal dirs name the stage0 box (/opt/nixboot, /opt/ooce), as x86 names the OI
+  # host's /usr/share/aclocal; upgrade when pkgconf/autoconf-archive are store build tools.
+  lp64Fix = t: if !aarch64 then t else builtins.replaceStrings
+    [ ''case "$d" in */amd64|*/lib-64) [ "$1" = 64 ] && r="$r:$d";; *) [ "$1" = 32 ] && r="$r:$d";; esac''
+      "lib/amd64" "$gccLib/amd64" " -m$ABI " "architecture=x86 abi=sysv" "gmake -j3 "
+      "ACLOCAL_PATH=/usr/share/aclocal autoreconf -fi -I /usr/share/aclocal" "./configure --prefix="
+      ''export PATH="''${btPath:+$btPath:}/usr/gnu/bin:/usr/bin:/usr/sbin"''
+      stripLoop rpLoop "INSTALL=ginstall" ]
+    [ ''r="$r:$d"''
+      "lib" "$gccLib" " -mno-outline-atomics -mtls-dialect=trad " "architecture=arm abi=aapcs" "gmake -j24 "
+      "ACLOCAL_PATH=/opt/nixboot/share/aclocal:/opt/ooce/autoconf-archive/share/aclocal M4=/usr/bin/gm4 autoreconf -fi -I /opt/nixboot/share/aclocal -I /opt/ooce/autoconf-archive/share/aclocal"
+      "./configure --build=aarch64-unknown-solaris2.11 --prefix="
+      # cmake (/opt/ooce) + pkgconf (/opt/nixboot) of the stage0 box, as x86 uses the OI host's.
+      ''export PATH="''${btPath:+$btPath:}/usr/gnu/bin:/usr/bin:/usr/sbin:/opt/ooce/bin:/opt/nixboot/bin"''
+      # RUNPATH rewrite BEFORE the strip: GNU strip 2.43.1 zeroes .SUNW_ldynsym sh_link on
+      # aarch64 and illumos elfedit then segfaults (measured on libstdc++.so.6.0.33);
+      # elfedit-then-strip works. The build-time-path guards still run after the strip.
+      (rpLoop + stripLoop) ""
+      "INSTALL=/usr/gnu/bin/install" ] t;  # braich ships GNU install only as /usr/gnu/bin/install
+  stripLoop = ''
+    find "$out" -type f | while read -r f; do
+      [ "$(od -An -tx1 -N4 "$f" 2>/dev/null | tr -d ' \n')" = 7f454c46 ] || continue
+      chmod u+w "$f"; "$GSTRIP" --strip-debug "$f" 2>/dev/null || true
+    done
+  '';
+  rpLoop = ''
+    find "$out" -type f | while read -r f; do
+      /usr/bin/elfdump -d "$f" 2>/dev/null | grep -Eq 'NEEDED|SONAME' || continue
+      c=$(od -An -tu1 -j4 -N1 "$f" | tr -d ' '); cl=32; [ "$c" -eq 2 ] && cl=64
+      # already store-only (baked at link time)? leave it; else rewrite.
+      cur=$(/usr/bin/elfdump -d "$f" | awk '$2=="RUNPATH"{print $4}')
+      if [ -n "$cur" ] && [ -z "$(echo "$cur" | tr ':' '\n' | grep -v '^/nix/store/')" ]; then continue; fi
+      chmod u+w "$f"
+      /usr/bin/elfedit -e "dyn:runpath $(rp_for $cl)" "$f" || echo "elfedit $f" >> "$W/fail"
+    done
+  '';
 in
 derivation {
   name = "${pname}-${version}";
-  inherit system gate gcc stage0 build pname;
+  inherit system gate gcc stage0 pname;
+  build = lp64Fix build;
   # the from-source gcc's runtime dir (lib = 32-bit, lib/amd64 = 64-bit); empty for a host compiler.
   gccLib = if builtins.isAttrs gcc then "${gcc.lib}/lib" else "";
   # buildTools' bin/ dirs on PATH (btPath) and the gstrip candidates both
@@ -84,7 +126,7 @@ derivation {
   linkDepsArg = builtins.concatStringsSep " " linkDeps;
   selfRp = if selfRunpath then "1" else "";
   rtDirs = builtins.concatStringsSep " " runtimeLibDirs;
-  args = [ "-c" ''
+  args = [ "-c" (lp64Fix ''
     set -eu
     # buildTools store bin/ dirs go first (store gmake/gnutar/gzip/xz/bzip2/
     # gnugrep/gnused/gstrip on a solnix system). Empty $btPath collapses this to
@@ -238,5 +280,5 @@ derivation {
     done
     if [ -s "$W/fail" ]; then echo "FATAL: closure gate failed:" >&2; head -40 "$W/fail" >&2; exit 1; fi
     echo "=== $pname: every ELF resolves inside /nix/store ===" >&2
-  '' ];
+  '') ];
 }

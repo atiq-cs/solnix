@@ -12,7 +12,8 @@
 #   --localstatedir=/nix/var, --with-store-dir=/nix/store.
 # Disabled, as nix224.nix did: Boehm GC (--disable-gc), lowdown (markdown),
 # libcpuid (x86 microarch detection), tests, docs. seccomp is Linux-only.
-{ mkSrcPkg, zlib, openssl, libcSlice, gccLib, system }:
+{ mkSrcPkg, zlib, openssl, libcSlice, gccLib, system, libSub ? "lib/amd64" }:
+# libSub: the 64-bit lib dir of the plain derivations below ("lib" on aarch64, LP64 only).
 
 rec {
   # boost: headers + boost_context (the only compiled boost lib nix links).
@@ -41,7 +42,7 @@ rec {
     builder = "/usr/bin/bash";
     args = [ "-c" ''
       set -eu; export PATH=/usr/gnu/bin:/usr/bin
-      mkdir -p $out/lib/amd64; cp -P $boost/lib/amd64/libboost_context.so* $out/lib/amd64/
+      mkdir -p $out/${libSub}; cp -P $boost/${libSub}/libboost_context.so* $out/${libSub}/
       if grep -rq "$boost" $out; then echo "FATAL: boost-context still names $boost" >&2; exit 1; fi
     '' ];
   };

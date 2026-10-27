@@ -17,7 +17,7 @@
 # gcc / $CROSS, which was NOT in the archived proto — it died with numa). Until
 # the gate is rebuilt, this ingest of the restored proto is the source of truth.
 
-{ protoDir ? /aarch64/arm64-gate/illumos-gate/proto/root_aarch64 }:
+{ protoDir ? /aarch64/arm64-gate/illumos-gate/proto/root_aarch64, system ? builtins.currentSystem }:
 
 let
   proto = builtins.path {
@@ -27,7 +27,7 @@ let
 in
 derivation {
   name = "illumos-aarch64-gate-proto";
-  system = builtins.currentSystem; # x86_64-solaris host; slices aarch64 ELF.
+  inherit system; # the x86 host (cross slicing) or aarch64-solaris (native, aa64nix)
   builder = "/usr/bin/bash";
   # cp -a preserves symlinks (lib/64 -> ., usr/lib/*.so -> *.so.N), perms, and
   # CTF sections in the aarch64 kernel objects (no strip/fixup).

@@ -7,15 +7,17 @@
 # nothing else here uses, so it is linked statically into fetch(1).
 { gate, gccWrapper, openssl, libcSlice
 , system ? "x86_64-solaris"
+, aarch64 ? false   # LP64-only aarch64 (aa64nix): lib/ not lib/amd64, the arm64-gate target flags
 , fetchSrc ? builtins.path { path = ../../src/ports/bsdfetch; name = "bsdfetch-src"; }
 }:
 derivation {
   name = "bsdfetch-14-e48eb1c5";
   inherit system gate gccWrapper openssl fetchSrc;
-  libcDir = "${libcSlice}/lib/amd64";
+  libcDir = "${libcSlice}/lib${if aarch64 then "" else "/amd64"}";
   builder = "/usr/bin/bash";
   PATH = "/usr/gnu/bin:/usr/bin:/usr/sbin";
-  args = [ "-c" ''
+  args = [ "-c" ((if aarch64 then builtins.replaceStrings [ "lib/amd64" "-m64 " ]
+                     [ "lib" "-mno-outline-atomics -mtls-dialect=trad " ] else (x: x)) ''
     set -eu
     export PATH=/usr/gnu/bin:/usr/bin:/usr/sbin
     W=$(mktemp -d /var/tmp/bsdfetch.XXXXXX); cp -r "$fetchSrc"/. "$W"/; chmod -R u+w "$W"
@@ -105,5 +107,5 @@ derivation {
       echo "bsdfetch: 40/40 back-to-back http fetches exited 0 ($nr r*.txt match)" >&2
     fi
     echo "bsdfetch: built, links clean, file:// round-trip ok, missing-file negative control ok" >&2
-  '' ];
+  '') ];
 }
