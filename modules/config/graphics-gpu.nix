@@ -50,6 +50,18 @@ in
         and a dump device armed, per docs/x1e-gpu-runtime-bind.md stage B.
       '';
     };
+    i915.acceptFirmwareLicense = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Lay Intel's i915 firmware (pkgs/illumos/i915-firmware.nix: Alder Lake-P
+        DMC, GuC and HuC, kernel/firmware/drm/i915/) next to the i915 module.
+        Without it the iGPU modesets but has no display power management (DMC)
+        and no GuC/HuC. The firmware is unfree, redistributable under
+        linux-firmware's LICENSE.i915, which is installed next to the blobs.
+        Takes effect with hardware.graphics.i915.attachAtBoot or onMedia.
+      '';
+    };
     nvidia.acceptFirmwareLicense = lib.mkOption {
       type = lib.types.bool;
       default = false;

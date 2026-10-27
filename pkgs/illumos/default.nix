@@ -622,6 +622,10 @@ let
   # redistributable for open-source kernels; gated on the explicit opt-in.
   nvidiaGspFirmware = acceptFirmwareLicense:
     import ./nvidia-gsp-firmware.nix { inherit acceptFirmwareLicense; };
+  # i915-firmware (DMC + GuC + HuC for Alder Lake-P), unfree, redistributable
+  # (linux-firmware LICENSE.i915); gated on the explicit opt-in.
+  i915Firmware = acceptFirmwareLicense:
+    import ./i915-firmware.nix { inherit acceptFirmwareLicense; };
 
   # mkIwmDriversDb -- the /etc driver database with the iwm lines merged in, so
   # install-be lays an iwm-aware DB into the BE with NO install-be change (it
@@ -912,7 +916,7 @@ let
   # The nvidia modules embed __FILE__ paths into kernelNd's illumos source
   # (908 MB); they are rewritten like stripSliceRefs so that tree stays out of
   # the closure.
-  mkGpuKernel = base: { nvidia ? false, gspFirmware ? null }: derivation {
+  mkGpuKernel = base: { nvidia ? false, gspFirmware ? null, i915Firmware ? null }: derivation {
     name = "illumos-kernel-gpu";
     system = "x86_64-solaris";
     builder = "/usr/bin/bash";
@@ -921,6 +925,7 @@ let
     i915 = i915-driver;
     nv = if nvidia then nvidia-oss-modules else "";
     gsp = if gspFirmware == null then "" else gspFirmware;
+    ifw = if i915Firmware == null then "" else i915Firmware;
     strip = [ base slices.kernel kernelNd.src ];
     disallowedReferences = [ base slices.kernel kernelNd.src kernelNd i915-driver ]
       ++ (if nvidia then [ nvidia-oss-modules ] else [ ]);
@@ -942,13 +947,17 @@ let
         mkdir -p "$out/kernel/firmware"
         cp -R "$gsp/kernel/firmware/nvidia" "$out/kernel/firmware/"
       fi
+      if [ -n "$ifw" ]; then
+        mkdir -p "$out/kernel/firmware/drm"
+        cp -R "$ifw/kernel/firmware/drm/i915" "$out/kernel/firmware/drm/"
+      fi
       ${stripSliceRefs}
       for m in $mods; do
         chmod 0555 "$out/kernel/drv/amd64/$m"
         [ ! -e "$out/kernel/drv/$m.conf" ] || { echo "FATAL: $m.conf in the tree would attach $m at boot" >&2; exit 1; }
       done
       [ -e "$out/platform/i86pc/kernel/amd64/unix" ] || { echo "FATAL: base kernel clobbered" >&2; exit 1; }
-      echo "gpu kernel: $mods''${gsp:+ + GSP firmware}" >&2
+      echo "gpu kernel: $mods''${gsp:+ + GSP firmware}''${ifw:+ + i915 firmware}" >&2
     '' ];
   };
 
@@ -1017,7 +1026,7 @@ in
   inherit iwm-driver mkIwmDriversDb mkIwmDriversDbUnbound mkIwmKernel iwmFirmware wpa-pmk solnix-cputemp;
   # iwx wifi (AX2xx): module only; mkIwxDriversDb/mkIwxKernel below.
   inherit iwx-driver iwxFirmware iwxAliases mkIwxDriversDb mkIwxKernel;
-  inherit nvidia-oss-modules nvidiaGspFirmware;
+  inherit nvidia-oss-modules nvidiaGspFirmware i915Firmware;
   # Intel iGPU (i915) and the GPU driver-DB/kernel helpers (modules/config/graphics-gpu.nix).
   inherit i915-driver i915Aliases mkDriversDbWith mkGpuKernel;
 

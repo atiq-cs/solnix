@@ -75,6 +75,7 @@ let
   finalKern = if wantGpu then s.mkGpuKernel wifiKern {
     nvidia = gfx.onMedia;
     gspFirmware = if gfx.onMedia && gfx.nvidia.acceptFirmwareLicense then s.nvidiaGspFirmware true else null;
+    i915Firmware = if gfx.i915.acceptFirmwareLicense then s.i915Firmware true else null;
   } else wifiKern;
 
   # Networks highest priority first; each line "SSID<TAB>pskFile".
