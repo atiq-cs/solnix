@@ -290,6 +290,12 @@ fi
 for f in name_to_major driver_aliases minor_perm driver_classes; do cp "$R$DRV/$f" "etc/$f"; done
 grep -q '^# solnix drivers' etc/security/device_policy || \
   { echo '# solnix drivers'; cat "$R$DRV/device_policy.add"; } >> etc/security/device_policy
+# the drivers' devlink.tab(5) lines (pkg(5)'s driver action "devlink=" adds them to
+# /etc/devlink.tab): without them devfsadm makes no /dev link for those minors (i915's
+# card0/renderD128 -> /dev/dri/, tpm, xsvc). Rewritten each generation, not appended to.
+sed '/^# solnix drivers (generated)$/,$d' etc/devlink.tab > etc/devlink.tab.new
+{ echo '# solnix drivers (generated)'; cat "$R$DRV/devlink.tab.add"; } >> etc/devlink.tab.new
+mv etc/devlink.tab.new etc/devlink.tab || die "laying /etc/devlink.tab"
 [ -e etc/path_to_inst ] || : > etc/path_to_inst
 # pkcs11_tpm.so NEEDs libtspi (trousers), which is not built: every libpkcs11
 # consumer that loads it dies in ld.so.1 (measured: `digest -a sha1` killed, so

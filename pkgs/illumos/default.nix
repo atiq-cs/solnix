@@ -888,6 +888,15 @@ let
         want=$(set -- $aliases; echo $#)
         [ "$na" -eq "$want" ] || { echo "FATAL: $name has $na aliases, want $want" >&2; exit 1; }
         [ -z "$perm" ] || grep -q "^$name:\*" "$out/minor_perm" || { echo "FATAL: no $name minor_perm" >&2; exit 1; }
+        # DRM minors (DDI_NT_DISPLAY_DRM, "ddi_display:drm") get /dev/dri/<minor>, as OI's
+        # drm package adds: devfsadm has no built-in rule for that node type. Type only: a
+        # devlink.tab "name=" selects the node name (display), not the driver, and matched
+        # nothing on lixi (measured; the type-only rule gave card0 + renderD128).
+        if [ "$name" = i915 ]; then
+          chmod u+w "$out/devlink.tab.add"
+          l=$(printf 'type=ddi_display:drm\tdri/\\M0')
+          grep -qxF "$l" "$out/devlink.tab.add" || printf '%s\n' "$l" >> "$out/devlink.tab.add"
+        fi
       done
       [ "$(awk '{print $2}' "$out/name_to_major" | sort | uniq -d | wc -l)" -eq 0 ] || { echo "FATAL: duplicate major" >&2; exit 1; }
     '' ];
