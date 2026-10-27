@@ -140,6 +140,45 @@ rec {
         || { echo "FATAL: libiconv UTF-8 -> UTF-16LE self-check" >&2; exit 1; }
     '';
   };
+  # readline 8.2 on the store ncurses (bash's line editor; the maintainer found neither bash nor
+  # readline on the aarch64 image). -ltinfo is ncurses' alias, never the gate's SVR4 termcap.
+  readline = mkSrcPkg {
+    pname = "readline"; version = "8.2";
+    src = { url = "https://mirrors.kernel.org/gnu/readline/readline-8.2.tar.gz";
+            sha256 = "3feb7171f16a84ee82ca18a36d7b9be109a52c04f492a053331d7d1095007c35"; };
+    deps = [ ncurses ];
+    build = ''
+      # support/shobj-conf picks gcc flags only when $CC's name says gcc ("solaris2*-*gcc*"), and
+      # then runs `gcc -print-prog-name=ld`; mk-src-pkg's wrapper is cc64 -> SunPro's -K pic (measured).
+      mkdir -p "$SRC/.bin"; ln -s "$CC" "$SRC/.bin/gcc"; export PATH="$SRC/.bin:$PATH" CC="$SRC/.bin/gcc"
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --with-curses --enable-shared --disable-static
+      gmake -j24 SHLIB_LIBS=-lncursesw
+      gmake install SHLIB_LIBS=-lncursesw
+      find "$out/share/doc" "$out/share/info" -delete 2>/dev/null || true
+      /usr/bin/elfdump -d "$out/lib/amd64/libreadline.so.8" | grep -q 'NEEDED.*libncursesw' \
+        || { echo "FATAL: libreadline does not NEED libncursesw" >&2; exit 1; }
+    '';
+  };
+
+  # bash 5.2.37, as ../base-src.nix's bash, on the store readline + ncurses (x86 links the
+  # world's curses and bash's bundled readline; aarch64 has no world yet).
+  bash = mkSrcPkg {
+    pname = "bash"; version = "5.2.37";
+    src = { url = "https://mirrors.kernel.org/gnu/bash/bash-5.2.37.tar.gz";
+            sha256 = "9599b22ecd1d5787ad7d3b7bf0c59f312b3396d1e281175dd1f8a4014da621ff"; };
+    deps = [ readline ncurses ];
+    build = ''
+      CFLAGS="-O2 -Wno-error=incompatible-pointer-types" \
+      ./configure --prefix="$out" --without-bash-malloc --disable-nls \
+        --with-installed-readline="${readline}" --with-curses bash_cv_termcap_lib=libncursesw
+      gmake -j24
+      gmake install
+      find "$out/share/doc" "$out/share/info" -delete 2>/dev/null || true
+      [ "$("$out/bin/bash" -c 'echo $BASH_VERSION')" = 5.2.37\(1\)-release ] || { echo "FATAL: bash version" >&2; exit 1; }
+      /usr/bin/elfdump -d "$out/bin/bash" | grep -q 'NEEDED.*libreadline' \
+        || { echo "FATAL: bash not linked to the store readline" >&2; exit 1; }
+    '';
+  };
   # nano: ../base-src.nix's gnuTool recipe, deps = ncurses only (no world on aarch64 yet).
   nano = mkSrcPkg {
     pname = "nano"; version = "8.4";

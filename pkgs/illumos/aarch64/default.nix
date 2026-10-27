@@ -175,9 +175,9 @@ in
 {
   gate = gate';
   inherit libc rtld ld sys systemPath gcc srcPkgs;
-  inherit (srcPkgs) zlib openssl nixChain git tree ncurses less nano nvi htop top wget gateLibs bsdfetch gccWrapper;
+  inherit (srcPkgs) zlib openssl nixChain git tree ncurses less nano nvi htop top wget gateLibs bsdfetch gccWrapper readline bash;
   nix = srcPkgs.nixChain.nix;
   # minimal /run/current-system for the aarch64 image (./system.nix; not the module toplevel).
   systemToplevel = import ./system.nix { pkgs = { inherit (srcPkgs) nixChain; nix = srcPkgs.nixChain.nix; };
-                                         extraPaths = [ srcPkgs.nixChain.curl srcPkgs.git srcPkgs.tree srcPkgs.less srcPkgs.nano srcPkgs.nvi srcPkgs.htop srcPkgs.top srcPkgs.wget srcPkgs.bsdfetch ]; inherit system; };
+                                         extraPaths = [ srcPkgs.nixChain.curl srcPkgs.git srcPkgs.tree srcPkgs.less srcPkgs.nano srcPkgs.nvi srcPkgs.htop srcPkgs.top srcPkgs.wget srcPkgs.bsdfetch srcPkgs.bash ]; inherit system; };
 }
