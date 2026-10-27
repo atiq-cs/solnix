@@ -228,7 +228,34 @@
  				if (m == NULL) {
  					ifp->if_ierrors++;
  					m_freem(m0);
-@@ -12760,14 +12810,28 @@
+@@ -12128,13 +12178,13 @@
+ 	/* Print version info and MAC address on first successful fw load. */
+ 	sc->attached = 1;
+ 	if (sc->sc_pnvm_ver) {
+-		printf("%s: hw rev 0x%x, fw %s, pnvm %08x, "
++		cmn_err(CE_CONT, "!%s: hw rev 0x%x, fw %s, pnvm %08x, "
+ 		    "address %s\n",
+ 		    DEVNAME(sc), sc->sc_hw_rev & IWX_CSR_HW_REV_TYPE_MSK,
+ 		    sc->sc_fwver, sc->sc_pnvm_ver,
+ 		    ether_sprintf(sc->sc_nvm.hw_addr));
+ 	} else {
+-		printf("%s: hw rev 0x%x, fw %s, address %s\n",
++		cmn_err(CE_CONT, "!%s: hw rev 0x%x, fw %s, address %s\n",
+ 		    DEVNAME(sc), sc->sc_hw_rev & IWX_CSR_HW_REV_TYPE_MSK,
+ 		    sc->sc_fwver, ether_sprintf(sc->sc_nvm.hw_addr));
+ 	}
+@@ -12363,7 +12413,9 @@
+ 		printf("\n");
+ 		return;
+ 	}
+-	printf(", %s\n", intrstr);
++	/* solnix: OpenBSD continues the autoconf attach line here; on illumos that is a
++	 * stray console line (", msi"). The interrupt type is in prtconf/intrstat. */
++	(void) intrstr;
+ 
+ 	/* Clear pending interrupts. */
+ 	IWX_WRITE(sc, IWX_CSR_INT_MASK, 0);
+@@ -12760,14 +12812,28 @@
  {
  	struct iwx_softc *sc = arg1;
  	struct ifnet *ifp = &sc->sc_ic.ic_if;
@@ -261,7 +288,7 @@
  		return;
  	}
  
-@@ -12779,8 +12843,8 @@
+@@ -12779,8 +12845,8 @@
  	if (!fatal && (ifp->if_flags & (IFF_UP | IFF_RUNNING)) == IFF_UP)
  		iwx_init(ifp);
  

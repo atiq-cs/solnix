@@ -173,8 +173,9 @@ let
   '';
 
   # The complete first-boot bringup body: every active interface, then the
-  # default route + hostname + the dns/client nudge (gotcha #16). Logged to
-  # /dev/console so a failed bringup is VISIBLE (the old netcfg silenced errors).
+  # default route + hostname + the dns/client nudge (gotcha #16). Logged to the
+  # service's own SMF log (svcs -L site/solnix-net), as NixOS's dhcpcd logs to the
+  # journal and not the console. A failure is still visible: svcs -x names the log.
   # resolv.conf itself is generated into /etc statically below; network/location
   # (enabled in the site profile) drives dns/client online — we nudge it here in
   # case its refresh-dep on location missed the boot-time state change.
@@ -299,10 +300,9 @@ in
         start.exec = "${pkgs.writeScript "solnix-net-bringup" ''
           #!/sbin/sh
           . /lib/svc/share/smf_include.sh
-          # /dev/msglog, as the gate's own methods use: a direct open of
-          # /dev/console bypasses the console's STREAMS line discipline, so the
-          # bring-up lines landed without carriage returns (skewed on the X1).
-          { ${netBringup} } > /dev/msglog 2>&1
+          # stdout/stderr of an SMF method go to its log (/var/svc/log/site-solnix-net:default.log),
+          # not the console: the boot console shows the login prompt, not this trace.
+          { ${netBringup} } 2>&1
           exit $SMF_EXIT_OK
         ''}";
         # the link wait, then create-addr (60 s), the lease poll (60 s) and the

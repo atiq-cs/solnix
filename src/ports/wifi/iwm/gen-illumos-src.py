@@ -192,6 +192,12 @@ rep('\tif (in->in_ni.ni_intval)\n\t\tduration = in->in_ni.ni_intval * 2;\n\telse
 
 
 # rep() has already asserted each needle's exact count; replace all of them.
+# solnix: OpenBSD continues the autoconf attach line here; on illumos it is a stray
+# console line (", msi"). The interrupt type is in prtconf/intrstat.
+rep('''	printf(", %s\\n", intrstr);''', '''	(void) intrstr;	/* solnix: no stray ", msi" console line */''')
+# solnix: the firmware/MAC line goes to the system log only (cmn_err "!"), not the console.
+rep('''	printf("%s: hw rev 0x%x, fw ver %s, address %s\\n",''', '''	cmn_err(CE_CONT, "!%s: hw rev 0x%x, fw ver %s, address %s\\n",''')
+
 for o, n in R:
     src = src.replace(o, n)
 os.makedirs(os.path.join(here, 'build'), exist_ok=True)

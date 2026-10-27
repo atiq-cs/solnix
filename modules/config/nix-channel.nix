@@ -171,7 +171,7 @@ in
         # a channel is a directory named for the channel holding the expression
         # (nix-channel --update unpacks the same shape).
         ${cfg.package}/bin/nix-env -p "$P/channels" -i ${channelTree} --quiet \
-          --option build-use-substitutes false > /dev/msglog 2>&1 || exit $SMF_EXIT_ERR_FATAL
+          --option build-use-substitutes false 2>&1 || exit $SMF_EXIT_ERR_FATAL
         mkdir -p /root/.nix-defexpr && chmod 0700 /root/.nix-defexpr
         [ -h /root/.nix-defexpr/channels ] || ln -s "$P/channels" /root/.nix-defexpr/channels
         touch "$stamp"
