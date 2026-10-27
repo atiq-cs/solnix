@@ -1,0 +1,116 @@
+diff -ruN sa/seatd-0.9.1/common/drm.c sb/seatd-0.9.1/common/drm.c
+--- a/common/drm.c
++++ b/common/drm.c
+@@ -6,7 +6,12 @@
+ 
+ // From libdrm
+ #define DRM_IOCTL_BASE        'd'
++#if defined(__sun)
++/* Linux _IO encoding, which the illumos i915 port decodes (0x641e/0x641f). */
++#define DRM_IO(nr)            ((DRM_IOCTL_BASE << 8) | (nr))
++#else
+ #define DRM_IO(nr)            _IO(DRM_IOCTL_BASE, nr)
++#endif
+ #define DRM_IOCTL_SET_MASTER  DRM_IO(0x1e)
+ #define DRM_IOCTL_DROP_MASTER DRM_IO(0x1f)
+ 
+@@ -21,7 +26,7 @@
+ 	return ioctl(fd, DRM_IOCTL_DROP_MASTER, 0);
+ }
+ 
+-#if defined(__linux__) || defined(__NetBSD__)
++#if defined(__linux__) || defined(__NetBSD__) || defined(__sun)
+ int path_is_drm(const char *path) {
+ 	if (STR_HAS_PREFIX("/dev/dri/", path))
+ 		return 1;
+diff -ruN sa/seatd-0.9.1/common/terminal.c sb/seatd-0.9.1/common/terminal.c
+--- a/common/terminal.c
++++ b/common/terminal.c
+@@ -26,6 +26,11 @@
+ #define K_ENABLE  K_XLATE
+ #define K_DISABLE K_RAW
+ #define FRSIG     0 // unimplemented
++#elif defined(__sun)
++/* illumos vt(4I): Linux-compatible VT_* ioctls and struct vt_mode/vt_stat. */
++#include <sys/kd.h>
++#include <sys/vt.h>
++#define FRSIG 0
+ #else
+ #error Unsupported platform
+ #endif
+@@ -147,6 +152,15 @@
+ 	}
+ 	return 0;
+ }
++#elif defined(__sun)
++static int get_tty_path(int tty, char path[static TTYPATHLEN]) {
++	assert(tty >= 0);
++	/* /dev/vt/0 is the console VT; VT_GETSTATE on it names the active one. */
++	if (snprintf(path, TTYPATHLEN, "/dev/vt/%d", tty) == -1) {
++		return -1;
++	}
++	return 0;
++}
+ #else
+ #error Unsupported platform
+ #endif
+@@ -166,7 +180,7 @@
+ }
+ 
+ int terminal_current_vt(int fd) {
+-#if defined(__linux__) || defined(__NetBSD__)
++#if defined(__linux__) || defined(__NetBSD__) || defined(__sun)
+ 	struct vt_stat st;
+ 	int res = ioctl(fd, VT_GETSTATE, &st);
+ 	if (res == -1) {
+@@ -242,11 +256,18 @@
+ 
+ int terminal_set_keyboard(int fd, bool enable) {
+ 	log_debugf("Setting KD keyboard state to %d", enable);
++#if defined(__sun)
++	/* STUB: illumos has no KDSKBMODE. The compositor takes the keyboard by
++	 * opening /dev/kbd itself (KIOCTRANS TR_UNTRANS_EVENT), as Xorg does. */
++	(void)fd;
++	return 0;
++#else
+ 	if (ioctl(fd, KDSKBMODE, enable ? K_ENABLE : K_DISABLE) == -1) {
+ 		log_errorf("Could not set KD keyboard mode to %s: %s",
+ 			   enable ? "enabled" : "disabled", strerror(errno));
+ 		return -1;
+ 	}
++#endif
+ #if defined(__FreeBSD__)
+ 	struct termios tios;
+ 	if (tcgetattr(fd, &tios) == -1) {
+diff -ruN sa/seatd-0.9.1/seatd/client.c sb/seatd-0.9.1/seatd/client.c
+--- a/seatd/client.c
++++ b/seatd/client.c
+@@ -18,6 +18,10 @@
+ #include <sys/un.h>
+ #endif
+ 
++#if defined(__sun)
++#include <ucred.h>
++#endif
++
+ #include "client.h"
+ #include "linked_list.h"
+ #include "log.h"
+@@ -69,6 +73,17 @@
+ 	*uid = cred.cr_uid;
+ 	*gid = cred.cr_ngroups > 0 ? cred.cr_groups[0] : (gid_t)-1;
+ 	return 0;
++#elif defined(__sun)
++	/* illumos: no SO_PEERCRED; getpeerucred(3C) names the peer. */
++	ucred_t *uc = NULL;
++	if (getpeerucred(fd, &uc) == -1) {
++		return -1;
++	}
++	*pid = ucred_getpid(uc);
++	*uid = ucred_geteuid(uc);
++	*gid = ucred_getegid(uc);
++	ucred_free(uc);
++	return 0;
+ #else
+ #error Unsupported platform
+ #endif

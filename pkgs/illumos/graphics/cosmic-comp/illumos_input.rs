@@ -1,0 +1,245 @@
+// illumos_input.rs -- cosmic-comp's KMS input on illumos: /dev/kbd + /dev/mouse as VUID
+// Firm_events (vuid_event.h), not libinput/evdev/udev, which illumos does not have.
+// Keyboard: KIOCTRANS(TR_UNTRANS_EVENT) gives one Firm_event per key, id = keyboard station.
+// Mouse: VUIDSFORMAT(VUID_FIRM_EVENT) gives LOC_X/Y_DELTA, MS_LEFT..MS_RIGHT, VUID wheel.
+// See solnix /scratch/solnix/cosmic2/input-route.md for why this route.
+use std::{fs::File, io::Read, path::PathBuf};
+
+use smithay::backend::input::{
+    self as bi, Axis, AxisRelativeDirection, AxisSource, ButtonState, DeviceCapability, InputBackend,
+    InputEvent, KeyState, Keycode, UnusedEvent,
+};
+use smithay::reexports::calloop::{generic::Generic, EventSource, Interest, Mode, Poll, PostAction, Readiness, Token, TokenFactory};
+
+// Values MEASURED from the gate headers by a C program (cosmic2/evidence-vuid-const.txt):
+// KIOCTRANS = KIOC|30 and VUIDSFORMAT = VUIOC|11 on x86 (the "avoid conflict with VT" arms).
+const KIOCTRANS: i32 = 27422;
+const TR_UNTRANS_EVENT: i32 = 3;
+const VUIDSFORMAT: i32 = 30219;
+const VUID_FIRM_EVENT: i32 = 1;
+const LOC_X_DELTA: u16 = 32640;
+const LOC_Y_DELTA: u16 = 32641;
+const MS_LEFT: u16 = 32544; // MS_MIDDLE 32545, MS_RIGHT 32546
+const VUID_WHEEL_FIRST: u16 = 30720; // vuid_first(VUID_WHEEL = 0x78)
+const VKEY_DOWN: i32 = 1; // VKEY_UP = 0
+const FE_SIZE: usize = 16;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum VuidDevice { Keyboard, Mouse }
+
+impl bi::Device for VuidDevice {
+    fn id(&self) -> String { format!("{:?}", self) }
+    fn name(&self) -> String { match self { Self::Keyboard => "illumos /dev/kbd".into(), Self::Mouse => "illumos /dev/mouse".into() } }
+    fn has_capability(&self, c: DeviceCapability) -> bool {
+        matches!((self, c), (Self::Keyboard, DeviceCapability::Keyboard) | (Self::Mouse, DeviceCapability::Pointer))
+    }
+    fn usb_id(&self) -> Option<(u32, u32)> { None }
+    fn syspath(&self) -> Option<PathBuf> { None }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Firm { pub id: u16, pub value: i32, pub usec: u64 }
+
+impl Firm {
+    pub fn parse(b: &[u8; FE_SIZE]) -> Firm {
+        let id = u16::from_ne_bytes([b[0], b[1]]);
+        let value = i32::from_ne_bytes([b[4], b[5], b[6], b[7]]);
+        let sec = i32::from_ne_bytes([b[8], b[9], b[10], b[11]]) as u64;
+        let usec = i32::from_ne_bytes([b[12], b[13], b[14], b[15]]) as u64;
+        Firm { id, value, usec: sec * 1_000_000 + usec }
+    }
+}
+
+// One event struct carries every kind; the trait impls read the fields that apply.
+#[derive(Debug, Clone, Copy)]
+pub struct VuidEvent { dev: VuidDevice, usec: u64, code: u32, pressed: bool, dx: f64, dy: f64 }
+
+impl bi::Event<VuidInput> for VuidEvent {
+    fn time(&self) -> u64 { self.usec }
+    fn device(&self) -> VuidDevice { self.dev }
+}
+impl bi::KeyboardKeyEvent<VuidInput> for VuidEvent {
+    fn key_code(&self) -> Keycode { Keycode::new(self.code) } // evdev + 8 (xkb)
+    fn state(&self) -> KeyState { if self.pressed { KeyState::Pressed } else { KeyState::Released } }
+    fn count(&self) -> u32 { self.pressed as u32 }
+}
+impl bi::PointerMotionEvent<VuidInput> for VuidEvent {
+    fn delta_x(&self) -> f64 { self.dx }
+    fn delta_y(&self) -> f64 { self.dy }
+    fn delta_x_unaccel(&self) -> f64 { self.dx }
+    fn delta_y_unaccel(&self) -> f64 { self.dy }
+}
+impl bi::PointerButtonEvent<VuidInput> for VuidEvent {
+    fn button_code(&self) -> u32 { self.code }
+    fn state(&self) -> ButtonState { if self.pressed { ButtonState::Pressed } else { ButtonState::Released } }
+}
+impl bi::PointerAxisEvent<VuidInput> for VuidEvent {
+    fn amount(&self, a: Axis) -> Option<f64> { (a == Axis::Vertical).then_some(self.dy * 15.0) }
+    fn amount_v120(&self, a: Axis) -> Option<f64> { (a == Axis::Vertical).then_some(self.dy * 120.0) }
+    fn source(&self) -> AxisSource { AxisSource::Wheel }
+    fn relative_direction(&self, _: Axis) -> AxisRelativeDirection { AxisRelativeDirection::Identical }
+}
+
+#[derive(Debug)]
+pub struct VuidInput;
+impl InputBackend for VuidInput {
+    type Device = VuidDevice;
+    type KeyboardKeyEvent = VuidEvent;
+    type PointerAxisEvent = VuidEvent;
+    type PointerButtonEvent = VuidEvent;
+    type PointerMotionEvent = VuidEvent;
+    type PointerMotionAbsoluteEvent = UnusedEvent;
+    type GestureSwipeBeginEvent = UnusedEvent;
+    type GestureSwipeUpdateEvent = UnusedEvent;
+    type GestureSwipeEndEvent = UnusedEvent;
+    type GesturePinchBeginEvent = UnusedEvent;
+    type GesturePinchUpdateEvent = UnusedEvent;
+    type GesturePinchEndEvent = UnusedEvent;
+    type GestureHoldBeginEvent = UnusedEvent;
+    type GestureHoldEndEvent = UnusedEvent;
+    type TouchDownEvent = UnusedEvent;
+    type TouchUpEvent = UnusedEvent;
+    type TouchMotionEvent = UnusedEvent;
+    type TouchCancelEvent = UnusedEvent;
+    type TouchFrameEvent = UnusedEvent;
+    type TabletToolAxisEvent = UnusedEvent;
+    type TabletToolProximityEvent = UnusedEvent;
+    type TabletToolTipEvent = UnusedEvent;
+    type TabletToolButtonEvent = UnusedEvent;
+    type SwitchToggleEvent = UnusedEvent;
+    type SpecialEvent = UnusedEvent;
+}
+
+#[path = "hid2evdev.rs"]
+mod hid2evdev; // sibling file src/backend/kms/hid2evdev.rs
+
+/// Firm_event -> smithay event. Pure, so it is unit-testable without a device.
+pub fn translate(dev: VuidDevice, f: Firm) -> Option<InputEvent<VuidInput>> {
+    let ev = |code, pressed, dx, dy| VuidEvent { dev, usec: f.usec, code, pressed, dx, dy };
+    match dev {
+        // TR_UNTRANS_EVENT: id = USB HID usage (conskbd sets KB_USB on every lower keyboard,
+        // kb8042 maps PS/2 through keytab_pc2usb). xkb keycode = evdev + 8.
+        VuidDevice::Keyboard => {
+            let k = *hid2evdev::HID2EVDEV.get(f.id as usize)? as u32;
+            (k != 0).then(|| InputEvent::Keyboard { event: ev(k + 8, f.value == VKEY_DOWN, 0.0, 0.0) })
+        }
+        VuidDevice::Mouse => match f.id {
+            LOC_X_DELTA => Some(InputEvent::PointerMotion { event: ev(0, false, f.value as f64, 0.0) }),
+            // VUID y grows upward (vuid_event.h); Wayland y grows downward.
+            LOC_Y_DELTA => Some(InputEvent::PointerMotion { event: ev(0, false, 0.0, -(f.value as f64)) }),
+            id if (MS_LEFT..MS_LEFT + 3).contains(&id) => {
+                const BTN: [u32; 3] = [0x110, 0x112, 0x111]; // BTN_LEFT, BTN_MIDDLE, BTN_RIGHT
+                Some(InputEvent::PointerButton { event: ev(BTN[(id - MS_LEFT) as usize], f.value != 0, 0.0, 0.0) })
+            }
+            // wheel 0 = vertical; VUID +1 = away from the user = scroll up = negative axis.
+            VUID_WHEEL_FIRST => Some(InputEvent::PointerAxis { event: ev(0, false, 0.0, -(f.value as f64)) }),
+            _ => None,
+        },
+    }
+}
+
+use smithay::reexports::rustix::{fs::OFlags, ioctl::{ioctl, Opcode, Setter}};
+
+pub fn open_kbd() -> std::io::Result<File> {
+    let f = open_nb("/dev/kbd")?; // KIOCTRANS takes an int* (kbio.h)
+    unsafe { ioctl(&f, Setter::<{ KIOCTRANS as Opcode }, i32>::new(TR_UNTRANS_EVENT))? };
+    Ok(f)
+}
+pub fn open_mouse() -> std::io::Result<File> {
+    let f = open_nb("/dev/mouse")?; // VUIDSFORMAT takes an int* (vuid_event.h)
+    unsafe { ioctl(&f, Setter::<{ VUIDSFORMAT as Opcode }, i32>::new(VUID_FIRM_EVENT))? };
+    Ok(f)
+}
+fn open_nb(path: &str) -> std::io::Result<File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new().read(true).custom_flags(OFlags::NONBLOCK.bits() as i32).open(path)
+}
+
+/// Drain whole Firm_events from a non-blocking VUID fd.
+pub fn read_events(f: &mut File, dev: VuidDevice, out: &mut Vec<InputEvent<VuidInput>>) -> std::io::Result<()> {
+    let mut buf = [0u8; FE_SIZE * 64];
+    loop {
+        match f.read(&mut buf) {
+            Ok(0) => return Ok(()),
+            Ok(n) => for c in buf[..n - n % FE_SIZE].chunks_exact(FE_SIZE) {
+                out.extend(translate(dev, Firm::parse(c.try_into().unwrap())));
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => return Ok(()),
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+/// calloop source over /dev/kbd + /dev/mouse. A missing device is skipped with a warning
+/// (a headless box has neither); the source still registers, so a later hotplug is the gap.
+pub struct VuidSource { kbd: Option<Generic<File>>, mouse: Option<Generic<File>>, added: bool }
+
+impl VuidSource {
+    pub fn new() -> Self {
+        let g = |r: std::io::Result<File>, what: &str| match r {
+            Ok(f) => Some(Generic::new(f, Interest::READ, Mode::Level)),
+            Err(e) => { tracing::warn!(?e, "illumos input: {} unavailable", what); None }
+        };
+        VuidSource { kbd: g(open_kbd(), "/dev/kbd"), mouse: g(open_mouse(), "/dev/mouse"), added: false }
+    }
+}
+
+impl EventSource for VuidSource {
+    type Event = InputEvent<VuidInput>;
+    type Metadata = ();
+    type Ret = ();
+    type Error = std::io::Error;
+
+    fn process_events<F>(&mut self, r: Readiness, t: Token, mut cb: F) -> Result<PostAction, Self::Error>
+    where F: FnMut(Self::Event, &mut ()) {
+        let mut evs = Vec::new();
+        if !self.added {
+            self.added = true;
+            if self.kbd.is_some() { evs.push(InputEvent::DeviceAdded { device: VuidDevice::Keyboard }); }
+            if self.mouse.is_some() { evs.push(InputEvent::DeviceAdded { device: VuidDevice::Mouse }); }
+        }
+        for (src, dev) in [(&mut self.kbd, VuidDevice::Keyboard), (&mut self.mouse, VuidDevice::Mouse)] {
+            if let Some(g) = src {
+                g.process_events(r, t, |_, f| { read_events(unsafe { f.get_mut() }, dev, &mut evs)?; Ok(PostAction::Continue) })?;
+            }
+        }
+        for e in evs { cb(e, &mut ()); }
+        Ok(PostAction::Continue)
+    }
+    fn register(&mut self, p: &mut Poll, tf: &mut TokenFactory) -> smithay::reexports::calloop::Result<()> {
+        if let Some(g) = &mut self.kbd { g.register(p, tf)?; }
+        if let Some(g) = &mut self.mouse { g.register(p, tf)?; }
+        Ok(())
+    }
+    fn reregister(&mut self, p: &mut Poll, tf: &mut TokenFactory) -> smithay::reexports::calloop::Result<()> {
+        if let Some(g) = &mut self.kbd { g.reregister(p, tf)?; }
+        if let Some(g) = &mut self.mouse { g.reregister(p, tf)?; }
+        Ok(())
+    }
+    fn unregister(&mut self, p: &mut Poll) -> smithay::reexports::calloop::Result<()> {
+        if let Some(g) = &mut self.kbd { g.unregister(p)?; }
+        if let Some(g) = &mut self.mouse { g.unregister(p)?; }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn fe(id: u16, value: i32) -> [u8; FE_SIZE] {
+        let mut b = [0u8; FE_SIZE];
+        b[0..2].copy_from_slice(&id.to_ne_bytes()); b[4..8].copy_from_slice(&value.to_ne_bytes());
+        b[8..12].copy_from_slice(&2i32.to_ne_bytes()); b[12..16].copy_from_slice(&5i32.to_ne_bytes()); b
+    }
+    #[test]
+    fn keys_buttons_motion() {
+        use smithay::backend::input::{Event, KeyboardKeyEvent, PointerButtonEvent, PointerMotionEvent};
+        let Some(InputEvent::Keyboard { event }) = translate(VuidDevice::Keyboard, Firm::parse(&fe(4, 1))) else { panic!() };
+        assert_eq!((event.key_code().raw(), KeyboardKeyEvent::state(&event), event.time()), (30 + 8, KeyState::Pressed, 2_000_005)); // HID 'a'
+        let Some(InputEvent::PointerButton { event }) = translate(VuidDevice::Mouse, Firm::parse(&fe(MS_LEFT + 2, 1))) else { panic!() };
+        assert_eq!(event.button_code(), 0x111); // MS_RIGHT -> BTN_RIGHT
+        let Some(InputEvent::PointerMotion { event }) = translate(VuidDevice::Mouse, Firm::parse(&fe(LOC_Y_DELTA, 3))) else { panic!() };
+        assert_eq!(event.delta_y(), -3.0);
+        assert!(translate(VuidDevice::Keyboard, Firm::parse(&fe(0, 1))).is_none()); // HID 0 = none
+    }
+}

@@ -20,6 +20,15 @@ the ~1h OpenIndiana 2025->2026 pkg-update + toolchain-install tax.
   baked key within a minute, ena0 DHCP, new host keys, cache.solnix.io 200; (2) nix-builds a flake
   from a clean git archive -- packages.x86_64-solaris.bash RC=0 (warm), and .less built ncurses +
   less from source RC=0 (ppsm8crr...-less-679, deriver resolves).
+- GOTCHA (solnix-pkgs fork stdenv only, not the solnix flake): `pkg install library/mpfr` BEFORE
+  the first fork build. The seed's GNU tools carry RUNPATH /usr/gcc/14/lib/amd64 because
+  unpack-seed.sh's $ORIGIN rewrite never ran (its bundled elfedit is ELFCLASS32 and failed
+  silently), so the gawk slice loads libmpfr.so.6 from the HOST; without it awk dies and
+  substituteAll writes literal @var@ into outputs that register as valid (poisoned, and
+  nix-store --delete cannot remove them here). Measured 2026-10-27 on ami-0c3f16422f8943a8b:
+  no mpfr -> 'libmpfr.so.6: open failed'; with it the fork stdenv builds. The cause is fixed
+  in /scratch/solnix/cosmic2/solnix-pkgs-unpack-seed.diff (host elfedit, fail loudly, RUNPATH
+  proof); once that lands the prerequisite goes away. Keep it until then.
 - GOTCHA: ftp.gnu.org times out from EC2 us-east-2, and the GNU sources in pkgs/ point there.
   Prefetch the same tarballs from mirrors.kernel.org/gnu into the store first (identical hashes,
   so identical store paths): scripts/gnu-mirror-prefetch.sh, run from the source tree.

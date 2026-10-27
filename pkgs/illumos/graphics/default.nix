@@ -6,8 +6,9 @@
 let
   tools = import ./tools.nix { inherit mkSrcPkg; };
   libs = import ./libs.nix { inherit mkSrcPkg tools pkgconf zlib; };
+  input = import ./input.nix { inherit mkSrcPkg tools pkgconf; };
 in
-libs // {
+libs // input // {
   inherit (tools) meson samurai;
   mesa = import ./mesa.nix ({ inherit mkSrcPkg tools pkgconf zlib; } // {
     inherit (libs) expat libffi wayland wayland-protocols libdrm;
