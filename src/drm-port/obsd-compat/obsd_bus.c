@@ -465,18 +465,19 @@ obsd_enum_walk(dev_info_t *dip, void *arg)
 }
 
 /* pci_find_device: the first PCI function anywhere that match() accepts;
- * the result is written over *pa (OpenBSD semantics). */
+ * the result is written over *pa (OpenBSD semantics). *pa is OUTPUT only:
+ * OpenBSD's pci_find_device builds each candidate from the pci softc and
+ * never reads *pa, and inteldrm's intel_pch_detect passes an uninitialised
+ * stack struct. Copying it as a template carried a garbage pa_pc into
+ * pci_conf_read, which panicked lixi (#gp in obsd_enum_walk, 2026-10-27,
+ * the first card0 open). The candidates get a NULL chipset tag, so
+ * pci_conf_read takes the mechanism-1 path every non-self read takes. */
 int
 pci_find_device(struct pci_attach_args *pa,
     int (*match)(struct pci_attach_args *))
 {
 	struct obsd_enum e = { match, pa, NULL, 0 };
-	struct pci_attach_args tmpl;
 
-	if (pa != NULL) {
-		tmpl = *pa;
-		e.tmpl = &tmpl;
-	}
 	ddi_walk_devs(ddi_root_node(), obsd_enum_walk, &e);
 	return (e.found);
 }
