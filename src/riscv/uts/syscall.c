@@ -173,6 +173,8 @@ extern long copyout(const void *kaddr, void *uaddr, unsigned long n);
 #define	SYS_getcwd	17
 #define	SYS_mkdirat	34
 #define	SYS_unlinkat	35
+#define	SYS_fchmodat	53	/* rvtty3c: /dev/pts/N only */
+#define	SYS_fchownat	54	/* rvtty3c: /dev/pts/N only */
 #define	SYS_renameat	38
 #define	SYS_chdir	49
 #define	SYS_getdents64	61
@@ -667,6 +669,17 @@ syscall_trap(struct regs *tf)
 	case SYS_setsid: {
 		extern long sys_setsid(void);
 		ret = sys_setsid();
+		break;
+	}
+	case SYS_fchmodat: {
+		extern long proc_fchmodat(int, const char *, unsigned int);
+		ret = proc_fchmodat((int)tf->r_a0, (const char *)tf->r_a1, (unsigned int)tf->r_a2);
+		break;
+	}
+	case SYS_fchownat: {
+		extern long proc_fchownat(int, const char *, unsigned int, unsigned int);
+		ret = proc_fchownat((int)tf->r_a0, (const char *)tf->r_a1,
+		    (unsigned int)tf->r_a2, (unsigned int)tf->r_a3);
 		break;
 	}
 	case SYS_setpgid: {

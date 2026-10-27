@@ -6,7 +6,8 @@ S="$1"; AK="$2"; OUT="${OUT:-$HOME/scratch/rvlogin/out}"
 mkdir -p "$S/sbin" "$S/bin" "$S/etc" "$S/home/gburd/.ssh" "$S/tmp"
 cp "$OUT/pkginit" "$S/sbin/init"; cp "$OUT/dropbear" "$OUT/dropbearkey" "$OUT/dash" "$OUT/sbase-box" "$S/bin/"
 ln "$S/bin/dash" "$S/bin/sh"	# ustar '1' entry: the kernel's reader has no symlinks
-for a in uname whoami ls cat echo; do ln "$S/bin/sbase-box" "$S/bin/$a"; done
+for a in uname whoami ls cat echo sleep; do ln "$S/bin/sbase-box" "$S/bin/$a"; done
+[ -f "$OUT/winsz" ] && cp "$OUT/winsz" "$S/bin/"	# rvtty3c: TIOCGWINSZ check for the pty proof
 printf '%s\n' 'root:x:0:0:Super-User:/:/bin/sh' 'gburd:x:1000:1000:gburd:/home/gburd:/bin/sh' > "$S/etc/passwd"
 cp "$AK" "$S/home/gburd/.ssh/authorized_keys"; chmod 700 "$S/home/gburd/.ssh"; chmod 600 "$S/home/gburd/.ssh/authorized_keys"
 cat > "$S/etc/rvpkg.tests" <<'T'

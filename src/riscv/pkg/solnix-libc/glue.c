@@ -72,6 +72,8 @@ struct rusage;
 #define	K_O_WRONLY	0x1
 #define	K_O_RDWR	0x2
 #define	K_O_CREAT	0x40
+#define	K_O_NOCTTY	0x100		/* rvtty3c: the kernel acquires a ctty unless this is set */
+#define	K_O_NONBLOCK	0x800
 #define	K_NOFILE	32		/* uproc.c NOFILE */
 
 extern char **environ;
@@ -314,6 +316,10 @@ _open(const char *path, int flags, ...)
 		kf |= K_O_CLOEXEC;
 	if (flags & O_APPEND)
 		kf |= K_O_APPEND;	/* the kernel keeps it across dup2/exec */
+	if (flags & O_NOCTTY)
+		kf |= K_O_NOCTTY;
+	if (flags & O_NONBLOCK)
+		kf |= K_O_NONBLOCK;
 	r = kret(ksys(K_openat, -100, (long)path, kf, 0), ENOENT);
 	if (r < 0)
 		return (-1);
@@ -976,15 +982,15 @@ chdir(const char *p)
 #define	NOSYS(proto) proto { errno = ENOSYS; return (-1); }
 NOSYS(int _link(const char *a, const char *b))
 NOSYS(int link(const char *a, const char *b))
-NOSYS(int chmod(const char *a, mode_t m))
+int chmod(const char *a, mode_t m) { return ((int)kret(ksys(53, -100 /* AT_FDCWD */, (long)a, m, 0), ENOSYS)); }	/* [REAL] /dev/pts/N only (rvtty3c) */
 NOSYS(int fchmod(int f, mode_t m))
-NOSYS(int chown(const char *a, uid_t u, gid_t g))
+int chown(const char *a, uid_t u, gid_t g) { return ((int)kret(ksys(54, -100 /* AT_FDCWD */, (long)a, u, g), ENOSYS)); }	/* [REAL] /dev/pts/N only (rvtty3c) */
 NOSYS(int symlink(const char *a, const char *b))
 NOSYS(ssize_t readlink(const char *a, char *b, size_t n))
 NOSYS(int ftruncate(int f, off_t l))
 NOSYS(int fsync(int f))
-NOSYS(int setpgid(pid_t a, pid_t b))
-pid_t getpgrp(void) { return (getpgid(0)); }	/* [REAL] rvlogin: group = session */
+int setpgid(pid_t a, pid_t b) { return ((int)kret(ksys(154, a, b, 0, 0), EPERM)); }	/* [REAL] rvtty3b kernel */
+pid_t getpgrp(void) { return (getpgid(0)); }	/* [REAL] */
 pid_t setsid(void) { return ((pid_t)kret(ksys(157, 0, 0, 0, 0), EPERM)); }	/* [REAL] rvlogin */
 pid_t getsid(pid_t p) { return ((pid_t)kret(ksys(156, p, 0, 0, 0), ESRCH)); }	/* [REAL] */
 pid_t getpgid(pid_t p) { return ((pid_t)kret(ksys(155, p, 0, 0, 0), ESRCH)); }	/* [REAL] */
@@ -1001,13 +1007,44 @@ getentropy(void *b, size_t n)
 }
 int _getentropy(void *b, size_t n) { return (getentropy(b, n)); }
 
-/* No termios: the console is the kernel's fixed line-mode echoing reader. */
-int tcgetattr(int f, void *t) { (void) f; (void) t; errno = ENOTTY; return (-1); }
-int tcsetattr(int f, int a, const void *t) { (void) f; (void) a; (void) t; errno = ENOTTY; return (-1); }
-pid_t tcgetpgrp(int f) { (void) f; errno = ENOTTY; return (-1); }
-int tcsetpgrp(int f, pid_t p) { (void) f; (void) p; errno = ENOTTY; return (-1); }
-int ioctl(int f, unsigned long r, ...) { (void) f; (void) r; errno = ENOTTY; return (-1); }
-char *ttyname(int f) { return (f >= 0 && f <= 2 ? "/dev/console" : NULL); }
+/*
+ * [REAL] rvtty3c: termios and job control through the kernel's pty ioctls (illumos numbers, the 36-byte
+ * illumos struct termios of <sys/termios.h>). The console (fds 0-2 with no descriptor) has no termios: the
+ * kernel answers only its isatty probe, so tcgetattr there fails ENOTTY as before.
+ */
+int
+ioctl(int f, unsigned long r, ...)
+{
+	va_list ap;
+	long a;
+
+	va_start(ap, r);
+	a = (long)va_arg(ap, void *);
+	va_end(ap);
+#ifndef SOLNIX_NO_VFD
+	/* The STUB userland fd table (vfd negative control): a program fd is not a kernel fd. */
+	if ((f = vk(f, 1)) < 0)
+		return (-1);
+#endif
+	return ((int)kret(ksys(29, f, (long)r, a, 0), ENOTTY));
+}
+int tcgetattr(int f, void *t) { return (ioctl(f, 0x540d, t)); }
+int tcsetattr(int f, int a, const void *t) { return (a < 0 || a > 2 ? (errno = EINVAL, -1) : ioctl(f, 0x540e + a, t)); }
+pid_t tcgetpgrp(int f) { int pg; return (ioctl(f, 0x7414, &pg) == 0 ? (pid_t)pg : -1); }
+int tcsetpgrp(int f, pid_t p) { int pg = (int)p; return (ioctl(f, 0x7415, &pg)); }
+char *
+ttyname(int f)
+{
+	static char name[] = "/dev/pts/0";
+	unsigned char t[36];
+	struct stat st;
+
+	if (tcgetattr(f, t) == 0 && ioctl(f, 0x5001, 0) != 0 && fstat(f, &st) == 0 && (st.st_mode & 0170000) == 0020000) {
+		name[9] = (char)('0' + (int)(st.st_rdev & 0xff));	/* a pty slave */
+		return (name);
+	}
+	return (f >= 0 && f <= 2 ? "/dev/console" : NULL);
+}
 
 long
 sysconf(int name)
@@ -1136,12 +1173,41 @@ int _rename(const char *a, const char *b) { return ((int)kret(ksys(K_renameat, K
  * there is no link): provide rename itself so stdio's rename is the kernel's. */
 int rename(const char *a, const char *b) { return (_rename(a, b)); }
 
-int tcflush(int f, int q) { (void) f; (void) q; errno = ENOTTY; return (-1); }
-int tcdrain(int f) { (void) f; errno = ENOTTY; return (-1); }
-unsigned cfgetospeed(const void *t) { (void) t; return (0010002); }
-unsigned cfgetispeed(const void *t) { (void) t; return (0010002); }
-int cfsetospeed(void *t, unsigned s) { (void) t; (void) s; return (0); }
-int cfsetispeed(void *t, unsigned s) { (void) t; (void) s; return (0); }
+/* [REAL] rvtty3c: illumos keeps the speed in c_cflag & CBAUD (offset 8); the pty stores it, ignores it. */
+int tcflush(int f, int q) { unsigned char t[36]; (void) q; return (tcgetattr(f, t) != 0 ? -1 : 0); }
+int tcdrain(int f) { unsigned char t[36]; return (tcgetattr(f, t)); }
+unsigned cfgetospeed(const void *t) { return (((const unsigned int *)t)[2] & 017); }
+unsigned cfgetispeed(const void *t) { return (((const unsigned int *)t)[2] & 017); }
+int cfsetospeed(void *t, unsigned s) { if (s > 017) { errno = EINVAL; return (-1); } ((unsigned int *)t)[2] = (((unsigned int *)t)[2] & ~017u) | s; return (0); }
+int cfsetispeed(void *t, unsigned s) { return (s == 0 ? 0 : cfsetospeed(t, s)); }
+void
+cfmakeraw(void *tp)
+{
+	unsigned int *t = tp;		/* c_iflag, c_oflag, c_cflag, c_lflag (illumos values) */
+
+	t[0] &= ~(0000001u | 0000002u | 0000010u | 0000040u | 0000100u | 0000200u | 0000400u | 0002000u);
+	t[1] &= ~0000001u;					/* OPOST */
+	t[3] &= ~(0000010u | 0000100u | 0000002u | 0000001u | 0100000u);	/* ECHO ECHONL ICANON ISIG IEXTEN */
+	t[2] = (t[2] & ~(0000060u | 0000400u)) | 0000060u;	/* CS8, no PARENB */
+	((unsigned char *)tp)[16 + 4] = 1;			/* VMIN */
+	((unsigned char *)tp)[16 + 5] = 0;			/* VTIME */
+}
+
+/* [REAL] rvtty3c: the pty master (illumos shape: /dev/ptmx, grantpt = OWNERPT, unlockpt = UNLKPT). */
+int posix_openpt(int fl) { return (open("/dev/ptmx", fl)); }
+int grantpt(int f) { unsigned int own[2] = { getuid(), 7 /* tty */ }; return (ioctl(f, 0x5005, own)); }
+int unlockpt(int f) { return (ioctl(f, 0x5002, 0)); }
+char *
+ptsname(int f)
+{
+	static char name[] = "/dev/pts/0";
+	struct stat st;
+
+	if (ioctl(f, 0x5001, 0) != 0 || fstat(f, &st) != 0)
+		return (NULL);			/* not a master */
+	name[9] = (char)('0' + (int)(st.st_rdev & 0xff));
+	return (name);
+}
 
 NOSYS(int mknod(const char *a, mode_t m, dev_t d))
 NOSYS(int mkfifo(const char *a, mode_t m))
@@ -1217,8 +1283,8 @@ renameat(int a, const char *p, int b, const char *q)
 int creat(const char *p, mode_t m) { return (_open(p, O_WRONLY | O_CREAT | O_TRUNC, m)); }
 NOSYS(int linkat(int a, const char *b, int c, const char *e, int f))
 NOSYS(int symlinkat(const char *a, int b, const char *c))
-NOSYS(int fchmodat(int d, const char *p, mode_t m, int f))
-NOSYS(int fchownat(int d, const char *p, uid_t u, gid_t g, int f))
+int fchmodat(int d, const char *p, mode_t m, int f) { (void) f; return ((int)kret(ksys(53, d, (long)p, m, 0), ENOSYS)); }	/* [REAL] /dev/pts/N only */
+int fchownat(int d, const char *p, uid_t u, gid_t g, int f) { (void) f; return ((int)kret(ksys(54, d, (long)p, u, g), ENOSYS)); }	/* [REAL] /dev/pts/N only */
 NOSYS(int fchown(int f, uid_t u, gid_t g))
 NOSYS(int lchown(const char *p, uid_t u, gid_t g))
 NOSYS(int utimensat(int d, const char *p, const struct timespec *t, int f))
@@ -1399,5 +1465,5 @@ execlp(const char *file, const char *a0, ...)
 }
 NOSYS(int sethostname(const char *n, size_t l))
 
-/* [DERIVED] killpg: no process groups, so a "group" is its leader pid only. */
-int killpg(pid_t pg, int sig) { return (_kill(pg, sig)); }
+/* [REAL] killpg: the kernel has process groups (rvtty3b): kill(-pg) (0 = the caller's group). */
+int killpg(pid_t pg, int sig) { return (_kill(pg == 0 ? 0 : -pg, sig)); }

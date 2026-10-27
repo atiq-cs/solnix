@@ -45,6 +45,7 @@ struct pty {
 	int		pt_ever;	/* a slave has been opened at least once */
 	int		pt_locked;	/* 1 until UNLKPT */
 	unsigned int	pt_uid, pt_gid;	/* slave owner (OWNERPT / grantpt) */
+	unsigned int	pt_mode;	/* slave permission bits (0620; chmod as root) */
 	unsigned char	pt_termios[36];	/* illumos struct termios (the line discipline reads it) */
 	unsigned long	pt_llen;	/* ICANON: bytes of the open line at the m2s tail */
 	unsigned short	pt_winsz[4];	/* ws_row, ws_col, ws_xpixel, ws_ypixel */
@@ -246,6 +247,7 @@ pty_alloc(unsigned int uid, unsigned int gid)
 		pt->pt_locked = 1;
 		pt->pt_uid = uid;
 		pt->pt_gid = gid;
+		pt->pt_mode = 0620;
 		pt->pt_m2s.r_rpos = pt->pt_m2s.r_wpos = pt->pt_llen = 0;
 		pt->pt_s2m.r_rpos = pt->pt_s2m.r_wpos = 0;
 		for (i = 0; i < 36; i++)
@@ -539,6 +541,37 @@ pty_ioctl(int n, int master, int cmd, unsigned long uarg, unsigned int uid)
 }
 
 /* Owner of /dev/pts/N for stat (ptsname/ttyname, dropbear's pty_setowner). */
+/* chmod of /dev/pts/N (as root): the permission bits stat reports. */
+int
+pty_chmod(int n, unsigned int mode)
+{
+	if (n < 0 || n >= NPTY || !ptytab[n].pt_used)
+		return (-PTY_ENXIO);
+	ptytab[n].pt_mode = mode & 07777;
+	return (0);
+}
+
+unsigned int
+pty_mode(int n)
+{
+	return (ptytab[n].pt_mode);
+}
+
+/* chown of /dev/pts/N (dropbear's pty_setowner, as root): the owner stat reports. */
+int
+pty_chown(int n, unsigned int uid, unsigned int gid)
+{
+	if (n < 0 || n >= NPTY || !ptytab[n].pt_used)
+		return (-PTY_ENXIO);
+	pty_lock(&ptytab[n]);
+	if (uid != (unsigned int)-1)
+		ptytab[n].pt_uid = uid;
+	if (gid != (unsigned int)-1)
+		ptytab[n].pt_gid = gid;
+	pty_unlock(&ptytab[n]);
+	return (0);
+}
+
 int
 pty_owner(int n, unsigned int *uid, unsigned int *gid)
 {

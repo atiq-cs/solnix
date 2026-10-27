@@ -85,6 +85,12 @@ leader(int ptsn)
 		return (14);
 	if (ks(K_wait4, c, (long)&wst, 0) != c || (wst & 0xff) != 128 + 2)
 		return (15);					/* not killed by SIGINT */
+	pg = ks(K_getpid, 0, 0, 0);				/* the shell takes the terminal back */
+	if (ks(K_ioctl, s, TIOCSPGRP, (long)&pg) != 0)
+		return (17);
+	(void) ks(K_write, 1, (long)"CTY-LEADER-READ\n", 16);
+	if (ks(K_read, s, (long)b, 3) != 3 || b[0] != 'o' || b[1] != 'k')
+		return (18);					/* the next line after ^C */
 	(void) ks(K_write, 1, (long)"CTY-LEADER-READY\n", 17);
 	for (c = 0; c < 100; c++)				/* main closes the master: SIGHUP kills us */
 		nap(100);
@@ -126,6 +132,8 @@ main(void)
 	nap(500);
 	(void) ks(K_write, m, (long)"\003", 1);		/* ^C at the foreground group */
 	nap(1500);
+	(void) ks(K_write, m, (long)"ok\n", 3);			/* the line the leader reads next */
+	nap(1000);
 	(void) ks(K_close, m, 0, 0);			/* hangup */
 	if ((r = ks(K_wait4, lp, (long)&wst, 0)) != lp)
 		return (fail("wait leader", r), 1);

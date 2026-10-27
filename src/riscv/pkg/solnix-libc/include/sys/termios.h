@@ -1,7 +1,7 @@
 /*
- * termios declarations so terminal-aware code compiles. The solnix riscv64 console
- * is a fixed line-mode echoing reader with NO termios: tcgetattr/tcsetattr fail
- * ENOTTY at run time (glue.c). Values follow the Linux generic ABI.
+ * termios: the illumos layout and values (uts/common/sys/termios.h), which is what the kernel's pty takes
+ * (TCGETS 0x540d, a 36-byte struct: four flags then c_cc[19]). The console has no termios: on fds 0-2 with
+ * no descriptor, tcgetattr fails ENOTTY (glue.c). Speeds are stored in c_cflag & CBAUD, as on illumos.
  */
 #ifndef _SYS_TERMIOS_H
 #define	_SYS_TERMIOS_H
@@ -9,29 +9,31 @@
 typedef unsigned int tcflag_t;
 typedef unsigned char cc_t;
 typedef unsigned int speed_t;
-#define	NCCS 32
+#define	NCCS 19
 struct termios {
 	tcflag_t c_iflag, c_oflag, c_cflag, c_lflag;
-	cc_t c_line;
 	cc_t c_cc[NCCS];
-	speed_t c_ispeed, c_ospeed;
 };
 #define	VINTR 0
 #define	VQUIT 1
 #define	VERASE 2
 #define	VKILL 3
 #define	VEOF 4
+#define	VEOL 5
+#define	VEOL2 6
+#define	VMIN 4
 #define	VTIME 5
-#define	VMIN 6
+#define	VSWTCH 7
 #define	VSTART 8
 #define	VSTOP 9
 #define	VSUSP 10
-#define	VEOL 11
+#define	VDSUSP 11
 #define	VREPRINT 12
 #define	VDISCARD 13
 #define	VWERASE 14
 #define	VLNEXT 15
-#define	VEOL2 16
+#define	VSTATUS 16
+#define	VERASE2 17
 #define	IGNBRK 0000001
 #define	BRKINT 0000002
 #define	IGNPAR 0000004
@@ -90,7 +92,7 @@ struct termios {
 #define	ECHOCTL 0001000
 #define	ECHOPRT 0002000
 #define	ECHOKE 0004000
-#define	FLUSHO 0010000
+#define	FLUSHO 0020000
 #define	PENDIN 0040000
 #define	VSWTC 7
 #define	CSTOPB 0000100
@@ -123,11 +125,11 @@ struct termios {
 #define	B9600 0000015
 #define	B19200 0000016
 #define	B38400 0000017
-#define	B57600 0010001
-#define	B115200 0010002
-#define	B230400 0010003
-#define	B460800 0010004
-#define	CBAUD 0010017
+#define	B57600 16
+#define	B115200 18
+#define	B230400 20
+#define	B460800 22
+#define	CBAUD 0000017
 #define	EXTA B19200
 #define	EXTB B38400
 #define	TCSANOW 0
@@ -146,4 +148,5 @@ speed_t cfgetospeed(const struct termios *);
 speed_t cfgetispeed(const struct termios *);
 int cfsetospeed(struct termios *, speed_t);
 int cfsetispeed(struct termios *, speed_t);
+void cfmakeraw(struct termios *);
 #endif

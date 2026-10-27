@@ -150,6 +150,9 @@ extern int pty_ctty(int n, int *pgrp);
 extern void pty_set_pgrp(int n, int pgrp);
 extern int pty_drop_ctty(int n);
 extern int pty_session_ctty(int sid);
+extern int pty_chown(int n, unsigned int uid, unsigned int gid);
+extern int pty_chmod(int n, unsigned int mode);
+extern unsigned int pty_mode(int n);
 #define	PTY_N(v)	(((v) - 1) >> 1)
 #define	PTY_M(v)	(((v) - 1) & 1)
 
@@ -2213,7 +2216,7 @@ pty_statout(int n, int master, unsigned long ustat)
 		b[i] = 0;
 	st.st_dev = 1;
 	st.st_ino = 0x7700 + (master ? 0x80 : n);
-	st.st_mode = 0020000 | (master ? 0666 : 0620);
+	st.st_mode = 0020000 | (master ? 0666 : pty_mode(n));
 	st.st_nlink = 1;
 	st.st_uid = uid;
 	st.st_gid = gid;
@@ -2907,6 +2910,43 @@ pty_fd_open(proc_t *p, const char *path)
  * directory (an fd for getdents) or a file. O_EXCL, O_TRUNC, O_DIRECTORY and
  * O_CLOEXEC are honoured here; the file kinds are proc_openat_ns's.
  */
+/*
+ * fchownat (54), for /dev/pts/N only: the one chown a server needs (dropbear's pty_setowner hands the slave to the
+ * user before it drops root). Root only, as POSIX allows; any other path is ENOSYS (no file ownership yet).
+ */
+static long pty_node_setattr(int, const char *, int, unsigned int, unsigned int);
+
+long
+proc_fchownat(int dirfd, const char *upath, unsigned int uid, unsigned int gid)
+{
+	return (pty_node_setattr(dirfd, upath, 0, uid, gid));
+}
+
+/* fchmodat (53), the same rule: /dev/pts/N, root. */
+long
+proc_fchmodat(int dirfd, const char *upath, unsigned int mode)
+{
+	return (pty_node_setattr(dirfd, upath, 1, mode, 0));
+}
+
+static long
+pty_node_setattr(int dirfd, const char *upath, int chmod_, unsigned int a, unsigned int b)
+{
+	proc_t *p = curproc;
+	char path[NS_PATHMAX];
+	int r;
+
+	if (p == 0 || upath == 0)
+		return (-NS_EFAULT);
+	if ((r = ns_abspath(p, dirfd, upath, path)) != 0)
+		return (r);
+	if (!ns_under(path, "/dev/pts", 8) || path[8] != '/' || path[9] < '0' || path[9] > '7' || path[10] != 0)
+		return (-38 /* ENOSYS */);
+	if (p->p_euid != 0)
+		return (-1 /* EPERM */);
+	return (chmod_ ? pty_chmod(path[9] - '0', a) : pty_chown(path[9] - '0', a, b));
+}
+
 /* /dev/tty: a new descriptor on the caller's controlling tty (its session's pty slave), else ENXIO. */
 static long
 pty_open_ctty(proc_t *p, int flags)
@@ -4000,15 +4040,29 @@ proc_nanosleep(unsigned long ureq, unsigned long urem)
 	deadline = gethrtime() + (unsigned long)req.tv_sec * 1000000000UL +
 	    (unsigned long)req.tv_nsec;
 
-	while ((now = gethrtime()) < deadline)
+	while ((now = gethrtime()) < deadline) {
+		if (proc_sig_wakes(curproc))
+			break;		/* EINTR below: the signal is delivered on the way out */
 		thread_yield();
+	}
+	if (now < deadline) {
+		if (urem != 0) {
+			struct { long tv_sec; long tv_nsec; } rem;
+			unsigned long left = deadline - now;
+
+			rem.tv_sec = (long)(left / 1000000000UL);
+			rem.tv_nsec = (long)(left % 1000000000UL);
+			if (copyout(&rem, (void *)urem, sizeof (rem)) != 0)
+				return (-14 /* EFAULT */);
+		}
+		return (-4 /* EINTR */);
+	}
 
 	/*
-	 * We only return when the deadline has passed, so the remainder is always
-	 * zero. It is still written when asked for: a caller that loops on
-	 * `while (nanosleep(&req, &req))` after a signal would otherwise re-read
-	 * its ORIGINAL request and sleep twice. (Signals cannot interrupt this
-	 * yet -- when they can, this is where the true remainder goes.)
+	 * The deadline passed, so the remainder is zero. It is still written when
+	 * asked for: a caller that loops on `while (nanosleep(&req, &req))` after a
+	 * signal would otherwise re-read its ORIGINAL request and sleep twice. A
+	 * waking signal returns EINTR above with the true remainder (rvtty3c).
 	 */
 	if (urem != 0) {
 		struct {
