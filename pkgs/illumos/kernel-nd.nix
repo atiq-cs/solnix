@@ -27,7 +27,10 @@
 # port's _PR3 power resource turned off, as Linux's D3cold does; idle in D0 it heated
 # the X1E to the EC's cutoff), and 0006-xhci-ss-warm-reset.patch (a USB 3 root port
 # whose link did not train -- SS.Inactive, Compliance, Cold Attach -- reads as
-# connected and gets a warm reset, so a device plugged in before boot enumerates).
+# connected and gets a warm reset, so a device plugged in before boot enumerates), and
+# 0007-usbecm-link-state-on-disconnect.patch (an unplugged usbecm adapter reports link
+# DOWN, and UP on reconnect, so IP drops IFF_RUNNING, dhcpagent removes its routes and
+# traffic moves to the other interface).
 #
 # OUTPUT: kernel/, platform/i86pc/{kernel,amd64}/, usr/kernel/ from the
 # non-DEBUG build, plus boot/ (loader, forth, fonts) copied from the gate proto,
@@ -41,7 +44,8 @@
               ../../scripts/patches/0002-tzmon-thinkpad-hkey-enable.patch
               ../../scripts/patches/0003-usbecm-usb-pipe-xopen.patch
               ../../scripts/patches/0005-tzmon-thinkpad-dgpu-off.patch
-              ../../scripts/patches/0006-xhci-ss-warm-reset.patch ]
+              ../../scripts/patches/0006-xhci-ss-warm-reset.patch
+              ../../scripts/patches/0007-usbecm-link-state-on-disconnect.patch ]
 , onbld ? "/opt/onbld"
 , gcc ? "/usr/gcc/10"
 , perlVersion ? "5.42"
@@ -119,6 +123,8 @@ derivation {
     E=usr/src/uts/common/io/usb/clients/usbecm/usbecm.c
     if ! grep -q 'usb_pipe_xopen(ecmp->ecm_dip, &in_xdesc' $E || grep -q 'usb_pipe_open(ecmp->ecm_dip' $E; then
       echo "FATAL: usbecm usb_pipe_xopen patch not applied" >&2; exit 1; fi
+    grep -q 'usbecm_link_down(ecmp);' $E && grep -q 'usbecm_link_up(ecmp);' $E \
+      || { echo "FATAL: usbecm link-state-on-disconnect patch not applied" >&2; exit 1; }
 
     # env file: the gate.nix edits, plus no smatch (its binary lives in the
     # workspace tools proto, which +t does not build).
