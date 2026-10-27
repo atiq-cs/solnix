@@ -392,6 +392,15 @@ let
   srcPkgs = import ./base-src.nix { gate = gate'; libcSlice = libc; inherit world gcc buildTools; };
   # The Wayland + Mesa userland (./graphics), built like srcPkgs.
   graphics = import ./graphics { inherit (srcPkgs) mkSrcPkg pkgconf zlib; };
+  # The maintainer's headless CLI set (werk/meh home.packages), from source (./cli).
+  # Generic Rust packages on rust199 (./cargo.nix: vendorOf FOD + cargoPkg).
+  cargo = import ./cargo.nix {
+    rust = rust199; inherit gcc libc world; gate = gate'; gccLib = gcc.lib;
+    inherit (srcPkgs.nixChain) cacert;
+  };
+  # Go from source: go1.4 (C) -> 1.17 -> 1.20 -> 1.22 -> 1.24 -> 1.26 (./go.nix).
+  goChain = import ./go.nix { inherit gcc world; gate = gate'; gccLib = gcc.lib; inherit (srcPkgs.nixChain) cacert; };
+  cli = import ./cli { base = srcPkgs; inherit world graphics goChain; inherit (cargo) cargoPkg; };
   # COSMIC rust programs on rust199 + graphics (./graphics/cosmic.nix).
   cosmic = import ./graphics/cosmic.nix {
     rust = rust199; inherit gcc libc world; gate = gate'; gccLib = gcc.lib;
@@ -1036,6 +1045,9 @@ in
   inherit (graphics) meson samurai expat libffi wayland wayland-protocols libdrm mesa
     pixman xkeyboard-config libxkbcommon libdisplay-info seatd;
   inherit (cosmic) cosmic-comp cosmic-term;
+  # cargoLib.{vendorOf,cargoPkg}: build any Cargo.lock'd crate on rust199 (./cargo.nix).
+  cargoLib = cargo;
+  inherit (goChain) go go_1_4 go_1_17 go_1_20 go_1_22 go_1_24 go_1_26 go_1_27;
   inherit bsdfetch;
   xz = srcPkgs.nixChain.xz;
   # A C/C++ toolchain to put on PATH (nix-shell / nix profile install), the
@@ -1082,4 +1094,4 @@ in
   # the CORE-OS slices, each with a computed DT_NEEDED closure (./slices.nix).
   inherit slices;
   inherit (slices) core-utils oamuser halt smf zfs kernel;
-}
+} // cli
