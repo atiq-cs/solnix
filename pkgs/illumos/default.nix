@@ -370,6 +370,23 @@ let
   # libgcc_s) is the C++/unwind runtime every shipped C++ binary links.
   gcc = import ./gcc-src.nix { gate = gate'; libcSlice = libc; };
 
+  # Rust FROM SOURCE (./rust-src.nix), the N-1 chain of docs/rust-illumos-bootstrap.md.
+  # stage0 is the OI 1.97.1 seed tree, fetched by its NarHash from the cache (the
+  # same store path, c821qgb6, as a fixed-output derivation, so pure eval works).
+  rustSeedStage = import <nix/fetchurl.nix> {
+    name = "rust-seed-stage";
+    url = "https://cache.solnix.io/nar/1pl9c29vgwsknlaz7nqmfk2dxkhn3lni31z7yrszxv0nag9g1bw1.nar.xz";
+    sha256 = "01cwvndhz2lm2wkjpsrvmna36msjnirbffb1s2s5c9nqbvw6jsir";
+    unpack = true;
+  };
+  mkRust = args: import ./rust-src.nix ({
+    inherit gcc libc world; gate = gate'; inherit (srcPkgs) openssl zlib;
+  } // args);
+  rust198 = mkRust { version = "1.98.0"; stage0 = rustSeedStage; seedStage0 = true;
+    sha256 = "271fa73d8174f53d713c46a8310da7bf7cfdcfb8b7cfd1c2b74b84a83ae9fb1e"; };
+  rust199 = mkRust { version = "1.99.0"; stage0 = rust198;
+    sha256 = "cc41916a8c84f5d9ec4f55561b44e39f43b647b133f8a6f51be9ea13c83f7036"; };
+
   # From-source packages the gate does not provide (./base-src.nix). zlib and
   # libxml2 replace the host-copied externalLibs; world is built on top of them.
   srcPkgs = import ./base-src.nix { gate = gate'; libcSlice = libc; inherit world gcc buildTools; };
@@ -973,6 +990,7 @@ let
 in
 {
   inherit libc rtld ld sys base-tools systemPath nix cached starter gcc world early stock drivers kernelNd worldMan;
+  inherit rustSeedStage rust198 rust199;
   # seedBuildTools -- the default build-tool set a bare solnix system passes as
   # buildTools so from-source builds resolve gmake/tar/grep/sed/gstrip/gzip/xz
   # from the store (not /usr/gnu). host-pkgs.nix wires it as the default for a
