@@ -496,6 +496,12 @@ let
     mkdir -p $out/etc/ssl/certs
     ln -s ${pkgs.solnix.nixChain.cacert}/etc/ssl/certs/ca-bundle.crt $out/etc/ssl/certs/ca-certificates.crt
     ln -s ${pkgs.solnix.nixChain.cacert}/etc/ssl/certs/ca-bundle.crt $out/etc/ssl/certs/ca-bundle.crt
+    # The from-source openssl's OPENSSLDIR is /etc/openssl (base-src.nix), so its default
+    # verify file is /etc/openssl/cert.pem: without it wget fails "cannot verify certificate"
+    # (measured on the 26.11 DP AMI: wget rc 5 while curl and fetch, which name the bundle,
+    # succeed). nixpkgs' openssl uses /etc/ssl and NixOS fills it from cacert; same bundle here.
+    mkdir -p $out/etc/openssl
+    ln -s ${pkgs.solnix.nixChain.cacert}/etc/ssl/certs/ca-bundle.crt $out/etc/openssl/cert.pem
     # /etc/shadow must be root-only (0400) or login refuses it.
     [ -e $out/etc/shadow ] && chmod 0400 $out/etc/shadow || true
   '';
