@@ -17,5 +17,7 @@ gen() { # gen <soname> <pcname> <version> <files...>
     "$O" "$O" "$pcn" "$ver" "${so#lib}" | sed 's/\.so\.[0-9]*$//' > "$O/pkgconfig/$pcn.pc"
   echo "STUB $so: $n symbols" >&2
 }
-gen libudev.so.1 libudev 255 "$V"/libudev-sys/src/lib.rs
-gen libinput.so.10 libinput 1.21.0 "$V"/input-sys/src/bindings/*.rs
+# Only for the -sys crates this app vendors (cosmic-comp has both; most clients neither).
+[ -d "$V/libudev-sys" ] && gen libudev.so.1 libudev 255 "$V"/libudev-sys/src/lib.rs
+[ -d "$V/input-sys" ] && gen libinput.so.10 libinput 1.21.0 "$V"/input-sys/src/bindings/*.rs
+true

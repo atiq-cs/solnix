@@ -44,11 +44,21 @@ edit rustix-0.38.44 src/ioctl/patterns.rs "'#[cfg(any(linux_kernel, bsd))]'" "'#
 #    same three cuts as solnix-pkgs cosmic-term.nix.
 wg='any(target_os = "linux", target_os = "android", target_os = "redox")'
 wn='any(target_os = "linux", target_os = "android", target_os = "redox", target_os = "illumos", target_os = "solaris")'
+if have wayland-backend && ! grep -qF 'target_os = "redox"' wayland-backend/src/rs/socket.rs; then
+  # 0.3.11 (cosmic-randr, cosmic-idle): no redox arms yet, so the gates are linux/android and macos.
+  wg='any(target_os = "linux", target_os = "android")'
+  wn='any(target_os = "linux", target_os = "android", target_os = "illumos", target_os = "solaris")'
+  ms='any(target_os = "macos", target_os = "illumos", target_os = "solaris")'
+  edit wayland-backend src/rs/socket.rs "'#[cfg(not(target_os = \"macos\"))]'" "'#[cfg(not($ms))]'"
+  edit wayland-backend src/rs/socket.rs "'#[cfg(target_os = \"macos\")]\n        let flags'" "'#[cfg($ms)]\n        let flags'"
+  edit wayland-backend src/rs/socket.rs "'#[cfg(target_os = \"macos\")]\n        for fd'" "'#[cfg($ms)]\n        for fd'"
+else
+  edit wayland-backend src/rs/socket.rs "'target_os = \"macos\", target_os = \"redox\"'" \
+    "'target_os = \"macos\", target_os = \"redox\", target_os = \"illumos\", target_os = \"solaris\"'"
+fi
 for f in src/rs/server_impl/common_poll.rs src/rs/server_impl/handle.rs; do
   edit wayland-backend $f "'$wg'" "'$wn'"
 done
-edit wayland-backend src/rs/socket.rs "'target_os = \"macos\", target_os = \"redox\"'" \
-  "'target_os = \"macos\", target_os = \"redox\", target_os = \"illumos\", target_os = \"solaris\"'"
 
 # 3. reis (libei): illumos recvmsg has no MSG_CMSG_CLOEXEC.
 edit reis src/util.rs "'            net::RecvFlags::CMSG_CLOEXEC,'" \
@@ -109,6 +119,40 @@ fi
 #    /scratch/solnix/gpu3/t/shm.c), the same fix as softbuffer's (item 7).
 edit smithay src/utils/sealed_file.rs "'            let mut shm_name = name.to_bytes().to_owned();'" \
   "'            let mut shm_name = b\"/\".to_vec();\n            shm_name.extend_from_slice(name.to_bytes());'"
+
+# 10. pam-sys 1.0.0-alpha5 + pam-client 0.5 (cosmic-greeter): illumos libpam is Solaris PAM.
+#     bindgen: signed macro constants (the Linux arm; the API takes int). pam-client: its
+#     target_os = "solaris" arms (pam_conv passes a pointer to an ARRAY of pam_message,
+#     illumos pam_framework.c:2676-2708) cover illumos too; MODULE_UNKNOWN, BAD_ITEM,
+#     CONV_AGAIN, INCOMPLETE are Linux-PAM codes illumos <security/pam_appl.h> lacks; the
+#     bindgen'd pam_message.msg is *mut (no const in the illumos header).
+if [ -f pam-sys/wrapper.h ]; then  # the bindgen pam-sys (1.0); greetd's 0.5 has prebuilt bindings
+  edit pam-sys build.rs "'    } else if cfg!(target_os = \"freebsd\") || cfg!(target_os = \"netbsd\") {'" \
+  "'    } else if cfg!(target_os = \"illumos\") {\n        builder = builder.default_macro_constant_type(bindgen::MacroTypeVariation::Signed);\n    } else if cfg!(target_os = \"freebsd\") || cfg!(target_os = \"netbsd\") {'"
+fi
+if have pam-client; then
+  python3 - "$V/pam-client/src/ffi.rs" <<'PY2'
+import sys
+p = sys.argv[1]; s = open(p).read()
+for g in ('#[cfg(not(target_os = "solaris"))]', '#[cfg(target_os = "solaris")]'):
+    if s.count(g) != 2: sys.exit("FATAL: pam-client ffi.rs: %r x%d (want 2)" % (g, s.count(g)))
+s = s.replace('#[cfg(not(target_os = "solaris"))]', '#[cfg(not(any(target_os = "solaris", target_os = "illumos")))]')
+s = s.replace('#[cfg(target_os = "solaris")]', '#[cfg(any(target_os = "solaris", target_os = "illumos"))]')
+# msg_content_as_cstr takes &*const c_char: a *mut -> *const cast is the same address, and
+# the returned &CStr borrows the C string, not the pointer variable (so transmute the ref).
+o = "msg_content_as_cstr(&message.msg)"
+if s.count(o) != 4: sys.exit("FATAL: pam-client ffi.rs: msg_content_as_cstr x%d" % s.count(o))
+s = s.replace(o, "msg_content_as_cstr(&*(&message.msg as *const *mut c_char as *const *const c_char))")
+open(p, "w").write(s)
+PY2
+  echo "pam-client src/ffi.rs" >> "$V/.illumos-edited"
+  # Linux-PAM-only codes: kept as variants (EnumRepr evaluates every variant, cfg or not), with
+  # values above PAM_TOTAL_ERRNUM (28) that illumos libpam never returns. This vendor dir is
+  # only ever built for illumos.
+  i=100; for c in MODULE_UNKNOWN BAD_ITEM CONV_AGAIN INCOMPLETE; do
+    edit pam-client src/lib.rs "'\t$c = PAM_$c as c_int,\n'" "'\t$c = $i, // not in illumos libpam\n'"; i=$((i+1))
+  done
+fi
 
 # Required per app: fail if an expected crate was not vendored at all.
 for c in ${REQUIRED:-}; do have $c || { echo "FATAL: required crate $c not vendored" >&2; exit 1; }; done

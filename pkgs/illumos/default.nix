@@ -391,7 +391,7 @@ let
   # libxml2 replace the host-copied externalLibs; world is built on top of them.
   srcPkgs = import ./base-src.nix { gate = gate'; libcSlice = libc; inherit world gcc buildTools; };
   # The Wayland + Mesa userland (./graphics), built like srcPkgs.
-  graphics = import ./graphics { inherit (srcPkgs) mkSrcPkg pkgconf zlib; };
+  graphics = import ./graphics { inherit (srcPkgs) mkSrcPkg pkgconf zlib; inherit world; };
   # The maintainer's headless CLI set (werk/meh home.packages), from source (./cli).
   # Generic Rust packages on rust199 (./cargo.nix: vendorOf FOD + cargoPkg).
   cargo = import ./cargo.nix {
@@ -1043,8 +1043,11 @@ in
   inherit (srcPkgs) ncurses less htop top libevent tmux coreutils gnugrep gnused gnutar findutils diffutils jq gettext home-manager xorgproto lndir hostname libiconv;
   inherit (srcPkgs) gzip nano rsync smartmontools tree wget db1 nvi;
   inherit (graphics) meson samurai expat libffi wayland wayland-protocols libdrm mesa
-    pixman xkeyboard-config libxkbcommon libdisplay-info seatd;
-  inherit (cosmic) cosmic-comp cosmic-term;
+    pixman xkeyboard-config libxkbcommon libdisplay-info seatd dbus;
+  inherit (cosmic) cosmic-comp cosmic-term cosmic-session cosmic-panel cosmic-applets cosmic-launcher
+    cosmic-app-library cosmic-notifications cosmic-osd cosmic-bg cosmic-workspaces cosmic-randr cosmic-idle
+    cosmic-settings cosmic-files cosmic-edit cosmic-store cosmic-screenshot cosmic-greeter greetd
+    open-sans noto-sans noto-sans-mono fira-mono hicolor-icon-theme pop-icon-theme cosmic-icons;
   # cargoLib.{vendorOf,cargoPkg}: build any Cargo.lock'd crate on rust199 (./cargo.nix).
   cargoLib = cargo;
   inherit (goChain) go go_1_4 go_1_17 go_1_20 go_1_22 go_1_24 go_1_26 go_1_27;

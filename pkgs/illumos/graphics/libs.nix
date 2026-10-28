@@ -1,5 +1,5 @@
 # graphics/libs.nix -- the C libraries under the Wayland/Mesa stack, from source.
-{ mkSrcPkg, tools, pkgconf, zlib }:
+{ mkSrcPkg, tools, pkgconf, zlib, world }:
 let m = tools.mesonBuild; pc = "export PATH=${pkgconf}/bin:$PATH"; in
 rec {
   expat = mkSrcPkg {
@@ -47,6 +47,34 @@ rec {
     build = ''
       ${pc}
       ${m "-Dtests=false"}
+    '';
+  };
+
+  # The reference D-Bus daemon + libdbus-1 (NixOS pkgs.dbus): the session bus cosmic-session
+  # and every COSMIC app talk on (start-cosmic runs dbus-run-session). Prefix-relative config
+  # (session.conf in $out/share/dbus-1), so a session bus needs nothing in /etc. No systemd,
+  # no X11 autolaunch; poll, not epoll (NixOS enables epoll on Linux only). -lsocket: meson's
+  # has_function(socket) passes, but tools/ links with -z defs and no network_libs.
+  dbus = mkSrcPkg {
+    pname = "dbus"; version = "1.16.2";
+    src = { url = "https://dbus.freedesktop.org/releases/dbus/dbus-1.16.2.tar.xz";
+            sha256 = "0ba2a1a4b16afe7bceb2c07e9ce99a8c2c3508e5dec290dbb643384bd6beb7e2"; };
+    deps = [ expat world ];   # world: libbsm (ADT audit, the Solaris arm) for the launch helper
+    build = ''
+      # meson calls illumos "sunos"; dbus's Solaris arms test for "solaris" (meson.build:174
+      # -D_XOPEN_SOURCE=500 for SCM_RIGHTS fd passing; :535 console owner file; :1382 summary). Same OS family.
+      grep -c "host_os.contains('solaris')" meson.build | grep -qx 3 || { echo "FATAL: dbus solaris anchors" >&2; exit 1; }
+      sed -i "s/host_os.contains('solaris')/(host_os.contains('solaris') or host_os == 'sunos')/" meson.build
+      # ...and upstream writes ' -D_XOPEN_SOURCE=500' with a leading space, so
+      # cc.get_supported_arguments() drops it (msghdr then has no msg_control: measured).
+      grep -q "' -D_XOPEN_SOURCE=500'" meson.build || { echo "FATAL: dbus XOPEN anchor" >&2; exit 1; }
+      sed -i "s/' -D_XOPEN_SOURCE=500'/'-D_XOPEN_SOURCE=500'/" meson.build
+      ${pc}
+      ${m "-Dsystemd=disabled -Dx11_autolaunch=disabled -Dselinux=disabled -Dapparmor=disabled -Dlibaudit=disabled -Depoll=disabled -Dinotify=disabled -Dkqueue=disabled -Dlaunchd=disabled -Ddoxygen_docs=disabled -Dducktype_docs=disabled -Dxml_docs=disabled -Dqt_help=disabled -Dmodular_tests=disabled -Dsession_socket_dir=/tmp '-Dc_link_args=-lsocket -lnsl'"}
+      # run check: dbus-run-session (what start-cosmic uses) starts a bus that answers ListNames.
+      "$out/bin/dbus-run-session" -- "$out/bin/dbus-send" --session --print-reply --dest=org.freedesktop.DBus \
+        /org/freedesktop/DBus org.freedesktop.DBus.ListNames | grep -q '"org.freedesktop.DBus"' \
+        || { echo "FATAL: session bus did not answer ListNames" >&2; exit 1; }
     '';
   };
 

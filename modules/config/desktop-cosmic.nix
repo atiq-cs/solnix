@@ -1,9 +1,16 @@
 # services.desktopManager.cosmic -- the COSMIC desktop on illumos, NixOS's
 # option name (nixos/modules/services/desktop-managers/cosmic.nix). DEFAULT OFF.
 #
-# Installs pkgs.solnix.{wayland,libdrm,mesa}, points the GL/GBM/Vulkan loaders at
-# Mesa, and declares an SMF service starting the compositor on the i915 DRM node
-# (NixOS: greetd). How and why this departs from NixOS: docs/x1-desktop-userland.md.
+# Like NixOS: the COSMIC packages go in the system closure (environment.systemPackages),
+# with the fonts COSMIC defaults to (Fira, Noto, Open Sans) and its icon themes, and the
+# greeter is cosmic-greeter under greetd (services.displayManager.cosmic-greeter). How
+# this departs from NixOS, and why (illumos has no systemd or logind):
+#   * SMF services instead of systemd units: greetd, cosmic-greeter-daemon, the
+#     system bus is illumos's own dbus service, and a seatd daemon (NixOS without logind).
+#   * PAM is illumos libpam: both services fall to the stock pam.conf "other" stack.
+#   * /dev/dri access follows illumos's logindevperm (the console user owns it).
+#   * no xdg-desktop-portal-cosmic and no cosmic-settings-daemon: both hard-need PipeWire.
+#   * cosmic-store only if flatpak were available (as NixOS); it is not, so it is off.
 #
 # It REFUSES to enable unless hardware.graphics.i915.attachAtBoot: a card0 opener
 # before i915 stage B passes is what src/drm-port/i915/STAGED-ATTACH-PLAN.md forbids.
@@ -11,25 +18,37 @@
 let
   cfg = config.services.desktopManager.cosmic;
   inherit (lib) mkOption mkEnableOption types mkIf;
-  mesa = pkgs.solnix.mesa;
-  # NixOS: logind makes /run/user/<uid>. Here the method (run as the user) makes
-  # a 0700 dir it owns; one pre-created by someone else fails the start.
-  start = pkgs.writeShellScript "cosmic-session-start" ''
-    d=/tmp/cosmic-runtime-${cfg.user}; mkdir -m 0700 -p "$d" && [ -O "$d" ] || exit 1
-    export XDG_RUNTIME_DIR="$d"; exec ${cfg.compositor}/bin/cosmic-comp
-  '';
+  s = pkgs.solnix;
+  mesa = s.mesa;
+  greeterUid = 30080;   # NixOS: isSystemUser (dynamic); here a fixed system uid
 in
 {
   options.services.desktopManager.cosmic = {
     enable = mkEnableOption "the COSMIC desktop environment (needs i915 attached at boot)";
-    compositor = mkOption {
-      type = types.nullOr types.package;
-      default = null;
-      description = "bin/cosmic-comp. null (no session service) until cosmic-comp builds on illumos.";
+    packages = mkOption {
+      type = types.listOf types.package;
+      default = with s; [
+        cosmic-comp cosmic-session cosmic-panel cosmic-applets cosmic-launcher cosmic-app-library
+        cosmic-notifications cosmic-osd cosmic-bg cosmic-workspaces cosmic-idle cosmic-randr
+        cosmic-settings cosmic-files cosmic-edit cosmic-term cosmic-screenshot cosmic-greeter
+        dbus cosmic-icons pop-icon-theme hicolor-icon-theme
+      ];
+      description = "The COSMIC packages installed (NixOS: the core list plus the optional apps).";
     };
-    user = mkOption {
-      type = types.str;
-      description = "User the session runs as (NixOS: services.displayManager.autoLogin.user).";
+    fonts = mkOption {
+      type = types.listOf types.package;
+      default = with s; [ fira-mono noto-sans noto-sans-mono open-sans ];
+      description = "Fonts on the fontconfig path (NixOS: fonts.packages = [ fira noto-fonts open-sans ]).";
+    };
+    greeter = mkOption {
+      type = types.bool;
+      default = true;
+      description = "Start cosmic-greeter under greetd at boot (NixOS: services.displayManager.cosmic-greeter).";
+    };
+    vt = mkOption {
+      type = types.int;
+      default = 7;
+      description = "Virtual console greetd runs on (/dev/vt/N; vt(4I) keeps VT 1 for the system console).";
     };
     drmDevice = mkOption {
       type = types.str;
@@ -38,37 +57,5 @@ in
     };
   };
 
-  config = mkIf cfg.enable {
-    assertions = [{
-      assertion = config.hardware.graphics.i915.attachAtBoot;
-      message = ''
-        services.desktopManager.cosmic opens the i915 DRM node, which runs the first
-        inteldrm modeset. src/drm-port/i915/STAGED-ATTACH-PLAN.md allows that only
-        after stage 1 passed; set hardware.graphics.i915.attachAtBoot first.
-      '';
-    }];
-
-    environment.systemPackages = [ pkgs.solnix.wayland pkgs.solnix.libdrm mesa ]
-      ++ lib.optional (cfg.compositor != null) cfg.compositor;
-
-    # libEGL/libgbm find iris/GBM in Mesa's own prefix (its compiled-in dri and gbm
-    # paths), so no /run/opengl-driver indirection is needed. The ICD file is for
-    # whichever Vulkan loader an app ships (NixOS: hardware.graphics.extraPackages).
-    environment.variables = {
-      VK_DRIVER_FILES = "${mesa}/share/vulkan/icd.d/intel_icd.x86_64.json";
-      XDG_SESSION_TYPE = "wayland";
-      XDG_CURRENT_DESKTOP = "COSMIC";
-    };
-
-    smf.services.cosmic-session = mkIf (cfg.compositor != null) {
-      category = "application";
-      description = "COSMIC Wayland session (cosmic-comp on the i915 DRM node)";
-      inherit (cfg) user;
-      environment = {
-        COSMIC_RENDER_DEVICE = cfg.drmDevice;
-      };
-      start.exec = "/usr/bin/bash ${start}";
-      requires = [ "svc:/milestone/multi-user:default" ];
-    };
-  };
+  config = mkIf cfg.enable (import ./desktop-cosmic-config.nix { inherit config lib pkgs cfg s mesa greeterUid; });
 }
