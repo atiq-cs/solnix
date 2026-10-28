@@ -100,6 +100,12 @@ derivation {
     cp -r "$portSrc" "$W/port"; chmod -R u+w "$W/port"
     cp -r "$obsdDrm" "$W/obsd"; chmod -R u+w "$W/obsd"
     P=$W/port; O=$W/obsd; C=$P/obsd-compat
+    # kmap_atomic_prot / kunmap_atomic come from obsd-compat/obsd_vm.c (direct map;
+    # OpenBSD's one shared VA raced across CPUs here, lixi vmdump.2). Rename the
+    # OpenBSD definitions away; fail if the anchors moved.
+    /usr/gnu/bin/sed -i 's/^kmap_atomic_prot(struct vm_page \*pg, pgprot_t prot)$/obsd_orig_kmap_atomic_prot(struct vm_page *pg, pgprot_t prot)/; s/^kunmap_atomic(void \*addr)$/obsd_orig_kunmap_atomic(void *addr)/' "$O/drm_linux.c"
+    [ "$(grep -c '^obsd_orig_k' "$O/drm_linux.c")" -eq 2 ] \
+      || { echo "FATAL: drm_linux.c kmap_atomic anchors not found" >&2; exit 1; }
 
     echo "obsd drm $(cat "$O/OPENBSD_REV")" >&2
 
