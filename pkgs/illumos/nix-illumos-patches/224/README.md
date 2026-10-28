@@ -10,7 +10,7 @@ clean Nix 2.24.15 source tree, in numeric order. Discovery and proofs are in
 Modern Nix already partitions its Linux-only code (`platform.mk` sets
 `HOST_SOLARIS`/`HOST_UNIX`, so seccomp/namespaces/personality never compile) and
 feature-detects statvfs/pipe2/xattr, so the 2.3.16 hazard list collapses to
-these seven; 0008 adds the solnix: scheme.
+these seven; 0008 adds the solnix: scheme, 0009 build users.
 
 | # | file | what / why |
 |---|------|------------|
@@ -22,6 +22,7 @@ these seven; 0008 adds the solnix: scheme.
 | 0006 | `src/nix/unix/daemon.cc` | illumos has neither `SO_PEERCRED` nor `LOCAL_PEERCRED`; learn the client uid with `getpeerucred()` so `trusted-users` can match |
 | 0007 | `src/libstore/gc.cc` | find runtime GC roots through `/proc/<pid>/path/*` under `__sun`, and skip ENAMETOOLONG/EINVAL in `readProcLink` (illumos `/proc/<pid>/cwd` readlinks to 0 bytes, so `nix-store --gc` aborted with "read_symlink: File name too long [/proc/0/cwd]") |
 | 0008 | `src/libfetchers/solnix.cc` (new), `fetchers.cc` | NOT an illumos fix: the `solnix:` flake input scheme (`solnix:#x`, `solnix:<branch|tag|commit-prefix>#x`, `solnix:<repo>/<ref>#x`), rewritten to a plain git input on git.solnix.io, so locks are ordinary git locks. It resolves tags and abbreviated commit ids, which a registry entry cannot. Proven 12/12 on Linux (2.24.14) and illumos (this build), with negative controls |
+| 0009 | `src/libstore/unix/user-lock.cc`, `src/libutil/unix/processes.cc` | build users: `useBuildUsers()` was Linux/macOS-only, so the daemon ran every build as root; enable it under `__sun`. `killUser()`'s `kill(-1)` also kills the caller on illumos (the child died of its own SIGKILL and every build failed), so `__sun` uses `sigsendset(POP_DIFF, P_UID uid, P_PID self)` |
 
 Patch 0003 is the re-forward-port of the 2.3.16 patch-0002 (the pty code moved
 from `build.cc` to `local-derivation-goal.cc`). Patch 0004 is new to the modern

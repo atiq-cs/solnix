@@ -344,6 +344,17 @@ closure_contract_checks() {
   if find "$R/root" "$R/etc/ssh" -name 'authorized_keys*' -size +0 2>/dev/null | grep -q .; then
     _fail "an authorized_keys file is baked into the media"
   else _ok "no authorized_keys baked into the media"; fi
+  # 7b. nix's build-users-group has members and every member is in passwd (the 26.11
+  #     DP AMI's identity scrub stripped nixbld1..32, uid 30001.., and left the group).
+  local _bug _bmiss
+  _bug=$(sed -n 's/^[[:space:]]*build-users-group[[:space:]]*=[[:space:]]*\([^[:space:]]*\).*/\1/p' "$R/etc/nix/nix.conf" 2>/dev/null | tail -1)
+  if [ -n "$_bug" ]; then
+    _bmiss=$(awk -F: -v g="$_bug" 'FILENAME~/passwd$/{u[$1]=1; next} $1==g{n=split($4,m,","); if(!n) print "(no members)"; for(i=1;i<=n;i++) if(!(m[i] in u)) print m[i]}' \
+      "$R/etc/passwd" "$R/etc/group" 2>/dev/null | head -3)
+    grep -q "^$_bug:" "$R/etc/group" 2>/dev/null || _bmiss="(no group $_bug)"
+    if [ -z "$_bmiss" ]; then _ok "nix build-users-group $_bug: every member is in passwd"
+    else _fail "nix build users missing: build-users-group $_bug, not in passwd: $(echo $_bmiss)"; fi
+  fi
   # 8. a TLS trust store at the names curl/git/openssl look for (NixOS security/ca.nix),
   #    resolving into the media's store. Without it the media's curl failed every HTTPS
   #    fetch with rc 77 and the installer reported "network is NOT up" (X1, closure1).

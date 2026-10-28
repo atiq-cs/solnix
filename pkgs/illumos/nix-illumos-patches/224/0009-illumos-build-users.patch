@@ -1,0 +1,67 @@
+Build users on illumos (solnix 0009).
+
+Without this the daemon runs every build as root on illumos, whatever
+build-users-group says: useBuildUsers() is true only on Linux and macOS.
+Enable it under __sun as on macOS (a non-empty build-users-group, daemon
+running as root); the rest of the path (getgrnam/getpwnam, the userpool
+lock, setgroups/setgid/setuid, chown of the build dir and the pty, the
+output uid check and lchown back) is POSIX and unchanged.
+
+killUser() needs a change too. It forks, setuid(uid), kill(-1, SIGKILL).
+illumos kill(-1) also signals the CALLER (uts/common/syscall/sigqueue.c
+sigqkill -> sigsendset(P_ALL, P_MYID); dotoprocs skips only SSYS and
+init). Linux excludes it, and nix passes macOS's kill a third argument
+false so it does there. So the child dies of its
+own SIGKILL, wait() returns a signal status and killUser throws "cannot
+kill processes for uid", failing every build: startBuilder calls
+killSandbox before each one. Measured on dixi (solnix 26.11, root):
+  su nobody -c 'sleep 300 & kill -9 -1; echo SURVIVED'
+  -> "ksh93: 886: Killed", rc 265: the caller died, its sleeper too;
+  root's session survived (after setuid to a non-root uid the process
+  has only basic privileges, so hasprocperm limits it to that uid).
+On __sun use sigsendset(POP_DIFF, P_UID uid, P_PID self): every process
+whose effective uid is uid, except this one. EPERM/ESRCH (none left)
+still end the loop. P_UID, not P_ALL: it holds even if the child kept a
+privilege. Gap: a setuid program the builder ran (euid 0, ruid uid) is
+not matched; Linux's kill(-1) would kill it.
+
+--- a/src/libstore/unix/user-lock.cc	2025-06-24 10:08:50.000000000 -0400
++++ b/src/libstore/unix/user-lock.cc	2026-10-28 15:45:46.608198657 -0400
+@@ -196,7 +196,7 @@
+     #if __linux__
+     static bool b = (settings.buildUsersGroup != "" || settings.autoAllocateUids) && isRootUser();
+     return b;
+-    #elif __APPLE__
++    #elif __APPLE__ || __sun
+     static bool b = settings.buildUsersGroup != "" && isRootUser();
+     return b;
+     #else
+--- a/src/libutil/unix/processes.cc	2025-06-24 10:08:50.000000000 -0400
++++ b/src/libutil/unix/processes.cc	2026-10-28 15:45:46.608734798 -0400
+@@ -22,6 +22,11 @@
+ # include <sys/syscall.h>
+ #endif
+ 
++#ifdef __sun
++# include <signal.h>
++# include <sys/procset.h>
++#endif
++
+ #ifdef __linux__
+ # include <sys/prctl.h>
+ # include <sys/mman.h>
+@@ -144,6 +149,14 @@
+                which means "follow POSIX", which we don't want here
+                  */
+             if (syscall(SYS_kill, -1, SIGKILL, false) == 0) break;
++#elif defined(__sun)
++            /* illumos kill(-1) signals the caller too (sigqkill: P_ALL
++               minus system processes and init only), so this child died
++               of its own SIGKILL and wait() reported failure. Send to
++               every process of uid except ourselves. */
++            procset_t set;
++            setprocset(&set, POP_DIFF, P_UID, uid, P_PID, getpid());
++            if (sigsendset(&set, SIGKILL) == 0) break;
+ #else
+             if (kill(-1, SIGKILL) == 0) break;
+ #endif

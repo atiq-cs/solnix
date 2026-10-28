@@ -28,6 +28,14 @@ SCRUB="${SCRUB:-/root/lib-core-scrub.sh}"
 
 die() { echo "FATAL: $*" >&2; exit 1; }
 log() { printf '\n=== %s ===\n' "$*" >&2; }
+# scrub_names <BE passwd> <toplevel passwd>: personal accounts to strip = uid>=1000,
+# not a system placeholder, and not declared by the toplevel. A missing toplevel
+# passwd declares nothing (strip all personal), never "strip nothing".
+scrub_names() {
+  awk -F: -v tl="$2" 'FILENAME==tl{decl[$1]=1; next}
+           ($3+0)>=1000 && $1!="nobody" && $1!="noaccess" && $1!="nobody4" && !($1 in decl){print $1}' \
+    $( [ -r "$2" ] && echo "$2" ) "$1"
+}
 
 [ "$(id -u)" = 0 ] || die "run as root"
 [ -d "$CS" ] || die "current-system $CS not found"
@@ -111,12 +119,14 @@ if zpool import -N -f -R "$ALT" "$_pid" 2>/dev/null; then
     # as the BE base, so its /etc/{passwd,shadow,group} carry the build host's
     # personal accounts (e.g. gburd). A PUBLIC image must be identity-free (root
     # only; installer/first-boot creates the operator). Strip any non-system
-    # (uid>=1000) account + its home from the BE. Keeps root + system accounts.
+    # (uid>=1000) account + its home from the BE. Keeps root + system accounts,
+    # and every account the toplevel declares (users.users): nix.nix's nixbld1..32
+    # are uid 30001.., and stripping them shipped a nixbld group with no users
+    # (the 26.11 DP AMI, y56y9686). scripts/test-identity-scrub.sh checks this.
     echo "=== identity-free scrub (strip personal uid>=1000 accounts) ==="
     _pw="$BEROOT/etc/passwd"
     if [ -f "$_pw" ]; then
-      # names to strip = every uid>=1000 that is not a system placeholder.
-      _strip=$(awk -F: '($3+0)>=1000 && $1!="nobody" && $1!="noaccess" && $1!="nobody4"{print $1}' "$_pw" 2>/dev/null)
+      _strip=$(scrub_names "$_pw" "$CS/etc/passwd")
       for _u in $_strip; do
         _h=$(awk -F: -v u="$_u" '$1==u{print $6}' "$_pw" 2>/dev/null)
         awk -F: -v u="$_u" '$1!=u' "$_pw" > "$_pw.c" && mv "$_pw.c" "$_pw"
