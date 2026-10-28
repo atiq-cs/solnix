@@ -1,0 +1,16 @@
+──────────────────────────────────────────────────────────────────────
+ Solnix keeps its package cache fresh as a community. Your machine can
+ help: build queued packages in idle time, seed what it has fetched to
+ other users, and report its platform (architecture + illumos flavour,
+ resolved to a country and then forgotten — never your IP or a machine
+ ID) so we know where to aim effort.
+
+ This is OFF until you choose it. To join, set in your configuration:
+
+     solnix.privacy.enable = false;   # opt into the community cache
+
+ To go further and become a trusted builder that adds to the cache, see
+ the handbook — it needs your host's SSH identity and (optionally) a
+ contact address:
+     https://solnix.io/docs/handbook/keeping-solnix-fresh.html
+──────────────────────────────────────────────────────────────────────

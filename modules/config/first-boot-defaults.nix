@@ -59,7 +59,7 @@ in
         admin (root):        pfexec <cmd>   (or: sudo <cmd>)
         docs:                https://solnix.io
 
-    '';
+    '' + lib.optionalString config.solnix.privacy.enable (builtins.readFile ./community/motd.txt + "\n");   # handoff 2026-10-28 section 1
 
     # 6. Nix GC + store optimise so /nix doesn't grow unbounded (NixOS weekly-GC analog).
     nix.settings = {

@@ -36,6 +36,10 @@
   ./config/desktop-cosmic.nix
   ./config/shell-environment.nix
   ./config/nix.nix
+  ./config/community/options.nix
+  ./config/community/census.nix
+  ./config/community/cache-proxy.nix
+  ./config/community/builder.nix
   ./system/boot/init/smf.nix
   ./system/activation
 ]
