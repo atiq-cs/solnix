@@ -1,0 +1,21 @@
+--- /scratch/solnix/aa64/gate/usr/src/uts/common/io/ena/ena_admin.c	2026-10-21 10:15:21.794471766 -0400
++++ /tmp/p10t/usr/src/uts/common/io/ena/ena_admin.c	2026-10-27 22:47:04.380830460 -0400
+@@ -250,6 +250,18 @@
+ 
+ 		if (gethrtime() > expire) {
+ 			/*
++			 * solnix: one last look at the CQ.  The deadline is judged
++			 * after the sleep, and a single sleep can overrun it (measured:
++			 * one delay(1 ms) returned after 685 ms on c6gd.metal while the
++			 * response was already in the CQ).  Without this re-read a
++			 * completed command is reported as a timeout and the device is
++			 * reset.
++			 */
++			ena_admin_process_responses(ena);
++			if (!ctx->ectx_pending)
++				break;
++
++			/*
+ 			 * We have no visibility into the device to
+ 			 * confirm it is making progress on this
+ 			 * command. At this point the driver and

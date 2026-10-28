@@ -1,26 +1,28 @@
-# Recreating dixa (c6gd.metal) from the solnix aa64g AMI
+# Recreating dixa (c6gd.metal) from the solnix aa64h AMI
 
-Track aa64g, 2026-10-27. The owning account is solnix-ami (788352824872). All AMIs below are private.
+Track aa64h, 2026-10-28 (supersedes the aa64g AMIs). The owning account is solnix-ami (788352824872). All AMIs below are private.
 
 ## The AMIs
 
-All are copies of one verified image: raw sha256 `c97190582b017b42544310cea56f900730d0665594fdbd19f8e30c71147b2539`, banked at
-floki `~/solnix-bank/ami/aarch64-6cd2521c1e-aa64g-20261027/aa64g-1.img.gz`.
+All are copies of one verified image: raw sha256 `0709fc1003f9fbd83f39ddc2932d0ec470cca13af06e5b3e5ea1fdee407ba78c`, banked at
+floki `~/solnix-bank/ami/aarch64-6cd2521c1e-aa64h-20261028/aa64h-f1.img.gz` (gz `6c1dd822...`). It is the aa64g image with two ena
+fixes in the kernel (p8: a failed attach no longer panics; p10: an admin command that completed during an overlong sleep no longer
+reports a timeout). Userland, nix and the toplevel are byte-identical to aa64g's.
 
 | region | AMI | snapshot | boot-tested |
 |---|---|---|---|
-| us-west-2 (source) | `ami-04aac43c39f0f1c51` | `snap-0aeb615e60e6ed050` | c6gd.metal x2 (sa1, sa2) + c6g.metal x1 (c6), via a kiwi share |
-| us-east-1 | `ami-033513d87a591a75a` | `snap-08090e05b4aa1ed95` | c6gd.metal x1 (ue1, us-east-1b, all checks pass on cycle 3) + c6g.metal x1 (ue1g, us-east-1c, cycle 2), via a temporary kiwi share (removed) |
-| us-east-2 | `ami-0b6b59a4b1a37ccb0` | `snap-077a938c090bd76fc` | no (copy of the verified image) |
-| eu-west-1 | `ami-089c89a4d4911304f` | `snap-010f432b3d3e2228d` | no |
-| eu-central-1 | `ami-041232c4cf05b5fe9` | `snap-0ef5ebf815ec423f2` | no |
+| us-west-2 (source) | `ami-0b6fd0122d717338d` | `snap-057192876ab9ea234` | c6gd.metal x2 (v5, v6) via a kiwi share; the same image as kiwi AMI f1 (c6gd.metal x4 v1-v4, c6g.metal x1) |
+| us-east-1 | `ami-09bf62de40f951648` | `snap-06d644b60cc43cdb7` | c6gd.metal x1 (ue1, us-east-1c), via a temporary kiwi share (removed) |
+| us-east-2 | `ami-0a72d5edb489ce63d` | `snap-0276007bb785ae9e8` | no (copy of the verified image) |
+| eu-west-1 | `ami-0daed1d3a87f8345d` | `snap-0968d061fd9db10d2` | no |
+| eu-central-1 | `ami-039038c46eb50c6b6` | `snap-048797f8e25b0ee49` | no |
 
 These are arm64, UEFI, ENA, with root device `/dev/sda1` (10 GiB gp3). The images carry the `Project=solnix` tag.
 
 ## Give the work account access (pick one)
 
 - **Share** (solnix-ami can do this): run
-  `AWS_PROFILE=solnix-ami aws ec2 modify-image-attribute --region us-east-1 --image-id ami-033513d87a591a75a --launch-permission "Add=[{UserId=<WORK_ACCT>}]"`.
+  `AWS_PROFILE=solnix-ami aws ec2 modify-image-attribute --region us-east-1 --image-id ami-09bf62de40f951648 --launch-permission "Add=[{UserId=<WORK_ACCT>}]"`.
   A shared AMI's snapshot does not have to be shared for a launch.
 - **Public**: this is the account owner's step ("block public access for AMIs" is on). Not attempted.
 
@@ -28,7 +30,7 @@ These are arm64, UEFI, ENA, with root device `/dev/sda1` (10 GiB gp3). The image
 
 ```
 aws ec2 run-instances --region us-east-1 \
-  --image-id ami-033513d87a591a75a --instance-type c6gd.metal \
+  --image-id ami-09bf62de40f951648 --instance-type c6gd.metal \
   --key-name <YOUR_KEY> \
   --network-interfaces "DeviceIndex=0,SubnetId=<SUBNET_IN_us-east-1c>,Groups=<SG_22_FROM_YOUR_/24>,AssociatePublicIpAddress=true" \
   --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=10,VolumeType=gp3,DeleteOnTermination=true}" \
@@ -38,10 +40,10 @@ aws ec2 run-instances --region us-east-1 \
 - **Capacity:** from 18:00Z to 18:22Z on 2026-10-27, kiwi got `InsufficientInstanceCapacity` for c6gd.metal in every us-east-1
   AZ (1a 1b 1c 1d 1f) and with no AZ given. At 18:22Z a launch got through in us-east-1b. If the work account sees the same
   error, retry, or try another AZ (c6gd.metal is offered in 1a 1b 1c 1d 1f). dixa does not have to sit in 1c next to werk for
-  the image's sake. A root volume bigger than 10 GiB works; the pool does not auto-grow, though.
+  the image's sake. A root volume bigger than 10 GiB works; the pool does not auto-grow, though. (2026-10-28 03:50Z: us-east-1c had capacity.)
 - **The key** comes from IMDS (the site/aa64-ec2-key service writes `/root/.ssh/authorized_keys`), so any EC2 keypair works.
   Then `ssh root@<public-ip>`.
-- **Timing:** the first cycle is the boot-archive self-reboot. ssh answers about 20 minutes after launch, on the second cycle.
+- **Timing:** the first cycle is the boot-archive self-reboot. ssh answers about 15-20 minutes after launch, on the second cycle.
   Watch progress with `aws ec2 get-console-output --latest` and look for `console login:`. The console now works after boot, so SMF
   lines and the login prompt show there.
 
@@ -58,22 +60,20 @@ aws ec2 run-instances --region us-east-1 \
 - Your user is not created: the image has root only. Add one with `useradd -m -s /run/current-system/sw/bin/bash gburd`.
   `/etc/shells` is absent, which illumos permits.
 
-## Known issue: on c6gd.metal, ena attach failed on 2 of 6 launches; the box recovered by itself both times
+## Fixed in this image: the c6gd.metal ena admin timeout (aa64g: 2 of 6 launches)
 
-- **What happens:** the boot runs ena's full 32-queue attach (the second cycle, after the boot-archive reboot), and right after
-  nvme1/nvme2 attach, ena0's admin queue times out:
-  `timed out waiting for admin response` / `failed to create Tx CQ 17` (or `Rx CQ 18`) / `attach sequence failed`.
-- **What the kernel does:** the DEBUG kernel then panics at `list.c:88`. That is the known ena cleanup bug,
-  docs/aarch64-nvme-intr-metal-result.md, "Second bug".
-- **Measured rate:**
-  - c6gd.metal: 2 of 6 launches (sa1 in us-west-2, ue1 in us-east-1);
-  - c6g.metal: 0 of 3 here, and 0 of 7 in aa64nix.
-- **Recovery:** both times the box reset about 12 minutes later, and the next cycle came up with every check passing. So expect
-  ssh at about 20 minutes, or about 37 minutes in the bad case.
-- **If ssh has not answered after 45 minutes,** read the console with `aws ec2 get-console-output --latest`. A `list.c` panic
-  there means you wait for the reset, or `aws ec2 reboot-instances`.
-- **Cause:** unknown. The admin command gets no reply. It is seen only on c6gd, after the second root complex's NVMe attach.
-  This is a hypothesis and has not been tested. It is the next aarch64 bug to chase.
+- **Mechanism (measured, aa64h observer boot o4):** ena polls its admin queue; it never waits for an interrupt (the ITS plays no
+  part). The poll loop slept `delay(1 ms)`, then judged the 500 ms deadline without reading the completion queue again. One sleep
+  returned after 685.6 ms while Create CQ 17's response was already in the queue (CQ head 113->114 = SQ tail 114, device ready).
+  So a completed command was reported as `timed out waiting for admin response`, the attach failed, and the DEBUG kernel panicked
+  at `list.c:88` on the cleanup path. Console writes were ruled out as the cause of the long sleep (max hold 1 ms, 0 UART drops).
+  What held the thread for 685 ms is not identified.
+- **Fixes:** p10 reads the queue once more when the deadline passes, and succeeds if the command completed. p8 makes a failed
+  attach clean up without the panic.
+- **Measured with this image:** 6/6 fresh c6gd.metal launches (4 kiwi + 2 solnix-ami, us-west-2) plus 1 in us-east-1 reached
+  login on the first full-ena cycle with every check passing, 0 admin timeouts, 0 panics. Expect ssh about 15-20 minutes after
+  launch (UEFI on c6gd.metal takes about 10 minutes per boot).
+- **If ssh has not answered after 40 minutes,** read the console with `aws ec2 get-console-output --latest`.
 
 ## Not in this image
 
