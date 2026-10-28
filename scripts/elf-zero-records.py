@@ -55,7 +55,8 @@ def scan(path):
 def main(argv):
     bad = 0
     for top in argv:
-        for d, _, fs in os.walk(top):
+        walk = [(os.path.dirname(top), [], [os.path.basename(top)])] if os.path.isfile(top) else os.walk(top)
+        for d, _, fs in walk:
             for f in fs:
                 p = os.path.join(d, f)
                 if os.path.islink(p) or not os.path.isfile(p):
