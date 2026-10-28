@@ -55,6 +55,12 @@ echo "stale kmods: $(wc -l < /build/stale-kmods.txt)"
 echo "=== 3. driver tables (pkg-style) ==="
 cp $TABLES/aa-name_to_major-gen-fixed.txt $IMGROOT/etc/name_to_major
 cp $TABLES/aa-driver_aliases-gen-fixed.txt $IMGROOT/etc/driver_aliases
+# minor_perm too (solnix pkgs/illumos/data/drivers/minor_perm, rendered from the gate's pkg
+# manifests: arch-independent modes). Without it the proto's 6-line file stayed, and every other
+# node defaulted to 0600 root: /dev/urandom, ptmx, tty, kstat, zfs. Then nix (libsodium's
+# randombytes) aborted for any non-root user (measured on dixa, 2026-10-28).
+cp ${SOLNIX_SRC:-/build/solnix}/pkgs/illumos/data/drivers/minor_perm $IMGROOT/etc/minor_perm
+[ "$(grep -c '^random:' $IMGROOT/etc/minor_perm)" -ge 1 ] || { echo "FATAL: minor_perm has no random line"; exit 5; }
 echo "name_to_major=$(wc -l < $IMGROOT/etc/name_to_major) driver_aliases=$(wc -l < $IMGROOT/etc/driver_aliases)"
 
 echo "=== 4+5. EC2 login overlay (braich OpenSSH/libs/curl, DHCP ena0, IMDS key) ==="
