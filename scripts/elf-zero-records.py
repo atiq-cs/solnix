@@ -34,6 +34,8 @@ def scan(path):
             b = f.read()
     except OSError:
         return []
+    if len(b) >= 512 and b.count(0) == len(b):
+        return [(0, 'whole file is zeros')]   # a small file the bug zeroed entirely (not ELF any more)
     secs = sections(b)
     if not secs:
         return []

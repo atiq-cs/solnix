@@ -33,7 +33,10 @@ if [ -z "$boot" ]; then
     [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] && /usr/bin/gstrip --strip-debug "$f"
   done
 fi
-mkdir -p "$out/share" "$out/bin"; cp -a "$W/go" "$out/share/go"
+mkdir -p "$out/share" "$out/bin"
+# sync first: Go's linker writes through mmap, and on a ZFS without scripts/patches/0009 (every OI
+# build host) a just-written file reads as one hole to SEEK_DATA, so cp copied zeros (measured).
+sync; cp -a "$W/go" "$out/share/go"
 for b in go gofmt; do ln -s ../share/go/bin/$b "$out/bin/$b"; done
 "$out/bin/go" version
 if [ -z "$boot" ]; then
