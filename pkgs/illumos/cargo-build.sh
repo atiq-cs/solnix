@@ -49,8 +49,8 @@ eval "$prep"
 cargo build --release --offline --locked ${pkg:+-p "$pkg"} ${noDefault:+--no-default-features} \
   ${features:+--features "$features"} -j "$J"
 mkdir -p "$out/bin"
-sync   # see go-build.sh: cp of a just-linked binary on an unpatched ZFS (0009)
-for b in $bins; do cp "target/release/$b" "$out/bin/"; done
+# fsync before cp: see go-build.sh (an unpatched ZFS reads a just-written file as a hole, 0009)
+for b in $bins; do /usr/bin/python3 -c 'import os,sys; fd = os.open(sys.argv[1], os.O_RDONLY); os.fsync(fd); os.close(fd)' "target/release/$b"; cp "target/release/$b" "$out/bin/"; done
 eval "$man"
 cd "$W"
 : > fail

@@ -34,9 +34,14 @@ if [ -z "$boot" ]; then
   done
 fi
 mkdir -p "$out/share" "$out/bin"
-# sync first: Go's linker writes through mmap, and on a ZFS without scripts/patches/0009 (every OI
-# build host) a just-written file reads as one hole to SEEK_DATA, so cp copied zeros (measured).
-sync; cp -a "$W/go" "$out/share/go"
+# fsync every file first. Go's linker writes through mmap, and on a ZFS without
+# scripts/patches/0009 (every OI build host) a just-written file reads as one hole to SEEK_DATA,
+# so GNU cp copied zeros, even with --sparse=never (it still asks SEEK_DATA). sync(2) does not
+# push mmap'd pages there; fsync does (measured: holetest2 0/3 with sync, 3/3 with fsync).
+find "$W/go" -type f -exec /usr/bin/python3 -c 'import os,sys
+for p in sys.argv[1:]:
+    fd = os.open(p, os.O_RDONLY); os.fsync(fd); os.close(fd)' {} +
+cp -a "$W/go" "$out/share/go"
 for b in go gofmt; do ln -s ../share/go/bin/$b "$out/bin/$b"; done
 "$out/bin/go" version
 if [ -z "$boot" ]; then
