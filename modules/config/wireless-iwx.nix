@@ -297,7 +297,10 @@ in
     # this service runs after the card is up and calls wpa-pmk (on /usr/bin via
     # pkgs.solnix.wpa-pmk) ESSID-only with a bounded retry.
 
-    smf.services.solnix-wifi-join = lib.mkIf (iwm.networks != { }) {
+    # With solnix-netd (./solnix-netd.nix, on by default when networks are set) the daemon runs the same join
+    # script whenever iwm0 is disconnected, so this one-shot is only for configs that turn the daemon off.
+    networking.solnix-netd.wifiJoin = lib.mkIf (iwm.networks != { }) { iwm0 = mkWifiJoinScript "iwm0" iwm.networks; };
+    smf.services.solnix-wifi-join = lib.mkIf (iwm.networks != { } && !config.networking.solnix-netd.enable) {
       enable = true;
       category = "site";
       description = "solnix iwm wifi auto-join";
@@ -346,7 +349,12 @@ in
       }];
     }
     # Boot auto-join on iwx0, then DHCP on it (the join must come first: a lease on an unassociated link never comes).
+    # solnix-netd keeps iwx0 joined (and DHCP on it) for as long as the system runs; this one-shot is the
+    # fallback for configs that turn the daemon off.
     (lib.mkIf (cfg.networks != { }) {
+      networking.solnix-netd.wifiJoin.iwx0 = mkWifiJoinScript "iwx0" cfg.networks;
+    })
+    (lib.mkIf (cfg.networks != { } && !config.networking.solnix-netd.enable) {
       smf.services.solnix-wifi-join-iwx = {
         enable = true;
         category = "site";

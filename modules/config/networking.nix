@@ -88,7 +88,9 @@ let
   );
 
   # interfaces that actually declare something (dhcp or a static addr).
-  activeIfs = filterAttrs (_: i: i.dhcp || i.ipv4.addresses != [ ]) cfg.interfaces;
+  # With solnix-netd on (./solnix-netd.nix), it runs every DHCP link and solnix-net keeps the static ones.
+  netd = cfg.solnix-netd.enable;
+  activeIfs = filterAttrs (_: i: (i.dhcp && !netd) || (!i.dhcp && i.ipv4.addresses != [ ])) cfg.interfaces;
   hasNetworking = activeIfs != { } || cfg.nameservers != [ ] || cfg.defaultGateway != null || cfg.useDHCP;
   dhcpIfs = lib.attrNames (filterAttrs (_: i: i.dhcp) activeIfs);
   # Names a config has decided about (any entry, dhcp or not): useDHCP leaves these alone.
@@ -184,14 +186,14 @@ let
   netBringup = ''
     echo "=== solnix networking bringup $(date) ==="
     ${concatStringsSep "\n" (mapAttrsToList (n: i: "( ${ifBringup n i} ) &") activeIfs)}
-    ${optionalString cfg.useDHCP "( ${anyBringup} ) &"}
+    ${optionalString (cfg.useDHCP && !netd) "( ${anyBringup} ) &"}
     wait
     ${optionalString (cfg.defaultGateway != null) ''
       echo "-- default route via ${cfg.defaultGateway}"
       /usr/sbin/route -p add default ${cfg.defaultGateway} 2>&1 || \
         /usr/sbin/route add default ${cfg.defaultGateway} 2>&1 || true
     ''}
-    ${optionalString (cfg.nameservers == [ ] && (dhcpIfs != [ ] || cfg.useDHCP)) ''
+    ${optionalString (cfg.nameservers == [ ] && (dhcpIfs != [ ] || (cfg.useDHCP && !netd))) ''
       # No static nameservers: take them from the DHCP lease, as NixOS's dhcpcd
       # does through resolvconf. The gate's network/service (net-svc) would do it
       # too, but it runs before this service has a lease and finds none (measured
@@ -288,7 +290,7 @@ in
     # The DHCP/static bringup runs as an SMF transient oneshot built through the
     # EXISTING smf.services.* module — no new init concept. Only emitted when the
     # config actually declares an interface (YAGNI: no service for an empty net).
-    (mkIf (activeIfs != { } || cfg.useDHCP) {
+    (mkIf (activeIfs != { } || (cfg.useDHCP && !netd)) {
       smf.services.solnix-net = {
         enable = true;
         category = "site";

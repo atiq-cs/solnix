@@ -91,6 +91,8 @@ fi
 #    clone minors (clone<<16 | instance<<8 | kind 0 card / 128 render, i915_drmioc.h). Normalise
 #    the dev_t to the /dev/dri node it came from (clone 0), so DrmNode equality and dev_path work.
 #    Same mapping as pkgs/illumos/graphics/patches/libdrm-2.4.120-illumos-device.patch.
+#    Only where smithay is vendored (cosmic-term's drm 0.11 has no node module).
+if have smithay; then
 edit drm src/node/mod.rs "'    pub fn from_dev_id(dev: dev_t) -> Result<Self, CreateDrmNodeError> {\n'" \
   "'    pub fn from_dev_id(dev: dev_t) -> Result<Self, CreateDrmNodeError> {\n        #[cfg(target_os = \"illumos\")]\n        let dev = illumos_node_dev(dev).ok_or(CreateDrmNodeError::NotDrmNode)?;\n'"
 edit drm src/node/mod.rs "'        let ty = match minor(dev) >> 6 {'" \
@@ -99,6 +101,8 @@ edit drm src/node/mod.rs "'#[cfg(not(any(target_os = \"linux\", target_os = \"fr
   "'#[cfg(target_os = \"illumos\")]\nfn illumos_node_dev(dev: dev_t) -> Option<dev_t> {\n    let m = minor(dev) & 0xffff; // drop the clone index\n    if m & 0xff != 0 && m & 0xff != 128 {\n        return None; // the console text minor (64) is not a DRM node\n    }\n    let d = rustix::fs::makedev(major(dev), m);\n    let id = ((m >> 8) & 0xff) + (m & 0xff); // instance + 0 (card) / 128 (renderD)\n    let p = format!(\"/dev/dri/{}{}\", if m & 0xff == 128 { RENDER_NAME } else { PRIMARY_NAME }, id);\n    (stat(p.as_str()).ok()?.st_rdev == d).then_some(d) // the named node must be this device\n}\n\n/// Returns if the given device by major:minor pair is a DRM device.\n#[cfg(target_os = \"illumos\")]\npub fn is_device_drm(dev: dev_t) -> bool {\n    illumos_node_dev(dev).is_some()\n}\n\n#[cfg(not(any(target_os = \"linux\", target_os = \"freebsd\", target_os = \"illumos\")))]\npub fn is_device_drm(dev: dev_t) -> bool {\n    major(dev) == DRM_MAJOR\n}'"
 edit drm src/node/mod.rs "'    let old_id = minor(dev);\n    let id_mask = 0b11_1111;\n    let id = old_id & id_mask + ty.minor_base();'" \
   "'    #[cfg(target_os = \"illumos\")]\n    let id = ((minor(dev) >> 8) & 0xff) + ty.minor_base(); // instance + 0 / 128\n    #[cfg(not(target_os = \"illumos\"))]\n    let id = {\n        let old_id = minor(dev);\n        let id_mask = 0b11_1111;\n        old_id & id_mask + ty.minor_base()\n    };'"
+
+fi
 
 # 9. smithay SealedFile (dmabuf feedback format table, keymaps): its non-Linux arm shm_open()s
 #    "name-XXXXXXX"; illumos shm_open needs a leading '/' (EINVAL otherwise, measured

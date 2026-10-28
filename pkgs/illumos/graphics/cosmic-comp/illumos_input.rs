@@ -171,7 +171,7 @@ pub fn restore_console_input() {
 
 // libc's signal(3C)/raise(3C), declared here: cosmic-comp has no libc crate dependency and a
 // new one would change Cargo.lock (the vendor FOD). Values from illumos <sys/iso/signal_iso.h>.
-extern "C" {
+unsafe extern "C" {
     fn signal(sig: i32, handler: usize) -> usize;
     fn raise(sig: i32) -> i32;
     fn atexit(f: extern "C" fn()) -> i32;
