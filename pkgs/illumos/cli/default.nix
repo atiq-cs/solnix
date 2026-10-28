@@ -1,7 +1,8 @@
 # cli/ -- the maintainer's headless CLI set (werk/meh home.packages) as solnix
 # derivations: C/autotools on mk-src-pkg (./c-*.nix), Rust on cargoPkg (../cargo.nix,
 # ./rust.nix), Go on a from-source go1.4 -> current chain (./go.nix, ./go-tools.nix).
-{ base, world, graphics, cargoPkg, goChain }:
+{ base, world, graphics, cargoPkg ? null, goChain ? null }:
+# cargoPkg/goChain null (aarch64: no Rust or Go illumos/aarch64 target upstream) drops those tiers.
 let
   # base = srcPkgs (base-src.nix): mkSrcPkg, zlib, openssl, ncurses, coreutils, ... and nixChain.
   args = { inherit base world graphics; inherit (base) mkSrcPkg zlib openssl ncurses libiconv pkgconf nixChain; };
@@ -43,4 +44,4 @@ let
   c6 = import ./c-mail.nix (h // { inherit (c1) readline; inherit (c4) perl; inherit (c5) cmake gdbm; });
   rust = import ./rust.nix { inherit cargoPkg chk; extra = import ./rust-extra.nix h; };
   gotools = import ./go-tools.nix { inherit (goChain) goPkg go_1_27; inherit chk; };
-in c1 // c2 // c3 // c4 // c5 // c6 // rust // gotools
+in c1 // c2 // c3 // c4 // c5 // c6 // (if cargoPkg == null then { } else rust) // (if goChain == null then { } else gotools)

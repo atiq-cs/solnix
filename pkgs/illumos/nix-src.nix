@@ -12,8 +12,9 @@
 #   --localstatedir=/nix/var, --with-store-dir=/nix/store.
 # Disabled, as nix224.nix did: Boehm GC (--disable-gc), lowdown (markdown),
 # libcpuid (x86 microarch detection), tests, docs. seccomp is Linux-only.
-{ mkSrcPkg, zlib, openssl, libcSlice, gccLib, system, libSub ? "lib/amd64" }:
+{ mkSrcPkg, zlib, openssl, libcSlice, gccLib, system, libSub ? "lib/amd64", nixCxxFlags ? "" }:
 # libSub: the 64-bit lib dir of the plain derivations below ("lib" on aarch64, LP64 only).
+# nixCxxFlags: extra CXXFLAGS for nix itself (aarch64: see aarch64/src.nix). "" keeps the x86 text byte-identical.
 
 rec {
   # boost: headers + boost_context (the only compiled boost lib nix links).
@@ -246,7 +247,7 @@ rec {
       # strip-debug), which pulls ~150 MB of boost headers into nix's runtime
       # closure. Map them away, as nixpkgs' remove-references-to does after the fact.
       SYSI="$SYSI -fmacro-prefix-map=${boost}=/boost -fmacro-prefix-map=${nlohmann_json}=/nlohmann_json -fmacro-prefix-map=${toml11}=/toml11"
-      export CXXFLAGS="-O2 $SYSI" CFLAGS="-O2"
+      export CXXFLAGS="-O2 $SYSI${nixCxxFlags}" CFLAGS="-O2"
       bash ./configure --prefix="$out" --sysconfdir=/etc --localstatedir=/nix/var \
         --with-store-dir=/nix/store --with-boost=${boost} --with-boost-libdir=${boost}/lib/amd64 \
         --disable-gc --disable-markdown --disable-cpuid --disable-unit-tests \

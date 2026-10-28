@@ -199,10 +199,12 @@ rec {
 
   # gate libs htop (libkstat, libproc) and wget (libuuid) NEED, copied from the proto with their
   # NEEDED closure (measured on the aarch64 proto), RUNPATH -> itself + the libc slice.
-  gateLibs = derivation {
-    name = "illumos-gate-libs"; inherit system gate zlib;
+  # mkGateLibs name roots: the roots' NEEDED closure from the proto (aarch64/home.nix uses it as the
+  # "world" the x86 recipes link: libsec, libgen, libxnet ...).
+  gateLibs = mkGateLibs "illumos-gate-libs" "libkstat.so.1 libproc.so.1";  # htop. (libuuid -> libdlpi -> libdladm -> ... -> libxml2 = the world; wget goes --without-libuuid)
+  mkGateLibs = name: roots: derivation {
+    inherit name roots system gate zlib;
     libc = libcSlice;
-    roots = "libkstat.so.1 libproc.so.1";  # htop. (libuuid -> libdlpi -> libdladm -> ... -> libxml2 = the world; wget goes --without-libuuid)
     builder = "/usr/bin/bash";
     args = [ "-c" ''
       set -eu; export PATH=/usr/gnu/bin:/usr/bin
@@ -291,5 +293,10 @@ rec {
     inherit mkSrcPkg zlib openssl libcSlice system;
     gccLib = gcc.lib;
     libSub = "lib";
+    # The illumos aarch64 ld turns an executable's general-dynamic TLS GOT pair into one TPREL
+    # (initial-exec) slot but leaves the GD code (adrp/add + bl __tls_get_addr), so __tls_get_addr
+    # reads the TP offset as a tls_index: nix-daemon SIGSEGV'd in daemonLoop on its first client
+    # (nix::unix::interruptCheck, dixa 2026-10-28; repro /scratch/tls). IE code is what ld expects.
+    nixCxxFlags = " -ftls-model=initial-exec";
   };
 }

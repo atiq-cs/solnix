@@ -17,11 +17,21 @@
 # gcc / $CROSS, which was NOT in the archived proto — it died with numa). Until
 # the gate is rebuilt, this ingest of the restored proto is the source of truth.
 
-{ protoDir ? /aarch64/arm64-gate/illumos-gate/proto/root_aarch64, system ? builtins.currentSystem }:
+# protoDir: a local proto tree (the cross build host's /aarch64/arm64-gate/illumos-gate/proto/root_aarch64).
+# null (the default): the banked proto tarball, so a pure (flake) eval works anywhere. builtins.fetchTarball with
+# the NAR hash gives the SAME source path as builtins.path of the unpacked tree (vrl03md6..-illumos-aarch64-gate-proto-src,
+# name + NAR hash), so every aarch64 drv stays the one the image was built from (gcc y5hyjz05, nix chain).
+# shortcut: an eval-time fetch (122 MB) where the path is not already in the store (x86's gate moved to an FOD,
+# fetch-tarball.nix, which would change every aarch64 drv hash); upgrade when the aarch64 set is rebuilt anyway.
+{ protoDir ? null, system ? builtins.currentSystem }:
 
 let
-  proto = builtins.path {
+  proto = if protoDir != null then builtins.path {
     path = protoDir;
+    name = "illumos-aarch64-gate-proto-src";
+  } else builtins.fetchTarball {
+    url = "https://s3.solnix.io/solnix-cache/ami/aarch64-proto-20260912/proto-root_aarch64.tar.gz";  # flat sha256 40596bc1..
+    sha256 = "0f3bqzms59ix7ci8w763bxbgwkhj0lwap4y8b4wrpgp3h6bnl9rh";
     name = "illumos-aarch64-gate-proto-src";
   };
 in

@@ -3,7 +3,9 @@
 # the build host: zlib + libxml2 replace externalLibs (host /usr/lib copies),
 # openssl + openssh replace make-be's host sshd copy, bash replaces nothing (the
 # gate has no bash) but is a login shell users expect.
-{ gate, libcSlice, world ? null, gcc ? "/usr/gcc/14", buildTools ? [ ] }:
+{ gate, libcSlice, world ? null, gcc ? "/usr/gcc/14", buildTools ? [ ], aarch64 ? false, system ? "x86_64-solaris" }:
+# aarch64/system: the same recipes natively on aarch64 illumos (aarch64/home.nix), through
+# mk-src-pkg's aarch64 text rewrite. The defaults leave every x86 derivation unchanged.
 # gcc: the from-source gcc derivation (gcc-src.nix). Everything here is compiled
 # by it, both ABIs; the IPS seed only compiled gcc itself.
 # buildTools: store paths whose bin/ go first on every mk-src-pkg builder PATH
@@ -12,7 +14,9 @@
 # store set so it can build with no /usr/gnu. Threaded to mkSrcPkg below.
 
 let
-  mkSrcPkg = import ./mk-src-pkg.nix {
+  mkSrcPkg = if aarch64
+    then args: import ./mk-src-pkg.nix { inherit gate gcc buildTools aarch64; runtimeLibDirs = [ "${libcSlice}/lib" ]; } (args // { inherit system; })
+    else import ./mk-src-pkg.nix {
     inherit gate gcc buildTools;
     runtimeLibDirs = [ "${libcSlice}/lib/amd64" "${libcSlice}/lib" ];
   };
@@ -407,7 +411,7 @@ rec {
   # htop is maintained and carries an upstream illumos/Solaris backend. prstat is
   # the native illumos equivalent and stays in the world.
   top = derivation {
-    name = "top-htop-3.4.1"; system = "x86_64-solaris"; inherit htop;
+    name = "top-htop-3.4.1"; inherit system; inherit htop;
     builder = "/usr/bin/bash";
     args = [ "-c" "/usr/bin/mkdir -p $out/bin && /usr/bin/ln -s $htop/bin/htop $out/bin/top" ];
   };
@@ -718,7 +722,7 @@ rec {
   # bare name: the same fallback GNU inetutils' hostname -f gives an
   # unresolvable host. Every other use goes to the system's hostname.
   hostname = derivation {
-    name = "hostname-f"; system = "x86_64-solaris";
+    name = "hostname-f"; inherit system;
     builder = "/usr/bin/bash";
     args = [ "-c" ''
       /usr/bin/mkdir -p $out/bin
@@ -747,7 +751,7 @@ rec {
   # the path, so the home-manager option subcommand is the one that is missing;
   # inetutils' role (hostname -f) is the hostname shim above.
   home-manager = derivation {
-    name = "home-manager-26.05-db7d5e2"; system = "x86_64-solaris";
+    name = "home-manager-26.05-db7d5e2"; inherit system;
     # tests/ (1.9 MB, ~2,700 files) is dropped: only the module tree, lib and the
     # script are read at run time. nixpkgs' package keeps the whole source as
     # HOME_MANAGER_PATH; this departs from it to fit the installer media.
@@ -756,7 +760,7 @@ rec {
       url = "https://github.com/nix-community/home-manager/archive/db7d5e2332710f5abb088f6b5de927d7f9511b35.tar.gz";
       sha256 = "63657a72baa6fda8bfdb5a2d5e530bbcce0b087dfb23be5d7598626d61870941";
       narHash = "08l22vv66hzgg3am7hs2vjxgdhgpr0wpizxf71fyfp9z4sycwv1s";
-      name = "home-manager-source"; exclude = [ "tests" ];
+      name = "home-manager-source"; exclude = [ "tests" ]; inherit system;
     };
     inherit bash;
     depPath = builtins.concatStringsSep ":" (map (p: "${p}/bin") [ coreutils findutils gettext gnused gnugrep jq less ncurses hostname ]);

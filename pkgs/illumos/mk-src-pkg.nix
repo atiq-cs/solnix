@@ -70,7 +70,7 @@ let
       "lib/amd64" "$gccLib/amd64" " -m$ABI " "architecture=x86 abi=sysv" "gmake -j3 "
       "ACLOCAL_PATH=/usr/share/aclocal autoreconf -fi -I /usr/share/aclocal" "./configure --prefix="
       ''export PATH="''${btPath:+$btPath:}/usr/gnu/bin:/usr/bin:/usr/sbin"''
-      stripLoop rpLoop "INSTALL=ginstall" ]
+      stripLoop rpLoop "INSTALL=ginstall" ''-Dlddlflags="-shared -m64"'' ]
     [ ''r="$r:$d"''
       "lib" "$gccLib" " -mno-outline-atomics -mtls-dialect=trad " "architecture=arm abi=aapcs" "gmake -j24 "
       "ACLOCAL_PATH=/opt/nixboot/share/aclocal:/opt/ooce/autoconf-archive/share/aclocal M4=/usr/bin/gm4 autoreconf -fi -I /opt/nixboot/share/aclocal -I /opt/ooce/autoconf-archive/share/aclocal"
@@ -81,7 +81,8 @@ let
       # aarch64 and illumos elfedit then segfaults (measured on libstdc++.so.6.0.33);
       # elfedit-then-strip works. The build-time-path guards still run after the strip.
       (rpLoop + stripLoop) ""
-      "INSTALL=/usr/gnu/bin/install" ] t;  # braich ships GNU install only as /usr/gnu/bin/install
+      "INSTALL=/usr/gnu/bin/install"  # braich ships GNU install only as /usr/gnu/bin/install
+      ''-Dlddlflags="-shared"'' ] t;    # perl (cli/c-big.nix): aarch64 gcc has no -m64
   stripLoop = ''
     find "$out" -type f | while read -r f; do
       [ "$(od -An -tx1 -N4 "$f" 2>/dev/null | tr -d ' \n')" = 7f454c46 ] || continue

@@ -148,6 +148,9 @@ let
   # nix 2.24.15 and its chain, from source with that gcc (./src.nix).
   srcPkgs = import ./src.nix { gate = gate'; libcSlice = libc; inherit gcc system; };
 
+  # what a home needs (lib/home-manager-pkgs.nix + the headless C tier), from the x86 recipes (./home.nix).
+  homePkgs = import ./home.nix { gate = gate'; libcSlice = libc; inherit gcc srcPkgs system; };
+
   systemPath = derivation {
     name = "system-path";
     inherit system;
@@ -172,11 +175,15 @@ let
     '' ];
   };
 in
-{
+homePkgs // {
   gate = gate';
   inherit libc rtld ld sys systemPath gcc srcPkgs;
   inherit (srcPkgs) zlib openssl nixChain git tree ncurses less nano nvi htop top wget gateLibs bsdfetch gccWrapper readline bash;
   nix = srcPkgs.nixChain.nix;
+  nixSrc = srcPkgs.nixChain.nix;
+  inherit (srcPkgs.nixChain) curl xz;
+  vi = srcPkgs.nvi;
+  inherit homePkgs;
   # minimal /run/current-system for the aarch64 image (./system.nix; not the module toplevel).
   systemToplevel = import ./system.nix { pkgs = { inherit (srcPkgs) nixChain; nix = srcPkgs.nixChain.nix; };
                                          extraPaths = [ srcPkgs.nixChain.curl srcPkgs.git srcPkgs.tree srcPkgs.less srcPkgs.nano srcPkgs.nvi srcPkgs.htop srcPkgs.top srcPkgs.wget srcPkgs.bsdfetch srcPkgs.bash ]; inherit system; };
