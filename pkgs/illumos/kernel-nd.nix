@@ -32,7 +32,9 @@
 # DOWN, and UP on reconnect, so IP drops IFF_RUNNING, dhcpagent removes its routes and
 # traffic moves to the other interface), and 0008-xhci-readdress-after-port-reset.patch
 # (a device hubd re-enumerates on the same port gets Reset Device + Address Device, so
-# an adapter unplugged and plugged back in passes traffic again).
+# an adapter unplugged and plugged back in passes traffic again), and
+# 0009-zfs-seek-hole-flush-mmap.patch (lseek SEEK_DATA/SEEK_HOLE flushes mmap'd pages first,
+# as OpenZFS does; without it a just-mmap-written file reads as one hole and cp copies zeros).
 #
 # OUTPUT: kernel/, platform/i86pc/{kernel,amd64}/, usr/kernel/ from the
 # non-DEBUG build, plus boot/ (loader, forth, fonts) copied from the gate proto,
@@ -48,7 +50,8 @@
               ../../scripts/patches/0005-tzmon-thinkpad-dgpu-off.patch
               ../../scripts/patches/0006-xhci-ss-warm-reset.patch
               ../../scripts/patches/0007-usbecm-link-state-on-disconnect.patch
-              ../../scripts/patches/0008-xhci-readdress-after-port-reset.patch ]
+              ../../scripts/patches/0008-xhci-readdress-after-port-reset.patch
+              ../../scripts/patches/0009-zfs-seek-hole-flush-mmap.patch ]
 , onbld ? "/opt/onbld"
 , gcc ? "/usr/gcc/10"
 , perlVersion ? "5.42"
@@ -130,6 +133,8 @@ derivation {
       || { echo "FATAL: usbecm link-state-on-disconnect patch not applied" >&2; exit 1; }
     grep -q 'xhci_command_reset_device(xhcip,' usr/src/uts/common/io/usb/hcd/xhci/xhci_usba.c \
       || { echo "FATAL: xhci re-address-after-port-reset patch not applied" >&2; exit 1; }
+    grep -q "solnix: flush any mmap()'d data first" usr/src/uts/common/fs/zfs/zfs_vnops.c \
+      || { echo "FATAL: zfs SEEK_HOLE mmap-flush patch not applied" >&2; exit 1; }
 
     # env file: the gate.nix edits, plus no smatch (its binary lives in the
     # workspace tools proto, which +t does not build).
