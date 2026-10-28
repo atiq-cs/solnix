@@ -33,6 +33,15 @@ if [ -z "$boot" ]; then
     [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] && /usr/bin/gstrip --strip-debug "$f"
   done
 fi
+if [ -n "$final" ]; then
+  # Upstream ships Linux/FreeBSD dynamic ELF test fixtures (src/debug/{elf,dwarf}/testdata: NEEDED
+  # libc.so.6, libtiff.so.6, ...). Nothing resolves them on illumos, so the store-only-NEEDED publish
+  # gate failed the toolchain on them (13 files, measured). NixOS ships them (it has no such gate);
+  # we drop them. Cost: `go test debug/elf debug/dwarf` lacks those fixtures.
+  find src -path '*/testdata/*' -type f | while read -r f; do
+    if [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] && /usr/bin/elfdump -d "$f" 2>/dev/null | grep -q NEEDED; then rm -f "$f"; fi
+  done
+fi
 mkdir -p "$out/share" "$out/bin"
 # fsync every file first. Go's linker writes through mmap, and on a ZFS without
 # scripts/patches/0009 (every OI build host) a just-written file reads as one hole to SEEK_DATA,
@@ -54,8 +63,7 @@ if [ -z "$boot" ]; then
   for x in "$gcc" "$gate"; do ! grep -rqF "$(basename "$x")" "$out" || { echo "FATAL: go_1_4 names $x" >&2; exit 1; }; done
 fi
 if [ -n "$final" ]; then
-  bash "$storeGate" "$out/share/go/bin" "$tsErrnoGate"
-  bash "$storeGate" "$out/share/go/pkg/tool" "$tsErrnoGate"
+  bash "$storeGate" "$out/share/go" "$tsErrnoGate"   # the whole tree: bin, pkg/tool and src
   "$out/bin/go" version | grep -q "^go version go$version illumos/amd64$" || { echo "FATAL: go version" >&2; exit 1; }
   mkdir -p "$W/h"; cd "$W/h"; printf 'package main\nimport "fmt"\nfunc main() { fmt.Println("hello-go") }\n' > m.go
   "$out/bin/go" mod init h >/dev/null 2>&1; "$out/bin/go" build -trimpath -ldflags "-r $rp" -o h .
