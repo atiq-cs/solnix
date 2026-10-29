@@ -16,6 +16,11 @@ g4ad is BIOS-only + rejected the UEFI solnix AMI. Fix:
 - 2a FIXED: boot-loop kernel panic -- wrmsr #GP on MSR 0xc0010000 (AMD PERF_CTL0), which the g4ad hypervisor
   rejects, via illumos's cu/kcpc PMC path. Fix: `set cu_flags = 0` inside the BOOT_ARCHIVE (/etc/system is
   read from the boot_archive ramdisk, NOT the ZFS root -- the key detail). Panic gone.
+  2026-10-29 (dpimg3): the same panic hit every solnix x86_64 image from its 2nd boot on EC2 m6a/c6a. Fixed in the kernel
+  instead (scripts/patches/0010-opteron-pcbe-probe-perfevtsel.patch): pcbe.AuthenticAMD probes PerfEvtSel0 under on_trap
+  and refuses to load when the write traps, so cu_init skips only where the counters are absent. cu_flags=0 is no longer
+  needed. cap_util (cu) only feeds the per-CPU hardware-utilisation kstats and the power/placement heuristics built on
+  them; NixOS (Linux) has no equivalent, and nothing in solnix reads them.
 - 2b ROOT-CAUSED (init SIGKILL loop): the exact fault class is now named. The kernel (exit.c restart_init)
   re-execs PID1 /sbin/init, it runs, then dies by SIGKILL, 936x. Diagnostic-init probes (swap /sbin/init for
   a shell script that prints a console marker, via offline ZFS+boot_archive edits) PROVED:

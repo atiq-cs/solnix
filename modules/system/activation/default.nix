@@ -78,6 +78,18 @@ let
     </service_bundle>
   '';
 
+  # /etc/svc/profile/generic.xml: the gate's generic_limited_net.xml with system/keymap NOT enabled. The stock profile
+  # enables keymap and the site profile disables it; on first boot manifest-import applies both and svc.startd starts
+  # keymap in between, then stops it in the same second single-user comes up, which strands console-login behind
+  # sulogin (amix86b; dpimg3: 7/11 fresh EC2 launches, a reboot clears it). Owning generic.xml (NixOS: the system owns unit enablement) keeps keymap
+  # disabled from early import on: no enable, no flip. Dropping the site-profile disable instead started keymap at early
+  # import, before devfsadm links /dev/openprom on the reconfigure boot -> maintenance (amix86b).
+  genericProfile = pkgs.runCommand "solnix-generic.xml" { } ''
+    s=${pkgs.solnix.stock}/etc/svc/profile/generic_limited_net.xml
+    awk '/<service name=.system\/keymap./{k=1} /<\/service>/{k=0} k && /<instance name=.default. enabled=.true.\/>/{sub(/true/,"false"); n++} {print} END{exit n!=1}' \
+      $s > $out || { echo "FATAL: $s has no single enabled system/keymap instance" >&2; exit 1; }
+  '';
+
   # The SMF activation script (design-smf-init §3.1). Runs ON-TARGET (svc.startd/
   # configd are already up). Idempotent: svccfg import is create-or-update.
   # `svcadm enable` per enabled service (import sets initial state; enforce so a
@@ -573,6 +585,8 @@ let
     # ssh enabled on the DP image). Fail the build instead.
     ${pkgs.solnix.libxml2}/bin/xmllint --noout ${siteProfile} || { echo "FATAL: ${siteProfile} is not well-formed XML" >&2; exit 1; }
     ln -s ${siteProfile}                              $out/site-profile.xml
+    ${pkgs.solnix.libxml2}/bin/xmllint --noout ${genericProfile} || { echo "FATAL: ${genericProfile} is not well-formed XML" >&2; exit 1; }
+    ln -s ${genericProfile}                           $out/generic-profile.xml
     ln -s ${etc}/etc                                  $out/etc
     # bin/: the switch-to-configuration + solnix-rebuild runtime tools (T2.5).
     mkdir -p $out/bin

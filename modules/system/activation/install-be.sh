@@ -369,7 +369,11 @@ for _m in "$R$TOP"/manifest/solnix/*.xml; do
   rm -f "$_sm/${_m##*/}"; cp "$_m" "$_sm/" || die "copy the manifest ${_m##*/}"
 done
 cp "$R$TOP/site-profile.xml" etc/svc/profile/site/solnix.xml
-( cd etc/svc/profile && relink generic_limited_net.xml generic.xml && relink platform_none.xml platform.xml && relink ns_files.xml name_service.xml )
+( cd etc/svc/profile && relink platform_none.xml platform.xml && relink ns_files.xml name_service.xml )
+# generic.xml is the toplevel's (stock generic_limited_net.xml minus the keymap enable; activation/default.nix). A real
+# copy: manifest-import reads it at early import, before <pool>/nix is mounted.
+rm -f etc/svc/profile/generic.xml; cp "$R$TOP/generic-profile.xml" etc/svc/profile/generic.xml || die "copy generic.xml"
+chmod 0444 etc/svc/profile/generic.xml
 
 # 6. /dev: the nodes needed before devfsadm runs, generated (never copied from the running /dev).
 for n in console:cn@0:console msglog:sysmsg@0:msglog null:mm@0:null zero:mm@0:zero tty:sy@0:tty \
