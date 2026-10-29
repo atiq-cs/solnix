@@ -20,6 +20,8 @@ want "opted in: proxy is an extra substituter" '"http://127.0.0.1:37515"' 'c.nix
 want "opted in: cache.solnix.io still a substituter" '"https://cache.solnix.io"' 'c.nix.settings.substituters' '{ solnix.privacy.enable = false; }'
 want "opted in: proxy bound to 127.0.0.1, tcp (v4)" "bind_addr' type='astring' value='127.0.0.1'.*proto' type='astring' value='tcp'|proto' type='astring' value='tcp'.*bind_addr' type='astring' value='127.0.0.1'" 'c.smf.services.solnix-cache-proxy.extraManifestXML' '{ solnix.privacy.enable = false; }'
 want "opted in: services(5) has the port" 'solnix-cache-proxy\\t37515/tcp' 'c.environment.generatedEtc."inet/services"' '{ solnix.privacy.enable = false; }'
+# nix applies nix.conf top to bottom: a plain substituters line AFTER extra-substituters drops the proxy (dixi, 2026-10-29).
+want "opted in: nix.conf puts extra-substituters after substituters" '^true$' 'let t = c.nix.generatedEtc."nix/nix.conf"; l = builtins.filter builtins.isString (builtins.split "\n" t); i = k: builtins.length (builtins.filter (x: x) (builtins.genList (n: true) 0)) + (let f = builtins.filter (x: builtins.match "${k} = .*" (builtins.elemAt l x) != null) (builtins.genList (n: n) (builtins.length l)); in builtins.head f); in i "substituters" < i "extra-substituters"' '{ solnix.privacy.enable = false; }'
 want "default: no proxy substituter" '^null$' 'c.nix.settings.extra-substituters or null' '{ }'
 want "seed.enable = false: no proxy" '^false$' 'c.smf.services ? solnix-cache-proxy' '{ solnix.privacy.enable = false; solnix.cache.seed.enable = false; }'
 want "opted in: endpoint is telemetry.solnix.io/api/v1/census" '"CENSUS_ENDPOINT":"https://telemetry.solnix.io/api/v1/census"' "$env" '{ solnix.privacy.enable = false; }'
