@@ -65,7 +65,10 @@ in
       enable = true;
       category = "system"; description = "D-Bus system message bus";
       # --fork: the daemon returns once the socket listens, so dependents start after it.
-      start.exec = "/usr/bin/bash -c ${lib.escapeShellArg "mkdir -p -m 0755 /var/run/dbus && ${dbus}/bin/dbus-uuidgen --ensure=/var/lib/dbus/machine-id && ${dbus}/bin/dbus-daemon --system --config-file=/etc/dbus-1/system.conf"}";
+      # /var/lib/dbus: machine-id lives there and nothing else makes it (systemd-tmpfiles does on NixOS). No --system: it
+      # names the package's own system.conf and dbus-daemon refuses a second --config-file ("already requested"),
+      # measured on lixi 2026-10-29; /etc/dbus-1/system.conf already says <type>system</type>.
+      start.exec = "/usr/bin/bash -c ${lib.escapeShellArg "mkdir -p -m 0755 /var/run/dbus /var/lib/dbus && ${dbus}/bin/dbus-uuidgen --ensure=/var/lib/dbus/machine-id && ${dbus}/bin/dbus-daemon --config-file=/etc/dbus-1/system.conf"}";
       requires = [ "svc:/system/filesystem/local:default" ];
     };
   };

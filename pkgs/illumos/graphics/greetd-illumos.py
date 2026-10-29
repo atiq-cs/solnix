@@ -78,4 +78,22 @@ edit("greetd/src/session/worker.rs", "    for e in env.iter().chain(prepared_env
      "        nix::unistd::chown(rd.as_str(), Some(user.uid), Some(user.gid))?;\n"
      "        std::fs::set_permissions(&rd, std::fs::Permissions::from_mode(0o700))?;\n"
      "        pam.putenv(&format!(\"XDG_RUNTIME_DIR={}\", rd))?;\n    }")
+# VT_SETMODE: illumos vcons.c vt_setmode() returns EINVAL unless relsig AND acqsig are valid signals (SIG_VALID:
+# 1..MAXSIG, not KILL/STOP), even for VT_AUTO; Linux accepts 0. greetd's vt_mode_clean() sends 0/0, so greetd died
+# "unable to set vt mode: EINVAL" (measured on lixi, 2026-10-29). In VT_AUTO the kernel never sends them (vt_switch
+# signals only VT_PROCESS owners), so SIGUSR1/SIGUSR2 are inert placeholders.
+edit(tm, """            mode: ioctl::VT_AUTO,
+            waitv: 0,
+            relsig: 0,
+            acqsig: 0,
+            frsig: 0,
+        };
+        let res = unsafe { ioctl::vt_setmode(self.fd, &mode) };""",
+     """            mode: ioctl::VT_AUTO,
+            waitv: 0,
+            relsig: if cfg!(target_os = "illumos") { libc::SIGUSR1 as u16 } else { 0 },
+            acqsig: if cfg!(target_os = "illumos") { libc::SIGUSR2 as u16 } else { 0 },
+            frsig: 0,
+        };
+        let res = unsafe { ioctl::vt_setmode(self.fd, &mode) };""")
 print("greetd illumos source fixup: ioctl.rs terminal/mod.rs server.rs prctl.rs", file=sys.stderr)

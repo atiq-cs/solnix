@@ -86,7 +86,7 @@ in
       enable = true;
       category = "application"; description = "greetd login manager running cosmic-greeter";
       start.exec = start "mkdir -p -m 0755 /run/cosmic-greeter /var/lib/cosmic-greeter && chown cosmic-greeter /run/cosmic-greeter /var/lib/cosmic-greeter && ${s.greetd}/bin/greetd --config /etc/greetd/config.toml &";
-      requires = [ "svc:/milestone/multi-user:default" "svc:/application/seatd:default" "svc:/application/cosmic-greeter-daemon:default" ];
+      requires = [ "svc:/milestone/multi-user:default" "svc:/system/seatd:default" "svc:/application/cosmic-greeter-daemon:default" ];
     };
   };
 }
