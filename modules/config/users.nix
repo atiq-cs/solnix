@@ -114,6 +114,16 @@ let
           example = literalExpression ''[ "ssh-ed25519 AAAA... user@host" ]'';
           description = "SSH public keys written to /etc/ssh/authorized_keys.d/<name>.";
         };
+        createHome = mkOption {
+          type = types.bool;
+          default = false;
+          description = ''
+            Create the home directory at boot if it is missing, owned by the user and group with mode 0700
+            (NixOS users.users.<name>.createHome; homeMode "700"). An existing home owned by root -- what
+            appears when a dataset under it (an ephemeral pool's ~/ws) is mounted before the account's
+            home exists -- is chowned to the user. Its contents are not touched.
+          '';
+        };
       };
       config = mkIf config.isRoot {
         uid = lib.mkDefault 0;
@@ -288,6 +298,21 @@ in
         shell = lib.mkDefault "";
         hashedPassword = lib.mkDefault null;
       };
+    };
+
+    # createHome (NixOS's activation users-groups step): an SMF one-shot after local filesystems, so homes on a
+    # separate dataset or an ephemeral pool exist first. Never recursive.
+    smf.services.solnix-create-homes = let
+      hs = filterAttrs (_: u: u.createHome && !u.isRoot) cfg.users;
+    in mkIf (hs != { }) {
+      enable = true;
+      category = "site";
+      description = "solnix: create users' home directories (users.users.<name>.createHome)";
+      model = "transient";
+      requires = [ "svc:/system/filesystem/local:default" ];
+      start.exec = "/usr/bin/sh -c ${lib.escapeShellArg (concatStringsSep "; " (mapAttrsToList (n: u:
+        "[ -d ${u.home} ] || mkdir -p -m 0700 ${u.home}; [ \"$(/usr/bin/ls -ld ${u.home} | /usr/bin/awk '{print $3}')\" = root ] && /usr/bin/chown ${n}:${u.group} ${u.home}; :") hs))}";
+      stop.exec = ":true";
     };
 
     users.generatedEtc = {
