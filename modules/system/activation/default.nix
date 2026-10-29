@@ -62,8 +62,8 @@ let
       <service name="system/power" version="1" type="service"><instance name="default" enabled="${if config.solnix.powerManagement.enable then "true" else "false"}"/></service>
       <service name="system/update-man-index" version="1" type="service"><instance name="default" enabled="false"/></service>
       <!-- A host, not a router (NixOS runs no routing daemon unless asked). net-routing-setup turns IPv4 routing
-           (in.routed, RIP) ON when it finds no default route at boot -- always the case when the lease comes late, as
-           on a USB NIC -- and then accepts routes any RIP speaker on the LAN advertises. Measured on lixi: a second
+           (in.routed, RIP) ON when it finds no default route at boot (always the case when the lease comes late, as
+           on a USB NIC), and then accepts routes any RIP speaker on the LAN advertises. Measured on lixi: a second
            default via 192.168.1.5, 50% loss and duplicates. ipv4-routing-set=true records an admin choice, so
            routing-setup keeps routing OFF (what `routeadm -d ipv4-routing` persists). -->
       <service name="network/routing-setup" version="1" type="service">
@@ -568,6 +568,10 @@ let
     ln -s ${config.system.build.smfManifests}/manifest/solnix $out/manifest/solnix 2>/dev/null || \
       { mkdir -p $out/manifest; ln -s ${config.system.build.smfManifests}/manifest/solnix $out/manifest/solnix; }
     ln -s ${activate}                                 $out/activate
+    # svccfg apply of a profile that is not well-formed XML fails the WHOLE profile at boot, with only a warning in
+    # manifest-import's log: every enable/disable in it is lost (2026-10-29: a "--" in a comment left hal, sendmail and
+    # ssh enabled on the DP image). Fail the build instead.
+    ${pkgs.solnix.libxml2}/bin/xmllint --noout ${siteProfile} || { echo "FATAL: ${siteProfile} is not well-formed XML" >&2; exit 1; }
     ln -s ${siteProfile}                              $out/site-profile.xml
     ln -s ${etc}/etc                                  $out/etc
     # bin/: the switch-to-configuration + solnix-rebuild runtime tools (T2.5).
