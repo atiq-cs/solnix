@@ -119,3 +119,33 @@ a FIXED path (/build, via the sandbox, or NIX_BUILD_TOP) for exactly this. Fix: 
 `W=$NIX_BUILD_TOP/w` (Nix gives each build a private top dir; its name is in the env, not in the output, once the build
 uses a constant relative name), or `/var/tmp/srcpkg` + the drv hash. This moves every mk-src-pkg out, so it belongs in the
 batched rebuild above.
+
+## 2026-10-29 (fodfix): what a fresh solnix host hits building its own toplevel
+
+Measured on the relaunched dixi (54.80.68.157, DP fix AMI, no /usr/gnu, no /usr/gcc), building nix-config 1e133df's
+`solnixConfigurations.dixi` toplevel against solnix 0eb4e89 + the fetch-tarball fix, with no imported store paths.
+
+1. **fetch-tarball.nix (FIXED here).** Its builder ran host `tar -xzf`. On a solnix host that is illumos tar, which
+   execs `/usr/bin/gzcat`, finds none, prints `tar: blocksize = 0` and EXITS 0 with nothing extracted, so the FOD came
+   out as an empty directory (NAR `sha256-pQpattmS...`, 96 bytes) and failed the hash check. The single-top-level guard
+   was blind for the same reason: an empty `tar -t` list counts as one line. Fixed by unpacking with Nix's own
+   `builtin:unpack-channel` and copying `tree/` up with `/usr/bin/cp -RP`. Out paths are unchanged (FOD = name +
+   hash); only the four FODs' .drv files move. Verified on dixi for the proto (0f0jr9xl), kernel-nd's src (1yhpjbxj),
+   nvidia-oss's rmSrc (19r6wrm4) and hmSrc (08l22vv6), each built under a new name. Negative control: the old builder
+   on dixi gives pQpattmS.
+2. **gcc-14.3.0 (gcc-src.nix): the next wall, and the root of everything left.** `PATH=/usr/gnu/bin:...`,
+   `stage0=/usr/gcc/14`, `/usr/bin/gas`, `/usr/bin/gstrip`, `/usr/gnu/bin/objdump`, and `tar xf` of a .tar.xz (fails:
+   `tar: Could not stat /usr/bin/xzcat`). The main output 6jxijj8h is not on cache.solnix.io (it fails the publish gate,
+   docs/pending/world-unresolved-needed.md), so a fresh host must build it and can't.
+3. **Behind gcc, all OI-host (buildTools=[]):** seedSrcPkgs' zlib, libxml2, nspr, nss, the seed world
+   (illumos-userland hnj340g3, not the served awwznprc), gnutar, gzip, gnused, gnugrep -> solnix-seed-build-tools ->
+   cmake, boost -> libtorrent-rasterbar -> solnix-torrent -> its SMF manifests; and gcc-wrapper -> solnix-dev-full.
+   Host paths named: /usr/gnu/bin, /usr/gcc/14, /usr/bin/gstrip, /usr/include (libtorrent also /usr/local). None of these
+   23 outputs is on cache.solnix.io.
+4. The ~16 writer drvs (solnix-etc*, channel-*, solnix-version*) list /usr/gnu/bin on PATH but use only bash builtins,
+   and they BUILT.
+
+So "any solnix host builds its own toplevel" needs either the seed chain served (gcc main output, the seed tools and
+their closure, after gcc passes the publish gate) or the stdenv work above. Fixing more FODs won't get there.
+Other FOD builders with the same host-tar pattern, which a fresh host will hit only if it builds them: cargo.nix
+`vendorOf` and graphics/cosmic.nix (`tar xzf` + PATH=/usr/gnu/bin), i915-driver.nix's obsdDrm (PATH /usr/gnu/bin).
