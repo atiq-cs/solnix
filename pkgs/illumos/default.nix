@@ -401,6 +401,11 @@ let
   # Go from source: go1.4 (C) -> 1.17 -> 1.20 -> 1.22 -> 1.24 -> 1.26 (./go.nix).
   goChain = import ./go.nix { inherit gcc world; gate = gate'; gccLib = gcc.lib; inherit (srcPkgs.nixChain) cacert; };
   cli = import ./cli { base = srcPkgs; inherit world graphics goChain; inherit (cargo) cargoPkg; };
+  # libtorrent-rasterbar + solnix-torrent, the community seeder's BitTorrent client (./solnix-torrent.nix).
+  torrent = import ./solnix-torrent.nix {
+    inherit (srcPkgs) mkSrcPkg openssl pkgconf gccWrapper binutils; inherit (srcPkgs.nixChain) boost; inherit (cli) cmake;
+    inherit gcc libc; gate = gate';
+  };
   # COSMIC rust programs on rust199 + graphics (./graphics/cosmic.nix).
   cosmic = import ./graphics/cosmic.nix {
     rust = rust199; inherit gcc libc world; gate = gate'; gccLib = gcc.lib;
@@ -1052,6 +1057,7 @@ in
   cargoLib = cargo;
   inherit (goChain) go go_1_4 go_1_17 go_1_20 go_1_22 go_1_24 go_1_26 go_1_27;
   inherit bsdfetch;
+  inherit (torrent) libtorrent-rasterbar solnix-torrent;
   xz = srcPkgs.nixChain.xz;
   # A C/C++ toolchain to put on PATH (nix-shell / nix profile install), the
   # solnix analog of nixpkgs' stdenv.cc: the wrapped gcc, gas, GNU make. The

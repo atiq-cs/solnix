@@ -39,6 +39,7 @@ solnix.privacy.enable = false;                # census + seed + build
 solnix.telemetry.census.hostKind = "laptop";  # lixi; dixi and dixa stay "server"
 # solnix.telemetry.census.location = { country = "US"; region = "MA"; };   # only if the maintainer wants one
 solnix.builder.contactEmail = "greg+dixi-solnix@burd.me";   # per host; used once enrolment ships
+# solnix.cache.seed.torrentPackage = pkgs.solnix.solnix-torrent;   # seeder + swarm probe + the proxy's swarm path
 ```
 
 ## Cache proxy (svc:/site/solnix-cache-proxy, installed with cache.seed)
@@ -50,9 +51,11 @@ solnix.builder.contactEmail = "greg+dixi-solnix@burd.me";   # per host; used onc
 - nix.conf gets `extra-substituters = http://127.0.0.1:37515`, and the proxy's nix-cache-info says `Priority: 30`
   (cache.solnix.io says 50), so nix asks the proxy first. Nix checks each signature and NAR hash itself.
 - narinfo: relayed from cache.solnix.io. The proxy records the `Torrent:` line under the NAR name; it reads the line
-  and never builds it from the URL. NAR: when the narinfo had a `Torrent:` line and a fetcher is configured
-  (PROXY_TORRENT_FETCH, patch 4), the proxy serves the fetcher's bytes. Otherwise, or on any failure, it answers
-  302 to `https://cache.solnix.io/nar/<file>`, which is the HTTP fallback.
+  and never builds it from the URL. NAR: the proxy tries the swarm only when the narinfo had a `Torrent:` line, a
+  fetcher is configured (PROXY_TORRENT_FETCH, from `solnix.cache.seed.torrentPackage`), and solnix-swarm-probe found
+  the swarm reachable in the last 30 min (`/var/lib/solnix/cache-proxy/swarm/ok`). Then it serves the fetcher's bytes.
+  Otherwise, or on any failure, it answers 302 to `https://cache.solnix.io/nar/<file>`, which is the HTTP fallback.
+  A failed fetch deletes swarm/ok, so the next NAR goes straight to HTTP.
 - Evidence (2026-10-28):
   - Loopback proof from another host: /scratch/solnix/community1/loopback-proof.txt. From floki, the proxy port was
     refused 3/3 while a 0.0.0.0 control on the same host and the same SG rule connected 3/3. Negative control:
@@ -64,6 +67,36 @@ solnix.builder.contactEmail = "greg+dixi-solnix@burd.me";   # per host; used onc
     - C, a valid xz whose NAR has one content byte flipped, served by the torrent path: hash mismatch.
     - D, an untrusted key: refused.
     - C2, an honest fetcher on the same torrent path: jq is substituted, and the fetcher log names the three NARs.
+
+## Seeding (svc:/site/solnix-seed and solnix-swarm-probe, installed with cache.seed and a torrentPackage)
+
+- The client is `pkgs.solnix.solnix-torrent` (src/solnix-torrent/solnix-torrent.cpp) on `pkgs.solnix.libtorrent-rasterbar`
+  2.0.11 (pkgs/illumos/solnix-torrent.nix), built from source against the store openssl and the nixChain boost 1.86
+  headers. Its licence is BSD-3. The tarball also carries a GPL-3 simulator, which is not built. The default is
+  `torrentPackage = null`: no seeder, no probe, and an HTTP-only proxy.
+- solnix-swarm-probe (as `nobody`, every 10 min) announces once for jq's served torrent. It keeps swarm/ok only when
+  the tracker reports a seed (`complete > 0`) and lists at least one peer outside 0/8, 10/8, 100.64/10, 127/8,
+  169.254/16, 172.16/12 and 192.168/16.
+- solnix-seed (as `nobody`) seeds only what this host fetched through the proxy or built (the post-build hook queues
+  each `$OUT_PATHS` entry), and only if cache.solnix.io serves it signed by 8UNr. The NAR bytes come from the cache and
+  are checked against the signed FileHash. solnix-seed-setup (root) creates the state directories.
+- Fetches: TCP only; DHT, PEX and LSD are off; only `tracker.solnix.io` is used. The fetch gives up after 10 s
+  without a payload byte. libtorrent checks every piece's SHA-1 against the info dict, and nix then checks the NAR
+  hash.
+- Evidence (2026-10-29, kiwi OI host; logs in /scratch/solnix/seed2/):
+  - scripts/test-swarm.sh, 8/8 (tests1.log):
+    - Seed and fetch through a local tracker: the fetched NAR is byte-identical to the cache's.
+    - Control: a non-libtorrent peer (scripts/bt-test-peer.py liar) serving the honest bytes: the fetch completes.
+    - The same peer with one byte flipped: the fetcher reports "191824 B failed the piece hash", exits 1 and leaves
+      no file.
+    - No seeder: the fetch gives up in 10 s.
+    - The probe says down for a loopback-only peer list and for no tracker, and ok for a public peer.
+  - The live tracker (probe-live.log): with this host seeding jq, the tracker reports `complete 1`. It lists the
+    seed as the ingress 10.42.0.158, so the probe says down (infra tracker defect #1).
+  - Cost with that tracker (timing1.log): one served NAR through the proxy under real inetd, 3 runs each, interleaved:
+    - torrentPackage off: 0.377, 0.417 and 0.393 s.
+    - torrentPackage on: 0.406, 0.376 and 0.387 s; the fetcher never ran.
+    - Control with the probe bypassed: 11.4, 11.2 and 11.2 s.
 
 ## Queue builder (svc:/site/solnix-builder, installed with cache.build)
 

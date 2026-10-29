@@ -43,6 +43,16 @@ want "builder: project with cpu-cap, newtask" 'solnix-builder:4242:.*project.cpu
 want "builder: started in its project" 'newtask -p solnix-builder' 'c.smf.services.solnix-builder.start.exec' '{ solnix.privacy.enable = false; }'
 want "builder: no bearer in the generated config" '^false$' 'builtins.any (v: builtins.match ".*bearer.*" v != null) (builtins.attrValues c.smf.services.solnix-builder.environment)' '{ solnix.privacy.enable = false; }'
 want "cache.build.enable = false: no builder, no /etc/project" '^false$' '(c.smf.services ? solnix-builder) || (c.environment.generatedEtc ? project)' '{ solnix.privacy.enable = false; solnix.cache.build.enable = false; }'
+want "seed: no torrent package (default) -> no seeder, no hook, HTTP-only proxy" '^false$' '(c.smf.services ? solnix-seed) || (c.nix.settings ? post-build-hook) || (builtins.match ".*PROXY_TORRENT_FETCH.*" c.smf.services.solnix-cache-proxy.extraManifestXML != null)' '{ solnix.privacy.enable = false; }'
+T='solnix.privacy.enable = false; solnix.cache.seed.torrentPackage = (derivation { name = "fake-torrent"; system = "x86_64-solaris"; builder = "/bin/sh"; })'
+want "seed: with a torrent package -> seeder + post-build-hook + proxy fetcher" '^true$' '(c.smf.services ? solnix-seed) && (c.nix.settings ? post-build-hook) && (builtins.match ".*PROXY_TORRENT_FETCH.*solnix-torrent-fetch.*" c.smf.services.solnix-cache-proxy.extraManifestXML != null)' "{ $T; }"
+want "seed: census flag seeding=true only then" '"CENSUS_seeding":"true"' "$env" "{ $T; }"
+want "seed: seeder + swarm probe run as nobody (not root)" '^\["nobody","nobody"\]$' '[ c.smf.services.solnix-seed.user c.smf.services.solnix-swarm-probe.user ]' "{ $T; }"
+want "seed: proxy gates the torrent path on the swarm probe" '^true$' '(c.smf.services ? solnix-swarm-probe) && builtins.match ".*/swarm.*" c.smf.services.solnix-seed-setup.start.exec != null' "{ $T; }"
+want "seed.enable = false: no seeder even with the package" '^false$' '(c.smf.services ? solnix-seed) || (c.smf.services ? solnix-swarm-probe) || (c.nix.settings ? post-build-hook)' "{ $T; solnix.cache.seed.enable = false; }"
+R='{ pkgs, ... }: { solnix.privacy.enable = false; solnix.cache.seed.torrentPackage = pkgs.solnix.solnix-torrent; }'
+want "seed: the real package (pkgs.solnix.solnix-torrent) wires the proxy fetcher" '^"solnix-torrent-1 true"$' 'c.solnix.cache.seed.torrentPackage.name + " " + builtins.toJSON (builtins.match ".*solnix-torrent-fetch.*" c.smf.services.solnix-cache-proxy.extraManifestXML != null)' "$R"
+
 motd='c.environment.generatedEtc.motd'
 want "MOTD asks when private" 'solnix.privacy.enable = false;   # opt into' "$motd" '{ }'
 want "MOTD silent once opted in" '^"solnix [^"]*docs: *https://solnix.io\\n\\n"$' "$motd" '{ solnix.privacy.enable = false; }'

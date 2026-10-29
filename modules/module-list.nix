@@ -41,6 +41,7 @@
   ./config/community/census.nix
   ./config/community/cache-proxy.nix
   ./config/community/builder.nix
+  ./config/community/seed.nix
   ./system/boot/init/smf.nix
   ./system/activation
 ]

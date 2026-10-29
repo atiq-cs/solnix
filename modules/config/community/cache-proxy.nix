@@ -15,11 +15,15 @@ let
   a = config.solnix.community.active;
   port = 37515;
   st = "/var/lib/solnix/cache-proxy";
+  t = config.solnix.cache.seed.torrentPackage;
   esc = lib.escapeXML;
   env = {
     PROXY_PATH = "${pkgs.solnix.nixChain.curl}/bin:/usr/bin";
     CURL_CA_BUNDLE = "${pkgs.solnix.nixChain.cacert}/etc/ssl/certs/ca-bundle.crt";
     PROXY_STATE = st;
+  } // lib.optionalAttrs (t != null) {
+    # the swarm fetcher (seed.nix's torrentPackage): <torrent-url> <out> <seconds>, else the 302 fallback
+    PROXY_TORRENT_FETCH = "${pkgs.writeScript "solnix-torrent-fetch" "#!/bin/sh\nexec ${t}/bin/solnix-torrent fetch \"$@\"\n"}";
   };
   # inetd as the restarter; inetd_start runs once per connection with the socket on stdin/stdout.
   inetdXml = ''
