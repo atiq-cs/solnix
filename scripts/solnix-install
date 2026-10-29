@@ -2063,6 +2063,12 @@ esac
 if ! zfs list -H "$POOL/dump" >/dev/null 2>&1; then
   _ramk=$(prtconf 2>/dev/null | awk '/^Memory size/ { print $3 * 1024 }')
   _dumpg=$(( ${_ramk:-2097152} / 2 / 1048576 )); [ "$_dumpg" -lt 1 ] && _dumpg=1; [ "$_dumpg" -gt 16 ] && _dumpg=16
+  # Never more than a quarter of the pool (half of a 32G build host's RAM did not fit an 8G image).
+  _poolq=$(( $(zpool list -Hp -o size "$POOL" 2>/dev/null || echo 4294967296) / 4 / 1073741824 ))
+  [ "$_dumpg" -gt "$_poolq" ] && _dumpg=$_poolq; [ "$_dumpg" -lt 1 ] && _dumpg=1
+  # An image is built on a host whose RAM is not the target's: ship a 1G placeholder, which
+  # site/solnix-dump-size (scripts/solnix-dump-size.sh) grows to the target's rule at first boot.
+  [ -n "${SOLNIX_IMAGE_BUILD:-}" ] && _dumpg=1
   zfs create -V ${_dumpg}G "$POOL/dump" || die "failed to create the dump zvol $POOL/dump"
   log "created $POOL/dump (${_dumpg} GiB) for kernel crash dumps"
 fi

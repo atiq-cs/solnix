@@ -85,7 +85,7 @@ log "running solnix-install $TARGET  (pool=$POOL, CS=$CS)"
 # from THIS script's PATH (has /nix-tools224/bin + sw/bin) so the fast exact
 # `nix-store -qR` path is taken.
 export SOLNIX_NIXSTORE="${SOLNIX_NIXSTORE:-$(command -v nix-store 2>/dev/null || echo nix-store)}"
-SOLNIX_POOL="$POOL" SOLNIX_ALLOW_RPOOL="" SOLNIX_NIXSTORE="$SOLNIX_NIXSTORE" \
+SOLNIX_POOL="$POOL" SOLNIX_ALLOW_RPOOL="" SOLNIX_NIXSTORE="$SOLNIX_NIXSTORE" SOLNIX_IMAGE_BUILD=1 \
   "$INSTALLER" "$TARGET" "$CS" 2>&1 | tail -60 || die "solnix-install failed"
 
 # ---- core-scrub the installed BE (import altroot, scrub, export) -----------
