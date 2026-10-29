@@ -101,24 +101,48 @@ solnix.builder.contactEmail = "greg+dixi-solnix@burd.me";   # per host; used onc
 ## Queue builder (svc:/site/solnix-builder, installed with cache.build)
 
 - Each tick (15 min): if the 1-minute load is below `solnix.cache.build.loadMax`, read
-  `GET https://telemetry.solnix.io/api/v1/build-queue/rows` (public) and the served recipes.tsv, and plan every row:
-  - `BUILD`: a served row matches (pname, or pname-version, plus version and system).
-  - `MET`: manpage-missing, but the served out already ships share/man.
+  `GET https://telemetry.solnix.io/api/v1/build-queue/rows` (public) and the served recipes.tsv, and plan every row.
+  A row's outs are every served recipe row at (pname, version, system): recipes.tsv has one row per output path, and
+  rows from older solnix commits stay (jq 1.7.1 has two).
+  - `BUILD`: a served row matches (pname, or pname-version, plus version and system). For manpage-missing, only the
+    outs cache.solnix.io does not serve yet.
+  - `MET`: manpage-missing, but a served out already ships share/man.
+  - `MAN-GAP`: manpage-missing, has_manpages=y, every out is served and none has share/man. A rebuild that matches the
+    served NAR is the same bytes, so it cannot add pages: a recipe fix, not a build.
   - `NO-MAN`: the recipe says has_manpages=n.
   - `NO-RECIPE`: no served row at that version.
   - `OTHER-SYSTEM`: a system this host does not build.
-- Claim is not selective (registry.rebuild_claim hands out the next job by priority, available_at, id), so the
-  builder claims (max 1) only when the plan has a BUILD. A claimed job is heartbeat at once and every lease/3.
-  BUILD jobs run `nix build --rebuild` of the attr whose outPath is the recipe's out: built from source here, and it
-  fails unless the output is identical. Then `complete done {version, nar_hash, store_path}`, after checking that
-  the narHash equals the one cache.solnix.io serves. Every other claimed job is `complete failed` with the reason,
-  which feeds the queue's own backoff and park.
+- Build first, claim only what was built. The queue spends an attempt at claim time (`registry.rebuild_claim`), so the
+  builder proves each BUILD row here before it touches the queue, in the listing's order:
+  1. evaluate `packages.<system>.<pname>` of `BUILDER_FLAKE` (default `git+https://git.solnix.io/solnix.git?ref=main`,
+     not the registry's `solnix`, which is the 26.11 edition with other outs) and keep the out that is one of the row's;
+  2. the out must be served (its narinfo NarHash). An unserved out is a first build, i.e. a submission, which needs the
+     submit key: declined, not wired (the maintainer's decision);
+  3. dry run of the leaf and every input derivation: declined unless all of it is a substitute (a dry run of the leaf
+     alone lists nothing when the leaf is substitutable);
+  4. fetch the served out and check its local NarHash equals the served one (a copied-in local copy can differ:
+     qbuild2 measured jq), then `nix build --rebuild`, which fails unless this build is identical;
+  5. only then claim it, `pnames=[<pname>]`, max 1, and complete `done {version, nar_hash, store_path}` with the served
+     NarHash. An empty claim means another builder has it. A pname with two rows for the system is declined (pnames
+     cannot choose between them).
+  A declined or failed job costs the queue nothing, and nothing is completed `failed` because this host cannot do it.
+  A failed rebuild is remembered per derivation in `/var/lib/solnix/builder/tried/` and not retried (delete the file to
+  retry). Without the bearer it stops before the fetch and logs `dry run`. Every nix call is time-bounded
+  (`bounded`, illumos has no timeout(1)): a `nix store ls` against cache.solnix.io hung for over 8 minutes on dixi.
 - It runs in project `solnix-builder` (`project.cpu-cap`, default 400 = four CPUs; the generation owns /etc/project:
   the gate's stock file plus that line) and builds under `nice 19`. FSS is not used: the solnix kernels load only
   TS, SDC and FX by default. The cap and the nice value bound its CPU share.
 - Measured 2026-10-28 against the live queue: 19 rows, 2 MET (wget, ncurses: their served outs already have man
   pages), 1 NO-MAN (openssl: has_manpages=n), 16 NO-RECIPE. Nothing there is buildable from the served recipes, so
   infra's feeder and our recipes have to change before any of it can be done.
+- Measured 2026-10-29 on dixi (`PATH=/usr/bin ksh93 scripts/test-builder.sh`: RESULT PASS, 24 checks). The gate runs
+  with real nix against a fixture flake served from a file:// cache and a fake queue: a nondeterministic rebuild, a
+  local NarHash unlike the served one, an input that would be built here, an unserved out, no matching attr and a
+  duplicated pname each end with no claim. The good fixture is rebuilt, claimed with `pnames=["good"]`, heartbeat and
+  completed done. Live, jq at main declines because the dry run would build 11 derivations here first (the
+  build-tool closure is not on the cache). The live queue (14 rows) plans 3 MET, 1 NO-MAN, 10 NO-RECIPE, so there is
+  nothing to build. The old builder fails 15 of the checks. Today no solnix host can build a leaf
+  (docs/pending/builders-need-store-tools.md), so every BUILD row is declined at the dry run.
 
 ### The bearer (never in the store)
 

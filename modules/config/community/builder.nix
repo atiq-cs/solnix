@@ -1,7 +1,8 @@
 # modules/config/community/builder.nix -- solnix-builder, the idle-time solnix.io queue drainer (solnix-builder.sh).
 # An SMF contract loop, root (nix builds go through nix-daemon; it reads the 0600 bearer), started in its own project
 # `solnix-builder` with a CPU cap (project.cpu-cap, resource_controls(7)), and every build runs under nice 19. It only
-# claims while the 1-minute load is below loadMax. Without /var/lib/solnix/build-queue-bearer it never claims.
+# claims while the 1-minute load is below loadMax, and only a job it has already rebuilt identical to the served NAR.
+# Without /var/lib/solnix/build-queue-bearer it never claims.
 #
 # The bearer: one shared X-Solnix-Build secret (infra 2026-10-28), sops solnix secrets/build-queue-bearer.yaml key
 # `build-queue-bearer`. It is NEVER in the store: the operator places it, root-only (see docs/community-features.md).
@@ -12,7 +13,8 @@ let
   cfg = config.solnix.cache.build;
   st = "/var/lib/solnix/builder";
   s = pkgs.solnix;
-  path = "${s.jq}/bin:${s.nixChain.curl}/bin:${config.nix.package}/bin:/usr/bin:/usr/sbin";
+  # git: nix 2.24 runs the git CLI to fetch the builder's git+https flake (BUILDER_FLAKE, solnix main)
+  path = "${s.jq}/bin:${s.nixChain.curl}/bin:${config.nix.package}/bin:${s.git}/bin:/usr/bin:/usr/sbin";
 in
 {
   options.solnix.cache.build = {
