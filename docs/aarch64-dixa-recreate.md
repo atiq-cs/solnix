@@ -1,5 +1,12 @@
 # Recreating dixa (c6gd.metal) from the solnix aa64h AMI
 
+> **Superseded 2026-10-29 by aa64rb m4** (us-east-1 `ami-0b544e93ac70551d6`, us-west-2 `ami-0c58280779782f854`; raw sha256
+> `1af90736...`, banked at floki `~/solnix-bank/ami/aarch64-6cd2521c1e-aa64rb-20261029/`). m4 = aa64tls m2 (static-TLS rtld/libc/ld,
+> rebuilt store set) + `site/aa64-archive-sync`. On aa64h, aa64tls and every earlier aarch64 image, the first EC2 API reboot after
+> launch lost ena0 (`DL_BADPPA`). The cause: the boot archive kept the bootstrap `/etc/path_to_inst`, and an aarch64
+> `reboot-instances` is a hard reset that skips the shutdown `bootadm`. m4 gave 3/3 OK where m2 gave 0/5. The launch
+> steps below still apply with the m4 ids.
+
 Track aa64h, 2026-10-28 (supersedes the aa64g AMIs). The owning account is solnix-ami (788352824872). All AMIs below are private.
 
 ## The AMIs

@@ -33,6 +33,9 @@ mkdir -p $R/var/empty $R/root/.ssh; chmod 700 $R/root/.ssh
 mkdir -p $R/usr/lib/aa64 $R/lib/svc/manifest/site
 cp /build/patches/aa64-ec2-key.sh $R/usr/lib/aa64/; chmod 0555 $R/usr/lib/aa64/aa64-ec2-key.sh
 cp /build/patches/aa64-ec2-key.xml $R/lib/svc/manifest/site/
+# boot-archive sync after first-boot devfsadm (an EC2 API reboot of aarch64 is a hard reset; archive-sync-20261029)
+cp /build/patches/aa64-archive-sync.sh $R/usr/lib/aa64/; chmod 0555 $R/usr/lib/aa64/aa64-archive-sync.sh
+cp /build/patches/aa64-archive-sync.xml $R/lib/svc/manifest/site/
 # network: DHCP on ena0 (persistent ipadm conf, the x86 AMI shape)
 mkdir -p $R/etc/ipadm $R/etc/dladm
 cat > $R/etc/ipadm/ipadm.conf <<'I'
