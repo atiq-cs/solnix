@@ -49,4 +49,9 @@ in {
         'w.row = uint16(t.dest.rows); w.col = uint16(t.dest.cols); w.xpix = 16 * uint16(t.dest.cols); w.ypix = 16 * uint16(t.dest.rows)' \
         'return ioctl(t.pty, 0, uintptr(unsafe.Pointer(&w))) }' > $f
     ''; check = chk ''"$out/bin/micro" -version'' "^Version: 2\\.0\\.14"; };
+  # BSD-3-Clause. illumos has no tailscale TUN (net/tstun/tstun_stub.go panics), so tailscaled defaults to
+  # --tun=userspace-networking (netstack); modules/config/tailscale.nix fixes that. Upstream CI cross-builds illumos/amd64.
+  tailscale = goPkg { pname = "tailscale"; version = "1.98.10"; src = gh "tailscale/tailscale" "v1.98.10" "1a3aac335f0e1b2154fbf948ae8cd7f3464af7e28a5a0a12fd55ab475212a282"; vendorHash = "sha256-MQ+SaaLXTZ707d1md/thZwqujtQVan2lzgw338KRrf8=";
+    subPkgs = "./cmd/tailscale ./cmd/tailscaled"; ldflags = "-X tailscale.com/version.longStamp=1.98.10 -X tailscale.com/version.shortStamp=1.98.10";
+    check = chk ''"$out/bin/tailscale" version'' "^1\\.98\\.10"; };
 }

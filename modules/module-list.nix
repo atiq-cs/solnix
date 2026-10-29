@@ -28,6 +28,7 @@
   ./config/graphics-gpu.nix
   ./config/networking.nix
   ./config/solnix-netd.nix
+  ./config/tailscale.nix
   ./config/users.nix
   ./config/system-path.nix
   ./config/documentation.nix
