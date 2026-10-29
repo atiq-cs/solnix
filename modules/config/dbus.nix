@@ -62,6 +62,7 @@ in
       home = "/var/run/dbus"; shell = "/usr/bin/false"; hashedPassword = null;
     };
     smf.services.dbus = {
+      enable = true;
       category = "system"; description = "D-Bus system message bus";
       # --fork: the daemon returns once the socket listens, so dependents start after it.
       start.exec = "/usr/bin/bash -c ${lib.escapeShellArg "mkdir -p -m 0755 /var/run/dbus && ${dbus}/bin/dbus-uuidgen --ensure=/var/lib/dbus/machine-id && ${dbus}/bin/dbus-daemon --system --config-file=/etc/dbus-1/system.conf"}";

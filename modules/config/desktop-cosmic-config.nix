@@ -71,16 +71,19 @@ in
   smf.services = mkIf cfg.greeter {
     # NixOS services.seatd (no logind): cosmic-comp's libseat talks to it over /var/run/seatd.sock.
     seatd = {
+      enable = true;
       category = "system"; description = "seatd seat management daemon (libseat)";
       start.exec = start "${s.seatd}/bin/seatd -g seat &";
       requires = [ "svc:/system/filesystem/local:default" ];
     };
     cosmic-greeter-daemon = {
+      enable = true;
       category = "application"; description = "COSMIC greeter D-Bus daemon (com.system76.CosmicGreeter)";
       start.exec = start "${greeter}/bin/cosmic-greeter-daemon &";
       requires = [ "svc:/system/dbus:default" ];
     };
     greetd = {
+      enable = true;
       category = "application"; description = "greetd login manager running cosmic-greeter";
       start.exec = start "mkdir -p -m 0755 /run/cosmic-greeter /var/lib/cosmic-greeter && chown cosmic-greeter /run/cosmic-greeter /var/lib/cosmic-greeter && ${s.greetd}/bin/greetd --config /etc/greetd/config.toml &";
       requires = [ "svc:/milestone/multi-user:default" "svc:/application/seatd:default" "svc:/application/cosmic-greeter-daemon:default" ];
