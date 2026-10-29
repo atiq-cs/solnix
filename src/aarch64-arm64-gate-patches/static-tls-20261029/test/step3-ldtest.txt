@@ -1,0 +1,3 @@
+FAIL ld-old relocs: 1 R_AARCH64_TLS_TPREL | tv=-290452864 main=BAD threads_bad=20/20 rc=1
+PASS ld-new relocs: 1 R_AARCH64_TLS_DTPMOD 1 R_AARCH64_TLS_DTPREL | tv=42 main=ok threads_bad=0/20
+rc=0

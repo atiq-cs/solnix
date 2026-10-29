@@ -14,7 +14,7 @@ T=aarch64-unknown-solaris2.11
 ../gcc-$rev/configure --build=$T --host=$T --target=$T --prefix="$out" \
   --with-sysroot="$gate" --with-native-system-header-dir=/usr/include \
   --enable-languages=c,c++ --disable-bootstrap --disable-multilib --with-abi=lp64 \
-  --with-gnu-as --with-as=/usr/bin/gas --without-gnu-ld --with-ld=/usr/bin/ld \
+  --with-gnu-as --with-as=/usr/bin/gas --without-gnu-ld --with-ld="$ldBin" \
   --enable-shared --enable-__cxa_atexit --enable-initfini-array --enable-c99 \
   --without-zstd --disable-nls --disable-decimal-float --disable-libquadmath \
   --disable-libsanitizer --disable-libgomp --disable-libitm --disable-libvtv \

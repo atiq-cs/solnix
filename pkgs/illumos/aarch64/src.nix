@@ -293,10 +293,7 @@ rec {
     inherit mkSrcPkg zlib openssl libcSlice system;
     gccLib = gcc.lib;
     libSub = "lib";
-    # The illumos aarch64 ld turns an executable's general-dynamic TLS GOT pair into one TPREL
-    # (initial-exec) slot but leaves the GD code (adrp/add + bl __tls_get_addr), so __tls_get_addr
-    # reads the TP offset as a tls_index: nix-daemon SIGSEGV'd in daemonLoop on its first client
-    # (nix::unix::interruptCheck, dixa 2026-10-28; repro /scratch/tls). IE code is what ld expects.
-    nixCxxFlags = " -ftls-model=initial-exec";
+    # No -ftls-model=initial-exec any more: the aa64tls proto's ld keeps an executable's GD TLS
+    # pair (it used to give GD code an IE slot), and its rtld/libc give each module its own block.
   };
 }

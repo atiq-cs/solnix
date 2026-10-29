@@ -143,7 +143,7 @@ let
   # store paths with the runtime /usr,/lib,/sbin,/kernel,/platform layout.
   # aarch64 sanity paths (armv8 unix + aarch64 genunix, no amd64).
   # gcc FROM SOURCE on aarch64 (./gcc-src.nix): gcc.lib is the C++/unwind runtime.
-  gcc = import ./gcc-src.nix { gate = gate'; libcSlice = libc; inherit system; };
+  gcc = import ./gcc-src.nix { gate = gate'; libcSlice = libc; inherit ld system; };
 
   # nix 2.24.15 and its chain, from source with that gcc (./src.nix).
   srcPkgs = import ./src.nix { gate = gate'; libcSlice = libc; inherit gcc system; };

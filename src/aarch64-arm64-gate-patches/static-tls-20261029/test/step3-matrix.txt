@@ -1,0 +1,106 @@
+== sys rc=1 PASS=0 FAIL=6 libc: /nix/store/rs4hiizl9f6xmrpp4c58pjc9kl3s2lxf-libc/lib/libc.so.1 
+== t0 rc=1 PASS=0 FAIL=6 libc: /lib/libc.so.1 
+== rtld rc=1 PASS=2 FAIL=4 libc: /nix/store/rs4hiizl9f6xmrpp4c58pjc9kl3s2lxf-libc/lib/libc.so.1 
+== libc rc=1 PASS=3 FAIL=3 libc: /lib/libc.so.1 
+== both rc=0 PASS=6 FAIL=0 libc: /lib/libc.so.1 
+=== out-sys.txt
+FAIL A 4 libs distinct+initialised: l1:+16=100 l2:+16=100 l3:+16=100 l4:+16=100 bad=9
+FAIL A' reverse link order: l1:+16=400 l2:+16=400 l3:+16=400 l4:+16=400 bad=9
+FAIL B 2 libs (ie) x 50 threads: main=BAD threads_bad=50/50
+FAIL B 2 libs (gd) x 50 threads: main=BAD threads_bad=50/50
+FAIL C aligned(64) (ie) x 20 threads: main=BAD mod64=0 threads_bad=20/20
+FAIL C aligned(64) (gd) x 20 threads: main=BAD mod64=0 threads_bad=20/20
+libc loaded by a: 1
+static TLS layout (LD_DEBUG=tls, test A):
+  static TLS module: [0] /var/tmp/aa64tls/w-sys/libl1.so
+  block:      0x7fffee911020    soff:         0x10  flags:  0x1 [ STATIC-TLS ]
+  static TLS module: [1] /var/tmp/aa64tls/w-sys/libl2.so
+  block:      0x7fffecb11020    soff:         0x20  flags:  0x1 [ STATIC-TLS ]
+  static TLS module: [2] /var/tmp/aa64tls/w-sys/libl3.so
+  block:      0x7fffedd11020    soff:         0x40  flags:  0x1 [ STATIC-TLS ]
+  static TLS module: [3] /var/tmp/aa64tls/w-sys/libl4.so
+  block:      0x7fffee611020    soff:         0x70  flags:  0x1 [ STATIC-TLS ]
+  static TLS module: [4] /nix/store/rs4hiizl9f6xmrpp4c58pjc9kl3s2lxf-libc/lib/libc.so.1
+  block:      0x7fffee20a160    soff:         0xb0  flags:  0x1 [ STATIC-TLS ]
+=== out-t0.txt
+FAIL A 4 libs distinct+initialised: l1:+16=100 l2:+16=100 l3:+16=100 l4:+16=100 bad=9
+FAIL A' reverse link order: l1:+16=400 l2:+16=400 l3:+16=400 l4:+16=400 bad=9
+FAIL B 2 libs (ie) x 50 threads: main=BAD threads_bad=50/50
+FAIL B 2 libs (gd) x 50 threads: main=BAD threads_bad=50/50
+FAIL C aligned(64) (ie) x 20 threads: main=BAD mod64=0 threads_bad=20/20
+FAIL C aligned(64) (gd) x 20 threads: main=BAD mod64=0 threads_bad=20/20
+libc loaded by a: 1
+static TLS layout (LD_DEBUG=tls, test A):
+  static TLS module: [0] /lib/libc.so.1
+  block:      0x7fffeefba160    soff:         0x10  flags:  0x1 [ STATIC-TLS ]
+  static TLS module: [0] /var/tmp/aa64tls/w-t0/libl1.so
+  block:      0x7fffe9711020    soff:         0x10  flags:  0x1 [ STATIC-TLS ]
+  static TLS module: [1] /var/tmp/aa64tls/w-t0/libl2.so
+  block:      0x7fffed711020    soff:         0x20  flags:  0x1 [ STATIC-TLS ]
+  static TLS module: [2] /var/tmp/aa64tls/w-t0/libl3.so
+  block:      0x7fffed811020    soff:         0x40  flags:  0x1 [ STATIC-TLS ]
+  static TLS module: [3] /var/tmp/aa64tls/w-t0/libl4.so
+  block:      0x7fffee711020    soff:         0x70  flags:  0x1 [ STATIC-TLS ]
+  static TLS module: [4] /var/tmp/aa64tls/t0/lib/libc.so.1
+  block:      0x7fffee0ea160    soff:         0xb0  flags:  0x1 [ STATIC-TLS ]
+=== out-rtld.txt
+FAIL A 4 libs distinct+initialised: l1:+16=100 l2:+16=100 l3:+16=100 l4:+16=100 bad=9
+FAIL A' reverse link order: l1:+16=400 l2:+16=400 l3:+16=400 l4:+16=400 bad=9
+PASS B 2 libs (ie) x 50 threads: main=ok threads_bad=0/50
+FAIL B 2 libs (gd) x 50 threads: main=BAD threads_bad=50/50
+PASS C aligned(64) (ie) x 20 threads: main=ok mod64=0 threads_bad=0/20
+FAIL C aligned(64) (gd) x 20 threads: main=BAD mod64=0 threads_bad=20/20
+libc loaded by a: 1
+static TLS layout (LD_DEBUG=tls, test A):
+  static TLS module: [0] /var/tmp/aa64tls/w-rtld/libl1.so
+  block:      0x7fffee711020    soff:         0x10  flags:  0x1 [ STATIC-TLS ]
+  static TLS module: [1] /var/tmp/aa64tls/w-rtld/libl2.so
+  block:      0x7fffed511020    soff:         0x20  flags:  0x1 [ STATIC-TLS ]
+  static TLS module: [2] /var/tmp/aa64tls/w-rtld/libl3.so
+  block:      0x7fffee311020    soff:         0x40  flags:  0x1 [ STATIC-TLS ]
+  static TLS module: [3] /var/tmp/aa64tls/w-rtld/libl4.so
+  block:      0x7fffee111020    soff:         0x70  flags:  0x1 [ STATIC-TLS ]
+  static TLS module: [4] /nix/store/rs4hiizl9f6xmrpp4c58pjc9kl3s2lxf-libc/lib/libc.so.1
+  block:      0x7fffeddda160    soff:         0xb0  flags:  0x1 [ STATIC-TLS ]
+=== out-libc.txt
+PASS A 4 libs distinct+initialised: l1:+16=100 l2:+32=200 l3:+64=300 l4:+112=400 bad=0
+PASS A' reverse link order: l1:+160=100 l2:+128=200 l3:+80=300 l4:+16=400 bad=0
+FAIL B 2 libs (ie) x 50 threads: main=BAD threads_bad=50/50
+PASS B 2 libs (gd) x 50 threads: main=ok threads_bad=0/50
+FAIL C aligned(64) (ie) x 20 threads: main=BAD mod64=0 threads_bad=20/20
+FAIL C aligned(64) (gd) x 20 threads: main=BAD mod64=16 threads_bad=20/20
+libc loaded by a: 1
+static TLS layout (LD_DEBUG=tls, test A):
+  static TLS module: [0] /lib/libc.so.1
+  block:      0x7fffea2ca160    soff:         0x10  flags:  0x1 [ STATIC-TLS ]
+  static TLS module: [0] /var/tmp/aa64tls/w-libc/libl1.so
+  block:      0x7fffeeb11020    soff:         0x10  flags:  0x1 [ STATIC-TLS ]
+  static TLS module: [1] /var/tmp/aa64tls/w-libc/libl2.so
+  block:      0x7fffedc11020    soff:         0x20  flags:  0x1 [ STATIC-TLS ]
+  static TLS module: [2] /var/tmp/aa64tls/w-libc/libl3.so
+  block:      0x7fffee411020    soff:         0x40  flags:  0x1 [ STATIC-TLS ]
+  static TLS module: [3] /var/tmp/aa64tls/w-libc/libl4.so
+  block:      0x7fffee711020    soff:         0x70  flags:  0x1 [ STATIC-TLS ]
+  static TLS module: [4] /var/tmp/aa64tls/t1/lib/libc.so.1
+  block:      0x7fffedfea160    soff:         0xb0  flags:  0x1 [ STATIC-TLS ]
+=== out-both.txt
+PASS A 4 libs distinct+initialised: l1:+16=100 l2:+32=200 l3:+64=300 l4:+112=400 bad=0
+PASS A' reverse link order: l1:+160=100 l2:+128=200 l3:+80=300 l4:+16=400 bad=0
+PASS B 2 libs (ie) x 50 threads: main=ok threads_bad=0/50
+PASS B 2 libs (gd) x 50 threads: main=ok threads_bad=0/50
+PASS C aligned(64) (ie) x 20 threads: main=ok mod64=0 threads_bad=0/20
+PASS C aligned(64) (gd) x 20 threads: main=ok mod64=0 threads_bad=0/20
+libc loaded by a: 1
+static TLS layout (LD_DEBUG=tls, test A):
+  static TLS module: [0] /lib/libc.so.1
+  block:      0x7fffeec4a160    soff:         0x10  flags:  0x1 [ STATIC-TLS ]
+  static TLS module: [0] /var/tmp/aa64tls/w-both/libl1.so
+  block:      0x7fffeea11020    soff:         0x10  flags:  0x1 [ STATIC-TLS ]
+  static TLS module: [1] /var/tmp/aa64tls/w-both/libl2.so
+  block:      0x7fffeeb11020    soff:         0x20  flags:  0x1 [ STATIC-TLS ]
+  static TLS module: [2] /var/tmp/aa64tls/w-both/libl3.so
+  block:      0x7fffed311020    soff:         0x40  flags:  0x1 [ STATIC-TLS ]
+  static TLS module: [3] /var/tmp/aa64tls/w-both/libl4.so
+  block:      0x7fffee311020    soff:         0x70  flags:  0x1 [ STATIC-TLS ]
+  static TLS module: [4] /var/tmp/aa64tls/t1/lib/libc.so.1
+  block:      0x7fffedaba160    soff:         0xb0  flags:  0x1 [ STATIC-TLS ]

@@ -1,0 +1,30 @@
+--- a/usr/src/lib/libc/port/threads/tls.c
++++ b/usr/src/lib/libc/port/threads/tls.c
+@@ -134,6 +134,17 @@
+ #define	ALIGN	8
+ #endif
+ 
++#if _TLS_VARIANT == 1
++/*
++ * The static TLS area starts right after the ulwp_t (whose last member is
++ * the TCB), and lmalloc() returns blocks aligned to at least 64 bytes for
++ * this size, so a module's block is as aligned as sizeof (ulwp_t) allows.
++ * rtld aligns each module's offset to max(16, p_align); this keeps p_align
++ * up to 64 honoured in the thread's memory as well.
++ */
++CTASSERT(sizeof (ulwp_t) % 64 == 0);
++#endif
++
+ /*
+  * Grow the TLS module information array as necessary to include the
+  * specified module-id.  tls_modinfo->tls_size must be a power of two.
+@@ -374,7 +385,8 @@
+ 		} else if (tlsp->tm_flags & TM_FLG_STATICTLS) {
+ 			/* static TLS is already allocated/initialized */
+ #if _TLS_VARIANT == 1
+-			base = ((caddr_t)self + sizeof (ulwp_t));
++			base = (caddr_t)self + sizeof (ulwp_t) +
++			    tlsp->tm_stattlsoffset;
+ #else
+ 			base = (caddr_t)self - tlsp->tm_stattlsoffset;
+ #endif

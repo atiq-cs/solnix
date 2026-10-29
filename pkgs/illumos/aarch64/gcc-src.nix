@@ -7,7 +7,9 @@
 # LP64 only, illumos ld (not GNU ld), GNU as, -mno-outline-atomics -mtls-dialect=trad for the
 # target libs (illumos aarch64 ld has no TLSDESC relocations: measured on nix's libnixutil).
 # Outputs as x86: out = the compiler (build-time only), lib = libstdc++/libgcc_s/libatomic.
-{ gate, libcSlice, stage0 ? "/opt/gcc-14", system ? "aarch64-solaris" }:
+# ld: the store link-editor slice (default.nix ld). collect2 runs it, so every store build links with the
+# gate ld of THIS proto, not the build host's /usr/bin/ld (an older host ld left GD TLS code on an IE slot).
+{ gate, libcSlice, ld, stage0 ? "/opt/gcc-14", system ? "aarch64-solaris" }:
 
 let
   version = "14.3.0";
@@ -27,6 +29,7 @@ derivation {
   name = "gcc-${version}";
   inherit system gate stage0 gccSrc gmpSrc mpfrSrc mpcSrc version rev tflags;
   libcDir = "${libcSlice}/lib";
+  ldBin = "${ld}/usr/bin/ld";
   outputs = [ "out" "lib" ];
   builder = "/usr/bin/bash";
   PATH = "/usr/gnu/bin:/usr/bin:/usr/sbin";

@@ -30,8 +30,12 @@ let
     path = protoDir;
     name = "illumos-aarch64-gate-proto-src";
   } else builtins.fetchTarball {
-    url = "https://s3.solnix.io/solnix-cache/ami/aarch64-proto-20260912/proto-root_aarch64.tar.gz";  # flat sha256 40596bc1..
-    sha256 = "0f3bqzms59ix7ci8w763bxbgwkhj0lwap4y8b4wrpgp3h6bnl9rh";
+    # aa64tls (2026-10-29): the 20260912 proto with three objects rebuilt from the same gate pin: lib/libc.so.1 +
+    # lib/ld.so.1 (variant-1 static TLS: each module its own block) and lib/libld.so.4 (an executable keeps GD TLS
+    # as GD). Diffs: src/aarch64-arm64-gate-patches/static-tls-20261029/. Until infra hosts this URL, pass protoDir
+    # = the unpacked tarball (same store path, sqf397cb..); bank floki ~/solnix-bank/aa64tls-20261029/proto.
+    url = "https://s3.solnix.io/solnix-cache/ami/aarch64-proto-aa64tls-20261029/proto-root_aarch64.tar.gz";  # flat sha256 81192a7c..
+    sha256 = "0d1szk5cf282m1c8220s0iy3hk043nicyhm56fw4wa9rhr9zgwwz";
     name = "illumos-aarch64-gate-proto-src";
   };
 in

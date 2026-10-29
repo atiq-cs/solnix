@@ -43,7 +43,8 @@ derivation {
     mkdir -p $out/sw/bin $out/etc/nix
     for p in $paths; do
       for b in "$p"/bin/*; do [ -e "$b" ] && ln -sf "$b" "$out/sw/bin/$(basename "$b")"; done
-      [ -d "$p/share/man" ] && { mkdir -p $out/sw/share/man; cp -rs "$p/share/man/." $out/sw/share/man/ 2>/dev/null || true; }
+      # cp -rs copies the store dirs' r-x mode: without the chmod, the first package with man1 locks the rest out.
+      [ -d "$p/share/man" ] && { mkdir -p $out/sw/share/man; cp -rs "$p/share/man/." $out/sw/share/man/; chmod -R u+w $out/sw/share/man; }
     done
     # as modules/system/activation: the system CA bundle is the store cacert (wget, git, fetch).
     mkdir -p $out/etc/ssl/certs

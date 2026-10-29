@@ -1,0 +1,19 @@
+--- a/usr/src/cmd/sgs/libld/common/machrel.aarch64.c
++++ b/usr/src/cmd/sgs/libld/common/machrel.aarch64.c
+@@ -1089,8 +1089,15 @@
+ 	/*
+ 	 * If we're building an executable - use either the IE or LE access
+ 	 * model.  If we're building a shared object process the IE model.
++	 *
++	 * XXXARM: tls_fixups() does not exist yet, so nothing rewrites a GD
++	 * code sequence (adrp/add/bl __tls_get_addr) into IE or LE code.
++	 * Giving a GD reference in an executable an IE GOT slot would leave
++	 * __tls_get_addr() reading a TPREL value as a tls_index.  Keep GD
++	 * references as GD (a DTPMOD/DTPREL pair) in executables too.
+ 	 */
+-	if ((flags & FLG_OF_EXEC) || (IS_TLS_IE(rtype))) {
++	if (((flags & FLG_OF_EXEC) && !IS_TLS_GD(rtype)) ||
++	    (IS_TLS_IE(rtype))) {
+ 		/*
+ 		 * Set the DF_STATIC_TLS flag.
+ 		 */
