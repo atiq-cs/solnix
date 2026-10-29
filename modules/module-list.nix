@@ -16,6 +16,7 @@
   ./config/nix-channel.nix
   ./config/sudo.nix
   ./config/dumpadm.nix
+  ./config/zfs.nix
   ./config/coreadm.nix
   ./config/libumem.nix
   ./config/first-boot-defaults.nix
