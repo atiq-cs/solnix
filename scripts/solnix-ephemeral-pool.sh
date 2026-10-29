@@ -49,6 +49,15 @@ fi
 while IFS='	' read -r ds mp own mode; do
   [ -n "$ds" ] || continue
   zfs list -H -o name "$POOL/$ds" >/dev/null 2>&1 || run zfs create -p -o mountpoint="$mp" "$POOL/$ds" || exit 1
+  # A dataset whose mountpoint directory already holds files does not mount (zfs refuses a non-empty dir), and the
+  # chown below would then fix the ROOT disk's directory instead: what happened to dixi's /var/tmp/big after a switch
+  # (builds wrote it on spool before data existed). Move the stray contents aside, then mount; never delete them.
+  if [ "$(zfs get -H -o value mounted "$POOL/$ds")" != yes ]; then
+    if [ -d "$mp" ] && [ -n "$(ls -A "$mp" 2>/dev/null)" ]; then
+      a="$mp.pre-$POOL.$(date +%Y%m%d%H%M%S)"; run mv "$mp" "$a" && echo "moved non-empty $mp to $a" || exit 1
+    fi
+    run zfs mount "$POOL/$ds" || exit 1
+  fi
   run chown "$own" "$mp" && run chmod "${mode:-0755}" "$mp" || exit 1
 done < "$SOLNIX_EP_DATASETS"
 echo "$POOL ready: $(zpool list -H -o name,size,health "$POOL" 2>/dev/null)"
