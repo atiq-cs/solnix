@@ -40,7 +40,11 @@ in rec {
   goPkg = { pname, version, src, vendorHash, subPkgs ? ".", check, ldflags ? "", prep ? "", man ? "", goPkgs ? go_1_26 }:
     let
       srcTar = import <nix/fetchurl.nix> { inherit (src) url sha256; };
-      common = { system = "x86_64-solaris"; builder = "/usr/bin/bash"; src = srcTar; go = goPkgs;
+      # unpacked by Nix (libarchive, in the daemon), as fetch-tarball.nix does: host `tar xzf` on a solnix
+      # system is illumos tar, which execs the absent /usr/bin/gzcat and exits 0 with nothing extracted.
+      srcTree = derivation { name = "${pname}-${version}-src"; system = "builtin"; builder = "builtin:unpack-channel";
+        src = srcTar; channelName = "tree"; };
+      common = { system = "x86_64-solaris"; builder = "/usr/bin/bash"; src = srcTree; go = goPkgs;
         inherit rp; storeGate = ./store-gate.sh; tsErrnoGate = ./ts-errno-gate.sh; args = [ ./go-pkg-build.sh ]; };
       vend = derivation (common // { name = "${pname}-${version}-go-vendor"; vendorOnly = "1";
         goVendor = ""; subPkgs = ""; check = ""; ldflags = ""; prep = ""; man = "";
