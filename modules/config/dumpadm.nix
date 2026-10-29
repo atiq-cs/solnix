@@ -83,6 +83,9 @@ in
       stop.exec = ":true";
       # after svc-dumpadm's own `dumpadm -u`, so the dedicated-device check sees the boot's real state.
       requires = [ "svc:/system/filesystem/local:default" "svc:/system/dumpadm:default" ];
+      # After the root pool has grown (services.zfs.expandOnBoot), so the quarter-of-pool cap sees the
+      # grown pool; optional_all, so a system without that service is not held back.
+      dependencies = [ { name = "after-grow"; grouping = "optional_all"; fmris = [ "svc:/site/solnix-zpool-expand:default" ]; } ];
     };
   })
   (lib.mkIf cfg.enable {

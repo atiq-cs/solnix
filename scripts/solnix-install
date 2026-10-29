@@ -1679,43 +1679,20 @@ for _try in 1 2 3 4 5; do
 done
 [ "$_label_ok" = 1 ] || die "clean EFI label failed after 5 attempts (device $TARGET not settling)"
 run_to 30 zpool destroy solnixtmp 2>/dev/null || true
-RESV_START=$(prtvtoc -h "/dev/rdsk/${TARGET}" 2>/dev/null | awk '$1==8{print $4}')
-RESV_SIZE=$(prtvtoc -h "/dev/rdsk/${TARGET}" 2>/dev/null | awk '$1==8{print $5}')
-[ -n "$RESV_START" ] || die "could not read EFI label reserved slice"
-ESP_START=256; ESP_SIZE=524288                 # 256 MiB ESP
-POOL_START=$((ESP_START + ESP_SIZE)); POOL_SIZE=$((RESV_START - POOL_START))
-[ "$POOL_SIZE" -gt 0 ] || die "computed pool size <= 0 (RESV_START=$RESV_START)"
-log "fmthard: s0 ESP @${ESP_START}+${ESP_SIZE}, s1 pool @${POOL_START}+${POOL_SIZE}, s8 resv @${RESV_START}+${RESV_SIZE}"
-cat > /tmp/solnix-install.vtoc <<EOF
-0 12 00 ${ESP_START} ${ESP_SIZE}
-1 4 00 ${POOL_START} ${POOL_SIZE}
-8 11 00 ${RESV_START} ${RESV_SIZE}
-EOF
-fmthard -s /tmp/solnix-install.vtoc "/dev/rdsk/${TARGET}" 2>&1 || die "fmthard failed"
-prtvtoc -h "/dev/rdsk/${TARGET}"
+# The real label is written by `zpool create -B` below (s0 ESP 256M, s1 zfs, s8 reserved),
+# the same geometry this step used to fmthard, but the pool is then whole_disk=1, so
+# autoexpand / `zpool online -e` can relabel it onto a larger disk (libzfs only relabels
+# whole-disk vdevs; a pool on a fmthard'd slice never grows past the image size).
 
 # ---------------------------------------------------------------------------
 # 2. ESP FAT32 + the pool + BE dataset
 # ---------------------------------------------------------------------------
-log "mkfs pcfs ESP on ${TARGET}s0"
-step "formatting ESP + creating pool $POOL + datasets"
-# fresh slice nodes after fmthard: re-run devfsadm so /dev/rdsk/${TARGET}s0
-# reflects the new vtoc before mkfs_pcfs opens it (stale node = silent no-op).
-devfsadm >/dev/null 2>&1 || true
+step "creating pool $POOL + ESP + datasets"
 # NOTE: pcfs `b=<file>` installs a boot file, NOT a volume label — `b=ESP` was
 # misread as boot-file `/boot/ESP` -> `/boot/pmbr: No such file`. Drop it; the ESP
 # just needs a FAT32 filesystem (the loader.efi is copied in later at mount time).
 mkfs_esp() { yes | run_to 60 mkfs -F pcfs -o fat=32 "/dev/rdsk/${TARGET}s0" 2>&1; }
-mkfs_esp
-if ! fstyp "/dev/rdsk/${TARGET}s0" 2>/dev/null | grep -q pcfs; then
-  log "ESP mkfs did not yield pcfs; devfsadm + retry"
-  devfsadm >/dev/null 2>&1 || true
-  mkfs_esp
-  fstyp "/dev/rdsk/${TARGET}s0" 2>/dev/null | grep -q pcfs || die "ESP mkfs failed (fstyp=$(fstyp "/dev/rdsk/${TARGET}s0" 2>&1))"
-fi
-log "ESP fstyp: $(fstyp "/dev/rdsk/${TARGET}s0" 2>&1)"
-
-log "creating pool $POOL on ${TARGET}s1 + BE dataset $BEDS"
+log "creating whole-disk boot pool $POOL on ${TARGET} (-B: s0 ESP, s1 pool) + BE dataset $BEDS"
 # CRITICAL for bootability: create the ROOT pool with -d (disable ALL feature
 # flags) so the illumos boot loader (loader64.efi / gptzfsboot) can READ the
 # pool. A default `zpool create` enables modern features (com.delphix:*,
@@ -1748,8 +1725,23 @@ _encfeat=""
 # encrypt (measured), independent of the not-yet-chosen mode. The actual encrypted
 # /home,/nix datasets are created later, after the mode prompt.
 if zpool upgrade -v 2>/dev/null | grep -q '^encryption'; then _encfeat="-o feature@encryption=enabled"; fi
-run_to 60 zpool create -f -d $_encfeat -o altroot="$ALTROOT" -o cachefile=none \
-  -O compression=on -O atime=off -m none "$POOL" "/dev/dsk/${TARGET}s1" || die "zpool create failed"
+# autoexpand=on: the pool grows to its disk at import (NixOS make-multi-disk-zfs-image's
+# rootPoolProperties); measured on EC2, docs/base-ami-rebuild-runbook.md.
+run_to 60 zpool create -f -d -B $_encfeat -o altroot="$ALTROOT" -o cachefile=none -o autoexpand=on \
+  -O compression=on -O atime=off -m none "$POOL" "/dev/dsk/${TARGET}" || die "zpool create failed"
+prtvtoc -h "/dev/rdsk/${TARGET}"
+# fresh slice nodes after the label: devfsadm so /dev/rdsk/${TARGET}s0 reflects the
+# new vtoc before mkfs_pcfs opens it (stale node = silent no-op).
+devfsadm >/dev/null 2>&1 || true
+log "mkfs pcfs ESP on ${TARGET}s0"
+mkfs_esp
+if ! fstyp "/dev/rdsk/${TARGET}s0" 2>/dev/null | grep -q pcfs; then
+  log "ESP mkfs did not yield pcfs; devfsadm + retry"
+  devfsadm >/dev/null 2>&1 || true
+  mkfs_esp
+  fstyp "/dev/rdsk/${TARGET}s0" 2>/dev/null | grep -q pcfs || die "ESP mkfs failed (fstyp=$(fstyp "/dev/rdsk/${TARGET}s0" 2>&1))"
+fi
+log "ESP fstyp: $(fstyp "/dev/rdsk/${TARGET}s0" 2>&1)"
 # WHY the explicit feature list (not just -d): on modern illumos `zpool create`
 # AUTO-ACTIVATES com.delphix:log_spacemap (needed for the log spacemap) even under
 # -d, and the bundled loader64.efi's ZFS reader does NOT support log_spacemap ->
