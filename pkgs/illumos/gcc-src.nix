@@ -30,6 +30,7 @@
 # keep the build short.
 { gate                    # gate proto store path (the sysroot)
 , libcSlice               # pkgs.solnix.libc: RUNPATH target for libc/libm at run time
+, libcExtra               # base-src's illumos-libc-extra: libkstat.so.1, which the drivers NEED
 , stage0 ? "/usr/gcc/14"  # BUILD-TIME seed compiler (IPS developer/gcc-14)
 , system ? "x86_64-solaris"
 }:
@@ -54,13 +55,16 @@ derivation {
   tsErrnoPatch = ./patches/gcc-14/0032-libstdc-must-use-thread-local-errno.patch;
   libcDir = "${libcSlice}/lib/amd64";
   libcDir32 = "${libcSlice}/lib";
+  libcExtraDir = "${libcExtra}/lib/amd64";
   outputs = [ "out" "lib" ];
   builder = "/usr/bin/bash";
   PATH = "/usr/gnu/bin:/usr/bin:/usr/sbin";
   args = [ "-c" ''
     set -eu
     export PATH=/usr/gnu/bin:/usr/bin:/usr/sbin
-    W=$(mktemp -d /var/tmp/gccsrc.XXXXXX); cd "$W"
+    # Fixed build dir (as mk-src-pkg.nix): the compiler named the random mktemp dir 5741 times.
+    W=/var/tmp/gccsrc-$(printf %s "$out" | /usr/bin/digest -a sha256 | cut -c1-16)
+    rm -rf "$W"; mkdir -m 700 "$W"; trap 'cd /; rm -rf "$W"' EXIT; cd "$W"
     tar xf "$gccSrc"
     cd "gcc-$version"
     patch -p1 < "$tsErrnoPatch" >&2
@@ -145,7 +149,10 @@ derivation {
     find "$out" -type f | while read -r f; do
       [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] || continue
       cur=$(/usr/bin/elfdump -d "$f" 2>/dev/null | awk '$2=="RUNPATH"{print $4}')
-      case "$cur" in /usr/gcc/*) chmod u+w "$f"; /usr/bin/elfedit -e "dyn:runpath $libcDir" "$f";; esac
+      # + libc-extra: the drivers NEED libkstat.so.1, which the libc slice lacks; + gcc.lib: the cc1
+      # plugins NEED libstdc++/libgcc_s. With the libc slice alone ldd took the HOST /lib/64 libkstat
+      # and found no libstdc++ (publish gate, 2026-10-29).
+      case "$cur" in /usr/gcc/*) chmod u+w "$f"; /usr/bin/elfedit -e "dyn:runpath $libcDir:$libcExtraDir:$lib/lib/amd64" "$f";; esac
     done
     if find "$out" -type f | while read -r f; do
          [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] || continue
@@ -154,9 +161,11 @@ derivation {
       echo "FATAL: an ELF in $out still has a /usr/gcc RUNPATH" >&2; exit 1
     fi
     unset LD_LIBRARY_PATH LD_LIBRARY_PATH_64 LD_LIBRARY_PATH_32 || true
-    bad=$(for f in "$out"/lib/*.so* "$out"/lib/amd64/*.so*; do
-      [ -f "$f" ] && [ ! -L "$f" ] || continue
-      case "$f" in *.py) continue;; esac
+    # Every dynamic ELF in $out, not only lib/*.so*: the publish gate checks all of them, and this
+    # gate let bin/gcc's host libkstat through.
+    bad=$(find "$out" -type f | while read -r f; do
+      [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] || continue
+      /usr/bin/elfdump -d "$f" 2>/dev/null | grep -q NEEDED || continue
       /usr/bin/ldd "$f" 2>&1 | awk -v f="$f" '/not found/ || (/=>/ && $NF !~ /^\/nix\/store\//) {print f": "$0}'
     done)
     [ -z "$bad" ] || { echo "FATAL: $out shared libs leave the store:" >&2; echo "$bad" >&2; exit 1; }

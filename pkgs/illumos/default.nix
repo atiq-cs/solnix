@@ -368,7 +368,7 @@ let
   # gcc built FROM SOURCE (./gcc-src.nix): the NixOS bootstrap step. The host's
   # IPS gcc-14 is only the stage0 seed that compiles it; gcc.lib (libstdc++,
   # libgcc_s) is the C++/unwind runtime every shipped C++ binary links.
-  gcc = import ./gcc-src.nix { gate = gate'; libcSlice = libc; };
+  gcc = import ./gcc-src.nix { gate = gate'; libcSlice = libc; inherit (srcPkgs) libcExtra; };
 
   # Rust FROM SOURCE (./rust-src.nix), the N-1 chain of docs/rust-illumos-bootstrap.md.
   # stage0 is the OI 1.97.1 seed tree, fetched by its NarHash from the cache (the

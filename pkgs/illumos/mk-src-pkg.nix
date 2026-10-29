@@ -133,7 +133,16 @@ derivation {
     # gnugrep/gnused/gstrip on a solnix system). Empty $btPath collapses this to
     # the old /usr/gnu/bin:/usr/bin:/usr/sbin, so the bhost build is unchanged.
     export PATH="''${btPath:+$btPath:}/usr/gnu/bin:/usr/bin:/usr/sbin"
-    W=$(mktemp -d /var/tmp/srcpkg.XXXXXX)
+    # FIXED build dir, not mktemp: configure/libtool record it in shipped strings (jq's `CC=<W>/cc64`
+    # and its .libs search path), so a random name made every build's NarHash differ (measured:
+    # docs/pending/builders-need-store-tools.md, 2026-10-29). NixOS builds in the sandbox's /build;
+    # illumos has no sandbox, so: one constant path per output, the same on every host (unlike
+    # $NIX_BUILD_TOP, which follows the daemon's TMPDIR). It is keyed by a digest of $out, so no
+    # store hash lands in the output, and Nix's output lock keeps two builds of one out apart.
+    # mkdir without -p FAILS if a stale entry we cannot remove (another user's) is in the way.
+    W=/var/tmp/srcpkg-$(printf %s "$out" | /usr/bin/digest -a sha256 | cut -c1-16)
+    # Removed on ANY exit: a stale dir from a failed build by another nixbld uid could not be.
+    rm -rf "$W"; mkdir -m 700 "$W"; trap 'cd /; rm -rf "$W"' EXIT
     cp "$srcTar" "$W/src.tar"
     # illumos has no sha256sum; /usr/bin/digest -a sha256 is always present and
     # emits lowercase hex, matching the plain-hex src.sha256 (verified on dixi).
