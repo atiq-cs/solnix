@@ -45,6 +45,12 @@ in
     environment.generatedEtc."inet/services" = builtins.readFile ./services.stock
       + "solnix-cache-proxy\t${toString port}/tcp\t\t\t# solnix local substituter (127.0.0.1 only)\n";
     nix.settings.extra-substituters = [ "http://127.0.0.1:${toString port}" ];
+    # cache.solnix.io's nix-cache-info carries no Priority line, so nix gives it 0 and tries it before the proxy's 30
+    # (lower = first): with both listed every path came straight from cache.solnix.io and the proxy saw no request
+    # (measured on dixi, 2026-10-29; with ?priority=50 on the origin the same fetch went through the proxy). The
+    # per-store ?priority= is nix's own knob. Only nix.nix's default list is rewritten (mkDefault < this); a config
+    # that sets its own substituters keeps them.
+    nix.settings.substituters = lib.mkOverride 900 [ "https://cache.solnix.io?priority=50" "https://cache.nixos.org" ];
     smf.services.solnix-cache-proxy-setup = {
       enable = true;
       category = "site";
