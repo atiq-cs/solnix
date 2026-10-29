@@ -103,3 +103,19 @@ system never re-runs it. No change needed for the core deliverable.
   route by mk-src-pkg + nix-src.nix. Only their sha256sum was fixed here; a full
   store-tool port of them is a separate item (they need the same buildTools
   treatment, or retirement in favour of the from-source chain).
+
+## 2026-10-29 (qbuild2): mk-src-pkg outputs are not reproducible across builds -- the random build dir is embedded
+
+Measured: the SAME store path /nix/store/1fjqlkii...-jq-1.7.1 built twice (bhost for cache.solnix.io, and the copy in
+dixi's store) has two NarHashes (served sha256:13hrx7nz..., dixi sha256:1krla6k9...), both 609208 bytes. They differ in 14
+bytes of bin/jq: strings that embed the build directory, `/var/tmp/srcpkg.5qDpqy/s64/jq-1.7.1/.libs:...` (libtool's
+link-time search path recorded in a string, NOT the ELF RUNPATH, which is store-only) and `CC=/var/tmp/srcpkg.5qDpqy/cc64`
+(the configure line jq prints with --version). The build dir comes from mk-src-pkg.nix's `W=$(mktemp -d
+/var/tmp/srcpkg.XXXXXX)`, and 10 other builders do the same (gcc-src, base-src, cli/c-*, bsdfetch, ...).
+
+Consequence: `nix build --rebuild` of any of these fails "not deterministic", and an independent rebuild never matches the
+served NarHash. So a second builder cannot ATTEST a solnix package (the trust model is reproducibility). NixOS builds in
+a FIXED path (/build, via the sandbox, or NIX_BUILD_TOP) for exactly this. Fix: build in a fixed directory, e.g.
+`W=$NIX_BUILD_TOP/w` (Nix gives each build a private top dir; its name is in the env, not in the output, once the build
+uses a constant relative name), or `/var/tmp/srcpkg` + the drv hash. This moves every mk-src-pkg out, so it belongs in the
+batched rebuild above.
