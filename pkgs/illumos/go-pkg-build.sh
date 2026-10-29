@@ -6,7 +6,11 @@ set -eu
 export PATH=/usr/gnu/bin:/usr/bin:/usr/sbin
 W=$NIX_BUILD_TOP; cd "$W"
 export HOME=$W GOCACHE=$W/cache GOPATH=$W/gopath CGO_ENABLED=0 GOTOOLCHAIN=local GOPROXY=${GOPROXY:-off}
-mkdir -p "$W/src"; cd "$W/src"; tar xzf "$src"; cd "$(ls -d */ | head -1)"
+# $src is the tree go.nix unpacked (builtin:unpack-channel puts the single top-level dir at tree/).
+# illumos cp lchowns copied symlinks to root and warns EPERM as nixbld (exit 0); drop just that line.
+mkdir -p "$W/src"; cp -RP "$src/tree" "$W/src/s" 2> "$W/cp.err" || { cat "$W/cp.err" >&2; exit 1; }
+grep -v 'cannot change owner and group of' "$W/cp.err" >&2 || :; chmod -R u+w "$W/src/s"; cd "$W/src/s"
+[ -f go.mod ] || { echo "FATAL: no go.mod at the top of the unpacked source" >&2; exit 1; }
 if [ -n "$vendorOnly" ]; then
   export GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org SSL_CERT_FILE
   "$go/bin/go" mod vendor
