@@ -32,7 +32,7 @@ in
       category = "site";
       description = "solnix idle-time build-queue drainer (telemetry.solnix.io)";
       model = "contract";
-      requires = [ "svc:/milestone/network:default" "svc:/system/filesystem/local:default" "svc:/system/nix-daemon:default" ];
+      requires = [ "svc:/milestone/network:default" "svc:/milestone/name-services:default" "svc:/system/filesystem/local:default" "svc:/system/nix-daemon:default" ];
       environment = {
         BUILDER_PATH = path;
         CURL_CA_BUNDLE = "${s.nixChain.cacert}/etc/ssl/certs/ca-bundle.crt";

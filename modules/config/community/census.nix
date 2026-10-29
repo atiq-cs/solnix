@@ -28,7 +28,7 @@ in
         category = "site";
         description = "solnix anonymous daily platform census (telemetry.solnix.io)";
         model = "contract";
-        requires = [ "svc:/milestone/network:default" "svc:/site/solnix-census-setup:default" ];
+        requires = [ "svc:/milestone/network:default" "svc:/milestone/name-services:default" "svc:/site/solnix-census-setup:default" ];
         environment = {
           CENSUS_PATH = "${pkgs.solnix.nixChain.curl}/bin:/usr/bin:/usr/sbin";
           CURL_CA_BUNDLE = "${pkgs.solnix.nixChain.cacert}/etc/ssl/certs/ca-bundle.crt";
