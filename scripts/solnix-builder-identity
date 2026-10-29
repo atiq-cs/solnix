@@ -1,0 +1,39 @@
+#!/usr/bin/ksh93
+# solnix-builder-identity -- enrol or rotate a builder identity with solnix.io (infra 2026-10-28, live at cache-api v37).
+# The identity is an ssh-ed25519 key (by default the host key). Signatures are `ssh-keygen -Y sign -n solnix-builder`
+# (armored SSHSIG) over the payloads below, each line followed by one newline, the last included:
+#   enroll: solnix-builder-enroll-v1 / sshid / arch / flavor / email-or-empty
+#   rotate: solnix-builder-rotate-v1 / old_sshid / new_sshid          (signed by BOTH keys)
+#   solnix-builder-identity enroll <key> <arch> [email]          print the JSON body (add --send to POST it)
+#   solnix-builder-identity rotate <old-key> <new-key>           print the JSON body (add --send to POST it)
+# Never enrol dixa/dixi/lixi (already tier 1); never rotate a real host key except to replace a lost or compromised one.
+PATH=${IDENTITY_PATH:-/usr/bin:/usr/sbin}
+: ${IDENTITY_API:=https://telemetry.solnix.io/api/v1/builder}
+W=$(mktemp -d /tmp/sbi.XXXXXX) || exit 1; trap 'find "$W" -depth -delete' EXIT
+die() { print -u2 "solnix-builder-identity: $*"; exit 2; }
+pub() { ssh-keygen -y -f "$1" 2>/dev/null | nawk '$1 == "ssh-ed25519" {print $1, $2; exit}'; }
+js() {	# a JSON string. Every field is a key, an arch, an email or an armored SSHSIG: refuse " and \, escape newlines.
+	[[ $1 == *[\"\\]* ]] && die "refusing a value with a quote or backslash"
+	typeset v=${1//$'\n'/\\n}; print -rn -- "\"$v\""
+}
+sig() { cp "$2" "$W/payload"; ssh-keygen -q -Y sign -n solnix-builder -f "$1" "$W/payload" >/dev/null 2>&1 && cat "$W/payload.sig" && rm -f "$W/payload.sig"; }
+send=0; [[ ${@: -1} == --send ]] && { send=1; set -- "${@:1:$#-1}"; }
+case $1 in
+enroll)
+	k=$2 arch=$3 email=${4:-}; id=$(pub "$k"); [[ -n $id && -n $arch ]] || die "usage: enroll <ed25519-key> <arch> [email]"
+	[[ -z $email || $email == +([!@ \"])@+([!@ \"]) ]] || die "bad email"
+	printf 'solnix-builder-enroll-v1\n%s\n%s\n%s\n%s\n' "$id" "$arch" solnix "$email" > "$W/p"
+	s=$(sig "$k" "$W/p") || die "ssh-keygen -Y sign failed"
+	body="{\"version\":1,\"kind\":\"builder_enroll\",\"sshid\":$(js "$id"),\"arch\":$(js "$arch"),\"flavor\":\"solnix\""
+	[[ -n $email ]] && body+=",\"email\":$(js "$email")"
+	body+=",\"sig\":$(js "$s")}"; ep=enroll ;;
+rotate)
+	o=$(pub "$2") n=$(pub "$3"); [[ -n $o && -n $n && $o != "$n" ]] || die "usage: rotate <old-key> <new-key> (two different ed25519 keys)"
+	printf 'solnix-builder-rotate-v1\n%s\n%s\n' "$o" "$n" > "$W/p"
+	so=$(sig "$2" "$W/p") && sn=$(sig "$3" "$W/p") || die "ssh-keygen -Y sign failed"
+	body="{\"version\":1,\"kind\":\"builder_rotate\",\"old_sshid\":$(js "$o"),\"new_sshid\":$(js "$n"),\"sig_old\":$(js "$so"),\"sig_new\":$(js "$sn")}"; ep=rotate ;;
+*) die "usage: enroll <key> <arch> [email] | rotate <old-key> <new-key>  [--send]" ;;
+esac
+cp "$W/p" "${IDENTITY_PAYLOAD_OUT:-/dev/null}" 2>/dev/null
+(( send )) || { print -r -- "$body"; exit 0; }
+print -r -- "$body" | curl -sS -m 30 -w '\nHTTP %{http_code}\n' -H 'Content-Type: application/json' --data-binary @- "$IDENTITY_API/$ep"

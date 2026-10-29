@@ -118,3 +118,26 @@ ssh root@<new-host> 'mv /etc/ssh/ssh_host_ed25519_key.new /etc/ssh/ssh_host_ed25
 If the key cannot be restored (it was lost or compromised), the host's identity moves by `rotate`, signed by the old key from
 sops (patch 5: scripts/solnix-builder-identity). A new host with a new key uses `enroll`, which lands at tier 0
 until infra raises it.
+
+## Enrol and rotate (scripts/solnix-builder-identity)
+
+`solnix-builder-identity enroll <key> <arch> [email] [--send]` and `rotate <old-key> <new-key> [--send]` build the
+JSON bodies infra specified (live at `https://telemetry.solnix.io/api/v1/builder/{enroll,rotate}` since cache-api v37).
+Each signature is `ssh-keygen -Y sign -n solnix-builder` (armored SSHSIG) over the fixed-domain payload, with a
+newline after each line including the last. Rotate is signed by both keys. Without `--send` the script only prints
+the body. Use it for a new or reinstalled host whose key could not be restored. Do not use it for dixa, dixi or lixi:
+they are enrolled at tier 1 already. `solnix.builder.enable = true` sets the census `builder` flag. The operator sets it
+once the host is enrolled.
+
+Tested 2026-10-28:
+- scripts/test-builder-identity.sh, offline on illumos, needing only /usr/bin (ksh93, ssh-keygen, nawk; no jq): 16/16 on
+  dixi as gburd with PATH=/usr/bin. Each signature verifies with `ssh-keygen -Y verify` over the exact payload. A broken
+  signature, a tampered payload, the wrong key, the wrong namespace, a rotate to the same key and a quoted email are
+  all refused. It exits 1 when any check fails (last line `RESULT:`), and that exit code is negative-controlled with
+  three broken copies of the client: a corrupted signature, a missing `arch`, and swapped rotate keys each give rc=1.
+  The first version needed jq, so on a host without it 7 positive checks failed and the run still looked green:
+  piped through `tail`, the reported rc was tail's 0.
+- solnix-builder-identity itself needs no jq: it uses ssh-keygen, nawk, and curl for `--send`, all in /usr/bin on a
+  solnix host. curl verifies TLS against the default CA path there; measured 200 without CURL_CA_BUNDLE.
+- Live, once, with throwaway keys (/scratch/solnix/community1/identity-live-test.txt): enroll A returned 200 (tier 0,
+  keyid ssh-d5ae18c7c6a1), then rotate A to B returned 200 "rotated". The private keys were deleted afterwards.

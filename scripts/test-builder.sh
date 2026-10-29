@@ -1,10 +1,14 @@
 #!/usr/bin/ksh93
-# test-builder.sh -- solnix-builder on illumos (ksh93, jq, nix, curl): the planner against fixed rows + a fixed recipes
+# test-builder.sh -- solnix-builder on illumos (ksh93, nix, curl; jq from the store as the module has it): the planner against fixed rows + a fixed recipes
 # file, the live listing, and the dry run (no bearer -> no claim). curl is real for the listing and cache; the claim
 # endpoint is never reached without a bearer, which the NEG cases prove with a recording fake API.
 S=${1:-$(dirname "$0")/../modules/config/community/solnix-builder.sh}
 W=$(mktemp -d /tmp/bld.XXXXXX); trap 'find "$W" -depth -delete' EXIT
 bad=0; ok() { print "ok: $1"; }; no() { print "FAIL: $1"; bad=1; }
+# jq, as the module gives it (builder.nix BUILDER_PATH = pkgs.solnix.jq): a host's PATH has none. Override with JQ_BIN.
+J=${JQ_BIN:-/nix/store/1fjqlkii7xmvhqrbryx59n7gbv46c3j5-jq-1.7.1/bin}
+[[ -x $J/jq ]] || nix-store -r "${J%/bin}" >/dev/null 2>&1 || { print "FAIL: no jq at $J (nix-store -r ${J%/bin})"; exit 1; }
+PATH=$J:$PATH; export PATH
 export BUILDER_STATE=$W BUILDER_BEARER_FILE=$W/bearer BUILDER_PATH=$PATH
 T=$'\t'; H="pname${T}version${T}url${T}sha256${T}buildsys${T}deps${T}flags${T}system${T}out${T}debug"
 { print -r -- "$H"
@@ -58,4 +62,5 @@ c=$(cat "$W/fk/log"); print -r -- "$c" | sed 's/^/   /'
 print -r -- "$c" | grep -q '/42/heartbeat' && print -r -- "$c" | grep -q '/42/complete .*"claim_token":"00000000-0000-4000-8000-000000000042".*"status":"failed".*cannot serve' &&
   ok "granted claim: heartbeat + complete failed with the reason (token kept)" || no "claim handling: $out"
 out=$(env BUILDER_LOAD_MAX=0 ksh93 "$S" once 2>&1); print -r -- "$out" | grep -q 'not idle' && ok "NEG busy (load >= 0): does nothing" || no "busy: $out"
+(( bad )) && print "RESULT: FAIL" || print "RESULT: PASS"
 exit $bad
