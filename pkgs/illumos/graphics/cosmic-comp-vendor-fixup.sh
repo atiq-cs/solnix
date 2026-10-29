@@ -120,6 +120,19 @@ fi
 edit smithay src/utils/sealed_file.rs "'            let mut shm_name = name.to_bytes().to_owned();'" \
   "'            let mut shm_name = b\"/\".to_vec();\n            shm_name.extend_from_slice(name.to_bytes());'"
 
+# 11. polling (calloop's poller): on illumos it uses event ports, but wayland-backend's server
+#     poll fd is an epoll fd (item 2), and an illumos epoll (/dev/poll DP_EPOLLCOMPAT) fd nested in
+#     an event port never wakes it: devpoll.c dppoll() gives no pollhead and wakes only poll/devpoll
+#     parents (measured: /scratch/solnix/gpu6/t/nestpoll2.c, epoll-in-port NO EVENT, epoll-in-epoll
+#     FIRED). So no client request was ever read (gpu6 run g6e). Take polling's epoll backend, the
+#     Linux one, on illumos; rustix has illumos epoll, eventfd and timerfd. Compositor only.
+if have smithay; then
+edit polling src/lib.rs "'        target_os = \"android\",\n        target_os = \"redox\"\n    ))] {\n        mod epoll;'" \
+  "'        target_os = \"android\",\n        target_os = \"redox\",\n        target_os = \"illumos\"\n    ))] {\n        mod epoll;'"
+edit polling src/lib.rs "'        target_os = \"illumos\",\n        target_os = \"solaris\",\n    ))] {\n        mod port;'" \
+  "'        target_os = \"solaris\",\n    ))] {\n        mod port;'"
+fi
+
 # 10. pam-sys 1.0.0-alpha5 + pam-client 0.5 (cosmic-greeter): illumos libpam is Solaris PAM.
 #     bindgen: signed macro constants (the Linux arm; the API takes int). pam-client: its
 #     target_os = "solaris" arms (pam_conv passes a pointer to an ARRAY of pam_message,

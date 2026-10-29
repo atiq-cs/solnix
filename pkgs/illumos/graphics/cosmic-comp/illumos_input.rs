@@ -15,6 +15,9 @@ use smithay::reexports::calloop::{generic::Generic, EventSource, Interest, Mode,
 // KIOCTRANS = KIOC|30 and VUIDSFORMAT = VUIOC|11 on x86 (the "avoid conflict with VT" arms).
 const KIOCTRANS: i32 = 27422;
 const KIOCGTRANS: i32 = 27427; // KIOC|35
+// conskbd routes key events to the /dev/kbd queue ONLY while directio is set (conskbd.c
+// conskbd_override_kbtrans); otherwise they go to the console. kbio.h: KIOCSDIRECT = KIOC|10.
+const KIOCSDIRECT: i32 = 27402;
 const TR_ASCII: i32 = 1;
 const TR_UNTRANS_EVENT: i32 = 3;
 const VUIDSFORMAT: i32 = 30219;
@@ -142,6 +145,7 @@ pub fn translate(dev: VuidDevice, f: Firm) -> Option<InputEvent<VuidInput>> {
 }
 
 use smithay::reexports::rustix::{fs::OFlags, ioctl::{ioctl, Getter, Opcode, Setter}};
+use smithay::backend::session::{libseat::LibSeatSession, Session};
 use std::os::fd::{AsRawFd, BorrowedFd};
 use std::sync::atomic::{AtomicI32, Ordering::SeqCst};
 
@@ -161,6 +165,8 @@ pub fn restore_console_input() {
     if k >= 0 {
         let fd = unsafe { BorrowedFd::borrow_raw(k) };
         let _ = unsafe { ioctl(fd, Setter::<{ KIOCTRANS as Opcode }, i32>::new(KBD_MODE.load(SeqCst))) };
+        // directio off = keys back to the console (its only correct value; close resets it too)
+        let _ = unsafe { ioctl(fd, Setter::<{ KIOCSDIRECT as Opcode }, i32>::new(0)) };
     }
     let m = MOUSE_FD.swap(-1, SeqCst);
     if m >= 0 {
@@ -210,25 +216,42 @@ fn install_restore_hooks() {
     });
 }
 
-pub fn open_kbd() -> std::io::Result<File> {
-    let f = open_nb("/dev/kbd")?; // KIOCTRANS/KIOCGTRANS take an int* (kbio.h)
+pub fn open_kbd(s: &mut Option<LibSeatSession>) -> std::io::Result<File> {
+    let f = open_seat(s, "/dev/kbd")?; // KIOCTRANS/KIOCGTRANS take an int* (kbio.h)
     let mode = unsafe { ioctl(&f, Getter::<{ KIOCGTRANS as Opcode }, i32>::new()) }.unwrap_or(TR_ASCII);
     // a compositor that died before this one may have left raw mode set: restore the console's
     let mode = if mode == TR_UNTRANS_EVENT { TR_ASCII } else { mode };
     KBD_MODE.store(mode, SeqCst);
     KBD_FD.store(f.as_raw_fd(), SeqCst);
     install_restore_hooks();
-    unsafe { ioctl(&f, Setter::<{ KIOCTRANS as Opcode }, i32>::new(TR_UNTRANS_EVENT))? };
+    let set = || -> smithay::reexports::rustix::io::Result<()> { unsafe {
+        ioctl(&f, Setter::<{ KIOCTRANS as Opcode }, i32>::new(TR_UNTRANS_EVENT))?;
+        ioctl(&f, Setter::<{ KIOCSDIRECT as Opcode }, i32>::new(1))
+    } };
+    // on failure put the console back and forget the fd before it closes (no restore on a reused fd)
+    if let Err(e) = set() { restore_console_input(); return Err(e.into()); }
     Ok(f)
 }
-pub fn open_mouse() -> std::io::Result<File> {
-    let f = open_nb("/dev/mouse")?; // VUIDSFORMAT/VUIDGFORMAT take an int* (vuid_event.h)
+pub fn open_mouse(s: &mut Option<LibSeatSession>) -> std::io::Result<File> {
+    let f = open_seat(s, "/dev/mouse")?; // VUIDSFORMAT/VUIDGFORMAT take an int* (vuid_event.h)
     let fmt = unsafe { ioctl(&f, Getter::<{ VUIDGFORMAT as Opcode }, i32>::new()) }.unwrap_or(VUID_FIRM_EVENT);
     MOUSE_FMT.store(fmt, SeqCst);
     MOUSE_FD.store(f.as_raw_fd(), SeqCst);
     install_restore_hooks();
     unsafe { ioctl(&f, Setter::<{ VUIDSFORMAT as Opcode }, i32>::new(VUID_FIRM_EVENT))? };
     Ok(f)
+}
+// /dev/kbd and /dev/mouse are root-only (or the console user's, logindevperm), so a greeter or
+// a greetd user session gets them from seatd, which opens them as root (seatd illumos-vuid
+// patch), as it does /dev/dri/card0. A direct open stays as the fallback (root, no seatd).
+fn open_seat(s: &mut Option<LibSeatSession>, path: &str) -> std::io::Result<File> {
+    if let Some(s) = s {
+        match s.open(std::path::Path::new(path), OFlags::RDWR | OFlags::NONBLOCK) {
+            Ok(fd) => return Ok(File::from(fd)),
+            Err(e) => tracing::warn!(?e, "illumos input: libseat open of {} failed, opening directly", path),
+        }
+    }
+    open_nb(path)
 }
 fn open_nb(path: &str) -> std::io::Result<File> {
     use std::os::unix::fs::OpenOptionsExt;
@@ -261,12 +284,12 @@ impl Drop for VuidSource {
 }
 
 impl VuidSource {
-    pub fn new() -> Self {
+    pub fn new(mut session: Option<LibSeatSession>) -> Self {
         let g = |r: std::io::Result<File>, what: &str| match r {
             Ok(f) => Some(Generic::new(f, Interest::READ, Mode::Level)),
             Err(e) => { tracing::warn!(?e, "illumos input: {} unavailable", what); None }
         };
-        VuidSource { kbd: g(open_kbd(), "/dev/kbd"), mouse: g(open_mouse(), "/dev/mouse"), added: false }
+        VuidSource { kbd: g(open_kbd(&mut session), "/dev/kbd"), mouse: g(open_mouse(&mut session), "/dev/mouse"), added: false }
     }
 }
 

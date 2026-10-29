@@ -21,7 +21,7 @@ rep("""    let libinput_context = init_libinput(dh, &session, &event_loop.handle
     let libinput_context = init_libinput(dh, &session, &event_loop.handle())
         .context("Failed to initialize libinput backend")?;
     #[cfg(target_os = "illumos")]
-    init_vuid_input(dh, &event_loop.handle()).context("Failed to initialize illumos input")?;""")
+    init_vuid_input(dh, &session, &event_loop.handle()).context("Failed to initialize illumos input")?;""")
 rep("""        if let Err(err) = backend.libinput.resume() {
             error!(?err, "Failed to resume libinput context.");
         }""", """        #[cfg(not(target_os = "illumos"))]
@@ -31,6 +31,14 @@ rep("""        if let Err(err) = backend.libinput.resume() {
 rep("        backend.libinput.suspend();", "        #[cfg(not(target_os = \"illumos\"))]\n        backend.libinput.suspend();")
 rep("fn init_libinput(", open(os.path.join(here, "cosmic-comp-kms-illumos.rs")).read() + "\nfn init_libinput(")
 open(k, "w").write(s)
+# (3) name the GL device at init, at WARN (the release logger keeps smithay and cosmic_comp at warn):
+# a seatd client once ran on softpipe unseen (gpu7: libdrm could not reach PCI info). Panel runs gate on this line.
+d = os.path.join(root, "src/backend/kms/device.rs")
+t = open(d).read()
+a = "    let context =\n        EGLContext::new_with_priority(&display, ContextPriority::High)"
+if t.count(a) != 1: sys.exit("FATAL: anchor not found in kms/device.rs: %r" % a[:60])
+t = t.replace(a, "    tracing::warn!(software = device.is_software(), path = ?path, \"illumos: EGL device\");\n" + a)
+open(d, "w").write(t)
 shutil.copy(os.path.join(here, "illumos_input.rs"), os.path.join(root, "src/backend/kms/illumos_input.rs"))
 shutil.copy(os.path.join(here, "hid2evdev.rs"), os.path.join(root, "src/backend/kms/hid2evdev.rs"))
 print("cosmic-comp illumos source fixup: kms/mod.rs + illumos_input.rs + hid2evdev.rs", file=sys.stderr)

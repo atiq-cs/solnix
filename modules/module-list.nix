@@ -16,7 +16,6 @@
   ./config/nix-channel.nix
   ./config/sudo.nix
   ./config/dumpadm.nix
-  ./config/zfs.nix
   ./config/coreadm.nix
   ./config/libumem.nix
   ./config/first-boot-defaults.nix
@@ -35,6 +34,7 @@
   ./config/pgfarm.nix
   ./config/cosmic-desktop.nix
   ./config/desktop-cosmic.nix
+  ./config/dbus.nix
   ./config/shell-environment.nix
   ./config/nix.nix
   ./config/community/options.nix

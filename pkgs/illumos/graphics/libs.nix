@@ -89,6 +89,8 @@ rec {
       patch -p1 < ${./patches/libdrm-2.4.120-illumos-ioctl.patch}
       # drmGetDevice2 & co. on illumos (no DRM major 226, clone minors): Mesa's loader needs it.
       patch -p1 < ${./patches/libdrm-2.4.120-illumos-device.patch}
+      # PCI info through the caller's fd (seatd passes card0; /dev/dri stays 0600 root)
+      patch -p1 < ${./patches/libdrm-2.4.120-illumos-fd-pciinfo.patch}
       ${pc}
       ${m "-Dintel=disabled -Dradeon=disabled -Damdgpu=disabled -Dnouveau=disabled -Dvmwgfx=disabled -Dfreedreno=disabled -Dvc4=disabled -Detnaviv=disabled -Dcairo-tests=disabled -Dman-pages=disabled -Dvalgrind=disabled -Dtests=false -Dudev=false -Dc_args=-D__EXTENSIONS__"}
     '';

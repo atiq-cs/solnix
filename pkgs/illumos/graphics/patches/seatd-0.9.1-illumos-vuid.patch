@@ -1,0 +1,17 @@
+--- a/common/wscons.c	2024-10-30 15:43:26.000000000 -0400
++++ b/common/wscons.c	2026-10-28 16:16:56.185104428 -0400
+@@ -19,6 +19,14 @@
+ 	       strncmp(path, wsmouse, STRLEN(wsmouse)) == 0 ||
+ 	       strncmp(path, wsmux, STRLEN(wsmouse)) == 0;
+ }
++#elif defined(__sun)
++/* illumos: the console keyboard and mouse (conskbd/consms, VUID Firm_events), which
++ * the compositor reads in place of evdev. seat_open_device realpath()s first, so the
++ * /devices names are what arrive here. Like wscons: nothing to set up, no revoke. */
++int path_is_wscons(const char *path) {
++	return strcmp(path, "/devices/pseudo/conskbd@0:kbd") == 0 ||
++	       strcmp(path, "/devices/pseudo/consms@0:mouse") == 0;
++}
+ #else
+ int path_is_wscons(const char *path) {
+ 	(void)path;

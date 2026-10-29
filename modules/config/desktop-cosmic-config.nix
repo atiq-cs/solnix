@@ -56,17 +56,23 @@ in
   # uses the stock "other" stack (pam_authtok_get, pam_unix_auth, ...; /etc/pam.conf), the
   # analog of NixOS's default security.pam.services entry.
 
+  # NixOS (services.seatd): a `seat` group may open the seat. The greeter is in it; desktop
+  # users join it with extraGroups = [ "seat" ] (lixi: gburd), as on NixOS.
+  users.groups.seat = { gid = greeterUid + 2; members = [ "cosmic-greeter" ]; };
   users.groups.cosmic-greeter.gid = greeterUid;
   users.users.cosmic-greeter = {
     uid = greeterUid; group = "cosmic-greeter"; description = "COSMIC login greeter user";
     home = "/var/lib/cosmic-greeter"; shell = "/usr/bin/false"; hashedPassword = null;
   };
 
+  # The system bus (NixOS has it always on): cosmic-greeter-daemon and cosmic-comp use it.
+  services.dbus = { enable = true; packages = [ greeter ]; };
+
   smf.services = mkIf cfg.greeter {
     # NixOS services.seatd (no logind): cosmic-comp's libseat talks to it over /var/run/seatd.sock.
     seatd = {
       category = "system"; description = "seatd seat management daemon (libseat)";
-      start.exec = start "${s.seatd}/bin/seatd -g cosmic-greeter &";
+      start.exec = start "${s.seatd}/bin/seatd -g seat &";
       requires = [ "svc:/system/filesystem/local:default" ];
     };
     cosmic-greeter-daemon = {

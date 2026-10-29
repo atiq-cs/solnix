@@ -64,4 +64,18 @@ edit("greetd/src/session/worker.rs", "    SessionChildToParent::FinalChildPid(ch
      "    SessionChildToParent::FinalChildPid(child.as_raw() as u64).send(sock)?;\n"
      "    if let Err(e) = sock.shutdown(std::net::Shutdown::Both) {\n"
      "        if e.kind() != std::io::ErrorKind::NotConnected { return Err(e.into()); }\n    }")
+# XDG_RUNTIME_DIR: on NixOS pam_systemd/logind makes /run/user/<uid> (0700, the user's) for every
+# session, the greeter's included; cosmic-comp, the greeter and the session's wayland and dbus
+# sockets live there. illumos has no logind, so the worker makes /var/run/user/<uid> (tmpfs) the
+# same way, before open_session, and exports it through the PAM environment.
+edit("greetd/src/session/worker.rs", "    for e in env.iter().chain(prepared_env.iter()) {\n        pam.putenv(e)?;\n    }",
+     "    for e in env.iter().chain(prepared_env.iter()) {\n        pam.putenv(e)?;\n    }\n"
+     "    #[cfg(target_os = \"illumos\")]\n    {\n"
+     "        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};\n"
+     "        let rd = format!(\"/var/run/user/{}\", user.uid);\n"
+     "        let _ = std::fs::DirBuilder::new().recursive(true).mode(0o755).create(\"/var/run/user\");\n"
+     "        let _ = std::fs::DirBuilder::new().mode(0o700).create(&rd);\n"
+     "        nix::unistd::chown(rd.as_str(), Some(user.uid), Some(user.gid))?;\n"
+     "        std::fs::set_permissions(&rd, std::fs::Permissions::from_mode(0o700))?;\n"
+     "        pam.putenv(&format!(\"XDG_RUNTIME_DIR={}\", rd))?;\n    }")
 print("greetd illumos source fixup: ioctl.rs terminal/mod.rs server.rs prctl.rs", file=sys.stderr)
