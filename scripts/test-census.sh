@@ -26,4 +26,15 @@ print -r -- "$s" | egrep -q "$G" && ok "sent once: $s" || no "send: '$s'"
 [[ $s != *$(cat "$W/census-secret")* ]] && ok "secret not in record" || no "secret leaked"
 find "$W" -name sent -delete; CENSUS_ENDPOINT=https://x.invalid/c ksh93 "$S" --once >/dev/null; [[ ! -e $W/sent ]] && ok "second run same day: not resent" || no "resent same day"
 [[ $(ls -l "$W/census-secret" | cut -c1-10) == -rw------- ]] && ok "secret 0600" || no "secret mode $(ls -l "$W/census-secret")"
+# the daily slot: picked once, on a 15-min boundary, kept across runs; the wait lands in [slot, slot+WINDOW-300)
+# a script without --slot/--next-wait would fall into its send loop and sleep for hours: refuse it up front
+grep -q -- '--slot)' "$S" && grep -q -- '--next-wait)' "$S" || { no "no --slot/--next-wait in $S (no per-host daily window)"; exit 1; }
+b() { ksh93 "$S" "$@"; }
+s1=$(b --slot); s2=$(b --slot)
+[[ $s1 == +([0-9]) ]] && (( s1 < 86400 && s1 % 900 == 0 )) && [[ $s1 == "$s2" ]] && ok "slot $s1 stable, 15-min boundary" || no "slot '$s1' '$s2'"
+day0=1793232000; lo=86400; hi=0
+for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do w=$(b --next-wait $((day0 + 3600)) 7200); (( w < lo )) && lo=$w; (( w > hi )) && hi=$w; done
+(( lo >= 3600 && hi < 3600 + 600 )) && ok "next-wait before the slot: in [3600,4200) (saw $lo..$hi)" || no "next-wait before: $lo..$hi"
+w=$(b --next-wait $((day0 + 7300)) 7200); (( w >= 86300 && w < 86300 + 600 )) && ok "next-wait just after the slot: tomorrow ($w)" || no "next-wait after: $w"
+(( hi > lo )) && ok "next-wait is random ($lo != $hi)" || no "next-wait not random: $lo"
 exit $bad

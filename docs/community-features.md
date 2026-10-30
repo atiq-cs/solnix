@@ -29,8 +29,10 @@ Effective = `!privacy.enable && <group> && <feature>` (`solnix.community.active.
   true only when the matching service is installed on this host. `location` appears only when the operator set it.
 - nonce = first 16 base64 chars of HMAC-SHA256(secret, "solnix-telemetry"+day). The secret is 32 random bytes in
   /var/lib/solnix/census/census-secret (0600, owner `daemon`) and is replaced each UTC day. It is never sent.
-- The service runs as `daemon`, waits a random 0-6 h, sends at most once per UTC day, and treats a non-200 as
-  "try next hour". `DO_NOT_TRACK=1` in its environment, or the file `/etc/solnix/telemetry-off`, stops it sending.
+- The service runs as `daemon` and sends at most once per UTC day, inside the host's own 15-minute window: one of the
+  day's 96 quarter-hours, picked at random once and kept in /var/lib/solnix/census/census-slot. Each day it sends at a
+  fresh random moment inside that window. A fleet's pings spread over the whole day instead of arriving together, and
+  one host keeps to the same time of day. A non-200 is retried twice, 2 min apart, inside the window, then tomorrow. `DO_NOT_TRACK=1` in its environment, or the file `/etc/solnix/telemetry-off`, stops it sending.
 
 ## Turning it on for a host (nix-config nixos/solnix/<host>.nix)
 
@@ -100,7 +102,7 @@ solnix.builder.contactEmail = "greg+dixi-solnix@burd.me";   # per host; used onc
 
 ## Queue builder (svc:/site/solnix-builder, installed with cache.build)
 
-- Each tick (15 min): if the 1-minute load is below `solnix.cache.build.loadMax`, read
+- Each tick (a random 10-30 min apart, so a fleet does not poll solnix.io in step): if the 1-minute load is below `solnix.cache.build.loadMax`, read
   `GET https://telemetry.solnix.io/api/v1/build-queue/rows` (public) and the served recipes.tsv, and plan every row.
   A row's outs are every served recipe row at (pname, version, system): recipes.tsv has one row per output path, and
   rows from older solnix commits stay (jq 1.7.1 has two).
