@@ -39,8 +39,8 @@ bounded() {	# bounded <secs> <cmd...>: run it, TERM it after <secs> (illumos has
 #   NO-MAN <outs>    manpage-missing, but the recipe says has_manpages=n (a recipe change, not a rebuild)
 #   NO-RECIPE        no served row at that (pname, version, system): not ours to guess
 #   OTHER-SYSTEM     a system this host does not build
-plan() {
-	jq -r '.rows[] | [.pname, .target // .current, .system, .reasons] | @tsv' "$1" | while IFS=$'\t' read -r p v s why; do
+plan() {	# in claim order (priority ascending, then oldest): /build-queue/rows lists priority DESC, so deferred rows would come first
+	jq -r '.rows | sort_by(.priority // 0, -(.age_secs // 0)) | .[] | [.pname, .target // .current, .system, .reasons] | @tsv' "$1" | while IFS=$'\t' read -r p v s why; do
 		[[ $s == "$BUILDER_SYSTEM" ]] || { print -r -- "$p OTHER-SYSTEM $s"; continue; }
 		n=${p%-"$v"}; [[ $n == openssl3 ]] && n=openssl	# the queue's pname for openssl-3 (recipes.tsv says openssl)
 		row=$(nawk -F'\t' -v n="$n" -v v="$v" -v s="$s" '$1==n && $2==v && $8==s {if (!f) f=$7; o=o (o ? "," : "") $9} END {if (o) print f "\t" o}' "$2")
