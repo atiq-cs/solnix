@@ -50,8 +50,12 @@ in
       enable = true; category = "site"; description = "Tailscale node agent (userspace networking)"; model = "contract";
       requires = [ "svc:/milestone/network:default" "svc:/milestone/name-services:default" "svc:/system/filesystem/local:default" ];
       environment = lib.optionalAttrs cfg.disableUpstreamLogging { TS_NO_LOGS_NO_SUPPORT = "true"; };
-      # the mkdirs in the foreground (a `a && b &` list would background them in a lingering subshell)
-      start.exec = "mkdir -p -m 0700 /var/lib/tailscale && mkdir -p -m 0755 /var/run/tailscale || exit 1\n" + lib.escapeShellArgs ([
+      # the mkdirs in the foreground (a `a && b &` list would background them in a lingering subshell).
+      # /var/run/tailscale is 0700 root: tailscaled makes its socket 0666 (it trusts peer creds), but the LocalAPI's
+      # `dial` serves ANY local uid. On illumos nix builds run unsandboxed as nixbld, and a derivation reached
+      # floki's sshd over the tailnet through it (bzone1, dixi 2026-10-30). NixOS hides the socket with the build
+      # sandbox; here the directory does. Non-root users run the CLI with pfexec.
+      start.exec = "mkdir -p -m 0700 /var/lib/tailscale && mkdir -p -m 0700 /var/run/tailscale && chmod 0700 /var/run/tailscale || exit 1\n" + lib.escapeShellArgs ([
         "${cfg.package}/bin/tailscaled" "--tun=${cfg.interfaceName}" "--state=/var/lib/tailscale/tailscaled.state"
         "--socket=/var/run/tailscale/tailscaled.sock" "--port=${toString cfg.port}" ] ++ cfg.extraDaemonFlags) + " &";
       stop.exec = ":kill";

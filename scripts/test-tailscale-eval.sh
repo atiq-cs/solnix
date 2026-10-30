@@ -21,6 +21,8 @@ want "default: no tailscale services" '^\[\]$' "$svcs" '{ }'
 want "enabled: tailscaled only (no key, no set flags)" '^\["tailscaled"\]$' "$svcs" "{ $on; }"
 want "tailscaled: userspace networking, state, socket, port 41641, backgrounded" \
   "/bin/tailscaled '--tun=userspace-networking' '--state=/var/lib/tailscale/tailscaled.state' '--socket=/var/run/tailscale/tailscaled.sock' '--port=41641' &\"$" "$d.start.exec" "{ $on; }"
+want "tailscaled: socket dir 0700 root (LocalAPI dial serves any uid; illumos builds are unsandboxed)" \
+  '^"mkdir -p -m 0700 /var/lib/tailscale && mkdir -p -m 0700 /var/run/tailscale && chmod 0700 /var/run/tailscale \|\| exit 1' "$d.start.exec" "{ $on; }"
 want "tailscaled: contract, needs network + name-services" '^"contract svc:/milestone/network:default svc:/milestone/name-services:default' \
   "$d.model + \" \" + builtins.concatStringsSep \" \" $d.requires" "{ $on; }"
 want "CLI in systemPackages" '^true$' 'builtins.elem c.services.tailscale.package c.environment.systemPackages' "{ $on; }"
