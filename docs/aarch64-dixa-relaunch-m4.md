@@ -89,9 +89,16 @@ The scripts and their originals are in `/scratch/solnix/dixa1/`, and the change 
 
 ## 7. Verify
 - The console of each boot shows no `DL_BADPPA` and no "Using default device instance data" (on the boot after launch).
-- `svcs -x` is empty, and `svcs aa64-archive-sync` is online. Its log `/var/svc/log/site-aa64-archive-sync:default.log`
+- `svcs -x` lists only services the site profile disables (rpc/bind, hal, dumpadm: "Disabled by an administrator"), and `svcs aa64-archive-sync` is online. Its log `/var/svc/log/site-aa64-archive-sync:default.log`
   ends "in sync after N updates", and `bootadm update-archive -vn` shows only `cannot find:` lines.
 - `ssh root@<ip> sh -s < ~/ws/solnix/scripts/ami-registry-check.sh` prints REGISTRY_FETCH_OK.
+- nix as a NON-root user: `ssh gburd@<ip> /run/current-system/sw/bin/nix --version` prints `nix (Nix) 2.24.15`, and
+  `ls -lL /dev/urandom /dev/ptmx` shows `crw-r--r--` and `crw-rw-rw-`. Every check above runs as root, which is why m4's
+  missing minor_perm got through. m4 ships the proto's 6-line `/etc/minor_perm`, so those nodes are 0600 root and nix
+  aborts in `sodium_init` (`randombytes_stir`) for any other user. Fix on a live m4: copy
+  `~/ws/solnix/pkgs/illumos/data/drivers/minor_perm` to `/etc/minor_perm` (root:sys 0644; keep the original as
+  `/etc/minor_perm.aa64-6line`), then run `devfsadm -P`. That reloads the kernel's table and resets every existing node
+  (modctl `devfs_reset_perm`), so no reboot is needed. Images after m4 carry the file (rb-img.sh).
 - `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` matches the sops `_pub` value.
 - One `aws ec2 reboot-instances`, then ssh again. This is the case m4 fixes.
 - Then terminate the old dixa and its root volume. The old dixa needs `bootadm update-archive` before any reboot

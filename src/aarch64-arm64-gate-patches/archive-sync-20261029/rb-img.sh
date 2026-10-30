@@ -3,6 +3,7 @@
 # snapshot) + site/aa64-archive-sync (/var/tmp/aa64-archive-sync.{sh,xml}). boot_archive unchanged (neither file is
 # in the archive filelist). Disk layout = /scratch/solnix/aa64tls/ib-tls-img.sh step 4. Work pool "big" on instance
 # store c3t1d0. Out: /big/<tag>.img, dd'd to the sdg volume c2t1d0 with read-back, /big/<tag>.img.gz. Log /var/tmp/img-<tag>.log
+# m5 (dixa2, 2026-10-30): + the full /etc/minor_perm from /var/tmp/minor_perm.solnix (m4 lacked it).
 exec >/var/tmp/img-$1.log 2>&1
 set -eux; date
 export PATH=/usr/bin:/usr/sbin:/sbin:/usr/gnu/bin; T=$1; TMP=imgpool; POOL=armpool; MNT=/big/espmnt; OUT=/big/$T.img; TGT=c2t1d0
@@ -16,7 +17,12 @@ cp /var/tmp/aa64-archive-sync.sh $IMG/usr/lib/aa64/; chmod 0555 $IMG/usr/lib/aa6
 cp /var/tmp/aa64-archive-sync.xml $IMG/lib/svc/manifest/site/; chmod 0644 $IMG/lib/svc/manifest/site/aa64-archive-sync.xml
 chown root:root $IMG/usr/lib/aa64/aa64-archive-sync.sh $IMG/lib/svc/manifest/site/aa64-archive-sync.xml
 svccfg validate $IMG/lib/svc/manifest/site/aa64-archive-sync.xml
-ls -l $IMG/usr/lib/aa64 $IMG/lib/svc/manifest/site; digest -a sha256 $IMG/usr/lib/aa64/* $IMG/lib/svc/manifest/site/* $IMG/platform/armv8/aarch64/boot_archive
+# minor_perm (solnix pkgs/illumos/data/drivers/minor_perm, as 8afbd39 put in aa64g-assemble.sh): m4 shipped the proto's 6-line file,
+# so /dev/urandom, ptmx, tty, kstat and zfs were 0600 root and nix aborted in sodium_init for every non-root user (dixa2, 2026-10-30).
+# Copy it to the builder first: /var/tmp/minor_perm.solnix.
+cp /var/tmp/minor_perm.solnix $IMG/etc/minor_perm; chown root:sys $IMG/etc/minor_perm; chmod 0644 $IMG/etc/minor_perm
+grep -q '^random:\* 0644 root sys$' $IMG/etc/minor_perm && grep -q '^clone:ptmx 0666 root sys$' $IMG/etc/minor_perm || { echo "FATAL: minor_perm"; exit 5; }
+ls -l $IMG/usr/lib/aa64 $IMG/lib/svc/manifest/site $IMG/etc/minor_perm; digest -a sha256 $IMG/usr/lib/aa64/* $IMG/lib/svc/manifest/site/* $IMG/etc/minor_perm $IMG/platform/armv8/aarch64/boot_archive
 zfs umount big/root-$T; zfs set mountpoint=legacy big/root-$T; zfs snapshot big/root-$T@img
 rm -f $OUT; mkfile 10g $OUT
 D=$(lofiadm -la $OUT); FAT=$(echo $D | sed 's/p0/s0/'); FATR=$(echo $FAT | sed 's,/dsk/,/rdsk/,')
