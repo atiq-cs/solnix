@@ -22,14 +22,15 @@ to floki. Image builds that need an OpenIndiana host go on an EC2 OI builder
 restored from R2 (docs/account-migration-lava-to-hotdog.md), and KVM boot tests
 go on an EC2 metal instance (nested virtualization) or real hardware.
 
-The current EC2 account is **kiwi** (`AWS_PROFILE=kiwi`, `437803535746`, us-east-2), **expiring
-2026-10-30 19:14:53 UTC**; docs/account-migration-kiwi2-to-kiwi3.md. The previous kiwi (`505435643998`)
-closed 2026-10-23 19:33 UTC and took the dde2cbe AMIs and both build-host AMIs with it. Name
-`AWS_PROFILE` explicitly (sg-guard has no default), re-check `describe-instances`
-before a launch, never a `0.0.0.0/0`/`::/0` rule, and terminate instances plus
-their volumes after. The account is shared with other tenants (about 1032 of the 1152 us-east-2
-vCPU were theirs on 2026-10-23); touch only Project=solnix resources, and check free vCPU before a
-metal launch.
+The current EC2 account is **chef** (`AWS_PROFILE=chef`, `842964983020`, us-west-2), since 2026-10-30; its
+expiry is not known yet (burners live about 7 days). docs/account-migration-kiwi-to-chef.md. kiwi (`437803535746`)
+closed 2026-10-30 19:14:53 UTC (docs/account-expiry-kiwi-20261030.md). Durable images live in the permanent account
+**solnix-ami** (`788352824872`): the OI build host `ami-0e4a740ebfc5bec81`, aarch64 v4 (boots on Nitro VMs)
+`ami-0e08aa06f629ffbac` (us-west-2) / `ami-0ecdc3a731f13adff` (us-east-1), the x86 DP fix AMIs. Share an image to a new
+account with `modify-image-attribute --launch-permission` from solnix-ami. Name `AWS_PROFILE` explicitly (sg-guard has
+no default), re-check `describe-instances` before a launch, never a `0.0.0.0/0`/`::/0` rule, and terminate instances
+plus their volumes after. Burner accounts are shared with other tenants (chef had a libxtc instance on day one); touch
+only Project=solnix resources, and check free vCPU before a metal launch.
 
 **Burner accounts live about 7 days.** Anything that took more than an hour to make, or
 that someone depends on (boot-verified AMIs as raw disk images, build hosts, toolchains,
