@@ -29,6 +29,7 @@
 # and the libraries nothing here needs (sanitizers, gomp, itm, vtv) are dropped to
 # keep the build short.
 { gate                    # gate proto store path (the sysroot)
+, ld                      # the store link-editor slice (default.nix ld): collect2 runs $ld/usr/bin/ld
 , libcSlice               # pkgs.solnix.libc: RUNPATH target for libc/libm at run time
 , libcExtra               # base-src's illumos-libc-extra: libkstat.so.1, which the drivers NEED
 , stage0 ? "/usr/gcc/14"  # BUILD-TIME seed compiler (IPS developer/gcc-14)
@@ -46,8 +47,7 @@ let
     "277807353a6726978996945af13e52829e3abd7a9a5b7fb2793894e18f1fcbb2";
   mpcSrc = fetch "https://mirrors.kernel.org/gnu/mpc/mpc-1.3.1.tar.gz"
     "ab642492f5cf882b74aa0cb730cd410a81edcdbec895183ce930e706c1c759b8";
-in
-derivation {
+  drvAttrs = {
   name = "gcc-${version}";
   inherit system gate stage0 gccSrc gmpSrc mpfrSrc mpcSrc version;
   # OpenIndiana/OmniOS gcc patch 0032: libstdc++ built with -D_TS_ERRNO so it
@@ -56,6 +56,10 @@ derivation {
   libcDir = "${libcSlice}/lib/amd64";
   libcDir32 = "${libcSlice}/lib";
   libcExtraDir = "${libcExtra}/lib/amd64";
+  # The link-editor is a store path (NixOS: the linker is part of stdenv), not the host /usr/bin/ld: gcc passes
+  # -Qy, so every ELF records the ld version, which differed between OI (1793) and a solnix host (1791). repro2.
+  ldBin = "${ld}/usr/bin/ld";
+  SOURCE_DATE_EPOCH = "315532800";  # as NixOS stdenv: __DATE__/__TIME__ are the epoch, not the build day
   outputs = [ "out" "lib" ];
   builder = "/usr/bin/bash";
   PATH = "/usr/gnu/bin:/usr/bin:/usr/sbin";
@@ -63,7 +67,8 @@ derivation {
     set -eu
     export PATH=/usr/gnu/bin:/usr/bin:/usr/sbin
     # Fixed build dir (as mk-src-pkg.nix): the compiler named the random mktemp dir 5741 times.
-    W=/var/tmp/gccsrc-$(printf %s "$out" | /usr/bin/digest -a sha256 | cut -c1-16)
+    # Keyed on $buildKey (eval-time digest of this drv's attrs), not $out: `nix build --check` builds into a scratch out.
+    W=/var/tmp/gccsrc-$buildKey
     rm -rf "$W"; mkdir -m 700 "$W"; trap 'cd /; rm -rf "$W"' EXIT; cd "$W"
     tar xf "$gccSrc"
     cd "gcc-$version"
@@ -86,7 +91,7 @@ derivation {
       --prefix="$out" \
       --with-sysroot="$gate" --with-native-system-header-dir=/usr/include \
       --enable-languages=c,c++ --disable-bootstrap --enable-multilib \
-      --with-gnu-as --with-as=/usr/bin/gas --without-gnu-ld --with-ld=/usr/bin/ld \
+      --with-gnu-as --with-as=/usr/bin/gas --without-gnu-ld --with-ld="$ldBin" \
       --enable-shared --enable-__cxa_atexit --enable-initfini-array \
       --without-zstd --disable-nls \
       --disable-libsanitizer --disable-libgomp --disable-libitm --disable-libvtv \
@@ -160,6 +165,9 @@ derivation {
        done | grep -q '/usr/gcc'; then
       echo "FATAL: an ELF in $out still has a /usr/gcc RUNPATH" >&2; exit 1
     fi
+    # DT_CHECKSUM -> 0 in both outputs (./zero-checksum.sh says why; gcc.lib names $lib in its RUNPATH).
+    : > "$W/zc"; /usr/bin/bash ${./zero-checksum.sh} "$out" "$W/zc"; /usr/bin/bash ${./zero-checksum.sh} "$lib" "$W/zc"
+    [ ! -s "$W/zc" ] || { cat "$W/zc" >&2; exit 1; }
     unset LD_LIBRARY_PATH LD_LIBRARY_PATH_64 LD_LIBRARY_PATH_32 || true
     # Every dynamic ELF in $out, not only lib/*.so*: the publish gate checks all of them, and this
     # gate let bin/gcc's host libkstat through.
@@ -185,4 +193,6 @@ derivation {
     [ "$nglob" -le 4 ] || { echo "FATAL: libstdc++ uses the GLOBAL errno ($nglob refs); -D_TS_ERRNO missing" >&2; exit 1; }
     echo "=== gcc-$version: lib output resolves inside /nix/store ===" >&2
   '' ];
-}
+};
+# buildKey: 1:1 with the drv, the same on every host and under --check (mk-src-pkg.nix explains why).
+in derivation (drvAttrs // { buildKey = builtins.substring 0 16 (builtins.hashString "sha256" (builtins.toJSON drvAttrs)); })

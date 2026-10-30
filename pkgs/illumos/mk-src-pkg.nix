@@ -85,8 +85,9 @@ let
       ''-Dlddlflags="-shared"'' ] t;    # perl (cli/c-big.nix): aarch64 gcc has no -m64
   stripLoop = ''
     find "$out" -type f | while read -r f; do
-      [ "$(od -An -tx1 -N4 "$f" 2>/dev/null | tr -d ' \n')" = 7f454c46 ] || continue
-      chmod u+w "$f"; "$GSTRIP" --strip-debug "$f" 2>/dev/null || true
+      # ELF, or an ar archive ("!<ar"): -D zeroes archive member mtimes (NixOS binutils is --enable-deterministic-archives).
+      case "$(od -An -tx1 -N4 "$f" 2>/dev/null | tr -d ' \n')" in 7f454c46|213c6172) ;; *) continue;; esac
+      chmod u+w "$f"; "$GSTRIP" --strip-debug -D "$f" 2>/dev/null || true
     done
   '';
   rpLoop = ''
@@ -100,8 +101,7 @@ let
       /usr/bin/elfedit -e "dyn:runpath $(rp_for $cl)" "$f" || echo "elfedit $f" >> "$W/fail"
     done
   '';
-in
-derivation {
+  drvAttrs = {
   name = "${pname}-${version}";
   inherit system gate gcc stage0 pname;
   build = lp64Fix build;
@@ -114,6 +114,7 @@ derivation {
   gstripCands = builtins.concatStringsSep " " gstripCands;
   builder = "/usr/bin/bash";
   PATH = "/usr/gnu/bin:/usr/bin:/usr/sbin";
+  SOURCE_DATE_EPOCH = "315532800";  # as NixOS stdenv: gcc uses it for __DATE__/__TIME__ (gdbm embedded its build day)
   # The source is a fixed-output store path (NixOS: fetchurl), fetched once by Nix
   # and verified against the pinned sha256, not downloaded by the builder. A
   # builder-side curl was invisible to Nix: no retry, no cache, no substitution,
@@ -137,10 +138,12 @@ derivation {
     # and its .libs search path), so a random name made every build's NarHash differ (measured:
     # docs/pending/builders-need-store-tools.md, 2026-10-29). NixOS builds in the sandbox's /build;
     # illumos has no sandbox, so: one constant path per output, the same on every host (unlike
-    # $NIX_BUILD_TOP, which follows the daemon's TMPDIR). It is keyed by a digest of $out, so no
-    # store hash lands in the output, and Nix's output lock keeps two builds of one out apart.
+    # $NIX_BUILD_TOP, which follows the daemon's TMPDIR). Keyed by $buildKey, an eval-time digest of
+    # this drv's attrs (so 1:1 with the drv), NOT $out: `nix build --check/--rebuild` builds into a
+    # scratch out, and jq embeds W (measured, repro2). Nix locks the real out path for normal and
+    # --check builds alike, so two builds of one drv on one host never share W at the same time.
     # mkdir without -p FAILS if a stale entry we cannot remove (another user's) is in the way.
-    W=/var/tmp/srcpkg-$(printf %s "$out" | /usr/bin/digest -a sha256 | cut -c1-16)
+    W=/var/tmp/srcpkg-$buildKey
     # Removed on ANY exit: a stale dir from a failed build by another nixbld uid could not be.
     rm -rf "$W"; mkdir -m 700 "$W"; trap 'cd /; rm -rf "$W"' EXIT
     cp "$srcTar" "$W/src.tar"
@@ -221,8 +224,9 @@ derivation {
     GSTRIP=""; for g in $gstripCands; do [ -x "$g" ] && { GSTRIP="$g"; break; }; done
     [ -n "$GSTRIP" ] || { echo "FATAL: no gstrip (GNU strip) on this host or in buildTools" >&2; exit 1; }
     find "$out" -type f | while read -r f; do
-      [ "$(od -An -tx1 -N4 "$f" 2>/dev/null | tr -d ' \n')" = 7f454c46 ] || continue
-      chmod u+w "$f"; "$GSTRIP" --strip-debug "$f" 2>/dev/null || true
+      # ELF, or an ar archive ("!<ar"): -D zeroes archive member mtimes (NixOS binutils is --enable-deterministic-archives).
+      case "$(od -An -tx1 -N4 "$f" 2>/dev/null | tr -d ' \n')" in 7f454c46|213c6172) ;; *) continue;; esac
+      chmod u+w "$f"; "$GSTRIP" --strip-debug -D "$f" 2>/dev/null || true
     done
     # BUILD-TOOL PATHS BAKED INTO GENERATED SCRIPTS (the stdenv patchShebangs /
     # --replace analog). A package's own ./configure can hardcode the ABSOLUTE path
@@ -282,6 +286,7 @@ derivation {
       chmod u+w "$f"
       /usr/bin/elfedit -e "dyn:runpath $(rp_for $cl)" "$f" || echo "elfedit $f" >> "$W/fail"
     done
+    /usr/bin/bash ${./zero-checksum.sh} "$out" "$W/fail"
     # THE GATE: ldd with no LD_LIBRARY_PATH; nothing unresolved, nothing off-store.
     unset LD_LIBRARY_PATH LD_LIBRARY_PATH_64 LD_LIBRARY_PATH_32 || true
     find "$out" -type f | while read -r f; do
@@ -291,4 +296,5 @@ derivation {
     if [ -s "$W/fail" ]; then echo "FATAL: closure gate failed:" >&2; head -40 "$W/fail" >&2; exit 1; fi
     echo "=== $pname: every ELF resolves inside /nix/store ===" >&2
   '') ];
-}
+};
+in derivation (drvAttrs // { buildKey = builtins.substring 0 16 (builtins.hashString "sha256" (builtins.toJSON drvAttrs)); })

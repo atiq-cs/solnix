@@ -1,7 +1,9 @@
 # rust-src-build.sh -- builder for rust-src.nix (read that file for the why).
 set -eu
 export PATH=/usr/gnu/bin:/usr/bin:/usr/sbin
-W=$NIX_BUILD_TOP; cd "$W"
+# FIXED build dir, not $NIX_BUILD_TOP (/tmp on OI, /var/tmp/big on dixi): ld names each link output by its
+# build path (measured in rust-1.99.0, repro2). $buildKey: see mk-src-pkg.nix.
+W=/var/tmp/rust-$buildKey; rm -rf "$W"; mkdir -m 700 "$W"; trap 'cd /; rm -rf "$W"' EXIT; cd "$W"
 got=$(/usr/bin/digest -a sha256 "$src")
 [ "$got" = "$srcSha256" ] || { echo "FATAL: sha256 want $srcSha256 got $got" >&2; exit 1; }
 # cc/c++ wrappers: the from-source gcc, the store RUNPATH baked in at link time
@@ -75,6 +77,8 @@ export CC=$W/w/cc CXX=$W/w/c++ CC_x86_64_unknown_illumos=$W/w/cc \
   OPENSSL_NO_VENDOR=1 PKG_CONFIG_PATH= \
   PKG_CONFIG_LIBDIR=$openssl/lib/amd64/pkgconfig:$zlib/lib/amd64/pkgconfig
 python3 x.py install rustc cargo std -j "${NIX_BUILD_CORES:-8}" >&2
+# the installer's log names the build dir 54x, and uninstall.sh makes no sense in a store path (nixpkgs rustc.nix).
+rm -f "$out/lib/rustlib/install.log" "$out/lib/rustlib/uninstall.sh"
 cd "$W"
 # self-check: the new rustc compiles and links a program that runs.
 unset LD_LIBRARY_PATH LD_LIBRARY_PATH_64 LD_LIBRARY_PATH_32 || true
@@ -102,5 +106,6 @@ while read -r f; do
   done
   /usr/bin/ldd "$f" 2>&1 | awk -v f="$f" '/not found/ || (/=>/ && $NF !~ /^\/nix\/store\//) {print f": "$0}' >> fail
 done < files
+bash "$zeroChecksum" "$out" fail   # DT_CHECKSUM -> 0 (zero-checksum.sh says why)
 if [ -s fail ]; then echo "FATAL: closure gate failed:" >&2; head -40 fail >&2; exit 1; fi
 echo "=== rust-$version: every ELF resolves inside /nix/store ===" >&2

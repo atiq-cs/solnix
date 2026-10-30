@@ -10,7 +10,9 @@
 #   final       : the closure gate over bin/ + pkg/tool/, then go version + a hello build.
 set -eu
 export PATH=/usr/gnu/bin:/usr/bin:/usr/sbin
-W=$NIX_BUILD_TOP; cd "$W"
+# FIXED build dir, not $NIX_BUILD_TOP (/tmp on OI, /var/tmp/big on dixi): go1.4's C tools name $W/cc and their
+# sources, go1.17/1.20 name GOROOT/src in every binary (measured, repro2). $buildKey: see mk-src-pkg.nix.
+W=/var/tmp/go-$buildKey; rm -rf "$W"; mkdir -m 700 "$W"; trap 'cd /; rm -rf "$W"' EXIT; cd "$W"
 export HOME=$W GOCACHE=$W/cache GOPATH=$W/gopath CGO_ENABLED=0 GOARCH=amd64 GOTOOLCHAIN=local
 tar xzf "$src"; cd go/src
 if [ -z "$boot" ]; then
@@ -51,6 +53,8 @@ find "$W/go" -type f -exec /usr/bin/python3 -c 'import os,sys
 for p in sys.argv[1:]:
     fd = os.open(p, os.O_RDONLY); os.fsync(fd); os.close(fd)' {} +
 cp -a "$W/go" "$out/share/go"
+# DT_CHECKSUM -> 0 (zero-checksum.sh says why): go1.4's C tools embed GOROOT_FINAL=$out (measured, repro2).
+: > "$W/zc"; bash "$zeroChecksum" "$out" "$W/zc"; [ ! -s "$W/zc" ] || { cat "$W/zc" >&2; exit 1; }
 for b in go gofmt; do ln -s ../share/go/bin/$b "$out/bin/$b"; done
 "$out/bin/go" version
 if [ -z "$boot" ]; then

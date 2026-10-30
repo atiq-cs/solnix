@@ -36,15 +36,16 @@ in rec {
   #   man      : shell to install man pages (from the source tree, cwd = the crate root)
   cargoPkg = { pname, version, src, vendorHash, bins, check, features ? "", noDefault ? false,
                pkg ? "", libs ? [ ], prep ? "", man ? "", env ? "" }:
-    let srcTar = import <nix/fetchurl.nix> { inherit (src) url sha256; }; in
-    derivation {
+    let srcTar = import <nix/fetchurl.nix> { inherit (src) url sha256; };
+        withKey = a: derivation (a // { buildKey = builtins.substring 0 16 (builtins.hashString "sha256" (builtins.toJSON a)); }); in
+    withKey {
       name = "${pname}-${version}"; system = "x86_64-solaris"; builder = "/usr/bin/bash";
       src = srcTar; vendor = vendorOf { pname = "${pname}-${version}"; src = srcTar; narHash = vendorHash; rustOnPath = true; };
       inherit rust gate; gcc = gcc; gccLibDir = "${gccLib}/lib";
       libDirs = builtins.concatStringsSep " " (map (d: "${d}") (libs ++ rtLibs));
       inherit features prep bins check man pkg env;
       noDefault = if noDefault then "1" else "";
-      tsErrnoGate = ./ts-errno-gate.sh;
+      tsErrnoGate = ./ts-errno-gate.sh; zeroChecksum = ./zero-checksum.sh;
       args = [ ./cargo-build.sh ];
     };
 }

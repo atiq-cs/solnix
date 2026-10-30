@@ -122,7 +122,8 @@ rec {
       cd nspr
       ./configure --prefix="$out" --libdir="$out/$LIBSUB" --includedir="$out/include/nspr" \
         --enable-optimize --disable-debug $E
-      gmake -j4
+      # build stamp from SOURCE_DATE_EPOCH, as nixpkgs' nspr patch (the Makefiles call date(1) and ./now).
+      gmake -j4 SH_DATE="1980-01-01 00:00:00" SH_NOW="''${SOURCE_DATE_EPOCH}000000"
       gmake install
       rm -f "$out/$LIBSUB"/*.a "$out/bin/compile-et.pl" "$out/bin/prerr.properties"
     '';
@@ -149,7 +150,9 @@ rec {
         USE_SYSTEM_ZLIB=1 ZLIB_LIBS="-L${zlib}/$LIBSUB -lz"
       O=$(ls -d dist/SunOS5*_OPT.OBJ | head -1)
       mkdir -p "$out/$LIBSUB" "$out/include/nss"
-      cp -P "$O"/lib/*.so "$O"/lib/*.chk "$out/$LIBSUB/" 2>/dev/null || cp -P "$O"/lib/*.so "$out/$LIBSUB/"
+      # no *.chk: shlibsign's DSA signature is random per build (so no two builds match, measured, repro2), and
+      # it is only read in FIPS mode. nixpkgs makes them only with enableFIPS (default false).
+      cp -P "$O"/lib/*.so "$out/$LIBSUB/"
       cp dist/public/nss/*.h dist/public/dbm/*.h "$out/include/nss/"
       if [ "$ABI" = 64 ]; then
         mkdir -p "$out/bin"

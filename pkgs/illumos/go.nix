@@ -6,13 +6,14 @@
 { gcc, gccLib, world, cacert, gate }:
 let
   rp = "${world}/lib/amd64:${world}/usr/lib/amd64";
-  stage = { version, sha256, url ? "https://go.dev/dl/go${version}.src.tar.gz", boot ? null, final ? false }: derivation {
+  stage = { version, sha256, url ? "https://go.dev/dl/go${version}.src.tar.gz", boot ? null, final ? false }:
+    (a: derivation (a // { buildKey = builtins.substring 0 16 (builtins.hashString "sha256" (builtins.toJSON a)); })) {
     name = "go-${version}"; system = "x86_64-solaris"; builder = "/usr/bin/bash";
     src = import <nix/fetchurl.nix> { inherit url sha256; };
     inherit version gcc rp world gate; gccLibDir = "${gccLib}/lib";
     boot = if boot == null then "" else boot;
     final = if final then "1" else "";
-    storeGate = ./store-gate.sh; tsErrnoGate = ./ts-errno-gate.sh;
+    storeGate = ./store-gate.sh; tsErrnoGate = ./ts-errno-gate.sh; zeroChecksum = ./zero-checksum.sh;
     args = [ ./go-build.sh ];
   };
 in rec {

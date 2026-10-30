@@ -4,7 +4,10 @@
 # mk-src-pkg closure gate (no global errno, no gate/gcc path, ldd resolves inside /nix/store).
 set -eu
 export PATH=/usr/gnu/bin:/usr/bin:/usr/sbin
-W=$NIX_BUILD_TOP; cd "$W"
+# FIXED build dir, not $NIX_BUILD_TOP (the daemon's build-dir: /tmp on OI, /var/tmp/big on dixi): ld records the
+# link output's path in .SUNW_ldynsym, and rustc the vendored crates' paths (136x in ripgrep), so the NAR named the
+# host (measured, repro2). Keyed on $buildKey (eval-time, 1:1 with the drv; mk-src-pkg.nix says why it is safe).
+W=/var/tmp/cargo-$buildKey; rm -rf "$W"; mkdir -m 700 "$W"; trap 'cd /; rm -rf "$W"' EXIT; cd "$W"
 RP=""; PCD=""
 for d in $libDirs; do
   [ -d "$d/lib/amd64" ] && RP="$RP:$d/lib/amd64"
@@ -23,6 +26,7 @@ mkdir -p w home "$out/lib"
   echo "exec $gcc/bin/gcc -m64 -D_TS_ERRNO $LD -Wl,-R,$RP \"\$@\" -g0"; } > w/cc
 chmod +x w/cc
 export PATH="$W/w:$rust/bin:$PATH" HOME="$W/home" CARGO_HOME="$W/home/.cargo"
+export RUSTFLAGS="--remap-path-prefix=$W=/build"
 export CC=$W/w/cc CC_x86_64_unknown_illumos=$W/w/cc CARGO_TARGET_X86_64_UNKNOWN_ILLUMOS_LINKER=$W/w/cc
 tar xzf "$src"; cd "$(ls -d */ | head -1)"
 cp -r "$vendor" vendor; chmod -R u+w vendor
@@ -56,6 +60,7 @@ done
 . "$fixups/cosmic-data.sh"; eval "$install"   # data files (desktop entries, schemas, icons), in the source dir
 cd "$W"
 : > fail
+bash "$zeroChecksum" "$out" fail   # DT_CHECKSUM -> 0 (zero-checksum.sh says why)
 bash "$tsErrnoGate" "$out" 2>> fail || echo "ts-errno gate failed" >> fail
 find "$out" -type f > files
 while read -r f; do

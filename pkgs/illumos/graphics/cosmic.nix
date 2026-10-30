@@ -23,14 +23,14 @@ let
     '' ];
   };
   cargoApp = { pname, version, src, vendor, libs, required, stubs ? false, features ? "", prep ? "", bins, wrap ? "", NO_SOFTBUFFER_KMS ? "",
-               cargoArgs ? "", install ? "", check ? "", appFixups ? "", env ? { } }: derivation ({
+               cargoArgs ? "", install ? "", check ? "", appFixups ? "", env ? { } }: (a: derivation (a // { buildKey = builtins.substring 0 16 (builtins.hashString "sha256" (builtins.toJSON a)); })) ({
     name = "${pname}-${version}"; system = "x86_64-solaris"; builder = "/usr/bin/bash";
     inherit src vendor rust gate;
     gcc = gcc; gccLibDir = "${gccLib}/lib";
     libDirs = builtins.concatStringsSep " " (map (d: "${d}") (libs ++ rtLibs));
     inherit features prep bins wrap NO_SOFTBUFFER_KMS cargoArgs install check appFixups; REQUIRED = required;
     stubsSh = if stubs then ./cosmic-comp-stubs.sh else "";
-    tsErrnoGate = ../ts-errno-gate.sh;
+    tsErrnoGate = ../ts-errno-gate.sh; zeroChecksum = ../zero-checksum.sh;
     fixups = ./.;
     args = [ ./cosmic-build.sh ];
   } // env);

@@ -4,7 +4,10 @@
 # closure gate (no global errno, no gate/gcc path in an ELF, ldd resolves inside /nix/store).
 set -eu
 export PATH=/usr/gnu/bin:/usr/bin:/usr/sbin
-W=$NIX_BUILD_TOP; cd "$W"
+# FIXED build dir, not $NIX_BUILD_TOP (the daemon's build-dir: /tmp on OI, /var/tmp/big on dixi): ld records the
+# link output's path in .SUNW_ldynsym, and rustc the vendored crates' paths (136x in ripgrep), so the NAR named the
+# host (measured, repro2). Keyed on $buildKey (eval-time, 1:1 with the drv; mk-src-pkg.nix says why it is safe).
+W=/var/tmp/cargo-$buildKey; rm -rf "$W"; mkdir -m 700 "$W"; trap 'cd /; rm -rf "$W"' EXIT; cd "$W"
 RP=""; PCD=""; CI=""
 for d in $libDirs; do
   [ -d "$d/lib/amd64" ] && RP="$RP:$d/lib/amd64"
@@ -18,6 +21,7 @@ printf '#!/usr/bin/bash\nexec %s/bin/gcc -m64 -D_TS_ERRNO %s %s -Wl,-R,%s "$@" -
 printf '#!/usr/bin/bash\nexec %s/bin/g++ -m64 -D_TS_ERRNO %s %s -Wl,-R,%s "$@" -g0\n' "$gcc" "$CI" "$LD" "$RP" > w/c++
 chmod +x w/cc w/c++
 export PATH="$W/w:$rust/bin:$PATH" HOME="$W/home" CARGO_HOME="$W/home/.cargo"
+export RUSTFLAGS="--remap-path-prefix=$W=/build"
 export CC=$W/w/cc CXX=$W/w/c++ CC_x86_64_unknown_illumos=$W/w/cc CXX_x86_64_unknown_illumos=$W/w/c++
 export CARGO_TARGET_X86_64_UNKNOWN_ILLUMOS_LINKER=$W/w/cc
 export PKG_CONFIG_PATH="${PCD#:}" PKG_CONFIG_LIBDIR="${PCD#:}"
@@ -54,6 +58,7 @@ for b in $bins; do /usr/bin/python3 -c 'import os,sys; fd = os.open(sys.argv[1],
 eval "$man"
 cd "$W"
 : > fail
+bash "$zeroChecksum" "$out" fail   # DT_CHECKSUM -> 0 (zero-checksum.sh says why)
 bash "$tsErrnoGate" "$out" 2>> fail || echo "ts-errno gate failed" >> fail
 find "$out" -type f > files
 while read -r f; do

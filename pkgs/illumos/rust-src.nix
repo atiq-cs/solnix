@@ -15,7 +15,7 @@
 , seedStage0 ? false     # stage0 is the OI 1.97.1 seed tree (prune + re-RUNPATH it)
 , gcc, gate, libc, world, openssl, zlib
 }:
-derivation {
+(a: derivation (a // { buildKey = builtins.substring 0 16 (builtins.hashString "sha256" (builtins.toJSON a)); zeroChecksum = ./zero-checksum.sh; })) {
   name = "rust-${version}";
   system = "x86_64-solaris";
   builder = "/usr/bin/bash";
