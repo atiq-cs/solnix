@@ -12,9 +12,9 @@ in
       type = lib.types.listOf lib.types.str;
       default = [ ];
       description = ''
-        Stock base-OS SMF services (FMRIs like "network/ntp") to `svcadm enable`
-        at image build / first boot. For SERVICES SHIPPED BY THE OS (ntp, ipfilter),
-        not generated manifests. The image builder + activation enable these.
+        Stock base-OS SMF services (FMRIs like "network/ipfilter", instance
+        default) that the site profile enables. For SERVICES SHIPPED BY THE OS,
+        not generated manifests.
       '';
     };
     timeZone = lib.mkOption {
@@ -121,13 +121,10 @@ in
       alias ..='cd ..'
     '';
 
-    # 3+7 (SMF): enable the stock base-OS services (ntp for time, ipfilter is
-    # handled by modules/config/firewall.nix). These are ENABLED via the image's
-    # site profile / first-boot activation (svcadm enable), NOT generated manifests.
-    # ⚠️ The option is solnix.defaults.enableStockServices (declared above, and used
-    # with the full path by modules/config/firewall.nix:63). This line said
-    # `solnix.enableStockServices`, which does not exist -- an undefined-option eval
-    # error that broke EVERY toplevel, not just a new one.
-    solnix.defaults.enableStockServices = [ "network/ntp" ];
+    # 3+7 (SMF): stock base-OS services go in solnix.defaults.enableStockServices, which
+    # the site profile enables (ipfilter: modules/config/firewall.nix). Until 2026-10-30
+    # nothing read the option, so neither ipfilter nor ntp was ever enabled. ntp is NOT
+    # listed: the world has no ntpd and no network/ntp manifest (measured on dixi), so
+    # enabling it would only make svccfg warn. No NTP client runs until one is packaged.
   };
 }

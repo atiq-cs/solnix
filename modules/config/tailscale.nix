@@ -33,18 +33,17 @@ in
     disableUpstreamLogging = lib.mkOption { type = t.bool; default = false;
       description = "Stop tailscaled uploading logs to log.tailscale.io (TS_NO_LOGS_NO_SUPPORT)."; };
     openFirewall = lib.mkOption { type = t.bool; default = false;
-      description = "Open the UDP port in the firewall. Not supported yet: solnix.firewall only has TCP rules (asserted)."; };
+      description = "Open the UDP port in the firewall (solnix.firewall.allowedUDPPorts). Without it the direct path still works outbound (keep state); inbound-first peers fall back to DERP."; };
   };
 
   config = lib.mkIf cfg.enable {
     assertions = [
       { assertion = cfg.interfaceName == "userspace-networking";
         message = "services.tailscale.interfaceName = \"${cfg.interfaceName}\": illumos has no tailscale TUN device (tailscale's net/tstun panics there and solnix has no tuntap driver); only \"userspace-networking\" works."; }
-      { assertion = !cfg.openFirewall;
-        message = "services.tailscale.openFirewall: solnix.firewall only opens TCP ports (allowedTCPPorts), so it cannot open UDP ${toString cfg.port} yet."; }
       { assertion = cfg.authKeyFile == null || !lib.hasPrefix builtins.storeDir (toString cfg.authKeyFile);
         message = "services.tailscale.authKeyFile is in the Nix store, which every user can read; place the key outside it (0600 root)."; }
     ];
+    solnix.firewall.allowedUDPPorts = lib.mkIf cfg.openFirewall [ cfg.port ];
     environment.systemPackages = [ cfg.package ];
     smf.services.tailscaled = {
       enable = true; category = "site"; description = "Tailscale node agent (userspace networking)"; model = "contract";

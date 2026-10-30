@@ -3,7 +3,7 @@
 # run against a stub CLI (no illumos needed; run on floki):
 #  - off by default; on: tailscaled (userspace networking, state/socket paths, port, deps), the CLI in systemPackages;
 #  - authKeyFile adds tailscale-autoconnect with the login server and the up flags; disableUpstreamLogging sets the env;
-#  - NEG: interfaceName != userspace-networking, openFirewall, a store-path key each fail the assertions;
+#  - NEG: interfaceName != userspace-networking and a store-path key each fail the assertions; openFirewall opens UDP 41641;
 #  - autoconnect: logs in on NeedsLogin, no-op when Running on the same control URL, and REFUSES a tskey- or empty key.
 set -u
 F=${1:-$(cd "$(dirname "$0")/.." && pwd)}; bad=0
@@ -37,7 +37,8 @@ want "extraSetFlags: tailscale-set after autoconnect" '^\["svc:/site/tailscaled:
   'c.smf.services.tailscale-set.requires' "{ $on; services.tailscale = { $K; extraSetFlags = [ \"--advertise-routes=10.0.0.1/32\" ]; }; }"
 want "assertions pass when enabled" '^true$' "$chk" "{ $on; services.tailscale = { $K; }; }"
 want "NEG interfaceName tailscale0 rejected" 'no tailscale TUN device' "$chk" "{ $on; services.tailscale.interfaceName = \"tailscale0\"; }"
-want "NEG openFirewall rejected (no UDP in solnix.firewall)" 'only opens TCP ports' "$chk" "{ $on; services.tailscale.openFirewall = true; }"
+want "openFirewall: UDP 41641 in solnix.firewall.allowedUDPPorts" '^\[41641\]$' 'c.solnix.firewall.allowedUDPPorts' "{ $on; services.tailscale.openFirewall = true; }"
+want "openFirewall off (default): no UDP port opened" '^\[\]$' 'c.solnix.firewall.allowedUDPPorts' "{ $on; }"
 want "NEG authKeyFile in the store rejected" 'is in the Nix store' "$chk" "{ $on; services.tailscale.authKeyFile = builtins.toFile \"k\" \"x\"; }"
 
 # the autoconnect script, on a stub tailscale CLI (STUB_STATE, STUB_CTRL; `up` records its argv in $T/up)

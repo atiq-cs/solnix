@@ -46,6 +46,9 @@ let
     ${concatStringsSep "\n" (mapAttrsToList (name: svc:
       "  <service name='${svc.category}/${name}' version='1' type='service'><instance name='${svc.instance}' enabled='${if svc.enable then "true" else "false"}'/></service>")
       config.smf.services)}
+    ${concatStringsSep "\n" (map (f:
+      "  <service name='${f}' version='1' type='service'><instance name='default' enabled='true'/></service>")
+      config.solnix.defaults.enableStockServices)}
       <service name="network/location" version="1" type="service"><instance name="default" enabled="true"/></service>
       <service name="network/smtp" version="1" type="service"><instance name="sendmail" enabled="false"/></service>
       <service name="network/sendmail-client" version="1" type="service"><instance name="default" enabled="false"/></service>

@@ -25,6 +25,9 @@ in
     description = "A package providing bin/solnix-torrent (libtorrent-rasterbar). null = no seeding, HTTP-only proxy.";
   };
   config = lib.mkIf on {
+    # the peer port, TCP and uTP/UDP (SOLNIX_TORRENT_LISTEN below), open only while seeding (NixOS: transmission's openPeerPorts)
+    solnix.firewall.allowedTCPPorts = [ 51413 ];
+    solnix.firewall.allowedUDPPorts = [ 51413 ];
     smf.services.solnix-seed = {
       enable = true;
       category = "site";
