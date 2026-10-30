@@ -132,3 +132,12 @@ The list and the commands are in `/scratch/solnix/kiwi-expiry/progress.txt` unde
 reports first (the orchestrator decides). Then terminate bh and hlcli and wait for terminated and for their 4 volumes to be gone
 (DeleteOnTermination=true). Then deregister the AMIs, ami-0db4448441e41d58c last, and delete their snapshots. Then delete the
 8 SGs and 2x5 keypairs. Never vol-00b3e76de84274a56, snap-0d9e378193aef77c9, ami-0a647800b65f8764e or any untagged resource.
+
+## Added 2026-10-30 15:45Z: the build-host AMI is in solnix-ami
+
+The OI build host image (kiwi `ami-0c3f16422f8943a8b`, `solnix-buildhost-x86-COMPLETE-20261017`) was copied to the
+permanent account: solnix-ami us-west-2 snapshot `snap-019a21615100cfe32`, AMI **`ami-0e4a740ebfc5bec81`** (x86_64,
+UEFI, ENA, /dev/xvda 20 GiB gp3). The next account can launch it from a launch share
+(`AWS_PROFILE=solnix-ami aws ec2 modify-image-attribute --launch-permission Add=[{UserId=<new account>}]`) instead of
+restoring the raw image from ~/solnix-bank/ami/x86_64-buildhost-20261017. The temporary createVolumePermission on the
+kiwi snapshot was removed after the copy (read back empty).
