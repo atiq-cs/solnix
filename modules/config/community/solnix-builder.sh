@@ -15,7 +15,9 @@ PATH=${BUILDER_PATH:-/usr/bin:/usr/sbin}
 : ${BUILDER_STATE:=/var/lib/solnix/builder} ${BUILDER_BEARER_FILE:=/var/lib/solnix/build-queue-bearer}
 # The recipes' outs come from solnix main, not from the system registry's `solnix` (= the 26.11 edition: other outs).
 : ${BUILDER_FLAKE:=git+https://git.solnix.io/solnix.git?ref=main}
-: ${BUILDER_SYSTEM:=x86_64-solaris} ${BUILDER_AGENT:=$(uname -n)} ${BUILDER_LOAD_MAX:=2} ${BUILDER_TICK:=900} ${BUILDER_LEASE:=600}
+: ${BUILDER_SYSTEM:=x86_64-solaris} ${BUILDER_AGENT:=$(uname -n)} ${BUILDER_LOAD_MAX:=2} ${BUILDER_LEASE:=600}
+# between ticks: a random BUILDER_TICK_MIN..BUILDER_TICK_MAX s (10-30 min), so a fleet doesn't poll solnix.io in step
+: ${BUILDER_TICK_MIN:=600} ${BUILDER_TICK_MAX:=1800}
 : ${BUILDER_BUILD_SECS:=14400}
 log() { printf '%(%Y-%m-%dT%H:%M:%SZ)T builder: %s\n' now "$*"; }
 bounded() {	# bounded <secs> <cmd...>: run it, TERM it after <secs> (illumos has no timeout(1)). A `nix store ls` against
@@ -137,9 +139,11 @@ tick() {
 		ready "$bp" "$bo" && claim "$bp" "$out" "$bv" "$nar"; } < /dev/null
 	done < "$BUILDER_STATE/builds"
 }
+pause() { print -r -- $(( BUILDER_TICK_MIN + (RANDOM * 32768 + RANDOM) % (BUILDER_TICK_MAX - BUILDER_TICK_MIN + 1) )); }
 case $1 in
 plan) plan "$2" "$3"; exit ;;
+pause) pause; exit ;;
 once) mkdir -p "$BUILDER_STATE" && tick; exit ;;
 esac
 mkdir -p "$BUILDER_STATE" || exit 1
-while :; do tick; sleep "$BUILDER_TICK"; done
+while :; do tick; sleep "$(pause)"; done

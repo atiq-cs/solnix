@@ -1,14 +1,17 @@
 #!/usr/bin/ksh93
 # solnix-census -- the anonymous daily platform census (modules/config/community/census.nix).
-# One SMF contract loop: sleep a random 0..CENSUS_JITTER s, send at most one record per UTC
-# day, repeat. Best effort: curl -m 5, a non-200 is "later" (next tick), nothing queued on disk.
+# One SMF contract loop that sends at most one record per UTC day, inside this host's own 15-minute window of the
+# day: the window (one of 96) is picked at random once and kept in <state>/census-slot, and each day's send lands at
+# a fresh random moment inside it. A fleet spreads over the whole day instead of arriving together, and a host keeps
+# to the same quarter-hour. Best effort: curl -m 5; a non-200 is retried twice in the window, then tomorrow. Nothing
+# is queued on disk.
 # The record: docs/design-telemetry-client.md + infra 2026-10-28 (seeding/building/builder flags,
 # optional operator-set location), sent as JSON: the live ingest rejects the EDN form with 400
 # (measured 2026-10-28; its census parser decodes JSON only). Never a hostname, key, email, IP
 # or stable id; the nonce is HMAC-SHA256(per-day secret, "solnix-telemetry"+day), never the secret.
 #   solnix-census --record <day> <nonce>   print the record only (the unit test uses this)
 PATH=${CENSUS_PATH:-/usr/bin:/usr/sbin}
-: ${CENSUS_STATE:=/var/lib/solnix/census} ${CENSUS_JITTER:=21600} ${CENSUS_TICK:=3600}
+: ${CENSUS_STATE:=/var/lib/solnix/census} ${CENSUS_WINDOW:=900}
 
 js() { printf '"%s"' "$1"; }	# values are closed vocabularies or eval-checked (no " \ control)
 
@@ -61,6 +64,23 @@ case $1 in
 --hmac-b64) hmac_b64 "$2" "$3"; exit ;;
 --once) send_once; exit ;;
 esac
+slot() {	# this host's daily slot start, seconds after 00:00 UTC, on a 15-min boundary; picked once and kept
+	typeset f=$CENSUS_STATE/census-slot s
+	s=$(cat "$f" 2>/dev/null)
+	[[ $s == +([0-9]) ]] && (( s < 86400 )) || { s=$(( (RANDOM * 32768 + RANDOM) % 96 * 900 )); print -r -- "$s" > "$f"; }
+	print -r -- "$s"
+}
+next_wait() {	# next_wait <now secs since epoch> <slot secs>: seconds until the next slot start + a random 0..WINDOW-301 s,
+	# so the first try and both retries (+120, +240) land inside the 15-min window
+	typeset now=$1 sl=$2 d=$(( $1 % 86400 )) w
+	(( w = sl - d )); (( w <= 0 )) && (( w += 86400 ))
+	print -r -- $(( w + (RANDOM * 32768 + RANDOM) % (CENSUS_WINDOW - 300) ))
+}
+case $1 in --slot) slot; exit ;; --next-wait) next_wait "$2" "$3"; exit ;; esac
 mkdir -p "$CENSUS_STATE" || exit 1
-# jitter each attempt; the day stamp keeps it to one send per UTC day (systemd: RandomizedDelaySec)
-while :; do sleep $(( (RANDOM * 32768 + RANDOM) % CENSUS_JITTER )); send_once; sleep "$CENSUS_TICK"; done
+s=$(slot)
+# a send that failed (non-200) retries inside the same window: 3 tries 2 min apart, then tomorrow's slot
+while :; do
+	sleep "$(next_wait "$(printf '%(%s)T' now)" "$s")"
+	for t in 1 2 3; do send_once && break; (( t < 3 )) && sleep 120; done
+done
