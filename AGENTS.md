@@ -35,7 +35,7 @@ only Project=solnix resources, and check free vCPU before a metal launch.
 **Burner accounts live about 7 days.** Anything that took more than an hour to make, or
 that someone depends on (boot-verified AMIs as raw disk images, build hosts, toolchains,
 installer images, test evidence), is backed up OFF the account the same day it is
-verified: to floki `/home/gburd/solnix-bank/` and, for AMI images, the R2 bank
+verified: to floki `/scratch/solnix-bank/` (moved from ~/solnix-bank 2026-10-30) and, for AMI images, the R2 bank
 (`scripts/ami-bank.sh`), each read back and sha256-compared. An AMI id is not a backup.
 See .kiro/steering/burner-account-backups.md.
 

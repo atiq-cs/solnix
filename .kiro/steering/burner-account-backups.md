@@ -18,7 +18,7 @@ Two backup locations, both outside every AWS account:
 
 | Location | What goes there | How |
 |---|---|---|
-| **floki** `/home/gburd/solnix-bank/<kind>/<name>/` | Everything below, always. 2+ TB free. | copy, then `sha256sum` both ends and compare |
+| **floki** `/scratch/solnix-bank/<kind>/<name>/` (was ~/solnix-bank until 2026-10-30) | Everything below, always. 2+ TB free. | copy, then `sha256sum` both ends and compare |
 | **R2 bank** `s3://solnix-cache/ami/<name>/` (`https://s3.solnix.io`) | Disk images of AMIs (the restore path reads from here) | `scripts/ami-bank.sh bank <ami>` then `ami-bank.sh verify <prefix>` |
 
 The R2 bank is the infra team's bucket that we are allowed to write under
