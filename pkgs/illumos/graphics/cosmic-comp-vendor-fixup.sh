@@ -120,18 +120,24 @@ fi
 edit smithay src/utils/sealed_file.rs "'            let mut shm_name = name.to_bytes().to_owned();'" \
   "'            let mut shm_name = b\"/\".to_vec();\n            shm_name.extend_from_slice(name.to_bytes());'"
 
-# 11. polling (calloop's poller): on illumos it uses event ports, but wayland-backend's server
-#     poll fd is an epoll fd (item 2), and an illumos epoll (/dev/poll DP_EPOLLCOMPAT) fd nested in
-#     an event port never wakes it: devpoll.c dppoll() gives no pollhead and wakes only poll/devpoll
-#     parents (measured: /scratch/solnix/gpu6/t/nestpoll2.c, epoll-in-port NO EVENT, epoll-in-epoll
-#     FIRED). So no client request was ever read (gpu6 run g6e). Take polling's epoll backend, the
-#     Linux one, on illumos; rustix has illumos epoll, eventfd and timerfd. Compositor only.
-if have smithay; then
+# 11. polling (calloop's and async-io's poller): take its epoll backend, the Linux one, on illumos;
+#     rustix has illumos epoll, eventfd and timerfd. Every crate that vendors polling, for two reasons:
+#     (a) compositor: wayland-backend's server poll fd is an epoll fd (item 2), and an illumos epoll
+#     (/dev/poll DP_EPOLLCOMPAT) fd nested in an event port never wakes it: devpoll.c dppoll() gives
+#     no pollhead and wakes only poll/devpoll parents (measured: /scratch/solnix/gpu6/t/nestpoll2.c,
+#     epoll-in-port NO EVENT, epoll-in-epoll FIRED), so no client request was ever read (gpu6 g6e).
+#     (b) every client: event ports have no level mode, so calloop emulates it by re-associating each
+#     fd BEFORE dispatch (calloop sys.rs). A ping pipe whose byte is still unread then fires once
+#     more; calloop's Channel::process_events reads nothing on that spurious event, takes the channel
+#     for not drained and pings itself again: a loop that never sleeps (40-150k turns/s per thread).
+#     In iced_winit's sctk loop each turn queues a message on an unbounded channel, so every applet,
+#     the osd and workspaces grew to 3-4 GB in ~2 min and aborted, and the greeter sat at 100% CPU
+#     (cosmic5 C5-11/C5-12: ping writes = reads = events/2, stack Ping::ping <- Channel::process_events).
+#     With epoll calloop uses native level mode and never re-associates.
 edit polling src/lib.rs "'        target_os = \"android\",\n        target_os = \"redox\"\n    ))] {\n        mod epoll;'" \
   "'        target_os = \"android\",\n        target_os = \"redox\",\n        target_os = \"illumos\"\n    ))] {\n        mod epoll;'"
 edit polling src/lib.rs "'        target_os = \"illumos\",\n        target_os = \"solaris\",\n    ))] {\n        mod port;'" \
   "'        target_os = \"solaris\",\n    ))] {\n        mod port;'"
-fi
 
 # 10. pam-sys 1.0.0-alpha5 + pam-client 0.5 (cosmic-greeter): illumos libpam is Solaris PAM.
 #     bindgen: signed macro constants (the Linux arm; the API takes int). pam-client: its
