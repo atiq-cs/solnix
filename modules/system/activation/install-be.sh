@@ -322,6 +322,12 @@ grep -q '^# solnix drivers' etc/security/device_policy || \
 sed '/^# solnix drivers (generated)$/,$d' etc/devlink.tab > etc/devlink.tab.new
 { echo '# solnix drivers (generated)'; cat "$R$DRV/devlink.tab.add"; } >> etc/devlink.tab.new
 mv etc/devlink.tab.new etc/devlink.tab || die "laying /etc/devlink.tab"
+# the drivers' dacf.conf(5) rules (e.g. ihid's consms link, mkTouchpadDriversDb), the same
+# way; a DB without dacf.conf.add leaves only the gate's rules. The kernel reads this from
+# the boot_archive, which step 8 rebuilds after this.
+sed '/^# solnix drivers (generated)$/,$d' etc/dacf.conf > etc/dacf.conf.new
+[ ! -e "$R$DRV/dacf.conf.add" ] || { echo '# solnix drivers (generated)'; cat "$R$DRV/dacf.conf.add"; } >> etc/dacf.conf.new
+mv etc/dacf.conf.new etc/dacf.conf || die "laying /etc/dacf.conf"
 [ -e etc/path_to_inst ] || : > etc/path_to_inst
 # pkcs11_tpm.so NEEDs libtspi (trousers), which is not built: every libpkcs11
 # consumer that loads it dies in ld.so.1 (measured: `digest -a sha1` killed, so

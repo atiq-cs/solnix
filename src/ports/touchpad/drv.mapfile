@@ -1,0 +1,11 @@
+$mapfile_version 2
+# _init/_fini/_info for krtld; dwiic_xfer is dwiic's one private export to ihid.
+SYMBOL_SCOPE {
+	global:
+		_init;
+		_fini;
+		_info;
+		dwiic_xfer;
+	local:
+		*;
+};

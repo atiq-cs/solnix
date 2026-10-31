@@ -569,6 +569,21 @@ let
     };
   };
 
+  # pkgs.solnix.touchpad-driver -- the X1E Gen 5 touchpad modules, dwiic (LPSS
+  # DesignWare I2C) and ihid (HID over I2C, linked under consms with usbms), a
+  # pure derivation (./touchpad-driver.nix) on the iwx-driver pattern. Headers
+  # the proto lacks (sys/i2c, sys/acpica.h, usbai_private.h) come from
+  # kernelNd.src. hardware.touchpad.i2cHid lays and binds them.
+  touchpad-driver = import ./touchpad-driver.nix {
+    gate = gate';
+    inherit kernelNd ld;
+    solnixDev = buildEnv {
+      name = "solnix-dev";
+      paths = [ srcPkgs.gccWrapper srcPkgs.binutils srcPkgs.gnumake ];
+      pathsToLink = [ "/bin" "/share/man" ];
+    };
+  };
+
   # wpa-pmk on the system PATH: a bin/-shaped view of iwm-driver's
   # usr/lib/inet/wpa-pmk, so environment.systemPackages puts it at sw/bin ->
   # /usr/bin/wpa-pmk, which the solnix-wifi-join service's PATH finds. (The join
@@ -920,6 +935,65 @@ let
     '' ];
   };
 
+  # The LPSS I2C controller hardware.touchpad.i2cHid binds dwiic to: the X1E
+  # Gen 5's Alder Lake-P I2C0 (8086:51e8), behind which sits the ELAN touchpad.
+  touchpadAliases = [ "pci8086,51e8" ];
+
+  # mkTouchpadDriversDb base -- `base` with dwiic (bound to touchpadAliases)
+  # and ihid (no alias: it binds by node name to the i2c device the
+  # solnix-touchpad SMF one-shot adds) and dacf.conf.add, the dacf(5) rule
+  # install-be appends to /etc/dacf.conf: consconfig_dacf pushes usbms on
+  # ihid's internal_mouse node and links it under consms, as it does for a USB
+  # mouse (hid:internal_mouse). Neither driver has a minor_perm line: dwiic's
+  # nodes belong to i2cnex and ihid's only node is kernel-internal.
+  mkTouchpadDriversDb = base: derivation {
+    name = "illumos-driver-db-touchpad";
+    system = "x86_64-solaris";
+    builder = "/usr/bin/bash";
+    PATH = "/usr/bin:/usr/sbin";
+    db = mkDriversDbWith base [
+      { name = "dwiic"; perm = null; aliases = touchpadAliases; }
+      { name = "ihid"; perm = null; aliases = [ ]; }
+    ];
+    args = [ "-c" ''
+      set -eu
+      mkdir -p "$out"; cp "$db"/* "$out"/; chmod u+w "$out"/*
+      for op in post-attach pre-detach; do
+        printf 'driver-minorname="ihid:internal_mouse" consconfig_dacf:ms_config %s - pushmod="usbms"\n' $op
+      done >> "$out/dacf.conf.add"
+      [ "$(grep -c '^driver-minorname="ihid:internal_mouse"' "$out/dacf.conf.add")" -eq 2 ] || { echo "FATAL: dacf rule" >&2; exit 1; }
+    '' ];
+  };
+
+  # mkTouchpadKernel base -- `base` (a kernel slice) with kernel/drv/amd64/
+  # dwiic and ihid laid in, the mkIwxKernel way. No driver.conf: nothing here
+  # attaches unless the driver DB binds it.
+  mkTouchpadKernel = base: derivation {
+    name = "illumos-kernel-touchpad";
+    system = "x86_64-solaris";
+    builder = "/usr/bin/bash";
+    PATH = "/usr/bin:/usr/sbin";
+    inherit base;
+    module = touchpad-driver;
+    strip = [ base slices.kernel ];
+    disallowedReferences = [ base slices.kernel touchpad-driver ];
+    args = [ "-c" ''
+      set -eu
+      mkdir -p "$out"
+      ( cd "$base" && tar cf - . ) | ( cd "$out" && tar xf - )
+      ${stripSliceRefs}
+      for d in "$out" "$out/kernel" "$out/kernel/drv" "$out/kernel/drv/amd64"; do
+        [ -d "$d" ] && [ ! -h "$d" ] && chmod u+w "$d" 2>/dev/null || true
+      done
+      mkdir -p "$out/kernel/drv/amd64"
+      for m in dwiic ihid; do
+        cp "$module/kernel/drv/amd64/$m" "$out/kernel/drv/amd64/$m"; chmod 0555 "$out/kernel/drv/amd64/$m"
+        [ ! -e "$out/kernel/drv/$m.conf" ] || { echo "FATAL: $m.conf in the tree" >&2; exit 1; }
+      done
+      [ -e "$out/platform/i86pc/kernel/amd64/unix" ] || { echo "FATAL: base kernel clobbered" >&2; exit 1; }
+    '' ];
+  };
+
   # mkGpuKernel base { nvidia; gspFirmware; } -- `base` (a kernel slice, e.g.
   # mkIwxKernel's) with kernel/drv/amd64/i915 laid in, plus nvidia,
   # nvidia_modeset and nvidia_i2c when nvidia = true, plus NVIDIA's GSP
@@ -1043,6 +1117,8 @@ in
   inherit nvidia-oss-modules nvidiaGspFirmware i915Firmware;
   # Intel iGPU (i915) and the GPU driver-DB/kernel helpers (modules/config/graphics-gpu.nix).
   inherit i915-driver i915Aliases mkDriversDbWith mkGpuKernel;
+  # X1E touchpad (dwiic + ihid) and its driver-DB/kernel helpers (modules/config/touchpad-i2c-hid.nix).
+  inherit touchpad-driver touchpadAliases mkTouchpadDriversDb mkTouchpadKernel;
 
   inherit (srcPkgs) zlib libxml2 openssl openssh bash nspr nss git libcExtra binutils gnumake gccWrapper vi pkgconf;
   inherit (srcPkgs) ncurses less htop top libevent tmux coreutils gnugrep gnused gnutar findutils diffutils jq gettext home-manager xorgproto lndir hostname libiconv;

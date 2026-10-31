@@ -170,11 +170,7 @@ in
 
     profileRelativeSessionVariables = mkOption {
       type = types.attrsOf (types.listOf types.str);
-      default = {
-        PATH = [ "/bin" "/sbin" ];
-        MANPATH = [ "/share/man" ];
-        INFOPATH = [ "/share/info" ];
-      };
+      default = { };
       description = ''
         Variables built by suffixing each entry onto every environment.profiles
         entry (e.g. PATH = /run/current-system/sw/bin:.../sw/sbin:...).
@@ -222,6 +218,14 @@ in
   config = {
     # environment.variables merges into sessionVariables (NixOS-compat).
     environment.sessionVariables = cfg.variables;
+
+    # A definition, not the option default, so a module adding a variable (desktop-cosmic: XDG_DATA_DIRS)
+    # does not drop PATH (the pathsToLink bug, system-path.nix). NixOS sets these in programs/environment.nix.
+    environment.profileRelativeSessionVariables = {
+      PATH = [ "/bin" "/sbin" ];
+      MANPATH = [ "/share/man" ];
+      INFOPATH = [ "/share/info" ];
+    };
 
     system.build.setEnvironment = setEnvironment;
     environment.generatedEtc."profile.d/solnix-env.sh" = setEnvironmentText;

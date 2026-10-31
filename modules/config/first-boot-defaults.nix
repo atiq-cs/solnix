@@ -6,6 +6,12 @@ let
   cfg = config.solnix.defaults;
 in
 {
+  # NixOS time.timeZone (nixos/modules/config/locale.nix): an IANA name, e.g. "America/New_York". NixOS's default is
+  # null = UTC; illumos needs a TZ value, so solnix's default is "UTC". Zone files: /usr/share/lib/zoneinfo.
+  options.time.timeZone = lib.mkOption {
+    type = lib.types.str; default = "UTC"; example = "America/New_York";
+    description = "The time zone used for displaying times and dates (TZ in /etc/default/init and the login environment).";
+  };
   options.solnix.defaults = {
     enable = lib.mkOption { type = lib.types.bool; default = true; };
     enableStockServices = lib.mkOption {
@@ -18,8 +24,9 @@ in
       '';
     };
     timeZone = lib.mkOption {
-      type = lib.types.str; default = "UTC";
-      description = "Default time zone (illumos reads TZ from /etc/default/init).";
+      type = lib.types.str; default = config.time.timeZone;
+      defaultText = lib.literalExpression "config.time.timeZone";
+      description = "Default time zone (illumos reads TZ from /etc/default/init). Set time.timeZone, as on NixOS.";
     };
     locale = lib.mkOption {
       type = lib.types.str; default = "en_US.UTF-8";

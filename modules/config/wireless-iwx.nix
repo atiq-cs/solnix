@@ -71,12 +71,16 @@ let
       { name = "nvidia_modeset"; perm = "0666 root sys"; aliases = [ ]; }
       { name = "nvidia_i2c"; perm = null; aliases = [ ]; }
     ];
-  finalDb = if wantGpu then s.mkDriversDbWith wifiDb gpuDrivers else wifiDb;
-  finalKern = if wantGpu then s.mkGpuKernel wifiKern {
+  gpuDb = if wantGpu then s.mkDriversDbWith wifiDb gpuDrivers else wifiDb;
+  gpuKern = if wantGpu then s.mkGpuKernel wifiKern {
     nvidia = gfx.onMedia;
     gspFirmware = if gfx.onMedia && gfx.nvidia.acceptFirmwareLicense then s.nvidiaGspFirmware true else null;
     i915Firmware = if gfx.i915.acceptFirmwareLicense then s.i915Firmware true else null;
   } else wifiKern;
+  # the touchpad (options in ./touchpad-i2c-hid.nix) last: dwiic + ihid, the dacf rule.
+  wantTouchpad = config.hardware.touchpad.i2cHid.enable;
+  finalDb = if wantTouchpad then s.mkTouchpadDriversDb gpuDb else gpuDb;
+  finalKern = if wantTouchpad then s.mkTouchpadKernel gpuKern else gpuKern;
 
   # Networks highest priority first; each line "SSID<TAB>pskFile".
   sortNets = nets: lib.sort (a: b: a.priority > b.priority)
@@ -382,7 +386,7 @@ in
   ]))
   # The driver DB and kernel tree, rendered from iwm/iwx/onMedia and the GPU
   # options together so the drivers compose instead of overriding each other.
-  (lib.mkIf (wantIwm || wantIwx || wantGpu) {
+  (lib.mkIf (wantIwm || wantIwx || wantGpu || wantTouchpad) {
     system.build.driversDb = finalDb;
     system.build.kernelTree = finalKern;
   })

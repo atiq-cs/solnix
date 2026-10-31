@@ -23,6 +23,13 @@ let
     </fontconfig>
   '';
   start = cmd: "/usr/bin/bash -c ${lib.escapeShellArg cmd}";
+  # NixOS xdg.icons.fallbackCursorThemes (the cosmic module: [ "Cosmic" ]): the "default" theme cosmic-comp loads
+  # when XCURSOR_THEME is unset; Cosmic inherits Pop, whose cursors/ it finds. Without it comp drew its built-in cursor.
+  fallbackCursorTheme = pkgs.writeTextFile {
+    name = "fallback-cursor-theme";
+    text = "[Icon Theme]\nInherits=Cosmic\n";
+    destination = "/share/icons/default/index.theme";
+  };
 in
 {
   assertions = [{
@@ -35,7 +42,22 @@ in
   }];
 
   solnix.roles = [ "cosmic-desktop" ];
-  environment.systemPackages = [ s.wayland s.libdrm mesa s.greetd ] ++ cfg.packages ++ cfg.fonts;
+  environment.systemPackages = [ s.wayland s.libdrm mesa s.greetd ] ++ cfg.packages ++ cfg.fonts ++ [ fallbackCursorTheme ];
+
+  # What the session finds through /run/current-system/sw/share, as NixOS links it: cosmic.nix (backgrounds,
+  # cosmic*), xdg.icons (icons, pixmaps), xdg.menus (applications, desktop-directories), xdg.mime, dbus.nix,
+  # displayManager's wayland-sessions (the greeter's session list) and metainfo (app-library, store).
+  environment.pathsToLink = [
+    "/share/applications" "/share/desktop-directories" "/share/icons" "/share/pixmaps" "/share/mime"
+    "/share/metainfo" "/share/wayland-sessions" "/share/dbus-1" "/share/backgrounds"
+    "/share/cosmic" "/share/cosmic-layouts" "/share/cosmic-themes"
+  ];
+  # NixOS programs/environment.nix + xdg/icons.nix: XDG_DATA_DIRS and XCURSOR_PATH per profile (system, the
+  # user's ~/.nix-profile, default), so apps installed with home-manager or nix profile show up too.
+  environment.profileRelativeSessionVariables = {
+    XDG_DATA_DIRS = [ "/share" ];
+    XCURSOR_PATH = [ "/share/icons" "/share/pixmaps" ];
+  };
 
   # libEGL/libgbm find iris/GBM in Mesa's own prefix (its compiled-in paths), so no
   # /run/opengl-driver indirection. The ICD file is for whichever Vulkan loader an app ships.
@@ -43,10 +65,13 @@ in
     VK_DRIVER_FILES = "${mesa}/share/vulkan/icd.d/intel_icd.x86_64.json";
     XDG_SESSION_TYPE = "wayland";
     XDG_CURRENT_DESKTOP = "COSMIC";
-    XDG_DATA_DIRS = lib.concatMapStringsSep ":" (p: "${p}/share") cfg.packages;
+    XCURSOR_PATH = [ "$HOME/.icons" "$HOME/.local/share/icons" ];   # ahead of the profile ones, as NixOS
     X11_BASE_RULES_XML = "${s.xkeyboard-config}/share/X11/xkb/rules/base.xml";
     X11_EXTRA_RULES_XML = "${s.xkeyboard-config}/share/X11/xkb/rules/base.extras.xml";
     COSMIC_RENDER_DEVICE = cfg.drmDevice;
+    # shortcut: Mesa allocates no render-compressed (CCS) buffers. cosmic-comp scanned out Y_TILED_GEN12_RC_CCS_CC
+    # buffers and the panel flashed on every pointer-motion commit (lixi, cosmic6); drop once that is understood.
+    INTEL_DEBUG = "noccs";
   };
   environment.generatedEtc = {
     "fonts/fonts.conf" = fontsConf;
