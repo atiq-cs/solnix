@@ -1,0 +1,10 @@
+host=solnix-builder-build plain=/nix/store/ny5lnz398v1hj618hxp69ghqlxxh1pni-gdof-plain copy=/nix/store/vb4rhqvslaqmsgchg7zngy4j66kw7ji8-gdof-copy outside=/nix/store/zkydx2pmyya9455by70wzshqf0r31avq-gdof-outside nosys=/nix/store/g6dw8v6sgliz3ji87xyb7bbyaknsjl66-gdof-nosys
+OK perl d6fjxi7w (free text): expect host/FAIL, got host/FAIL :: names the build host (solnix-builder-build in lib/perl5/5.42.0/i86pc-solaris-thread-multi-64/Config_heavy.pl @2293)
+OK world rsppqvh0 (DOF utsname only): expect nohost/PASS, got nohost/PASS :: 
+OK world-seed 08cx1a0n (DOF utsname only): expect nohost/PASS, got nohost/PASS :: 
+OK jq (no hit): expect nohost/PASS, got nohost/PASS :: 
+OK synthetic plain text: expect host, got host/FAIL :: names the build host (solnix-builder-build in note @9)
+OK copy of a DOF ELF (control: DOF only): expect nohost, got nohost/PASS :: 
+OK same copy + nodename appended outside the DOF: expect host, got host/FAIL :: names the build host (solnix-builder-build in lib.so @1684836)
+OK same copy, SunOS sysname clobbered (DOF hit, no record): expect host, got host/FAIL :: names the build host (solnix-builder-build in lib.so @1336948)
+RESULT ok=8 wrong=0

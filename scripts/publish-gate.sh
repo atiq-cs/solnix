@@ -47,7 +47,26 @@ for p in "$@"; do
   hs="$(uname -n) $(sed -n 's/^domain[[:space:]]*//p; s/^search[[:space:]]*//p' /etc/resolv.conf 2>/dev/null) compute.internal ${GATE_HOST_STRINGS:-}"
   for h in $hs; do
     [ ${#h} -ge 6 ] || continue   # too short to mean a host (e.g. "local")
-    nix-store --dump "$p" 2>/dev/null | grep -a -q -F -- "$h" && why="$why names the build host ($h);"
+    n=$(nix-store --dump "$p" 2>/dev/null | grep -a -o -F -- "$h" | wc -l | tr -d ' ')
+    [ "$n" -gt 0 ] || continue
+    # Exempt ONLY a hit that is the nodename of a DTrace DOF utsname record: inside an ELF's .SUNW_dof section, with the
+    # sysname "SunOS\0" 257 bytes before it (struct utsname, 257-byte fields). `dtrace -G` wrote the illumos-gate build
+    # machine's name there (solnix-builder-build, the generic OI build-host image name); the gate proto and served libc carry it.
+    # Every other hit FAILs: free text, a non-ELF file, outside .SUNW_dof, no SunOS record, a file name or symlink target
+    # (the dump's count must equal the exempt count).
+    ex=0; where=""
+    while IFS= read -r f; do
+      offs=$(grep -a -b -o -F -- "$h" "$f" | cut -d: -f1); [ -n "$offs" ] || continue
+      doff=""; dsz=""
+      read -r doff dsz < <(elfdump -c "$f" 2>/dev/null | awk '/sh_name: \.SUNW_dof$/ {d=1; next} d && /sh_size:/ {sz=$2} d && /sh_offset:/ {print $2, sz; exit}')
+      for o in $offs; do
+        if [ -n "$dsz" ] && [ "$o" -ge $((doff)) ] && [ $((o + ${#h})) -le $((doff + dsz)) ] && [ "$o" -ge 257 ] &&
+           [ "$(dd if="$f" bs=1 skip=$((o - 257)) count=6 2>/dev/null | od -An -tx1 | tr -d ' \n')" = 53756e4f5300 ]; then
+          ex=$((ex + 1))
+        else [ -n "$where" ] || where="${f#$p/} @$o"; fi
+      done
+    done < <(find "$p" -type f)
+    [ "$ex" = "$n" ] || why="$why names the build host ($h in ${where:-a file name or symlink target});"
   done
   refs=$(nix-store -q --references "$p" | sort -u)
   named=$(nix-store --dump "$p" | grep -a -o -E '/nix/store/[0-9a-df-np-sv-z]{32}-[A-Za-z0-9+._?=-]+' | cut -c1-44 | sort -u)
