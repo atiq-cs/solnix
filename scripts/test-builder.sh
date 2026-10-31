@@ -56,6 +56,10 @@ mkdir -p "$W/flake" "$W/fk"; cat > "$W/flake/flake.nix" <<EOF
     needs = mk "qb-needs-1" "cat \${mk "qb-dep-${W##*/}" "echo dep > \$out"} > \$out";
     unserved = mk "qb-unserved-${W##*/}" "echo unserved > \$out";
     dup = mk "qb-dup-1" "echo dup > \$out";
+    # an input that is a FIXED-OUTPUT derivation nobody has (a source tarball): it may build here, the leaf is reproducible
+    fodin = mk "qb-fodin-1" "read x < \${derivation { name = "qb-fod-${W##*/}"; system = "x86_64-solaris"; builder = "/bin/sh";
+      args = [ "-c" "printf fod > \$out" ]; outputHashMode = "flat"; outputHashAlgo = "sha256";
+      outputHash = "40c8c5469f953906025db90f6621bd41d33944e585aa4f39a487ebe7a5c69f5f"; }}; echo \$x > \$out";
   }; }; }
 EOF
 F=path:$W/flake; o() { jq -r --arg a "$1" '.[$a]' "$W/outs.json"; }
@@ -69,9 +73,17 @@ GH=$(nawk '/^NarHash:/ {print $2}' "$(hp $(o good))")
 sed "s|^NarHash: .*|NarHash: sha256:0000000000000000000000000000000000000000000000000000|" "$(hp $(o mism))" > "$W/x" && mv "$W/x" "$(hp $(o mism))"
 # needs: served (a narinfo), but building it here first needs qb-dep, which is neither valid nor served
 printf 'StorePath: %s\nNarHash: %s\n' "$(o needs)" "$GH" > "$(hp $(o needs))"
+# fodin: served and valid here, but its only input, a fixed-output drv with a per-run name, is not. The out is what a build
+# gives (the file "fod\n"), imported from a hand-made NAR, so the gate's dry run lists exactly that FOD to build.
+print fod > "$W/fod.txt"; chmod 444 "$W/fod.txt"; nix-store --dump "$W/fod.txt" > "$W/cache/fodin.nar"
+fh=$(nix-hash --type sha256 --flat --base32 "$W/cache/fodin.nar"); fs=$(wc -c < "$W/cache/fodin.nar" | tr -d ' ')
+printf 'StorePath: %s\nURL: fodin.nar\nCompression: none\nFileHash: sha256:%s\nFileSize: %s\nNarHash: sha256:%s\nNarSize: %s\nReferences: \n' \
+  "$(o fodin)" "$fh" "$fs" "$fh" "$fs" > "$(hp $(o fodin))"
+nix copy --no-check-sigs --from "file://$W/cache" $(o fodin) >> "$W/fixture.log" 2>&1 && [[ -e $(o fodin) ]] ||
+  { no "fodin fixture: $(tail -3 "$W/fixture.log")"; print "RESULT: FAIL"; exit 1; }
 { print -r -- "$H"; rec good 1 y /nix/store/11111111111111111111111111111111-qb-good-1	# a stale row: the gate builds the evaluated out
-  for a in good flaky mism needs unserved dup; do rec $a 1 y "$(o $a)"; done; rec noattr 1 y "$(o good)"; } > "$W/g.tsv"
-print "{\"rows\":[$(row flaky 1 outdated),$(row good 1 outdated),$(row mism 1 outdated),$(row needs 1 outdated),$(row unserved 1 outdated),$(row noattr 1 outdated),$(row dup 1 outdated),$(row dup 1 outdated)]}" > "$W/g.json"
+  for a in good flaky mism needs unserved dup fodin; do rec $a 1 y "$(o $a)"; done; rec noattr 1 y "$(o good)"; } > "$W/g.tsv"
+print "{\"rows\":[$(row flaky 1 outdated),$(row good 1 outdated),$(row mism 1 outdated),$(row needs 1 outdated),$(row unserved 1 outdated),$(row noattr 1 outdated),$(row dup 1 outdated),$(row dup 1 outdated),$(row fodin 1 outdated)]}" > "$W/g.json"
 # the fake queue: rows from $FKROWS; claim grants pnames[0] (no pnames: $FKNEXT, as the server hands out its next job),
 # FKEMPTY=1: no job (someone else has it). Every request is logged, body included; everything else goes to the real curl.
 cat > "$W/fk/curl" <<'FK'
@@ -100,9 +112,10 @@ print x > "$W/bearer"; : > "$W/fk/log"; out=$(tk); print -r -- "$out" | sed 's/^
 nc() { print -r -- "$c" | grep '/claim ' | grep -c "\"pnames\":\[\"$1\"\]"; }
 [[ $(claims) -ge 1 && $(print -r -- "$c" | grep '/claim ' | grep -vc '"pnames":\["') == 0 ]] && ok "every claim carries pnames ($(claims) claims)" || no "a claim without pnames"
 has 'decline flaky: nix build --rebuild .* failed' && [[ $(nc flaky) == 0 ]] && ! print -r -- "$c" | grep -q '"pnames":\[\]' &&
-  ! print -r -- "$c" | grep '/claim ' | grep -vq '"pnames":\["good"\]' && ok "NEG a failed (nondeterministic) rebuild: declined, no claim" || no "flaky was claimed or not rebuilt"
+  ! print -r -- "$c" | grep '/claim ' | grep -vEq '"pnames":\["(good|fodin)"\]' && ok "NEG a failed (nondeterministic) rebuild: declined, no claim" || no "flaky was claimed or not rebuilt"
 has 'decline mism: the local .*qb-mism-1 has sha256:.*, cache.solnix.io serves sha256:0000' && [[ $(nc mism) == 0 ]] && ok "NEG local NarHash != served NarHash: declined before any build, no claim" || no "mism"
-has 'decline needs: the dry run would build 1 derivations' && [[ $(nc needs) == 0 ]] && ok "NEG the dry run lists a local build of an input: declined, no claim" || no "needs"
+has 'decline needs: the dry run would build 1 non-fixed-output derivations' && [[ $(nc needs) == 0 ]] && ok "NEG the dry run lists a local build of a non-FOD input: declined, no claim" || no "needs"
+has 'fodin: rebuilt .* identical' && [[ $(nc fodin) == 1 ]] && ok "a leaf whose only local input is a fixed-output derivation (a tarball): built and claimed" || no "fodin: $(print -r -- "$out" | grep fodin | tail -2)"
 has 'decline unserved: .* is not served' && [[ $(nc unserved) == 0 ]] && ok "NEG out not served: declined (a first build needs the submit key), no claim" || no "unserved"
 has 'decline noattr: no packages.x86_64-solaris attr' && [[ $(nc noattr) == 0 ]] && ok "NEG no attr evaluates to the out: declined" || no "noattr"
 has 'decline dup: more than one' && [[ $(nc dup) == 0 ]] && ok "NEG two rows of one pname: declined (pnames cannot choose)" || no "dup"
@@ -128,8 +141,9 @@ out=$(env BUILDER_LOAD_MAX=0 ksh93 "$S" once 2>&1); print -r -- "$out" | grep -q
 print x > "$W/bearer"; print "{\"rows\":[$(row jq 1.7.1 outdated)]}" > "$W/l.json"; : > "$W/fk/log"
 out=$(env BUILDER_PATH="$W/fk:$PATH" FKREAL=$RC FKLOG=$W/fk/log FKROWS=$W/l.json BUILDER_API=http://queue.invalid/q BUILDER_STATE=$W/stl BUILDER_LOAD_MAX=1000 ksh93 "$S" once 2>&1)
 print -r -- "$out" | sed 's/^/   L /'
-if has 'decline jq: the dry run would build [0-9]+ derivations'; then [[ $(claims) == 0 ]] && ok "live jq: the real dry run needs local builds of its inputs -> declined, no claim" || no "live jq claimed"
+if has 'decline jq: the dry run would build [0-9]+ (non-fixed-output )?derivations'; then [[ $(claims) == 0 ]] && ok "live jq: the real dry run needs local builds of its inputs -> declined, no claim" || no "live jq claimed"
 elif has 'decline jq: nix build --rebuild .* failed'; then [[ $(claims) == 0 ]] && ok "live jq: served, but its rebuild can't run here (an input such as gcc is not substitutable yet) -> declined, no claim" || no "live jq claimed after a failed rebuild"
+elif has 'decline jq: no packages.x86_64-solaris attr of .* evaluates to'; then [[ $(claims) == 0 ]] && ok "live jq: main has moved past every served jq out (a rebuild wave not yet served) -> declined, no claim" || no "live jq claimed with no attr"
 elif has 'decline jq: .* is not served'; then [[ $(claims) == 0 ]] && ok "live jq: main's jq out is not served yet (a wave not yet published) -> declined, no claim" || no "live jq claimed an unserved out"
 elif has 'jq: rebuilt .* identical'; then [[ $(claims) == 1 ]] && ok "live jq: rebuilt identical to the served NAR -> one claim (a solnix host builds now)" || no "live jq"
 else no "live jq"; fi

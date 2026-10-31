@@ -97,8 +97,12 @@ ready() {	# ready <pname> <outs>: 0 when the out ($out) was rebuilt here and is 
 	bounded 300 nix derivation show "${d%^*}" > "$BUILDER_STATE/drv.json" 2>&1 && ins=$(jq -r '.[].inputDrvs | to_entries[] |
 	    .key + "^" + ((if (.value|type) == "array" then .value else .value.outputs end) | join(","))' "$BUILDER_STATE/drv.json") &&
 	    bounded 600 nix build --dry-run --no-link "$d" $ins > "$BUILDER_STATE/dry" 2>&1 || { log "decline $1: dry run of $d failed ($BUILDER_STATE/dry)"; return 1; }
-	x=$(nawk -v d="${d%^*}" '/will be built/ {b=1; next} /will be fetched/ {b=0} b && $1 ~ /\.drv$/ && $1 != d {n++} END {print n+0}' "$BUILDER_STATE/dry")
-	(( x == 0 )) || { log "decline $1: the dry run would build $x derivations here first ($BUILDER_STATE/dry)"; return 1; }
+	# fixed-output inputs (source tarballs, vendor dirs) may build here: their outputs are checked against the pinned
+	# hash, so where they are fetched does not matter (NixOS fetches them on any builder). Any other input must substitute.
+	x=0; for f in $(nawk -v d="${d%^*}" '/will be built/ {b=1; next} /will be fetched/ {b=0} b && $1 ~ /\.drv$/ && $1 != d {print $1}' "$BUILDER_STATE/dry"); do
+		bounded 120 nix derivation show "$f" 2> /dev/null | jq -e '[.[].outputs[] | has("hash") or has("hashAlgo")] | all' > /dev/null || x=$((x + 1))
+	done
+	(( x == 0 )) || { log "decline $1: the dry run would build $x non-fixed-output derivations here first ($BUILDER_STATE/dry)"; return 1; }
 	[[ -s $BUILDER_BEARER_FILE ]] || { log "dry run: would fetch $2 and rebuild $d"; return 1; }	# no fetch or CPU for what it cannot claim
 	# --rebuild compares the new build with the LOCAL copy, so that copy must be the served NAR (a copied-in one may not be)
 	bounded 1800 nix-store -r "$2" > /dev/null 2>&1 && nh=$(nix-store -q --hash "$2") || { log "decline $1: cannot fetch the served $2"; return 1; }
