@@ -52,6 +52,10 @@ in
   };
 
   config = lib.mkIf cfg.firstBootAuthKeys {
+    # IMDS answers the IMDSv2 token PUT with IP TTL = HttpPutResponseHopLimit (1), and ipf tags any inbound packet with
+    # TTL < fr_minttl (4) low-ttl, which breaks its `keep state` match (FI_LOWTTL is in FI_CMP): the reply hit `block in`
+    # and the token PUT timed out (measured on dixi, ipmon "IN low-ttl"). NixOS's conntrack has no TTL check.
+    solnix.firewall.extraRules = "pass in quick proto tcp from 169.254.169.254/32 port = 80 to any";
     smf.services.solnix-ec2-first-boot = {
       enable = true;
       category = "site";
