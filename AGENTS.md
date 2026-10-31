@@ -28,7 +28,9 @@ closed 2026-10-30 19:14:53 UTC (docs/account-expiry-kiwi-20261030.md). Durable i
 **solnix-ami** (`788352824872`): the OI build host `ami-0e4a740ebfc5bec81`, aarch64 v4 (boots on Nitro VMs)
 `ami-0e08aa06f629ffbac` (us-west-2) / `ami-0ecdc3a731f13adff` (us-east-1), the x86 DP fix AMIs. Share an image to a new
 account with `modify-image-attribute --launch-permission` from solnix-ami. Name `AWS_PROFILE` explicitly (sg-guard has
-no default), re-check `describe-instances` before a launch, never a `0.0.0.0/0`/`::/0` rule, and terminate instances
+no default), re-check `describe-instances` before a launch, never a `0.0.0.0/0`/`::/0` rule, ssh ingress from every
+network in `scripts/operator-cidrs.txt` (Comcast plus the Starlink backup, so a Comcast outage doesn't lock us out),
+and terminate instances
 plus their volumes after. Burner accounts are shared with other tenants (chef had a libxtc instance on day one); touch
 only Project=solnix resources, and check free vCPU before a metal launch.
 
