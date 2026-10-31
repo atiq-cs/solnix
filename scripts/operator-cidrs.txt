@@ -1,0 +1,9 @@
+# Networks the maintainer and floki reach the build fleet from. Every ssh ingress rule we write (EC2 security groups,
+# host firewalls that restrict by source) admits all of these and nothing wider. Add with:
+#   while read c _; do sh scripts/sg-guard.sh authorize <region> <sg> tcp 22 $c; done < <(grep -v '^#' scripts/operator-cidrs.txt)
+# cidr              what
+73.4.58.0/24        Comcast (AS7922), the primary uplink; floki egresses as 73.4.58.126 (measured 2026-10-31)
+153.66.152.0/24     Starlink (AS14593) backup uplink, Connecticut block per Starlink's geofeed (geoip.starlinkisp.net/feed.csv)
+153.66.153.0/24     Starlink, same
+153.66.154.0/24     Starlink, same
+# shortcut: the Starlink blocks come from the geofeed, not a measured egress; confirm with `curl -4 ifconfig.me` while on Starlink.

@@ -110,7 +110,8 @@ now fails on this. Prose belongs in `.notes.md`.
 ## ⚠️ NEVER create a world-open security-group rule — not even to test
 
 `0.0.0.0/0` or `::/0` ingress **kills a burner account in minutes** via a T&C violation. Prior fleets have
-been terminated for exactly this. Scope every rule to `73.4.58.0/24` or a /32.
+been terminated for exactly this. Scope every rule to the networks in `scripts/operator-cidrs.txt` (Comcast `73.4.58.0/24` plus the Starlink backup
+blocks) or a /32, and add every one of them, so the fleet stays reachable when the primary uplink is down.
 
 This is not hypothetical caution about a future mistake: the orchestrator created a real world-open rule
 **three times** while verifying that `sg-guard.sh` could detect one. The finding was real (the guard was
