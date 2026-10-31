@@ -263,6 +263,10 @@
         x86_64-solaris = lib.filterAttrs (_: v:
           let r = builtins.tryEval (lib.isDerivation v); in r.success && r.value)
           (removeAttrs (mkPkgs { }).solnix [ "cached" "starter" ]);
+        # the native aarch64 set (pkgs/illumos/aarch64; lib/host-pkgs.nix uses the same import), for drv_for on dixa.
+        aarch64-solaris = lib.filterAttrs (_: v:
+          let r = builtins.tryEval (lib.isDerivation v); in r.success && r.value)
+          (removeAttrs (import ./pkgs/illumos/aarch64 { system = "aarch64-solaris"; }) [ "systemToplevel" ]);
       } // lib.genAttrs buildSystems (_buildSystem: {
         # the full system closure (T2.8); realise on the illumos host.
         baseToplevel = self.solnixConfigurations.base.config.system.build.toplevel;
