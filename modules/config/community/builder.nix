@@ -24,8 +24,11 @@ in
       description = "Claim only while the 1-minute load average is below this."; };
     agentId = lib.mkOption { type = lib.types.strMatching "[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}"; default = config.networking.hostName;
       description = "agent_id sent to the queue (the host name)."; };
+    # what builder-zone.nix runs in the zone: the same script and tools
+    internal = lib.mkOption { internal = true; readOnly = true;
+      default = { inherit path; script = ./solnix-builder.sh; cacert = "${s.nixChain.cacert}/etc/ssl/certs/ca-bundle.crt"; }; };
   };
-  config = lib.mkIf a.build {
+  config = lib.mkIf (a.build && config.solnix.builder.isolation == "none") {
     # the generation owns /etc/project: the gate's stock file (./project.stock, sha256 0b4ce25c..., = dixi's and dixa's) + ours
     environment.generatedEtc.project = builtins.readFile ./project.stock
       + "solnix-builder:4242:solnix idle queue builder::root:project.cpu-cap=(privileged,${toString cfg.cpuCap},deny)\n";

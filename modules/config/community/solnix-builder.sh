@@ -9,6 +9,7 @@
 # Without the bearer file it never claims (dry run).
 #   solnix-builder plan <rows.json> <recipes.tsv>   print one decision per row (the unit test drives this)
 #   solnix-builder once                             one tick;  solnix-builder (no args): the SMF loop
+#   solnix-builder ready <pname> <outs>             prove one job here (dry run, fetch, rebuild, NarHash), never claim
 PATH=${BUILDER_PATH:-/usr/bin:/usr/sbin}
 : ${BUILDER_API:=https://telemetry.solnix.io/api/v1/build-queue} ${BUILDER_RECIPES:=https://cache.solnix.io/registry/recipes.tsv}
 : ${BUILDER_CACHE:=https://cache.solnix.io}
@@ -69,7 +70,14 @@ api() {	# api <method> <path> [json-body]: body in $BUILDER_STATE/resp, HTTP cod
 	    -X "$1" -H @- -H 'Content-Type: application/json' ${3:+--data-binary "$3"} "$BUILDER_API$2" 2>"$BUILDER_STATE/curl.err")
 }
 idle() {	# 1-minute load below the threshold (per CPU count is the operator's choice of threshold)
-	typeset l=$(kstat -p unix:0:system_misc:avenrun_1min | nawk '{print $2/256}')
+	typeset l
+	if [[ ${BUILDER_IDLE:-load} == cpu ]]; then
+		# in a zone avenrun counts only the zone's own threads (kstat_fr.c), but the per-CPU tick kstats are the
+		# machine's (pools off): busy CPUs over a 5 s sample stand in for the load average
+		l=$(vmstat 5 2 | nawk -v n="$(psrinfo | wc -l)" 'END {print (100 - $NF) * n / 100}')
+	else
+		l=$(kstat -p unix:0:system_misc:avenrun_1min | nawk '{print $2/256}')
+	fi
 	nawk -v l="$l" -v m="$BUILDER_LOAD_MAX" 'BEGIN{exit !(l < m)}'
 }
 
@@ -148,6 +156,7 @@ case $1 in
 plan) plan "$2" "$3"; exit ;;
 pause) pause; exit ;;
 once) mkdir -p "$BUILDER_STATE" && tick; exit ;;
+ready) mkdir -p "$BUILDER_STATE" && ready "$2" "$3"; exit ;;	# ready <pname> <outs>: prove one job by hand (never claims)
 esac
 mkdir -p "$BUILDER_STATE" || exit 1
 while :; do tick; sleep "$(pause)"; done

@@ -576,6 +576,8 @@ let
     ln -s ${pkgs.solnix.early}   $out/early
     ln -s ${driversDb}           $out/drivers
     ln -s ${pkgs.solnix.stock}   $out/stock
+    ${lib.optionalString (config.system.zoneBrands != { }) "mkdir -p $out/brand"}
+    ${concatStringsSep "\n    " (mapAttrsToList (n: d: "ln -s ${d} $out/brand/${n}") config.system.zoneBrands)}
     # sw: the composed userland profile (environment.systemPackages via buildEnv)
     # -> /run/current-system/sw. SEPARATE from systemPath so a broken package set
     # can't drop the kernel (design §B). shell-environment puts sw/bin first on PATH.
@@ -642,6 +644,16 @@ in
       runtime references (they are present on purpose). When false (the default,
       for minimal/production images), the gate still FATALs if the 219 MB build-only
       gate proto or the from-source compiler leaks into the runtime closure.
+    '';
+  };
+
+  options.system.zoneBrands = mkOption {
+    type = types.attrsOf types.path;
+    default = { };
+    description = ''
+      Extra zone brands: name -> a directory holding config.xml + platform.xml. install-be
+      links each one into the BE's /usr/lib/brand beside the userland's brands (libbrand reads
+      only /usr/lib/brand: BRAND_DIR is compile-time).
     '';
   };
 

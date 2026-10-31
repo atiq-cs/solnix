@@ -48,6 +48,14 @@ in
     builder = {
       enable = mkOption { type = types.bool; default = false; description = "Identified builder: send this host's ssh-ed25519 identity (a separate, stronger opt-in)."; };
       contactEmail = mkOption { type = types.nullOr (types.strMatching "[^@[:space:]\"]+@[^@[:space:]\"]+"); default = null; description = "Optional contact address, sent only in the builder enrolment record."; };
+      # bzone1 (2026-10-30): build as an unprivileged, isolated identity. "zone" = the queue builder AND its nix-daemon
+      # in their own zone (builder-zone.nix): on illumos (sandbox = false) build code runs as the daemon's nixbld users
+      # in the daemon's zone, so only a zone with its own daemon and store keeps a recipe from the host. "none" = the
+      # global-zone service (builder.nix), root in a capped project.
+      isolation = mkOption { type = types.enum [ "none" "zone" ]; default = "none";
+        description = "Where the queue builder runs: none (global zone, root) or zone (its own zone, an untrusted user)."; };
+      shortId = mkOption { type = types.nullOr (types.strMatching "[a-z0-9]{4,12}"); default = null;
+        description = "The builder's short id (infra assigns one per enrolled builder key); the zone user is solnix-builder-<shortId>."; };
       identityKeyFile = mkOption { type = types.str; default = "/etc/ssh/ssh_host_ed25519_key"; description = "The builder identity: the host's own ssh-ed25519 key (kept in sops off the host)."; };
     };
     community.active = mkOption {

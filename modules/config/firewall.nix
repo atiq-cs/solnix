@@ -30,6 +30,10 @@ in
       type = lib.types.listOf lib.types.int; default = [ ];
       description = "Inbound UDP ports to allow (NixOS networking.firewall.allowedUDPPorts).";
     };
+    extraRules = lib.mkOption {
+      type = lib.types.lines; default = "";
+      description = "ipf rules placed FIRST in ipf.conf, before the default policy (e.g. a zone link's own rules: builder-zone.nix).";
+    };
     trustedInterfaces = lib.mkOption {
       type = lib.types.listOf lib.types.str; default = [ "lo0" ];
       description = "Interfaces exempt from filtering (loopback always trusted).";
@@ -45,6 +49,7 @@ in
     #   - ICMP echo allowed (ping) — NixOS allows ping by default.
     environment.generatedEtc."ipf/ipf.conf" = ''
       # solnix default firewall (ipfilter): default-deny inbound, allow established + ssh.
+      ${cfg.extraRules}
       # loopback fully trusted
       pass in quick on lo0 all
       pass out quick on lo0 all

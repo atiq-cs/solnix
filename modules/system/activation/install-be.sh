@@ -125,6 +125,32 @@ farm() {   # $1 = dir relative to /, mirrors $WORLD/$1
   for e in $(ls -A "$R$WORLD/$1"); do
     [ "$1/$e" = usr/lib/libc ] && { rm -f usr/lib/libc; continue; }
     if [ "$e" = amd64 ] && [ -d "$R$WORLD/$1/amd64" ]; then farm "$1/amd64"; continue; fi
+    # the generation's own zone brands (system.zoneBrands) sit beside the userland's: libbrand reads only /usr/lib/brand
+    # (a cloned BE may hold an earlier generation's farm: links only, so find -delete removes no target)
+    if [ "$1/$e" = usr/lib/brand ]; then
+      [ -d usr/lib/brand ] && [ ! -h usr/lib/brand ] && find usr/lib/brand -depth -delete
+      if [ -d "$R$TOP/brand" ]; then
+        farm usr/lib/brand
+        for b in $(ls -A "$R$TOP/brand"); do relink "$(rl "$R$TOP/brand/$b")" "usr/lib/brand/$b"; done
+        continue
+      fi
+    fi
+    # usr/lib/fs: one level deeper. The gate's usr/lib/fs/{dev,hsfs,nfs,ufs}/mount are RELATIVE links to
+    # ../../../../etc/fs/<t>/mount, which resolve inside the store (no etc/fs there) when usr/lib/fs links to the
+    # world. mount(1M) finds /etc/fs first, but zoneadmd execs /usr/lib/fs/dev/mount and failed to boot a zone.
+    if [ "$1/$e" = usr/lib/fs ]; then
+      [ -h usr/lib/fs ] && rm -f usr/lib/fs
+      for t in $(ls -A "$R$WORLD/usr/lib/fs"); do
+        mkdir -p "usr/lib/fs/$t"
+        for f in $(ls -A "$R$WORLD/usr/lib/fs/$t"); do
+          case $(rl "$R$WORLD/usr/lib/fs/$t/$f") in
+            ../../../../etc/*) relink "$(rl "$R$WORLD/usr/lib/fs/$t/$f")" "usr/lib/fs/$t/$f" ;;
+            *) relink "$WORLD/usr/lib/fs/$t/$f" "usr/lib/fs/$t/$f" ;;
+          esac
+        done
+      done
+      continue
+    fi
     relink "$WORLD/$1/$e" "$1/$e"   # relink, not skip: a cloned BE points at the old generation
   done
 }

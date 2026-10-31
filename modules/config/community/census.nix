@@ -38,7 +38,7 @@ in
           CENSUS_HOST_KIND = c.hostKind;
           # true only when the service is really installed, so a flag never runs ahead of the code
           CENSUS_seeding = b (config.smf.services ? solnix-seed);
-          CENSUS_building = b (config.smf.services ? solnix-builder);
+          CENSUS_building = b (config.smf.services ? solnix-builder || config.smf.services ? solnix-builder-zone);
           CENSUS_builder = b a.builder;   # the operator asserts it: enrolled by hand (dixa/dixi/lixi) or by solnix-builder-identity
         } // lib.optionalAttrs (loc != null) {
           CENSUS_LOC_COUNTRY = loc.country;
