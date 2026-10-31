@@ -64,15 +64,11 @@ harvesting drivers from it. Nobody had built or booted it. Today it was built an
 * **ABI.** illumos numbering throughout, which is the ABI `docs/riscv64-packages-2026-10-23.md` §7 recommended moving
   to. Our uts kernel's Linux-numbered syscalls and newlib userland do not carry over. The cost is losing the uts
   packages, not gaining anything.
-* **Login over a DNS-configured resolver hangs** (steps 17-22): the pristine disk logs in, at every -smp (14 s at
-  -smp 4). A disk where I had set `nsswitch.conf` hosts to dns, or that holds a DHCP lease, hangs after the username.
-  The mechanism is inferred (login's audit `getaddrinfo` of hostname "unknown"), not traced. Give the guest a
-  hostname and `/etc/hosts` entry.
-* **sshd preauth dies with EINVAL** (open, step 26): OpenSSH 8.6p1 + LibreSSL 3.3.3 in the proto. `sshd -d` shows
-  `ssh_dispatch_run_fatal: ... Invalid argument [preauth]` right after `SSH2_MSG_KEXINIT`. It fails the same way for
-  curve25519, ecdh-p256 and dh-group14, from the host and from an in-guest `ssh localhost`, and with the sandbox off.
-  The cause is in the riscv64 sshd/LibreSSL build, not in the network. Until it is fixed, the guest is driven through
-  its serial socket (`con.py`), which works.
+* **Login over a DNS-configured resolver "hangs"** (dixr1 steps 17-22). RETRACTED by dixr2: it was not a block in
+  getaddrinfo. With `hosts: files dns`, every `getent hosts <name>` and `/usr/bin/login` died of SIGSEGV (pc 0) in
+  `nss_dns.so.1`, and ttymon re-prompting looked like a hang. Cause and fix: stage 1 below.
+* **sshd preauth died with EINVAL** (dixr1 step 26). Fixed by dixr2; the cause was the cross-configured sandbox, not
+  LibreSSL: stage 1 below.
 
 ## Step 3, done: an upstream leaf built natively on riscv64-solaris
 
@@ -83,13 +79,48 @@ trailer CRC zeroed it reports `incorrect data check`, rc 1.
 This is a native build with the proto's gcc, not a Nix derivation and not a `packages.riscv64-solaris` attr. The
 recipe side (mk-src-pkg.nix's zlib) runs only once nix runs in the guest.
 
+## Stages 1 and 2, done (dixr2, 2026-10-31)
+
+Work: /scratch/solnix/dixr2/ (progress.txt has every step). Bank: /scratch/solnix-bank/dixr2-20261031/ (sha256 read
+back). Same EC2 box. Four fixes to the n-hys tree (`n-hys-dixr2.diff`) and one to its gcc (`n-hys-gcc-dixr2.diff`).
+Each fix was A/B-tested in the same guest with the old binary as the negative control.
+
+| problem | mechanism (observed) | fix | control |
+|---|---|---|---|
+| sshd `Invalid argument [preauth]` | truss: the preauth child's `pollsys(..., 1, ...)` = EINVAL. openssh was configured cross, so configure's run-probes "select works with descriptor rlimit" assumed yes, giving SANDBOX_RLIMIT; with RLIMIT_NOFILE 0, illumos poll rejects nfds > p_fno_ctl (poll.c:393) | `oss/openssh/Makefile`: `--with-solaris-privs --with-sandbox=solaris` (what solnix x86 uses, base-src.nix) | old sshd: "Connection reset" rc 255; new: kex OK, `ssh uname -m` = riscv64 |
+| login/getent die with DNS on | `nss_dns` calls `res_*` (all `#pragma weak`) through GOT slots that ld.so.1 binds at load (R_RISCV_64), before `_nss_dns_init` dlopens libresolv, so the call goes to 0 | `lib/nsswitch/dns/Makefile.com`: link `-lresolv` | alternating old,new,old,new: old rc 139 2/2, new resolves 2/2 |
+| nix links fail on `qsort_r` | riscv64 libc exports from the hand-kept `port/mapfile-vers.gnu`, which lacked 6 symbols that `mapfile-vers` lists and libc defines | add qsort_r, futimes, lutimes, getgrouplist, upanic, __stack_chk_fail | old libc exports 0 of 6, new 6 |
+| libgit2 (-std=c90) fails in `<sys/atomic.h>` | `uts/riscv64/asm/atomic.h` used C99 `static inline` | `static __inline__` | -std=c90 test compiles |
+| nix aborts: `created == 123 ... ~AbstractSetting` | GCC PR c++/80431 (fixed in gcc 12, r12-1697): an NSDMI `Setting x{this}` in a class with a virtual base skips the constructor | backport r12-1697 into n-hys `extra/gcc` 11.1; rebuilt the cross and the native cc1plus | the PR's reproducer: old g++ "DESTROY" only, new "CREATE DESTROY"; old nix rc 139 2/2, new rc 0 2/2 |
+
+The image: `mkdisk2.sh` builds a fresh disk from the proto dir with hostname `dixr` + `/etc/inet/hosts`, persistent
+DHCP on platmac0 (ipadm.conf), nsswitch.dns (net-svc writes resolv.conf from the lease), sshd enabled by an SMF site
+profile (`/etc/svc/profile/site/dixr.xml`) and key-only root login. `NIXBOOT=1` adds /opt/nixboot.
+
+**Stage 1 gate, 8/8 boots** (`boottest.sh`: 8 fresh copies, `-smp 8 -m 6G`, 2 at a time): every boot answered
+`ssh -p <fwd> root@127.0.0.1 uname -m` = riscv64 (8 harts, hostname dixr) 475-648 s after qemu start (`bt-r1.tsv`).
+
+**Stage 2: nix in the guest.** Stage0 was CROSS-built on the host, not natively: a native g++ -O2 of one
+nix-sized C++ unit takes 101-107 s in the guest against 3.65 s for the host cross g++ (about 28x). openssl 3.4.0
+(no-asm, a solaris64-riscv64-gcc target), sqlite, libsodium, zstd, bzip2, editline, nlohmann_json, toml11, curl,
+libarchive, brotli, libgit2, boost-context, then nix 2.24.15 with the 9 solnix patches plus 0010 (gcc 11 std::visit)
+and `-include optional`. All of it installs to /opt/nixboot. In the guest:
+`nix-build -E 'derivation { name="t"; system="riscv64-solaris"; builder="/bin/sh"; args=["-c" "echo ok > $out"]; }'`
+gives `/nix/store/7c1hvm66dbi8i0l62w5ijb5h820sn7hk-t` ("ok") in 2.7 s. Controls: a builder that exits 3 fails
+with rc 100, and `system = "x86_64-solaris"` is refused ("but I am a 'riscv64-solaris'"). The second gate
+(`bt-r2.tsv`) passed 8/8 on the banked nix disk: on every boot, ssh `uname -m` = riscv64 and a fresh nix-build gave the
+same out path, 537-699 s from qemu start. The gate's negative control is the same image built with the old rlimit
+sandbox sshd (`SSHD=` in mkdisk2.sh): 2/2 reached `dixr console login:` and 2/2 FAILED the ssh check at 900 s (`bt-neg.tsv`).
+
+Stage 3 plan, with what was measured: /scratch/solnix/dixr2/stage3-plan.md.
+
 ## Stages to "dixr builds queue rows as riscv64-solaris"
 
 | stage | what runs where | done when | size |
 |---|---|---|---|
 | 0 (today) | n-hys proto on qemu virt on an EC2 Linux box; serial console | boots to login, native gcc/g++/make, zlib check | done |
-| 1 | fix sshd preauth EINVAL; set a hostname and /etc/hosts; persistent DHCP; script the image (mkdisk.sh + an SMF profile) | `ssh dixr uname -m` = riscv64, 8/8 boots | days |
-| 2 | nix in the guest: stage0 = proto gcc 11 + nix's 15 C/C++ deps built natively (as aa64nix used braich gcc14), nix 2.24.15 into /opt/nixboot | `nix-build` of a trivial derivation gives riscv64 output | 1-2 weeks of TCG time; the risk is C++ (boost context asm for riscv64-solaris, libstdc++ unwinding) |
+| 1 | fix sshd preauth EINVAL; set a hostname and /etc/hosts; persistent DHCP; script the image (mkdisk.sh + an SMF profile) | `ssh dixr uname -m` = riscv64, 8/8 boots | done (dixr2) |
+| 2 | nix in the guest: stage0 = proto gcc 11 + nix's 15 C/C++ deps built natively (as aa64nix used braich gcc14), nix 2.24.15 into /opt/nixboot | `nix-build` of a trivial derivation gives riscv64 output | done (dixr2), cross-built in about an hour; the C++ risk was gcc 11's PR 80431, not boost or unwinding |
 | 3 | `pkgs/illumos/riscv64/{gate,default}.nix`: ingest this proto like aarch64's gate.nix; gcc from n-hys `extra/gcc`; `lib.systems` already names riscv64-solaris (solnix-pkgs 0007) | `nix build .#...riscv64-solaris.zlib` in the guest, drv + out recorded | weeks |
 | 4 | builder: `solnix-builder-<id>` user/zone, claims only riscv64-solaris rows from recipes.tsv, publish gate, 8UNr client check | one queue row done end to end | after infra issues the short id and recipes.tsv has riscv64 rows (0 today) |
 | 5 | real hardware: K3 (lixr) or a rented riscv64 server | separate track; see K3 below | months |
