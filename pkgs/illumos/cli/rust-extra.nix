@@ -27,9 +27,42 @@ in
   # tikv-jemalloc-sys passes the rust triple to jemalloc's configure, and config.sub rejects
   # x86_64-unknown-illumos (measured): map it to x86_64-pc-solaris2.11 (jemalloc's Solaris port).
   ruff = { prep = jemallocFix; };
+  qsv = { prep = jemallocFix; };   # tikv-jemalloc-sys, as ruff (its configure also needs GNU grep/sed: /usr/gnu first on PATH)
   uv = { prep = jemallocFix; };
   # starship-battery (default "battery") and nvml have no illumos arm: build without them.
   bottom = { noDefault = true; };
+  # --- batch C1.
+  # tree-sitter's portable/endian.h: see difftastic. Its default qjs-rt feature builds rquickjs-sys, whose build.rs
+  # needs bindgen + libclang for a target without shipped bindings (x86_64-unknown-illumos; measured): build without it
+  # (`tree-sitter generate` then needs node for grammar.js, as before 0.25).
+  tree-sitter = { env = ''export CFLAGS="-D__illumos__"''; noDefault = true; };
+  # harper: only the CLI + language server (nixpkgs' cargoBuildFlags); the workspace also holds a tauri desktop app.
+  harper = { env = ''export CFLAGS="-D__illumos__"''; prep = ''
+    grep -qx 'resolver = "2"' Cargo.toml || { echo "FATAL: harper workspace anchor" >&2; exit 1; }
+    sed -i 's/^resolver = "2"$/resolver = "2"\ndefault-members = ["harper-cli", "harper-ls"]/' Cargo.toml
+  ''; };
+  # socket2 0.5 has no set_tos/set_tclass_v6/set_reuse_port on illumos (cfg'd out). illumos has IP_TOS and
+  # IPV6_TCLASS (int setsockopt) and no SO_REUSEPORT: a SockExt trait gives trippy-core the first two, the third is a no-op.
+  trippy = { prep = ''
+    f=crates/trippy-core/src/net/platform/unix.rs; a='    use socket2::{Domain, Protocol, SockAddr, Type};'
+    grep -qxF "$a" $f || { echo "FATAL: trippy socket2 anchor" >&2; exit 1; }
+    sed -i "s|^$a\$|$a\n    #[cfg(target_os = \"illumos\")]\n    use super::sockopt_illumos::SockExt;|" $f
+    cat ${./rust-fixups/trippy-sockopt-illumos.rs} >> $f
+  ''; };
+  # uu_ls: illumos libc's major()/minor() are `unsafe fn` (E0133). uu_sort: rustix is not a dependency on illumos
+  # (its Cargo.toml), so take the portable access() arm. Default features (feat_common_core, 89 utils): feat_os_unix
+  # adds who/users/uptime/pinky (uucore's utmpx module has no illumos arm, E0432) and stdbuf (libstdbuf link fails); measured.
+  uutils-coreutils = { prep = ''
+    f=src/uu/ls/src/display.rs
+    grep -q 'let major = major(dev);' $f || { echo "FATAL: uutils ls major anchor" >&2; exit 1; }
+    sed -i 's/let major = major(dev);/#[allow(unused_unsafe)] let major = unsafe { major(dev) };/; s/let minor = minor(dev);/#[allow(unused_unsafe)] let minor = unsafe { minor(dev) };/' $f
+    f=src/uu/sort/src/sort.rs
+    grep -qx '#\[cfg(all(unix, not(target_os = "redox")))\]' $f && grep -qx '#\[cfg(any(not(unix), target_os = "redox"))\]' $f || { echo "FATAL: uutils sort cfg anchor" >&2; exit 1; }
+    sed -i 's/^#\[cfg(all(unix, not(target_os = "redox")))\]$/#[cfg(all(unix, not(target_os = "redox"), not(target_os = "illumos")))]/; s/^#\[cfg(any(not(unix), target_os = "redox"))\]$/#[cfg(any(not(unix), target_os = "redox", target_os = "illumos"))]/' $f
+  ''; man = ''
+    cd "$out/bin"; mv coreutils uutils-coreutils
+    for u in $(./uutils-coreutils --list); do [ "$u" = coreutils ] || ln -s uutils-coreutils "uutils-$u"; done; cd - >/dev/null
+  ''; };
   # illumos libc exports wait4 (sys/wait.h), the libc crate has no solarish binding: declare it.
   hyperfine = { prep = ''
     f=src/timer/unix_timer.rs

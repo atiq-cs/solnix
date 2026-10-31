@@ -56,6 +56,37 @@ in {
     bins = "uv uvx"; pkg = "uv"; check = chk ''"$out/bin/uv" --version'' "^uv 0\\.13\\.6"; };
   cargo-nextest = pkg { pname = "cargo-nextest"; vendorHash = "sha256-FKHrNK31xkpKGf4IQEt9I8uPL1sqsq20Pr3OtVnddl0="; version = "0.9.150"; src = gh "nextest-rs/nextest" "cargo-nextest-0.9.150" "52daf837e45bf08815f1fa92202adb28d835c04b3e8f1fc9a2d1b47e2b6537c6";
     bins = "cargo-nextest"; pkg = "cargo-nextest"; check = chk ''"$out/bin/cargo-nextest" nextest --version'' "^cargo-nextest 0\\.9\\.150"; };
+  # --- batch C1 (nxq1 c-batches.tsv): nixpkgs' versions at nix-config's lock; illumos fixes in ./rust-extra.nix.
+  nixpkgs-fmt = pkg { pname = "nixpkgs-fmt"; vendorHash = "sha256-XyUowhUsGis4C5XmNJwfMcqjwkOM4w08k5+i5JRu4TI="; version = "1.3.0"; src = gh "nix-community/nixpkgs-fmt" "v1.3.0" "a04b99a8aa9d162ba5da77a764915a4d8385492a40169c419dc5fc7af606b89a";
+    bins = "nixpkgs-fmt"; pkg = "nixpkgs-fmt"; check = chk ''echo "{a=1;}" | "$out/bin/nixpkgs-fmt"'' "^\\{ a = 1; \\}$"; };
+  tree-sitter = pkg { pname = "tree-sitter"; vendorHash = "sha256-QvUgMS5FlvXQdis/twiIFmet8gDi/1qTWC8unkg1FUk="; version = "0.26.8"; src = gh "tree-sitter/tree-sitter" "v0.26.8" "e6826b7533ec3a885aba598377a6d20b5a6321ff3db76968e960c2352d3a5077";
+    bins = "tree-sitter"; pkg = "tree-sitter-cli"; check = chk ''"$out/bin/tree-sitter" --version'' "^tree-sitter 0\\.26\\.8"; };
+  asciinema = pkg { pname = "asciinema"; vendorHash = "sha256-miGH/f1LSjluuOblZpzh/e8eoGDHLBt6e4Wt4jdKdtQ="; version = "3.2.0"; src = gh "asciinema/asciinema" "v3.2.0" "247c7c87481f38d7788c1fb1be12021c778676c0d0ab37e529ec528f87f487ce";
+    bins = "asciinema"; check = chk ''"$out/bin/asciinema" --version'' "^asciinema 3\\.2\\.0"; };
+  cargo-audit = pkg { pname = "cargo-audit"; vendorHash = "sha256-Kzk6R+DjcPzmeXp0YvKihVlcczGXtLp/k8RzjaTBtLQ="; version = "0.22.1"; src = { url = "https://static.crates.io/crates/cargo-audit/cargo-audit-0.22.1.crate"; sha256 = "2f4e27b0ab2d116c87c29db159ad42565cdcdccf77eb62ef0486ddd017a02da6"; };
+    bins = "cargo-audit"; features = "fix"; check = chk ''"$out/bin/cargo-audit" audit --version'' "^cargo-audit-audit 0\\.22\\.1|^cargo-audit 0\\.22\\.1"; };
+  cargo-deny = pkg { pname = "cargo-deny"; vendorHash = "sha256-W9HGiYPG8rgN0wxe4csZIrf6NA47rLHJeGp/OnHRP0M="; version = "0.19.6"; src = gh "EmbarkStudios/cargo-deny" "0.19.6" "e852cbc4effc3de40e0d77066898234aef014f6740e61406288f56c26cf58d83";
+    bins = "cargo-deny"; check = chk ''"$out/bin/cargo-deny" --version'' "^cargo-deny 0\\.19\\.6"; };
+  cargo-expand = pkg { pname = "cargo-expand"; vendorHash = "sha256-1TOrXuBL4hqPGZlZLO/OWBbUAaYwaeIQdEHFIhZOrlA="; version = "1.0.121"; src = gh "dtolnay/cargo-expand" "1.0.121" "99d61908f3e2364b31e82e9fb781c80044d26cbfdb2386ab8640205f3b535325";
+    bins = "cargo-expand"; pkg = "cargo-expand"; check = chk ''"$out/bin/cargo-expand" expand --version'' "^cargo-expand 1\\.0\\.121"; };
+  # cargo-llvm-cov, cargo-tarpaulin: NOT PACKAGED -- both build, but rust199 has no profiler runtime (`rustc -C instrument-coverage`:
+  # E0463 "can't find crate for profiler_builtins", measured) and tarpaulin's other engine is ptrace (Linux-only). Needs rust-src.nix profiler=true.
+  diffr = pkg { pname = "diffr"; vendorHash = "sha256-c8ziGAYnqDnDmCjeWzoUPn+jZHrRSI2sMm47JTEH4DM="; version = "0.1.5"; src = gh "mookid/diffr" "v0.1.5" "6c5861e5b8f5d798e027fe69cc186452848dc4ae5641326b41b5c160d3e91654";
+    bins = "diffr"; check = chk ''"$out/bin/diffr" --version'' "^diffr 0\\.1\\.5"; };
+  gping = pkg { pname = "gping"; vendorHash = "sha256-jd+BCX8Z1GyMdCEtmrRBY4y5PtqNUbsc74R7EDPzgFE="; version = "1.20.1"; src = gh "orf/gping" "gping-v1.20.1" "0df965111429d5fcef832a4ff23b452a1ec8f683d51ed31ce9b10902c0a18a9c";
+    bins = "gping"; pkg = "gping"; check = chk ''"$out/bin/gping" --version'' "^gping 1\\.20\\.1"; };
+  htmlq = pkg { pname = "htmlq"; vendorHash = "sha256-rfoeVFxP8iQnbEncLAs/N9Ad0yPgeLUVAR+335BM1c0="; version = "0.4.0"; src = gh "mgdm/htmlq" "v0.4.0" "c2954c0fcb3ada664b14834646aa0a2c4268683cc51fd60d47a71a9f7e77d4b9";
+    bins = "htmlq"; check = chk ''echo "<p class=x>hi</p>" | "$out/bin/htmlq" --text .x'' "^hi$"; };
+  trippy = pkg { pname = "trippy"; vendorHash = "sha256-6uG5aTbUQgbTj+1JeiQrk1T3OxTKOWb/3xqZrsZ8P50="; version = "0.13.0"; src = gh "fujiapple852/trippy" "0.13.0" "72e598d2e0b947e8bc46706021c511f169b7e7634a734c326e492e0f30725c35";
+    bins = "trip"; pkg = "trippy"; check = chk ''"$out/bin/trip" --version'' "^trip 0\\.13\\.0"; };
+  # qsv: nixpkgs' default features (all but self_update; python/ui/mcp/polars off as there).
+  qsv = pkg { pname = "qsv"; vendorHash = "sha256-EYK3NQ5J9TMRMvkAf39oICFAEd3tjgEtI+5kQ3pup+U="; version = "20.1.0"; src = gh "dathere/qsv" "20.1.0" "9e945ebcf525cef35591e5b8187dee9b9237282a1611c8ba52e650d5703dcfd0";
+    bins = "qsv"; features = "apply,feature_capable,fetch,foreach,geocode,luau,to"; check = chk ''printf "a,b\n1,2\n3,4\n" | "$out/bin/qsv" count'' "^2$"; };
+  # multicall coreutils + uutils-<util> links, as nixpkgs (prefix "uutils-", buildMulticallBinary).
+  uutils-coreutils = pkg { pname = "uutils-coreutils"; vendorHash = "sha256-Aa1RQJwY0HlMjKVhB1WxAfkuurJ/LOI+DhdUQbMXFsI="; version = "0.12.0"; src = gh "uutils/coreutils" "0.12.0" "4fb327655cb4ffcbf2f16550cf9234079ffe839692f7aa1a6eda104af684e122";
+    bins = "coreutils"; check = chk ''"$out/bin/uutils-coreutils" --version; "$out/bin/uutils-ls" -d /'' "^coreutils 0\\.12\\.0"; };
+  harper = pkg { pname = "harper"; vendorHash = "sha256-RoPbPC7IqXFyDSoV8aPEKjcfmHFGAF5AW04i0hxQQ9E="; version = "2.3.0"; src = gh "Automattic/harper" "v2.3.0" "63bc2153874a8d98f76e7c92af66bd97da97f089461ec4e14cb7dbf487c7ca07";
+    bins = "harper-cli harper-ls"; check = chk ''"$out/bin/harper-ls" --version'' "^harper-ls 2\\.3\\.0"; };
   # cargo-watch: NOT BUILT -- hard-depends on notify-rust -> zbus, whose unix peer-credentials code has no illumos arm
   # (zbus 4.4 socket/unix.rs E0308, measured). Upstream archived it for watchexec (above).
 }

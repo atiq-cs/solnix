@@ -43,5 +43,6 @@ let
   c5 = import ./c-dev.nix (h // { inherit (c1) readline; inherit (c2) sqlite; inherit (c4) perl; });
   c6 = import ./c-mail.nix (h // { inherit (c1) readline; inherit (c4) perl; inherit (c5) cmake gdbm; });
   rust = import ./rust.nix { inherit cargoPkg chk; extra = import ./rust-extra.nix h; };
-  gotools = import ./go-tools.nix { inherit (goChain) goPkg go_1_27; inherit chk; };
-in c1 // c2 // c3 // c4 // c5 // c6 // (if cargoPkg == null then { } else rust) // (if goChain == null then { } else gotools)
+  gotools = import ./go-tools.nix { inherit (goChain) goPkg go_1_27; inherit chk; } // import ./go-c1.nix { inherit (goChain) goPkg go_1_27; inherit chk; };
+  data = import ./data.nix h;
+in c1 // c2 // c3 // c4 // c5 // c6 // data // (if cargoPkg == null then { } else rust) // (if goChain == null then { } else gotools)
