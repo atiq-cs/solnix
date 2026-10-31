@@ -40,6 +40,13 @@ want "NEG region 'US-MA' rejected" 'ISO 3166-2 subdivision' "$chk" "{ $L = { cou
 want "NEG locality 65 chars rejected" 'locality must be' "$chk" "{ $L = { country = \"US\"; locality = \"$(printf 'a%.0s' $(seq 65))\"; }; }"
 want "NEG locality with a quote rejected" 'locality must be' "$chk" "{ $L = { country = \"US\"; locality = \"a\\\\\\\"b\"; }; }"
 want "builder: project with cpu-cap, newtask" 'solnix-builder:4242:.*project.cpu-cap=\(privileged,400,deny\)' 'c.environment.generatedEtc.project' '{ solnix.privacy.enable = false; }'
+# qbuild4: profiles. idle (default) = as before; dedicated = every idle CPU, no cap, short busy ticks; explicit settings win
+be='builtins.removeAttrs c.smf.services.solnix-builder.environment [ "BUILDER_PATH" "CURL_CA_BUNDLE" "BUILDER_AGENT" "BUILDER_STATE" "BUILDER_SYSTEM" ]'
+want "builder idle profile: 1 job, loadMax 2, 600-1800 s" '^\{"BUILDER_BUSY_TICK_MAX":"1800","BUILDER_BUSY_TICK_MIN":"600","BUILDER_CORES":"0","BUILDER_JOBS":"1","BUILDER_LOAD_MAX":"2","BUILDER_NICE":"19","BUILDER_TICK_MAX":"1800","BUILDER_TICK_MIN":"600"\}$' "$be" '{ solnix.privacy.enable = false; }'
+want "builder dedicated: auto jobs of 4 cores, loadMax auto, busy ticks 60-300 s" '^\{"BUILDER_BUSY_TICK_MAX":"300","BUILDER_BUSY_TICK_MIN":"60","BUILDER_CORES":"4","BUILDER_JOBS":"auto","BUILDER_LOAD_MAX":"auto",' "$be" '{ solnix.privacy.enable = false; solnix.cache.build.profile = "dedicated"; }'
+want "builder dedicated: no cpu-cap in /etc/project" 'solnix-builder:4242:solnix idle queue builder::root:\\n' 'c.environment.generatedEtc.project' '{ solnix.privacy.enable = false; solnix.cache.build.profile = "dedicated"; }'
+want "builder parallelJobs 4 x 3 cores: cap 1200, jobs 4, cores 3" 'cpu-cap=\(privileged,1200,deny\).*"BUILDER_CORES":"3","BUILDER_JOBS":"4"' '[ c.environment.generatedEtc.project c.smf.services.solnix-builder.environment ]' '{ solnix.privacy.enable = false; solnix.cache.build = { parallelJobs = 4; coresPerJob = 3; }; }'
+want "NEG builder tickMin > tickMax rejected" 'tickMin/busyTickMin must not exceed' "$chk" '{ solnix.privacy.enable = false; solnix.cache.build.tickMin = 900; solnix.cache.build.tickMax = 600; }'
 want "builder: started in its project" 'newtask -p solnix-builder' 'c.smf.services.solnix-builder.start.exec' '{ solnix.privacy.enable = false; }'
 want "builder: no bearer in the generated config" '^false$' 'builtins.any (v: builtins.match ".*bearer.*" v != null) (builtins.attrValues c.smf.services.solnix-builder.environment)' '{ solnix.privacy.enable = false; }'
 want "cache.build.enable = false: no builder, no /etc/project" '^false$' '(c.smf.services ? solnix-builder) || (c.environment.generatedEtc ? project)' '{ solnix.privacy.enable = false; solnix.cache.build.enable = false; }'

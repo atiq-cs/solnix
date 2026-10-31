@@ -6,6 +6,8 @@
 #    unserved, duplicated, no attr) served from a file:// cache, against a fake queue (curl on PATH answers only
 #    http://queue.invalid and logs every request). Only a job rebuilt here identical to the served NAR is claimed, by pname;
 # 3. live: jq at the real solnix main through the real gate (no bearer).
+# 4. parallel (qbuild4): the listing as ?system= + ?pname= queries, per-tick sizing, N jobs at once with their own state,
+#    --option cores, the N=1 rebuild bound, the busy re-tick.
 S=${1:-$(dirname "$0")/../modules/config/community/solnix-builder.sh}
 W=$(mktemp -d /tmp/bld.XXXXXX); trap 'find "$W" -depth -delete' EXIT
 bad=0; ok() { print "ok: $1"; }; no() { print "FAIL: $1"; bad=1; }
@@ -15,6 +17,8 @@ J=${JQ_BIN:-/nix/store/1fjqlkii7xmvhqrbryx59n7gbv46c3j5-jq-1.7.1/bin}
 RC=$(whence -p curl) || { print "FAIL: no curl"; exit 1; }
 PATH=$J:$PATH; export PATH
 export BUILDER_STATE=$W/st BUILDER_BEARER_FILE=$W/bearer BUILDER_PATH=$PATH; mkdir -p "$W/st"
+# a builder without the `rows`/`size` subcommands would fall into its SMF loop when asked for them: refuse it up front
+for c in rows size; do grep -q "^$c) $c" "$S" || { print "FAIL: $S has no '$c' subcommand (an old builder)"; print "RESULT: FAIL"; exit 1; }; done
 T=$'\t'; H="pname${T}version${T}url${T}sha256${T}buildsys${T}deps${T}flags${T}system${T}out${T}debug"
 rec() { print -r -- "$1${T}$2${T}u${T}s${T}a${T}d${T}has_manpages=$3${T}x86_64-solaris${T}$4${T}"; }
 { print -r -- "$H"
@@ -39,10 +43,11 @@ want "aarch64 row on x86_64 -> OTHER-SYSTEM" '^jq OTHER-SYSTEM aarch64-solaris'
 want "libc manpage-missing, served without share/man -> MAN-GAP (a rebuild of that out cannot add pages)" '^libc MAN-GAP /nix/store/86qg1hqv'
 want "ghost manpage-missing, out not served -> BUILD (the gate decides)" '^ghost BUILD /nix/store/0{32}-ghost-1 1$'
 [[ $(print -r -- "$P" | wc -l | tr -d ' ') == 8 ]] && ok "one decision per row" || no "rows: $(print -r -- "$P" | wc -l)"
-# live: the real listing + the served recipes.tsv must plan without error, every row decided
-curl -sS -m 30 -o "$W/live.json" https://telemetry.solnix.io/api/v1/build-queue/rows && curl -sS -m 60 -o "$W/live.tsv" https://cache.solnix.io/registry/recipes.tsv
+# live: the real listing (this system's window + every served recipe pname, cache-api v44) + the served recipes.tsv must
+# plan without error, every row decided
+curl -sS -m 60 -o "$W/live.tsv" https://cache.solnix.io/registry/recipes.tsv && ksh93 "$S" rows "$W/live.json" "$W/live.tsv" || no "live rows"
 L=$(ksh93 "$S" plan "$W/live.json" "$W/live.tsv"); n=$(jq '.rows|length' "$W/live.json")
-[[ $(print -r -- "$L" | egrep -c ' (BUILD|MET|MAN-GAP|NO-MAN|NO-RECIPE|OTHER-SYSTEM) ') == "$n" ]] && ok "live listing: $n rows, all decided: $(print -r -- "$L" | cut -d' ' -f2 | sort | uniq -c | tr -s ' \n' ' ')" || no "live: $L"
+(( n > 0 )) && [[ $(print -r -- "$L" | egrep -c ' (BUILD|MET|MAN-GAP|NO-MAN|NO-RECIPE|OTHER-SYSTEM) ') == "$n" ]] && ok "live listing: $n rows, all decided: $(print -r -- "$L" | cut -d' ' -f2 | sort | uniq -c | tr -s ' \n' ' ')" || no "live: $n: $L"
 print -r -- "$L" > "${LIVE_PLAN_OUT:-/dev/null}"
 
 # --- the gate, with real nix. The fixture flake: one derivation per case; `needs` depends on a derivation nobody has.
@@ -60,12 +65,17 @@ mkdir -p "$W/flake" "$W/fk"; cat > "$W/flake/flake.nix" <<EOF
     fodin = mk "qb-fodin-1" "read x < \${derivation { name = "qb-fod-${W##*/}"; system = "x86_64-solaris"; builder = "/bin/sh";
       args = [ "-c" "printf fod > \$out" ]; outputHashMode = "flat"; outputHashAlgo = "sha256";
       outputHash = "40c8c5469f953906025db90f6621bd41d33944e585aa4f39a487ebe7a5c69f5f"; }}; echo \$x > \$out";
+    # parallel: four 4-second builds, and one whose out is the build's NIX_BUILD_CORES (served as built with cores = 3)
+    p1 = mk "qb-par1-1" "sleep 4; echo p1 > \$out"; p2 = mk "qb-par2-1" "sleep 4; echo p2 > \$out";
+    p3 = mk "qb-par3-1" "sleep 4; echo p3 > \$out"; p4 = mk "qb-par4-1" "sleep 4; echo p4 > \$out";
+    cores3 = mk "qb-cores-1" "echo \$NIX_BUILD_CORES > \$out";
   }; }; }
 EOF
 F=path:$W/flake; o() { jq -r --arg a "$1" '.[$a]' "$W/outs.json"; }
 nix eval --json "$F#packages.x86_64-solaris" --apply 'builtins.mapAttrs (n: d: d.outPath)' > "$W/outs.json" 2>"$W/eval.err" &&
-  nix build --no-link "$F#packages.x86_64-solaris."{good,flaky,mism,dup} > "$W/fixture.log" 2>&1 &&
-  nix copy --to "file://$W/cache" $(o good) $(o flaky) $(o mism) $(o dup) >> "$W/fixture.log" 2>&1 ||
+  nix build --no-link "$F#packages.x86_64-solaris."{good,flaky,mism,dup,p1,p2,p3,p4} > "$W/fixture.log" 2>&1 &&
+  nix build --no-link --option cores 3 "$F#packages.x86_64-solaris.cores3" >> "$W/fixture.log" 2>&1 && [[ $(<$(o cores3)) == 3 ]] &&
+  nix copy --to "file://$W/cache" $(o good) $(o flaky) $(o mism) $(o dup) $(o p1) $(o p2) $(o p3) $(o p4) $(o cores3) >> "$W/fixture.log" 2>&1 ||
   { no "fixture: $(tail -3 "$W/eval.err" "$W/fixture.log")"; print "RESULT: FAIL"; exit 1; }
 hp() { h=${1#/nix/store/}; print -r -- "$W/cache/${h%%-*}.narinfo"; }
 GH=$(nawk '/^NarHash:/ {print $2}' "$(hp $(o good))")
@@ -82,19 +92,27 @@ printf 'StorePath: %s\nURL: fodin.nar\nCompression: none\nFileHash: sha256:%s\nF
 nix copy --no-check-sigs --from "file://$W/cache" $(o fodin) >> "$W/fixture.log" 2>&1 && [[ -e $(o fodin) ]] ||
   { no "fodin fixture: $(tail -3 "$W/fixture.log")"; print "RESULT: FAIL"; exit 1; }
 { print -r -- "$H"; rec good 1 y /nix/store/11111111111111111111111111111111-qb-good-1	# a stale row: the gate builds the evaluated out
-  for a in good flaky mism needs unserved dup fodin; do rec $a 1 y "$(o $a)"; done; rec noattr 1 y "$(o good)"; } > "$W/g.tsv"
+  for a in good flaky mism needs unserved dup fodin p1 p2 p3 p4 cores3; do rec $a 1 y "$(o $a)"; done; rec noattr 1 y "$(o good)"; } > "$W/g.tsv"
 print "{\"rows\":[$(row flaky 1 outdated),$(row good 1 outdated),$(row mism 1 outdated),$(row needs 1 outdated),$(row unserved 1 outdated),$(row noattr 1 outdated),$(row dup 1 outdated),$(row dup 1 outdated),$(row fodin 1 outdated)]}" > "$W/g.json"
-# the fake queue: rows from $FKROWS; claim grants pnames[0] (no pnames: $FKNEXT, as the server hands out its next job),
-# FKEMPTY=1: no job (someone else has it). Every request is logged, body included; everything else goes to the real curl.
+# the fake queue: rows from $FKROWS, as cache-api v44 serves them: /rows?system=<s> is the window ($FKWIN, else $FKROWS),
+# &pname=a,b narrows $FKROWS to those pnames, and a bare /rows is refused (curl -f: rc 22). claim grants pnames[0] (no
+# pnames: $FKNEXT, as the server hands out its next job), FKEMPTY=1: no job (someone else has it); FKIDS=1: an id and token
+# per pname; FKSLOW=<s>: the claim reply is written, then curl takes <s> more (two jobs sharing one reply file collide).
+# Every request is logged, body included; everything else goes to the real curl.
 cat > "$W/fk/curl" <<'FK'
 #!/bin/sh
 q=; for a; do case $a in http://queue.invalid*) q=1;; esac; done; [ -n "$q" ] || exec "$FKREAL" "$@"
 o=; u=; d=; w=; while [ $# -gt 0 ]; do case $1 in -o) o=$2; shift;; --data-binary) d=$2; shift;; -w) w=1; shift;; -m|-X|-H) shift;; -*) ;; *) u=$1;; esac; shift; done
-[ "$u" = http://queue.invalid/q/rows ] || cat > /dev/null; echo "$u $d" >> "$FKLOG"
+case $u in */rows*) ;; *) cat > /dev/null;; esac; echo "$u $d" >> "$FKLOG"
+qs() { echo "$u" | sed -n "s/.*[?\&]$1=\([^&]*\).*/\1/p" | sed 's/%2B/+/g'; }
 case $u in
-*/rows) cp "$FKROWS" "$o";;
+*/rows) exit 22;;
+*/rows\?*pname=*) jq --arg s "$(qs system)" --arg p ",$(qs pname)," '{rows: [.rows[] | select(.system == $s and (.pname as $n | $p | contains("," + $n + ",")))]}' "$FKROWS" > "$o";;
+*/rows\?system=*) jq --arg s "$(qs system)" '{rows: [.rows[] | select(.system == $s)]}' "${FKWIN:-$FKROWS}" > "$o";;
 */claim) p=$(echo "$d" | sed -n 's/.*"pnames":\["\([^"]*\)".*/\1/p'); [ -n "$p" ] || p=$FKNEXT; [ -z "$FKGIVE" ] || p=$FKGIVE
-  if [ -n "$FKEMPTY" ]; then echo '{"jobs":[]}'; else echo '{"jobs":[{"id":42,"claim_token":"00000000-0000-4000-8000-000000000042","pname":"'$p'","current_version":"1","target_version":"1"}]}'; fi > "$o";;
+  i=42 t=00000000-0000-4000-8000-000000000042; [ -z "$FKIDS" ] || { i=$(printf %s "$p" | cksum | cut -d' ' -f1); t=tok-$p; }
+  if [ -n "$FKEMPTY" ]; then echo '{"jobs":[]}'; else echo '{"jobs":[{"id":'$i',"claim_token":"'$t'","pname":"'$p'","current_version":"1","target_version":"1"}]}'; fi > "$o"
+  [ -z "$FKSLOW" ] || sleep "$FKSLOW";;
 */complete) echo '{"id":42,"attempt":1,"state":"done","publication_verified":false,"attestation_recorded":false}' > "$o";;
 *) echo '{"claim_expires_at":"x"}' > "$o";;
 esac; [ -z "$w" ] || printf 200
@@ -156,6 +174,51 @@ o=$(ksh93 "$S" plan "$W/o.json" "$W/r.tsv" 2>/dev/null < /dev/null | cut -d' ' -
 grep -q '^pause) pause' "$S" || no "no pause: the tick interval is fixed"
 grep -q '^pause) pause' "$S" && { lo=99999; hi=0; for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do p=$(ksh93 "$S" pause < /dev/null); (( p < lo )) && lo=$p; (( p > hi )) && hi=$p; done
 (( lo >= 600 && hi <= 1800 && hi > lo )) && ok "pause between ticks random in [600,1800] (saw $lo..$hi)" || no "pause: $lo..$hi"; }
+# --- 4. parallel (qbuild4). The listing: ?system= window + ?pname= for every served recipe pname (100 a query).
+print "{\"rows\":[$(row zzz 9 nixpkgs),$(row good 1 outdated aarch64-solaris)]}" > "$W/win.json"
+print "{\"rows\":[$(row zzz 9 nixpkgs),$(row good 1 outdated),$(row openssl3 3.4.0 manpage-missing),$(row good 1 outdated aarch64-solaris)]}" > "$W/all.json"
+{ cat "$W/g.tsv"; tail -n +2 "$W/r.tsv"; i=0; while (( (i += 1) <= 230 )); do rec x$i 1 y /nix/store/x; done; } > "$W/big.tsv"
+: > "$W/fk/log"; env BUILDER_PATH="$W/fk:$PATH" FKREAL=$RC FKLOG=$W/fk/log FKROWS=$W/all.json FKWIN=$W/win.json BUILDER_API=http://queue.invalid/q \
+  ksh93 "$S" rows "$W/m.json" "$W/big.tsv" > "$W/m.err" 2>&1; c=$(<"$W/fk/log")
+[[ $(jq -c '[.rows[] | .pname + "@" + .system] | sort' "$W/m.json") == '["good@x86_64-solaris","openssl3@x86_64-solaris","zzz@x86_64-solaris"]' ]] &&
+  print -r -- "$c" | grep -q '^http://queue.invalid/q/rows?system=x86_64-solaris $' && [[ $(print -r -- "$c" | grep -c 'rows?system=x86_64-solaris&pname=') == 3 ]] &&
+  print -r -- "$c" | grep 'pname=' | grep -q '[=,]openssl3[,& ]' && print -r -- "$c" | grep 'pname=' | grep -q '[=,]x230[,& ]' &&
+  ! print -r -- "$c" | grep -q '/rows ' && ok "rows: ?system= window + ?pname= (3 queries for 250 pnames, openssl3 too): good past the window seen once, no other system" ||
+  no "rows: $(jq -c . "$W/m.json" 2>&1) $(<"$W/m.err") $c"
+# size: jobs = floor((CPUs - busy) / cores), capped by BUILDER_JOBS; a numeric loadMax keeps the old gate (0 or >= 1 job)
+sz() { env BUILDER_NCPU=$1 BUILDER_BUSY=$2 BUILDER_JOBS=$3 BUILDER_CORES=$4 BUILDER_LOAD_MAX=$5 ksh93 "$S" size; }
+z="$(sz 32 0 auto 4 auto)|$(sz 32 10 auto 4 auto)|$(sz 32 30 auto 4 auto)|$(sz 32 0 4 0 auto)|$(sz 20 10 4 4 auto)|$(sz 32 1.5 1 0 2)|$(sz 32 2.5 1 0 2)|$(sz 32 0 1 0 2)"
+[[ $z == "8 4 0|5 4 10|0 4 30|4 8 0|2 4 10|1 32 1.5|0 32 2.5|1 32 0" ]] && ok "size: dedicated 8 jobs idle, 5 with 10 CPUs busy, 0 with 30; lixi 2 of 4 with 10 busy; loadMax 2 gate as before" || no "size: $z"
+z=$(ksh93 "$S" size); [[ $z == +([0-9])\ +([0-9])\ +([0-9.]) ]] && ok "size from a real vmstat sample: $z" || no "size (vmstat): $z"
+# N=4: four 4 s builds at once, each its own state dir, its own claim (FKIDS: an id and token per pname), the claim reply
+# slow (FKSLOW) so jobs sharing one reply file would read each other's; cores3's out is the build's NIX_BUILD_CORES (3)
+print "{\"rows\":[$(row p1 1 outdated),$(row p2 1 outdated),$(row p3 1 outdated),$(row p4 1 outdated),$(row cores3 1 outdated)]}" > "$W/p.json"
+win() { typeset a b; a=$(print -r -- "$out" | grep " builder: $1: rebuilding " | cut -d' ' -f1); b=$(print -r -- "$out" | grep " builder: $1: rebuilt " | cut -d' ' -f1)
+  [[ -n $a && -n $b ]] && print $(printf '%(%s)T' "$a") $(printf '%(%s)T' "$b"); }
+ovl() { typeset hs=0 le=9999999999 x a b; for x in p1 p2 p3 p4; do set -- $(win $x); [[ -n $2 ]] || return 2; (( $1 > hs )) && hs=$1; (( $2 < le )) && le=$2; done; (( hs < le )); }
+pt() { : > "$W/fk/log"; SECONDS=0; out=$(tk FKROWS=$W/p.json FKIDS=1 FKSLOW=2 BUILDER_LOAD_MAX=auto BUILDER_BUSY=0 BUILDER_NCPU=12 BUILDER_CORES=3 "$@"); prc=$?; pd=${SECONDS%.*}; c=$(<"$W/fk/log"); }
+pt BUILDER_JOBS=4 BUILDER_STATE=$W/stp; print -r -- "$out" | sed 's/^/   P /'
+has 'up to 4 jobs of 3 cores' && ovl && ok "N=4: p1..p4 rebuilt at the same time (every build window overlaps the others; tick ${pd}s)" || no "N=4 overlap: $(for x in p1 p2 p3 p4; do print -n "$x=$(win $x) "; done)"
+pc=0; for x in p1 p2 p3 p4 cores3; do id=$(printf %s "$x" | cksum | cut -d' ' -f1); nh=$(nawk '/^NarHash:/ {print $2}' "$(hp $(o $x))")
+  [[ $(print -r -- "$c" | grep -c "/$id/complete .*\"claim_token\":\"tok-$x\",\"status\":\"done\",\"version\":\"1\",\"nar_hash\":\"$nh\",\"store_path\":\"$(o $x)\"") == 1 ]] && pc=$((pc + 1)); done
+(( pc == 5 )) && ! print -r -- "$c" | grep -q '"status":"failed"' && [[ -s $W/stp/job/p3/claim.json && $(jq -r '.jobs[0].pname' "$W/stp/job/p3/claim.json") == p3 ]] &&
+  ok "N=4: five jobs, five claims, each completed done with its own id, token, out and NarHash (no shared state)" || no "N=4 claims: $pc of 5 right: $(print -r -- "$c" | grep -E 'complete|claim ')"
+has 'cores3: rebuilt .* identical' && ok "--option cores reaches the build: cores3 (out = NIX_BUILD_CORES = 3) rebuilt identical" || no "cores3: $(print -r -- "$out" | grep cores3)"
+(( prc == 0 )) && ok "a tick that rebuilt and claimed returns 0 (the loop re-ticks soon)" || no "N=4 tick rc $prc"
+# N=1, the same rows: one at a time, exactly as before qbuild4 (the overlap check can fail)
+pt BUILDER_JOBS=1 BUILDER_STATE=$W/stp1; ovl; r=$?
+has 'up to 1 jobs of 3 cores' && (( r == 1 && pd >= 16 )) && [[ $(print -r -- "$out" | grep -c ': rebuilt .* identical') == 5 ]] &&
+  ok "N=1: the same five rebuilt one after another (no overlap, ${pd}s), all claimed" || no "N=1 serial: r=$r ${pd}s"
+# N=1 (JOBMAX=1): a job's own rebuild bound must still fire. nice that hangs 30 s, BUILDER_BUILD_SECS=3
+mkdir -p "$W/nice"; printf '#!/bin/sh\nexec sleep 30\n' > "$W/nice/nice"; chmod +x "$W/nice/nice"; print "{\"rows\":[$(row good 1 outdated)]}" > "$W/g1.json"
+SECONDS=0; out=$(env BUILDER_PATH="$W/nice:$W/fk:$PATH" FKREAL=$RC FKLOG=$W/fk/log FKROWS=$W/g1.json BUILDER_API=http://queue.invalid/q BUILDER_RECIPES=file://$W/g.tsv \
+  BUILDER_CACHE=file://$W/cache BUILDER_FLAKE=$F BUILDER_LOAD_MAX=1000 BUILDER_STATE=$W/stn BUILDER_BUILD_SECS=3 ksh93 "$S" once 2>&1); t=${SECONDS%.*}
+has 'decline good: nix build --rebuild .* failed rc=' && (( t < 25 )) && ok "N=1: a hung rebuild is killed at BUILDER_BUILD_SECS (${t}s)" || no "N=1 bound: ${t}s $out"
+# a tick with nothing to build returns non-zero: the loop backs off to the long pause
+print "{\"rows\":[$(row ninja 1.12.1 outdated)]}" > "$W/n.json"; tk FKROWS=$W/n.json BUILDER_STATE=$W/stz > /dev/null; r=$?
+lo=99999; hi=0; for i in 1 2 3 4 5 6 7 8 9 10 11 12; do p=$(BUILDER_BUSY_TICK_MIN=60 BUILDER_BUSY_TICK_MAX=300 ksh93 "$S" pause busy); (( p < lo )) && lo=$p; (( p > hi )) && hi=$p; done
+(( r != 0 && lo >= 60 && hi <= 300 && hi > lo )) && [[ $(ksh93 "$S" pause busy) == +([0-9]) ]] && (( $(ksh93 "$S" pause busy) >= 600 )) &&
+  ok "nothing to build: tick rc $r (long pause); busy pause random in the busy range ($lo..$hi), defaults to the long range" || no "pause: rc $r busy $lo..$hi"
 rm -f "$W/bearer"
 (( bad )) && print "RESULT: FAIL" || print "RESULT: PASS"
 exit $bad

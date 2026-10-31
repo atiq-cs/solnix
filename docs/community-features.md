@@ -102,8 +102,14 @@ solnix.builder.contactEmail = "greg+dixi-solnix@burd.me";   # per host; used onc
 
 ## Queue builder (svc:/site/solnix-builder, installed with cache.build)
 
-- Each tick (a random 10-30 min apart, so a fleet does not poll solnix.io in step): if the 1-minute load is below `solnix.cache.build.loadMax`, read
-  `GET https://telemetry.solnix.io/api/v1/build-queue/rows` (public) and the served recipes.tsv, and plan every row.
+- Each tick (a random 10-30 min apart, so a fleet does not poll solnix.io in step) first sizes itself: busy CPUs over a
+  5 s `vmstat` sample. None of the builder's own jobs run between ticks, so that is other work; the 1-minute load average
+  would still count the last tick's builds. It runs up to `floor((CPUs - busy) / coresPerJob)` jobs at once, capped by
+  `parallelJobs`. A numeric `loadMax` keeps the older gate: no job while that many CPUs are busy, otherwise at least one.
+  Then it reads the served recipes.tsv and the public listing (cache-api v44): `GET .../build-queue/rows?system=<system>`
+  (that system's first 500 rows in claim order, mostly nixpkgs attrs with no recipe), plus `?system=<system>&pname=a,b,...`
+  for every pname the served recipes have for the system (100 a query), so a job it could do is never hidden past the
+  window. It plans every row.
   A row's outs are every served recipe row at (pname, version, system): recipes.tsv has one row per output path, and
   rows from older solnix commits stay (jq 1.7.1 has two).
   - `BUILD`: a served row matches (pname, or pname-version, plus version and system). For manpage-missing, only the
@@ -115,7 +121,10 @@ solnix.builder.contactEmail = "greg+dixi-solnix@burd.me";   # per host; used onc
   - `NO-RECIPE`: no served row at that version.
   - `OTHER-SYSTEM`: a system this host does not build.
 - Build first, claim only what was built. The queue spends an attempt at claim time (`registry.rebuild_claim`), so the
-  builder proves each BUILD row here before it touches the queue, in the listing's order:
+  builder proves each BUILD row here before it touches the queue, in the listing's order. Each row is one job with its own
+  state directory (`/var/lib/solnix/builder/job/<pname>/`: drv.json, dry, resp, claim.json), started as a slot frees
+  (ksh93 `JOBMAX`), its rebuild given `--option cores <coresPerJob>`. Every job of a tick evaluates the same locked commit
+  of `BUILDER_FLAKE` (`nix flake metadata` once per tick):
   1. evaluate `packages.<system>.<pname>` of `BUILDER_FLAKE` (default `git+https://git.solnix.io/solnix.git?ref=main`,
      not the registry's `solnix`, which is the 26.11 edition with other outs) and keep the out that is one of the row's;
   2. the out must be served (its narinfo NarHash). An unserved out is a first build, i.e. a submission, which needs the
@@ -131,9 +140,17 @@ solnix.builder.contactEmail = "greg+dixi-solnix@burd.me";   # per host; used onc
   A failed rebuild is remembered per derivation in `/var/lib/solnix/builder/tried/` and not retried (delete the file to
   retry). Without the bearer it stops before the fetch and logs `dry run`. Every nix call is time-bounded
   (`bounded`, illumos has no timeout(1)): a `nix store ls` against cache.solnix.io hung for over 8 minutes on dixi.
-- It runs in project `solnix-builder` (`project.cpu-cap`, default 400 = four CPUs; the generation owns /etc/project:
-  the gate's stock file plus that line) and builds under `nice 19`. FSS is not used: the solnix kernels load only
-  TS, SDC and FX by default. The cap and the nice value bound its CPU share.
+- It runs in project `solnix-builder` (`project.cpu-cap`, default `parallelJobs * coresPerJob * 100`, 400 = four CPUs for
+  the idle profile, none for dedicated; the generation owns /etc/project: the gate's stock file plus that line) and builds
+  under `nice` (19). FSS is not used: the solnix kernels load only TS, SDC and FX by default. The cap and the nice value
+  bound its CPU share. Root's nix builds in the builder's own process tree (the local store, not the daemon), so the
+  cap and nice cover the builds.
+- Settings (`solnix.cache.build`): `profile = "idle"` (default: one job, all CPUs as its `cores`, cap 400, `loadMax` 2,
+  10-30 min between ticks) or `"dedicated"` (a build host: as many 4-core jobs as idle CPUs allow, no cap, no `loadMax`,
+  1-5 min to the next tick after one that rebuilt or completed a job, 10-30 min after one with nothing to do). Each of
+  `parallelJobs` (null = as many as fit), `coresPerJob`, `cpuCap` (null = none), `loadMax` (null = none), `nice`,
+  `tickMin`/`tickMax` and `busyTickMin`/`busyTickMax` overrides the profile. The isolated zone builder exports the same
+  settings, and its zone `capped-cpu` and nix-daemon `max-jobs` follow them.
 - Measured 2026-10-28 against the live queue: 19 rows, 2 MET (wget, ncurses: their served outs already have man
   pages), 1 NO-MAN (openssl: has_manpages=n), 16 NO-RECIPE. Nothing there is buildable from the served recipes, so
   infra's feeder and our recipes have to change before any of it can be done.
@@ -145,6 +162,18 @@ solnix.builder.contactEmail = "greg+dixi-solnix@burd.me";   # per host; used onc
   build-tool closure is not on the cache). The live queue (14 rows) plans 3 MET, 1 NO-MAN, 10 NO-RECIPE, so there is
   nothing to build. The old builder fails 15 of the checks. Today no solnix host can build a leaf
   (docs/pending/builders-need-store-tools.md), so every BUILD row is declined at the dry run.
+
+- Measured 2026-10-31 on dixi (qbuild4, `PATH=/usr/bin ksh93 scripts/test-builder.sh`: RESULT PASS, 37 checks). Four
+  4-second fixture builds ran at once at N=4 (every build window overlaps the others; the tick took 8 s), and one after
+  another at N=1 (27 s). Five jobs made five claims, each completed with its own id, token, out and NarHash. A fixture
+  whose out is its `NIX_BUILD_CORES` proves `--option cores` reaches the build, and a hung rebuild at N=1 is killed at
+  `BUILDER_BUILD_SECS`. Sabotaged copies fail the matching checks: a shared state dir, no `JOBMAX` reset in the job,
+  serial jobs, a bare `/rows`, no `?pname=` queries, no `--option cores`. The old builder fails 16 checks. Live on dixi
+  (32 CPUs, idle): `size` gives 8 jobs of 4 cores. The listing is 581 rows (the 500-row window plus 81 recipe rows past it),
+  which plan to 95 BUILD and 486 NO-RECIPE in 1.8 s, and the whole dry-run tick takes 14 s. Of the 95, 64 are not served
+  (first builds), 6 have no attr at main, 3 need a non-FOD input built here, and 22 pass the dry run (10 of those
+  rebuilt and failed earlier: nondeterministic, or a missing build tool). On dixa, with other work holding 30 of 32
+  CPUs, `size` gives 0 jobs, and all 500 aarch64 rows plan NO-RECIPE: no served aarch64 recipe rows yet.
 
 ### The bearer (never in the store)
 

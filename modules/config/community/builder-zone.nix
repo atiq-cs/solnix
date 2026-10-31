@@ -50,7 +50,7 @@ let
   # the builder, as the zone user: the GZ service's environment with zone paths
   run = pkgs.writeText "solnix-builder-zone-run" ''
     export BUILDER_PATH='${bi.path}' CURL_CA_BUNDLE='${bi.cacert}' BUILDER_STATE=/home/${user}/state BUILDER_SYSTEM='${solnixSystem}'
-    export BUILDER_AGENT='${config.solnix.cache.build.agentId}' BUILDER_LOAD_MAX='${toString config.solnix.cache.build.loadMax}' BUILDER_IDLE=cpu
+    export ${lib.concatStringsSep " " (lib.mapAttrsToList (n: v: "${n}='${v}'") bi.env)}
     export BUILDER_BEARER_FILE=/var/lib/solnix/secrets/build-queue-bearer HOME=/home/${user} SSL_CERT_FILE='${bi.cacert}' GIT_SSL_CAINFO='${bi.cacert}'
     exec /usr/bin/ksh93 ${bi.script}
   '';
@@ -87,10 +87,11 @@ let
     set type=lofs
     add options [ro,nosetuid,nodevices]
     end
+    ${lib.optionalString (cfg.cpuCap != null) ''
     add capped-cpu
     set ncpus=${toString (cfg.cpuCap / 100)}.${lib.fixedWidthNumber 2 (lib.mod cfg.cpuCap 100)}
     end
-    add capped-memory
+    ''}    add capped-memory
     set swap=${cfg.memCap}
     end
     set max-lwps=${toString cfg.maxLwps}
@@ -125,11 +126,12 @@ in
     dataset = lib.mkOption { type = lib.types.str; example = "data/zones/solnix-builder";
       description = "The ZFS dataset for the zonepath (created at ${zp}). Not under a BE root."; };
     quota = lib.mkOption { type = lib.types.str; default = "100G"; description = "Quota of the zone's dataset (its store, homes and build trees)."; };
-    cpuCap = lib.mkOption { type = lib.types.ints.between 10 10000; default = config.solnix.cache.build.cpuCap;
-      description = "capped-cpu, in percent of one CPU (the project.cpu-cap of isolation = none)."; };
+    cpuCap = lib.mkOption { type = lib.types.nullOr (lib.types.ints.between 10 10000); default = config.solnix.cache.build.cpuCap;
+      description = "capped-cpu, in percent of one CPU (the project.cpu-cap of isolation = none); null: no cap."; };
     memCap = lib.mkOption { type = lib.types.str; default = "32g"; description = "capped-memory swap: the zone's reserved memory (kernel-enforced; a physical cap needs rcapd)."; };
     maxLwps = lib.mkOption { type = lib.types.ints.positive; default = 20000; description = "zone.max-lwps."; };
-    maxJobs = lib.mkOption { type = lib.types.ints.positive; default = 2; description = "The zone daemon's max-jobs."; };
+    maxJobs = lib.mkOption { type = lib.types.ints.positive; description = "The zone daemon's max-jobs (the builder's own parallelJobs sizes the work).";
+      default = let j = config.solnix.cache.build.parallelJobs; in if j == null then cfg.buildUsers else lib.max 2 j; };
     buildUsers = lib.mkOption { type = lib.types.ints.between 1 32; default = 8; description = "nixbld users in the zone (uids 30101..)."; };
     nameservers = lib.mkOption { type = lib.types.listOf lib.types.str; default = [ "1.1.1.1" "9.9.9.9" ];
       description = "The zone's resolvers: public ones, so the zone needs no route to the host's LAN or VPC resolver."; };
