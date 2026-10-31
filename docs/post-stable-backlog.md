@@ -1957,3 +1957,19 @@ State today (measured, src/ports/wifi/iwx/STATUS.md):
   same for iwm so both the X1 and X1E wifi are present on shipped media, not just on their owners' host configs.
 - This fits the per-platform-shim direction (PS-X1E-TZMON): detect the device by PCI id, bind the driver, load its
   banked firmware -- all discovered at boot, present on the generic image.
+
+## PS-17: quiesce(9E) for the drivers lixi reboots with (fast reboot), 2026-10-31
+
+`reboot` on lixi prints "Not all drivers have implemented quiesce(9E)". /var/adm/messages names three, the same on every
+reboot since 10-30: **i915**, **xhci** (twice: two controllers) and **pchsmbus**. Without quiesce, fast reboot is refused and
+the machine takes the slow firmware path (illumos falls back automatically, so this costs boot time, not correctness).
+Each driver declares `devo_quiesce = ddi_quiesce_not_supported`:
+- **i915** (ours: src/drm-port/i915/i915_illumos.c:682). Quiesce = stop the display pipes and GT (no DMA, interrupts off) without
+  locks or allocation. OpenBSD's i915 has no equivalent; Linux's `i915_driver_shutdown` is the model (intel_display_driver
+  shutdown + GT suspend). The DRM port owns this one.
+- **xhci** (illumos-gate usr/src/uts/common/io/usb/hcd/xhci/xhci.c:2261). Quiesce = halt the controller (USBCMD.R/S = 0, wait
+  HCH) and reset it, the way ehci_quiesce does. A small upstream illumos change; send it upstream.
+- **pchsmbus** (illumos-gate usr/src/uts/common/io/i2c/ctrl/pchsmbus/pchsmbus.c:1292). Quiesce = disable the host
+  controller's interrupts and abort any transfer. Upstream illumos. lixi steering: don't change pchsmbus's behaviour without the
+  maintainer's OK; quiesce runs only at reboot, so ask before shipping it.
+Each with a check: `reboot -f` on lixi (fast reboot) completes instead of falling back, and the warning is gone for that driver.
