@@ -110,6 +110,10 @@ derivation {
     # references under fb_tracking.lock, and make kref_get_unless_zero one CAS
     # (lixi vmdump.3). Fails if the patch does not apply exactly.
     ( cd "$O" && /usr/gnu/bin/patch -p1 --no-backup-if-mismatch -F0 < "$P/i915/obsd-norcu.patch" ) >&2
+    # Linux errnos at their illumos (= Linux-meaning) values, not OpenBSD's aliases: userland (Mesa, libdrm) is built
+    # against illumos <errno.h>. ETIME -> ETIMEDOUT made iris_bo_busy() never see a busy BO (rcs0 CS errors, lixi).
+    ( cd "$O" && /usr/gnu/bin/patch -p1 --no-backup-if-mismatch -F0 < "$P/i915/obsd-errno.patch" ) >&2
+    grep -q '^#define ETIME' "$O/include/linux/errno.h" && { echo "FATAL: linux/errno.h still aliases ETIME" >&2; exit 1; }
 
     echo "obsd drm $(cat "$O/OPENBSD_REV")" >&2
 

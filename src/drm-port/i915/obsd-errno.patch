@@ -1,0 +1,36 @@
+--- a/include/linux/errno.h
++++ b/include/linux/errno.h
+@@ -5,20 +5,24 @@
+ 
+ #include <sys/errno.h>
+ 
++/*
++ * solnix: illumos, unlike OpenBSD, has these errnos with their Linux meanings,
++ * and userland (Mesa, libdrm) is built against illumos <errno.h>, so the kernel
++ * must return the same numbers. OpenBSD's ETIME -> ETIMEDOUT made a timed-out
++ * syncobj wait return 145 where iris_bo_busy() compares with -ETIME (62): every
++ * busy batch BO read as idle and was reused while the GPU ran it (rcs0 CS
++ * errors, lixi 2026-10-31).
++ */
+ #define ERESTARTSYS	EINTR
+-#define ETIME		ETIMEDOUT
+ #define EREMOTEIO	EIO
+ #define ENOTSUPP	ENOTSUP
+-#define ENODATA		ENOTSUP
+-#define ECHRNG		EINVAL
+ #define EHWPOISON	EIO
+-#define ENOPKG		ENOENT
+-#define EMULTIHOP	EIPSEC
+-#define EBADSLT		EINVAL
+ #define ENOKEY		ENOENT
+ #define EPROBE_DEFER	EAGAIN
+-#define ENOLINK		EIO
+-#define EREMCHG		EPROTO
+-#define EBADRQC		EINVAL
++#if !defined(ETIME) || !defined(ENODATA) || !defined(ECHRNG) || !defined(ENOPKG) || !defined(EMULTIHOP) || \
++    !defined(EBADSLT) || !defined(ENOLINK) || !defined(EREMCHG) || !defined(EBADRQC)
++#error "illumos <sys/errno.h> lacks a Linux errno the drm code returns"
++#endif
++_Static_assert(ETIME == 62 && ETIME != ETIMEDOUT, "ETIME must be illumos's (62), not ETIMEDOUT");
+ 
+ #endif
