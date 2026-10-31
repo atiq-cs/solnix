@@ -42,6 +42,11 @@ in {
     subPkgs = "."; ldflags = "-X github.com/peak/s5cmd/v2/version.Version=v2.3.0"; check = chk ''"$out/bin/s5cmd" version'' "v2\\.3\\.0"; };
   terraform-ls = goPkg { pname = "terraform-ls"; version = "0.38.6"; src = gh "hashicorp/terraform-ls" "v0.38.6" "76df608818567cc02cfba57e23558a5ba561b3aa0a60c2f3abf1a1e2f8b282fc"; vendorHash = "sha256-oOus8qN5MOd0mCYBHaORjVIr/pYVGEfbMdJnuyVIzEc=";
     subPkgs = "."; check = chk ''"$out/bin/terraform-ls" version'' "0\\.38\\.6"; };
+  # opentofu (MPL-2.0), not terraform (BUSL-1.1, nixpkgs: unfree). GOOS=illumos, but registries publish solaris_amd64
+  # providers only: ./go-fixups/tofu-platform-illumos.go makes tofu ask for those (measured: init + apply hashicorp/random).
+  opentofu = goPkg { pname = "opentofu"; version = "1.11.14"; src = gh "opentofu/opentofu" "v1.11.14" "891b3d6069f9e6788e839c2317ecd145d69a64d0618eccca1b2e90b54ece2afa"; vendorHash = "sha256-uihJM6MpG0icaTHdLNVXYf301FwymWl6uG/LK9Pbkwk=";
+    subPkgs = "./cmd/tofu"; ldflags = "-X github.com/opentofu/opentofu/version.dev=no"; prep = "cp ${./go-fixups/tofu-platform-illumos.go} internal/getproviders/platform_illumos.go";
+    check = chk ''"$out/bin/tofu" version | tr "\\n" " "'' "^OpenTofu v1\\.11\\.14 on solaris_amd64"; };
   # gh-dash: godbus/dbus tags its unix transport !solaris (no peer-credential arm); a local bus needs none.
   gh-dash = goPkg { pname = "gh-dash"; version = "4.25.0"; src = gh "dlvhdr/gh-dash" "v4.25.0" "cd36a9f004e3a40d6acdea5183429a50e07ebbefad03eb95915d09ac9d37db15"; vendorHash = "sha256-nYbFNClgWijahEnX8rMIhowP0yxysDymhKYr53oUUC4=";
     subPkgs = "."; ldflags = "-X github.com/dlvhdr/gh-dash/v4/cmd.Version=4.25.0"; prep = ''
