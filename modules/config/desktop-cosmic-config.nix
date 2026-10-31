@@ -87,6 +87,9 @@ in
       category = "application"; description = "greetd login manager running cosmic-greeter";
       start.exec = start "mkdir -p -m 0755 /run/cosmic-greeter /var/lib/cosmic-greeter && chown cosmic-greeter /run/cosmic-greeter /var/lib/cosmic-greeter && ${s.greetd}/bin/greetd --config /etc/greetd/config.toml &";
       requires = [ "svc:/milestone/multi-user:default" "svc:/system/seatd:default" "svc:/application/cosmic-greeter-daemon:default" ];
+      # The user's session lives in greetd's contract: at logout cosmic-session SIGKILLs the panel and its applets
+      # abort with cores (measured on lixi), which svc.startd took as greetd failing and restarted it (as ssh.xml).
+      ignoreError = [ "core" "signal" ];
     };
   };
 }

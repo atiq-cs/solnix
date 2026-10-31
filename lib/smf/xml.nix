@@ -143,7 +143,9 @@ let
             optionalString (svc.refresh != null)
               ("\n          " + renderMethod "refresh" refreshExec svc.refresh.timeoutSeconds)}
           <property_group name='startd' type='framework'>
-            <propval name='duration' type='astring' value='${svc.model}'/>
+            <propval name='duration' type='astring' value='${svc.model}'/>${
+              optionalString ((svc.ignoreError or [ ]) != [ ])
+                "\n            <propval name='ignore_error' type='astring' value='${concatStringsSep "," svc.ignoreError}'/>"}
           </property_group>
           <instance name='${esc svc.instance}' enabled='${if svc.enable then "true" else "false"}'>${
             concatStringsSep "" (mapAttrsToList (n: p: "\n          " + renderPg n p) svc.properties)}${

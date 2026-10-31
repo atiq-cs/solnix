@@ -124,6 +124,17 @@ let
               wait      = svc.startd waits on a child in the foreground.
           '';
         };
+        ignoreError = mkOption {
+          type = types.listOf (types.enum [ "core" "signal" ]);
+          default = [ ];
+          example = [ "core" "signal" ];
+          description = ''
+            startd/ignore_error: contract events svc.startd does NOT treat as a service
+            failure. A login daemon whose user sessions live in its contract needs
+            [ "core" "signal" ], as the gate's network/ssh: a session child that dumps core
+            or is killed must not restart the daemon (svc.startd(8)).
+          '';
+        };
 
         # --- methods --------------------------------------------------------
         start = mkOption {

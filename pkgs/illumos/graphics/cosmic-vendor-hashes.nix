@@ -7,6 +7,7 @@
   cosmic-app-library = "sha256-3j6RjcNVLwcUE5MmapTV4yMnO3v+3L1HcncSMM4MGNw=";
   cosmic-notifications = "sha256-npLLBF+T1/vvRqYY4q0GtAR8P/KEfcYIad7x33rFJz0=";
   cosmic-osd = "sha256-sIcUPP5s3h24MI4j8+D8YLYesnZ65g36r0/RNiAthXM=";
+  cosmic-settings-daemon = "sha256-lwAj+U63t6LMe29QIcjJX4nuwHSoDJzvRNEvylZviAc=";
   cosmic-bg = "sha256-oFdBW7hd6kVDjwIeyk/NiqQmLuRJbJEL1UHtjtAJxu4=";
   cosmic-workspaces = "sha256-ks56oFWMyP2AtwXsHrEq6QP2VzkgD9SOtLlYrj+ekp8=";
   cosmic-randr = "sha256-AgzEfElSmEJEauJZiQBJ1kUpkRZpDK/U+VZle790068=";

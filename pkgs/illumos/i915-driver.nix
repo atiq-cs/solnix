@@ -106,6 +106,10 @@ derivation {
     /usr/gnu/bin/sed -i 's/^kmap_atomic_prot(struct vm_page \*pg, pgprot_t prot)$/obsd_orig_kmap_atomic_prot(struct vm_page *pg, pgprot_t prot)/; s/^kunmap_atomic(void \*addr)$/obsd_orig_kunmap_atomic(void *addr)/' "$O/drm_linux.c"
     [ "$(grep -c '^obsd_orig_k' "$O/drm_linux.c")" -eq 2 ] \
       || { echo "FATAL: drm_linux.c kmap_atomic anchors not found" >&2; exit 1; }
+    # The compat has no RCU (kfree_rcu frees at once): take frontbuffer
+    # references under fb_tracking.lock, and make kref_get_unless_zero one CAS
+    # (lixi vmdump.3). Fails if the patch does not apply exactly.
+    ( cd "$O" && /usr/gnu/bin/patch -p1 --no-backup-if-mismatch -F0 < "$P/i915/obsd-norcu.patch" ) >&2
 
     echo "obsd drm $(cat "$O/OPENBSD_REV")" >&2
 

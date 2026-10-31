@@ -170,6 +170,11 @@ fi
 # Required per app: fail if an expected crate was not vendored at all.
 for c in ${REQUIRED:-}; do have $c || { echo "FATAL: required crate $c not vendored" >&2; exit 1; }; done
 
+# 13. ddc-hi (cosmic-settings-daemon's external-monitor brightness): build.rs turns on its i2c backend
+#     for every unix, but Cargo.toml pulls ddc-i2c only on Linux/Windows (it is i2c-linux). illumos has
+#     no /dev/i2c-N DDC route: no backend, so Display::enumerate() lists nothing.
+edit ddc-hi build.rs "'\t} else if var(\"CARGO_CFG_UNIX\").is_ok() {'" "'\t} else if var(\"CARGO_CFG_UNIX\").is_ok() && var(\"CARGO_CFG_TARGET_OS\") != Ok(\"illumos\".into()) {'"
+
 # re-stamp checksums of every edited file
 sort -u "$V/.illumos-edited" | while read -r c f; do
   new=$(sha256sum "$c/$f" | cut -d' ' -f1); sum="$c/.cargo-checksum.json"

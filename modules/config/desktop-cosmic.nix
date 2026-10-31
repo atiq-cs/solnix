@@ -9,7 +9,9 @@
 #     system bus is illumos's own dbus service, and a seatd daemon (NixOS without logind).
 #   * PAM is illumos libpam: both services fall to the stock pam.conf "other" stack.
 #   * /dev/dri access follows illumos's logindevperm (the console user owns it).
-#   * no xdg-desktop-portal-cosmic and no cosmic-settings-daemon: both hard-need PipeWire.
+#   * no xdg-desktop-portal-cosmic (PipeWire + GStreamer). cosmic-settings-daemon is in, with its PipeWire
+#     audio backend gated off (no audio devices), as NixOS lists it in corePkgs.
+#   * the session does not start the cosmic-greeter screen locker (no logind Lock signal; cosmic-apps-src-fixup.py).
 #   * cosmic-store only if flatpak were available (as NixOS); it is not, so it is off.
 #
 # It REFUSES to enable unless hardware.graphics.i915.attachAtBoot: a card0 opener
@@ -29,7 +31,7 @@ in
       type = types.listOf types.package;
       default = with s; [
         cosmic-comp cosmic-session cosmic-panel cosmic-applets cosmic-launcher cosmic-app-library
-        cosmic-notifications cosmic-osd cosmic-bg cosmic-workspaces cosmic-idle cosmic-randr
+        cosmic-notifications cosmic-osd cosmic-settings-daemon cosmic-bg cosmic-workspaces cosmic-idle cosmic-randr
         cosmic-settings cosmic-files cosmic-edit cosmic-term cosmic-screenshot cosmic-greeter
         dbus cosmic-icons pop-icon-theme hicolor-icon-theme
       ];

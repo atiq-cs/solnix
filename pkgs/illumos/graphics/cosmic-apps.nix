@@ -3,7 +3,7 @@
 # epoch-1.5.0 tag (an FOD), its cargo vendor (an FOD), the illumos fixups, a run check.
 # Features drop only what has no illumos backend (systemd/logind/journald, PipeWire,
 # BlueZ, io_uring, gvfs/glib, flatpak, wgpu); each drop is named where it happens.
-{ src, vendorOf, cargoApp, graphics, vendorHashes }:
+{ src, vendorOf, cargoApp, graphics, vendorHashes, openssl }:
 let
   inherit (graphics) libxkbcommon wayland libffi mesa libdrm;
   client = [ libxkbcommon wayland libffi ];
@@ -78,6 +78,17 @@ in {
   cosmic-osd = app {
     pname = "cosmic-osd"; sha256 = "de1a409c95305059f0c79f1dff0089f7cf6aaf9b2b7201e982da9895d58ad4a3";
     bins = "cosmic-osd";
+  };
+  # NixOS ships it (services.desktopManager.cosmic corePkgs) and cosmic-session starts it first: theme,
+  # shortcuts' system actions, brightness, the audio varlink service. Its audio backend is PipeWire, which
+  # illumos lacks: cosmic-apps-src-fixup.py gates the client off, so the audio server has no devices.
+  # udev (backlight) links the STUB libudev and fails as an Err at run time. No polkit rule (no polkit).
+  cosmic-settings-daemon = app {
+    pname = "cosmic-settings-daemon"; sha256 = "5b404784098e5b92f989e7b7c4e0c645b2f60c3b385c283ad052d75b5d75952c";
+    # a wayland client (cctk): the client libs; openssl for geonames' reqwest (NixOS buildInputs has it too)
+    libs = client ++ [ openssl ]; wrap = ""; bins = "cosmic-settings-daemon"; cargoArgs = "--bin cosmic-settings-daemon";
+    install = ''install -Dm0644 data/system_actions.ron "$out/share/cosmic/com.system76.CosmicSettings.Shortcuts/v1/system_actions"'';
+    check = "runok cosmic-settings-daemon";   # no session bus here: it must start and exit non-signalled
   };
   cosmic-bg = app {   # no avif (dav1d); png/jpeg/webp/jxl stay
     pname = "cosmic-bg"; sha256 = "12b30c60e15ac6c0f4b3eca8c37642145683e830833b429958222dfc395db177";

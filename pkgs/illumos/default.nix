@@ -409,7 +409,7 @@ let
   # COSMIC rust programs on rust199 + graphics (./graphics/cosmic.nix).
   cosmic = import ./graphics/cosmic.nix {
     rust = rust199; inherit gcc libc world; gate = gate'; gccLib = gcc.lib;
-    inherit (srcPkgs.nixChain) cacert; inherit graphics;
+    inherit (srcPkgs.nixChain) cacert; inherit graphics; inherit (srcPkgs) openssl;
   };
 
   # ---------------------------------------------------------------------------
@@ -1050,7 +1050,7 @@ in
   inherit (graphics) meson samurai expat libffi wayland wayland-protocols libdrm mesa
     pixman xkeyboard-config libxkbcommon libdisplay-info seatd dbus;
   inherit (cosmic) cosmic-comp cosmic-term cosmic-session cosmic-panel cosmic-applets cosmic-launcher
-    cosmic-app-library cosmic-notifications cosmic-osd cosmic-bg cosmic-workspaces cosmic-randr cosmic-idle
+    cosmic-app-library cosmic-notifications cosmic-osd cosmic-settings-daemon cosmic-bg cosmic-workspaces cosmic-randr cosmic-idle
     cosmic-settings cosmic-files cosmic-edit cosmic-store cosmic-screenshot cosmic-greeter greetd
     open-sans noto-sans noto-sans-mono fira-mono hicolor-icon-theme pop-icon-theme cosmic-icons;
   # cargoLib.{vendorOf,cargoPkg}: build any Cargo.lock'd crate on rust199 (./cargo.nix).
