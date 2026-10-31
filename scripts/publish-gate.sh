@@ -2,7 +2,8 @@
 # publish-gate.sh <store path>... -- the solnix-cache-publish skill's gate, on illumos.
 # A path passes only if: deriver resolves to an existing .drv; it is not host/user
 # specific; every ELF has a store-only RUNPATH and ldd (no LD_LIBRARY_PATH) resolves
-# every NEEDED inside /nix/store; the declared references cover every store path the
+# every NEEDED inside /nix/store; it names no build-host identity (uname -n, its DNS domain,
+# compute.internal, GATE_HOST_STRINGS); the declared references cover every store path the
 # NAR names, counting only names inside the deriver's input closure (a store-path
 # string outside it, such as nix's --help examples, is text, not a dependency).
 # Prints PASS/FAIL per path; exit 1 if any FAIL. --selftest proves the reference rule.
@@ -41,6 +42,13 @@ for p in "$@"; do
     bad=$(ldd "$f" 2>&1 | awk '/not found/ || (/=>/ && $NF !~ /^\/nix\/store\//)' | head -2 | tr '\n' ' ')
     [ -n "$bad" ] && why="$why $f ldd: $bad;"
   done < <(find "$p" -type f)
+  # the build host's own identity must not be in a published NAR (perl's Configure recorded myhostname/mydomain:
+  # wave3 2026-10-30). Strings: this host's name and DNS domain, and the EC2 internal domain; GATE_HOST_STRINGS adds more.
+  hs="$(uname -n) $(sed -n 's/^domain[[:space:]]*//p; s/^search[[:space:]]*//p' /etc/resolv.conf 2>/dev/null) compute.internal ${GATE_HOST_STRINGS:-}"
+  for h in $hs; do
+    [ ${#h} -ge 6 ] || continue   # too short to mean a host (e.g. "local")
+    nix-store --dump "$p" 2>/dev/null | grep -a -q -F -- "$h" && why="$why names the build host ($h);"
+  done
   refs=$(nix-store -q --references "$p" | sort -u)
   named=$(nix-store --dump "$p" | grep -a -o -E '/nix/store/[0-9a-df-np-sv-z]{32}-[A-Za-z0-9+._?=-]+' | cut -c1-44 | sort -u)
   # A reference is a path the build could see: Nix scans the output only for the
