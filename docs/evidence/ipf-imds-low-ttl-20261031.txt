@@ -1,0 +1,4 @@
+# a8a0fe2 live check on dixi, 2026-10-31 19:30Z, after a reboot (fr_minttl back to its default 4)
+# running toplevel 8k2acsjs predates a8a0fe2: /etc/ipf/ipf.conf has no 169.254 rule.
+before (that ruleset):  curl -X PUT http://169.254.169.254/latest/api/token -> 000 (timeout); solnix-ec2-first-boot: start method timed out, KILL
+with the rule prepended (ipf -Fa -f, dead-man restore armed): token PUT 200, 200, 200, 200, 200, 200 (6/6), fr_minttl still 4
