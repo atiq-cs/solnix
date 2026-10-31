@@ -6,7 +6,7 @@ See .agent-steering-domains.md for domain-specific steering (local).
 
 Host names (maintainer, 2026-10-24; d = EC2, l = local hardware):
 - **dixi**: x86_64 EC2 host. **dixa**: aarch64 EC2 host. **dixr**: hosted riscv64 server, headless, no GPU (likely qemu-system-riscv64 on EC2, emulating a many-core, large-RAM virt machine).
-- **lixi**: ThinkPad X1 Extreme Gen 5 (192.168.1.11; i9-12900H, Iris Xe, RTX 3080 Ti, AX211).
+- **lixi**: ThinkPad X1 Extreme Gen 5 (wifi 192.168.1.192, tailnet 100.64.0.13; 192.168.1.11 is the USB NIC's lease and follows the dongle; i9-12900H, Iris Xe, RTX 3080 Ti, AX211).
 - **arnold**: ThinkPad X1 Extreme Gen 1 (192.168.1.37; i7-8850H, UHD 630, GTX 1050 Ti, AC 9560). It runs Fedora today.
 - **lixr**: Milk-V K3, riscv64 (192.168.1.179).
 Docs older than 2026-10-24 say "dixi" for arnold and "arnold" for lixi.
