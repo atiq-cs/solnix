@@ -12,6 +12,10 @@ rec {
       # wrapper is cc64 (-> Sun cc flags -xarch=generic64, measured). A gcc-named link to it.
       mkdir -p "$W/gccbin"; ln -sf "$CC" "$W/gccbin/gcc"; export PATH="$W/gccbin:$PATH"
       sed -i 's@ldflags="$ldflags -L/usr/gnu/lib"@:@; s@-L/usr/gnu/lib@@g' hints/solaris_2.sh
+      # Configure records the build time, host name, domain, user and uname -a (Config_heavy.pl, config.h, perlbug). Pinned to
+      # neutral values (solnix.io policy: no build-host facts in a NAR), as nixpkgs interpreter.nix does; cf_time = SOURCE_DATE_EPOCH.
+      printf '%s\n' 'myuname="solnix"' 'myhostname="localhost"' 'mydomain=""' 'cf_by="nixbld"' 'cf_email=""' \
+        'perladmin="root@localhost"' 'cf_time="Tue Jan  1 00:00:00 UTC 1980"' > config.over
       sh ./Configure -des -Dprefix="$out" -Dcc=gcc -Duseshrplib -Dusethreads -Duse64bitall \
         -Dlibpth="$gate/lib/amd64 $gate/usr/lib/amd64" -Dloclibpth= -Dlocincpth= -Dglibpth= \
         -Dinstallstyle=lib/perl5 -Dman1dir="$out/share/man/man1" -Dman3dir="$out/share/man/man3" \
@@ -20,6 +24,7 @@ rec {
       gmake -j16; gmake install
       ${scrub}
       ${chk ''"$out/bin/perl" -v'' "v5\\.42\\.0"}
+      ${chk ''"$out/bin/perl" -V:myhostname'' "^myhostname=.localhost.;$"}
       ${chk ''"$out/bin/perl" -MPOSIX -MSocket -MDigest::SHA=sha1_hex -e "print sha1_hex(q(abc)),qq(\\n)"'' "^a9993e364706816aba3e25717850c26c9cd0d89d$"}
       [ -f "$out/share/man/man1/perl.1" ] || { echo "FATAL: no perl.1" >&2; exit 1; }
     '';
