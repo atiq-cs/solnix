@@ -17,7 +17,7 @@ derivation {
   builder = "/usr/bin/bash";
   PATH = "/usr/gnu/bin:/usr/bin:/usr/sbin";
   args = [ "-c" ((if aarch64 then builtins.replaceStrings [ "lib/amd64" "-m64 " ]
-                     [ "lib" "-mno-outline-atomics -mtls-dialect=trad " ] else (x: x)) ''
+                     [ "lib" "-mno-outline-atomics -mtls-dialect=trad -ffile-prefix-map=$W=/build " ] else (x: x)) ''
     set -eu
     export PATH=/usr/gnu/bin:/usr/bin:/usr/sbin
     W=$(mktemp -d /var/tmp/bsdfetch.XXXXXX); cp -r "$fetchSrc"/. "$W"/; chmod -R u+w "$W"

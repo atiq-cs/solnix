@@ -70,9 +70,10 @@ let
       "lib/amd64" "$gccLib/amd64" " -m$ABI " "architecture=x86 abi=sysv" "gmake -j3 "
       "ACLOCAL_PATH=/usr/share/aclocal autoreconf -fi -I /usr/share/aclocal" "./configure --prefix="
       ''export PATH="''${btPath:+$btPath:}/usr/gnu/bin:/usr/bin:/usr/sbin"''
-      stripLoop rpLoop "INSTALL=ginstall" ''-Dlddlflags="-shared -m64"'' ]
+      stripLoop rpLoop "INSTALL=ginstall" ''-Dlddlflags="-shared -m64"'' "${./zero-checksum.sh}" ]
     [ ''r="$r:$d"''
-      "lib" "$gccLib" " -mno-outline-atomics -mtls-dialect=trad " "architecture=arm abi=aapcs" "gmake -j24 "
+      # -ffile-prefix-map: __FILE__ and any surviving debug string name /build, not the build dir (no host paths in a NAR)
+      "lib" "$gccLib" " -mno-outline-atomics -mtls-dialect=trad -ffile-prefix-map=$W=/build " "architecture=arm abi=aapcs" "gmake -j24 "
       "ACLOCAL_PATH=/opt/nixboot/share/aclocal:/opt/ooce/autoconf-archive/share/aclocal M4=/usr/bin/gm4 autoreconf -fi -I /opt/nixboot/share/aclocal -I /opt/ooce/autoconf-archive/share/aclocal"
       "./configure --build=aarch64-unknown-solaris2.11 --prefix="
       # cmake (/opt/ooce) + pkgconf (/opt/nixboot) of the stage0 box, as x86 uses the OI host's.
@@ -82,7 +83,9 @@ let
       # elfedit-then-strip works. The build-time-path guards still run after the strip.
       (rpLoop + stripLoop) ""
       "INSTALL=/usr/gnu/bin/install"  # braich ships GNU install only as /usr/gnu/bin/install
-      ''-Dlddlflags="-shared"'' ] t;    # perl (cli/c-big.nix): aarch64 gcc has no -m64
+      ''-Dlddlflags="-shared"''         # perl (cli/c-big.nix): aarch64 gcc has no -m64
+      # DT_CHECKSUM -> 0 without elfedit, which segfaults on a GNU-stripped aarch64 ELF (repro2 fix 4; dixa4).
+      "${./aarch64/zero-checksum.sh}" ] t;
   stripLoop = ''
     find "$out" -type f | while read -r f; do
       # ELF, or an ar archive ("!<ar"): -D zeroes archive member mtimes (NixOS binutils is --enable-deterministic-archives).

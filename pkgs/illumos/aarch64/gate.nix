@@ -50,10 +50,20 @@ derivation {
     set -eu
     mkdir -p "$out"
     cp -a "${proto}/." "$out/"
+    # no build-host name in the store: the DOF utsname nodename -> localhost (./dof-nodename.sh)
+    /usr/bin/bash ${./dof-nodename.sh} "$out"
+    if grep -r -l -a -F solnix-builder-build "$out" >&2; then echo "FATAL: the proto still names its build host" >&2; exit 1; fi
     # sanity: aarch64 libc, headers, kernel unix + genunix (LP64, no amd64).
     [ -f "$out/lib/libc.so.1" ]                        || { echo "FATAL: no aarch64 proto libc" >&2; exit 1; }
     [ -d "$out/usr/include" ]                          || { echo "FATAL: no aarch64 proto headers" >&2; exit 1; }
     [ -f "$out/platform/armv8/kernel/aarch64/unix" ]   || { echo "FATAL: no aarch64 unix" >&2; exit 1; }
     [ -f "$out/kernel/aarch64/genunix" ]               || { echo "WARN: genunix not at kernel/aarch64/genunix" >&2; }
   '' ];
+  # A FOD, as x86's proto (pkgs/illumos/gate.nix prebuiltProto, served on the CA lane): gcc's out names this path, and an
+  # input-addressed proto could only be published as a recipe row, which the whole-sysroot publish gate fails (sbin/init
+  # NEEDs /lib/libpam: it is a sysroot, not a package). Hash = the NAR of the DOF-neutralised copy, measured twice on dixa
+  # (dixa4 2026-10-31: build + `nix-store --check` in another build dir, both 10gjyphi..).
+  outputHashMode = "recursive";
+  outputHashAlgo = "sha256";
+  outputHash = "10gjyphi78nvqi5pnpnjidig39dbxav8jvcx3lcb0mzwg1xxqhyj";
 }

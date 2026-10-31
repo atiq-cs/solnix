@@ -1,7 +1,26 @@
 set -eu
 # builder for aarch64/gcc-src.nix (see its header). LP64 only: everything lives in lib/.
 export PATH=/usr/gnu/bin:/usr/bin:/usr/sbin
-W=$(mktemp -d /var/tmp/gccsrc.XXXXXX); cd "$W"
+# Fixed build dir keyed on $buildKey (repro2 fix 3, as ../gcc-src.nix): the compiler names it, and --check builds at a scratch out.
+W=/var/tmp/gccsrc-$buildKey
+rm -rf "$W"; mkdir -m 700 "$W"; trap 'cd /; rm -rf "$W"' EXIT; cd "$W"
+# Deterministic archives (NixOS binutils --enable-deterministic-archives; wave3 gcc-detar, as ../gcc-src.nix): GNU ar/ranlib
+# stamp the armap and members with the build time, and cc1's executable_checksum is an md5 over those archives.
+mkdir "$W/detbin"
+cat > "$W/detbin/ar" <<'EOS'
+#!/usr/bin/bash
+a=(); k=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --plugin|--target|--output) a+=("$1" "$2"); shift 2; continue;;
+    --*|-V|-h) a+=("$1");;
+    *) if [ $k = 0 ]; then k=1; case "$1" in *[rqs]*) a+=("$1"D);; *) a+=("$1");; esac; else a+=("$1"); fi;;
+  esac; shift
+done
+exec /usr/gnu/bin/ar "${a[@]}"
+EOS
+printf '#!/usr/bin/bash\nexec /usr/gnu/bin/ranlib -D "$@"\n' > "$W/detbin/ranlib"
+chmod +x "$W/detbin/ar" "$W/detbin/ranlib"; export PATH="$W/detbin:$PATH"
 tar xf "$gccSrc"; cd "gcc-$rev"
 tar xf "$gmpSrc"; mv gmp-6.3.0 gmp
 tar xf "$mpfrSrc"; mv mpfr-4.2.1 mpfr
@@ -38,12 +57,31 @@ for f in "$lib"/lib/*; do
   if grep -q "$gate" "$f"; then echo "FATAL: $f still names the gate proto" >&2; exit 1; fi
 done
 [ -e "$lib/lib/libstdc++.so.6" ] && [ -e "$lib/lib/libgcc_s.so.1" ] || { echo "FATAL: runtime libs missing" >&2; exit 1; }
+# the drivers (bin/gcc, cpp, ...) NEED libkstat.so.1, which the libc slice lacks: a copy in $out/lib, already first on their RUNPATH
+# (x86 uses libc-extra for this; without it ldd took the host /lib/libkstat, publish gate dixa4 2026-10-31). It NEEDs libc only.
+cp "$gate/lib/libkstat.so.1" "$out/lib/"; chmod u+w "$out/lib/libkstat.so.1"
 # every other ELF in $out: a store RUNPATH, never the stage0 compiler's /opt/gcc-14.
 find "$out" -type f | while read -r f; do
   [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] || continue
   /usr/bin/elfdump -d "$f" 2>/dev/null | grep -q NEEDED || continue
   chmod u+w "$f"; /usr/bin/elfedit -e "dyn:runpath $out/lib:$libcDir" "$f"
 done
+# every shipped archive's armap without a date; cc1/cc1plus executable_checksum = md5(name-buildKey) (../gcc-src.nix says why)
+find "$out" "$lib" -name '*.a' -type f | while read -r f; do chmod u+w "$f"; /usr/gnu/bin/ranlib -D "$f"; done
+for f in "$out"/libexec/gcc/*/*/cc1 "$out"/libexec/gcc/*/*/cc1plus; do
+  [ -f "$f" ] || continue
+  sym=$(/usr/bin/nm -x "$f" | awk -F'|' '{gsub(/ /, "", $NF)} $NF == "executable_checksum" {print $2, $3, $7}')
+  set -- $sym; [ "$(($2))" = 16 ] || { echo "FATAL: $f executable_checksum: [$sym]" >&2; exit 1; }
+  read -r sn sa so < <(/usr/bin/elfdump -c "$f" | awk -v i="$(($3))" '$1 == "Section" {x = ($2 == "Header[" i "]:"); n = $4} x && /sh_addr:/ {a = $2} x && /sh_offset:/ {print n, a, $2; exit}')
+  [ "$sn" = .rodata ] || { echo "FATAL: $f executable_checksum in [$sn], expected .rodata" >&2; exit 1; }
+  h=$(printf '%s' "gcc-$version-$buildKey" | /usr/bin/digest -a md5)
+  e=""; i=0; while [ $i -lt 32 ]; do e="$e$(printf '\\%03o' "0x${h:$i:2}")"; i=$((i + 2)); done
+  chmod u+w "$f"; printf "$e" | dd of="$f" bs=1 seek=$(($1 - sa + so)) conv=notrunc 2>/dev/null
+  [ "$(dd if="$f" bs=1 skip=$(($1 - sa + so)) count=16 2>/dev/null | od -An -tx1 | tr -d ' \n')" = "$h" ] || { echo "FATAL: $f checksum write" >&2; exit 1; }
+done
+# DT_CHECKSUM -> 0 in both outputs (repro2 fix 4; ./zero-checksum.sh, the aarch64 dd copy)
+: > "$W/zc"; /usr/bin/bash "$zeroChecksum" "$out" "$W/zc"; /usr/bin/bash "$zeroChecksum" "$lib" "$W/zc"
+[ ! -s "$W/zc" ] || { cat "$W/zc" >&2; exit 1; }
 bad=$(for f in "$lib"/lib/libstdc++.so.6 "$lib"/lib/libgcc_s.so.1; do
   /usr/bin/ldd "$f" 2>&1 | awk -v f="$f" '/not found/ || (/=>/ && $NF !~ /^\/nix\/store\//) {print f": "$0}'
 done)

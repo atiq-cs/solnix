@@ -24,14 +24,17 @@ let
   mpcSrc = fetch "https://mirrors.kernel.org/gnu/mpc/mpc-1.3.1.tar.gz"
     "ab642492f5cf882b74aa0cb730cd410a81edcdbec895183ce930e706c1c759b8";
   tflags = "-g -O2 -mno-outline-atomics -mtls-dialect=trad";
-in
-derivation {
+  drvAttrs = {
   name = "gcc-${version}";
   inherit system gate stage0 gccSrc gmpSrc mpfrSrc mpcSrc version rev tflags;
   libcDir = "${libcSlice}/lib";
   ldBin = "${ld}/usr/bin/ld";
+  SOURCE_DATE_EPOCH = "315532800";  # as NixOS stdenv (repro2 fix 2)
+  zeroChecksum = ./zero-checksum.sh; # DT_CHECKSUM -> 0 (repro2 fix 4; this copy works on GNU-stripped aarch64 ELF)
   outputs = [ "out" "lib" ];
   builder = "/usr/bin/bash";
   PATH = "/usr/gnu/bin:/usr/bin:/usr/sbin";
   args = [ ./gcc-src-build.sh ];
-}
+  };
+# buildKey: 1:1 with the drv, the same on every host and under --check (../mk-src-pkg.nix explains why).
+in derivation (drvAttrs // { buildKey = builtins.substring 0 16 (builtins.hashString "sha256" (builtins.toJSON drvAttrs)); })

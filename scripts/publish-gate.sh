@@ -7,6 +7,7 @@
 # NAR names, counting only names inside the deriver's input closure (a store-path
 # string outside it, such as nix's --help examples, is text, not a dependency).
 # Prints PASS/FAIL per path; exit 1 if any FAIL. --selftest proves the reference rule.
+# GATE_DOF_EXEMPT=0 drops the DOF-utsname exemption below (infra protocol v2 exception E1); the aarch64 set needs none.
 # shortcut: the reference scan greps /nix/store/<hash>- strings in the NAR, so a reference
 # written without the /nix/store/ prefix would go unseen; Nix's own scan is per-hash.
 
@@ -60,7 +61,7 @@ for p in "$@"; do
       doff=""; dsz=""
       read -r doff dsz < <(elfdump -c "$f" 2>/dev/null | awk '/sh_name: \.SUNW_dof$/ {d=1; next} d && /sh_size:/ {sz=$2} d && /sh_offset:/ {print $2, sz; exit}')
       for o in $offs; do
-        if [ -n "$dsz" ] && [ "$o" -ge $((doff)) ] && [ $((o + ${#h})) -le $((doff + dsz)) ] && [ "$o" -ge 257 ] &&
+        if [ "${GATE_DOF_EXEMPT:-1}" = 1 ] && [ -n "$dsz" ] && [ "$o" -ge $((doff)) ] && [ $((o + ${#h})) -le $((doff + dsz)) ] && [ "$o" -ge 257 ] &&
            [ "$(dd if="$f" bs=1 skip=$((o - 257)) count=6 2>/dev/null | od -An -tx1 | tr -d ' \n')" = 53756e4f5300 ]; then
           ex=$((ex + 1))
         else [ -n "$where" ] || where="${f#$p/} @$o"; fi
