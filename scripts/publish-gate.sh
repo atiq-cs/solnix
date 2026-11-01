@@ -25,8 +25,13 @@ if [ "${1:-}" = "--selftest" ]; then
   echo "SELFTEST FAIL: [$r1] [$r2] [$r3]"; exit 1
 fi
 
-PATH=/usr/gnu/bin:/usr/bin:/usr/sbin:$PATH
+PATH=${GATE_GREP_DIR:+$GATE_GREP_DIR:}/usr/gnu/bin:/usr/bin:/usr/sbin:$PATH
 unset LD_LIBRARY_PATH LD_LIBRARY_PATH_64 LD_LIBRARY_PATH_32
+# fail closed: the host-name and reference scans need GNU grep (-a -o -b); illumos grep rejects -a, and the checks
+# then passed silently (a solnix host has no /usr/gnu/bin/grep; seen on dixi 2026-11-01). There, run with
+# GATE_GREP_DIR=$(nix build --print-out-paths .#gnugrep)/bin.
+printf 'a\000b\n' | grep -a -b -o -F b > /dev/null 2>&1 || {
+  echo "publish-gate: $(command -v grep) is not GNU grep (needs -a -b -o); set GATE_GREP_DIR to a gnugrep bin" >&2; exit 2; }
 rc=0
 for p in "$@"; do
   why=""
