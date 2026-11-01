@@ -25,6 +25,12 @@ in rec {
       PATH="''${python3:+$python3/bin:}$PATH"   # hash B's cargo-build.sh drops /usr/bin python3 from PATH; it passes $python3
       REQUIRED="rustix wayland-backend polling" bash ${../graphics/cosmic-comp-vendor-fixup.sh} "$PWD/$V"
       python3 ${./pop-launcher-src-fixup.py} "$PWD" "$out" "${fd}"
+      # mimalloc 2.x (libmimalloc-sys, pop-launcher-bin's global allocator): on 64-bit, _mi_ptr_segment calls a segment
+      # NULL when it is <= 0 as intptr_t. illumos amd64 user addresses are 0xfffffc7f..., negative as intptr_t, so every
+      # segment was NULL and the first malloc dereferenced it: pop-launcher SIGSEGV at startup on lixi (gpuhang2 G2-1,
+      # from the core: segment 0xfffffc7f80000000, jle taken). Use the pointer test mimalloc's 32-bit branch uses.
+      vfix libmimalloc-sys c_src/mimalloc/v2/include/mimalloc/internal.h \
+        "'  return ((intptr_t)segment <= 0 ? NULL : segment);\n'" "'  return (p==NULL ? NULL : segment);\n'"
     '';
     # the justfile's install-bin + install-plugins + install-scripts (cargoPkg's man hook runs in the source root)
     man = ''
