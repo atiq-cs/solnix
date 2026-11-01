@@ -1,0 +1,107 @@
+solnix: usbecm -- report link DOWN when the adapter is unplugged (and UP on reconnect), so traffic moves to the
+other interface.
+
+SYMPTOM (ThinkPad X1 Extreme Gen5 "lixi", Belkin USB-C LAN adapter on usbecm1 next to the AX211 wifi on iwx0, both
+DHCP on 192.168.1.0/24, maintainer 2026-10-26): unplugging the adapter stopped the network. Rebooting with it
+out came up on wifi and worked.
+
+MECHANISM (code reading; measurement pending): usbecm_disconnect_event_cb sets USB_DEV_DISCONNECTED and closes the
+pipes, but never calls mac_link_update(). The MAC layer keeps usbecm1's link UP, so IP never clears IFF_RUNNING
+on it (ip.c DL_NOTE_LINK_DOWN is what clears PHYI_RUNNING). dhcpagent removes an interface's routes only when
+IFF_RUNNING goes away (agent.c process_link_up_down -> pif_status -> remove_routes). So usbecm1's default route,
+its 192.168.1.0/24 route and its address all stay. ire_round_robin spreads flows over the two equal default and
+subnet routes, and some of them keep going to the vanished adapter. The same effect was measured in the other
+direction on lixi (wifi disconnected while the wired link stayed up: 68% loss for the minute wifi was gone).
+
+THE CHANGE (usbecm.c only):
+- usbecm_link_set(): report a change once, with es_linkstate tracking it and mac_link_update called with no lock
+  held, as m_start, m_stop and the CDC NETWORK_CONNECTION notification already do.
+- disconnect: after the pipes are closed, link DOWN. usbgem drivers (axf/urf/udmf) get the same through
+  usbgem_mac_stop on disconnect.
+- reconnect/resume (usbecm_restore_device_state): once the pipes and rx are restarted and the MAC was started,
+  link UP, as m_start reports it. ECM gives the host no way to ask for the link state, and a device that has lost
+  carrier says so through its notification pipe.
+RUNG: compiles in the gate (the build is the check). NOT yet measured on lixi: the plug/unplug test with the route
+table and pings is next.
+
+--- a/usr/src/uts/common/io/usb/clients/usbecm/usbecm.c	2026-10-26 21:53:58.310593034 -0400
++++ b/usr/src/uts/common/io/usb/clients/usbecm/usbecm.c	2026-10-26 21:56:02.050833785 -0400
+@@ -1720,6 +1720,36 @@
+ }
+ 
+ /*
++ * Report a link state change once: mac_link_update with no lock held, and
++ * es_linkstate tracking it, as usbecm_m_start/m_stop and the CDC
++ * NETWORK_CONNECTION notification already do.
++ */
++static void
++usbecm_link_set(usbecm_state_t *ecmp, link_state_t ls)
++{
++	mutex_enter(&ecmp->ecm_mutex);
++	if (ecmp->ecm_stat.es_linkstate == ls) {
++		mutex_exit(&ecmp->ecm_mutex);
++		return;
++	}
++	ecmp->ecm_stat.es_linkstate = ls;
++	mutex_exit(&ecmp->ecm_mutex);
++	mac_link_update(ecmp->ecm_mh, ls);
++}
++
++static void
++usbecm_link_down(usbecm_state_t *ecmp)
++{
++	usbecm_link_set(ecmp, LINK_STATE_DOWN);
++}
++
++static void
++usbecm_link_up(usbecm_state_t *ecmp)
++{
++	usbecm_link_set(ecmp, LINK_STATE_UP);
++}
++
++/*
+  * usbecm_restore_device_state:
+  *	restore device state after CPR resume or reconnect
+  */
+@@ -1727,6 +1757,7 @@
+ usbecm_restore_device_state(usbecm_state_t *ecmp)
+ {
+ 	int	state;
++	boolean_t	started;
+ 
+ 	USB_DPRINTF_L4(PRINT_MASK_EVENTS, ecmp->ecm_lh,
+ 	    "usbecm_restore_device_state: ");
+@@ -1784,8 +1815,17 @@
+ 	 */
+ 	mutex_enter(&ecmp->ecm_mutex);
+ 	state = ecmp->ecm_dev_state = USB_DEV_ONLINE;
++	started = (ecmp->ecm_mac_state == USBECM_MAC_STARTED);
+ 	mutex_exit(&ecmp->ecm_mutex);
+ 
++	/*
++	 * Reconnected with the MAC started: the link is usable again, as
++	 * usbecm_m_start reports it (ECM gives the host no way to ask; a device
++	 * that has lost carrier will say so through its notification pipe).
++	 */
++	if (started)
++		usbecm_link_up(ecmp);
++
+ 	return (state);
+ }
+ 
+@@ -1849,6 +1889,15 @@
+ 
+ 	usb_release_access(ecmp->ecm_ser_acc);
+ 
++	/*
++	 * The device is gone, so the link is down. Without this the MAC layer
++	 * keeps the link UP, IP keeps IFF_RUNNING, and dhcpagent keeps this
++	 * interface's routes, so traffic goes on being sent to a cable that is
++	 * no longer there instead of moving to another interface. usbgem's
++	 * disconnect path (usbgem_mac_stop) and m_stop here do the same.
++	 */
++	usbecm_link_down(ecmp);
++
+ 	USB_DPRINTF_L4(PRINT_MASK_EVENTS, ecmp->ecm_lh,
+ 	    "usbecm_disconnect_event_cb: End");
+ 

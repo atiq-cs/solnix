@@ -1,0 +1,10 @@
+$mapfile_version 2
+# ihid exports only what krtld needs; dwiic_xfer (drv/dwiic) and hidparser_* (misc/hidparser) are imports.
+SYMBOL_SCOPE {
+	global:
+		_init;
+		_fini;
+		_info;
+	local:
+		*;
+};

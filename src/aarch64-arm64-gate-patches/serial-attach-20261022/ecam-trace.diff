@@ -1,0 +1,29 @@
+--- t2/ecam.c.orig	2026-10-22 13:03:46.006824773 -0400
++++ t2/g/usr/src/uts/aarch64/io/pciex/ecam/ecam.c	2026-10-22 13:03:46.031677841 -0400
+@@ -39,6 +39,7 @@
+ extern volatile uint64_t aa_ot_esr;
+ extern volatile uintptr_t aa_ot_far;
+ extern volatile uint32_t aa_ot_count;
++#define	AA_TRACE_MAX	2048
+ static uint32_t aa_ecam_n, aa_ecam_rec;
+ static hrtime_t aa_ecam_t0, aa_ecam_maxns;
+ 
+@@ -167,8 +168,18 @@
+ 		    PCI_CFGACC_BUS(req), PCI_CFGACC_DEV(req),
+ 		    PCI_CFGACC_FUNC(req), req->offset);
+ 	}
++	if (aa_ecam_n < AA_TRACE_MAX) {
++		cmn_err(CE_CONT, "[E>%u %x:%x.%x r=%x s=%d w=%d]\n", aa_ecam_n,
++		    PCI_CFGACC_BUS(req), PCI_CFGACC_DEV(req),
++		    PCI_CFGACC_FUNC(req), req->offset, (int)req->size,
++		    (int)req->write);
++	}
+ 	ecam_cfgspace_acc_impl(req);
+ 	d = gethrtime() - t;
++	if (aa_ecam_n < AA_TRACE_MAX) {
++		cmn_err(CE_CONT, "[E<%u v=%llx us=%lld]\n", aa_ecam_n,
++		    (u_longlong_t)VAL64(req), (longlong_t)(d / 1000));
++	}
+ 	if (aa_ecam_n == 0)
+ 		aa_ecam_t0 = t;
+ 	if (d > aa_ecam_maxns)

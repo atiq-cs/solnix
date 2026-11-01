@@ -240,3 +240,23 @@ the script is described at the top of this file) on the new illumos-userland,
 illumos-kernel and illumos-stock-etc-var. Each must report `GATE PASS`, and the
 world's `.world/ldd-bad` must be empty or contain only an explicit, reviewed
 allowUnresolved list.
+
+## gcc-14.3.0 main output: shared libs under $out/lib carry no RUNPATH (found 2026-10-23, cache2 gate)
+
+The `lib` output (gcc-14.3.0-lib, w00yl57k) is correct: its libstdc++, libgcc_s and libatomic get
+`RUNPATH $lib/lib/amd64:<libc>` (gcc-src.nix) and pass the publish gate. The MAIN output (1n24r6d3) keeps its own
+copies under `$out/lib{,/amd64}` with no RUNPATH: `ldd libatomic.so.1.2.0` -> `libgcc_s.so.1 => (file not
+found)`. libcc1*/libcp1plugin carry RUNPATH /usr/gcc/14/lib/amd64 (the bootstrap compiler). Nothing links those
+copies (the cc wrapper points at the lib output), so it breaks no program, but it fails the gate, so gcc and
+gcc-wrapper are not offered to the cache. Fix at the source: in gcc-src.nix, run the same elfedit RUNPATH pass over
+`$out/lib{,/amd64}/*.so*` (and rewrite libcc1* to the store), then rebuild gcc (~1 h on c5.4xlarge).
+
+Update 2026-10-23: 631fb56 + the bin/libexec/plugin pass fixed the libatomic case and removed every /usr/gcc
+RUNPATH (gate on zw75zy5y: 0 ELFs name /usr/gcc; a copy-of-gcc test compiled and ran C and C++ hello). Two NEEDEDs
+still do not resolve inside the store, so the main output still fails the gate (the lib output w00yl57k/fi25qqrs and
+gcc-wrapper PASS, and they are what programs use):
+  - lib/gcc/*/plugin/libcc1plugin, libcp1plugin NEED libstdc++.so.6 + libgcc_s.so.1: RUNPATH should be
+    `$lib/lib/amd64:<libc>` (the lib output), not only libc;
+  - bin/* and libexec/* (gcc, cc1, ...) NEED libkstat.so.1, which is in illumos-libc-extra, not the libc slice:
+    their RUNPATH needs libcExtra's lib/amd64 too, so gcc-src.nix needs libcExtra as an input.
+Both are a one-line RUNPATH change each plus a gcc rebuild; do them when gcc itself is to be offered to the cache.

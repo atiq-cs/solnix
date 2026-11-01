@@ -140,10 +140,72 @@ sbi_probe_dbcn(void)
  * boot, secondary, or thread. (DBCN with a properly pinned/identity buffer is a
  * later console-driver concern; the NS16550A PLIC console replaces this in R-P6.)
  */
+/*
+ * rvsmp-c: one console LINE at a time across harts. A kernel line is several
+ * puts/kputdec calls, so a per-call lock still interleaves; the hart that
+ * prints a line's first char owns the console until it prints '\n'. Same hart
+ * re-enters (a trap printing mid-line). A line that never ends (a prompt, a
+ * thread moved mid-line) is stolen after CONS_STEAL time ticks.
+ * shortcut: owner is the hart not the thread, steal is time-bounded; upgrade
+ * to a per-thread line buffer if real-UART lines exceed the bound.
+ */
+#define	CONS_STEAL	1000000UL	/* 100 ms at qemu's 10 MHz timebase */
+static unsigned long cons_owner;	/* hart id + 1; 0 = free */
+
+/*
+ * tryit1: kcons_quiet silences the kernel's own console chatter (the boot log,
+ * the [fork]/[exec]/[elf]/[exit] trace, self-test reports) in the browser-demo
+ * build (-DSOLNIX_DEMO). Userland output goes through sbi_console_putchar_u and
+ * is never silenced; a kernel trap that parks a hart clears the flag first.
+ */
+#ifdef SOLNIX_DEMO
+volatile int kcons_quiet = 1;
+#else
+volatile int kcons_quiet = 0;
+#endif
+
 void
 sbi_console_putchar(int ch)
 {
+	if (!kcons_quiet)
+		sbi_console_putchar_u(ch);
+}
+
+/*
+ * tryit1: the console pair's output (pty.c pty_cons_poll, serialized there).
+ * No line lock: an echo must not wait out another hart's unfinished prompt line.
+ */
+void
+sbi_console_putraw(int ch)
+{
 	sbi_legacy_putchar(ch);
+}
+
+void
+sbi_console_putchar_u(int ch)
+{
+	unsigned long me, t0, t;
+
+	__asm__ __volatile__("mv %0, tp" : "=r"(me));
+	me++;
+	if (__atomic_load_n(&cons_owner, __ATOMIC_ACQUIRE) != me) {
+		__asm__ __volatile__("csrr %0, time" : "=r"(t0));
+		for (;;) {
+			unsigned long f = 0;
+
+			if (__atomic_compare_exchange_n(&cons_owner, &f, me, 0,
+			    __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
+				break;
+			__asm__ __volatile__("csrr %0, time" : "=r"(t));
+			if (t - t0 > CONS_STEAL) {
+				__atomic_store_n(&cons_owner, me, __ATOMIC_SEQ_CST);
+				break;
+			}
+		}
+	}
+	sbi_legacy_putchar(ch);
+	if (ch == '\n')
+		__atomic_store_n(&cons_owner, 0, __ATOMIC_RELEASE);
 }
 
 /*

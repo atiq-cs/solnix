@@ -1,6 +1,30 @@
 --- upstream/if_iwx.c
 +++ build/if_iwx_illumos.c
-@@ -4611,26 +4611,22 @@
+@@ -2061,8 +2061,10 @@
+ 			m_freem(data->m);
+ 			data->m = NULL;
+ 		}
+-		if (data->map != NULL)
++		if (data->map != NULL) {
+ 			bus_dmamap_destroy(sc->sc_dmat, data->map);
++			data->map = NULL;	/* ILLUMOS: free_{rx,tx}_ring runs twice on the error path */
++		}
+ 	}
+ }
+ 
+@@ -2222,8 +2224,10 @@
+ 			m_freem(data->m);
+ 			data->m = NULL;
+ 		}
+-		if (data->map != NULL)
++		if (data->map != NULL) {
+ 			bus_dmamap_destroy(sc->sc_dmat, data->map);
++			data->map = NULL;	/* ILLUMOS: free_{rx,tx}_ring runs twice on the error path */
++		}
+ 	}
+ }
+ 
+@@ -4611,26 +4615,25 @@
  	int err;
  	int fatal = 0;
  
@@ -9,10 +33,13 @@
 +	 * ILLUMOS: m_gethdr + MCLGET/MCLGETL + the (m_flags & M_EXT) test all
 +	 * collapse into one allocation that opens the whole cluster for writing,
 +	 * which is what "m->m_len = m->m_pkthdr.len = m->m_ext.ext_size" did.
-+	 * allocb() either returns a cluster of the requested size or fails, so
-+	 * there is no separate M_EXT case to test.
++	 * The RX descriptor stores one address and the map is nsegs == 1, so the
++	 * buffer must be physically contiguous: allocb() can straddle a page and
++	 * bind as two cookies (EFBIG, measured in iwm). iwm_dma_mblk_alloc()
++	 * returns DDI-contiguous memory.
 +	 */
-+	m = iwx_m_alloc(size <= MCLBYTES ? MCLBYTES : IWX_RBUF_SIZE);
++	m = iwm_dma_mblk_alloc(sc->sc_dmat,
++	    size <= MCLBYTES ? MCLBYTES : IWX_RBUF_SIZE);
  	if (m == NULL)
  		return ENOBUFS;
  
@@ -35,7 +62,7 @@
  	err = bus_dmamap_load_mbuf(sc->sc_dmat, data->map, m,
  	    BUS_DMA_READ|BUS_DMA_NOWAIT);
  	if (err) {
-@@ -5232,8 +5228,18 @@
+@@ -5232,8 +5235,18 @@
  		return;
  	}
  
@@ -56,7 +83,7 @@
  
  	/* Account for padding following the frame header. */
  	if (desc->mac_flags2 & IWX_RX_MPDU_MFLG2_PAD) {
-@@ -5261,7 +5267,18 @@
+@@ -5261,7 +5274,18 @@
  			hdrlen += IEEE80211_CCMP_HDRLEN;
  		}
  
@@ -76,7 +103,7 @@
  		m_adj(m, 2);
  	}
  
-@@ -5287,12 +5304,12 @@
+@@ -5287,12 +5311,12 @@
  		if (subframe_idx > 0)
  			rxi.rxi_flags |= IEEE80211_RXI_HWDEC_SAME_PN;
  		if (ieee80211_has_qos(wh) && ieee80211_has_addr4(wh) &&
@@ -91,17 +118,21 @@
  			struct ieee80211_qosframe *qwh = mtod(m,
  			    struct ieee80211_qosframe *);
  			qwh->i_qos[0] &= htole16(~IEEE80211_QOS_AMSDU);
-@@ -5878,7 +5895,8 @@
+@@ -5878,7 +5902,12 @@
  			err = EINVAL;
  			goto out;
  		}
 -		m = MCLGETL(NULL, M_DONTWAIT, totlen);
-+		/* ILLUMOS: MCLGETL(NULL, ...) is just an allocation. */
-+		m = iwx_m_alloc(totlen);
++		/*
++		 * ILLUMOS: MCLGETL(NULL, ...) is an allocation, but this buffer is
++		 * bus_dmamap_load'ed with nsegs 1 and the TFD uses dm_segs[0] only,
++		 * so it must be contiguous and single-cookie, as the RX refill.
++		 */
++		m = iwm_dma_mblk_alloc(sc->sc_dmat, totlen);
  		if (m == NULL) {
  			printf("%s: could not get fw cmd mbuf (%zd bytes)\n",
  			    DEVNAME(sc), totlen);
-@@ -6332,7 +6350,7 @@
+@@ -6332,7 +6361,7 @@
  	} else
  		flags |= IWX_TX_FLAGS_ENCRYPT_DIS;
  
@@ -110,7 +141,7 @@
  
  	offload_assist |= IWX_TX_CMD_OFFLD_MH_SIZE((hdrlen / 2) &
  	    IWX_TX_CMD_OFFLD_MH_MASK);
-@@ -6374,11 +6392,17 @@
+@@ -6374,11 +6403,17 @@
  		return err;
  	}
  	if (err) {
@@ -132,7 +163,7 @@
  		err = bus_dmamap_load_mbuf(sc->sc_dmat, data->map, m,
  		    BUS_DMA_NOWAIT | BUS_DMA_WRITE);
  		if (err) {
-@@ -10291,7 +10315,14 @@
+@@ -10291,7 +10326,14 @@
  		/* need to send management frames even if we're not RUNning */
  		m = mq_dequeue(&ic->ic_mgtq);
  		if (m) {
@@ -148,7 +179,7 @@
  			goto sendit;
  		}
  
-@@ -10302,7 +10333,7 @@
+@@ -10302,7 +10344,7 @@
  		m = ifq_dequeue(&ifp->if_snd);
  		if (!m)
  			break;
@@ -157,7 +188,7 @@
  		    (m = m_pullup(m, sizeof (*eh))) == NULL) {
  			ifp->if_oerrors++;
  			continue;
-@@ -10879,7 +10910,15 @@
+@@ -10879,7 +10921,15 @@
  
  	m0 = data->m;
  	while (m0 && offset + minsz < IWX_RBUF_SIZE) {
@@ -174,7 +205,7 @@
  		qid = pkt->hdr.qid;
  		idx = pkt->hdr.idx;
  
-@@ -10923,11 +10962,11 @@
+@@ -10923,11 +10973,11 @@
  			size_t maxlen = IWX_RBUF_SIZE - offset - minsz;
  			nextoff = offset +
  			    roundup(len, IWX_FH_RSCSR_FRAME_ALIGN);
@@ -188,7 +219,7 @@
  			    !iwx_rx_pkt_valid(nextpkt)) {
  				/* No need to copy last frame in buffer. */
  				if (offset > 0)
-@@ -10940,7 +10979,7 @@
+@@ -10940,7 +10990,7 @@
  				 * packet. Always copy from offset zero to
  				 * preserve m_pkthdr.
  				 */
@@ -197,7 +228,34 @@
  				if (m == NULL) {
  					ifp->if_ierrors++;
  					m_freem(m0);
-@@ -12760,14 +12799,28 @@
+@@ -12128,13 +12178,13 @@
+ 	/* Print version info and MAC address on first successful fw load. */
+ 	sc->attached = 1;
+ 	if (sc->sc_pnvm_ver) {
+-		printf("%s: hw rev 0x%x, fw %s, pnvm %08x, "
++		cmn_err(CE_CONT, "!%s: hw rev 0x%x, fw %s, pnvm %08x, "
+ 		    "address %s\n",
+ 		    DEVNAME(sc), sc->sc_hw_rev & IWX_CSR_HW_REV_TYPE_MSK,
+ 		    sc->sc_fwver, sc->sc_pnvm_ver,
+ 		    ether_sprintf(sc->sc_nvm.hw_addr));
+ 	} else {
+-		printf("%s: hw rev 0x%x, fw %s, address %s\n",
++		cmn_err(CE_CONT, "!%s: hw rev 0x%x, fw %s, address %s\n",
+ 		    DEVNAME(sc), sc->sc_hw_rev & IWX_CSR_HW_REV_TYPE_MSK,
+ 		    sc->sc_fwver, ether_sprintf(sc->sc_nvm.hw_addr));
+ 	}
+@@ -12363,7 +12413,9 @@
+ 		printf("\n");
+ 		return;
+ 	}
+-	printf(", %s\n", intrstr);
++	/* solnix: OpenBSD continues the autoconf attach line here; on illumos that is a
++	 * stray console line (", msi"). The interrupt type is in prtconf/intrstat. */
++	(void) intrstr;
+ 
+ 	/* Clear pending interrupts. */
+ 	IWX_WRITE(sc, IWX_CSR_INT_MASK, 0);
+@@ -12760,14 +12812,28 @@
  {
  	struct iwx_softc *sc = arg1;
  	struct ifnet *ifp = &sc->sc_ic.ic_if;
@@ -230,7 +288,7 @@
  		return;
  	}
  
-@@ -12779,8 +12832,8 @@
+@@ -12779,8 +12845,8 @@
  	if (!fatal && (ifp->if_flags & (IFF_UP | IFF_RUNNING)) == IFF_UP)
  		iwx_init(ifp);
  

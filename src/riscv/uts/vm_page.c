@@ -34,6 +34,8 @@
 
 /* From hat_riscv.c: the physical bump watermark bounds (post kernel + PTs). */
 extern unsigned long hat_phys_watermark(void);
+extern int hat_phys_identity(unsigned long pa);
+extern unsigned long hat_peek_highva(unsigned long pa, unsigned long off);
 
 /* From startup.c helpers: decimal/hex console (shared, avoid duplicating). */
 extern void kputdec(unsigned long v);
@@ -83,17 +85,28 @@ page_lock_exit(void)
 }
 
 /*
- * page_init — build the page_t array + free list over [rambase,ramend) that
- * lies above the boot bump watermark. Called from startup() with the DTB-
- * reported RAM extent. The page_t array is self-hosted at the front of the
- * managed region; the rest is freed onto the list.
+ * page_init — build the page_t array + free list over [rambase, rambase +
+ * ramsize) above the boot bump watermark: all of DRAM the DTB reports (rvsrv;
+ * it used to stop at the end of the kernel's boot gigapage). The page_t array
+ * is self-hosted at the front of the managed region. A page is freed only if
+ * it is identity-mapped in every address space (hat_phys_identity: not in a
+ * user slot) and not inside one of the `nrsv` firmware-reserved ranges
+ * (rsvbase/rsvsize: the DTB, its reservation block, /reserved-memory).
+ *
+ * The free count is then checked two ways, independently: arithmetic (DTB
+ * size minus every class of page not freed, each printed) and a walk of the
+ * free list. Both must equal nfree exactly; the bound is 0 pages.
  */
 void
-page_init(unsigned long rambase, unsigned long ramsize)
+page_init(unsigned long rambase, unsigned long ramsize,
+    const unsigned long *rsvbase, const unsigned long *rsvsize, int nrsv)
 {
 	unsigned long ramend = rambase + ramsize;
 	unsigned long mstart = hat_phys_watermark();	/* first free PA */
-	unsigned long mpages, arraybytes, arraypages, i;
+	unsigned long mpages, arraybytes, arraypages, i, run;
+	unsigned long nhole = 0, nrsvd = 0, nwalk = 0, below, beyond, expect;
+	page_t *pp;
+	int r;
 
 	/* Managed region: [mstart, ramend), page-aligned. */
 	mstart = (mstart + PAGESIZE - 1) & ~(PAGESIZE - 1);
@@ -106,6 +119,28 @@ page_init(unsigned long rambase, unsigned long ramsize)
 
 	mpages = (ramend - mstart) >> PAGESHIFT;
 
+	/*
+	 * The array is written through VA==PA, so it must fit in the identity
+	 * run that starts at mstart (to the next hole). shortcut: on qemu virt
+	 * that run is the kernel gigapage, ~1 GiB of page_t = ~170 GiB of RAM;
+	 * past that the managed extent is cut, as printed. A sparse/per-range
+	 * page_t (memseg) lifts it.
+	 */
+	for (run = mstart; run < ramend && hat_phys_identity(run);
+	    run = (run | (GIGASIZE - 1)) + 1)
+		;
+	if (run > ramend)
+		run = ramend;
+	if (mpages * sizeof (page_t) > run - mstart) {
+		mpages = (run - mstart) / (sizeof (page_t) + PAGESIZE) *
+		    (PAGESIZE / sizeof (page_t));
+		sbi_console_puts("[page] page_t array capped by the identity run"
+		    " at the kernel: managing only ");
+		kputdec(mpages);
+		sbi_console_puts(" frames\n");
+		ramend = mstart + (mpages << PAGESHIFT);
+	}
+
 	/* Reserve the front pages of the region for the page_t array itself. */
 	arraybytes = mpages * sizeof (page_t);
 	arraypages = (arraybytes + PAGESIZE - 1) >> PAGESHIFT;
@@ -115,23 +150,58 @@ page_init(unsigned long rambase, unsigned long ramsize)
 	npages = mpages;
 	page_base_pfn = mstart >> PAGESHIFT;
 
-	/* Initialize every descriptor; array pages start allocated (reserved). */
+	/*
+	 * Pass 1: every descriptor; a page after the array that is identity in
+	 * every AS is a free candidate, any other is a hole (stays allocated).
+	 */
 	for (i = 0; i < npages; i++) {
 		pages[i].p_pfn = page_base_pfn + i;
 		pages[i].p_next = 0;
-		pages[i].p_state = PAGE_ALLOC;
 		pages[i].p_ref = 0;
+		if (i >= arraypages &&
+		    hat_phys_identity((page_base_pfn + i) << PAGESHIFT)) {
+			pages[i].p_state = PAGE_FREE;
+		} else {
+			pages[i].p_state = PAGE_ALLOC;
+			if (i >= arraypages)
+				nhole++;
+		}
 	}
 
-	/* Free every page after the reserved array region onto the list. */
+	/* Pass 2: firmware-reserved ranges inside the managed region. */
+	for (r = 0; r < nrsv; r++) {
+		unsigned long b = rsvbase[r] & ~(PAGESIZE - 1);
+		unsigned long e = (rsvbase[r] + rsvsize[r] + PAGESIZE - 1) &
+		    ~(PAGESIZE - 1);
+		unsigned long pa;
+
+		if (e <= mstart || b >= ramend)
+			continue;
+		if (b < mstart)
+			b = mstart;
+		if (e > ramend)
+			e = ramend;
+		for (pa = b; pa < e; pa += PAGESIZE) {
+			pp = &pages[(pa >> PAGESHIFT) - page_base_pfn];
+			if (pp->p_state == PAGE_FREE) {
+				pp->p_state = PAGE_ALLOC;
+				nrsvd++;
+			}
+		}
+	}
+
+	/* Pass 3: thread the free list (LIFO: the highest page is popped first). */
 	page_freelist = 0;
 	nfree = 0;
 	for (i = arraypages; i < npages; i++) {
-		pages[i].p_state = PAGE_FREE;
+		if (pages[i].p_state != PAGE_FREE)
+			continue;
 		pages[i].p_next = page_freelist;
 		page_freelist = &pages[i];
 		nfree++;
 	}
+	for (pp = page_freelist; pp != 0; pp = pp->p_next)
+		nwalk++;
 
 	physmem = npages;
 
@@ -146,9 +216,115 @@ page_init(unsigned long rambase, unsigned long ramsize)
 	sbi_console_puts("..");
 	kputhex(ramend);
 	sbi_console_puts(")\n");
+
+	below = (mstart - rambase) >> PAGESHIFT;
+	beyond = ((rambase + ramsize) & ~(PAGESIZE - 1)) - ramend;
+	beyond >>= PAGESHIFT;
+	expect = (ramsize >> PAGESHIFT) - below - arraypages - nhole - nrsvd -
+	    beyond;
+	sbi_console_puts("[page] DTB RAM ");
+	kputdec(ramsize >> PAGESHIFT);
+	sbi_console_puts(" pages = free ");
+	kputdec(expect);
+	sbi_console_puts(" + firmware/kernel/boot-PT below the watermark ");
+	kputdec(below);
+	sbi_console_puts(" + page_t ");
+	kputdec(arraypages);
+	sbi_console_puts(" + user-slot hole ");
+	kputdec(nhole);
+	sbi_console_puts(" + fw-reserved ");
+	kputdec(nrsvd);
+	sbi_console_puts(" + unmanaged ");
+	kputdec(beyond);
+	sbi_console_puts("\n");
 	sbi_console_puts("[page] free list: ");
 	kputdec(nfree);
-	sbi_console_puts(" pages available\n");
+	sbi_console_puts(" pages available (list walk ");
+	kputdec(nwalk);
+	sbi_console_puts(", expected ");
+	kputdec(expect);
+	sbi_console_puts(nfree == expect && nwalk == nfree ?
+	    "; EXACT, bound 0 pages)\n" : "; MISMATCH)\n");
+}
+
+/*
+ * page_highram_selftest — rvsrv: prove RAM above 4 GiB is real, distinct
+ * memory. One free page per GiB above 4 GiB (at an offset that varies by GiB),
+ * 512 words each of a PA-unique pattern, written through the identity map;
+ * then every word read back through the identity map, and two words per page
+ * through a fresh KERNELBASE mapping of that PA (an independent page-table
+ * walk). Runs single-hart, before anything allocates (the secondaries are
+ * parked on smp_dispatch_ready), so borrowing free pages is safe; page_alloc
+ * zeroes them on hand-out. A build that mapped every high GiB onto one PA made
+ * this report FAIL (docs/riscv64-server-2026-10-24.md).
+ */
+#define	HIGHRAM_SIG	0x4849474852414d00UL	/* "HIGHRAM\0" */
+
+void
+page_highram_selftest(void)
+{
+	unsigned long lim = (page_base_pfn + npages) << PAGESHIFT;
+	unsigned long g, pa, i, tested = 0, bad = 0, first = 0, last = 0;
+	int pass;
+
+	for (pass = 0; pass < 2; pass++) {
+		for (g = 4; (g << GIGASHIFT) < lim; g++) {
+			unsigned long pfn, *w;
+
+			pa = (g << GIGASHIFT) + ((g * 37) % 0x3fff + 1) * PAGESIZE;
+			pfn = pa >> PAGESHIFT;
+			if (pfn < page_base_pfn || pfn >= page_base_pfn + npages ||
+			    pages[pfn - page_base_pfn].p_state != PAGE_FREE)
+				continue;
+			w = (unsigned long *)pa;
+			if (pass == 0) {
+				for (i = 0; i < PAGESIZE / sizeof (long); i++)
+					w[i] = pa ^ (i * 0x9e3779b97f4a7c15UL) ^
+					    HIGHRAM_SIG;
+				tested++;
+				if (first == 0)
+					first = pa;
+				last = pa;
+				continue;
+			}
+			for (i = 0; i < PAGESIZE / sizeof (long); i++)
+				if (w[i] != (pa ^ (i * 0x9e3779b97f4a7c15UL) ^
+				    HIGHRAM_SIG))
+					break;
+			if (i != PAGESIZE / sizeof (long) ||
+			    hat_peek_highva(pa, 0) != (pa ^ HIGHRAM_SIG) ||
+			    hat_peek_highva(pa, PAGESIZE - 8) != (pa ^
+			    (511 * 0x9e3779b97f4a7c15UL) ^ HIGHRAM_SIG)) {
+				if (bad == 0) {
+					sbi_console_puts("[page] high-RAM: "
+					    "readback MISMATCH at PA ");
+					kputhex(pa);
+					sbi_console_puts("\n");
+				}
+				bad++;
+			}
+		}
+	}
+	if (tested == 0) {
+		sbi_console_puts("[page] high-RAM self-test: skipped "
+		    "(no managed RAM above 4 GiB)\n");
+		return;
+	}
+	sbi_console_puts("[page] high-RAM self-test: ");
+	kputdec(tested);
+	sbi_console_puts(" pages above 4 GiB (one per GiB, PA ");
+	kputhex(first);
+	sbi_console_puts(" .. ");
+	kputhex(last);
+	sbi_console_puts("), 4 KiB each written via identity, read back via "
+	    "identity + KERNELBASE kmap: ");
+	if (bad == 0) {
+		sbi_console_puts("OK\n");
+	} else {
+		sbi_console_puts("FAIL (");
+		kputdec(bad);
+		sbi_console_puts(" bad)\n");
+	}
 }
 
 /*

@@ -1,0 +1,56 @@
+--- /scratch/solnix/aa64/t2/ecam.c.orig	2026-10-22 13:03:46.006824773 -0400
++++ tm/g/usr/src/uts/aarch64/io/pciex/ecam/ecam.c	2026-10-22 23:30:46.324757432 -0400
+@@ -39,7 +39,10 @@
+ extern volatile uint64_t aa_ot_esr;
+ extern volatile uintptr_t aa_ot_far;
+ extern volatile uint32_t aa_ot_count;
++#define	AA_TRACE_MAX	2048
+ static uint32_t aa_ecam_n, aa_ecam_rec;
++static uint32_t aa_ecam_mute;
++static uint16_t aa_ecam_mute_bdf;
+ static hrtime_t aa_ecam_t0, aa_ecam_maxns;
+ 
+ static void
+@@ -167,13 +170,41 @@
+ 		    PCI_CFGACC_BUS(req), PCI_CFGACC_DEV(req),
+ 		    PCI_CFGACC_FUNC(req), req->offset);
+ 	}
++	if (aa_ecam_mute != 0 && req->bdf != aa_ecam_mute_bdf) {
++		cmn_err(CE_CONT, "[E~ muted %u %x]\n", aa_ecam_mute,
++		    aa_ecam_mute_bdf);
++		aa_ecam_mute = 0;
++	}
++	if (aa_ecam_n < AA_TRACE_MAX && aa_ecam_mute == 0) {
++		cmn_err(CE_CONT, "[E>%u %x:%x.%x r=%x s=%d w=%d]\n", aa_ecam_n,
++		    PCI_CFGACC_BUS(req), PCI_CFGACC_DEV(req),
++		    PCI_CFGACC_FUNC(req), req->offset, (int)req->size,
++		    (int)req->write);
++	}
+ 	ecam_cfgspace_acc_impl(req);
+ 	d = gethrtime() - t;
++	if (req->write && req->offset == PCI_CONF_COMM) {
++		if ((VAL16(req) & PCI_COMM_MAE) == 0) {
++			aa_ecam_mute_bdf = req->bdf;
++			aa_ecam_mute = 1;
++		} else if (aa_ecam_mute != 0) {
++			cmn_err(CE_CONT, "[E~ muted %u %x]\n", aa_ecam_mute,
++			    aa_ecam_mute_bdf);
++			aa_ecam_mute = 0;
++		}
++	} else if (aa_ecam_mute != 0) {
++		aa_ecam_mute++;
++	}
++	if (aa_ecam_n < AA_TRACE_MAX && aa_ecam_mute == 0) {
++		cmn_err(CE_CONT, "[E<%u v=%llx us=%lld]\n", aa_ecam_n,
++		    (u_longlong_t)VAL64(req), (longlong_t)(d / 1000));
++	}
+ 	if (aa_ecam_n == 0)
+ 		aa_ecam_t0 = t;
+ 	if (d > aa_ecam_maxns)
+ 		aa_ecam_maxns = d;
+-	if ((++aa_ecam_n & 1023) == 0 || aa_ecam_n == 1) {
++	if (((++aa_ecam_n & 1023) == 0 || aa_ecam_n == 1) &&
++	    aa_ecam_mute == 0) {
+ 		cmn_err(CE_CONT, "[AAECAM] n=%u ms=%lld maxus=%lld rec=%u "
+ 		    "otc=%u last=%x:%x.%x\n", aa_ecam_n,
+ 		    (longlong_t)((t - aa_ecam_t0) / 1000000),

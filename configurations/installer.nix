@@ -44,6 +44,10 @@ let
   liveMethods = pkgs.runCommand "solnix-live-methods" { } ''
     /sbin/sh ${../scripts/live/mk-live-methods.sh} ${live.world} $out
   '';
+  # The live root's writable store: a tmpfs upper with the ramdisk's store paths
+  # lofs-mounted into it read-only (NixOS: /nix/.rw-store + overlay). Run from
+  # inittab, which make-installer-image.sh points at share/solnix/live-store.
+  liveStore = pkgs.writeScript "solnix-live-store" (builtins.readFile ../scripts/live/solnix-live-store);
   # /run/current-system/sw/bin carries these by name, like any systemPackage.
   liveTools = pkgs.runCommand "solnix-live-tools" { } ''
     mkdir -p $out/bin
@@ -65,6 +69,7 @@ let
     done
     mkdir -p $out/share/solnix
     ln -s ${liveMethods} $out/share/solnix/live-methods
+    ln -s ${liveStore} $out/share/solnix/live-store
     # /root/README on the media (make-installer-image.sh copies it there).
     ln -s ${readme} $out/share/solnix/README
   '';
@@ -79,6 +84,21 @@ in
   imports = [ ./base.nix ];
 
   networking.hostName = "solnix-installer";
+
+  # Both Intel wifi drivers on the media (iwm: AC 7260-9560, the X1; iwx:
+  # AX210/AX211, the X1E) with their firmware in the kernel tree, but bound to
+  # NO device at boot: neither has a proven attach on that silicon, and a panic
+  # at boot would make the media unusable. Bind at run time with one command
+  # (docs/x1e-wifi-runtime-bind.md), e.g. update_drv -a -i '"pciex8086,51f0"' iwx.
+  hardware.wirelessIntel.onMedia = true;
+
+  # The GPU drivers on the media the same way: i915 (the X1E's Iris Xe, the X1's
+  # UHD 630) and the NVIDIA open modules (the X1E's RTX 3080 Ti) have a major
+  # and minor_perm but no alias, so the console stays on vgatext and nothing
+  # attaches at boot. Load-test them at run time (docs/x1e-gpu-runtime-bind.md).
+  # The GSP firmware is unfree, so it is not on the media: an nvidia attach
+  # needs hardware.graphics.nvidia.acceptFirmwareLicense in a later image.
+  hardware.graphics.onMedia = true;
 
   # The edition this media ships (same pin as cloud-ec2.nix); without it the
   # release label falls back to "unstable" and /etc/release misreports the image.
@@ -140,15 +160,16 @@ in
     # close in the media's from-source store like everything else here. Each
     # ships its own man page under share/man (worldMan carries the base pages),
     # so `man wget`, `man tree`, `man top`, `man htop`, `man less`, `man vi` work
-    # through the system MANPATH. (BSD fetch is NOT yet packaged -- curl + wget
-    # cover the fetch-a-file need; nvi is deferred -- see the report in /tmp. The
-    # gate's POSIX vi (live.vi) is the shipped vi.)
-    live.vi
+    # through the system MANPATH, and `man fetch` (bsdfetch, FreeBSD fetch(1)).
+    # nvi (nvi2) is the shipped vi: live.nvi carries
+    # bin/nvi plus vi/ex/view links to it.
+    live.nvi
     live.top
     live.htop
     live.less
     live.tree
     live.wget
+    live.bsdfetch
     # The build toolchain, so the booted installer/system can rebuild solnix
     # packages on the image (the "build host in the image" capability): gcc
     # 14.3.0 + gas (binutils) + GNU make + pkg-config, all real from-source
@@ -185,8 +206,14 @@ in
 
   # sshd runs on the media with root login allowed, as NixOS's installation-device
   # profile sets (services.openssh.enable, settings.PermitRootLogin = "yes"). Nobody
-  # can log in until root has a password or a key: the media bakes neither, and
-  # `solnix-install --ssh` sets one and prints it.
+  # can log in until root has a password or a key: the media bakes neither. On the
+  # LIVE root it is not started at boot (make-installer-image.sh disables it in the
+  # ramdisk's repository; an installed system keeps it on): solnix-live starts it
+  # once solnix-autonet has a DHCP lease (`solnix-install --sshd-now`), which sets a
+  # random one-time root password and prints it with the address on the console,
+  # above the login prompt and in the motd. A key in the stick's ESP at
+  # /solnix/authorized_keys is installed for root too. Before that, port 22 is
+  # closed. `solnix-install --ssh` does the same by hand.
   environment.generatedEtc."ssh/sshd_config" = lib.mkForce ''
     UsePAM yes
     KbdInteractiveAuthentication yes
@@ -234,6 +261,23 @@ in
   # media's store is fixed, and the installer writes to the target pool's store.
   nix.settings.min-free = 0;
   nix.settings.max-free = 0;
+
+  # CPU power management on the media (svc:/system/power is on: solnix.
+  # powerManagement.enable). The stock power.conf has `cpupm enable` (cpupm_default_
+  # mode = event: the kernel's elastic P-state policy, falling back to polling where
+  # PAD is unavailable, pm.c) and leaves autoS3 / autoshutdown at "default"; on a
+  # laptop that answers estar_v2/v3 the default may suspend or power off an idle
+  # machine. A live installer must never do that, so both are pinned off here.
+  # speedstep (P-states via _PSS + IA32_PERF_CTL) supports family 6 model >= 0xe
+  # with CPUID EST, i.e. Alder Lake too (speedstep.c speedstep_supported).
+  environment.generatedEtc."power.conf" = ''
+    device-dependency-property removable-media /dev/fb
+    autopm                  default
+    autoS3                  disable
+    autoshutdown            30 9:00 9:00 noshutdown
+    cpupm                   enable
+    cpu-threshold           1s
+  '';
 
   # The live root is a RAM ramdisk: cap the ARC so the target's bootadm/digest
   # always has memory (measured: an uncapped ARC OOM-killed digest on install).

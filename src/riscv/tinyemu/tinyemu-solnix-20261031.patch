@@ -1,0 +1,156 @@
+diff -ruN tinyemu-solnix/build-wasm.sh tinyemu-solnix/build-wasm.sh
+--- tinyemu-solnix/build-wasm.sh
++++ tinyemu-solnix/build-wasm.sh
+@@ -11,8 +11,10 @@
+ #   3. sh build-wasm.sh
+ #   4. copy js/riscvemu64-wasm.js + js/riscvemu64-wasm.wasm into <bundle>/emu/
+ #
+-# Produces: js/riscvemu64-wasm.js and js/riscvemu64-wasm.wasm
++# Produces: js/$OUT.js and js/$OUT.wasm (OUT defaults to riscvemu64-wasm; give each
++# published bundle a new OUT, because solnix.io caches /tryit/emu/ for a week)
+ set -e
++OUT=${OUT:-riscvemu64-wasm}
+ 
+ EMCC=${EMCC:-emcc}
+ command -v "$EMCC" >/dev/null 2>&1 || { echo "emcc not found; source emsdk_env.sh"; exit 1; }
+@@ -47,9 +49,9 @@
+   -s MODULARIZE=0 \
+   --js-library emu/lib.js"
+ 
+-echo "  LD   js/riscvemu64-wasm.js"
+-"$EMCC" $LDFLAGS -o js/riscvemu64-wasm.js $OBJ_FILES
++echo "  LD   js/$OUT.js"
++"$EMCC" $LDFLAGS -o js/$OUT.js $OBJ_FILES
+ 
+ echo
+ echo "Done. Copy into the bundle:"
+-echo "  cp js/riscvemu64-wasm.js js/riscvemu64-wasm.wasm <bundle>/emu/"
++echo "  cp js/$OUT.js js/$OUT.wasm <bundle>/emu/"
+diff -ruN tinyemu-solnix/riscv_machine.c tinyemu-solnix/riscv_machine.c
+--- tinyemu-solnix/riscv_machine.c
++++ tinyemu-solnix/riscv_machine.c
+@@ -52,6 +52,8 @@
+     uint64_t timecmp;
+     /* PLIC */
+     uint32_t plic_pending_irq, plic_served_irq;
++    /* hart0 contexts 0 (M) and 1 (S): enable bitmap, threshold; per-source priority */
++    uint32_t plic_enable[2], plic_threshold[2], plic_priority[32];
+     IRQSignal plic_irq[32]; /* IRQ 0 is not used */
+     /* HTIF */
+     uint64_t htif_tohost, htif_fromhost;
+@@ -349,16 +351,31 @@
+     }
+ }
+ 
++/* Deliver only sources the context enabled with priority > its threshold (as
++   qemu-virt does): a guest that polls a virtio queue and never enables its
++   source must not get an interrupt storm. */
++static uint32_t plic_ctx_mask(RISCVMachine *s, int ctx)
++{
++    uint32_t mask = s->plic_pending_irq & ~s->plic_served_irq & s->plic_enable[ctx];
++    uint32_t m = 0;
++    int i;
++    for (i = 0; i < 32; i++)
++        if ((mask >> i & 1) && s->plic_priority[i] > s->plic_threshold[ctx])
++            m |= 1u << i;
++    return m;
++}
++
+ static void plic_update_mip(RISCVMachine *s)
+ {
+     RISCVCPUState *cpu = s->cpu_state;
+-    uint32_t mask;
+-    mask = s->plic_pending_irq & ~s->plic_served_irq;
+-    if (mask) {
+-        riscv_cpu_set_mip(cpu, MIP_MEIP | MIP_SEIP);
+-    } else {
+-        riscv_cpu_reset_mip(cpu, MIP_MEIP | MIP_SEIP);
+-    }
++    if (plic_ctx_mask(s, 0))
++        riscv_cpu_set_mip(cpu, MIP_MEIP);
++    else
++        riscv_cpu_reset_mip(cpu, MIP_MEIP);
++    if (plic_ctx_mask(s, 1))
++        riscv_cpu_set_mip(cpu, MIP_SEIP);
++    else
++        riscv_cpu_reset_mip(cpu, MIP_SEIP);
+ }
+ 
+ #define PLIC_HART_BASE 0x200000
+@@ -368,16 +385,23 @@
+ {
+     RISCVMachine *s = opaque;
+     uint32_t val, mask;
+-    int i;
++    int i, ctx;
+     assert(size_log2 == 2);
++    /* source i+1 is bit i (plic_set_irq numbering) */
++    if (offset >= 4 && offset < 4 * 33)
++        return s->plic_priority[offset / 4 - 1];
++    if (offset == 0x2000 || offset == 0x2080) {
++        ctx = (offset - 0x2000) / 0x80;
++        return s->plic_enable[ctx] << 1;
++    }
+     switch(offset) {
+     case PLIC_HART_BASE:              /* hart0 M threshold */
+     case PLIC_HART_BASE + 0x1000:     /* hart0 S threshold */
+-        val = 0;
++        val = s->plic_threshold[(offset - PLIC_HART_BASE) / 0x1000];
+         break;
+     case PLIC_HART_BASE + 4:          /* hart0 M claim */
+     case PLIC_HART_BASE + 0x1000 + 4: /* hart0 S claim */
+-        mask = s->plic_pending_irq & ~s->plic_served_irq;
++        mask = plic_ctx_mask(s, (offset - PLIC_HART_BASE) / 0x1000);
+         if (mask != 0) {
+             i = ctz32(mask);
+             s->plic_served_irq |= 1 << i;
+@@ -400,7 +424,22 @@
+     RISCVMachine *s = opaque;
+     
+     assert(size_log2 == 2);
++    if (offset >= 4 && offset < 4 * 33) {
++        s->plic_priority[offset / 4 - 1] = val & 7;
++        plic_update_mip(s);
++        return;
++    }
++    if (offset == 0x2000 || offset == 0x2080) {
++        s->plic_enable[(offset - 0x2000) / 0x80] = val >> 1;
++        plic_update_mip(s);
++        return;
++    }
+     switch(offset) {
++    case PLIC_HART_BASE:              /* hart0 M threshold */
++    case PLIC_HART_BASE + 0x1000:     /* hart0 S threshold */
++        s->plic_threshold[(offset - PLIC_HART_BASE) / 0x1000] = val & 7;
++        plic_update_mip(s);
++        break;
+     case PLIC_HART_BASE + 4:          /* hart0 M complete */
+     case PLIC_HART_BASE + 0x1000 + 4: /* hart0 S complete */
+         val--;
+diff -ruN tinyemu-solnix/virtio.c tinyemu-solnix/virtio.c
+--- tinyemu-solnix/virtio.c
++++ tinyemu-solnix/virtio.c
+@@ -1083,6 +1083,12 @@
+     case VIRTIO_BLK_T_IN:
+         s1->req.buf = malloc(write_size);
+         s1->req.write_size = write_size;
++        /* past the end of the device -> IOERR, as qemu does (guests probe the
++           disk size by reading until a read fails) */
++        if (h.sector_num + (write_size - 1) / SECTOR_SIZE > bs->get_sector_count(bs)) {
++            virtio_block_req_end(s, -1);
++            break;
++        }
+         ret = bs->read_async(bs, h.sector_num, s1->req.buf, 
+                              (write_size - 1) / SECTOR_SIZE,
+                              virtio_block_req_cb, s);
+@@ -1096,6 +1102,10 @@
+     case VIRTIO_BLK_T_OUT:
+         assert(write_size >= 1);
+         len = read_size - sizeof(h);
++        if (h.sector_num + len / SECTOR_SIZE > bs->get_sector_count(bs)) {
++            virtio_block_req_end(s, -1);
++            break;
++        }
+         buf = malloc(len);
+         memcpy_from_queue(s, buf, queue_idx, desc_idx, sizeof(h), len);
+         ret = bs->write_async(bs, h.sector_num, buf, len / SECTOR_SIZE,

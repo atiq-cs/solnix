@@ -1,0 +1,4 @@
+# defect 1 (fixed by rvsh): the only writer sits in the child's slot 1; close(1)+exit must release it -> parent EOF.
+# On the unfixed kernel (rvpkg) this boot hangs: control = same check vs ~/scratch/rvsh/unix-baseline.
+kpipe-leak|0|/bin/kpipeprobe|kpipeprobe|leak
+@kpipe-leak|kpipe leak: parent read 0 bytes then EOF

@@ -63,7 +63,9 @@ typedef struct bus_dma_segment {
 	ddi_acc_handle_t	ds_acc;
 } bus_dma_segment_t;
 
-#define IWX_DMA_MAX_SEGS	20	/* iwm: IWM_NUM_OF_TBS */
+#ifndef IWX_DMA_MAX_SEGS
+#define IWX_DMA_MAX_SEGS	20	/* iwm: IWM_NUM_OF_TBS; iwx builds set IWX_TFH_NUM_TBS */
+#endif
 
 typedef struct iwx_bus_dma_tag {
 	dev_info_t	*dt_dip;

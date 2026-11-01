@@ -1915,3 +1915,61 @@ BUILT this session (store 1193 -> 1837 paths): cmake-minimal, brotli, gdbm, gett
   the render swath (ninja/pixman/fontconfig/harfbuzz) -> glib -> gtk4 -> libadwaita -> the COSMIC apps.
 => BOTH blockers are SOLVED (the session's goal). The remaining path is the (now-unblocked) render/GUI
 cascade on a builder with adequate disk.
+
+## PS-X1E-WIFI: finish the AX211 (iwx) driver and ship it on all install media (maintainer-requested 2026-10-18)
+The X1E (lixi) has NO wired NIC and its internal wifi is an Intel AX211; it needs a USB-ethernet dongle to get
+online today. Do for the AX211 what was done for dixi's AC 9560 (iwm): a working in-tree driver, firmware banked
+permanently, and the module PRESENT on every install image. Maintainer's explicit ask: the driver must be present
+on all install media we create (available to bind), not an opt-in a downstream host config has to enable.
+
+State today (measured, src/ports/wifi/iwx/STATUS.md):
+- COMPILES + LINKS clean: iwx_mbuf.c (120 checks, 13/13 sabotages caught), if_iwx.c -> .o, full `ld -r` leaves 42
+  undefined and all 42 are kernel-supplied-at-load (0 non-kernel). The attach glue (_init/_info/_fini,
+  mac_register, DDI attach) is done in iwx_attach.c.
+- DOES NOT LOAD/ATTACH yet. The blocker is phase-3 locking: the coarse "hold sc_lock across each region" model is
+  REFUTED (deadlocks 3 ways incl. a net80211 ic_lock->sc_lock inversion vs the ISR's sc_lock->ic_lock). The
+  sc_lock + sc_cmd_cv scaffolding is in struct iwx_softc (patches/if_iwxvar.illumos.patch) but not yet load-bearing;
+  the FINE-GRAINED locking model is the real remaining work. This mirrors the iwm effort in size.
+- Three concrete gaps to "on the media and binding":
+  1. FINISH LOCKING so the module loads + attaches (the hard part; STATUS.md ROUND 7 + Session-5 have the map).
+  CAPTURED FROM lixi (live, Pop!_OS, 2026-10-18) -- the facts the wifi work starts from:
+     - device: PCI 8086:51f0 (Alder Lake-P PCH CNVi WiFi = AX211), subsystem 8086:0090.
+     - firmware family: iwlwifi-so-a0-gf-a0 (CORRECTED: ethtool -i on lixi shows Linux runs
+       so-a0-gf-a0-89.uc; iwx maps AX211/no-CDB -> so_gf_a0, and gf4 is the AX411/CDB pair). An earlier
+       note here said gf4, from reading a directory listing instead of the loaded firmware. iwx is api rev 77.
+  2. FIRMWARE: DONE (commit cd9983a). iwx-firmware.nix now pins the AX210 SO/TY GF family (gf + gf4 ucode + PNVM,
+     api rev 77) with real sha256s from linux-firmware 20241017, installs each under the exact iwx- name, and
+     builds (6 blobs, the X1E's gf pair asserted present). Banked off-account: floki /home/gburd/solnix-bank/firmware/
+     iwx-ax210-api77-20241017/ (SHA256SUMS + MANIFEST, read-back verified). WAS: hash = lib.fakeHash and is a nixpkgs stdenvNoCC
+     derivation that cannot eval on the illumos build host ("callPackage missing"). Make it a real pinned FOD
+     (like iwm-firmware.nix / iwx-firmware fetchurl), with the AX211 blobs (iwlwifi-so-a0-gf-a0 / ty-a0-gf-a0 /
+     cc-a0 at the api rev if_iwx.c:1229 verifies). Capture the AX211's exact model+api from lixi (lspci -nn: AX211
+     is 8086:51f0/51f1; the right ucode family comes from the device's cfg) and BANK the blob off-account (floki
+     /home/gburd/solnix-bank/firmware/ + the R2/B2 bank once the builder key exists), read-back verified -- same
+     durability rule as the AMIs, so the firmware is always available to every image build.
+  3. ALIASES: add the AX211 PCI id to the iwx driver_aliases (pkgs/illumos/data/gate-drivers.txt + gen) the way
+     iwm got "pciex8086,a370"; today only iwm's id is wired. mkIwxKernel/mkIwxDriversDb analogs of the iwm helpers
+     in pkgs/illumos/default.nix.
+- SHIP ON MEDIA (the design question the ask raises): the iwm module is OPT-IN today (attachAtBoot defaults false;
+  only dixi's host config enables it), so it is NOT on the installer media. To honor "present on all install media",
+  put the iwx MODULE (and its banked firmware) into the base kernel tree of every image so it is AVAILABLE, while
+  keeping ATTACH either auto-on-_HID/PCI-id-detect or a safe default-on. Decide attach policy explicitly; do the
+  same for iwm so both the X1 and X1E wifi are present on shipped media, not just on their owners' host configs.
+- This fits the per-platform-shim direction (PS-X1E-TZMON): detect the device by PCI id, bind the driver, load its
+  banked firmware -- all discovered at boot, present on the generic image.
+
+## PS-17: quiesce(9E) for the drivers lixi reboots with (fast reboot), 2026-10-31
+
+`reboot` on lixi prints "Not all drivers have implemented quiesce(9E)". /var/adm/messages names three, the same on every
+reboot since 10-30: **i915**, **xhci** (twice: two controllers) and **pchsmbus**. Without quiesce, fast reboot is refused and
+the machine takes the slow firmware path (illumos falls back automatically, so this costs boot time, not correctness).
+Each driver declares `devo_quiesce = ddi_quiesce_not_supported`:
+- **i915** (ours: src/drm-port/i915/i915_illumos.c:682). Quiesce = stop the display pipes and GT (no DMA, interrupts off) without
+  locks or allocation. OpenBSD's i915 has no equivalent; Linux's `i915_driver_shutdown` is the model (intel_display_driver
+  shutdown + GT suspend). The DRM port owns this one.
+- **xhci** (illumos-gate usr/src/uts/common/io/usb/hcd/xhci/xhci.c:2261). Quiesce = halt the controller (USBCMD.R/S = 0, wait
+  HCH) and reset it, the way ehci_quiesce does. A small upstream illumos change; send it upstream.
+- **pchsmbus** (illumos-gate usr/src/uts/common/io/i2c/ctrl/pchsmbus/pchsmbus.c:1292). Quiesce = disable the host
+  controller's interrupts and abort any transfer. Upstream illumos. lixi steering: don't change pchsmbus's behaviour without the
+  maintainer's OK; quiesce runs only at reboot, so ask before shipping it.
+Each with a check: `reboot -f` on lixi (fast reboot) completes instead of falling back, and the warning is gone for that driver.

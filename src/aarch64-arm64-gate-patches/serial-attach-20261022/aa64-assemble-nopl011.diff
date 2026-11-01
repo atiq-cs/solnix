@@ -1,0 +1,8 @@
+6c6
+< exec >/build/assemble.log 2>&1
+---
+> exec >/build/assemble-nopl011.log 2>&1
+56c56
+< cp $TABLES/aa-driver_aliases-pkgstyle.txt $IMGROOT/etc/driver_aliases
+---
+> cp $TABLES/aa-driver_aliases-nopl011.txt $IMGROOT/etc/driver_aliases

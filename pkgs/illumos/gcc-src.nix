@@ -29,14 +29,16 @@
 # and the libraries nothing here needs (sanitizers, gomp, itm, vtv) are dropped to
 # keep the build short.
 { gate                    # gate proto store path (the sysroot)
+, ld                      # the store link-editor slice (default.nix ld): collect2 runs $ld/usr/bin/ld
 , libcSlice               # pkgs.solnix.libc: RUNPATH target for libc/libm at run time
+, libcExtra               # base-src's illumos-libc-extra: libkstat.so.1, which the drivers NEED
 , stage0 ? "/usr/gcc/14"  # BUILD-TIME seed compiler (IPS developer/gcc-14)
 , system ? "x86_64-solaris"
 }:
 
 let
   version = "14.3.0";
-  fetch = url: sha256: builtins.fetchurl { inherit url sha256; };
+  fetch = url: sha256: import <nix/fetchurl.nix> { inherit url sha256; };
   gccSrc = fetch "https://mirrors.kernel.org/gnu/gcc/gcc-${version}/gcc-${version}.tar.xz"
     "e0dc77297625631ac8e50fa92fffefe899a4eb702592da5c32ef04e2293aca3a";
   gmpSrc = fetch "https://mirrors.kernel.org/gnu/gmp/gmp-6.3.0.tar.xz"
@@ -45,8 +47,7 @@ let
     "277807353a6726978996945af13e52829e3abd7a9a5b7fb2793894e18f1fcbb2";
   mpcSrc = fetch "https://mirrors.kernel.org/gnu/mpc/mpc-1.3.1.tar.gz"
     "ab642492f5cf882b74aa0cb730cd410a81edcdbec895183ce930e706c1c759b8";
-in
-derivation {
+  drvAttrs = {
   name = "gcc-${version}";
   inherit system gate stage0 gccSrc gmpSrc mpfrSrc mpcSrc version;
   # OpenIndiana/OmniOS gcc patch 0032: libstdc++ built with -D_TS_ERRNO so it
@@ -54,13 +55,21 @@ derivation {
   tsErrnoPatch = ./patches/gcc-14/0032-libstdc-must-use-thread-local-errno.patch;
   libcDir = "${libcSlice}/lib/amd64";
   libcDir32 = "${libcSlice}/lib";
+  libcExtraDir = "${libcExtra}/lib/amd64";
+  # The link-editor is a store path (NixOS: the linker is part of stdenv), not the host /usr/bin/ld: gcc passes
+  # -Qy, so every ELF records the ld version, which differed between OI (1793) and a solnix host (1791). repro2.
+  ldBin = "${ld}/usr/bin/ld";
+  SOURCE_DATE_EPOCH = "315532800";  # as NixOS stdenv: __DATE__/__TIME__ are the epoch, not the build day
   outputs = [ "out" "lib" ];
   builder = "/usr/bin/bash";
   PATH = "/usr/gnu/bin:/usr/bin:/usr/sbin";
   args = [ "-c" ''
     set -eu
     export PATH=/usr/gnu/bin:/usr/bin:/usr/sbin
-    W=$(mktemp -d /var/tmp/gccsrc.XXXXXX); cd "$W"
+    # Fixed build dir (as mk-src-pkg.nix): the compiler named the random mktemp dir 5741 times.
+    # Keyed on $buildKey (eval-time digest of this drv's attrs), not $out: `nix build --check` builds into a scratch out.
+    W=/var/tmp/gccsrc-$buildKey
+    rm -rf "$W"; mkdir -m 700 "$W"; trap 'cd /; rm -rf "$W"' EXIT; cd "$W"
     tar xf "$gccSrc"
     cd "gcc-$version"
     patch -p1 < "$tsErrnoPatch" >&2
@@ -82,7 +91,7 @@ derivation {
       --prefix="$out" \
       --with-sysroot="$gate" --with-native-system-header-dir=/usr/include \
       --enable-languages=c,c++ --disable-bootstrap --enable-multilib \
-      --with-gnu-as --with-as=/usr/bin/gas --without-gnu-ld --with-ld=/usr/bin/ld \
+      --with-gnu-as --with-as=/usr/bin/gas --without-gnu-ld --with-ld="$ldBin" \
       --enable-shared --enable-__cxa_atexit --enable-initfini-array \
       --without-zstd --disable-nls \
       --disable-libsanitizer --disable-libgomp --disable-libitm --disable-libvtv \
@@ -122,6 +131,52 @@ derivation {
       done
       [ -e "$dst/libstdc++.so.6" ] && [ -e "$dst/libgcc_s.so.1" ] || { echo "FATAL: runtime libs missing in $dst" >&2; exit 1; }
     done
+    # The main output keeps its own copies of the runtime libs under $out/lib
+    # (gcc's install layout; nothing links them, the wrapper uses $lib) and the
+    # plugin libs libcc1*/libcp1plugin. Give every shared object in $out a store
+    # RUNPATH as well: without it libatomic's NEEDED libgcc_s does not resolve and
+    # libcc1* name the bootstrap compiler's /usr/gcc/14 (measured by the publish gate).
+    for pair in "$out/lib/amd64:$libcDir" "$out/lib:$libcDir32"; do
+      d=''${pair%%:*}; lc=''${pair#*:}
+      for f in "$d"/*.so*; do
+        [ -f "$f" ] && [ ! -L "$f" ] || continue
+        case "$f" in *.py) continue;; esac
+        /usr/bin/elfdump -d "$f" 2>/dev/null | grep -q NEEDED || continue
+        chmod u+w "$f"
+        /usr/bin/elfedit -e "dyn:runpath $d:$lc" "$f"
+      done
+    done
+    # The compiler binaries (bin/, libexec/gcc/) and the cc1 plugins
+    # (lib/gcc/*/plugin) link the seed's C++ runtime statically and NEED only
+    # libc/libm/libsocket/libnsl, but the bootstrap compiler left RUNPATH
+    # /usr/gcc/14/lib/amd64 on every one. Point it at the store libc instead, so
+    # nothing in $out names the build host.
+    find "$out" -type f | while read -r f; do
+      [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] || continue
+      cur=$(/usr/bin/elfdump -d "$f" 2>/dev/null | awk '$2=="RUNPATH"{print $4}')
+      # + libc-extra: the drivers NEED libkstat.so.1, which the libc slice lacks; + gcc.lib: the cc1
+      # plugins NEED libstdc++/libgcc_s. With the libc slice alone ldd took the HOST /lib/64 libkstat
+      # and found no libstdc++ (publish gate, 2026-10-29).
+      case "$cur" in /usr/gcc/*) chmod u+w "$f"; /usr/bin/elfedit -e "dyn:runpath $libcDir:$libcExtraDir:$lib/lib/amd64" "$f";; esac
+    done
+    if find "$out" -type f | while read -r f; do
+         [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] || continue
+         /usr/bin/elfdump -d "$f" 2>/dev/null | awk '$2=="RUNPATH"{print $4}'
+       done | grep -q '/usr/gcc'; then
+      echo "FATAL: an ELF in $out still has a /usr/gcc RUNPATH" >&2; exit 1
+    fi
+    # DT_CHECKSUM -> 0 in both outputs (./zero-checksum.sh says why; gcc.lib names $lib in its RUNPATH).
+    : > "$W/zc"; /usr/bin/bash ${./zero-checksum.sh} "$out" "$W/zc"; /usr/bin/bash ${./zero-checksum.sh} "$lib" "$W/zc"
+    [ ! -s "$W/zc" ] || { cat "$W/zc" >&2; exit 1; }
+    unset LD_LIBRARY_PATH LD_LIBRARY_PATH_64 LD_LIBRARY_PATH_32 || true
+    # Every dynamic ELF in $out, not only lib/*.so*: the publish gate checks all of them, and this
+    # gate let bin/gcc's host libkstat through.
+    bad=$(find "$out" -type f | while read -r f; do
+      [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] || continue
+      /usr/bin/elfdump -d "$f" 2>/dev/null | grep -q NEEDED || continue
+      /usr/bin/ldd "$f" 2>&1 | awk -v f="$f" '/not found/ || (/=>/ && $NF !~ /^\/nix\/store\//) {print f": "$0}'
+    done)
+    [ -z "$bad" ] || { echo "FATAL: $out shared libs leave the store:" >&2; echo "$bad" >&2; exit 1; }
     # Gate: the runtime libs resolve inside /nix/store with no LD_LIBRARY_PATH.
     unset LD_LIBRARY_PATH LD_LIBRARY_PATH_64 LD_LIBRARY_PATH_32 || true
     bad=$(for f in "$lib"/lib/libstdc++.so.6 "$lib"/lib/libgcc_s.so.1 "$lib"/lib/amd64/libstdc++.so.6 "$lib"/lib/amd64/libgcc_s.so.1; do
@@ -138,4 +193,6 @@ derivation {
     [ "$nglob" -le 4 ] || { echo "FATAL: libstdc++ uses the GLOBAL errno ($nglob refs); -D_TS_ERRNO missing" >&2; exit 1; }
     echo "=== gcc-$version: lib output resolves inside /nix/store ===" >&2
   '' ];
-}
+};
+# buildKey: 1:1 with the drv, the same on every host and under --check (mk-src-pkg.nix explains why).
+in derivation (drvAttrs // { buildKey = builtins.substring 0 16 (builtins.hashString "sha256" (builtins.toJSON drvAttrs)); })

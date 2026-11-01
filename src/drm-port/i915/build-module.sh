@@ -13,16 +13,20 @@
 #
 # Usage (on dixi): build-module.sh OBSD_DRM_DIR PORT_DIR OUT_DIR FILES_TXT
 #   PORT_DIR is the src/drm-port copy (obsd-compat/ and i915/ under it).
-#   env: GATE_INC, JOBS (4), XFLAGS, CC, NM (gnm), LD (/usr/bin/ld).
+#   env: GATE_INC, JOBS (4), XFLAGS, CC, NM (gnm), LD (/usr/bin/ld), KROOT, KSYMS, KSYMS_TXT.
 #   OBJS_FROM=DIR reuses the drm objects link-gap.sh left in DIR/obj.
 set -u
+# KROOT: root of the target kernel tree (default the running one, /).
+: "${KROOT:=}"
 obsd=$1 port=$2 out=$3 files=$4
 compat=$port/obsd-compat
 : "${GATE_INC:=/nix/store/s7zkx8nx5sfxixmyqmlnrybrrh14jkmb-illumos-gate-proto/usr/include}"
 : "${JOBS:=4}" "${XFLAGS:=}" "${CC:=gcc}" "${NM:=gnm}" "${LD:=/usr/bin/ld}"
 : "${OBJS_FROM:=}"
 mkdir -p "$out/obj"
-F="-m64 -mcmodel=kernel -mno-red-zone -D_KERNEL -ffreestanding -nostdinc -std=gnu11 \
+# -mno-mmx -mno-sse: the gate kernel's NO_SIMD (Makefile.master). Kernel threads run
+# with CR0.TS set, so FPU/SIMD use outside fpu_kernel_enter/exit is a #NM panic.
+F="-m64 -mcmodel=kernel -mno-red-zone -mno-mmx -mno-sse -D_KERNEL -ffreestanding -nostdinc -std=gnu11 \
  -O2 -fno-strict-aliasing $XFLAGS -include $compat/obsd_prelude.h -I$compat \
  -I$obsd/include -I$obsd/include/uapi -I$obsd -I$obsd/i915 -I$GATE_INC"
 if [ -n "$OBJS_FROM" ]; then
@@ -47,7 +51,7 @@ $CC $F -I$port/i915 -I$port/i915/openbsd-orig/include -Werror -Wall \
 $CC $F -I$port/i915 -c "$port/i915/i915_drmglue.c" -o "$out/i915_drmglue.o" \
     > "$out/drmglue.log" 2>&1 || { grep -E 'error|Error' "$out/drmglue.log"; exit 1; }
 grep -E 'i915_drmglue.c:[0-9]+:[0-9]+: warning' "$out/drmglue.log"
-$CC -m64 -mcmodel=kernel -mno-red-zone -D_KERNEL -ffreestanding -nostdinc \
+$CC -m64 -mcmodel=kernel -mno-red-zone -mno-mmx -mno-sse -D_KERNEL -ffreestanding -nostdinc \
     -std=gnu11 -O2 -Wall -Werror -I$port/i915/openbsd-orig/include -I$port/i915 \
     -I$GATE_INC -c "$port/i915/i915_pciid.c" -o "$out/i915_pciid.o" || exit 1
 # -Breduce + the mapfile scope every symbol local except the module interface
@@ -58,15 +62,22 @@ $CC -m64 -mcmodel=kernel -mno-red-zone -D_KERNEL -ffreestanding -nostdinc \
 mapfile=$port/i915/i915.mapfile
 $LD -r -Breduce -M "$mapfile" -o "$out/i915" "$out"/obj/*.o "$compat"/obsd_*.o "$out/i915_illumos.o" \
     "$out/i915_drmglue.o" "$out/i915_pciid.o" > "$out/ld.log" 2>&1 || { cat "$out/ld.log"; exit 1; }
-for k in /platform/i86pc/kernel/amd64/unix /kernel/amd64/genunix \
-    /platform/i86pc/kernel/misc/amd64/gfx_private; do
+for k in $KROOT/platform/i86pc/kernel/amd64/unix $KROOT/kernel/amd64/genunix \
+    $KROOT/platform/i86pc/kernel/misc/amd64/gfx_private; do
 	$NM -g --defined-only "$k" | awk '{print $3}'
 done | sort -u > "$out/kernel.txt"
 # /dev/ksyms is the symbol table of the kernel AND every loaded module.
 # gnm cannot read the character device itself (measured: 0 symbols, which
 # would make the collision gate pass vacuously), so copy it to a file first.
-cat /dev/ksyms > "$out/ksyms.elf"
-$NM -g --defined-only "$out/ksyms.elf" | awk '{print $3}' | sort -u > "$out/ksyms-all.txt"
+# KSYMS: a saved copy of the target's /dev/ksyms (default: read it live).
+# KSYMS_TXT: instead, a ready-made list of every global the target kernel and
+# all its modules define (the pure-build analog, pkgs/illumos/i915-driver.nix).
+if [ -n "${KSYMS_TXT:-}" ]; then
+	sort -u "$KSYMS_TXT" > "$out/ksyms-all.txt"
+else
+	cat "${KSYMS:-/dev/ksyms}" > "$out/ksyms.elf"
+	$NM -g --defined-only "$out/ksyms.elf" | awk '{print $3}' | sort -u > "$out/ksyms-all.txt"
+fi
 if [ "$(wc -l < "$out/ksyms-all.txt")" -lt 10000 ]; then
 	echo "ksyms snapshot has only $(wc -l < "$out/ksyms-all.txt") symbols: refusing a vacuous collision gate"
 	exit 1

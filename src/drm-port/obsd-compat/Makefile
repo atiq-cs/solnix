@@ -11,13 +11,14 @@
 GATE_INC ?= /nix/store/s7zkx8nx5sfxixmyqmlnrybrrh14jkmb-illumos-gate-proto/usr/include
 CC      = gcc
 NM      = gnm
-KFLAGS  = -m64 -mcmodel=kernel -mno-red-zone -D_KERNEL -ffreestanding -nostdinc \
+# -mno-mmx -mno-sse: the gate kernel's NO_SIMD (Makefile.master); see i915/simd-gate.sh.
+KFLAGS  = -m64 -mcmodel=kernel -mno-red-zone -mno-mmx -mno-sse -D_KERNEL -ffreestanding -nostdinc \
           -std=gnu11 -O2 -Wall -Werror -fno-strict-aliasing -I. -I$(GATE_INC)
 KERNEL  = /platform/i86pc/kernel/amd64/unix /kernel/amd64/genunix
 UCC     = gcc
 UFLAGS  = -m64 -O2 -Wall -Werror -DOBSD_USERTEST -D_REENTRANT
 ULIBS   = -lpthread
-KOBJS   = obsd_kern.o obsd_time.o obsd_bus.o obsd_vm.o obsd_glue.o
+KOBJS   = obsd_kern.o obsd_time.o obsd_bus.o obsd_vm.o obsd_glue.o obsd_file.o
 # Symbols the compat objects use that OpenBSD's drm objects define (the
 # autoconf glue runs drm_attach through drm_ca/drm_cd, drm_drv.c); they
 # resolve inside the module, not against the kernel.

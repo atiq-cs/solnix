@@ -21,7 +21,7 @@
 # The existing illumos iwn driver's blobs live the same way under
 # /kernel/firmware/iwn/ on dixi (measured).
 #
-# Plain derivation + builtins.fetchurl (fixed-output by sha256), the same
+# Plain derivation + <nix/fetchurl.nix> (fixed-output by sha256), the same
 # pattern as ./gcc-src.nix, so it evaluates and builds on the illumos host
 # without a nixpkgs stdenv. ./iwx-firmware.nix (stdenvNoCC, fakeHash) cannot.
 #
@@ -37,12 +37,12 @@
 let
   rev = "20241017";
   base = "https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain";
-  ucode = builtins.fetchurl {
+  ucode = import <nix/fetchurl.nix> {
     url = "${base}/iwlwifi-9000-pu-b0-jf-b0-46.ucode?id=${rev}";
     name = "iwlwifi-9000-pu-b0-jf-b0-46.ucode";
     sha256 = "9a0c5d938646942f9798e6212579c25771e4bb44301cd409b82abe361ca2c3e0";
   };
-  licence = builtins.fetchurl {
+  licence = import <nix/fetchurl.nix> {
     url = "${base}/LICENCE.iwlwifi_firmware?id=${rev}";
     name = "LICENCE.iwlwifi_firmware";
     sha256 = "16d5040c7cf851fc693b7542e20870935b99802533ea1bfd231c377a2305e5c5";

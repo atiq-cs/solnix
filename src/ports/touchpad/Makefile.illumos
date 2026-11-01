@@ -1,0 +1,24 @@
+# Native illumos build of dwiic and ihid (lixi touchpad). UTSINC = gate proto usr/include.
+UTSINC	?= /usr/include
+LD	?= /usr/bin/ld
+KDEFS	= -D_KERNEL -D_SYSCALL32 -D_SYSCALL32_IMPL -D_ELF64 -D_DDI_STRICT -Dsun -D__sun -D__SVR4
+KFLAGS	= -m64 -O2 -std=gnu11 -ffreestanding -mno-red-zone -mcmodel=kernel \
+	  -mno-mmx -mno-sse -fno-asynchronous-unwind-tables \
+	  -mindirect-branch=thunk-extern -mindirect-branch-register \
+	  -fstack-protector-strong -fno-strict-aliasing -fno-common -nostdinc \
+	  -Wall -Werror -Wno-unknown-pragmas
+# Headers the proto does not ship (sys/acpi/*.h, sys/acpica.h, sys/i2c/client.h, usbai_private.h) come from the
+# kernel's own source (UTSSRC = <illumos src>/usr/src/uts), searched AFTER the proto.
+UTSSRC	?= /nonexistent
+CC	= gcc $(KFLAGS) $(KDEFS) -I. -I$(UTSINC) -idirafter $(UTSSRC)/intel -idirafter $(UTSSRC)/common
+
+all: dwiic ihid
+
+dwiic: dwiic.o drv.mapfile
+	$(LD) -r -Breduce -M drv.mapfile -o $@ dwiic.o -dy -N drv/i2cnex
+
+ihid: ihid.o ihid.mapfile
+	$(LD) -r -Breduce -M ihid.mapfile -o $@ ihid.o -dy -N drv/i2cnex -N drv/dwiic -N misc/acpica -N misc/hidparser
+
+%.o: %.c dwiic.h
+	$(CC) -c -o $@ $<

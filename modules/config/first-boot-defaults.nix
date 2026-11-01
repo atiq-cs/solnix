@@ -6,24 +6,39 @@ let
   cfg = config.solnix.defaults;
 in
 {
+  # NixOS time.timeZone (nixos/modules/config/locale.nix): an IANA name, e.g. "America/New_York". NixOS's default is
+  # null = UTC; illumos needs a TZ value, so solnix's default is "UTC". Zone files: /usr/share/lib/zoneinfo.
+  options.time.timeZone = lib.mkOption {
+    type = lib.types.str; default = "UTC"; example = "America/New_York";
+    description = "The time zone used for displaying times and dates (TZ in /etc/default/init and the login environment).";
+  };
   options.solnix.defaults = {
     enable = lib.mkOption { type = lib.types.bool; default = true; };
     enableStockServices = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ ];
       description = ''
-        Stock base-OS SMF services (FMRIs like "network/ntp") to `svcadm enable`
-        at image build / first boot. For SERVICES SHIPPED BY THE OS (ntp, ipfilter),
-        not generated manifests. The image builder + activation enable these.
+        Stock base-OS SMF services (FMRIs like "network/ipfilter", instance
+        default) that the site profile enables. For SERVICES SHIPPED BY THE OS,
+        not generated manifests.
       '';
     };
     timeZone = lib.mkOption {
-      type = lib.types.str; default = "UTC";
-      description = "Default time zone (illumos reads TZ from /etc/default/init).";
+      type = lib.types.str; default = config.time.timeZone;
+      defaultText = lib.literalExpression "config.time.timeZone";
+      description = "Default time zone (illumos reads TZ from /etc/default/init). Set time.timeZone, as on NixOS.";
     };
     locale = lib.mkOption {
       type = lib.types.str; default = "en_US.UTF-8";
       description = "Default LANG (illumos ships en_US.UTF-8).";
+    };
+    mdns = lib.mkOption {
+      type = lib.types.bool; default = false;
+      description = ''
+        Multicast DNS (NixOS services.avahi with nssmdns4): enable illumos's own mdnsd (svc:/network/dns/multicast)
+        and put mdns after dns on the hosts/ipnodes lines. nss_mdns answers only .local names and link-local
+        addresses, so other lookups never wait on it. The mdnsd firewall port (UDP 5353) opens with it.
+      '';
     };
     ntpServer = lib.mkOption {
       type = lib.types.str; default = "169.254.169.123";
@@ -32,6 +47,8 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    solnix.defaults.enableStockServices = lib.mkIf cfg.mdns [ "network/dns/multicast" ];
+    solnix.firewall.allowedUDPPorts = lib.mkIf cfg.mdns [ 5353 ];
     # 1+2. Timezone + locale via /etc/default/init (read by init + login for TZ/LANG).
     environment.generatedEtc."default/init" = ''
       TZ=${cfg.timeZone}
@@ -59,7 +76,7 @@ in
         admin (root):        pfexec <cmd>   (or: sudo <cmd>)
         docs:                https://solnix.io
 
-    '';
+    '' + lib.optionalString config.solnix.privacy.enable (builtins.readFile ./community/motd.txt + "\n");   # handoff 2026-10-28 section 1
 
     # 6. Nix GC + store optimise so /nix doesn't grow unbounded (NixOS weekly-GC analog).
     nix.settings = {
@@ -77,19 +94,17 @@ in
       driftfile /var/ntp/ntp.drift
     '';
 
-    # 7. logadm — rotate /var/cores + solnix logs (illumos-native log rotation,
-    # the logrotate/journald-retention analog). Appended to the base logadm.conf.
-    environment.generatedEtc."logadm.d/solnix.conf" = ''
-      /var/cores/core.* -A 30d -C 20 -p 1d
-      /var/log/solnix.log -C 8 -c -s 10m
-    '';
+    # 7. log rotation: none here. An /etc/logadm.d/solnix.conf was generated until cosmic8 (2026-11-01), with rules for
+    # /var/cores/core.* and /var/log/solnix.log. Neither ever ran: logadm reads only /etc/logadm.conf, and logadm-upgrade
+    # merges a logadm.d file only when it is a regular -r--r--r-- root:sys file, which a generated-etc link is not
+    # (`logadm -n -v` on lixi listed neither). Nothing writes /var/log/solnix.log. Cores: solnix-core-prune (coreadm.nix).
 
-    # 8. nsswitch — hosts: files dns (drop mdns; no mdnsd -> avoids slow lookups).
+    # 8. nsswitch — hosts: files dns, plus mdns only with solnix.defaults.mdns (mdnsd running; no mdnsd -> slow lookups).
     environment.generatedEtc."nsswitch.conf" = ''
       passwd:     files
       group:      files
-      hosts:      files dns
-      ipnodes:    files dns
+      hosts:      files dns${lib.optionalString cfg.mdns " mdns"}
+      ipnodes:    files dns${lib.optionalString cfg.mdns " mdns"}
       networks:   files
       protocols:  files
       rpc:        files
@@ -121,13 +136,10 @@ in
       alias ..='cd ..'
     '';
 
-    # 3+7 (SMF): enable the stock base-OS services (ntp for time, ipfilter is
-    # handled by modules/config/firewall.nix). These are ENABLED via the image's
-    # site profile / first-boot activation (svcadm enable), NOT generated manifests.
-    # ⚠️ The option is solnix.defaults.enableStockServices (declared above, and used
-    # with the full path by modules/config/firewall.nix:63). This line said
-    # `solnix.enableStockServices`, which does not exist -- an undefined-option eval
-    # error that broke EVERY toplevel, not just a new one.
-    solnix.defaults.enableStockServices = [ "network/ntp" ];
+    # 3+7 (SMF): stock base-OS services go in solnix.defaults.enableStockServices, which
+    # the site profile enables (ipfilter: modules/config/firewall.nix). Until 2026-10-30
+    # nothing read the option, so neither ipfilter nor ntp was ever enabled. ntp is NOT
+    # listed: the world has no ntpd and no network/ntp manifest (measured on dixi), so
+    # enabling it would only make svccfg warn. No NTP client runs until one is packaged.
   };
 }

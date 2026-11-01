@@ -1,37 +1,78 @@
-solnix: tzmon -- enable the ThinkPad HKEY event interface before reading THM0.
+solnix: tzmon -- act on ThinkPad thermal alarms reliably: ThinkPad HKEY init, debounced _HOT/_CRT, and a clean power-off.
 
-SYMPTOM (ThinkPad X1 Extreme Gen5, 21DE): the machine stops at "Press any key
-to reboot." from seconds to minutes after boot, in multi-user and in boot -s.
-The console line just before the prompt (photographed 2026-10-17):
+WHAT THE X1 EXTREME GEN5 (21DE001EUS) SHOWED
+- The stock tzmon halted the machine at "Thermal zone (\_TZ_.THM0) is critically hot (128 C); initiating rapid
+  shutdown" -> "Press any key to reboot." (photographed 2026-10-17 and 2026-10-18, 40-60 s after login).
+- An earlier version of this patch treated _TMP == _CRT as a firmware sentinel and skipped the shutdown. THAT WAS
+  WRONG. With it the machine ran on, then lost power silently, about 20 minutes after boot. That was the EC's own
+  hardware cutoff (2026-10-20).
 
-  tzmon: WARNING: tzmon: Thermal zone (\_TZ_.THM0) is critically hot (128 C);
-  initiating rapid shutdown
+WHAT THE FIRMWARE ACTUALLY DOES (ThinkPad X1 Extreme / P1 and X1 Carbon DSDTs)
+- \_TZ.THM0._TMP reads EC TMP0. An unreadable sensor (0x80) becomes 0x30, which is 48 C. _C2K clamps
+  out-of-range values to 48 C as well.
+- _TMP returns exactly TCRT (== _CRT == 128 C) only when the EC raises a temperature level:
+  - always when TSL3 is non-zero;
+  - when TSL2 is non-zero AND HKEY.DHKC is 0, that is, no OS driver has enabled the hotkey interface.
+- So _TMP == _CRT is the EC's critical alarm, not a bad read. It must be acted on.
+- Under Linux (thinkpad_acpi sets DHKC=1 at load) the same machine idles at 44-50 C, fan on auto.
 
-ROOT CAUSE: tzmon's _CRT handling calls mdboot(A_REBOOT, AD_HALT) when _TMP >=
-_CRT. In the ThinkPad DSDTs read for this (P1 Gen 4i 20Y4 and X1 Carbon Gen 11
-21HN, from linuxhw/ACPI; the X1E Gen5's own tables are not dumped yet, but 128 C
-is exactly TCRT, which no real sensor reports), \_TZ.THM0._TMP returns TCRT
-whenever the EC sets its TSL2 "sensor critically hot" level while HKEY.DHKC is
-0, that is while no OS driver has enabled the hotkey/event interface. The Linux
-thinkpad_acpi driver sets DHKC with HKEY.MHKC(1) at load; illumos has no
-ThinkPad driver, so DHKC stays 0 and the first TSL2 event halts the system.
-With DHKC=1 the firmware reports TSL2 as HKEY event 0x6022 instead (Linux logs
-"THERMAL EMERGENCY: a sensor reports something is extremely hot" and keeps
-running) and _TMP returns the real temperature. _TMP still returns TCRT for
-TSL3, the EC's shutdown level, regardless of DHKC, so tzmon still halts there,
-and the EC's own thermal protection is unchanged.
+THE CHANGE
+1. ThinkPad init, the platform shim. tzmon_attach finds HKEY (_HID LEN0268/LEN0068/IBM0068), installs a notify
+   handler that drains MHKP and logs the thermal-alarm events (0x6011/0x6012/0x6021/0x6022), as Linux logs them;
+   other events fire the hkey-event SDT probe. It then calls MHKC(1), as Linux thinkpad_acpi does at load. After
+   that the EC reports its TSL2 level as event 0x6022 instead of forcing _TMP to _CRT. TSL3, the EC's own critical level, still reads as _CRT.
+2. Debounce, FreeBSD's model (sys/dev/acpica/acpi_thermal.c TZ_VALIDCHECKS):
+   - _HOT and _CRT act only after TZ_VALIDCHECKS (3) consecutive over-limit polls;
+   - while a zone is over a limit it is re-polled every TZ_CONFIRM_PERIOD (2) seconds, so confirming takes about
+     4 s, not 3 x 30 s;
+   - one bogus EC read no longer takes the machine down, and a sustained alarm still does.
+3. Both limits power off through init (SIGPWR -> inittab powerfail -> shutdown -i5), so filesystems sync. Before this
+   patch, _CRT halted at "Press any key to reboot." and left a hot machine running.
+   tzmon acts on the third reading (FreeBSD: tz_validchecks == TZ_VALIDCHECKS) and then re-sends the power-off
+   request every TZ_RESEND_PERIOD (30) seconds while the episode lasts. Dropping below the limit ends the episode.
+   - Re-sending on every 2 s poll printed two lines every 2 s through a 61 s shutdown (KVM).
+   - Sending only once is UNSAFE. init(8) masks inittab's "s1234:powerfail" entry with the current run level,
+     which is 0 until svc.startd reports one. So a SIGPWR early in boot is dropped (init.c spawn_processes), and
+     the machine stayed up at 128 C (measured under KVM). A SIGPWR during a shutdown already under way is
+     harmless: init skips an entry that is still running.
+4. Every over-limit poll prints one console line: the zone, the reading, _HOT/_CRT and the debounce count. The
+   "back to N C" note after an episode goes to the system log only. (The EC sensor dump the diagnosis used, TMP0-7
+   and TSL0-3 on each line, is gone; the fix does not need it.)
 
-FIX: in tzmon_attach, before the zones are enumerated, find the HKEY device
-(_HID LEN0268/LEN0068/IBM0068), install a notify handler that drains MHKP and
-logs the thermal alarm events (0x6011/0x6012/0x6021/0x6022) with the EC's
-TSL0-TSL3 sensor bitmaps, then call MHKC(1). Detach and the attach failure
-paths call MHKC(0) and remove the handler. Without an HKEY device (every
-non-ThinkPad) nothing changes. Side effect, as under Linux: with DHKC=1 the
-firmware routes hotkeys such as Fn+F4 (sleep) to HKEY events instead of the
-SLPB notify; the handler ignores them.
-
---- a/usr/src/uts/i86pc/io/tzmon/tzmon.c	2026-10-17 16:58:08.989267967 -0400
-+++ b/usr/src/uts/i86pc/io/tzmon/tzmon.c	2026-10-17 17:54:33.271974485 -0400
+The model-independent part is (2)-(3). (1) binds on the ThinkPad HKEY _HID and is a no-op elsewhere.
+--- a/usr/src/uts/i86pc/io/tzmon/tzmon.h
++++ b/usr/src/uts/i86pc/io/tzmon/tzmon.h
+@@ -35,6 +35,12 @@
+ #define	TZ_DEFAULT_PERIOD	30
+ 
+ #define	TZ_NUM_LEVELS		10
++/* consecutive over-limit polls before tzmon acts (FreeBSD TZ_VALIDCHECKS) */
++#define	TZ_VALIDCHECKS		3
++/* poll period while a zone is over a limit, so confirming takes seconds */
++#define	TZ_CONFIRM_PERIOD	2
++/* seconds between repeated power-off requests while an episode lasts */
++#define	TZ_RESEND_PERIOD	30
+ 
+ typedef struct thermal_zone {
+ 	struct thermal_zone	*next;
+@@ -56,6 +62,15 @@
+ 
+ 	int			polling_period;
+ 	int			current_level;
++
++	/*
++	 * solnix: consecutive polls at or above _HOT/_CRT. tzmon acts only once
++	 * this reaches TZ_VALIDCHECKS, so a single bad EC read does not power
++	 * the machine off, while a sustained alarm still does (FreeBSD
++	 * acpi_thermal.c tz_validchecks).
++	 */
++	int			validchecks;
++	hrtime_t		acted;		/* last power-off request, 0 = none */
+ } thermal_zone_t;
+ 
+ 
+--- a/usr/src/uts/i86pc/io/tzmon/tzmon.c
++++ b/usr/src/uts/i86pc/io/tzmon/tzmon.c
 @@ -88,6 +88,8 @@
  static void tzmon_set_power(ACPI_BUFFER devlist, int on_off, char *tz_name);
  static void tzmon_eval_zone(thermal_zone_t *tzp);
@@ -84,7 +125,103 @@ SLPB notify; the handler ignores them.
  
  	ddi_remove_minor_node(dip, NULL);
  	tzmon_dip = NULL;
-@@ -745,3 +758,130 @@
+@@ -589,6 +602,14 @@
+ 		/* Go back to sleep */
+ 		mutex_enter(&tzp->lock);
+ 		ticks = drv_usectohz(tzp->polling_period * 1000000);
++		if (ticks > 0 && tzp->validchecks > 0 &&
++		    tzp->validchecks < TZ_VALIDCHECKS &&
++		    tzp->polling_period > TZ_CONFIRM_PERIOD)
++			ticks = drv_usectohz(TZ_CONFIRM_PERIOD * 1000000);
++		/* while acting, poll at least as often as the re-send period */
++		else if (ticks > 0 && tzp->acted != 0 &&
++		    tzp->polling_period > TZ_RESEND_PERIOD)
++			ticks = drv_usectohz(TZ_RESEND_PERIOD * 1000000);
+ 		if (ticks > 0)
+ 			(void) cv_reltimedwait(&zone_list_condvar,
+ 			    &tzp->lock, ticks, TR_CLOCK_TICK);
+@@ -670,25 +691,61 @@
+ 	DTRACE_PROBE4(tz__temp, int, tmp, int, tzp->crt, int, tzp->hot,
+ 	    char *, (char *)tzp->zone_name);
+ 
+-	/* _HOT handling */
+-	if (tzp->hot > 0 && tmp >= tzp->hot) {
+-		cmn_err(CE_WARN,
+-		    "tzmon: Thermal zone (%s) is too hot (%d C); "
+-		    "initiating shutdown\n",
+-		    (char *)tzp->zone_name, K_TO_C(tmp));
+-
+-		tzmon_do_shutdown();
+-	}
+-
+-	/* _CRT handling */
+-	if (tzp->crt > 0 && tmp >= tzp->crt) {
+-		cmn_err(CE_WARN,
+-		    "tzmon: Thermal zone (%s) is critically hot (%d C); "
+-		    "initiating rapid shutdown\n",
+-		    (char *)tzp->zone_name, K_TO_C(tmp));
+-
+-		/* shut down (fairly) immediately */
+-		mdboot(A_REBOOT, AD_HALT, NULL, B_FALSE);
++	/*
++	 * _HOT and _CRT. On ThinkPads _TMP returns _CRT (128 C) exactly when the
++	 * EC raises a critical-temperature level (TSL3, or TSL2 before
++	 * MHKC(1)); an unreadable sensor reads 48 C, not _CRT (the X1 Extreme /
++	 * P1 and X1 Carbon DSDTs). So _CRT is a real alarm and must be acted on.
++	 * Some ECs return a bogus high value for a single poll, so act only
++	 * after TZ_VALIDCHECKS consecutive over-limit polls, re-polling every
++	 * TZ_CONFIRM_PERIOD seconds meanwhile (FreeBSD acpi_thermal.c). Both
++	 * limits power the machine off through init, so filesystems sync and the
++	 * reason stays on the console; neither halts and waits for a key.
++	 */
++	if ((tzp->hot > 0 && tmp >= tzp->hot) ||
++	    (tzp->crt > 0 && tmp >= tzp->crt)) {
++		/*
++		 * Act on the TZ_VALIDCHECKS-th reading, as FreeBSD does
++		 * (tz_validchecks == TZ_VALIDCHECKS), and then again every
++		 * TZ_RESEND_PERIOD seconds while the episode lasts. Re-sending
++		 * on every 2 s poll printed two lines every 2 s through a 61 s
++		 * shutdown (KVM). Sending only ONCE is unsafe: init(8) honours
++		 * SIGPWR only once it is past boot (spawn_processes() masks
++		 * inittab's "s1234:powerfail" entry with the current run level,
++		 * which is 0 until svc.startd reports one), so an alarm early
++		 * in boot was dropped and the machine stayed up at 128 C
++		 * (measured under KVM). A repeated SIGPWR during a shutdown
++		 * already under way is harmless: init skips a living entry.
++		 */
++		if (tzp->validchecks < TZ_VALIDCHECKS) {
++			tzp->validchecks++;
++			cmn_err(CE_WARN, "tzmon: Thermal zone (%s) reads %d C "
++			    "(_HOT %d, _CRT %d); over-limit reading %d of %d",
++			    (char *)tzp->zone_name, K_TO_C(tmp),
++			    tzp->hot > 0 ? K_TO_C(tzp->hot) : -1,
++			    tzp->crt > 0 ? K_TO_C(tzp->crt) : -1,
++			    tzp->validchecks, TZ_VALIDCHECKS);
++		}
++		if (tzp->validchecks == TZ_VALIDCHECKS && (tzp->acted == 0 ||
++		    gethrtime() - tzp->acted >=
++		    (hrtime_t)TZ_RESEND_PERIOD * NANOSEC)) {
++			tzp->acted = gethrtime();
++			cmn_err(CE_WARN, "tzmon: Thermal zone (%s) is %s (%d C) "
++			    "for %d consecutive readings; powering off",
++			    (char *)tzp->zone_name,
++			    (tzp->crt > 0 && tmp >= tzp->crt) ?
++			    "critically hot" : "too hot",
++			    K_TO_C(tmp), tzp->validchecks);
++			tzmon_do_shutdown();
++		}
++	} else {
++		tzp->acted = 0;
++		if (tzp->validchecks > 0)
++			cmn_err(CE_NOTE, "!tzmon: Thermal zone (%s) back to "
++			    "%d C after %d over-limit reading(s)",
++			    (char *)tzp->zone_name, K_TO_C(tmp),
++			    tzp->validchecks);
++		tzp->validchecks = 0;
+ 	}
+ 
+ 	/*
+@@ -745,3 +802,110 @@
  	/* graceful shutdown with inittab and all getting involved */
  	psignal(initpp, SIGPWR);
  }
@@ -95,13 +232,13 @@ SLPB notify; the handler ignores them.
 + * thermal zone's critical temperature, but only while no OS driver has
 + * enabled its hotkey/event interface. In the DSDTs of the X1 Extreme / P1
 + * and X1 Carbon lines, \_TZ.THM0._TMP returns _CRT (TCRT, 128 C) when the
-+ * EC's TSL2 level is set and HKEY.DHKC is 0, so tzmon halts the machine at
++ * EC's TSL2 level is set and HKEY.DHKC is 0, so tzmon powers the machine off at
 + * that level. HKEY.MHKC(1) sets DHKC, which the Linux thinkpad_acpi driver
 + * and Lenovo's Windows driver both do at load. The firmware then reports the
 + * TSL2 level as HKEY event 0x6022, and _TMP returns _CRT only for the EC's own
-+ * shutdown level (TSL3), which still halts here. The HKEY notify handler logs
++ * shutdown level (TSL3), which still powers it off here. The HKEY notify handler logs
 + * the thermal alarm events, the same events Linux logs, so the warning stays
-+ * visible.
++ * visible; other events fire the hkey-event SDT probe.
 + */
 +#define	TZ_HKEY_MAX_EVENTS	16
 +
@@ -126,32 +263,11 @@ SLPB notify; the handler ignores them.
 +	return (AcpiEvaluateObject(obj, "MHKC", &args, NULL));
 +}
 +
-+/*
-+ * Log a thermal alarm with the EC's per-level sensor bitmaps (TSL0..TSL3 in
-+ * the EC device, HKEY's parent), so the log names which sensor tripped which
-+ * level. An unreadable bitmap prints as ffffffff.
-+ */
-+static void
-+tzmon_hkey_alarm(ACPI_HANDLE hkey, char *what)
-+{
-+	static char *names[] = { "TSL0", "TSL1", "TSL2", "TSL3" };
-+	int lvl[4] = { -1, -1, -1, -1 };
-+	ACPI_HANDLE ec;
-+	int i;
-+
-+	if (AcpiGetParent(hkey, &ec) == AE_OK) {
-+		for (i = 0; i < 4; i++)
-+			(void) acpica_eval_int(ec, names[i], &lvl[i]);
-+	}
-+	cmn_err(CE_WARN, "tzmon: ThinkPad thermal alarm: %s "
-+	    "(EC sensor levels TSL0-3: %x %x %x %x)", what,
-+	    lvl[0], lvl[1], lvl[2], lvl[3]);
-+}
-+
 +/*ARGSUSED*/
 +static void
 +tzmon_hkey_notify(ACPI_HANDLE obj, UINT32 val, void *ctx)
 +{
++	char *what;
 +	int i, ev;
 +
 +	if (val != 0x80)
@@ -163,21 +279,22 @@ SLPB notify; the handler ignores them.
 +			break;
 +		switch (ev) {
 +		case 0x6011:
-+			tzmon_hkey_alarm(obj, "battery is too hot");
++			what = "battery is too hot";
 +			break;
 +		case 0x6012:
-+			tzmon_hkey_alarm(obj, "battery is critically hot");
++			what = "battery is critically hot";
 +			break;
 +		case 0x6021:
-+			tzmon_hkey_alarm(obj, "a sensor is too hot");
++			what = "a sensor is too hot";
 +			break;
 +		case 0x6022:
-+			tzmon_hkey_alarm(obj, "a sensor is critically hot");
++			what = "a sensor is critically hot";
 +			break;
 +		default:
 +			DTRACE_PROBE1(hkey__event, int, ev);
-+			break;
++			continue;
 +		}
++		cmn_err(CE_WARN, "tzmon: ThinkPad thermal alarm: %s", what);
 +	}
 +}
 +

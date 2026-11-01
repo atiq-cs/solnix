@@ -36,6 +36,10 @@ struct iwm_il_state {
 	uint8_t		s_bssid[6];
 	uint8_t		s_rssi;		/* 0..15 */
 	uint8_t		s_rate;		/* 500 kb/s units, 0 if unknown */
+	uint8_t		s_chan;		/* BSS IEEE channel, 0 if none */
+	uint8_t		s_5ghz;
+	uint8_t		s_ht;
+	uint16_t	s_freq;		/* BSS MHz, 0 if none */
 };
 
 extern int iwm_il_start(void *);

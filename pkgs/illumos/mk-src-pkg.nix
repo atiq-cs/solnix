@@ -35,6 +35,8 @@
                              # the old /usr/gnu:/usr/bin:/usr/sbin (the OI buildhost path),
                              # so this arg changes NO hash for the bhost build. A solnix
                              # system (no /usr/gnu, no gstrip, no gzip) passes the store set.
+, aarch64 ? false           # native aarch64 illumos (aa64nix): LP64 only, libs in lib/ (lib/64 -> .).
+                             # false = the x86 text byte-for-byte, so no x86 drv hash moves.
 }:
 
 { pname, version, src, build
@@ -58,10 +60,54 @@ let
   # one, else the host path. (illumos /usr/bin/strip is SVR4 strip and does not
   # take --strip-debug; using it would be a silent no-op, so never fall to it.)
   gstripCands = (map (d: "${d}/bin/gstrip") buildTools) ++ [ "/usr/bin/gstrip" ];
-in
-derivation {
+  # aarch64: rewrite the x86 builder text (lib/amd64 -> lib, -m$ABI -> the arm64-gate target
+  # flags: illumos aarch64 ld has no TLSDESC relocs and shared links miss libgcc.a's outline
+  # atomics, both measured on nix), plus the bootstrap box's autotools/config.guess quirks.
+  # shortcut: aclocal dirs name the stage0 box (/opt/nixboot, /opt/ooce), as x86 names the OI
+  # host's /usr/share/aclocal; upgrade when pkgconf/autoconf-archive are store build tools.
+  lp64Fix = t: if !aarch64 then t else builtins.replaceStrings
+    [ ''case "$d" in */amd64|*/lib-64) [ "$1" = 64 ] && r="$r:$d";; *) [ "$1" = 32 ] && r="$r:$d";; esac''
+      "lib/amd64" "$gccLib/amd64" " -m$ABI " "architecture=x86 abi=sysv" "gmake -j3 "
+      "ACLOCAL_PATH=/usr/share/aclocal autoreconf -fi -I /usr/share/aclocal" "./configure --prefix="
+      ''export PATH="''${btPath:+$btPath:}/usr/gnu/bin:/usr/bin:/usr/sbin"''
+      stripLoop rpLoop "INSTALL=ginstall" ''-Dlddlflags="-shared -m64"'' "${./zero-checksum.sh}" ]
+    [ ''r="$r:$d"''
+      # -ffile-prefix-map: __FILE__ and any surviving debug string name /build, not the build dir (no host paths in a NAR)
+      "lib" "$gccLib" " -mno-outline-atomics -mtls-dialect=trad -ffile-prefix-map=$W=/build " "architecture=arm abi=aapcs" "gmake -j24 "
+      "ACLOCAL_PATH=/opt/nixboot/share/aclocal:/opt/ooce/autoconf-archive/share/aclocal M4=/usr/bin/gm4 autoreconf -fi -I /opt/nixboot/share/aclocal -I /opt/ooce/autoconf-archive/share/aclocal"
+      "./configure --build=aarch64-unknown-solaris2.11 --prefix="
+      # cmake (/opt/ooce) + pkgconf (/opt/nixboot) of the stage0 box, as x86 uses the OI host's.
+      ''export PATH="''${btPath:+$btPath:}/usr/gnu/bin:/usr/bin:/usr/sbin:/opt/ooce/bin:/opt/nixboot/bin"''
+      # RUNPATH rewrite BEFORE the strip: GNU strip 2.43.1 zeroes .SUNW_ldynsym sh_link on
+      # aarch64 and illumos elfedit then segfaults (measured on libstdc++.so.6.0.33);
+      # elfedit-then-strip works. The build-time-path guards still run after the strip.
+      (rpLoop + stripLoop) ""
+      "INSTALL=/usr/gnu/bin/install"  # braich ships GNU install only as /usr/gnu/bin/install
+      ''-Dlddlflags="-shared"''         # perl (cli/c-big.nix): aarch64 gcc has no -m64
+      # DT_CHECKSUM -> 0 without elfedit, which segfaults on a GNU-stripped aarch64 ELF (repro2 fix 4; dixa4).
+      "${./aarch64/zero-checksum.sh}" ] t;
+  stripLoop = ''
+    find "$out" -type f | while read -r f; do
+      # ELF, or an ar archive ("!<ar"): -D zeroes archive member mtimes (NixOS binutils is --enable-deterministic-archives).
+      case "$(od -An -tx1 -N4 "$f" 2>/dev/null | tr -d ' \n')" in 7f454c46|213c6172) ;; *) continue;; esac
+      chmod u+w "$f"; "$GSTRIP" --strip-debug -D "$f" 2>/dev/null || true
+    done
+  '';
+  rpLoop = ''
+    find "$out" -type f | while read -r f; do
+      /usr/bin/elfdump -d "$f" 2>/dev/null | grep -Eq 'NEEDED|SONAME' || continue
+      c=$(od -An -tu1 -j4 -N1 "$f" | tr -d ' '); cl=32; [ "$c" -eq 2 ] && cl=64
+      # already store-only (baked at link time)? leave it; else rewrite.
+      cur=$(/usr/bin/elfdump -d "$f" | awk '$2=="RUNPATH"{print $4}')
+      if [ -n "$cur" ] && [ -z "$(echo "$cur" | tr ':' '\n' | grep -v '^/nix/store/')" ]; then continue; fi
+      chmod u+w "$f"
+      /usr/bin/elfedit -e "dyn:runpath $(rp_for $cl)" "$f" || echo "elfedit $f" >> "$W/fail"
+    done
+  '';
+  drvAttrs = {
   name = "${pname}-${version}";
-  inherit system gate gcc stage0 build pname;
+  inherit system gate gcc stage0 pname;
+  build = lp64Fix build;
   # the from-source gcc's runtime dir (lib = 32-bit, lib/amd64 = 64-bit); empty for a host compiler.
   gccLib = if builtins.isAttrs gcc then "${gcc.lib}/lib" else "";
   # buildTools' bin/ dirs on PATH (btPath) and the gstrip candidates both
@@ -71,25 +117,38 @@ derivation {
   gstripCands = builtins.concatStringsSep " " gstripCands;
   builder = "/usr/bin/bash";
   PATH = "/usr/gnu/bin:/usr/bin:/usr/sbin";
+  SOURCE_DATE_EPOCH = "315532800";  # as NixOS stdenv: gcc uses it for __DATE__/__TIME__ (gdbm embedded its build day)
   # The source is a fixed-output store path (NixOS: fetchurl), fetched once by Nix
   # and verified against the pinned sha256, not downloaded by the builder. A
   # builder-side curl was invisible to Nix: no retry, no cache, no substitution,
   # and one flaky mirror (ftp.gnu.org timed out after 81 s, measured) failed the
   # build. The hash check below stays as a second, independent verification.
-  srcTar = builtins.fetchurl { inherit (src) url sha256; };
+  # <nix/fetchurl.nix>: a builtin:fetchurl FOD, so eval downloads nothing (same store path).
+  srcTar = import <nix/fetchurl.nix> { inherit (src) url sha256; };
   srcSha256 = src.sha256;
   abisArg = builtins.concatStringsSep " " abis;
   depsArg = builtins.concatStringsSep " " deps;
   linkDepsArg = builtins.concatStringsSep " " linkDeps;
   selfRp = if selfRunpath then "1" else "";
   rtDirs = builtins.concatStringsSep " " runtimeLibDirs;
-  args = [ "-c" ''
+  args = [ "-c" (lp64Fix ''
     set -eu
     # buildTools store bin/ dirs go first (store gmake/gnutar/gzip/xz/bzip2/
     # gnugrep/gnused/gstrip on a solnix system). Empty $btPath collapses this to
     # the old /usr/gnu/bin:/usr/bin:/usr/sbin, so the bhost build is unchanged.
     export PATH="''${btPath:+$btPath:}/usr/gnu/bin:/usr/bin:/usr/sbin"
-    W=$(mktemp -d /var/tmp/srcpkg.XXXXXX)
+    # FIXED build dir, not mktemp: configure/libtool record it in shipped strings (jq's `CC=<W>/cc64`
+    # and its .libs search path), so a random name made every build's NarHash differ (measured:
+    # docs/pending/builders-need-store-tools.md, 2026-10-29). NixOS builds in the sandbox's /build;
+    # illumos has no sandbox, so: one constant path per output, the same on every host (unlike
+    # $NIX_BUILD_TOP, which follows the daemon's TMPDIR). Keyed by $buildKey, an eval-time digest of
+    # this drv's attrs (so 1:1 with the drv), NOT $out: `nix build --check/--rebuild` builds into a
+    # scratch out, and jq embeds W (measured, repro2). Nix locks the real out path for normal and
+    # --check builds alike, so two builds of one drv on one host never share W at the same time.
+    # mkdir without -p FAILS if a stale entry we cannot remove (another user's) is in the way.
+    W=/var/tmp/srcpkg-$buildKey
+    # Removed on ANY exit: a stale dir from a failed build by another nixbld uid could not be.
+    rm -rf "$W"; mkdir -m 700 "$W"; trap 'cd /; rm -rf "$W"' EXIT
     cp "$srcTar" "$W/src.tar"
     # illumos has no sha256sum; /usr/bin/digest -a sha256 is always present and
     # emits lowercase hex, matching the plain-hex src.sha256 (verified on dixi).
@@ -125,6 +184,8 @@ derivation {
       done
       # deps only: no host .pc file or cmake package can be picked up.
       export PKG_CONFIG_LIBDIR="''${PCD#:}" PKG_CONFIG_PATH="" CMAKE_PREFIX_PATH="''${CPP_#;}"
+      # -D_TS_ERRNO in both wrappers: errno is per-thread, as in illumos-gate (DTS_ERRNO).
+      # Without it errno is the main thread's global and other threads clobber it (./ts-errno-gate.sh).
       if [ -n "$gccLib" ]; then
         # The from-source gcc: its sysroot is the gate proto, so its default headers,
         # crt objects and libs are the gate's. The final RUNPATH is baked at link
@@ -134,7 +195,7 @@ derivation {
         for t in gcc:cc g++:c++; do
           cat > "$W/''${t#*:}$ABI" <<EOF
     #!/usr/bin/bash
-    exec $gcc/bin/''${t%%:*} -m$ABI $DI $DL -Wl,-R,$RP "\$@"
+    exec $gcc/bin/''${t%%:*} -m$ABI -D_TS_ERRNO $DI $DL -Wl,-R,$RP "\$@"
     EOF
           chmod +x "$W/''${t#*:}$ABI"
         done
@@ -142,7 +203,7 @@ derivation {
       else
         cat > "$W/cc$ABI" <<EOF
     #!/usr/bin/bash
-    exec $stage0/bin/gcc -m$ABI -nostdinc $DI -isystem $GI -isystem $gate/usr/include -B$(echo $GL | awk '{print $2}')/ $DL -static-libgcc "\$@"
+    exec $stage0/bin/gcc -m$ABI -D_TS_ERRNO -nostdinc $DI -isystem $GI -isystem $gate/usr/include -B$(echo $GL | awk '{print $2}')/ $DL -static-libgcc "\$@"
     EOF
         chmod +x "$W/cc$ABI"
       fi
@@ -166,8 +227,9 @@ derivation {
     GSTRIP=""; for g in $gstripCands; do [ -x "$g" ] && { GSTRIP="$g"; break; }; done
     [ -n "$GSTRIP" ] || { echo "FATAL: no gstrip (GNU strip) on this host or in buildTools" >&2; exit 1; }
     find "$out" -type f | while read -r f; do
-      [ "$(od -An -tx1 -N4 "$f" 2>/dev/null | tr -d ' \n')" = 7f454c46 ] || continue
-      chmod u+w "$f"; "$GSTRIP" --strip-debug "$f" 2>/dev/null || true
+      # ELF, or an ar archive ("!<ar"): -D zeroes archive member mtimes (NixOS binutils is --enable-deterministic-archives).
+      case "$(od -An -tx1 -N4 "$f" 2>/dev/null | tr -d ' \n')" in 7f454c46|213c6172) ;; *) continue;; esac
+      chmod u+w "$f"; "$GSTRIP" --strip-debug -D "$f" 2>/dev/null || true
     done
     # BUILD-TOOL PATHS BAKED INTO GENERATED SCRIPTS (the stdenv patchShebangs /
     # --replace analog). A package's own ./configure can hardcode the ABSOLUTE path
@@ -201,6 +263,8 @@ derivation {
       IFS=$_oldifs
     fi
     : > "$W/fail"
+    # no shipped ELF may reference the global errno (the wrappers pass -D_TS_ERRNO)
+    /usr/bin/bash ${./ts-errno-gate.sh} "$out" 2>> "$W/fail" || echo "ts-errno gate failed for $out" >> "$W/fail"
     # the two big build-time-only paths (gate proto, compiler) must not appear in
     # any shipped ELF, or the runtime closure silently grows by ~400 MB.
     # grep's status is checked, not piped away: 0 = hits, 1 = none, anything else
@@ -225,6 +289,7 @@ derivation {
       chmod u+w "$f"
       /usr/bin/elfedit -e "dyn:runpath $(rp_for $cl)" "$f" || echo "elfedit $f" >> "$W/fail"
     done
+    /usr/bin/bash ${./zero-checksum.sh} "$out" "$W/fail"
     # THE GATE: ldd with no LD_LIBRARY_PATH; nothing unresolved, nothing off-store.
     unset LD_LIBRARY_PATH LD_LIBRARY_PATH_64 LD_LIBRARY_PATH_32 || true
     find "$out" -type f | while read -r f; do
@@ -233,5 +298,6 @@ derivation {
     done
     if [ -s "$W/fail" ]; then echo "FATAL: closure gate failed:" >&2; head -40 "$W/fail" >&2; exit 1; fi
     echo "=== $pname: every ELF resolves inside /nix/store ===" >&2
-  '' ];
-}
+  '') ];
+};
+in derivation (drvAttrs // { buildKey = builtins.substring 0 16 (builtins.hashString "sha256" (builtins.toJSON drvAttrs)); })

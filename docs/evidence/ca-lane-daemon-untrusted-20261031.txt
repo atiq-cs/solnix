@@ -1,0 +1,31 @@
+# nix 2.24.15 through nix-daemon, untrusted user: an unsigned CA path is accepted, an unsigned IA path is refused
+# host: dixa (aarch64-solaris, solnix v4 image), 2026-10-31; nix.conf require-sigs = true, substituters = https://cache.solnix.io https://cache.nixos.org, trusted-users = root
+# user gburd: nix store info -> Trusted: 0
+
+## 1. the real fetch: gburd, NIX_REMOTE=daemon nix-store -r of the CA-lane path (absent before), from cache.solnix.io (its narinfo has no Sig)
+copying path '/nix/store/cbzxm9jny42k1bf5gbi0rad1w1681p6f-source' from 'https://cache.solnix.io'...
+/nix/store/cbzxm9jny42k1bf5gbi0rad1w1681p6f-source   rc=0
+nix-store -q --hash: sha256:19r6wrm4067pq89nr63dppnbv85q5rmpwb2pp0kz85ymn69lg4lh   path-info signatures: []
+
+## 2. the same CA path from a local file:// cache, untrusted gburd through the daemon (ca-daemon-test5)
+== untrusted gburd: nix copy --from file:///var/tmp/catest-cache, daemon store: /nix/store/cbzxm9jny42k1bf5gbi0rad1w1681p6f-source
+copying 1 paths...
+copying path '/nix/store/cbzxm9jny42k1bf5gbi0rad1w1681p6f-source' from 'file:///var/tmp/catest-cache'...
+rc=0
+  now: /nix/store/cbzxm9jny42k1bf5gbi0rad1w1681p6f-source
+
+## 3. negative control (ca-daemon-test8): an input-addressed served path, qw8mbsgz solnix-cputemp, its narinfo with the Sig line removed, its two refs' signed narinfos unchanged
+narinfo: StorePath: /nix/store/qw8mbsgz200jmy1x3qbn5scwvzd472gi-solnix-cputemp
+narinfo: References: 86qg1hqv9nk9s5s2g1bwdkp9fg7nhfyj-libc qw8mbsgz200jmy1x3qbn5scwvzd472gi-solnix-cputemp v32plmi32y0icxppchnsn5ikfpp6ag1b-gcc-14.3.0-lib
+== CONTROL: untrusted gburd, daemon, IA path with its Sig stripped (expect refused)
+copying path '/nix/store/qw8mbsgz200jmy1x3qbn5scwvzd472gi-solnix-cputemp' from 'file:///var/tmp/catest-cache'...
+error: cannot add path '/nix/store/qw8mbsgz200jmy1x3qbn5scwvzd472gi-solnix-cputemp' because it lacks a signature by a trusted key
+rc=0
+  now: /nix/store/qw8mbsgz200jmy1x3qbn5scwvzd472gi-solnix-cputemp: No such file or directory
+== SAME, root (trusted) with --no-check-sigs (expect accepted: the NAR itself is fine)
+copying path '/nix/store/qw8mbsgz200jmy1x3qbn5scwvzd472gi-solnix-cputemp' from 'file:///var/tmp/catest-cache'...
+  now: /nix/store/qw8mbsgz200jmy1x3qbn5scwvzd472gi-solnix-cputemp
+1 store paths deleted, 0.01 MiB freed
+
+# rc=0 after the CONTROL is the rc of `tail` in the pipe, not of nix copy; the outcome is the error line and the path staying absent.
+# Scripts: dixa /var/tmp/ca-daemon-test{5,8}.sh (floki /tmp copies). On dixi the path could not be removed first (keep-outputs + a live deriver), so dixa ran it.

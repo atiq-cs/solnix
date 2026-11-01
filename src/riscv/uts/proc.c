@@ -136,6 +136,7 @@ typedef struct kthread {
 	void		*t_wchan;	/* sleep channel (R-P9), NULL if runnable */
 	void		*t_curproc;	/* this thread's user proc (R-P9 preempt) */
 	struct kthread	*t_link;	/* run-queue / sleepq link */
+	int		t_swtch;	/* rvsmp-b: on sleepq, context not yet saved */
 } kthread_t;
 
 /* Global run queue (FIFO) + lock. */
@@ -147,12 +148,11 @@ static int next_tid = 0;
 /* Per-cpu current thread + idle thread. Boot-cpu dispatch only in R-P5, but
  * indexed by hartid so the structure is already SMP-shaped. */
 /*
- * MUST match main.c's MAXCPU and the secondary_stacks pool in locore.S (which
- * holds MAXCPU-1 stacks). 16 for the SpacemiT K3's 16 harts; see the MAXCPU
- * comment in main.c for why a too-small value aliases harts onto one slot
- * rather than merely limiting them.
+ * MAXCPU is <sys/machtypes.h>'s, the one main.c uses for cpu_online[] and the
+ * secondary_stacks pool; see the MAXCPU comment there for why a too-small value
+ * aliases harts onto one slot rather than merely limiting them.
  */
-#define	MAXCPU		16
+#include <sys/machtypes.h>
 static kthread_t *curthread[MAXCPU];
 static kthread_t *idlethread[MAXCPU];
 
@@ -317,6 +317,9 @@ curthread_kstacktop(void)
 	return (((unsigned long)self->t_stack + self->t_stacksize) & ~15UL);
 }
 
+void smp_wake_idle(void);
+void clock_start_secondary(unsigned long hartid);
+
 /* Enqueue a runnable thread at the tail (FIFO round-robin). Caller may hold or
  * not hold runq_lock; this takes it. */
 static void
@@ -331,6 +334,7 @@ runq_enqueue(kthread_t *t)
 		runq_head = t;
 	runq_tail = t;
 	runq_lock_exit();
+	smp_wake_idle();	/* rvsmp-1b: disp_enq_thread -> cpu_wakeup */
 }
 
 /* Dequeue the head runnable thread, or NULL if the runq is empty. */
@@ -349,6 +353,48 @@ runq_dequeue(void)
 	}
 	runq_lock_exit();
 	return (t);
+}
+
+/*
+ * rvsmp-a: a yielding thread is enqueued by the thread that replaces it, after
+ * rv_swtch has stored its context (illumos: the new thread drops the old one's
+ * thread lock). Enqueued earlier, another hart can resume it on a stack that is
+ * still live here. swtch_tail runs at every resume point after rv_swtch.
+ */
+static kthread_t *swtch_prev[MAXCPU];
+static kthread_t *swtch_sleep[MAXCPU];	/* rvsmp-b: sleep_on's thread */
+static kthread_t *swtch_dead[MAXCPU];	/* rvsmp-b: thread_exit's thread */
+void swtch_tail(void);
+
+void
+swtch_tail(void)
+{
+	int cpu = this_cpu_ok();	/* tp, as rv_swtch restored it */
+	kthread_t *t = swtch_prev[cpu];
+
+	if (t != 0) {
+		swtch_prev[cpu] = 0;
+		runq_enqueue(t);
+	}
+	/* rvsmp-b: a sleeper's context is saved now; enqueue it if woken meanwhile. */
+	t = swtch_sleep[cpu];
+	if (t != 0) {
+		int woken;
+
+		swtch_sleep[cpu] = 0;
+		runq_lock_enter();
+		t->t_swtch = 0;
+		woken = (t->t_state == TS_RUN);
+		runq_lock_exit();
+		if (woken)
+			runq_enqueue(t);
+	}
+	/* rvsmp-b: an exiting thread is off its stack now; let the reaper free it. */
+	t = swtch_dead[cpu];
+	if (t != 0) {
+		swtch_dead[cpu] = 0;
+		__atomic_store_n(&t->t_state, TS_DEAD, __ATOMIC_RELEASE);
+	}
 }
 
 /*
@@ -410,6 +456,7 @@ thread_create(void (*entry)(void *), void *arg)
 	t->t_link = 0;
 	t->t_wchan = 0;
 	t->t_curproc = 0;
+	t->t_swtch = 0;
 
 	/* Stack grows down: top = base + size, 16-byte aligned. */
 	sp = ((unsigned long)t->t_stack + THREAD_STACK_SIZE) & ~15UL;
@@ -498,7 +545,9 @@ swtch(void)
 	 */
 	fp_switch((fpu_ctx_t *)old->t_ctx.c_fpu, (fpu_ctx_t *)new->t_ctx.c_fpu);
 	rv_swtch(&old->t_ctx, &new->t_ctx);
-	proc_set_current(curthread[cpu]->t_curproc);
+	swtch_tail();			/* rvsmp-a: enqueue a yielder now saved */
+	/* rvsmp-b: `cpu` is stale if we resumed on another hart; restore OURS. */
+	proc_set_current(old->t_curproc);
 	/*
 	 * When we are switched back to, execution resumes here. The barrier
 	 * also prevents the compiler from tail-call-optimizing rv_swtch (which
@@ -534,8 +583,13 @@ thread_yield(void)
 	int cpu = this_cpu_ok();
 	kthread_t *self = curthread[cpu];
 
-	if (self != idlethread[cpu])
-		runq_enqueue(self);		/* back of the line */
+	if (self != idlethread[cpu]) {
+		/* rvsmp-a: nothing else runnable -> keep the cpu (as the old
+		 * enqueue-self/dequeue-self did); else swtch_tail enqueues us. */
+		if (__atomic_load_n(&runq_head, __ATOMIC_ACQUIRE) == 0)
+			return;
+		swtch_prev[cpu] = self;	/* back of the line, once saved */
+	}
 	swtch();
 }
 
@@ -572,7 +626,9 @@ sleep_on(void *chan)
 	runq_lock_enter();
 	self->t_link = sleepq_head;
 	sleepq_head = self;
+	self->t_swtch = 1;		/* rvsmp-b: wakeup must not enqueue yet */
 	runq_lock_exit();
+	swtch_sleep[cpu] = self;	/* swtch_tail enqueues it if woken */
 
 	swtch();			/* off-cpu until wakeup re-enqueues us */
 	/* Woken: we are ONPROC again; t_wchan cleared by wakeup. */
@@ -601,6 +657,10 @@ wakeup(void *chan)
 			t->t_wchan = 0;
 			/* Re-enqueue runnable (inline; we hold the lock). */
 			t->t_state = TS_RUN;
+			if (t->t_swtch) {	/* rvsmp-b: swtch_tail enqueues */
+				t = next;
+				continue;
+			}
 			t->t_link = 0;
 			if (runq_tail != 0)
 				runq_tail->t_link = t;
@@ -630,7 +690,9 @@ thread_exit(void)
 	int cpu = this_cpu_ok();
 	kthread_t *self = curthread[cpu];
 
-	self->t_state = TS_DEAD;
+	/* rvsmp-b: TS_DEAD is set by swtch_tail after our context is saved, so
+	 * the reaper cannot free this stack while we still run on it. */
+	swtch_dead[cpu] = self;
 	/* Do not re-enqueue; just switch to the next runnable/idle thread. */
 	swtch();
 	/* Never reached. */
@@ -641,6 +703,12 @@ thread_exit(void)
 /*
  * curthread_id — the current thread's id (for proc bookkeeping / diagnostics).
  */
+void *
+curthread_ptr(void)
+{
+	return (curthread[this_cpu_ok()]);
+}
+
 int
 curthread_id(void)
 {
@@ -659,8 +727,10 @@ thread_reap(kthread_t *t)
 {
 	if (t == 0)
 		return;
-	if (t->t_state != TS_DEAD)
-		return;		/* still runnable/onproc: not safe to free */
+	/* rvsmp-b: a zombie's thread is at most one swtch from TS_DEAD (no
+	 * sleep/preempt after proc_exit's PS_ZOMBIE); wait, do not leak it. */
+	while (__atomic_load_n(&t->t_state, __ATOMIC_ACQUIRE) != TS_DEAD)
+		;
 	if (t->t_stack != 0)
 		kmem_free(t->t_stack, t->t_stacksize);
 	kmem_free(t, sizeof (kthread_t));
@@ -671,12 +741,15 @@ thread_reap(kthread_t *t)
  * wfi's until an interrupt, then yields so a freshly-runnable thread can run.
  * This replaces the R-P4 raw wfi park with a real dispatched idle thread.
  */
+extern void pty_cons_poll(void);	/* pty.c */
+
 static void
 idle_body(void *arg)
 {
 	(void) arg;
 	for (;;) {
 		__asm__ __volatile__("wfi");
+		pty_cons_poll();	/* tryit1: console input while every thread sleeps */
 		thread_yield();
 	}
 }
@@ -717,6 +790,10 @@ dispatch_init_cpu(int cpu)
 	idle->t_ctx.c_fpu = 0;
 
 	set_this_cpu((unsigned long)cpu);	/* tp = our S-mode hart id */
+	/* rvsmp-c: copy.S needs sstatus.SUM=1, and sstatus is per hart, not per
+	 * thread. Set it on every hart so a thread resumed in-kernel on a hart
+	 * that never entered U-mode (or a frame saved there) cannot carry SUM=0. */
+	__asm__ __volatile__("csrs sstatus, %0" :: "r"(SSTATUS_SUM));
 	idlethread[cpu] = idle;
 	curthread[cpu] = idle;		/* we ARE the idle thread now */
 }
@@ -821,6 +898,8 @@ thread_ab_selftest(void)
  */
 
 #define	HARTBIT(h)	(1UL << (h))
+/* idle_harts and the SBI IPI hart_mask (base 0) hold one bit per hart. */
+_Static_assert(MAXCPU <= 64, "idle_harts is one unsigned long: MAXCPU <= 64");
 extern long sbi_send_ipi(unsigned long hart_mask, unsigned long hart_mask_base);
 
 /* Bitmap of harts currently in their idle wfi (candidates to IPI-wake). */
@@ -867,9 +946,20 @@ void
 smp_wake_idle(void)
 {
 	unsigned long mask;
+	/* Order the caller's runq store before the idle_harts load; pairs with
+	 * the idle hart's set-bit-then-recheck-runq (no lost wakeup). */
+	__atomic_thread_fence(__ATOMIC_SEQ_CST);
+	/* Claim one idle hart (clear its bit) so back-to-back enqueues wake
+	 * different harts, as illumos cpu_wakeup picks one. */
 	__atomic_load(&idle_harts, &mask, __ATOMIC_ACQUIRE);
-	if (mask != 0)
-		(void) sbi_send_ipi(mask, 0);
+	while (mask != 0) {
+		unsigned long bit = mask & -mask;
+		if (__atomic_fetch_and(&idle_harts, ~bit, __ATOMIC_ACQ_REL) & bit) {
+			(void) sbi_send_ipi(bit, 0);
+			return;
+		}
+		__atomic_load(&idle_harts, &mask, __ATOMIC_ACQUIRE);
+	}
 }
 
 /*
@@ -892,6 +982,7 @@ smp_secondary_dispatch(unsigned long hartid)
 
 	/* Enable the S-soft (IPI) source so sbi_send_ipi can wake us from wfi. */
 	__asm__ __volatile__("csrs sie, %0" :: "r"(SIE_SSIE));
+	clock_start_secondary(hartid);	/* rvsmp-1b: per-hart tick (STIE) */
 	__asm__ __volatile__("csrs sstatus, %0" :: "r"(SSTATUS_SIE));
 
 	for (;;) {
@@ -909,13 +1000,24 @@ smp_secondary_dispatch(unsigned long hartid)
 			fp_switch((fpu_ctx_t *)self->t_ctx.c_fpu,
 			    (fpu_ctx_t *)t->t_ctx.c_fpu);
 			rv_swtch(&self->t_ctx, &t->t_ctx);
+			swtch_tail();	/* rvsmp-a: enqueue a yielder now saved */
 			proc_set_current(curthread[cpu]->t_curproc);
 			curthread[cpu] = self;	/* idle is current again */
 			set_this_cpu(hartid);	/* restore tp (idle ran with it) */
 		} else {
+			/*
+			 * rvsmp-1b: publish idle, then recheck the runq with SIE
+			 * masked so an enqueue+IPI landing between the check and
+			 * wfi stays pending (SSIP) and wakes the wfi; unmask to take
+			 * it (trap clears SSIP), then return to the dispatch loop.
+			 */
+			__asm__ __volatile__("csrc sstatus, %0" :: "r"(SSTATUS_SIE));
 			__sync_fetch_and_or(&idle_harts, HARTBIT(hartid));
-			__asm__ __volatile__("wfi");
+			__atomic_thread_fence(__ATOMIC_SEQ_CST);
+			if (__atomic_load_n(&runq_head, __ATOMIC_ACQUIRE) == 0)
+				__asm__ __volatile__("wfi");
 			__sync_fetch_and_and(&idle_harts, ~HARTBIT(hartid));
+			__asm__ __volatile__("csrs sstatus, %0" :: "r"(SSTATUS_SIE));
 		}
 	}
 }

@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# solnix-cc -- compile/link a STATIC riscv64 program for the solnix riscv64 kernel
+# (src/riscv/uts) with the board's NATIVE gcc, against newlib 4.5.0 + libsolnix.
+#
+# Why these flags (each is forced, see docs/riscv64-first-real-binary.md §3):
+#   -mcmodel=medlow   newlib's libc.a is medlow (1547 R_RISCV_HI20 vs 3 PCREL)
+#   -mabi=lp64d       newlib's only multilib is rv64imafdc/lp64d -> hard float
+#   link @0x40010000  medlow reaches [0,2G); Sv39 slot 1 is a free user slot
+#   -nostdinc         the native gcc is riscv64-linux-gnu: keep glibc headers out
+#   -fno-pic -no-pie  the kernel loads static ET_EXEC only (uts/elf.c)
+# glue.o is linked as an OBJECT, not from libsolnix.a: otherwise newlib's own
+# signal.o (a software signal emulation) can be pulled first to satisfy raise()
+# and then collide with the glue's signal()/raise() that use the kernel.
+# SOLNIX_GLUE overrides glue.o (negative-control builds only).
+# Env: SOLNIX_SYSROOT (default ~/scratch/rvpkg/sysroot) holds include/ lib/.
+# SOLNIX_GCC (default gcc, the board's native one) may name a riscv64 cross gcc instead
+# (tryit1: riscv64-none-elf-gcc on an x86_64 build host); the flags below make the two equivalent.
+set -euo pipefail
+SR="${SOLNIX_SYSROOT:-$HOME/scratch/rvpkg/sysroot}"
+GCC="${SOLNIX_GCC:-gcc}"
+GCCINC="$("$GCC" -print-file-name=include)"
+ARCH="-march=rv64imafdc_zicsr_zifencei -mabi=lp64d -mcmodel=medlow"
+CPP="-nostdinc -isystem $SR/include/solnix -isystem $SR/include -isystem $GCCINC -D__solnix__ -D__illumos_riscv64_newlib__"
+# -ffile-prefix-map: no build-host path ($HOME/...) in the DWARF or __FILE__ of what we ship.
+CF="-ffile-prefix-map=$HOME=/build -ffile-prefix-map=$SR=/sysroot -fno-pic -fno-pie -fno-stack-protector -fno-asynchronous-unwind-tables -fno-unwind-tables -ffunction-sections -fdata-sections"
+link=1
+for a in "$@"; do case "$a" in -c|-S|-E|-M|-MM) link=0;; esac; done
+if [ "$link" = 0 ]; then
+	exec "$GCC" $ARCH $CPP $CF "$@"
+fi
+# A bare-metal (*-elf) ld has no RELRO and rejects -z norelro (fatal under configure's --fatal-warnings).
+case "$("$GCC" -dumpmachine)" in *-elf) NORELRO=;; *) NORELRO=-Wl,-z,norelro;; esac
+exec "$GCC" $ARCH $CPP $CF -nostdlib -static -no-pie -Wl,-T,"$SR/lib/solnix.ld" \
+	-Wl,--gc-sections $NORELRO -Wl,--build-id=none \
+	"$SR/lib/crt0.o" "${SOLNIX_GLUE:-$SR/lib/glue.o}" "$@" \
+	-Wl,--start-group "$SR/lib/libsolnix.a" -L"$SR/lib" -lc -lm "$("$GCC" $ARCH -print-libgcc-file-name)" -Wl,--end-group

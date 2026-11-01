@@ -1,0 +1,61 @@
+solnix: opteron_pcbe -- refuse to load when PerfEvtSel0 cannot be written, so cpu utilization (cap_util) never programs
+counters the hypervisor rejects.
+
+SYMPTOM (dpimg3, kiwi us-west-2, 2026-10-29; earlier docs/GPU-PARITY-AMD.md STEP 2a on g4ad): every solnix x86_64 image
+panic-loops from its SECOND boot on EC2 AMD (m6a.large and c6a.large, AMD EPYC 7R13): 4/4 launches, up to 11 boots each:
+  panic: BAD TRAP: type=d (#gp General protection) ... unix:wrmsr+b <- genunix:kcpc_program <- unix:cu_cpc_program
+  <- cu_cpc_program_xcall / cu_cpu_run <- cu_init <- main ; rcx=0xc0010000 (PerfEvtSel0), rax/rsi=0x1300c0.
+The first boot survives only because the pcbe module does not load then (cu_init_error = -2, read with mdb -k).
+
+MECHANISM: cu_init (mp_init_tbl, uts/common/conf/param.c) -> kcpc_init loads pcbe.AuthenticAMD (opteron_pcbe.c).
+opt_pcbe_init accepts any AMD family >= 0xf, so cpc_ncounters = 4/6 and cu_init programs event 0xc0 with
+USR|OS|INT on every CPU. The EC2 AMD hypervisor exposes no PMU and raises #GP on that wrmsr, outside any on_trap.
+
+THE CHANGE: opt_pcbe_init probes PerfEvtSel0 under on_trap(OT_DATA_ACCESS): read it, write the value cu_init would
+(0x1300c0, enable clear), restore it. If it traps, the module refuses to load, so kcpc_init fails and cu_init skips
+(cu_init_error -2, as on the first boot). Same pattern as the C1E probe of MSR_AMD_INT_PENDING_CMP_HALT in
+uts/intel/os/cpuid.c. Hardware with a working PMU behaves as before. Before this, docs/GPU-PARITY-AMD.md used
+`set cu_flags = 0` in the boot archive's /etc/system; that turns cap_util off on every machine, this only where the
+counters are absent.
+
+diff -ru a/usr/src/uts/intel/pcbe/opteron_pcbe.c b/usr/src/uts/intel/pcbe/opteron_pcbe.c
+--- a/usr/src/uts/intel/pcbe/opteron_pcbe.c	2026-10-28 23:39:18.869767187 -0400
++++ b/usr/src/uts/intel/pcbe/opteron_pcbe.c	2026-10-28 23:40:33.884234141 -0400
+@@ -88,6 +88,7 @@
+ #include <sys/privregs.h>
+ #include <sys/ddi.h>
+ #include <sys/sunddi.h>
++#include <sys/ontrap.h>
+ 
+ #include "opteron_pcbe_table.h"
+ #include <opteron_pcbe_cpcgen.h>
+@@ -632,6 +633,29 @@
+ 	opd.opd_cmask = (1 << opd.opd_ncounters) - 1;
+ 
+ 	/*
++	 * solnix: a hypervisor may report an AMD CPU with no usable counters and
++	 * #GP on any non-zero PerfEvtSel write (EC2 m6a/c6a). Probe PerfEvtSel0 with
++	 * the shape cpu utilization (cap_util) programs, event 0xc0 + USR|OS|INT,
++	 * enable bit clear, and refuse to load if it traps, as the C1E probe in
++	 * cpuid.c does for its MSR. kcpc_init() then fails and cu_init() skips.
++	 */
++	{
++		on_trap_data_t otd;
++		uint64_t pes;
++		int ok = 0;
++
++		if (!on_trap(&otd, OT_DATA_ACCESS)) {
++			pes = rdmsr(opd.opd_pesf(0));
++			wrmsr(opd.opd_pesf(0), 0x1300c0ULL);
++			wrmsr(opd.opd_pesf(0), pes);
++			ok = 1;
++		}
++		no_trap();
++		if (!ok)
++			return (-1);
++	}
++
++	/*
+ 	 * Figure out processor revision here and assign appropriate
+ 	 * event configuration.
+ 	 */

@@ -351,7 +351,16 @@ above), so the pool covered 1.7 GiB of a 20 GiB disk. Fixed and measured:
 **`rpool 19.6G, 17.7G avail`** on a booted instance, same single 20 GiB `xvda`.
 Both `ami-0cb14e40f9355bd0c` and the restored `ami-062d017ec6cd47b16` show this.
 
-### ✅ STILL TRUE: `--block-device-mappings` beyond 20 GiB does not enlarge `rpool`
+### ✅ FIXED 2026-10-29 for the solnix DP image (rootgrow): the root pool grows to the EBS size at first boot
+
+The DP image built by `scripts/solnix-install` (`oi-make-raw-img.sh`) now makes the root pool with `zpool create -B`
+(whole_disk=1, autoexpand=on), and `cloud-ec2.nix` sets `services.zfs.expandOnBoot = "all"` (NixOS amazon-image.nix).
+Measured on kiwi, 6/6 cold launches: 32G volume -> spool 31.5G, 100G -> 99.5G, in one boot with no human step. The pool
+was ONLINE, and `zpool history` shows the relabel at root import. The old layout (pool on a fmthard'd slice, whole_disk=0)
+stayed at 7.5G on both sizes (control, 2/2): libzfs relabels only whole-disk vdevs. The section below still describes the
+OLD OI base AMI and any image built before this change.
+
+### ✅ STILL TRUE (old OI base AMI / pre-2026-10-29 images): `--block-device-mappings` beyond 20 GiB does not enlarge `rpool`
 
 * Launching with a root **larger than the AMI's 20 GiB** does not enlarge `rpool`. The extra
   capacity is not adjacent to the vdev, so `zpool online -e rpool` has nothing to expand into

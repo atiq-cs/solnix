@@ -4,10 +4,11 @@
  * the same lists Linux ships).
  *
  * First target is Gen9 big-core (SKL/KBL/CFL/WHL/AML/CML), which is what the
- * X1's UHD 630 (8086:3e9b, CFL-H GT2) is. Ids outside that set are
- * deliberately not matched: they need display/GT code paths the illumos port
- * has not reached, and binding them would give a driver that attaches and
- * then fails.
+ * X1's UHD 630 (8086:3e9b, CFL-H GT2) is. Second is Alder Lake-P (Gen12,
+ * display 13), the X1E's Iris Xe (8086:46a6). OpenBSD builds every platform's
+ * display and GT code into the one inteldrm object set, so the ADL-P paths
+ * link already; they have never run here, and no driver alias for them is
+ * shipped (ATTACH-PLAN.md HOLD). Other ids stay unmatched.
  *
  * The table uses pciids.h's own X-macro lists, so a re-fetched pciids.h adds
  * new ids in these families with no edit here. i915_pciid_device() walks the
@@ -61,6 +62,8 @@ static const struct i915_pciid_info cfl_gt2 = { "coffeelake", 9, 2 };
 static const struct i915_pciid_info cfl_gt3 = { "coffeelake", 9, 3 };
 static const struct i915_pciid_info cml_gt1 = { "cometlake", 9, 1 };
 static const struct i915_pciid_info cml_gt2 = { "cometlake", 9, 2 };
+/* pciids.h lists ADL-P GT1 and GT2 ids in one list, so no GT tier (0). */
+static const struct i915_pciid_info adl_p = { "alderlake_p", 12, 0 };
 
 /*
  * Same id-list -> info pairing as the upstream i915_pci.c pciidlist[] for
@@ -93,6 +96,9 @@ static const struct pci_device_id i915_pciid_table[] = {
 	INTEL_CML_GT2_IDS(INTEL_VGA_DEVICE, &cml_gt2),
 	INTEL_CML_U_GT1_IDS(INTEL_VGA_DEVICE, &cml_gt1),
 	INTEL_CML_U_GT2_IDS(INTEL_VGA_DEVICE, &cml_gt2),
+#ifndef I915_PCIID_SABOTAGE_ADLP	/* negative control: drop the X1E's list */
+	INTEL_ADLP_IDS(INTEL_VGA_DEVICE, &adl_p),
+#endif
 	{ 0 }
 };
 

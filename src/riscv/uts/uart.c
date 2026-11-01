@@ -32,6 +32,7 @@
  */
 
 #include "riscv_regs.h"
+#include "sbi.h"	/* kcons_quiet */
 
 extern void kputhex(unsigned long v);
 extern void kputdec(unsigned long v);
@@ -260,8 +261,9 @@ dw_apb_uart_selftest(unsigned long base, unsigned int shift, int io32, int live)
 		return;
 	}
 
-	/* TX a line straight through the bound UART's THR (shifted offset). */
-	for (q = msg; *q != '\0'; q++)
+	/* TX a line straight through the bound UART's THR (shifted offset);
+	 * not printed when the kernel console is quiet (tryit1 demo). */
+	for (q = msg; *q != '\0' && !kcons_quiet; q++)
 		uart_putc((int)*q);
 
 	/* Read LSR back at its shifted offset; an idle line has THRE set. */

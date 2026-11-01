@@ -1,5 +1,8 @@
 # iwx port status: what compiles, what does not, and the measured route decision
 
+**2026-10-26: the top three rows of the claim ladder are now measured on hardware (lixi); see them.** The rest of
+this document is the original record.
+
 Scope of this document: **two work sessions**, local cross-compile only, no hardware. It records what
 was measured. Where it corrects the earlier plan -- or an earlier version of itself -- it says so,
 because the earlier numbers are cited elsewhere in this repo and the correction needs to be findable
@@ -14,9 +17,9 @@ from the source, not only from here.
 | **`if_iwx.c` compiles to an object file** | **YES** | `build/if_iwx_illumos.o`, ELF 64-bit relocatable x86-64, 263 text symbols. Real `-c` codegen, not `-fsyntax-only` |
 | **the mbuf layer links** | **YES** | `ld -r` against a kernel-built `iwx_mbuf.o` resolves **all 11** `iwx_m_*`: 128 undefined -> 122 |
 | **`iwx` links as a module** | **YES** | `ld -r` of net80211 + crypto + rbtree + mbuf + kcompat + stack + iwx_mbuf leaves **42 undefined, EVERY ONE kernel-supplied-at-load, 0 non-kernel remaining** (measure-gate.sh, negative-controlled). See ROUND 7 below. |
-| **module loads** | **NO** | needs phase-3 locking (SPLNET/Finding 3) -- the audited COARSE model is now REFUTED (deadlocks; see below); the FINE-GRAINED model is the real remaining work. The attach glue (`_init`/`_info`/`_fini`, `mac_register`, DDI attach) is DONE in `iwx_attach.c`. |
-| **attaches to the PCI device** | **NO** | not attempted |
-| **sees / associates with an AP** | **NO** | not attempted |
+| **module loads** | **YES** (on lixi, the X1E Gen 5, from 2026-10-24) | under the n80211 giant-lock model (src/ports/wifi/net80211/n80211_giant.c), the same model as iwm; modinfo "iwx (Intel AX2xx (OpenBSD iwx))" |
+| **attaches to the PCI device** | **YES** | AX211 8086:51f0, iwx0 attaches at boot (`hardware.wirelessIwx.attachAtBoot`), firmware so-a0-gf-a0 77 |
+| **sees / associates with an AP** | **YES, WPA2-PSK, 2026-10-26** | `scan-wifi` lists the LAN; wpa-pmk -> in-kernel 4-way (fbt: recv_4way_msg1/3, send_4way_msg2/4, check_mic 0, 3x iwx_add_sta_key 0) -> DHCP on iwx0, ping 0% loss, ssh over iwx0 alone. Boot auto-join: `site/solnix-wifi-join-iwx` (`hardware.wirelessIwx.networks`), connected 12 s after the method started |
 
 ### Session-5 addition: phase-3 locking -- safe subset landed, coarse model refuted
 

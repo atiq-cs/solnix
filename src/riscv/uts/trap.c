@@ -73,6 +73,8 @@ extern int thread_preempt(void);
 
 /* From uproc.c: deliver a pending signal on return-to-U (R-P11). */
 extern void proc_deliver_signals(struct regs *tf);
+/* From pty.c (tryit1): drive the console pair's UART master. */
+extern void pty_cons_poll(void);
 
 /* Count of clock-tick preemptions of a user thread (R-P9 gate 5 proof). */
 volatile unsigned long preempt_count = 0;
@@ -121,7 +123,10 @@ volatile unsigned long trap_probe_scause = 0;
  * R-P9, so one global is correct; a per-thread t_lofault is the SMP-userland
  * upgrade. (NOTE: the ceiling — one global lofault — is documented above.)
  */
-volatile unsigned long copy_lofault = 0;
+/* rvsmp-b: one slot per hart, indexed by tp (copy.S/swtch.S); swtch saves and
+ * restores it per thread, so it is the thread's t_lofault. */
+#include <sys/machtypes.h>
+volatile unsigned long copy_lofault[MAXCPU];
 
 static void
 puthex(unsigned long v)
@@ -185,6 +190,9 @@ static void
 trap_report(struct regs *tf, const char *tag)
 {
 	unsigned long code = SCAUSE_CODE(tf->r_scause);
+
+	if (!trap_probe_active)
+		kcons_quiet = 0;	/* tryit1: a real fault is always printed */
 
 	sbi_console_puts("[trap] ");
 	sbi_console_puts(tag);
@@ -253,8 +261,10 @@ trap(struct regs *tf)
 			 * no syscall this tick. Runs after any preempt swtch, on
 			 * whichever thread we resume as.
 			 */
-			if ((tf->r_sstatus & SSTATUS_SPP) == 0)
+			if ((tf->r_sstatus & SSTATUS_SPP) == 0) {
+				pty_cons_poll();	/* tryit1: ^C reaches a busy foreground */
 				proc_deliver_signals(tf);
+			}
 			return;
 		case IRQ_S_SOFT:
 			/*
@@ -341,11 +351,14 @@ trap(struct regs *tf)
 	 * thread, which is a hint that making copy_lofault per-thread outright is
 	 * the real upgrade.
 	 */
-	if (copy_lofault != 0 && (tf->r_sstatus & SSTATUS_SPP) != 0 &&
+	unsigned long lfh;	/* rvsmp-b: this hart's slot (SPP=1: tp is ours) */
+	__asm__ __volatile__("mv %0, tp" : "=r"(lfh));
+	lfh = lfh < MAXCPU ? lfh : 0;
+	if (copy_lofault[lfh] != 0 && (tf->r_sstatus & SSTATUS_SPP) != 0 &&
 	    (code == EXC_LOAD_PAGE_FAULT || code == EXC_STORE_PAGE_FAULT ||
 	    code == EXC_LOAD_ACCESS || code == EXC_STORE_ACCESS)) {
-		tf->r_sepc = copy_lofault;
-		copy_lofault = 0;
+		tf->r_sepc = copy_lofault[lfh];
+		copy_lofault[lfh] = 0;
 		return;
 	}
 

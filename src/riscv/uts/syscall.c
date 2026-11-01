@@ -52,10 +52,11 @@ extern int proc_signal(int pid, int sig);
 extern long proc_open(const char *path);
 extern long proc_fread(int fd, char *ubuf, unsigned long n);
 extern long proc_close(int fd);
+extern int proc_fd_open(int fd);
 extern int proc_fork(struct regs *tf);
 extern int proc_execve(const char *path, char *const argv[],
     char *const envp[]);
-extern int proc_waitpid(int pid, int *statusp);
+extern int proc_waitpid(int pid, int *statusp, int nohang);
 extern long proc_brk(unsigned long newbrk);
 extern unsigned long proc_cow_shared(void);
 extern unsigned long proc_cow_copied(void);
@@ -68,11 +69,23 @@ extern long sys_getuid(void);
 extern void proc_sigreturn(struct regs *tf);
 extern void proc_deliver_signals(struct regs *tf);
 extern long proc_openat_w(const char *path, int flags);
+extern long proc_openat(int dirfd, const char *path, int flags);
+extern long proc_fstatat(int dirfd, const char *path, unsigned long ustat,
+    int flags);
+extern long proc_fstat(int fd, unsigned long ustat);
+extern long proc_getdents64(int fd, unsigned long ubuf, unsigned long n);
+extern long proc_mkdirat(int dirfd, const char *path, int mode);
+extern long proc_unlinkat(int dirfd, const char *path, int flags);
+extern long proc_renameat(int ofd, const char *opath, int nfd,
+    const char *npath);
+extern long proc_chdir(const char *path);
+extern long proc_getcwd(unsigned long ubuf, unsigned long size);
 extern long proc_fwrite(int fd, const char *ubuf, unsigned long n);
 extern long proc_lseek(int fd, long off, int whence);
 /* R-P12: pipes, dup2, on-disk FS sync/remount. */
 extern long proc_pipe(int *ufds);
 extern long proc_dup2(int oldfd, int newfd);
+extern long proc_fcntl(int fd, int cmd, long arg);
 extern long sys_sync(void);
 extern long sys_remount(void);
 /* AF_UNIX sockets (uproc.c: the fd-table half; unixsock.c: the protocol). */
@@ -82,6 +95,12 @@ extern long sys_bind(int fd, unsigned long uaddr, unsigned int ulen);
 extern long sys_listen(int fd, int backlog);
 extern long sys_accept(int fd, unsigned long uaddr, unsigned long ulenp);
 extern long sys_connect(int fd, unsigned long uaddr, unsigned int ulen);
+extern long sys_sendto(int fd, const char *ubuf, unsigned long n, int flags,
+    unsigned long usa, unsigned int salen);
+extern long sys_recvfrom(int fd, char *ubuf, unsigned long n, int flags,
+    unsigned long usa, unsigned long ulenp);
+extern long sys_getname(int fd, unsigned long usa, unsigned long ulenp,
+    int peer);
 extern long sys_getsockopt(int fd, int level, int name, unsigned long uval,
     unsigned long ulenp);
 extern long sys_setsockopt(int fd, int level, int name, unsigned long uval,
@@ -150,6 +169,17 @@ extern long copyout(const void *kaddr, void *uaddr, unsigned long n);
  * time-of-day source on this platform yet, so REALTIME is monotonic-since-boot
  * and says so rather than inventing an epoch).
  */
+#define	SYS_fcntl	25
+#define	SYS_getcwd	17
+#define	SYS_mkdirat	34
+#define	SYS_unlinkat	35
+#define	SYS_fchmodat	53	/* rvtty3c: /dev/pts/N only */
+#define	SYS_fchownat	54	/* rvtty3c: /dev/pts/N only */
+#define	SYS_renameat	38
+#define	SYS_chdir	49
+#define	SYS_getdents64	61
+#define	SYS_newfstatat	79
+#define	SYS_fstat	80
 #define	SYS_clock_gettime	113
 #define	SYS_exit	93
 #define	SYS_kill	129
@@ -158,11 +188,21 @@ extern long copyout(const void *kaddr, void *uaddr, unsigned long n);
 #define	SYS_setgid	144
 #define	SYS_setuid	146
 #define	SYS_getuid	174
+#define	SYS_getgid	176	/* rvlogin */
+#define	SYS_geteuid	175
+#define	SYS_getegid	177
+#define	SYS_setresuid	147
+#define	SYS_setresgid	149
 #define	SYS_getpid	172
 #define	SYS_brk		214
 #define	SYS_fork	220
 #define	SYS_execve	221
 #define	SYS_wait4	260
+#define	SYS_getrandom	278	/* rvlogin: viornd.c */
+#define	SYS_setpgid	154	/* rvtty3b */
+#define	SYS_getpgid	155	/* rvlogin */
+#define	SYS_getsid	156
+#define	SYS_setsid	157
 /* solnix-private diagnostic: print the kernel COW-fork stats line (R-P9). */
 #define	SYS_cowreport	500
 /* solnix-private diagnostic: print the clock-preemption count (R-P9 gate 5). */
@@ -205,6 +245,15 @@ extern long proc_port_send(int pfd, unsigned long user);
 #define	SYS_connect	203
 #define	SYS_getsockopt	209
 #define	SYS_setsockopt	208
+/*
+ * rvsrv: AF_INET. getsockname/getpeername/sendto are Linux's numbers; recvfrom
+ * is NOT (Linux's 207 is SYS_pset here, an illumos call), so it takes 520 in
+ * this kernel's private range next to the event ports.
+ */
+#define	SYS_getsockname	204
+#define	SYS_getpeername	205
+#define	SYS_sendto	206
+#define	SYS_recvfrom	520
 #define	SYS_sendmsg	211
 #define	SYS_recvmsg	212
 
@@ -221,9 +270,12 @@ sys_write(int fd, const char *ubuf, unsigned long n)
 
 	if (ubuf == 0)
 		return (-EFAULT);
-	if (fd >= 3)
+	/* Any slot holding an object (fd 0..2 too, after dup2) goes through the
+	 * fd table, as fd_ready does for poll; an empty 0..2 is the console. */
+	if (fd >= 3 || proc_fd_open(fd))
 		return (proc_fwrite(fd, ubuf, n));	/* writable file (R-P11) */
-	if (fd != 1 && fd != 2)
+	/* the console tty: writable on an empty 0, 1 or 2 */
+	if (fd < 0 || fd > 2)
 		return (-1);
 	/* Bounce the user buffer through the kernel in chunks via fault-safe
 	 * copyin. A bad user pointer returns EFAULT instead of panicking. */
@@ -236,7 +288,7 @@ sys_write(int fd, const char *ubuf, unsigned long n)
 		if (copyin(ubuf + off, kb, chunk) != 0)
 			return (off > 0 ? (long)off : -EFAULT);
 		for (i = 0; i < chunk; i++)
-			sbi_console_putchar((unsigned char)kb[i]);
+			sbi_console_putchar_u((unsigned char)kb[i]);	/* user output: never quieted */
 		off += chunk;
 	}
 	return ((long)n);
@@ -254,10 +306,12 @@ sys_read(int fd, char *ubuf, unsigned long n)
 	if (ubuf == 0 || n == 0)
 		return (-EFAULT);
 
-	if (fd >= 3)
+	if (fd >= 3 || proc_fd_open(fd))
 		return (proc_fread(fd, ubuf, n));	/* vfs file (copyout inside) */
 
-	if (fd != 0)
+	/* An empty fd 0, 1 or 2 is the console tty, readable on all three
+	 * (less reads its keys from fd 2, as on any Unix terminal). */
+	if (fd < 0 || fd > 2)
 		return (-1);
 
 	/* Console: blocking, cooked-lite. Copy each byte out fault-safely so a
@@ -271,11 +325,12 @@ sys_read(int fd, char *ubuf, unsigned long n)
 		/* R-P11: ^C on the console posts SIGINT to the foreground
 		 * (current) process, then returns what we have. */
 		if (c == 0x03) {
-			sbi_console_puts("^C\n");
+			sbi_console_putchar_u('^'), sbi_console_putchar_u('C');
+			sbi_console_putchar_u('\r'), sbi_console_putchar_u('\n');
 			proc_signal(proc_getpid(), 2 /* SIGINT */);
 			return (i > 0 ? (long)i : -4 /* EINTR */);
 		}
-		sbi_console_putchar(c);		/* echo */
+		sbi_console_putchar_u(c);	/* echo */
 		ch = (char)c;
 		if (copyout(&ch, ubuf + i, 1) != 0)
 			return (i > 0 ? (long)i : -EFAULT);
@@ -307,9 +362,38 @@ syscall_trap(struct regs *tf)
 		ret = sys_read((int)tf->r_a0, (char *)tf->r_a1, tf->r_a2);
 		break;
 	case SYS_openat:
-		/* a0=dirfd (ignored), a1=path, a2=flags. R-P11: honor write/
-		 * create flags against the writable ramfs. */
-		ret = proc_openat_w((const char *)tf->r_a1, (int)tf->r_a2);
+		/* a0=dirfd, a1=path, a2=flags (rvsh: dirfd and the cwd are
+		 * honoured; R-P11 write/create flags against the ramfs). */
+		ret = proc_openat((int)tf->r_a0, (const char *)tf->r_a1,
+		    (int)tf->r_a2);
+		break;
+	case SYS_newfstatat:
+		ret = proc_fstatat((int)tf->r_a0, (const char *)tf->r_a1,
+		    tf->r_a2, (int)tf->r_a3);
+		break;
+	case SYS_fstat:
+		ret = proc_fstat((int)tf->r_a0, tf->r_a1);
+		break;
+	case SYS_getdents64:
+		ret = proc_getdents64((int)tf->r_a0, tf->r_a1, tf->r_a2);
+		break;
+	case SYS_mkdirat:
+		ret = proc_mkdirat((int)tf->r_a0, (const char *)tf->r_a1,
+		    (int)tf->r_a2);
+		break;
+	case SYS_unlinkat:
+		ret = proc_unlinkat((int)tf->r_a0, (const char *)tf->r_a1,
+		    (int)tf->r_a2);
+		break;
+	case SYS_renameat:
+		ret = proc_renameat((int)tf->r_a0, (const char *)tf->r_a1,
+		    (int)tf->r_a2, (const char *)tf->r_a3);
+		break;
+	case SYS_chdir:
+		ret = proc_chdir((const char *)tf->r_a0);
+		break;
+	case SYS_getcwd:
+		ret = proc_getcwd(tf->r_a0, tf->r_a1);
 		break;
 	case SYS_lseek:
 		ret = proc_lseek((int)tf->r_a0, (long)tf->r_a1, (int)tf->r_a2);
@@ -324,6 +408,9 @@ syscall_trap(struct regs *tf)
 	case SYS_dup3:
 		/* a0 = oldfd, a1 = newfd, a2 = flags (ignored). dup2 semantics. */
 		ret = proc_dup2((int)tf->r_a0, (int)tf->r_a1);
+		break;
+	case SYS_fcntl:
+		ret = proc_fcntl((int)tf->r_a0, (int)tf->r_a1, (long)tf->r_a2);
 		break;
 	case SYS_sync:
 		ret = sys_sync();
@@ -482,6 +569,19 @@ syscall_trap(struct regs *tf)
 		ret = sys_setsockopt((int)tf->r_a0, (int)tf->r_a1,
 		    (int)tf->r_a2, tf->r_a3, (unsigned int)tf->r_a4);
 		break;
+	case SYS_sendto:
+		ret = sys_sendto((int)tf->r_a0, (const char *)tf->r_a1, tf->r_a2,
+		    (int)tf->r_a3, tf->r_a4, (unsigned int)tf->r_a5);
+		break;
+	case SYS_recvfrom:
+		ret = sys_recvfrom((int)tf->r_a0, (char *)tf->r_a1, tf->r_a2,
+		    (int)tf->r_a3, tf->r_a4, tf->r_a5);
+		break;
+	case SYS_getsockname:
+	case SYS_getpeername:
+		ret = sys_getname((int)tf->r_a0, tf->r_a1, tf->r_a2,
+		    tf->r_a7 == SYS_getpeername);
+		break;
 	case SYS_sendmsg:
 		/* a0=fd a1=buf a2=len a3=int* fds a4=nfds (see uproc.c) */
 		ret = sys_sendmsg_fds((int)tf->r_a0, (const char *)tf->r_a1,
@@ -509,7 +609,13 @@ syscall_trap(struct regs *tf)
 		break;
 	case SYS_wait4: {
 		int status = 0;
-		int rpid = proc_waitpid((int)tf->r_a0, &status);
+		int rpid;
+
+		if (tf->r_a2 & ~1UL) {
+			ret = -22;	/* EINVAL: only WNOHANG (1) is known */
+			break;
+		}
+		rpid = proc_waitpid((int)tf->r_a0, &status, (int)(tf->r_a2 & 1));
 		int *usp = (int *)tf->r_a1;
 		if (usp != 0 && rpid > 0) {
 			if (copyout(&status, usp, sizeof (status)) != 0) {
@@ -547,7 +653,53 @@ syscall_trap(struct regs *tf)
 		break;
 	case SYS_getuid:
 		ret = sys_getuid();
-		break;	case SYS_cowreport: {
+		break;
+	case SYS_getgid:
+	case SYS_geteuid:
+	case SYS_getegid: {
+		extern long sys_getid(int which);
+		ret = sys_getid(tf->r_a7 == SYS_geteuid ? 1 : tf->r_a7 == SYS_getgid ? 2 : 3);
+		break;
+	}
+	case SYS_setresuid:
+	case SYS_setresgid: {
+		extern long sys_setres(int, unsigned long, unsigned long, unsigned long);
+		ret = sys_setres(tf->r_a7 == SYS_setresgid, tf->r_a0, tf->r_a1, tf->r_a2);
+		break;
+	}
+	case SYS_setsid: {
+		extern long sys_setsid(void);
+		ret = sys_setsid();
+		break;
+	}
+	case SYS_fchmodat: {
+		extern long proc_fchmodat(int, const char *, unsigned int);
+		ret = proc_fchmodat((int)tf->r_a0, (const char *)tf->r_a1, (unsigned int)tf->r_a2);
+		break;
+	}
+	case SYS_fchownat: {
+		extern long proc_fchownat(int, const char *, unsigned int, unsigned int);
+		ret = proc_fchownat((int)tf->r_a0, (const char *)tf->r_a1,
+		    (unsigned int)tf->r_a2, (unsigned int)tf->r_a3);
+		break;
+	}
+	case SYS_setpgid: {
+		extern long sys_setpgid(int, int);
+		ret = sys_setpgid((int)tf->r_a0, (int)tf->r_a1);
+		break;
+	}
+	case SYS_getsid:
+	case SYS_getpgid: {
+		extern long sys_getsid(int pid, int pg);
+		ret = sys_getsid((int)tf->r_a0, tf->r_a7 == SYS_getpgid);
+		break;
+	}
+	case SYS_getrandom: {
+		extern long sys_getrandom(unsigned long, unsigned long, unsigned int);
+		ret = sys_getrandom(tf->r_a0, tf->r_a1, (unsigned int)tf->r_a2);
+		break;
+	}
+	case SYS_cowreport: {
 		extern void kputdec(unsigned long v);
 		sbi_console_puts("COW fork OK: ");
 		kputdec(proc_cow_shared());

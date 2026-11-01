@@ -56,7 +56,7 @@ extern void thread_yield(void);
 
 /* From uproc.c: the R-P8 process model. */
 extern int proc_first(const char *path, const void *img, unsigned long len);
-extern int proc_waitpid(int pid, int *statusp);
+extern int proc_waitpid(int pid, int *statusp, int nohang);
 
 /* Defined below: on-disk ustar root FS mount + query (R-P9 gate 4). */
 int rootfs_mount_ondisk(void);
@@ -176,7 +176,6 @@ mountroot(void)
  * this proves the kernel mounts root and reaches the single-user milestone.
  * ---------------------------------------------------------------------------
  */
-static volatile int single_user_reached;
 
 static void
 single_user_thread(void *arg)
@@ -202,8 +201,6 @@ single_user_thread(void *arg)
 	 * embedded ELFs (user_elfs.h) are only the fallback when no disk FS is
 	 * present. proc_waitpid now blocks on a real sleep queue, not a spin.
 	 */
-	single_user_reached = 1;
-
 	{
 		const void *img;
 		unsigned long len;
@@ -229,7 +226,7 @@ single_user_thread(void *arg)
 			sbi_console_puts("[init] proc_first(/sbin/init) "
 			    "FAILED\n");
 		} else {
-			rpid = proc_waitpid(-1, &st);
+			rpid = proc_waitpid(-1, &st, 0);
 			sbi_console_puts("\n[init] reaped /sbin/init pid ");
 			kputdec((unsigned long)rpid);
 			sbi_console_puts(" status ");
@@ -256,6 +253,11 @@ single_user(const char *rootdev)
 {
 	void *t;
 
+	/* rvsmp-e: print before init exists (another hart may run it at once). */
+	sbi_console_puts("\n[R-P6] root on ");
+	sbi_console_puts(rootdev);
+	sbi_console_puts(", starting single-user\n");
+
 	t = thread_create(single_user_thread, 0);
 	if (t == 0) {
 		sbi_console_puts("[init] FAILED to create single-user thread\n");
@@ -264,15 +266,7 @@ single_user(const char *rootdev)
 
 	/* Yield so the single-user thread runs and prints its prompt. */
 	thread_yield();
-
-	if (single_user_reached) {
-		sbi_console_puts("\n[R-P6] root on ");
-		sbi_console_puts(rootdev);
-		sbi_console_puts(", single-user reached\n");
-		return (1);
-	}
-	sbi_console_puts("[init] single-user thread did not report in\n");
-	return (0);
+	return (1);
 }
 
 /* The mounted root device string, for the milestone banner. */
@@ -379,13 +373,19 @@ str_eq(const char *a, const char *b)
  * ---------------------------------------------------------------------------
  */
 #define	TAR_BLOCK	512
-#define	ROOTFS_MAX_BYTES (2UL * 1024 * 1024)	/* 2 MiB staging cap */
-#define	NDISKFILE	16
+/*
+ * rvsh: one session root (six packages, sbase as one box, a terminfo dir)
+ * needs a few dozen names and ~3 MiB; 256 names / 8 MiB leaves room. The
+ * staging buffer (kmem) is allocated at the full cap: 8 MiB of a 512 MiB guest.
+ */
+#define	ROOTFS_MAX_BYTES (8UL * 1024 * 1024)	/* 8 MiB staging cap */
+#define	NDISKFILE	256
 
 struct diskfile {
 	char		df_path[100];
 	const unsigned char *df_data;
 	unsigned long	df_len;
+	int		df_dir;		/* rvsh: a ustar directory entry ('5') */
 };
 static struct diskfile diskfiles[NDISKFILE];
 static int ndiskfile;
@@ -493,7 +493,7 @@ rootfs_mount_ondisk(void)
 		/* Regular file (typeflag '0' or NUL). Register it with a leading
 		 * '/' so lookup paths like "/sbin/init" match tar names like
 		 * "sbin/init" or "./sbin/init". */
-		if (h[156] == '0' || h[156] == 0) {
+		if (h[156] == '0' || h[156] == 0 || h[156] == '5') {
 			struct diskfile *df = &diskfiles[ndiskfile];
 			const char *name = (const char *)h;
 			int pi = 0;
@@ -503,10 +503,53 @@ rootfs_mount_ondisk(void)
 			df->df_path[pi++] = '/';
 			for (j = 0; name[j] != 0 && j < 98; j++)
 				df->df_path[pi++] = name[j];
+			/* a directory's ustar name ends in '/': drop it */
+			while (pi > 1 && df->df_path[pi - 1] == '/')
+				pi--;
 			df->df_path[pi] = 0;
+			df->df_dir = (h[156] == '5');
 			df->df_data = h + TAR_BLOCK;
-			df->df_len = size;
-			ndiskfile++;
+			df->df_len = df->df_dir ? 0 : size;
+			if (pi > 1)		/* "./" itself names nothing */
+				ndiskfile++;
+		}
+
+		/*
+		 * rvsh: a hard link ('1') names the bytes of an EARLIER entry
+		 * (linkname at offset 157). This is how one sbase-box binary
+		 * appears as /bin/ls, /bin/rm, ...: argv[0] picks the applet.
+		 */
+		if (h[156] == '1' && ndiskfile < NDISKFILE) {
+			struct diskfile *df = &diskfiles[ndiskfile];
+			const char *name = (const char *)h;
+			const char *ln = (const char *)h + 157;
+			char lp[100];
+			int pi = 0, k;
+
+			if (name[0] == '.' && name[1] == '/')
+				name += 2;
+			if (ln[0] == '.' && ln[1] == '/')
+				ln += 2;
+			lp[pi++] = '/';
+			for (j = 0; ln[j] != 0 && j < 98; j++)
+				lp[pi++] = ln[j];
+			lp[pi] = 0;
+			for (k = 0; k < ndiskfile; k++) {
+				if (diskfiles[k].df_dir ||
+				    !str_eq(lp, diskfiles[k].df_path))
+					continue;
+				pi = 0;
+				df->df_path[pi++] = '/';
+				for (j = 0; name[j] != 0 && j < 98; j++)
+					df->df_path[pi++] = name[j];
+				df->df_path[pi] = 0;
+				df->df_dir = 0;
+				df->df_data = diskfiles[k].df_data;
+				df->df_len = diskfiles[k].df_len;
+				ndiskfile++;
+				break;
+			}
+			size = 0;		/* a link entry carries no data */
 		}
 
 		datablocks = (size + TAR_BLOCK - 1) / TAR_BLOCK;
@@ -523,10 +566,12 @@ rootfs_mount_ondisk(void)
 	    " files off vioblk:");
 	{
 		int i;
-		for (i = 0; i < ndiskfile; i++) {
+		for (i = 0; i < ndiskfile && i < 16; i++) {
 			sbi_console_puts(" ");
 			sbi_console_puts(diskfiles[i].df_path);
 		}
+		if (ndiskfile > 16)
+			sbi_console_puts(" ...");
 	}
 	sbi_console_puts("\n");
 	return (1);
@@ -539,6 +584,64 @@ rootfs_is_ondisk(void)
 	return (rootfs_ondisk);
 }
 
+/*
+ * The namespace enumerator uproc.c's directory syscalls walk (getdents, stat,
+ * mkdir, unlink, rename): the i-th name the root fs serves. Returns -1 past the
+ * end, 0 for an empty/removed/shadowed slot, 1 for a mutable on-disk ustar file,
+ * 2 for an immutable name (a fixed top-level dir or an embedded image).
+ * Directories other than the fixed ones are implicit: a prefix of some name.
+ */
+static const char *const rootdirs[] = {
+	"/etc", "/dev", "/sbin", "/var", "/tmp", "/bin", "/data"
+};
+#define	NROOTDIR	(int)(sizeof (rootdirs) / sizeof (rootdirs[0]))
+
+static int diskfs_lookup(const char *path, const void **datap,
+    unsigned long *lenp);
+
+int
+rootfs_path(int i, const char **pp, int *dirp)
+{
+	const void *d;
+	unsigned long l;
+
+	if (i < NROOTDIR) {
+		*pp = rootdirs[i];
+		*dirp = 1;
+		return (2);
+	}
+	i -= NROOTDIR;
+	if (i < NDISKFILE) {
+		if (!rootfs_ondisk || i >= ndiskfile ||
+		    diskfiles[i].df_path[0] == 0)
+			return (0);
+		*pp = diskfiles[i].df_path;
+		*dirp = diskfiles[i].df_dir;
+		return (1);
+	}
+	i -= NDISKFILE;
+	vfiles_init();
+	if (i >= NVFILES)
+		return (-1);
+	if (diskfs_lookup(vfiles[i].f_path, &d, &l))
+		return (0);		/* the on-disk file shadows the image */
+	*pp = vfiles[i].f_path;
+	*dirp = 0;
+	return (2);
+}
+
+/* The writable path of on-disk file `i` (rootfs_path's index), for unlink
+ * (path[0] = 0 removes it) and rename. 0 if `i` is not an on-disk file. */
+char *
+rootfs_wpath(int i, int *capp)
+{
+	i -= NROOTDIR;
+	if (!rootfs_ondisk || i < 0 || i >= ndiskfile)
+		return (0);
+	*capp = (int)sizeof (diskfiles[i].df_path);
+	return (diskfiles[i].df_path);
+}
+
 /* Look up a path in the on-disk file table (R-P9). Returns 1 on hit. */
 static int
 diskfs_lookup(const char *path, const void **datap, unsigned long *lenp)
@@ -547,7 +650,7 @@ diskfs_lookup(const char *path, const void **datap, unsigned long *lenp)
 	if (!rootfs_ondisk)
 		return (0);
 	for (i = 0; i < ndiskfile; i++) {
-		if (str_eq(path, diskfiles[i].df_path)) {
+		if (!diskfiles[i].df_dir && str_eq(path, diskfiles[i].df_path)) {
 			*datap = diskfiles[i].df_data;
 			*lenp = diskfiles[i].df_len;
 			return (1);

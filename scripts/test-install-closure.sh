@@ -26,6 +26,10 @@ mk_toplevel() {  # $1 = store root; prints the toplevel path
   mkdir -p "$SR$TL/bin" "$SR$TL/kernel-slice/platform/i86pc/kernel/amd64" "$SR$TL/kernel-slice/kernel/amd64"
   : > "$SR$TL/activate"; : > "$SR$TL/early-paths"; : > "$SR$TL/bin/install-be"
   : > "$SR$TL/kernel-slice/platform/i86pc/kernel/amd64/unix"; : > "$SR$TL/kernel-slice/kernel/amd64/genunix"
+  # the generation's etc (an absolute store link, as in the real toplevel) with one declared user's keys
+  mkdir -p "$SR/nix/store/11111111111111111111111111111111-solnix-etc/etc/ssh/authorized_keys.d"
+  echo 'ssh-ed25519 AAAA test' > "$SR/nix/store/11111111111111111111111111111111-solnix-etc/etc/ssh/authorized_keys.d/gburd"
+  ln -s /nix/store/11111111111111111111111111111111-solnix-etc/etc "$SR$TL/etc"
   cat > "$SR$TL/bin/switch-to-configuration" <<'STC'
 #!/bin/sh
 # test stub of IFACE-1 install-be
@@ -38,17 +42,26 @@ install-be)
   echo ba | gzip > "$R/platform/i86pc/amd64/boot_archive"
   echo init > "$R/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-illumos-early/sbin/init"
   echo sh > "$R/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-illumos-early/sbin/sh"
+  echo ap > "$R/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-illumos-early/sbin/autopush"
+  ln -s /nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-illumos-early/sbin/autopush "$R/sbin/autopush"
   ln -s /nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-illumos-early/sbin/init "$R/sbin/init"
   ln -s ../nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-illumos-early/sbin/sh "$R/sbin/sh"
-  printf 'nx::sysinit:/sbin/zfs mount -O %s/nix\nvr::sysinit:/sbin/sh -c '"'"'/sbin/zfs list -H -o canmount,name -r -t filesystem %s/var 2>/dev/null | ...'"'"'\nsmf::sysinit:/lib/svc/bin/svc.startd\n' "$P" "$P" > "$R/etc/inittab"
+  printf 'ap::sysinit:/sbin/autopush -f /etc/iu.ap\nnx::sysinit:/sbin/zfs mount -O %s/nix\nvr::sysinit:/sbin/sh -c '"'"'/sbin/zfs list -H -o canmount,name -r -t filesystem %s/var 2>/dev/null | ...'"'"'\nsmf::sysinit:/lib/svc/bin/svc.startd\n' "$P" "$P" > "$R/etc/inittab"
   : > "$R/lib/svc/bin/svc.startd"; : > "$R/etc/svc/repository.db"
   for f in loader64.efi pmbr gptzfsboot loader.rc defaults/loader.conf forth/loader.4th; do : > "$R/boot/$f"; done
   echo x > "$R/boot/fonts/fonts.dir"
   for f in passwd shadow group; do echo "root:x:0:0::/root:/bin/sh" > "$R/etc/$f"; done
+  mkdir -p "$R/etc/ssh/authorized_keys.d"; echo 'ssh-ed25519 AAAA test' > "$R/etc/ssh/authorized_keys.d/gburd"
+  chmod 0444 "$R/etc/ssh/authorized_keys.d/gburd"
+  echo 'AuthorizedKeysFile .ssh/authorized_keys /etc/ssh/authorized_keys.d/%u' > "$R/etc/ssh/sshd_config"
   case "${SABOTAGE:-}" in
     no-stage2)    sed -i '/zfs mount -O/d' "$R/etc/inittab" ;;
     # /var state left inside the BE: a switch loses it and a rollback reverts it.
     no-vr)        sed -i '/^vr::/d' "$R/etc/inittab" ;;
+    # a sysinit line ahead of autopush opens the console first: no ldterm all boot.
+    ap-late)      sed -i '/^ap::/d' "$R/etc/inittab"; echo 'ap::sysinit:/sbin/autopush -f /etc/iu.ap' >> "$R/etc/inittab" ;;
+    # autopush linked into the shared store, which is not mounted when ap:: runs
+    ap-shared)    rm -f "$R/sbin/autopush"; ln -s /nix/store/ffffffffffffffffffffffffffffffff-userland/sbin/autopush "$R/sbin/autopush" ;;
     live-copy)    : > "$R/etc/solnix-live-shell" ;;
     clobber-cons) echo 'console="ttya"' > "$R/boot/loader.conf" ;;
     shadow-link)  rm -f "$R/etc/shadow"; ln -s /nix/store/x-etc/etc/shadow "$R/etc/shadow" ;;
@@ -64,6 +77,10 @@ install-be)
     # (the X1's NVMe boot hung after cpu5 with the stock bootstrap path_to_inst).
     stock-pti)    echo '#path_to_inst_bootstrap_1' > "$R/etc/path_to_inst" ;;
     stock-hostid) echo '' > "$R/etc/hostid" ;;
+    # declared keys that sshd would ignore or refuse
+    no-akf)       echo 'UsePAM yes' > "$R/etc/ssh/sshd_config" ;;
+    akd-link)     rm -f "$R/etc/ssh/authorized_keys.d/gburd"; ln -s /nix/store/11111111111111111111111111111111-solnix-etc/etc/ssh/authorized_keys.d/gburd "$R/etc/ssh/authorized_keys.d/gburd" ;;
+    akd-mode)     chmod 0644 "$R/etc/ssh/authorized_keys.d/gburd" ;;
     fail)         exit 3 ;;
   esac ;;
 *) exit 0 ;;
@@ -111,6 +128,8 @@ while read -r s re; do
 done <<'CASES'
 no-stage2    no stage-2 'zfs mount -O
 no-vr        no 'vr' line mounting rpool/var
+ap-late      first sysinit line is not ap
+ap-shared    sbin/autopush resolves outside the BE or dangles
 live-copy    live-media file /etc/solnix-live-shell
 clobber-cons (overwrote the installed console|replaced the machine input /boot/loader.conf)
 shadow-link  /etc/shadow is a symlink into the store
@@ -121,6 +140,9 @@ trunc-ba     truncated gzip
 drop-presets removed the machine input /etc/svc/profile/site/solnix-install.xml
 stock-pti    replaced the machine input /etc/path_to_inst
 stock-hostid replaced the machine input /etc/hostid
+no-akf       sshd_config does not read /etc/ssh/authorized_keys.d
+akd-link     no real /etc/ssh/authorized_keys.d/gburd
+akd-mode     authorized_keys.d/gburd is not root-owned 0444
 fail         install-be failed \(rc=3\)
 CASES
 

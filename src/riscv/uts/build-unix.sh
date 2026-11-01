@@ -28,9 +28,12 @@ LOG="${LOG:-unix-qemu-boot.log}"
 # FP context switch, and the embedded userland (fptest/newlibtest) is hard-float
 # lp64d — the kernel ABI must match. zifencei: ld.so.1's I-cache coherence
 # (fence.i) on the first-map path. Mirrors build-all.sh / build-scanout.sh.
+# -ffile-prefix-map: no build-host path (home directory) in the DWARF of what we ship.
+SRCROOT="$(cd ../../.. && pwd)"
 CFLAGS="-march=rv64gc_zifencei -mabi=lp64d -mcmodel=medany \
-	-ffreestanding -nostdlib -fno-stack-protector -fno-pic \
-	-Wall -Wextra -O2 -g"
+	-ffreestanding -nostdlib -fno-stack-protector -fno-pic -Iriscv64 \
+	-ffile-prefix-map=$SRCROOT=. \
+	-Wall -Wextra -O2 -g ${EXTRA_CFLAGS:-}"
 
 echo "== compile (freestanding, $TC) =="
 "$CC" $CFLAGS -c image_header.S -o image_header.o
@@ -49,6 +52,7 @@ echo "== compile (freestanding, $TC) =="
 "$CC" $CFLAGS -c fp.c        -o fp.o
 "$CC" $CFLAGS -c port.c      -o port.o
 "$CC" $CFLAGS -c unixsock.c  -o unixsock.o
+"$CC" $CFLAGS -c pty.c       -o pty.o
 "$CC" $CFLAGS -c fdt.c       -o fdt.o
 "$CC" $CFLAGS -c vm_page.c   -o vm_page.o
 "$CC" $CFLAGS -c kmem.c      -o kmem.o
@@ -63,6 +67,8 @@ echo "== compile (freestanding, $TC) =="
 "$CC" $CFLAGS -c vioblk.c    -o vioblk.o
 "$CC" $CFLAGS -c blkfs.c     -o blkfs.o
 "$CC" $CFLAGS -c vionet.c    -o vionet.o
+"$CC" $CFLAGS -c viornd.c    -o viornd.o
+. ./lwip-objs.sh		# rvsrv: lwIP + inet.c -> $LWIPOBJS
 "$CC" $CFLAGS -c gmac.c      -o gmac.o
 "$CC" $CFLAGS -c k3i2c.c     -o k3i2c.o
 "$CC" $CFLAGS -c k3spi.c     -o k3spi.o
@@ -90,10 +96,10 @@ RP64="$(cd "$(dirname "$0")/../../riscv-port/rp64/kernel" && pwd)"
 
 echo "== link (riscv.ld @ 0x80200000) =="
 "$LD" -T riscv.ld -o "$OUT" image_header.o locore.o trap_asm.o swtch.o fpsave.o \
-	sbi.o trap.o hat_riscv.o timer.o plic.o aia.o cmo.o fp.o port.o unixsock.o \
+	sbi.o trap.o hat_riscv.o timer.o plic.o aia.o cmo.o fp.o port.o unixsock.o pty.o \
 	fdt.o vm_page.o kmem.o proc.o \
 	as.o elf.o syscall.o uart.o sdhci.o uproc.o copy.o \
-	virtio.o vioblk.o blkfs.o vionet.o rootfs.o startup.o main.o \
+	virtio.o vioblk.o blkfs.o vionet.o viornd.o $LWIPOBJS rootfs.o startup.o main.o \
 	gmac.o k3i2c.o k3spi.o k3dma.o k3pwm.o k3usb.o k3pcie.o k3efuse.o \
 	k3rtc.o k3misc.o k3ufs.o k3dev.o \
 	virtio_gpu.o fb.o

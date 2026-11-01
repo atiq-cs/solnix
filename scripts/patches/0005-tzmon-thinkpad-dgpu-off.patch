@@ -1,0 +1,320 @@
+solnix: tzmon -- ThinkPad discrete-GPU power-off at boot, ON by default where it applies (opt out with
+-B solnix-dgpu-off=0), the way Linux powers off a GPU that no driver owns.
+
+WHY
+- Measured on the X1 Extreme Gen5 (r1 image, plain boot, 2026-10-21): the RTX 3080 Ti (10de:2420 at 01:00.0,
+  \_SB.PC00.PEG1.PEGP) idled in D0 with vgatext on 01:00.0 and audiohd on its HDMI audio 01:00.1. The EC's GPU
+  sensor (GPUT) went 53 C -> 76 -> 83 -> 92-94 C in ten idle minutes, THM0 42 -> 67 C with the CPU
+  at 400 MHz, then the machine powered off silently (the EC cutoff).
+- Under Linux the same GPU runs NVIDIA's runtime D3, so it is powered off whenever idle. For a GPU with no driver
+  Linux does pci_set_power_state(D3cold): the endpoint to D3hot through its PM capability, then the root port's D3
+  power resource (_PR3) off, which the platform implements as link-down, reset and power-cut.
+
+WHERE IT LIVES: in tzmon's ThinkPad shim, called from tzmon_attach right after the HKEY init.
+- The gate is the ThinkPad HKEY that 0002 already finds (tzmon_hkey), and tzmon is force-attached early
+  (tzmon.conf ddi-forceattach=1), before devfsadm.
+
+WHAT THE X1E'S TABLES SAY (BIOS N3JET48W, SSDT14 "NvOptTbl", solnix-bank/evidence/x1e-acpi-N3JET48W/ssdt/SSDT14.dsl)
+- \_SB.PC00.PEG1 has _PR0 = _PR3 = { PXP } (lines 550-557). Linux lists it as \_SB_.PC00.PEG1.PXP_ (LNXPOWER:01).
+- PXP._OFF (lines 525-547) acts when OSYS > 0x07D9; illumos's _OSI answers make OSYS 0x07DF. It runs GC6I if
+  PEGP.TDGC is 1, which only NVIDIA's _DSM (NGC6) sets; otherwise it runs POFF().
+- POFF (lines 433-494) returns early if the port is empty or already off, saves the link state (NVPF), puts the
+  link in L2/L3 ready (PEG1.DL23), drops the clock request (SPCO), asserts the GPU reset GPIO and cuts its power
+  GPIO. So with no NVIDIA driver, PXP._OFF needs NO _DSM handshake. After it, config reads of 01:00.x return all
+  1s, and nothing may touch the device again.
+
+WHEN IT ACTS (all must hold; otherwise it changes nothing and logs nothing)
+1. solnix-dgpu-off is not "0" (a -B string, or an int in tzmon.conf). Unset means ON.
+2. The ThinkPad HKEY is present, and \_SB.PC00.PEG1 (or \_SB.PCI0.PEG1) exists (not on EC2 or other machines).
+3. The port's _PR3 package names a PowerResource object.
+4. Among the root port's devinfo children there is a function with vendor-id 0x10de and class-code 0x03xxxx
+   (display), read from the properties the PCI enumerator set, not from config space.
+5. No function is the console framebuffer (fbdip). On the X1E the console is the iGPU (display@2).
+6. Every function is unbound or bound to a generic driver: vgatext (display) or audiohd (HDMI audio). Any other
+   driver (e.g. a future nvidia) means hands off.
+7. The power resource's _STA is not 0.
+
+THE SEQUENCE
+- ndi_devi_offline every function. This detaches vgatext/audiohd if they attached (consconfig attaches display nodes
+  while it looks for the console, so vgatext can be on 01:00.0 before tzmon runs), and an offline node is never
+  attached again by devfsadm or a later bus_config (i_ddi_attachchild checks DEVI_IS_DEVICE_OFFLINE). If one
+  function refuses, the ones already offlined are put back online and the GPU stays powered.
+- Every function to D3hot via PMCSR, 10 ms, read back.
+- The power resource's _OFF, then its _STA.
+- One system-log line ("!", not the console): port, function count, drivers detached, the D3hot result, _STA
+  before -> after. The opt-out logs one system-log line too.
+After _OFF nothing reads or writes the GPU's config space.
+
+--- a/usr/src/uts/i86pc/io/tzmon/tzmon.c
++++ b/usr/src/uts/i86pc/io/tzmon/tzmon.c
+@@ -41,6 +41,11 @@
+ #include <sys/acpi/acpi.h>
+ #include <sys/acpica.h>
+ #include <sys/sdt.h>
++#include <sys/pci.h>
++#include <sys/pci_cfgspace.h>
++#include <sys/sunndi.h>
++#include <sys/ddi_implfuncs.h>
++#include <sys/consdev.h>
+ 
+ #include "tzmon.h"
+ 
+@@ -90,6 +95,7 @@
+ static void tzmon_do_shutdown(void);
+ static void tzmon_hkey_enable(void);
+ static void tzmon_hkey_disable(void);
++static void tzmon_dgpu_off(dev_info_t *dip);
+ 
+ extern void halt(char *);
+ 
+@@ -198,6 +204,8 @@
+ 
+ 	/* before the zones are first evaluated; see tzmon_hkey_enable() */
+ 	tzmon_hkey_enable();
++	/* on by default on a ThinkPad dGPU, -B solnix-dgpu-off=0 opts out */
++	tzmon_dgpu_off(dip);
+ 	tzmon_find_zones();
+ 	mutex_enter(&zone_list_lock);
+ 	if (zone_count < 1) {
+@@ -909,3 +917,241 @@
+ 	    tzmon_hkey_notify);
+ 	tzmon_hkey = NULL;
+ }
++
++
++/*
++ * ThinkPad discrete-GPU power-off at boot: ON by default where it applies,
++ * opt out with -B solnix-dgpu-off=0.
++ *
++ * Under Linux the X1 Extreme Gen5's RTX 3080 Ti runs NVIDIA's runtime D3
++ * (fine-grained): the GPU is powered off whenever it is idle. Nothing drives
++ * it under illumos, so it idles in D0. Measured on that machine: the EC's GPU
++ * sensor (GPUT) went 53 -> 94 C in ten idle minutes, then the
++ * EC cut power. This does what Linux's pci_set_power_state(D3cold) does for a
++ * GPU with no driver: the endpoint to D3hot through its PCI PM capability,
++ * then the root port's D3 power resource (its _PR3) off, so the platform cuts
++ * the GPU's power.
++ *
++ * The X1E's tables (BIOS N3JET48W, SSDT14 "NvOptTbl"): \_SB.PC00.PEG1 has
++ * _PR0 = _PR3 = { PXP } (SSDT14.dsl lines 550-557). PXP._OFF (lines 525-547)
++ * runs POFF() (lines 433-494) unless PEGP.TDGC is set, and only the NVIDIA
++ * _DSM sets TDGC. POFF returns early if the port is empty or already off,
++ * then saves link state (NVPF), puts the link in L2/L3 ready (PEG1.DL23),
++ * drops the clock request, asserts the GPU reset GPIO and cuts its power GPIO.
++ * With no NVIDIA driver loaded, that needs no _DSM handshake. After it the
++ * GPU's config space reads all 1s, so nothing here touches it again, and its
++ * functions stay offline so no driver attaches to them later.
++ *
++ * Applies only when ALL of these hold; anything else does nothing:
++ * - the ThinkPad HKEY (tzmon_hkey);
++ * - \_SB.PC00.PEG1 (or \_SB.PCI0.PEG1) whose _PR3 names a power resource;
++ * - a function under it that is display class (0x03) from vendor 0x10de, read
++ *   from the devinfo properties the PCI enumerator set (no config access);
++ * - no function is the console framebuffer (fbdip);
++ * - every function is unbound, or bound to a generic driver: vgatext (display)
++ *   or audiohd (the GPU's HDMI audio). Any other driver means hands off.
++ * vgatext/audiohd can attach before tzmon's force-attach (consconfig attaches
++ * display nodes while it looks for the console), so a bound generic driver is
++ * detached by ndi_devi_offline, which also keeps devfsadm from re-attaching.
++ *
++ * Without the HKEY (EC2, QEMU without the test SSDT, other laptops) it does
++ * nothing and logs nothing. It logs one line (log only, not the console) when
++ * it powers the GPU off, and one when the opt-out leaves it on.
++ */
++static char *tzmon_dgpu_ports[] = { "\\_SB.PC00.PEG1", "\\_SB.PCI0.PEG1",
++	NULL };
++/* the only drivers this may detach from the dGPU's functions */
++static char *tzmon_dgpu_generic[] = { "vgatext", "audiohd", NULL };
++
++#define	TZMON_DGPU_VENDOR	0x10de
++#define	TZMON_DGPU_MAXFN	8
++
++typedef struct tzmon_dgpu_fn {
++	dev_info_t	*dip;
++	int		bus, dev, func;
++	int		class;
++	const char	*drv;		/* bound driver, NULL if none attached */
++} tzmon_dgpu_fn_t;
++
++/* Put one function in D3hot via its PCI PM capability; -1 if it has none. */
++static int
++tzmon_dgpu_d3hot(tzmon_dgpu_fn_t *fn)
++{
++	uint8_t ptr;
++	uint16_t pmcsr;
++	int n;
++
++	if (!((*pci_getw_func)(fn->bus, fn->dev, fn->func, PCI_CONF_STAT) &
++	    PCI_STAT_CAP))
++		return (-1);
++	ptr = (*pci_getb_func)(fn->bus, fn->dev, fn->func, PCI_CONF_CAP_PTR);
++	for (n = 0; ptr >= 0x40 && n < 48; n++) {
++		ptr &= ~3;
++		if ((*pci_getb_func)(fn->bus, fn->dev, fn->func, ptr) ==
++		    PCI_CAP_ID_PM)
++			break;
++		ptr = (*pci_getb_func)(fn->bus, fn->dev, fn->func, ptr + 1);
++	}
++	if (ptr < 0x40 || n >= 48)
++		return (-1);
++	pmcsr = (*pci_getw_func)(fn->bus, fn->dev, fn->func, ptr + PCI_PMCSR);
++	pmcsr = (pmcsr & ~PCI_PMCSR_STATE_MASK) | PCI_PMCSR_D3HOT;
++	(*pci_putw_func)(fn->bus, fn->dev, fn->func, ptr + PCI_PMCSR, pmcsr);
++	/* PCIe: 10 ms from D0 to D3hot before the next access */
++	delay(drv_usectohz(10000));
++	pmcsr = (*pci_getw_func)(fn->bus, fn->dev, fn->func, ptr + PCI_PMCSR);
++	return (pmcsr & PCI_PMCSR_STATE_MASK);
++}
++
++/*
++ * The opt-out: -B solnix-dgpu-off=0 (a boot property: a string) or
++ * solnix-dgpu-off=0; in tzmon.conf (an int). Looked up from tzmon's node up
++ * to the root node. Returns 1 (default), 0 (opted out).
++ */
++static int
++tzmon_dgpu_wanted(dev_info_t *dip)
++{
++	char *s;
++	int v;
++
++	if (ddi_prop_lookup_string(DDI_DEV_T_ANY, dip, 0, "solnix-dgpu-off",
++	    &s) == DDI_PROP_SUCCESS) {
++		v = (strcmp(s, "0") != 0);
++		ddi_prop_free(s);
++		return (v);
++	}
++	/* not set anywhere (-1): on by default */
++	v = ddi_prop_get_int(DDI_DEV_T_ANY, dip, 0, "solnix-dgpu-off", -1);
++	return (v != 0);
++}
++
++static boolean_t
++tzmon_dgpu_is_generic(const char *drv)
++{
++	int i;
++
++	for (i = 0; tzmon_dgpu_generic[i] != NULL; i++)
++		if (strcmp(drv, tzmon_dgpu_generic[i]) == 0)
++			return (B_TRUE);
++	return (B_FALSE);
++}
++
++static void
++tzmon_dgpu_off(dev_info_t *dip)
++{
++	ACPI_HANDLE port = NULL, pr = NULL;
++	ACPI_BUFFER rb;
++	ACPI_OBJECT *pkg;
++	dev_info_t *pdip = NULL, *cdip;
++	tzmon_dgpu_fn_t fn[TZMON_DGPU_MAXFN];
++	char *name = NULL;
++	int nfn = 0, sta0 = -1, sta1 = -1, i, d3[TZMON_DGPU_MAXFN];
++	int nvdisp = 0, ndet = 0;
++	ACPI_OBJECT_TYPE t;
++
++	for (i = 0; tzmon_dgpu_ports[i] != NULL && port == NULL; i++) {
++		if (AcpiGetHandle(NULL, tzmon_dgpu_ports[i], &port) != AE_OK)
++			port = NULL;
++		else
++			name = tzmon_dgpu_ports[i];
++	}
++	if (tzmon_hkey == NULL || port == NULL)
++		return;
++	if (!tzmon_dgpu_wanted(dip)) {
++		cmn_err(CE_NOTE, "!tzmon: solnix-dgpu-off=0: %s: discrete GPU "
++		    "left powered", name);
++		return;
++	}
++
++	/* the D3 power resource: the first entry of the port's _PR3 */
++	rb.Length = ACPI_ALLOCATE_BUFFER;
++	rb.Pointer = NULL;
++	if (AcpiEvaluateObjectTyped(port, "_PR3", NULL, &rb,
++	    ACPI_TYPE_PACKAGE) == AE_OK) {
++		pkg = rb.Pointer;
++		if (pkg->Package.Count >= 1 &&
++		    pkg->Package.Elements[0].Type == ACPI_TYPE_LOCAL_REFERENCE &&
++		    AcpiGetType(pkg->Package.Elements[0].Reference.Handle,
++		    &t) == AE_OK && t == ACPI_TYPE_POWER)
++			pr = pkg->Package.Elements[0].Reference.Handle;
++		AcpiOsFree(rb.Pointer);
++	}
++	if (pr == NULL)
++		return;
++
++	/*
++	 * The GPU's functions: the PCI children of the root port's devinfo
++	 * node (acpica tags PCI nodes with their ACPI device at boot). Their
++	 * vendor and class come from the properties the PCI enumerator set,
++	 * so this reads no config space until it has decided to act.
++	 */
++	if (acpica_get_devinfo(port, &pdip) != AE_OK || pdip == NULL)
++		return;
++	ndi_devi_enter(pdip);
++	for (cdip = ddi_get_child(pdip); cdip != NULL;
++	    cdip = ddi_get_next_sibling(cdip)) {
++		tzmon_dgpu_fn_t *f = &fn[nfn];
++		int ven;
++
++		if (acpica_get_bdf(cdip, &f->bus, &f->dev, &f->func) < 0)
++			continue;
++		if (nfn == TZMON_DGPU_MAXFN) {
++			ndi_devi_exit(pdip);
++			return;
++		}
++		ven = ddi_prop_get_int(DDI_DEV_T_ANY, cdip, DDI_PROP_DONTPASS,
++		    "vendor-id", -1);
++		f->class = ddi_prop_get_int(DDI_DEV_T_ANY, cdip,
++		    DDI_PROP_DONTPASS, "class-code", -1);
++		f->drv = i_ddi_devi_attached(cdip) ? ddi_driver_name(cdip) :
++		    NULL;
++		f->dip = cdip;
++		if (ven == TZMON_DGPU_VENDOR && f->class != -1 &&
++		    ((f->class >> 16) & 0xff) == PCI_CLASS_DISPLAY)
++			nvdisp++;
++		/* the console, or a real driver: hands off */
++		if (cdip == fbdip ||
++		    (f->drv != NULL && !tzmon_dgpu_is_generic(f->drv))) {
++			ndi_devi_exit(pdip);
++			return;
++		}
++		nfn++;
++	}
++	ndi_devi_exit(pdip);
++	if (nvdisp == 0)
++		return;
++
++	(void) acpica_eval_int(pr, "_STA", &sta0);
++	if (sta0 == 0)
++		return;
++
++	/*
++	 * Offline every function first: that detaches vgatext/audiohd if
++	 * they attached, and keeps any driver from attaching later. A
++	 * function that will not go offline could still be in use and would
++	 * then touch a powered-off device: stop before any change, and put
++	 * back what was detached so the machine is as it was.
++	 */
++	for (i = 0; i < nfn; i++) {
++		if (ndi_devi_offline(fn[i].dip, 0) != NDI_SUCCESS) {
++			while (--i >= 0)
++				(void) ndi_devi_online(fn[i].dip, 0);
++			return;
++		}
++		if (fn[i].drv != NULL)
++			ndet++;
++	}
++	for (i = 0; i < nfn; i++)
++		d3[i] = tzmon_dgpu_d3hot(&fn[i]);
++
++	/* then the power resource; nothing touches the GPU after this */
++	(void) AcpiEvaluateObject(pr, "_OFF", NULL, NULL);
++	(void) acpica_eval_int(pr, "_STA", &sta1);
++
++	cmn_err(CE_NOTE, "!tzmon: solnix-dgpu-off: %s: %d function(s) at "
++	    "bus %d dev %d offlined (%d driver(s) detached), PM state %d%s; "
++	    "_PR3 _OFF evaluated, _STA %d -> %d", name, nfn, fn[0].bus,
++	    fn[0].dev, ndet, d3[0], (d3[0] == PCI_PMCSR_D3HOT) ? " (D3hot)" :
++	    (d3[0] < 0 ? " (no PM capability)" : " (D3hot not reached)"),
++	    sta0, sta1);
++}

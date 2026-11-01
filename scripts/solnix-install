@@ -63,7 +63,7 @@ export PATH
 # verified that his repo is anonymously clonable over https (info/refs returns 200),
 # so the installer never needs credentials. A git@ URL is accepted but warned about.
 GIT_URL=""; GIT_REF=""; FLAKE_REF=""; HOME_FLAKE=""; DO_HOME=1
-DO_NET_ONLY=0; DO_SELF_UPDATE=0; DO_SSHD=0
+DO_NET_ONLY=0; DO_SELF_UPDATE=0; DO_SSHD=0; DO_SSHD_NOW=0
 TARGET=""; TOPLEVEL=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -80,6 +80,7 @@ while [ $# -gt 0 ]; do
     --disk)       TARGET="${2:-}"; shift 2 ;;
     --net)        DO_NET_ONLY=1; shift ;;
     --ssh)        DO_SSHD=1; shift ;;
+    --sshd-now)   DO_SSHD_NOW=1; shift ;;   # live media boot: network already up (solnix-live)
     --self-update) DO_SELF_UPDATE=1; shift ;;
     -h|--help)
       cat <<'USAGE'
@@ -840,6 +841,26 @@ setup_media_store() {
   return 0
 }
 
+# _media_authorized_keys -- copy /solnix/authorized_keys from the boot stick's ESP
+# (GPT partition 2, FAT) to a temp file and print its path; nothing if absent. The
+# stick is the disk solnix-live identified by its boot_archive (/tmp/.solnix-media-disk).
+# The ESP is mounted read-only and unmounted again.
+_media_authorized_keys() {
+  _md=$(cat /tmp/.solnix-media-disk 2>/dev/null)
+  [ -n "$_md" ] || return 0
+  _mp=/tmp/.solnix-esp; mkdir -p "$_mp"
+  for _s in s1 p2; do
+    [ -e "/dev/dsk/${_md}$_s" ] || continue
+    if mount -F pcfs -o ro "/dev/dsk/${_md}$_s" "$_mp" 2>/dev/null; then
+      if [ -s "$_mp/solnix/authorized_keys" ]; then
+        _t=$(mktemp /tmp/.solnix-ak.XXXXXX) && cp "$_mp/solnix/authorized_keys" "$_t" && echo "$_t"
+      fi
+      umount "$_mp" 2>/dev/null
+      return 0
+    fi
+  done
+}
+
 # _start_sshd -- after the network is up (--ssh, or offered by --net), make sure
 # the media's sshd is online and give root a credential, so a remote operator can
 # ssh in and drive the install. Best-effort; never fatal.
@@ -854,8 +875,22 @@ _start_sshd() {
   if [ "$(svcs -H -o state "$_sv" 2>/dev/null)" != online ]; then
     log "sshd is not online -- check: svcs -xv $_sv"; return 0
   fi
-  # 1. a key the operator supplied (SOLNIX_SSH_PUBKEY).
+  # 1. a key the operator supplied: SOLNIX_SSH_PUBKEY, or /solnix/authorized_keys
+  #    on the boot stick's ESP (FAT, writable from any OS; docs/installer-ssh.md).
   _pubkey_done=0
+  _ak=$(_media_authorized_keys)
+  if [ -n "$_ak" ]; then
+    mkdir -p /root/.ssh; chmod 700 /root/.ssh
+    tr -d '\r' < "$_ak" | grep -v -e '^[[:space:]]*#' -e '^[[:space:]]*$' > "$_ak.keys"
+    while IFS= read -r _k; do
+      grep -qxF "$_k" /root/.ssh/authorized_keys 2>/dev/null || printf '%s\n' "$_k" >> /root/.ssh/authorized_keys
+    done < "$_ak.keys"
+    chmod 600 /root/.ssh/authorized_keys
+    _pubkey_done=1
+    log "installed $(grep -c . "$_ak.keys") key(s) from the boot medium's /solnix/authorized_keys"
+    rm -f "$_ak.keys"
+    rm -f "$_ak"
+  fi
   if [ -n "${SOLNIX_SSH_PUBKEY:-}" ]; then
     mkdir -p /root/.ssh; chmod 700 /root/.ssh
     grep -qF "$SOLNIX_SSH_PUBKEY" /root/.ssh/authorized_keys 2>/dev/null \
@@ -959,22 +994,21 @@ check_internet() {
   echo "" >&2
   echo "  THIS IS ALMOST CERTAINLY THE USB-ETHERNET ADAPTER, NOT WIFI." >&2
   if have_intel_ax2xx; then
-    echo "  An Intel AX2xx wifi card IS present in this machine. solnix's native" >&2
-    echo "  iwx driver is IN PROGRESS (src/ports/wifi): the 802.11 layer compiles" >&2
-    echo "  and partial-links, but the module does not yet load/attach -- so wifi" >&2
-    echo "  cannot associate TODAY. The firmware blobs are already staged in the" >&2
-    echo "  image (hardware.wirelessIwx), so the card is ready the moment the" >&2
-    echo "  driver lands. For NOW, install over USB ethernet." >&2
+    echo "  An Intel AX2xx wifi card IS present in this machine. The iwx driver and" >&2
+    echo "  its firmware are on this media but not bound, because it has not yet been" >&2
+    echo "  tested on hardware. Install over USB ethernet. To try the wifi, see" >&2
+    echo "  docs/x1e-wifi-runtime-bind.md (update_drv -a, then wpa-pmk)." >&2
   else
     echo "  No Intel AX2xx wifi card detected; this is the USB-ethernet dongle." >&2
   fi
   echo "  Check the dongle:" >&2
   echo "    dladm show-phys             # is the adapter attached at all?" >&2
   echo "    dladm show-link" >&2
-  echo "  illumos ships axf (ASIX AX88172/88178/88772), udmf (Davicom DM9601E)," >&2
-  echo "  upf (Prolific) and urf (Realtek RTL8150) -- all Fast Ethernet, and NONE" >&2
-  echo "  supports RTL8153, which is what most modern dongles are. If dladm lists" >&2
-  echo "  nothing, the adapter is unsupported; an ASIX AX88772 one is the safe buy." >&2
+  echo "  Supported adapters: Realtek RTL8153 gigabit (most USB-C ones, e.g." >&2
+  echo "  Belkin, Apple-store and Anker) via usbecm; ASIX AX88172/88178/88772 via" >&2
+  echo "  axf; Davicom DM9601E (udmf), Prolific (upf), Realtek RTL8150 (urf)." >&2
+  echo "  If dladm lists nothing, the adapter is unsupported. If it lists usbecm0" >&2
+  echo "  but no lease arrives, check the cable and the switch port." >&2
   echo "" >&2
   echo "  SOLNIX_SKIP_NET_CHECK=1 proceeds anyway (later fetches will just fail)." >&2
   return 1
@@ -1032,6 +1066,15 @@ detect_target() {
 # install (positional toplevel, no --git/--flake) must still work offline.
 # --net / --self-update: network-only actions, no disk touched. Placed AFTER
 # bring_up_network + check_internet are defined and BEFORE any disk work.
+# --sshd-now: the live media's boot service calls this once solnix-autonet has a
+# lease. Start sshd and give root a credential; no internet check, no disk.
+if [ "${DO_SSHD_NOW:-0}" = 1 ]; then
+  _start_sshd 2>&1 | tee -a /var/run/solnix-sshd-banner >&2
+  # ttymon prints /etc/issue above the console login prompt, so the password
+  # stays readable at the console after the boot messages scroll away.
+  grep '##' /var/run/solnix-sshd-banner >> /etc/issue 2>/dev/null || true
+  exit 0
+fi
 if [ "${DO_NET_ONLY:-0}" = 1 ] || [ "${DO_SELF_UPDATE:-0}" = 1 ] || [ "${DO_SSHD:-0}" = 1 ]; then
   bring_up_network
   if check_internet; then
@@ -1636,43 +1679,20 @@ for _try in 1 2 3 4 5; do
 done
 [ "$_label_ok" = 1 ] || die "clean EFI label failed after 5 attempts (device $TARGET not settling)"
 run_to 30 zpool destroy solnixtmp 2>/dev/null || true
-RESV_START=$(prtvtoc -h "/dev/rdsk/${TARGET}" 2>/dev/null | awk '$1==8{print $4}')
-RESV_SIZE=$(prtvtoc -h "/dev/rdsk/${TARGET}" 2>/dev/null | awk '$1==8{print $5}')
-[ -n "$RESV_START" ] || die "could not read EFI label reserved slice"
-ESP_START=256; ESP_SIZE=524288                 # 256 MiB ESP
-POOL_START=$((ESP_START + ESP_SIZE)); POOL_SIZE=$((RESV_START - POOL_START))
-[ "$POOL_SIZE" -gt 0 ] || die "computed pool size <= 0 (RESV_START=$RESV_START)"
-log "fmthard: s0 ESP @${ESP_START}+${ESP_SIZE}, s1 pool @${POOL_START}+${POOL_SIZE}, s8 resv @${RESV_START}+${RESV_SIZE}"
-cat > /tmp/solnix-install.vtoc <<EOF
-0 12 00 ${ESP_START} ${ESP_SIZE}
-1 4 00 ${POOL_START} ${POOL_SIZE}
-8 11 00 ${RESV_START} ${RESV_SIZE}
-EOF
-fmthard -s /tmp/solnix-install.vtoc "/dev/rdsk/${TARGET}" 2>&1 || die "fmthard failed"
-prtvtoc -h "/dev/rdsk/${TARGET}"
+# The real label is written by `zpool create -B` below (s0 ESP 256M, s1 zfs, s8 reserved),
+# the same geometry this step used to fmthard, but the pool is then whole_disk=1, so
+# autoexpand / `zpool online -e` can relabel it onto a larger disk (libzfs only relabels
+# whole-disk vdevs; a pool on a fmthard'd slice never grows past the image size).
 
 # ---------------------------------------------------------------------------
 # 2. ESP FAT32 + the pool + BE dataset
 # ---------------------------------------------------------------------------
-log "mkfs pcfs ESP on ${TARGET}s0"
-step "formatting ESP + creating pool $POOL + datasets"
-# fresh slice nodes after fmthard: re-run devfsadm so /dev/rdsk/${TARGET}s0
-# reflects the new vtoc before mkfs_pcfs opens it (stale node = silent no-op).
-devfsadm >/dev/null 2>&1 || true
+step "creating pool $POOL + ESP + datasets"
 # NOTE: pcfs `b=<file>` installs a boot file, NOT a volume label — `b=ESP` was
 # misread as boot-file `/boot/ESP` -> `/boot/pmbr: No such file`. Drop it; the ESP
 # just needs a FAT32 filesystem (the loader.efi is copied in later at mount time).
 mkfs_esp() { yes | run_to 60 mkfs -F pcfs -o fat=32 "/dev/rdsk/${TARGET}s0" 2>&1; }
-mkfs_esp
-if ! fstyp "/dev/rdsk/${TARGET}s0" 2>/dev/null | grep -q pcfs; then
-  log "ESP mkfs did not yield pcfs; devfsadm + retry"
-  devfsadm >/dev/null 2>&1 || true
-  mkfs_esp
-  fstyp "/dev/rdsk/${TARGET}s0" 2>/dev/null | grep -q pcfs || die "ESP mkfs failed (fstyp=$(fstyp "/dev/rdsk/${TARGET}s0" 2>&1))"
-fi
-log "ESP fstyp: $(fstyp "/dev/rdsk/${TARGET}s0" 2>&1)"
-
-log "creating pool $POOL on ${TARGET}s1 + BE dataset $BEDS"
+log "creating whole-disk boot pool $POOL on ${TARGET} (-B: s0 ESP, s1 pool) + BE dataset $BEDS"
 # CRITICAL for bootability: create the ROOT pool with -d (disable ALL feature
 # flags) so the illumos boot loader (loader64.efi / gptzfsboot) can READ the
 # pool. A default `zpool create` enables modern features (com.delphix:*,
@@ -1705,8 +1725,23 @@ _encfeat=""
 # encrypt (measured), independent of the not-yet-chosen mode. The actual encrypted
 # /home,/nix datasets are created later, after the mode prompt.
 if zpool upgrade -v 2>/dev/null | grep -q '^encryption'; then _encfeat="-o feature@encryption=enabled"; fi
-run_to 60 zpool create -f -d $_encfeat -o altroot="$ALTROOT" -o cachefile=none \
-  -O compression=on -O atime=off -m none "$POOL" "/dev/dsk/${TARGET}s1" || die "zpool create failed"
+# autoexpand=on: the pool grows to its disk at import (NixOS make-multi-disk-zfs-image's
+# rootPoolProperties); measured on EC2, docs/base-ami-rebuild-runbook.md.
+run_to 60 zpool create -f -d -B $_encfeat -o altroot="$ALTROOT" -o cachefile=none -o autoexpand=on \
+  -O compression=on -O atime=off -m none "$POOL" "/dev/dsk/${TARGET}" || die "zpool create failed"
+prtvtoc -h "/dev/rdsk/${TARGET}"
+# fresh slice nodes after the label: devfsadm so /dev/rdsk/${TARGET}s0 reflects the
+# new vtoc before mkfs_pcfs opens it (stale node = silent no-op).
+devfsadm >/dev/null 2>&1 || true
+log "mkfs pcfs ESP on ${TARGET}s0"
+mkfs_esp
+if ! fstyp "/dev/rdsk/${TARGET}s0" 2>/dev/null | grep -q pcfs; then
+  log "ESP mkfs did not yield pcfs; devfsadm + retry"
+  devfsadm >/dev/null 2>&1 || true
+  mkfs_esp
+  fstyp "/dev/rdsk/${TARGET}s0" 2>/dev/null | grep -q pcfs || die "ESP mkfs failed (fstyp=$(fstyp "/dev/rdsk/${TARGET}s0" 2>&1))"
+fi
+log "ESP fstyp: $(fstyp "/dev/rdsk/${TARGET}s0" 2>&1)"
 # WHY the explicit feature list (not just -d): on modern illumos `zpool create`
 # AUTO-ACTIVATES com.delphix:log_spacemap (needed for the log spacemap) even under
 # -d, and the bundled loader64.efi's ZFS reader does NOT support log_spacemap ->
@@ -2013,6 +2048,22 @@ esac
 # after <pool>/nix (install-be's vr line), before svc.startd writes its logs.
 # Never encrypted: nothing at that point of boot can ask for a passphrase.
 # Mounted now at $ALTROOT/var/<x>, so install-be's stock /var lands in them.
+# The crash-dump zvol, as every illumos installer creates one (OpenIndiana/OmniOS: rpool/dump). Outside every BE, so
+# a panic in any generation leaves a dump for savecore. Without it dumpadm falls back to swap, and a solnix install has
+# no swap: a panic left nothing (measured on lixi, 2026-10-25: "Dump device: none (dumps disabled)"). Sized like
+# OpenIndiana's installer: half of RAM, between 1 and 16 GiB. solnix.dumpadm (modules/config/dumpadm.nix) names it.
+if ! zfs list -H "$POOL/dump" >/dev/null 2>&1; then
+  _ramk=$(prtconf 2>/dev/null | awk '/^Memory size/ { print $3 * 1024 }')
+  _dumpg=$(( ${_ramk:-2097152} / 2 / 1048576 )); [ "$_dumpg" -lt 1 ] && _dumpg=1; [ "$_dumpg" -gt 16 ] && _dumpg=16
+  # Never more than a quarter of the pool (half of a 32G build host's RAM did not fit an 8G image).
+  _poolq=$(( $(zpool list -Hp -o size "$POOL" 2>/dev/null || echo 4294967296) / 4 / 1073741824 ))
+  [ "$_dumpg" -gt "$_poolq" ] && _dumpg=$_poolq; [ "$_dumpg" -lt 1 ] && _dumpg=1
+  # An image is built on a host whose RAM is not the target's: ship a 1G placeholder, which
+  # site/solnix-dump-size (scripts/solnix-dump-size.sh) grows to the target's rule at first boot.
+  [ -n "${SOLNIX_IMAGE_BUILD:-}" ] && _dumpg=1
+  zfs create -V ${_dumpg}G "$POOL/dump" || die "failed to create the dump zvol $POOL/dump"
+  log "created $POOL/dump (${_dumpg} GiB) for kernel crash dumps"
+fi
 VAR_SHARED="adm cores crash cron fm lib log logadm mail saf spool tmp svc/log"
 zfs list -H "$POOL/var" >/dev/null 2>&1 \
   || zfs create -o canmount=off -o mountpoint=/var "$POOL/var" || die "failed to create $POOL/var"
@@ -2153,7 +2204,16 @@ echo "installed-console gate OK: console=$TARGET_CONSOLE in loader.conf + booten
 # /reconfigure + empty path_to_inst made the dixi X1's first boot hang 10+ min at
 # the loader hand-off (MEASURED). SOLNIX_FORCE_RECONFIGURE=1 for install-here,
 # boot-elsewhere. This is hardware state, not system state, so it is copied.
+# A PUBLIC CLOUD IMAGE is built on one instance type and booted on all of them, so
+# the build host's bindings are wrong for the image: on a c7i the ENA sits at
+# /pci@2,0/pci1d0f,200@0/.../pci1d0f,ec20@0, not the c5 build host's
+# /pci@0,0/pci1d0f,ec20@5, became ena1 against the copied binding, and ena0 (what
+# the networking module plumbs) did not exist (measured 2026-10-21, 0/4 c7i boots).
+# NixOS's amazon image ships no machine-specific device state either. An empty
+# file makes the kernel rebuild instance data on first boot (instance.c
+# PTI_NOT_FOUND -> RB_RECONFIG), so the first ENA found is ena0 on every type.
 mkdir -p "$ALTROOT/etc"
+if [ -n "${SOLNIX_CLOUD_IMAGE:-}" ]; then SOLNIX_FORCE_RECONFIGURE=1; fi
 if [ "${SOLNIX_FORCE_RECONFIGURE:-0}" = 1 ] || [ ! -s /etc/path_to_inst ]; then
   : > "$ALTROOT/etc/path_to_inst"; : > "$ALTROOT/reconfigure"
   log "first boot: forcing a device reconfigure (empty path_to_inst)"
@@ -2222,8 +2282,12 @@ grep -q "zfs mount -O $POOL/nix" "$ALTROOT/etc/inittab" 2>/dev/null \
   || die "BE inittab has no stage-2 'zfs mount -O $POOL/nix' line: the BE could not reach the shared store at boot"
 grep -q "^vr::sysinit:.* $POOL/var " "$ALTROOT/etc/inittab" 2>/dev/null \
   || die "BE inittab has no 'vr' line mounting $POOL/var: /var state would stay inside the BE"
+# autopush must be the first sysinit line: an earlier line opens the console before
+# autopush loads iu.ap, and the console then has no ldterm for the whole boot.
+[ "$(grep -E '^[^#:]*:[^:]*:sysinit:' "$ALTROOT/etc/inittab" 2>/dev/null | head -1 | cut -d: -f1)" = ap ] \
+  || die "BE inittab's first sysinit line is not ap (autopush): the installed console would staircase"
 # the early set must be REAL files: the loader and init run before $POOL/nix mounts.
-for _e in sbin/init sbin/sh platform/i86pc/kernel/amd64/unix platform/i86pc/amd64/boot_archive; do
+for _e in sbin/init sbin/sh sbin/autopush platform/i86pc/kernel/amd64/unix platform/i86pc/amd64/boot_archive; do
   _r=$(_in_be "$_e") || die "$_e resolves outside the BE or dangles -- it runs before $POOL/nix is mounted, so it must be a real file in the BE"
   case "$_r" in "$ALTROOT"/nix/store/*|"$ALTROOT"/sbin/*|"$ALTROOT"/platform/*|"$ALTROOT"/usr/*|"$ALTROOT"/lib/*) : ;;
     *) die "$_e resolves outside the BE ($_r)" ;; esac
@@ -2242,6 +2306,24 @@ for _f in passwd shadow group; do
   [ -h "$ALTROOT/etc/$_f" ] && die "/etc/$_f is a symlink into the store; the installer must edit it (passwords, admin user)"
   [ -f "$ALTROOT/etc/$_f" ] || die "BE has no /etc/$_f"
 done
+# declared users' keys: a root-owned 0444 real file per user in the BE's /etc
+# (sshd's safe_path() refuses a group-writable /nix/store parent), as NixOS lays
+# /etc/ssh/authorized_keys.d. The keys never go into a home: /home is shared.
+# The toplevel's etc is an absolute store link: read it through STORE_PREFIX.
+# Owner: the BE's /etc owner (root on a real install).
+_tetc=$(_readlink "$_TLD/etc") && _tetc="$STORE_PREFIX$_tetc"
+if [ -n "$_tetc" ] && [ -d "$_tetc/ssh/authorized_keys.d" ]; then
+  _eown=$(ls -lnd "$ALTROOT/etc" | awk '{print $3}')
+  for _k in "$_tetc"/ssh/authorized_keys.d/*; do
+    [ -e "$_k" ] || continue
+    _kb="$ALTROOT/etc/ssh/authorized_keys.d/${_k##*/}"
+    [ -f "$_kb" ] && [ ! -h "$_kb" ] || die "BE has no real /etc/ssh/authorized_keys.d/${_k##*/}"
+    [ "$(ls -ln "$_kb" | awk '{print $1, $3}')" = "-r--r--r-- $_eown" ] \
+      || die "/etc/ssh/authorized_keys.d/${_k##*/} is not root-owned 0444 ($(ls -ln "$_kb" | awk '{print $1, $3}'))"
+  done
+  grep -q '^AuthorizedKeysFile.*/etc/ssh/authorized_keys.d/%u' "$ALTROOT/etc/ssh/sshd_config" 2>/dev/null \
+    || die "BE sshd_config does not read /etc/ssh/authorized_keys.d/%u: declared users' keys would be ignored"
+fi
 # What the brief calls "no live-root copy": the BE must not contain the live media's
 # own marker files. Their presence would mean something copied the running root.
 for _la in etc/solnix-live-shell usr/sbin/solnix-motd root/run-install.sh; do
@@ -2682,9 +2764,10 @@ if [ "$_mkadmin" = 1 ]; then
   log "admin user OK: $_au (staff+sysadmin, Primary Administrator, home on $POOL$HOME_BASE)"
   echo "  Created $_au. Log in and use: pfexec <command>   (or su - root)"
   # Seed the admin user's SSH authorized_keys so key login works on first boot.
-  # Config-declared users get keys via seed-authorized-keys (step 6c); this
+  # Config-declared users get keys in /etc/ssh/authorized_keys.d (install-be); this
   # runtime-created admin user does NOT, so without this it would have NO key and
-  # (with PermitRootLogin no) the machine could be unreachable by key.
+  # (with PermitRootLogin no) the machine could be unreachable by key. The home
+  # dataset is mounted under $ALTROOT here (above), so this lands in the real home.
   # SOLNIX_ADMIN_SSHKEY may hold one or more keys (newline-separated).
   if [ -n "${SOLNIX_ADMIN_SSHKEY:-}" ]; then
     _assh="$ALTROOT${HOME_BASE}/$_au/.ssh"

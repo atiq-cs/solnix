@@ -20,6 +20,8 @@ now dead. Everything below was measured, not reasoned.
 | The box is hung at the ZFS scan | **REFUTED** — it is a repeating silent reset (Step 4) |
 | Committed PCIe ground truth is from Graviton metal | **FALSE** — it is from a c6g.medium VM (Step 3) |
 | "Read `_CRS wins` off metal — no rebuild needed" | **REFUTED** — that line cannot reach a metal console at all (Step 5) |
+| Reset is an unprotected ECAM config read (EC 0x25) that `on_trap` would recover | **REFUTED on metal 2026-10-22** — the fix plus a diagnostic printed 0 `[AAECAM]` lines in 2 reset cycles; `ecam_cfgspace_acc` never ran. See `docs/aarch64-ecam-ontrap-metal-result.md` |
+| "Stall is ITS/MSI" refuted because no device was present for MSI | **REOPENED** — the refutation argued about MSI delivery, but `gicv3_its` *attach* (the `its@` node, emitted before `pcie@`) touches ITS MMIO with no device present. Still unmeasured |
 
 ## Step 1 (free): "no driver binds the ECAM node" is REFUTED
 

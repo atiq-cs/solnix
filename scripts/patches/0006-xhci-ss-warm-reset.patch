@@ -1,0 +1,112 @@
+solnix: xhci -- warm-reset a USB 3 root port whose link did not train (SS.Inactive / Compliance / Cold Attach
+Status), so a device plugged in before boot is enumerated, as Linux and FreeBSD do.
+
+WHY
+- Measured on the X1 Extreme Gen5 (r1 image, 2026-10-21): a Belkin RTL8153 (USB 3, 5 Gb/s) on a left USB-C port,
+  whose SuperSpeed lines are on the Thunderbolt 4 xHCI 56:00.0 (8086:1138 Maple Ridge), was NOT seen when plugged
+  in before boot ("no wired NIC"). After an unplug/replug, usbecm0 came up at 1 Gb/s. So the controller, hubd and
+  the driver work, and only the device present at controller reset is missed.
+- MECHANISM (candidate, from the specs and two other OSes; NOT yet read off the X1E's registers): xHCI 1.2 5.4.8
+  and 4.19.1.2.4.1: a USB 3 device attached when the port powers up can fail link training. The port then reports
+  PLS = SS.Inactive (6) or Compliance (10), often with PORTSC.CAS (Cold Attach Status) set, and CCS clear. Only a
+  warm reset (PORTSC.WPR) leaves that state. A hot-plug trains normally, which matches the replug result.
+- illumos neither sees nor fixes that state. xhci_hub.c's GET_STATUS translation ignores CAS and the link state,
+  so hubd sees no connection, and hubd never issues a warm reset. Linux 6.12 xhci-hub.c
+  xhci_hub_report_usb3_link_state reports CONNECTION for CAS (as Compliance), and hub.c
+  hub_port_warm_reset_required() turns the port reset of an SS.Inactive/Compliance port into BH_PORT_RESET.
+  FreeBSD usb_hub.c warm-resets SS_INA (usbd_req_warm_reset_port, usb_request.c: U3/COMP/LOOPBACK/SS_INA).
+
+THE CHANGE (xhci_hub.c only; hubd's own reset/enumerate path is unchanged)
+- xhci_port_needs_warm_reset(raw PORTSC): port powered, and CAS set or PLS SS.Inactive/Compliance.
+- GET_STATUS reports such a port as connected (PORT_STATUS_CCS), so hubd's attach-time scan
+  (hubd_determine_port_connection) and its hotplug thread call hubd_handle_port_connect.
+- SET_FEATURE(PORT_RESET) on such a port sets WPR instead of PR. hubd already waits for the reset change and
+  clears C_BH_PORT_RESET (hubdi.c hubd_reset_port). One system-log NOTE ("!", not the console) per warm
+  reset with the raw PORTSC.
+- Tunable xhci_ss_warm_reset (default 1). 0 is the old behaviour, which is the negative control.
+RUNG: compiles with the gate's warning set, and is modelled under KVM with a QEMU qemu-xhci patched to hold a
+present-at-boot SuperSpeed device in SS.Inactive with CAS until a warm reset. NOT measured on the X1E; the
+solnix-diag PORTSC dump (/usr/lib/xhci/xhci_portsc) is what shows whether the X1E's port is in that state.
+
+--- a/usr/src/uts/common/io/usb/hcd/xhci/xhci_hub.c
++++ b/usr/src/uts/common/io/usb/hcd/xhci/xhci_hub.c
+@@ -22,6 +22,34 @@
+ #include <sys/usb/hcd/xhci/xhci.h>
+ 
+ /*
++ * A USB 3 device that is already plugged in when the controller is reset can
++ * fail link training: the port then sits in SS.Inactive or Compliance, often
++ * with Cold Attach Status (CAS) set and CCS clear, and only a warm reset
++ * trains it (xHCI 1.2 4.19.1.2, 5.4.8). Hot-plug trains normally, so such a
++ * device is seen only after a replug. hubd knows nothing of warm resets, so
++ * report such a port as connected and turn hubd's port reset into a warm
++ * one, as Linux does (xhci_hub_report_usb3_link_state: CAS or Compliance ->
++ * connected; hub_port_warm_reset_required) and FreeBSD does (uhub on SS_INA
++ * -> usbd_req_warm_reset_port). Set to 0 for the old behaviour.
++ */
++uint_t xhci_ss_warm_reset = 1;
++
++#define	XHCI_PLS_SS_INACTIVE	6
++#define	XHCI_PLS_COMPLIANCE	10
++
++/* reg is a raw PORTSC read */
++static boolean_t
++xhci_port_needs_warm_reset(uint32_t reg)
++{
++	uint_t pls = XHCI_PS_PLS_GET(reg);
++
++	if (xhci_ss_warm_reset == 0 || !(reg & XHCI_PS_PP))
++		return (B_FALSE);
++	return ((reg & XHCI_PS_CAS) != 0 || pls == XHCI_PLS_SS_INACTIVE ||
++	    pls == XHCI_PLS_COMPLIANCE);
++}
++
++/*
+  * The following structure and global define the default configuration that we
+  * 'deliver' to USBA on behalf of our hub. However, it's worth noting that it's
+  * going to take this in as an array of bytes off of the wire, whereas we're
+@@ -325,7 +353,7 @@
+ 	int feat = ucrp->ctrl_wValue;
+ 	int port = XHCI_PS_INDPORT(ucrp->ctrl_wIndex);
+ 	uint32_t val = XHCI_PS_INDVAL(ucrp->ctrl_wIndex);
+-	uint32_t reg;
++	uint32_t reg, raw;
+ 	uintptr_t index;
+ 
+ 	ASSERT(MUTEX_HELD(&xhcip->xhci_lock));
+@@ -336,7 +364,7 @@
+ 		return (USB_CR_UNSPECIFIED_ERR);
+ 
+ 	index = XHCI_PORTSC(port);
+-	reg = xhci_get32(xhcip, XHCI_R_OPER, index);
++	reg = raw = xhci_get32(xhcip, XHCI_R_OPER, index);
+ 	if (xhci_check_regs_acc(xhcip) != DDI_FM_OK) {
+ 		xhci_error(xhcip, "failed to read port status register for "
+ 		    "port %d: encountered fatal FM error, resetting device",
+@@ -404,7 +432,15 @@
+ 		reg |= XHCI_PS_WPR;
+ 		break;
+ 	case CFS_PORT_RESET:
+-		reg |= XHCI_PS_PR;
++		if (xhci_port_needs_warm_reset(raw)) {
++			xhci_log(xhcip, "!port %d: USB 3 link not trained "
++			    "(PORTSC 0x%x, link state %d%s); warm reset", port,
++			    raw, XHCI_PS_PLS_GET(raw),
++			    (raw & XHCI_PS_CAS) ? ", cold attach" : "");
++			reg |= XHCI_PS_WPR;
++		} else {
++			reg |= XHCI_PS_PR;
++		}
+ 		break;
+ 	case CFS_PORT_POWER:
+ 		reg |= XHCI_PS_PP;
+@@ -471,7 +507,8 @@
+ 	}
+ 
+ 	ps = cs = 0;
+-	if (reg & XHCI_PS_CCS)
++	/* a link that needs a warm reset counts as connected; see above */
++	if ((reg & XHCI_PS_CCS) || xhci_port_needs_warm_reset(reg))
+ 		ps |= PORT_STATUS_CCS;
+ 	if (reg & XHCI_PS_PED)
+ 		ps |= PORT_STATUS_PES;

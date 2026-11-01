@@ -1,0 +1,805 @@
+diff -ruN a/Makefile b/Makefile
+--- a/Makefile
++++ b/Makefile
+@@ -24,18 +24,18 @@
+ 
+ # if set, network filesystem is enabled. libcurl and libcrypto
+ # (openssl) must be installed.
+-CONFIG_FS_NET=y
++#CONFIG_FS_NET=y
+ # SDL support (optional)
+-CONFIG_SDL=y
++#CONFIG_SDL=y
+ # if set, compile the 128 bit emulator. Note: the 128 bit target does
+ # not compile if gcc does not support the int128 type (32 bit hosts).
+ CONFIG_INT128=y
+ # build x86 emulator
+-CONFIG_X86EMU=y
++#CONFIG_X86EMU=y
+ # win32 build (not usable yet)
+ #CONFIG_WIN32=y
+ # user space network redirector
+-CONFIG_SLIRP=y
++#CONFIG_SLIRP=y
+ 
+ ifdef CONFIG_WIN32
+ CROSS_PREFIX=i686-w64-mingw32-
+diff -ruN a/build-wasm.sh b/build-wasm.sh
+--- a/build-wasm.sh
++++ b/build-wasm.sh
+@@ -0,0 +1,55 @@
++#!/bin/sh
++# Build the solnix WASM emulator (TinyEMU, qemu-virt map) with Emscripten.
++#
++# RUN THIS ON A LINUX BOX WITH EMSCRIPTEN INSTALLED (emsdk).  The solnix build
++# node is illumos and cannot run emcc, so this step is done off-node; the
++# emulator sources here are already patched + native-validated (see
++# build-wasm-demo.sh / SITE-TEAM-WASM-DEMO.md).
++#
++#   1. git clone / unpack this tinyemu-solnix source tree
++#   2. . /path/to/emsdk/emsdk_env.sh      # puts emcc on PATH
++#   3. sh build-wasm.sh
++#   4. copy js/riscvemu64-wasm.js + js/riscvemu64-wasm.wasm into <bundle>/emu/
++#
++# Produces: js/riscvemu64-wasm.js and js/riscvemu64-wasm.wasm
++set -e
++
++EMCC=${EMCC:-emcc}
++command -v "$EMCC" >/dev/null 2>&1 || { echo "emcc not found; source emsdk_env.sh"; exit 1; }
++
++CFLAGS="-O2 -Wall -DEMSCRIPTEN -Wno-deprecated-pragma -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE -fno-strict-aliasing -DCONFIG_FS_NET"
++
++# The emscripten JS entry point is jsemu.c (not temu.c).
++OBJS="jsemu softfp virtio fs simplefb pci json iomem cutils aes sha256 \
++      riscv_machine machine fs_net fs_wget fs_utils block_net"
++
++mkdir -p js
++for o in $OBJS; do
++    echo "  CC   $o.c"
++    "$EMCC" $CFLAGS -c -o "$o.js.o" "$o.c"
++done
++echo "  CC   riscv_cpu.c (MAX_XLEN=64)"
++"$EMCC" $CFLAGS -DMAX_XLEN=64 -DCONFIG_RISCV_MAX_XLEN=64 -c -o riscv_cpu64.js.o riscv_cpu.c
++
++OBJ_FILES="$(for o in $OBJS; do echo $o.js.o; done) riscv_cpu64.js.o"
++
++# Modern-emscripten link flags.  console_queue_char + vm_start are the JS entry
++# points; the demo page (index.html) calls them via cwrap.  emu/lib.js provides
++# console_write / console_get_size / the HTTP fetch used by fs_wget + block_net.
++LDFLAGS="-O3 \
++  -s WASM=1 \
++  -s ALLOW_MEMORY_GROWTH=1 \
++  -s INITIAL_MEMORY=134217728 \
++  -s EXPORTED_FUNCTIONS=['_vm_start','_console_queue_char','_malloc','_free'] \
++  -s EXPORTED_RUNTIME_METHODS=['ccall','cwrap'] \
++  -s ALLOW_TABLE_GROWTH=1 \
++  -s NO_EXIT_RUNTIME=1 \
++  -s MODULARIZE=0 \
++  --js-library emu/lib.js"
++
++echo "  LD   js/riscvemu64-wasm.js"
++"$EMCC" $LDFLAGS -o js/riscvemu64-wasm.js $OBJ_FILES
++
++echo
++echo "Done. Copy into the bundle:"
++echo "  cp js/riscvemu64-wasm.js js/riscvemu64-wasm.wasm <bundle>/emu/"
+diff -ruN a/cutils.h b/cutils.h
+--- a/cutils.h
++++ b/cutils.h
+@@ -30,7 +30,9 @@
+ #define unlikely(x)     __builtin_expect(!!(x), 0)
+ #define force_inline inline __attribute__((always_inline))
+ #define no_inline __attribute__((noinline))
++#ifndef __maybe_unused
+ #define __maybe_unused __attribute__((unused))
++#endif
+ 
+ #define xglue(x, y) x ## y
+ #define glue(x, y) xglue(x, y)
+@@ -84,15 +86,20 @@
+ 
+ void *mallocz(size_t size);
+ 
+-#if defined(_WIN32)
++/* portable byteswaps (no byteswap.h: absent on illumos and emscripten) */
++static inline uint16_t bswap_16(uint16_t v)
++{
++    return (uint16_t)((v >> 8) | (v << 8));
++}
+ static inline uint32_t bswap_32(uint32_t v)
+ {
+     return ((v & 0xff000000) >> 24) | ((v & 0x00ff0000) >>  8) |
+         ((v & 0x0000ff00) <<  8) | ((v & 0x000000ff) << 24);
+ }
+-#else
+-#include <byteswap.h>
+-#endif
++static inline uint64_t bswap_64(uint64_t v)
++{
++    return ((uint64_t)bswap_32(v & 0xffffffff) << 32) | bswap_32(v >> 32);
++}
+ 
+ static inline uint16_t get_le16(const uint8_t *ptr)
+ {
+diff -ruN a/emu/lib.js b/emu/lib.js
+--- a/emu/lib.js
++++ b/emu/lib.js
+@@ -0,0 +1,153 @@
++/*
++ * solnix WASM demo -- Emscripten JS library glue for TinyEMU (qemu-virt build).
++ *
++ * Bridges the emulated ns16550 UART to an xterm.js terminal and fetches the
++ * bios / split-disk blocks over HTTP.  Written for a modern emscripten
++ * (>= 3.x): UTF8ToString, getWasmTableEntry, no Pointer_stringify/Runtime.
++ *
++ * C entry points (see jsemu.c): vm_start(url, ram, cmdline, pwd, w, h, net)
++ * and console_queue_char(c).  The page defines a global `SolnixTerm` object
++ * with .write(str) and .getSize() -> [cols, rows].
++ */
++mergeInto(LibraryManager.library, {
++    /* guest UART TX -> xterm.js */
++    console_write: function(opaque, buf, len) {
++        var s = "";
++        for (var i = 0; i < len; i++)
++            s += String.fromCharCode(HEAPU8[buf + i]);
++        SolnixTerm.write(s);
++    },
++
++    /* terminal geometry for the (unused) resize event */
++    console_get_size: function(pw, ph) {
++        var r = SolnixTerm.getSize();
++        HEAPU32[pw >> 2] = r[0];
++        HEAPU32[ph >> 2] = r[1];
++    },
++
++    /* file-download hook (unused by this demo, kept for link compat) */
++    fs_export_file: function(filename, buf, buf_len) {},
++
++    /*
++     * HTTP fetch used by fs_wget (bios) and the split-disk block device.
++     * Signature matches TinyEMU's emscripten_async_wget3_data.
++     */
++    emscripten_async_wget3_data__deps: ['$getWasmTableEntry'],
++    emscripten_async_wget3_data: function(url, request, user, password,
++                                          post_data, post_data_len, arg,
++                                          free, onload, onerror, onprogress) {
++        var _url = UTF8ToString(url);
++        var _request = UTF8ToString(request);
++        var http = new XMLHttpRequest();
++        http.open(_request, _url, true);
++        http.responseType = "arraybuffer";
++        var handle = 1;
++        http.onload = function() {
++            /* status is 0 for non-http schemes (e.g. file:), 200 for http(s);
++             * a relative URL fetched over http still reports the real status,
++             * so a 404 must be treated as an error, not fed to the guest. */
++            if (http.status === 200 || http.status === 0) {
++                var bytes = new Uint8Array(http.response);
++                var buffer = _malloc(bytes.length);
++                HEAPU8.set(bytes, buffer);
++                if (onload)
++                    getWasmTableEntry(onload)(handle, arg, buffer, bytes.length);
++                if (free) _free(buffer);
++            } else if (onerror) {
++                getWasmTableEntry(onerror)(handle, arg, http.status, 0);
++            }
++        };
++        http.onerror = function() {
++            if (onerror) getWasmTableEntry(onerror)(handle, arg, http.status, 0);
++        };
++        http.onprogress = function(e) {
++            if (onprogress)
++                getWasmTableEntry(onprogress)(handle, arg, e.loaded,
++                    e.lengthComputable ? e.total : 0);
++        };
++        http.send(_request === "POST"
++            ? HEAPU8.subarray(post_data, post_data + post_data_len) : null);
++        return handle;
++    },
++
++    fs_wget_update_downloading: function(flag) {
++        if (typeof SolnixTerm.setDownloading === "function")
++            SolnixTerm.setDownloading(Boolean(flag));
++    },
++
++    /* framebuffer + network are unused in this console-only demo (extern-only) */
++    fb_refresh: function(opaque, data, x, y, w, h, stride) {},
++    net_recv_packet: function(bs, buf, buf_len) {},
++
++    /*
++     * file-buffer API used by the split-disk block device (block_net.c).
++     * A FileBuffer is two 32-bit words: {handle, allocated_size}.  The bytes
++     * live JS-side in a handle table (fbuf.h maps FileBuffer to a JS handle
++     * under EMSCRIPTEN).  Self-contained table (no dependency on Browser).
++     */
++    $SolnixFbuf: { table: {}, next: 1 },
++    file_buffer_get_new_handle__deps: ['$SolnixFbuf'],
++    file_buffer_get_new_handle: function() {
++        var h;
++        for (;;) {
++            h = SolnixFbuf.next++;
++            if (SolnixFbuf.next === 0x80000000) SolnixFbuf.next = 1;
++            if (typeof SolnixFbuf.table[h] === "undefined") return h;
++        }
++    },
++    file_buffer_init__deps: ['$SolnixFbuf'],
++    file_buffer_init: function(bs) {
++        HEAPU32[bs >> 2] = 0;
++        HEAPU32[(bs + 4) >> 2] = 0;
++    },
++    file_buffer_resize__deps: ['file_buffer_get_new_handle', '$SolnixFbuf'],
++    file_buffer_resize: function(bs, new_size) {
++        var h, size, new_data, i, data;
++        h = HEAPU32[bs >> 2];
++        size = HEAPU32[(bs + 4) >> 2];
++        if (new_size == 0) {
++            if (h != 0) { delete SolnixFbuf.table[h]; h = 0; }
++        } else if (size == 0) {
++            h = _file_buffer_get_new_handle();
++            SolnixFbuf.table[h] = new Uint8Array(new_size);
++        } else if (size != new_size) {
++            data = SolnixFbuf.table[h];
++            new_data = new Uint8Array(new_size);
++            if (new_size > size) new_data.set(data, 0);
++            else for (i = 0; i < new_size; i = (i + 1) | 0) new_data[i] = data[i];
++            SolnixFbuf.table[h] = new_data;
++        }
++        HEAPU32[bs >> 2] = h;
++        HEAPU32[(bs + 4) >> 2] = new_size;
++        return 0;
++    },
++    file_buffer_reset__deps: ['file_buffer_resize', 'file_buffer_init'],
++    file_buffer_reset: function(bs) {
++        _file_buffer_resize(bs, 0);
++        _file_buffer_init(bs);
++    },
++    file_buffer_write__deps: ['$SolnixFbuf'],
++    file_buffer_write: function(bs, offset, buf, size) {
++        var h = HEAPU32[bs >> 2], data, i;
++        if (h) {
++            data = SolnixFbuf.table[h];
++            for (i = 0; i < size; i = (i + 1) | 0) data[offset + i] = HEAPU8[buf + i];
++        }
++    },
++    file_buffer_read__deps: ['$SolnixFbuf'],
++    file_buffer_read: function(bs, offset, buf, size) {
++        var h = HEAPU32[bs >> 2], data, i;
++        if (h) {
++            data = SolnixFbuf.table[h];
++            for (i = 0; i < size; i = (i + 1) | 0) HEAPU8[buf + i] = data[offset + i];
++        }
++    },
++    file_buffer_set__deps: ['$SolnixFbuf'],
++    file_buffer_set: function(bs, offset, val, size) {
++        var h = HEAPU32[bs >> 2], data, i;
++        if (h) {
++            data = SolnixFbuf.table[h];
++            for (i = 0; i < size; i = (i + 1) | 0) data[offset + i] = val;
++        }
++    }
++});
+diff -ruN a/fs_disk.c b/fs_disk.c
+--- a/fs_disk.c
++++ b/fs_disk.c
+@@ -27,7 +27,7 @@
+ #include <inttypes.h>
+ #include <assert.h>
+ #include <stdarg.h>
+-#include <sys/statfs.h>
++/* sys/statfs.h removed for illumos; statvfs used */
+ #include <sys/stat.h>
+ #include <sys/sysmacros.h>
+ #include <unistd.h>
+@@ -35,6 +35,19 @@
+ #include <dirent.h>
+ #include <errno.h>
+ 
++/* illumos portability: no d_type in dirent; map DT_* from st_mode>>12 */
++#include <sys/statvfs.h>
++#ifndef DT_DIR
++#define DT_DIR  4
++#endif
++#ifndef DT_LNK
++#define DT_LNK  10
++#endif
++#ifndef DT_REG
++#define DT_REG  8
++#endif
++
++
+ #include "cutils.h"
+ #include "list.h"
+ #include "fs.h"
+@@ -145,8 +158,8 @@
+ static void fs_statfs(FSDevice *fs1, FSStatFS *st)
+ {
+     FSDeviceDisk *fs = (FSDeviceDisk *)fs1;
+-    struct statfs st1;
+-    statfs(fs->root_path, &st1);
++    struct statvfs st1;
++    statvfs(fs->root_path, &st1);
+     st->f_bsize = st1.f_bsize;
+     st->f_blocks = st1.f_blocks;
+     st->f_bfree = st1.f_bfree;
+@@ -312,8 +325,8 @@
+         if ((pos + len) > count)
+             break;
+         offset = telldir(f->u.dirp);
+-        d_type = de->d_type;
+-        if (d_type == DT_UNKNOWN) {
++        d_type = 0 /*DT_UNKNOWN: no d_type on illumos*/;
++        if (d_type == 0) {
+             char *path;
+             struct stat st;
+             path = compose_path(f->path, de->d_name);
+diff -ruN a/jsemu.c b/jsemu.c
+--- a/jsemu.c
++++ b/jsemu.c
+@@ -205,8 +205,12 @@
+ 
+     if (p->fs_count > 0) {
+         assert(p->fs_count == 1);
+-        p->tab_fs[0].fs_dev = fs_net_init(p->tab_fs[0].filename,
++        /* resolve the 9p url relative to the config file (page passes a path
++         * relative to index.html, e.g. "images/...") */
++        char *fs_url = get_file_path(p->cfg_filename, p->tab_fs[0].filename);
++        p->tab_fs[0].fs_dev = fs_net_init(fs_url,
+                                           init_vm_drive, s);
++        free(fs_url);
+         if (s->pwd) {
+             fs_net_set_pwd(p->tab_fs[0].fs_dev, s->pwd);
+         }
+@@ -222,10 +226,14 @@
+ 
+     if (p->drive_count > 0) {
+         assert(p->drive_count == 1);
++        /* resolve the disk manifest url relative to the config file, so the
++         * split-disk blocks are fetched from images/disk/ rather than /disk/ */
++        char *drv_url = get_file_path(p->cfg_filename, p->tab_drive[0].filename);
+         p->tab_drive[0].block_dev =
+-            block_device_init_http(p->tab_drive[0].filename,
++            block_device_init_http(drv_url,
+                                    131072,
+                                    init_vm, s);
++        free(drv_url);
+     } else {
+         init_vm(s);
+     }
+@@ -308,20 +316,19 @@
+     int delay, i;
+     FBDevice *fb_dev;
+     
+-    if (m->console_dev && virtio_console_can_write_data(m->console_dev)) {
++    /* solnix uses the ns16550 UART (SBI console), not virtio-console:
++       drain JS-queued input into the UART RX ring (console_dev is NULL). */
++    if (m->console) {
+         uint8_t buf[128];
+-        int ret, len;
+-        len = virtio_console_get_write_len(m->console_dev);
+-        len = min_int(len, sizeof(buf));
+-        ret = m->console->read_data(m->console->opaque, buf, len);
+-        if (ret > 0)
+-            virtio_console_write_data(m->console_dev, buf, ret);
+-        if (console_resize_pending) {
+-            int w, h;
+-            console_get_size(&w, &h);
+-            virtio_console_resize_event(m->console_dev, w, h);
+-            console_resize_pending = FALSE;
++        int ret;
++        ret = m->console->read_data(m->console->opaque, buf, sizeof(buf));
++        if (ret > 0) {
++            if (m->console_dev)
++                virtio_console_write_data(m->console_dev, buf, ret);
++            else
++                riscv_machine_console_rx(m, buf, ret);
+         }
++        console_resize_pending = FALSE;
+     }
+ 
+     fb_dev = m->fb_dev;
+diff -ruN a/machine.c b/machine.c
+--- a/machine.c
++++ b/machine.c
+@@ -153,7 +153,7 @@
+                 /* get the offset to UTC */
+                 time(&ti);
+                 localtime_r(&ti, &tm);
+-                n = tm.tm_gmtoff / 60;
++                n = 0; /* UTC: tm_gmtoff absent on illumos/emscripten */ (void)tm;
+                 sg = '-';
+                 if (n < 0) {
+                     sg = '+';
+@@ -496,8 +496,19 @@
+                              FSLoadFileCB *cb, void *opaque)
+ {
+     //    printf("loading %s\n", filename);
++    /*
++     * Under EMSCRIPTEN there is no local filesystem (load_file() aborts), so
++     * every file load must go through the HTTP fetch.  The page passes paths
++     * relative to index.html (e.g. "images/solnix.cfg"); XHR resolves those
++     * against the document origin, so is_url() (http:/https:/file: only) is
++     * bypassed here.
++     */
+ #ifdef CONFIG_FS_NET
+-    if (is_url(filename)) {
++    if (is_url(filename)
++#ifdef EMSCRIPTEN
++        || 1
++#endif
++        ) {
+         s->file_load_cb = cb;
+         s->file_load_opaque = opaque;
+         fs_wget(filename, NULL, NULL, s, config_load_file_cb, TRUE);
+diff -ruN a/machine.h b/machine.h
+--- a/machine.h
++++ b/machine.h
+@@ -172,6 +172,7 @@
+ 
+ /* gui */
+ void sdl_refresh(VirtMachine *m);
++void riscv_machine_console_rx(VirtMachine *m, const uint8_t *buf, int len);
+ void sdl_init(int width, int height);
+ 
+ /* simplefb.c */
+diff -ruN a/riscv_cpu.c b/riscv_cpu.c
+--- a/riscv_cpu.c
++++ b/riscv_cpu.c
+@@ -700,6 +700,8 @@
+ 
+ /* return -1 if invalid CSR. 0 if OK. 'will_write' indicate that the
+    csr will be written after (used for CSR access check) */
++uint64_t riscv_machine_get_mtime(void *machine);
++
+ static int csr_read(RISCVCPUState *s, target_ulong *pval, uint32_t csr,
+                      BOOL will_write)
+ {
+@@ -743,6 +745,14 @@
+         }
+         val = (int64_t)s->insn_counter;
+         break;
++    case 0xc01: /* utime: qemu-virt exposes mtime here, always readable */
++        val = riscv_machine_get_mtime(s->mem_map->opaque);
++        break;
++    case 0xc81: /* utimeh */
++        if (s->cur_xlen != 32)
++            goto invalid_csr;
++        val = riscv_machine_get_mtime(s->mem_map->opaque) >> 32;
++        break;
+     case 0xc80: /* mcycleh */
+     case 0xc82: /* minstreth */
+         if (s->cur_xlen != 32)
+@@ -838,6 +848,11 @@
+             goto invalid_csr;
+         val = s->insn_counter >> 32;
+         break;
++    case 0xf11: /* mvendorid */
++    case 0xf12: /* marchid */
++    case 0xf13: /* mimpid */
++        val = 0;
++        break;
+     case 0xf14:
+         val = s->mhartid;
+         break;
+diff -ruN a/riscv_machine.c b/riscv_machine.c
+--- a/riscv_machine.c
++++ b/riscv_machine.c
+@@ -55,6 +55,10 @@
+     IRQSignal plic_irq[32]; /* IRQ 0 is not used */
+     /* HTIF */
+     uint64_t htif_tohost, htif_fromhost;
++    /* ns16550 UART @ 0x10000000 (qemu-virt): OpenSBI console */
++    uint8_t uart_ier, uart_lcr, uart_mcr, uart_scr, uart_fcr;
++    uint8_t uart_rx_buf[256];
++    unsigned int uart_rx_r, uart_rx_w;
+ 
+     VIRTIODevice *keyboard_dev;
+     VIRTIODevice *mouse_dev;
+@@ -68,10 +72,14 @@
+ #define CLINT_SIZE      0x000c0000
+ #define HTIF_BASE_ADDR 0x40008000
+ #define IDE_BASE_ADDR  0x40009000
+-#define VIRTIO_BASE_ADDR 0x40010000
++/* qemu-virt memory map so a stock OpenSBI fw_payload + qemu-virt kernel boot */
++#define UART0_BASE_ADDR  0x10000000
++#define UART0_SIZE       0x100
++#define UART0_IRQ        10
++#define VIRTIO_BASE_ADDR 0x10001000
+ #define VIRTIO_SIZE      0x1000
+ #define VIRTIO_IRQ       1
+-#define PLIC_BASE_ADDR 0x40100000
++#define PLIC_BASE_ADDR 0x0c000000
+ #define PLIC_SIZE      0x00400000
+ #define FRAMEBUFFER_BASE_ADDR 0x41000000
+ 
+@@ -99,6 +107,13 @@
+     return val;
+ }
+ 
++/* mtime (10 MHz) for the guest time CSR -- same source the SBI timer uses,
++   so alarm(2)/nanosleep deadlines line up */
++uint64_t riscv_machine_get_mtime(void *machine)
++{
++    return rtc_get_time((RISCVMachine *)machine);
++}
++
+ static uint32_t htif_read(void *opaque, uint32_t offset,
+                           int size_log2)
+ {
+@@ -176,6 +191,102 @@
+     }
+ }
+ 
++/* ns16550 UART @ 0x10000000 (qemu-virt).  OpenSBI drives this as its console;
++   the guest reads input via SBI getchar, which reads the RBR below.  Polled I/O
++   only (no TX/RX interrupts needed for the SBI console). */
++#define UART_LSR_DR   0x01   /* receive data ready */
++#define UART_LSR_THRE 0x20   /* TX holding empty */
++#define UART_LSR_TEMT 0x40   /* TX shift empty */
++#define UART_LCR_DLAB 0x80
++
++static BOOL uart_rx_empty(RISCVMachine *s)
++{
++    return s->uart_rx_r == s->uart_rx_w;
++}
++
++/* push one host byte into the UART RX ring (called from the emulator poll) */
++static void uart_rx_put(RISCVMachine *s, uint8_t ch)
++{
++    unsigned int next = (s->uart_rx_w + 1) & 255;
++    if (next != s->uart_rx_r) {   /* drop on overflow */
++        s->uart_rx_buf[s->uart_rx_w] = ch;
++        s->uart_rx_w = next;
++    }
++}
++
++static uint32_t uart_read(void *opaque, uint32_t offset, int size_log2)
++{
++    RISCVMachine *s = opaque;
++    uint8_t v = 0;
++    switch(offset) {
++    case 0: /* RBR (or DLL when DLAB) */
++        if (s->uart_lcr & UART_LCR_DLAB) {
++            v = 1; /* DLL */
++        } else if (!uart_rx_empty(s)) {
++            v = s->uart_rx_buf[s->uart_rx_r];
++            s->uart_rx_r = (s->uart_rx_r + 1) & 255;
++        }
++        break;
++    case 1: /* IER (or DLM when DLAB) */
++        v = (s->uart_lcr & UART_LCR_DLAB) ? 0 : s->uart_ier;
++        break;
++    case 2: /* IIR: no interrupt pending */
++        v = 0x01;
++        break;
++    case 3: /* LCR */
++        v = s->uart_lcr;
++        break;
++    case 4: /* MCR */
++        v = s->uart_mcr;
++        break;
++    case 5: /* LSR: TX always ready; DR when a byte is buffered */
++        v = UART_LSR_THRE | UART_LSR_TEMT;
++        if (!uart_rx_empty(s))
++            v |= UART_LSR_DR;
++        break;
++    case 6: /* MSR */
++        v = 0xb0; /* DCD|DSR|CTS asserted */
++        break;
++    case 7: /* SCR */
++        v = s->uart_scr;
++        break;
++    default:
++        break;
++    }
++    return v;
++}
++
++static void uart_write(void *opaque, uint32_t offset, uint32_t val,
++                       int size_log2)
++{
++    RISCVMachine *s = opaque;
++    uint8_t ch;
++    switch(offset) {
++    case 0: /* THR (or DLL when DLAB) */
++        if (!(s->uart_lcr & UART_LCR_DLAB)) {
++            ch = val & 0xff;
++            if (s->common.console)
++                s->common.console->write_data(s->common.console->opaque, &ch, 1);
++        }
++        break;
++    case 1: s->uart_ier = val & 0xff; break; /* IER (or DLM) */
++    case 2: s->uart_fcr = val & 0xff; break; /* FCR */
++    case 3: s->uart_lcr = val & 0xff; break; /* LCR */
++    case 4: s->uart_mcr = val & 0xff; break; /* MCR */
++    case 7: s->uart_scr = val & 0xff; break; /* SCR */
++    default: break;
++    }
++}
++
++/* feed host console bytes into the UART RX ring (called from the run loop) */
++void riscv_machine_console_rx(VirtMachine *m1, const uint8_t *buf, int len)
++{
++    RISCVMachine *s = (RISCVMachine *)m1;
++    int i;
++    for(i = 0; i < len; i++)
++        uart_rx_put(s, buf[i]);
++}
++
+ #if 0
+ static void htif_poll(RISCVMachine *s)
+ {
+@@ -260,10 +371,12 @@
+     int i;
+     assert(size_log2 == 2);
+     switch(offset) {
+-    case PLIC_HART_BASE:
++    case PLIC_HART_BASE:              /* hart0 M threshold */
++    case PLIC_HART_BASE + 0x1000:     /* hart0 S threshold */
+         val = 0;
+         break;
+-    case PLIC_HART_BASE + 4:
++    case PLIC_HART_BASE + 4:          /* hart0 M claim */
++    case PLIC_HART_BASE + 0x1000 + 4: /* hart0 S claim */
+         mask = s->plic_pending_irq & ~s->plic_served_irq;
+         if (mask != 0) {
+             i = ctz32(mask);
+@@ -288,7 +401,8 @@
+     
+     assert(size_log2 == 2);
+     switch(offset) {
+-    case PLIC_HART_BASE + 4:
++    case PLIC_HART_BASE + 4:          /* hart0 M complete */
++    case PLIC_HART_BASE + 0x1000 + 4: /* hart0 S complete */
+         val--;
+         if (val < 32) {
+             s->plic_served_irq &= ~(1 << val);
+@@ -696,7 +810,19 @@
+     fdt_prop_u32(s, "phandle", plic_phandle);
+ 
+     fdt_end_node(s); /* plic */
+-    
++
++    /* ns16550a UART @ 0x10000000 -- OpenSBI console (uart8250) */
++    fdt_begin_node_num(s, "serial", UART0_BASE_ADDR);
++    fdt_prop_str(s, "compatible", "ns16550a");
++    fdt_prop_tab_u64_2(s, "reg", UART0_BASE_ADDR, UART0_SIZE);
++    fdt_prop_u32(s, "clock-frequency", 3686400);
++    fdt_prop_u32(s, "reg-shift", 0);
++    fdt_prop_u32(s, "reg-io-width", 1);
++    tab[0] = plic_phandle;
++    tab[1] = UART0_IRQ;
++    fdt_prop_tab_u32(s, "interrupts-extended", tab, 2);
++    fdt_end_node(s); /* serial */
++
+     for(i = 0; i < m->virtio_count; i++) {
+         fdt_begin_node_num(s, "virtio", VIRTIO_BASE_ADDR + i * VIRTIO_SIZE);
+         fdt_prop_str(s, "compatible", "virtio,mmio");
+@@ -723,6 +849,7 @@
+     fdt_end_node(s); /* soc */
+ 
+     fdt_begin_node(s, "chosen");
++    fdt_prop_str(s, "stdout-path", "/soc/serial@10000000");
+     fdt_prop_str(s, "bootargs", cmd_line ? cmd_line : "");
+     if (kernel_size > 0) {
+         fdt_prop_tab_u64(s, "riscv,kernel-start", kernel_start);
+@@ -879,6 +1006,9 @@
+ 
+     cpu_register_device(s->mem_map, HTIF_BASE_ADDR, 16,
+                         s, htif_read, htif_write, DEVIO_SIZE32);
++    /* ns16550 UART @ 0x10000000: byte-wide regs, OpenSBI console */
++    cpu_register_device(s->mem_map, UART0_BASE_ADDR, UART0_SIZE, s,
++                        uart_read, uart_write, DEVIO_SIZE8);
+     s->common.console = p->console;
+ 
+     memset(vbus, 0, sizeof(*vbus));
+@@ -886,14 +1016,8 @@
+     vbus->addr = VIRTIO_BASE_ADDR;
+     irq_num = VIRTIO_IRQ;
+     
+-    /* virtio console */
+-    if (p->console) {
+-        vbus->irq = &s->plic_irq[irq_num];
+-        s->common.console_dev = virtio_console_init(vbus, p->console);
+-        vbus->addr += VIRTIO_SIZE;
+-        irq_num++;
+-        s->virtio_count++;
+-    }
++    /* No virtio console: solnix drives the ns16550 UART directly (SBI console).
++       Host input is fed to the UART RX ring; the block device takes slot 0. */
+     
+     /* virtio net device */
+     for(i = 0; i < p->eth_count; i++) {
+diff -ruN a/solnix.cfg b/solnix.cfg
+--- a/solnix.cfg
++++ b/solnix.cfg
+@@ -0,0 +1,8 @@
++/* solnix riscv64 on TinyEMU */
++{
++    version: 1,
++    machine: "riscv64",
++    memory_size: 256,
++    bios: "fw_payload.bin",
++    drive0: { file: "disk.img" },
++}
+diff -ruN a/temu.c b/temu.c
+--- a/temu.c
++++ b/temu.c
+@@ -35,9 +35,11 @@
+ #ifndef _WIN32
+ #include <termios.h>
+ #include <sys/ioctl.h>
++#ifdef CONFIG_TAP
+ #include <net/if.h>
+ #include <linux/if_tun.h>
+ #endif
++#endif
+ #include <sys/stat.h>
+ #include <signal.h>
+ 
+@@ -346,7 +348,7 @@
+     return bs;
+ }
+ 
+-#ifndef _WIN32
++#ifdef CONFIG_TAP
+ 
+ typedef struct {
+     int fd;
+@@ -450,7 +452,7 @@
+     return net;
+ }
+ 
+-#endif /* !_WIN32 */
++#endif /* CONFIG_TAP */
+ 
+ #ifdef CONFIG_SLIRP
+ 
+@@ -551,13 +553,13 @@
+     FD_ZERO(&efds);
+     fd_max = -1;
+ #ifndef _WIN32
+-    if (m->console_dev && virtio_console_can_write_data(m->console_dev)) {
++    if (m->console) {
+         STDIODevice *s = m->console->opaque;
+         stdin_fd = s->stdin_fd;
+         FD_SET(stdin_fd, &rfds);
+         fd_max = stdin_fd;
+-
+-        if (s->resize_pending) {
++        if (m->console_dev && virtio_console_can_write_data(m->console_dev) &&
++            s->resize_pending) {
+             int width, height;
+             console_get_size(s, &width, &height);
+             virtio_console_resize_event(m->console_dev, width, height);
+@@ -579,14 +581,18 @@
+     }
+     if (ret > 0) {
+ #ifndef _WIN32
+-        if (m->console_dev && FD_ISSET(stdin_fd, &rfds)) {
++        if (m->console && FD_ISSET(stdin_fd, &rfds)) {
+             uint8_t buf[128];
+             int ret, len;
+-            len = virtio_console_get_write_len(m->console_dev);
+-            len = min_int(len, sizeof(buf));
++            len = sizeof(buf);
++            if (m->console_dev)
++                len = min_int(virtio_console_get_write_len(m->console_dev), len);
+             ret = m->console->read_data(m->console->opaque, buf, len);
+             if (ret > 0) {
+-                virtio_console_write_data(m->console_dev, buf, ret);
++                if (m->console_dev)
++                    virtio_console_write_data(m->console_dev, buf, ret);
++                else
++                    riscv_machine_console_rx(m, buf, ret);
+             }
+         }
+ #endif
+@@ -788,7 +794,7 @@
+                 exit(1);
+         } else
+ #endif
+-#ifndef _WIN32
++#ifdef CONFIG_TAP
+         if (!strcmp(p->tab_eth[i].driver, "tap")) {
+             p->tab_eth[i].net = tun_open(p->tab_eth[i].ifname);
+             if (!p->tab_eth[i].net)

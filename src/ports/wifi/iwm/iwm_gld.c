@@ -577,6 +577,32 @@ iwm_m_getprop(void *arg, const char *name, mac_prop_id_t id, uint_t sz,
 		 */
 		((wl_capability_t *)val)->caps = IEEE80211_C_WPA2;
 		break;
+	case MAC_PROP_WL_PHY_CONFIG:
+		/*
+		 * As illumos net80211 wl_get_phy: OFDM with the frequency on
+		 * 5 GHz, ERP with the channel on 2.4 GHz. libdladm reads it
+		 * once associated (dladm_wlan_get_linkattr), so ENOTSUP here
+		 * failed every show-wifi of a connected link.
+		 */
+		if (sz < sizeof (wl_phy_conf_t)) {
+			err = EINVAL;
+			break;
+		}
+		bzero(val, sizeof (wl_phy_conf_t));
+		if (st.s_5ghz) {
+			wl_ofdm_t *o = val;
+
+			o->wl_ofdm_subtype = WL_OFDM;
+			o->wl_ofdm_frequency = st.s_freq;
+			o->wl_ofdm_ht_enabled = st.s_ht;
+		} else {
+			wl_erp_t *e = val;
+
+			e->wl_erp_subtype = WL_ERP;
+			e->wl_erp_channel = st.s_chan;
+			e->wl_erp_ht_enabled = st.s_ht;
+		}
+		break;
 	default:
 		err = ENOTSUP;
 		break;
@@ -711,6 +737,7 @@ iwm_m_propinfo(void *arg, const char *name, mac_prop_id_t id,
 	case MAC_PROP_WL_SUPPORTED_RATES:
 	case MAC_PROP_WL_RSSI:
 	case MAC_PROP_WL_CAPABILITY:
+	case MAC_PROP_WL_PHY_CONFIG:
 	case MAC_PROP_WL_SCANRESULTS:
 	case MAC_PROP_WL_CREATE_IBSS:
 		mac_prop_info_set_perm(ph, MAC_PROP_PERM_READ);
@@ -805,10 +832,20 @@ iwm_gld_mac_handle(void *gp)
 	return (((struct iwm_gld *)gp)->g_mh);
 }
 
+/*
+ * The GLDv3 driver name: mac_init_ops marks THIS name's major as a GLDv3
+ * driver, and mac_register refuses (EINVAL) a dip whose major is not marked.
+ * The iwx build compiles this file too and must pass "iwx" (its own major),
+ * the same #ifndef default pattern as N80211_FW_MODULE in n80211_giant.c.
+ */
+#ifndef N80211_DRV_NAME
+#define	N80211_DRV_NAME	"iwm"
+#endif
+
 void
 iwm_gld_init_ops(struct dev_ops *ops)
 {
-	mac_init_ops(ops, "iwm");
+	mac_init_ops(ops, N80211_DRV_NAME);
 }
 
 /*

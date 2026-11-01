@@ -42,8 +42,9 @@ is_world_open() {  # $1=cidr -> 0 if world-open
   esac
 }
 
-too_wide() {  # $1=cidr -> 0 if >= /8 (defense in depth)
+too_wide() {  # $1=cidr -> 0 if wider than a /8 (IPv4) or a /32 (IPv6) (defense in depth)
   case "$1" in
+    *:*/*) [ "${1##*/}" -lt 32 ] && return 0; return 1 ;;   # an IPv6 ISP block is a /32../48; a /40 is a PoP's
     */0|*/1|*/2|*/3|*/4|*/5|*/6|*/7|*/8) return 0 ;;
     *) return 1 ;;
   esac
@@ -61,8 +62,12 @@ cmd_authorize() {
     die "REFUSED: CIDR '$cidr' is far too wide (>= /8). Use a /32."
   fi
   echo "sg-guard: OK -> authorizing $proto/$port from $cidr on $sg ($region)"
-  aws ec2 authorize-security-group-ingress --region "$region" --group-id "$sg" \
-    --protocol "$proto" --port "$port" --cidr "$cidr"
+  case "$cidr" in
+    *:*) aws ec2 authorize-security-group-ingress --region "$region" --group-id "$sg" \
+           --ip-permissions "IpProtocol=$proto,FromPort=$port,ToPort=$port,Ipv6Ranges=[{CidrIpv6=$cidr}]" ;;
+    *)   aws ec2 authorize-security-group-ingress --region "$region" --group-id "$sg" \
+           --protocol "$proto" --port "$port" --cidr "$cidr" ;;
+  esac
 }
 
 # Detect world-open ingress using an AWS-side JMESPath filter (no embedded
@@ -154,6 +159,10 @@ cmd_selftest() {  # runnable check of the refusal logic; no AWS calls
   done
   is_world_open 73.4.58.126/32 && { echo "selftest: FALSE-POSITIVE on /32"; fail=1; }
   too_wide 73.4.58.126/32 && { echo "selftest: FALSE-POSITIVE too-wide on /32"; fail=1; }
+  for bad in 2000::/3 2605::/16 2605:59ca::/31; do
+    too_wide "$bad" || { echo "selftest: MISS too-wide v6 '$bad'"; fail=1; }
+  done
+  too_wide 2605:59ca:4200::/40 && { echo "selftest: FALSE-POSITIVE too-wide on v6 /40"; fail=1; }
   [ "$fail" -eq 0 ] && echo "sg-guard selftest: PASS" || { echo "sg-guard selftest: FAIL"; return 1; }
 }
 

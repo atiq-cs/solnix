@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<!DOCTYPE service_bundle SYSTEM "/usr/share/lib/xml/dtd/service_bundle.dtd.1">
+<!-- aa64-archive-sync: bootadm update-archive once devfsadm has written /etc/path_to_inst (see the method). -->
+<service_bundle type="manifest" name="aa64-archive-sync">
+  <service name="site/aa64-archive-sync" type="service" version="1">
+    <create_default_instance enabled="true"/>
+    <single_instance/>
+    <dependency name="fs" grouping="require_all" restart_on="none" type="service">
+      <service_fmri value="svc:/system/filesystem/local:default"/>
+    </dependency>
+    <!-- optional_all: order after them, but never block if one is disabled or in maintenance -->
+    <dependency name="devices" grouping="optional_all" restart_on="none" type="service">
+      <service_fmri value="svc:/system/device/local:default"/>
+    </dependency>
+    <dependency name="bau" grouping="optional_all" restart_on="none" type="service">
+      <service_fmri value="svc:/system/boot-archive-update:default"/>
+    </dependency>
+    <!-- ssh answers only once the archive is in sync, so a reboot sent after login is safe -->
+    <dependent name="archsync_ssh" grouping="optional_all" restart_on="none">
+      <service_fmri value="svc:/network/ssh:default"/>
+    </dependent>
+    <exec_method type="method" name="start" exec="/usr/lib/aa64/aa64-archive-sync.sh" timeout_seconds="600"/>
+    <exec_method type="method" name="stop" exec=":true" timeout_seconds="10"/>
+    <property_group name="startd" type="framework">
+      <propval name="duration" type="astring" value="transient"/>
+    </property_group>
+  </service>
+</service_bundle>

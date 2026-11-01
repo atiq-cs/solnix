@@ -3,7 +3,8 @@
 #   make obj     kernel ET_REL object(s) against the illumos gate headers
 #   make test    userland self-check of the same sources + its negative control
 #   make probe   measure the OpenBSD-kernel-API gap of unmodified OpenBSD
-#                files (OBSD=<OpenBSD sys/dev/pci/drm checkout>)
+#                files (OBSD=<OpenBSD sys/dev/pci/drm checkout>, the pinned
+#                tree from ./fetch-obsd-drm.sh DEST -> DEST/obsd-drm)
 #
 # GATE_INC defaults to the solnix gate proto on dixi (dixi has no /usr/include).
 GATE_INC ?= /nix/store/s7zkx8nx5sfxixmyqmlnrybrrh14jkmb-illumos-gate-proto/usr/include
@@ -28,6 +29,11 @@ test:
 	    echo "NEGATIVE CONTROL DID NOT FAIL"; exit 1; \
 	 else echo "negative control (CFL-H GT2 list removed): FAILS as required"; \
 	    grep FAIL test_pciid_neg.out; fi
+	$(CC) $(UFLAGS) -Wno-unused-const-variable -DI915_PCIID_SABOTAGE_ADLP -o test_pciid_neg2 test/test_pciid.c i915_pciid.c
+	@if ./test_pciid_neg2 > test_pciid_neg2.out; then \
+	    echo "NEGATIVE CONTROL (ADL-P) DID NOT FAIL"; exit 1; \
+	 else echo "negative control (ADL-P list removed): FAILS as required"; \
+	    grep FAIL test_pciid_neg2.out; fi
 
 # test-ioc: the Linux -> OpenBSD DRM ioctl translation (i915_drmioc.h)
 # against OpenBSD's own uapi headers. OBSD = the OpenBSD sys/dev/pci/drm
@@ -81,6 +87,7 @@ test-console:
 
 clean:
 	rm -f $(OBJS) test_pciid test_pciid_neg test_pciid_neg.out \
+	    test_pciid_neg2 test_pciid_neg2.out \
 	    test/test_console test/test_console_neg test/test_console_neg.out \
 	    test/test_console_tem_neg test/test_console_tem_neg.out
 

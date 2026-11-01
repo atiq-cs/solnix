@@ -100,6 +100,19 @@ done
 [ -z "$(find etc var -type f -links +1 | head -1)" ] || die "/etc or /var still has hard-linked files"
 relink() { rm -f "$2"; ln -s "$1" "$2"; }
 relink "$TOP/sw/bin" usr/bin;  relink "$WORLD/usr/sbin" usr/sbin;  relink usr/bin bin
+# /usr/perl5/bin: the IPS perl mediator's link (OI: /usr/perl5/bin -> 5.x/bin). The gate's perl scripts (lp, lpstat,
+# print-service, projadd, arcstat, ... 30 in all) start #!/usr/perl5/bin/perl, and the world ships only
+# usr/perl5/5.42/lib. With solnix.perl5Mediator the toplevel names a perl, and usr/perl5 becomes a real dir: the
+# world's entries linked, plus bin -> that perl's bin. Without it, usr/perl5 stays the world's link (below).
+PERL5=$(rl "$R$TOP/perl5-bin")
+if [ -n "$PERL5" ]; then
+  [ -h usr/perl5 ] && rm -f usr/perl5
+  mkdir -p usr/perl5
+  for e in $(ls -A "$R$WORLD/usr/perl5"); do relink "$WORLD/usr/perl5/$e" "usr/perl5/$e"; done
+  relink "$PERL5" usr/perl5/bin
+elif [ -d usr/perl5 ] && [ ! -h usr/perl5 ]; then
+  find usr/perl5 -depth -delete   # a previous generation's mediator dir: back to the world's link
+fi
 # the rest of /usr and /opt: links into the userland; the gate's own relative
 # links (usr/adm -> ../var/adm, ...) are reproduced as they are.
 for d in usr opt; do
@@ -125,12 +138,38 @@ farm() {   # $1 = dir relative to /, mirrors $WORLD/$1
   for e in $(ls -A "$R$WORLD/$1"); do
     [ "$1/$e" = usr/lib/libc ] && { rm -f usr/lib/libc; continue; }
     if [ "$e" = amd64 ] && [ -d "$R$WORLD/$1/amd64" ]; then farm "$1/amd64"; continue; fi
+    # the generation's own zone brands (system.zoneBrands) sit beside the userland's: libbrand reads only /usr/lib/brand
+    # (a cloned BE may hold an earlier generation's farm: links only, so find -delete removes no target)
+    if [ "$1/$e" = usr/lib/brand ]; then
+      [ -d usr/lib/brand ] && [ ! -h usr/lib/brand ] && find usr/lib/brand -depth -delete
+      if [ -d "$R$TOP/brand" ]; then
+        farm usr/lib/brand
+        for b in $(ls -A "$R$TOP/brand"); do relink "$(rl "$R$TOP/brand/$b")" "usr/lib/brand/$b"; done
+        continue
+      fi
+    fi
+    # usr/lib/fs: one level deeper. The gate's usr/lib/fs/{dev,hsfs,nfs,ufs}/mount are RELATIVE links to
+    # ../../../../etc/fs/<t>/mount, which resolve inside the store (no etc/fs there) when usr/lib/fs links to the
+    # world. mount(1M) finds /etc/fs first, but zoneadmd execs /usr/lib/fs/dev/mount and failed to boot a zone.
+    if [ "$1/$e" = usr/lib/fs ]; then
+      [ -h usr/lib/fs ] && rm -f usr/lib/fs
+      for t in $(ls -A "$R$WORLD/usr/lib/fs"); do
+        mkdir -p "usr/lib/fs/$t"
+        for f in $(ls -A "$R$WORLD/usr/lib/fs/$t"); do
+          case $(rl "$R$WORLD/usr/lib/fs/$t/$f") in
+            ../../../../etc/*) relink "$(rl "$R$WORLD/usr/lib/fs/$t/$f")" "usr/lib/fs/$t/$f" ;;
+            *) relink "$WORLD/usr/lib/fs/$t/$f" "usr/lib/fs/$t/$f" ;;
+          esac
+        done
+      done
+      continue
+    fi
     relink "$WORLD/$1/$e" "$1/$e"   # relink, not skip: a cloned BE points at the old generation
   done
 }
 farm lib; farm usr/lib; farm sbin
-# the four early tools are real files in the BE; the rest of /sbin resolves after the mount.
-for b in init sh zfs mount; do relink "$EARLY/sbin/$b" "sbin/$b"; done
+# the early tools are real files in the BE; the rest of /sbin resolves after the mount.
+for b in init sh zfs mount autopush; do relink "$EARLY/sbin/$b" "sbin/$b"; done
 RT=$(grep -- '-rtld$' "$R$TOP/early-paths")
 for l in lib/ld.so.1 usr/lib/ld.so.1 lib/amd64/ld.so.1 usr/lib/amd64/ld.so.1; do
   case $l in *amd64*) relink "$RT/lib/amd64/ld.so.1" $l;; *) relink "$RT/lib/ld.so.1" $l;; esac
@@ -225,8 +264,13 @@ etc_copy() {
     coreadm.conf) return 0 ;;
     # dumpadm(8) rewrites /etc/dumpadm.conf (and svc:/system/dumpadm reads it).
     dumpadm.conf) return 0 ;;
+    # svc:/system/power's method appends a statefile line to it in place.
+    power.conf) return 0 ;;
     # install-be filters pkcs11.conf below; cryptoadm rewrites it.
     crypto/*) return 0 ;;
+    # sshd's safe_path() walks the key file's realpath and refuses a group-writable
+    # directory; /nix/store is 1775 root:nixbld. NixOS copies these too (mode 0444).
+    ssh/authorized_keys.d/*) return 0 ;;
   esac
   return 1
 }
@@ -285,6 +329,18 @@ fi
 for f in name_to_major driver_aliases minor_perm driver_classes; do cp "$R$DRV/$f" "etc/$f"; done
 grep -q '^# solnix drivers' etc/security/device_policy || \
   { echo '# solnix drivers'; cat "$R$DRV/device_policy.add"; } >> etc/security/device_policy
+# the drivers' devlink.tab(5) lines (pkg(5)'s driver action "devlink=" adds them to
+# /etc/devlink.tab): without them devfsadm makes no /dev link for those minors (i915's
+# card0/renderD128 -> /dev/dri/, tpm, xsvc). Rewritten each generation, not appended to.
+sed '/^# solnix drivers (generated)$/,$d' etc/devlink.tab > etc/devlink.tab.new
+{ echo '# solnix drivers (generated)'; cat "$R$DRV/devlink.tab.add"; } >> etc/devlink.tab.new
+mv etc/devlink.tab.new etc/devlink.tab || die "laying /etc/devlink.tab"
+# the drivers' dacf.conf(5) rules (e.g. ihid's consms link, mkTouchpadDriversDb), the same
+# way; a DB without dacf.conf.add leaves only the gate's rules. The kernel reads this from
+# the boot_archive, which step 8 rebuilds after this.
+sed '/^# solnix drivers (generated)$/,$d' etc/dacf.conf > etc/dacf.conf.new
+[ ! -e "$R$DRV/dacf.conf.add" ] || { echo '# solnix drivers (generated)'; cat "$R$DRV/dacf.conf.add"; } >> etc/dacf.conf.new
+mv etc/dacf.conf.new etc/dacf.conf || die "laying /etc/dacf.conf"
 [ -e etc/path_to_inst ] || : > etc/path_to_inst
 # pkcs11_tpm.so NEEDs libtspi (trousers), which is not built: every libpkcs11
 # consumer that loads it dies in ld.so.1 (measured: `digest -a sha1` killed, so
@@ -294,15 +350,24 @@ grep -v 'pkcs11_tpm' etc/crypto/pkcs11.conf > etc/crypto/pkcs11.conf.new && mv e
 # then derives the hostid from the SMBIOS UUID and system/hostid (svc-hostid)
 # persists it in the rot47-quoted form the kernel's reader expects.
 
-# declared users' authorized_keys (users.users.<n>.openssh.authorizedKeys).
-[ -e "$R$TOP/seed-authorized-keys" ] && ROOT="$ROOT" /usr/bin/bash "$R$TOP/seed-authorized-keys" >&2
-
-# 4. inittab: mount the shared store FIRST (before autopush/soconfig, which live in
-#    the shared store, and before svc.startd; measured ctB4 + M4).
-if [ -z "${SOLNIX_LIVE:-}" ] && ! grep -q '^nx::sysinit' etc/inittab; then
-  awk -v p="$POOL" '/::sysinit:/ && !d {print "nx::sysinit:/sbin/zfs mount -O " p "/nix >/dev/msglog 2<>/dev/msglog </dev/console"; d=1} {print}' \
-    etc/inittab > etc/inittab.new && mv etc/inittab.new etc/inittab
+# declared users' authorized_keys (users.users.<n>.openssh.authorizedKeys): the
+# copies laid above, root-owned and read-only as NixOS's sshd.nix makes them.
+# Keys the previous generation had and this one does not are dropped with it.
+if [ -d etc/ssh/authorized_keys.d ]; then
+  for _k in etc/ssh/authorized_keys.d/*; do
+    [ -e "$_k" ] || continue
+    [ -e "$R$ETC/ssh/authorized_keys.d/${_k##*/}" ] || { rm -f "$_k"; continue; }
+    chown 0:0 "$_k" && chmod 0444 "$_k" || die "cannot set root 0444 on /$_k"
+  done
+  chown 0:0 etc/ssh/authorized_keys.d && chmod 0755 etc/ssh/authorized_keys.d || die "cannot set root 0755 on /etc/ssh/authorized_keys.d"
 fi
+
+# 4. inittab: mount the shared store right AFTER autopush (ap::, from the early set)
+#    and before soconfig, which lives in the shared store, and svc.startd
+#    (measured ctB4 + M4). Not before ap::: autopush applies only to streams built
+#    after it runs, and these lines' msglog/console redirects open the console, so
+#    ahead of ap:: the console never gets ldterm and every boot message is a bare
+#    line feed (the staircase console). Stock illumos keeps ap:: first for this.
 # 4a. right after it, the shared /var state (docs/design-var-state.md): every
 #    canmount=noauto dataset under <pool>/var is mounted with -O over the BE's own
 #    directory, so logs, /var/tmp, /var/lib and the spools are one copy for every
@@ -311,10 +376,15 @@ fi
 #    utmpx/wtmpx as soon as filesystem/minimal is online, before `zfs mount -a`, and
 #    noauto keeps `zfs mount -a` from trying a non-empty BE directory. A pool
 #    without <pool>/var mounts nothing and the BE keeps its own /var.
-if [ -z "${SOLNIX_LIVE:-}" ] && ! grep -q '^vr::sysinit' etc/inittab; then
+# A BE laid by an older install-be has nx:: and vr:: ahead of ap::; both are moved.
+if [ -z "${SOLNIX_LIVE:-}" ]; then
+  grep -q '^ap::sysinit' etc/inittab || die "inittab has no ap::sysinit (autopush) line to mount the store after"
+  _nx="nx::sysinit:/sbin/zfs mount -O $POOL/nix >/dev/msglog 2<>/dev/msglog </dev/console"
   _vr="vr::sysinit:/sbin/sh -c '/sbin/zfs list -H -o canmount,name -r -t filesystem $POOL/var 2>/dev/null | while read c n; do [ \"\$c\" = noauto ] && /sbin/zfs mount -O \"\$n\"; done; exit 0' >/dev/msglog 2<>/dev/msglog </dev/console"
-  awk -v l="$_vr" '{print} /^nx::sysinit:/ && !d {print l; d=1}' etc/inittab > etc/inittab.new && mv etc/inittab.new etc/inittab
-  grep -q '^vr::sysinit' etc/inittab || die "inittab has no nx line to put the shared /var mount after"
+  awk -v n="$_nx" -v v="$_vr" '/^(nx|vr)::sysinit/ {next} {print} /^ap::sysinit/ && !d {print n; print v; d=1}' \
+    etc/inittab > etc/inittab.new && mv etc/inittab.new etc/inittab
+  [ "$(grep -E '^[^#:]*:[^:]*:sysinit:' etc/inittab | head -3 | cut -d: -f1 | tr '\n' ' ')" = "ap nx vr " ] \
+    || die "inittab sysinit order is not ap, nx, vr"
 fi
 # their mountpoints exist in the BE (zfs mount creates a missing one, which a BE
 # cloned before the dataset existed may lack); the dataset name is the path.
@@ -344,7 +414,11 @@ for _m in "$R$TOP"/manifest/solnix/*.xml; do
   rm -f "$_sm/${_m##*/}"; cp "$_m" "$_sm/" || die "copy the manifest ${_m##*/}"
 done
 cp "$R$TOP/site-profile.xml" etc/svc/profile/site/solnix.xml
-( cd etc/svc/profile && relink generic_limited_net.xml generic.xml && relink platform_none.xml platform.xml && relink ns_files.xml name_service.xml )
+( cd etc/svc/profile && relink platform_none.xml platform.xml && relink ns_files.xml name_service.xml )
+# generic.xml is the toplevel's (stock generic_limited_net.xml minus the keymap enable; activation/default.nix). A real
+# copy: manifest-import reads it at early import, before <pool>/nix is mounted.
+rm -f etc/svc/profile/generic.xml; cp "$R$TOP/generic-profile.xml" etc/svc/profile/generic.xml || die "copy generic.xml"
+chmod 0444 etc/svc/profile/generic.xml
 
 # 6. /dev: the nodes needed before devfsadm runs, generated (never copied from the running /dev).
 for n in console:cn@0:console msglog:sysmsg@0:msglog null:mm@0:null zero:mm@0:zero tty:sy@0:tty \
@@ -499,6 +573,32 @@ if [ -d etc/system.alt ]; then
       echo "* --- $(basename "$_alt") (boot -a alternate) ---"; cat "$_x"; } > "$_alt.new" \
       && rm -f "$_alt" && mv "$_alt.new" "$_alt" || die "assembling $_alt"
   done
+fi
+
+# 7c. Nothing in this BE under a shared dataset that `zfs mount -a` mounts without
+#     -O (/home, /export, ... : canmount=on, mountpoint not legacy/none, outside
+#     $POOL/ROOT). zfs mount refuses a non-empty directory, so a file left there makes
+#     filesystem/local fail to mount the real dataset at boot and the BE's stale copy
+#     shows instead (measured on lixi: a seeded <BE>/home/gburd). The -O datasets
+#     (<pool>/nix, <pool>/var/*) and the live root have no such problem. Checked on
+#     the BE dataset's own files (its .zfs snapshot), since on the running system the
+#     shared dataset may be mounted over the path and hide them.
+if [ -z "${SOLNIX_LIVE:-}" ]; then
+  _snap="install-be-shared-$$"
+  zfs snapshot "$POOL/ROOT/$BE@$_snap" || die "cannot snapshot $POOL/ROOT/$BE to check shared mountpoints"
+  _sd="$ROOT/.zfs/snapshot/$_snap"
+  _alt=$(zpool get -H -o value altroot "$POOL" 2>/dev/null); [ "$_alt" = - ] && _alt=""
+  _shared_bad=$(zfs list -H -o name,canmount,mountpoint -t filesystem -r "$POOL" 2>/dev/null |
+    while read -r _n _c _m; do
+      case "$_n" in "$POOL/ROOT"|"$POOL/ROOT/"*) continue ;; esac
+      [ "$_c" = on ] || continue
+      case "$_m" in legacy|none|-) continue ;; esac
+      _m=${_m#"$_alt"}; [ -n "$_m" ] && [ "$_m" != / ] || continue
+      [ -d "$_sd$_m" ] && [ -n "$(ls -A "$_sd$_m" 2>/dev/null)" ] && echo "$_m ($_n)"
+    done)
+  [ -d "$_sd" ] || { zfs destroy "$POOL/ROOT/$BE@$_snap"; die "BE snapshot $_sd not visible; cannot check shared mountpoints"; }
+  zfs destroy "$POOL/ROOT/$BE@$_snap" || die "cannot destroy $POOL/ROOT/$BE@$_snap"
+  [ -z "$_shared_bad" ] || die "this BE holds files under shared dataset mountpoint(s), which zfs mount -a would refuse to mount over at boot: $_shared_bad"
 fi
 
 # 8. console + boot archive.

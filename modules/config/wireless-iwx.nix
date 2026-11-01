@@ -25,16 +25,74 @@
 # but it is still young, so attachAtBoot is opt-in and defaults to false -- a
 # fresh solnix install does not auto-bind an experimental driver. Set it true
 # per host (e.g. dixi) to bind the card at boot.
-{ config, lib, pkgs, ... }:
+#
+# wirelessIwx mirrors it: hardware.wirelessIwx.attachAtBoot renders iwx's
+# name_to_major/driver_aliases/minor_perm lines and lays kernel/drv/amd64/iwx +
+# kernel/firmware/iwx/* (pkgs.solnix.iwx-driver, iwx-firmware). The iwx module
+# loads on the solnix kernel but has never attached to an AX2xx, so this is
+# opt-in too.
+#
+# hardware.wirelessIntel.onMedia (installer media): both modules and both
+# firmware sets are laid into the kernel tree and both drivers get a major and
+# minor_perm, but NO alias, so nothing binds at boot (an unproven driver that
+# panicked at attach would make the media unusable). One command binds a card
+# at run time: `update_drv -a -i '"pciex8086,51f0"' iwx` (see
+# docs/x1e-wifi-runtime-bind.md).
+{ config, lib, pkgs, options, ... }:
 
 let
   cfg = config.hardware.wirelessIwx;
   iwm = config.hardware.wirelessIwm;
+  media = config.hardware.wirelessIntel.onMedia;
+  s = pkgs.solnix;
+
+  # The final driver DB and kernel tree, composed from whichever of the three
+  # switches are on. iwm first (its helpers take no base), then iwx on top.
+  # bind decides only whether the alias lines are written.
+  iwmBound = iwm.enable && iwm.attachAtBoot;
+  iwxBound = cfg.enable && cfg.attachAtBoot;
+  wantIwm = iwmBound || media;
+  wantIwx = iwxBound || media;
+  iwmDb = if iwmBound then s.mkIwmDriversDb else s.mkIwmDriversDbUnbound;
+  dbWithIwm = if wantIwm then iwmDb else s.drivers;
+  # the firmware licence opt-in: the per-driver option, or onMedia (whose
+  # description says it accepts the licence for the media).
+  kernWithIwm = if wantIwm then s.mkIwmKernel (iwm.allowUnfreeFirmware || media) else s.kernel;
+  wifiDb = if wantIwx then s.mkIwxDriversDb dbWithIwm iwxBound else dbWithIwm;
+  wifiKern = if wantIwx then s.mkIwxKernel kernWithIwm (cfg.allowUnfreeFirmware || media) else kernWithIwm;
+  # GPU drivers (options in ./graphics-gpu.nix) on top of the wifi DB/kernel:
+  # i915 always when wanted, nvidia only on media; aliases only when bound.
+  gfx = config.hardware.graphics;
+  i915Bound = gfx.i915.attachAtBoot;
+  wantGpu = gfx.onMedia || i915Bound;
+  gpuDrivers = [ { name = "i915"; perm = "0666 root sys"; aliases = if i915Bound then s.i915Aliases else [ ]; } ]
+    ++ lib.optionals gfx.onMedia [
+      { name = "nvidia"; perm = "0666 root sys"; aliases = [ ]; }
+      { name = "nvidia_modeset"; perm = "0666 root sys"; aliases = [ ]; }
+      { name = "nvidia_i2c"; perm = null; aliases = [ ]; }
+    ];
+  gpuDb = if wantGpu then s.mkDriversDbWith wifiDb gpuDrivers else wifiDb;
+  gpuKern = if wantGpu then s.mkGpuKernel wifiKern {
+    nvidia = gfx.onMedia;
+    gspFirmware = if gfx.onMedia && gfx.nvidia.acceptFirmwareLicense then s.nvidiaGspFirmware true else null;
+    i915Firmware = if gfx.i915.acceptFirmwareLicense then s.i915Firmware true else null;
+  } else wifiKern;
+  # the touchpad (options in ./touchpad-i2c-hid.nix) last: dwiic + ihid, the dacf rule.
+  wantTouchpad = config.hardware.touchpad.i2cHid.enable;
+  tpDb = if wantTouchpad then s.mkTouchpadDriversDb gpuDb else gpuDb;
+  # audiohd's extra controller ids (./audio-hda.nix): the stock aliases plus these; the helper checks the count.
+  hdaIds = config.hardware.audio.hdaIds;
+  wantHda = hdaIds != [ ];
+  finalDb = if wantHda then s.mkDriversDbWith tpDb [ { name = "audiohd"; perm = null;
+    aliases = lib.unique ([ "pci10de,371" "pci8086,2668" "pciclass,0403" "pciexclass,0403" ] ++ hdaIds); } ] else tpDb;
+  finalKern = if wantTouchpad then s.mkTouchpadKernel gpuKern else gpuKern;
 
   # Networks highest priority first; each line "SSID<TAB>pskFile".
-  iwmNets = lib.sort (a: b: a.priority > b.priority)
-    (lib.mapAttrsToList (ssid: n: { inherit ssid; inherit (n) pskFile priority; }) iwm.networks);
-  wifiJoinScript = pkgs.writeText "solnix-wifi-join.sh" ''
+  sortNets = nets: lib.sort (a: b: a.priority > b.priority)
+    (lib.mapAttrsToList (ssid: n: { inherit ssid; inherit (n) pskFile priority; }) nets);
+  # One join script per driver: the link (iwm0 / iwx0) and that driver's networks. Both drivers run WPA2's 4-way
+  # in-kernel through the same OpenBSD net80211 port, so the mechanism below is shared.
+  mkWifiJoinScript = link: nets: pkgs.writeText "solnix-wifi-join-${link}.sh" ''
     # Join the first configured SSID that is in range. PSKs are read at RUN
     # time from their 0600 files (never baked into this store-readable script).
     #
@@ -49,7 +107,7 @@ let
     # occasional status-30 is handled by a bounded retry. Runs as root (SMF).
     set -u
     PATH=/usr/lib/inet:/usr/sbin:/usr/bin:/sbin:/bin
-    link=iwm0
+    link=${link}
     dladm show-phys "$link" >/dev/null 2>&1 || { echo "solnix-wifi-join: no $link"; exit 0; }
     scan=$(dladm scan-wifi -p -o essid "$link" 2>/dev/null)
     joined() { [ "$(dladm show-wifi -p -o status "$link" 2>/dev/null)" = connected ]; }
@@ -66,7 +124,7 @@ let
       done
       return 1
     }
-    ${lib.concatMapStringsSep "\n    " (n: ''try ${lib.escapeShellArg n.ssid} ${lib.escapeShellArg n.pskFile} && exit 0'') iwmNets}
+    ${lib.concatMapStringsSep "\n    " (n: ''try ${lib.escapeShellArg n.ssid} ${lib.escapeShellArg n.pskFile} && exit 0'') (sortNets nets)}
     echo "solnix-wifi-join: no configured SSID in range"; exit 0
   '';
 in
@@ -132,8 +190,35 @@ in
     };
   };
 
+  options.hardware.wirelessIntel.onMedia = lib.mkOption {
+    type = lib.types.bool;
+    default = false;
+    description = ''
+      Put BOTH Intel wifi drivers (iwm: AC 7260-9560; iwx: AX210/AX211) and
+      their firmware into the kernel tree, with a name_to_major and minor_perm
+      entry each but NO driver_aliases line, so neither attaches at boot.
+      For installer media: the drivers are present for a one-command runtime
+      bind (update_drv -a -i '"pciex8086,51f0"' iwx) without risking a boot-time
+      attach of a driver that has never run on that silicon. Accepts Intel's
+      redistributable firmware licence (the firmware is laid into the tree).
+    '';
+  };
+
   options.hardware.wirelessIwx = {
     enable = lib.mkEnableOption "Intel AX2xx wireless via the iwx driver";
+
+    attachAtBoot = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Bind the iwx driver at boot: render name_to_major / driver_aliases
+        (the AX210/AX211 pciex ids, pkgs.solnix.iwxAliases) / minor_perm and
+        lay kernel/drv/amd64/iwx + kernel/firmware/iwx/* into the BE kernel
+        tree, as hardware.wirelessIwm.attachAtBoot does for iwm. Defaults to
+        false: the module loads on the solnix kernel but has never attached to
+        an AX2xx. Requires allowUnfreeFirmware.
+      '';
+    };
 
     allowUnfreeFirmware = lib.mkOption {
       type = lib.types.bool;
@@ -156,6 +241,19 @@ in
         iwx verifies it at attach and refuses a mismatch, so a bump here without
         a corresponding driver update yields a card that never associates.
       '';
+    };
+
+    networks = lib.mkOption {
+      default = { };
+      description = ''
+        WPA2 networks for the AX2xx (iwx0) to join at boot, by SSID: the same shape as
+        hardware.wirelessIwm.networks. The passphrase is never in the store: pskFile names
+        a root-owned 0600 file on the installed system whose first line is the passphrase.
+        Needs attachAtBoot. After the join, iwx0 gets DHCP from the solnix-wifi-join
+        service (DNS from the lease when networking.nameservers is empty).
+      '';
+      type = options.hardware.wirelessIwm.networks.type;
+      example = lib.literalExpression ''{ sedgwick.pskFile = "/etc/wifi/sedgwick.psk"; }'';
     };
   };
 
@@ -198,9 +296,8 @@ in
     # iwm "pciex8086,a370" and minor_perm iwm:*/clone:iwm; the kernel tree gets
     # kernel/drv/amd64/iwm and kernel/firmware/iwm/iwm-9000-46. This is the NixOS
     # model: the config renders the database, the activation step just copies it.
-    system.build.driversDb = lib.mkIf iwm.attachAtBoot pkgs.solnix.mkIwmDriversDb;
-    system.build.kernelTree = lib.mkIf iwm.attachAtBoot
-      (pkgs.solnix.mkIwmKernel iwm.allowUnfreeFirmware);
+    # (system.build.driversDb / kernelTree are set in the shared block below,
+    # which composes iwm and iwx.)
 
     # Boot auto-join: scan, pick the highest-priority configured SSID in range,
     # read its PSK from the 0600 file, join. Transient run-once. The driver-DB
@@ -209,13 +306,16 @@ in
     # this service runs after the card is up and calls wpa-pmk (on /usr/bin via
     # pkgs.solnix.wpa-pmk) ESSID-only with a bounded retry.
 
-    smf.services.solnix-wifi-join = lib.mkIf (iwm.networks != { }) {
+    # With solnix-netd (./solnix-netd.nix, on by default when networks are set) the daemon runs the same join
+    # script whenever iwm0 is disconnected, so this one-shot is only for configs that turn the daemon off.
+    networking.solnix-netd.wifiJoin = lib.mkIf (iwm.networks != { }) { iwm0 = mkWifiJoinScript "iwm0" iwm.networks; };
+    smf.services.solnix-wifi-join = lib.mkIf (iwm.networks != { } && !config.networking.solnix-netd.enable) {
       enable = true;
       category = "site";
       description = "solnix iwm wifi auto-join";
       model = "transient";
       start = {
-        exec = "/bin/sh ${wifiJoinScript}";
+        exec = "/bin/sh ${mkWifiJoinScript "iwm0" iwm.networks}";
         timeoutSeconds = 120;
       };
       stop.exec = ":true";
@@ -242,13 +342,63 @@ in
       }];
 
       environment.systemPackages = [
-        (pkgs.callPackage ../../pkgs/illumos/iwx-firmware.nix {
+        (import ../../pkgs/illumos/iwx-firmware.nix {
           apiRev = cfg.apiRev;
           # Threads the opt-in through to the real gate in the derivation.
           acceptFirmwareLicense = cfg.allowUnfreeFirmware;
         })
-      ];
+      ]
+      # The join tool, whenever the card is bound at boot (as for iwm).
+      ++ lib.optional cfg.attachAtBoot pkgs.solnix.wpa-pmk;
     }
+    {
+      assertions = [{
+        assertion = cfg.networks == { } || cfg.attachAtBoot;
+        message = "hardware.wirelessIwx.networks needs hardware.wirelessIwx.attachAtBoot: an unbound card has no iwx0 to join.";
+      }];
+    }
+    # Boot auto-join on iwx0, then DHCP on it (the join must come first: a lease on an unassociated link never comes).
+    # solnix-netd keeps iwx0 joined (and DHCP on it) for as long as the system runs; this one-shot is the
+    # fallback for configs that turn the daemon off.
+    (lib.mkIf (cfg.networks != { }) {
+      networking.solnix-netd.wifiJoin.iwx0 = mkWifiJoinScript "iwx0" cfg.networks;
+    })
+    (lib.mkIf (cfg.networks != { } && !config.networking.solnix-netd.enable) {
+      smf.services.solnix-wifi-join-iwx = {
+        enable = true;
+        category = "site";
+        description = "solnix iwx wifi auto-join + DHCP";
+        model = "transient";
+        start = {
+          exec = "/bin/sh ${pkgs.writeText "solnix-wifi-join-iwx-dhcp.sh" ''
+            /bin/sh ${mkWifiJoinScript "iwx0" cfg.networks} || exit 0
+            [ "$(/usr/sbin/dladm show-wifi -p -o status iwx0 2>/dev/null)" = connected ] || exit 0
+            /usr/sbin/ipadm create-if iwx0 2>/dev/null
+            /usr/sbin/ipadm show-addr -p -o type iwx0/ 2>/dev/null | grep -q '^dhcp$' \
+              || /usr/sbin/ipadm create-addr -T dhcp -w 60 iwx0/dhcp 2>&1
+            ${lib.optionalString (config.networking.nameservers == [ ]) ''
+              ns=$(/sbin/dhcpinfo -i iwx0 DNSserv 2>/dev/null)
+              [ -n "$ns" ] && [ ! -s /etc/resolv.conf ] && { for x in $ns; do echo "nameserver $x"; done > /etc/resolv.conf; }
+            ''}
+            exit 0
+          ''}";
+          timeoutSeconds = 240;
+        };
+        stop.exec = ":true";
+        requires = [ "svc:/network/physical:default" ];
+      };
+    })
   ]))
+  # The driver DB and kernel tree, rendered from iwm/iwx/onMedia and the GPU
+  # options together so the drivers compose instead of overriding each other.
+  (lib.mkIf (wantIwm || wantIwx || wantGpu || wantTouchpad || wantHda) {
+    system.build.driversDb = finalDb;
+    system.build.kernelTree = finalKern;
+  })
+  # With the drivers on the media for a runtime bind, the WPA2 join tool must be
+  # there too: docs/x1e-wifi-runtime-bind.md runs wpa-pmk right after update_drv.
+  (lib.mkIf media {
+    environment.systemPackages = [ pkgs.solnix.wpa-pmk ];
+  })
   ];
 }

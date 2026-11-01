@@ -12,7 +12,9 @@
 #   --localstatedir=/nix/var, --with-store-dir=/nix/store.
 # Disabled, as nix224.nix did: Boehm GC (--disable-gc), lowdown (markdown),
 # libcpuid (x86 microarch detection), tests, docs. seccomp is Linux-only.
-{ mkSrcPkg, zlib, openssl, libcSlice, gccLib, system }:
+{ mkSrcPkg, zlib, openssl, libcSlice, gccLib, system, libSub ? "lib/amd64", nixCxxFlags ? "" }:
+# libSub: the 64-bit lib dir of the plain derivations below ("lib" on aarch64, LP64 only).
+# nixCxxFlags: extra CXXFLAGS for nix itself (aarch64: see aarch64/src.nix). "" keeps the x86 text byte-identical.
 
 rec {
   # boost: headers + boost_context (the only compiled boost lib nix links).
@@ -41,7 +43,7 @@ rec {
     builder = "/usr/bin/bash";
     args = [ "-c" ''
       set -eu; export PATH=/usr/gnu/bin:/usr/bin
-      mkdir -p $out/lib/amd64; cp -P $boost/lib/amd64/libboost_context.so* $out/lib/amd64/
+      mkdir -p $out/${libSub}; cp -P $boost/${libSub}/libboost_context.so* $out/${libSub}/
       if grep -rq "$boost" $out; then echo "FATAL: boost-context still names $boost" >&2; exit 1; fi
     '' ];
   };
@@ -49,7 +51,7 @@ rec {
   # Mozilla CA bundle (curl.se's extract), for nix's ssl-cert-file.
   cacert = derivation {
     name = "cacert-2024-09-24"; inherit system;
-    pem = builtins.fetchurl { url = "https://curl.se/ca/cacert-2024-09-24.pem";
+    pem = import <nix/fetchurl.nix> { url = "https://curl.se/ca/cacert-2024-09-24.pem";
             sha256 = "189d3cf6d103185fba06d76c1af915263c6d42225481a1759e853b33ac857540"; };
     builder = "/usr/bin/bash";
     args = [ "-c" "/usr/bin/mkdir -p $out/etc/ssl/certs && /usr/bin/cp $pem $out/etc/ssl/certs/ca-bundle.crt" ];
@@ -245,7 +247,7 @@ rec {
       # strip-debug), which pulls ~150 MB of boost headers into nix's runtime
       # closure. Map them away, as nixpkgs' remove-references-to does after the fact.
       SYSI="$SYSI -fmacro-prefix-map=${boost}=/boost -fmacro-prefix-map=${nlohmann_json}=/nlohmann_json -fmacro-prefix-map=${toml11}=/toml11"
-      export CXXFLAGS="-O2 $SYSI" CFLAGS="-O2"
+      export CXXFLAGS="-O2 $SYSI${nixCxxFlags}" CFLAGS="-O2"
       bash ./configure --prefix="$out" --sysconfdir=/etc --localstatedir=/nix/var \
         --with-store-dir=/nix/store --with-boost=${boost} --with-boost-libdir=${boost}/lib/amd64 \
         --disable-gc --disable-markdown --disable-cpuid --disable-unit-tests \

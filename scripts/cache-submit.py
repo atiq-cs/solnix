@@ -30,7 +30,7 @@ after each signature. The key is never printed.
 import argparse, base64, hashlib, json, lzma, os, re, secrets, subprocess, sys, tempfile, time
 import urllib.error, urllib.request
 
-API = "https://search.solnix.io"
+API = "https://builders.solnix.io"  # builder routes only (infra 20261101); search.solnix.io still answers until protocol v2 R1
 CACHE = "https://cache.solnix.io"
 RECIPES = CACHE + "/registry/recipes.tsv"
 KEY8UNR = "cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8="

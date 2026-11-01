@@ -72,7 +72,8 @@ NLLIB="${NEWLIB_DIR}/riscv64-none-elf/lib"
 NLINC="${NEWLIB_DIR}/riscv64-none-elf/include"
 
 NL_CFLAGS="-march=rv64imafdc_zicsr -mabi=lp64d -mcmodel=medlow \
-	-O2 -g -Wall -Wextra -fno-stack-protector -fno-pic"
+	-O2 -g -Wall -Wextra -fno-stack-protector -fno-pic \
+	-ffile-prefix-map=$(cd ../../../.. && pwd)=."
 LIBGCC="$("$CC" -march=rv64imafdc_zicsr -mabi=lp64d -print-libgcc-file-name)"
 
 echo "== build /bin/newlibtest against REAL newlib libc.a =="
@@ -121,7 +122,8 @@ echo "  newlibtest.elf: $(wc -c < newlibtest.elf) bytes @ 0x40010000 (lp64d)"
 # newlib_gate() call.
 echo "== rebuild init.elf (adds the newlib_gate call) =="
 STOCK_CFLAGS="-march=rv64imac_zicsr -mabi=lp64 -mcmodel=medany \
-	-ffreestanding -nostdlib -fno-stack-protector -fno-pic -Wall -Wextra -Os -g"
+	-ffreestanding -nostdlib -fno-stack-protector -fno-pic -Wall -Wextra -Os -g \
+	-ffile-prefix-map=$(cd ../../../.. && pwd)=."
 "$CC" $STOCK_CFLAGS -c init.c -o init.o
 "$LD" -T init.ld -o init.elf init.o libc-riscv.a
 echo "  init.elf: $(wc -c < init.elf) bytes"

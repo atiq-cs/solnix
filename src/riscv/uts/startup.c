@@ -27,8 +27,14 @@
 #include "riscv_regs.h"
 
 /* R-P5 subsystem entry points. */
-extern void page_init(unsigned long rambase, unsigned long ramsize);
+extern void page_init(unsigned long rambase, unsigned long ramsize,
+    const unsigned long *rsvbase, const unsigned long *rsvsize, int nrsv);
 extern void page_selftest(void);
+extern void page_highram_selftest(void);
+extern int fdt_get_reserved(unsigned long dtb, unsigned long *rbase,
+    unsigned long *rsize, int max);
+extern unsigned long hat_dram_end(void);
+extern void inet_init(void);
 extern unsigned long page_freecount(void);
 extern unsigned long physmem;			/* total managed pages */
 extern void hat_page_layer_online(void);	/* hat.c: route PT allocs to page_alloc */
@@ -47,6 +53,7 @@ extern void thread_ab_selftest(void);
 extern int virtio_discover(void);
 extern int vioblk_attach(void);
 extern int vionet_attach(void);
+extern int viornd_attach(void);
 extern int mountroot(void);
 extern int single_user(const char *rootdev);
 extern const char *rootdev_name(void);
@@ -308,24 +315,35 @@ startup_memlist(unsigned long dtb)
 	}
 
 	/*
-	 * Clamp the managed extent to what the boot identity map can dereference
-	 * as VA==PA. page_init writes its page_t array through VA==PA at the front
-	 * of the region it manages, so RAM beyond the kernel's identity gigapage
-	 * must not be handed to it. No-op on qemu-virt (512 MiB fits); on the K1,
-	 * bank-0 DRAM is 2 GiB and only 1 GiB is mapped.
+	 * rvsrv: manage ALL of DRAM. hat_boot_init identity-mapped every DRAM
+	 * gigapage (bar the user slots, which page_init leaves as a hole), so the
+	 * old clamp to the kernel's boot gigapage is gone. The only cut left is
+	 * hat_dram_end's (256 GiB PA, the KERNELBASE half), printed if it bites.
+	 * The firmware-reserved ranges (the DTB, its rsvmap, /reserved-memory) are
+	 * read while the DTB is still mapped and kept off the free list.
 	 */
 	{
-		unsigned long limit = hat_phys_ram_limit();
-		if (base < limit && base + size > limit) {
-			sbi_console_puts("[startup] clamping managed RAM to the "
-			    "boot identity gigapage end ");
-			kputhex(limit);
-			sbi_console_puts("\n");
-			size = limit - base;
-		}
-	}
+		unsigned long rb[32], rs[32];
+		unsigned long dend = hat_dram_end();
+		int nrsv = fdt_get_reserved(dtb, rb, rs, 32);
 
-	page_init(base, size);
+		if (dend != 0 && base < dend && base + size > dend) {
+			sbi_console_puts("[startup] managed RAM capped at the "
+			    "identity-map limit ");
+			kputhex(dend);
+			sbi_console_puts("\n");
+			size = dend - base;
+		}
+		sbi_console_puts("[startup] ");
+		kputdec((unsigned long)nrsv);
+		sbi_console_puts(" firmware-reserved range(s) from the DTB "
+		    "(blob ");
+		kputhex(nrsv > 0 ? rb[0] : 0);
+		sbi_console_puts(" +");
+		kputdec(nrsv > 0 ? rs[0] : 0);
+		sbi_console_puts(" B)\n");
+		page_init(base, size, rb, rs, nrsv);
+	}
 	sbi_console_puts("[startup] physmem: ");
 	kputdec(physmem);
 	sbi_console_puts(" pages (");
@@ -336,6 +354,7 @@ startup_memlist(unsigned long dtb)
 	hat_page_layer_online();
 
 	page_selftest();
+	page_highram_selftest();
 }
 
 /*
@@ -428,6 +447,8 @@ startup_root(void)
 	(void) virtio_discover();
 	(void) vioblk_attach();
 	(void) vionet_attach();
+	(void) viornd_attach();	/* rvlogin: entropy for getrandom */
+	inet_init();		/* rvsrv: lwIP IPv4 on vionet (DHCP) */
 
 	/*
 	 * The scanout seam (docs/riscv64-scanout-seam.md): bring up the display
@@ -455,7 +476,7 @@ startup_root(void)
 	/* R-P12: writable on-disk FS (FDT summary already printed at memlist). */
 	(void) vioblk_data_attach();
 	(void) snfs_init();
-	(void) single_user(rootdev_name());
+	/* single_user() is called from main() after the boot banner (rvsmp-e). */
 }
 
 /*

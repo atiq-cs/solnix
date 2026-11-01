@@ -1,0 +1,889 @@
+diff --git a/usr/src/Makefile.master b/usr/src/Makefile.master
+index fab4bd0c..acf4649b 100644
+--- a/usr/src/Makefile.master
++++ b/usr/src/Makefile.master
+@@ -251,7 +251,7 @@ PYTHON3b_PKGVERS=	-35
+ PYTHON3b_SUFFIX=	m
+ #
+ $(BUILDPY3b)PYTHON3b=	/usr/bin/python$(PYTHON3b_VERSION)
+-TOOLS_PYTHON=		$(PYTHON3)
++TOOLS_PYTHON=		/usr/bin/python3.9
+ SORT=		/usr/bin/sort
+ TR=		/usr/bin/tr
+ TOUCH=		/usr/bin/touch
+diff --git a/usr/src/boot/efi/libefi/efipart.c b/usr/src/boot/efi/libefi/efipart.c
+index 7dcfaaaf..fec9bac8 100644
+--- a/usr/src/boot/efi/libefi/efipart.c
++++ b/usr/src/boot/efi/libefi/efipart.c
+@@ -71,6 +71,14 @@ static int efipart_printhd(int);
+ /* Bounce buffer max size */
+ #define	BIO_BUFFER_SIZE	0x4000
+ 
++/*
++ * Maximum bytes per single EFI ReadBlocks call.  Large single transfers are
++ * mishandled by some UEFI NVMe drivers (AWS Nitro), which return success but
++ * only copy part of the buffer; cap the transfer to a size every firmware
++ * handles reliably.
++ */
++#define	EFIPART_IOMAX_BYTES	0x4000
++
+ struct devsw efipart_fddev = {
+ 	.dv_name = "fd",
+ 	.dv_type = DEVT_FD,
+@@ -996,8 +1004,40 @@ efipart_readwrite(pdinfo_t *pd, int rw, daddr_t blk, daddr_t nblks,
+ 
+ 	switch (rw & F_MASK) {
+ 	case F_READ:
+-		status = blkio->ReadBlocks(blkio, blkio->Media->MediaId, blk,
+-		    nblks * blkio->Media->BlockSize, buf);
++		/*
++		 * Some UEFI BlockIo implementations (notably the NVMe driver
++		 * in AWS Nitro/Graviton firmware) return EFI_SUCCESS for a
++		 * large single ReadBlocks but only transfer part of the
++		 * request, silently corrupting the tail.  That surfaces later
++		 * as a ZFS checksum failure ("all block copies unavailable").
++		 * Cap each ReadBlocks at EFIPART_IOMAX_BYTES so every
++		 * transfer stays within a size all firmware handles.
++		 */
++		status = EFI_SUCCESS;
++		while (nblks > 0) {
++			daddr_t chunk = nblks;
++			daddr_t maxblks = EFIPART_IOMAX_BYTES /
++			    blkio->Media->BlockSize;
++
++			if (maxblks < 1)
++				maxblks = 1;
++			if (chunk > maxblks)
++				chunk = maxblks;
++			status = blkio->ReadBlocks(blkio,
++			    blkio->Media->MediaId, blk,
++			    chunk * blkio->Media->BlockSize, buf);
++#ifdef EFIPART_DEBUG
++			printf("A6BLK rd lba=%ju nblks=%ju bytes=%ju bs=%u "
++			    "st=%lu\n", (uintmax_t)blk, (uintmax_t)chunk,
++			    (uintmax_t)(chunk * blkio->Media->BlockSize),
++			    blkio->Media->BlockSize, DECODE_ERROR(status));
++#endif
++			if (EFI_ERROR(status))
++				break;
++			blk += chunk;
++			nblks -= chunk;
++			buf += chunk * blkio->Media->BlockSize;
++		}
+ 		break;
+ 	case F_WRITE:
+ 		if (blkio->Media->ReadOnly)
+@@ -1104,10 +1144,21 @@ efipart_realstrategy(void *devdata, int rw, daddr_t blk, size_t size,
+ 	if (disk_blocks == 0)
+ 		disk_blocks = blkio->Media->LastBlock + 1 - d_offset;
+ 
++#ifdef EFIPART_DEBUG
++	printf("A6RS in rw=%d blk=%ju off=%ju size=%ju doff=%ju dblks=%ju "
++	    "bs=%u last=%ju\n", rw & F_MASK, (uintmax_t)blk, (uintmax_t)off,
++	    (uintmax_t)size, (uintmax_t)d_offset, (uintmax_t)disk_blocks,
++	    blkio->Media->BlockSize, (uintmax_t)blkio->Media->LastBlock);
++#endif
+ 	/* make sure we don't read past disk end */
+ 	if ((off + size) / blkio->Media->BlockSize > d_offset + disk_blocks) {
+ 		diskend = d_offset + disk_blocks;
+ 		readstart = off / blkio->Media->BlockSize;
++#ifdef EFIPART_DEBUG
++		printf("A6RS CLAMP off=%ju size=%ju diskend=%ju readstart=%ju\n",
++		    (uintmax_t)off, (uintmax_t)size, (uintmax_t)diskend,
++		    (uintmax_t)readstart);
++#endif
+ 
+ 		if (diskend <= readstart) {
+ 			if (rsize != NULL)
+@@ -1133,6 +1184,12 @@ efipart_realstrategy(void *devdata, int rw, daddr_t blk, size_t size,
+ 	if (ioalign > 1 && (uintptr_t)buf != roundup2((uintptr_t)buf, ioalign))
+ 		need_buf = true;
+ 
++#ifdef EFIPART_DEBUG
++	printf("A6RS dec need_buf=%d ioalign=%u buf=%p bufaln=%d\n",
++	    need_buf, ioalign, buf,
++	    (int)((uintptr_t)buf == roundup2((uintptr_t)buf, ioalign)));
++#endif
++
+ 	if (need_buf) {
+ 		for (bio_size = BIO_BUFFER_SIZE; bio_size > 0;
+ 		    bio_size -= blkio->Media->BlockSize) {
+diff --git a/usr/src/pkg/Makefile b/usr/src/pkg/Makefile
+index 777939ee..162b2a4b 100644
+--- a/usr/src/pkg/Makefile
++++ b/usr/src/pkg/Makefile
+@@ -439,7 +439,7 @@ $(PDIR):
+ $(PDIR)/gendeps: $(DEP_SYNTH_PKGS) $(DEP_PKGS)
+ 	$(PKGDEBUG)if [ "$(SUPPRESSPKGDEP)" = "true" ]; then \
+ 		print "Suppressing dependency resolution"; \
+-		for p in $(DEP_PKGS:%.dep=%); do \
++		for p in $(DEP_SYNTH_PKGS:%.dep=%) $(DEP_PKGS:%.dep=%); do \
+ 			$(CP) $$p.dep $$p.res; \
+ 		done; \
+ 	else \
+diff --git a/usr/src/uts/Makefile.uts b/usr/src/uts/Makefile.uts
+index 331fc23d..1ac22028 100644
+--- a/usr/src/uts/Makefile.uts
++++ b/usr/src/uts/Makefile.uts
+@@ -183,8 +183,18 @@ CERRWARN += -_gcc=-Wno-missing-braces
+ CERRWARN += -_gcc=-Wno-sign-compare
+ CERRWARN += -_gcc=-Wno-unused-parameter
+ CERRWARN += -_gcc=-Wno-missing-field-initializers
++CERRWARN += -_gcc=-Wno-unused-variable
++CERRWARN += -_gcc=-Wno-unused-but-set-variable
++CERRWARN += -_gcc=-Wno-empty-body
++CERRWARN += -_gcc=-Wno-unused-but-set-parameter
+ CERRWARN += $(CCWARNINLINE)
+ 
++# gcc 14 flags these in DEBUG kernel builds (aarch64 cross); benign, downgrade
++CERRWARN += -_gcc=-Wno-unused-variable
++CERRWARN += -_gcc=-Wno-unused-but-set-variable
++CERRWARN += -_gcc=-Wno-empty-body
++CERRWARN += -_gcc=-Wno-unused-but-set-parameter
++
+ CNOWARN_UNINIT = -_gcc=-Wno-maybe-uninitialized
+ 
+ # DEBUG v. -nd make for frequent unused variables, empty conditions, etc. in
+diff --git a/usr/src/uts/aarch64/io/pciex/ecam/ecam.c b/usr/src/uts/aarch64/io/pciex/ecam/ecam.c
+index 1c621d10..abfb26c6 100644
+--- a/usr/src/uts/aarch64/io/pciex/ecam/ecam.c
++++ b/usr/src/uts/aarch64/io/pciex/ecam/ecam.c
+@@ -22,6 +22,8 @@
+ #include <sys/pci_cfgacc.h>
+ #include <sys/pcie.h>
+ #include <sys/pcie_impl.h>
++#include <sys/ontrap.h>
++#include <sys/pci.h>
+ 
+ #include <pcierc.h>
+ 
+@@ -57,6 +59,45 @@ ecam_cfgspace_acc(pci_cfgacc_req_t *req)
+ 
+ 	caddr_t addr = softc->ec_base + PCIE_CADDR_ECAM(bus, dev, func, reg);
+ 
++	/*
++	 * The ECAM config access is a raw MMIO load/store.  On real hardware
++	 * (notably AWS Graviton) a config access to a bus/device/function the
++	 * host fabric rejects raises a synchronous external abort.  In EL1 that
++	 * is a same-EL data abort (ESR EC=0x25), routed to trap(), whose
++	 * kernel-mode data-abort case honors on_trap(OT_DATA_ACCESS): if we arm
++	 * it here, the abort recovers to ot_trampoline instead of calling die()
++	 * (which, on this abort class, silent-resets the box).  On a trapped
++	 * read we return the width-correct all-1s -- the PCI "no function"
++	 * convention -- so a config probe skips the absent slot and the scan
++	 * continues.  Writes to a rejected target are simply dropped.
++	 */
++	on_trap_data_t otd;
++
++	if (on_trap(&otd, OT_DATA_ACCESS) != 0) {
++		/* Took an external abort on the access below; recover. */
++		no_trap();
++		if (!req->write) {
++			switch (req->size) {
++			case PCI_CFG_SIZE_BYTE:
++				VAL16(req) = PCI_EINVAL8;
++				break;
++			case PCI_CFG_SIZE_WORD:
++				VAL16(req) = PCI_EINVAL16;
++				break;
++			case PCI_CFG_SIZE_DWORD:
++				VAL32(req) = PCI_EINVAL32;
++				break;
++			case PCI_CFG_SIZE_QWORD:
++				VAL64(req) = PCI_EINVAL64;
++				break;
++			default:
++				VAL64(req) = PCI_EINVAL64;
++				break;
++			}
++		}
++		return;
++	}
++
+ 	switch (req->size) {
+ 	case PCI_CFG_SIZE_BYTE:
+ 		if (req->write) {
+@@ -94,9 +135,12 @@ ecam_cfgspace_acc(pci_cfgacc_req_t *req)
+ 		}
+ 		break;
+ 	default:
++		no_trap();
+ 		dev_err(softc->ec_dip, CE_PANIC,
+ 		    "weird %d bit config space access", req->size * NBBY);
+ 	}
++
++	no_trap();
+ }
+ 
+ pcie_rc_data_t ecam_pcie_rc_data = {
+diff --git a/usr/src/uts/aarch64/io/pciex/pcierc/pci_boot.c b/usr/src/uts/aarch64/io/pciex/pcierc/pci_boot.c
+index 59483223..cbcfe730 100644
+--- a/usr/src/uts/aarch64/io/pciex/pcierc/pci_boot.c
++++ b/usr/src/uts/aarch64/io/pciex/pcierc/pci_boot.c
+@@ -1043,8 +1043,16 @@ fix_ppb_res(dev_info_t *rcdip, struct pci_bus_resource *pci_bus_res,
+ 	add_ranges_prop(pci_bus_res, secbus, B_TRUE);
+ 
+ 	/*
+-	 * Reprogram memory
++	 * Reprogram memory only if the parent was reprogrammed, memory decode
++	 * is off, or both windows are disabled (as x86 does); otherwise the
++	 * firmware window kept by add_ppb_props() stays where it is.
+ 	 */
++	if (!pci_bus_res[parbus].mem_reprogram &&
++	    (cmd_reg & PCI_COMM_MAE) != 0 &&
++	    (mem.base <= mem.limit || pmem.base <= pmem.limit))
++		goto cmd_enable;
++	pci_bus_res[secbus].mem_reprogram = B_TRUE;
++
+ 	/* Mem range */
+ 	if (pci_bus_res[secbus].mem_used != NULL) {
+ 		memlist_rsrc_subsume(&pci_bus_res[secbus].mem_used,
+@@ -1848,13 +1856,22 @@ add_bar_reg_props(dev_info_t *rcdip, struct pci_bus_resource *pci_bus_res,
+ 
+ 		if (op == CONFIG_INFO) {
+ 			dcmn_err(CE_NOTE,
+-			    MSGHDR "BAR%u %sMEM FWINIT 0x%lx ~ 0x%lx%s "
+-			    "(ignored)",
++			    MSGHDR "BAR%u %sMEM FWINIT 0x%lx ~ 0x%lx%s",
+ 			    ddi_node_name(rcdip), bus, dev, func, bar,
+ 			    (phys_hi & PCI_PREFETCH_B) ? "P" : " ",
+ 			    fbase, len,
+ 			    *bar_sz == PCI_BAR_SZ_64 ? " (64-bit)" : "");
+ 
++			/* Keep a firmware-assigned BAR: mark its span used. */
++			if (fbase != 0) {
++				memlist_rsrc_delete(mem_avail, fbase, len);
++				memlist_rsrc_delete(pmem_avail, fbase, len);
++				if (phys_hi & PCI_PREFETCH_B)
++					memlist_rsrc_add(pmem_used, fbase, len);
++				else
++					memlist_rsrc_add(mem_used, fbase, len);
++			}
++
+ 			/*
+ 			 * We need to actually increase the amount of memory
+ 			 * that we request to take into account alignment.
+@@ -1870,7 +1887,8 @@ add_bar_reg_props(dev_info_t *rcdip, struct pci_bus_resource *pci_bus_res,
+ 				pci_bus_res[bus].pmem_size += len;
+ 			else
+ 				pci_bus_res[bus].mem_size += len;
+-		} else {
++		} else if (fbase == 0 || pci_bus_res[bus].mem_reprogram) {
++			/* Unassigned, or its bridge window moved: allocate. */
+ 			boolean_t pf = B_FALSE, got = B_FALSE;
+ 			fbase = 0;
+ 
+@@ -2145,6 +2163,7 @@ add_ppb_props(dev_info_t *rcdip, dev_info_t *dip,
+ 	} io, mem, pmem;
+ 	uchar_t secbus, subbus;
+ 	uchar_t progclass;
++	uint16_t cmd_reg;
+ 
+ 	secbus = pci_cfgacc_get8(rcdip, PCI_GETBDF(bus, dev, func),
+ 	    PCI_BCNF_SECBUS);
+@@ -2228,12 +2247,10 @@ add_ppb_props(dev_info_t *rcdip, dev_info_t *dip,
+ 		    "(ignored)",
+ 		    ddi_node_name(dip), bus, dev, func, io.base, io.limit,
+ 		    io.base > io.limit ? " (disabled)" : "");
+-		dcmn_err(CE_NOTE, MSGHDR " MEM FWINIT 0x%lx ~ 0x%lx%s "
+-		    "(ignored)",
++		dcmn_err(CE_NOTE, MSGHDR " MEM FWINIT 0x%lx ~ 0x%lx%s",
+ 		    ddi_node_name(dip), bus, dev, func, mem.base, mem.limit,
+ 		    mem.base > mem.limit ? " (disabled)" : "");
+-		dcmn_err(CE_NOTE, MSGHDR "PMEM FWINIT 0x%lx ~ 0x%lx%s "
+-		    "(ignored)",
++		dcmn_err(CE_NOTE, MSGHDR "PMEM FWINIT 0x%lx ~ 0x%lx%s",
+ 		    ddi_node_name(dip), bus, dev, func, pmem.base, pmem.limit,
+ 		    pmem.base > pmem.limit ? " (disabled)" : "");
+ 	}
+@@ -2242,15 +2259,50 @@ add_ppb_props(dev_info_t *rcdip, dev_info_t *dip,
+ 	io.limit = PPB_DISABLE_IORANGE_LIMIT;
+ 	set_ppb_res(rcdip, dip, bus, dev, func, RES_IO, io.base, io.limit);
+ 
+-	mem.base = PPB_DISABLE_MEMRANGE_BASE;
+-	mem.limit = PPB_DISABLE_MEMRANGE_LIMIT;
+-	set_ppb_res(rcdip, dip, bus, dev, func, RES_MEM, mem.base,
+-	    mem.limit);
++	/*
++	 * Keep a memory window that firmware programmed and enabled (Memory
++	 * Access Enable set, base non-zero), as the x86 code does.  On SBBR
++	 * machines the SPCR console UART can sit behind a bridge (AWS Graviton:
++	 * 15:00.0 at 0x83e00000 behind root port 00:02.0), and disabling the
++	 * window cuts the kernel off from its own console.  Only a window that
++	 * firmware left unconfigured is disabled here, for fix_ppb_res().
++	 */
++	cmd_reg = pci_cfgacc_get16(rcdip, PCI_GETBDF(bus, dev, func),
++	    PCI_CONF_COMM);
+ 
+-	pmem.base = PPB_DISABLE_MEMRANGE_BASE;
+-	pmem.limit = PPB_DISABLE_MEMRANGE_LIMIT;
+-	set_ppb_res(rcdip, dip, bus, dev, func, RES_PMEM, pmem.base,
+-	    pmem.limit);
++	if ((cmd_reg & PCI_COMM_MAE) == 0 || mem.base == 0) {
++		mem.base = PPB_DISABLE_MEMRANGE_BASE;
++		mem.limit = PPB_DISABLE_MEMRANGE_LIMIT;
++		set_ppb_res(rcdip, dip, bus, dev, func, RES_MEM, mem.base,
++		    mem.limit);
++	} else if (mem.base < mem.limit) {
++		uint64_t size = mem.limit - mem.base + 1;
++
++		memlist_rsrc_add(&pci_bus_res[secbus].mem_avail, mem.base,
++		    size);
++		memlist_rsrc_add(&pci_bus_res[bus].mem_used, mem.base, size);
++		memlist_rsrc_delete(&pci_bus_res[bus].mem_avail, mem.base,
++		    size);
++		memlist_rsrc_delete(&pci_bus_res[bus].pmem_avail, mem.base,
++		    size);
++	}
++
++	if ((cmd_reg & PCI_COMM_MAE) == 0 || pmem.base == 0) {
++		pmem.base = PPB_DISABLE_MEMRANGE_BASE;
++		pmem.limit = PPB_DISABLE_MEMRANGE_LIMIT;
++		set_ppb_res(rcdip, dip, bus, dev, func, RES_PMEM, pmem.base,
++		    pmem.limit);
++	} else if (pmem.base < pmem.limit) {
++		uint64_t size = pmem.limit - pmem.base + 1;
++
++		memlist_rsrc_add(&pci_bus_res[secbus].pmem_avail, pmem.base,
++		    size);
++		memlist_rsrc_add(&pci_bus_res[bus].pmem_used, pmem.base, size);
++		memlist_rsrc_delete(&pci_bus_res[bus].pmem_avail, pmem.base,
++		    size);
++		memlist_rsrc_delete(&pci_bus_res[bus].mem_avail, pmem.base,
++		    size);
++	}
+ 
+ 	if (pci_cfgacc_get16(rcdip, PCI_GETBDF(bus, dev, func),
+ 	    PCI_BCNF_BCNTRL) & PCI_BCNF_BCNTRL_VGA_ENABLE) {
+diff --git a/usr/src/uts/armv8/Makefile.files b/usr/src/uts/armv8/Makefile.files
+index 8ec4a3c2..c8a0a46b 100644
+--- a/usr/src/uts/armv8/Makefile.files
++++ b/usr/src/uts/armv8/Makefile.files
+@@ -120,6 +120,7 @@ DBOOT_OBJS +=			\
+ 	dboot_printf.o		\
+ 	dboot_conf.o		\
+ 	dboot_conf_acpi.o	\
++	dboot_synth_fdt.o	\
+ 	dboot_conf_fdt.o	\
+ 	dboot_conf_uefi.o	\
+ 	dboot_memlist.o		\
+diff --git a/usr/src/uts/armv8/boot/boot_uart.c b/usr/src/uts/armv8/boot/boot_uart.c
+index d1c77ebf..21676f45 100644
+--- a/usr/src/uts/armv8/boot/boot_uart.c
++++ b/usr/src/uts/armv8/boot/boot_uart.c
+@@ -92,18 +92,48 @@ boot_uart_getchar(void)
+ void
+ boot_uart_putchar(int c)
+ {
++	/*
++	 * Bounded FR poll: some SBBR/PL011 implementations (observed on AWS
++	 * Graviton) do not drive the TXFF/TXFE flags the way SBSA leads us to
++	 * expect, so an unbounded spin here hangs the boot forever on the
++	 * first console write -- the kernel then emits no banner though it is
++	 * running.  Cap the waits and fall through (still write the byte).
++	 *
++	 * TXFE IS NOT WAITED ON AT ALL, and that is deliberate.  Measured on
++	 * Graviton: TXFE never sets on this UART, so a capped post-write drain
++	 * costs the FULL cap on EVERY character.  At 1e6 iterations that
++	 * measured ~13 seconds per character -- ~2.5 hours of console output
++	 * for a few hundred characters, which made every metal boot an
++	 * afternoon and made -B prom_debug=1 completely unaffordable.
++	 *
++	 * Draining the FIFO after each byte is not needed for correctness
++	 * either: the TXFF (full) check before the write is what prevents
++	 * overrun, and the hardware drains on its own.  A post-write TXFE wait
++	 * only matters when handing the UART to another agent (a kexec-style
++	 * transfer, or powering the block down), which the boot console never
++	 * does.  So the drain is dropped rather than capped, and the TXFF cap
++	 * is lowered to a value that still bounds a genuinely wedged FIFO
++	 * without dominating the boot.
++	 */
++	uint32_t cap;
++
+ 	if (boot_uart_mmio_base == NULL)
+ 		return;
+ 
+-	while (boot_uart_readreg32(SBSA_UARTFR) & SBSA_UARTFR_TXFF)
++	/*
++	 * Wait for space, bounded.  10k iterations is ample for a real FIFO to
++	 * drain one slot at any sane baud, and cheap enough that a UART whose
++	 * TXFF is stuck-full costs milliseconds per character rather than
++	 * seconds.
++	 */
++	for (cap = 0; (boot_uart_readreg32(SBSA_UARTFR) & SBSA_UARTFR_TXFF) &&
++	    cap < 10000u; cap++)
+ 		boot_uart_yield();
+ 
+ 	if ((c & 0xff) == '\n')
+ 		boot_uart_putchar('\r');
+ 
+ 	boot_uart_writereg32(SBSA_UARTDR, c & 0xff);
+-	while (!(boot_uart_readreg32(SBSA_UARTFR) & SBSA_UARTFR_TXFE))
+-		boot_uart_yield();
+ }
+ 
+ /*
+diff --git a/usr/src/uts/armv8/dboot/dboot.h b/usr/src/uts/armv8/dboot/dboot.h
+index fc6c9064..1b314de4 100644
+--- a/usr/src/uts/armv8/dboot/dboot.h
++++ b/usr/src/uts/armv8/dboot/dboot.h
+@@ -63,6 +63,11 @@ extern int dboot_configure_fdt(void);
+  */
+ extern int dboot_configure_acpi(void);
+ 
++/*
++ * dboot_synth_fdt.c
++ */
++extern uint64_t dboot_synth_fdt(struct xboot_info *);
++
+ /*
+  * dboot_uefimem.c
+  */
+diff --git a/usr/src/uts/armv8/dboot/dboot_conf_acpi.c b/usr/src/uts/armv8/dboot/dboot_conf_acpi.c
+index 20652023..b8b911a3 100644
+--- a/usr/src/uts/armv8/dboot/dboot_conf_acpi.c
++++ b/usr/src/uts/armv8/dboot/dboot_conf_acpi.c
+@@ -36,6 +36,7 @@
+ 
+ extern void boot_smccc_init(struct xboot_info *);
+ extern void boot_psci_init(struct xboot_info *);
++extern uint64_t dboot_synth_fdt(struct xboot_info *);
+ 
+ static const ACPI_TABLE_XSDT *
+ get_acpi_xsdt(void)
+@@ -305,5 +306,16 @@ dboot_configure_acpi(void)
+ 	boot_smccc_init(bi);
+ 	boot_psci_init(bi);
+ 	dboot_count_pcierc(bi);
+-	return (dboot_configure_acpi_cpuinfo(bi));
++	if (dboot_configure_acpi_cpuinfo(bi) != 0)
++		return (-1);
++
++	/*
++	 * Synthesise a minimal FDT from the static ACPI tables so that
++	 * the kernel's FDT-fed prom_emul and device enumeration work
++	 * unchanged. On failure bi_fdt stays 0 (no devicetree); the
++	 * kernel would then come up without enumerated devices.
++	 */
++	bi->bi_fdt = dboot_synth_fdt(bi);
++
++	return (0);
+ }
+diff --git a/usr/src/uts/armv8/dboot/dboot_machdep.c b/usr/src/uts/armv8/dboot/dboot_machdep.c
+index 854c788d..595328c4 100644
+--- a/usr/src/uts/armv8/dboot/dboot_machdep.c
++++ b/usr/src/uts/armv8/dboot/dboot_machdep.c
+@@ -182,9 +182,8 @@ exitto(int (*entrypoint)(struct xboot_info *), struct xboot_info *bi)
+ 
+ 	if (bi->bi_fdt == 0) {
+ 		dboot_printf(
+-		    "dboot: ACPI kernel support is a work in progress\n");
+-		for (;;)
+-			/* spin forever */;
++		    "dboot: no devicetree (ACPI synth failed); "
++		    "kernel device enumeration will be incomplete\n");
+ 	}
+ 
+ 	/*
+diff --git a/usr/src/uts/armv8/io/rootnex.c b/usr/src/uts/armv8/io/rootnex.c
+index ac3be4fe..4bf9d56f 100644
+--- a/usr/src/uts/armv8/io/rootnex.c
++++ b/usr/src/uts/armv8/io/rootnex.c
+@@ -921,7 +921,9 @@ rootnex_map_regspec(ddi_map_req_t *mp, caddr_t *vaddrp)
+ 			hat_acc_flags = HAT_LOADCACHING_OK;
+ 			break;
+ 		case DDI_STORECACHING_OK_ACC:
+-			hat_acc_flags = HAT_STORECACHING_OK;
++			/* aa64f: device regs are never cacheable on arm64: */
++			/* write-combining = Normal-NC, as Linux ioremap_wc */
++			hat_acc_flags = HAT_MERGING_OK;
+ 			break;
+ 		default:
+ 			return (DDI_ME_INVAL);
+@@ -1088,7 +1090,9 @@ rootnex_map_handle(ddi_map_req_t *mp)
+ 		hp->ah_hat_flags |= HAT_LOADCACHING_OK;
+ 		break;
+ 	case DDI_STORECACHING_OK_ACC:
+-		hp->ah_hat_flags |= HAT_STORECACHING_OK;
++		/* aa64f: device regs are never cacheable on arm64: */
++		/* write-combining = Normal-NC, as Linux ioremap_wc */
++		hp->ah_hat_flags |= HAT_MERGING_OK;
+ 		break;
+ 	default:
+ 		return (DDI_FAILURE);
+diff --git a/usr/src/uts/armv8/ml/exceptions.S b/usr/src/uts/armv8/ml/exceptions.S
+index 9ab23b6c..b48b9f3e 100644
+--- a/usr/src/uts/armv8/ml/exceptions.S
++++ b/usr/src/uts/armv8/ml/exceptions.S
+@@ -133,7 +133,10 @@ SET_SIZE(from_current_el_fiq)
+ 
+ 	.balign	VECTOR_ENTRY_SIZE
+ ALTENTRY(from_current_el_error)
+-	UNEXPECTED()
++	clrex
++	__SAVE_REGS_EL1
++	__SAVE_FRAME
++	b	from_current_el_error_handler
+ 	CHECK_VECTOR_ENTRY(from_current_el_error)
+ SET_SIZE(from_current_el_error)
+ 
+@@ -162,7 +165,7 @@ ALTENTRY(from_lower_el_aarch64_irq)
+ 	msr	mdscr_el1, x1
+ 
+ 	// Enable debug exceptions
+-	msr DAIFClr, #DAIF_SETCLEAR_DEBUG
++	msr DAIFClr, #(DAIF_SETCLEAR_DEBUG | DAIF_SETCLEAR_SERROR)
+ 
+ 	mov	x0, sp
+ 	bl	do_interrupt
+@@ -213,6 +216,10 @@ SET_SIZE(from_lower_el_aarch32_error)
+ 	SET_SIZE(exception_vector)
+ 
+ 	ENTRY(from_current_el_sync_handler)
++	ldr	x9, [sp, #REGOFF_SPSR]	// aa64f: unmask A if interrupted ctx had A=0
++	tbnz	x9, #8, 7f		// SPSR.A is bit 8 (PSR_A)
++	msr	DAIFClr, #DAIF_SETCLEAR_SERROR
++7:
+ 	mrs	x1, esr_el1
+ 	lsr	w0, w1, #ESR_EC_SHIFT	// w0 <- EC, no need to mask.
+ 	mrs	x2, far_el1
+@@ -223,13 +230,39 @@ SET_SIZE(from_lower_el_aarch32_error)
+ 	cbz	x0, 1f
+ 	b	_sys_rtt
+ 1:
++	msr	DAIFSet, #DAIF_SETCLEAR_SERROR	// aa64f
+ 	__RESTORE_REGS_EL1
+ 	eret
+ 	SET_SIZE(from_current_el_sync_handler)
+ 
++	/*
++	 * Current-EL SError (async abort) handler.  Mirror the sync handler:
++	 * hand trap() the EC/ESR/FAR and a valid frame so an SError is reported
++	 * (or recovered via t_lofault/t_ontrap) instead of silently resetting
++	 * the box from a frameless panic.  See aa-serror-vector-fix.sh.
++	 */
++	ENTRY(from_current_el_error_handler)
++	mrs	x1, esr_el1
++	lsr	w0, w1, #ESR_EC_SHIFT	// w0 <- EC
++	mrs	x2, far_el1
++	mov	x3, sp
++	mov	x29, sp
++	bl	trap
++	cbz	x0, 1f
++	b	_sys_rtt
++1:
++	msr	DAIFSet, #DAIF_SETCLEAR_SERROR	// aa64f
++	__RESTORE_REGS_EL1
++	eret
++	SET_SIZE(from_current_el_error_handler)
++
+ 	ENTRY(from_current_el_irq_handler)
+ 	__SAVE_REGS_EL1
+ 	__SAVE_FRAME
++	ldr	x9, [sp, #REGOFF_SPSR]	// aa64f: unmask A if interrupted ctx had A=0
++	tbnz	x9, #8, 7f		// SPSR.A is bit 8 (PSR_A)
++	msr	DAIFClr, #DAIF_SETCLEAR_SERROR
++7:
+ 	mov	x0, sp
+ 	bl	do_interrupt
+ 	b	_sys_rtt
+@@ -242,7 +275,7 @@ SET_SIZE(from_lower_el_aarch32_error)
+ 	msr	mdscr_el1, x1
+ 
+ 	// Enable debug exceptions
+-	msr DAIFClr, #DAIF_SETCLEAR_DEBUG
++	msr DAIFClr, #(DAIF_SETCLEAR_DEBUG | DAIF_SETCLEAR_SERROR)
+ 
+ 	mrs	x1, esr_el1
+ 	lsr	w0, w1, #ESR_EC_SHIFT	// w0 <- EC, no need to mask
+@@ -332,7 +365,7 @@ _syscall_invoke:
+ 	mov	w1, #LMS_USER
+ 	bl	syscall_mstate
+ 
+-	msr	DAIFSet, #DAIF_SETCLEAR_IRQ
++	msr	DAIFSet, #(DAIF_SETCLEAR_IRQ | DAIF_SETCLEAR_SERROR)
+ 
+ 	ldr	w9, [x21, #T_POST_SYS_AST]
+ 	cbnz	w9, _syscall_post
+@@ -351,7 +384,7 @@ _syscall_invoke:
+ 	eret
+ 
+ _user_rtt:
+-	msr	DAIFSet, #(DAIF_SETCLEAR_IRQ | DAIF_SETCLEAR_DEBUG)
++	msr	DAIFSet, #(DAIF_SETCLEAR_IRQ | DAIF_SETCLEAR_DEBUG | DAIF_SETCLEAR_SERROR)
+ 
+ 	// if we've been requested to single-step in user-land, set this now
+ 	// that debug exceptions are masked and won't be taken in the kernel
+@@ -376,6 +409,7 @@ _user_rtt:
+ 	eret
+ 
+ 3:
++	msr	DAIFClr, #DAIF_SETCLEAR_SERROR	// aa64f
+ 	mov	x0, #T_AST
+ 	mov	x1, #0
+ 	mov	x2, #0
+@@ -399,7 +433,7 @@ _syscall_ill:
+ 	b	_syscall_post_call
+ 
+ _syscall_post:
+-	msr	DAIFClr, #DAIF_SETCLEAR_IRQ
++	msr	DAIFClr, #(DAIF_SETCLEAR_IRQ | DAIF_SETCLEAR_SERROR)
+ 
+ 	// syscall_mstate(LMS_USER, LMS_SYSTEM);
+ 	mov	w0, #LMS_USER
+@@ -438,7 +472,7 @@ _fasttrap:
+ 
+ 	msr	DAIFClr, #DAIF_SETCLEAR_IRQ
+ 	blr	x9
+-	msr	DAIFSet, #DAIF_SETCLEAR_IRQ
++	msr	DAIFSet, #(DAIF_SETCLEAR_IRQ | DAIF_SETCLEAR_SERROR)
+ 
+ 	ldp	x17, x18, [sp, #REGOFF_PC]
+ 	msr	elr_el1, x17
+@@ -488,7 +522,7 @@ _fasttrap:
+ 	cmp	x2, #PSR_M_EL0t
+ 	b.eq	user_rtt
+ 
+-	msr	DAIFSet, #DAIF_SETCLEAR_IRQ
++	msr	DAIFSet, #(DAIF_SETCLEAR_IRQ | DAIF_SETCLEAR_SERROR)
+ 
+ 	CPUP(x21)
+ 	ldrb	w0, [x21, #CPU_KPRUNRUN]
+@@ -517,9 +551,13 @@ _sys_rtt_preempt:
+ 	mov	w0, #1
+ 	strb	w0, [x20, #T_PREEMPT_LK]
+ 
++	ldr	x9, [sp, #REGOFF_SPSR]	// aa64f
++	tbnz	x9, #8, 7f
++	msr	DAIFClr, #DAIF_SETCLEAR_SERROR
++7:
+ 	msr	DAIFClr, #DAIF_SETCLEAR_IRQ
+ 	bl	kpreempt
+-	msr	DAIFSet, #DAIF_SETCLEAR_IRQ
++	msr	DAIFSet, #(DAIF_SETCLEAR_IRQ | DAIF_SETCLEAR_SERROR)
+ 
+ 	strb	wzr, [x20, #T_PREEMPT_LK]
+ 	b	_sys_rtt_preempt_ret
+diff --git a/usr/src/uts/armv8/os/fakebop.c b/usr/src/uts/armv8/os/fakebop.c
+index 4d042636..023c8fa6 100644
+--- a/usr/src/uts/armv8/os/fakebop.c
++++ b/usr/src/uts/armv8/os/fakebop.c
+@@ -220,6 +220,12 @@ bop_init(struct xboot_info *xbp)
+ 	extern void boot_fb_shadow_init(bootops_t *);
+ 
+ 	bsvc_init(xbp);
++	{
++		extern uint64_t sysp_uart_pa;	/* machdep.c */
++
++		if (xbp != NULL)
++			sysp_uart_pa = xbp->bi_bsvc_uart_mmio_base;
++	}
+ 
+ 	bootops = &bootop;
+ 	xbootp = xbp;
+@@ -1708,7 +1714,7 @@ bmemlist_find(struct memlist **listp, uint64_t size, int align)
+ static void
+ bmemlist_init(struct xboot_info *xbp)
+ {
+-	static memlist_t boot_list[MMU_PAGESIZE * 8 / sizeof (memlist_t)];
++	static memlist_t boot_list[MMU_PAGESIZE * 128 / sizeof (memlist_t)];
+ 	int i;
+ 	extern struct memlist *phys_install;
+ 	extern struct memlist *phys_avail;
+diff --git a/usr/src/uts/armv8/os/machdep.c b/usr/src/uts/armv8/os/machdep.c
+index 7ad1bf41..3c9b6efc 100644
+--- a/usr/src/uts/armv8/os/machdep.c
++++ b/usr/src/uts/armv8/os/machdep.c
+@@ -63,6 +63,7 @@
+ #include <sys/efirt.h>
+ 
+ #include <c2/audit.h>
++#include <sys/mman.h>
+ 
+ int maxphys = MMU_PAGESIZE * 16;	/* 128k */
+ int klustsize = MMU_PAGESIZE * 16;	/* 128k */
+@@ -682,6 +683,29 @@ hres_tick(void)
+ 	hr_clock_unlock(s);
+ }
+ 
++/*
++ * Console output after consconfig() when nothing else provides polled output (no tem, no
++ * console tty driver): the boot UART, written as boot_uart_putchar() does (PL011 TXFF poll,
++ * bounded; no TXFE drain).  The PA is the SPCR UART dboot handed to the kernel.
++ */
++uint64_t sysp_uart_pa;			/* set by bop_init() */
++static volatile uint32_t *sysp_uart;	/* kernel VA, set by prom_io_use_kernel() */
++
++static void
++sysp_uart_putchar(int c)
++{
++	volatile uint32_t *u = sysp_uart;
++	uint32_t cap;
++
++	if (u == NULL)
++		return;
++	if ((c & 0xff) == '\n')
++		sysp_uart_putchar('\r');
++	for (cap = 0; (u[0x18 / 4] & (1u << 5)) != 0 && cap < 10000u; cap++)
++		__asm__ volatile("yield":::"memory");
++	u[0] = (uint32_t)(c & 0xff);
++}
++
+ static int
+ sysp_getchar(void)
+ {
+@@ -707,12 +731,13 @@ sysp_putchar(int c)
+ {
+ 	uint64_t s;
+ 
+-	/*
+-	 * We have no alternative but to drop the output on the floor.
+-	 */
+ 	if (cons_polledio == NULL ||
+-	    cons_polledio->cons_polledio_putchar == NULL)
++	    cons_polledio->cons_polledio_putchar == NULL) {
++		s = disable_interrupts();
++		sysp_uart_putchar(c);
++		restore_interrupts(s);
+ 		return;
++	}
+ 
+ 	s = disable_interrupts();
+ 	cons_polledio->cons_polledio_putchar(
+@@ -754,6 +779,9 @@ static struct boot_syscalls kern_sysp = {
+ void
+ prom_io_use_kernel(void)
+ {
++	if (sysp_uart_pa != 0 && sysp_uart == NULL)
++		sysp_uart = (volatile uint32_t *)psm_map_phys(sysp_uart_pa,
++		    0x1000, PROT_READ | PROT_WRITE);
+ 	sysp = &kern_sysp;
+ }
+ 
+diff --git a/usr/src/uts/armv8/os/mp_startup.c b/usr/src/uts/armv8/os/mp_startup.c
+index e2a742ed..d1242f51 100644
+--- a/usr/src/uts/armv8/os/mp_startup.c
++++ b/usr/src/uts/armv8/os/mp_startup.c
+@@ -584,7 +584,8 @@ mp_startup_boot(void)
+ 	/* The base spl should still be at LOCK LEVEL here */
+ 	ASSERT(cp->cpu_base_spl == ipltospl(LOCK_LEVEL));
+ 	set_base_spl();		/* Restore the spl to its proper value */
+-	clear_daif(DAIF_SETCLEAR_IRQ);
++	/* aa64f: unmask SError too, as the boot CPU does (startup.c) */
++	clear_daif(DAIF_SETCLEAR_IRQ | DAIF_SETCLEAR_SERROR);
+ 
+ 	pghw_physid_create(cp);
+ 	/*
+diff --git a/usr/src/uts/armv8/os/trap.c b/usr/src/uts/armv8/os/trap.c
+index db356fc1..1561e63e 100644
+--- a/usr/src/uts/armv8/os/trap.c
++++ b/usr/src/uts/armv8/os/trap.c
+@@ -890,10 +890,33 @@ out:
+ 		new_mstate(ct, mstate);
+ 	} else {
+ 		switch (ec) {
++		/*
++		 * A kernel-mode SError raised while a protected access is in
++		 * flight (on_trap(OT_DATA_ACCESS) or a t_lofault handler, as set
++		 * by ddi_peek()/the PCIe config-space accessor) is recoverable:
++		 * recover exactly as the data-abort path does rather than dying.
++		 * This is what lets PCIe config-space enumeration survive a
++		 * device/bus the fabric rejects (observed on AWS Graviton: the
++		 * ZFS device scan's config probe SErrors, which previously
++		 * silent-reset the box).  An unguarded kernel SError still dies.
++		 */
++		case T_SERROR:
++			if ((ct->t_ontrap != NULL) &&
++			    (ct->t_ontrap->ot_prot & OT_DATA_ACCESS)) {
++				ct->t_ontrap->ot_trap |= OT_DATA_ACCESS;
++				rp->r_pc = ct->t_ontrap->ot_trampoline;
++				goto cleanup;
++			}
++			if (ct->t_lofault != 0) {
++				rp->r_x0 = EFAULT;
++				rp->r_pc = ct->t_lofault;
++				goto cleanup;
++			}
++			die(ec, esr, addr, rp);
++			break;
+ 		case T_FP_EXCEPTION:
+ 		case T_PC_ALIGNMENT:
+ 		case T_SP_ALIGNMENT:
+-		case T_SERROR:
+ 		case T_ILLEGAL_STATE:
+ 		default:
+ 			die(ec, esr, addr, rp);
+diff --git a/usr/src/uts/armv8/vm/hat_aarch64.h b/usr/src/uts/armv8/vm/hat_aarch64.h
+index 8c79800f..df121ce4 100644
+--- a/usr/src/uts/armv8/vm/hat_aarch64.h
++++ b/usr/src/uts/armv8/vm/hat_aarch64.h
+@@ -137,7 +137,7 @@ extern struct hatstats hatstat;
+ #ifdef DEBUG
+ #define	HATSTAT_INC(x)	(++hatstat.x)
+ #else
+-#define	HATSTAT_INC(x)	(0)
++#define	HATSTAT_INC(x)	((void)0)
+ #endif
+ 
+ #if defined(_KERNEL) || defined(_BOOT)
+diff --git a/usr/src/uts/armv8/vm/hment.c b/usr/src/uts/armv8/vm/hment.c
+index 27aa5aa8..145fdb1a 100644
+--- a/usr/src/uts/armv8/vm/hment.c
++++ b/usr/src/uts/armv8/vm/hment.c
+@@ -720,7 +720,7 @@ hment_steal(void)
+ 	page_t *last = last_page;
+ 	page_t *pp = last;
+ 	hment_t *hm = NULL;
+-	hment_t *hm2;
++	hment_t *hm2 __unused;
+ 	htable_t *ht;
+ 	uint_t found_one = 0;
+ 
+diff --git a/usr/src/uts/common/io/wscons.c b/usr/src/uts/common/io/wscons.c
+index e6282ec8..aa16c1dc 100644
+--- a/usr/src/uts/common/io/wscons.c
++++ b/usr/src/uts/common/io/wscons.c
+@@ -557,6 +557,16 @@ wcuwsrv(queue_t *q)
+ 			ptem = wc_get_screen_tem(pvc);
+ 
+ 			if (ptem == NULL) {
++#if defined(__aarch64__)
++				/* no tem: the PROM output path (boot UART) */
++				for (mblk_t *nbp = mp; nbp != NULL;
++				    nbp = nbp->b_cont) {
++					if (nbp->b_wptr > nbp->b_rptr)
++						console_puts(
++						    (const char *)nbp->b_rptr,
++						    nbp->b_wptr - nbp->b_rptr);
++				}
++#endif
+ 				freemsg(mp);
+ 				continue;
+ 			}
+diff --git a/usr/src/uts/common/krtld/kobj.c b/usr/src/uts/common/krtld/kobj.c
+index 9668d8c2..dbfa2b62 100644
+--- a/usr/src/uts/common/krtld/kobj.c
++++ b/usr/src/uts/common/krtld/kobj.c
+@@ -683,6 +683,22 @@ attr_val(val_t *bootaux)
+ 		}
+ 	}
+ 
++#if defined(__aarch64__)
++	/*
++	 * The boot loader (dboot) maps the kernel image in whole pages, so it
++	 * rounds the writable segment's end (`_edata`) and the text segment's
++	 * end (`_etext`) up to a page boundary when building the initial page
++	 * tables.  kobj_segbrk() grows the kernel by BOP_ALLOC()ing the next
++	 * page above these cursors; if a cursor sits mid-page, its round-up
++	 * lands on the page dboot already mapped, and kbm_map() panics with an
++	 * overlapping allocation.  Align the cursors up to match dboot's
++	 * page-granular image mapping so growth always starts on the first
++	 * page dboot did not map.
++	 */
++	_etext = (caddr_t)P2ROUNDUP((uintptr_t)_etext, (uintptr_t)PAGESIZE);
++	_edata = (caddr_t)P2ROUNDUP((uintptr_t)_edata, (uintptr_t)PAGESIZE);
++#endif
++
+ 	/* To do the kobj_alloc, _edata needs to be set. */
+ 	for (i = 0; i < NLIBMACROS; i++) {
+ 		if (bootaux[libmacros[i].lmi_ba_index].ba_ptr != NULL) {

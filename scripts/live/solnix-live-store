@@ -1,0 +1,54 @@
+#!/sbin/sh
+# solnix-live-store -- the live media's writable Nix store, /nix/var and /root, in RAM.
+# Run once from inittab (sysinit, after autopush and the volatile tmpfs, before
+# svc.startd), so every service and login already sees the final /nix/store.
+# Design and measurements: docs/design-live-nix-store.md.
+#
+# NixOS's live ISO (nixos/modules/installer/cd-dvd/iso-image.nix) mounts the
+# media's squashfs at /nix/.ro-store, a tmpfs at /nix/.rw-store (mode=0755, no size,
+# so half of RAM) and an overlay of the two on /nix/store. illumos has no overlayfs,
+# so the same union is built from lofs:
+#   * a tmpfs at /nix/.rw-store, size=50% (tmpfs_convnum: half of available swap,
+#     which on a swapless live system is RAM);
+#   * for each entry of the ramdisk's /nix/store, a read-only lofs of that entry
+#     onto a same-named stub in /nix/.rw-store/store (a directory or a regular
+#     file; a symlink is copied), hidden from mnttab (-m);
+#   * one lofs of /nix/.rw-store/store over /nix/store.
+# New store paths are created in the tmpfs; the media's paths stay read-only and
+# cost no extra RAM. /nix/var (the store DB, profiles) and /root (~/.cache/nix)
+# are copied into the tmpfs and lofs-mounted back, because the ramdisk root has
+# only its fixed slack free.
+# If any step fails the store stays the ramdisk's, as on earlier media.
+PATH=/usr/sbin:/usr/bin:/sbin; export PATH
+RW=/nix/.rw-store
+say() { echo "solnix-live-store: $*"; }
+[ -d "$RW" ] || { say "no $RW on this root; /nix/store stays on the ramdisk"; exit 0; }
+mount -F tmpfs -o size=50%,mode=0755 swap "$RW" || { say "tmpfs mount on $RW failed; /nix/store stays on the ramdisk"; exit 0; }
+mkdir "$RW/store" "$RW/var" "$RW/root" || { say "mkdir in $RW failed"; exit 0; }
+
+n=0; bad=0
+for e in $(ls -A /nix/store); do
+  p=/nix/store/$e; u=$RW/store/$e; n=$((n+1))
+  # .links (auto-optimise-store's hard-link pool) must be on the same fs as new
+  # paths, or every write fails EXDEV: a fresh tmpfs directory, no lower (measured).
+  if [ "$e" = .links ]; then mkdir "$u" || bad=$((bad+1))
+  elif [ -h "$p" ]; then ln -s "$(ls -ld "$p" | sed 's/.* -> //')" "$u" || bad=$((bad+1))
+  elif [ -d "$p" ]; then { mkdir "$u" && mount -F lofs -m -o ro "$p" "$u"; } || bad=$((bad+1))
+  elif [ -f "$p" ]; then { : > "$u" && mount -F lofs -m -o ro "$p" "$u"; } || bad=$((bad+1))
+  else say "skipping $p (not a file, directory or symlink)"; bad=$((bad+1))
+  fi
+done
+# a half-built union would hide store paths the running system needs
+[ "$bad" = 0 ] || { say "$bad of $n store entries failed; /nix/store stays on the ramdisk"; exit 0; }
+# -O: this shell and its tools run from /nix/store, so the directory is busy
+mount -F lofs -O "$RW/store" /nix/store || { say "lofs over /nix/store failed; /nix/store stays on the ramdisk"; exit 0; }
+
+# copy, then mount the copy back over the original (tar E: symlink targets longer than 100 bytes; p: owners and modes)
+inram() {
+  { ( cd "$1" && tar cEf - . ) | ( cd "$2" && tar xpf - ); } 2>/dev/null \
+    && mount -F lofs "$2" "$1" || say "$1 stays on the ramdisk (copy or mount failed)"
+}
+inram /nix/var "$RW/var"
+inram /root "$RW/root"
+say "/nix/store: $n ramdisk paths (read-only) + new paths in RAM ($(df -k "$RW" | awk 'NR==2{printf "%d MB", $2/1024}') tmpfs); /nix/var and /root in RAM"
+exit 0

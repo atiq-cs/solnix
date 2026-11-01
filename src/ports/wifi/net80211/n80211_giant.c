@@ -722,13 +722,18 @@ timeout_pending(struct timeout *to)
 
 /*
  * loadfirmware(name): OpenBSD reads /etc/firmware/<name>. Here it is
- * firmware_open("iwm", name) -> /kernel/firmware/iwm/<name> (os/firmload.c:86
- * builds "firmware/%s/%s" and searches the module path). File IO sleeps for
+ * firmware_open(N80211_FW_MODULE, name) -> /kernel/firmware/<module>/<name>
+ * (os/firmload.c:86 builds "firmware/%s/%s" and searches the module path);
+ * the driver's build sets the module name (iwm, iwx). File IO sleeps for
  * real, so giant is dropped around it -- the same window OpenBSD's VFS read
  * opens, since the caller then waits on fw_status (if_iwm.c:710-711).
  * The buffer is a malloc(9)-style kmem allocation because iwm_fw_info_free
  * releases it with free(fw_rawdata, M_DEVBUF, fw_rawsize) (if_iwm.c:673).
  */
+#ifndef N80211_FW_MODULE
+#define N80211_FW_MODULE	"iwm"
+#endif
+
 int
 loadfirmware(const char *name, uint8_t **bufp, size_t *lenp)
 {
@@ -740,7 +745,7 @@ loadfirmware(const char *name, uint8_t **bufp, size_t *lenp)
 
 	if (held)
 		mutex_exit(&n80211_giant);
-	err = firmware_open("iwm", name, &fh);
+	err = firmware_open(N80211_FW_MODULE, name, &fh);
 	if (err == 0) {
 		size = firmware_get_size(fh);
 		if (size <= 0 || size > 16 * 1024 * 1024) {

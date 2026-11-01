@@ -46,6 +46,9 @@ let
     ${concatStringsSep "\n" (mapAttrsToList (name: svc:
       "  <service name='${svc.category}/${name}' version='1' type='service'><instance name='${svc.instance}' enabled='${if svc.enable then "true" else "false"}'/></service>")
       config.smf.services)}
+    ${concatStringsSep "\n" (map (f:
+      "  <service name='${f}' version='1' type='service'><instance name='default' enabled='true'/></service>")
+      config.solnix.defaults.enableStockServices)}
       <service name="network/location" version="1" type="service"><instance name="default" enabled="true"/></service>
       <service name="network/smtp" version="1" type="service"><instance name="sendmail" enabled="false"/></service>
       <service name="network/sendmail-client" version="1" type="service"><instance name="default" enabled="false"/></service>
@@ -61,7 +64,33 @@ let
       <service name="network/ssh" version="1" type="service"><instance name="default" enabled="false"/></service>
       <service name="system/power" version="1" type="service"><instance name="default" enabled="${if config.solnix.powerManagement.enable then "true" else "false"}"/></service>
       <service name="system/update-man-index" version="1" type="service"><instance name="default" enabled="false"/></service>
+      <!-- A host, not a router (NixOS runs no routing daemon unless asked). net-routing-setup turns IPv4 routing
+           (in.routed, RIP) ON when it finds no default route at boot (always the case when the lease comes late, as
+           on a USB NIC), and then accepts routes any RIP speaker on the LAN advertises. Measured on lixi: a second
+           default via 192.168.1.5, 50% loss and duplicates. ipv4-routing-set=true records an admin choice, so
+           routing-setup keeps routing OFF (what `routeadm -d ipv4-routing` persists). -->
+      <service name="network/routing-setup" version="1" type="service">
+        <instance name="default" enabled="true">
+          <property_group name="routeadm" type="framework">
+            <propval name="ipv4-routing-set" type="boolean" value="true"/>
+            <propval name="default-ipv4-routing" type="boolean" value="false"/>
+          </property_group>
+        </instance>
+      </service>
+      <service name="network/routing/route" version="1" type="service"><instance name="default" enabled="false"/></service>
     </service_bundle>
+  '';
+
+  # /etc/svc/profile/generic.xml: the gate's generic_limited_net.xml with system/keymap NOT enabled. The stock profile
+  # enables keymap and the site profile disables it; on first boot manifest-import applies both and svc.startd starts
+  # keymap in between, then stops it in the same second single-user comes up, which strands console-login behind
+  # sulogin (amix86b; dpimg3: 7/11 fresh EC2 launches, a reboot clears it). Owning generic.xml (NixOS: the system owns unit enablement) keeps keymap
+  # disabled from early import on: no enable, no flip. Dropping the site-profile disable instead started keymap at early
+  # import, before devfsadm links /dev/openprom on the reconfigure boot -> maintenance (amix86b).
+  genericProfile = pkgs.runCommand "solnix-generic.xml" { } ''
+    s=${pkgs.solnix.stock}/etc/svc/profile/generic_limited_net.xml
+    awk '/<service name=.system\/keymap./{k=1} /<\/service>/{k=0} k && /<instance name=.default. enabled=.true.\/>/{sub(/true/,"false"); n++} {print} END{exit n!=1}' \
+      $s > $out || { echo "FATAL: $s has no single enabled system/keymap instance" >&2; exit 1; }
   '';
 
   # The SMF activation script (design-smf-init §3.1). Runs ON-TARGET (svc.startd/
@@ -459,6 +488,7 @@ let
   #   defaultrouter   <- networking.defaultGateway
   #   passwd/group    <- users.users / users.groups
   #   shadow          <- users.users.*.hashedPassword (0400, root-only)
+  #   ssh/authorized_keys.d/<user> <- users.users.*.openssh.authorizedKeys.keys
   # networking.generatedEtc / users.generatedEtc are the internal carriers the
   # config-surface modules populate; folded in here so the toplevel /etc is a
   # pure function of the options, not hardcoded. shell-environment + nix add
@@ -481,19 +511,14 @@ let
     mkdir -p $out/etc/ssl/certs
     ln -s ${pkgs.solnix.nixChain.cacert}/etc/ssl/certs/ca-bundle.crt $out/etc/ssl/certs/ca-certificates.crt
     ln -s ${pkgs.solnix.nixChain.cacert}/etc/ssl/certs/ca-bundle.crt $out/etc/ssl/certs/ca-bundle.crt
+    # The from-source openssl's OPENSSLDIR is /etc/openssl (base-src.nix), so its default
+    # verify file is /etc/openssl/cert.pem: without it wget fails "cannot verify certificate"
+    # (measured on the 26.11 DP AMI: wget rc 5 while curl and fetch, which name the bundle,
+    # succeed). nixpkgs' openssl uses /etc/ssl and NixOS fills it from cacert; same bundle here.
+    mkdir -p $out/etc/openssl
+    ln -s ${pkgs.solnix.nixChain.cacert}/etc/ssl/certs/ca-bundle.crt $out/etc/openssl/cert.pem
     # /etc/shadow must be root-only (0400) or login refuses it.
     [ -e $out/etc/shadow ] && chmod 0400 $out/etc/shadow || true
-  '';
-
-  # users.users.*.openssh.authorizedKeys seed script (T2.9): a store-path shell
-  # snippet make-be sources to write each user's authorized_keys under $ROOT.
-  # Driven by the users module option, not a hand-written ROOT_AUTHKEY copy.
-  authKeysSetupScript = pkgs.writeScript "solnix-seed-authorized-keys" ''
-    #!/usr/bin/env bash
-    # solnix authorized_keys seed (T2.9). ROOT = the BE root (default /).
-    set -eu
-    ROOT="''${ROOT:-/}"
-    ${config.users.authorizedKeysSetup or ""}
   '';
 
   # THE TOPLEVEL — the derivation whose closure is the bootable world.
@@ -551,6 +576,9 @@ let
     ln -s ${pkgs.solnix.early}   $out/early
     ln -s ${driversDb}           $out/drivers
     ln -s ${pkgs.solnix.stock}   $out/stock
+    ${lib.optionalString (config.system.zoneBrands != { }) "mkdir -p $out/brand"}
+    ${concatStringsSep "\n    " (mapAttrsToList (n: d: "ln -s ${d} $out/brand/${n}") config.system.zoneBrands)}
+    ${lib.optionalString config.solnix.perl5Mediator.enable "ln -s ${pkgs.solnix.perl}/bin $out/perl5-bin"}
     # sw: the composed userland profile (environment.systemPackages via buildEnv)
     # -> /run/current-system/sw. SEPARATE from systemPath so a broken package set
     # can't drop the kernel (design §B). shell-environment puts sw/bin first on PATH.
@@ -558,12 +586,14 @@ let
     ln -s ${config.system.build.smfManifests}/manifest/solnix $out/manifest/solnix 2>/dev/null || \
       { mkdir -p $out/manifest; ln -s ${config.system.build.smfManifests}/manifest/solnix $out/manifest/solnix; }
     ln -s ${activate}                                 $out/activate
+    # svccfg apply of a profile that is not well-formed XML fails the WHOLE profile at boot, with only a warning in
+    # manifest-import's log: every enable/disable in it is lost (2026-10-29: a "--" in a comment left hal, sendmail and
+    # ssh enabled on the DP image). Fail the build instead.
+    ${pkgs.solnix.libxml2}/bin/xmllint --noout ${siteProfile} || { echo "FATAL: ${siteProfile} is not well-formed XML" >&2; exit 1; }
     ln -s ${siteProfile}                              $out/site-profile.xml
+    ${pkgs.solnix.libxml2}/bin/xmllint --noout ${genericProfile} || { echo "FATAL: ${genericProfile} is not well-formed XML" >&2; exit 1; }
+    ln -s ${genericProfile}                           $out/generic-profile.xml
     ln -s ${etc}/etc                                  $out/etc
-    # users.users.*.openssh.authorizedKeys seed script (T2.9). make-be runs it
-    # against the BE root ($ROOT) to seed ~/.ssh/authorized_keys per user, from
-    # the OPTIONS (replacing the ad-hoc ROOT_AUTHKEY path).
-    ln -s ${authKeysSetupScript}                      $out/seed-authorized-keys
     # bin/: the switch-to-configuration + solnix-rebuild runtime tools (T2.5).
     mkdir -p $out/bin
     ln -s ${switchToConfiguration}                    $out/bin/switch-to-configuration
@@ -615,6 +645,28 @@ in
       runtime references (they are present on purpose). When false (the default,
       for minimal/production images), the gate still FATALs if the 219 MB build-only
       gate proto or the from-source compiler leaks into the runtime closure.
+    '';
+  };
+
+  # The IPS perl mediator (/usr/perl5/bin), which the gate's perl scripts (lpstat, print-service, projadd, ...) name in
+  # their #! line. install-be links it to this perl when set (install-be.sh, after usr/bin).
+  options.solnix.perl5Mediator.enable = mkOption {
+    type = types.bool;
+    default = false;
+    description = ''
+      Provide /usr/perl5/bin (pkgs.solnix.perl 5.42, the version the gate's perl modules are built for) so the
+      base system's perl scripts run: lp/lpstat/cancel/lpadmin (print-service), projadd/projmod, arcstat, ... Without it
+      they fail "required file not found". Adds perl (~50 MB) to the closure.
+    '';
+  };
+
+  options.system.zoneBrands = mkOption {
+    type = types.attrsOf types.path;
+    default = { };
+    description = ''
+      Extra zone brands: name -> a directory holding config.xml + platform.xml. install-be
+      links each one into the BE's /usr/lib/brand beside the userland's brands (libbrand reads
+      only /usr/lib/brand: BRAND_DIR is compile-time).
     '';
   };
 
@@ -681,16 +733,11 @@ in
       type = types.package;
       description = "The solnix-install tool (nixos-install analog; install to a blank disk).";
     };
-    seedAuthorizedKeys = mkOption {
-      type = types.package;
-      description = "The users.users.*.openssh.authorizedKeys seed script (T2.9).";
-    };
   };
 
   config.system.build = {
     inherit toplevel activate etc switchToConfiguration solnixRebuild solnixInstall;
     smfSiteProfile = siteProfile;
-    seedAuthorizedKeys = authKeysSetupScript;
   };
 
   # solnix-rebuild on PATH, as NixOS puts nixos-rebuild in system.path. The script

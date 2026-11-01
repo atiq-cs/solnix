@@ -144,6 +144,7 @@ i915_il_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	    I915_IL_MINOR(inst, I915_IL_RENDER, 0), DDI_NT_DISPLAY_DRM, 0) !=
 	    DDI_SUCCESS)
 		goto fail_minor;
+	obsd_dmabuf_register(dip, ddi_driver_major(dip), inst);
 	cmn_err(CE_CONT, "?i915%d: %s gen%u gt%u, console on gfxp_fb; "
 	    "OpenBSD inteldrm attach on first open\n", inst, id->platform,
 	    id->gen, id->gt);
@@ -320,10 +321,12 @@ i915_il_open(dev_t *devp, int flag, int otyp, cred_t *cr)
 
 	if (il == NULL || otyp != OTYP_CHR)
 		return (ENXIO);
-	if (I915_IL_CLONE(m) != 0)
+	if (I915_IL_CLONE(m) != 0 && I915_IL_KIND(m) != I915_IL_DMABUF)
 		return (ENXIO);		/* clones are never opened by name */
 	if (I915_IL_KIND(m) == I915_IL_TEXT)
 		return (gfxp_fb_open(devp, flag, otyp, cr, il->il_gfxp));
+	if (I915_IL_KIND(m) == I915_IL_DMABUF)	/* only fdinsert opens these */
+		return (i915_glue_dmabuf_open(I915_IL_CLONE(m)));
 	if (I915_IL_KIND(m) != I915_IL_CARD && I915_IL_KIND(m) != I915_IL_RENDER)
 		return (ENXIO);
 
@@ -362,6 +365,10 @@ i915_il_close(dev_t dev, int flag, int otyp, cred_t *cr)
 		return (ENXIO);
 	if (I915_IL_KIND(m) == I915_IL_TEXT)
 		return (gfxp_fb_close(dev, flag, otyp, cr, il->il_gfxp));
+	if (I915_IL_KIND(m) == I915_IL_DMABUF) {
+		i915_glue_dmabuf_close(I915_IL_CLONE(m));
+		return (0);
+	}
 	if (I915_IL_CLONE(m) == 0 || il->il_drm_state <= 0)
 		return (0);
 	odev = i915_il_odev(il, dev);
@@ -382,7 +389,8 @@ i915_il_drmfile(dev_t dev)
 
 	if (il == NULL || il->il_drm_state <= 0 ||
 	    I915_IL_CLONE(getminor(dev)) == 0 ||
-	    I915_IL_KIND(getminor(dev)) == I915_IL_TEXT)
+	    I915_IL_KIND(getminor(dev)) == I915_IL_TEXT ||
+	    I915_IL_KIND(getminor(dev)) == I915_IL_DMABUF)
 		return (NULL);
 	return (il);
 }
@@ -405,6 +413,12 @@ i915_il_chpoll(dev_t dev, short events, int anyyet, short *reventsp,
 {
 	struct i915_il *il = i915_il_drmfile(dev);
 
+	if (I915_IL_KIND(getminor(dev)) == I915_IL_DMABUF) {
+		/* MAP: implicit fences are not waited for; always ready */
+		(void) anyyet; (void) phpp;
+		*reventsp = events & (POLLIN | POLLRDNORM | POLLOUT | POLLWRNORM);
+		return (0);
+	}
 	if (il == NULL)
 		return (ENXIO);
 	return (i915_glue_chpoll(i915_il_odev(il, dev), events, anyyet,
@@ -434,6 +448,13 @@ i915_il_ioctl(dev_t dev, int cmd, intptr_t arg, int mode, cred_t *cr,
 	if (I915_IL_KIND(getminor(dev)) == I915_IL_TEXT)
 		return (gfxp_fb_ioctl(dev, cmd, arg, mode, cr, rval,
 		    il->il_gfxp));
+	if (I915_IL_KIND(getminor(dev)) == I915_IL_DMABUF) {
+		/* MAP: DMA_BUF_IOCTL_SYNC is a no-op (WB maps on LLC are
+		 * coherent); every other dma-buf ioctl is ENOTTY */
+		*rval = 0;
+		return (I915_LIOC_TYPE((uint32_t)cmd) == 'b' &&
+		    ((uint32_t)cmd & 0xffu) == 0 ? 0 : ENOTTY);
+	}
 	if (i915_il_drmfile(dev) == NULL)
 		return (ENXIO);
 	if (i915_ioc_xlate((uint32_t)cmd, &x) != 0)
@@ -538,6 +559,12 @@ static ddi_device_acc_attr_t i915_il_wc_attr = {
 	.devacc_attr_dataorder = DDI_MERGING_OK_ACC,	/* write-combining */
 };
 
+static ddi_device_acc_attr_t i915_il_wb_attr = {
+	.devacc_attr_version = DDI_DEVICE_ATTR_V0,
+	.devacc_attr_endian_flags = DDI_NEVERSWAP_ACC,
+	.devacc_attr_dataorder = DDI_STORECACHING_OK_ACC,	/* write-back */
+};
+
 static int
 i915_il_devmap(dev_t dev, devmap_cookie_t dhp, offset_t off, size_t len,
     size_t *maplen, uint_t model)
@@ -547,17 +574,26 @@ i915_il_devmap(dev_t dev, devmap_cookie_t dhp, offset_t off, size_t len,
 	devmap_handle_t *h = (devmap_handle_t *)dhp;
 	void *kva, *obj;
 	size_t size;
-	int ro, err;
+	int ro, wb = 0, err;
 
 	if (il == NULL)
 		return (ENXIO);
 	if (I915_IL_KIND(getminor(dev)) == I915_IL_TEXT)
 		return (gfxp_fb_devmap(dev, dhp, off, len, maplen, model,
 		    il->il_gfxp));
-	if (i915_il_drmfile(dev) == NULL)
+	if (I915_IL_KIND(getminor(dev)) == I915_IL_DMABUF) {
+		/* a dma-buf fd maps its object from offset 0 */
+		if (off != 0)
+			return (EINVAL);
+		ro = 0;
+		err = i915_glue_dmabuf_map(I915_IL_CLONE(getminor(dev)),
+		    &kva, &size, &wb, &obj);
+	} else if (i915_il_drmfile(dev) == NULL) {
 		return (ENXIO);
-	err = i915_glue_dumb_map(i915_il_odev(il, dev), (uint64_t)off, len,
-	    &kva, &size, &ro, &obj);
+	} else {
+		err = i915_glue_dumb_map(i915_il_odev(il, dev), (uint64_t)off,
+		    len, &kva, &size, &ro, &wb, &obj);
+	}
 	if (err != 0)
 		return (err);
 	if (len > size) {
@@ -573,7 +609,7 @@ i915_il_devmap(dev_t dev, devmap_cookie_t dhp, offset_t off, size_t len,
 	 * drm offset the mmap used */
 	err = gfxp_devmap_umem_setup(dhp, il->il_dip, &i915_il_dm_ops,
 	    mp->m_cookie, 0, len, ro ? PROT_READ | PROT_USER : PROT_ALL,
-	    0, &i915_il_wc_attr);
+	    0, wb ? &i915_il_wb_attr : &i915_il_wc_attr);
 	if (err != 0) {
 		gfxp_umem_cookie_destroy(mp->m_cookie);
 		i915_glue_dumb_unmap(obj);
@@ -591,6 +627,25 @@ i915_il_devmap(dev_t dev, devmap_cookie_t dhp, offset_t off, size_t len,
 	return (0);
 }
 
+/*
+ * prop_op(9E): specfs sizes a character device from its "Size" property
+ * (spec_size), which is what lseek(fd, 0, SEEK_END) on a dma-buf fd returns:
+ * Mesa (iris_bo_import_dmabuf, anv) reads the object size that way.
+ */
+static int
+i915_il_prop_op(dev_t dev, dev_info_t *dip, ddi_prop_op_t op, int flags,
+    char *name, caddr_t valuep, int *lengthp)
+{
+	int64_t sz;
+
+	if (dev != DDI_DEV_T_ANY && dev != DDI_DEV_T_NONE &&
+	    I915_IL_KIND(getminor(dev)) == I915_IL_DMABUF &&
+	    (sz = i915_glue_dmabuf_size(I915_IL_CLONE(getminor(dev)))) >= 0)
+		return (ddi_prop_op_size(dev, dip, op, flags, name, valuep,
+		    lengthp, (uint64_t)sz));
+	return (ddi_prop_op(dev, dip, op, flags, name, valuep, lengthp));
+}
+
 static struct cb_ops i915_il_cb_ops = {
 	.cb_open = i915_il_open,
 	.cb_close = i915_il_close,
@@ -604,7 +659,7 @@ static struct cb_ops i915_il_cb_ops = {
 	.cb_mmap = nodev,
 	.cb_segmap = ddi_devmap_segmap,
 	.cb_chpoll = i915_il_chpoll,
-	.cb_prop_op = ddi_prop_op,
+	.cb_prop_op = i915_il_prop_op,
 	.cb_str = NULL,
 	.cb_flag = D_NEW | D_MP | D_64BIT | D_DEVMAP,
 	.cb_rev = CB_REV,
@@ -632,7 +687,7 @@ char _depends_on[] = "misc/gfx_private";
 
 static struct modldrv i915_il_modldrv = {
 	&mod_driverops,
-	"i915 (OpenBSD inteldrm, Gen9)",
+	"i915 (inteldrm Gen9, ADL-P)",
 	&i915_il_dev_ops,
 };
 

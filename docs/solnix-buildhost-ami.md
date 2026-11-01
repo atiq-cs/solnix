@@ -20,6 +20,15 @@ the ~1h OpenIndiana 2025->2026 pkg-update + toolchain-install tax.
   baked key within a minute, ena0 DHCP, new host keys, cache.solnix.io 200; (2) nix-builds a flake
   from a clean git archive -- packages.x86_64-solaris.bash RC=0 (warm), and .less built ncurses +
   less from source RC=0 (ppsm8crr...-less-679, deriver resolves).
+- GOTCHA (solnix-pkgs fork stdenv only, not the solnix flake): `pkg install library/mpfr` BEFORE
+  the first fork build. The seed's GNU tools carry RUNPATH /usr/gcc/14/lib/amd64 because
+  unpack-seed.sh's $ORIGIN rewrite never ran (its bundled elfedit is ELFCLASS32 and failed
+  silently), so the gawk slice loads libmpfr.so.6 from the HOST; without it awk dies and
+  substituteAll writes literal @var@ into outputs that register as valid (poisoned, and
+  nix-store --delete cannot remove them here). Measured 2026-10-27 on ami-0c3f16422f8943a8b:
+  no mpfr -> 'libmpfr.so.6: open failed'; with it the fork stdenv builds. The cause is fixed
+  in /scratch/solnix/cosmic2/solnix-pkgs-unpack-seed.diff (host elfedit, fail loudly, RUNPATH
+  proof); once that lands the prerequisite goes away. Keep it until then.
 - GOTCHA: ftp.gnu.org times out from EC2 us-east-2, and the GNU sources in pkgs/ point there.
   Prefetch the same tarballs from mirrors.kernel.org/gnu into the store first (identical hashes,
   so identical store paths): scripts/gnu-mirror-prefetch.sh, run from the source tree.
@@ -95,7 +104,27 @@ nix store optimise, then create-image a new solnix-buildhost-2026-<date>; update
 
 The build-host story has been corrected several times; the honest current state:
 
-### aarch64 cross-build host -- READY (boot-verified both ways)
+### aarch64 cross-build host -- REBUILT 2026-10-22 (boot-verified: network + bldenv unix build)
+- id: **ami-0de86d0e2f52c0fed** (solnix-arm64-buildhost-20261022, us-east-2 kiwi 505435643998,
+  x86_64, key solnix-baked, Project=solnix); snaps snap-0832682ded96f50db (20G root),
+  snap-074e9735626a895cc (120G bpool: /aarch64 + /build).
+- base ami-02365f53edd7fd297 + bison/illumos-closed/mpc/mpfr/python-313/xml-parser/astdev;
+  harness 43502da, gate 6cd2521c1e + base stack + ecam fix/diag; cross gcc 14.3.0 from the R2 seed;
+  sysroot = seed + an OmniOS braich aarch64 pkg image overlay (the seed has no python3.13 headers,
+  and bldenv refuses without them). bpool is imported at boot by site/aa64-bpool
+  (`zpool import -d /dev/dsk`), because a fresh launch gets new volume ids and the cached path FAULTs.
+- fresh launch (i-06b59fdf5e7debcf7) verified: ena0 DHCP, cache.solnix.io 200, new host keys, bpool
+  ONLINE, cross gcc -> aarch64 ET_REL, `bldenv -d -t -T aarch64` relinked `unix` (UTS_RC=0, new sha).
+  Use the GATE's `usr/src/tools/scripts/bldenv`; `/opt/onbld/bin/bldenv` has no `-T`.
+- known gap: a userland LINK with the seed's `build/cross/opt/onbld/bin/amd64/ld` fails
+  ("unsupported ELF machine type: EM_AARCH64", it loads the host libld). Pointing it at the gate-built
+  `usr/src/tools/proto/root_i386-nd/opt/onbld/bin/amd64/ld` links an aarch64 ET_EXEC. The kernel
+  build is unaffected because cw already uses the tools-proto ld.
+- banked off-account: floki `~/solnix-bank/toolchain/arm64-buildhost-20261021/` (zfs send streams
+  root-be c7b6ad3c..., bpool-aarch64 14441503..., bpool-build 667c494d...; read back and compared, MANIFEST
+  has the restore steps).
+
+### aarch64 cross-build host -- (HISTORY, died with kiwi 830118047484) READY (boot-verified both ways)
 - id: **ami-06583907ca11a0ab1** (solnix-arm64-buildhost-20261013, us-east-2 kiwi,
   x86_64 host that CROSS-builds aarch64, key solnix-baked, Project=solnix)
 - clean-baked (scrub instance state -> stop -> create-image) and BOOT-VERIFIED on a

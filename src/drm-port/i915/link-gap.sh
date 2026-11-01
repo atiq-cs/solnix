@@ -8,11 +8,14 @@
 # Usage: link-gap.sh OBSD_DRM_DIR COMPAT_DIR OUT_DIR FILES_TXT
 #   env: GATE_INC, JOBS (4), XFLAGS, CC, NM (gnm).
 set -u
+# KROOT: root of the target kernel tree (default the running one, /).
+: "${KROOT:=}"
 obsd=$1 compat=$2 out=$3 files=$4
 : "${GATE_INC:=/nix/store/s7zkx8nx5sfxixmyqmlnrybrrh14jkmb-illumos-gate-proto/usr/include}"
 : "${JOBS:=4}" "${XFLAGS:=}" "${CC:=gcc}" "${NM:=gnm}"
 mkdir -p "$out/obj"
-F="-m64 -mcmodel=kernel -mno-red-zone -D_KERNEL -ffreestanding -nostdinc -std=gnu11 \
+# -mno-mmx -mno-sse: the gate kernel's NO_SIMD, as build-module.sh.
+F="-m64 -mcmodel=kernel -mno-red-zone -mno-mmx -mno-sse -D_KERNEL -ffreestanding -nostdinc -std=gnu11 \
  -O2 -fno-strict-aliasing $XFLAGS -include $compat/obsd_prelude.h -I$compat \
  -I$obsd/include -I$obsd/include/uapi -I$obsd -I$obsd/i915 -I$GATE_INC"
 cd "$obsd" || exit 1
@@ -24,7 +27,7 @@ for f in $(cat "$files"); do
 done
 wait
 ok=$(ls "$out"/obj/*.o 2>/dev/null | wc -l)
-for k in /platform/i86pc/kernel/amd64/unix /kernel/amd64/genunix; do
+for k in $KROOT/platform/i86pc/kernel/amd64/unix $KROOT/kernel/amd64/genunix; do
 	$NM -g --defined-only "$k" | awk '{print $3}'
 done | sort -u > "$out/kernel.txt"
 # every compat-layer kernel object (obsd_kern.o, obsd_time.o, ...)

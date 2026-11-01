@@ -344,6 +344,17 @@ closure_contract_checks() {
   if find "$R/root" "$R/etc/ssh" -name 'authorized_keys*' -size +0 2>/dev/null | grep -q .; then
     _fail "an authorized_keys file is baked into the media"
   else _ok "no authorized_keys baked into the media"; fi
+  # 7b. nix's build-users-group has members and every member is in passwd (the 26.11
+  #     DP AMI's identity scrub stripped nixbld1..32, uid 30001.., and left the group).
+  local _bug _bmiss
+  _bug=$(sed -n 's/^[[:space:]]*build-users-group[[:space:]]*=[[:space:]]*\([^[:space:]]*\).*/\1/p' "$R/etc/nix/nix.conf" 2>/dev/null | tail -1)
+  if [ -n "$_bug" ]; then
+    _bmiss=$(awk -F: -v g="$_bug" 'FILENAME~/passwd$/{u[$1]=1; next} $1==g{n=split($4,m,","); if(!n) print "(no members)"; for(i=1;i<=n;i++) if(!(m[i] in u)) print m[i]}' \
+      "$R/etc/passwd" "$R/etc/group" 2>/dev/null | head -3)
+    grep -q "^$_bug:" "$R/etc/group" 2>/dev/null || _bmiss="(no group $_bug)"
+    if [ -z "$_bmiss" ]; then _ok "nix build-users-group $_bug: every member is in passwd"
+    else _fail "nix build users missing: build-users-group $_bug, not in passwd: $(echo $_bmiss)"; fi
+  fi
   # 8. a TLS trust store at the names curl/git/openssl look for (NixOS security/ca.nix),
   #    resolving into the media's store. Without it the media's curl failed every HTTPS
   #    fetch with rc 77 and the installer reported "network is NOT up" (X1, closure1).
@@ -417,6 +428,25 @@ closure_contract_checks() {
     *devices/pseudo/sad@0:admin) _ok "/dev/sad/admin exists for inittab's autopush (console line discipline)" ;;
     *) _fail "no /dev/sad/admin: autopush configures nothing and the boot console staircases" ;;
   esac
+  # 10a. ...and autopush is the FIRST sysinit line: autopush applies only to a
+  #      stream built after it ran, and any earlier sysinit line opens the console
+  #      (a </dev/console or >/dev/msglog redirect), building its stream without
+  #      ldterm for the whole boot. The installed BE's nx::/vr:: lines are added
+  #      by install-be at install time, not on the media.
+  _first=$(grep -E '^[^#:]*:[^:]*:sysinit:' "$R/etc/inittab" 2>/dev/null | head -1 | cut -d: -f1)
+  if [ "$_first" = ap ]; then _ok "inittab runs autopush first (the console gets ldterm)"
+  else _fail "inittab's first sysinit line is '${_first:-none}', not ap: the console is opened before autopush and staircases"; fi
+  # 15. the live store is writable in RAM (docs/design-live-nix-store.md): with the
+  #     ramdisk's fixed slack (~45 MB) as the only writable store, `nix shell
+  #     nixpkgs#...` and the registry fetch died "No space left on device" (measured
+  #     on the 1c9b149 media). inittab must run live-store after vol:: and before
+  #     svc.startd, the script must be in the media's store, and /nix/.rw-store must exist.
+  local _sys _ls
+  _sys=$(grep -E '^[^#:]*:[^:]*:sysinit:' "$R/etc/inittab" 2>/dev/null | head -3 | cut -d: -f1 | tr '\n' ' ')
+  _ls=$(grep '^ls::sysinit:' "$R/etc/inittab" 2>/dev/null | sed -n 's,.*/sbin/sh \(/nix/store/[^ ]*\) .*,\1,p')
+  if [ "$_sys" = "ap vol ls " ] && [ -n "$_ls" ] && _inr "$R" "$_ls" >/dev/null && [ -d "$R/nix/.rw-store" ] && [ ! -h "$R/nix/.rw-store" ]; then
+    _ok "inittab mounts the RAM store (ls:: after ap, vol; $(basename "$_ls") in the media's store; /nix/.rw-store present)"
+  else _fail "no RAM store for nix: sysinit order '${_sys}' (want 'ap vol ls '), live-store '${_ls:-none}', /nix/.rw-store $([ -d "$R/nix/.rw-store" ] && echo present || echo missing)"; fi
   [ "${MODE:-}" = selftest ] || https_check "$R"
 }
 
@@ -620,6 +650,8 @@ selftest() {
   mkdir -p "$T/usr/bin"; printf '\177ELF\002\001\001' > "$T/usr/bin/ls"
   printf 'trusted-public-keys = cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk=\nsubstituters = https://cache.nixos.org\n' >> "$T/etc/nix/nix.conf"
   echo 'jdoe:x:1000:10::/home/jdoe:/bin/sh' > "$T/etc/passwd"
+  # the staircase-console defect: a sysinit line that opens the console ahead of autopush
+  printf 'vol::sysinit:/sbin/mount -F tmpfs swap /system/volatile </dev/console\nap::sysinit:/sbin/autopush -f /etc/iu.ap\n' > "$T/etc/inittab"
   # install tools: the defective root has no /run/current-system and no /root/README,
   # so every README tool and the README itself must FAIL (one per tool + 1).
   local ib=$FAIL; install_tools_check "$T" >/dev/null 2>&1
@@ -635,6 +667,12 @@ selftest() {
   cbefore=$FAIL; _cao=$( closure_contract_checks "$T" 2>&1 ); echo "$_cao" | grep -q 'no /etc/ssl/certs/ca-certificates.crt resolving' \
     && echo "  CA-store check fires on a root with no /etc/ssl/certs/ca-certificates.crt" \
     || { echo "  FAIL: CA-store check did not fire on a root without the bundle"; return 1; }
+  echo "$_cao" | grep -q "first sysinit line is 'vol', not ap" \
+    && echo "  autopush-first check fires on an inittab with a sysinit line ahead of ap" \
+    || { echo "  FAIL: autopush-first check did not fire on vol:: ahead of ap::"; return 1; }
+  echo "$_cao" | grep -q "no RAM store for nix" \
+    && echo "  RAM-store check fires on a root without the ls:: line and /nix/.rw-store" \
+    || { echo "  FAIL: RAM-store check did not fire on a root without it"; return 1; }
   FAIL=$cbefore
   # and a GOOD closure root passes them all (positive control).
   local G="$WORK/good" TL=/nix/store/00000000000000000000000000000000-solnix-system-x
@@ -661,6 +699,8 @@ selftest() {
     > "$G/etc/svc/profile/site/solnix.xml"
   for _b in passwd su ping w crontab login; do : > "$G/run/wrappers/bin/$_b"; chmod 4555 "$G/run/wrappers/bin/$_b"; done
   ln -s ../../devices/pseudo/sad@0:admin "$G/dev/sad/admin"
+  printf 'ap::sysinit:/sbin/autopush -f /etc/iu.ap\nvol::sysinit:/sbin/mount -F tmpfs swap /system/volatile </dev/null\nls::sysinit:/sbin/sh /nix/store/33333333333333333333333333333333-solnix-live-store >/dev/msglog 2>&1 </dev/null\n' > "$G/etc/inittab"
+  : > "$G/nix/store/33333333333333333333333333333333-solnix-live-store"; mkdir -p "$G/nix/.rw-store"
   local gb=$FAIL; ACCEPT_ROOT_UID=$(id -u) closure_contract_checks "$G" > "$WORK/good.out" 2>&1 || true
   # the store-DB validity check needs a real store; on a fake root it may only SKIP or FAIL that one line
   local gfails; gfails=$(grep -c 'FAIL:' "$WORK/good.out"); grep 'FAIL:' "$WORK/good.out" | grep -v 'store DB' | sed 's/^/    good-root /'

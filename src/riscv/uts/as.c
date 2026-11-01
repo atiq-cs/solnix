@@ -36,6 +36,7 @@ extern void hat_as_walk_leaves(unsigned long root,
 extern void hat_as_freeuser(unsigned long root);
 extern unsigned long hat_as_va2pa(unsigned long root, unsigned long va);
 extern unsigned long hat_as_unmap(unsigned long root, unsigned long va);
+extern int hat_user_range_ok(unsigned long va, unsigned long len);
 
 /* vm_page.c */
 extern void page_free(unsigned long pa);
@@ -62,6 +63,7 @@ typedef struct as {
 	unsigned long	a_satp;		/* Sv39 satp for this AS */
 	unsigned long	a_npages;	/* user pages mapped */
 	unsigned long	a_brk;		/* current program break (heap top VA) */
+	unsigned long	a_brkbase;	/* initial break: brk may not go below */
 	unsigned long	a_mmap;		/* next free VA in the anon mmap arena */
 	/*
 	 * Freed anon extents, newest first, for reuse. A fixed array rather than
@@ -118,6 +120,7 @@ as_alloc(void)
 	as->a_satp = hat_as_satp(as->a_root);
 	as->a_npages = 0;
 	as->a_brk = 0;
+	as->a_brkbase = 0;
 	as->a_mmap = ANON_MMAP_BASE;
 	return (as);
 }
@@ -186,6 +189,10 @@ as_anon_map(as_t *as, unsigned long len)
 	end = va + len;
 	if (end < va)
 		return (0);		/* length overflowed the arena */
+	/* rvsrv: with GiBs of RAM page_alloc no longer fails first; stay below
+	 * the user stack (USTACK_TOP - 64 KiB in uproc.c) and inside slot 3. */
+	if (end > 0xfffff000UL - 16 * PAGESIZE || !hat_user_range_ok(va, len))
+		return (0);
 
 	for (p = va; p < end; p += PAGESIZE) {
 		unsigned long pa = page_alloc();	/* zeroed */
@@ -286,6 +293,9 @@ as_map(as_t *as, unsigned long va, unsigned long len, const void *data,
 	unsigned long end = (va + len + PAGESIZE - 1) & ~(PAGESIZE - 1);
 	unsigned long p;
 
+	/* rvsrv: an ELF segment must lie in a user slot, not on a kernel leaf. */
+	if (end < start || !hat_user_range_ok(start, end - start))
+		return (0);
 	for (p = start; p < end; p += PAGESIZE) {
 		unsigned long pa = page_alloc();	/* zeroed */
 		unsigned long off, n;
@@ -382,6 +392,7 @@ as_copy(as_t *src)
 		return (0);
 	}
 	c.dst->a_brk = src->a_brk;
+	c.dst->a_brkbase = src->a_brkbase;
 	c.dst->a_mmap = src->a_mmap;	/* the arena bump follows the AS */
 	return (c.dst);
 }
@@ -414,6 +425,7 @@ as_cow_copy(as_t *src)
 	shared = hat_as_cow_share(dst->a_root, src->a_root);
 	dst->a_npages = shared;
 	dst->a_brk = src->a_brk;
+	dst->a_brkbase = src->a_brkbase;
 	/*
 	 * The arena bump must be INHERITED, not reset: the child's anon mappings
 	 * are already present (COW-shared with the parent's), so restarting the
@@ -453,13 +465,15 @@ as_cow_fault(as_t *as, unsigned long va)
  * as_setbrk / as_grow — the heap (brk/sbrk) primitive. exec sets the initial
  * break just past the loaded image (via as_setbrk). as_grow moves the break to
  * `newbrk`, eagerly mapping fresh RW user pages for any newly covered page. A
- * shrink just lowers the recorded break (pages are not reclaimed until exit).
- * Returns the new break, or 0 on allocation failure.
+ * shrink unmaps and frees the pages wholly above the new break, as illumos
+ * brk_internal() does with as_unmap(). Returns the new break, or 0 on allocation
+ * failure or a break below the initial one.
  */
 void
 as_setbrk(as_t *as, unsigned long brk)
 {
 	as->a_brk = (brk + PAGESIZE - 1) & ~(PAGESIZE - 1);
+	as->a_brkbase = as->a_brk;
 }
 
 unsigned long
@@ -475,10 +489,37 @@ as_grow(as_t *as, unsigned long newbrk)
 	unsigned long newtop = (newbrk + PAGESIZE - 1) & ~(PAGESIZE - 1);
 	unsigned long p;
 
+	if (newbrk < as->a_brkbase)
+		return (0);	/* would unmap the program's own data/bss */
 	if (newbrk <= as->a_brk) {
-		as->a_brk = newbrk;		/* shrink: keep pages, lower brk */
+		/*
+		 * Shrink: unmap the pages above the new break. They used to stay
+		 * mapped while a_brk dropped, so the next grow hat_as_map()ed a
+		 * fresh page over each still-valid leaf without a TLB flush: the
+		 * process kept storing into the old page through its stale TLB
+		 * entry until the next sfence.vma (any context switch), then saw
+		 * the new zeroed page, and its heap came back corrupted. newlib's
+		 * free() trims the heap with sbrk(-n), so any program that frees
+		 * a large block and mallocs again hit it when it was preempted.
+		 * page_free() drops only this AS's share of a COW page.
+		 */
+		for (p = newtop; p < oldtop; p += PAGESIZE) {
+			unsigned long pa = hat_as_unmap(as->a_root, p);
+
+			if (pa != 0) {
+				page_free(pa);
+				if (as->a_npages > 0)
+					as->a_npages--;
+			}
+		}
+		/* brk is a syscall of the process whose AS is live on this hart */
+		__asm__ __volatile__("sfence.vma" ::: "memory");
+		as->a_brk = newbrk;
 		return (as->a_brk);
 	}
+	/* rvsrv: a brk past its user slot would map onto a kernel leaf. */
+	if (!hat_user_range_ok(oldtop, newtop - oldtop))
+		return (0);
 	for (p = oldtop; p < newtop; p += PAGESIZE) {
 		unsigned long pa = page_alloc();	/* zeroed */
 

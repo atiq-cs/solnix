@@ -31,7 +31,7 @@ ARTDIR="${ARTDIR:-/tmp/scanout}"
 RP64="${RP64:-../../riscv-port/rp64/kernel}"
 
 CFLAGS="-march=rv64imac_zicsr_zifencei -mabi=lp64 -mcmodel=medany \
-	-ffreestanding -nostdlib -fno-stack-protector -fno-pic \
+	-ffreestanding -nostdlib -fno-stack-protector -fno-pic -Iriscv64 \
 	-Wall -Wextra -O2 -g"
 
 # GPU_IDENTITY_MAP: the kernel's boot HAT identity-maps the 0x80000000 RAM
@@ -64,7 +64,7 @@ for src in locore.S trap.S swtch.S copy.S; do
 	KOBJS="$KOBJS $o"
 done
 for src in sbi trap hat_riscv timer plic aia fdt cmo vm_page kmem proc as elf \
-	   syscall uart sdhci uproc unixsock virtio vioblk blkfs vionet rootfs \
+	   syscall uart sdhci uproc unixsock virtio vioblk blkfs vionet viornd rootfs \
 	   fp port startup main; do
 	"$CC" $CFLAGS -c "$src.c" -o "$src.o"
 	KOBJS="$KOBJS $src.o"
@@ -76,6 +76,8 @@ echo "== compile the R-P64 scanout seam (virtio_gpu.c + fb.c) =="
 KOBJS="$KOBJS virtio_gpu.o fb.o"
 
 echo "== link (riscv.ld @ 0x80200000) =="
+. ./lwip-objs.sh		# rvsrv: inet.c needs lwIP; startup_root calls inet_init
+KOBJS="$KOBJS $LWIPOBJS"
 "$LD" -T riscv.ld -o "$OUT" $KOBJS
 echo "  $OUT: $(wc -c < "$OUT") bytes"
 "$OBJDUMP" -h "$OUT" | awk '/\.bss|\.text|\.data/ {print "   " $2, $3}'

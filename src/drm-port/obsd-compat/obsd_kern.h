@@ -665,8 +665,8 @@ extern void klist_free(struct klist *);
 /* ---- file descriptors. struct file here is OpenBSD's (the token is
  * renamed to obsd_file in obsd_prelude.h; illumos file_t stays intact).
  * drm_linux.c builds dma-buf and sync_file descriptors out of it with
- * fnew/fdinsert. Bodies PLANNED: the solnix C1c falloc + spec-vnode
- * mechanism (src/drm-port/src/drm_prime.c) is the illumos side. ---- */
+ * fnew/fdinsert. Bodies REAL in obsd_file.c: the solnix C1c falloc +
+ * spec-vnode mechanism (src/drm-port/src/drm_prime.c). ---- */
 /* declared before fileops: a tag first named inside a prototype would have
  * prototype scope and never match the real struct file */
 struct file;
@@ -707,6 +707,8 @@ extern struct file *fnew(struct proc *);
 #define FREF(fp)	atomic_inc_uint(&(fp)->f_count)
 extern int obsd_frele(struct file *, struct proc *);
 #define FRELE(fp, p)	obsd_frele((fp), (p))
+extern struct file *obsd_file_get(uint32_t);	/* slot -> file, FREF'd */
+extern void obsd_file_lastclose(uint32_t);	/* slot's close(9E) */
 
 /* ---- sysctl / misc ---- */
 extern char osrelease[];

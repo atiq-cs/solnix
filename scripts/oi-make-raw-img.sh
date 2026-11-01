@@ -28,6 +28,14 @@ SCRUB="${SCRUB:-/root/lib-core-scrub.sh}"
 
 die() { echo "FATAL: $*" >&2; exit 1; }
 log() { printf '\n=== %s ===\n' "$*" >&2; }
+# scrub_names <BE passwd> <toplevel passwd>: personal accounts to strip = uid>=1000,
+# not a system placeholder, and not declared by the toplevel. A missing toplevel
+# passwd declares nothing (strip all personal), never "strip nothing".
+scrub_names() {
+  awk -F: -v tl="$2" 'FILENAME==tl{decl[$1]=1; next}
+           ($3+0)>=1000 && $1!="nobody" && $1!="noaccess" && $1!="nobody4" && !($1 in decl){print $1}' \
+    $( [ -r "$2" ] && echo "$2" ) "$1"
+}
 
 [ "$(id -u)" = 0 ] || die "run as root"
 [ -d "$CS" ] || die "current-system $CS not found"
@@ -77,14 +85,21 @@ log "running solnix-install $TARGET  (pool=$POOL, CS=$CS)"
 # from THIS script's PATH (has /nix-tools224/bin + sw/bin) so the fast exact
 # `nix-store -qR` path is taken.
 export SOLNIX_NIXSTORE="${SOLNIX_NIXSTORE:-$(command -v nix-store 2>/dev/null || echo nix-store)}"
-SOLNIX_POOL="$POOL" SOLNIX_ALLOW_RPOOL="" SOLNIX_NIXSTORE="$SOLNIX_NIXSTORE" \
+SOLNIX_POOL="$POOL" SOLNIX_ALLOW_RPOOL="" SOLNIX_NIXSTORE="$SOLNIX_NIXSTORE" SOLNIX_IMAGE_BUILD=1 \
   "$INSTALLER" "$TARGET" "$CS" 2>&1 | tail -60 || die "solnix-install failed"
 
 # ---- core-scrub the installed BE (import altroot, scrub, export) -----------
 log "core-scrub the installed BE (no core files shipped)"
 ALT=/a-scrub
 mkdir -p "$ALT"
-if zpool import -N -f -R "$ALT" "$POOL" 2>/dev/null; then
+# Import the pool solnix-install just made BY ID: a build host can hold a second
+# importable pool of the same name (a prior run's disk), and a by-name import then
+# fails and this whole scrub was skipped silently (measured 2026-10-21).
+_pid=$(zpool import 2>/dev/null | awk -v p="$POOL" '$1=="pool:"{n=$2} $1=="id:" && n==p {print $2}' | tail -1)
+[ -n "$_pid" ] || die "core-scrub: no importable pool named $POOL (solnix-install should have exported it)"
+[ "$(zpool import 2>/dev/null | awk -v p="$POOL" '$1=="pool:" && $2==p' | wc -l | tr -d ' ')" = 1 ] \
+  || die "core-scrub: more than one importable pool named $POOL; destroy or detach the stale one first"
+if zpool import -N -f -R "$ALT" "$_pid" 2>/dev/null; then
   BE=$(zfs list -H -o name -r "$POOL/ROOT" 2>/dev/null | grep -v '/ROOT$' | head -1)
   if [ -n "$BE" ]; then
     zfs set canmount=noauto "$BE" 2>/dev/null || true
@@ -104,12 +119,14 @@ if zpool import -N -f -R "$ALT" "$POOL" 2>/dev/null; then
     # as the BE base, so its /etc/{passwd,shadow,group} carry the build host's
     # personal accounts (e.g. gburd). A PUBLIC image must be identity-free (root
     # only; installer/first-boot creates the operator). Strip any non-system
-    # (uid>=1000) account + its home from the BE. Keeps root + system accounts.
+    # (uid>=1000) account + its home from the BE. Keeps root + system accounts,
+    # and every account the toplevel declares (users.users): nix.nix's nixbld1..32
+    # are uid 30001.., and stripping them shipped a nixbld group with no users
+    # (the 26.11 DP AMI, y56y9686). scripts/test-identity-scrub.sh checks this.
     echo "=== identity-free scrub (strip personal uid>=1000 accounts) ==="
     _pw="$BEROOT/etc/passwd"
     if [ -f "$_pw" ]; then
-      # names to strip = every uid>=1000 that is not a system placeholder.
-      _strip=$(awk -F: '($3+0)>=1000 && $1!="nobody" && $1!="noaccess" && $1!="nobody4"{print $1}' "$_pw" 2>/dev/null)
+      _strip=$(scrub_names "$_pw" "$CS/etc/passwd")
       for _u in $_strip; do
         _h=$(awk -F: -v u="$_u" '$1==u{print $6}' "$_pw" 2>/dev/null)
         awk -F: -v u="$_u" '$1!=u' "$_pw" > "$_pw.c" && mv "$_pw.c" "$_pw"
@@ -127,9 +144,13 @@ if zpool import -N -f -R "$ALT" "$POOL" 2>/dev/null; then
       # store nix ships in the CS closure (sw/bin/nix); no /nix-tools224 stage.
       :
     fi
-    if [ -f "$CS/etc/nix/registry.json" ]; then
+    # install-be already lays /etc/nix/registry.json from the toplevel (/etc/static,
+    # NixOS's managed /etc). This copy over it exited 2 and aborted the script under
+    # set -e on the 2026-10-17 and 2026-10-21 AMI builds (cause not isolated). Stage
+    # the file only when install-be did not lay one.
+    if [ -f "$CS/etc/nix/registry.json" ] && [ ! -e "$BEROOT/etc/nix/registry.json" ]; then
       mkdir -p "$BEROOT/etc/nix"
-      cp -L "$CS/etc/nix/registry.json" "$BEROOT/etc/nix/registry.json" 2>/dev/null || cp "$CS/etc/nix/registry.json" "$BEROOT/etc/nix/registry.json"
+      cp -L "$CS/etc/nix/registry.json" "$BEROOT/etc/nix/registry.json"
     fi
     if [ ! -e "$BEROOT/usr/sbin/ping" ] && [ -x /usr/sbin/ping ]; then
       cp /usr/sbin/ping "$BEROOT/usr/sbin/ping" 2>/dev/null && chmod 4555 "$BEROOT/usr/sbin/ping" && chown root:bin "$BEROOT/usr/sbin/ping" 2>/dev/null || true

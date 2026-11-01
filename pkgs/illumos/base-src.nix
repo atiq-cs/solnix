@@ -3,7 +3,9 @@
 # the build host: zlib + libxml2 replace externalLibs (host /usr/lib copies),
 # openssl + openssh replace make-be's host sshd copy, bash replaces nothing (the
 # gate has no bash) but is a login shell users expect.
-{ gate, libcSlice, world ? null, gcc ? "/usr/gcc/14", buildTools ? [ ] }:
+{ gate, libcSlice, world ? null, gcc ? "/usr/gcc/14", buildTools ? [ ], aarch64 ? false, system ? "x86_64-solaris" }:
+# aarch64/system: the same recipes natively on aarch64 illumos (aarch64/home.nix), through
+# mk-src-pkg's aarch64 text rewrite. The defaults leave every x86 derivation unchanged.
 # gcc: the from-source gcc derivation (gcc-src.nix). Everything here is compiled
 # by it, both ABIs; the IPS seed only compiled gcc itself.
 # buildTools: store paths whose bin/ go first on every mk-src-pkg builder PATH
@@ -12,7 +14,9 @@
 # store set so it can build with no /usr/gnu. Threaded to mkSrcPkg below.
 
 let
-  mkSrcPkg = import ./mk-src-pkg.nix {
+  mkSrcPkg = if aarch64
+    then args: import ./mk-src-pkg.nix { inherit gate gcc buildTools aarch64; runtimeLibDirs = [ "${libcSlice}/lib" ]; } (args // { inherit system; })
+    else import ./mk-src-pkg.nix {
     inherit gate gcc buildTools;
     runtimeLibDirs = [ "${libcSlice}/lib/amd64" "${libcSlice}/lib" ];
   };
@@ -118,7 +122,8 @@ rec {
       cd nspr
       ./configure --prefix="$out" --libdir="$out/$LIBSUB" --includedir="$out/include/nspr" \
         --enable-optimize --disable-debug $E
-      gmake -j4
+      # build stamp from SOURCE_DATE_EPOCH, as nixpkgs' nspr patch (the Makefiles call date(1) and ./now).
+      gmake -j4 SH_DATE="1980-01-01 00:00:00" SH_NOW="''${SOURCE_DATE_EPOCH}000000"
       gmake install
       rm -f "$out/$LIBSUB"/*.a "$out/bin/compile-et.pl" "$out/bin/prerr.properties"
     '';
@@ -145,7 +150,9 @@ rec {
         USE_SYSTEM_ZLIB=1 ZLIB_LIBS="-L${zlib}/$LIBSUB -lz"
       O=$(ls -d dist/SunOS5*_OPT.OBJ | head -1)
       mkdir -p "$out/$LIBSUB" "$out/include/nss"
-      cp -P "$O"/lib/*.so "$O"/lib/*.chk "$out/$LIBSUB/" 2>/dev/null || cp -P "$O"/lib/*.so "$out/$LIBSUB/"
+      # no *.chk: shlibsign's DSA signature is random per build (so no two builds match, measured, repro2), and
+      # it is only read in FIPS mode. nixpkgs makes them only with enableFIPS (default false).
+      cp -P "$O"/lib/*.so "$out/$LIBSUB/"
       cp dist/public/nss/*.h dist/public/dbm/*.h "$out/include/nss/"
       if [ "$ABI" = 64 ]; then
         mkdir -p "$out/bin"
@@ -407,7 +414,7 @@ rec {
   # htop is maintained and carries an upstream illumos/Solaris backend. prstat is
   # the native illumos equivalent and stays in the world.
   top = derivation {
-    name = "top-htop-3.4.1"; system = "x86_64-solaris"; inherit htop;
+    name = "top-htop-3.4.1"; inherit system; inherit htop;
     builder = "/usr/bin/bash";
     args = [ "-c" "/usr/bin/mkdir -p $out/bin && /usr/bin/ln -s $htop/bin/htop $out/bin/top" ];
   };
@@ -520,6 +527,10 @@ rec {
     flags = "--disable-libmagic --disable-speller";
     deps = [ needWorld ncurses ];
   };
+  # nvi (nvi2) and the BSD DB 1.85 it edits through: the maintainer-required nvi,
+  # and solnix's vi (bin/vi, ex, view link to nvi). See ./nvi2.nix and ./db1.nix.
+  db1 = import ./db1.nix { inherit mkSrcPkg; };
+  nvi = import ./nvi2.nix { inherit mkSrcPkg ncurses db1 libiconv; };
   # rsync (NixOS installation-cd-base.nix defaultPackages). The bundled popt,
   # zlib-free (no -z), no optional hash/compression libraries: the media links
   # nothing it does not already carry.
@@ -714,7 +725,7 @@ rec {
   # bare name: the same fallback GNU inetutils' hostname -f gives an
   # unresolvable host. Every other use goes to the system's hostname.
   hostname = derivation {
-    name = "hostname-f"; system = "x86_64-solaris";
+    name = "hostname-f"; inherit system;
     builder = "/usr/bin/bash";
     args = [ "-c" ''
       /usr/bin/mkdir -p $out/bin
@@ -743,14 +754,17 @@ rec {
   # the path, so the home-manager option subcommand is the one that is missing;
   # inetutils' role (hostname -f) is the hostname shim above.
   home-manager = derivation {
-    name = "home-manager-26.05-db7d5e2"; system = "x86_64-solaris";
+    name = "home-manager-26.05-db7d5e2"; inherit system;
     # tests/ (1.9 MB, ~2,700 files) is dropped: only the module tree, lib and the
     # script are read at run time. nixpkgs' package keeps the whole source as
     # HOME_MANAGER_PATH; this departs from it to fit the installer media.
-    hmSrc = let src = builtins.fetchTarball {
+    # narHash is of the tree WITHOUT tests/ (the store path the old eval-time filter gave).
+    hmSrc = import ./fetch-tarball.nix {
       url = "https://github.com/nix-community/home-manager/archive/db7d5e2332710f5abb088f6b5de927d7f9511b35.tar.gz";
-      sha256 = "1vy9bsc0wgz9ccgghpv4vn0z077j486il9jhrld78llf9720xsbz";
-    }; in builtins.path { path = src; name = "home-manager-source"; filter = p: _: p != "${src}/tests"; };
+      sha256 = "63657a72baa6fda8bfdb5a2d5e530bbcce0b087dfb23be5d7598626d61870941";
+      narHash = "08l22vv66hzgg3am7hs2vjxgdhgpr0wpizxf71fyfp9z4sycwv1s";
+      name = "home-manager-source"; exclude = [ "tests" ]; inherit system;
+    };
     inherit bash;
     depPath = builtins.concatStringsSep ":" (map (p: "${p}/bin") [ coreutils findutils gettext gnused gnugrep jq less ncurses hostname ]);
     msgfmt = "${gettext}/bin/msgfmt";

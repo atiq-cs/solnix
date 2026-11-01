@@ -1,0 +1,7 @@
+# ncurses: newterm(vt100) + box + text + reverse video. The oracle is the SAME test
+# against the SAME ncurses 6.5 source configured identically, built for Linux on the
+# host (etc/curs-linux.out = its stdout, byte-exact escape sequences).
+curstest|0|/bin/curstest|curstest
+@curstest|^CURSTEST PASS$
+@curstest|solnix riscv64 ncurses
+@curstest|REVERSE

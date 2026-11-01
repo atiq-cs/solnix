@@ -1,0 +1,13 @@
+diff --git a/usr/src/uts/armv8/Makefile.rules b/usr/src/uts/armv8/Makefile.rules
+index d0d9ca514a..e993ec677e 100644
+--- a/usr/src/uts/armv8/Makefile.rules
++++ b/usr/src/uts/armv8/Makefile.rules
+@@ -75,6 +75,8 @@ DBOOT_FLAGS	= $(aarch64_CFLAGS) $(CSTD) $(COPTFLAG) $(CSOURCEDEBUGFLAGS) \
+ 	$(C_BIGPICFLAGS)
+ DBOOT_FLAGS	+= $(CCVERBOSE) $(CERRWARN) $(CCNOAUTOINLINE)
+ DBOOT_FLAGS	+= -_gcc=-march=armv8-a+nofp+nosimd
++# dboot runs with the MMU off, where an unaligned access faults (packed ACPI tables, e.g. a VM RSDP at 0x...14)
++DBOOT_FLAGS	+= -_gcc=-mstrict-align
+ DBOOT_ASFLAGS	= $(C_BIGPICFLAGS) $(ASFLAGS_XARCH_64) -D_ASM
+ 
+ DBOOT_CC_INCL	= -I$(SRC)/contrib/libfdt $(INCLUDE_PATH)

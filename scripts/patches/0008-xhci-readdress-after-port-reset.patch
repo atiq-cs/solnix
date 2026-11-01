@@ -1,0 +1,175 @@
+solnix: xhci -- re-address a device whose port was reset (Reset Device, then Address Device), so a USB device
+unplugged and plugged back into the same port works again.
+
+SYMPTOM (lixi, ThinkPad X1 Extreme Gen5, Belkin USB-C LAN adapter = RTL8153 on usbecm1, maintainer 2026-10-27):
+booted with the adapter in, it worked. Unplugged: "usbecm1 link down" (0007), traffic moved to wifi. Plugged back
+in: "/pci@0,0/pci17aa,22f8@14/device@1 (usbecm1) online" and nothing else. No "link up", the link stayed down
+and the adapter passed no traffic until a reboot.
+
+MECHANISM (from the code; the confirming trace is armed on lixi for the next replug)
+- An unplug does not delete the child: hubd posts HOT_REMOVAL (usbecm closes its pipes), marks the dip
+  DEVI_DEVICE_REMOVED and leaves it for its cleanup thread. The xhci slot (xhci_device_t) stays, with
+  xd_addressed TRUE.
+- On a connect, hubd_handle_port_connect sees h_children_dips[port] still set and reuses the child. It resets
+  the port, which puts the device back at USB address 0 in the Default state. Then hubd_setdevaddr ->
+  xhci_hcdi_device_address, hubd_setdevconfig and HOT_INSERTION (whose ndi_devi_device_insert prints
+  "online").
+- xhci_hcdi_device_address returned USB_SUCCESS at once for an xd_addressed slot ("the actual USB address is a
+  fiction for USBA"). The controller still held the slot as Addressed/Configured for the old address, so
+  Address Device was never sent. SET_CONFIGURATION, usb_check_same_device's GET_DESCRIPTOR and usbecm's
+  usb_set_alt_if all went to an address the device no longer had and failed.
+  usbecm_restore_device_state then returned without reaching ONLINE/link up. That matches the log exactly.
+- xHCI 1.2 4.6.11: after a port reset of an addressed device, software issues Reset Device (slot -> Default,
+  all endpoints but EP0 disabled) and then Address Device. Linux does the same: xhci_discover_or_reset_device()
+  before xhci_address_device() on every re-enumeration. Every hubd_setdevaddr caller resets the port first
+  (hubd_handle_port_connect, hubd_restore_device_state, a cfgadm configure), so this is always the right
+  sequence there.
+
+THE CHANGE (xhci_command.c, xhci.h, xhci_usba.c)
+- xhci_command_reset_device(), modelled on xhci_command_disable_slot().
+- xhci_hcdi_device_address(), for an xd_addressed slot:
+  - read the slot state from the output context;
+  - if it is Addressed or Configured, refuse (USB_FAILURE, logged) when a non-default endpoint is still open;
+  - otherwise issue Reset Device and free the non-default endpoint structures, which the controller has
+    disabled, so the next pipe open takes the fresh init + Configure Endpoint path, not reopen;
+  - reset the input context to slot + EP0 with DCI 1, and fall through to the existing setup_default_context
+    + Address Device.
+  A slot already in Default is addressed directly. A first-time address is unchanged.
+
+LIMIT: a device that comes back at a different speed keeps the old slot speed, because hubd does not refresh
+usb_port_status for a reused child. A replug at a different speed (USB 3 vs 2) still needs the cleanup thread to
+delete the old child first. No regression: that case did not work before either.
+
+diff -ru a/usr/src/uts/common/io/usb/hcd/xhci/xhci_command.c b/usr/src/uts/common/io/usb/hcd/xhci/xhci_command.c
+--- a/usr/src/uts/common/io/usb/hcd/xhci/xhci_command.c	2026-10-27 09:53:53.013855205 -0400
++++ b/usr/src/uts/common/io/usb/hcd/xhci/xhci_command.c	2026-10-27 09:54:21.833394793 -0400
+@@ -544,6 +544,44 @@
+ 	return (ret);
+ }
+ 
++/*
++ * Tell the controller the device in this slot was reset (xHCI 1.2 / 4.6.11): the
++ * slot returns to the Default state and every endpoint but the default control
++ * endpoint is disabled. A port reset of an addressed device needs this before
++ * the device can be addressed again.
++ */
++int
++xhci_command_reset_device(xhci_t *xhcip, uint8_t slot)
++{
++	int ret, code;
++	xhci_command_t co;
++
++	VERIFY(xhcip != NULL);
++
++	xhci_command_init(&co);
++	co.xco_req.trb_flags = LE_32(XHCI_CMD_RESET_DEV |
++	    XHCI_TRB_SET_SLOT(slot));
++
++	ret = xhci_command_submit(xhcip, &co);
++	if (ret != 0)
++		goto done;
++
++	code = XHCI_TRB_GET_CODE(co.xco_res.trb_status);
++	if (code == XHCI_CODE_SUCCESS) {
++		ret = USB_SUCCESS;
++	} else if (code == XHCI_CODE_CMD_ABORTED) {
++		ret = USB_CR_TIMEOUT;
++	} else {
++		ret = USB_HC_HARDWARE_ERROR;
++		xhci_log(xhcip, "!unexpected error when resetting device: "
++		    "%d", code);
++	}
++
++done:
++	xhci_command_fini(&co);
++	return (ret);
++}
++
+ int
+ xhci_command_set_address(xhci_t *xhcip, xhci_device_t *xd, boolean_t bsr)
+ {
+diff -ru a/usr/src/uts/common/io/usb/hcd/xhci/xhci_usba.c b/usr/src/uts/common/io/usb/hcd/xhci/xhci_usba.c
+--- a/usr/src/uts/common/io/usb/hcd/xhci/xhci_usba.c	2026-10-27 09:53:53.005855318 -0400
++++ b/usr/src/uts/common/io/usb/hcd/xhci/xhci_usba.c	2026-10-27 09:54:56.381337656 -0400
+@@ -1868,12 +1868,66 @@
+ 	 * controller. For example, the device this represents may have been
+ 	 * unconfigured, which does not actually remove the slot or other
+ 	 * information, merely tears down all the active use of it and the child
+-	 * driver. In such cases, if we're already addressed, just return
+-	 * success. The actual USB address is a fiction for USBA anyways.
++	 * driver.
++	 *
++	 * solnix: but hubd calls this only after it has reset the port
++	 * (hubd_handle_port_connect, hubd_restore_device_state and a cfgadm
++	 * configure all do), and a port reset returns the device to address 0.
++	 * Returning success for a slot the controller still holds as Addressed or
++	 * Configured left every later control transfer going to the old address:
++	 * a USB NIC unplugged and plugged back into the same port came back
++	 * "online" but never passed a frame, since hubd reuses the old child for
++	 * it. So tell the controller about the reset (Reset Device: the slot goes
++	 * back to Default and drops all but the default endpoint), forget those
++	 * endpoints so a later pipe open configures them afresh, and address the
++	 * device again, as Linux does (xhci_discover_or_reset_device).
+ 	 */
+ 	if (xd->xd_addressed == B_TRUE) {
+-		mutex_exit(&xhcip->xhci_lock);
+-		return (USB_SUCCESS);
++		uint_t state;
++
++		XHCI_DMA_SYNC(xd->xd_octx, DDI_DMA_SYNC_FORKERNEL);
++		state = XHCI_SCTX_GET_SLOT_STATE(LE_32(xd->xd_slotout->xsc_state));
++		if (state == XHCI_SLOT_DIS_ENAB || state == XHCI_SLOT_DEFAULT) {
++			/* nothing to reset; address it below */
++			xep = NULL;
++		} else {
++			for (uint_t n = 1; n < XHCI_NUM_ENDPOINTS; n++) {
++				xep = xd->xd_endpoints[n];
++				if (xep != NULL &&
++				    (xep->xep_state & XHCI_ENDPOINT_OPEN)) {
++					mutex_exit(&xhcip->xhci_lock);
++					xhci_log(xhcip, "!slot %d port %d: cannot "
++					    "re-address the device, endpoint %u "
++					    "is still open", xd->xd_slot,
++					    xd->xd_port, n);
++					return (USB_FAILURE);
++				}
++			}
++			mutex_exit(&xhcip->xhci_lock);
++			if ((ret = xhci_command_reset_device(xhcip,
++			    xd->xd_slot)) != USB_SUCCESS) {
++				return (ret);
++			}
++			mutex_enter(&xhcip->xhci_lock);
++			for (uint_t n = 1; n < XHCI_NUM_ENDPOINTS; n++) {
++				xep = xd->xd_endpoints[n];
++				/* opened while the lock was dropped: leave it */
++				if (xep == NULL ||
++				    (xep->xep_state & XHCI_ENDPOINT_OPEN))
++					continue;
++				xhci_endpoint_fini(xd, n);
++			}
++			mutex_enter(&xd->xd_imtx);
++			xd->xd_input->xic_drop_flags = LE_32(0);
++			xd->xd_input->xic_add_flags =
++			    LE_32(XHCI_INCTX_MASK_DCI(0) |
++			    XHCI_INCTX_MASK_DCI(1));
++			xd->xd_slotin->xsc_info = LE_32((LE_32(
++			    xd->xd_slotin->xsc_info) & ~XHCI_SCTX_DCI_MASK) |
++			    XHCI_SCTX_SET_DCI(1));
++			mutex_exit(&xd->xd_imtx);
++		}
++		xd->xd_addressed = B_FALSE;
+ 	}
+ 
+ 	ASSERT(xd->xd_addressed == B_FALSE);
+diff -ru a/usr/src/uts/common/sys/usb/hcd/xhci/xhci.h b/usr/src/uts/common/sys/usb/hcd/xhci/xhci.h
+--- a/usr/src/uts/common/sys/usb/hcd/xhci/xhci.h	2026-10-27 09:53:53.020855107 -0400
++++ b/usr/src/uts/common/sys/usb/hcd/xhci/xhci.h	2026-10-27 09:54:21.834313376 -0400
+@@ -785,6 +785,7 @@
+ 
+ extern int xhci_command_enable_slot(xhci_t *, uint8_t *);
+ extern int xhci_command_disable_slot(xhci_t *, uint8_t);
++extern int xhci_command_reset_device(xhci_t *, uint8_t);
+ extern int xhci_command_set_address(xhci_t *, xhci_device_t *, boolean_t);
+ extern int xhci_command_configure_endpoint(xhci_t *, xhci_device_t *);
+ extern int xhci_command_evaluate_context(xhci_t *, xhci_device_t *);

@@ -1,0 +1,98 @@
+--- a/i915/display/intel_frontbuffer.c
++++ b/i915/display/intel_frontbuffer.c
+@@ -275,6 +275,27 @@
+ 	kfree_rcu(front, rcu);
+ }
+ 
++/*
++ * solnix: the reference for i915_gem_object_get_frontbuffer. The 1 -> 0 put
++ * (kref_put_lock) and frontbuffer_release, which clears obj->frontbuffer,
++ * both run under fb_tracking.lock, so a pointer read under that lock names a
++ * frontbuffer whose count is still at least 1 and which is not yet freed.
++ */
++struct intel_frontbuffer *
++intel_frontbuffer_lookup(struct drm_gem_object *obj)
++{
++	struct intel_display *display = to_intel_display(obj->dev);
++	struct intel_frontbuffer *front;
++
++	spin_lock(&display->fb_tracking.lock);
++	front = rcu_dereference_protected(to_intel_bo(obj)->frontbuffer, true);
++	if (front && !kref_get_unless_zero(&front->ref))
++		front = NULL;
++	spin_unlock(&display->fb_tracking.lock);
++
++	return front;
++}
++
+ struct intel_frontbuffer *
+ intel_frontbuffer_get(struct drm_gem_object *obj)
+ {
+--- a/i915/display/intel_frontbuffer.h
++++ b/i915/display/intel_frontbuffer.h
+@@ -78,6 +78,9 @@
+ void intel_frontbuffer_put(struct intel_frontbuffer *front);
+ 
+ struct intel_frontbuffer *
++intel_frontbuffer_lookup(struct drm_gem_object *obj);
++
++struct intel_frontbuffer *
+ intel_frontbuffer_get(struct drm_gem_object *obj);
+ 
+ void __intel_fb_invalidate(struct intel_frontbuffer *front,
+--- a/i915/gem/i915_gem_object_frontbuffer.h
++++ b/i915/gem/i915_gem_object_frontbuffer.h
+@@ -45,28 +45,17 @@
+ static inline struct intel_frontbuffer *
+ i915_gem_object_get_frontbuffer(const struct drm_i915_gem_object *obj)
+ {
+-	struct intel_frontbuffer *front;
+-
+ 	if (likely(!rcu_access_pointer(obj->frontbuffer)))
+ 		return NULL;
+ 
+-	rcu_read_lock();
+-	do {
+-		front = rcu_dereference(obj->frontbuffer);
+-		if (!front)
+-			break;
+-
+-		if (unlikely(!kref_get_unless_zero(&front->ref)))
+-			continue;
+-
+-		if (likely(front == rcu_access_pointer(obj->frontbuffer)))
+-			break;
+-
+-		intel_frontbuffer_put(front);
+-	} while (1);
+-	rcu_read_unlock();
+-
+-	return front;
++	/*
++	 * solnix: no RCU in the OpenBSD compat (rcu_read_lock is empty and
++	 * kfree_rcu frees at once), so the lockless lookup could take a
++	 * reference on a frontbuffer whose last reference is being dropped and
++	 * which is freed before this caller puts it. Take it under
++	 * fb_tracking.lock instead (intel_frontbuffer.c).
++	 */
++	return intel_frontbuffer_lookup((struct drm_gem_object *)&obj->base);
+ }
+ 
+ /**
+--- a/include/linux/kref.h
++++ b/include/linux/kref.h
+@@ -48,12 +48,8 @@
+ static inline int
+ kref_get_unless_zero(struct kref *ref)
+ {
+-	if (ref->refcount != 0) {
+-		atomic_inc_int(&ref->refcount);
+-		return (1);
+-	} else {
+-		return (0);
+-	}
++	/* solnix: one compare-and-swap; the test-then-increment could move 0 to 1. */
++	return atomic_add_unless(&ref->refcount, 1, 0);
+ }
+ 
+ static inline int

@@ -1,0 +1,21 @@
+/* solnix riscv64: key-only server, ed25519 host key, nothing that needs a missing libc piece. */
+#define DROPBEAR_SVR_PASSWORD_AUTH 0
+#define DROPBEAR_SVR_PAM_AUTH 0
+#define DROPBEAR_SVR_PUBKEY_AUTH 1
+#define DROPBEAR_DSS 0
+#define DROPBEAR_RSA 0
+#define DROPBEAR_ECDSA 0
+#define DROPBEAR_ED25519 1
+#define DROPBEAR_SVR_AGENTFWD 0
+#define DROPBEAR_SVR_LOCALTCPFWD 0
+#define DROPBEAR_SVR_REMOTETCPFWD 0
+#define DROPBEAR_X11FWD 0
+#define DROPBEAR_SFTPSERVER 0
+#define DROPBEAR_SVR_MULTIUSER 1
+#define DROPBEAR_URANDOM_DEV "/dev/urandom"
+#define DSS_PRIV_FILENAME "/data/dropbear_dss_host_key"
+#define RSA_PRIV_FILENAME "/data/dropbear_rsa_host_key"
+#define ECDSA_PRIV_FILENAME "/data/dropbear_ecdsa_host_key"
+#define ED25519_PRIV_FILENAME "/data/dropbear_ed25519_host_key"
+#define DEFAULT_PATH "/bin:/sbin"
+#define DEFAULT_ROOT_PATH "/bin:/sbin"

@@ -821,7 +821,11 @@ rm -f "$RDROOT/usr/bin/ksh" 2>/dev/null; ln -s ksh93 "$RDROOT/usr/bin/ksh" 2>/de
 #   native /usr/has/bin/vi.
 # So: if a WORKING nvi is present, point vi/ex/view at it; else the native vi. nano
 # is a real bin. (vim, if staged, remains available as `vim` but is NOT what vi is.)
-if [ -e "$RDROOT/usr/bin/nvi" ] && [ -e "$RDROOT/usr/bin/nvi-edits-ok" ]; then
+# pkgs.solnix.nvi (pkgs/illumos/nvi2.nix) no longer drops the marker: its edit test
+# FAILS the build instead, so an nvi that exists has already passed it. Accept
+# either: the marker (older nvi package) or an nvi whose binary names nvi2.
+if [ -e "$RDROOT/usr/bin/nvi" ] && { [ -e "$RDROOT/usr/bin/nvi-edits-ok" ] || \
+     strings -a "$RDROOT/usr/bin/nvi" 2>/dev/null | grep -q 'Version 2\.[0-9]'; }; then
   for _e in vi ex view; do rm -f "$RDROOT/usr/bin/$_e"; ln -s nvi "$RDROOT/usr/bin/$_e" 2>/dev/null || true; done
 elif [ -e "$RDROOT/usr/has/bin/vi" ]; then
   for _e in vi ex view; do rm -f "$RDROOT/usr/bin/$_e"; ln -s ../has/bin/vi "$RDROOT/usr/bin/$_e" 2>/dev/null || true; done

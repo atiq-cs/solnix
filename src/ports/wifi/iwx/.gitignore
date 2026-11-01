@@ -2,3 +2,6 @@
 # patches/if_iwx.illumos.patch. Not authoritative: regenerate, never edit.
 # The patch is the reviewable artifact and IS committed.
 build/
+# Build outputs of Makefile.illumos.
+obj/
+/iwx

@@ -16,22 +16,37 @@
   ./config/nix-channel.nix
   ./config/sudo.nix
   ./config/dumpadm.nix
+  ./config/zfs.nix
   ./config/coreadm.nix
   ./config/libumem.nix
   ./config/first-boot-defaults.nix
   ./config/ec2-first-boot.nix
+  ./config/ephemeral-pool.nix
   ./config/mtu.nix
   ./config/firewall.nix
   ./config/wireless-iwx.nix
+  ./config/graphics-gpu.nix
+  ./config/touchpad-i2c-hid.nix
+  ./config/audio-hda.nix
   ./config/networking.nix
+  ./config/solnix-netd.nix
+  ./config/tailscale.nix
   ./config/users.nix
   ./config/system-path.nix
   ./config/documentation.nix
   ./config/debug-info.nix
   ./config/pgfarm.nix
   ./config/cosmic-desktop.nix
+  ./config/desktop-cosmic.nix
+  ./config/dbus.nix
   ./config/shell-environment.nix
   ./config/nix.nix
+  ./config/community/options.nix
+  ./config/community/census.nix
+  ./config/community/cache-proxy.nix
+  ./config/community/builder.nix
+  ./config/community/builder-zone.nix
+  ./config/community/seed.nix
   ./system/boot/init/smf.nix
   ./system/activation
 ]

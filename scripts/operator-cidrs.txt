@@ -1,0 +1,15 @@
+# Networks the maintainer and floki reach the build fleet from. Every ssh ingress rule we write (EC2 security groups,
+# host firewalls that restrict by source) admits all of these and nothing wider. IPv4 rules use IpRanges, IPv6 rules
+# Ipv6Ranges (an EC2 SG needs both). Add with scripts/sg-guard.sh authorize <region> <sg> tcp 22 <cidr>.
+# cidr                  what
+73.4.58.0/24            Comcast (AS7922), the primary uplink; floki egresses as 73.4.58.126 (measured 2026-10-31)
+153.66.152.0/24         Starlink (AS14593) backup uplink, Connecticut, per Starlink's geofeed (geoip.starlinkisp.net/feed.csv)
+153.66.153.0/24         Starlink, same
+153.66.154.0/24         Starlink, same
+2605:59ca:4200::/40     Starlink IPv6, the same geofeed's Connecticut block
+# IPv6 over Comcast: none today. Measured 2026-11-01 from floki: only ULA addresses (fd4a:, fd11:, fd3a:; the UniFi gateway
+#   and the router advertise no global prefix), no IPv6 default route, `curl -6` fails. If Comcast IPv6 is turned on at the
+#   gateway, add its delegated prefix here (Comcast hands out a /60 or /64 from 2601::/20 or 2603::/16).
+# shortcut: the Starlink blocks come from the geofeed, not a measured egress; confirm with `curl -4 ifconfig.me` and
+#   `curl -6 ifconfig.me` while on Starlink (Starlink CGNATs IPv4 and rotates its public address per PoP, so the /24s cover
+#   the PoP's pool, not one address).

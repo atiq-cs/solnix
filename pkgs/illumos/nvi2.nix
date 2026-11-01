@@ -1,112 +1,85 @@
-# pkgs/illumos/nvi2.nix — nvi2 (github.com/lichray/nvi2): the modernized nvi editor.
+# pkgs/illumos/nvi2.nix -- nvi2 (github.com/lichray/nvi2), the maintained fork of
+# Berkeley nvi, built from source with mk-src-pkg (base-src.nix calls it).
 #
-# solnix's default `vi`. A small, wide-char nvi fork (C) — a clean, illumos-friendly
-# vi with no vim dependency. Packaged as `nvi`; `vi`/`ex`/`view` link to it.
+# solnix's default vi: installs bin/nvi with vi/ex/view links to it (nvi picks its
+# mode from argv[0], as nixpkgs' nvi does), and man/vi.1 with nvi/ex/view links.
 #
-# Build: cmake, C. Deps: ncurses (curses UI) + real Berkeley DB 1.85 (db1). nvi
-# uses the BSD 1.85 dbopen() API for its file backing (an in-memory RECNO tree
-# with a `bfname` backing file, 0-based append). On BSD, dbopen lives in libc;
-# illumos has no dbopen, so nvi2's CMakeLists links a `db1` lib and includes
-# <db.h> for the 1.85 API. We supply both from the db1 package (real BSD DB
-# 1.85 -- see db1.nix). Berkeley DB 5.x --enable-compat185 is NOT a drop-in:
-# its RECNO is 1-based and rejects nvi's record-0 append. Installs bin/{nvi,vi,
-# ex,view} + share/vi.
+# NO CMAKE. Upstream builds with CMake, which is not in the from-source chain (a
+# bare solnix system has none). The CMakeLists is mechanical, so this replays it:
+#   * the generated headers are the same sed/awk one-liners its add_custom_command
+#     rules run (PUBLIC: prototypes -> *_extern.h, options.awk, ex.awk, README ->
+#     version.h);
+#   * config.h holds what CMake's checks find on illumos (ncurses.h, term.h, no
+#     libutil.h/pty.h), with ICONV_TRADITIONAL probed the way CMake probes it;
+#   * the sources are CMake's lists: every .c under cl common ex vi, plus the
+#     wide-char BSD regex (regcomp/regerror/regexec/regfree; engine.c is #included).
+# Departures from the CMake build, and why:
+#   * no -fstack-protector: gcc.lib ships no libssp, so it would NEED libssp.so.0
+#     (the smartmontools failure in base-src.nix).
+#   * HAVE_STRUCT_STAT_ST_MTIM is defined: CMake detects it but its config.h.in
+#     never emits it, so upstream falls back to whole-second mtimes.
+#   * GNU libiconv, not the illumos iconv: nvi always opens a "utf-16be"
+#     converter from the locale codeset ("646" in the C locale), and the world has
+#     no 64-bit iconv modules (see libiconv in base-src.nix).
 #
-# Usage (in the fork overlay / a callPackage site):
-#   nvi = pkgs.callPackage ./nvi2.nix { db1 = pkgs.callPackage ./db1.nix {}; };
-{ lib, stdenv, fetchFromGitHub, cmake, ncurses, pkg-config, db1 }:
+# illumos fixups: <bitstring.h> (the CSRG bit macros) and <util.h> (an openpty
+# shim over posix_openpt, for :script) are BSD headers illumos lacks, vendored from
+# patches/. b64_ntop/b64_pton (recover.c) are in libresolv on illumos.
+# The 1.85 dbopen() API comes from db1 (./db1.nix); Berkeley DB 5's compat185 is
+# not a drop-in (its RECNO rejects nvi's record-0 append).
+{ mkSrcPkg, ncurses, db1, libiconv }:
 
-stdenv.mkDerivation (finalAttrs: {
-  pname = "nvi";
-  version = "2.2.1-unstable"; # nvi2 is versioned loosely; pin the rev below.
-
-  src = fetchFromGitHub {
-    owner = "lichray";
-    repo = "nvi2";
-    # Pin an explicit rev for reproducibility (a recent lichray/nvi2 commit).
-    # NOTE: the build agent resolves + fills the real rev + hash from the repo HEAD
-    # at build time and reports them back for this pin.
-    rev = "eea5df8b71205df101f05125281c67be33e24a53";
-    hash = "sha256-ijxBpfFDSyxCxl9vz8aDC9J2HlUTfZQpFFLsrRPy5H0=";
-  };
-
-  nativeBuildInputs = [ cmake pkg-config ];
-  buildInputs = [ ncurses db1 ];
-
-  # nvi2's CMakeLists links a `db1` lib and includes <db.h> for the 1.85 API.
-  # The db1 package provides exactly those names (lib/libdb1.so, include/db.h),
-  # so no CMakeLists rewrite of the db link/include is needed -- unlike the old
-  # db5-compat path, which had to rename the lib to `db` and the header to
-  # <db_185.h>. The include/lib dirs come in via NIX_CFLAGS/NIX_LDFLAGS below.
-  #
-  # nvi2 probes openpty/__b64_ntop (BSD/glibc-isms absent from illumos libc) and,
-  # when missing, links libutil/libresolv -- but neither symbol is used anywhere
-  # in nvi2's sources and neither lib exists on illumos, so find_library returns
-  # NOTFOUND and aborts the configure. Guard those two links so an empty result
-  # is skipped rather than fatal.
-  #
-  # nvi2 includes <bitstring.h> (BSD bit-array macros) and <util.h> (openpty for
-  # :script mode) -- both are BSD/macOS system headers absent on illumos. Vendor
-  # the canonical CSRG bitstring.h and an illumos openpty() shim into the source
-  # tree (its own dir is on the include path) so the compile finds them.
-  postPatch = ''
+mkSrcPkg {
+  pname = "nvi"; version = "2.2.2-unstable-2026-05-31";
+  # lichray/nvi2 eea5df8b (2026-05-31), 5 commits past v2.2.2.
+  src = { url = "https://github.com/lichray/nvi2/archive/eea5df8b71205df101f05125281c67be33e24a53.tar.gz";
+          sha256 = "c6cdf038d213f75152d7adbef7a55802835826b056f571e3fb202f55eecc391b"; };
+  deps = [ ncurses db1 libiconv ];
+  build = ''
     cp ${./patches/bitstring.h} bitstring.h
     cp ${./patches/util.h} util.h
-    sed -i 's,include_directories(''${CMAKE_CURRENT_BINARY_DIR}),include_directories(''${CMAKE_CURRENT_BINARY_DIR} ''${CMAKE_CURRENT_SOURCE_DIR}),' CMakeLists.txt
-    sed -i 's/target_link_libraries(nvi PRIVATE ''${UTIL_LIBRARY})/if(UTIL_LIBRARY)\n        target_link_libraries(nvi PRIVATE ''${UTIL_LIBRARY})\n    endif()/' CMakeLists.txt
-    sed -i 's/target_link_libraries(nvi PRIVATE ''${RESOLV_LIBRARY})/if(RESOLV_LIBRARY)\n        target_link_libraries(nvi PRIVATE ''${RESOLV_LIBRARY})\n    endif()/' CMakeLists.txt
-  '';
+    mkdir -p build
+    for d in cl common ex vi; do
+      sed -n 's/^ \* PUBLIC: \(.*\)/\1/p' $d/*.c > "build/$d"_extern.h
+    done
+    awk -f common/options.awk common/options.c > build/options_def.h
+    awk -f ex/ex.awk ex/ex_cmd.c > build/ex_def.h
+    sed -n 's/^.*version \([^)]*)\).*/#define VI_VERSION "\1"/p' README > build/version.h
+    grep -q '^#define VI_VERSION "2\.' build/version.h || { echo "FATAL: no VI_VERSION in README" >&2; exit 1; }
+    sed -e 's,@vi_cv_path_msgcat@,/usr/share/vi/catalog/,' -e 's,@vi_cv_path_preserve@,/var/tmp/vi.recover/,' \
+      files/pathnames.h.in > build/pathnames.h
+    printf '%s\n' '#define USE_WIDECHAR 1' '#define USE_ICONV 1' '#define HAVE_NCURSES_H 1' \
+      '#define HAVE_TERM_H 1' '#define HAVE_STRUCT_STAT_ST_MTIM 1' > build/config.h
+    # CMake's ICONV_TRADITIONAL probe: does iconv(3) take a non-const char ** ?
+    # A wrong answer cannot ship: conv.c then fails to compile (gcc 14 rejects
+    # incompatible pointer types).
+    printf '%s\n' '#include <iconv.h>' \
+      'int main(void) { iconv_t c = 0; char *i = 0, *o = 0; size_t il = 0, ol = 0; iconv(c, &i, &il, &o, &ol); return 0; }' > build/iconvt.c
+    if $CC -Werror -c build/iconvt.c -o build/iconvt.o; then echo '#define ICONV_TRADITIONAL 1' >> build/config.h; fi
 
-  # nvi2 is a straightforward cmake build. On illumos: ensure the curses lib is
-  # ncurses (wide, from the store), and link -lsocket -lnsl if the DB/recovery
-  # code pulls them. The gawkReal hermeticity pattern applies (store -L before
-  # any host lib dir) so ncurses resolves from /nix/store, not /usr/lib/64.
-  cmakeFlags = [
-    "-DCMAKE_BUILD_TYPE=Release"
-  ];
-  # Store -L before any host lib dir (hermeticity). Also expose db1's include so
-  # find_path(db.h) and the compile resolve the real 1.85 header, and db1's lib
-  # so find_library(db1) resolves libdb1.so from the store.
-  env.NIX_CFLAGS_COMPILE_BEFORE = "-L${lib.getLib ncurses}/lib -L${db1}/lib -I${db1}/include";
-  # -lsocket -lnsl: illumos split socket/name-service libs. -lresolv: recover.c
-  # uses b64_ntop/b64_pton (illumos puts them in libresolv, not libc). nvi2's own
-  # find_library(resolv) probes __b64_ntop (underscored, absent) and misses this.
-  # -L${db1}/lib so the db1 link resolves; -R for the runtime search path.
-  env.NIX_LDFLAGS = "-L${db1}/lib -R${db1}/lib -lsocket -lnsl -lresolv";
+    CF="-O2 -D_XOPEN_SOURCE_EXTENDED -D__REGEX_PRIVATE -Ibuild -I. -Iregex"
+    objs=""
+    for f in cl/*.c common/*.c ex/*.c vi/*.c regex/regcomp.c regex/regerror.c regex/regexec.c regex/regfree.c; do
+      o="build/$(echo "$f" | tr / _).o"
+      $CC $CF -c "$f" -o "$o" || { echo "FATAL: compile $f" >&2; exit 1; }
+      objs="$objs $o"
+    done
+    $CC -o build/nvi $objs -lncursesw -ldb1 -liconv -lresolv
 
-  # nvi2 installs `nvi`; provide the classic vi/ex/view names as links to it.
-  # Then run nvi's own edit smoke test in-build (scripted ex session: append a
-  # line, write, quit; verify the file content). This is the exact operation
-  # that failed on db5-compat. On success, drop a `nvi-edits-ok` marker: the
-  # media build (oi-make-livecd.sh) gates pointing the system vi/ex/view at nvi
-  # on the presence of $out/bin/nvi-edits-ok, so vi becomes nvi only once nvi
-  # can actually edit.
-  postInstall = ''
-    if [ -x "$out/bin/nvi" ]; then
-      for n in vi ex view; do
-        [ -e "$out/bin/$n" ] || ln -s nvi "$out/bin/$n"
-      done
-    fi
+    mkdir -p "$out/bin" "$out/share/man/man1"
+    cp build/nvi "$out/bin/nvi"
+    for n in vi ex view; do ln -s nvi "$out/bin/$n"; done
+    cp man/vi.1 "$out/share/man/man1/vi.1"
+    for n in nvi ex view; do ln -s vi.1 "$out/share/man/man1/$n.1"; done
 
-    export LD_LIBRARY_PATH="${db1}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-    tf="$(mktemp)"
+    # Edit smoke test, no LD_LIBRARY_PATH: a scripted ex session appends a line,
+    # writes and quits; the file must hold exactly that line. This is the
+    # operation a Berkeley-DB-5 build fails.
+    unset LD_LIBRARY_PATH LD_LIBRARY_PATH_64 || true
+    tf=$(mktemp /var/tmp/nvi-smoke.XXXXXX)
     printf 'a\nhello world\n.\nw\nq\n' | "$out/bin/ex" -s "$tf"
-    if grep -q '^hello world$' "$tf"; then
-      echo "nvi edit smoke test PASSED: $(cat "$tf")"
-      touch "$out/bin/nvi-edits-ok"
-    else
-      echo "nvi edit smoke test FAILED; file was:" >&2
-      cat "$tf" >&2
-      exit 1
-    fi
+    [ "$(cat "$tf")" = "hello world" ] || { echo "FATAL: nvi edit smoke test; file holds:" >&2; cat "$tf" >&2; exit 1; }
     rm -f "$tf"
+    grep -q 'Version 2\.2\.2 (' "$out/bin/nvi" || { echo "FATAL: nvi binary carries no 2.2.2 version string" >&2; exit 1; }
   '';
-
-  meta = with lib; {
-    description = "nvi2 — modernized Berkeley nvi (solnix default vi)";
-    homepage = "https://github.com/lichray/nvi2";
-    license = licenses.bsd3; # nvi is BSD (CSRG); nvi2 keeps the BSD license
-    mainProgram = "nvi";
-    platforms = platforms.illumos or [ "x86_64-solaris" ];
-  };
-})
+}

@@ -3,12 +3,12 @@
 # gates; each must make the gate FAIL by name.
 #   unresolved: a module that also calls a function no kernel defines;
 #   collision:  a module that also defines a kernel-defined global. NOTE: the
-#               injected symbol must be one the mapfile keeps GLOBAL, else
-#               -Breduce scopes it local and it can never collide -- a
-#               vacuous control. ddi_get_lbolt was wrong for exactly this
-#               reason (reduced to local, so "DID NOT FAIL" proved nothing);
-#               segkmem_mapin stays global and does collide, so the gate fails
-#               as required.
+#               mapfile reduces every symbol but the loader interface to
+#               local, so an injected definition alone never collides (measured
+#               for ddi_get_lbolt and segkmem_mapin: nm shows 't', "DID NOT
+#               FAIL"). The control therefore also lists the symbol as global
+#               in its copy of i915.mapfile, i.e. it models a mapfile that lets
+#               a kernel name escape.
 # Usage (on dixi): build-module-negctl.sh OBSD_DRM_DIR PORT_DIR OUT_BASE FILES_TXT OBJS_FROM
 set -u
 obsd=$1 port=$2 base=$3 files=$4 from=$5
@@ -23,6 +23,9 @@ for kind in unresolved collision; do
 		    >> "$neg/port/i915/i915_illumos.c"
 	else
 		printf '\nvoid *segkmem_mapin(void) { return ((void *)0); }\n' >> "$neg/port/i915/i915_illumos.c"
+		awk '{ print } $1 == "_depends_on;" { print "\t\tsegkmem_mapin;" }' \
+		    "$port/i915/i915.mapfile" > "$neg/port/i915/i915.mapfile"
+		grep -q segkmem_mapin "$neg/port/i915/i915.mapfile" || { echo "negctl: mapfile edit failed"; rc=1; }
 	fi
 	if OBJS_FROM=$from sh "$here/build-module.sh" "$obsd" "$neg/port" "$neg/out" "$files" > "$neg/log" 2>&1; then
 		echo "NEGATIVE CONTROL ($kind) DID NOT FAIL"; rc=1

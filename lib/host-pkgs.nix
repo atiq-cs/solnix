@@ -39,7 +39,11 @@ let
   #              (dixi, EC2; no /usr/gnu) can realise them. See
   #              docs/pending/builders-need-store-tools.md.
   seedPkgs = import solnixDir { gate = gateProto; inherit gateArgs; };
-  solnix = import solnixDir {
+  # aarch64-solaris: the native aarch64 set (pkgs/illumos/aarch64, nix + gcc + the home tools), built on
+  # an aarch64 illumos host with its stage0 tools (mk-src-pkg's aarch64 path). No world, so no seed farm.
+  solnix = if system == "aarch64-solaris"
+    then import (solnixDir + "/aarch64") ({ inherit system; } // (if gateProto == null then { } else { gate = gateProto; }))
+    else import solnixDir {
     gate = gateProto; inherit gateArgs;
     buildTools = [ seedPkgs.seedBuildTools ];
   };
@@ -116,7 +120,7 @@ in
   # userland (modules/config/system-path.nix) composes environment.systemPackages
   # into system.path with it, the same merge pkgs.solnix.systemPath uses. Matches
   # nixpkgs' pkgs.buildEnv surface for the args solnix passes (design §B).
-  buildEnv = import ./build-env.nix { };
+  buildEnv = args: import ./build-env.nix { } ({ inherit system; } // args);
 
   # buildPackages.libxml2 marker: smf.nix lists it as a nativeBuildInput for the
   # xmllint DTD gate. runCommand ignores nativeBuildInputs and puts /usr/bin

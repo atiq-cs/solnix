@@ -49,7 +49,9 @@ fails). BOTH modules must be symbol-scoped before either is loaded while the oth
 - Gates (`build-module.sh`): 178 undefined symbols, **0 not exported by the running unix + genunix**; **0 globals that
   collide with the 27,540 global symbols of /dev/ksyms** (kernel + every loaded module; `_init/_fini/_info` exempt).
   Negative controls (`build-module-negctl.sh`): an added call to a missing function and an added `ddi_get_lbolt`
-  definition each fail the gate by name. The first collision run found a real one: the loaded `ufs` module exports a
+  definition each fail the gate by name. (Retracted for the collision control: the mapfile reduces an injected
+  definition to local, so it cannot collide; re-measured 2026-10-19 as "DID NOT FAIL". The control now also keeps
+  the symbol global in its mapfile copy; see build-module-negctl.sh.) The first collision run found a real one: the loaded `ufs` module exports a
   global `free()`, and krtld would have bound every drm `free()` to it (now `obsd_free`, `obsd_prelude.h`).
 - Undefined vs "defined nowhere" (`link-gap.sh`): 114 → 0. The R2, console and ACPI rows are **stubs that fail**
   (ENOTSUP/NULL), listed in `obsd-compat/obsd_glue.c`, not implementations.

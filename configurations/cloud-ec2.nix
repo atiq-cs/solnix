@@ -24,6 +24,9 @@
   # (stale) build. Pin the DP edition so a clean-HEAD build is self-consistent.
   solnix.release = "26.11";
 
+  # Grow the root pool onto whatever EBS size the launcher picked (NixOS amazon-image.nix sets the same).
+  services.zfs.expandOnBoot = "all";
+
   # MTU self-raise + reboot: OFF for cloud images (reboot-loop hazard above).
   solnix.mtu.enable = false;
 }

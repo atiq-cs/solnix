@@ -158,6 +158,24 @@ TWO bugs that silently broke publishes (caused mysterious 404s + under-counted c
    Also: stale local binary-cache-v*.sqlite positives make Nix SKIP re-uploads -> clear them when
    re-verifying (deletes nothing from S3, just forces honest re-checks).
 
+## 2026-10-18 UPDATE: s3.solnix.io is READ-ONLY now (rustfs retired 2026-10-10)
+The rustfs write inbox below is GONE. s3.solnix.io is now an nginx read-proxy
+(k8s/s3-read-proxy.yaml) that translates /solnix-cache/<key> to
+cache.solnix.io/<key> and answers every other method with HTTP 405. The old
+sops SigV4 credential (secrets/s3-cache.yaml) was a rustfs key and no longer
+authenticates anywhere. So:
+  - CONSUMERS/AMIs: unchanged -- read https://s3.solnix.io/solnix-cache/<key>
+    (pinned read URLs still work) or https://cache.solnix.io/<key>.
+  - STORE PATHS (narinfo+NAR): submit through staging.solnix.io (signed-submit
+    flow), 8 GiB/object limit, recipe-output-tied.
+  - RAW OBJECTS (AMI disk images, install media): hand off to infra (floki path
+    + SHA256SUMS + MANIFEST.txt + target prefix); they bank under cache/ami/ or
+    cache/install-media/ and read-back verify. A builder-scoped B2 key
+    (write+read on cache/ami/ + cache/install-media/, no delete) is being minted;
+    once it lands, ami-bank.sh points S3_ENDPOINT at the B2 endpoint and uploads
+    directly. cache/ami/** is on the protected-paths keep-list; nothing drains it.
+The section below is HISTORICAL (the two-endpoint rustfs model, retired).
+
 ## RESOLVED (2026-08-04): s3.solnix.io is the WRITE INBOX; cache.solnix.io is the durable read cache
 The earlier "backend defect / objects evicted" notes below were a MISDIAGNOSIS on my part.
 solnix uses the NixOS.org two-endpoint model:

@@ -37,16 +37,18 @@
   # tree, nano, and the vi/less/htop/top above. Each is a real from-source
   # pkgs.solnix derivation and ships its own man page under share/man, so with
   # documentation.man.enable (default true) `man curl`, `man wget`, `man tree`,
-  # `man nano`, `man vi`, ... all work. (BSD fetch is not yet packaged -- curl +
-  # wget cover it; nvi is deferred -- see /tmp report.)
+  # `man nano`, `man vi`, `man fetch`, ... all work. bsdfetch is FreeBSD fetch(1).
+  # nvi (nvi2) is the vi: its bin/vi, ex and view replace the
+  # gate's XPG4 ones, so `vi` and `nvi` are the same editor, as on the BSDs.
   #
   # git: nix 2.24 fetches git+https flake inputs by running the git CLI, and the
   # system registry maps nixpkgs/solnix to git+https://git.solnix.io/solnix.git.
   # Without git on PATH, `nix build nixpkgs#<x>` fails with "resolving Git
   # reference '26.11': revspec not found" (measured on the dde2cbe AMI, 2026-10-23).
+  # NixOS gets git through its nix package's runtime closure; this is the same need.
   environment.systemPackages = with pkgs.solnix; [
-    openssh bash vi less htop top
-    nixChain.curl wget tree nano git
+    openssh bash nvi less htop top
+    nixChain.curl wget bsdfetch tree nano git
   ];
 
   # /etc/system is generated, NixOS-style: this is its only source, so each
@@ -82,7 +84,7 @@
 
   # Declarative users (T2.9): a login user + root, both with the maintainer's
   # ssh key. This GENERATES /etc/{passwd,shadow,group} entries (illumos format)
-  # merged over the base system accounts, and seeds ~/.ssh/authorized_keys.
+  # merged over the base system accounts, and /etc/ssh/authorized_keys.d/<user>.
   #
   # IDENTITY-FREE DEFAULT: base.nix defines NO personal user, key, or password
   # (matching NixOS's identity-free installer image). The public AMI/ISO/IMG ship
@@ -111,6 +113,8 @@
     stop.exec = ":kill";
     refresh.exec = ":kill -HUP";
   };
+  # AuthorizedKeysFile: NixOS's default (sshd.nix authorizedKeysFiles): the user's
+  # own file, then the declared keys users.nix renders into /etc (never into a home).
   # PrintMotd no: /etc/profile prints /etc/motd for every login shell, so sshd
   # printing it too showed it twice per ssh login (NixOS's sshd defaults
   # PrintMotd to false for the same reason; pam_motd/the shell owns it).
@@ -120,6 +124,7 @@
     PasswordAuthentication yes
     PrintMotd no
     PermitRootLogin prohibit-password
+    AuthorizedKeysFile .ssh/authorized_keys /etc/ssh/authorized_keys.d/%u
     Subsystem sftp ${pkgs.solnix.openssh}/libexec/sftp-server
   '';
 

@@ -368,11 +368,54 @@ let
   # gcc built FROM SOURCE (./gcc-src.nix): the NixOS bootstrap step. The host's
   # IPS gcc-14 is only the stage0 seed that compiles it; gcc.lib (libstdc++,
   # libgcc_s) is the C++/unwind runtime every shipped C++ binary links.
-  gcc = import ./gcc-src.nix { gate = gate'; libcSlice = libc; };
+  gcc = import ./gcc-src.nix { gate = gate'; libcSlice = libc; inherit ld; inherit (srcPkgs) libcExtra; };
+
+  # Rust FROM SOURCE (./rust-src.nix), the N-1 chain of docs/rust-illumos-bootstrap.md.
+  # stage0 is the OI 1.97.1 seed tree, fetched by its NarHash from the cache (the
+  # same store path, c821qgb6, as a fixed-output derivation, so pure eval works).
+  rustSeedStage = import <nix/fetchurl.nix> {
+    name = "rust-seed-stage";
+    url = "https://cache.solnix.io/nar/1pl9c29vgwsknlaz7nqmfk2dxkhn3lni31z7yrszxv0nag9g1bw1.nar.xz";
+    sha256 = "01cwvndhz2lm2wkjpsrvmna36msjnirbffb1s2s5c9nqbvw6jsir";
+    unpack = true;
+  };
+  mkRust = args: import ./rust-src.nix ({
+    inherit gcc libc world; gate = gate'; inherit (srcPkgs) openssl zlib;
+  } // args);
+  rust198 = mkRust { version = "1.98.0"; stage0 = rustSeedStage; seedStage0 = true;
+    sha256 = "271fa73d8174f53d713c46a8310da7bf7cfdcfb8b7cfd1c2b74b84a83ae9fb1e"; };
+  rust199 = mkRust { version = "1.99.0"; stage0 = rust198;
+    sha256 = "cc41916a8c84f5d9ec4f55561b44e39f43b647b133f8a6f51be9ea13c83f7036"; };
 
   # From-source packages the gate does not provide (./base-src.nix). zlib and
   # libxml2 replace the host-copied externalLibs; world is built on top of them.
   srcPkgs = import ./base-src.nix { gate = gate'; libcSlice = libc; inherit world gcc buildTools; };
+  # The Wayland + Mesa userland (./graphics), built like srcPkgs.
+  graphics = import ./graphics { inherit (srcPkgs) mkSrcPkg pkgconf zlib; inherit world; };
+  # The maintainer's headless CLI set (werk/meh home.packages), from source (./cli).
+  # Generic Rust packages on rust199 (./cargo.nix: vendorOf FOD + cargoPkg).
+  cargo = import ./cargo.nix {
+    rust = rust199; inherit gcc libc world; gate = gate'; gccLib = gcc.lib;
+    inherit (srcPkgs.nixChain) cacert;
+  };
+  # Go from source: go1.4 (C) -> 1.17 -> 1.20 -> 1.22 -> 1.24 -> 1.26 (./go.nix).
+  goChain = import ./go.nix { inherit gcc world; gate = gate'; gccLib = gcc.lib; inherit (srcPkgs.nixChain) cacert; };
+  cli = import ./cli { base = srcPkgs; inherit world graphics goChain; inherit (cargo) cargoPkg; };
+  # libtorrent-rasterbar + solnix-torrent, the community seeder's BitTorrent client (./solnix-torrent.nix).
+  torrent = import ./solnix-torrent.nix {
+    inherit (srcPkgs) mkSrcPkg openssl pkgconf gccWrapper binutils; inherit (srcPkgs.nixChain) boost; inherit (cli) cmake;
+    inherit gcc libc; gate = gate';
+  };
+  # Desktop apps outside graphics/ (pop-launcher, cosmic-wallpapers): ./desktop, so the COSMIC outs do not move.
+  desktop = import ./desktop { inherit (cargo) cargoPkg; inherit graphics; inherit (cli) fd file;
+    inherit (srcPkgs) mkSrcPkg bash coreutils gnugrep gnused hostname; };
+  # The GTK 3 / Wayland stack for Firefox (./desktop/gtk): its own dir, so neither COSMIC nor desktop/ outs move.
+  gtk = import ./desktop/gtk { base = srcPkgs; inherit graphics cli; inherit (cosmic) noto-sans; };
+  # COSMIC rust programs on rust199 + graphics (./graphics/cosmic.nix).
+  cosmic = import ./graphics/cosmic.nix {
+    rust = rust199; inherit gcc libc world; gate = gate'; gccLib = gcc.lib;
+    inherit (srcPkgs.nixChain) cacert; inherit graphics; inherit (srcPkgs) openssl;
+  };
 
   # ---------------------------------------------------------------------------
   # seedBuildTools -- the DEFAULT build-tool set that lets a BARE solnix system
@@ -454,12 +497,14 @@ let
   };
 
   # The boot-time set: what must run before the shared /nix is mounted (init,
-  # the shell inittab uses, zfs to mount /nix). Lives as real files at these
-  # store paths inside each generation's BE (docs/design-nix-managed-base.md).
+  # the shell inittab uses, zfs to mount /nix, and autopush, which must run
+  # before anything opens the console or the console never gets ldterm). Lives
+  # as real files at these store paths inside each generation's BE
+  # (docs/design-nix-managed-base.md).
   early = import ./mk-proto-slice.nix {
     gate = gate'; name = "illumos-early";
     deps = [ libc rtld srcPkgs.zlib srcPkgs.libxml2 ];
-    bins = [ "sbin/init" "sbin/sh" "sbin/zfs" "sbin/mount" ];
+    bins = [ "sbin/init" "sbin/sh" "sbin/zfs" "sbin/mount" "sbin/autopush" ];
     allowUnresolved = [ ];
   };
 
@@ -494,6 +539,56 @@ let
     inherit ld;
   };
 
+  # pkgs.solnix.iwx-driver -- the Intel AX2xx wireless kernel module (OpenBSD
+  # iwx(4)) under the giant-lock model, built from src/ports/wifi/iwx as a pure
+  # derivation (./iwx-driver.nix). $out/kernel/drv/amd64/iwx. Its gate checks
+  # symbol resolution against both the gate proto and kernelNd.
+  # BSD fetch(1) (+ libfetch), from FreeBSD source: the last of the maintainer-required CLI set.
+  bsdfetch = import ./bsdfetch.nix {
+    gate = gate'; libcSlice = libc;
+    inherit (srcPkgs) gccWrapper openssl;
+  };
+
+  iwx-driver = import ./iwx-driver.nix {
+    gate = gate';
+    inherit kernelNd ld;
+    solnixDev = buildEnv {
+      name = "solnix-dev";
+      paths = [ srcPkgs.gccWrapper srcPkgs.binutils srcPkgs.gnumake ];
+      pathsToLink = [ "/bin" "/share/man" ];
+    };
+  };
+
+  # pkgs.solnix.i915-driver -- the Intel iGPU kernel module (OpenBSD inteldrm +
+  # drm via src/drm-port), a pure derivation (./i915-driver.nix) on the
+  # iwx-driver pattern: $out/kernel/drv/amd64/i915. Its gate checks symbols
+  # against the gate proto and kernelNd and that SIMD appears only inside
+  # fpu_kernel_enter/exit sections (src/drm-port/i915/simd-gate.sh).
+  i915-driver = import ./i915-driver.nix {
+    gate = gate';
+    inherit kernelNd ld;
+    solnixDev = buildEnv {
+      name = "solnix-dev";
+      paths = [ srcPkgs.gccWrapper srcPkgs.binutils srcPkgs.gnumake ];
+      pathsToLink = [ "/bin" "/share/man" ];
+    };
+  };
+
+  # pkgs.solnix.touchpad-driver -- the X1E Gen 5 touchpad modules, dwiic (LPSS
+  # DesignWare I2C) and ihid (HID over I2C, linked under consms with usbms), a
+  # pure derivation (./touchpad-driver.nix) on the iwx-driver pattern. Headers
+  # the proto lacks (sys/i2c, sys/acpica.h, usbai_private.h) come from
+  # kernelNd.src. hardware.touchpad.i2cHid lays and binds them.
+  touchpad-driver = import ./touchpad-driver.nix {
+    gate = gate';
+    inherit kernelNd ld;
+    solnixDev = buildEnv {
+      name = "solnix-dev";
+      paths = [ srcPkgs.gccWrapper srcPkgs.binutils srcPkgs.gnumake ];
+      pathsToLink = [ "/bin" "/share/man" ];
+    };
+  };
+
   # wpa-pmk on the system PATH: a bin/-shaped view of iwm-driver's
   # usr/lib/inet/wpa-pmk, so environment.systemPackages puts it at sw/bin ->
   # /usr/bin/wpa-pmk, which the solnix-wifi-join service's PATH finds. (The join
@@ -513,6 +608,29 @@ let
     '' ];
   };
 
+  # solnix-cputemp -- the coretemp ksensor reader the live media's temperature
+  # line uses (src/live/solnix-cputemp.c): one ioctl per /dev/sensors/temperature/
+  # cpu node. Built like wpa-pmk (the solnix-dev gcc), self-test at build time.
+  solnix-cputemp = derivation {
+    name = "solnix-cputemp";
+    system = "x86_64-solaris";
+    builder = "/usr/bin/bash";
+    PATH = "/usr/bin";
+    src = ../../src/live/solnix-cputemp.c;
+    solnixDev = buildEnv {
+      name = "solnix-dev";
+      paths = [ srcPkgs.gccWrapper srcPkgs.binutils srcPkgs.gnumake ];
+      pathsToLink = [ "/bin" "/share/man" ];
+    };
+    args = [ "-c" ''
+      set -eu
+      export PATH="$solnixDev/bin:/usr/bin"
+      mkdir -p "$out/bin"
+      cp "$src" solnix-cputemp.c; gcc -O2 -Wall -Werror -Wl,-R,${libc}/lib/amd64 -o "$out/bin/solnix-cputemp" solnix-cputemp.c
+      "$out/bin/solnix-cputemp" -t || { echo "FATAL: solnix-cputemp self-test failed" >&2; exit 1; }
+    '' ];
+  };
+
   # iwm-firmware -- the proprietary (redistributable) iwlwifi blob + licence
   # (./iwm-firmware.nix), gated on the unfree opt-in. Threaded through here so
   # mkIwmKernel can lay it into the BE kernel tree alongside the module. The
@@ -521,6 +639,27 @@ let
   # did not opt in.
   iwmFirmware = acceptFirmwareLicense:
     import ./iwm-firmware.nix { inherit acceptFirmwareLicense; };
+
+  # pkgs.solnix.nvidia-oss-modules -- the NVIDIA open GPU kernel modules
+  # (nvidia, nvidia_modeset, nvidia_i2c; MIT), built from the pinned upstream
+  # tree with its RM source and checked unresolved=0 against kernelNd
+  # (./nvidia-oss.nix). Headers come from kernelNd's own illumos-gate source.
+  # No config installs or binds these: first attach is supervised by hand
+  # (nvidia before nvidia_modeset; see X1E-NVIDIA-STATUS.md).
+  nvidia-oss-modules = (import ./nvidia-oss.nix {
+    illumosSrc = kernelNd.src;
+    kernel = kernelNd;
+    gate = gate';
+    solnixDev = null;
+  }).nvidia-oss-modules;
+  # nvidia-gsp-firmware 615.71.09 (GSP + ucodes for TU10X/GA10X), unfree,
+  # redistributable for open-source kernels; gated on the explicit opt-in.
+  nvidiaGspFirmware = acceptFirmwareLicense:
+    import ./nvidia-gsp-firmware.nix { inherit acceptFirmwareLicense; };
+  # i915-firmware (DMC + GuC + HuC for Alder Lake-P), unfree, redistributable
+  # (linux-firmware LICENSE.i915); gated on the explicit opt-in.
+  i915Firmware = acceptFirmwareLicense:
+    import ./i915-firmware.nix { inherit acceptFirmwareLicense; };
 
   # mkIwmDriversDb -- the /etc driver database with the iwm lines merged in, so
   # install-be lays an iwm-aware DB into the BE with NO install-be change (it
@@ -567,6 +706,56 @@ let
     '' ];
   };
 
+  # mkIwmDriversDbUnbound -- mkIwmDriversDb without the driver_aliases line:
+  # iwm has a major and minor_perm (modload and a runtime `update_drv -a`
+  # work) but binds nothing at boot. For installer media
+  # (hardware.wirelessIntel.onMedia). A separate derivation so the bound one
+  # above stays byte-identical.
+  mkIwmDriversDbUnbound = derivation {
+    name = "illumos-driver-db-iwm-unbound";
+    system = "x86_64-solaris";
+    builder = "/usr/bin/bash";
+    PATH = "/usr/bin:/usr/sbin";
+    base = drivers;
+    args = [ "-c" ''
+      set -eu
+      mkdir -p "$out"
+      cp "$base"/* "$out"/
+      chmod u+w "$out"/name_to_major "$out"/driver_aliases "$out"/minor_perm
+      if ! awk '{print $1}' "$out/name_to_major" | grep -qx iwm; then
+        used=$(awk '{print $2}' "$out/name_to_major" | sort -n)
+        n=0
+        while printf '%s\n' $used | grep -qx "$n"; do n=$((n+1)); done
+        echo "iwm $n" >> "$out/name_to_major"
+      fi
+      grep -q '^iwm:' "$out/minor_perm" || \
+        { printf 'iwm:* 0666 root sys\n'; printf 'clone:iwm 0666 root sys\n'; } >> "$out/minor_perm"
+      awk '{print $1}' "$out/name_to_major" | grep -qx iwm || { echo "FATAL: no iwm major" >&2; exit 1; }
+      if grep -q '^iwm ' "$out/driver_aliases"; then echo "FATAL: unbound DB has an iwm alias" >&2; exit 1; fi
+    '' ];
+  };
+
+  # stripSliceRefs -- run after a wrapper tar-copies a kernel slice. The copy
+  # keeps the slice's own store path in boot/grub/bin/grub and
+  # boot/solaris/bin/symdef (RUNPATH entries naming the slice's EMPTY
+  # lib-32/lib-64) and in .slice/runpath.txt, so the wrapper referenced the slice
+  # it copied and the kernel shipped twice (measured: +94.5 MB in the installer
+  # ramdisk closure, which then failed its size cap). Each hash in $strip is
+  # overwritten in place, same length, as nixpkgs' remove-references-to does;
+  # the entries named empty dirs, so nothing resolves differently. Nix enforces
+  # the result through disallowedReferences.
+  stripSliceRefs = ''
+      [ -x /usr/bin/perl ] || { echo "FATAL: /usr/bin/perl needed to strip slice references" >&2; exit 1; }
+      for sp in $strip; do
+        bh=$(basename "$sp" | cut -c1-32)
+        grep -rl "$bh" "$out" 2>/dev/null | while read -r f; do
+          [ -h "$f" ] && continue
+          chmod u+w "$f" "$(dirname "$f")"
+          /usr/bin/perl -0777 -pi -e "s/$bh/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee/g" "$f"
+        done
+      done
+  '';
+
   # mkIwmKernel -- the kernel slice with the iwm module and its firmware laid
   # into the kernel tree, so a BE populated from this slice has
   #   kernel/drv/amd64/iwm          the module install-be copies as a real file
@@ -581,11 +770,14 @@ let
     base = slices.kernel;
     module = iwm-driver;
     firmware = iwmFirmware acceptFirmwareLicense;
+    strip = [ slices.kernel ];
+    disallowedReferences = [ slices.kernel ];
     args = [ "-c" ''
       set -eu
       mkdir -p "$out"
       # copy the base kernel slice, then overlay iwm's module + firmware.
       ( cd "$base" && tar cf - . ) | ( cd "$out" && tar xf - )
+      ${stripSliceRefs}
       # NOT chmod -R: the kernel slice has relative symlinks (e.g.
       # boot/solaris/bin/root_archive) that dangle in this isolated tree, and
       # chmod -R FOLLOWS symlinks -> errors on the broken link (same hazard
@@ -605,6 +797,266 @@ let
     '' ];
   };
 
+  # iwx-firmware -- the AX2xx blobs + licence (./iwx-firmware.nix), gated on
+  # the unfree opt-in like iwmFirmware.
+  iwxFirmware = acceptFirmwareLicense:
+    import ./iwx-firmware.nix { inherit acceptFirmwareLicense; };
+  # ibt-firmware -- Intel AX2xx Bluetooth blobs + licence (./ibt-firmware.nix),
+  # same unfree opt-in; loaded by btintelfw (docs/design-bluetooth.md).
+  ibtFirmware = acceptFirmwareLicense:
+    import ./ibt-firmware.nix { inherit acceptFirmwareLicense; };
+
+  # The AX210/AX211 ids iwx claims (src/ports/wifi/iwx/compat/dev/pci/
+  # pcidevs.h WL_22500_9..17), in the illumos pciex spelling. 51f0 is the X1E.
+  iwxAliases = [ "pciex8086,2725" "pciex8086,2726" "pciex8086,51f0"
+    "pciex8086,51f1" "pciex8086,54f0" "pciex8086,7a70" "pciex8086,7af0"
+    "pciex8086,7e40" "pciex8086,7f70" ];
+
+  # mkIwxDriversDb base bind -- the /etc driver database with iwx merged in,
+  # the mkIwmDriversDb way: name_to_major iwx <lowest free major>, minor_perm
+  # iwx:* + clone:iwx, and driver_aliases for iwxAliases ONLY when bind is
+  # true. bind = false gives a database that knows the driver (so modload and
+  # a runtime `update_drv -a` work) but never attaches it at boot. `base` is
+  # the DB to extend (pkgs.solnix.drivers, or mkIwmDriversDb to carry both).
+  mkIwxDriversDb = base: bind: derivation {
+    name = "illumos-driver-db-iwx${if bind then "-bound" else ""}";
+    system = "x86_64-solaris";
+    builder = "/usr/bin/bash";
+    PATH = "/usr/bin:/usr/sbin";
+    inherit base;
+    aliases = if bind then iwxAliases else [ ];
+    args = [ "-c" ''
+      set -eu
+      mkdir -p "$out"
+      cp "$base"/* "$out"/
+      chmod u+w "$out"/name_to_major "$out"/driver_aliases "$out"/minor_perm
+      if ! awk '{print $1}' "$out/name_to_major" | grep -qx iwx; then
+        used=$(awk '{print $2}' "$out/name_to_major" | sort -n)
+        n=0
+        while printf '%s\n' $used | grep -qx "$n"; do n=$((n+1)); done
+        echo "iwx $n" >> "$out/name_to_major"
+        echo "iwx: allocated major $n (lowest free)" >&2
+      fi
+      for a in $aliases; do
+        grep -qx "iwx \"$a\"" "$out/driver_aliases" || printf 'iwx "%s"\n' "$a" >> "$out/driver_aliases"
+      done
+      grep -q '^iwx:' "$out/minor_perm" || \
+        { printf 'iwx:* 0666 root sys\n'; printf 'clone:iwx 0666 root sys\n'; } >> "$out/minor_perm"
+      # every major unique, iwx present, aliases exactly as asked
+      [ "$(awk '{print $2}' "$out/name_to_major" | sort | uniq -d | wc -l)" -eq 0 ] || { echo "FATAL: duplicate major" >&2; exit 1; }
+      awk '{print $1}' "$out/name_to_major" | grep -qx iwx || { echo "FATAL: no iwx major" >&2; exit 1; }
+      na=$(grep -c '^iwx ' "$out/driver_aliases" || true)
+      want=$(set -- $aliases; echo $#)
+      [ "$na" -eq "$want" ] || { echo "FATAL: $na iwx aliases, want $want" >&2; exit 1; }
+      grep -q '^iwx:\*' "$out/minor_perm" || { echo "FATAL: no iwx minor_perm" >&2; exit 1; }
+    '' ];
+  };
+
+  # mkIwxKernel base acceptFirmwareLicense -- `base` (a kernel slice, e.g.
+  # slices.kernel or mkIwmKernel) with the iwx module and its firmware laid in:
+  #   kernel/drv/amd64/iwx
+  #   kernel/firmware/iwx/<name>   where loadfirmware() opens them:
+  #     firmware_open("iwx", name) -> "firmware/iwx/<name>" on the module path
+  mkIwxKernel = base: acceptFirmwareLicense: derivation {
+    name = "illumos-kernel-iwx";
+    system = "x86_64-solaris";
+    builder = "/usr/bin/bash";
+    PATH = "/usr/bin:/usr/sbin";
+    inherit base;
+    module = iwx-driver;
+    firmware = iwxFirmware acceptFirmwareLicense;
+    strip = [ base slices.kernel ];
+    disallowedReferences = [ base slices.kernel ];
+    args = [ "-c" ''
+      set -eu
+      mkdir -p "$out"
+      ( cd "$base" && tar cf - . ) | ( cd "$out" && tar xf - )
+      ${stripSliceRefs}
+      # NOT chmod -R (it follows the slice's dangling relative symlinks).
+      for d in "$out" "$out/kernel" "$out/kernel/drv" "$out/kernel/drv/amd64" "$out/kernel/firmware"; do
+        [ -d "$d" ] && [ ! -h "$d" ] && chmod u+w "$d" 2>/dev/null || true
+      done
+      mkdir -p "$out/kernel/drv/amd64" "$out/kernel/firmware/iwx"
+      cp "$module/kernel/drv/amd64/iwx" "$out/kernel/drv/amd64/iwx"
+      cp "$firmware/kernel/firmware/iwx/"* "$out/kernel/firmware/iwx/"
+      chmod 0555 "$out/kernel/drv/amd64/iwx"
+      [ -f "$out/kernel/drv/amd64/iwx" ] || { echo "FATAL: iwx module not laid in" >&2; exit 1; }
+      for f in iwx-so-a0-gf-a0-77 iwx-so-a0-gf-a0.pnvm; do
+        [ -f "$out/kernel/firmware/iwx/$f" ] || { echo "FATAL: iwx firmware $f not laid in" >&2; exit 1; }
+      done
+      [ -e "$out/platform/i86pc/kernel/amd64/unix" ] || { echo "FATAL: base kernel clobbered" >&2; exit 1; }
+    '' ];
+  };
+
+
+  # i915Aliases -- the iGPUs hardware.graphics.i915.attachAtBoot binds: the
+  # X1E's Alder Lake-P Iris Xe and the X1's Coffee Lake-H UHD 630 (the two the
+  # staged attach plan covers, src/drm-port/i915/STAGED-ATTACH-PLAN.md).
+  i915Aliases = [ "pciex8086,46a6" "pciex8086,3e9b" ];
+
+  # mkDriversDbWith base drivers -- `base` (a driver DB shaped like `drivers`)
+  # with each of `drivers` ({ name; perm; aliases; }) added the mkIwxDriversDb
+  # way: name_to_major at the lowest free major, "minor_perm <name>:* <perm>"
+  # unless perm is null, and one driver_aliases line per alias. No aliases =
+  # the system knows the driver (modload, a runtime update_drv -a work) but
+  # binds it to nothing at boot.
+  mkDriversDbWith = base: drivers: derivation {
+    name = "illumos-driver-db-gpu";
+    system = "x86_64-solaris";
+    builder = "/usr/bin/bash";
+    PATH = "/usr/bin:/usr/sbin";
+    inherit base;
+    spec = builtins.concatStringsSep "\n" (map (d:
+      "${d.name}|${if d.perm == null then "" else d.perm}|${builtins.concatStringsSep " " d.aliases}") drivers);
+    args = [ "-c" ''
+      set -eu
+      mkdir -p "$out"
+      cp "$base"/* "$out"/
+      chmod u+w "$out"/name_to_major "$out"/driver_aliases "$out"/minor_perm
+      printf '%s\n' "$spec" | while IFS='|' read -r name perm aliases; do
+        [ -n "$name" ] || continue
+        if ! awk '{print $1}' "$out/name_to_major" | grep -qx "$name"; then
+          used=$(awk '{print $2}' "$out/name_to_major" | sort -n)
+          n=0
+          while printf '%s\n' $used | grep -qx "$n"; do n=$((n+1)); done
+          echo "$name $n" >> "$out/name_to_major"
+          echo "$name: allocated major $n (lowest free)" >&2
+        fi
+        [ -z "$perm" ] || grep -q "^$name:" "$out/minor_perm" || printf '%s:* %s\n' "$name" "$perm" >> "$out/minor_perm"
+        for a in $aliases; do
+          grep -qx "$name \"$a\"" "$out/driver_aliases" || printf '%s "%s"\n' "$name" "$a" >> "$out/driver_aliases"
+        done
+        na=$(grep -c "^$name " "$out/driver_aliases" || true)
+        want=$(set -- $aliases; echo $#)
+        [ "$na" -eq "$want" ] || { echo "FATAL: $name has $na aliases, want $want" >&2; exit 1; }
+        [ -z "$perm" ] || grep -q "^$name:\*" "$out/minor_perm" || { echo "FATAL: no $name minor_perm" >&2; exit 1; }
+        # DRM minors (DDI_NT_DISPLAY_DRM, "ddi_display:drm") get /dev/dri/<minor>, as OI's
+        # drm package adds: devfsadm has no built-in rule for that node type. Type only: a
+        # devlink.tab "name=" selects the node name (display), not the driver, and matched
+        # nothing on lixi (measured; the type-only rule gave card0 + renderD128).
+        if [ "$name" = i915 ]; then
+          chmod u+w "$out/devlink.tab.add"
+          l=$(printf 'type=ddi_display:drm\tdri/\\M0')
+          grep -qxF "$l" "$out/devlink.tab.add" || printf '%s\n' "$l" >> "$out/devlink.tab.add"
+        fi
+      done
+      [ "$(awk '{print $2}' "$out/name_to_major" | sort | uniq -d | wc -l)" -eq 0 ] || { echo "FATAL: duplicate major" >&2; exit 1; }
+    '' ];
+  };
+
+  # The LPSS I2C controller hardware.touchpad.i2cHid binds dwiic to: the X1E
+  # Gen 5's Alder Lake-P I2C0 (8086:51e8), behind which sits the ELAN touchpad.
+  touchpadAliases = [ "pci8086,51e8" ];
+
+  # mkTouchpadDriversDb base -- `base` with dwiic (bound to touchpadAliases)
+  # and ihid (no alias: it binds by node name to the i2c device the
+  # solnix-touchpad SMF one-shot adds) and dacf.conf.add, the dacf(5) rule
+  # install-be appends to /etc/dacf.conf: consconfig_dacf pushes usbms on
+  # ihid's internal_mouse node and links it under consms, as it does for a USB
+  # mouse (hid:internal_mouse). Neither driver has a minor_perm line: dwiic's
+  # nodes belong to i2cnex and ihid's only node is kernel-internal.
+  mkTouchpadDriversDb = base: derivation {
+    name = "illumos-driver-db-touchpad";
+    system = "x86_64-solaris";
+    builder = "/usr/bin/bash";
+    PATH = "/usr/bin:/usr/sbin";
+    db = mkDriversDbWith base [
+      { name = "dwiic"; perm = null; aliases = touchpadAliases; }
+      { name = "ihid"; perm = null; aliases = [ ]; }
+    ];
+    args = [ "-c" ''
+      set -eu
+      mkdir -p "$out"; cp "$db"/* "$out"/; chmod u+w "$out"/*
+      for op in post-attach pre-detach; do
+        printf 'driver-minorname="ihid:internal_mouse" consconfig_dacf:ms_config %s - pushmod="usbms"\n' $op
+      done >> "$out/dacf.conf.add"
+      [ "$(grep -c '^driver-minorname="ihid:internal_mouse"' "$out/dacf.conf.add")" -eq 2 ] || { echo "FATAL: dacf rule" >&2; exit 1; }
+    '' ];
+  };
+
+  # mkTouchpadKernel base -- `base` (a kernel slice) with kernel/drv/amd64/
+  # dwiic and ihid laid in, the mkIwxKernel way. No driver.conf: nothing here
+  # attaches unless the driver DB binds it.
+  mkTouchpadKernel = base: derivation {
+    name = "illumos-kernel-touchpad";
+    system = "x86_64-solaris";
+    builder = "/usr/bin/bash";
+    PATH = "/usr/bin:/usr/sbin";
+    inherit base;
+    module = touchpad-driver;
+    strip = [ base slices.kernel ];
+    disallowedReferences = [ base slices.kernel touchpad-driver ];
+    args = [ "-c" ''
+      set -eu
+      mkdir -p "$out"
+      ( cd "$base" && tar cf - . ) | ( cd "$out" && tar xf - )
+      ${stripSliceRefs}
+      for d in "$out" "$out/kernel" "$out/kernel/drv" "$out/kernel/drv/amd64"; do
+        [ -d "$d" ] && [ ! -h "$d" ] && chmod u+w "$d" 2>/dev/null || true
+      done
+      mkdir -p "$out/kernel/drv/amd64"
+      for m in dwiic ihid; do
+        cp "$module/kernel/drv/amd64/$m" "$out/kernel/drv/amd64/$m"; chmod 0555 "$out/kernel/drv/amd64/$m"
+        [ ! -e "$out/kernel/drv/$m.conf" ] || { echo "FATAL: $m.conf in the tree" >&2; exit 1; }
+      done
+      [ -e "$out/platform/i86pc/kernel/amd64/unix" ] || { echo "FATAL: base kernel clobbered" >&2; exit 1; }
+    '' ];
+  };
+
+  # mkGpuKernel base { nvidia; gspFirmware; } -- `base` (a kernel slice, e.g.
+  # mkIwxKernel's) with kernel/drv/amd64/i915 laid in, plus nvidia,
+  # nvidia_modeset and nvidia_i2c when nvidia = true, plus NVIDIA's GSP
+  # firmware (kernel/firmware/nvidia/<version>/) when gspFirmware is the
+  # licence-accepted nvidiaGspFirmware. No driver.conf is laid: nvidia.conf
+  # and nvidia_i2c.conf declare pseudo children (nvidia_i2c with
+  # ddi-forceattach=1) that boot would configure, loading nvidia unasked.
+  # The nvidia modules embed __FILE__ paths into kernelNd's illumos source
+  # (908 MB); they are rewritten like stripSliceRefs so that tree stays out of
+  # the closure.
+  mkGpuKernel = base: { nvidia ? false, gspFirmware ? null, i915Firmware ? null }: derivation {
+    name = "illumos-kernel-gpu";
+    system = "x86_64-solaris";
+    builder = "/usr/bin/bash";
+    PATH = "/usr/bin:/usr/sbin";
+    inherit base;
+    i915 = i915-driver;
+    nv = if nvidia then nvidia-oss-modules else "";
+    gsp = if gspFirmware == null then "" else gspFirmware;
+    ifw = if i915Firmware == null then "" else i915Firmware;
+    strip = [ base slices.kernel kernelNd.src ];
+    disallowedReferences = [ base slices.kernel kernelNd.src kernelNd i915-driver ]
+      ++ (if nvidia then [ nvidia-oss-modules ] else [ ]);
+    args = [ "-c" ''
+      set -eu
+      mkdir -p "$out"
+      ( cd "$base" && tar cf - . ) | ( cd "$out" && tar xf - )
+      for d in "$out" "$out/kernel" "$out/kernel/drv" "$out/kernel/drv/amd64" "$out/kernel/firmware"; do
+        [ -d "$d" ] && [ ! -h "$d" ] && chmod u+w "$d" 2>/dev/null || true
+      done
+      mkdir -p "$out/kernel/drv/amd64"
+      mods=i915
+      cp "$i915/kernel/drv/amd64/i915" "$out/kernel/drv/amd64/i915"
+      if [ -n "$nv" ]; then
+        mods="$mods nvidia nvidia_modeset nvidia_i2c"
+        for m in nvidia nvidia_modeset nvidia_i2c; do cp "$nv/kernel/drv/amd64/$m" "$out/kernel/drv/amd64/$m"; done
+      fi
+      if [ -n "$gsp" ]; then
+        mkdir -p "$out/kernel/firmware"
+        cp -R "$gsp/kernel/firmware/nvidia" "$out/kernel/firmware/"
+      fi
+      if [ -n "$ifw" ]; then
+        mkdir -p "$out/kernel/firmware/drm"
+        cp -R "$ifw/kernel/firmware/drm/i915" "$out/kernel/firmware/drm/"
+      fi
+      ${stripSliceRefs}
+      for m in $mods; do
+        chmod 0555 "$out/kernel/drv/amd64/$m"
+        [ ! -e "$out/kernel/drv/$m.conf" ] || { echo "FATAL: $m.conf in the tree would attach $m at boot" >&2; exit 1; }
+      done
+      [ -e "$out/platform/i86pc/kernel/amd64/unix" ] || { echo "FATAL: base kernel clobbered" >&2; exit 1; }
+      echo "gpu kernel: $mods''${gsp:+ + GSP firmware}''${ifw:+ + i915 firmware}" >&2
+    '' ];
+  };
 
   # worldMan: the gate's base man pages as a doc-only store path (the illumos
   # analog of NixOS delivering man pages through a profile package rather than
@@ -639,22 +1091,9 @@ let
   # TODO in ./nix.nix for the proper mk-illumos-component slice.
   nix = import ./nix.nix { };
 
-  # nix224 (pkgs.solnix.nix224) — the store-path Nix 2.24.15, RUNPATH-correct
-  # (runs with no LD_LIBRARY_PATH), ships on PATH via the system profile the
-  # NixOS way. This is the shipped nix (nix.package default), replacing the
-  # /nix-tools224 bootstrap that must never appear on a shipped image PATH.
-  # Substitutable from cache.solnix.io (5HAV-signed, durable).
-  #
-  # fetchClosure, not storePath: builtins.storePath is forbidden in pure eval
-  # (nix eval .#), which blocked every toplevel via nix.package's default. Same
-  # rewrite as starter.nix — name the substituter + path and pull at eval time;
-  # inputAddressed = true because this path is input-addressed, so signature
-  # trust (cache.solnix.io-1:5HAV..., in base.nix) does the integrity work.
-  nix224 = builtins.fetchClosure {
-    fromStore = "https://cache.solnix.io";
-    fromPath = "/nix/store/w44py7y17i7z5c9mwhh62q5yzx681y1a-nix-2.24.15";
-    inputAddressed = true;
-  };
+  # nix224 is retired: it was a fetchClosure of a cache path nobody can rebuild
+  # bit-for-bit, and the infra team hid it in the 10-05 cache retirement. The
+  # shipped Nix is nixSrc (./nix-src.nix, nix.package's default).
 
   # cached (pkgs.solnix.cached.<pname>) — every wave-built package in the cache
   # (docs/registry/arch-manifest.tsv), exposed as a store-path attr so a config
@@ -670,7 +1109,8 @@ let
   starter = import ./starter.nix { system = "x86_64-solaris"; };
 in
 {
-  inherit libc rtld ld sys base-tools systemPath nix nix224 cached starter gcc world early stock drivers kernelNd worldMan;
+  inherit libc rtld ld sys base-tools systemPath nix cached starter gcc world early stock drivers kernelNd worldMan;
+  inherit rustSeedStage rust198 rust199;
   # seedBuildTools -- the default build-tool set a bare solnix system passes as
   # buildTools so from-source builds resolve gmake/tar/grep/sed/gstrip/gzip/xz
   # from the store (not /usr/gnu). host-pkgs.nix wires it as the default for a
@@ -680,11 +1120,35 @@ in
   # helpers wireless-iwx.nix uses to render an iwm-aware driver DB and kernel
   # tree when hardware.wirelessIwm.attachAtBoot. mkIwmKernel/iwmFirmware take
   # the unfree opt-in so the blob stays out of any non-opted closure.
-  inherit iwm-driver mkIwmDriversDb mkIwmKernel iwmFirmware wpa-pmk;
+  inherit iwm-driver mkIwmDriversDb mkIwmDriversDbUnbound mkIwmKernel iwmFirmware wpa-pmk solnix-cputemp;
+  # Intel Bluetooth firmware (phase 0, docs/design-bluetooth.md).
+  inherit ibtFirmware;
+  # iwx wifi (AX2xx): module only; mkIwxDriversDb/mkIwxKernel below.
+  inherit iwx-driver iwxFirmware iwxAliases mkIwxDriversDb mkIwxKernel;
+  inherit nvidia-oss-modules nvidiaGspFirmware i915Firmware;
+  # Intel iGPU (i915) and the GPU driver-DB/kernel helpers (modules/config/graphics-gpu.nix).
+  inherit i915-driver i915Aliases mkDriversDbWith mkGpuKernel;
+  # X1E touchpad (dwiic + ihid) and its driver-DB/kernel helpers (modules/config/touchpad-i2c-hid.nix).
+  inherit touchpad-driver touchpadAliases mkTouchpadDriversDb mkTouchpadKernel;
 
   inherit (srcPkgs) zlib libxml2 openssl openssh bash nspr nss git libcExtra binutils gnumake gccWrapper vi pkgconf;
   inherit (srcPkgs) ncurses less htop top libevent tmux coreutils gnugrep gnused gnutar findutils diffutils jq gettext home-manager xorgproto lndir hostname libiconv;
-  inherit (srcPkgs) gzip nano rsync smartmontools tree wget;
+  inherit (srcPkgs) gzip nano rsync smartmontools tree wget db1 nvi;
+  inherit (graphics) meson samurai expat libffi wayland wayland-protocols libdrm mesa
+    pixman xkeyboard-config libxkbcommon libdisplay-info seatd dbus;
+  inherit (cosmic) cosmic-comp cosmic-term cosmic-session cosmic-panel cosmic-applets cosmic-launcher
+    cosmic-app-library cosmic-notifications cosmic-osd cosmic-settings-daemon cosmic-bg cosmic-workspaces cosmic-randr cosmic-idle
+    cosmic-settings cosmic-files cosmic-edit cosmic-store cosmic-screenshot cosmic-greeter greetd
+    open-sans noto-sans noto-sans-mono fira-mono hicolor-icon-theme pop-icon-theme cosmic-icons;
+  inherit (desktop) pop-launcher cosmic-wallpapers sound-theme-freedesktop adwaita-icon-theme dejavu-fonts liberation-fonts
+    noto-fonts-color-emoji xdg-utils xdg-user-dirs;
+  inherit (gtk) pcre2 glib libpng libjpeg-turbo freetype fontconfig fribidi harfbuzz cairo pango gdk-pixbuf libepoxy
+    at-spi2-core gtk3 gperf nasm ninja meson_1_10;
+  # cargoLib.{vendorOf,cargoPkg}: build any Cargo.lock'd crate on rust199 (./cargo.nix).
+  cargoLib = cargo;
+  inherit (goChain) go go_1_4 go_1_17 go_1_20 go_1_22 go_1_24 go_1_26 go_1_27;
+  inherit bsdfetch;
+  inherit (torrent) libtorrent-rasterbar solnix-torrent;
   xz = srcPkgs.nixChain.xz;
   # A C/C++ toolchain to put on PATH (nix-shell / nix profile install), the
   # solnix analog of nixpkgs' stdenv.cc: the wrapped gcc, gas, GNU make. The
@@ -730,4 +1194,4 @@ in
   # the CORE-OS slices, each with a computed DT_NEEDED closure (./slices.nix).
   inherit slices;
   inherit (slices) core-utils oamuser halt smf zfs kernel;
-}
+} // cli

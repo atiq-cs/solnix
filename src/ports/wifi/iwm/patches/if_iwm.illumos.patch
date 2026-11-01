@@ -292,3 +292,21 @@
  				if (m == NULL) {
  					ifp->if_ierrors++;
  					m_freem(m0);
+@@ -11669,7 +11736,7 @@
+ 
+ 	/* Print version info and MAC address on first successful fw load. */
+ 	sc->attached = 1;
+-	printf("%s: hw rev 0x%x, fw ver %s, address %s\n",
++	cmn_err(CE_CONT, "!%s: hw rev 0x%x, fw ver %s, address %s\n",
+ 	    DEVNAME(sc), sc->sc_hw_rev & IWM_CSR_HW_REV_TYPE_MSK,
+ 	    sc->sc_fwver, ether_sprintf(sc->sc_nvm.hw_addr));
+ 
+@@ -11779,7 +11846,7 @@
+ 		printf("\n");
+ 		return;
+ 	}
+-	printf(", %s\n", intrstr);
++	(void) intrstr;	/* solnix: no stray ", msi" console line */
+ 
+ 	sc->sc_hw_rev = IWM_READ(sc, IWM_CSR_HW_REV);
+ 	switch (PCI_PRODUCT(pa->pa_id)) {

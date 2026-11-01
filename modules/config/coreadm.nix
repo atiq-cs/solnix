@@ -52,6 +52,19 @@ in
         SMF down with it (measured). An installed system on a real pool keeps it on.
       '';
     };
+    # NixOS bounds cores too (systemd-coredump: MaxUse 10% of the fs, tmpfiles `d /var/lib/systemd/coredump 2w`).
+    # The global core ignores RLIMIT_CORE (gate core.c: cg->core_rlimit), so a session ulimit cannot stop them;
+    # the bound is a pruning loop. lixi: a COSMIC logout wrote ~16 cores (2 GB) each time, 118 in a day.
+    prune = {
+      enable = lib.mkOption { type = lib.types.bool; default = true;
+        description = "Prune /var/cores (solnix-core-prune): by age, per program, and total size, oldest first."; };
+      maxAgeDays = lib.mkOption { type = lib.types.ints.positive; default = 14;
+        description = "Remove cores older than this (NixOS: 2 weeks)."; };
+      keepPerProgram = lib.mkOption { type = lib.types.ints.positive; default = 3;
+        description = "Keep only the newest N cores of each program name."; };
+      maxUseMB = lib.mkOption { type = lib.types.ints.positive; default = 4096;
+        description = "Remove the oldest cores past this total, in MiB."; };
+    };
     developerUsers = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ ];
@@ -88,5 +101,21 @@ in
     # just fails (coreadm logs it).
     environment.generatedEtc."solnix/core-users" =
       lib.concatStringsSep "\n" devUids + lib.optionalString (devUids != [ ]) "\n";
+
+    smf.services.solnix-core-prune = lib.mkIf cfg.prune.enable {
+      enable = true;
+      category = "site";
+      description = "solnix /var/cores bound (age, per program, total size)";
+      model = "contract";
+      requires = [ "svc:/system/filesystem/local:default" ];
+      environment = {
+        CORE_DIR = "/var/cores";
+        CORE_MAX_AGE_DAYS = toString cfg.prune.maxAgeDays;
+        CORE_KEEP_PER_PROGRAM = toString cfg.prune.keepPerProgram;
+        CORE_MAX_USE_MB = toString cfg.prune.maxUseMB;
+      };
+      start.exec = "/usr/bin/ksh93 ${./core-prune.sh} &";
+      stop.exec = ":kill";
+    };
   };
 }

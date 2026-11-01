@@ -1,6 +1,27 @@
 --- upstream/if_iwxvar.h
 +++ build/dev/pci/if_iwxvar.h
-@@ -759,6 +759,22 @@
+@@ -489,6 +489,12 @@
+ #define IWX_BZ_B_GF_A_FW	"iwx-bz-b0-gf-a0-100"
+ #define IWX_BZ_B_GF_A_PNVM	"iwx-bz-b0-gf-a0.pnvm"
+ 
++/*
++ * ILLUMOS: these cfg tables are object DEFINITIONS in a header. A second
++ * translation unit that needs struct iwx_softc (iwx_glue.c) defines
++ * IWX_NO_CFG_TABLES so the module gets one copy, from if_iwx.c.
++ */
++#ifndef IWX_NO_CFG_TABLES
+ const struct iwx_device_cfg iwx_9560_quz_a0_jf_b0_cfg = {
+ 	.fw_name = IWX_QUZ_A_JF_B_FW,
+ };
+@@ -594,6 +600,7 @@
+ 	.fw_name = IWX_MA_A_FM_A_FW,
+ 	.pnvm_name = IWX_MA_A_FM_A_PNVM,
+ };
++#endif /* !IWX_NO_CFG_TABLES */
+ 
+ #define IWX_CFG_ANY (~0)
+ 
+@@ -759,6 +766,22 @@
  
  	struct rwlock ioctl_rwl;
  

@@ -1,0 +1,138 @@
+--- a/usr/src/uts/aarch64/io/pciex/pcierc/pci_boot.c	2026-10-22 23:27:24.635573222 -0400
++++ b/usr/src/uts/aarch64/io/pciex/pcierc/pci_boot.c	2026-10-22 23:27:24.636573206 -0400
+@@ -1043,8 +1043,16 @@
+ 	add_ranges_prop(pci_bus_res, secbus, B_TRUE);
+ 
+ 	/*
+-	 * Reprogram memory
++	 * Reprogram memory only if the parent was reprogrammed, memory decode
++	 * is off, or both windows are disabled (as x86 does); otherwise the
++	 * firmware window kept by add_ppb_props() stays where it is.
+ 	 */
++	if (!pci_bus_res[parbus].mem_reprogram &&
++	    (cmd_reg & PCI_COMM_MAE) != 0 &&
++	    (mem.base <= mem.limit || pmem.base <= pmem.limit))
++		goto cmd_enable;
++	pci_bus_res[secbus].mem_reprogram = B_TRUE;
++
+ 	/* Mem range */
+ 	if (pci_bus_res[secbus].mem_used != NULL) {
+ 		memlist_rsrc_subsume(&pci_bus_res[secbus].mem_used,
+@@ -1848,13 +1856,22 @@
+ 
+ 		if (op == CONFIG_INFO) {
+ 			dcmn_err(CE_NOTE,
+-			    MSGHDR "BAR%u %sMEM FWINIT 0x%lx ~ 0x%lx%s "
+-			    "(ignored)",
++			    MSGHDR "BAR%u %sMEM FWINIT 0x%lx ~ 0x%lx%s",
+ 			    ddi_node_name(rcdip), bus, dev, func, bar,
+ 			    (phys_hi & PCI_PREFETCH_B) ? "P" : " ",
+ 			    fbase, len,
+ 			    *bar_sz == PCI_BAR_SZ_64 ? " (64-bit)" : "");
+ 
++			/* Keep a firmware-assigned BAR: mark its span used. */
++			if (fbase != 0) {
++				memlist_rsrc_delete(mem_avail, fbase, len);
++				memlist_rsrc_delete(pmem_avail, fbase, len);
++				if (phys_hi & PCI_PREFETCH_B)
++					memlist_rsrc_add(pmem_used, fbase, len);
++				else
++					memlist_rsrc_add(mem_used, fbase, len);
++			}
++
+ 			/*
+ 			 * We need to actually increase the amount of memory
+ 			 * that we request to take into account alignment.
+@@ -1870,7 +1887,8 @@
+ 				pci_bus_res[bus].pmem_size += len;
+ 			else
+ 				pci_bus_res[bus].mem_size += len;
+-		} else {
++		} else if (fbase == 0 || pci_bus_res[bus].mem_reprogram) {
++			/* Unassigned, or its bridge window moved: allocate. */
+ 			boolean_t pf = B_FALSE, got = B_FALSE;
+ 			fbase = 0;
+ 
+@@ -2145,6 +2163,7 @@
+ 	} io, mem, pmem;
+ 	uchar_t secbus, subbus;
+ 	uchar_t progclass;
++	uint16_t cmd_reg;
+ 
+ 	secbus = pci_cfgacc_get8(rcdip, PCI_GETBDF(bus, dev, func),
+ 	    PCI_BCNF_SECBUS);
+@@ -2228,12 +2247,10 @@
+ 		    "(ignored)",
+ 		    ddi_node_name(dip), bus, dev, func, io.base, io.limit,
+ 		    io.base > io.limit ? " (disabled)" : "");
+-		dcmn_err(CE_NOTE, MSGHDR " MEM FWINIT 0x%lx ~ 0x%lx%s "
+-		    "(ignored)",
++		dcmn_err(CE_NOTE, MSGHDR " MEM FWINIT 0x%lx ~ 0x%lx%s",
+ 		    ddi_node_name(dip), bus, dev, func, mem.base, mem.limit,
+ 		    mem.base > mem.limit ? " (disabled)" : "");
+-		dcmn_err(CE_NOTE, MSGHDR "PMEM FWINIT 0x%lx ~ 0x%lx%s "
+-		    "(ignored)",
++		dcmn_err(CE_NOTE, MSGHDR "PMEM FWINIT 0x%lx ~ 0x%lx%s",
+ 		    ddi_node_name(dip), bus, dev, func, pmem.base, pmem.limit,
+ 		    pmem.base > pmem.limit ? " (disabled)" : "");
+ 	}
+@@ -2242,15 +2259,50 @@
+ 	io.limit = PPB_DISABLE_IORANGE_LIMIT;
+ 	set_ppb_res(rcdip, dip, bus, dev, func, RES_IO, io.base, io.limit);
+ 
+-	mem.base = PPB_DISABLE_MEMRANGE_BASE;
+-	mem.limit = PPB_DISABLE_MEMRANGE_LIMIT;
+-	set_ppb_res(rcdip, dip, bus, dev, func, RES_MEM, mem.base,
+-	    mem.limit);
+-
+-	pmem.base = PPB_DISABLE_MEMRANGE_BASE;
+-	pmem.limit = PPB_DISABLE_MEMRANGE_LIMIT;
+-	set_ppb_res(rcdip, dip, bus, dev, func, RES_PMEM, pmem.base,
+-	    pmem.limit);
++	/*
++	 * Keep a memory window that firmware programmed and enabled (Memory
++	 * Access Enable set, base non-zero), as the x86 code does.  On SBBR
++	 * machines the SPCR console UART can sit behind a bridge (AWS Graviton:
++	 * 15:00.0 at 0x83e00000 behind root port 00:02.0), and disabling the
++	 * window cuts the kernel off from its own console.  Only a window that
++	 * firmware left unconfigured is disabled here, for fix_ppb_res().
++	 */
++	cmd_reg = pci_cfgacc_get16(rcdip, PCI_GETBDF(bus, dev, func),
++	    PCI_CONF_COMM);
++
++	if ((cmd_reg & PCI_COMM_MAE) == 0 || mem.base == 0) {
++		mem.base = PPB_DISABLE_MEMRANGE_BASE;
++		mem.limit = PPB_DISABLE_MEMRANGE_LIMIT;
++		set_ppb_res(rcdip, dip, bus, dev, func, RES_MEM, mem.base,
++		    mem.limit);
++	} else if (mem.base < mem.limit) {
++		uint64_t size = mem.limit - mem.base + 1;
++
++		memlist_rsrc_add(&pci_bus_res[secbus].mem_avail, mem.base,
++		    size);
++		memlist_rsrc_add(&pci_bus_res[bus].mem_used, mem.base, size);
++		memlist_rsrc_delete(&pci_bus_res[bus].mem_avail, mem.base,
++		    size);
++		memlist_rsrc_delete(&pci_bus_res[bus].pmem_avail, mem.base,
++		    size);
++	}
++
++	if ((cmd_reg & PCI_COMM_MAE) == 0 || pmem.base == 0) {
++		pmem.base = PPB_DISABLE_MEMRANGE_BASE;
++		pmem.limit = PPB_DISABLE_MEMRANGE_LIMIT;
++		set_ppb_res(rcdip, dip, bus, dev, func, RES_PMEM, pmem.base,
++		    pmem.limit);
++	} else if (pmem.base < pmem.limit) {
++		uint64_t size = pmem.limit - pmem.base + 1;
++
++		memlist_rsrc_add(&pci_bus_res[secbus].pmem_avail, pmem.base,
++		    size);
++		memlist_rsrc_add(&pci_bus_res[bus].pmem_used, pmem.base, size);
++		memlist_rsrc_delete(&pci_bus_res[bus].pmem_avail, pmem.base,
++		    size);
++		memlist_rsrc_delete(&pci_bus_res[bus].mem_avail, pmem.base,
++		    size);
++	}
+ 
+ 	if (pci_cfgacc_get16(rcdip, PCI_GETBDF(bus, dev, func),
+ 	    PCI_BCNF_BCNTRL) & PCI_BCNF_BCNTRL_VGA_ENABLE) {

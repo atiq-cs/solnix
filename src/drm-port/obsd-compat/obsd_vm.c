@@ -85,6 +85,7 @@ struct obsd_pfnent {
 
 static avl_tree_t obsd_pfntree;
 static kmutex_t obsd_pfnlock;
+static kmutex_t obsd_kmap_lock;		/* kmap_atomic_prot's shared-VA path */
 static int obsd_vm_inited;
 struct uvmexp uvmexp;
 
@@ -112,6 +113,7 @@ obsd_vm_init(void)
 	if (obsd_vm_inited)
 		return;
 	mutex_init(&obsd_pfnlock, NULL, MUTEX_DRIVER, NULL);
+	mutex_init(&obsd_kmap_lock, NULL, MUTEX_DRIVER, NULL);
 	avl_create(&obsd_pfntree, obsd_pfncmp, sizeof (struct obsd_pfnent),
 	    offsetof(struct obsd_pfnent, e_node));
 	uvmexp.pagesize = PAGESIZE;
@@ -617,6 +619,43 @@ struct vm_page *
 pmap_unmap_direct(vaddr_t va)
 {
 	return (uvm_atopg(va));
+}
+
+/*
+ * kmap_atomic_prot / kunmap_atomic (REAL; replace drm_linux.c's, which the
+ * i915 build renames away). OpenBSD's maps every page at ONE global
+ * kmap_atomic_va and relies on the kernel lock to serialise its callers;
+ * here KERNEL_LOCK is a no-op and the KASSERT guarding it is compiled out,
+ * so two CPUs flushing GEM pages (drm_clflush_sg) remapped that VA under
+ * each other: hati_pte_map "flags & HAT_LOAD_REMAP" panic on lixi
+ * (2026-10-28, vmdump.2, the first cosmic-comp atomic commit).
+ * PAGE_KERNEL (0, cacheable) is the direct map: no shared state, any CPU.
+ * Any other prot (TTM's WC/UC system pages; integrated GPUs use shmem, not
+ * TTM) keeps the single VA, now serialised by a mutex held from map to
+ * unmap. shortcut: an adaptive mutex across the atomic section; a caller
+ * already at high PIL would deadlock on contention, upgrade to a per-CPU
+ * VA if a discrete-GPU (TTM) path ever uses a non-default prot here.
+ */
+extern vaddr_t kmap_atomic_va;		/* drm_linux.c's init allocates it */
+
+void *
+kmap_atomic_prot(struct vm_page *pg, int prot)	/* pgprot_t: int (linux/types.h) */
+{
+	if (prot == 0)
+		return ((void *)pmap_map_direct(pg));
+	mutex_enter(&obsd_kmap_lock);
+	pmap_kenter_pa(kmap_atomic_va, VM_PAGE_TO_PHYS(pg) | prot,
+	    PROT_READ | PROT_WRITE);
+	return ((void *)kmap_atomic_va);
+}
+
+void
+kunmap_atomic(void *addr)
+{
+	if ((vaddr_t)addr != kmap_atomic_va)
+		return;			/* a direct-map address: nothing to undo */
+	pmap_kremove(kmap_atomic_va, PAGE_SIZE);
+	mutex_exit(&obsd_kmap_lock);
 }
 
 void

@@ -1,0 +1,350 @@
+--- /build/dboot_synth_fdt.c.b2	Sat Oct 24 13:16:24 2026
++++ usr/src/uts/armv8/dboot/dboot_synth_fdt.c	Tue Oct 27 14:48:59 2026
+@@ -399,117 +399,7 @@
+ 	g->ngicr_regions++;
+ }
+ 
+-/*
+- * Emit the GICR topology to the console.
+- *
+- * dboot_printf() goes through bcons, which on the real-hardware quiet-loader
+- * path is not wired to the SPCR UART -- its output never reached the Graviton
+- * serial console.  The mechanism that DOES print (proven by the [A6KCON:*]
+- * markers) is a raw store to the SPCR UART data register, so use that: the MMU
+- * is off in dboot, making the SPCR base directly addressable.  Falls back to
+- * dboot_printf when no SPCR UART was found (e.g. QEMU virt, where
+- * dboot_printf works anyway).
+- */
+ static void
+-synth_uart_putc(volatile uint32_t *dr, char c)
+-{
+-	/*
+-	 * Bounded TXFF wait before each byte.  The short [A6KCON:*] markers
+-	 * could store blindly (14 bytes fits the 32-byte PL011 TX FIFO), but
+-	 * this diagnostic emits a few hundred bytes and would overflow the
+-	 * FIFO and drop characters.  The wait is CAPPED because Graviton's
+-	 * PL011 does not drive TXFF/TXFE the way SBSA implies (the same quirk
+-	 * the boot_uart FR-poll fix handles) -- an unbounded spin here would
+-	 * hang the boot instead of printing.  UARTFR is at offset 0x18, i.e.
+-	 * dr[6] in uint32_t units; TXFF is bit 5.
+-	 */
+-	uint32_t cap;
+-
+-	for (cap = 0; (dr[6] & (1 << 5)) != 0 && cap < 1000000u; cap++)
+-		;
+-	*dr = (uint32_t)(uint8_t)c;
+-}
+-
+-static void
+-synth_uart_puts(volatile uint32_t *dr, const char *s)
+-{
+-	while (*s != '\0') {
+-		if (*s == '\n')
+-			synth_uart_putc(dr, '\r');
+-		synth_uart_putc(dr, *s++);
+-	}
+-}
+-
+-static void
+-synth_uart_puthex(volatile uint32_t *dr, uint64_t v)
+-{
+-	static const char hex[] = "0123456789abcdef";
+-	char buf[17];
+-	int i = 0, started = 0, sh;
+-
+-	for (sh = 60; sh >= 0; sh -= 4) {
+-		unsigned nyb = (unsigned)((v >> sh) & 0xf);
+-		if (nyb != 0 || started || sh == 0) {
+-			buf[i++] = hex[nyb];
+-			started = 1;
+-		}
+-	}
+-	buf[i] = '\0';
+-	synth_uart_puts(dr, buf);
+-}
+-
+-static void
+-synth_gicr_diag(struct xboot_info *bi, const synth_gic_t *g, uint32_t nr)
+-{
+-	volatile uint32_t *dr;
+-	uint32_t i;
+-
+-	if (bi == NULL || bi->bi_bsvc_uart_mmio_base == 0) {
+-		dboot_printf("[A6GIC] ngicc=%u nbase=%u regions=%u "
+-		    "stride=0x%llx gicr=0x%llx\n", g->ngicc,
+-		    synth_gicr_ncpu_base, nr,
+-		    (unsigned long long)g->gicr_stride,
+-		    (unsigned long long)g->gicr);
+-		return;
+-	}
+-
+-	dr = (volatile uint32_t *)(uintptr_t)bi->bi_bsvc_uart_mmio_base;
+-
+-	synth_uart_puts(dr, "[A6GIC] ngicc=");
+-	synth_uart_puthex(dr, g->ngicc);
+-	synth_uart_puts(dr, " distinct_gicr_base=");
+-	synth_uart_puthex(dr, synth_gicr_ncpu_base);
+-	synth_uart_puts(dr, " regions=");
+-	synth_uart_puthex(dr, nr);
+-	synth_uart_puts(dr, " stride=0x");
+-	synth_uart_puthex(dr, g->gicr_stride);
+-	synth_uart_puts(dr, "\n");
+-
+-	for (i = 0; i < nr; i++) {
+-		synth_uart_puts(dr, "[A6GIC] region[");
+-		synth_uart_puthex(dr, i);
+-		synth_uart_puts(dr, "] base=0x");
+-		synth_uart_puthex(dr, g->gicr_base[i]);
+-		synth_uart_puts(dr, " size=0x");
+-		synth_uart_puthex(dr, g->gicr_size[i]);
+-		synth_uart_puts(dr, " ncpu=0x");
+-		synth_uart_puthex(dr, g->gicr_stride ?
+-		    g->gicr_size[i] / g->gicr_stride : 0);
+-		synth_uart_puts(dr, "\n");
+-	}
+-
+-	/* The raw per-cpu bases: min/max bracket the spread. */
+-	if (synth_gicr_ncpu_base > 0) {
+-		synth_uart_puts(dr, "[A6GIC] gicr_base min=0x");
+-		synth_uart_puthex(dr, synth_gicr_cpu_base[0]);
+-		synth_uart_puts(dr, " max=0x");
+-		synth_uart_puthex(dr,
+-		    synth_gicr_cpu_base[synth_gicr_ncpu_base - 1]);
+-		synth_uart_puts(dr, "\n");
+-	}
+-}
+-
+-static void
+ synth_scan_madt(synth_gic_t *g)
+ {
+ 	const ACPI_TABLE_MADT *madt;
+@@ -693,6 +583,7 @@
+ 	uint64_t	base;
+ 	uint8_t		bus_start;
+ 	uint8_t		bus_end;
++	uint16_t	seg;		/* PCI segment group (IORT RC) */
+ 	bool		have;
+ } synth_ecam_t;
+ 
+@@ -730,6 +621,7 @@
+ 		e[i].base = addr;
+ 		e[i].bus_start = alloc[i].StartBusNumber;
+ 		e[i].bus_end = alloc[i].EndBusNumber;
++		memcpy(&e[i].seg, &alloc[i].PciSegment, sizeof (e[i].seg));
+ 		e[i].have = true;
+ 	}
+ 
+@@ -1098,25 +990,60 @@
+  * (measured: nvme's admin completion sits in the CQ, no interrupt).  Use the
+  * IORT's choice; keep the old last-wins pick when there is no usable IORT.
+  */
+-static void
+-synth_pick_pci_its(synth_gic_t *g)
++/* BEGIN synth_rc_its */
++/*
++ * The ITS a root complex's MSIs reach, as an index into g->its_base[], or -1
++ * when the IORT gives no usable path (the caller keeps the default ITS).  The
++ * MADT order says nothing about it.  c6g.metal: segment 0 goes through the
++ * SMMUv3 at 0xbcfde00000 to ITS id 0, while the last MADT translator is id 3,
++ * and MSI-X sent to id 3 is never delivered (measured, aa64c).  c6gd.metal:
++ * the instance-store root complex is segment 2, routed to ITS id 2; its MSI-X
++ * sent to ITS 0 is lost the same way (measured, aa64g).
++ */
++static int
++synth_rc_its(const synth_gic_t *g, uint32_t seg)
+ {
+ 	const ACPI_TABLE_HEADER *iort = synth_find_table(ACPI_SIG_IORT);
+ 	uint32_t len, id, k;
+ 
+ 	if (iort == NULL)
+-		return;
++		return (-1);
+ 	memcpy(&len, &iort->Length, sizeof (len));
+-	if (!synth_iort_pci_its_id((const uint8_t *)iort, len, 0, &id))
+-		return;
++	if (!synth_iort_pci_its_id((const uint8_t *)iort, len, seg, &id))
++		return (-1);
+ 	for (k = 0; k < g->nits; k++) {
+-		if (g->its_id[k] == id) {
+-			g->its = g->its_base[k];
+-			return;
+-		}
++		if (g->its_id[k] == id)
++			return ((int)k);
+ 	}
++	return (-1);
+ }
++/* END synth_rc_its */
+ 
++/* The default ITS (its@ with SYNTH_PHANDLE_ITS) is segment 0's. */
++static void
++synth_pick_pci_its(synth_gic_t *g)
++{
++	int k = synth_rc_its(g, 0);
++
++	if (k >= 0)
++		g->its = g->its_base[k];
++}
++
++static void
++synth_emit_its(void *fdt, uint64_t base, uint32_t phandle)
++{
++	char name[32];
++
++	synth_nodename(name, sizeof (name), "its", base);
++	(void) fdt_begin_node(fdt, name);
++	(void) fdt_property_string(fdt, "compatible", "arm,gic-v3-its");
++	(void) fdt_property(fdt, "msi-controller", NULL, 0);
++	(void) fdt_property_cell(fdt, "#msi-cells", 1);
++	(void) fdt_property_cell(fdt, "phandle", phandle);
++	(void) prop_reg2(fdt, base, 0x20000);
++	(void) fdt_end_node(fdt);
++}
++
+ static int
+ prop_interrupt(void *fdt, uint32_t type, uint32_t nr, uint32_t flags)
+ {
+@@ -1139,6 +1066,7 @@
+ 	synth_gic_t gic;
+ 	synth_uart_t uart;
+ 	synth_ecam_t ecam[8];
++	uint32_t its_ph[SYNTH_ITS_MAX] = { 0 };	/* extra ITS phandles */
+ 	synth_crs_t crs;
+ 	bool qemu;
+ 	int necam;
+@@ -1341,39 +1269,21 @@
+ 			reg[np++] = cpu_to_fdt32(
+ 			    (uint32_t)(gic.gicr_size[i] & 0xffffffff));
+ 		}
+-		synth_gicr_diag(bi, &gic, nr);
+ 		(void) fdt_property(fdt, "reg", reg,
+ 		    np * sizeof (fdt32_t));
+ 	}
+ 
+ 	if (gic.have_its) {
+-		synth_nodename(name, sizeof (name), "its", gic.its);
+-		(void) fdt_begin_node(fdt, name);
+-		(void) fdt_property_string(fdt, "compatible",
+-		    "arm,gic-v3-its");
+-		(void) fdt_property(fdt, "msi-controller", NULL, 0);
+-		(void) fdt_property_cell(fdt, "#msi-cells", 1);
+-		(void) fdt_property_cell(fdt, "phandle", SYNTH_PHANDLE_ITS);
+-		(void) prop_reg2(fdt, gic.its, 0x20000);
+-		{
+-			/*
+-			 * NOTE: diagnostic.  Copy the raw ACPI IORT here so the
+-			 * kernel can print it at console speed (gicv3_its attach).
+-			 * Capped at 4 KiB so the synth FDT (9069 of 16384 bytes on
+-			 * c6g.metal) cannot overflow.
+-			 */
+-			const ACPI_TABLE_HEADER *iort =
+-			    synth_find_table(ACPI_SIG_IORT);
+-			if (iort != NULL) {
+-				UINT32 ilen;
+-				memcpy(&ilen, &iort->Length, sizeof (ilen));
+-				if (ilen > 4096)
+-					ilen = 4096;
+-				(void) fdt_property(fdt, "solnix,acpi-iort",
+-				    iort, (int)ilen);
+-			}
++		int e, k;
++
++		synth_emit_its(fdt, gic.its, SYNTH_PHANDLE_ITS);
++		for (e = 0; e < necam; e++) {
++			k = synth_rc_its(&gic, ecam[e].seg);
++			if (k < 0 || gic.its_base[k] == gic.its || its_ph[k] != 0)
++				continue;
++			its_ph[k] = synth_alloc_phandle();
++			synth_emit_its(fdt, gic.its_base[k], its_ph[k]);
+ 		}
+-		(void) fdt_end_node(fdt);
+ 	}
+ 	(void) fdt_end_node(fdt);		/* intc */
+ 
+@@ -1520,8 +1430,11 @@
+ 			}
+ 			if (gic.have_its) {
+ 				fdt32_t mm[4];
++				int k = synth_rc_its(&gic, ecam[i].seg);
++
+ 				mm[0] = cpu_to_fdt32(0);
+-				mm[1] = cpu_to_fdt32(SYNTH_PHANDLE_ITS);
++				mm[1] = cpu_to_fdt32(k >= 0 && its_ph[k] != 0 ?
++				    its_ph[k] : SYNTH_PHANDLE_ITS);
+ 				mm[2] = cpu_to_fdt32(0);
+ 				mm[3] = cpu_to_fdt32(0x10000);
+ 				(void) fdt_property(fdt, "msi-map", mm,
+@@ -1571,73 +1484,6 @@
+ 	    fdt_totalsize(fdt), SYNTH_FDT_MAX,
+ 	    SYNTH_FDT_MAX - fdt_totalsize(fdt));
+ 
+-	/*
+-	 * Repeat the verdict on the RAW SPCR UART, because dboot_printf() output
+-	 * does not reach the console on real SBBR/Graviton at all.  Measured on a
+-	 * c6g.metal boot: five [A6GIC] lines (emitted by synth_gicr_diag() through
+-	 * synth_uart_puts(), the raw MMIO store below) arrive, while every dboot:
+-	 * line from this same function is absent -- same boot, same file, differing
+-	 * only in output path.  The cause is stated at the SPCR block above: the
+-	 * loader finds "no compatible MMIO UARTs" in the ACPI namespace, so dboot's
+-	 * own console was never wired up; the SPCR base is installed into
+-	 * bi_bsvc_uart_mmio_base for the kernel's later boot_uart_init(), which is
+-	 * why the kernel banner prints and dboot's does not.
+-	 *
+-	 * Without this, the _CRS-window count -- the value that decides whether the
+-	 * pcie ranges came from the firmware or from the hardcoded QEMU-virt
+-	 * fallback -- is unreadable on the only hardware where the answer matters.
+-	 * Four metal console captures were taken before anyone noticed they
+-	 * structurally could not contain it.
+-	 *
+-	 * Deliberately hex, no format strings, reusing the helpers synth_gicr_diag()
+-	 * already proves work at this point in the boot.  One ~70-character line: on
+-	 * a console measured well under 0.1 s/char this is free, but note that at the
+-	 * old 13 s/char it would have cost ~15 minutes -- an instrument that changes
+-	 * the system is not an observer.
+-	 */
+-	if (bi->bi_bsvc_uart_mmio_base != 0) {
+-		volatile uint32_t *dr = (volatile uint32_t *)(uintptr_t)
+-		    bi->bi_bsvc_uart_mmio_base;
+-		int w;
+-
+-		synth_uart_puts(dr, "[A6CRS] crs_nwin=0x");
+-		synth_uart_puthex(dr, (uint64_t)(uint32_t)crs.nwin);
+-		synth_uart_puts(dr, " crs_have=0x");
+-		synth_uart_puthex(dr, crs.have ? 1 : 0);
+-		synth_uart_puts(dr, " necam=0x");
+-		synth_uart_puthex(dr, (uint64_t)(uint32_t)necam);
+-		synth_uart_puts(dr, " ecam0=0x");
+-		synth_uart_puthex(dr, necam > 0 ? ecam[0].base : 0);
+-		synth_uart_puts(dr, " qemu=0x");
+-		synth_uart_puthex(dr, qemu ? 1 : 0);
+-		synth_uart_puts(dr, " fdt_used=0x");
+-		synth_uart_puthex(dr, (uint64_t)(uint32_t)fdt_totalsize(fdt));
+-		synth_uart_puts(dr, " fdt_max=0x");
+-		synth_uart_puthex(dr, (uint64_t)SYNTH_FDT_MAX);
+-		synth_uart_puts(dr, "\n");
+-
+-		/*
+-		 * The windows themselves, one line each.  If crs_nwin is 0 the
+-		 * emitted ranges are the QEMU-virt constants (MEM32 0x10000000,
+-		 * MEM64 0x8000000000, IO parent 0x3eff0000) and these lines say so
+-		 * by their absence -- which distinguishes "firmware advertised
+-		 * nothing" from "firmware advertised windows we mis-parsed".
+-		 */
+-		for (w = 0; w < crs.nwin; w++) {
+-			synth_uart_puts(dr, "[A6CRS] win[");
+-			synth_uart_puthex(dr, (uint64_t)(uint32_t)w);
+-			synth_uart_puts(dr, "] space=0x");
+-			synth_uart_puthex(dr, crs.win[w].space);
+-			synth_uart_puts(dr, " child=0x");
+-			synth_uart_puthex(dr, crs.win[w].child);
+-			synth_uart_puts(dr, " parent=0x");
+-			synth_uart_puthex(dr, crs.win[w].parent);
+-			synth_uart_puts(dr, " size=0x");
+-			synth_uart_puthex(dr, crs.win[w].size);
+-			synth_uart_puts(dr, "\n");
+-		}
+-	}
+-
+ 	nc = (int)bi->bi_cpuinfo_cnt;
+ 	dboot_printf("dboot: synthesised FDT from ACPI (%d cpu%s, gicd=0x%lx "
+ 	    "gicr=0x%lx%s, %d pcie rc, %s, %d _CRS win%s)\n", nc,

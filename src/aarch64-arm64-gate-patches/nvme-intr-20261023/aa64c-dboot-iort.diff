@@ -1,0 +1,27 @@
+--- /build/dboot_synth_fdt.c.pre	Fri Oct 23 09:16:30 2026
++++ usr/src/uts/armv8/dboot/dboot_synth_fdt.c	Fri Oct 23 09:18:55 2026
+@@ -1240,6 +1240,24 @@
+ 		(void) fdt_property_cell(fdt, "#msi-cells", 1);
+ 		(void) fdt_property_cell(fdt, "phandle", SYNTH_PHANDLE_ITS);
+ 		(void) prop_reg2(fdt, gic.its, 0x20000);
++		{
++			/*
++			 * NOTE: diagnostic.  Copy the raw ACPI IORT here so the
++			 * kernel can print it at console speed (gicv3_its attach).
++			 * Capped at 4 KiB so the synth FDT (9069 of 16384 bytes on
++			 * c6g.metal) cannot overflow.
++			 */
++			const ACPI_TABLE_HEADER *iort =
++			    synth_find_table(ACPI_SIG_IORT);
++			if (iort != NULL) {
++				UINT32 ilen;
++				memcpy(&ilen, &iort->Length, sizeof (ilen));
++				if (ilen > 4096)
++					ilen = 4096;
++				(void) fdt_property(fdt, "solnix,acpi-iort",
++				    iort, (int)ilen);
++			}
++		}
+ 		(void) fdt_end_node(fdt);
+ 	}
+ 	(void) fdt_end_node(fdt);		/* intc */

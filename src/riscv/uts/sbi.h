@@ -13,6 +13,8 @@ extern "C" {
 #endif
 
 extern void sbi_console_putchar(int ch);
+extern void sbi_console_putchar_u(int ch);	/* userland output: never quieted */
+extern volatile int kcons_quiet;
 extern void sbi_console_puts(const char *s);
 extern const char *sbi_console_kind(void);
 extern long sbi_set_timer(unsigned long deadline);

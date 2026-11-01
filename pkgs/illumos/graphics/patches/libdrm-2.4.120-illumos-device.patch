@@ -1,0 +1,205 @@
+--- a/xf86drm.c
++++ b/xf86drm.c
+@@ -101,7 +101,24 @@
+ #define DRM_MAJOR 226 /* Linux */
+ #endif
+ 
+-#if defined(__OpenBSD__) || defined(__DragonFly__)
++#ifdef __sun
++/* solnix i915 minors (src/drm-port/i915/i915_drmioc.h): clone << 16 |
++ * instance << 8 | kind (0 card, 64 console text, 128 render). fstat of an
++ * open fd sees its clone minor; the /dev/dri nodes carry clone 0. Map to the
++ * Linux drm minor the /dev/dri names use (cardN, renderD128+N). */
++static unsigned int drm_minor(dev_t d)
++{
++    unsigned int m = minor(d), kind = m & 0xff, inst = (m >> 8) & 0xff;
++
++    if (kind == 0)
++        return inst;
++    return kind == 128 ? 128 + inst : 0xffff;
++}
++#else
++#define drm_minor(d) minor(d)
++#endif
++
++#if defined(__OpenBSD__) || defined(__DragonFly__) || defined(__sun)
+ struct drm_pciinfo {
+ 	uint16_t	domain;
+ 	uint8_t		bus;
+@@ -3295,7 +3312,7 @@
+         return NULL;
+ 
+     maj = major(sbuf.st_rdev);
+-    min = minor(sbuf.st_rdev);
++    min = drm_minor(sbuf.st_rdev);
+     nodetype = drmGetMinorType(maj, min);
+     return drmGetMinorNameForFD(fd, nodetype);
+ #else
+@@ -3314,7 +3331,8 @@
+ 
+     for (i = 0; i < DRM_MAX_MINOR; i++) {
+         snprintf(name, sizeof name, DRM_DEV_NAME, DRM_DIR_NAME, i);
+-        if (stat(name, &sbuf) == 0 && sbuf.st_rdev == d)
++        if (stat(name, &sbuf) == 0 && major(sbuf.st_rdev) == major(d) &&
++            drm_minor(sbuf.st_rdev) == drm_minor(d))
+             break;
+     }
+     if (i == DRM_MAX_MINOR)
+@@ -3343,6 +3361,16 @@
+      * in /dev/drm/ and links in /dev/dri while a WIP in kernel driver creates
+      * only device nodes in /dev/dri/ */
+     return (!strncmp(name, "drm/", 4) || !strncmp(name, "dri/", 4));
++#elif defined(__sun)
++    /* No fixed DRM major (name_to_major assigns it): a DRM node is one whose
++     * /dev/dri name exists with this major and minor. */
++    char path[64];
++    struct stat sbuf;
++
++    snprintf(path, sizeof(path), min < 128 ? DRM_DEV_NAME : DRM_RENDER_DEV_NAME,
++             DRM_DIR_NAME, min);
++    return stat(path, &sbuf) == 0 && S_ISCHR(sbuf.st_mode) &&
++           major(sbuf.st_rdev) == maj && drm_minor(sbuf.st_rdev) == min;
+ #else
+     return maj == DRM_MAJOR;
+ #endif
+@@ -3357,7 +3385,7 @@
+         return -1;
+ 
+     maj = major(sbuf.st_rdev);
+-    min = minor(sbuf.st_rdev);
++    min = drm_minor(sbuf.st_rdev);
+ 
+     if (!drmNodeIsDRM(maj, min) || !S_ISCHR(sbuf.st_mode)) {
+         errno = EINVAL;
+@@ -3432,7 +3460,7 @@
+         return NULL;
+ 
+     maj = major(sbuf.st_rdev);
+-    min = minor(sbuf.st_rdev);
++    min = drm_minor(sbuf.st_rdev);
+ 
+     if (!drmNodeIsDRM(maj, min) || !S_ISCHR(sbuf.st_mode))
+         return NULL;
+@@ -3467,7 +3495,7 @@
+         return NULL;
+ 
+     maj = major(sbuf.st_rdev);
+-    min = minor(sbuf.st_rdev);
++    min = drm_minor(sbuf.st_rdev);
+ 
+     if (!drmNodeIsDRM(maj, min) || !S_ISCHR(sbuf.st_mode))
+         return NULL;
+@@ -3510,7 +3538,7 @@
+         return NULL;
+ 
+     maj = major(sbuf.st_rdev);
+-    min = minor(sbuf.st_rdev);
++    min = drm_minor(sbuf.st_rdev);
+ 
+     if (!drmNodeIsDRM(maj, min) || !S_ISCHR(sbuf.st_mode))
+         return NULL;
+@@ -3518,6 +3546,13 @@
+     if (!dev_name)
+         return NULL;
+ 
++#ifdef __sun
++    /* the other node of the same device: rebase card N <-> renderD 128+N */
++    n = drmGetMinorType(maj, min);
++    if (n < 0)
++        return NULL;
++    min = min - drmGetMinorBase(n) + drmGetMinorBase(type);
++#endif
+     n = snprintf(buf, sizeof(buf), dev_name, DRM_DIR_NAME, min);
+     if (n == -1 || n >= sizeof(buf))
+         return NULL;
+@@ -3641,7 +3676,7 @@
+             return DRM_BUS_VIRTIO;
+      }
+     return subsystem_type;
+-#elif defined(__OpenBSD__) || defined(__DragonFly__) || defined(__FreeBSD__)
++#elif defined(__OpenBSD__) || defined(__DragonFly__) || defined(__FreeBSD__) || defined(__sun)
+     return DRM_BUS_PCI;
+ #else
+ #warning "Missing implementation of drmParseSubsystemType"
+@@ -3749,7 +3784,7 @@
+     info->func = func;
+ 
+     return 0;
+-#elif defined(__OpenBSD__) || defined(__DragonFly__)
++#elif defined(__OpenBSD__) || defined(__DragonFly__) || defined(__sun)
+     struct drm_pciinfo pinfo;
+     int fd, type;
+ 
+@@ -3917,7 +3952,7 @@
+         return parse_config_sysfs_file(maj, min, device);
+ 
+     return 0;
+-#elif defined(__OpenBSD__) || defined(__DragonFly__)
++#elif defined(__OpenBSD__) || defined(__DragonFly__) || defined(__sun)
+     struct drm_pciinfo pinfo;
+     int fd, type;
+ 
+@@ -4483,7 +4518,7 @@
+         return -1;
+ 
+     maj = major(sbuf.st_rdev);
+-    min = minor(sbuf.st_rdev);
++    min = drm_minor(sbuf.st_rdev);
+ 
+     if (!drmNodeIsDRM(maj, min) || !S_ISCHR(sbuf.st_mode))
+         return -1;
+@@ -4548,7 +4583,8 @@
+     for (int i = 0; i < DRM_NODE_MAX; i++) {
+         if (device->available_nodes & 1 << i) {
+             if (stat(device->nodes[i], &sbuf) == 0 &&
+-                sbuf.st_rdev == find_rdev)
++                major(sbuf.st_rdev) == major(find_rdev) &&
++                drm_minor(sbuf.st_rdev) == drm_minor(find_rdev))
+                 return true;
+         }
+     }
+@@ -4590,7 +4626,7 @@
+         return -EINVAL;
+ 
+     maj = major(find_rdev);
+-    min = minor(find_rdev);
++    min = drm_minor(find_rdev);
+ 
+     if (!drmNodeIsDRM(maj, min))
+         return -EINVAL;
+@@ -4636,7 +4672,7 @@
+         return -EINVAL;
+ 
+     maj = major(find_rdev);
+-    min = minor(find_rdev);
++    min = drm_minor(find_rdev);
+ 
+     if (!drmNodeIsDRM(maj, min))
+         return -EINVAL;
+@@ -4692,7 +4728,7 @@
+     int maj, min, node_type;
+ 
+     maj = major(devid);
+-    min = minor(devid);
++    min = drm_minor(devid);
+ 
+     if (!drmNodeIsDRM(maj, min))
+         return -EINVAL;
+@@ -4847,7 +4883,7 @@
+         return NULL;
+ 
+     maj = major(sbuf.st_rdev);
+-    min = minor(sbuf.st_rdev);
++    min = drm_minor(sbuf.st_rdev);
+ 
+     if (!drmNodeIsDRM(maj, min) || !S_ISCHR(sbuf.st_mode))
+         return NULL;
+@@ -4875,7 +4911,7 @@
+         return NULL;
+ 
+     maj = major(sbuf.st_rdev);
+-    min = minor(sbuf.st_rdev);
++    min = drm_minor(sbuf.st_rdev);
+ 
+     if (!drmNodeIsDRM(maj, min) || !S_ISCHR(sbuf.st_mode))
+         return NULL;

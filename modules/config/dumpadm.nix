@@ -1,4 +1,4 @@
-{ config, lib, ... }:
+{ config, lib, pkgs, ... }:
 # modules/config/dumpadm.nix -- the kernel crash-dump device (illumos dumpadm(8)).
 #
 # illumos writes a kernel crash dump to a dedicated device on panic, and
@@ -15,9 +15,25 @@
 # setting is part of the configuration rather than state a new BE would drop.
 let
   cfg = config.solnix.dumpadm;
+  sizeScript = pkgs.writeTextFile {
+    name = "solnix-dump-size.sh";
+    executable = true;
+    text = builtins.readFile ../../scripts/solnix-dump-size.sh;
+  };
 in
 {
   options.solnix.dumpadm = {
+    sizeAtBoot = lib.mkOption {
+      type = lib.types.bool;
+      # Fail-safe default: no <pool>/dump, or a dedicated dump device already set -> no-op.
+      default = true;
+      description = ''
+        At boot, when no dedicated dump device is set, grow the root pool's <pool>/dump zvol to
+        this machine's size (half of RAM, 1..16 GiB, at most a quarter of the pool) and make it
+        the dump device. An image ships a 1 GiB placeholder because it is built on a host whose
+        RAM is not the target's (scripts/solnix-dump-size.sh).
+      '';
+    };
     enable = lib.mkEnableOption "a declarative kernel crash-dump device (dumpadm)";
     device = lib.mkOption {
       type = lib.types.str;
@@ -44,9 +60,36 @@ in
       default = true;
       description = "Save dumps compressed (vmdump.N, expanded with savecore -f).";
     };
+    deadman = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Arm the illumos deadman timer (`set snooping=1`, uts/common/os/clock.c deadman_init): a CPU
+        whose clock interrupt stops for snoop_interval (50 s) panics, so a hard hang leaves a dump
+        instead of a frozen machine. Off by default, as on illumos. Turn it on for driver bring-up
+        (the staged GPU attach requires it) and to diagnose hangs.
+      '';
+    };
   };
 
-  config = lib.mkIf cfg.enable {
+  config = lib.mkMerge [
+  (lib.mkIf cfg.sizeAtBoot {
+    smf.services.solnix-dump-size = {
+      enable = true;
+      category = "site";
+      description = "solnix: size <pool>/dump to this machine and make it the dump device";
+      model = "transient";
+      start = { exec = "${sizeScript}"; timeoutSeconds = 300; };
+      stop.exec = ":true";
+      # after svc-dumpadm's own `dumpadm -u`, so the dedicated-device check sees the boot's real state.
+      requires = [ "svc:/system/filesystem/local:default" "svc:/system/dumpadm:default" ];
+      # After the root pool has grown (services.zfs.expandOnBoot), so the quarter-of-pool cap sees the
+      # grown pool; optional_all, so a system without that service is not held back.
+      dependencies = [ { name = "after-grow"; grouping = "optional_all"; fmris = [ "svc:/site/solnix-zpool-expand:default" ]; } ];
+    };
+  })
+  (lib.mkIf cfg.enable {
+    environment.generatedEtc."system.d/solnix-deadman" = lib.mkIf cfg.deadman "set snooping=1\n";
     # dumpadm(8) rewrites this file, so install-be keeps it a real copy
     # (etc_copy), not a link into the store.
     environment.generatedEtc."dumpadm.conf" = ''
@@ -61,5 +104,6 @@ in
       DUMPADM_ENABLE=yes
       DUMPADM_CSAVE=${if cfg.compress then "on" else "off"}
     '';
-  };
+  })
+  ];
 }

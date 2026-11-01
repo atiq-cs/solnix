@@ -1,0 +1,55 @@
+nvidia_modeset: refuse to load before nvidia has initialized RM
+
+On illumos, nvidia's _init does not start RM: rm_init_rm() runs from
+nv_global_init(), which only nvidia_attach() calls (the first attach of the
+pseudo node or a GPU). nvidia_modeset's _init -> nvkms_setup() ->
+nvKmsModuleLoad() allocates through RM right away. If nvidia is loaded but has
+never attached (modload nvidia; modload nvidia_modeset, or a forceload),
+RM's g_RmApiList is still zero-filled and the allocation calls through a NULL
+pointer:
+
+  panic: BAD TRAP: type=e (#pf Page fault) addr=0 ... pc=0x0
+  nvidia_modeset:nvkms_call_rm+40
+  nvidia_modeset:nvRmApiAlloc+56
+  nvidia_modeset:nvKmsModuleLoad+39
+  nvidia_modeset:_init+14e
+  genunix:modinstall+8a
+
+(measured on the solnix kernel, illumos-gate ac45d71, no GPU present; with mdb
+nvidia`g_RmApiList read all zero and nvidia`nv_rm_initialized = 0.)
+Linux does not hit this because nv.c calls rm_init_rm() from module init.
+
+Fail _init with ENXIO and a warning instead, the same check nvidia_uvm's
+uvm_start() already makes with nv_rm_is_initialized(). The guard sits before
+anything nvkms_setup() allocates, so _init's existing fail path (id space and
+soft state) is the whole cleanup.
+--- a/kernel-illumos/nvidia-modeset/nvidia_modeset_illumos.c
++++ b/kernel-illumos/nvidia-modeset/nvidia_modeset_illumos.c
+@@ -44,6 +44,9 @@
+ #include "nvstatus.h"
+ #include "nvkms-ioctl.h"
+ 
++/* nvidia.kmod: RM starts at the first nvidia attach, not at its _init. */
++extern NvBool nv_rm_is_initialized(void);
++
+ /*************************************************************************
+  * NVKMS uses a global lock, nvkms_lock, taken in the driver entry points
+  * when calling into core NVKMS.  nvkms_pm_lock synchronizes clients with
+@@ -860,6 +863,17 @@
+ {
+     int ret;
+ 
++    /*
++     * nvKmsModuleLoad() below allocates through RM.  Until an nvidia
++     * instance has attached, RM's API table is zero-filled and that
++     * allocation calls through a NULL pointer, so refuse to load.
++     */
++    if (!nv_rm_is_initialized()) {
++        cmn_err(CE_WARN, NVKMS_LOG_PREFIX "nvidia is not attached "
++            "(RM not initialized); attach nvidia (/dev/nvidiactl) first");
++        return ENXIO;
++    }
++
+     nvkms_alloc_called_count = 0;
+     nvkms_popen_count = 0;
+     nvkms_nvidia_major = ddi_name_to_major(NVKMS_NVIDIA_DRIVER_NAME);

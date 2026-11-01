@@ -1,0 +1,20 @@
+hello|0|/bin/hello|hello|a b
+@hello|^HELLO PASS mono=
+@hello|PATH=/bin
+sigtest|0|/bin/sigtest|sigtest
+@sigtest|^SIGTEST PASS$
+# negative control: pass-through signal numbers must break SIGUSR1/SIGCHLD
+xfail-sigtest-noxlate|0|/bin/sigtest-nc|sigtest-nc
+@xfail-sigtest-noxlate|^SIGTEST PASS$
+fstest|0|/bin/fstest|fstest
+@fstest|^FSTEST PASS$
+pipetest|0|/bin/pipetest|pipetest
+@pipetest|^PIPETEST PASS$
+# rvpre: brk shrink + regrow must not lose data across a TLB flush; zhog's one hog makes brktest's usleep really switch
+brktest|0|/bin/zhog|zhog|1|r|3|/bin/brktest
+@brktest|^ZHOG DONE 3/3$
+!brktest|BRKTEST FAIL
+# rvpre: kernel addresses passed to syscalls must get EFAULT. K = the last secondary_stacks slot (unused below -smp 64), so a
+# kernel without the check is corrupted nowhere that matters (nm unix | grep secondary_stacks; re-derive if the BSS moves)
+uptrtest|0|/bin/uptrtest|uptrtest|804a8000
+@uptrtest|^UPTRTEST PASS$

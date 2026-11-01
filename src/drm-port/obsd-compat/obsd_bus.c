@@ -15,7 +15,8 @@
  * PCI interrupts (REAL): pci_intr_map_msi / pci_intr_map pick one MSI or
  * FIXED vector with ddi_intr_alloc; pci_intr_establish adds the handler at
  * the vector's priority and enables it. OpenBSD's handler returns int (1 =
- * claimed), which is the DDI_INTR_CLAIMED/UNCLAIMED convention.
+ * claimed), which is the DDI_INTR_CLAIMED/UNCLAIMED convention. intr_barrier
+ * waits for a running handler and leaves the vector enabled (see there).
  *
  * pci_find_device / pci_enumerate_bus (REAL): a walk of the illumos device
  * tree that builds a pci_attach_args for every PCI function and calls
@@ -341,16 +342,22 @@ struct obsd_intr {
 	ddi_intr_handle_t	oi_ih;
 	int			(*oi_func)(void *);
 	void			*oi_arg;
+	volatile uint_t		oi_active;	/* handlers running now */
 };
 
 static uint_t
 obsd_intr_trampoline(caddr_t a1, caddr_t a2)
 {
 	struct obsd_intr *oi = (struct obsd_intr *)a1;
+	int r;
 
 	(void) a2;
-	return (oi->oi_func(oi->oi_arg) ? DDI_INTR_CLAIMED :
-	    DDI_INTR_UNCLAIMED);
+	atomic_inc_uint(&oi->oi_active);
+	membar_enter();
+	r = oi->oi_func(oi->oi_arg);
+	membar_exit();
+	atomic_dec_uint(&oi->oi_active);
+	return (r ? DDI_INTR_CLAIMED : DDI_INTR_UNCLAIMED);
 }
 
 /*
@@ -399,9 +406,20 @@ pci_intr_disestablish(pci_chipset_tag_t pc, void *cookie)
 }
 
 /*
- * intr_barrier: wait until a running handler has returned. MAP: illumos
- * has no per-vector barrier; disabling and re-enabling the vector waits for
- * an in-progress handler (the DDI serialises them with the vector's lock).
+ * intr_barrier: wait until a running handler has returned (OpenBSD's
+ * intr_barrier, Linux synchronize_irq). The trampoline counts the handlers
+ * in progress; this waits for the count to read 0. The fence orders the
+ * caller's earlier stores (irqs_enabled, IMR writes) before the read, so a
+ * handler that starts after it sees them.
+ *
+ * It must not mask the source. ddi_intr_disable/enable on an MSI clears and
+ * sets the MSI Enable bit in the device's config space (apix_disable_vector,
+ * apic_pci_msi_disable_mode). An interrupt the GPU raises in that window is
+ * never sent, and gen11+ only sends a new MSI on a new edge of its master
+ * interrupt, which an IIR nobody acked holds high: after one loss the GPU
+ * never interrupts again (no vblank, flip_done or DSB completion). i915
+ * calls this on every GT park; lixi lost its display interrupt that way
+ * (cosmic5, 2026-10-31).
  */
 void
 intr_barrier(void *cookie)
@@ -410,8 +428,9 @@ intr_barrier(void *cookie)
 
 	if (oi == NULL)
 		return;
-	(void) ddi_intr_disable(oi->oi_ih);
-	(void) ddi_intr_enable(oi->oi_ih);
+	membar_sync();
+	while (oi->oi_active != 0)
+		CPU_BUSY_CYCLE();	/* a handler runs for microseconds */
 }
 
 /* ------------------------------------------------------- bus enumeration */
@@ -465,18 +484,19 @@ obsd_enum_walk(dev_info_t *dip, void *arg)
 }
 
 /* pci_find_device: the first PCI function anywhere that match() accepts;
- * the result is written over *pa (OpenBSD semantics). */
+ * the result is written over *pa (OpenBSD semantics). *pa is OUTPUT only:
+ * OpenBSD's pci_find_device builds each candidate from the pci softc and
+ * never reads *pa, and inteldrm's intel_pch_detect passes an uninitialised
+ * stack struct. Copying it as a template carried a garbage pa_pc into
+ * pci_conf_read, which panicked lixi (#gp in obsd_enum_walk, 2026-10-27,
+ * the first card0 open). The candidates get a NULL chipset tag, so
+ * pci_conf_read takes the mechanism-1 path every non-self read takes. */
 int
 pci_find_device(struct pci_attach_args *pa,
     int (*match)(struct pci_attach_args *))
 {
 	struct obsd_enum e = { match, pa, NULL, 0 };
-	struct pci_attach_args tmpl;
 
-	if (pa != NULL) {
-		tmpl = *pa;
-		e.tmpl = &tmpl;
-	}
 	ddi_walk_devs(ddi_root_node(), obsd_enum_walk, &e);
 	return (e.found);
 }

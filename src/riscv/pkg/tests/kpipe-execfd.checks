@@ -1,0 +1,4 @@
+# defect 3 (fixed by rvsh): the exec'd image's write to the inherited pipe fd 4 must succeed and reach the parent.
+kpipe-execfd|0|/bin/kpipeprobe|kpipeprobe|execfd
+@kpipe-execfd|execchild: write\(fd 4\) = 9$
+@kpipe-execfd|kpipe execfd: parent read 9 bytes then EOF

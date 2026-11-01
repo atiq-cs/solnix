@@ -228,16 +228,46 @@ grep -qw solnix-installer "$RD/etc/hosts" 2>/dev/null || echo "127.0.0.1 solnix-
 #     directory needs no writable backing fs, so it works on the still-RO ramdisk.
 #     This is the structural root cause (volatile belongs in RAM, as on any illumos
 #     root), not symptom relief.
+#     AFTER ap::sysinit (autopush): the first open of the console builds its
+#     stream, and autopush modules are pushed only when a stream is built. A
+#     sysinit line ahead of ap:: opens the console (its </dev/console, and its
+#     >/dev/msglog too: sysmsg's first open vn_opens /dev/console, sysmsg.c) before
+#     autopush has loaded iu.ap, which leaves the console without ldterm for the
+#     whole boot, so every kernel and service message is a bare line feed (the
+#     staircase console; measured: aligned before this line was first inserted
+#     ahead of ap::, stepped after). Stock illumos has ap:: as the first sysinit
+#     line for this reason; stdin is /dev/null because nothing here reads it.
 if ! grep -q '^vol::sysinit' "$RD/etc/inittab"; then
   _volcmd='/sbin/mount -F tmpfs -o size=256m swap /system/volatile >/dev/msglog 2>&1; /sbin/mount -F tmpfs -o size=256m swap /etc/svc/volatile >/dev/msglog 2>&1'
   awk -v c="$_volcmd" '
-    /::sysinit:/ && !d { print "vol::sysinit:" c " </dev/console"; d=1 }
     { print }
+    /^ap::sysinit:/ && !d { print "vol::sysinit:" c " </dev/null"; d=1 }
     END { if (!d) exit 7 }
   ' "$RD/etc/inittab" > "$RD/etc/inittab.n" && mv "$RD/etc/inittab.n" "$RD/etc/inittab" \
     || die "could not insert the volatile-tmpfs sysinit line into inittab"
   grep -q '^vol::sysinit' "$RD/etc/inittab" || die "volatile-tmpfs sysinit line not present after edit"
 fi
+# 5e''. THE WRITABLE STORE IN RAM (docs/design-live-nix-store.md). The ramdisk has
+#     only RD_MIN_FREE_KB of slack, and one `nix shell nixpkgs#...` needs far more
+#     (measured: a cold solnix eval writes 1.25 GB to the store and 275 MB to
+#     ~/.cache/nix). NixOS's live ISO mounts a tmpfs at /nix/.rw-store and overlays
+#     it on the read-only store; solnix-live-store builds the same union from tmpfs
+#     + lofs, and moves /nix/var and /root into the tmpfs. It runs from inittab after
+#     vol:: (so after autopush) and before svc.startd, so nothing has opened the
+#     store DB yet and every service sees the final /nix/store.
+LS=$(rl "$RD$TOP/sw/share/solnix/live-store")
+[ -n "$LS" ] && [ -f "$RD$LS" ] || die "toplevel has no sw/share/solnix/live-store"
+mkdir -p "$RD/nix/.rw-store" && chmod 0755 "$RD/nix/.rw-store"
+if ! grep -q '^ls::sysinit' "$RD/etc/inittab"; then
+  awk -v c="/sbin/sh $LS >/dev/msglog 2>&1 </dev/null" '
+    { print }
+    /^vol::sysinit:/ && !d { print "ls::sysinit:" c; d=1 }
+    END { if (!d) exit 7 }
+  ' "$RD/etc/inittab" > "$RD/etc/inittab.n" && mv "$RD/etc/inittab.n" "$RD/etc/inittab" \
+    || die "could not insert the live-store sysinit line into inittab"
+fi
+[ "$(grep -E '^[^#:]*:[^:]*:sysinit:' "$RD/etc/inittab" | head -3 | cut -d: -f1 | tr '\n' ' ')" = "ap vol ls " ] \
+  || die "inittab sysinit order is not ap, vol, ls"
 # 5f. login motd + PATH (GNU tools first: illumos diff prints "No differences encountered").
 cat >> "$RD/etc/profile" <<'EOF'
 # solnix installer media
@@ -283,6 +313,16 @@ _nbuild=$(printf '%s\n' "$_pgs" | grep -c "^$(printf '%s' "${RD#/}" | tr / _)" |
 echo "SMF hashes: $_nprof profiles, 0 build-path keys" >&2
 echo "pre-imported $_nimp manifests ($_nfail failed)" >&2
 [ "$_nimp" -gt 50 ] || die "only $_nimp manifests imported -- the live root would not reach single-user"
+# sshd on the LIVE root starts only once the network has a lease (solnix-live ->
+# solnix-install --sshd-now sets a one-time root password first). Disabled here in
+# the ramdisk's repository only: an installed system keeps the site profile's sshd.
+_sshd=svc:/network/sshd:default
+SVCCFG_REPOSITORY="$RD/etc/svc/repository.db" "$SVCCFG" -s "$_sshd" setprop general/enabled = boolean: false \
+  && SVCCFG_REPOSITORY="$RD/etc/svc/repository.db" "$SVCCFG" -s "$_sshd" refresh \
+  || die "could not disable $_sshd in the live repository"
+_en=$(SVCCFG_REPOSITORY="$RD/etc/svc/repository.db" "$SVCCFG" -s "$_sshd" listprop general/enabled 2>/dev/null | awk '{print $3}')
+[ "$_en" = false ] || die "$_sshd general/enabled is '$_en' in the live repository, not false"
+echo "live sshd: disabled until a DHCP lease ($_sshd general/enabled=$_en)" >&2
 # importing ran a private svc.configd: purge the runtime state it left (a stale
 # init.state makes PID 1 re-exit in a SIGKILL loop, measured on earlier media).
 find "$RD/etc/svc/volatile" -mindepth 1 -delete 2>/dev/null || true
@@ -291,7 +331,7 @@ find "$RD/etc/svc/volatile" -mindepth 1 -delete 2>/dev/null || true
 # 7. GATES on the finished root, then gzip. Each failed silently on old media.
 # ---------------------------------------------------------------------------
 log "verifying the live root"
-for need in sbin/init etc/inittab lib/svc/bin/svc.startd etc/svc/repository.db platform/i86pc/kernel/amd64/unix \
+for need in sbin/init etc/inittab lib/svc/bin/svc.startd etc/svc/repository.db platform/i86pc/kernel/amd64/unix nix/.rw-store \
             kernel/amd64/genunix dev/console dev/null run/current-system nix/var/nix/profiles/system; do
   [ -e "$RD/$need" ] || [ -h "$RD/$need" ] || die "live root lacks /$need"
 done

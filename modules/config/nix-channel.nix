@@ -35,6 +35,14 @@ let
   keepDocs = [ "registry" "registry/arch-manifest.tsv" "registry/real-derivations.tsv" ];
   keepScripts = [ "patches" "oi-cc-wrapper.sh" "oi-closure.sh" "oi-gate-slices.sh"
                   "oi-smf-gates.sh" "oi-world-slices.sh" "gate-c-hello.sh" ];
+  # The install-root flake, on the git host, at the SUPPORTED EDITION branch: so
+  # `solnix#tmux` gives the edition's build. It follows solnix.release (26.11, ...)
+  # and falls to the rolling `unstable` branch only for an unstable system.
+  solnixFlake = {
+    type = "git";
+    url = "https://git.solnix.io/solnix.git";
+    ref = if config.solnix.release == "unstable" then "unstable" else config.solnix.release;
+  };
   channelSrc = builtins.path {
     name = "solnix-channel";
     path = root;
@@ -48,10 +56,12 @@ let
          else if top == "scripts" then builtins.elem (builtins.head (builtins.tail parts)) keepScripts
          else builtins.elem top [ "lib" "pkgs" ];
   };
-  # the derivation nix-env installs into root's channels profile: one directory,
-  # solnix/, holding the expression (a channel's shape: <profile>/<name>/default.nix).
+  # the derivation nix-env installs into root's channels profile: one directory
+  # per channel name, holding the expression (<profile>/<name>/default.nix).
+  # `nixos` is the name NixOS gives its system channel, so the NixOS manual's
+  # `nix-env -iA nixos.hello` works here too; `solnix` stays as the explicit name.
   channelTree = pkgs.runCommand "solnix-channel-tree" { src = channelSrc; } ''
-    mkdir -p $out; ln -s $src $out/solnix
+    mkdir -p $out; ln -s $src $out/solnix; ln -s $src $out/nixos
   '';
 in
 {
@@ -109,15 +119,14 @@ in
     # install-root flake (pkgs.solnix.<name>) served from git.solnix.io over
     # anonymous-read HTTPS. The install root is solnix.git (it composes the full
     # pkgs.solnix.* world; solnix-pkgs.git is only its bootstrap-overlay input).
-    # ref tracks the SUPPORTED EDITION so `solnix#tmux` gives the edition's build;
-    # it follows solnix.release (26.11, ...) and falls to the rolling `unstable`
-    # branch only for an unstable system. Infra ships the mirror + the edition
-    # branches on git.solnix.io (/tmp/to-solnix-builder/...install-root...reply).
-    nix.registry.solnix.to = lib.mkDefault {
-      type = "git";
-      url = "https://git.solnix.io/solnix.git";
-      ref = if config.solnix.release == "unstable" then "unstable" else config.solnix.release;
-    };
+    nix.registry.solnix.to = lib.mkDefault solnixFlake;
+    # `nixpkgs` on solnix is solnix's package set, as NixOS points it at the system's
+    # own nixpkgs (nixos/modules/misc/nixpkgs-flake.nix: nix.registry.nixpkgs.to).
+    # So the NixOS manual's `nix shell nixpkgs#hello` installs solnix's hello. The
+    # solnix flake is a superset of nixpkgs' outputs (lib, legacyPackages for every
+    # system), so a third-party flake whose nixpkgs input resolves here still finds
+    # nixpkgs.lib and, on Linux/macOS, plain nixpkgs packages.
+    nix.registry.nixpkgs.to = lib.mkDefault solnixFlake;
 
     # NixOS: environment.sessionVariables.NIX_PATH = nix.nixPath, plus the
     # per-user channels first when the user has any.
@@ -162,7 +171,7 @@ in
         # a channel is a directory named for the channel holding the expression
         # (nix-channel --update unpacks the same shape).
         ${cfg.package}/bin/nix-env -p "$P/channels" -i ${channelTree} --quiet \
-          --option build-use-substitutes false > /dev/msglog 2>&1 || exit $SMF_EXIT_ERR_FATAL
+          --option build-use-substitutes false 2>&1 || exit $SMF_EXIT_ERR_FATAL
         mkdir -p /root/.nix-defexpr && chmod 0700 /root/.nix-defexpr
         [ -h /root/.nix-defexpr/channels ] || ln -s "$P/channels" /root/.nix-defexpr/channels
         touch "$stamp"

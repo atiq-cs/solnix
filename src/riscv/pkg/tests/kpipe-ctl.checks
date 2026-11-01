@@ -1,0 +1,2 @@
+kpipe-ctl|0|/bin/kpipeprobe|kpipeprobe|ctl
+@kpipe-ctl|parent read 10 bytes then EOF

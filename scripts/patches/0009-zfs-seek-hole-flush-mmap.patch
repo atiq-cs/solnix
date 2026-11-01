@@ -1,0 +1,51 @@
+solnix: zfs -- flush mmap()'d pages before lseek(SEEK_DATA/SEEK_HOLE), so a just-written file is not reported as one
+big hole (and cp(1) does not copy it as zeros).
+
+SYMPTOM (kiwi build hosts on OpenIndiana 2026.04 illumos 3581f14f53, AND lixi on solnix ac45d71fc2b0, 2026-10-27):
+go 1.27.3 built from source segfaulted, SIGILLed, failed "missing stackmap" / "traceback did not unwind" / ld.so.1 "TLS
+requirement failure" -- intermittently, and only for the copy the derivation installs. The installed bin/go had three
+128 KiB records (the dataset recordsize) of zeros where the build tree's copy had code and data
+(runtime.mallocScanTable 0/81 non-zero; a good build of the same source has 81/81).
+
+MECHANISM (reproduced: holetest.c, 5/5 on the build host, 3/3 on lixi; 0/3 with msync):
+- Go's linker writes its output through a MAP_SHARED mapping. Those pages sit in the page cache; zfs_putpage turns
+  them into dirty dbufs only when they are pushed (fsync, msync, pageout).
+- GNU cp 9.x copies sparse-aware: lseek(SEEK_DATA)/lseek(SEEK_HOLE), then reads only the data extents.
+- zfs_holey -> dmu_offset_next -> dmu_object_wait_synced waits for DIRTY DBUFS (illumos 16087). An mmap-written file
+  has none yet, so the block pointers still describe holes: the whole file reads as a hole. cp writes zeros. Measured:
+  a 32 MiB mmap-written file copied right after close came out 100% different; the same copy 6 s later (txg synced)
+  was identical.
+- OpenZFS fixed this in zfs_holey_common: "Flush any mmap()'d data to disk" (de198f2d9, 2021), made synchronous in
+  102b468b5 (2024, "Fix corruption caused by mmap flushing problems"). illumos never took it.
+
+THE CHANGE (zfs_vnops.c zfs_holey): if the vnode has cached pages, VOP_PUTPAGE(vp, 0, 0, 0 /* sync */) before
+dmu_offset_next. The pushed pages become dirty dbufs, and dmu_object_wait_synced then waits for their txg, as it
+already does for write(2) data. zfs_fsync uses the same VOP_PUTPAGE call. ZFS_ENTER nests (z_teardown_lock is an
+rrm read lock).
+
+diff -ru a/usr/src/uts/common/fs/zfs/zfs_vnops.c b/usr/src/uts/common/fs/zfs/zfs_vnops.c
+--- a/usr/src/uts/common/fs/zfs/zfs_vnops.c	2026-10-27 20:01:52.580630826 -0400
++++ b/usr/src/uts/common/fs/zfs/zfs_vnops.c	2026-10-27 20:01:52.600089198 -0400
+@@ -282,6 +282,22 @@
+ 	else
+ 		hole = B_FALSE;
+ 
++	/*
++	 * solnix: flush any mmap()'d data first, synchronously (OpenZFS
++	 * de198f2d9 + 102b468b5, zfs_holey_common). Pages written through a
++	 * MAP_SHARED mapping live only in the page cache until putpage turns
++	 * them into dirty dbufs, so dmu_offset_next() -- which waits for dirty
++	 * dbufs to sync -- saw none and reported the whole file as a hole.
++	 * cp(1) and friends then copied zeros (measured: a linker-written Go
++	 * binary lost whole 128K records).
++	 */
++	if (vn_has_cached_data(vp)) {
++		error = VOP_PUTPAGE(vp, (offset_t)0, (size_t)0, 0, kcred,
++		    NULL);
++		if (error != 0)
++			return (error);
++	}
++
+ 	error = dmu_offset_next(zp->z_zfsvfs->z_os, zp->z_id, hole, &noff);
+ 
+ 	if (error == ESRCH)

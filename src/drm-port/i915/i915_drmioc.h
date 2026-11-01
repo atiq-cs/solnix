@@ -74,7 +74,9 @@ i915_ioc_xlate(uint32_t lcmd, struct i915_ioc *x)
 /*
  * Minor numbers. illumos gives a driver a 32-bit minor (getminor); the
  * i915 module lays it out as
- *	bits 7:0   kind: I915_IL_CARD 0, I915_IL_TEXT 64, I915_IL_RENDER 128
+ *	bits 7:0   kind: I915_IL_CARD 0, I915_IL_TEXT 64, I915_IL_RENDER 128,
+ *	           I915_IL_DMABUF 192 (bits 31:16 then name a dma-buf slot,
+ *	           obsd_glue.c; such a minor is only ever opened from the kernel)
  *	bits 15:8  driver instance
  *	bits 31:16 clone index (0 = the node itself; open(9E) of card0 or
  *	           renderD128 returns a fresh one per open, as a clone device)
@@ -87,6 +89,7 @@ i915_ioc_xlate(uint32_t lcmd, struct i915_ioc *x)
 #define I915_IL_CARD		0u
 #define I915_IL_TEXT		64u
 #define I915_IL_RENDER		128u
+#define I915_IL_DMABUF		192u
 #define I915_IL_KIND(m)		((m) & 0xffu)
 #define I915_IL_INST(m)		(((m) >> 8) & 0xffu)
 #define I915_IL_CLONE(m)	((m) >> 16)

@@ -202,6 +202,7 @@ derivation {
       /usr/bin/ldd "$f" 2>&1 | awk -v f="$f" '/not found/ || (/=>/ && $NF !~ /^\/nix\/store\//) {print f}' >> .world/ldd-bad
     done
     sort -u .world/ldd-bad | sed 's,^\./,,' > .world/ldd-bad.sorted
+    rm -f .world/ldd-bad   # find order differs between builds (measured, repro2); the sorted copy is kept
 
     # Drop the objects that cannot load (their library is not in the base), and
     # ASSERT the found set equals dropUnloadable: a binary that newly cannot load,

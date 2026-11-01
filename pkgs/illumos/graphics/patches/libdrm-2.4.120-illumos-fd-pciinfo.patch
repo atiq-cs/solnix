@@ -1,0 +1,138 @@
+--- a/xf86drm.c
++++ b/xf86drm.c
+@@ -3759,6 +3759,73 @@
+ }
+ #endif
+ 
++#ifdef __sun
++/* PCI info per DRM device instance, learned through fds this process holds. A seatd client
++ * gets card0 as an fd while /dev/dri/* stay 0600 root (logindevperm), so the OpenBSD arm's
++ * by-path reopen fails with EACCES and Mesa falls back to softpipe (gpu7, measured on lixi).
++ * Linux reads world-readable sysfs instead. drmGetDevice2(fd) asks the fd it was given and
++ * records the answer; a lookup for any node of that instance (cardN or renderD128+N) uses it
++ * before opening anything. The PCI device behind an attached instance does not change. */
++#define DRM_SUN_PCI_MAX 8
++static struct { int state, maj, inst; struct drm_pciinfo p; } drm_sun_pci[DRM_SUN_PCI_MAX];
++
++static int drm_sun_inst(int maj, int min)
++{
++    int type = drmGetMinorType(maj, min);
++
++    return type < 0 ? -1 : min - drmGetMinorBase(type);
++}
++
++static void drm_sun_pci_put(int maj, int min, const struct drm_pciinfo *p)
++{
++    int i, inst = drm_sun_inst(maj, min);
++
++    for (i = 0; inst >= 0 && i < DRM_SUN_PCI_MAX; i++) {
++        int s = 0; /* state: 0 free, 1 being filled, 2 valid */
++
++        if (__atomic_compare_exchange_n(&drm_sun_pci[i].state, &s, 1, 0,
++                                        __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
++            drm_sun_pci[i].maj = maj;
++            drm_sun_pci[i].inst = inst;
++            drm_sun_pci[i].p = *p;
++            __atomic_store_n(&drm_sun_pci[i].state, 2, __ATOMIC_RELEASE);
++            return;
++        }
++        if (s == 2 && drm_sun_pci[i].maj == maj && drm_sun_pci[i].inst == inst)
++            return;
++    }
++}
++
++/* PCIINFO for node (maj, min): from an fd this process was given, else by opening the node. */
++static int drm_sun_pciinfo(int maj, int min, struct drm_pciinfo *p)
++{
++    int i, fd, type, inst = drm_sun_inst(maj, min);
++
++    for (i = 0; inst >= 0 && i < DRM_SUN_PCI_MAX; i++) {
++        if (__atomic_load_n(&drm_sun_pci[i].state, __ATOMIC_ACQUIRE) == 2 &&
++            drm_sun_pci[i].maj == maj && drm_sun_pci[i].inst == inst) {
++            *p = drm_sun_pci[i].p;
++            return 0;
++        }
++    }
++    type = drmGetMinorType(maj, min);
++    if (type == -1)
++        return -ENODEV;
++    fd = drmOpenMinor(min, 0, type);
++    if (fd < 0)
++        return fd;
++    if (drmIoctl(fd, DRM_IOCTL_GET_PCIINFO, p)) {
++        int err = -errno;
++
++        close(fd);
++        return err;
++    }
++    close(fd);
++    drm_sun_pci_put(maj, min, p);
++    return 0;
++}
++#endif
++
+ static int drmParsePciBusInfo(int maj, int min, drmPciBusInfoPtr info)
+ {
+ #ifdef __linux__
+@@ -3784,7 +3851,20 @@
+     info->func = func;
+ 
+     return 0;
+-#elif defined(__OpenBSD__) || defined(__DragonFly__) || defined(__sun)
++#elif defined(__sun)
++    struct drm_pciinfo pinfo;
++    int ret = drm_sun_pciinfo(maj, min, &pinfo);
++
++    if (ret)
++        return ret;
++
++    info->domain = pinfo.domain;
++    info->bus = pinfo.bus;
++    info->dev = pinfo.dev;
++    info->func = pinfo.func;
++
++    return 0;
++#elif defined(__OpenBSD__) || defined(__DragonFly__)
+     struct drm_pciinfo pinfo;
+     int fd, type;
+ 
+@@ -3952,7 +4032,21 @@
+         return parse_config_sysfs_file(maj, min, device);
+ 
+     return 0;
+-#elif defined(__OpenBSD__) || defined(__DragonFly__) || defined(__sun)
++#elif defined(__sun)
++    struct drm_pciinfo pinfo;
++    int ret = drm_sun_pciinfo(maj, min, &pinfo);
++
++    if (ret)
++        return ret;
++
++    device->vendor_id = pinfo.vendor_id;
++    device->device_id = pinfo.device_id;
++    device->revision_id = pinfo.revision_id;
++    device->subvendor_id = pinfo.subvendor_id;
++    device->subdevice_id = pinfo.subdevice_id;
++
++    return 0;
++#elif defined(__OpenBSD__) || defined(__DragonFly__)
+     struct drm_pciinfo pinfo;
+     int fd, type;
+ 
+@@ -4766,6 +4860,16 @@
+     if (!S_ISCHR(sbuf.st_mode))
+         return -EINVAL;
+ 
++#ifdef __sun
++    {
++        /* ask the fd we were given; the nodes may not be openable by this user */
++        struct drm_pciinfo p;
++        int maj = major(sbuf.st_rdev), min = drm_minor(sbuf.st_rdev);
++
++        if (drmNodeIsDRM(maj, min) && drmIoctl(fd, DRM_IOCTL_GET_PCIINFO, &p) == 0)
++            drm_sun_pci_put(maj, min, &p);
++    }
++#endif
+     return drmGetDeviceFromDevId(sbuf.st_rdev, flags, device);
+ }
+ 

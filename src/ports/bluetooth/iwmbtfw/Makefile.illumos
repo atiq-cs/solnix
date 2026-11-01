@@ -1,0 +1,29 @@
+# btintelfw: Intel Bluetooth firmware loader over ugen (illumos userland).
+# PROTOINC = the gate proto usr/include (for sys/usb/clients/ugen/usb_ugen.h,
+# which the build host's /usr/include lacks). Searched AFTER the system headers.
+PROTOINC ?= /usr/include
+CC	 = gcc
+CFLAGS	 = -m64 -O2 -std=gnu11 -Wall -Wextra -Wno-unused-parameter \
+	   -Wno-sign-compare -Wno-missing-field-initializers -Werror \
+	   -Icompat -I. -idirafter $(PROTOINC) -include compat/iwmbt_compat.h -DNDEBUG
+OBJS	 = btintelfw.o iwmbt_fw.o ugen_usb.o ugen_evq.o selftest.o
+
+all: btintelfw
+
+btintelfw: $(OBJS)
+	$(CC) -m64 -o $@ $(OBJS)
+
+iwmbt_fw.o: upstream/iwmbt_fw.c
+	$(CC) $(CFLAGS) -c -o $@ upstream/iwmbt_fw.c
+
+%.o: %.c
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+check: btintelfw
+	./btintelfw -t
+	./negative-controls.sh
+
+clean:
+	find . -name "*.o" -type f -delete; find . -name btintelfw -type f -delete
+
+.PHONY: all check clean

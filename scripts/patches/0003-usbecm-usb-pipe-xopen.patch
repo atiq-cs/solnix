@@ -1,0 +1,90 @@
+solnix: usbecm -- open the data pipes with usb_pipe_xopen() so USB 3 adapters work.
+
+SYMPTOM (ThinkPad X1 Extreme Gen5, Belkin USB-C LAN adapter, Realtek RTL8153,
+photographed 2026-10-19 22:17:27): usbecm attaches and dladm show-phys lists
+usbecm0, but no frame ever moves and DHCP never gets a lease. The console says:
+
+  usba: NOTICE: driver usbecm attempting to open non-default of a USB 3.0 or
+  newer device through usb_pipe_open(). usbecm must be updated to use
+  usb_pipe_xopen() to work with USB device Belkin Belkin USB-C LAN.
+
+MECHANISM: usb_pipe_xopen() (usbai_pipe_mgmt.c) refuses any non-default pipe
+on a device at USBA_SUPER_SPEED_DEV or above when the caller passed only a
+plain usb_ep_descr_t -- the xHCI driver needs the SuperSpeed endpoint
+companion descriptor (bMaxBurst, streams) to program the endpoint context, and
+usb_pipe_open() has none to give. usbecm_open_pipes() opened bulk-in, bulk-out
+and the notification interrupt pipe with usb_pipe_open(), so on a USB 3 port
+every open failed and the link never came up. On a USB 2 port the same adapter
+works, which is why the driver looked correct in testing.
+
+FIX: the conversion upstream already did for hid, scsa2usb and ccid. Fill a
+usb_ep_xdescr_t for each endpoint with usb_ep_xdescr_fill() (which copies the
+companion descriptor when the device has one and leaves the flags clear when it
+does not) and open with usb_pipe_xopen(). USB 1.x/2.x devices get exactly the
+pipe they got before: with no companion, usb_pipe_open() itself builds the same
+xdescr and calls the same open (usbai_pipe_mgmt.c usb_pipe_open). Nothing else
+in usbecm reads the descriptors through the pipe; the cached usb_ep_data_t
+pointers it keeps (wMaxPacketSize for rx sizing and the tx zero-length packet)
+are unchanged.
+
+Upstream illumos-gate master still has the usb_pipe_open() calls (checked
+2026-10-19, 6ec2e514a3); this is a candidate to send upstream.
+
+--- a/usr/src/uts/common/io/usb/clients/usbecm/usbecm.c	2026-10-20 07:38:59.170372811 -0400
++++ b/usr/src/uts/common/io/usb/clients/usbecm/usbecm.c	2026-10-20 07:52:40.585441123 -0400
+@@ -2895,6 +2895,7 @@
+ {
+ 	int		rval = USB_SUCCESS;
+ 	usb_ep_data_t	*in_data, *out_data, *intr_pipe;
++	usb_ep_xdescr_t	in_xdesc, out_xdesc, intr_xdesc;
+ 	usb_pipe_policy_t policy;
+ 	int		altif;
+ 
+@@ -2955,8 +2956,28 @@
+ 
+ 	policy.pp_max_async_reqs = 2;
+ 
++	/*
++	 * Extended descriptors carry the SuperSpeed endpoint companion that a
++	 * USB 3.x device needs; usb_pipe_open() refuses non-default pipes on
++	 * such a device (usbai_pipe_mgmt.c), so every pipe goes through
++	 * usb_pipe_xopen(). For USB 2.x devices the companion is absent and
++	 * the open is unchanged.
++	 */
++	if (usb_ep_xdescr_fill(USB_EP_XDESCR_CURRENT_VERSION, ecmp->ecm_dip,
++	    in_data, &in_xdesc) != USB_SUCCESS ||
++	    usb_ep_xdescr_fill(USB_EP_XDESCR_CURRENT_VERSION, ecmp->ecm_dip,
++	    out_data, &out_xdesc) != USB_SUCCESS ||
++	    (intr_pipe != NULL &&
++	    usb_ep_xdescr_fill(USB_EP_XDESCR_CURRENT_VERSION, ecmp->ecm_dip,
++	    intr_pipe, &intr_xdesc) != USB_SUCCESS)) {
++		USB_DPRINTF_L2(PRINT_MASK_OPEN, ecmp->ecm_lh,
++		    "usbecm_open_pipes: fill extended ep descriptor failed");
++
++		return (USB_FAILURE);
++	}
++
+ 	/* Open bulk in endpoint */
+-	if (usb_pipe_open(ecmp->ecm_dip, &in_data->ep_descr, &policy,
++	if (usb_pipe_xopen(ecmp->ecm_dip, &in_xdesc, &policy,
+ 	    USB_FLAGS_SLEEP, &ecmp->ecm_bulkin_ph) != USB_SUCCESS) {
+ 		USB_DPRINTF_L2(PRINT_MASK_OPEN, ecmp->ecm_lh,
+ 		    "usbecm_open_pipes: open bulkin pipe failed!");
+@@ -2965,7 +2986,7 @@
+ 	}
+ 
+ 	/* Open bulk out endpoint */
+-	if (usb_pipe_open(ecmp->ecm_dip, &out_data->ep_descr, &policy,
++	if (usb_pipe_xopen(ecmp->ecm_dip, &out_xdesc, &policy,
+ 	    USB_FLAGS_SLEEP, &ecmp->ecm_bulkout_ph) != USB_SUCCESS) {
+ 		USB_DPRINTF_L2(PRINT_MASK_OPEN, ecmp->ecm_lh,
+ 		    "usbecm_open_pipes: open bulkout pipe failed!");
+@@ -2978,7 +2999,7 @@
+ 
+ 	/* Open interrupt endpoint if found. */
+ 	if (intr_pipe != NULL) {
+-		if (usb_pipe_open(ecmp->ecm_dip, &intr_pipe->ep_descr, &policy,
++		if (usb_pipe_xopen(ecmp->ecm_dip, &intr_xdesc, &policy,
+ 		    USB_FLAGS_SLEEP, &ecmp->ecm_intr_ph) != USB_SUCCESS) {
+ 			USB_DPRINTF_L2(PRINT_MASK_OPEN, ecmp->ecm_lh,
+ 			    "usbecm_open_pipes: "

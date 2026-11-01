@@ -10,7 +10,10 @@ al, mp, cl, dp, dl = [], [], [], [], []
 for l in open('../gate-drivers.txt').read().split('\n'):
     if not l.strip():
         continue
-    attrs = [t.split('=', 1) for t in shlex.split(l[len('driver '):]) if '=' in t]
+    # posix shlex but with no escape character: a devlink value's \t and \M0 are
+    # devlink.tab(5) syntax and must survive (the default shlex ate the backslashes).
+    lx = shlex.shlex(l[len('driver '):], posix=True); lx.whitespace_split = True; lx.escape = ''
+    attrs = [t.split('=', 1) for t in lx if '=' in t]
     name = [v for k, v in attrs if k == 'name'][0]
     if name not in n2m:
         while nxt in used:

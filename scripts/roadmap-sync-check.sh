@@ -10,13 +10,13 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 
 RM="${1:-../solnix.io/site/data/roadmap.json}"
-REG=docs/registry/real-derivations-224.tsv
+REG="docs/registry/real-derivations.tsv docs/registry/recipes.tsv"  # was real-derivations-224.tsv, gone: every count read 0
 RISCV=docs/design-riscv-port.md
 
 # --- ground truth from the repo ---
-x86=$(grep -c x86_64-solaris "$REG" 2>/dev/null || echo 0)
-aa=$(grep -c aarch64-solaris "$REG" 2>/dev/null || echo 0)
-sp=$(grep -c sparcv9 "$REG" 2>/dev/null || echo 0)
+x86=$(cat $REG 2>/dev/null | grep -c x86_64-solaris)
+aa=$(cat $REG 2>/dev/null | grep -c aarch64-solaris)
+sp=$(cat $REG 2>/dev/null | grep -c sparcv9)
 rp=$(grep -oE 'R-P[0-9]+' "$RISCV" 2>/dev/null | sort -tP -k2 -n | tail -1)
 rel=$(ls RELEASE-NOTES-*.md 2>/dev/null | head -1 | sed -E 's/.*NOTES-(.*)\.md/\1/')
 gpu_compile=$( [ -d src/drm-port ] && echo yes || echo no )
@@ -60,6 +60,7 @@ echo "== drift check =="
 [ "$sp" -gt 5 ]  && imply 4 "in progress" "$sp sparcv9 derivations"
 [ -n "$rp" ]     && imply 5 "in progress" "RISC-V at $rp"
 [ "$gpu_compile" = yes ] && imply 6 "in progress" "GPU stack compiles (src/drm-port)"
+grep -q '^cosmic-comp	' docs/registry/recipes.tsv && imply 7 "in progress" "COSMIC desktop rows in the registry"
 [ "$warn" -eq 0 ] && echo "  no drift: the published roadmap matches the repo state."
 echo
 echo "To fix drift: edit ../solnix.io/site/data/roadmap.json (states: planned|in progress|done),"
