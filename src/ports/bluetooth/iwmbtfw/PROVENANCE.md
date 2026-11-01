@@ -23,11 +23,14 @@ and iwmbt_hw.c, so it can call their static helpers, and iwmbt_fw.c compiles on 
 
 * `ugen_usb.c`, `compat/libusb.h`: the libusb-1.0 calls iwmbtfw makes (17 functions), implemented over
   illumos ugen(4D) nodes `/dev/usb/<vid>.<pid>/<inst>/{cntrl0,if0in1,if0out2,if0in2}`.
+  `libusb_open` resets the interrupt-IN toggle (CLEAR_FEATURE(ENDPOINT_HALT) on 0x81),
+  because illumos xhci re-adds the endpoint at DATA0 on every open; `-C` skips it, as a
+  negative control. Measured: docs/design-bluetooth.md §9.
 * `ugen_evq.[ch]`: rebuilds HCI event boundaries from ugen's coalesced interrupt-IN stream.
 * `btintelfw.c`: modes -r (read-only TLV and firmware name), -l (upstream handle_9260),
   -V [-n N] (HCI_Read_Local_Version), and -t (self-test).
 * `selftest.c`, `negative-controls.sh`: the self-test runs against a fake ugen directory, and
-  5 sabotages must each fail it.
+  6 sabotages must each fail it.
 * `compat/`: the FreeBSD sys/endian.h, bluetooth.h (bdaddr_t) and ng_hci.h (one constant)
   subsets, plus timespec/nitems.
 
