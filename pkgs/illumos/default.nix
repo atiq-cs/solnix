@@ -407,7 +407,8 @@ let
     inherit gcc libc; gate = gate';
   };
   # Desktop apps outside graphics/ (pop-launcher, cosmic-wallpapers): ./desktop, so the COSMIC outs do not move.
-  desktop = import ./desktop { inherit (cargo) cargoPkg; inherit graphics; inherit (cli) fd; };
+  desktop = import ./desktop { inherit (cargo) cargoPkg; inherit graphics; inherit (cli) fd file;
+    inherit (srcPkgs) mkSrcPkg bash coreutils gnugrep gnused hostname; };
   # COSMIC rust programs on rust199 + graphics (./graphics/cosmic.nix).
   cosmic = import ./graphics/cosmic.nix {
     rust = rust199; inherit gcc libc world; gate = gate'; gccLib = gcc.lib;
@@ -1131,7 +1132,8 @@ in
     cosmic-app-library cosmic-notifications cosmic-osd cosmic-settings-daemon cosmic-bg cosmic-workspaces cosmic-randr cosmic-idle
     cosmic-settings cosmic-files cosmic-edit cosmic-store cosmic-screenshot cosmic-greeter greetd
     open-sans noto-sans noto-sans-mono fira-mono hicolor-icon-theme pop-icon-theme cosmic-icons;
-  inherit (desktop) pop-launcher cosmic-wallpapers;
+  inherit (desktop) pop-launcher cosmic-wallpapers sound-theme-freedesktop adwaita-icon-theme dejavu-fonts liberation-fonts
+    noto-fonts-color-emoji xdg-utils xdg-user-dirs;
   # cargoLib.{vendorOf,cargoPkg}: build any Cargo.lock'd crate on rust199 (./cargo.nix).
   cargoLib = cargo;
   inherit (goChain) go go_1_4 go_1_17 go_1_20 go_1_22 go_1_24 go_1_26 go_1_27;

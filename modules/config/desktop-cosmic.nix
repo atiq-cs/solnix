@@ -39,8 +39,8 @@ in
     };
     fonts = mkOption {
       type = types.listOf types.package;
-      default = with s; [ fira-mono noto-sans noto-sans-mono open-sans ];
-      description = "Fonts on the fontconfig path (NixOS: fonts.packages = [ fira noto-fonts open-sans ]).";
+      default = with s; [ fira-mono noto-sans noto-sans-mono open-sans dejavu-fonts liberation-fonts noto-fonts-color-emoji ];
+      description = "Fonts on the fontconfig path (NixOS: fonts.packages = [ fira noto-fonts open-sans ] + fonts.enableDefaultPackages).";
     };
     greeter = mkOption {
       type = types.bool;

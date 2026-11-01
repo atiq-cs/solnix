@@ -32,6 +32,14 @@ in
       type = lib.types.str; default = "en_US.UTF-8";
       description = "Default LANG (illumos ships en_US.UTF-8).";
     };
+    mdns = lib.mkOption {
+      type = lib.types.bool; default = false;
+      description = ''
+        Multicast DNS (NixOS services.avahi with nssmdns4): enable illumos's own mdnsd (svc:/network/dns/multicast)
+        and put mdns after dns on the hosts/ipnodes lines. nss_mdns answers only .local names and link-local
+        addresses, so other lookups never wait on it. The mdnsd firewall port (UDP 5353) opens with it.
+      '';
+    };
     ntpServer = lib.mkOption {
       type = lib.types.str; default = "169.254.169.123";
       description = "NTP source. EC2 provides a link-local NTP at 169.254.169.123.";
@@ -39,6 +47,8 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    solnix.defaults.enableStockServices = lib.mkIf cfg.mdns [ "network/dns/multicast" ];
+    solnix.firewall.allowedUDPPorts = lib.mkIf cfg.mdns [ 5353 ];
     # 1+2. Timezone + locale via /etc/default/init (read by init + login for TZ/LANG).
     environment.generatedEtc."default/init" = ''
       TZ=${cfg.timeZone}
@@ -84,19 +94,17 @@ in
       driftfile /var/ntp/ntp.drift
     '';
 
-    # 7. logadm — rotate /var/cores + solnix logs (illumos-native log rotation,
-    # the logrotate/journald-retention analog). Appended to the base logadm.conf.
-    environment.generatedEtc."logadm.d/solnix.conf" = ''
-      /var/cores/core.* -A 30d -C 20 -p 1d
-      /var/log/solnix.log -C 8 -c -s 10m
-    '';
+    # 7. log rotation: none here. An /etc/logadm.d/solnix.conf was generated until cosmic8 (2026-11-01), with rules for
+    # /var/cores/core.* and /var/log/solnix.log. Neither ever ran: logadm reads only /etc/logadm.conf, and logadm-upgrade
+    # merges a logadm.d file only when it is a regular -r--r--r-- root:sys file, which a generated-etc link is not
+    # (`logadm -n -v` on lixi listed neither). Nothing writes /var/log/solnix.log. Cores: solnix-core-prune (coreadm.nix).
 
-    # 8. nsswitch — hosts: files dns (drop mdns; no mdnsd -> avoids slow lookups).
+    # 8. nsswitch — hosts: files dns, plus mdns only with solnix.defaults.mdns (mdnsd running; no mdnsd -> slow lookups).
     environment.generatedEtc."nsswitch.conf" = ''
       passwd:     files
       group:      files
-      hosts:      files dns
-      ipnodes:    files dns
+      hosts:      files dns${lib.optionalString cfg.mdns " mdns"}
+      ipnodes:    files dns${lib.optionalString cfg.mdns " mdns"}
       networks:   files
       protocols:  files
       rpc:        files

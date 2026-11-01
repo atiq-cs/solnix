@@ -100,6 +100,19 @@ done
 [ -z "$(find etc var -type f -links +1 | head -1)" ] || die "/etc or /var still has hard-linked files"
 relink() { rm -f "$2"; ln -s "$1" "$2"; }
 relink "$TOP/sw/bin" usr/bin;  relink "$WORLD/usr/sbin" usr/sbin;  relink usr/bin bin
+# /usr/perl5/bin: the IPS perl mediator's link (OI: /usr/perl5/bin -> 5.x/bin). The gate's perl scripts (lp, lpstat,
+# print-service, projadd, arcstat, ... 30 in all) start #!/usr/perl5/bin/perl, and the world ships only
+# usr/perl5/5.42/lib. With solnix.perl5Mediator the toplevel names a perl, and usr/perl5 becomes a real dir: the
+# world's entries linked, plus bin -> that perl's bin. Without it, usr/perl5 stays the world's link (below).
+PERL5=$(rl "$R$TOP/perl5-bin")
+if [ -n "$PERL5" ]; then
+  [ -h usr/perl5 ] && rm -f usr/perl5
+  mkdir -p usr/perl5
+  for e in $(ls -A "$R$WORLD/usr/perl5"); do relink "$WORLD/usr/perl5/$e" "usr/perl5/$e"; done
+  relink "$PERL5" usr/perl5/bin
+elif [ -d usr/perl5 ] && [ ! -h usr/perl5 ]; then
+  find usr/perl5 -depth -delete   # a previous generation's mediator dir: back to the world's link
+fi
 # the rest of /usr and /opt: links into the userland; the gate's own relative
 # links (usr/adm -> ../var/adm, ...) are reproduced as they are.
 for d in usr opt; do

@@ -578,6 +578,7 @@ let
     ln -s ${pkgs.solnix.stock}   $out/stock
     ${lib.optionalString (config.system.zoneBrands != { }) "mkdir -p $out/brand"}
     ${concatStringsSep "\n    " (mapAttrsToList (n: d: "ln -s ${d} $out/brand/${n}") config.system.zoneBrands)}
+    ${lib.optionalString config.solnix.perl5Mediator.enable "ln -s ${pkgs.solnix.perl}/bin $out/perl5-bin"}
     # sw: the composed userland profile (environment.systemPackages via buildEnv)
     # -> /run/current-system/sw. SEPARATE from systemPath so a broken package set
     # can't drop the kernel (design §B). shell-environment puts sw/bin first on PATH.
@@ -644,6 +645,18 @@ in
       runtime references (they are present on purpose). When false (the default,
       for minimal/production images), the gate still FATALs if the 219 MB build-only
       gate proto or the from-source compiler leaks into the runtime closure.
+    '';
+  };
+
+  # The IPS perl mediator (/usr/perl5/bin), which the gate's perl scripts (lpstat, print-service, projadd, ...) name in
+  # their #! line. install-be links it to this perl when set (install-be.sh, after usr/bin).
+  options.solnix.perl5Mediator.enable = mkOption {
+    type = types.bool;
+    default = false;
+    description = ''
+      Provide /usr/perl5/bin (pkgs.solnix.perl 5.42, the version the gate's perl modules are built for) so the
+      base system's perl scripts run: lp/lpstat/cancel/lpadmin (print-service), projadd/projmod, arcstat, ... Without it
+      they fail "required file not found". Adds perl (~50 MB) to the closure.
     '';
   };
 

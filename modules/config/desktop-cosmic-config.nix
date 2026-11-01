@@ -42,7 +42,13 @@ in
   }];
 
   solnix.roles = [ "cosmic-desktop" ];
-  environment.systemPackages = [ s.wayland s.libdrm mesa s.greetd ] ++ cfg.packages ++ cfg.fonts ++ [ fallbackCursorTheme ];
+  environment.systemPackages = [ s.wayland s.libdrm mesa s.greetd ] ++ cfg.packages ++ cfg.fonts ++ [ fallbackCursorTheme ]
+    # NixOS's cosmic module (adwaita-icon-theme, xdg-user-dirs; xdg.sounds: sound-theme-freedesktop) and graphical-desktop
+    # (xdg-utils). Not in cfg.packages, as NixOS keeps them out of its COSMIC list.
+    ++ (with s; [ adwaita-icon-theme xdg-user-dirs sound-theme-freedesktop xdg-utils ]);
+  # NixOS cosmic: services.avahi (mdnsd here); the gate's perl scripts (lp, lpstat, print-service) need /usr/perl5/bin.
+  solnix.defaults.mdns = lib.mkDefault true;
+  solnix.perl5Mediator.enable = lib.mkDefault true;
 
   # What the session finds through /run/current-system/sw/share, as NixOS links it: cosmic.nix (backgrounds,
   # cosmic*), xdg.icons (icons, pixmaps), xdg.menus (applications, desktop-directories), xdg.mime, dbus.nix,
@@ -51,13 +57,17 @@ in
     "/share/applications" "/share/desktop-directories" "/share/icons" "/share/pixmaps" "/share/mime"
     "/share/metainfo" "/share/wayland-sessions" "/share/dbus-1" "/share/backgrounds"
     "/share/cosmic" "/share/cosmic-layouts" "/share/cosmic-themes"
+    "/share/sounds" "/etc/xdg"   # NixOS xdg.sounds; xdg.autostart + programs/environment.nix (sw/etc/xdg)
   ];
   # NixOS programs/environment.nix + xdg/icons.nix: XDG_DATA_DIRS and XCURSOR_PATH per profile (system, the
   # user's ~/.nix-profile, default), so apps installed with home-manager or nix profile show up too.
   environment.profileRelativeSessionVariables = {
     XDG_DATA_DIRS = [ "/share" ];
     XCURSOR_PATH = [ "/share/icons" "/share/pixmaps" ];
+    # NixOS programs/environment.nix: cosmic-session's autostart scan ($dir/autostart) and xdg-user-dirs read these.
+    XDG_CONFIG_DIRS = [ "/etc/xdg" ];
   };
+  environment.sessionVariables.XDG_CONFIG_DIRS = [ "/etc/xdg" ];   # ahead of the profile ones, as NixOS
 
   # libEGL/libgbm find iris/GBM in Mesa's own prefix (its compiled-in paths), so no
   # /run/opengl-driver indirection. The ICD file is for whichever Vulkan loader an app ships.

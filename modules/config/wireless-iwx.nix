@@ -79,7 +79,12 @@ let
   } else wifiKern;
   # the touchpad (options in ./touchpad-i2c-hid.nix) last: dwiic + ihid, the dacf rule.
   wantTouchpad = config.hardware.touchpad.i2cHid.enable;
-  finalDb = if wantTouchpad then s.mkTouchpadDriversDb gpuDb else gpuDb;
+  tpDb = if wantTouchpad then s.mkTouchpadDriversDb gpuDb else gpuDb;
+  # audiohd's extra controller ids (./audio-hda.nix): the stock aliases plus these; the helper checks the count.
+  hdaIds = config.hardware.audio.hdaIds;
+  wantHda = hdaIds != [ ];
+  finalDb = if wantHda then s.mkDriversDbWith tpDb [ { name = "audiohd"; perm = null;
+    aliases = lib.unique ([ "pci10de,371" "pci8086,2668" "pciclass,0403" "pciexclass,0403" ] ++ hdaIds); } ] else tpDb;
   finalKern = if wantTouchpad then s.mkTouchpadKernel gpuKern else gpuKern;
 
   # Networks highest priority first; each line "SSID<TAB>pskFile".
@@ -386,7 +391,7 @@ in
   ]))
   # The driver DB and kernel tree, rendered from iwm/iwx/onMedia and the GPU
   # options together so the drivers compose instead of overriding each other.
-  (lib.mkIf (wantIwm || wantIwx || wantGpu || wantTouchpad) {
+  (lib.mkIf (wantIwm || wantIwx || wantGpu || wantTouchpad || wantHda) {
     system.build.driversDb = finalDb;
     system.build.kernelTree = finalKern;
   })

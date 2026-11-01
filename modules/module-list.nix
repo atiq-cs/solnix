@@ -27,6 +27,7 @@
   ./config/wireless-iwx.nix
   ./config/graphics-gpu.nix
   ./config/touchpad-i2c-hid.nix
+  ./config/audio-hda.nix
   ./config/networking.nix
   ./config/solnix-netd.nix
   ./config/tailscale.nix
