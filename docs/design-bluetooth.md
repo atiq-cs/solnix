@@ -286,10 +286,24 @@ stays desynced; one single-read session moves it back into sync; after that ever
 **Fix.** `libusb_open` sends CLEAR_FEATURE(ENDPOINT_HALT) to 0x81 before it opens `if0in1`. That
 resets the device's toggle to DATA0 (USB 2.0 §9.4.5), the value the re-added host endpoint
 starts at. The kernel ubt (phase 1) needs the same step every time it opens the interrupt pipe:
-`usb_clr_feature(..., USB_EP_HALT, 0x81)`. The problem affects any ugen client of an interrupt
-endpoint that reopens it, not just Bluetooth; it is worth a note to illumos.
+a raw CLEAR_FEATURE(ENDPOINT_HALT, 0x81) through `usb_pipe_sync_ctrl_xfer` on the default pipe, before the
+interrupt pipe is opened. Not `usb_clr_feature()`: on an endpoint with no open pipe it dereferences NULL
+(usbai_util.c:1641-1651, read, not run; docs/bluetooth-phase1-plan.md). The problem affects any ugen client of an
+interrupt endpoint that reopens it, not just Bluetooth; it is worth a note to illumos.
 
-Not yet run with the fix: the cold path (`-r` then `-l` on a controller fresh from power-on).
+Cold path with the fix, run on lixi solnix-32 (2026-11-01, bt2), controller fresh from boot: `-r` bootloader,
+ibt-0040-0041; load, then 20/20 reads on one handle; 8/8 separate runs. 43/43 commands across 15 sessions. The `-C`
+control (warm controller) alternated FAIL/OK as predicted.
+
+**Phase 1 is planned in docs/bluetooth-phase1-plan.md.** It changes this doc in six places, all read in source, not
+run:
+- the HCI socket moves into phase 1;
+- the clear goes over the control pipe, as above;
+- ubt refuses a controller still in its bootloader;
+- ubt binds interface 0 only (`usbif8087,33.config1.0`), so usb_mid keeps the ugen nodes for the loader;
+- "a USB reset loses the firmware" is unmeasured;
+- illumos needs its own SOCK_RAW value (4), a sockaddr_bt without bt_len, and an mbuf type of its own.
+Where that plan and this doc disagree, the plan is newer.
 Only the reopen path is measured with the fix.
 
 The step proves the approach. USBA plus ugen carries every HCI transfer type the Intel boot
