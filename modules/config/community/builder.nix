@@ -81,7 +81,7 @@ in
     smf.services.solnix-builder = {
       enable = true;
       category = "site";
-      description = "solnix idle-time build-queue drainer (telemetry.solnix.io)";
+      description = "solnix idle-time build-queue drainer (builders.solnix.io)";
       model = "contract";
       requires = [ "svc:/milestone/network:default" "svc:/milestone/name-services:default" "svc:/system/filesystem/local:default" "svc:/system/nix-daemon:default" ];
       environment = env // {

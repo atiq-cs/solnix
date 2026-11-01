@@ -8,7 +8,7 @@
 #   solnix-builder-identity rotate <old-key> <new-key>           print the JSON body (add --send to POST it)
 # Never enrol dixa/dixi/lixi (already tier 1); never rotate a real host key except to replace a lost or compromised one.
 PATH=${IDENTITY_PATH:-/usr/bin:/usr/sbin}
-: ${IDENTITY_API:=https://telemetry.solnix.io/api/v1/builder}
+: ${IDENTITY_API:=https://builders.solnix.io/api/v1/builder}
 W=$(mktemp -d /tmp/sbi.XXXXXX) || exit 1; trap 'find "$W" -depth -delete' EXIT
 die() { print -u2 "solnix-builder-identity: $*"; exit 2; }
 pub() { ssh-keygen -y -f "$1" 2>/dev/null | nawk '$1 == "ssh-ed25519" {print $1, $2; exit}'; }

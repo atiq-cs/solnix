@@ -16,7 +16,7 @@
 #   solnix-builder once                             one tick (rc 0: it rebuilt or claimed);  no args: the SMF loop
 #   solnix-builder ready <pname> <outs>             prove one job here (dry run, fetch, rebuild, NarHash), never claim
 PATH=${BUILDER_PATH:-/usr/bin:/usr/sbin}
-: ${BUILDER_API:=https://telemetry.solnix.io/api/v1/build-queue} ${BUILDER_RECIPES:=https://cache.solnix.io/registry/recipes.tsv}
+: ${BUILDER_API:=https://builders.solnix.io/api/v1/build-queue} ${BUILDER_RECIPES:=https://cache.solnix.io/registry/recipes.tsv}
 : ${BUILDER_CACHE:=https://cache.solnix.io}
 : ${BUILDER_STATE:=/var/lib/solnix/builder} ${BUILDER_BEARER_FILE:=/var/lib/solnix/build-queue-bearer}
 # The recipes' outs come from solnix main, not from the system registry's `solnix` (= the 26.11 edition: other outs).

@@ -155,7 +155,7 @@ in
     smf.services.solnix-builder-zone = {
       enable = true;
       category = "site";
-      description = "solnix idle-time build-queue drainer in its own zone (telemetry.solnix.io)";
+      description = "solnix idle-time build-queue drainer in its own zone (builders.solnix.io)";
       model = "transient";
       requires = [ "svc:/network/ipfilter:default" "svc:/system/zones:default" "svc:/milestone/network:default"
         "svc:/system/filesystem/local:default" ] ++ lib.optional config.solnix.ephemeralPool.enable "svc:/site/solnix-ephemeral-pool:default";

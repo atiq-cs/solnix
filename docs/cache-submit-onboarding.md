@@ -44,12 +44,12 @@ You'll be told your `<builder-id>`. (The site-team's key is already generated at
 
 ### 3. Confirm you can authenticate
 ```sh
-curl https://search.solnix.io/api/v1/cache/submit   # info endpoint, 200
+curl https://builders.solnix.io/api/v1/cache/submit   # info endpoint, 200
 ```
 
 ## The submit protocol (per package)
 
-All requests to `search.solnix.io`. Two headers authenticate every POST:
+All requests to `builders.solnix.io` (the builder-only host, DNS-only, since 2026-11-01; `search.solnix.io` keeps the search API). Two headers authenticate every POST:
 - `X-Solnix-Builder: <your-builder-id>`
 - `X-Solnix-Submit-Sig: <base64(ed25519 sig over the canonical challenge)>`
 
