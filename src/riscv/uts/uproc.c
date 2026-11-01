@@ -150,6 +150,7 @@ extern int pty_ctty(int n, int *pgrp);
 extern void pty_set_pgrp(int n, int pgrp);
 extern int pty_drop_ctty(int n);
 extern int pty_session_ctty(int sid);
+extern void pty_cons_poll(void);	/* tryit1: the console pair's UART master */
 extern int pty_chown(int n, unsigned int uid, unsigned int gid);
 extern int pty_chmod(int n, unsigned int mode);
 extern unsigned int pty_mode(int n);
@@ -1313,6 +1314,10 @@ proc_exit(int status)
 		 * in any slot, must not keep its reader from seeing EOF. */
 		for (fd = 0; fd < NOFILE; fd++)
 			fd_release(p, fd);
+		/* A session leader's exit frees its ctty for the next session
+		 * (tryit1: the next console login acquires the console). */
+		if (p->p_sid == p->p_pid && (fd = pty_session_ctty(p->p_sid)) >= 0)
+			(void) pty_drop_ctty(fd);
 		p->p_status = status;
 		p->p_state = PS_ZOMBIE;
 	}
@@ -1755,6 +1760,7 @@ pty_uio(proc_t *p, int fd, char *ubuf, unsigned long n, int wr)
 				return (done > 0 ? (long)done : r);
 			if (proc_sig_wakes(p))
 				return (done > 0 ? (long)done : -4 /* EINTR */);
+			pty_cons_poll();
 			thread_yield();
 			curproc = p;
 			continue;
@@ -2978,8 +2984,10 @@ proc_openat(int dirfd, const char *upath, int flags)
 		return (r);
 	if (str_eq_uproc(path, "/dev/tty"))
 		return (pty_open_ctty(p, flags));
-	if (str_eq_uproc(path, "/dev/ptmx") || ns_under(path, "/dev/pts", 8)) {
-		fd = pty_fd_open(p, path);
+	if (str_eq_uproc(path, "/dev/console") || str_eq_uproc(path, "/dev/ptmx") ||
+	    ns_under(path, "/dev/pts", 8)) {
+		/* tryit1: /dev/console is the console pair, slave 8 (= NPTY in pty.c) */
+		fd = pty_fd_open(p, str_eq_uproc(path, "/dev/console") ? "/dev/pts/8" : path);
 		/* A session leader with no ctty acquires the slave it opens without O_NOCTTY (0x100). */
 		if (fd >= 0 && !(flags & 0x100) && p->p_sid == p->p_pid && !PTY_M(p->p_fd[fd].fd_pty) &&
 		    pty_session_ctty(p->p_sid) < 0)
@@ -3980,6 +3988,7 @@ proc_poll(unsigned long ufds, int nfds, int timeout)
 			break;			/* timed out: return 0 */
 		if (proc_sig_wakes(p))
 			return (-4 /* EINTR: the handler runs on the way out */);
+		pty_cons_poll();
 
 		/*
 		 * Wait. thread_yield gives the cpu to whoever might make us ready
@@ -4043,6 +4052,7 @@ proc_nanosleep(unsigned long ureq, unsigned long urem)
 	while ((now = gethrtime()) < deadline) {
 		if (proc_sig_wakes(curproc))
 			break;		/* EINTR below: the signal is delivered on the way out */
+		pty_cons_poll();
 		thread_yield();
 	}
 	if (now < deadline) {

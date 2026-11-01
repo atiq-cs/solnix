@@ -741,12 +741,15 @@ thread_reap(kthread_t *t)
  * wfi's until an interrupt, then yields so a freshly-runnable thread can run.
  * This replaces the R-P4 raw wfi park with a real dispatched idle thread.
  */
+extern void pty_cons_poll(void);	/* pty.c */
+
 static void
 idle_body(void *arg)
 {
 	(void) arg;
 	for (;;) {
 		__asm__ __volatile__("wfi");
+		pty_cons_poll();	/* tryit1: console input while every thread sleeps */
 		thread_yield();
 	}
 }

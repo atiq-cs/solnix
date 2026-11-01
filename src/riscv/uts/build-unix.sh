@@ -28,8 +28,11 @@ LOG="${LOG:-unix-qemu-boot.log}"
 # FP context switch, and the embedded userland (fptest/newlibtest) is hard-float
 # lp64d — the kernel ABI must match. zifencei: ld.so.1's I-cache coherence
 # (fence.i) on the first-map path. Mirrors build-all.sh / build-scanout.sh.
+# -ffile-prefix-map: no build-host path (home directory) in the DWARF of what we ship.
+SRCROOT="$(cd ../../.. && pwd)"
 CFLAGS="-march=rv64gc_zifencei -mabi=lp64d -mcmodel=medany \
 	-ffreestanding -nostdlib -fno-stack-protector -fno-pic -Iriscv64 \
+	-ffile-prefix-map=$SRCROOT=. \
 	-Wall -Wextra -O2 -g ${EXTRA_CFLAGS:-}"
 
 echo "== compile (freestanding, $TC) =="

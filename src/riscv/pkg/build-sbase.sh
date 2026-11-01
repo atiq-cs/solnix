@@ -19,6 +19,6 @@ make -j8 CC="$HERE/solnix-cc" CFLAGS="$CF" libutf.a libutil.a getconf.h
 sh scripts/mkbox
 cp getconf.h build/
 "$HERE/solnix-cc" $CF -o sbase-box build/*.c libutil.a libutf.a
-mkdir -p "$OUT"; cp sbase-box "$OUT/"
+mkdir -p "$OUT"; cp sbase-box build/sbase-box.c "$OUT/"	# sbase-box.c: the applet table (stage-demo.sh)
 echo "applets: $(grep -c '_main},' build/sbase-box.c)"
 echo SBASE_DONE "$OUT/sbase-box" "$(wc -c < sbase-box)"

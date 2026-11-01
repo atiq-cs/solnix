@@ -23,6 +23,7 @@ OBJDUMP="${OBJDUMP:-${TC}-objdump}"
 
 CFLAGS="-march=rv64imac_zicsr -mabi=lp64 -mcmodel=medany \
 	-ffreestanding -nostdlib -fno-stack-protector -fno-pic \
+	-ffile-prefix-map=$(cd ../../../.. && pwd)=. \
 	-Wall -Wextra -Os -g"
 
 PROGS="init sh hello echo cat fbtest socktest polltest porttest miniwl"

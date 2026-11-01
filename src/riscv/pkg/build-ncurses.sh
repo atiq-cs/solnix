@@ -8,7 +8,7 @@ SRC="${SRC:-$HOME/ws/rvpkg/dl/ncurses-6.5}"; OUT="${OUT:-$HOME/scratch/rvpkg/out
 SR="${SOLNIX_SYSROOT:-$HOME/scratch/rvpkg/sysroot}"
 cd "$SRC"
 make distclean >/dev/null 2>&1 || true
-CC="$HERE/solnix-cc" CFLAGS="-O2" ./configure --host=riscv64-unknown-elf --build=riscv64-linux-gnu \
+CC="$HERE/solnix-cc" CFLAGS="-O2" ./configure --host=riscv64-unknown-elf --build="${SOLNIX_BUILD:-riscv64-linux-gnu}" \
 	--without-shared --without-cxx --without-cxx-binding --without-ada --without-progs \
 	--without-tests --without-manpages --disable-db-install --with-fallbacks=vt100,dumb \
 	--without-dlsym --disable-home-terminfo --disable-widec --without-pthread \

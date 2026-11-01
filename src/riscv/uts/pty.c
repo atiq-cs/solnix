@@ -14,6 +14,11 @@
  * The line discipline applies the slave's termios: ICANON (VERASE, VKILL,
  * VEOF; a slave read returns at most one line), ECHO, and OPOST|ONLCR on
  * output. With ICANON off, input is raw. NOT here: ISIG, ctty, input maps.
+ *
+ * tryit1: pair NPTY is the console. Its master is the UART, driven from the
+ * kernel (pty_cons_poll): received bytes go through ld_in, so the console gets
+ * the same line discipline, ctty and ^C as a pty slave; s2m (echo + output) is
+ * drained to the SBI console. Open /dev/console to use it.
  */
 #define	NPTY		8
 #define	PTYBUF		4096
@@ -58,7 +63,8 @@ struct pty {
 
 extern int proc_signal_pgrp(int pgid, int sig);	/* uproc.c */
 extern int proc_signal(int pid, int sig);
-static struct pty ptytab[NPTY];
+static struct pty ptytab[NPTY + 1];	/* [NPTY] = the console */
+void pty_cons_poll(void);
 
 static void
 pty_lock(struct pty *pt)
@@ -267,6 +273,35 @@ pty_alloc(unsigned int uid, unsigned int gid)
 }
 
 /*
+ * tryit1: the console pair, made by the first open of /dev/console. Cooked, as a
+ * console starts out: ICRNL, OPOST|ONLCR, ISIG|ICANON|ECHO|ECHOE|ECHOK, the
+ * usual control characters. The kernel holds its one master reference.
+ */
+static volatile int cons_on, cons_busy;
+
+static void
+cons_setup(struct pty *pt)
+{
+	static const unsigned char cc[5] = { 3, 034, 0x7f, 0x15, 4 };	/* INTR QUIT ERASE KILL EOF */
+	int i;
+
+	pt->pt_used = 1, pt->pt_mref = 1, pt->pt_sref = pt->pt_ever = 0;
+	pt->pt_locked = 0, pt->pt_uid = pt->pt_gid = 0, pt->pt_mode = 0620;
+	pt->pt_sid = pt->pt_pgrp = 0;
+	pt->pt_m2s.r_rpos = pt->pt_m2s.r_wpos = pt->pt_llen = 0;
+	pt->pt_s2m.r_rpos = pt->pt_s2m.r_wpos = 0;
+	for (i = 0; i < 36; i++)
+		pt->pt_termios[i] = i >= 16 && i < 21 ? cc[i - 16] : 0;
+	pt->pt_termios[1] = 01;			/* c_iflag ICRNL (0400) */
+	pt->pt_termios[4] = 05;			/* c_oflag OPOST|ONLCR */
+	pt->pt_termios[8] = PTY_CS8 | PTY_CREAD;
+	pt->pt_termios[12] = 073;		/* c_lflag ISIG|ICANON|ECHO|ECHOE|ECHOK */
+	for (i = 0; i < 4; i++)
+		pt->pt_winsz[i] = 0;
+	cons_on = 1;
+}
+
+/*
  * pty_open_slave -- open /dev/pts/N for uid. -ENXIO when there is no such pair
  * or its master is gone, -EIO while still locked (no unlockpt yet), -EACCES for
  * a non-owner that is not root. On success the caller holds a slave reference.
@@ -277,10 +312,12 @@ pty_open_slave(int n, unsigned int uid)
 	struct pty *pt;
 	int r = 0;
 
-	if (n < 0 || n >= NPTY)
+	if (n < 0 || n > NPTY)
 		return (-PTY_ENXIO);
 	pt = &ptytab[n];
 	pty_lock(pt);
+	if (n == NPTY && !pt->pt_used)
+		cons_setup(pt);			/* the first open of /dev/console */
 	if (!pt->pt_used || pt->pt_mref == 0)
 		r = -PTY_ENXIO;
 	else if (pt->pt_locked)
@@ -381,6 +418,8 @@ pty_write(int n, int master, const char *kbuf, unsigned long len)
 	pty_unlock(pt);
 	if (sig != 0 && pg > 0)
 		(void) proc_signal_pgrp(pg, sig);
+	if (n == NPTY)
+		pty_cons_poll();	/* the console: out to the UART now */
 	return (r);
 }
 
@@ -464,7 +503,7 @@ pty_session_ctty(int sid)
 {
 	int n;
 
-	for (n = 0; n < NPTY; n++)
+	for (n = 0; n <= NPTY; n++)
 		if (ptytab[n].pt_used && ptytab[n].pt_sid == sid)
 			return (n);
 	return (-1);
@@ -577,7 +616,7 @@ pty_owner(int n, unsigned int *uid, unsigned int *gid)
 {
 	int r = 0;
 
-	if (n < 0 || n >= NPTY)
+	if (n < 0 || n > NPTY)
 		return (-PTY_ENXIO);
 	pty_lock(&ptytab[n]);
 	if (!ptytab[n].pt_used)
@@ -586,4 +625,47 @@ pty_owner(int n, unsigned int *uid, unsigned int *gid)
 	*gid = ptytab[n].pt_gid;
 	pty_unlock(&ptytab[n]);
 	return (r);
+}
+
+/*
+ * tryit1: drive the console pair's master, the UART. Moves received bytes
+ * through the line discipline (0x08 is taken as VERASE too: terminals send
+ * either Backspace), posts ^C's signal to the foreground group, and drains
+ * output + echo to the SBI console. Called from the kernel's wait loops, the
+ * idle loop and the clock tick; one hart at a time, nobody waits for it.
+ */
+extern int uart_getc_nonblock(void);
+extern void sbi_console_putraw(int ch);
+
+void
+pty_cons_poll(void)
+{
+	struct pty *pt = &ptytab[NPTY];
+	char b[64];
+	int c, n = 0, sig, pg;
+
+	if (!cons_on || __atomic_exchange_n(&cons_busy, 1, __ATOMIC_ACQUIRE))
+		return;
+	pty_lock(pt);
+	while (n < (int)sizeof (b) && PTYBUF - (pt->pt_m2s.r_wpos - pt->pt_m2s.r_rpos) > 1 &&
+	    (c = uart_getc_nonblock()) >= 0) {
+		if (c == '\r' && (pt->pt_termios[1] & 01))	/* ICRNL */
+			c = '\n';
+		if (c == 0x08 && (PTY_LFLAG(pt) & 02))
+			c = PTY_CC(pt, 2);
+		b[n++] = (char)c;
+	}
+	if (n > 0)
+		(void) ld_in(pt, b, (unsigned long)n);
+	sig = pt->pt_sigpend, pg = pt->pt_pgrp, pt->pt_sigpend = 0;
+	while ((n = (int)ring_get(&pt->pt_s2m, b, sizeof (b))) > 0) {
+		pty_unlock(pt);
+		for (c = 0; c < n; c++)
+			sbi_console_putraw((unsigned char)b[c]);
+		pty_lock(pt);
+	}
+	pty_unlock(pt);
+	if (sig != 0 && pg > 0)
+		(void) proc_signal_pgrp(pg, sig);
+	__atomic_store_n(&cons_busy, 0, __ATOMIC_RELEASE);
 }

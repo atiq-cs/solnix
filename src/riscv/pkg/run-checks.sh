@@ -80,7 +80,8 @@ for _ in $(seq 1 "$TMO"); do
 	kill -0 $QP 2>/dev/null || break
 	sleep 1
 done
-kill -9 $QP 2>/dev/null; wait $QP 2>/dev/null
+# $QP is timeout(1): SIGKILL on it would orphan qemu, which then runs on forever. Kill its child first.
+pkill -9 -P $QP 2>/dev/null; kill -9 $QP 2>/dev/null; wait $QP 2>/dev/null
 [ -n "${FEEDER:-}" ] && { pkill -P "$FEEDER" 2>/dev/null; kill "$FEEDER" 2>/dev/null; wait "$FEEDER" 2>/dev/null; }
 set -e
 tr -d '\r' < "$LOG" > "$LOG.txt"

@@ -247,6 +247,87 @@ login_console(void)
 	}
 }
 
+#ifdef SOLNIX_DEMO
+/*
+ * tryit1: the browser-demo console login (-DSOLNIX_DEMO; the embedded init is
+ * built without it). A getty in a child: a new session that opens
+ * /dev/console as its controlling tty (the kernel's console line discipline:
+ * erase, ^C), reads a user name, prints /etc/motd and execs the user's shell
+ * as a login shell. No password: the demo account's field is empty.
+ */
+static void
+demo_cat(const char *path)
+{
+	char b[256];
+	long n;
+	int fd = open(path, O_RDONLY);
+
+	if (fd < 0)
+		return;
+	while ((n = read(fd, b, sizeof (b))) > 0)
+		write(1, b, (size_t)n);
+	close(fd);
+}
+
+static void
+demo_getty(void)
+{
+	static char *ev[] = { "HOME=/root", "PATH=/bin:/sbin", "TERM=xterm",
+	    "USER=root", "LOGNAME=root", 0 };
+	char user[64], sh0[66], *av[2];
+	int fd, uid, gid, i;
+	long n;
+
+	(void) __sys(157 /* setsid */, 0, 0, 0, 0);
+	if ((fd = open("/dev/console", O_RDWR)) < 0)
+		_exit(1);
+	for (i = 0; i < 3; i++)
+		dup2(fd, i);
+	close(fd);
+	for (;;) {
+		write(1, "\nsolnix-riscv login: ", 21);
+		if ((n = read(0, user, sizeof (user) - 1)) <= 0)
+			continue;
+		while (n > 0 && (user[n - 1] == '\n' || user[n - 1] == '\r'))
+			n--;
+		user[n] = '\0';
+		if (user[0] != '\0' && passwd_lookup(user, &uid, &gid))
+			break;
+		if (user[0] != '\0')
+			printf("Login incorrect\n");
+	}
+	demo_cat("/etc/motd");
+	setgid((unsigned int)gid);
+	setuid((unsigned int)uid);
+	(void) __sys(49 /* chdir */, (long)"/root", 0, 0, 0);
+	/* argv[0] = "-" + the shell's basename ("-dash"): a login shell */
+	for (i = (int)strlen(pw_shell); i > 0 && pw_shell[i - 1] != '/'; i--)
+		;
+	sh0[0] = '-';
+	for (n = 0; pw_shell[i + n] != '\0' && n < 64; n++)
+		sh0[n + 1] = pw_shell[i + n];
+	sh0[n + 1] = '\0';
+	av[0] = sh0, av[1] = 0;
+	execve(pw_shell, av, ev);
+	printf("login: exec %s FAILED\n", pw_shell);
+	_exit(127);
+}
+
+/* init's whole job in the demo: respawn the console getty. */
+static void
+demo_login(void)
+{
+	int pid, st;
+
+	for (;;) {
+		if ((pid = fork()) == 0)
+			demo_getty();
+		if (pid > 0)
+			waitpid(pid, &st, 0);
+	}
+}
+#endif
+
 /*
  * concurrent_shells — R-P11 gate 2. Fork two independent shell-like sessions
  * that run truly concurrently (each a bounded loop printing its pid); the clock
@@ -696,6 +777,9 @@ main(int argc, char **argv)
 
 	(void) argc; (void) argv;
 	cow_shared[0] = '-';
+#ifdef SOLNIX_DEMO
+	demo_login();		/* tryit1: no gates, just the console login */
+#endif
 
 	printf("\n[R-P11] /sbin/init running in U-mode (pid %d), linked "
 	    "against libc-riscv\n", getpid());

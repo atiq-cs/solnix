@@ -73,6 +73,8 @@ extern int thread_preempt(void);
 
 /* From uproc.c: deliver a pending signal on return-to-U (R-P11). */
 extern void proc_deliver_signals(struct regs *tf);
+/* From pty.c (tryit1): drive the console pair's UART master. */
+extern void pty_cons_poll(void);
 
 /* Count of clock-tick preemptions of a user thread (R-P9 gate 5 proof). */
 volatile unsigned long preempt_count = 0;
@@ -189,6 +191,9 @@ trap_report(struct regs *tf, const char *tag)
 {
 	unsigned long code = SCAUSE_CODE(tf->r_scause);
 
+	if (!trap_probe_active)
+		kcons_quiet = 0;	/* tryit1: a real fault is always printed */
+
 	sbi_console_puts("[trap] ");
 	sbi_console_puts(tag);
 	sbi_console_puts(": scause=");
@@ -256,8 +261,10 @@ trap(struct regs *tf)
 			 * no syscall this tick. Runs after any preempt swtch, on
 			 * whichever thread we resume as.
 			 */
-			if ((tf->r_sstatus & SSTATUS_SPP) == 0)
+			if ((tf->r_sstatus & SSTATUS_SPP) == 0) {
+				pty_cons_poll();	/* tryit1: ^C reaches a busy foreground */
 				proc_deliver_signals(tf);
+			}
 			return;
 		case IRQ_S_SOFT:
 			/*

@@ -502,12 +502,20 @@ mlsetup(unsigned long hartid, unsigned long dtb)
  * banner and the subsystem-online status proving R-P3. Does not return; parks
  * the boot hart (the future idle thread).
  */
+extern void pty_cons_poll(void);	/* pty.c */
+
 static void
 main(void)
 {
+#ifdef SOLNIX_DEMO
+	kcons_quiet = 0;	/* tryit1: the one kernel line the demo console shows */
+#endif
 	sbi_console_puts("\n");
 	sbi_console_puts("SunOS Release " SOLNIX_RELEASE " Version "
 	    SOLNIX_VERSION " (first illumos on RISC-V)\n");
+#ifdef SOLNIX_DEMO
+	kcons_quiet = 1;
+#endif
 	sbi_console_puts("Copyright (c) solnix -- the first illumos RISC-V "
 	    "port (R-P5 genunix bring-up)\n");
 	sbi_console_puts("\n");
@@ -636,6 +644,8 @@ main(void)
 	 * nothing is runnable, so this is not a busy spin when userland blocks on
 	 * console input.
 	 */
-	for (;;)
+	for (;;) {
+		pty_cons_poll();	/* tryit1: the console pair's UART master */
 		thread_yield();
+	}
 }

@@ -288,7 +288,7 @@ sys_write(int fd, const char *ubuf, unsigned long n)
 		if (copyin(ubuf + off, kb, chunk) != 0)
 			return (off > 0 ? (long)off : -EFAULT);
 		for (i = 0; i < chunk; i++)
-			sbi_console_putchar((unsigned char)kb[i]);
+			sbi_console_putchar_u((unsigned char)kb[i]);	/* user output: never quieted */
 		off += chunk;
 	}
 	return ((long)n);
@@ -325,11 +325,12 @@ sys_read(int fd, char *ubuf, unsigned long n)
 		/* R-P11: ^C on the console posts SIGINT to the foreground
 		 * (current) process, then returns what we have. */
 		if (c == 0x03) {
-			sbi_console_puts("^C\n");
+			sbi_console_putchar_u('^'), sbi_console_putchar_u('C');
+			sbi_console_putchar_u('\r'), sbi_console_putchar_u('\n');
 			proc_signal(proc_getpid(), 2 /* SIGINT */);
 			return (i > 0 ? (long)i : -4 /* EINTR */);
 		}
-		sbi_console_putchar(c);		/* echo */
+		sbi_console_putchar_u(c);	/* echo */
 		ch = (char)c;
 		if (copyout(&ch, ubuf + i, 1) != 0)
 			return (i > 0 ? (long)i : -EFAULT);

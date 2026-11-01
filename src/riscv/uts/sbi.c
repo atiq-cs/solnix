@@ -152,8 +152,37 @@ sbi_probe_dbcn(void)
 #define	CONS_STEAL	1000000UL	/* 100 ms at qemu's 10 MHz timebase */
 static unsigned long cons_owner;	/* hart id + 1; 0 = free */
 
+/*
+ * tryit1: kcons_quiet silences the kernel's own console chatter (the boot log,
+ * the [fork]/[exec]/[elf]/[exit] trace, self-test reports) in the browser-demo
+ * build (-DSOLNIX_DEMO). Userland output goes through sbi_console_putchar_u and
+ * is never silenced; a kernel trap that parks a hart clears the flag first.
+ */
+#ifdef SOLNIX_DEMO
+volatile int kcons_quiet = 1;
+#else
+volatile int kcons_quiet = 0;
+#endif
+
 void
 sbi_console_putchar(int ch)
+{
+	if (!kcons_quiet)
+		sbi_console_putchar_u(ch);
+}
+
+/*
+ * tryit1: the console pair's output (pty.c pty_cons_poll, serialized there).
+ * No line lock: an echo must not wait out another hart's unfinished prompt line.
+ */
+void
+sbi_console_putraw(int ch)
+{
+	sbi_legacy_putchar(ch);
+}
+
+void
+sbi_console_putchar_u(int ch)
 {
 	unsigned long me, t0, t;
 
