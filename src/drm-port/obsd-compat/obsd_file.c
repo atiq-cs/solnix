@@ -9,10 +9,13 @@
  * src/drm-port/src/drm_prime.c (C1c): the fd passes over SCM_RIGHTS like any
  * fd, mmap goes to i915's devmap, the last close to i915's close(9E), and
  * lseek(SEEK_END) reads the "Size" property (specfs spec_size).
- * References: f_count counts OpenBSD holders (fnew's, FREF/FRELE) plus one
- * per fdinsert (one dma-buf can be installed as several fds). specfs calls
- * close(9E) once, at the last close of the slot's dev_t with no mapping
- * left, and that drops all of them (obsd_file_lastclose).
+ * References: f_count counts OpenBSD holders (FREF/FRELE). As in OpenBSD,
+ * fdinsert takes no reference of its own: the fd takes over the caller's
+ * (fnew's for a new file, get_dma_buf's for another fd of one dma-buf), and
+ * obsd_file_opens counts them. specfs calls close(9E) once, at the last
+ * close of the slot's dev_t with no mapping left, and that drops all of
+ * them (obsd_file_lastclose). An FREF here leaked every exported sync_file
+ * and dma-buf: the 4095 slots filled and cosmic-comp lost its outputs.
  */
 #include <obsd_prelude.h>
 #include <sys/id_space.h>
@@ -147,10 +150,6 @@ fdinsert(struct filedesc *fdp, int fd, int flags, struct file *fp)
 	(void) snprintf(path, sizeof (path), "/devices%s:dmabuf%u",
 	    obsd_file_path, slot);
 	vn_setpath_str(vp, path, strlen(path));
-	mutex_enter(&obsd_file_lock);
-	FREF(fp);			/* the open fd's reference */
-	obsd_file_opens[slot]++;
-	mutex_exit(&obsd_file_lock);
 	if ((err = VOP_OPEN(&vp, FREAD | FWRITE, CRED(), NULL)) != 0 ||
 	    (err = falloc(vp, FREAD | FWRITE, &ifp, NULL)) != 0) {
 		/* shortcut: the OpenBSD caller cannot see this failure;
@@ -158,13 +157,15 @@ fdinsert(struct filedesc *fdp, int fd, int flags, struct file *fp)
 		cmn_err(CE_WARN, "!obsd_file: slot %u open failed: %d",
 		    slot, err);
 		VN_RELE(vp);
-		mutex_enter(&obsd_file_lock);
-		obsd_file_opens[slot]--;
-		mutex_exit(&obsd_file_lock);
-		(void) obsd_frele(fp, curproc);
+		(void) obsd_frele(fp, curproc);	/* the fd would have owned it */
 		setf(fd, NULL);
 		return;
 	}
+	/* counted only once open: a close(9E) of this slot still running
+	 * (spec_open waited for it) must not drain this fd's reference */
+	mutex_enter(&obsd_file_lock);
+	obsd_file_opens[slot]++;	/* the caller's reference, now the fd's */
+	mutex_exit(&obsd_file_lock);
 	mutex_exit(&ifp->f_tlock);
 	setf(fd, ifp);
 	if (flags & UF_EXCLOSE)
