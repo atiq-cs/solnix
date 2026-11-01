@@ -97,9 +97,27 @@ from the media first (`solnix-install`). Then, on the installed system:
   `beadm destroy solnix-<N>` and set `attachAtBoot` back to false.
 - Never back out with an ssh script, cron or a timer. None of them runs if the hang comes before userland.
 
+## D. nvidia bound at boot (boot-once BE only)
+
+`hardware.graphics.nvidia = { attachAtBoot = true; acceptFirmwareLicense = true; }` (modules/config/graphics-gpu.nix)
+binds `nvidia` to `pciex10de,2420` and changes what tzmon does, so read all of this first.
+
+- tzmon's boot-time dGPU power-off (scripts/patches/0005) acts on any dGPU that has no driver attached when tzmon
+  attaches, even one bound by alias, so the option opts tzmon out (`solnix-dgpu-off=0` in tzmon.conf). From then
+  on the GPU is powered. Unmanaged it went 53 -> 94 C in ten minutes and the EC cut power.
+- `site/solnix-nvidia-guard` starts with single-user. It reads the EC's dGPU sensor (GPUT, kstat
+  `dgputemp:0:ec:gput_C`, from the `dgputemp` module) every 3 s and reboots at `nvidia.maxTempC` (80) or when the
+  sensor cannot be read. Test it without rebooting: `DRYRUN=1 SENSOR=tmp0_C MAXT=40 LOG=/tmp/g.log sh <guard>`
+  logs `would reboot` at the first sample.
+- nvidia.conf sets `NVreg_GpuInitOnProbe=0`. The PCI attach maps the BARs and makes /dev/nvidia0, but it does not
+  boot the GSP. `site/solnix-nvidia` (after the guard and system/dumpadm) opens /dev/nvidia0, which runs
+  RmInitAdapter and boots the GSP after the dump device is armed. It then holds the device open and logs to
+  /var/log/solnix-nvidia.log. The GSP firmware is in usr/kernel/firmware, outside the boot_archive.
+- Use it only in a `beadm activate -t` BE. The guard's reboot then lands in a BE where tzmon powers the GPU off.
+  RTD3 (runtime D3) is stubbed in the port, so nothing ever powers an idle GPU down. That is why this is not a default.
+
 ## Not done here
 
 - Stage 2 (one explicit open of card0, the OpenBSD inteldrm modeset). It is the first time the FPU glue
   (`kernel_fpu_begin` with `KFPU_NO_STATE` under `kpreempt_disable`), BAR mapping, MSI and GEM run.
-- An nvidia attach. It needs an image with the GSP firmware, and the order is `nvidia` before `nvidia_modeset`
-  (src/drm-port/nvidia-oss).
+- `nvidia_modeset` / `nvidia_i2c` attach (load them only after /dev/nvidiactl exists), display on the dGPU, and RTD3.
