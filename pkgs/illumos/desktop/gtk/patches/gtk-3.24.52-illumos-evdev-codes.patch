@@ -1,0 +1,18 @@
+--- a/gdk/wayland/gdkdevice-wayland.c	2026-11-01 09:54:21.853206587 -0500
++++ b/gdk/wayland/gdkdevice-wayland.c	2026-11-01 09:54:21.881773072 -0500
+@@ -45,6 +45,15 @@
+ #include <dev/evdev/input.h>
+ #elif defined(HAVE_LINUX_INPUT_H)
+ #include <linux/input.h>
++#else
++/* illumos: no evdev header. wl_pointer button codes are Linux evdev codes (input-event-codes.h). */
++#define BTN_LEFT    0x110
++#define BTN_RIGHT   0x111
++#define BTN_MIDDLE  0x112
++#define BTN_FORWARD 0x115
++#define BTN_BACK    0x116
++#define BTN_STYLUS  0x14b
++#define BTN_STYLUS2 0x14c
+ #endif
+ 
+ #define BUTTON_BASE (BTN_LEFT - 1) /* Used to translate to 1-indexed buttons */
