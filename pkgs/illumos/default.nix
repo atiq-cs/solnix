@@ -396,8 +396,13 @@ let
   # Generic Rust packages on rust199 (./cargo.nix: vendorOf FOD + cargoPkg).
   cargo = import ./cargo.nix {
     rust = rust199; inherit gcc libc world; gate = gate'; gccLib = gcc.lib;
-    inherit (srcPkgs.nixChain) cacert;
+    inherit (srcPkgs.nixChain) cacert; tools = hostfixTools; inherit (cliBase) python3;
   };
+  # hostfix: the store tools the cargo builders put first on PATH (NixOS: stdenv's tools are store paths), so a
+  # solnix host (no /usr/gnu, no python3, no patch) rebuilds them. cliBase = the cli set without go/cargo (no cycle).
+  cliBase = import ./cli { base = srcPkgs; inherit world graphics; goChain = null; cargoPkg = null; };
+  hostfixTools = buildEnv { name = "solnix-hostfix-tools"; pathsToLink = [ "/bin" ];
+    paths = [ seedBuildTools srcPkgs.coreutils srcPkgs.findutils cliBase.gnupatch cliBase.cmake srcPkgs.pkgconf ]; };   # pkgconf: -sys crates' pkg-config
   # Go from source: go1.4 (C) -> 1.17 -> 1.20 -> 1.22 -> 1.24 -> 1.26 (./go.nix).
   goChain = import ./go.nix { inherit gcc world; gate = gate'; gccLib = gcc.lib; inherit (srcPkgs.nixChain) cacert; };
   cli = import ./cli { base = srcPkgs; inherit world graphics goChain; inherit (cargo) cargoPkg; };
@@ -411,6 +416,13 @@ let
     inherit (srcPkgs) mkSrcPkg bash coreutils gnugrep gnused hostname; };
   # The GTK 3 / Wayland stack for Firefox (./desktop/gtk): its own dir, so neither COSMIC nor desktop/ outs move.
   gtk = import ./desktop/gtk { base = srcPkgs; inherit graphics cli; inherit (cosmic) noto-sans; };
+  # COSMIC's fonts and icon themes on store tools only (./desktop/cosmic-data.nix). Not graphics/cosmic-data.nix, which
+  # still evaluates there (unused) because graphics/ is every COSMIC app's fixups = ./. input: editing it moves all 21.
+  # shortcut: graphics/cosmic-data.nix is dead text kept for that hash; delete it in the next wave that rebuilds COSMIC.
+  cosmicData = import ./desktop/cosmic-data.nix { fetchurl = import <nix/fetchurl.nix>; tools = hostfixTools; inherit world;
+    inherit (cliBase) python3;
+    src = repo: sha256: import <nix/fetchurl.nix> {   # = graphics/cosmic.nix's src (same FOD)
+      name = "${repo}-epoch-1.5.0.tar.gz"; url = "https://codeload.github.com/pop-os/${repo}/tar.gz/refs/tags/epoch-1.5.0"; inherit sha256; }; };
   # COSMIC rust programs on rust199 + graphics (./graphics/cosmic.nix).
   cosmic = import ./graphics/cosmic.nix {
     rust = rust199; inherit gcc libc world; gate = gate'; gccLib = gcc.lib;
@@ -546,7 +558,7 @@ let
   # BSD fetch(1) (+ libfetch), from FreeBSD source: the last of the maintainer-required CLI set.
   bsdfetch = import ./bsdfetch.nix {
     gate = gate'; libcSlice = libc;
-    inherit (srcPkgs) gccWrapper openssl;
+    inherit (srcPkgs) gccWrapper openssl; tools = hostfixTools; inherit (cliBase) perl; inherit world;
   };
 
   iwx-driver = import ./iwx-driver.nix {
@@ -1246,8 +1258,8 @@ in
     pixman xkeyboard-config libxkbcommon libdisplay-info seatd dbus;
   inherit (cosmic) cosmic-comp cosmic-term cosmic-session cosmic-panel cosmic-applets cosmic-launcher
     cosmic-app-library cosmic-notifications cosmic-osd cosmic-settings-daemon cosmic-bg cosmic-workspaces cosmic-randr cosmic-idle
-    cosmic-settings cosmic-files cosmic-edit cosmic-store cosmic-screenshot cosmic-greeter greetd
-    open-sans noto-sans noto-sans-mono fira-mono hicolor-icon-theme pop-icon-theme cosmic-icons;
+    cosmic-settings cosmic-files cosmic-edit cosmic-store cosmic-screenshot cosmic-greeter greetd;
+  inherit (cosmicData) open-sans noto-sans noto-sans-mono fira-mono hicolor-icon-theme pop-icon-theme cosmic-icons;
   inherit (desktop) pop-launcher cosmic-wallpapers sound-theme-freedesktop adwaita-icon-theme dejavu-fonts liberation-fonts
     noto-fonts-color-emoji xdg-utils xdg-user-dirs;
   inherit (gtk) pcre2 glib libpng libjpeg-turbo freetype fontconfig fribidi harfbuzz cairo pango gdk-pixbuf libepoxy

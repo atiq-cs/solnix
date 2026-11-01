@@ -1,10 +1,10 @@
 # cli/go-c1.nix -- batch C1 of the maintainer's Go tools (nxq1 c-batches.tsv), on goPkg (../go.nix) as ./go-tools.nix.
 # Versions are nixpkgs' at nix-config's lock; subPackages/ldflags follow nixpkgs' recipes. Statically linked (CGO=0),
 # so the tz/services/mime data come from the system (/usr/share/lib/zoneinfo, /etc/services, /etc/mime.types).
-{ goPkg, chk, go_1_27 }:
+{ goPkg, chk, go_1_27, python3 }:   # python3: the store one, for go-ioctl-fixup.py (a solnix host has no python3 on PATH)
 let
   gh = repo: tag: sha256: { url = "https://codeload.github.com/${repo}/tar.gz/refs/tags/${tag}"; inherit sha256; };
-  ioctl = f: "python3 ${../go-ioctl-fixup.py} ${f} terminal 'const ioctlReadTermios = unix.TCGETS; const ioctlWriteTermios = unix.TCSETS'";
+  ioctl = f: "${python3}/bin/python3 ${../go-ioctl-fixup.py} ${f} terminal 'const ioctlReadTermios = unix.TCGETS; const ioctlWriteTermios = unix.TCSETS'";
   survey = ioctl "vendor/github.com/AlecAivazis/survey/v2/terminal/runereader_posix.go";
 in {
   git-lfs = goPkg { pname = "git-lfs"; version = "3.7.1"; src = gh "git-lfs/git-lfs" "v3.7.1" "0e83566a9e2477e03627e7fd6bf81f01fadbf93dcaf6abd2686fca90f6bac7dd"; vendorHash = "sha256-95QUAZ6Bwicc8PUJYm8agdHhRfmBLfM+MlymaUvVCfM=";

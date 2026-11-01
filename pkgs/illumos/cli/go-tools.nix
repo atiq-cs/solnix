@@ -1,5 +1,5 @@
 # cli/go-tools.nix -- the Go CLI tier on the from-source go 1.26 (../go.nix goPkg).
-{ goPkg, chk, go_1_27 }:
+{ goPkg, chk, go_1_27, python3 }:   # python3: the store one, for go-ioctl-fixup.py (a solnix host has no python3 on PATH)
 let
   gh = repo: tag: sha256: { url = "https://codeload.github.com/${repo}/tar.gz/refs/tags/${tag}"; inherit sha256; };
   fake = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
@@ -18,13 +18,13 @@ in {
     subPkgs = "./cmd/gh"; ldflags = "-X github.com/cli/cli/v2/internal/build.Version=2.103.3"; prep = ''
       # vendored terminal code calls syscall.SYS_IOCTL, which GOOS=illumos lacks (gh: survey,
       # vt10x, creack/pty; measured): route those through x/sys/unix (../../go-ioctl-fixup.py).
-      python3 ${../go-ioctl-fixup.py} vendor/github.com/AlecAivazis/survey/v2/terminal/runereader_posix.go terminal \
+      ${python3}/bin/python3 ${../go-ioctl-fixup.py} vendor/github.com/AlecAivazis/survey/v2/terminal/runereader_posix.go terminal \
         'const ioctlReadTermios = unix.TCGETS; const ioctlWriteTermios = unix.TCSETS'
-      python3 ${../go-ioctl-fixup.py} vendor/github.com/hinshun/vt10x/ioctl_posix.go vt10x
+      ${python3}/bin/python3 ${../go-ioctl-fixup.py} vendor/github.com/hinshun/vt10x/ioctl_posix.go vt10x
     ''; check = chk ''"$out/bin/gh" --version'' "^gh version 2\\.103\\.3"; };
   lazygit = goPkg { pname = "lazygit"; version = "0.66.2"; src = gh "jesseduffield/lazygit" "v0.66.2" "fcaad0909af765ef87bd873164a4de78435515ab4d8b04f58d6ad51e8ecd00e5"; vendorHash = null;  # ships vendor/
     subPkgs = "."; ldflags = "-X main.version=0.66.2"; prep = ''
-      python3 ${../go-ioctl-fixup.py} pkg/gocui/gui_others.go gocui
+      ${python3}/bin/python3 ${../go-ioctl-fixup.py} pkg/gocui/gui_others.go gocui
       # syscall.Getpgrp is not in GOOS=illumos' syscall; x/sys/unix has it (this file imports unix).
       f=pkg/gui/controllers/helpers/signal_handling.go
       grep -q 'syscall.Getpgrp()' $f || { echo "FATAL: lazygit Getpgrp anchor" >&2; exit 1; }

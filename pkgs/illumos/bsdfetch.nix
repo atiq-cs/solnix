@@ -6,17 +6,26 @@
 # openssl (-DWITH_SSL), as FreeBSD's default build. libfetch is FreeBSD-private API that
 # nothing else here uses, so it is linked statically into fetch(1).
 { gate, gccWrapper, openssl, libcSlice
+, tools ? null, perl ? null, world ? null   # x86: store build tools (hostfixTools has patch), perl for the http self-test, the world
 , system ? "x86_64-solaris"
 , aarch64 ? false   # LP64-only aarch64 (aa64nix): lib/ not lib/amd64, the arm64-gate target flags
 , fetchSrc ? builtins.path { path = ../../src/ports/bsdfetch; name = "bsdfetch-src"; }
 }:
+let
+  # store tools only when given (NixOS stdenv); without them (aarch64) the text is byte-for-byte the old one, so its drv is unchanged.
+  # with a store perl the http self-tests are mandatory (a host with no perl silently skipped them).
+  hermetic = t: if tools == null then t else builtins.replaceStrings
+    [ "\nexport PATH=/usr/gnu/bin:/usr/bin:/usr/sbin\n" "\nif command -v perl >/dev/null 2>&1; then\n" ]
+    [ "\nexport PATH=${tools}/bin:${perl}/bin:${world}/bin:${world}/usr/bin\n"
+      "\n[ -x ${perl}/bin/perl ] || { echo \"FATAL: no perl for the http self-test\" >&2; exit 1; }\nif command -v perl >/dev/null 2>&1; then\n" ] t;
+in
 derivation {
   name = "bsdfetch-14-e48eb1c5";
   inherit system gate gccWrapper openssl fetchSrc;
   libcDir = "${libcSlice}/lib${if aarch64 then "" else "/amd64"}";
   builder = "/usr/bin/bash";
   PATH = "/usr/gnu/bin:/usr/bin:/usr/sbin";
-  args = [ "-c" ((if aarch64 then builtins.replaceStrings [ "lib/amd64" "-m64 " ]
+  args = [ "-c" (hermetic ((if aarch64 then builtins.replaceStrings [ "lib/amd64" "-m64 " ]
                      [ "lib" "-mno-outline-atomics -mtls-dialect=trad -ffile-prefix-map=$W=/build " ] else (x: x)) ''
     set -eu
     export PATH=/usr/gnu/bin:/usr/bin:/usr/sbin
@@ -107,5 +116,5 @@ derivation {
       echo "bsdfetch: 40/40 back-to-back http fetches exited 0 ($nr r*.txt match)" >&2
     fi
     echo "bsdfetch: built, links clean, file:// round-trip ok, missing-file negative control ok" >&2
-  '') ];
+  '')) ];
 }

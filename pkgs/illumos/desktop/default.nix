@@ -23,7 +23,7 @@ in (import ./data.nix { }) // (import ./xdg.nix { inherit mkSrcPkg bash coreutil
     # the vendor fixups every COSMIC client takes. Then the source edits (./pop-launcher-src-fixup.py).
     prep = ''
       PATH="''${python3:+$python3/bin:}$PATH"   # hash B's cargo-build.sh drops /usr/bin python3 from PATH; it passes $python3
-      REQUIRED="rustix wayland-backend polling" bash ${../graphics/cosmic-comp-vendor-fixup.sh} "$PWD/$V"
+      REQUIRED="rustix wayland-backend polling" /usr/bin/bash ${../graphics/cosmic-comp-vendor-fixup.sh} "$PWD/$V"
       python3 ${./pop-launcher-src-fixup.py} "$PWD" "$out" "${fd}"
       # mimalloc 2.x (libmimalloc-sys, pop-launcher-bin's global allocator): on 64-bit, _mi_ptr_segment calls a segment
       # NULL when it is <= 0 as intptr_t. illumos amd64 user addresses are 0xfffffc7f..., negative as intptr_t, so every
@@ -49,7 +49,7 @@ in (import ./data.nix { }) // (import ./xdg.nix { inherit mkSrcPkg bash coreutil
         o="$W/q-$(basename "$1").out"; : > "$o"
         ( printf '{"Search":"solnixcheck"}\n'
           for ((i = 0; i < 30; i++)); do grep -q '"Update"' "$o" && break; sleep 1; done; printf '"Exit"\n' ) |
-          env -i PATH=/usr/bin HOME="$W/chkhome" XDG_DATA_HOME="$1" XDG_DATA_DIRS="$W/none" /usr/bin/timeout 60 "$out/bin/pop-launcher" > "$o" 2> "$o.err" || true
+          env -i PATH="$PATH" HOME="$W/chkhome" XDG_DATA_HOME="$1" XDG_DATA_DIRS="$W/none" timeout 60 "$out/bin/pop-launcher" > "$o" 2> "$o.err" || true
         grep -q '"Update"' "$o" || { echo "FATAL: pop-launcher sent no Update:" >&2; head -c 600 "$o" "$o.err" >&2; exit 1; }
         echo "$o"
       }
