@@ -801,6 +801,10 @@ let
   # the unfree opt-in like iwmFirmware.
   iwxFirmware = acceptFirmwareLicense:
     import ./iwx-firmware.nix { inherit acceptFirmwareLicense; };
+  # ibt-firmware -- Intel AX2xx Bluetooth blobs + licence (./ibt-firmware.nix),
+  # same unfree opt-in; loaded by btintelfw (docs/design-bluetooth.md).
+  ibtFirmware = acceptFirmwareLicense:
+    import ./ibt-firmware.nix { inherit acceptFirmwareLicense; };
 
   # The AX210/AX211 ids iwx claims (src/ports/wifi/iwx/compat/dev/pci/
   # pcidevs.h WL_22500_9..17), in the illumos pciex spelling. 51f0 is the X1E.
@@ -1117,6 +1121,8 @@ in
   # tree when hardware.wirelessIwm.attachAtBoot. mkIwmKernel/iwmFirmware take
   # the unfree opt-in so the blob stays out of any non-opted closure.
   inherit iwm-driver mkIwmDriversDb mkIwmDriversDbUnbound mkIwmKernel iwmFirmware wpa-pmk solnix-cputemp;
+  # Intel Bluetooth firmware (phase 0, docs/design-bluetooth.md).
+  inherit ibtFirmware;
   # iwx wifi (AX2xx): module only; mkIwxDriversDb/mkIwxKernel below.
   inherit iwx-driver iwxFirmware iwxAliases mkIwxDriversDb mkIwxKernel;
   inherit nvidia-oss-modules nvidiaGspFirmware i915Firmware;
