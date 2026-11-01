@@ -28,6 +28,8 @@ PATH=${BUILDER_PATH:-/usr/bin:/usr/sbin}
 # BUILDER_JOBS: at most this many jobs at once (auto: as many as fit); BUILDER_CORES: nix `cores` per job (0: CPUs / jobs).
 # BUILDER_LOAD_MAX: no job unless fewer CPUs than this are busy (auto: unless C are idle). BUILDER_BUSY: a test hook.
 : ${BUILDER_JOBS:=1} ${BUILDER_CORES:=0} ${BUILDER_NICE:=19} ${BUILDER_NCPU:=$(/usr/sbin/psrinfo | wc -l | tr -d ' ')}
+# BUILDER_SHARE: the fraction (percent) of the CPUs other work leaves idle that this host may use (100 dedicated, 66 opportunistic).
+: ${BUILDER_SHARE:=100}
 : ${BUILDER_BUILD_SECS:=14400}
 J=$BUILDER_STATE C=0 flake=$BUILDER_FLAKE	# a job's state dir, its cores, the flake (locked once per tick)
 log() { printf '%(%Y-%m-%dT%H:%M:%SZ)T builder: %s\n' now "$*"; }
@@ -84,8 +86,8 @@ size() {	# "<jobs> <cores> <busy>" for this tick. busy: CPUs busy over a 5 s sam
 	# are still the machine's (pools off), while avenrun counts only the zone's threads (kstat_fr.c).
 	typeset b=${BUILDER_BUSY:-$(vmstat 5 2 | nawk -v n="$BUILDER_NCPU" 'END {printf "%.2f", (100 - $NF) * n / 100}')} c=$BUILDER_CORES k
 	(( c > 0 )) || { [[ $BUILDER_JOBS == auto ]] && c=4 || c=$(( BUILDER_NCPU / BUILDER_JOBS )); }; (( c > 0 )) || c=1
-	k=$(nawk -v n="$BUILDER_NCPU" -v b="$b" -v c="$c" -v j="$BUILDER_JOBS" -v m="$BUILDER_LOAD_MAX" 'BEGIN {
-		k = int((n - b) / c); if (j != "auto" && k > j + 0) k = j + 0
+	k=$(nawk -v n="$BUILDER_NCPU" -v b="$b" -v c="$c" -v j="$BUILDER_JOBS" -v m="$BUILDER_LOAD_MAX" -v sh="$BUILDER_SHARE" 'BEGIN {
+		k = int((n - b) * sh / 100 / c); if (j != "auto" && k > j + 0) k = j + 0
 		if (m != "auto") k = (b >= m + 0) ? 0 : (k < 1 ? 1 : k)	# a numeric loadMax: the old gate, at least one job
 		print (k < 0 ? 0 : k) }')
 	print -r -- "$k $c $b"
@@ -118,7 +120,9 @@ ready() {	# ready <pname> <outs>: 0 when the out ($out) was rebuilt here and is 
 	# fixed-output inputs (source tarballs, vendor dirs) may build here: their outputs are checked against the pinned
 	# hash, so where they are fetched does not matter (NixOS fetches them on any builder). Any other input must substitute.
 	x=0; for f in $(nawk -v d="${d%^*}" '/will be built/ {b=1; next} /will be fetched/ {b=0} b && $1 ~ /\.drv$/ && $1 != d {print $1}' "$J/dry"); do
-		bounded 120 nix derivation show "$f" 2> /dev/null | jq -e '[.[].outputs[] | has("hash") or has("hashAlgo")] | all' > /dev/null || x=$((x + 1))
+		# a builtin:unpack-channel drv (go.nix srcTree) only unpacks its one FOD input in the daemon: as fetchable as that FOD
+		bounded 120 nix derivation show "$f" 2> /dev/null | jq -e '[.[] | ([.outputs[] | has("hash") or has("hashAlgo")] | all) or
+		    (.builder == "builtin:unpack-channel" and (.inputDrvs | length) <= 1)] | all' > /dev/null || x=$((x + 1))
 	done
 	(( x == 0 )) || { log "decline $1: the dry run would build $x non-fixed-output derivations here first ($J/dry)"; return 1; }
 	[[ -s $BUILDER_BEARER_FILE ]] || { log "dry run: would fetch $2 and rebuild $d"; return 1; }	# no fetch or CPU for what it cannot claim
@@ -198,4 +202,12 @@ once) mkdir -p "$BUILDER_STATE" && tick; exit ;;
 ready) mkdir -p "$BUILDER_STATE" && ready "$2" "$3"; exit ;;	# ready <pname> <outs>: prove one job by hand (never claims)
 esac
 mkdir -p "$BUILDER_STATE" || exit 1
+# opportunistic: cap the project at BUILDER_CAP_SHARE% of the machine (it runs in it now, so the project is active), so builds
+# that started while it was quiet stay within 2/3 of it when the user gets busy (prctl: replace, or add if none is set).
+if [[ -n ${BUILDER_CAP_SHARE:-} ]]; then
+	v=$(( BUILDER_NCPU * BUILDER_CAP_SHARE ))
+	prctl -n project.cpu-cap -r -v "$v" -i project solnix-builder 2> /dev/null ||
+	    prctl -n project.cpu-cap -t privileged -v "$v" -e deny -i project solnix-builder || log "cannot set project.cpu-cap $v"
+	log "opportunistic: project.cpu-cap $v (${BUILDER_CAP_SHARE}% of $BUILDER_NCPU CPUs)"
+fi
 while :; do if tick; then sleep "$(pause busy)"; else sleep "$(pause)"; fi; done

@@ -189,6 +189,11 @@ print "{\"rows\":[$(row zzz 9 nixpkgs),$(row good 1 outdated),$(row openssl3 3.4
 sz() { env BUILDER_NCPU=$1 BUILDER_BUSY=$2 BUILDER_JOBS=$3 BUILDER_CORES=$4 BUILDER_LOAD_MAX=$5 ksh93 "$S" size; }
 z="$(sz 32 0 auto 4 auto)|$(sz 32 10 auto 4 auto)|$(sz 32 30 auto 4 auto)|$(sz 32 0 4 0 auto)|$(sz 20 10 4 4 auto)|$(sz 32 1.5 1 0 2)|$(sz 32 2.5 1 0 2)|$(sz 32 0 1 0 2)"
 [[ $z == "8 4 0|5 4 10|0 4 30|4 8 0|2 4 10|1 32 1.5|0 32 2.5|1 32 0" ]] && ok "size: dedicated 8 jobs idle, 5 with 10 CPUs busy, 0 with 30; lixi 2 of 4 with 10 busy; loadMax 2 gate as before" || no "size: $z"
+# opportunistic: 2/3 (BUILDER_SHARE 66) of the CPUs other work leaves idle; it stops when the user is busy. A builder that ignores
+# BUILDER_SHARE gives 10/6/1 here and fails.
+so() { env BUILDER_NCPU=20 BUILDER_BUSY=$1 BUILDER_JOBS=auto BUILDER_CORES=2 BUILDER_LOAD_MAX=auto BUILDER_SHARE=66 ksh93 "$S" size; }
+z="$(so 0)|$(so 8)|$(so 18)"
+[[ $z == "6 2 0|3 2 8|0 2 18" ]] && ok "size: opportunistic lixi 6 jobs idle, 3 with 8 CPUs busy, 0 with 18 (2/3 of the idle CPUs)" || no "size opportunistic: $z"
 z=$(ksh93 "$S" size); [[ $z == +([0-9])\ +([0-9])\ +([0-9.]) ]] && ok "size from a real vmstat sample: $z" || no "size (vmstat): $z"
 # N=4: four 4 s builds at once, each its own state dir, its own claim (FKIDS: an id and token per pname), the claim reply
 # slow (FKSLOW) so jobs sharing one reply file would read each other's; cores3's out is the build's NIX_BUILD_CORES (3)
