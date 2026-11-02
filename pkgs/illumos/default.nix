@@ -510,7 +510,12 @@ let
     '' ];
   };
 
-  seedBuildTools = buildEnv {
+  # In an instance given buildTools (the system instance: lib/host-pkgs.nix passes the seed instance's seedBuildTools), the
+  # seed farm IS that one: hostfixTools and gcc15's tools must not build a second seed chain here (with this instance's gcc
+  # it would be a different, host-PATH copy). Only the seed instance (buildTools = [ ]) builds it. NixOS: stage N's build
+  # tools are stage N-1's outputs.
+  seedBuildTools = if buildTools != [ ] then builtins.head buildTools else seedBuildTools';
+  seedBuildTools' = buildEnv {
     name = "solnix-seed-build-tools";
     paths = [
       seedSrcPkgs.gnumake    # make, gmake
