@@ -369,6 +369,13 @@ let
   # IPS gcc-14 is only the stage0 seed that compiles it; gcc.lib (libstdc++,
   # libgcc_s) is the C++/unwind runtime every shipped C++ binary links.
   gcc = import ./gcc-src.nix { gate = gate'; libcSlice = libc; inherit ld; inherit (srcPkgs) libcExtra; };
+  # GCC 15.3.0 + the illumos patch series (./gcc15-src.nix), a SECOND compiler: nothing builds with it yet (gcc1).
+  gcc15 = import ./gcc15-src.nix { gate = gate'; libcSlice = libc; inherit ld; inherit (srcPkgs) libcExtra binutils;
+    stage0 = srcPkgs.gccWrapper;   # the gcc 14 stdenv compiler builds the next one (NixOS stage chain)
+    # store-only PATH; perl: libssp/libatomic make_sunver.pl. cliBase, not cli: no go/cargo in gcc15's closure.
+    tools = builtins.concatStringsSep ":" (map (p: "${p}/bin") [ seedBuildTools srcPkgs.coreutils srcPkgs.findutils cliBase.gnupatch cliBase.perl ]); };
+  # its wrapper: srcPkgs.gccWrapper's recipe (gas via -B, -R to the runtime) on gcc15.
+  gcc15Wrapper = derivation (srcPkgs.gccWrapper.drvAttrs // { name = "gcc-wrapper-15.3.0"; gcc = gcc15; gccLib = gcc15.lib; });
 
   # Rust FROM SOURCE (./rust-src.nix), the N-1 chain of docs/rust-illumos-bootstrap.md.
   # stage0 is the OI 1.97.1 seed tree, fetched by its NarHash from the cache (the
@@ -1243,6 +1250,7 @@ let
 in
 {
   inherit libc rtld ld sys base-tools systemPath nix cached starter gcc world early stock drivers kernelNd worldMan;
+  inherit gcc15 gcc15Wrapper;
   inherit rustSeedStage rust198 rust199;
   # seedBuildTools -- the default build-tool set a bare solnix system passes as
   # buildTools so from-source builds resolve gmake/tar/grep/sed/gstrip/gzip/xz
