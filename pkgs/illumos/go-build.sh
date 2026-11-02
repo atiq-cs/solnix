@@ -9,7 +9,8 @@
 #                 PT_TLS ("ld.so.1: go: fatal: TLS requirement failure", measured on 1.20.14).
 #   final       : the closure gate over bin/ + pkg/tool/, then go version + a hello build.
 set -eu
-export PATH="$tools/bin:/usr/bin:/usr/sbin"   # store tools first, no /usr/gnu (hostfix)
+export PATH="$tools/bin:$world/usr/bin:$world/usr/sbin:$world/bin:$world/sbin"   # store tools, then the world (no /usr/bin|sbin|gnu)
+/usr/bin/bash "$pathGate"; . "$illumosBin"
 # FIXED build dir, not $NIX_BUILD_TOP (/tmp on OI, /var/tmp/big on dixi): go1.4's C tools name $W/cc and their
 # sources, go1.17/1.20 name GOROOT/src in every binary (measured, repro2). $buildKey: see mk-src-pkg.nix.
 W=/var/tmp/go-$buildKey; rm -rf "$W"; mkdir -m 700 "$W"; trap 'cd /; rm -rf "$W"' EXIT; cd "$W"
@@ -17,7 +18,8 @@ export HOME=$W GOCACHE=$W/cache GOPATH=$W/gopath CGO_ENABLED=0 GOARCH=amd64 GOTO
 tar xzf "$src"; cd go/src
 if [ -z "$boot" ]; then
   # store RUNPATH for the C tools: gcc's runtime + the world's libc/libm (not the host /lib).
-  printf '#!/usr/bin/bash\nexec %s/bin/gcc -m64 -Wl,-R,%s/amd64:%s "$@"\n' "$gcc" "$gccLibDir" "$rp" > "$W/cc"; chmod +x "$W/cc"
+  # -std=gnu17: go1.4's C uses bool/true as identifiers, C23 keywords under GCC 15 (gcc1 STDENV-SWITCH.md 2.2)
+  printf '#!/usr/bin/bash\nexec %s/bin/gcc -m64 -std=gnu17 -Wl,-R,%s/amd64:%s "$@"\n' "$gcc" "$gccLibDir" "$rp" > "$W/cc"; chmod +x "$W/cc"
   CC=$W/cc GOROOT_FINAL=$out/share/go bash ./make.bash
 else
   GOROOT_BOOTSTRAP=$boot/share/go GOOS=illumos GO_LDFLAGS="-r $rp" bash ./make.bash
@@ -32,7 +34,7 @@ if [ -z "$boot" ]; then
   # made gcc-14.3.0 + illumos-gate-proto RUNTIME references of go_1_4 (measured). Strip them
   # (mk-src-pkg's strip phase), then the same closure gate as the final stages.
   find pkg/tool bin -type f | while read -r f; do
-    [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] && /usr/bin/gstrip --strip-debug "$f"
+    [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] && "$tools/bin/gstrip" --strip-debug "$f"   # store gstrip: a solnix host has no /usr/bin/gstrip
   done
 fi
 if [ -n "$final" ]; then
@@ -41,7 +43,7 @@ if [ -n "$final" ]; then
   # gate failed the toolchain on them (13 files, measured). NixOS ships them (it has no such gate);
   # we drop them. Cost: `go test debug/elf debug/dwarf` lacks those fixtures.
   find src -path '*/testdata/*' -type f | while read -r f; do
-    if [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] && /usr/bin/elfdump -d "$f" 2>/dev/null | grep -q NEEDED; then rm -f "$f"; fi
+    if [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] && elfdump -d "$f" 2>/dev/null | grep -q NEEDED; then rm -f "$f"; fi
   done
 fi
 mkdir -p "$out/share" "$out/bin"

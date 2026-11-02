@@ -3,7 +3,8 @@
 # (GOFLAGS=-mod=vendor), store RUNPATH via -ldflags -r, then the closure gate + the check.
 # Vendor mode (vendorOnly): `go mod vendor` with the network, output pinned by its NAR hash.
 set -eu
-export PATH="$tools/bin:/usr/bin:/usr/sbin"   # store tools first, no /usr/gnu (hostfix)
+export PATH="$tools/bin:$world/usr/bin:$world/usr/sbin:$world/bin:$world/sbin"   # store tools, then the world (no /usr/bin|sbin|gnu)
+/usr/bin/bash "$pathGate"; . "$illumosBin"
 W=$NIX_BUILD_TOP; cd "$W"
 export HOME=$W GOCACHE=$W/cache GOPATH=$W/gopath CGO_ENABLED=0 GOTOOLCHAIN=local GOPROXY=${GOPROXY:-off}
 # $src is the tree go.nix unpacked (builtin:unpack-channel puts the single top-level dir at tree/).
@@ -28,6 +29,9 @@ for p in $subPkgs; do
   "$go/bin/go" build -trimpath -ldflags "-r $rp $ldflags" -o "$out/bin/" "$p"
 done
 eval "$man"
+# Go keeps DWARF and writes its own GNU build-id (a hash of the Go inputs, stable): split it into $debug as every builder does
+: > "$W/split.fail"; /usr/bin/bash "$splitDebug" "$out" "$debug" "$buildKey" "$tools/bin" "$W/split.fail"
+if [ -s "$W/split.fail" ]; then echo "FATAL: split-debug:" >&2; head -20 "$W/split.fail" >&2; exit 1; fi
 bash "$storeGate" "$out" "$tsErrnoGate" "$go"
 cd "$W"; eval "$check"
 echo "=== $name: check passed ===" >&2

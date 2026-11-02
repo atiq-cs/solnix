@@ -2,11 +2,14 @@
 # COSMIC set lacks). Its own dir on purpose: graphics/cosmic.nix passes fixups = ./., so any file added there moves
 # all 21 COSMIC derivations. Rust here builds on ../cargo.nix cargoPkg; the one shared file, the vendor fixup, is
 # imported by path (a single store file), which leaves graphics/ and its outputs unchanged.
-{ cargoPkg, graphics, fd, mkSrcPkg, bash, coreutils, gnugrep, gnused, file, hostname }:
+{ cargoPkg, graphics, fd, mkSrcPkg, bash, coreutils, gnugrep, gnused, file, hostname, jq }:
 let
   fetchurl = import <nix/fetchurl.nix>;
   gh = repo: sha256: { url = "https://codeload.github.com/pop-os/${repo}/tar.gz/refs/tags/epoch-1.5.0"; inherit sha256; };
-in (import ./data.nix { }) // (import ./xdg.nix { inherit mkSrcPkg bash coreutils gnugrep gnused file hostname; }) // rec {
+in (import ./data.nix { }) // (import ./xdg.nix { inherit mkSrcPkg bash coreutils gnugrep gnused file hostname; }) // {
+  # the desktop's help: man: handler, launcher man search, Solnix Manual entry (./help.nix)
+  solnix-help = import ./help.nix { inherit bash coreutils gnused gnugrep jq; };
+} // rec {
   # pop-launcher (pop-os/launcher epoch-1.5.0 = NixOS's 1.2.7 + the discrete-GPU menu fix): the search service
   # cosmic-launcher runs from PATH, with its plugins (desktop entries, files, find, calc, scripts, ...).
   pop-launcher = cargoPkg {

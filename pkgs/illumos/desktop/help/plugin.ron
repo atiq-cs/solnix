@@ -1,0 +1,12 @@
+(
+    name: "Manual pages",
+    description: "Syntax: man <word>\nExample: man tar",
+    query: (
+        regex: "^(man )+",
+        help: "man ",
+        isolate: true,
+        no_sort: true,
+    ),
+    bin: (path: "@out@/libexec/pop-launcher-man"),
+    icon: Name("help-contents"),
+)

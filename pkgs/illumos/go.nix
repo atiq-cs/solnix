@@ -13,7 +13,7 @@ let
     inherit version gcc rp world gate tools python3; gccLibDir = "${gccLib}/lib";
     boot = if boot == null then "" else boot;
     final = if final then "1" else "";
-    storeGate = ./store-gate.sh; tsErrnoGate = ./ts-errno-gate.sh; zeroChecksum = ./zero-checksum.sh;
+    storeGate = ./store-gate.sh; tsErrnoGate = ./ts-errno-gate.sh; zeroChecksum = ./zero-checksum.sh; pathGate = ./path-gate.sh; illumosBin = ./illumos-bin.sh;
     args = [ ./go-build.sh ];
   };
 in rec {
@@ -45,12 +45,13 @@ in rec {
       # system is illumos tar, which execs the absent /usr/bin/gzcat and exits 0 with nothing extracted.
       srcTree = derivation { name = "${pname}-${version}-src"; system = "builtin"; builder = "builtin:unpack-channel";
         src = srcTar; channelName = "tree"; };
-      common = { system = "x86_64-solaris"; builder = "/usr/bin/bash"; src = srcTree; go = goPkgs; inherit tools python3;
+      common = { system = "x86_64-solaris"; builder = "/usr/bin/bash"; src = srcTree; go = goPkgs; inherit tools python3 world; pathGate = ./path-gate.sh; illumosBin = ./illumos-bin.sh;
         inherit rp; storeGate = ./store-gate.sh; tsErrnoGate = ./ts-errno-gate.sh; args = [ ./go-pkg-build.sh ]; };
       vend = derivation (common // { name = "${pname}-${version}-go-vendor"; vendorOnly = "1";
         goVendor = ""; subPkgs = ""; check = ""; ldflags = ""; prep = ""; man = "";
         SSL_CERT_FILE = "${cacert}/etc/ssl/certs/ca-bundle.crt";
         outputHashMode = "recursive"; outputHashAlgo = "sha256"; outputHash = vendorHash; });
-    in derivation (common // { name = "${pname}-${version}"; vendorOnly = "";
+    in (a: derivation (a // { buildKey = builtins.substring 0 16 (builtins.hashString "sha256" (builtins.toJSON a)); })) (common // {
+      name = "${pname}-${version}"; vendorOnly = ""; outputs = [ "out" "debug" ]; splitDebug = ./split-debug.sh;
       goVendor = if vendorHash == null then "" else vend; inherit subPkgs check ldflags prep man; });
 }

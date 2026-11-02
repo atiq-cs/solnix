@@ -3,7 +3,8 @@
 # the build host: zlib + libxml2 replace externalLibs (host /usr/lib copies),
 # openssl + openssh replace make-be's host sshd copy, bash replaces nothing (the
 # gate has no bash) but is a login shell users expect.
-{ gate, libcSlice, world ? null, gcc ? "/usr/gcc/14", buildTools ? [ ], seedTools ? [ ], aarch64 ? false, system ? "x86_64-solaris" }:
+{ gate, libcSlice, world ? null, gcc ? "/usr/gcc/14", buildTools ? [ ], seedTools ? [ ], aarch64 ? false, system ? "x86_64-solaris"
+, nixChainTools ? { } }:   # { cmake; bzip2Bin; } from the cli set (default.nix), for nixChain's store-only builds
 # aarch64/system: the same recipes natively on aarch64 illumos (aarch64/home.nix), through
 # mk-src-pkg's aarch64 text rewrite. The defaults leave every x86 derivation unchanged.
 # gcc: the from-source gcc derivation (gcc-src.nix). Everything here is compiled
@@ -16,22 +17,27 @@
 let
   mkSrcPkg = if aarch64
     then args: import ./mk-src-pkg.nix { inherit gate gcc buildTools aarch64; runtimeLibDirs = [ "${libcSlice}/lib" ]; } (args // { inherit system; })
-    else import ./mk-src-pkg.nix {
+    else args: import ./mk-src-pkg.nix {
     inherit gate gcc buildTools;
     runtimeLibDirs = [ "${libcSlice}/lib/amd64" "${libcSlice}/lib" ];
-  };
+    # wave6: store-only by default (NixOS stdenv). Exempt: the seed instance (buildTools = [ ]), until bootstrap-tools.
+    storeOnly = buildTools != [ ];
+    # the world's own closure (zlib libxml2 nspr nss) and the two tools in hostTools cannot use hostTools (a cycle): they get
+    # the seed instance's world-free set (lib/host-pkgs.nix seedTools: perl coreutils findutils + the seed world).
+    defaultNativeTools = if builtins.elem (args.pname or "") [ "zlib" "libxml2" "nspr" "nss" "coreutils" "findutils" "pkgconf" ] then seedTools else hostTools;   # pkgconf: libxml2 (in the world) needs it
+  } (args // { # the seed instance is build-only (nothing it builds ships): no man/info/doc outputs there, so its drvs (and gcc15) do not move
+    docOutputs = if buildTools == [ ] then [ ] else args.docOutputs or [ ]; });
   needWorld = if world == null then throw "base-src: this package needs the userland world" else world;
+  # [] for the seed (buildTools = [], the OI bootstrap that builds seedBuildTools): its recipes keep the OI PATH, so no cycle and no seed move.
+  hostTools = if buildTools == [ ] then [ ] else [ self.coreutils self.findutils needWorld ];
   # hermetic recipes (mk-src-pkg nativeTools): the store tools a configure/make run needs, NixOS stdenv's set (coreutils: GNU install,
   # findutils, gnused/gnugrep/gnutar/gzip/xz/make via the seed in buildTools), then the world for the illumos tools (elfdump, ld, nm).
   # Only recipes that are NOT one of these may use it (no cycle): coreutils/findutils are base outs that do not take nativeTools.
-in
-rec {
-  inherit mkSrcPkg;
-  # [] for the seed (buildTools = [], the OI bootstrap that builds seedBuildTools): its recipes keep the OI PATH, so no cycle and no seed move.
-  hostTools = if buildTools == [ ] then [ ] else [ coreutils findutils needWorld ];
+  self = rec {
+  inherit mkSrcPkg hostTools;
 
   # Nix 2.24.15 + its dependency chain (./nix-src.nix).
-  nixChain = import ./nix-src.nix { inherit mkSrcPkg zlib openssl libcSlice; system = "x86_64-solaris"; gccLib = gcc.lib; };
+  nixChain = import ./nix-src.nix ({ inherit mkSrcPkg zlib openssl libcSlice hostTools; system = "x86_64-solaris"; gccLib = gcc.lib; } // nixChainTools);
 
   # libz.so.1 with the illumos symbol versions (SUNW_1.1 .. ILLUMOS_0.2). The
   # gate's libzfs/libzpool record `libz.so.1 SUNW_1.1` as a needed version, so an
@@ -53,25 +59,32 @@ rec {
   # libxml2.so.16 (soname 16 first appears in 2.14). The gate's libpool,
   # libzonecfg, libbrand and svccfg NEED it; both ABIs, because SMF is 32-bit.
   libxml2 = mkSrcPkg {
-    pname = "libxml2"; version = "2.14.6";
-    src = { url = "https://download.gnome.org/sources/libxml2/2.14/libxml2-2.14.6.tar.xz";
-            sha256 = "7ce458a0affeb83f0b55f1f4f9e0e55735dbfc1a9de124ee86fb4a66b597203a"; };
+    pname = "libxml2"; version = "2.15.4";   # 8 High in 2.14.6 (fixed 2.15.3/2.15.4); 2.14 has no later release; soname stays .16
+    src = { url = "https://download.gnome.org/sources/libxml2/2.15/libxml2-2.15.4.tar.xz";
+            sha256 = "98087fd181d9070724f3fbc65c7377db03038eb92bd882374daff44940138821"; };
     abis = [ "64" "32" ];
     deps = [ zlib ];
+    # + pkg-config: 2.15's configure requires it (PKG_PROG_PKG_CONFIG, PKG_CHECK_MODULES zlib); the OI host gave /usr/bin/pkg-config.
+    # The store pkgconf is world-free (its own deps: libc), so the world's closure stays acyclic.
+    nativeTools = if buildTools == [ ] then null else [ self.pkgconf ] ++ seedTools;
     build = ''
+      # 2.15 removed LZMA support (and --without-lzma) and the HTTP client (its symbols are stubs: the soname stays .16)
       ./configure --prefix="$out" --libdir="$out/$LIBSUB" --without-python --without-icu \
-        --without-lzma --with-zlib --disable-static --without-debug
+        --with-zlib --disable-static --without-debug
       gmake -j4
       gmake install
     '';
   };
 
   openssl = mkSrcPkg {
-    pname = "openssl"; version = "3.4.0";
-    src = { url = "https://github.com/openssl/openssl/releases/download/openssl-3.4.0/openssl-3.4.0.tar.gz";
-            sha256 = "e15dda82fe2fe8139dc2ac21a36d4ca01d5313c75f99f46c4e8a27709b7294bf"; };
+    pname = "openssl"; version = "3.4.8";   # 30 High/Critical in 3.4.0, all fixed by 3.4.8. 3.4 went EOL 2026-10-22: next is 3.5 LTS
+    src = { url = "https://github.com/openssl/openssl/releases/download/openssl-3.4.8/openssl-3.4.8.tar.gz";
+            sha256 = "9de9ce2f29e584044ae07ab93fc601637be01fdc91d109c5a655ec7419e6022b"; };
     # libc only (runtimeLibDirs): no world dep, so nix's closure does not pull
     # the whole userland in through libcrypto.
+    # Configure is perl (OI had /usr/bin/perl). The store perl depends on openssl's dependents' world, so openssl takes the
+    # seed tools (perl coreutils findutils + the seed world: world-free of this instance), as nss does. Build-time only.
+    nativeTools = if buildTools == [ ] then null else seedTools;
     build = ''
       ./Configure solaris64-x86_64-gcc --prefix="$out" --libdir=lib/amd64 --openssldir=/etc/openssl \
         shared no-tests no-docs
@@ -85,9 +98,9 @@ rec {
   # sysconfdir is /etc/ssh (host keys + config are per-machine state, as on NixOS);
   # the binaries and libexec helpers live in the store.
   openssh = mkSrcPkg {
-    pname = "openssh"; version = "10.2p1";
-    src = { url = "https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-10.2p1.tar.gz";
-            sha256 = "ccc42c0419937959263fa1dbd16dafc18c56b984c03562d2937ce56a60f798b2"; };
+    pname = "openssh"; version = "10.6p1";   # CVE-2026-60002 (Critical, 10.4) and 10.3/10.6 fixes
+    src = { url = "https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-10.6p1.tar.gz";
+            sha256 = "a9dc9565dffe8640f64d863cd29a32bc4a3dbdec0566a7fc44c5d6ee767d5f39"; };
     deps = [ needWorld zlib openssl ];
     nativeTools = hostTools;   # store-only PATH + config.site (wave4: host /usr/gnu, /usr/bin perl/python3/xauth/openssl leaked into configure)
     build = ''
@@ -243,11 +256,16 @@ rec {
   # they never shadow the gate's ar/nm/strip; bin/as is gas under its plain name,
   # which is what gcc -B<dir>/ looks for.
   binutils = mkSrcPkg {
-    pname = "binutils"; version = "2.46.1";
-    src = { url = "https://mirrors.kernel.org/gnu/binutils/binutils-2.46.1.tar.xz";
-            sha256 = "e127a709cba24c76de8936cb7083dd768f28cd37eb010492e2f19b71eb1294e4"; };
+    # 2.47 is the signed release (Nick Clifton's key, sha256 = the announcement's), but its bfd/development.sh still says
+    # development=true experimental=true, so it calls itself 2.47.20260726, turns on extra checking and -Werror (Debian
+    # reported it on binutils@, 2026-07-26). Set both to false, as every other release tarball has them.
+    pname = "binutils"; version = "2.47";
+    src = { url = "https://mirrors.kernel.org/gnu/binutils/binutils-2.47.tar.xz";
+            sha256 = "154ab23b60070e8f27013c22977f1129425d67d1e8acd6e13010e617811e4cff"; };
     build = ''
       T=x86_64-pc-solaris2.11
+      sed -i 's/^development=true$/development=false/; s/^experimental=true$/experimental=false/' bfd/development.sh
+      grep -qx development=false bfd/development.sh || { echo "FATAL: bfd/development.sh not pinned" >&2; exit 1; }
       # no -g: DWARF names the gate proto and the compiler, and the stripper only
       # touches ELF files, so debug info in an installed .a would pull both into
       # the runtime closure. --disable-install-libbfd keeps libbfd.a/bfd.h out.
@@ -269,6 +287,7 @@ rec {
         "$out/bin/as" --$c -o t$c.o t.s
         [ "$(od -An -tx1 -N4 t$c.o | tr -d ' \n')" = 7f454c46 ] || { echo "FATAL: gas --$c made no ELF" >&2; exit 1; }
       done
+      "$out/bin/as" --version | head -1 | grep -q ' 2\.47$' || { echo "FATAL: gas does not say 2.47: $("$out/bin/as" --version | head -1)" >&2; exit 1; }
     '';
   };
 
@@ -315,11 +334,16 @@ rec {
   # Linking uses the gcc's built-in /usr/bin/ld (the gate's link-editor in the
   # system profile); headers and crt objects come from its sysroot, the gate proto.
   gccWrapper = derivation {
-    name = "gcc-wrapper-14.3.0"; system = "x86_64-solaris";
+    name = "gcc-wrapper-${gcc.version}"; system = "x86_64-solaris";
     inherit gcc binutils; gccLib = gcc.lib;
     builder = "/usr/bin/bash";
+    # store coreutils (+ the world for its runtime) on PATH, not /usr/bin (OpenIndiana's on an OI host). The seed instance
+    # (buildTools = [ ], exempt until the bootstrap-tools wave) has no store coreutils of its own yet: it keeps /usr/bin.
+    wrapPath = if buildTools == [ ] then "/usr/bin" else "${coreutils}/bin:${needWorld}/usr/bin";
+    pathGate = if buildTools == [ ] then "" else "${./path-gate.sh}";
     args = [ "-c" ''
-      set -eu; export PATH=/usr/bin
+      set -eu; export PATH=$wrapPath
+      [ -z "$pathGate" ] || /usr/bin/bash "$pathGate"
       mkdir -p $out/bin
       for t in gcc:gcc cc:gcc g++:g++ c++:g++ cpp:cpp; do
         f="$out/bin/''${t%%:*}"; real="$gcc/bin/''${t#*:}"
@@ -370,6 +394,7 @@ rec {
   # share/terminfo (compiled in, as on NixOS); TERMINFO_DIRS adds others at run time.
   ncurses = mkSrcPkg {
     pname = "ncurses"; version = "6.5";
+    docOutputs = [ "man" ];   # nixpkgs ncurses: man output
     src = { url = "https://mirrors.kernel.org/gnu/ncurses/ncurses-6.5.tar.gz";
             sha256 = "136d91bc269a9a5785e5f9e980bc76ab57428f604ce3e5a5a90cebc767971cc6"; };
     build = ''
@@ -433,9 +458,9 @@ rec {
   };
 
   libevent = mkSrcPkg {
-    pname = "libevent"; version = "2.1.12";
-    src = { url = "https://github.com/libevent/libevent/releases/download/release-2.1.12-stable/libevent-2.1.12-stable.tar.gz";
-            sha256 = "92e6de1be9ec176428fd2367677e61ceffc2ee1cb119035037a27d346b0403bb"; };
+    pname = "libevent"; version = "2.1.13";   # 6 High/Critical CVE-2026-6338x (fixed 2.1.13)
+    src = { url = "https://github.com/libevent/libevent/releases/download/release-2.1.13-stable/libevent-2.1.13-stable.tar.gz";
+            sha256 = "f7e9383b8c0baa81b687e5b5eecc01beefaf1b19b64151d95ed61647fe7a315c"; };
     deps = [ needWorld ];  # libsendfile.so.1 (the gate's), not in the libc slice
     build = ''
       ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-samples \
@@ -470,8 +495,8 @@ rec {
   # the equivalent is to not ship them. man pages stay (NixOS installs man
   # outputs by default, documentation.man.enable).
   dropDocs = ''find "$out/share/doc" "$out/share/info" -delete 2>/dev/null || true'';
-  gnuTool = { pname, version, url, sha256, flags ? "", deps ? [ needWorld ], nativeTools ? [ ] }: mkSrcPkg {
-    inherit pname version deps nativeTools; src = { inherit url sha256; };
+  gnuTool = { pname, version, url, sha256, flags ? "", deps ? [ needWorld ], nativeTools ? null, docOutputs ? [ ] }: mkSrcPkg {
+    inherit pname version deps nativeTools docOutputs; src = { inherit url sha256; };
     build = ''
       for f in $(find . \( -name 'localename*.[ch]' -o -name 'getlocalename_l*.[ch]' -o -name 'setlocale_null*.c' \)); do
         sed -i 's/extern char \* *getlocalename_l/extern const char *getlocalename_l/;s/^char \* *getlocalename_l/const char *getlocalename_l/' "$f"
@@ -483,12 +508,15 @@ rec {
     '';
   };
   coreutils = gnuTool {
-    pname = "coreutils"; version = "9.7";
-    url = "https://mirrors.kernel.org/gnu/coreutils/coreutils-9.7.tar.xz";
-    sha256 = "e8bb26ad0293f9b5a1fc43fb42ba970e312c66ce92c1b0b16713d7500db251bf";
+    pname = "coreutils"; version = "9.12";
+    docOutputs = [ "man" ];   # nixpkgs coreutils: info output too, but dropDocs deletes share/info here (MAKEINFO=true)
+    url = "https://mirrors.kernel.org/gnu/coreutils/coreutils-9.12.tar.xz";
+    sha256 = "a480198559733e9b3da999e90543ac6f888a2caa544d8d664c5a1f17e528e210";
     # one multicall binary with a symlink per tool, nixpkgs' default (singleBinary =
     # "symlinks"): the separate binaries repeat the same gnulib code ~100 times.
-    flags = "--without-selinux --disable-gcc-warnings --without-openssl --without-libgmp --enable-single-binary=symlinks";
+    # kill,uptime: 9.12 stopped installing them by default (9.7 did; nixpkgs passes arch,kill,uptime). No arch: the
+    # world's arch(1) prints the illumos kernel arch (i86pc), and a GNU arch on PATH would shadow it.
+    flags = "--without-selinux --disable-gcc-warnings --without-openssl --without-libgmp --enable-single-binary=symlinks --enable-install-program=kill,uptime";
   };
   gnugrep = gnuTool {
     pname = "gnugrep"; version = "3.11";
@@ -550,9 +578,9 @@ rec {
   # zlib-free (no -z), no optional hash/compression libraries: the media links
   # nothing it does not already carry.
   rsync = mkSrcPkg {
-    pname = "rsync"; version = "3.4.1";
-    src = { url = "https://download.samba.org/pub/rsync/src/rsync-3.4.1.tar.gz";
-            sha256 = "2924bcb3a1ed8b551fc101f740b9f0fe0a202b115027647cf69850d65fd88c52"; };
+    pname = "rsync"; version = "3.5.1";   # 3.4.4 (last 3.4) fixes 1 of 22; the Criticals need 3.5.0 (nixpkgs: 3.5.0)
+    src = { url = "https://download.samba.org/pub/rsync/src/rsync-3.5.1.tar.gz";
+            sha256 = "c55f9c9dc10fb8bec397b399a0fdded53cc9a2d8e30891bb0d63724d25c37bef"; };
     deps = [ needWorld ];
     nativeTools = hostTools;   # store-only PATH + config.site (wave4: host /usr/gnu, /usr/bin perl/python3/xauth/openssl leaked into configure)
     build = ''
@@ -560,7 +588,7 @@ rec {
         --disable-xxhash --disable-zstd --disable-lz4 --disable-md2man --disable-debug
       gmake -j4
       gmake install
-      "$out/bin/rsync" --version | grep -q '^rsync  *version 3.4.1' || { echo "FATAL: rsync --version" >&2; exit 1; }
+      "$out/bin/rsync" --version | grep -q '^rsync  *version 3.5.1' || { echo "FATAL: rsync --version" >&2; exit 1; }
     '';
   };
   # smartctl: its os_solaris backend speaks ATA/SCSI through USCSI (SATA/SAS
@@ -617,9 +645,9 @@ rec {
   # argument (wgetWith); default.nix exports wgetWith cli.perl. The plain `wget` here (no perl) is what other base packages could use.
   wget = wgetWith null;
   wgetWith = perl: mkSrcPkg ({
-    pname = "wget"; version = "1.24.5";
-    src = { url = "https://mirrors.kernel.org/gnu/wget/wget-1.24.5.tar.gz";
-            sha256 = "fa2dc35bab5184ecbc46a9ef83def2aaaa3f4c9f3c97d4bd19dcb07d4da637de"; };
+    pname = "wget"; version = "1.25.0";   # CVE-2024-38428 (Critical, 1.25.0); 58471/58472 have no release yet
+    src = { url = "https://mirrors.kernel.org/gnu/wget/wget-1.25.0.tar.gz";
+            sha256 = "766e48423e79359ea31e41db9e5c289675947a7fcf2efdcedb726ac9d0da3784"; };
     deps = [ needWorld zlib openssl ];
     build = ''
       for f in $(find . \( -name 'localename*.[ch]' -o -name 'getlocalename_l*.[ch]' -o -name 'setlocale_null*.c' \)); do
@@ -633,7 +661,7 @@ rec {
       gmake -j4
       gmake install
       ${dropDocs}
-      "$out/bin/wget" --version | grep -q '^GNU Wget 1.24.5' || { echo "FATAL: wget --version" >&2; exit 1; }
+      "$out/bin/wget" --version | grep -q '^GNU Wget 1.25.0' || { echo "FATAL: wget --version" >&2; exit 1; }
       [ -f "$out/share/man/man1/wget.1" ] || { echo "FATAL: wget ships no man page" >&2; exit 1; }
       /usr/bin/elfdump -d "$out/bin/wget" | grep -q 'NEEDED.*libssl' || { echo "FATAL: wget not linked to openssl" >&2; /usr/bin/elfdump -d "$out/bin/wget" | grep NEEDED >&2; exit 1; }
     '';
@@ -698,9 +726,10 @@ rec {
   # jq, without oniguruma (no regex builtins: test/match/sub). home-manager
   # only uses @uri and -r.
   jq = mkSrcPkg {
-    pname = "jq"; version = "1.7.1";
-    src = { url = "https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-1.7.1.tar.gz";
-            sha256 = "478c9ca129fd2e3443fe27314b455e211e0d8c60bc8ff7df703873deeee580c2"; };
+    pname = "jq"; version = "1.8.2";
+    docOutputs = [ "man" ];   # nixpkgs jq: man output (jq.1 is prebuilt in the tarball)   # 5 High (1.8.0/1.8.2); 1.7 has no later release. Also C23-clean (gcc1 survey)
+    src = { url = "https://github.com/jqlang/jq/releases/download/jq-1.8.2/jq-1.8.2.tar.gz";
+            sha256 = "71b8d6e8f5fe81f6c6d0d110e3892251f6ce76ed095abd315e26e6e1193af3af"; };
     build = ''
       ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-docs --disable-static --without-oniguruma
       gmake -j4
@@ -810,12 +839,22 @@ rec {
 
   bash = mkSrcPkg {
     pname = "bash"; version = "5.2.37";
+    docOutputs = [ "man" "info" "doc" ];   # nixpkgs bash: man doc info outputs
     src = { url = "https://mirrors.kernel.org/gnu/bash/bash-5.2.37.tar.gz";
             sha256 = "9599b22ecd1d5787ad7d3b7bf0c59f312b3396d1e281175dd1f8a4014da621ff"; };
     deps = [ needWorld ];
     build = ''
       # illumos curses declares tputs(..., int (*)(char)); GCC 14 errors on the
       # mismatch with bash's int (*)(int) putc callback (display.c:2839, measured).
+      # nixpkgs bash 5.nix's -DSYS_BASHRC=/etc/bashrc -DSYS_BASH_LOGOUT -DNON_INTERACTIVE_LOGIN_SHELLS -DSSH_SOURCE_BASHRC, set in
+      # config-top.h (its commented-out defines): /etc/bashrc then runs for every shell, `ssh host cmd` included, so
+      # PATH/MANPATH/INFOPATH reach it (wave6 plan section 4; /etc/bashrc sources solnix-env.sh).
+      sed -i -e 's@^/\* #define SYS_BASHRC .*@#define SYS_BASHRC "/etc/bashrc"@' \
+        -e 's@^/\* #define SYS_BASH_LOGOUT .*@#define SYS_BASH_LOGOUT "/etc/bash_logout"@' \
+        -e 's@^/\* #define NON_INTERACTIVE_LOGIN_SHELLS \*/@#define NON_INTERACTIVE_LOGIN_SHELLS@' \
+        -e 's@^/\* #define SSH_SOURCE_BASHRC \*/@#define SSH_SOURCE_BASHRC@' config-top.h
+      [ "$(grep -cE '^#define (SYS_BASHRC "/etc/bashrc"|SYS_BASH_LOGOUT "/etc/bash_logout"|NON_INTERACTIVE_LOGIN_SHELLS|SSH_SOURCE_BASHRC)$' config-top.h)" = 4 ] \
+        || { echo "FATAL: bash config-top.h defines not set" >&2; exit 1; }
       CFLAGS="-O2 -Wno-error=incompatible-pointer-types" \
       ./configure --prefix="$out" --without-bash-malloc --disable-nls
       # builtins/psize.sh MEASURES the build host's pipe (psize.aux | sleep 3, until EPIPE) for `ulimit -p`; under load it falls back
@@ -825,6 +864,7 @@ rec {
       gmake -j6
       grep -qx '#define PIPESIZE 5120' builtins/pipesize.h || { echo "FATAL: bash PIPESIZE not pinned" >&2; exit 1; }
       gmake install
+      strings -a "$out/bin/bash" | grep -qx /etc/bashrc || { echo "FATAL: bash built without SYS_BASHRC" >&2; exit 1; }
     '';
   };
-}
+}; in self

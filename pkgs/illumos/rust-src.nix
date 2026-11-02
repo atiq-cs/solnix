@@ -28,5 +28,5 @@
   };
   srcSha256 = sha256;
   seedStage0 = if seedStage0 then "1" else "";
-  tsErrnoGate = ./ts-errno-gate.sh;
+  tsErrnoGate = ./ts-errno-gate.sh; pathGate = ./path-gate.sh; illumosBin = ./illumos-bin.sh;
 }

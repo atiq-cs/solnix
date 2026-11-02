@@ -66,6 +66,20 @@ a=$(ls /run/current-system/sw/share/applications/*.desktop 2>/dev/null | wc -l)
 [ "$a" -ge 50 ] && r PASS xdg-applications "$a desktop entries" || r FAIL xdg-applications "$a desktop entries (< 50)"
 ls /run/current-system/sw/share/applications/com.system76.CosmicTerm.desktop > /dev/null 2>&1 && r PASS cosmic-term-desktop "present" || r GAP cosmic-term-desktop "no CosmicTerm.desktop (held for the hash-B wave)"
 
+# 7b. help on the desktop (help1): the man: URI handler is the default for x-scheme-handler/man, it refuses a URI that
+# is not a page name, and the launcher's man plugin answers "man ls" from the whatis index. Files only, no window.
+# Negative controls: ITEST_HELP_SHARE=<a share dir without the handler>, ITEST_HELP_PLUGIN=<a plugin.ron naming no plugin>.
+hs=${ITEST_HELP_SHARE:-/run/current-system/sw/share}
+d=$(HOME=/nonexistent XDG_DATA_HOME=/nonexistent XDG_CONFIG_HOME=/nonexistent XDG_DATA_DIRS=$hs xdg-mime query default x-scheme-handler/man 2>/dev/null)
+c=$(SOLNIX_MAN_OPEN_PRINT=1 solnix-man-open 'man:printf(3c)' 2>&1); x=$(SOLNIX_MAN_OPEN_PRINT=1 solnix-man-open 'man:ls;id' 2>&1) && x=accepted
+if [ "$d" = solnix-man.desktop ] && [ "$c" = "man -s 3c printf" ] && [ "$x" != accepted ]; then r PASS help-man-uri "x-scheme-handler/man -> $d"
+else r FAIL help-man-uri "default '${d:-none}' in $hs, 'man:printf(3c)' -> '$c', 'man:ls;id' $([ "$x" = accepted ] && echo ACCEPTED || echo refused)"; fi
+pr=${ITEST_HELP_PLUGIN:-/etc/pop-launcher/plugins/man/plugin.ron}; pb=$(sed -n 's/.*path: "\(.*\)".*/\1/p' "$pr" 2>/dev/null)
+po=$([ -x "$pb" ] && printf '{"Search":"man ls"}\n"Exit"\n' | "$pb" 2>/dev/null)
+echo "$po" | grep -q '"name":"ls(1)' && r PASS help-launcher-man "$pr answers 'man ls'" || r FAIL help-launcher-man "plugin '${pb:-none}' from $pr: ${po:-no answer}"
+[ -e /run/current-system/sw/share/applications/solnix-manual.desktop ] && r PASS help-manual-entry "Solnix Manual desktop entry" \
+  || r FAIL help-manual-entry "no solnix-manual.desktop"
+
 # 8. integrations not present yet (GAP rows from docs/cosmic-illumos-integration-tests.md section 7)
 for g in pipewire:audio-server upower:battery NetworkManager:network-applet bluetoothd:bluetooth xdg-desktop-portal:portal; do
   command -v "${g%%:*}" > /dev/null 2>&1 && r PASS "${g#*:}" "${g%%:*} present" || r GAP "${g#*:}" "no ${g%%:*}"; done

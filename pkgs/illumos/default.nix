@@ -45,6 +45,13 @@
   # seedTools: world-FREE store tools for the recipes the world itself depends on (nss: libldap/kmf_nss link it), from the seed instance
   # (lib/host-pkgs.nix seedPkgs: perl coreutils findutils + the seed world). [] (the bhost/seed path) keeps the old PATH.
   seedTools ? [ ],
+  # stdenvGcc: "15" (default) = every from-source package builds with gcc15, which the "14" instance (the gcc 14 chain:
+  # gcc-src.nix from the IPS seed, its wrapper, binutils, the seed tools) builds as its own gcc15 (NixOS stage chain:
+  # stage N's compiler comes from stage N-1). "14" is that boot instance; nothing else should pass it.
+  stdenvGcc ? "15",
+  # gcc15From: the stdenv gcc15 from the caller's stage chain (lib/host-pkgs.nix passes the seed instance's: stdenvGcc = "14",
+  # buildTools = [ ]). null = the same, imported here (flake.nix's worldOverlay, a bare import), so every instance has one gcc15.
+  gcc15From ? null,
 }:
 
 let
@@ -363,7 +370,7 @@ let
   };
 
   # Modern compiler toolchains (backlog PS-1 clang / PS-4 latest-GCC/GDB, pulled
-  # forward): gcc14 + clang + gdb sliced from the OI host IPS install and RUNPATH-
+  # forward): gcc14 + clang sliced from the OI host IPS install and RUNPATH-
   # relocated into the store, the foundation the package-batch work builds on.
   # See ./toolchains.nix + docs/design-toolchains.md.
   toolchains = import ./toolchains.nix { inherit mkIllumosComponent libc; };
@@ -371,7 +378,20 @@ let
   # gcc built FROM SOURCE (./gcc-src.nix): the NixOS bootstrap step. The host's
   # IPS gcc-14 is only the stage0 seed that compiles it; gcc.lib (libstdc++,
   # libgcc_s) is the C++/unwind runtime every shipped C++ binary links.
-  gcc = import ./gcc-src.nix { gate = gate'; libcSlice = libc; inherit ld; inherit (srcPkgs) libcExtra; };
+  gcc14 = import ./gcc-src.nix { gate = gate'; libcSlice = libc; inherit ld; inherit (srcPkgs) libcExtra; };
+  # the stdenv compiler (wave6 W0): gcc15 built by the gcc 14 instance, so gcc15's own inputs (stage0 = the gcc 14 wrapper,
+  # binutils, perl, coreutils...) are the gcc 14 builds and nothing here depends on itself.
+  stdGcc15 = if gcc15From != null then gcc15From
+    else (import ./. { gate = gate'; inherit gateArgs; stdenvGcc = "14"; }).gcc15;
+  gcc = if stdenvGcc == "14" then gcc14 else stdGcc15;
+  # GCC 15.3.0 + the illumos patch series (./gcc15-src.nix, gcc1 fd815b3 as is), built in the gcc 14 instance.
+  gcc15 = if stdenvGcc != "14" then stdGcc15 else import ./gcc15-src.nix { gate = gate'; libcSlice = libc; inherit ld world; inherit (srcPkgs) libcExtra binutils;
+    stage0 = srcPkgs.gccWrapper;   # the gcc 14 stdenv compiler builds the next one (NixOS stage chain)
+    # store-only PATH; perl: libssp/libatomic make_sunver.pl. cliBase, not cli: no go/cargo in gcc15's closure.
+    tools = builtins.concatStringsSep ":" (map (p: "${p}/bin") [ seedBuildTools srcPkgs.coreutils srcPkgs.findutils cliBase.gnupatch cliBase.perl ]); };
+  # its wrapper: srcPkgs.gccWrapper's recipe (gas via -B, -R to the runtime) on gcc15.
+  gcc15Wrapper = if stdenvGcc != "14" then srcPkgs.gccWrapper
+    else derivation (srcPkgs.gccWrapper.drvAttrs // { name = "gcc-wrapper-15.3.0"; gcc = gcc15; gccLib = gcc15.lib; });
 
   # Rust FROM SOURCE (./rust-src.nix), the N-1 chain of docs/rust-illumos-bootstrap.md.
   # stage0 is the OI 1.97.1 seed tree, fetched by its NarHash from the cache (the
@@ -388,12 +408,14 @@ let
   } // args);
   rust198 = mkRust { version = "1.98.0"; stage0 = rustSeedStage; seedStage0 = true;
     sha256 = "271fa73d8174f53d713c46a8310da7bf7cfdcfb8b7cfd1c2b74b84a83ae9fb1e"; };
-  rust199 = mkRust { version = "1.99.0"; stage0 = rust198;
-    sha256 = "cc41916a8c84f5d9ec4f55561b44e39f43b647b133f8a6f51be9ea13c83f7036"; };
+  # 1.99.1 (infra's dixi trial, 2026-11-02; sha256 = static.rust-lang.org's .sha256). The attr keeps its name: one stable rust.
+  rust199 = mkRust { version = "1.99.1"; stage0 = rust198;
+    sha256 = "6451598a99e77f07571960f6b21d577399d3a30f33e80cbd2e3a4aae6535d265"; };
 
   # From-source packages the gate does not provide (./base-src.nix). zlib and
   # libxml2 replace the host-copied externalLibs; world is built on top of them.
-  srcPkgs = import ./base-src.nix { gate = gate'; libcSlice = libc; inherit world gcc buildTools seedTools; };
+  srcPkgs = import ./base-src.nix { gate = gate'; libcSlice = libc; inherit world gcc buildTools seedTools;
+    nixChainTools = if buildTools == [ ] then { } else { inherit (cliBase) cmake; bzip2Bin = cliBase.bzip2-bin; }; };
   # The Wayland + Mesa userland (./graphics), built like srcPkgs.
   graphics = import ./graphics { inherit (srcPkgs) mkSrcPkg pkgconf zlib hostTools; inherit world; inherit (cliBase) perl; };   # perl: libffi's make_sunver.pl
   # The maintainer's headless CLI set (werk/meh home.packages), from source (./cli).
@@ -418,7 +440,7 @@ let
   };
   # Desktop apps outside graphics/ (pop-launcher, cosmic-wallpapers): ./desktop, so the COSMIC outs do not move.
   desktop = import ./desktop { inherit (cargo) cargoPkg; inherit graphics; inherit (cli) fd file;
-    inherit (srcPkgs) mkSrcPkg bash coreutils gnugrep gnused hostname; };
+    inherit (srcPkgs) mkSrcPkg bash coreutils gnugrep gnused hostname jq; };
   # The GTK 3 / Wayland stack for Firefox (./desktop/gtk): its own dir, so neither COSMIC nor desktop/ outs move.
   gtk = import ./desktop/gtk { base = srcPkgs; inherit graphics cli; inherit (cosmic) noto-sans; inherit (cargo) cargoPkg; rust = rust199; inherit world; };
   # COSMIC's fonts and icon themes on store tools only (./desktop/cosmic-data.nix). Not graphics/cosmic-data.nix, which
@@ -1249,6 +1271,7 @@ let
 in
 {
   inherit libc rtld ld sys base-tools systemPath nix cached starter gcc world early stock drivers kernelNd worldMan;
+  inherit gcc15 gcc15Wrapper;
   inherit rustSeedStage rust198 rust199;
   # seedBuildTools -- the default build-tool set a bare solnix system passes as
   # buildTools so from-source builds resolve gmake/tar/grep/sed/gstrip/gzip/xz
@@ -1282,7 +1305,7 @@ in
     cosmic-settings cosmic-files cosmic-edit cosmic-store cosmic-screenshot cosmic-greeter greetd;
   inherit (cosmicData) open-sans noto-sans noto-sans-mono fira-mono hicolor-icon-theme pop-icon-theme cosmic-icons;
   inherit (desktop) pop-launcher cosmic-wallpapers sound-theme-freedesktop adwaita-icon-theme dejavu-fonts liberation-fonts
-    noto-fonts-color-emoji xdg-utils xdg-user-dirs;
+    noto-fonts-color-emoji xdg-utils xdg-user-dirs solnix-help;
   inherit (gtk) pcre2 glib libpng libjpeg-turbo freetype fontconfig fribidi harfbuzz cairo pango gdk-pixbuf libepoxy
     at-spi2-core gtk3 grim gperf nasm ninja meson_1_10 nodejs cbindgen llvm-clang firefox-esr;
   # cargoLib.{vendorOf,cargoPkg}: build any Cargo.lock'd crate on rust199 (./cargo.nix).
@@ -1331,7 +1354,7 @@ in
   nixChain = srcPkgs.nixChain;
   nixSrc = srcPkgs.nixChain.nix;
   gate = gate';
-  inherit (toolchains) gcc14 clang gdb;
+  inherit (toolchains) gcc14 clang;   # gdb: from source, cli/c-dev.nix (reaches here through // cli)
   # the CORE-OS slices, each with a computed DT_NEEDED closure (./slices.nix).
   inherit slices;
   inherit (slices) core-utils oamuser halt smf zfs kernel;

@@ -3,9 +3,9 @@
 let m = tools.mesonBuild; pc = "export PATH=${pkgconf}/bin:$PATH"; in
 rec {
   expat = mkSrcPkg {
-    pname = "expat"; version = "2.6.4";
-    src = { url = "https://github.com/libexpat/libexpat/releases/download/R_2_6_4/expat-2.6.4.tar.xz";
-            sha256 = "a695629dae047055b37d50a0ff4776d1d45d0a4c842cf4ccee158441f55ff7ee"; };
+    pname = "expat"; version = "2.10.0";   # 11 High in 2.6.4; 2.10.0 (2026-11-02) is the first with CVE-2026-115506
+    src = { url = "https://github.com/libexpat/libexpat/releases/download/R_2_10_0/expat-2.10.0.tar.xz";
+            sha256 = "c624ba2998fc65df1163a49641ff3f9ab73138b11641d92c86bee0fb01b1bc7f"; };
     build = ''
       ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static \
         --without-docbook --without-examples --without-tests

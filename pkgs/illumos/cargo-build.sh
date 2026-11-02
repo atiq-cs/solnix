@@ -3,7 +3,8 @@
 # from-source gcc (graphics/cosmic-build.sh, minus the COSMIC fixups), then the mk-src-pkg
 # closure gate (no global errno, no gate/gcc path in an ELF, ldd resolves inside /nix/store).
 set -eu
-export PATH="$tools/bin:$python3/bin:$world/bin:$world/usr/bin:$world/sbin"   # store tools only (NixOS stdenv): no /usr/gnu, no host /usr/bin
+export PATH="$tools/bin:$python3/bin:$world/bin:$world/usr/bin:$world/sbin:$world/usr/sbin"   # store tools only (NixOS stdenv): no /usr/gnu, no host /usr/bin
+/usr/bin/bash "$pathGate"; . "$illumosBin"
 # FIXED build dir, not $NIX_BUILD_TOP (the daemon's build-dir: /tmp on OI, /var/tmp/big on dixi): ld records the
 # link output's path in .SUNW_ldynsym, and rustc the vendored crates' paths (136x in ripgrep), so the NAR named the
 # host (measured, repro2). Keyed on $buildKey (eval-time, 1:1 with the drv; mk-src-pkg.nix says why it is safe).
@@ -17,11 +18,17 @@ done
 RP="${RP#:}:$gccLibDir/amd64"
 LD=""; for d in $(echo "$RP" | tr ':' ' '); do LD="$LD -L$d"; done
 mkdir -p w home
-printf '#!/usr/bin/bash\nexec %s/bin/gcc -m64 -D_TS_ERRNO %s %s -Wl,-R,%s "$@" -g0\n' "$gcc" "$CI" "$LD" "$RP" > w/cc
-printf '#!/usr/bin/bash\nexec %s/bin/g++ -m64 -D_TS_ERRNO %s %s -Wl,-R,%s "$@" -g0\n' "$gcc" "$CI" "$LD" "$RP" > w/c++
+# -g: the C of -sys crates gets DWARF too (split into $debug below); -std=gnu17 for C (GCC 15's C23 default, mk-src-pkg.nix)
+# DBGMAP: as mk-src-pkg.nix (no build-only store path in DWARF; compression alone does not hide it)
+DBGMAP="-ffile-prefix-map=$W=/build -Wa,--debug-prefix-map=$W=/build -fdebug-prefix-map=$gcc=/build/gcc -fdebug-prefix-map=$gate=/build/sysroot"
+printf '#!/usr/bin/bash\nexec %s/bin/gcc -m64 -std=gnu17 -g %s -D_TS_ERRNO %s %s -Wl,-R,%s "$@"\n' "$gcc" "$DBGMAP" "$CI" "$LD" "$RP" > w/cc
+printf '#!/usr/bin/bash\nexec %s/bin/g++ -m64 -g %s -D_TS_ERRNO %s %s -Wl,-R,%s "$@"\n' "$gcc" "$DBGMAP" "$CI" "$LD" "$RP" > w/c++
 chmod +x w/cc w/c++
 export PATH="$W/w:$rust/bin:$PATH" HOME="$W/home" CARGO_HOME="$W/home/.cargo"
-export RUSTFLAGS="--remap-path-prefix=$W=/build"
+export RUSTFLAGS="--remap-path-prefix=$W=/build --remap-path-prefix=$rust=/build/rust"
+# debug info kept for $debug (NixOS separateDebugInfo for Rust: -g -C strip=none). Since Rust 1.77 the release profile strips
+# debuginfo when debug is off, so both are set; cargo's env profile overrides beat Cargo.toml's [profile.release].
+export CARGO_PROFILE_RELEASE_DEBUG=2 CARGO_PROFILE_RELEASE_STRIP=none
 # as NixOS stdenv: build.rs crates (shadow-rs, built, vergen) and C deps stamp the clock otherwise (gping build_time, measured chef vs dixi)
 export SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-315532800}
 export CC=$W/w/cc CXX=$W/w/c++ CC_x86_64_unknown_illumos=$W/w/cc CXX_x86_64_unknown_illumos=$W/w/c++
@@ -48,7 +55,7 @@ s = open(p).read()
 if o not in s: sys.exit("FATAL: anchor not found in %s: %r" % (p, o[:80]))
 open(p, "w").write(s.replace(o, n))
 PY
-  new=$(/usr/bin/digest -a sha256 "$V/$1/$2")
+  new=$(digest -a sha256 "$V/$1/$2")
   sed -i "s|\"$2\":\"[0-9a-f]\{64\}\"|\"$2\":\"$new\"|" "$V/$1/.cargo-checksum.json"
 }
 eval "$prep"
@@ -60,19 +67,21 @@ for b in $bins; do "$python3/bin/python3" -c 'import os,sys; fd = os.open(sys.ar
 eval "$man"
 cd "$W"
 : > fail
+/usr/bin/bash "$splitDebug" "$out" "$debug" "$buildKey" "$tools/bin" fail   # DWARF -> $debug by build-id, then gstrip
 /usr/bin/bash "$zeroChecksum" "$out" fail   # DT_CHECKSUM -> 0 (zero-checksum.sh says why)
 /usr/bin/bash "$tsErrnoGate" "$out" 2>> fail || echo "ts-errno gate failed" >> fail
 find "$out" -type f > files
 while read -r f; do
   [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] || continue
-  chmod u+w "$f"; "$tools/bin/gstrip" --strip-debug "$f"
   for x in "$gate" "$gcc/"; do grep -q "$x" "$f" && echo "$f names $x" >> fail; done
-  /usr/bin/elfdump -d "$f" 2>/dev/null | grep -q NEEDED || continue
-  for e in $(/usr/bin/elfdump -d "$f" | awk '$2=="RUNPATH"||$2=="RPATH"{print $4}' | tr ':' ' '); do
+  elfdump -d "$f" 2>/dev/null | grep -q NEEDED || continue
+  for e in $(elfdump -d "$f" | awk '$2=="RUNPATH"||$2=="RPATH"{print $4}' | tr ':' ' '); do
     case "$e" in /nix/store/*|'$ORIGIN'*) ;; *) echo "$f RUNPATH $e" >> fail;; esac
   done
-  (unset LD_LIBRARY_PATH; /usr/bin/ldd "$f") 2>&1 | awk -v f="$f" '/not found/ || (/=>/ && $NF !~ /^\/nix\/store\//) {print f": "$0}' >> fail
+  (unset LD_LIBRARY_PATH; ldd "$f") 2>&1 | awk -v f="$f" '/not found/ || (/=>/ && $NF !~ /^\/nix\/store\//) {print f": "$0}' >> fail
 done < files
+# an uncompressed .debug would name the gate proto and the compiler: $debug may name neither
+for x in "$gate" "$gcc/" "$rust/"; do grep -rlF "$x" "$debug" 2>/dev/null | sed "s|\$| names $x (debug info must be compressed)|" >> fail; done
 if [ -s fail ]; then echo "FATAL: closure gate failed:" >&2; head -40 fail >&2; exit 1; fi
 echo "=== $name: every ELF resolves inside /nix/store ===" >&2
 eval "$check"

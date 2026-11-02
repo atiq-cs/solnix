@@ -31,6 +31,9 @@
   pathsToLink ? null,
   extraOutputsToInstall ? [ ],
   ignoreCollisions ? true,
+  # nixpkgs buildEnv's postBuild: shell run in $out after the merge (NixOS's
+  # environment.extraSetup lands here). "" leaves the derivation byte-identical.
+  postBuild ? "",
     # system IS AN ARGUMENT, defaulted to a literal -- NOT builtins.currentSystem.
     # currentSystem does not EXIST in a pure evaluation (hard "attribute 'currentSystem'
     # missing"), so reading it made the systemPath derivation unevaluable from
@@ -57,7 +60,7 @@ derivation {
   ignoreCollisions = if ignoreCollisions then "1" else "";
   args = [
     "-c"
-    ''
+    (''
       set -eu
       mkdir -p "$out"
 
@@ -107,6 +110,6 @@ derivation {
       # marker after the loop (mirrors mk-illumos-component's relocfail pattern).
       [ -e "$out/.collision" ] && { echo "FATAL: buildEnv collisions (ignoreCollisions=false)" >&2; exit 1; }
       true
-    ''
+    '' + (if postBuild == "" then "" else "\n" + postBuild))
   ];
 }

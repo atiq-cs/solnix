@@ -1,10 +1,11 @@
 # rust-src-build.sh -- builder for rust-src.nix (read that file for the why).
 set -eu
-export PATH="$tools/bin:/usr/bin:/usr/sbin"   # store tools first, no /usr/gnu (hostfix)
+export PATH="$tools/bin:$world/usr/bin:$world/usr/sbin:$world/bin:$world/sbin"   # store tools, then the illumos base from the world store path (no /usr/bin|sbin|gnu)
+/usr/bin/bash "$pathGate"; . "$illumosBin"
 # FIXED build dir, not $NIX_BUILD_TOP (/tmp on OI, /var/tmp/big on dixi): ld names each link output by its
 # build path (measured in rust-1.99.0, repro2). $buildKey: see mk-src-pkg.nix.
 W=/var/tmp/rust-$buildKey; rm -rf "$W"; mkdir -m 700 "$W"; trap 'cd /; rm -rf "$W"' EXIT; cd "$W"
-got=$(/usr/bin/digest -a sha256 "$src")
+got=$(digest -a sha256 "$src")
 [ "$got" = "$srcSha256" ] || { echo "FATAL: sha256 want $srcSha256 got $got" >&2; exit 1; }
 # cc/c++ wrappers: the from-source gcc, the store RUNPATH baked in at link time
 # (post-link elfedit is capped by .dynstr padding), -g0 so no DWARF names a path.
@@ -25,7 +26,7 @@ if [ -n "$seedStage0" ]; then
   for f in s0/bin/* s0/lib/*.so*; do
     [ -L "$f" ] && continue
     [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] || continue
-    /usr/bin/elfedit -e "dyn:runpath $W/s0/lib:$gccLib/lib/amd64" "$f"
+    elfedit -e "dyn:runpath $W/s0/lib:$gccLib/lib/amd64" "$f"
   done
 fi
 "$S0/bin/rustc" --version >&2
@@ -69,10 +70,10 @@ compress-debuginfo = "off"
 cc = "@W@/w/cc"
 cxx = "@W@/w/c++"
 linker = "@W@/w/cc"
-ar = "/usr/bin/ar"
+ar = "$world/usr/bin/ar"
 EOF
 export CC=$W/w/cc CXX=$W/w/c++ CC_x86_64_unknown_illumos=$W/w/cc \
-  CXX_x86_64_unknown_illumos=$W/w/c++ AR_x86_64_unknown_illumos=/usr/bin/ar \
+  CXX_x86_64_unknown_illumos=$W/w/c++ AR_x86_64_unknown_illumos=$world/usr/bin/ar \
   OPENSSL_DIR=$openssl OPENSSL_LIB_DIR=$openssl/lib/amd64 OPENSSL_INCLUDE_DIR=$openssl/include \
   OPENSSL_NO_VENDOR=1 PKG_CONFIG_PATH= \
   PKG_CONFIG_LIBDIR=$openssl/lib/amd64/pkgconfig:$zlib/lib/amd64/pkgconfig
@@ -95,16 +96,16 @@ find "$out" -type f > files
 # compiler's store path, which the reference scan would turn into a runtime dep.
 while read -r f; do
   [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] || continue
-  chmod u+w "$f"; /usr/bin/gstrip --strip-debug "$f"
+  chmod u+w "$f"; "$tools/bin/gstrip" --strip-debug "$f"
 done < files
 while read -r f; do
   for x in "$gate" "$gcc/"; do grep -q "$x" "$f" && echo "$f names $x" >> fail; done
   [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] || continue
-  /usr/bin/elfdump -d "$f" 2>/dev/null | grep -q NEEDED || continue
-  for e in $(/usr/bin/elfdump -d "$f" | awk '$2=="RUNPATH"||$2=="RPATH"{print $4}' | tr ':' ' '); do
+  elfdump -d "$f" 2>/dev/null | grep -q NEEDED || continue
+  for e in $(elfdump -d "$f" | awk '$2=="RUNPATH"||$2=="RPATH"{print $4}' | tr ':' ' '); do
     case "$e" in /nix/store/*|'$ORIGIN'*) ;; *) echo "$f RUNPATH $e" >> fail;; esac
   done
-  /usr/bin/ldd "$f" 2>&1 | awk -v f="$f" '/not found/ || (/=>/ && $NF !~ /^\/nix\/store\//) {print f": "$0}' >> fail
+  ldd "$f" 2>&1 | awk -v f="$f" '/not found/ || (/=>/ && $NF !~ /^\/nix\/store\//) {print f": "$0}' >> fail
 done < files
 bash "$zeroChecksum" "$out" fail   # DT_CHECKSUM -> 0 (zero-checksum.sh says why)
 if [ -s fail ]; then echo "FATAL: closure gate failed:" >&2; head -40 fail >&2; exit 1; fi

@@ -127,7 +127,9 @@ in
     # 10. /etc/bashrc — a pleasant interactive shell (umask, PS1, common aliases).
     # Sourced by interactive bash; ksh users get the login env from profile.d.
     environment.generatedEtc."bashrc" = ''
-      # solnix interactive bash defaults
+      # solnix bash defaults. bash reads this for every shell (SYS_BASHRC + SSH_SOURCE_BASHRC, as NixOS), so a
+      # non-interactive `ssh host cmd` gets the login environment (PATH, MANPATH, INFOPATH) before the $PS1 return.
+      [ -r /etc/profile.d/solnix-env.sh ] && . /etc/profile.d/solnix-env.sh
       umask 022
       [ -z "$PS1" ] && return
       PS1='\u@\h:\w\$ '

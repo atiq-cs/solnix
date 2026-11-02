@@ -202,7 +202,7 @@ let
       [ "$(dd if="$f" bs=1 skip=$(($1 - sa + so)) count=16 2>/dev/null | od -An -tx1 | tr -d ' \n')" = "$h" ] || { echo "FATAL: $f checksum write" >&2; exit 1; }
     done
     # DT_CHECKSUM -> 0 in both outputs (./zero-checksum.sh says why; gcc.lib names $lib in its RUNPATH).
-    : > "$W/zc"; /usr/bin/bash ${./zero-checksum.sh} "$out" "$W/zc"; /usr/bin/bash ${./zero-checksum.sh} "$lib" "$W/zc"
+    : > "$W/zc"; /usr/bin/bash ${./exempt/zero-checksum.sh} "$out" "$W/zc"; /usr/bin/bash ${./exempt/zero-checksum.sh} "$lib" "$W/zc"
     [ ! -s "$W/zc" ] || { cat "$W/zc" >&2; exit 1; }
     unset LD_LIBRARY_PATH LD_LIBRARY_PATH_64 LD_LIBRARY_PATH_32 || true
     # Every dynamic ELF in $out, not only lib/*.so*: the publish gate checks all of them, and this

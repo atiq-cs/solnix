@@ -16,9 +16,10 @@
 #     DWARF then appears at /run/current-system/sw/lib/debug/.build-id.
 #   * NIX_DEBUG_INFO_DIRS points gdb at that directory, so gdb resolves split
 #     debug BY build-id (the --add-gnu-debuglink + .note.gnu.build-id path).
-#   * A /etc/gdbinit sets debug-file-directory to the same tree, for gdb builds
-#     that do not read NIX_DEBUG_INFO_DIRS (belt and suspenders; NixOS relies on
-#     the env var, but a bare gdb invocation with no env benefits from the init).
+#   * /etc/gdb/gdbinit sets debug-file-directory to the same tree, for a gdb run
+#     with no NIX_DEBUG_INFO_DIRS in its env (belt and suspenders; NixOS relies on
+#     the env var). /etc/gdb/gdbinit is the system gdbinit pkgs.solnix.gdb is
+#     configured with (--with-system-gdbinit, as nixpkgs); gdb never reads /etc/gdbinit.
 #
 # Off by default (NixOS default) to keep the closure small; a config/dixi.nix
 # sets environment.enableDebugInfo = true to get symbols for every package that
@@ -61,8 +62,8 @@ in
       # Point gdb/valgrind at the split-debug tree by build-id.
       sessionVariables.NIX_DEBUG_INFO_DIRS = debugDir;
 
-      # /etc/gdbinit so a bare `gdb` (no env) still finds the split debug tree.
-      generatedEtc."gdbinit" = ''
+      # the system gdbinit (gdb --configuration), so a bare `gdb` (no env) still finds the split debug tree.
+      generatedEtc."gdb/gdbinit" = ''
         set debug-file-directory ${debugDir}
       '';
     };

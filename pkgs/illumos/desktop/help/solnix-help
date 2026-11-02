@@ -1,0 +1,9 @@
+#!/usr/bin/bash
+# solnix-help -- open the Solnix documentation (NixOS's nixos-help: the first browser in $BROWSER, else xdg-open).
+# The manual is online (https://solnix.io/docs/); with no browser it falls back to the local intro(1) page.
+url=${SOLNIX_HELP_URL:-https://solnix.io/docs/}
+IFS=: read -r -a bs <<< "${BROWSER:-}"
+for b in "${bs[@]}"; do command -v "$b" > /dev/null 2>&1 && exec "$b" "$url"; done
+# xdg-open needs a handler for https; without one it fails and the local pages are the help there is
+xdg-open "$url" 2> /dev/null && exit 0
+exec solnix-man-open man:intro

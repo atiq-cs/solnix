@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Solnix Manual
+GenericName=System Manual
+Comment=View the Solnix documentation
+Exec=solnix-help
+Icon=help-contents
+Categories=System;Documentation;
+Keywords=help;manual;documentation;docs;

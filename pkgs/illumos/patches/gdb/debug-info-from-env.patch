@@ -1,0 +1,21 @@
+NIX_DEBUG_INFO_DIRS overrides gdb's debug-file-directory (the solnix debug-info module sets it to
+/run/current-system/sw/lib/debug). Source: nixpkgs pkgs/by-name/gd/gdb/debug-info-from-env.patch, rebased onto
+gdb 18.1 (offset 21 lines, same change). Not upstream.
+
+--- a/gdb/main.c
++++ b/gdb/main.c
+@@ -729,8 +729,12 @@
+   if (gdb_sysroot.empty ())
+     gdb_sysroot = TARGET_SYSROOT_PREFIX;
+ 
+-  debug_file_directory
+-    = relocate_gdb_directory (DEBUGDIR, DEBUGDIR_RELOCATABLE);
++  const char * nix_debug = getenv ("NIX_DEBUG_INFO_DIRS");
++  if (nix_debug != NULL)
++      debug_file_directory = nix_debug;
++  else
++    debug_file_directory
++      = relocate_gdb_directory (DEBUGDIR, DEBUGDIR_RELOCATABLE);
+ 
+ #ifdef ADDITIONAL_DEBUG_DIRS
+   debug_file_directory = (debug_file_directory + DIRNAME_SEPARATOR

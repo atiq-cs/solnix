@@ -6,6 +6,7 @@
 # compute.internal, GATE_HOST_STRINGS); the declared references cover every store path the
 # NAR names, counting only names inside the deriver's input closure (a store-path
 # string outside it, such as nix's --help examples, is text, not a dependency).
+# every file in bin/ and sbin/ must be executable.
 # Prints PASS/FAIL per path; exit 1 if any FAIL. --selftest proves the reference rule.
 # GATE_DOF_EXEMPT=0 drops the DOF-utsname exemption below (infra protocol v2 exception E1); the aarch64 set needs none.
 # shortcut: the reference scan greps /nix/store/<hash>- strings in the NAR, so a reference
@@ -48,6 +49,9 @@ for p in "$@"; do
     bad=$(ldd "$f" 2>&1 | awk '/not found/ || (/=>/ && $NF !~ /^\/nix\/store\//)' | head -2 | tr '\n' ' ')
     [ -n "$bad" ] && why="$why $f ldd: $bad;"
   done < <(find "$p" -type f)
+  # every regular file in bin/ and sbin/ is executable (libtool 2.5.4 shipped bin/libtool 0444 and passed everything else)
+  nx=$(find "$p/bin" "$p/sbin" -type f ! -perm -u+x 2>/dev/null | head -3 | tr '\n' ' ')
+  [ -n "$nx" ] && why="$why not executable: $nx;"
   # the build host's own identity must not be in a published NAR (perl's Configure recorded myhostname/mydomain:
   # wave3 2026-10-30). Strings: this host's name and DNS domain, and the EC2 internal domain; GATE_HOST_STRINGS adds more.
   hs="$(uname -n) $(sed -n 's/^domain[[:space:]]*//p; s/^search[[:space:]]*//p' /etc/resolv.conf 2>/dev/null) compute.internal ${GATE_HOST_STRINGS:-}"

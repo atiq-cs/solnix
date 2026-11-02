@@ -11,12 +11,13 @@
 # 0 with -D_TS_ERRNO. mk-src-pkg.nix passes -D_TS_ERRNO (illumos-gate's DTS_ERRNO;
 # gcc patch 0032 does the same for libstdc++) and runs this on every output.
 # Matches the UNDEF data symbol `errno` only, never the function ___errno.
+IB=${ILLUMOS_BIN:-/usr/bin}   # illumos elfedit/elfdump/ldd: the world's usr/bin in a store-only build, /usr/bin when exempt
 d=${1:?usage: ts-errno-gate.sh <dir>}
 [ -d "$d" ] || { echo "ts-errno-gate: $d is not a directory" >&2; exit 2; }
 bad=0
 while read -r f; do
   [ "$(od -An -tx1 -N4 "$f" 2>/dev/null | tr -d ' \n')" = 7f454c46 ] || continue
-  if /usr/bin/elfdump -s "$f" 2>/dev/null | grep -Eq ' UNDEF +errno$'; then
+  if "$IB/elfdump" -s "$f" 2>/dev/null | grep -Eq ' UNDEF +errno$'; then
     echo "$f: references the global errno (built without _TS_ERRNO)" >&2; bad=1
   fi
 done < <(find "$d" -type f)

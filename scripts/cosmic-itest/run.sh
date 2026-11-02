@@ -13,6 +13,9 @@ if [ "$1" = --negctl ] || [ "$2" = --negctl ]; then
   [ -n "$(k 01mp92bd)" ] && neg ITEST_I915 "$(k 01mp92bd)/kernel/drv/amd64/i915" i915-errno-etime           # pre-b46be77 (ETIME = 145)
   a=$(ls -d /nix/store/3danjnp8*-cosmic-applets* 2>/dev/null | head -1); [ -n "$a" ] && neg ITEST_POLLING_BINS "$a/libexec/cosmic-applets" polling-epoll  # pre-73c4cf7
   p=/nix/store/mj98i4x43h07h3na5a604ss5909rdmaq-pop-launcher-1.5.0/bin/pop-launcher; [ -x $p ] && neg ITEST_POPLAUNCHER $p mimalloc-pop-launcher  # pre-72f6a23
+  # help1: a share dir with no man: handler, and a plugin.ron whose bin does not exist
+  e=$(mktemp -d /tmp/itest-help.XXXXXX); mkdir -p "$e/applications"; printf '(\n    bin: (path: "%s/none"),\n)\n' "$e" > "$e/plugin.ron"
+  neg ITEST_HELP_SHARE "$e" help-man-uri; neg ITEST_HELP_PLUGIN "$e/plugin.ron" help-launcher-man; find "$e" -depth -delete
   echo "cosmic-itest negctl: $ok of $n failed as expected"; [ $ok -eq $n ] || rc=1
 fi
 echo "results: $J"; exit $rc

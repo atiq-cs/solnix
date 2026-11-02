@@ -1,0 +1,41 @@
+#!/usr/bin/bash
+# pop-launcher-man -- a pop-launcher plugin: type "man <word>" in the COSMIC launcher to search the manual pages
+# (whatis/apropos over the man index), Enter opens the page in a terminal (solnix-man-open). The protocol is JSON
+# lines on stdin/stdout (pop-launcher src/lib.rs Request/PluginResponse), as upstream's man-pages-plugin example
+# (toolkit/examples/man-pages-plugin.rs), which pop-launcher does not install. jq parses and writes the JSON.
+PATH=$PATH:/usr/bin
+jq=@jq@ open=@open@
+names=() descs=()
+out() { printf '%s\n' "$1"; }
+search() {   # $1 = the whole query ("man ls")
+  local q=${1#man}; q=${q# }; q=${q%% *}
+  names=() descs=()
+  # a page-name word only: man -k takes a regex, and this text comes from the user
+  case $q in ''|-*|*[!A-Za-z0-9._+-]*) out '"Finished"'; return ;; esac
+  local seen=" " line ns d n i=0
+  # exact names first (whatis), then apropos matches, at most 24
+  while IFS= read -r line; do
+    case $line in *' - '*) ;; *) continue ;; esac
+    ns=${line%% - *}; d=${line#* - }; ns=${ns%"${ns##*[! ]}"}
+    n=${ns%%,*}   # the first name of "a(3c), b(3c) - ..."
+    case $seen in *" $n "*) continue ;; esac
+    seen="$seen$n "; names+=("$n"); descs+=("$d")
+    "$jq" -nc --argjson id "$i" --arg name "$ns" --arg d "$d" \
+      '{Append: {id: $id, name: $name, description: $d, icon: {Name: "help-contents"}}}'
+    i=$((i+1)); [ $i -ge 24 ] && break
+  done < <({ man -f "$q"; man -k "$q"; } 2> /dev/null)
+  out '"Finished"'
+}
+while IFS= read -r req; do
+  r=$("$jq" -r 'if type == "string" then . elif has("Search") then "Search\t" + .Search
+                 elif has("Activate") then "Activate\t" + (.Activate|tostring)
+                 elif has("Complete") then "Complete\t" + (.Complete|tostring) else "Other" end' <<< "$req" 2> /dev/null)
+  case $r in
+    Exit) exit 0 ;;
+    Search$'\t'*) search "${r#*$'\t'}" ;;
+    Activate$'\t'*) n=${names[${r#*$'\t'}]:-}
+      if [ -n "$n" ]; then "$open" "man:$n" < /dev/null > /dev/null 2>&1 & fi
+      out '"Close"' ;;
+    Complete$'\t'*) n=${names[${r#*$'\t'}]:-}; [ -n "$n" ] && "$jq" -nc --arg f "man ${n%%(*}" '{Fill: $f}' ;;
+  esac
+done

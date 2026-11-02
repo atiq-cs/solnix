@@ -28,15 +28,15 @@ rec {
   };
 
   socat = mkSrcPkg {
-    pname = "socat"; version = "1.8.0.3";
-    src = { url = "http://www.dest-unreach.org/socat/download/socat-1.8.0.3.tar.gz";
-            sha256 = "a9f9eb6cfb9aa6b1b4b8fe260edbac3f2c743f294db1e362b932eb3feca37ba4"; };
+    pname = "socat"; version = "1.8.1.3";   # CVE-2026-56123 (Critical, 1.8.1.2)
+    src = { url = "http://www.dest-unreach.org/socat/download/socat-1.8.1.3.tar.gz";
+            sha256 = "06602ffd591e98c75b3dc1d66f0f19136cc666b0b2d95caad987d6ab2cb28097"; };
     deps = [ world openssl readline ncurses ];
     nativeTools = hostTools;   # store-only PATH + config.site (wave4)
     build = ''
       CFLAGS="-O2 -D__EXTENSIONS__" ./configure --prefix="$out" --disable-libwrap
       gmake -j8; gmake install
-      ${chk ''"$out/bin/socat" -V'' "socat version 1.8.0.3"}
+      ${chk ''"$out/bin/socat" -V'' "socat version 1.8.1.3"}
       ${chk ''echo hlcli | "$out/bin/socat" - -'' "^hlcli$"}
       /usr/bin/elfdump -d "$out/bin/socat" | grep -q 'NEEDED.*libssl' || { echo "FATAL: socat without openssl" >&2; exit 1; }
     '';
@@ -44,9 +44,9 @@ rec {
 
   # sqlite CLI (nix-src.nix's sqlite is the library nix links, 3.46.1, no shell readline).
   sqlite = mkSrcPkg {
-    pname = "sqlite"; version = "3.50.4";
-    src = { url = "https://sqlite.org/2025/sqlite-autoconf-3500400.tar.gz";
-            sha256 = "a3db587a1b92ee5ddac2f66b3edb41b26f9c867275782d46c3a088977d6a5b18"; };
+    pname = "sqlite"; version = "3.53.4";   # CVE-2025-70873 (3.51.1), CVE-2026-11824 (3.53.2)
+    src = { url = "https://www.sqlite.org/2026/sqlite-autoconf-3530400.tar.gz";
+            sha256 = "0e9483900e92cd5de8fd48d16bf9200145a61f7fd5be542a5ac81d8a9516eb9c"; };
     deps = [ readline ncurses zlib ];
     nativeTools = hostTools;   # store-only PATH + config.site (wave4)
     build = ''
@@ -55,7 +55,7 @@ rec {
         --with-readline-cflags="-I${readline}/include" --with-readline-ldflags="-L${readline}/lib/amd64 -lreadline -L${ncurses}/lib/amd64 -lncursesw" --disable-editline
       # autosetup's --soname "does not support SONAME" on illumos (measured): set it ourselves.
       gmake -j8 LDFLAGS.libsqlite3.soname=-Wl,-h,libsqlite3.so.0; gmake install LDFLAGS.libsqlite3.soname=-Wl,-h,libsqlite3.so.0
-      ${chk ''"$out/bin/sqlite3" --version'' "^3\\.50\\.4"}
+      ${chk ''"$out/bin/sqlite3" --version'' "^3\\.53\\.4"}
       ${chk ''echo "select 6*7;" | "$out/bin/sqlite3" :memory:'' "^42$"}
       # autosetup sets NO soname by default: consumers then NEED the bare libsqlite3.so dev link
       # (python3's _sqlite3 did, and resolved a host copy; measured). legacy = libsqlite3.so.0.

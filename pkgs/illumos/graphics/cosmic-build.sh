@@ -27,6 +27,9 @@ mkdir -p w home "$out/lib"
 chmod +x w/cc
 export PATH="$W/w:$rust/bin:$PATH" HOME="$W/home" CARGO_HOME="$W/home/.cargo"
 export RUSTFLAGS="--remap-path-prefix=$W=/build"
+# SOURCE_DATE_EPOCH (NixOS stdenv sets it for every build): libcosmic's localize module is #[derive(RustEmbed)], and rust-embed embeds each
+# asset's mtime without it. That changed the module's hash, so every promoted local got a new .llvm.<n> suffix (wave5 LLVM-SUFFIX.md: 4/4 DIFFERS -> 4/4 SAME).
+export SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-315532800}
 export CC=$W/w/cc CC_x86_64_unknown_illumos=$W/w/cc CARGO_TARGET_X86_64_UNKNOWN_ILLUMOS_LINKER=$W/w/cc
 tar xzf "$src"; cd "$(ls -d */ | head -1)"
 cp -r "$vendor" vendor; chmod -R u+w vendor

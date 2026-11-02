@@ -40,9 +40,10 @@ let
   c2 = import ./c-net.nix (h // { inherit (c1) readline; });
   c3 = import ./c-gnupg.nix (h // { inherit (c1) readline; });
   c4 = import ./c-big.nix (h // { inherit (c1) readline gnum4; inherit (c2) sqlite; });
-  c5 = import ./c-dev.nix (h // { inherit (c1) readline; inherit (c2) sqlite; inherit (c4) perl; });
+  c5 = import ./c-dev.nix (h // { inherit (c1) readline gnum4; inherit (c2) sqlite; inherit (c4) perl; });
   c6 = import ./c-mail.nix (h // { inherit (c1) readline; inherit (c4) perl; inherit (c5) cmake gdbm; });
   rust = import ./rust.nix { inherit cargoPkg chk; extra = import ./rust-extra.nix h; };
   gotools = import ./go-tools.nix { inherit (goChain) goPkg go_1_27; inherit chk; inherit (c5) python3; } // import ./go-c1.nix { inherit (goChain) goPkg go_1_27; inherit chk; inherit (c5) python3; };
   data = import ./data.nix h;
-in c1 // c2 // c3 // c4 // c5 // c6 // data // (if cargoPkg == null then { } else rust) // (if goChain == null then { } else gotools)
+  ti = import ./texinfo.nix (h // { inherit (c1) gnum4; inherit (c4) perl; });
+in c1 // c2 // c3 // c4 // c5 // c6 // data // ti // (if cargoPkg == null then { } else rust) // (if goChain == null then { } else gotools)

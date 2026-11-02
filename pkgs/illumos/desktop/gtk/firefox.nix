@@ -62,7 +62,7 @@ mkSrcPkg {
     export MOZ_APP_REMOTINGNAME=firefox CARGO_HOME="$TMPDIR/cargo" RUSTFLAGS="--remap-path-prefix=$W=/build"
     # bindgen: the from-source libclang parses Gecko's C++ with gcc's libstdc++ headers, in g++'s own search order, then
     # the gate's (as nixpkgs' bindgenHook passes the cc's include dirs; without them: "'version' file not found", measured)
-    X=$gcc/include/c++/14.3.0
+    X=$(ls -d $gcc/include/c++/[0-9]* | head -1)   # the stdenv gcc's libstdc++ headers (14.3.0 or 15.3.0)
     export LIBCLANG_PATH=${llvm-clang}/lib BINDGEN_CFLAGS="--sysroot=$gate -isystem $X -isystem $X/x86_64-pc-solaris2.11 -isystem $X/backward -isystem $gate/usr/include"
     cat > mozconfig <<EOF
     ac_add_options --prefix=$out

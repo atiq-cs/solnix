@@ -38,13 +38,19 @@ let
   #              store gmake/tar/grep/sed/gstrip/gzip/xz on PATH, so a bare system
   #              (dixi, EC2; no /usr/gnu) can realise them. See
   #              docs/pending/builders-need-store-tools.md.
-  seedPkgs = import solnixDir { gate = gateProto; inherit gateArgs; };
+  # wave6: the stdenv compiler is gcc15, built as NixOS builds stdenv: by the previous stage. The seed instance keeps gcc 14
+  # (stdenvGcc = "14": gcc-src.nix from the IPS seed) and builds gcc15 from its own store outputs (stage0 = its gcc 14 wrapper,
+  # binutils, the seed tools, coreutils, findutils, gnupatch, perl, the world: gcc15-src.nix, store-only PATH). The system
+  # instance compiles everything with that gcc15. So: two chains, as before wave6, plus one compiler. The seed instance is
+  # the documented exception to the store-only PATH rule (buildTools = [ ], an OI build host) until the bootstrap-tools wave.
+  seedPkgs = import solnixDir { gate = gateProto; inherit gateArgs; stdenvGcc = "14"; };
+  gcc15From = seedPkgs.gcc15;
   # aarch64-solaris: the native aarch64 set (pkgs/illumos/aarch64, nix + gcc + the home tools), built on
   # an aarch64 illumos host with its stage0 tools (mk-src-pkg's aarch64 path). No world, so no seed farm.
   solnix = if system == "aarch64-solaris"
     then import (solnixDir + "/aarch64") ({ inherit system; } // (if gateProto == null then { } else { gate = gateProto; }))
     else import solnixDir {
-    gate = gateProto; inherit gateArgs;
+    gate = gateProto; inherit gateArgs gcc15From;
     buildTools = [ seedPkgs.seedBuildTools ];
     seedTools = [ seedPkgs.perl seedPkgs.coreutils seedPkgs.findutils seedPkgs.world ];   # world-free (nss): the seed instance's
   };

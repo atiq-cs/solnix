@@ -12,13 +12,18 @@
 #   --localstatedir=/nix/var, --with-store-dir=/nix/store.
 # Disabled, as nix224.nix did: Boehm GC (--disable-gc), lowdown (markdown),
 # libcpuid (x86 microarch detection), tests, docs. seccomp is Linux-only.
-{ mkSrcPkg, zlib, openssl, libcSlice, gccLib, system, libSub ? "lib/amd64", nixCxxFlags ? "" }:
+{ mkSrcPkg, zlib, openssl, libcSlice, gccLib, system, libSub ? "lib/amd64", nixCxxFlags ? ""
+, hostTools ? [ ]   # store-only PATH base (base-src.nix): [] on the exempt seed instance
+, cmake ? null      # store cmake for brotli/nlohmann_json/libgit2 (the OI host had /usr/bin/cmake); null on the seed/aarch64
+, bzip2Bin ? null   # bzip2 CLI for boost's .tar.bz2 (GNU tar runs bzip2 from PATH; the OI host had /usr/bin/bzip2)
+}:
+let withTools = extra: if hostTools == [ ] then { } else { nativeTools = builtins.filter (x: x != null) extra ++ hostTools; }; in
 # libSub: the 64-bit lib dir of the plain derivations below ("lib" on aarch64, LP64 only).
 # nixCxxFlags: extra CXXFLAGS for nix itself (aarch64: see aarch64/src.nix). "" keeps the x86 text byte-identical.
 
 rec {
   # boost: headers + boost_context (the only compiled boost lib nix links).
-  boost = mkSrcPkg {
+  boost = mkSrcPkg ({
     pname = "boost"; version = "1.86.0";
     selfRunpath = false;
     src = { url = "https://archives.boost.io/release/1.86.0/source/boost_1_86_0.tar.bz2";
@@ -33,7 +38,7 @@ rec {
         address-model=64 architecture=x86 abi=sysv binary-format=elf target-os=solaris \
         --prefix="$out" --libdir="$out/lib/amd64" -j4 install >&2
     '';
-  };
+  } // withTools [ bzip2Bin ]);
 
   # libboost_context alone, for the runtime closure: the boost output above is
   # ~150 MB of headers nix needs only to compile. boost is built with
@@ -58,9 +63,9 @@ rec {
   };
 
   sqlite = mkSrcPkg {
-    pname = "sqlite"; version = "3.46.1";
-    src = { url = "https://www.sqlite.org/2024/sqlite-autoconf-3460100.tar.gz";
-            sha256 = "67d3fe6d268e6eaddcae3727fce58fcc8e9c53869bdd07a0c61e38ddf2965071"; };
+    pname = "sqlite"; version = "3.53.4";   # CVE feed 2026-11-02: 3.46.1 had 5 High/Critical (fixed by 3.53.2)
+    src = { url = "https://www.sqlite.org/2026/sqlite-autoconf-3530400.tar.gz";
+            sha256 = "0e9483900e92cd5de8fd48d16bf9200145a61f7fd5be542a5ac81d8a9516eb9c"; };
     build = ''
       ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-readline --disable-editline
       gmake -j4; gmake install
@@ -68,9 +73,9 @@ rec {
   };
 
   xz = mkSrcPkg {
-    pname = "xz"; version = "5.6.3";
-    src = { url = "https://github.com/tukaani-project/xz/releases/download/v5.6.3/xz-5.6.3.tar.gz";
-            sha256 = "b1d45295d3f71f25a4c9101bd7c8d16cb56348bbef3bbc738da0351e17c73317"; };
+    pname = "xz"; version = "5.8.4";   # CVE-2025-31115 (fixed 5.8.1); 5.6 has no later release
+    src = { url = "https://github.com/tukaani-project/xz/releases/download/v5.8.4/xz-5.8.4.tar.gz";
+            sha256 = "0014c7886930454fe8bd4228665b51af55eeae560ea135c9c4cd33f55b2591d9"; };
     build = ''
       ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-nls --disable-doc
       gmake -j4; gmake install
@@ -90,9 +95,9 @@ rec {
   };
 
   curl = mkSrcPkg {
-    pname = "curl"; version = "8.10.1";
-    src = { url = "https://curl.se/download/curl-8.10.1.tar.xz";
-            sha256 = "73a4b0e99596a09fa5924a4fb7e4b995a85fda0d18a2c02ab9cf134bebce04ee"; };
+    pname = "curl"; version = "8.23.0";   # 36 High/Critical in 8.10.1; curl vuln.json: CVE-2026-92392 needs 8.23.0
+    src = { url = "https://curl.se/download/curl-8.23.0.tar.xz";
+            sha256 = "8dadd7d2536a314f982ad05a651b713f426bf7d02cc2c76cffb9796f2218e6c5"; };
     deps = [ zlib openssl ];
     build = ''
       ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static \
@@ -142,9 +147,9 @@ rec {
   };
 
   libarchive = mkSrcPkg {
-    pname = "libarchive"; version = "3.7.6";
-    src = { url = "https://www.libarchive.org/downloads/libarchive-3.7.6.tar.xz";
-            sha256 = "0a2efdcb185da2eb1e7cd8421434cb9a6119f72417a13335cca378d476fd3ba0"; };
+    pname = "libarchive"; version = "3.8.11";   # CVE-2026-5121/4424 (fixed 3.8.7), CVE-2025-5914 (3.8.0); same soname libarchive.so.13
+    src = { url = "https://github.com/libarchive/libarchive/releases/download/v3.8.11/libarchive-3.8.11.tar.xz";
+            sha256 = "a3dc0872b1b39da34dc18ef1b944f0f11ffd37425d70ae04be679279f1cf43d2"; };
     deps = [ zlib xz zstd bzip2 ];
     build = ''
       ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-bsdtar \
@@ -159,10 +164,10 @@ rec {
     '';
   };
 
-  brotli = mkSrcPkg {
-    pname = "brotli"; version = "1.1.0";
-    src = { url = "https://github.com/google/brotli/archive/refs/tags/v1.1.0.tar.gz";
-            sha256 = "e720a6ca29428b803f4ad165371771f5398faba397edf6778837a18599ea13ff"; };
+  brotli = mkSrcPkg ({
+    pname = "brotli"; version = "1.1.1";   # CVE-2026-111497 (fixed 1.1.1)
+    src = { url = "https://github.com/google/brotli/archive/refs/tags/v1.1.1.tar.gz";
+            sha256 = "1a84dfaa740994d19254bf78aa7d74a4a8040d1638f3d5f2cdecb188fd520da8"; };
     build = ''
       mkdir b; cd b
       # CMAKE_SKIP_RPATH: the compiler wrapper bakes the store RUNPATH; cmake's
@@ -171,7 +176,7 @@ rec {
         -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON -DCMAKE_SKIP_RPATH=ON -DBROTLI_DISABLE_TESTS=ON >&2
       gmake -j4; gmake install
     '';
-  };
+  } // withTools [ cmake ]);
 
   editline = mkSrcPkg {
     pname = "editline"; version = "1.17.1";
@@ -184,7 +189,7 @@ rec {
   };
 
   # header-only
-  nlohmann_json = mkSrcPkg {
+  nlohmann_json = mkSrcPkg ({
     pname = "nlohmann_json"; version = "3.11.3";
     src = { url = "https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz";
             sha256 = "d6c65aca6b1ed68e7a182f4757257b107ae403032760ed6ef121c9d55e81757d"; };
@@ -193,7 +198,7 @@ rec {
       cmake .. -DCMAKE_INSTALL_PREFIX="$out" -DJSON_BuildTests=OFF -DCMAKE_CXX_COMPILER="$CXX" >&2
       gmake install
     '';
-  };
+  } // withTools [ cmake ]);
 
   # header-only; nix's configure checks for <toml.hpp>
   toml11 = mkSrcPkg {
@@ -205,10 +210,10 @@ rec {
     '';
   };
 
-  libgit2 = mkSrcPkg {
-    pname = "libgit2"; version = "1.7.2";
-    src = { url = "https://github.com/libgit2/libgit2/archive/refs/tags/v1.7.2.tar.gz";
-            sha256 = "de384e29d7efc9330c6cdb126ebf88342b5025d920dcb7c645defad85195ea7f"; };
+  libgit2 = mkSrcPkg ({
+    pname = "libgit2"; version = "1.8.7";   # CVE-2026-53587 (fixed 1.8.6); 1.7 has no later release; 1.8 is nix 2.24's supported range
+    src = { url = "https://github.com/libgit2/libgit2/archive/refs/tags/v1.8.7.tar.gz";
+            sha256 = "a548a2209c3e99d6bb685d843396fff3a7d3ffd8340adb5d8851637cfe8cd134"; };
     deps = [ zlib openssl ];
     build = ''
       mkdir b; cd b
@@ -221,7 +226,7 @@ rec {
         -DCMAKE_SKIP_RPATH=ON >&2
       gmake -j4; gmake install
     '';
-  };
+  } // withTools [ cmake ]);
 
   nix = mkSrcPkg {
     pname = "nix"; version = "2.24.15";

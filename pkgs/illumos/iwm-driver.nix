@@ -131,8 +131,10 @@ derivation {
     # --- build the module (Makefile.illumos; same flags as build-dixi.sh) ------
     cd iwm
     gmake -f Makefile.illumos clean >/dev/null 2>&1 || true
+    # -std=gnu17: the gate's sys/systm.h declares `int nodev(); int nulldev();`, which C23 (GCC 15) reads as (void), so
+    # every cb_ops initialiser mismatches (gcc1 STDENV-SWITCH.md 2.2). The real fix is prototypes in the gate.
     gmake -f Makefile.illumos -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)" \
-      UTSINC="$UTSINC" LD="$LDBIN" >/tmp/iwm-build.log 2>&1 \
+      UTSINC="$UTSINC" LD="$LDBIN" CC="gcc -std=gnu17" >/tmp/iwm-build.log 2>&1 \
       || { echo "FATAL: iwm build failed" >&2; tail -40 /tmp/iwm-build.log >&2; exit 1; }
     [ -f iwm ] || { echo "FATAL: no iwm module produced" >&2; exit 1; }
     echo "built: iwm ($(ls -l iwm | awk '{print $5}') bytes)" >&2

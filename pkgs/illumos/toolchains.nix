@@ -18,7 +18,7 @@
 # HOST PROVENANCE (sandbox=false, Phase-1 host-impure stance, design §1.3):
 #   gcc-14   IPS developer/gcc-14 @ 14.3.0-2026.0.0.2  -> /usr/gcc/14
 #   clang-21 IPS developer/clang-21 @ 21.1.8-2025.0.0.0 -> /usr/clang/21
-#   gdb      IPS developer/debug/gdb @ 16.3-2025.0.0.0  -> /usr/bin/gdb
+# (gdb was sliced from IPS developer/debug/gdb 16.3 here; it is built from source now: cli/c-dev.nix.)
 # Third-party runtime libs (libz/libzstd/libedit/...) sliced from /usr/lib/64.
 # TODO(P2): pin these to gate/IPS versions or build from source, like externalLibs.
 
@@ -100,64 +100,6 @@ rec {
     # lib-extra. Neither is reachable from usr/clang/21/bin via one $ORIGIN rule,
     # so bake both as $out-absolute RUNPATH entries.
     selfLibDirs = [ "usr/clang/21/lib" "lib-extra" ];
-    originParts = [ "$ORIGIN" ];
-    depRunpaths = libcLibDirs;
-  };
-
-  # ---------------------------------------------------------------------------
-  # gdb — GNU GDB 16.3, sliced from /usr/bin/gdb. Big NEEDED closure (python3.9,
-  # glib, babeltrace, mpfr/gmp, the dladm/nvpair/scf chain, ...) — all bundled
-  # into $out/lib-extra so gdb resolves everything from the store. gcc-14 runtime
-  # (libstdc++/libgcc_s) + libc slice as usual. Debugger, not on the compile path.
-  gdb = mkIllumosComponent {
-    name = "gdb";
-    srcRoot = "/";
-    files = [ "usr/bin/gdb" "usr/bin/gdb-add-index" "usr/bin/gdbtui" ];
-    extraFiles = [
-      { src = "/usr/gcc/14/lib/amd64/libstdc++.so.6"; dst = "lib-extra/libstdc++.so.6"; }
-      { src = "/usr/gcc/14/lib/amd64/libgcc_s.so.1";  dst = "lib-extra/libgcc_s.so.1"; }
-      # gdb's non-libc-slice NEEDED closure (from /usr/lib/64 + /lib/64).
-      { src = "/usr/lib/64/libbabeltrace.so.1";      dst = "lib-extra/libbabeltrace.so.1"; }
-      { src = "/usr/lib/64/libbabeltrace-ctf.so.1";  dst = "lib-extra/libbabeltrace-ctf.so.1"; }
-      { src = "/usr/lib/64/libexpat.so.1";           dst = "lib-extra/libexpat.so.1"; }
-      { src = "/usr/lib/64/libglib-2.0.so.0";        dst = "lib-extra/libglib-2.0.so.0"; }
-      { src = "/usr/lib/64/libgmp.so.10";            dst = "lib-extra/libgmp.so.10"; }
-      { src = "/usr/lib/64/libmpfr.so.6";            dst = "lib-extra/libmpfr.so.6"; }
-      { src = "/usr/lib/64/liblzma.so.5";            dst = "lib-extra/liblzma.so.5"; }
-      { src = "/usr/lib/64/libncurses.so.5";         dst = "lib-extra/libncurses.so.5"; }
-      { src = "/usr/lib/64/libpcre2-8.so.0";         dst = "lib-extra/libpcre2-8.so.0"; }
-      { src = "/usr/lib/64/libpython3.9.so.1.0";     dst = "lib-extra/libpython3.9.so.1.0"; }
-      { src = "/usr/lib/64/libxml2.so.16";           dst = "lib-extra/libxml2.so.16"; }
-      { src = "/usr/lib/64/libicuuc.so.78";           dst = "lib-extra/libicuuc.so.78"; }
-      { src = "/usr/lib/64/libicudata.so.78";         dst = "lib-extra/libicudata.so.78"; }
-      { src = "/usr/lib/64/libxxhash.so.0";          dst = "lib-extra/libxxhash.so.0"; }
-      { src = "/usr/lib/64/libz.so.1";               dst = "lib-extra/libz.so.1"; }
-      { src = "/usr/lib/64/libzstd.so.1";            dst = "lib-extra/libzstd.so.1"; }
-      { src = "/usr/lib/64/libidmap.so.1";           dst = "lib-extra/libidmap.so.1"; }
-      { src = "/usr/lib/64/libidspace.so.1";         dst = "lib-extra/libidspace.so.1"; }
-      { src = "/usr/lib/64/libexacct.so.1";          dst = "lib-extra/libexacct.so.1"; }
-      { src = "/usr/lib/64/libpool.so.1";            dst = "lib-extra/libpool.so.1"; }
-      { src = "/usr/lib/64/librename.so.1";          dst = "lib-extra/librename.so.1"; }
-      { src = "/usr/lib/64/libsmbios.so.1";          dst = "lib-extra/libsmbios.so.1"; }
-      { src = "/lib/64/libavl.so.1";                 dst = "lib-extra/libavl.so.1"; }
-      { src = "/lib/64/libdevinfo.so.1";             dst = "lib-extra/libdevinfo.so.1"; }
-      { src = "/lib/64/libdladm.so.1";               dst = "lib-extra/libdladm.so.1"; }
-      { src = "/lib/64/libdlpi.so.1";                dst = "lib-extra/libdlpi.so.1"; }
-      { src = "/lib/64/libgen.so.1";                 dst = "lib-extra/libgen.so.1"; }
-      { src = "/lib/64/libinetutil.so.1";            dst = "lib-extra/libinetutil.so.1"; }
-      { src = "/lib/64/libintl.so.1";                dst = "lib-extra/libintl.so.1"; }
-      { src = "/lib/64/libkstat.so.1";               dst = "lib-extra/libkstat.so.1"; }
-      { src = "/lib/64/libnvpair.so.1";              dst = "lib-extra/libnvpair.so.1"; }
-      { src = "/lib/64/librcm.so.1";                 dst = "lib-extra/librcm.so.1"; }
-      { src = "/lib/64/libscf.so.1";                 dst = "lib-extra/libscf.so.1"; }
-      { src = "/lib/64/libsec.so.1";                 dst = "lib-extra/libsec.so.1"; }
-      { src = "/lib/64/libsendfile.so.1";            dst = "lib-extra/libsendfile.so.1"; }
-      { src = "/lib/64/libumem.so.1";                dst = "lib-extra/libumem.so.1"; }
-      { src = "/lib/64/libuuid.so.1";                dst = "lib-extra/libuuid.so.1"; }
-      { src = "/lib/64/libuutil.so.1";               dst = "lib-extra/libuutil.so.1"; }
-      { src = "/lib/64/libvarpd.so.1";               dst = "lib-extra/libvarpd.so.1"; }
-    ];
-    selfLibDirs = [ "lib-extra" ];
     originParts = [ "$ORIGIN" ];
     depRunpaths = libcLibDirs;
   };

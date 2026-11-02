@@ -7,9 +7,9 @@ rec {
   ftPriv = [ zlib libpng nixChain.brotli nixChain.bzip2 ];
 
   pcre2 = mkSrcPkg {
-    pname = "pcre2"; version = "10.47";
-    src = { url = "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.47/pcre2-10.47.tar.gz";
-            sha256 = "c08ae2388ef333e8403e670ad70c0a11f1eed021fd88308d7e02f596fcd9dc16"; };
+    pname = "pcre2"; version = "10.49";   # CVE-2026-89157/89161 (fixed 10.48)
+    src = { url = "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.49/pcre2-10.49.tar.gz";
+            sha256 = "929f0b20e62879252a15886b06c89f1edef61a363cbd5826fb041080a5e557ae"; };
     deps = [ zlib ];
     build = ''
       # nixpkgs: 16/32-bit libs + JIT (sealloc: Linux memfd only, so off here)
