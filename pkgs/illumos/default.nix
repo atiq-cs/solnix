@@ -415,7 +415,7 @@ let
   desktop = import ./desktop { inherit (cargo) cargoPkg; inherit graphics; inherit (cli) fd file;
     inherit (srcPkgs) mkSrcPkg bash coreutils gnugrep gnused hostname; };
   # The GTK 3 / Wayland stack for Firefox (./desktop/gtk): its own dir, so neither COSMIC nor desktop/ outs move.
-  gtk = import ./desktop/gtk { base = srcPkgs; inherit graphics cli; inherit (cosmic) noto-sans; };
+  gtk = import ./desktop/gtk { base = srcPkgs; inherit graphics cli; inherit (cosmic) noto-sans; inherit (cargo) cargoPkg; rust = rust199; inherit world; };
   # COSMIC's fonts and icon themes on store tools only (./desktop/cosmic-data.nix). Not graphics/cosmic-data.nix, which
   # still evaluates there (unused) because graphics/ is every COSMIC app's fixups = ./. input: editing it moves all 21.
   # shortcut: graphics/cosmic-data.nix is dead text kept for that hash; delete it in the next wave that rebuilds COSMIC.
@@ -1278,7 +1278,7 @@ in
   inherit (desktop) pop-launcher cosmic-wallpapers sound-theme-freedesktop adwaita-icon-theme dejavu-fonts liberation-fonts
     noto-fonts-color-emoji xdg-utils xdg-user-dirs;
   inherit (gtk) pcre2 glib libpng libjpeg-turbo freetype fontconfig fribidi harfbuzz cairo pango gdk-pixbuf libepoxy
-    at-spi2-core gtk3 gperf nasm ninja meson_1_10;
+    at-spi2-core gtk3 grim gperf nasm ninja meson_1_10 nodejs cbindgen llvm-clang firefox-esr;
   # cargoLib.{vendorOf,cargoPkg}: build any Cargo.lock'd crate on rust199 (./cargo.nix).
   cargoLib = cargo;
   inherit (goChain) go go_1_4 go_1_17 go_1_20 go_1_22 go_1_24 go_1_26 go_1_27;

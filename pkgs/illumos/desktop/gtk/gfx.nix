@@ -132,4 +132,22 @@ rec {
       grep -q 'cannot open display' "$TMPDIR/nod.out" || { echo "FATAL: unexpected no-display error:" >&2; head -3 "$TMPDIR/nod.out" >&2; exit 1; }
     '';
   };
+
+  # grim 1.5.0 (nixpkgs grim): a Wayland screenshot through ext-image-copy-capture-v1, which cosmic-comp 1.5 serves to
+  # unsandboxed clients (state.rs client_not_sandboxed). The capture the GTK/Firefox panel runs on lixi read back.
+  grim = mkSrcPkg {
+    pname = "grim"; version = "1.5.0";
+    src = { url = "https://gitlab.freedesktop.org/emersion/grim/-/archive/v1.5.0/grim-v1.5.0.tar.gz";
+            sha256 = "9e72a98f7621b1f5741b405b8dbd447acf7d300ddb12667ec526db1ce6154eaa"; };
+    deps = [ wayland libpng libjpeg-turbo pixman zlib ];
+    linkDeps = [ wayland-protocols libffi ];
+    build = ''
+      ${tools.path}
+      export PATH=${wayland}/bin:$PATH   # wayland-scanner
+      # __EXTENSIONS__: getline() under _POSIX_C_SOURCE=200809L on illumos; -Db_ndebug leaves write_ppm.c's assert-only
+      # variable unused, and grim builds with -Werror (both measured).
+      ${m "-Djpeg=enabled -Dman-pages=disabled '-Dc_args=-D__EXTENSIONS__ -Wno-error=unused-variable'"}
+      "$out/bin/grim" -h 2>&1 | grep -q 'Usage: grim' || { echo "FATAL: grim -h" >&2; exit 1; }
+    '';
+  };
 }
