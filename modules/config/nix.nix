@@ -147,6 +147,10 @@ in
       requires = [ "svc:/system/filesystem/local:default" ];
       start.exec = "${cfg.package}/bin/nix-daemon --daemon &";
       stop.exec = ":kill";
+      # A build that dumps core or dies on a signal is in the daemon's process contract; without this, svc.startd treats it as
+      # the service failing and kills the whole contract, every in-flight build with it (dixi 2026-11-02: one nodejs build's
+      # ld core restarted the daemon and killed 8 builds). NixOS's nix-daemon.service has KillMode=process for the same reason.
+      ignoreError = [ "core" "signal" ];
     };
   };
 }
