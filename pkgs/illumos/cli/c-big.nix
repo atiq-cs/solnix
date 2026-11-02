@@ -3,10 +3,10 @@
 rec {
   # perl, shared libperl, threads. libpth is the gate proto's only (no host /usr/lib probe).
   perl = mkSrcPkg {
-    pname = "perl"; version = "5.42.3";
+    pname = "perl"; version = "5.42.2";   # queue target (policy-refresh,security; perl CVEs fixed in 5.42.2)
     docOutputs = [ "man" ];   # nixpkgs perl: man output (953 pages, mostly 3pm)
-    src = { url = "https://www.cpan.org/src/5.0/perl-5.42.3.tar.gz";
-            sha256 = "1137740985837b5cdf15f0cfab932279dcb4352f912fed6fc144e8b4f0823627"; };
+    src = { url = "https://www.cpan.org/src/5.0/perl-5.42.2.tar.gz";
+            sha256 = "9384e8deb75b7b1695e5637971b752281aaecd025a3d5d4734d33c1d0adfee47"; };
     deps = [ world ];
     build = ''
       # hints/solaris_2.sh picks gcc vs Sun cc by "gcc" in the compiler's NAME; the builder's
@@ -24,7 +24,7 @@ rec {
         -Dlibswanted="pthread socket nsl dl m c" -Dccflags="-fno-stack-protector" -Ui_gdbm -Ui_db -Ui_ndbm
       gmake -j16; gmake install
       ${scrub}
-      ${chk ''"$out/bin/perl" -v'' "v5\\.42\\.3"}
+      ${chk ''"$out/bin/perl" -v'' "v5\\.42\\.2"}
       ${chk ''"$out/bin/perl" -V:myhostname'' "^myhostname=.localhost.;$"}
       ${chk ''"$out/bin/perl" -MPOSIX -MSocket -MDigest::SHA=sha1_hex -e "print sha1_hex(q(abc)),qq(\\n)"'' "^a9993e364706816aba3e25717850c26c9cd0d89d$"}
       [ -f "$out/share/man/man1/perl.1" ] || { echo "FATAL: no perl.1" >&2; exit 1; }

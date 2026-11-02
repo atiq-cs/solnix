@@ -119,7 +119,11 @@ let
   # bare gcc/cc, which only the OI host had on PATH: the same wrapper as CC (native build).
   hermetic = a: if nativeTools' == [ ] then
     (if storeOnly then throw "mk-src-pkg ${pname}: storeOnly but no nativeTools (the PATH would be the host's)" else a)
-    else a // { inherit ntPath; args = map (x: builtins.replaceStrings
+    else a // { inherit ntPath;
+    # the drv's own PATH attribute (the builder's starting environment) is the store-only one too, not the OI default below:
+    # nothing before the builder's `export PATH` may resolve a host tool (gate2 A1: env PATH only /nix/store). Exempt: as before.
+    PATH = if storeOnly then (if btPath == "" then ntPath else "${btPath}:${ntPath}") else a.PATH;
+    args = map (x: builtins.replaceStrings
     [ ''export PATH="''${btPath:+$btPath:}/usr/gnu/bin:/usr/bin:/usr/sbin"'' ''export CC="$W/cc$ABI" ABI LIBSUB'' ]
     [ (''export PATH="''${btPath:+$btPath:}$ntPath" CONFIG_SITE=${./config.site}''   # config.site: host-state probes pinned
        + (if storeOnly then "\n    /usr/bin/bash ${./path-gate.sh}" else "")

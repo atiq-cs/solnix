@@ -63,9 +63,10 @@ rec {
   };
 
   sqlite = mkSrcPkg {
-    pname = "sqlite"; version = "3.53.4";   # CVE feed 2026-11-02: 3.46.1 had 5 High/Critical (fixed by 3.53.2)
-    src = { url = "https://www.sqlite.org/2026/sqlite-autoconf-3530400.tar.gz";
-            sha256 = "0e9483900e92cd5de8fd48d16bf9200145a61f7fd5be542a5ac81d8a9516eb9c"; };
+    pname = "sqlite"; version = "3.53.2";   # queue target (CVE feed fixed_in: CVE-2026-11824); 3.46.1 had 5 High/Critical
+    # sha3-256 of sqlite3.c = 44fd61b9... = the 3.53.2 release log's
+    src = { url = "https://www.sqlite.org/2026/sqlite-autoconf-3530200.tar.gz";
+            sha256 = "588ad51949419a56ebe81fe56193d510c559eb94c9a57748387860b5d3069316"; };
     build = ''
       ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-readline --disable-editline
       gmake -j4; gmake install
@@ -73,9 +74,9 @@ rec {
   };
 
   xz = mkSrcPkg {
-    pname = "xz"; version = "5.8.4";   # CVE-2025-31115 (fixed 5.8.1); 5.6 has no later release
-    src = { url = "https://github.com/tukaani-project/xz/releases/download/v5.8.4/xz-5.8.4.tar.gz";
-            sha256 = "0014c7886930454fe8bd4228665b51af55eeae560ea135c9c4cd33f55b2591d9"; };
+    pname = "xz"; version = "5.8.1";   # queue target (CVE-2025-31115 fixed_in); .sig: Lasse Collin 3690C240CE51B467
+    src = { url = "https://github.com/tukaani-project/xz/releases/download/v5.8.1/xz-5.8.1.tar.gz";
+            sha256 = "507825b599356c10dca1cd720c9d0d0c9d5400b9de300af00e4d1ea150795543"; };
     build = ''
       ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-nls --disable-doc
       gmake -j4; gmake install
@@ -147,9 +148,9 @@ rec {
   };
 
   libarchive = mkSrcPkg {
-    pname = "libarchive"; version = "3.8.11";   # CVE-2026-5121/4424 (fixed 3.8.7), CVE-2025-5914 (3.8.0); same soname libarchive.so.13
-    src = { url = "https://github.com/libarchive/libarchive/releases/download/v3.8.11/libarchive-3.8.11.tar.xz";
-            sha256 = "a3dc0872b1b39da34dc18ef1b944f0f11ffd37425d70ae04be679279f1cf43d2"; };
+    pname = "libarchive"; version = "3.8.7";   # queue target (CVE-2026-5121/4424 fixed_in); same soname libarchive.so.13; .asc: Martin Matuska C040B508D63D2B36
+    src = { url = "https://github.com/libarchive/libarchive/releases/download/v3.8.7/libarchive-3.8.7.tar.xz";
+            sha256 = "d3a8ba457ae25c27c84fd2830a2efdcc5b1d40bf585d4eb0d35f47e99e5d4774"; };
     deps = [ zlib xz zstd bzip2 ];
     build = ''
       ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-bsdtar \
@@ -211,9 +212,9 @@ rec {
   };
 
   libgit2 = mkSrcPkg ({
-    pname = "libgit2"; version = "1.8.7";   # CVE-2026-53587 (fixed 1.8.6); 1.7 has no later release; 1.8 is nix 2.24's supported range
-    src = { url = "https://github.com/libgit2/libgit2/archive/refs/tags/v1.8.7.tar.gz";
-            sha256 = "a548a2209c3e99d6bb685d843396fff3a7d3ffd8340adb5d8851637cfe8cd134"; };
+    pname = "libgit2"; version = "1.8.6";   # queue target (CVE-2026-53587 fixed_in); 1.7 has no later release (GitHub tag, no signature)
+    src = { url = "https://github.com/libgit2/libgit2/archive/refs/tags/v1.8.6.tar.gz";
+            sha256 = "c171e9c6fcc33455e3df46d422f4e1b3ea7c049a645051664c9cdbdc081208e7"; };
     deps = [ zlib openssl ];
     build = ''
       mkdir b; cd b
