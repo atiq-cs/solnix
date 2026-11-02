@@ -8,8 +8,9 @@
 # 3. live: jq at the real solnix main through the real gate (no bearer).
 # 4. parallel (qbuild4): the listing as ?system= + ?pname= queries, per-tick sizing, N jobs at once with their own state,
 #    --option cores, the N=1 rebuild bound, the busy re-tick.
-# 5. fleet1: a git fixture whose head moved past the served out: the builder evaluates the commit that wrote the served
-#    recipes.tsv; pname-with-dashes -> camelCase attr; a GC between fetch and --rebuild; a full disk is not memo'd.
+# 5. fleet1: a git fixture whose head moved past the served outs, with two batches from two commits on two branches: each row
+#    is built at the commit that added it (one pin for the file fails one batch: negative control); rows[].commit first;
+#    pname-with-dashes -> camelCase attr; a GC between fetch and --rebuild; a full disk is not memo'd.
 S=${1:-$(dirname "$0")/../modules/config/community/solnix-builder.sh}
 W=$(mktemp -d /tmp/bld.XXXXXX); trap 'find "$W" -depth -delete' EXIT
 bad=0; ok() { print "ok: $1"; }; no() { print "FAIL: $1"; bad=1; }
@@ -38,12 +39,12 @@ P=$(ksh93 "$S" plan "$W/rows.json" "$W/r.tsv"); print -r -- "$P" | sed 's/^/   /
 want() { print -r -- "$P" | egrep -q "$2" && ok "$1" || no "$1"; }
 want "wget-1.24.5 (pname carries the version): served out already ships man1 -> MET" '^wget-1\.24\.5 MET /nix/store/wd17vpnh'
 want "openssl3 -> openssl row, has_manpages=n -> NO-MAN" '^openssl3 NO-MAN /nix/store/arszvzha'
-want "jq outdated, two served rows (one per solnix commit) -> BUILD <both outs> <version>" '^jq BUILD /nix/store/n9aq9aa2[^ ]*,/nix/store/1fjqlkii[^ ]* 1\.7\.1$'
+want "jq outdated, two served rows (one per solnix commit) -> BUILD <both outs> <version> - (no row commit)" '^jq BUILD /nix/store/n9aq9aa2[^ ]*,/nix/store/1fjqlkii[^ ]* 1\.7\.1 -$'
 want "zlib 1.3.1 (only 1.3.2 served) -> NO-RECIPE" '^zlib NO-RECIPE zlib 1\.3\.1'
 want "ninja (no row) -> NO-RECIPE" '^ninja NO-RECIPE'
 want "aarch64 row on x86_64 -> OTHER-SYSTEM" '^jq OTHER-SYSTEM aarch64-solaris'
 want "libc manpage-missing, served without share/man -> MAN-GAP (a rebuild of that out cannot add pages)" '^libc MAN-GAP /nix/store/86qg1hqv'
-want "ghost manpage-missing, out not served -> BUILD (the gate decides)" '^ghost BUILD /nix/store/0{32}-ghost-1 1$'
+want "ghost manpage-missing, out not served -> BUILD (the gate decides)" '^ghost BUILD /nix/store/0{32}-ghost-1 1 -$'
 [[ $(print -r -- "$P" | wc -l | tr -d ' ') == 8 ]] && ok "one decision per row" || no "rows: $(print -r -- "$P" | wc -l)"
 # live: the real listing (this system's window + every served recipe pname, cache-api v44) + the served recipes.tsv must
 # plan without error, every row decided
@@ -226,44 +227,89 @@ print "{\"rows\":[$(row ninja 1.12.1 outdated)]}" > "$W/n.json"; tk FKROWS=$W/n.
 lo=99999; hi=0; for i in 1 2 3 4 5 6 7 8 9 10 11 12; do p=$(BUILDER_BUSY_TICK_MIN=60 BUILDER_BUSY_TICK_MAX=300 ksh93 "$S" pause busy); (( p < lo )) && lo=$p; (( p > hi )) && hi=$p; done
 (( r != 0 && lo >= 60 && hi <= 300 && hi > lo )) && [[ $(ksh93 "$S" pause busy) == +([0-9]) ]] && (( $(ksh93 "$S" pause busy) >= 600 )) &&
   ok "nothing to build: tick rc $r (long pause); busy pause random in the busy range ($lo..$hi), defaults to the long range" || no "pause: rc $r busy $lo..$hi"
-# --- 5. fleet1: evaluate the commit that WROTE the served recipes.tsv (head has moved on), GC-safe rebuilds. A git fixture:
-# commit A writes recipes.tsv with pin1's out A; head B rebuilds pin1 at out B and lists that. Served = A's file, exactly.
+# --- 5. fleet1: each row is evaluated at the commit that ADDED it (head has moved on), GC-safe rebuilds. A git fixture shaped like
+# the real served file (2026-11-02: T1 from 540d65c on main, W0-W2 from b080459 on wave5, where gcc moved and T1's outs differ):
+#   main: A adds pin1 (out A1), gcd, pin-camel; then B moves pin1 to B1 (head; never served).
+#   side (from A): W moves "gcc", so pin1 there is W1 != A1; it adds wrow (out WW). The served file = side's: A's rows + wrow.
+#   pin1 must build at A, wrow at W: one pin for the whole file (A or W) gets one of the two wrong, and head (B) has neither.
 R=$W/repo; mkdir -p "$R/docs/registry"; gt() { git -C "$R" -c user.name=t -c user.email=t@t "$@" > /dev/null 2>&1; }
-pf() { cat > "$R/flake.nix" <<EOF
-{ outputs = { self }: let mk = name: script: derivation { inherit name; system = "x86_64-solaris"; builder = "/bin/sh"; args = [ "-c" script ]; };
-  in { packages.x86_64-solaris = { pin1 = mk "qb-pin1-$1-${W##*/}" "echo $1 > \$out"; gcd = mk "qb-gcd-${W##*/}" "echo gcd > \$out";
-    pinCamel = mk "qb-camel-${W##*/}" "echo c > \$out"; }; }; }
-EOF
-  gt add -A; }
+pf() { print -r -- "{ outputs = { self }: let mk = name: script: derivation { inherit name; system = \"x86_64-solaris\"; builder = \"/bin/sh\"; args = [ \"-c\" script ]; };
+  in { packages.x86_64-solaris = { pin1 = mk \"qb-pin1-$1-${W##*/}\" \"echo $1 > \$out\"; gcd = mk \"qb-gcd-${W##*/}\" \"echo gcd > \$out\";
+    pinCamel = mk \"qb-camel-${W##*/}\" \"echo c > \$out\"; ${2:-} }; }; }" > "$R/flake.nix"; gt add -A; }
 po() { nix eval --raw "git+file://$R?rev=$(git -C "$R" rev-parse HEAD)#packages.x86_64-solaris.$1.outPath" 2> /dev/null; }
 gt init -b main; pf A; gt commit -m A; A1=$(po pin1); AG=$(po gcd); AC=$(po pinCamel)
 { print -r -- "$H"; rec pin1 1 y "$A1"; rec gcd 1 y "$AG"; rec pin-camel 1 y "$AC"; } > "$R/docs/registry/recipes.tsv"; gt add -A; gt commit -m rowsA; RA=$(git -C "$R" rev-parse HEAD)
-pf B; gt commit -m B; B1=$(po pin1); sed "s|$A1|$B1|" "$R/docs/registry/recipes.tsv" > "$W/x" && mv "$W/x" "$R/docs/registry/recipes.tsv"; gt add -A; gt commit -m rowsB
-git -C "$R" show "$RA:docs/registry/recipes.tsv" > "$W/served.tsv"
-nix build --no-link "git+file://$R?rev=$RA#packages.x86_64-solaris."{pin1,gcd,pinCamel} >> "$W/fixture.log" 2>&1 && nix copy --to "file://$W/cache" "$A1" "$AG" "$AC" >> "$W/fixture.log" 2>&1 &&
-  [[ -n $A1 && -n $B1 && $A1 != "$B1" ]] || no "pin fixture: A=$A1 B=$B1 $(tail -2 "$W/fixture.log")"
+gt checkout -b side; pf W "wrow = mk \"qb-wrow-W-${W##*/}\" \"echo w > \$out\";"; gt commit -m W; W1=$(po pin1); WW=$(po wrow)
+rec wrow 1 y "$WW" >> "$R/docs/registry/recipes.tsv"; gt add -A; gt commit -m rowsW; RW=$(git -C "$R" rev-parse HEAD)
+gt checkout main; pf B; gt commit -m B; B1=$(po pin1); sed "s|$A1|$B1|" "$R/docs/registry/recipes.tsv" > "$W/x" && mv "$W/x" "$R/docs/registry/recipes.tsv"; gt add -A; gt commit -m rowsB
+git -C "$R" show "$RA:docs/registry/recipes.tsv" > "$W/served.tsv"; git -C "$R" show "$RW:docs/registry/recipes.tsv" > "$W/servedW.tsv"
+nix build --no-link "git+file://$R?rev=$RA#packages.x86_64-solaris."{pin1,gcd,pinCamel} "git+file://$R?rev=$RW#packages.x86_64-solaris.wrow" >> "$W/fixture.log" 2>&1 &&
+  nix copy --to "file://$W/cache" "$A1" "$AG" "$AC" "$WW" >> "$W/fixture.log" 2>&1 &&
+  [[ -n $A1 && -n $B1 && -n $W1 && -n $WW && $A1 != "$B1" && $A1 != "$W1" ]] || no "fixture: A=$A1 B=$B1 W=$W1 WW=$WW $(tail -2 "$W/fixture.log")"
 print "{\"rows\":[$(row pin1 1 outdated),$(row gcd 1 outdated),$(row pin-camel 1 outdated)]}" > "$W/pin.json"
 # nice, as the builder calls it before `nix build --rebuild`: for gcd it first deletes gcd's out AND its drv, as a min-free GC on a
 # busy host would (nix-store --delete counts paths outside its set as alive, and keep-outputs keeps an out alive through its drv,
 # so deleting the out alone is always refused); NOSPACE=1: the rebuild fails as a full disk does.
-mkdir -p "$W/gcn"; printf '#!/bin/sh\ncase " $* " in *qb-gcd-*) nix-store --delete "$GCDEL" "$(nix-store -q --deriver "$GCDEL")" >> "$GCLOG" 2>&1;; esac\n[ -z "$NOSPACE" ] || { echo "error: writing to file: No space left on device" >&2; exit 1; }\nexec /usr/bin/nice "$@"\n' > "$W/gcn/nice"; chmod +x "$W/gcn/nice"
+mkdir -p "$W/gcn"; printf '#!/bin/sh\ncase " $* " in *qb-gcd-*) nix-store --delete "$GCDEL" "$(nix-store -q --deriver "$GCDEL")" >> "$GCLOG" 2>&1;; esac\n[ -z "$NOSPACE" ] || { echo "error: writing to file: No space left on device" >&2; exit 1; }\n[ -z "$STALEW" ] || { echo "> rm: cannot remove '"'"'/var/tmp/cargo-597fba60e295d4fa'"'"': Permission denied" >&2; exit 1; }\nexec /usr/bin/nice "$@"\n' > "$W/gcn/nice"; chmod +x "$W/gcn/nice"
 pk() { : > "$W/fk/log"; : > "$W/gc.log"; out=$(env BUILDER_PATH="$W/gcn:$W/fk:$PATH" FKREAL=$RC FKLOG=$W/fk/log FKROWS=$W/pin.json BUILDER_API=http://queue.invalid/q \
   BUILDER_CACHE=file://$W/cache BUILDER_FLAKE="git+file://$R?ref=main" BUILDER_LOAD_MAX=1000 GCDEL=$AG GCLOG=$W/gc.log "$@" ksh93 "$S" once 2>&1); c=$(<"$W/fk/log"); }
 pk BUILDER_RECIPES=file://$W/served.tsv BUILDER_STATE=$W/stpin; print -r -- "$out" | sed 's/^/   N /'
-has "served recipes.tsv written by $RA" && has 'pin1: rebuilt .*qb-pin1-A-.* identical' && [[ $(nc pin1) == 1 ]] && print -r -- "$c" | grep '/complete' | grep -q "\"store_path\":\"$A1\"" &&
-  ok "head moved past the served out: the builder evaluates $RA (the commit that wrote the served recipes.tsv), rebuilds out A, claims it" || no "pin: $(print -r -- "$out" | grep -E 'served|pin1')"
+has 'pin1: rebuilt .*qb-pin1-A-.* identical' && [[ $(nc pin1) == 1 ]] && print -r -- "$c" | grep '/complete' | grep -q "\"store_path\":\"$A1\"" &&
+  ok "head moved past the served out: the builder evaluates pin1 at the commit that added its row ($RA), rebuilds out A, claims it" || no "origin: $(print -r -- "$out" | grep -E 'origins|pin1')"
 has 'pin-camel: rebuilt .* identical' && ok "pname pin-camel -> attr pinCamel (gcc-wrapper -> gccWrapper)" || no "camel: $(print -r -- "$out" | grep camel)"
 has 'gcd: rebuilt .* identical' && grep -q 'still alive' "$W/gc.log" && [[ -e $AG && -e $(nix-store -q --deriver "$AG") ]] &&
   ok "a GC between fetch and --rebuild cannot take the fetched served out or its drv (job roots): rebuilt identical" || no "gc root: $(<"$W/gc.log") $(print -r -- "$out" | grep gcd)"
 [[ ! -e $W/stpin/job/gcd/root-out && ! -e $W/stpin/job/gcd/root-drv ]] && ok "the job's roots are dropped when the job ends" || no "job roots left behind"
-# NEG: a served file no commit wrote (one row more): no pin, head only -> pin1 declines, no claim
-{ cat "$W/served.tsv"; rec zz 1 y /nix/store/x; } > "$W/served2.tsv"; pk BUILDER_RECIPES=file://$W/served2.tsv BUILDER_STATE=$W/stpin2
-has 'served recipes.tsv written by no commit' && has 'decline pin1: no packages.x86_64-solaris attr' && [[ $(nc pin1) == 0 ]] &&
-  ok "NEG served recipes.tsv written by no commit: head only, pin1 declined, no claim" || no "neg pin: $(print -r -- "$out" | grep -E 'served|pin1')"
+# the served file mixes two batches from two commits on two branches (T1-like pin1 from A on main, W-like wrow from W on side):
+# each row is built at its own commit, in the same tick
+print "{\"rows\":[$(row pin1 1 outdated),$(row wrow 1 outdated)]}" > "$W/mix.json"
+pk BUILDER_RECIPES=file://$W/servedW.tsv BUILDER_STATE=$W/stmix FKROWS=$W/mix.json; print -r -- "$out" | sed 's/^/   M /'
+# the tick's sizing survives the origin map (ksh93 name() functions share the caller's scope: a helper's b/c once overwrote
+# busy/cores with a commit sha, live on dixi 2026-11-02)
+has 'up to [0-9]+ jobs of [0-9]+ cores \([0-9.]+ of [0-9]+ CPUs busy\)' && ! has 'jobs of [0-9]+ cores \([0-9a-f]{40} of' && ! has 'rebuilding .*\([0-9a-f]{12,} cores\)' &&
+  ok "the origin map leaves the tick's busy and cores alone" || no "sizing clobbered: $(print -r -- "$out" | grep -E 'up to|cores\)' | head -2)"
+has 'pin1: rebuilt .*qb-pin1-A-.* identical' && has 'wrow: rebuilt .*qb-wrow-W-.* identical' && [[ $(nc pin1) == 1 && $(nc wrow) == 1 ]] &&
+  ok "two batches from two commits (main A, side W) in one served file: pin1 built at A, wrow at W, both claimed" || no "mixed: $(print -r -- "$out" | grep -E 'origins|pin1|wrow')"
+# NEG: one pin for the whole file, either commit: the origin map says every out came from that commit (what a single blob pin does)
+for x in A W; do eval "rv=\$R$x"; sed "s|\t[0-9a-f]\{40\}\$|\t$rv|" "$W/stmix/origins" > "$W/one.$x"; done
+for x in A W; do  # a builder whose origins() is replaced by "every out came from $x": the single-pin behaviour
+  sed "s|^origins() {|origins() { cat \"$W/one.$x\"; return 0; }; origins_unused() {|" "$S" > "$W/single-$x.sh"
+  : > "$W/fk/log"; out=$(env BUILDER_PATH="$W/gcn:$W/fk:$PATH" FKREAL=$RC FKLOG=$W/fk/log FKROWS=$W/mix.json BUILDER_API=http://queue.invalid/q \
+    BUILDER_CACHE=file://$W/cache BUILDER_FLAKE="git+file://$R?ref=main" BUILDER_LOAD_MAX=1000 BUILDER_RECIPES=file://$W/servedW.tsv BUILDER_STATE=$W/stone$x ksh93 "$W/single-$x.sh" once 2>&1); c=$(<"$W/fk/log")
+  eval "n$x=\"\$(nc pin1) \$(nc wrow)\""
+done
+[[ $nA == "1 0" && $nW == "0 1" ]] && ok "NEG one pin for the whole file gets one batch wrong: at A wrow declines (1 0), at W pin1 declines (W moved it: 0 1)" || no "single pin: A=$nA W=$nW"
+# NEG: no origin for a row (its out is in no commit's recipes.tsv) and head has moved on: declined, no claim
+{ cat "$W/served.tsv"; } | sed "s|$A1|/nix/store/00000000000000000000000000000000-qb-pin1-A|" > "$W/served2.tsv"; pk BUILDER_RECIPES=file://$W/served2.tsv BUILDER_STATE=$W/stpin2
+has 'decline pin1: no packages.x86_64-solaris attr at its commit' && [[ $(nc pin1) == 0 ]] &&
+  ok "NEG a row whose out no commit added and head does not evaluate: declined, no claim" || no "neg origin: $(print -r -- "$out" | grep -E 'origins|pin1')"
+# rows[].commit (infra 2026-11-02 §7): evaluated first. The origin map is emptied (BUILDER_FLAKE points at a repo that is not a
+# git repo for origins), so only rows[].commit can bring pin1's out A; NEG: a commit that is not a full sha is ignored
+rc() { print -n "{\"pname\":\"$1\",\"target\":\"1\",\"current\":\"1\",\"system\":\"x86_64-solaris\",\"reasons\":\"outdated\",\"attempts\":0,\"commit\":\"$2\"}"; }
+print "{\"rows\":[$(rc pin1 "$RA")]}" > "$W/pinc.json"; print "{\"rows\":[$(rc pin1 "${RA:0:12}\$(id)")]}" > "$W/pinb.json"
+mkdir -p "$W/nogit"; printf '#!/bin/sh\ncase "$*" in *hash-object*) exec %s "$@";; esac\nexit 1\n' "$(whence -p git)" > "$W/nogit/git"; chmod +x "$W/nogit/git"
+pc() { : > "$W/fk/log"; out=$(env BUILDER_PATH="$W/nogit:$W/gcn:$W/fk:$PATH" FKREAL=$RC FKLOG=$W/fk/log BUILDER_API=http://queue.invalid/q BUILDER_CACHE=file://$W/cache \
+  BUILDER_FLAKE="git+file://$R?ref=main" BUILDER_LOAD_MAX=1000 BUILDER_RECIPES=file://$W/served.tsv "$@" ksh93 "$S" once 2>&1); c=$(<"$W/fk/log"); }
+pc BUILDER_STATE=$W/stpc FKROWS=$W/pinc.json
+has 'row origins: 0 commits' && has 'pin1: rebuilt .*qb-pin1-A-.* identical' && [[ $(nc pin1) == 1 ]] &&
+  ok "rows[].commit: with no origin map, the row's commit alone brings out A: rebuilt, claimed" || no "row commit: $(print -r -- "$out" | grep -E 'origins|pin1')"
+P2=$(ksh93 "$S" plan "$W/pinc.json" "$W/served.tsv" 2> /dev/null); P3=$(ksh93 "$S" plan "$W/pinb.json" "$W/served.tsv" 2> /dev/null)
+[[ $P2 == "pin1 BUILD $A1 1 $RA" && $P3 == "pin1 BUILD $A1 1 -" ]] && ok "plan carries a full-sha row commit, drops anything else ($P3)" || no "plan commit: $P2 | $P3"
+pc BUILDER_STATE=$W/stpb FKROWS=$W/pinb.json
+has 'decline pin1: no packages.x86_64-solaris attr' && [[ $(nc pin1) == 0 ]] && ok "NEG a row commit that is not a full sha is ignored: declined, no claim" || no "bad commit: $(print -r -- "$out" | grep pin1)"
+# a cached eval at a fixed rev is reused on the next tick (no nix eval): the second tick of stmix finds both in $BUILDER_STATE/eval
+ls "$W/stmix/eval" 2> /dev/null | grep -q "^$RA\.x86_64-solaris\.pin1$" && ls "$W/stmix/eval" | grep -q "^$RW\.x86_64-solaris\.wrow$" &&
+  ok "evals cached per (commit, system, attr): $(ls "$W/stmix/eval" | grep -vc miss) hits kept" || no "eval cache: $(ls "$W/stmix/eval" 2>&1)"
 # a full disk during the rebuild is not the recipe's fault: no memo, the next tick tries again (a nondeterministic build IS memo'd, flaky above)
 pk BUILDER_RECIPES=file://$W/served.tsv BUILDER_STATE=$W/stns NOSPACE=1
-has 'decline pin1: the store, not the recipe, failed the rebuild' && [[ $(ls "$W/stns/tried" | grep -c 'pin1.*out$') == 0 && $(nc pin1) == 0 ]] &&
+has 'decline pin1: the host, not the recipe, failed the rebuild' && [[ $(ls "$W/stns/tried" | grep -c 'pin1.*out$') == 0 && $(nc pin1) == 0 ]] &&
   ok "no space during the rebuild: declined, not memo'd, no claim" || no "nospace: $(print -r -- "$out" | grep pin1) $(ls "$W/stns/tried")"
+# a fixed W dir left by a build killed in a reboot (another nixbld's, 0700): the rebuild fails on rm, which is the host's state, not the recipe
+pk BUILDER_RECIPES=file://$W/served.tsv BUILDER_STATE=$W/stsw STALEW=1
+has 'decline pin1: the host, not the recipe, failed the rebuild' && [[ $(ls "$W/stsw/tried" | grep -c 'pin1.*out$') == 0 ]] &&
+  ok "a stale fixed build dir (rm Permission denied): declined, not memo'd" || no "stale W: $(print -r -- "$out" | grep pin1) $(ls "$W/stsw/tried")"
+# at start (the SMF loop, before its first tick) the sweep runs with age 0. Checked on the script, since the loop never exits.
+grep -q 'ksh93 "$BUILDER_WSWEEP" 0 |' "$S" && ok "the builder sweeps stale fixed build dirs at start, whatever their age" || no "no start sweep"
 rm -f "$W/bearer"
 (( bad )) && print "RESULT: FAIL" || print "RESULT: PASS"
 exit $bad

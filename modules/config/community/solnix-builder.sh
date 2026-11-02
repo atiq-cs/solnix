@@ -31,7 +31,7 @@ PATH=${BUILDER_PATH:-/usr/bin:/usr/sbin}
 # BUILDER_SHARE: the fraction (percent) of the CPUs other work leaves idle that this host may use (100 dedicated, 66 opportunistic).
 : ${BUILDER_SHARE:=100}
 : ${BUILDER_BUILD_SECS:=14400}
-J=$BUILDER_STATE C=0 flake=$BUILDER_FLAKE pinned=	# a job's state dir, its cores, the flake (locked once per tick), the served rows' commit
+J=$BUILDER_STATE C=0 flake=$BUILDER_FLAKE	# a job's state dir, its cores, the flake (locked once per tick)
 log() { printf '%(%Y-%m-%dT%H:%M:%SZ)T builder: %s\n' now "$*"; }
 bounded() {	# bounded <secs> <cmd...>: run it, TERM it after <secs> (illumos has no timeout(1)). A `nix store ls` against
 	# cache.solnix.io hung > 8 min on dixi (2026-10-29, past stalled-download-timeout), which would wedge the loop for good.
@@ -44,7 +44,8 @@ bounded() {	# bounded <secs> <cmd...>: run it, TERM it after <secs> (illumos has
 # plan: rows (the listing's JSON) x served recipes -> "<pname> <decision> <detail>" per row. Decisions:
 # <outs> is every served row's out at that (pname, version, system), comma-separated: recipes.tsv has one row per output
 # path, and rows from older solnix commits stay (jq 1.7.1 has two), so the gate builds the one BUILDER_FLAKE evaluates to.
-#   BUILD <outs> <version>  a served recipe row matches (pname or pname-version, version, system) and the job is not met
+#   BUILD <outs> <version> <commit>  a served recipe row matches (pname or pname-version, version, system) and the job is not
+#                    met; <commit>: the row's `commit` (the solnix commit infra recorded for its batch), - when the listing has none
 #                    (manpage-missing: only the outs cache.solnix.io does not serve yet)
 #   MET <outs>       manpage-missing, and a served out already ships share/man/man* (nothing to do; tell infra)
 #   MAN-GAP <outs>   manpage-missing, has_manpages=y, every out IS served and none has share/man: rebuilding the same
@@ -53,7 +54,10 @@ bounded() {	# bounded <secs> <cmd...>: run it, TERM it after <secs> (illumos has
 #   NO-RECIPE        no served row at that (pname, version, system): not ours to guess
 #   OTHER-SYSTEM     a system this host does not build
 plan() {	# in claim order (priority ascending, then oldest): /build-queue/rows lists priority DESC, so deferred rows would come first
-	jq -r '.rows | sort_by(.priority // 0, -(.age_secs // 0)) | .[] | [.pname, .target // .current, .system, .reasons] | @tsv' "$1" | while IFS=$'\t' read -r p v s why; do
+	# commit first: IFS=tab collapses empty fields, and it is never empty ("-" when the listing has none)
+	jq -r '.rows | sort_by(.priority // 0, -(.age_secs // 0)) | .[] | [.commit // "-", .pname, .target // .current, .system, .reasons] | @tsv' "$1" |
+	while IFS=$'\t' read -r rc p v s why; do
+		[[ $rc == +([0-9a-f]) && ${#rc} == 40 ]] || rc=-	# a full git sha or nothing: it goes into a flake URL
 		[[ $s == "$BUILDER_SYSTEM" ]] || { print -r -- "$p OTHER-SYSTEM $s"; continue; }
 		n=${p%-"$v"}; [[ $n == openssl3 ]] && n=openssl	# the queue's pname for openssl-3 (recipes.tsv says openssl)
 		row=$(nawk -F'\t' -v n="$n" -v v="$v" -v s="$s" '$1==n && $2==v && $8==s {if (!f) f=$7; o=o (o ? "," : "") $9} END {if (o) print f "\t" o}' "$2")
@@ -66,7 +70,7 @@ plan() {	# in claim order (priority ascending, then oldest): /build-queue/rows l
 			[[ -z $b ]] && { print -r -- "$p MAN-GAP $outs"; continue; }
 			outs=$b	# only an unserved out can add pages: a served one rebuilt is the same bytes
 		fi
-		print -r -- "$p BUILD $outs $v"
+		print -r -- "$p BUILD $outs $v $rc"
 	done
 }
 has_man() { bounded 120 nix store ls --store "$BUILDER_CACHE" "$1/share/man" 2>/dev/null | grep -q '^\./man'; }
@@ -97,35 +101,49 @@ complete() {	# complete <id> <token> <result-json>
 	api POST "/$1/complete" "{\"agent_id\":\"$BUILDER_AGENT\",\"claim_token\":\"$2\",$3}"
 	log "complete $1 -> $code $(<"$J/resp") ($3)"
 }
-pin() {	# pin <recipes.tsv>: the newest commit on BUILDER_FLAKE's ref that wrote the SERVED docs/registry/recipes.tsv (its git blob
-	# id = `git hash-object` of the file), i.e. the commit its rows' outs were evaluated from. Prints nothing when no commit
-	# wrote exactly that file. Metadata only: a blobless bare clone ($BUILDER_STATE/solnix.git, about 0.5 MB).
-	# shortcut: the clone keeps the first BUILDER_FLAKE's URL; rm $BUILDER_STATE/solnix.git after changing the repo.
-	typeset g=$BUILDER_STATE/solnix.git u=${BUILDER_FLAKE#git+} r=HEAD b
+origins() {	# origins <recipes.tsv>: "<out>\t<commit>" for every served out: the first commit (any branch, oldest first) whose
+	# docs/registry/recipes.tsv lists it, i.e. the commit that ADDED the row. Each batch's rows come from their own commit
+	# (T1 540d65c, T2a b04d9ec, W0-W2 b080459 on wave5 ...), and one commit's tree may not evaluate another batch's outs, so a
+	# row is evaluated at ITS commit, never at one pin for the whole file. Metadata + the recipes.tsv blobs only: a blobless
+	# bare clone ($BUILDER_STATE/solnix.git, ~2 MB; 13 s to build the map once per served file, then read from <it>.origins.<blob>).
+	# shortcut: the clone keeps the first BUILDER_FLAKE's URL; delete $BUILDER_STATE/solnix.git after changing the repo.
+	typeset og=$BUILDER_STATE/solnix.git ou=${BUILDER_FLAKE#git+} ob oc	# o*: ksh93 name() functions share the caller's scope
 	[[ $BUILDER_FLAKE == git+* ]] || return 1
-	[[ $BUILDER_FLAKE == *[?\&]ref=* ]] && { r=${BUILDER_FLAKE#*[?&]ref=}; r=${r%%&*}; }
-	b=$(git hash-object "$1") || return 1
-	[[ -s $g.pin.$b ]] && { print -r -- "$(<"$g.pin.$b")"; return 0; }	# the same served file: the same commit (an empty answer is retried)
-	[[ -d $g ]] || bounded 300 git clone -q --bare --filter=blob:none "${u%%\?*}" "$g" > /dev/null 2>&1 || return 1
-	bounded 300 git -C "$g" fetch -q origin '+refs/heads/*:refs/heads/*' > /dev/null 2>&1
-	git -C "$g" log --raw --no-renames --no-abbrev --format='C %H' "$r" -- docs/registry/recipes.tsv |
-	    nawk -v b="$b" '/^C / {c = $2; next} $4 == b {print c; exit}' > "$g.pin.new" && mv "$g.pin.new" "$g.pin.$b" && print -r -- "$(<"$g.pin.$b")"
+	ob=$(git hash-object "$1") || return 1
+	[[ -s $og.origins.$ob ]] && { cat "$og.origins.$ob"; return 0; }	# the same served file: the same map
+	[[ -d $og ]] || bounded 300 git clone -q --bare --filter=blob:none "${ou%%\?*}" "$og" > /dev/null 2>&1 || return 1
+	bounded 300 git -C "$og" fetch -q origin '+refs/heads/*:refs/heads/*' > /dev/null 2>&1
+	for oc in $(git -C "$og" log --all --reverse --topo-order --format=%H -- docs/registry/recipes.tsv); do
+		bounded 120 git -C "$og" show "$oc:docs/registry/recipes.tsv" 2> /dev/null | nawk -F'\t' -v c="$oc" 'NR > 1 && $9 ~ /^\/nix\/store\// {print $9 "\t" c}'
+	done | nawk -F'\t' '!s[$1]++' > "$og.origins.new" && mv "$og.origins.new" "$og.origins.$ob" && cat "$og.origins.$ob"
 }
-drv_for() {	# drv_for <pname> <outs>: "<out> <drv>^<output>" of the packages attr whose outPath is one of <outs>, evaluated at the
-	# served rows' commit ($pinned) first, then at BUILDER_FLAKE's head. The out must match, so a wrong commit only declines.
-	typeset n=${1%-[0-9]*} a r f c= w u s=
+drv_for() {	# drv_for <pname> <outs>: "<out> <drv>^<output>" of the packages attr whose outPath is one of <outs>, evaluated at
+	# the row's commit: rows[].commit when the listing has it ($rowc), else each out's origin commit (origins), then
+	# BUILDER_FLAKE's head. The out must match, so a wrong commit only declines. An eval at a fixed rev never changes, so
+	# hits are kept across ticks ($BUILDER_STATE/eval/<rev>.<system>.<attr>, a week); misses only for the tick.
+	typeset n=${1%-[0-9]*} a r f c= w u s= o k revs="" e=$BUILDER_STATE/eval
 	[[ $n == openssl3 ]] && n=openssl
 	for w in ${n//-/ }; do if [[ -z $c ]]; then c=$w; else typeset -u u=${w:0:1}; c=$c$u${w:1}; fi; done	# gcc-wrapper -> gccWrapper
-	for f in ${pinned:+"$pinned"} "$flake"; do s=; for a in "$n" "${n//-/_}" "$c"; do
+	[[ $rowc == +([0-9a-f]) ]] && revs=$rowc
+	for o in ${2//,/ }; do k=$(nawk -F'\t' -v o="$o" '$1 == o {print $2; exit}' "$BUILDER_STATE/origins" 2> /dev/null)
+		[[ -n $k && " $revs " != *" $k "* ]] && revs="$revs $k"; done
+	for f in $revs head; do
+		[[ $f == head ]] && f=$flake || { [[ $BUILDER_FLAKE == *\?* ]] && f="$BUILDER_FLAKE&rev=$f" || f="$BUILDER_FLAKE?rev=$f"; }
+		s=; for a in "$n" "${n//-/_}" "$c"; do
 		[[ " $s " == *" $a "* ]] && continue; s="$s $a"
-		r=$(bounded 900 nix eval --raw "$f#packages.$BUILDER_SYSTEM.$a" --apply 'd: d.outPath + " " + d.drvPath + "^" + (d.outputName or "out")' 2>/dev/null) &&
-		    [[ ,$2, == *,"${r%% *}",* ]] && { print -r -- "$r"; return 0; }
+		k=; [[ $f == *[?\&]rev=+([0-9a-f])* ]] && { k=${f##*[?&]rev=}; k=$e/${k%%&*}.$BUILDER_SYSTEM.$a; }
+		if [[ -n $k && -s $k ]]; then r=$(<"$k"); elif [[ -n $k && -e $k.miss ]]; then continue
+		else r=$(bounded 900 nix eval --raw "$f#packages.$BUILDER_SYSTEM.$a" --apply 'd: d.outPath + " " + d.drvPath + "^" + (d.outputName or "out")' 2>/dev/null) ||
+			{ [[ -n $k ]] && { mkdir -p "$e"; : > "$k.miss"; }; continue; }
+			[[ -n $k ]] && { mkdir -p "$e"; print -r -- "$r" > "$k.${J##*/}" && mv "$k.${J##*/}" "$k"; }	# per job: jobs run in parallel
+		fi
+		[[ ,$2, == *,"${r%% *}",* ]] && { print -r -- "$r"; return 0; }
 	done; done
 	return 1
 }
 ready() {	# ready <pname> <outs>: 0 when the out ($out) was rebuilt here and is the NAR cache.solnix.io serves ($nar); else log why not
 	typeset d m x ins nh; nar= out=
-	d=$(drv_for "$1" "$2") || { log "decline $1: no packages.$BUILDER_SYSTEM attr of ${pinned:+$pinned or }$flake evaluates to $2"; return 1; }
+	d=$(drv_for "$1" "$2") || { log "decline $1: no packages.$BUILDER_SYSTEM attr at its commit(s) or $flake evaluates to $2"; return 1; }
 	out=${d%% *} d=${d#* }; set -- "$1" "$out"
 	# hold the evaluated drv (and the drvs it references) until the job ends: an eval's temporary root dies with it
 	nix-instantiate --add-root "$J/root-drv" --expr "import ${d%^*}" > /dev/null 2>&1 || { log "decline $1: cannot root $d"; return 1; }
@@ -154,7 +172,9 @@ ready() {	# ready <pname> <outs>: 0 when the out ($out) was rebuilt here and is 
 	bounded "$BUILDER_BUILD_SECS" nice -n "$BUILDER_NICE" nix build --option cores "$C" --no-link --rebuild "$d" > "$m.log" 2>&1 ||
 	    { print -r -- "nix build --rebuild $d failed rc=$? ($m.log)" > "$m"
 	      # a full disk or a store path GC'd mid-job says nothing about the recipe: no memo, so a later tick tries again
-	      egrep -q 'No space left on device|not valid, so checking is not possible' "$m.log" && { rm -f "$m"; log "decline $1: the store, not the recipe, failed the rebuild ($m.log); will retry"; return 1; }
+	      # (or a fixed W=/var/tmp/<kind>-<buildKey> left by a build killed in a reboot, owned by another nixbld: swept at start)
+	      egrep -q "No space left on device|not valid, so checking is not possible|cannot remove '/var/tmp/[a-z]+-[0-9a-f]+'" "$m.log" &&
+	          { rm -f "$m"; log "decline $1: the host, not the recipe, failed the rebuild ($m.log); will retry"; return 1; }
 	      log "decline $1: $(<"$m")"; return 1; }
 	print ok > "$m"; : > "$J/worked"; log "$1: rebuilt $2 here, identical to the served NAR $nar"
 }
@@ -185,8 +205,9 @@ rows() {	# rows <out.json> <recipes.tsv>: this system's listing window (500 rows
 	jq -s --rawfile q "$o.q" '($q | split("\n") | map(select(. != "") | {(.): true}) | add // {}) as $Q |
 	    {rows: ((.[0].rows | map(select($Q[.pname] | not))) + ([.[1:][].rows] | add // []))}' $f > "$o"
 }
-job() {	# job <pname> <outs> <version>: one BUILD row, start to finish, in its own state dir. Runs in the background.
+job() {	# job <pname> <outs> <version> <commit|->: one BUILD row, start to finish, in its own state dir. Runs in the background.
 	JOBMAX=0	# inherited from the tick: at 1, bounded()'s own watchdog `&` would wait behind the command it guards
+	typeset rowc=$4	# rows[].commit (drv_for evaluates it first)
 	J=$BUILDER_STATE/job/${1//[!A-Za-z0-9._+-]/_}; mkdir -p "$J" || return 1
 	ready "$1" "$2" && claim "$1" "$out" "$3" "$nar"
 	rm -f "$J/root-out" "$J/root-drv"	# the next GC may take them; a later tick re-fetches or re-evaluates
@@ -204,19 +225,17 @@ tick() {	# rc 0 when a job rebuilt or completed something: the loop then re-tick
 	grep ' BUILD ' "$BUILDER_STATE/plan" > "$BUILDER_STATE/builds" || return 1
 	# every job evaluates the same commit, fetched once
 	flake=$(bounded 300 nix flake metadata --json "$BUILDER_FLAKE" 2> /dev/null | jq -r '.url // empty'); : ${flake:=$BUILDER_FLAKE}
-	# the commit the served rows come from (a row's outs were evaluated there; head may have moved past them)
-	p=$(pin "$rec"); pinned=
-	[[ -n $p && $flake != *rev=$p* ]] && { [[ $BUILDER_FLAKE == *\?* ]] && pinned="$BUILDER_FLAKE&rev=$p" || pinned="$BUILDER_FLAKE?rev=$p"; }
-	log "served recipes.tsv written by ${p:-no commit of $BUILDER_FLAKE (evaluating head only)}${p:+, evaluating ${pinned:-head (= it)}${pinned:+ first, then head}}"
-	# fetch it once here, not once per job
-	[[ -n $pinned ]] && { bounded 600 nix flake metadata "$pinned" > /dev/null 2>&1 || { log "cannot fetch $pinned: head only"; pinned=; }; }
+	# each served out's origin commit (the commit that added its row); a row's job evaluates there first
+	origins "$rec" > "$BUILDER_STATE/origins" || : > "$BUILDER_STATE/origins"
+	[[ -d $BUILDER_STATE/eval ]] && find "$BUILDER_STATE/eval" -type f \( -name '*.miss' -o -mtime +7 \) -exec rm -f {} +	# a miss may have been a timeout
+	log "row origins: $(cut -f2 "$BUILDER_STATE/origins" | sort -u | wc -l | tr -d ' ') commits for $(wc -l < "$BUILDER_STATE/origins" | tr -d ' ') served outs"
 	log "up to $k jobs of $c cores ($b of $BUILDER_NCPU CPUs busy), $flake"
 	C=$c; rm -f "$BUILDER_STATE"/job/*/worked "$BUILDER_STATE"/job/*/root-*; JOBMAX=$k	# roots of a killed tick's jobs
-	while read -r bp bd bo bv; do
+	while read -r bp bd bo bv br; do
 		# pnames filters by pname only: with two rows of one pname the server may hand out the other one
 		[[ $(jq --arg p "$bp" --arg s "$BUILDER_SYSTEM" '[.rows[] | select(.pname == $p and .system == $s)] | length' "$rows") == 1 ]] ||
 		    { log "decline $bp: more than one $BUILDER_SYSTEM row for it"; continue; }
-		job "$bp" "$bo" "$bv" < /dev/null &
+		job "$bp" "$bo" "$bv" "${br:--}" < /dev/null &
 	done < "$BUILDER_STATE/builds"
 	wait; JOBMAX=0
 	ls "$BUILDER_STATE"/job/*/worked > /dev/null 2>&1
@@ -235,6 +254,9 @@ once) mkdir -p "$BUILDER_STATE" && tick; exit ;;
 ready) mkdir -p "$BUILDER_STATE" && ready "$2" "$3"; exit ;;	# ready <pname> <outs>: prove one job by hand (never claims)
 esac
 mkdir -p "$BUILDER_STATE" || exit 1
+# at start (boot, restart), none of our builds runs yet: every fixed build dir whose owner has no process is from a killed build,
+# whatever its age (dixi 2026-11-02 17:04Z: a reboot mid-tick left 7 cargo dirs, and their next builds as other uids failed)
+[[ -n ${BUILDER_WSWEEP:-} && $(/usr/bin/id -u) == 0 ]] && /usr/bin/ksh93 "$BUILDER_WSWEEP" 0 | while read -r l; do log "$l"; done
 # opportunistic: cap the project at BUILDER_CAP_SHARE% of the machine (it runs in it now, so the project is active), so builds
 # that started while it was quiet stay within 2/3 of it when the user gets busy (prctl: replace, or add if none is set).
 if [[ -n ${BUILDER_CAP_SHARE:-} ]]; then
