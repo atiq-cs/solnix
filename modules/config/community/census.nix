@@ -10,6 +10,20 @@ let
   loc = c.location;
   iso = lib.filter (s: s != "") (lib.splitString " " (lib.replaceStrings [ "\n" ] [ " " ] (builtins.readFile ./iso3166-1-alpha2.txt)));
   b = v: if v then "true" else "false";
+  s = pkgs.solnix;
+  ca = "${s.nixChain.cacert}/etc/ssl/certs/ca-bundle.crt";
+  adv = c.advisories && a.census;
+  # solnix-advisories (solnix-advisories.sh): the feed match, for the census and for anyone on the host
+  advPkg = pkgs.writeTextFile {
+    name = "solnix-advisories";
+    destination = "/bin/solnix-advisories";
+    executable = true;
+    text = ''
+      #!/bin/sh
+      export ADV_PATH=${s.jq}/bin:${s.nixChain.curl}/bin:${config.nix.package}/bin:/usr/bin:/usr/sbin CURL_CA_BUNDLE=${ca}
+      exec /usr/bin/ksh93 ${./solnix-advisories.sh} "$@"
+    '';
+  };
   checks = lib.optionals (loc != null) [
     { assertion = lib.elem loc.country iso;
       message = "solnix.telemetry.census.location.country = \"${loc.country}\" is not an ISO 3166-1 alpha-2 code (uppercase, e.g. \"US\")."; }
@@ -23,6 +37,7 @@ in
   config = lib.mkMerge [
     { assertions = checks; }
     (lib.mkIf a.census {
+      environment.systemPackages = lib.optional adv advPkg;
       smf.services.solnix-census = {
         enable = true;
         category = "site";
@@ -31,7 +46,7 @@ in
         requires = [ "svc:/milestone/network:default" "svc:/milestone/name-services:default" "svc:/site/solnix-census-setup:default" ];
         environment = {
           CENSUS_PATH = "${pkgs.solnix.nixChain.curl}/bin:/usr/bin:/usr/sbin";
-          CURL_CA_BUNDLE = "${pkgs.solnix.nixChain.cacert}/etc/ssl/certs/ca-bundle.crt";
+          CURL_CA_BUNDLE = ca;
           CENSUS_STATE = "/var/lib/solnix/census";
           CENSUS_ENDPOINT = if c.endpoint == null then "" else c.endpoint;
           CENSUS_SYSTEM = solnixSystem;
@@ -40,6 +55,9 @@ in
           CENSUS_seeding = b (config.smf.services ? solnix-seed);
           CENSUS_building = b (config.smf.services ? solnix-builder || config.smf.services ? solnix-builder-zone);
           CENSUS_builder = b a.builder;   # the operator asserts it: enrolled by hand (dixa/dixi/lixi) or by solnix-builder-identity
+        } // lib.optionalAttrs adv {
+          CENSUS_advisories = "true";   # the record's one extra key; absent (not false) when off
+          CENSUS_ADVISORIES = "${advPkg}/bin/solnix-advisories";
         } // lib.optionalAttrs (loc != null) {
           CENSUS_LOC_COUNTRY = loc.country;
           CENSUS_LOC_REGION = if loc.region == null then "" else loc.region;
@@ -49,14 +67,15 @@ in
         start.exec = "/usr/bin/ksh93 ${./solnix-census.sh} &";
         stop.exec = ":kill";
       };
-      # root's part: the state dir, owned by daemon, before the loop starts.
+      # root's part: the state dir, owned by daemon, before the loop starts. 0711 with advisories, so every user's
+      # solnix-advisories can open advisories.json by name (census-secret stays 0600).
       smf.services.solnix-census-setup = {
         enable = true;
         category = "site";
         description = "solnix census state directory";
         model = "transient";
         requires = [ "svc:/system/filesystem/local:default" ];
-        start.exec = "mkdir -p -m 0700 /var/lib/solnix/census && chown daemon /var/lib/solnix/census";
+        start.exec = "mkdir -p -m 0700 /var/lib/solnix/census && chown daemon /var/lib/solnix/census && chmod ${if adv then "0711" else "0700"} /var/lib/solnix/census";
         stop.exec = ":true";
       };
     })

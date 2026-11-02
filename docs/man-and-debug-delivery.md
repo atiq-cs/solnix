@@ -162,3 +162,19 @@ Python, split debug through `.gnu_debuglink` with both `debug-file-directory` an
 `NIX_DEBUG_INFO_DIRS` (control: debug file removed), a 32-bit inferior, and strings; 8/8 runs.
 That split-debug proof uses an objcopy-split test binary. Repeating it against a real package's
 `debug` output waits on the wave6 split-debug work: no `-debug` output is on dixi yet.
+
+gdb2 (2026-11-02) closed four of gdb1's gaps, each tested on dixi with a negative control:
+
+- `gdb-add-index` runs with nothing on PATH: it names this gdb and binutils' `gobjcopy`/`greadelf` by
+  store path (solnix has no plain `objcopy`/`readelf`).
+- `catch syscall` by name, number, alias (`waitsys`) or none. Upstream has no illumos support at all
+  ("not supported on this architecture"), and the OI/OmniOS table alone does nothing either.
+  `patches/gdb/catch-syscall-procfs.patch` adds the procfs target and sol2 parts. The name table is
+  generated at build time from the gate proto's `sys/syscall.h` (`patches/gdb/gen-syscalls-xml.sh`),
+  so it follows the gate.
+- libstdc++ pretty printers load automatically. Our gcc installs them in its compiler output, not in
+  `gcc.lib`, so gdb carries a copy plus an auto-load script under `$datadir/auto-load/<libstdc++
+  path>`. The real fix is nixpkgs' move of `share/gcc-*/python` into `gcc.lib` at the next gcc rebuild,
+  because moving them now would rebuild every C++ package.
+- `info gdb` works (the shipped manuals are kept; only binutils' bfd.info is dropped, as nixpkgs
+  does), `gdb -tui` draws in a terminal, and `gdb.types`/`gdb.printing` import.

@@ -192,6 +192,9 @@ rec {
     build = ''
       patch -p1 < ${../patches/gdb/debug-info-from-env.patch}
       patch -p1 < ${../patches/gdb/ignore-core-note0-segment.patch}   # OI/OmniOS: without it every illumos core aborts gdb
+      # catch syscall: the procfs target + sol2 tdep parts, and the name table generated from the gate's header (tracks the gate)
+      patch -p1 < ${../patches/gdb/catch-syscall-procfs.patch}
+      sh ${../patches/gdb/gen-syscalls-xml.sh} "$gate/usr/include/sys/syscall.h" > gdb/syscalls/illumos.xml
       tar xf ${fetch "https://mirrors.kernel.org/gnu/gmp/gmp-6.3.0.tar.xz" "a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898"}; mv gmp-6.3.0 gmp
       tar xf ${fetch "https://mirrors.kernel.org/gnu/mpfr/mpfr-4.2.1.tar.xz" "277807353a6726978996945af13e52829e3abd7a9a5b7fb2793894e18f1fcbb2"}; mv mpfr-4.2.1 mpfr
       # nixpkgs: regenerate the man pages so gdbinit(5) names the system gdbinit (the shipped ones say "not enabled")
@@ -214,7 +217,30 @@ rec {
         --with-auto-load-safe-path='$debugdir:$datadir/auto-load'
       gmake -j16 MAKEINFO=true; gmake install MAKEINFO=true )
       rm -f "$out/bin/gcore" "$out/share/man/man1/gcore.1"
-      ${dropDocs}
+      # `info gdb`: keep the shipped gdb/annotate manuals (dropDocs deleted them); bfd.info is binutils', as nixpkgs
+      # removes it. The profile's info dir is built by documentation.nix, so no per-package dir file.
+      rm -rf "$out/share/doc" "$out/share/info/bfd.info" "$out/share/info/dir"
+      # gdb-add-index: solnix ships binutils' objcopy/readelf only as gobjcopy/greadelf (OI layout), so pin them, and
+      # this gdb, by store path (nixpkgs pins its scripts' tools the same way).
+      sed -i -e 's@^GDB=.*@GDB=''${GDB:="'"$out"'/bin/gdb"}@' \
+        -e 's@^OBJCOPY=.*@OBJCOPY=''${OBJCOPY:=${base.binutils}/bin/gobjcopy}@' \
+        -e 's@^READELF=.*@READELF=''${READELF:=${base.binutils}/bin/greadelf}@' "$out/bin/gdb-add-index"
+      grep -q "^OBJCOPY=.*${base.binutils}/bin/gobjcopy" "$out/bin/gdb-add-index" || { echo "FATAL: gdb-add-index not pinned" >&2; exit 1; }
+      # libstdc++ pretty printers. gcc installs them in its compiler out (share/gcc-*/python and lib/libstdc++*-gdb.py),
+      # not in gcc.lib, which is what a C++ program loads; nixpkgs' gcc moves both into lib. Moving them here moves every
+      # C++ package, so gdb carries a copy: the printers in $out/share, and an auto-load script per libstdc++ under
+      # $datadir/auto-load/<realpath of the .so> (already in the safe path; Fedora's layout). gcc's own -gdb.py names the
+      # compiler out, so the stub here names only $out.
+      # shortcut: printers match the gcc these drvs build with; upgrade by moving them into gcc.lib at the next gcc rebuild.
+      gv=$(basename "$(ls -d "$gcc"/share/gcc-*)")
+      mkdir -p "$out/share/$gv"; cp -R "$gcc/share/$gv/python" "$out/share/$gv/"
+      for so in "$gccLib"/libstdc++.so.6.*[0-9] "$gccLib"/amd64/libstdc++.so.6.*[0-9]; do
+        mkdir -p "$out/share/gdb/auto-load$(dirname "$so")"
+        printf 'import sys, gdb\nsys.path.insert(0, "%s")\nfrom libstdcxx.v6 import register_libstdcxx_printers\nregister_libstdcxx_printers(gdb.current_objfile())\n' \
+          "$out/share/$gv/python" > "$out/share/gdb/auto-load$so-gdb.py"
+      done
+      [ -f "$out/share/$gv/python/libstdcxx/v6/printers.py" ] && ls "$out"/share/gdb/auto-load/nix/store/*/lib/amd64/libstdc++.so.6.*-gdb.py >/dev/null \
+        || { echo "FATAL: libstdc++ printers not installed" >&2; exit 1; }
       # the checks below run gdb's Python: without this they write __pycache__/*.pyc into $out, stamped with the .py
       # mtimes of this build, so `nix-store --check` differed in those 2 bytes per file (measured, v4)
       export PYTHONDONTWRITEBYTECODE=1
@@ -230,6 +256,10 @@ rec {
         echo "$n" | grep -q "^$l" || { echo "FATAL: gdb does not NEED $l: $n" >&2; exit 1; }
       done
       if echo "$n" | grep -Eq '^lib(termcap|curses)\.'; then echo "FATAL: gdb NEEDs an SVR4 curses: $n" >&2; exit 1; fi
+      ${chk ''"$out/bin/gdb" -nx -batch -ex 'python import gdb.types, gdb.printing; print("pymods-ok")' '' "^pymods-ok$"}
+      grep -q 'name="write" number="4"' "$out/share/gdb/syscalls/illumos.xml" || { echo "FATAL: no illumos syscall table" >&2; exit 1; }
+      ${chk ''"$out/bin/gdb" -nx -batch -ex 'set osabi Solaris' -ex 'catch syscall write' -ex 'catch syscall waitsys' '' "^Catchpoint 2 \\(syscall .waitid. \\[107\\]\\)$"}
+      [ -f "$out/share/info/gdb.info" ] || { echo "FATAL: gdb.info missing" >&2; exit 1; }
       [ -z "$(find "$out" -name __pycache__)" ] || { echo "FATAL: __pycache__ in $out" >&2; exit 1; }
       [ -f "$out/share/man/man1/gdb.1" ] && grep -q /etc/gdb/gdbinit "$out/share/man/man5/gdbinit.5" \
         || { echo "FATAL: gdb man pages missing or not regenerated" >&2; exit 1; }

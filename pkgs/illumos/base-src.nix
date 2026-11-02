@@ -98,9 +98,9 @@ let
   # sysconfdir is /etc/ssh (host keys + config are per-machine state, as on NixOS);
   # the binaries and libexec helpers live in the store.
   openssh = mkSrcPkg {
-    pname = "openssh"; version = "10.6p1";   # CVE-2026-60002 (Critical, 10.4) and 10.3/10.6 fixes
+    pname = "openssh"; version = "10.6p1";
     src = { url = "https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-10.6p1.tar.gz";
-            sha256 = "a9dc9565dffe8640f64d863cd29a32bc4a3dbdec0566a7fc44c5d6ee767d5f39"; };
+            sha256 = "a9dc9565dffe8640f64d863cd29a32bc4a3dbdec0566a7fc44c5d6ee767d5f39"; };   # .asc: Damien Miller RELEASE_KEY 7168B983
     deps = [ needWorld zlib openssl ];
     nativeTools = hostTools;   # store-only PATH + config.site (wave4: host /usr/gnu, /usr/bin perl/python3/xauth/openssl leaked into configure)
     build = ''
@@ -458,10 +458,11 @@ let
   };
 
   libevent = mkSrcPkg {
-    pname = "libevent"; version = "2.1.13";   # 6 High/Critical CVE-2026-6338x (fixed 2.1.13)
+    pname = "libevent"; version = "2.1.13";
     src = { url = "https://github.com/libevent/libevent/releases/download/release-2.1.13-stable/libevent-2.1.13-stable.tar.gz";
-            sha256 = "f7e9383b8c0baa81b687e5b5eecc01beefaf1b19b64151d95ed61647fe7a315c"; };
+            sha256 = "f7e9383b8c0baa81b687e5b5eecc01beefaf1b19b64151d95ed61647fe7a315c"; };   # upstream .asc: Nick Mathewson 7A02B352
     deps = [ needWorld ];  # libsendfile.so.1 (the gate's), not in the libc slice
+    nativeTools = hostTools;   # store-only PATH + config.site (recipes1)
     build = ''
       ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-samples \
         --disable-openssl --disable-libevent-regress --disable-debug-mode
@@ -475,6 +476,7 @@ let
     src = { url = "https://github.com/tmux/tmux/releases/download/3.5a/tmux-3.5a.tar.gz";
             sha256 = "16216bd0877170dfcc64157085ba9013610b12b082548c7c9542cc0103198951"; };
     deps = [ needWorld libevent ncurses ];  # libxnet.so.1 is the gate's
+    nativeTools = hostTools;   # store-only PATH + config.site (recipes1); yacc is the world's
     build = ''
       # cmd-parse.c ships pre-generated; configure only checks that a yacc exists.
       ./configure --prefix="$out" --disable-utf8proc
@@ -578,9 +580,9 @@ let
   # zlib-free (no -z), no optional hash/compression libraries: the media links
   # nothing it does not already carry.
   rsync = mkSrcPkg {
-    pname = "rsync"; version = "3.5.1";   # 3.4.4 (last 3.4) fixes 1 of 22; the Criticals need 3.5.0 (nixpkgs: 3.5.0)
-    src = { url = "https://download.samba.org/pub/rsync/src/rsync-3.5.1.tar.gz";
-            sha256 = "c55f9c9dc10fb8bec397b399a0fdded53cc9a2d8e30891bb0d63724d25c37bef"; };
+    pname = "rsync"; version = "3.5.0";
+    src = { url = "https://download.samba.org/pub/rsync/src/rsync-3.5.0.tar.gz";
+            sha256 = "c7ffd1ef653e99540f661e47cb00b7f9cad1ee6b972399b16f93d672656e0d33"; };   # upstream .asc: Andrew Tridgell 9FEF112D
     deps = [ needWorld ];
     nativeTools = hostTools;   # store-only PATH + config.site (wave4: host /usr/gnu, /usr/bin perl/python3/xauth/openssl leaked into configure)
     build = ''
@@ -588,7 +590,7 @@ let
         --disable-xxhash --disable-zstd --disable-lz4 --disable-md2man --disable-debug
       gmake -j4
       gmake install
-      "$out/bin/rsync" --version | grep -q '^rsync  *version 3.5.1' || { echo "FATAL: rsync --version" >&2; exit 1; }
+      "$out/bin/rsync" --version | grep -q '^rsync  *version 3.5.0' || { echo "FATAL: rsync --version" >&2; exit 1; }
     '';
   };
   # smartctl: its os_solaris backend speaks ATA/SCSI through USCSI (SATA/SAS
@@ -645,9 +647,9 @@ let
   # argument (wgetWith); default.nix exports wgetWith cli.perl. The plain `wget` here (no perl) is what other base packages could use.
   wget = wgetWith null;
   wgetWith = perl: mkSrcPkg ({
-    pname = "wget"; version = "1.25.0";   # CVE-2024-38428 (Critical, 1.25.0); 58471/58472 have no release yet
+    pname = "wget"; version = "1.25.0";
     src = { url = "https://mirrors.kernel.org/gnu/wget/wget-1.25.0.tar.gz";
-            sha256 = "766e48423e79359ea31e41db9e5c289675947a7fcf2efdcedb726ac9d0da3784"; };
+            sha256 = "766e48423e79359ea31e41db9e5c289675947a7fcf2efdcedb726ac9d0da3784"; };   # .sig: Darshit Shah (gnu-keyring.gpg)
     deps = [ needWorld zlib openssl ];
     build = ''
       for f in $(find . \( -name 'localename*.[ch]' -o -name 'getlocalename_l*.[ch]' -o -name 'setlocale_null*.c' \)); do

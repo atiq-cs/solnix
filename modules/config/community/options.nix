@@ -42,6 +42,16 @@ in
           options.locality = mkOption { type = types.nullOr types.str; default = null; description = "Free text, at most 64 printable ASCII characters, no \" or \\."; };
         });
       };
+      advisories = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          Ask the census reply for solnix.io's CVE advisory feed (one more boolean in the record, "advisories": true). The
+          host fetches the public feed when it changed, verifies its sha256, and matches it against its own store paths
+          locally; nothing about the result is sent. Adds the solnix-advisories command and one census-log line a day.
+          Only while the census itself is active.
+        '';
+      };
     };
     cache.seed.enable = on "Seed what this host fetched or built over BitTorrent (tracker.solnix.io; peers see this host's IP).";
     cache.build.enable = on "Build solnix.io's queued packages in idle time.";
