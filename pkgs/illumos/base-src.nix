@@ -85,9 +85,9 @@ rec {
   # sysconfdir is /etc/ssh (host keys + config are per-machine state, as on NixOS);
   # the binaries and libexec helpers live in the store.
   openssh = mkSrcPkg {
-    pname = "openssh"; version = "10.2p1";
-    src = { url = "https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-10.2p1.tar.gz";
-            sha256 = "ccc42c0419937959263fa1dbd16dafc18c56b984c03562d2937ce56a60f798b2"; };
+    pname = "openssh"; version = "10.6p1";
+    src = { url = "https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-10.6p1.tar.gz";
+            sha256 = "a9dc9565dffe8640f64d863cd29a32bc4a3dbdec0566a7fc44c5d6ee767d5f39"; };   # .asc: Damien Miller RELEASE_KEY 7168B983
     deps = [ needWorld zlib openssl ];
     nativeTools = hostTools;   # store-only PATH + config.site (wave4: host /usr/gnu, /usr/bin perl/python3/xauth/openssl leaked into configure)
     build = ''
@@ -426,10 +426,11 @@ rec {
   };
 
   libevent = mkSrcPkg {
-    pname = "libevent"; version = "2.1.12";
-    src = { url = "https://github.com/libevent/libevent/releases/download/release-2.1.12-stable/libevent-2.1.12-stable.tar.gz";
-            sha256 = "92e6de1be9ec176428fd2367677e61ceffc2ee1cb119035037a27d346b0403bb"; };
+    pname = "libevent"; version = "2.1.13";
+    src = { url = "https://github.com/libevent/libevent/releases/download/release-2.1.13-stable/libevent-2.1.13-stable.tar.gz";
+            sha256 = "f7e9383b8c0baa81b687e5b5eecc01beefaf1b19b64151d95ed61647fe7a315c"; };   # upstream .asc: Nick Mathewson 7A02B352
     deps = [ needWorld ];  # libsendfile.so.1 (the gate's), not in the libc slice
+    nativeTools = hostTools;   # store-only PATH + config.site (recipes1)
     build = ''
       ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-samples \
         --disable-openssl --disable-libevent-regress --disable-debug-mode
@@ -443,6 +444,7 @@ rec {
     src = { url = "https://github.com/tmux/tmux/releases/download/3.5a/tmux-3.5a.tar.gz";
             sha256 = "16216bd0877170dfcc64157085ba9013610b12b082548c7c9542cc0103198951"; };
     deps = [ needWorld libevent ncurses ];  # libxnet.so.1 is the gate's
+    nativeTools = hostTools;   # store-only PATH + config.site (recipes1); yacc is the world's
     build = ''
       # cmd-parse.c ships pre-generated; configure only checks that a yacc exists.
       ./configure --prefix="$out" --disable-utf8proc
@@ -543,9 +545,9 @@ rec {
   # zlib-free (no -z), no optional hash/compression libraries: the media links
   # nothing it does not already carry.
   rsync = mkSrcPkg {
-    pname = "rsync"; version = "3.4.1";
-    src = { url = "https://download.samba.org/pub/rsync/src/rsync-3.4.1.tar.gz";
-            sha256 = "2924bcb3a1ed8b551fc101f740b9f0fe0a202b115027647cf69850d65fd88c52"; };
+    pname = "rsync"; version = "3.5.0";
+    src = { url = "https://download.samba.org/pub/rsync/src/rsync-3.5.0.tar.gz";
+            sha256 = "c7ffd1ef653e99540f661e47cb00b7f9cad1ee6b972399b16f93d672656e0d33"; };   # upstream .asc: Andrew Tridgell 9FEF112D
     deps = [ needWorld ];
     nativeTools = hostTools;   # store-only PATH + config.site (wave4: host /usr/gnu, /usr/bin perl/python3/xauth/openssl leaked into configure)
     build = ''
@@ -553,7 +555,7 @@ rec {
         --disable-xxhash --disable-zstd --disable-lz4 --disable-md2man --disable-debug
       gmake -j4
       gmake install
-      "$out/bin/rsync" --version | grep -q '^rsync  *version 3.4.1' || { echo "FATAL: rsync --version" >&2; exit 1; }
+      "$out/bin/rsync" --version | grep -q '^rsync  *version 3.5.0' || { echo "FATAL: rsync --version" >&2; exit 1; }
     '';
   };
   # smartctl: its os_solaris backend speaks ATA/SCSI through USCSI (SATA/SAS
@@ -610,9 +612,9 @@ rec {
   # argument (wgetWith); default.nix exports wgetWith cli.perl. The plain `wget` here (no perl) is what other base packages could use.
   wget = wgetWith null;
   wgetWith = perl: mkSrcPkg ({
-    pname = "wget"; version = "1.24.5";
-    src = { url = "https://mirrors.kernel.org/gnu/wget/wget-1.24.5.tar.gz";
-            sha256 = "fa2dc35bab5184ecbc46a9ef83def2aaaa3f4c9f3c97d4bd19dcb07d4da637de"; };
+    pname = "wget"; version = "1.25.0";
+    src = { url = "https://mirrors.kernel.org/gnu/wget/wget-1.25.0.tar.gz";
+            sha256 = "766e48423e79359ea31e41db9e5c289675947a7fcf2efdcedb726ac9d0da3784"; };   # .sig: Darshit Shah (gnu-keyring.gpg)
     deps = [ needWorld zlib openssl ];
     build = ''
       for f in $(find . \( -name 'localename*.[ch]' -o -name 'getlocalename_l*.[ch]' -o -name 'setlocale_null*.c' \)); do
@@ -626,7 +628,7 @@ rec {
       gmake -j4
       gmake install
       ${dropDocs}
-      "$out/bin/wget" --version | grep -q '^GNU Wget 1.24.5' || { echo "FATAL: wget --version" >&2; exit 1; }
+      "$out/bin/wget" --version | grep -q '^GNU Wget 1.25.0' || { echo "FATAL: wget --version" >&2; exit 1; }
       [ -f "$out/share/man/man1/wget.1" ] || { echo "FATAL: wget ships no man page" >&2; exit 1; }
       /usr/bin/elfdump -d "$out/bin/wget" | grep -q 'NEEDED.*libssl' || { echo "FATAL: wget not linked to openssl" >&2; /usr/bin/elfdump -d "$out/bin/wget" | grep NEEDED >&2; exit 1; }
     '';

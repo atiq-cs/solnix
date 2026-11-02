@@ -28,15 +28,16 @@ rec {
   };
 
   socat = mkSrcPkg {
-    pname = "socat"; version = "1.8.0.3";
-    src = { url = "http://www.dest-unreach.org/socat/download/socat-1.8.0.3.tar.gz";
-            sha256 = "a9f9eb6cfb9aa6b1b4b8fe260edbac3f2c743f294db1e362b932eb3feca37ba4"; };
+    pname = "socat"; version = "1.8.1.2";
+    # upstream publishes no signature or checksum; sha256 == Alpine's distfiles copy (edge, v3.23)
+    src = { url = "http://www.dest-unreach.org/socat/download/socat-1.8.1.2.tar.gz";
+            sha256 = "daeb9eed37a99424cd14877208706e93745c91cb86fb917a355635f4df5c8499"; };
     deps = [ world openssl readline ncurses ];
     nativeTools = hostTools;   # store-only PATH + config.site (wave4)
     build = ''
       CFLAGS="-O2 -D__EXTENSIONS__" ./configure --prefix="$out" --disable-libwrap
       gmake -j8; gmake install
-      ${chk ''"$out/bin/socat" -V'' "socat version 1.8.0.3"}
+      ${chk ''"$out/bin/socat" -V'' "socat version 1.8.1.2"}
       ${chk ''echo hlcli | "$out/bin/socat" - -'' "^hlcli$"}
       /usr/bin/elfdump -d "$out/bin/socat" | grep -q 'NEEDED.*libssl' || { echo "FATAL: socat without openssl" >&2; exit 1; }
     '';
