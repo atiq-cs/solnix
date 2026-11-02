@@ -654,6 +654,19 @@ let
     '' ];
   };
 
+  # btintelfw + hcitest -- userland Bluetooth tools over ugen (./bluetooth):
+  # the Intel firmware loader (FreeBSD iwmbtfw) and NetBSD's netbt HCI core
+  # (unit up + inquiry). Each build runs its self-test and negative controls.
+  bluetooth = import ./bluetooth {
+    gate = gate';
+    inherit libc;
+    solnixDev = buildEnv {
+      name = "solnix-dev";
+      paths = [ srcPkgs.gccWrapper srcPkgs.binutils srcPkgs.gnumake ];
+      pathsToLink = [ "/bin" "/share/man" ];
+    };
+  };
+
   # iwm-firmware -- the proprietary (redistributable) iwlwifi blob + licence
   # (./iwm-firmware.nix), gated on the unfree opt-in. Threaded through here so
   # mkIwmKernel can lay it into the BE kernel tree alongside the module. The
@@ -1241,8 +1254,9 @@ in
   # tree when hardware.wirelessIwm.attachAtBoot. mkIwmKernel/iwmFirmware take
   # the unfree opt-in so the blob stays out of any non-opted closure.
   inherit iwm-driver mkIwmDriversDb mkIwmDriversDbUnbound mkIwmKernel iwmFirmware wpa-pmk solnix-cputemp;
-  # Intel Bluetooth firmware (phase 0, docs/design-bluetooth.md).
+  # Intel Bluetooth firmware (phase 0, docs/design-bluetooth.md) and the userland tools.
   inherit ibtFirmware;
+  inherit (bluetooth) btintelfw hcitest;
   # iwx wifi (AX2xx): module only; mkIwxDriversDb/mkIwxKernel below.
   inherit iwx-driver iwxFirmware iwxAliases mkIwxDriversDb mkIwxKernel;
   inherit nvidia-oss-modules nvidiaGspFirmware i915Firmware nvidia-probe nvidiaAliases dgputemp mkNvidiaBootDb mkNvidiaBootKernel;

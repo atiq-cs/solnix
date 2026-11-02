@@ -38,11 +38,19 @@ struct libusb_device_handle {
 static char ugen_dir[PATH_MAX - 32];
 
 static int ugen_noclear;	/* -C: skip the toggle reset (negative control) */
+static int ugen_quiet;		/* no diag line on an interrupt-IN timeout */
 
 void
 ugen_usb_set_noclear(int v)
 {
 	ugen_noclear = v;
+}
+
+/* A caller that polls (the netbt pump) sees timeouts as normal, not as faults. */
+void
+ugen_usb_set_quiet(int v)
+{
+	ugen_quiet = v;
 }
 
 int
@@ -371,7 +379,8 @@ libusb_interrupt_transfer(libusb_device_handle *h, unsigned char ep,
 			return (r > 0 ? 0 : LIBUSB_ERROR_OVERFLOW);
 		}
 		if ((ms = ugen_ms_left(&end)) <= 0) {
-			ugen_usb_diag(h, "interrupt-IN timeout");
+			if (!ugen_quiet)
+				ugen_usb_diag(h, "interrupt-IN timeout");
 			return (LIBUSB_ERROR_TIMEOUT);
 		}
 		pfd.fd = h->intr;

@@ -75,6 +75,8 @@ const char *libusb_strerror(int);
 int ugen_usb_set_dir(const char *dir);
 /* solnix: 1 = do not reset the interrupt-IN toggle at open (negative control). */
 void ugen_usb_set_noclear(int);
+/* solnix: 1 = no diagnostic line on an interrupt-IN timeout (polling callers). */
+void ugen_usb_set_quiet(int);
 /* solnix: print ugen device + endpoint status without blocking (diagnostics). */
 void ugen_usb_diag(libusb_device_handle *, const char *why);
 

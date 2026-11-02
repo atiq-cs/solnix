@@ -1,0 +1,30 @@
+# Synthetic transcript written from the Bluetooth Core spec and NetBSD hci_event.c
+# (not recorded): Intel gate, the netbt init sequence, RSSI-mode inquiry with 2 results.
+# Addresses are made up. Format: xport_fixture.c.
+C 05fc01ff                # Intel Read Version (TLV), gate.c
+E +2 0e070105fc001c0103   # status 0, TLV 0x1c image type = 03 operational
+C 030c00                  # HCI_Reset (hci_enable)
+E +40 0e0401030c00
+C 091000                  # Read_BD_ADDR (hci_cmd_reset)
+E +1 0e0a01091000112233445566
+C 051000                  # Read_Buffer_Size
+E +1 0e0b01051000fd036008000200
+C 031000                  # Read_Local_Supported_Features
+E +1 0e0c01031000fffe8ffed83f5b87
+C 011000                  # Read_Local_Version
+E +1 0e0c010110000c5b370c02005b37
+C 04100100                # Read_Local_Extended_Features page 0 (features[7] bit 7)
+E +1 0e0e010410000002fffe8ffed83f5b87
+C 021000                  # Read_Local_Supported_Commands (hci_version >= 1.2)
+E +1 0e4401021000ffffff03ccffefffffffec1ff20fe8fe3ff78fff1c00040061f7ffff7f3800000000000000000000000000000000000000000000000000000000000000000000
+C 04100101                # extended page 1
+E +1 0e0e0104100001020700000000000000
+C 04100102                # extended page 2
+E +1 0e0e0104100002024503000000000000
+C 450c0101                # Write_Inquiry_Mode 1 (RSSI), hcitest -i
+E +1 0e0401450c00
+C 010405338b9e070a        # Inquiry: GIAC, 7 x 1.28 s, 10 responses
+E +1 0f0400010104             # Command Status ok
+E +1800 220f01010203aabbcc01000c025a3412c4   # RSSI result: class 5a020c, -60 dBm
+E +2500 220f01040506ddeeff01000404240000b0   # RSSI result: class 240404, -80 dBm
+E +4700 010100                   # Inquiry Complete
