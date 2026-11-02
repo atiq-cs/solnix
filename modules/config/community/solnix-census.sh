@@ -22,6 +22,7 @@ record() {	# record <day> <nonce>: one JSON object (the deployed ingest parses t
 		eval "v=\${CENSUS_${f}:-}"
 		[[ $v == true || $v == false ]] && r+=",\"$f\":$v"
 	done
+	[[ $CENSUS_advisories == true ]] && r+=',"advisories":true'	# only ever true; off = no key (infra 2026-11-02)
 	if [[ -n $CENSUS_LOC_COUNTRY ]]; then
 		r+=",\"location\":{\"country\":$(js "$CENSUS_LOC_COUNTRY")"
 		[[ -n $CENSUS_LOC_REGION ]] && r+=",\"region\":$(js "$CENSUS_LOC_REGION")"
@@ -53,10 +54,13 @@ send_once() {	# 0 = sent (or nothing to do today), 1 = try later
 	[[ -e /etc/solnix/telemetry-off || $DO_NOT_TRACK == 1 ]] && { print "census: telemetry-off, not sending"; return 0; }
 	[[ $(cat "$stamp" 2>/dev/null) == "$day" ]] && return 0
 	typeset n; n=$(nonce "$day") && [[ ${#n} == 16 ]] || { print -u2 "census: nonce failed"; return 1; }
-	typeset code=$(record "$day" "$n" | ${CENSUS_CURL:-curl} -sS -m 5 -o /dev/null -w '%{http_code}' \
+	typeset code=$(record "$day" "$n" | ${CENSUS_CURL:-curl} -sS -m 5 -o "$CENSUS_STATE/census-reply" -w '%{http_code}' \
 	    -H 'Content-Type: application/json' --data-binary @- "$CENSUS_ENDPOINT" 2>&1)
 	[[ $code == 200 ]] || { print "census: $code, later"; return 1; }
 	print -r -- "$day" > "$stamp"; print "census: sent for $day"
+	# the reply names the CVE feed; solnix-advisories fetches it if it changed and prints the day's summary line
+	if [[ $CENSUS_advisories == true && -n $CENSUS_ADVISORIES ]]; then ADV_STATE=$CENSUS_STATE "$CENSUS_ADVISORIES" --census-reply "$CENSUS_STATE/census-reply"; fi
+	return 0
 }
 
 case $1 in

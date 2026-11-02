@@ -6,8 +6,8 @@ W=$(mktemp -d /tmp/census.XXXXXX); trap 'find "$W" -depth -delete' EXIT
 bad=0; ok() { print "ok: $1"; }; no() { print "FAIL: $1"; bad=1; }
 print '#!/bin/sh\ncat > "$W/sent"; echo "$@" >> "$W/args"; printf 200' > "$W/curl"; chmod +x "$W/curl"
 export W CENSUS_STATE=$W CENSUS_CURL=$W/curl CENSUS_SYSTEM=x86_64-solaris CENSUS_HOST_KIND=server CENSUS_PATH=$PATH
-G='^\{"version":1,"kind":"platform_census","system":"(x86_64|aarch64|riscv64|sparcv9)-solaris","host-kind":"(server|laptop|workstation)","illumos-flavor":"solnix"(,"seeding":(true|false))?(,"building":(true|false))?(,"builder":(true|false))?(,"location":\{"country":"[A-Z]{2}"(,"region":"[A-Z0-9]{1,3}")?(,"locality":"[^"\\]{1,64}")?\})?,"nonce":"[A-Za-z0-9+/]{16}","day":"[0-9]{4}-[0-9]{2}-[0-9]{2}"\}$'
-r=$(CENSUS_seeding=true CENSUS_building=true CENSUS_builder=false ksh93 "$S" --record 2026-10-28 AAAAbbbbCCCCdd+/)
+G='^\{"version":1,"kind":"platform_census","system":"(x86_64|aarch64|riscv64|sparcv9)-solaris","host-kind":"(server|laptop|workstation)","illumos-flavor":"solnix"(,"seeding":(true|false))?(,"building":(true|false))?(,"builder":(true|false))?(,"advisories":true)?(,"location":\{"country":"[A-Z]{2}"(,"region":"[A-Z0-9]{1,3}")?(,"locality":"[^"\\]{1,64}")?\})?,"nonce":"[A-Za-z0-9+/]{16}","day":"[0-9]{4}-[0-9]{2}-[0-9]{2}"\}$'
+r=$(CENSUS_seeding=true CENSUS_building=true CENSUS_builder=false CENSUS_advisories=true ksh93 "$S" --record 2026-10-28 AAAAbbbbCCCCdd+/)
 print -r -- "$r" | egrep -q "$G" && ok "grammar: $r" || no "grammar: $r"
 [[ $r != *location* ]] && ok "no location unless set" || no "location leaked: $r"
 r=$(CENSUS_LOC_COUNTRY=US CENSUS_LOC_REGION=MA CENSUS_LOC_LOCALITY=Ware ksh93 "$S" --record 2026-10-28 AAAAbbbbCCCCdd+/)

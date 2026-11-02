@@ -1,7 +1,7 @@
 # The solnix.io community features: census, cache proxy, seeding, queue builder
 
 Opt-in, private by default (infra handoff 2026-10-28 §1, docs/design-telemetry-client.md). Code:
-modules/config/community/. Tests: scripts/test-community-eval.sh (eval, floki), scripts/test-census.sh (illumos).
+modules/config/community/. Tests: scripts/test-community-eval.sh (eval, floki), scripts/test-census.sh, scripts/test-advisories.sh (illumos).
 
 ## The switches
 
@@ -13,6 +13,7 @@ modules/config/community/. Tests: scripts/test-community-eval.sh (eval, floki), 
 | `solnix.telemetry.census.endpoint` | `https://telemetry.solnix.io/api/v1/census` | `null` = never send |
 | `solnix.telemetry.census.hostKind` | `"server"` | `server` / `laptop` / `workstation` |
 | `solnix.telemetry.census.location` | `null` | operator-volunteered `{ country; region; locality; }`, checked at eval |
+| `solnix.telemetry.census.advisories` | `false` | ask the census for the CVE advisory feed; matching is local (below) |
 | `solnix.cache.seed.enable` | `true` | BitTorrent seeding of what this host fetched or built |
 | `solnix.cache.build.enable` | `true` | idle-time queue builder |
 | `solnix.builder.enable` | `false` | identified builder (enrol/rotate with the host key); separate opt-in |
@@ -25,7 +26,7 @@ Effective = `!privacy.enable && <group> && <feature>` (`solnix.community.active.
 - The record is JSON. The live ingest (`POST https://telemetry.solnix.io/api/v1/census`) rejects the EDN form infra's
   note shows with `400 {"error":"invalid census record"}` and accepts the same fields as JSON. Measured from dixi on
   2026-10-28: the EDN form got 400 and the JSON form got 200.
-- Fields: `version kind system host-kind illumos-flavor [seeding building builder] [location] nonce day`. The flags are
+- Fields: `version kind system host-kind illumos-flavor [seeding building builder] [advisories] [location] nonce day`. The flags are
   true only when the matching service is installed on this host. `location` appears only when the operator set it.
 - nonce = first 16 base64 chars of HMAC-SHA256(secret, "solnix-telemetry"+day). The secret is 32 random bytes in
   /var/lib/solnix/census/census-secret (0600, owner `daemon`) and is replaced each UTC day. It is never sent.
@@ -34,12 +35,31 @@ Effective = `!privacy.enable && <group> && <feature>` (`solnix.community.active.
   fresh random moment inside that window. A fleet's pings spread over the whole day instead of arriving together, and
   one host keeps to the same time of day. A non-200 is retried twice, 2 min apart, inside the window, then tomorrow. `DO_NOT_TRACK=1` in its environment, or the file `/etc/solnix/telemetry-off`, stops it sending.
 
+## CVE advisories (opt-in, `solnix.telemetry.census.advisories`)
+
+Off by default, and only while the census itself runs. What is sent: one more boolean in the census record,
+`"advisories": true`. Nothing else, and the server doesn't store it. The reply names the public feed
+(`https://telemetry.solnix.io/api/v1/advisories`, infra's daily grype scan of the served store paths) and its sha256.
+What is fetched: that feed, a static public GET, only when its sha256 differs from the cached copy. The body is checked
+against the sha256 and kept at /var/lib/solnix/census/advisories.json (owner `daemon`, 0644; a feed that fails the check
+is dropped and the old copy kept). Matching is local: the 32-character store hashes in the closures of
+/run/current-system, /nix/var/nix/profiles/system, every /nix/var/nix/profiles/per-user/*/profile and every user's
+~/.nix-profile are matched against the feed's `hash`. Neither the matches nor the store paths leave the host. The census
+log gets one line a day (`advisories: N store paths in use have M known CVEs (K Critical); run solnix-advisories`), and
+`solnix-advisories` prints path, CVE, severity, fixed_in, url and, when solnix.io serves one, `newer build served:
+<path>` (`--json` for the matched feed, `--fetch` to GET the feed now without the census). The limits: only packages
+with a CPE are scanned (about 127 of 1,000 served names: no python/perl modules, most Rust/Go tools, or the illumos gate),
+and matching by CPE and version range knows nothing of backported fixes, so a patched build still shows. **No advisory
+does not mean no CVE.** Code: census.nix, solnix-census.sh, solnix-advisories.sh. Tests: scripts/test-advisories.sh
+(illumos; the matcher part also runs on Linux), scripts/test-community-eval.sh.
+
 ## Turning it on for a host (nix-config nixos/solnix/<host>.nix)
 
 ```nix
 solnix.privacy.enable = false;                # census + seed + build
 solnix.telemetry.census.hostKind = "laptop";  # lixi; dixi and dixa stay "server"
 # solnix.telemetry.census.location = { country = "US"; region = "MA"; };   # only if the maintainer wants one
+solnix.telemetry.census.advisories = true;    # CVE feed, matched locally (dixi, dixa, lixi)
 solnix.builder.contactEmail = "greg+dixi-solnix@burd.me";   # per host; used once enrolment ships
 # solnix.cache.seed.torrentPackage = pkgs.solnix.solnix-torrent;   # seeder + swarm probe + the proxy's swarm path
 ```
