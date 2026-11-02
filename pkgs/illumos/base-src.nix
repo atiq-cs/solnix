@@ -374,12 +374,14 @@ let
   vi = derivation {
     name = "illumos-vi"; system = "x86_64-solaris"; world = needWorld;
     builder = "/usr/bin/bash";
+    PATH = "${coreutils}/bin";   # store-only (wave6, gate2 A1); the seed instance has no vi
     args = [ "-c" ''
       set -eu
-      /usr/bin/mkdir -p $out/bin
+      /usr/bin/bash ${./path-gate.sh}
+      mkdir -p $out/bin
       for n in vi ex view; do
         [ -x $world/usr/xpg4/bin/$n ] || { echo "FATAL: no $n in the world" >&2; exit 1; }
-        /usr/bin/ln -s $world/usr/xpg4/bin/$n $out/bin/$n
+        ln -s $world/usr/xpg4/bin/$n $out/bin/$n
       done
     '' ];
   };
@@ -454,7 +456,8 @@ let
   top = derivation {
     name = "top-htop-3.4.1"; inherit system; inherit htop;
     builder = "/usr/bin/bash";
-    args = [ "-c" "/usr/bin/mkdir -p $out/bin && /usr/bin/ln -s $htop/bin/htop $out/bin/top" ];
+    PATH = "${coreutils}/bin";   # store-only (wave6, gate2 A1)
+    args = [ "-c" "/usr/bin/bash ${./path-gate.sh} && mkdir -p $out/bin && ln -s $htop/bin/htop $out/bin/top" ];
   };
 
   libevent = mkSrcPkg {
@@ -778,9 +781,12 @@ let
   hostname = derivation {
     name = "hostname-f"; inherit system;
     builder = "/usr/bin/bash";
+    # store-only build (wave6, gate2 A1). The wrapper it writes still execs /usr/bin/hostname AT RUN TIME: the running system's.
+    PATH = "${coreutils}/bin:${needWorld}/usr/bin";
     args = [ "-c" ''
-      /usr/bin/mkdir -p $out/bin
-      /usr/bin/cat > $out/bin/hostname <<'EOF'
+      /usr/bin/bash ${./path-gate.sh} || exit 1
+      mkdir -p $out/bin
+      cat > $out/bin/hostname <<'EOF'
     #!/usr/bin/bash
     if [ "$#" = 1 ] && { [ "$1" = -f ] || [ "$1" = --fqdn ]; }; then
       h=$(/usr/bin/hostname); d=$(/usr/bin/domainname 2>/dev/null)
@@ -789,8 +795,8 @@ let
     fi
     exec /usr/bin/hostname "$@"
     EOF
-      /usr/bin/chmod 555 $out/bin/hostname
-      [ "$($out/bin/hostname -f)" = "$(/usr/bin/hostname)" ] || [ -n "$(/usr/bin/domainname)" ]
+      chmod 555 $out/bin/hostname
+      [ "$($out/bin/hostname -f)" = "$(hostname)" ] || [ -n "$(domainname)" ]
     '' ];
   };
 
@@ -820,8 +826,9 @@ let
     depPath = builtins.concatStringsSep ":" (map (p: "${p}/bin") [ coreutils findutils gettext gnused gnugrep jq less ncurses hostname ]);
     msgfmt = "${gettext}/bin/msgfmt";
     builder = "/usr/bin/bash";
+    PATH = "${coreutils}/bin:${gnused}/bin:${gnugrep}/bin";   # store-only (wave6, gate2 A1)
     args = [ "-c" ''
-      set -eu; export PATH=/usr/bin
+      set -eu; /usr/bin/bash ${./path-gate.sh}
       mkdir -p $out/bin $out/share/bash
       ln -s $hmSrc $out/share/home-manager
       cp $hmSrc/lib/bash/home-manager.sh $out/share/bash/home-manager.sh

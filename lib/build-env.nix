@@ -34,6 +34,9 @@
   # nixpkgs buildEnv's postBuild: shell run in $out after the merge (NixOS's
   # environment.extraSetup lands here). "" leaves the derivation byte-identical.
   postBuild ? "",
+  # storeTools: store bin dirs (coreutils for mkdir/ln/dirname/touch, findutils for find) that make the builder PATH
+  # store-only (wave6, gate2 A1) and add the path gate; null leaves the derivation byte-identical (the seed farm).
+  storeTools ? null, pathGate ? null,
     # system IS AN ARGUMENT, defaulted to a literal -- NOT builtins.currentSystem.
     # currentSystem does not EXIST in a pure evaluation (hard "attribute 'currentSystem'
     # missing"), so reading it made the systemPath derivation unevaluable from
@@ -50,7 +53,7 @@ let
   pathsToLinkArg =
     if pathsToLink == null then "" else builtins.concatStringsSep " " pathsToLink;
 in
-derivation {
+let d = {
   inherit name;
     inherit system; # passed in; see the argument comment above.
   builder = "/usr/bin/bash";
@@ -112,4 +115,7 @@ derivation {
       true
     '' + (if postBuild == "" then "" else "\n" + postBuild))
   ];
-}
+}; in derivation (if storeTools == null then d else d // {
+  PATH = storeTools;
+  args = [ (builtins.elemAt d.args 0) (builtins.replaceStrings [ "set -eu\n" ] [ "set -eu\n/usr/bin/bash ${pathGate}\n" ] (builtins.elemAt d.args 1)) ];
+})

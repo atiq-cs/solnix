@@ -46,8 +46,10 @@ rec {
   boostContext = derivation {
     name = "boost-context-1.86.0"; inherit system boost;
     builder = "/usr/bin/bash";
+    # store-only (wave6, gate2 A1): coreutils (mkdir cp) + grep, from the store tools nix-src's recipes use
+    PATH = builtins.concatStringsSep ":" (map (d: "${d}/bin") hostTools);
     args = [ "-c" ''
-      set -eu; export PATH=/usr/gnu/bin:/usr/bin
+      set -eu; [ -z "$PATH" ] && export PATH=/usr/gnu/bin:/usr/bin || /usr/bin/bash ${./path-gate.sh}
       mkdir -p $out/${libSub}; cp -P $boost/${libSub}/libboost_context.so* $out/${libSub}/
       if grep -rq "$boost" $out; then echo "FATAL: boost-context still names $boost" >&2; exit 1; fi
     '' ];
@@ -59,7 +61,10 @@ rec {
     pem = import <nix/fetchurl.nix> { url = "https://curl.se/ca/cacert-2024-09-24.pem";
             sha256 = "189d3cf6d103185fba06d76c1af915263c6d42225481a1759e853b33ac857540"; };
     builder = "/usr/bin/bash";
-    args = [ "-c" "/usr/bin/mkdir -p $out/etc/ssl/certs && /usr/bin/cp $pem $out/etc/ssl/certs/ca-bundle.crt" ];
+    # store-only (wave6, gate2 A1) when the instance has store tools; the seed instance keeps /usr/bin (bootstrap set)
+    PATH = builtins.concatStringsSep ":" (map (d: "${d}/bin") hostTools);
+    args = [ "-c" (if hostTools == [ ] then "/usr/bin/mkdir -p $out/etc/ssl/certs && /usr/bin/cp $pem $out/etc/ssl/certs/ca-bundle.crt"
+      else "/usr/bin/bash ${./path-gate.sh} && mkdir -p $out/etc/ssl/certs && cp $pem $out/etc/ssl/certs/ca-bundle.crt") ];
   };
 
   sqlite = mkSrcPkg {

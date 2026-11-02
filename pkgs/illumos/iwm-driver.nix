@@ -48,6 +48,8 @@
 { gate                       # the gate proto (usr/include headers + reference kernel)
 , solnixDev                  # pkgs.solnix.solnix-dev: gcc 14.3.0 + gas + gmake on PATH
 , ld                         # pkgs.solnix.ld: the gate link-editor slice (usr/bin/ld)
+, kmodPath ? null             # wave6: store bin dirs replacing /usr/bin:/usr/sbin:/usr/gnu/bin (default.nix kmodTools); null = old
+, pathGate ? null
 , system ? "x86_64-solaris"
   # The vendored driver tree. The whole src/ports/wifi is needed: the iwm
   # Makefile references ../net80211 and ../iwx. builtins.path captures the
@@ -73,11 +75,13 @@ derivation {
   inherit system gate solnixDev ld wifiSrc;
   builder = "/usr/bin/bash";
   # git for `git apply` (source gen); the rest of the toolchain is prepended below.
-  PATH = "/usr/bin:/usr/sbin:/usr/gnu/bin";
+  PATH = if kmodPath == null then "/usr/bin:/usr/sbin:/usr/gnu/bin" else kmodPath;
+  pathGate = if pathGate == null then "" else pathGate;
 
   args = [ "-c" ''
     set -eu
-    export PATH="$solnixDev/bin:$ld/usr/bin:$ld/bin:/usr/bin:/usr/sbin:/usr/gnu/bin"
+    export PATH="$solnixDev/bin:$ld/usr/bin:$ld/bin:$PATH"   # $PATH = the drv's: store tools (kmodPath), or the old host dirs
+    [ -z "$pathGate" ] || PATH_GATE_ALLOW="" /usr/bin/bash "$pathGate"
     UTSINC="$gate/usr/include"
     [ -d "$UTSINC/sys" ] || { echo "FATAL: gate proto has no usr/include/sys" >&2; exit 1; }
     command -v git >/dev/null  || { echo "FATAL: no git for source generation" >&2; exit 1; }
@@ -92,7 +96,7 @@ derivation {
     [ -x "$LDBIN" ] || LDBIN=/usr/bin/ld
     [ -x "$LDBIN" ] || { echo "FATAL: no ld found under $ld or /usr/bin" >&2; exit 1; }
 
-    WORK=$(mktemp -d /tmp/iwm-driver.XXXXXX)
+    WORK=$(mktemp -d "${TMPDIR:-/tmp}"/iwm-driver.XXXXXX)
     cp -r "$wifiSrc" "$WORK/wifi"
     chmod -R u+w "$WORK/wifi"
     cd "$WORK/wifi"
@@ -106,8 +110,8 @@ derivation {
     # the target dir, so apply into a temp named dir then rename to the output.
     mkdir -p iwm/build
     cp iwm/upstream/if_iwm.c iwm/build/if_iwm.c
-    ( cd iwm/build && git apply -p1 ../patches/if_iwm.illumos.patch 2>/tmp/iwm-apply.err ) \
-      || { echo "FATAL: git apply if_iwm.illumos.patch failed" >&2; cat /tmp/iwm-apply.err >&2; exit 1; }
+    ( cd iwm/build && git apply -p1 ../patches/if_iwm.illumos.patch 2>"$WORK"/iwm-apply.err ) \
+      || { echo "FATAL: git apply if_iwm.illumos.patch failed" >&2; cat "$WORK"/iwm-apply.err >&2; exit 1; }
     mv iwm/build/if_iwm.c iwm/build/if_iwm_illumos.c
     cmp -s iwm/upstream/if_iwm.c iwm/build/if_iwm_illumos.c \
       && { echo "FATAL: if_iwm patch applied as a no-op" >&2; exit 1; }
@@ -121,8 +125,8 @@ derivation {
              ieee80211_crypto_wep ieee80211_crypto_tkip ieee80211_crypto_ccmp \
              ieee80211_crypto_bip ieee80211_pae_input ieee80211_pae_output; do
       cp "net80211/orig/$f.c" "net80211/build/$f.c"
-      ( cd net80211/build && git apply -p1 "../patches/$f.illumos.patch" 2>/tmp/iwm-apply.err ) \
-        || { echo "FATAL: git apply net80211/$f failed" >&2; cat /tmp/iwm-apply.err >&2; exit 1; }
+      ( cd net80211/build && git apply -p1 "../patches/$f.illumos.patch" 2>"$WORK"/iwm-apply.err ) \
+        || { echo "FATAL: git apply net80211/$f failed" >&2; cat "$WORK"/iwm-apply.err >&2; exit 1; }
       cmp -s "net80211/orig/$f.c" "net80211/build/$f.c" \
         && { echo "FATAL: net80211/$f patch applied as a no-op" >&2; exit 1; }
     done
@@ -134,8 +138,8 @@ derivation {
     # -std=gnu17: the gate's sys/systm.h declares `int nodev(); int nulldev();`, which C23 (GCC 15) reads as (void), so
     # every cb_ops initialiser mismatches (gcc1 STDENV-SWITCH.md 2.2). The real fix is prototypes in the gate.
     gmake -f Makefile.illumos -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)" \
-      UTSINC="$UTSINC" LD="$LDBIN" CC="gcc -std=gnu17" >/tmp/iwm-build.log 2>&1 \
-      || { echo "FATAL: iwm build failed" >&2; tail -40 /tmp/iwm-build.log >&2; exit 1; }
+      UTSINC="$UTSINC" LD="$LDBIN" CC="gcc -std=gnu17" >"$WORK"/iwm-build.log 2>&1 \
+      || { echo "FATAL: iwm build failed" >&2; tail -40 "$WORK"/iwm-build.log >&2; exit 1; }
     [ -f iwm ] || { echo "FATAL: no iwm module produced" >&2; exit 1; }
     echo "built: iwm ($(ls -l iwm | awk '{print $5}') bytes)" >&2
 
@@ -145,7 +149,7 @@ derivation {
     # -p produces NO output on these ET_REL kernel objects (measured on dixi),
     # which would make `undefined=0` and the whole gate a check that cannot fail.
     # build-dixi.sh uses plain nm for the same reason.
-    NM=/usr/bin/nm
+    NM=$(command -v nm || echo /usr/bin/nm)
     [ -x "$NM" ] || NM=nm
     U=$gate/platform/i86pc/kernel/amd64/unix
     G=$gate/kernel/amd64/genunix

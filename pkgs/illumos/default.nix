@@ -62,7 +62,11 @@ let
   # buildEnv — the symlink-farm merge, factored out of `systemPath` (below) into
   # lib/build-env.nix so the declarative userland (modules/config/system-path.nix)
   # composes its profile the same way. systemPath now CALLS it (design §B).
-  buildEnv = import ../../lib/build-env.nix { };
+  buildEnv0 = import ../../lib/build-env.nix { };
+  # store-only buildEnv (wave6): the seed farm (seedBuildTools') stays on buildEnv0, a bootstrap-set member; every other farm
+  # in an instance with store build tools merges with store coreutils + findutils. The seed instance keeps the old PATH.
+  buildEnv = args: buildEnv0 (args // (if buildTools == [ ] then { } else {
+    storeTools = "${srcPkgs.coreutils}/bin:${srcPkgs.findutils}/bin"; pathGate = ./path-gate.sh; }));
 
   mkIllumosComponent = args: import ./mk-illumos-component.nix ({ gate = gate'; } // args);
 
@@ -515,7 +519,7 @@ let
   # it would be a different, host-PATH copy). Only the seed instance (buildTools = [ ]) builds it. NixOS: stage N's build
   # tools are stage N-1's outputs.
   seedBuildTools = if buildTools != [ ] then builtins.head buildTools else seedBuildTools';
-  seedBuildTools' = buildEnv {
+  seedBuildTools' = buildEnv0 {
     name = "solnix-seed-build-tools";
     paths = [
       seedSrcPkgs.gnumake    # make, gmake
@@ -570,7 +574,14 @@ let
   # Only materialised when a config enables hardware.wirelessIwm.attachAtBoot;
   # the module build is dixi/EC2-only (illumos toolchain), so no amd64-cross
   # config forces it unless the wifi is actually wanted.
+  # store tools for the out-of-gate kernel modules (wave6, gate2 A1): GNU coreutils/findutils/sed/grep/patch, git (git apply of the
+  # port patches), and the world's illumos bins (nm elfdump ld mcs ...). Replaces /usr/bin:/usr/sbin:/usr/gnu/bin.
+  kmodPath = if buildTools == [ ] then null else builtins.concatStringsSep ":" ((map (p: "${p}/bin")
+    [ srcPkgs.coreutils srcPkgs.findutils srcPkgs.gnused srcPkgs.gnugrep cliBase.gnupatch srcPkgs.git ])
+    ++ [ "${world}/usr/bin" "${world}/usr/sbin" "${world}/usr/ccs/bin" "${world}/bin" "${world}/sbin" ]);
+  kmodGate = if buildTools == [ ] then null else ./path-gate.sh;
   iwm-driver = import ./iwm-driver.nix {
+    kmodPath = kmodPath; pathGate = kmodGate;
     gate = gate';
     # the same C/C++ toolchain profile as `solnix-dev` (gcc 14.3.0 + gas + GNU
     # make); built inline here because solnix-dev itself is defined in the output
@@ -594,6 +605,7 @@ let
   };
 
   iwx-driver = import ./iwx-driver.nix {
+    inherit kmodPath; pathGate = kmodGate;
     gate = gate';
     inherit kernelNd ld;
     solnixDev = buildEnv {
@@ -609,6 +621,7 @@ let
   # against the gate proto and kernelNd and that SIMD appears only inside
   # fpu_kernel_enter/exit sections (src/drm-port/i915/simd-gate.sh).
   i915-driver = import ./i915-driver.nix {
+    inherit kmodPath; pathGate = kmodGate;
     gate = gate';
     inherit kernelNd ld;
     solnixDev = buildEnv {
@@ -624,6 +637,7 @@ let
   # the proto lacks (sys/i2c, sys/acpica.h, usbai_private.h) come from
   # kernelNd.src. hardware.touchpad.i2cHid lays and binds them.
   touchpad-driver = import ./touchpad-driver.nix {
+    inherit kmodPath; pathGate = kmodGate;
     gate = gate';
     inherit kernelNd ld;
     solnixDev = buildEnv {

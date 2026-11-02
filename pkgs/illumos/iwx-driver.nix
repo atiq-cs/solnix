@@ -32,6 +32,8 @@
 , kernelNd                   # pkgs.solnix.kernelNd: the shipped non-DEBUG kernel
 , solnixDev                  # gcc 14.3.0 + gas + gmake on PATH
 , ld                         # pkgs.solnix.ld: the gate link-editor slice
+, kmodPath ? null             # wave6: store bin dirs replacing /usr/bin:/usr/sbin:/usr/gnu/bin (default.nix kmodTools); null = old
+, pathGate ? null
 , system ? "x86_64-solaris"
 , wifiSrc ? builtins.path {
     path = ../../src/ports/wifi;
@@ -49,11 +51,13 @@ derivation {
   name = "iwx-driver";
   inherit system gate kernelNd solnixDev ld wifiSrc;
   builder = "/usr/bin/bash";
-  PATH = "/usr/bin:/usr/sbin:/usr/gnu/bin";
+  PATH = if kmodPath == null then "/usr/bin:/usr/sbin:/usr/gnu/bin" else kmodPath;
+  pathGate = if pathGate == null then "" else pathGate;
 
   args = [ "-c" ''
     set -eu
-    export PATH="$solnixDev/bin:$ld/usr/bin:$ld/bin:/usr/bin:/usr/sbin:/usr/gnu/bin"
+    export PATH="$solnixDev/bin:$ld/usr/bin:$ld/bin:$PATH"   # $PATH = the drv's: store tools (kmodPath), or the old host dirs
+    [ -z "$pathGate" ] || PATH_GATE_ALLOW="" /usr/bin/bash "$pathGate"
     UTSINC="$gate/usr/include"
     [ -d "$UTSINC/sys" ] || { echo "FATAL: gate proto has no usr/include/sys" >&2; exit 1; }
     for t in git gcc gmake; do
@@ -64,7 +68,7 @@ derivation {
     [ -x "$LDBIN" ] || LDBIN=/usr/bin/ld
     [ -x "$LDBIN" ] || { echo "FATAL: no ld" >&2; exit 1; }
 
-    WORK=$(mktemp -d /tmp/iwx-driver.XXXXXX)
+    WORK=$(mktemp -d "${TMPDIR:-/tmp}"/iwx-driver.XXXXXX)
     cp -r "$wifiSrc" "$WORK/wifi"
     chmod -R u+w "$WORK/wifi"
     cd "$WORK/wifi"
@@ -97,15 +101,15 @@ derivation {
     # -std=gnu17: the gate's sys/systm.h declares `int nodev(); int nulldev();`, which C23 (GCC 15) reads as (void), so
     # every cb_ops initialiser mismatches (gcc1 STDENV-SWITCH.md 2.2). The real fix is prototypes in the gate.
     gmake -f Makefile.illumos -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)" \
-      UTSINC="$UTSINC" LD="$LDBIN" CC="gcc -std=gnu17" >/tmp/iwx-build.$$.log 2>&1 \
-      || { echo "FATAL: iwx build failed" >&2; grep -m20 -B2 'error' /tmp/iwx-build.$$.log >&2 || tail -40 /tmp/iwx-build.$$.log >&2; exit 1; }
+      UTSINC="$UTSINC" LD="$LDBIN" CC="gcc -std=gnu17" >"$WORK"/iwx-build.$$.log 2>&1 \
+      || { echo "FATAL: iwx build failed" >&2; grep -m20 -B2 'error' "$WORK"/iwx-build.$$.log >&2 || tail -40 "$WORK"/iwx-build.$$.log >&2; exit 1; }
     [ -f iwx ] || { echo "FATAL: no iwx module produced" >&2; exit 1; }
     echo "built: iwx ($(wc -c < iwx) bytes)" >&2
 
     # --- GATE -----------------------------------------------------------------
     # illumos nm, not gnm: GNU nm -p prints nothing for these ET_REL objects
     # (measured on dixi), which would make every check below vacuous.
-    NM=/usr/bin/nm
+    NM=$(command -v nm || echo /usr/bin/nm)
     [ -x "$NM" ] || NM=nm
     ksyms() {   # exported globals of unix + genunix + misc/mac under $1
       for k in "$1/platform/i86pc/kernel/amd64/unix" "$1/kernel/amd64/genunix" \
