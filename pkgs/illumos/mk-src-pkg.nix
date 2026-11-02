@@ -55,6 +55,7 @@
                              # so they stay out of the runtime closure (boost headers, json)
 , docOutputs ? [ ]           # "man" "info" "doc": move share/<x> into its own output, the nixpkgs layout (environment.
                              # extraOutputsToInstall finds them). A declared output whose dir is missing or empty FAILS the build.
+, hostPathAllow ? ""         # grep -E of documented exceptions for ./host-path-scan.sh (a recipe's own, rare)
 , nativeTools ? null         # NixOS nativeBuildInputs: store paths whose bin/ (and sbin/, usr/bin/) make up the WHOLE builder PATH
                              # after buildTools: no /usr/gnu, no host /usr/bin. null => defaultNativeTools (storeOnly) or the
                              # old OI PATH text (an exempt instance).
@@ -128,7 +129,10 @@ let
     [ (''export PATH="''${btPath:+$btPath:}$ntPath" CONFIG_SITE=${./config.site}''   # config.site: host-state probes pinned
        + (if storeOnly then "\n    /usr/bin/bash ${./path-gate.sh}" else "")
        # the illumos elfedit/elfdump/ldd for the shared gate scripts: the world's (a nativeTools entry), never /usr/gnu's GNU elfedit
-       + (if storeOnly then "\n    . ${./illumos-bin.sh}" else ""))   # exempt: IB stays /usr/bin (the OI host's illumos tools)
+       + (if storeOnly then "\n    . ${./illumos-bin.sh}" else "")   # exempt: IB stays /usr/bin (the OI host's illumos tools)
+       # the tools configure looks for by name or at fixed host paths, set from the store PATH (jq 1.8.2: MAKE=/usr/gnu/bin/make on
+       # SunOS when MAKE is unset; recipes1). /usr/bin/bash stays the shell (the builder interpreter, a documented exemption).
+       + (if storeOnly then "\n    MAKE=$(command -v gmake) M4=$(command -v m4 || true) INSTALL=\"$(command -v install) -c\"; export MAKE M4 INSTALL" else ""))
       ''export CC="$W/cc$ABI" CC_FOR_BUILD="$W/cc$ABI" ABI LIBSUB'' ] x) a.args; };
   drvAttrs' = hermetic drvAttrs;
   drvAttrs = {
@@ -136,6 +140,7 @@ let
   inherit system gate gcc stage0 pname;
   outputs = [ "out" "debug" ] ++ docOutputs;   # debug: NixOS separateDebugInfo, $debug/lib/debug/.build-id/xx/rest.debug (./split-debug.sh)
   docOutputsArg = builtins.concatStringsSep " " docOutputs;
+  inherit hostPathAllow;
   build = lp64Fix build;
   # nativeTools => store-only PATH: buildTools' bins, then each tool's bin/sbin/usr/bin/usr/sbin. Only the attr is added when set.
   # the from-source gcc's runtime dir (lib = 32-bit, lib/amd64 = 64-bit); empty for a host compiler.
@@ -254,6 +259,7 @@ let
       tar xf "$W/src.tar"; cd "$(ls -d */ | head -1)"; SRC=$(pwd)
       echo "=== build $pname ABI=$ABI ===" >&2
       eval "$build"
+      ${if storeOnly then ''/usr/bin/bash ${./host-path-scan.sh} "$W/s$ABI" "$hostPathAllow" || exit 1'' else ""}
       cd "$W"
     done
 
