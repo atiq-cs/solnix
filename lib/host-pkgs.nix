@@ -113,7 +113,7 @@ let
 in
 {
   # Canonical namespace is pkgs.solnix.*; `illumos` kept as a one-cycle alias.
-  inherit solnix runCommand;
+  inherit solnix runCommand seedPkgs;   # seedPkgs: the bootstrap set (cross-host proofs, wave6)
   illumos = solnix;
   writeText = mkWriter false;
   writeScript = mkWriter true;
