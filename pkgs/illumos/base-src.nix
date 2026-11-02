@@ -732,11 +732,14 @@ let
   # only uses @uri and -r.
   jq = mkSrcPkg {
     pname = "jq"; version = "1.8.2";
-    docOutputs = [ "man" ];   # nixpkgs jq: man output (jq.1 is prebuilt in the tarball)   # 5 High (1.8.0/1.8.2); 1.7 has no later release. Also C23-clean (gcc1 survey)
+    docOutputs = [ "man" ];   # nixpkgs jq: man output (jq.1 is prebuilt in the tarball)
+    # upstream publishes no signature; sha256 == the release's sha256sum.txt == nixpkgs
     src = { url = "https://github.com/jqlang/jq/releases/download/jq-1.8.2/jq-1.8.2.tar.gz";
             sha256 = "71b8d6e8f5fe81f6c6d0d110e3892251f6ce76ed095abd315e26e6e1193af3af"; };
+    nativeTools = hostTools;   # store-only PATH + config.site (recipes1); libc only at run time, as before
     build = ''
-      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-docs --disable-static --without-oniguruma
+      # configure.ac sets MAKE=/usr/gnu/bin/make on SunOS when MAKE is unset (an OI host path; a solnix host has none): the store gmake.
+      MAKE=gmake ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-docs --disable-static --without-oniguruma
       gmake -j4
       gmake install
       [ "$(echo '{"a":[1,2]}' | "$out/bin/jq" -c '.a|add')" = 3 ] || { echo "FATAL: jq self-check" >&2; exit 1; }
@@ -828,7 +831,8 @@ let
     builder = "/usr/bin/bash";
     PATH = "${coreutils}/bin:${gnused}/bin:${gnugrep}/bin";   # store-only (wave6, gate2 A1)
     args = [ "-c" ''
-      set -eu; /usr/bin/bash ${./path-gate.sh}
+      set -eu; export PATH=${coreutils}/bin:${gnused}/bin:${gnugrep}/bin   # store tools only (recipes1)
+      /usr/bin/bash ${./path-gate.sh}
       mkdir -p $out/bin $out/share/bash
       ln -s $hmSrc $out/share/home-manager
       cp $hmSrc/lib/bash/home-manager.sh $out/share/bash/home-manager.sh
