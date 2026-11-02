@@ -1,5 +1,5 @@
 # cli/c-net.nix -- terminal/network tools: screen, socat, sqlite, ncdu, tig, lsof.
-{ mkSrcPkg, world, zlib, openssl, ncurses, readline, chk, gnulibFix, dropDocs, ... }:
+{ mkSrcPkg, world, zlib, openssl, ncurses, readline, pkgconf, chk, gnulibFix, dropDocs, hostTools, ... }:
 rec {
   # screen 4.9.1: screen 5 requires openpty(), which illumos libc does not have (configure:
   # "unable to find openpty() function", measured); 4.9 carries its own SVR4 /dev/ptmx path.
@@ -8,6 +8,7 @@ rec {
     src = { url = "https://mirrors.kernel.org/gnu/screen/screen-4.9.1.tar.gz";
             sha256 = "26cef3e3c42571c0d484ad6faf110c5c15091fbf872b06fa7aa4766c7405ac69"; };
     deps = [ world ncurses ];
+    nativeTools = hostTools;   # store-only PATH + config.site (wave4)
     build = ''
       # _XOPEN_SOURCE=600: msg_control/CMSG_* in illumos <sys/socket.h> are XPG4.2+ only.
       CFLAGS="-O2 -D__EXTENSIONS__ -D_XOPEN_SOURCE=600" ./configure --prefix="$out" --disable-pam --disable-socket-dir \
@@ -31,6 +32,7 @@ rec {
     src = { url = "http://www.dest-unreach.org/socat/download/socat-1.8.0.3.tar.gz";
             sha256 = "a9f9eb6cfb9aa6b1b4b8fe260edbac3f2c743f294db1e362b932eb3feca37ba4"; };
     deps = [ world openssl readline ncurses ];
+    nativeTools = hostTools;   # store-only PATH + config.site (wave4)
     build = ''
       CFLAGS="-O2 -D__EXTENSIONS__" ./configure --prefix="$out" --disable-libwrap
       gmake -j8; gmake install
@@ -79,6 +81,7 @@ rec {
     src = { url = "https://github.com/jonas/tig/releases/download/tig-2.6.0/tig-2.6.0.tar.gz";
             sha256 = "99d4a0fdd3d93547ebacfe511195cb92e4f75b91644c06293c067f401addeb3e"; };
     deps = [ ncurses readline libiconvDep ];
+    nativeTools = [ pkgconf ] ++ hostTools;   # store-only PATH + config.site; configure needs pkg-config (OI had /usr/bin/pkg-config)
     build = ''
       CFLAGS="-O2 -D__EXTENSIONS__" LIBS="-lncursesw" ./configure --prefix="$out" --with-ncursesw --with-readline
       gmake -j8 prefix="$out"; gmake install install-doc-man prefix="$out"

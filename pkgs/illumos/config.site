@@ -1,0 +1,24 @@
+# config.site for solnix's store-only builds (mk-src-pkg nativeTools): the configure answers that depend on the HOST, not on the source,
+# pinned so two hosts give one answer (NixOS gets this from its sandbox: one /build, a C-only locale set, one uid). Measured differences,
+# chef (OpenIndiana) vs dixi (solnix): wave4 cfg/*.diff. Each line names what it pins and why.
+# gnulib locale probes: chef has 23 en_* locales, dixi 229 (fr_FR, zh_CN, ...). With a French/Chinese locale gnulib runs the real mbrtowc
+# tests and swaps in replacements; without one it "guesses". The NixOS sandbox has no such locales: pin "none".
+gt_cv_locale_fr=none
+gt_cv_locale_fr_utf8=none
+gt_cv_locale_zh_CN=none
+gt_cv_locale_ja=none
+gt_cv_locale_tr_utf8=none
+# iconv: chef has 1395 /usr/lib/iconv modules, dixi 201; the probe converts through modules the host may lack. The gate libc's iconv is the
+# same on both; pin the answer chef (the served builds) gave.
+am_cv_func_iconv_works=yes
+# O_NOATIME: the probe opens a file in the build dir; the answer follows that file system's atime setting (chef /var/tmp atime=on: "bad",
+# dixi off: "yes"). illumos has no O_NOATIME semantics either way; pin "yes" (dixi, the NixOS-like answer).
+gl_cv_header_working_fcntl_h=yes
+# (ustar uid/gid: automake asks `id -u`, no cache variable; it only picks the `make dist` tar format, never shipped: both hosts say yes.)
+# Fixed host paths, read outside PATH (wave4 T2a cross-host diff, chef vs dixi, both as nixbld):
+# lynx: "ipv6 stack type" tests for /usr/include/netinet/ip6.h on the HOST. The headers it compiles against are the gate proto's, which
+# has ip6.h. A solnix host has no /usr/include, so it gave "unknown". Pin it to "solaris": what the proto's headers are, and what chef found.
+cf_cv_ipv6type=solaris
+# GNU tar: the remote-shell probe walks /usr/ucb/rsh, /usr/bin/rsh, ... (chef /usr/bin/rsh, dixi /usr/ucb/rsh) and bakes the path in for
+# `tar -f host:file`. "no", as on NixOS (no rsh in the closure): remote archives then need --rsh-command.
+tar_cv_path_RSH=no

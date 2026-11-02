@@ -1253,7 +1253,8 @@ in
 
   inherit (srcPkgs) zlib libxml2 openssl openssh bash nspr nss git libcExtra binutils gnumake gccWrapper vi pkgconf;
   inherit (srcPkgs) ncurses less htop top libevent tmux coreutils gnugrep gnused gnutar findutils diffutils jq gettext home-manager xorgproto lndir hostname libiconv;
-  inherit (srcPkgs) gzip nano rsync smartmontools tree wget db1 nvi;
+  inherit (srcPkgs) gzip nano rsync smartmontools tree db1 nvi;
+  wget = srcPkgs.wgetWith cli.perl;   # pod2man from the store perl (a solnix host has no /usr/bin/pod2man)
   inherit (graphics) meson samurai expat libffi wayland wayland-protocols libdrm mesa
     pixman xkeyboard-config libxkbcommon libdisplay-info seatd dbus;
   inherit (cosmic) cosmic-comp cosmic-term cosmic-session cosmic-panel cosmic-applets cosmic-launcher

@@ -1,5 +1,5 @@
 # cli/c-base.nix -- small GNU/C tools: file (libmagic), bc, GNU m4, readline.
-{ mkSrcPkg, world, zlib, ncurses, chk, gnulibFix, dropDocs, ... }:
+{ mkSrcPkg, world, zlib, ncurses, chk, gnulibFix, dropDocs, hostTools, ... }:
 rec {
   file = mkSrcPkg {
     pname = "file"; version = "5.46";
@@ -34,11 +34,25 @@ rec {
     '';
   };
 
+  # flex 2.6.4 (nixpkgs' version and tarball): bc's configure wants flex for --with-readline ("readline works only with flex"); the
+  # OpenIndiana build host had /usr/bin/flex, a solnix host has none. The tarball ships generated scan.c/parse.c: no flex/bison to build it.
+  flex = mkSrcPkg {
+    pname = "flex"; version = "2.6.4";
+    src = { url = "https://github.com/westes/flex/releases/download/v2.6.4/flex-2.6.4.tar.gz";
+            sha256 = "e87aae032bf07c26f85ac0ed3250998c37621d95f8bd748b31f15b33c45ee995"; };
+    deps = [ world ]; nativeTools = [ gnum4 ] ++ hostTools;   # GNU m4 (-P): the world's m4 is SVR4 ('bad option: -P'); OI had /usr/bin/gm4
+    build = ''
+      MAKEINFO=true HELP2MAN=true ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-nls
+      gmake -j8 MAKEINFO=true HELP2MAN=true; gmake install MAKEINFO=true HELP2MAN=true
+      ${dropDocs}
+      ${chk ''"$out/bin/flex" --version'' "^flex 2\\.6\\.4"}
+    '';
+  };
   bc = mkSrcPkg {
     pname = "bc"; version = "1.08.2";
     src = { url = "https://mirrors.kernel.org/gnu/bc/bc-1.08.2.tar.gz";
             sha256 = "ae470fec429775653e042015edc928d07c8c3b2fc59765172a330d3d87785f86"; };
-    deps = [ readline ncurses ];
+    deps = [ readline ncurses ]; nativeTools = [ flex gnum4 ] ++ hostTools;   # flex runs `m4` from PATH (main.c: M4 basename searched first; nixpkgs flex propagates m4)   # store-only PATH + config.site; flex from the store (wave4)
     build = ''
       MAKEINFO=true ./configure --prefix="$out" --with-readline
       gmake -j8 MAKEINFO=true; gmake install MAKEINFO=true

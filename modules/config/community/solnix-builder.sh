@@ -169,6 +169,9 @@ job() {	# job <pname> <outs> <version>: one BUILD row, start to finish, in its o
 }
 tick() {	# rc 0 when a job rebuilt or completed something: the loop then re-ticks soon
 	typeset rows=$BUILDER_STATE/rows.json rec=$BUILDER_STATE/recipes.tsv z k c b
+	# a killed build leaves its fixed W (/var/tmp/<kind>-<buildKey>, the same path on every host) owned by its nixbld uid, and the next build
+	# of that drv, as another uid, cannot replace it. Older than the longest build and no process of its owner in it: remove (wave4, chef uv).
+	[[ -n ${BUILDER_WSWEEP:-} && $(/usr/bin/id -u) == 0 ]] && /usr/bin/ksh93 "$BUILDER_WSWEEP" $(( BUILDER_BUILD_SECS + 3600 )) | while read -r l; do log "$l"; done
 	z=$(size); k=${z%% *} z=${z#* } c=${z%% *} b=${z#* }
 	(( k > 0 )) || { log "not idle ($b of $BUILDER_NCPU CPUs busy; loadMax $BUILDER_LOAD_MAX, $c cores a job)"; return 1; }
 	curl -sS -m 60 -o "$rec" "$BUILDER_RECIPES" && rows "$rows" "$rec" || { log "listing unavailable"; return 1; }

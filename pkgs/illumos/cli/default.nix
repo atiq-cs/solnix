@@ -5,7 +5,7 @@
 # cargoPkg/goChain null (aarch64: no Rust or Go illumos/aarch64 target upstream) drops those tiers.
 let
   # base = srcPkgs (base-src.nix): mkSrcPkg, zlib, openssl, ncurses, coreutils, ... and nixChain.
-  args = { inherit base world graphics; inherit (base) mkSrcPkg zlib openssl ncurses libiconv pkgconf nixChain; };
+  args = { inherit base world graphics; inherit (base) mkSrcPkg zlib openssl ncurses libiconv pkgconf nixChain hostTools; };
   # remove-references-to for text files (Config.pm, _sysconfigdata, generated scripts): the
   # gate proto and the compiler are build-time only; a hash left in a text file would pull
   # ~400 MB into the runtime closure (the ELF guard in mk-src-pkg only sees ELFs).

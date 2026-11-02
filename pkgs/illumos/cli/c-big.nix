@@ -1,5 +1,5 @@
 # cli/c-big.nix -- perl, the autotools, python3, cmake, ccache.
-{ base, mkSrcPkg, world, zlib, openssl, ncurses, readline, pkgconf, nixChain, graphics, chk, scrub, dropDocs, gnum4, sqlite, ... }:
+{ base, mkSrcPkg, world, zlib, openssl, ncurses, readline, pkgconf, nixChain, graphics, chk, scrub, dropDocs, gnum4, sqlite, hostTools, ... }:
 rec {
   # perl, shared libperl, threads. libpth is the gate proto's only (no host /usr/lib probe).
   perl = mkSrcPkg {
@@ -64,6 +64,7 @@ rec {
     src = { url = "https://mirrors.kernel.org/gnu/libtool/libtool-2.5.4.tar.xz";
             sha256 = "f81f5860666b0bc7d84baddefa60d1cb9fa6fceb2398cc3baca6afaa60266675"; };
     deps = [ gnum4 ];
+    nativeTools = hostTools;   # store-only PATH + config.site (wave4)
     build = ''
       MAKEINFO=true ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static M4=${gnum4}/bin/m4
       gmake -j8 MAKEINFO=true; gmake install MAKEINFO=true
