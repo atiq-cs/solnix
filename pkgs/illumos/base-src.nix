@@ -37,7 +37,7 @@ let
   inherit mkSrcPkg hostTools;
 
   # Nix 2.24.15 + its dependency chain (./nix-src.nix).
-  nixChain = import ./nix-src.nix ({ inherit mkSrcPkg zlib openssl libcSlice hostTools; system = "x86_64-solaris"; gccLib = gcc.lib; } // nixChainTools);
+  nixChain = import ./nix-src.nix ({ inherit mkSrcPkg zlib openssl libcSlice hostTools seedTools; system = "x86_64-solaris"; gccLib = gcc.lib; } // nixChainTools);
 
   # libz.so.1 with the illumos symbol versions (SUNW_1.1 .. ILLUMOS_0.2). The
   # gate's libzfs/libzpool record `libz.so.1 SUNW_1.1` as a needed version, so an

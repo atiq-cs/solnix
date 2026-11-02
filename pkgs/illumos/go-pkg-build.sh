@@ -32,6 +32,6 @@ eval "$man"
 # Go keeps DWARF and writes its own GNU build-id (a hash of the Go inputs, stable): split it into $debug as every builder does
 : > "$W/split.fail"; /usr/bin/bash "$splitDebug" "$out" "$debug" "$buildKey" "$tools/bin" "$W/split.fail"
 if [ -s "$W/split.fail" ]; then echo "FATAL: split-debug:" >&2; head -20 "$W/split.fail" >&2; exit 1; fi
-bash "$storeGate" "$out" "$tsErrnoGate" "$go"
+/usr/bin/bash "$storeGate" "$out" "$tsErrnoGate" "$go"
 cd "$W"; eval "$check"
 echo "=== $name: check passed ===" >&2

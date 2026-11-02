@@ -20,9 +20,9 @@ if [ -z "$boot" ]; then
   # store RUNPATH for the C tools: gcc's runtime + the world's libc/libm (not the host /lib).
   # -std=gnu17: go1.4's C uses bool/true as identifiers, C23 keywords under GCC 15 (gcc1 STDENV-SWITCH.md 2.2)
   printf '#!/usr/bin/bash\nexec %s/bin/gcc -m64 -std=gnu17 -Wl,-R,%s/amd64:%s "$@"\n' "$gcc" "$gccLibDir" "$rp" > "$W/cc"; chmod +x "$W/cc"
-  CC=$W/cc GOROOT_FINAL=$out/share/go bash ./make.bash
+  CC=$W/cc GOROOT_FINAL=$out/share/go /usr/bin/bash ./make.bash
 else
-  GOROOT_BOOTSTRAP=$boot/share/go GOOS=illumos GO_LDFLAGS="-r $rp" bash ./make.bash
+  GOROOT_BOOTSTRAP=$boot/share/go GOOS=illumos GO_LDFLAGS="-r $rp" /usr/bin/bash ./make.bash
 fi
 cd "$W/go"
 if [ -d bin/illumos_amd64 ]; then
@@ -56,7 +56,7 @@ for p in sys.argv[1:]:
     fd = os.open(p, os.O_RDONLY); os.fsync(fd); os.close(fd)' {} +
 cp -a "$W/go" "$out/share/go"
 # DT_CHECKSUM -> 0 (zero-checksum.sh says why): go1.4's C tools embed GOROOT_FINAL=$out (measured, repro2).
-: > "$W/zc"; bash "$zeroChecksum" "$out" "$W/zc"; [ ! -s "$W/zc" ] || { cat "$W/zc" >&2; exit 1; }
+: > "$W/zc"; /usr/bin/bash "$zeroChecksum" "$out" "$W/zc"; [ ! -s "$W/zc" ] || { cat "$W/zc" >&2; exit 1; }
 for b in go gofmt; do ln -s ../share/go/bin/$b "$out/bin/$b"; done
 "$out/bin/go" version
 if [ -z "$boot" ]; then
@@ -65,15 +65,15 @@ if [ -z "$boot" ]; then
   # sets no RUNPATH (libc.so from /lib/64, caught by this gate, measured); they only ever run
   # inside the go_1_17 build. shortcut: not gated, upgrade if go_1_4 is ever shipped to a system.
   mkdir -p "$W/ctools"; for t in 6a 6c 6g 6l dist; do cp "$out/share/go/pkg/tool/solaris_amd64/$t" "$W/ctools/"; done
-  bash "$storeGate" "$W/ctools" "$tsErrnoGate" "$gcc/" "$gate"
+  /usr/bin/bash "$storeGate" "$W/ctools" "$tsErrnoGate" "$gcc/" "$gate"
   for x in "$gcc" "$gate"; do ! grep -rqF "$(basename "$x")" "$out" || { echo "FATAL: go_1_4 names $x" >&2; exit 1; }; done
 fi
 if [ -n "$final" ]; then
-  bash "$storeGate" "$out/share/go" "$tsErrnoGate"   # the whole tree: bin, pkg/tool and src
+  /usr/bin/bash "$storeGate" "$out/share/go" "$tsErrnoGate"   # the whole tree: bin, pkg/tool and src
   "$out/bin/go" version | grep -q "^go version go$version illumos/amd64$" || { echo "FATAL: go version" >&2; exit 1; }
   mkdir -p "$W/h"; cd "$W/h"; printf 'package main\nimport "fmt"\nfunc main() { fmt.Println("hello-go") }\n' > m.go
   "$out/bin/go" mod init h >/dev/null 2>&1; "$out/bin/go" build -trimpath -ldflags "-r $rp" -o h .
   [ "$(./h)" = hello-go ] || { echo "FATAL: go hello" >&2; exit 1; }
-  bash "$storeGate" "$W/h" "$tsErrnoGate"
+  /usr/bin/bash "$storeGate" "$W/h" "$tsErrnoGate"
   echo "=== go $version: check passed ===" >&2
 fi

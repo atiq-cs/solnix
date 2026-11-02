@@ -15,9 +15,11 @@
 { mkSrcPkg, zlib, openssl, libcSlice, gccLib, system, libSub ? "lib/amd64", nixCxxFlags ? ""
 , hostTools ? [ ]   # store-only PATH base (base-src.nix): [] on the exempt seed instance
 , cmake ? null      # store cmake for brotli/nlohmann_json/libgit2 (the OI host had /usr/bin/cmake); null on the seed/aarch64
+, seedTools ? [ ]   # the world-free seed tools (perl coreutils findutils world), for curl's docs (perl)
 , bzip2Bin ? null   # bzip2 CLI for boost's .tar.bz2 (GNU tar runs bzip2 from PATH; the OI host had /usr/bin/bzip2)
 }:
-let withTools = extra: if hostTools == [ ] then { } else { nativeTools = builtins.filter (x: x != null) extra ++ hostTools; }; in
+let seedPerlTools = seedTools;
+    withTools = extra: if hostTools == [ ] then { } else { nativeTools = builtins.filter (x: x != null) extra ++ hostTools; }; in
 # libSub: the 64-bit lib dir of the plain derivations below ("lib" on aarch64, LP64 only).
 # nixCxxFlags: extra CXXFLAGS for nix itself (aarch64: see aarch64/src.nix). "" keeps the x86 text byte-identical.
 
@@ -31,7 +33,10 @@ rec {
     build = ''
       # b2 itself is a build tool, compiled by whatever g++ is on PATH; the
       # library is compiled by $CXX (the from-source gcc) via user-config.jam.
-      ./bootstrap.sh --with-toolset=gcc --with-libraries=context >&2
+      # b2's engine build clears CXX and runs `g++` by name (tools/build/src/engine/build.sh test_compiler; the OI host had
+      # /usr/bin/g++): the builder's own wrappers under those names, on PATH for this step only.
+      mkdir -p "$W/b2bin"; ln -sf "$CXX" "$W/b2bin/g++"; ln -sf "$CC" "$W/b2bin/gcc"
+      PATH="$W/b2bin:$PATH" ./bootstrap.sh --with-toolset=gcc --with-libraries=context >&2
       echo "using gcc : solnix : $CXX ;" > user-config.jam
       ./b2 --user-config=user-config.jam toolset=gcc-solnix --with-context \
         variant=release link=shared threading=multi runtime-link=shared \
@@ -100,7 +105,7 @@ rec {
     '';
   };
 
-  curl = mkSrcPkg {
+  curl = mkSrcPkg ({
     pname = "curl"; version = "8.23.0";   # 36 High/Critical in 8.10.1; curl vuln.json: CVE-2026-92392 needs 8.23.0
     src = { url = "https://curl.se/download/curl-8.23.0.tar.xz";
             sha256 = "8dadd7d2536a314f982ad05a651b713f426bf7d02cc2c76cffb9796f2218e6c5"; };
@@ -116,7 +121,7 @@ rec {
       grep -q '#define CURL_CA_BUNDLE "${cacert}/etc/ssl/certs/ca-bundle.crt"' lib/curl_config.h \
         || { echo "FATAL: curl CA bundle default is not the store cacert" >&2; exit 1; }
     '';
-  };
+  } // (if hostTools == [ ] then { } else { nativeTools = seedPerlTools; }));   # docs/mk-ca-bundle.1 runs perl
 
   # zstd and bzip2 for libarchive, which nix uses for every compression filter.
   # Without them nix cannot substitute: cache.solnix.io serves its 404 bodies
@@ -131,7 +136,7 @@ rec {
     # library only (multi-threaded, as nixpkgs' default); the zstd CLI is not needed.
     build = ''
       gmake -C lib -j4 CC="$CC" PREFIX="$out" LIBDIR="$out/lib/amd64" libzstd libzstd.pc
-      gmake -C lib CC="$CC" PREFIX="$out" LIBDIR="$out/lib/amd64" INSTALL=ginstall install-shared install-includes install-pc
+      gmake -C lib CC="$CC" PREFIX="$out" LIBDIR="$out/lib/amd64" INSTALL=install install-shared install-includes install-pc   # GNU install (store coreutils), not the OI host's ginstall
     '';
   };
 

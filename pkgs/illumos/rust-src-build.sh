@@ -38,7 +38,7 @@ if [ -n "$seedStage0" ]; then
     PATH="$S0/bin:$PATH" RUSTC_BOOTSTRAP=1 "$S0/bin/cargo" generate-lockfile --offline --manifest-path "$m" >&2
   done
 fi
-sed -e "s|@S0@|$S0|g" -e "s|@out@|$out|g" -e "s|@W@|$W|g" > bootstrap.toml <<'EOF'
+sed -e "s|@S0@|$S0|g" -e "s|@out@|$out|g" -e "s|@W@|$W|g" -e "s|@world@|$world|g" > bootstrap.toml <<'EOF'
 profile = "dist"
 change-id = "ignore"
 [build]
@@ -70,7 +70,7 @@ compress-debuginfo = "off"
 cc = "@W@/w/cc"
 cxx = "@W@/w/c++"
 linker = "@W@/w/cc"
-ar = "$world/usr/bin/ar"
+ar = "@world@/usr/bin/ar"
 EOF
 export CC=$W/w/cc CXX=$W/w/c++ CC_x86_64_unknown_illumos=$W/w/cc \
   CXX_x86_64_unknown_illumos=$W/w/c++ AR_x86_64_unknown_illumos=$world/usr/bin/ar \
@@ -90,7 +90,7 @@ echo 'fn main(){ let v: Vec<u32> = (1..4).collect(); println!("hello {:?}", v); 
 # the compiler; every RUNPATH entry is a store path or $ORIGIN; ldd resolves
 # every NEEDED inside /nix/store.
 : > fail
-bash "$tsErrnoGate" "$out" 2>> fail || echo "ts-errno gate failed" >> fail
+/usr/bin/bash "$tsErrnoGate" "$out" 2>> fail || echo "ts-errno gate failed" >> fail
 find "$out" -type f > files
 # strip debug (stdenv's strip phase): DWARF from gcc's own .a files names the
 # compiler's store path, which the reference scan would turn into a runtime dep.
@@ -107,6 +107,6 @@ while read -r f; do
   done
   ldd "$f" 2>&1 | awk -v f="$f" '/not found/ || (/=>/ && $NF !~ /^\/nix\/store\//) {print f": "$0}' >> fail
 done < files
-bash "$zeroChecksum" "$out" fail   # DT_CHECKSUM -> 0 (zero-checksum.sh says why)
+/usr/bin/bash "$zeroChecksum" "$out" fail   # DT_CHECKSUM -> 0 (zero-checksum.sh says why)
 if [ -s fail ]; then echo "FATAL: closure gate failed:" >&2; head -40 fail >&2; exit 1; fi
 echo "=== rust-$version: every ELF resolves inside /nix/store ===" >&2

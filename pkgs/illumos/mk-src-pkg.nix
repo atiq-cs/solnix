@@ -132,7 +132,7 @@ let
        + (if storeOnly then "\n    . ${./illumos-bin.sh}" else "")   # exempt: IB stays /usr/bin (the OI host's illumos tools)
        # the tools configure looks for by name or at fixed host paths, set from the store PATH (jq 1.8.2: MAKE=/usr/gnu/bin/make on
        # SunOS when MAKE is unset; recipes1). /usr/bin/bash stays the shell (the builder interpreter, a documented exemption).
-       + (if storeOnly then "\n    MAKE=$(command -v gmake) INSTALL=\"$(command -v install) -c\"; export MAKE INSTALL   # not M4: the world m4 is SVR4; a recipe needing GNU m4 lists gnum4" else ""))
+       + (if storeOnly then "\n    MAKE=$(command -v gmake) INSTALL=\"$(command -v install) -c\" CMAKE_TOOLCHAIN_FILE=${./solnix-toolchain.cmake}; export MAKE INSTALL CMAKE_TOOLCHAIN_FILE   # not M4: the world m4 is SVR4; a recipe needing GNU m4 lists gnum4" else ""))
       ''export CC="$W/cc$ABI" CC_FOR_BUILD="$W/cc$ABI" ABI LIBSUB'' ] x) a.args; };
   drvAttrs' = hermetic drvAttrs;
   drvAttrs = {
@@ -268,6 +268,7 @@ let
     # dependencies on the whole compiler and gate proto. libtool .la files name
     # build-time paths too and nothing at run time reads them.
     find "$out" -name '*.la' -type f -delete
+    ${if storeOnly then ''/usr/bin/bash ${./out-host-refs.sh} "$out" || exit 1   # no symlink / #! to the host at run time (recipes1: quilt awk)'' else ""}
     # man/info/doc outputs (nixpkgs multiple-outputs.sh's moveToOutput share/man "$man"); info's dir file is per-profile.
     for o in $docOutputsArg; do
       case "$o" in man) s=share/man;; info) s=share/info; rm -f "$out/share/info/dir";; doc) s=share/doc;;

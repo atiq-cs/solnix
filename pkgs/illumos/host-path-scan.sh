@@ -12,14 +12,17 @@ scan() {  # <dir> [allow]: prints "file: line" for each hit
   find "$1" -type f \( -name config.status -o -name config.log -o -name libtool -o -name CMakeCache.txt -o -name build.ninja \
     -o \( -name Makefile -newer "$1" \) -o -name Makefile \) 2>/dev/null | while read -r f; do
     case "${f##*/}" in Makefile) [ -f "$f.in" ] || [ -f "${f%/*}/Makefile.am" ] || continue;; esac
-    grep -a -n -E "$pat" "$f" 2>/dev/null | { if [ -n "${2:-}" ]; then grep -a -v -E "$2"; else cat; fi; } | head -5 | sed "s|^|$f: |"
+    p=$pat; case "${f##*/}" in CMakeCache.txt) p='(^|[^A-Za-z0-9_.+/-])(/usr/bin/|/usr/sbin/|/usr/gnu/|/opt/|/usr/local/|/usr/sfw/)';; esac
+    grep -a -n -E "$p" "$f" 2>/dev/null | { if [ -n "${2:-}" ]; then grep -a -v -E "$2"; else cat; fi; } | head -5 | sed "s|^|$f: |"
   done
 }
 T=$(mktemp -d "${TMPDIR:-/tmp}/hps.XXXXXX") || exit 1
 mkdir -p "$T/good" "$T/bad"
 printf 'MAKE=/nix/store/00000000000000000000000000000000-illumos-userland/usr/bin/sed\nSHELL=/bin/sh\n' > "$T/good/config.status"
 printf "MAKE='/usr/gnu/bin/make'\n" > "$T/bad/config.status"
-[ -n "$(scan "$T/bad")" ] && [ -z "$(scan "$T/good")" ] || { echo "FATAL: host-path-scan selftest failed" >&2; find "$T" -depth -delete; exit 1; }
+mkdir -p "$T/badc" "$T/goodc"; printf 'CMAKE_AR:FILEPATH=/usr/bin/ar\n' > "$T/badc/CMakeCache.txt"
+printf 'CMAKE_AR:FILEPATH=/nix/store/00000000000000000000000000000000-w/usr/bin/ar\n' > "$T/goodc/CMakeCache.txt"
+[ -n "$(scan "$T/bad")" ] && [ -z "$(scan "$T/good")" ] && [ -n "$(scan "$T/badc")" ] && [ -z "$(scan "$T/goodc")" ] || { echo "FATAL: host-path-scan selftest failed" >&2; find "$T" -depth -delete; exit 1; }
 find "$T" -depth -delete
 [ "${1:-}" = --selftest ] && { echo "host-path-scan selftest PASS"; exit 0; }
 hits=$(scan "$1" "${2:-}")
