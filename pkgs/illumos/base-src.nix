@@ -513,6 +513,7 @@ rec {
     url = "https://mirrors.kernel.org/gnu/diffutils/diffutils-3.10.tar.xz";
     sha256 = "90e5e93cc724e4ebe12ede80df1634063c7a855692685919bfe60b556c9bd09e";
     flags = "--disable-gcc-warnings";
+    nativeTools = hostTools;   # store-only PATH + config.site: chef and dixi probed different locales/iconv/O_NOATIME/install (wave4 cfg/diffutils-3.10.diff)
   };
 
   # Install-media tools NixOS's minimal ISO ships (profiles/base.nix,

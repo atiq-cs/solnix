@@ -67,7 +67,7 @@ rec {
     pname = "gnum4"; version = "1.4.20";
     src = { url = "https://mirrors.kernel.org/gnu/m4/m4-1.4.20.tar.xz";
             sha256 = "e236ea3a1ccf5f6c270b1c4bb60726f371fa49459a8eaaebc90b216b328daf2b"; };
-    deps = [ world ];
+    deps = [ world ]; nativeTools = hostTools;   # store-only PATH + config.site: locales/iconv/O_NOATIME/install differed by host (wave4 cfg/gnum4-1.4.20.diff)
     build = ''
       ${gnulibFix}
       MAKEINFO=true ./configure --prefix="$out" --disable-nls --disable-gcc-warnings
