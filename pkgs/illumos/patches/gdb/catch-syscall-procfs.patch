@@ -1,0 +1,175 @@
+"catch syscall" on illumos (solnix gdb2, 2026-11-02). Upstream 18.1 has none: sol2 sets no xml_syscall_file and no
+get_syscall_number, so every `catch syscall` says "not supported on this architecture yet" (measured on dixi), and the
+procfs native target has no set_syscall_catchpoint and only prints "procfs: trapped on entry to ..." for PR_SYSENTRY.
+OmniOS/OI ship only the XML (their syscalls.patch adds it to data-directory); nothing in their patch sets reads it.
+  - sol2-tdep.c: syscalls/illumos.xml for both ISAs, and a get_syscall_number that is never called (as fbsd/netbsd:
+    the native target reports the number from pr_what).
+  - procfs.c: set_syscall_catchpoint writes PCSENTRY/PCSEXIT (gdb's own exit/lwp/exec set plus the caught calls, or
+    all of them); wait() reports a caught PR_SYSENTRY/PR_SYSEXIT as a syscall entry/return.
+  - data-directory/Makefile.in installs illumos.xml, which the recipe generates from the gate proto's sys/syscall.h
+    (pkgs/illumos/patches/gdb/gen-syscalls-xml.sh) before configure.
+
+--- a/gdb/sol2-tdep.c
++++ b/gdb/sol2-tdep.c
+@@ -23,6 +23,7 @@
+ #include "objfiles.h"
+ 
+ #include "sol2-tdep.h"
++#include "xml-syscall.h"
+ 
+ /* The Solaris signal trampolines reside in libc.  For normal signals,
+    the function `sigacthandler' is used.  This signal trampoline will
+@@ -98,6 +99,18 @@
+   return normal_pid_to_str (ptid);
+ }
+ 
++/* Implement the "get_syscall_number" gdbarch method.  */
++
++static LONGEST
++sol2_get_syscall_number (struct gdbarch *gdbarch, thread_info *thread)
++{
++  /* As FreeBSD and NetBSD: the procfs native target takes the system
++     call number from pr_what of the PR_SYSENTRY/PR_SYSEXIT stop, so this
++     is never called.  System call catching requires it to be set.  */
++
++  internal_error (_("sol2_get_syscall_number called"));
++}
++
+ /* To be called from GDB_OSABI_SOLARIS handlers.  */
+ 
+ void
+@@ -108,4 +121,9 @@
+ 
+   /* How to print LWP PTIDs from core files.  */
+   set_gdbarch_core_pid_to_str (gdbarch, sol2_core_pid_to_str);
++
++  /* System call names for "catch syscall": one table for both ISAs,
++     generated from illumos <sys/syscall.h>.  */
++  set_xml_syscall_file_name (gdbarch, "syscalls/illumos.xml");
++  set_gdbarch_get_syscall_number (gdbarch, sol2_get_syscall_number);
+ }
+--- a/gdb/procfs.c
++++ b/gdb/procfs.c
+@@ -159,6 +159,9 @@
+   int can_use_hw_breakpoint (enum bptype, int, int) override;
+   std::vector<CORE_ADDR> stopped_data_addresses () override;
+ 
++  int set_syscall_catchpoint (int, bool, int, gdb::array_view<const int>)
++    override;
++
+   void procfs_init_inferior (int pid);
+ };
+ 
+@@ -2021,10 +2024,12 @@
+   ptid_t    retval, temp_ptid;
+   int       why, what, flags;
+   int       retry = 0;
++  int       syscall_stop;
+ 
+ wait_again:
+ 
+   retry++;
++  syscall_stop = 0;
+   wstat    = 0;
+   retval   = ptid_t (-1);
+ 
+@@ -2113,6 +2118,13 @@
+ 		wstat = (what << 8) | 0177;
+ 		break;
+ 	      case PR_SYSENTRY:
++		/* A "catch syscall" stop.  SYS_lwp_exit stays internal.  */
++		if (what != SYS_lwp_exit && catch_syscall_enabled ()
++		    && catching_syscall_number (what))
++		  {
++		    syscall_stop = PR_SYSENTRY;
++		    break;
++		  }
+ 		if (what == SYS_lwp_exit)
+ 		  {
+ 		    delete_thread (this->find_thread (retval));
+@@ -2185,6 +2197,16 @@
+ 		  }
+ 		break;
+ 	      case PR_SYSEXIT:
++		/* shortcut: execve, lwp_create and lwp_exit returns stay
++		   internal (fork-child startup, thread list), so they are not
++		   reported to "catch syscall"; upgrade if anyone needs them.  */
++		if (what != SYS_execve && what != SYS_lwp_create
++		    && what != SYS_lwp_exit && catch_syscall_enabled ()
++		    && catching_syscall_number (what))
++		  {
++		    syscall_stop = PR_SYSEXIT;
++		    break;
++		  }
+ 		if (what == SYS_execve)
+ 		  {
+ 		    /* Hopefully this is our own "fork-child" execing
+@@ -2315,7 +2337,11 @@
+ 	    }
+ 	}
+ 
+-      if (status)
++      if (status && syscall_stop == PR_SYSENTRY)
++	status->set_syscall_entry (what);
++      else if (status && syscall_stop == PR_SYSEXIT)
++	status->set_syscall_return (what);
++      else if (status)
+ 	*status = host_status_to_waitstatus (wstat);
+     }
+ 
+@@ -2994,6 +3020,44 @@
+   return 0;
+ }
+ 
++/* Implement the "set_syscall_catchpoint" target_ops method: the traced
++   entry and exit sets are procfs_debug_inferior's own calls plus the
++   caught ones (all of them for a bare "catch syscall").  */
++
++int
++procfs_target::set_syscall_catchpoint (int pid, bool needed, int any_count,
++				       gdb::array_view<const int> counts)
++{
++  procinfo *pi = find_procinfo_or_die (pid, 0);
++  sysset_t sysentry, sysexit;
++
++  premptyset (&sysentry);
++  praddset (&sysentry, SYS_exit);
++  praddset (&sysentry, SYS_lwp_exit);
++  premptyset (&sysexit);
++  praddset (&sysexit, SYS_execve);
++  praddset (&sysexit, SYS_lwp_create);
++  praddset (&sysexit, SYS_lwp_exit);
++
++  if (needed && any_count > 0)
++    {
++      prfillset (&sysentry);
++      prfillset (&sysexit);
++    }
++  else if (needed)
++    for (size_t i = 0; i < counts.size (); i++)
++      if (counts[i] != 0)
++	{
++	  praddset (&sysentry, i);
++	  praddset (&sysexit, i);
++	}
++
++  if (!proc_set_traced_sysentry (pi, &sysentry)
++      || !proc_set_traced_sysexit (pi, &sysexit))
++    return 1;
++  return 0;
++}
++
+ /* Return non-zero if we can set a hardware watchpoint of type TYPE.  TYPE
+    is one of bp_hardware_watchpoint, bp_read_watchpoint, bp_write_watchpoint,
+    or bp_hardware_watchpoint.  CNT is the number of watchpoints used so
+--- a/gdb/data-directory/Makefile.in
++++ b/gdb/data-directory/Makefile.in
+@@ -67,7 +67,7 @@
+ 	sparc-linux.xml \
+ 	sparc64-linux.xml
+ 
+-SYSCALLS_FILES = gdb-syscalls.dtd freebsd.xml netbsd.xml $(GEN_SYSCALLS_FILES)
++SYSCALLS_FILES = gdb-syscalls.dtd freebsd.xml netbsd.xml illumos.xml $(GEN_SYSCALLS_FILES)
+ 
+ PYTHON_DIR = python
+ PYTHON_INSTALL_DIR = $(DESTDIR)$(GDB_DATADIR)/$(PYTHON_DIR)
