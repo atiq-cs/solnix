@@ -1257,6 +1257,9 @@ in
   # from the store (not /usr/gnu). host-pkgs.nix wires it as the default for a
   # system eval; the gate/bhost build keeps buildTools=[] (byte-identical).
   inherit seedBuildTools;
+  # the cargo/bsdfetch/COSMIC-data builders' store tool set, a build input of their served rows: exposed so a builder
+  # without it can fetch it (recipes.tsv row) instead of declining those rows.
+  solnix-hostfix-tools = hostfixTools;
   # iwm wifi: the driver module + wpa-pmk (iwm-driver), and the augmentation
   # helpers wireless-iwx.nix uses to render an iwm-aware driver DB and kernel
   # tree when hardware.wirelessIwm.attachAtBoot. mkIwmKernel/iwmFirmware take

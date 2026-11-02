@@ -34,6 +34,7 @@ let
     '';
   };
 in rec {
+  inherit bzip2-bin;   # exposed so a builder finds the gnupg family's build input by name (recipes.tsv row; output unchanged)
   libgpg-error = lib {
     pname = "libgpg-error"; version = "1.55";
     sha256 = "95b178148863f07d45df0cea67e880a79b9ef71f5d230baddc0071128516ef78";
