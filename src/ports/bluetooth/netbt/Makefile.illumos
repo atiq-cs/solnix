@@ -1,0 +1,53 @@
+# hcitest: NetBSD's netbt HCI core in userland on illumos (solnix).
+# Three kinds of translation unit, kept apart because their headers clash:
+#   CORE  the vendored upstream/netbt/*.c and the glue that sees struct hci_unit:
+#         compat/kern ahead of the system headers, kshim.h force-included
+#   IWM   the Intel gate and bt1's ugen transport: iwmbtfw's compat headers
+#   PLAIN mbuf, fixture, recorder, scrubber: neither
+# PROTOINC = the gate proto usr/include (sys/usb/clients/ugen/usb_ugen.h).
+PROTOINC ?= /usr/include
+IWM	 = ../iwmbtfw
+CC	 = gcc
+WARN	 = -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare \
+	   -Wno-missing-field-initializers -Werror
+BASE	 = -m64 -O2 -std=gnu11 $(WARN)
+CORE_CFLAGS  = $(BASE) -Icompat/kern -Icompat -Iupstream -I. -include compat/kshim.h
+IWM_CFLAGS   = $(BASE) -I$(IWM)/compat -I$(IWM) -I. -idirafter $(PROTOINC) \
+	       -include $(IWM)/compat/iwmbt_compat.h -DNDEBUG
+PLAIN_CFLAGS = $(BASE) -Icompat -I.
+
+UPSTREAM = hci_unit hci_event hci_misc hci_link hci_ioctl
+CORE_OBJS  = $(UPSTREAM:%=up_%.o) kshim.o core.o core_io.o stubs.o hcitest.o
+IWM_OBJS   = gate.o iwmbt_fw.o ugen_usb.o ugen_evq.o xport_ugen.o
+PLAIN_OBJS = mbuf.o mbuf_ops.o mbuf_test.o xport_fixture.o rec.o raw.o scrub_test.o
+OBJS	 = $(CORE_OBJS) $(IWM_OBJS) $(PLAIN_OBJS)
+
+all: hcitest
+
+hcitest: $(OBJS)
+	$(CC) -m64 -o $@ $(OBJS)
+
+up_%.o: upstream/netbt/%.c
+	$(CC) $(CORE_CFLAGS) -c -o $@ $<
+kshim.o core.o core_io.o stubs.o hcitest.o: %.o: %.c
+	$(CC) $(CORE_CFLAGS) -c -o $@ $<
+
+iwmbt_fw.o: $(IWM)/upstream/iwmbt_fw.c
+	$(CC) $(IWM_CFLAGS) -c -o $@ $<
+ugen_usb.o ugen_evq.o: %.o: $(IWM)/%.c
+	$(CC) $(IWM_CFLAGS) -c -o $@ $<
+gate.o xport_ugen.o: %.o: %.c
+	$(CC) $(IWM_CFLAGS) -c -o $@ $<
+
+$(PLAIN_OBJS): %.o: %.c
+	$(CC) $(PLAIN_CFLAGS) -c -o $@ $<
+
+check: hcitest
+	./hcitest -t
+	./run-fixtures.sh
+	./negative-controls.sh
+
+clean:
+	find . -name "*.o" -type f -delete; find . -name hcitest -type f -delete
+
+.PHONY: all check clean

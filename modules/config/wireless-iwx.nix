@@ -64,27 +64,35 @@ let
   # i915 always when wanted, nvidia only on media; aliases only when bound.
   gfx = config.hardware.graphics;
   i915Bound = gfx.i915.attachAtBoot;
-  wantGpu = gfx.onMedia || i915Bound;
+  nvBound = gfx.nvidia.attachAtBoot;
+  wantNv = gfx.onMedia || nvBound;
+  wantGpu = gfx.onMedia || i915Bound || nvBound;
   gpuDrivers = [ { name = "i915"; perm = "0666 root sys"; aliases = if i915Bound then s.i915Aliases else [ ]; } ]
-    ++ lib.optionals gfx.onMedia [
-      { name = "nvidia"; perm = "0666 root sys"; aliases = [ ]; }
+    ++ lib.optionals gfx.onMedia nvDrivers;
+  nvDrivers = [
+      { name = "nvidia"; perm = "0666 root sys"; aliases = if nvBound then s.nvidiaAliases else [ ]; }
       { name = "nvidia_modeset"; perm = "0666 root sys"; aliases = [ ]; }
       { name = "nvidia_i2c"; perm = null; aliases = [ ]; }
     ];
   gpuDb = if wantGpu then s.mkDriversDbWith wifiDb gpuDrivers else wifiDb;
-  gpuKern = if wantGpu then s.mkGpuKernel wifiKern {
-    nvidia = gfx.onMedia;
+  gpuKern0 = if wantGpu then s.mkGpuKernel wifiKern {
+    nvidia = wantNv;
     gspFirmware = if gfx.onMedia && gfx.nvidia.acceptFirmwareLicense then s.nvidiaGspFirmware true else null;
     i915Firmware = if gfx.i915.acceptFirmwareLicense then s.i915Firmware true else null;
   } else wifiKern;
+  # nvidia bound at boot: nvidia.conf, tzmon's opt-out, GSP firmware in usr/kernel (graphics-gpu.nix).
+  gpuKern = if nvBound then s.mkNvidiaBootKernel gpuKern0 (s.nvidiaGspFirmware gfx.nvidia.acceptFirmwareLicense) else gpuKern0;
   # the touchpad (options in ./touchpad-i2c-hid.nix) last: dwiic + ihid, the dacf rule.
   wantTouchpad = config.hardware.touchpad.i2cHid.enable;
   tpDb = if wantTouchpad then s.mkTouchpadDriversDb gpuDb else gpuDb;
   # audiohd's extra controller ids (./audio-hda.nix): the stock aliases plus these; the helper checks the count.
   hdaIds = config.hardware.audio.hdaIds;
   wantHda = hdaIds != [ ];
-  finalDb = if wantHda then s.mkDriversDbWith tpDb [ { name = "audiohd"; perm = null;
+  finalDb0 = if wantHda then s.mkDriversDbWith tpDb [ { name = "audiohd"; perm = null;
     aliases = lib.unique ([ "pci10de,371" "pci8086,2668" "pciclass,0403" "pciexclass,0403" ] ++ hdaIds); } ] else tpDb;
+  # nvidia bound at boot: its majors go in LAST, so the drivers already installed keep theirs (dwiic and ihid
+  # would move by three if nvidia came before the touchpad layer).
+  finalDb = if nvBound then s.mkNvidiaBootDb (s.mkDriversDbWith finalDb0 nvDrivers) else finalDb0;
   finalKern = if wantTouchpad then s.mkTouchpadKernel gpuKern else gpuKern;
 
   # Networks highest priority first; each line "SSID<TAB>pskFile".
@@ -399,6 +407,40 @@ in
   # there too: docs/x1e-wifi-runtime-bind.md runs wpa-pmk right after update_drv.
   (lib.mkIf media {
     environment.systemPackages = [ pkgs.solnix.wpa-pmk ];
+  })
+  # nvidia bound at boot (graphics-gpu.nix). tzmon leaves the dGPU powered in this BE, so the thermal guard runs
+  # from as early as SMF starts anything (a single-user dependent, like the early services that need no /nix
+  # writes) and reboots at maxTempC or an unreadable sensor. The bring-up waits for the guard and the dump device,
+  # so a first-attach panic leaves a dump.
+  (lib.mkIf nvBound {
+    environment.systemPackages = [ s.nvidia-probe ];
+    smf.services.solnix-nvidia-guard = {
+      enable = true;
+      category = "site";
+      description = "solnix dGPU thermal guard (EC GPUT)";
+      model = "contract";
+      dependents = [ "svc:/milestone/single-user:default" ];
+      environment = {
+        MAXT = toString gfx.nvidia.maxTempC;
+        INTERVAL = "3";
+        LOG = "/var/log/solnix-nvidia.log";
+      };
+      start.exec = "/bin/sh ${./nvidia-guard.sh} &";
+      stop.exec = ":kill";
+    };
+    smf.services.solnix-nvidia = {
+      enable = true;
+      category = "site";
+      description = "solnix nvidia dGPU bring-up (RmInitAdapter, GSP) after the dump device";
+      model = "contract";
+      requires = [ "svc:/site/solnix-nvidia-guard:default" "svc:/system/dumpadm:default" "svc:/system/filesystem/local:default" ];
+      environment = {
+        PROBE = "${s.nvidia-probe}/bin/nvidia-probe";
+        LOG = "/var/log/solnix-nvidia.log";
+      };
+      start.exec = "/bin/sh ${./nvidia-up.sh} &";
+      stop.exec = ":kill";
+    };
   })
   ];
 }

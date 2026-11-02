@@ -31,7 +31,7 @@ PATH=${BUILDER_PATH:-/usr/bin:/usr/sbin}
 # BUILDER_SHARE: the fraction (percent) of the CPUs other work leaves idle that this host may use (100 dedicated, 66 opportunistic).
 : ${BUILDER_SHARE:=100}
 : ${BUILDER_BUILD_SECS:=14400}
-J=$BUILDER_STATE C=0 flake=$BUILDER_FLAKE	# a job's state dir, its cores, the flake (locked once per tick)
+J=$BUILDER_STATE C=0 flake=$BUILDER_FLAKE pinned=	# a job's state dir, its cores, the flake (locked once per tick), the served rows' commit
 log() { printf '%(%Y-%m-%dT%H:%M:%SZ)T builder: %s\n' now "$*"; }
 bounded() {	# bounded <secs> <cmd...>: run it, TERM it after <secs> (illumos has no timeout(1)). A `nix store ls` against
 	# cache.solnix.io hung > 8 min on dixi (2026-10-29, past stalled-download-timeout), which would wedge the loop for good.
@@ -97,19 +97,38 @@ complete() {	# complete <id> <token> <result-json>
 	api POST "/$1/complete" "{\"agent_id\":\"$BUILDER_AGENT\",\"claim_token\":\"$2\",$3}"
 	log "complete $1 -> $code $(<"$J/resp") ($3)"
 }
-drv_for() {	# drv_for <pname> <outs>: "<out> <drv>^<output>" of the BUILDER_FLAKE packages attr whose outPath is one of <outs>
-	typeset n=${1%-[0-9]*} a r
+pin() {	# pin <recipes.tsv>: the newest commit on BUILDER_FLAKE's ref that wrote the SERVED docs/registry/recipes.tsv (its git blob
+	# id = `git hash-object` of the file), i.e. the commit its rows' outs were evaluated from. Prints nothing when no commit
+	# wrote exactly that file. Metadata only: a blobless bare clone ($BUILDER_STATE/solnix.git, about 0.5 MB).
+	# shortcut: the clone keeps the first BUILDER_FLAKE's URL; rm $BUILDER_STATE/solnix.git after changing the repo.
+	typeset g=$BUILDER_STATE/solnix.git u=${BUILDER_FLAKE#git+} r=HEAD b
+	[[ $BUILDER_FLAKE == git+* ]] || return 1
+	[[ $BUILDER_FLAKE == *[?\&]ref=* ]] && { r=${BUILDER_FLAKE#*[?&]ref=}; r=${r%%&*}; }
+	b=$(git hash-object "$1") || return 1
+	[[ -s $g.pin.$b ]] && { print -r -- "$(<"$g.pin.$b")"; return 0; }	# the same served file: the same commit (an empty answer is retried)
+	[[ -d $g ]] || bounded 300 git clone -q --bare --filter=blob:none "${u%%\?*}" "$g" > /dev/null 2>&1 || return 1
+	bounded 300 git -C "$g" fetch -q origin '+refs/heads/*:refs/heads/*' > /dev/null 2>&1
+	git -C "$g" log --raw --no-renames --no-abbrev --format='C %H' "$r" -- docs/registry/recipes.tsv |
+	    nawk -v b="$b" '/^C / {c = $2; next} $4 == b {print c; exit}' > "$g.pin.new" && mv "$g.pin.new" "$g.pin.$b" && print -r -- "$(<"$g.pin.$b")"
+}
+drv_for() {	# drv_for <pname> <outs>: "<out> <drv>^<output>" of the packages attr whose outPath is one of <outs>, evaluated at the
+	# served rows' commit ($pinned) first, then at BUILDER_FLAKE's head. The out must match, so a wrong commit only declines.
+	typeset n=${1%-[0-9]*} a r f c= w u s=
 	[[ $n == openssl3 ]] && n=openssl
-	for a in "$n" "${n//-/_}"; do
-		r=$(bounded 900 nix eval --raw "$flake#packages.$BUILDER_SYSTEM.$a" --apply 'd: d.outPath + " " + d.drvPath + "^" + (d.outputName or "out")' 2>/dev/null) &&
+	for w in ${n//-/ }; do if [[ -z $c ]]; then c=$w; else typeset -u u=${w:0:1}; c=$c$u${w:1}; fi; done	# gcc-wrapper -> gccWrapper
+	for f in ${pinned:+"$pinned"} "$flake"; do s=; for a in "$n" "${n//-/_}" "$c"; do
+		[[ " $s " == *" $a "* ]] && continue; s="$s $a"
+		r=$(bounded 900 nix eval --raw "$f#packages.$BUILDER_SYSTEM.$a" --apply 'd: d.outPath + " " + d.drvPath + "^" + (d.outputName or "out")' 2>/dev/null) &&
 		    [[ ,$2, == *,"${r%% *}",* ]] && { print -r -- "$r"; return 0; }
-	done
+	done; done
 	return 1
 }
 ready() {	# ready <pname> <outs>: 0 when the out ($out) was rebuilt here and is the NAR cache.solnix.io serves ($nar); else log why not
 	typeset d m x ins nh; nar= out=
-	d=$(drv_for "$1" "$2") || { log "decline $1: no packages.$BUILDER_SYSTEM attr of $flake evaluates to $2"; return 1; }
+	d=$(drv_for "$1" "$2") || { log "decline $1: no packages.$BUILDER_SYSTEM attr of ${pinned:+$pinned or }$flake evaluates to $2"; return 1; }
 	out=${d%% *} d=${d#* }; set -- "$1" "$out"
+	# hold the evaluated drv (and the drvs it references) until the job ends: an eval's temporary root dies with it
+	nix-instantiate --add-root "$J/root-drv" --expr "import ${d%^*}" > /dev/null 2>&1 || { log "decline $1: cannot root $d"; return 1; }
 	nar=$(served "$2") || { log "decline $1: $2 is not served (a first build is a submission: needs the submit key)"; return 1; }
 	m=$BUILDER_STATE/tried/${d##*/}	# shortcut: a failed build is never retried for that drv; rm the file to retry
 	[[ -f $m && $(<"$m") != ok ]] && { log "decline $1: $(<"$m")"; return 1; }
@@ -126,13 +145,17 @@ ready() {	# ready <pname> <outs>: 0 when the out ($out) was rebuilt here and is 
 	done
 	(( x == 0 )) || { log "decline $1: the dry run would build $x non-fixed-output derivations here first ($J/dry)"; return 1; }
 	[[ -s $BUILDER_BEARER_FILE ]] || { log "dry run: would fetch $2 and rebuild $d"; return 1; }	# no fetch or CPU for what it cannot claim
-	# --rebuild compares the new build with the LOCAL copy, so that copy must be the served NAR (a copied-in one may not be)
-	bounded 1800 nix-store -r "$2" > /dev/null 2>&1 && nh=$(nix-store -q --hash "$2") || { log "decline $1: cannot fetch the served $2"; return 1; }
+	# --rebuild compares the new build with the LOCAL copy, so that copy must be the served NAR (a copied-in one may not be).
+	# Rooted for the job's life ($J/root-out) so a GC (min-free) cannot delete it before --rebuild compares against it.
+	bounded 1800 nix-store --add-root "$J/root-out" -r "$2" > /dev/null 2>&1 && nh=$(nix-store -q --hash "$2") || { log "decline $1: cannot fetch the served $2"; return 1; }
 	[[ $nh == "$nar" ]] || { log "decline $1: the local $2 has $nh, cache.solnix.io serves $nar"; return 1; }
 	[[ -f $m ]] && { log "$1: rebuilt and matched on an earlier tick ($m)"; return 0; }
 	mkdir -p "${m%/*}"; log "$1: rebuilding $d ($C cores)"
 	bounded "$BUILDER_BUILD_SECS" nice -n "$BUILDER_NICE" nix build --option cores "$C" --no-link --rebuild "$d" > "$m.log" 2>&1 ||
-	    { print -r -- "nix build --rebuild $d failed rc=$? ($m.log)" > "$m"; log "decline $1: $(<"$m")"; return 1; }
+	    { print -r -- "nix build --rebuild $d failed rc=$? ($m.log)" > "$m"
+	      # a full disk or a store path GC'd mid-job says nothing about the recipe: no memo, so a later tick tries again
+	      egrep -q 'No space left on device|not valid, so checking is not possible' "$m.log" && { rm -f "$m"; log "decline $1: the store, not the recipe, failed the rebuild ($m.log); will retry"; return 1; }
+	      log "decline $1: $(<"$m")"; return 1; }
 	print ok > "$m"; : > "$J/worked"; log "$1: rebuilt $2 here, identical to the served NAR $nar"
 }
 claim() {	# claim <pname> <out> <version> <nar_hash>: claim exactly that job, then complete it done
@@ -166,9 +189,13 @@ job() {	# job <pname> <outs> <version>: one BUILD row, start to finish, in its o
 	JOBMAX=0	# inherited from the tick: at 1, bounded()'s own watchdog `&` would wait behind the command it guards
 	J=$BUILDER_STATE/job/${1//[!A-Za-z0-9._+-]/_}; mkdir -p "$J" || return 1
 	ready "$1" "$2" && claim "$1" "$out" "$3" "$nar"
+	rm -f "$J/root-out" "$J/root-drv"	# the next GC may take them; a later tick re-fetches or re-evaluates
 }
 tick() {	# rc 0 when a job rebuilt or completed something: the loop then re-ticks soon
-	typeset rows=$BUILDER_STATE/rows.json rec=$BUILDER_STATE/recipes.tsv z k c b
+	typeset rows=$BUILDER_STATE/rows.json rec=$BUILDER_STATE/recipes.tsv z k c b p
+	# a killed build leaves its fixed W (/var/tmp/<kind>-<buildKey>, the same path on every host) owned by its nixbld uid, and the next build
+	# of that drv, as another uid, cannot replace it. Older than the longest build and no process of its owner in it: remove (wave4, chef uv).
+	[[ -n ${BUILDER_WSWEEP:-} && $(/usr/bin/id -u) == 0 ]] && /usr/bin/ksh93 "$BUILDER_WSWEEP" $(( BUILDER_BUILD_SECS + 3600 )) | while read -r l; do log "$l"; done
 	z=$(size); k=${z%% *} z=${z#* } c=${z%% *} b=${z#* }
 	(( k > 0 )) || { log "not idle ($b of $BUILDER_NCPU CPUs busy; loadMax $BUILDER_LOAD_MAX, $c cores a job)"; return 1; }
 	curl -sS -m 60 -o "$rec" "$BUILDER_RECIPES" && rows "$rows" "$rec" || { log "listing unavailable"; return 1; }
@@ -177,8 +204,14 @@ tick() {	# rc 0 when a job rebuilt or completed something: the loop then re-tick
 	grep ' BUILD ' "$BUILDER_STATE/plan" > "$BUILDER_STATE/builds" || return 1
 	# every job evaluates the same commit, fetched once
 	flake=$(bounded 300 nix flake metadata --json "$BUILDER_FLAKE" 2> /dev/null | jq -r '.url // empty'); : ${flake:=$BUILDER_FLAKE}
+	# the commit the served rows come from (a row's outs were evaluated there; head may have moved past them)
+	p=$(pin "$rec"); pinned=
+	[[ -n $p && $flake != *rev=$p* ]] && { [[ $BUILDER_FLAKE == *\?* ]] && pinned="$BUILDER_FLAKE&rev=$p" || pinned="$BUILDER_FLAKE?rev=$p"; }
+	log "served recipes.tsv written by ${p:-no commit of $BUILDER_FLAKE (evaluating head only)}${p:+, evaluating ${pinned:-head (= it)}${pinned:+ first, then head}}"
+	# fetch it once here, not once per job
+	[[ -n $pinned ]] && { bounded 600 nix flake metadata "$pinned" > /dev/null 2>&1 || { log "cannot fetch $pinned: head only"; pinned=; }; }
 	log "up to $k jobs of $c cores ($b of $BUILDER_NCPU CPUs busy), $flake"
-	C=$c; rm -f "$BUILDER_STATE"/job/*/worked; JOBMAX=$k
+	C=$c; rm -f "$BUILDER_STATE"/job/*/worked "$BUILDER_STATE"/job/*/root-*; JOBMAX=$k	# roots of a killed tick's jobs
 	while read -r bp bd bo bv; do
 		# pnames filters by pname only: with two rows of one pname the server may hand out the other one
 		[[ $(jq --arg p "$bp" --arg s "$BUILDER_SYSTEM" '[.rows[] | select(.pname == $p and .system == $s)] | length' "$rows") == 1 ]] ||

@@ -1,0 +1,17 @@
+# Native illumos build of dgputemp (misc module). UTSINC = gate proto usr/include; UTSSRC = <illumos src>/usr/src/uts.
+UTSINC	?= /usr/include
+UTSSRC	?= /nonexistent
+LD	?= /usr/bin/ld
+KDEFS	= -D_KERNEL -D_SYSCALL32 -D_SYSCALL32_IMPL -D_ELF64 -D_DDI_STRICT -Dsun -D__sun -D__SVR4
+KFLAGS	= -m64 -O2 -std=gnu11 -ffreestanding -mno-red-zone -mcmodel=kernel \
+	  -mno-mmx -mno-sse -fno-asynchronous-unwind-tables \
+	  -mindirect-branch=thunk-extern -mindirect-branch-register \
+	  -fstack-protector-strong -fno-strict-aliasing -fno-common -nostdinc \
+	  -Wall -Werror -Wno-unknown-pragmas
+CC	= gcc $(KFLAGS) $(KDEFS) -I. -I$(UTSINC) -idirafter $(UTSSRC)/intel -idirafter $(UTSSRC)/common
+
+dgputemp: dgputemp.o dgputemp.mapfile
+	$(LD) -r -Breduce -M dgputemp.mapfile -o $@ dgputemp.o -dy -N misc/acpica
+
+dgputemp.o: dgputemp.c
+	$(CC) -c -o $@ dgputemp.c

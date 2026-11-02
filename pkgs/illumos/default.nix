@@ -396,8 +396,13 @@ let
   # Generic Rust packages on rust199 (./cargo.nix: vendorOf FOD + cargoPkg).
   cargo = import ./cargo.nix {
     rust = rust199; inherit gcc libc world; gate = gate'; gccLib = gcc.lib;
-    inherit (srcPkgs.nixChain) cacert;
+    inherit (srcPkgs.nixChain) cacert; tools = hostfixTools; inherit (cliBase) python3;
   };
+  # hostfix: the store tools the cargo builders put first on PATH (NixOS: stdenv's tools are store paths), so a
+  # solnix host (no /usr/gnu, no python3, no patch) rebuilds them. cliBase = the cli set without go/cargo (no cycle).
+  cliBase = import ./cli { base = srcPkgs; inherit world graphics; goChain = null; cargoPkg = null; };
+  hostfixTools = buildEnv { name = "solnix-hostfix-tools"; pathsToLink = [ "/bin" ];
+    paths = [ seedBuildTools srcPkgs.coreutils srcPkgs.findutils cliBase.gnupatch cliBase.cmake srcPkgs.pkgconf ]; };   # pkgconf: -sys crates' pkg-config
   # Go from source: go1.4 (C) -> 1.17 -> 1.20 -> 1.22 -> 1.24 -> 1.26 (./go.nix).
   goChain = import ./go.nix { inherit gcc world; gate = gate'; gccLib = gcc.lib; inherit (srcPkgs.nixChain) cacert; };
   cli = import ./cli { base = srcPkgs; inherit world graphics goChain; inherit (cargo) cargoPkg; };
@@ -410,7 +415,14 @@ let
   desktop = import ./desktop { inherit (cargo) cargoPkg; inherit graphics; inherit (cli) fd file;
     inherit (srcPkgs) mkSrcPkg bash coreutils gnugrep gnused hostname; };
   # The GTK 3 / Wayland stack for Firefox (./desktop/gtk): its own dir, so neither COSMIC nor desktop/ outs move.
-  gtk = import ./desktop/gtk { base = srcPkgs; inherit graphics cli; inherit (cosmic) noto-sans; };
+  gtk = import ./desktop/gtk { base = srcPkgs; inherit graphics cli; inherit (cosmic) noto-sans; inherit (cargo) cargoPkg; rust = rust199; inherit world; };
+  # COSMIC's fonts and icon themes on store tools only (./desktop/cosmic-data.nix). Not graphics/cosmic-data.nix, which
+  # still evaluates there (unused) because graphics/ is every COSMIC app's fixups = ./. input: editing it moves all 21.
+  # shortcut: graphics/cosmic-data.nix is dead text kept for that hash; delete it in the next wave that rebuilds COSMIC.
+  cosmicData = import ./desktop/cosmic-data.nix { fetchurl = import <nix/fetchurl.nix>; tools = hostfixTools; inherit world;
+    inherit (cliBase) python3;
+    src = repo: sha256: import <nix/fetchurl.nix> {   # = graphics/cosmic.nix's src (same FOD)
+      name = "${repo}-epoch-1.5.0.tar.gz"; url = "https://codeload.github.com/pop-os/${repo}/tar.gz/refs/tags/epoch-1.5.0"; inherit sha256; }; };
   # COSMIC rust programs on rust199 + graphics (./graphics/cosmic.nix).
   cosmic = import ./graphics/cosmic.nix {
     rust = rust199; inherit gcc libc world; gate = gate'; gccLib = gcc.lib;
@@ -546,7 +558,7 @@ let
   # BSD fetch(1) (+ libfetch), from FreeBSD source: the last of the maintainer-required CLI set.
   bsdfetch = import ./bsdfetch.nix {
     gate = gate'; libcSlice = libc;
-    inherit (srcPkgs) gccWrapper openssl;
+    inherit (srcPkgs) gccWrapper openssl; tools = hostfixTools; inherit (cliBase) perl; inherit world;
   };
 
   iwx-driver = import ./iwx-driver.nix {
@@ -580,6 +592,17 @@ let
   # the proto lacks (sys/i2c, sys/acpica.h, usbai_private.h) come from
   # kernelNd.src. hardware.touchpad.i2cHid lays and binds them.
   touchpad-driver = import ./touchpad-driver.nix {
+    gate = gate';
+    inherit kernelNd ld;
+    solnixDev = buildEnv {
+      name = "solnix-dev";
+      paths = [ srcPkgs.gccWrapper srcPkgs.binutils srcPkgs.gnumake ];
+      pathsToLink = [ "/bin" "/share/man" ];
+    };
+  };
+
+  # dgputemp: the X1E's dGPU temperature (EC GPUT) as a kstat, for the nvidia thermal guard.
+  dgputemp = import ./dgputemp.nix {
     gate = gate';
     inherit kernelNd ld;
     solnixDev = buildEnv {
@@ -631,6 +654,19 @@ let
     '' ];
   };
 
+  # btintelfw + hcitest -- userland Bluetooth tools over ugen (./bluetooth):
+  # the Intel firmware loader (FreeBSD iwmbtfw) and NetBSD's netbt HCI core
+  # (unit up + inquiry). Each build runs its self-test and negative controls.
+  bluetooth = import ./bluetooth {
+    gate = gate';
+    inherit libc;
+    solnixDev = buildEnv {
+      name = "solnix-dev";
+      paths = [ srcPkgs.gccWrapper srcPkgs.binutils srcPkgs.gnumake ];
+      pathsToLink = [ "/bin" "/share/man" ];
+    };
+  };
+
   # iwm-firmware -- the proprietary (redistributable) iwlwifi blob + licence
   # (./iwm-firmware.nix), gated on the unfree opt-in. Threaded through here so
   # mkIwmKernel can lay it into the BE kernel tree alongside the module. The
@@ -656,6 +692,99 @@ let
   # redistributable for open-source kernels; gated on the explicit opt-in.
   nvidiaGspFirmware = acceptFirmwareLicense:
     import ./nvidia-gsp-firmware.nix { inherit acceptFirmwareLicense; };
+  # nvidia-probe -- the open modules' ioctl probe (src/drm-port/nvidia-oss-tools/
+  # nvprobe.c): /dev/nvidiactl version + card list, the first /dev/nvidia0 open
+  # (RmInitAdapter, GSP boot), root client/device/subdevice, GPU name and
+  # temperature. Only the MIT ABI headers of the pinned RM tree (rmSrc).
+  nvidia-probe = derivation {
+    name = "nvidia-probe-615.71.09";
+    system = "x86_64-solaris";
+    builder = "/usr/bin/bash";
+    PATH = "/usr/bin";
+    src = ../../src/drm-port/nvidia-oss-tools/nvprobe.c;
+    rm = import ./fetch-tarball.nix {
+      url = "https://github.com/nwilkens/open-gpu-kernel-modules/archive/8da2326c626cdd08130538f0f5f9a1f985054f4a.tar.gz";
+      sha256 = "386540bc01e99bae3bc1d7a137fa04969e33f77bb3e2eb9991445947806ceb00";
+      narHash = "19r6wrm4067pq89nr63dppnbv85q5rmpwb2pp0kz85ymn69lg4lh";
+    };
+    solnixDev = buildEnv {
+      name = "solnix-dev";
+      paths = [ srcPkgs.gccWrapper srcPkgs.binutils srcPkgs.gnumake ];
+      pathsToLink = [ "/bin" "/share/man" ];
+    };
+    args = [ "-c" ''
+      set -eu
+      export PATH="$solnixDev/bin:/usr/bin"
+      mkdir -p "$out/bin"
+      I="-I$rm/kernel-open/common/inc -I$rm/src/common/sdk/nvidia/inc -I$rm/src/nvidia/arch/nvalloc/unix/include -I$rm/src/common/inc"
+      cp "$src" nvprobe.c; gcc -O2 -Wall -Werror $I -Wl,-R,${libc}/lib/amd64 -o "$out/bin/nvidia-probe" nvprobe.c
+      # no GPU at build time: it must fail at the first step, not succeed
+      "$out/bin/nvidia-probe" > /dev/null 2>&1 && { echo "FATAL: nvidia-probe passed without a GPU" >&2; exit 1; } || true
+    '' ];
+  };
+  # mkNvidiaBootDb base -- `base` with the devlink.tab lines of the nvidia
+  # module's /dev names (kernel-illumos/devlink.tab without nvidia_uvm, which
+  # is not built). The majors and the alias come from mkDriversDbWith.
+  mkNvidiaBootDb = base: derivation {
+    name = "illumos-driver-db-nvidia";
+    system = "x86_64-solaris";
+    builder = "/usr/bin/bash";
+    PATH = "/usr/bin";
+    inherit base;
+    tab = "${nvidia-oss-modules}/share/nvidia-oss/devlink.tab";
+    args = [ "-c" ''
+      set -eu
+      mkdir -p "$out"; cp "$base"/* "$out"/; chmod u+w "$out"/*
+      grep -v nvidia_uvm "$tab" | while IFS= read -r l; do
+        grep -qxF "$l" "$out/devlink.tab.add" || printf '%s\n' "$l" >> "$out/devlink.tab.add"
+      done
+      grep -q 'type=ddi_pseudo:nvidia	' "$out/devlink.tab.add" || { echo "FATAL: nvidia devlink" >&2; exit 1; }
+    '' ];
+  };
+  # mkNvidiaBootKernel base gsp -- `base` (mkGpuKernel's tree with the nvidia
+  # modules) plus what an nvidia bound at boot needs:
+  #   kernel/drv/nvidia.conf  the pseudo node (/dev/nvidiactl) and
+  #       NVreg_GpuInitOnProbe=0: attach maps the BARs and makes /dev/nvidia0
+  #       but leaves RmInitAdapter (GSP boot) to the first open, which a
+  #       service runs after the dump device is up (graphics-gpu.nix);
+  #   kernel/drv/tzmon.conf   solnix-dgpu-off=0: tzmon's boot-time dGPU
+  #       power-off (scripts/patches/0005) acts on every unattached dGPU,
+  #       bound or not, and would cut the GPU's power before nvidia attaches;
+  #   kernel/misc/amd64/dgputemp  the EC dGPU-temperature kstat the thermal
+  #       guard reads (pkgs.solnix.dgputemp);
+  #   usr/kernel/firmware/nvidia/<v>/  the GSP firmware (85 MB for GA10X). It
+  #       is on the module path (firmware_open -> kobj_open_path) but not in
+  #       the boot_archive's filelist, which a kernel/ copy would grow by that.
+  mkNvidiaBootKernel = base: gsp: derivation {
+    name = "illumos-kernel-nvidia";
+    system = "x86_64-solaris";
+    builder = "/usr/bin/bash";
+    PATH = "/usr/bin:/usr/sbin";
+    inherit base gsp dgputemp;
+    args = [ "-c" ''
+      set -eu
+      mkdir -p "$out"
+      ( cd "$base" && tar cf - . ) | ( cd "$out" && tar xf - )
+      for d in "$out" "$out/kernel" "$out/kernel/drv" "$out/kernel/drv/tzmon.conf" "$out/kernel/misc" "$out/kernel/misc/amd64" "$out/usr" "$out/usr/kernel"; do
+        [ -e "$d" ] && [ ! -h "$d" ] && chmod u+w "$d" 2>/dev/null || true
+      done
+      [ -f "$out/kernel/drv/tzmon.conf" ] || { echo "FATAL: no kernel/drv/tzmon.conf in the base tree" >&2; exit 1; }
+      mkdir -p "$out/usr/kernel/firmware"
+      cp -R "$gsp/kernel/firmware/nvidia" "$out/usr/kernel/firmware/"
+      cp "$dgputemp/kernel/misc/amd64/dgputemp" "$out/kernel/misc/amd64/dgputemp"
+      printf '%s\n' '# solnix: the control node, and RM init deferred to the first open (graphics-gpu.nix)' \
+        'name="nvidia" parent="pseudo" instance=0;' 'NVreg_GpuInitOnProbe=0;' > "$out/kernel/drv/nvidia.conf"
+      grep -q '^solnix-dgpu-off' "$out/kernel/drv/tzmon.conf" && { echo "FATAL: tzmon.conf already sets solnix-dgpu-off" >&2; exit 1; }
+      printf '%s\n' '# solnix: nvidia drives the dGPU; no boot-time power-off' 'solnix-dgpu-off=0;' >> "$out/kernel/drv/tzmon.conf"
+      chmod 0444 "$out/kernel/drv/nvidia.conf" "$out/kernel/drv/tzmon.conf"
+      [ -e "$out/kernel/drv/amd64/nvidia" ] || { echo "FATAL: no nvidia module in the base tree" >&2; exit 1; }
+      for m in nvidia_modeset nvidia_i2c; do
+        [ ! -e "$out/kernel/drv/$m.conf" ] || { echo "FATAL: $m.conf would attach $m at boot" >&2; exit 1; }
+      done
+      [ ! -e "$out/kernel/firmware/nvidia" ] && [ -s "$out/usr/kernel/firmware/nvidia/615.71.09/gsp_ga10x.bin" ] \
+        || { echo "FATAL: GSP firmware not in usr/kernel only" >&2; exit 1; }
+    '' ];
+  };
   # i915-firmware (DMC + GuC + HuC for Alder Lake-P), unfree, redistributable
   # (linux-firmware LICENSE.i915); gated on the explicit opt-in.
   i915Firmware = acceptFirmwareLicense:
@@ -893,6 +1022,10 @@ let
   # X1E's Alder Lake-P Iris Xe and the X1's Coffee Lake-H UHD 630 (the two the
   # staged attach plan covers, src/drm-port/i915/STAGED-ATTACH-PLAN.md).
   i915Aliases = [ "pciex8086,46a6" "pciex8086,3e9b" ];
+  # nvidiaAliases -- the dGPU hardware.graphics.nvidia.attachAtBoot binds: the
+  # X1E Gen 5's RTX 3080 Ti Mobile (GA103). One id, not the 319-line
+  # nvidia.aliases list: the only NVIDIA GPU this has been tried on.
+  nvidiaAliases = [ "pciex10de,2420" ];
 
   # mkDriversDbWith base drivers -- `base` (a driver DB shaped like `drivers`)
   # with each of `drivers` ({ name; perm; aliases; }) added the mkIwxDriversDb
@@ -1121,11 +1254,12 @@ in
   # tree when hardware.wirelessIwm.attachAtBoot. mkIwmKernel/iwmFirmware take
   # the unfree opt-in so the blob stays out of any non-opted closure.
   inherit iwm-driver mkIwmDriversDb mkIwmDriversDbUnbound mkIwmKernel iwmFirmware wpa-pmk solnix-cputemp;
-  # Intel Bluetooth firmware (phase 0, docs/design-bluetooth.md).
+  # Intel Bluetooth firmware (phase 0, docs/design-bluetooth.md) and the userland tools.
   inherit ibtFirmware;
+  inherit (bluetooth) btintelfw hcitest;
   # iwx wifi (AX2xx): module only; mkIwxDriversDb/mkIwxKernel below.
   inherit iwx-driver iwxFirmware iwxAliases mkIwxDriversDb mkIwxKernel;
-  inherit nvidia-oss-modules nvidiaGspFirmware i915Firmware;
+  inherit nvidia-oss-modules nvidiaGspFirmware i915Firmware nvidia-probe nvidiaAliases dgputemp mkNvidiaBootDb mkNvidiaBootKernel;
   # Intel iGPU (i915) and the GPU driver-DB/kernel helpers (modules/config/graphics-gpu.nix).
   inherit i915-driver i915Aliases mkDriversDbWith mkGpuKernel;
   # X1E touchpad (dwiic + ihid) and its driver-DB/kernel helpers (modules/config/touchpad-i2c-hid.nix).
@@ -1133,17 +1267,18 @@ in
 
   inherit (srcPkgs) zlib libxml2 openssl openssh bash nspr nss git libcExtra binutils gnumake gccWrapper vi pkgconf;
   inherit (srcPkgs) ncurses less htop top libevent tmux coreutils gnugrep gnused gnutar findutils diffutils jq gettext home-manager xorgproto lndir hostname libiconv;
-  inherit (srcPkgs) gzip nano rsync smartmontools tree wget db1 nvi;
+  inherit (srcPkgs) gzip nano rsync smartmontools tree db1 nvi;
+  wget = srcPkgs.wgetWith cli.perl;   # pod2man from the store perl (a solnix host has no /usr/bin/pod2man)
   inherit (graphics) meson samurai expat libffi wayland wayland-protocols libdrm mesa
     pixman xkeyboard-config libxkbcommon libdisplay-info seatd dbus;
   inherit (cosmic) cosmic-comp cosmic-term cosmic-session cosmic-panel cosmic-applets cosmic-launcher
     cosmic-app-library cosmic-notifications cosmic-osd cosmic-settings-daemon cosmic-bg cosmic-workspaces cosmic-randr cosmic-idle
-    cosmic-settings cosmic-files cosmic-edit cosmic-store cosmic-screenshot cosmic-greeter greetd
-    open-sans noto-sans noto-sans-mono fira-mono hicolor-icon-theme pop-icon-theme cosmic-icons;
+    cosmic-settings cosmic-files cosmic-edit cosmic-store cosmic-screenshot cosmic-greeter greetd;
+  inherit (cosmicData) open-sans noto-sans noto-sans-mono fira-mono hicolor-icon-theme pop-icon-theme cosmic-icons;
   inherit (desktop) pop-launcher cosmic-wallpapers sound-theme-freedesktop adwaita-icon-theme dejavu-fonts liberation-fonts
     noto-fonts-color-emoji xdg-utils xdg-user-dirs;
   inherit (gtk) pcre2 glib libpng libjpeg-turbo freetype fontconfig fribidi harfbuzz cairo pango gdk-pixbuf libepoxy
-    at-spi2-core gtk3 gperf nasm ninja meson_1_10;
+    at-spi2-core gtk3 grim gperf nasm ninja meson_1_10 nodejs cbindgen llvm-clang firefox-esr;
   # cargoLib.{vendorOf,cargoPkg}: build any Cargo.lock'd crate on rust199 (./cargo.nix).
   cargoLib = cargo;
   inherit (goChain) go go_1_4 go_1_17 go_1_20 go_1_22 go_1_24 go_1_26 go_1_27;

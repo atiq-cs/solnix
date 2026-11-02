@@ -47,6 +47,8 @@
                              # carrying a reference back to this output)
 , linkDeps ? [ ]             # build-time only (headers, link-time libs): NOT put in RUNPATH,
                              # so they stay out of the runtime closure (boost headers, json)
+, nativeTools ? [ ]          # NixOS nativeBuildInputs: store paths whose bin/ (and sbin/, usr/bin/) make up the WHOLE builder PATH
+                             # after buildTools: no /usr/gnu, no host /usr/bin. [] => the old PATH text, so no drv moves.
 , system ? "x86_64-solaris"
 }:
 
@@ -104,10 +106,20 @@ let
       /usr/bin/elfedit -e "dyn:runpath $(rp_for $cl)" "$f" || echo "elfedit $f" >> "$W/fail"
     done
   '';
+  ntPath = builtins.concatStringsSep ":" (builtins.concatMap (d: map (s: "${d}/${s}") [ "bin" "sbin" "usr/bin" "usr/sbin" ]) nativeTools);
+  # store-only PATH (nativeTools set): the old line is replaced in the builder text, so a recipe without nativeTools keeps its drv.
+  # CC_FOR_BUILD: configure's build-machine compiler (flex's stage1 scanner, autosetup's bootstrap jimsh in neomutt/sqlite) is looked up as
+  # bare gcc/cc, which only the OI host had on PATH: the same wrapper as CC (native build).
+  hermetic = a: if nativeTools == [ ] then a else a // { inherit ntPath; args = map (x: builtins.replaceStrings
+    [ ''export PATH="''${btPath:+$btPath:}/usr/gnu/bin:/usr/bin:/usr/sbin"'' ''export CC="$W/cc$ABI" ABI LIBSUB'' ]
+    [ ''export PATH="''${btPath:+$btPath:}$ntPath" CONFIG_SITE=${./config.site}''   # config.site: host-state probes pinned
+      ''export CC="$W/cc$ABI" CC_FOR_BUILD="$W/cc$ABI" ABI LIBSUB'' ] x) a.args; };
+  drvAttrs' = hermetic drvAttrs;
   drvAttrs = {
   name = "${pname}-${version}";
   inherit system gate gcc stage0 pname;
   build = lp64Fix build;
+  # nativeTools => store-only PATH: buildTools' bins, then each tool's bin/sbin/usr/bin/usr/sbin. Only the attr is added when set.
   # the from-source gcc's runtime dir (lib = 32-bit, lib/amd64 = 64-bit); empty for a host compiler.
   gccLib = if builtins.isAttrs gcc then "${gcc.lib}/lib" else "";
   # buildTools' bin/ dirs on PATH (btPath) and the gstrip candidates both
@@ -300,4 +312,4 @@ let
     echo "=== $pname: every ELF resolves inside /nix/store ===" >&2
   '') ];
 };
-in derivation (drvAttrs // { buildKey = builtins.substring 0 16 (builtins.hashString "sha256" (builtins.toJSON drvAttrs)); })
+in derivation (drvAttrs' // { buildKey = builtins.substring 0 16 (builtins.hashString "sha256" (builtins.toJSON drvAttrs')); })

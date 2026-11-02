@@ -24,7 +24,8 @@ let
     config.environment.systemPackages
     ++ lib.concatMap
       (pkg: lib.concatMap
-        (o: lib.optional (pkg ? ${o}) pkg.${o})
+        # isDerivation: an attr named like an output can be something else (cargoPkg's `man` install hook is a string)
+        (o: lib.optional (pkg ? ${o} && lib.isDerivation pkg.${o}) pkg.${o})
         config.environment.extraOutputsToInstall)
       config.environment.systemPackages;
 in

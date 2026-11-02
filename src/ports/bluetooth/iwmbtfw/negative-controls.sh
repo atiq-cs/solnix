@@ -34,6 +34,7 @@ sab ugen_evq.c 's/elen = 2 + (size_t)q->buf\[1\];/elen = q->len;/' "event framin
 sab ugen_usb.c 's/buf\[6\] = len . 0xff;/buf[6] = 0;/' "control setup wLength zeroed"
 sab ugen_usb.c 's/buf\[0\] = rt;/buf[0] = rt | 0x80;/' "control setup direction bit"
 sab btintelfw.c 's/memcpy(out9, ev->data, 9);/memcpy(out9, ev->data + 1, 9);/' "Read_Local_Version return params"
+sab ugen_usb.c 's/!ugen_noclear \&\&/0 \&\&/' "interrupt-IN toggle reset at open removed"
 sab compat/sys/endian.h 's/((uint32_t)p\[1\] << 8)/((uint32_t)p[1] << 0)/' "le32dec byte order"
 
 echo "negative controls: $caught/$total caught"

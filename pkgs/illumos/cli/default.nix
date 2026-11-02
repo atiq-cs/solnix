@@ -5,7 +5,7 @@
 # cargoPkg/goChain null (aarch64: no Rust or Go illumos/aarch64 target upstream) drops those tiers.
 let
   # base = srcPkgs (base-src.nix): mkSrcPkg, zlib, openssl, ncurses, coreutils, ... and nixChain.
-  args = { inherit base world graphics; inherit (base) mkSrcPkg zlib openssl ncurses libiconv pkgconf nixChain; };
+  args = { inherit base world graphics; inherit (base) mkSrcPkg zlib openssl ncurses libiconv pkgconf nixChain hostTools; };
   # remove-references-to for text files (Config.pm, _sysconfigdata, generated scripts): the
   # gate proto and the compiler are build-time only; a hash left in a text file would pull
   # ~400 MB into the runtime closure (the ELF guard in mk-src-pkg only sees ELFs).
@@ -43,6 +43,6 @@ let
   c5 = import ./c-dev.nix (h // { inherit (c1) readline; inherit (c2) sqlite; inherit (c4) perl; });
   c6 = import ./c-mail.nix (h // { inherit (c1) readline; inherit (c4) perl; inherit (c5) cmake gdbm; });
   rust = import ./rust.nix { inherit cargoPkg chk; extra = import ./rust-extra.nix h; };
-  gotools = import ./go-tools.nix { inherit (goChain) goPkg go_1_27; inherit chk; } // import ./go-c1.nix { inherit (goChain) goPkg go_1_27; inherit chk; };
+  gotools = import ./go-tools.nix { inherit (goChain) goPkg go_1_27; inherit chk; inherit (c5) python3; } // import ./go-c1.nix { inherit (goChain) goPkg go_1_27; inherit chk; inherit (c5) python3; };
   data = import ./data.nix h;
 in c1 // c2 // c3 // c4 // c5 // c6 // data // (if cargoPkg == null then { } else rust) // (if goChain == null then { } else gotools)

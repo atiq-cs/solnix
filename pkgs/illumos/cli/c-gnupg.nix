@@ -1,12 +1,25 @@
 # cli/c-gnupg.nix -- GnuPG 2.4 and its libraries (libgpg-error, libgcrypt, libassuan, libksba, npth).
-{ mkSrcPkg, world, zlib, readline, ncurses, chk, dropDocs, ... }:
+{ mkSrcPkg, world, zlib, readline, ncurses, chk, dropDocs, hostTools, ... }:
 let
   gpgSrc = name: version: sha256: { url = "https://gnupg.org/ftp/gcrypt/${name}/${name}-${version}.tar.bz2"; inherit sha256; };
+  # the bzip2 CLI (bin/bzip2, bunzip2, bzcat; nixChain.bzip2 ships the library only): GNU tar unpacks these .tar.bz2 sources by
+  # running bzip2 from PATH, and a solnix host has none ('lbzip2: Cannot exec', measured on dixi). Same pinned tarball as nixChain.bzip2.
+  bzip2-bin = mkSrcPkg {
+    pname = "bzip2-bin"; version = "1.0.8";
+    src = { url = "https://sourceware.org/pub/bzip2/bzip2-1.0.8.tar.gz";
+            sha256 = "ab5a03176ee106d3f0fa90e381da478ddae405918153cca248e682cd0c4a2269"; };
+    build = ''
+      gmake bzip2 CC="$CC" >&2
+      mkdir -p "$out/bin"; cp bzip2 "$out/bin/"; ln -s bzip2 "$out/bin/bunzip2"; ln -s bzip2 "$out/bin/bzcat"
+      echo bzip2-ok | "$out/bin/bzip2" | "$out/bin/bzcat" | grep -qx bzip2-ok || { echo "FATAL: bzip2 round trip" >&2; exit 1; }
+    '';
+  };
+  tools = [ bzip2-bin ] ++ hostTools;   # store-only PATH + config.site (wave4), and bzip2 for the .tar.bz2 unpack
   # The OI build host has its own gpgrt-config/libgcrypt in /usr/bin (1.12.4, measured): configure
   # takes a *-config from PATH, so the deps' bin/ go first and GPGRT_CONFIG names the store one.
   cfgPath = deps: builtins.concatStringsSep ":" (map (d: "${d}/bin") deps);
   lib = { pname, version, sha256, deps ? [ ], flags ? "", check }: mkSrcPkg {
-    inherit pname version deps; src = gpgSrc pname version sha256;
+    inherit pname version deps; src = gpgSrc pname version sha256; nativeTools = tools;
     build = ''
       export PATH="${cfgPath deps}''${PATH:+:$PATH}"
       ${if deps == [ ] then "" else "export GPGRT_CONFIG=${builtins.head deps}/bin/gpgrt-config"}
@@ -61,7 +74,7 @@ in rec {
   gnupg = mkSrcPkg {
     pname = "gnupg"; version = "2.4.8";
     src = gpgSrc "gnupg" "2.4.8" "b58c80d79b04d3243ff49c1c3fc6b5f83138eb3784689563bcdd060595318616";
-    deps = [ world zlib readline ncurses libgpg-error libgcrypt libassuan libksba npth ];
+    deps = [ world zlib readline ncurses libgpg-error libgcrypt libassuan libksba npth ]; nativeTools = tools;
     build = ''
       export PATH="${cfgPath [ libgpg-error libgcrypt libassuan libksba npth ]}:$PATH"
       export GPGRT_CONFIG=${libgpg-error}/bin/gpgrt-config

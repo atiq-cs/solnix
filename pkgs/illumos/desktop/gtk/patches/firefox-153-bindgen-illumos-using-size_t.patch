@@ -1,0 +1,22 @@
+--- a/third_party/rust/bindgen/ir/ty.rs	2026-11-01 20:14:05.978819051 -0500
++++ b/third_party/rust/bindgen/ir/ty.rs	2026-11-01 20:14:06.161002400 -0500
+@@ -1159,6 +1159,19 @@
+                         ctx,
+                     );
+                 }
++                // illumos <stddef.h> does `using std::size_t;`: a global size_t is a UsingType that libclang 21
++                // reports as Elaborated -> Unexposed, whose canonical type (unsigned long) would bypass
++                // size_t_is_usize. Map it by its spelling, as type_from_named does for the typedef.
++                CXType_Elaborated
++                    if ctx.options().size_t_is_usize &&
++                        matches!(ty.spelling().as_str(), "size_t" | "ssize_t") =>
++                {
++                    let signed = ty.spelling() == "ssize_t";
++                    TypeKind::Int(IntKind::Custom {
++                        name: if signed { "isize" } else { "usize" },
++                        is_signed: signed,
++                    })
++                }
+                 CXType_Elaborated => {
+                     return Self::from_clang_ty(
+                         potential_id,

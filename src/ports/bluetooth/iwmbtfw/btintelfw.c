@@ -87,7 +87,7 @@ static void
 btintel_usage(void)
 {
 	fprintf(stderr, "usage: btintelfw -d /dev/usb/<vid>.<pid>/<inst> "
-	    "{-r | -l | -V [-n N]} [-f fwdir] [-D]\n       btintelfw -t\n");
+	    "{-r | -l | -V [-n N]} [-f fwdir] [-D] [-C]\n       btintelfw -t\n");
 	exit(2);
 }
 
@@ -101,7 +101,7 @@ main(int argc, char *argv[])
 	const char *dir = NULL, *fwdir = _DEFAULT_IWMBT_FIRMWARE_PATH;
 	int c, ronly = 0, load = 0, ver = 0, nrep = 1, ok = 0, rc = 1;
 
-	while ((c = getopt(argc, argv, "d:f:rlVDtn:")) != -1) {
+	while ((c = getopt(argc, argv, "d:f:rlVDtn:C")) != -1) {
 		switch (c) {
 		case 'd': dir = optarg; break;
 		case 'f': fwdir = optarg; break;
@@ -109,6 +109,7 @@ main(int argc, char *argv[])
 		case 'l': load = 1; break;
 		case 'V': ver = 1; break;
 		case 'n': nrep = atoi(optarg); break;
+		case 'C': ugen_usb_set_noclear(1); break;
 		case 'D': iwmbt_do_debug = iwmbt_do_info = 1; break;
 		case 't': return (btintel_selftest() == 0 ? 0 : 1);
 		default: btintel_usage();

@@ -235,6 +235,10 @@ association.
 * **ugen and ubt cannot both own the device.** In phase 0 usb_mid's ugen mode owns it. When
   ubt is bound, ugen goes away, so the phase-0 tool is only for bring-up and as a reference,
   not something phase 1 builds on.
+* **Interrupt-endpoint toggle across reopen (measured, §9).** illumos xhci unconfigures
+  periodic endpoints on close, so any driver that closes and reopens its interrupt-IN pipe
+  (ubt on detach/attach, suspend/resume, or when netbt disables and re-enables the unit) must
+  send CLEAR_FEATURE(ENDPOINT_HALT) first, or it loses events on alternate opens.
 * **Firmware state across resets.** The controller loses its firmware on a USB reset or a
   power-cycle. If a load goes wrong partway, the controller may stay in its bootloader until
   the next cold boot. FreeBSD's tool rejects a bad header before it sends anything.
@@ -245,31 +249,62 @@ association.
 
 Code: `src/ports/bluetooth/iwmbtfw/` (PROVENANCE.md). Firmware: `pkgs/illumos/ibt-firmware.nix`
 (`pkgs.solnix.ibtFirmware`, throws unless `acceptFirmwareLicense`). Built on chef (gcc 14.3,
-`-Wall -Wextra -Werror`). `make check`: self-test PASS, and 5/5 negative controls are caught.
+`-Wall -Wextra -Werror`). `make check`: self-test PASS, and 6/6 negative controls are caught.
 The controls break event framing, the control-setup wLength, the direction bit, the HCI
-return-parameter offset and le32dec, and each one fails the self-test. Run log:
+return-parameter offset, the toggle reset and le32dec, and each one fails the self-test. Run log:
 /scratch/solnix/bt1/lixi-run.log. Nothing on lixi changed persistently: the files lived in
 /tmp (tmpfs), and the firmware sits in controller RAM.
 
 | check | result |
 |---|---|
-| Intel Read Version (0xfc05, read-only), 2 runs | 2/2: bootloader (img_type 0x01), hw_variant 0x18, ECDSA secure boot, cnvi_top 0x00080400 / cnvr_top 0x00400410 -> `ibt-0040-0041` |
-| load `.sfi` + Intel Reset + `.ddc` + event mask (upstream `handle_9260` unmodified), 1 run | **1/1**, 2 s wall: "Firmware download complete" -> "Firmware operational", img_type 0x03, firmware 2024.33 build 81755 |
+| Intel Read Version (0xfc05, read-only), cold, 3 runs over two boots | 3/3: bootloader (img_type 0x01), hw_variant 0x18, ECDSA secure boot, cnvi_top 0x00080400 / cnvr_top 0x00400410 -> `ibt-0040-0041` |
+| load `.sfi` + Intel Reset + `.ddc` + event mask (upstream `handle_9260` unmodified), one run per boot | **2/2** (two boots), 2 s wall: "Firmware download complete" -> "Firmware operational", img_type 0x03, firmware 2024.33 build 81755 |
 | HCI_Read_Local_Version, same process right after the load | HCI version 12 (Bluetooth 5.3), manufacturer 0x0002 (Intel), LMP subversion 0x375b |
 | Wi-Fi on the same combo card afterwards | iwx0 up, gateway ping 3/3 |
-| HCI_Read_Local_Version in **separate** later processes | **1/8, then 7 failures in a row**: the command write succeeds, then no event arrives on if0in1 within 2 s |
+| HCI_Read_Local_Version in **separate** later processes, before the fix | 1/8 then 7 failures in a row (session 1); exact alternation, 4/8 (session 2) |
+| the same after the fix (toggle reset at open) | **28/28 commands in 20 sessions**, and 6/6 `-r -V` sessions; the control (same binary, `-C`) still alternates, 5/9, and fails 0/4 on `-r -V` |
 
-**Open (not yet explained):** repeated open/command/close is not reliable. Three hypotheses,
-none tested on hardware yet:
-(a) ugen does not restart interrupt-IN polling on reopen (the source at usba_ugen.c 2087-2260
-says it does, so this is the weakest);
-(b) usb_mid's power management suspends the idle device (it enables remote wakeup;
-usb_mid.c 1390-1425);
-(c) the controller stops answering after the load.
-The next run separates them: 20 reads inside one handle (`-n 20`) against separate opens, with
-a non-blocking device and endpoint state dump on each timeout.
+**Cause (measured): the interrupt-IN data toggle falls out of sync across a reopen.** illumos
+xhci unconfigures an interrupt or isochronous endpoint when its pipe closes
+(`xhci_usba.c` `xhci_hcdi_pipe_close`; bulk and control endpoints stay configured). The next
+ugen open adds endpoint 0x81 again, with the host's sequence at DATA0. The controller keeps its
+own toggle. After a session that took an odd number of event packets, the first packet of the
+next session carries the wrong toggle: the host ACKs it and drops it (USB 2.0 §8.6.4), and the
+device flips its toggle anyway. So the packet parity of one session decides the next one.
+
+Three hypotheses were refuted on the way, each with a measurement:
+(a) ugen polling restarts on every open (dtrace: `start_polling rv=0` in failing runs, with no
+completion before close);
+(b) there is no PM transition (no `usb_mid_power` call in any trace, and devstat is ONLINE);
+(c) the controller is healthy (20/20 reads on one handle).
+
+The parity model was written down before each run and held in every one. With `-n 2` sessions
+a desynced device gives 1/2 per session, the second read succeeding on the same handle, and
+stays desynced; one single-read session moves it back into sync; after that every session is
+2/2.
+
+**Fix.** `libusb_open` sends CLEAR_FEATURE(ENDPOINT_HALT) to 0x81 before it opens `if0in1`. That
+resets the device's toggle to DATA0 (USB 2.0 §9.4.5), the value the re-added host endpoint
+starts at. The kernel ubt (phase 1) needs the same step every time it opens the interrupt pipe:
+a raw CLEAR_FEATURE(ENDPOINT_HALT, 0x81) through `usb_pipe_sync_ctrl_xfer` on the default pipe, before the
+interrupt pipe is opened. Not `usb_clr_feature()`: on an endpoint with no open pipe it dereferences NULL
+(usbai_util.c:1641-1651, read, not run; docs/bluetooth-phase1-plan.md). The problem affects any ugen client of an
+interrupt endpoint that reopens it, not just Bluetooth; it is worth a note to illumos.
+
+Cold path with the fix, run on lixi solnix-32 (2026-11-01, bt2), controller fresh from boot: `-r` bootloader,
+ibt-0040-0041; load, then 20/20 reads on one handle; 8/8 separate runs. 43/43 commands across 15 sessions. The `-C`
+control (warm controller) alternated FAIL/OK as predicted.
+
+**Phase 1 is planned in docs/bluetooth-phase1-plan.md.** It changes this doc in six places, all read in source, not
+run:
+- the HCI socket moves into phase 1;
+- the clear goes over the control pipe, as above;
+- ubt refuses a controller still in its bootloader;
+- ubt binds interface 0 only (`usbif8087,33.config1.0`), so usb_mid keeps the ugen nodes for the loader;
+- "a USB reset loses the firmware" is unmeasured;
+- illumos needs its own SOCK_RAW value (4), a sockaddr_bt without bt_len, and an mbuf type of its own.
+Where that plan and this doc disagree, the plan is newer.
+Only the reopen path is measured with the fix.
 
 The step proves the approach. USBA plus ugen carries every HCI transfer type the Intel boot
-sequence needs, and FreeBSD's BSD-2 loader runs unmodified over a 485-line shim (ugen_usb.c + ugen_evq.c). Phase 1 (ubt in
-the kernel) does not depend on ugen, but (b) would affect it too: ubt must hold the device at
-full power, or handle resume and re-run the firmware load.
+sequence needs, and FreeBSD's BSD-2 loader runs unmodified over a 507-line shim (ugen_usb.c + ugen_evq.c).

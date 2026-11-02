@@ -15,6 +15,10 @@
 #       src/drm-port/i915/STAGED-ATTACH-PLAN.md: the driver takes the console
 #       over gfxp_fb and creates card0/renderD128, and the OpenBSD inteldrm
 #       modeset runs only on the first open of those nodes.
+#   hardware.graphics.nvidia.attachAtBoot  installed system: bind nvidia to
+#       the RTX 3080 Ti (10de:2420) and bring it up after the dump device, under
+#       a thermal guard (site/solnix-nvidia, in ./wireless-iwx.nix). Boot-once
+#       BEs only, for now: docs/x1e-gpu-runtime-bind.md section D.
 #
 # The driver DB and kernel tree are rendered together with the wifi drivers'
 # in modules/config/wireless-iwx.nix (one place renders the final
@@ -70,16 +74,59 @@ in
         kernel/firmware/nvidia/615.71.09/) next to the nvidia modules. Turing
         and newer GPUs do not run without it. The firmware is unfree,
         redistributable for open-source kernels under the NVIDIA Driver License
-        Agreement, which is installed next to the blobs. Only takes effect with
-        hardware.graphics.onMedia.
+        Agreement, which is installed next to the blobs. Takes effect with
+        hardware.graphics.onMedia or hardware.graphics.nvidia.attachAtBoot.
+      '';
+    };
+    nvidia.attachAtBoot = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Bind the nvidia open module to the X1E's RTX 3080 Ti (pkgs.solnix.
+        nvidiaAliases) at boot and bring the GPU up once the dump device is
+        armed. Lays the three nvidia modules, nvidia.conf (the /dev/nvidiactl
+        pseudo node, NVreg_GpuInitOnProbe=0) and the GSP firmware (under
+        usr/kernel/firmware, out of the boot_archive), opts tzmon out of its
+        boot-time dGPU power-off (solnix-dgpu-off=0). A powered dGPU no
+        driver manages overheats this laptop (53 to 94 C in ten minutes, then
+        the EC cuts power), so site/solnix-nvidia-guard samples the EC's dGPU
+        sensor from early boot and reboots at nvidia.maxTempC. After it and
+        system/dumpadm, site/solnix-nvidia attaches nvidia and holds
+        /dev/nvidia0 open, whose first open runs RmInitAdapter and boots the
+        GSP. Use it only in a boot-once BE (beadm activate -t), so that
+        reboot lands in a BE without it, where tzmon powers the GPU off.
+        nvidia_modeset and nvidia_i2c are laid but not attached. Needs
+        nvidia.acceptFirmwareLicense.
+      '';
+    };
+    nvidia.maxTempC = lib.mkOption {
+      type = lib.types.int;
+      default = 80;
+      description = ''
+        The dGPU temperature (C) at which site/solnix-nvidia-guard reboots. The
+        sensor is the EC's GPUT (kstat dgputemp:0:ec:gput_C), the one that read
+        92-94 C before the EC cut power; it is sampled every 3 s from early
+        boot, and a reading it cannot get counts as too hot.
       '';
     };
   };
   config.assertions = [{
-    assertion = !cfg.nvidia.acceptFirmwareLicense || cfg.onMedia;
+    assertion = !cfg.nvidia.acceptFirmwareLicense || cfg.onMedia || cfg.nvidia.attachAtBoot;
     message = ''
       hardware.graphics.nvidia.acceptFirmwareLicense lays NVIDIA's GSP firmware
-      next to the nvidia modules, which only hardware.graphics.onMedia ships.
+      next to the nvidia modules, which only hardware.graphics.onMedia or
+      hardware.graphics.nvidia.attachAtBoot ships.
     '';
+  } {
+    assertion = !cfg.nvidia.attachAtBoot || cfg.nvidia.acceptFirmwareLicense;
+    message = ''
+      hardware.graphics.nvidia.attachAtBoot needs NVIDIA's GSP firmware: the
+      GA103 does not initialise without it. Set
+      hardware.graphics.nvidia.acceptFirmwareLicense = true to accept the
+      NVIDIA Driver License Agreement.
+    '';
+  } {
+    assertion = !(cfg.nvidia.attachAtBoot && cfg.onMedia);
+    message = "hardware.graphics.nvidia.attachAtBoot is for an installed system, not installer media (onMedia).";
   }];
 }

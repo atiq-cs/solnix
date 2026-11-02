@@ -1,6 +1,6 @@
 # cli/c-dev.nix -- python3, cmake, ccache, quilt, pkg-config (pkgconf), gdbm, expat, libffi.
 { base, mkSrcPkg, world, zlib, openssl, ncurses, readline, pkgconf, nixChain, graphics, chk, scrub,
-  dropDocs, gnulibFix, perl, sqlite, ... }:
+  dropDocs, gnulibFix, perl, sqlite, hostTools, ... }:
 rec {
   gdbm = mkSrcPkg {
     pname = "gdbm"; version = "1.24";
@@ -111,6 +111,9 @@ rec {
     pname = "getopt"; version = "1.1.6";
     src = { url = "http://frodo.looijaard.name/system/files/software/getopt/getopt-1.1.6.tar.gz";
             sha256 = "d0bf1dc642a993e7388a1cddfb9409bed375c21d5278056ccca3a0acd09dc5fe"; };
+    # GNU install from the store: the world's SysV /usr/sbin/install took `install -m 755 getopt $out/bin` as "copy to /bin/getopt",
+    # which only root can write (it did on the build host, as root). Store-only PATH (wave4).
+    nativeTools = hostTools;
     build = ''
       sed -i '1i #include <string.h>' gnu/getopt.c
       gmake CC="$CC" prefix="$out" WITHOUT_GETTEXT=1 LIBCGETOPT=0 mandir="$out/share/man"

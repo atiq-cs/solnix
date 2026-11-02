@@ -21,9 +21,14 @@ let
     runtimeLibDirs = [ "${libcSlice}/lib/amd64" "${libcSlice}/lib" ];
   };
   needWorld = if world == null then throw "base-src: this package needs the userland world" else world;
+  # hermetic recipes (mk-src-pkg nativeTools): the store tools a configure/make run needs, NixOS stdenv's set (coreutils: GNU install,
+  # findutils, gnused/gnugrep/gnutar/gzip/xz/make via the seed in buildTools), then the world for the illumos tools (elfdump, ld, nm).
+  # Only recipes that are NOT one of these may use it (no cycle): coreutils/findutils are base outs that do not take nativeTools.
 in
 rec {
   inherit mkSrcPkg;
+  # [] for the seed (buildTools = [], the OI bootstrap that builds seedBuildTools): its recipes keep the OI PATH, so no cycle and no seed move.
+  hostTools = if buildTools == [ ] then [ ] else [ coreutils findutils needWorld ];
 
   # Nix 2.24.15 + its dependency chain (./nix-src.nix).
   nixChain = import ./nix-src.nix { inherit mkSrcPkg zlib openssl libcSlice; system = "x86_64-solaris"; gccLib = gcc.lib; };
@@ -84,6 +89,7 @@ rec {
     src = { url = "https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-10.2p1.tar.gz";
             sha256 = "ccc42c0419937959263fa1dbd16dafc18c56b984c03562d2937ce56a60f798b2"; };
     deps = [ needWorld zlib openssl ];
+    nativeTools = hostTools;   # store-only PATH + config.site (wave4: host /usr/gnu, /usr/bin perl/python3/xauth/openssl leaked into configure)
     build = ''
       DP=/run/current-system/sw/bin:/usr/bin:/usr/sbin:/sbin
       # GCC 14 makes -Wincompatible-pointer-types an error; illumos PAM declares
@@ -192,12 +198,12 @@ rec {
     src = { url = "https://www.kernel.org/pub/software/scm/git/git-2.54.0.tar.xz";
             sha256 = "f689162364c10de79ef89aa8dbf48731eb057e34edbbd20aca510ce0154681a3"; };
     deps = [ zlib openssl nixChain.curl ];
+    nativeTools = hostTools;   # store-only PATH (wave4: INSTALL=/usr/gnu/bin/install did not exist on a solnix host): GNU install + tar from the store
     build = ''
       cat > config.mak <<EOF
       CC = $CC
       prefix = $out
       SHELL_PATH = ${bash}/bin/bash
-      PERL_PATH = /usr/bin/perl
       NO_PERL = YesPlease
       NO_PYTHON = YesPlease
       NO_TCLTK = YesPlease
@@ -206,8 +212,8 @@ rec {
       NO_INSTALL_HARDLINKS = YesPlease
       INSTALL_SYMLINKS = YesPlease
       SKIP_DASHED_BUILT_INS = YesPlease
-      INSTALL = /usr/gnu/bin/install
-      TAR = /usr/gnu/bin/tar
+      INSTALL = install
+      TAR = tar
       ZLIB_PATH = ${zlib}
       OPENSSLDIR = ${openssl}
       CURLDIR = ${nixChain.curl}
@@ -457,8 +463,8 @@ rec {
   # the equivalent is to not ship them. man pages stay (NixOS installs man
   # outputs by default, documentation.man.enable).
   dropDocs = ''find "$out/share/doc" "$out/share/info" -delete 2>/dev/null || true'';
-  gnuTool = { pname, version, url, sha256, flags ? "", deps ? [ needWorld ] }: mkSrcPkg {
-    inherit pname version deps; src = { inherit url sha256; };
+  gnuTool = { pname, version, url, sha256, flags ? "", deps ? [ needWorld ], nativeTools ? [ ] }: mkSrcPkg {
+    inherit pname version deps nativeTools; src = { inherit url sha256; };
     build = ''
       for f in $(find . \( -name 'localename*.[ch]' -o -name 'getlocalename_l*.[ch]' -o -name 'setlocale_null*.c' \)); do
         sed -i 's/extern char \* *getlocalename_l/extern const char *getlocalename_l/;s/^char \* *getlocalename_l/const char *getlocalename_l/' "$f"
@@ -494,6 +500,7 @@ rec {
     url = "https://mirrors.kernel.org/gnu/tar/tar-1.35.tar.xz";
     sha256 = "4d62ff37342ec7aed748535323930c7cf94acf71c3591882b26a7ea50f3edc16";
     flags = "--disable-gcc-warnings";
+    nativeTools = hostTools;   # store-only PATH + config.site: chef and dixi probed different locales/iconv/tools (wave4)
   };
   findutils = gnuTool {
     pname = "findutils"; version = "4.10.0";
@@ -506,6 +513,7 @@ rec {
     url = "https://mirrors.kernel.org/gnu/diffutils/diffutils-3.10.tar.xz";
     sha256 = "90e5e93cc724e4ebe12ede80df1634063c7a855692685919bfe60b556c9bd09e";
     flags = "--disable-gcc-warnings";
+    nativeTools = hostTools;   # store-only PATH + config.site: chef and dixi probed different locales/iconv/O_NOATIME/install (wave4 cfg/diffutils-3.10.diff)
   };
 
   # Install-media tools NixOS's minimal ISO ships (profiles/base.nix,
@@ -539,6 +547,7 @@ rec {
     src = { url = "https://download.samba.org/pub/rsync/src/rsync-3.4.1.tar.gz";
             sha256 = "2924bcb3a1ed8b551fc101f740b9f0fe0a202b115027647cf69850d65fd88c52"; };
     deps = [ needWorld ];
+    nativeTools = hostTools;   # store-only PATH + config.site (wave4: host /usr/gnu, /usr/bin perl/python3/xauth/openssl leaked into configure)
     build = ''
       ./configure --prefix="$out" --with-included-popt --with-included-zlib --disable-openssl \
         --disable-xxhash --disable-zstd --disable-lz4 --disable-md2man --disable-debug
@@ -578,6 +587,7 @@ rec {
     src = { url = "https://gitlab.com/OldManProgrammer/unix-tree/-/archive/2.1.3/unix-tree-2.1.3.tar.gz";
             sha256 = "f554a1b62233b96fa8eaa2d85e91bc62cad80ee441fd591380f16cdfbe3e8868"; };
     deps = [ needWorld ];
+    nativeTools = hostTools;   # store-only PATH + config.site (wave4: host /usr/gnu, /usr/bin perl/python3/xauth/openssl leaked into configure)
     build = ''
       for f in *.c *.h; do
         [ -f "$f" ] || continue
@@ -596,7 +606,10 @@ rec {
   # is needed for `wget <url>`. gnulibFix for the getlocalename_l clash,
   # illumosExt for strcasecmp/_XOPEN_SOURCE. Installs share/man/man1/wget.1, so
   # `man wget` works through the system MANPATH.
-  wget = mkSrcPkg {
+  # wget's man page is pod2man output, and pod2man is perl's: perl is a cli package (after this set), so the recipe takes it as an
+  # argument (wgetWith); default.nix exports wgetWith cli.perl. The plain `wget` here (no perl) is what other base packages could use.
+  wget = wgetWith null;
+  wgetWith = perl: mkSrcPkg ({
     pname = "wget"; version = "1.24.5";
     src = { url = "https://mirrors.kernel.org/gnu/wget/wget-1.24.5.tar.gz";
             sha256 = "fa2dc35bab5184ecbc46a9ef83def2aaaa3f4c9f3c97d4bd19dcb07d4da637de"; };
@@ -617,7 +630,7 @@ rec {
       [ -f "$out/share/man/man1/wget.1" ] || { echo "FATAL: wget ships no man page" >&2; exit 1; }
       /usr/bin/elfdump -d "$out/bin/wget" | grep -q 'NEEDED.*libssl' || { echo "FATAL: wget not linked to openssl" >&2; /usr/bin/elfdump -d "$out/bin/wget" | grep NEEDED >&2; exit 1; }
     '';
-  };
+  } // (if perl == null then { } else { nativeTools = [ perl ] ++ hostTools; }));   # store-only PATH + config.site; perl: pod2man (wave4)
 
   # GNU libiconv, for gettext. The world's iconv(3) modules are the gate proto's
   # usr/lib/iconv, which has no amd64/ directory and no UTF-8%UTF-16 or

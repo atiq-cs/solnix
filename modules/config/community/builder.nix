@@ -35,6 +35,7 @@ let
     BUILDER_CAP_SHARE = lib.optionalString (opp && cfg.cpuCap == null) (toString cfg.share);
     BUILDER_TICK_MIN = toString cfg.tickMin; BUILDER_TICK_MAX = toString cfg.tickMax;
     BUILDER_BUSY_TICK_MIN = toString cfg.busyTickMin; BUILDER_BUSY_TICK_MAX = toString cfg.busyTickMax;
+    BUILDER_WSWEEP = "${./solnix-wsweep.ksh}";   # stale fixed build dirs of killed builds (wave4)
   };
   cap = lib.optionalString (cfg.cpuCap != null) "project.cpu-cap=(privileged,${toString cfg.cpuCap},deny)";
 in

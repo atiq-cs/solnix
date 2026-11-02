@@ -37,6 +37,22 @@ struct libusb_device_handle {
 /* Node paths are <dir>/<node> with node names up to 16 chars. */
 static char ugen_dir[PATH_MAX - 32];
 
+static int ugen_noclear;	/* -C: skip the toggle reset (negative control) */
+static int ugen_quiet;		/* no diag line on an interrupt-IN timeout */
+
+void
+ugen_usb_set_noclear(int v)
+{
+	ugen_noclear = v;
+}
+
+/* A caller that polls (the netbt pump) sees timeouts as normal, not as faults. */
+void
+ugen_usb_set_quiet(int v)
+{
+	ugen_quiet = v;
+}
+
 int
 ugen_usb_set_dir(const char *dir)
 {
@@ -178,9 +194,23 @@ libusb_open(libusb_device *d, libusb_device_handle **hp)
 		return (LIBUSB_ERROR_OTHER);
 	h->dev = libusb_ref_device(d);
 	ugen_evq_init(&h->q);
+	h->intrstat = h->intr = h->bin = h->bout = -1;
+	h->ctrl = ugen_open_node(d->dir, "cntrl0", O_RDWR);
+	/*
+	 * illumos xhci unconfigures an interrupt endpoint when its pipe closes
+	 * (xhci_usba.c xhci_hcdi_pipe_close), so the next open re-adds it with
+	 * the host toggle at DATA0. The device keeps its own toggle, and after
+	 * an odd number of packets the first event of the next open is
+	 * ACKed and dropped. CLEAR_FEATURE(ENDPOINT_HALT) resets the device
+	 * side to DATA0 (USB 2.0 9.4.5). Measured on lixi: docs/design-bluetooth.md.
+	 */
+	if (h->ctrl >= 0 && !ugen_noclear &&
+	    libusb_control_transfer(h, 0x02, 0x01, 0, 0x81, NULL, 0, 0) < 0) {
+		libusb_close(h);
+		return (LIBUSB_ERROR_IO);
+	}
 	h->intrstat = ugen_open_node(d->dir, "if0in1stat", O_RDONLY);
 	h->intr = ugen_open_node(d->dir, "if0in1", O_RDONLY | O_NONBLOCK);
-	h->ctrl = ugen_open_node(d->dir, "cntrl0", O_RDWR);
 	h->bout = ugen_open_node(d->dir, "if0out2", O_WRONLY);
 	h->bin = ugen_open_node(d->dir, "if0in2", O_RDONLY);
 	if (h->intrstat < 0 || h->intr < 0 || h->ctrl < 0 || h->bout < 0 ||
@@ -349,7 +379,8 @@ libusb_interrupt_transfer(libusb_device_handle *h, unsigned char ep,
 			return (r > 0 ? 0 : LIBUSB_ERROR_OVERFLOW);
 		}
 		if ((ms = ugen_ms_left(&end)) <= 0) {
-			ugen_usb_diag(h, "interrupt-IN timeout");
+			if (!ugen_quiet)
+				ugen_usb_diag(h, "interrupt-IN timeout");
 			return (LIBUSB_ERROR_TIMEOUT);
 		}
 		pfd.fd = h->intr;

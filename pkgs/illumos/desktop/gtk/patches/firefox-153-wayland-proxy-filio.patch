@@ -1,0 +1,14 @@
+illumos: FIONREAD lives in <sys/filio.h>; <sys/ioctl.h> pulls it in only under -DBSD_COMP (Linux and the BSDs get
+it from <sys/ioctl.h>). Without it wayland-proxy.cpp:418 fails "'FIONREAD' was not declared" (measured, chef).
+--- a/third_party/wayland-proxy/wayland-proxy.cpp
++++ b/third_party/wayland-proxy/wayland-proxy.cpp
+@@ -12,6 +12,9 @@
+ #include <stdlib.h>
+ #include <stdarg.h>
+ #include <sys/ioctl.h>
++#ifdef __sun
++#  include <sys/filio.h>
++#endif
+ #include <sys/socket.h>
+ #include <sys/stat.h>
+ #include <sys/wait.h>

@@ -3,7 +3,7 @@
 # from-source gcc (graphics/cosmic-build.sh, minus the COSMIC fixups), then the mk-src-pkg
 # closure gate (no global errno, no gate/gcc path in an ELF, ldd resolves inside /nix/store).
 set -eu
-export PATH=/usr/gnu/bin:/usr/bin:/usr/sbin
+export PATH="$tools/bin:$python3/bin:$world/bin:$world/usr/bin:$world/sbin"   # store tools only (NixOS stdenv): no /usr/gnu, no host /usr/bin
 # FIXED build dir, not $NIX_BUILD_TOP (the daemon's build-dir: /tmp on OI, /var/tmp/big on dixi): ld records the
 # link output's path in .SUNW_ldynsym, and rustc the vendored crates' paths (136x in ripgrep), so the NAR named the
 # host (measured, repro2). Keyed on $buildKey (eval-time, 1:1 with the drv; mk-src-pkg.nix says why it is safe).
@@ -22,15 +22,17 @@ printf '#!/usr/bin/bash\nexec %s/bin/g++ -m64 -D_TS_ERRNO %s %s -Wl,-R,%s "$@" -
 chmod +x w/cc w/c++
 export PATH="$W/w:$rust/bin:$PATH" HOME="$W/home" CARGO_HOME="$W/home/.cargo"
 export RUSTFLAGS="--remap-path-prefix=$W=/build"
+# as NixOS stdenv: build.rs crates (shadow-rs, built, vergen) and C deps stamp the clock otherwise (gping build_time, measured chef vs dixi)
+export SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-315532800}
 export CC=$W/w/cc CXX=$W/w/c++ CC_x86_64_unknown_illumos=$W/w/cc CXX_x86_64_unknown_illumos=$W/w/c++
 export CARGO_TARGET_X86_64_UNKNOWN_ILLUMOS_LINKER=$W/w/cc
 export PKG_CONFIG_PATH="${PCD#:}" PKG_CONFIG_LIBDIR="${PCD#:}"
 # unpack into its own dir: $W also holds w/ and home/, so `ls -d */ | head -1` there can pick
 # home/ (ripgrep/sd: "vendor FOD is for another Cargo.lock", measured).
-mkdir -p "$W/src"; cd "$W/src"; tar xf "$src"; cd "$(ls -d */ | head -1)"
+mkdir -p "$W/src"; cp -RP "$src/tree" "$W/src/s"; find "$W/src/s" ! -type l -exec chmod u+w {} +; cd "$W/src/s"   # unpacked by Nix (cargo.nix srcTree)
 # into its own dir: some crates commit a vendor/ of their own (atuin: bash-preexec), and
 # `cp -r $vendor vendor` would then nest the FOD inside it (measured).
-V=.nix-cargo-vendor; cp -r "$vendor" $V; chmod -R u+w $V
+V=.nix-cargo-vendor; cp -a "$vendor" $V; find $V ! -type l -exec chmod u+w {} +
 cmp -s Cargo.lock $V/.Cargo.lock || { echo "FATAL: vendor FOD is for another Cargo.lock" >&2; exit 1; }
 mkdir -p .cargo; sed 's|directory = "vendor"|directory = "'"$PWD/$V"'"|' $V/.cargo-config.toml > .cargo/config.toml
 grep -q "$V" .cargo/config.toml || { echo "FATAL: cargo vendor config" >&2; exit 1; }
@@ -39,14 +41,14 @@ eval "$env"
 # vfix <crate> <file> <python-literal-old> <python-literal-new>: edit a vendored crate, FAIL if the
 # anchor is gone, re-stamp its .cargo-checksum.json (cosmic-comp-vendor-fixup.sh's edit()).
 vfix() {
-  python3 - "$V/$1/$2" "$3" "$4" <<'PY'
+  "$python3/bin/python3" - "$V/$1/$2" "$3" "$4" <<'PY'
 import sys, ast
 p, o, n = sys.argv[1], ast.literal_eval(sys.argv[2]), ast.literal_eval(sys.argv[3])
 s = open(p).read()
 if o not in s: sys.exit("FATAL: anchor not found in %s: %r" % (p, o[:80]))
 open(p, "w").write(s.replace(o, n))
 PY
-  new=$(sha256sum "$V/$1/$2" | cut -d' ' -f1)
+  new=$(/usr/bin/digest -a sha256 "$V/$1/$2")
   sed -i "s|\"$2\":\"[0-9a-f]\{64\}\"|\"$2\":\"$new\"|" "$V/$1/.cargo-checksum.json"
 }
 eval "$prep"
@@ -54,16 +56,16 @@ cargo build --release --offline --locked ${pkg:+-p "$pkg"} ${noDefault:+--no-def
   ${features:+--features "$features"} -j "$J"
 mkdir -p "$out/bin"
 # fsync before cp: see go-build.sh (an unpatched ZFS reads a just-written file as a hole, 0009)
-for b in $bins; do /usr/bin/python3 -c 'import os,sys; fd = os.open(sys.argv[1], os.O_RDONLY); os.fsync(fd); os.close(fd)' "target/release/$b"; cp "target/release/$b" "$out/bin/"; done
+for b in $bins; do "$python3/bin/python3" -c 'import os,sys; fd = os.open(sys.argv[1], os.O_RDONLY); os.fsync(fd); os.close(fd)' "target/release/$b"; cp "target/release/$b" "$out/bin/"; done
 eval "$man"
 cd "$W"
 : > fail
-bash "$zeroChecksum" "$out" fail   # DT_CHECKSUM -> 0 (zero-checksum.sh says why)
-bash "$tsErrnoGate" "$out" 2>> fail || echo "ts-errno gate failed" >> fail
+/usr/bin/bash "$zeroChecksum" "$out" fail   # DT_CHECKSUM -> 0 (zero-checksum.sh says why)
+/usr/bin/bash "$tsErrnoGate" "$out" 2>> fail || echo "ts-errno gate failed" >> fail
 find "$out" -type f > files
 while read -r f; do
   [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] || continue
-  chmod u+w "$f"; /usr/bin/gstrip --strip-debug "$f"
+  chmod u+w "$f"; "$tools/bin/gstrip" --strip-debug "$f"
   for x in "$gate" "$gcc/"; do grep -q "$x" "$f" && echo "$f names $x" >> fail; done
   /usr/bin/elfdump -d "$f" 2>/dev/null | grep -q NEEDED || continue
   for e in $(/usr/bin/elfdump -d "$f" | awk '$2=="RUNPATH"||$2=="RPATH"{print $4}' | tr ':' ' '); do
