@@ -693,11 +693,14 @@ rec {
   # jq, without oniguruma (no regex builtins: test/match/sub). home-manager
   # only uses @uri and -r.
   jq = mkSrcPkg {
-    pname = "jq"; version = "1.7.1";
-    src = { url = "https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-1.7.1.tar.gz";
-            sha256 = "478c9ca129fd2e3443fe27314b455e211e0d8c60bc8ff7df703873deeee580c2"; };
+    pname = "jq"; version = "1.8.2";
+    # upstream publishes no signature; sha256 == the release's sha256sum.txt == nixpkgs
+    src = { url = "https://github.com/jqlang/jq/releases/download/jq-1.8.2/jq-1.8.2.tar.gz";
+            sha256 = "71b8d6e8f5fe81f6c6d0d110e3892251f6ce76ed095abd315e26e6e1193af3af"; };
+    nativeTools = hostTools;   # store-only PATH + config.site (recipes1); libc only at run time, as before
     build = ''
-      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-docs --disable-static --without-oniguruma
+      # configure.ac sets MAKE=/usr/gnu/bin/make on SunOS when MAKE is unset (an OI host path; a solnix host has none): the store gmake.
+      MAKE=gmake ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-docs --disable-static --without-oniguruma
       gmake -j4
       gmake install
       [ "$(echo '{"a":[1,2]}' | "$out/bin/jq" -c '.a|add')" = 3 ] || { echo "FATAL: jq self-check" >&2; exit 1; }
@@ -785,7 +788,7 @@ rec {
     msgfmt = "${gettext}/bin/msgfmt";
     builder = "/usr/bin/bash";
     args = [ "-c" ''
-      set -eu; export PATH=/usr/bin
+      set -eu; export PATH=${coreutils}/bin:${gnused}/bin:${gnugrep}/bin   # store tools only (recipes1)
       mkdir -p $out/bin $out/share/bash
       ln -s $hmSrc $out/share/home-manager
       cp $hmSrc/lib/bash/home-manager.sh $out/share/bash/home-manager.sh
