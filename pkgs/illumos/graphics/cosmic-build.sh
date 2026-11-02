@@ -47,7 +47,8 @@ if [ -n "$appFixups" ]; then  # the shell/apps (cosmicApp); cosmic-comp and cosm
 fi
 eval "$prep"
 # --offline, not --frozen: dropping softbuffer/kms prunes drm from the lock graph (no fetch is possible).
-cargo build --release --offline --no-default-features ${features:+--features "$features"} $cargoArgs -j "${NIX_BUILD_CORES:-16}"
+J=${NIX_BUILD_CORES:-0}; [ "$J" -gt 0 ] 2>/dev/null || J=16   # cores=0 (nix and solnix default: all) -> cargo rejects -j 0
+cargo build --release --offline --no-default-features ${features:+--features "$features"} $cargoArgs -j "$J"
 T=${CARGO_TARGET_DIR:-target}/release
 mkdir -p "$out/bin"
 for b in $bins; do
@@ -79,9 +80,9 @@ echo "=== $name: every ELF resolves inside /nix/store ===" >&2
 # Run check: every program starts with all symbols bound (LD_BIND_NOW: a STUB or a missing
 # symbol fails here, not at first use) and reaches main. No compositor or bus here, so an
 # error exit is expected for GUI programs; a runtime-linker error or a signal death fails.
-# runok <bin> <args..>: one run, output kept in $out/share/solnix-check/<bin>.txt.
+# runok <bin> <args..>: one run; its output goes to the build log, not $out (tracing timestamps made the NAR differ, wave3 gate 4a).
 runok() {
-  local b=$1 rc=0 o="$out/share/solnix-check/$1.txt"; shift; mkdir -p "$out/share/solnix-check"
+  local b=$1 rc=0 o="$W/solnix-check/$1.txt"; shift; mkdir -p "$W/solnix-check"
   (cd "$W"; unset WAYLAND_DISPLAY DBUS_SESSION_BUS_ADDRESS DISPLAY; export XDG_RUNTIME_DIR="$W/home" LD_BIND_NOW=1
     exec /usr/bin/timeout 20 "$out/bin/$b" "$@" < /dev/null) > "$o" 2>&1 || rc=$?
   echo "rc=$rc" >> "$o"

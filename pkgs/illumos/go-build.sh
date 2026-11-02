@@ -9,7 +9,7 @@
 #                 PT_TLS ("ld.so.1: go: fatal: TLS requirement failure", measured on 1.20.14).
 #   final       : the closure gate over bin/ + pkg/tool/, then go version + a hello build.
 set -eu
-export PATH=/usr/gnu/bin:/usr/bin:/usr/sbin
+export PATH="$tools/bin:/usr/bin:/usr/sbin"   # store tools first, no /usr/gnu (hostfix)
 # FIXED build dir, not $NIX_BUILD_TOP (/tmp on OI, /var/tmp/big on dixi): go1.4's C tools name $W/cc and their
 # sources, go1.17/1.20 name GOROOT/src in every binary (measured, repro2). $buildKey: see mk-src-pkg.nix.
 W=/var/tmp/go-$buildKey; rm -rf "$W"; mkdir -m 700 "$W"; trap 'cd /; rm -rf "$W"' EXIT; cd "$W"
@@ -49,7 +49,7 @@ mkdir -p "$out/share" "$out/bin"
 # scripts/patches/0009 (every OI build host) a just-written file reads as one hole to SEEK_DATA,
 # so GNU cp copied zeros, even with --sparse=never (it still asks SEEK_DATA). sync(2) does not
 # push mmap'd pages there; fsync does (measured: holetest2 0/3 with sync, 3/3 with fsync).
-find "$W/go" -type f -exec /usr/bin/python3 -c 'import os,sys
+find "$W/go" -type f -exec "$python3/bin/python3" -c 'import os,sys
 for p in sys.argv[1:]:
     fd = os.open(p, os.O_RDONLY); os.fsync(fd); os.close(fd)' {} +
 cp -a "$W/go" "$out/share/go"

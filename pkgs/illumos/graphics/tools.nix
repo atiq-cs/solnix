@@ -16,7 +16,7 @@ rec {
       patch -p1 < ${./patches/meson-1.4.2-keep-store-rpath.patch}
       mkdir -p "$out/lib/meson" "$out/bin"
       cp -r mesonbuild meson.py "$out/lib/meson/"
-      printf '#!/usr/bin/bash\nexec ${python} %s/lib/meson/meson.py "$@"\n' "$out" > "$out/bin/meson"
+      printf '#!/usr/bin/bash\nexport PYTHONDONTWRITEBYTECODE=1\nexec ${python} %s/lib/meson/meson.py "$@"\n' "$out" > "$out/bin/meson"
       chmod +x "$out/bin/meson"
       "$out/bin/meson" --version | grep -qx 1.4.2 || { echo "FATAL: meson --version" >&2; exit 1; }
     '';
@@ -50,7 +50,7 @@ rec {
             sha256 = "48dbc20568c1d276a2698b36d968fa76161bf127194907ea6fc594fa81f943bc"; };
     build = ''
       mkdir -p "$out/lib/python" && cp -r mako "$out/lib/python/"
-      PYTHONPATH="$out/lib/python:${markupsafe}/lib/python" ${python} -c 'import mako.template' \
+      PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$out/lib/python:${markupsafe}/lib/python" ${python} -c 'import mako.template' \
         || { echo "FATAL: mako does not import" >&2; exit 1; }
     '';
   };
@@ -58,6 +58,8 @@ rec {
   # The shell lines every meson recipe runs; $1.. are the -D flags.
   mesonBuild = flags: ''
     export PATH="${meson}/bin:${samurai}/bin:$PATH"
+    # no .pyc into meson/mako/markupsafe: a root build on a writable store (single-user OI host) rewrote them after registration (wave3)
+    export PYTHONDONTWRITEBYTECODE=1
     meson setup _b --prefix="$out" --libdir=lib/amd64 --buildtype=release \
       --wrap-mode=nodownload -Db_ndebug=true ${flags}
     samu -C _b -j16

@@ -42,6 +42,9 @@
   # A solnix system (dixi, EC2) injects the store set so it can build with no
   # /usr/gnu, no host sha256sum/gstrip/gzip. See docs/pending/builders-need-store-tools.md.
   buildTools ? [ ],
+  # seedTools: world-FREE store tools for the recipes the world itself depends on (nss: libldap/kmf_nss link it), from the seed instance
+  # (lib/host-pkgs.nix seedPkgs: perl coreutils findutils + the seed world). [] (the bhost/seed path) keeps the old PATH.
+  seedTools ? [ ],
 }:
 
 let
@@ -381,6 +384,7 @@ let
   };
   mkRust = args: import ./rust-src.nix ({
     inherit gcc libc world; gate = gate'; inherit (srcPkgs) openssl zlib;
+    tools = hostfixTools; inherit (cliBase) python3;
   } // args);
   rust198 = mkRust { version = "1.98.0"; stage0 = rustSeedStage; seedStage0 = true;
     sha256 = "271fa73d8174f53d713c46a8310da7bf7cfdcfb8b7cfd1c2b74b84a83ae9fb1e"; };
@@ -389,9 +393,9 @@ let
 
   # From-source packages the gate does not provide (./base-src.nix). zlib and
   # libxml2 replace the host-copied externalLibs; world is built on top of them.
-  srcPkgs = import ./base-src.nix { gate = gate'; libcSlice = libc; inherit world gcc buildTools; };
+  srcPkgs = import ./base-src.nix { gate = gate'; libcSlice = libc; inherit world gcc buildTools seedTools; };
   # The Wayland + Mesa userland (./graphics), built like srcPkgs.
-  graphics = import ./graphics { inherit (srcPkgs) mkSrcPkg pkgconf zlib; inherit world; };
+  graphics = import ./graphics { inherit (srcPkgs) mkSrcPkg pkgconf zlib hostTools; inherit world; inherit (cliBase) perl; };   # perl: libffi's make_sunver.pl
   # The maintainer's headless CLI set (werk/meh home.packages), from source (./cli).
   # Generic Rust packages on rust199 (./cargo.nix: vendorOf FOD + cargoPkg).
   cargo = import ./cargo.nix {
@@ -404,7 +408,8 @@ let
   hostfixTools = buildEnv { name = "solnix-hostfix-tools"; pathsToLink = [ "/bin" ];
     paths = [ seedBuildTools srcPkgs.coreutils srcPkgs.findutils cliBase.gnupatch cliBase.cmake srcPkgs.pkgconf ]; };   # pkgconf: -sys crates' pkg-config
   # Go from source: go1.4 (C) -> 1.17 -> 1.20 -> 1.22 -> 1.24 -> 1.26 (./go.nix).
-  goChain = import ./go.nix { inherit gcc world; gate = gate'; gccLib = gcc.lib; inherit (srcPkgs.nixChain) cacert; };
+  goChain = import ./go.nix { inherit gcc world; gate = gate'; gccLib = gcc.lib; inherit (srcPkgs.nixChain) cacert;
+    tools = hostfixTools; inherit (cliBase) python3; };
   cli = import ./cli { base = srcPkgs; inherit world graphics goChain; inherit (cargo) cargoPkg; };
   # libtorrent-rasterbar + solnix-torrent, the community seeder's BitTorrent client (./solnix-torrent.nix).
   torrent = import ./solnix-torrent.nix {
@@ -651,6 +656,7 @@ let
       mkdir -p "$out/bin"
       cp "$src" solnix-cputemp.c; gcc -O2 -Wall -Werror -Wl,-R,${libc}/lib/amd64 -o "$out/bin/solnix-cputemp" solnix-cputemp.c
       "$out/bin/solnix-cputemp" -t || { echo "FATAL: solnix-cputemp self-test failed" >&2; exit 1; }
+      : > zc; /usr/bin/bash ${./zero-checksum.sh} "$out" zc; [ ! -s zc ] || { cat zc >&2; exit 1; }
     '' ];
   };
 

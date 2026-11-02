@@ -70,6 +70,24 @@ let
     # Keyed on $buildKey (eval-time digest of this drv's attrs), not $out: `nix build --check` builds into a scratch out.
     W=/var/tmp/gccsrc-$buildKey
     rm -rf "$W"; mkdir -m 700 "$W"; trap 'cd /; rm -rf "$W"' EXIT; cd "$W"
+    # Deterministic archives (NixOS: binutils --enable-deterministic-archives). OI's GNU ar/ranlib stamp the
+    # armap with the build time: 22 shipped .a differed under --check, and so did cc1/cc1plus, whose
+    # executable_checksum is an md5 over libbackend.a & co. Every ar/ranlib on PATH gets D / -D (wave3).
+    mkdir "$W/detbin"
+    cat > "$W/detbin/ar" <<'EOS'
+    #!/usr/bin/bash
+    a=(); k=0
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --plugin|--target|--output) a+=("$1" "$2"); shift 2; continue;;
+        --*|-V|-h) a+=("$1");;
+        *) if [ $k = 0 ]; then k=1; case "$1" in *[rqs]*) a+=("$1"D);; *) a+=("$1");; esac; else a+=("$1"); fi;;
+      esac; shift
+    done
+    exec /usr/gnu/bin/ar "''${a[@]}"
+    EOS
+    printf '#!/usr/bin/bash\nexec /usr/gnu/bin/ranlib -D "$@"\n' > "$W/detbin/ranlib"
+    chmod +x "$W/detbin/ar" "$W/detbin/ranlib"; export PATH="$W/detbin:$PATH"
     tar xf "$gccSrc"
     cd "gcc-$version"
     patch -p1 < "$tsErrnoPatch" >&2
@@ -165,6 +183,24 @@ let
        done | grep -q '/usr/gcc'; then
       echo "FATAL: an ELF in $out still has a /usr/gcc RUNPATH" >&2; exit 1
     fi
+    # every shipped archive's armap without a date, whatever wrote it (strip -D would strip the symbols too)
+    find "$out" "$lib" -name '*.a' -type f | while read -r f; do chmod u+w "$f"; /usr/gnu/bin/ranlib -D "$f"; done
+    # cc1/cc1plus executable_checksum (gcc's PCH validity stamp) is genchecksum's md5 over objects that embed $out. An
+    # unsandboxed `nix-store --check` builds at a scratch out and rewrites only the hash string, never this md5 (wave3:
+    # 7 objects equal after mapping scratch->real hash; only the two *-checksum.o differ). Set it to md5(name-buildKey):
+    # still unique per compiler drv (what PCH needs), the same on every host and under --check.
+    for f in "$out"/libexec/gcc/*/*/cc1 "$out"/libexec/gcc/*/*/cc1plus; do
+      [ -f "$f" ] || continue
+      sym=$(/usr/bin/nm -x "$f" | awk -F'|' '{gsub(/ /, "", $NF)} $NF == "executable_checksum" {print $2, $3, $7}')
+      set -- $sym; [ "$(($2))" = 16 ] || { echo "FATAL: $f executable_checksum: [$sym]" >&2; exit 1; }
+      read -r sn sa so < <(/usr/bin/elfdump -c "$f" | awk -v i="$(($3))" '$1 == "Section" {x = ($2 == "Header[" i "]:"); n = $4} x && /sh_addr:/ {a = $2} x && /sh_offset:/ {print n, a, $2; exit}')
+      [ "$sn" = .rodata ] || { echo "FATAL: $f executable_checksum in [$sn], expected .rodata" >&2; exit 1; }
+      h=$(printf '%s' "gcc-$version-$buildKey" | digest -a md5)
+      # the 16 bytes as printf octal escapes, built with awk's %c 92 (a backslash written in this Nix string reached sed as plain x)
+      e=""; i=0; while [ $i -lt 32 ]; do e="$e$(printf '%d' "0x''${h:$i:2}" | awk '{printf "%c%03o", 92, $1}')"; i=$((i + 2)); done
+      chmod u+w "$f"; printf "$e" | dd of="$f" bs=1 seek=$(($1 - sa + so)) conv=notrunc 2>/dev/null
+      [ "$(dd if="$f" bs=1 skip=$(($1 - sa + so)) count=16 2>/dev/null | od -An -tx1 | tr -d ' \n')" = "$h" ] || { echo "FATAL: $f checksum write" >&2; exit 1; }
+    done
     # DT_CHECKSUM -> 0 in both outputs (./zero-checksum.sh says why; gcc.lib names $lib in its RUNPATH).
     : > "$W/zc"; /usr/bin/bash ${./zero-checksum.sh} "$out" "$W/zc"; /usr/bin/bash ${./zero-checksum.sh} "$lib" "$W/zc"
     [ ! -s "$W/zc" ] || { cat "$W/zc" >&2; exit 1; }

@@ -129,6 +129,10 @@ in {
     pname = "cosmic-edit"; sha256 = "d567902b1e04829eedd428cd37372137908947cfafccc14ba485b1ad58832cba";
     features = "dbus-config,wayland"; bins = "cosmic-edit";
     install = "app res/com.system76.CosmicEdit.desktop; meta res/com.system76.CosmicEdit.metainfo.xml; tree res/icons/hicolor share/icons/hicolor";
+    # main() daemonizes first (fork::daemon, src/main.rs): runok sees the parent exit 0 while the child
+    # keeps running in $W and writing there, and the EXIT trap's removal of $W then fails "File exists"
+    # (T5 06:24Z and its retry). Wait for the child, which has no display and exits on its own.
+    check = "runok cosmic-edit --help; for i in 1 2 3 4 5 6 7 8 9 10; do pgrep -f \"^$out/bin/cosmic-edit\" >/dev/null || break; sleep 2; done; ! pgrep -f \"^$out/bin/cosmic-edit\" >/dev/null";
   };
   # No flatpak (libflatpak needs glib/ostree), no packagekit: the pkgar backend only, so the
   # store opens and lists nothing installable. NixOS installs cosmic-store only with flatpak.

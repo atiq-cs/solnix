@@ -1,6 +1,6 @@
 # rust-src-build.sh -- builder for rust-src.nix (read that file for the why).
 set -eu
-export PATH=/usr/gnu/bin:/usr/bin:/usr/sbin
+export PATH="$tools/bin:/usr/bin:/usr/sbin"   # store tools first, no /usr/gnu (hostfix)
 # FIXED build dir, not $NIX_BUILD_TOP (/tmp on OI, /var/tmp/big on dixi): ld names each link output by its
 # build path (measured in rust-1.99.0, repro2). $buildKey: see mk-src-pkg.nix.
 W=/var/tmp/rust-$buildKey; rm -rf "$W"; mkdir -m 700 "$W"; trap 'cd /; rm -rf "$W"' EXIT; cd "$W"
@@ -20,7 +20,7 @@ S0=$stage0
 if [ -n "$seedStage0" ]; then
   # Seed hazard (bootstrap doc, blocker 2): drop the seed's rustc-src/src, and
   # point its /usr/gcc/14 RUNPATH at the store gcc.lib.
-  S0=$W/s0; mkdir s0; cp -r "$stage0/bin" "$stage0/lib" s0/; chmod -R u+w s0
+  S0=$W/s0; mkdir s0; cp -RP "$stage0/bin" "$stage0/lib" s0/; find s0 ! -type l -exec chmod u+w {} +
   find s0/lib/rustlib/rustc-src s0/lib/rustlib/src -depth -delete 2>/dev/null || true
   for f in s0/bin/* s0/lib/*.so*; do
     [ -L "$f" ] && continue
@@ -76,7 +76,7 @@ export CC=$W/w/cc CXX=$W/w/c++ CC_x86_64_unknown_illumos=$W/w/cc \
   OPENSSL_DIR=$openssl OPENSSL_LIB_DIR=$openssl/lib/amd64 OPENSSL_INCLUDE_DIR=$openssl/include \
   OPENSSL_NO_VENDOR=1 PKG_CONFIG_PATH= \
   PKG_CONFIG_LIBDIR=$openssl/lib/amd64/pkgconfig:$zlib/lib/amd64/pkgconfig
-python3 x.py install rustc cargo std -j "${NIX_BUILD_CORES:-8}" >&2
+"$python3/bin/python3" x.py install rustc cargo std -j "${NIX_BUILD_CORES:-8}" >&2
 # the installer's log names the build dir 54x, and uninstall.sh makes no sense in a store path (nixpkgs rustc.nix).
 rm -f "$out/lib/rustlib/install.log" "$out/lib/rustlib/uninstall.sh"
 cd "$W"

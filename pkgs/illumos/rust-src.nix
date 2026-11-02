@@ -13,14 +13,14 @@
 { version, sha256
 , stage0                 # previous hop's output (bin/rustc, bin/cargo, lib/rustlib)
 , seedStage0 ? false     # stage0 is the OI 1.97.1 seed tree (prune + re-RUNPATH it)
-, gcc, gate, libc, world, openssl, zlib
+, gcc, gate, libc, world, openssl, zlib, tools, python3
 }:
 (a: derivation (a // { buildKey = builtins.substring 0 16 (builtins.hashString "sha256" (builtins.toJSON a)); zeroChecksum = ./zero-checksum.sh; })) {
   name = "rust-${version}";
   system = "x86_64-solaris";
   builder = "/usr/bin/bash";
   args = [ ./rust-src-build.sh ];
-  inherit version stage0 gcc gate libc world openssl zlib;
+  inherit version stage0 gcc gate libc world openssl zlib tools python3;
   gccLib = gcc.lib;
   src = import <nix/fetchurl.nix> {
     url = "https://static.rust-lang.org/dist/rustc-${version}-src.tar.xz";

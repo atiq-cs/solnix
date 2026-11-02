@@ -46,6 +46,7 @@ let
     else import solnixDir {
     gate = gateProto; inherit gateArgs;
     buildTools = [ seedPkgs.seedBuildTools ];
+    seedTools = [ seedPkgs.perl seedPkgs.coreutils seedPkgs.findutils seedPkgs.world ];   # world-free (nss): the seed instance's
   };
 
   # writeText / writeScript: write $text to $out (executable if asked). Matches

@@ -1,5 +1,5 @@
 # graphics/libs.nix -- the C libraries under the Wayland/Mesa stack, from source.
-{ mkSrcPkg, tools, pkgconf, zlib, world }:
+{ mkSrcPkg, tools, pkgconf, zlib, world, perl ? null, hostTools ? [ ] }:
 let m = tools.mesonBuild; pc = "export PATH=${pkgconf}/bin:$PATH"; in
 rec {
   expat = mkSrcPkg {
@@ -17,6 +17,8 @@ rec {
     pname = "libffi"; version = "3.4.6";
     src = { url = "https://github.com/libffi/libffi/releases/download/v3.4.6/libffi-3.4.6.tar.gz";
             sha256 = "b0dea9df23c863a7a50e825440f3ebffabd65df1497108e5d437747843895a4e"; };
+    # make_sunver.pl (the libffi.map-sun version script) is perl: the OI build host had /usr/bin/perl, a solnix host has none (wave4 dixi)
+    nativeTools = if perl == null then [ ] else [ perl ] ++ hostTools;
     build = ''
       ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static \
         --disable-docs --disable-multi-os-directory

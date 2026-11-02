@@ -65,7 +65,7 @@
     "usr/lib/hal/hal-storage-cleanup-mountpoint" "usr/lib/hal/hal-storage-closetray"
     "usr/lib/hal/hal-storage-eject" "usr/lib/hal/hal-storage-mount"
     "usr/lib/hal/hal-storage-unmount" "usr/lib/hal/hal-storage-zpool-export"
-    "usr/lib/hal/hal-storage-zpool-import" "usr/lib/hal/hald"
+    "usr/lib/hal/hal-storage-zpool-import"   # hald: not in the E1 proto (its -Werror build failed on the build host's newer expat.h; wave5 step3c)
     "usr/lib/hal/hald-addon-acpi" "usr/lib/hal/hald-addon-cpufreq"
     "usr/lib/hal/hald-addon-network-discovery" "usr/lib/hal/hald-addon-storage"
     "usr/lib/hal/hald-probe-acpi" "usr/lib/hal/hald-probe-network-printer"
@@ -106,8 +106,10 @@ derivation {
     cd "$gate"
     for d in $dirsArg; do [ -e "$d" ] && tar cf - "$d" | (cd "$out" && tar xf -); done
     cd "$out"
-    for x in $excludeArg; do [ -e "$x" ] && find "$x" -depth -delete; done
+    # writable BEFORE the exclude: the proto's dirs are r-x, so as nixbld find -delete failed on opt/ and usr/kernel/ ("delete failed ...
+    # Permission denied") and opt/ stayed; as root (every earlier world) the deletes succeeded (wave5 W1).
     chmod -R u+w "$out"
+    for x in $excludeArg; do [ -e "$x" ] && find "$x" -depth -delete; done
     # dev output: the C headers (usr/include) and the lint/link-only bits.
     mkdir -p "$dev/usr"
     [ -d usr/include ] && mv usr/include "$dev/usr/include"

@@ -3,14 +3,14 @@
 # 1.24 needs 1.22, 1.26 needs 1.24). No binary seed. ./go-build.sh does one stage.
 # Go binaries NEED libc.so/libsocket.so/libsendfile.so and carry no RUNPATH by default, so
 # every stage after 1.4 links with -r <world lib dirs> (cmd/link -r = DT_RUNPATH).
-{ gcc, gccLib, world, cacert, gate }:
+{ gcc, gccLib, world, cacert, gate, tools, python3 }:
 let
   rp = "${world}/lib/amd64:${world}/usr/lib/amd64";
   stage = { version, sha256, url ? "https://go.dev/dl/go${version}.src.tar.gz", boot ? null, final ? false }:
     (a: derivation (a // { buildKey = builtins.substring 0 16 (builtins.hashString "sha256" (builtins.toJSON a)); })) {
     name = "go-${version}"; system = "x86_64-solaris"; builder = "/usr/bin/bash";
     src = import <nix/fetchurl.nix> { inherit url sha256; };
-    inherit version gcc rp world gate; gccLibDir = "${gccLib}/lib";
+    inherit version gcc rp world gate tools python3; gccLibDir = "${gccLib}/lib";
     boot = if boot == null then "" else boot;
     final = if final then "1" else "";
     storeGate = ./store-gate.sh; tsErrnoGate = ./ts-errno-gate.sh; zeroChecksum = ./zero-checksum.sh;
@@ -45,7 +45,7 @@ in rec {
       # system is illumos tar, which execs the absent /usr/bin/gzcat and exits 0 with nothing extracted.
       srcTree = derivation { name = "${pname}-${version}-src"; system = "builtin"; builder = "builtin:unpack-channel";
         src = srcTar; channelName = "tree"; };
-      common = { system = "x86_64-solaris"; builder = "/usr/bin/bash"; src = srcTree; go = goPkgs;
+      common = { system = "x86_64-solaris"; builder = "/usr/bin/bash"; src = srcTree; go = goPkgs; inherit tools python3;
         inherit rp; storeGate = ./store-gate.sh; tsErrnoGate = ./ts-errno-gate.sh; args = [ ./go-pkg-build.sh ]; };
       vend = derivation (common // { name = "${pname}-${version}-go-vendor"; vendorOnly = "1";
         goVendor = ""; subPkgs = ""; check = ""; ldflags = ""; prep = ""; man = "";

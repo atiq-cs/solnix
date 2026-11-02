@@ -3,7 +3,7 @@
 # the build host: zlib + libxml2 replace externalLibs (host /usr/lib copies),
 # openssl + openssh replace make-be's host sshd copy, bash replaces nothing (the
 # gate has no bash) but is a login shell users expect.
-{ gate, libcSlice, world ? null, gcc ? "/usr/gcc/14", buildTools ? [ ], aarch64 ? false, system ? "x86_64-solaris" }:
+{ gate, libcSlice, world ? null, gcc ? "/usr/gcc/14", buildTools ? [ ], seedTools ? [ ], aarch64 ? false, system ? "x86_64-solaris" }:
 # aarch64/system: the same recipes natively on aarch64 illumos (aarch64/home.nix), through
 # mk-src-pkg's aarch64 text rewrite. The defaults leave every x86 derivation unchanged.
 # gcc: the from-source gcc derivation (gcc-src.nix). Everything here is compiled
@@ -143,8 +143,13 @@ rec {
             sha256 = "f549cc33d35c0601674bfacf7c6ad683c187595eb4125b423238d3e9aa4209ce"; };
     abis = [ "64" "32" ];
     deps = [ nspr zlib libcExtra ];
+    # store-only PATH from the seed (world-free: the world links nss): perl for certdata.perl, coreutils, the seed world's ar/uname/nawk.
+    nativeTools = seedTools;
     build = ''
-      patch -p1 < ${./patches/nss/0001-hacl-bignum-base-include-alloca.patch}
+      # ./patches/nss/0001-hacl-bignum-base-include-alloca.patch, applied with sed: GNU patch depends on the world, which depends on nss.
+      H=nss/lib/freebl/verified/internal/Hacl_Bignum_Base.h
+      sed -i 's@^#include <string.h>$@#include <alloca.h>\n#include <string.h>@' "$H"
+      grep -q '^#include <alloca.h>$' "$H" || { echo "FATAL: nss alloca include not applied" >&2; exit 1; }
       # coreconf's SunOS5.mk: RPATH '$ORIGIN' is replaced by the store RUNPATH
       # the compiler wrapper bakes in; -lthread/-lposix4/-lkstat come from the gate.
       sed -i "s,^RPATH = -R '\$\$ORIGIN'$,RPATH =," nss/coreconf/SunOS5.mk
@@ -159,7 +164,9 @@ rec {
       # no *.chk: shlibsign's DSA signature is random per build (so no two builds match, measured, repro2), and
       # it is only read in FIPS mode. nixpkgs makes them only with enableFIPS (default false).
       cp -P "$O"/lib/*.so "$out/$LIBSUB/"
-      cp dist/public/nss/*.h dist/public/dbm/*.h "$out/include/nss/"
+      # headers once (ABI 64, the first pass): they are ABI-independent, and the 32-bit pass's cp onto the 64-bit pass's read-only copies
+      # fails as nixbld ('Permission denied'); every earlier nss was built as root, which overwrote them (wave5 W1).
+      [ "$ABI" = 64 ] && cp dist/public/nss/*.h dist/public/dbm/*.h "$out/include/nss/"
       if [ "$ABI" = 64 ]; then
         mkdir -p "$out/bin"
         for t in certutil modutil pk12util; do cp "$O/bin/$t" "$out/bin/"; done
@@ -811,7 +818,12 @@ rec {
       # mismatch with bash's int (*)(int) putc callback (display.c:2839, measured).
       CFLAGS="-O2 -Wno-error=incompatible-pointer-types" \
       ./configure --prefix="$out" --without-bash-malloc --disable-nls
+      # builtins/psize.sh MEASURES the build host's pipe (psize.aux | sleep 3, until EPIPE) for `ulimit -p`; under load it falls back
+      # to 512, so two builds compiled 0x4000 vs 0x200 (wave5 W2 --check). Pin illumos PIPE_BUF (limits.h): the target's value, not a race.
+      # The rule is `pipesize.h: psize.aux` -> `$(SHELL) psize.sh > $@`: replace the script, so whenever make runs it, it prints the pin.
+      printf '#!/bin/sh\necho "#define PIPESIZE 5120"\n' > builtins/psize.sh
       gmake -j6
+      grep -qx '#define PIPESIZE 5120' builtins/pipesize.h || { echo "FATAL: bash PIPESIZE not pinned" >&2; exit 1; }
       gmake install
     '';
   };

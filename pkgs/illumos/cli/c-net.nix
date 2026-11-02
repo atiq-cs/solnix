@@ -48,9 +48,11 @@ rec {
     src = { url = "https://sqlite.org/2025/sqlite-autoconf-3500400.tar.gz";
             sha256 = "a3db587a1b92ee5ddac2f66b3edb41b26f9c867275782d46c3a088977d6a5b18"; };
     deps = [ readline ncurses zlib ];
+    nativeTools = hostTools;   # store-only PATH + config.site (wave4)
     build = ''
+      # readline's headers from the store: the OI build host found them in /usr/include, a solnix host has none (wave4 dixi rebuild)
       ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --enable-readline \
-        --with-readline-ldflags="-lreadline -lncursesw" --disable-editline
+        --with-readline-cflags="-I${readline}/include" --with-readline-ldflags="-L${readline}/lib/amd64 -lreadline -L${ncurses}/lib/amd64 -lncursesw" --disable-editline
       # autosetup's --soname "does not support SONAME" on illumos (measured): set it ourselves.
       gmake -j8 LDFLAGS.libsqlite3.soname=-Wl,-h,libsqlite3.so.0; gmake install LDFLAGS.libsqlite3.soname=-Wl,-h,libsqlite3.so.0
       ${chk ''"$out/bin/sqlite3" --version'' "^3\\.50\\.4"}
@@ -106,8 +108,14 @@ rec {
       ./configure --prefix="$out" --disable-static
       gmake -j8; gmake install
       ${chk ''"$out/bin/lsof" -v'' "revision: 4.99.5"}
-      ${chk ''"$out/bin/lsof" -p $$'' "^bash +[0-9]+ "}
-      ${chk ''"$out/bin/lsof" -a -p $$ -d cwd'' "cwd +V?DIR"}
+      # lsof reads the kernel through libkvm (/dev/kmem): only root can, so these two checks ran only while the build host built as root.
+      # As nixbld (NixOS: no root in the sandbox either) "cannot open /dev/kmem" (wave5 W2): check that it fails for that reason, not another.
+      if [ "$(id -u)" = 0 ]; then
+        ${chk ''"$out/bin/lsof" -p $$'' "^bash +[0-9]+ "}
+        ${chk ''"$out/bin/lsof" -a -p $$ -d cwd'' "cwd +V?DIR"}
+      else
+        ${chk ''"$out/bin/lsof" -p $$'' "cannot open /dev/kmem"}
+      fi
       [ -f "$out/share/man/man8/lsof.8" ] || [ -f "$out/share/man/man1/lsof.1" ] || { echo "FATAL: no lsof man" >&2; exit 1; }
     '';
   };
