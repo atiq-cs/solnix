@@ -360,7 +360,7 @@ let
   };
 
   # Modern compiler toolchains (backlog PS-1 clang / PS-4 latest-GCC/GDB, pulled
-  # forward): gcc14 + clang + gdb sliced from the OI host IPS install and RUNPATH-
+  # forward): gcc14 + clang sliced from the OI host IPS install and RUNPATH-
   # relocated into the store, the foundation the package-batch work builds on.
   # See ./toolchains.nix + docs/design-toolchains.md.
   toolchains = import ./toolchains.nix { inherit mkIllumosComponent libc; };
@@ -1325,7 +1325,7 @@ in
   nixChain = srcPkgs.nixChain;
   nixSrc = srcPkgs.nixChain.nix;
   gate = gate';
-  inherit (toolchains) gcc14 clang gdb;
+  inherit (toolchains) gcc14 clang;   # gdb: from source, cli/c-dev.nix (reaches here through // cli)
   # the CORE-OS slices, each with a computed DT_NEEDED closure (./slices.nix).
   inherit slices;
   inherit (slices) core-utils oamuser halt smf zfs kernel;

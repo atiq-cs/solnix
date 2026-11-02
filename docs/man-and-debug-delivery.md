@@ -17,7 +17,7 @@ Modeled on NixOS: `documentation.man.enable` (nixos/modules/misc/documentation.n
 | `man` / `mandoc` viewer | `pkgs.solnix.world` (gate `/usr/bin/man`, `/usr/bin/mandoc`) | Already on PATH via the base world. `man(1)` dispatches to `mandoc(1)`. |
 | Profile package man pages | each package's `$out/share/man` | Linked into the system profile at `sw/share/man` (and `~/.nix-profile/share/man`). `environment.pathsToLink` already carries `/share/man`; `MANPATH` already suffixes `/share/man` onto every profile (modules/config/shell-environment.nix). No extra wiring. |
 | illumos **base** man pages | `pkgs.solnix.worldMan` | The gap: `mk-proto-world` EXCLUDES `usr/share/man` to keep the runtime closure lean, so the installed BE has none. `worldMan` carries them under `share/man` as a doc-only store path; `documentation.man.enable` adds it to the system profile, so they land at `sw/share/man` and the existing MANPATH finds them. |
-| Split debug symbols | each `mk-userland-pkg` package's `debug` output | `environment.enableDebugInfo` adds the `debug` output of every package that has one into the profile at `sw/lib/debug/.build-id`; gdb finds it by build-id (`NIX_DEBUG_INFO_DIRS` + `/etc/gdbinit`). |
+| Split debug symbols | each `mk-userland-pkg` package's `debug` output | `environment.enableDebugInfo` adds the `debug` output of every package that has one into the profile at `sw/lib/debug/.build-id`; gdb finds it by build-id (`NIX_DEBUG_INFO_DIRS` + `/etc/gdb/gdbinit`). |
 
 This mirrors NixOS exactly: man pages and debug symbols are delivered through
 PROFILE packages into `share/man` / `lib/debug`, not baked into the kernel/libc
@@ -67,7 +67,8 @@ refused), and a pop-launcher plugin (`man <word>` in the launcher lists whatis/a
 
 - `environment.extraOutputsToInstall += [ "debug" ]`;
 - `environment.sessionVariables.NIX_DEBUG_INFO_DIRS = /run/current-system/sw/lib/debug`;
-- writes `/etc/gdbinit` with `set debug-file-directory …` so a bare `gdb` (no env)
+- writes `/etc/gdb/gdbinit` (the `--with-system-gdbinit` of `pkgs.solnix.gdb`, as nixpkgs;
+  it was `/etc/gdbinit` until 2026-11-02, a file no gdb read) with `set debug-file-directory …` so a bare `gdb` (no env)
   still finds the tree.
 
 `pkgs/illumos/mk-userland-pkg.nix` already produces the `debug` output: it splits
@@ -139,3 +140,25 @@ Two independent paths both carry man on the booted installer:
   read-only): `man htop` and `man ls` resolve a page; `ls /run/current-system/sw/lib/debug/.build-id`
   shows build-id dirs; `gdb -q -ex 'show debug-file-directory'` reports the
   sw/lib/debug tree.
+
+## gdb itself (2026-11-02, gdb1)
+
+`pkgs.solnix.gdb` is GNU GDB 18.1 built from source (`pkgs/illumos/cli/c-dev.nix`, after
+nixpkgs' `pkgs/by-name/gd/gdb`); it replaced the slice of OpenIndiana's gdb 16.3 binary. It
+carries nixpkgs' `NIX_DEBUG_INFO_DIRS` patch, so the variable above is what sets gdb's
+`debug-file-directory`, and its system gdbinit is `/etc/gdb/gdbinit`. Two more pieces were
+needed on solnix and are measured, each with a negative control (the build without them):
+
+- GNU libiconv: the world's iconv modules have no ASCII/UTF-8 to UTF-32 converter, and gdb
+  converts every string it prints that way (`print "abc"` failed with "Unable to find a valid
+  charset"; the OI build host has the modules, so a build-host check cannot see it).
+- `patches/gdb/ignore-core-note0-segment.patch` (OpenIndiana and OmniOS carry it; upstream
+  sourceware PR 33258): without it gdb 18.1 aborts opening any illumos core
+  (`regcache.c:432 ... THREAD_EXITED`).
+
+Proof on dixi (bank `/scratch/solnix-bank/gdb1-20261102/`): run+bt with file:line (control:
+no -g), attach/print/detach, a core's backtrace equal to the live one, 2-thread `info threads`,
+Python, split debug through `.gnu_debuglink` with both `debug-file-directory` and
+`NIX_DEBUG_INFO_DIRS` (control: debug file removed), a 32-bit inferior, and strings; 8/8 runs.
+That split-debug proof uses an objcopy-split test binary. Repeating it against a real package's
+`debug` output waits on the wave6 split-debug work: no `-debug` output is on dixi yet.

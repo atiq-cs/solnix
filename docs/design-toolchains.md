@@ -27,7 +27,7 @@ only if a newer-than-OI or differently-configured compiler is wanted.
 | GCC (older) | `developer/gcc-13` | 13.4.0 | (runtime only installed) | available |
 | **Clang/LLVM** | `developer/clang-21` | 21.1.8-2025.0.0.0 | `/usr/clang/21` | installed, sliced |
 | Clang (older) | `developer/clang-{16,18,19,20}` | … | | available |
-| **GDB** | `developer/debug/gdb` | 16.3-2025.0.0.0 | `/usr/bin/gdb` | installed, sliced |
+| **GDB** | `developer/debug/gdb` | 16.3-2025.0.0.0 | `/usr/bin/gdb` | was sliced; since 2026-11-02 `pkgs.solnix.gdb` is GDB 18.1 from source (cli/c-dev.nix) |
 | **LLDB** | — | — | — | **not shipped by OI at all** |
 
 Both gcc-14 and clang-21 default-target `x86_64-pc-solaris2.11` (confirmed:

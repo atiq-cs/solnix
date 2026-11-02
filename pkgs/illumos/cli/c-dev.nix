@@ -1,6 +1,6 @@
 # cli/c-dev.nix -- python3, cmake, ccache, quilt, pkg-config (pkgconf), gdbm, expat, libffi.
 { base, mkSrcPkg, world, zlib, openssl, ncurses, readline, pkgconf, nixChain, graphics, chk, scrub,
-  dropDocs, gnulibFix, perl, sqlite, hostTools, ... }:
+  dropDocs, gnulibFix, perl, sqlite, hostTools, gnum4, libiconv, ... }:
 rec {
   gdbm = mkSrcPkg {
     pname = "gdbm"; version = "1.24";
@@ -161,4 +161,66 @@ rec {
   };
 
   pkg-config = base.pkgconf;
+
+  # GNU GDB, from source, as nixpkgs builds it (pkgs/by-name/gd/gdb): out-of-tree, every bfd target, TUI, system
+  # readline/zlib/expat, Python, static bfd/opcodes, no sim, system gdbinit in /etc/gdb, NIX_DEBUG_INFO_DIRS patch.
+  # 18.1 keeps the native Solaris target (configure.nat sol2: procfs + sol-thread via libthread_db.so.1, which is
+  # the world's, hence world in deps). gmp + mpfr (18.1 needs both: target-float.c) in-tree and static, as
+  # gcc-src.nix. Departures from nixpkgs: no source-highlight/libipt/debuginfod (no solnix packages; nixpkgs gates
+  # debuginfod on elfutils, Linux only), no NLS, and no gcore: the world's native gcore(1) stays first.
+  gdb = let fetch = url: sha256: import <nix/fetchurl.nix> { inherit url sha256; }; in mkSrcPkg {
+    pname = "gdb"; version = "18.1";
+    src = { url = "https://mirrors.kernel.org/gnu/gdb/gdb-18.1.tar.xz";
+            sha256 = "cd9fc3fe2b47743840e42c1592d3d87f8302eb18639c0b8b4ba0898002e2348f"; };
+    # libiconv: gdb converts every string it prints from the host charset to UTF-32 with iconv(3); the world's iconv
+    # modules have no 646/UTF-8 -> UTF-32 (dixi: `print "abc"` gave "Unable to find a valid charset", the OI build host
+    # with 1395 modules printed it). nixpkgs links GNU libiconv off glibc too (as gettext here, base-src.nix).
+    deps = [ world ncurses readline zlib graphics.expat nixChain.xz nixChain.zstd xxhash python3 libiconv ];
+    nativeTools = [ perl gnupatch pkgconf gnum4 ] ++ hostTools;   # perl: pod2man for the man pages; m4: in-tree gmp's configure
+    build = ''
+      patch -p1 < ${../patches/gdb/debug-info-from-env.patch}
+      patch -p1 < ${../patches/gdb/ignore-core-note0-segment.patch}   # OI/OmniOS: without it every illumos core aborts gdb
+      tar xf ${fetch "https://mirrors.kernel.org/gnu/gmp/gmp-6.3.0.tar.xz" "a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898"}; mv gmp-6.3.0 gmp
+      tar xf ${fetch "https://mirrors.kernel.org/gnu/mpfr/mpfr-4.2.1.tar.xz" "277807353a6726978996945af13e52829e3abd7a9a5b7fb2793894e18f1fcbb2"}; mv mpfr-4.2.1 mpfr
+      # nixpkgs: regenerate the man pages so gdbinit(5) names the system gdbinit (the shipped ones say "not enabled")
+      rm gdb/doc/*.1 gdb/doc/*.5 gdb/doc/GDBvn.texi
+      mkdir _build; cd _build
+      T=x86_64-pc-solaris2.11
+      # ABI unset: mk-src-pkg exports ABI=64, and the in-tree gmp (configured from gmake, host none-*) rejects it.
+      # (GNU libiconv's iconv.h declares const char ** in C and C++ alike, so configure's iconv-prototype probe, run in C,
+      # holds for gdb's C++; against the gate's <iconv.h> it did not: g++ predefines _XPG6, which switches it to char **.)
+      ( unset ABI
+      # -L gcc.lib first: gdb links through libtool, which found -latomic as the COMPILER's libatomic.la and added its
+      # libdir (gcc out, build-time only) as -R (closure gate, measured); a plain .so found first adds no rpath.
+      CFLAGS=-O2 CXXFLAGS=-O2 LDFLAGS="-L$gccLib/amd64" MAKEINFO=true ../configure --prefix="$out" \
+        --build=$T --host=$T --target=$T --enable-targets=all --enable-64-bit-bfd --disable-werror \
+        --disable-install-libbfd --disable-shared --enable-static --enable-tui --with-curses \
+        --with-system-readline --with-system-zlib --with-expat --with-lzma --with-zstd --with-xxhash \
+        --with-python=${python3}/bin/python3 --without-guile --disable-sim --without-debuginfod \
+        --disable-source-highlight --disable-nls --with-static-standard-libraries=no \
+        --with-libiconv-prefix=${libiconv} --with-system-gdbinit=/etc/gdb/gdbinit --with-system-gdbinit-dir=/etc/gdb/gdbinit.d \
+        --with-auto-load-safe-path='$debugdir:$datadir/auto-load'
+      gmake -j16 MAKEINFO=true; gmake install MAKEINFO=true )
+      rm -f "$out/bin/gcore" "$out/share/man/man1/gcore.1"
+      ${dropDocs}
+      # the checks below run gdb's Python: without this they write __pycache__/*.pyc into $out, stamped with the .py
+      # mtimes of this build, so `nix-store --check` differed in those 2 bytes per file (measured, v4)
+      export PYTHONDONTWRITEBYTECODE=1
+      ${chk ''"$out/bin/gdb" --version'' "^GNU gdb \\(GDB\\) 18\\.1$"}
+      ${chk ''"$out/bin/gdb" -nx -batch -ex "python print(1+1)"'' "^2$"}
+      ${chk ''NIX_DEBUG_INFO_DIRS=/nix-debug-probe "$out/bin/gdb" -nx -batch -ex "show debug-file-directory"'' "/nix-debug-probe"}
+      ${chk ''"$out/bin/gdb" --configuration'' "with-system-gdbinit=/etc/gdb/gdbinit"}
+      n=$(/usr/bin/elfdump -d "$out/bin/gdb" | awk '$2=="NEEDED"{print $4}')
+      # (the OI build host's own iconv modules would mask a missing libiconv here; the NEEDED check below does not)
+      ${chk ''"$out/bin/gdb" -nx -batch -ex 'print "abc"' '' "^\\$1 = .abc.$"}
+      ${chk ''"$out/bin/gdb" -nx -batch -ex 'set host-charset UTF-8' -ex 'print "abc"' '' "^\\$1 = .abc.$"}
+      for l in libreadline libncursesw libpython3 libexpat liblzma libzstd libxxhash libz.so libstdc++ libiconv; do
+        echo "$n" | grep -q "^$l" || { echo "FATAL: gdb does not NEED $l: $n" >&2; exit 1; }
+      done
+      if echo "$n" | grep -Eq '^lib(termcap|curses)\.'; then echo "FATAL: gdb NEEDs an SVR4 curses: $n" >&2; exit 1; fi
+      [ -z "$(find "$out" -name __pycache__)" ] || { echo "FATAL: __pycache__ in $out" >&2; exit 1; }
+      [ -f "$out/share/man/man1/gdb.1" ] && grep -q /etc/gdb/gdbinit "$out/share/man/man5/gdbinit.5" \
+        || { echo "FATAL: gdb man pages missing or not regenerated" >&2; exit 1; }
+    '';
+  };
 }
