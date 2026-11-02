@@ -132,7 +132,7 @@ let
        + (if storeOnly then "\n    . ${./illumos-bin.sh}" else "")   # exempt: IB stays /usr/bin (the OI host's illumos tools)
        # the tools configure looks for by name or at fixed host paths, set from the store PATH (jq 1.8.2: MAKE=/usr/gnu/bin/make on
        # SunOS when MAKE is unset; recipes1). /usr/bin/bash stays the shell (the builder interpreter, a documented exemption).
-       + (if storeOnly then "\n    MAKE=$(command -v gmake) M4=$(command -v m4 || true) INSTALL=\"$(command -v install) -c\"; export MAKE M4 INSTALL" else ""))
+       + (if storeOnly then "\n    MAKE=$(command -v gmake) INSTALL=\"$(command -v install) -c\"; export MAKE INSTALL   # not M4: the world m4 is SVR4; a recipe needing GNU m4 lists gnum4" else ""))
       ''export CC="$W/cc$ABI" CC_FOR_BUILD="$W/cc$ABI" ABI LIBSUB'' ] x) a.args; };
   drvAttrs' = hermetic drvAttrs;
   drvAttrs = {
