@@ -25,7 +25,8 @@ bare man curl > "$T/1b" 2>&1; page "$T/1b" 'transfer a URL' && r PASS man-pkg-no
 # 2. through ssh's non-login shell and sudo, as a user runs them (bash -c is what `ssh host cmd` execs)
 env -i HOME="$HOME" LOGNAME="$LOGNAME" PATH=/run/wrappers/bin:$SW/bin:/usr/bin:/usr/sbin:/sbin bash -c 'man zfs' > "$T/2" 2>&1
 page "$T/2" 'zfs - configures ZFS' && r PASS man-ssh-cmd "bash -c 'man zfs', no MANPATH" || r FAIL man-ssh-cmd "$(head -1 "$T/2")"
-if [ -r /proc/self/psinfo ] && sudo -n true > /dev/null 2>&1; then   # pfexec segfaults with no /proc (getexecname NULL) (unset MANPATH; sudo -n man ls) > "$T/2s" 2>&1
+if [ -r /proc/self/psinfo ] && sudo -n true > /dev/null 2>&1; then   # pfexec segfaults with no /proc (getexecname NULL)
+  (unset MANPATH; sudo -n man ls) > "$T/2s" 2>&1
   page "$T/2s" 'list contents' && r PASS man-sudo "sudo man ls" || r FAIL man-sudo "$(head -1 "$T/2s")"
 else r SKIP man-sudo "sudo -n not allowed for $LOGNAME"; fi
 # 3. a real cron job (illumos cron gives jobs HOME LOGNAME PATH SHELL TZ, nothing from /etc/default/init)
