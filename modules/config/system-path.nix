@@ -51,6 +51,15 @@ in
       '';
     };
 
+    extraSetup = mkOption {
+      type = types.lines;
+      default = "";
+      description = ''
+        Shell fragments run in the composed system profile ($out) after the
+        merge (NixOS's environment.extraSetup): the man index, the info dir.
+      '';
+    };
+
     extraOutputsToInstall = mkOption {
       type = types.listOf types.str;
       default = [ ];
@@ -80,6 +89,7 @@ in
       paths = extraOutputPaths;
       inherit (config.environment) pathsToLink extraOutputsToInstall;
       ignoreCollisions = true;
+      postBuild = config.environment.extraSetup;
     };
 
     # The base subtrees, as a definition rather than the option default, so a

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Manual Page Viewer
+Comment=Open a man: link in a terminal
+Exec=solnix-man-open %u
+Icon=help-contents
+NoDisplay=true
+MimeType=x-scheme-handler/man;
+Categories=System;Documentation;

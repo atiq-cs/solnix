@@ -48,4 +48,6 @@
   # the target. (NixOS's minimal installation ISO likewise omits man pages that
   # the installed system then gets.) See docs/design-two-installer-images.md.
   documentation.man.enable = lib.mkForce false;
+  # share/doc: same reason (info is already off in installer.nix).
+  documentation.doc.enable = lib.mkForce false;
 }

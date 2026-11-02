@@ -46,6 +46,10 @@
   # Without git on PATH, `nix build nixpkgs#<x>` fails with "resolving Git
   # reference '26.11': revspec not found" (measured on the dde2cbe AMI, 2026-10-23).
   # NixOS gets git through its nix package's runtime closure; this is the same need.
+  # `man -k` / apropos / whatis: the index built into sw/share/man at system build time (NixOS's
+  # documentation.man.cache.enable, off by default there; on here because getting help is a requirement).
+  documentation.man.cache.enable = lib.mkDefault true;
+
   environment.systemPackages = with pkgs.solnix; [
     openssh bash nvi less htop top
     nixChain.curl wget bsdfetch tree nano git

@@ -118,12 +118,33 @@ fi
 for d in usr opt; do
   [ -d "$R$WORLD/$d" ] || continue; mkdir -p "$d"
   for e in $(ls -A "$R$WORLD/$d"); do
-    case $d/$e in usr/bin|usr/sbin|usr/lib|usr/kernel) continue;; esac
+    case $d/$e in usr/bin|usr/sbin|usr/lib|usr/kernel|usr/share) continue;; esac
     [ -d "$d/$e" ] && [ ! -h "$d/$e" ] && continue
     rm -f "$d/$e"
     if [ -h "$R$WORLD/$d/$e" ]; then ln -s "$(rl "$R$WORLD/$d/$e")" "$d/$e"; else ln -s "$WORLD/$d/$e" "$d/$e"; fi
   done
 done
+# /usr/share: a real dir of per-entry links into the userland, plus man and info from the system profile. With
+# MANPATH unset (cron jobs, `ssh host cmd`, SMF methods) illumos man(1) maps /usr/bin, which is sw/bin here, BY INODE
+# to /usr/share/man (usr/src/cmd/man/man.c bintoman[]; info's default is /usr/share/info), so those must be the
+# profile's: the illumos form of NixOS man-db's `MANPATH_MAP /run/current-system/sw/bin /run/current-system/sw/share/man`.
+# Measured on dixi: a cron job's environment is HOME LOGNAME PATH SHELL TZ only (cron.c envinit), and `man ls` in it
+# found nothing. The links name the system-path store path, not $TOP/sw: community/zone-install.sh copies this farm
+# into a zone whose store has system.path but not the toplevel, and fails on a link naming anything else.
+lay_usr_share() {   # $1 = the system profile's store path
+  [ -h usr/share ] && rm -f usr/share
+  mkdir -p usr/share
+  # a previous generation's links (only links: anything real an admin put here stays)
+  find usr/share/. ! -name . -prune -type l -exec rm -f {} +
+  for e in $(ls -A "$R$WORLD/usr/share"); do
+    case $e in man|info) continue ;; esac
+    [ -e "usr/share/$e" ] || [ -h "usr/share/$e" ] && continue
+    if [ -h "$R$WORLD/usr/share/$e" ]; then ln -s "$(rl "$R$WORLD/usr/share/$e")" "usr/share/$e"
+    else ln -s "$WORLD/usr/share/$e" "usr/share/$e"; fi
+  done
+  for e in man info; do [ -e "usr/share/$e" ] || ln -s "$1/share/$e" "usr/share/$e"; done
+}
+lay_usr_share "$(attr sw)"
 # per-entry farms for lib dirs whose ld.so.1 must resolve before /nix is mounted.
 # usr/lib/libc is left out: fs-root's libc_mount lofs-mounts the
 # hardware-capability libc found there (32-bit libc_hwcapN.so.1, -xtarget

@@ -45,7 +45,10 @@ in
   environment.systemPackages = [ s.wayland s.libdrm mesa s.greetd ] ++ cfg.packages ++ cfg.fonts ++ [ fallbackCursorTheme ]
     # NixOS's cosmic module (adwaita-icon-theme, xdg-user-dirs; xdg.sounds: sound-theme-freedesktop) and graphical-desktop
     # (xdg-utils). Not in cfg.packages, as NixOS keeps them out of its COSMIC list.
-    ++ (with s; [ adwaita-icon-theme xdg-user-dirs sound-theme-freedesktop xdg-utils ]);
+    ++ (with s; [ adwaita-icon-theme xdg-user-dirs sound-theme-freedesktop xdg-utils ])
+    # Help on the desktop (COSMIC has none): the Solnix Manual entry (NixOS's nixos-help), the man: URI handler
+    # (xdg-open man:ls) and the launcher's "man <word>" search (pkgs/illumos/desktop/help.nix).
+    ++ lib.optional config.documentation.man.enable s.solnix-help;
   # NixOS cosmic: services.avahi (mdnsd here); the gate's perl scripts (lp, lpstat, print-service) need /usr/perl5/bin.
   solnix.defaults.mdns = lib.mkDefault true;
   solnix.perl5Mediator.enable = lib.mkDefault true;
@@ -84,6 +87,10 @@ in
     INTEL_DEBUG = "noccs";
   };
   environment.generatedEtc = {
+    # pop-launcher reads plugins from /etc/pop-launcher/plugins (its src/lib.rs SYSTEM_PLUGINS) as well as its own
+    # store path, so the man plugin needs no launcher rebuild. bin is the plugin's absolute store path.
+    "pop-launcher/plugins/man/plugin.ron" = lib.mkIf config.documentation.man.enable
+      (builtins.replaceStrings [ "@out@" ] [ "${s.solnix-help}" ] (builtins.readFile ../../pkgs/illumos/desktop/help/plugin.ron));
     "fonts/fonts.conf" = fontsConf;
     "greetd/config.toml" = greetdToml;
   };

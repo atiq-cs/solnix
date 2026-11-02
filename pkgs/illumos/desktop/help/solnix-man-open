@@ -1,0 +1,15 @@
+#!/usr/bin/bash
+# solnix-man-open <man:URI | page> -- the x-scheme-handler/man handler (xdg-open man:ls, man:printf(3c), man:zfs.8).
+# Shows the page with man(1) in a terminal window: $TERMINAL, else COSMIC Terminal. Opening a man: link from a
+# browser or a chat must not run a command, so the page name is checked before anything is executed.
+u=${1:?usage: solnix-man-open <man:page[(section)]>}
+u=${u#man:}; u=${u#//}
+# man:printf(3c) and man:printf.3c are both used in the wild (RFC draft and KDE's kio-man)
+sec=; case $u in *\(*\)) sec=${u##*\(}; sec=${sec%\)}; u=${u%%\(*} ;; esac
+case $u in ''|-*|*[!A-Za-z0-9._+:@-]*) echo "solnix-man-open: not a man page name: $1" >&2; exit 2 ;; esac
+case $sec in *[!A-Za-z0-9]*) echo "solnix-man-open: not a man section: $1" >&2; exit 2 ;; esac
+cmd=(man ${sec:+-s "$sec"} "$u")
+if [ -n "${SOLNIX_MAN_OPEN_PRINT:-}" ]; then printf '%s\n' "${cmd[*]}"; exit 0; fi   # tests: print, don't open
+term=${TERMINAL:-cosmic-term}
+# keep the window open on a missing page so the error can be read
+exec "$term" -e bash -c '"$@" || { echo; read -r -p "Press Enter to close. " _; }' solnix-man-open "${cmd[@]}"

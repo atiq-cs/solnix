@@ -82,6 +82,9 @@ let
 in
 {
   imports = [ ./base.nix ];
+  # info off, as NixOS's minimal installation CD (profiles/minimal.nix): texinfo needs perl (~78 MB) in the media
+  # closure. man pages and the man index stay on (installation-cd-minimal.nix keeps man), as does share/doc.
+  documentation.info.enable = lib.mkDefault false;
 
   networking.hostName = "solnix-installer";
 

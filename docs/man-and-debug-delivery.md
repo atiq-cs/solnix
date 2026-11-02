@@ -25,23 +25,41 @@ base, and the env vars are profile-relative.
 
 ## The modules
 
-### `modules/config/documentation.nix` — man pages (default on)
+### `modules/config/documentation.nix` — man, the man index, info, doc (help1, 2026-11-02)
 
-`documentation.enable` / `documentation.man.enable` (both default `true`, as on
-NixOS). When on:
+Options, NixOS's names: `documentation.enable`, `man.enable`, `man.cache.enable` (NixOS default false; base.nix sets
+it true), `info.enable`, `doc.enable`. When on:
 
-- adds `pkgs.solnix.worldMan` to `environment.systemPackages` (the illumos base
-  man pages → `sw/share/man`);
-- `environment.extraOutputsToInstall += [ "man" ]` — the NixOS-faithful wiring to
-  pull any package's `man` output. solnix packages keep man in `$out` (see
-  docs/design-manpages.md), so this is a no-op for the base set today, but it
-  covers a future package that splits a `man` output;
-- writes `/etc/man.conf` with the fallback `MANPATH` directives
-  (`documentation.man.manPath`), for a `man` invocation with no login `MANPATH`.
+- `worldMan` goes into the system profile (the base pages at `sw/share/man`); `extraOutputsToInstall += [ "man" ]`.
+- **The index** (`man.cache.enable`): `environment.extraSetup` (NixOS's name; lib/build-env.nix `postBuild`) runs the
+  world's `man -w -M $out/share/man` over the composed profile, writing `sw/share/man/whatis`. illumos apropos,
+  whatis and `man -k` read that plain-text file (man.c whatapro), not a mandoc.db. Measured on the base profile:
+  5186 entries. The build fails if no whatis is written.
+- **info** (`info.enable`): texinfo 7.3 (pkgs/illumos/cli/texinfo.nix) in the profile, and `sw/share/info/dir`
+  rebuilt by install-info from every `*.info` at build time (NixOS documentation.nix's extraSetup).
+- **No /etc/man.conf.** illumos man(1) never opens it, and mandoc reads only lowercase `manpath` lines, so the
+  `MANPATH` lines this module used to write were read by nothing. `documentation.man.manPath` is removed.
 
-MANPATH itself is already set per-login in `modules/config/shell-environment.nix`
-(`profileRelativeSessionVariables.MANPATH = [ "/share/man" ]` suffixed onto every
-`environment.profiles` entry), so profile man pages resolve with no change here.
+**Man in every context (install-be, not the shell):** with MANPATH unset, illumos man maps /usr/bin, /usr/sbin and
+/sbin by inode to `/usr/share/man` (man.c `bintoman[]`), and info's compiled default path has `/usr/share/info`.
+install-be now lays `/usr/share` as a real directory of per-entry links into the userland, with `man` and `info`
+linking the system profile's `share/man` and `share/info` (`lay_usr_share`, test: scripts/test-install-be-share.sh).
+That is the illumos form of NixOS man-db's `MANPATH_MAP /run/current-system/sw/bin /run/current-system/sw/share/man`.
+It covers cron jobs, whose environment is only HOME LOGNAME PATH SHELL TZ (cron.c envinit; measured on dixi:
+`/etc/default/init` variables do not reach them), `ssh host cmd`, sudo, and SMF methods. The links name the
+system-path store path, not `$TOP/sw`, because community/zone-install.sh copies the /usr farm into zones whose store
+holds system.path but not the toplevel. Per-user `~/.nix-profile` pages still need the login MANPATH; the non-login
+shells get it once bash reads /etc/bashrc (SYS_BASHRC, wave6).
+
+MANPATH itself is still set per login in `modules/config/shell-environment.nix` (every profile's share/man).
+
+### Desktop help (desktop-cosmic-config.nix, pkgs/illumos/desktop/help.nix)
+
+COSMIC 1.5 has no help system (no yelp, no `help:`/`man:` handler, no launcher plugin for manuals). The
+`solnix-help` package adds NixOS's nixos-help analog (a "Solnix Manual" entry opening https://solnix.io/docs/), a
+`x-scheme-handler/man` handler (`xdg-open man:ls` opens ls(1) in cosmic-term; anything that is not a page name is
+refused), and a pop-launcher plugin (`man <word>` in the launcher lists whatis/apropos matches), linked into
+/etc/pop-launcher/plugins/man (pop-launcher reads that directory, so the launcher is not rebuilt).
 
 ### `modules/config/debug-info.nix` — split debug symbols (default off)
 
@@ -94,7 +112,7 @@ Two independent paths both carry man on the booted installer:
 
 1. **toplevel path** — `configurations/installer.nix` imports `base.nix` and the
    base module list, so `documentation.man.enable` is on by default and the
-   installer toplevel carries `worldMan` (base man pages) + `/etc/man.conf`. The
+   installer toplevel carries `worldMan` (base man pages) and the man index. The
    `man`/`mandoc` binaries come from the world (already on PATH). Debug info is
    left OFF on the installer (keeps the image small).
 2. **livecd script path** — `scripts/oi-make-livecd.sh` already stages
