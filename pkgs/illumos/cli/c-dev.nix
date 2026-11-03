@@ -151,7 +151,7 @@ sys.exit("FATAL: sysconfig names a host or build dir: %r" % bad if bad else 0)'
             sha256 = "aae608dfe8213dfd05d909a57718ef82f30722c392344583d3f39050c7f29a80"; };
     build = ''
       gmake -j8 CC="$CC" PREFIX="$out" LIBDIR="$out/lib/amd64" lib xxhsum
-      gmake install CC="$CC" PREFIX="$out" LIBDIR="$out/lib/amd64" INSTALL=ginstall
+      gmake install CC="$CC" PREFIX="$out" LIBDIR="$out/lib/amd64" INSTALL=install   # GNU install, the store coreutils (OI had ginstall)
       ${chk ''printf abc | "$out/bin/xxh64sum"'' "^44bc2cf5ad770999 "}
     '';
   };

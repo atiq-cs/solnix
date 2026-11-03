@@ -71,6 +71,7 @@ rec {
     src = { url = "https://dev.yorhel.nl/download/ncdu-1.22.tar.gz";
             sha256 = "0ad6c096dc04d5120581104760c01b8f4e97d4191d6c9ef79654fa3c691a176b"; };
     deps = [ ncurses ];
+    nativeTools = [ pkgconf ] ++ hostTools;   # store-only: configure needs pkg-config (the OI host's /usr/bin/pkg-config before)
     build = ''
       CFLAGS="-O2 -D__EXTENSIONS__" ./configure --prefix="$out" --with-ncursesw
       gmake -j8; gmake install

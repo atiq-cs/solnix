@@ -619,11 +619,15 @@ let
   # option in CXXFLAGS makes configure skip that probe (configure.ac:802).
   smartmontools = mkSrcPkg {
     pname = "smartmontools"; version = "7.4";
+    hostPathAllow = "-e 's[|]/usr/local/(share/man|sbin|share/doc)/";   # the Makefile's own sed that REWRITES upstream doc paths
     src = { url = "https://downloads.sourceforge.net/project/smartmontools/smartmontools/7.4/smartmontools-7.4.tar.gz";
             sha256 = "e9a61f641ff96ca95319edfb17948cd297d0cd3342736b2c49c99d4716fb993d"; };
     deps = [ needWorld ];
     build = ''
-      CXXFLAGS="-g -O2 -fno-stack-protector" ./configure --prefix="$out" --without-update-smart-drivedb --without-initscriptdir \
+      # --with-scriptpath: the PATH smartd's warning scripts run with (etc/smartd_warning.sh); configure's default is
+      # /usr/local/bin:/usr/bin:/bin. The system profile, as on NixOS (the store-only build must not name /usr/local; gate B13 WARNed it).
+      CXXFLAGS="-g -O2 -fno-stack-protector" ./configure --prefix="$out" --with-scriptpath=/run/current-system/sw/bin:/usr/bin:/bin \
+        --without-update-smart-drivedb --without-initscriptdir \
         --without-systemdsystemunitdir --without-smartdplugindir --without-libcap-ng --without-selinux
       gmake -j4
       gmake install
@@ -780,8 +784,12 @@ let
     src = { url = "https://www.x.org/releases/individual/util/lndir-1.0.5.tar.xz";
             sha256 = "3b65577a5575cce095664f5492164a96941800fe6290a123731d47f3e7104ddb"; };
     linkDeps = [ xorgproto ];
+    nativeTools = [ self.pkgconf ] ++ hostTools;   # store-only: configure needs pkg-config for xorg-macros (the OI host's before)
     build = ''
-      ./configure --prefix="$out"
+      # xorg-macros reads the HOST's /usr/share/man/man7/attributes.7 to pick SysV vs BSD man sections (host state; yes on chef and on
+      # a solnix host whose /usr/share/man is the profile's): pinned to the answer both give, the BSD sections (NixOS: no such file
+      # in the sandbox -> the same answer as here only by luck, so pin). shortcut: per recipe; move to config.site in the next full rebuild.
+      ac_cv_file__usr_share_man_man7_attributes_7=yes ./configure --prefix="$out"
       gmake -j4
       gmake install
       # self-check: a tree of links that mirrors the source tree.

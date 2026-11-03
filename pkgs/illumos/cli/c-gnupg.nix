@@ -20,6 +20,8 @@ let
   cfgPath = deps: builtins.concatStringsSep ":" (map (d: "${d}/bin") deps);
   lib = { pname, version, sha256, deps ? [ ], flags ? "", check }: mkSrcPkg {
     inherit pname version deps; src = gpgSrc pname version sha256; nativeTools = tools;
+    # Makefile.am's maintainer target `stowinstall` (install prefix=/usr/local/stow/<pkg>): copied into the Makefile, never run
+    hostPathAllow = "install prefix=/usr/local/stow/";
     build = ''
       export PATH="${cfgPath deps}''${PATH:+:$PATH}"
       ${if deps == [ ] then "" else "export GPGRT_CONFIG=${builtins.head deps}/bin/gpgrt-config"}

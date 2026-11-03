@@ -54,7 +54,9 @@ rec {
     nativeTools = [ perl ] ++ hostTools;   # store-only PATH + config.site; perl: w3mman and the cgi scripts get a #! to the store perl (OI: /usr/bin/perl, solnix: none)
     build = ''
       CFLAGS="-O2 -D__EXTENSIONS__ -std=gnu17 -Wno-error=incompatible-pointer-types -Wno-error=implicit-function-declaration" \
-      ./configure --prefix="$out" --with-ssl=${openssl} --with-gc=${bdwgc} --with-termlib=ncursesw \
+      # NKF: configure.ac AC_PATH_PROGS(NKF, nkf, /usr/local/bin/nkf): the Japanese-text filter the multipart cgi runs, defaulting to a
+      # host path when no nkf is found. No nkf here (nor in nixpkgs' w3m inputs): the bare name, found on the user's PATH if installed.
+      NKF=nkf ./configure --prefix="$out" --with-ssl=${openssl} --with-gc=${bdwgc} --with-termlib=ncursesw \
         --enable-image=no --without-x --disable-w3mmailer --disable-nls
       gmake -j8; gmake install
       ${chk ''"$out/bin/w3m" -version'' "^w3m version"}
@@ -66,6 +68,7 @@ rec {
 
   isync = mkSrcPkg {
     pname = "isync"; version = "1.5.1";
+    hostPathAllow = "/opt/cov-analysis-[*]/bin/cov-build";   # Makefile.am's Coverity target (maintainer only, never run)
     src = { url = "https://downloads.sourceforge.net/project/isync/isync/1.5.1/isync-1.5.1.tar.gz";
             sha256 = "28cc90288036aa5b6f5307bfc7178a397799003b96f7fd6e4bd2478265bb22fa"; };
     deps = [ world openssl zlib ];
