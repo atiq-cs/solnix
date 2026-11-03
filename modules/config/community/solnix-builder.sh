@@ -117,51 +117,72 @@ origins() {	# origins <recipes.tsv>: "<out>\t<commit>" for every served out: the
 		bounded 120 git -C "$og" show "$oc:docs/registry/recipes.tsv" 2> /dev/null | nawk -F'\t' -v c="$oc" 'NR > 1 && $9 ~ /^\/nix\/store\// {print $9 "\t" c}'
 	done | nawk -F'\t' '!s[$1]++' > "$og.origins.new" && mv "$og.origins.new" "$og.origins.$ob" && cat "$og.origins.$ob"
 }
-drv_for() {	# drv_for <pname> <outs>: "<out> <drv>^<output>" of the packages attr whose outPath is one of <outs>, evaluated at
-	# the row's commit: rows[].commit when the listing has it ($rowc), else each out's origin commit (origins), then
-	# BUILDER_FLAKE's head. The out must match, so a wrong commit only declines. An eval at a fixed rev never changes, so
-	# hits are kept across ticks ($BUILDER_STATE/eval/<rev>.<system>.<attr>, a week); misses only for the tick.
-	typeset n=${1%-[0-9]*} a r f c= w u s= o k revs="" e=$BUILDER_STATE/eval
+revs() {	# revs <outs>: the commits a job's candidates come from, in the order tried: BUILDER_FLAKE's head (the commit whose
+	# inputs are most likely served), then rows[].commit ($rowc) when the listing has it, else each out's origin commit,
+	# newest first ($BUILDER_STATE/origins is in commit order, oldest first)
+	typeset v=head k
+	[[ $rowc == +([0-9a-f]) ]] && { print -r -- "$v $rowc"; return; }
+	for k in $(nawk -F'\t' -v o=",$1," 'index(o, "," $1 ",") {c[++n] = $2} END {while (n) print c[n--]}' "$BUILDER_STATE/origins" 2> /dev/null); do
+		[[ " $v " == *" $k "* ]] || v="$v $k"; done
+	print -r -- "$v"
+}
+drv_for() {	# drv_for <pname> <outs> <rev|head>: "<out> <drv>^<output>" of the packages attr whose outPath is one of <outs>,
+	# evaluated at <rev> of BUILDER_FLAKE (head: this tick's locked head). The out must match, so a wrong commit only declines.
+	# An eval at a fixed rev never changes, so hits are kept across ticks ($BUILDER_STATE/eval/<rev>.<system>.<attr>, a week)
+	# unless a GC took the hit's .drv (the eval writes it again); misses only for the tick.
+	typeset n=${1%-[0-9]*} a r f=$3 c= w u s= k d e=$BUILDER_STATE/eval
 	[[ $n == openssl3 ]] && n=openssl
 	for w in ${n//-/ }; do if [[ -z $c ]]; then c=$w; else typeset -u u=${w:0:1}; c=$c$u${w:1}; fi; done	# gcc-wrapper -> gccWrapper
-	[[ $rowc == +([0-9a-f]) ]] && revs=$rowc
-	for o in ${2//,/ }; do k=$(nawk -F'\t' -v o="$o" '$1 == o {print $2; exit}' "$BUILDER_STATE/origins" 2> /dev/null)
-		[[ -n $k && " $revs " != *" $k "* ]] && revs="$revs $k"; done
-	for f in $revs head; do
-		[[ $f == head ]] && f=$flake || { [[ $BUILDER_FLAKE == *\?* ]] && f="$BUILDER_FLAKE&rev=$f" || f="$BUILDER_FLAKE?rev=$f"; }
-		s=; for a in "$n" "${n//-/_}" "$c"; do
+	[[ $f == head ]] && f=$flake || { [[ $BUILDER_FLAKE == *\?* ]] && f="$BUILDER_FLAKE&rev=$f" || f="$BUILDER_FLAKE?rev=$f"; }
+	for a in "$n" "${n//-/_}" "$c"; do
 		[[ " $s " == *" $a "* ]] && continue; s="$s $a"
 		k=; [[ $f == *[?\&]rev=+([0-9a-f])* ]] && { k=${f##*[?&]rev=}; k=$e/${k%%&*}.$BUILDER_SYSTEM.$a; }
-		if [[ -n $k && -s $k ]]; then r=$(<"$k"); elif [[ -n $k && -e $k.miss ]]; then continue
-		else r=$(bounded 900 nix eval --raw "$f#packages.$BUILDER_SYSTEM.$a" --apply 'd: d.outPath + " " + d.drvPath + "^" + (d.outputName or "out")' 2>/dev/null) ||
+		r=; if [[ -n $k && -s $k ]]; then r=$(<"$k"); d=${r#* }; [[ -e ${d%^*} ]] || r=; elif [[ -n $k && -e $k.miss ]]; then continue; fi
+		if [[ -z $r ]]; then r=$(bounded 900 nix eval --raw "$f#packages.$BUILDER_SYSTEM.$a" --apply 'd: d.outPath + " " + d.drvPath + "^" + (d.outputName or "out")' 2>/dev/null) ||
 			{ [[ -n $k ]] && { mkdir -p "$e"; : > "$k.miss"; }; continue; }
 			[[ -n $k ]] && { mkdir -p "$e"; print -r -- "$r" > "$k.${J##*/}" && mv "$k.${J##*/}" "$k"; }	# per job: jobs run in parallel
 		fi
 		[[ ,$2, == *,"${r%% *}",* ]] && { print -r -- "$r"; return 0; }
-	done; done
+	done
 	return 1
 }
-ready() {	# ready <pname> <outs>: 0 when the out ($out) was rebuilt here and is the NAR cache.solnix.io serves ($nar); else log why not
-	typeset d m x ins nh; nar= out=
-	d=$(drv_for "$1" "$2") || { log "decline $1: no packages.$BUILDER_SYSTEM attr at its commit(s) or $flake evaluates to $2"; return 1; }
-	out=${d%% *} d=${d#* }; set -- "$1" "$out"
+cand() {	# cand <out> <drv>^<output> <rev>, run in $(...): rc 0 and the served NarHash when this candidate can be rebuilt here
+	# from served inputs alone (its drv then rooted in $J/root-drv), else rc 1 and why not. Never memo'd: its inputs may be
+	# served by a later tick.
+	typeset d=$2 m x f ins h y=$J/dry-${3:0:12}
 	# hold the evaluated drv (and the drvs it references) until the job ends: an eval's temporary root dies with it
-	nix-instantiate --add-root "$J/root-drv" --expr "import ${d%^*}" > /dev/null 2>&1 || { log "decline $1: cannot root $d"; return 1; }
-	nar=$(served "$2") || { log "decline $1: $2 is not served (a first build is a submission: needs the submit key)"; return 1; }
+	nix-instantiate --add-root "$J/root-drv" --expr "import ${d%^*}" > /dev/null 2>&1 || { print -r -- "cannot root $d"; return 1; }
+	h=$(served "$1") || { print -r -- "$1 is not served (a first build is a submission: needs the submit key)"; return 1; }
 	m=$BUILDER_STATE/tried/${d##*/}	# shortcut: a failed build is never retried for that drv; rm the file to retry
-	[[ -f $m && $(<"$m") != ok ]] && { log "decline $1: $(<"$m")"; return 1; }
+	[[ -f $m && $(<"$m") != ok ]] && { print -r -- "$(<"$m")"; return 1; }
 	# the dry run covers the leaf AND its inputs: a dry run of a substitutable leaf alone lists nothing to build
 	bounded 300 nix derivation show "${d%^*}" > "$J/drv.json" 2>&1 && ins=$(jq -r '.[].inputDrvs | to_entries[] |
 	    .key + "^" + ((if (.value|type) == "array" then .value else .value.outputs end) | join(","))' "$J/drv.json") &&
-	    bounded 600 nix build --dry-run --no-link "$d" $ins > "$J/dry" 2>&1 || { log "decline $1: dry run of $d failed ($J/dry)"; return 1; }
+	    bounded 600 nix build --dry-run --no-link "$d" $ins > "$y" 2>&1 || { print -r -- "dry run of $d failed ($y)"; return 1; }
 	# fixed-output inputs (source tarballs, vendor dirs) may build here: their outputs are checked against the pinned
 	# hash, so where they are fetched does not matter (NixOS fetches them on any builder). Any other input must substitute.
-	x=0; for f in $(nawk -v d="${d%^*}" '/will be built/ {b=1; next} /will be fetched/ {b=0} b && $1 ~ /\.drv$/ && $1 != d {print $1}' "$J/dry"); do
+	x=0; for f in $(nawk -v d="${d%^*}" '/will be built/ {b=1; next} /will be fetched/ {b=0} b && $1 ~ /\.drv$/ && $1 != d {print $1}' "$y"); do
 		# a builtin:unpack-channel drv (go.nix srcTree) only unpacks its one FOD input in the daemon: as fetchable as that FOD
 		bounded 120 nix derivation show "$f" 2> /dev/null | jq -e '[.[] | ([.outputs[] | has("hash") or has("hashAlgo")] | all) or
 		    (.builder == "builtin:unpack-channel" and (.inputDrvs | length) <= 1)] | all' > /dev/null || x=$((x + 1))
 	done
-	(( x == 0 )) || { log "decline $1: the dry run would build $x non-fixed-output derivations here first ($J/dry)"; return 1; }
+	(( x == 0 )) || { print -r -- "the dry run would build $x non-fixed-output derivations here first ($y)"; return 1; }
+	print -r -- "$h"
+}
+ready() {	# ready <pname> <outs>: 0 when the out ($out) was rebuilt here and is the NAR cache.solnix.io serves ($nar); else log why not.
+	# A job lists every served out of its (pname, version), from several commits. Each commit (revs) that evaluates to one of
+	# them is a candidate; the first whose out is served and whose dry run builds no non-FOD input here is the one rebuilt.
+	typeset d m nh r c why= seen=; nar= out=
+	for r in $(revs "$2"); do
+		d=$(drv_for "$1" "$2" "$r") || { d=; continue; }
+		[[ " $seen " == *" ${d#* } "* ]] && { d=; continue; }; seen="$seen ${d#* }"
+		c=$(cand "${d%% *}" "${d#* }" "$r") && { nar=$c; break; }
+		why="$why${why:+; }$c [${r:0:12}]" d=
+	done
+	[[ -n $d ]] || { log "decline $1: ${why:-no packages.$BUILDER_SYSTEM attr at its commit(s) or $flake evaluates to $2}"; return 1; }
+	out=${d%% *} d=${d#* }; set -- "$1" "$out"
+	log "$1: candidate ${r:0:12} $d${why:+ (skipped: $why)}"
+	m=$BUILDER_STATE/tried/${d##*/}
 	[[ -s $BUILDER_BEARER_FILE ]] || { log "dry run: would fetch $2 and rebuild $d"; return 1; }	# no fetch or CPU for what it cannot claim
 	# --rebuild compares the new build with the LOCAL copy, so that copy must be the served NAR (a copied-in one may not be).
 	# Rooted for the job's life ($J/root-out) so a GC (min-free) cannot delete it before --rebuild compares against it.
