@@ -464,6 +464,19 @@ WARN_ONLY = (b"/usr/local/",)
 # "/usr/local/include", "/usr/include") is in the served x86 gnumake yc7i5s3r and aarch64 kipf3wwd, and in nixpkgs' make.
 # Exact strings only: anything else under /usr/gnu still FAILs.
 UPSTREAM_DEFAULTS = {b"/usr/gnu/include"}
+# Upstream template TEXT shipped as data (not run on this platform): an exact line of libtool.m4's sysv5*/SCO/UnixWare
+# branch (libtool.m4:3168), which every libtool's share/aclocal/libtool.m4 and share/libtool/configure carry, the served
+# x86 6f1im3pn included. Matched as the whole literal assignment, only in those two files; any other /usr/gnu text FAILs.
+UPSTREAM_TEXT = {
+    ("share/aclocal/libtool.m4", b"sys_lib_search_path_spec='/usr/local/lib /usr/gnu/lib /usr/ccs/lib /usr/lib /lib'"),
+    ("share/libtool/configure", b"sys_lib_search_path_spec='/usr/local/lib /usr/gnu/lib /usr/ccs/lib /usr/lib /lib'"),
+}
+def upstream_text(rel, data, at):
+    for f, t in UPSTREAM_TEXT:
+        if rel.endswith(f):
+            i = data.rfind(b"sys_lib_search_path_spec=", 0, at + 1)
+            if i >= 0 and data[i:i + len(t)] == t and i <= at < i + len(t): return True
+    return False
 def upstream_default(data, at):
     a = data.rfind(b"\0", 0, at) + 1; b = data.find(b"\0", at); b = len(data) if b < 0 else b
     return data[a:b] in UPSTREAM_DEFAULTS
@@ -634,6 +647,7 @@ def check_nar(out, src=None):
                 if m.group(0) in WARN_ONLY: return "WARN"
                 if elf and search_list(data, m.start()): return "WARN"
                 if elf and upstream_default(data, m.start()): return "WARN"
+                if not elf and upstream_text(rel, data, m.start()): return "WARN"
                 if elf and live is not None and m.start() in live["dynstr"] and not live["used"](m.start()): return "INFO"
                 return "WARN" if (not elf and DOC_RE.search(rel)) else "FAIL"
             order = {"FAIL": 0, "WARN": 1, "INFO": 2}
@@ -1141,6 +1155,9 @@ def selftest_out():
         ("B9 #!/usr/bin/perl", mut("bin/p", R(b"#!/usr/bin/perl -w\n", True)), False, "B9-shebang"),
         ("B9 not hit: a non-executable .pm with #!/bin/false", mut("share/x/M.pm", R(b"#!/bin/false\n")), True, None),
         ("B9 not hit: a relative #!perl", mut("bin/rel", R(b"#!perl -w\n", True)), True, None),
+        ("B13 WARN: libtool.m4's sysv5 search-path template line", mut("share/aclocal/libtool.m4", R(b"  sys_lib_search_path_spec='/usr/local/lib /usr/gnu/lib /usr/ccs/lib /usr/lib /lib'\n")), True, "WARN B13-hostpath"),
+        ("B13 FAIL: the same line in another file", mut("share/foo/configure", R(b"sys_lib_search_path_spec='/usr/local/lib /usr/gnu/lib /usr/ccs/lib /usr/lib /lib'\n")), False, "FAIL B13-hostpath"),
+        ("B13 FAIL: a different /usr/gnu value in libtool.m4", mut("share/aclocal/libtool.m4", R(b"NM=/usr/gnu/bin/nm\n")), False, "FAIL B13-hostpath"),
         ("B13 WARN: GNU make's default include dir as its own C string", mut("bin/make", R(b"\x7fELF\0/usr/gnu/include\0/usr/local/include\0/usr/include\0", True)), True, "WARN B13-hostpath"),
         ("B13 FAIL: -I/usr/gnu/include is not the upstream default", mut("bin/cc1", R(b"\x7fELF\0-I/usr/gnu/include\0", True)), False, "FAIL B13-hostpath"),
         ("B13 WARN: a compiled-in search list (texinfo INFOPATH)", mut("bin/info", R(b"\x7fELF\0PATH:/usr/local/info:/usr/info:/usr/gnu/info:/opt/gnu/info:/usr/share/info\0", True)), True, "WARN B13-hostpath"),
