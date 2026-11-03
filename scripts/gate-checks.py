@@ -826,8 +826,24 @@ def _classify(path):
     if re.match(r"^/(usr/(bin|sbin|xpg4|xpg6|ucb)|bin|sbin)(/|$)", path): return "WARN"
     return None
 
+# L4: a host-state configure probe that pkgs/illumos/config.site pins must come out "(cached)" (the pinned answer). If it RAN, the
+# build did not read config.site, and its answer came from the build host (wave6t: gcc15's libstdc++ configure ran "checking for
+# working iconv": yes on chef, no on dixi, and libstdc++.so differed). The probe message of each pinned cache variable:
+PINNED_PROBES = {
+    "for working iconv": "am_cv_func_iconv_works",
+    "for working fcntl.h": "gl_cv_header_working_fcntl_h",
+    "for a traditional french locale": "gt_cv_locale_fr",
+    "for a french Unicode locale": "gt_cv_locale_fr_utf8", "for a transitional chinese locale": "gt_cv_locale_zh_CN",
+    "for a traditional japanese locale": "gt_cv_locale_ja", "for a turkish Unicode locale": "gt_cv_locale_tr_utf8",
+    "ipv6 stack type": "cf_cv_ipv6type", "for remote shell": "tar_cv_path_RSH",
+}
+_PINNED = re.compile(r"^checking (" + "|".join(re.escape(k) for k in PINNED_PROBES) + r")\.\.\. (\(cached\) )?(\S.*)$")
+
 def _log_line(line):
     """-> [(level, check, why)] for one log line."""
+    m = _PINNED.match(line)
+    if m and not m.group(2):
+        return [("FAIL", "L4-probe-ran", f"a host-state probe config.site pins ({PINNED_PROBES[m.group(1)]}) ran: answer '{m.group(3)}' came from the build host")]
     m = _CONF_RES.match(line) or _CONF_WHETHER.match(line)
     if m:
         path = m.group(2) if m.re is _CONF_RES else m.group(1)
@@ -1132,7 +1148,11 @@ def selftest_log():
              ("L3 WARN: perl hints mount probe (perl-5.42.2, real line)", "./hints/solaris_2.sh: line 141: mount: command not found", True, "L3-notfound"),
              ("L3 WARN: nano groff html probe (real line)", "checking for HTML support in groff... ./configure: line 53508: groff: command not found", True, "L3-notfound"),
              ("L5 cmake Found PkgConfig: /usr/bin/pkg-config (fortune-mod, real line)", '-- Found PkgConfig: /usr/bin/pkg-config (found version "0.29.2")', False, "L5-cmake"),
-             ("L5 meson host program", "Program python3 found: YES (/usr/bin/python3)", False, "L5-meson")]
+             ("L5 meson host program", "Program python3 found: YES (/usr/bin/python3)", False, "L5-meson"),
+             ("L4 a pinned probe that RAN (gcc15 libstdc++ on dixi, real line)", "checking for working iconv... no", False, "L4-probe-ran"),
+             ("L4 a pinned probe that ran and said yes is still host state (chef, real line)", "checking for working iconv... yes", False, "L4-probe-ran"),
+             ("L4 not hit: the pinned answer from config.site", "checking for working iconv... (cached) yes", True, None),
+             ("L4 not hit: an unpinned iconv probe", "checking for iconv... yes", True, None)]
     for label, text, want_pass, must in cases:
         lines = []; rc = report("log", check_log(text), lines.append)
         ok = (rc == 0) == want_pass and (must is None or any(f" {must} " in l for l in lines))
