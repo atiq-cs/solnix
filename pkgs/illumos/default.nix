@@ -423,7 +423,8 @@ let
   # From-source packages the gate does not provide (./base-src.nix). zlib and
   # libxml2 replace the host-copied externalLibs; world is built on top of them.
   srcPkgs = import ./base-src.nix { gate = gate'; libcSlice = libc; inherit world gcc buildTools seedTools;
-    nixChainTools = if buildTools == [ ] then { } else { inherit (cliBase) cmake; bzip2Bin = cliBase.bzip2-bin; }; };
+    nixChainTools = if buildTools == [ ] then { } else { inherit (cliBase) cmake; bzip2Bin = cliBase.bzip2-bin;
+      nixBuildTools = with cliBase; [ autoconf automake libtool autoconf-archive gnum4 bison flex gnupatch srcPkgs.pkgconf ]; }; };
   # The Wayland + Mesa userland (./graphics), built like srcPkgs.
   graphics = import ./graphics { inherit (srcPkgs) mkSrcPkg pkgconf zlib hostTools; inherit world; inherit (cliBase) perl;
     python3 = if buildTools == [ ] then null else cliBase.python3; gnupatch = if buildTools == [ ] then null else cliBase.gnupatch; };   # perl: libffi's make_sunver.pl

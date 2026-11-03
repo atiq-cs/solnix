@@ -100,7 +100,7 @@ derivation {
     [ -x "$NM" ] || { echo "FATAL: no illumos nm" >&2; exit 1; }
     J=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
 
-    W=$(mktemp -d "${TMPDIR:-/tmp}"/i915-driver.XXXXXX)
+    W=$(mktemp -d "''${TMPDIR:-/tmp}"/i915-driver.XXXXXX)
     cp -r "$portSrc" "$W/port"; chmod -R u+w "$W/port"
     cp -r "$obsdDrm" "$W/obsd"; chmod -R u+w "$W/obsd"
     P=$W/port; O=$W/obsd; C=$P/obsd-compat

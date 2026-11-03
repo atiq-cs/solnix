@@ -17,6 +17,8 @@
 , cmake ? null      # store cmake for brotli/nlohmann_json/libgit2 (the OI host had /usr/bin/cmake); null on the seed/aarch64
 , seedTools ? [ ]   # the world-free seed tools (perl coreutils findutils world), for curl's docs (perl)
 , bzip2Bin ? null   # bzip2 CLI for boost's .tar.bz2 (GNU tar runs bzip2 from PATH; the OI host had /usr/bin/bzip2)
+, nixBuildTools ? [ ]   # nix's autoreconf/configure tools from the store: autotools, autoconf-archive (AX_BOOST_BASE), m4, bison,
+                        # flex, patch, pkg-config (the OI host's /usr/bin and /usr/share/aclocal before; [ ] = that old text)
 }:
 let seedPerlTools = seedTools;
     # xz's configure, on solaris*, gives xzgrep/xzdiff/xzless/xzmore "#!/usr/xpg4/bin/sh" and a PATH=/usr/xpg4/bin prefix: host
@@ -243,7 +245,12 @@ rec {
     '';
   } // withTools [ cmake ]);
 
-  nix = mkSrcPkg {
+  # aclocal dirs: AX_BOOST_BASE (autoconf-archive), PKG_CHECK_MODULES (pkgconf's pkg.m4), LT_INIT (libtool), as /usr/share/aclocal had.
+  nix = let ac = builtins.filter (t: builtins.elem (t.pname or "") [ "autoconf-archive" "libtool" "pkgconf" ]) nixBuildTools;
+    acDirs = map (t: "${t}/share/aclocal") ac;
+    aclocalLine = if nixBuildTools == [ ] then "ACLOCAL_PATH=/usr/share/aclocal autoreconf -fi -I /usr/share/aclocal >&2"
+      else "for d in ${toString acDirs}; do [ -d $d ] || { echo \"FATAL: no aclocal dir $d\" >&2; exit 1; }; done; "
+        + "ACLOCAL_PATH=${builtins.concatStringsSep ":" acDirs} autoreconf -fi ${toString (map (d: "-I " + d) acDirs)} >&2"; in mkSrcPkg {
     pname = "nix"; version = "2.24.15";
     src = { url = "https://github.com/NixOS/nix/archive/refs/tags/2.24.15.tar.gz";
             sha256 = "e395732ec576b7f65359c80bc5a23335ad2a8c382f4f14c370bbc236708d4749"; };
@@ -253,8 +260,8 @@ rec {
       for p in ${./nix-illumos-patches/224}/0*.patch; do patch -p1 < "$p" >&2; done
       # The GitHub archive ships no ./configure; the AX_BOOST_BASE macro comes
       # from the build host's autoconf-archive (build tool).
-      ACLOCAL_PATH=/usr/share/aclocal autoreconf -fi -I /usr/share/aclocal >&2
-      export CONFIG_SHELL=/usr/bin/bash
+      ${aclocalLine}
+      export CONFIG_SHELL=/usr/bin/bash   # the builder interpreter (path-gate's documented exemption)
       # gcc's temporaries: the builder's /tmp is a small tmpfs (824 MB on the build
       # guest) and nix's C++ units filled it (measured: "No space left on device").
       export TMPDIR="$SRC/.tmp"; mkdir -p "$TMPDIR"
@@ -282,12 +289,12 @@ rec {
       # strip first (mk-src-pkg strips again later; idempotent): DWARF names the
       # headers too, and only what survives the strip is a real reference.
       find "$out" -type f | while read -r f; do
-        [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] && { chmod u+w "$f"; /usr/bin/gstrip --strip-debug "$f"; }
+        [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] && { chmod u+w "$f"; ${if nixBuildTools == [ ] then "/usr/bin/gstrip" else "gstrip"} --strip-debug "$f"; }
         true
       done
       for x in ${boost} ${nlohmann_json} ${toml11}; do
         if grep -rlq "$x" "$out"; then echo "FATAL: nix still references build-only $x" >&2; exit 1; fi
       done
     '';
-  };
+  } // withTools nixBuildTools;   # store-only (wave6): the autotools above; [ ] (seed / aarch64) keeps the old drv
 }

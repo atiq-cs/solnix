@@ -48,6 +48,33 @@ rec {
       ${chk ''"$out/bin/flex" --version'' "^flex 2\\.6\\.4"}
     '';
   };
+  # bison 3.8.2 (nixpkgs' version; .sig Good, Akim Demaille) and autoconf-archive 2024.10.16 (nixpkgs'; .sig Good, Peter Simons):
+  # nix's autoreconf + configure took both from the OI host (/usr/bin/bison, /usr/share/aclocal/ax_boost_base.m4; wave6 P0 run l).
+  bison = mkSrcPkg {
+    pname = "bison"; version = "3.8.2";
+    src = { url = "https://mirrors.kernel.org/gnu/bison/bison-3.8.2.tar.xz";
+            sha256 = "9bba0214ccf7f1079c5d59210045227bcf619519840ebfa80cd3849cff5a5bf2"; };
+    deps = [ world ]; nativeTools = [ gnum4 ] ++ hostTools;   # GNU m4 at build and run time (bison execs M4)
+    build = ''
+      MAKEINFO=true HELP2MAN=true ./configure --prefix="$out" --disable-nls M4=${gnum4}/bin/m4
+      gmake -j8 MAKEINFO=true HELP2MAN=true; gmake install MAKEINFO=true HELP2MAN=true
+      ${dropDocs}
+      ${chk ''"$out/bin/bison" --version'' "^bison \\(GNU Bison\\) 3\\.8\\.2"}
+      grep -q '${gnum4}/bin/m4' "$out/bin/bison" || { echo "FATAL: bison does not exec the store m4" >&2; exit 1; }
+    '';
+  };
+  autoconf-archive = mkSrcPkg {
+    pname = "autoconf-archive"; version = "2024.10.16";
+    src = { url = "https://mirrors.kernel.org/gnu/autoconf-archive/autoconf-archive-2024.10.16.tar.xz";
+            sha256 = "7bcd5d001916f3a50ed7436f4f700e3d2b1bade3ed803219c592d62502a57363"; };
+    abis = [ "64" ];
+    nativeTools = hostTools;
+    build = ''
+      MAKEINFO=true ./configure --prefix="$out"; gmake MAKEINFO=true install
+      ${dropDocs}
+      [ -f "$out/share/aclocal/ax_boost_base.m4" ] || { echo "FATAL: no ax_boost_base.m4" >&2; exit 1; }
+    '';
+  };
   bc = mkSrcPkg {
     pname = "bc"; version = "1.08.2";
     src = { url = "https://mirrors.kernel.org/gnu/bc/bc-1.08.2.tar.gz";

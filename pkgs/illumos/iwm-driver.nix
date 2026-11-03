@@ -96,7 +96,7 @@ derivation {
     [ -x "$LDBIN" ] || LDBIN=/usr/bin/ld
     [ -x "$LDBIN" ] || { echo "FATAL: no ld found under $ld or /usr/bin" >&2; exit 1; }
 
-    WORK=$(mktemp -d "${TMPDIR:-/tmp}"/iwm-driver.XXXXXX)
+    WORK=$(mktemp -d "''${TMPDIR:-/tmp}"/iwm-driver.XXXXXX)
     cp -r "$wifiSrc" "$WORK/wifi"
     chmod -R u+w "$WORK/wifi"
     cd "$WORK/wifi"

@@ -55,7 +55,7 @@ derivation {
     LDBIN="$ld/usr/bin/ld"
     [ -x "$LDBIN" ] || LDBIN="$ld/bin/ld"
     [ -x "$LDBIN" ] || LDBIN=/usr/bin/ld
-    WORK=$(mktemp -d "${TMPDIR:-/tmp}"/touchpad-driver.XXXXXX)
+    WORK=$(mktemp -d "''${TMPDIR:-/tmp}"/touchpad-driver.XXXXXX)
     cp -r "$tpSrc" "$WORK/tp"; chmod -R u+w "$WORK/tp"; cd "$WORK/tp"
 
     gmake -f Makefile.illumos UTSINC="$UTSINC" UTSSRC="$utsSrc" LD="$LDBIN" >build.log 2>&1 \
