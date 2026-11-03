@@ -15,6 +15,7 @@
 { mkSrcPkg, zlib, openssl, libcSlice, gccLib, system, libSub ? "lib/amd64", nixCxxFlags ? "", hostTools ? [ ], perl ? null
 , shared ? { }   # shared: one sqlite from the caller (aarch64 final: the set's 3.50.4); {} = the 3.46.1 recipe below
 , plain ? (d: d)   # aarch64 store-only set: the plain derivations' builder text -> store tools (../aarch64/tools.nix)
+, pinNixCurl ? false   # x86 only (base-src.nix): nix links curlForNix 8.10.1; see the shortcut at curlForNix
 }:
 # hostTools, perl: the store build tools for curl's store-only build (x86, base-src.nix); [] / null (aarch64) keep curl on the old PATH text.
 # libSub: the 64-bit lib dir of the plain derivations below ("lib" on aarch64, LP64 only).
@@ -90,6 +91,28 @@ rec {
     build = ''
       ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-ssp
       gmake -j4; gmake install
+    '';
+  };
+
+  # shortcut (x86 only, pinNixCurl): nix links curl, and nix's x86 recipe is still host-PATH (patch, /usr/share/aclocal), so a nix on curl 8.23.0
+  # (q8nfp905) can be built only on an OI host and no host has it: every system toplevel after 4784cde failed to build on dixi
+  # and lixi. nix keeps linking the served 8.10.1 (nix 9ay73nan, served and reproducible) until wave6 makes nix store-only;
+  # then nix takes `curl` below again. The 8.23.0 CLI and library (packages.<system>.curl, git) are unchanged.
+  curlForNix = mkSrcPkg {
+    pname = "curl"; version = "8.10.1";
+    src = { url = "https://curl.se/download/curl-8.10.1.tar.xz";
+            sha256 = "73a4b0e99596a09fa5924a4fb7e4b995a85fda0d18a2c02ab9cf134bebce04ee"; };
+    deps = [ zlib openssl ];
+    build = ''
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static \
+        --with-openssl=${openssl} --with-zlib=${zlib} --without-libpsl --without-brotli \
+        --without-zstd --without-libidn2 --without-nghttp2 --without-libssh2 --disable-ldap \
+        --with-ca-bundle=${cacert}/etc/ssl/certs/ca-bundle.crt --without-ca-path
+      gmake -j4; gmake install
+      # curl --version's CA line comes from the compiled default; a wrong one
+      # reads as "network is NOT up" (rc 77) on a root with no /etc/ssl bundle.
+      grep -q '#define CURL_CA_BUNDLE "${cacert}/etc/ssl/certs/ca-bundle.crt"' lib/curl_config.h \
+        || { echo "FATAL: curl CA bundle default is not the store cacert" >&2; exit 1; }
     '';
   };
 
@@ -235,7 +258,7 @@ rec {
     pname = "nix"; version = "2.24.15";
     src = { url = "https://github.com/NixOS/nix/archive/refs/tags/2.24.15.tar.gz";
             sha256 = "e395732ec576b7f65359c80bc5a23335ad2a8c382f4f14c370bbc236708d4749"; };
-    deps = [ boostContext sqlite curl openssl libsodium libarchive brotli editline libgit2 zlib xz ];
+    deps = [ boostContext sqlite (if pinNixCurl then curlForNix else curl) openssl libsodium libarchive brotli editline libgit2 zlib xz ];
     linkDeps = [ boost nlohmann_json toml11 ];
     build = ''
       for p in ${./nix-illumos-patches/224}/0*.patch; do patch -p1 < "$p" >&2; done

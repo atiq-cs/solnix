@@ -270,7 +270,7 @@
         # attr by pname, its _ form or camelCase (gcc-wrapper -> gccWrapper).
         aarch64-solaris = let a = import ./pkgs/illumos/aarch64 { system = "aarch64-solaris"; }; in lib.filterAttrs (_: v:
           let r = builtins.tryEval (lib.isDerivation v); in r.success && r.value)
-          (a.srcPkgs.nixChain // a.srcPkgs // removeAttrs a [ "systemToplevel" ]
+          (removeAttrs a.srcPkgs.nixChain [ "curlForNix" ] // a.srcPkgs // removeAttrs a [ "systemToplevel" ]
            // { hostname-f = a.hostname; illumos-gate-libs = a.gateLibs; illumos-gate-libs-home = a.world; });
       } // lib.genAttrs buildSystems (_buildSystem: {
         # the full system closure (T2.8); realise on the illumos host.

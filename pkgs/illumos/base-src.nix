@@ -34,7 +34,7 @@ rec {
   hostTools = if buildTools == [ ] then [ ] else [ coreutils findutils needWorld ];
 
   # Nix 2.24.15 + its dependency chain (./nix-src.nix).
-  nixChain = import ./nix-src.nix { inherit mkSrcPkg zlib openssl libcSlice hostTools perl; system = "x86_64-solaris"; gccLib = gcc.lib; };
+  nixChain = import ./nix-src.nix { inherit mkSrcPkg zlib openssl libcSlice hostTools perl; system = "x86_64-solaris"; gccLib = gcc.lib; pinNixCurl = true; };
 
   # libz.so.1 with the illumos symbol versions (SUNW_1.1 .. ILLUMOS_0.2). The
   # gate's libzfs/libzpool record `libz.so.1 SUNW_1.1` as a needed version, so an
