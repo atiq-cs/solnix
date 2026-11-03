@@ -668,13 +668,15 @@ def check_nar(out, src=None):
         r.append(("INFO", "B8-builddir", f"{n['mapped_build']} non-debug files name the mapped build dir /build/ (prefix map; NixOS normal)"))
     if shebangs:
         r.append(("INFO", "B9-shebang", "exceptions: " + ", ".join(f"#!{k} x{v}" for k, v in sorted(shebangs.items()))))
-    # cap repeated findings per check so one bad tree stays readable
+    # cap repeated findings per check so one bad tree stays readable. FAIL lines are never dropped: the verdict comes from
+    # this list, and capping before it turned a FAIL after 20 INFO/WARN lines of the same check into a PASS (infra
+    # 20261103-content-gate-b6-b7-b13 s2: illumos-userland's minconn.so B13 FAIL hid behind 20 stale-.dynstr INFOs).
     capped, per = [], {}
     for f in r:
         per[f[1]] = per.get(f[1], 0) + 1
-        if per[f[1]] <= 20: capped.append(f)
+        if f[0] == "FAIL" or per[f[1]] <= 20: capped.append(f)
     for k, v in per.items():
-        if v > 20: capped.append(("INFO", k, f"... {v - 20} more"))
+        if v > 20: capped.append(("INFO", k, f"... {v - 20} more (FAIL lines are all kept)"))
     return capped, n
 
 # ---- S: mirror of the server's NAR content gate (infra k8s/validate-nar-content.py, 05e799c; 20261103-v2b-live s6) --------
@@ -1114,6 +1116,16 @@ def selftest_log():
         ok = (rc == 0) == want_pass and (must is None or any(f" {must} " in l for l in lines))
         bad += not ok
         print(f"{'ok ' if ok else 'BAD'} log  {label}: {'PASS' if rc == 0 else 'FAIL'}" + ("" if ok else "\n    " + "\n    ".join(lines)))
+    # the per-check cap must never drop a FAIL (infra 20261103-content-gate-b6-b7-b13 s2 repro): 21 stale-.dynstr ELFs (INFO)
+    # then one MAKE=/usr/gnu/bin/make text file (FAIL) -> FAIL
+    stale = mkelf(b"/usr/gcc/10/lib/amd64\0", b"/nix/store/x/lib\0")
+    e = {f"a{i:02d}.so": {"type": "reg", "exec": False, "data": stale} for i in range(21)}
+    e["z.mk"] = {"type": "reg", "exec": False, "data": b"MAKE=/usr/gnu/bin/make\n"}
+    import tempfile; cf = os.path.join(tempfile.mkdtemp(), "cap.nar")
+    open(cf, "wb").write(nar_bytes({"type": "dir", "entries": {"lib": {"type": "dir", "entries": e}}}))
+    lines = []; rc = run_out("nar", [STORE + "6" * 32 + "-cap", cf], out=lines.append)
+    ok = rc != 0 and any(l.startswith("FAIL B13") for l in lines); bad += not ok
+    print(f"{'ok ' if ok else 'BAD'} nar  cap: a FAIL after 20 INFO lines of the same check still FAILs: {'FAIL' if rc else 'PASS'}")
     return bad
 
 def selftest_out():
