@@ -17,7 +17,7 @@
 #              tools ran (NixOS fetchers also run outside the sandbox); gate2 A4 checks the hash is real
 #   seedenv  : buildEnv/alias of the seed farm: env paths (or gnutar) name only outs of seed / gccseed / seedenv drvs
 # name-regex	marker	why
-^(binutils|bzip2-bin|coreutils|diffutils|findutils|gnugrep|gnum4|gnumake|gnupatch|gnused|gnutar|gzip|libxml2|nspr|nss|openssl|perl|pkgconf|xz|zlib)-[0-9][0-9.a-z]*$	seed	the seed instance: built on the OI host's /usr/gnu + /usr/bin, compiles the first store tools
+^(bash|binutils|bzip2-bin|coreutils|diffutils|findutils|gnugrep|gnum4|gnumake|gnupatch|gnused|gnutar|gzip|libxml2|nspr|nss|openssl|perl|pkgconf|xz|zlib)-[0-9][0-9.a-z]*$	seed	the seed instance: built on the OI host's /usr/gnu + /usr/bin, compiles the first store tools (bash: gcc15's CONFIG_SHELL, wave6t)
 ^gcc-14\.3\.0$	gccseed	gcc 14 from the OI IPS gcc-14 (stage0 of gcc15)
 ^(libc|ld|rtld|illumos-libc-extra|illumos-early|sys|base-tools|core-utils|halt|oamuser|zfs|illumos-smf)$	slice	gate proto slices, copied with the gate's own tools
 ^illumos-userland$	world	the whole gate userland, relocated (mk-proto-world)
