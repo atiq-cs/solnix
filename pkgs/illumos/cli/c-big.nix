@@ -15,7 +15,7 @@ rec {
     build = ''
       # hints/solaris_2.sh picks gcc vs Sun cc by "gcc" in the compiler's NAME; the builder's
       # wrapper is cc64 (-> Sun cc flags -xarch=generic64, measured). A gcc-named link to it.
-      mkdir -p "$W/gccbin"; ln -sf "$CC" "$W/gccbin/gcc"; export PATH="$W/gccbin:$PATH"
+      mkdir -p "$W/gccbin"; ln -sf ${if hostTools == [ ] then "\"$CC\"" else "\"$(command -v $CC)\""} "$W/gccbin/gcc"; export PATH="$W/gccbin:$PATH"
       sed -i 's@ldflags="$ldflags -L/usr/gnu/lib"@:@; s@-L/usr/gnu/lib@@g' hints/solaris_2.sh
       # nixpkgs no-sys-dirs: Configure must not search the build host's /usr/gnu/lib, /usr/lib, /usr/ccs/lib, /bin (recipes1 W3: chef and
       # dixi baked different Config_heavy.pl). The hint's `set \`echo $glibpth ...\`` would, with glibpth empty, take Configure's own args.

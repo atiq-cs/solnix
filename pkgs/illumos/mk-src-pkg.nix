@@ -133,7 +133,18 @@ let
        # the tools configure looks for by name or at fixed host paths, set from the store PATH (jq 1.8.2: MAKE=/usr/gnu/bin/make on
        # SunOS when MAKE is unset; recipes1). /usr/bin/bash stays the shell (the builder interpreter, a documented exemption).
        + (if storeOnly then "\n    MAKE=$(command -v gmake) INSTALL=\"$(command -v install) -c\" CMAKE_TOOLCHAIN_FILE=${./solnix-toolchain.cmake}; export MAKE INSTALL CMAKE_TOOLCHAIN_FILE   # not M4: the world m4 is SVR4; a recipe needing GNU m4 lists gnum4" else ""))
-      ''export CC="$W/cc$ABI" CC_FOR_BUILD="$W/cc$ABI" ABI LIBSUB'' ] x) a.args; };
+      # the compiler by NAME, as NixOS's cc-wrapper is on PATH as gcc/g++: configure, libtool and every *-config then record
+      # "gcc", not the build-dir shim /var/tmp/srcpkg-<key>/cc64 (jq --build-configuration, bashbug, curl-config, openssl's
+      # compiler string: gate2 B8). The wrappers move to $W/bin$ABI (regular files, so a recipe can still edit "$(command -v $CC)");
+      # $W/cc$ABI stays as a link. PATH_GATE_ALLOW: a recipe's own path-gate call (gtk) accepts the build dir.
+      (if !storeOnly then ''export CC="$W/cc$ABI" CC_FOR_BUILD="$W/cc$ABI" ABI LIBSUB'' else ''mkdir -p "$W/bin$ABI"; mv "$W/cc$ABI" "$W/bin$ABI/gcc"; ln -s gcc "$W/bin$ABI/cc"; ln -s "$W/bin$ABI/gcc" "$W/cc$ABI"
+      if [ -f "$W/c++$ABI" ]; then mv "$W/c++$ABI" "$W/bin$ABI/g++"; ln -s g++ "$W/bin$ABI/c++"; ln -s "$W/bin$ABI/g++" "$W/c++$ABI"; export CXX=g++; fi
+      export PATH="$W/bin$ABI:$PATH" PATH_GATE_ALLOW="$W" CC=gcc CC_FOR_BUILD=gcc ABI LIBSUB
+      # fontconfig's compiled-in default config is the HOST's /etc/fonts/fonts.conf (recipes1 W5: gtk3's in-build check failed on a
+      # solnix host without it): an empty one in the build dir. NixOS: no /etc/fonts in the sandbox. HOME is Nix's /homeless-shelter.
+      printf '<?xml version="1.0"?><fontconfig><cachedir>%s</cachedir></fontconfig>\n' "$W/fcc" > "$W/fonts.conf"; export FONTCONFIG_FILE="$W/fonts.conf"'') ]
+    # .la links too (libpng.la -> libpng16.la dangled once the files went: gate B6; recipes1 W5 WAVE6-NOTES 8)
+    (if storeOnly then builtins.replaceStrings [ "find \"$out\" -name '*.la' -type f -delete" ] [ "find \"$out\" -name '*.la' \\( -type f -o -type l \\) -delete" ] x else x)) a.args; };
   drvAttrs' = hermetic drvAttrs;
   drvAttrs = {
   name = "${pname}-${version}";
@@ -268,7 +279,8 @@ let
     # dependencies on the whole compiler and gate proto. libtool .la files name
     # build-time paths too and nothing at run time reads them.
     find "$out" -name '*.la' -type f -delete
-    ${if storeOnly then ''/usr/bin/bash ${./out-host-refs.sh} "$out" || exit 1   # no symlink / #! to the host at run time (recipes1: quilt awk)'' else ""}
+    ${if storeOnly then ''/usr/bin/bash ${./patch-shebangs.sh} "$out $(for o in $docOutputsArg; do eval "echo \$$o"; done)" "$btPath:$W" || exit 1   # NixOS patchShebangs
+    /usr/bin/bash ${./out-host-refs.sh} "$out" || exit 1   # no symlink / #! to the host at run time (recipes1: quilt awk)'' else ""}
     # man/info/doc outputs (nixpkgs multiple-outputs.sh's moveToOutput share/man "$man"); info's dir file is per-profile.
     for o in $docOutputsArg; do
       case "$o" in man) s=share/man;; info) s=share/info; rm -f "$out/share/info/dir";; doc) s=share/doc;;

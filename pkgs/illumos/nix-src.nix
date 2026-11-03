@@ -40,9 +40,9 @@ rec {
       # library is compiled by $CXX (the from-source gcc) via user-config.jam.
       # b2's engine build clears CXX and runs `g++` by name (tools/build/src/engine/build.sh test_compiler; the OI host had
       # /usr/bin/g++): the builder's own wrappers under those names, on PATH for this step only.
-      mkdir -p "$W/b2bin"; ln -sf "$CXX" "$W/b2bin/g++"; ln -sf "$CC" "$W/b2bin/gcc"
+      mkdir -p "$W/b2bin"; ln -sf "$(command -v $CXX)" "$W/b2bin/g++"; ln -sf "$(command -v $CC)" "$W/b2bin/gcc"
       PATH="$W/b2bin:$PATH" ./bootstrap.sh --with-toolset=gcc --with-libraries=context >&2
-      echo "using gcc : solnix : $CXX ;" > user-config.jam
+      echo "using gcc : solnix : $(command -v $CXX) ;" > user-config.jam
       ./b2 --user-config=user-config.jam toolset=gcc-solnix --with-context \
         variant=release link=shared threading=multi runtime-link=shared \
         address-model=64 architecture=x86 abi=sysv binary-format=elf target-os=solaris \

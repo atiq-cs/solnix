@@ -38,14 +38,14 @@ mkSrcPkg {
     # shadowed ANGLE's gfx/angle/checkout/include (PackedEnums.cpp: EGL_TEXTURE_RECTANGLE_ANGLE undeclared; gcc -H shows
     # mesa's egl.h), and the system harfbuzz/cairo headers shadowed the bundled ones in dist/include. -isystem is NixOS's
     # NIX_CFLAGS_COMPILE order: the target's -I, then deps, then the system dirs. Firefox-local: other recipes keep -I.
-    for w in "$CC" "$CXX"; do sed -i 's@ -I/nix/store/@ -isystem /nix/store/@g' "$w"; done
-    ! grep -q -- ' -I/nix/store/' "$CXX" && grep -q -- ' -isystem /nix/store/' "$CXX" || { echo "FATAL: c++ wrapper rewrite" >&2; exit 1; }
+    for w in "$(command -v $CC)" "$(command -v $CXX)"; do sed -i 's@ -I/nix/store/@ -isystem /nix/store/@g' "$w"; done
+    ! grep -q -- ' -I/nix/store/' "$(command -v $CXX)" && grep -q -- ' -isystem /nix/store/' "$(command -v $CXX)" || { echo "FATAL: c++ wrapper rewrite" >&2; exit 1; }
     # mach adds -fstack-protector-strong at link, so gcc's link_ssp spec NEEDs libssp.so.0, which gcc.lib does not ship
     # (firefox: "libssp.so.0: open failed", measured). illumos libc has __stack_chk_fail/__stack_chk_guard: keep the
     # protector, drop the -lssp (measured: an overflow still aborts, NEEDED = libgcc_s libc). $W: a fixed path.
     printf '*link_ssp:\n%%{fstack-protector*:}\n\n' > "$W/nossp.specs"
-    for w in "$CC" "$CXX"; do sed -i "s@ -D_TS_ERRNO @ -D_TS_ERRNO -specs=$W/nossp.specs @" "$w"; done
-    grep -q -- '-specs=' "$CC" || { echo "FATAL: cc wrapper specs" >&2; exit 1; }
+    for w in "$(command -v $CC)" "$(command -v $CXX)"; do sed -i "s@ -D_TS_ERRNO @ -D_TS_ERRNO -specs=$W/nossp.specs @" "$w"; done
+    grep -q -- '-specs=' "$(command -v $CC)" || { echo "FATAL: cc wrapper specs" >&2; exit 1; }
     # libxul.so and the bundled NSS NEED their siblings in lib/firefox (nixpkgs' musl LDFLAGS adds it for the same reason),
     # and it must come FIRST: world's lib-64 has OI's libnss3/libnssutil3/libnspr4, and with lib/firefox last the bundled
     # libnss3 bound world's libnssutil3 ("NSSUTIL_3.101 version not found", measured). ld joins -R in order, so it goes
@@ -53,8 +53,8 @@ mkSrcPkg {
     # -z nodefaultlib: a bare dlopen("libpulse.so.0") (xpcom nsSystemInfo, for a version string) otherwise fell through to
     # ld.so.1's default /usr/lib, loaded the host's libpulse and its host libc.so.1 beside the store's, and Firefox SEGVed
     # (measured: 2 libc.so.1 in the core). NixOS has no /usr/lib, so there the dlopen just fails; NODEFLIB makes it fail here.
-    for w in "$CC" "$CXX"; do sed -i "s@ -Wl,-R,@ -Wl,-z,nodefaultlib -Wl,-R,$out/lib/firefox:@" "$w"; done
-    grep -q -- "-Wl,-z,nodefaultlib -Wl,-R,$out/lib/firefox:" "$CXX" || { echo "FATAL: c++ wrapper RUNPATH" >&2; exit 1; }
+    for w in "$(command -v $CC)" "$(command -v $CXX)"; do sed -i "s@ -Wl,-R,@ -Wl,-z,nodefaultlib -Wl,-R,$out/lib/firefox:@" "$w"; done
+    grep -q -- "-Wl,-z,nodefaultlib -Wl,-R,$out/lib/firefox:" "$(command -v $CXX)" || { echo "FATAL: c++ wrapper RUNPATH" >&2; exit 1; }
     # llvm-clang bin: llvm-objdump/llvm-ar that mach requires (nixpkgs: llvmPackages.bintools); CC/CXX stay gcc (mozconfig)
     export PATH=${llvm-clang}/bin:${rust}/bin:${cbindgen}/bin:${nodejs}/bin:${tools.nasm}/bin:${cli.perl}/bin:${cli.gnum4}/bin:$PATH
     export HOME="$TMPDIR/home" MOZBUILD_STATE_PATH="$TMPDIR/mozbuild" MOZ_OBJDIR="$PWD/objdir" MOZ_NOSPAM=1

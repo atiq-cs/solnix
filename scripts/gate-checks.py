@@ -295,27 +295,6 @@ def served_narinfo(p, _cache={}):
     except OSError: _cache[p] = None
     return _cache[p]
 
-LEGACY_ENV_PATH = "/usr/gnu/bin:/usr/bin:/usr/sbin"
-def allow_envpath(d):
-    """shortcut: --leaf only, TEMPORARY. Delete this function and its one call in the commit where mk-src-pkg stops
-    emitting the legacy drv attr PATH="/usr/gnu/bin:/usr/bin:/usr/sbin" (the wave6 merge; on wave6's checklist).
-    The served rows recipes1 made hermetic still carry that attr, but their builder replaces PATH before it runs any
-    command (orchestrator 2026-11-03: they need their NARs). Exact condition, anything else FAILs: the builder is
-    /usr/bin/bash, env PATH is exactly the legacy value, no BASH_ENV/ENV, and the -c text's first statement is a PATH=
-    that passes A1, with only `set -<flags>` (a builtin: no PATH lookup) allowed before it."""
-    env = d["env"]
-    if d["builder"] != "/usr/bin/bash" or env.get("PATH") != LEGACY_ENV_PATH or "BASH_ENV" in env or "ENV" in env:
-        return False
-    if len(d["args"]) != 2 or d["args"][0] != "-c":
-        return False
-    for line in d["args"][1].splitlines():
-        for stmt in re.split(r"\s*;\s*", line.strip()):
-            if not stmt or stmt.startswith("#"): break
-            if re.fullmatch(r"set -[euxo]+( pipefail)?", stmt): continue
-            m = re.match(r"(?:export\s+)?PATH=(\"[^\"]*\"|'[^']*'|[^\s;]*)(\s|$)", stmt)
-            return bool(m) and not bad_path_entries(m.group(1).strip("\"'"), env)
-    return False
-
 def run_drv(drvs, out=print, ca_ok=None, mode="closure", served=None):
     """mode closure (strict; host first publishing via pre-submit-check.sh): every drv in the deriver's closure.
     mode leaf (the orchestrator's cache-submit path): the deriver plus every input drv with an output that is NOT served
@@ -371,11 +350,6 @@ def run_drv(drvs, out=print, ca_ok=None, mode="closure", served=None):
             outs = {o["path"] for o in d["outputs"].values()}
             name = d["env"].get("name", dp[44:-4])
             findings = check_drv(dp, d, ca_ok)
-            if mode == "leaf" and dp in judged and allow_envpath(d):
-                envf = [f for f in findings if f[1] == "A1-path" and f[2].startswith("env PATH")]
-                if envf:
-                    findings = [f for f in findings if f not in envf]
-                    out(f"ALLOW A1-envpath {dp}: {name}: legacy env PATH {LEGACY_ENV_PATH}, replaced by the builder's first statement (temporary, --leaf only)")
             hard = [f for f in findings if f[0] == "FAIL"]
             if dp not in judged:
                 host_debt += bool(hard); continue
@@ -615,10 +589,14 @@ def check_nar(out, src=None):
         for m in BUILD_STR.finditer(data):
             if m.group(0) == b"/build/":
                 n["mapped_build"] = n.get("mapped_build", 0) + (0 if dbg else 1); continue
-            if DRV_KEYED.match(m.group(0)):
-                # shortcut: WARN while mk-src-pkg's configure/compile strings name the $W/cc64 shim; becomes FAIL once wave6
-                # makes them name the store compiler wrapper (on wave6's checklist, gate2 2026-11-03).
+            if DRV_KEYED.match(m.group(0)) and not m.group(0).startswith(b"/var/tmp/srcpkg-"):
+                # WARN: the cargo, go, rust and gcc builders' dirs (wave6t step5, measured: rg and rustc name their cargo target
+                # dir, gcc's driver the gcc 14 libstdc++ build dir it links statically). drv-keyed, so the same on every host.
+                # shortcut: WARN for those four until their builders remap the dir (--remap-path-prefix, -ffile-prefix-map); then FAIL.
                 b8 = b8 or ("WARN", "B8-builddir", f"{rel} names {m.group(0).decode()} (drv-keyed build dir: same on every host)")
+            elif DRV_KEYED.match(m.group(0)):
+                # mk-src-pkg's dir: wave6 records the compiler by name (gcc, not $W/cc64), so nothing shipped may name it
+                b8 = ("FAIL", "B8-builddir", f"{rel} names {m.group(0).decode()} (mk-src-pkg's build dir: a recorded CC or path)"); break
             else:
                 b8 = ("FAIL", "B8-builddir", f"{rel} names {m.group(0).decode(errors='replace')} (a build dir that is not drv-keyed)"); break
         m = RUN_DIR_STR.search(data)
@@ -1023,27 +1001,6 @@ def selftest():
     lines = []; rc = run_drv([leafroot], out=lines.append, ca_ok=ca, mode="closure", served=lambda p: True)
     ok = rc != 0; bad += not ok
     print(f"{'ok ' if ok else 'BAD'} drv  closure mode judges the served host-PATH input too: {'PASS' if rc == 0 else 'FAIL'}")
-    # the temporary ALLOW A1-envpath (leaf only): each of its limits must be load-bearing
-    sp = 'export PATH="${btPath:+$btPath:}$ntPath" CONFIG_SITE=x'
-    lenv = {"PATH": LEGACY_ENV_PATH, "btPath": T + "/bin", "ntPath": T + "/bin"}
-    allow_cases = [
-        ("ALLOW: legacy env PATH, store PATH first (recipes1 class)", dict(args=["-c", "set -eu\n" + sp + "\nmake"], env=dict(lenv)), "leaf", True),
-        ("ALLOW never in closure mode", dict(args=["-c", "set -eu\n" + sp + "\nmake"], env=dict(lenv)), "closure", False),
-        ("no ALLOW: a command before the PATH statement", dict(args=["-c", "set -eu\nmkdir $out\n" + sp], env=dict(lenv)), "leaf", False),
-        ("no ALLOW: env PATH not exactly the legacy value", dict(args=["-c", sp], env=dict(lenv, PATH="/usr/bin:/usr/gnu/bin")), "leaf", False),
-        ("no ALLOW: BASH_ENV set", dict(args=["-c", sp], env=dict(lenv, BASH_ENV="/etc/x")), "leaf", False),
-        ("no ALLOW: the first PATH still has /usr/bin", dict(args=["-c", 'export PATH="$ntPath:/usr/bin"'], env=dict(lenv)), "leaf", False),
-        ("no ALLOW: builder is not /usr/bin/bash", dict(args=["-c", sp], env=dict(lenv), builder="/usr/gnu/bin/bash"), "leaf", False),
-    ]
-    for i, (label, kw, mode, want_pass) in enumerate(allow_cases):
-        kw.setdefault("idrvs", [tools]); kw["env"]["tools"] = T
-        dp = fake_drv(f"al{i}", **kw)
-        lines = []
-        rc = run_drv([dp], out=lines.append, ca_ok=ca, mode=mode, served=lambda p: True if p.startswith(T) or "-lane" in p else False)
-        allowed = any(l.startswith("ALLOW A1-envpath") for l in lines)
-        ok = (rc == 0) == want_pass and allowed == want_pass
-        bad += not ok
-        print(f"{'ok ' if ok else 'BAD'} drv  {label}: {'PASS' if rc == 0 else 'FAIL'}" + ("" if ok else "\n    " + "\n    ".join(lines)))
     # leaf mode refuses to judge when the probe cannot see a served path, or any input's state is unknown
     for label, srv in (("leaf: probe blind (CA-lane path not seen served) -> hard FAIL", lambda p: False),
                        ("leaf: an input's served state unknown -> hard FAIL", lambda p: True if "-lane" in p else None)):
@@ -1143,7 +1100,8 @@ def selftest_out():
         ("B6 symlink loop", mut("lib/a", L("a")), False, "B6-symlink"),
         ("B7 bin/ file without x (libtool 0444)", mut("bin/libtool", R(b"#!/bin/sh\n")), False, "B7-exec"),
         ("B8 a non-drv-keyed /var/tmp/srcpkg- dir (8 hex) in a .pc", mut("lib/z.pc", R(b"prefix=/var/tmp/srcpkg-0123abcd/out")), False, "B8-builddir"),
-        ("B8 drv-keyed /var/tmp/srcpkg-<16 hex> (jq CC= class): WARN, not FAIL", mut("bin/jq2", R(b"\x7fELF\0CC=/var/tmp/srcpkg-4424febabee4a39c/cc64\0", True)), True, "WARN B8-builddir"),
+        ("B8 drv-keyed /var/tmp/srcpkg-<16 hex> (jq CC= class): FAIL (wave6 records CC=gcc)", mut("bin/jq2", R(b"\x7fELF\0CC=/var/tmp/srcpkg-4424febabee4a39c/cc64\0", True)), False, "FAIL B8-builddir"),
+        ("B8 drv-keyed /var/tmp/cargo-<16 hex> (rg target dir): WARN, not FAIL", mut("bin/rg2", R(b"\x7fELF\0/var/tmp/cargo-9bfaa4b8b8af3683/src/s/target\0", True)), True, "WARN B8-builddir"),
         ("B8 Nix's /tmp/nix-build-<name>-<n> dir: FAIL", mut("lib/x.la", R(b"libdir='/tmp/nix-build-xyz-1.0.drv-0/src/.libs'")), False, "FAIL B8-builddir"),
         ("B8 a mktemp-suffixed dir /var/tmp/cargo-Ab3xQz: FAIL", mut("bin/c", R(b"\x7fELF\0/var/tmp/cargo-Ab3xQz/target\0", True)), False, "FAIL B8-builddir"),
         ("B8 a build user's home /home/gburd/: FAIL", mut("lib/y.pc", R(b"prefix=/home/gburd/src/y")), False, "FAIL B8-builddir"),
