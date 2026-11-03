@@ -8,6 +8,11 @@
 # string outside it, such as nix's --help examples, is text, not a dependency).
 # Prints PASS/FAIL per path; exit 1 if any FAIL. --selftest proves the reference rule.
 # GATE_DOF_EXEMPT=0 drops the DOF-utsname exemption below (infra protocol v2 exception E1); the aarch64 set needs none.
+# Plus the out checks over the NAR stream (scripts/gate-checks.py nar, the bytes that get published): B6 every symlink
+# resolves inside the out or /nix/store; B7 every bin/ sbin/ file is executable; B8 no unmapped build dir
+# (/var/tmp/srcpkg- ...; the mapped /build/ is counted); B9 no #! outside the store but /bin/sh and /usr/bin/env (counted);
+# B10 no timestamp-mode pyc; B13 no /usr/gnu/ /opt/ooce /opt/nixboot /usr/gcc/ /var/tmp/big string (/usr/local and
+# documentation mentions WARN). GATE_PYTHON: a python3 >= 3.9 (a solnix host has none on PATH: a store python3).
 # shortcut: the reference scan greps /nix/store/<hash>- strings in the NAR, so a reference
 # written without the /nix/store/ prefix would go unseen; Nix's own scan is per-hash.
 
@@ -32,6 +37,10 @@ unset LD_LIBRARY_PATH LD_LIBRARY_PATH_64 LD_LIBRARY_PATH_32
 # GATE_GREP_DIR=$(nix build --print-out-paths .#gnugrep)/bin.
 printf 'a\000b\n' | grep -a -b -o -F b > /dev/null 2>&1 || {
   echo "publish-gate: $(command -v grep) is not GNU grep (needs -a -b -o); set GATE_GREP_DIR to a gnugrep bin" >&2; exit 2; }
+py=${GATE_PYTHON:-$(command -v python3)}
+[ -n "$py" ] && "$py" -c 'import sys; sys.exit(sys.version_info < (3, 9))' 2>/dev/null || {
+  echo "publish-gate: no python3 >= 3.9 for the out checks (set GATE_PYTHON)" >&2; exit 2; }
+here=$(cd "$(dirname "$0")" && pwd)
 rc=0
 for p in "$@"; do
   why=""
@@ -87,6 +96,10 @@ for p in "$@"; do
     echo "$refs" | grep -q "^$n" && continue
     echo "$inputs" | grep -qx "$n" && why="$why undeclared ref $n;"
   done
-  if [ -z "$why" ]; then echo "PASS $p ($(echo "$refs" | grep -c . ) refs)"; else echo "FAIL $p:$why" | cut -c1-600; rc=1; fi
+  # the out checks B6-B13 over the NAR (FAIL lines fail the gate; WARN/INFO are printed for the record)
+  outc=$("$py" "$here/gate-checks.py" nar "$p" 2>&1); oc=$?
+  echo "$outc" | grep -E '^(WARN|INFO) ' | cut -c1-300 | sed 's/^/  /'
+  [ $oc = 0 ] || why="$why $(echo "$outc" | grep -E '^FAIL B' | head -6 | sed "s|^FAIL \(B[0-9]*-[a-z]*\) $p: |\1 |" | tr '\n' ';')"
+  if [ -z "$why" ]; then echo "PASS $p ($(echo "$refs" | grep -c . ) refs)"; else echo "FAIL $p:$why" | cut -c1-1200; rc=1; fi
 done
 exit $rc

@@ -23,6 +23,17 @@ for a random submission id (expect 404 "no such submission") plus the same with
 a wrong key (expect 403): it proves the key authenticates without creating a
 submission. --submit performs the real submissions.
 
+Before a READY path is offered (dry run and --submit alike), its Deriver must pass scripts/drv-gate.sh --leaf here:
+the deriver plus every input drv whose out is not served builds from the store only. A path that fails, or whose
+deriver is not in this store, is planned DRV-GATE-FAIL and never submitted. This is the submit path only: a
+verification rebuild of a served row does not come through here.
+
+A builder id other than site-team (a host publishing its own build: dixi, dixa, lixi) also needs --stamps <dir>:
+the stamps scripts/pre-submit-check.sh writes on that host when an out passes every gate, drv-gate --closure included
+(<dir>/<NarHash nix32>.ok, holding the store path and its NarHash). A path without a stamp naming it and its NarHash is
+planned NO-STAMP and never submitted. The stamp is an interlock against skipping the checks, not a security
+boundary: anyone who can write the directory can write one.
+
 Signing: the OpenSSH ed25519 private key is converted in memory to PKCS#8 and
 handed to `openssl pkeyutl -rawin` through a 0600 temp file that is deleted
 after each signature. The key is never printed.
@@ -212,6 +223,41 @@ def unsigned_narinfo(f):
     return "".join(f"{k}: {f.get(k, '')}\n" for k in keys).encode()
 
 
+def drv_gate_leaf(f):
+    """None if the narinfo's Deriver passes scripts/drv-gate.sh --leaf in this store, else why (the FAIL lines)."""
+    drv = f.get("Deriver", "")
+    if not drv:
+        return "no Deriver in the narinfo"
+    drv = "/nix/store/" + drv
+    if not os.path.exists(drv):
+        return f"deriver {drv} is not in this store (drv-gate cannot judge it)"
+    gc = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gate-checks.py")
+    r = subprocess.run([sys.executable, gc, "drv", "--leaf", drv], capture_output=True, text=True)
+    for l in r.stdout.splitlines():
+        if l.startswith(("ALLOW ", "EXEMPT ")):
+            print("  drv-gate: " + l[:300])
+    if r.returncode == 0:
+        return None
+    fails = [l for l in r.stdout.splitlines() if l.startswith("FAIL ")] or [r.stderr.strip()[-300:]]
+    return "drv-gate --leaf: " + " | ".join(x[:240] for x in fails[:4])
+
+
+def stamped(d, sp, narhash):
+    """pre-submit-check.sh passed this exact path with this exact NarHash (stamp <nix32>.ok: path, NarHash, time, host)."""
+    if not narhash.startswith("sha256:"):
+        return False
+    try:
+        cols = open(os.path.join(d, narhash[len("sha256:"):] + ".ok")).read().split("\t")
+    except OSError:
+        return False
+    if len(cols) < 2 or cols[0] != sp:
+        return False
+    h = cols[1]
+    if h.startswith("sha256-"):
+        h = "sha256:" + nix32(base64.b64decode(h[len("sha256-"):]))
+    return h == narhash
+
+
 def published(path):
     """Installable from cache.solnix.io under 8UNr, with an empty Nix cache (onboarding doc, Client notes)."""
     env = dict(os.environ, XDG_CACHE_HOME=tempfile.mkdtemp(prefix="cs-xdg."))
@@ -323,6 +369,7 @@ def main():
     ap.add_argument("--with-refs", action="store_true",
                     help="also submit leaves that have (published) references, alone")
     ap.add_argument("--poll", type=int, default=600, help="seconds to poll status after finalize")
+    ap.add_argument("--stamps", help="pre-submit-check.sh stamp dir (required with --submit for any builder but site-team)")
     a = ap.parse_args()
 
     seed = None
@@ -333,6 +380,8 @@ def main():
         die("--submit/--probe-auth need --key")
     if a.submit and a.recipes != RECIPES:
         die("--submit plans only against the served recipes.tsv")
+    if a.submit and a.builder != "site-team" and not a.stamps:
+        die(f"--submit as builder {a.builder} needs --stamps: run scripts/pre-submit-check.sh on the build host first")
     if a.probe_auth:
         probe_auth(a, seed)
 
@@ -360,6 +409,8 @@ def main():
                                             ("not in --pathinfo" if pinfo else None))
         if why:
             plan.append((sp, "BAD-LOCAL", why)); continue
+        if a.stamps and not stamped(a.stamps, sp, f["NarHash"]):
+            plan.append((sp, "NO-STAMP", f"no pre-submit stamp for NarHash {f['NarHash']} in {a.stamps}")); continue
         if is_pub(sp):
             plan.append((sp, "PUBLISHED", "verifies under 8UNr")); continue
         refs = [("/nix/store/" + r) for r in f.get("References", "").split()]
@@ -376,6 +427,14 @@ def main():
             plan.append((sp, "HOLD-REFS", f"{len(refs)} refs, all published; see --with-refs"))
         else:
             plan.append((sp, "READY", f"{len(refs)} refs, all published"))
+
+    # drv-gate --leaf on every READY path's deriver (the submit path's store-only check; see the module docstring)
+    for i, (sp, st, why) in enumerate(plan):
+        if st != "READY":
+            continue
+        bad = drv_gate_leaf(objs[sp])
+        if bad:
+            plan[i] = (sp, "DRV-GATE-FAIL", bad)
 
     for sp, st, why in plan:
         print(f"{st:15s} {sp}  {why}")

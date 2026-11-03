@@ -1,0 +1,24 @@
+# bootstrap-exempt.tsv -- the CLOSED list of derivations allowed a host PATH (gate2 drv-gate A1 / pkgs/illumos/path-gate.sh), until
+# the bootstrap-tools wave (/scratch/solnix/wave6/BOOTSTRAP-TOOLS-DESIGN.md) gives the chain a store root. Orchestrator, 2026-11-02:
+# the BOOTSTRAP SET is the seed instance and the gate/world slices. Anything else with a host PATH entry FAILS, even if it looks
+# like a slice. Read by: scripts/drv-gate.sh (gate2) and `pkgs/illumos/path-gate.sh --exempt-check <drv>...` (both apply the markers).
+# COMPENSATED: every exempt out needs a cross-host proof (chef = OpenIndiana with /usr/gnu, dixi = solnix without it, same NarHash),
+# recorded per drv in wave6's HANDOFF. One that differs is fixed, not exempted.
+#
+# A drv is exempt iff its env `name` matches the name regex (anchored) AND the marker holds:
+#   seed     : env btPath is present and empty (mk-src-pkg's seed instance, buildTools = [ ]; the system instance's same-named
+#              recipes have btPath set, so a name match alone would exempt them: gate2 step5)
+#   gccseed  : env stage0 = /usr/gcc/14 (gcc-src.nix compiled by the OI IPS seed)
+#   slice    : env gate (the proto) and filesArg (mk-illumos-component: libc, ld, rtld, early, sys, base-tools)
+#   world    : env gate and dirsArg and sharedLibsArg (mk-proto-world: illumos-userland, its -dev output, and the world man)
+#   fod      : a fixed-output drv (outputHashMode recursive, a full sha256 outputHash): the pinned hash fixes its bytes whatever
+#              tools ran (NixOS fetchers also run outside the sandbox); gate2 A4 checks the hash is real
+#   seedenv  : buildEnv/alias of the seed farm: env paths (or gnutar) name only outs of seed / gccseed / seedenv drvs
+# name-regex	marker	why
+^(binutils|bzip2-bin|coreutils|diffutils|findutils|gnugrep|gnum4|gnumake|gnupatch|gnused|gnutar|gzip|libxml2|nspr|nss|openssl|perl|pkgconf|xz|zlib)-[0-9][0-9.a-z]*$	seed	the seed instance: built on the OI host's /usr/gnu + /usr/bin, compiles the first store tools
+^gcc-14\.3\.0$	gccseed	gcc 14 from the OI IPS gcc-14 (stage0 of gcc15)
+^(libc|ld|rtld|illumos-libc-extra|illumos-early|sys|base-tools|core-utils|halt|oamuser|zfs|illumos-smf)$	slice	gate proto slices, copied with the gate's own tools
+^illumos-userland$	world	the whole gate userland, relocated (mk-proto-world)
+^illumos-world-man$	world	the world's man pages
+^(solnix-seed-build-tools|seed-tar-alias)$	seedenv	the seed farm (symlinks to seed-instance outs only)
+^illumos-gate-proto$	fod	the gate proto 601ihrx7 (gate.nix: copies the unpacked proto tarball; outputHash pinned)
