@@ -17,6 +17,8 @@ let
 in
 {
   inherit world;
+  # the recipe sets themselves (not derivations, so the flake's packages filter drops them), for ./a64r-pkgs.nix
+  cliSet = cli; baseSet = base';
   # lib/home-manager-pkgs.nix's tools + home-manager
   inherit (base) coreutils findutils gnused gnugrep diffutils gnutar gzip jq lndir gettext hostname
     gnumake pkgconf rsync libevent tmux;

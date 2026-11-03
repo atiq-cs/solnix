@@ -179,6 +179,17 @@ let
         + "sed -i '1s|^#!/usr/bin/perl$|#!/usr/bin/env perl|' $f; head -1 $f | grep -qx '#!/usr/bin/env perl' || { echo 'FATAL: watchman sample #!' >&2; exit 1; }\n"; };
       # quilt runs awk at run time from --with-awk=${world}/usr/bin/nawk (x86: the whole userland); aarch64's world is gate libs only.
       quilt = { build = builtins.replaceStrings [ "${homePkgs.world}/usr/bin/nawk" ] [ "${a64.illumosTools}/bin/nawk" ] args.build; };
+      # dixa's nix.conf has cores = 0 (all cores), so NIX_BUILD_CORES=0 and `gmake -j0` fails ("-j requires a positive integer"):
+      # a fixed -j, as lp64Fix gives the other recipes (the job count does not reach the output). And mk-src-pkg deletes the .la FILES, which leaves libpng's lib/libpng.la -> libpng16.la link dangling (gate2 B6): drop it too.
+      libpng = { build = let b = builtins.replaceStrings [ "-j\${NIX_BUILD_CORES:-8}" ] [ "-j24" ] args.build; in
+        if b == args.build then throw "a64r libpng: -j anchor" else b + "\nrm -f \"$out/lib/libpng.la\"\n"; };
+      # tzselect's #! is the Makefile's KSHELL (/bin/bash), which gate2 B9 rejects: /bin/sh, illumos' ksh93 (tzselect wants a POSIX
+      # shell with ksh's select). NixOS patchShebangs it to the store bash instead; /bin/sh keeps tzdata reference-free.
+      tzdata = { build = let b = builtins.replaceStrings [ "gmake -j8 CC=" ] [ "gmake -j8 KSHELL=/bin/sh CC=" ] args.build; in
+        if b == args.build then throw "a64r tzdata: gmake anchor" else b + "\nhead -1 $out/bin/tzselect | grep -qx '#!/bin/sh' || { echo 'FATAL: tzselect #! is not /bin/sh' >&2; exit 1; }\n"; };
+      # gmp: the x86 text pins --build=x86_64-pc-solaris2.11 after lp64Fix's aarch64 --build (the last one wins): drop it.
+      gmp6 = { build = let b = builtins.replaceStrings [ "--build=x86_64-pc-solaris2.11 " ] [ "" ] args.build; in
+        if b == args.build then throw "a64r gmp6: --build anchor" else b; };
       # builtins/psize.sh times a pipe fill ('psize.aux | sleep 3') and falls back to 512 when that comes back empty: on dixa 2 of 3
       # builds got 512, one 16384 (--check differs in bin/bash). Pin the fallback, which the served stage0 bash ships (safe for here-docs).
       bash = { build = "printf '#!/bin/sh\\necho \"#define PIPESIZE 512\"\\n' > builtins/psize.sh\n" + args.build; };
@@ -220,7 +231,9 @@ let
 in
 homePkgs // (if stage == "seed" then { } else final // {
   # the build-only tools under their pnames (solnix-builder.sh drv_for finds an attr by pname, _ or camelCase)
-  illumos-build-tools = a64.illumosTools; cc-store-names = a64.ccNames; sh-store = a64.shAlias; solnix-a64-build-tools = a64.buildToolsFarm; }) // {
+  illumos-build-tools = a64.illumosTools; cc-store-names = a64.ccNames; sh-store = a64.shAlias; solnix-a64-build-tools = a64.buildToolsFarm; }
+  # x86-served recipes on the store-only aarch64 set (a64r): the same recipe files (./a64r-pkgs.nix)
+  // import ./a64r-pkgs.nix { inherit srcPkgs homePkgs a64 final system; }) // {
   gate = gate';
   inherit libc rtld ld sys systemPath gcc srcPkgs;
   inherit (srcPkgs) zlib openssl nixChain git tree ncurses less nano nvi htop top wget gateLibs bsdfetch gccWrapper readline bash;
