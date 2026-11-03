@@ -15,7 +15,7 @@ export PATH="$tools/bin:$world/usr/bin:$world/usr/sbin:$world/bin:$world/sbin"  
 # sources, go1.17/1.20 name GOROOT/src in every binary (measured, repro2). $buildKey: see mk-src-pkg.nix.
 W=/var/tmp/go-$buildKey; rm -rf "$W"; mkdir -m 700 "$W"; trap 'cd /; rm -rf "$W"' EXIT; cd "$W"
 export HOME=$W GOCACHE=$W/cache GOPATH=$W/gopath CGO_ENABLED=0 GOARCH=amd64 GOTOOLCHAIN=local
-tar xzf "$src"; cd go/src
+"$tools/bin/tar" xzf "$src"; cd go/src   # store GNU tar (+ gzip on $tools): the illumos tar fails on dixi ('blocksize = 0', recipes2)
 if [ -z "$boot" ]; then
   # store RUNPATH for the C tools: gcc's runtime + the world's libc/libm (not the host /lib).
   # -std=gnu17: go1.4's C uses bool/true as identifiers, C23 keywords under GCC 15 (gcc1 STDENV-SWITCH.md 2.2)

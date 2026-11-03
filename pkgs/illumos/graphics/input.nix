@@ -1,6 +1,6 @@
 # graphics/input.nix -- the C libraries cosmic-comp links beyond Mesa:
 # pixman, libxkbcommon (+ xkeyboard-config data), libdisplay-info, libseat.
-{ mkSrcPkg, tools, pkgconf }:
+{ mkSrcPkg, tools, pkgconf, python3 ? null }:
 let m = tools.mesonBuild; pc = "export PATH=${pkgconf}/bin:$PATH"; in
 rec {
   pixman = mkSrcPkg {
@@ -19,8 +19,8 @@ rec {
     src = { url = "https://www.x.org/releases/individual/data/xkeyboard-config/xkeyboard-config-2.43.tar.xz";
             sha256 = "c810f362c82a834ee89da81e34cd1452c99789339f46f6037f4b9e227dd06c01"; };
     build = ''
-      # rules/ needs python >= 3.11 (enum.StrEnum); the host python3.14 is a build tool here.
-      mkdir -p "$TMPDIR/py" && ln -sf /usr/bin/python3.14 "$TMPDIR/py/python3" && export PATH="$TMPDIR/py:$PATH"
+      # rules/ needs python >= 3.11 (enum.StrEnum): the store python3 (3.13; wave6), the OI host's python3.14 on the seed path
+      mkdir -p "$TMPDIR/py" && ln -sf ${if python3 == null then "/usr/bin/python3.14" else "${python3}/bin/python3"} "$TMPDIR/py/python3" && export PATH="$TMPDIR/py:$PATH"
       ${m "-Dnls=false -Dxorg-rules-symlinks=true -Dcompat-rules=true"}
       [ -e "$out/share/X11/xkb/rules/evdev" ] || { echo "FATAL: no rules/evdev" >&2; exit 1; }
     '';

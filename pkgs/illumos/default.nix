@@ -421,7 +421,8 @@ let
   srcPkgs = import ./base-src.nix { gate = gate'; libcSlice = libc; inherit world gcc buildTools seedTools;
     nixChainTools = if buildTools == [ ] then { } else { inherit (cliBase) cmake; bzip2Bin = cliBase.bzip2-bin; }; };
   # The Wayland + Mesa userland (./graphics), built like srcPkgs.
-  graphics = import ./graphics { inherit (srcPkgs) mkSrcPkg pkgconf zlib hostTools; inherit world; inherit (cliBase) perl; };   # perl: libffi's make_sunver.pl
+  graphics = import ./graphics { inherit (srcPkgs) mkSrcPkg pkgconf zlib hostTools; inherit world; inherit (cliBase) perl;
+    python3 = if buildTools == [ ] then null else cliBase.python3; gnupatch = if buildTools == [ ] then null else cliBase.gnupatch; };   # perl: libffi's make_sunver.pl
   # The maintainer's headless CLI set (werk/meh home.packages), from source (./cli).
   # Generic Rust packages on rust199 (./cargo.nix: vendorOf FOD + cargoPkg).
   cargo = import ./cargo.nix {
