@@ -1,19 +1,24 @@
 # src.nix (aarch64) -- the from-source packages nix needs, built natively on aarch64 illumos with
 # the aarch64 gcc (./gcc-src.nix). Same recipes as ../base-src.nix + ../nix-src.nix; the shared
 # builder ../mk-src-pkg.nix runs with aarch64 = true (LP64: libs in lib/, arm64-gate target flags).
-{ gate, libcSlice, gcc, system ? "aarch64-solaris" }:
+{ gate, libcSlice, gcc, system ? "aarch64-solaris"
+, sharedChain ? { }   # nix-src.nix shared (the set's sqlite); {} = its own 3.46.1
+, a64 ? null   # ./tools.nix (store-only set: farm, defaultTools, shell, plain, perPkg); null = the stage0 seed, drvs unchanged
+}:
 # gateLibs: the few gate libraries (outside the libc slice) htop/wget link; on x86 they come
 # from the whole world (mk-proto-world.nix), which aarch64 does not have yet.
 
 let
-  mkSrcPkg = args: import ../mk-src-pkg.nix {
+  mkSrcPkg = args: import ../mk-src-pkg.nix ({
     inherit gate gcc;
     aarch64 = true;
     runtimeLibDirs = [ "${libcSlice}/lib" ];
-  } (args // { inherit system; });
+  } // (if a64 == null then { } else { buildTools = a64.farm; defaultTools = a64.defaultToolsFor args.pname; inherit (a64) shell; }))
+    (args // { inherit system; } // (if a64 == null then { } else a64.perPkg args));
+  plain = if a64 == null then (d: d) else a64.plain;
 in
 rec {
-  inherit mkSrcPkg;
+  inherit mkSrcPkg plain;
 
   # as ../base-src.nix zlib (OI symbol-version mapfile), LP64 only. --libdir first: zlib's
   # configure is not autoconf and rejects the --build that mk-src-pkg adds after "./configure --prefix=".
@@ -202,7 +207,7 @@ rec {
   # mkGateLibs name roots: the roots' NEEDED closure from the proto (aarch64/home.nix uses it as the
   # "world" the x86 recipes link: libsec, libgen, libxnet ...).
   gateLibs = mkGateLibs "illumos-gate-libs" "libkstat.so.1 libproc.so.1";  # htop. (libuuid -> libdlpi -> libdladm -> ... -> libxml2 = the world; wget goes --without-libuuid)
-  mkGateLibs = name: roots: derivation {
+  mkGateLibs = name: roots: derivation (plain {
     inherit name roots system gate zlib;
     libc = libcSlice;
     builder = "/usr/bin/bash";
@@ -229,7 +234,7 @@ rec {
       bad=$(for f in $out/lib/*.so.[0-9]*; do /usr/bin/ldd $f 2>&1 | awk -v f=$f '/not found/ || (/=>/ && $NF !~ /^\/nix\/store\//) {print f": "$0}'; done)
       [ -z "$bad" ] || { echo "FATAL: gate libs leave the store: $bad" >&2; exit 1; }
     '' ];
-  };
+  });
 
   htop = mkSrcPkg {
     pname = "htop"; version = "3.4.1";
@@ -266,15 +271,15 @@ rec {
       /usr/bin/elfdump -d "$out/bin/wget" | grep -q 'NEEDED.*libssl' || { echo "FATAL: wget not linked to openssl" >&2; /usr/bin/elfdump -d "$out/bin/wget" | grep NEEDED >&2; exit 1; }
     '';
   };
-  top = derivation {
+  top = derivation (plain {
     name = "top-htop-3.4.1"; inherit system htop;
     builder = "/usr/bin/bash";
     args = [ "-c" "/usr/bin/mkdir -p $out/bin && /usr/bin/ln -s $htop/bin/htop $out/bin/top" ];
-  };
+  });
 
   # gcc wrapper (as ../base-src.nix gccWrapper): bin/gcc = the derivation gcc + RUNPATH to its lib.
   # No -B binutils: aarch64 uses the stage0 box's /usr/bin/gas + illumos ld (gcc-src --with-as/--with-ld).
-  gccWrapper = derivation {
+  gccWrapper = derivation (plain {
     name = "gcc-wrapper-14.3.0"; inherit system gcc; gccLib = gcc.lib;
     builder = "/usr/bin/bash";
     args = [ "-c" ''
@@ -284,13 +289,14 @@ rec {
         /usr/bin/chmod +x $out/bin/''${t%%:*}
       done
     '' ];
-  };
+  });
 
   # fetch(1), FreeBSD's (../bsdfetch.nix), with the aarch64 text rewrite.
-  bsdfetch = import ../bsdfetch.nix { inherit gate gccWrapper openssl libcSlice system; aarch64 = true; };
+  bsdfetch = import ../bsdfetch.nix { inherit gate gccWrapper openssl libcSlice system plain; aarch64 = true; };
 
   nixChain = import ../nix-src.nix {
-    inherit mkSrcPkg zlib openssl libcSlice system;
+    inherit mkSrcPkg zlib openssl libcSlice system plain;
+    shared = sharedChain;
     gccLib = gcc.lib;
     libSub = "lib";
     # No -ftls-model=initial-exec any more: the aa64tls proto's ld keeps an executable's GD TLS

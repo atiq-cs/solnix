@@ -1,7 +1,7 @@
 # cli/ -- the maintainer's headless CLI set (werk/meh home.packages) as solnix
 # derivations: C/autotools on mk-src-pkg (./c-*.nix), Rust on cargoPkg (../cargo.nix,
 # ./rust.nix), Go on a from-source go1.4 -> current chain (./go.nix, ./go-tools.nix).
-{ base, world, graphics, cargoPkg ? null, goChain ? null }:
+{ base, world, graphics, cargoPkg ? null, goChain ? null, shared ? { } }:   # shared: one readline from the caller (aarch64 final)
 # cargoPkg/goChain null (aarch64: no Rust or Go illumos/aarch64 target upstream) drops those tiers.
 let
   # base = srcPkgs (base-src.nix): mkSrcPkg, zlib, openssl, ncurses, coreutils, ... and nixChain.
@@ -36,7 +36,7 @@ let
     echo "CHECK-OK: $(head -1 "$W/chk.out")" >&2
   '';
   h = args // { inherit scrub gnulibFix dropDocs chk; };
-  c1 = import ./c-base.nix h;
+  c1 = import ./c-base.nix (h // { inherit shared; });
   c2 = import ./c-net.nix (h // { inherit (c1) readline; });
   c3 = import ./c-gnupg.nix (h // { inherit (c1) readline; });
   c4 = import ./c-big.nix (h // { inherit (c1) readline gnum4; inherit (c2) sqlite; inherit (c5) gnupatch; });   # gnupatch: perl's no-sys-dirs (no perl in its closure)

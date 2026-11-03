@@ -535,6 +535,59 @@ def elf_live_strings(data):
     except (struct.error, IndexError, ValueError):
         return None
 
+DZ_LIMIT = 1 << 30   # 1 GiB per decompressed section: far above any real debug section (gcc15 cc1plus .debug_info ~ 300 MB)
+
+def elf_compressed_text(data):
+    """(byte ranges, DECOMPRESSED bytes) of an ELF's compressed sections (SHF_COMPRESSED + Elf_Chdr zlib, as gobjcopy
+    --compress-debug-sections=zlib writes them; and GNU .zdebug_* 'ZLIB'+8-byte-size), the text joined by NULs; ([], b"") when not an
+    ELF, none, or unparseable. The content scans (S3 S4 B8 B13) read the real text: scanning zlib bytes gives false hits (wave6t: 'lixi'
+    in a seed binutils .debug) and hides real ones (a host name inside a compressed .debug_str). A section that does not
+    inflate is returned as nothing (the raw bytes are still scanned)."""
+    import struct, zlib
+    def inflate(b, limit):   # bounded: a crafted NAR must not exhaust memory (infra's server gate mirrors this code)
+        d = zlib.decompressobj(); r = d.decompress(b, limit)
+        if d.unconsumed_tail: raise zlib.error("decompressed section larger than the limit")
+        return r
+    try:
+        if data[:4] != b"\x7fELF": return [], b""
+        is64, end = data[4] == 2, "<" if data[5] == 1 else ">"
+        if is64:
+            shoff = struct.unpack_from(end + "Q", data, 0x28)[0]; shentsize, shnum, shstrndx = struct.unpack_from(end + "HHH", data, 0x3A)
+        else:
+            shoff = struct.unpack_from(end + "I", data, 0x20)[0]; shentsize, shnum, shstrndx = struct.unpack_from(end + "HHH", data, 0x2E)
+        secs = []
+        for i in range(shnum):
+            o = shoff + i * shentsize
+            if is64: name, typ, flags, _, off, size = struct.unpack_from(end + "IIQQQQ", data, o)
+            else: name, typ, flags, _, off, size = struct.unpack_from(end + "IIIIII", data, o)
+            secs.append((name, typ, flags, off, size))
+        stro = secs[shstrndx][3] if shstrndx < len(secs) else 0
+        out, rng = [], []
+        for name, typ, flags, off, size in secs:
+            if typ == 8 or size == 0: continue   # SHT_NOBITS
+            sec = data[off:off + size]
+            nm = data[stro + name:data.index(b"\0", stro + name)] if stro else b""
+            try:
+                if flags & 0x800:   # SHF_COMPRESSED: Elf64_Chdr (24 bytes) / Elf32_Chdr (12), ch_type 1 = ELFCOMPRESS_ZLIB
+                    hl = 24 if is64 else 12
+                    if struct.unpack_from(end + "I", sec, 0)[0] == 1: out.append(inflate(sec[hl:], DZ_LIMIT)); rng.append((off, off + size))
+                elif nm.startswith(b".zdebug") and sec[:4] == b"ZLIB":
+                    out.append(inflate(sec[12:], DZ_LIMIT)); rng.append((off, off + size))
+            except zlib.error:
+                out.append(b"\0GATE-UNREADABLE-COMPRESSED-SECTION\0"); rng.append((off, off + size))   # never silently skipped
+        return rng, b"\0".join(out)
+    except (struct.error, IndexError, ValueError):
+        return [], b""
+
+def scan_text(data):
+    """What the content scans read: the file with each compressed section's bytes masked to NUL (same length, so offsets
+    into data stay valid), then the decompressed sections. A file without compressed sections is returned as is."""
+    rng, txt = elf_compressed_text(data) if data[:4] == b"\x7fELF" else ([], b"")
+    if not rng: return data
+    b = bytearray(data)
+    for lo, hi in rng: b[lo:hi] = bytes(hi - lo)
+    return bytes(b) + b"\0" + txt
+
 def check_nar(out, src=None):
     """-> (findings, counts). findings: (level, check, why)."""
     r, n = [], {"files": 0, "links": 0, "dirs": 0, "shebang_exceptions": {}}
@@ -578,7 +631,10 @@ def check_nar(out, src=None):
             n["links"] += 1; links[rel] = info["target"]; r.extend(server_checks(rel, target=info["target"])); continue
         n["files"] += 1
         data, top = info["data"], rel.split("/")[0]
-        r.extend(server_checks(rel, data=data))
+        text = scan_text(data)   # = data unless an ELF has compressed sections
+        if b"\0GATE-UNREADABLE-COMPRESSED-SECTION\0" in text:   # corrupt, or larger than DZ_LIMIT: the scans can't read it
+            r.append(("FAIL", "B16-compressed", f"{rel}: a compressed section that cannot be decompressed (corrupt, or over {DZ_LIMIT >> 20} MiB)"))
+        r.extend(server_checks(rel, data=data, text=text))
         r.extend(config_record_findings(rel, data))
         # B7: bin/ and sbin/ hold executables (libtool 2.5.4 shipped bin/libtool 0444; gzip zgrep)
         if top in ("bin", "sbin") and rel.count("/") == 1 and not info["exec"]:
@@ -586,7 +642,7 @@ def check_nar(out, src=None):
         dbg = "/lib/debug/" in "/" + rel or rel.endswith(".debug")
         # B8: build directories
         b8 = None
-        for m in BUILD_STR.finditer(data):
+        for m in BUILD_STR.finditer(text):
             if m.group(0) == b"/build/":
                 n["mapped_build"] = n.get("mapped_build", 0) + (0 if dbg else 1); continue
             if DRV_KEYED.match(m.group(0)) and not m.group(0).startswith(b"/var/tmp/srcpkg-"):
@@ -599,7 +655,7 @@ def check_nar(out, src=None):
                 b8 = ("FAIL", "B8-builddir", f"{rel} names {m.group(0).decode()} (mk-src-pkg's build dir: a recorded CC or path)"); break
             else:
                 b8 = ("FAIL", "B8-builddir", f"{rel} names {m.group(0).decode(errors='replace')} (a build dir that is not drv-keyed)"); break
-        m = RUN_DIR_STR.search(data)
+        m = RUN_DIR_STR.search(text)
         if m:
             b8 = ("FAIL", "B8-builddir", f"{rel} names {m.group(0).decode(errors='replace')} (a host- or run-specific dir)")
         if b8: r.append(b8)
@@ -617,7 +673,11 @@ def check_nar(out, src=None):
             # wrote it); 1/3 = hash-based (deterministic, what NixOS and wave3's python-nopyc ship).
             if len(data) >= 16 and int.from_bytes(data[4:8], "little") == 0:
                 r.append(("FAIL", "B10-pyc", f"{rel}: timestamp-mode pyc (written by an import during the build, not compileall --invalidation-mode checked-hash)"))
-        # B13: host tool paths baked into the out: report the first FAIL-class hit, else the first WARN-class one
+        # B13: host tool paths baked into the out: report the first FAIL-class hit, else the first WARN-class one. In the
+        # decompressed sections (debug info) every hit but WARN_ONLY is FAIL: the WARN cases are .rodata/.dynstr/text-file shapes.
+        if len(text) > len(data):
+            dh = [m for m in host_hits(text[len(data) + 1:]) if m.group(0) not in WARN_ONLY]
+            if dh: r.append(("FAIL", "B13-hostpath", f"{rel} (compressed section) names {dh[0].group(0).decode(errors='replace')}"))
         hits = list(host_hits(data))
         if hits:
             elf = is_elf(data)
@@ -647,13 +707,15 @@ def check_nar(out, src=None):
         r.append(("INFO", "B8-builddir", f"{n['mapped_build']} non-debug files name the mapped build dir /build/ (prefix map; NixOS normal)"))
     if shebangs:
         r.append(("INFO", "B9-shebang", "exceptions: " + ", ".join(f"#!{k} x{v}" for k, v in sorted(shebangs.items()))))
-    # cap repeated findings per check so one bad tree stays readable
+    # cap repeated findings per check so one bad tree stays readable. FAIL lines are never dropped: the verdict comes from
+    # this list, and capping before it turned a FAIL after 20 INFO/WARN lines of the same check into a PASS (infra
+    # 20261103-content-gate-b6-b7-b13 s2: illumos-userland's minconn.so B13 FAIL hid behind 20 stale-.dynstr INFOs).
     capped, per = [], {}
     for f in r:
         per[f[1]] = per.get(f[1], 0) + 1
-        if per[f[1]] <= 20: capped.append(f)
+        if f[0] == "FAIL" or per[f[1]] <= 20: capped.append(f)
     for k, v in per.items():
-        if v > 20: capped.append(("INFO", k, f"... {v - 20} more"))
+        if v > 20: capped.append(("INFO", k, f"... {v - 20} more (FAIL lines are all kept)"))
     return capped, n
 
 # ---- S: mirror of the server's NAR content gate (infra k8s/validate-nar-content.py, 05e799c; 20261103-v2b-live s6) --------
@@ -707,8 +769,8 @@ def elf_dynamic(data):
     except (struct.error, IndexError, ValueError):
         return None
 
-def server_checks(rel, data=None, target=None):
-    """-> [(level, check, why)] for one NAR entry: a regular file (data) or a symlink (target)."""
+def server_checks(rel, data=None, target=None, text=None):
+    """-> [(level, check, why)] for one NAR entry: a regular file (data) or a symlink (target). text: scan_text(data)."""
     r = []
     if target is not None:
         if BUILDHOST_RE.search(target.encode(errors="surrogateescape")):
@@ -726,11 +788,13 @@ def server_checks(rel, data=None, target=None):
                         r.append(("FAIL", "S1-runpath", f"{rel}: {tag} entry {e!r} is not under /nix/store or $ORIGIN"))
             if interp is not None and not INTERP_OK.match(interp):
                 r.append(("FAIL", "S2-interp", f"{rel}: PT_INTERP {interp} is not the store or the illumos ld.so.1"))
-    m = BUILDHOST_RE.search(data)
-    if m: r.append(("FAIL", "S3-buildhost", f"{rel}: contains {m.group(0).decode(errors='replace')!r} (@{m.start()})"))
-    m = HOSTNAME_RE.search(data)
+    # S3/S4 read the real text: an ELF's compressed sections decompressed, never the zlib bytes (wave6t, orchestrator 2026-11-03)
+    t = text if text is not None else scan_text(data)
+    m = BUILDHOST_RE.search(t)
+    if m: r.append(("FAIL", "S3-buildhost", f"{rel}: contains {m.group(0).decode(errors='replace')!r} (@{m.start()}{', decompressed' if m.start() >= len(data) else ''})"))
+    m = HOSTNAME_RE.search(t)
     if m:
-        ctx = data[max(0, m.start() - 20):m.end() + 20].decode(errors="replace").replace("\n", " ")
+        ctx = t[max(0, m.start() - 20):m.end() + 20].decode(errors="replace").replace("\n", " ")
         r.append(("FAIL", "S4-hostname", f"{rel}: names host {m.group(0).decode()!r}: ...{ctx}..."))
     return r
 
@@ -777,8 +841,13 @@ def _log_line(line):
         return [("WARN", "L2-configure-ignored", "perl Configure ignored a -D (use -U); B15 checks what Config recorded")]
     m = re.match(r"^Checking compatibility between (/\S+)", line)
     if m and _classify(m.group(1)) == "FAIL": return [("FAIL", "L2-configure-host", f"perl Configure probed {m.group(1)}")]
-    if re.search(r"no POSIX shell found|: command not found$", line):
+    if re.search(r"no POSIX shell found", line):
         return [("FAIL", "L3-missing", "a tool the store PATH lacks")]
+    # a probe that did not find a tool on the store-only PATH is that PATH working: the host's tool was NOT used (a host
+    # path would be an L1 hit). Counted, not failed (fleet3, dixa 2026-11-03: 11 of the 86 a64h logs, all non-fatal probes:
+    # autobuild.m4 AB_INIT `hostname` x8, perl hints `mount`/`arch`, nano `groff -Thtml`, wget's empty $GPG_ERROR_CONFIG).
+    if re.search(r": command not found$", line):
+        return [("WARN", "L3-notfound", "a probe found no such tool on the store PATH (not used)")]
     return []
 
 def check_log(text):
@@ -1059,6 +1128,9 @@ def selftest_log():
              ("L1 FAIL: automake sh=/usr/gnu/bin/sh (chef, real line)", "checking for sh... /usr/gnu/bin/sh", False, "L1-configure"),
              ("L2 perl probing /usr/gnu/bin/echo (real line)", "Checking compatibility between /usr/gnu/bin/echo and builtin echo (if any)...", False, "L2-configure-host"),
              ("L3 automake: no POSIX shell (real message)", "configure: error: no POSIX shell found that is good enough to be used in our testsuite", False, "L3-missing"),
+             ("L3 WARN: autobuild AB_INIT hostname probe (libtool, real line)", "./configure: line 4348: hostname: command not found", True, "L3-notfound"),
+             ("L3 WARN: perl hints mount probe (perl-5.42.2, real line)", "./hints/solaris_2.sh: line 141: mount: command not found", True, "L3-notfound"),
+             ("L3 WARN: nano groff html probe (real line)", "checking for HTML support in groff... ./configure: line 53508: groff: command not found", True, "L3-notfound"),
              ("L5 cmake Found PkgConfig: /usr/bin/pkg-config (fortune-mod, real line)", '-- Found PkgConfig: /usr/bin/pkg-config (found version "0.29.2")', False, "L5-cmake"),
              ("L5 meson host program", "Program python3 found: YES (/usr/bin/python3)", False, "L5-meson")]
     for label, text, want_pass, must in cases:
@@ -1066,7 +1138,34 @@ def selftest_log():
         ok = (rc == 0) == want_pass and (must is None or any(f" {must} " in l for l in lines))
         bad += not ok
         print(f"{'ok ' if ok else 'BAD'} log  {label}: {'PASS' if rc == 0 else 'FAIL'}" + ("" if ok else "\n    " + "\n    ".join(lines)))
+    # the per-check cap must never drop a FAIL (infra 20261103-content-gate-b6-b7-b13 s2 repro): 21 stale-.dynstr ELFs (INFO)
+    # then one MAKE=/usr/gnu/bin/make text file (FAIL) -> FAIL
+    stale = mkelf(b"/usr/gcc/10/lib/amd64\0", b"/nix/store/x/lib\0")
+    e = {f"a{i:02d}.so": {"type": "reg", "exec": False, "data": stale} for i in range(21)}
+    e["z.mk"] = {"type": "reg", "exec": False, "data": b"MAKE=/usr/gnu/bin/make\n"}
+    import tempfile; cf = os.path.join(tempfile.mkdtemp(), "cap.nar")
+    open(cf, "wb").write(nar_bytes({"type": "dir", "entries": {"lib": {"type": "dir", "entries": e}}}))
+    lines = []; rc = run_out("nar", [STORE + "6" * 32 + "-cap", cf], out=lines.append)
+    ok = rc != 0 and any(l.startswith("FAIL B13") for l in lines); bad += not ok
+    print(f"{'ok ' if ok else 'BAD'} nar  cap: a FAIL after 20 INFO lines of the same check still FAILs: {'FAIL' if rc else 'PASS'}")
     return bad
+
+def mk_elf_zsec(payload, chdr_align=8, zdebug=False):
+    """A minimal ELF64 LE with one compressed debug section holding zlib(payload): SHF_COMPRESSED + Elf64_Chdr (gobjcopy
+    --compress-debug-sections=zlib), or a GNU .zdebug_str ('ZLIB' + 8-byte BE size). chdr_align: the raw ch_addralign
+    field (8 bytes), so a control can plant bytes in the compressed section that are not part of its text."""
+    import struct, zlib
+    z = zlib.compress(payload)
+    if zdebug: name, sec, flags = b".zdebug_str", b"ZLIB" + struct.pack(">Q", len(payload)) + z, 0
+    else:
+        al = chdr_align if isinstance(chdr_align, bytes) else struct.pack("<Q", chdr_align)
+        name, sec, flags = b".debug_str", struct.pack("<II", 1, 0) + struct.pack("<Q", len(payload)) + al + z, 0x800
+    shstr = b"\0.shstrtab\0" + name + b"\0"
+    off_shstr = 64; off_sec = off_shstr + len(shstr); off_sh = (off_sec + len(sec) + 7) & ~7
+    eh = b"\x7fELF" + bytes([2, 1, 1]) + bytes(9) + struct.pack("<HHIQQQIHHHHHH", 1, 62, 1, 0, 0, off_sh, 0, 64, 0, 0, 64, 3, 1)
+    sh = bytes(64) + struct.pack("<IIQQQQIIQQ", 1, 3, 0, 0, off_shstr, len(shstr), 0, 0, 1, 0) \
+        + struct.pack("<IIQQQQIIQQ", 11, 1, flags, 0, off_sec, len(sec), 0, 0, 1, 0)
+    return (eh + shstr + sec).ljust(off_sh, b"\0") + sh
 
 def selftest_out():
     import tempfile
@@ -1141,6 +1240,15 @@ def selftest_out():
         ("S3 ip-10-0-1-23.EC2.Internal (case-insensitive)", mut("BUILDINFO", R(b"host=ip-10-0-1-23.EC2.Internal")), False, "FAIL S3-buildhost"),
         ("S3 a symlink target naming compute.internal", mut("lib/hl", L("/nix/store/" + "8" * 32 + "-x/ip-1.compute.internal")), False, "FAIL S3-buildhost"),
         ("S4 host name dixi as a word", mut("etc/conf", R(b"built on dixi by gburd")), False, "FAIL S4-hostname"),
+        # compressed debug sections are scanned DECOMPRESSED, and their zlib bytes are not (wave6t: 'lixi' in a seed binutils .debug)
+        ("S4 a host name inside a zlib-compressed .debug_str (SHF_COMPRESSED)", mut("lib/debug/a.debug", R(mk_elf_zsec(b"src\0/home/x on dixi build\0"))), False, "FAIL S4-hostname"),
+        ("S4 a host name inside a GNU .zdebug_str", mut("lib/debug/b.debug", R(mk_elf_zsec(b"floki\0", zdebug=True))), False, "FAIL S4-hostname"),
+        ("S4 not hit: ' lixi ' in a compressed section's raw bytes, not its text", mut("lib/debug/c.debug", R(mk_elf_zsec(b"main.c\0", chdr_align=b" lixi \0\0"))), True, None),
+        ("S3 solnix-builder-build inside a compressed section", mut("lib/debug/d.debug", R(mk_elf_zsec(b"x\0solnix-builder-build\0"))), False, "FAIL S3-buildhost"),
+        ("B8 a non-drv-keyed build dir inside a compressed section", mut("lib/debug/e.debug", R(mk_elf_zsec(b"/var/tmp/srcpkg-0123abcd/s64/x.c\0"))), False, "FAIL B8-builddir"),
+        ("B13 /usr/gnu/ inside a compressed section", mut("lib/debug/f.debug", R(mk_elf_zsec(b"/usr/gnu/include/x.h\0"))), False, "FAIL B13-hostpath"),
+        ("compressed section with clean text: PASS", mut("lib/debug/g.debug", R(mk_elf_zsec(b"/build/src/main.c\0int\0"))), True, None),
+        ("B16 a compressed section that is not valid zlib: FAIL (never skipped)", mut("lib/debug/c.debug", R(mk_elf_zsec(b"x").replace(__import__("zlib").compress(b"x"), b"\x78\x9c" + b"\xff" * 7))), False, "FAIL B16-compressed"),
         ("S4 not hit: dixi inside a longer word (dixie)", mut("etc/conf2", R(b"dixieland floki_x lixir")), True, None),
         ("S4 case-sensitive: DIXI is not a host name", mut("etc/conf3", R(b"DIXI FLOKI")), True, None),
         # B15: config records (LOOPHOLES class 2: perl Configure recorded -L/usr/gnu/lib; served perl-5.42.0 fwpxqmsj)

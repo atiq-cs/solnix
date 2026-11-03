@@ -10,6 +10,7 @@
 , system ? "x86_64-solaris"
 , aarch64 ? false   # LP64-only aarch64 (aa64nix): lib/ not lib/amd64, the arm64-gate target flags
 , fetchSrc ? builtins.path { path = ../../src/ports/bsdfetch; name = "bsdfetch-src"; }
+, plain ? (d: d)    # aarch64 store-only set (aarch64/tools.nix): builder text -> store tools; identity = the old drv
 }:
 let
   # store tools only when given (NixOS stdenv); without them (aarch64) the text is byte-for-byte the old one, so its drv is unchanged.
@@ -19,7 +20,7 @@ let
     [ "\nexport PATH=${tools}/bin:${perl}/bin:${world}/bin:${world}/usr/bin\n"
       "\n[ -x ${perl}/bin/perl ] || { echo \"FATAL: no perl for the http self-test\" >&2; exit 1; }\nif command -v perl >/dev/null 2>&1; then\n" ] t;
 in
-derivation {
+derivation (plain {
   name = "bsdfetch-14-e48eb1c5";
   inherit system gate gccWrapper openssl fetchSrc;
   libcDir = "${libcSlice}/lib${if aarch64 then "" else "/amd64"}";
@@ -117,4 +118,4 @@ derivation {
     fi
     echo "bsdfetch: built, links clean, file:// round-trip ok, missing-file negative control ok" >&2
   '')) ];
-}
+})

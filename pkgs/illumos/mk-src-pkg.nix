@@ -43,6 +43,9 @@
 , defaultNativeTools ? [ ]   # the store tools a recipe gets when it names none (base-src.nix: coreutils findutils + the world;
                              # seedTools for the world's own closure). A recipe's nativeTools replaces this list.
                              # false = the x86 text byte-for-byte, so no x86 drv hash moves.
+, defaultTools ? [ ]         # aarch64 only: store tools every recipe gets after its nativeTools (NixOS stdenv's
+                             # initialPath). Non-empty => every recipe is store-only (a64h); [] = the stage0 seed text.
+, shell ? "/usr/bin/bash"    # a64h: the store bash that runs the builder (stage0's /usr/bin/bash is the devroot's, SEED-PLAN.md)
 }:
 
 { pname, version, src, build
@@ -61,6 +64,7 @@
 , nativeTools ? null         # NixOS nativeBuildInputs: store paths whose bin/ (and sbin/, usr/bin/) make up the WHOLE builder PATH
                              # after buildTools: no /usr/gnu, no host /usr/bin. null => defaultNativeTools (storeOnly) or the
                              # old OI PATH text (an exempt instance).
+, aclocalDirs ? [ ]          # a64h (aarch64): store aclocal dirs for the recipe's autoreconf (replace the stage0 box's /opt ones)
 , system ? "x86_64-solaris"
 }:
 
@@ -78,8 +82,8 @@ let
   # aarch64: rewrite the x86 builder text (lib/amd64 -> lib, -m$ABI -> the arm64-gate target
   # flags: illumos aarch64 ld has no TLSDESC relocs and shared links miss libgcc.a's outline
   # atomics, both measured on nix), plus the bootstrap box's autotools/config.guess quirks.
-  # shortcut: aclocal dirs name the stage0 box (/opt/nixboot, /opt/ooce), as x86 names the OI
-  # host's /usr/share/aclocal; upgrade when pkgconf/autoconf-archive are store build tools.
+  # aclocal dirs name the stage0 box (/opt/nixboot, /opt/ooce) in the seed text only; with defaultTools (a64h) a64hBuild swaps in
+  # the recipe's store aclocalDirs (pkgconf, libtool, autoconf-archive). x86 still names the OI host's /usr/share/aclocal.
   lp64Fix = t: if !aarch64 then t else builtins.replaceStrings
     [ ''case "$d" in */amd64|*/lib-64) [ "$1" = 64 ] && r="$r:$d";; *) [ "$1" = 32 ] && r="$r:$d";; esac''
       "lib/amd64" "$gccLib/amd64" " -m$ABI " "architecture=x86 abi=sysv" "gmake -j3 "
@@ -120,7 +124,7 @@ let
   # store-only PATH (nativeTools set): the old line is replaced in the builder text, so a recipe without nativeTools keeps its drv.
   # CC_FOR_BUILD: configure's build-machine compiler (flex's stage1 scanner, autosetup's bootstrap jimsh in neomutt/sqlite) is looked up as
   # bare gcc/cc, which only the OI host had on PATH: the same wrapper as CC (native build).
-  hermetic = a: if nativeTools' == [ ] then
+  hermeticX = a: if nativeTools' == [ ] then
     (if storeOnly then throw "mk-src-pkg ${pname}: storeOnly but no nativeTools (the PATH would be the host's)" else a)
     else a // { inherit ntPath;
     # the drv's own PATH attribute (the builder's starting environment) is the store-only one too, not the OI default below:
@@ -147,6 +151,34 @@ let
       printf '<?xml version="1.0"?><fontconfig><cachedir>%s</cachedir></fontconfig>\n' "$W/fcc" > "$W/fonts.conf"; export FONTCONFIG_FILE="$W/fonts.conf"'') ]
     # .la links too (libpng.la -> libpng16.la dangled once the files went: gate B6; recipes1 W5 WAVE6-NOTES 8)
     (if storeOnly then builtins.replaceStrings [ "find \"$out\" -name '*.la' -type f -delete" ] [ "find \"$out\" -name '*.la' \\( -type f -o -type l \\) -delete" ] x else x)) a.args; };
+  # aarch64 (main af5ac0e, a64h): its own store-only text (defaultTools, the stage0 box's patterns); x86: wave6's storeOnly above.
+  ntPathA = builtins.concatStringsSep ":" (builtins.concatMap (d: map (s: "${d}/${s}") [ "bin" "sbin" "usr/bin" "usr/sbin" ]) (ntA ++ defaultTools));
+  ntA = if nativeTools == null then [ ] else nativeTools;   # wave6's null default = main's [ ] on aarch64
+  # a64h: aarch64 with defaultTools. lp64Fix has already turned the x86 PATH line into the aarch64 one, so match that line too,
+  # and gate the result (./path-gate.sh, main's shared gate, run by the store bash: every entry under /nix/store). The x86 patterns are unchanged.
+  a64h = aarch64 && defaultTools != [ ];
+  aclocalPath = builtins.concatStringsSep ":" aclocalDirs;
+  a64hBuild = t: if !a64h then t else builtins.replaceStrings
+    [ "ACLOCAL_PATH=/opt/nixboot/share/aclocal:/opt/ooce/autoconf-archive/share/aclocal M4=/usr/bin/gm4 autoreconf -fi -I /opt/nixboot/share/aclocal -I /opt/ooce/autoconf-archive/share/aclocal"
+      "/usr/gnu/bin/" "/usr/bin/bash" ]
+    [ "ACLOCAL_PATH=${aclocalPath} M4=m4 autoreconf -fi" "" shell ] t;   # INSTALL/TAR=/usr/gnu/bin/x -> x from the store PATH
+  # store-only PATH (nativeTools set): the old line is replaced in the builder text, so a recipe without nativeTools keeps its drv.
+  # CC_FOR_BUILD: configure's build-machine compiler (flex's stage1 scanner, autosetup's bootstrap jimsh in neomutt/sqlite) is looked up as
+  # bare gcc/cc, which only the OI host had on PATH: the same wrapper as CC (native build).
+  hermeticA = a: if ntA == [ ] && defaultTools == [ ] then a else a // { ntPath = ntPathA;
+    # the drv's own PATH attribute (the builder's starting environment) is the store-only one too (gate2 A1: env PATH only /nix/store).
+    # Same expression as wave6's storeOnly (w6 0e61596), so the two converge; x86 recipes keep a.PATH, so no x86 drv moves.
+    PATH = if a64h then (if btPath == "" then ntPathA else "${btPath}:${ntPathA}") else a.PATH;
+    args = map (x: builtins.replaceStrings
+    ([ ''export PATH="''${btPath:+$btPath:}/usr/gnu/bin:/usr/bin:/usr/sbin"'' ''export CC="$W/cc$ABI" ABI LIBSUB'' ]
+     ++ (if a64h then [ ''export PATH="''${btPath:+$btPath:}/usr/gnu/bin:/usr/bin:/usr/sbin:/opt/ooce/bin:/opt/nixboot/bin"'' "/usr/bin/bash"
+                        ''sed "s@$_btd/@@g" "$f" > "$f.btfix" && mv "$f.btfix" "$f"'' ] else [ ]))
+    ([ ''export PATH="''${btPath:+$btPath:}$ntPath" CONFIG_SITE=${./config.site}''   # config.site: host-state probes pinned
+      ''export CC="$W/cc$ABI" CC_FOR_BUILD="$W/cc$ABI" ABI LIBSUB'' ]
+     ++ (if a64h then [ ''export PATH="''${btPath:+$btPath:}$ntPath" CONFIG_SITE=${./config.site} CONFIG_SHELL=${shell} SHELL=${shell}; ${shell} ${./path-gate.sh}'' shell
+                        ''sed "s@$_btd/@@g" "$f" > "$W/btfix" && cat "$W/btfix" > "$f"'' ] else [ ])) x) a.args;
+    builder = if a64h then shell else a.builder; };
+  hermetic = if aarch64 then hermeticA else hermeticX;
   drvAttrs' = hermetic drvAttrs;
   drvAttrs = {
   name = "${pname}-${version}";
@@ -155,7 +187,7 @@ let
   docOutputsArg = builtins.concatStringsSep " " docOutputs;
   inherit hostPathAllow;
 } // (if buildOnlyRefs == [ ] then { } else { buildOnlyRefsArg = builtins.concatStringsSep " " buildOnlyRefs; }) // {
-  build = lp64Fix build;
+  build = a64hBuild (lp64Fix build);
   # nativeTools => store-only PATH: buildTools' bins, then each tool's bin/sbin/usr/bin/usr/sbin. Only the attr is added when set.
   # the from-source gcc's runtime dir (lib = 32-bit, lib/amd64 = 64-bit); empty for a host compiler.
   gccLib = if builtins.isAttrs gcc then "${gcc.lib}/lib" else "";

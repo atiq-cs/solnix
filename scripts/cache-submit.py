@@ -29,14 +29,19 @@ deriver is not in this store, is planned DRV-GATE-FAIL and never submitted. This
 verification rebuild of a served row does not come through here.
 
 A builder id other than site-team (a host publishing its own build: dixi, dixa, lixi) also needs --stamps <dir>:
-the stamps scripts/pre-submit-check.sh writes on that host when an out passes every gate, drv-gate --closure included
-(<dir>/<NarHash nix32>.ok, holding the store path and its NarHash). A path without a stamp naming it and its NarHash is
+the stamps scripts/pre-submit-check.sh writes on that host when an out passes every gate, drv-gate --closure (or --leaf, for
+the first publish of a served row's out: the stamp's 5th column says which) included (<dir>/<NarHash nix32>.ok, holding the
+store path and its NarHash). A path without a stamp naming it and its NarHash is
 planned NO-STAMP and never submitted. The stamp is an interlock against skipping the checks, not a security
 boundary: anyone who can write the directory can write one.
 
 Signing: the OpenSSH ed25519 private key is converted in memory to PKCS#8 and
 handed to `openssl pkeyutl -rawin` through a 0600 temp file that is deleted
 after each signature. The key is never printed.
+
+Tier 1 (protocol v2 (b), infra 20261103-v2b-live): a submission ends `proposed` (or `approved`) until an operator reviews
+it: the poll returns that state (`result: proposed`), and `--status <id>` polls it again later. /begin at the 2 GiB
+proposal cap answers 429 + Retry-After: `result: backoff <secs>` (wait, never a failure).
 """
 import argparse, base64, hashlib, json, lzma, os, re, secrets, subprocess, sys, tempfile, time
 import urllib.error, urllib.request
@@ -49,6 +54,7 @@ TAG = "solnix-cache-submit-v1"
 NIX32 = "0123456789abcdfghijklmnpqrsvwxyz"
 STORE_RE = re.compile(r"^/nix/store/([0-9abcdfghijklmnpqrsvwxyz]{32})-[A-Za-z0-9+._?=-]{1,211}$")
 UA = "solnix-cache-submit/1"
+last_headers = {}  # the response headers of the last http() call (Retry-After on a 429)
 
 
 def die(msg):
@@ -138,8 +144,10 @@ def http(method, url, body=None, headers=None, timeout=120):
     req = urllib.request.Request(url, data=body, method=method, headers={"User-Agent": UA, **(headers or {})})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
+            last_headers.clear(); last_headers.update(r.headers.items())
             return r.status, r.read()
     except urllib.error.HTTPError as e:
+        last_headers.clear(); last_headers.update(e.headers.items())
         return e.code, e.read()
 
 
@@ -313,6 +321,9 @@ def submit_one(a, seed, sp, f):
     body = begin_body(sp, f)
     code, resp = signed("POST", "/api/v1/cache/submit/begin", a.builder, seed, body)
     print(f"  begin: HTTP {code} {resp[:300].decode(errors='replace') if code != 200 else ''}")
+    if code == 429:  # tier 1 over the proposal cap: back off, not a failure
+        ra = last_headers.get("Retry-After", "900")
+        return f"backoff {ra if ra.isdigit() else 900}"
     if code != 200:
         return "begin-failed"
     b = json.loads(resp)
@@ -331,18 +342,25 @@ def submit_one(a, seed, sp, f):
     print(f"  finalize: HTTP {code} {resp[:300].decode(errors='replace')}")
     if code != 200:
         return "finalize-failed"
+    return poll_status(a, seed, sid, "finalized")
+
+
+def poll_status(a, seed, sid, unknown="unknown"):
+    """Poll the signed status of submission sid for up to a.poll s: promoted | rejected | proposed | approved (tier 1:
+    waiting for /review) | <unknown> (status not answering) | <unknown>-timeout."""
     deadline = time.time() + a.poll
-    while time.time() < deadline:
+    while True:
         code, resp = signed("GET", f"/api/v1/cache/submit/status/{sid}", a.builder, seed)
         if code != 200:
             print(f"  status: HTTP {code} {resp[:200].decode(errors='replace')} (endpoint not live?)")
-            return "finalized"
+            return unknown
         st = json.loads(resp)
         print(f"  status: {st.get('state')} {st.get('reason') or ''}")
-        if st.get("state") in ("promoted", "rejected"):
+        if st.get("state") in ("promoted", "rejected", "proposed", "approved"):
             return st["state"]
+        if time.time() >= deadline:
+            return unknown + "-timeout"
         time.sleep(15)
-    return "finalized-timeout"
 
 
 def probe_auth(a, seed):
@@ -356,7 +374,7 @@ def probe_auth(a, seed):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--cache-dir", required=True, help="local file:// binary cache holding the NARs")
+    ap.add_argument("--cache-dir", help="local file:// binary cache holding the NARs (required but with --status)")
     ap.add_argument("--paths", help="file of store paths to consider (default: every narinfo in --cache-dir)")
     ap.add_argument("--pathinfo", help="`nix path-info --json` output from the build host, to cross-check")
     ap.add_argument("--key", help="OpenSSH ed25519 submit key (0600)")
@@ -369,6 +387,7 @@ def main():
     ap.add_argument("--with-refs", action="store_true",
                     help="also submit leaves that have (published) references, alone")
     ap.add_argument("--poll", type=int, default=600, help="seconds to poll status after finalize")
+    ap.add_argument("--status", metavar="ID", help="poll an earlier submission's status (for --poll s) and print `result: <state>`")
     ap.add_argument("--stamps", help="pre-submit-check.sh stamp dir (required with --submit for any builder but site-team)")
     a = ap.parse_args()
 
@@ -384,6 +403,13 @@ def main():
         die(f"--submit as builder {a.builder} needs --stamps: run scripts/pre-submit-check.sh on the build host first")
     if a.probe_auth:
         probe_auth(a, seed)
+    if a.status:
+        if not seed:
+            die("--status needs --key")
+        print(f"STATUS {a.status}\n  result: {poll_status(a, seed, a.status)}")
+        return
+    if not a.cache_dir:
+        die("--cache-dir is required")
 
     objs = load_local(a.cache_dir)
     if a.paths:

@@ -12,6 +12,9 @@
 #    is built at the commit that added it (one pin for the file fails one batch: negative control); rows[].commit first;
 #    pname-with-dashes -> camelCase attr; a GC between fetch and --rebuild; a full disk is not memo'd.
 # 6. fleet2: a job's candidates (head, then each out's origin commit, newest first): the first that builds from served inputs wins.
+# 7. fleet3: first publish (BUILDER_PUBLISH) of a served row's unserved out with the host's key, against a fixture cache and a
+#    submitter hook running the real cache-submit.py planner; the tier-1 states (proposed, 429), and the negative controls.
+#    OLD_BUILDER=<origin/main's solnix-builder.sh>: it must never submit (else that control is SKIPped, not passed).
 S=${1:-$(dirname "$0")/../modules/config/community/solnix-builder.sh}
 W=$(mktemp -d /tmp/bld.XXXXXX); trap 'find "$W" -depth -delete' EXIT
 bad=0; ok() { print "ok: $1"; }; no() { print "FAIL: $1"; bad=1; }
@@ -345,11 +348,180 @@ has "tw: candidate ${RN:0:12} .*qb-tw-N-" && has 'tw: rebuilt .*qb-tw-N-.* ident
 has "tv: candidate ${RO:0:12} .*qb-tv-O-.*skipped: the dry run would build 1 .*\[${RN:0:12}\]" && has 'tv: rebuilt .*qb-tv-O-.* identical' && [[ $(nc tv) == 1 ]] && done6 "$VO" &&
   ok "the newest candidate needs an unserved input: the older one is rebuilt, the skip logged" || no "tv: $(print -r -- "$out" | grep ' tv')"
 has 'th: candidate head .*qb-th-O-' && [[ $(nc th) == 1 ]] && done6 "$HO" && ok "head is the first candidate (it evaluates O's served out; N's is never tried)" || no "th: $(print -r -- "$out" | grep ' th')"
+cm6() { print -r -- "$c" | grep '/complete' | grep "\"store_path\":\"$1\"" | grep -q "\"commit\":\"$2\""; }
+cm6 "$TN" "$RN" && cm6 "$HO" "$(git -C "$R2" rev-parse main)" && ok "completions carry commit: the candidate's evaluated rev (tw: $RN; th: head's)" || no "commit: $(print -r -- "$c" | grep complete)"
 has "decline tb: the dry run would build 1 .*\[${RN:0:12}\]; the dry run would build 1 .*\[${RO:0:12}\]" && [[ $(nc tb) == 0 ]] &&
   ! ls "$W/st6/tried" 2> /dev/null | egrep -q 'qb-(tb|tw-O|tv-N)-' && ok "NEG every candidate needs an unserved input: declined with each reason, no claim, no candidate memo'd" ||
   no "tb: $(print -r -- "$out" | grep ' tb') $(ls "$W/st6/tried" 2>&1)"
 has 'tg: rebuilt .*qb-tg-N-.* identical' && [[ $(nc tg) == 1 ]] && ! grep -q 00000000000000000000000000000000 "$W/st6/eval/$RN.x86_64-solaris.tg" &&
   ok "an eval cache hit whose .drv was GC'd is re-evaluated, not declined 'cannot root' (dixi nss, solnix-cputemp 2026-11-02)" || no "tg: $(print -r -- "$out" | grep ' tg')"
+# --- 7. fleet3: first publish of a served row's unserved out with this host's own key (BUILDER_PUBLISH). The fixture cache
+# is a python http.server over a file:// cache signed with a test key (it stands in for cache.solnix.io + 8UNr); the
+# submitter hook runs the REAL cache-submit.py planner pointed at that cache (stage, pathinfo, stamp, drv-gate --leaf, refs),
+# then answers as the server would, by name: promoted (it publishes + signs), proposed, rejected, 429, a forged signature.
+# pre-submit-check.sh --leaf runs for real (GATE_CACHE = the fixture cache). Nothing here talks to builders.solnix.io.
+GP=${GATE_PYTHON:-/nix/store/nwmx779ahmnyl692n6ibdlhifwaa8dwm-python3-3.13.9/bin/python3}
+GG=${GATE_GREP_DIR:-/nix/store/hd2f25vypgb47i0p88m2k5v38c4j4bxw-gnugrep-3.11/bin}
+OS=${OPENSSL_BIN:-/nix/store/gppisr3kxnrnnw73vw1pi49b9m2x8w7z-openssl-3.4.0/bin}
+for x in "${GP%/bin/*}" "${GG%/bin}" "${OS%/bin}"; do [[ -e $x ]] || nix-store -r "$x" > /dev/null 2>&1; done
+G=$(cd "$(dirname "$0")/.." && pwd); mkdir -p "$W/gates/scripts" "$W/gates/pkgs/illumos" "$W/hc" "$W/fkst" "$W/vp"
+for f in cache-submit.py pre-submit-check.sh drv-gate.sh publish-gate.sh gate-checks.py not-for-cache.tsv gate2-exemptions.tsv; do cp "$G/scripts/$f" "$W/gates/scripts/"; done
+cp "$G/pkgs/illumos/bootstrap-exempt.tsv" "$W/gates/pkgs/illumos/"
+nix key generate-secret --key-name qb-test-1 > "$W/sk"; nix key convert-secret-to-public < "$W/sk" > "$W/pk"
+nix key generate-secret --key-name qb-test-1 > "$W/sk2"	# the same key name, another key: a forged signature
+ssh-keygen -q -t ed25519 -N '' -C qb-host -f "$W/hostkey" < /dev/null	# the host's builder key (0600)
+print 'StoreDir: /nix/store' > "$W/hc/nix-cache-info"
+PORT=$(( 20000 + RANDOM % 20000 )); HC=http://127.0.0.1:$PORT
+"$GP" -m http.server --bind 127.0.0.1 "$PORT" --directory "$W/hc" > "$W/http.log" 2>&1 & HP=$!
+trap 'kill $HP 2> /dev/null; find "$W" -depth -delete' EXIT
+i=0; while (( (i += 1) < 30 )) && ! curl -sf -o /dev/null "$HC/nix-cache-info"; do sleep 1; done
+# the fixture planner: cache-submit.py with the fixture cache, recipes and key in place of cache.solnix.io's (never --submit)
+sed -e "s|^CACHE = .*|CACHE = \"$HC\"|" -e "s|^RECIPES = .*|RECIPES = \"$W/p.tsv\"|" -e "s|^KEY8UNR = .*|KEY8UNR = \"$(<"$W/pk")\"|" \
+  -e 's|^API = .*|API = "http://127.0.0.1:9"|' "$W/gates/scripts/cache-submit.py" > "$W/gates/scripts/cs-fixture.py"
+# a store copy that fails nix-store --verify-path (pubcorrupt): a wrapper, since a real one would need root to damage
+{ print '#!/bin/sh'; print 'case "$1 $2" in "--verify-path "*pubcorrupt*) echo "path $2 was modified! expected hash sha256:0, got sha256:1" >&2; exit 1;; esac'
+  print "exec $(whence -p nix-store) \"\$@\""; } > "$W/vp/nix-store"; chmod +x "$W/vp/nix-store"
+mkdir -p "$W/pflake"; cat > "$W/pflake/flake.nix" <<PF
+{ outputs = { self }: let
+    mk = name: script: derivation { inherit name; system = "x86_64-solaris"; builder = "/usr/bin/bash"; args = [ "-c" script ]; };
+    t = n: mk "qb-\${n}-${W##*/}" "echo building \${n}; echo \${n}-${W##*/} > \$out";
+    dep = t "pubdep";
+  in { packages.x86_64-solaris = {
+    pubok = t "pubok"; pubok2 = t "pubok2"; pubok3 = t "pubok3"; pubprop = t "pubprop"; pubrej = t "pubrej"; pub429 = t "pub429";
+    pubforge = t "pubforge"; pubcorrupt = t "pubcorrupt"; pubx = t "pubx"; pubmut = t "pubmut"; pubdep = dep;
+    pubneeds = mk "qb-pubneeds-${W##*/}" "echo building; echo \${dep} > \$out";
+    pubflaky = mk "qb-pubflaky-${W##*/}" "echo building; echo \$RANDOM\$\$ > \$out";
+    # the pre-wave6 legacy env PATH without the builder's PATH= first statement: drv-gate --leaf FAILs A1 (no ALLOW)
+    pubgate = derivation { name = "qb-pubgate-${W##*/}"; system = "x86_64-solaris"; builder = "/usr/bin/bash";
+      PATH = "/usr/gnu/bin:/usr/bin:/usr/sbin"; args = [ "-c" "echo building; echo g > \$out" ]; };
+  }; }; }
+PF
+# the submitter hook (python: argument lists): the REAL planner (cs-fixture.py, dry), then the server's answer by out name
+{ print "#!$GP"; cat <<'PY'
+import os, sys, subprocess, shutil, tempfile
+W, a = os.environ["FKW"], sys.argv[1:]
+opt = lambda n: a[a.index(n) + 1] if n in a else None
+b, sid, sub = opt("--builder"), opt("--status"), "--submit" in a
+paths = open(opt("--paths")).read().split() if opt("--paths") else []
+log = open(W + "/fk/sublog", "a")
+log.write(f"CALL builder={b} key={opt('--key')} submit={int(sub)} status={sid} paths={' '.join(paths)}\n"); log.flush()
+def promote(stage, p, key):
+    h = os.path.basename(p)[:32]; os.makedirs(W + "/hc/nar", exist_ok=True)
+    ni = open(f"{stage}/{h}.narinfo").read(); url = [l[5:] for l in ni.splitlines() if l.startswith("URL: ")][0]
+    shutil.copy(f"{stage}/{url}", f"{W}/hc/{url}"); open(f"{W}/hc/{h}.narinfo", "w").write(ni)
+    env = dict(os.environ, XDG_CACHE_HOME=tempfile.mkdtemp(dir=W + "/fkst"))
+    subprocess.run(["nix", "store", "sign", "--store", "file://" + W + "/hc", "--key-file", key, p], env=env, check=True, capture_output=True)
+if sid:
+    f = f"{W}/fkst/{sid}"; st, p = open(f).read().split()
+    if st == "proposed" and os.path.exists(W + "/fk/approve"):
+        promote(f + ".stage", p, W + "/sk"); st = "promoted"; open(f, "w").write(f"{st} {p}\n")
+    print(f"STATUS {sid}\n  status: {st}\n  result: {st}"); sys.exit(0)
+r = subprocess.run([os.environ["FKGP"], W + "/gates/scripts/cs-fixture.py"] + [x for x in a if x != "--submit"], capture_output=True, text=True)
+print(r.stdout + r.stderr, end="")
+p = paths[0] if paths else ""
+if not sub or not any(l.split()[:2] == ["READY", p] for l in r.stdout.splitlines()):
+    sys.exit(0)
+log.write(f"BEGIN {p} builder={b}\n"); log.flush()
+n = os.path.basename(p)[33:].split("-")[1]; sid = "sid-" + n; stage = opt("--cache-dir")
+if n == "pub429":
+    print('  begin: HTTP 429 {"error":"proposal backlog","proposed_bytes":2202009600,"cap":2147483648}\n  result: backoff 900'); sys.exit(0)
+print(f"  submission {sid} staging http://staging.invalid")
+if n == "pubrej":
+    print("  status: rejected content gate REJECTED: FAIL build-host: /x: contains 'ip-10-0-1-23.ec2.internal'\n  result: rejected"); sys.exit(0)
+if n == "pubprop":
+    shutil.copytree(stage, f"{W}/fkst/{sid}.stage"); open(f"{W}/fkst/{sid}", "w").write(f"proposed {p}\n")
+    print("  status: proposed\n  result: proposed"); sys.exit(0)
+promote(stage, p, W + ("/sk2" if n == "pubforge" else "/sk"))  # pubforge: signed by another key under the same name
+print("  status: promoted\n  result: promoted")
+PY
+} > "$W/fk/submit"; chmod +x "$W/fk/submit"
+PF=path:$W/pflake; po7() { jq -r --arg a "$1" '.[$a]' "$W/pouts.json"; }
+nix eval --json "$PF#packages.x86_64-solaris" --apply 'builtins.mapAttrs (n: d: d.outPath)' > "$W/pouts.json" 2> "$W/peval.err" &&
+  nix build --no-link "$PF#packages.x86_64-solaris.pubdep" >> "$W/fixture.log" 2>&1 || { no "fixture 7: $(tail -3 "$W/peval.err" "$W/fixture.log")"; }
+P7="pubok pubok2 pubok3 pubprop pubrej pub429 pubforge pubcorrupt pubneeds pubflaky pubgate pubdep pubmut"
+{ print -r -- "$H"; for a in $P7; do rec $a 1 y "$(po7 $a)"; done; } > "$W/p.tsv"	# pubx: no row (an unrowed out)
+mkdir -p "$W/hc/registry"; cp "$W/p.tsv" "$W/hc/registry/recipes.tsv"	# pre-submit-check.sh reads $GATE_CACHE/registry/recipes.tsv
+r7() { typeset s= a; for a; do s="$s${s:+,}$(row $a 1 outdated)"; done; print "{\"rows\":[$s]}"; }
+# tk7 [VAR=value...]: one tick, publish on, against the fake queue, the fixture cache (http) and the fixture key
+tk7() { : > "$W/fk/log"; : > "$W/fk/sublog"; out=$(env BUILDER_PATH="$W/vp:$W/fk:$PATH" FKREAL=$RC FKLOG=$W/fk/log FKROWS=$W/p7.json FKW=$W FKGP=$GP \
+  BUILDER_API=http://queue.invalid/q BUILDER_RECIPES=$HC/registry/recipes.tsv BUILDER_CACHE=$HC BUILDER_CACHE_KEY="$(<"$W/pk")" BUILDER_FLAKE=$PF BUILDER_LOAD_MAX=1000 \
+  BUILDER_PUBLISH=1 BUILDER_PUBLISH_KEY=$W/hostkey BUILDER_AGENT=qbhost BUILDER_GATES=$W/gates BUILDER_PYTHON=$GP BUILDER_SUBMIT=$W/fk/submit \
+  GATE_PYTHON=$GP GATE_GREP_DIR=$GG GATE_CACHE=$HC GATE_RECIPES= BUILDER_VERIFY_WAIT=1 BUILDER_PUBLISH_POLL=5 BUILDER_STATE=$W/st7 "$@" ksh93 "$S" once 2>&1)
+  c=$(<"$W/fk/log"); sl=$(<"$W/fk/sublog"); }
+begun() { print -r -- "$sl" | grep -c "^BEGIN .*qb-$1-"; }
+PATH=$OS:$PATH; export PATH
+# serial (BUILDER_JOBS 1), pub429 last: its back-off stops every LATER new submission (tick C checks that)
+r7 pubok pubok2 pubprop pubrej pubforge pubcorrupt pubneeds pubflaky pubgate pub429 > "$W/p7.json"
+print x > "$W/bearer"; tk7; print -r -- "$out" | sed 's/^/   7 /'; print -r -- "$sl" | sed 's/^/   s /'
+sv7() { curl -sf "$HC/$(print -r -- "${1#/nix/store/}" | cut -c1-32).narinfo" | nawk '/^NarHash:/ {print $2}'; }
+cl7() { print -r -- "$c" | grep '/claim ' | grep -c "\"pnames\":\[\"$1\"\]"; }
+for a in pubok pubok2; do
+  [[ $(begun $a) == 1 ]] && has "$a: published .*qb-$a-.*an 8UNr-only client verified it" && [[ $(cl7 $a) == 1 && -n $(sv7 "$(po7 $a)") ]] &&
+    print -r -- "$c" | grep '/complete' | grep -q "\"status\":\"done\",\"version\":\"1\",\"nar_hash\":\"$(sv7 "$(po7 $a)")\",\"store_path\":\"$(po7 $a)\"" &&
+    ok "$a: a served row's unserved out: built, pre-submit --leaf, submitted once, promoted, client-verified, claimed + completed done" || no "$a: $(print -r -- "$out" | grep " $a")"
+done
+print -r -- "$sl" | grep '^CALL' | grep -v "builder=qbhost key=$W/hostkey " | grep -q . && no "a submission without the host's own id and key" ||
+  ok "every submission carries the host's builder id and key (never site-team)"
+print -r -- "$c" | grep '/complete' | grep -q '"commit"' && no "commit sent for a path: flake (no git rev)" || ok "no commit in the body when the evaluated flake has no git rev"
+[[ $(begun pubprop) == 1 && -s $W/st7/pub/$(basename "$(po7 pubprop)") && $(cl7 pubprop) == 0 ]] && has 'pubprop: .* is proposed .*waiting for review' &&
+  ok "tier 1: proposed -> waits (marker kept), no claim, not a failure" || no "pubprop: $(print -r -- "$out" | grep pubprop)"
+m7() { ls "$W/st7/tried/" 2> /dev/null | grep -c "qb-$1-.*\.drv\^out\.pub$"; }
+[[ $(begun pubrej) == 1 && $(m7 pubrej) == 1 && $(cl7 pubrej) == 0 ]] && has 'decline pubrej: rejected \(sid-pubrej\)' &&
+  ok "rejected: memo'd with the reason, no claim" || no "pubrej: $(print -r -- "$out" | grep pubrej)"
+[[ $(begun pub429) == 1 && $(cl7 pub429) == 0 && -s $W/st7/pub/backoff && $(m7 pub429) == 0 ]] && (( $(<"$W/st7/pub/backoff") > $(printf '%(%s)T' now) + 800 )) &&
+  has 'pub429: /begin answered 429: backing off 900 s' && ok "429 + Retry-After: backs off 900 s, not memo'd, no claim" || no "pub429: $(print -r -- "$out" | grep pub429)"
+[[ $(begun pubforge) == 1 && $(cl7 pubforge) == 0 ]] && has 'decline .*qb-pubforge-.*: the client check failed' &&
+  ok "NEG promoted but signed by another key: the 8UNr-style client check fails, no claim" || no "pubforge: $(print -r -- "$out" | grep pubforge)"
+[[ $(print -r -- "$sl" | grep -c 'qb-pubflaky-') == 0 && $(m7 pubflaky) == 1 && $(cl7 pubflaky) == 0 ]] && has 'decline pubflaky: pre-submit-check.sh --leaf .* rc=1 \(check' &&
+  ok "NEG --check DIFFERS (nondeterministic): never submitted, memo'd" || no "pubflaky: $(print -r -- "$out" | grep pubflaky)"
+[[ $(print -r -- "$sl" | grep -c 'qb-pubgate-') == 0 && $(m7 pubgate) == 1 ]] && has 'decline pubgate: pre-submit-check.sh --leaf .* rc=1 \(drv' &&
+  grep -q 'FAIL A1-path' "$W/st7/tried/"*qb-pubgate-*.presubmit && ok "NEG drv-gate --leaf FAILs (host env PATH): never submitted" || no "pubgate: $(print -r -- "$out" | grep pubgate)"
+[[ $(print -r -- "$sl" | grep -c 'qb-pubcorrupt-') == 0 && $(m7 pubcorrupt) == 1 ]] && has 'decline pubcorrupt: nix-store --verify-path .* failed' &&
+  ok "NEG this store's copy fails --verify-path: never submitted" || no "pubcorrupt: $(print -r -- "$out" | grep pubcorrupt)"
+[[ $(print -r -- "$sl" | grep -c 'qb-pubneeds-') == 0 && $(m7 pubneeds) == 0 && $(cl7 pubneeds) == 0 ]] && has "pubneeds: .* waits for its references to be served first: .*qb-pubdep-" &&
+  ok "NEG deps first: a reference not served -> waits, not submitted, not memo'd" || no "pubneeds: $(print -r -- "$out" | grep pubneeds)"
+# tick B: the dep is served now (published from elsewhere), the proposal approved: pubneeds publishes, pubprop is polled (not
+# resubmitted) and claimed; a published out is not rebuilt or submitted again (its rebuild memo is ok); refused ones stay refused
+mkdir -p "$W/hc/nar"; nix copy --to "file://$W/hc" "$(po7 pubdep)" >> "$W/fixture.log" 2>&1 &&
+  ( export XDG_CACHE_HOME=$W/fkst/x; nix store sign --store "file://$W/hc" --key-file "$W/sk" "$(po7 pubdep)" ) >> "$W/fixture.log" 2>&1
+# (tick A's 429 back-off is parked for this tick, so new submissions may start; tick C puts it back and checks it)
+mv "$W/st7/pub/backoff" "$W/backoff.A"; : > "$W/fk/approve"; r7 pubok pubprop pubrej pubneeds pubflaky > "$W/p7.json"; tk7; print -r -- "$out" | sed 's/^/   B /'
+mv "$W/backoff.A" "$W/st7/pub/backoff"
+[[ $(begun pubneeds) == 1 && $(cl7 pubneeds) == 1 ]] && has 'pubneeds: published' && ok "deps first: once its reference is served, the next tick publishes it" || no "pubneeds B: $(print -r -- "$out" | grep pubneeds)"
+[[ $(begun pubprop) == 0 && $(print -r -- "$sl" | grep -c 'status=sid-pubprop') == 1 && $(cl7 pubprop) == 1 && ! -e $W/st7/pub/$(basename "$(po7 pubprop)") ]] &&
+  has 'pubprop: published .*sid-pubprop' && ok "an approved proposal: polled by id on the next tick (never resubmitted), then verified and claimed" || no "pubprop B: $(print -r -- "$out" | grep pubprop) $sl"
+[[ $(print -r -- "$sl" | grep -c 'qb-pubok-') == 0 && $(cl7 pubok) == 1 ]] && has 'pubok: rebuilt and matched on an earlier tick' &&
+  ok "published on an earlier tick: now served, so the verification path claims it again without a third build or a submission" || no "pubok B: $(print -r -- "$out" | grep ' pubok')"
+[[ $(print -r -- "$sl" | grep -c 'qb-pub\(rej\|flaky\)-') == 0 ]] && has 'decline pubrej: .*first publish was refused here: rejected' &&
+  ok "refused outs (rejected, --check differs) are not built or submitted again" || no "refused B: $(print -r -- "$out" | grep -E 'pubrej|pubflaky')"
+# tick C: inside the 429 back-off no new submission starts; after it (backoff file in the past) pub429 is submitted again
+r7 pubok3 pub429 > "$W/p7.json"; tk7
+[[ $(print -r -- "$sl" | grep -c BEGIN) == 0 ]] && has 'new submissions back off for' && ok "inside the Retry-After window: no /begin at all" || no "429 window: $out"
+print 1 > "$W/st7/pub/backoff"; tk7
+[[ $(begun pub429) == 1 && $(begun pubok3) == 1 ]] && has 'pubok3: published' && ok "after the back-off: submissions resume (pub429 again: 429, pubok3 published)" || no "429 after: $(print -r -- "$out" | grep -E 'pub429|pubok3')"
+# NEG controls on fresh outs (pubmut: a served row, unserved, clean): none of these may reach /begin
+r7 pubmut > "$W/p7.json"
+tk7 BUILDER_PUBLISH_ID=site-team BUILDER_STATE=$W/st7s
+[[ -z $sl && $(cl7 pubmut) == 0 ]] && has 'decline pubmut: .* is not served' && ok "NEG builder id site-team: never submits from a host" || no "site-team: $out $sl"
+tk7 BUILDER_PUBLISH=0 BUILDER_STATE=$W/st7z
+[[ -z $sl && $(cl7 pubmut) == 0 ]] && has 'decline pubmut: .* is not served \(a first build' && ok "NEG BUILDER_PUBLISH=0 (the default): declines as before, nothing submitted" || no "publish 0: $out $sl"
+tk7 BUILDER_PUBLISH_KEY=$W/nokey BUILDER_STATE=$W/st7k
+[[ -z $sl ]] && has 'decline pubmut: .* is not served' && ok "NEG no readable host key: declines, nothing submitted" || no "no key: $out $sl"
+if [[ -n ${OLD_BUILDER:-} ]]; then S0=$S S=$OLD_BUILDER; tk7 BUILDER_STATE=$W/st7o; S=$S0
+  [[ -z $sl && $(cl7 pubmut) == 0 ]] && has 'decline pubmut: .* is not served' && ok "NEG origin/main's builder ($OLD_BUILDER) never submits, whatever BUILDER_PUBLISH says" || no "old builder: $out $sl"
+else print "SKIP origin/main negative control: OLD_BUILDER unset (not counted as a pass)"; fi
+# a mutant that skips pre-submit-check.sh: cache-submit.py's stamp interlock refuses it (NO-STAMP), no /begin
+sed 's|bash "$BUILDER_GATES/scripts/pre-submit-check.sh" --leaf "$2"|print -r -- "PASS $2 (mutant: no checks)"|' "$S" > "$W/mut.sh"; S0=$S S=$W/mut.sh; tk7 BUILDER_STATE=$W/st7m; S=$S0
+! cmp -s "$S" "$W/mut.sh" && [[ $(print -r -- "$sl" | grep -c BEGIN) == 0 && $(cl7 pubmut) == 0 ]] && has "pubmut: submission .*ended 'plan NO-STAMP'" &&
+  ok "NEG a builder that skips pre-submit-check: the planner says NO-STAMP, nothing begun" || no "mutant: $(print -r -- "$out" | grep pubmut) $sl"
+# BUILDER_PUBLISH=dry, no bearer: every gate and the real planner (READY), never /begin, never a claim
+rm -f "$W/bearer"; tk7 BUILDER_PUBLISH=dry BUILDER_STATE=$W/st7d
+[[ $(print -r -- "$sl" | grep -c BEGIN) == 0 && $(claims) == 0 ]] && print -r -- "$sl" | grep -q '^CALL .*submit=0' && has 'dry run: would submit .*qb-pubmut-' &&
+  grep -q "^READY  *$(po7 pubmut)" "$W/st7d/tried/"*qb-pubmut-*.submit && ok "BUILDER_PUBLISH=dry: built, gated, planned READY by cache-submit.py, never begun or claimed" || no "dry: $(print -r -- "$out" | grep pubmut)"
+# an out no served row names (pubx), proved by hand: refused before any build
+out=$(env BUILDER_PATH="$W/fk:$PATH" FKREAL=$RC BUILDER_RECIPES=$HC/registry/recipes.tsv BUILDER_CACHE=$HC BUILDER_FLAKE=$PF BUILDER_PUBLISH=dry BUILDER_PUBLISH_KEY=$W/hostkey \
+  BUILDER_GATES=$W/gates BUILDER_PYTHON=$GP BUILDER_SUBMIT=$W/fk/submit FKW=$W FKGP=$GP BUILDER_STATE=$W/st7x ksh93 "$S" ready pubx "$(po7 pubx)" 2>&1)
+has 'decline pubx: .* is not an out of the served recipes.tsv' && [[ ! -e $(po7 pubx) ]] && ok "NEG an out with no served row: never built or submitted" || no "pubx: $out"
 rm -f "$W/bearer"
 (( bad )) && print "RESULT: FAIL" || print "RESULT: PASS"
 exit $bad

@@ -20,6 +20,9 @@
 , sqliteShared ? null   # one sqlite per set, as NixOS (a64h2 did it on aarch64): the cli's 3.53.2 (readline); null = the recipe below
 , nixBuildTools ? [ ]   # nix's autoreconf/configure tools from the store: autotools, autoconf-archive (AX_BOOST_BASE), m4, bison,
                         # flex, patch, pkg-config (the OI host's /usr/bin and /usr/share/aclocal before; [ ] = that old text)
+, shared ? { }   # aarch64 (main af5ac0e): one sqlite from the caller (the set's 3.50.4); x86 wave6 uses sqliteShared
+, plain ? (d: d)   # aarch64 store-only set: the plain derivations' builder text -> store tools (../aarch64/tools.nix)
+, pinNixCurl ? false   # main 6dd8c10's x86 pin (nix on curl 8.10.1) until nix is store-only: wave6's is, so base-src.nix does not set it
 }:
 let # xz's configure, on solaris*, gives xzgrep/xzdiff/xzless/xzmore "#!/usr/xpg4/bin/sh" and a PATH=/usr/xpg4/bin prefix: host
     # paths in the out (wave6 out-host-refs, P0 run i). /bin/sh is POSIX ksh93 on illumos; NixOS adds no PATH prefix. The seed
@@ -54,7 +57,7 @@ rec {
   # libboost_context alone, for the runtime closure: the boost output above is
   # ~150 MB of headers nix needs only to compile. boost is built with
   # selfRunpath = false, so the copied library names no path inside boost.
-  boostContext = derivation {
+  boostContext = derivation (plain {
     name = "boost-context-1.86.0"; inherit system boost;
     builder = "/usr/bin/bash";
     # store-only (wave6, gate2 A1): coreutils (mkdir cp) + grep, from the store tools nix-src's recipes use
@@ -65,10 +68,10 @@ rec {
       mkdir -p $out/${libSub}; cp -P $boost/${libSub}/libboost_context.so* $out/${libSub}/
       if grep -rq "$boost" $out; then echo "FATAL: boost-context still names $boost" >&2; exit 1; fi
     '') ];
-  };
+  });
 
   # Mozilla CA bundle (curl.se's extract), for nix's ssl-cert-file.
-  cacert = derivation {
+  cacert = derivation (plain {
     name = "cacert-2024-09-24"; inherit system;
     pem = import <nix/fetchurl.nix> { url = "https://curl.se/ca/cacert-2024-09-24.pem";
             sha256 = "189d3cf6d103185fba06d76c1af915263c6d42225481a1759e853b33ac857540"; };
@@ -79,9 +82,9 @@ rec {
       # trailing true: bash -c execs its last command, and a store coreutils one (cp) as the builder is killed by signal 9 (a64h step43:
       # 6/6 on dixa; W6B-step68 and wave6t W2 here, which were this, not a killed client)
       else "/usr/bin/bash ${./path-gate.sh} && mkdir -p $out/etc/ssl/certs && cp $pem $out/etc/ssl/certs/ca-bundle.crt && true") ];
-  };
+  });
 
-  sqlite = if sqliteShared != null then sqliteShared else mkSrcPkg {
+  sqlite = if sqliteShared != null then sqliteShared else shared.sqlite or (mkSrcPkg {
     pname = "sqlite"; version = "3.53.2";   # queue target (CVE feed fixed_in: CVE-2026-11824); 3.46.1 had 5 High/Critical
     # sha3-256 of sqlite3.c = 44fd61b9... = the 3.53.2 release log's
     src = { url = "https://www.sqlite.org/2026/sqlite-autoconf-3530200.tar.gz";
@@ -90,7 +93,7 @@ rec {
       ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-readline --disable-editline
       gmake -j4; gmake install
     '';
-  };
+  });
 
   xz = mkSrcPkg {
     pname = "xz"; version = "5.8.1";   # queue target (CVE-2025-31115 fixed_in); .sig: Lasse Collin 3690C240CE51B467
@@ -111,6 +114,28 @@ rec {
     build = ''
       ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-ssp
       gmake -j4; gmake install
+    '';
+  };
+
+  # shortcut (x86 only, pinNixCurl): nix links curl, and nix's x86 recipe is still host-PATH (patch, /usr/share/aclocal), so a nix on curl 8.23.0
+  # (q8nfp905) can be built only on an OI host and no host has it: every system toplevel after 4784cde failed to build on dixi
+  # and lixi. nix keeps linking the served 8.10.1 (nix 9ay73nan, served and reproducible) until wave6 makes nix store-only;
+  # then nix takes `curl` below again. The 8.23.0 CLI and library (packages.<system>.curl, git) are unchanged.
+  curlForNix = mkSrcPkg {
+    pname = "curl"; version = "8.10.1";
+    src = { url = "https://curl.se/download/curl-8.10.1.tar.xz";
+            sha256 = "73a4b0e99596a09fa5924a4fb7e4b995a85fda0d18a2c02ab9cf134bebce04ee"; };
+    deps = [ zlib openssl ];
+    build = ''
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static \
+        --with-openssl=${openssl} --with-zlib=${zlib} --without-libpsl --without-brotli \
+        --without-zstd --without-libidn2 --without-nghttp2 --without-libssh2 --disable-ldap \
+        --with-ca-bundle=${cacert}/etc/ssl/certs/ca-bundle.crt --without-ca-path
+      gmake -j4; gmake install
+      # curl --version's CA line comes from the compiled default; a wrong one
+      # reads as "network is NOT up" (rc 77) on a root with no /etc/ssl bundle.
+      grep -q '#define CURL_CA_BUNDLE "${cacert}/etc/ssl/certs/ca-bundle.crt"' lib/curl_config.h \
+        || { echo "FATAL: curl CA bundle default is not the store cacert" >&2; exit 1; }
     '';
   };
 
@@ -261,7 +286,7 @@ rec {
     pname = "nix"; version = "2.24.15";
     src = { url = "https://github.com/NixOS/nix/archive/refs/tags/2.24.15.tar.gz";
             sha256 = "e395732ec576b7f65359c80bc5a23335ad2a8c382f4f14c370bbc236708d4749"; };
-    deps = [ boostContext sqlite curl openssl libsodium libarchive brotli editline libgit2 zlib xz ];
+    deps = [ boostContext sqlite (if pinNixCurl then curlForNix else curl) openssl libsodium libarchive brotli editline libgit2 zlib xz ];
     linkDeps = [ boost nlohmann_json toml11 ];
     build = ''
       for p in ${./nix-illumos-patches/224}/0*.patch; do patch -p1 < "$p" >&2; done
