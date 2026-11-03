@@ -17,6 +17,7 @@
 , cmake ? null      # store cmake for brotli/nlohmann_json/libgit2 (the OI host had /usr/bin/cmake); null on the seed/aarch64
 , perl ? null      # the store perl (cli), for curl's man pages (main 4784cde); null on the seed/aarch64
 , bzip2Bin ? null   # bzip2 CLI for boost's .tar.bz2 (GNU tar runs bzip2 from PATH; the OI host had /usr/bin/bzip2)
+, sqliteShared ? null   # one sqlite per set, as NixOS (a64h2 did it on aarch64): the cli's 3.53.2 (readline); null = the recipe below
 , nixBuildTools ? [ ]   # nix's autoreconf/configure tools from the store: autotools, autoconf-archive (AX_BOOST_BASE), m4, bison,
                         # flex, patch, pkg-config (the OI host's /usr/bin and /usr/share/aclocal before; [ ] = that old text)
 }:
@@ -78,7 +79,7 @@ rec {
       else "/usr/bin/bash ${./path-gate.sh} && mkdir -p $out/etc/ssl/certs && cp $pem $out/etc/ssl/certs/ca-bundle.crt") ];
   };
 
-  sqlite = mkSrcPkg {
+  sqlite = if sqliteShared != null then sqliteShared else mkSrcPkg {
     pname = "sqlite"; version = "3.53.2";   # queue target (CVE feed fixed_in: CVE-2026-11824); 3.46.1 had 5 High/Critical
     # sha3-256 of sqlite3.c = 44fd61b9... = the 3.53.2 release log's
     src = { url = "https://www.sqlite.org/2026/sqlite-autoconf-3530200.tar.gz";
@@ -277,7 +278,10 @@ rec {
       # assert strings (measured: libnixutil.so named boost/format/*.hpp after
       # strip-debug), which pulls ~150 MB of boost headers into nix's runtime
       # closure. Map them away, as nixpkgs' remove-references-to does after the fact.
-      SYSI="$SYSI -fmacro-prefix-map=${boost}=/boost -fmacro-prefix-map=${nlohmann_json}=/nlohmann_json -fmacro-prefix-map=${toml11}=/toml11"
+      SYSI="$SYSI -fmacro-prefix-map=${boost}=/boost -fmacro-prefix-map=${nlohmann_json}=/nlohmann_json -fmacro-prefix-map=${toml11}=/toml11"${if nixBuildTools == [ ] then "" else ''
+
+      # and in DWARF too (wave6: nix gets a debug output; DW_AT_producer omits -I/-isystem, the line tables name the headers)
+      SYSI="$SYSI -fdebug-prefix-map=${boost}=/boost -fdebug-prefix-map=${nlohmann_json}=/nlohmann_json -fdebug-prefix-map=${toml11}=/toml11"''}
       export CXXFLAGS="-O2 $SYSI${nixCxxFlags}" CFLAGS="-O2"
       bash ./configure --prefix="$out" --sysconfdir=/etc --localstatedir=/nix/var \
         --with-store-dir=/nix/store --with-boost=${boost} --with-boost-libdir=${boost}/lib/amd64 \
@@ -290,15 +294,16 @@ rec {
       gmake install ERROR_SWITCH_ENUM= sysconfdir="$out/etc" >&2
       unset LD_LIBRARY_PATH LD_LIBRARY_PATH_64 || true
       "$out/bin/nix" --version >&2
+${if nixBuildTools == [ ] then ''
       # strip first (mk-src-pkg strips again later; idempotent): DWARF names the
       # headers too, and only what survives the strip is a real reference.
       find "$out" -type f | while read -r f; do
-        [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] && { chmod u+w "$f"; ${if nixBuildTools == [ ] then "/usr/bin/gstrip" else "gstrip"} --strip-debug "$f"; }
+        [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] && { chmod u+w "$f"; /usr/bin/gstrip --strip-debug "$f"; }
         true
       done
       for x in ${boost} ${nlohmann_json} ${toml11}; do
         if grep -rlq "$x" "$out"; then echo "FATAL: nix still references build-only $x" >&2; exit 1; fi
-      done
+      done'' else ""}   # wave6: no self-strip; mk-src-pkg splits the DWARF into $debug and guards buildOnlyRefs after it
     '';
-  } // withTools nixBuildTools);   # store-only (wave6): the autotools above; [ ] (seed / aarch64) keeps the old drv
+  } // withTools nixBuildTools // (if nixBuildTools == [ ] then { } else { buildOnlyRefs = [ boost nlohmann_json toml11 ]; }));   # store-only (wave6): the autotools above; [ ] (seed / aarch64) keeps the old drv
 }

@@ -137,9 +137,9 @@ rec {
       # positive test is gtk3-demo in lixi's COSMIC session). gtk3-demo --list needs a display (it activates first).
       printf '#include <gtk/gtk.h>\n#include <gdk/gdkwayland.h>\nint main(int c,char**v){g_print("%%u.%%u.%%u %%d\\n",gtk_get_major_version(),gtk_get_minor_version(),gtk_get_micro_version(),gtk_init_check(&c,&v));return 0;}\n' > "$TMPDIR/t.c"
       $CC "$TMPDIR/t.c" -o "$TMPDIR/t" -Wl,-R,"$out/lib/amd64" $(PKG_CONFIG_PATH="$out/lib/amd64/pkgconfig" pkg-config --cflags --libs gtk+-wayland-3.0)
-      env -i PATH="$PATH" CHARSET=UTF-8 XDG_RUNTIME_DIR="$TMPDIR" WAYLAND_DISPLAY=none "$TMPDIR/t" > "$TMPDIR/t.out" 2>&1
+      env -i PATH="$PATH" CHARSET=UTF-8 XDG_RUNTIME_DIR="$TMPDIR" WAYLAND_DISPLAY=none FONTCONFIG_FILE="$FONTCONFIG_FILE" "$TMPDIR/t" > "$TMPDIR/t.out" 2>&1
       grep -qx '3.24.52 0' "$TMPDIR/t.out" || { echo "FATAL: gtk_init_check without a display:" >&2; head -3 "$TMPDIR/t.out" >&2; exit 1; }
-      env -i PATH="$PATH" CHARSET=UTF-8 XDG_RUNTIME_DIR="$TMPDIR" WAYLAND_DISPLAY=none "$out/bin/gtk3-demo" > "$TMPDIR/nod.out" 2>&1 && \
+      env -i PATH="$PATH" CHARSET=UTF-8 XDG_RUNTIME_DIR="$TMPDIR" WAYLAND_DISPLAY=none FONTCONFIG_FILE="$FONTCONFIG_FILE" "$out/bin/gtk3-demo" > "$TMPDIR/nod.out" 2>&1 && \
         { echo "FATAL: gtk3-demo ran with no display" >&2; exit 1; }
       grep -q 'cannot open display' "$TMPDIR/nod.out" || { echo "FATAL: unexpected no-display error:" >&2; head -3 "$TMPDIR/nod.out" >&2; exit 1; }
     '';

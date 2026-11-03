@@ -39,7 +39,7 @@ let
   # cargo vendor NAR hashes (FODs). A new one: set it to lib.fakeHash, build, copy the "got:".
   vendorHashes = import ./cosmic-vendor-hashes.nix;
 in import ./cosmic-apps.nix { inherit src vendorOf cargoApp graphics vendorHashes openssl; }
-// import ./cosmic-data.nix { fetchurl = import <nix/fetchurl.nix>; inherit src; } // rec {
+// rec {
   cosmic-comp-src = import <nix/fetchurl.nix> {
     url = "https://codeload.github.com/pop-os/cosmic-comp/tar.gz/refs/tags/epoch-1.5.0";
     sha256 = "ebdc79bd667b6ee167fcf5c4a616f56db7c24adfabc11ab3c3e572c5b2a52421"; };

@@ -12,7 +12,9 @@ patch() {  # <dir> <skip>
     case "$i" in /bin/sh|/usr/bin/env|/nix/store/*) continue;; /*) ;; *) continue;; esac
     p=$(command -v "$(basename "$i")" 2>/dev/null) || continue
     case "$p" in /nix/store/*) ;; *) continue;; esac
-    s=0; for x in $SKIP; do case "$p" in "$x"/*) s=1;; esac; done; [ "$s" = 0 ] || continue
+    s=0; for x in $SKIP; do case "$p" in "$x"/*) s=1;; esac; done; [ "$s" = 0 ] || continue   # before resolving: btPath is the seed farm
+    # through a buildEnv farm's links to the package's own file (NixOS: HOST_PATH holds package bins, not a farm)
+    while [ -h "$p" ]; do t=$(readlink "$p" 2>/dev/null || ls -ld "$p" | sed 's/.* -> //'); case "$t" in /*) p=$t;; *) p=$(dirname "$p")/$t;; esac; done
     chmod u+w "$f"; { printf '#!%s%s\n' "$p" "${1:+ $*}"; tail -n +2 "$f"; } > "$f.psb" && cat "$f.psb" > "$f"; rm -f "$f.psb"
     echo "patch-shebangs: $f: #!$i -> $p" >&2
   done

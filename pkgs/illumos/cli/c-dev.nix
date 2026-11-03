@@ -38,6 +38,11 @@ rec {
       gmake -j16; gmake install
       ${scrub}
       find "$out" -type d -name '__pycache__' -prune -exec rm -r {} +   # timestamp pyc from install's failed compileall (wave3)
+      # nixpkgs python postInstall: the recorded build configuration must not name the build dir (served 3.13.9: abs_builddir, RUNSHARED
+      # = /var/tmp/srcpkg-...; recipes1 W5) -> /no-such-path
+      for f in "$out"/lib/python3.13/_sysconfigdata*.py "$out"/lib/python3.13/config-3.13*/Makefile; do
+        chmod u+w "$f"; LC_ALL=C sed -i -e "s|$W|/no-such-path|g" "$f"
+      done
       ln -sf python3 "$out/bin/python"
       export PYTHONDONTWRITEBYTECODE=1   # the checks below must not write bytecode into $out
       ${chk ''"$out/bin/python3" --version'' "^Python 3\\.13\\.18"}
@@ -46,6 +51,11 @@ rec {
       done
       ${chk ''"$out/bin/python3" -c "import ssl,sqlite3; print(ssl.OPENSSL_VERSION, sqlite3.sqlite_version)"'' "^OpenSSL 3\\.4\\.8 .* 3\\.53\\.2$"}
       [ -f "$out/share/man/man1/python3.13.1" ] || { echo "FATAL: no python3 man page" >&2; exit 1; }
+      # no host or build dir in the recorded configuration (recipes1 W5; gate2 B15)
+      "$out/bin/python3" -c '
+import re, sys, sysconfig
+bad = {k: v for k, v in sysconfig.get_config_vars().items() if isinstance(v, str) and re.search(r"/usr/gnu|/opt/|/usr/local/|/var/tmp/", v)}
+sys.exit("FATAL: sysconfig names a host or build dir: %r" % bad if bad else 0)'
       # deterministic bytecode: SOURCE_DATE_EPOCH is set, so compileall writes checked-hash pyc; -j1 = no multiprocessing
       unset PYTHONDONTWRITEBYTECODE
       "$out/bin/python3" -E -m compileall -q -f -j1 -o 0 -o 1 -o 2 -x 'bad_coding|badsyntax|site-packages|test' "$out/lib/python3.13" >/dev/null || true

@@ -39,7 +39,12 @@ in rec {
     pname = "libgpg-error"; version = "1.55";
     sha256 = "95b178148863f07d45df0cea67e880a79b9ef71f5d230baddc0071128516ef78";
     flags = "--disable-nls --disable-languages";
-    check = chk ''"$out/bin/gpg-error" --version'' "^gpg-error \\(libgpg-error\\) 1\\.55";
+    # configure.ac sets INSTALLSHELLPATH=/usr/xpg4/bin/sh on solaris* (no cache variable): gpgrt-config's #! (gate B9; a64h did the same
+    # on aarch64). On illumos /bin/sh is the same ksh93. The seed instance has no gnupg family.
+    check = chk ''"$out/bin/gpg-error" --version'' "^gpg-error \\(libgpg-error\\) 1\\.55" + ''
+      chmod u+w "$out/bin/gpgrt-config"; sed -i '1s|^#!/usr/xpg4/bin/sh$|#!/bin/sh|' "$out/bin/gpgrt-config"
+      head -1 "$out/bin/gpgrt-config" | grep -qx '#!/bin/sh' || { echo "FATAL: gpgrt-config #! is not /bin/sh" >&2; exit 1; }
+    '';
   };
   npth = lib {
     pname = "npth"; version = "1.8";

@@ -55,6 +55,20 @@ find "$W/go" -type f -exec "$python3/bin/python3" -c 'import os,sys
 for p in sys.argv[1:]:
     fd = os.open(p, os.O_RDONLY); os.fsync(fd); os.close(fd)' {} +
 cp -a "$W/go" "$out/share/go"
+if [ -n "$boot" ]; then   # the shipped GOROOT (src/ is the stdlib a user's `go build` compiles): no host path in it (gate2, wave6t)
+  # S2: every ELF under a testdata/ dir (line-clang-dwarf5.elf has PT_INTERP /lib64/ld-linux-x86-64.so.2; not only the NEEDED ones)
+  find "$out/share/go/src" -path '*/testdata/*' -type f | while read -r f; do
+    [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] && rm -f "$f"; true; done
+  # B13: x/sys's vendored mkerrors.sh (a maintainer generator, Linux/Solaris): `export PATH=/usr/gnu/bin:$PATH` on SunOS. Dropped
+  # (the store-only PATH already has the GNU tools by name, as on NixOS).
+  for f in $(find "$out/share/go/src" -name mkerrors.sh); do chmod u+w "$f"
+    sed -i 's|^[[:space:]]*export PATH=/usr/gnu/bin:\$PATH$|\t:|' "$f"; ! grep -q /usr/gnu "$f" || { echo "FATAL: $f names /usr/gnu" >&2; exit 1; }; done
+  # B9: #!/bin/bash -> the store bash (NixOS patchShebangs); plan9 #!/bin/rc and the perl generators: no such interpreter here, not
+  # executable (they are source files of the tree, never run by go)
+  /usr/bin/bash "$patchShebangs" "$out/share/go" ""
+  find "$out/share/go" -type f -perm -u+x | while read -r f; do [ "$(head -c 2 "$f")" = '#!' ] || continue
+    case "$(head -1 "$f" | sed 's/^#![[:space:]]*//; s/[[:space:]].*//')" in /bin/sh|/usr/bin/env|/nix/store/*) ;; /*) chmod a-x "$f";; esac; done
+fi
 # DT_CHECKSUM -> 0 (zero-checksum.sh says why): go1.4's C tools embed GOROOT_FINAL=$out (measured, repro2).
 : > "$W/zc"; /usr/bin/bash "$zeroChecksum" "$out" "$W/zc"; [ ! -s "$W/zc" ] || { cat "$W/zc" >&2; exit 1; }
 for b in go gofmt; do ln -s ../share/go/bin/$b "$out/bin/$b"; done

@@ -14,6 +14,7 @@ let
     boot = if boot == null then "" else boot;
     final = if final then "1" else "";
     storeGate = ./store-gate.sh; tsErrnoGate = ./ts-errno-gate.sh; zeroChecksum = ./zero-checksum.sh; pathGate = ./path-gate.sh; illumosBin = ./illumos-bin.sh;
+    patchShebangs = ./patch-shebangs.sh;
     args = [ ./go-build.sh ];
   };
 in rec {

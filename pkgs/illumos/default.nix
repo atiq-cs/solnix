@@ -423,7 +423,7 @@ let
   # From-source packages the gate does not provide (./base-src.nix). zlib and
   # libxml2 replace the host-copied externalLibs; world is built on top of them.
   srcPkgs = import ./base-src.nix { gate = gate'; libcSlice = libc; inherit world gcc buildTools seedTools; perl = if buildTools == [ ] then null else cliBase.perl;
-    nixChainTools = if buildTools == [ ] then { } else { inherit (cliBase) cmake; bzip2Bin = cliBase.bzip2-bin;
+    nixChainTools = if buildTools == [ ] then { } else { inherit (cliBase) cmake; bzip2Bin = cliBase.bzip2-bin; sqliteShared = cliBase.sqlite;
       nixBuildTools = with cliBase; [ autoconf automake libtool autoconf-archive gnum4 bison flex gnupatch srcPkgs.pkgconf ]; }; };
   # The Wayland + Mesa userland (./graphics), built like srcPkgs.
   graphics = import ./graphics { inherit (srcPkgs) mkSrcPkg pkgconf zlib hostTools; inherit world; inherit (cliBase) perl;
@@ -453,13 +453,12 @@ let
   desktop = import ./desktop { inherit (cargo) cargoPkg; inherit graphics; inherit (cli) fd file;
     inherit (srcPkgs) mkSrcPkg bash coreutils gnugrep gnused hostname jq hostTools; inherit hostfixTools world; inherit (cliBase) python3; };
   # The GTK 3 / Wayland stack for Firefox (./desktop/gtk): its own dir, so neither COSMIC nor desktop/ outs move.
-  gtk = import ./desktop/gtk { base = srcPkgs; inherit graphics cli; inherit (cosmic) noto-sans; inherit (cargo) cargoPkg; rust = rust199; inherit world; };
+  gtk = import ./desktop/gtk { base = srcPkgs; inherit graphics cli; inherit (cosmicData) noto-sans; inherit (cargo) cargoPkg; rust = rust199; inherit world; };
   # LLVM 23.1.4 from source, split as nixpkgs' llvmPackages: llvm, clang, lld, lldb, clang-wrapper (./llvm).
   llvmPackages = import ./llvm { inherit (srcPkgs) mkSrcPkg hostTools; inherit (cli) cmake python3 gnupatch; inherit (gtk) ninja;
     inherit world gcc ld libc; gate = gate'; };
-  # COSMIC's fonts and icon themes on store tools only (./desktop/cosmic-data.nix). Not graphics/cosmic-data.nix, which
-  # still evaluates there (unused) because graphics/ is every COSMIC app's fixups = ./. input: editing it moves all 21.
-  # shortcut: graphics/cosmic-data.nix is dead text kept for that hash; delete it in the next wave that rebuilds COSMIC.
+  # COSMIC's fonts and icon themes on store tools only (./desktop/cosmic-data.nix). The host-PATH graphics/cosmic-data.nix is
+  # deleted (wave6 rebuilds COSMIC: its fixups = ./. input moves anyway); gtk took its noto-sans 5d35mbxi from there.
   cosmicData = import ./desktop/cosmic-data.nix { fetchurl = import <nix/fetchurl.nix>; tools = hostfixTools; inherit world;
     inherit (cliBase) python3;
     src = repo: sha256: import <nix/fetchurl.nix> {   # = graphics/cosmic.nix's src (same FOD)

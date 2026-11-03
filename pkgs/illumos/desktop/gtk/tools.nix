@@ -2,7 +2,7 @@
 # >= 1.5, graphics/'s 1.4.2 is too old), gperf (fontconfig), nasm (libjpeg-turbo SIMD, Firefox). None ships at run
 # time except as a build input. meson runs on the STORE python3 (cli/c-dev.nix), not /usr/bin/python3.9 as
 # graphics/tools.nix does, so a solnix host with no host python (dixi) can rebuild everything here.
-{ mkSrcPkg, python3, samurai, pkgconf, gnupatch, gettext }:
+{ mkSrcPkg, python3, samurai, pkgconf, gnupatch, gettext, bash }:
 rec {
   meson = mkSrcPkg {
     pname = "meson"; version = "1.10.2";
@@ -11,9 +11,14 @@ rec {
     build = ''
       # keep /nix/store RUNPATH entries on install (nixpkgs meson 001-fix-rpath; applies to 1.10.2 at an offset)
       ${gnupatch}/bin/patch -p1 < ${../../graphics/patches/meson-1.4.2-keep-store-rpath.patch}
+      # symbolextractor (run by every meson shared-library link) put /usr/gnu/bin first on PATH on SunOS, so on an OI builder meson
+      # used the HOST's GNU nm/readelf. The store-only PATH has them by name (gtk-build-tools' binutils links). (recipes1 W5)
+      grep -q "os.environ\['PATH'\] = '/usr/gnu/bin:' + origpath" mesonbuild/scripts/symbolextractor.py || { echo "FATAL: symbolextractor anchor" >&2; exit 1; }
+      sed -i "s|os.environ\['PATH'\] = '/usr/gnu/bin:' + origpath|os.environ['PATH'] = origpath|" mesonbuild/scripts/symbolextractor.py
+      ! grep -q /usr/gnu mesonbuild/scripts/symbolextractor.py || { echo "FATAL: symbolextractor still names /usr/gnu" >&2; exit 1; }
       mkdir -p "$out/lib/meson" "$out/bin"
       cp -r mesonbuild meson.py "$out/lib/meson/"
-      printf '#!/usr/bin/bash\nexport PYTHONDONTWRITEBYTECODE=1\nexec ${python3}/bin/python3 %s/lib/meson/meson.py "$@"\n' "$out" > "$out/bin/meson"
+      printf '#!${bash}/bin/bash\nexport PYTHONDONTWRITEBYTECODE=1\nexec ${python3}/bin/python3 %s/lib/meson/meson.py "$@"\n' "$out" > "$out/bin/meson"   # store bash (gate B9)
       chmod +x "$out/bin/meson"
       "$out/bin/meson" --version | grep -qx 1.10.2 || { echo "FATAL: meson --version" >&2; exit 1; }
     '';

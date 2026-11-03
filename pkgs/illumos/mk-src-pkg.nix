@@ -56,6 +56,8 @@
 , docOutputs ? [ ]           # "man" "info" "doc": move share/<x> into its own output, the nixpkgs layout (environment.
                              # extraOutputsToInstall finds them). A declared output whose dir is missing or empty FAILS the build.
 , hostPathAllow ? ""         # grep -E of documented exceptions for ./host-path-scan.sh (a recipe's own, rare)
+, buildOnlyRefs ? [ ]        # build-time-only store paths (header-only libs: nix's boost/json/toml11) that no shipped file, $debug
+                             # included, may name: the gate/compiler guard below covers them too (nixpkgs disallowedReferences)
 , nativeTools ? null         # NixOS nativeBuildInputs: store paths whose bin/ (and sbin/, usr/bin/) make up the WHOLE builder PATH
                              # after buildTools: no /usr/gnu, no host /usr/bin. null => defaultNativeTools (storeOnly) or the
                              # old OI PATH text (an exempt instance).
@@ -152,6 +154,7 @@ let
   outputs = [ "out" "debug" ] ++ docOutputs;   # debug: NixOS separateDebugInfo, $debug/lib/debug/.build-id/xx/rest.debug (./split-debug.sh)
   docOutputsArg = builtins.concatStringsSep " " docOutputs;
   inherit hostPathAllow;
+} // (if buildOnlyRefs == [ ] then { } else { buildOnlyRefsArg = builtins.concatStringsSep " " buildOnlyRefs; }) // {
   build = lp64Fix build;
   # nativeTools => store-only PATH: buildTools' bins, then each tool's bin/sbin/usr/bin/usr/sbin. Only the attr is added when set.
   # the from-source gcc's runtime dir (lib = 32-bit, lib/amd64 = 64-bit); empty for a host compiler.
@@ -343,7 +346,7 @@ let
     # grep into the loop with 2>/dev/null turned an error into "no hits": on a
     # system without GNU grep, --binary-files is rejected (illumos grep, measured)
     # and the guard checked nothing. -rl is POSIX-enough for both greps.
-    for x in "$gate" $([ -n "$gccLib" ] && echo "$gcc"); do
+    for x in "$gate" $([ -n "$gccLib" ] && echo "$gcc")${if buildOnlyRefs == [ ] then "" else " $buildOnlyRefsArg"}; do
       rc=0; grep -rl "$x" "$out" "$debug" $(for o in $docOutputsArg; do eval "echo \$$o"; done) > "$W/hits" || rc=$?
       [ "$rc" -le 1 ] || { echo "FATAL: build-time-path guard: grep -rl exited $rc" >&2; exit 1; }
       while read -r f; do

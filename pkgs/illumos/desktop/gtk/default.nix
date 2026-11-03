@@ -27,7 +27,7 @@ let
     nativeTools = (a.nativeTools or [ ]) ++ [ gtkTools ] ++ base.hostTools;
     build = "/usr/bin/bash ${../../path-gate.sh}\n" + a.build + "\n/usr/bin/bash ${../../path-gate.sh}\n";
   });
-  tools = import ./tools.nix { inherit mkSrcPkg gettext; inherit (cli) python3 gnupatch; inherit (graphics) samurai; inherit (base) pkgconf; };
+  tools = import ./tools.nix { inherit mkSrcPkg gettext; inherit (cli) python3 gnupatch; inherit (graphics) samurai; inherit (base) pkgconf bash; };
   b = import ./base.nix { inherit mkSrcPkg tools zlib graphics nixChain; inherit (cli) python3 cmake; inherit noto-sans; };
   g = import ./gfx.nix { inherit mkSrcPkg tools zlib graphics nixChain libxml2; base = b; };
   dev = import ./devtools.nix { inherit mkSrcPkg tools cargoPkg zlib nixChain world; inherit (base) openssl; inherit (cli) python3; };
