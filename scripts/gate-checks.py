@@ -798,8 +798,13 @@ def _log_line(line):
         return [("WARN", "L2-configure-ignored", "perl Configure ignored a -D (use -U); B15 checks what Config recorded")]
     m = re.match(r"^Checking compatibility between (/\S+)", line)
     if m and _classify(m.group(1)) == "FAIL": return [("FAIL", "L2-configure-host", f"perl Configure probed {m.group(1)}")]
-    if re.search(r"no POSIX shell found|: command not found$", line):
+    if re.search(r"no POSIX shell found", line):
         return [("FAIL", "L3-missing", "a tool the store PATH lacks")]
+    # a probe that did not find a tool on the store-only PATH is that PATH working: the host's tool was NOT used (a host
+    # path would be an L1 hit). Counted, not failed (fleet3, dixa 2026-11-03: 11 of the 86 a64h logs, all non-fatal probes:
+    # autobuild.m4 AB_INIT `hostname` x8, perl hints `mount`/`arch`, nano `groff -Thtml`, wget's empty $GPG_ERROR_CONFIG).
+    if re.search(r": command not found$", line):
+        return [("WARN", "L3-notfound", "a probe found no such tool on the store PATH (not used)")]
     return []
 
 def check_log(text):
@@ -1099,6 +1104,9 @@ def selftest_log():
              ("L1 FAIL: automake sh=/usr/gnu/bin/sh (chef, real line)", "checking for sh... /usr/gnu/bin/sh", False, "L1-configure"),
              ("L2 perl probing /usr/gnu/bin/echo (real line)", "Checking compatibility between /usr/gnu/bin/echo and builtin echo (if any)...", False, "L2-configure-host"),
              ("L3 automake: no POSIX shell (real message)", "configure: error: no POSIX shell found that is good enough to be used in our testsuite", False, "L3-missing"),
+             ("L3 WARN: autobuild AB_INIT hostname probe (libtool, real line)", "./configure: line 4348: hostname: command not found", True, "L3-notfound"),
+             ("L3 WARN: perl hints mount probe (perl-5.42.2, real line)", "./hints/solaris_2.sh: line 141: mount: command not found", True, "L3-notfound"),
+             ("L3 WARN: nano groff html probe (real line)", "checking for HTML support in groff... ./configure: line 53508: groff: command not found", True, "L3-notfound"),
              ("L5 cmake Found PkgConfig: /usr/bin/pkg-config (fortune-mod, real line)", '-- Found PkgConfig: /usr/bin/pkg-config (found version "0.29.2")', False, "L5-cmake"),
              ("L5 meson host program", "Program python3 found: YES (/usr/bin/python3)", False, "L5-meson")]
     for label, text, want_pass, must in cases:
