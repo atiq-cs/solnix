@@ -144,23 +144,25 @@ revs() {	# revs <outs>: the commits a job's candidates come from, in the order t
 		[[ " $v " == *" $k "* ]] || v="$v $k"; done
 	print -r -- "$v"
 }
-drv_for() {	# drv_for <pname> <outs> <rev|head>: "<out> <drv>^<output>" of the packages attr whose outPath is one of <outs>,
-	# evaluated at <rev> of BUILDER_FLAKE (head: this tick's locked head). The out must match, so a wrong commit only declines.
-	# An eval at a fixed rev never changes, so hits are kept across ticks ($BUILDER_STATE/eval/<rev>.<system>.<attr>, a week)
-	# unless a GC took the hit's .drv (the eval writes it again); misses only for the tick.
+drv_for() {	# drv_for <pname> <outs> <rev|head>: "<out> <drv>^<output>" of the packages attr one of whose outputs is one of <outs>
+	# (a row may name a non-default output: gcc's -lib, a wave6 -debug/-man), evaluated at <rev> of BUILDER_FLAKE (head: this
+	# tick's locked head). The out must match, so a wrong commit only declines. An eval at a fixed rev never changes, so hits
+	# are kept across ticks ($BUILDER_STATE/eval/<rev>.<system>.<attr>.outs, every output, a week) unless a GC took the hit's
+	# .drv (the eval writes it again); misses only for the tick. (.outs: the one-line default-output caches before it are ignored)
 	typeset n=${1%-[0-9]*} a r f=$3 c= w u s= k d e=$BUILDER_STATE/eval
 	[[ $n == openssl3 ]] && n=openssl
 	for w in ${n//-/ }; do if [[ -z $c ]]; then c=$w; else typeset -u u=${w:0:1}; c=$c$u${w:1}; fi; done	# gcc-wrapper -> gccWrapper
 	[[ $f == head ]] && f=$flake || { [[ $BUILDER_FLAKE == *\?* ]] && f="$BUILDER_FLAKE&rev=$f" || f="$BUILDER_FLAKE?rev=$f"; }
 	for a in "$n" "${n//-/_}" "$c"; do
 		[[ " $s " == *" $a "* ]] && continue; s="$s $a"
-		k=; [[ $f == *[?\&]rev=+([0-9a-f])* ]] && { k=${f##*[?&]rev=}; k=$e/${k%%&*}.$BUILDER_SYSTEM.$a; }
-		r=; if [[ -n $k && -s $k ]]; then r=$(<"$k"); d=${r#* }; [[ -e ${d%^*} ]] || r=; elif [[ -n $k && -e $k.miss ]]; then continue; fi
-		if [[ -z $r ]]; then r=$(bounded 900 nix eval --raw "$f#packages.$BUILDER_SYSTEM.$a" --apply 'd: d.outPath + " " + d.drvPath + "^" + (d.outputName or "out")' 2>/dev/null) ||
+		k=; [[ $f == *[?\&]rev=+([0-9a-f])* ]] && { k=${f##*[?&]rev=}; k=$e/${k%%&*}.$BUILDER_SYSTEM.$a.outs; }
+		r=; if [[ -n $k && -s $k ]]; then r=$(<"$k"); d=${r%%$'\n'*}; d=${d#* }; [[ -e ${d%^*} ]] || r=; elif [[ -n $k && -e $k.miss ]]; then continue; fi
+		if [[ -z $r ]]; then r=$(bounded 900 nix eval --raw "$f#packages.$BUILDER_SYSTEM.$a" --apply 'd: builtins.concatStringsSep "\n" (map (o: d.${o}.outPath + " " + d.drvPath + "^" + o) (d.outputs or ["out"]))' 2>/dev/null) ||
 			{ [[ -n $k ]] && { mkdir -p "$e"; : > "$k.miss"; }; continue; }
 			[[ -n $k ]] && { mkdir -p "$e"; print -r -- "$r" > "$k.${J##*/}" && mv "$k.${J##*/}" "$k"; }	# per job: jobs run in parallel
 		fi
-		[[ ,$2, == *,"${r%% *}",* ]] && { print -r -- "$r"; return 0; }
+		# one line per output ("<out> <drv>^<output>"): the first that is one of <outs>
+		r=$(print -r -- "$r" | nawk -v o=",$2," 'index(o, "," $1 ",") {print; exit}'); [[ -n $r ]] && { print -r -- "$r"; return 0; }
 	done
 	return 1
 }

@@ -302,7 +302,7 @@ P2=$(ksh93 "$S" plan "$W/pinc.json" "$W/served.tsv" 2> /dev/null); P3=$(ksh93 "$
 pc BUILDER_STATE=$W/stpb FKROWS=$W/pinb.json
 has 'decline pin1: no packages.x86_64-solaris attr' && [[ $(nc pin1) == 0 ]] && ok "NEG a row commit that is not a full sha is ignored: declined, no claim" || no "bad commit: $(print -r -- "$out" | grep pin1)"
 # a cached eval at a fixed rev is reused on the next tick (no nix eval): the second tick of stmix finds both in $BUILDER_STATE/eval
-ls "$W/stmix/eval" 2> /dev/null | grep -q "^$RA\.x86_64-solaris\.pin1$" && ls "$W/stmix/eval" | grep -q "^$RW\.x86_64-solaris\.wrow$" &&
+ls "$W/stmix/eval" 2> /dev/null | grep -q "^$RA\.x86_64-solaris\.pin1\.outs$" && ls "$W/stmix/eval" | grep -q "^$RW\.x86_64-solaris\.wrow\.outs$" &&
   ok "evals cached per (commit, system, attr): $(ls "$W/stmix/eval" | grep -vc miss) hits kept" || no "eval cache: $(ls "$W/stmix/eval" 2>&1)"
 # a full disk during the rebuild is not the recipe's fault: no memo, the next tick tries again (a nondeterministic build IS memo'd, flaky above)
 pk BUILDER_RECIPES=file://$W/served.tsv BUILDER_STATE=$W/stns NOSPACE=1
@@ -314,6 +314,35 @@ has 'decline pin1: the host, not the recipe, failed the rebuild' && [[ $(ls "$W/
   ok "a stale fixed build dir (rm Permission denied): declined, not memo'd" || no "stale W: $(print -r -- "$out" | grep pin1) $(ls "$W/stsw/tried")"
 # at start (the SMF loop, before its first tick) the sweep runs with age 0. Checked on the script, since the loop never exits.
 grep -q 'ksh93 "$BUILDER_WSWEEP" 0 |' "$S" && ok "the builder sweeps stale fixed build dirs at start, whatever their age" || no "no start sweep"
+# --- 5b. a row may name a NON-DEFAULT output (gcc's -lib; every wave6 mk-src-pkg drv has out + debug, some man/info/doc):
+# drv_for evaluates every output and returns <drv>^<that output>; the rebuild and its claim use that output. A builder that
+# compares only .outPath (OLD_BUILDER, the pre-fleet3 one) MISSes the -debug row: negative control.
+R5=$W/repo5; mkdir -p "$R5"; g5() { git -C "$R5" -c user.name=t -c user.email=t@t "$@" > /dev/null 2>&1; }
+print -r -- "{ outputs = { self }: { packages.x86_64-solaris.mo = derivation { name = \"qb-mo-1\"; pname = \"mo\"; version = \"1\";
+  system = \"x86_64-solaris\"; outputs = [ \"out\" \"debug\" ]; builder = \"/bin/sh\";
+  args = [ \"-c\" \"echo mo-${W##*/} > \$out; echo dbg-${W##*/} > \$debug\" ]; }; }; }" > "$R5/flake.nix"
+g5 init -b main; g5 add -A; g5 commit -m mo; R5H=$(git -C "$R5" rev-parse HEAD)
+MO=$(nix eval --raw "git+file://$R5?rev=$R5H#packages.x86_64-solaris.mo.out.outPath" 2> /dev/null)
+MD=$(nix eval --raw "git+file://$R5?rev=$R5H#packages.x86_64-solaris.mo.debug.outPath" 2> /dev/null)
+MV=$(nix eval --raw "git+file://$R5?rev=$R5H#packages.x86_64-solaris.mo.drvPath" 2> /dev/null)
+nix build --no-link "git+file://$R5?rev=$R5H#packages.x86_64-solaris.mo^*" >> "$W/fixture.log" 2>&1 && nix copy --to "file://$W/cache" "$MO" "$MD" >> "$W/fixture.log" 2>&1 &&
+  [[ $MD == *-qb-mo-1-debug && -e $MD ]] || no "fixture 5b: MO=$MO MD=$MD $(tail -2 "$W/fixture.log")"
+df5() { ( eval "$(sed -n '/^bounded() {/,/^}/p; /^evattr() {/,/^}/p; /^drv_for() {/,/^}/p' "${2:-$S}")"
+  BUILDER_SYSTEM=x86_64-solaris BUILDER_STATE=$W/st5b BUILDER_FLAKE="git+file://$R5?ref=main" J=x; drv_for mo "$1" "$R5H" ); }
+r=$(df5 "$MD") && [[ $r == "$MD $MV^debug" ]] && ok "drv_for: a -debug row (out + debug outputs): FOUND $MV^debug" || no "drv_for debug: '$r'"
+r=$(df5 "/nix/store/00000000000000000000000000000000-qb-mo-1-debug,$MO") && [[ $r == "$MO $MV^out" ]] && ok "drv_for: the default out still FOUND ^out" || no "drv_for out: '$r'"
+ls "$W/st5b/eval/$R5H.x86_64-solaris.mo"* 2> /dev/null | grep -q '\.outs$' && (( $(wc -l < "$W/st5b/eval/$R5H.x86_64-solaris.mo.outs") == 2 )) &&
+  r=$(df5 "$MD") && [[ $r == "$MD $MV^debug" ]] && ok "the eval cache keeps every output per (rev, system, attr) (.outs, 2 lines), and a cache hit finds -debug" || no "cache: $(ls "$W/st5b/eval" 2>&1)"
+! df5 /nix/store/00000000000000000000000000000000-qb-mo-2-debug > /dev/null && ok "NEG drv_for: an out no output of the attr has (another version): MISS" || no "drv_for wrong out FOUND"
+if [[ -n ${OLD_BUILDER:-} ]]; then ! df5 "$MD" "$OLD_BUILDER" > /dev/null && ok "NEG a builder before this change ($OLD_BUILDER) MISSes the -debug row (the bug this fixes)" || no "old builder found -debug: the control cannot fail"
+else print "SKIP drv_for negative control: OLD_BUILDER unset (not counted as a pass)"; fi
+# a tick: the -debug row is rebuilt as <drv>^debug and claimed with the debug out and its served NarHash
+{ print -r -- "$H"; rec mo 1 y "$MD"; } > "$W/mo.tsv"; print "{\"rows\":[$(row mo 1 outdated)]}" > "$W/mo.json"; print x > "$W/bearer"; : > "$W/fk/log"
+out=$(env BUILDER_PATH="$W/fk:$PATH" FKREAL=$RC FKLOG=$W/fk/log FKROWS=$W/mo.json BUILDER_API=http://queue.invalid/q BUILDER_CACHE=file://$W/cache \
+  BUILDER_FLAKE="git+file://$R5?ref=main" BUILDER_LOAD_MAX=1000 BUILDER_RECIPES=file://$W/mo.tsv BUILDER_STATE=$W/st5t ksh93 "$S" once 2>&1); c=$(<"$W/fk/log")
+MH=$(nawk '/^NarHash:/ {print $2}' "$(hp "$MD")")
+has "mo: rebuilding $MV\^debug" && has "mo: rebuilt $MD here, identical" && print -r -- "$c" | grep '/complete' | grep -q "\"nar_hash\":\"$MH\",\"store_path\":\"$MD\"" &&
+  ok "a tick: the -debug row is rebuilt as drv^debug, identical, and the job completed with the debug out's NarHash" || no "tick 5b: $(print -r -- "$out" | grep ' mo')"
 # --- 6. fleet2: a job lists outs from several commits; the builder rebuilds the first CANDIDATE (head, then origins newest first)
 # whose out is served and whose dry run builds no non-FOD input here. Repo2: O adds rows, N adds more, head H moves on.
 #   tw: O's out needs a dep nobody has, N's is clean -> N (origin/main tried O alone and declined: dixi gnupatch/libffi 2026-11-02)
@@ -338,7 +367,7 @@ nix build --no-link "git+file://$R2?rev=$RN#packages.x86_64-solaris."{tw,tg} "gi
   no "fixture 6: TO=$TO TN=$TN VN=$VN BN=$BN $(tail -2 "$W/fixture.log")"
 for x in "$TO" "$VN" "$BO" "$BN"; do printf 'StorePath: %s\nNarHash: %s\n' "$x" "$GH" > "$(hp "$x")"; done	# served, as needs above
 print "{\"rows\":[$(row tw 1 outdated),$(row tv 1 outdated),$(row th 1 outdated),$(row tb 1 outdated),$(row tg 1 outdated)]}" > "$W/six.json"
-mkdir -p "$W/st6/eval"; print -r -- "$GN /nix/store/00000000000000000000000000000000-qb-tg-gone.drv^out" > "$W/st6/eval/$RN.x86_64-solaris.tg"
+mkdir -p "$W/st6/eval"; print -r -- "$GN /nix/store/00000000000000000000000000000000-qb-tg-gone.drv^out" > "$W/st6/eval/$RN.x86_64-solaris.tg.outs"
 six() { : > "$W/fk/log"; out=$(env BUILDER_PATH="$W/fk:$PATH" FKREAL=$RC FKLOG=$W/fk/log FKROWS=$W/six.json BUILDER_API=http://queue.invalid/q BUILDER_CACHE=file://$W/cache \
   BUILDER_FLAKE="git+file://$R2?ref=main" BUILDER_LOAD_MAX=1000 BUILDER_RECIPES=file://$W/served6.tsv BUILDER_STATE=$W/st6 ksh93 "${1:-$S}" once 2>&1); c=$(<"$W/fk/log"); }
 six; print -r -- "$out" | sed 's/^/   6 /'
@@ -353,7 +382,7 @@ cm6 "$TN" "$RN" && cm6 "$HO" "$(git -C "$R2" rev-parse main)" && ok "completions
 has "decline tb: the dry run would build 1 .*\[${RN:0:12}\]; the dry run would build 1 .*\[${RO:0:12}\]" && [[ $(nc tb) == 0 ]] &&
   ! ls "$W/st6/tried" 2> /dev/null | egrep -q 'qb-(tb|tw-O|tv-N)-' && ok "NEG every candidate needs an unserved input: declined with each reason, no claim, no candidate memo'd" ||
   no "tb: $(print -r -- "$out" | grep ' tb') $(ls "$W/st6/tried" 2>&1)"
-has 'tg: rebuilt .*qb-tg-N-.* identical' && [[ $(nc tg) == 1 ]] && ! grep -q 00000000000000000000000000000000 "$W/st6/eval/$RN.x86_64-solaris.tg" &&
+has 'tg: rebuilt .*qb-tg-N-.* identical' && [[ $(nc tg) == 1 ]] && ! grep -q 00000000000000000000000000000000 "$W/st6/eval/$RN.x86_64-solaris.tg.outs" &&
   ok "an eval cache hit whose .drv was GC'd is re-evaluated, not declined 'cannot root' (dixi nss, solnix-cputemp 2026-11-02)" || no "tg: $(print -r -- "$out" | grep ' tg')"
 # --- 7. fleet3: first publish of a served row's unserved out with this host's own key (BUILDER_PUBLISH). The fixture cache
 # is a python http.server over a file:// cache signed with a test key (it stands in for cache.solnix.io + 8UNr); the
