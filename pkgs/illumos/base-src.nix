@@ -3,7 +3,8 @@
 # the build host: zlib + libxml2 replace externalLibs (host /usr/lib copies),
 # openssl + openssh replace make-be's host sshd copy, bash replaces nothing (the
 # gate has no bash) but is a login shell users expect.
-{ gate, libcSlice, world ? null, gcc ? "/usr/gcc/14", buildTools ? [ ], aarch64 ? false, system ? "x86_64-solaris" }:
+{ gate, libcSlice, world ? null, gcc ? "/usr/gcc/14", buildTools ? [ ], aarch64 ? false, system ? "x86_64-solaris", perl ? null }:
+# perl: the store perl (cli), for curl's man pages; its build closure has no nixChain, so no cycle. null: curl keeps the old text.
 # aarch64/system: the same recipes natively on aarch64 illumos (aarch64/home.nix), through
 # mk-src-pkg's aarch64 text rewrite. The defaults leave every x86 derivation unchanged.
 # gcc: the from-source gcc derivation (gcc-src.nix). Everything here is compiled
@@ -31,7 +32,7 @@ rec {
   hostTools = if buildTools == [ ] then [ ] else [ coreutils findutils needWorld ];
 
   # Nix 2.24.15 + its dependency chain (./nix-src.nix).
-  nixChain = import ./nix-src.nix { inherit mkSrcPkg zlib openssl libcSlice; system = "x86_64-solaris"; gccLib = gcc.lib; };
+  nixChain = import ./nix-src.nix { inherit mkSrcPkg zlib openssl libcSlice hostTools perl; system = "x86_64-solaris"; gccLib = gcc.lib; };
 
   # libz.so.1 with the illumos symbol versions (SUNW_1.1 .. ILLUMOS_0.2). The
   # gate's libzfs/libzpool record `libz.so.1 SUNW_1.1` as a needed version, so an

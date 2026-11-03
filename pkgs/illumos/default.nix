@@ -396,7 +396,7 @@ let
 
   # From-source packages the gate does not provide (./base-src.nix). zlib and
   # libxml2 replace the host-copied externalLibs; world is built on top of them.
-  srcPkgs = import ./base-src.nix { gate = gate'; libcSlice = libc; inherit world gcc buildTools; };
+  srcPkgs = import ./base-src.nix { gate = gate'; libcSlice = libc; inherit world gcc buildTools; perl = if buildTools == [ ] then null else cliBase.perl; };
   # The Wayland + Mesa userland (./graphics), built like srcPkgs.
   graphics = import ./graphics { inherit (srcPkgs) mkSrcPkg pkgconf zlib; inherit world; };
   # The maintainer's headless CLI set (werk/meh home.packages), from source (./cli).

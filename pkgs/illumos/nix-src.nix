@@ -12,7 +12,8 @@
 #   --localstatedir=/nix/var, --with-store-dir=/nix/store.
 # Disabled, as nix224.nix did: Boehm GC (--disable-gc), lowdown (markdown),
 # libcpuid (x86 microarch detection), tests, docs. seccomp is Linux-only.
-{ mkSrcPkg, zlib, openssl, libcSlice, gccLib, system, libSub ? "lib/amd64", nixCxxFlags ? "" }:
+{ mkSrcPkg, zlib, openssl, libcSlice, gccLib, system, libSub ? "lib/amd64", nixCxxFlags ? "", hostTools ? [ ], perl ? null }:
+# hostTools, perl: the store build tools for curl's store-only build (x86, base-src.nix); [] / null (aarch64) keep curl on the old PATH text.
 # libSub: the 64-bit lib dir of the plain derivations below ("lib" on aarch64, LP64 only).
 # nixCxxFlags: extra CXXFLAGS for nix itself (aarch64: see aarch64/src.nix). "" keeps the x86 text byte-identical.
 
@@ -90,10 +91,14 @@ rec {
   };
 
   curl = mkSrcPkg {
-    pname = "curl"; version = "8.10.1";
-    src = { url = "https://curl.se/download/curl-8.10.1.tar.xz";
-            sha256 = "73a4b0e99596a09fa5924a4fb7e4b995a85fda0d18a2c02ab9cf134bebce04ee"; };
+    pname = "curl"; version = "8.23.0";
+    src = { url = "https://curl.se/download/curl-8.23.0.tar.xz";   # .asc: Daniel Stenberg 27EDEAF2; == nixpkgs
+            sha256 = "8dadd7d2536a314f982ad05a651b713f426bf7d02cc2c76cffb9796f2218e6c5"; };
     deps = [ zlib openssl ];
+    # store-only PATH + config.site (recipes1). perl renders the man pages (NixOS: nativeBuildInputs = [ perl ... ]): configure looks for it
+    # in $PATH:/usr/local/bin/perl:/usr/bin/, so without a store perl an OI host's /usr/bin/perl turned the docs on and a solnix host's
+    # absence turned them off (two different outs; recipes1 W4).
+    nativeTools = (if perl == null then [ ] else [ perl ]) ++ hostTools;
     build = ''
       ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static \
         --with-openssl=${openssl} --with-zlib=${zlib} --without-libpsl --without-brotli \
