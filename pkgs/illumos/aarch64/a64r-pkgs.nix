@@ -14,22 +14,34 @@ let
   gtools = import ../graphics/tools.nix { inherit mkSrcPkg; };
   glibs = homePkgs.graphicsSet;
   ginput = import ../graphics/input.nix { inherit mkSrcPkg; tools = gtools; inherit (base) pkgconf; };
+  # pixman with gtk's meson 1.10.2 on the store python3 (graphics/tools.nix's meson 1.4.2 runs the host /usr/bin/python3.9), mesonBuild's -j16
+  gtoolsS = gtools // { mesonBuild = f: builtins.replaceStrings [ ("-j$" + "{NIX_BUILD_CORES:-8}") ] [ "-j16" ] (gtkTools.mesonBuild f); };
+  ginputS = import ../graphics/input.nix { inherit mkSrcPkg; tools = gtoolsS; inherit (base) pkgconf; };
+  # graphics/libs.nix the same way (wayland, libdrm); its expat/libffi do not use mesonBuild, so they are b1's drvs
+  glibsS = import ../graphics/libs.nix { inherit mkSrcPkg zlib; tools = gtoolsS; inherit (base) pkgconf; inherit (homePkgs) world; };
   # desktop/gtk/tools.nix (meson 1.10.2 on the store python3, gperf, nasm, ninja) and gtk/base.nix (libpng, pcre2, ...), as
   # desktop/gtk/default.nix wires them (its own mkSrcPkg wrapper adds gtkTools = x86 GNU binutils; aarch64's store set has none)
   gtkTools = import ../desktop/gtk/tools.nix { mkSrcPkg = mkCores; inherit (cli) python3 gnupatch; inherit (gtools) samurai; inherit (base) pkgconf gettext; };
-  # tools.path stays ':' (b1's libpng text interpolates it; freetype & co. that need meson/pkg-config on PATH come with a later batch)
-  gtkBase = import ../desktop/gtk/base.nix { mkSrcPkg = mkCores; inherit zlib; tools = { path = ":"; inherit (gtkTools) nasm; }; inherit (cli) python3 cmake;
-    graphics = glibs; inherit (srcPkgs) nixChain; noto-sans = null; };
+  # tools.path stays ':' (b1's libpng text interpolates it, so its row stays put); mesonBuild sets the meson PATH itself, and the farm has pkg-config
+  gtkBase = import ../desktop/gtk/base.nix { mkSrcPkg = mkCores; inherit zlib; tools = gtkTools // { path = ":"; }; inherit (cli) python3 cmake;
+    graphics = glibs; inherit (srcPkgs) nixChain; noto-sans = cosmicData'.noto-sans; };
+  # graphics/input.nix's pixman, and desktop/gtk/gfx.nix's cairo/pango/gdk-pixbuf (graphics = pixman only; no mesa/wayland on aarch64)
+  gtkGfx = import ../desktop/gtk/gfx.nix { mkSrcPkg = mkCores; tools = gtkTools; inherit zlib; base = gtkBase; inherit (srcPkgs) nixChain;
+    libxml2 = null; graphics = glibs // { inherit (ginputS) pixman; }; };
   # desktop/ as pkgs/illumos/default.nix wires it (data, xdg, help, cosmic-wallpapers); cargoPkg null: pop-launcher is never forced
   desk = import ../desktop { cargoPkg = null; graphics = null; fd = null; inherit mkSrcPkg; inherit (srcPkgs) bash;
     inherit (base) coreutils gnugrep gnused hostname jq hostTools; inherit (cli) file; hostfixTools = a64.buildToolsFarm; world = null; python3 = null; };
   cosmicData = import ../desktop/cosmic-data.nix { fetchurl = import <nix/fetchurl.nix>; tools = a64.buildToolsFarm; world = null; python3 = null;
     src = repo: sha256: import <nix/fetchurl.nix> {   # = pkgs/illumos/default.nix's (same FOD)
       name = "${repo}-epoch-1.5.0.tar.gz"; url = "https://codeload.github.com/pop-os/${repo}/tar.gz/refs/tags/epoch-1.5.0"; inherit sha256; }; };
+  # the .zip fonts (cosmic-data.nix unzips with the store python3's zipfile): the same retarget, with the aarch64 python3 (b2)
+  cosmicData' = builtins.mapAttrs (_: d: retarget' d (removeAttrs d.drvAttrs [ "world" ] // { inherit (cli) python3; }))
+    { inherit (cosmicData) noto-sans noto-sans-mono fira-mono; };
   rep1 = a: b: s: let r = builtins.replaceStrings [ a ] [ b ] s; in if r == s then throw "a64r retarget: anchor not found: ${a}" else r;
-  # .tar.bz2: x86 decompresses through the store python3's bz2 module; aarch64 has bzip2-bin (no python3 yet)
+  # .tar.bz2: x86 decompresses through the store python3's bz2 module; aarch64 uses bzip2-bin (b1's rows were built so, before python3)
   pyBz2 = ''"$python3/bin/python3" -c 'import bz2, shutil, sys; shutil.copyfileobj(bz2.open(sys.argv[1]), sys.stdout.buffer)' "$src" | tar xf -'';
-  retarget = d: derivation (a64.plain (removeAttrs d.drvAttrs [ "world" "python3" ] // { inherit system; tools = a64.buildToolsFarm;
+  retarget = d: retarget' d (removeAttrs d.drvAttrs [ "world" "python3" ]);
+  retarget' = d: attrs: derivation (a64.plain (attrs // { inherit system; tools = a64.buildToolsFarm;
     # the recipe's PATH line -> the store tools + bzip2, gated (data.nix gates it already, cosmic-data.nix does not: one gate each)
     args = map (x: if x == "-c" then x else rep1 ''export PATH="$tools/bin:$world/bin:$world/usr/bin";'' ''export PATH="$tools/bin:${final.bzip2-bin}/bin"; /usr/bin/bash ${../path-gate.sh};''
       (builtins.replaceStrings [ pyBz2 ''export PATH="$tools/bin:$world/bin:$world/usr/bin"; /usr/bin/bash ${../path-gate.sh};'' ]
@@ -47,6 +59,17 @@ in
   inherit (cli) python3 tcl groff texinfo hunspell pinentry-curses fmt catch2_3;
   inherit (gtkTools) gperf nasm; inherit (gtools) samurai;
   inherit (gtkBase) pcre2 libjpeg-turbo;
+  # batch 3 (a64r b3): meson and the glib/freetype/harfbuzz tier (desktop/gtk/), on the store python3
+  inherit (gtkTools) meson ninja;
+  inherit (gtkBase) glib fribidi freetype harfbuzz;
+  # batch 3, then: the three .zip fonts (b2's python3 unzips them), pixman, fontconfig (default fonts: noto-sans), cairo, pango, gdk-pixbuf
+  inherit (cosmicData') noto-sans noto-sans-mono fira-mono;
+  inherit (ginputS) pixman;
+  inherit (gtkBase) fontconfig;
+  inherit (gtkGfx) cairo pango gdk-pixbuf;
+  # batch 4 (a64r b4): the Wayland client libraries and seat/input data (graphics/), on gtk's meson
+  inherit (glibsS) wayland wayland-protocols libdrm;
+  inherit (ginputS) xkeyboard-config libxkbcommon libdisplay-info seatd;
   inherit (base) smartmontools;   # not libxml2: base-src's links base-src's own zlib (abis 64+32), a 2nd zlib drv_for cannot reach
   inherit (desk) xdg-utils xdg-user-dirs;
   solnix-help = derivation (a64.plain (desk.solnix-help.drvAttrs // { inherit system; }));

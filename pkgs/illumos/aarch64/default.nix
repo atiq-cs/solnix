@@ -199,6 +199,18 @@ let
             + "\n" + ''      ! grep -lF "$W" "$out"/lib/python3.13/_sysconfigdata*.py "$out"/lib/python3.13/config-3.13*/Makefile || { echo "FATAL: python3 sysconfig still names the build dir" >&2; exit 1; }'' + "\n" + a) ] args.build; in
         if b == args.build then throw "a64r python3: anchor" else b
           + "\n[ -z \"$(find $out -name '*.pyc' | head -1)\" ] || { echo 'FATAL: python3 ships pyc' >&2; exit 1; }\n"; };
+      # meson's symbolextractor.py (shared-lib symbol lists, for relink avoidance) prepends the OI host's /usr/gnu/bin to PATH to find GNU
+      # nm/readelf on SunOS (upstream text; gate2 B13). A solnix host has no /usr/gnu: drop the prefix, so it uses PATH as is (gnu_syms
+      # falls back to dummy_syms when no GNU nm is found, which only costs relinks), as NixOS patches meson's host paths.
+      meson = { build = let a = ''cp -r mesonbuild meson.py "$out/lib/meson/"''; b = builtins.replaceStrings [ a ] [ (a + "\n"
+          + ''f="$out/lib/meson/mesonbuild/scripts/symbolextractor.py"; grep -q "'/usr/gnu/bin:' + origpath" "$f" || { echo "FATAL: meson symbolextractor anchor" >&2; exit 1; }''
+          + "\n" + ''sed -i "s|'/usr/gnu/bin:' + origpath|origpath|" "$f"; ! grep -q /usr/gnu "$f" || { echo "FATAL: meson still names /usr/gnu" >&2; exit 1; }'') ] args.build; in
+        if b == args.build then throw "a64r meson: anchor" else b; };
+      # xkeyboard-config's rules/ needs python >= 3.11: x86 links the OI host's /usr/bin/python3.14; here the store python3 (3.13, b2)
+      xkeyboard-config = { build = let a = "ln -sf /usr/bin/python3.14 "; b = builtins.replaceStrings [ a ] [ "ln -sf ${homePkgs.cliSet.python3}/bin/python3 " ] args.build; in
+        if b == args.build then throw "a64r xkeyboard-config: anchor" else b; };
+      # libxkbcommon's parser needs a yacc: x86 takes the OI host's /usr/bin/bison; here a64h's store bison (as tmux/gdbm/nix)
+      libxkbcommon = { nativeTools = (args.nativeTools or [ ]) ++ [ final.bison ]; };
       # texinfo: the served x86 texinfo has no perl XS (0 .so; its configure found it unbuildable there). On aarch64 configure builds XS
       # with perl's ccflags, which miss the arm64-gate flags (TLSDESC relocs, dixa), and with no store RUNPATH (the closure gate saw
       # /lib/libc.so.1). --disable-perl-xs: the pure-perl texi2any, as x86 ships.
