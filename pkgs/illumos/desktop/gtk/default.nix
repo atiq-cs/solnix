@@ -18,8 +18,10 @@ let
     args = [ "-c" ''
       set -eu; export PATH=$coreutils/bin; mkdir -p "$out/bin"; cd "$out/bin"
       for t in ar nm ranlib strip objcopy objdump readelf; do ln -s "$binutils/bin/g$t" "$t"; done
-      ln -s "$bash/bin/bash" bash; ln -s "$bash/bin/bash" sh
-      for t in ar nm ranlib strip objcopy objdump readelf bash sh; do [ -x "$t" ] || { echo "FATAL: $t" >&2; exit 1; }; done
+      # sh only: bash itself comes from base.hostTools (the store bash, first there). A farm LINK named bash made patch-shebangs.sh's
+      # selftest (command -v bash must be the store file it writes into a #!) fail every gtk build (wave6t W2 on chef2)
+      ln -s "$bash/bin/bash" sh
+      for t in ar nm ranlib strip objcopy objdump readelf sh; do [ -x "$t" ] || { echo "FATAL: $t" >&2; exit 1; }; done
     '' ];
   };
   hermetic = base.hostTools != [ ];
