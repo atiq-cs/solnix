@@ -13,7 +13,8 @@ scan() {  # <dir> [allow]: prints "file: line" for each hit
   # /usr/gnu/lib on the OI host only (recipes1 LOOPHOLES class 2).
   find "$1" -type f \( -name config.status -o -name config.log -o -name libtool -o -name CMakeCache.txt -o -name build.ninja -o -name config.sh \
     -o \( -name Makefile -newer "$1" \) -o -name Makefile \) 2>/dev/null | while read -r f; do
-    case "${f##*/}" in Makefile) [ -f "$f.in" ] || [ -f "${f%/*}/Makefile.am" ] || continue;; esac
+    case "${f##*/}" in Makefile) [ -f "$f.in" ] || [ -f "${f%/*}/Makefile.am" ] || continue;;
+      config.sh) [ -f "${f%/*}/Configure" ] || continue;; esac   # metaconfig's output beside its Configure, not a shipped sample (perl Porting/config.sh)
     p=$pat; case "${f##*/}" in CMakeCache.txt) p='(^|[^A-Za-z0-9_.+/-])(/usr/bin/|/usr/sbin/|/usr/gnu/|/opt/|/usr/local/|/usr/sfw/)';; esac
     # comment lines document a path, they do not configure one (libtool's "cygwin /usr/bin/install" note, zlib's Makefile
     # "/usr/local/lib" usage text, measured in P0 run h); libtool's own case pattern for it is skipped by name.
@@ -25,7 +26,8 @@ T=$(mktemp -d "${TMPDIR:-/tmp}/hps.XXXXXX") || exit 1
 mkdir -p "$T/good" "$T/bad"
 printf 'MAKE=/nix/store/00000000000000000000000000000000-illumos-userland/usr/bin/sed\nSHELL=/bin/sh\n' > "$T/good/config.status"
 printf "MAKE='/usr/gnu/bin/make'\n" > "$T/bad/config.status"; printf '# install into /usr/local/lib\n' >> "$T/good/config.status"
-mkdir -p "$T/badp"; printf "loclibpth='/usr/gnu/lib'\n" > "$T/badp/config.sh"
+mkdir -p "$T/badp" "$T/good/Porting"; printf "loclibpth='/usr/gnu/lib'\n" > "$T/badp/config.sh"; : > "$T/badp/Configure"
+printf "libpth='/usr/local/lib'\n" > "$T/good/Porting/config.sh"
 mkdir -p "$T/badc" "$T/goodc"; printf 'CMAKE_AR:FILEPATH=/usr/bin/ar\n' > "$T/badc/CMakeCache.txt"
 printf 'CMAKE_AR:FILEPATH=/nix/store/00000000000000000000000000000000-w/usr/bin/ar\n' > "$T/goodc/CMakeCache.txt"
 [ -n "$(scan "$T/bad")" ] && [ -n "$(scan "$T/badp")" ] && [ -z "$(scan "$T/good")" ] && [ -n "$(scan "$T/badc")" ] && [ -z "$(scan "$T/goodc")" ] || { echo "FATAL: host-path-scan selftest failed" >&2; find "$T" -depth -delete; exit 1; }
