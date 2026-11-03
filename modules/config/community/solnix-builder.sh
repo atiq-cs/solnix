@@ -15,6 +15,16 @@
 #   solnix-builder size                             print "<jobs> <cores> <busy>" for this tick
 #   solnix-builder once                             one tick (rc 0: it rebuilt or claimed);  no args: the SMF loop
 #   solnix-builder ready <pname> <outs>             prove one job here (dry run, fetch, rebuild, NarHash), never claim
+# First publish (fleet3, maintainer 2026-11-03): a served row whose out cache.solnix.io does not serve yet (narinfo 404) is
+# built here and submitted with this host's own builder id and key, when BUILDER_PUBLISH=1 and BUILDER_PUBLISH_KEY is
+# readable (and the bearer is there; BUILDER_PUBLISH=dry: every step up to the signed /begin, which is never sent):
+# nix build of every output (the first build); every reference served, else it waits (deps first, never memo'd);
+# nix-store --verify-path; pre-submit-check.sh --leaf (--check: the second build, SAME; drv-gate --leaf; publish-gate;
+# store; closure; build log; the stamp); a one-path file:// stage; cache-submit.py --submit (one leaf, at most
+# BUILDER_PUBLISH_SLOTS in flight). Promoted: the served NarHash is this host's, an 8UNr-only client fetches and verifies
+# the NAR (a key that signs nothing must not), then the job is claimed and completed done like a rebuilt one. Tier 1
+# (after 2026-11-13): proposed/approved wait in $BUILDER_STATE/pub/<out> and are polled on later ticks, a 429 backs off
+# Retry-After seconds; neither is a failure. A failed gate, a differing --check or a rejection is memo'd (tried/<drv>.pub).
 PATH=${BUILDER_PATH:-/usr/bin:/usr/sbin}
 : ${BUILDER_API:=https://builders.solnix.io/api/v1/build-queue} ${BUILDER_RECIPES:=https://cache.solnix.io/registry/recipes.tsv}
 : ${BUILDER_CACHE:=https://cache.solnix.io}
@@ -31,6 +41,11 @@ PATH=${BUILDER_PATH:-/usr/bin:/usr/sbin}
 # BUILDER_SHARE: the fraction (percent) of the CPUs other work leaves idle that this host may use (100 dedicated, 66 opportunistic).
 : ${BUILDER_SHARE:=100}
 : ${BUILDER_BUILD_SECS:=14400}
+# first publish: off unless set (the module turns it on for dedicated hosts); the key is the host's enrolled ssh-ed25519 key
+: ${BUILDER_PUBLISH:=0} ${BUILDER_PUBLISH_KEY:=/etc/ssh/ssh_host_ed25519_key} ${BUILDER_PUBLISH_ID:=$BUILDER_AGENT}
+# BUILDER_GATES: the dir with scripts/cache-submit.py, pre-submit-check.sh and the gates; BUILDER_SUBMIT: a test hook (the submitter)
+: ${BUILDER_GATES:=} ${BUILDER_PYTHON:=${GATE_PYTHON:-python3}} ${BUILDER_PUBLISH_POLL:=1800} ${BUILDER_PUBLISH_SLOTS:=4}
+: ${BUILDER_CACHE_KEY:=cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8=}
 J=$BUILDER_STATE C=0 flake=$BUILDER_FLAKE	# a job's state dir, its cores, the flake (locked once per tick)
 log() { printf '%(%Y-%m-%dT%H:%M:%SZ)T builder: %s\n' now "$*"; }
 bounded() {	# bounded <secs> <cmd...>: run it, TERM it after <secs> (illumos has no timeout(1)). A `nix store ls` against
@@ -97,8 +112,11 @@ size() {	# "<jobs> <cores> <busy>" for this tick. busy: CPUs busy over a 5 s sam
 	print -r -- "$k $c $b"
 }
 
-complete() {	# complete <id> <token> <result-json>
-	api POST "/$1/complete" "{\"agent_id\":\"$BUILDER_AGENT\",\"claim_token\":\"$2\",$3}"
+complete() {	# complete <id> <token> <result-json>, with `commit` (infra v2b §5: 40 lowercase hex, else a 400) when the job's
+	# evaluated commit is known ($crev, set by ready)
+	typeset cb="\"agent_id\":\"$BUILDER_AGENT\",\"claim_token\":\"$2\",$3"
+	[[ $crev == +([0-9a-f]) && ${#crev} == 40 ]] && cb="$cb,\"commit\":\"$crev\""
+	api POST "/$1/complete" "{$cb}"
 	log "complete $1 -> $code $(<"$J/resp") ($3)"
 }
 origins() {	# origins <recipes.tsv>: "<out>\t<commit>" for every served out: the first commit (any branch, oldest first) whose
@@ -152,9 +170,12 @@ cand() {	# cand <out> <drv>^<output> <rev>, run in $(...): rc 0 and the served N
 	typeset d=$2 m x f ins h y=$J/dry-${3:0:12}
 	# hold the evaluated drv (and the drvs it references) until the job ends: an eval's temporary root dies with it
 	nix-instantiate --add-root "$J/root-drv" --expr "import ${d%^*}" > /dev/null 2>&1 || { print -r -- "cannot root $d"; return 1; }
-	h=$(served "$1") || { print -r -- "$1 is not served (a first build is a submission: needs the submit key)"; return 1; }
+	h=$(served "$1") || { pubok || { print -r -- "$1 is not served (a first build is a submission: needs the submit key)"; return 1; }; h=first; }
 	m=$BUILDER_STATE/tried/${d##*/}	# shortcut: a failed build is never retried for that drv; rm the file to retry
 	[[ -f $m && $(<"$m") != ok ]] && { print -r -- "$(<"$m")"; return 1; }
+	# submitted on an earlier tick (served by now or not): first() polls that submission instead of building again
+	[[ -s $BUILDER_STATE/pub/${1##*/} ]] && pubok && { print first; return 0; }
+	[[ $h == first && -f $m.pub ]] && { print -r -- "$1 is not served, and its first publish was refused here: $(<"$m.pub")"; return 1; }
 	# the dry run covers the leaf AND its inputs: a dry run of a substitutable leaf alone lists nothing to build
 	bounded 300 nix derivation show "${d%^*}" > "$J/drv.json" 2>&1 && ins=$(jq -r '.[].inputDrvs | to_entries[] |
 	    .key + "^" + ((if (.value|type) == "array" then .value else .value.outputs end) | join(","))' "$J/drv.json") &&
@@ -169,18 +190,123 @@ cand() {	# cand <out> <drv>^<output> <rev>, run in $(...): rc 0 and the served N
 	(( x == 0 )) || { print -r -- "the dry run would build $x non-fixed-output derivations here first ($y)"; return 1; }
 	print -r -- "$h"
 }
+pubok() {	# may this host first-publish? BUILDER_PUBLISH=1 (with the bearer: it claims after) or dry; the key; the gates; never site-team
+	[[ $BUILDER_PUBLISH == @(1|dry) && -r $BUILDER_PUBLISH_KEY && -f $BUILDER_GATES/scripts/cache-submit.py && $BUILDER_PUBLISH_ID != site-team ]] &&
+	    [[ $BUILDER_PUBLISH == dry || -s $BUILDER_BEARER_FILE ]]
+}
+rowed() { nawk -F'\t' -v o="$1" 'NR > 1 && $9 == o {f = 1} END {exit !f}' "$BUILDER_STATE/recipes.tsv" 2> /dev/null; }	# a served row names <out>
+fbuild() {	# fbuild <pname> <out> <drv>^<output>: the first build and every gate before a submission; rc 0 with the stage dir in $fst
+	typeset fm=$BUILDER_STATE/tried/${3##*/} f x= w h k fr=
+	ultimate() { [[ $(nix path-info --json "$1" 2> /dev/null | jq -r '.[].ultimate') == true ]]; }	# built by this host's daemon
+	# a copy that came from elsewhere (not ultimate) is rebuilt here against itself: SAME makes it this host's build too
+	nix-store --check-validity "$2" 2> /dev/null && ! ultimate "$2" && fr=--rebuild
+	log "$1: first build of $3 ($C cores)${fr:+ (--rebuild: the copy here was not built here)}"
+	bounded "$BUILDER_BUILD_SECS" nice -n "$BUILDER_NICE" nix build --option cores "$C" $fr --out-link "$J/root-pub" "${3%^*}^*" > "$fm.publog" 2>&1 ||
+	    { egrep -q "No space left on device|is not valid|cannot remove '/var/tmp/[a-z]+-[0-9a-f]+'" "$fm.publog" ||
+	          print -r -- "the first build of $3 failed${fr:+ or differs from the copy here} ($fm.publog)" > "$fm.pub"
+	      log "decline $1: the first build of $3 failed${fr:+ or differs from the copy here} ($fm.publog)"; return 1; }
+	[[ -n $fr ]] || ultimate "$2" || { log "decline $1: $2 was not built here (not ultimate)"; return 1; }
+	# this store's copy intact (never repaired here: --repair-path on a shared host is forbidden)
+	nix-store --verify-path "$2" > /dev/null 2>&1 || { print -r -- "nix-store --verify-path $2 failed: this store's copy is damaged" > "$fm.pub"; log "decline $1: $(<"$fm.pub")"; return 1; }
+	# deps first: every reference already served, else wait (not memo'd: a later tick, or another publisher, serves them)
+	for f in $(nix-store -q --references "$2"); do [[ $f == "$2" ]] || served "$f" > /dev/null || x="$x ${f#/nix/store/}"; done
+	[[ -z $x ]] || { log "$1: $2 waits for its references to be served first:$x"; return 1; }
+	# pre-submit-check.sh --leaf: the second build (--check SAME), drv-gate --leaf, publish-gate, store, closure, log, deps, the
+	# stamp. A drv-leaf stamp for this out and NarHash from an earlier tick stands (a store path never changes): no third build.
+	h=$(nix-store -q --hash "$2"); k=$BUILDER_STATE/stamps/${h#sha256:}.ok
+	if [[ -s $k && $(cut -f1 "$k") == "$2" && $(cut -f5 "$k") == drv-leaf ]]; then log "$1: pre-submit-check --leaf passed on an earlier tick ($k)"
+	else
+		( export GATE_STAMP_DIR=$BUILDER_STATE/stamps GATE_PYTHON=$BUILDER_PYTHON; bounded "$BUILDER_BUILD_SECS" bash "$BUILDER_GATES/scripts/pre-submit-check.sh" --leaf "$2" ) > "$fm.presubmit" 2>&1; f=$?
+		if (( f != 0 )) || ! grep -q "^PASS $2 " "$fm.presubmit"; then
+			w=$(grep -E '^  [a-z]+: FAIL' "$fm.presubmit" | cut -d: -f1 | tr -d ' ' | paste -sd, -)
+			# rc 2 = setup (no python, served file unreachable), a full disk, or only deps (served since our check): not the out's fault
+			(( f == 1 )) && [[ ${w:-deps} != deps ]] && ! grep -q "No space left on device" "$fm.presubmit" && print -r -- "pre-submit-check.sh --leaf failed: ${w:-?} ($fm.presubmit)" > "$fm.pub"
+			log "decline $1: pre-submit-check.sh --leaf $2 rc=$f (${w:-setup}; $fm.presubmit)"; return 1
+		fi
+	fi
+	# the stage: a file:// cache holding the out's NAR and narinfo, with its references' served narinfos (nix copy needs them valid there)
+	fst=$(mktemp -d "$BUILDER_STATE/pub/stage.XXXXXX") || return 1
+	for f in $(nix-store -q --references "$2"); do [[ $f == "$2" ]] && continue; x=${f#/nix/store/}
+		curl -sf -m 30 -o "$fst/${x%%-*}.narinfo" "$BUILDER_CACHE/${x%%-*}.narinfo" || { log "decline $1: cannot fetch the served narinfo of $f"; return 1; }; done
+	print -r -- "$2" > "$fst.paths"; nix path-info --json "$2" > "$fst.pathinfo" 2> /dev/null &&
+	    bounded 1800 nix copy --no-recursive --to "file://$fst?compression=xz" "$2" > "$fst.log" 2>&1 || { log "decline $1: cannot stage $2 ($fst.log)"; return 1; }
+}
+fsubmit() {	# fsubmit <out> <log> <cache-submit.py args>: the submitter (BUILDER_SUBMIT: a test hook); sets fres (its result) and fsid
+	typeset o=$1 l=$2; shift 2	# a --poll in the args overrides the default (the last one wins)
+	set -- --key "$BUILDER_PUBLISH_KEY" --builder "$BUILDER_PUBLISH_ID" --poll "$BUILDER_PUBLISH_POLL" "$@"
+	if [[ -n ${BUILDER_SUBMIT:-} ]]; then set -- $BUILDER_SUBMIT "$@"; else set -- "$BUILDER_PYTHON" "$BUILDER_GATES/scripts/cache-submit.py" "$@"; fi
+	bounded $(( BUILDER_PUBLISH_POLL + 900 )) "$@" > "$l" 2>&1
+	fsid=$(sed -n 's/^  submission \([^ ]*\) .*/\1/p; s/^STATUS \([^ ]*\)$/\1/p' "$l" | tail -1)
+	fres=$(sed -n 's/^  result: //p' "$l" | tail -1)
+	[[ -n $fres ]] || fres="plan $(nawk -v p="$o" '$2 == p && $1 ~ /^[A-Z][A-Z-]+$/ && $1 !~ /^(SUBMIT|DRY-RUN|STATUS)$/ {print $1}' "$l")"	# its plan line
+}
+fverify() {	# fverify <out> <NarHash built here>: cache.solnix.io serves <out> with that NarHash, an 8UNr-only client fetches and
+	# verifies the NAR, and a key that signs nothing is refused (a check that cannot fail proves nothing). The CDN may lag.
+	typeset fh fx ft=0 fn fo=$2
+	while :; do
+		fx=$(mktemp -d "$BUILDER_STATE/pub/xdg.XXXXXX")	# an empty narinfo cache: a stale local answer cannot pass
+		fh=$(served "$1") && [[ $fh != "$fo" ]] && { log "decline ${1#/nix/store/}: cache.solnix.io serves $fh, this host built $fo (another build was published)"; find "$fx" -depth -delete; return 1; }
+		[[ -n $fh ]] && ( export XDG_CACHE_HOME=$fx; bounded 1800 nix store verify --store "$BUILDER_CACHE" --trusted-public-keys "$BUILDER_CACHE_KEY" "$1" ) > "$fx.ok" 2>&1 &&
+		    ! ( export XDG_CACHE_HOME=$fx/n; bounded 300 nix store verify --no-contents --store "$BUILDER_CACHE" \
+		          --trusted-public-keys bogus-1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= "$1" ) > "$fx.neg" 2>&1 &&
+		    grep -q untrusted "$fx.neg" && { find "$fx" -depth -delete; rm -f "$fx".*; return 0; }
+		fn="served ${fh:-nothing}; 8UNr: $(tail -1 "$fx.ok" 2> /dev/null | cut -c1-160); bogus key: $(tail -1 "$fx.neg" 2> /dev/null | cut -c1-120)"
+		find "$fx" -depth -delete; rm -f "$fx".*
+		(( (ft += 1) < 8 )) || { log "decline ${1#/nix/store/}: the client check failed: $fn"; return 1; }
+		sleep "${BUILDER_VERIFY_WAIT:-20}"
+	done
+}
+first() {	# first <pname> <out> <drv>^<output>: publish this host's first build of a served row's unserved out. rc 0 when it is
+	# served with our NarHash and the client check passed ($nar: the served NarHash; the caller claims), else 1 (logged).
+	typeset fm=$BUILDER_STATE/tried/${3##*/} fp=$BUILDER_STATE/pub/${2##*/} fb=$BUILDER_STATE/pub/backoff fl fst= fsid= fres= fz fn
+	mkdir -p "$BUILDER_STATE/pub" "$BUILDER_STATE/stamps" "${fm%/*}"; fl=$fm.submit
+	rowed "$2" || { log "decline $1: $2 is not an out of the served recipes.tsv: never published from here"; return 1; }
+	if [[ -s $fp ]]; then fsubmit "$2" "$fl" --status "$(cut -f1 "$fp")" --poll 120	# a 429 is /begin's: polling goes on
+	else
+		fz=$(printf '%(%s)T' now); [[ -s $fb ]] && (( $(<"$fb") > fz )) && { log "$1: new submissions back off for $(( $(<"$fb") - fz )) s more (429)"; return 1; }
+		fbuild "$1" "$2" "$3" || { [[ -n $fst ]] && { find "$fst" -depth -delete; rm -f "$fst".*; }; return 1; }
+		fn=0; while (( (fn += 1) <= BUILDER_PUBLISH_SLOTS )); do mkdir "$BUILDER_STATE/pub/slot.$fn" 2> /dev/null && break; done
+		(( fn <= BUILDER_PUBLISH_SLOTS )) || { find "$fst" -depth -delete; rm -f "$fst".*; log "$1: $BUILDER_PUBLISH_SLOTS submissions in flight; a later tick"; return 1; }
+		set -- "$1" "$2" "$3" --cache-dir "$fst" --paths "$fst.paths" --pathinfo "$fst.pathinfo" --stamps "$BUILDER_STATE/stamps" --with-refs
+		[[ $BUILDER_PUBLISH == 1 ]] && set -- "$@" --submit
+		log "$1: submitting $2 as $BUILDER_PUBLISH_ID$([[ $BUILDER_PUBLISH == dry ]] && print ' (BUILDER_PUBLISH=dry: no /begin)')"
+		fsubmit "$2" "$fl" "${@:4}"; rmdir "$BUILDER_STATE/pub/slot.$fn"; find "$fst" -depth -delete; rm -f "$fst".*
+		# finalized but not resolved yet: later ticks poll its status (never a second submission of the same out)
+		# shortcut: a submission that never resolves stays pending; rm $BUILDER_STATE/pub/<out> to submit again
+		[[ -n $fsid && $fres == @(proposed|approved|finalized*) ]] && printf '%s\t%(%Y-%m-%dT%H:%M:%SZ)T\t%s\n' "$fsid" now "$(nix-store -q --hash "$2")" > "$fp"
+	fi
+	case $fres in
+	promoted|'plan PUBLISHED')
+		fverify "$2" "$([[ -s $fp ]] && cut -f3 "$fp" || nix-store -q --hash "$2")" || return 1
+		rm -f "$fp"; print ok > "$fm"; nar=$(served "$2"); : > "$J/worked"	# tried/<drv> ok: the rebuild path never builds it again
+		log "$1: published $2 ($fres${fsid:+ $fsid}), NarHash $nar: an 8UNr-only client verified it"; return 0 ;;
+	proposed|approved) log "$1: $2 is $fres (${fsid:-?}): waiting for review (tier 1); polled on later ticks"; return 1 ;;
+	rejected) print -r -- "rejected (${fsid:-?}): $(grep '^  status:' "$fl" | tail -1 | cut -c11-400)" > "$fm.pub"; rm -f "$fp"; log "decline $1: $(<"$fm.pub")"; return 1 ;;
+	backoff\ +([0-9])) print $(( $(printf '%(%s)T' now) + ${fres#backoff } )) > "$fb"; log "$1: /begin answered 429: backing off ${fres#backoff } s"; return 1 ;;
+	'plan READY') log "dry run: would submit $2 as $BUILDER_PUBLISH_ID ($fl)"; return 1 ;;
+	'plan DRV-GATE-FAIL'|'plan BAD-LOCAL') print -r -- "cache-submit.py planned ${fres#plan } ($fl)" > "$fm.pub"; log "decline $1: $(<"$fm.pub")"; return 1 ;;
+	*) log "$1: submission of $2 ${fsid:+$fsid }ended '${fres:-nothing}' ($fl); $([[ -s $fp ]] && print polled || print submitted again) on a later tick"; return 1 ;;
+	esac
+}
 ready() {	# ready <pname> <outs>: 0 when the out ($out) was rebuilt here and is the NAR cache.solnix.io serves ($nar); else log why not.
 	# A job lists every served out of its (pname, version), from several commits. Each commit (revs) that evaluates to one of
 	# them is a candidate; the first whose out is served and whose dry run builds no non-FOD input here is the one rebuilt.
-	typeset d m nh r c why= seen=; nar= out=
+	# A served candidate (rebuild, vote) beats an unserved one (first publish, when this host may: cand says `first`).
+	typeset d m nh r c why= seen= qd= qr=; nar= out= crev=
 	for r in $(revs "$2"); do
 		d=$(drv_for "$1" "$2" "$r") || { d=; continue; }
 		[[ " $seen " == *" ${d#* } "* ]] && { d=; continue; }; seen="$seen ${d#* }"
-		c=$(cand "${d%% *}" "${d#* }" "$r") && { nar=$c; break; }
+		# a first candidate keeps its own root: the next candidate's cand() re-points root-drv
+		c=$(cand "${d%% *}" "${d#* }" "$r") && { [[ $c == first ]] || { nar=$c; break; }
+			[[ -n $qd ]] || { m=${d#* }; nix-instantiate --add-root "$J/root-first" --expr "import ${m%^*}" > /dev/null 2>&1 && qd=$d qr=$r; }; d=; continue; }
 		why="$why${why:+; }$c [${r:0:12}]" d=
 	done
+	[[ -z $d && -n $qd ]] && d=$qd r=$qr nar=first
 	[[ -n $d ]] || { log "decline $1: ${why:-no packages.$BUILDER_SYSTEM attr at its commit(s) or $flake evaluates to $2}"; return 1; }
 	out=${d%% *} d=${d#* }; set -- "$1" "$out"
+	# sent with the completion: rows[].commit, else the commit the candidate was evaluated at (head: this tick's locked rev)
+	crev=${rowc:-}; [[ $crev == +([0-9a-f]) && ${#crev} == 40 ]] || { crev=$r; [[ $r == head ]] && { crev=${flake##*[?&]rev=}; crev=${crev%%&*}; }; }
+	[[ $nar == first ]] && { log "$1: candidate ${r:0:12} $d (first publish: $2 is not served yet)${why:+ (skipped: $why)}"; first "$1" "$2" "$d"; return; }
 	log "$1: candidate ${r:0:12} $d${why:+ (skipped: $why)}"
 	m=$BUILDER_STATE/tried/${d##*/}
 	[[ -s $BUILDER_BEARER_FILE ]] || { log "dry run: would fetch $2 and rebuild $d"; return 1; }	# no fetch or CPU for what it cannot claim
@@ -231,7 +357,7 @@ job() {	# job <pname> <outs> <version> <commit|->: one BUILD row, start to finis
 	typeset rowc=$4	# rows[].commit (drv_for evaluates it first)
 	J=$BUILDER_STATE/job/${1//[!A-Za-z0-9._+-]/_}; mkdir -p "$J" || return 1
 	ready "$1" "$2" && claim "$1" "$out" "$3" "$nar"
-	rm -f "$J/root-out" "$J/root-drv"	# the next GC may take them; a later tick re-fetches or re-evaluates
+	rm -f "$J"/root-*	# the next GC may take them; a later tick re-fetches, re-evaluates or rebuilds
 }
 tick() {	# rc 0 when a job rebuilt or completed something: the loop then re-ticks soon
 	typeset rows=$BUILDER_STATE/rows.json rec=$BUILDER_STATE/recipes.tsv z k c b p
@@ -252,6 +378,7 @@ tick() {	# rc 0 when a job rebuilt or completed something: the loop then re-tick
 	log "row origins: $(cut -f2 "$BUILDER_STATE/origins" | sort -u | wc -l | tr -d ' ') commits for $(wc -l < "$BUILDER_STATE/origins" | tr -d ' ') served outs"
 	log "up to $k jobs of $c cores ($b of $BUILDER_NCPU CPUs busy), $flake"
 	C=$c; rm -f "$BUILDER_STATE"/job/*/worked "$BUILDER_STATE"/job/*/root-*; JOBMAX=$k	# roots of a killed tick's jobs
+	[[ -d $BUILDER_STATE/pub ]] && find "$BUILDER_STATE/pub" \( -name 'slot.*' -o -name 'stage.*' -o -name 'xdg.*' \) -prune -exec rm -r {} +	# a killed tick's
 	while read -r bp bd bo bv br; do
 		# pnames filters by pname only: with two rows of one pname the server may hand out the other one
 		[[ $(jq --arg p "$bp" --arg s "$BUILDER_SYSTEM" '[.rows[] | select(.pname == $p and .system == $s)] | length' "$rows") == 1 ]] ||
@@ -272,7 +399,7 @@ rows) rows "$2" "$3"; exit ;;
 size) size; exit ;;
 pause) pause "$2"; exit ;;
 once) mkdir -p "$BUILDER_STATE" && tick; exit ;;
-ready) mkdir -p "$BUILDER_STATE" && ready "$2" "$3"; exit ;;	# ready <pname> <outs>: prove one job by hand (never claims)
+ready) mkdir -p "$BUILDER_STATE" && curl -sS -m 60 -o "$BUILDER_STATE/recipes.tsv" "$BUILDER_RECIPES" && ready "$2" "$3"; exit ;;	# by hand: never claims
 esac
 mkdir -p "$BUILDER_STATE" || exit 1
 # at start (boot, restart), none of our builds runs yet: every fixed build dir whose owner has no process is from a killed build,

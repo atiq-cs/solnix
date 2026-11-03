@@ -9,6 +9,9 @@
 # profile = "dedicated" (a build host): every idle CPU in 4-core jobs, no cap, back to back (10-30 s) while it has work,
 #   2-5 min apart when the queue has nothing it can do.
 # Without /var/lib/solnix/build-queue-bearer it never claims.
+# publish (fleet3): a served row whose out is not on cache.solnix.io yet is built here and submitted with this host's own
+# builder id and key (agentId; solnix.builder.identityKeyFile, root-only, never in the store), through the gates in
+# scripts/ (pre-submit-check.sh --leaf, cache-submit.py). On by default for a dedicated, identified builder (dixi, dixa).
 #
 # The bearer: one shared X-Solnix-Build secret (infra 2026-10-28), sops solnix secrets/build-queue-bearer.yaml key
 # `build-queue-bearer`. It is NEVER in the store: the operator places it, root-only (see docs/community-features.md).
@@ -20,7 +23,14 @@ let
   st = "/var/lib/solnix/builder";
   s = pkgs.solnix;
   # git: nix 2.24 runs the git CLI to fetch the builder's git+https flake (BUILDER_FLAKE, solnix main)
-  path = "${s.jq}/bin:${s.nixChain.curl}/bin:${config.nix.package}/bin:${s.git}/bin:/usr/bin:/usr/sbin";
+  # openssl: cache-submit.py signs with `openssl pkeyutl`
+  path = "${s.jq}/bin:${s.nixChain.curl}/bin:${config.nix.package}/bin:${s.git}/bin:${s.openssl}/bin:/usr/bin:/usr/sbin";
+  # the publish gates and the submitter, as committed (scripts/ + the bootstrap exemption list gate-checks.py reads)
+  gates = builtins.path { name = "solnix-publish-gates"; path = ../../..; filter = p: t:
+    let r = lib.removePrefix (toString ../../.. + "/") (toString p); in
+    lib.elem r [ "scripts" "pkgs" "pkgs/illumos" "pkgs/illumos/bootstrap-exempt.tsv" ] || lib.elem r (map (f: "scripts/" + f)
+      [ "cache-submit.py" "pre-submit-check.sh" "drv-gate.sh" "publish-gate.sh" "gate-checks.py" "not-for-cache.tsv" "gate2-exemptions.tsv" ]); };
+  pub = cfg.publish != "off";
   ded = cfg.profile == "dedicated";
   opp = cfg.profile == "opportunistic";
   str = v: if v == null then "auto" else toString v;
@@ -36,6 +46,11 @@ let
     BUILDER_TICK_MIN = toString cfg.tickMin; BUILDER_TICK_MAX = toString cfg.tickMax;
     BUILDER_BUSY_TICK_MIN = toString cfg.busyTickMin; BUILDER_BUSY_TICK_MAX = toString cfg.busyTickMax;
     BUILDER_WSWEEP = "${./solnix-wsweep.ksh}";   # stale fixed build dirs of killed builds (wave4)
+    BUILDER_PUBLISH = { off = "0"; on = "1"; dry = "dry"; }.${cfg.publish};
+  } // lib.optionalAttrs pub {
+    BUILDER_GATES = "${gates}"; BUILDER_PYTHON = "${s.python3}/bin/python3";
+    GATE_GREP_DIR = "${s.gnugrep}/bin";   # publish-gate.sh needs GNU grep (-a -b -o); /usr/bin/grep comes first on its PATH
+    BUILDER_PUBLISH_KEY = config.solnix.builder.identityKeyFile; BUILDER_PUBLISH_ID = cfg.agentId;
   };
   cap = lib.optionalString (cfg.cpuCap != null) "project.cpu-cap=(privileged,${toString cfg.cpuCap},deny)";
 in
@@ -67,6 +82,14 @@ in
     tickMax = lib.mkOption { type = lib.types.ints.positive; default = if ded then 300 else 1800; description = "... and at most (random, so a fleet doesn't poll solnix.io in step)."; };
     busyTickMin = lib.mkOption { type = lib.types.ints.positive; default = if ded then 10 else if opp then 120 else cfg.tickMin; description = "Seconds to the next tick after one that rebuilt or completed a job: at least ..."; };
     busyTickMax = lib.mkOption { type = lib.types.ints.positive; default = if ded then 30 else if opp then 600 else cfg.tickMax; description = "... and at most."; };
+    publish = lib.mkOption { type = lib.types.enum [ "off" "on" "dry" ];
+      default = if ded && config.solnix.community.active.builder then "on" else "off";
+      description = ''
+        First-publish a served row's out that cache.solnix.io does not serve yet: build it here, pass
+        scripts/pre-submit-check.sh --leaf (a second build must be identical), submit it with this host's own builder id
+        (agentId) and key (solnix.builder.identityKeyFile), wait for it to be promoted, check it as an 8UNr-only client,
+        then complete the queue job. dry: everything but the signed /begin. Default: on for a dedicated, identified builder.
+      ''; };
     agentId = lib.mkOption { type = lib.types.strMatching "[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}"; default = config.networking.hostName;
       description = "agent_id sent to the queue (the host name)."; };
     # what builder-zone.nix runs in the zone: the same script and tools

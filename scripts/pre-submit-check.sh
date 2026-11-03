@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# pre-submit-check.sh <out> [<out>...] -- what a host (dixi, dixa, lixi) and our own submitter must pass before an out
+# pre-submit-check.sh [--leaf] <out> [<out>...] -- what a host (dixi, dixa, lixi) and our own submitter must pass before an out
 # is offered to cache.solnix.io (we promised infra: no host publishes until this runs on it). Every out is checked on
 # THIS host, from its own store:
 #   1. row     the SERVED recipes.tsv has a row whose out column names this exact path (the authority the site uses)
-#   2. drv     scripts/drv-gate.sh --closure on its deriver: the whole .drv closure builds from the store only (A1-A4)
+#   2. drv     scripts/drv-gate.sh --closure on its deriver: the whole .drv closure builds from the store only (A1-A4).
+#              --leaf: drv-gate.sh --leaf instead (the deriver + every unserved input drv), for a host's first publish of an
+#              out whose row is SERVED (maintainer 2026-11-03: pre-wave6 outs have host-PATH drvs deep in their closure).
+#              The stamp records the mode (5th column); --closure stays the default for an out with no served row.
 #   3. check   nix-store --realise --check of the deriver, so EVERY output (out, debug, man, ...) rebuilt bit-identical
 #   4. gate    scripts/publish-gate.sh: deriver, host/user names, store RUNPATH + ldd, build-host identity, undeclared
 #              references, and the out checks B6-B13 over the NAR stream (the bytes that get published)
@@ -33,22 +36,25 @@ if [ "${1:-}" = --selftest ]; then
   bash "$here/publish-gate.sh" --selftest || rc=1
   exit $rc
 fi
-[ $# -gt 0 ] || { echo "usage: pre-submit-check.sh <out>... | --selftest" >&2; exit 2; }
-CACHE=https://cache.solnix.io
+mode=--closure; [ "${1:-}" = --leaf ] && { mode=--leaf; shift; }
+[ $# -gt 0 ] || { echo "usage: pre-submit-check.sh [--leaf] <out>... | --selftest" >&2; exit 2; }
+# GATE_CACHE: another cache for the authority and deps steps (scripts/test-builder.sh's fixture cache). A stamp made against
+# it gets nothing past cache-submit.py --submit, which plans only against the served recipes.tsv and 8UNr-published refs.
+CACHE=${GATE_CACHE:-https://cache.solnix.io}
 T=$(mktemp -d "${TMPDIR:-/tmp}/presubmit.XXXXXX"); trap 'rm -rf "$T"' EXIT
 stamps=${GATE_STAMP_DIR:-$HOME/.cache/solnix-pre-submit}; mkdir -p "$stamps"
 if [ -n "${GATE_RECIPES:-}" ]; then cp "$GATE_RECIPES" "$T/recipes.tsv" || exit 2; authority="local $GATE_RECIPES (no stamps)"
 else
   c=$(curl -s -o "$T/recipes.tsv" -w '%{http_code}' "$CACHE/registry/recipes.tsv")
   [ "$c" = 200 ] || { echo "pre-submit: served recipes.tsv HTTP $c" >&2; exit 2; }
-  authority="served recipes.tsv sha256 $("$py" -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest()[:16])' "$T/recipes.tsv")"
+  authority="served recipes.tsv ($CACHE) sha256 $("$py" -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest()[:16])' "$T/recipes.tsv")"
 fi
 head -1 "$T/recipes.tsv" | grep -q $'\tout\t' || { echo "pre-submit: recipes.tsv has no out column" >&2; exit 2; }
 ocol=$(head -1 "$T/recipes.tsv" | tr '\t' '\n' | grep -n -x out | cut -d: -f1)
 awk -F'\t' -v c="$ocol" 'NR>1 && $c != "" {print $c}' "$T/recipes.tsv" | sort -u > "$T/outs"
 if [ -d /usr/gnu/bin ]; then ev="OI build host ($(uname -n)): /usr/gnu exists, so a host tool could have satisfied a build step unseen; WEAKER evidence than a build on a host without /usr/gnu"
 else ev="host without /usr/gnu ($(uname -n)): only store tools exist here, so this build is direct evidence of store-only"; fi
-echo "pre-submit: authority $authority; $(wc -l < "$T/outs" | tr -d ' ') out rows"
+echo "pre-submit: authority $authority; $(wc -l < "$T/outs" | tr -d ' ') out rows; drv gate $mode"
 echo "EVIDENCE $ev"
 batch=" $* "; rc=0; seen=""
 for p in "$@"; do
@@ -60,7 +66,7 @@ for p in "$@"; do
   if grep -qx -F "$p" "$T/outs"; then step row "PASS (served row names this out)"; else step row FAIL; why="$why no served row names this out;"; fi
   # 2 drv
   d=$(nix-store -q --deriver "$p" 2>/dev/null)
-  if bash "$here/drv-gate.sh" --closure "$p" > "$T/drv" 2>&1; then step drv "PASS ($(tail -1 "$T/drv" | sed 's/^PASS [^ ]* //'))"
+  if bash "$here/drv-gate.sh" $mode "$p" > "$T/drv" 2>&1; then step drv "PASS $mode ($(tail -1 "$T/drv" | sed 's/^PASS [^ ]* //'))"
   else step drv FAIL; grep -E '^(FAIL A|WARN)' "$T/drv" | head -8 | sed 's/^/    /'; why="$why drv-gate;"; fi
   grep '^EXEMPT' "$T/drv" | cut -c1-400 | sed 's/^/    /'
   # 3 check: every output of the deriver rebuilt bit-identical
@@ -98,7 +104,7 @@ for p in "$@"; do
     nh=$(nix path-info --json "$p" 2>/dev/null | "$py" -c 'import json,sys; d=json.load(sys.stdin); d=d[0] if isinstance(d,list) else next(iter(d.values())); print(d["narHash"])')
     if [ -z "${GATE_RECIPES:-}" ] && [ -z "$nostamp" ] && [ -n "$nh" ]; then
       key=$("$py" "$here/gate-checks.py" stampkey "$nh")
-      printf '%s\t%s\t%s\t%s\n' "$p" "$nh" "$(date -u +%FT%TZ)" "$(uname -n)" > "$stamps/$key.ok"
+      printf '%s\t%s\t%s\t%s\t%s\n' "$p" "$nh" "$(date -u +%FT%TZ)" "$(uname -n)" "drv${mode#-}" > "$stamps/$key.ok"
       echo "PASS $p (stamp $stamps/$key.ok)"
     else echo "PASS $p (no stamp: ${GATE_RECIPES:+local recipes}${nostamp:+--check skipped})"; fi
   else echo "FAIL $p:$why"; rc=1; fi
