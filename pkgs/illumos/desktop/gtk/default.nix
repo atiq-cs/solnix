@@ -34,4 +34,4 @@ let
   llvm-clang = import ./llvm.nix { inherit mkSrcPkg tools world; inherit (cli) cmake python3; };
   firefox-esr = import ./firefox.nix { inherit mkSrcPkg tools cli rust llvm-clang zlib nixChain graphics world noto-sans; inherit (dev) cbindgen nodejs;
     gtk = b // g; };
-in removeAttrs b [ "ftPriv" ] // g // dev // { inherit llvm-clang firefox-esr; inherit (tools) gperf nasm ninja; meson_1_10 = tools.meson; }
+in removeAttrs b [ "ftPriv" ] // g // dev // { inherit llvm-clang firefox-esr gtkTools; inherit (tools) gperf nasm ninja; meson_1_10 = tools.meson; }

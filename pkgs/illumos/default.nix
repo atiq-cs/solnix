@@ -1264,6 +1264,7 @@ in
   # the cargo/bsdfetch/COSMIC-data builders' store tool set, a build input of their served rows: exposed so a builder
   # without it can fetch it (recipes.tsv row) instead of declining those rows.
   solnix-hostfix-tools = hostfixTools;
+  solnix-gtk-build-tools = gtk.gtkTools;   # a build input of 21 gtk rows; rowed (recipes1 gtk1) so any host can substitute it
   # iwm wifi: the driver module + wpa-pmk (iwm-driver), and the augmentation
   # helpers wireless-iwx.nix uses to render an iwm-aware driver DB and kernel
   # tree when hardware.wirelessIwm.attachAtBoot. mkIwmKernel/iwmFirmware take
