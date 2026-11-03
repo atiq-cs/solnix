@@ -22,5 +22,5 @@ ${CC64:-/usr/gcc/14/bin/gcc} -m64 -o $R/tmp/t64 $R/tmp/t64.c || { echo "FATAL: t
   printf '\303\251\n' | chroot $R /usr/bin/iconv -f UTF-8 -t UTF-16 > $R/tmp/o32 2> $R/tmp/e32; rc=$?
   echo "iconv32(1): rc=$rc out:$(od -An -tx1 $R/tmp/o32 | tr -s ' ') err:$(head -1 $R/tmp/e32)"
   r=$(chroot $R /tmp/t64 2>&1); echo "iconv_open64: rc=$? out: $r"
-  elfdump -e $R/tmp/t64 | grep -m1 ei_class; } > $O 2>&1
+  elfdump -e $R/tmp/t64 | grep ei_class | head -1; } > $O 2>&1
 cat $O
