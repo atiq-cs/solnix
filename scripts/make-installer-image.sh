@@ -366,6 +366,11 @@ KS=$(rl "$TOP/kernel-slice")
 [ -n "$KS" ] && [ -d "$KS/boot" ] || die "toplevel has no kernel-slice/boot"
 ( cd "$KS" && tar cf - boot ) | ( cd "$OUT/iso" && tar xf - )
 chmod -R u+w "$OUT/iso/boot"
+# the loader brand (boot.loader.brand), as install-be's lay_brand lays it into a BE
+_bb=$(rl "$TOP/boot-brand")
+[ -z "$_bb" ] || for _f in forth/brand-solnix.4th solnix-brand.png conf.d/solnix-brand; do
+  mkdir -p "$OUT/iso/boot/$(dirname "$_f")" && cp "$_bb/$_f" "$OUT/iso/boot/$_f" || die "copying the loader brand $_f"
+done
 cp "$KS/platform/i86pc/kernel/amd64/unix" "$OUT/iso/platform/i86pc/kernel/amd64/unix"
 cp "$KS/boot/loader64.efi" "$OUT/loader64.efi"
 cp "$KS/boot/cdboot" "$OUT/cdboot"

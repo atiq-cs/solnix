@@ -3311,6 +3311,17 @@ if [ -f "$_mt" ]; then
 else
   echo "WARNING: $_mt absent -- cannot rebrand the boot menu title" >&2
 fi
+# the brand loader_brand="solnix" (below) includes: forth/brand-solnix.4th + solnix-brand.png (src/boot-brand). Absent
+# when this script was copied alone to the host; make-iso-usb.sh's branding gate then fails the image.
+_bsrc="$(dirname "$0")/../src/boot-brand/boot"
+if [ -d "$_bsrc" ]; then
+  for _f in forth/brand-solnix.4th solnix-brand.png conf.d/solnix-brand; do
+    mkdir -p "$OUT/iso/boot/$(dirname "$_f")" && cp "$_bsrc/$_f" "$OUT/iso/boot/$_f" \
+      || { echo "FATAL: copying $_bsrc/$_f" >&2; exit 1; }
+  done
+else
+  echo "WARNING: $_bsrc absent (copy src/boot-brand/boot next to this script's ../): the loader will draw no brand" >&2
+fi
 
 # ⚠️ UNQUOTED heredoc, deliberately. With <<'EOF' the ${SOLNIX_CONSOLE:-text}
 # below is written to loader.conf LITERALLY, and the loader has no shell-style

@@ -181,6 +181,11 @@ error anywhere: the same silent-no-op class as the `readlink` and `stat` bugs. B
 the assembler's heredoc, plus a hard gate that fails the build if `menu.4th` still says
 `Welcome to illumos`, or lacks `Welcome to solnix`, or `loader.conf` lacks `loader_brand="solnix"`.
 
+**Correction (2026-11-03):** `loader_brand="solnix"` alone drew *no* wordmark at all. `brand.4th` includes
+`/boot/forth/brand-solnix.4th`, and no such file shipped, so the top-left of the menu was blank on the live media
+(QEMU screenshot under OVMF with lixi's loader, /scratch/solnix/brand1/qemu/shot-media.png). The brand files now come
+from `src/boot-brand/boot`, and the gate also requires `boot/forth/brand-solnix.4th` and `boot/solnix-brand.png`.
+
 **Superseded — do not flash.** `usb-image-20260909c/` (no console-flood fix, no branding),
 `usb-image-20260909b/` (also missing the `/dev` staging fix; its 18-boot matrix is kept as the
 reference), `usb-image-20260909/` (the pair that failed on the X1 at 820 MiB).
