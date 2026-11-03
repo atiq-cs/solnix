@@ -260,9 +260,21 @@
         # cached and starter are store-path imports (builtins.storePath /
         # fetchClosure), not builds, and fetchClosure needs an experimental feature
         # whose absence tryEval cannot catch, so they are named and dropped first.
-        x86_64-solaris = lib.filterAttrs (_: v:
+        # plus the seed rung (lib/host-pkgs.nix seedPkgs: the buildTools = [ ] instance every x86 build stands on) under its served
+        # row pnames (<pname>-seed, illumos-userland-seed, seed-tar-alias, solnix-seed-build-tools, gcc-wrapper-seed), so the
+        # builder's drv_for (packages.<system>.<pname>) finds a seed row's derivation (wave6t: none did; the served -seed rows were
+        # rowed by out only). Never over an existing name.
+        x86_64-solaris = let p = mkPkgs { }; s = p.seedPkgs;
+            seedRows = {
+              zlib-seed = s.zlib; libxml2-seed = s.libxml2; nspr-seed = s.nspr; nss-seed = s.nss; illumos-userland-seed = s.world;
+              coreutils-seed = s.coreutils; findutils-seed = s.findutils; gnused-seed = s.gnused; gnugrep-seed = s.gnugrep;
+              gnutar-seed = s.gnutar; gzip-seed = s.gzip; gnumake-seed = s.gnumake; gnupatch-seed = s.gnupatch; xz-seed = s.xz;
+              binutils-seed = s.binutils; perl-seed = s.perl; bash-seed = s.bash; gcc-wrapper-seed = s.gccWrapper;
+              seed-tar-alias = s.seedTarAlias; solnix-seed-build-tools = s.seedBuildTools;
+            };
+          in lib.filterAttrs (_: v:
           let r = builtins.tryEval (lib.isDerivation v); in r.success && r.value)
-          (removeAttrs (mkPkgs { }).solnix [ "cached" "starter" ]);
+          (seedRows // removeAttrs p.solnix [ "cached" "starter" ]);
         # the native aarch64 set (pkgs/illumos/aarch64; lib/host-pkgs.nix uses the same import), for drv_for on dixa. The
         # served aarch64 rows include the nix chain and gate pieces that live only in nested sets (srcPkgs, nixChain): they
         # are lifted to the top, never over an existing name (sqlite: one 3.50.4, which nixChain links too), plus

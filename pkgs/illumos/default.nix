@@ -1307,7 +1307,7 @@ in
   # buildTools so from-source builds resolve gmake/tar/grep/sed/gstrip/gzip/xz
   # from the store (not /usr/gnu). host-pkgs.nix wires it as the default for a
   # system eval; the gate/bhost build keeps buildTools=[] (byte-identical).
-  inherit seedBuildTools;
+  inherit seedBuildTools seedTarAlias;   # seedTarAlias: its row pname seed-tar-alias (flake.nix x86_64-solaris seed rows)
   # the cargo/bsdfetch/COSMIC-data builders' store tool set, a build input of their served rows: exposed so a builder
   # without it can fetch it (recipes.tsv row) instead of declining those rows.
   solnix-hostfix-tools = hostfixTools;
