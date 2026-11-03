@@ -6,12 +6,19 @@
 { srcPkgs, homePkgs, a64, final, system }:
 let
   inherit (srcPkgs) mkSrcPkg zlib;
+  # dixa's nix.conf has cores = 0, so NIX_BUILD_CORES=0 and `-j''${NIX_BUILD_CORES:-8}` is gmake -j0 (fails). nixpkgs' setup.sh
+  # normalizes a non-positive NIX_BUILD_CORES to the CPU count; same here, for the recipes that read it (libpng: b1's own fix).
+  mkCores = a: mkSrcPkg (if a.pname == "libpng" || builtins.match ".*NIX_BUILD_CORES.*" a.build == null then a
+    else a // { build = ''[ "''${NIX_BUILD_CORES:-0}" -gt 0 ] 2>/dev/null || NIX_BUILD_CORES=24'' + "\n" + a.build; });
   cli = homePkgs.cliSet; base = homePkgs.baseSet;
   gtools = import ../graphics/tools.nix { inherit mkSrcPkg; };
-  glibs = import ../graphics/libs.nix { inherit mkSrcPkg zlib; tools = gtools; inherit (base) pkgconf; inherit (homePkgs) world; };
+  glibs = homePkgs.graphicsSet;
   ginput = import ../graphics/input.nix { inherit mkSrcPkg; tools = gtools; inherit (base) pkgconf; };
-  # gtk/base.nix's libpng: tools.path (meson, python3, ...: not on aarch64 yet) is unused by its configure build -> ':'
-  gtkBase = import ../desktop/gtk/base.nix { inherit mkSrcPkg zlib; tools = { path = ":"; }; python3 = null; inherit (cli) cmake;
+  # desktop/gtk/tools.nix (meson 1.10.2 on the store python3, gperf, nasm, ninja) and gtk/base.nix (libpng, pcre2, ...), as
+  # desktop/gtk/default.nix wires them (its own mkSrcPkg wrapper adds gtkTools = x86 GNU binutils; aarch64's store set has none)
+  gtkTools = import ../desktop/gtk/tools.nix { mkSrcPkg = mkCores; inherit (cli) python3 gnupatch; inherit (gtools) samurai; inherit (base) pkgconf gettext; };
+  # tools.path stays ':' (b1's libpng text interpolates it; freetype & co. that need meson/pkg-config on PATH come with a later batch)
+  gtkBase = import ../desktop/gtk/base.nix { mkSrcPkg = mkCores; inherit zlib; tools = { path = ":"; inherit (gtkTools) nasm; }; inherit (cli) python3 cmake;
     graphics = glibs; inherit (srcPkgs) nixChain; noto-sans = null; };
   # desktop/ as pkgs/illumos/default.nix wires it (data, xdg, help, cosmic-wallpapers); cargoPkg null: pop-launcher is never forced
   desk = import ../desktop { cargoPkg = null; graphics = null; fd = null; inherit mkSrcPkg; inherit (srcPkgs) bash;
@@ -33,6 +40,14 @@ in
   inherit (glibs) expat libffi;
   inherit (ginput) hwdata;
   inherit (gtkBase) libpng;
+  # batch 2 (a64r b2): python3 and the C tier that needs no meson. Not yet: bdwgc (gcconfig.h: __aarch64__ on a non-Linux/BSD OS is NOSYS, no UNIX_LIKE: a port, then w3m), screen (links the proto's
+  # libcrypt/libutempter, which aarch64's gate libs lack: ldd resolved them to the host /usr/lib), whisper-cpp (x86 SIMD flags), lsof
+  # (builds with ./default.nix's ARCH64B + zlib fixes, but its in-build `lsof -p $$` needs kvm_open of /dev/kmem, which nixbld on
+  # dixa may not open: "kvm_open ... Permission denied". A host permission; held, not worked around)
+  inherit (cli) python3 tcl groff texinfo hunspell pinentry-curses fmt catch2_3;
+  inherit (gtkTools) gperf nasm; inherit (gtools) samurai;
+  inherit (gtkBase) pcre2 libjpeg-turbo;
+  inherit (base) smartmontools;   # not libxml2: base-src's links base-src's own zlib (abis 64+32), a 2nd zlib drv_for cannot reach
   inherit (desk) xdg-utils xdg-user-dirs;
   solnix-help = derivation (a64.plain (desk.solnix-help.drvAttrs // { inherit system; }));
 } // builtins.mapAttrs (_: retarget) {

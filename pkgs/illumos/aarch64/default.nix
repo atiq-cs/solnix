@@ -187,6 +187,28 @@ let
       # shell with ksh's select). NixOS patchShebangs it to the store bash instead; /bin/sh keeps tzdata reference-free.
       tzdata = { build = let b = builtins.replaceStrings [ "gmake -j8 CC=" ] [ "gmake -j8 KSHELL=/bin/sh CC=" ] args.build; in
         if b == args.build then throw "a64r tzdata: gmake anchor" else b + "\nhead -1 $out/bin/tzselect | grep -qx '#!/bin/sh' || { echo 'FATAL: tzselect #! is not /bin/sh' >&2; exit 1; }\n"; };
+      # python3: imports during install and the in-build checks write timestamp-mode pyc (gate2 B10; --check differed on dixa). Ship
+      # none, as the served x86 python3 (0 pyc; wave6's 3.13.18 recipe also rm's them first), and write none while checking.
+      # _sysconfigdata named $W (abs_builddir, RUNSHARED: 7 hits on dixa): /no-such-path, as nixpkgs and wave6.
+      python3 = { build = let a = ''      ln -sf python3 "$out/bin/python"''; b = builtins.replaceStrings [ a ]
+          [ (''      find "$out" -type d -name __pycache__ -prune -exec rm -r {} +; export PYTHONDONTWRITEBYTECODE=1'' + "\n"
+            # nixpkgs postInstall (and wave6's x86 3.13.18): the recorded build configuration must not name the build dir
+            + ''      for f in "$out"/lib/python3.13/_sysconfigdata*.py "$out"/lib/python3.13/config-3.13*/Makefile; do chmod u+w "$f"; LC_ALL=C sed -i -e "s|$W|/no-such-path|g" "$f"; done''
+            # check these two only: in the shipped (stripped) out they are the only files naming $W (measured, nav3ra6x); before
+            # mk-src-pkg's strip, which runs after this, other files under lib/python3.13 still do (the first v4 build FAILed here).
+            + "\n" + ''      ! grep -lF "$W" "$out"/lib/python3.13/_sysconfigdata*.py "$out"/lib/python3.13/config-3.13*/Makefile || { echo "FATAL: python3 sysconfig still names the build dir" >&2; exit 1; }'' + "\n" + a) ] args.build; in
+        if b == args.build then throw "a64r python3: anchor" else b
+          + "\n[ -z \"$(find $out -name '*.pyc' | head -1)\" ] || { echo 'FATAL: python3 ships pyc' >&2; exit 1; }\n"; };
+      # texinfo: the served x86 texinfo has no perl XS (0 .so; its configure found it unbuildable there). On aarch64 configure builds XS
+      # with perl's ccflags, which miss the arm64-gate flags (TLSDESC relocs, dixa), and with no store RUNPATH (the closure gate saw
+      # /lib/libc.so.1). --disable-perl-xs: the pure-perl texi2any, as x86 ships.
+      texinfo = { build = let b = builtins.replaceStrings [ "./configure --prefix=\"$out\" --disable-nls" ]   # perPkg sees the recipe text (pre-lp64Fix)
+          [ "./configure --prefix=\"$out\" --disable-nls --disable-perl-xs" ] args.build; in
+        if b == args.build then throw "a64r texinfo: configure anchor" else b; };
+      # lsof's dproc.c defines ARCH64B (the isalist word of a 64-bit kernel) for sparc and x86 only: aarch64's isalist says aarch64.
+      # and it links the proto's libctf -> libdwarf, which NEEDs libz (x86: the world has it): zlib as a dep (link path + RUNPATH).
+      lsof = { deps = args.deps ++ [ srcPkgs.zlib ]; build = "sed -i 's|^#    if defined(__i386) \\|\\| defined(__amd64)$|#    if defined(__aarch64__)\\n#        define ARCH64B \"aarch64\"\\n#    elif defined(__i386) \\|\\| defined(__amd64)|' lib/dialects/sun/dproc.c\n"
+        + "grep -q 'define ARCH64B \"aarch64\"' lib/dialects/sun/dproc.c || { echo 'FATAL: lsof ARCH64B anchor' >&2; exit 1; }\n" + args.build; };
       # gmp: the x86 text pins --build=x86_64-pc-solaris2.11 after lp64Fix's aarch64 --build (the last one wins): drop it.
       gmp6 = { build = let b = builtins.replaceStrings [ "--build=x86_64-pc-solaris2.11 " ] [ "" ] args.build; in
         if b == args.build then throw "a64r gmp6: --build anchor" else b; };
