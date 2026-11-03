@@ -42,7 +42,9 @@ rec {
       for f in "$out"/lib/perl5/*/*/Config_heavy.pl "$out"/lib/perl5/*/*/Config.pm; do chmod u+w "$f"; sed -i 's@/usr/gnu/bin/@@g' "$f"; done
       ! grep -n '/usr/gnu/' "$out"/lib/perl5/*/*/Config_heavy.pl "$out"/lib/perl5/*/*/Config.pm > "$W/perlgnu" \
         || { echo "FATAL: perl Config names /usr/gnu: $(head -3 "$W/perlgnu")" >&2; exit 1; }
-      ${chk ''"$out/bin/perl" -V:lns'' "^lns=.ln -s.;$"}
+      ${chk ''"$out/bin/perl" -V:lns'' (/* lns: the seed's is the bare name (the sed above); a store-only instance records the store
+        coreutils' ln, as nixpkgs perl does (nixpkgs 5.42.0: lns='/nix/store/...-coreutils-9.11/bin/ln -s'; wave6u: W2 t7 perl
+        bk8v93iv failed the bare-name check). A Nix comment: the seed drv's text must not change. */ if hostTools == [ ] then "^lns=.ln -s.;$" else "^lns=./nix/store/[a-z0-9]{32}-coreutils-[0-9.]+/bin/ln -s.;$")}
       ${if hostTools == [ ] then "" else ''
       # no build-host search dir in the recorded configuration (chef recorded /usr/gnu/lib, /usr/ccs/lib and perl5=/bin/perl; dixi did not)
       for v in libpth glibpth loclibpth locincpth xlibpth ldflags lddlflags perl5 libspath; do

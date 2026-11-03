@@ -18,10 +18,10 @@ let
   # The OI build host has its own gpgrt-config/libgcrypt in /usr/bin (1.12.4, measured): configure
   # takes a *-config from PATH, so the deps' bin/ go first and GPGRT_CONFIG names the store one.
   cfgPath = deps: builtins.concatStringsSep ":" (map (d: "${d}/bin") deps);
-  lib = { pname, version, sha256, deps ? [ ], flags ? "", check }: mkSrcPkg {
+  lib = { pname, version, sha256, deps ? [ ], flags ? "", check, allow ? "" }: mkSrcPkg {
     inherit pname version deps; src = gpgSrc pname version sha256; nativeTools = tools;
     # Makefile.am's maintainer target `stowinstall` (install prefix=/usr/local/stow/<pkg>): copied into the Makefile, never run
-    hostPathAllow = "install prefix=/usr/local/stow/";
+    hostPathAllow = "install prefix=/usr/local/stow/" + allow;
     build = ''
       export PATH="${cfgPath deps}''${PATH:+:$PATH}"
       ${if deps == [ ] then "" else "export GPGRT_CONFIG=${builtins.head deps}/bin/gpgrt-config"}
@@ -74,6 +74,8 @@ in rec {
     sha256 = "cf72510b8ebb4eb6693eef765749d83677a03c79291a311040a5bfd79baab763";
     deps = [ libgpg-error ];
     flags = "--with-libgpg-error-prefix=${libgpg-error}";
+    # tests/Makefile's oidtranstbl.h rule searches /etc/dumpasn1 /usr/local/bin .. /usr/bin for dumpasn1.cfg: a noinst test header
+    allow = "|for i in /etc/dumpasn1 /usr/local/bin ";
     check = ''[ -f "$out/lib/amd64/libksba.so.8" ] || { echo "FATAL: no libksba.so.8" >&2; exit 1; }'';
   };
 
