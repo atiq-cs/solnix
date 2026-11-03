@@ -183,9 +183,12 @@ let
     builder = if a64h then shell else a.builder; };
   hermetic = if aarch64 then hermeticA else if seedOuts then seedText else hermeticX;
   # the seed's CC by name: the wrappers move to $W/bin$ABI/{gcc,g++} on PATH, as storeOnly does; PATH stays the OI host's
+  # CONFIG_SITE: the same host-state answers as every store-only build (gate L4: the seed's gnulib locale/fcntl probes ran on the
+  # OI host's state, wave6t step59)
   seedText = a: a // { args = map (x: builtins.replaceStrings
     [ ''export CC="$W/cc$ABI" ABI LIBSUB'' "find \"$out\" -name '*.la' -type f -delete" ]
-    [ ''mkdir -p "$W/bin$ABI"; mv "$W/cc$ABI" "$W/bin$ABI/gcc"; ln -s gcc "$W/bin$ABI/cc"; ln -s "$W/bin$ABI/gcc" "$W/cc$ABI"
+    [ ''export CONFIG_SITE=${./config.site}
+      mkdir -p "$W/bin$ABI"; mv "$W/cc$ABI" "$W/bin$ABI/gcc"; ln -s gcc "$W/bin$ABI/cc"; ln -s "$W/bin$ABI/gcc" "$W/cc$ABI"
       if [ -f "$W/c++$ABI" ]; then mv "$W/c++$ABI" "$W/bin$ABI/g++"; ln -s g++ "$W/bin$ABI/c++"; ln -s "$W/bin$ABI/g++" "$W/c++$ABI"; export CXX=g++; fi
       export PATH="$W/bin$ABI:$PATH" CC=gcc CC_FOR_BUILD=gcc ABI LIBSUB''
       "find \"$out\" -name '*.la' \\( -type f -o -type l \\) -delete\n    /usr/bin/bash ${./seed-outs.sh} \"$out\" \"$W\" || exit 1" ] x) a.args; };
