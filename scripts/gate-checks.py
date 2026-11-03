@@ -1141,6 +1141,8 @@ def selftest_out():
         ("B9 #!/usr/bin/perl", mut("bin/p", R(b"#!/usr/bin/perl -w\n", True)), False, "B9-shebang"),
         ("B9 not hit: a non-executable .pm with #!/bin/false", mut("share/x/M.pm", R(b"#!/bin/false\n")), True, None),
         ("B9 not hit: a relative #!perl", mut("bin/rel", R(b"#!perl -w\n", True)), True, None),
+        ("B13 WARN: GNU make's default include dir as its own C string", mut("bin/make", R(b"\x7fELF\0/usr/gnu/include\0/usr/local/include\0/usr/include\0", True)), True, "WARN B13-hostpath"),
+        ("B13 FAIL: -I/usr/gnu/include is not the upstream default", mut("bin/cc1", R(b"\x7fELF\0-I/usr/gnu/include\0", True)), False, "FAIL B13-hostpath"),
         ("B13 WARN: a compiled-in search list (texinfo INFOPATH)", mut("bin/info", R(b"\x7fELF\0PATH:/usr/local/info:/usr/info:/usr/gnu/info:/opt/gnu/info:/usr/share/info\0", True)), True, "WARN B13-hostpath"),
         ("B9 #!/usr/gnu/bin/bash", mut("bin/q", R(b"#! /usr/gnu/bin/bash\n", True)), False, "B9-shebang"),
         ("B9 #!/usr/bin/bash still FAILs", mut("bin/b", R(b"#!/usr/bin/bash\n", True)), False, "B9-shebang"),

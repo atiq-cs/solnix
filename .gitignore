@@ -212,3 +212,4 @@ docs/registry/real-derivations-224.tsv
 src/drm-port/nvidia-oss/nouveau/*.ods
 installer/screenshot-*.png
 docs/hardware/x1-gen5-install/*.png
+__pycache__/
