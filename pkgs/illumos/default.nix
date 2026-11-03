@@ -552,6 +552,7 @@ let
     gate = gate'; libcSlice = libc;
     sharedLibs = [ srcPkgs.libcExtra ];
     deps = [ srcPkgs.zlib srcPkgs.libxml2 srcPkgs.nspr srcPkgs.nss gcc.lib ];
+    fixups = buildTools != [ ];   # the system world only: the seed world (bootstrap set) keeps its drv
   };
 
   # The boot-time set: what must run before the shared /nix is mounted (init,

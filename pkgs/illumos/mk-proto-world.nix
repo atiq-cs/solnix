@@ -85,6 +85,9 @@
     "usr/sbin/hal-set-property" "usr/sbin/lshal" "usr/sbin/polkit-is-privileged"
   ]
 , system ? "x86_64-solaris"
+  # fixups: the system world's NixOS-style fixups (./world-fixups.sh, ./world-links.sh: host RUNPATH, pyc, dangling links, host #!)
+  # and their in-build checks. false = the seed world's text byte-for-byte (the bootstrap set must not move).
+, fixups ? false
 }:
 
 derivation {
@@ -99,7 +102,7 @@ derivation {
   excludeArg = builtins.concatStringsSep " " (exclude ++ (if withTests then [ ] else [ "opt" ]));
   dropArg = builtins.concatStringsSep " " dropUnloadable;
   depsArg = builtins.concatStringsSep " " deps;
-  args = [ "-c" ''
+  args = [ "-c" (''
     set -eu
     export PATH=/usr/gnu/bin:/usr/bin:/usr/sbin
     mkdir -p "$out/.world"
@@ -239,5 +242,8 @@ derivation {
       "$(find . -type f ! -path './lib-*' | wc -l | tr -d ' ')" "$(grep -c . .world/drop.expected | tr -d ' ')" \
       "$(wc -l < .world/setuid | tr -d ' ')" > .world/summary
     cat .world/summary >&2
-  '' ];
+  '' + (if fixups then ''
+    /usr/bin/bash ${./world-fixups.sh} "$out"
+    /usr/bin/bash ${./world-links.sh} "$out"
+  '' else "")) ];
 }
