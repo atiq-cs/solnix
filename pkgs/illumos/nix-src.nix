@@ -76,7 +76,9 @@ rec {
     # store-only (wave6, gate2 A1) when the instance has store tools; the seed instance keeps /usr/bin (bootstrap set)
     PATH = builtins.concatStringsSep ":" (map (d: "${d}/bin") hostTools);
     args = [ "-c" (if hostTools == [ ] then "/usr/bin/mkdir -p $out/etc/ssl/certs && /usr/bin/cp $pem $out/etc/ssl/certs/ca-bundle.crt"
-      else "/usr/bin/bash ${./path-gate.sh} && mkdir -p $out/etc/ssl/certs && cp $pem $out/etc/ssl/certs/ca-bundle.crt") ];
+      # trailing true: bash -c execs its last command, and a store coreutils one (cp) as the builder is killed by signal 9 (a64h step43:
+      # 6/6 on dixa; W6B-step68 and wave6t W2 here, which were this, not a killed client)
+      else "/usr/bin/bash ${./path-gate.sh} && mkdir -p $out/etc/ssl/certs && cp $pem $out/etc/ssl/certs/ca-bundle.crt && true") ];
   };
 
   sqlite = if sqliteShared != null then sqliteShared else mkSrcPkg {

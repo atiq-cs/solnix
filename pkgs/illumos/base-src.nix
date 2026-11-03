@@ -470,7 +470,7 @@ let
     name = "top-htop-3.4.1"; inherit system; inherit htop;
     builder = "/usr/bin/bash";
     PATH = "${coreutils}/bin";   # store-only (wave6, gate2 A1)
-    args = [ "-c" "/usr/bin/bash ${./path-gate.sh} && mkdir -p $out/bin && ln -s $htop/bin/htop $out/bin/top" ];
+    args = [ "-c" "/usr/bin/bash ${./path-gate.sh} && mkdir -p $out/bin && ln -s $htop/bin/htop $out/bin/top && true" ];   # true: see cacert
   };
 
   libevent = mkSrcPkg {

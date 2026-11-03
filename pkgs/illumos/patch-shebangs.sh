@@ -22,6 +22,7 @@ patch() {  # <dir> <skip>
 T=$(mktemp -d "${TMPDIR:-/tmp}/psb.XXXXXX") || exit 1
 printf '#!/bin/bash -e\necho a\n' > "$T/a"; printf '#!/bin/sh\n' > "$T/b"; printf '#!/usr/bin/nosuch\n' > "$T/c"; chmod +x "$T/a" "$T/b" "$T/c"
 SKIP="" patch "$T" 2>/dev/null; bp=$(command -v bash)
+while [ -h "$bp" ]; do t=$(readlink "$bp" 2>/dev/null || ls -ld "$bp" | sed 's/.* -> //'); case "$t" in /*) bp=$t;; *) bp=$(dirname "$bp")/$t;; esac; done   # as patch() (gtk's farm bash link)
 case "$bp" in /nix/store/*) [ "$(head -1 "$T/a")" = "#!$bp -e" ] || { echo "FATAL: patch-shebangs selftest: bash not patched" >&2; exit 1; };; esac
 [ "$(head -1 "$T/b")" = '#!/bin/sh' ] && [ "$(head -1 "$T/c")" = '#!/usr/bin/nosuch' ] || { echo "FATAL: patch-shebangs selftest" >&2; exit 1; }
 find "$T" -depth -delete
