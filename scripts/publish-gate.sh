@@ -43,6 +43,9 @@ for p in "$@"; do
     case "$f" in */testdata/*) continue;; esac   # test fixtures in a toolchain's sources (go: Linux ELFs), never loaded here (wave5)
     [ "$(od -An -tx1 -N4 "$f" 2>/dev/null | tr -d ' \n')" = 7f454c46 ] || continue
     elfdump -d "$f" 2>/dev/null | grep -q NEEDED || continue
+    # a kernel module (ET_REL) NEEDs other modules by name (misc/mac, drv/i2cnex): krtld resolves them in the running
+    # kernel, never ld.so.1, so ldd and RUNPATH do not apply (iwm/iwx/touchpad, wave6 pilot); its builder gates the links
+    elfdump -e "$f" 2>/dev/null | grep -q 'e_type:[[:space:]]*ET_REL' && continue
     rp=$(elfdump -d "$f" | awk '$2=="RUNPATH"||$2=="RPATH"{print $4}')
     for e in $(echo "$rp" | tr ':' ' '); do
       case "$e" in /nix/store/*|'$ORIGIN'*) ;; *) why="$why $f RUNPATH $e;";; esac
