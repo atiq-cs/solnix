@@ -58,11 +58,12 @@ rec {
     builder = "/usr/bin/bash";
     # store-only (wave6, gate2 A1): coreutils (mkdir cp) + grep, from the store tools nix-src's recipes use
     PATH = builtins.concatStringsSep ":" (map (d: "${d}/bin") hostTools);
-    args = [ "-c" ''
-      set -eu; [ -z "$PATH" ] && export PATH=/usr/gnu/bin:/usr/bin || /usr/bin/bash ${./path-gate.sh}
+    args = [ "-c" (''
+      set -eu
+    '' + (if hostTools == [ ] then "export PATH=/usr/gnu/bin:/usr/bin\n" else "/usr/bin/bash ${./path-gate.sh}\n") + ''
       mkdir -p $out/${libSub}; cp -P $boost/${libSub}/libboost_context.so* $out/${libSub}/
       if grep -rq "$boost" $out; then echo "FATAL: boost-context still names $boost" >&2; exit 1; fi
-    '' ];
+    '') ];
   };
 
   # Mozilla CA bundle (curl.se's extract), for nix's ssl-cert-file.

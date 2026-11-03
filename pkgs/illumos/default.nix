@@ -389,7 +389,7 @@ let
     else (import ./. { gate = gate'; inherit gateArgs; stdenvGcc = "14"; }).gcc15;
   gcc = if stdenvGcc == "14" then gcc14 else stdGcc15;
   # GCC 15.3.0 + the illumos patch series (./gcc15-src.nix, gcc1 fd815b3 as is), built in the gcc 14 instance.
-  gcc15 = if stdenvGcc != "14" then stdGcc15 else import ./gcc15-src.nix { gate = gate'; libcSlice = libc; inherit ld world; inherit (srcPkgs) libcExtra binutils;
+  gcc15 = if stdenvGcc != "14" then stdGcc15 else import ./gcc15-src.nix { gate = gate'; libcSlice = libc; inherit ld world; inherit (srcPkgs) libcExtra binutils bash;
     stage0 = srcPkgs.gccWrapper;   # the gcc 14 stdenv compiler builds the next one (NixOS stage chain)
     # store-only PATH; perl: libssp/libatomic make_sunver.pl. cliBase, not cli: no go/cargo in gcc15's closure.
     tools = builtins.concatStringsSep ":" (map (p: "${p}/bin") [ seedBuildTools srcPkgs.coreutils srcPkgs.findutils cliBase.gnupatch cliBase.perl ]); };

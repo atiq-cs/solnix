@@ -10,6 +10,8 @@
 #              recipes have btPath set, so a name match alone would exempt them: gate2 step5)
 #   gccseed  : env stage0 = /usr/gcc/14 (gcc-src.nix compiled by the OI IPS seed)
 #   slice    : env gate (the proto) and filesArg (mk-illumos-component: libc, ld, rtld, early, sys, base-tools)
+#   libcx    : env keys exactly builder gate libc name out system (base-src's illumos-libc-extra: 2 gate libs copied + elfedit; an
+#              input of the seed gcc14, so it stays as it is until the bootstrap-tools wave; gate2 drv-gate found it, wave6t step3)
 #   world    : env gate and dirsArg and sharedLibsArg (mk-proto-world: illumos-userland, its -dev output, and the world man)
 #   fod      : a fixed-output drv (outputHashMode recursive, a full sha256 outputHash): the pinned hash fixes its bytes whatever
 #              tools ran (NixOS fetchers also run outside the sandbox); gate2 A4 checks the hash is real
@@ -22,3 +24,4 @@
 ^illumos-world-man$	world	the world's man pages
 ^(solnix-seed-build-tools|seed-tar-alias)$	seedenv	the seed farm (symlinks to seed-instance outs only)
 ^illumos-gate-proto$	fod	the gate proto 601ihrx7 (gate.nix: copies the unpacked proto tarball; outputHash pinned)
+^illumos-libc-extra$	libcx	libthread + libkstat copied from the gate proto with RUNPATH -> the libc slice (base-src.nix libcExtra)

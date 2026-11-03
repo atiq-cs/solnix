@@ -47,6 +47,7 @@ if [ "${1:-}" = --exempt-check ]; then
       gccseed) [ "$(ev "$1" stage0)" = /usr/gcc/14 ] && has "$1" gccSrc && ! has "$1" btPath ;;
       slice) has "$1" gate && has "$1" filesArg ;;
       world) has "$1" gate && has "$1" dirsArg && has "$1" sharedLibsArg ;;
+      libcx) [ "$(sed 's/.*\],\[(//; s/)\])$//' "$1" | tr -d '\n' | sed 's/),(/\n/g' | sed 's/^"\([^"]*\)".*/\1/' | sort | tr '\n' ' ')" = "builder gate libc name out system " ] ;;
       fod) [ "$(ev "$1" outputHashMode)" = recursive ] && [ "$(ev "$1" outputHash | wc -c)" -gt 40 ] && ! has "$1" btPath ;;
       seedenv) local p d ok seen=""
         for p in $(ev "$1" paths) $(ev "$1" gnutar); do

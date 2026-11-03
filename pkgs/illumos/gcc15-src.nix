@@ -30,6 +30,7 @@
 , binutils                # store gas: --with-as, so the installed gcc needs no host /usr/bin/gas
 , tools                   # store bin dirs, the whole PATH before /usr/bin (no /usr/gnu): seed make/tar/xz/grep/sed/binutils,
                           # coreutils (cp -P), findutils, gnupatch, perl (make_sunver.pl). Infra's dixi trial fixes 3 and 4.
+, bash                    # store bash: CONFIG_SHELL (gate2 A1-tool: /usr/bin/bash is the OI host's); the seed instance's bash
 , world                   # the gate userland as a store path: the illumos tools (elfedit elfdump ldd nm od awk digest), as the store
                           # copy of the gate binaries /usr/bin holds, so PATH has no host dir at all (wave6, rows1's finding)
 , system ? "x86_64-solaris"
@@ -60,7 +61,7 @@ let
   SOURCE_DATE_EPOCH = "315532800";  # as NixOS stdenv: __DATE__/__TIME__ are the epoch, not the build day
   outputs = [ "out" "lib" ];
   builder = "/usr/bin/bash";
-  inherit binutils tools world;
+  inherit binutils tools world bash;
   # the world's bin dirs end PATH: the illumos base tools, from the store (no /usr/bin, /usr/sbin, /usr/gnu; ./path-gate.sh)
   worldPath = "${world}/usr/bin:${world}/usr/sbin:${world}/bin:${world}/sbin";
   PATH = "${tools}";
@@ -112,7 +113,7 @@ let
     tar xf "$mpcSrc"; mv mpc-1.3.1 mpc
     mkdir ../b; cd ../b
     # MAKEINFO=true: chef2 has /usr/bin/makeinfo, a solnix host none; the release tarball's prebuilt .info files are installed either way.
-    export CC="$stage0/bin/gcc" CXX="$stage0/bin/g++" CONFIG_SHELL=/usr/bin/bash MAKEINFO=true
+    export CC="$stage0/bin/gcc" CXX="$stage0/bin/g++" CONFIG_SHELL="$bash/bin/bash" MAKEINFO=true
     # NM: binutils' gnm (configure took OI's /usr/bin/nm -p before). gettext tools: none (--disable-nls; configure still looked).
     export NM="$binutils/bin/gnm" NM_FOR_TARGET="$binutils/bin/gnm" MSGFMT=: GMSGFMT=: XGETTEXT=: MSGMERGE=:
     # The compiler binaries themselves link the seed's C++ runtime statically, so

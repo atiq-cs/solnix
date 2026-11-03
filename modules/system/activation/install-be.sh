@@ -189,6 +189,15 @@ farm() {   # $1 = dir relative to /, mirrors $WORLD/$1
   done
 }
 farm lib; farm usr/lib; farm sbin
+# the world's root-relative links (usr/mail -> ../var/mail, usr/lib/fs/ufs/mount -> ../../../../etc/fs/ufs/mount, usr/lib/cron ...):
+# they dangle inside a store path, so the system world records them in .world/rootlinks instead (pkgs/illumos/world-links.sh) and
+# they are made here, in the BE. A parent that is itself a link into the store (usr/share/lib) is skipped: the link would land in
+# the store (usr/share/lib/fonts -> ../../../boot/fonts dangled there before too).
+[ -f "$R$WORLD/.world/rootlinks" ] && while IFS='	' read -r p t; do
+  [ -d "$(dirname "$p")" ] && [ ! -h "$(dirname "$p")" ] || continue
+  [ -d "$p" ] && [ ! -h "$p" ] && continue
+  relink "$t" "$p"
+done < "$R$WORLD/.world/rootlinks"
 # the early tools are real files in the BE; the rest of /sbin resolves after the mount.
 for b in init sh zfs mount autopush; do relink "$EARLY/sbin/$b" "sbin/$b"; done
 RT=$(grep -- '-rtld$' "$R$TOP/early-paths")

@@ -48,6 +48,7 @@ def _marker(m, d, clo):
     if m == "gccseed": return env.get("stage0") == "/usr/gcc/14" and "gccSrc" in env and "btPath" not in env
     if m == "slice": return "gate" in env and "filesArg" in env
     if m == "world": return "gate" in env and "dirsArg" in env and "sharedLibsArg" in env
+    if m == "libcx": return set(env) == {"builder", "gate", "libc", "name", "out", "system"}
     if m == "fod": return env.get("outputHashMode") == "recursive" and len(env.get("outputHash", "")) + 1 > 40 and "btPath" not in env
     if m == "seedenv":   # every path it links is an output of an input drv that is itself seed, gccseed or seedenv
         ps = (env.get("paths", "") + " " + env.get("gnutar", "")).split()
@@ -998,6 +999,8 @@ def selftest():
         ("NOT exempt: seed marker on a name outside the list", D("seedq", name="jq-1.8.2", env={"PATH": "/usr/gnu/bin:/usr/bin", "btPath": ""}), False, "A1-path"),
         ("exempt: slice libc (gate + filesArg)", D("slc", name="libc", env={"PATH": "/usr/gnu/bin:/usr/bin", "gate": STORE + "c" * 32 + "-illumos-gate-proto", "filesArg": "lib/libc.so.1"}), True, "EXEMPT"),
         ("NOT exempt: libc without the slice marker", D("slc2", name="libc", env={"PATH": "/usr/gnu/bin:/usr/bin"}), False, "A1-path"),
+        ("exempt: libc-extra (libcx: exactly gate + libc)", fake_drv("lcx", ["-c", "set -eu; export PATH=/usr/gnu/bin:/usr/bin; cp $gate/lib/x $out"], {"gate": STORE + "c" * 32 + "-illumos-gate-proto", "libc": STORE + "d" * 32 + "-libc"}, name="illumos-libc-extra"), True, "EXEMPT"),
+        ("NOT exempt: libc-extra with one more env key", fake_drv("lcx2", ["-c", "set -eu; export PATH=/usr/gnu/bin:/usr/bin"], {"gate": STORE + "c" * 32 + "-illumos-gate-proto", "libc": STORE + "d" * 32 + "-libc", "tool": "/usr/bin/x"}, name="illumos-libc-extra"), False, "A1-path"),
         ("exempt: seed farm linking only a seed out (seedenv)", D("farm", name="solnix-seed-build-tools", idrvs=[tools, sdz], env={"PATH": "/usr/bin", "paths": sdz_out}), True, "EXEMPT"),
         ("NOT exempt: seed farm linking a non-seed out", D("farm2", name="solnix-seed-build-tools", env={"PATH": "/usr/bin", "paths": T}), False, "A1-path"),
         ("NOT exempt: same name with store build tools", D("sysz", name="zlib-1.3.2", env={"PATH": "/usr/gnu/bin:/usr/bin", "btPath": T + "/bin", "stage0": "/usr/gcc/14"}), False, "A1-path"),
