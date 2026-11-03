@@ -1,8 +1,9 @@
 # desktop/xdg.nix -- xdg-utils and xdg-user-dirs (NixOS: services.graphical-desktop's xdg-utils, the cosmic module's
 # xdg-user-dirs). Both are small; neither needs glib.
-{ mkSrcPkg, bash, coreutils, gnugrep, gnused, file, hostname }:
+{ mkSrcPkg, bash, coreutils, gnugrep, gnused, file, hostname, hostTools }:
 let
   rt = "${bash}/bin:${coreutils}/bin:${gnugrep}/bin:${gnused}/bin:${file}/bin:${hostname}/bin";
+  gate = if hostTools == [ ] then "" else "/usr/bin/bash ${../path-gate.sh}";   # seed instance (hostTools []): host PATH, no gate
 in {
   # xdg-utils 1.2.1 (scripts only; the man pages need xmlto + docbook, not built here). As nixpkgs (resholve), each script
   # gets store bash and a runtime PATH ahead of the caller's: GNU coreutils for realpath/readlink -f (illumos has neither)
@@ -12,7 +13,9 @@ in {
     pname = "xdg-utils"; version = "1.2.1";
     src = { url = "https://gitlab.freedesktop.org/xdg/xdg-utils/-/archive/v1.2.1/xdg-utils-v1.2.1.tar.gz";
             sha256 = "f6b648c064464c2636884c05746e80428110a576f8daacf46ef2e554dcfdae75"; };
+    nativeTools = hostTools;   # store-only PATH (the OI host's /usr/gnu awk/sed/install otherwise; gtkfix)
     build = ''
+      ${gate}
       cd scripts; mkdir -p "$out/bin"
       for s in xdg-desktop-menu xdg-desktop-icon xdg-mime xdg-icon-resource xdg-open xdg-email xdg-screensaver xdg-settings; do
         : > "$s.txt"
@@ -40,7 +43,9 @@ in {
     pname = "xdg-user-dirs"; version = "0.20";
     src = { url = "https://user-dirs.freedesktop.org/releases/xdg-user-dirs-0.20.tar.xz";
             sha256 = "b8e34286278f4fef3e1bfe9685c395ccc0eb50c14d3a2fb4953dd00fbfd3af39"; };
+    nativeTools = hostTools;   # store-only PATH: GNU install from the store coreutils, not /usr/gnu/bin's (gtkfix)
     build = ''
+      ${gate}
       # meson's iconv probe: does iconv() take const char ** here?
       printf '#include <iconv.h>\nint main(void){iconv_t c=0;const char *i=0;char *o=0;size_t a=0,b=0;return (int)iconv(c,&i,&a,&o,&b);}\n' > ic.c
       ic=; $CC -Werror -c ic.c -o ic.o 2>/dev/null && ic=const

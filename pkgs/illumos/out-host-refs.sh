@@ -13,15 +13,16 @@ chk() {
     done
     find "$o" -type f | while read -r f; do
       [ "$(head -c 2 "$f" 2>/dev/null)" = '#!' ] || continue
-      i=$(head -1 "$f" | sed 's/^#![[:space:]]*//; s/[[:space:]].*//')
-      case "$i" in /nix/store/*|/bin/sh|/usr/bin/env) ;; *) echo "$f: #!$i outside /nix/store";; esac
+      i=$(head -1 "$f" | tr -d '\000' | sed 's/^#![[:space:]]*//; s/[[:space:]].*//')
+      # only an absolute interpreter is a host path (cmake's GHS templates start "#!gbuild": a data format, not a script)
+      case "$i" in /nix/store/*|/bin/sh|/usr/bin/env) ;; /*) echo "$f: #!$i outside /nix/store";; esac
     done
   done
 }
 T=$(mktemp -d "${TMPDIR:-/tmp}/ohr.XXXXXX") || exit 1
 mkdir -p "$T/bad" "$T/good"
 ln -s /usr/bin/nawk "$T/bad/awk"; printf '#!/usr/bin/perl\n' > "$T/bad/s"
-ln -s /nix/store/00000000000000000000000000000000-x/bin/awk "$T/good/awk"; ln -s ../x "$T/good/rel"; printf '#!/bin/sh\n' > "$T/good/s"
+ln -s /nix/store/00000000000000000000000000000000-x/bin/awk "$T/good/awk"; ln -s ../x "$T/good/rel"; printf '#!/bin/sh\n' > "$T/good/s"; printf '#!gbuild\n' > "$T/good/g"
 [ "$(chk "$T/bad" | wc -l | tr -d ' ')" = 2 ] && [ -z "$(chk "$T/good")" ] || { echo "FATAL: out-host-refs selftest failed" >&2; find "$T" -depth -delete; exit 1; }
 find "$T" -depth -delete
 [ "${1:-}" = --selftest ] && { echo "out-host-refs selftest PASS"; exit 0; }

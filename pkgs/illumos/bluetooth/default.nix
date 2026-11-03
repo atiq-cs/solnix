@@ -14,6 +14,7 @@
 # pfexec against /dev/usb/8087.33/0. Firmware is pkgs.solnix.ibtFirmware.
 { gate                 # the gate proto (usr/include/sys/usb/clients/ugen/usb_ugen.h)
 , solnixDev            # gcc + binutils + gmake
+, tools                # store coreutils, findutils, the world (cp/mkdir/find/mktemp, awk/cmp/sed/grep): base-src's hostTools
 , libc                 # the libc slice: RUNPATH for the binaries
 , system ? "x86_64-solaris"
 }:
@@ -31,10 +32,11 @@ let
   tool = { name, dir, bin, extra ? "" }: derivation {
     inherit name system src gate solnixDev;
     builder = "/usr/bin/bash";
-    PATH = "/usr/bin:/usr/sbin";
     args = [ "-c" ''
       set -eu
-      export PATH="$solnixDev/bin:/usr/bin:/usr/sbin"
+      # store tools only: with /usr/bin on PATH, cp/mkdir/find/awk came from the build host (OI's on chef, rows1 audit)
+      export PATH="$solnixDev/bin:${builtins.concatStringsSep ":" (map (t: "${t}/bin") tools)}"
+      /usr/bin/bash ${../path-gate.sh}
       [ -f "$gate/usr/include/sys/usb/clients/ugen/usb_ugen.h" ] || { echo "FATAL: gate proto has no usb_ugen.h" >&2; exit 1; }
       W=$(mktemp -d /tmp/${name}.XXXXXX)
       cp -r "$src/." "$W/"; chmod -R u+w "$W"; cd "$W/${dir}"

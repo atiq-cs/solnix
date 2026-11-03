@@ -86,11 +86,12 @@ rec {
     pname = "quilt"; version = "0.69";
     src = { url = "https://download.savannah.gnu.org/releases/quilt/quilt-0.69.tar.gz";
             sha256 = "555ddffde22da3c86d1caf5a9c1fb8a152ac2b84730437bd39cc08849c9f4852"; };
-    deps = [ perl base.bash base.coreutils base.gnused base.gnugrep base.diffutils base.findutils gnupatch getopt ];
+    deps = [ perl base.bash base.coreutils base.gnused base.gnugrep base.diffutils base.findutils gnupatch getopt world ];
+    nativeTools = hostTools;   # store-only PATH + config.site (recipes1); every tool quilt runs is baked by store path below
     build = ''
       C=${base.coreutils}/bin
       ./configure --prefix="$out" --with-perl=${perl}/bin/perl --with-bash=${base.bash}/bin/bash \
-        --with-getopt=${getopt}/bin/getopt --with-sed=${base.gnused}/bin/sed --with-awk=/usr/bin/nawk \
+        --with-getopt=${getopt}/bin/getopt --with-sed=${base.gnused}/bin/sed --with-awk=${world}/usr/bin/nawk \
         --with-diff=${base.diffutils}/bin/diff --with-patch=${gnupatch}/bin/patch \
         --with-find=${base.findutils}/bin/find --with-xargs=${base.findutils}/bin/xargs \
         --with-date=$C/date --with-cp=$C/cp --with-stat=$C/stat --with-column=$C/true \

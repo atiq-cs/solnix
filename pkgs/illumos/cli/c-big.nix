@@ -1,18 +1,25 @@
 # cli/c-big.nix -- perl, the autotools, python3, cmake, ccache.
-{ base, mkSrcPkg, world, zlib, openssl, ncurses, readline, pkgconf, nixChain, graphics, chk, scrub, dropDocs, gnum4, sqlite, hostTools, ... }:
+{ base, mkSrcPkg, world, zlib, openssl, ncurses, readline, pkgconf, nixChain, graphics, chk, scrub, dropDocs, gnum4, sqlite, hostTools, gnupatch, ... }:
 rec {
   # perl, shared libperl, threads. libpth is the gate proto's only (no host /usr/lib probe).
   perl = mkSrcPkg {
     pname = "perl"; version = "5.42.2";   # queue target (policy-refresh,security; perl CVEs fixed in 5.42.2)
+    # no upstream signature; sha256 == CPAN's perl-5.42.2.tar.gz.sha256.txt
     docOutputs = [ "man" ];   # nixpkgs perl: man output (953 pages, mostly 3pm)
     src = { url = "https://www.cpan.org/src/5.0/perl-5.42.2.tar.gz";
             sha256 = "9384e8deb75b7b1695e5637971b752281aaecd025a3d5d4734d33c1d0adfee47"; };
     deps = [ world ];
+    nativeTools = [ gnupatch ] ++ hostTools;   # store-only PATH + config.site (recipes1); GNU patch for no-sys-dirs
     build = ''
       # hints/solaris_2.sh picks gcc vs Sun cc by "gcc" in the compiler's NAME; the builder's
       # wrapper is cc64 (-> Sun cc flags -xarch=generic64, measured). A gcc-named link to it.
       mkdir -p "$W/gccbin"; ln -sf "$CC" "$W/gccbin/gcc"; export PATH="$W/gccbin:$PATH"
       sed -i 's@ldflags="$ldflags -L/usr/gnu/lib"@:@; s@-L/usr/gnu/lib@@g' hints/solaris_2.sh
+      # nixpkgs no-sys-dirs: Configure must not search the build host's /usr/gnu/lib, /usr/lib, /usr/ccs/lib, /bin (recipes1 W3: chef and
+      # dixi baked different Config_heavy.pl). The hint's `set \`echo $glibpth ...\`` would, with glibpth empty, take Configure's own args.
+      chmod u+w Configure hints/solaris_2.sh; patch -p1 < ${../patches/perl-no-sys-dirs.patch}
+      sed -i 's|^set `echo $glibpth |set X `echo $glibpth |; s|^\(set X `echo $glibpth .*`\)$|\1; shift|' hints/solaris_2.sh
+      grep -q '^set X `echo $glibpth .*`; shift$' hints/solaris_2.sh || { echo "FATAL: solaris_2.sh glibpth line not patched" >&2; exit 1; }
       # Configure records the build time, host name, domain, user and uname -a (Config_heavy.pl, config.h, perlbug). Pinned to
       # neutral values (solnix.io policy: no build-host facts in a NAR), as nixpkgs interpreter.nix does; cf_time = SOURCE_DATE_EPOCH.
       printf '%s\n' 'myuname="solnix"' 'myhostname="localhost"' 'mydomain=""' 'cf_by="nixbld"' 'cf_email=""' \
@@ -26,6 +33,11 @@ rec {
       ${scrub}
       ${chk ''"$out/bin/perl" -v'' "v5\\.42\\.2"}
       ${chk ''"$out/bin/perl" -V:myhostname'' "^myhostname=.localhost.;$"}
+      # no build-host search dir in the recorded configuration (chef recorded /usr/gnu/lib, /usr/ccs/lib and perl5=/bin/perl; dixi did not)
+      for v in libpth glibpth loclibpth locincpth xlibpth ldflags lddlflags perl5 libspath; do
+        "$out/bin/perl" -V:$v | grep -qE "/usr/gnu|/usr/ccs|/usr/local|/opt/|[ ']/usr/lib[ ']|[ ']/lib[ ']|/bin/perl" \
+          && { echo "FATAL: perl Config $v names a host dir: $("$out/bin/perl" -V:$v)" >&2; exit 1; }
+      done
       ${chk ''"$out/bin/perl" -MPOSIX -MSocket -MDigest::SHA=sha1_hex -e "print sha1_hex(q(abc)),qq(\\n)"'' "^a9993e364706816aba3e25717850c26c9cd0d89d$"}
       [ -f "$out/share/man/man1/perl.1" ] || { echo "FATAL: no perl.1" >&2; exit 1; }
     '';
@@ -36,6 +48,7 @@ rec {
     src = { url = "https://mirrors.kernel.org/gnu/autoconf/autoconf-2.73.tar.xz";
             sha256 = "9fd672b1c8425fac2fa67fa0477b990987268b90ff36d5f016dae57be0d6b52e"; };
     deps = [ perl gnum4 ];
+    nativeTools = hostTools;   # store-only PATH + config.site (recipes1); m4 and perl by store path
     build = ''
       MAKEINFO=true ./configure --prefix="$out" M4=${gnum4}/bin/m4 PERL=${perl}/bin/perl
       gmake -j8 MAKEINFO=true; gmake install MAKEINFO=true
@@ -51,6 +64,9 @@ rec {
     src = { url = "https://mirrors.kernel.org/gnu/automake/automake-1.19.tar.xz";
             sha256 = "e3e2c2e3abf37898138db5b6c1d1dc35c9160c5978be7947d2c741705251d445"; };
     deps = [ perl autoconf ];
+    # store-only PATH + config.site (recipes1). bash: configure insists on a "sturdy" POSIX shell for its testsuite (the world's sh fails
+    # that probe) and finds it on PATH; NixOS's stdenv always has bash on PATH.
+    nativeTools = [ base.bash ] ++ hostTools;
     build = ''
       export PATH=${autoconf}/bin:${perl}/bin:$PATH
       MAKEINFO=true ./configure --prefix="$out" PERL=${perl}/bin/perl

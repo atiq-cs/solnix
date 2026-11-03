@@ -36,7 +36,9 @@ rec {
             sha256 = "e65d6d117080dc3aeeb7d8b4b3b518f7383aa2e6cfce23117c623cd624764c2f"; };
     deps = [ glib harfbuzz fribidi fontconfig freetype cairo ];
     linkDeps = pcPriv ++ [ pixman ];
+    nativeTools = [ glib ];   # glib-mkenums & co. by name, as NixOS nativeBuildInputs (gdk-pixbuf says why)
     build = ''
+      ${tools.charset}
       ${m "-Dintrospection=disabled -Ddocumentation=false -Dman-pages=false -Dbuild-testsuite=false -Dbuild-examples=false -Dxft=disabled -Dlibthai=disabled -Dsysprof=disabled -Dfontconfig=enabled -Dfreetype=enabled -Dcairo=enabled"}
       # render a line through pango-view with the source's DejaVu test font, to a PNG
       mkdir -p "$TMPDIR/fc"; cp tests/fonts/DejaVuSans.ttf "$TMPDIR/fc/"
@@ -55,7 +57,11 @@ rec {
             sha256 = "140c2d0b899fcf853ee92b26373c9dc228dbcde0820a4246693f4328a27466fa"; };
     deps = [ glib libpng libjpeg-turbo ];
     linkDeps = pcPriv;
+    # glib's bin on PATH (NixOS nativeBuildInputs = [ glib ]): meson finds glib-compile-resources by name; on chef it took OI's
+    # /usr/bin/glib-compile-resources 2.86.5, and a solnix host has none ("Program 'glib-compile-resources' not found", dixi)
+    nativeTools = [ glib ];
     build = ''
+      ${tools.charset}
       # gettext is in illumos libc (as in glibc; gtk3 checks libc first). gdk-pixbuf always adds -lintl, which NEEDs
       # libintl.so.1, a libc filter the store libc slice does not carry (closure gate FAIL: /lib/64/libintl.so.1, measured).
       grep -q "^intl_dep = cc.find_library('intl', required: false)" meson.build || { echo "FATAL: gdk-pixbuf intl anchor" >&2; exit 1; }
@@ -96,7 +102,9 @@ rec {
             sha256 = "1a1f5ba9805917f41fc6aa6823dcf887a291d607a427e2d5afb6b5dfa65070c7"; };
     deps = [ glib dbus libxml2 ];
     linkDeps = pcPriv;
+    nativeTools = [ glib ];   # glib-mkenums & co. by name, as NixOS nativeBuildInputs (gdk-pixbuf says why)
     build = ''
+      ${tools.charset}
       ${m "-Dx11=disabled -Duse_systemd=false -Ddefault_bus=dbus-daemon -Ddbus_daemon=${dbus}/bin/dbus-daemon -Ddocs=false -Dintrospection=disabled -Dgtk2_atk_adaptor=false -Dc_args=-D__EXTENSIONS__ '-Dc_link_args=-lsocket -lnsl'"}
       for pc in atk atspi-2 atk-bridge-2.0; do
         [ -f "$out/lib/amd64/pkgconfig/$pc.pc" ] || { echo "FATAL: at-spi2-core did not install $pc.pc" >&2; exit 1; }
@@ -114,7 +122,11 @@ rec {
             sha256 = "80931fa472a77b9a164f6740e3c0b444fac6770054632d35a7ff9d679e5e7b9f"; };
     deps = [ glib cairo pango harfbuzz fribidi fontconfig freetype gdk-pixbuf libepoxy at-spi2-core wayland libxkbcommon mesa ];
     linkDeps = pcPriv ++ [ wayland-protocols pixman graphics.libdrm dbus libxml2 ];
+    # + libxml2's xmllint: glib-compile-resources' xml-stripblanks (NixOS gtk3 nativeBuildInputs has libxml2; chef's build took the OI
+    # host's /usr/bin/xmllint silently, store-only builds warned "XMLLINT is not set" and kept the blanks)
+    nativeTools = [ glib libxml2 ];   # glib-mkenums & co. by name, as NixOS nativeBuildInputs (gdk-pixbuf says why)
     build = ''
+      ${tools.charset}
       ${tools.path}
       export PATH=${wayland}/bin:$PATH   # wayland-scanner
       patch -p1 < ${./patches/gtk-3.24.52-illumos-evdev-codes.patch}
@@ -125,9 +137,9 @@ rec {
       # positive test is gtk3-demo in lixi's COSMIC session). gtk3-demo --list needs a display (it activates first).
       printf '#include <gtk/gtk.h>\n#include <gdk/gdkwayland.h>\nint main(int c,char**v){g_print("%%u.%%u.%%u %%d\\n",gtk_get_major_version(),gtk_get_minor_version(),gtk_get_micro_version(),gtk_init_check(&c,&v));return 0;}\n' > "$TMPDIR/t.c"
       $CC "$TMPDIR/t.c" -o "$TMPDIR/t" -Wl,-R,"$out/lib/amd64" $(PKG_CONFIG_PATH="$out/lib/amd64/pkgconfig" pkg-config --cflags --libs gtk+-wayland-3.0)
-      env -i PATH=/usr/bin XDG_RUNTIME_DIR="$TMPDIR" WAYLAND_DISPLAY=none "$TMPDIR/t" > "$TMPDIR/t.out" 2>&1
+      env -i PATH="$PATH" CHARSET=UTF-8 XDG_RUNTIME_DIR="$TMPDIR" WAYLAND_DISPLAY=none "$TMPDIR/t" > "$TMPDIR/t.out" 2>&1
       grep -qx '3.24.52 0' "$TMPDIR/t.out" || { echo "FATAL: gtk_init_check without a display:" >&2; head -3 "$TMPDIR/t.out" >&2; exit 1; }
-      env -i PATH=/usr/bin XDG_RUNTIME_DIR="$TMPDIR" WAYLAND_DISPLAY=none "$out/bin/gtk3-demo" > "$TMPDIR/nod.out" 2>&1 && \
+      env -i PATH="$PATH" CHARSET=UTF-8 XDG_RUNTIME_DIR="$TMPDIR" WAYLAND_DISPLAY=none "$out/bin/gtk3-demo" > "$TMPDIR/nod.out" 2>&1 && \
         { echo "FATAL: gtk3-demo ran with no display" >&2; exit 1; }
       grep -q 'cannot open display' "$TMPDIR/nod.out" || { echo "FATAL: unexpected no-display error:" >&2; head -3 "$TMPDIR/nod.out" >&2; exit 1; }
     '';

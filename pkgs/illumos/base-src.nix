@@ -24,12 +24,16 @@ let
     storeOnly = buildTools != [ ];
     # the world's own closure (zlib libxml2 nspr nss) and the two tools in hostTools cannot use hostTools (a cycle): they get
     # the seed instance's world-free set (lib/host-pkgs.nix seedTools: perl coreutils findutils + the seed world).
-    defaultNativeTools = if builtins.elem (args.pname or "") [ "zlib" "libxml2" "nspr" "nss" "coreutils" "findutils" "pkgconf" ] then seedTools else hostTools;   # pkgconf: libxml2 (in the world) needs it
+    defaultNativeTools = if builtins.elem (args.pname or "") [ "zlib" "libxml2" "nspr" "nss" "coreutils" "findutils" "pkgconf" ] then seedTools   # pkgconf: libxml2 (in the world) needs it
+      else if (args.pname or "") == "bash" then hostToolsNoBash else hostTools;
   } (args // { # the seed instance is build-only (nothing it builds ships): no man/info/doc outputs there, so its drvs (and gcc15) do not move
     docOutputs = if buildTools == [ ] then [ ] else args.docOutputs or [ ]; });
   needWorld = if world == null then throw "base-src: this package needs the userland world" else world;
   # [] for the seed (buildTools = [], the OI bootstrap that builds seedBuildTools): its recipes keep the OI PATH, so no cycle and no seed move.
-  hostTools = if buildTools == [ ] then [ ] else [ self.coreutils self.findutils needWorld ];
+  # store bash first (recipes1 LOOPHOLES class 3: automake's configure wanted a POSIX shell the store-only PATH lacked and the OI host
+  # had; NixOS's stdenv always has bash on PATH). bash itself builds with the rest (no cycle: its only dep is the world).
+  hostToolsNoBash = if buildTools == [ ] then [ ] else [ self.coreutils self.findutils needWorld ];
+  hostTools = if buildTools == [ ] then [ ] else [ self.bash ] ++ hostToolsNoBash;
   # hermetic recipes (mk-src-pkg nativeTools): the store tools a configure/make run needs, NixOS stdenv's set (coreutils: GNU install,
   # findutils, gnused/gnugrep/gnutar/gzip/xz/make via the seed in buildTools), then the world for the illumos tools (elfdump, ld, nm).
   # Only recipes that are NOT one of these may use it (no cycle): coreutils/findutils are base outs that do not take nativeTools.

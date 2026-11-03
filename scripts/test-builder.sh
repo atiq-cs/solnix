@@ -11,6 +11,7 @@
 # 5. fleet1: a git fixture whose head moved past the served outs, with two batches from two commits on two branches: each row
 #    is built at the commit that added it (one pin for the file fails one batch: negative control); rows[].commit first;
 #    pname-with-dashes -> camelCase attr; a GC between fetch and --rebuild; a full disk is not memo'd.
+# 6. fleet2: a job's candidates (head, then each out's origin commit, newest first): the first that builds from served inputs wins.
 S=${1:-$(dirname "$0")/../modules/config/community/solnix-builder.sh}
 W=$(mktemp -d /tmp/bld.XXXXXX); trap 'find "$W" -depth -delete' EXIT
 bad=0; ok() { print "ok: $1"; }; no() { print "FAIL: $1"; bad=1; }
@@ -310,6 +311,45 @@ has 'decline pin1: the host, not the recipe, failed the rebuild' && [[ $(ls "$W/
   ok "a stale fixed build dir (rm Permission denied): declined, not memo'd" || no "stale W: $(print -r -- "$out" | grep pin1) $(ls "$W/stsw/tried")"
 # at start (the SMF loop, before its first tick) the sweep runs with age 0. Checked on the script, since the loop never exits.
 grep -q 'ksh93 "$BUILDER_WSWEEP" 0 |' "$S" && ok "the builder sweeps stale fixed build dirs at start, whatever their age" || no "no start sweep"
+# --- 6. fleet2: a job lists outs from several commits; the builder rebuilds the first CANDIDATE (head, then origins newest first)
+# whose out is served and whose dry run builds no non-FOD input here. Repo2: O adds rows, N adds more, head H moves on.
+#   tw: O's out needs a dep nobody has, N's is clean -> N (origin/main tried O alone and declined: dixi gnupatch/libffi 2026-11-02)
+#   tv: N's needs the dep, O's is clean -> O (the fallback goes both ways);  th: head evaluates O's served out -> head, first
+#   tb: both need a dep -> declined with both reasons, nothing memo'd;  tg: an eval cached at N whose .drv a GC took -> re-evaluated
+R2=$W/repo2; mkdir -p "$R2/docs/registry"; g2() { git -C "$R2" -c user.name=t -c user.email=t@t "$@" > /dev/null 2>&1; }
+pf2() {	# pf2 <tw> <tv> <th> <tb> <tg>: each c<tag> (a clean build) or d<tag> (needs a per-run dep nobody has)
+  typeset a n t s= i=0; set -A nm tw tv th tb tg
+  for a; do n=${nm[i]} t=${a#?}; i=$((i + 1))
+    if [[ $a == c* ]]; then s="$s $n = mk \"qb-$n-$t-${W##*/}\" \"echo $t > \$out\";"
+    else s="$s $n = mk \"qb-$n-$t-${W##*/}\" \"cat \${mk \"qb-${n}dep-$t-${W##*/}\" \"echo dep > \$out\"} > \$out\";"; fi; done
+  print -r -- "{ outputs = { self }: let mk = name: script: derivation { inherit name; system = \"x86_64-solaris\"; builder = \"/bin/sh\"; args = [ \"-c\" script ]; };
+  in { packages.x86_64-solaris = {$s }; }; }" > "$R2/flake.nix"; g2 add -A; }
+p2() { nix eval --raw "git+file://$R2?rev=$(git -C "$R2" rev-parse HEAD)#packages.x86_64-solaris.$1.outPath" 2> /dev/null; }
+g2 init -b main; pf2 dO cO cO dO cO; g2 commit -m O; TO=$(p2 tw) VO=$(p2 tv) HO=$(p2 th) BO=$(p2 tb)
+{ print -r -- "$H"; rec tw 1 y "$TO"; rec tv 1 y "$VO"; rec th 1 y "$HO"; rec tb 1 y "$BO"; } > "$R2/docs/registry/recipes.tsv"; g2 add -A; g2 commit -m rowsO; RO=$(git -C "$R2" rev-parse HEAD)
+pf2 cN dN cN dN cN; g2 commit -m N; TN=$(p2 tw) VN=$(p2 tv) HN=$(p2 th) BN=$(p2 tb) GN=$(p2 tg)
+{ rec tw 1 y "$TN"; rec tv 1 y "$VN"; rec th 1 y "$HN"; rec tb 1 y "$BN"; rec tg 1 y "$GN"; } >> "$R2/docs/registry/recipes.tsv"; g2 add -A; g2 commit -m rowsN; RN=$(git -C "$R2" rev-parse HEAD)
+pf2 cH cH cO dH cH; g2 commit -m head; git -C "$R2" show "$RN:docs/registry/recipes.tsv" > "$W/served6.tsv"
+nix build --no-link "git+file://$R2?rev=$RN#packages.x86_64-solaris."{tw,tg} "git+file://$R2?rev=$RO#packages.x86_64-solaris."{tv,th} >> "$W/fixture.log" 2>&1 &&
+  nix copy --to "file://$W/cache" "$TN" "$GN" "$VO" "$HO" >> "$W/fixture.log" 2>&1 && [[ -n $TO && -n $TN && -n $VN && -n $BN && $TO != "$TN" && $HN != "$HO" ]] ||
+  no "fixture 6: TO=$TO TN=$TN VN=$VN BN=$BN $(tail -2 "$W/fixture.log")"
+for x in "$TO" "$VN" "$BO" "$BN"; do printf 'StorePath: %s\nNarHash: %s\n' "$x" "$GH" > "$(hp "$x")"; done	# served, as needs above
+print "{\"rows\":[$(row tw 1 outdated),$(row tv 1 outdated),$(row th 1 outdated),$(row tb 1 outdated),$(row tg 1 outdated)]}" > "$W/six.json"
+mkdir -p "$W/st6/eval"; print -r -- "$GN /nix/store/00000000000000000000000000000000-qb-tg-gone.drv^out" > "$W/st6/eval/$RN.x86_64-solaris.tg"
+six() { : > "$W/fk/log"; out=$(env BUILDER_PATH="$W/fk:$PATH" FKREAL=$RC FKLOG=$W/fk/log FKROWS=$W/six.json BUILDER_API=http://queue.invalid/q BUILDER_CACHE=file://$W/cache \
+  BUILDER_FLAKE="git+file://$R2?ref=main" BUILDER_LOAD_MAX=1000 BUILDER_RECIPES=file://$W/served6.tsv BUILDER_STATE=$W/st6 ksh93 "${1:-$S}" once 2>&1); c=$(<"$W/fk/log"); }
+six; print -r -- "$out" | sed 's/^/   6 /'
+done6() { print -r -- "$c" | grep '/complete' | grep -q "\"status\":\"done\".*\"store_path\":\"$1\""; }
+has "tw: candidate ${RN:0:12} .*qb-tw-N-" && has 'tw: rebuilt .*qb-tw-N-.* identical' && [[ $(nc tw) == 1 ]] && done6 "$TN" &&
+  ok "two candidates, the older needs an unserved input: the newer ($RN) is rebuilt and claimed" || no "tw: $(print -r -- "$out" | grep ' tw')"
+has "tv: candidate ${RO:0:12} .*qb-tv-O-.*skipped: the dry run would build 1 .*\[${RN:0:12}\]" && has 'tv: rebuilt .*qb-tv-O-.* identical' && [[ $(nc tv) == 1 ]] && done6 "$VO" &&
+  ok "the newest candidate needs an unserved input: the older one is rebuilt, the skip logged" || no "tv: $(print -r -- "$out" | grep ' tv')"
+has 'th: candidate head .*qb-th-O-' && [[ $(nc th) == 1 ]] && done6 "$HO" && ok "head is the first candidate (it evaluates O's served out; N's is never tried)" || no "th: $(print -r -- "$out" | grep ' th')"
+has "decline tb: the dry run would build 1 .*\[${RN:0:12}\]; the dry run would build 1 .*\[${RO:0:12}\]" && [[ $(nc tb) == 0 ]] &&
+  ! ls "$W/st6/tried" 2> /dev/null | egrep -q 'qb-(tb|tw-O|tv-N)-' && ok "NEG every candidate needs an unserved input: declined with each reason, no claim, no candidate memo'd" ||
+  no "tb: $(print -r -- "$out" | grep ' tb') $(ls "$W/st6/tried" 2>&1)"
+has 'tg: rebuilt .*qb-tg-N-.* identical' && [[ $(nc tg) == 1 ]] && ! grep -q 00000000000000000000000000000000 "$W/st6/eval/$RN.x86_64-solaris.tg" &&
+  ok "an eval cache hit whose .drv was GC'd is re-evaluated, not declined 'cannot root' (dixi nss, solnix-cputemp 2026-11-02)" || no "tg: $(print -r -- "$out" | grep ' tg')"
 rm -f "$W/bearer"
 (( bad )) && print "RESULT: FAIL" || print "RESULT: PASS"
 exit $bad

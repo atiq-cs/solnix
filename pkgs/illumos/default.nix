@@ -449,9 +449,12 @@ let
   };
   # Desktop apps outside graphics/ (pop-launcher, cosmic-wallpapers): ./desktop, so the COSMIC outs do not move.
   desktop = import ./desktop { inherit (cargo) cargoPkg; inherit graphics; inherit (cli) fd file;
-    inherit (srcPkgs) mkSrcPkg bash coreutils gnugrep gnused hostname jq; };
+    inherit (srcPkgs) mkSrcPkg bash coreutils gnugrep gnused hostname jq hostTools; inherit hostfixTools world; inherit (cliBase) python3; };
   # The GTK 3 / Wayland stack for Firefox (./desktop/gtk): its own dir, so neither COSMIC nor desktop/ outs move.
   gtk = import ./desktop/gtk { base = srcPkgs; inherit graphics cli; inherit (cosmic) noto-sans; inherit (cargo) cargoPkg; rust = rust199; inherit world; };
+  # LLVM 23.1.4 from source, split as nixpkgs' llvmPackages: llvm, clang, lld, lldb, clang-wrapper (./llvm).
+  llvmPackages = import ./llvm { inherit (srcPkgs) mkSrcPkg hostTools; inherit (cli) cmake python3 gnupatch; inherit (gtk) ninja;
+    inherit world gcc ld libc; gate = gate'; };
   # COSMIC's fonts and icon themes on store tools only (./desktop/cosmic-data.nix). Not graphics/cosmic-data.nix, which
   # still evaluates there (unused) because graphics/ is every COSMIC app's fixups = ./. input: editing it moves all 21.
   # shortcut: graphics/cosmic-data.nix is dead text kept for that hash; delete it in the next wave that rebuilds COSMIC.
@@ -712,6 +715,7 @@ let
   bluetooth = import ./bluetooth {
     gate = gate';
     inherit libc;
+    tools = [ srcPkgs.coreutils srcPkgs.findutils world ];
     solnixDev = buildEnv {
       name = "solnix-dev";
       paths = [ srcPkgs.gccWrapper srcPkgs.binutils srcPkgs.gnumake ];
@@ -1302,6 +1306,9 @@ in
   # from the store (not /usr/gnu). host-pkgs.nix wires it as the default for a
   # system eval; the gate/bhost build keeps buildTools=[] (byte-identical).
   inherit seedBuildTools;
+  # the cargo/bsdfetch/COSMIC-data builders' store tool set, a build input of their served rows: exposed so a builder
+  # without it can fetch it (recipes.tsv row) instead of declining those rows.
+  solnix-hostfix-tools = hostfixTools;
   # iwm wifi: the driver module + wpa-pmk (iwm-driver), and the augmentation
   # helpers wireless-iwx.nix uses to render an iwm-aware driver DB and kernel
   # tree when hardware.wirelessIwm.attachAtBoot. mkIwmKernel/iwmFirmware take
@@ -1330,6 +1337,10 @@ in
   inherit (cosmicData) open-sans noto-sans noto-sans-mono fira-mono hicolor-icon-theme pop-icon-theme cosmic-icons;
   inherit (desktop) pop-launcher cosmic-wallpapers sound-theme-freedesktop adwaita-icon-theme dejavu-fonts liberation-fonts
     noto-fonts-color-emoji xdg-utils xdg-user-dirs solnix-help;
+  inherit llvmPackages;
+  inherit (llvmPackages) llvm lld lldb;
+  clang-unwrapped = llvmPackages.clang;   # nixpkgs' names: clang is the wrapped compiler
+  clang_23 = llvmPackages.clang-wrapper;
   inherit (gtk) pcre2 glib libpng libjpeg-turbo freetype fontconfig fribidi harfbuzz cairo pango gdk-pixbuf libepoxy
     at-spi2-core gtk3 grim gperf nasm ninja meson_1_10 nodejs cbindgen llvm-clang firefox-esr;
   # cargoLib.{vendorOf,cargoPkg}: build any Cargo.lock'd crate on rust199 (./cargo.nix).

@@ -83,6 +83,10 @@ mkSrcPkg {
     mk_add_options MOZ_OBJDIR=$MOZ_OBJDIR
     EOF
     export MOZCONFIG="$PWD/mozconfig"
+    # configure requires an unzip (toolkit/moz.configure check_prog UNZIP); only packaging runs it (make_unzip.py), which this
+    # build never does (0 unzip runs in chef's log). chef found OI's /usr/bin/unzip; a solnix host has none. NixOS puts unzip in
+    # nativeBuildInputs; no from-source unzip here yet, so a stub that fails loudly if anything does run it.
+    printf '#!/usr/bin/bash\necho "FATAL: unzip called: $*" >&2; exit 1\n' > "$W/unzip"; chmod +x "$W/unzip"; export UNZIP="$W/unzip"
     export MOZ_TELEMETRY_REPORTING=   # exported: a configure re-run inside `mach build` sees it too
     python3 ./mach configure
     grep -q '"MOZ_TELEMETRY_REPORTING"' "$MOZ_OBJDIR/config.status.json" && { echo "FATAL: telemetry reporting on" >&2; exit 1; }
@@ -97,14 +101,14 @@ mkSrcPkg {
     "$out/lib/firefox/firefox" --version | grep -q 'Mozilla Firefox 153.6.0esr' || { echo "FATAL: firefox --version" >&2; exit 1; }
     # every shipped ELF that links libc must carry NODEFLIB (a stray link without the wrapper would reopen the host-lib hole)
     for f in "$out"/lib/firefox/*.so "$out"/lib/firefox/firefox; do
-      /usr/bin/elfdump -d "$f" | grep -q 'NODEFLIB' || { echo "FATAL: $f lacks -z nodefaultlib" >&2; exit 1; }
+      elfdump -d "$f" | grep -q 'NODEFLIB' || { echo "FATAL: $f lacks -z nodefaultlib" >&2; exit 1; }
     done
     # headless start: loads libxul, the profile, Gecko, a local page, and writes a PNG (no display needed). Gecko aborts with no
     # font at all (MOZ_RELEASE_ASSERT in gfxPlatformFontList, measured on a fontless builder), so a build-only fonts.conf in
     # $TMPDIR names noto-sans; nothing in $out refers to it.
     mkdir -p "$TMPDIR/ffhome" "$TMPDIR/ffprof"; printf '<html><body><h1>solnix</h1></body></html>\n' > "$TMPDIR/t.html"
     printf '<?xml version="1.0"?><fontconfig><dir>%s/share/fonts</dir><cachedir>%s/fc</cachedir></fontconfig>\n' ${noto-sans} "$TMPDIR" > "$TMPDIR/fonts.conf"
-    env -i HOME="$TMPDIR/ffhome" PATH=/usr/bin FONTCONFIG_FILE="$TMPDIR/fonts.conf" MOZ_HEADLESS=1 "$out/lib/firefox/firefox" --no-remote --profile "$TMPDIR/ffprof" \
+    env -i HOME="$TMPDIR/ffhome" PATH="$PATH" CHARSET=UTF-8 FONTCONFIG_FILE="$TMPDIR/fonts.conf" MOZ_HEADLESS=1 "$out/lib/firefox/firefox" --no-remote --profile "$TMPDIR/ffprof" \
       --screenshot "$TMPDIR/shot.png" "file://$TMPDIR/t.html" > "$TMPDIR/shot.log" 2>&1 || true
     [ -s "$TMPDIR/shot.png" ] || { echo "FATAL: headless screenshot" >&2; tail -20 "$TMPDIR/shot.log" >&2; exit 1; }
   '';
