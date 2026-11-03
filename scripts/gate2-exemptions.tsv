@@ -1,0 +1,6 @@
+# gate2-exemptions.tsv -- the EXACT store paths drv-gate exempts beyond pkgs/illumos/bootstrap-exempt.tsv (the bootstrap set).
+# One line: out store path <TAB> reason. A drv is exempt only if one of its OUTPUTS is listed byte-for-byte; its inputs are
+# not (orchestrator 2026-11-02: no closure exemption). Each EXEMPT is printed with its path. Add a line only with a proof
+# that names the path; remove it when the row is superseded.
+/nix/store/g08y7agf6jn204kj1gqm6nhjmc81m046-solnix-hostfix-tools	recipes2 (/scratch/solnix/recipes2/gate2-exemptions.md): build-only input of the served cargo rows (buildEnv; host mkdir/find/ln); published by the orchestrator under the named exception, hosts only rebuild-verify it; until wave6 supersedes it
+/nix/store/w2brssmawivrz4xlgk1vlzc82ghfcf3k-bzip2-bin-1.0.8	recipes2 (/scratch/solnix/recipes2/gate2-exemptions.md): build-only input of the served gnupg-family rows (seed + host PATH); published by the orchestrator under the named exception, hosts only rebuild-verify it; until wave6 supersedes it

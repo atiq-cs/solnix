@@ -1,0 +1,17 @@
+# not-for-cache.tsv -- store paths that must never be in the runtime closure of anything offered to cache.solnix.io
+# (check B12, scripts/gate-checks.py closure). One rule per line: kind <TAB> regex <TAB> why.
+#   name    regex on the store path's name (after <hash>-); a CA-lane path (scripts/ca-lane.tsv) is allowed even if named
+#   path    regex on the full store path; never excused by the CA lane
+#   unfree  regex on the name; allowed only when the row's flags say unfree=y (pre-submit passes GATE_ALLOW_UNFREE=1)
+# Keep this the one list; publish-gate.sh, pre-submit-check.sh and the infra mirror read it.
+name	(^|-)solnix-system-	a NixOS-style system toplevel: one host's configuration (hostname, users, keys)
+name	^(solnix-)?etc$|-etc$|^etc-	a generated /etc tree: host-specific configuration
+name	(^|-)system-path$	a system profile (environment.systemPackages of one host)
+name	home-manager-(generation|files)|^home-files$|^hm[-_]session	a home-manager generation: one user's files
+name	(^|-)user-environment$	a nix-env profile: one user's package set
+name	^illumos-(aarch64-)?gate-proto$	the illumos-gate proto: served ONLY through the CA lane (fixed-output), never as a built path
+name	^nixpkgs-unfree|-nixpkgs-unfree	nixpkgs-unfree: not redistributable by this cache
+name	^(gcc14|clang)$	a slice copied from the build host's / (pkgs/illumos/toolchains.nix srcRoot = "/"): host-specific bits
+name	(^|-)(secrets?|sops|age-keys?|ssh-host-keys?)(-|$)	secret material
+unfree	^(iwm|iwx)-firmware-|^iwlwifi-.*\.ucode$|^LICENCE\.iwlwifi_firmware$	Intel wireless firmware: redistributable only under its licence; only a row that says unfree=y
+unfree	^nvidia-gsp-firmware-|^NVIDIA-Linux-	NVIDIA GSP firmware / driver .run: unfree; only a row that says unfree=y

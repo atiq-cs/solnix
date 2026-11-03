@@ -422,7 +422,7 @@ let
 
   # From-source packages the gate does not provide (./base-src.nix). zlib and
   # libxml2 replace the host-copied externalLibs; world is built on top of them.
-  srcPkgs = import ./base-src.nix { gate = gate'; libcSlice = libc; inherit world gcc buildTools seedTools;
+  srcPkgs = import ./base-src.nix { gate = gate'; libcSlice = libc; inherit world gcc buildTools seedTools; perl = if buildTools == [ ] then null else cliBase.perl;
     nixChainTools = if buildTools == [ ] then { } else { inherit (cliBase) cmake; bzip2Bin = cliBase.bzip2-bin;
       nixBuildTools = with cliBase; [ autoconf automake libtool autoconf-archive gnum4 bison flex gnupatch srcPkgs.pkgconf ]; }; };
   # The Wayland + Mesa userland (./graphics), built like srcPkgs.
@@ -1311,6 +1311,7 @@ in
   # the cargo/bsdfetch/COSMIC-data builders' store tool set, a build input of their served rows: exposed so a builder
   # without it can fetch it (recipes.tsv row) instead of declining those rows.
   solnix-hostfix-tools = hostfixTools;
+  solnix-gtk-build-tools = gtk.gtkTools;   # a build input of 21 gtk rows; rowed (recipes1 gtk1) so any host can substitute it
   # iwm wifi: the driver module + wpa-pmk (iwm-driver), and the augmentation
   # helpers wireless-iwx.nix uses to render an iwm-aware driver DB and kernel
   # tree when hardware.wirelessIwm.attachAtBoot. mkIwmKernel/iwmFirmware take

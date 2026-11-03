@@ -4,7 +4,8 @@
 # openssl + openssh replace make-be's host sshd copy, bash replaces nothing (the
 # gate has no bash) but is a login shell users expect.
 { gate, libcSlice, world ? null, gcc ? "/usr/gcc/14", buildTools ? [ ], seedTools ? [ ], aarch64 ? false, system ? "x86_64-solaris"
-, nixChainTools ? { } }:   # { cmake; bzip2Bin; } from the cli set (default.nix), for nixChain's store-only builds
+, nixChainTools ? { }, perl ? null }:   # { cmake; bzip2Bin; } from the cli set (default.nix), for nixChain's store-only builds
+# perl: the store perl (cli), for curl's man pages; its build closure has no nixChain, so no cycle. null: curl keeps the old text.
 # aarch64/system: the same recipes natively on aarch64 illumos (aarch64/home.nix), through
 # mk-src-pkg's aarch64 text rewrite. The defaults leave every x86 derivation unchanged.
 # gcc: the from-source gcc derivation (gcc-src.nix). Everything here is compiled
@@ -41,7 +42,7 @@ let
   inherit mkSrcPkg hostTools;
 
   # Nix 2.24.15 + its dependency chain (./nix-src.nix).
-  nixChain = import ./nix-src.nix ({ inherit mkSrcPkg zlib openssl libcSlice hostTools seedTools; system = "x86_64-solaris"; gccLib = gcc.lib; } // nixChainTools);
+  nixChain = import ./nix-src.nix ({ inherit mkSrcPkg zlib openssl libcSlice hostTools perl; system = "x86_64-solaris"; gccLib = gcc.lib; } // nixChainTools);
 
   # libz.so.1 with the illumos symbol versions (SUNW_1.1 .. ILLUMOS_0.2). The
   # gate's libzfs/libzpool record `libz.so.1 SUNW_1.1` as a needed version, so an

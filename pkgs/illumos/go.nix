@@ -38,7 +38,8 @@ in rec {
   # goPkg { pname; version; src = { url; sha256; }; vendorHash; subPkgs; check; ldflags; man }:
   # nixpkgs' buildGoModule reduced -- `go mod vendor` as a fixed-output derivation, then an
   # offline -mod=vendor build on go_1_26 (./go-pkg-build.sh). vendorHash = null: no vendor dir.
-  goPkg = { pname, version, src, vendorHash, subPkgs ? ".", check, ldflags ? "", prep ? "", man ? "", goPkgs ? go_1_26 }:
+  # storeOnly: accepted and ignored (main's recipes2 flag): in wave6 every goPkg builds on store tools (./go-pkg-build.sh, path-gated).
+  goPkg = { pname, version, src, vendorHash, subPkgs ? ".", check, ldflags ? "", prep ? "", man ? "", goPkgs ? go_1_26, storeOnly ? true }:
     let
       srcTar = import <nix/fetchurl.nix> { inherit (src) url sha256; };
       # unpacked by Nix (libarchive, in the daemon), as fetch-tarball.nix does: host `tar xzf` on a solnix

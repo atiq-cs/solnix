@@ -15,13 +15,12 @@
 { mkSrcPkg, zlib, openssl, libcSlice, gccLib, system, libSub ? "lib/amd64", nixCxxFlags ? ""
 , hostTools ? [ ]   # store-only PATH base (base-src.nix): [] on the exempt seed instance
 , cmake ? null      # store cmake for brotli/nlohmann_json/libgit2 (the OI host had /usr/bin/cmake); null on the seed/aarch64
-, seedTools ? [ ]   # the world-free seed tools (perl coreutils findutils world), for curl's docs (perl)
+, perl ? null      # the store perl (cli), for curl's man pages (main 4784cde); null on the seed/aarch64
 , bzip2Bin ? null   # bzip2 CLI for boost's .tar.bz2 (GNU tar runs bzip2 from PATH; the OI host had /usr/bin/bzip2)
 , nixBuildTools ? [ ]   # nix's autoreconf/configure tools from the store: autotools, autoconf-archive (AX_BOOST_BASE), m4, bison,
                         # flex, patch, pkg-config (the OI host's /usr/bin and /usr/share/aclocal before; [ ] = that old text)
 }:
-let seedPerlTools = seedTools;
-    # xz's configure, on solaris*, gives xzgrep/xzdiff/xzless/xzmore "#!/usr/xpg4/bin/sh" and a PATH=/usr/xpg4/bin prefix: host
+let # xz's configure, on solaris*, gives xzgrep/xzdiff/xzless/xzmore "#!/usr/xpg4/bin/sh" and a PATH=/usr/xpg4/bin prefix: host
     # paths in the out (wave6 out-host-refs, P0 run i). /bin/sh is POSIX ksh93 on illumos; NixOS adds no PATH prefix. The seed
     # instance keeps upstream's text (its xz is build-only and its drv must not move).
     xzScripts = if hostTools == [ ] then "" else " gl_cv_posix_shell=/bin/sh --enable-path-for-scripts=no";
@@ -111,11 +110,15 @@ rec {
     '';
   };
 
-  curl = mkSrcPkg ({
-    pname = "curl"; version = "8.23.0";   # 36 High/Critical in 8.10.1; curl vuln.json: CVE-2026-92392 needs 8.23.0
-    src = { url = "https://curl.se/download/curl-8.23.0.tar.xz";
+  curl = mkSrcPkg {
+    pname = "curl"; version = "8.23.0";
+    src = { url = "https://curl.se/download/curl-8.23.0.tar.xz";   # .asc: Daniel Stenberg 27EDEAF2; == nixpkgs
             sha256 = "8dadd7d2536a314f982ad05a651b713f426bf7d02cc2c76cffb9796f2218e6c5"; };
     deps = [ zlib openssl ];
+    # store-only PATH + config.site (recipes1). perl renders the man pages (NixOS: nativeBuildInputs = [ perl ... ]): configure looks for it
+    # in $PATH:/usr/local/bin/perl:/usr/bin/, so without a store perl an OI host's /usr/bin/perl turned the docs on and a solnix host's
+    # absence turned them off (two different outs; recipes1 W4).
+    nativeTools = (if perl == null then [ ] else [ perl ]) ++ hostTools;
     build = ''
       ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static \
         --with-openssl=${openssl} --with-zlib=${zlib} --without-libpsl --without-brotli \
@@ -127,7 +130,7 @@ rec {
       grep -q '#define CURL_CA_BUNDLE "${cacert}/etc/ssl/certs/ca-bundle.crt"' lib/curl_config.h \
         || { echo "FATAL: curl CA bundle default is not the store cacert" >&2; exit 1; }
     '';
-  } // (if hostTools == [ ] then { } else { nativeTools = seedPerlTools; }));   # docs/mk-ca-bundle.1 runs perl
+  };
 
   # zstd and bzip2 for libarchive, which nix uses for every compression filter.
   # Without them nix cannot substitute: cache.solnix.io serves its 404 bodies
