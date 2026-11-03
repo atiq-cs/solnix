@@ -6,13 +6,18 @@ set -eu
 o=$1; cd "$o"
 isexe() { [ -f "$1" ] && [ -x "$1" ]; }
 # 1. S1: usr/lib/inet/ppp/minconn.so records RUNPATH and RPATH /usr/gcc/10/lib (the gate built it with gcc 10) and NEEDs nothing,
-# so the relocation loop (NEEDED|SONAME only) never touched it. Delete a host RUNPATH/RPATH from any ELF with no NEEDED.
+# so the relocation loop (NEEDED|SONAME only) never touched it. Delete RUNPATH/RPATH only where it holds a host entry and the ELF
+# has no NEEDED and no filter: a filter (libtermcap.so.1, SUNW_FILTER libcurses.so.1, no NEEDED) resolves its filtee through RUNPATH
+# (W1 run 1: deleting it made bash's libcurses come from /lib/64).
 find . -type f ! -path './lib-*' | while read -r f; do
   [ "$(od -An -tx1 -N4 "$f" 2>/dev/null | tr -d ' \n')" = 7f454c46 ] || continue
   d=$(/usr/bin/elfdump -d "$f" 2>/dev/null) || continue
-  echo "$d" | grep -Eq 'R(UN)?PATH' || continue
-  echo "$d" | grep -q NEEDED && continue
+  echo "$d" | awk '$2=="RUNPATH"||$2=="RPATH"{print $4}' | tr ':' '\n' | grep -v '^/nix/store/' | grep -q . || continue
+  echo "$d" | grep -Eq 'NEEDED|FILTER|AUXILIARY' && continue
   chmod u+w "$f"; /usr/bin/elfedit -e 'dyn:delete RUNPATH' -e 'dyn:delete RPATH' "$f"
+done
+for l in lib/libtermcap.so.1 lib/amd64/libtermcap.so.1; do   # a filter keeps its store RUNPATH (the negative control of the above)
+  [ ! -f "$l" ] || /usr/bin/elfdump -d "$l" | grep -q 'RUNPATH.*/nix/store/' || { echo "FATAL: world: $l lost its RUNPATH" >&2; exit 1; }
 done
 bad=$(find . -type f ! -path './lib-*' | while read -r f; do
   /usr/bin/elfdump -d "$f" 2>/dev/null | awk -v f="$f" '$2=="RUNPATH"||$2=="RPATH"{n=split($4,a,":"); for(i=1;i<=n;i++) if (a[i] !~ /^\/nix\/store\// && a[i] !~ /^\$ORIGIN/) print f": "$2" "a[i]}'
