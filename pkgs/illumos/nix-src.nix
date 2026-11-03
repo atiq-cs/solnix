@@ -250,7 +250,7 @@ rec {
     acDirs = map (t: "${t}/share/aclocal") ac;
     aclocalLine = if nixBuildTools == [ ] then "ACLOCAL_PATH=/usr/share/aclocal autoreconf -fi -I /usr/share/aclocal >&2"
       else "for d in ${toString acDirs}; do [ -d $d ] || { echo \"FATAL: no aclocal dir $d\" >&2; exit 1; }; done; "
-        + "ACLOCAL_PATH=${builtins.concatStringsSep ":" acDirs} autoreconf -fi ${toString (map (d: "-I " + d) acDirs)} >&2"; in mkSrcPkg {
+        + "ACLOCAL_PATH=${builtins.concatStringsSep ":" acDirs} autoreconf -fi ${toString (map (d: "-I " + d) acDirs)} >&2"; in mkSrcPkg ({
     pname = "nix"; version = "2.24.15";
     src = { url = "https://github.com/NixOS/nix/archive/refs/tags/2.24.15.tar.gz";
             sha256 = "e395732ec576b7f65359c80bc5a23335ad2a8c382f4f14c370bbc236708d4749"; };
@@ -296,5 +296,5 @@ rec {
         if grep -rlq "$x" "$out"; then echo "FATAL: nix still references build-only $x" >&2; exit 1; fi
       done
     '';
-  } // withTools nixBuildTools;   # store-only (wave6): the autotools above; [ ] (seed / aarch64) keeps the old drv
+  } // withTools nixBuildTools);   # store-only (wave6): the autotools above; [ ] (seed / aarch64) keeps the old drv
 }

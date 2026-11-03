@@ -7,7 +7,7 @@ IB=${ILLUMOS_BIN:-/usr/bin}   # illumos elfedit/elfdump/ldd: the world's usr/bin
 set -eu
 d=$1; tsg=$2; shift 2
 T=$(mktemp -d /var/tmp/sgate.XXXXXX); : > "$T/fail"
-bash "$tsg" "$d" 2>> "$T/fail" || echo "ts-errno gate failed" >> "$T/fail"
+/usr/bin/bash "$tsg" "$d" 2>> "$T/fail" || echo "ts-errno gate failed" >> "$T/fail"
 find "$d" -type f > "$T/files"
 n=0
 while read -r f; do
