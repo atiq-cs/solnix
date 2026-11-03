@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # test-gate.sh -- every negative control of the cache publish gate, no store or network needed (run on floki, dixi, chef):
-#   gate-checks.py selftest  drv A1-A4 (28 crafted .drvs incl. the exemptions both ways), NAR out checks B6-B13 (crafted
-#                            NARs incl. a corrupt one and a minimal ELF), store form B5/B11 (a real temp tree), closure
-#                            B12 (the not-for-cache list), the stamp key
+#   gate-checks.py selftest  drv A1-A4 (crafted .drvs incl. the exemptions and the --leaf ALLOW, both ways), NAR out
+#                            checks B6-B15 and the server mirror S1-S4 (crafted NARs incl. a corrupt one and minimal
+#                            ELFs), store form B5/B11 (a real temp tree), closure B12 (the not-for-cache list), build log
+#                            L1-L5 (real log lines of each LOOPHOLES class), the stamp key
 #   publish-gate.sh --selftest  the undeclared-reference rule
 #   cache-submit.py             --stamps: no stamp / wrong NarHash / wrong path -> NO-STAMP; a matching stamp gets past
 #                               it to the drv-gate --leaf hook, which refuses a narinfo without a Deriver (DRV-GATE-FAIL);

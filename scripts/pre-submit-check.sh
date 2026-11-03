@@ -10,7 +10,9 @@
 #   5. store   B5/B11 on this store's copy (no setuid/setgid/sticky/writable bits, devices or FIFOs; mtime 1; owner):
 #              the NAR cannot carry them, so only the exporting host can see them
 #   6. closure B12: nothing in the runtime closure is in scripts/not-for-cache.tsv
-#   7. deps    every reference has a narinfo on the cache, or is in this batch AHEAD of it (deps first); cache-submit.py
+#   7. log     the deriver's build log (nix log): configure/cmake/meson found no host tool, perl Configure ignored no
+#              -D (LOOPHOLES.md classes 1-3, 5); a missing log FAILs (only the building host has it)
+#   8. deps    every reference has a narinfo on the cache, or is in this batch AHEAD of it (deps first); cache-submit.py
 #              then re-checks each reference under the 8UNr key before it submits
 # Then it prints an EVIDENCE line: whether this host has /usr/gnu (an OI build host, where a host tool can satisfy a
 # build silently) or not (a solnix host: only store tools exist, so the build is stronger evidence of store-only).
@@ -76,7 +78,12 @@ for p in "$@"; do
   # 5 store form, 6 closure
   "$py" "$here/gate-checks.py" store "$p" > "$T/store" 2>&1 && step store PASS || { step store FAIL; grep '^FAIL B' "$T/store" | head -5 | sed 's/^/    /'; why="$why store form;"; }
   "$py" "$here/gate-checks.py" closure "$p" > "$T/clo" 2>&1 && step closure PASS || { step closure FAIL; grep '^FAIL B' "$T/clo" | head -5 | sed 's/^/    /'; why="$why closure denylist;"; }
-  # 7 deps first: each reference is served under 8UNr, or appears earlier in this batch
+  # 7 build log (LOOPHOLES classes 1-3, 5): only the host that built the out has it
+  if [ -n "$d" ] && nix log "$d" > "$T/log" 2>/dev/null && [ -s "$T/log" ]; then
+    "$py" "$here/gate-checks.py" log "$p" "$T/log" > "$T/logc" 2>&1 && step log "PASS $(tail -1 "$T/logc" | sed 's/^PASS [^ ]* //')" \
+      || { step log FAIL; grep '^FAIL L' "$T/logc" | head -6 | cut -c1-260 | sed 's/^/    /'; why="$why build log;"; }
+  else step log "FAIL (no build log for $d here: pre-submit runs on the host that built it)"; why="$why no build log;"; fi
+  # 8 deps first: each reference is served under 8UNr, or appears earlier in this batch
   miss=""
   for r in $(nix-store -q --references "$p"); do
     [ "$r" = "$p" ] && continue

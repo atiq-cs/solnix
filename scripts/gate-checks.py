@@ -6,6 +6,7 @@
   gate-checks.py nar <out> [<nar>]       B. the published bytes: walk the NAR (nix-store --dump <out>, or a .nar/.nar.xz)
   gate-checks.py store <out>...          B5/B11 on the host's store copy (the NAR cannot carry them; see below)
   gate-checks.py closure <out>...        B12. no path of the runtime closure is marked not-for-cache
+  gate-checks.py log <out> <log|->       L. the build log shows no host tool found or used (LOOPHOLES classes 1-3, 5)
   gate-checks.py stampkey <NarHash>      the stamp name pre-submit-check.sh writes and cache-submit.py --stamps requires
   gate-checks.py selftest                every check against a crafted bad input (must FAIL) and a good one (must PASS)
 
@@ -496,7 +497,10 @@ DRV_KEYED = re.compile(rb"^/var/tmp/(srcpkg|cargo|go|rust|gccsrc)-[0-9a-f]{16}$"
 _HOMES = sorted({"gburd", "nixbld"} | set(os.environ.get("GATE_HOME_USERS", "").split()))
 RUN_DIR_STR = re.compile(rb"(?:/private)?/tmp/nix-build-[A-Za-z0-9+._?=-]+|/var/tmp/big(?=/|\b)"
                          rb"|(?<![A-Za-z0-9_.+-])/(?:export/)?home/(?:" + "|".join(re.escape(h) for h in _HOMES).encode() + rb")[0-9]*(?=/|\b)"
-                         rb"|(?<![A-Za-z0-9_.+-])/root/\.(?:cache|cargo|rustup|local|nix|config)/")
+                         # root's build caches only: a path INTO them is what a root build leaks (cargo registry sources, a
+                         # rustup toolchain, go's build cache); "rm /root/.cache/nix/..." in nix's globals.hh comment and
+                         # flyctl's help text (also in nixpkgs flyctl-0.4.108) is upstream text (measured 2026-11-03)
+                         rb"|(?<![A-Za-z0-9_.+-])/root/\.(?:cargo/(?:registry|git)|rustup/toolchains|cache/go-build|cache/go-mod)/")
 # B9: #! interpreters allowed outside the store (POSIX sh and env, as in nixpkgs before patchShebangs). /usr/bin/sh too:
 # on illumos /bin is a symlink to /usr/bin, so it is the same always-present system shell as /bin/sh (orchestrator
 # 2026-11-03, quilt spec-filters/obs). Only that one: /usr/bin/bash, /usr/bin/perl, /usr/bin/python* still FAIL.
@@ -574,9 +578,12 @@ def check_nar(out, src=None):
       for rel, kind, info in nar_entries(open_nar(src or out)):   # streamed: one file's data in memory at a time
         names.add(rel)
         if kind == "dir": n["dirs"] += 1; continue
-        if kind == "link": n["links"] += 1; links[rel] = info["target"]; continue
+        if kind == "link":
+            n["links"] += 1; links[rel] = info["target"]; r.extend(server_checks(rel, target=info["target"])); continue
         n["files"] += 1
         data, top = info["data"], rel.split("/")[0]
+        r.extend(server_checks(rel, data=data))
+        r.extend(config_record_findings(rel, data))
         # B7: bin/ and sbin/ hold executables (libtool 2.5.4 shipped bin/libtool 0444; gzip zgrep)
         if top in ("bin", "sbin") and rel.count("/") == 1 and not info["exec"]:
             r.append(("FAIL", "B7-exec", f"{rel} is not executable"))
@@ -646,6 +653,167 @@ def check_nar(out, src=None):
     for k, v in per.items():
         if v > 20: capped.append(("INFO", k, f"... {v - 20} more"))
     return capped, n
+
+# ---- S: mirror of the server's NAR content gate (infra k8s/validate-nar-content.py, 05e799c; 20261103-v2b-live s6) --------
+# Enforced for tier 1, log-only for tier 2. Ours is at least as strict, so nothing we submit is rejected there.
+#  S1 every DT_RUNPATH / DT_RPATH entry is under /nix/store/ or starts with $ORIGIN
+#  S2 PT_INTERP is under /nix/store/, or {/lib,/usr/lib}/{,64/,amd64/,sparcv9/,aarch64/}ld.so.1, $ORIGIN/..., empty, or
+#     /.SUNWnative/usr/lib/... (the sn1 brand)
+#  S3 build-host strings in any file or symlink target, case-insensitive: *.compute.internal, *.ec2.internal,
+#     solnix-builder-build
+#  S4 host names, case-sensitive, not inside a longer word: dixi dixa dixr lixi floki
+INTERP_OK = re.compile(r"^(/nix/store/.*|(/lib|/usr/lib)/(64/|amd64/|sparcv9/|aarch64/)?ld\.so\.1|\$ORIGIN.*|/\.SUNWnative/usr/lib/.*|)$")
+BUILDHOST_RE = re.compile(rb"compute\.internal|ec2\.internal|solnix-builder-build", re.I)
+HOSTNAME_RE = re.compile(rb"(?<![A-Za-z0-9_])(dixi|dixa|dixr|lixi|floki)(?![A-Za-z0-9_])")
+
+def elf_dynamic(data):
+    """(runpath entries [(tag, value)], interp or None) for an ELF of either class/endianness, or None if unparseable."""
+    import struct
+    try:
+        if data[:4] != b"\x7fELF": return None
+        is64, end = data[4] == 2, "<" if data[5] == 1 else ">"
+        if is64:
+            phoff, shoff = struct.unpack_from(end + "QQ", data, 0x20)
+            phentsize, phnum, shentsize, shnum = struct.unpack_from(end + "HHHH", data, 0x36)
+        else:
+            phoff, shoff = struct.unpack_from(end + "II", data, 0x1C)
+            phentsize, phnum, shentsize, shnum = struct.unpack_from(end + "HHHH", data, 0x2A)
+        interp, rp = None, []
+        for i in range(phnum):
+            o = phoff + i * phentsize
+            typ = struct.unpack_from(end + "I", data, o)[0]
+            if typ == 3:   # PT_INTERP
+                off, size = (struct.unpack_from(end + "QQQQ", data, o + 8)[0], struct.unpack_from(end + "Q", data, o + 32)[0]) if is64 \
+                    else (struct.unpack_from(end + "I", data, o + 4)[0], struct.unpack_from(end + "I", data, o + 16)[0])
+                interp = data[off:off + size].split(b"\0")[0].decode(errors="replace")
+        secs = []
+        for i in range(shnum):
+            o = shoff + i * shentsize
+            if is64: _, typ, _, _, off, size, link = struct.unpack_from(end + "IIQQQQI", data, o)
+            else: _, typ, _, _, off, size, link = struct.unpack_from(end + "IIIIIII", data, o)
+            secs.append((typ, off, size, link))
+        for typ, off, size, link in secs:
+            if typ != 6: continue   # SHT_DYNAMIC
+            soff = secs[link][1]; ent = 16 if is64 else 8
+            for k in range(size // ent):
+                tag, val = struct.unpack_from(end + ("qQ" if is64 else "iI"), data, off + k * ent)
+                if tag == 0: break
+                if tag in (15, 29):   # DT_RPATH, DT_RUNPATH
+                    v = data[soff + val:data.index(b"\0", soff + val)].decode(errors="replace")
+                    rp.append(("DT_RPATH" if tag == 15 else "DT_RUNPATH", v))
+        return rp, interp
+    except (struct.error, IndexError, ValueError):
+        return None
+
+def server_checks(rel, data=None, target=None):
+    """-> [(level, check, why)] for one NAR entry: a regular file (data) or a symlink (target)."""
+    r = []
+    if target is not None:
+        if BUILDHOST_RE.search(target.encode(errors="surrogateescape")):
+            r.append(("FAIL", "S3-buildhost", f"{rel}: symlink target {target} names a build host"))
+        if HOSTNAME_RE.search(target.encode(errors="surrogateescape")):
+            r.append(("FAIL", "S4-hostname", f"{rel}: symlink target {target} names a host"))
+        return r
+    if data[:4] == b"\x7fELF":
+        dyn = elf_dynamic(data)
+        if dyn:
+            rp, interp = dyn
+            for tag, v in rp:
+                for e in v.split(":"):
+                    if not (e.startswith(STORE) or e.startswith("$ORIGIN")):
+                        r.append(("FAIL", "S1-runpath", f"{rel}: {tag} entry {e!r} is not under /nix/store or $ORIGIN"))
+            if interp is not None and not INTERP_OK.match(interp):
+                r.append(("FAIL", "S2-interp", f"{rel}: PT_INTERP {interp} is not the store or the illumos ld.so.1"))
+    m = BUILDHOST_RE.search(data)
+    if m: r.append(("FAIL", "S3-buildhost", f"{rel}: contains {m.group(0).decode(errors='replace')!r} (@{m.start()})"))
+    m = HOSTNAME_RE.search(data)
+    if m:
+        ctx = data[max(0, m.start() - 20):m.end() + 20].decode(errors="replace").replace("\n", " ")
+        r.append(("FAIL", "S4-hostname", f"{rel}: names host {m.group(0).decode()!r}: ...{ctx}..."))
+    return r
+
+
+# ---- L: the build log (LOOPHOLES.md classes 1, 2, 3, 5: a store-only PATH that still reached the host) ----------------
+# The log exists only where the out was built (nix log <drv>), so pre-submit-check.sh runs this on the host. Each rule
+# is a line shape a real build printed (recipes1 LOOPHOLES.md + chef logs, 2026-11-03); the store-only wave6 jq
+# fvf9shlz log matches none of them (negative control on real data).
+# Classified by WHERE the path points (measured on dixi + chef logs, 2026-11-03):
+#  OI-only dirs (/usr/gnu /opt /usr/gcc /usr/local /usr/sfw /usr/ccs): never on a solnix host, so a hit means the build
+#    used the OI host's tool: FAIL (jq "checking whether /usr/gnu/bin/make sets $(MAKE)"; automake sh=/usr/gnu/bin/sh).
+#  other system dirs (/usr/bin /usr/sbin /usr/xpg4 /bin /sbin): mostly configure's hard-coded runtime defaults (w3m's
+#    /usr/bin/firefox and rsync's /usr/bin/fakeroot do not exist on dixi; openssh's /usr/sbin/groupadd): WARN, listed.
+#  /bin/sh, /usr/bin/sh: the system shell (as B9): not reported.
+#  cmake/meson "Found X: /usr/..." is their own system-prefix search past PATH (LOOPHOLES class 5): FAIL for any host
+#    path, since those are tools the build then runs.
+# Only a line whose result is a path (+ flags) counts: "checking for X... /bin/sh ./libtool --mode=..." is make output
+# interleaved into configure's line (gdb), not a result.
+OI_ONLY = re.compile(r"^/(usr/(gnu|gcc|local|sfw|ccs)|opt)(/|$)")
+SYS_SHELL = ("/bin/sh", "/usr/bin/sh")
+_CONF_RES = re.compile(r"^checking (.*?)\.\.\. (?:\(cached\) )?(/[^\s]+)((?:\s+-[\w-]+)*)\s*$")
+_CONF_WHETHER = re.compile(r"^checking whether (/[^\s]+) ")
+_CMAKE = re.compile(r"^-- (?:Found|Check for working|Looking for|Using) .*?(?<![\w./-])(/(?:usr|opt|bin|sbin)/[\w.+/-]+)")
+_MESON = re.compile(r"^Program .* found: YES \((/(?:usr|opt|bin|sbin)/[^)\s]+)")
+
+def _classify(path):
+    if path.startswith(STORE) or path in SYS_SHELL: return None
+    if OI_ONLY.match(path): return "FAIL"
+    if re.match(r"^/(usr/(bin|sbin|xpg4|xpg6|ucb)|bin|sbin)(/|$)", path): return "WARN"
+    return None
+
+def _log_line(line):
+    """-> [(level, check, why)] for one log line."""
+    m = _CONF_RES.match(line) or _CONF_WHETHER.match(line)
+    if m:
+        path = m.group(2) if m.re is _CONF_RES else m.group(1)
+        lv = _classify(path)
+        if lv: return [(lv, "L1-configure", f"configure used {'an OI-host' if lv == 'FAIL' else 'a system'} path {path}")]
+    m = _CMAKE.match(line) or _MESON.match(line)
+    if m and not m.group(1).startswith(STORE) and m.group(1) not in SYS_SHELL:
+        return [("FAIL", "L5-cmake" if m.re is _CMAKE else "L5-meson", f"found on the host past PATH: {m.group(1)}")]
+    if re.match(r"^Configure: ignoring -D \w+=", line):
+        # not a defect by itself: perl-5.42.2 (no-sys-dirs) prints it with a clean Config; B15 judges the recorded Config
+        return [("WARN", "L2-configure-ignored", "perl Configure ignored a -D (use -U); B15 checks what Config recorded")]
+    m = re.match(r"^Checking compatibility between (/\S+)", line)
+    if m and _classify(m.group(1)) == "FAIL": return [("FAIL", "L2-configure-host", f"perl Configure probed {m.group(1)}")]
+    if re.search(r"no POSIX shell found|: command not found$", line):
+        return [("FAIL", "L3-missing", "a tool the store PATH lacks")]
+    return []
+
+def check_log(text):
+    r, seen = [], {}
+    for n, line in enumerate(text.splitlines(), 1):
+        line = re.sub(r"^[\w.+-]+> ", "", line).rstrip()   # nix-build's "<name>> " prefix
+        for lv, chk, why in _log_line(line):
+            k = (lv, chk); seen[k] = seen.get(k, 0) + 1
+            if seen[k] <= 5: r.append((lv, chk, f"line {n}: {why}: {line.strip()[:160]}"))
+    for (lv, chk), k in seen.items():
+        if k > 5: r.append(("INFO", chk, f"... {k - 5} more {lv} lines"))
+    return r
+
+# ---- B15: configuration records that bake link/include dirs (LOOPHOLES class 2: perl Config_heavy.pl) -------------------
+# A tool's recorded build config is what downstream builds read back (ExtUtils::MakeMaker uses perl's ldflags/libpth,
+# pkg-config reads .pc, libtool .la, cmake *Config.cmake, python _sysconfigdata). A host dir there leaks into the next
+# build on every host. nixpkgs perl (no-sys-dirs.patch) records store paths or /no-such-path (measured on floki).
+PERL_LINK_VARS = ("libpth", "glibpth", "loclibpth", "locincpth", "xlibpth", "libspath", "ldflags", "lddlflags",
+                  "ccflags", "cppflags", "ldflags_nolargefiles", "ccdlflags", "incpth")
+HOST_DIR_TOKEN = re.compile(r"(?:^|[\s'\"=,:;])(?:-[LIR]|-Wl,-R)?(/(?:usr|opt|lib|bin|sbin)(?:/[\w.+-]+)*)(?=$|[\s'\":;,])")
+
+def config_record_findings(rel, data):
+    r = []
+    if re.search(r"/Config(_heavy)?\.p[lm]$", rel) and b"perl" in data[:4096].lower() + data[-4096:].lower():
+        for m in re.finditer(rb"^(\w+)='([^']*)'", data, re.M):
+            var = m.group(1).decode()
+            if var not in PERL_LINK_VARS: continue
+            hosts = sorted({h for h in HOST_DIR_TOKEN.findall(m.group(2).decode(errors="replace")) if h not in ("/no-such-path",)})
+            if hosts: r.append(("FAIL", "B15-config", f"{rel}: {var}='{m.group(2).decode(errors='replace')[:100]}' names host dirs {' '.join(hosts[:4])}"))
+    elif rel.endswith((".pc", ".la")) or re.search(r"(Config|-config)\.cmake$|/_sysconfigdata[^/]*\.py$|/[\w.+-]+-config$", rel):
+        txt = data.decode(errors="replace")
+        for line in txt.splitlines():
+            if line.lstrip().startswith("#"): continue
+            for tok in re.findall(r"(?:-[LIR]|-Wl,-R|libdir=|includedir=|dependency_libs=')\s*'?(/(?:usr/(?:gnu|local|gcc|sfw|ccs)|opt)/[\w./+-]*)", line):
+                r.append(("FAIL", "B15-config", f"{rel}: link/include dir {tok} in a config record: {line.strip()[:120]}")); break
+            if len(r) >= 3: break
+    return r
 
 # ---- B5 / B11: the host's store copy is in Nix's canonical form ----------------------------------------------------------
 def check_store(out, want_uid=None):
@@ -814,7 +982,7 @@ def selftest():
         ("NOT exempt: hostfix-tools with another hash", D("hf2", name="solnix-hostfix-tools", env={"PATH": "/usr/gnu/bin:/usr/bin:/usr/sbin"}), False, "A1-path"),
     ]
     ca = lambda p: FAKE_CA.get(p, True)
-    bad = selftest_out()
+    bad = selftest_out() + selftest_log()
     # leaf mode: a host-PATH input whose out IS served is not judged (counted as debt); one whose out is NOT served is
     hostin = fake_drv("hostin", ["-c", "true"], {"PATH": "/usr/bin"})
     hostout = parse_drv(FAKE[hostin])["outputs"]["out"]["path"]
@@ -883,6 +1051,40 @@ def mkelf(stale, live):
     sh = lambda typ, off, size, link: struct.pack("<IIQQQQIIQQ", 0, typ, 0, 0, off, size, link, 0, 1, 0)
     return hdr + body + dynamic + sh(0, 0, 0, 0) + sh(3, stroff, len(dynstr), 0) + sh(6, dynoff, len(dynamic), 1)
 
+def mkelf_interp(interp):
+    """A minimal 64-bit LE ELF with one PT_INTERP program header and no sections."""
+    import struct
+    body = interp + b"\0"
+    phoff = 64; off = phoff + 56
+    hdr = b"\x7fELF" + bytes([2, 1, 1]) + b"\0" * 9 + struct.pack("<HHIQQQIHHHHHH", 2, 62, 1, 0, phoff, 0, 0, 64, 56, 1, 64, 0, 0)
+    ph = struct.pack("<IIQQQQQQ", 3, 4, off, 0, 0, len(body), len(body), 1)
+    return hdr + ph + body
+
+def selftest_log():
+    bad = 0
+    good = "\n".join(["jq> checking for gcc... /var/tmp/srcpkg-d259544faa76e83d/cc64",
+                      "checking for a BSD-compatible install... /nix/store/1dh4mvfqri4jqmgjk6vgi79d1gq2cbqp-coreutils-9.12/bin/install -c",
+                      "checking for ld used by cc64... /nix/store/a5rnsv8dyxqmy11jy9p0v5nc0l65azvp-ld/usr/bin/ld",
+                      "-- Found Perl: /nix/store/d6fjxi7wnf8blph569v7kzpl5q410z3k-perl-5.42.0/bin/perl (found version \"5.42.0\")"])
+    cases = [("store-only wave6 jq log (real lines)", good, True, None),
+             ("L1 jq 1.8.2 MAKE=/usr/gnu/bin/make (real line)", "checking whether /usr/gnu/bin/make sets $(MAKE)... yes", False, "L1-configure"),
+             ("L1 configure found /usr/gnu/bin/install (real line)", "checking for a BSD-compatible install... /usr/gnu/bin/install -c", False, "L1-configure"),
+             ("L2 perl Configure ignoring -D: WARN only (perl-5.42.2 prints it with a clean Config)", "perl> Configure: ignoring -D loclibpth=", True, "L2-configure-ignored"),
+             ("L1 not hit: make output interleaved (gdb, real line)", "checking for localeconv... /bin/sh ./libtool  --tag=CC   --mode=link /var/tmp/srcpkg-059b7c750b714417/cc64 -W", True, None),
+             ("L1 not hit: the system shell (autoconf, real line)", "checking for a shell whose -n mode is known to work... /bin/sh", True, None),
+             ("L1 WARN: a configure runtime default (w3m, real line)", "checking which external browser is used by default... /usr/bin/firefox", True, "L1-configure"),
+             ("L1 FAIL: automake sh=/usr/gnu/bin/sh (chef, real line)", "checking for sh... /usr/gnu/bin/sh", False, "L1-configure"),
+             ("L2 perl probing /usr/gnu/bin/echo (real line)", "Checking compatibility between /usr/gnu/bin/echo and builtin echo (if any)...", False, "L2-configure-host"),
+             ("L3 automake: no POSIX shell (real message)", "configure: error: no POSIX shell found that is good enough to be used in our testsuite", False, "L3-missing"),
+             ("L5 cmake Found PkgConfig: /usr/bin/pkg-config (fortune-mod, real line)", '-- Found PkgConfig: /usr/bin/pkg-config (found version "0.29.2")', False, "L5-cmake"),
+             ("L5 meson host program", "Program python3 found: YES (/usr/bin/python3)", False, "L5-meson")]
+    for label, text, want_pass, must in cases:
+        lines = []; rc = report("log", check_log(text), lines.append)
+        ok = (rc == 0) == want_pass and (must is None or any(f" {must} " in l for l in lines))
+        bad += not ok
+        print(f"{'ok ' if ok else 'BAD'} log  {label}: {'PASS' if rc == 0 else 'FAIL'}" + ("" if ok else "\n    " + "\n    ".join(lines)))
+    return bad
+
 def selftest_out():
     import tempfile
     O = STORE + "6" * 32 + "-t-out"
@@ -919,7 +1121,8 @@ def selftest_out():
         ("B8 Nix's /tmp/nix-build-<name>-<n> dir: FAIL", mut("lib/x.la", R(b"libdir='/tmp/nix-build-xyz-1.0.drv-0/src/.libs'")), False, "FAIL B8-builddir"),
         ("B8 a mktemp-suffixed dir /var/tmp/cargo-Ab3xQz: FAIL", mut("bin/c", R(b"\x7fELF\0/var/tmp/cargo-Ab3xQz/target\0", True)), False, "FAIL B8-builddir"),
         ("B8 a build user's home /home/gburd/: FAIL", mut("lib/y.pc", R(b"prefix=/home/gburd/src/y")), False, "FAIL B8-builddir"),
-        ("B8 root's cargo home /root/.cargo/: FAIL", mut("bin/rc", R(b"\x7fELF\0/root/.cargo/registry/src/x.rs\0", True)), False, "FAIL B8-builddir"),
+        ("B8 root's cargo registry /root/.cargo/registry/: FAIL", mut("bin/rc", R(b"\x7fELF\0/root/.cargo/registry/src/x.rs\0", True)), False, "FAIL B8-builddir"),
+        ("B8 not hit: upstream help text 'rm /root/.cache/nix/' (nix globals.hh, flyctl)", mut("include/g.hh", R(b"# rm /root/.cache/nix/binary-cache-v*.sqlite*\n")), True, None),
         ("B8 not hit: upstream example text /home/user/hello.c (gdb)", mut("bin/gdb2", R(b"\x7fELF\0The base name of \"/home/user/hello.c\" is\0", True)), True, None),
         ("B8 /var/tmp/big scratch: FAIL", mut("lib/w.cmake", R(b"set(X /var/tmp/big/build)")), False, "FAIL B8-builddir"),
         ("B8 /build/ outside lib/debug: counted INFO, not failed (NixOS ships it)", mut("lib/libz.la", R(b"libdir='/build/src/.libs'")), True, "INFO B8-builddir"),
@@ -940,6 +1143,23 @@ def selftest_out():
         ("B13 /opt/ooce in a .pc", mut("lib/pkgconfig/a.pc", R(b"Libs: -L/opt/ooce/lib")), False, "B13-hostpath"),
         ("B13 not hit: a store subpath .../usr/gnu/", mut("lib/w.txt", R(b"x=" + STORE.encode() + b"7" * 32 + b"-world/usr/gnu/bin/x")), True, None),
         ("B0 corrupt NAR", None, False, "B0-nar"),
+        # S: the server content gate (infra's 3 findings are the positive controls on real NARs; these are synthetic)
+        ("S1 DT_RUNPATH /usr/gcc/10/lib (ppp/minconn.so class)", mut("lib/minconn.so", R(mkelf(b"", b"/usr/gcc/10/lib\0"))), False, "FAIL S1-runpath"),
+        ("S1 DT_RUNPATH $ORIGIN:<store> passes", mut("lib/ok.so", R(mkelf(b"", b"$ORIGIN/../lib:/nix/store/x/lib\0"))), True, None),
+        ("S2 PT_INTERP /usr/local/lib/ld.so.1", mut("bin/i1", R(mkelf_interp(b"/usr/local/lib/ld.so.1"), True)), False, "FAIL S2-interp"),
+        ("S2 PT_INTERP /usr/lib/amd64/ld.so.1 passes", mut("bin/i2", R(mkelf_interp(b"/usr/lib/amd64/ld.so.1"), True)), True, None),
+        ("S3 solnix-builder-build in a DOF record", mut("lib/libz2.so", R(b"\x7fELF\0SunOS\0solnix-builder-build\0")), False, "FAIL S3-buildhost"),
+        ("S3 ip-10-0-1-23.EC2.Internal (case-insensitive)", mut("BUILDINFO", R(b"host=ip-10-0-1-23.EC2.Internal")), False, "FAIL S3-buildhost"),
+        ("S3 a symlink target naming compute.internal", mut("lib/hl", L("/nix/store/" + "8" * 32 + "-x/ip-1.compute.internal")), False, "FAIL S3-buildhost"),
+        ("S4 host name dixi as a word", mut("etc/conf", R(b"built on dixi by gburd")), False, "FAIL S4-hostname"),
+        ("S4 not hit: dixi inside a longer word (dixie)", mut("etc/conf2", R(b"dixieland floki_x lixir")), True, None),
+        ("S4 case-sensitive: DIXI is not a host name", mut("etc/conf3", R(b"DIXI FLOKI")), True, None),
+        # B15: config records (LOOPHOLES class 2: perl Configure recorded -L/usr/gnu/lib; served perl-5.42.0 fwpxqmsj)
+        ("B15 perl Config_heavy.pl lddlflags -L/usr/gnu/lib", mut("lib/perl5/5.42.0/i86pc/Config_heavy.pl", R(b"# perl config\nlddlflags='-shared -m64 -L/usr/gnu/lib'\nperl5='/usr/bin/perl'\n")), False, "FAIL B15-config"),
+        ("B15 perl glibpth with host dirs", mut("lib/perl5/5.42.0/i86pc/Config_heavy.pl", R(b"# perl\nglibpth='/usr/shlib /usr/lib /usr/ccs/lib'\n")), False, "FAIL B15-config"),
+        ("B15 not hit: nixpkgs-style perl Config (store + /no-such-path, pager=/usr/ucb/more)", mut("lib/perl5/5.42.0/i86pc/Config_heavy.pl", R(b"# perl\nlibpth='/nix/store/x/lib /no-such-path/lib'\nglibpth=''\npager='/usr/ucb/more'\n")), True, None),
+        ("B15 a .pc with -L/opt/ooce/lib", mut("lib/pkgconfig/b.pc", R(b"Libs: -L/opt/ooce/lib -lb\n")), False, "FAIL B15-config"),
+        ("B15 a .la dependency_libs with /usr/gnu/lib", mut("lib/libb.la", R(b"dependency_libs=' -L/usr/gnu/lib -lintl'\n")), False, "FAIL B15-config"),
     ]
     bad = 0
     with tempfile.TemporaryDirectory() as td:
@@ -1022,6 +1242,10 @@ def main(argv):
     if cmd == "selftest":
         bad = selftest(); print(f"SELFTEST {'PASS' if bad == 0 else 'FAIL'} ({bad} bad)"); return 1 if bad else 0
     if cmd in ("nar", "store", "closure") and rest: return run_out(cmd, rest)
+    if cmd == "log" and rest:
+        # gate-checks.py log <out> <logfile|->: the build log of the out's deriver (nix log <drv>)
+        text = sys.stdin.read() if rest[1] == "-" else open(rest[1], errors="replace").read()
+        return report(rest[0], check_log(text), extra=f" (log: {len(text.splitlines())} lines)")
     print(__doc__); return 2
 
 if __name__ == "__main__":
