@@ -459,6 +459,14 @@ HOST_STR = re.compile(rb"(/usr/gnu/|/opt/ooce|/opt/nixboot|/usr/gcc/|/usr/local/
 # table, wgetrc/neomuttrc examples): nixpkgs ships the same strings (measured: dbus-1.14.10 bin/dbus-daemon, wget-1.25.0
 # etc/wgetrc) and neither dixi nor a NixOS host has it, so it is WARN. The others exist only on an OI build host.
 WARN_ONLY = (b"/usr/local/",)
+# Upstream compiled-in defaults: a whole NUL-terminated C string in an ELF, exactly one of these, is an upstream search
+# default, not a tool path configure baked. GNU make's src/read.c default_include_directories ("/usr/gnu/include" beside
+# "/usr/local/include", "/usr/include") is in the served x86 gnumake yc7i5s3r and aarch64 kipf3wwd, and in nixpkgs' make.
+# Exact strings only: anything else under /usr/gnu still FAILs.
+UPSTREAM_DEFAULTS = {b"/usr/gnu/include"}
+def upstream_default(data, at):
+    a = data.rfind(b"\0", 0, at) + 1; b = data.find(b"\0", at); b = len(data) if b < 0 else b
+    return data[a:b] in UPSTREAM_DEFAULTS
 TOKEN_CH = set(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.+-/${}()")
 def search_list(data, at):
     """True if the hit sits in a ':'-separated list of >= 4 absolute dirs inside one NUL-terminated string: an upstream
@@ -625,6 +633,7 @@ def check_nar(out, src=None):
             def lvl(m):
                 if m.group(0) in WARN_ONLY: return "WARN"
                 if elf and search_list(data, m.start()): return "WARN"
+                if elf and upstream_default(data, m.start()): return "WARN"
                 if elf and live is not None and m.start() in live["dynstr"] and not live["used"](m.start()): return "INFO"
                 return "WARN" if (not elf and DOC_RE.search(rel)) else "FAIL"
             order = {"FAIL": 0, "WARN": 1, "INFO": 2}
