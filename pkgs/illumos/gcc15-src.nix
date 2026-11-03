@@ -114,6 +114,11 @@ let
     mkdir ../b; cd ../b
     # MAKEINFO=true: chef2 has /usr/bin/makeinfo, a solnix host none; the release tarball's prebuilt .info files are installed either way.
     export CC="$stage0/bin/gcc" CXX="$stage0/bin/g++" CONFIG_SHELL="$bash/bin/bash" MAKEINFO=true
+    # the host-state configure answers pinned, as every store-only mk-src-pkg build (./config.site): libstdc++'s "checking for working
+    # iconv" RUNS a conversion through the BUILD HOST's /usr/lib/iconv modules, so chef said yes and dixi (201 modules) no, and
+    # libstdc++.so's std::format locale path differed (wave6t step41: dixi --check DIFFERS on gcc-15.3.0-lib). Pinned to yes: the
+    # iconv functions are the store libc's, the same on every host.
+    export CONFIG_SITE=${./config.site}
     # NM: binutils' gnm (configure took OI's /usr/bin/nm -p before). gettext tools: none (--disable-nls; configure still looked).
     export NM="$binutils/bin/gnm" NM_FOR_TARGET="$binutils/bin/gnm" MSGFMT=: GMSGFMT=: XGETTEXT=: MSGMERGE=:
     # The compiler binaries themselves link the seed's C++ runtime statically, so
