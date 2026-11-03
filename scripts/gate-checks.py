@@ -859,6 +859,12 @@ PINNED_PROBES = {
     "ipv6 stack type": "cf_cv_ipv6type", "for remote shell": "tar_cv_path_RSH",
 }
 _PINNED = re.compile(r"^checking (" + "|".join(re.escape(k) for k in PINNED_PROBES) + r")\.\.\. (\(cached\) )?(\S.*)$")
+# A message that more than one configure prints, where only one has the cache variable: the probe is pinnable only in a log
+# from that configure. "ipv6 stack type" is lynx's CF_CHECK_IPV6 (cf_cv_ipv6type); CPython's configure prints the same words
+# with no cache variable (it reads /etc/netconfig, the same 'solaris' on every illumos host), so config.site can't pin it there
+# (a64r, python3 3.13.9: a false L4 FAIL). A log is from a cf_ (Thomas Dickey) configure when it asks "checking if you want to use".
+# Measured: CPython 3.13.9's log has "checking for curses function ..." lines, so a curses pattern would not tell them apart.
+PINNED_ONLY_IF = {"ipv6 stack type": re.compile(r"^checking if you want to use ", re.M)}   # Dickey's cf_ configures ask this; CPython's never does
 
 def _log_line(line):
     """-> [(level, check, why)] for one log line."""
@@ -887,11 +893,18 @@ def _log_line(line):
         return [("WARN", "L3-notfound", "a probe found no such tool on the store PATH (not used)")]
     return []
 
+def _pinnable(msg, text):
+    r = PINNED_ONLY_IF.get(msg)
+    return r is None or bool(r.search(text))
+
 def check_log(text):
     r, seen = [], {}
     for n, line in enumerate(text.splitlines(), 1):
         line = re.sub(r"^[\w.+-]+> ", "", line).rstrip()   # nix-build's "<name>> " prefix
         for lv, chk, why in _log_line(line):
+            if chk == "L4-probe-ran":
+                m = _PINNED.match(line)
+                if m and not _pinnable(m.group(1), text): continue   # this configure has no cache variable for it
             k = (lv, chk); seen[k] = seen.get(k, 0) + 1
             if seen[k] <= 5: r.append((lv, chk, f"line {n}: {why}: {line.strip()[:160]}"))
     for (lv, chk), k in seen.items():
@@ -1192,6 +1205,8 @@ def selftest_log():
              ("L4 a pinned probe that RAN (gcc15 libstdc++ on dixi, real line)", "checking for working iconv... no", False, "L4-probe-ran"),
              ("L4 a pinned probe that ran and said yes is still host state (chef, real line)", "checking for working iconv... yes", False, "L4-probe-ran"),
              ("L4 not hit: the pinned answer from config.site", "checking for working iconv... (cached) yes", True, None),
+             ("L4 not hit: CPython's 'ipv6 stack type' (no cache variable; python3 3.13.9, real line)", "checking ipv6 stack type... solaris", True, None),
+             ("L4 FAIL: lynx's 'ipv6 stack type' that ran (a cf_ configure)", "checking if you want to use the bundled libraries... no\nchecking ipv6 stack type... solaris", False, "L4-probe-ran"),
              ("L4 not hit: an unpinned iconv probe", "checking for iconv... yes", True, None)]
     for label, text, want_pass, must in cases:
         lines = []; rc = report("log", check_log(text), lines.append)
