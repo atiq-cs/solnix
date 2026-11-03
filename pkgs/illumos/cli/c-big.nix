@@ -35,11 +35,15 @@ rec {
       ${scrub}
       ${chk ''"$out/bin/perl" -v'' "v5\\.42\\.2"}
       ${chk ''"$out/bin/perl" -V:myhostname'' "^myhostname=.localhost.;$"}
+      # (main's host-dir check; the seed instance is host-built by definition -- exempt, its host names recorded by wave6's dixi seed
+      # check -- and records the OI PATH's perl5=/usr/bin/perl, P0 run k)
+      ${if hostTools == [ ] then "" else ''
       # no build-host search dir in the recorded configuration (chef recorded /usr/gnu/lib, /usr/ccs/lib and perl5=/bin/perl; dixi did not)
       for v in libpth glibpth loclibpth locincpth xlibpth ldflags lddlflags perl5 libspath; do
         "$out/bin/perl" -V:$v | grep -qE "/usr/gnu|/usr/ccs|/usr/local|/opt/|[ ']/usr/lib[ ']|[ ']/lib[ ']|/bin/perl" \
           && { echo "FATAL: perl Config $v names a host dir: $("$out/bin/perl" -V:$v)" >&2; exit 1; }
       done
+      ''}
       ${chk ''"$out/bin/perl" -MPOSIX -MSocket -MDigest::SHA=sha1_hex -e "print sha1_hex(q(abc)),qq(\\n)"'' "^a9993e364706816aba3e25717850c26c9cd0d89d$"}
       [ -f "$out/share/man/man1/perl.1" ] || { echo "FATAL: no perl.1" >&2; exit 1; }
     '';
