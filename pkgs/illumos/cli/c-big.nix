@@ -9,7 +9,9 @@ rec {
     src = { url = "https://www.cpan.org/src/5.0/perl-5.42.2.tar.gz";
             sha256 = "9384e8deb75b7b1695e5637971b752281aaecd025a3d5d4734d33c1d0adfee47"; };
     deps = [ world ];
-    nativeTools = [ gnupatch ] ++ hostTools;   # store-only PATH + config.site (recipes1); GNU patch for no-sys-dirs
+    # store-only PATH + config.site (recipes1); GNU patch for no-sys-dirs. The seed instance (hostTools = [ ]) keeps the OI PATH, as
+    # before the merge: [ gnupatch ] alone there was a gnupatch-only PATH ("rm: command not found", wave6 P0 run j).
+    nativeTools = if hostTools == [ ] then [ ] else [ gnupatch ] ++ hostTools;
     build = ''
       # hints/solaris_2.sh picks gcc vs Sun cc by "gcc" in the compiler's NAME; the builder's
       # wrapper is cc64 (-> Sun cc flags -xarch=generic64, measured). A gcc-named link to it.
