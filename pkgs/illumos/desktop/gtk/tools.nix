@@ -60,6 +60,13 @@ rec {
     '';
   };
 
+  # For a recipe that runs glib's programs at build time (glib-compile-resources, gdbus-codegen, ...) or in its checks. glib converts
+  # argv and file names from the locale codeset; in the C locale that is 646, and libc's iconv opens /usr/lib/iconv/646%UTF-8.so by
+  # absolute path, i.e. the RUNNING host's modules, not the store's. dixi has none: "Conversion from character set 646 to UTF-8 is
+  # not supported" (gtk3's glib-compile-resources, harfbuzz's hb-shape; measured). CHARSET=UTF-8 makes glib treat the codeset as
+  # UTF-8 (gcharset.c), so it copies the bytes and reads no host file (LC_ALL=C.UTF-8 also works, but reads the host's /usr/lib/locale).
+  charset = "export CHARSET=UTF-8";
+
   # The lines every meson recipe here runs; flags are the -D options. Store tools first on PATH: meson, samurai,
   # python3 (glib-mkenums & co. are `#!/usr/bin/env python3`), pkg-config, patch, msgfmt (po/).
   # PYTHONDONTWRITEBYTECODE: a root build on chef's writable store wrote __pycache__ into the store python3 and glib it

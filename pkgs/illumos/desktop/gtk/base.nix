@@ -51,7 +51,7 @@ rec {
     EOF
       $CC -I"$out/include/glib-2.0" -I"$out/lib/amd64/glib-2.0/include" "$TMPDIR/t.c" -o "$TMPDIR/t" \
         -L"$out/lib/amd64" -Wl,-R,"$out/lib/amd64" -lgio-2.0 -lgobject-2.0 -lglib-2.0
-      "$TMPDIR/t" | grep -qx 'glib-ok a%20b' || { echo "FATAL: glib round trip" >&2; exit 1; }
+      CHARSET=UTF-8 "$TMPDIR/t" | grep -qx 'glib-ok a%20b' || { echo "FATAL: glib round trip" >&2; exit 1; }
     '';
   };
 
@@ -144,7 +144,9 @@ rec {
             sha256 = "6695da3eb7e1be0aa3092fe4d81433a33b47f4519259c759d729e3a9a55c1429"; };
     deps = [ glib freetype ];
     linkDeps = [ pcre2 libffi ] ++ ftPriv;
+    nativeTools = [ glib ];   # glib-mkenums & co. by name, as NixOS nativeBuildInputs (gdk-pixbuf says why)
     build = ''
+      ${tools.charset}
       ${m "-Dcairo=disabled -Dchafa=disabled -Dicu=disabled -Dgraphite=disabled -Dgraphite2=disabled -Dintrospection=disabled -Ddocs=disabled -Dtests=disabled -Dbenchmark=disabled -Dglib=enabled -Dgobject=enabled -Dfreetype=enabled -Draster=disabled '-Dc_link_args=-lm' '-Dcpp_link_args=-lm'"}
       "$out/bin/hb-shape" test/api/fonts/OpenSans-Regular.ttf 'fi' | grep -q '^\[' || { echo "FATAL: hb-shape" >&2; exit 1; }
     '';

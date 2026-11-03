@@ -11,6 +11,8 @@ mkSrcPkg {
   deps = [ world ];
   build = ''
     export PYTHONDONTWRITEBYTECODE=1   # cmake/ninja run the store python3 (tools.nix says why)
+    # Git off: cmake's find_program also searches /usr/bin apart from PATH (nixpkgs patches that out of its cmake), and chef's log
+    # had "Found Git: /usr/bin/git" (OI's; a solnix host has none). It only stamps a VCS revision, which a release tarball has not.
     ${cmake}/bin/cmake -S llvm -B _b -G Ninja -DCMAKE_MAKE_PROGRAM=${tools.ninja}/bin/ninja \
       -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$out" -DCMAKE_INSTALL_LIBDIR=lib \
       -DCMAKE_C_COMPILER="$CC" -DCMAKE_CXX_COMPILER="$CXX" -DCMAKE_SKIP_RPATH=ON \
@@ -24,7 +26,7 @@ mkSrcPkg {
       -DLLVM_ENABLE_TERMINFO=OFF -DLLVM_ENABLE_LIBXML2=OFF -DLLVM_ENABLE_ZLIB=OFF -DLLVM_ENABLE_ZSTD=OFF \
       -DLLVM_ENABLE_LIBPFM=OFF -DLLVM_ENABLE_LIBEDIT=OFF -DLLVM_ENABLE_BINDINGS=OFF -DLLVM_ENABLE_ASSERTIONS=OFF \
       -DLLVM_BUILD_LLVM_DYLIB=ON -DLLVM_LINK_LLVM_DYLIB=ON -DCLANG_LINK_CLANG_DYLIB=ON -DLLVM_PARALLEL_LINK_JOBS=2 \
-      -DPython3_EXECUTABLE=${python3}/bin/python3
+      -DPython3_EXECUTABLE=${python3}/bin/python3 -DCMAKE_DISABLE_FIND_PACKAGE_Git=ON
     ${tools.ninja}/bin/ninja -C _b -j''${NIX_BUILD_CORES:-8} install
     rm -f "$out"/lib/*.a   # static component libs: bindgen needs only libclang.so (nixpkgs keeps them in a dev output)
     # bindgen's path: libclang parses a header with clang's own resource dir (stddef.h)

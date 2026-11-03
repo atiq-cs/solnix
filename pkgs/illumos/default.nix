@@ -420,7 +420,7 @@ let
   };
   # Desktop apps outside graphics/ (pop-launcher, cosmic-wallpapers): ./desktop, so the COSMIC outs do not move.
   desktop = import ./desktop { inherit (cargo) cargoPkg; inherit graphics; inherit (cli) fd file;
-    inherit (srcPkgs) mkSrcPkg bash coreutils gnugrep gnused hostname jq; };
+    inherit (srcPkgs) mkSrcPkg bash coreutils gnugrep gnused hostname jq hostTools; inherit hostfixTools world; inherit (cliBase) python3; };
   # The GTK 3 / Wayland stack for Firefox (./desktop/gtk): its own dir, so neither COSMIC nor desktop/ outs move.
   gtk = import ./desktop/gtk { base = srcPkgs; inherit graphics cli; inherit (cosmic) noto-sans; inherit (cargo) cargoPkg; rust = rust199; inherit world; };
   # LLVM 23.1.4 from source, split as nixpkgs' llvmPackages: llvm, clang, lld, lldb, clang-wrapper (./llvm).
@@ -670,6 +670,7 @@ let
   bluetooth = import ./bluetooth {
     gate = gate';
     inherit libc;
+    tools = [ srcPkgs.coreutils srcPkgs.findutils world ];
     solnixDev = buildEnv {
       name = "solnix-dev";
       paths = [ srcPkgs.gccWrapper srcPkgs.binutils srcPkgs.gnumake ];

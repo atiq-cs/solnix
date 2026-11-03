@@ -1,16 +1,20 @@
 # desktop/data.nix -- data-only desktop packages NixOS's cosmic module and a NixOS desktop install (sound theme, icons,
 # fonts) that solnix lacked (cosmic8 gap table). Each is unpacked and copied, nothing compiled; hashes are nixpkgs 26.05's
 # where nixpkgs fetches the same file. A guard fails a build that installs nothing.
-{ }:
+# Store tools only (desktop/cosmic-data.nix's set: the hostfix tools = seed GNU tar/gzip/xz/sed/grep + coreutils/findutils, then
+# the world): with the OI host PATH (/usr/gnu/bin:/usr/bin) a solnix host had no GNU install and illumos tar ("install: command not
+# found", "tar: blocksize = 0", dixi). bzip2: the store python3's bz2 module (no bzip2 CLI in the hostfix set). ../path-gate.sh.
+{ tools, world, python3 }:
 let
   fetchurl = import <nix/fetchurl.nix>;
   data = name: url: sha256: script: derivation {
-    inherit name; system = "x86_64-solaris"; builder = "/usr/bin/bash";
+    inherit name tools world python3; system = "x86_64-solaris"; builder = "/usr/bin/bash";
     src = fetchurl { inherit url sha256; };
-    PATH = "/usr/gnu/bin:/usr/bin";
     args = [ "-c" ''
-      set -eu; mkdir w; cd w
-      case "$src" in *.ttf) cp "$src" ./"''${src##*-}" ;; *.tar.bz2) bzip2 -dc "$src" | tar xf - ;; *.tar.xz) xz -dc "$src" | tar xf - ;; *) gzip -dc "$src" | tar xf - ;; esac
+      set -eu; export PATH="$tools/bin:$world/bin:$world/usr/bin"; /usr/bin/bash ${../path-gate.sh}; mkdir w; cd w
+      case "$src" in *.ttf) cp "$src" ./"''${src##*-}" ;;
+        *.tar.bz2) "$python3/bin/python3" -c 'import bz2, shutil, sys; shutil.copyfileobj(bz2.open(sys.argv[1]), sys.stdout.buffer)' "$src" | tar xf - ;;
+        *.tar.xz) xz -dc "$src" | tar xf - ;; *) gzip -dc "$src" | tar xf - ;; esac
       ${script}
       n=$(find "$out" -type f | wc -l); [ "$n" -gt 0 ] || { echo "FATAL: ${name}: empty" >&2; exit 1; }
       echo "${name}: $n files" >&2

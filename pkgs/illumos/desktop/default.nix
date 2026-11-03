@@ -2,11 +2,11 @@
 # COSMIC set lacks). Its own dir on purpose: graphics/cosmic.nix passes fixups = ./., so any file added there moves
 # all 21 COSMIC derivations. Rust here builds on ../cargo.nix cargoPkg; the one shared file, the vendor fixup, is
 # imported by path (a single store file), which leaves graphics/ and its outputs unchanged.
-{ cargoPkg, graphics, fd, mkSrcPkg, bash, coreutils, gnugrep, gnused, file, hostname, jq }:
+{ cargoPkg, graphics, fd, mkSrcPkg, bash, coreutils, gnugrep, gnused, file, hostname, jq, hostfixTools, world, python3, hostTools }:
 let
   fetchurl = import <nix/fetchurl.nix>;
   gh = repo: sha256: { url = "https://codeload.github.com/pop-os/${repo}/tar.gz/refs/tags/epoch-1.5.0"; inherit sha256; };
-in (import ./data.nix { }) // (import ./xdg.nix { inherit mkSrcPkg bash coreutils gnugrep gnused file hostname; }) // {
+in (import ./data.nix { tools = hostfixTools; inherit world python3; }) // (import ./xdg.nix { inherit mkSrcPkg bash coreutils gnugrep gnused file hostname hostTools; }) // {
   # the desktop's help: man: handler, launcher man search, Solnix Manual entry (./help.nix)
   solnix-help = import ./help.nix { inherit bash coreutils gnused gnugrep jq; };
 } // rec {
@@ -70,9 +70,10 @@ in (import ./data.nix { }) // (import ./xdg.nix { inherit mkSrcPkg bash coreutil
   cosmic-wallpapers = derivation {
     name = "cosmic-wallpapers-1.5.0"; system = "x86_64-solaris"; builder = "/usr/bin/bash";
     src = fetchurl { name = "cosmic-wallpapers-epoch-1.5.0.tar.gz"; inherit (gh "cosmic-wallpapers" "decdaf0b17fd1fda7de5adf763bb68ef46c39daae1bd627330f66cf1a679b99d") url sha256; };
-    PATH = "/usr/gnu/bin:/usr/bin";
+    tools = hostfixTools; inherit world;   # store tools only (data.nix says why)
     args = [ "-c" ''
-      set -eu; tar xzf "$src"; cd cosmic-wallpapers-epoch-1.5.0; n=0
+      set -eu; export PATH="$tools/bin:$world/bin:$world/usr/bin"; /usr/bin/bash ${../path-gate.sh}
+      tar xzf "$src"; cd cosmic-wallpapers-epoch-1.5.0; n=0
       for f in original/*.jpg; do
         [ "$(od -An -tx1 -N3 "$f" | tr -d ' \n')" = ffd8ff ] || { echo "FATAL: $f is not a JPEG (an LFS pointer?)" >&2; exit 1; }
         install -Dm0644 "$f" "$out/share/backgrounds/cosmic/$(basename "$f")"; n=$((n+1))
