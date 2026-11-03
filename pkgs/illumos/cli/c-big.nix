@@ -15,7 +15,7 @@ rec {
     build = ''
       # hints/solaris_2.sh picks gcc vs Sun cc by "gcc" in the compiler's NAME; the builder's
       # wrapper is cc64 (-> Sun cc flags -xarch=generic64, measured). A gcc-named link to it.
-      mkdir -p "$W/gccbin"; ln -sf ${if hostTools == [ ] then "\"$CC\"" else "\"$(command -v $CC)\""} "$W/gccbin/gcc"; export PATH="$W/gccbin:$PATH"
+      mkdir -p "$W/gccbin"; ln -sf "$(command -v $CC)" "$W/gccbin/gcc"; export PATH="$W/gccbin:$PATH"
       sed -i 's@ldflags="$ldflags -L/usr/gnu/lib"@:@; s@-L/usr/gnu/lib@@g' hints/solaris_2.sh
       # nixpkgs no-sys-dirs: Configure must not search the build host's /usr/gnu/lib, /usr/lib, /usr/ccs/lib, /bin (recipes1 W3: chef and
       # dixi baked different Config_heavy.pl). The hint's `set \`echo $glibpth ...\`` would, with glibpth empty, take Configure's own args.
@@ -37,6 +37,12 @@ rec {
       ${chk ''"$out/bin/perl" -V:myhostname'' "^myhostname=.localhost.;$"}
       # (main's host-dir check; the seed instance is host-built by definition -- exempt, its host names recorded by wave6's dixi seed
       # check -- and records the OI PATH's perl5=/usr/bin/perl, P0 run k)
+      # every instance (the seed too, wave6t): no OI tool path in the recorded configuration. Configure records the tools where it found
+      # them on PATH (seed perl jb0z0bkp: lns='/usr/gnu/bin/ln -s', rm_try='/usr/gnu/bin/rm -f ...'): the bare names, as on a NixOS PATH.
+      for f in "$out"/lib/perl5/*/*/Config_heavy.pl "$out"/lib/perl5/*/*/Config.pm; do chmod u+w "$f"; sed -i 's@/usr/gnu/bin/@@g' "$f"; done
+      ! grep -n '/usr/gnu/' "$out"/lib/perl5/*/*/Config_heavy.pl "$out"/lib/perl5/*/*/Config.pm > "$W/perlgnu" \
+        || { echo "FATAL: perl Config names /usr/gnu: $(head -3 "$W/perlgnu")" >&2; exit 1; }
+      ${chk ''"$out/bin/perl" -V:lns'' "^lns='ln -s';$"}
       ${if hostTools == [ ] then "" else ''
       # no build-host search dir in the recorded configuration (chef recorded /usr/gnu/lib, /usr/ccs/lib and perl5=/bin/perl; dixi did not)
       for v in libpth glibpth loclibpth locincpth xlibpth ldflags lddlflags perl5 libspath; do

@@ -40,6 +40,9 @@
                              # reachable). base-src.nix sets it for every instance with store build tools; only the seed instance
                              # (buildTools = [ ], the OI bootstrap) and aarch64 (its stage0 box) are exempt, until the
                              # bootstrap-tools wave. With it, ./path-gate.sh runs in every build and FAILs on a host PATH entry.
+, seedOuts ? false           # wave6t: the seed instance (buildTools = [ ]) BUILDS on the OI host's PATH, but its OUTS pass the publish
+                             # content gate (no waivers, orchestrator 2026-11-03): CC by name (no $W/cc64 recorded) and ./seed-outs.sh
+                             # (#! -> /bin/sh, no /usr/gnu/bin/<tool> in a text file), each with its check
 , defaultNativeTools ? [ ]   # the store tools a recipe gets when it names none (base-src.nix: coreutils findutils + the world;
                              # seedTools for the world's own closure). A recipe's nativeTools replaces this list.
                              # false = the x86 text byte-for-byte, so no x86 drv hash moves.
@@ -178,7 +181,14 @@ let
      ++ (if a64h then [ ''export PATH="''${btPath:+$btPath:}$ntPath" CONFIG_SITE=${./config.site} CONFIG_SHELL=${shell} SHELL=${shell}; ${shell} ${./path-gate.sh}'' shell
                         ''sed "s@$_btd/@@g" "$f" > "$W/btfix" && cat "$W/btfix" > "$f"'' ] else [ ])) x) a.args;
     builder = if a64h then shell else a.builder; };
-  hermetic = if aarch64 then hermeticA else hermeticX;
+  hermetic = if aarch64 then hermeticA else if seedOuts then seedText else hermeticX;
+  # the seed's CC by name: the wrappers move to $W/bin$ABI/{gcc,g++} on PATH, as storeOnly does; PATH stays the OI host's
+  seedText = a: a // { args = map (x: builtins.replaceStrings
+    [ ''export CC="$W/cc$ABI" ABI LIBSUB'' "find \"$out\" -name '*.la' -type f -delete" ]
+    [ ''mkdir -p "$W/bin$ABI"; mv "$W/cc$ABI" "$W/bin$ABI/gcc"; ln -s gcc "$W/bin$ABI/cc"; ln -s "$W/bin$ABI/gcc" "$W/cc$ABI"
+      if [ -f "$W/c++$ABI" ]; then mv "$W/c++$ABI" "$W/bin$ABI/g++"; ln -s g++ "$W/bin$ABI/c++"; ln -s "$W/bin$ABI/g++" "$W/c++$ABI"; export CXX=g++; fi
+      export PATH="$W/bin$ABI:$PATH" CC=gcc CC_FOR_BUILD=gcc ABI LIBSUB''
+      "find \"$out\" -name '*.la' \\( -type f -o -type l \\) -delete\n    /usr/bin/bash ${./seed-outs.sh} \"$out\" \"$W\" || exit 1" ] x) a.args; };
   drvAttrs' = hermetic drvAttrs;
   drvAttrs = {
   name = "${pname}-${version}";

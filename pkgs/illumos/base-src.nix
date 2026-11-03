@@ -25,6 +25,7 @@ let
     runtimeLibDirs = [ "${libcSlice}/lib/amd64" "${libcSlice}/lib" ];
     # wave6: store-only by default (NixOS stdenv). Exempt: the seed instance (buildTools = [ ]), until bootstrap-tools.
     storeOnly = buildTools != [ ];
+    seedOuts = buildTools == [ ];   # the seed's outs pass the content gate too (wave6t; mk-src-pkg seedOuts)
     # the world's own closure (zlib libxml2 nspr nss) and the two tools in hostTools cannot use hostTools (a cycle): they get
     # the seed instance's world-free set (lib/host-pkgs.nix seedTools: perl coreutils findutils + the seed world).
     defaultNativeTools = if builtins.elem (args.pname or "") [ "zlib" "libxml2" "nspr" "nss" "coreutils" "findutils" "pkgconf" ] then seedTools   # pkgconf: libxml2 (in the world) needs it

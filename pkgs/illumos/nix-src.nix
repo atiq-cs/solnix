@@ -25,9 +25,8 @@
 , pinNixCurl ? false   # main 6dd8c10's x86 pin (nix on curl 8.10.1) until nix is store-only: wave6's is, so base-src.nix does not set it
 }:
 let # xz's configure, on solaris*, gives xzgrep/xzdiff/xzless/xzmore "#!/usr/xpg4/bin/sh" and a PATH=/usr/xpg4/bin prefix: host
-    # paths in the out (wave6 out-host-refs, P0 run i). /bin/sh is POSIX ksh93 on illumos; NixOS adds no PATH prefix. The seed
-    # instance keeps upstream's text (its xz is build-only and its drv must not move).
-    xzScripts = if hostTools == [ ] then "" else " gl_cv_posix_shell=/bin/sh --enable-path-for-scripts=no";
+    # paths in the out (wave6 out-host-refs, P0 run i). /bin/sh is POSIX ksh93 on illumos; NixOS adds no PATH prefix.
+    xzScripts = " gl_cv_posix_shell=/bin/sh --enable-path-for-scripts=no";   # the seed too (wave6t: its outs pass the content gate)
     withTools = extra: if hostTools == [ ] then { } else { nativeTools = builtins.filter (x: x != null) extra ++ hostTools; }; in
 # libSub: the 64-bit lib dir of the plain derivations below ("lib" on aarch64, LP64 only).
 # nixCxxFlags: extra CXXFLAGS for nix itself (aarch64: see aarch64/src.nix). "" keeps the x86 text byte-identical.
@@ -102,6 +101,7 @@ rec {
     build = ''
       ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-nls --disable-doc${xzScripts}
       gmake -j4; gmake install
+      head -1 "$out/bin/xzgrep" | grep -qx '#!/bin/sh' || { echo "FATAL: xzgrep #! is not /bin/sh: $(head -1 "$out/bin/xzgrep")" >&2; exit 1; }
     '';
   };
 
