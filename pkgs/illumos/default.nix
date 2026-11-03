@@ -412,8 +412,12 @@ let
   } // args);
   rust198 = mkRust { version = "1.98.0"; stage0 = rustSeedStage; seedStage0 = true;
     sha256 = "271fa73d8174f53d713c46a8310da7bf7cfdcfb8b7cfd1c2b74b84a83ae9fb1e"; };
-  # 1.99.1 (infra's dixi trial, 2026-11-02; sha256 = static.rust-lang.org's .sha256). The attr keeps its name: one stable rust.
-  rust199 = mkRust { version = "1.99.1"; stage0 = rust198;
+  # The N-1 chain, one more hop: 1.97.1 seed -> 1.98.0 -> 1.99.0 -> 1.99.1. rust-1.98 (built by the OI seed) DIFFERS under --check
+  # (wave5, 2/2) while rust-1.99.0 (built by 1.98) is SAME, so the shipped compiler is built by 1.99.0, never straight by 1.98
+  # (wave5 report). rust1990 is build-only: nothing ships it, as rust198. 1.99.1: infra's dixi trial (sha256 = static.rust-lang.org's).
+  rust1990 = mkRust { version = "1.99.0"; stage0 = rust198;
+    sha256 = "cc41916a8c84f5d9ec4f55561b44e39f43b647b133f8a6f51be9ea13c83f7036"; };
+  rust199 = mkRust { version = "1.99.1"; stage0 = rust1990;
     sha256 = "6451598a99e77f07571960f6b21d577399d3a30f33e80cbd2e3a4aae6535d265"; };
 
   # From-source packages the gate does not provide (./base-src.nix). zlib and
@@ -1292,7 +1296,7 @@ in
 {
   inherit libc rtld ld sys base-tools systemPath nix cached starter gcc world early stock drivers kernelNd worldMan;
   inherit gcc15 gcc15Wrapper;
-  inherit rustSeedStage rust198 rust199;
+  inherit rustSeedStage rust198 rust1990 rust199;
   # seedBuildTools -- the default build-tool set a bare solnix system passes as
   # buildTools so from-source builds resolve gmake/tar/grep/sed/gstrip/gzip/xz
   # from the store (not /usr/gnu). host-pkgs.nix wires it as the default for a

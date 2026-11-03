@@ -37,7 +37,7 @@ if [ -z "$boot" ]; then
     [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] && "$tools/bin/gstrip" --strip-debug "$f"   # store gstrip: a solnix host has no /usr/bin/gstrip
   done
 fi
-if [ -n "$final" ]; then
+if [ -n "$boot" ]; then   # every stage after go1.4 (was: final only; go_1_24 then failed the gate on them, wave5)
   # Upstream ships Linux/FreeBSD dynamic ELF test fixtures (src/debug/{elf,dwarf}/testdata: NEEDED
   # libc.so.6, libtiff.so.6, ...). Nothing resolves them on illumos, so the store-only-NEEDED publish
   # gate failed the toolchain on them (13 files, measured). NixOS ships them (it has no such gate);

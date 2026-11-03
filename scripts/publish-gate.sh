@@ -40,6 +40,7 @@ for p in "$@"; do
   case "$d" in /nix/store/*.drv) [ -e "$d" ] || why="$why deriver $d not in store;";; *) why="$why no deriver;";; esac
   case "$(basename "$p")" in *-solnix-system-*|*-etc|*-system-path|*home-manager-generation*|*home-files*) why="$why host/user-specific;";; esac
   while IFS= read -r f; do
+    case "$f" in */testdata/*) continue;; esac   # test fixtures in a toolchain's sources (go: Linux ELFs), never loaded here (wave5)
     [ "$(od -An -tx1 -N4 "$f" 2>/dev/null | tr -d ' \n')" = 7f454c46 ] || continue
     elfdump -d "$f" 2>/dev/null | grep -q NEEDED || continue
     rp=$(elfdump -d "$f" | awk '$2=="RUNPATH"||$2=="RPATH"{print $4}')

@@ -226,6 +226,15 @@ derivation {
     done < .world/drop.expected
     echo "dropped $(grep -c . .world/drop.expected) unloadable objects (dbus/glib/hal/tspi/net-snmp/openssl-1.0/python3.9/jvm consumers)" >&2
 
+    # iconv (wave5 finding: the served world had 201 modules and no amd64/ dir, so 64-bit UTF-8 -> UTF-16 failed on every host): the
+    # converters libc opens by absolute path (/usr/lib/iconv/<from>%<to>.so, the RUNNING system's) must be in the world, both
+    # ABIs. A build cannot run them (libc reads /usr/lib/iconv of the BUILD host, not of $out); the run check is a chroot as root
+    # (wave6 checks/iconv-chroot.sh: echo e-acute | iconv -f UTF-8 -t UTF-16 inside a root whose /usr is this world).
+    for m in usr/lib/iconv/UTF-8%UTF-16.so usr/lib/iconv/amd64/UTF-8%UTF-16.so usr/lib/iconv/UTF-16%UTF-8.so usr/lib/iconv/amd64/UTF-16%UTF-8.so; do
+      [ -f "$m" ] && [ "$(od -An -tx1 -N4 "$m" | tr -d ' \n')" = 7f454c46 ] || { echo "FATAL: the world lacks the iconv module $m" >&2; exit 1; }
+    done
+    n32=$(ls usr/lib/iconv | grep -c '\.so$'); n64=$(ls usr/lib/iconv/amd64 | grep -c '\.so$')
+    [ "$n32" -ge 1000 ] && [ "$n64" -ge 1000 ] || { echo "FATAL: iconv modules: $n32 (32-bit), $n64 (64-bit); want >= 1000 each" >&2; exit 1; }
     printf 'objects_relocated=%s dropped_unloadable=%s setuid=%s\n' \
       "$(find . -type f ! -path './lib-*' | wc -l | tr -d ' ')" "$(grep -c . .world/drop.expected | tr -d ' ')" \
       "$(wc -l < .world/setuid | tr -d ' ')" > .world/summary
