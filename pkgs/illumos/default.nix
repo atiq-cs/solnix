@@ -411,7 +411,7 @@ let
   hostfixTools = buildEnv { name = "solnix-hostfix-tools"; pathsToLink = [ "/bin" ];
     paths = [ seedBuildTools srcPkgs.coreutils srcPkgs.findutils cliBase.gnupatch cliBase.cmake srcPkgs.pkgconf ]; };   # pkgconf: -sys crates' pkg-config
   # Go from source: go1.4 (C) -> 1.17 -> 1.20 -> 1.22 -> 1.24 -> 1.26 (./go.nix).
-  goChain = import ./go.nix { inherit gcc world; gate = gate'; gccLib = gcc.lib; inherit (srcPkgs.nixChain) cacert; };
+  goChain = import ./go.nix { inherit gcc world; gate = gate'; gccLib = gcc.lib; inherit (srcPkgs.nixChain) cacert; tools = hostfixTools; inherit (srcPkgs) bash; };
   cli = import ./cli { base = srcPkgs; inherit world graphics goChain; inherit (cargo) cargoPkg; };
   # libtorrent-rasterbar + solnix-torrent, the community seeder's BitTorrent client (./solnix-torrent.nix).
   torrent = import ./solnix-torrent.nix {
