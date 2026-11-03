@@ -3,7 +3,9 @@
 # the build host: zlib + libxml2 replace externalLibs (host /usr/lib copies),
 # openssl + openssh replace make-be's host sshd copy, bash replaces nothing (the
 # gate has no bash) but is a login shell users expect.
-{ gate, libcSlice, world ? null, gcc ? "/usr/gcc/14", buildTools ? [ ], aarch64 ? false, system ? "x86_64-solaris", perl ? null }:
+{ gate, libcSlice, world ? null, gcc ? "/usr/gcc/14", buildTools ? [ ], aarch64 ? false, system ? "x86_64-solaris", perl ? null
+, mkSrcPkgA ? null, plain ? (d: d)   # aarch64 store-only set (aarch64/tools.nix): its mkSrcPkg, and the plain drvs' text -> store tools
+, shared ? { } }:   # one ncurses/less/libiconv from the caller (aarch64 final: srcPkgs'), as NixOS has one per set; {} = the recipes below
 # perl: the store perl (cli), for curl's man pages; its build closure has no nixChain, so no cycle. null: curl keeps the old text.
 # aarch64/system: the same recipes natively on aarch64 illumos (aarch64/home.nix), through
 # mk-src-pkg's aarch64 text rewrite. The defaults leave every x86 derivation unchanged.
@@ -15,7 +17,7 @@
 # store set so it can build with no /usr/gnu. Threaded to mkSrcPkg below.
 
 let
-  mkSrcPkg = if aarch64
+  mkSrcPkg = if mkSrcPkgA != null then mkSrcPkgA else if aarch64
     then args: import ./mk-src-pkg.nix { inherit gate gcc buildTools aarch64; runtimeLibDirs = [ "${libcSlice}/lib" ]; } (args // { inherit system; })
     else import ./mk-src-pkg.nix {
     inherit gate gcc buildTools;
@@ -362,7 +364,7 @@ rec {
   # so a consumer finds this ncurses whichever name it asks for rather than the
   # gate's SVR4 libcurses. The terminfo database is this package's
   # share/terminfo (compiled in, as on NixOS); TERMINFO_DIRS adds others at run time.
-  ncurses = mkSrcPkg {
+  ncurses = shared.ncurses or (mkSrcPkg {
     pname = "ncurses"; version = "6.5";
     src = { url = "https://mirrors.kernel.org/gnu/ncurses/ncurses-6.5.tar.gz";
             sha256 = "136d91bc269a9a5785e5f9e980bc76ab57428f604ce3e5a5a90cebc767971cc6"; };
@@ -382,9 +384,9 @@ rec {
       done
       [ "$(TERM=xterm-256color "$out/bin/tput" colors)" = 256 ] || { echo "FATAL: tput colors" >&2; exit 1; }
     '';
-  };
+  });
 
-  less = mkSrcPkg {
+  less = shared.less or (mkSrcPkg {
     pname = "less"; version = "679";
     src = { url = "https://www.greenwoodsoftware.com/less/less-679.tar.gz";
             sha256 = "9b68820c34fa8a0af6b0e01b74f0298bcdd40a0489c61649b47058908a153d78"; };
@@ -398,7 +400,7 @@ rec {
       /usr/bin/elfdump -d "$out/bin/less" | grep -q 'NEEDED.*libncursesw\.so' \
         || { echo "FATAL: less does not NEED libncursesw" >&2; /usr/bin/elfdump -d "$out/bin/less" | grep NEEDED >&2; exit 1; }
     '';
-  };
+  });
 
   # htop, with its upstream solaris backend (kstat + libproc, both from the gate,
   # so the world is a dependency: libkstat/libproc are not in the libc slice).
@@ -640,7 +642,7 @@ rec {
   # UTF-8%8859-1 converters, so a 64-bit msgfmt cannot read a UTF-8 .po file
   # ("invalid multibyte sequence", measured). nixpkgs links gettext to libiconv
   # on every non-glibc platform; same here.
-  libiconv = mkSrcPkg {
+  libiconv = shared.libiconv or (mkSrcPkg {
     pname = "libiconv"; version = "1.17";
     src = { url = "https://mirrors.kernel.org/gnu/libiconv/libiconv-1.17.tar.gz";
             sha256 = "8f74213b56238c85a50a5329f77e06198771e70dd9a739779f4c02f65d971313"; };
@@ -652,7 +654,7 @@ rec {
       [ "$(printf '\303\251' | "$out/bin/iconv" -f UTF-8 -t UTF-16LE | od -An -tx1 | tr -d ' ')" = e900 ] \
         || { echo "FATAL: libiconv UTF-8 -> UTF-16LE self-check" >&2; exit 1; }
     '';
-  };
+  });
 
   # gettext: home-manager prints its messages through gettext/ngettext (the
   # illumos world has gettext and msgfmt but no ngettext, measured) and its
@@ -743,7 +745,7 @@ rec {
   # name plus the DNS domain when one is configured (domainname), else the
   # bare name: the same fallback GNU inetutils' hostname -f gives an
   # unresolvable host. Every other use goes to the system's hostname.
-  hostname = derivation {
+  hostname = derivation (plain {
     name = "hostname-f"; inherit system;
     builder = "/usr/bin/bash";
     args = [ "-c" ''
@@ -760,7 +762,7 @@ rec {
       /usr/bin/chmod 555 $out/bin/hostname
       [ "$($out/bin/hostname -f)" = "$(/usr/bin/hostname)" ] || [ -n "$(/usr/bin/domainname)" ]
     '' ];
-  };
+  });
 
   # home-manager (the command), pinned to the release-26.05 commit the
   # maintainer's nix-config locks. nixpkgs builds it with runCommand +
@@ -772,7 +774,7 @@ rec {
   # script's non-flake build resolves its modules from. nixos-option is not on
   # the path, so the home-manager option subcommand is the one that is missing;
   # inetutils' role (hostname -f) is the hostname shim above.
-  home-manager = derivation {
+  home-manager = derivation (plain {
     name = "home-manager-26.05-db7d5e2"; inherit system;
     # tests/ (1.9 MB, ~2,700 files) is dropped: only the module tree, lib and the
     # script are read at run time. nixpkgs' package keeps the whole source as
@@ -805,7 +807,7 @@ rec {
       done
       [ "$($out/bin/home-manager --version)" = 26.05-pre ] || { echo "FATAL: home-manager --version" >&2; exit 1; }
     '' ];
-  };
+  });
 
   bash = mkSrcPkg {
     pname = "bash"; version = "5.2.37";

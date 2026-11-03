@@ -26,7 +26,10 @@
 # gate: an already-built aarch64 proto store path (pass it; the default ingests the build
 # host's proto dir). system: aarch64-solaris when built ON aarch64 (aa64nix, native);
 # the old cross default (the x86 host's currentSystem) is kept for the slices-on-x86 path.
-{ gate ? null, protoDir ? null, system ? builtins.currentSystem }:
+# stage: "final" = every recipe store-only (a64h; ./tools.nix: store PATH + path gate), its tools from the "seed" instance, which is
+# this same set built the stage0 way (/usr/gnu, /opt/ooce, /opt/nixboot). NixOS's stdenv bootstrap in two stages; the seed's outs
+# are the served aarch64 rows. gate/libc/ld/rtld/sys/gcc are shared bootstrap tools (one drv in both stages).
+{ gate ? null, protoDir ? null, system ? builtins.currentSystem, stage ? "final" }:
 let
   gate' = if gate != null then gate
           else import ./gate.nix ({ inherit system; } // (if protoDir == null then { } else { inherit protoDir; }));
@@ -146,10 +149,50 @@ let
   gcc = import ./gcc-src.nix { gate = gate'; libcSlice = libc; inherit ld system; };
 
   # nix 2.24.15 and its chain, from source with that gcc (./src.nix).
-  srcPkgs = import ./src.nix { gate = gate'; libcSlice = libc; inherit gcc system; };
+  seed = import ./. { gate = gate'; inherit system; stage = "seed"; };
+  # the perl build tool is this set's own store-only perl (homePkgs.perl), not the seed's: the seed perl reads the stage0 PATH, where
+  # dixa's devroot /usr/bin/perl is, and perl 5.42.2's recipe rejects a host perl5 (FATAL on dixa). tools.nix keeps perl off the tool
+  # PATH of perl's own build closure (perl, gnupatch, zlib), so there is no cycle.
+  a64 = if stage == "seed" then null else import ./tools.nix { gate = gate'; libcSlice = libc; inherit ld gcc seed system;
+    perl = homePkgs.perl; } // {
+    # per recipe: the build tools stage0 found in /usr/bin or /opt (dixa4 build logs: devroot bison, flex, autoconf-archive).
+    perPkg = args: {
+      boost = { nativeTools = [ final.bzip2-bin ]; };   # .tar.bz2
+      tmux = { nativeTools = [ final.bison ]; };         # configure requires a yacc
+      gdbm = { nativeTools = [ final.bison homePkgs.flex ]; };
+      nix = { nativeTools = [ homePkgs.flex final.bison homePkgs.autoconf homePkgs.automake homePkgs.libtool ];
+              aclocalDirs = map (p: "${p}/share/aclocal") [ final.autoconf-archive homePkgs.pkgconf homePkgs.libtool ]; };
+      # configure bakes the absolute path of pr / m4 it found on PATH (the build-tools farm) into the ELF: name the store tool itself,
+      # as nixpkgs does (diffutils PR_PROGRAM=coreutils/bin/pr; bison/flex run m4), so the reference is that tool, not the whole farm.
+      diffutils = { build = "export PR_PROGRAM=${homePkgs.coreutils}/bin/pr\n" + args.build; };
+      flex = { build = "export M4=${homePkgs.gnum4}/bin/m4\n" + args.build; };
+      bison = { build = "export M4=${homePkgs.gnum4}/bin/m4\n" + args.build; };
+      # xz's configure.ac forces POSIX_SHELL=/usr/xpg4/bin/sh on solaris* (for old Solaris' Bourne /bin/sh); on illumos /bin/sh is the
+      # same ksh93 (both are links to it), and gate2 B9 rejects a /usr/xpg4 #! in the shipped xzgrep/xzdiff/xzless/xzmore.
+      xz = { build = "export gl_cv_posix_shell=/bin/sh\n" + args.build + "\nhead -1 $out/bin/xzgrep | grep -qx '#!/bin/sh' || { echo 'FATAL: xzgrep #! is not /bin/sh' >&2; exit 1; }\n"; };
+      # libgpg-error's configure.ac sets INSTALLSHELLPATH=/usr/xpg4/bin/sh for solaris* (no cache variable): gpgrt-config's #! (B9).
+      libgpg-error = { build = args.build + "\nsed -i '1s|^#!/usr/xpg4/bin/sh$|#!/bin/sh|' $out/bin/gpgrt-config\n"
+        + "head -1 $out/bin/gpgrt-config | grep -qx '#!/bin/sh' || { echo 'FATAL: gpgrt-config #! is not /bin/sh' >&2; exit 1; }\n"; };
+      # git ships templates/hooks/fsmonitor-watchman.sample with a literal #!/usr/bin/perl (its Makefile rewrites only #!.../sh and @PERL_PATH@).
+      # A sample hook, run only if a user enables it: /usr/bin/env perl (B9 allows env), so this NO_PERL git stays perl-free (nixpkgs: patchShebangs).
+      git = { build = args.build + "\nf=$out/share/git-core/templates/hooks/fsmonitor-watchman.sample; chmod u+w $f\n"
+        + "sed -i '1s|^#!/usr/bin/perl$|#!/usr/bin/env perl|' $f; head -1 $f | grep -qx '#!/usr/bin/env perl' || { echo 'FATAL: watchman sample #!' >&2; exit 1; }\n"; };
+      # quilt runs awk at run time from --with-awk=${world}/usr/bin/nawk (x86: the whole userland); aarch64's world is gate libs only.
+      quilt = { build = builtins.replaceStrings [ "${homePkgs.world}/usr/bin/nawk" ] [ "${a64.illumosTools}/bin/nawk" ] args.build; };
+      # builtins/psize.sh times a pipe fill ('psize.aux | sleep 3') and falls back to 512 when that comes back empty: on dixa 2 of 3
+      # builds got 512, one 16384 (--check differs in bin/bash). Pin the fallback, which the served stage0 bash ships (safe for here-docs).
+      bash = { build = "printf '#!/bin/sh\\necho \"#define PIPESIZE 512\"\\n' > builtins/psize.sh\n" + args.build; };
+    }.${args.pname} or { };
+  };
+  final = import ./a64h-pkgs.nix { inherit (srcPkgs) mkSrcPkg; };
+  # one ncurses/readline/libiconv/less/sqlite per set, as NixOS has (the seed keeps its served duplicates): base-src's and cli's
+  # copies are srcPkgs', and nixChain links the set's sqlite 3.50.4 (homePkgs.sqlite) instead of its own 3.46.1.
+  shared = if stage == "seed" then { } else { inherit (srcPkgs) ncurses readline libiconv less; };
+  srcPkgs = import ./src.nix { gate = gate'; libcSlice = libc; inherit gcc system a64;
+    sharedChain = if stage == "seed" then { } else { inherit (homePkgs) sqlite; }; };
 
   # what a home needs (lib/home-manager-pkgs.nix + the headless C tier), from the x86 recipes (./home.nix).
-  homePkgs = import ./home.nix { gate = gate'; libcSlice = libc; inherit gcc srcPkgs system; };
+  homePkgs = import ./home.nix { gate = gate'; libcSlice = libc; inherit gcc srcPkgs system shared; };
 
   systemPath = derivation {
     name = "system-path";
@@ -175,7 +218,9 @@ let
     '' ];
   };
 in
-homePkgs // {
+homePkgs // (if stage == "seed" then { } else final // {
+  # the build-only tools under their pnames (solnix-builder.sh drv_for finds an attr by pname, _ or camelCase)
+  illumos-build-tools = a64.illumosTools; cc-store-names = a64.ccNames; sh-store = a64.shAlias; solnix-a64-build-tools = a64.buildToolsFarm; }) // {
   gate = gate';
   inherit libc rtld ld sys systemPath gcc srcPkgs;
   inherit (srcPkgs) zlib openssl nixChain git tree ncurses less nano nvi htop top wget gateLibs bsdfetch gccWrapper readline bash;

@@ -265,7 +265,7 @@
           (removeAttrs (mkPkgs { }).solnix [ "cached" "starter" ]);
         # the native aarch64 set (pkgs/illumos/aarch64; lib/host-pkgs.nix uses the same import), for drv_for on dixa. The
         # served aarch64 rows include the nix chain and gate pieces that live only in nested sets (srcPkgs, nixChain): they
-        # are lifted to the top, never over an existing name (sqlite: top is 3.50.4, nixChain's 3.46.1 stays nested), plus
+        # are lifted to the top, never over an existing name (sqlite: one 3.50.4, which nixChain links too), plus
         # the served pnames that differ from the attr (hostname-f, illumos-gate-libs(-home)). solnix-builder.sh finds an
         # attr by pname, its _ form or camelCase (gcc-wrapper -> gccWrapper).
         aarch64-solaris = let a = import ./pkgs/illumos/aarch64 { system = "aarch64-solaris"; }; in lib.filterAttrs (_: v:

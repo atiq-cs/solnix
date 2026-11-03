@@ -1,5 +1,5 @@
 # cli/c-base.nix -- small GNU/C tools: file (libmagic), bc, GNU m4, readline.
-{ mkSrcPkg, world, zlib, ncurses, chk, gnulibFix, dropDocs, hostTools, ... }:
+{ mkSrcPkg, world, zlib, ncurses, chk, gnulibFix, dropDocs, hostTools, shared ? { }, ... }:
 rec {
   file = mkSrcPkg {
     pname = "file"; version = "5.46";
@@ -16,7 +16,7 @@ rec {
     '';
   };
 
-  readline = mkSrcPkg {
+  readline = shared.readline or (mkSrcPkg {
     pname = "readline"; version = "8.2";
     src = { url = "https://mirrors.kernel.org/gnu/readline/readline-8.2.tar.gz";
             sha256 = "3feb7171f16a84ee82ca18a36d7b9be109a52c04f492a053331d7d1095007c35"; };
@@ -32,7 +32,7 @@ rec {
       /usr/bin/elfdump -d "$out/lib/amd64/libreadline.so.8" | grep -q 'NEEDED.*libncursesw' \
         || { echo "FATAL: libreadline does not NEED libncursesw" >&2; exit 1; }
     '';
-  };
+  });
 
   # flex 2.6.4 (nixpkgs' version and tarball): bc's configure wants flex for --with-readline ("readline works only with flex"); the
   # OpenIndiana build host had /usr/bin/flex, a solnix host has none. The tarball ships generated scan.c/parse.c: no flex/bison to build it.

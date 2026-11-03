@@ -12,7 +12,10 @@
 #   --localstatedir=/nix/var, --with-store-dir=/nix/store.
 # Disabled, as nix224.nix did: Boehm GC (--disable-gc), lowdown (markdown),
 # libcpuid (x86 microarch detection), tests, docs. seccomp is Linux-only.
-{ mkSrcPkg, zlib, openssl, libcSlice, gccLib, system, libSub ? "lib/amd64", nixCxxFlags ? "", hostTools ? [ ], perl ? null }:
+{ mkSrcPkg, zlib, openssl, libcSlice, gccLib, system, libSub ? "lib/amd64", nixCxxFlags ? "", hostTools ? [ ], perl ? null
+, shared ? { }   # shared: one sqlite from the caller (aarch64 final: the set's 3.50.4); {} = the 3.46.1 recipe below
+, plain ? (d: d)   # aarch64 store-only set: the plain derivations' builder text -> store tools (../aarch64/tools.nix)
+}:
 # hostTools, perl: the store build tools for curl's store-only build (x86, base-src.nix); [] / null (aarch64) keep curl on the old PATH text.
 # libSub: the 64-bit lib dir of the plain derivations below ("lib" on aarch64, LP64 only).
 # nixCxxFlags: extra CXXFLAGS for nix itself (aarch64: see aarch64/src.nix). "" keeps the x86 text byte-identical.
@@ -39,7 +42,7 @@ rec {
   # libboost_context alone, for the runtime closure: the boost output above is
   # ~150 MB of headers nix needs only to compile. boost is built with
   # selfRunpath = false, so the copied library names no path inside boost.
-  boostContext = derivation {
+  boostContext = derivation (plain {
     name = "boost-context-1.86.0"; inherit system boost;
     builder = "/usr/bin/bash";
     args = [ "-c" ''
@@ -47,18 +50,18 @@ rec {
       mkdir -p $out/${libSub}; cp -P $boost/${libSub}/libboost_context.so* $out/${libSub}/
       if grep -rq "$boost" $out; then echo "FATAL: boost-context still names $boost" >&2; exit 1; fi
     '' ];
-  };
+  });
 
   # Mozilla CA bundle (curl.se's extract), for nix's ssl-cert-file.
-  cacert = derivation {
+  cacert = derivation (plain {
     name = "cacert-2024-09-24"; inherit system;
     pem = import <nix/fetchurl.nix> { url = "https://curl.se/ca/cacert-2024-09-24.pem";
             sha256 = "189d3cf6d103185fba06d76c1af915263c6d42225481a1759e853b33ac857540"; };
     builder = "/usr/bin/bash";
     args = [ "-c" "/usr/bin/mkdir -p $out/etc/ssl/certs && /usr/bin/cp $pem $out/etc/ssl/certs/ca-bundle.crt" ];
-  };
+  });
 
-  sqlite = mkSrcPkg {
+  sqlite = shared.sqlite or (mkSrcPkg {
     pname = "sqlite"; version = "3.46.1";
     src = { url = "https://www.sqlite.org/2024/sqlite-autoconf-3460100.tar.gz";
             sha256 = "67d3fe6d268e6eaddcae3727fce58fcc8e9c53869bdd07a0c61e38ddf2965071"; };
@@ -66,7 +69,7 @@ rec {
       ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-readline --disable-editline
       gmake -j4; gmake install
     '';
-  };
+  });
 
   xz = mkSrcPkg {
     pname = "xz"; version = "5.6.3";
