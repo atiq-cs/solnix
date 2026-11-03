@@ -1,0 +1,2616 @@
+diff -ruN a/lldb/cmake/modules/AddLLDB.cmake b/lldb/cmake/modules/AddLLDB.cmake
+--- a/lldb/cmake/modules/AddLLDB.cmake	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/cmake/modules/AddLLDB.cmake	2026-11-02 13:12:29.490853654 -0500
+@@ -495,7 +495,9 @@
+ # Mach-O uses two-level namespaces and PE/COFF does not export symbols by
+ # default.
+ function(lldb_prevent_liblldb_symbol_interposition name)
+-  if(UNIX AND NOT APPLE)
++  # Solaris ld has no --exclude-libs; liblldb is linked -Bsymbolic there
++  # instead (source/API/CMakeLists.txt), so the tool's copies cannot interpose.
++  if(UNIX AND NOT APPLE AND NOT CMAKE_SYSTEM_NAME MATCHES "SunOS")
+     target_link_options(${name} PRIVATE "LINKER:--exclude-libs,ALL")
+   endif()
+ endfunction()
+diff -ruN a/lldb/include/lldb/Host/HostInfo.h b/lldb/include/lldb/Host/HostInfo.h
+--- a/lldb/include/lldb/Host/HostInfo.h	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/include/lldb/Host/HostInfo.h	2026-11-02 13:12:29.491533445 -0500
+@@ -55,6 +55,9 @@
+ #elif defined(__APPLE__)
+ #include "lldb/Host/macosx/HostInfoMacOSX.h"
+ #define HOST_INFO_TYPE HostInfoMacOSX
++#elif defined(__sun)
++#include "lldb/Host/solaris/HostInfoSolaris.h"
++#define HOST_INFO_TYPE HostInfoSolaris
+ #elif defined(_AIX)
+ #include "lldb/Host/aix/HostInfoAIX.h"
+ #define HOST_INFO_TYPE HostInfoAIX
+diff -ruN a/lldb/include/lldb/Host/solaris/HostInfoSolaris.h b/lldb/include/lldb/Host/solaris/HostInfoSolaris.h
+--- a/lldb/include/lldb/Host/solaris/HostInfoSolaris.h	1969-12-31 19:00:00.000000000 -0500
++++ b/lldb/include/lldb/Host/solaris/HostInfoSolaris.h	2026-11-02 13:12:29.491638331 -0500
+@@ -0,0 +1,23 @@
++//===-- HostInfoSolaris.h --------------------------------------*- C++ -*-===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++
++#ifndef LLDB_HOST_SOLARIS_HOSTINFOSOLARIS_H
++#define LLDB_HOST_SOLARIS_HOSTINFOSOLARIS_H
++
++#include "lldb/Host/posix/HostInfoPosix.h"
++#include "lldb/Utility/FileSpec.h"
++
++namespace lldb_private {
++
++class HostInfoSolaris : public HostInfoPosix {
++public:
++  static FileSpec GetProgramFileSpec();
++};
++} // namespace lldb_private
++
++#endif
+diff -ruN a/lldb/include/lldb/Utility/Stream.h b/lldb/include/lldb/Utility/Stream.h
+--- a/lldb/include/lldb/Utility/Stream.h	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/include/lldb/Utility/Stream.h	2026-11-02 13:12:29.492115985 -0500
+@@ -240,7 +240,10 @@
+   Stream &operator<<(uint16_t uval) = delete;
+   Stream &operator<<(uint32_t uval) = delete;
+   Stream &operator<<(uint64_t uval) = delete;
++#if !defined(__sun)
++  // illumos <sys/int_types.h> defines int8_t as plain char.
+   Stream &operator<<(int8_t sval) = delete;
++#endif
+   Stream &operator<<(int16_t sval) = delete;
+   Stream &operator<<(int32_t sval) = delete;
+   Stream &operator<<(int64_t sval) = delete;
+diff -ruN a/lldb/source/API/CMakeLists.txt b/lldb/source/API/CMakeLists.txt
+--- a/lldb/source/API/CMakeLists.txt	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/API/CMakeLists.txt	2026-11-02 13:12:29.492562304 -0500
+@@ -158,7 +158,14 @@
+ )
+ 
+ target_compile_definitions(liblldb PRIVATE LLDB_IN_LIBLLDB)
+-if (NOT CMAKE_SYSTEM_NAME MATCHES "Windows")
++if (CMAKE_SYSTEM_NAME MATCHES "SunOS")
++  # Solaris ld mapfiles take no glob patterns in "global:" (_ZN4lldb* is read as
++  # one literal name: "symbol referencing errors"), so export everything.
++  message(STATUS "Symbols (liblldb): exporting all symbols (Solaris ld)")
++  # Bind liblldb's references to its own definitions (the --exclude-libs job
++  # in lldb_prevent_liblldb_symbol_interposition, done from the library side).
++  target_link_options(liblldb PRIVATE "LINKER:-Bsymbolic")
++elseif (NOT CMAKE_SYSTEM_NAME MATCHES "Windows")
+   if (LLDB_EXPORT_ALL_SYMBOLS)
+     if (LLDB_EXPORT_ALL_SYMBOLS_EXPORTS_FILE)
+       message(STATUS "Symbols (liblldb): exporting all symbols specified in the exports "
+diff -ruN a/lldb/source/Core/DumpDataExtractor.cpp b/lldb/source/Core/DumpDataExtractor.cpp
+--- a/lldb/source/Core/DumpDataExtractor.cpp	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/Core/DumpDataExtractor.cpp	2026-11-02 13:12:29.493057262 -0500
+@@ -119,10 +119,10 @@
+ /// Dumps decoded instructions to a stream.
+ static lldb::offset_t DumpInstructions(const DataExtractor &DE, Stream *s,
+                                        ExecutionContextScope *exe_scope,
+-                                       offset_t start_offset,
++                                       lldb::offset_t start_offset,
+                                        uint64_t base_addr,
+                                        size_t number_of_instructions) {
+-  offset_t offset = start_offset;
++  lldb::offset_t offset = start_offset;
+ 
+   TargetSP target_sp;
+   if (exe_scope)
+@@ -348,7 +348,7 @@
+ }
+ 
+ lldb::offset_t lldb_private::DumpDataExtractor(
+-    const DataExtractor &DE, Stream *s, offset_t start_offset,
++    const DataExtractor &DE, Stream *s, lldb::offset_t start_offset,
+     lldb::Format item_format, size_t item_byte_size, size_t item_count,
+     size_t num_per_line, uint64_t base_addr,
+     uint32_t item_bit_size,   // If zero, this is not a bitfield value, if
+@@ -364,7 +364,7 @@
+       item_byte_size = DE.GetAddressByteSize();
+   }
+ 
+-  offset_t offset = start_offset;
++  lldb::offset_t offset = start_offset;
+ 
+   std::optional<MemoryTagMap> memory_tag_map;
+   if (show_memory_tags && base_addr != LLDB_INVALID_ADDRESS)
+diff -ruN a/lldb/source/Host/CMakeLists.txt b/lldb/source/Host/CMakeLists.txt
+--- a/lldb/source/Host/CMakeLists.txt	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/Host/CMakeLists.txt	2026-11-02 13:12:29.493694300 -0500
+@@ -173,6 +173,12 @@
+       openbsd/HostInfoOpenBSD.cpp
+       )
+ 
++  elseif (CMAKE_SYSTEM_NAME MATCHES "SunOS")
++    add_host_subdirectory(solaris
++      solaris/Host.cpp
++      solaris/HostInfoSolaris.cpp
++      )
++
+   elseif (CMAKE_SYSTEM_NAME MATCHES "AIX")
+     add_host_subdirectory(aix
+       aix/Host.cpp
+diff -ruN a/lldb/source/Host/common/Host.cpp b/lldb/source/Host/common/Host.cpp
+--- a/lldb/source/Host/common/Host.cpp	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/Host/common/Host.cpp	2026-11-02 13:12:29.494004560 -0500
+@@ -351,7 +351,8 @@
+ FileSpec Host::GetModuleFileSpecForHostAddress(const void *host_addr) {
+   FileSpec module_filespec;
+   Dl_info info;
+-  if (::dladdr(host_addr, &info)) {
++  // illumos dladdr() takes a non-const void * (<dlfcn.h>).
++  if (::dladdr(const_cast<void *>(host_addr), &info)) {
+     if (info.dli_fname) {
+       module_filespec.SetFile(info.dli_fname, FileSpec::Style::native);
+       FileSystem::Instance().Resolve(module_filespec);
+diff -ruN a/lldb/source/Host/common/OptionParser.cpp b/lldb/source/Host/common/OptionParser.cpp
+--- a/lldb/source/Host/common/OptionParser.cpp	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/Host/common/OptionParser.cpp	2026-11-02 13:12:29.494327450 -0500
+@@ -18,7 +18,8 @@
+ void OptionParser::Prepare(std::unique_lock<std::mutex> &lock) {
+   static std::mutex g_mutex;
+   lock = std::unique_lock<std::mutex>(g_mutex);
+-#ifdef __GLIBC__
++#if defined(__GLIBC__) || defined(__sun)
++  // illumos getopt_long also restarts on optind == 0 (its optreset is static).
+   optind = 0;
+ #else
+   optreset = 1;
+diff -ruN a/lldb/source/Host/common/Terminal.cpp b/lldb/source/Host/common/Terminal.cpp
+--- a/lldb/source/Host/common/Terminal.cpp	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/Host/common/Terminal.cpp	2026-11-02 13:12:29.494488622 -0500
+@@ -116,7 +116,17 @@
+     return data.takeError();
+ 
+   struct termios &fd_termios = data->m_termios;
++#if defined(__sun)
++  // illumos libc has no cfmakeraw(); this is its glibc/BSD definition.
++  fd_termios.c_iflag &= ~(IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR |
++                          ICRNL | IXON);
++  fd_termios.c_oflag &= ~OPOST;
++  fd_termios.c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
++  fd_termios.c_cflag &= ~(CSIZE | PARENB);
++  fd_termios.c_cflag |= CS8;
++#else
+   ::cfmakeraw(&fd_termios);
++#endif
+ 
+   // Make sure only one character is needed to return from a read
+   // (cfmakeraw() doesn't do this on NetBSD)
+diff -ruN a/lldb/source/Host/posix/ProcessLauncherPosixFork.cpp b/lldb/source/Host/posix/ProcessLauncherPosixFork.cpp
+--- a/lldb/source/Host/posix/ProcessLauncherPosixFork.cpp	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/Host/posix/ProcessLauncherPosixFork.cpp	2026-11-02 13:12:29.494790794 -0500
+@@ -18,7 +18,9 @@
+ 
+ #include <climits>
+ #include <fcntl.h>
++#if !defined(__sun)
+ #include <sys/ptrace.h>
++#endif
+ #include <sys/wait.h>
+ #include <unistd.h>
+ 
+@@ -193,12 +195,19 @@
+     }
+ 
+     // Start tracing this child that is about to exec.
++#if defined(__sun)
++    // illumos has no PT_TRACE_ME: a debugger stops the child through /proc
++    // (no native process plugin exists yet, so a debug launch is refused).
++    errno = ENOTSUP;
++    ExitWithError(error_fd, "debug launch (no illumos native process plugin)");
++#else
+ #ifdef _AIX
+     if (ptrace64(PT_TRACE_ME, 0, 0, 0, nullptr) == -1)
+ #else
+     if (ptrace(PT_TRACE_ME, 0, nullptr, 0) == -1)
+ #endif
+       ExitWithError(error_fd, "ptrace");
++#endif
+   }
+ 
+   // Execute.  We should never return...
+diff -ruN a/lldb/source/Host/solaris/Host.cpp b/lldb/source/Host/solaris/Host.cpp
+--- a/lldb/source/Host/solaris/Host.cpp	1969-12-31 19:00:00.000000000 -0500
++++ b/lldb/source/Host/solaris/Host.cpp	2026-11-02 13:12:29.495120855 -0500
+@@ -0,0 +1,99 @@
++//===-- source/Host/solaris/Host.cpp --------------------------------------===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++// illumos/Solaris host process queries over /proc/<pid>/{psinfo,path/a.out},
++// the same model as Host/aix/Host.cpp.
++
++#include "lldb/Host/Host.h"
++#include "lldb/Host/HostInfo.h"
++#include "lldb/Host/posix/Support.h"
++#include "lldb/Utility/ProcessInfo.h"
++#include "lldb/Utility/Status.h"
++#include "llvm/Support/MemoryBuffer.h"
++
++#include <dirent.h>
++#include <procfs.h>
++#include <unistd.h>
++
++#include <climits>
++#include <cstring>
++
++using namespace lldb;
++using namespace lldb_private;
++
++static bool GetProcessAndStatInfo(::pid_t pid, ProcessInstanceInfo &info,
++                                  bool &skip) {
++  info.Clear();
++  info.SetProcessID(pid);
++  skip = false;
++  auto buf = getProcFile(pid, "psinfo");
++  if (!buf || (*buf)->getBufferSize() < sizeof(psinfo_t))
++    return false;
++  psinfo_t ps;
++  std::memcpy(&ps, (*buf)->getBufferStart(), sizeof(ps));
++
++  // /proc/<pid>/path/a.out is a symlink to the executable (when it is known).
++  char exe[PATH_MAX];
++  std::string link = "/proc/" + std::to_string(pid) + "/path/a.out";
++  ssize_t n = ::readlink(link.c_str(), exe, sizeof(exe) - 1);
++  if (n > 0) {
++    exe[n] = '\0';
++    info.GetExecutableFile().SetFile(exe, FileSpec::Style::native);
++  } else {
++    info.GetExecutableFile().SetFile(
++        llvm::StringRef(ps.pr_fname, strnlen(ps.pr_fname, sizeof(ps.pr_fname))),
++        FileSpec::Style::native);
++  }
++  info.SetArchitecture(HostInfo::GetArchitecture(
++      ps.pr_dmodel == PR_MODEL_LP64 ? HostInfo::eArchKind64
++                                    : HostInfo::eArchKind32));
++  info.SetParentProcessID(ps.pr_ppid);
++  info.SetUserID(ps.pr_uid);
++  info.SetEffectiveUserID(ps.pr_euid);
++  info.SetGroupID(ps.pr_gid);
++  info.SetEffectiveGroupID(ps.pr_egid);
++  info.SetProcessGroupID(ps.pr_pgid);
++  info.SetProcessSessionID(ps.pr_sid);
++  info.SetIsZombie(ps.pr_nlwp == 0);
++  // pr_state 4 = SSTOP (<sys/proc.h>, not exported to user code)
++  skip = ps.pr_nlwp == 0 || ps.pr_lwp.pr_state == 4;
++  return true;
++}
++
++uint32_t Host::FindProcessesImpl(const ProcessInstanceInfoMatch &match_info,
++                                 ProcessInstanceInfoList &process_infos) {
++  DIR *d = opendir("/proc");
++  if (!d)
++    return 0;
++  const uid_t our_uid = getuid();
++  const lldb::pid_t our_pid = getpid();
++  while (struct dirent *e = readdir(d)) {
++    lldb::pid_t pid;
++    if (!llvm::to_integer(e->d_name, pid) || pid == our_pid)
++      continue;
++    ProcessInstanceInfo info;
++    bool skip;
++    if (!GetProcessAndStatInfo(pid, info, skip) || skip)
++      continue;
++    if (!match_info.GetMatchAllUsers() && our_uid != 0 &&
++        info.GetUserID() != our_uid)
++      continue;
++    if (match_info.Matches(info))
++      process_infos.push_back(info);
++  }
++  closedir(d);
++  return process_infos.size();
++}
++
++bool Host::GetProcessInfo(lldb::pid_t pid, ProcessInstanceInfo &process_info) {
++  bool skip;
++  return GetProcessAndStatInfo(pid, process_info, skip);
++}
++
++Status Host::ShellExpandArguments(ProcessLaunchInfo &launch_info) {
++  return Status::FromErrorString("unimplemented");
++}
+diff -ruN a/lldb/source/Host/solaris/HostInfoSolaris.cpp b/lldb/source/Host/solaris/HostInfoSolaris.cpp
+--- a/lldb/source/Host/solaris/HostInfoSolaris.cpp	1969-12-31 19:00:00.000000000 -0500
++++ b/lldb/source/Host/solaris/HostInfoSolaris.cpp	2026-11-02 13:12:29.495168477 -0500
+@@ -0,0 +1,28 @@
++//===-- HostInfoSolaris.cpp -----------------------------------------------===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++
++#include "lldb/Host/solaris/HostInfoSolaris.h"
++
++#include <climits>
++#include <unistd.h>
++
++using namespace lldb_private;
++
++// The running executable: /proc/self/path/a.out links to it (illumos procfs).
++FileSpec HostInfoSolaris::GetProgramFileSpec() {
++  static FileSpec g_program_filespec;
++  if (!g_program_filespec) {
++    char exe[PATH_MAX];
++    ssize_t n = ::readlink("/proc/self/path/a.out", exe, sizeof(exe) - 1);
++    if (n > 0) {
++      exe[n] = '\0';
++      g_program_filespec.SetFile(exe, FileSpec::Style::native);
++    }
++  }
++  return g_program_filespec;
++}
+diff -ruN a/lldb/source/Plugins/ABI/ARC/ABISysV_arc.cpp b/lldb/source/Plugins/ABI/ARC/ABISysV_arc.cpp
+--- a/lldb/source/Plugins/ABI/ARC/ABISysV_arc.cpp	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/Plugins/ABI/ARC/ABISysV_arc.cpp	2026-11-02 13:12:29.495428875 -0500
+@@ -342,7 +342,7 @@
+   }
+ 
+   if (num_bytes <= 2 * reg_size) {
+-    offset_t offset = 0;
++    lldb::offset_t offset = 0;
+     uint64_t raw_value = data.GetMaxU64(&offset, num_bytes);
+ 
+     auto reg_info =
+diff -ruN a/lldb/source/Plugins/ABI/LoongArch/ABISysV_loongarch.cpp b/lldb/source/Plugins/ABI/LoongArch/ABISysV_loongarch.cpp
+--- a/lldb/source/Plugins/ABI/LoongArch/ABISysV_loongarch.cpp	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/Plugins/ABI/LoongArch/ABISysV_loongarch.cpp	2026-11-02 13:12:29.495868453 -0500
+@@ -288,7 +288,7 @@
+     return result;
+   }
+ 
+-  offset_t offset = 0;
++  lldb::offset_t offset = 0;
+   uint64_t raw_value = data.GetMaxU64(&offset, num_bytes);
+   // According to psABI, i32 (no matter signed or unsigned) should be
+   // sign-extended in register.
+diff -ruN a/lldb/source/Plugins/ABI/Mips/ABISysV_mips64.cpp b/lldb/source/Plugins/ABI/Mips/ABISysV_mips64.cpp
+--- a/lldb/source/Plugins/ABI/Mips/ABISysV_mips64.cpp	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/Plugins/ABI/Mips/ABISysV_mips64.cpp	2026-11-02 13:12:29.496450194 -0500
+@@ -965,7 +965,7 @@
+ 
+             DataExtractor *copy_from_extractor = nullptr;
+             uint64_t return_value[2];
+-            offset_t offset = 0;
++            lldb::offset_t offset = 0;
+ 
+             if (idx == 0) {
+               // This case is for long double type.
+diff -ruN a/lldb/source/Plugins/ABI/RISCV/ABISysV_riscv.cpp b/lldb/source/Plugins/ABI/RISCV/ABISysV_riscv.cpp
+--- a/lldb/source/Plugins/ABI/RISCV/ABISysV_riscv.cpp	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/Plugins/ABI/RISCV/ABISysV_riscv.cpp	2026-11-02 13:12:29.497189603 -0500
+@@ -399,7 +399,7 @@
+ 
+   size_t reg_size = m_is_rv64 ? 8 : 4;
+   if (num_bytes <= 2 * reg_size) {
+-    offset_t offset = 0;
++    lldb::offset_t offset = 0;
+     uint64_t raw_value = data.GetMaxU64(&offset, num_bytes);
+ 
+     auto reg_info =
+diff -ruN a/lldb/source/Plugins/DynamicLoader/MacOSX-DYLD/DynamicLoaderMacOS.cpp b/lldb/source/Plugins/DynamicLoader/MacOSX-DYLD/DynamicLoaderMacOS.cpp
+--- a/lldb/source/Plugins/DynamicLoader/MacOSX-DYLD/DynamicLoaderMacOS.cpp	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/Plugins/DynamicLoader/MacOSX-DYLD/DynamicLoaderMacOS.cpp	2026-11-02 13:12:29.497787355 -0500
+@@ -370,7 +370,7 @@
+                 DataExtractor added_binaries(
+                     buffer_sp, target_arch.GetByteOrder(), addrsize);
+ 
+-                offset_t offset = 0;
++                lldb::offset_t offset = 0;
+                 for (uint64_t i = 0; i < image_infos_count; i++) {
+                   addr_t addr = added_binaries.GetAddress(&offset);
+                   image_load_addresses.push_back(addr);
+@@ -550,7 +550,7 @@
+ 
+   const uint32_t addr_size =
+       m_process->GetTarget().GetArchitecture().GetAddressByteSize();
+-  offset_t registered_infos_addr_offset =
++  lldb::offset_t registered_infos_addr_offset =
+       sizeof(uint32_t) + // version
+       sizeof(uint32_t) + // infoArrayCount
+       addr_size +        // infoArray
+@@ -580,7 +580,7 @@
+   if (registered_infos_addr != all_image_infos_addr)
+     return notification_addr;
+ 
+-  offset_t notification_fptr_offset = sizeof(uint32_t) + // version
++  lldb::offset_t notification_fptr_offset = sizeof(uint32_t) + // version
+                                       sizeof(uint32_t) + // infoArrayCount
+                                       addr_size;         // infoArray
+ 
+diff -ruN a/lldb/source/Plugins/DynamicLoader/POSIX-DYLD/DYLDRendezvous.cpp b/lldb/source/Plugins/DynamicLoader/POSIX-DYLD/DYLDRendezvous.cpp
+--- a/lldb/source/Plugins/DynamicLoader/POSIX-DYLD/DYLDRendezvous.cpp	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/Plugins/DynamicLoader/POSIX-DYLD/DYLDRendezvous.cpp	2026-11-02 13:12:29.498335684 -0500
+@@ -549,6 +549,11 @@
+   case llvm::Triple::NetBSD:
+   case llvm::Triple::OpenBSD:
+     return entry.file_spec == m_exe_file_spec;
++  case llvm::Triple::Solaris:
++    // illumos ld.so.1 puts the executable first on the link map, named as it
++    // was exec'd ("crashg", not a full path), with l_addr = its mapping base.
++    return entry.link_addr == m_current.map_addr ||
++           entry.file_spec == m_exe_file_spec;
+   case llvm::Triple::Linux:
+     if (triple.isAndroid())
+       return entry.file_spec == m_exe_file_spec;
+diff -ruN a/lldb/source/Plugins/DynamicLoader/POSIX-DYLD/DynamicLoaderPOSIXDYLD.cpp b/lldb/source/Plugins/DynamicLoader/POSIX-DYLD/DynamicLoaderPOSIXDYLD.cpp
+--- a/lldb/source/Plugins/DynamicLoader/POSIX-DYLD/DynamicLoaderPOSIXDYLD.cpp	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/Plugins/DynamicLoader/POSIX-DYLD/DynamicLoaderPOSIXDYLD.cpp	2026-11-02 13:12:29.499135739 -0500
+@@ -62,7 +62,8 @@
+     if (triple_ref.getOS() == llvm::Triple::FreeBSD ||
+         triple_ref.getOS() == llvm::Triple::Linux ||
+         triple_ref.getOS() == llvm::Triple::NetBSD ||
+-        triple_ref.getOS() == llvm::Triple::OpenBSD)
++        triple_ref.getOS() == llvm::Triple::OpenBSD ||
++        triple_ref.getOS() == llvm::Triple::Solaris)
+       create = true;
+   }
+ 
+diff -ruN a/lldb/source/Plugins/Language/ObjC/Cocoa.cpp b/lldb/source/Plugins/Language/ObjC/Cocoa.cpp
+--- a/lldb/source/Plugins/Language/ObjC/Cocoa.cpp	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/Plugins/Language/ObjC/Cocoa.cpp	2026-11-02 13:12:29.500026161 -0500
+@@ -1236,8 +1236,10 @@
+     tm_epoch.tm_mday = 1;
+     tm_epoch.tm_year = 2001 - 1900;
+     tm_epoch.tm_isdst = -1;
++#if !defined(__sun) // illumos struct tm has no tm_gmtoff/tm_zone
+     tm_epoch.tm_gmtoff = 0;
+     tm_epoch.tm_zone = nullptr;
++#endif
+     epoch = timegm(&tm_epoch);
+ #endif
+   }
+diff -ruN a/lldb/source/Plugins/ObjectFile/Breakpad/ObjectFileBreakpad.cpp b/lldb/source/Plugins/ObjectFile/Breakpad/ObjectFileBreakpad.cpp
+--- a/lldb/source/Plugins/ObjectFile/Breakpad/ObjectFileBreakpad.cpp	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/Plugins/ObjectFile/Breakpad/ObjectFileBreakpad.cpp	2026-11-02 13:12:29.500575697 -0500
+@@ -59,10 +59,10 @@
+ 
+ ObjectFile *ObjectFileBreakpad::CreateInstance(const ModuleSP &module_sp,
+                                                DataExtractorSP extractor_sp,
+-                                               offset_t data_offset,
++                                               lldb::offset_t data_offset,
+                                                const FileSpec *file,
+-                                               offset_t file_offset,
+-                                               offset_t length) {
++                                               lldb::offset_t file_offset,
++                                               lldb::offset_t length) {
+   if (!extractor_sp || !extractor_sp->HasData()) {
+     DataBufferSP data_sp = MapFileData(*file, length, file_offset);
+     if (!data_sp)
+@@ -102,8 +102,8 @@
+ }
+ 
+ ModuleSpecList ObjectFileBreakpad::GetModuleSpecifications(
+-    const FileSpec &file, DataExtractorSP &extractor_sp, offset_t file_offset,
+-    offset_t length) {
++    const FileSpec &file, DataExtractorSP &extractor_sp, lldb::offset_t file_offset,
++    lldb::offset_t length) {
+   if (!extractor_sp || !extractor_sp->HasData())
+     return {};
+   // If this is opearting on a VirtualDataExtractor, it can have
+@@ -124,9 +124,9 @@
+ 
+ ObjectFileBreakpad::ObjectFileBreakpad(const ModuleSP &module_sp,
+                                        DataExtractorSP extractor_sp,
+-                                       offset_t data_offset,
+-                                       const FileSpec *file, offset_t offset,
+-                                       offset_t length, ArchSpec arch,
++                                       lldb::offset_t data_offset,
++                                       const FileSpec *file, lldb::offset_t offset,
++                                       lldb::offset_t length, ArchSpec arch,
+                                        UUID uuid)
+     : ObjectFile(module_sp, file, offset, length, extractor_sp, data_offset),
+       m_arch(std::move(arch)), m_uuid(std::move(uuid)) {}
+@@ -148,14 +148,14 @@
+   m_sections_up = std::make_unique<SectionList>();
+ 
+   std::optional<Record::Kind> current_section;
+-  offset_t section_start;
++  lldb::offset_t section_start;
+   llvm::StringRef text = toStringRef(m_data_nsp->GetData());
+   uint32_t next_section_id = 1;
+   auto maybe_add_section = [&](const uint8_t *end_ptr) {
+     if (!current_section)
+       return; // We have been called before parsing the first line.
+ 
+-    offset_t end_offset = end_ptr - m_data_nsp->GetDataStart();
++    lldb::offset_t end_offset = end_ptr - m_data_nsp->GetDataStart();
+     auto section_sp = std::make_shared<Section>(
+         GetModule(), this, next_section_id++,
+         ConstString(toString(*current_section)), eSectionTypeOther,
+diff -ruN a/lldb/source/Plugins/ObjectFile/COFF/ObjectFileCOFF.cpp b/lldb/source/Plugins/ObjectFile/COFF/ObjectFileCOFF.cpp
+--- a/lldb/source/Plugins/ObjectFile/COFF/ObjectFileCOFF.cpp	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/Plugins/ObjectFile/COFF/ObjectFileCOFF.cpp	2026-11-02 13:12:29.500866793 -0500
+@@ -46,8 +46,8 @@
+ lldb_private::ObjectFile *
+ ObjectFileCOFF::CreateInstance(const ModuleSP &module_sp,
+                                DataExtractorSP extractor_sp,
+-                               offset_t data_offset, const FileSpec *file,
+-                               offset_t file_offset, offset_t length) {
++                               lldb::offset_t data_offset, const FileSpec *file,
++                               lldb::offset_t file_offset, lldb::offset_t length) {
+   Log *log = GetLog(LLDBLog::Object);
+ 
+   if (!extractor_sp || !extractor_sp->HasData()) {
+@@ -116,7 +116,7 @@
+ ModuleSpecList
+ ObjectFileCOFF::GetModuleSpecifications(const FileSpec &file,
+                                         DataExtractorSP &extractor_sp,
+-                                        offset_t file_offset, offset_t length) {
++                                        lldb::offset_t file_offset, lldb::offset_t length) {
+   if (!extractor_sp || !extractor_sp->HasData())
+     return {};
+ 
+diff -ruN a/lldb/source/Plugins/ObjectFile/ELF/ObjectFileELF.cpp b/lldb/source/Plugins/ObjectFile/ELF/ObjectFileELF.cpp
+--- a/lldb/source/Plugins/ObjectFile/ELF/ObjectFileELF.cpp	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/Plugins/ObjectFile/ELF/ObjectFileELF.cpp	2026-11-02 13:12:29.502020545 -0500
+@@ -1295,6 +1295,16 @@
+       // This is sometimes found in core files and usually contains extended
+       // register info
+       arch_spec.GetTriple().setOS(llvm::Triple::OSType::Linux);
++    } else if (note.n_name == LLDB_NT_OWNER_CORE &&
++               note.n_type == 15 /* illumos NT_UTSNAME */ &&
++               note.n_descsz >= 5 && data.PeekData(offset, 5) &&
++               llvm::StringRef(reinterpret_cast<const char *>(
++                                   data.PeekData(offset, 5)),
++                               5) == "SunOS") {
++      // An illumos/Solaris core has ELFOSABI_NONE and no ABI note; its
++      // NT_UTSNAME (struct utsname, sysname first) names the OS.
++      arch_spec.GetTriple().setOS(llvm::Triple::OSType::Solaris);
++      arch_spec.GetTriple().setVendor(llvm::Triple::VendorType::UnknownVendor);
+     } else if (note.n_name == LLDB_NT_OWNER_CORE) {
+       // Parse the NT_FILE to look for stuff in paths to shared libraries
+       // The contents look like this in a 64 bit ELF core file:
+@@ -2087,7 +2097,7 @@
+ 
+   addr_t vm_addr = section->GetFileAddress();
+   ConstString name = section->GetName();
+-  offset_t byte_size = section->GetByteSize();
++  lldb::offset_t byte_size = section->GetByteSize();
+   bool thread_specific = section->IsThreadSpecific();
+   uint32_t permissions = section->GetPermissions();
+   uint32_t alignment = section->GetLog2Align();
+@@ -4217,7 +4227,7 @@
+   if (auto data = ReadDataFromDynamic(hash, 8)) {
+     // We don't need the number of buckets value "nbucket", we just need the
+     // "nchain" value which contains the number of symbols.
+-    offset_t offset = offsetof(DtHashHeader, nchain);
++    lldb::offset_t offset = offsetof(DtHashHeader, nchain);
+     return data->GetU32(&offset);
+   }
+ 
+@@ -4240,7 +4250,7 @@
+   uint32_t num_symbols = 0;
+   // Read enogh data for the DT_GNU_HASH header so we can extract the values.
+   if (auto data = ReadDataFromDynamic(gnu_hash, sizeof(DtGnuHashHeader))) {
+-    offset_t offset = 0;
++    lldb::offset_t offset = 0;
+     DtGnuHashHeader header;
+     header.nbuckets = data->GetU32(&offset);
+     header.symoffset = data->GetU32(&offset);
+diff -ruN a/lldb/source/Plugins/ObjectFile/JSON/ObjectFileJSON.cpp b/lldb/source/Plugins/ObjectFile/JSON/ObjectFileJSON.cpp
+--- a/lldb/source/Plugins/ObjectFile/JSON/ObjectFileJSON.cpp	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/Plugins/ObjectFile/JSON/ObjectFileJSON.cpp	2026-11-02 13:12:29.503383662 -0500
+@@ -38,10 +38,10 @@
+ 
+ ObjectFile *ObjectFileJSON::CreateInstance(const ModuleSP &module_sp,
+                                            DataExtractorSP extractor_sp,
+-                                           offset_t data_offset,
++                                           lldb::offset_t data_offset,
+                                            const FileSpec *file,
+-                                           offset_t file_offset,
+-                                           offset_t length) {
++                                           lldb::offset_t file_offset,
++                                           lldb::offset_t length) {
+   if (!extractor_sp || !extractor_sp->HasData()) {
+     DataBufferSP data_sp = MapFileData(*file, length, file_offset);
+     if (!data_sp)
+@@ -111,7 +111,7 @@
+ ModuleSpecList
+ ObjectFileJSON::GetModuleSpecifications(const FileSpec &file,
+                                         DataExtractorSP &extractor_sp,
+-                                        offset_t file_offset, offset_t length) {
++                                        lldb::offset_t file_offset, lldb::offset_t length) {
+   if (!extractor_sp || !MagicBytesMatch(extractor_sp))
+     return {};
+ 
+@@ -155,8 +155,8 @@
+ 
+ ObjectFileJSON::ObjectFileJSON(const ModuleSP &module_sp,
+                                DataExtractorSP extractor_sp,
+-                               offset_t data_offset, const FileSpec *file,
+-                               offset_t offset, offset_t length, ArchSpec arch,
++                               lldb::offset_t data_offset, const FileSpec *file,
++                               lldb::offset_t offset, lldb::offset_t length, ArchSpec arch,
+                                UUID uuid, Type type,
+                                std::vector<JSONSymbol> symbols,
+                                std::vector<JSONSection> sections)
+diff -ruN a/lldb/source/Plugins/ObjectFile/Mach-O/ObjectFileMachO.cpp b/lldb/source/Plugins/ObjectFile/Mach-O/ObjectFileMachO.cpp
+--- a/lldb/source/Plugins/ObjectFile/Mach-O/ObjectFileMachO.cpp	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/Plugins/ObjectFile/Mach-O/ObjectFileMachO.cpp	2026-11-02 13:12:29.504844406 -0500
+@@ -375,7 +375,7 @@
+     while (offset < data.GetByteSize()) {
+       int flavor = data.GetU32(&offset);
+       uint32_t count = data.GetU32(&offset);
+-      offset_t next_thread_state = offset + (count * 4);
++      lldb::offset_t next_thread_state = offset + (count * 4);
+       switch (flavor) {
+       case GPRAltRegSet:
+       case GPRRegSet: {
+@@ -497,7 +497,7 @@
+     while (offset < data.GetByteSize()) {
+       int flavor = data.GetU32(&offset);
+       uint32_t count = data.GetU32(&offset);
+-      offset_t next_thread_state = offset + (count * 4);
++      lldb::offset_t next_thread_state = offset + (count * 4);
+       switch (flavor) {
+       case GPRRegSet:
+         // x0-x29 + fp + lr + sp + pc (== 33 64-bit registers) plus cpsr (1
+@@ -637,7 +637,7 @@
+     while (offset < data.GetByteSize()) {
+       int flavor = data.GetU32(&offset);
+       uint32_t count = data.GetU32(&offset);
+-      offset_t next_thread_state = offset + (count * 4);
++      lldb::offset_t next_thread_state = offset + (count * 4);
+       switch (flavor) {
+       case GPRRegSet:
+         // x0-x31 + pc
+@@ -837,7 +837,7 @@
+   if (ObjectFileMachO::MagicBytesMatch(extractor_sp, 0,
+                                        extractor_sp->GetByteSize())) {
+     llvm::MachO::mach_header header;
+-    offset_t data_offset = 0;
++    lldb::offset_t data_offset = 0;
+     if (ParseHeader(extractor_sp, &data_offset, header)) {
+       size_t header_and_load_cmds =
+           header.sizeofcmds + MachHeaderSizeFromMagic(header.magic);
+@@ -5066,14 +5066,14 @@
+   return m_thread_context_offsets.GetSize();
+ }
+ 
+-std::vector<std::tuple<offset_t, offset_t>>
++std::vector<std::tuple<lldb::offset_t, lldb::offset_t>>
+ ObjectFileMachO::FindLC_NOTEByName(std::string name) {
+-  std::vector<std::tuple<offset_t, offset_t>> results;
++  std::vector<std::tuple<lldb::offset_t, lldb::offset_t>> results;
+   ModuleSP module_sp(GetModule());
+   if (module_sp) {
+     std::lock_guard<std::recursive_mutex> guard(module_sp->GetMutex());
+ 
+-    offset_t offset = MachHeaderSizeFromMagic(m_header.magic);
++    lldb::offset_t offset = MachHeaderSizeFromMagic(m_header.magic);
+     for (uint32_t i = 0; i < m_header.ncmds; ++i) {
+       const uint32_t cmd_offset = offset;
+       llvm::MachO::load_command lc = {};
+@@ -5086,8 +5086,8 @@
+         offset += 16;
+ 
+         if (name == data_owner) {
+-          offset_t payload_offset = m_data_nsp->GetU64_unchecked(&offset);
+-          offset_t payload_size = m_data_nsp->GetU64_unchecked(&offset);
++          lldb::offset_t payload_offset = m_data_nsp->GetU64_unchecked(&offset);
++          lldb::offset_t payload_size = m_data_nsp->GetU64_unchecked(&offset);
+           results.push_back({payload_offset, payload_size});
+         }
+       }
+@@ -5106,8 +5106,8 @@
+ 
+     auto lc_notes = FindLC_NOTEByName("kern ver str");
+     for (auto lc_note : lc_notes) {
+-      offset_t payload_offset = std::get<0>(lc_note);
+-      offset_t payload_size = std::get<1>(lc_note);
++      lldb::offset_t payload_offset = std::get<0>(lc_note);
++      lldb::offset_t payload_size = std::get<1>(lc_note);
+       uint32_t version;
+       if (m_data_nsp->GetU32(&payload_offset, &version, 1) != nullptr) {
+         if (version == 1) {
+@@ -5123,7 +5123,7 @@
+ 
+     // Second, make a pass over the load commands looking for an obsolete
+     // LC_IDENT load command.
+-    offset_t offset = MachHeaderSizeFromMagic(m_header.magic);
++    lldb::offset_t offset = MachHeaderSizeFromMagic(m_header.magic);
+     for (uint32_t i = 0; i < m_header.ncmds; ++i) {
+       const uint32_t cmd_offset = offset;
+       llvm::MachO::ident_command ident_command;
+@@ -5152,7 +5152,7 @@
+     std::lock_guard<std::recursive_mutex> guard(module_sp->GetMutex());
+     auto lc_notes = FindLC_NOTEByName("addrable bits");
+     for (auto lc_note : lc_notes) {
+-      offset_t payload_offset = std::get<0>(lc_note);
++      lldb::offset_t payload_offset = std::get<0>(lc_note);
+       uint32_t version;
+       if (m_data_nsp->GetU32(&payload_offset, &version, 1) != nullptr) {
+         if (version == 3) {
+@@ -5198,7 +5198,7 @@
+ 
+     auto lc_notes = FindLC_NOTEByName("main bin spec");
+     for (auto lc_note : lc_notes) {
+-      offset_t payload_offset = std::get<0>(lc_note);
++      lldb::offset_t payload_offset = std::get<0>(lc_note);
+ 
+       // struct main_bin_spec
+       // {
+@@ -6015,9 +6015,9 @@
+ // are some multiple passes over the image list while calculating
+ // everything.
+ 
+-static offset_t
++static lldb::offset_t
+ CreateAllImageInfosPayload(const lldb::ProcessSP &process_sp,
+-                           offset_t initial_file_offset,
++                           lldb::offset_t initial_file_offset,
+                            StreamString &all_image_infos_payload,
+                            lldb_private::SaveCoreOptions &options) {
+   Target &target = process_sp->GetTarget();
+@@ -6096,13 +6096,13 @@
+     modules_segment_vmaddrs.push_back(segment_vmaddrs);
+   }
+ 
+-  offset_t size_of_vmaddr_structs = 0;
++  lldb::offset_t size_of_vmaddr_structs = 0;
+   for (size_t i = 0; i < modules_segment_vmaddrs.size(); i++) {
+     size_of_vmaddr_structs +=
+         modules_segment_vmaddrs[i].size() * sizeof(segment_vmaddr);
+   }
+ 
+-  offset_t size_of_filepath_cstrings = 0;
++  lldb::offset_t size_of_filepath_cstrings = 0;
+   for (size_t i = 0; i < modules_count; i++) {
+     ModuleSP module_sp = modules.GetModuleAtIndex(i);
+     size_of_filepath_cstrings += module_sp->GetFileSpec().GetPath().size() + 1;
+@@ -6111,20 +6111,20 @@
+   // Calculate the file offsets of our "all image infos" payload in the
+   // corefile. initial_file_offset the original value passed in to this method.
+ 
+-  offset_t start_of_entries =
++  lldb::offset_t start_of_entries =
+       initial_file_offset + sizeof(all_image_infos_header);
+-  offset_t start_of_seg_vmaddrs =
++  lldb::offset_t start_of_seg_vmaddrs =
+       start_of_entries + sizeof(image_entry) * modules_count;
+-  offset_t start_of_filenames = start_of_seg_vmaddrs + size_of_vmaddr_structs;
++  lldb::offset_t start_of_filenames = start_of_seg_vmaddrs + size_of_vmaddr_structs;
+ 
+-  offset_t final_file_offset = start_of_filenames + size_of_filepath_cstrings;
++  lldb::offset_t final_file_offset = start_of_filenames + size_of_filepath_cstrings;
+ 
+   // Now write the one-per-module 'struct image_entry' into the
+   // StringStream; keep track of where the struct segment_vmaddr
+   // entries for each module will end up in the corefile.
+ 
+-  offset_t current_string_offset = start_of_filenames;
+-  offset_t current_segaddrs_offset = start_of_seg_vmaddrs;
++  lldb::offset_t current_string_offset = start_of_filenames;
++  lldb::offset_t current_segaddrs_offset = start_of_seg_vmaddrs;
+   for (size_t i = 0; i < modules_count; i++) {
+     ModuleSP module_sp = modules.GetModuleAtIndex(i);
+ 
+@@ -6574,7 +6574,7 @@
+ 
+   auto lc_notes = FindLC_NOTEByName("all image infos");
+   for (auto lc_note : lc_notes) {
+-    offset_t payload_offset = std::get<0>(lc_note);
++    lldb::offset_t payload_offset = std::get<0>(lc_note);
+     // Read the struct all_image_infos_header.
+     uint32_t version = m_data_nsp->GetU32(&payload_offset);
+     if (version != 1) {
+@@ -6591,12 +6591,12 @@
+     payload_offset = entries_fileoff;
+     for (uint32_t i = 0; i < imgcount; i++) {
+       // Read the struct image_entry.
+-      offset_t filepath_offset = m_data_nsp->GetU64(&payload_offset);
++      lldb::offset_t filepath_offset = m_data_nsp->GetU64(&payload_offset);
+       uuid_t uuid;
+       memcpy(&uuid, m_data_nsp->GetData(&payload_offset, sizeof(uuid_t)),
+              sizeof(uuid_t));
+       uint64_t load_address = m_data_nsp->GetU64(&payload_offset);
+-      offset_t seg_addrs_offset = m_data_nsp->GetU64(&payload_offset);
++      lldb::offset_t seg_addrs_offset = m_data_nsp->GetU64(&payload_offset);
+       uint32_t segment_count = m_data_nsp->GetU32(&payload_offset);
+       uint32_t currently_executing = m_data_nsp->GetU32(&payload_offset);
+ 
+@@ -6607,7 +6607,7 @@
+       image_entry.load_address = load_address;
+       image_entry.currently_executing = currently_executing;
+ 
+-      offset_t seg_vmaddrs_offset = seg_addrs_offset;
++      lldb::offset_t seg_vmaddrs_offset = seg_addrs_offset;
+       for (uint32_t j = 0; j < segment_count; j++) {
+         char segname[17];
+         m_data_nsp->CopyData(seg_vmaddrs_offset, 16, segname);
+@@ -6631,7 +6631,7 @@
+ 
+   lc_notes = FindLC_NOTEByName("load binary");
+   for (auto lc_note : lc_notes) {
+-    offset_t payload_offset = std::get<0>(lc_note);
++    lldb::offset_t payload_offset = std::get<0>(lc_note);
+     uint32_t version = m_data_nsp->GetU32(&payload_offset);
+     if (version == 1) {
+       uuid_t uuid;
+diff -ruN a/lldb/source/Plugins/ObjectFile/Minidump/MinidumpFileBuilder.cpp b/lldb/source/Plugins/ObjectFile/Minidump/MinidumpFileBuilder.cpp
+--- a/lldb/source/Plugins/ObjectFile/Minidump/MinidumpFileBuilder.cpp	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/Plugins/ObjectFile/Minidump/MinidumpFileBuilder.cpp	2026-11-02 13:12:29.506787183 -0500
+@@ -84,7 +84,7 @@
+   m_saved_data_size +=
+       m_expected_directories * sizeof(llvm::minidump::Directory);
+   Status error;
+-  offset_t new_offset = m_core_file->SeekFromStart(m_saved_data_size);
++  lldb::offset_t new_offset = m_core_file->SeekFromStart(m_saved_data_size);
+   if (new_offset != m_saved_data_size)
+     error = Status::FromErrorStringWithFormat(
+         "Failed to fill in header and directory "
+@@ -938,7 +938,7 @@
+   return error;
+ }
+ 
+-offset_t MinidumpFileBuilder::GetCurrentDataEndOffset() const {
++lldb::offset_t MinidumpFileBuilder::GetCurrentDataEndOffset() const {
+   return m_data.GetByteSize() + m_saved_data_size;
+ }
+ 
+@@ -1059,7 +1059,7 @@
+       std::min(GetLargestRangeSize(ranges), MAX_WRITE_CHUNK_SIZE), 0);
+   for (const auto &core_range : ranges) {
+     // Take the offset before we write.
+-    const offset_t offset_for_data = GetCurrentDataEndOffset();
++    const lldb::offset_t offset_for_data = GetCurrentDataEndOffset();
+     const addr_t addr = core_range.range.start();
+     const addr_t size = core_range.range.size();
+     const addr_t end = core_range.range.end();
+@@ -1136,11 +1136,11 @@
+   list_header.NumberOfMemoryRanges = memory_ranges_num;
+   // Capture the starting offset for all the descriptors so we can clean them up
+   // if needed.
+-  offset_t starting_offset =
++  lldb::offset_t starting_offset =
+       GetCurrentDataEndOffset() + sizeof(llvm::minidump::Memory64ListHeader);
+   // The base_rva needs to start after the directories, which is right after
+   // the descriptors + the size of the header.
+-  offset_t base_rva =
++  lldb::offset_t base_rva =
+       starting_offset +
+       (ranges.size() * sizeof(llvm::minidump::MemoryDescriptor_64));
+   llvm::support::ulittle64_t memory_ranges_base_rva =
+@@ -1232,7 +1232,7 @@
+   m_core_file->SeekFromStart(m_saved_data_size);
+   addr_t starting_size = m_data.GetByteSize();
+   addr_t remaining_bytes = starting_size;
+-  offset_t offset = 0;
++  lldb::offset_t offset = 0;
+ 
+   while (remaining_bytes > 0) {
+     size_t bytes_written = remaining_bytes;
+diff -ruN a/lldb/source/Plugins/ObjectFile/PDB/ObjectFilePDB.cpp b/lldb/source/Plugins/ObjectFile/PDB/ObjectFilePDB.cpp
+--- a/lldb/source/Plugins/ObjectFile/PDB/ObjectFilePDB.cpp	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/Plugins/ObjectFile/PDB/ObjectFilePDB.cpp	2026-11-02 13:12:29.507763742 -0500
+@@ -93,10 +93,10 @@
+ 
+ ObjectFile *ObjectFilePDB::CreateInstance(const ModuleSP &module_sp,
+                                           DataExtractorSP extractor_sp,
+-                                          offset_t data_offset,
++                                          lldb::offset_t data_offset,
+                                           const FileSpec *file,
+-                                          offset_t file_offset,
+-                                          offset_t length) {
++                                          lldb::offset_t file_offset,
++                                          lldb::offset_t length) {
+   auto objfile_up = std::make_unique<ObjectFilePDB>(
+       module_sp, extractor_sp, data_offset, file, file_offset, length);
+   if (!objfile_up->initPDBFile())
+@@ -114,7 +114,7 @@
+ ModuleSpecList
+ ObjectFilePDB::GetModuleSpecifications(const FileSpec &file,
+                                        DataExtractorSP &extractor_sp,
+-                                       offset_t file_offset, offset_t length) {
++                                       lldb::offset_t file_offset, lldb::offset_t length) {
+   ModuleSpec module_spec(file);
+   llvm::BumpPtrAllocator allocator;
+   std::unique_ptr<PDBFile> pdb_file = loadPDBFile(file.GetPath(), allocator);
+@@ -163,8 +163,8 @@
+ 
+ ObjectFilePDB::ObjectFilePDB(const ModuleSP &module_sp,
+                              DataExtractorSP &extractor_sp,
+-                             offset_t data_offset, const FileSpec *file,
+-                             offset_t offset, offset_t length)
++                             lldb::offset_t data_offset, const FileSpec *file,
++                             lldb::offset_t offset, lldb::offset_t length)
+     : ObjectFile(module_sp, file, offset, length, extractor_sp, data_offset) {}
+ 
+ std::unique_ptr<PDBFile>
+diff -ruN a/lldb/source/Plugins/ObjectFile/PECOFF/PECallFrameInfo.cpp b/lldb/source/Plugins/ObjectFile/PECOFF/PECallFrameInfo.cpp
+--- a/lldb/source/Plugins/ObjectFile/PECOFF/PECallFrameInfo.cpp	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/Plugins/ObjectFile/PECOFF/PECallFrameInfo.cpp	2026-11-02 13:12:29.508173545 -0500
+@@ -11,8 +11,8 @@
+ using namespace llvm::Win64EH;
+ 
+ template <typename T>
+-static const T *TypedRead(const DataExtractor &data_extractor, offset_t &offset,
+-                          offset_t size = sizeof(T)) {
++static const T *TypedRead(const DataExtractor &data_extractor, lldb::offset_t &offset,
++                          lldb::offset_t size = sizeof(T)) {
+   return static_cast<const T *>(data_extractor.GetData(&offset, size));
+ }
+ 
+@@ -53,7 +53,7 @@
+   const UnwindInfo *m_unwind_info = nullptr;
+ 
+   DataExtractor m_unwind_code_data;
+-  offset_t m_unwind_code_offset;
++  lldb::offset_t m_unwind_code_offset;
+   const UnwindCode *m_unwind_code = nullptr;
+ 
+   bool m_chained = false;
+@@ -74,7 +74,7 @@
+       m_unwind_info_data =
+           m_object_file.ReadImageDataByRVA(m_unwind_info_rva, UNWIND_INFO_SIZE);
+ 
+-      offset_t offset = 0;
++      lldb::offset_t offset = 0;
+       m_unwind_info =
+           TypedRead<UnwindInfo>(m_unwind_info_data, offset, UNWIND_INFO_SIZE);
+       if (!m_unwind_info) {
+@@ -104,7 +104,7 @@
+     DataExtractor runtime_function_data = m_object_file.ReadImageDataByRVA(
+         runtime_function_rva, sizeof(RuntimeFunction));
+ 
+-    offset_t offset = 0;
++    lldb::offset_t offset = 0;
+     const auto *runtime_function =
+         TypedRead<RuntimeFunction>(runtime_function_data, offset);
+     if (!runtime_function) {
+@@ -512,7 +512,7 @@
+   while (begin < end) {
+     uint32_t curr = (begin + end) / 2;
+ 
+-    offset_t offset = curr * sizeof(RuntimeFunction);
++    lldb::offset_t offset = curr * sizeof(RuntimeFunction);
+     const auto *runtime_function =
+         TypedRead<RuntimeFunction>(m_exception_dir, offset);
+     if (!runtime_function)
+diff -ruN a/lldb/source/Plugins/ObjectFile/wasm/ObjectFileWasm.cpp b/lldb/source/Plugins/ObjectFile/wasm/ObjectFileWasm.cpp
+--- a/lldb/source/Plugins/ObjectFile/wasm/ObjectFileWasm.cpp	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/Plugins/ObjectFile/wasm/ObjectFileWasm.cpp	2026-11-02 13:12:29.508831571 -0500
+@@ -140,10 +140,10 @@
+ 
+ ObjectFile *ObjectFileWasm::CreateInstance(const ModuleSP &module_sp,
+                                            DataExtractorSP extractor_sp,
+-                                           offset_t data_offset,
++                                           lldb::offset_t data_offset,
+                                            const FileSpec *file,
+-                                           offset_t file_offset,
+-                                           offset_t length) {
++                                           lldb::offset_t file_offset,
++                                           lldb::offset_t length) {
+   Log *log = GetLog(LLDBLog::Object);
+ 
+   if (!extractor_sp || !extractor_sp->HasData()) {
+@@ -276,7 +276,7 @@
+ ModuleSpecList
+ ObjectFileWasm::GetModuleSpecifications(const FileSpec &file,
+                                         DataExtractorSP &extractor_sp,
+-                                        offset_t file_offset, offset_t length) {
++                                        lldb::offset_t file_offset, lldb::offset_t length) {
+   if (!ValidateModuleHeader(extractor_sp->GetData()))
+     return {};
+ 
+@@ -287,8 +287,8 @@
+ 
+ ObjectFileWasm::ObjectFileWasm(const ModuleSP &module_sp,
+                                DataExtractorSP extractor_sp,
+-                               offset_t data_offset, const FileSpec *file,
+-                               offset_t offset, offset_t length)
++                               lldb::offset_t data_offset, const FileSpec *file,
++                               lldb::offset_t offset, lldb::offset_t length)
+     : ObjectFile(module_sp, file, offset, length, extractor_sp, data_offset),
+       m_arch("wasm32") {
+   m_data_nsp->SetAddressByteSize(4);
+@@ -647,7 +647,7 @@
+   for (const section_info &sect_info : m_sect_infos) {
+     SectionType section_type = eSectionTypeOther;
+     ConstString section_name;
+-    offset_t file_offset = sect_info.offset & 0xffffffff;
++    lldb::offset_t file_offset = sect_info.offset & 0xffffffff;
+     addr_t vm_addr = sect_info.offset;
+     size_t vm_size = sect_info.size;
+ 
+@@ -877,7 +877,7 @@
+   return num_loaded_sections > 0;
+ }
+ 
+-DataExtractor ObjectFileWasm::ReadImageData(offset_t offset, uint32_t size) {
++DataExtractor ObjectFileWasm::ReadImageData(lldb::offset_t offset, uint32_t size) {
+   DataExtractor data;
+   if (m_file) {
+     if (offset < GetByteSize()) {
+diff -ruN a/lldb/source/Plugins/Platform/Android/AdbClient.cpp b/lldb/source/Plugins/Platform/Android/AdbClient.cpp
+--- a/lldb/source/Plugins/Platform/Android/AdbClient.cpp	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/Plugins/Platform/Android/AdbClient.cpp	2026-11-02 13:12:29.509668828 -0500
+@@ -541,7 +541,7 @@
+ 
+   DataExtractor extractor(&buffer[0], buffer.size(), eByteOrderLittle,
+                           sizeof(void *));
+-  offset_t offset = 0;
++  lldb::offset_t offset = 0;
+ 
+   const void *command = extractor.GetData(&offset, stat_len);
+   if (!command)
+@@ -631,7 +631,7 @@
+   if (error.Success()) {
+     response_id.assign(&buffer[0], 4);
+     DataExtractor extractor(&buffer[4], 4, eByteOrderLittle, sizeof(void *));
+-    offset_t offset = 0;
++    lldb::offset_t offset = 0;
+     data_len = extractor.GetU32(&offset);
+   }
+ 
+diff -ruN a/lldb/source/Plugins/Platform/CMakeLists.txt b/lldb/source/Plugins/Platform/CMakeLists.txt
+--- a/lldb/source/Plugins/Platform/CMakeLists.txt	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/Plugins/Platform/CMakeLists.txt	2026-11-02 13:12:29.510018734 -0500
+@@ -15,5 +15,6 @@
+ add_subdirectory(OpenBSD)
+ add_subdirectory(POSIX)
+ add_subdirectory(QemuUser)
++add_subdirectory(Solaris)
+ add_subdirectory(WebAssembly)
+ add_subdirectory(Windows)
+diff -ruN a/lldb/source/Plugins/Platform/Solaris/CMakeLists.txt b/lldb/source/Plugins/Platform/Solaris/CMakeLists.txt
+--- a/lldb/source/Plugins/Platform/Solaris/CMakeLists.txt	1969-12-31 19:00:00.000000000 -0500
++++ b/lldb/source/Plugins/Platform/Solaris/CMakeLists.txt	2026-11-02 13:12:29.510131741 -0500
+@@ -0,0 +1,9 @@
++add_lldb_library(lldbPluginPlatformSolaris PLUGIN
++  PlatformSolaris.cpp
++
++   LINK_LIBS
++    lldbBreakpoint
++    lldbCore
++    lldbHost
++    lldbTarget
++  )
+diff -ruN a/lldb/source/Plugins/Platform/Solaris/PlatformSolaris.cpp b/lldb/source/Plugins/Platform/Solaris/PlatformSolaris.cpp
+--- a/lldb/source/Plugins/Platform/Solaris/PlatformSolaris.cpp	1969-12-31 19:00:00.000000000 -0500
++++ b/lldb/source/Plugins/Platform/Solaris/PlatformSolaris.cpp	2026-11-02 13:12:29.510189729 -0500
+@@ -0,0 +1,102 @@
++//===-- PlatformSolaris.cpp -----------------------------------------------===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++
++#include "PlatformSolaris.h"
++
++#include "lldb/Core/PluginManager.h"
++#include "lldb/Host/HostInfo.h"
++#include "lldb/Utility/LLDBLog.h"
++#include "lldb/Utility/Log.h"
++
++// illumos <sys/mman.h> values, for a remote illumos target from any host.
++#define SOLARIS_MAP_PRIVATE 0x0002
++#define SOLARIS_MAP_ANON 0x0100
++
++using namespace lldb;
++using namespace lldb_private;
++using namespace lldb_private::platform_solaris;
++
++LLDB_PLUGIN_DEFINE(PlatformSolaris)
++
++static uint32_t g_initialize_count = 0;
++
++PlatformSP PlatformSolaris::CreateInstance(bool force, const ArchSpec *arch) {
++  bool create = force;
++  if (!create && arch && arch->IsValid()) {
++    const llvm::Triple &triple = arch->GetTriple();
++    create = triple.getOS() == llvm::Triple::Solaris;
++#if defined(__sun)
++    // An illumos core file has ELFOSABI_NONE and no OS note: take it here.
++    if (triple.getOS() == llvm::Triple::UnknownOS)
++      create = !arch->TripleOSWasSpecified();
++#endif
++  }
++  if (create)
++    return PlatformSP(new PlatformSolaris(false));
++  return PlatformSP();
++}
++
++void PlatformSolaris::Initialize() {
++  Platform::Initialize();
++  if (g_initialize_count++ == 0) {
++#if defined(__sun)
++    PlatformSP default_platform_sp(new PlatformSolaris(true));
++    default_platform_sp->SetSystemArchitecture(HostInfo::GetArchitecture());
++    Platform::SetHostPlatform(default_platform_sp);
++#endif
++    PluginManager::RegisterPlugin(
++        PlatformSolaris::GetPluginNameStatic(false),
++        PlatformSolaris::GetPluginDescriptionStatic(false),
++        PlatformSolaris::CreateInstance, nullptr);
++  }
++}
++
++void PlatformSolaris::Terminate() {
++  if (g_initialize_count > 0 && --g_initialize_count == 0)
++    PluginManager::UnregisterPlugin(PlatformSolaris::CreateInstance);
++  PlatformPOSIX::Terminate();
++}
++
++PlatformSolaris::PlatformSolaris(bool is_host) : PlatformPOSIX(is_host) {
++  if (is_host) {
++    m_supported_architectures.push_back(HostInfo::GetArchitecture());
++    ArchSpec arch32 = HostInfo::GetArchitecture(HostInfo::eArchKind32);
++    if (arch32.IsValid())
++      m_supported_architectures.push_back(arch32);
++  } else {
++    m_supported_architectures = CreateArchList(
++        {llvm::Triple::x86_64, llvm::Triple::x86, llvm::Triple::aarch64},
++        llvm::Triple::Solaris);
++  }
++}
++
++std::vector<ArchSpec>
++PlatformSolaris::GetSupportedArchitectures(const ArchSpec &process_host_arch) {
++  if (m_remote_platform_sp)
++    return m_remote_platform_sp->GetSupportedArchitectures(process_host_arch);
++  return m_supported_architectures;
++}
++
++void PlatformSolaris::CalculateTrapHandlerSymbolNames() {
++  // libc's signal path: the kernel enters sigacthandler, which calls the
++  // user handler through __sighndlr (both local symbols in libc.so.1).
++  m_trap_handlers.push_back(ConstString("sigacthandler"));
++  m_trap_handlers.push_back(ConstString("__sighndlr"));
++}
++
++MmapArgList PlatformSolaris::GetMmapArgumentList(const ArchSpec &arch,
++                                                 addr_t addr, addr_t length,
++                                                 unsigned prot, unsigned flags,
++                                                 addr_t fd, addr_t offset) {
++  uint64_t flags_platform = 0;
++  if (flags & eMmapFlagsPrivate)
++    flags_platform |= SOLARIS_MAP_PRIVATE;
++  if (flags & eMmapFlagsAnon)
++    flags_platform |= SOLARIS_MAP_ANON;
++  return MmapArgList({addr, length, prot, flags_platform, fd, offset});
++}
+diff -ruN a/lldb/source/Plugins/Platform/Solaris/PlatformSolaris.h b/lldb/source/Plugins/Platform/Solaris/PlatformSolaris.h
+--- a/lldb/source/Plugins/Platform/Solaris/PlatformSolaris.h	1969-12-31 19:00:00.000000000 -0500
++++ b/lldb/source/Plugins/Platform/Solaris/PlatformSolaris.h	2026-11-02 13:12:29.510265958 -0500
+@@ -0,0 +1,56 @@
++//===-- PlatformSolaris.h --------------------------------------*- C++ -*-===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++
++#ifndef LLDB_SOURCE_PLUGINS_PLATFORM_SOLARIS_PLATFORMSOLARIS_H
++#define LLDB_SOURCE_PLUGINS_PLATFORM_SOLARIS_PLATFORMSOLARIS_H
++
++#include "Plugins/Platform/POSIX/PlatformPOSIX.h"
++
++namespace lldb_private {
++namespace platform_solaris {
++
++// illumos/Solaris: a host platform (symbols, core files) with no native
++// process plugin yet, so CanDebugProcess() is false, as OpenBSD's is.
++class PlatformSolaris : public PlatformPOSIX {
++public:
++  PlatformSolaris(bool is_host);
++
++  static void Initialize();
++  static void Terminate();
++  static lldb::PlatformSP CreateInstance(bool force, const ArchSpec *arch);
++
++  static llvm::StringRef GetPluginNameStatic(bool is_host) {
++    return is_host ? Platform::GetHostPlatformName() : "remote-solaris";
++  }
++  static llvm::StringRef GetPluginDescriptionStatic(bool is_host) {
++    return is_host ? "Local illumos/Solaris user platform plug-in."
++                   : "Remote illumos/Solaris user platform plug-in.";
++  }
++  llvm::StringRef GetPluginName() override {
++    return GetPluginNameStatic(IsHost());
++  }
++  llvm::StringRef GetDescription() override {
++    return GetPluginDescriptionStatic(IsHost());
++  }
++
++  std::vector<ArchSpec>
++  GetSupportedArchitectures(const ArchSpec &process_host_arch) override;
++  bool CanDebugProcess() override { return false; }
++  void CalculateTrapHandlerSymbolNames() override;
++  MmapArgList GetMmapArgumentList(const ArchSpec &arch, lldb::addr_t addr,
++                                  lldb::addr_t length, unsigned prot,
++                                  unsigned flags, lldb::addr_t fd,
++                                  lldb::addr_t offset) override;
++
++  std::vector<ArchSpec> m_supported_architectures;
++};
++
++} // namespace platform_solaris
++} // namespace lldb_private
++
++#endif
+diff -ruN a/lldb/source/Plugins/Process/elf-core/ProcessElfCore.cpp b/lldb/source/Plugins/Process/elf-core/ProcessElfCore.cpp
+--- a/lldb/source/Plugins/Process/elf-core/ProcessElfCore.cpp	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/Plugins/Process/elf-core/ProcessElfCore.cpp	2026-11-02 13:12:43.650991384 -0500
+@@ -7,6 +7,7 @@
+ //===----------------------------------------------------------------------===//
+ 
+ #include <cstdlib>
++#include <map>
+ 
+ #include <memory>
+ 
+@@ -1095,6 +1096,88 @@
+   return llvm::Error::success();
+ }
+ 
++/// illumos/Solaris (64-bit) core notes, named "CORE" (uts/common/exec/elf/
++/// elf_notes.c). Offsets are lwpstatus_t/psinfo_t from <sys/procfs.h> for an
++/// LP64 process, measured with offsetof() on illumos:
++///   lwpstatus_t: pr_lwpid@4, pr_cursig@12, pr_reg@544 (28 x u64 gregset_t),
++///                pr_fpreg@768 (fpregset_t, FXSAVE layout first 512 bytes)
++///   psinfo_t:    pr_pid@8, pr_fname@136 [16], pr_psargs@152 [80]
++llvm::Error ProcessElfCore::parseSolarisNotes(llvm::ArrayRef<CoreNote> notes) {
++  if (GetArchitecture().GetMachine() != llvm::Triple::x86_64)
++    return llvm::createStringError(
++        "illumos core files are supported for x86_64 only");
++  std::map<lldb::tid_t, std::string> lwp_names;
++  size_t nthreads = m_thread_data.size();
++  bool have_pstatus = false;
++  for (const auto &note : notes) {
++    if (note.info.n_name != "CORE")
++      continue;
++    const DataExtractor &d = note.data;
++    switch (note.info.n_type) {
++    case SOLARIS::NT_PSTATUS:
++      have_pstatus = true;
++      break;
++    case SOLARIS::NT_PSINFO: {
++      if (d.GetByteSize() < 232)
++        return llvm::createStringError("short illumos NT_PSINFO note");
++      lldb::offset_t o = 8;
++      SetID(d.GetU32(&o));
++      const char *fname = d.PeekCStr(136);
++      if (fname)
++        m_executable_name.assign(fname, strnlen(fname, 16));
++      const char *args = d.PeekCStr(152);
++      if (args) {
++        std::string a(args, strnlen(args, 80));
++        m_process_args = CoreArgs(a, /*might_be_truncated=*/a.size() == 79);
++      }
++      break;
++    }
++    case SOLARIS::NT_AUXV:
++      m_auxv = d;
++      break;
++    case SOLARIS::NT_LWPNAME: {
++      lldb::offset_t o = 0;
++      lldb::tid_t tid = d.GetU64(&o);
++      if (const char *n = d.PeekCStr(8))
++        lwp_names[tid] = std::string(n, strnlen(n, 32));
++      break;
++    }
++    case SOLARIS::NT_LWPSTATUS: {
++      if (d.GetByteSize() < 768 + 512)
++        return llvm::createStringError("short illumos NT_LWPSTATUS note");
++      ThreadData td;
++      lldb::offset_t o = 4;
++      td.tid = d.GetU32(&o);
++      o = 12;
++      td.prstatus_sig = d.GetU16(&o);
++      td.gpregset = DataExtractor(d, 544, 28 * 8);
++      CoreNote fp;
++      fp.info = note.info;
++      fp.info.n_type = SOLARIS::NT_PRFPREG;
++      fp.data = DataExtractor(d, 768, 512);
++      td.notes.push_back(fp);
++      m_thread_data.push_back(td);
++      break;
++    }
++    default:
++      break;
++    }
++  }
++  // The kernel writes each LWP's NT_LWPNAME after its NT_LWPSTATUS.
++  for (auto &td : m_thread_data) {
++    auto it = lwp_names.find(td.tid);
++    if (it != lwp_names.end())
++      td.name = it->second;
++  }
++  // A core can have two PT_NOTE segments (each is parsed on its own): the
++  // old-style one (NT_PRSTATUS, NT_PRPSINFO, ...) and the one with NT_PSTATUS
++  // and an NT_LWPSTATUS per LWP. Only the second must have threads.
++  if (have_pstatus && m_thread_data.size() == nthreads)
++    return llvm::createStringError(
++        "no NT_LWPSTATUS note in illumos core file");
++  return llvm::Error::success();
++}
++
+ /// Parse Thread context from PT_NOTE segment and store it in the thread list
+ /// A note segment consists of one or more NOTE entries, but their types and
+ /// meaning differ depending on the OS.
+@@ -1115,6 +1198,8 @@
+     return parseNetBSDNotes(*notes_or_error);
+   case llvm::Triple::OpenBSD:
+     return parseOpenBSDNotes(*notes_or_error);
++  case llvm::Triple::Solaris:
++    return parseSolarisNotes(*notes_or_error);
+   default:
+     // Treat bare-metal 32-bit RISC-V like Linux.
+     if (GetTarget().GetArchitecture().GetMachine() == llvm::Triple::riscv32 &&
+diff -ruN a/lldb/source/Plugins/Process/elf-core/ProcessElfCore.h b/lldb/source/Plugins/Process/elf-core/ProcessElfCore.h
+--- a/lldb/source/Plugins/Process/elf-core/ProcessElfCore.h	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/Plugins/Process/elf-core/ProcessElfCore.h	2026-11-02 13:12:29.511283267 -0500
+@@ -191,6 +191,7 @@
+   llvm::Error parseFreeBSDNotes(llvm::ArrayRef<lldb_private::CoreNote> notes);
+   llvm::Error parseNetBSDNotes(llvm::ArrayRef<lldb_private::CoreNote> notes);
+   llvm::Error parseOpenBSDNotes(llvm::ArrayRef<lldb_private::CoreNote> notes);
++  llvm::Error parseSolarisNotes(llvm::ArrayRef<lldb_private::CoreNote> notes);
+   llvm::Error parseLinuxNotes(llvm::ArrayRef<lldb_private::CoreNote> notes);
+ 
+   /// Find the NT_FILE entry that contains an address.
+diff -ruN a/lldb/source/Plugins/Process/elf-core/RegisterUtilities.h b/lldb/source/Plugins/Process/elf-core/RegisterUtilities.h
+--- a/lldb/source/Plugins/Process/elf-core/RegisterUtilities.h	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/Plugins/Process/elf-core/RegisterUtilities.h	2026-11-02 13:12:29.511682150 -0500
+@@ -61,6 +61,19 @@
+ 
+ } // namespace NETBSD
+ 
++namespace SOLARIS {
++// <sys/elf.h> note types written by the illumos kernel (elf_notes.c).
++enum {
++  NT_PRFPREG = 2, // not written by illumos; used for pr_fpreg (see FPR_Desc)
++  NT_AUXV = 6,
++  NT_PSTATUS = 10,
++  NT_PSINFO = 13,
++  NT_UTSNAME = 15,
++  NT_LWPSTATUS = 16,
++  NT_LWPNAME = 25,
++};
++} // namespace SOLARIS
++
+ namespace OPENBSD {
+ enum {
+   NT_PROCINFO = 10,
+@@ -224,6 +237,9 @@
+     {llvm::Triple::NetBSD, llvm::Triple::x86, NETBSD::I386::NT_FPREGS},
+     {llvm::Triple::NetBSD, llvm::Triple::x86_64, NETBSD::AMD64::NT_FPREGS},
+     {llvm::Triple::OpenBSD, llvm::Triple::UnknownArch, OPENBSD::NT_FPREGS},
++    // illumos: the FXSAVE-layout pr_fpreg cut out of NT_LWPSTATUS
++    // (ProcessElfCore::parseSolarisNotes), filed under this type.
++    {llvm::Triple::Solaris, llvm::Triple::x86_64, SOLARIS::NT_PRFPREG},
+     // Bare-metal 32-bit RISC-V debug target.
+     {llvm::Triple::UnknownOS, llvm::Triple::riscv32, llvm::ELF::NT_FPREGSET},
+ };
+diff -ruN a/lldb/source/Plugins/Process/elf-core/ThreadElfCore.cpp b/lldb/source/Plugins/Process/elf-core/ThreadElfCore.cpp
+--- a/lldb/source/Plugins/Process/elf-core/ThreadElfCore.cpp	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/Plugins/Process/elf-core/ThreadElfCore.cpp	2026-11-02 13:12:29.512169898 -0500
+@@ -26,6 +26,7 @@
+ #include "Plugins/Process/Utility/RegisterContextNetBSD_x86_64.h"
+ #include "Plugins/Process/Utility/RegisterContextOpenBSD_i386.h"
+ #include "Plugins/Process/Utility/RegisterContextOpenBSD_x86_64.h"
++#include "Plugins/Process/Utility/RegisterContextSolaris_x86_64.h"
+ #include "Plugins/Process/Utility/RegisterInfoPOSIX_arm.h"
+ #include "Plugins/Process/Utility/RegisterInfoPOSIX_arm64.h"
+ #include "Plugins/Process/Utility/RegisterInfoPOSIX_ppc64le.h"
+@@ -148,6 +149,12 @@
+       break;
+     }
+ 
++    case llvm::Triple::Solaris: {
++      if (arch.GetMachine() == llvm::Triple::x86_64)
++        reg_interface = new RegisterContextSolaris_x86_64(arch);
++      break;
++    }
++
+     case llvm::Triple::OpenBSD: {
+       switch (arch.GetMachine()) {
+       case llvm::Triple::aarch64:
+@@ -305,7 +312,7 @@
+ 
+   // Read field by field to correctly account for endianess of both the core
+   // dump and the platform running lldb.
+-  offset_t offset = 0;
++  lldb::offset_t offset = 0;
+   si_signo = data.GetU32(&offset);
+   si_code = data.GetU32(&offset);
+   si_errno = data.GetU32(&offset);
+@@ -391,7 +398,7 @@
+     return error;
+   }
+   size_t size = 0;
+-  offset_t offset = 0;
++  lldb::offset_t offset = 0;
+ 
+   pr_state = data.GetU8(&offset);
+   pr_sname = data.GetU8(&offset);
+diff -ruN a/lldb/source/Plugins/Process/gdb-remote/ProcessGDBRemote.cpp b/lldb/source/Plugins/Process/gdb-remote/ProcessGDBRemote.cpp
+--- a/lldb/source/Plugins/Process/gdb-remote/ProcessGDBRemote.cpp	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/Plugins/Process/gdb-remote/ProcessGDBRemote.cpp	2026-11-02 13:12:29.513683727 -0500
+@@ -13,6 +13,9 @@
+ #if LLDB_ENABLE_POSIX
+ #include <netinet/in.h>
+ #include <sys/ioctl.h>
++#if defined(__sun)
++#include <termios.h> // struct winsize, TIOCGWINSZ
++#endif
+ #include <sys/mman.h>
+ #include <sys/socket.h>
+ #include <unistd.h>
+diff -ruN a/lldb/source/Plugins/Process/mach-core/RegisterContextUnifiedCore.cpp b/lldb/source/Plugins/Process/mach-core/RegisterContextUnifiedCore.cpp
+--- a/lldb/source/Plugins/Process/mach-core/RegisterContextUnifiedCore.cpp	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/Plugins/Process/mach-core/RegisterContextUnifiedCore.cpp	2026-11-02 13:12:29.515669311 -0500
+@@ -286,7 +286,7 @@
+     DataExtractor regdata(m_register_data.data(), m_register_data.size(),
+                           process_sp->GetByteOrder(),
+                           process_sp->GetAddressByteSize());
+-    offset_t offset = reg_info->byte_offset;
++    lldb::offset_t offset = reg_info->byte_offset;
+     switch (reg_info->byte_size) {
+     case 2:
+       value.SetUInt16(regdata.GetU16(&offset));
+diff -ruN a/lldb/source/Plugins/Process/scripted/ScriptedProcess.cpp b/lldb/source/Plugins/Process/scripted/ScriptedProcess.cpp
+--- a/lldb/source/Plugins/Process/scripted/ScriptedProcess.cpp	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/Plugins/Process/scripted/ScriptedProcess.cpp	2026-11-02 13:12:29.516137867 -0500
+@@ -227,7 +227,7 @@
+   if (!data_extractor_sp || !data_extractor_sp->HasData() || error.Fail())
+     return 0;
+ 
+-  offset_t bytes_copied = data_extractor_sp->CopyByteOrderedData(
++  lldb::offset_t bytes_copied = data_extractor_sp->CopyByteOrderedData(
+       0, data_extractor_sp->GetByteSize(), buf, size, GetByteOrder());
+ 
+   if (!bytes_copied || bytes_copied == LLDB_INVALID_OFFSET)
+diff -ruN a/lldb/source/Plugins/Process/Utility/CMakeLists.txt b/lldb/source/Plugins/Process/Utility/CMakeLists.txt
+--- a/lldb/source/Plugins/Process/Utility/CMakeLists.txt	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/Plugins/Process/Utility/CMakeLists.txt	2026-11-02 13:12:29.516507856 -0500
+@@ -20,6 +20,7 @@
+   NativeRegisterContextRegisterInfo.cpp
+   NetBSDSignals.cpp
+   OpenBSDSignals.cpp
++  SolarisSignals.cpp
+   RegisterContext_x86.cpp
+   RegisterContextDarwin_arm.cpp
+   RegisterContextDarwin_arm64.cpp
+@@ -40,6 +41,7 @@
+   RegisterContextNetBSD_x86_64.cpp
+   RegisterContextOpenBSD_i386.cpp
+   RegisterContextOpenBSD_x86_64.cpp
++  RegisterContextSolaris_x86_64.cpp
+   RegisterContextPOSIX_arm.cpp
+   RegisterContextPOSIX_arm64.cpp
+   RegisterContextPOSIX_loongarch64.cpp
+diff -ruN a/lldb/source/Plugins/Process/Utility/RegisterContextDarwin_arm64.cpp b/lldb/source/Plugins/Process/Utility/RegisterContextDarwin_arm64.cpp
+--- a/lldb/source/Plugins/Process/Utility/RegisterContextDarwin_arm64.cpp	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/Plugins/Process/Utility/RegisterContextDarwin_arm64.cpp	2026-11-02 13:12:29.516785002 -0500
+@@ -382,7 +382,7 @@
+     if (process_sp.get()) {
+       DataExtractor regdata(&gpr.x[reg - gpr_w0], 8, process_sp->GetByteOrder(),
+                             process_sp->GetAddressByteSize());
+-      offset_t offset = 0;
++      lldb::offset_t offset = 0;
+       uint64_t retval = regdata.GetMaxU64(&offset, 8);
+       uint32_t retval_lower32 = static_cast<uint32_t>(retval & 0xffffffff);
+       value.SetUInt32(retval_lower32);
+@@ -461,7 +461,7 @@
+     if (process_sp.get()) {
+       DataExtractor regdata(&fpu.v[reg - fpu_s0], 4, process_sp->GetByteOrder(),
+                             process_sp->GetAddressByteSize());
+-      offset_t offset = 0;
++      lldb::offset_t offset = 0;
+       value.SetFloat(regdata.GetFloat(&offset));
+     }
+   } break;
+@@ -502,7 +502,7 @@
+     if (process_sp.get()) {
+       DataExtractor regdata(&fpu.v[reg - fpu_d0], 8, process_sp->GetByteOrder(),
+                             process_sp->GetAddressByteSize());
+-      offset_t offset = 0;
++      lldb::offset_t offset = 0;
+       value.SetDouble(regdata.GetDouble(&offset));
+     }
+   } break;
+diff -ruN a/lldb/source/Plugins/Process/Utility/RegisterContextSolaris_x86_64.cpp b/lldb/source/Plugins/Process/Utility/RegisterContextSolaris_x86_64.cpp
+--- a/lldb/source/Plugins/Process/Utility/RegisterContextSolaris_x86_64.cpp	1969-12-31 19:00:00.000000000 -0500
++++ b/lldb/source/Plugins/Process/Utility/RegisterContextSolaris_x86_64.cpp	2026-11-02 13:12:29.517151501 -0500
+@@ -0,0 +1,86 @@
++//===-- RegisterContextSolaris_x86_64.cpp ---------------------------------===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===---------------------------------------------------------------------===//
++
++#include "RegisterContextSolaris_x86_64.h"
++#include "RegisterContextPOSIX_x86.h"
++#include <vector>
++
++using namespace lldb_private;
++using namespace lldb;
++
++// illumos amd64 gregset_t order, <sys/regset.h> REG_R15 (0) .. REG_GSBASE (27);
++// lwpstatus_t.pr_reg in an NT_LWPSTATUS core note is this array.
++typedef struct _GPR {
++  uint64_t r15, r14, r13, r12, r11, r10, r9, r8;
++  uint64_t rdi, rsi, rbp, rbx, rdx, rcx, rax;
++  uint64_t trapno, err, rip, cs, rflags, rsp, ss;
++  uint64_t fs, gs, es, ds, fs_base, gs_base;
++} GPR;
++static_assert(sizeof(GPR) == 28 * 8, "illumos _NGREG is 28");
++
++struct DBG {
++  uint64_t dr[16]; /* debug registers */
++                   /* Index 0-3: debug address registers */
++                   /* Index 4-5: reserved */
++                   /* Index 6: debug status */
++                   /* Index 7: debug control */
++                   /* Index 8-15: reserved */
++};
++
++struct UserArea {
++  GPR gpr;
++  FPR fpr;
++  DBG dbg;
++};
++
++#define DR_OFFSET(reg_index) (LLVM_EXTENSION offsetof(DBG, dr[reg_index]))
++
++// Include RegisterInfos_x86_64 to declare our g_register_infos_x86_64
++// structure.
++#define DECLARE_REGISTER_INFOS_X86_64_STRUCT
++#include "RegisterInfos_x86_64.h"
++#undef DECLARE_REGISTER_INFOS_X86_64_STRUCT
++
++static const RegisterInfo *
++PrivateGetRegisterInfoPtr(const lldb_private::ArchSpec &target_arch) {
++  switch (target_arch.GetMachine()) {
++  case llvm::Triple::x86_64:
++    return g_register_infos_x86_64;
++  default:
++    assert(false && "Unhandled target architecture.");
++    return nullptr;
++  }
++}
++
++static uint32_t
++PrivateGetRegisterCount(const lldb_private::ArchSpec &target_arch) {
++  switch (target_arch.GetMachine()) {
++  case llvm::Triple::x86_64:
++    return static_cast<uint32_t>(sizeof(g_register_infos_x86_64) /
++                                 sizeof(g_register_infos_x86_64[0]));
++  default:
++    assert(false && "Unhandled target architecture.");
++    return 0;
++  }
++}
++
++RegisterContextSolaris_x86_64::RegisterContextSolaris_x86_64(
++    const ArchSpec &target_arch)
++    : lldb_private::RegisterInfoInterface(target_arch),
++      m_register_info_p(PrivateGetRegisterInfoPtr(target_arch)),
++      m_register_count(PrivateGetRegisterCount(target_arch)) {}
++
++size_t RegisterContextSolaris_x86_64::GetGPRSize() const { return sizeof(GPR); }
++
++const RegisterInfo *RegisterContextSolaris_x86_64::GetRegisterInfo() const {
++  return m_register_info_p;
++}
++
++uint32_t RegisterContextSolaris_x86_64::GetRegisterCount() const {
++  return m_register_count;
++}
+diff -ruN a/lldb/source/Plugins/Process/Utility/RegisterContextSolaris_x86_64.h b/lldb/source/Plugins/Process/Utility/RegisterContextSolaris_x86_64.h
+--- a/lldb/source/Plugins/Process/Utility/RegisterContextSolaris_x86_64.h	1969-12-31 19:00:00.000000000 -0500
++++ b/lldb/source/Plugins/Process/Utility/RegisterContextSolaris_x86_64.h	2026-11-02 13:12:29.517220012 -0500
+@@ -0,0 +1,30 @@
++//===-- RegisterContextSolaris_x86_64.h -------------------------*- C++ -*-===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++
++#ifndef LLDB_SOURCE_PLUGINS_PROCESS_UTILITY_REGISTERCONTEXTSOLARIS_X86_64_H
++#define LLDB_SOURCE_PLUGINS_PROCESS_UTILITY_REGISTERCONTEXTSOLARIS_X86_64_H
++
++#include "RegisterInfoInterface.h"
++
++class RegisterContextSolaris_x86_64
++    : public lldb_private::RegisterInfoInterface {
++public:
++  RegisterContextSolaris_x86_64(const lldb_private::ArchSpec &target_arch);
++
++  size_t GetGPRSize() const override;
++
++  const lldb_private::RegisterInfo *GetRegisterInfo() const override;
++
++  uint32_t GetRegisterCount() const override;
++
++private:
++  const lldb_private::RegisterInfo *m_register_info_p;
++  const uint32_t m_register_count;
++};
++
++#endif
+diff -ruN a/lldb/source/Plugins/Process/Utility/SolarisSignals.cpp b/lldb/source/Plugins/Process/Utility/SolarisSignals.cpp
+--- a/lldb/source/Plugins/Process/Utility/SolarisSignals.cpp	1969-12-31 19:00:00.000000000 -0500
++++ b/lldb/source/Plugins/Process/Utility/SolarisSignals.cpp	2026-11-02 13:12:29.517270175 -0500
+@@ -0,0 +1,50 @@
++//===-- SolarisSignals.cpp ------------------------------------------------===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++
++#include "SolarisSignals.h"
++
++using namespace lldb_private;
++
++SolarisSignals::SolarisSignals() : UnixSignals() { Reset(); }
++
++// illumos <sys/iso/signal_iso.h> numbering. 1-15 match the default (Darwin)
++// table; 16 up differ, and AddSignal does not overwrite, so drop them first.
++void SolarisSignals::Reset() {
++  UnixSignals::Reset();
++  for (int signo = 16; signo <= 41; ++signo)
++    RemoveSignal(signo);
++  // clang-format off
++  //        SIGNO  NAME          SUPPRESS STOP   NOTIFY DESCRIPTION
++  AddSignal(16,    "SIGUSR1",    false,   true,  true,  "user defined signal 1");
++  AddSignal(17,    "SIGUSR2",    false,   true,  true,  "user defined signal 2");
++  AddSignal(18,    "SIGCHLD",    false,   false, true,  "child status has changed", "SIGCLD");
++  AddSignal(19,    "SIGPWR",     false,   true,  true,  "power-fail restart");
++  AddSignal(20,    "SIGWINCH",   false,   false, true,  "window size changes");
++  AddSignal(21,    "SIGURG",     false,   false, true,  "urgent data on socket");
++  AddSignal(22,    "SIGPOLL",    false,   false, false, "pollable event", "SIGIO");
++  AddSignal(23,    "SIGSTOP",    true,    true,  true,  "process stop");
++  AddSignal(24,    "SIGTSTP",    false,   true,  true,  "tty stop");
++  AddSignal(25,    "SIGCONT",    false,   false, true,  "process continue");
++  AddSignal(26,    "SIGTTIN",    false,   true,  true,  "background tty read");
++  AddSignal(27,    "SIGTTOU",    false,   true,  true,  "background tty write");
++  AddSignal(28,    "SIGVTALRM",  false,   true,  true,  "virtual timer expired");
++  AddSignal(29,    "SIGPROF",    false,   false, false, "profiling timer expired");
++  AddSignal(30,    "SIGXCPU",    false,   true,  true,  "CPU limit exceeded");
++  AddSignal(31,    "SIGXFSZ",    false,   true,  true,  "file size limit exceeded");
++  AddSignal(32,    "SIGWAITING", false,   false, false, "reserved (was LWP pool)");
++  AddSignal(33,    "SIGLWP",     false,   false, false, "reserved (libc LWP signal)");
++  AddSignal(34,    "SIGFREEZE",  false,   true,  true,  "checkpoint freeze");
++  AddSignal(35,    "SIGTHAW",    false,   true,  true,  "checkpoint thaw");
++  AddSignal(36,    "SIGCANCEL",  false,   false, false, "thread cancellation");
++  AddSignal(37,    "SIGLOST",    false,   true,  true,  "resource lost");
++  AddSignal(38,    "SIGXRES",    false,   true,  true,  "resource control exceeded");
++  AddSignal(39,    "SIGJVM1",    false,   false, false, "reserved for Java VM");
++  AddSignal(40,    "SIGJVM2",    false,   false, false, "reserved for Java VM");
++  AddSignal(41,    "SIGINFO",    false,   true,  true,  "information request");
++  // clang-format on
++}
+diff -ruN a/lldb/source/Plugins/Process/Utility/SolarisSignals.h b/lldb/source/Plugins/Process/Utility/SolarisSignals.h
+--- a/lldb/source/Plugins/Process/Utility/SolarisSignals.h	1969-12-31 19:00:00.000000000 -0500
++++ b/lldb/source/Plugins/Process/Utility/SolarisSignals.h	2026-11-02 13:12:29.517391952 -0500
+@@ -0,0 +1,27 @@
++//===-- SolarisSignals.h ----------------------------------------*- C++ -*-===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++
++#ifndef LLDB_SOURCE_PLUGINS_PROCESS_UTILITY_SOLARISSIGNALS_H
++#define LLDB_SOURCE_PLUGINS_PROCESS_UTILITY_SOLARISSIGNALS_H
++
++#include "lldb/Target/UnixSignals.h"
++
++namespace lldb_private {
++
++/// Solaris specific set of Unix signals.
++class SolarisSignals : public UnixSignals {
++public:
++  SolarisSignals();
++
++private:
++  void Reset() override;
++};
++
++} // namespace lldb_private
++
++#endif // LLDB_SOURCE_PLUGINS_PROCESS_UTILITY_SOLARISSIGNALS_H
+diff -ruN a/lldb/source/Plugins/SystemRuntime/MacOSX/SystemRuntimeMacOSX.cpp b/lldb/source/Plugins/SystemRuntime/MacOSX/SystemRuntimeMacOSX.cpp
+--- a/lldb/source/Plugins/SystemRuntime/MacOSX/SystemRuntimeMacOSX.cpp	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/Plugins/SystemRuntime/MacOSX/SystemRuntimeMacOSX.cpp	2026-11-02 13:12:29.517720733 -0500
+@@ -825,7 +825,7 @@
+           //   introspection_dispatch_pending_item_info_s items[];
+           //   }
+ 
+-          offset_t offset = 0;
++          lldb::offset_t offset = 0;
+           uint64_t i = 0;
+           uint32_t version = extractor.GetU32(&offset);
+           if (version == 1) {
+@@ -932,7 +932,7 @@
+     DataExtractor extractor(data.GetBytes(), data.GetByteSize(),
+                             m_process->GetByteOrder(),
+                             m_process->GetAddressByteSize());
+-    offset_t offset = 0;
++    lldb::offset_t offset = 0;
+     uint64_t queues_read = 0;
+ 
+     // The information about the queues is stored in this format (v1): typedef
+@@ -949,7 +949,7 @@
+     // } introspection_dispatch_queue_info_s;
+ 
+     while (queues_read < count && offset < queues_buffer_size) {
+-      offset_t start_of_this_item = offset;
++      lldb::offset_t start_of_this_item = offset;
+ 
+       uint32_t offset_to_next = extractor.GetU32(&offset);
+ 
+@@ -966,7 +966,7 @@
+       if (queue_label == nullptr)
+         queue_label = "";
+ 
+-      offset_t start_of_next_item = start_of_this_item + offset_to_next;
++      lldb::offset_t start_of_next_item = start_of_this_item + offset_to_next;
+       offset = start_of_next_item;
+ 
+       LLDB_LOGF(log,
+@@ -993,7 +993,7 @@
+     lldb_private::DataExtractor &extractor) {
+   ItemInfo item;
+ 
+-  offset_t offset = 0;
++  lldb::offset_t offset = 0;
+ 
+   item.item_that_enqueued_this = extractor.GetAddress(&offset);
+   item.function_or_block = extractor.GetAddress(&offset);
+diff -ruN a/lldb/source/Symbol/ArmUnwindInfo.cpp b/lldb/source/Symbol/ArmUnwindInfo.cpp
+--- a/lldb/source/Symbol/ArmUnwindInfo.cpp	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/Symbol/ArmUnwindInfo.cpp	2026-11-02 13:12:29.518587175 -0500
+@@ -54,7 +54,7 @@
+ 
+   addr_t exidx_base_addr = m_arm_exidx_sp->GetFileAddress();
+ 
+-  offset_t offset = 0;
++  lldb::offset_t offset = 0;
+   while (m_arm_exidx_data.ValidOffset(offset)) {
+     lldb::addr_t file_addr = exidx_base_addr + offset;
+     lldb::addr_t addr = exidx_base_addr + (addr_t)offset +
+diff -ruN a/lldb/source/Symbol/CompactUnwindInfo.cpp b/lldb/source/Symbol/CompactUnwindInfo.cpp
+--- a/lldb/source/Symbol/CompactUnwindInfo.cpp	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/Symbol/CompactUnwindInfo.cpp	2026-11-02 13:12:29.519216238 -0500
+@@ -287,7 +287,7 @@
+   }
+ 
+   if (m_unwindinfo_data.GetByteSize() > 0) {
+-    offset_t offset = 0;
++    lldb::offset_t offset = 0;
+ 
+     // struct unwind_info_section_header
+     // {
+@@ -387,12 +387,12 @@
+   //         uint32_t        lsdaOffset;
+   // };
+ 
+-  offset_t first_entry = lsda_offset;
++  lldb::offset_t first_entry = lsda_offset;
+   uint32_t low = 0;
+   uint32_t high = lsda_count;
+   while (low < high) {
+     uint32_t mid = (low + high) / 2;
+-    offset_t offset = first_entry + (mid * 8);
++    lldb::offset_t offset = first_entry + (mid * 8);
+     uint32_t mid_func_offset =
+         m_unwindinfo_data.GetU32(&offset); // functionOffset
+     uint32_t mid_lsda_offset = m_unwindinfo_data.GetU32(&offset); // lsdaOffset
+@@ -416,14 +416,14 @@
+   //     uint32_t                    functionOffset;
+   //     compact_unwind_encoding_t    encoding;
+ 
+-  offset_t first_entry = entry_page_offset;
++  lldb::offset_t first_entry = entry_page_offset;
+ 
+   uint32_t low = 0;
+   uint32_t high = entry_count;
+   uint32_t last = high - 1;
+   while (low < high) {
+     uint32_t mid = (low + high) / 2;
+-    offset_t offset = first_entry + (mid * 8);
++    lldb::offset_t offset = first_entry + (mid * 8);
+     uint32_t mid_func_offset =
+         m_unwindinfo_data.GetU32(&offset); // functionOffset
+     uint32_t next_func_offset = 0;
+@@ -452,14 +452,14 @@
+     uint32_t entry_page_offset, uint32_t entry_count,
+     uint32_t function_offset_to_find, uint32_t function_offset_base,
+     uint32_t *entry_func_start_offset, uint32_t *entry_func_end_offset) {
+-  offset_t first_entry = entry_page_offset;
++  lldb::offset_t first_entry = entry_page_offset;
+ 
+   uint32_t low = 0;
+   uint32_t high = entry_count;
+   uint32_t last = high - 1;
+   while (low < high) {
+     uint32_t mid = (low + high) / 2;
+-    offset_t offset = first_entry + (mid * 4);
++    lldb::offset_t offset = first_entry + (mid * 4);
+     uint32_t entry = m_unwindinfo_data.GetU32(&offset); // entry
+     uint32_t mid_func_offset = UNWIND_INFO_COMPRESSED_ENTRY_FUNC_OFFSET(entry);
+     mid_func_offset += function_offset_base;
+@@ -537,11 +537,11 @@
+     unwind_info.valid_range_offset_end = next_it->function_offset;
+   }
+ 
+-  offset_t second_page_offset = it->second_level;
+-  offset_t lsda_array_start = it->lsda_array_start;
+-  offset_t lsda_array_count = (it->lsda_array_end - it->lsda_array_start) / 8;
++  lldb::offset_t second_page_offset = it->second_level;
++  lldb::offset_t lsda_array_start = it->lsda_array_start;
++  lldb::offset_t lsda_array_count = (it->lsda_array_end - it->lsda_array_start) / 8;
+ 
+-  offset_t offset = second_page_offset;
++  lldb::offset_t offset = second_page_offset;
+   uint32_t kind = m_unwindinfo_data.GetU32(
+       &offset); // UNWIND_SECOND_LEVEL_REGULAR or UNWIND_SECOND_LEVEL_COMPRESSED
+ 
+@@ -560,7 +560,7 @@
+         m_unwindinfo_data.GetU16(&offset);                    // entryPageOffset
+     uint16_t entry_count = m_unwindinfo_data.GetU16(&offset); // entryCount
+ 
+-    offset_t entry_offset = BinarySearchRegularSecondPage(
++    lldb::offset_t entry_offset = BinarySearchRegularSecondPage(
+         second_page_offset + entry_page_offset, entry_count, function_offset,
+         &unwind_info.valid_range_offset_start,
+         &unwind_info.valid_range_offset_end);
+@@ -587,7 +587,7 @@
+       if (personality_index > 0) {
+         personality_index--;
+         if (personality_index < m_unwind_header.personality_array_count) {
+-          offset_t offset = m_unwind_header.personality_array_offset;
++          lldb::offset_t offset = m_unwind_header.personality_array_offset;
+           offset += 4 * personality_index;
+           SectionList *sl = m_objfile.GetSectionList();
+           if (sl) {
+@@ -671,7 +671,7 @@
+       if (personality_index > 0) {
+         personality_index--;
+         if (personality_index < m_unwind_header.personality_array_count) {
+-          offset_t offset = m_unwind_header.personality_array_offset;
++          lldb::offset_t offset = m_unwind_header.personality_array_offset;
+           offset += 4 * personality_index;
+           SectionList *sl = m_objfile.GetSectionList();
+           if (sl) {
+diff -ruN a/lldb/source/Symbol/ObjectFile.cpp b/lldb/source/Symbol/ObjectFile.cpp
+--- a/lldb/source/Symbol/ObjectFile.cpp	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/Symbol/ObjectFile.cpp	2026-11-02 13:12:29.519991731 -0500
+@@ -187,7 +187,7 @@
+ 
+ bool ObjectFile::IsObjectFile(lldb_private::FileSpec file_spec) {
+   DataExtractorSP extractor_sp;
+-  offset_t data_offset = 0;
++  lldb::offset_t data_offset = 0;
+   ModuleSP module_sp = std::make_shared<Module>(file_spec);
+   return static_cast<bool>(ObjectFile::FindPlugin(
+       module_sp, &file_spec, 0, FileSystem::Instance().GetByteSize(file_spec),
+diff -ruN a/lldb/source/Symbol/SymbolVendor.cpp b/lldb/source/Symbol/SymbolVendor.cpp
+--- a/lldb/source/Symbol/SymbolVendor.cpp	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/Symbol/SymbolVendor.cpp	2026-11-02 13:12:29.520478810 -0500
+@@ -40,7 +40,7 @@
+   FileSpec sym_spec = module_sp->GetSymbolFileFileSpec();
+   if (sym_spec && sym_spec != module_sp->GetObjectFile()->GetFileSpec()) {
+     DataExtractorSP extractor_sp;
+-    offset_t data_offset = 0;
++    lldb::offset_t data_offset = 0;
+     sym_objfile_sp = ObjectFile::FindPlugin(
+         module_sp, &sym_spec, 0, FileSystem::Instance().GetByteSize(sym_spec),
+         extractor_sp, data_offset);
+diff -ruN a/lldb/source/Target/Process.cpp b/lldb/source/Target/Process.cpp
+--- a/lldb/source/Target/Process.cpp	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/Target/Process.cpp	2026-11-02 13:12:29.521625170 -0500
+@@ -2496,7 +2496,7 @@
+     }
+ 
+     DataExtractor data(range.data(), integer_byte_size, byte_order, addr_size);
+-    offset_t offset = 0;
++    lldb::offset_t offset = 0;
+     result.push_back(data.GetMaxU64(&offset, integer_byte_size));
+     assert(offset == integer_byte_size);
+   }
+diff -ruN a/lldb/source/Target/UnixSignals.cpp b/lldb/source/Target/UnixSignals.cpp
+--- a/lldb/source/Target/UnixSignals.cpp	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/Target/UnixSignals.cpp	2026-11-02 13:12:29.523824412 -0500
+@@ -11,6 +11,7 @@
+ #include "Plugins/Process/Utility/LinuxSignals.h"
+ #include "Plugins/Process/Utility/NetBSDSignals.h"
+ #include "Plugins/Process/Utility/OpenBSDSignals.h"
++#include "Plugins/Process/Utility/SolarisSignals.h"
+ #include "lldb/Host/HostInfo.h"
+ #include "lldb/Utility/ArchSpec.h"
+ #include <optional>
+@@ -38,6 +39,8 @@
+     return std::make_shared<NetBSDSignals>();
+   case llvm::Triple::OpenBSD:
+     return std::make_shared<OpenBSDSignals>();
++  case llvm::Triple::Solaris:
++    return std::make_shared<SolarisSignals>();
+   default:
+     return std::make_shared<UnixSignals>();
+   }
+diff -ruN a/lldb/source/Utility/DataExtractor.cpp b/lldb/source/Utility/DataExtractor.cpp
+--- a/lldb/source/Utility/DataExtractor.cpp	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/Utility/DataExtractor.cpp	2026-11-02 13:12:29.524872711 -0500
+@@ -41,21 +41,21 @@
+ using namespace lldb;
+ using namespace lldb_private;
+ 
+-static inline uint16_t ReadInt16(const unsigned char *ptr, offset_t offset) {
++static inline uint16_t ReadInt16(const unsigned char *ptr, lldb::offset_t offset) {
+   uint16_t value;
+   memcpy(&value, ptr + offset, 2);
+   return value;
+ }
+ 
+ static inline uint32_t ReadInt32(const unsigned char *ptr,
+-                                 offset_t offset = 0) {
++                                 lldb::offset_t offset = 0) {
+   uint32_t value;
+   memcpy(&value, ptr + offset, 4);
+   return value;
+ }
+ 
+ static inline uint64_t ReadInt64(const unsigned char *ptr,
+-                                 offset_t offset = 0) {
++                                 lldb::offset_t offset = 0) {
+   uint64_t value;
+   memcpy(&value, ptr + offset, 8);
+   return value;
+@@ -68,21 +68,21 @@
+ }
+ 
+ static inline uint16_t ReadSwapInt16(const unsigned char *ptr,
+-                                     offset_t offset) {
++                                     lldb::offset_t offset) {
+   uint16_t value;
+   memcpy(&value, ptr + offset, 2);
+   return llvm::byteswap<uint16_t>(value);
+ }
+ 
+ static inline uint32_t ReadSwapInt32(const unsigned char *ptr,
+-                                     offset_t offset) {
++                                     lldb::offset_t offset) {
+   uint32_t value;
+   memcpy(&value, ptr + offset, 4);
+   return llvm::byteswap<uint32_t>(value);
+ }
+ 
+ static inline uint64_t ReadSwapInt64(const unsigned char *ptr,
+-                                     offset_t offset) {
++                                     lldb::offset_t offset) {
+   uint64_t value;
+   memcpy(&value, ptr + offset, 8);
+   return llvm::byteswap<uint64_t>(value);
+@@ -126,7 +126,7 @@
+ 
+ // This constructor allows us to use data that is owned by someone else. The
+ // data must stay around as long as this object is valid.
+-DataExtractor::DataExtractor(const void *data, offset_t length,
++DataExtractor::DataExtractor(const void *data, lldb::offset_t length,
+                              ByteOrder endian, uint32_t addr_size)
+     : m_start(const_cast<uint8_t *>(static_cast<const uint8_t *>(data))),
+       m_end(const_cast<uint8_t *>(static_cast<const uint8_t *>(data)) + length),
+@@ -158,13 +158,13 @@
+ // the shared data will stay around as long as any object contains a reference
+ // to that data. The endian swap and address size settings are copied from
+ // "data".
+-DataExtractor::DataExtractor(const DataExtractor &data, offset_t offset,
+-                             offset_t length)
++DataExtractor::DataExtractor(const DataExtractor &data, lldb::offset_t offset,
++                             lldb::offset_t length)
+     : m_byte_order(data.m_byte_order), m_addr_size(data.m_addr_size),
+       m_data_sp() {
+   assert(m_addr_size >= 1 && m_addr_size <= 8);
+   if (data.ValidOffset(offset)) {
+-    offset_t bytes_available = data.GetByteSize() - offset;
++    lldb::offset_t bytes_available = data.GetByteSize() - offset;
+     if (length > bytes_available)
+       length = bytes_available;
+     SetData(data, offset, length);
+@@ -224,7 +224,7 @@
+ // and can extract from it. If this object refers to any shared data upon
+ // entry, the reference to that data will be released. Is SWAP is set to true,
+ // any data extracted will be endian swapped.
+-lldb::offset_t DataExtractor::SetData(const void *bytes, offset_t length,
++lldb::offset_t DataExtractor::SetData(const void *bytes, lldb::offset_t length,
+                                       ByteOrder endian) {
+   m_byte_order = endian;
+   m_data_sp.reset();
+@@ -249,8 +249,8 @@
+ // exist at least as long as this object refers to those bytes. The address
+ // size and endian swap settings are copied from the current values in "data".
+ lldb::offset_t DataExtractor::SetData(const DataExtractor &data,
+-                                      offset_t data_offset,
+-                                      offset_t data_length) {
++                                      lldb::offset_t data_offset,
++                                      lldb::offset_t data_length) {
+   m_addr_size = data.m_addr_size;
+   assert(m_addr_size >= 1 && m_addr_size <= 8);
+   // If "data" contains shared pointer to data, then we can use that
+@@ -282,8 +282,8 @@
+ // needed. The address size and endian swap settings will remain unchanged from
+ // their current settings.
+ lldb::offset_t DataExtractor::SetData(const DataBufferSP &data_sp,
+-                                      offset_t data_offset,
+-                                      offset_t data_length) {
++                                      lldb::offset_t data_offset,
++                                      lldb::offset_t data_length) {
+   m_start = m_end = nullptr;
+ 
+   if (data_length > 0) {
+@@ -317,7 +317,7 @@
+ // pointed to by "offset_ptr".
+ //
+ // RETURNS the byte that was extracted, or zero on failure.
+-uint8_t DataExtractor::GetU8(offset_t *offset_ptr) const {
++uint8_t DataExtractor::GetU8(lldb::offset_t *offset_ptr) const {
+   const uint8_t *data = static_cast<const uint8_t *>(GetData(offset_ptr, 1));
+   if (data)
+     return *data;
+@@ -330,7 +330,7 @@
+ // RETURNS the non-nullptr buffer pointer upon successful extraction of
+ // all the requested bytes, or nullptr when the data is not available in the
+ // buffer due to being out of bounds, or insufficient data.
+-void *DataExtractor::GetU8(offset_t *offset_ptr, void *dst,
++void *DataExtractor::GetU8(lldb::offset_t *offset_ptr, void *dst,
+                            uint32_t count) const {
+   const uint8_t *data =
+       static_cast<const uint8_t *>(GetData(offset_ptr, count));
+@@ -348,7 +348,7 @@
+ // "offset_ptr".
+ //
+ // RETURNS the uint16_t that was extracted, or zero on failure.
+-uint16_t DataExtractor::GetU16(offset_t *offset_ptr) const {
++uint16_t DataExtractor::GetU16(lldb::offset_t *offset_ptr) const {
+   uint16_t val = 0;
+   const uint8_t *data =
+       static_cast<const uint8_t *>(GetData(offset_ptr, sizeof(val)));
+@@ -361,7 +361,7 @@
+   return val;
+ }
+ 
+-uint16_t DataExtractor::GetU16_unchecked(offset_t *offset_ptr) const {
++uint16_t DataExtractor::GetU16_unchecked(lldb::offset_t *offset_ptr) const {
+   uint16_t val;
+   if (m_byte_order == endian::InlHostByteOrder())
+     val = ReadInt16(m_start, *offset_ptr);
+@@ -371,7 +371,7 @@
+   return val;
+ }
+ 
+-uint32_t DataExtractor::GetU32_unchecked(offset_t *offset_ptr) const {
++uint32_t DataExtractor::GetU32_unchecked(lldb::offset_t *offset_ptr) const {
+   uint32_t val;
+   if (m_byte_order == endian::InlHostByteOrder())
+     val = ReadInt32(m_start, *offset_ptr);
+@@ -381,7 +381,7 @@
+   return val;
+ }
+ 
+-uint64_t DataExtractor::GetU64_unchecked(offset_t *offset_ptr) const {
++uint64_t DataExtractor::GetU64_unchecked(lldb::offset_t *offset_ptr) const {
+   uint64_t val;
+   if (m_byte_order == endian::InlHostByteOrder())
+     val = ReadInt64(m_start, *offset_ptr);
+@@ -397,7 +397,7 @@
+ // RETURNS the non-nullptr buffer pointer upon successful extraction of
+ // all the requested bytes, or nullptr when the data is not available in the
+ // buffer due to being out of bounds, or insufficient data.
+-void *DataExtractor::GetU16(offset_t *offset_ptr, void *void_dst,
++void *DataExtractor::GetU16(lldb::offset_t *offset_ptr, void *void_dst,
+                             uint32_t count) const {
+   const size_t src_size = sizeof(uint16_t) * count;
+   const uint16_t *src =
+@@ -426,7 +426,7 @@
+ // "offset_ptr".
+ //
+ // RETURNS the uint32_t that was extracted, or zero on failure.
+-uint32_t DataExtractor::GetU32(offset_t *offset_ptr) const {
++uint32_t DataExtractor::GetU32(lldb::offset_t *offset_ptr) const {
+   uint32_t val = 0;
+   const uint8_t *data =
+       static_cast<const uint8_t *>(GetData(offset_ptr, sizeof(val)));
+@@ -446,7 +446,7 @@
+ // RETURNS the non-nullptr buffer pointer upon successful extraction of
+ // all the requested bytes, or nullptr when the data is not available in the
+ // buffer due to being out of bounds, or insufficient data.
+-void *DataExtractor::GetU32(offset_t *offset_ptr, void *void_dst,
++void *DataExtractor::GetU32(lldb::offset_t *offset_ptr, void *void_dst,
+                             uint32_t count) const {
+   const size_t src_size = sizeof(uint32_t) * count;
+   const uint32_t *src =
+@@ -475,7 +475,7 @@
+ // "offset_ptr".
+ //
+ // RETURNS the uint64_t that was extracted, or zero on failure.
+-uint64_t DataExtractor::GetU64(offset_t *offset_ptr) const {
++uint64_t DataExtractor::GetU64(lldb::offset_t *offset_ptr) const {
+   uint64_t val = 0;
+   const uint8_t *data =
+       static_cast<const uint8_t *>(GetData(offset_ptr, sizeof(val)));
+@@ -494,7 +494,7 @@
+ // Get multiple consecutive 64 bit values. Return true if the entire read
+ // succeeds and increment the offset pointed to by offset_ptr, else return
+ // false and leave the offset pointed to by offset_ptr unchanged.
+-void *DataExtractor::GetU64(offset_t *offset_ptr, void *void_dst,
++void *DataExtractor::GetU64(lldb::offset_t *offset_ptr, void *void_dst,
+                             uint32_t count) const {
+   const size_t src_size = sizeof(uint64_t) * count;
+   const uint64_t *src =
+@@ -519,13 +519,13 @@
+   return nullptr;
+ }
+ 
+-uint32_t DataExtractor::GetMaxU32(offset_t *offset_ptr,
++uint32_t DataExtractor::GetMaxU32(lldb::offset_t *offset_ptr,
+                                   size_t byte_size) const {
+   lldbassert(byte_size > 0 && byte_size <= 4 && "GetMaxU32 invalid byte_size!");
+   return GetMaxU64(offset_ptr, byte_size);
+ }
+ 
+-uint64_t DataExtractor::GetMaxU64(offset_t *offset_ptr,
++uint64_t DataExtractor::GetMaxU64(lldb::offset_t *offset_ptr,
+                                   size_t byte_size) const {
+   lldbassert(byte_size > 0 && byte_size <= 8 && "GetMaxU64 invalid byte_size!");
+   switch (byte_size) {
+@@ -549,7 +549,7 @@
+   return 0;
+ }
+ 
+-uint64_t DataExtractor::GetMaxU64_unchecked(offset_t *offset_ptr,
++uint64_t DataExtractor::GetMaxU64_unchecked(lldb::offset_t *offset_ptr,
+                                             size_t byte_size) const {
+   switch (byte_size) {
+   case 1:
+@@ -569,12 +569,12 @@
+   return 0;
+ }
+ 
+-int64_t DataExtractor::GetMaxS64(offset_t *offset_ptr, size_t byte_size) const {
++int64_t DataExtractor::GetMaxS64(lldb::offset_t *offset_ptr, size_t byte_size) const {
+   uint64_t u64 = GetMaxU64(offset_ptr, byte_size);
+   return llvm::SignExtend64(u64, 8 * byte_size);
+ }
+ 
+-uint64_t DataExtractor::GetMaxU64Bitfield(offset_t *offset_ptr, size_t size,
++uint64_t DataExtractor::GetMaxU64Bitfield(lldb::offset_t *offset_ptr, size_t size,
+                                           uint32_t bitfield_bit_size,
+                                           uint32_t bitfield_bit_offset) const {
+   assert(bitfield_bit_size <= 64);
+@@ -602,7 +602,7 @@
+   return uval64;
+ }
+ 
+-int64_t DataExtractor::GetMaxS64Bitfield(offset_t *offset_ptr, size_t size,
++int64_t DataExtractor::GetMaxS64Bitfield(lldb::offset_t *offset_ptr, size_t size,
+                                          uint32_t bitfield_bit_size,
+                                          uint32_t bitfield_bit_offset) const {
+   assert(size >= 1 && "GetMaxS64Bitfield size must be >= 1");
+@@ -623,15 +623,15 @@
+   return sval64;
+ }
+ 
+-float DataExtractor::GetFloat(offset_t *offset_ptr) const {
++float DataExtractor::GetFloat(lldb::offset_t *offset_ptr) const {
+   return Get<float>(offset_ptr, 0.0f);
+ }
+ 
+-double DataExtractor::GetDouble(offset_t *offset_ptr) const {
++double DataExtractor::GetDouble(lldb::offset_t *offset_ptr) const {
+   return Get<double>(offset_ptr, 0.0);
+ }
+ 
+-long double DataExtractor::GetLongDouble(offset_t *offset_ptr) const {
++long double DataExtractor::GetLongDouble(lldb::offset_t *offset_ptr) const {
+   long double val = 0.0;
+ #if defined(__i386__) || defined(__amd64__) || defined(__x86_64__) ||          \
+     defined(_M_IX86) || defined(_M_IA64) || defined(_M_X64)
+@@ -650,17 +650,17 @@
+ // extracting any address values.
+ //
+ // RETURNS the address that was extracted, or zero on failure.
+-uint64_t DataExtractor::GetAddress(offset_t *offset_ptr) const {
++uint64_t DataExtractor::GetAddress(lldb::offset_t *offset_ptr) const {
+   assert(m_addr_size >= 1 && m_addr_size <= 8);
+   return GetMaxU64(offset_ptr, m_addr_size);
+ }
+ 
+-uint64_t DataExtractor::GetAddress_unchecked(offset_t *offset_ptr) const {
++uint64_t DataExtractor::GetAddress_unchecked(lldb::offset_t *offset_ptr) const {
+   assert(m_addr_size >= 1 && m_addr_size <= 8);
+   return GetMaxU64_unchecked(offset_ptr, m_addr_size);
+ }
+ 
+-size_t DataExtractor::ExtractBytes(offset_t offset, offset_t length,
++size_t DataExtractor::ExtractBytes(lldb::offset_t offset, lldb::offset_t length,
+                                    ByteOrder dst_byte_order, void *dst) const {
+   const uint8_t *src = PeekData(offset, length);
+   if (src) {
+@@ -675,7 +675,7 @@
+ }
+ 
+ // Extract data as it exists in target memory
+-lldb::offset_t DataExtractor::CopyData(offset_t offset, offset_t length,
++lldb::offset_t DataExtractor::CopyData(lldb::offset_t offset, lldb::offset_t length,
+                                        void *dst) const {
+   const uint8_t *src = PeekData(offset, length);
+   if (src) {
+@@ -687,8 +687,8 @@
+ 
+ // Extract data and swap if needed when doing the copy
+ lldb::offset_t
+-DataExtractor::CopyByteOrderedData(offset_t src_offset, offset_t src_len,
+-                                   void *dst_void_ptr, offset_t dst_len,
++DataExtractor::CopyByteOrderedData(lldb::offset_t src_offset, lldb::offset_t src_len,
++                                   void *dst_void_ptr, lldb::offset_t dst_len,
+                                    ByteOrder dst_byte_order) const {
+   // Validate the source info
+   if (!ValidOffsetForDataOfSize(src_offset, src_len))
+@@ -781,7 +781,7 @@
+ // If the offset pointed to by "offset_ptr" is out of bounds, or if "length" is
+ // non-zero and there aren't enough available bytes, nullptr will be returned
+ // and "offset_ptr" will not be updated.
+-const char *DataExtractor::GetCStr(offset_t *offset_ptr) const {
++const char *DataExtractor::GetCStr(lldb::offset_t *offset_ptr) const {
+   const char *start = reinterpret_cast<const char *>(PeekData(*offset_ptr, 1));
+   // Already at the end of the data.
+   if (!start)
+@@ -811,7 +811,7 @@
+ // plus the length of the field is out of bounds, or if the field does not
+ // contain a NULL terminator byte, nullptr will be returned and "offset_ptr"
+ // will not be updated.
+-const char *DataExtractor::GetCStr(offset_t *offset_ptr, offset_t len) const {
++const char *DataExtractor::GetCStr(lldb::offset_t *offset_ptr, lldb::offset_t len) const {
+   const char *cstr = reinterpret_cast<const char *>(PeekData(*offset_ptr, len));
+   if (cstr != nullptr) {
+     if (memchr(cstr, '\0', len) == nullptr) {
+@@ -829,7 +829,7 @@
+ //
+ // Returns a valid C string pointer if "offset" is a valid offset in this
+ // object's data, else nullptr is returned.
+-const char *DataExtractor::PeekCStr(offset_t offset) const {
++const char *DataExtractor::PeekCStr(lldb::offset_t offset) const {
+   return reinterpret_cast<const char *>(PeekData(offset, 1));
+ }
+ 
+@@ -839,7 +839,7 @@
+ // byte.
+ //
+ // Returned the extracted integer value.
+-uint64_t DataExtractor::GetULEB128(offset_t *offset_ptr) const {
++uint64_t DataExtractor::GetULEB128(lldb::offset_t *offset_ptr) const {
+   const uint8_t *src = PeekData(*offset_ptr, 1);
+   if (src == nullptr)
+     return 0;
+@@ -856,7 +856,7 @@
+ // byte.
+ //
+ // Returned the extracted integer value.
+-int64_t DataExtractor::GetSLEB128(offset_t *offset_ptr) const {
++int64_t DataExtractor::GetSLEB128(lldb::offset_t *offset_ptr) const {
+   const uint8_t *src = PeekData(*offset_ptr, 1);
+   if (src == nullptr)
+     return 0;
+@@ -873,7 +873,7 @@
+ // extracted byte.
+ //
+ // Returns the number of bytes consumed during the extraction.
+-uint32_t DataExtractor::Skip_LEB128(offset_t *offset_ptr) const {
++uint32_t DataExtractor::Skip_LEB128(lldb::offset_t *offset_ptr) const {
+   uint32_t bytes_consumed = 0;
+   const uint8_t *src = PeekData(*offset_ptr, 1);
+   if (src == nullptr)
+@@ -899,15 +899,15 @@
+ // printf style formatting string. If "type_format" is nullptr, then an
+ // appropriate format string will be used for the supplied "type". If the
+ // stream "s" is nullptr, then the output will be send to Log().
+-lldb::offset_t DataExtractor::PutToLog(Log *log, offset_t start_offset,
+-                                       offset_t length, uint64_t base_addr,
++lldb::offset_t DataExtractor::PutToLog(Log *log, lldb::offset_t start_offset,
++                                       lldb::offset_t length, uint64_t base_addr,
+                                        uint32_t num_per_line,
+                                        DataExtractor::Type type) const {
+   if (log == nullptr)
+     return start_offset;
+ 
+-  offset_t offset;
+-  offset_t end_offset;
++  lldb::offset_t offset;
++  lldb::offset_t end_offset;
+   uint32_t count;
+   StreamString sstr;
+   for (offset = start_offset, end_offset = offset + length, count = 0;
+@@ -999,7 +999,7 @@
+   return true;
+ }
+ 
+-bool DataExtractor::Append(void *buf, offset_t length) {
++bool DataExtractor::Append(void *buf, lldb::offset_t length) {
+   if (buf == nullptr)
+     return false;
+ 
+@@ -1045,8 +1045,8 @@
+   dest.append(result.begin(), result.end());
+ }
+ 
+-DataExtractorSP DataExtractor::GetSubsetExtractorSP(offset_t offset,
+-                                                    offset_t length) {
++DataExtractorSP DataExtractor::GetSubsetExtractorSP(lldb::offset_t offset,
++                                                    lldb::offset_t length) {
+   DataExtractorSP new_sp = std::make_shared<DataExtractor>(
+       GetSharedDataBuffer(), GetByteOrder(), GetAddressByteSize());
+   new_sp->SetData(GetSharedDataBuffer(), GetSharedDataOffset() + offset,
+@@ -1054,6 +1054,6 @@
+   return new_sp;
+ }
+ 
+-DataExtractorSP DataExtractor::GetSubsetExtractorSP(offset_t offset) {
++DataExtractorSP DataExtractor::GetSubsetExtractorSP(lldb::offset_t offset) {
+   return GetSubsetExtractorSP(offset, GetByteSize() - offset);
+ }
+diff -ruN a/lldb/source/Utility/VirtualDataExtractor.cpp b/lldb/source/Utility/VirtualDataExtractor.cpp
+--- a/lldb/source/Utility/VirtualDataExtractor.cpp	2026-10-19 19:57:12.000000000 -0400
++++ b/lldb/source/Utility/VirtualDataExtractor.cpp	2026-11-02 13:12:29.525664913 -0500
+@@ -13,7 +13,7 @@
+ using namespace lldb_private;
+ 
+ VirtualDataExtractor::VirtualDataExtractor(const void *data,
+-                                           offset_t data_length,
++                                           lldb::offset_t data_length,
+                                            ByteOrder byte_order,
+                                            uint32_t addr_size,
+                                            LookupTable lookup_table)
+@@ -38,13 +38,13 @@
+ }
+ 
+ const VirtualDataExtractor::LookupTable::Entry *
+-VirtualDataExtractor::FindEntry(offset_t virtual_addr) const {
++VirtualDataExtractor::FindEntry(lldb::offset_t virtual_addr) const {
+   // Use RangeDataVector's binary search instead of linear search.
+   return m_lookup_table.FindEntryThatContains(virtual_addr);
+ }
+ 
+-bool VirtualDataExtractor::ValidateVirtualRead(offset_t virtual_addr,
+-                                               offset_t length) const {
++bool VirtualDataExtractor::ValidateVirtualRead(lldb::offset_t virtual_addr,
++                                               lldb::offset_t length) const {
+   const LookupTable::Entry *entry = FindEntry(virtual_addr);
+   if (!entry)
+     return false;
+@@ -56,17 +56,17 @@
+ 
+   // Also validate that the physical offset is within the data buffer.
+   // RangeData.data contains the physical offset.
+-  offset_t physical_offset = entry->data + (virtual_addr - entry->base);
++  lldb::offset_t physical_offset = entry->data + (virtual_addr - entry->base);
+   return ValidOffsetForDataOfSize(physical_offset, length);
+ }
+ 
+-const void *VirtualDataExtractor::GetData(offset_t *offset_ptr,
+-                                          offset_t length) const {
++const void *VirtualDataExtractor::GetData(lldb::offset_t *offset_ptr,
++                                          lldb::offset_t length) const {
+   // Override to treat offset as virtual address.
+   if (!offset_ptr)
+     return nullptr;
+ 
+-  offset_t virtual_addr = *offset_ptr;
++  lldb::offset_t virtual_addr = *offset_ptr;
+ 
+   if (!ValidateVirtualRead(virtual_addr, length))
+     return nullptr;
+@@ -74,7 +74,7 @@
+   const LookupTable::Entry *entry = FindEntry(virtual_addr);
+   assert(entry && "ValidateVirtualRead should have found an entry");
+ 
+-  offset_t physical_offset = entry->data + (virtual_addr - entry->base);
++  lldb::offset_t physical_offset = entry->data + (virtual_addr - entry->base);
+   // Use base class PeekData directly to avoid recursion.
+   const void *result = DataExtractor::PeekData(physical_offset, length);
+ 
+@@ -86,7 +86,7 @@
+   return result;
+ }
+ 
+-offset_t VirtualDataExtractor::SetData(const void *bytes, lldb::offset_t length,
++lldb::offset_t VirtualDataExtractor::SetData(const void *bytes, lldb::offset_t length,
+                                        lldb::ByteOrder byte_order) {
+   // Invoked from the base class ctor.
+   if (!m_data_sp || m_start == nullptr)
+@@ -105,7 +105,7 @@
+   return GetVirtualByteSize();
+ }
+ 
+-offset_t VirtualDataExtractor::SetData(const DataExtractor &data,
++lldb::offset_t VirtualDataExtractor::SetData(const DataExtractor &data,
+                                        lldb::offset_t offset,
+                                        lldb::offset_t length) {
+   // Invoked from the base class ctor
+@@ -125,7 +125,7 @@
+   return GetVirtualByteSize();
+ }
+ 
+-offset_t VirtualDataExtractor::SetData(const lldb::DataBufferSP &data_sp,
++lldb::offset_t VirtualDataExtractor::SetData(const lldb::DataBufferSP &data_sp,
+                                        lldb::offset_t offset,
+                                        lldb::offset_t length) {
+   // Invoked from the base class ctor
+@@ -160,8 +160,8 @@
+ }
+ 
+ uint64_t VirtualDataExtractor::GetVirtualByteSize() const {
+-  offset_t lowest = -1ULL;
+-  offset_t highest = 0;
++  lldb::offset_t lowest = -1ULL;
++  lldb::offset_t highest = 0;
+   for (const auto ent : m_lookup_table) {
+     lowest = std::min(lowest, ent.base);
+     highest = std::max(highest, ent.base + ent.size);
+@@ -173,23 +173,23 @@
+   return m_end - m_start;
+ }
+ 
+-offset_t VirtualDataExtractor::VirtualBytesLeft(offset_t virtual_offset) const {
+-  const offset_t size = GetVirtualByteSize();
++lldb::offset_t VirtualDataExtractor::VirtualBytesLeft(lldb::offset_t virtual_offset) const {
++  const lldb::offset_t size = GetVirtualByteSize();
+   if (size > virtual_offset)
+     return size - virtual_offset;
+   return 0;
+ }
+ 
+-offset_t
+-VirtualDataExtractor::PhysicalBytesLeft(offset_t physical_offset) const {
+-  const offset_t size = m_end - m_start;
++lldb::offset_t
++VirtualDataExtractor::PhysicalBytesLeft(lldb::offset_t physical_offset) const {
++  const lldb::offset_t size = m_end - m_start;
+   if (size > physical_offset)
+     return size - physical_offset;
+   return 0;
+ }
+ 
+-const uint8_t *VirtualDataExtractor::PeekData(offset_t offset,
+-                                              offset_t length) const {
++const uint8_t *VirtualDataExtractor::PeekData(lldb::offset_t offset,
++                                              lldb::offset_t length) const {
+   // Override to treat offset as virtual address.
+   if (!ValidateVirtualRead(offset, length))
+     return nullptr;
+@@ -197,50 +197,50 @@
+   const LookupTable::Entry *entry = FindEntry(offset);
+   assert(entry && "ValidateVirtualRead should have found an entry");
+ 
+-  offset_t physical_offset = entry->data + (offset - entry->base);
++  lldb::offset_t physical_offset = entry->data + (offset - entry->base);
+   // Use the base class PeekData with the physical offset.
+   return DataExtractor::PeekData(physical_offset, length);
+ }
+ 
+-uint8_t VirtualDataExtractor::GetU8_unchecked(offset_t *offset_ptr) const {
+-  offset_t virtual_addr = *offset_ptr;
++uint8_t VirtualDataExtractor::GetU8_unchecked(lldb::offset_t *offset_ptr) const {
++  lldb::offset_t virtual_addr = *offset_ptr;
+   const LookupTable::Entry *entry = FindEntry(virtual_addr);
+   assert(entry && "Unchecked methods require valid virtual address");
+ 
+-  offset_t physical_offset = entry->data + (virtual_addr - entry->base);
++  lldb::offset_t physical_offset = entry->data + (virtual_addr - entry->base);
+   uint8_t result = DataExtractor::GetU8_unchecked(&physical_offset);
+   *offset_ptr += 1;
+   return result;
+ }
+ 
+-uint16_t VirtualDataExtractor::GetU16_unchecked(offset_t *offset_ptr) const {
+-  offset_t virtual_addr = *offset_ptr;
++uint16_t VirtualDataExtractor::GetU16_unchecked(lldb::offset_t *offset_ptr) const {
++  lldb::offset_t virtual_addr = *offset_ptr;
+   const LookupTable::Entry *entry = FindEntry(virtual_addr);
+   assert(entry && "Unchecked methods require valid virtual address");
+ 
+-  offset_t physical_offset = entry->data + (virtual_addr - entry->base);
++  lldb::offset_t physical_offset = entry->data + (virtual_addr - entry->base);
+   uint16_t result = DataExtractor::GetU16_unchecked(&physical_offset);
+   *offset_ptr += 2;
+   return result;
+ }
+ 
+-uint32_t VirtualDataExtractor::GetU32_unchecked(offset_t *offset_ptr) const {
+-  offset_t virtual_addr = *offset_ptr;
++uint32_t VirtualDataExtractor::GetU32_unchecked(lldb::offset_t *offset_ptr) const {
++  lldb::offset_t virtual_addr = *offset_ptr;
+   const LookupTable::Entry *entry = FindEntry(virtual_addr);
+   assert(entry && "Unchecked methods require valid virtual address");
+ 
+-  offset_t physical_offset = entry->data + (virtual_addr - entry->base);
++  lldb::offset_t physical_offset = entry->data + (virtual_addr - entry->base);
+   uint32_t result = DataExtractor::GetU32_unchecked(&physical_offset);
+   *offset_ptr += 4;
+   return result;
+ }
+ 
+-uint64_t VirtualDataExtractor::GetU64_unchecked(offset_t *offset_ptr) const {
+-  offset_t virtual_addr = *offset_ptr;
++uint64_t VirtualDataExtractor::GetU64_unchecked(lldb::offset_t *offset_ptr) const {
++  lldb::offset_t virtual_addr = *offset_ptr;
+   const LookupTable::Entry *entry = FindEntry(virtual_addr);
+   assert(entry && "Unchecked methods require valid virtual address");
+ 
+-  offset_t physical_offset = entry->data + (virtual_addr - entry->base);
++  lldb::offset_t physical_offset = entry->data + (virtual_addr - entry->base);
+   uint64_t result = DataExtractor::GetU64_unchecked(&physical_offset);
+   *offset_ptr += 8;
+   return result;
+@@ -257,15 +257,15 @@
+ }
+ 
+ DataExtractorSP
+-VirtualDataExtractor::GetSubsetExtractorSP(offset_t virtual_offset,
+-                                           offset_t virtual_length) {
++VirtualDataExtractor::GetSubsetExtractorSP(lldb::offset_t virtual_offset,
++                                           lldb::offset_t virtual_length) {
+   const LookupTable::Entry *entry = FindEntry(virtual_offset);
+   if (!entry)
+     return MakeEmptySubsetExtractor(GetByteOrder(), GetAddressByteSize());
+ 
+   // Entry::data is the offset into the DataBuffer's actual start/end range
+   // Entry::base is the virtual address at the start of this region of data
+-  offset_t offset_into_entry_range = virtual_offset - entry->base;
++  lldb::offset_t offset_into_entry_range = virtual_offset - entry->base;
+   // A subset may not span more than one entry; a range that overflows this
+   // entry is unmappable.
+   if (offset_into_entry_range + virtual_length > entry->size)
+@@ -277,7 +277,7 @@
+   // the Subset, a bit tricky.  So we won't implement that until it's
+   // needed.
+ 
+-  offset_t physical_start = entry->data + offset_into_entry_range;
++  lldb::offset_t physical_start = entry->data + offset_into_entry_range;
+   std::shared_ptr<DataExtractor> new_sp = std::make_shared<DataExtractor>(
+       GetSharedDataBuffer(), GetByteOrder(), GetAddressByteSize());
+   new_sp->SetData(GetSharedDataBuffer(), physical_start, virtual_length);
+@@ -287,16 +287,16 @@
+ // Return a DataExtractorSP that contains a single LookupTable's entry; all
+ // bytes are guaranteed to be readable.
+ DataExtractorSP
+-VirtualDataExtractor::GetSubsetExtractorSP(offset_t virtual_offset) {
++VirtualDataExtractor::GetSubsetExtractorSP(lldb::offset_t virtual_offset) {
+   const LookupTable::Entry *entry = FindEntry(virtual_offset);
+   if (!entry)
+     return MakeEmptySubsetExtractor(GetByteOrder(), GetAddressByteSize());
+ 
+   // Entry::data is the offset into the DataBuffer's actual start/end range
+   // Entry::base is the virtual address at the start of this region of data
+-  offset_t offset_into_entry_range = virtual_offset - entry->base;
++  lldb::offset_t offset_into_entry_range = virtual_offset - entry->base;
+ 
+-  offset_t physical_start = entry->data + offset_into_entry_range;
++  lldb::offset_t physical_start = entry->data + offset_into_entry_range;
+   std::shared_ptr<DataExtractor> new_sp = std::make_shared<DataExtractor>(
+       GetSharedDataBuffer(), GetByteOrder(), GetAddressByteSize());
+   new_sp->SetData(GetSharedDataBuffer(), physical_start,
