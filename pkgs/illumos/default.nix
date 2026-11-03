@@ -438,7 +438,8 @@ let
   # solnix host (no /usr/gnu, no python3, no patch) rebuilds them. cliBase = the cli set without go/cargo (no cycle).
   cliBase = import ./cli { base = srcPkgs; inherit world graphics; goChain = null; cargoPkg = null; };
   hostfixTools = buildEnv { name = "solnix-hostfix-tools"; pathsToLink = [ "/bin" ];
-    paths = [ seedBuildTools srcPkgs.coreutils srcPkgs.findutils cliBase.gnupatch cliBase.cmake srcPkgs.pkgconf ]; };   # pkgconf: -sys crates' pkg-config
+    # bash: rust's `x install` runs install.sh as bare "bash" from PATH (P0 run n: rust-1.98 failed there); NixOS's PATH always has it
+    paths = [ seedBuildTools srcPkgs.coreutils srcPkgs.findutils cliBase.gnupatch cliBase.cmake srcPkgs.pkgconf srcPkgs.bash ]; };   # pkgconf: -sys crates' pkg-config
   # Go from source: go1.4 (C) -> 1.17 -> 1.20 -> 1.22 -> 1.24 -> 1.26 (./go.nix).
   goChain = import ./go.nix { inherit gcc world; gate = gate'; gccLib = gcc.lib; inherit (srcPkgs.nixChain) cacert;
     tools = hostfixTools; inherit (cliBase) python3; };
