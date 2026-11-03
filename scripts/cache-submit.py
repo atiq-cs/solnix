@@ -39,6 +39,12 @@ Signing: the OpenSSH ed25519 private key is converted in memory to PKCS#8 and
 handed to `openssl pkeyutl -rawin` through a 0600 temp file that is deleted
 after each signature. The key is never printed.
 
+Eval-anchored (protocol v2 (B), fleet4; infra docs/design/eval-anchored-rows.md): --eval ATTR SYSTEM COMMIT BRANCH
+[--flake-nar-hash H] submits ONE path that NO served row names, anchored to what packages.SYSTEM.ATTR evaluates to at COMMIT
+(on BRANCH: main or 26.11 only); /begin carries {"eval": {attr, system, commit, branch, flake_nar_hash}}. Its stamp must say
+drv-closure (the strict gate: no reviewed row stands behind it) and name exactly that eval (6th column); its deriver passes
+drv-gate --closure here. A path some row names plans EVAL-HAS-ROW (it goes the row way). It always ends a proposal.
+
 Tier 1 (protocol v2 (b), infra 20261103-v2b-live): a submission ends `proposed` (or `approved`) until an operator reviews
 it: the poll returns that state (`result: proposed`), and `--status <id>` polls it again later. /begin at the 2 GiB
 proposal cap answers 429 + Retry-After: `result: backoff <secs>` (wait, never a failure).
@@ -231,8 +237,8 @@ def unsigned_narinfo(f):
     return "".join(f"{k}: {f.get(k, '')}\n" for k in keys).encode()
 
 
-def drv_gate_leaf(f):
-    """None if the narinfo's Deriver passes scripts/drv-gate.sh --leaf in this store, else why (the FAIL lines)."""
+def drv_gate_leaf(f, mode="--leaf"):
+    """None if the narinfo's Deriver passes scripts/drv-gate.sh --leaf (eval: --closure) in this store, else why (the FAIL lines)."""
     drv = f.get("Deriver", "")
     if not drv:
         return "no Deriver in the narinfo"
@@ -240,18 +246,19 @@ def drv_gate_leaf(f):
     if not os.path.exists(drv):
         return f"deriver {drv} is not in this store (drv-gate cannot judge it)"
     gc = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gate-checks.py")
-    r = subprocess.run([sys.executable, gc, "drv", "--leaf", drv], capture_output=True, text=True)
+    r = subprocess.run([sys.executable, gc, "drv", mode, drv], capture_output=True, text=True)
     for l in r.stdout.splitlines():
         if l.startswith(("ALLOW ", "EXEMPT ")):
             print("  drv-gate: " + l[:300])
     if r.returncode == 0:
         return None
     fails = [l for l in r.stdout.splitlines() if l.startswith("FAIL ")] or [r.stderr.strip()[-300:]]
-    return "drv-gate --leaf: " + " | ".join(x[:240] for x in fails[:4])
+    return f"drv-gate {mode}: " + " | ".join(x[:240] for x in fails[:4])
 
 
-def stamped(d, sp, narhash):
-    """pre-submit-check.sh passed this exact path with this exact NarHash (stamp <nix32>.ok: path, NarHash, time, host)."""
+def stamped(d, sp, narhash, ev=None):
+    """pre-submit-check.sh passed this exact path with this exact NarHash (stamp <nix32>.ok: path, NarHash, time, host,
+    mode, [eval]); ev: the stamp must be drv-closure and name exactly this eval (eval:<attr>:<system>:<commit>:<branch>)."""
     if not narhash.startswith("sha256:"):
         return False
     try:
@@ -259,6 +266,8 @@ def stamped(d, sp, narhash):
     except OSError:
         return False
     if len(cols) < 2 or cols[0] != sp:
+        return False
+    if ev and (len(cols) < 6 or cols[4] != "drv-closure" or cols[5].strip() != ev):
         return False
     h = cols[1]
     if h.startswith("sha256-"):
@@ -308,17 +317,40 @@ def topo(objs):
 
 # ---- submit ----------------------------------------------------------------
 
-def begin_body(sp, f):
+def begin_body(sp, f, ev=None):
     h = STORE_RE.match(sp).group(1)
     common = {"store_path": sp, "nar_hash": f["NarHash"], "nar_size": int(f["NarSize"])}
-    return json.dumps({"objects": [dict(common, nar_key=f["URL"], compression="xz"),
-                                   dict(common, nar_key=h + ".narinfo", compression="none")]},
-                      separators=(",", ":")).encode()
+    b = {"objects": [dict(common, nar_key=f["URL"], compression="xz"), dict(common, nar_key=h + ".narinfo", compression="none")]}
+    if ev:
+        b["eval"] = ev
+    return json.dumps(b, separators=(",", ":")).encode()
 
 
-def submit_one(a, seed, sp, f):
+EVAL_BRANCHES = ("main", "26.11")  # our review of (B) §2.1: the published branches; a wave branch only when we name one
+
+
+def eval_obj(a):
+    """--eval ATTR SYSTEM COMMIT BRANCH [--flake-nar-hash] -> the /begin eval object, validated as infra's §4 does, or die."""
+    attr, system, commit, branch = a.eval
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,127}", attr) or "." in attr:
+        die(f"--eval attr {attr!r}: one level, [A-Za-z0-9][A-Za-z0-9._+-]{{0,127}}, no dots")
+    if not re.fullmatch(r"[a-z0-9_]+-[a-z]+", system):
+        die(f"--eval system {system!r}")
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        die(f"--eval commit {commit!r}: 40 lowercase hex")
+    if branch not in EVAL_BRANCHES:
+        die(f"--eval branch {branch!r} is not one of {', '.join(EVAL_BRANCHES)}")
+    ev = {"attr": attr, "system": system, "commit": commit, "branch": branch}
+    if a.flake_nar_hash:
+        if not re.fullmatch(r"sha256-[A-Za-z0-9+/]{43}=", a.flake_nar_hash):
+            die(f"--flake-nar-hash {a.flake_nar_hash!r}: sha256-<base64> (nix flake metadata --json .locked.narHash)")
+        ev["flake_nar_hash"] = a.flake_nar_hash
+    return ev
+
+
+def submit_one(a, seed, sp, f, ev=None):
     h = STORE_RE.match(sp).group(1)
-    body = begin_body(sp, f)
+    body = begin_body(sp, f, ev)
     code, resp = signed("POST", "/api/v1/cache/submit/begin", a.builder, seed, body)
     print(f"  begin: HTTP {code} {resp[:300].decode(errors='replace') if code != 200 else ''}")
     if code == 429:  # tier 1 over the proposal cap: back off, not a failure
@@ -389,7 +421,16 @@ def main():
     ap.add_argument("--poll", type=int, default=600, help="seconds to poll status after finalize")
     ap.add_argument("--status", metavar="ID", help="poll an earlier submission's status (for --poll s) and print `result: <state>`")
     ap.add_argument("--stamps", help="pre-submit-check.sh stamp dir (required with --submit for any builder but site-team)")
+    ap.add_argument("--eval", nargs=4, metavar=("ATTR", "SYSTEM", "COMMIT", "BRANCH"),
+                    help="eval-anchored: one path no row names, = packages.SYSTEM.ATTR at COMMIT on BRANCH (see above)")
+    ap.add_argument("--flake-nar-hash", help="with --eval: nix flake metadata --json <flake>?rev=COMMIT .locked.narHash")
     a = ap.parse_args()
+    ev = eval_obj(a) if a.eval else None
+    evs = "eval:" + ":".join(a.eval) if a.eval else None
+    if a.flake_nar_hash and not a.eval:
+        die("--flake-nar-hash goes with --eval")
+    if ev and not a.status and not (a.paths and a.stamps):
+        die("--eval needs --paths (one path) and --stamps (pre-submit-check.sh --eval passed it)")
 
     seed = None
     if a.key:
@@ -418,6 +459,8 @@ def main():
         if missing:
             die(f"{len(missing)} paths not in {a.cache_dir}: {sorted(missing)[:3]}")
         objs = {p: f for p, f in objs.items() if p in want}
+    if ev and len(objs) != 1:
+        die(f"--eval submits exactly one path ({len(objs)} given)")
     pinfo = json.load(open(a.pathinfo)) if a.pathinfo else {}
     outs, rsha = served_outs(a.recipes)
     print(f"recipes.tsv {a.recipes} sha256 {rsha}: {len(outs)} out rows")
@@ -435,13 +478,15 @@ def main():
                                             ("not in --pathinfo" if pinfo else None))
         if why:
             plan.append((sp, "BAD-LOCAL", why)); continue
-        if a.stamps and not stamped(a.stamps, sp, f["NarHash"]):
-            plan.append((sp, "NO-STAMP", f"no pre-submit stamp for NarHash {f['NarHash']} in {a.stamps}")); continue
+        if a.stamps and not stamped(a.stamps, sp, f["NarHash"], evs):
+            plan.append((sp, "NO-STAMP", f"no pre-submit stamp for NarHash {f['NarHash']}{' naming ' + evs + ' (drv-closure)' if evs else ''} in {a.stamps}")); continue
         if is_pub(sp):
             plan.append((sp, "PUBLISHED", "verifies under 8UNr")); continue
         refs = [("/nix/store/" + r) for r in f.get("References", "").split()]
         unpub = [r for r in refs if r != sp and not is_pub(r)]
-        if sp not in outs:
+        if ev and sp in outs:
+            plan.append((sp, "EVAL-HAS-ROW", "a served row names it: submit it the row way, not --eval"))
+        elif not ev and sp not in outs:
             plan.append((sp, "WAIT-AUTHORITY", "not an out row of the served recipes.tsv"))
         elif unpub:
             plan.append((sp, "WAIT-DEPS", "unpublished refs: " + " ".join(os.path.basename(r) for r in unpub)))
@@ -458,7 +503,7 @@ def main():
     for i, (sp, st, why) in enumerate(plan):
         if st != "READY":
             continue
-        bad = drv_gate_leaf(objs[sp])
+        bad = drv_gate_leaf(objs[sp], "--closure" if ev else "--leaf")
         if bad:
             plan[i] = (sp, "DRV-GATE-FAIL", bad)
 
@@ -474,7 +519,7 @@ def main():
     # rerun after the status reports promoted rather than chaining (the site is asynchronous).
     for sp in ready:
         f = objs[sp]
-        body = begin_body(sp, f)
+        body = begin_body(sp, f, ev)
         if not a.submit:
             print(f"DRY-RUN {sp}\n  begin body {body.decode()}")
             if seed:
@@ -482,7 +527,7 @@ def main():
             print("  narinfo to stage:\n    " + unsigned_narinfo(f).decode().replace("\n", "\n    ").rstrip())
             continue
         print(f"SUBMIT {sp}")
-        print(f"  result: {submit_one(a, seed, sp, f)}")
+        print(f"  result: {submit_one(a, seed, sp, f, ev)}")
 
 
 if __name__ == "__main__":

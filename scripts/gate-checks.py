@@ -8,6 +8,7 @@
   gate-checks.py closure <out>...        B12. no path of the runtime closure is marked not-for-cache
   gate-checks.py log <out> <log|->       L. the build log shows no host tool found or used (LOOPHOLES classes 1-3, 5)
   gate-checks.py stampkey <NarHash>      the stamp name pre-submit-check.sh writes and cache-submit.py --stamps requires
+  gate-checks.py inputs <drv>            the non-fixed-output input outs a build of <drv> needs (pre-submit-check.sh --eval)
   gate-checks.py selftest                every check against a crafted bad input (must FAIL) and a good one (must PASS)
 
 Prints one line per finding: "FAIL <check> <path>: <why>", "EXEMPT <check> <path>: <why>" or "WARN ...", then
@@ -1145,6 +1146,18 @@ def selftest():
         lines = []; rc = run_drv([leafroot], out=lines.append, ca_ok=ca, mode="leaf", served=srv)
         ok = rc != 0 and any(l.startswith("FAIL A0") for l in lines); bad += not ok
         print(f"{'ok ' if ok else 'BAD'} drv  {label}: {'PASS' if rc == 0 else 'FAIL'}" + ("" if ok else "\n    " + "\n    ".join(lines)))
+    # build_inputs (eval-anchored deps rule): a non-FOD input's out counts, a FOD's and an unpack-channel-of-FOD's don't,
+    # an input of an input counts too
+    fod = fake_drv("bifod", fod="0" * 64); unp = fake_drv("biunp", builder="builtin:unpack-channel", idrvs=[fod])
+    deep = fake_drv("bideep"); mid = fake_drv("bimid", idrvs=[deep, fod])
+    bir = fake_drv("biroot", idrvs=[mid, unp, tools])
+    po = lambda d: parse_drv(FAKE[d])["outputs"]["out"]["path"]
+    got = build_inputs(bir); want = sorted({po(mid), po(deep), T})
+    ok = got == want; bad += not ok
+    print(f"{'ok ' if ok else 'BAD'} drv  build_inputs: non-FOD inputs at any depth, FOD + unpack-channel excluded" + ("" if ok else f": {got} != {want}"))
+    unp2 = fake_drv("biunp2", builder="builtin:unpack-channel", idrvs=[deep]); got = build_inputs(fake_drv("biroot2", idrvs=[unp2]))
+    ok = po(unp2) in got and po(deep) in got; bad += not ok
+    print(f"{'ok ' if ok else 'BAD'} drv  build_inputs: unpack-channel of a NON-fixed input counts (and its input)" + ("" if ok else f": {got}"))
     # zlib 63big3dz: path-info narHash (SRI) and its narinfo NarHash name the same stamp
     k1 = stamp_key("sha256-aQCIZKWVcv6X8XFLJrazY5D6jm/QH5YUZd/iN3EJvB8=")
     ok = k1 == stamp_key("sha256:" + k1) and len(k1) == 52
@@ -1394,6 +1407,19 @@ def nix32(digest):
         out.append(NIX32[c & 0x1f])
     return "".join(out)
 
+def build_inputs(root):
+    """The non-fixed-output outs a build of root takes from its closure (each input drv's outputs some dependent names),
+    for the eval-anchored rule: every one must be published, or in the same batch (deps first on the drv graph). Fixed:
+    a pinned-hash output, or builtin:unpack-channel of fixed inputs only (it unpacks them, as the builder's cand() counts it)."""
+    clo = drv_closure([root]); need = {}
+    for d in clo.values():
+        for idp, onames in d["inputDrvs"].items(): need.setdefault(idp, set()).update(onames)
+    def fixed(dp):
+        d = clo[dp]
+        return all(o["hash"] for o in d["outputs"].values()) or (
+            d["builder"] == "builtin:unpack-channel" and len(d["inputDrvs"]) <= 1 and all(fixed(x) for x in d["inputDrvs"]))
+    return sorted({clo[dp]["outputs"][o]["path"] for dp, ons in need.items() if not fixed(dp) for o in ons if o in clo[dp]["outputs"]})
+
 def stamp_key(nar_hash):
     """sha256-<base64> (path-info) or sha256:<nix32> (narinfo) -> the nix32 digest, the stamp file's name."""
     import base64
@@ -1410,6 +1436,9 @@ def main(argv):
         if rest and rest[0] in ("--closure", "--leaf"): mode = rest[0][2:]; rest = rest[1:]
         return run_drv(rest, mode=mode)
     if cmd == "stampkey": print(stamp_key(rest[0])); return 0
+    if cmd == "inputs" and len(rest) == 1:
+        for o in build_inputs(rest[0]): print(o)
+        return 0
     if cmd == "selftest":
         bad = selftest(); print(f"SELFTEST {'PASS' if bad == 0 else 'FAIL'} ({bad} bad)"); return 1 if bad else 0
     if cmd in ("nar", "store", "closure") and rest: return run_out(cmd, rest)
