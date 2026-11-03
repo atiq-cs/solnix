@@ -42,7 +42,7 @@ rec {
       for f in "$out"/lib/perl5/*/*/Config_heavy.pl "$out"/lib/perl5/*/*/Config.pm; do chmod u+w "$f"; sed -i 's@/usr/gnu/bin/@@g' "$f"; done
       ! grep -n '/usr/gnu/' "$out"/lib/perl5/*/*/Config_heavy.pl "$out"/lib/perl5/*/*/Config.pm > "$W/perlgnu" \
         || { echo "FATAL: perl Config names /usr/gnu: $(head -3 "$W/perlgnu")" >&2; exit 1; }
-      ${chk ''"$out/bin/perl" -V:lns'' "^lns='ln -s';$"}
+      ${chk ''"$out/bin/perl" -V:lns'' "^lns=.ln -s.;$"}
       ${if hostTools == [ ] then "" else ''
       # no build-host search dir in the recorded configuration (chef recorded /usr/gnu/lib, /usr/ccs/lib and perl5=/bin/perl; dixi did not)
       for v in libpth glibpth loclibpth locincpth xlibpth ldflags lddlflags perl5 libspath; do
