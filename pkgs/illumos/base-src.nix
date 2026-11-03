@@ -347,7 +347,10 @@ let
     # (buildTools = [ ], exempt until the bootstrap-tools wave) has no store coreutils of its own yet: it keeps /usr/bin.
     wrapPath = if buildTools == [ ] then "/usr/bin" else "${coreutils}/bin:${needWorld}/usr/bin";
     pathGate = if buildTools == [ ] then "" else "${./path-gate.sh}";
-    args = [ "-c" ''
+    # the store libc's lib dirs in every link's RUNPATH, as NixOS's cc-wrapper adds glibc's: without them a program (iwm-driver's
+    # wpa-pmk, P0 run n) took libc.so.1 from the host's /lib/64 and failed the publish gate. The seed's text is untouched (it, and
+    # the gcc15 it builds, must not move): the edit is a text rewrite applied off the seed only.
+    args = map (t: if buildTools == [ ] then t else builtins.replaceStrings [ "-Wl,-R,%s/lib/amd64:%s/lib \"$@\"\\n' \\\n      \"$real\" \"$binutils\" \"$gccLib\" \"$gccLib\" > \"$f\"" "echo \"=== gcc-wrapper: C (64/32) and C++ hello run ===\" >&2" ] [ "-Wl,-R,%s/lib/amd64:%s/lib:%s/lib/amd64:%s/lib \"$@\"\\n' \\\n      \"$real\" \"$binutils\" \"$gccLib\" \"$gccLib\" \"${libcSlice}\" \"${libcSlice}\" > \"$f\"" "for x in hc64 hc32 hcc; do ldd ./$x | grep 'libc\\.so\\.1' | grep -q '=>[[:space:]]*/nix/store/' || { echo \"FATAL: gcc-wrapper: $x takes libc from the host\" >&2; exit 1; }; done\n      echo \"=== gcc-wrapper: C (64/32) and C++ hello run, libc from the store ===\" >&2" ] t) [ "-c" ''
       set -eu; export PATH=$wrapPath
       [ -z "$pathGate" ] || /usr/bin/bash "$pathGate"
       mkdir -p $out/bin
