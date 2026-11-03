@@ -19,6 +19,10 @@
 , bzip2Bin ? null   # bzip2 CLI for boost's .tar.bz2 (GNU tar runs bzip2 from PATH; the OI host had /usr/bin/bzip2)
 }:
 let seedPerlTools = seedTools;
+    # xz's configure, on solaris*, gives xzgrep/xzdiff/xzless/xzmore "#!/usr/xpg4/bin/sh" and a PATH=/usr/xpg4/bin prefix: host
+    # paths in the out (wave6 out-host-refs, P0 run i). /bin/sh is POSIX ksh93 on illumos; NixOS adds no PATH prefix. The seed
+    # instance keeps upstream's text (its xz is build-only and its drv must not move).
+    xzScripts = if hostTools == [ ] then "" else " gl_cv_posix_shell=/bin/sh --enable-path-for-scripts=no";
     withTools = extra: if hostTools == [ ] then { } else { nativeTools = builtins.filter (x: x != null) extra ++ hostTools; }; in
 # libSub: the 64-bit lib dir of the plain derivations below ("lib" on aarch64, LP64 only).
 # nixCxxFlags: extra CXXFLAGS for nix itself (aarch64: see aarch64/src.nix). "" keeps the x86 text byte-identical.
@@ -88,7 +92,7 @@ rec {
     src = { url = "https://github.com/tukaani-project/xz/releases/download/v5.8.1/xz-5.8.1.tar.gz";
             sha256 = "507825b599356c10dca1cd720c9d0d0c9d5400b9de300af00e4d1ea150795543"; };
     build = ''
-      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-nls --disable-doc
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-nls --disable-doc${xzScripts}
       gmake -j4; gmake install
     '';
   };

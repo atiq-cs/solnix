@@ -98,6 +98,9 @@ rec {
       # (chef: root-owned, 2026-10-31 01:28 = the wave3 build; as nixbld: 'cannot remove /etc/neomuttrc'). nixpkgs: the same split.
       gmake -j8; gmake install sysconfdir="$out/etc"
       [ -f "$out/etc/neomuttrc" ] || { echo "FATAL: neomuttrc not installed under \$out/etc" >&2; exit 1; }
+      # smime_keys is "#! /usr/bin/perl -w" (host perl; out-host-refs). The user's perl via env, -w as "use warnings".
+      sed -i '1s|^#! */usr/bin/perl -w$|#!/usr/bin/env perl\nuse warnings;|' "$out/libexec/neomutt/smime_keys"
+      head -2 "$out/libexec/neomutt/smime_keys" | grep -q '^use warnings;$' || { echo "FATAL: smime_keys #! not rewritten" >&2; exit 1; }
       ${chk ''"$out/bin/neomutt" -v </dev/null'' "^NeoMutt 20250510"}
       /usr/bin/elfdump -d "$out/bin/neomutt" | grep -q 'NEEDED.*libssl' || { echo "FATAL: neomutt without openssl" >&2; exit 1; }
     '';

@@ -247,6 +247,8 @@ let
       EOF
       gmake -j4 all
       gmake install
+      # NO_PERL leaves the fsmonitor-watchman sample hook on #!/usr/bin/perl (host; out-host-refs). /usr/bin/env perl: the user's.
+      sed -i '1s|^#!/usr/bin/perl$|#!/usr/bin/env perl|' "$out/share/git-core/templates/hooks/fsmonitor-watchman.sample"
     '';
   };
 
