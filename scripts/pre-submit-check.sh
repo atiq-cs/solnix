@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# pre-submit-check.sh [--leaf] <out> [<out>...] -- what a host (dixi, dixa, lixi) and our own submitter must pass before an out
+# pre-submit-check.sh [--leaf | --eval <attr> <system> <commit> <branch>] <out> [<out>...] -- what a host (dixi, dixa, lixi) and our own submitter must pass before an out
 # is offered to cache.solnix.io (we promised infra: no host publishes until this runs on it). Every out is checked on
 # THIS host, from its own store:
 #   1. row     the SERVED recipes.tsv has a row whose out column names this exact path (the authority the site uses)
@@ -17,6 +17,13 @@
 #              -D (LOOPHOLES.md classes 1-3, 5); a missing log FAILs (only the building host has it)
 #   8. deps    every reference has a narinfo on the cache, or is in this batch AHEAD of it (deps first); cache-submit.py
 #              then re-checks each reference under the 8UNr key before it submits
+# --eval <attr> <system> <commit> <branch> (protocol v2 (B), fleet4): ONE out with no served row, anchored instead to what
+#   packages.<system>.<attr> evaluates to at <commit> of $GATE_FLAKE (default git+https://git.solnix.io/solnix.git):
+#   1. row     replaced by `eval`: <branch> is main or 26.11, <commit> is 40 hex and an ancestor of that branch's head (a git
+#              clone of the flake: nix takes ?ref=<b>&rev=<c> for any c), the attr's outPath at c is this out, and no served
+#              row names it (a row's out goes the --leaf way); drv runs --closure (strict: no reviewed row stands behind it);
+#   8b. inputs every non-fixed-output out the build takes (gate-checks.py inputs) is served, or is in this batch ahead of it.
+#   The stamp's 6th column is eval:<attr>:<system>:<commit>:<branch> (cache-submit.py --eval requires it).
 # Then it prints an EVIDENCE line: whether this host has /usr/gnu (an OI build host, where a host tool can satisfy a
 # build silently) or not (a solnix host: only store tools exist, so the build is stronger evidence of store-only).
 # On PASS it writes a stamp $GATE_STAMP_DIR/<NarHash nix32>.ok (default ~/.cache/solnix-pre-submit) that
@@ -36,8 +43,15 @@ if [ "${1:-}" = --selftest ]; then
   bash "$here/publish-gate.sh" --selftest || rc=1
   exit $rc
 fi
-mode=--closure; [ "${1:-}" = --leaf ] && { mode=--leaf; shift; }
-[ $# -gt 0 ] || { echo "usage: pre-submit-check.sh [--leaf] <out>... | --selftest" >&2; exit 2; }
+mode=--closure; eva=""; [ "${1:-}" = --leaf ] && { mode=--leaf; shift; }
+if [ "${1:-}" = --eval ]; then
+  [ $# -ge 6 ] || { echo "usage: pre-submit-check.sh --eval <attr> <system> <commit> <branch> <out>..." >&2; exit 2; }
+  ea=$2 es=$3 ec=$4 eb=$5; shift 5; eva="eval:$ea:$es:$ec:$eb"; mode=--closure	# strict, whatever came before
+  case "$eb" in main|26.11) ;; *) echo "pre-submit: branch '$eb' is not main or 26.11" >&2; exit 2 ;; esac
+  echo "$ec" | grep -qx '[0-9a-f]\{40\}' && echo "$ea" | grep -qx '[A-Za-z0-9][A-Za-z0-9._+-]\{0,127\}' ||
+    { echo "pre-submit: --eval needs a 40-hex commit and a one-level attr" >&2; exit 2; }
+fi
+[ $# -gt 0 ] || { echo "usage: pre-submit-check.sh [--leaf | --eval <attr> <system> <commit> <branch>] <out>... | --selftest" >&2; exit 2; }
 # GATE_CACHE: another cache for the authority and deps steps (scripts/test-builder.sh's fixture cache). A stamp made against
 # it gets nothing past cache-submit.py --submit, which plans only against the served recipes.tsv and 8UNr-published refs.
 CACHE=${GATE_CACHE:-https://cache.solnix.io}
@@ -54,6 +68,14 @@ ocol=$(head -1 "$T/recipes.tsv" | tr '\t' '\n' | grep -n -x out | cut -d: -f1)
 awk -F'\t' -v c="$ocol" 'NR>1 && $c != "" {print $c}' "$T/recipes.tsv" | sort -u > "$T/outs"
 if [ -d /usr/gnu/bin ]; then ev="OI build host ($(uname -n)): /usr/gnu exists, so a host tool could have satisfied a build step unseen; WEAKER evidence than a build on a host without /usr/gnu"
 else ev="host without /usr/gnu ($(uname -n)): only store tools exist here, so this build is direct evidence of store-only"; fi
+if [ -n "$eva" ]; then
+  # the anchor: c on b (our own clone: nix's ?ref= is not checked against ?rev=), and the attr's out at c
+  fl=${GATE_FLAKE:-git+https://git.solnix.io/solnix.git}; fl=${fl%%\?*}
+  { git clone -q --bare --filter=blob:none "${fl#git+}" "$T/g.git" && git -C "$T/g.git" merge-base --is-ancestor "$ec" "refs/heads/$eb"; } > "$T/git" 2>&1 &&
+    eo=$(nix eval --raw "$fl?ref=$eb&rev=$ec#packages.$es.$ea.outPath" 2> "$T/eval") ||
+    { echo "pre-submit: $ec is not on $eb, or packages.$es.$ea does not evaluate there: $(tail -1 "$T/git" "$T/eval" 2>/dev/null | grep -v '^==' | tail -1)"; exit 1; }
+  echo "pre-submit: eval anchor $ea at $eb $ec = $eo"
+fi
 echo "pre-submit: authority $authority; $(wc -l < "$T/outs" | tr -d ' ') out rows; drv gate $mode"
 echo "EVIDENCE $ev"
 batch=" $* "; rc=0; seen=""
@@ -62,8 +84,11 @@ for p in "$@"; do
   case "$p" in /nix/store/*) ;; *) echo "FAIL $p: not a store path"; rc=1; continue ;; esac
   [ -e "$p" ] || { echo "FAIL $p: not in this store"; rc=1; continue; }
   echo "== $p"
-  # 1 row
-  if grep -qx -F "$p" "$T/outs"; then step row "PASS (served row names this out)"; else step row FAIL; why="$why no served row names this out;"; fi
+  # 1 row (--eval: the eval anchor instead, and no row may name the out)
+  if [ -n "$eva" ]; then
+    if grep -qx -F "$p" "$T/outs"; then step eval "FAIL (a served row names this out: --leaf, not --eval)"; why="$why has a row;"
+    elif [ "$p" = "$eo" ]; then step eval "PASS (packages.$es.$ea at $eb $ec)"; else step eval "FAIL (packages.$es.$ea at $ec is $eo)"; why="$why eval anchor;"; fi
+  elif grep -qx -F "$p" "$T/outs"; then step row "PASS (served row names this out)"; else step row FAIL; why="$why no served row names this out;"; fi
   # 2 drv
   d=$(nix-store -q --deriver "$p" 2>/dev/null)
   if bash "$here/drv-gate.sh" $mode "$p" > "$T/drv" 2>&1; then step drv "PASS $mode ($(tail -1 "$T/drv" | sed 's/^PASS [^ ]* //'))"
@@ -99,12 +124,20 @@ for p in "$@"; do
     case "$batch" in *" $r "*) miss="$miss $(basename "$r")(later in this batch: order deps first)";; *) miss="$miss $(basename "$r")";; esac
   done
   if [ -z "$miss" ]; then step deps PASS; else step deps "FAIL (not served:$miss)"; why="$why unserved references;"; fi
+  # 8b (--eval) every non-FOD input of the build served, or earlier in this batch: no reviewed row stands behind them
+  if [ -n "$eva" ]; then miss=""; n=0
+    for r in $("$py" "$here/gate-checks.py" inputs "$d" 2>/dev/null); do n=$((n + 1))
+      case "$seen" in *" $r "*) continue ;; esac; h=$(basename "$r" | cut -c1-32)
+      [ "$(curl -s -o /dev/null -w '%{http_code}' "$CACHE/$h.narinfo")" = 200 ] || miss="$miss $(basename "$r")"; done
+    if [ "$n" = 0 ] && ! "$py" "$here/gate-checks.py" inputs "$d" > /dev/null 2>&1; then step inputs "FAIL (cannot read $d)"; why="$why inputs;"
+    elif [ -z "$miss" ]; then step inputs "PASS ($n non-FOD input outs, all served)"; else step inputs "FAIL (not published:$miss)"; why="$why unpublished inputs;"; fi
+  fi
   seen="$seen $p "
   if [ -z "$why" ]; then
     nh=$(nix path-info --json "$p" 2>/dev/null | "$py" -c 'import json,sys; d=json.load(sys.stdin); d=d[0] if isinstance(d,list) else next(iter(d.values())); print(d["narHash"])')
     if [ -z "${GATE_RECIPES:-}" ] && [ -z "$nostamp" ] && [ -n "$nh" ]; then
       key=$("$py" "$here/gate-checks.py" stampkey "$nh")
-      printf '%s\t%s\t%s\t%s\t%s\n' "$p" "$nh" "$(date -u +%FT%TZ)" "$(uname -n)" "drv${mode#-}" > "$stamps/$key.ok"
+      printf '%s\t%s\t%s\t%s\t%s%s\n' "$p" "$nh" "$(date -u +%FT%TZ)" "$(uname -n)" "drv${mode#-}" "${eva:+	$eva}" > "$stamps/$key.ok"
       echo "PASS $p (stamp $stamps/$key.ok)"
     else echo "PASS $p (no stamp: ${GATE_RECIPES:+local recipes}${nostamp:+--check skipped})"; fi
   else echo "FAIL $p:$why"; rc=1; fi

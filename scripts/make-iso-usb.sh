@@ -421,6 +421,9 @@ grep -q 'Welcome to solnix' "$ISOROOT/boot/forth/menu.4th" 2>/dev/null || \
   { echo "FATAL: boot/forth/menu.4th lacks 'Welcome to solnix'" >&2; exit 1; }
 grep -q '^loader_brand="solnix"' "$ISOROOT/boot/loader.conf" || \
   { echo "FATAL: loader.conf lacks loader_brand=solnix" >&2; exit 1; }
+# loader_brand=solnix makes brand.4th include forth/brand-solnix.4th; without it the loader draws no brand at all.
+[ -s "$ISOROOT/boot/forth/brand-solnix.4th" ] && [ -s "$ISOROOT/boot/solnix-brand.png" ] || \
+  { echo "FATAL: loader_brand=solnix but boot/forth/brand-solnix.4th or boot/solnix-brand.png is missing (toplevel has no boot-brand)" >&2; exit 1; }
 echo "branding gate OK: menu.4th + loader.conf both say solnix"
 
 log "DONE: $ISO + $USB"

@@ -251,10 +251,22 @@ lay_boot() {
   done
 }
 lay_boot
+# The loader brand (boot.loader.brand): the toplevel's boot-brand tree (forth/brand-solnix.4th, solnix-brand.png,
+# conf.d/solnix-brand) laid over boot/. lay_boot keeps any file already there and beadm create clones the running BE,
+# so these are removed and laid again for every generation; a toplevel without boot-brand gets the stock brand back.
+lay_brand() {
+  _bf="forth/brand-solnix.4th solnix-brand.png conf.d/solnix-brand"
+  for _f in $_bf; do rm -f "boot/$_f"; done
+  _bb=$(rl "$R$TOP/boot-brand"); [ -n "$_bb" ] || return 0
+  for _f in $_bf; do
+    mkdir -p "boot/$(dirname "$_f")" && cp "$R$_bb/$_f" "boot/$_f" || die "laying the loader brand: $_bb/$_f"
+  done
+}
 # find ! -type l, not chmod -R, which follows links: boot/solaris/bin/root_archive
 # -> ../../../usr/sbin/root_archive resolves into the userland store path, and
 # chmod -R made that store file 0755 (measured on the X1's live store).
 find boot ! -type l -exec chmod u+w {} + 2>/dev/null
+lay_brand
 # platform/i86pc/amd64 holds bootadm's boot_archive: writable on a real BE. On a live
 # root its files are hard links into the store, so a chmod would make the STORE
 # writable; the live root builds no boot_archive there (step 8), so leave it.

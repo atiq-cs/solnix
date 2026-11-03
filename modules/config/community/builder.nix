@@ -12,6 +12,9 @@
 # publish (fleet3): a served row whose out is not on cache.solnix.io yet is built here and submitted with this host's own
 # builder id and key (agentId; solnix.builder.identityKeyFile, root-only, never in the store), through the gates in
 # scripts/ (pre-submit-check.sh --leaf, cache-submit.py). On by default for a dedicated, identified builder (dixi, dixa).
+# evalAnchored (fleet4, protocol v2 (B)): a queue job with no served row whose pname and version are what
+# packages.<system>.<attr> evaluates to at the head of main (or 26.11) is built and proposed with an `eval` anchor
+# (pre-submit-check.sh --eval: drv-gate --closure). Off until infra's evaluator is live; dry runs it up to the /begin.
 #
 # The bearer: one shared X-Solnix-Build secret (infra 2026-10-28), sops solnix secrets/build-queue-bearer.yaml key
 # `build-queue-bearer`. It is NEVER in the store: the operator places it, root-only (see docs/community-features.md).
@@ -30,7 +33,7 @@ let
     let r = lib.removePrefix (toString ../../.. + "/") (toString p); in
     lib.elem r [ "scripts" "pkgs" "pkgs/illumos" "pkgs/illumos/bootstrap-exempt.tsv" ] || lib.elem r (map (f: "scripts/" + f)
       [ "cache-submit.py" "pre-submit-check.sh" "drv-gate.sh" "publish-gate.sh" "gate-checks.py" "not-for-cache.tsv" "gate2-exemptions.tsv" ]); };
-  pub = cfg.publish != "off";
+  pub = cfg.publish != "off" || cfg.evalAnchored != "off";
   ded = cfg.profile == "dedicated";
   opp = cfg.profile == "opportunistic";
   str = v: if v == null then "auto" else toString v;
@@ -47,6 +50,7 @@ let
     BUILDER_BUSY_TICK_MIN = toString cfg.busyTickMin; BUILDER_BUSY_TICK_MAX = toString cfg.busyTickMax;
     BUILDER_WSWEEP = "${./solnix-wsweep.ksh}";   # stale fixed build dirs of killed builds (wave4)
     BUILDER_PUBLISH = { off = "0"; on = "1"; dry = "dry"; }.${cfg.publish};
+    BUILDER_EVAL = { off = "0"; on = "1"; dry = "dry"; }.${cfg.evalAnchored};
   } // lib.optionalAttrs pub {
     BUILDER_GATES = "${gates}"; BUILDER_PYTHON = "${s.python3}/bin/python3";
     GATE_GREP_DIR = "${s.gnugrep}/bin";   # publish-gate.sh needs GNU grep (-a -b -o); /usr/bin/grep comes first on its PATH
@@ -90,6 +94,15 @@ in
         (agentId) and key (solnix.builder.identityKeyFile), wait for it to be promoted, check it as an 8UNr-only client,
         then complete the queue job. dry: everything but the signed /begin. Default: on for a dedicated, identified builder.
       ''; };
+    evalAnchored = lib.mkOption { type = lib.types.enum [ "off" "on" "dry" ]; default = "off";
+      description = ''
+        Eval-anchored first publish (protocol v2 (B)): a queue job whose pname has no served row for this system, but whose
+        pname and target version are those of packages.<system>.<attr> at the head of main (else 26.11), is built here,
+        passes scripts/pre-submit-check.sh --eval (drv-gate --closure: its whole build chain store-only; every non-FOD input
+        published first), and is submitted as a proposal carrying {attr, system, commit, branch, flake_nar_hash}. The job is
+        completed only after it is promoted and an 8UNr-only client verified it. on needs publish on (the key and gates);
+        dry: every step up to the signed /begin. Off until infra's evaluator is live.
+      ''; };
     agentId = lib.mkOption { type = lib.types.strMatching "[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}"; default = config.networking.hostName;
       description = "agent_id sent to the queue (the host name)."; };
     # what builder-zone.nix runs in the zone: the same script and tools
@@ -98,7 +111,9 @@ in
   };
   config = lib.mkIf (a.build && config.solnix.builder.isolation == "none") {
     assertions = [ { assertion = cfg.tickMin <= cfg.tickMax && cfg.busyTickMin <= cfg.busyTickMax;
-      message = "solnix.cache.build: tickMin/busyTickMin must not exceed tickMax/busyTickMax."; } ];
+      message = "solnix.cache.build: tickMin/busyTickMin must not exceed tickMax/busyTickMax."; }
+      { assertion = cfg.evalAnchored != "on" || cfg.publish == "on";
+        message = "solnix.cache.build.evalAnchored = on needs publish = on (the host's key and gates submit it)."; } ];
     # the generation owns /etc/project: the gate's stock file (./project.stock, sha256 0b4ce25c..., = dixi's and dixa's) + ours
     environment.generatedEtc.project = builtins.readFile ./project.stock
       + "solnix-builder:4242:solnix idle queue builder::root:${cap}\n";

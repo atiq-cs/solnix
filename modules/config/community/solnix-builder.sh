@@ -25,6 +25,17 @@
 # the NAR (a key that signs nothing must not), then the job is claimed and completed done like a rebuilt one. Tier 1
 # (after 2026-11-13): proposed/approved wait in $BUILDER_STATE/pub/<out> and are polled on later ticks, a 429 backs off
 # Retry-After seconds; neither is a failure. A failed gate, a differing --check or a rejection is memo'd (tried/<drv>.pub).
+# Eval-anchored (protocol v2 (B), fleet4; BUILDER_EVAL=1, or dry: every step up to the signed /begin): a job whose pname has NO
+# served row for this system, but whose name (drv_for's rule: pname, _ or camelCase) is a packages.<system> attr at the head
+# of an allowed branch (BUILDER_EVAL_BRANCHES, main then 26.11; the gates accept no other) whose drv pname (attr pname, else
+# the name minus its version) and version are the job's pname and target (gate is not illumos-gate-proto), is built here
+# and submitted with {eval: attr, system, commit, branch, flake_nar_hash}. Before the build every non-fixed-output input of
+# its drv closure must be served (else it waits: deps first); pre-submit-check.sh --eval (drv-gate --closure, the strict
+# one: no reviewed row stands behind it, --check SAME, publish-gate, the log, the eval anchor) stamps it; it always ends a
+# proposal, polled like tier 1 at the commit first submitted ($BUILDER_STATE/pub/eval.<pname>); only after `promoted` and
+# the 8UNr client check is the job claimed and completed, with that commit.
+#   solnix-builder vote <attr> <commit> <branch> <NarHash> [pname]   the second vote on someone's (or, same-host, our own)
+#                    eval proposal: build that (attr, commit) here and complete the job with its NarHash and commit
 PATH=${BUILDER_PATH:-/usr/bin:/usr/sbin}
 : ${BUILDER_API:=https://builders.solnix.io/api/v1/build-queue} ${BUILDER_RECIPES:=https://cache.solnix.io/registry/recipes.tsv}
 : ${BUILDER_CACHE:=https://cache.solnix.io}
@@ -46,7 +57,10 @@ PATH=${BUILDER_PATH:-/usr/bin:/usr/sbin}
 # BUILDER_GATES: the dir with scripts/cache-submit.py, pre-submit-check.sh and the gates; BUILDER_SUBMIT: a test hook (the submitter)
 : ${BUILDER_GATES:=} ${BUILDER_PYTHON:=${GATE_PYTHON:-python3}} ${BUILDER_PUBLISH_POLL:=1800} ${BUILDER_PUBLISH_SLOTS:=4}
 : ${BUILDER_CACHE_KEY:=cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8=}
+# eval-anchored jobs: off unless set (module solnix.cache.build.evalAnchored); the branches whose heads are evaluated, in order
+: ${BUILDER_EVAL:=0} ${BUILDER_EVAL_BRANCHES:=main 26.11}
 J=$BUILDER_STATE C=0 flake=$BUILDER_FLAKE	# a job's state dir, its cores, the flake (locked once per tick)
+EA= EB= EC= EN= cx=	# an eval job's attr, branch, commit, flake narHash (set only in its own job); extra completion fields
 log() { printf '%(%Y-%m-%dT%H:%M:%SZ)T builder: %s\n' now "$*"; }
 bounded() {	# bounded <secs> <cmd...>: run it, TERM it after <secs> (illumos has no timeout(1)). A `nix store ls` against
 	# cache.solnix.io hung > 8 min on dixi (2026-10-29, past stalled-download-timeout), which would wedge the loop for good.
@@ -67,6 +81,8 @@ bounded() {	# bounded <secs> <cmd...>: run it, TERM it after <secs> (illumos has
 #                    out cannot add pages, so `done` would be false (a recipe fix)
 #   NO-MAN <outs>    manpage-missing, but the recipe says has_manpages=n (a recipe change, not a rebuild)
 #   NO-RECIPE        no served row at that (pname, version, system): not ours to guess
+#   EVAL <attr> <version> <branch> <rev>  (BUILDER_EVAL on) no served row has the pname for this system, and the head <rev> of
+#                    <branch> has packages.<system>.<attr> (drv_for's forms) whose drv pname and version ARE the job's
 #   OTHER-SYSTEM     a system this host does not build
 plan() {	# in claim order (priority ascending, then oldest): /build-queue/rows lists priority DESC, so deferred rows would come first
 	# commit first: IFS=tab collapses empty fields, and it is never empty ("-" when the listing has none)
@@ -76,7 +92,7 @@ plan() {	# in claim order (priority ascending, then oldest): /build-queue/rows l
 		[[ $s == "$BUILDER_SYSTEM" ]] || { print -r -- "$p OTHER-SYSTEM $s"; continue; }
 		n=${p%-"$v"}; [[ $n == openssl3 ]] && n=openssl	# the queue's pname for openssl-3 (recipes.tsv says openssl)
 		row=$(nawk -F'\t' -v n="$n" -v v="$v" -v s="$s" '$1==n && $2==v && $8==s {if (!f) f=$7; o=o (o ? "," : "") $9} END {if (o) print f "\t" o}' "$2")
-		[[ -z $row ]] && { print -r -- "$p NO-RECIPE $n $v"; continue; }
+		[[ -z $row ]] && { print -r -- "$p $(eplan "$n" "$v" "$2" "$p")"; continue; }
 		outs=${row#*$'\t'} flags=${row%%$'\t'*} d=BUILD
 		if [[ $why == *manpage-missing* ]]; then
 			[[ $flags == *has_manpages=n* ]] && { print -r -- "$p NO-MAN $outs"; continue; }
@@ -87,6 +103,54 @@ plan() {	# in claim order (priority ascending, then oldest): /build-queue/rows l
 		fi
 		print -r -- "$p BUILD $outs $v $rc"
 	done
+}
+eplan() {	# eplan <pname> <version> <recipes.tsv> <row pname>, in $(...): "EVAL <attr> <version> <branch> <rev>" when no served row has <pname>
+	# for this system and an allowed branch's head (eindex, in branch order) has an attr of drv_for's forms whose drv pname and
+	# version are exactly the job's (pkg-config is not pkgconf, gate is not illumos-gate-proto); else NO-RECIPE, saying why
+	typeset x=${1%-[0-9]*} c= w u
+	[[ $BUILDER_EVAL != 0 && -s $BUILDER_STATE/eindex ]] &&
+	    ! nawk -F'\t' -v n="$1" -v s="$BUILDER_SYSTEM" 'NR > 1 && $1 == n && $8 == s {f = 1} END {exit !f}' "$3" || { print -r -- "NO-RECIPE $1 $2"; return; }
+	# a proposal pending from an earlier tick is followed at its own commit, even once the head has moved on or lost the attr
+	x=$BUILDER_STATE/pub/eval.${4//[!A-Za-z0-9._+-]/_}; [[ -s $x ]] && { read -r c w u < "$x"; print -r -- "EVAL $c $2 $w $u"; return; }
+	x=${1%-[0-9]*} c=
+	for w in ${x//-/ }; do if [[ -z $c ]]; then c=$w; else typeset -u u=${w:0:1}; c=$c$u${w:1}; fi; done
+	nawk -F'\t' -v n="$1" -v v="$2" -v f=" $x ${x//-/_} $c " 'index(f, " " $3 " ") {
+		if ($4 == n && $5 == v) { print "EVAL " $3 " " v " " $1 " " $2; ok = 1; exit }
+		if (!m) m = "packages." $3 " at " $1 " is " $4 ($5 != "" ? " " $5 : "") }
+	    END { if (!ok) print "NO-RECIPE " n " " v (m ? " (" m ": not this job)" : "") }' "$BUILDER_STATE/eindex"
+}
+eids() {	# eids <branch> <rev>: print $BUILDER_STATE/eval/<rev>.<system>.ids ("<attr>\t<pname>\t<version>" per packages.<system>
+	# attr: the drv attr pname, else the name minus its version), evaluated once per rev and kept (an eval at a fixed rev never changes)
+	typeset ik=$BUILDER_STATE/eval/$2.$BUILDER_SYSTEM.ids iu=${BUILDER_FLAKE%%\?*}
+	mkdir -p "${ik%/*}"
+	[[ -s $ik ]] || { bounded 900 nix eval --json "$iu?ref=$1&rev=$2#packages.$BUILDER_SYSTEM" --apply 'builtins.mapAttrs (n: d: let
+	    t = builtins.tryEval (if builtins.isAttrs d then (let x = builtins.parseDrvName (d.name or "");
+	      in "${toString (d.pname or x.name)}\t${toString (d.version or x.version)}") else "\t");
+	    in if t.success then t.value else "\t")' 2> /dev/null | jq -r 'to_entries[] | "\(.key)\t\(.value)"' > "$ik.${J##*/}" &&
+	    [[ -s $ik.${J##*/} ]] && mv "$ik.${J##*/}" "$ik"; rm -f "$ik.${J##*/}"; }
+	[[ -s $ik ]] && print -r -- "$ik"
+}
+eindex() {	# eindex: $BUILDER_STATE/eindex = "<branch>\t<rev>\t<attr>\t<pname>\t<version>" for the heads of BUILDER_EVAL_BRANCHES (in
+	# order; only main and 26.11: the gates take no other), from the clone fetched here (onbranch() reads the same clone)
+	typeset eb er ei eg=$BUILDER_STATE/solnix.git
+	: > "$BUILDER_STATE/eindex"; [[ $BUILDER_EVAL != 0 && $BUILDER_FLAKE == git+* ]] || return 0; eclone
+	for eb in $BUILDER_EVAL_BRANCHES; do
+		[[ $eb == @(main|26.11) ]] || { log "eval: branch $eb is not main or 26.11: never evaluated"; continue; }
+		er=$(git -C "$eg" rev-parse -q --verify "refs/heads/$eb^{commit}" 2> /dev/null) && ei=$(eids "$eb" "$er") ||
+		    { log "eval: no head or no packages.$BUILDER_SYSTEM eval for $eb"; continue; }
+		nawk -v b="$eb" -v r="$er" '{print b "\t" r "\t" $0}' "$ei" >> "$BUILDER_STATE/eindex"
+	done
+	log "eval: $(wc -l < "$BUILDER_STATE/eindex" | tr -d ' ') attrs at the heads of $BUILDER_EVAL_BRANCHES"
+}
+eclone() {	# the bare clone of BUILDER_FLAKE's repo (origins() shares it), every head fetched now
+	typeset eu=${BUILDER_FLAKE%%\?*} eg=$BUILDER_STATE/solnix.git
+	[[ -d $eg ]] || bounded 300 git clone -q --bare --filter=blob:none "${eu#git+}" "$eg" > /dev/null 2>&1
+	bounded 300 git -C "$eg" fetch -q origin '+refs/heads/*:refs/heads/*' > /dev/null 2>&1 || log "eval: cannot fetch ${eu#git+} (heads may be stale)"
+}
+onbranch() {	# onbranch <rev> <branch>: an allowed branch, and <rev> is its head or behind it in the clone eindex fetched (nix
+	# evaluates ?ref=<b>&rev=<c> for ANY c it can fetch, measured with a wave6 commit: the ref proves nothing)
+	[[ $2 == @(main|26.11) && " $BUILDER_EVAL_BRANCHES " == *" $2 "* && $1 == +([0-9a-f]) && ${#1} == 40 ]] &&
+	    git -C "$BUILDER_STATE/solnix.git" merge-base --is-ancestor "$1" "refs/heads/$2" 2> /dev/null
 }
 has_man() { bounded 120 nix store ls --store "$BUILDER_CACHE" "$1/share/man" 2>/dev/null | grep -q '^\./man'; }
 served() {	# served <out>: print the NarHash cache.solnix.io serves for <out> (sha256:<nix32>, the nix-store -q --hash form)
@@ -115,7 +179,7 @@ size() {	# "<jobs> <cores> <busy>" for this tick. busy: CPUs busy over a 5 s sam
 complete() {	# complete <id> <token> <result-json>, with `commit` (infra v2b §5: 40 lowercase hex, else a 400) when the job's
 	# evaluated commit is known ($crev, set by ready)
 	typeset cb="\"agent_id\":\"$BUILDER_AGENT\",\"claim_token\":\"$2\",$3"
-	[[ $crev == +([0-9a-f]) && ${#crev} == 40 ]] && cb="$cb,\"commit\":\"$crev\""
+	[[ $crev == +([0-9a-f]) && ${#crev} == 40 ]] && cb="$cb,\"commit\":\"$crev\""; [[ -n $cx ]] && cb="$cb,$cx"
 	api POST "/$1/complete" "{$cb}"
 	log "complete $1 -> $code $(<"$J/resp") ($3)"
 }
@@ -144,25 +208,31 @@ revs() {	# revs <outs>: the commits a job's candidates come from, in the order t
 		[[ " $v " == *" $k "* ]] || v="$v $k"; done
 	print -r -- "$v"
 }
-drv_for() {	# drv_for <pname> <outs> <rev|head>: "<out> <drv>^<output>" of the packages attr whose outPath is one of <outs>,
-	# evaluated at <rev> of BUILDER_FLAKE (head: this tick's locked head). The out must match, so a wrong commit only declines.
-	# An eval at a fixed rev never changes, so hits are kept across ticks ($BUILDER_STATE/eval/<rev>.<system>.<attr>, a week)
-	# unless a GC took the hit's .drv (the eval writes it again); misses only for the tick.
-	typeset n=${1%-[0-9]*} a r f=$3 c= w u s= k d e=$BUILDER_STATE/eval
+drv_for() {	# drv_for <pname> <outs> <rev|head>: "<out> <drv>^<output>" of the packages attr one of whose outputs is one of <outs>
+	# (a row may name a non-default output: gcc's -lib, a wave6 -debug/-man), evaluated at <rev> of BUILDER_FLAKE (head: this
+	# tick's locked head; evattr keeps the answer per rev). The out must match, so a wrong commit only declines.
+	typeset n=${1%-[0-9]*} a r f=$3 c= w u s=
 	[[ $n == openssl3 ]] && n=openssl
 	for w in ${n//-/ }; do if [[ -z $c ]]; then c=$w; else typeset -u u=${w:0:1}; c=$c$u${w:1}; fi; done	# gcc-wrapper -> gccWrapper
 	[[ $f == head ]] && f=$flake || { [[ $BUILDER_FLAKE == *\?* ]] && f="$BUILDER_FLAKE&rev=$f" || f="$BUILDER_FLAKE?rev=$f"; }
 	for a in "$n" "${n//-/_}" "$c"; do
 		[[ " $s " == *" $a "* ]] && continue; s="$s $a"
-		k=; [[ $f == *[?\&]rev=+([0-9a-f])* ]] && { k=${f##*[?&]rev=}; k=$e/${k%%&*}.$BUILDER_SYSTEM.$a; }
-		r=; if [[ -n $k && -s $k ]]; then r=$(<"$k"); d=${r#* }; [[ -e ${d%^*} ]] || r=; elif [[ -n $k && -e $k.miss ]]; then continue; fi
-		if [[ -z $r ]]; then r=$(bounded 900 nix eval --raw "$f#packages.$BUILDER_SYSTEM.$a" --apply 'd: d.outPath + " " + d.drvPath + "^" + (d.outputName or "out")' 2>/dev/null) ||
-			{ [[ -n $k ]] && { mkdir -p "$e"; : > "$k.miss"; }; continue; }
-			[[ -n $k ]] && { mkdir -p "$e"; print -r -- "$r" > "$k.${J##*/}" && mv "$k.${J##*/}" "$k"; }	# per job: jobs run in parallel
-		fi
-		[[ ,$2, == *,"${r%% *}",* ]] && { print -r -- "$r"; return 0; }
+		r=$(evattr "$f" "$a") || continue
+		# one line per output ("<out> <drv>^<output>"): the first that is one of <outs>
+		r=$(print -r -- "$r" | nawk -v o=",$2," 'index(o, "," $1 ",") {print; exit}'); [[ -n $r ]] && { print -r -- "$r"; return 0; }
 	done
 	return 1
+}
+evattr() {	# evattr <flake URL> <attr>, in $(...): one "<out> <drv>^<output>" line per output of packages.<system>.<attr> there, the
+	# default output (outPath) first. With a rev in the URL the answer is kept ($BUILDER_STATE/eval/<rev>.<system>.<attr>.outs, a
+	# week) unless a GC took its .drv; a miss only for the tick. (.outs: the one-line default-output caches before it are ignored)
+	typeset k= r d e=$BUILDER_STATE/eval
+	[[ $1 == *[?\&]rev=+([0-9a-f])* ]] && { k=${1##*[?&]rev=}; k=$e/${k%%&*}.$BUILDER_SYSTEM.$2.outs; }
+	if [[ -n $k && -s $k ]]; then r=$(<"$k"); d=${r%%$'\n'*}; d=${d#* }; [[ -e ${d%^*} ]] && { print -r -- "$r"; return 0; }; elif [[ -n $k && -e $k.miss ]]; then return 1; fi
+	r=$(bounded 900 nix eval --raw "$1#packages.$BUILDER_SYSTEM.$2" --apply 'd: builtins.concatStringsSep "\n" (map (o: d.${o}.outPath + " " + d.drvPath + "^" + o) (d.outputs or ["out"]))' 2>/dev/null) ||
+	    { [[ -n $k ]] && { mkdir -p "$e"; : > "$k.miss"; }; return 1; }
+	[[ -n $k ]] && { mkdir -p "$e"; print -r -- "$r" > "$k.${J##*/}" && mv "$k.${J##*/}" "$k"; }	# per job: jobs run in parallel
+	print -r -- "$r"
 }
 cand() {	# cand <out> <drv>^<output> <rev>, run in $(...): rc 0 and the served NarHash when this candidate can be rebuilt here
 	# from served inputs alone (its drv then rooted in $J/root-drv), else rc 1 and why not. Never memo'd: its inputs may be
@@ -213,15 +283,16 @@ fbuild() {	# fbuild <pname> <out> <drv>^<output>: the first build and every gate
 	[[ -z $x ]] || { log "$1: $2 waits for its references to be served first:$x"; return 1; }
 	# pre-submit-check.sh --leaf: the second build (--check SAME), drv-gate --leaf, publish-gate, store, closure, log, deps, the
 	# stamp. A drv-leaf stamp for this out and NarHash from an earlier tick stands (a store path never changes): no third build.
+	typeset fk=drv-leaf fa=--leaf; [[ -n ${EA:-} ]] && fk="drv-closure"$'\t'"eval:$EA:$BUILDER_SYSTEM:$EC:$EB" fa="--eval $EA $BUILDER_SYSTEM $EC $EB"
 	h=$(nix-store -q --hash "$2"); k=$BUILDER_STATE/stamps/${h#sha256:}.ok
-	if [[ -s $k && $(cut -f1 "$k") == "$2" && $(cut -f5 "$k") == drv-leaf ]]; then log "$1: pre-submit-check --leaf passed on an earlier tick ($k)"
+	if [[ -s $k && $(cut -f1 "$k") == "$2" && $(cut -f5- "$k") == "$fk" ]]; then log "$1: pre-submit-check ${fa%% *} passed on an earlier tick ($k)"
 	else
-		( export GATE_STAMP_DIR=$BUILDER_STATE/stamps GATE_PYTHON=$BUILDER_PYTHON; bounded "$BUILDER_BUILD_SECS" bash "$BUILDER_GATES/scripts/pre-submit-check.sh" --leaf "$2" ) > "$fm.presubmit" 2>&1; f=$?
+		( export GATE_STAMP_DIR=$BUILDER_STATE/stamps GATE_PYTHON=$BUILDER_PYTHON GATE_FLAKE=$BUILDER_FLAKE; bounded "$BUILDER_BUILD_SECS" bash "$BUILDER_GATES/scripts/pre-submit-check.sh" $fa "$2" ) > "$fm.presubmit" 2>&1; f=$?
 		if (( f != 0 )) || ! grep -q "^PASS $2 " "$fm.presubmit"; then
 			w=$(grep -E '^  [a-z]+: FAIL' "$fm.presubmit" | cut -d: -f1 | tr -d ' ' | paste -sd, -)
 			# rc 2 = setup (no python, served file unreachable), a full disk, or only deps (served since our check): not the out's fault
-			(( f == 1 )) && [[ ${w:-deps} != deps ]] && ! grep -q "No space left on device" "$fm.presubmit" && print -r -- "pre-submit-check.sh --leaf failed: ${w:-?} ($fm.presubmit)" > "$fm.pub"
-			log "decline $1: pre-submit-check.sh --leaf $2 rc=$f (${w:-setup}; $fm.presubmit)"; return 1
+			(( f == 1 )) && [[ ${w:-deps} != @(deps|inputs|deps,inputs) ]] && ! grep -q "No space left on device" "$fm.presubmit" && print -r -- "pre-submit-check.sh ${fa%% *} failed: ${w:-?} ($fm.presubmit)" > "$fm.pub"
+			log "decline $1: pre-submit-check.sh ${fa%% *} $2 rc=$f (${w:-setup}; $fm.presubmit)"; return 1
 		fi
 	fi
 	# the stage: a file:// cache holding the out's NAR and narinfo, with its references' served narinfos (nix copy needs them valid there)
@@ -260,7 +331,8 @@ first() {	# first <pname> <out> <drv>^<output>: publish this host's first build 
 	# served with our NarHash and the client check passed ($nar: the served NarHash; the caller claims), else 1 (logged).
 	typeset fm=$BUILDER_STATE/tried/${3##*/} fp=$BUILDER_STATE/pub/${2##*/} fb=$BUILDER_STATE/pub/backoff fl fst= fsid= fres= fz fn
 	mkdir -p "$BUILDER_STATE/pub" "$BUILDER_STATE/stamps" "${fm%/*}"; fl=$fm.submit
-	rowed "$2" || { log "decline $1: $2 is not an out of the served recipes.tsv: never published from here"; return 1; }
+	if [[ -n ${EA:-} ]]; then rowed "$2" && { log "decline $1: a served row names $2: it is published the row way, never --eval"; return 1; }
+	else rowed "$2" || { log "decline $1: $2 is not an out of the served recipes.tsv: never published from here"; return 1; }; fi
 	if [[ -s $fp ]]; then fsubmit "$2" "$fl" --status "$(cut -f1 "$fp")" --poll 120	# a 429 is /begin's: polling goes on
 	else
 		fz=$(printf '%(%s)T' now); [[ -s $fb ]] && (( $(<"$fb") > fz )) && { log "$1: new submissions back off for $(( $(<"$fb") - fz )) s more (429)"; return 1; }
@@ -268,20 +340,22 @@ first() {	# first <pname> <out> <drv>^<output>: publish this host's first build 
 		fn=0; while (( (fn += 1) <= BUILDER_PUBLISH_SLOTS )); do mkdir "$BUILDER_STATE/pub/slot.$fn" 2> /dev/null && break; done
 		(( fn <= BUILDER_PUBLISH_SLOTS )) || { find "$fst" -depth -delete; rm -f "$fst".*; log "$1: $BUILDER_PUBLISH_SLOTS submissions in flight; a later tick"; return 1; }
 		set -- "$1" "$2" "$3" --cache-dir "$fst" --paths "$fst.paths" --pathinfo "$fst.pathinfo" --stamps "$BUILDER_STATE/stamps" --with-refs
+		[[ -n ${EA:-} ]] && set -- "$@" --eval "$EA" "$BUILDER_SYSTEM" "$EC" "$EB" ${EN:+--flake-nar-hash "$EN"}
 		[[ $BUILDER_PUBLISH == 1 ]] && set -- "$@" --submit
 		log "$1: submitting $2 as $BUILDER_PUBLISH_ID$([[ $BUILDER_PUBLISH == dry ]] && print ' (BUILDER_PUBLISH=dry: no /begin)')"
 		fsubmit "$2" "$fl" "${@:4}"; rmdir "$BUILDER_STATE/pub/slot.$fn"; find "$fst" -depth -delete; rm -f "$fst".*
 		# finalized but not resolved yet: later ticks poll its status (never a second submission of the same out)
 		# shortcut: a submission that never resolves stays pending; rm $BUILDER_STATE/pub/<out> to submit again
-		[[ -n $fsid && $fres == @(proposed|approved|finalized*) ]] && printf '%s\t%(%Y-%m-%dT%H:%M:%SZ)T\t%s\n' "$fsid" now "$(nix-store -q --hash "$2")" > "$fp"
+		[[ -n $fsid && $fres == @(proposed|approved|finalized*) ]] && printf '%s\t%(%Y-%m-%dT%H:%M:%SZ)T\t%s\n' "$fsid" now "$(nix-store -q --hash "$2")" > "$fp" &&
+		    [[ -n ${EA:-} ]] && printf '%s\t%s\t%s\n' "$EA" "$EB" "$EC" > "$BUILDER_STATE/pub/eval.${1//[!A-Za-z0-9._+-]/_}"	# later ticks: this commit
 	fi
 	case $fres in
 	promoted|'plan PUBLISHED')
 		fverify "$2" "$([[ -s $fp ]] && cut -f3 "$fp" || nix-store -q --hash "$2")" || return 1
-		rm -f "$fp"; print ok > "$fm"; nar=$(served "$2"); : > "$J/worked"	# tried/<drv> ok: the rebuild path never builds it again
+		rm -f "$fp" "$BUILDER_STATE/pub/eval.${1//[!A-Za-z0-9._+-]/_}"; print ok > "$fm"; nar=$(served "$2"); : > "$J/worked"	# tried/<drv> ok: the rebuild path never builds it again
 		log "$1: published $2 ($fres${fsid:+ $fsid}), NarHash $nar: an 8UNr-only client verified it"; return 0 ;;
 	proposed|approved) log "$1: $2 is $fres (${fsid:-?}): waiting for review (tier 1); polled on later ticks"; return 1 ;;
-	rejected) print -r -- "rejected (${fsid:-?}): $(grep '^  status:' "$fl" | tail -1 | cut -c11-400)" > "$fm.pub"; rm -f "$fp"; log "decline $1: $(<"$fm.pub")"; return 1 ;;
+	rejected) print -r -- "rejected (${fsid:-?}): $(grep '^  status:' "$fl" | tail -1 | cut -c11-400)" > "$fm.pub"; rm -f "$fp" "$BUILDER_STATE/pub/eval.${1//[!A-Za-z0-9._+-]/_}"; log "decline $1: $(<"$fm.pub")"; return 1 ;;
 	backoff\ +([0-9])) print $(( $(printf '%(%s)T' now) + ${fres#backoff } )) > "$fb"; log "$1: /begin answered 429: backing off ${fres#backoff } s"; return 1 ;;
 	'plan READY') log "dry run: would submit $2 as $BUILDER_PUBLISH_ID ($fl)"; return 1 ;;
 	'plan DRV-GATE-FAIL'|'plan BAD-LOCAL') print -r -- "cache-submit.py planned ${fres#plan } ($fl)" > "$fm.pub"; log "decline $1: $(<"$fm.pub")"; return 1 ;;
@@ -325,6 +399,71 @@ ready() {	# ready <pname> <outs>: 0 when the out ($out) was rebuilt here and is 
 	      log "decline $1: $(<"$m")"; return 1; }
 	print ok > "$m"; : > "$J/worked"; log "$1: rebuilt $2 here, identical to the served NAR $nar"
 }
+eready() {	# eready <pname> <attr> <version> <branch> <rev>: 0 when packages.<system>.<attr> at <rev> of <branch> was built here,
+	# gated, promoted as an eval proposal and verified ($out, $nar, $crev = the commit); else log why not. A proposal pending
+	# from an earlier tick is followed at the commit it was submitted with (pub/eval.<pname>), never the moving head.
+	typeset ep=$BUILDER_STATE/pub/eval.${1//[!A-Za-z0-9._+-]/_} en=${1%-"$3"} r d m f x i; nar= out= crev=
+	EA=$2 EB=$4 EC=$5; [[ -s $ep ]] && { read -r EA EB EC < "$ep"; log "$1: eval proposal pending: $EA at $EB ${EC:0:12}"; }
+	pubok || { log "decline $1: eval-anchored needs this host's publish key and gates (BUILDER_PUBLISH 1|dry)"; return 1; }
+	onbranch "$EC" "$EB" || { log "decline $1: $EC is not on $EB here (allowed: $BUILDER_EVAL_BRANCHES): never an eval anchor"; return 1; }
+	f="${BUILDER_FLAKE%%\?*}?ref=$EB&rev=$EC"
+	# the job's identity at THIS commit: drv pname = the job's pname, version = its target (gate is not illumos-gate-proto)
+	x=$(eids "$EB" "$EC") && i=$(nawk -F'\t' -v a="$EA" '$1 == a {print $2 " " $3; exit}' "$x") && [[ $i == "$en $3" ]] ||
+	    { log "decline $1: packages.$BUILDER_SYSTEM.$EA at ${EC:0:12} is '${i:-nothing}', not $en $3"; return 1; }
+	r=$(evattr "$f" "$EA") || { log "decline $1: packages.$BUILDER_SYSTEM.$EA does not evaluate at $EB ${EC:0:12}"; return 1; }
+	r=${r%%$'\n'*}	# the default output: what packages.<system>.<attr>.outPath is, and what infra's evaluator anchors
+	out=${r%% *} d=${r#* } crev=$EC m=$BUILDER_STATE/tried/${d##*/}
+	nix-instantiate --add-root "$J/root-first" --expr "import ${d%^*}" > /dev/null 2>&1 || { log "decline $1: cannot root $d"; return 1; }
+	if [[ ! -s $BUILDER_STATE/pub/${out##*/} ]]; then	# not submitted yet
+		served "$out" > /dev/null && { log "decline $1: $out is served already (another publish): a row, then a rebuild vote, later"; return 1; }
+		[[ -f $m.pub ]] && { log "decline $1: its first publish was refused here: $(<"$m.pub")"; return 1; }
+		# the strict gate on the drv graph first (no build needed): an eval out has no reviewed row behind it. Not memo'd.
+		( export GATE_PYTHON=$BUILDER_PYTHON; bounded 600 bash "$BUILDER_GATES/scripts/drv-gate.sh" --closure "${d%^*}" ) > "$J/eval-closure" 2>&1 ||
+		    { log "decline $1: drv-gate --closure FAILs ${d%^*} ($(grep -c '^FAIL A' "$J/eval-closure") findings, first: $(nawk '/^FAIL A/ {print; exit}' "$J/eval-closure" | cut -c1-200))"; return 1; }
+		# deps first on the drv graph: every non-fixed-output input out is published (or waits for a later tick)
+		i=$("$BUILDER_PYTHON" "$BUILDER_GATES/scripts/gate-checks.py" inputs "${d%^*}" 2> /dev/null) || { log "decline $1: cannot read the inputs of $d"; return 1; }
+		x=; for r in $i; do served "$r" > /dev/null || x="$x ${r#/nix/store/}"; done
+		[[ -z $x ]] || { log "$1: eval $EA waits for non-FOD inputs to be published first:$x"; return 1; }
+		EN=$(bounded 300 nix flake metadata --json "${BUILDER_FLAKE%%\?*}?rev=$EC" 2> /dev/null | jq -r '.locked.narHash // empty')
+		[[ -n $EN ]] || { log "decline $1: no flake narHash for $EC"; return 1; }
+	fi
+	log "$1: eval candidate packages.$BUILDER_SYSTEM.$EA at $EB ${EC:0:12} = $out ($d)"
+	nar=first; first "$1" "$out" "$d"
+}
+ejob() {	# ejob <pname> <attr> <version> <branch> <rev>: one EVAL row, in its own state dir, in the background (as job)
+	JOBMAX=0; typeset rowc=-
+	J=$BUILDER_STATE/job/${1//[!A-Za-z0-9._+-]/_}; mkdir -p "$J" || return 1
+	[[ $BUILDER_EVAL == dry ]] && BUILDER_PUBLISH=dry	# this job only (a subshell): every step up to /begin
+	eready "$@" && claim "$1" "$out" "$3" "$nar"
+	rm -f "$J"/root-*
+}
+vote() {	# vote <attr> <commit> <branch> <NarHash> [pname]: the second vote on an eval proposal (condition 4): build packages.<system>.
+	# <attr> at <commit> here (a fresh build, or --rebuild of a copy already here: a second build dir), and only if its NarHash
+	# is the proposal's, claim the job and complete it done with that NarHash and commit. If this host built or proposed the out
+	# itself, the vote says "independence":"same-host" (dixa, the only aarch64 host). Claims only with BUILDER_EVAL=1.
+	typeset va=$1 vc=$2 vb=$3 vh=$4 vn=${5:-} vi vr vd vo vm vs=; J=$BUILDER_STATE/job/vote.${1//[!A-Za-z0-9._+-]/_}; mkdir -p "$J" "$BUILDER_STATE/tried"
+	eclone; onbranch "$vc" "$vb" || { log "vote $va: $vc is not on $vb (allowed: $BUILDER_EVAL_BRANCHES): no vote"; return 1; }
+	vi=$(eids "$vb" "$vc") && vi=$(nawk -F'\t' -v a="$va" '$1 == a {print $2 " " $3; exit}' "$vi") && [[ -n ${vi%% *} && -n ${vi#* } ]] ||
+	    { log "vote $va: no packages.$BUILDER_SYSTEM.$va with a pname and version at ${vc:0:12}"; return 1; }
+	[[ -z $vn || $vn == "${vi%% *}" ]] || { log "vote $va: at ${vc:0:12} it is ${vi%% *}, not $vn: no vote"; return 1; }
+	vr=$(evattr "${BUILDER_FLAKE%%\?*}?ref=$vb&rev=$vc" "$va") || { log "vote $va: does not evaluate at ${vc:0:12}"; return 1; }
+	vr=${vr%%$'\n'*}	# the default output (the proposal's out)
+	vo=${vr%% *} vd=${vr#* } vm=$BUILDER_STATE/tried/${vd##*/}.vote
+	[[ -s $BUILDER_STATE/pub/${vo##*/} ]] && vs=1; grep -qs "^$vo"$'\t' "$BUILDER_STATE"/stamps/*.ok && vs=1
+	if nix-store --check-validity "$vo" 2> /dev/null; then
+		[[ $(nix path-info --json "$vo" 2> /dev/null | jq -r '.[].ultimate') == true ]] && vs=1	# built here before: same-host
+		log "vote $va: rebuilding $vd (a second build dir: --rebuild of the copy here)"
+		bounded "$BUILDER_BUILD_SECS" nice -n "$BUILDER_NICE" nix build --no-link --rebuild "$vd" > "$vm.log" 2>&1 || { log "vote $va: --rebuild failed or differs ($vm.log): no vote"; return 1; }
+	else log "vote $va: building $vd"
+		bounded "$BUILDER_BUILD_SECS" nice -n "$BUILDER_NICE" nix build --out-link "$J/root-vote" "$vd" > "$vm.log" 2>&1 || { log "vote $va: the build failed ($vm.log): no vote"; return 1; }
+	fi
+	nar=$(nix-store -q --hash "$vo"); out=$vo crev=$vc
+	[[ $nar == "$vh" ]] || { log "vote $va: $vo has $nar here, the proposal says $vh: no vote (tell infra: not reproducible)"; return 1; }
+	[[ -n $vs ]] && cx='"independence":"same-host"'
+	log "vote $va: $vo reproduced here, NarHash $nar ($([[ -n $vs ]] && print 'same-host: this host built or proposed it' || print 'a different builder'))"
+	[[ $BUILDER_EVAL == 1 ]] || { log "dry run: BUILDER_EVAL=$BUILDER_EVAL: would claim ${vi%% *} ${vi#* } and complete it with commit $vc${cx:+ and $cx}"; return 0; }
+	claim "${vi%% *}" "$vo" "${vi#* }" "$nar"
+}
 claim() {	# claim <pname> <out> <version> <nar_hash>: claim exactly that job, then complete it done
 	[[ -s $BUILDER_BEARER_FILE ]] || { log "dry run: no $BUILDER_BEARER_FILE, not claiming $1"; return 0; }
 	api POST /claim "{\"agent_id\":\"$BUILDER_AGENT\",\"systems\":[\"$BUILDER_SYSTEM\"],\"max\":1,\"lease_secs\":$BUILDER_LEASE,\"pnames\":[\"$1\"]}"
@@ -345,7 +484,8 @@ rows() {	# rows <out.json> <recipes.tsv>: this system's listing window (500 rows
 	# past the window. A queried pname's rows come only from its own query: each row once, a real duplicate kept.
 	typeset o=$1 f q i=0
 	curl -sSf -m 30 -o "$o.w" "$BUILDER_API/rows?system=$BUILDER_SYSTEM" || return 1; f="$o.w"
-	nawk -F'\t' -v s="$BUILDER_SYSTEM" 'NR > 1 && $8 == s && $1 ~ /^[A-Za-z0-9._+-]+$/ {print $1; if ($1 == "openssl") print "openssl3"}' "$2" | sort -u > "$o.q"
+	{ nawk -F'\t' -v s="$BUILDER_SYSTEM" 'NR > 1 && $8 == s && $1 ~ /^[A-Za-z0-9._+-]+$/ {print $1; if ($1 == "openssl") print "openssl3"}' "$2"
+	  [[ $BUILDER_EVAL != 0 ]] && nawk -F'\t' '$4 ~ /^[A-Za-z0-9._+-]+$/ {print $4}' "$BUILDER_STATE/eindex" 2> /dev/null; } | sort -u > "$o.q"
 	while q=$(nawk -v i="$i" 'NR > i && NR <= i + 100' "$o.q" | sed 's/+/%2B/g' | paste -sd, -); [[ -n $q ]]; do
 		curl -sSf -m 30 -o "$o.p$i" "$BUILDER_API/rows?system=$BUILDER_SYSTEM&pname=$q" || return 1; f="$f $o.p$i"; i=$((i + 100))
 	done
@@ -366,10 +506,11 @@ tick() {	# rc 0 when a job rebuilt or completed something: the loop then re-tick
 	[[ -n ${BUILDER_WSWEEP:-} && $(/usr/bin/id -u) == 0 ]] && /usr/bin/ksh93 "$BUILDER_WSWEEP" $(( BUILDER_BUILD_SECS + 3600 )) | while read -r l; do log "$l"; done
 	z=$(size); k=${z%% *} z=${z#* } c=${z%% *} b=${z#* }
 	(( k > 0 )) || { log "not idle ($b of $BUILDER_NCPU CPUs busy; loadMax $BUILDER_LOAD_MAX, $c cores a job)"; return 1; }
+	eindex	# BUILDER_EVAL off: empty (plan then says NO-RECIPE, as before)
 	curl -sS -m 60 -o "$rec" "$BUILDER_RECIPES" && rows "$rows" "$rec" || { log "listing unavailable"; return 1; }
 	plan "$rows" "$rec" > "$BUILDER_STATE/plan"; log "plan: $(cut -d' ' -f2 "$BUILDER_STATE/plan" | sort | uniq -c | tr -s ' \n' ' ')"
 	[[ -s $BUILDER_BEARER_FILE ]] || log "dry run: no $BUILDER_BEARER_FILE, never claiming"
-	grep ' BUILD ' "$BUILDER_STATE/plan" > "$BUILDER_STATE/builds" || return 1
+	egrep ' (BUILD|EVAL) ' "$BUILDER_STATE/plan" > "$BUILDER_STATE/builds" || return 1
 	# every job evaluates the same commit, fetched once
 	flake=$(bounded 300 nix flake metadata --json "$BUILDER_FLAKE" 2> /dev/null | jq -r '.url // empty'); : ${flake:=$BUILDER_FLAKE}
 	# each served out's origin commit (the commit that added its row); a row's job evaluates there first
@@ -379,11 +520,12 @@ tick() {	# rc 0 when a job rebuilt or completed something: the loop then re-tick
 	log "up to $k jobs of $c cores ($b of $BUILDER_NCPU CPUs busy), $flake"
 	C=$c; rm -f "$BUILDER_STATE"/job/*/worked "$BUILDER_STATE"/job/*/root-*; JOBMAX=$k	# roots of a killed tick's jobs
 	[[ -d $BUILDER_STATE/pub ]] && find "$BUILDER_STATE/pub" \( -name 'slot.*' -o -name 'stage.*' -o -name 'xdg.*' \) -prune -exec rm -r {} +	# a killed tick's
-	while read -r bp bd bo bv br; do
+	while read -r bp bd bo bv br bx; do
 		# pnames filters by pname only: with two rows of one pname the server may hand out the other one
 		[[ $(jq --arg p "$bp" --arg s "$BUILDER_SYSTEM" '[.rows[] | select(.pname == $p and .system == $s)] | length' "$rows") == 1 ]] ||
 		    { log "decline $bp: more than one $BUILDER_SYSTEM row for it"; continue; }
-		job "$bp" "$bo" "$bv" "${br:--}" < /dev/null &
+		if [[ $bd == EVAL ]]; then ejob "$bp" "$bo" "$bv" "$br" "$bx" < /dev/null &
+		else job "$bp" "$bo" "$bv" "${br:--}" < /dev/null & fi
 	done < "$BUILDER_STATE/builds"
 	wait; JOBMAX=0
 	ls "$BUILDER_STATE"/job/*/worked > /dev/null 2>&1
@@ -399,6 +541,8 @@ rows) rows "$2" "$3"; exit ;;
 size) size; exit ;;
 pause) pause "$2"; exit ;;
 once) mkdir -p "$BUILDER_STATE" && tick; exit ;;
+eindex) mkdir -p "$BUILDER_STATE" && eindex; exit ;;
+vote) mkdir -p "$BUILDER_STATE" && vote "$2" "$3" "$4" "$5" "${6:-}"; exit ;;	# by hand (until infra lists eval proposals)
 ready) mkdir -p "$BUILDER_STATE" && curl -sS -m 60 -o "$BUILDER_STATE/recipes.tsv" "$BUILDER_RECIPES" && ready "$2" "$3"; exit ;;	# by hand: never claims
 esac
 mkdir -p "$BUILDER_STATE" || exit 1

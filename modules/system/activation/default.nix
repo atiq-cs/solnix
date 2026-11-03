@@ -539,6 +539,8 @@ let
   # install-be (IFACE-1): populate a BE from this toplevel. One script, called by
   # lib/make-be.nix, scripts/solnix-install and do_boot below.
   installBe = pkgs.writeScript "solnix-install-be" (builtins.readFile ./install-be.sh);
+  # boot.loader.brand = "solnix": the files install-be lays over each BE's /boot (src/boot-brand/boot).
+  bootBrand = builtins.path { path = ../../../src/boot-brand/boot; name = "solnix-boot-brand"; };
 
   # The driver database and the kernel tree the toplevel ships to install-be.
   # Default to the base ones; a hardware module (modules/config/wireless-iwx.nix)
@@ -579,6 +581,7 @@ let
     ${lib.optionalString (config.system.zoneBrands != { }) "mkdir -p $out/brand"}
     ${concatStringsSep "\n    " (mapAttrsToList (n: d: "ln -s ${d} $out/brand/${n}") config.system.zoneBrands)}
     ${lib.optionalString config.solnix.perl5Mediator.enable "ln -s ${pkgs.solnix.perl}/bin $out/perl5-bin"}
+    ${lib.optionalString (config.boot.loader.brand == "solnix") "ln -s ${bootBrand} $out/boot-brand"}
     # sw: the composed userland profile (environment.systemPackages via buildEnv)
     # -> /run/current-system/sw. SEPARATE from systemPath so a broken package set
     # can't drop the kernel (design §B). shell-environment puts sw/bin first on PATH.
@@ -632,6 +635,14 @@ in
     type = types.bool;
     default = true;
     description = "Enable svc:/system/power (pmconfig + powerd).";
+  };
+
+  # The loader menu's top-left wordmark. "solnix": "Solnix" + the solnix logo (src/boot-brand). "illumos": the stock
+  # illumos wordmark. The "powered by illumos" logo beside the menu is the same in both.
+  options.boot.loader.brand = mkOption {
+    type = types.enum [ "solnix" "illumos" ];
+    default = "solnix";
+    description = "Brand drawn above the boot loader menu (install-be lays it into every new boot environment).";
   };
 
   options.system.buildCapable = mkOption {

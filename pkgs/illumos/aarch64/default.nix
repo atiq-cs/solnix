@@ -179,6 +179,51 @@ let
         + "sed -i '1s|^#!/usr/bin/perl$|#!/usr/bin/env perl|' $f; head -1 $f | grep -qx '#!/usr/bin/env perl' || { echo 'FATAL: watchman sample #!' >&2; exit 1; }\n"; };
       # quilt runs awk at run time from --with-awk=${world}/usr/bin/nawk (x86: the whole userland); aarch64's world is gate libs only.
       quilt = { build = builtins.replaceStrings [ "${homePkgs.world}/usr/bin/nawk" ] [ "${a64.illumosTools}/bin/nawk" ] args.build; };
+      # dixa's nix.conf has cores = 0 (all cores), so NIX_BUILD_CORES=0 and `gmake -j0` fails ("-j requires a positive integer"):
+      # a fixed -j, as lp64Fix gives the other recipes (the job count does not reach the output). And mk-src-pkg deletes the .la FILES, which leaves libpng's lib/libpng.la -> libpng16.la link dangling (gate2 B6): drop it too.
+      libpng = { build = let b = builtins.replaceStrings [ "-j\${NIX_BUILD_CORES:-8}" ] [ "-j24" ] args.build; in
+        if b == args.build then throw "a64r libpng: -j anchor" else b + "\nrm -f \"$out/lib/libpng.la\"\n"; };
+      # tzselect's #! is the Makefile's KSHELL (/bin/bash), which gate2 B9 rejects: /bin/sh, illumos' ksh93 (tzselect wants a POSIX
+      # shell with ksh's select). NixOS patchShebangs it to the store bash instead; /bin/sh keeps tzdata reference-free.
+      tzdata = { build = let b = builtins.replaceStrings [ "gmake -j8 CC=" ] [ "gmake -j8 KSHELL=/bin/sh CC=" ] args.build; in
+        if b == args.build then throw "a64r tzdata: gmake anchor" else b + "\nhead -1 $out/bin/tzselect | grep -qx '#!/bin/sh' || { echo 'FATAL: tzselect #! is not /bin/sh' >&2; exit 1; }\n"; };
+      # python3: imports during install and the in-build checks write timestamp-mode pyc (gate2 B10; --check differed on dixa). Ship
+      # none, as the served x86 python3 (0 pyc; wave6's 3.13.18 recipe also rm's them first), and write none while checking.
+      # _sysconfigdata named $W (abs_builddir, RUNSHARED: 7 hits on dixa): /no-such-path, as nixpkgs and wave6.
+      python3 = { build = let a = ''      ln -sf python3 "$out/bin/python"''; b = builtins.replaceStrings [ a ]
+          [ (''      find "$out" -type d -name __pycache__ -prune -exec rm -r {} +; export PYTHONDONTWRITEBYTECODE=1'' + "\n"
+            # nixpkgs postInstall (and wave6's x86 3.13.18): the recorded build configuration must not name the build dir
+            + ''      for f in "$out"/lib/python3.13/_sysconfigdata*.py "$out"/lib/python3.13/config-3.13*/Makefile; do chmod u+w "$f"; LC_ALL=C sed -i -e "s|$W|/no-such-path|g" "$f"; done''
+            # check these two only: in the shipped (stripped) out they are the only files naming $W (measured, nav3ra6x); before
+            # mk-src-pkg's strip, which runs after this, other files under lib/python3.13 still do (the first v4 build FAILed here).
+            + "\n" + ''      ! grep -lF "$W" "$out"/lib/python3.13/_sysconfigdata*.py "$out"/lib/python3.13/config-3.13*/Makefile || { echo "FATAL: python3 sysconfig still names the build dir" >&2; exit 1; }'' + "\n" + a) ] args.build; in
+        if b == args.build then throw "a64r python3: anchor" else b
+          + "\n[ -z \"$(find $out -name '*.pyc' | head -1)\" ] || { echo 'FATAL: python3 ships pyc' >&2; exit 1; }\n"; };
+      # meson's symbolextractor.py (shared-lib symbol lists, for relink avoidance) prepends the OI host's /usr/gnu/bin to PATH to find GNU
+      # nm/readelf on SunOS (upstream text; gate2 B13). A solnix host has no /usr/gnu: drop the prefix, so it uses PATH as is (gnu_syms
+      # falls back to dummy_syms when no GNU nm is found, which only costs relinks), as NixOS patches meson's host paths.
+      meson = { build = let a = ''cp -r mesonbuild meson.py "$out/lib/meson/"''; b = builtins.replaceStrings [ a ] [ (a + "\n"
+          + ''f="$out/lib/meson/mesonbuild/scripts/symbolextractor.py"; grep -q "'/usr/gnu/bin:' + origpath" "$f" || { echo "FATAL: meson symbolextractor anchor" >&2; exit 1; }''
+          + "\n" + ''sed -i "s|'/usr/gnu/bin:' + origpath|origpath|" "$f"; ! grep -q /usr/gnu "$f" || { echo "FATAL: meson still names /usr/gnu" >&2; exit 1; }'') ] args.build; in
+        if b == args.build then throw "a64r meson: anchor" else b; };
+      # xkeyboard-config's rules/ needs python >= 3.11: x86 links the OI host's /usr/bin/python3.14; here the store python3 (3.13, b2)
+      xkeyboard-config = { build = let a = "ln -sf /usr/bin/python3.14 "; b = builtins.replaceStrings [ a ] [ "ln -sf ${homePkgs.cliSet.python3}/bin/python3 " ] args.build; in
+        if b == args.build then throw "a64r xkeyboard-config: anchor" else b; };
+      # libxkbcommon's parser needs a yacc: x86 takes the OI host's /usr/bin/bison; here a64h's store bison (as tmux/gdbm/nix)
+      libxkbcommon = { nativeTools = (args.nativeTools or [ ]) ++ [ final.bison ]; };
+      # texinfo: the served x86 texinfo has no perl XS (0 .so; its configure found it unbuildable there). On aarch64 configure builds XS
+      # with perl's ccflags, which miss the arm64-gate flags (TLSDESC relocs, dixa), and with no store RUNPATH (the closure gate saw
+      # /lib/libc.so.1). --disable-perl-xs: the pure-perl texi2any, as x86 ships.
+      texinfo = { build = let b = builtins.replaceStrings [ "./configure --prefix=\"$out\" --disable-nls" ]   # perPkg sees the recipe text (pre-lp64Fix)
+          [ "./configure --prefix=\"$out\" --disable-nls --disable-perl-xs" ] args.build; in
+        if b == args.build then throw "a64r texinfo: configure anchor" else b; };
+      # lsof's dproc.c defines ARCH64B (the isalist word of a 64-bit kernel) for sparc and x86 only: aarch64's isalist says aarch64.
+      # and it links the proto's libctf -> libdwarf, which NEEDs libz (x86: the world has it): zlib as a dep (link path + RUNPATH).
+      lsof = { deps = args.deps ++ [ srcPkgs.zlib ]; build = "sed -i 's|^#    if defined(__i386) \\|\\| defined(__amd64)$|#    if defined(__aarch64__)\\n#        define ARCH64B \"aarch64\"\\n#    elif defined(__i386) \\|\\| defined(__amd64)|' lib/dialects/sun/dproc.c\n"
+        + "grep -q 'define ARCH64B \"aarch64\"' lib/dialects/sun/dproc.c || { echo 'FATAL: lsof ARCH64B anchor' >&2; exit 1; }\n" + args.build; };
+      # gmp: the x86 text pins --build=x86_64-pc-solaris2.11 after lp64Fix's aarch64 --build (the last one wins): drop it.
+      gmp6 = { build = let b = builtins.replaceStrings [ "--build=x86_64-pc-solaris2.11 " ] [ "" ] args.build; in
+        if b == args.build then throw "a64r gmp6: --build anchor" else b; };
       # builtins/psize.sh times a pipe fill ('psize.aux | sleep 3') and falls back to 512 when that comes back empty: on dixa 2 of 3
       # builds got 512, one 16384 (--check differs in bin/bash). Pin the fallback, which the served stage0 bash ships (safe for here-docs).
       bash = { build = "printf '#!/bin/sh\\necho \"#define PIPESIZE 512\"\\n' > builtins/psize.sh\n" + args.build; };
@@ -220,7 +265,9 @@ let
 in
 homePkgs // (if stage == "seed" then { } else final // {
   # the build-only tools under their pnames (solnix-builder.sh drv_for finds an attr by pname, _ or camelCase)
-  illumos-build-tools = a64.illumosTools; cc-store-names = a64.ccNames; sh-store = a64.shAlias; solnix-a64-build-tools = a64.buildToolsFarm; }) // {
+  illumos-build-tools = a64.illumosTools; cc-store-names = a64.ccNames; sh-store = a64.shAlias; solnix-a64-build-tools = a64.buildToolsFarm; }
+  # x86-served recipes on the store-only aarch64 set (a64r): the same recipe files (./a64r-pkgs.nix)
+  // import ./a64r-pkgs.nix { inherit srcPkgs homePkgs a64 final system; }) // {
   gate = gate';
   inherit libc rtld ld sys systemPath gcc srcPkgs;
   inherit (srcPkgs) zlib openssl nixChain git tree ncurses less nano nvi htop top wget gateLibs bsdfetch gccWrapper readline bash;

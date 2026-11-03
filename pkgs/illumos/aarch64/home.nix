@@ -13,10 +13,15 @@ let
   base = import ../base-src.nix { inherit gate libcSlice world gcc system; aarch64 = true; mkSrcPkgA = srcPkgs.mkSrcPkg; inherit (srcPkgs) plain; inherit shared; };
   # the aarch64 srcPkgs builds (nix chain, ncurses, bash, ...) stand in for base-src's x86-only ones.
   base' = base // { inherit (srcPkgs) mkSrcPkg zlib openssl ncurses libiconv readline bash nixChain less nano nvi tree htop top git wget; };
-  cli = import ../cli { base = base'; inherit world shared; graphics = null; };
+  # graphics/libs.nix's expat + libffi (python3's deps); only those two are exported (graphics/tools.nix's meson runs the host python3.9)
+  graphics = import ../graphics/libs.nix { inherit (srcPkgs) mkSrcPkg zlib; inherit (base) pkgconf; inherit world;
+    tools = import ../graphics/tools.nix { inherit (srcPkgs) mkSrcPkg; }; };
+  cli = import ../cli { base = base'; inherit world shared graphics; };
 in
 {
   inherit world;
+  # the recipe sets themselves (not derivations, so the flake's packages filter drops them), for ./a64r-pkgs.nix
+  cliSet = cli; baseSet = base'; graphicsSet = graphics;
   # lib/home-manager-pkgs.nix's tools + home-manager
   inherit (base) coreutils findutils gnused gnugrep diffutils gnutar gzip jq lndir gettext hostname
     gnumake pkgconf rsync libevent tmux;

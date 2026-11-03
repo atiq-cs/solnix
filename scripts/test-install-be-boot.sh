@@ -58,4 +58,35 @@ check() {   # $1 = label, $2 = function, $3 = expect pass(1)/fail(0)
 check lay_boot lay_boot 1
 check control-old-tar old_lay_boot 0
 
+# lay_brand: a toplevel with boot-brand lays it over a BE cloned from one that already had files there (the stock
+# brand.4th stays); one without boot-brand removes them. Control: lay_boot alone (cp only if absent) leaves the clone's
+# stale PNG in place.
+awk '/^lay_brand\(\) \{/,/^\}/' "$IBE" > "$W/brand.sh"
+grep -q '^lay_brand$' "$IBE" || { echo "FAIL  install-be does not call lay_brand"; exit 1; }
+. "$W/brand.sh"
+rl() { ls -ld "$1" 2>/dev/null | sed -n 's/.* -> //p'; }
+TOP=/nix/store/tttt-solnix-system; BB=/nix/store/bbbb-solnix-boot-brand
+mkdir -p "$R$TOP" "$R$BB/forth" "$R$BB/conf.d"
+echo new > "$R$BB/solnix-brand.png"; echo brand > "$R$BB/forth/brand-solnix.4th"; echo 'loader_brand="solnix"' > "$R$BB/conf.d/solnix-brand"
+check_brand() {   # $1 = label, $2 = function, $3 = with boot-brand (1/0), $4 = expect pass(1)/fail(0)
+  local BE="$W/bb.$1"; mkdir -p "$BE/boot/forth" "$BE/boot/conf.d"
+  echo stale > "$BE/boot/solnix-brand.png"; echo stale > "$BE/boot/conf.d/solnix-brand"; echo stock > "$BE/boot/forth/brand.4th"
+  rm -f "$R$TOP/boot-brand"; [ "$3" = 1 ] && ln -s "$BB" "$R$TOP/boot-brand"
+  ( cd "$BE" && "$2" ) >/dev/null 2>&1
+  local ok=1 why=""
+  [ "$(cat "$BE/boot/forth/brand.4th")" = stock ] || { ok=0; why="$why stock-brand.4th-touched"; }
+  if [ "$3" = 1 ]; then
+    cmp -s "$R$BB/solnix-brand.png" "$BE/boot/solnix-brand.png" || { ok=0; why="$why png-not-laid"; }
+    grep -q '^loader_brand="solnix"$' "$BE/boot/conf.d/solnix-brand" 2>/dev/null || { ok=0; why="$why conf.d-not-laid"; }
+    [ -s "$BE/boot/forth/brand-solnix.4th" ] || { ok=0; why="$why forth-not-laid"; }
+  else
+    [ ! -e "$BE/boot/solnix-brand.png" ] && [ ! -e "$BE/boot/conf.d/solnix-brand" ] || { ok=0; why="$why stale-brand-left"; }
+  fi
+  if [ "$ok" = "$4" ]; then echo "PASS  $1${why:+ (control fails:$why)}"
+  else echo "FAIL  $1:${why:- expected the control to fail}"; FAILED=1; fi
+}
+check_brand lay_brand-solnix lay_brand 1 1
+check_brand lay_brand-illumos lay_brand 0 1
+check_brand control-lay_boot-only true 1 0
+
 [ -z "$FAILED" ] && echo "ALL PASS" || { echo "SOME FAILED"; exit 1; }
