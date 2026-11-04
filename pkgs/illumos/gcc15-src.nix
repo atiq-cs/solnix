@@ -119,6 +119,11 @@ let
     # libstdc++.so's std::format locale path differed (wave6t step41: dixi --check DIFFERS on gcc-15.3.0-lib). Pinned to yes: the
     # iconv functions are the store libc's, the same on every host.
     export CONFIG_SITE=${./config.site}
+    # ... but gcc's top-level Makefile runs every TARGET library's configure (libstdc++-v3, libquadmath, ...) with
+    # CONFIG_SITE=no-such-file (Makefile.in, each configure-target-*), so the site file reached only the host-side configures:
+    # libstdc++ still RAN its iconv probe (chef "yes", lixi "no": gcc-15.3.0 and -lib DIFFER; gate L4 FAILs the log; wave6u).
+    # The same answers as environment variables reach every configure: autoconf reports a set cache variable "(cached)".
+    set -a; . ${./config.site}; set +a
     # NM: binutils' gnm (configure took OI's /usr/bin/nm -p before). gettext tools: none (--disable-nls; configure still looked).
     export NM="$binutils/bin/gnm" NM_FOR_TARGET="$binutils/bin/gnm" MSGFMT=: GMSGFMT=: XGETTEXT=: MSGMERGE=:
     # The compiler binaries themselves link the seed's C++ runtime statically, so
