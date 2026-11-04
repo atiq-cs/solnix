@@ -20,6 +20,8 @@
 #    it); the identity rule (gate is not illumos-gate-proto, pkg-config is not pkgconf); the negative controls (off-branch,
 #    --closure, an unpublished input, eval off, a mutant without the identity rule); the second vote.
 #    MAIN_BUILDER=<origin/main's solnix-builder.sh, before fleet4>: it must never take an eval job (else SKIPped, not passed).
+# 10. fleet6: queue requests signed with sshsig (infra R7), a retry signed anew (R8), the egress registration (s3).
+#    PRESIG_BUILDER=<a builder before fleet6>: in sshsig mode it must fail the signature check (else SKIPped, not passed).
 S=${1:-$(dirname "$0")/../modules/config/community/solnix-builder.sh}
 W=$(mktemp -d /tmp/bld.XXXXXX); trap 'find "$W" -depth -delete' EXIT
 bad=0; ok() { print "ok: $1"; }; no() { print "FAIL: $1"; bad=1; }
@@ -115,7 +117,10 @@ cat > "$W/fk/curl" <<'FK'
 #!/bin/sh
 q=; for a; do case $a in http://queue.invalid*) q=1;; esac; done; [ -n "$q" ] || exec "$FKREAL" "$@"
 o=; u=; d=; w=; while [ $# -gt 0 ]; do case $1 in -o) o=$2; shift;; --data-binary) d=$2; shift;; -w) w=1; shift;; -m|-X|-H) shift;; -*) ;; *) u=$1;; esac; shift; done
-case $u in */rows*) ;; *) cat > /dev/null;; esac; echo "$u $d" >> "$FKLOG"
+# FKREQ=<dir>: each request kept as <dir>/<n>/{url,hdr,body} (hdr: the -H @- lines; an egress POST's body is its stdin)
+kp() { [ -n "$FKREQ" ] || { cat > /dev/null; return; }; n=$(( $(cat "$FKREQ/n" 2> /dev/null || echo 0) + 1 )); echo $n > "$FKREQ/n"
+  mkdir -p "$FKREQ/$n"; echo "$u" > "$FKREQ/$n/url"; if [ "$1" = body ]; then cat > "$FKREQ/$n/body"; else cat > "$FKREQ/$n/hdr"; printf %s "$d" > "$FKREQ/$n/body"; fi; }
+case $u in */rows*) ;; */builder/egress) kp body;; *) kp;; esac; echo "$u $d" >> "$FKLOG"
 qs() { echo "$u" | sed -n "s/.*[?\&]$1=\([^&]*\).*/\1/p" | sed 's/%2B/+/g'; }
 case $u in
 */rows) exit 22;;
@@ -126,8 +131,13 @@ case $u in
   if [ -n "$FKEMPTY" ]; then echo '{"jobs":[]}'; else echo '{"jobs":[{"id":'$i',"claim_token":"'$t'","pname":"'$p'","current_version":"1","target_version":"1"}]}'; fi > "$o"
   [ -z "$FKSLOW" ] || sleep "$FKSLOW";;
 */complete) echo '{"id":42,"attempt":1,"state":"done","publication_verified":false,"attestation_recorded":false}' > "$o";;
-*) echo '{"claim_expires_at":"x"}' > "$o";;
-esac; [ -z "$w" ] || printf 200
+# egress: 400 with "seen" unless ip is $FKSEEN (198.51.100.7); FKE500=1: a 500
+*/builder/egress) i=$(jq -r .ip "$FKREQ/$n/body"); sn=${FKSEEN:-198.51.100.7}
+  if [ -n "$FKE500" ]; then echo '{"error":"x"}' > "$o"; c=500; elif [ "$i" != "$sn" ]; then echo '{"error":"ip must be the address this request comes from","seen":"'$sn'"}' > "$o"; c=400
+  else echo '{"status":"registered","keyid":"qbhost","ip":"'$sn'","addresses":1,"expires_in":86400}' > "$o"; fi;;
+# FKFAIL=<file>: while it exists, the next heartbeat answers 503 (and removes it)
+*) echo '{"claim_expires_at":"x"}' > "$o"; case $u in */heartbeat) [ -z "$FKFAIL" ] || [ ! -e "$FKFAIL" ] || { rm -f "$FKFAIL"; c=503; };; esac;;
+esac; [ -z "$w" ] || printf %s "${c:-200}"
 FK
 chmod +x "$W/fk/curl"
 tk() { env BUILDER_PATH="$W/fk:$PATH" FKREAL=$RC FKLOG=$W/fk/log FKROWS=${FKROWS:-$W/g.json} FKNEXT=flaky BUILDER_API=http://queue.invalid/q \
@@ -719,6 +729,77 @@ vote8 evvote "$M1" wave9 "$VH"
 has 'is not on wave9' && [[ $(claims) == 0 ]] && ok "NEG vote: branch wave9: no vote" || no "vote wave9: $out"
 vote8 gate "$M1" main "$VH" gate
 has 'vote gate: at .* it is illumos-gate-proto, not gate: no vote' && [[ $(claims) == 0 ]] && ok "NEG vote: the job's pname is not the attr's (gate -> illumos-gate-proto): no vote" || no "vote gate: $out"
+# --- 10. fleet6: sshsig queue auth (R7), retries signed anew (R8), the egress registration (s3). Each request is checked
+# by rebuilding the spec message HERE from what was sent ("<METHOD>\n<path>\n<sha256 hex of the body>\n<ts>\n", path = the
+# URL's) and verifying its X-Solnix-Sig (base64 of the armored SSHSIG) with ssh-keygen -Y verify against the test key.
+SK=$(whence -p ssh-keygen); rm -f "$W/qkey" "$W/qkey.pub"; ssh-keygen -q -t ed25519 -N '' -C qb-queue -f "$W/qkey" < /dev/null
+print -r -- "qb $(cut -d' ' -f1,2 "$W/qkey.pub")" > "$W/qsigners"; print "{\"rows\":[$(row good 1 outdated)]}" > "$W/g9.json"
+QA=http://queue.invalid/api/v1/build-queue	# the production path shape: /api/v1/build-queue/<id>/heartbeat
+t9() { typeset s=$1; shift; find "$W/rq" -depth -delete 2> /dev/null; mkdir -p "$W/rq"; : > "$W/fk/log"
+  out=$(env BUILDER_PATH="$W/fk:$PATH" FKREAL=$RC FKLOG=$W/fk/log FKREQ=$W/rq FKROWS=$W/g9.json BUILDER_API=$QA BUILDER_RECIPES=file://$W/g.tsv \
+    BUILDER_CACHE=file://$W/cache BUILDER_FLAKE=$F BUILDER_LOAD_MAX=1000 BUILDER_STATE=$W/st9 BUILDER_PUBLISH_KEY=$W/qkey BUILDER_SSH_KEYGEN=$SK \
+    BUILDER_RETRY_WAIT=1 BUILDER_AGENT=qbhost BUILDER_PUBLISH_ID=qbhost "$@" ksh93 "$s" "$t9c" 2>&1); c=$(<"$W/fk/log"); }
+t9c=once
+hv() { tr -d '\r' < "$1/hdr" 2> /dev/null | sed -n "s/^$2: //p"; }	# hv <request> <header>
+rqs() { typeset i=0; while (( (i += 1) <= $(cat "$W/rq/n" 2> /dev/null || print 0) )); do print -r -- "$W/rq/$i"; done; }
+sigok() {	# sigok <request>: its X-Solnix-Sig verifies over the spec message rebuilt from its URL path, body and X-Solnix-Timestamp
+  typeset u=$(<"$1/url") ts=$(hv "$1" X-Solnix-Timestamp); [[ $ts == +([0-9]) ]] || return 1
+  printf 'POST\n%s\n%s\n%s\n' "/${u#http://*/}" "$(digest -a sha256 "$1/body")" "$ts" > "$1/msg"
+  hv "$1" X-Solnix-Sig | openssl base64 -d -A > "$1/sig" 2> /dev/null
+  ssh-keygen -Y verify -f "$W/qsigners" -I qb -n solnix-build-queue -s "$1/sig" < "$1/msg" > /dev/null 2>&1; }
+paths9() { for r in $(rqs); do u=$(<"$r/url"); u=${u#$QA}; print -n "${u#http://queue.invalid/api/v1} "; done; }
+allsig() { typeset r n=0; for r in $(rqs); do sigok "$r" && [[ -z $(hv "$r" X-Solnix-Build) ]] || return 1; n=$((n + 1)); done; (( n >= 3 )); }
+print BEARER-qb9 > "$W/bearer"
+t9 "$S" BUILDER_QUEUE_AUTH=sshsig; print -r -- "$out" | sed 's/^/   9 /'
+[[ $(paths9) == '/claim /42/heartbeat /42/complete ' ]] && allsig && has 'complete 42 -> 200' &&
+  ok "sshsig: claim, heartbeat and complete each carry X-Solnix-Sig + X-Solnix-Timestamp over the spec bytes (path /api/v1/build-queue/...), no bearer" ||
+  no "sshsig: $(paths9) $(for r in $(rqs); do print -n "[$(cat "$r/hdr" 2> /dev/null | cut -c1-40 | tr '\n' '|')] "; done)"
+[[ $(<"$W/rq/1/body") == *'"pnames":["good"]'* ]] && ! grep -q BEARER-qb9 "$W"/rq/*/hdr && ok "sshsig: the bearer file is never read (its value is in no request)" || no "sshsig sent the bearer"
+mu8 "$S" "$W/mut9m.sh" "qs=\$(printf '%s\\n%s\\n%s\\n%s\\n'" "qs=\$(printf '%s\\n%s\\n%s\\n%s'"
+t9 "$W/mut9m.sh" BUILDER_QUEUE_AUTH=sshsig
+! allsig && [[ -n $(hv "$W/rq/1" X-Solnix-Sig) ]] && ok "NEG mutant signing the message without its final newline: refused by the check (the check sees the bytes)" || no "mutant message passed"
+rm -f "$W/bearer"; t9 "$S" BUILDER_QUEUE_AUTH=sshsig
+[[ $(paths9) == '/claim /42/heartbeat /42/complete ' ]] && allsig && ok "sshsig with no bearer file at all: the key is the credential, claimed and completed" || no "sshsig no bearer: $(paths9)"
+t9 "$S" BUILDER_QUEUE_AUTH=sshsig BUILDER_PUBLISH_KEY=$W/nokey
+[[ ! -e $W/rq/n ]] && has 'dry run: no .*nokey' && ok "NEG sshsig, key unreadable: a dry run, nothing sent" || no "sshsig no key: $(paths9) $(print -r -- "$out" | grep -i 'dry run' | head -2)"
+print BEARER-qb9 > "$W/bearer"; t9 "$S" BUILDER_QUEUE_AUTH=bearer
+[[ $(paths9) == '/claim /42/heartbeat /42/complete ' && $(hv "$W/rq/2" X-Solnix-Build) == BEARER-qb9 ]] && ! egrep -qi 'X-Solnix-(Sig|Timestamp)' "$W"/rq/*/hdr &&
+  ok "bearer: X-Solnix-Build on each request, no X-Solnix-Sig or X-Solnix-Timestamp" || no "bearer: $(cat "$W"/rq/*/hdr 2> /dev/null | cut -c1-30 | tr '\n' '|')"
+t9 "$S"; [[ $(hv "$W/rq/1" X-Solnix-Build) == BEARER-qb9 && -z $(hv "$W/rq/1" X-Solnix-Sig) ]] && ok "the default (no BUILDER_QUEUE_AUTH): bearer, as before" || no "default auth"
+t9 "$S" BUILDER_QUEUE_AUTH=both; n=0; for r in $(rqs); do sigok "$r" && [[ $(hv "$r" X-Solnix-Build) == BEARER-qb9 ]] && n=$((n + 1)); done
+(( n == 3 )) && ok "both (the control for the two checks above): each request has the bearer AND a valid signature" || no "both: $n of 3"
+# R8: a heartbeat answered 503 is retried with a new X-Solnix-Timestamp, so a new signature (ed25519 is deterministic: the
+# same message gives the same bytes, which infra refuses as a replay); a mutant that keeps the ts resends the same bytes
+rt9() { : > "$W/fail9"; t9 "$1" BUILDER_QUEUE_AUTH=sshsig FKFAIL=$W/fail9; h1=$W/rq/2 h2=$W/rq/3; }
+rt9 "$S"; print -r -- "$out" | grep -E 'heartbeat|retry' | sed 's/^/   R /'
+[[ $(paths9) == '/claim /42/heartbeat /42/heartbeat /42/complete ' ]] && sigok "$h1" && sigok "$h2" && (( $(hv "$h2" X-Solnix-Timestamp) > $(hv "$h1" X-Solnix-Timestamp) )) &&
+  [[ $(hv "$h1" X-Solnix-Sig) != "$(hv "$h2" X-Solnix-Sig)" ]] && has 'queue POST /42/heartbeat -> 503: retry 1 in 1 s, signed anew' && has 'heartbeat 42 -> 200' &&
+  ok "R8: a 503 heartbeat is retried signed anew: a later ts and another signature, both valid" || no "retry: $(paths9) $(print -r -- "$out" | grep -E 'retry|heartbeat')"
+mu8 "$S" "$W/mut9t.sh" 'while aqs=$(printf '"'%(%s)T'"' now); (( aqs <= aqt )); do sleep 1; done; aqt=$aqs' '(( aqt )) || aqt=$(printf '"'%(%s)T'"' now)'
+rt9 "$W/mut9t.sh"
+[[ $(paths9) == '/claim /42/heartbeat /42/heartbeat /42/complete ' && $(hv "$h1" X-Solnix-Sig) == "$(hv "$h2" X-Solnix-Sig)" ]] && cmp -s "$h1/hdr" "$h2/hdr" &&
+  ok "NEG mutant keeping the ts: the retry is byte-identical to the first try (the replay R8 refuses), so the check above can fail" || no "mutant ts: $(paths9)"
+if [[ -n ${PRESIG_BUILDER:-} ]]; then t9 "$PRESIG_BUILDER" BUILDER_QUEUE_AUTH=sshsig
+  ! allsig && grep -q BEARER-qb9 "$W/rq/1/hdr" && ok "NEG a builder before this change ($PRESIG_BUILDER), asked for sshsig: bearer only, no signature (fails the check)" || no "presig builder passed"
+else print "SKIP sshsig negative control: PRESIG_BUILDER unset (not counted as a pass)"; fi
+# s3 egress: exactly six keys; sig = armored SSHSIG (namespace solnix-builder) over the four lines; the first try's ip is
+# TEST-NET-1, a 400 gives `seen`, re-signed once; the address is kept for the next run; a failure never fails the builder
+egok() {	# egok <request> <ip>: six keys, the values, and the signature over the four-line message
+  typeset b=$1/body ts; [[ $(jq -c 'keys' "$b") == '["ip","keyid","kind","sig","ts","version"]' ]] || return 1
+  [[ $(jq -r '[.version, .kind, .keyid, .ip, (.ts|type)] | join(" ")' "$b") == "1 builder_egress qbhost $2 number" ]] || return 1
+  ts=$(jq -r .ts "$b"); jq -j .sig "$b" > "$1/sig"; [[ $(head -1 "$1/sig") == '-----BEGIN SSH SIGNATURE-----' ]] || return 1
+  printf 'solnix-builder-egress-v1\n%s\n%s\n%s\n' qbhost "$2" "$ts" | ssh-keygen -Y verify -f "$W/qsigners" -I qb -n solnix-builder -s "$1/sig" > /dev/null 2>&1; }
+e9() { typeset r; t9c=egress; t9 "$1" BUILDER_EGRESS=1 BUILDER_STATE=$W/st9e "${@:2}"; r=$?; t9c=once; return $r; }
+mkdir -p "$W/st9e"; e9 "$S"; r=$?; print -r -- "$out" | sed 's/^/   E /'
+(( r == 0 )) && [[ $(paths9) == '/builder/egress /builder/egress ' ]] && egok "$W/rq/1" 192.0.2.1 && egok "$W/rq/2" 198.51.100.7 &&
+  [[ $(cut -d' ' -f2 "$W/st9e/egress") == 198.51.100.7 ]] && has 'egress: qbhost 198.51.100.7 -> 200 .*"registered"' &&
+  ok "egress: six keys, signed over the four lines; 192.0.2.1 -> 400 seen 198.51.100.7 -> signed anew -> 200 registered, logged and kept" || no "egress: $(paths9) $out"
+e9 "$S"; [[ $(paths9) == '/builder/egress ' ]] && egok "$W/rq/1" 198.51.100.7 && ok "egress again: the kept address first, one request" || no "egress 2: $(paths9)"
+e9 "$S" FKE500=1; r=$?; (( r == 0 )) && has 'egress: qbhost 198.51.100.7 -> 500' && [[ $(paths9) == '/builder/egress ' ]] && ok "egress answered 500: logged, rc 0 (never fails the builder)" || no "egress 500: rc $r $out"
+e9 "$S" BUILDER_EGRESS=0; [[ ! -e $W/rq/n ]] && ok "NEG BUILDER_EGRESS=0 (not an identified builder): nothing sent" || no "egress off sent $(paths9)"
+mu8 "$S" "$W/mut9e.sh" 'ts: $ts, sig: $sig}' 'ts: $ts, sig: $sig, agent: "x"}'
+e9 "$W/mut9e.sh"; ! egok "$W/rq/1" 198.51.100.7 && [[ $(jq 'keys | length' "$W/rq/1/body") == 7 ]] && ok "NEG mutant with a seventh key: the six-key check fails" || no "mutant egress passed"
+grep -q 'egress; egl=' "$S" && ok "the SMF loop registers egress at start and every BUILDER_EGRESS_SECS" || no "no egress in the loop"
 rm -f "$W/bearer"
 (( bad )) && print "RESULT: FAIL" || print "RESULT: PASS"
 exit $bad

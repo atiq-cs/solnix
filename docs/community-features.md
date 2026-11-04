@@ -40,9 +40,13 @@ Effective = `!privacy.enable && <group> && <feature>` (`solnix.community.active.
 Off by default, and only while the census itself runs. What is sent: one more boolean in the census record,
 `"advisories": true`. Nothing else, and the server doesn't store it. The reply names the public feed
 (`https://telemetry.solnix.io/api/v1/advisories`, infra's daily grype scan of the served store paths) and its sha256.
-What is fetched: that feed, a static public GET, only when its sha256 differs from the cached copy. The body is checked
-against the sha256 and kept at /var/lib/solnix/census/advisories.json (owner `daemon`, 0644; a feed that fails the check
-is dropped and the old copy kept). Matching is local: the 32-character store hashes in the closures of
+What is fetched: that feed, a static public GET (gzip on the wire), only when its sha256 differs from the cached copy.
+The inflated body is checked against the sha256 and against its signature, and kept at
+/var/lib/solnix/census/advisories.json (owner `daemon`, 0644). A feed that fails either check is dropped, the old copy
+kept, and the census log says why. The signature (infra 2026-11-04) is ed25519 over the exact uncompressed body, by the
+key pinned in solnix-advisories.sh, `solnix-advisories-1:2d5AbDD9IxGY2aKTG2SgtE9E6pPXN73KBafI+zCqpC8=`, never one fetched
+next to the feed. It comes from the same response's `X-Solnix-Feed-Sig` header (so a newer feed cannot race in between),
+else from `<url>.sig`, and openssl from the store checks it. Matching is local: the 32-character store hashes in the closures of
 /run/current-system, /nix/var/nix/profiles/system, every /nix/var/nix/profiles/per-user/*/profile and every user's
 ~/.nix-profile are matched against the feed's `hash`. Neither the matches nor the store paths leave the host. The census
 log gets one line a day (`advisories: N store paths in use have M known CVEs (K Critical); run solnix-advisories`), and
@@ -198,13 +202,38 @@ solnix.builder.contactEmail = "greg+dixi-solnix@burd.me";   # per host; used onc
 ### The bearer (never in the store)
 
 One shared `X-Solnix-Build` secret for all hosts: sops `secrets/build-queue-bearer.yaml`, key `build-queue-bearer`,
-encrypted to the solnix dev key. Without the file the builder plans and logs `dry run`, and never claims. The builder
+encrypted to the solnix dev key. Without the file the builder plans and logs `dry run`, and never claims. Infra deprecated
+it on 2026-11-04 (R7, target retirement 2026-11-11, after 24 h with no bearer request and 48 h notice); see the next
+section. The builder
 passes it to curl on stdin (`-H @-`), never in argv (psargs is world-readable). To place it on a host, from floki:
 
 ```sh
 SOPS_AGE_KEY_FILE=~/.config/sops/age/keys.txt sops -d --extract '["build-queue-bearer"]' secrets/build-queue-bearer.yaml |
   ssh <host> 'pfexec ksh93 -c "umask 077; mkdir -p /var/lib/solnix; cat > /var/lib/solnix/build-queue-bearer"'
 ```
+
+### Signed queue requests and the egress address (`solnix.cache.build.queueAuth`, fleet6)
+
+- `queueAuth = bearer | both | sshsig`. The default is `both` on an identified builder (`solnix.builder.enable`,
+  isolation `none`), else `bearer`. Anything but `bearer` sends the host's identity, so the module refuses it without
+  `solnix.builder.enable`. The builder zone's untrusted user cannot read the host key, so a zone builder stays on bearer.
+- Every claim, heartbeat and complete carries `X-Solnix-Sig`: the base64, as one line, of the armored
+  `ssh-keygen -Y sign -n solnix-build-queue -f <identityKeyFile>` over `<METHOD>\n<path>\n<sha256 hex of the body>\n<unix-ts>\n`.
+  The path is the URL's (`/api/v1/build-queue/<id>/heartbeat`). It also carries `X-Solnix-Timestamp: <unix-ts>`.
+  ssh-keygen comes from the store's openssh. The headers go to curl on stdin, like the bearer.
+- `sshsig` never reads the bearer file. `both` sends the bearer as well, until infra confirms each host's signed requests.
+- A request with no answer, or a 502/503/504, is tried 3 times in all, 10 and then 20 s apart. Each try is signed anew at a
+  later second. ed25519 signatures are deterministic (measured: the same message gives the same bytes), and infra refuses
+  a resent signature as a replay (R8), so a retry never reuses one. A 429 is not retried here.
+- Egress (infra s3): at start, then every 6 h, `POST builders.solnix.io/api/v1/builder/egress` with exactly
+  `{version, kind, keyid, ip, ts, sig}`. `keyid` is the agent id (the enrolled keyid: dixa, dixi, lixi, lixu). `sig` is
+  the armored `ssh-keygen -Y sign -n solnix-builder` over `solnix-builder-egress-v1\n<keyid>\n<ip>\n<ts>\n`. The ip is
+  the address the server sees, and only the server knows it. The builder sends the last one registered
+  (`/var/lib/solnix/builder/egress`), else 192.0.2.1 (TEST-NET-1). After a 400 it takes the reply's `seen` and signs again,
+  once. There is no third-party IP echo. Measured from chef2 with a throwaway key: a wrong ip gives
+  `400 {"error":"ip must be the address this request comes from","seen":"54.213.136.114"}` before the key check, and the
+  right ip gives `403 unknown builder key or invalid signature`. The reply is logged and never fails the builder.
+  `solnix-builder egress` registers by hand.
 
 ## Host identity: the host's own ssh-ed25519 key, kept in sops
 

@@ -6,7 +6,7 @@
 # unless the build is identical), and check the NarHash against the served narinfo's. Only then claim exactly that job
 # (pnames=[pname], max 1) and complete it done. The queue spends an attempt AT CLAIM (registry.rebuild_claim), so a
 # declined or failed job costs it nothing, and no job is ever completed failed because this host cannot do it.
-# Without the bearer file it never claims (dry run).
+# Without the bearer file (queueAuth sshsig: the readable key) it never claims (dry run).
 # Parallel (qbuild4): each tick sizes itself from the CPUs NOT busy with other work (none of ours runs between ticks):
 # K jobs of C cores (size), each BUILD row one job in its own state dir, up to K at once (ksh93 JOBMAX). A tick that
 # rebuilt or claimed something re-ticks soon (BUILDER_BUSY_TICK_*), one that found nothing to do backs off (BUILDER_TICK_*).
@@ -59,6 +59,16 @@ PATH=${BUILDER_PATH:-/usr/bin:/usr/sbin}
 : ${BUILDER_CACHE_KEY:=cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8=}
 # eval-anchored jobs: off unless set (module solnix.cache.build.evalAnchored); the branches whose heads are evaluated, in order
 : ${BUILDER_EVAL:=0} ${BUILDER_EVAL_BRANCHES:=main 26.11}
+# queue auth (infra 2026-11-04 R7): bearer (X-Solnix-Build), sshsig (X-Solnix-Sig by BUILDER_PUBLISH_KEY, the host's enrolled
+# key) or both (until infra confirms sshsig per host); module solnix.cache.build.queueAuth. A transient failure (no answer,
+# 502-504) is tried BUILDER_RETRIES times in all, BUILDER_RETRY_WAIT s more each time. BUILDER_SSH_KEYGEN: the store's.
+: ${BUILDER_QUEUE_AUTH:=bearer} ${BUILDER_SSH_KEYGEN:=ssh-keygen} ${BUILDER_RETRIES:=3} ${BUILDER_RETRY_WAIT:=10}
+# egress registration (infra s3): 1 on an identified builder (the module); at start, then every BUILDER_EGRESS_SECS (6 h)
+: ${BUILDER_EGRESS:=0} ${BUILDER_EGRESS_SECS:=21600}
+# sshsig: the key is the queue credential and the bearer is never read. Claiming is gated on -s $BUILDER_BEARER_FILE, so
+# point that at the key's public half when the key is readable (a dry run when not): nothing secret, should anything read it.
+# shortcut: an alias, so ready()/pubok()/claim() stay as they are while fleet5 changes ready(); a real authok() test after.
+[[ $BUILDER_QUEUE_AUTH == sshsig ]] && { [[ -r $BUILDER_PUBLISH_KEY ]] && BUILDER_BEARER_FILE=$BUILDER_PUBLISH_KEY.pub || BUILDER_BEARER_FILE="$BUILDER_PUBLISH_KEY (not readable)"; }
 J=$BUILDER_STATE C=0 flake=$BUILDER_FLAKE	# a job's state dir, its cores, the flake (locked once per tick)
 EA= EB= EC= EN= cx=	# an eval job's attr, branch, commit, flake narHash (set only in its own job); extra completion fields
 log() { printf '%(%Y-%m-%dT%H:%M:%SZ)T builder: %s\n' now "$*"; }
@@ -158,11 +168,54 @@ served() {	# served <out>: print the NarHash cache.solnix.io serves for <out> (s
 	curl -sf -m 30 "$BUILDER_CACHE/${h%%-*}.narinfo" | nawk '/^NarHash: sha256:/ {print $2; f=1} END {exit !f}'
 }
 
+qhdr() {	# qhdr <method> <path> <body> <ts>: one attempt's auth headers, one a line. bearer: X-Solnix-Build. sshsig (infra
+	# 2026-10-29, R7): X-Solnix-Sig = base64 (one line) of the armored `ssh-keygen -Y sign -n solnix-build-queue` by the
+	# enrolled key over "<METHOD>\n<path>\n<sha256 hex of the body>\n<ts>\n" (the URL's path: /api/v1/build-queue/claim),
+	# and X-Solnix-Timestamp: <ts>. both: all three. sshsig never reads the bearer file.
+	typeset qp=${BUILDER_API#*://} qs
+	[[ $BUILDER_QUEUE_AUTH == sshsig ]] || printf 'X-Solnix-Build: %s\n' "$(<"$BUILDER_BEARER_FILE")"
+	[[ $BUILDER_QUEUE_AUTH == @(sshsig|both) ]] || return 0
+	qp=/${qp#*/}$2
+	qs=$(printf '%s\n%s\n%s\n%s\n' "$1" "$qp" "$(printf %s "$3" | digest -a sha256)" "$4" |
+	    "$BUILDER_SSH_KEYGEN" -q -Y sign -n solnix-build-queue -f "$BUILDER_PUBLISH_KEY" 2> /dev/null | openssl base64 -A)
+	[[ $qs == +([A-Za-z0-9+/=]) ]] || { log "queue $1 $2: cannot sign with $BUILDER_PUBLISH_KEY: sent without a signature" >&2; return 0; }
+	printf 'X-Solnix-Sig: %s\nX-Solnix-Timestamp: %s\n' "$qs" "$4"
+}
 api() {	# api <method> <path> [json-body]: body in $J/resp (the job's own), HTTP code in $code (called directly, never in
-	# $(...), so $code reaches the caller). The bearer goes to curl on stdin (-H @-), never in its arguments: psargs is
-	# world-readable on illumos.
-	code=$(printf 'X-Solnix-Build: %s\n' "$(<"$BUILDER_BEARER_FILE")" | curl -sS -m 60 -o "$J/resp" -w '%{http_code}' \
-	    -X "$1" -H @- -H 'Content-Type: application/json' ${3:+--data-binary "$3"} "$BUILDER_API$2" 2>"$J/curl.err")
+	# $(...), so $code reaches the caller). The headers go to curl on stdin (-H @-), never in its arguments: psargs is
+	# world-readable on illumos. Each attempt has its own headers: a signed request is single-use (infra R8: a resend is a
+	# 403 replay) and ed25519 signs the same bytes the same way, so a retry signs anew at a later ts.
+	typeset aqn=0 aqt=0 aqs
+	while :; do
+		while aqs=$(printf '%(%s)T' now); (( aqs <= aqt )); do sleep 1; done; aqt=$aqs
+		code=$(qhdr "$1" "$2" "${3:-}" "$aqt" | curl -sS -m 60 -o "$J/resp" -w '%{http_code}' \
+		    -X "$1" -H @- -H 'Content-Type: application/json' ${3:+--data-binary "$3"} "$BUILDER_API$2" 2>"$J/curl.err")
+		[[ $code == @(000|502|503|504) ]] && (( (aqn += 1) < BUILDER_RETRIES )) || return 0
+		log "queue $1 $2 -> $code: retry $aqn in $(( aqn * BUILDER_RETRY_WAIT )) s, signed anew"; sleep $(( aqn * BUILDER_RETRY_WAIT ))
+	done
+}
+egress() {	# egress: register this host's egress address for its enrolled key (infra 2026-11-04 s3; logged by infra, not enforced
+	# yet): POST <api>/builder/egress with exactly {version, kind, keyid, ip, ts, sig}, sig = the armored `ssh-keygen -Y sign
+	# -n solnix-builder` over "solnix-builder-egress-v1\n<keyid>\n<ip>\n<ts>\n". The ip must be the one the request comes from,
+	# which only the server sees: the last one registered ($BUILDER_STATE/egress), else 192.0.2.1 (TEST-NET-1), and after a 400
+	# the reply's `seen`, signed anew, once. No third-party IP echo. Logged; never fails the builder.
+	typeset egi egs egr egt egn=0 egf=$BUILDER_STATE/egress
+	[[ $BUILDER_EGRESS == 1 ]] || return 0
+	egi=$(cut -d' ' -f2 "$egf" 2> /dev/null); [[ $egi == +([0-9a-fA-F.:]) ]] || egi=192.0.2.1
+	while :; do
+		egt=$(printf '%(%s)T' now)
+		egs=$(printf 'solnix-builder-egress-v1\n%s\n%s\n%s\n' "$BUILDER_PUBLISH_ID" "$egi" "$egt" |
+		    "$BUILDER_SSH_KEYGEN" -q -Y sign -n solnix-builder -f "$BUILDER_PUBLISH_KEY" 2> /dev/null) && [[ $egs == -----BEGIN* ]] ||
+		    { log "egress: cannot sign with $BUILDER_PUBLISH_KEY: not registered"; return 0; }
+		egr=$(jq -nc --arg k "$BUILDER_PUBLISH_ID" --arg ip "$egi" --argjson ts "$egt" --arg sig "$egs"$'\n' \
+		    '{version: 1, kind: "builder_egress", keyid: $k, ip: $ip, ts: $ts, sig: $sig}' |
+		    curl -sS -m 30 -o "$egf.resp" -w '%{http_code}' -H 'Content-Type: application/json' --data-binary @- "${BUILDER_API%/build-queue}/builder/egress" 2> "$egf.err")
+		log "egress: $BUILDER_PUBLISH_ID $egi -> $egr $(tr -d '\n' < "$egf.resp" 2> /dev/null | cut -c1-300)$([[ $egr == 000 ]] && cut -c1-200 "$egf.err")"
+		[[ $egr == 200 ]] && { print -r -- "$egt $egi" > "$egf"; return 0; }
+		egs=$(jq -r '.seen // empty' "$egf.resp" 2> /dev/null)
+		[[ $egr == 400 && $egn == 0 && $egs == +([0-9a-fA-F.:]) && $egs != "$egi" ]] || return 0
+		egi=$egs egn=1	# the address the server saw
+	done
 }
 size() {	# "<jobs> <cores> <busy>" for this tick. busy: CPUs busy over a 5 s sample. None of ours runs between ticks, so that
 	# is OTHER work; the 1-min load average would still count the last tick's builds. In a zone the per-CPU tick kstats
@@ -542,6 +595,7 @@ size) size; exit ;;
 pause) pause "$2"; exit ;;
 once) mkdir -p "$BUILDER_STATE" && tick; exit ;;
 eindex) mkdir -p "$BUILDER_STATE" && eindex; exit ;;
+egress) mkdir -p "$BUILDER_STATE" && egress; exit ;;	# by hand: register now
 vote) mkdir -p "$BUILDER_STATE" && vote "$2" "$3" "$4" "$5" "${6:-}"; exit ;;	# by hand (until infra lists eval proposals)
 ready) mkdir -p "$BUILDER_STATE" && curl -sS -m 60 -o "$BUILDER_STATE/recipes.tsv" "$BUILDER_RECIPES" && ready "$2" "$3"; exit ;;	# by hand: never claims
 esac
@@ -557,4 +611,6 @@ if [[ -n ${BUILDER_CAP_SHARE:-} ]]; then
 	    prctl -n project.cpu-cap -t privileged -v "$v" -e deny -i project solnix-builder || log "cannot set project.cpu-cap $v"
 	log "opportunistic: project.cpu-cap $v (${BUILDER_CAP_SHARE}% of $BUILDER_NCPU CPUs)"
 fi
-while :; do if tick; then sleep "$(pause busy)"; else sleep "$(pause)"; fi; done
+egl=0	# the last egress try: at start, then at the first tick boundary BUILDER_EGRESS_SECS later (a registration lasts 24 h)
+while :; do (( $(printf '%(%s)T' now) - egl >= BUILDER_EGRESS_SECS )) && { egress; egl=$(printf '%(%s)T' now); }
+	if tick; then sleep "$(pause busy)"; else sleep "$(pause)"; fi; done

@@ -13,14 +13,15 @@ let
   s = pkgs.solnix;
   ca = "${s.nixChain.cacert}/etc/ssl/certs/ca-bundle.crt";
   adv = c.advisories && a.census;
-  # solnix-advisories (solnix-advisories.sh): the feed match, for the census and for anyone on the host
+  # solnix-advisories (solnix-advisories.sh): the feed match, for the census and for anyone on the host; openssl checks
+  # the feed's signature
   advPkg = pkgs.writeTextFile {
     name = "solnix-advisories";
     destination = "/bin/solnix-advisories";
     executable = true;
     text = ''
       #!/bin/sh
-      export ADV_PATH=${s.jq}/bin:${s.nixChain.curl}/bin:${config.nix.package}/bin:/usr/bin:/usr/sbin CURL_CA_BUNDLE=${ca}
+      export ADV_PATH=${s.jq}/bin:${s.nixChain.curl}/bin:${config.nix.package}/bin:${s.openssl}/bin:/usr/bin:/usr/sbin CURL_CA_BUNDLE=${ca}
       exec /usr/bin/ksh93 ${./solnix-advisories.sh} "$@"
     '';
   };
