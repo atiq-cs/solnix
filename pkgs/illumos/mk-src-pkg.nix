@@ -133,7 +133,7 @@ let
     # the drv's own PATH attribute (the builder's starting environment) is the store-only one too, not the OI default below:
     # nothing before the builder's `export PATH` may resolve a host tool (gate2 A1: env PATH only /nix/store). Exempt: as before.
     PATH = if storeOnly then (if btPath == "" then ntPath else "${btPath}:${ntPath}") else a.PATH;
-    args = map (x: builtins.replaceStrings
+    args = map (x: (if storeOnly then cmakeX else (y: y)) (builtins.replaceStrings
     [ ''export PATH="''${btPath:+$btPath:}/usr/gnu/bin:/usr/bin:/usr/sbin"'' ''export CC="$W/cc$ABI" ABI LIBSUB'' ]
     [ (''export PATH="''${btPath:+$btPath:}$ntPath" CONFIG_SITE=${./config.site}''   # config.site: host-state probes pinned
        + (if storeOnly then "\n    /usr/bin/bash ${./path-gate.sh}" else "")
@@ -153,7 +153,16 @@ let
       # solnix host without it): an empty one in the build dir. NixOS: no /etc/fonts in the sandbox. HOME is Nix's /homeless-shelter.
       printf '<?xml version="1.0"?><fontconfig><cachedir>%s</cachedir></fontconfig>\n' "$W/fcc" > "$W/fonts.conf"; export FONTCONFIG_FILE="$W/fonts.conf"'') ]
     # .la links too (libpng.la -> libpng16.la dangled once the files went: gate B6; recipes1 W5 WAVE6-NOTES 8)
-    (if storeOnly then builtins.replaceStrings [ "find \"$out\" -name '*.la' -type f -delete" ] [ "find \"$out\" -name '*.la' \\( -type f -o -type l \\) -delete" ] x else x)) a.args; };
+    (if storeOnly then builtins.replaceStrings [ "find \"$out\" -name '*.la' -type f -delete" ] [ "find \"$out\" -name '*.la' \\( -type f -o -type l \\) -delete" ] x else x))) a.args; };
+  # cmake builds (the recipe text runs cmake; NixOS: the cmake setup hook comes with cmake in nativeBuildInputs, so only those drvs move).
+  # The env CMAKE_PREFIX_PATH is a PATH-style list: cmake splits it on ':' on Unix, so the ';'-joined one named NO dir (a64s on dixa:
+  # libgit2 found the host /usr/lib/libz.so; x86 w6, chef2 W2 t9: "Could NOT find ZLIB", bundled copy). ':' and solnix-cmake.cmake
+  # (lib/amd64 for ABI 64, host prefixes ignored). Measured on chef: t/cmakeprobe.sh, store zlib found per ABI, host never.
+  cmakeX = x: if builtins.match ".*cmake.*" build == null || builtins.match ".*CPP_=.*" x == null then x else   # the script arg only
+    let r = builtins.replaceStrings [ ''CPP_="$CPP_;$d"'' ''CMAKE_TOOLCHAIN_FILE=${./solnix-toolchain.cmake}'' ]
+                                   [ ''CPP_="$CPP_:$d"'' ''CMAKE_TOOLCHAIN_FILE=${./solnix-cmake.cmake}'' ] x;
+    in if r == x || builtins.match ".*solnix-cmake.cmake.*" r == null || builtins.match ''.*CPP_="[$]CPP_:[$]d".*'' r == null
+       then throw "mk-src-pkg ${pname}: cmakeX anchors" else builtins.replaceStrings [ ''CMAKE_PREFIX_PATH="''${CPP_#;}"'' ] [ ''CMAKE_PREFIX_PATH="''${CPP_#:}"'' ] r;
   # aarch64 (main af5ac0e, a64h): its own store-only text (defaultTools, the stage0 box's patterns); x86: wave6's storeOnly above.
   ntPathA = builtins.concatStringsSep ":" (builtins.concatMap (d: map (s: "${d}/${s}") [ "bin" "sbin" "usr/bin" "usr/sbin" ]) (ntA ++ defaultTools));
   ntA = if nativeTools == null then [ ] else nativeTools;   # wave6's null default = main's [ ] on aarch64
