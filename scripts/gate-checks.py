@@ -42,12 +42,29 @@ def bootstrap_rules():
     p = os.environ.get("GATE_BOOTSTRAP_EXEMPT") or os.path.join(HERE, "..", "pkgs", "illumos", "bootstrap-exempt.tsv")
     return [(re.compile(r[0]), r[1], r[2] if len(r) > 2 else "") for r in _rows(p)]
 
+PSLICE_KEYS = {"PATH", "allowUnresolvedArg", "binsArg", "builder", "depsArg", "elfdump", "elfedit", "extraArg", "extraRunpathArg", "gate",
+               "hardlinkArg", "name", "out", "system", "wantClosure"}   # mk-proto-slice.nix's derivation attrs, exactly
+PSLICE_PATH = "/usr/gnu/bin:/usr/bin:/usr/sbin:/sbin"
+
 def _marker(m, d, clo):
-    """The markers of bootstrap-exempt.tsv, exactly as wave6's pkgs/illumos/path-gate.sh --exempt-check applies them."""
+    """The markers of bootstrap-exempt.tsv. They agree with wave6's pkgs/illumos/path-gate.sh --exempt-check, except pslice, which
+    path-gate.sh lacks until the next drv-moving change (see the shortcut at pslice below)."""
     env = d["env"]
     if m == "seed": return "btPath" in env and env["btPath"] == ""
     if m == "gccseed": return env.get("stage0") == "/usr/gcc/14" and "gccSrc" in env and "btPath" not in env
     if m == "slice": return "gate" in env and "filesArg" in env
+    # shortcut: path-gate.sh --exempt-check lacks pslice until the next drv-moving change (it is an inputSrc of every store-only drv);
+    # until then it reports pslice drvs FAIL; drv-gate.sh (this function) is authoritative.
+    if m == "pslice":   # mk-proto-slice (wave6v; its env keys measured on illumos-early/-zfs/-smf): exact keys, exact PATH, and every
+        # input drv is the gate proto's, a slice/pslice, or an output named in depsArg (zlib/libxml2: judged as themselves)
+        if set(env) != PSLICE_KEYS or d["builder"] != "/usr/bin/bash" or env.get("PATH") != PSLICE_PATH: return False
+        deps = set(env.get("depsArg", "").split())
+        for i in d["inputDrvs"]:
+            if i not in clo: return False
+            x = clo[i]
+            if x["env"].get("name") == "illumos-gate-proto" or _marker("slice", x, clo) or _marker("pslice", x, clo): continue
+            if not any(o["path"] in deps for o in x["outputs"].values()): return False
+        return True
     if m == "world": return "gate" in env and "dirsArg" in env and "sharedLibsArg" in env
     if m == "libcx": return set(env) == {"builder", "gate", "libc", "name", "out", "system"}
     if m == "fod": return env.get("outputHashMode") == "recursive" and len(env.get("outputHash", "")) + 1 > 40 and "btPath" not in env
@@ -1067,6 +1084,17 @@ def selftest():
         return fake_drv(tag, **kw)
     sdz = D("sdz", name="gzip-1.13", env={"PATH": "/usr/bin", "btPath": ""})
     sdz_out = parse_drv(FAKE[sdz])["outputs"]["out"]["path"]
+    GP = STORE + "c" * 32 + "-illumos-gate-proto"
+    gpd = fake_drv("gpd", ["-c", "cp -r $tree $out"], {"PATH": "/usr/bin"}, name="illumos-gate-proto", out=GP, fod="1b" * 32)
+    _LANE.add(GP)   # the real proto (601ihrx7) is exempt by its served CA-lane path; so is this one
+    slc = D("slcin", name="libc", idrvs=[gpd], env={"PATH": "/usr/gnu/bin:/usr/bin:/usr/sbin", "gate": GP, "filesArg": "lib/libc.so.1"})
+    slc_out = parse_drv(FAKE[slc])["outputs"]["out"]["path"]
+    psz = D("psz", name="zlib-1.3.2", env={"PATH": T + "/bin", "btPath": T + "/bin"}); psz_out = parse_drv(FAKE[psz])["outputs"]["out"]["path"]
+    def PS(tag, extra=None, path=PSLICE_PATH, more=(), deps=""):
+        e = {k: "" for k in PSLICE_KEYS - {"name", "out", "builder", "system"}}
+        e.update({"PATH": path, "gate": GP, "binsArg": "sbin/init sbin/sh", "depsArg": (slc_out + " " + deps).strip(),
+                  "elfdump": "/usr/bin/elfdump", "elfedit": "/usr/bin/elfedit", "wantClosure": "1"}); e.update(extra or {})
+        return fake_drv(tag, ["-c", "set -eu"], e, idrvs=[gpd, slc] + list(more), name="illumos-early")
     cases = [  # (label, drv, expect PASS?, check id that must appear)
         ("good: store-only PATH, store MAKE, CA .sh", D("good", args=[good_sh], srcs=[good_sh], env={"PATH": T + "/bin"}), True, None),
         ("A1 env PATH=/usr/bin", D("a1env", env={"PATH": T + "/bin:/usr/bin"}), False, "A1-path"),
@@ -1102,6 +1130,13 @@ def selftest():
         ("NOT exempt: same name with store build tools", D("sysz", name="zlib-1.3.2", env={"PATH": "/usr/gnu/bin:/usr/bin", "btPath": T + "/bin", "stage0": "/usr/gcc/14"}), False, "A1-path"),
         ("exempt: hostfix-tools g08y7agf by exact out", D("hf", name="solnix-hostfix-tools", out="/nix/store/g08y7agf6jn204kj1gqm6nhjmc81m046-solnix-hostfix-tools", env={"PATH": "/usr/gnu/bin:/usr/bin:/usr/sbin"}), True, "EXEMPT"),
         ("NOT exempt: hostfix-tools with another hash", D("hf2", name="solnix-hostfix-tools", env={"PATH": "/usr/gnu/bin:/usr/bin:/usr/sbin"}), False, "A1-path"),
+        # pslice (mk-proto-slice): the env of the real illumos-early drv (shfz5jh1), inputs = the gate proto's drv + a slice (libc)
+        ("exempt: pslice illumos-early (real env keys, gate proto + slice inputs)", PS("ps1"), True, "EXEMPT"),
+        ("NOT exempt: pslice with one extra env key (CC)", PS("ps2", extra={"CC": "gcc"}), False, "A1-path"),
+        ("NOT exempt: pslice name with a store-tools PATH but a host /usr/bin entry", PS("ps3", path=T + "/bin:/usr/bin"), False, "A1-path"),
+        ("NOT exempt: pslice with a non-gate, non-slice, non-depsArg input drv", PS("ps4", more=[D("psx", env={"PATH": T + "/bin"})]), False, "A1-path"),
+        ("exempt: pslice with a depsArg input (zlib, judged as itself: store-only)", PS("ps5", more=[psz], deps=psz_out), True, "EXEMPT"),
+        ("exempt: mk-illumos-component slice still under 'slice'", D("slc3", name="base-tools", env={"PATH": "/usr/gnu/bin:/usr/bin:/usr/sbin", "gate": GP, "filesArg": "usr/bin/ls"}), True, "EXEMPT"),
     ]
     ca = lambda p: FAKE_CA.get(p, True)
     bad = selftest_out() + selftest_log()
