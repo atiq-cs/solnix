@@ -53,9 +53,10 @@ rec {
     deps = [ world ncurses openssl zlib bdwgc ];
     nativeTools = [ perl ] ++ hostTools;   # store-only PATH + config.site; perl: w3mman and the cgi scripts get a #! to the store perl (OI: /usr/bin/perl, solnix: none)
     build = ''
-      CFLAGS="-O2 -D__EXTENSIONS__ -std=gnu17 -Wno-error=incompatible-pointer-types -Wno-error=implicit-function-declaration" \
       # NKF: configure.ac AC_PATH_PROGS(NKF, nkf, /usr/local/bin/nkf): the Japanese-text filter the multipart cgi runs, defaulting to a
       # host path when no nkf is found. No nkf here (nor in nixpkgs' w3m inputs): the bare name, found on the user's PATH if installed.
+      # (Above the CFLAGS line: between it and configure, a comment ended the command, so configure ran without CFLAGS; wave6u.)
+      CFLAGS="-O2 -D__EXTENSIONS__ -std=gnu17 -Wno-error=incompatible-pointer-types -Wno-error=implicit-function-declaration" \
       NKF=nkf ./configure --prefix="$out" --with-ssl=${openssl} --with-gc=${bdwgc} --with-termlib=ncursesw \
         --enable-image=no --without-x --disable-w3mmailer --disable-nls
       gmake -j8; gmake install

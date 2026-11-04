@@ -92,6 +92,8 @@ in rec {
     pname = "gnupg"; version = "2.4.8";
     src = gpgSrc "gnupg" "2.4.8" "b58c80d79b04d3243ff49c1c3fc6b5f83138eb3784689563bcdd060595318616";
     deps = [ world zlib readline ncurses libgpg-error libgcrypt libassuan libksba npth ]; nativeTools = tools;
+    # Makefile.am:207's maintainer target `stowinstall` (install prefix=/usr/local/stow/gnupg), as the libraries': never run, nothing ships it
+    hostPathAllow = "^[0-9]+:[[:space:]]+[$][(]MAKE[)] [$][(]AM_MAKEFLAGS[)] install prefix=/usr/local/stow/gnupg$";
     build = ''
       export PATH="${cfgPath [ libgpg-error libgcrypt libassuan libksba npth ]}:$PATH"
       export GPGRT_CONFIG=${libgpg-error}/bin/gpgrt-config
