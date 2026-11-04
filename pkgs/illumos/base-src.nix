@@ -749,6 +749,11 @@ let
       # after config.h has already pulled in illumos <sys/feature_tests.h>, so
       # memset_s stays undeclared (gcc 14: implicit declaration error, measured);
       # without it gnulib uses its memset + compiler-barrier fallback.
+      # libtextstyle's textstyle/stdbool.h rule tests the BUILD HOST's /usr/include/stdbool.h (lib/Makefile.in): OI hosts have one,
+      # solnix hosts none, so the installed header differed by host (dixi --keep-failed, wave6v). The proto's header is the one we
+      # compile against, as NixOS's glibc stdbool.h is in the sandbox.
+      sed -i "s@test -f /usr/include/stdbool.h@test -f $gate/usr/include/stdbool.h@" libtextstyle/lib/Makefile.in
+      grep -q "test -f $gate/usr/include/stdbool.h" libtextstyle/lib/Makefile.in || { echo "FATAL: gettext stdbool rule not patched" >&2; exit 1; }
       ac_cv_func_memset_s=no MAKEINFO=true ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-java \
         --disable-csharp --disable-openmp --disable-acl --disable-curses --without-emacs --without-git \
         --without-cvs --without-xz --without-bzip2 --with-included-libxml --with-included-libunistring \
@@ -762,6 +767,9 @@ let
       find "$out/share/gettext/archive.dir.tar.gz" "$out/bin/autopoint" "$out/bin/gettextize" -delete
       for t in gettext ngettext envsubst msgfmt; do [ -x "$out/bin/$t" ] || { echo "FATAL: no $t" >&2; exit 1; }; done
       [ "$("$out/bin/ngettext" one many 2)" = many ] || { echo "FATAL: ngettext self-check" >&2; exit 1; }
+      # the rule's branch must follow the proto (x86 proto has stdbool.h): with it '|| defined _AIX', without it none
+      a=0; grep -q '|| defined _AIX$' "$out/include/textstyle/stdbool.h" && a=1; p=0; [ -f "$gate/usr/include/stdbool.h" ] && p=1
+      [ $a = $p ] || { echo "FATAL: textstyle/stdbool.h (AIX branch $a) does not follow the proto's stdbool.h ($p)" >&2; exit 1; }
       # msgfmt must read UTF-8 (home-manager's .po files): the failure mode above.
       printf 'msgid ""\nmsgstr "Content-Type: text/plain; charset=UTF-8\\n"\n\nmsgid "a"\nmsgstr "\303\251"\n' > t.po
       "$out/bin/msgfmt" -o t.mo t.po || { echo "FATAL: msgfmt cannot read UTF-8" >&2; exit 1; }
