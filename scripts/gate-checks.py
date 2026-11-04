@@ -20,7 +20,7 @@ for a regular file, so chmod 4755, 0755 and 0777 dump to the same NAR, and nix-s
 can never reach the cache in a NAR; on the host they mean the store path is not in Nix's canonical form (or was
 tampered with after registration), which is what `store` checks before the host exports it.
 """
-import io, json, lzma, os, re, stat, subprocess, sys
+import base64, hashlib, io, json, lzma, os, re, stat, subprocess, sys
 
 STORE = "/nix/store/"
 HASH = r"[0-9a-df-np-sv-z]{32}"
@@ -312,7 +312,8 @@ def run_drv(drvs, out=print, ca_ok=None, mode="closure", served=None):
                            capture_output=True, text=True)
         try:
             info = json.loads(j.stdout); info = info[p] if isinstance(info, dict) else info[0]
-            cache[p] = bool(info.get("ca")) or (q.stdout.strip() not in ("", "unknown-deriver") and q.stdout.strip().endswith(".drv"))
+            cache[p] = bool(info.get("ca")) or (q.stdout.strip() not in ("", "unknown-deriver") and q.stdout.strip().endswith(".drv")) \
+                or (not info.get("references") and source_path(info.get("narHash", ""), p[44:]) == p)
         except (ValueError, KeyError, IndexError, TypeError):
             cache[p] = None
         return cache[p]
@@ -1100,6 +1101,16 @@ def selftest():
     lines = []; rc = run_drv([leafroot], out=lines.append, ca_ok=ca, mode="closure", served=lambda p: True)
     ok = rc != 0; bad += not ok
     print(f"{'ok ' if ok else 'BAD'} drv  closure mode judges the served host-PATH input too: {'PASS' if rc == 0 else 'FAIL'}")
+    # A3 by path: a source imported without its CA field still proves itself (nvi's bitstring.h, its real narHash); a flipped
+    # hash byte, another name, or a base64 that is not 32 bytes does not
+    sp_cases = [("sha256-eqzHG8o/3ymVO5mawCGZvk8wZBY8PyjTHsk2bnlg+Q4=", "bitstring.h", True),
+                ("sha256:03prc1wnwdn93v9jhgrw2rj30kxyk4hw16lr7fajkprzr8dwgb3s", "bitstring.h", True),
+                ("sha256-fqzHG8o/3ymVO5mawCGZvk8wZBY8PyjTHsk2bnlg+Q4=", "bitstring.h", False),
+                ("sha256-eqzHG8o/3ymVO5mawCGZvk8wZBY8PyjTHsk2bnlg+Q4=", "util.h", False),
+                ("sha256-AAAA", "bitstring.h", False)]
+    for nh, nm, want in sp_cases:
+        ok = (source_path(nh, nm) == "/nix/store/r9m0bfxm4yf8hjg49wl3w1nqx4mi61h1-bitstring.h") == want; bad += not ok
+        print(f"{'ok ' if ok else 'BAD'} drv  A3 source path from narHash {nh[:14]}.. {nm}: {'matches' if want else 'does not match'}")
     # leaf mode refuses to judge when the probe cannot see a served path, or any input's state is unknown
     for label, srv in (("leaf: probe blind (CA-lane path not seen served) -> hard FAIL", lambda p: False),
                        ("leaf: an input's served state unknown -> hard FAIL", lambda p: True if "-lane" in p else None)):
@@ -1367,6 +1378,31 @@ def nix32(digest):
         if b + 1 < len(digest): c |= digest[b + 1] << (8 - j)
         out.append(NIX32[c & 0x1f])
     return "".join(out)
+
+def nix32_decode(s):
+    n = len(s) * 5 // 8; out = bytearray(n)
+    for i, ch in enumerate(reversed(s)):
+        d = NIX32.index(ch); b, j = i * 5 // 8, i * 5 % 8
+        out[b] |= (d << j) & 0xff
+        if b + 1 < n: out[b + 1] |= d >> (8 - j)
+    return bytes(out)
+
+def source_path(narhash, name):
+    """The store path Nix gives a source added by path (a `./file` literal: recursive sha256, no references) whose NAR hash
+    is narhash ("sha256-<base64>" or "sha256:<nix32>"), or None. A3 uses it when a store has the path with no CA field:
+    nix-store --import drops that field (wave6u/wave6v, chef2 and lixi), but the path itself still proves it is
+    content-addressed. A built output's path is a function of its drv, never of its content, so it can't match.
+    shortcut: only `source:` paths without references; a builtins.toFile `text:` path with references still needs the
+    store's CA field. Upgrade if one of those ever arrives by import."""
+    try:
+        if narhash.startswith("sha256-"): h = base64.b64decode(narhash[7:])
+        elif narhash.startswith("sha256:"): h = nix32_decode(narhash[7:])
+        else: return None
+    except (ValueError, IndexError): return None
+    if len(h) != 32: return None
+    d = hashlib.sha256(f"source:sha256:{h.hex()}:/nix/store:{name}".encode()).digest(); c = bytearray(20)
+    for i, x in enumerate(d): c[i % 20] ^= x
+    return f"/nix/store/{nix32(bytes(c))}-{name}"
 
 def build_inputs(root):
     """The non-fixed-output outs a build of root takes from its closure (each input drv's outputs some dependent names),
