@@ -97,14 +97,23 @@ in rec {
     build = ''
       export PATH="${cfgPath [ libgpg-error libgcrypt libassuan libksba npth ]}:$PATH"
       export GPGRT_CONFIG=${libgpg-error}/bin/gpgrt-config
+      # Byte order pinned from the TARGET (this drv's $system), not probed: GNUPG_CHECK_ENDIAN (acinclude.m4) looks for BYTE_ORDER in
+      # <sys/param.h>, which the gate lacks, then runs a test that calls exit() without <stdlib.h>; gcc 14 rejects it, and the failed
+      # link reads as "big". BIG_ENDIAN_HOST made g10/rmd160.c byte-swap every word, so each uid namehash was wrong and trustdb validity
+      # did not carry between solnix and other systems (endian1, measured). Not --disable-endian-check: that hits "No endianness found".
+      case "$system" in x86_64-*|aarch64-*) en=little EN=LITTLE;; sparcv9-*) en=big EN=BIG;; *) echo "FATAL: gnupg: byte order of $system?" >&2; exit 1;; esac
       CFLAGS="-O2 -D__EXTENSIONS__" ./configure --prefix="$out" --libexecdir="$out/libexec" --sysconfdir=/etc \
         --with-libgpg-error-prefix=${libgpg-error} --with-libgcrypt-prefix=${libgcrypt} \
         --with-libassuan-prefix=${libassuan} --with-ksba-prefix=${libksba} --with-npth-prefix=${npth} \
         --with-readline=${readline} --disable-ldap --disable-gnutls --disable-sqlite --disable-tpm2d \
-        --disable-ccid-driver --disable-nls --disable-doc --enable-gpg-is-gpg2=no
+        --disable-ccid-driver --disable-nls --disable-doc --enable-gpg-is-gpg2=no gnupg_cv_c_endian=$en
+      grep -q "^#define ''${EN}_ENDIAN_HOST 1" config.h || { echo "FATAL: gnupg config.h lacks ''${EN}_ENDIAN_HOST ($system)" >&2; exit 1; }
       grep -q "^LIBGCRYPT_CFLAGS = .*${libgcrypt}" Makefile || grep -q "${libgcrypt}" config.log \
         || { echo "FATAL: gnupg did not configure against the store libgcrypt" >&2; exit 1; }
-      gmake -j8; gmake install
+      gmake -j8
+      # gpg's own RIPEMD-160 (the uid namehash) against its test vectors: gmake builds g10/t-rmd160 but nothing ran it
+      g10/t-rmd160 || { echo "FATAL: g10/t-rmd160 failed (rmd160.c byte order)" >&2; exit 1; }; echo "CHECK-OK: g10/t-rmd160" >&2
+      gmake install
       ${dropDocs}
       ${chk ''"$out/bin/gpg" --version'' "^gpg \\(GnuPG\\) 2\\.4\\.8"}
       # functional: symmetric encrypt + decrypt round trip in a throwaway homedir
@@ -112,6 +121,12 @@ in rec {
       echo hlcli-gpg > "$G/m"
       "$out/bin/gpg" --homedir "$G" --batch --pinentry-mode loopback --passphrase p -c -o "$G/m.gpg" "$G/m"
       ${chk ''"$out/bin/gpg" --homedir "$G" --batch --pinentry-mode loopback --passphrase p -d "$G/m.gpg"'' "^hlcli-gpg$"}
+      # the uid namehash (--with-colons uid field 8) must be RIPEMD-160 of the uid: 3F94... is openssl dgst -rmd160 of it, and what
+      # another distro's gpg 2.4.9 shows for the same key (endian1). The big-endian misconfiguration gave 2F8259F4...
+      "$out/bin/gpg" --homedir "$G" --batch --pinentry-mode loopback --passphrase "" \
+        --quick-gen-key "Endian Test <endian@example.invalid>" ed25519 sign never >&2
+      ${chk ''"$out/bin/gpg" --homedir "$G" --batch --with-colons --list-keys endian@example.invalid 2>/dev/null | grep '^uid:' | cut -d: -f8''
+        "^3F943865BAE28FB84FAD407CD11DB5A2BB4D3049$"}
       "$out/bin/gpgconf" --homedir "$G" --kill all 2>/dev/null || true
     '';
   };
