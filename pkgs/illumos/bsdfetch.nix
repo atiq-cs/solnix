@@ -15,17 +15,19 @@
 let
   # store tools only when given (NixOS stdenv); without them (aarch64) the text is byte-for-byte the old one, so its drv is unchanged.
   # with a store perl the http self-tests are mandatory (a host with no perl silently skipped them).
+  # the env PATH attr too (gate A1 reads it; wave6v: it stayed the host PATH), the world's ldd in the link check, and path-gate.
+  storePath = "${tools}/bin:${perl}/bin:${world}/bin:${world}/usr/bin";
   hermetic = t: if tools == null then t else builtins.replaceStrings
-    [ "\nexport PATH=/usr/gnu/bin:/usr/bin:/usr/sbin\n" "\nif command -v perl >/dev/null 2>&1; then\n" ]
-    [ "\nexport PATH=${tools}/bin:${perl}/bin:${world}/bin:${world}/usr/bin\n"
-      "\n[ -x ${perl}/bin/perl ] || { echo \"FATAL: no perl for the http self-test\" >&2; exit 1; }\nif command -v perl >/dev/null 2>&1; then\n" ] t;
+    [ "\nexport PATH=/usr/gnu/bin:/usr/bin:/usr/sbin\n" "\nif command -v perl >/dev/null 2>&1; then\n" "$(/usr/bin/ldd " ]
+    [ "\nexport PATH=${storePath}\n/usr/bin/bash ${./path-gate.sh}\n"
+      "\n[ -x ${perl}/bin/perl ] || { echo \"FATAL: no perl for the http self-test\" >&2; exit 1; }\nif command -v perl >/dev/null 2>&1; then\n" "$(ldd " ] t;
 in
 derivation (plain {
   name = "bsdfetch-14-e48eb1c5";
   inherit system gate gccWrapper openssl fetchSrc;
   libcDir = "${libcSlice}/lib${if aarch64 then "" else "/amd64"}";
   builder = "/usr/bin/bash";
-  PATH = "/usr/gnu/bin:/usr/bin:/usr/sbin";
+  PATH = if tools == null then "/usr/gnu/bin:/usr/bin:/usr/sbin" else storePath;
   args = [ "-c" (hermetic ((if aarch64 then builtins.replaceStrings [ "lib/amd64" "-m64 " ]
                      [ "lib" "-mno-outline-atomics -mtls-dialect=trad -ffile-prefix-map=$W=/build " ] else (x: x)) ''
     set -eu

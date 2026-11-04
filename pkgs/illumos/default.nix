@@ -691,11 +691,14 @@ let
   # solnix-cputemp -- the coretemp ksensor reader the live media's temperature
   # line uses (src/live/solnix-cputemp.c): one ioctl per /dev/sensors/temperature/
   # cpu node. Built like wpa-pmk (the solnix-dev gcc), self-test at build time.
-  solnix-cputemp = derivation {
+  # store tools only, as ./bluetooth (gate A1; wave6v): coreutils/findutils + the world's illumos bins (elfedit/elfdump for
+  # zero-checksum.sh via illumos-bin.sh). The seed instance (buildTools = [ ]) keeps /usr/bin.
+  solnix-cputemp = let tp = if buildTools == [ ] then "/usr/bin"
+    else builtins.concatStringsSep ":" (map (t: "${t}/bin") [ srcPkgs.coreutils srcPkgs.findutils world ]); in derivation {
     name = "solnix-cputemp";
     system = "x86_64-solaris";
     builder = "/usr/bin/bash";
-    PATH = "/usr/bin";
+    PATH = tp;
     src = ../../src/live/solnix-cputemp.c;
     solnixDev = buildEnv {
       name = "solnix-dev";
@@ -704,7 +707,8 @@ let
     };
     args = [ "-c" ''
       set -eu
-      export PATH="$solnixDev/bin:/usr/bin"
+      export PATH="$solnixDev/bin:${tp}"
+      ${if buildTools == [ ] then "" else "/usr/bin/bash ${./path-gate.sh}; . ${./illumos-bin.sh}"}
       mkdir -p "$out/bin"
       cp "$src" solnix-cputemp.c; gcc -O2 -Wall -Werror -Wl,-R,${libc}/lib/amd64 -o "$out/bin/solnix-cputemp" solnix-cputemp.c
       "$out/bin/solnix-cputemp" -t || { echo "FATAL: solnix-cputemp self-test failed" >&2; exit 1; }
