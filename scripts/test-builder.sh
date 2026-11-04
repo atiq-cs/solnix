@@ -20,6 +20,9 @@
 #    it); the identity rule (gate is not illumos-gate-proto, pkg-config is not pkgconf); the negative controls (off-branch,
 #    --closure, an unpublished input, eval off, a mutant without the identity rule); the second vote.
 #    MAIN_BUILDER=<origin/main's solnix-builder.sh, before fleet4>: it must never take an eval job (else SKIPped, not passed).
+# 9. fleet5: a job listing several outputs of one drv (gcc's out and -lib, wave6's out and -debug): each unserved one first-
+#    published as its own submission, deps first; one claim once every listed out is served, completed with the primary.
+#    F5_BUILDER=<origin/main's solnix-builder.sh, before fleet5 (2c13182)>: it must loop on the gcc shape (else SKIPped).
 # 10. fleet6: queue requests signed with sshsig (infra R7), a retry signed anew (R8), the egress registration (s3).
 #    PRESIG_BUILDER=<a builder before fleet6>: in sshsig mode it must fail the signature check (else SKIPped, not passed).
 S=${1:-$(dirname "$0")/../modules/config/community/solnix-builder.sh}
@@ -346,6 +349,7 @@ df5() { ( eval "$(sed -n '/^bounded() {/,/^}/p; /^evattr() {/,/^}/p; /^drv_for()
   BUILDER_SYSTEM=x86_64-solaris BUILDER_STATE=$W/st5b BUILDER_FLAKE="git+file://$R5?ref=main" J=x; drv_for mo "$1" "$R5H" ); }
 r=$(df5 "$MD") && [[ $r == "$MD $MV^debug" ]] && ok "drv_for: a -debug row (out + debug outputs): FOUND $MV^debug" || no "drv_for debug: '$r'"
 r=$(df5 "/nix/store/00000000000000000000000000000000-qb-mo-1-debug,$MO") && [[ $r == "$MO $MV^out" ]] && ok "drv_for: the default out still FOUND ^out" || no "drv_for out: '$r'"
+r=$(df5 "$MD,$MO") && [[ $r == "$MO $MV^out"$'\n'"$MD $MV^debug" ]] && ok "drv_for: a job listing both outputs gets both lines, the default output (the primary) first" || no "drv_for both: '$r'"
 ls "$W/st5b/eval/$R5H.x86_64-solaris.mo"* 2> /dev/null | grep -q '\.outs$' && (( $(wc -l < "$W/st5b/eval/$R5H.x86_64-solaris.mo.outs") == 2 )) &&
   r=$(df5 "$MD") && [[ $r == "$MD $MV^debug" ]] && ok "the eval cache keeps every output per (rev, system, attr) (.outs, 2 lines), and a cache hit finds -debug" || no "cache: $(ls "$W/st5b/eval" 2>&1)"
 ! df5 /nix/store/00000000000000000000000000000000-qb-mo-2-debug > /dev/null && ok "NEG drv_for: an out no output of the attr has (another version): MISS" || no "drv_for wrong out FOUND"
@@ -466,7 +470,7 @@ p = paths[0] if paths else ""
 if not sub or not any(l.split()[:2] == ["READY", p] for l in r.stdout.splitlines()):
     sys.exit(0)
 log.write(f"BEGIN {p} builder={b}\n"); log.flush()
-n = os.path.basename(p)[33:].split("-")[1]; sid = "sid-" + n; stage = opt("--cache-dir")
+nm = os.path.basename(p)[33:].split("-"); n = nm[1]; sid = "-".join(["sid", n] + nm[3:]); stage = opt("--cache-dir")  # sid-mprop-lib: one per output
 if n == "pub429":
     print('  begin: HTTP 429 {"error":"proposal backlog","proposed_bytes":2202009600,"cap":2147483648}\n  result: backoff 900'); sys.exit(0)
 print(f"  submission {sid} staging http://staging.invalid")
@@ -477,7 +481,7 @@ if "--eval" in a:
     print("  status: proposed\n  result: proposed"); sys.exit(0)
 if n == "pubrej":
     print("  status: rejected content gate REJECTED: FAIL build-host: /x: contains 'ip-10-0-1-23.ec2.internal'\n  result: rejected"); sys.exit(0)
-if n == "pubprop":
+if n == "pubprop" or (n == "mprop" and p.endswith("-lib")):
     shutil.copytree(stage, f"{W}/fkst/{sid}.stage"); open(f"{W}/fkst/{sid}", "w").write(f"proposed {p}\n")
     print("  status: proposed\n  result: proposed"); sys.exit(0)
 promote(stage, p, W + ("/sk2" if n == "pubforge" else "/sk"))  # pubforge: signed by another key under the same name
@@ -800,6 +804,85 @@ e9 "$S" BUILDER_EGRESS=0; [[ ! -e $W/rq/n ]] && ok "NEG BUILDER_EGRESS=0 (not an
 mu8 "$S" "$W/mut9e.sh" 'ts: $ts, sig: $sig}' 'ts: $ts, sig: $sig, agent: "x"}'
 e9 "$W/mut9e.sh"; ! egok "$W/rq/1" 198.51.100.7 && [[ $(jq 'keys | length' "$W/rq/1/body") == 7 ]] && ok "NEG mutant with a seventh key: the six-key check fails" || no "mutant egress passed"
 grep -q 'egress; egl=' "$S" && ok "the SMF loop registers egress at start and every BUILDER_EGRESS_SECS" || no "no egress in the loop"
+rm -f "$W/bearer"
+# --- 9. fleet5: a job listing several outputs of one drv (gcc 15.3.0: out and -lib; wave6: out and -debug). Each unserved one
+# is first-published as its own submission, deps first; the job is claimed once every listed out is served, and completed once
+# with the primary (the default output). Shapes: mlib out -> lib (gcc); mdev out -> lib, dev -> out (a later pass); mdbg out +
+# a -debug with no refs; mserv -lib served already; mpri out served already; mrej -lib fails the gate (S4 names a host);
+# msib -debug served from ANOTHER build (another NarHash); mprop -lib proposed (tier 1), approved on the next tick.
+mkdir -p "$W/mflake"; cat > "$W/mflake/flake.nix" <<MF
+{ outputs = { self }: let
+    m = n: o: s: derivation { name = "qb-\${n}-${W##*/}"; system = "x86_64-solaris"; builder = "/usr/bin/bash"; outputs = o;
+      args = [ "-c" "echo building \${n}; \${s}" ]; };
+    T = "${W##*/}";
+  in { packages.x86_64-solaris = {
+    mlib = m "mlib" [ "out" "lib" ] "echo mlib-lib-\${T} > \$lib; echo \$lib > \$out";
+    mdev = m "mdev" [ "out" "lib" "dev" ] "echo mdev-lib-\${T} > \$lib; echo \$lib > \$out; echo \$out > \$dev";
+    mdbg = m "mdbg" [ "out" "debug" ] "echo mdbg-\${T} > \$out; echo mdbg-debug-\${T} > \$debug";
+    mserv = m "mserv" [ "out" "lib" ] "echo mserv-lib-\${T} > \$lib; echo \$lib > \$out";
+    mpri = m "mpri" [ "out" "lib" ] "echo mpri-\${T} > \$out; echo mpri-lib-\${T} > \$lib";
+    mrej = m "mrej" [ "out" "lib" ] "echo mrej-lib-\${T} built on floki > \$lib; echo \$lib > \$out";
+    msib = m "msib" [ "out" "debug" ] "echo msib-\${T} > \$out; echo msib-debug-\${T} > \$debug";
+    mprop = m "mprop" [ "out" "lib" ] "echo mprop-lib-\${T} > \$lib; echo \$lib > \$out";
+  }; }; }
+MF
+MFL=path:$W/mflake; M9="mlib mdev mdbg mserv mpri mrej msib mprop"
+nix eval --json "$MFL#packages.x86_64-solaris" --apply 'builtins.mapAttrs (n: d: builtins.listToAttrs (map (o: { name = o; value = d.${o}.outPath; }) d.outputs))' > "$W/mouts.json" 2> "$W/meval.err" ||
+  no "fixture 9: $(tail -3 "$W/meval.err")"
+mo9() { jq -r --arg a "$1" --arg o "${2:-out}" '.[$a][$o]' "$W/mouts.json"; }
+for a in $M9; do for x in $(jq -r --arg a "$a" '.[$a] | keys[]' "$W/mouts.json"); do rec $a 1 y "$(mo9 $a $x)"; done; done >> "$W/p.tsv"
+cp "$W/p.tsv" "$W/hc/registry/recipes.tsv"
+ML=$(mo9 mlib lib) MO9=$(mo9 mlib) DL=$(mo9 mdev lib) DO=$(mo9 mdev) DD=$(mo9 mdev dev) GO=$(mo9 mdbg) GD=$(mo9 mdbg debug) SL=$(mo9 mserv lib) SO=$(mo9 mserv)
+PL=$(mo9 mpri lib) PO=$(mo9 mpri) RL=$(mo9 mrej lib) RO=$(mo9 mrej) IO=$(mo9 msib) ID=$(mo9 msib debug) QL=$(mo9 mprop lib) QO=$(mo9 mprop)
+# served by someone else before any tick: mserv's -lib and mpri's out (signed as published); msib's -debug with another NarHash
+nix build --no-link "$MFL#packages.x86_64-solaris.mserv^*" "$MFL#packages.x86_64-solaris.mpri^*" >> "$W/fixture.log" 2>&1 &&
+  nix copy --to "file://$W/hc" "$SL" "$PO" >> "$W/fixture.log" 2>&1 &&
+  ( export XDG_CACHE_HOME=$W/fkst/x9; nix store sign --store "file://$W/hc" --key-file "$W/sk" "$SL" "$PO" ) >> "$W/fixture.log" 2>&1 &&
+  [[ $DD == *-qb-mdev-*-dev && $ML == *-qb-mlib-*-lib && -n $(sv7 "$SL") && -n $(sv7 "$PO") ]] || no "fixture 9: ML=$ML DD=$DD $(tail -2 "$W/fixture.log")"
+printf 'StorePath: %s\nNarHash: sha256:%s\n' "$ID" 0000000000000000000000000000000000000000000000000000 > "$W/hc/$(print -r -- "${ID#/nix/store/}" | cut -c1-32).narinfo"
+bg9() { print -r -- "$sl" | grep -c "^BEGIN $1 "; }	# /begin count for exactly that path
+ln9() { print -r -- "$sl" | grep -n "^BEGIN $1 " | head -1 | cut -d: -f1; }	# its /begin's line in the submitter log
+dn9() { print -r -- "$c" | grep '/complete' | grep -c "\"status\":\"done\",\"version\":\"1\",\"nar_hash\":\"$(sv7 "$1")\",\"store_path\":\"$1\""; }
+tk9() { tk7 FKROWS=$W/p9.json BUILDER_FLAKE=$MFL BUILDER_STATE=$W/st9 "$@"; }
+print x > "$W/bearer"
+# NEG control: origin/main's builder on the gcc shape picks out, builds, waits for -lib every tick, never offers -lib
+if [[ -n ${F5_BUILDER:-} ]]; then S0=$S S=$F5_BUILDER; w9="mlib: $MO9 waits for its references to be served first: ${ML#/nix/store/}"
+  r7 mlib > "$W/p9.json"; tk9 BUILDER_STATE=$W/st9o; o1=$out s1=$sl c1=$(claims); tk9 BUILDER_STATE=$W/st9o; o2=$out s2=$sl c2=$(claims)
+  r7 mpri > "$W/p9.json"; tk9 BUILDER_STATE=$W/st9p BUILDER_PUBLISH=0; c3=$(cl7 mpri); S=$S0
+  print -r -- "$o2" | grep ' mlib' | sed 's/^/   9o /'
+  [[ $(print -r -- "$o1" | grep -cF "$w9") == 1 && $(print -r -- "$o2" | grep -cF "$w9") == 1 && -z $s1$s2 && $c1 == 0 && $c2 == 0 ]] &&
+    ok "NEG origin/main's builder ($F5_BUILDER) loops on the gcc shape: each tick builds out and waits for -lib, never submits -lib, never claims" ||
+    no "F5_BUILDER mlib: $(print -r -- "$o1" "$o2" | grep ' mlib') $s1 $s2"
+  (( c3 == 1 )) && ok "NEG origin/main's builder without a publish key claims mpri though its -lib is unserved (the gap: infra claims once every listed out is served)" || no "F5_BUILDER mpri: $c3 claims"
+else print "SKIP origin/main multi-output negative control: F5_BUILDER unset (not counted as a pass)"; fi
+r7 mpri mlib > "$W/p9.json"; tk9 BUILDER_STATE=$W/st9z BUILDER_PUBLISH=0
+[[ -z $sl && $(claims) == 0 ]] && has "decline mpri: $PO is served, its sibling output\(s\) ${PL#/nix/store/} not" && has "decline mlib: $MO9 is not served \(a first build" &&
+  ok "NEG a host that may not publish declines a job whose drv has a listed out unserved (mpri: out served, -lib not): no claim" || no "publish 0: $(print -r -- "$out" | grep -E ' (mpri|mlib)') $sl"
+r7 $M9 > "$W/p9.json"; tk9; print -r -- "$out" | sed 's/^/   9 /'; print -r -- "$sl" | grep -v '^BODY' | sed 's/^/   s /'
+[[ $(bg9 "$ML") == 1 && $(bg9 "$MO9") == 1 ]] && (( $(ln9 "$ML") < $(ln9 "$MO9") )) && [[ $(cl7 mlib) == 1 && $(dn9 "$MO9") == 1 ]] &&
+  ok "the gcc shape (out references -lib): -lib submitted first, then out, then one claim" || no "mlib: $(print -r -- "$out" | grep ' mlib')"
+[[ $(bg9 "$DL") == 1 && $(bg9 "$DO") == 1 && $(bg9 "$DD") == 1 ]] && (( $(ln9 "$DL") < $(ln9 "$DO") && $(ln9 "$DO") < $(ln9 "$DD") )) &&
+  has "mdev: $DD waits for its references to be served first: ${DO#/nix/store/}" && [[ $(cl7 mdev) == 1 && $(dn9 "$DO") == 1 ]] &&
+  ok "three outputs (dev -> out -> lib): dev waits in the first pass, lib then out go, then dev in a later pass of the same tick; one claim" || no "mdev: $(print -r -- "$out" | grep ' mdev')"
+[[ $(bg9 "$GD") == 1 && $(bg9 "$GO") == 1 && $(cl7 mdbg) == 1 && $(dn9 "$GO") == 1 ]] && ok "out + a -debug that references nothing: both published, one claim" || no "mdbg: $(print -r -- "$out" | grep ' mdbg')"
+[[ $(bg9 "$SL") == 0 && $(bg9 "$SO") == 1 && $(cl7 mserv) == 1 && $(dn9 "$SO") == 1 ]] && ! print -r -- "$sl" | grep -q "paths=$SL" &&
+  ok "-lib already served by someone else: only out is submitted, one claim" || no "mserv: $(print -r -- "$out" | grep ' mserv')"
+[[ $(bg9 "$PL") == 1 && $(bg9 "$PO") == 0 && $(cl7 mpri) == 1 && $(dn9 "$PO") == 1 ]] && ! print -r -- "$sl" | grep -q "paths=$PO" &&
+  ok "out already served by someone else: only -lib is submitted, then one claim" || no "mpri: $(print -r -- "$out" | grep ' mpri')"
+! print -r -- "$c" | grep '/complete' | egrep -q '"store_path":"[^"]*-(lib|debug|dev)"' && [[ $(dn9 "$MO9") == 1 && $(dn9 "$DO") == 1 && $(dn9 "$PO") == 1 ]] && (( $(ln9 "$ML") < $(ln9 "$MO9") )) &&
+  ok "each completion names the primary (out) and its served NarHash, though -lib was published first (mlib), dev last (mdev), out not at all (mpri)" || no "primary: $(print -r -- "$c" | grep '/complete')"
+[[ $(bg9 "$RL") == 0 && $(bg9 "$RO") == 0 && $(cl7 mrej) == 0 ]] && ! print -r -- "$sl" | grep -q "paths=$RO" && has 'decline mrej: pre-submit-check.sh --leaf .*-lib rc=1 \([a-z,]*gate' &&
+  ls "$W/st9/tried/" | grep -q 'qb-mrej-.*\.drv\^lib\.pub$' && ok "NEG a sibling refused at the gate (-lib names a host): the job declines, out is never offered, no claim" || no "mrej: $(print -r -- "$out" | grep ' mrej')"
+[[ -z $(print -r -- "$sl" | grep 'qb-msib-') && $(cl7 msib) == 0 ]] && has "decline msib: cache.solnix.io serves its sibling $ID with sha256:0{52}, this host built sha256:" &&
+  ls "$W/st9/tried/" | grep -q 'qb-msib-.*\.drv\^out\.pub$' && ok "NEG a served sibling of another build (-debug, another NarHash): out is never submitted, memo'd, no claim" || no "msib: $(print -r -- "$out" | grep ' msib')"
+[[ $(bg9 "$QL") == 1 && $(bg9 "$QO") == 0 && $(cl7 mprop) == 0 && -s $W/st9/pub/${QL##*/} ]] && has "mprop: $QL is proposed \(sid-mprop-lib\)" &&
+  has "mprop: $QO waits for its references to be served first: ${QL#/nix/store/}" && ok "tier 1: -lib proposed, out waits for it (not submitted), no claim, the proposal kept" || no "mprop: $(print -r -- "$out" | grep ' mprop')"
+# tick 9B: the -lib proposal is approved; mrej's refusal stands
+: > "$W/fk/approve"; r7 mrej mprop > "$W/p9.json"; tk9; print -r -- "$out" | sed 's/^/   9B /'; rm -f "$W/fk/approve"
+[[ $(print -r -- "$sl" | grep -c 'status=sid-mprop-lib') == 1 && $(bg9 "$QL") == 0 && $(bg9 "$QO") == 1 && $(cl7 mprop) == 1 && $(dn9 "$QO") == 1 && ! -e $W/st9/pub/${QL##*/} ]] &&
+  ok "the approved -lib proposal: polled by id on the next tick, then out submitted, one claim" || no "mprop B: $(print -r -- "$out" | grep ' mprop') $sl"
+! has 'mrej: first build of' && has "decline mrej: $RL is not served, and its first publish was refused here" && [[ $(cl7 mrej) == 0 ]] && ! print -r -- "$sl" | grep -q 'qb-mrej-' &&
+  ok "a refused sibling: the next tick declines the job before any build" || no "mrej B: $(print -r -- "$out" | grep ' mrej')"
 rm -f "$W/bearer"
 (( bad )) && print "RESULT: FAIL" || print "RESULT: PASS"
 exit $bad
