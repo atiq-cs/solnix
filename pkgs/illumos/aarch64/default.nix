@@ -250,6 +250,8 @@ let
             + "\n" + ''! grep -q -- -solnix-a64-build-tools config.cache || { echo "FATAL: lynx config.cache names the farm" >&2; exit 1; }'' + "\n" + c) ] b; in
           if d == b then throw "a64r lynx: gmake anchor" else d
         + "\n! grep -aq -- '-solnix-a64-build-tools' \"$out/bin/lynx\" || { echo 'FATAL: lynx names the build-tools farm' >&2; exit 1; }\n"; };
+      # screen links the proto's libcrypt + libutempter (x86: the world), which gate-libs-home lacks: its own gate-libs set, as openssh.
+      screen = { deps = args.deps ++ [ screenWorld ]; };
       # base-src's libxml2 links base-src's own zlib, built for both ABIs (x86 SMF is 32-bit): on aarch64 one zlib per set (srcPkgs',
       # the served one) and LP64 only, as the set's other libraries.
       libxml2 = { deps = [ srcPkgs.zlib ]; abis = [ "64" ]; };
@@ -273,6 +275,7 @@ let
   };
   final = import ./a64h-pkgs.nix { inherit (srcPkgs) mkSrcPkg; };
   sshWorld = srcPkgs.mkGateLibs "illumos-gate-libs-ssh" "libpam.so.1 libcrypt.so.1 libcontract.so.1";   # openssh's gate libs (perPkg)
+  screenWorld = srcPkgs.mkGateLibs "illumos-gate-libs-screen" "libcrypt.so.1 libutempter.so.1";   # screen's (perPkg)
   # one ncurses/readline/libiconv/less/sqlite per set, as NixOS has (the seed keeps its served duplicates): base-src's and cli's
   # copies are srcPkgs', and nixChain links the set's sqlite 3.50.4 (homePkgs.sqlite) instead of its own 3.46.1.
   shared = if stage == "seed" then { } else { inherit (srcPkgs) ncurses readline libiconv less; };
@@ -310,7 +313,7 @@ homePkgs // (if stage == "seed" then { } else final // {
   # the build-only tools under their pnames (solnix-builder.sh drv_for finds an attr by pname, _ or camelCase)
   illumos-build-tools = a64.illumosTools; cc-store-names = a64.ccNames; sh-store = a64.shAlias; solnix-a64-build-tools = a64.buildToolsFarm; }
   # x86-served recipes on the store-only aarch64 set (a64r): the same recipe files (./a64r-pkgs.nix)
-  // import ./a64r-pkgs.nix { inherit srcPkgs homePkgs a64 final system sshWorld; }) // {
+  // import ./a64r-pkgs.nix { inherit srcPkgs homePkgs a64 final system sshWorld screenWorld; }) // {
   gate = gate';
   inherit libc rtld ld sys systemPath gcc srcPkgs;
   inherit (srcPkgs) zlib openssl nixChain git tree ncurses less nano nvi htop top wget gateLibs bsdfetch gccWrapper readline bash;

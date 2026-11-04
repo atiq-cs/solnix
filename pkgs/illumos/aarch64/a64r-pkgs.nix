@@ -3,7 +3,7 @@
 # desktop/cosmic-data.nix, cosmic-wallpapers, solnix-help) are x86 drvs: `retarget` builds the same text on aarch64 through
 # ./tools.nix's plain (store PATH, seed bash, path gate). Final stage only. Not here: go and cargo (no aarch64-illumos target
 # upstream), python3 and what needs it (cli/c-dev.nix links graphics.libffi/expat; next batch), the .zip data (python3 zipfile).
-{ srcPkgs, homePkgs, a64, final, system, sshWorld }:
+{ srcPkgs, homePkgs, a64, final, system, sshWorld, screenWorld }:
 let
   inherit (srcPkgs) mkSrcPkg zlib;
   # dixa's nix.conf has cores = 0, so NIX_BUILD_CORES=0 and `-j''${NIX_BUILD_CORES:-8}` is gmake -j0 (fails). nixpkgs' setup.sh
@@ -31,7 +31,10 @@ let
     graphics = glibs; inherit (srcPkgs) nixChain; noto-sans = cosmicData'.noto-sans; };
   # graphics/input.nix's pixman, and desktop/gtk/gfx.nix's cairo/pango/gdk-pixbuf (graphics = pixman only; no mesa/wayland on aarch64)
   gtkGfx = import ../desktop/gtk/gfx.nix { mkSrcPkg = mkCores; tools = gtkTools; inherit zlib; base = gtkBase; inherit (srcPkgs) nixChain;
-    inherit (base) libxml2; graphics = glibs // { inherit (ginputS) pixman; inherit (glibsD) dbus; }; };
+    inherit (base) libxml2; graphics = glibs // { inherit (ginputS) pixman; inherit (glibsD) dbus; inherit (glibsS) wayland wayland-protocols; }; };
+  # solnix-torrent.nix's libtorrent-rasterbar (the community seeder's client library): the set's openssl, nixChain's boost (headers)
+  torrent = import ../solnix-torrent.nix { inherit mkSrcPkg; inherit (srcPkgs) openssl gccWrapper; inherit (srcPkgs.nixChain) boost; inherit (cli) cmake;
+    inherit (base) pkgconf; binutils = null; gcc = null; gate = null; libc = null; inherit system; };
   # desktop/ as pkgs/illumos/default.nix wires it (data, xdg, help, cosmic-wallpapers); cargoPkg null: pop-launcher is never forced
   desk = import ../desktop { cargoPkg = null; graphics = null; fd = null; inherit mkSrcPkg; inherit (srcPkgs) bash;
     inherit (base) coreutils gnugrep gnused hostname jq hostTools; inherit (cli) file; hostfixTools = a64.buildToolsFarm; world = null; python3 = null; };
@@ -56,8 +59,8 @@ in
   inherit (glibs) expat libffi;
   inherit (ginput) hwdata;
   inherit (gtkBase) libpng;
-  # batch 2 (a64r b2): python3 and the C tier that needs no meson. Not yet: bdwgc (gcconfig.h: __aarch64__ on a non-Linux/BSD OS is NOSYS, no UNIX_LIKE: a port, then w3m), screen (links the proto's
-  # libcrypt/libutempter, which aarch64's gate libs lack: ldd resolved them to the host /usr/lib), whisper-cpp (x86 SIMD flags), lsof
+  # batch 2 (a64r b2): python3 and the C tier that needs no meson. Not yet: bdwgc (gcconfig.h: __aarch64__ on a non-Linux/BSD OS is NOSYS, no UNIX_LIKE: a port, then w3m), screen (b7: its own gate libs),
+  # whisper-cpp (x86 SIMD flags), lsof
   # (builds with ./default.nix's ARCH64B + zlib fixes, but its in-build `lsof -p $$` needs kvm_open of /dev/kmem, which nixbld on
   # dixa may not open: "kvm_open ... Permission denied". A host permission; held, not worked around)
   inherit (cli) python3 tcl groff texinfo hunspell pinentry-curses fmt catch2_3;
@@ -75,6 +78,10 @@ in
   inherit (glibsS) wayland wayland-protocols libdrm;
   inherit (glibsD) dbus; illumos-gate-libs-dbus = dbusWorld;
   inherit (gtkGfx) at-spi2-core;
+  # batch 7 (a64r b7)
+  inherit (gtkGfx) grim;
+  inherit (torrent) libtorrent-rasterbar;
+  inherit (cli) screen; illumos-gate-libs-screen = screenWorld;
   # batch 6 (a64r b6): more of the C tier (cli/, base-src)
   inherit (cli) lynx neomutt;
   inherit (base) openssh; illumos-gate-libs-ssh = sshWorld;   # not nspr: pr/include/md/_solaris.h has only sparc and x86 arms ("#error unknown processor"): a port
