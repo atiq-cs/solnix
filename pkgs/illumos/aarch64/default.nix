@@ -265,6 +265,15 @@ let
       # and it links the proto's libctf -> libdwarf, which NEEDs libz (x86: the world has it): zlib as a dep (link path + RUNPATH).
       lsof = { deps = args.deps ++ [ srcPkgs.zlib ]; build = "sed -i 's|^#    if defined(__i386) \\|\\| defined(__amd64)$|#    if defined(__aarch64__)\\n#        define ARCH64B \"aarch64\"\\n#    elif defined(__i386) \\|\\| defined(__amd64)|' lib/dialects/sun/dproc.c\n"
         + "grep -q 'define ARCH64B \"aarch64\"' lib/dialects/sun/dproc.c || { echo 'FATAL: lsof ARCH64B anchor' >&2; exit 1; }\n" + args.build; };
+      # libgit2: cmake found the host's /usr/lib/libz.so + /usr/include ("Found ZLIB: /usr/lib/libz.so", gate L5; also /usr/lib/libpcre.so,
+      # unused: REGEX_BACKEND=builtin). mk-src-pkg's env CMAKE_PREFIX_PATH is ';'-joined, which cmake splits on ':' on Unix, so it names
+      # no dir and the default /usr prefix wins (measured on dixa, cmake 4.1.2). Name the store zlib, as the recipe names openssl, and
+      # ignore the host prefixes (/ too: else /lib/libz.so); the cache check fails a build that still found a host library.
+      libgit2 = { build = let a = "-DUSE_BUNDLED_ZLIB=OFF "; b = builtins.replaceStrings [ a ] [ (a + "-DZLIB_INCLUDE_DIR:PATH=${srcPkgs.zlib}/include "
+          + "-DZLIB_LIBRARY:FILEPATH=${srcPkgs.zlib}/lib/libz.so -DCMAKE_IGNORE_PREFIX_PATH='/;/usr;/usr/local;/opt' ") ] args.build; in
+        if b == args.build then throw "a64s libgit2: zlib anchor" else b
+          + "\ngrep -qx 'ZLIB_LIBRARY:FILEPATH=${srcPkgs.zlib}/lib/libz.so' CMakeCache.txt || { echo 'FATAL: libgit2 zlib is not the store zlib' >&2; exit 1; }\n"
+          + "! grep -E '^[A-Za-z0-9_]+:(FILEPATH|PATH)=/(usr|lib|opt)/' CMakeCache.txt | grep -v '^CMAKE_INSTALL_' || { echo 'FATAL: libgit2 cmake found a host path' >&2; exit 1; }\n"; };   # CMAKE_INSTALL_OLDINCLUDEDIR=/usr/include is GNUInstallDirs' default, not a find
       # gmp: the x86 text pins --build=x86_64-pc-solaris2.11 after lp64Fix's aarch64 --build (the last one wins): drop it.
       gmp6 = { build = let b = builtins.replaceStrings [ "--build=x86_64-pc-solaris2.11 " ] [ "" ] args.build; in
         if b == args.build then throw "a64r gmp6: --build anchor" else b; };
