@@ -1,0 +1,49 @@
+bdwgc 8.2.8 on illumos aarch64 (solnix a64s, 2026-11-04): gcconfig.h treats __aarch64__ on an OS other than Linux/BSD/Darwin
+as NOSYS, and gc_config_macros.h maps GC_THREADS to GC_SOLARIS_THREADS only for sparc and x86 SunOS. Make sun+__aarch64__
+SOLARIS (the generic SOLARIS block: DATAEND _end, HEURISTIC2 stack base, SOLARISDL dynamic roots), give AARCH64 a SOLARIS
+arm (ELF_CLASS64, DATASTART at the 64 KB max page size of the aarch64 link-editor: measured on dixa, an executable's data
+PT_LOAD starts exactly at GC_SysVGetDataStart(0x10000, _etext); 0x1000 points into the unmapped gap), and GC_SOLARIS_THREADS.
+Verified: gmake check 16/16 (gctest, staticrootstest, threadleaktest, ...); with DATASTART = _end gctest and staticrootstest FAIL.
+--- a/include/private/gcconfig.h
++++ b/include/private/gcconfig.h
+@@ -154,7 +154,11 @@
+ # endif
+ # if defined(__aarch64__)
+ #    define AARCH64
+-#    if !defined(LINUX) && !defined(DARWIN) && !defined(FREEBSD) \
++#    if (defined(sun) || defined(__sun))
++       /* solnix: illumos on aarch64 (richlowe's arm64-gate) is SunOS 5.11 */
++#      define SOLARIS
++#      define mach_type_known
++#    elif !defined(LINUX) && !defined(DARWIN) && !defined(FREEBSD) \
+         && !defined(NETBSD) && !defined(NN_BUILD_TARGET_PLATFORM_NX) \
+         && !defined(OPENBSD) && !defined(_WIN32)
+ #      define NOSYS
+@@ -2191,6 +2195,15 @@
+ #   ifdef OPENBSD
+       /* Nothing specific. */
+ #   endif
++#   ifdef SOLARIS
++      /* solnix: illumos aarch64. The OS part (DATAEND _end, HEURISTIC2  */
++      /* stack base, SOLARISDL, sbrk/calloc heap) is the generic SOLARIS */
++      /* block. The data PT_LOAD follows text at the 64 KB max page size */
++      /* of the aarch64 link-editor (p_align 0x10000), as on SPARC, not  */
++      /* x86's 4 KB: SysV(0x10000) gave the data segment's exact start.  */
++#     define ELF_CLASS ELFCLASS64
++#     define DATASTART GC_SysVGetDataStart(0x10000, (ptr_t)_etext)
++#   endif
+ #   ifdef NINTENDO_SWITCH
+ #     define OS_TYPE "NINTENDO_SWITCH"
+       extern int __bss_end[];
+--- a/include/gc_config_macros.h
++++ b/include/gc_config_macros.h
+@@ -105,7 +105,8 @@
+ # elif defined(__sparc) /* && !Linux */ \
+        || ((defined(sun) || defined(__sun)) \
+            && (defined(i386) || defined(__i386__) \
+-               || defined(__amd64) || defined(__amd64__)))
++               || defined(__amd64) || defined(__amd64__) \
++               || defined(__aarch64__) /* solnix: illumos aarch64 */))
+ #   define GC_SOLARIS_THREADS
+ # elif defined(__APPLE__) && defined(__MACH__)
+ #   define GC_DARWIN_THREADS
