@@ -4,9 +4,11 @@
 # meson and mako run on the STORE python3 (cli/c-dev.nix) and patch with the store gnupatch (wave6; recipes2: the OI host's
 # /usr/bin/python3.9 and patch made meson/mako unrowable on a solnix host). python3/gnupatch come from cliBase (default.nix);
 # python3's own deps (libffi expat) are in graphics/libs.nix and use neither, so the reference is not a cycle.
-{ mkSrcPkg, python3 ? null, gnupatch ? null }:
+{ mkSrcPkg, python3 ? null, gnupatch ? null, bash ? null }:
 rec {
   python = if python3 == null then "/usr/bin/python3.9" else "${python3}/bin/python3";
+  # meson's #!: the store bash (gate B9 FAILs #!/usr/bin/bash), as desktop/gtk/tools.nix. null: the old text (an exempt caller).
+  shBang = if bash == null then "/usr/bin/bash" else "${bash}/bin/bash";
   patch = if gnupatch == null then "patch" else "${gnupatch}/bin/patch";
 
   meson = mkSrcPkg {
@@ -20,7 +22,7 @@ rec {
       # no bytecode in the out (recipes2: 14 .pyc differed between builds); the wrapper runs with PYTHONDONTWRITEBYTECODE=1
       find "$out/lib/meson" -name __pycache__ -prune -exec rm -r {} + 2>/dev/null || true
       ! find "$out" -name '*.pyc' | grep -q . || { echo "FATAL: meson ships .pyc" >&2; exit 1; }
-      printf '#!/usr/bin/bash\nexport PYTHONDONTWRITEBYTECODE=1\nexec ${python} %s/lib/meson/meson.py "$@"\n' "$out" > "$out/bin/meson"
+      printf '#!${shBang}\nexport PYTHONDONTWRITEBYTECODE=1\nexec ${python} %s/lib/meson/meson.py "$@"\n' "$out" > "$out/bin/meson"
       chmod +x "$out/bin/meson"
       "$out/bin/meson" --version | grep -qx 1.4.2 || { echo "FATAL: meson --version" >&2; exit 1; }
     '';
@@ -57,6 +59,19 @@ rec {
       PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$out/lib/python:${markupsafe}/lib/python" ${python} -c 'import mako.template' \
         || { echo "FATAL: mako does not import" >&2; exit 1; }
       ! find "$out" -name '*.pyc' | grep -q . || { echo "FATAL: mako ships .pyc" >&2; exit 1; }
+    '';
+  };
+
+  # mesa's meson.build checks mako's version with packaging.version, else distutils, which python 3.12 removed: on the store
+  # python3 (3.13) mesa needs packaging (a64s, aarch64/mesa.nix: the same recipe; NixOS's mesa takes python3Packages.packaging).
+  packaging = mkSrcPkg {
+    pname = "packaging"; version = "24.1";   # PyPI sdist (pypi.org json digest)
+    src = { url = "https://files.pythonhosted.org/packages/51/65/50db4dda066951078f0a96cf12f4b9ada6e4b811516bf0262c0f4f7064d4/packaging-24.1.tar.gz";
+            sha256 = "026ed72c8ed3fcce5bf8950572258698927fd1dbda10a5e981cdf0ac37f4f002"; };
+    build = ''
+      mkdir -p "$out/lib/python" && cp -r src/packaging "$out/lib/python/"
+      PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$out/lib/python" ${python} -c 'from packaging.version import Version; assert Version("1.3.5") >= Version("0.8.0")' \
+        || { echo "FATAL: packaging does not import" >&2; exit 1; }
     '';
   };
 

@@ -8,22 +8,22 @@
 # llvmpipe/lavapipe need an LLVM derivation too, so softpipe is the CPU GL.
 #
 # iris/anv need a DRM render node only at RUN time (i915 stage B). They build now.
-{ mkSrcPkg, tools, pkgconf, zlib, expat, libffi, wayland, wayland-protocols, libdrm }:
+{ mkSrcPkg, tools, pkgconf, zlib, expat, libffi, wayland, wayland-protocols, libdrm, cmake ? null, hostTools ? [ ] }:
 let
   # glslang compiles anv's five internal GLSL shaders at build time. Host-run
-  # C++ tool, built with the build host's cmake; nothing of it ships.
-  glslang = mkSrcPkg {
+  # C++ tool, built with the store cmake (it ran the OI host's /usr/bin/cmake before wave6); nothing of it ships.
+  glslang = mkSrcPkg ({
     pname = "glslang"; version = "14.3.0";
     src = { url = "https://github.com/KhronosGroup/glslang/archive/refs/tags/14.3.0.tar.gz";
             sha256 = "be6339048e20280938d9cb399fcdd06e04f8654d43e170e8cce5a56c9a754284"; };
     build = ''
-      /usr/bin/cmake -S . -B _b -DCMAKE_INSTALL_PREFIX="$out" -DCMAKE_BUILD_TYPE=Release \
+      cmake -S . -B _b -DCMAKE_INSTALL_PREFIX="$out" -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_C_COMPILER="$CC" -DCMAKE_CXX_COMPILER="$CXX" -DENABLE_OPT=OFF \
         -DGLSLANG_TESTS=OFF -DENABLE_HLSL=OFF -DBUILD_SHARED_LIBS=OFF -DCMAKE_INSTALL_LIBDIR=lib/amd64
       gmake -C _b -j16 install
       "$out/bin/glslangValidator" --version | grep -q Glslang || { echo "FATAL: glslang" >&2; exit 1; }
     '';
-  };
+  } // (if cmake == null then { } else { nativeTools = [ cmake ] ++ hostTools; }));
 in
 mkSrcPkg {
   pname = "mesa"; version = "24.0.9";
@@ -39,7 +39,7 @@ mkSrcPkg {
     # PIPE_CAP_DMABUF on illumos (dma-buf fds, src/drm-port obsd_file.c): EGL_EXT_image_dma_buf_import.
     patch -p1 < ${./patches/mesa-24.0.9-illumos-dmabuf.patch}
     export PATH=${pkgconf}/bin:${glslang}/bin:${wayland}/bin:$PATH
-    export PYTHONPATH=${tools.mako}/lib/python:${tools.markupsafe}/lib/python
+    export PYTHONPATH=${tools.mako}/lib/python:${tools.markupsafe}/lib/python:${tools.packaging}/lib/python   # packaging: mako's version check
     ${tools.mesonBuild (builtins.concatStringsSep " " [
       "-Dgallium-drivers=iris,swrast -Dvulkan-drivers=intel -Dllvm=disabled"
       "-Dplatforms=wayland -Degl=enabled -Dgbm=enabled -Dgles1=disabled -Dgles2=enabled"
