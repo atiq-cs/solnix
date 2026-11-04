@@ -1,0 +1,29 @@
+NSPR 4.40 on illumos, any arch (solnix a64s, 2026-11-04): _pth.h hardcodes the SOLARIS pthread priority range as 1..127. illumos
+libc's pthread_create checks a PTHREAD_EXPLICIT_SCHED priority against the class range (usr/src/lib/libc/port/threads/pthread.c:
+ap->prio < pcc_primin || > pcc_primax -> EINVAL); SCHED_OTHER (TS) is -60..60. So PR_PRIORITY_HIGH (85) and URGENT (127) give
+EINVAL, which ptthread.c does not retry (it retries only EPERM), and PR_CreateThread returns NULL: NSPR's own `switch` test hangs.
+Measured on dixa: prio 0 ok, 1..60 EPERM unprivileged, 64/85/127 EINVAL. Fix: ask libc (sched_get_priority_min/max), as NSPR does
+for Linux and FreeBSD. Any illumos arch: aarch64 applies it now (aarch64/default.nix perPkg nspr), x86 (base-src.nix) in wave6.
+--- a/nspr/pr/include/md/_pth.h
++++ b/nspr/pr/include/md/_pth.h
+@@ -113,13 +113,14 @@
+ #define PT_PRIO_MAX 30
+ #elif defined(SOLARIS)
+ /*
+- * Solaris doesn't seem to have macros for the min/max priorities.
+- * The range of 0-127 is mentioned in the pthread_setschedparam(3T)
+- * man pages, and pthread_setschedparam indeed allows 0-127.  However,
+- * pthread_attr_setschedparam does not allow 0; it allows 1-127.
++ * solnix: illumos libc's pthread_create validates an explicit priority
++ * against the policy's class range (SCHED_OTHER = TS: -60..60), so the old
++ * fixed 1..127 made PR_PRIORITY_HIGH (85) and URGENT (127) fail with EINVAL,
++ * and PR_CreateThread returned NULL (NSPR's switch test hangs). Ask libc, as
++ * for Linux and FreeBSD.
+  */
+-#define PT_PRIO_MIN 1
+-#define PT_PRIO_MAX 127
++#define PT_PRIO_MIN sched_get_priority_min(SCHED_OTHER)
++#define PT_PRIO_MAX sched_get_priority_max(SCHED_OTHER)
+ #elif defined(OPENBSD)
+ #define PT_PRIO_MIN 0
+ #define PT_PRIO_MAX 31

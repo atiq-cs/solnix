@@ -138,6 +138,15 @@ let
   # (measured on the world). illumos-gate does not ship them; OpenIndiana builds
   # them as library/mozilla-nspr and library/mozilla-nss into /usr/lib/mps.
   # Both ABIs: passwd, the PAM stack and SMF are 32-bit.
+  # NSPR's own suite (pr/tests runtests.sh, ~100 programs, each killed after TEST_TIMEOUT s): every test must pass, switch included.
+  # Without the priority patch switch hangs (PR_CreateThread(HIGH) returns NULL): the control, wave6u.
+  nsprTests = ''
+    r=0; ( cd pr/tests && gmake -j4 >&2 && TEST_TIMEOUT=300 sh ./runtests.sh ../../dist > "$W/nspr-tests-$ABI.out" 2>&1 ) || r=$?
+    cat "$W/nspr-tests-$ABI.out" >&2
+    n=$(grep -c 'Passed$' "$W/nspr-tests-$ABI.out" || true); f=$(grep -c 'FAILED$' "$W/nspr-tests-$ABI.out" || true)
+    grep -q '^switch .*Passed$' "$W/nspr-tests-$ABI.out" || { echo "FATAL: nspr switch test did not pass (ABI $ABI)" >&2; exit 1; }
+    [ "$r" = 0 ] && [ "$f" = 0 ] && [ "$n" -ge 100 ] || { echo "FATAL: nspr tests ABI $ABI rc=$r passed=$n failed=$f" >&2; exit 1; }
+  '';
   nspr = mkSrcPkg {
     pname = "nspr"; version = "4.40";
     src = { url = "https://ftp.mozilla.org/pub/nspr/releases/v4.40/src/nspr-4.40.tar.gz";
@@ -146,14 +155,23 @@ let
     build = ''
       # configure appends -m64 itself for --enable-64bit; the wrapper already passes it.
       E=""; [ "$ABI" = 64 ] && E=--enable-64bit
-      cd nspr
+      ${if buildTools == [ ] then "" else ''
+      # _pth.h's fixed SOLARIS thread priority range 1..127: illumos libc rejects an explicit SCHED_OTHER priority outside -60..60
+      # (EINVAL), so PR_CreateThread(PR_PRIORITY_HIGH/URGENT) returned NULL (measured on chef, t/nsprprio.c; a64s on dixa). Range from
+      # libc, as NSPR does for Linux/FreeBSD (./patches/nspr/0001-illumos-thread-priority-range.patch; applied with sed: GNU patch
+      # depends on the world, which depends on nspr). The seed instance is unchanged (bootstrap only, never shipped).
+      H=nspr/pr/include/md/_pth.h
+      sed -i 's@^#define PT_PRIO_MIN 1$@#define PT_PRIO_MIN sched_get_priority_min(SCHED_OTHER)@; s@^#define PT_PRIO_MAX 127$@#define PT_PRIO_MAX sched_get_priority_max(SCHED_OTHER)@' "$H"
+      [ "$(grep -c '^#define PT_PRIO_M[AI][XN] sched_get_priority_m[ai][xn](SCHED_OTHER)$' "$H")" = 4 ] \
+        || { echo "FATAL: nspr _pth.h SOLARIS priority range not patched" >&2; exit 1; }
+      ''}cd nspr
       ./configure --prefix="$out" --libdir="$out/$LIBSUB" --includedir="$out/include/nspr" \
         --enable-optimize --disable-debug $E
       # build stamp from SOURCE_DATE_EPOCH, as nixpkgs' nspr patch (the Makefiles call date(1) and ./now).
       gmake -j4 SH_DATE="1980-01-01 00:00:00" SH_NOW="''${SOURCE_DATE_EPOCH}000000"
       gmake install
       rm -f "$out/$LIBSUB"/*.a "$out/bin/compile-et.pl" "$out/bin/prerr.properties"
-    '';
+      ${if buildTools == [ ] then "" else nsprTests}'';
   };
 
   nss = mkSrcPkg {
