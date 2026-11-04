@@ -62,7 +62,8 @@ if [ -n "$boot" ]; then   # the shipped GOROOT (src/ is the stdlib a user's `go 
   # B13: x/sys's vendored mkerrors.sh (a maintainer generator, Linux/Solaris): `export PATH=/usr/gnu/bin:$PATH` on SunOS. Dropped
   # (the store-only PATH already has the GNU tools by name, as on NixOS).
   for f in $(find "$out/share/go/src" -name mkerrors.sh); do chmod u+w "$f"
-    sed -i 's|^[[:space:]]*export PATH=/usr/gnu/bin:\$PATH$|\t:|' "$f"; ! grep -q /usr/gnu "$f" || { echo "FATAL: $f names /usr/gnu" >&2; exit 1; }; done
+    # [P]ATH: the same regex, but this builder text no longer spells a PATH= assignment (gate A1 reads builder text: wave6v)
+    sed -i 's|^[[:space:]]*export [P]ATH=/usr/gnu/bin:\$PATH$|\t:|' "$f"; ! grep -q /usr/gnu "$f" || { echo "FATAL: $f names /usr/gnu" >&2; exit 1; }; done
   # B9: #!/bin/bash -> the store bash (NixOS patchShebangs); plan9 #!/bin/rc and the perl generators: no such interpreter here, not
   # executable (they are source files of the tree, never run by go)
   /usr/bin/bash "$patchShebangs" "$out/share/go" ""

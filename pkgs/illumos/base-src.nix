@@ -879,6 +879,7 @@ let
       sha256 = "63657a72baa6fda8bfdb5a2d5e530bbcce0b087dfb23be5d7598626d61870941";
       narHash = "08l22vv66hzgg3am7hs2vjxgdhgpr0wpizxf71fyfp9z4sycwv1s";
       name = "home-manager-source"; exclude = [ "tests" ]; inherit system;
+      tools = "${coreutils}/bin:${gnugrep}/bin";   # store-only fetcher (gate A1/A4; wave6v)
     };
     inherit bash;
     depPath = builtins.concatStringsSep ":" (map (p: "${p}/bin") [ coreutils findutils gettext gnused gnugrep jq less ncurses hostname ]);

@@ -30,6 +30,8 @@
 , name ? "source"
 , exclude ? [ ]
 , system ? "x86_64-solaris"
+, tools ? null              # store bin dirs for cp/grep/mkdir/cat (gate A4: a fetcher runs only store tools). null = /usr/bin, for
+                            # the gate proto and others below the store tools (a cycle otherwise); the pinned narHash fixes the bytes
 }:
 
 let
@@ -45,7 +47,7 @@ in
 derivation {
   inherit name system tree;
   builder = "/usr/bin/bash";
-  PATH = "/usr/bin";
+  PATH = if tools == null then "/usr/bin" else tools;
   exclude = builtins.concatStringsSep " " exclude;
   outputHashMode = "recursive";
   outputHashAlgo = "sha256";
