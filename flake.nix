@@ -274,9 +274,16 @@
               # the system world's served pname is illumos-userland (the attr is `world`): drv_for looks up the pname (wave6u, piece 2)
               illumos-userland = p.solnix.world;
             };
+            # served row pnames that are not top-level attrs (wave6v, W2: drv_for MISSed 28 of 172 rows), as aarch64 below:
+            # the nix chain's members (never over an existing name), hostname-f, illumos-vi; and two names whose served row
+            # is another drv than the attr was: nix = nixSrc 2.24.15 (the attr was the /nix-tools ingest, which does not
+            # evaluate purely), meson = 1.10.2 (served row; graphics' 1.4.2 moves to meson_1_4). aarch64 has both already.
+            lifted = removeAttrs p.solnix.nixChain [ "curlForNix" "nix" ];
+            renamed = { hostname-f = p.solnix.hostname; illumos-vi = p.solnix.vi; nix = p.solnix.nixSrc;
+                        meson = p.solnix.meson_1_10; meson_1_4 = p.solnix.meson; };
           in lib.filterAttrs (_: v:
           let r = builtins.tryEval (lib.isDerivation v); in r.success && r.value)
-          (seedRows // removeAttrs p.solnix [ "cached" "starter" ]);
+          (lifted // seedRows // removeAttrs p.solnix [ "cached" "starter" ] // renamed);
         # the native aarch64 set (pkgs/illumos/aarch64; lib/host-pkgs.nix uses the same import), for drv_for on dixa. The
         # served aarch64 rows include the nix chain and gate pieces that live only in nested sets (srcPkgs, nixChain): they
         # are lifted to the top, never over an existing name (sqlite: one 3.50.4, which nixChain links too), plus
