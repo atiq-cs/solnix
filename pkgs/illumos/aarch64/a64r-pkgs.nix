@@ -82,6 +82,8 @@ in
   inherit (gtkGfx) grim;
   inherit (torrent) libtorrent-rasterbar;
   inherit (cli) screen; illumos-gate-libs-screen = screenWorld;
+  # a64s batch 2: bdwgc (ported: ./bdwgc-aarch64-illumos.patch, its suite in the build, ./default.nix perPkg), then w3m on it
+  inherit (cli) bdwgc w3m;
   # batch 6 (a64r b6): more of the C tier (cli/, base-src)
   inherit (cli) lynx neomutt;
   inherit (base) openssh; illumos-gate-libs-ssh = sshWorld;   # not nspr: pr/include/md/_solaris.h has only sparc and x86 arms ("#error unknown processor"): a port

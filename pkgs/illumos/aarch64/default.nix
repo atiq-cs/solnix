@@ -274,6 +274,14 @@ let
         if b == args.build then throw "a64s libgit2: zlib anchor" else b
           + "\ngrep -qx 'ZLIB_LIBRARY:FILEPATH=${srcPkgs.zlib}/lib/libz.so' CMakeCache.txt || { echo 'FATAL: libgit2 zlib is not the store zlib' >&2; exit 1; }\n"
           + "! grep -E '^[A-Za-z0-9_]+:(FILEPATH|PATH)=/(usr|lib|opt)/' CMakeCache.txt | grep -v '^CMAKE_INSTALL_' || { echo 'FATAL: libgit2 cmake found a host path' >&2; exit 1; }\n"; };   # CMAKE_INSTALL_OLDINCLUDEDIR=/usr/include is GNUInstallDirs' default, not a find
+      # bdwgc: gcconfig.h has no illumos aarch64 (NOSYS): ./bdwgc-aarch64-illumos.patch (its header has the why and the measurement).
+      # A GC that builds but loses roots is worse than none, so its own suite runs here, before install (nixpkgs' checkPhase:
+      # doCheck = true): gctest, staticrootstest, threadleaktest and the rest, all 16 must PASS (also under --check).
+      bdwgc = { build = let a = "gmake -j8; gmake install"; b = builtins.replaceStrings [ a ] [ ("gmake -j8\n"
+          + "gmake -j8 check >&2 || { cat test-suite.log >&2; echo 'FATAL: bdwgc gmake check failed' >&2; exit 1; }\n"
+          + "grep -Eq '^# PASS: +16$' test-suite.log && grep -Eq '^# (FAIL|ERROR|XPASS): +0$' test-suite.log && [ \"$(grep -Ec '^# (FAIL|ERROR|XPASS): +0$' test-suite.log)\" = 3 ] "
+          + "|| { cat test-suite.log >&2; echo 'FATAL: bdwgc test count is not 16 PASS / 0 FAIL' >&2; exit 1; }\ngmake install") ] args.build; in
+        if b == args.build then throw "a64s bdwgc: gmake anchor" else "patch -p1 < ${./bdwgc-aarch64-illumos.patch} >&2\n" + b; };
       # gmp: the x86 text pins --build=x86_64-pc-solaris2.11 after lp64Fix's aarch64 --build (the last one wins): drop it.
       gmp6 = { build = let b = builtins.replaceStrings [ "--build=x86_64-pc-solaris2.11 " ] [ "" ] args.build; in
         if b == args.build then throw "a64r gmp6: --build anchor" else b; };
