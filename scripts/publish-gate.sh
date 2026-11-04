@@ -21,6 +21,15 @@
 # shortcut: the reference scan greps /nix/store/<hash>- strings in the NAR, so a reference
 # written without the /nix/store/ prefix would go unseen; Nix's own scan is per-hash.
 
+PATH=${GATE_GREP_DIR:+$GATE_GREP_DIR:}/usr/gnu/bin:/usr/bin:/usr/sbin:$PATH
+unset LD_LIBRARY_PATH LD_LIBRARY_PATH_64 LD_LIBRARY_PATH_32
+# fail closed: the host-name and reference scans need GNU grep (-a -o -b); illumos grep rejects -a, and the checks
+# then passed silently (a solnix host has no /usr/gnu/bin/grep; seen on dixi 2026-11-01). There, run with
+# GATE_GREP_DIR=$(nix build --print-out-paths .#gnugrep)/bin.
+printf 'a\000b\n' | grep -a -b -o -F b > /dev/null 2>&1 || {
+  echo "publish-gate: $(command -v grep) is not GNU grep (needs -a -b -o); set GATE_GREP_DIR to a gnugrep bin" >&2; exit 2; }
+# (before --selftest too: its word-rule check needs GNU grep -w, and illumos /usr/bin/grep has none; a64s on dixa)
+
 # --selftest: prove the undeclared-reference rule bites without the store. A path
 # NAMED in the NAR is a violation iff it is in the deriver's input closure and not
 # declared; help-text strings (outside the inputs) and declared refs are not.
@@ -37,13 +46,6 @@ if [ "${1:-}" = "--selftest" ]; then
   echo "SELFTEST FAIL: [$r1] [$r2] [$r3] word [$w1] [$w2]"; exit 1
 fi
 
-PATH=${GATE_GREP_DIR:+$GATE_GREP_DIR:}/usr/gnu/bin:/usr/bin:/usr/sbin:$PATH
-unset LD_LIBRARY_PATH LD_LIBRARY_PATH_64 LD_LIBRARY_PATH_32
-# fail closed: the host-name and reference scans need GNU grep (-a -o -b); illumos grep rejects -a, and the checks
-# then passed silently (a solnix host has no /usr/gnu/bin/grep; seen on dixi 2026-11-01). There, run with
-# GATE_GREP_DIR=$(nix build --print-out-paths .#gnugrep)/bin.
-printf 'a\000b\n' | grep -a -b -o -F b > /dev/null 2>&1 || {
-  echo "publish-gate: $(command -v grep) is not GNU grep (needs -a -b -o); set GATE_GREP_DIR to a gnugrep bin" >&2; exit 2; }
 py=${GATE_PYTHON:-$(command -v python3)}
 [ -n "$py" ] && "$py" -c 'import sys; sys.exit(sys.version_info < (3, 9))' 2>/dev/null || {
   echo "publish-gate: no python3 >= 3.9 for the out checks (set GATE_PYTHON)" >&2; exit 2; }
