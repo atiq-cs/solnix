@@ -18,12 +18,12 @@ let
   # The OI build host has its own gpgrt-config/libgcrypt in /usr/bin (1.12.4, measured): configure
   # takes a *-config from PATH, so the deps' bin/ go first and GPGRT_CONFIG names the store one.
   cfgPath = deps: builtins.concatStringsSep ":" (map (d: "${d}/bin") deps);
-  lib = { pname, version, sha256, deps ? [ ], flags ? "", check, allow ? "" }: mkSrcPkg {
+  lib = { pname, version, sha256, deps ? [ ], flags ? "", check, pre ? "" }: mkSrcPkg {
     inherit pname version deps; src = gpgSrc pname version sha256; nativeTools = tools;
     # Makefile.am's maintainer target `stowinstall` (install prefix=/usr/local/stow/<pkg>): copied into the Makefile, never run
-    hostPathAllow = "install prefix=/usr/local/stow/" + allow;
+    hostPathAllow = "install prefix=/usr/local/stow/";
     build = ''
-      export PATH="${cfgPath deps}''${PATH:+:$PATH}"
+      ${pre}export PATH="${cfgPath deps}''${PATH:+:$PATH}"
       ${if deps == [ ] then "" else "export GPGRT_CONFIG=${builtins.head deps}/bin/gpgrt-config"}
       # GREP/SED as bare names: configure would bake the builder's seed-tool path into the
       # installed *-config scripts, and mk-src-pkg's de-bake (`sed > f.btfix && mv`) then
@@ -74,8 +74,15 @@ in rec {
     sha256 = "cf72510b8ebb4eb6693eef765749d83677a03c79291a311040a5bfd79baab763";
     deps = [ libgpg-error ];
     flags = "--with-libgpg-error-prefix=${libgpg-error}";
-    # tests/Makefile's oidtranstbl.h rule searches /etc/dumpasn1 /usr/local/bin .. /usr/bin for dumpasn1.cfg: a noinst test header
-    allow = "|for i in /etc/dumpasn1 /usr/local/bin ";
+    # tests/Makefile's oidtranstbl.h rule (a header for the noinst test t-crl-parser) reads the BUILD HOST's dumpasn1.cfg from
+    # /etc/dumpasn1 /usr/local/bin /usr/local/share /usr/bin /usr/share. None of them is on chef or lixi, so the table came from
+    # /dev/null; the search list is emptied to make that the answer on every host (nothing installed reads it).
+    pre = ''
+      sed -i -e 's|for i in /etc/dumpasn1 /usr/local/bin /usr/local/share /usr/bin \\$|for i in \\|' \
+        -e 's|^\( *\)/usr/share ; do \\$|\1; do \\|' tests/Makefile.in
+      ! grep -n -e dumpasn1 tests/Makefile.in | grep -v 'dumpasn1\.cfg' | grep -q . || { echo "FATAL: libksba dumpasn1 search list not emptied" >&2; exit 1; }
+      grep -q '^ *; do \\$' tests/Makefile.in || { echo "FATAL: libksba dumpasn1 search list not emptied" >&2; exit 1; }
+    '';
     check = ''[ -f "$out/lib/amd64/libksba.so.8" ] || { echo "FATAL: no libksba.so.8" >&2; exit 1; }'';
   };
 

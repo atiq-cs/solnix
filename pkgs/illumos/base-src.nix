@@ -619,9 +619,10 @@ let
   # option in CXXFLAGS makes configure skip that probe (configure.ac:802).
   smartmontools = mkSrcPkg {
     pname = "smartmontools"; version = "7.4";
-    # the Makefile's own seds that REWRITE upstream's /usr/local paths to the configured dirs (15 lines: -e 's|/usr/local/..|$(dir)|',
-    # sed 's|/usr/local/..|..|'; 93f0cfc's narrower pattern left 769-808 as hits, W2 t7 931ik18z)
-    hostPathAllow = "(sed|-e) 's[|]/usr/local/";
+    # the Makefile's own seds that REWRITE upstream's /usr/local paths to a configured dir: 16 lines of Makefile.in (MAN_FILTER
+    # 764-808, the init script 2122, smartd.service 2141-2148), each a line that starts with sed or -e and replaces s|/usr/local/..|
+    # with $(somedir) (or the !exampledir! token). 93f0cfc's pattern matched 4 of them (W2 t7 931ik18z). Anchored to that form.
+    hostPathAllow = "^[0-9]+:(@[A-Z_]+@)*[[:space:]]*(sed (-e )?|-e )'s[|]/usr/local/[^|]*[|]([$][(][a-z_]+[)]|!exampledir!)";
     src = { url = "https://downloads.sourceforge.net/project/smartmontools/smartmontools/7.4/smartmontools-7.4.tar.gz";
             sha256 = "e9a61f641ff96ca95319edfb17948cd297d0cd3342736b2c49c99d4716fb993d"; };
     deps = [ needWorld ];
