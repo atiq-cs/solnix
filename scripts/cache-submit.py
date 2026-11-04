@@ -146,6 +146,11 @@ def challenge(method, path, builder, nonce, body):
 
 # ---- HTTP ------------------------------------------------------------------
 
+def put_timeout(n):
+    """Seconds allowed for one PUT of n bytes. The socket timeout bounds the whole sendall, so a flat 600 s failed cmake-4.1.2-debug's
+    450 MB NAR from floki (0.65 MB/s to staging: "The write operation timed out", twice, 2026-11-04). 600 s or 100 kB/s, the longer."""
+    return max(600, n // 100_000)
+
 def http(method, url, body=None, headers=None, timeout=120):
     req = urllib.request.Request(url, data=body, method=method, headers={"User-Agent": UA, **(headers or {})})
     try:
@@ -365,7 +370,7 @@ def submit_one(a, seed, sp, f, ev=None):
     for key, data in ((f["URL"], open(os.path.join(a.cache_dir, f["URL"]), "rb").read()),
                       (h + ".narinfo", unsigned_narinfo(f))):
         code, resp = http("PUT", f"{base}/staging/{sid}/{key}", data,
-                          {"X-Solnix-Capability": caps[key], "Content-Length": str(len(data))}, timeout=600)
+                          {"X-Solnix-Capability": caps[key], "Content-Length": str(len(data))}, timeout=put_timeout(len(data)))
         print(f"  put {key} ({len(data)} B): HTTP {code} {resp[:200].decode(errors='replace') if code >= 300 else ''}")
         if code >= 300:
             return "upload-failed"
