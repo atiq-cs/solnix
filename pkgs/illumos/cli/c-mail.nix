@@ -55,15 +55,18 @@ rec {
     build = ''
       # NKF: configure.ac AC_PATH_PROGS(NKF, nkf, /usr/local/bin/nkf): the Japanese-text filter the multipart cgi runs, defaulting to a
       # host path when no nkf is found. No nkf here (nor in nixpkgs' w3m inputs): the bare name, found on the user's PATH if installed.
-      # (Above the CFLAGS line: between it and configure, a comment ended the command, so configure ran without CFLAGS; wave6u.)
+      # Through the cache variable: AC_PATH_PROGS keeps a preset NKF only when it is absolute, so NKF=nkf searched PATH, found none and
+      # fell back to /usr/local/bin/nkf (configure:4893-4932; host-path-scan caught it, wave6u). The comment sits above the command:
+      # between 'CFLAGS=.. \' and configure, it ended the command, so configure ran without CFLAGS.
       CFLAGS="-O2 -D__EXTENSIONS__ -std=gnu17 -Wno-error=incompatible-pointer-types -Wno-error=implicit-function-declaration" \
-      NKF=nkf ./configure --prefix="$out" --with-ssl=${openssl} --with-gc=${bdwgc} --with-termlib=ncursesw \
+      ac_cv_path_NKF=nkf ./configure --prefix="$out" --with-ssl=${openssl} --with-gc=${bdwgc} --with-termlib=ncursesw \
         --enable-image=no --without-x --disable-w3mmailer --disable-nls
       gmake -j8; gmake install
       ${chk ''"$out/bin/w3m" -version'' "^w3m version"}
       printf '<html><body><p>hlcli-w3m</p></body></html>\n' > t.html
       export HOME=$W/home; mkdir -p "$HOME"   # w3m -dump writes ~/.w3m (no sandbox: /homeless-shelter)
       ${chk ''"$out/bin/w3m" -dump t.html'' "hlcli-w3m"}
+      grep -qx 'NKF		= nkf' scripts/multipart/Makefile || { echo "FATAL: w3m NKF is not the bare name" >&2; exit 1; }
     '';
   };
 
