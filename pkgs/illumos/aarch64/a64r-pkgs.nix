@@ -3,7 +3,7 @@
 # desktop/cosmic-data.nix, cosmic-wallpapers, solnix-help) are x86 drvs: `retarget` builds the same text on aarch64 through
 # ./tools.nix's plain (store PATH, seed bash, path gate). Final stage only. Not here: go and cargo (no aarch64-illumos target
 # upstream), python3 and what needs it (cli/c-dev.nix links graphics.libffi/expat; next batch), the .zip data (python3 zipfile).
-{ srcPkgs, homePkgs, a64, final, system }:
+{ srcPkgs, homePkgs, a64, final, system, sshWorld }:
 let
   inherit (srcPkgs) mkSrcPkg zlib;
   # dixa's nix.conf has cores = 0, so NIX_BUILD_CORES=0 and `-j''${NIX_BUILD_CORES:-8}` is gmake -j0 (fails). nixpkgs' setup.sh
@@ -19,6 +19,10 @@ let
   ginputS = import ../graphics/input.nix { inherit mkSrcPkg; tools = gtoolsS; inherit (base) pkgconf; };
   # graphics/libs.nix the same way (wayland, libdrm); its expat/libffi do not use mesonBuild, so they are b1's drvs
   glibsS = import ../graphics/libs.nix { inherit mkSrcPkg zlib; tools = gtoolsS; inherit (base) pkgconf; inherit (homePkgs) world; };
+  # dbus links libbsm (ADT audit; x86: the whole world). aarch64's gate-libs-home lacks it, and adding it would move every row that
+  # links world: its own gate-libs set instead (as ./src.nix's gateLibs for htop), passed to dbus alone.
+  dbusWorld = srcPkgs.mkGateLibs "illumos-gate-libs-dbus" "libbsm.so.1";
+  glibsD = import ../graphics/libs.nix { inherit mkSrcPkg zlib; tools = gtoolsS; inherit (base) pkgconf; world = dbusWorld; };
   # desktop/gtk/tools.nix (meson 1.10.2 on the store python3, gperf, nasm, ninja) and gtk/base.nix (libpng, pcre2, ...), as
   # desktop/gtk/default.nix wires them (its own mkSrcPkg wrapper adds gtkTools = x86 GNU binutils; aarch64's store set has none)
   gtkTools = import ../desktop/gtk/tools.nix { mkSrcPkg = mkCores; inherit (cli) python3 gnupatch; inherit (gtools) samurai; inherit (base) pkgconf gettext; };
@@ -27,7 +31,7 @@ let
     graphics = glibs; inherit (srcPkgs) nixChain; noto-sans = cosmicData'.noto-sans; };
   # graphics/input.nix's pixman, and desktop/gtk/gfx.nix's cairo/pango/gdk-pixbuf (graphics = pixman only; no mesa/wayland on aarch64)
   gtkGfx = import ../desktop/gtk/gfx.nix { mkSrcPkg = mkCores; tools = gtkTools; inherit zlib; base = gtkBase; inherit (srcPkgs) nixChain;
-    libxml2 = null; graphics = glibs // { inherit (ginputS) pixman; }; };
+    inherit (base) libxml2; graphics = glibs // { inherit (ginputS) pixman; inherit (glibsD) dbus; }; };
   # desktop/ as pkgs/illumos/default.nix wires it (data, xdg, help, cosmic-wallpapers); cargoPkg null: pop-launcher is never forced
   desk = import ../desktop { cargoPkg = null; graphics = null; fd = null; inherit mkSrcPkg; inherit (srcPkgs) bash;
     inherit (base) coreutils gnugrep gnused hostname jq hostTools; inherit (cli) file; hostfixTools = a64.buildToolsFarm; world = null; python3 = null; };
@@ -69,8 +73,15 @@ in
   inherit (gtkGfx) cairo pango gdk-pixbuf;
   # batch 4 (a64r b4): the Wayland client libraries and seat/input data (graphics/), on gtk's meson
   inherit (glibsS) wayland wayland-protocols libdrm;
+  inherit (glibsD) dbus; illumos-gate-libs-dbus = dbusWorld;
+  inherit (gtkGfx) at-spi2-core;
+  # batch 6 (a64r b6): more of the C tier (cli/, base-src)
+  inherit (cli) lynx neomutt;
+  inherit (base) openssh; illumos-gate-libs-ssh = sshWorld;   # not nspr: pr/include/md/_solaris.h has only sparc and x86 arms ("#error unknown processor"): a port
+  # cli/c-recipes2.nix's dictionary is a plain x86 drv (store coreutils + python3 zipfile + hunspell's check): aarch64 builder and tools
+  hunspell-dict-en-us = derivation (a64.plain (cli.hunspell-dict-en-us.drvAttrs // { inherit system; }));
   inherit (ginputS) xkeyboard-config libxkbcommon libdisplay-info seatd;
-  inherit (base) smartmontools;   # not libxml2: base-src's links base-src's own zlib (abis 64+32), a 2nd zlib drv_for cannot reach
+  inherit (base) smartmontools libxml2;   # libxml2: on the set's zlib (./default.nix perPkg)
   inherit (desk) xdg-utils xdg-user-dirs;
   solnix-help = derivation (a64.plain (desk.solnix-help.drvAttrs // { inherit system; }));
 } // builtins.mapAttrs (_: retarget) {

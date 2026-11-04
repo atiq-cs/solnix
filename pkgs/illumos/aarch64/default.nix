@@ -211,6 +211,48 @@ let
         if b == args.build then throw "a64r xkeyboard-config: anchor" else b; };
       # libxkbcommon's parser needs a yacc: x86 takes the OI host's /usr/bin/bison; here a64h's store bison (as tmux/gdbm/nix)
       libxkbcommon = { nativeTools = (args.nativeTools or [ ]) ++ [ final.bison ]; };
+      # dbus's in-build check runs dbus-run-session, which execs `dbus-daemon` from PATH: on x86 that found the OI host's /usr/bin one
+      # (the x86 builder PATH is the host's). On the store-only PATH there is none ("failed to execute ... dbus-daemon", dixa): name
+      # the daemon just built, so the check tests this dbus and not the host's.
+      dbus = { build = let a = ''"$out/bin/dbus-run-session" -- ''; b = builtins.replaceStrings [ a ] [ ''"$out/bin/dbus-run-session" --dbus-daemon="$out/bin/dbus-daemon" -- '' ] args.build; in
+        if b == args.build then throw "a64r dbus: anchor" else b; };
+      # openssh links base-src's own zlib + openssl (both ABIs, for x86's 32-bit PAM world): one of each per set on aarch64 (srcPkgs', served)
+      # and `install -s` runs `strip` from PATH (x86: the world's illumos strip); the store-only PATH has none (dixa). --disable-strip, as
+      # nixpkgs' openssh; mk-src-pkg's gstrip --strip-debug pass still runs.
+      # and sshd links the proto's libpam + libcrypt (+ libcontract, PAM's NEEDs), which aarch64's gate-libs-home lacks (x86: the world):
+      # a gate-libs set of those for openssh alone (as dbus' libbsm), so no other row moves.
+      openssh = { deps = [ homePkgs.world sshWorld srcPkgs.zlib srcPkgs.openssl ]; build = let a = "--with-mantype=man --without-rpath";
+          b = builtins.replaceStrings [ a ] [ (a + " --disable-strip") ] args.build; in if b == args.build then throw "a64r openssh: anchor" else b; };
+      # neomutt's autosetup requires a `strip` on PATH (cc-check-tools ar ranlib strip) but never runs it (Makefile.autosetup has no
+      # STRIP): the store `true`, so the check passes without a host tool.
+      # Its hcache/hcachever.sh hashes struct text with `openssl md5 -r` (x86: the OI host's /usr/bin/openssl on PATH), else, on SunOS,
+      # `digest -a md5` from PATH: neither is on the store PATH, so HCACHEVER came out "0x" (dixa). coreutils' md5sum (in the farm)
+      # prints the same digest first, so the version constant is the same value.
+      neomutt = { build = "export STRIP=true\n"
+        + "grep -q 'prog=\"digest -a md5\"' hcache/hcachever.sh || { echo 'FATAL: neomutt md5prog anchor' >&2; exit 1; }\n"
+        + "sed -i 's|if openssl=$(command -v openssl); then|if false; then|; s|prog=\"digest -a md5\"|prog=md5sum|' hcache/hcachever.sh\n" + args.build
+        # libexec/neomutt/smime_keys (S/MIME key helper) ships #!/usr/bin/perl -w (gate2 B9): /usr/bin/env perl, as a64h's git hook sample
+        # (-w becomes `use warnings;` on line 2: env passes one argument at most)
+        + "\nf=$out/libexec/neomutt/smime_keys; head -1 $f | grep -qx '#! /usr/bin/perl -w' || { echo 'FATAL: smime_keys #! anchor' >&2; exit 1; }\n"
+        + "chmod u+w $f; sed -i '1s|^#! /usr/bin/perl -w$|#!/usr/bin/env perl\\nuse warnings;|' $f\n"
+        + "head -1 $f | grep -qx '#!/usr/bin/env perl' && sed -n 2p $f | grep -qx 'use warnings;' || { echo 'FATAL: smime_keys #!' >&2; exit 1; }\n"; };
+      # lynx's `lynx -V` table (cfg_defs.h) is config.cache verbatim, so the absolute pkg-config and install paths configure cached (the
+      # build-tools farm here) became runtime references of bin/lynx (measured: the farm in its closure). Bare names, as the recipe's
+      # other ac_cv_path_* pins; the in-build check below fails a lynx that still names the farm.
+      # The recipe's own `! strings ... | grep` seed-tools check cannot fail here: no strings(1) on the store PATH ("command not found",
+      # dixa log), so the pipeline is always empty. grep -a on the binary instead, for the seed tools and the farm.
+      lynx = { build = let a = ''! strings "$out/bin/lynx" | grep -qE "/nix/store/[a-z0-9]{32}-solnix-seed-build-tools" \''; b = builtins.replaceStrings [ a ]
+          [ ''! grep -aqE "/nix/store/[a-z0-9]{32}-solnix-seed-build-tools" "$out/bin/lynx" \'' ] args.build; in
+        # configure itself needs an absolute pkg-config ("expected a pathname"), so the cache entries are de-baked AFTER configure,
+        # before make writes cfg_defs.h from config.cache (only the -V table reads them).
+        if b == args.build then throw "a64r lynx: strings anchor" else
+          let c = ''gmake -j8; gmake install sysconfdir="$out/etc"''; d = builtins.replaceStrings [ c ] [ (''sed -i "s@$(echo $PATH | tr ':' '\n' | grep -- -solnix-a64-build-tools/bin | head -1)/@@g" config.cache''
+            + "\n" + ''! grep -q -- -solnix-a64-build-tools config.cache || { echo "FATAL: lynx config.cache names the farm" >&2; exit 1; }'' + "\n" + c) ] b; in
+          if d == b then throw "a64r lynx: gmake anchor" else d
+        + "\n! grep -aq -- '-solnix-a64-build-tools' \"$out/bin/lynx\" || { echo 'FATAL: lynx names the build-tools farm' >&2; exit 1; }\n"; };
+      # base-src's libxml2 links base-src's own zlib, built for both ABIs (x86 SMF is 32-bit): on aarch64 one zlib per set (srcPkgs',
+      # the served one) and LP64 only, as the set's other libraries.
+      libxml2 = { deps = [ srcPkgs.zlib ]; abis = [ "64" ]; };
       # texinfo: the served x86 texinfo has no perl XS (0 .so; its configure found it unbuildable there). On aarch64 configure builds XS
       # with perl's ccflags, which miss the arm64-gate flags (TLSDESC relocs, dixa), and with no store RUNPATH (the closure gate saw
       # /lib/libc.so.1). --disable-perl-xs: the pure-perl texi2any, as x86 ships.
@@ -230,6 +272,7 @@ let
     }.${args.pname} or { };
   };
   final = import ./a64h-pkgs.nix { inherit (srcPkgs) mkSrcPkg; };
+  sshWorld = srcPkgs.mkGateLibs "illumos-gate-libs-ssh" "libpam.so.1 libcrypt.so.1 libcontract.so.1";   # openssh's gate libs (perPkg)
   # one ncurses/readline/libiconv/less/sqlite per set, as NixOS has (the seed keeps its served duplicates): base-src's and cli's
   # copies are srcPkgs', and nixChain links the set's sqlite 3.50.4 (homePkgs.sqlite) instead of its own 3.46.1.
   shared = if stage == "seed" then { } else { inherit (srcPkgs) ncurses readline libiconv less; };
@@ -267,7 +310,7 @@ homePkgs // (if stage == "seed" then { } else final // {
   # the build-only tools under their pnames (solnix-builder.sh drv_for finds an attr by pname, _ or camelCase)
   illumos-build-tools = a64.illumosTools; cc-store-names = a64.ccNames; sh-store = a64.shAlias; solnix-a64-build-tools = a64.buildToolsFarm; }
   # x86-served recipes on the store-only aarch64 set (a64r): the same recipe files (./a64r-pkgs.nix)
-  // import ./a64r-pkgs.nix { inherit srcPkgs homePkgs a64 final system; }) // {
+  // import ./a64r-pkgs.nix { inherit srcPkgs homePkgs a64 final system sshWorld; }) // {
   gate = gate';
   inherit libc rtld ld sys systemPath gcc srcPkgs;
   inherit (srcPkgs) zlib openssl nixChain git tree ncurses less nano nvi htop top wget gateLibs bsdfetch gccWrapper readline bash;
