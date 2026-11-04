@@ -271,6 +271,8 @@
               gnutar-seed = s.gnutar; gzip-seed = s.gzip; gnumake-seed = s.gnumake; gnupatch-seed = s.gnupatch; xz-seed = s.xz;
               binutils-seed = s.binutils; perl-seed = s.perl; bash-seed = s.bash; gcc-wrapper-seed = s.gccWrapper;
               seed-tar-alias = s.seedTarAlias; solnix-seed-build-tools = s.seedBuildTools;
+              # the system world's served pname is illumos-userland (the attr is `world`): drv_for looks up the pname (wave6u, piece 2)
+              illumos-userland = p.solnix.world;
             };
           in lib.filterAttrs (_: v:
           let r = builtins.tryEval (lib.isDerivation v); in r.success && r.value)
