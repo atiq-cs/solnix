@@ -29,3 +29,7 @@ tar_cv_path_RSH=no
 # (x86_64, aarch64). shortcut: one value for all arches, as config.site loads before configure knows $host; a big-endian target
 # (sparcv9) needs its own config.site with ac_cv_c_bigendian=yes, passed by mk-src-pkg for that arch.
 ac_cv_c_bigendian=no
+# gnupg 2.4.8's GNUPG_CHECK_ENDIAN (its acinclude.m4; cache variable gnupg_cv_c_endian): its runtime probe fails to link under gcc >= 14, so it answers
+# "big" on x86 ("checking endianness... big" in every wave6 build, 4 hosts) and defines BIG_ENDIAN_HOST: g10/rmd160.c then computes a
+# wrong uid namehash (endian1, measured: rmd160 of a test string 2F8259F4.. = served gpg vs 3F943865.. correct). Little, as above.
+gnupg_cv_c_endian=little

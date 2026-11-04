@@ -839,6 +839,7 @@ PINNED_PROBES = {
     "for a traditional japanese locale": "gt_cv_locale_ja", "for a turkish Unicode locale": "gt_cv_locale_tr_utf8",
     "ipv6 stack type": "cf_cv_ipv6type", "for remote shell": "tar_cv_path_RSH",
     "whether byte ordering is bigendian": "ac_cv_c_bigendian",
+    "endianness": "gnupg_cv_c_endian",
 }
 _PINNED = re.compile(r"^checking (" + "|".join(re.escape(k) for k in PINNED_PROBES) + r")\.\.\. (\(cached\) )?(\S.*)$")
 # A message that more than one configure prints, where only one has the cache variable: the probe is pinnable only in a log
@@ -1220,6 +1221,9 @@ def selftest_log():
              ("L4 spliced log: binutils 2.47's dangling prompt (line 518) then its bare yes (line 919), real lines",
               "checking whether byte ordering is bigendian... checking whether gcc supports -Wall... yes\nchecking for _doprnt... Setting warning flags = -W -Wall\n"
               "checking whether byte ordering is bigendian... yes", True, "L4-spliced"),
+             ("L4 gnupg 2.4.8 GNUPG_CHECK_ENDIAN that ran (W2 chef, real line 230)", "checking endianness... big", False, "L4-probe-ran"),
+             ("L4 not hit: GNUPG_CHECK_ENDIAN from config.site (endian1, real line)", "checking endianness... (cached) little", True, None),
+             ("L4 not hit: another configure's float-endianness line", "checking float word endianness... little", True, None),
              ("L4 iconv stays strict in an interleaved log", "checking whether byte ordering is bigendian... checking for x... yes\nchecking for working iconv... no", False, "L4-probe-ran")]
     for label, text, want_pass, must in cases:
         lines = []; rc = report("log", check_log(text), lines.append)
