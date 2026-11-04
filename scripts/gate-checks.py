@@ -838,6 +838,7 @@ PINNED_PROBES = {
     "for a french Unicode locale": "gt_cv_locale_fr_utf8", "for a transitional chinese locale": "gt_cv_locale_zh_CN",
     "for a traditional japanese locale": "gt_cv_locale_ja", "for a turkish Unicode locale": "gt_cv_locale_tr_utf8",
     "ipv6 stack type": "cf_cv_ipv6type", "for remote shell": "tar_cv_path_RSH",
+    "whether byte ordering is bigendian": "ac_cv_c_bigendian",
 }
 _PINNED = re.compile(r"^checking (" + "|".join(re.escape(k) for k in PINNED_PROBES) + r")\.\.\. (\(cached\) )?(\S.*)$")
 # A message that more than one configure prints, where only one has the cache variable: the probe is pinnable only in a log
@@ -1191,7 +1192,10 @@ def selftest_log():
              ("L4 not hit: the pinned answer from config.site", "checking for working iconv... (cached) yes", True, None),
              ("L4 not hit: CPython's 'ipv6 stack type' (no cache variable; python3 3.13.9, real line)", "checking ipv6 stack type... solaris", True, None),
              ("L4 FAIL: lynx's 'ipv6 stack type' that ran (a cf_ configure)", "checking if you want to use the bundled libraries... no\nchecking ipv6 stack type... solaris", False, "L4-probe-ran"),
-             ("L4 not hit: an unpinned iconv probe", "checking for iconv... yes", True, None)]
+             ("L4 not hit: an unpinned iconv probe", "checking for iconv... yes", True, None),
+             ("L4 AC_C_BIGENDIAN that ran (gcc 15.3.0 libiberty on chef, real line)", "checking whether byte ordering is bigendian... yes", False, "L4-probe-ran"),
+             ("L4 AC_C_BIGENDIAN that ran and said no is host state too", "checking whether byte ordering is bigendian... no", False, "L4-probe-ran"),
+             ("L4 not hit: AC_C_BIGENDIAN from config.site", "checking whether byte ordering is bigendian... (cached) no", True, None)]
     for label, text, want_pass, must in cases:
         lines = []; rc = report("log", check_log(text), lines.append)
         ok = (rc == 0) == want_pass and (must is None or any(f" {must} " in l for l in lines))

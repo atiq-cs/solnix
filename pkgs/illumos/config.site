@@ -22,3 +22,10 @@ cf_cv_ipv6type=solaris
 # GNU tar: the remote-shell probe walks /usr/ucb/rsh, /usr/bin/rsh, ... (chef /usr/bin/rsh, dixi /usr/ucb/rsh) and bakes the path in for
 # `tar -f host:file`. "no", as on NixOS (no rsh in the closure): remote archives then need --rsh-command.
 tar_cv_path_RSH=no
+# AC_C_BIGENDIAN (autoconf <= 2.59, and 2.69's sub-configures in gcc/binutils): the gate defines BYTE_ORDER only in <endian.h>, not
+# <sys/param.h>, so the probe falls back to compiling or running a test program; where that fails (gcc >= 14: exit() without <stdlib.h>,
+# a sub-configure that thinks it cross-compiles) it concludes "yes" on a little-endian host (served tcl 8.6.16 got WORDS_BIGENDIAN=1;
+# chef W1g logs: 1 of gcc 15.3.0's 10 configures, 1 of binutils 2.47's 4). Every solnix target this file serves is little-endian
+# (x86_64, aarch64). shortcut: one value for all arches, as config.site loads before configure knows $host; a big-endian target
+# (sparcv9) needs its own config.site with ac_cv_c_bigendian=yes, passed by mk-src-pkg for that arch.
+ac_cv_c_bigendian=no
