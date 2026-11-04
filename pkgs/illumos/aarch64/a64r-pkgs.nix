@@ -70,6 +70,8 @@ in
   # (builds with ./default.nix's ARCH64B + zlib fixes, but its in-build `lsof -p $$` needs kvm_open of /dev/kmem, which nixbld on
   # dixa may not open: "kvm_open ... Permission denied". A host permission; held, not worked around)
   inherit (cli) python3 tcl groff texinfo hunspell pinentry-curses fmt catch2_3;
+  # libdb1: libdb 2026.10.7.2 (Oracle Berkeley DB 5.3.28's replacement), from cli/c-libdb.nix, on the fixed tcl (its test suite)
+  inherit (cli) libdb berkeleydb;
   inherit (gtkTools) gperf nasm; inherit (gtools) samurai;
   inherit (gtkBase) pcre2 libjpeg-turbo;
   # batch 3 (a64r b3): meson and the glib/freetype/harfbuzz tier (desktop/gtk/), on the store python3

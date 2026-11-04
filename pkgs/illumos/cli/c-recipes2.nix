@@ -193,13 +193,25 @@ in rec {
       # which sqlite does not include ("implicit declaration of function 'alloca'", measured): gcc's builtin, by name.
       export CFLAGS="-O2 -Dalloca=__builtin_alloca"
       cd unix
+      # Byte order pinned from the TARGET (this drv's $system), not probed: tcl's autoconf-2.59 AC_C_BIGENDIAN looks for BYTE_ORDER in
+      # <sys/param.h>, but the gate defines it only in <endian.h>; the fallback run test calls exit() without <stdlib.h>, gcc 14 rejects
+      # the implicit declaration, and the failed link reads as "yes". That shipped WORDS_BIGENDIAN=1 on x86_64 and aarch64, and every
+      # double format panicked ("wrong digit!", tclStrToD.c; libdb1, measured).
+      case "$system" in x86_64-*|aarch64-*) be=no ord=q;; sparcv9-*) be=yes ord=Q;; *) echo "FATAL: tcl: byte order of $system?" >&2; exit 1;; esac
       ./configure --prefix="$out" --libdir="$out/lib/amd64" --enable-threads --enable-man-symlinks --enable-64bit --enable-shared \
-        --without-tzdata
+        --without-tzdata ac_cv_c_bigendian=$be
+      got=no; grep -q WORDS_BIGENDIAN tclConfig.sh && got=yes
+      [ "$got" = "$be" ] || { echo "FATAL: tcl configured bigendian=$got, $system is $be" >&2; exit 1; }
       gmake -j16; gmake install
       ln -s tclsh8.6 "$out/bin/tclsh"
       ${dropDocs}
       ${chk ''echo 'puts [info patchlevel]' | "$out/bin/tclsh"'' "^8\\.6\\.16$"}
       ${chk ''echo 'package require Thread; puts [expr {6*7}]' | "$out/bin/tclsh"'' "^42$"}
+      # doubles: the big-endian misconfiguration aborted on 0.1 and printed 2.5 as 5.56e-309. A native double must be laid out as the
+      # target's own byte order ($ord: q little, Q big), and survive binary format/scan.
+      printf '%s\n' 'binary scan [binary format d 1.0] d x' \
+        "puts \"[expr {0.1}] [expr {2.5*2}] \$x [expr {[binary format d 1.0] eq [binary format $ord 1.0]}]\"" > "$W/dbl.tcl"
+      ${chk ''"$out/bin/tclsh" "$W/dbl.tcl"'' "^0\\.1 5\\.0 1\\.0 1$"}
     '';
   };
 
