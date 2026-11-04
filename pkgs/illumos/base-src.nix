@@ -835,7 +835,7 @@ let
       /usr/bin/bash ${./path-gate.sh} || exit 1
       mkdir -p $out/bin
       cat > $out/bin/hostname <<'EOF'
-    #!/usr/bin/bash
+    #!/bin/sh
     if [ "$#" = 1 ] && { [ "$1" = -f ] || [ "$1" = --fqdn ]; }; then
       h=$(/usr/bin/hostname); d=$(/usr/bin/domainname 2>/dev/null)
       [ -n "$d" ] && case "$h" in *.*) ;; *) h="$h.$d";; esac
@@ -844,7 +844,9 @@ let
     exec /usr/bin/hostname "$@"
     EOF
       chmod 555 $out/bin/hostname
-      [ "$($out/bin/hostname -f)" = "$(hostname)" ] || [ -n "$(domainname)" ]
+      # #!/bin/sh, not /usr/bin/bash (gate B9; the wrapper is POSIX sh: case, $(..), [ ]), so the check runs it under /bin/sh too
+      [ "$(/bin/sh $out/bin/hostname -f)" = "$(hostname)" ] || [ -n "$(domainname)" ]
+      [ "$(head -1 $out/bin/hostname)" = "#!/bin/sh" ] || { echo "FATAL: hostname-f #!" >&2; exit 1; }
     '' ];
   });
 
