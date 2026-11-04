@@ -847,6 +847,15 @@ _PINNED = re.compile(r"^checking (" + "|".join(re.escape(k) for k in PINNED_PROB
 # (a64r, python3 3.13.9: a false L4 FAIL). A log is from a cf_ (Thomas Dickey) configure when it asks "checking if you want to use".
 # Measured: CPython 3.13.9's log has "checking for curses function ..." lines, so a curses pattern would not tell them apart.
 PINNED_ONLY_IF = {"ipv6 stack type": re.compile(r"^checking if you want to use ", re.M)}   # Dickey's cf_ configures ask this; CPython's never does
+# Parallel sub-configures (gcc, binutils: make -j over libiberty/zlib/...) write into one log, so a prompt and its answer can land on
+# different lines (endian1, measured: gcc 15.3.0's and binutils 2.47's "bigendian... yes" are splices; their autoconf 2.69 answers
+# "no" from <limits.h>, serial re-runs 28/28 no). For these probes: a line whose answer is another prompt, or that holds two
+# prompts, is skipped; and once a log shows a spliced prompt of the probe, its other answers in that log cannot be attributed either
+# (binutils 2.47: the prompt at line 518 dangles, line 919's "yes" is 400 lines later): WARN, still visible. Other pinned probes stay
+# strict (gcc 15's iconv L4 FAIL on dixi was real). With config.site pinning it, the probe prints "(cached)" and none of this applies.
+PINNED_SPLICE_TOLERANT = {"whether byte ordering is bigendian"}
+_SPLICE_OK = ("yes", "no", "universal", "unknown")   # what AC_C_BIGENDIAN itself prints
+def _spliced(m, line): return m.group(3) not in _SPLICE_OK or line.count("checking ") > 1
 
 def _log_line(line):
     """-> [(level, check, why)] for one log line."""
@@ -880,13 +889,20 @@ def _pinnable(msg, text):
     return r is None or bool(r.search(text))
 
 def check_log(text):
-    r, seen = [], {}
+    r, seen, spliced = [], {}, {}
     for n, line in enumerate(text.splitlines(), 1):
         line = re.sub(r"^[\w.+-]+> ", "", line).rstrip()   # nix-build's "<name>> " prefix
         for lv, chk, why in _log_line(line):
             if chk == "L4-probe-ran":
                 m = _PINNED.match(line)
                 if m and not _pinnable(m.group(1), text): continue   # this configure has no cache variable for it
+                if m and m.group(1) in PINNED_SPLICE_TOLERANT:
+                    if _spliced(m, line): continue   # the "answer" is another prompt, config.status, a make command: spliced
+                    if m.group(1) not in spliced:
+                        spliced[m.group(1)] = any(_spliced(mm, l) for l in (re.sub(r"^[\w.+-]+> ", "", x).rstrip() for x in text.splitlines())
+                                                  for mm in [_PINNED.match(l)] if mm and mm.group(1) == m.group(1) and not mm.group(2))
+                    if spliced[m.group(1)]:
+                        lv, chk, why = "WARN", "L4-spliced", why + " (this log splices the probe's output: not attributable)"
             k = (lv, chk); seen[k] = seen.get(k, 0) + 1
             if seen[k] <= 5: r.append((lv, chk, f"line {n}: {why}: {line.strip()[:160]}"))
     for (lv, chk), k in seen.items():
@@ -1195,7 +1211,16 @@ def selftest_log():
              ("L4 not hit: an unpinned iconv probe", "checking for iconv... yes", True, None),
              ("L4 AC_C_BIGENDIAN that ran (gcc 15.3.0 libiberty on chef, real line)", "checking whether byte ordering is bigendian... yes", False, "L4-probe-ran"),
              ("L4 AC_C_BIGENDIAN that ran and said no is host state too", "checking whether byte ordering is bigendian... no", False, "L4-probe-ran"),
-             ("L4 not hit: AC_C_BIGENDIAN from config.site", "checking whether byte ordering is bigendian... (cached) no", True, None)]
+             ("L4 not hit: AC_C_BIGENDIAN from config.site", "checking whether byte ordering is bigendian... (cached) no", True, None),
+             ("L4 spliced: gcc 15.3.0's parallel libiberty configures (real lines 487-488, chef W1g): WARN, not FAIL",
+              "checking whether byte ordering is bigendian... checking whether /nix/store/dhk16dca5vl301h1i7dr4jlfvr3bh60r-gcc-wrapper-14.3.0/bin/gcc supports -Wold-style-definition... inline\n"
+              "checking whether byte ordering is bigendian... yes", True, "L4-spliced"),
+             ("L4 spliced: the answer is another prompt (binutils 2.47, real line)", "checking whether byte ordering is bigendian... checking whether gcc supports -Wall... yes", True, None),
+             ("L4 spliced: the answer is config.status output (gcc 15.3.0 line 899, real)", "checking whether byte ordering is bigendian... config.status: creating Makefile", True, None),
+             ("L4 spliced log: binutils 2.47's dangling prompt (line 518) then its bare yes (line 919), real lines",
+              "checking whether byte ordering is bigendian... checking whether gcc supports -Wall... yes\nchecking for _doprnt... Setting warning flags = -W -Wall\n"
+              "checking whether byte ordering is bigendian... yes", True, "L4-spliced"),
+             ("L4 iconv stays strict in an interleaved log", "checking whether byte ordering is bigendian... checking for x... yes\nchecking for working iconv... no", False, "L4-probe-ran")]
     for label, text, want_pass, must in cases:
         lines = []; rc = report("log", check_log(text), lines.append)
         ok = (rc == 0) == want_pass and (must is None or any(f" {must} " in l for l in lines))
