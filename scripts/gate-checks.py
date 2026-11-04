@@ -855,6 +855,9 @@ PINNED_PROBES = {
     "for a french Unicode locale": "gt_cv_locale_fr_utf8", "for a transitional chinese locale": "gt_cv_locale_zh_CN",
     "for a traditional japanese locale": "gt_cv_locale_ja", "for a turkish Unicode locale": "gt_cv_locale_tr_utf8",
     "ipv6 stack type": "cf_cv_ipv6type", "for remote shell": "tar_cv_path_RSH",
+    # pinned in pkgs/illumos/config.site, which gcc-src.nix (gcc 14.3.0, x86 + aarch64) never loads (no CONFIG_SITE: it builds outside
+    # mk-src-pkg). Harmless: its autoconf 2.69 answers from <limits.h> (endian1: serial re-runs 28/28 "no"; the "yes" lines were
+    # splices). A gcc14 log would still show the probe (WARN when spliced, else L4 FAIL): gcc14 is the seed's stage0, built once.
     "whether byte ordering is bigendian": "ac_cv_c_bigendian",
     "endianness": "gnupg_cv_c_endian",
 }
