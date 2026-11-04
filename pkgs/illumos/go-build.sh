@@ -66,7 +66,11 @@ if [ -n "$boot" ]; then   # the shipped GOROOT (src/ is the stdlib a user's `go 
     sed -i 's|^[[:space:]]*export [P]ATH=/usr/gnu/bin:\$PATH$|\t:|' "$f"; ! grep -q /usr/gnu "$f" || { echo "FATAL: $f names /usr/gnu" >&2; exit 1; }; done
   # B9: #!/bin/bash -> the store bash (NixOS patchShebangs); plan9 #!/bin/rc and the perl generators: no such interpreter here, not
   # executable (they are source files of the tree, never run by go)
-  /usr/bin/bash "$patchShebangs" "$out/share/go" ""
+  # $tools (hostfixTools) holds bash as a farm LINK since ee50560, and patch-shebangs.sh's selftest wants `command -v bash` to be the
+  # store file patch() writes into a #! (gtk-build-tools hit the same, 3092a2a): the real bash dir first, for this call only
+  b=$(command -v bash); [ -h "$b" ] && b=$(readlink "$b")
+  case "$b" in /nix/store/*/bin/bash) ;; *) echo "FATAL: go-build: no store bash for patch-shebangs ($b)" >&2; exit 1;; esac
+  PATH="${b%/bash}:$PATH" /usr/bin/bash "$patchShebangs" "$out/share/go" ""
   find "$out/share/go" -type f -perm -u+x | while read -r f; do [ "$(head -c 2 "$f")" = '#!' ] || continue
     case "$(head -1 "$f" | sed 's/^#![[:space:]]*//; s/[[:space:]].*//')" in /bin/sh|/usr/bin/env|/nix/store/*) ;; /*) chmod a-x "$f";; esac; done
 fi
