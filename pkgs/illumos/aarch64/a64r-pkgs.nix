@@ -93,9 +93,11 @@ in
   # a64s batch 3: mesa, software only (./mesa.nix: gallium swrast, EGL/GBM/GLES2), on b4's wayland/libdrm and gtk's meson
   inherit (mesaSet) mesa packaging mako markupsafe;   # the three python build tools get rows too (a fresh builder substitutes them)
   inherit (gtkGfxM) libepoxy gtk3;   # desktop/gtk/gfx.nix's, on ./mesa.nix (x86: graphics' iris mesa)
+  # a64s batch 4: nspr (ported: ./default.nix perPkg, two patches, its own test suite in the build), then nss on it
+  inherit (base) nspr nss;
   # batch 6 (a64r b6): more of the C tier (cli/, base-src)
   inherit (cli) lynx neomutt;
-  inherit (base) openssh; illumos-gate-libs-ssh = sshWorld;   # not nspr: pr/include/md/_solaris.h has only sparc and x86 arms ("#error unknown processor"): a port
+  inherit (base) openssh; illumos-gate-libs-ssh = sshWorld;
   # cli/c-recipes2.nix's dictionary is a plain x86 drv (store coreutils + python3 zipfile + hunspell's check): aarch64 builder and tools
   hunspell-dict-en-us = derivation (a64.plain (cli.hunspell-dict-en-us.drvAttrs // { inherit system; }));
   inherit (ginputS) xkeyboard-config libxkbcommon libdisplay-info seatd;

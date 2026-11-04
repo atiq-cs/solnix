@@ -1,0 +1,51 @@
+NSPR 4.40 on illumos aarch64 (solnix a64s, 2026-11-04): pr/include/md/_solaris.h and _solaris.cfg have sparc, x86_64 and i386
+arms and '#error unknown processor' otherwise. Add __aarch64__: _PR_SI_ARCHITECTURE "aarch64"; little-endian LP64 (IS_64, 8-byte
+int64/double alignment, as __x86_64). Atomics: configure assembles os_SunOS_{x86,x86_64,sparcv9}.s only for i86pc/sparc, so
+aarch64 maps _MD_ATOMIC_* to the GCC __sync builtins, as _linux.h does for aarch64. pthreads only (configure's default here).
+--- a/nspr/pr/include/md/_solaris.h
++++ b/nspr/pr/include/md/_solaris.h
+@@ -17,6 +17,9 @@
+ #define _PR_SI_ARCHITECTURE "x86-64"
+ #elif defined(i386)
+ #define _PR_SI_ARCHITECTURE "x86"
++#elif defined(__aarch64__)
++/* solnix: illumos aarch64 (arm64-gate). LP64 and pthreads only. */
++#define _PR_SI_ARCHITECTURE "aarch64"
+ #else
+ #error unknown processor
+ #endif
+@@ -117,7 +120,17 @@
+ _MD_Solaris_TicksPerSecond(void);
+ #define _MD_INTERVAL_PER_SEC _MD_Solaris_TicksPerSecond
+ 
+-#if defined(_PR_HAVE_ATOMIC_OPS)
++#if defined(_PR_HAVE_ATOMIC_OPS) && defined(__aarch64__)
++/*
++** Atomic Operations: aarch64 has no os_SunOS_*.s (configure picks those for
++** i86pc and sparcv9 only); the GCC builtins, as _linux.h does for aarch64.
++*/
++#define _MD_INIT_ATOMIC()
++#define _MD_ATOMIC_INCREMENT(ptr) __sync_add_and_fetch(ptr, 1)
++#define _MD_ATOMIC_DECREMENT(ptr) __sync_sub_and_fetch(ptr, 1)
++#define _MD_ATOMIC_ADD(ptr, i) __sync_add_and_fetch(ptr, i)
++#define _MD_ATOMIC_SET(ptr, nv) __sync_lock_test_and_set(ptr, nv)
++#elif defined(_PR_HAVE_ATOMIC_OPS)
+ /*
+ ** Atomic Operations
+ */
+--- a/nspr/pr/include/md/_solaris.cfg
++++ b/nspr/pr/include/md/_solaris.cfg
+@@ -34,6 +34,13 @@
+ #undef  IS_BIG_ENDIAN
+ #define PR_ALIGN_OF_INT64   4
+ #define PR_ALIGN_OF_DOUBLE  4
++#elif defined(__aarch64__)
++/* solnix: illumos aarch64, LP64 little-endian (as __x86_64) */
++#define IS_LITTLE_ENDIAN 1
++#undef  IS_BIG_ENDIAN
++#define PR_ALIGN_OF_INT64   8
++#define PR_ALIGN_OF_DOUBLE  8
++#define IS_64
+ #else
+ #error unknown processor
+ #endif

@@ -1,0 +1,53 @@
+NSS 3.98 on illumos aarch64 (solnix a64s, 2026-11-04): coreconf/SunOS5.mk knows sparc and i86pc only. On aarch64 (uname -m armv8)
+it set CPU_ARCH=sparc (freebl then picks the SPARC asm and /usr/ccs/bin/as) and, with USE_64=1, passed gcc's -m64, which the
+aarch64 gcc rejects. armv8 -> CPU_ARCH aarch64, no ARCHFLAG / DSO -m64; freebl's SunOS branch gets an aarch64 arm (no Solaris asm,
+little-endian MPI): freebl's own aarch64 block (ARMv8 AES/GCM/SHA C files, -march=armv8-a+crypto) applies as on Linux.
+CheckARMSupport has no illumos arm, so the HW paths stay off at run time and the portable C runs (a getisax(2) arm would be an
+optimization, not needed for correctness).
+--- a/nss/coreconf/SunOS5.mk
++++ b/nss/coreconf/SunOS5.mk
+@@ -10,7 +10,10 @@
+ # gcc's v9 is equivalent to Workshop's v8plus.
+ # gcc's -m64 is equivalent to Workshop's v9
+ 
+-ifeq ($(USE_64), 1)
++ifeq ($(OS_TEST),armv8)
++  # solnix: illumos aarch64 (uname -m armv8) is LP64 only; its gcc has no -m64
++  ARCHFLAG=
++else ifeq ($(USE_64), 1)
+   ifdef NS_USE_GCC
+       ARCHFLAG=-m64
+   else
+@@ -65,6 +68,9 @@
+ CPU_ARCH    = sparc
+ OS_DEFINES += -DSVR4 -DSYSV -D__svr4 -D__svr4__ -DSOLARIS -D_REENTRANT
+ 
++ifeq ($(OS_TEST),armv8)
++    CPU_ARCH		= aarch64
++endif
+ ifeq ($(OS_TEST),i86pc)
+ ifeq ($(USE_64),1)
+     CPU_ARCH		= x86_64
+@@ -102,8 +108,10 @@
+ # -z defs: no unresolved symbols allowed
+ ifdef NS_USE_GCC
+ ifeq ($(USE_64), 1)
++ifneq ($(OS_TEST),armv8)
+ 	DSO_LDOPTS += -m64
+ endif
++endif
+ 	DSO_LDOPTS += -shared -h $(notdir $@)
+ else
+ ifeq ($(USE_64), 1)
+--- a/nss/lib/freebl/Makefile
++++ b/nss/lib/freebl/Makefile
+@@ -513,6 +513,9 @@
+ 	DEFINES  += -DMP_USING_MONT_MULF -DMP_MONT_USE_MP_MUL
+     endif
+ 
++else ifeq ($(CPU_ARCH),aarch64)
++    # solnix: illumos aarch64: no Solaris asm; the portable C, as freebl's Linux aarch64 build without the HW paths above
++    DEFINES += -DMP_IS_LITTLE_ENDIAN
+ else
+     # Solaris for non-sparc family CPUs
+     ifdef NS_USE_GCC

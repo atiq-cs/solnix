@@ -282,6 +282,42 @@ let
           + "grep -Eq '^# PASS: +16$' test-suite.log && grep -Eq '^# (FAIL|ERROR|XPASS): +0$' test-suite.log && [ \"$(grep -Ec '^# (FAIL|ERROR|XPASS): +0$' test-suite.log)\" = 3 ] "
           + "|| { cat test-suite.log >&2; echo 'FATAL: bdwgc test count is not 16 PASS / 0 FAIL' >&2; exit 1; }\ngmake install") ] args.build; in
         if b == args.build then throw "a64s bdwgc: gmake anchor" else "patch -p1 < ${./bdwgc-aarch64-illumos.patch} >&2\n" + b; };
+      # nspr: _solaris.h/_solaris.cfg have no aarch64 arm (./nspr-aarch64-illumos.patch), and _pth.h's fixed SOLARIS thread priority
+      # range makes PR_CreateThread(PR_PRIORITY_HIGH) fail on illumos libc (../patches/nspr/0001-illumos-thread-priority-range.patch: arch-
+      # independent; x86 takes it in wave6). LP64 only, and no --enable-64bit (it adds -m64, which the aarch64 gcc rejects). NSPR's own suite (pr/tests
+      # runtests.sh, 101 programs; nixpkgs runs none) must pass: without the priority patch its `switch` test hangs (measured on dixa).
+      nspr = { abis = [ "64" ]; build = let a = "cd nspr\n"; b = builtins.replaceStrings [ "E=\"\"; [ \"$ABI\" = 64 ] && E=--enable-64bit\n" ] [ "E=\"\"\n" ] args.build; in
+        if b == args.build then throw "a64s nspr: --enable-64bit anchor" else
+          let c = builtins.replaceStrings [ a ] [ ("patch -p1 < ${./nspr-aarch64-illumos.patch} >&2\npatch -p1 < ${../patches/nspr/0001-illumos-thread-priority-range.patch} >&2\n" + a) ] b; in
+          if c == b then throw "a64s nspr: cd anchor" else c + "\nr=0; ( cd pr/tests && gmake -j16 >&2 && TEST_TIMEOUT=300 sh ./runtests.sh ../../dist > $W/nspr-tests.out 2>&1 ) || r=$?\n"
+            + "cat $W/nspr-tests.out >&2; n=$(grep -c 'Passed$' $W/nspr-tests.out || true); f=$(grep -c 'FAILED$' $W/nspr-tests.out || true)\n"
+            + "[ $r = 0 ] && [ $f = 0 ] && [ $n -ge 100 ] || { echo \"FATAL: nspr tests rc=$r passed=$n failed=$f\" >&2; exit 1; }\n"; };
+      # nss: coreconf/SunOS5.mk knows sparc and i86pc only (./nss-aarch64-illumos.patch: armv8 -> CPU_ARCH aarch64, no -m64); LP64
+      # only; the set's zlib and an aarch64 libc-extra (base-src's is an x86 drv: lib + lib/amd64). freebl's own known-answer tests
+      # (bltest -T over every line of tests/cipher/cipher.txt) and a certutil self-signed -V run in the build, as nixpkgs' nss
+      # runs its test suite.
+      nss = { abis = [ "64" ]; deps = map (d: if (d.name or "") == "illumos-libc-extra" then nssLibcExtra else if (d.pname or "") == "zlib" then srcPkgs.zlib else d) args.deps; build = let a = "sed -i \"s,^RPATH = -R '\\$\\$ORIGIN'$,RPATH =,\" nss/coreconf/SunOS5.mk\n";
+          b0 = builtins.replaceStrings [ a ] [ ("patch -p1 < ${./nss-aarch64-illumos.patch} >&2\n" + a) ] args.build;
+          # ZLIB_LIBS names base-src's own zlib (x86's, both ABIs): the set's one zlib instead (srcPkgs', served), as libxml2/openssh take
+          # it by deps. The old path is dropped from the string context too (replaceStrings keeps it), so it is no input of nss.
+          z = builtins.match ".*ZLIB_LIBS=\"-L(/nix/store/[a-z0-9]{32}-zlib-[^/]*)/.*" b0; old = builtins.head z;
+          oldDrv = builtins.filter (k: builtins.match ".*-zlib-.*[.]drv" k != null && k != srcPkgs.zlib.drvPath) (builtins.attrNames (builtins.getContext b0));
+          b = if z == null || builtins.length oldDrv != 1 then throw "a64s nss: ZLIB_LIBS anchor" else
+            builtins.appendContext (builtins.replaceStrings [ old ] [ "${srcPkgs.zlib}" ] (builtins.unsafeDiscardStringContext b0))
+              (builtins.removeAttrs (builtins.getContext b0) oldDrv // builtins.getContext "${srcPkgs.zlib}"); in
+        if b0 == args.build then throw "a64s nss: RPATH anchor" else b + "\n" + ''
+          export LD_LIBRARY_PATH=$PWD/$O/lib; T=$PWD/nss/cmd/bltest; p=0; f=0
+          while read -r e m _; do case "$e" in ""|\#*) continue;; esac; m=$(echo $m | sed 's/_-/ -/g'); r=0
+            "$O/bin/bltest" -T -m $m -d $T > $W/bltest.out 2>&1 || r=$?
+            if [ "$r" = "$e" ]; then p=$((p+1)); else f=$((f+1)); echo "FAIL bltest -T -m $m: rc=$r want $e" >&2; tail -3 $W/bltest.out >&2; fi
+          done < nss/tests/cipher/cipher.txt
+          echo "bltest: $p PASS, $f FAIL" >&2; [ $f = 0 ] && [ $p -ge 50 ] || { echo "FATAL: nss bltest $p PASS $f FAIL" >&2; exit 1; }
+          D=$W/certdb; mkdir -p $D; echo a64s > $W/pw; head -c 64 /dev/urandom > $W/noise
+          "$out/bin/certutil" -N -d $D -f $W/pw && "$out/bin/certutil" -S -d $D -f $W/pw -z $W/noise -n a64s -s CN=a64s -x -t CT,, -v 1 >&2 \
+            && "$out/bin/certutil" -V -d $D -n a64s -u V -f $W/pw > $W/cv.out 2>&1 || { cat $W/cv.out >&2; echo "FATAL: nss certutil" >&2; exit 1; }
+          grep -q 'certificate is valid' $W/cv.out || { cat $W/cv.out >&2; echo "FATAL: nss certutil -V" >&2; exit 1; }
+          unset LD_LIBRARY_PATH
+        ''; };
       # gmp: the x86 text pins --build=x86_64-pc-solaris2.11 after lp64Fix's aarch64 --build (the last one wins): drop it.
       gmp6 = { build = let b = builtins.replaceStrings [ "--build=x86_64-pc-solaris2.11 " ] [ "" ] args.build; in
         if b == args.build then throw "a64r gmp6: --build anchor" else b; };
@@ -292,6 +328,20 @@ let
   };
   final = import ./a64h-pkgs.nix { inherit (srcPkgs) mkSrcPkg; };
   sshWorld = srcPkgs.mkGateLibs "illumos-gate-libs-ssh" "libpam.so.1 libcrypt.so.1 libcontract.so.1";   # openssh's gate libs (perPkg)
+  # nss links -lthread -lkstat -lposix4 (coreconf OS_LIBS): base-src's libcExtra (x86, lib + lib/amd64) for aarch64, LP64 lib/ only.
+  # libthread is a filter on libc and libposix4 is librt (the libc slice has it): one copy of each per process, as on x86.
+  nssLibcExtra = derivation (a64.plain {
+    name = "illumos-libc-extra"; inherit system; gate = gate'; libc = libc;
+    builder = "/usr/bin/bash";
+    args = [ "-c" ''
+      set -eu; export PATH=/usr/gnu/bin:/usr/bin
+      mkdir -p $out/lib
+      for l in libthread.so.1 libkstat.so.1; do cp $gate/lib/$l $out/lib/; done
+      ln -s libthread.so.1 $out/lib/libthread.so; ln -s libkstat.so.1 $out/lib/libkstat.so
+      ln -s $libc/lib/librt.so.1 $out/lib/libposix4.so
+      for f in $out/lib/*.so.1; do [ -L "$f" ] && continue; chmod u+w "$f"; /usr/bin/elfedit -e "dyn:runpath $libc/lib" "$f"; done
+    '' ];
+  });
   screenWorld = srcPkgs.mkGateLibs "illumos-gate-libs-screen" "libcrypt.so.1 libutempter.so.1";   # screen's (perPkg)
   # one ncurses/readline/libiconv/less/sqlite per set, as NixOS has (the seed keeps its served duplicates): base-src's and cli's
   # copies are srcPkgs', and nixChain links the set's sqlite 3.50.4 (homePkgs.sqlite) instead of its own 3.46.1.
@@ -328,7 +378,8 @@ let
 in
 homePkgs // (if stage == "seed" then { } else final // {
   # the build-only tools under their pnames (solnix-builder.sh drv_for finds an attr by pname, _ or camelCase)
-  illumos-build-tools = a64.illumosTools; cc-store-names = a64.ccNames; sh-store = a64.shAlias; solnix-a64-build-tools = a64.buildToolsFarm; }
+  illumos-build-tools = a64.illumosTools; cc-store-names = a64.ccNames; sh-store = a64.shAlias; solnix-a64-build-tools = a64.buildToolsFarm;
+  illumos-libc-extra = nssLibcExtra; }   # nss's -lthread -lkstat -lposix4 (a64s b4), its own row
   # x86-served recipes on the store-only aarch64 set (a64r): the same recipe files (./a64r-pkgs.nix)
   // import ./a64r-pkgs.nix { inherit srcPkgs homePkgs a64 final system sshWorld screenWorld; }) // {
   gate = gate';
