@@ -32,6 +32,12 @@ let
   # graphics/input.nix's pixman, and desktop/gtk/gfx.nix's cairo/pango/gdk-pixbuf (graphics = pixman only; no mesa/wayland on aarch64)
   gtkGfx = import ../desktop/gtk/gfx.nix { mkSrcPkg = mkCores; tools = gtkTools; inherit zlib; base = gtkBase; inherit (srcPkgs) nixChain;
     inherit (base) libxml2; graphics = glibs // { inherit (ginputS) pixman; inherit (glibsD) dbus; inherit (glibsS) wayland wayland-protocols; }; };
+  mesaSet = import ./mesa.nix { mkSrcPkg = mkCores; tools = gtkTools; inherit zlib; inherit (cli) python3; bison = final.bison; inherit (homePkgs) flex;
+    inherit (glibs) expat libffi; inherit (glibsS) wayland wayland-protocols libdrm; };
+  # gfx.nix again with mesa and libxkbcommon for libepoxy/gtk3 only: cairo/pango/... ignore both, so b3's rows (gtkGfx) do not move
+  gtkGfxM = import ../desktop/gtk/gfx.nix { mkSrcPkg = mkCores; tools = gtkTools; inherit zlib; base = gtkBase; inherit (srcPkgs) nixChain;
+    inherit (base) libxml2; graphics = glibs // { inherit (ginputS) pixman libxkbcommon; inherit (glibsD) dbus; inherit (glibsS) wayland wayland-protocols libdrm;
+      inherit (mesaSet) mesa; }; };
   # solnix-torrent.nix's libtorrent-rasterbar (the community seeder's client library): the set's openssl, nixChain's boost (headers)
   torrent = import ../solnix-torrent.nix { inherit mkSrcPkg; inherit (srcPkgs) openssl gccWrapper; inherit (srcPkgs.nixChain) boost; inherit (cli) cmake;
     inherit (base) pkgconf; binutils = null; gcc = null; gate = null; libc = null; inherit system; };
@@ -84,6 +90,9 @@ in
   inherit (cli) screen; illumos-gate-libs-screen = screenWorld;
   # a64s batch 2: bdwgc (ported: ./bdwgc-aarch64-illumos.patch, its suite in the build, ./default.nix perPkg), then w3m on it
   inherit (cli) bdwgc w3m;
+  # a64s batch 3: mesa, software only (./mesa.nix: gallium swrast, EGL/GBM/GLES2), on b4's wayland/libdrm and gtk's meson
+  inherit (mesaSet) mesa packaging mako markupsafe;   # the three python build tools get rows too (a fresh builder substitutes them)
+  inherit (gtkGfxM) libepoxy gtk3;   # desktop/gtk/gfx.nix's, on ./mesa.nix (x86: graphics' iris mesa)
   # batch 6 (a64r b6): more of the C tier (cli/, base-src)
   inherit (cli) lynx neomutt;
   inherit (base) openssh; illumos-gate-libs-ssh = sshWorld;   # not nspr: pr/include/md/_solaris.h has only sparc and x86 arms ("#error unknown processor"): a port
