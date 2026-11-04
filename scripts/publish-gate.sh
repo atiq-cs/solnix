@@ -31,8 +31,10 @@ if [ "${1:-}" = "--selftest" ]; then
   r1=$(chk /nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb "$R" "$I")
   r2=$(chk /nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa "$R" "$I")
   r3=$(chk /nix/store/cccccccccccccccccccccccccccccccc "$R" "$I")
-  [ -n "$r1" ] && [ -z "$r2" ] && [ -z "$r3" ] && { echo "SELFTEST PASS"; exit 0; }
-  echo "SELFTEST FAIL: [$r1] [$r2] [$r3]"; exit 1
+  # the host-string scan counts the name as a WORD: inside "obraichean" (gd.po) it is not the host, in "/ROOT/braich/" it is
+  w1=$(printf 'obraichean\n' | grep -c -w -F braich); w2=$(printf 'zfs /ROOT/braich/var\n' | grep -c -w -F braich)
+  [ -n "$r1" ] && [ -z "$r2" ] && [ -z "$r3" ] && [ "$w1" = 0 ] && [ "$w2" = 1 ] && { echo "SELFTEST PASS"; exit 0; }
+  echo "SELFTEST FAIL: [$r1] [$r2] [$r3] word [$w1] [$w2]"; exit 1
 fi
 
 PATH=${GATE_GREP_DIR:+$GATE_GREP_DIR:}/usr/gnu/bin:/usr/bin:/usr/sbin:$PATH
@@ -67,7 +69,11 @@ for p in "$@"; do
   hs="$(uname -n) $(sed -n 's/^domain[[:space:]]*//p; s/^search[[:space:]]*//p' /etc/resolv.conf 2>/dev/null) compute.internal ${GATE_HOST_STRINGS:-}"
   for h in $hs; do
     [ ${#h} -ge 6 ] || continue   # too short to mean a host (e.g. "local")
-    n=$(nix-store --dump "$p" 2>/dev/null | grep -a -o -F -- "$h" | wc -l | tr -d ' ')
+    # -w: the name as a word, so a host string inside an ordinary word is not the host (a64s: "braich", dixa's boot environment,
+    # is in Scottish Gaelic "obraichean" in gtk3's own po/gd.po; "/ROOT/braich/" or "host=braich" still match)
+    # shortcut: grep -w counts _ as a word character, so a name joined by underscores (foo_braich_bar) is not caught; upgrade to an
+    # explicit [^A-Za-z0-9] boundary if such a leak is ever seen.
+    n=$(nix-store --dump "$p" 2>/dev/null | grep -a -o -w -F -- "$h" | wc -l | tr -d ' ')
     [ "$n" -gt 0 ] || continue
     # Exempt ONLY a hit that is the nodename of a DTrace DOF utsname record: inside an ELF's .SUNW_dof section, with the
     # sysname "SunOS\0" 257 bytes before it (struct utsname, 257-byte fields). `dtrace -G` wrote the illumos-gate build
@@ -76,7 +82,7 @@ for p in "$@"; do
     # (the dump's count must equal the exempt count).
     ex=0; where=""
     while IFS= read -r f; do
-      offs=$(grep -a -b -o -F -- "$h" "$f" | cut -d: -f1); [ -n "$offs" ] || continue
+      offs=$(grep -a -b -o -w -F -- "$h" "$f" | cut -d: -f1); [ -n "$offs" ] || continue
       doff=""; dsz=""
       read -r doff dsz < <(elfdump -c "$f" 2>/dev/null | awk '/sh_name: \.SUNW_dof$/ {d=1; next} d && /sh_size:/ {sz=$2} d && /sh_offset:/ {print $2, sz; exit}')
       for o in $offs; do
