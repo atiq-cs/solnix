@@ -13,7 +13,8 @@
 # (/var/tmp/srcpkg- ...; the mapped /build/ is counted); B9 no #! outside the store but /bin/sh and /usr/bin/env (counted);
 # B10 no timestamp-mode pyc; B13 no /usr/gnu/ /opt/ooce /opt/nixboot /usr/gcc/ /var/tmp/big string (/usr/local and
 # documentation mentions WARN); B15 no host link/include dir in a recorded build config (perl Config_heavy.pl link vars,
-# .pc, .la, *-config, *Config.cmake, _sysconfigdata). And the mirror of the server's NAR content gate (infra
+# .pc, .la, *-config, *Config.cmake, _sysconfigdata); B17 no help2man stub page under share/man ("unable to create a proper
+# manual page", plain or .gz). And the mirror of the server's NAR content gate (infra
 # k8s/validate-nar-content.py; enforced for tier 1): S1 DT_RUNPATH/DT_RPATH under /nix/store or $ORIGIN, S2 PT_INTERP the
 # store or the illumos ld.so.1, S3 no *.compute.internal / *.ec2.internal / solnix-builder-build (any case, files and
 # symlink targets; NO DOF exemption there, unlike the host-name check above), S4 no dixi dixa dixr lixi floki as a word.
