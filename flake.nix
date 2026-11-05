@@ -279,7 +279,8 @@
             # is another drv than the attr was: nix = nixSrc 2.24.15 (the attr was the /nix-tools ingest, which does not
             # evaluate purely), meson = 1.10.2 (served row; graphics' 1.4.2 moves to meson_1_4). aarch64 has both already.
             lifted = removeAttrs p.solnix.nixChain [ "curlForNix" "nix" ];
-            renamed = { hostname-f = p.solnix.hostname; illumos-vi = p.solnix.vi; nix = p.solnix.nixSrc;
+            # illumos-early: the early-boot slice's served pname (attr early; drv_for MISSed its W3a row, wave6w)
+            renamed = { hostname-f = p.solnix.hostname; illumos-vi = p.solnix.vi; nix = p.solnix.nixSrc; illumos-early = p.solnix.early;
                         meson = p.solnix.meson_1_10; meson_1_4 = p.solnix.meson; };
           in lib.filterAttrs (_: v:
           let r = builtins.tryEval (lib.isDerivation v); in r.success && r.value)
