@@ -172,8 +172,9 @@ let
   aclocalPath = builtins.concatStringsSep ":" aclocalDirs;
   a64hBuild = t: if !a64h then t else builtins.replaceStrings
     [ "ACLOCAL_PATH=/opt/nixboot/share/aclocal:/opt/ooce/autoconf-archive/share/aclocal M4=/usr/bin/gm4 autoreconf -fi -I /opt/nixboot/share/aclocal -I /opt/ooce/autoconf-archive/share/aclocal"
-      "/usr/gnu/bin/" "/usr/bin/bash" ]
-    [ "ACLOCAL_PATH=${aclocalPath} M4=m4 autoreconf -fi" "" shell ] t;   # INSTALL/TAR=/usr/gnu/bin/x -> x from the store PATH
+      "s@/usr/gnu/bin/@@g" "/usr/gnu/bin/" "/usr/bin/bash" ]
+    [ "ACLOCAL_PATH=${aclocalPath} M4=m4 autoreconf -fi" "s@/usr/gnu/bin/@@g" "" shell ] t;   # INSTALL/TAR=/usr/gnu/bin/x -> x from the store PATH
+    # perl's Config scrub (sed -i 's@/usr/gnu/bin/@@g') is kept as written: stripped, it is s@@@g, a GNU sed error (wave6x, dixa perl kjf2kni2)
   # store-only PATH (nativeTools set): the old line is replaced in the builder text, so a recipe without nativeTools keeps its drv.
   # CC_FOR_BUILD: configure's build-machine compiler (flex's stage1 scanner, autosetup's bootstrap jimsh in neomutt/sqlite) is looked up as
   # bare gcc/cc, which only the OI host had on PATH: the same wrapper as CC (native build).
