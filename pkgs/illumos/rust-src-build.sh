@@ -1,6 +1,9 @@
 # rust-src-build.sh -- builder for rust-src.nix (read that file for the why).
 set -eu
 export PATH="$tools/bin:$world/usr/bin:$world/usr/sbin:$world/bin:$world/sbin"   # store tools, then the illumos base from the world store path (no /usr/bin|sbin|gnu)
+# python3 on PATH (nixpkgs rustc.nix: python3 in nativeBuildInputs): LLVM's cmake runs find_package(Python3), which otherwise falls back
+# to its system prefixes: the build host's /usr/bin/python3 on OI, and on solnix (no /usr/bin/python3) "Could NOT find Python3" (dixi, wave6x).
+export PATH="$python3/bin:$PATH"
 /usr/bin/bash "$pathGate"; . "$illumosBin"
 # FIXED build dir, not $NIX_BUILD_TOP (/tmp on OI, /var/tmp/big on dixi): ld names each link output by its
 # build path (measured in rust-1.99.0, repro2). $buildKey: see mk-src-pkg.nix.
