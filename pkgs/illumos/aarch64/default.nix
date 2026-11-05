@@ -149,7 +149,9 @@ let
   gcc = import ./gcc-src.nix { gate = gate'; libcSlice = libc; inherit ld system; };
 
   # nix 2.24.15 and its chain, from source with that gcc (./src.nix).
-  seed = import ./. { gate = gate'; inherit system; stage = "seed"; };
+  # the seed is main's SERVED aarch64 seed, frozen (./seed-main/README.md; orchestrator decision (A), wave6x): wave6's recipe text does not
+  # move it, so the store-only set builds from outs the cache serves (a fixed bootstrap, as nixpkgs' bootstrap-tools).
+  seed = import ./seed-main/illumos/aarch64 { gate = gate'; inherit system; stage = "seed"; };
   # the perl build tool is this set's own store-only perl (homePkgs.perl), not the seed's: the seed perl reads the stage0 PATH, where
   # dixa's devroot /usr/bin/perl is, and perl 5.42.2's recipe rejects a host perl5 (FATAL on dixa). tools.nix keeps perl off the tool
   # PATH of perl's own build closure (perl, gnupatch, zlib), so there is no cycle.
