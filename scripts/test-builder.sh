@@ -21,6 +21,8 @@
 #    pkg-config is not pkgconf); the negative controls (off-branch, --closure, an unpublished input, eval off, a mutant
 #    without the identity rule, a mutant without wave6); the second vote.
 #    MAIN_BUILDER=<origin/main's solnix-builder.sh, before fleet4>: it must never take an eval job (else SKIPped, not passed).
+#    A version bump (fleet7): an older served version of the pname does not stop the eval path, a served row at the target does.
+#    EV7_BUILDER=<c49a27f's solnix-builder.sh (any served row of the pname refused the eval)>: NO-RECIPE there (else SKIPped).
 # 9. fleet5: a job listing several outputs of one drv (gcc's out and -lib, wave6's out and -debug): each unserved one first-
 #    published as its own submission, deps first; one claim once every listed out is served, completed with the primary.
 #    F5_BUILDER=<origin/main's solnix-builder.sh, before fleet5 (2c13182)>: it must loop on the gcc shape (else SKIPped).
@@ -596,15 +598,16 @@ cat > "$W/f8.tmpl" <<'F8'
     gate = e "gate" "illumos-gate-proto" "0.65.0" "echo g > $out" { };
     "pkg-config" = e "pkgcfg" "pkgconf" "2.3.0" "echo p > $out" { };
     evvote = e "evvote" "evvote" "1" "echo evvote-@TAG@ > $out" { };
+    evbump = e "evbump" "evbump" "@BV@" "echo bump@BV@ > $out" { };
     @EXTRA@
   }; }; }
 F8
-pf8() { sed -e "s|@EXTRA@|${2:-}|" -e "s|@EVOK@|$1|" -e "s|@TAG@|${W##*/}|g" "$W/f8.tmpl" > "$R3/flake.nix"; g3 add -A; }
+pf8() { sed -e "s|@EXTRA@|${2:-}|" -e "s|@EVOK@|$1|" -e "s|@BV@|${3:-1}|g" -e "s|@TAG@|${W##*/}|g" "$W/f8.tmpl" > "$R3/flake.nix"; g3 add -A; }
 g3 init -b main; pf8 M1; g3 commit -m M1; M1=$(git -C "$R3" rev-parse HEAD)
 g3 checkout -b 26.11; pf8 M1 'ev2611 = derivation { name = "ev2611-1"; system = "x86_64-solaris"; builder = "/usr/bin/bash"; args = [ "-c" "echo building ev2611; echo 2611-@TAG@ > $out" ]; };'
 g3 commit -m K; K=$(git -C "$R3" rev-parse HEAD)
 g3 checkout -b wave5 "$M1"; pf8 M1 'evoff = e "evoff" "evoff" "1" "echo off > $out" { };'; g3 commit -m W5; W5=$(git -C "$R3" rev-parse HEAD)
-g3 checkout -b wave6 "$M1"; pf8 M1 'evw6 = e "evw6" "evw6" "1" "echo w6 > $out" { };'; g3 commit -m W6; W6=$(git -C "$R3" rev-parse HEAD); g3 checkout main
+g3 checkout -b wave6 "$M1"; pf8 M1 'evw6 = e "evw6" "evw6" "1" "echo w6 > $out" { };' 2; g3 commit -m W6; W6=$(git -C "$R3" rev-parse HEAD); g3 checkout main
 pe8() { nix eval --raw "git+file://$R3?ref=$1&rev=$2#packages.x86_64-solaris.$3.outPath" 2> /dev/null; }
 EVOK1=$(pe8 main "$M1" evok) E2611=$(pe8 26.11 "$K" ev2611) EVIN=$(pe8 main "$M1" evin) EVDEP=$(pe8 main "$M1" evindep) EVOFF=$(pe8 wave5 "$W5" evoff)
 NH1=$(nix flake metadata --json "git+file://$R3?ref=main&rev=$M1" 2> /dev/null | jq -r '.locked.narHash // empty')
@@ -730,6 +733,30 @@ r8 evw6:1 > "$W/p8.json"; mu8 "$S" "$W/mut8w.sh" '[[ $2 == @(main|26.11|wave6) &
 S0=$S S=$W/mut8w.sh; tk8 BUILDER_EVAL=dry BUILDER_EVAL_BRANCHES="$W6B" BUILDER_STATE=$W/st8w6m; S=$S0
 ! cmp -s "$S" "$W/mut8w.sh" && grep -qx "evw6 EVAL evw6 1 wave6 $W6" "$W/st8w6m/plan" && has "decline evw6: $W6 is not on wave6 here" && ! has 'would submit .*qb-evw6-' &&
   ok "NEG mutant whose onbranch lacks wave6: the same listed tick declines evw6 (so the wave6 pass above is onbranch's)" || no "mutant w6: $(print -r -- "$out" | grep evw6)"
+# fleet7: a version bump. evbump is 1 on main and 26.11 and 2 at wave6's head; the job's target is 2, the served row is at 1
+# (aarch64 pcre2 10.47 served, the job 10.48, wave6 2f3d4be at 10.48). (pname, target) has no served row: the eval path.
+EVB1=$(pe8 main "$M1" evbump) EVB2=$(pe8 wave6 "$W6" evbump); [[ -n $EVB1 && -n $EVB2 && $EVB1 != "$EVB2" ]] || no "fixture 8: evbump $EVB1 $EVB2"
+{ print -r -- "$H"; rec evbump 1 y "$EVB1"; } > "$W/hc/registry/recipes-bump.tsv"; { cat "$W/hc/registry/recipes-bump.tsv"; rec evbump 2 y "$EVB2"; } > "$W/rbump2.tsv"
+for b8 in "st8bi:$W6B" "st8bn:main 26.11"; do env BUILDER_EVAL=1 BUILDER_FLAKE="git+file://$R3?ref=main" BUILDER_EVAL_BRANCHES="${b8#*:}" BUILDER_STATE=$W/${b8%%:*} ksh93 "$S" eindex > /dev/null 2>&1; done
+pb8() { env BUILDER_EVAL=1 BUILDER_STATE=$W/$1 ksh93 "${3:-$S}" plan "$W/p8.json" "$2" 2>&1; }	# pb8 <state> <recipes> [builder]
+r8 evbump:2 > "$W/p8.json"
+[[ $(pb8 st8bi "$W/hc/registry/recipes-bump.tsv") == "evbump EVAL evbump 2 wave6 $W6" ]] &&
+  ok "version bump: evbump 1 served, the job's target 2 = wave6's head: EVAL at wave6 (an older served version does not stop it)" || no "bump: $(pb8 st8bi "$W/hc/registry/recipes-bump.tsv")"
+[[ $(pb8 st8bi "$W/rbump2.tsv") == "evbump BUILD $EVB2 2 -" ]] &&
+  ok "NEG a served row at the target (evbump 2): the row path (BUILD), never the eval path" || no "bump served at target: $(pb8 st8bi "$W/rbump2.tsv")"
+[[ $(pb8 st8bn "$W/hc/registry/recipes-bump.tsv") == "evbump NO-RECIPE evbump 2 (packages.evbump at main is evbump 1: not this job)" ]] &&
+  ok "NEG the bump with wave6 not listed: NO-RECIPE (main and 26.11 have evbump 1)" || no "bump unlisted: $(pb8 st8bn "$W/hc/registry/recipes-bump.tsv")"
+tk8 BUILDER_EVAL=dry BUILDER_EVAL_BRANCHES="$W6B" BUILDER_STATE=$W/st8bd BUILDER_RECIPES=$HC/registry/recipes-bump.tsv
+[[ $(print -r -- "$sl" | grep -c BEGIN) == 0 && $(claims) == 0 ]] && grep -qx "evbump EVAL evbump 2 wave6 $W6" "$W/st8bd/plan" && has 'dry run: would submit .*qb-evbump-' &&
+  cat "$W/st8bd/tried/"*-evbump-*.submit 2> /dev/null | grep '^  begin body ' | grep -q "\"eval\":{\"attr\":\"evbump\",\"system\":\"x86_64-solaris\",\"commit\":\"$W6\",\"branch\":\"wave6\",\"flake_nar_hash\":\"$NHW6\"}" &&
+  grep -q "^$EVB2${T}.*drv-closure${T}eval:evbump:x86_64-solaris:$W6:wave6" "$W/st8bd/stamps/"*.ok &&
+  ok "version bump, a dry tick: built, pre-submit --eval stamped, the /begin body anchors wave6's evbump 2 (nothing begun or claimed)" ||
+  no "bump tick: $(cat "$W/st8bd/plan" 2>&1) $(print -r -- "$out" | grep evbump)"
+if [[ -n ${EV7_BUILDER:-} ]]; then
+  [[ $(pb8 st8bi "$W/hc/registry/recipes-bump.tsv" "$EV7_BUILDER") == "evbump NO-RECIPE evbump 2" ]] &&
+    ok "NEG c49a27f's builder ($EV7_BUILDER): the same bump is NO-RECIPE (any served row of the pname refused the eval)" ||
+    no "EV7_BUILDER bump: $(pb8 st8bi "$W/hc/registry/recipes-bump.tsv" "$EV7_BUILDER")"
+else print "SKIP version-bump negative control: EV7_BUILDER unset (not counted as a pass)"; fi
 # the second vote: `solnix-builder vote <attr> <commit> <branch> <NarHash> [pname]` builds that (attr, commit) here and completes
 # the job with its NarHash and commit, only if the NarHash is the proposal's. The proposal's NarHash: evvote's out is one file.
 print -r -- "evvote-${W##*/}" > "$W/evvote.txt"; chmod 444 "$W/evvote.txt"; nix-store --dump "$W/evvote.txt" > "$W/evvote.nar"

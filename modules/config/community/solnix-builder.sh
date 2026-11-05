@@ -29,10 +29,11 @@
 # Each unserved one is first-published as its own submission, deps first (firsts); the job is claimed once every listed out
 # is served, and completed once, with the primary (the drv's first listed output: its default output when listed). A host
 # that may not publish declines such a job. fbuild refuses an out whose served sibling is another build's NAR.
-# Eval-anchored (protocol v2 (B), fleet4; BUILDER_EVAL=1, or dry: every step up to the signed /begin): a job whose pname has NO
-# served row for this system, but whose name (drv_for's rule: pname, _ or camelCase) is a packages.<system> attr at the head
-# of an allowed branch (BUILDER_EVAL_BRANCHES: main then 26.11, wave6 if listed; no other) whose drv pname (attr pname, else
-# the name minus its version) and version are the job's pname and target (gate is not illumos-gate-proto), is built here
+# Eval-anchored (protocol v2 (B), fleet4; BUILDER_EVAL=1, or dry: every step up to the signed /begin): a job that NO served row
+# has at its (pname, target version) for this system (an older served version does not stop it: a version bump), but whose
+# name (drv_for's rule: pname, _ or camelCase) is a packages.<system> attr at the head of an allowed branch
+# (BUILDER_EVAL_BRANCHES: main then 26.11, wave6 if listed; no other) whose drv pname (attr pname, else the name minus its
+# version) and version are the job's pname and target (gate is not illumos-gate-proto), is built here
 # and submitted with {eval: attr, system, commit, branch, flake_nar_hash}. Before the build every non-fixed-output input of
 # its drv closure must be served (else it waits: deps first); pre-submit-check.sh --eval (drv-gate --closure, the strict
 # one: no reviewed row stands behind it, --check SAME, publish-gate, the log, the eval anchor) stamps it; it always ends a
@@ -95,7 +96,7 @@ bounded() {	# bounded <secs> <cmd...>: run it, TERM it after <secs> (illumos has
 #                    out cannot add pages, so `done` would be false (a recipe fix)
 #   NO-MAN <outs>    manpage-missing, but the recipe says has_manpages=n (a recipe change, not a rebuild)
 #   NO-RECIPE        no served row at that (pname, version, system): not ours to guess
-#   EVAL <attr> <version> <branch> <rev>  (BUILDER_EVAL on) no served row has the pname for this system, and the head <rev> of
+#   EVAL <attr> <version> <branch> <rev>  (BUILDER_EVAL on) no served row at that (pname, version, system), and the head <rev> of
 #                    <branch> has packages.<system>.<attr> (drv_for's forms) whose drv pname and version ARE the job's
 #   OTHER-SYSTEM     a system this host does not build
 plan() {	# in claim order (priority ascending, then oldest): /build-queue/rows lists priority DESC, so deferred rows would come first
@@ -106,7 +107,7 @@ plan() {	# in claim order (priority ascending, then oldest): /build-queue/rows l
 		[[ $s == "$BUILDER_SYSTEM" ]] || { print -r -- "$p OTHER-SYSTEM $s"; continue; }
 		n=${p%-"$v"}; [[ $n == openssl3 ]] && n=openssl	# the queue's pname for openssl-3 (recipes.tsv says openssl)
 		row=$(nawk -F'\t' -v n="$n" -v v="$v" -v s="$s" '$1==n && $2==v && $8==s {if (!f) f=$7; o=o (o ? "," : "") $9} END {if (o) print f "\t" o}' "$2")
-		[[ -z $row ]] && { print -r -- "$p $(eplan "$n" "$v" "$2" "$p")"; continue; }
+		[[ -z $row ]] && { print -r -- "$p $(eplan "$n" "$v" "$p")"; continue; }
 		outs=${row#*$'\t'} flags=${row%%$'\t'*} d=BUILD
 		if [[ $why == *manpage-missing* ]]; then
 			[[ $flags == *has_manpages=n* ]] && { print -r -- "$p NO-MAN $outs"; continue; }
@@ -118,14 +119,14 @@ plan() {	# in claim order (priority ascending, then oldest): /build-queue/rows l
 		print -r -- "$p BUILD $outs $v $rc"
 	done
 }
-eplan() {	# eplan <pname> <version> <recipes.tsv> <row pname>, in $(...): "EVAL <attr> <version> <branch> <rev>" when no served row has <pname>
-	# for this system and an allowed branch's head (eindex, in branch order) has an attr of drv_for's forms whose drv pname and
-	# version are exactly the job's (pkg-config is not pkgconf, gate is not illumos-gate-proto); else NO-RECIPE, saying why
+eplan() {	# eplan <pname> <version> <row pname>, in $(...), for a job no served row has at (pname, version, system) (plan's
+	# check; an older served version is a version bump, infra's rule too): "EVAL <attr> <version> <branch> <rev>" when an allowed
+	# branch's head (eindex, in branch order) has an attr of drv_for's forms whose drv pname and version are exactly the job's
+	# (pkg-config is not pkgconf, gate is not illumos-gate-proto); else NO-RECIPE, saying why
 	typeset x=${1%-[0-9]*} c= w u
-	[[ $BUILDER_EVAL != 0 && -s $BUILDER_STATE/eindex ]] &&
-	    ! nawk -F'\t' -v n="$1" -v s="$BUILDER_SYSTEM" 'NR > 1 && $1 == n && $8 == s {f = 1} END {exit !f}' "$3" || { print -r -- "NO-RECIPE $1 $2"; return; }
+	[[ $BUILDER_EVAL != 0 && -s $BUILDER_STATE/eindex ]] || { print -r -- "NO-RECIPE $1 $2"; return; }
 	# a proposal pending from an earlier tick is followed at its own commit, even once the head has moved on or lost the attr
-	x=$BUILDER_STATE/pub/eval.${4//[!A-Za-z0-9._+-]/_}; [[ -s $x ]] && { read -r c w u < "$x"; print -r -- "EVAL $c $2 $w $u"; return; }
+	x=$BUILDER_STATE/pub/eval.${3//[!A-Za-z0-9._+-]/_}; [[ -s $x ]] && { read -r c w u < "$x"; print -r -- "EVAL $c $2 $w $u"; return; }
 	x=${1%-[0-9]*} c=
 	for w in ${x//-/ }; do if [[ -z $c ]]; then c=$w; else typeset -u u=${w:0:1}; c=$c$u${w:1}; fi; done
 	nawk -F'\t' -v n="$1" -v v="$2" -v f=" $x ${x//-/_} $c " 'index(f, " " $3 " ") {
