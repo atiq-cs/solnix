@@ -19,7 +19,7 @@
 #              then re-checks each reference under the 8UNr key before it submits
 # --eval <attr> <system> <commit> <branch> (protocol v2 (B), fleet4): ONE out with no served row, anchored instead to what
 #   packages.<system>.<attr> evaluates to at <commit> of $GATE_FLAKE (default git+https://git.solnix.io/solnix.git):
-#   1. row     replaced by `eval`: <branch> is main or 26.11, <commit> is 40 hex and an ancestor of that branch's head (a git
+#   1. row     replaced by `eval`: <branch> is main, 26.11 or wave6, <commit> is 40 hex and an ancestor of that branch's head (a git
 #              clone of the flake: nix takes ?ref=<b>&rev=<c> for any c), the attr's outPath at c is this out, and no served
 #              row names it (a row's out goes the --leaf way); drv runs --closure (strict: no reviewed row stands behind it);
 #   8b. inputs every non-fixed-output out the build takes (gate-checks.py inputs) is served, or is in this batch ahead of it.
@@ -47,7 +47,7 @@ mode=--closure; eva=""; [ "${1:-}" = --leaf ] && { mode=--leaf; shift; }
 if [ "${1:-}" = --eval ]; then
   [ $# -ge 6 ] || { echo "usage: pre-submit-check.sh --eval <attr> <system> <commit> <branch> <out>..." >&2; exit 2; }
   ea=$2 es=$3 ec=$4 eb=$5; shift 5; eva="eval:$ea:$es:$ec:$eb"; mode=--closure	# strict, whatever came before
-  case "$eb" in main|26.11) ;; *) echo "pre-submit: branch '$eb' is not main or 26.11" >&2; exit 2 ;; esac
+  case "$eb" in main|26.11|wave6) ;; *) echo "pre-submit: branch '$eb' is not main, 26.11 or wave6" >&2; exit 2 ;; esac
   echo "$ec" | grep -qx '[0-9a-f]\{40\}' && echo "$ea" | grep -qx '[A-Za-z0-9][A-Za-z0-9._+-]\{0,127\}' ||
     { echo "pre-submit: --eval needs a 40-hex commit and a one-level attr" >&2; exit 2; }
 fi

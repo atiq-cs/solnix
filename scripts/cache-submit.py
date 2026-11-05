@@ -41,7 +41,7 @@ after each signature. The key is never printed.
 
 Eval-anchored (protocol v2 (B), fleet4; infra docs/design/eval-anchored-rows.md): --eval ATTR SYSTEM COMMIT BRANCH
 [--flake-nar-hash H] submits ONE path that NO served row names, anchored to what packages.SYSTEM.ATTR evaluates to at COMMIT
-(on BRANCH: main or 26.11 only); /begin carries {"eval": {attr, system, commit, branch, flake_nar_hash}}. Its stamp must say
+(on BRANCH: main, 26.11 or wave6 only); /begin carries {"eval": {attr, system, commit, branch, flake_nar_hash}}. Its stamp must say
 drv-closure (the strict gate: no reviewed row stands behind it) and name exactly that eval (6th column); its deriver passes
 drv-gate --closure here. A path some row names plans EVAL-HAS-ROW (it goes the row way). It always ends a proposal.
 
@@ -145,6 +145,11 @@ def challenge(method, path, builder, nonce, body):
 
 
 # ---- HTTP ------------------------------------------------------------------
+
+def put_timeout(n):
+    """Seconds allowed for one PUT of n bytes. The socket timeout bounds the whole sendall, so a flat 600 s failed cmake-4.1.2-debug's
+    450 MB NAR from floki (0.65 MB/s to staging: "The write operation timed out", twice, 2026-11-04). 600 s or 100 kB/s, the longer."""
+    return max(600, n // 100_000)
 
 def http(method, url, body=None, headers=None, timeout=120):
     req = urllib.request.Request(url, data=body, method=method, headers={"User-Agent": UA, **(headers or {})})
@@ -326,7 +331,7 @@ def begin_body(sp, f, ev=None):
     return json.dumps(b, separators=(",", ":")).encode()
 
 
-EVAL_BRANCHES = ("main", "26.11")  # our review of (B) §2.1: the published branches; a wave branch only when we name one
+EVAL_BRANCHES = ("main", "26.11", "wave6")  # our review of (B) §2.1: the published branches; a wave branch only when we name one (wave6: 2026-11-03)
 
 
 def eval_obj(a):
@@ -365,7 +370,7 @@ def submit_one(a, seed, sp, f, ev=None):
     for key, data in ((f["URL"], open(os.path.join(a.cache_dir, f["URL"]), "rb").read()),
                       (h + ".narinfo", unsigned_narinfo(f))):
         code, resp = http("PUT", f"{base}/staging/{sid}/{key}", data,
-                          {"X-Solnix-Capability": caps[key], "Content-Length": str(len(data))}, timeout=600)
+                          {"X-Solnix-Capability": caps[key], "Content-Length": str(len(data))}, timeout=put_timeout(len(data)))
         print(f"  put {key} ({len(data)} B): HTTP {code} {resp[:200].decode(errors='replace') if code >= 300 else ''}")
         if code >= 300:
             return "upload-failed"

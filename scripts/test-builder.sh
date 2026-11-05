@@ -15,11 +15,17 @@
 # 7. fleet3: first publish (BUILDER_PUBLISH) of a served row's unserved out with the host's key, against a fixture cache and a
 #    submitter hook running the real cache-submit.py planner; the tier-1 states (proposed, 429), and the negative controls.
 #    OLD_BUILDER=<a builder before fleet3 (26105b0^)>: it must never submit (else that control is SKIPped, not passed).
-# 8. fleet4: eval-anchored jobs (BUILDER_EVAL, protocol v2 (B)) against a git fixture with main, 26.11 and an unpublished
-#    branch: an attr-only job takes the eval path (dry, then a proposal followed at its commit after main moves, claimed with
-#    it); the identity rule (gate is not illumos-gate-proto, pkg-config is not pkgconf); the negative controls (off-branch,
-#    --closure, an unpublished input, eval off, a mutant without the identity rule); the second vote.
+# 8. fleet4: eval-anchored jobs (BUILDER_EVAL, protocol v2 (B)) against a git fixture with main, 26.11, wave6 (fleet7: only
+#    when BUILDER_EVAL_BRANCHES lists it) and an unpublished branch (wave5): an attr-only job takes the eval path (dry, then
+#    a proposal followed at its commit after main moves, claimed with it); the identity rule (gate is not illumos-gate-proto,
+#    pkg-config is not pkgconf); the negative controls (off-branch, --closure, an unpublished input, eval off, a mutant
+#    without the identity rule, a mutant without wave6); the second vote.
 #    MAIN_BUILDER=<origin/main's solnix-builder.sh, before fleet4>: it must never take an eval job (else SKIPped, not passed).
+# 9. fleet5: a job listing several outputs of one drv (gcc's out and -lib, wave6's out and -debug): each unserved one first-
+#    published as its own submission, deps first; one claim once every listed out is served, completed with the primary.
+#    F5_BUILDER=<origin/main's solnix-builder.sh, before fleet5 (2c13182)>: it must loop on the gcc shape (else SKIPped).
+# 10. fleet6: queue requests signed with sshsig (infra R7), a retry signed anew (R8), the egress registration (s3).
+#    PRESIG_BUILDER=<a builder before fleet6>: in sshsig mode it must fail the signature check (else SKIPped, not passed).
 S=${1:-$(dirname "$0")/../modules/config/community/solnix-builder.sh}
 W=$(mktemp -d /tmp/bld.XXXXXX); trap 'find "$W" -depth -delete' EXIT
 bad=0; ok() { print "ok: $1"; }; no() { print "FAIL: $1"; bad=1; }
@@ -115,7 +121,10 @@ cat > "$W/fk/curl" <<'FK'
 #!/bin/sh
 q=; for a; do case $a in http://queue.invalid*) q=1;; esac; done; [ -n "$q" ] || exec "$FKREAL" "$@"
 o=; u=; d=; w=; while [ $# -gt 0 ]; do case $1 in -o) o=$2; shift;; --data-binary) d=$2; shift;; -w) w=1; shift;; -m|-X|-H) shift;; -*) ;; *) u=$1;; esac; shift; done
-case $u in */rows*) ;; *) cat > /dev/null;; esac; echo "$u $d" >> "$FKLOG"
+# FKREQ=<dir>: each request kept as <dir>/<n>/{url,hdr,body} (hdr: the -H @- lines; an egress POST's body is its stdin)
+kp() { [ -n "$FKREQ" ] || { cat > /dev/null; return; }; n=$(( $(cat "$FKREQ/n" 2> /dev/null || echo 0) + 1 )); echo $n > "$FKREQ/n"
+  mkdir -p "$FKREQ/$n"; echo "$u" > "$FKREQ/$n/url"; if [ "$1" = body ]; then cat > "$FKREQ/$n/body"; else cat > "$FKREQ/$n/hdr"; printf %s "$d" > "$FKREQ/$n/body"; fi; }
+case $u in */rows*) ;; */builder/egress) kp body;; *) kp;; esac; echo "$u $d" >> "$FKLOG"
 qs() { echo "$u" | sed -n "s/.*[?\&]$1=\([^&]*\).*/\1/p" | sed 's/%2B/+/g'; }
 case $u in
 */rows) exit 22;;
@@ -126,8 +135,13 @@ case $u in
   if [ -n "$FKEMPTY" ]; then echo '{"jobs":[]}'; else echo '{"jobs":[{"id":'$i',"claim_token":"'$t'","pname":"'$p'","current_version":"1","target_version":"1"}]}'; fi > "$o"
   [ -z "$FKSLOW" ] || sleep "$FKSLOW";;
 */complete) echo '{"id":42,"attempt":1,"state":"done","publication_verified":false,"attestation_recorded":false}' > "$o";;
-*) echo '{"claim_expires_at":"x"}' > "$o";;
-esac; [ -z "$w" ] || printf 200
+# egress: 400 with "seen" unless ip is $FKSEEN (198.51.100.7); FKE500=1: a 500
+*/builder/egress) i=$(jq -r .ip "$FKREQ/$n/body"); sn=${FKSEEN:-198.51.100.7}
+  if [ -n "$FKE500" ]; then echo '{"error":"x"}' > "$o"; c=500; elif [ "$i" != "$sn" ]; then echo '{"error":"ip must be the address this request comes from","seen":"'$sn'"}' > "$o"; c=400
+  else echo '{"status":"registered","keyid":"qbhost","ip":"'$sn'","addresses":1,"expires_in":86400}' > "$o"; fi;;
+# FKFAIL=<file>: while it exists, the next heartbeat answers 503 (and removes it)
+*) echo '{"claim_expires_at":"x"}' > "$o"; case $u in */heartbeat) [ -z "$FKFAIL" ] || [ ! -e "$FKFAIL" ] || { rm -f "$FKFAIL"; c=503; };; esac;;
+esac; [ -z "$w" ] || printf %s "${c:-200}"
 FK
 chmod +x "$W/fk/curl"
 tk() { env BUILDER_PATH="$W/fk:$PATH" FKREAL=$RC FKLOG=$W/fk/log FKROWS=${FKROWS:-$W/g.json} FKNEXT=flaky BUILDER_API=http://queue.invalid/q \
@@ -336,6 +350,7 @@ df5() { ( eval "$(sed -n '/^bounded() {/,/^}/p; /^evattr() {/,/^}/p; /^drv_for()
   BUILDER_SYSTEM=x86_64-solaris BUILDER_STATE=$W/st5b BUILDER_FLAKE="git+file://$R5?ref=main" J=x; drv_for mo "$1" "$R5H" ); }
 r=$(df5 "$MD") && [[ $r == "$MD $MV^debug" ]] && ok "drv_for: a -debug row (out + debug outputs): FOUND $MV^debug" || no "drv_for debug: '$r'"
 r=$(df5 "/nix/store/00000000000000000000000000000000-qb-mo-1-debug,$MO") && [[ $r == "$MO $MV^out" ]] && ok "drv_for: the default out still FOUND ^out" || no "drv_for out: '$r'"
+r=$(df5 "$MD,$MO") && [[ $r == "$MO $MV^out"$'\n'"$MD $MV^debug" ]] && ok "drv_for: a job listing both outputs gets both lines, the default output (the primary) first" || no "drv_for both: '$r'"
 ls "$W/st5b/eval/$R5H.x86_64-solaris.mo"* 2> /dev/null | grep -q '\.outs$' && (( $(wc -l < "$W/st5b/eval/$R5H.x86_64-solaris.mo.outs") == 2 )) &&
   r=$(df5 "$MD") && [[ $r == "$MD $MV^debug" ]] && ok "the eval cache keeps every output per (rev, system, attr) (.outs, 2 lines), and a cache hit finds -debug" || no "cache: $(ls "$W/st5b/eval" 2>&1)"
 ! df5 /nix/store/00000000000000000000000000000000-qb-mo-2-debug > /dev/null && ok "NEG drv_for: an out no output of the attr has (another version): MISS" || no "drv_for wrong out FOUND"
@@ -456,7 +471,7 @@ p = paths[0] if paths else ""
 if not sub or not any(l.split()[:2] == ["READY", p] for l in r.stdout.splitlines()):
     sys.exit(0)
 log.write(f"BEGIN {p} builder={b}\n"); log.flush()
-n = os.path.basename(p)[33:].split("-")[1]; sid = "sid-" + n; stage = opt("--cache-dir")
+nm = os.path.basename(p)[33:].split("-"); n = nm[1]; sid = "-".join(["sid", n] + nm[3:]); stage = opt("--cache-dir")  # sid-mprop-lib: one per output
 if n == "pub429":
     print('  begin: HTTP 429 {"error":"proposal backlog","proposed_bytes":2202009600,"cap":2147483648}\n  result: backoff 900'); sys.exit(0)
 print(f"  submission {sid} staging http://staging.invalid")
@@ -467,7 +482,7 @@ if "--eval" in a:
     print("  status: proposed\n  result: proposed"); sys.exit(0)
 if n == "pubrej":
     print("  status: rejected content gate REJECTED: FAIL build-host: /x: contains 'ip-10-0-1-23.ec2.internal'\n  result: rejected"); sys.exit(0)
-if n == "pubprop":
+if n == "pubprop" or (n == "mprop" and p.endswith("-lib")):
     shutil.copytree(stage, f"{W}/fkst/{sid}.stage"); open(f"{W}/fkst/{sid}", "w").write(f"proposed {p}\n")
     print("  status: proposed\n  result: proposed"); sys.exit(0)
 promote(stage, p, W + ("/sk2" if n == "pubforge" else "/sk"))  # pubforge: signed by another key under the same name
@@ -563,7 +578,8 @@ out=$(env BUILDER_PATH="$W/fk:$PATH" FKREAL=$RC BUILDER_RECIPES=$HC/registry/rec
 has 'decline pubx: .* is not an out of the served recipes.tsv' && [[ ! -e $(po7 pubx) ]] && ok "NEG an out with no served row: never built or submitted" || no "pubx: $out"
 rm -f "$W/bearer"
 # --- 8. fleet4: eval-anchored jobs (BUILDER_EVAL). Repo3: main M1 -> M2 (evok moves); 26.11 = M1 + K (adds ev2611, with no
-# pname/version attrs: parseDrvName); wave9 = M1 + W9 (adds evoff: on no allowed branch). No out has a row or is served.
+# pname/version attrs: parseDrvName); wave5 = M1 + W5 (adds evoff: on no allowed branch); wave6 = M1 + W6 (adds evw6: allowed
+# only when listed). No out has a row or is served.
 rm -f "$W/fk/approve"; R3=$W/repo3; mkdir -p "$R3"; g3() { git -C "$R3" -c user.name=t -c user.email=t@t "$@" > /dev/null 2>&1; }
 cat > "$W/f8.tmpl" <<'F8'
 { outputs = { self }: let
@@ -587,13 +603,15 @@ pf8() { sed -e "s|@EXTRA@|${2:-}|" -e "s|@EVOK@|$1|" -e "s|@TAG@|${W##*/}|g" "$W
 g3 init -b main; pf8 M1; g3 commit -m M1; M1=$(git -C "$R3" rev-parse HEAD)
 g3 checkout -b 26.11; pf8 M1 'ev2611 = derivation { name = "ev2611-1"; system = "x86_64-solaris"; builder = "/usr/bin/bash"; args = [ "-c" "echo building ev2611; echo 2611-@TAG@ > $out" ]; };'
 g3 commit -m K; K=$(git -C "$R3" rev-parse HEAD)
-g3 checkout -b wave9 "$M1"; pf8 M1 'evoff = e "evoff" "evoff" "1" "echo off > $out" { };'; g3 commit -m W9; W9=$(git -C "$R3" rev-parse HEAD); g3 checkout main
+g3 checkout -b wave5 "$M1"; pf8 M1 'evoff = e "evoff" "evoff" "1" "echo off > $out" { };'; g3 commit -m W5; W5=$(git -C "$R3" rev-parse HEAD)
+g3 checkout -b wave6 "$M1"; pf8 M1 'evw6 = e "evw6" "evw6" "1" "echo w6 > $out" { };'; g3 commit -m W6; W6=$(git -C "$R3" rev-parse HEAD); g3 checkout main
 pe8() { nix eval --raw "git+file://$R3?ref=$1&rev=$2#packages.x86_64-solaris.$3.outPath" 2> /dev/null; }
-EVOK1=$(pe8 main "$M1" evok) E2611=$(pe8 26.11 "$K" ev2611) EVIN=$(pe8 main "$M1" evin) EVDEP=$(pe8 main "$M1" evindep) EVOFF=$(pe8 wave9 "$W9" evoff)
+EVOK1=$(pe8 main "$M1" evok) E2611=$(pe8 26.11 "$K" ev2611) EVIN=$(pe8 main "$M1" evin) EVDEP=$(pe8 main "$M1" evindep) EVOFF=$(pe8 wave5 "$W5" evoff)
 NH1=$(nix flake metadata --json "git+file://$R3?ref=main&rev=$M1" 2> /dev/null | jq -r '.locked.narHash // empty')
 NHK=$(nix flake metadata --json "git+file://$R3?ref=26.11&rev=$K" 2> /dev/null | jq -r '.locked.narHash // empty')
-[[ -n $EVOK1 && -n $E2611 && -n $EVIN && -n $EVDEP && -n $EVOFF && $NH1 == sha256-* && $NHK == sha256-* && $M1 != "$K" ]] ||
-  no "fixture 8: M1=$M1 K=$K W9=$W9 evok=$EVOK1 ev2611=$E2611 evoff=$EVOFF NH1=$NH1"
+EVW6=$(pe8 wave6 "$W6" evw6) NHW6=$(nix flake metadata --json "git+file://$R3?ref=wave6&rev=$W6" 2> /dev/null | jq -r '.locked.narHash // empty')
+[[ -n $EVOK1 && -n $E2611 && -n $EVIN && -n $EVDEP && -n $EVOFF && -n $EVW6 && $NH1 == sha256-* && $NHK == sha256-* && $NHW6 == sha256-* && $M1 != "$K" ]] ||
+  no "fixture 8: M1=$M1 K=$K W5=$W5 W6=$W6 evok=$EVOK1 ev2611=$E2611 evoff=$EVOFF evw6=$EVW6 NH1=$NH1 NHW6=$NHW6"
 r8() { typeset s= a; for a; do s="$s${s:+,}$(row ${a%%:*} ${a#*:} nixpkgs)"; done; print "{\"rows\":[$s]}"; }	# r8 pname:target...
 # tk8 [VAR=value...]: one tick, eval on (BUILDER_EVAL=1, publish on), against the fake queue, the fixture cache and Repo3's main
 tk8() { : > "$W/fk/log"; : > "$W/fk/sublog"; out=$(env BUILDER_PATH="$W/vp:$W/fk:$PATH" FKREAL=$RC FKLOG=$W/fk/log FKROWS=$W/p8.json FKW=$W FKGP=$GP \
@@ -611,7 +629,7 @@ ECDEP=$(nix-store -q --references "$ECD" 2> /dev/null | grep 'qb-evclodep-.*\.dr
 nix build --no-link "$ECDEP^out" >> "$W/fixture.log" 2>&1 && ECO=$(nix-store -q --outputs "$ECDEP") && nix copy --to "file://$W/hc" "$ECO" >> "$W/fixture.log" 2>&1 &&
   ( export XDG_CACHE_HOME=$W/fkst/x8; nix store sign --store "file://$W/hc" --key-file "$W/sk" "$ECO" ) >> "$W/fixture.log" 2>&1 || no "fixture 8: serve evclodep ($ECDEP)"
 # tick D: BUILDER_EVAL=dry, bearer present: the attr-only jobs take the eval path up to /begin, nothing begun or claimed
-print x > "$W/bearer"; r8 evok:1 ev2611:1 evin:1 evclo:1 evver:2 gate:0.65.0 pkg-config:2.3.0 evoff:1 > "$W/p8.json"
+print x > "$W/bearer"; r8 evok:1 ev2611:1 evin:1 evclo:1 evver:2 gate:0.65.0 pkg-config:2.3.0 evoff:1 evw6:1 > "$W/p8.json"
 tk8 BUILDER_EVAL=dry BUILDER_STATE=$W/st8d; print -r -- "$out" | sed 's/^/   8 /'; P8=$(<"$W/st8d/plan"); print -r -- "$P8" | sed 's/^/   p /'
 [[ $(print -r -- "$sl" | grep -c BEGIN) == 0 && $(claims) == 0 ]] && ok "eval dry: nothing begun, nothing claimed (bearer present)" || no "eval dry begun/claimed: $sl"
 dsub() { cat "$W/st8d/tried/"*-$1-*.submit 2> /dev/null; }
@@ -632,22 +650,24 @@ print -r -- "$P8" | grep -qx 'gate NO-RECIPE gate 0.65.0 (packages.gate at main 
 print -r -- "$P8" | grep -qx 'evver NO-RECIPE evver 2 (packages.evver at main is evver 1: not this job)' &&
   ok "NEG identity: the attr's version is not the job's target: NO-RECIPE" || no "evver: $(print -r -- "$P8" | grep evver)"
 print -r -- "$P8" | grep -qx 'evoff NO-RECIPE evoff 1' && ! print -r -- "$sl" | grep -q 'qb-evoff-' &&
-  ok "NEG an attr that evaluates on no allowed branch (only wave9): NO-RECIPE, never built" || no "evoff: $(print -r -- "$P8" | grep evoff)"
+  ok "NEG an attr that evaluates on no allowed branch (only wave5): NO-RECIPE, never built" || no "evoff: $(print -r -- "$P8" | grep evoff)"
+print -r -- "$P8" | grep -qx 'evw6 NO-RECIPE evw6 1' && ! print -r -- "$sl" | grep -q 'qb-evw6-' &&
+  ok "NEG an attr only on wave6, BUILDER_EVAL_BRANCHES the default (main 26.11): NO-RECIPE, never built" || no "evw6 default: $(print -r -- "$P8" | grep evw6)"
 # pre-submit-check.sh --eval on its own (the gate layer, not only the builder's pre-checks)
 ps8() { ( export GATE_STAMP_DIR=$W/st8ps GATE_PYTHON=$GP GATE_GREP_DIR=$GG GATE_CACHE=$HC GATE_FLAKE="git+file://$R3?ref=main"; bash "$W/gates/scripts/pre-submit-check.sh" "$@" ) 2>&1; }
 nix build --no-link "git+file://$R3?ref=main&rev=$M1#packages.x86_64-solaris.evin" >> "$W/fixture.log" 2>&1
 o8=$(ps8 --eval evin x86_64-solaris "$M1" main "$EVIN"); r=$?
 (( r == 1 )) && print -r -- "$o8" | grep -q "^  inputs: FAIL (not published: .*qb-evindep-" && print -r -- "$o8" | grep -q '^  eval: PASS' && ! ls "$W/st8ps" 2> /dev/null | grep -q . &&
   ok "NEG pre-submit --eval: an unpublished non-FOD input FAILs step inputs, no stamp" || no "pre-submit inputs: rc=$r $o8"
-EVOFFM=$(pe8 main "$W9" evoff); o8=$(ps8 --eval evoff x86_64-solaris "$W9" main "$EVOFF"); r=$?
+EVOFFM=$(pe8 main "$W5" evoff); o8=$(ps8 --eval evoff x86_64-solaris "$W5" main "$EVOFF"); r=$?
 (( r == 1 )) && print -r -- "$o8" | grep -q "is not on main" &&
-  ok "NEG pre-submit --eval: an off-branch commit FAILs the anchor (nix itself evaluates ?ref=main&rev=<wave9 commit> to ${EVOFFM:-nothing}$([[ $EVOFFM == "$EVOFF" ]] && print ': the same out'))" || no "pre-submit off-branch: rc=$r EVOFFM=$EVOFFM $o8"
-o8=$(ps8 --eval evoff x86_64-solaris "$W9" wave9 "$EVOFF"); r=$?
-(( r == 2 )) && print -r -- "$o8" | grep -q "not main or 26.11" && ok "NEG pre-submit --eval: branch wave9 refused (allow-list main, 26.11)" || no "pre-submit wave9: rc=$r $o8"
+  ok "NEG pre-submit --eval: an off-branch commit FAILs the anchor (nix itself evaluates ?ref=main&rev=<wave5 commit> to ${EVOFFM:-nothing}$([[ $EVOFFM == "$EVOFF" ]] && print ': the same out'))" || no "pre-submit off-branch: rc=$r EVOFFM=$EVOFFM $o8"
+o8=$(ps8 --eval evoff x86_64-solaris "$W5" wave5 "$EVOFF"); r=$?
+(( r == 2 )) && print -r -- "$o8" | grep -q "not main, 26.11 or wave6" && ok "NEG pre-submit --eval: branch wave5 refused (allow-list main, 26.11, wave6)" || no "pre-submit wave5: rc=$r $o8"
 o8=$(ps8 --eval evok x86_64-solaris "$M1" main "$(po7 pubok)"); r=$?
 (( r == 1 )) && print -r -- "$o8" | grep -q '^  eval: FAIL (a served row names this out' && ok "NEG pre-submit --eval of an out a served row names: FAIL (it goes --leaf)" || no "pre-submit rowed: rc=$r $o8"
-o8=$("$GP" "$W/gates/scripts/cs-fixture.py" --eval evoff x86_64-solaris "$W9" wave9 --cache-dir "$W/hc" 2>&1); r=$?
-(( r != 0 )) && print -r -- "$o8" | grep -q "branch 'wave9' is not one of main, 26.11" && ok "NEG cache-submit.py --eval: branch wave9 refused" || no "cache-submit wave9: $o8"
+o8=$("$GP" "$W/gates/scripts/cs-fixture.py" --eval evoff x86_64-solaris "$W5" wave5 --cache-dir "$W/hc" 2>&1); r=$?
+(( r != 0 )) && print -r -- "$o8" | grep -q "branch 'wave5' is not one of main, 26.11, wave6" && ok "NEG cache-submit.py --eval: branch wave5 refused" || no "cache-submit wave5: $o8"
 # tick E: publish + eval on. evindep is served now, so evin goes too. Each is proposed with its eval object; nothing is claimed.
 nix copy --to "file://$W/hc" "$EVDEP" >> "$W/fixture.log" 2>&1 && ( export XDG_CACHE_HOME=$W/fkst/x9; nix store sign --store "file://$W/hc" --key-file "$W/sk" "$EVDEP" ) >> "$W/fixture.log" 2>&1
 r8 evok:1 evin:1 ev2611:1 > "$W/p8.json"; tk8; print -r -- "$out" | sed 's/^/   E /'; print -r -- "$sl" | grep -v '^BODY' | sed 's/^/   s /'
@@ -667,14 +687,27 @@ r8 evok:1 > "$W/p8.json"
 tk8 BUILDER_EVAL=0 BUILDER_STATE=$W/st8z
 [[ $(print -r -- "$sl" | grep -c BEGIN) == 0 && $(claims) == 0 ]] && grep -qx 'evok NO-RECIPE evok 1' "$W/st8z/plan" &&
   ok "NEG BUILDER_EVAL=0 (the default): an attr-only job is NO-RECIPE as before, nothing submitted" || no "eval 0: $(<"$W/st8z/plan") $sl"
-tk8 BUILDER_EVAL=dry BUILDER_EVAL_BRANCHES="wave9 main" BUILDER_STATE=$W/st8w; r=$(<"$W/st8w/plan")
-has 'eval: branch wave9 is not main or 26.11: never evaluated' && print -r -- "$r" | grep -qx "evok EVAL evok 1 main $M2" &&
-  ok "NEG BUILDER_EVAL_BRANCHES naming wave9: wave9 is never evaluated (the allow-list is in the script, not only the option)" || no "branches wave9: $r $(print -r -- "$out" | grep 'eval:')"
-# an off-branch commit reaching the job (a pin naming main and a wave9 commit): refused before any build or eval of it
-r8 evoff:1 > "$W/p8.json"; mkdir -p "$W/st8o/pub"; printf 'evoff\tmain\t%s\n' "$W9" > "$W/st8o/pub/eval.evoff"
+tk8 BUILDER_EVAL=dry BUILDER_EVAL_BRANCHES="wave5 main" BUILDER_STATE=$W/st8w; r=$(<"$W/st8w/plan")
+has 'eval: branch wave5 is not main, 26.11 or wave6: never evaluated' && print -r -- "$r" | grep -qx "evok EVAL evok 1 main $M2" &&
+  ok "NEG BUILDER_EVAL_BRANCHES naming wave5: wave5 is never evaluated (the allow-list is in the script, not only the option)" || no "branches wave5: $r $(print -r -- "$out" | grep 'eval:')"
+# an off-branch commit reaching the job (a pin naming main and a wave5 commit): refused before any build or eval of it
+r8 evoff:1 > "$W/p8.json"; mkdir -p "$W/st8o/pub"; printf 'evoff\tmain\t%s\n' "$W5" > "$W/st8o/pub/eval.evoff"
 tk8 BUILDER_STATE=$W/st8o
-[[ $(print -r -- "$sl" | grep -c BEGIN) == 0 && $(claims) == 0 ]] && has "decline evoff: $W9 is not on main here" && [[ ! -e $EVOFF ]] &&
-  ok "NEG an off-branch commit (wave9's, named as main): declined, nothing built or submitted" || no "off-branch pin: $(print -r -- "$out" | grep evoff) $sl"
+[[ $(print -r -- "$sl" | grep -c BEGIN) == 0 && $(claims) == 0 ]] && has "decline evoff: $W5 is not on main here" && [[ ! -e $EVOFF ]] &&
+  ok "NEG an off-branch commit (wave5's, named as main): declined, nothing built or submitted" || no "off-branch pin: $(print -r -- "$out" | grep evoff) $sl"
+# fleet7: wave6 (infra's allow-list: main, 26.11, wave6) only when the host lists it; wave5 never, listed or not (onbranch)
+mkdir -p "$W/st8o5/pub"; printf 'evoff\twave5\t%s\n' "$W5" > "$W/st8o5/pub/eval.evoff"; tk8 BUILDER_EVAL_BRANCHES="main 26.11 wave5" BUILDER_STATE=$W/st8o5
+[[ $(print -r -- "$sl" | grep -c BEGIN) == 0 && $(claims) == 0 ]] && has "decline evoff: $W5 is not on wave5 here" && [[ ! -e $EVOFF ]] &&
+  ok "NEG a wave5 commit pinned at wave5, BUILDER_EVAL_BRANCHES listing wave5: declined (onbranch), nothing built" || no "wave5 pin: $(print -r -- "$out" | grep evoff) $sl"
+r8 evw6:1 > "$W/p8.json"; mkdir -p "$W/st8p6/pub"; printf 'evw6\twave6\t%s\n' "$W6" > "$W/st8p6/pub/eval.evw6"; tk8 BUILDER_STATE=$W/st8p6
+[[ $(print -r -- "$sl" | grep -c BEGIN) == 0 && $(claims) == 0 ]] && has "decline evw6: $W6 is not on wave6 here \(allowed: main 26.11\)" && [[ ! -e $EVW6 ]] &&
+  ok "NEG a wave6 commit pinned at wave6, wave6 not listed (the default): declined (onbranch), nothing built" || no "wave6 unlisted pin: $(print -r -- "$out" | grep evw6) $sl"
+W6B="main 26.11 wave6"; tk8 BUILDER_EVAL=dry BUILDER_EVAL_BRANCHES="$W6B" BUILDER_STATE=$W/st8w6
+[[ $(print -r -- "$sl" | grep -c BEGIN) == 0 && $(claims) == 0 ]] && grep -qx "evw6 EVAL evw6 1 wave6 $W6" "$W/st8w6/plan" && has 'dry run: would submit .*qb-evw6-' &&
+  cat "$W/st8w6/tried/"*-evw6-*.submit 2> /dev/null | grep '^  begin body ' | grep -q "\"eval\":{\"attr\":\"evw6\",\"system\":\"x86_64-solaris\",\"commit\":\"$W6\",\"branch\":\"wave6\",\"flake_nar_hash\":\"$NHW6\"}" &&
+  grep -q "drv-closure${T}eval:evw6:x86_64-solaris:$W6:wave6" "$W/st8w6/stamps/"*.ok &&
+  ok "wave6 listed: an attr only on wave6 is EVAL at wave6's head, pre-submit --eval stamps it, cache-submit plans the body with branch wave6 (dry: nothing begun)" ||
+  no "wave6 listed: $(cat "$W/st8w6/plan" 2>&1) $(print -r -- "$out" | grep evw6)"
 if [[ -n ${MAIN_BUILDER:-} ]]; then r8 evok:1 > "$W/p8.json"; S0=$S S=$MAIN_BUILDER; tk8 BUILDER_STATE=$W/st8old; S=$S0
   [[ $(print -r -- "$sl" | grep -c BEGIN) == 0 && $(claims) == 0 ]] && grep -q '^evok NO-RECIPE' "$W/st8old/plan" &&
     ok "NEG origin/main's builder ($MAIN_BUILDER) never takes an eval job, whatever BUILDER_EVAL says" || no "main builder eval: $(cat "$W/st8old/plan" 2>&1) $sl"
@@ -693,11 +726,15 @@ r8 gate:0.65.0 > "$W/p8.json"; S0=$S S=$W/mut8a.sh; tk8 BUILDER_EVAL=dry BUILDER
 S0=$S S=$W/mut8b.sh; tk8 BUILDER_EVAL=dry BUILDER_STATE=$W/st8mb; S=$S0
 ! cmp -s "$W/mut8a.sh" "$W/mut8b.sh" && has 'dry run: would submit .*qb-gate-' &&
   ok "NEG control of the control: a mutant without BOTH identity checks would submit gate as illumos-gate-proto (so the checks above can fail)" || no "mutant b: $(print -r -- "$out" | grep gate)"
+r8 evw6:1 > "$W/p8.json"; mu8 "$S" "$W/mut8w.sh" '[[ $2 == @(main|26.11|wave6) &&' '[[ $2 == @(main|26.11) &&'
+S0=$S S=$W/mut8w.sh; tk8 BUILDER_EVAL=dry BUILDER_EVAL_BRANCHES="$W6B" BUILDER_STATE=$W/st8w6m; S=$S0
+! cmp -s "$S" "$W/mut8w.sh" && grep -qx "evw6 EVAL evw6 1 wave6 $W6" "$W/st8w6m/plan" && has "decline evw6: $W6 is not on wave6 here" && ! has 'would submit .*qb-evw6-' &&
+  ok "NEG mutant whose onbranch lacks wave6: the same listed tick declines evw6 (so the wave6 pass above is onbranch's)" || no "mutant w6: $(print -r -- "$out" | grep evw6)"
 # the second vote: `solnix-builder vote <attr> <commit> <branch> <NarHash> [pname]` builds that (attr, commit) here and completes
 # the job with its NarHash and commit, only if the NarHash is the proposal's. The proposal's NarHash: evvote's out is one file.
 print -r -- "evvote-${W##*/}" > "$W/evvote.txt"; chmod 444 "$W/evvote.txt"; nix-store --dump "$W/evvote.txt" > "$W/evvote.nar"
 VH=sha256:$(nix-hash --type sha256 --flat --base32 "$W/evvote.nar"); VO=$(pe8 main "$M1" evvote)
-vote8() { : > "$W/fk/log"; out=$(env BUILDER_PATH="$W/fk:$PATH" FKREAL=$RC FKLOG=$W/fk/log BUILDER_API=http://queue.invalid/q BUILDER_CACHE=$HC \
+vote8() { : > "$W/fk/log"; out=$(env ${VBR:+"BUILDER_EVAL_BRANCHES=$VBR"} BUILDER_PATH="$W/fk:$PATH" FKREAL=$RC FKLOG=$W/fk/log BUILDER_API=http://queue.invalid/q BUILDER_CACHE=$HC \
   BUILDER_FLAKE="git+file://$R3?ref=main" BUILDER_AGENT=qbvoter BUILDER_EVAL=${VEVAL:-1} BUILDER_STATE=${VST:-$W/st8v} ksh93 "$S" vote "$@" 2>&1); c=$(<"$W/fk/log"); }
 print x > "$W/bearer"; [[ ! -e $VO ]] || no "fixture 8: $VO exists before the vote"
 vote8 evvote "$M1" main "$VH" evvote; print -r -- "$out" | sed 's/^/   V /'
@@ -713,12 +750,167 @@ print -r -- "$c" | grep '/complete' | grep -q '"independence":"same-host"' && [[
   ok "same-host vote (aarch64: dixa): the completion carries independence same-host and the commit" || no "same-host vote: $out $c"
 vote8 evvote "$M1" main sha256:0000000000000000000000000000000000000000000000000000 evvote
 has 'the proposal says sha256:0000.*no vote' && [[ $(claims) == 0 ]] && ok "NEG vote: a NarHash other than the proposal's: no vote, no claim" || no "vote mismatch: $out"
-vote8 evoff "$W9" main "$VH"
-has "vote evoff: $W9 is not on main" && [[ $(claims) == 0 && ! -e $EVOFF ]] && ok "NEG vote: an off-branch commit: no vote, nothing built" || no "vote off-branch: $out"
-vote8 evvote "$M1" wave9 "$VH"
-has 'is not on wave9' && [[ $(claims) == 0 ]] && ok "NEG vote: branch wave9: no vote" || no "vote wave9: $out"
+vote8 evoff "$W5" main "$VH"
+has "vote evoff: $W5 is not on main" && [[ $(claims) == 0 && ! -e $EVOFF ]] && ok "NEG vote: an off-branch commit: no vote, nothing built" || no "vote off-branch: $out"
+vote8 evvote "$M1" wave5 "$VH"
+has 'is not on wave5' && [[ $(claims) == 0 ]] && ok "NEG vote: branch wave5: no vote" || no "vote wave5: $out"
+VH6=$(nix-store -q --hash "$EVW6" 2> /dev/null); vote8 evw6 "$W6" wave6 "$VH6" evw6
+has "vote evw6: $W6 is not on wave6 \(allowed: main 26.11\): no vote" && [[ $(claims) == 0 ]] && ok "NEG vote: a wave6 commit, wave6 not listed: no vote" || no "vote wave6 unlisted: $out"
+VBR=$W6B VEVAL=dry vote8 evw6 "$W6" wave6 "$VH6" evw6; VBR= VEVAL=1
+[[ $VH6 == sha256:* ]] && has "dry run: BUILDER_EVAL=dry: would claim evw6 1 and complete it with commit $W6" && [[ $(claims) == 0 ]] &&
+  ok "vote: a wave6 commit, wave6 listed: reproduced, would complete with commit $W6 (dry: no claim)" || no "vote wave6 listed: $out"
 vote8 gate "$M1" main "$VH" gate
 has 'vote gate: at .* it is illumos-gate-proto, not gate: no vote' && [[ $(claims) == 0 ]] && ok "NEG vote: the job's pname is not the attr's (gate -> illumos-gate-proto): no vote" || no "vote gate: $out"
+# --- 10. fleet6: sshsig queue auth (R7), retries signed anew (R8), the egress registration (s3). Each request is checked
+# by rebuilding the spec message HERE from what was sent ("<METHOD>\n<path>\n<sha256 hex of the body>\n<ts>\n", path = the
+# URL's) and verifying its X-Solnix-Sig (base64 of the armored SSHSIG) with ssh-keygen -Y verify against the test key.
+SK=$(whence -p ssh-keygen); rm -f "$W/qkey" "$W/qkey.pub"; ssh-keygen -q -t ed25519 -N '' -C qb-queue -f "$W/qkey" < /dev/null
+print -r -- "qb $(cut -d' ' -f1,2 "$W/qkey.pub")" > "$W/qsigners"; print "{\"rows\":[$(row good 1 outdated)]}" > "$W/g9.json"
+QA=http://queue.invalid/api/v1/build-queue	# the production path shape: /api/v1/build-queue/<id>/heartbeat
+t9() { typeset s=$1; shift; find "$W/rq" -depth -delete 2> /dev/null; mkdir -p "$W/rq"; : > "$W/fk/log"
+  out=$(env BUILDER_PATH="$W/fk:$PATH" FKREAL=$RC FKLOG=$W/fk/log FKREQ=$W/rq FKROWS=$W/g9.json BUILDER_API=$QA BUILDER_RECIPES=file://$W/g.tsv \
+    BUILDER_CACHE=file://$W/cache BUILDER_FLAKE=$F BUILDER_LOAD_MAX=1000 BUILDER_STATE=$W/st9 BUILDER_PUBLISH_KEY=$W/qkey BUILDER_SSH_KEYGEN=$SK \
+    BUILDER_RETRY_WAIT=1 BUILDER_AGENT=qbhost BUILDER_PUBLISH_ID=qbhost "$@" ksh93 "$s" "$t9c" 2>&1); c=$(<"$W/fk/log"); }
+t9c=once
+hv() { tr -d '\r' < "$1/hdr" 2> /dev/null | sed -n "s/^$2: //p"; }	# hv <request> <header>
+rqs() { typeset i=0; while (( (i += 1) <= $(cat "$W/rq/n" 2> /dev/null || print 0) )); do print -r -- "$W/rq/$i"; done; }
+sigok() {	# sigok <request>: its X-Solnix-Sig verifies over the spec message rebuilt from its URL path, body and X-Solnix-Timestamp
+  typeset u=$(<"$1/url") ts=$(hv "$1" X-Solnix-Timestamp); [[ $ts == +([0-9]) ]] || return 1
+  printf 'POST\n%s\n%s\n%s\n' "/${u#http://*/}" "$(digest -a sha256 "$1/body")" "$ts" > "$1/msg"
+  hv "$1" X-Solnix-Sig | openssl base64 -d -A > "$1/sig" 2> /dev/null
+  ssh-keygen -Y verify -f "$W/qsigners" -I qb -n solnix-build-queue -s "$1/sig" < "$1/msg" > /dev/null 2>&1; }
+paths9() { for r in $(rqs); do u=$(<"$r/url"); u=${u#$QA}; print -n "${u#http://queue.invalid/api/v1} "; done; }
+allsig() { typeset r n=0; for r in $(rqs); do sigok "$r" && [[ -z $(hv "$r" X-Solnix-Build) ]] || return 1; n=$((n + 1)); done; (( n >= 3 )); }
+print BEARER-qb9 > "$W/bearer"
+t9 "$S" BUILDER_QUEUE_AUTH=sshsig; print -r -- "$out" | sed 's/^/   9 /'
+[[ $(paths9) == '/claim /42/heartbeat /42/complete ' ]] && allsig && has 'complete 42 -> 200' &&
+  ok "sshsig: claim, heartbeat and complete each carry X-Solnix-Sig + X-Solnix-Timestamp over the spec bytes (path /api/v1/build-queue/...), no bearer" ||
+  no "sshsig: $(paths9) $(for r in $(rqs); do print -n "[$(cat "$r/hdr" 2> /dev/null | cut -c1-40 | tr '\n' '|')] "; done)"
+[[ $(<"$W/rq/1/body") == *'"pnames":["good"]'* ]] && ! grep -q BEARER-qb9 "$W"/rq/*/hdr && ok "sshsig: the bearer file is never read (its value is in no request)" || no "sshsig sent the bearer"
+mu8 "$S" "$W/mut9m.sh" "qs=\$(printf '%s\\n%s\\n%s\\n%s\\n'" "qs=\$(printf '%s\\n%s\\n%s\\n%s'"
+t9 "$W/mut9m.sh" BUILDER_QUEUE_AUTH=sshsig
+! allsig && [[ -n $(hv "$W/rq/1" X-Solnix-Sig) ]] && ok "NEG mutant signing the message without its final newline: refused by the check (the check sees the bytes)" || no "mutant message passed"
+rm -f "$W/bearer"; t9 "$S" BUILDER_QUEUE_AUTH=sshsig
+[[ $(paths9) == '/claim /42/heartbeat /42/complete ' ]] && allsig && ok "sshsig with no bearer file at all: the key is the credential, claimed and completed" || no "sshsig no bearer: $(paths9)"
+t9 "$S" BUILDER_QUEUE_AUTH=sshsig BUILDER_PUBLISH_KEY=$W/nokey
+[[ ! -e $W/rq/n ]] && has 'dry run: no .*nokey' && ok "NEG sshsig, key unreadable: a dry run, nothing sent" || no "sshsig no key: $(paths9) $(print -r -- "$out" | grep -i 'dry run' | head -2)"
+print BEARER-qb9 > "$W/bearer"; t9 "$S" BUILDER_QUEUE_AUTH=bearer
+[[ $(paths9) == '/claim /42/heartbeat /42/complete ' && $(hv "$W/rq/2" X-Solnix-Build) == BEARER-qb9 ]] && ! egrep -qi 'X-Solnix-(Sig|Timestamp)' "$W"/rq/*/hdr &&
+  ok "bearer: X-Solnix-Build on each request, no X-Solnix-Sig or X-Solnix-Timestamp" || no "bearer: $(cat "$W"/rq/*/hdr 2> /dev/null | cut -c1-30 | tr '\n' '|')"
+t9 "$S"; [[ $(hv "$W/rq/1" X-Solnix-Build) == BEARER-qb9 && -z $(hv "$W/rq/1" X-Solnix-Sig) ]] && ok "the default (no BUILDER_QUEUE_AUTH): bearer, as before" || no "default auth"
+t9 "$S" BUILDER_QUEUE_AUTH=both; n=0; for r in $(rqs); do sigok "$r" && [[ $(hv "$r" X-Solnix-Build) == BEARER-qb9 ]] && n=$((n + 1)); done
+(( n == 3 )) && ok "both (the control for the two checks above): each request has the bearer AND a valid signature" || no "both: $n of 3"
+# R8: a heartbeat answered 503 is retried with a new X-Solnix-Timestamp, so a new signature (ed25519 is deterministic: the
+# same message gives the same bytes, which infra refuses as a replay); a mutant that keeps the ts resends the same bytes
+rt9() { : > "$W/fail9"; t9 "$1" BUILDER_QUEUE_AUTH=sshsig FKFAIL=$W/fail9; h1=$W/rq/2 h2=$W/rq/3; }
+rt9 "$S"; print -r -- "$out" | grep -E 'heartbeat|retry' | sed 's/^/   R /'
+[[ $(paths9) == '/claim /42/heartbeat /42/heartbeat /42/complete ' ]] && sigok "$h1" && sigok "$h2" && (( $(hv "$h2" X-Solnix-Timestamp) > $(hv "$h1" X-Solnix-Timestamp) )) &&
+  [[ $(hv "$h1" X-Solnix-Sig) != "$(hv "$h2" X-Solnix-Sig)" ]] && has 'queue POST /42/heartbeat -> 503: retry 1 in 1 s, signed anew' && has 'heartbeat 42 -> 200' &&
+  ok "R8: a 503 heartbeat is retried signed anew: a later ts and another signature, both valid" || no "retry: $(paths9) $(print -r -- "$out" | grep -E 'retry|heartbeat')"
+mu8 "$S" "$W/mut9t.sh" 'while aqs=$(printf '"'%(%s)T'"' now); (( aqs <= aqt )); do sleep 1; done; aqt=$aqs' '(( aqt )) || aqt=$(printf '"'%(%s)T'"' now)'
+rt9 "$W/mut9t.sh"
+[[ $(paths9) == '/claim /42/heartbeat /42/heartbeat /42/complete ' && $(hv "$h1" X-Solnix-Sig) == "$(hv "$h2" X-Solnix-Sig)" ]] && cmp -s "$h1/hdr" "$h2/hdr" &&
+  ok "NEG mutant keeping the ts: the retry is byte-identical to the first try (the replay R8 refuses), so the check above can fail" || no "mutant ts: $(paths9)"
+if [[ -n ${PRESIG_BUILDER:-} ]]; then t9 "$PRESIG_BUILDER" BUILDER_QUEUE_AUTH=sshsig
+  ! allsig && grep -q BEARER-qb9 "$W/rq/1/hdr" && ok "NEG a builder before this change ($PRESIG_BUILDER), asked for sshsig: bearer only, no signature (fails the check)" || no "presig builder passed"
+else print "SKIP sshsig negative control: PRESIG_BUILDER unset (not counted as a pass)"; fi
+# s3 egress: exactly six keys; sig = armored SSHSIG (namespace solnix-builder) over the four lines; the first try's ip is
+# TEST-NET-1, a 400 gives `seen`, re-signed once; the address is kept for the next run; a failure never fails the builder
+egok() {	# egok <request> <ip>: six keys, the values, and the signature over the four-line message
+  typeset b=$1/body ts; [[ $(jq -c 'keys' "$b") == '["ip","keyid","kind","sig","ts","version"]' ]] || return 1
+  [[ $(jq -r '[.version, .kind, .keyid, .ip, (.ts|type)] | join(" ")' "$b") == "1 builder_egress qbhost $2 number" ]] || return 1
+  ts=$(jq -r .ts "$b"); jq -j .sig "$b" > "$1/sig"; [[ $(head -1 "$1/sig") == '-----BEGIN SSH SIGNATURE-----' ]] || return 1
+  printf 'solnix-builder-egress-v1\n%s\n%s\n%s\n' qbhost "$2" "$ts" | ssh-keygen -Y verify -f "$W/qsigners" -I qb -n solnix-builder -s "$1/sig" > /dev/null 2>&1; }
+e9() { typeset r; t9c=egress; t9 "$1" BUILDER_EGRESS=1 BUILDER_STATE=$W/st9e "${@:2}"; r=$?; t9c=once; return $r; }
+mkdir -p "$W/st9e"; e9 "$S"; r=$?; print -r -- "$out" | sed 's/^/   E /'
+(( r == 0 )) && [[ $(paths9) == '/builder/egress /builder/egress ' ]] && egok "$W/rq/1" 192.0.2.1 && egok "$W/rq/2" 198.51.100.7 &&
+  [[ $(cut -d' ' -f2 "$W/st9e/egress") == 198.51.100.7 ]] && has 'egress: qbhost 198.51.100.7 -> 200 .*"registered"' &&
+  ok "egress: six keys, signed over the four lines; 192.0.2.1 -> 400 seen 198.51.100.7 -> signed anew -> 200 registered, logged and kept" || no "egress: $(paths9) $out"
+e9 "$S"; [[ $(paths9) == '/builder/egress ' ]] && egok "$W/rq/1" 198.51.100.7 && ok "egress again: the kept address first, one request" || no "egress 2: $(paths9)"
+e9 "$S" FKE500=1; r=$?; (( r == 0 )) && has 'egress: qbhost 198.51.100.7 -> 500' && [[ $(paths9) == '/builder/egress ' ]] && ok "egress answered 500: logged, rc 0 (never fails the builder)" || no "egress 500: rc $r $out"
+e9 "$S" BUILDER_EGRESS=0; [[ ! -e $W/rq/n ]] && ok "NEG BUILDER_EGRESS=0 (not an identified builder): nothing sent" || no "egress off sent $(paths9)"
+mu8 "$S" "$W/mut9e.sh" 'ts: $ts, sig: $sig}' 'ts: $ts, sig: $sig, agent: "x"}'
+e9 "$W/mut9e.sh"; ! egok "$W/rq/1" 198.51.100.7 && [[ $(jq 'keys | length' "$W/rq/1/body") == 7 ]] && ok "NEG mutant with a seventh key: the six-key check fails" || no "mutant egress passed"
+grep -q 'egress; egl=' "$S" && ok "the SMF loop registers egress at start and every BUILDER_EGRESS_SECS" || no "no egress in the loop"
+rm -f "$W/bearer"
+# --- 9. fleet5: a job listing several outputs of one drv (gcc 15.3.0: out and -lib; wave6: out and -debug). Each unserved one
+# is first-published as its own submission, deps first; the job is claimed once every listed out is served, and completed once
+# with the primary (the default output). Shapes: mlib out -> lib (gcc); mdev out -> lib, dev -> out (a later pass); mdbg out +
+# a -debug with no refs; mserv -lib served already; mpri out served already; mrej -lib fails the gate (S4 names a host);
+# msib -debug served from ANOTHER build (another NarHash); mprop -lib proposed (tier 1), approved on the next tick.
+mkdir -p "$W/mflake"; cat > "$W/mflake/flake.nix" <<MF
+{ outputs = { self }: let
+    m = n: o: s: derivation { name = "qb-\${n}-${W##*/}"; system = "x86_64-solaris"; builder = "/usr/bin/bash"; outputs = o;
+      args = [ "-c" "echo building \${n}; \${s}" ]; };
+    T = "${W##*/}";
+  in { packages.x86_64-solaris = {
+    mlib = m "mlib" [ "out" "lib" ] "echo mlib-lib-\${T} > \$lib; echo \$lib > \$out";
+    mdev = m "mdev" [ "out" "lib" "dev" ] "echo mdev-lib-\${T} > \$lib; echo \$lib > \$out; echo \$out > \$dev";
+    mdbg = m "mdbg" [ "out" "debug" ] "echo mdbg-\${T} > \$out; echo mdbg-debug-\${T} > \$debug";
+    mserv = m "mserv" [ "out" "lib" ] "echo mserv-lib-\${T} > \$lib; echo \$lib > \$out";
+    mpri = m "mpri" [ "out" "lib" ] "echo mpri-\${T} > \$out; echo mpri-lib-\${T} > \$lib";
+    mrej = m "mrej" [ "out" "lib" ] "echo mrej-lib-\${T} built on floki > \$lib; echo \$lib > \$out";
+    msib = m "msib" [ "out" "debug" ] "echo msib-\${T} > \$out; echo msib-debug-\${T} > \$debug";
+    mprop = m "mprop" [ "out" "lib" ] "echo mprop-lib-\${T} > \$lib; echo \$lib > \$out";
+  }; }; }
+MF
+MFL=path:$W/mflake; M9="mlib mdev mdbg mserv mpri mrej msib mprop"
+nix eval --json "$MFL#packages.x86_64-solaris" --apply 'builtins.mapAttrs (n: d: builtins.listToAttrs (map (o: { name = o; value = d.${o}.outPath; }) d.outputs))' > "$W/mouts.json" 2> "$W/meval.err" ||
+  no "fixture 9: $(tail -3 "$W/meval.err")"
+mo9() { jq -r --arg a "$1" --arg o "${2:-out}" '.[$a][$o]' "$W/mouts.json"; }
+for a in $M9; do for x in $(jq -r --arg a "$a" '.[$a] | keys[]' "$W/mouts.json"); do rec $a 1 y "$(mo9 $a $x)"; done; done >> "$W/p.tsv"
+cp "$W/p.tsv" "$W/hc/registry/recipes.tsv"
+ML=$(mo9 mlib lib) MO9=$(mo9 mlib) DL=$(mo9 mdev lib) DO=$(mo9 mdev) DD=$(mo9 mdev dev) GO=$(mo9 mdbg) GD=$(mo9 mdbg debug) SL=$(mo9 mserv lib) SO=$(mo9 mserv)
+PL=$(mo9 mpri lib) PO=$(mo9 mpri) RL=$(mo9 mrej lib) RO=$(mo9 mrej) IO=$(mo9 msib) ID=$(mo9 msib debug) QL=$(mo9 mprop lib) QO=$(mo9 mprop)
+# served by someone else before any tick: mserv's -lib and mpri's out (signed as published); msib's -debug with another NarHash
+nix build --no-link "$MFL#packages.x86_64-solaris.mserv^*" "$MFL#packages.x86_64-solaris.mpri^*" >> "$W/fixture.log" 2>&1 &&
+  nix copy --to "file://$W/hc" "$SL" "$PO" >> "$W/fixture.log" 2>&1 &&
+  ( export XDG_CACHE_HOME=$W/fkst/x9; nix store sign --store "file://$W/hc" --key-file "$W/sk" "$SL" "$PO" ) >> "$W/fixture.log" 2>&1 &&
+  [[ $DD == *-qb-mdev-*-dev && $ML == *-qb-mlib-*-lib && -n $(sv7 "$SL") && -n $(sv7 "$PO") ]] || no "fixture 9: ML=$ML DD=$DD $(tail -2 "$W/fixture.log")"
+printf 'StorePath: %s\nNarHash: sha256:%s\n' "$ID" 0000000000000000000000000000000000000000000000000000 > "$W/hc/$(print -r -- "${ID#/nix/store/}" | cut -c1-32).narinfo"
+bg9() { print -r -- "$sl" | grep -c "^BEGIN $1 "; }	# /begin count for exactly that path
+ln9() { print -r -- "$sl" | grep -n "^BEGIN $1 " | head -1 | cut -d: -f1; }	# its /begin's line in the submitter log
+dn9() { print -r -- "$c" | grep '/complete' | grep -c "\"status\":\"done\",\"version\":\"1\",\"nar_hash\":\"$(sv7 "$1")\",\"store_path\":\"$1\""; }
+tk9() { tk7 FKROWS=$W/p9.json BUILDER_FLAKE=$MFL BUILDER_STATE=$W/st9 "$@"; }
+print x > "$W/bearer"
+# NEG control: origin/main's builder on the gcc shape picks out, builds, waits for -lib every tick, never offers -lib
+if [[ -n ${F5_BUILDER:-} ]]; then S0=$S S=$F5_BUILDER; w9="mlib: $MO9 waits for its references to be served first: ${ML#/nix/store/}"
+  r7 mlib > "$W/p9.json"; tk9 BUILDER_STATE=$W/st9o; o1=$out s1=$sl c1=$(claims); tk9 BUILDER_STATE=$W/st9o; o2=$out s2=$sl c2=$(claims)
+  r7 mpri > "$W/p9.json"; tk9 BUILDER_STATE=$W/st9p BUILDER_PUBLISH=0; c3=$(cl7 mpri); S=$S0
+  print -r -- "$o2" | grep ' mlib' | sed 's/^/   9o /'
+  [[ $(print -r -- "$o1" | grep -cF "$w9") == 1 && $(print -r -- "$o2" | grep -cF "$w9") == 1 && -z $s1$s2 && $c1 == 0 && $c2 == 0 ]] &&
+    ok "NEG origin/main's builder ($F5_BUILDER) loops on the gcc shape: each tick builds out and waits for -lib, never submits -lib, never claims" ||
+    no "F5_BUILDER mlib: $(print -r -- "$o1" "$o2" | grep ' mlib') $s1 $s2"
+  (( c3 == 1 )) && ok "NEG origin/main's builder without a publish key claims mpri though its -lib is unserved (the gap: infra claims once every listed out is served)" || no "F5_BUILDER mpri: $c3 claims"
+else print "SKIP origin/main multi-output negative control: F5_BUILDER unset (not counted as a pass)"; fi
+r7 mpri mlib > "$W/p9.json"; tk9 BUILDER_STATE=$W/st9z BUILDER_PUBLISH=0
+[[ -z $sl && $(claims) == 0 ]] && has "decline mpri: $PO is served, its sibling output\(s\) ${PL#/nix/store/} not" && has "decline mlib: $MO9 is not served \(a first build" &&
+  ok "NEG a host that may not publish declines a job whose drv has a listed out unserved (mpri: out served, -lib not): no claim" || no "publish 0: $(print -r -- "$out" | grep -E ' (mpri|mlib)') $sl"
+r7 $M9 > "$W/p9.json"; tk9; print -r -- "$out" | sed 's/^/   9 /'; print -r -- "$sl" | grep -v '^BODY' | sed 's/^/   s /'
+[[ $(bg9 "$ML") == 1 && $(bg9 "$MO9") == 1 ]] && (( $(ln9 "$ML") < $(ln9 "$MO9") )) && [[ $(cl7 mlib) == 1 && $(dn9 "$MO9") == 1 ]] &&
+  ok "the gcc shape (out references -lib): -lib submitted first, then out, then one claim" || no "mlib: $(print -r -- "$out" | grep ' mlib')"
+[[ $(bg9 "$DL") == 1 && $(bg9 "$DO") == 1 && $(bg9 "$DD") == 1 ]] && (( $(ln9 "$DL") < $(ln9 "$DO") && $(ln9 "$DO") < $(ln9 "$DD") )) &&
+  has "mdev: $DD waits for its references to be served first: ${DO#/nix/store/}" && [[ $(cl7 mdev) == 1 && $(dn9 "$DO") == 1 ]] &&
+  ok "three outputs (dev -> out -> lib): dev waits in the first pass, lib then out go, then dev in a later pass of the same tick; one claim" || no "mdev: $(print -r -- "$out" | grep ' mdev')"
+[[ $(bg9 "$GD") == 1 && $(bg9 "$GO") == 1 && $(cl7 mdbg) == 1 && $(dn9 "$GO") == 1 ]] && ok "out + a -debug that references nothing: both published, one claim" || no "mdbg: $(print -r -- "$out" | grep ' mdbg')"
+[[ $(bg9 "$SL") == 0 && $(bg9 "$SO") == 1 && $(cl7 mserv) == 1 && $(dn9 "$SO") == 1 ]] && ! print -r -- "$sl" | grep -q "paths=$SL" &&
+  ok "-lib already served by someone else: only out is submitted, one claim" || no "mserv: $(print -r -- "$out" | grep ' mserv')"
+[[ $(bg9 "$PL") == 1 && $(bg9 "$PO") == 0 && $(cl7 mpri) == 1 && $(dn9 "$PO") == 1 ]] && ! print -r -- "$sl" | grep -q "paths=$PO" &&
+  ok "out already served by someone else: only -lib is submitted, then one claim" || no "mpri: $(print -r -- "$out" | grep ' mpri')"
+! print -r -- "$c" | grep '/complete' | egrep -q '"store_path":"[^"]*-(lib|debug|dev)"' && [[ $(dn9 "$MO9") == 1 && $(dn9 "$DO") == 1 && $(dn9 "$PO") == 1 ]] && (( $(ln9 "$ML") < $(ln9 "$MO9") )) &&
+  ok "each completion names the primary (out) and its served NarHash, though -lib was published first (mlib), dev last (mdev), out not at all (mpri)" || no "primary: $(print -r -- "$c" | grep '/complete')"
+[[ $(bg9 "$RL") == 0 && $(bg9 "$RO") == 0 && $(cl7 mrej) == 0 ]] && ! print -r -- "$sl" | grep -q "paths=$RO" && has 'decline mrej: pre-submit-check.sh --leaf .*-lib rc=1 \([a-z,]*gate' &&
+  ls "$W/st9/tried/" | grep -q 'qb-mrej-.*\.drv\^lib\.pub$' && ok "NEG a sibling refused at the gate (-lib names a host): the job declines, out is never offered, no claim" || no "mrej: $(print -r -- "$out" | grep ' mrej')"
+[[ -z $(print -r -- "$sl" | grep 'qb-msib-') && $(cl7 msib) == 0 ]] && has "decline msib: cache.solnix.io serves its sibling $ID with sha256:0{52}, this host built sha256:" &&
+  ls "$W/st9/tried/" | grep -q 'qb-msib-.*\.drv\^out\.pub$' && ok "NEG a served sibling of another build (-debug, another NarHash): out is never submitted, memo'd, no claim" || no "msib: $(print -r -- "$out" | grep ' msib')"
+[[ $(bg9 "$QL") == 1 && $(bg9 "$QO") == 0 && $(cl7 mprop) == 0 && -s $W/st9/pub/${QL##*/} ]] && has "mprop: $QL is proposed \(sid-mprop-lib\)" &&
+  has "mprop: $QO waits for its references to be served first: ${QL#/nix/store/}" && ok "tier 1: -lib proposed, out waits for it (not submitted), no claim, the proposal kept" || no "mprop: $(print -r -- "$out" | grep ' mprop')"
+# tick 9B: the -lib proposal is approved; mrej's refusal stands
+: > "$W/fk/approve"; r7 mrej mprop > "$W/p9.json"; tk9; print -r -- "$out" | sed 's/^/   9B /'; rm -f "$W/fk/approve"
+[[ $(print -r -- "$sl" | grep -c 'status=sid-mprop-lib') == 1 && $(bg9 "$QL") == 0 && $(bg9 "$QO") == 1 && $(cl7 mprop) == 1 && $(dn9 "$QO") == 1 && ! -e $W/st9/pub/${QL##*/} ]] &&
+  ok "the approved -lib proposal: polled by id on the next tick, then out submitted, one claim" || no "mprop B: $(print -r -- "$out" | grep ' mprop') $sl"
+! has 'mrej: first build of' && has "decline mrej: $RL is not served, and its first publish was refused here" && [[ $(cl7 mrej) == 0 ]] && ! print -r -- "$sl" | grep -q 'qb-mrej-' &&
+  ok "a refused sibling: the next tick declines the job before any build" || no "mrej B: $(print -r -- "$out" | grep ' mrej')"
 rm -f "$W/bearer"
 (( bad )) && print "RESULT: FAIL" || print "RESULT: PASS"
 exit $bad

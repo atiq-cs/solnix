@@ -18,6 +18,8 @@
 #
 # The bearer: one shared X-Solnix-Build secret (infra 2026-10-28), sops solnix secrets/build-queue-bearer.yaml key
 # `build-queue-bearer`. It is NEVER in the store: the operator places it, root-only (see docs/community-features.md).
+# queueAuth (fleet6, infra R7/R8): sshsig signs each queue request with the host's enrolled key instead. The bearer is
+# deprecated and goes once every host signs. An identified builder (solnix.builder.enable) also registers its egress address.
 { config, lib, pkgs, solnixSystem, ... }:
 
 let
@@ -34,6 +36,8 @@ let
     lib.elem r [ "scripts" "pkgs" "pkgs/illumos" "pkgs/illumos/bootstrap-exempt.tsv" ] || lib.elem r (map (f: "scripts/" + f)
       [ "cache-submit.py" "pre-submit-check.sh" "drv-gate.sh" "publish-gate.sh" "gate-checks.py" "not-for-cache.tsv" "gate2-exemptions.tsv" ]); };
   pub = cfg.publish != "off" || cfg.evalAnchored != "off";
+  # an identified builder whose service can read the identity key (the zone's untrusted user cannot): it signs and registers
+  idk = a.builder && config.solnix.builder.isolation == "none";
   ded = cfg.profile == "dedicated";
   opp = cfg.profile == "opportunistic";
   str = v: if v == null then "auto" else toString v;
@@ -51,10 +55,12 @@ let
     BUILDER_WSWEEP = "${./solnix-wsweep.ksh}";   # stale fixed build dirs of killed builds (wave4)
     BUILDER_PUBLISH = { off = "0"; on = "1"; dry = "dry"; }.${cfg.publish};
     BUILDER_EVAL = { off = "0"; on = "1"; dry = "dry"; }.${cfg.evalAnchored};
+    BUILDER_QUEUE_AUTH = cfg.queueAuth; BUILDER_SSH_KEYGEN = "${s.openssh}/bin/ssh-keygen";
+    BUILDER_EGRESS = if idk then "1" else "0";   # register the egress address (identified builders only)
+    BUILDER_PUBLISH_KEY = config.solnix.builder.identityKeyFile; BUILDER_PUBLISH_ID = cfg.agentId;   # publish, sshsig, egress
   } // lib.optionalAttrs pub {
     BUILDER_GATES = "${gates}"; BUILDER_PYTHON = "${s.python3}/bin/python3";
     GATE_GREP_DIR = "${s.gnugrep}/bin";   # publish-gate.sh needs GNU grep (-a -b -o); /usr/bin/grep comes first on its PATH
-    BUILDER_PUBLISH_KEY = config.solnix.builder.identityKeyFile; BUILDER_PUBLISH_ID = cfg.agentId;
   };
   cap = lib.optionalString (cfg.cpuCap != null) "project.cpu-cap=(privileged,${toString cfg.cpuCap},deny)";
 in
@@ -103,13 +109,25 @@ in
         completed only after it is promoted and an 8UNr-only client verified it. on needs publish on (the key and gates);
         dry: every step up to the signed /begin. Off until infra's evaluator is live.
       ''; };
+    queueAuth = lib.mkOption { type = lib.types.enum [ "bearer" "both" "sshsig" ]; default = if idk then "both" else "bearer";
+      description = ''
+        How queue requests (claim, heartbeat, complete) authenticate to builders.solnix.io. bearer: the shared X-Solnix-Build
+        secret (deprecated, infra R7). sshsig: an sshsig by this host's enrolled key (solnix.builder.identityKeyFile), made anew
+        for every request and retry (infra R8: a resent signature is refused); no bearer needed. both: the two, until infra
+        confirms the host's signed requests. Anything but bearer sends the host's identity: it needs solnix.builder.enable, and
+        isolation = "none" (the zone's untrusted user cannot read the key). Default: both on such a host, else bearer.
+      ''; };
     agentId = lib.mkOption { type = lib.types.strMatching "[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}"; default = config.networking.hostName;
       description = "agent_id sent to the queue (the host name)."; };
     # what builder-zone.nix runs in the zone: the same script and tools
     internal = lib.mkOption { internal = true; readOnly = true;
       default = { inherit path env; script = ./solnix-builder.sh; cacert = "${s.nixChain.cacert}/etc/ssl/certs/ca-bundle.crt"; }; };
   };
-  config = lib.mkIf (a.build && config.solnix.builder.isolation == "none") {
+  config = lib.mkMerge [
+  # on every builder host, the zone's too (builder-zone.nix runs the same script with the same env)
+  (lib.mkIf a.build { assertions = [ { assertion = cfg.queueAuth == "bearer" || idk;
+    message = "solnix.cache.build.queueAuth = ${cfg.queueAuth} signs with the host's identity key: it needs solnix.builder.enable (an enrolled builder) and isolation = \"none\"."; } ]; })
+  (lib.mkIf (a.build && config.solnix.builder.isolation == "none") {
     assertions = [ { assertion = cfg.tickMin <= cfg.tickMax && cfg.busyTickMin <= cfg.busyTickMax;
       message = "solnix.cache.build: tickMin/busyTickMin must not exceed tickMax/busyTickMax."; }
       { assertion = cfg.evalAnchored != "on" || cfg.publish == "on";
@@ -122,6 +140,10 @@ in
       category = "site";
       description = "solnix idle-time build-queue drainer (builders.solnix.io)";
       model = "contract";
+      # A build that dumps core or dies on a signal is in this service's contract. Without this, svc.startd counts it as the
+      # builder failing and restarts it, killing every in-flight job; four in a row put dixa's builder in maintenance
+      # (2026-11-05 00:53-00:59Z). The same reason as nix-daemon's in nix.nix (5ccd4fd).
+      ignoreError = [ "core" "signal" ];
       requires = [ "svc:/milestone/network:default" "svc:/milestone/name-services:default" "svc:/system/filesystem/local:default" "svc:/system/nix-daemon:default" ];
       environment = env // {
         BUILDER_PATH = path;
@@ -132,5 +154,5 @@ in
       start.exec = "mkdir -p -m 0700 ${st} && /usr/bin/newtask -p solnix-builder /usr/bin/ksh93 ${./solnix-builder.sh} &";
       stop.exec = ":kill";
     };
-  };
+  }) ];
 }

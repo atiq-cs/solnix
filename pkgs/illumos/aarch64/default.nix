@@ -156,7 +156,7 @@ let
   a64 = if stage == "seed" then null else import ./tools.nix { gate = gate'; libcSlice = libc; inherit ld gcc seed system;
     perl = homePkgs.perl; } // {
     # per recipe: the build tools stage0 found in /usr/bin or /opt (dixa4 build logs: devroot bison, flex, autoconf-archive).
-    perPkg = args: {
+    perPkg = args: let p = {
       boost = { nativeTools = [ final.bzip2-bin ]; };   # .tar.bz2
       tmux = { nativeTools = [ final.bison ]; };         # configure requires a yacc
       gdbm = { nativeTools = [ final.bison homePkgs.flex ]; };
@@ -325,6 +325,9 @@ let
       # builds got 512, one 16384 (--check differs in bin/bash). Pin the fallback, which the served stage0 bash ships (safe for here-docs).
       bash = { build = "printf '#!/bin/sh\\necho \"#define PIPESIZE 512\"\\n' > builtins/psize.sh\n" + args.build; };
     }.${args.pname} or { };
+      # a64t: the security/version bumps (./bumps.nix), on top of the fixes above (they see the recipe as fixed here)
+      v = (import ./bumps.nix { inherit (homePkgs.cliSet) tcl; } (args // p)).${args.pname} or { };
+    in p // v;
   };
   final = import ./a64h-pkgs.nix { inherit (srcPkgs) mkSrcPkg; };
   sshWorld = srcPkgs.mkGateLibs "illumos-gate-libs-ssh" "libpam.so.1 libcrypt.so.1 libcontract.so.1";   # openssh's gate libs (perPkg)
