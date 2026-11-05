@@ -29,6 +29,31 @@ if [ -n "$seedStage0" ]; then
     elfedit -e "dyn:runpath $W/s0/lib:$gccLib/lib/amd64" "$f"
   done
 fi
+if [ -n "$binStage0" ]; then
+  # upstream's stage0 dist tarballs (fixed-output; nixpkgs' rustc-bootstrap), unpacked into $W/s0 (build-only, never shipped). Their
+  # ELFs carry only RPATH $ORIGIN/../lib and .dynstr has no room for a store path (elfedit, measured), so every system lib they NEED
+  # gets a link in $W/s0/xlib to the same store lib the cc wrapper's RUNPATH resolves (libssp: gcc's), and bin/{rustc,cargo,rustdoc}
+  # are wrappers that put xlib on LD_LIBRARY_PATH_64: never the build host's /lib/64.
+  S0=$W/s0; mkdir -p s0/xlib t0
+  for t in $stage0Tars; do tar xJf "$t" -C t0; done
+  for c in t0/*/; do for comp in $(cat "$c/components"); do cp -RP "$c$comp/." s0/; done; done
+  for f in s0/bin/* s0/lib/*.so*; do
+    [ -L "$f" ] && continue; [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] || continue
+    for n in $(elfdump -d "$f" | awk '$2=="NEEDED"{print $4}'); do
+      { [ -e "s0/lib/$n" ] || [ -e "s0/xlib/$n" ]; } && continue
+      p=; for d in "$libc/lib/amd64" "$world/lib/amd64" "$world/usr/lib/amd64" "$gccLib/lib/amd64" "$gcc/lib/amd64"; do [ -e "$d/$n" ] && { p=$d/$n; break; }; done
+      [ -n "$p" ] || { echo "FATAL: stage0 $f NEEDs $n, in no store lib dir" >&2; exit 1; }
+      ln -s "$p" "s0/xlib/$n"
+    done
+  done
+  for b in rustc cargo rustdoc; do mv "s0/bin/$b" "s0/bin/.$b-wrapped"
+    printf '#!/usr/bin/bash\nLD_LIBRARY_PATH_64=%s exec %s "$@"\n' "$W/s0/xlib" "$W/s0/bin/.$b-wrapped" > "s0/bin/$b"; chmod +x "s0/bin/$b"
+  done
+  # the check: every lib the stage0 compiler loads is its own s0/lib, or an s0/xlib link whose target is a store path
+  LD_LIBRARY_PATH_64=$W/s0/xlib ldd s0/bin/.rustc-wrapped s0/lib/librustc_driver-*.so | awk '/not found/ {print; b=1} /=>/ {print $NF}' | sort -u |
+    while read -r l; do case "$l" in */s0/bin/../lib/*|"$W"/s0/lib/*) ;; "$W"/s0/xlib/*) case "$(readlink "$l")" in /nix/store/*) ;; *) echo "$l";; esac;; /nix/store/*) ;; *) echo "$l";; esac; done > s0/bad
+  [ ! -s s0/bad ] || { cat s0/bad >&2; echo "FATAL: stage0 loads a lib from outside the store" >&2; exit 1; }
+fi
 "$S0/bin/rustc" --version >&2
 tar xf "$src"; cd "rustc-$version-src"
 if [ -n "$seedStage0" ]; then

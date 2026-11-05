@@ -11,7 +11,8 @@
 # /usr/openssl, and those five are the runtime references. rustc carries no
 # default linker: it runs `cc` from PATH, as nixpkgs' rustc does with stdenv.cc.
 { version, sha256
-, stage0                 # previous hop's output (bin/rustc, bin/cargo, lib/rustlib)
+, stage0 ? null          # previous hop's output (bin/rustc, bin/cargo, lib/rustlib)
+, binStage0 ? null       # or upstream's stage0 dist tarballs { rustc, std, cargo } (fixed-output: nixpkgs' rustc-bootstrap)
 , seedStage0 ? false     # stage0 is the OI 1.97.1 seed tree (prune + re-RUNPATH it)
 , gcc, gate, libc, world, openssl, zlib, tools, python3
 }:
@@ -20,7 +21,10 @@
   system = "x86_64-solaris";
   builder = "/usr/bin/bash";
   args = [ ./rust-src-build.sh ];
-  inherit version stage0 gcc gate libc world openssl zlib tools python3;
+  inherit version gcc gate libc world openssl zlib tools python3;
+  stage0 = if binStage0 != null then "" else stage0;
+  stage0Tars = if binStage0 != null then [ binStage0.rustc binStage0.std binStage0.cargo ] else [ ];
+  binStage0 = if binStage0 != null then "1" else "";
   gccLib = gcc.lib;
   src = import <nix/fetchurl.nix> {
     url = "https://static.rust-lang.org/dist/rustc-${version}-src.tar.xz";

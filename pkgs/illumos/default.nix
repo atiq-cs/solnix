@@ -411,11 +411,19 @@ let
   } // args);
   rust198 = mkRust { version = "1.98.0"; stage0 = rustSeedStage; seedStage0 = true;
     sha256 = "271fa73d8174f53d713c46a8310da7bf7cfdcfb8b7cfd1c2b74b84a83ae9fb1e"; };
-  # The N-1 chain, one more hop: 1.97.1 seed -> 1.98.0 -> 1.99.0 -> 1.99.1. rust-1.98 (built by the OI seed) DIFFERS under --check
-  # (wave5, 2/2) while rust-1.99.0 (built by 1.98) is SAME, so the shipped compiler is built by 1.99.0, never straight by 1.98
-  # (wave5 report). rust1990 is build-only: nothing ships it, as rust198. 1.99.1: infra's dixi trial (sha256 = static.rust-lang.org's).
-  rust1990 = mkRust { version = "1.99.0"; stage0 = rust198;
+  # The chain: upstream's 1.98.0 binary stage0 (rustBin198) -> 1.99.0 -> 1.99.1, as nixpkgs (rustc from rustc-bootstrap, never from a
+  # source-built previous stage). rust1990 is build-only: nothing ships it. 1.99.1: infra's dixi trial (sha256 = static.rust-lang.org's).
+  rust1990 = mkRust { version = "1.99.0"; binStage0 = rustBin198;
     sha256 = "cc41916a8c84f5d9ec4f55561b44e39f43b647b133f8a6f51be9ea13c83f7036"; };
+  # upstream's 1.98.0 stage0 for x86_64-unknown-illumos (static.rust-lang.org dist 2026-08-20), as nixpkgs' rustc-bootstrap: fixed-output
+  # inputs, judged by their hash. rust1990 builds from it. The source-built rust198 (stage0 = the OI 1.97.1 seed) DIFFERS under --check
+  # 4/4 (wave5 2, wave6w 2), so it is no longer a rung of the chain (kept as an attr: the served rows name it); 1.99.0 from this binary
+  # stage0 is --check SAME (wave6w, chef 2026-11-05).
+  rustBin198 = let f = c: sha256: import <nix/fetchurl.nix> { url = "https://static.rust-lang.org/dist/${c}-1.98.0-x86_64-unknown-illumos.tar.xz"; inherit sha256; }; in {
+    rustc = f "rustc" "ea27c7d6a1b5fdef87e5839628fb598b5391397394f909481807a9864b2a1251";
+    std = f "rust-std" "78c631b51555e5e7e6300058c31da1940707c6e55f482a4e21ce2dfa41181b3a";
+    cargo = f "cargo" "d43d67e33057c16c6aa9ac884c36676aa9d6bbbe2afa6344889f55518dce9d3e";
+  };
   rust199 = mkRust { version = "1.99.1"; stage0 = rust1990;
     sha256 = "6451598a99e77f07571960f6b21d577399d3a30f33e80cbd2e3a4aae6535d265"; };
 
