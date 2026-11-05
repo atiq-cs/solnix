@@ -52,7 +52,7 @@ let
     BUILDER_CAP_SHARE = lib.optionalString (opp && cfg.cpuCap == null) (toString cfg.share);
     BUILDER_TICK_MIN = toString cfg.tickMin; BUILDER_TICK_MAX = toString cfg.tickMax;
     BUILDER_BUSY_TICK_MIN = toString cfg.busyTickMin; BUILDER_BUSY_TICK_MAX = toString cfg.busyTickMax;
-    BUILDER_WSWEEP = "${./solnix-wsweep.ksh}";   # stale fixed build dirs of killed builds (wave4)
+    BUILDER_WSWEEP = "${./solnix-wsweep.ksh}";   # stale fixed build dirs of killed builds (wave4), and one drv's right before its pre-submit --check (fleet8)
     BUILDER_PUBLISH = { off = "0"; on = "1"; dry = "dry"; }.${cfg.publish};
     BUILDER_EVAL = { off = "0"; on = "1"; dry = "dry"; }.${cfg.evalAnchored};
     BUILDER_QUEUE_AUTH = cfg.queueAuth; BUILDER_SSH_KEYGEN = "${s.openssh}/bin/ssh-keygen";

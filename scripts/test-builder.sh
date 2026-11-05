@@ -28,6 +28,11 @@
 #    F5_BUILDER=<origin/main's solnix-builder.sh, before fleet5 (2c13182)>: it must loop on the gcc shape (else SKIPped).
 # 10. fleet6: queue requests signed with sshsig (infra R7), a retry signed anew (R8), the egress registration (s3).
 #    PRESIG_BUILDER=<a builder before fleet6>: in sshsig mode it must fail the signature check (else SKIPped, not passed).
+# 11. fleet8 (root): a fixed build dir (W=/var/tmp/srcpkg-<buildKey>) left 0700 by another build uid fails pre-submit's --check:
+#    the host's failure, never memo'd as the out's refusal (read from the check's nix log); the per-drv sweep right before the
+#    --check removes it (also one left inside the same tick), never one whose owner runs a process; a genuine DIFFERS still memos.
+#    F8_BUILDER=<origin/main's solnix-builder.sh, before fleet8 (e4aea94)>: it must memo the stale-W failure (else SKIPped).
+#    WSWEEP=<solnix-wsweep.ksh> (default: this tree's).
 S=${1:-$(dirname "$0")/../modules/config/community/solnix-builder.sh}
 W=$(mktemp -d /tmp/bld.XXXXXX); trap 'find "$W" -depth -delete' EXIT
 bad=0; ok() { print "ok: $1"; }; no() { print "FAIL: $1"; bad=1; }
@@ -939,5 +944,107 @@ r7 $M9 > "$W/p9.json"; tk9; print -r -- "$out" | sed 's/^/   9 /'; print -r -- "
 ! has 'mrej: first build of' && has "decline mrej: $RL is not served, and its first publish was refused here" && [[ $(cl7 mrej) == 0 ]] && ! print -r -- "$sl" | grep -q 'qb-mrej-' &&
   ok "a refused sibling: the next tick declines the job before any build" || no "mrej B: $(print -r -- "$out" | grep ' mrej')"
 rm -f "$W/bearer"
+# --- 11. fleet8: a fixed build dir left by another build uid is the host's failure, never a memo'd refusal of the out. A first
+# build leaves W=/var/tmp/srcpkg-<buildKey> 0700 as its nixbld uid; pre-submit's --check, as another uid, cannot remove it
+# (dixa a64t openssl/sqlite, 2026-11-04: memo'd, 13 h blocked). The fixture's drvs use that W the way mk-src-pkg does (rm; mkdir
+# -m 700; trap rm), and the `nice` wrapper plants a stale W (another uid's, 0700, holding a file) right after that drv's first
+# build: inside the tick, past the tick-start sweep. BUILDER_WSWEEP is a wrapper that runs only the per-drv (keyed) sweep, so
+# nothing else under this host's /var/tmp is touched. pubstale, pubsweep: GNU rm wording (store coreutils, copied into the fixture
+# flake: an inputSrc, as drv-gate wants); pubheld: illumos rm wording (/usr/bin, the store's illumos-userland on solnix), and its
+# owner runs a process (kept); pubstfl: a genuine DIFFERS whose log also names ANOTHER key's W (still memo'd).
+if [[ $(/usr/bin/id -u) == 0 ]]; then
+K11=$(printf '%04x' $RANDOM $RANDOM $RANDOM); KS=${K11}0001 KH=${K11}0002 KF=${K11}0003 KW=${K11}0004 KD=${K11}00ff
+SWS=${WSWEEP:-$G/modules/config/community/solnix-wsweep.ksh} CU=${COREUTILS:-/nix/store/vfd9kp6r0f56iz8y73ab6vb0bf2d0890-coreutils-9.7}
+[[ -e $CU ]] || nix-store -r "$CU" > /dev/null 2>&1
+mkdir -p "$W/sflake/cu" "$W/swn" "$W/sws"; cp "$CU/bin/coreutils" "$W/sflake/cu/" && ln -s coreutils "$W/sflake/cu/rm" && ln -s coreutils "$W/sflake/cu/mkdir" || no "fixture 11: no coreutils at $CU"
+cat > "$W/sflake/flake.nix" <<SF
+{ outputs = { self }: let
+    sw = n: k: rm: mk: body: derivation { name = "qb-\${n}-${W##*/}"; system = "x86_64-solaris"; builder = "/usr/bin/bash"; buildKey = k;
+      args = [ "-c" "W=/var/tmp/srcpkg-\${k}; \${rm} -r -f \"\$W\"; \${mk} -m 700 \"\$W\" || exit 1; trap 'cd /; \${rm} -r -f \"\$W\"' EXIT; cd \"\$W\"; echo building \${n}; \${body}" ]; };
+    g = n: k: sw n k "\${./cu}/rm" "\${./cu}/mkdir";
+  in { packages.x86_64-solaris = {
+    pubstale = g "pubstale" "$KS" "echo stale-${W##*/} > \$out";
+    pubsweep = g "pubsweep" "$KW" "echo sweep-${W##*/} > \$out";
+    pubheld = sw "pubheld" "$KH" "/usr/bin/rm" "/usr/bin/mkdir" "echo held-${W##*/} > \$out";
+    pubstfl = g "pubstfl" "$KF" "echo \"rm: cannot remove '/var/tmp/srcpkg-$KD': Permission denied (a test prints it)\"; echo \$RANDOM\$\$ > \$out";
+  }; }; }
+SF
+SFL=path:$W/sflake
+nix eval --json "$SFL#packages.x86_64-solaris" --apply 'builtins.mapAttrs (n: d: d.outPath)' > "$W/souts.json" 2> "$W/seval.err" || no "fixture 11: $(tail -3 "$W/seval.err")"
+po11() { jq -r --arg a "$1" '.[$a]' "$W/souts.json"; }
+for a in pubstale pubsweep pubheld pubstfl; do rec $a 1 y "$(po11 $a)"; done >> "$W/p.tsv"; cp "$W/p.tsv" "$W/hc/registry/recipes.tsv"
+# nice, as fbuild calls it for the first build: build, then (SWPLANT=1) leave the W of each SWKEYS <name>:<key> being built, as
+# another build uid (SWUID) would have left it
+{ print '#!/bin/sh'; print '/usr/bin/nice "$@"; r=$?'
+  print '[ -n "$SWPLANT" ] && for p in $SWKEYS; do case " $* " in *-qb-${p%%:*}-*) d=/var/tmp/srcpkg-${p#*:}; [ -e "$d" ] || { /usr/bin/mkdir -m 700 "$d" && echo left > "$d/src.tar" && /usr/bin/chown -R "${SWUID:-30999}:30000" "$d"; };; esac; done'
+  print 'exit $r'; } > "$W/swn/nice"; chmod +x "$W/swn/nice"
+# BUILDER_WSWEEP: only the keyed call (the per-drv sweep), logged; the tick-start call (one argument) does nothing here
+{ print '#!/usr/bin/ksh93'; print "[[ \$# == 2 ]] || exit 0; print -r -- \"\$*\" >> $W/sws/calls; exec /usr/bin/ksh93 $SWS \"\$@\""; } > "$W/sws/wsweep"; chmod +x "$W/sws/wsweep"
+tk11() { : > "$W/sws/calls"; tk7 BUILDER_PATH="$W/swn:$W/vp:$W/fk:$PATH" FKROWS=$W/p11.json BUILDER_FLAKE=$SFL "$@"; }
+m11() { ls "$1/tried/" 2> /dev/null | grep -c "qb-$2-.*\.drv\^out\.pub$"; }
+sweeps() { grep -c "^0 $1\$" "$W/sws/calls" 2> /dev/null; }
+wq() { [[ -e /var/tmp/srcpkg-$1 ]] && print kept || print gone; }
+cw() { typeset k; for k in "$@"; do [[ -e /var/tmp/srcpkg-$k ]] && find "/var/tmp/srcpkg-$k" -depth -delete; done; }
+print x > "$W/bearer"; r7 pubstale > "$W/p11.json"
+# NEG control: origin/main's builder memos the stale-W failure, and its next tick declines the out before any build
+if [[ -n ${F8_BUILDER:-} ]]; then S0=$S S=$F8_BUILDER
+  tk11 BUILDER_STATE=$W/st11o SWPLANT=1 SWKEYS=pubstale:$KS BUILDER_WSWEEP=$W/sws/wsweep; o1=$out c1=$(cl7 pubstale); m1=$(m11 "$W/st11o" pubstale); cw $KS
+  tk11 BUILDER_STATE=$W/st11o BUILDER_WSWEEP=$W/sws/wsweep; o2=$out c2=$(cl7 pubstale); S=$S0
+  print -r -- "$o1"$'\n'"$o2" | grep ' pubstale' | sed 's/^/   11o /'
+  (( m1 == 1 && c1 == 0 && c2 == 0 )) && print -r -- "$o1" | grep -q 'decline pubstale: pre-submit-check.sh --leaf .* rc=1 (check' &&
+    print -r -- "$o2" | grep -q 'decline pubstale: .*first publish was refused here' && ! print -r -- "$o2" | grep -q 'pubstale: first build of' &&
+    ok "NEG origin/main's builder ($F8_BUILDER): a stale W of another uid fails --check, memo'd as the out's refusal; the next tick declines it unbuilt" ||
+    no "F8_BUILDER: memo $m1, claims $c1 $c2: $(print -r -- "$o1"$'\n'"$o2" | grep ' pubstale')"
+else print "SKIP origin/main stale-W negative control: F8_BUILDER unset (not counted as a pass)"; fi
+# 11A, no sweep (BUILDER_WSWEEP unset): the stale W fails --check; not memo'd, nothing submitted or claimed. pubstfl: a DIFFERS.
+r7 pubstale pubheld pubstfl > "$W/p11.json"
+tk11 BUILDER_STATE=$W/st11 SWPLANT=1 "SWKEYS=pubstale:$KS pubheld:$KH" BUILDER_WSWEEP=; print -r -- "$out" | grep -E ' pub(stale|held|stfl)' | sed 's/^/   11A /'
+grep -q '^  check: FAIL (error: builder for ' "$W/st11/tried/"*qb-pubstale-*.presubmit && ! grep -q "srcpkg-$KS" "$W/st11/tried/"*qb-pubstale-*.presubmit &&
+  ok "the stale W fails pre-submit's --check, whose .presubmit keeps only 'error: builder ... failed', not the W (so the builder reads nix log)" ||
+  no "11A presubmit: $(grep check: "$W/st11/tried/"*qb-pubstale-*.presubmit 2>&1)"
+for a in "pubstale:cannot remove '/var/tmp/srcpkg-$KS': Permission denied" "pubheld:/var/tmp/srcpkg-$KH: Permission denied"; do x=${a%%:*}
+  (( $(m11 "$W/st11" $x) == 0 && $(cl7 $x) == 0 && $(begun $x) == 0 )) && has "decline $x: the host, not the out, failed pre-submit-check.sh --leaf .*${a#*:}" &&
+    ok "$x: a stale W of another uid fails --check: the host's failure (${a#*:}), not memo'd, nothing submitted or claimed" ||
+    no "11A $x: memo $(m11 "$W/st11" $x): $(print -r -- "$out" | grep " $x")"
+done
+(( $(m11 "$W/st11" pubstfl) == 1 && $(begun pubstfl) == 0 )) && has 'decline pubstfl: pre-submit-check.sh --leaf .* rc=1 \(check' &&
+  ok "NEG a genuine DIFFERS whose log names ANOTHER key's W ($KD): still memo'd, never submitted" || no "11A pubstfl: $(print -r -- "$out" | grep ' pubstfl')"
+# mutants: one that reads only .presubmit (no nix log), one whose W pattern is not anchored on the drv's own buildKey
+mu8 "$S" "$W/mut11a.sh" '[[ -z $fy && -n $x && ,$w, == *,check,* ]] && fy=' ': || fy='
+mu8 "$S" "$W/mut11b.sh" '+-${x}['"'"'\"]?[:;] (Permission denied|File exists)' '+-[0-9a-f]+'"'"'?: Permission denied'
+cw $KS; r7 pubstale > "$W/p11.json"; S0=$S S=$W/mut11a.sh; tk11 BUILDER_STATE=$W/st11ma SWPLANT=1 SWKEYS=pubstale:$KS BUILDER_WSWEEP=; S=$S0
+! cmp -s "$S" "$W/mut11a.sh" && (( $(m11 "$W/st11ma" pubstale) == 1 )) && ok "NEG a mutant that reads only .presubmit memos the stale-W failure (the nix log read is what saves it)" ||
+  no "mut11a: memo $(m11 "$W/st11ma" pubstale): $(print -r -- "$out" | grep ' pubstale')"
+r7 pubstfl > "$W/p11.json"; S0=$S S=$W/mut11b.sh; tk11 BUILDER_STATE=$W/st11mb BUILDER_WSWEEP=; S=$S0
+! cmp -s "$S" "$W/mut11b.sh" && (( $(m11 "$W/st11mb" pubstfl) == 0 )) && has 'decline pubstfl: the host, not the out' &&
+  ok "NEG a mutant matching any key's W calls the DIFFERS a host failure (never memo'd: rebuilt every tick); anchored on the drv's own key, it memos" ||
+  no "mut11b: memo $(m11 "$W/st11mb" pubstfl): $(print -r -- "$out" | grep ' pubstfl')"
+# 11B: the next tick of 11A's state dir, the stale W (mut11a's) still there: the per-drv sweep before --check removes it; published
+r7 pubstale > "$W/p11.json"; [[ $(wq $KS) == kept ]] || no "11B: no stale W before the tick"
+tk11 BUILDER_STATE=$W/st11 BUILDER_WSWEEP=$W/sws/wsweep; print -r -- "$out" | grep ' pubstale' | sed 's/^/   11B /'
+(( $(sweeps $KS) == 1 && $(begun pubstale) == 1 && $(cl7 pubstale) == 1 )) && has "pubstale: solnix-wsweep: removing stale /var/tmp/srcpkg-$KS \(uid 30999, no process of uid 30999 runs\)" &&
+  has 'pubstale: published .*an 8UNr-only client verified it' && [[ $(wq $KS) == gone ]] &&
+  ok "the next tick passes: the per-drv sweep removes the W (whatever its age), --check SAME, published, claimed" || no "11B: sweeps $(sweeps $KS): $(print -r -- "$out" | grep ' pubstale')"
+# 11C: the W is left INSIDE the tick, after the first build (the dixa shape), and its owner runs no process: swept, published
+r7 pubsweep > "$W/p11.json"; tk11 BUILDER_STATE=$W/st11c SWPLANT=1 SWKEYS=pubsweep:$KW BUILDER_WSWEEP=$W/sws/wsweep
+print -r -- "$out" | grep ' pubsweep' | sed 's/^/   11C /'
+(( $(sweeps $KW) == 1 && $(begun pubsweep) == 1 && $(cl7 pubsweep) == 1 && $(m11 "$W/st11c" pubsweep) == 0 )) && has "pubsweep: solnix-wsweep: removing stale /var/tmp/srcpkg-$KW" &&
+  ok "a W left inside the tick (after the first build, past the tick-start sweep): swept before --check, published in the same tick" || no "11C: $(print -r -- "$out" | grep ' pubsweep')"
+# 11D: the W's owner runs a process (a live build, as far as root can tell): the sweep keeps it; --check fails, not memo'd
+cw $KH; r7 pubheld > "$W/p11.json"
+"$GP" -c 'import os, time; os.setgid(30000); os.setuid(30998); time.sleep(900)' & HOLD=$!; sleep 2
+tk11 BUILDER_STATE=$W/st11d SWPLANT=1 SWKEYS=pubheld:$KH SWUID=30998 BUILDER_WSWEEP=$W/sws/wsweep; print -r -- "$out" | grep ' pubheld' | sed 's/^/   11D /'
+(( $(sweeps $KH) == 1 && $(m11 "$W/st11d" pubheld) == 0 && $(cl7 pubheld) == 0 && $(begun pubheld) == 0 )) && [[ $(wq $KH) == kept ]] &&
+  has "pubheld: solnix-wsweep: keeping /var/tmp/srcpkg-$KH \(uid 30998 runs a process" && has 'decline pubheld: the host, not the out' &&
+  ok "the W's owner runs a process: the sweep keeps it (never a dir a live build may use); declined, not memo'd" || no "11D: $(print -r -- "$out" | grep ' pubheld')"
+# 11E: that process ended: the next tick sweeps the W and publishes
+kill $HOLD; wait $HOLD 2> /dev/null; tk11 BUILDER_STATE=$W/st11d BUILDER_WSWEEP=$W/sws/wsweep; print -r -- "$out" | grep ' pubheld' | sed 's/^/   11E /'
+(( $(begun pubheld) == 1 && $(cl7 pubheld) == 1 )) && has "pubheld: solnix-wsweep: removing stale /var/tmp/srcpkg-$KH" && [[ $(wq $KH) == gone ]] &&
+  ok "its owner's process gone: the next tick sweeps the W and publishes" || no "11E: $(print -r -- "$out" | grep ' pubheld')"
+# 11F: a DIFFERS with the sweep on is memo'd too (the sweep ran; the check still differs)
+r7 pubstfl > "$W/p11.json"; tk11 BUILDER_STATE=$W/st11f BUILDER_WSWEEP=$W/sws/wsweep
+(( $(sweeps $KF) == 1 && $(m11 "$W/st11f" pubstfl) == 1 && $(begun pubstfl) == 0 )) && ok "NEG a genuine DIFFERS with the sweep on: memo'd, never submitted" || no "11F: $(print -r -- "$out" | grep ' pubstfl')"
+cw $KS $KH $KF $KW $KD; rm -f "$W/bearer"
+else print "SKIP section 11 (stale fixed build dirs): needs root, to own a dir as another uid (not counted as a pass)"; fi
 (( bad )) && print "RESULT: FAIL" || print "RESULT: PASS"
 exit $bad

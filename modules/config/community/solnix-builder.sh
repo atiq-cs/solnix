@@ -24,7 +24,8 @@
 # BUILDER_PUBLISH_SLOTS in flight). Promoted: the served NarHash is this host's, an 8UNr-only client fetches and verifies
 # the NAR (a key that signs nothing must not), then the job is claimed and completed done like a rebuilt one. Tier 1
 # (after 2026-11-13): proposed/approved wait in $BUILDER_STATE/pub/<out> and are polled on later ticks, a 429 backs off
-# Retry-After seconds; neither is a failure. A failed gate, a differing --check or a rejection is memo'd (tried/<drv>.pub).
+# Retry-After seconds; neither is a failure. A failed gate, a differing --check or a rejection is memo'd (tried/<drv>.pub); a host
+# failure (a full disk, a path GC'd mid-check, another nixbld uid's fixed build dir in the way) is not: a later tick retries.
 # Multi-output (fleet5, infra 2026-11-04): a job lists every served out of its drv (gcc: out and -lib; wave6: out and -debug).
 # Each unserved one is first-published as its own submission, deps first (firsts); the job is claimed once every listed out
 # is served, and completed once, with the primary (the drv's first listed output: its default output when listed). A host
@@ -328,7 +329,7 @@ ultimate() { [[ $(nix path-info --json "$1" 2> /dev/null | jq -r '.[].ultimate')
 unserved() { [[ -s $BUILDER_STATE/pub/${1##*/} ]] || ! served "$1" > /dev/null; }	# not served, or our submission of it is pending
 fbuild() {	# fbuild <pname> <out> <drv>^<output>: the first build and every gate before a submission; rc 0 with the stage dir in $fst.
 	# fwait=1 when it only waits for references to be served (firsts() retries it after a sibling publishes)
-	typeset fm=$BUILDER_STATE/tried/${3##*/} f x= w h k fr=
+	typeset fm=$BUILDER_STATE/tried/${3##*/} f x= w h k fr= fy=
 	# a copy that came from elsewhere (not ultimate) is rebuilt here against itself: SAME makes it this host's build too
 	nix-store --check-validity "$2" 2> /dev/null && ! ultimate "$2" && fr=--rebuild
 	log "$1: first build of $3 ($C cores)${fr:+ (--rebuild: the copy here was not built here)}"
@@ -355,11 +356,23 @@ fbuild() {	# fbuild <pname> <out> <drv>^<output>: the first build and every gate
 	h=$(nix-store -q --hash "$2"); k=$BUILDER_STATE/stamps/${h#sha256:}.ok
 	if [[ -s $k && $(cut -f1 "$k") == "$2" && $(cut -f5- "$k") == "$fk" ]]; then log "$1: pre-submit-check ${fa%% *} passed on an earlier tick ($k)"
 	else
+		# the --check builds in this drv's fixed W (/var/tmp/<kind>-<buildKey>) again, maybe as another nixbld uid, which cannot remove
+		# a W the first build left (dixa a64t openssl, 2026-11-04: 13 h memo'd). NixOS's sandbox gives each build its own /build; here
+		# that W goes first, unless its owner runs any process (a live build). The tick-start sweep cannot: this tick's first build made it.
+		x=$(bounded 120 nix derivation show "${3%^*}" 2> /dev/null | jq -r '.[].env.buildKey // empty'); [[ $x == +([0-9a-f]) ]] || x=
+		[[ -n $x && -n ${BUILDER_WSWEEP:-} && $(/usr/bin/id -u) == 0 ]] && /usr/bin/ksh93 "$BUILDER_WSWEEP" 0 "$x" | while read -r l; do log "$1: $l"; done
 		( export GATE_STAMP_DIR=$BUILDER_STATE/stamps GATE_PYTHON=$BUILDER_PYTHON GATE_FLAKE=$BUILDER_FLAKE; bounded "$BUILDER_BUILD_SECS" bash "$BUILDER_GATES/scripts/pre-submit-check.sh" $fa "$2" ) > "$fm.presubmit" 2>&1; f=$?
 		if (( f != 0 )) || ! grep -q "^PASS $2 " "$fm.presubmit"; then
 			w=$(grep -E '^  [a-z]+: FAIL' "$fm.presubmit" | cut -d: -f1 | tr -d ' ' | paste -sd, -)
-			# rc 2 = setup (no python, served file unreachable), a full disk, or only deps (served since our check): not the out's fault
-			(( f == 1 )) && [[ ${w:-deps} != @(deps|inputs|deps,inputs) ]] && ! grep -q "No space left on device" "$fm.presubmit" && print -r -- "pre-submit-check.sh ${fa%% *} failed: ${w:-?} ($fm.presubmit)" > "$fm.pub"
+			# the host, not the out: a full disk, a path GC'd mid-check, or a W of another uid in the way. pre-submit keeps one line of
+			# a failed --check, so the check's log (nix log: the last build's, measured on chef2) is read for this drv's OWN W only,
+			# which fails a build at its first line (rm; mkdir: GNU or illumos wording): a check that prints another key's W and then
+			# DIFFERS is still memo'd. A host failure is not memo'd: a later tick retries.
+			fy=$(grep -E "No space left on device|is not valid" "$fm.presubmit" | head -1)
+			[[ -z $fy && -n $x && ,$w, == *,check,* ]] && fy=$(bounded 120 nix log "${3%^*}" 2> /dev/null | grep -E "/var/tmp/[a-z]+-${x}['\"]?[:;] (Permission denied|File exists)" | head -1)
+			[[ -n $fy ]] && { log "decline $1: the host, not the out, failed pre-submit-check.sh ${fa%% *} $2 (${fy:0:200}; $fm.presubmit): not memo'd, a later tick retries"; return 1; }
+			# rc 2 = setup (no python, served file unreachable), or only deps (served since our check): not the out's fault
+			(( f == 1 )) && [[ ${w:-deps} != @(deps|inputs|deps,inputs) ]] && print -r -- "pre-submit-check.sh ${fa%% *} failed: ${w:-?} ($fm.presubmit)" > "$fm.pub"
 			log "decline $1: pre-submit-check.sh ${fa%% *} $2 rc=$f (${w:-setup}; $fm.presubmit)"; return 1
 		fi
 	fi
