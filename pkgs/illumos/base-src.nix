@@ -534,7 +534,7 @@ let
   # the equivalent is to not ship them. man pages stay (NixOS installs man
   # outputs by default, documentation.man.enable).
   dropDocs = ''find "$out/share/doc" "$out/share/info" -delete 2>/dev/null || true'';
-  gnuTool = { pname, version, url, sha256, flags ? "", deps ? [ needWorld ], nativeTools ? null, docOutputs ? [ ] }: mkSrcPkg {
+  gnuTool = { pname, version, url, sha256, flags ? "", deps ? [ needWorld ], nativeTools ? null, docOutputs ? [ ], postInstall ? "" }: mkSrcPkg {
     inherit pname version deps nativeTools docOutputs; src = { inherit url sha256; };
     build = ''
       for f in $(find . \( -name 'localename*.[ch]' -o -name 'getlocalename_l*.[ch]' -o -name 'setlocale_null*.c' \)); do
@@ -543,9 +543,18 @@ let
       FORCE_UNSAFE_CONFIGURE=1 MAKEINFO=true ./configure --prefix="$out" --disable-nls ${flags}
       gmake -j4 MAKEINFO=true
       gmake install MAKEINFO=true
-      ${dropDocs}
+      ${dropDocs}${postInstall}
     '';
   };
+  # help2man's fallback page: with no perl at configure, doc/dummy-man writes an "OOPS!" stub (gnused mcfr18qx). gnused runs it as
+  # postInstall; with postInstall = "" the builder text of every other gnuTool drv stays byte-identical (hence the leading newline).
+  # shortcut: only gnused runs the check (in gnuTool it moves ~all x86 and aarch64 drvs: coreutils/findutils are on every PATH);
+  # make it gnuTool's default at wave6's next full rebuild. publish-gate B17-man-stub covers every package meanwhile.
+  noHelp2manStub = "\n" + ''
+      if [ -d "$out/share/man" ] && grep -rl "unable to create a proper manual page" "$out/share/man" >&2; then
+        echo "FATAL: help2man stub man page(s) above" >&2; exit 1
+      fi
+  '';
   coreutils = gnuTool {
     pname = "coreutils"; version = "9.12";
     docOutputs = [ "man" ];   # nixpkgs coreutils: info output too, but dropDocs deletes share/info here (MAKEINFO=true)
@@ -568,6 +577,9 @@ let
     url = "https://mirrors.kernel.org/gnu/sed/sed-4.9.tar.xz";
     sha256 = "6e226b732e1cd739464ad6862bd1a1aba42d7982922da7a53519631d24975181";
     flags = "--disable-gcc-warnings";
+    # help2man needs perl (NixOS gnused: nativeBuildInputs perl); sed-4.9 regenerates doc/sed.1 in every build (it depends on sed/sed)
+    nativeTools = if perl == null then null else [ perl ] ++ hostTools;
+    postInstall = if perl == null then "" else noHelp2manStub;   # not the seed instance (OI PATH, /usr/bin/perl): its gnused feeds every drv
   };
   gnutar = gnuTool {
     pname = "gnutar"; version = "1.35";
