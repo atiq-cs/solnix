@@ -140,6 +140,10 @@ in
       category = "site";
       description = "solnix idle-time build-queue drainer (builders.solnix.io)";
       model = "contract";
+      # A build that dumps core or dies on a signal is in this service's contract. Without this, svc.startd counts it as the
+      # builder failing and restarts it, killing every in-flight job; four in a row put dixa's builder in maintenance
+      # (2026-11-05 00:53-00:59Z). The same reason as nix-daemon's in nix.nix (5ccd4fd).
+      ignoreError = [ "core" "signal" ];
       requires = [ "svc:/milestone/network:default" "svc:/milestone/name-services:default" "svc:/system/filesystem/local:default" "svc:/system/nix-daemon:default" ];
       environment = env // {
         BUILDER_PATH = path;
