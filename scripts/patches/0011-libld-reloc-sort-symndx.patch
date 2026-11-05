@@ -1,0 +1,447 @@
+solnix: libld -- sort the output relocations on the output symbol index, not on the Sym_desc address, so that
+identical inputs give identical objects.
+
+SYMPTOM (wave6w/wave6x, 2026-11-05; /scratch/solnix/wave6/LD-NONDETERMINISM.md): rust-1.99.0's librustc_driver differed
+between two builds only in .SUNW_reloc (same 229517 relocations, 7627 symbol groups in another order). Relinking the
+saved, byte-identical inputs with the same store ld: dixi 3/3 identical, lixi 3/3 different (2-3 values per 8-16 runs).
+
+MECHANISM: do_sorted_outrelocs() qsorts the non-PLT output relocations with reloc_compare() on (NEEDED index,
+Sym_desc pointer, offset). The pointer is a libumem heap address, so the order of the symbol groups follows the
+allocator: it differs between hosts and, on a many-CPU host, between runs.
+
+THE CHANGE: key 2 is the output symbol table index the relocation is written with (the r_info symbol; for SECTION
+symbols the output section symbol), as GNU ld's -z combreloc sort does (bfd elflink.c elf_link_sort_cmp1). RELATIVE and
+REGISTER relocations have STN_UNDEF and stay first, grouped by type (DT_RELACOUNT). The relocations against each symbol
+stay contiguous (one ld.so.1 lookup per group). A last tie-break on type makes the order total.
+
+MEASURED (libld1, /scratch/solnix/libld1/): the librustc_driver relink with this libld gives one .SUNW_reloc on lixi
+(12/12) and the same bytes on dixi (8/8); only .SUNW_reloc ever changes. elf-tests 23/3 with the new relocs/order test
+(stock 22/4; the 3 are environment failures, the same with stock). NOT WIRED: it changes .SUNW_reloc in nearly every
+linked object (jq 2/2, harfbuzz 7/8, openssl 6/7), so it lands with the next gate proto rebuild (see the .notes.md).
+
+diff --git a/usr/src/cmd/sgs/libld/common/_libld.h b/usr/src/cmd/sgs/libld/common/_libld.h
+index 61817ccd82..d43e24a4aa 100644
+--- a/usr/src/cmd/sgs/libld/common/_libld.h
++++ b/usr/src/cmd/sgs/libld/common/_libld.h
+@@ -284,13 +284,14 @@ typedef	struct support_list {
+  * Structure to manage a sorted output relocation list.
+  *
+  *	rl_key1		->	pointer to needed ndx
+- *	rl_key2		->	pointer to symbol relocation is against
++ *	rl_key2		->	output symbol table index of the symbol the
++ *				relocation is against (STN_UNDEF for none)
+  *	rl_key3		->	virtual offset of relocation
+  */
+ typedef struct reloc_list {
+-	Sym_desc	*rl_key2;
+ 	Xword		rl_key3;
+ 	Rel_desc	*rl_rsp;
++	Word		rl_key2;
+ 	Half		rl_key1;
+ } Reloc_list;
+ 
+diff --git a/usr/src/cmd/sgs/libld/common/relocate.c b/usr/src/cmd/sgs/libld/common/relocate.c
+index d2aab26b42..b589327569 100644
+--- a/usr/src/cmd/sgs/libld/common/relocate.c
++++ b/usr/src/cmd/sgs/libld/common/relocate.c
+@@ -24,6 +24,7 @@
+  *	  All Rights Reserved
+  *
+  * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
++ * Copyright 2026 Greg Burd
+  */
+ 
+ /*
+@@ -2508,18 +2509,26 @@ ld_reloc_init(Ofl_desc *ofl)
+ }
+ 
+ /*
+- * Simple comparison routine to be used by qsort() for
+- * the sorting of the output relocation list.
++ * Comparison routine used by qsort() to sort the output relocation list.
+  *
+  * The reloc_compare() routine results in a relocation
+  * table which is located on:
+  *
+  *	file referenced (NEEDED NDX)
+- *	referenced symbol
++ *	output symbol index (0 for RELATIVE and REGISTER relocations,
++ *	    which are ordered by type)
+  *	relocation offset
+  *
+  * This provides the most efficient traversal of the relocation
+- * table at run-time.
++ * table at run-time: the RELATIVE relocations stay together at the
++ * front (DT_RELACOUNT), and the relocations against each symbol are
++ * grouped, so ld.so.1 looks the symbol up once for the whole group.
++ *
++ * The symbol is compared by the index it has in the output symbol table,
++ * as GNU ld's -z combreloc does, and not by the address of its Sym_desc.
++ * That address is an artifact of ld's heap: sorting on it made the order
++ * depend on the allocator, so that identical inputs could produce
++ * different objects from run to run and from host to host.
+  */
+ static int
+ reloc_compare(Reloc_list *i, Reloc_list *j)
+@@ -2534,17 +2543,24 @@ reloc_compare(Reloc_list *i, Reloc_list *j)
+ 		return (-1);
+ 
+ 	/*
+-	 * Then sort on symbol
++	 * Then sort on output symbol index
+ 	 */
+-	if ((uintptr_t)i->rl_key2 > (uintptr_t)j->rl_key2)
++	if (i->rl_key2 > j->rl_key2)
+ 		return (1);
+-	if ((uintptr_t)i->rl_key2 < (uintptr_t)j->rl_key2)
++	if (i->rl_key2 < j->rl_key2)
+ 		return (-1);
+ 
++	/*
++	 * Relocations without a symbol are grouped by type
++	 */
++	if ((i->rl_key2 == STN_UNDEF) &&
++	    (i->rl_rsp->rel_rtype != j->rl_rsp->rel_rtype))
++		return ((i->rl_rsp->rel_rtype > j->rl_rsp->rel_rtype) ? 1 : -1);
++
+ 	/*
+ 	 * i->key2 == j->key2
+ 	 *
+-	 * At this point we fall back to key2 (offsets) to
++	 * At this point we fall back to key3 (offsets) to
+ 	 * sort the output relocations.  Ideally this will
+ 	 * make for the most efficient processing of these
+ 	 * relocations at run-time.
+@@ -2553,9 +2569,38 @@ reloc_compare(Reloc_list *i, Reloc_list *j)
+ 		return (1);
+ 	if (i->rl_key3 < j->rl_key3)
+ 		return (-1);
++
++	/*
++	 * Finally on type, so that the order is total.
++	 */
++	if (i->rl_rsp->rel_rtype > j->rl_rsp->rel_rtype)
++		return (1);
++	if (i->rl_rsp->rel_rtype < j->rl_rsp->rel_rtype)
++		return (-1);
+ 	return (0);
+ }
+ 
++/*
++ * The output symbol table index a relocation against sdp will carry, as the
++ * target's perform_outreloc() routine computes it: a SECTION symbol takes the
++ * index of its output section's symbol.  (Relocations against expanded
++ * partially initialized symbols are written with ofl_parexpnndx instead;
++ * they keep the section index here, which only affects their position.)
++ */
++static Word
++reloc_outsymndx(Rel_desc *rsp)
++{
++	Sym_desc	*sdp = rsp->rel_sym;
++
++	if ((rsp->rel_flags & FLG_REL_SCNNDX) ||
++	    (ELF_ST_TYPE(sdp->sd_sym->st_info) == STT_SECTION)) {
++		if ((sdp->sd_isc != NULL) && (sdp->sd_isc->is_osdesc != NULL))
++			return (sdp->sd_isc->is_osdesc->os_identndx);
++		return (sdp->sd_shndx);
++	}
++	return (sdp->sd_symndx);
++}
++
+ static uintptr_t
+ do_sorted_outrelocs(Ofl_desc *ofl)
+ {
+@@ -2605,13 +2650,11 @@ do_sorted_outrelocs(Ofl_desc *ofl)
+ 		if ((orsp->rel_rtype == ld_targ.t_m.m_r_relative) ||
+ 		    (orsp->rel_rtype == ld_targ.t_m.m_r_register)) {
+ 			sorted_list[index].rl_key1 = 0;
+-			sorted_list[index].rl_key2 =
+-			    /* LINTED */
+-			    (Sym_desc *)(uintptr_t)orsp->rel_rtype;
++			sorted_list[index].rl_key2 = STN_UNDEF;
+ 		} else {
+ 			sorted_list[index].rl_key1 =
+ 			    orsp->rel_sym->sd_file->ifl_neededndx;
+-			sorted_list[index].rl_key2 = orsp->rel_sym;
++			sorted_list[index].rl_key2 = reloc_outsymndx(orsp);
+ 		}
+ 
+ 		if (orsp->rel_flags & FLG_REL_GOT) {
+diff --git a/usr/src/pkg/manifests/system-test-elftest.p5m b/usr/src/pkg/manifests/system-test-elftest.p5m
+index a23d4571bb..a306a60b52 100644
+--- a/usr/src/pkg/manifests/system-test-elftest.p5m
++++ b/usr/src/pkg/manifests/system-test-elftest.p5m
+@@ -11,6 +11,7 @@
+ 
+ # Copyright 2021, Richard Lowe.
+ # Copyright 2026 Oxide Computer Company
++# Copyright 2026 Greg Burd
+ 
+ set name=pkg.fmri value=pkg:/system/test/elftest@$(PKGVERS)
+ set name=pkg.summary value="ELF Test Suite"
+@@ -105,6 +106,11 @@ dir  path=opt/elf-tests/tests/relocs/i386
+ dir  path=opt/elf-tests/tests/relocs/i386/got32x
+ file path=opt/elf-tests/tests/relocs/i386/got32x/got32x mode=0555
+ file path=opt/elf-tests/tests/relocs/i386/got32x/got32x.s mode=0444
++dir  path=opt/elf-tests/tests/relocs/order
++file path=opt/elf-tests/tests/relocs/order/order mode=0555
++file path=opt/elf-tests/tests/relocs/order/refs1.s mode=0444
++file path=opt/elf-tests/tests/relocs/order/refs2.s mode=0444
++file path=opt/elf-tests/tests/relocs/order/undefs.s mode=0444
+ dir  path=opt/elf-tests/tests/resolution
+ dir  path=opt/elf-tests/tests/resolution/mixed-hidden-comdat
+ file path=opt/elf-tests/tests/resolution/mixed-hidden-comdat/Makefile.test \
+diff --git a/usr/src/test/elf-tests/runfiles/default.run b/usr/src/test/elf-tests/runfiles/default.run
+index 0c64e8ebd0..a61a08400a 100644
+--- a/usr/src/test/elf-tests/runfiles/default.run
++++ b/usr/src/test/elf-tests/runfiles/default.run
+@@ -11,6 +11,7 @@
+ 
+ # Copyright 2021, Richard Lowe.
+ # Copyright 2026 Oxide Computer Company
++# Copyright 2026 Greg Burd
+ 
+ [DEFAULT]
+ pre =
+@@ -49,6 +50,10 @@ tests = ['got32x']
+ arch = i86pc
+ tests = ['gotpcrelx', 'rex_gotpcrelx']
+ 
++[/opt/elf-tests/tests/relocs/order]
++arch = i86pc
++tests = ['order']
++
+ [/opt/elf-tests/tests/resolution/mixed-hidden-comdat]
+ arch = i86pc
+ tests = ['mixed-hidden-comdat']
+diff --git a/usr/src/test/elf-tests/tests/relocs/Makefile b/usr/src/test/elf-tests/tests/relocs/Makefile
+index d0dc53a033..1305f3fff6 100644
+--- a/usr/src/test/elf-tests/tests/relocs/Makefile
++++ b/usr/src/test/elf-tests/tests/relocs/Makefile
+@@ -12,8 +12,9 @@
+ #
+ # Copyright (c) 2012, 2016 by Delphix. All rights reserved.
+ # Copyright 2018 Joyent, Inc.
++# Copyright 2026 Greg Burd
+ #
+ 
+-SUBDIRS = amd64 i386
++SUBDIRS = amd64 i386 order
+ 
+ include $(SRC)/test/Makefile.com
+diff --git a/usr/src/test/elf-tests/tests/relocs/order/Makefile b/usr/src/test/elf-tests/tests/relocs/order/Makefile
+new file mode 100644
+index 0000000000..3132aa0e8f
+--- /dev/null
++++ b/usr/src/test/elf-tests/tests/relocs/order/Makefile
+@@ -0,0 +1,50 @@
++#
++# This file and its contents are supplied under the terms of the
++# Common Development and Distribution License ("CDDL"), version 1.0.
++# You may only use this file in accordance with the terms of version
++# 1.0 of the CDDL.
++#
++# A full copy of the text of the CDDL should have accompanied this
++# source.  A copy of the CDDL is also available via the Internet at
++# http://www.illumos.org/license/CDDL.
++#
++
++#
++# Copyright 2026 Greg Burd
++#
++
++include $(SRC)/cmd/Makefile.cmd
++include $(SRC)/test/Makefile.com
++
++PROG =	order
++
++DATAFILES =	refs1.s refs2.s undefs.s
++
++ROOTOPTPKG = $(ROOT)/opt/elf-tests
++TESTDIR = $(ROOTOPTPKG)/tests/relocs/order
++
++CMDS = $(PROG:%=$(TESTDIR)/%)
++$(CMDS) := FILEMODE = 0555
++
++DATA = $(DATAFILES:%=$(TESTDIR)/%)
++$(DATA) := FILEMODE = 0444
++
++all: $(PROG)
++
++install: all $(CMDS) $(DATA)
++
++clobber: clean
++	-$(RM) $(PROG)
++
++clean:
++	-$(RM) $(CLEANFILES)
++
++$(CMDS): $(TESTDIR) $(PROG)
++
++$(DATA): $(TESTDIR)
++
++$(TESTDIR):
++	$(INS.dir)
++
++$(TESTDIR)/%: %
++	$(INS.file)
+diff --git a/usr/src/test/elf-tests/tests/relocs/order/order.sh b/usr/src/test/elf-tests/tests/relocs/order/order.sh
+new file mode 100644
+index 0000000000..9ef75ae4eb
+--- /dev/null
++++ b/usr/src/test/elf-tests/tests/relocs/order/order.sh
+@@ -0,0 +1,108 @@
++#!/bin/ksh
++#
++# This file and its contents are supplied under the terms of the
++# Common Development and Distribution License ("CDDL"), version 1.0.
++# You may only use this file in accordance with the terms of version
++# 1.0 of the CDDL.
++#
++# A full copy of the text of the CDDL should have accompanied this
++# source.  A copy of the CDDL is also available via the Internet at
++# http://www.illumos.org/license/CDDL.
++#
++
++#
++# Copyright 2026 Greg Burd
++#
++
++#
++# The output relocations of a dynamic object must not depend on the order
++# in which ld(1) first meets each symbol.  undefs.s carries no content, only
++# references to the symbols refs1.s and refs2.s relocate against, so moving
++# it on the link line changes nothing but that order: both links must produce
++# the same bytes.  The relocations against each symbol must also stay grouped
++# together (one ld.so.1 lookup per symbol), each group in offset order.
++#
++
++TESTDIR=$(dirname $0)
++
++tmpdir=/tmp/test.$$
++mkdir $tmpdir
++cd $tmpdir
++
++cleanup() {
++	cd /
++	rm -fr $tmpdir
++}
++
++trap 'cleanup' EXIT
++
++if [[ $PWD != $tmpdir ]]; then
++	print -u2 "Failed to create temporary directory: $tmpdir"
++	exit 1
++fi
++
++assemble() {
++	gcc -m64 -c -o $2 $1
++	if (( $? != 0 )); then
++		print -u2 "assembly of ${1} failed"
++		exit 1
++	fi
++}
++
++# We expect any alternate linker to be in LD_ALTEXEC for us already
++assemble ${TESTDIR}/refs1.s refs1.o
++assemble ${TESTDIR}/refs2.s refs2.o
++assemble ${TESTDIR}/undefs.s undefs.o
++
++# Same output name for both links: ld records it in a FILE symbol
++for order in "refs1.o refs2.o undefs.o" "undefs.o refs1.o refs2.o"; do
++	gcc -m64 -shared -o order.so $order
++	if (( $? != 0 )); then
++		print -u2 "link of $order failed"
++		exit 1
++	fi
++	mv order.so "order.${order%% *}.so"
++done
++
++if ! cmp -s order.refs1.o.so order.undefs.o.so; then
++	print -u2 "FAIL: output depends on the order ld first meets each symbol"
++	elfdump -r order.refs1.o.so >&2
++	elfdump -r order.undefs.o.so >&2
++	exit 1
++fi
++
++#
++# Each symbol's relocations form one contiguous run, in increasing offset.
++#
++elfdump -r order.refs1.o.so | awk '
++	function hex(s,   i, n) {
++		n = 0
++		for (i = 3; i <= length(s); i++)
++			n = n * 16 + index("0123456789abcdef", substr(s, i, 1)) - 1
++		return (n)
++	}
++	$1 ~ /^R_AMD64_64$|^R_386_32$/ {
++		n++
++		if ($NF != last) {
++			if ($NF in seen) {
++				printf("%s is not grouped\n", $NF); bad = 1
++			}
++			seen[$NF] = 1; last = $NF
++		} else if (hex($2) <= off) {
++			printf("%s is not in offset order\n", $NF); bad = 1
++		}
++		off = hex($2)
++	}
++	END {
++		if (n != 8) {
++			printf("expected 8 relocations, found %d\n", n); bad = 1
++		}
++		exit bad
++	}' >&2
++if (( $? != 0 )); then
++	print -u2 "FAIL: relocations against one symbol are not grouped"
++	elfdump -r order.refs1.o.so >&2
++	exit 1
++fi
++
++exit 0
+diff --git a/usr/src/test/elf-tests/tests/relocs/order/refs1.s b/usr/src/test/elf-tests/tests/relocs/order/refs1.s
+new file mode 100644
+index 0000000000..410fe3b050
+--- /dev/null
++++ b/usr/src/test/elf-tests/tests/relocs/order/refs1.s
+@@ -0,0 +1,11 @@
++/*
++ * Data that needs dynamic relocations against undefined symbols, in an
++ * order unrelated to their names.
++ */
++	.data
++	.globl	tab1
++tab1:
++	.quad	sym_delta
++	.quad	sym_alpha
++	.quad	sym_charlie
++	.quad	sym_alpha
+diff --git a/usr/src/test/elf-tests/tests/relocs/order/refs2.s b/usr/src/test/elf-tests/tests/relocs/order/refs2.s
+new file mode 100644
+index 0000000000..628f6a642d
+--- /dev/null
++++ b/usr/src/test/elf-tests/tests/relocs/order/refs2.s
+@@ -0,0 +1,7 @@
++	.data
++	.globl	tab2
++tab2:
++	.quad	sym_charlie
++	.quad	sym_bravo
++	.quad	sym_echo
++	.quad	sym_bravo
+diff --git a/usr/src/test/elf-tests/tests/relocs/order/undefs.s b/usr/src/test/elf-tests/tests/relocs/order/undefs.s
+new file mode 100644
+index 0000000000..ed01c516bf
+--- /dev/null
++++ b/usr/src/test/elf-tests/tests/relocs/order/undefs.s
+@@ -0,0 +1,10 @@
++/*
++ * No content, only references to the symbols refs1.s and refs2.s use, in
++ * yet another order.  Where this object appears on the link line changes
++ * the order in which ld(1) first meets each symbol, and nothing else.
++ */
++	.globl	sym_echo
++	.globl	sym_bravo
++	.globl	sym_charlie
++	.globl	sym_alpha
++	.globl	sym_delta
