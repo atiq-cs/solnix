@@ -41,7 +41,7 @@ after each signature. The key is never printed.
 
 Eval-anchored (protocol v2 (B), fleet4; infra docs/design/eval-anchored-rows.md): --eval ATTR SYSTEM COMMIT BRANCH
 [--flake-nar-hash H] submits ONE path that NO served row names, anchored to what packages.SYSTEM.ATTR evaluates to at COMMIT
-(on BRANCH: main or 26.11 only); /begin carries {"eval": {attr, system, commit, branch, flake_nar_hash}}. Its stamp must say
+(on BRANCH: main, 26.11 or wave6 only); /begin carries {"eval": {attr, system, commit, branch, flake_nar_hash}}. Its stamp must say
 drv-closure (the strict gate: no reviewed row stands behind it) and name exactly that eval (6th column); its deriver passes
 drv-gate --closure here. A path some row names plans EVAL-HAS-ROW (it goes the row way). It always ends a proposal.
 
@@ -331,7 +331,7 @@ def begin_body(sp, f, ev=None):
     return json.dumps(b, separators=(",", ":")).encode()
 
 
-EVAL_BRANCHES = ("main", "26.11")  # our review of (B) §2.1: the published branches; a wave branch only when we name one
+EVAL_BRANCHES = ("main", "26.11", "wave6")  # our review of (B) §2.1: the published branches; a wave branch only when we name one (wave6: 2026-11-03)
 
 
 def eval_obj(a):

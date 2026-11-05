@@ -15,10 +15,11 @@
 # 7. fleet3: first publish (BUILDER_PUBLISH) of a served row's unserved out with the host's key, against a fixture cache and a
 #    submitter hook running the real cache-submit.py planner; the tier-1 states (proposed, 429), and the negative controls.
 #    OLD_BUILDER=<a builder before fleet3 (26105b0^)>: it must never submit (else that control is SKIPped, not passed).
-# 8. fleet4: eval-anchored jobs (BUILDER_EVAL, protocol v2 (B)) against a git fixture with main, 26.11 and an unpublished
-#    branch: an attr-only job takes the eval path (dry, then a proposal followed at its commit after main moves, claimed with
-#    it); the identity rule (gate is not illumos-gate-proto, pkg-config is not pkgconf); the negative controls (off-branch,
-#    --closure, an unpublished input, eval off, a mutant without the identity rule); the second vote.
+# 8. fleet4: eval-anchored jobs (BUILDER_EVAL, protocol v2 (B)) against a git fixture with main, 26.11, wave6 (fleet7: only
+#    when BUILDER_EVAL_BRANCHES lists it) and an unpublished branch (wave5): an attr-only job takes the eval path (dry, then
+#    a proposal followed at its commit after main moves, claimed with it); the identity rule (gate is not illumos-gate-proto,
+#    pkg-config is not pkgconf); the negative controls (off-branch, --closure, an unpublished input, eval off, a mutant
+#    without the identity rule, a mutant without wave6); the second vote.
 #    MAIN_BUILDER=<origin/main's solnix-builder.sh, before fleet4>: it must never take an eval job (else SKIPped, not passed).
 # 9. fleet5: a job listing several outputs of one drv (gcc's out and -lib, wave6's out and -debug): each unserved one first-
 #    published as its own submission, deps first; one claim once every listed out is served, completed with the primary.
@@ -577,7 +578,8 @@ out=$(env BUILDER_PATH="$W/fk:$PATH" FKREAL=$RC BUILDER_RECIPES=$HC/registry/rec
 has 'decline pubx: .* is not an out of the served recipes.tsv' && [[ ! -e $(po7 pubx) ]] && ok "NEG an out with no served row: never built or submitted" || no "pubx: $out"
 rm -f "$W/bearer"
 # --- 8. fleet4: eval-anchored jobs (BUILDER_EVAL). Repo3: main M1 -> M2 (evok moves); 26.11 = M1 + K (adds ev2611, with no
-# pname/version attrs: parseDrvName); wave9 = M1 + W9 (adds evoff: on no allowed branch). No out has a row or is served.
+# pname/version attrs: parseDrvName); wave5 = M1 + W5 (adds evoff: on no allowed branch); wave6 = M1 + W6 (adds evw6: allowed
+# only when listed). No out has a row or is served.
 rm -f "$W/fk/approve"; R3=$W/repo3; mkdir -p "$R3"; g3() { git -C "$R3" -c user.name=t -c user.email=t@t "$@" > /dev/null 2>&1; }
 cat > "$W/f8.tmpl" <<'F8'
 { outputs = { self }: let
@@ -601,13 +603,15 @@ pf8() { sed -e "s|@EXTRA@|${2:-}|" -e "s|@EVOK@|$1|" -e "s|@TAG@|${W##*/}|g" "$W
 g3 init -b main; pf8 M1; g3 commit -m M1; M1=$(git -C "$R3" rev-parse HEAD)
 g3 checkout -b 26.11; pf8 M1 'ev2611 = derivation { name = "ev2611-1"; system = "x86_64-solaris"; builder = "/usr/bin/bash"; args = [ "-c" "echo building ev2611; echo 2611-@TAG@ > $out" ]; };'
 g3 commit -m K; K=$(git -C "$R3" rev-parse HEAD)
-g3 checkout -b wave9 "$M1"; pf8 M1 'evoff = e "evoff" "evoff" "1" "echo off > $out" { };'; g3 commit -m W9; W9=$(git -C "$R3" rev-parse HEAD); g3 checkout main
+g3 checkout -b wave5 "$M1"; pf8 M1 'evoff = e "evoff" "evoff" "1" "echo off > $out" { };'; g3 commit -m W5; W5=$(git -C "$R3" rev-parse HEAD)
+g3 checkout -b wave6 "$M1"; pf8 M1 'evw6 = e "evw6" "evw6" "1" "echo w6 > $out" { };'; g3 commit -m W6; W6=$(git -C "$R3" rev-parse HEAD); g3 checkout main
 pe8() { nix eval --raw "git+file://$R3?ref=$1&rev=$2#packages.x86_64-solaris.$3.outPath" 2> /dev/null; }
-EVOK1=$(pe8 main "$M1" evok) E2611=$(pe8 26.11 "$K" ev2611) EVIN=$(pe8 main "$M1" evin) EVDEP=$(pe8 main "$M1" evindep) EVOFF=$(pe8 wave9 "$W9" evoff)
+EVOK1=$(pe8 main "$M1" evok) E2611=$(pe8 26.11 "$K" ev2611) EVIN=$(pe8 main "$M1" evin) EVDEP=$(pe8 main "$M1" evindep) EVOFF=$(pe8 wave5 "$W5" evoff)
 NH1=$(nix flake metadata --json "git+file://$R3?ref=main&rev=$M1" 2> /dev/null | jq -r '.locked.narHash // empty')
 NHK=$(nix flake metadata --json "git+file://$R3?ref=26.11&rev=$K" 2> /dev/null | jq -r '.locked.narHash // empty')
-[[ -n $EVOK1 && -n $E2611 && -n $EVIN && -n $EVDEP && -n $EVOFF && $NH1 == sha256-* && $NHK == sha256-* && $M1 != "$K" ]] ||
-  no "fixture 8: M1=$M1 K=$K W9=$W9 evok=$EVOK1 ev2611=$E2611 evoff=$EVOFF NH1=$NH1"
+EVW6=$(pe8 wave6 "$W6" evw6) NHW6=$(nix flake metadata --json "git+file://$R3?ref=wave6&rev=$W6" 2> /dev/null | jq -r '.locked.narHash // empty')
+[[ -n $EVOK1 && -n $E2611 && -n $EVIN && -n $EVDEP && -n $EVOFF && -n $EVW6 && $NH1 == sha256-* && $NHK == sha256-* && $NHW6 == sha256-* && $M1 != "$K" ]] ||
+  no "fixture 8: M1=$M1 K=$K W5=$W5 W6=$W6 evok=$EVOK1 ev2611=$E2611 evoff=$EVOFF evw6=$EVW6 NH1=$NH1 NHW6=$NHW6"
 r8() { typeset s= a; for a; do s="$s${s:+,}$(row ${a%%:*} ${a#*:} nixpkgs)"; done; print "{\"rows\":[$s]}"; }	# r8 pname:target...
 # tk8 [VAR=value...]: one tick, eval on (BUILDER_EVAL=1, publish on), against the fake queue, the fixture cache and Repo3's main
 tk8() { : > "$W/fk/log"; : > "$W/fk/sublog"; out=$(env BUILDER_PATH="$W/vp:$W/fk:$PATH" FKREAL=$RC FKLOG=$W/fk/log FKROWS=$W/p8.json FKW=$W FKGP=$GP \
@@ -625,7 +629,7 @@ ECDEP=$(nix-store -q --references "$ECD" 2> /dev/null | grep 'qb-evclodep-.*\.dr
 nix build --no-link "$ECDEP^out" >> "$W/fixture.log" 2>&1 && ECO=$(nix-store -q --outputs "$ECDEP") && nix copy --to "file://$W/hc" "$ECO" >> "$W/fixture.log" 2>&1 &&
   ( export XDG_CACHE_HOME=$W/fkst/x8; nix store sign --store "file://$W/hc" --key-file "$W/sk" "$ECO" ) >> "$W/fixture.log" 2>&1 || no "fixture 8: serve evclodep ($ECDEP)"
 # tick D: BUILDER_EVAL=dry, bearer present: the attr-only jobs take the eval path up to /begin, nothing begun or claimed
-print x > "$W/bearer"; r8 evok:1 ev2611:1 evin:1 evclo:1 evver:2 gate:0.65.0 pkg-config:2.3.0 evoff:1 > "$W/p8.json"
+print x > "$W/bearer"; r8 evok:1 ev2611:1 evin:1 evclo:1 evver:2 gate:0.65.0 pkg-config:2.3.0 evoff:1 evw6:1 > "$W/p8.json"
 tk8 BUILDER_EVAL=dry BUILDER_STATE=$W/st8d; print -r -- "$out" | sed 's/^/   8 /'; P8=$(<"$W/st8d/plan"); print -r -- "$P8" | sed 's/^/   p /'
 [[ $(print -r -- "$sl" | grep -c BEGIN) == 0 && $(claims) == 0 ]] && ok "eval dry: nothing begun, nothing claimed (bearer present)" || no "eval dry begun/claimed: $sl"
 dsub() { cat "$W/st8d/tried/"*-$1-*.submit 2> /dev/null; }
@@ -646,22 +650,24 @@ print -r -- "$P8" | grep -qx 'gate NO-RECIPE gate 0.65.0 (packages.gate at main 
 print -r -- "$P8" | grep -qx 'evver NO-RECIPE evver 2 (packages.evver at main is evver 1: not this job)' &&
   ok "NEG identity: the attr's version is not the job's target: NO-RECIPE" || no "evver: $(print -r -- "$P8" | grep evver)"
 print -r -- "$P8" | grep -qx 'evoff NO-RECIPE evoff 1' && ! print -r -- "$sl" | grep -q 'qb-evoff-' &&
-  ok "NEG an attr that evaluates on no allowed branch (only wave9): NO-RECIPE, never built" || no "evoff: $(print -r -- "$P8" | grep evoff)"
+  ok "NEG an attr that evaluates on no allowed branch (only wave5): NO-RECIPE, never built" || no "evoff: $(print -r -- "$P8" | grep evoff)"
+print -r -- "$P8" | grep -qx 'evw6 NO-RECIPE evw6 1' && ! print -r -- "$sl" | grep -q 'qb-evw6-' &&
+  ok "NEG an attr only on wave6, BUILDER_EVAL_BRANCHES the default (main 26.11): NO-RECIPE, never built" || no "evw6 default: $(print -r -- "$P8" | grep evw6)"
 # pre-submit-check.sh --eval on its own (the gate layer, not only the builder's pre-checks)
 ps8() { ( export GATE_STAMP_DIR=$W/st8ps GATE_PYTHON=$GP GATE_GREP_DIR=$GG GATE_CACHE=$HC GATE_FLAKE="git+file://$R3?ref=main"; bash "$W/gates/scripts/pre-submit-check.sh" "$@" ) 2>&1; }
 nix build --no-link "git+file://$R3?ref=main&rev=$M1#packages.x86_64-solaris.evin" >> "$W/fixture.log" 2>&1
 o8=$(ps8 --eval evin x86_64-solaris "$M1" main "$EVIN"); r=$?
 (( r == 1 )) && print -r -- "$o8" | grep -q "^  inputs: FAIL (not published: .*qb-evindep-" && print -r -- "$o8" | grep -q '^  eval: PASS' && ! ls "$W/st8ps" 2> /dev/null | grep -q . &&
   ok "NEG pre-submit --eval: an unpublished non-FOD input FAILs step inputs, no stamp" || no "pre-submit inputs: rc=$r $o8"
-EVOFFM=$(pe8 main "$W9" evoff); o8=$(ps8 --eval evoff x86_64-solaris "$W9" main "$EVOFF"); r=$?
+EVOFFM=$(pe8 main "$W5" evoff); o8=$(ps8 --eval evoff x86_64-solaris "$W5" main "$EVOFF"); r=$?
 (( r == 1 )) && print -r -- "$o8" | grep -q "is not on main" &&
-  ok "NEG pre-submit --eval: an off-branch commit FAILs the anchor (nix itself evaluates ?ref=main&rev=<wave9 commit> to ${EVOFFM:-nothing}$([[ $EVOFFM == "$EVOFF" ]] && print ': the same out'))" || no "pre-submit off-branch: rc=$r EVOFFM=$EVOFFM $o8"
-o8=$(ps8 --eval evoff x86_64-solaris "$W9" wave9 "$EVOFF"); r=$?
-(( r == 2 )) && print -r -- "$o8" | grep -q "not main or 26.11" && ok "NEG pre-submit --eval: branch wave9 refused (allow-list main, 26.11)" || no "pre-submit wave9: rc=$r $o8"
+  ok "NEG pre-submit --eval: an off-branch commit FAILs the anchor (nix itself evaluates ?ref=main&rev=<wave5 commit> to ${EVOFFM:-nothing}$([[ $EVOFFM == "$EVOFF" ]] && print ': the same out'))" || no "pre-submit off-branch: rc=$r EVOFFM=$EVOFFM $o8"
+o8=$(ps8 --eval evoff x86_64-solaris "$W5" wave5 "$EVOFF"); r=$?
+(( r == 2 )) && print -r -- "$o8" | grep -q "not main, 26.11 or wave6" && ok "NEG pre-submit --eval: branch wave5 refused (allow-list main, 26.11, wave6)" || no "pre-submit wave5: rc=$r $o8"
 o8=$(ps8 --eval evok x86_64-solaris "$M1" main "$(po7 pubok)"); r=$?
 (( r == 1 )) && print -r -- "$o8" | grep -q '^  eval: FAIL (a served row names this out' && ok "NEG pre-submit --eval of an out a served row names: FAIL (it goes --leaf)" || no "pre-submit rowed: rc=$r $o8"
-o8=$("$GP" "$W/gates/scripts/cs-fixture.py" --eval evoff x86_64-solaris "$W9" wave9 --cache-dir "$W/hc" 2>&1); r=$?
-(( r != 0 )) && print -r -- "$o8" | grep -q "branch 'wave9' is not one of main, 26.11" && ok "NEG cache-submit.py --eval: branch wave9 refused" || no "cache-submit wave9: $o8"
+o8=$("$GP" "$W/gates/scripts/cs-fixture.py" --eval evoff x86_64-solaris "$W5" wave5 --cache-dir "$W/hc" 2>&1); r=$?
+(( r != 0 )) && print -r -- "$o8" | grep -q "branch 'wave5' is not one of main, 26.11, wave6" && ok "NEG cache-submit.py --eval: branch wave5 refused" || no "cache-submit wave5: $o8"
 # tick E: publish + eval on. evindep is served now, so evin goes too. Each is proposed with its eval object; nothing is claimed.
 nix copy --to "file://$W/hc" "$EVDEP" >> "$W/fixture.log" 2>&1 && ( export XDG_CACHE_HOME=$W/fkst/x9; nix store sign --store "file://$W/hc" --key-file "$W/sk" "$EVDEP" ) >> "$W/fixture.log" 2>&1
 r8 evok:1 evin:1 ev2611:1 > "$W/p8.json"; tk8; print -r -- "$out" | sed 's/^/   E /'; print -r -- "$sl" | grep -v '^BODY' | sed 's/^/   s /'
@@ -681,14 +687,27 @@ r8 evok:1 > "$W/p8.json"
 tk8 BUILDER_EVAL=0 BUILDER_STATE=$W/st8z
 [[ $(print -r -- "$sl" | grep -c BEGIN) == 0 && $(claims) == 0 ]] && grep -qx 'evok NO-RECIPE evok 1' "$W/st8z/plan" &&
   ok "NEG BUILDER_EVAL=0 (the default): an attr-only job is NO-RECIPE as before, nothing submitted" || no "eval 0: $(<"$W/st8z/plan") $sl"
-tk8 BUILDER_EVAL=dry BUILDER_EVAL_BRANCHES="wave9 main" BUILDER_STATE=$W/st8w; r=$(<"$W/st8w/plan")
-has 'eval: branch wave9 is not main or 26.11: never evaluated' && print -r -- "$r" | grep -qx "evok EVAL evok 1 main $M2" &&
-  ok "NEG BUILDER_EVAL_BRANCHES naming wave9: wave9 is never evaluated (the allow-list is in the script, not only the option)" || no "branches wave9: $r $(print -r -- "$out" | grep 'eval:')"
-# an off-branch commit reaching the job (a pin naming main and a wave9 commit): refused before any build or eval of it
-r8 evoff:1 > "$W/p8.json"; mkdir -p "$W/st8o/pub"; printf 'evoff\tmain\t%s\n' "$W9" > "$W/st8o/pub/eval.evoff"
+tk8 BUILDER_EVAL=dry BUILDER_EVAL_BRANCHES="wave5 main" BUILDER_STATE=$W/st8w; r=$(<"$W/st8w/plan")
+has 'eval: branch wave5 is not main, 26.11 or wave6: never evaluated' && print -r -- "$r" | grep -qx "evok EVAL evok 1 main $M2" &&
+  ok "NEG BUILDER_EVAL_BRANCHES naming wave5: wave5 is never evaluated (the allow-list is in the script, not only the option)" || no "branches wave5: $r $(print -r -- "$out" | grep 'eval:')"
+# an off-branch commit reaching the job (a pin naming main and a wave5 commit): refused before any build or eval of it
+r8 evoff:1 > "$W/p8.json"; mkdir -p "$W/st8o/pub"; printf 'evoff\tmain\t%s\n' "$W5" > "$W/st8o/pub/eval.evoff"
 tk8 BUILDER_STATE=$W/st8o
-[[ $(print -r -- "$sl" | grep -c BEGIN) == 0 && $(claims) == 0 ]] && has "decline evoff: $W9 is not on main here" && [[ ! -e $EVOFF ]] &&
-  ok "NEG an off-branch commit (wave9's, named as main): declined, nothing built or submitted" || no "off-branch pin: $(print -r -- "$out" | grep evoff) $sl"
+[[ $(print -r -- "$sl" | grep -c BEGIN) == 0 && $(claims) == 0 ]] && has "decline evoff: $W5 is not on main here" && [[ ! -e $EVOFF ]] &&
+  ok "NEG an off-branch commit (wave5's, named as main): declined, nothing built or submitted" || no "off-branch pin: $(print -r -- "$out" | grep evoff) $sl"
+# fleet7: wave6 (infra's allow-list: main, 26.11, wave6) only when the host lists it; wave5 never, listed or not (onbranch)
+mkdir -p "$W/st8o5/pub"; printf 'evoff\twave5\t%s\n' "$W5" > "$W/st8o5/pub/eval.evoff"; tk8 BUILDER_EVAL_BRANCHES="main 26.11 wave5" BUILDER_STATE=$W/st8o5
+[[ $(print -r -- "$sl" | grep -c BEGIN) == 0 && $(claims) == 0 ]] && has "decline evoff: $W5 is not on wave5 here" && [[ ! -e $EVOFF ]] &&
+  ok "NEG a wave5 commit pinned at wave5, BUILDER_EVAL_BRANCHES listing wave5: declined (onbranch), nothing built" || no "wave5 pin: $(print -r -- "$out" | grep evoff) $sl"
+r8 evw6:1 > "$W/p8.json"; mkdir -p "$W/st8p6/pub"; printf 'evw6\twave6\t%s\n' "$W6" > "$W/st8p6/pub/eval.evw6"; tk8 BUILDER_STATE=$W/st8p6
+[[ $(print -r -- "$sl" | grep -c BEGIN) == 0 && $(claims) == 0 ]] && has "decline evw6: $W6 is not on wave6 here \(allowed: main 26.11\)" && [[ ! -e $EVW6 ]] &&
+  ok "NEG a wave6 commit pinned at wave6, wave6 not listed (the default): declined (onbranch), nothing built" || no "wave6 unlisted pin: $(print -r -- "$out" | grep evw6) $sl"
+W6B="main 26.11 wave6"; tk8 BUILDER_EVAL=dry BUILDER_EVAL_BRANCHES="$W6B" BUILDER_STATE=$W/st8w6
+[[ $(print -r -- "$sl" | grep -c BEGIN) == 0 && $(claims) == 0 ]] && grep -qx "evw6 EVAL evw6 1 wave6 $W6" "$W/st8w6/plan" && has 'dry run: would submit .*qb-evw6-' &&
+  cat "$W/st8w6/tried/"*-evw6-*.submit 2> /dev/null | grep '^  begin body ' | grep -q "\"eval\":{\"attr\":\"evw6\",\"system\":\"x86_64-solaris\",\"commit\":\"$W6\",\"branch\":\"wave6\",\"flake_nar_hash\":\"$NHW6\"}" &&
+  grep -q "drv-closure${T}eval:evw6:x86_64-solaris:$W6:wave6" "$W/st8w6/stamps/"*.ok &&
+  ok "wave6 listed: an attr only on wave6 is EVAL at wave6's head, pre-submit --eval stamps it, cache-submit plans the body with branch wave6 (dry: nothing begun)" ||
+  no "wave6 listed: $(cat "$W/st8w6/plan" 2>&1) $(print -r -- "$out" | grep evw6)"
 if [[ -n ${MAIN_BUILDER:-} ]]; then r8 evok:1 > "$W/p8.json"; S0=$S S=$MAIN_BUILDER; tk8 BUILDER_STATE=$W/st8old; S=$S0
   [[ $(print -r -- "$sl" | grep -c BEGIN) == 0 && $(claims) == 0 ]] && grep -q '^evok NO-RECIPE' "$W/st8old/plan" &&
     ok "NEG origin/main's builder ($MAIN_BUILDER) never takes an eval job, whatever BUILDER_EVAL says" || no "main builder eval: $(cat "$W/st8old/plan" 2>&1) $sl"
@@ -707,11 +726,15 @@ r8 gate:0.65.0 > "$W/p8.json"; S0=$S S=$W/mut8a.sh; tk8 BUILDER_EVAL=dry BUILDER
 S0=$S S=$W/mut8b.sh; tk8 BUILDER_EVAL=dry BUILDER_STATE=$W/st8mb; S=$S0
 ! cmp -s "$W/mut8a.sh" "$W/mut8b.sh" && has 'dry run: would submit .*qb-gate-' &&
   ok "NEG control of the control: a mutant without BOTH identity checks would submit gate as illumos-gate-proto (so the checks above can fail)" || no "mutant b: $(print -r -- "$out" | grep gate)"
+r8 evw6:1 > "$W/p8.json"; mu8 "$S" "$W/mut8w.sh" '[[ $2 == @(main|26.11|wave6) &&' '[[ $2 == @(main|26.11) &&'
+S0=$S S=$W/mut8w.sh; tk8 BUILDER_EVAL=dry BUILDER_EVAL_BRANCHES="$W6B" BUILDER_STATE=$W/st8w6m; S=$S0
+! cmp -s "$S" "$W/mut8w.sh" && grep -qx "evw6 EVAL evw6 1 wave6 $W6" "$W/st8w6m/plan" && has "decline evw6: $W6 is not on wave6 here" && ! has 'would submit .*qb-evw6-' &&
+  ok "NEG mutant whose onbranch lacks wave6: the same listed tick declines evw6 (so the wave6 pass above is onbranch's)" || no "mutant w6: $(print -r -- "$out" | grep evw6)"
 # the second vote: `solnix-builder vote <attr> <commit> <branch> <NarHash> [pname]` builds that (attr, commit) here and completes
 # the job with its NarHash and commit, only if the NarHash is the proposal's. The proposal's NarHash: evvote's out is one file.
 print -r -- "evvote-${W##*/}" > "$W/evvote.txt"; chmod 444 "$W/evvote.txt"; nix-store --dump "$W/evvote.txt" > "$W/evvote.nar"
 VH=sha256:$(nix-hash --type sha256 --flat --base32 "$W/evvote.nar"); VO=$(pe8 main "$M1" evvote)
-vote8() { : > "$W/fk/log"; out=$(env BUILDER_PATH="$W/fk:$PATH" FKREAL=$RC FKLOG=$W/fk/log BUILDER_API=http://queue.invalid/q BUILDER_CACHE=$HC \
+vote8() { : > "$W/fk/log"; out=$(env ${VBR:+"BUILDER_EVAL_BRANCHES=$VBR"} BUILDER_PATH="$W/fk:$PATH" FKREAL=$RC FKLOG=$W/fk/log BUILDER_API=http://queue.invalid/q BUILDER_CACHE=$HC \
   BUILDER_FLAKE="git+file://$R3?ref=main" BUILDER_AGENT=qbvoter BUILDER_EVAL=${VEVAL:-1} BUILDER_STATE=${VST:-$W/st8v} ksh93 "$S" vote "$@" 2>&1); c=$(<"$W/fk/log"); }
 print x > "$W/bearer"; [[ ! -e $VO ]] || no "fixture 8: $VO exists before the vote"
 vote8 evvote "$M1" main "$VH" evvote; print -r -- "$out" | sed 's/^/   V /'
@@ -727,10 +750,15 @@ print -r -- "$c" | grep '/complete' | grep -q '"independence":"same-host"' && [[
   ok "same-host vote (aarch64: dixa): the completion carries independence same-host and the commit" || no "same-host vote: $out $c"
 vote8 evvote "$M1" main sha256:0000000000000000000000000000000000000000000000000000 evvote
 has 'the proposal says sha256:0000.*no vote' && [[ $(claims) == 0 ]] && ok "NEG vote: a NarHash other than the proposal's: no vote, no claim" || no "vote mismatch: $out"
-vote8 evoff "$W9" main "$VH"
-has "vote evoff: $W9 is not on main" && [[ $(claims) == 0 && ! -e $EVOFF ]] && ok "NEG vote: an off-branch commit: no vote, nothing built" || no "vote off-branch: $out"
-vote8 evvote "$M1" wave9 "$VH"
-has 'is not on wave9' && [[ $(claims) == 0 ]] && ok "NEG vote: branch wave9: no vote" || no "vote wave9: $out"
+vote8 evoff "$W5" main "$VH"
+has "vote evoff: $W5 is not on main" && [[ $(claims) == 0 && ! -e $EVOFF ]] && ok "NEG vote: an off-branch commit: no vote, nothing built" || no "vote off-branch: $out"
+vote8 evvote "$M1" wave5 "$VH"
+has 'is not on wave5' && [[ $(claims) == 0 ]] && ok "NEG vote: branch wave5: no vote" || no "vote wave5: $out"
+VH6=$(nix-store -q --hash "$EVW6" 2> /dev/null); vote8 evw6 "$W6" wave6 "$VH6" evw6
+has "vote evw6: $W6 is not on wave6 \(allowed: main 26.11\): no vote" && [[ $(claims) == 0 ]] && ok "NEG vote: a wave6 commit, wave6 not listed: no vote" || no "vote wave6 unlisted: $out"
+VBR=$W6B VEVAL=dry vote8 evw6 "$W6" wave6 "$VH6" evw6; VBR= VEVAL=1
+[[ $VH6 == sha256:* ]] && has "dry run: BUILDER_EVAL=dry: would claim evw6 1 and complete it with commit $W6" && [[ $(claims) == 0 ]] &&
+  ok "vote: a wave6 commit, wave6 listed: reproduced, would complete with commit $W6 (dry: no claim)" || no "vote wave6 listed: $out"
 vote8 gate "$M1" main "$VH" gate
 has 'vote gate: at .* it is illumos-gate-proto, not gate: no vote' && [[ $(claims) == 0 ]] && ok "NEG vote: the job's pname is not the attr's (gate -> illumos-gate-proto): no vote" || no "vote gate: $out"
 # --- 10. fleet6: sshsig queue auth (R7), retries signed anew (R8), the egress registration (s3). Each request is checked

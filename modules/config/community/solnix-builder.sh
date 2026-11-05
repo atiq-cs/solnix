@@ -31,7 +31,7 @@
 # that may not publish declines such a job. fbuild refuses an out whose served sibling is another build's NAR.
 # Eval-anchored (protocol v2 (B), fleet4; BUILDER_EVAL=1, or dry: every step up to the signed /begin): a job whose pname has NO
 # served row for this system, but whose name (drv_for's rule: pname, _ or camelCase) is a packages.<system> attr at the head
-# of an allowed branch (BUILDER_EVAL_BRANCHES, main then 26.11; the gates accept no other) whose drv pname (attr pname, else
+# of an allowed branch (BUILDER_EVAL_BRANCHES: main then 26.11, wave6 if listed; no other) whose drv pname (attr pname, else
 # the name minus its version) and version are the job's pname and target (gate is not illumos-gate-proto), is built here
 # and submitted with {eval: attr, system, commit, branch, flake_nar_hash}. Before the build every non-fixed-output input of
 # its drv closure must be served (else it waits: deps first); pre-submit-check.sh --eval (drv-gate --closure, the strict
@@ -145,11 +145,11 @@ eids() {	# eids <branch> <rev>: print $BUILDER_STATE/eval/<rev>.<system>.ids ("<
 	[[ -s $ik ]] && print -r -- "$ik"
 }
 eindex() {	# eindex: $BUILDER_STATE/eindex = "<branch>\t<rev>\t<attr>\t<pname>\t<version>" for the heads of BUILDER_EVAL_BRANCHES (in
-	# order; only main and 26.11: the gates take no other), from the clone fetched here (onbranch() reads the same clone)
+	# order; only main, 26.11 and wave6: the gates take no other), from the clone fetched here (onbranch() reads the same clone)
 	typeset eb er ei eg=$BUILDER_STATE/solnix.git
 	: > "$BUILDER_STATE/eindex"; [[ $BUILDER_EVAL != 0 && $BUILDER_FLAKE == git+* ]] || return 0; eclone
 	for eb in $BUILDER_EVAL_BRANCHES; do
-		[[ $eb == @(main|26.11) ]] || { log "eval: branch $eb is not main or 26.11: never evaluated"; continue; }
+		[[ $eb == @(main|26.11|wave6) ]] || { log "eval: branch $eb is not main, 26.11 or wave6: never evaluated"; continue; }
 		er=$(git -C "$eg" rev-parse -q --verify "refs/heads/$eb^{commit}" 2> /dev/null) && ei=$(eids "$eb" "$er") ||
 		    { log "eval: no head or no packages.$BUILDER_SYSTEM eval for $eb"; continue; }
 		nawk -v b="$eb" -v r="$er" '{print b "\t" r "\t" $0}' "$ei" >> "$BUILDER_STATE/eindex"
@@ -163,7 +163,7 @@ eclone() {	# the bare clone of BUILDER_FLAKE's repo (origins() shares it), every
 }
 onbranch() {	# onbranch <rev> <branch>: an allowed branch, and <rev> is its head or behind it in the clone eindex fetched (nix
 	# evaluates ?ref=<b>&rev=<c> for ANY c it can fetch, measured with a wave6 commit: the ref proves nothing)
-	[[ $2 == @(main|26.11) && " $BUILDER_EVAL_BRANCHES " == *" $2 "* && $1 == +([0-9a-f]) && ${#1} == 40 ]] &&
+	[[ $2 == @(main|26.11|wave6) && " $BUILDER_EVAL_BRANCHES " == *" $2 "* && $1 == +([0-9a-f]) && ${#1} == 40 ]] &&
 	    git -C "$BUILDER_STATE/solnix.git" merge-base --is-ancestor "$1" "refs/heads/$2" 2> /dev/null
 }
 has_man() { bounded 120 nix store ls --store "$BUILDER_CACHE" "$1/share/man" 2>/dev/null | grep -q '^\./man'; }
