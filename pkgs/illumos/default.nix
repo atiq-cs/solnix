@@ -245,14 +245,13 @@ let
   # keeps base-tools single-ABI so one RUNPATH string fits every ELF's .dynstr
   # (see the ksh93 note below). ksh93 (the only 64-bit tool) is DROPPED: its
   # 64-bit closure would push the shared RUNPATH past the .dynstr grow limit
-  # (design risk #1). sbin/sh is the shell for method scripts.
+  # (design risk #1). No sbin/sh here: the proto's sbin/sh is a link to that ksh93, so it dangled in base-tools (gate B6, wave6w).
   baseToolBins = [
     "usr/bin/svcs"
     "usr/sbin/svcadm"
     "lib/svc/bin/svc.startd"
     "lib/svc/bin/svc.configd"
     "sbin/init"
-    "sbin/sh"
     "usr/bin/ls"
     "usr/bin/cp"
     "usr/bin/mv"

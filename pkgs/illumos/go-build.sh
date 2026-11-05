@@ -20,7 +20,9 @@ if [ -z "$boot" ]; then
   # store RUNPATH for the C tools: gcc's runtime + the world's libc/libm (not the host /lib).
   # -std=gnu17: go1.4's C uses bool/true as identifiers, C23 keywords under GCC 15 (gcc1 STDENV-SWITCH.md 2.2)
   printf '#!/usr/bin/bash\nexec %s/bin/gcc -m64 -std=gnu17 -Wl,-R,%s/amd64:%s "$@"\n' "$gcc" "$gccLibDir" "$rp" > "$W/cc"; chmod +x "$W/cc"
-  CC=$W/cc GOROOT_FINAL=$out/share/go /usr/bin/bash ./make.bash
+  # GO_LDFLAGS -r: go1.4's cmd/6l writes DT_RUNPATH only for -r (cmd/ld/elf.c), so its Go-built tools (go, gofmt, cgo, pack, ...)
+  # carried none and resolved the build host's /lib/64/libc.so (publish-gate ldd, wave6w)
+  CC=$W/cc GOROOT_FINAL=$out/share/go GO_LDFLAGS="-r $rp" /usr/bin/bash ./make.bash
 else
   GOROOT_BOOTSTRAP=$boot/share/go GOOS=illumos GO_LDFLAGS="-r $rp" /usr/bin/bash ./make.bash
 fi
@@ -37,7 +39,9 @@ if [ -z "$boot" ]; then
     [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] && "$tools/bin/gstrip" --strip-debug "$f"   # store gstrip: a solnix host has no /usr/bin/gstrip
   done
 fi
-if [ -n "$boot" ]; then   # every stage after go1.4 (was: final only; go_1_24 then failed the gate on them, wave5)
+# every stage, go1.4 included (was: final only, then every stage after go1.4: go_1_24 failed the gate on them, wave5; go1.4
+# shipped 3 Linux/FreeBSD ones, S2, wave6w)
+if :; then
   # Upstream ships Linux/FreeBSD dynamic ELF test fixtures (src/debug/{elf,dwarf}/testdata: NEEDED
   # libc.so.6, libtiff.so.6, ...). Nothing resolves them on illumos, so the store-only-NEEDED publish
   # gate failed the toolchain on them (13 files, measured). NixOS ships them (it has no such gate);
@@ -55,7 +59,9 @@ find "$W/go" -type f -exec "$python3/bin/python3" -c 'import os,sys
 for p in sys.argv[1:]:
     fd = os.open(p, os.O_RDONLY); os.fsync(fd); os.close(fd)' {} +
 cp -a "$W/go" "$out/share/go"
-if [ -n "$boot" ]; then   # the shipped GOROOT (src/ is the stdlib a user's `go build` compiles): no host path in it (gate2, wave6t)
+# the shipped GOROOT (src/ is the stdlib a user's `go build` compiles): no host path in it (gate2, wave6t); go1.4 too (it ships
+# #!/bin/bash, /bin/rc, /usr/bin/perl and awk scripts: B9, wave6w)
+if :; then
   # S2: every ELF under a testdata/ dir (line-clang-dwarf5.elf has PT_INTERP /lib64/ld-linux-x86-64.so.2; not only the NEEDED ones)
   find "$out/share/go/src" -path '*/testdata/*' -type f | while read -r f; do
     [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] && rm -f "$f"; true; done
