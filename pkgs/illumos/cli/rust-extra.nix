@@ -37,9 +37,16 @@ in
   # (`tree-sitter generate` then needs node for grammar.js, as before 0.25).
   tree-sitter = { env = ''export CFLAGS="-D__illumos__"''; noDefault = true; };
   # harper: only the CLI + language server (nixpkgs' cargoBuildFlags); the workspace also holds a tauri desktop app.
+  # blanket 0.4.0 (harper-core's #[blanket(derive(Arc, Ref))] on trait Dictionary) collects the derives in a std HashSet, whose
+  # iteration order is per-process random (RandomState), and emits one impl per element in that order: rustc numbers the impls by
+  # it, so 30 v0 symbols (impl Dictionary for Arc<D> / &D) flipped run to run on one host (wave6w, measured). A BTreeSet makes the
+  # order the enum's declaration order (nixpkgs has no fix; upstream althonos/blanket has the HashSet at master).
   harper = { env = ''export CFLAGS="-D__illumos__"''; prep = ''
     grep -qx 'resolver = "2"' Cargo.toml || { echo "FATAL: harper workspace anchor" >&2; exit 1; }
     sed -i 's/^resolver = "2"$/resolver = "2"\ndefault-members = ["harper-cli", "harper-ls"]/' Cargo.toml
+    vfix blanket src/lib.rs "'use std::collections::HashSet;'" "'use std::collections::BTreeSet as HashSet;'"
+    vfix blanket src/types/mod.rs "'#[derive(Debug, PartialEq, Eq, Hash)]\npub enum Type {'" "'#[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]\npub enum Type {'"
+    ! grep -rqE "std::collections::(HashSet|HashMap)[;,}]" .nix-cargo-vendor/blanket/src || { echo "FATAL: blanket still uses a std hash set/map" >&2; exit 1; }
   ''; };
   # socket2 0.5 has no set_tos/set_tclass_v6/set_reuse_port on illumos (cfg'd out). illumos has IP_TOS and
   # IPV6_TCLASS (int setsockopt) and no SO_REUSEPORT: a SockExt trait gives trippy-core the first two, the third is a no-op.
