@@ -51,6 +51,7 @@ let
     BUILDER_SHARE = toString cfg.share;
     BUILDER_CAP_SHARE = lib.optionalString (opp && cfg.cpuCap == null) (toString cfg.share);
     BUILDER_TICK_MIN = toString cfg.tickMin; BUILDER_TICK_MAX = toString cfg.tickMax;
+    BUILDER_SKIP = lib.concatStringsSep " " cfg.skipPnames;   # plan() SKIPs these pnames (fleet9: the seed rows)
     BUILDER_BUSY_TICK_MIN = toString cfg.busyTickMin; BUILDER_BUSY_TICK_MAX = toString cfg.busyTickMax;
     BUILDER_WSWEEP = "${./solnix-wsweep.ksh}";   # stale fixed build dirs of killed builds (wave4), and one drv's right before its pre-submit --check (fleet8)
     BUILDER_PUBLISH = { off = "0"; on = "1"; dry = "dry"; }.${cfg.publish};
@@ -88,6 +89,12 @@ in
     loadMax = lib.mkOption { type = lib.types.nullOr lib.types.ints.positive; default = if ded || opp then null else 2;
       description = "Start no job while this many CPUs are busy with other work (null: whenever a job's cores are idle)."; };
     nice = lib.mkOption { type = lib.types.ints.between 0 19; default = 19; description = "nice value of every build."; };
+    skipPnames = lib.mkOption { type = lib.types.listOf (lib.types.strMatching "[][A-Za-z0-9._+*?-]+");
+      default = [ "*-seed" "illumos-early" "illumos-userland" ];
+      description = ''
+        Queue pnames the builder never plans (ksh93 patterns: *-seed). Default: the seed rows, illumos-early and illumos-userland,
+        which no solnix host builds (the seed builder publishes them); each tick spent its whole plan on 17 of them.
+      ''; };
     tickMin = lib.mkOption { type = lib.types.ints.positive; default = if ded then 120 else 600; description = "Seconds between ticks after one with nothing to do: at least ..."; };
     tickMax = lib.mkOption { type = lib.types.ints.positive; default = if ded then 300 else 1800; description = "... and at most (random, so a fleet doesn't poll solnix.io in step)."; };
     busyTickMin = lib.mkOption { type = lib.types.ints.positive; default = if ded then 10 else if opp then 120 else cfg.tickMin; description = "Seconds to the next tick after one that rebuilt or completed a job: at least ..."; };
