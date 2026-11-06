@@ -56,6 +56,7 @@ let
     BUILDER_WSWEEP = "${./solnix-wsweep.ksh}";   # stale fixed build dirs of killed builds (wave4), and one drv's right before its pre-submit --check (fleet8)
     BUILDER_PUBLISH = { off = "0"; on = "1"; dry = "dry"; }.${cfg.publish};
     BUILDER_EVAL = { off = "0"; on = "1"; dry = "dry"; }.${cfg.evalAnchored};
+    BUILDER_EVAL_BRANCHES = lib.concatStringsSep " " cfg.evalBranches;   # the branches whose heads (B) evaluates (wave6: opt-in, fleet7)
     BUILDER_QUEUE_AUTH = cfg.queueAuth; BUILDER_SSH_KEYGEN = "${s.openssh}/bin/ssh-keygen";
     BUILDER_EGRESS = if idk then "1" else "0";   # register the egress address (identified builders only)
     BUILDER_PUBLISH_KEY = config.solnix.builder.identityKeyFile; BUILDER_PUBLISH_ID = cfg.agentId;   # publish, sshsig, egress
@@ -117,6 +118,8 @@ in
         completed only after it is promoted and an 8UNr-only client verified it. on needs publish on (the key and gates);
         dry: every step up to the signed /begin. Off until infra's evaluator is live.
       ''; };
+    evalBranches = lib.mkOption { type = lib.types.listOf (lib.types.enum [ "main" "26.11" "wave6" ]); default = [ "main" "26.11" ];
+      description = "The branches whose heads evalAnchored evaluates, in order (BUILDER_EVAL_BRANCHES). wave6 is opt-in: its outs are new rows until it merges."; };
     queueAuth = lib.mkOption { type = lib.types.enum [ "bearer" "both" "sshsig" ]; default = if idk then "both" else "bearer";
       description = ''
         How queue requests (claim, heartbeat, complete) authenticate to builders.solnix.io. bearer: the shared X-Solnix-Build
