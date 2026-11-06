@@ -376,7 +376,10 @@ fbuild() {	# fbuild <pname> <out> <drv>^<output>: the first build and every gate
 		# that W goes first, unless its owner runs any process (a live build). The tick-start sweep cannot: this tick's first build made it.
 		x=$(bounded 120 nix derivation show "${3%^*}" 2> /dev/null | jq -r '.[].env.buildKey // empty'); [[ $x == +([0-9a-f]) ]] || x=
 		[[ -n $x && -n ${BUILDER_WSWEEP:-} && $(/usr/bin/id -u) == 0 ]] && /usr/bin/ksh93 "$BUILDER_WSWEEP" 0 "$x" | while read -r l; do log "$1: $l"; done
-		( export GATE_STAMP_DIR=$BUILDER_STATE/stamps GATE_PYTHON=$BUILDER_PYTHON GATE_FLAKE=$BUILDER_FLAKE; bounded "$BUILDER_BUILD_SECS" bash "$BUILDER_GATES/scripts/pre-submit-check.sh" $fa "$2" ) > "$fm.presubmit" 2>&1; f=$?
+		# --check builds with this job's cores, as the first build did: with nix.conf cores = 0, NIX_BUILD_CORES is 0, and a recipe's
+		# `gmake -j${NIX_BUILD_CORES:-8}` is `gmake -j0`, which fails (dixi pcre2 (B), 2026-11-06). NIX_CONFIG reaches pre-submit's nix-store.
+		( export GATE_STAMP_DIR=$BUILDER_STATE/stamps GATE_PYTHON=$BUILDER_PYTHON GATE_FLAKE=$BUILDER_FLAKE NIX_CONFIG="${NIX_CONFIG:+$NIX_CONFIG
+}cores = $C"; bounded "$BUILDER_BUILD_SECS" bash "$BUILDER_GATES/scripts/pre-submit-check.sh" $fa "$2" ) > "$fm.presubmit" 2>&1; f=$?
 		if (( f != 0 )) || ! grep -q "^PASS $2 " "$fm.presubmit"; then
 			w=$(grep -E '^  [a-z]+: FAIL' "$fm.presubmit" | cut -d: -f1 | tr -d ' ' | paste -sd, -)
 			# the host, not the out: a full disk, a path GC'd mid-check, or a W of another uid in the way. pre-submit keeps one line of

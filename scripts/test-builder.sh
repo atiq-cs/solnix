@@ -39,6 +39,9 @@
 #    completion's commit is the candidate's own; deps first (A2: pcre2 -> zlib's newest row, whose job voted the older one);
 #    the per-out lock; BUILDER_SKIP (seed rows); UTC log stamps; nap's deadline across a suspend.
 #    F9_BUILDER=<origin/main's solnix-builder.sh, before fleet9 (773733a)>: it votes the older rows (else SKIPped, not passed).
+# 13. fleet9b (nix.conf cores = 0, NixOS's default and dixi's): pre-submit's --check builds with the job's cores, as the first
+#    build did, so a recipe's `-j${NIX_BUILD_CORES:-8}` is never -j0: a fixture that fails at cores 0 passes, SAME, with no .pub memo.
+#    F9B_BUILDER=<origin/main's solnix-builder.sh, before fleet9b (cae0e55)>: it memos the --check refusal (else SKIPped, not passed).
 S=${1:-$(dirname "$0")/../modules/config/community/solnix-builder.sh}
 W=$(mktemp -d /tmp/bld.XXXXXX); trap 'find "$W" -depth -delete' EXIT
 bad=0; ok() { print "ok: $1"; }; no() { print "FAIL: $1"; bad=1; }
@@ -1191,6 +1194,46 @@ r=$(np12 7200 old 4); (( ${r#* } >= 4 )) && grep -q 'nap "$(pause)"' "$S" && ! g
   ok "NEG a single sleep (origin/main's loop: sleep \"\$(pause)\") sleeps its whole length through the same jump ($r); the loop uses nap" || no "old sleep: $r"
 if [[ -n ${F9_BUILDER:-} ]]; then grep -q 'sleep "$(pause)"' "$F9_BUILDER" && ! grep -q '^nap()' "$F9_BUILDER" && ok "NEG origin/main's loop sleeps one pause (no deadline)" || no "F9 nap"
 else print "SKIP origin/main nap negative control: F9_BUILDER unset (not counted as a pass)"; fi
+# --- 13. fleet9b: pre-submit's --check builds with the job's cores, as the first build did. With nix.conf cores = 0 (the NixOS
+# default; dixi's) NIX_BUILD_CORES is 0 in a build that sets no cores, and a recipe's `gmake -j${NIX_BUILD_CORES:-8}` is `gmake
+# -j0`, which fails (dixi pcre2 (B), 2026-11-06: memo'd, held). The fixture fails the same way (exit 3), and every tick's nix is
+# forced to cores = 0 by NIX_CONFIG, whatever this host's nix.conf says. pubcores: this builder; pubcoresn: F9B_BUILDER;
+# pubcoresm: a mutant without the NIX_CONFIG export. Three drvs, so no case sees another's build.
+print x > "$W/bearer"; mkdir -p "$W/cflake"
+sed "s|@TAG@|${W##*/}|g" > "$W/cflake/flake.nix" <<'CF'
+{ outputs = { self }: let
+    mk = n: derivation { name = "qb-${n}-@TAG@"; system = "x86_64-solaris"; builder = "/usr/bin/bash";
+      args = [ "-c" "echo building ${n} with NIX_BUILD_CORES=$NIX_BUILD_CORES; [ \"\${NIX_BUILD_CORES:-0}\" -gt 0 ] || exit 3; echo ${n}-@TAG@ > $out" ]; };
+  in { packages.x86_64-solaris = { pubcores = mk "pubcores"; pubcoresn = mk "pubcoresn"; pubcoresm = mk "pubcoresm"; }; }; }
+CF
+nix eval --json "path:$W/cflake#packages.x86_64-solaris" --apply 'builtins.mapAttrs (n: d: d.outPath)' > "$W/couts.json" 2> "$W/ceval.err" || no "fixture 13: $(tail -3 "$W/ceval.err")"
+po13() { jq -r --arg a "$1" '.[$a]' "$W/couts.json"; }
+for a in pubcores pubcoresn pubcoresm; do rec $a 1 y "$(po13 $a)"; done >> "$W/p.tsv"; cp "$W/p.tsv" "$W/hc/registry/recipes.tsv"
+tk13() { tk7 FKROWS=$W/p13.json BUILDER_FLAKE=path:$W/cflake NIX_CONFIG="cores = 0" "$@"; }
+m13() { ls "$1/tried/" 2> /dev/null | grep -c "qb-$2-.*\.drv\^out\.pub$"; }
+[[ $(env NIX_CONFIG="cores = 0" nix config show cores) == 0 ]] && ok "the test's nix: NIX_CONFIG='cores = 0' gives cores 0 (this host's nix.conf: $(nix config show cores))" || no "cores 0: $(env NIX_CONFIG="cores = 0" nix config show cores)"
+r7 pubcores > "$W/p13.json"; tk13 BUILDER_STATE=$W/st13; print -r -- "$out" | grep ' pubcores' | sed 's/^/   13 /'
+n13=$(print -r -- "$out" | sed -n 's/.* pubcores: first build of .* (\([0-9]*\) cores).*/\1/p')
+(( n13 > 0 && $(begun pubcores) == 1 && $(cl7 pubcores) == 1 && $(m13 "$W/st13" pubcores) == 0 )) && grep -q '^  check: PASS (SAME' "$W/st13/tried/"*qb-pubcores-*.presubmit &&
+  has 'pubcores: published .*an 8UNr-only client verified it' &&
+  ok "nix.conf cores = 0: the first build ($n13 cores) and pre-submit's --check (NIX_CONFIG cores = $n13) pass, SAME; no .pub memo; submitted, claimed" ||
+  no "13 pubcores: memo $(m13 "$W/st13" pubcores): $(print -r -- "$out" | grep ' pubcores'; grep check: "$W/st13/tried/"*qb-pubcores-*.presubmit 2>&1)"
+# n13: the --check's log names the cores it ran with (nix log: the check's, the last build of the drv)
+x=$(nix log "$(nix-store -q --deriver "$(po13 pubcores)")" 2> /dev/null | grep -c "NIX_BUILD_CORES=$n13\$")
+(( x >= 1 )) && ok "the build log says NIX_BUILD_CORES=$n13" || no "13 log: $(nix log "$(nix-store -q --deriver "$(po13 pubcores)")" 2>&1 | head -3)"
+# the refusal shape: the first build passes, the --check (cores 0) fails with exit 3, memo'd as the out's refusal, never begun
+c13() {	# c13 <pname> <state>: origin/main's verdict
+  (( $(m13 "$2" $1) == 1 && $(begun $1) == 0 && $(cl7 $1) == 0 )) && has "$1: first build of .* \([1-9][0-9]* cores\)" &&
+    has "decline $1: pre-submit-check.sh --leaf .* rc=1 \(check" && grep -q "^  check: FAIL (error: builder for .*qb-$1-.* failed with exit code 3" "$2/tried/"*qb-$1-*.presubmit; }
+if [[ -n ${F9B_BUILDER:-} ]]; then r7 pubcoresn > "$W/p13.json"; S0=$S S=$F9B_BUILDER; tk13 BUILDER_STATE=$W/st13o; S=$S0
+  print -r -- "$out" | grep ' pubcoresn' | sed 's/^/   13o /'
+  c13 pubcoresn "$W/st13o" && ok "NEG origin/main's builder ($F9B_BUILDER): the --check runs with cores 0, fails (exit 3), memo'd as a check refusal" ||
+    no "F9B_BUILDER: memo $(m13 "$W/st13o" pubcoresn): $(print -r -- "$out" | grep ' pubcoresn'; grep check: "$W/st13o/tried/"*qb-pubcoresn-*.presubmit 2>&1)"
+else print "SKIP origin/main cores negative control: F9B_BUILDER unset (not counted as a pass)"; fi
+mu8 "$S" "$W/mut13.sh" ' NIX_CONFIG="${NIX_CONFIG:+$NIX_CONFIG'$'\n''}cores = $C";' ';'
+r7 pubcoresm > "$W/p13.json"; S0=$S S=$W/mut13.sh; tk13 BUILDER_STATE=$W/st13m; S=$S0
+! cmp -s "$S" "$W/mut13.sh" && c13 pubcoresm "$W/st13m" && ok "NEG a mutant without the NIX_CONFIG export: the same check refusal (the export is what passes it)" ||
+  no "mut13: memo $(m13 "$W/st13m" pubcoresm): $(print -r -- "$out" | grep ' pubcoresm')"
 rm -f "$W/bearer"
 (( bad )) && print "RESULT: FAIL" || print "RESULT: PASS"
 exit $bad
