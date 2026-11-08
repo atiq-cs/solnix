@@ -1,9 +1,11 @@
 # graphics/input.nix -- the C libraries cosmic-comp links beyond Mesa:
 # pixman, libxkbcommon (+ xkeyboard-config data), libdisplay-info, libseat.
-{ mkSrcPkg, tools, pkgconf, python3 ? null, gnupatch ? null }:
+{ mkSrcPkg, tools, pkgconf, python3 ? null, gnupatch ? null, perl ? null }:
 let m = tools.mesonBuild; pc = "export PATH=${pkgconf}/bin:$PATH";
   # patch is on /usr/gnu/bin on the OI bhost (gnupatch==null -> no-op); a solnix host has no /usr/gnu, so put the store patch on PATH.
   pp = if gnupatch == null then "" else "export PATH=${gnupatch}/bin:$PATH";
+  # perl: xkeyboard-config's rules/xml2lst.pl runs via /usr/bin/env perl. On the OI bhost perl is /usr/bin (perl==null -> no-op); a solnix host has none.
+  pl = if perl == null then "" else "export PATH=${perl}/bin:$PATH";
 in
 rec {
   pixman = mkSrcPkg {
@@ -24,6 +26,7 @@ rec {
     build = ''
       # rules/ needs python >= 3.11 (enum.StrEnum): the store python3 (3.13; wave6), the OI host's python3.14 on the seed path
       mkdir -p "$TMPDIR/py" && ln -sf ${if python3 == null then "/usr/bin/python3.14" else "${python3}/bin/python3"} "$TMPDIR/py/python3" && export PATH="$TMPDIR/py:$PATH"
+      ${pl}   # rules/xml2lst.pl: /usr/bin/env perl
       ${m "-Dnls=false -Dxorg-rules-symlinks=true -Dcompat-rules=true"}
       [ -e "$out/share/X11/xkb/rules/evdev" ] || { echo "FATAL: no rules/evdev" >&2; exit 1; }
     '';

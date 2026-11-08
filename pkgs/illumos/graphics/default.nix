@@ -6,7 +6,7 @@
 let
   tools = import ./tools.nix { inherit mkSrcPkg python3 gnupatch bash; };
   libs = import ./libs.nix { inherit mkSrcPkg tools pkgconf zlib world perl hostTools gnupatch; };
-  input = import ./input.nix { inherit mkSrcPkg tools pkgconf python3 gnupatch; };
+  input = import ./input.nix { inherit mkSrcPkg tools pkgconf python3 gnupatch perl; };
 in
 libs // input // {
   inherit (tools) meson samurai;
