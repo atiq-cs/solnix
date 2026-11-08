@@ -436,6 +436,7 @@ let
   graphics = import ./graphics { inherit (srcPkgs) mkSrcPkg pkgconf zlib hostTools; inherit world; inherit (cliBase) perl;
     python3 = if buildTools == [ ] then null else cliBase.python3; gnupatch = if buildTools == [ ] then null else cliBase.gnupatch;   # perl: libffi's make_sunver.pl
     bison = if buildTools == [ ] then null else cliBase.bison;   # libxkbcommon's meson YACC (store bison on a solnix host; /usr/bin/bison on the OI bhost)
+    flex = if buildTools == [ ] then null else cliBase.flex;   # mesa's meson needs flex (lexer, meson.build:1955); store flex on a solnix host, /usr/bin/flex on the OI bhost
     bash = if buildTools == [ ] then null else srcPkgs.bash; cmake = if buildTools == [ ] then null else cliBase.cmake; };   # meson's #!, glslang
   # The maintainer's headless CLI set (werk/meh home.packages), from source (./cli).
   # Generic Rust packages on rust199 (./cargo.nix: vendorOf FOD + cargoPkg).
