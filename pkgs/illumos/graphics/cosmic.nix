@@ -29,7 +29,7 @@ let
   cargoApp = { pname, version, src, vendor, libs, required, stubs ? false, features ? "", prep ? "", bins, wrap ? "", NO_SOFTBUFFER_KMS ? "",
                cargoArgs ? "", install ? "", check ? "", appFixups ? "", env ? { } }: (a: derivation (a // { buildKey = builtins.substring 0 16 (builtins.hashString "sha256" (builtins.toJSON a)); })) ({
     name = "${pname}-${version}"; system = "x86_64-solaris"; builder = "/usr/bin/bash";
-    src = unpack src; inherit vendor rust gate tools python3;
+    src = unpack src; inherit vendor rust gate tools python3 world;
     gcc = gcc; gccLibDir = "${gccLib}/lib";
     libDirs = builtins.concatStringsSep " " (map (d: "${d}") (libs ++ rtLibs));
     inherit features prep bins wrap NO_SOFTBUFFER_KMS cargoArgs install check appFixups; REQUIRED = required;

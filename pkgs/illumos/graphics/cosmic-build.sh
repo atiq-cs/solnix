@@ -7,7 +7,7 @@ set -eu
 # no host timeout/grep builds this. /usr/bin stays last for the illumos base binaries the gate uses by absolute
 # path anyway (elfdump, gstrip, ldd, od). cargo.nix's twin enforces a strict store-only path-gate; the COSMIC
 # builder keeps the illumos base on PATH because its closure gate (below) is the real check, not the PATH shape.
-export PATH="$tools/bin:$python3/bin:/usr/bin:/usr/sbin"
+export PATH="$tools/bin:$python3/bin:$world/bin"
 # FIXED build dir, not $NIX_BUILD_TOP (the daemon's build-dir: /tmp on OI, /var/tmp/big on dixi): ld records the
 # link output's path in .SUNW_ldynsym, and rustc the vendored crates' paths (136x in ripgrep), so the NAR named the
 # host (measured, repro2). Keyed on $buildKey (eval-time, 1:1 with the drv; mk-src-pkg.nix says why it is safe).
@@ -25,7 +25,7 @@ mkdir -p w home "$out/lib"
 # A link naming -lclang is a bindgen build script (pam-sys) on the host libclang, a build tool like
 # meson's host python. It links against the HOST runtime only: with the store RUNPATH it loaded the
 # store libc AND libclang's host libc (pldd), and aborted in _thrp_exit on clang's parse thread.
-{ echo '#!/usr/bin/bash'
+{ echo "#!$tools/bin/bash"
   echo 'case " $* " in *" -lclang "*) exec '"$gcc"'/bin/gcc -m64 "$@" -L/usr/clang/21/lib -L/usr/lib/amd64 -Wl,-R,/usr/clang/21/lib:/usr/gcc/14/lib/amd64:/usr/lib/amd64 -g0 ;; esac'
   echo "exec $gcc/bin/gcc -m64 -D_TS_ERRNO $LD -Wl,-R,$RP \"\$@\" -g0"; } > w/cc
 chmod +x w/cc
@@ -61,7 +61,7 @@ mkdir -p "$out/bin"
 for b in $bins; do
   if [ -n "$wrap" ]; then  # makeWrapper --set-default analog: env defaults, then the real binary
     mkdir -p "$out/libexec"; cp "$T/$b" "$out/libexec/$b"
-    { echo '#!/usr/bin/bash'; for kv in $wrap; do echo ": \"\${${kv%%=*}:=${kv#*=}}\"; export ${kv%%=*}"; done
+    { echo "#!$tools/bin/bash"; for kv in $wrap; do echo ": \"\${${kv%%=*}:=${kv#*=}}\"; export ${kv%%=*}"; done
       echo "exec -a \"\$0\" $out/libexec/$b \"\$@\""; } > "$out/bin/$b"; chmod +x "$out/bin/$b"
   else cp "$T/$b" "$out/bin/"; fi
 done
@@ -75,12 +75,12 @@ while read -r f; do
   [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] || continue
   chmod u+w "$f"; gstrip --strip-debug "$f"   # gstrip from $tools/bin (store binutils); a clean solnix host has no /usr/bin/gstrip
   for x in "$gate" "$gcc/"; do grep -q "$x" "$f" && echo "$f names $x" >> fail; done
-  /usr/bin/elfdump -d "$f" 2>/dev/null | grep -q NEEDED || continue
-  for e in $(/usr/bin/elfdump -d "$f" | awk '$2=="RUNPATH"||$2=="RPATH"{print $4}' | tr ':' ' '); do
+  elfdump -d "$f" 2>/dev/null | grep -q NEEDED || continue
+  for e in $(elfdump -d "$f" | awk '$2=="RUNPATH"||$2=="RPATH"{print $4}' | tr ':' ' '); do
     case "$e" in /nix/store/*|'$ORIGIN'*) ;; *) echo "$f RUNPATH $e" >> fail;; esac
   done
-  (unset LD_LIBRARY_PATH; /usr/bin/ldd -r "$f") 2>&1 | awk -v f="$f" '/symbol not found/ {print f": "$0}' >> fail
-  (unset LD_LIBRARY_PATH; /usr/bin/ldd "$f") 2>&1 | awk -v f="$f" '/not found/ || (/=>/ && $NF !~ /^\/nix\/store\//) {print f": "$0}' >> fail
+  (unset LD_LIBRARY_PATH; ldd -r "$f") 2>&1 | awk -v f="$f" '/symbol not found/ {print f": "$0}' >> fail
+  (unset LD_LIBRARY_PATH; ldd "$f") 2>&1 | awk -v f="$f" '/not found/ || (/=>/ && $NF !~ /^\/nix\/store\//) {print f": "$0}' >> fail
 done < files
 if [ -s fail ]; then echo "FATAL: closure gate failed:" >&2; head -40 fail >&2; exit 1; fi
 echo "=== $name: every ELF resolves inside /nix/store ===" >&2
