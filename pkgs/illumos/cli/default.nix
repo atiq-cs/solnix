@@ -46,9 +46,11 @@ let
   c7 = import ./c-recipes2.nix (h // { inherit (c1) readline gnum4; inherit (c4) perl; inherit (c5) cmake python3; inherit (c3) libgpg-error libassuan bzip2-bin; });
   # libdb 2026.10.7.2 (+ the berkeleydb alias): Oracle Berkeley DB 5.3.28's replacement (libdb1, security)
   c8 = import ./c-libdb.nix (h // { inherit (c5) python3; inherit (c7) tcl; });
+  # recipes3: libraries the x86 queue has jobs for (a new file, so no served drv moves)
+  c9 = import ./c-recipes3.nix (h // { inherit (c5) cmake; });
   rust = import ./rust.nix { inherit cargoPkg chk; extra = import ./rust-extra.nix h; };
   gotools = import ./go-tools.nix { inherit (goChain) goPkg go_1_27; inherit chk; inherit (c5) python3; } // import ./go-c1.nix { inherit (goChain) goPkg go_1_27; inherit chk; inherit (c5) python3; }
     // import ./go-recipes2.nix { inherit (goChain) goPkg; inherit chk; };
   data = import ./data.nix h;
   ti = import ./texinfo.nix (h // { inherit (c1) gnum4; inherit (c4) perl; });
-in c1 // c2 // c3 // c4 // c5 // c6 // c7 // c8 // data // ti // (if cargoPkg == null then { } else rust) // (if goChain == null then { } else gotools)
+in c1 // c2 // c3 // c4 // c5 // c6 // c7 // c8 // c9 // data // ti // (if cargoPkg == null then { } else rust) // (if goChain == null then { } else gotools)
