@@ -475,6 +475,7 @@ let
   cosmic = import ./graphics/cosmic.nix {
     rust = rust199; inherit gcc libc world; gate = gate'; gccLib = gcc.lib;
     inherit (srcPkgs.nixChain) cacert; inherit graphics; inherit (srcPkgs) openssl;
+    tools = hostfixTools; inherit (cliBase) python3;   # store tools (no OI host): unpack via Nix, python3/grep/timeout from the store
   };
 
   # ---------------------------------------------------------------------------

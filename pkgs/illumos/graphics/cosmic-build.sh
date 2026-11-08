@@ -3,7 +3,11 @@
 # rust program with rust199 + the from-source gcc, store RUNPATH baked at link time, then the
 # mk-src-pkg closure gate (no global errno, no gate/gcc path, ldd resolves inside /nix/store).
 set -eu
-export PATH=/usr/gnu/bin:/usr/bin:/usr/sbin
+# Store tools first (NixOS stdenv: PATH is store paths), so a solnix host with no /usr/gnu, no host python3,
+# no host timeout/grep builds this. /usr/bin stays last for the illumos base binaries the gate uses by absolute
+# path anyway (elfdump, gstrip, ldd, od). cargo.nix's twin enforces a strict store-only path-gate; the COSMIC
+# builder keeps the illumos base on PATH because its closure gate (below) is the real check, not the PATH shape.
+export PATH="$tools/bin:$python3/bin:/usr/bin:/usr/sbin"
 # FIXED build dir, not $NIX_BUILD_TOP (the daemon's build-dir: /tmp on OI, /var/tmp/big on dixi): ld records the
 # link output's path in .SUNW_ldynsym, and rustc the vendored crates' paths (136x in ripgrep), so the NAR named the
 # host (measured, repro2). Keyed on $buildKey (eval-time, 1:1 with the drv; mk-src-pkg.nix says why it is safe).
@@ -31,7 +35,7 @@ export RUSTFLAGS="--remap-path-prefix=$W=/build"
 # asset's mtime without it. That changed the module's hash, so every promoted local got a new .llvm.<n> suffix (wave5 LLVM-SUFFIX.md: 4/4 DIFFERS -> 4/4 SAME).
 export SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-315532800}
 export CC=$W/w/cc CC_x86_64_unknown_illumos=$W/w/cc CARGO_TARGET_X86_64_UNKNOWN_ILLUMOS_LINKER=$W/w/cc
-tar xzf "$src"; cd "$(ls -d */ | head -1)"
+cp -RP "$src/tree" srctree; find srctree ! -type l -exec chmod u+w {} +; cd srctree   # unpacked by Nix (builtin:unpack-channel renames the top dir to tree/; no host tar/gzcat)
 cp -r "$vendor" vendor; chmod -R u+w vendor
 cmp -s Cargo.lock vendor/.Cargo.lock || { echo "FATAL: vendor FOD is for another Cargo.lock" >&2; exit 1; }
 bash "$fixups/cosmic-comp-vendor-fixup.sh" "$PWD/vendor"
@@ -87,14 +91,14 @@ echo "=== $name: every ELF resolves inside /nix/store ===" >&2
 runok() {
   local b=$1 rc=0 o="$W/solnix-check/$1.txt"; shift; mkdir -p "$W/solnix-check"
   (cd "$W"; unset WAYLAND_DISPLAY DBUS_SESSION_BUS_ADDRESS DISPLAY; export XDG_RUNTIME_DIR="$W/home" LD_BIND_NOW=1
-    exec /usr/bin/timeout 20 "$out/bin/$b" "$@" < /dev/null) > "$o" 2>&1 || rc=$?
+    exec timeout 20 "$out/bin/$b" "$@" < /dev/null) > "$o" 2>&1 || rc=$?
   echo "rc=$rc" >> "$o"
   # ld.so.1 fatal errors end in SIGKILL (137); a hang is timeout's 124 (still running = it started).
   # The one accepted signal: SIGABRT (134) from a panic=abort profile whose panic is "no display"
   # (iced_winit: no WAYLAND_DISPLAY here), i.e. main ran with every symbol bound.
   local nodisp='neither WAYLAND_DISPLAY nor WAYLAND_SOCKET nor DISPLAY is set'
-  if [ $rc -eq 134 ] && /usr/gnu/bin/grep -q "$nodisp" "$o"; then rc=0; fi
-  if /usr/gnu/bin/grep -Eq 'ld\.so\.1: .*fatal|relocation error|symbol not found' "$o" || { [ $rc -ge 128 ]; }; then
+  if [ $rc -eq 134 ] && grep -q "$nodisp" "$o"; then rc=0; fi
+  if grep -Eq 'ld\.so\.1: .*fatal|relocation error|symbol not found' "$o" || { [ $rc -ge 128 ]; }; then
     echo "FATAL: run check $b $* (rc=$rc):" >&2; head -20 "$o" >&2; exit 1; fi
   echo "run check $b $*: rc=$rc: $(head -c 200 "$o" | tr '\n' ' ')" >&2
 }

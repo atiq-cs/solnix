@@ -2,19 +2,23 @@
 # derivations: rust199 + the from-source gcc + the graphics libs here. Same shape as
 # solnix-pkgs cosmic-term.nix (a cargo-vendor FOD + an offline build), without the
 # nixpkgs stdenv: the fork world it needs does not build (cosmic2/fork-world-blockers.md).
-{ rust, gcc, gate, libc, world, gccLib, cacert, graphics, openssl }:
+{ rust, gcc, gate, libc, world, gccLib, cacert, graphics, openssl, tools, python3 }:
 let
   rtLibs = [ libc world gcc.lib ];
-  # cargo vendor needs the network; the output is pinned by its NAR hash (an FOD).
+  # the source tarball unpacked by Nix (libarchive), as cargo.nix's unpack: a solnix host's tar execs the absent gzcat.
+  unpack = srcTar: derivation { name = "${srcTar.name}-unpacked"; system = "builtin"; builder = "builtin:unpack-channel";
+    src = srcTar; channelName = "tree"; };
+  # cargo vendor needs the network; the output is pinned by its NAR hash (an FOD). Store tools only
+  # (cargo.nix pattern): Nix unpacks the tarball, PATH is the store set, no host tar/gzcat.
   vendorOf = { pname, src, narHash }: derivation {
     name = "${pname}-vendor"; system = "x86_64-solaris"; builder = "/usr/bin/bash";
-    inherit src rust;
-    SSL_CERT_FILE = "${cacert}/etc/ssl/certs/ca-bundle.crt"; PATH = "/usr/gnu/bin:/usr/bin";
+    src = unpack src; inherit rust;
+    SSL_CERT_FILE = "${cacert}/etc/ssl/certs/ca-bundle.crt";
+    PATH = "${rust}/bin:${tools}/bin:${world}/bin:${world}/usr/bin";   # rust on PATH: cargo vendor runs rustc -vV for some workspaces
     outputHashMode = "recursive"; outputHashAlgo = "sha256"; outputHash = narHash;
     args = [ "-c" ''
       set -eu; export HOME=$PWD CARGO_HOME=$PWD/ch
-      tar xzf "$src"; cd */
-      export PATH="$rust/bin:$PATH"   # cargo vendor runs rustc -vV for some workspaces
+      cp -RP "$src/tree" s; find s ! -type l -exec chmod u+w {} +; cd s   # unpacked by Nix (no host tar/gzcat)
       cargo vendor --locked "$out" > config.toml
       cp Cargo.lock "$out/.Cargo.lock"
       # cargo's own source-replacement config, with the vendor dir made relocatable
@@ -25,7 +29,7 @@ let
   cargoApp = { pname, version, src, vendor, libs, required, stubs ? false, features ? "", prep ? "", bins, wrap ? "", NO_SOFTBUFFER_KMS ? "",
                cargoArgs ? "", install ? "", check ? "", appFixups ? "", env ? { } }: (a: derivation (a // { buildKey = builtins.substring 0 16 (builtins.hashString "sha256" (builtins.toJSON a)); })) ({
     name = "${pname}-${version}"; system = "x86_64-solaris"; builder = "/usr/bin/bash";
-    inherit src vendor rust gate;
+    src = unpack src; inherit vendor rust gate tools python3;
     gcc = gcc; gccLibDir = "${gccLib}/lib";
     libDirs = builtins.concatStringsSep " " (map (d: "${d}") (libs ++ rtLibs));
     inherit features prep bins wrap NO_SOFTBUFFER_KMS cargoArgs install check appFixups; REQUIRED = required;
