@@ -226,6 +226,20 @@
           modules = [ ./configurations/installer-live.nix ];
         };
 
+        # The wired/cloud edition: installer / installer-live without the wifi
+        # and GPU modules, so it builds on a solnix host (no perl or OI gcc in
+        # its kernel tree). See configurations/installer-wired.nix.
+        installer-wired = solnixSystem {
+          system = "x86_64-solaris";
+          pkgs = mkPkgs { };
+          modules = [ ./configurations/installer.nix ./configurations/installer-wired.nix ];
+        };
+        installer-live-wired = solnixSystem {
+          system = "x86_64-solaris";
+          pkgs = mkPkgs { };
+          modules = [ ./configurations/installer-live.nix ./configurations/installer-wired.nix ];
+        };
+
         # installer-live + a diagnostic agent (stick log, LAN stream, halt on
         # panic) for chasing an unexplained reboot on real hardware.
         # See configurations/installer-x1ediag.nix.
@@ -285,6 +299,8 @@
         installerToplevel = self.solnixConfigurations.installer.config.system.build.toplevel;
         installerLiveToplevel = self.solnixConfigurations.installer-live.config.system.build.toplevel;
         installerX1ediagToplevel = self.solnixConfigurations.installer-x1ediag.config.system.build.toplevel;
+        installerWiredToplevel = self.solnixConfigurations.installer-wired.config.system.build.toplevel;
+        installerLiveWiredToplevel = self.solnixConfigurations.installer-live-wired.config.system.build.toplevel;
 
         # The pgfarm role's generated artifacts ALONE (build-farm.conf, the
         # run_build.pl driver, the setup oneshot). These are plain text/script
