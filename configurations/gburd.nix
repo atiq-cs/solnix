@@ -14,20 +14,19 @@
 {
   # root's authorized key (so root ssh works on the personal test host).
   users.users.root.openssh.authorizedKeys.keys = [
-    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKCqHOIyYwbp42C7MxnRFxOcy+ZE8cNOWdsdvCgVFm1L Greg Burd <greg@burd.me>"
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIM2PZQ+eKLAdQWYSFT6oqZd5/HW3dmahfzE9hVO5qdN9 Greg Burd <greg@burd.me>"
   ];
 
   # gburd: personal admin login. RBAC Primary Administrator (pfexec -> root).
-  # Password is SHA-512 crypt, delivered out-of-band; key login also enabled.
   users.users.gburd = {
     uid = 1000;
     group = "staff";
     description = "Greg Burd";
     shell = "/usr/bin/ksh93";
     extraGroups = [ "adm" "sys" ];
-    hashedPassword = "$6$ArPWLrn2ySFy0yku$UT8DvBWBxdrSJ0LLGgznIBjfBwa.hBG6td1UjoOiue.FaNsp3sHs6yLwjDSWN7Aa6TT/aQJgMTEzGUtw//yJ40";
+    # No password here: key login only. Set one by hand on the test host if needed.
     openssh.authorizedKeys.keys = [
-      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKCqHOIyYwbp42C7MxnRFxOcy+ZE8cNOWdsdvCgVFm1L Greg Burd <greg@burd.me>"
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIM2PZQ+eKLAdQWYSFT6oqZd5/HW3dmahfzE9hVO5qdN9 Greg Burd <greg@burd.me>"
     ];
   };
 }
