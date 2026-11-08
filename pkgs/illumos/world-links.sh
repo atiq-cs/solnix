@@ -6,12 +6,13 @@ o=$1; cd "$o"
 # lexical resolution of a relative link inside the out: prints the out-relative path, or "^" if it climbs out of the out
 lex() { awk -v p="$(dirname "$1")/$2" 'BEGIN{n=split(p,a,"/"); k=0; for(i=1;i<=n;i++){ if(a[i]==""||a[i]==".") continue;
   if(a[i]==".."){ if(k==0){print "^"; exit} k--; continue } s[++k]=a[i] } r=""; for(i=1;i<=k;i++) r=r (i>1?"/":"") s[i]; print r}'; }
+rl() { ls -ld "$1" 2>/dev/null | sed -n 's/.* -> //p'; }   # readlink(1): GNU only, a solnix host has none
 dangling() { find . -type l | sed 's|^\./||' | while read -r l; do [ -e "$l" ] || echo "$l"; done; }
 # 1. links to objects dropUnloadable deleted (libhal*.so, libpolkit*, libfmd_snmp.so, pkinit.so, pkcs11_tpm.so, rmumount, newaliases,
 # and link_flat's lib-32/lib-64 entries): delete them, to a fixpoint (a link to a deleted link goes too).
 printf '%s\n' $dropArg > "$o/.world/gone"
 while :; do n=0
-  for l in $(dangling); do t=$(readlink "$l")
+  for l in $(dangling); do t=$(rl "$l")
     case "$t" in "$o"/*) r=${t#"$o"/};; /*) continue;; *) r=$(lex "$l" "$t");; esac
     grep -qxF "$r" "$o/.world/gone" || continue
     rm -f "$l"; echo "$l" >> "$o/.world/gone"; n=$((n + 1))
@@ -21,7 +22,7 @@ rm -f "$o/.world/gone"
 # usr/lib/cron -> ../../etc/cron.d, usr/share/lib/fonts -> ../../../boot/fonts): they resolve against a root, never inside the
 # store path, where they dangle (gate B6). Recorded for activation (install-be.sh makes them in the BE), then removed.
 : > .world/rootlinks
-for l in $(dangling); do t=$(readlink "$l")
+for l in $(dangling); do t=$(rl "$l")
   case "$t" in /*) echo "FATAL: world: absolute dangling link $l -> $t" >&2; exit 1;; esac
   printf '%s\t%s\n' "$l" "$t" >> .world/rootlinks; rm -f "$l"
 done
