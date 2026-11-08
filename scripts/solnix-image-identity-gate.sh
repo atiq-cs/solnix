@@ -119,6 +119,12 @@ kind_of() { # kind_of <file>
   [ "$(dd if="$1" bs=1 skip=257 count=5 2>/dev/null | tr -d '\000')" = ustar ] && echo tar
 }
 
+# true iff every error line names a device node it could not create (mknod), plus the tools' summary lines
+only_mknod() { # only_mknod <stderr-file>
+  [ -s "$1" ] || return 1
+  ! $GREP -vE 'Cannot mknod: Operation not permitted|Exiting with failure status due to previous errors|^[0-9]+ blocks?$' "$1" | $GREP -q .
+}
+
 # unpack a container into <dest>: archives as a tree, streams as <dest>/data. Nonzero if it cannot.
 open_container() { # open_container <kind> <file> <dest>
   local k=$1 f=$2 d=$3
@@ -127,8 +133,10 @@ open_container() { # open_container <kind> <file> <dest>
     xz)   have xz && xz -dc "$f" > "$d/data" ;;
     zst)  have zstd && zstd -qdc "$f" > "$d/data" ;;
     bz2)  have bzip2 && bzip2 -dc "$f" > "$d/data" ;;
-    tar)  tar -C "$d" -xf "$f" 2>/dev/null ;;
-    cpio) have cpio && (cd "$d" && cpio -idm --quiet --no-absolute-filenames < "$f" 2>/dev/null) ;;
+    # A device node in an archive (test fixtures: util-tests' cpio/files hold a block node) cannot be created without
+    # privilege and carries no content; the archive's regular files still extract, so that one refusal is not an error.
+    tar)  tar -C "$d" -xf "$f" 2>"$d.err" || only_mknod "$d.err" ;;
+    cpio) have cpio && { (cd "$d" && cpio -idm --quiet --no-absolute-filenames < "$f" 2>"$d.err") || only_mknod "$d.err"; } ;;
     nar)  have nix-store && nix-store --restore "$d/nar" < "$f" 2>/dev/null ;;
     iso)  { if have xorriso; then xorriso -osirrox on -indev "$f" -extract / "$d" >/dev/null 2>&1
             elif have bsdtar; then bsdtar -C "$d" -xf "$f" 2>/dev/null; else false; fi; } || return 1
