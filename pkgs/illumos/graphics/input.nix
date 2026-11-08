@@ -1,11 +1,13 @@
 # graphics/input.nix -- the C libraries cosmic-comp links beyond Mesa:
 # pixman, libxkbcommon (+ xkeyboard-config data), libdisplay-info, libseat.
-{ mkSrcPkg, tools, pkgconf, python3 ? null, gnupatch ? null, perl ? null }:
+{ mkSrcPkg, tools, pkgconf, python3 ? null, gnupatch ? null, perl ? null, bison ? null }:
 let m = tools.mesonBuild; pc = "export PATH=${pkgconf}/bin:$PATH";
   # patch is on /usr/gnu/bin on the OI bhost (gnupatch==null -> no-op); a solnix host has no /usr/gnu, so put the store patch on PATH.
   pp = if gnupatch == null then "" else "export PATH=${gnupatch}/bin:$PATH";
   # perl: xkeyboard-config's rules/xml2lst.pl runs via /usr/bin/env perl. On the OI bhost perl is /usr/bin (perl==null -> no-op); a solnix host has none.
   pl = if perl == null then "" else "export PATH=${perl}/bin:$PATH";
+  # bison: libxkbcommon's meson needs a YACC (bison or byacc). On the OI bhost it is /usr/bin/bison (bison==null -> no-op); a solnix host has none.
+  bs = if bison == null then "" else "export PATH=${bison}/bin:$PATH";
 in
 rec {
   pixman = mkSrcPkg {
@@ -39,7 +41,7 @@ rec {
             sha256 = "65782f0a10a4b455af9c6baab7040e2f537520caa2ec2092805cdfd36863b247"; };
     build = ''
       ${pc}
-      # bison comes from the host /usr/bin (a build tool, like python3 for meson)
+      ${bs}   # meson needs a YACC (bison); host /usr/bin/bison on the OI bhost, store bison on a solnix host
       ${m "-Denable-x11=false -Denable-xkbregistry=false -Denable-wayland=false -Denable-docs=false -Denable-tools=false -Denable-bash-completion=false -Dxkb-config-root=${xkeyboard-config}/share/X11/xkb -Dxkb-config-extra-path=/etc/xkb -Dx-locale-root=${xkeyboard-config}/share/X11/locale"}
     '';
   };
