@@ -8,7 +8,7 @@
 # llvmpipe/lavapipe need an LLVM derivation too, so softpipe is the CPU GL.
 #
 # iris/anv need a DRM render node only at RUN time (i915 stage B). They build now.
-{ mkSrcPkg, tools, pkgconf, zlib, expat, libffi, wayland, wayland-protocols, libdrm, cmake ? null, hostTools ? [ ], gnupatch ? null }:
+{ mkSrcPkg, tools, pkgconf, zlib, expat, libffi, wayland, wayland-protocols, libdrm, cmake ? null, hostTools ? [ ], gnupatch ? null, python3 ? null }:
 let
   # patch is on /usr/gnu/bin on the OI bhost (gnupatch==null -> no-op); a solnix host has no /usr/gnu, so put the store patch on PATH.
   pp = if gnupatch == null then "" else "export PATH=${gnupatch}/bin:$PATH";
@@ -21,7 +21,7 @@ let
     build = ''
       cmake -S . -B _b -DCMAKE_INSTALL_PREFIX="$out" -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_C_COMPILER="$CC" -DCMAKE_CXX_COMPILER="$CXX" -DENABLE_OPT=OFF \
-        -DGLSLANG_TESTS=OFF -DENABLE_HLSL=OFF -DBUILD_SHARED_LIBS=OFF -DCMAKE_INSTALL_LIBDIR=lib/amd64
+        ${if python3 == null then "" else "-DPython3_EXECUTABLE=${python3}/bin/python3 "}-DGLSLANG_TESTS=OFF -DENABLE_HLSL=OFF -DBUILD_SHARED_LIBS=OFF -DCMAKE_INSTALL_LIBDIR=lib/amd64
       gmake -C _b -j16 install
       "$out/bin/glslangValidator" --version | grep -q Glslang || { echo "FATAL: glslang" >&2; exit 1; }
     '';
