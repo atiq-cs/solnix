@@ -10,13 +10,19 @@ rec {
   # meson's #!: the store bash (gate B9 FAILs #!/usr/bin/bash), as desktop/gtk/tools.nix. null: the old text (an exempt caller).
   shBang = if bash == null then "/usr/bin/bash" else "${bash}/bin/bash";
   patch = if gnupatch == null then "patch" else "${gnupatch}/bin/patch";
+  # symbolextractor (every meson shared-library link) puts /usr/gnu/bin first on PATH on SunOS: the OI host's GNU nm/readelf (gate B13).
+  # Dropped on the store-python3 instance, as desktop/gtk/tools.nix (1.10.2) and aarch64's meson; python3 == null keeps the old text.
+  symFix = if python3 == null then "" else "\n" + ''
+      grep -q "os.environ\['PATH'\] = '/usr/gnu/bin:' + origpath" mesonbuild/scripts/symbolextractor.py || { echo "FATAL: symbolextractor anchor" >&2; exit 1; }
+      sed -i "s|os.environ\['PATH'\] = '/usr/gnu/bin:' + origpath|os.environ['PATH'] = origpath|" mesonbuild/scripts/symbolextractor.py
+      ! grep -q /usr/gnu mesonbuild/scripts/symbolextractor.py || { echo "FATAL: symbolextractor still names /usr/gnu" >&2; exit 1; }'';
 
   meson = mkSrcPkg {
     pname = "meson"; version = "1.4.2";
     src = { url = "https://github.com/mesonbuild/meson/releases/download/1.4.2/meson-1.4.2.tar.gz";
             sha256 = "ea2546a26f4a171a741c1fd036f22c9c804d6198e3259f1df588e01f842dd69f"; };
     build = ''
-      ${patch} -p1 < ${./patches/meson-1.4.2-keep-store-rpath.patch}
+      ${patch} -p1 < ${./patches/meson-1.4.2-keep-store-rpath.patch}${symFix}
       mkdir -p "$out/lib/meson" "$out/bin"
       cp -r mesonbuild meson.py "$out/lib/meson/"
       # no bytecode in the out (recipes2: 14 .pyc differed between builds); the wrapper runs with PYTHONDONTWRITEBYTECODE=1
