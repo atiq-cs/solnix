@@ -3,7 +3,7 @@
 # targets (jansson and oniguruma: the cross-arch jobs from the served sparcv9 rows, same source and sha256). Store-only builds
 # (nativeTools = NixOS nativeBuildInputs + config.site), shared libraries as nixpkgs builds them, each with an in-build check that links
 # and runs it. Sources pinned by sha256 (libogg and libzip equal to nixpkgs' flat hash; GitHub tag tarballs have no upstream signature).
-{ base, mkSrcPkg, world, zlib, chk, hostTools, cmake, ... }:
+{ base, mkSrcPkg, world, zlib, openssl, ncurses, chk, hostTools, cmake, ... }:
 let
   gh = repo: tag: sha256: { url = "https://codeload.github.com/${repo}/tar.gz/refs/tags/${tag}"; inherit sha256; };
   # cmake projects: the store cmake, store prefixes only (as c-recipes2.nix)
@@ -176,6 +176,215 @@ zip_file_t *f=zip_fopen(z,"a.txt",0); char b[16]={0}; zip_fread(f,b,9); printf("
       ${cmakeB ""}
       grep -q '#define VK_HEADER_VERSION 363$' "$out/include/vulkan/vulkan_core.h" || { echo "FATAL: vulkan-headers version" >&2; exit 1; }
       [ -f "$out/share/vulkan/registry/vk.xml" ] || { echo "FATAL: vulkan registry" >&2; exit 1; }
+    '';
+  };
+
+  # ---- recipes3 batch 2 ---------------------------------------------------------------------------------------------------------
+  # libedit (BSD-3-Clause): the BSD line editor (lldb, sqlite's shell, postgresql's psql can use it). autotools, ncurses.
+  libedit = mkSrcPkg {
+    pname = "libedit"; version = "20260508-3.1";
+    src = { url = "https://thrysoee.dk/editline/libedit-20260508-3.1.tar.gz";
+            sha256 = "91f42d6571dd8d92faedd1341134ce5abca0c5d0b4b352814186d33f2b11272e"; };
+    deps = [ world ncurses ]; nativeTools = hostTools;
+    build = ''
+      # sys.h, terminal.h and terminal.c each declare Solaris' old termcap prototypes (tgetflag(char *), ...) under __sun; ncurses'
+      # <termcap.h> (HAVE_TERMCAP_H) declares them const, and gcc 14 errors on the conflict (measured): the __sun blocks only without it
+      for f in src/sys.h src/terminal.h src/terminal.c; do
+        grep -qE '^#(if defined\(__sun\)|ifdef __sun)$' $f || { echo "FATAL: libedit $f __sun anchor" >&2; exit 1; }
+        sed -i -E 's/^#(if defined\(__sun\)|ifdef __sun)$/#if defined(__sun) \&\& !defined(HAVE_TERMCAP_H)/' $f
+      done
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static CPPFLAGS="-I${ncurses}/include/ncursesw -I${ncurses}/include -D__EXTENSIONS__" LIBS="-lncursesw"
+      gmake -j8; gmake install
+      ${tprog ''#include <histedit.h>
+#include <stdio.h>
+int main(void){HistEvent e; History *h=history_init(); history(h,&e,H_SETSIZE,10); history(h,&e,H_ENTER,"solnix line");
+if(history(h,&e,H_FIRST)<0) return 1; printf("%s\n",e.str); history_end(h); return 0;}'' "c" "$CC" "-ledit -lncursesw"}
+      ${chk ''"$W/t"'' "^solnix line$"}
+    '';
+  };
+
+  # cJSON (MIT): a small C JSON parser (mosquitto, libfido2 tooling). cmake, shared.
+  cjson = mkSrcPkg {
+    pname = "cjson"; version = "1.7.19";
+    src = gh "DaveGamble/cJSON" "v1.7.19" "7fa616e3046edfa7a28a32d5f9eacfd23f92900fe1f8ccd988c1662f30454562";
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      # its custom flags add -fstack-protector-strong, which NEEDs libssp.so.0: gcc.lib ships no libssp (as nvi2.nix): off
+      grep -q -- '-fstack-protector-strong' CMakeLists.txt || { echo "FATAL: cjson ssp anchor" >&2; exit 1; }
+      sed -i '/-fstack-protector-strong/d' CMakeLists.txt
+      ${cmakeB "-DBUILD_SHARED_LIBS=ON -DENABLE_CJSON_TEST=OFF -DENABLE_CJSON_UTILS=ON -DCMAKE_POLICY_VERSION_MINIMUM=3.5"}
+      ${tprog ''#include <cjson/cJSON.h>
+#include <stdio.h>
+int main(void){cJSON *j=cJSON_Parse("{\"a\":[1,2,42]}"); if(!j) return 1; printf("%d\n", cJSON_GetArrayItem(cJSON_GetObjectItem(j,"a"),2)->valueint); cJSON_Delete(j); return 0;}'' "c" "$CC" "-lcjson"}
+      ${chk ''"$W/t"'' "^42$"}
+    '';
+  };
+
+  # TinyXML-2 (Zlib): a small C++ XML parser. cmake, shared, as nixpkgs.
+  tinyxml-2 = mkSrcPkg {
+    pname = "tinyxml-2"; version = "11.0.0";
+    src = gh "leethomason/tinyxml2" "11.0.0" "5556deb5081fb246ee92afae73efd943c889cef0cafea92b0b82422d6a18f289";
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DBUILD_SHARED_LIBS=ON -Dtinyxml2_BUILD_TESTING=OFF"}
+      ${tprog ''#include <tinyxml2.h>
+#include <cstdio>
+int main(){tinyxml2::XMLDocument d; if(d.Parse("<a><b n=\"42\"/></a>")) return 1; std::printf("%d\n", d.FirstChildElement("a")->FirstChildElement("b")->IntAttribute("n")); return 0;}'' "cc" "$CXX" "-ltinyxml2"}
+      ${chk ''"$W/t"'' "^42$"}
+    '';
+  };
+
+  # OpenCL-Headers (Apache-2.0): the Khronos OpenCL C headers (ocl-icd, mesa's rusticl, pocl). Header-only; cmake installs them.
+  opencl-headers = mkSrcPkg {
+    pname = "opencl-headers"; version = "2026.05.29";
+    src = gh "KhronosGroup/OpenCL-Headers" "v2026.05.29" "d9e6c48357de5002da11ce45de600e0c3ffe6ab4f628a3b9fe2b38603161658a";
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DBUILD_TESTING=OFF"}
+      [ -f "$out/include/CL/cl.h" ] && grep -q CL_VERSION_3_0 "$out/include/CL/cl.h" || { echo "FATAL: opencl-headers" >&2; exit 1; }
+      printf '#include <CL/cl.h>\nint main(void){return CL_SUCCESS;}\n' > "$W/t.c"; "$CC" -I"$out/include" -c "$W/t.c" -o "$W/t.o"
+    '';
+  };
+
+  # termcolor (BSD-3-Clause): a header-only C++ library for colored terminal output. cmake installs the header + config.
+  termcolor = mkSrcPkg {
+    pname = "termcolor"; version = "2.1.0";
+    src = gh "ikalnytskyi/termcolor" "v2.1.0" "435994c32557674469404cb1527c283fdcf45746f7df75fd2996bb200d6a759f";
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DTERMCOLOR_TESTS=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5"}
+      ${tprog ''#include <termcolor/termcolor.hpp>
+#include <iostream>
+int main(){ std::cout << termcolor::colorize << termcolor::red << "red" << termcolor::reset << std::endl; return 0; }'' "cc" "$CXX" ""}
+      ${chk ''"$W/t" | od -c | head -2'' "033"}
+    '';
+  };
+
+  # check (LGPL-2.1+): a unit test framework for C. autotools (no subunit), as nixpkgs.
+  check = mkSrcPkg {
+    pname = "check"; version = "0.15.2";
+    src = { url = "https://github.com/libcheck/check/releases/download/0.15.2/check-0.15.2.tar.gz";
+            sha256 = "a8de4e0bacfb4d76dd1c618ded263523b53b85d92a146d8835eb1a52932fa20a"; };
+    deps = [ world ]; nativeTools = hostTools;
+    build = ''
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-subunit --disable-build-docs
+      gmake -j8; gmake install
+      find "$out/share/doc" -delete 2>/dev/null || true
+      ${tprog ''#include <check.h>
+#include <stdlib.h>
+START_TEST(t1){ ck_assert_int_eq(1+1, 2); } END_TEST
+int main(void){Suite *s=suite_create("s"); TCase *c=tcase_create("c"); tcase_add_test(c,t1); suite_add_tcase(s,c);
+SRunner *r=srunner_create(s); srunner_set_fork_status(r, CK_NOFORK); srunner_run_all(r, CK_NORMAL); int f=srunner_ntests_failed(r); srunner_free(r); return f;}'' "c" "$CC" "-lcheck -lm"}
+      ${chk ''"$W/t"'' "100%: Checks: 1, Failures: 0, Errors: 0"}
+    '';
+  };
+
+  # popt (MIT): command-line option parsing (rsync, logrotate, cryptsetup). autotools.
+  popt = mkSrcPkg {
+    pname = "popt"; version = "1.19";
+    src = { url = "https://ftp.osuosl.org/pub/rpm/popt/releases/popt-1.x/popt-1.19.tar.gz";
+            sha256 = "c25a4838fc8e4c1c8aacb8bd620edb3084a3d63bf8987fdad3ca2758c63240f9"; };
+    deps = [ world ]; nativeTools = hostTools;
+    build = ''
+      # poptint.c passes char ** as iconv's input buffer; the gate's <iconv.h> (XPG6) takes const char **, and gcc 14 makes the
+      # mismatch an error (measured; GNU libiconv's header is const too). The pre-gcc-14 warning, as packages.nix's tputsFix.
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-nls CFLAGS="-O2 -Wno-error=incompatible-pointer-types"
+      gmake -j8; gmake install
+      ${tprog ''#include <popt.h>
+#include <stdio.h>
+int main(int c, const char **v){int n=0; struct poptOption o[]={{"num",'n',POPT_ARG_INT,&n,0,"n",NULL},POPT_TABLEEND};
+poptContext x=poptGetContext(NULL,c,v,o,0); while(poptGetNextOpt(x)>0); printf("n=%d\n",n); poptFreeContext(x); return 0;}'' "c" "$CC" "-lpopt"}
+      ${chk ''"$W/t" --num 42'' "^n=42$"}
+    '';
+  };
+
+  # libev (BSD-2-Clause): an event loop (its event-port backend is the Solaris one). autotools.
+  libev = mkSrcPkg {
+    pname = "libev"; version = "4.33";
+    src = { url = "https://dist.schmorp.de/libev/Attic/libev-4.33.tar.gz";
+            sha256 = "507eb7b8d1015fbec5b935f34ebed15bf346bed04a11ab82b8eee848c4205aea"; };
+    deps = [ world ]; nativeTools = hostTools;
+    build = ''
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static
+      gmake -j8; gmake install
+      # its ev.h is also the name of libevent's compat header: nixpkgs ships it as is (no event.h shim conflict here: none installed)
+      ${tprog ''#include <ev.h>
+#include <stdio.h>
+static int n; static void cb(EV_P_ ev_timer *w, int r){ n++; ev_break(EV_A_ EVBREAK_ALL); }
+int main(void){ struct ev_loop *l = ev_default_loop(0); ev_timer t; ev_timer_init(&t, cb, 0.01, 0.); ev_timer_start(l, &t); ev_run(l, 0);
+printf("libev %d.%d backend %u timer %d\n", ev_version_major(), ev_version_minor(), ev_backend(l), n); return n != 1; }'' "c" "$CC" "-lev"}
+      ${chk ''"$W/t"'' "^libev 4\\.33 backend [0-9]+ timer 1$"}
+    '';
+  };
+
+  # c-ares (MIT): async DNS (curl, nodejs, grpc). cmake, shared, tests off.
+  c-ares = mkSrcPkg {
+    pname = "c-ares"; version = "1.34.4";
+    src = { url = "https://github.com/c-ares/c-ares/releases/download/v1.34.4/c-ares-1.34.4.tar.gz";
+            sha256 = "fa38dbed659ee4cc5a32df5e27deda575fa6852c79a72ba1af85de35a6ae222f"; };
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DCARES_SHARED=ON -DCARES_STATIC=OFF -DCARES_BUILD_TESTS=OFF -DCARES_BUILD_TOOLS=ON"}
+      ${tprog ''#include <ares.h>
+#include <stdio.h>
+int main(void){ if(ares_library_init(ARES_LIB_INIT_ALL)) return 1; ares_channel_t *c; if(ares_init(&c) != ARES_SUCCESS) return 1;
+printf("c-ares %s\n", ares_version(NULL)); ares_destroy(c); ares_library_cleanup(); return 0; }'' "c" "$CC" "-lcares"}
+      ${chk ''"$W/t"'' "^c-ares 1\\.34\\.4$"}
+    '';
+  };
+
+  # libssh2 (BSD-3-Clause): the SSH2 client library (curl's sftp/scp, libgit2). autotools, OpenSSL + zlib.
+  libssh2 = mkSrcPkg {
+    pname = "libssh2"; version = "1.11.1";
+    src = { url = "https://www.libssh2.org/download/libssh2-1.11.1.tar.gz";
+            sha256 = "d9ec76cbe34db98eec3539fe2c899d26b0c837cb3eb466a56b0f109cabf658f7"; };
+    deps = [ world openssl zlib ]; nativeTools = hostTools;
+    build = ''
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --with-crypto=openssl --with-libssl-prefix=${openssl} \
+        --with-libz --disable-examples-build --disable-tests
+      gmake -j8; gmake install
+      ${tprog ''#include <libssh2.h>
+#include <stdio.h>
+int main(void){ if(libssh2_init(0)) return 1; LIBSSH2_SESSION *s = libssh2_session_init(); if(!s) return 1;
+printf("libssh2 %s\n", libssh2_version(0)); libssh2_session_free(s); libssh2_exit(); return 0; }'' "c" "$CC" "-lssh2"}
+      ${chk ''"$W/t"'' "^libssh2 1\\.11\\.1$"}
+    '';
+  };
+
+  # cmocka (Apache-2.0): a unit test framework for C with mock objects. cmake, shared.
+  cmocka = mkSrcPkg {
+    pname = "cmocka"; version = "2.0.2";
+    src = { url = "https://cmocka.org/files/2.0/cmocka-2.0.2.tar.xz";
+            sha256 = "39f92f366bdf3f1a02af4da75b4a5c52df6c9f7e736c7d65de13283f9f0ef416"; };
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      # CompilerChecks.cmake adds -fstack-protector(-strong) when the compiler takes it, which NEEDs libssp.so.0 (no libssp in gcc.lib)
+      grep -q 'check_c_compiler_flag_ssp("-fstack-protector-strong"' CompilerChecks.cmake || { echo "FATAL: cmocka ssp anchor" >&2; exit 1; }
+      sed -i 's/check_c_compiler_flag_ssp("-fstack-protector[-a-z]*" \(WITH_STACK_PROTECTOR[A-Z_]*\))/set(\1 FALSE)/' CompilerChecks.cmake
+      ${cmakeB "-DBUILD_SHARED_LIBS=ON -DUNIT_TESTING=OFF -DWITH_EXAMPLES=OFF"}
+      ${tprog ''#include <stdarg.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <setjmp.h>
+#include <cmocka.h>
+static void t(void **s){ (void)s; assert_int_equal(1+1, 2); }
+int main(void){ const struct CMUnitTest ts[] = { cmocka_unit_test(t) }; return cmocka_run_group_tests(ts, NULL, NULL); }'' "c" "$CC" "-lcmocka"}
+      ${chk ''"$W/t" 2>&1'' "PASSED.*1 test"}
+    '';
+  };
+
+  # utfcpp (BSL-1.0): header-only UTF-8 helpers for C++ (taglib, kodi). cmake installs the headers + config.
+  utf8cpp = mkSrcPkg {
+    pname = "utf8cpp"; version = "4.2.1";
+    src = gh "nemtrif/utfcpp" "v4.2.1" "6d6a5493a111884cc085ee31babfe6d9960c8fb08fc80a64852eaeea8323dbc1";
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DUTF8_TESTS=OFF -DUTF8_SAMPLES=OFF"}
+      ${tprog ''#include <utf8cpp/utf8.h>
+#include <cstdio>
+#include <string>
+int main(){ std::string s = "\xc3\xa9t\xc3\xa9"; std::printf("%d %d\n", (int)utf8::distance(s.begin(), s.end()), utf8::is_valid(s.begin(), s.end()) ? 1 : 0); return 0; }'' "cc" "$CXX" ""}
+      ${chk ''"$W/t"'' "^3 1$"}
     '';
   };
 }
