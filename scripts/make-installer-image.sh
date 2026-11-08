@@ -45,9 +45,11 @@ UFS_OVERHEAD_PCT="${UFS_OVERHEAD_PCT:-12}" # UFS metadata + fragment slack over 
 RD_MIN_FREE_KB="${RD_MIN_FREE_KB:-32768}"  # runtime slack the live root needs (/root, /etc edits)
 RD_NBPI="${RD_NBPI:-8192}"
 POOL_NAME="${SOLNIX_LIVE_POOL:-rpool}"     # install-be needs a pool name; the live root never mounts one
-# GNU first: this runs on the BUILD host (sed -i, df -i, find -L).
-PATH=/usr/gnu/bin:/usr/sbin:/usr/bin:/sbin:$PATH
+# GNU first: this runs on the BUILD host (sed -i, df -i, find -L). An OpenIndiana host has them in /usr/gnu/bin; a solnix
+# host has no /usr/gnu, so the caller's PATH (store coreutils/gnused/findutils) must come before illumos /usr/bin.
+PATH=/usr/gnu/bin:$PATH:/usr/sbin:/usr/bin:/sbin
 die() { echo "FATAL: $*" >&2; exit 1; }
+for _t in df sed find; do "$_t" --version 2>/dev/null | grep -q GNU || die "$_t on PATH is not GNU ($(command -v $_t)): put store coreutils, gnused and findutils first"; done
 log() { printf '\n=== %s ===\n' "$*" >&2; }
 rl() { ls -ld "$1" 2>/dev/null | sed -n 's/.* -> //p'; }
 [ "$(id -u)" = 0 ] || die "run as root (lofiadm/newfs/mount)"
