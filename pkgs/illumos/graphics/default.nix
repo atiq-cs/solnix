@@ -5,7 +5,7 @@
 { mkSrcPkg, pkgconf, zlib, world, perl ? null, hostTools ? [ ], python3 ? null, gnupatch ? null, bash ? null, cmake ? null, bison ? null }:
 let
   tools = import ./tools.nix { inherit mkSrcPkg python3 gnupatch bash; };
-  libs = import ./libs.nix { inherit mkSrcPkg tools pkgconf zlib world perl hostTools gnupatch; };
+  libs = import ./libs.nix { inherit mkSrcPkg tools pkgconf zlib world perl hostTools gnupatch python3; };
   input = import ./input.nix { inherit mkSrcPkg tools pkgconf python3 gnupatch perl bison; };
 in
 libs // input // {

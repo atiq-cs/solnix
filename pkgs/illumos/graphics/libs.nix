@@ -1,8 +1,10 @@
 # graphics/libs.nix -- the C libraries under the Wayland/Mesa stack, from source.
-{ mkSrcPkg, tools, pkgconf, zlib, world, perl ? null, hostTools ? [ ], gnupatch ? null }:
+{ mkSrcPkg, tools, pkgconf, zlib, world, perl ? null, hostTools ? [ ], gnupatch ? null, python3 ? null }:
 let m = tools.mesonBuild; pc = "export PATH=${pkgconf}/bin:$PATH";
   # patch is on /usr/gnu/bin on the OI bhost (gnupatch==null -> no-op); a solnix host has no /usr/gnu, so put the store patch on PATH.
   pp = if gnupatch == null then "" else "export PATH=${gnupatch}/bin:$PATH";
+  # python3: dbus's test/data/copy_data_for_tests.py runs via /usr/bin/env python3 at BUILD time. OI bhost: /usr/bin/python3.14; solnix host: the store python3.
+  py = if python3 == null then "mkdir -p \"$TMPDIR/py\" && ln -sf /usr/bin/python3.14 \"$TMPDIR/py/python3\" && export PATH=\"$TMPDIR/py:$PATH\"" else "mkdir -p \"$TMPDIR/py\" && ln -sf ${python3}/bin/python3 \"$TMPDIR/py/python3\" && export PATH=\"$TMPDIR/py:$PATH\"";
 in
 rec {
   expat = mkSrcPkg {
@@ -75,6 +77,7 @@ rec {
       # cc.get_supported_arguments() drops it (msghdr then has no msg_control: measured).
       grep -q "' -D_XOPEN_SOURCE=500'" meson.build || { echo "FATAL: dbus XOPEN anchor" >&2; exit 1; }
       sed -i "s/' -D_XOPEN_SOURCE=500'/'-D_XOPEN_SOURCE=500'/" meson.build
+      ${py}   # test/data/copy_data_for_tests.py: /usr/bin/env python3
       ${pc}
       ${m "-Dsystemd=disabled -Dx11_autolaunch=disabled -Dselinux=disabled -Dapparmor=disabled -Dlibaudit=disabled -Depoll=disabled -Dinotify=disabled -Dkqueue=disabled -Dlaunchd=disabled -Ddoxygen_docs=disabled -Dducktype_docs=disabled -Dxml_docs=disabled -Dqt_help=disabled -Dmodular_tests=disabled -Dsession_socket_dir=/tmp '-Dc_link_args=-lsocket -lnsl'"}
       # run check: dbus-run-session (what start-cosmic uses) starts a bus that answers ListNames.
