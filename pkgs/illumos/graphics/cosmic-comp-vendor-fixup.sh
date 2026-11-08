@@ -119,6 +119,12 @@ fi
 #    /scratch/solnix/gpu3/t/shm.c), the same fix as softbuffer's (item 7).
 edit smithay src/utils/sealed_file.rs "'            let mut shm_name = name.to_bytes().to_owned();'" \
   "'            let mut shm_name = b\"/\".to_vec();\n            shm_name.extend_from_slice(name.to_bytes());'"
+# smithay 8a27023 (cosmic-comp/panel epoch-1.11.0) moved to rand 0.10, where sample() is RngExt's, not Rng's; upstream builds
+# this non-Linux arm on no CI target, so its `use rand::Rng` fails E0599 on illumos. Only where smithay takes rand 0.10
+# (smithay 1ed69cb, the 1.5.0 compositor, takes 0.9, whose Rng has sample()).
+if have smithay && grep -q '^rand = "0\.10' smithay/Cargo.toml; then
+  edit smithay src/utils/sealed_file.rs "'        use rand::{Rng, distr::Alphanumeric};'" "'        use rand::{RngExt, distr::Alphanumeric};'"
+fi
 
 # 11. polling (calloop's and async-io's poller): take its epoll backend, the Linux one, on illumos;
 #     rustix has illumos epoll, eventfd and timerfd. Every crate that vendors polling, for two reasons:

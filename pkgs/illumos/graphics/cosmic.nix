@@ -39,18 +39,18 @@ let
     args = [ ./cosmic-build.sh ];
   } // env);
   src = repo: sha256: import <nix/fetchurl.nix> {
-    name = "${repo}-epoch-1.5.0.tar.gz"; url = "https://codeload.github.com/pop-os/${repo}/tar.gz/refs/tags/epoch-1.5.0"; inherit sha256; };
+    name = "${repo}-epoch-1.11.0.tar.gz"; url = "https://codeload.github.com/pop-os/${repo}/tar.gz/refs/tags/epoch-1.11.0"; inherit sha256; };
   # cargo vendor NAR hashes (FODs). A new one: set it to lib.fakeHash, build, copy the "got:".
   vendorHashes = import ./cosmic-vendor-hashes.nix;
 in import ./cosmic-apps.nix { inherit src vendorOf cargoApp graphics vendorHashes openssl libclang; }
 // rec {
   cosmic-comp-src = import <nix/fetchurl.nix> {
-    url = "https://codeload.github.com/pop-os/cosmic-comp/tar.gz/refs/tags/epoch-1.5.0";
-    sha256 = "ebdc79bd667b6ee167fcf5c4a616f56db7c24adfabc11ab3c3e572c5b2a52421"; };
-  cosmic-comp-vendor = vendorOf { pname = "cosmic-comp-1.5.0"; src = cosmic-comp-src;
-    narHash = "sha256-tOK+PNEh6/X15NsuRGvxrZMAXUGQlkzLjAPaa5N/ERg="; };
+    url = "https://codeload.github.com/pop-os/cosmic-comp/tar.gz/refs/tags/epoch-1.11.0";
+    sha256 = "c07778440f25e909358a37f293ddf403a28a153b02eedb30b61b846a7142ba60"; };
+  cosmic-comp-vendor = vendorOf { pname = "cosmic-comp-1.11.0"; src = cosmic-comp-src;
+    narHash = "sha256-QwUZzAcdHCDDyqJrd1+iFJ86PNg4FUXSeHPkuuTSJwA="; };
   cosmic-comp = cargoApp {
-    pname = "cosmic-comp"; version = "1.5.0"; src = cosmic-comp-src; vendor = cosmic-comp-vendor;
+    pname = "cosmic-comp"; version = "1.11.0"; src = cosmic-comp-src; vendor = cosmic-comp-vendor;
     libs = with graphics; [ mesa libdrm wayland libffi expat seatd libxkbcommon pixman libdisplay-info ];
     stubs = true; bins = "cosmic-comp";
     required = "rustix rustix-0.38.44 wayland-backend reis winit smithay";
@@ -60,12 +60,12 @@ in import ./cosmic-apps.nix { inherit src vendorOf cargoApp graphics vendorHashe
   # The reference COSMIC client (solnix-pkgs cosmic-term.nix), built here instead of on the
   # nixpkgs fork. Same features: wayland + dbus-config, no wgpu (it panics with no backend).
   cosmic-term-src = import <nix/fetchurl.nix> {
-    url = "https://codeload.github.com/pop-os/cosmic-term/tar.gz/refs/tags/epoch-1.5.0";
-    sha256 = "ea942a519c33c6bc13dddfdd8c5addfc4307742c1f892fa67807646fc6db42bc"; };
-  cosmic-term-vendor = vendorOf { pname = "cosmic-term-1.5.0"; src = cosmic-term-src;
-    narHash = "sha256-9vBAV+2+LhVu0wJXz0k5damFgbp7geRkRQhX7/MURWw="; };
+    url = "https://codeload.github.com/pop-os/cosmic-term/tar.gz/refs/tags/epoch-1.11.0";
+    sha256 = "455cdc42e8f4a5a00a033a38f65341bf1b1af621cc7d01a78da0ee2f9177a09c"; };
+  cosmic-term-vendor = vendorOf { pname = "cosmic-term-1.11.0"; src = cosmic-term-src;
+    narHash = "sha256-5G1J76m13BBzgcwNLQKNslutHXHm+9ai9KSfV0EPLk8="; };
   cosmic-term = cargoApp {
-    pname = "cosmic-term"; version = "1.5.0"; src = cosmic-term-src; vendor = cosmic-term-vendor;
+    pname = "cosmic-term"; version = "1.11.0"; src = cosmic-term-src; vendor = cosmic-term-vendor;
     libs = with graphics; [ libxkbcommon wayland libffi ];
     features = "wayland,dbus-config"; bins = "cosmic-term";
     required = "rustix wayland-backend winit softbuffer";

@@ -1,22 +1,22 @@
-# NAR hashes of each COSMIC app's cargo vendor FOD (graphics/cosmic.nix vendorOf).
+# NAR hashes (epoch-1.11.0; greetd 0.10.3) of each COSMIC app's cargo vendor FOD (graphics/cosmic.nix vendorOf).
 {
-  cosmic-session = "sha256-srcH0dF+af6z1BpbGBpl9MtYh9RLZwRGXYuHIBqlC7s=";
-  cosmic-panel = "sha256-K+1Wgpmjj0M2hyq0f4zFRQFHZ9T4yVFtNV5zXgkfFNo=";
-  cosmic-applets = "sha256-OWshoKI2h36rzs8Nmmk1hxBBajNLjlJaGx0WVVbZUdw=";
-  cosmic-launcher = "sha256-y2YMlRQuGLQxZRQ/Ri71dZtV4NUbhPna9oExY+INWVQ=";
-  cosmic-app-library = "sha256-3j6RjcNVLwcUE5MmapTV4yMnO3v+3L1HcncSMM4MGNw=";
-  cosmic-notifications = "sha256-npLLBF+T1/vvRqYY4q0GtAR8P/KEfcYIad7x33rFJz0=";
-  cosmic-osd = "sha256-sIcUPP5s3h24MI4j8+D8YLYesnZ65g36r0/RNiAthXM=";
-  cosmic-settings-daemon = "sha256-lwAj+U63t6LMe29QIcjJX4nuwHSoDJzvRNEvylZviAc=";
-  cosmic-bg = "sha256-oFdBW7hd6kVDjwIeyk/NiqQmLuRJbJEL1UHtjtAJxu4=";
+  cosmic-session = "sha256-DsZyKbj5KHpU3nIBknzmdOaGkn4vgoQv61gb5UtxBZo=";
+  cosmic-panel = "sha256-fejOwGLQphNNk11vFAt4r9Ho5pBK9OMhdVqeYtV97co=";
+  cosmic-applets = "sha256-cpribXtK/d0L64eBMj0RA2O7Mrz7h/CQg7fZ65l9hCc=";
+  cosmic-launcher = "sha256-l0pfVkewDwo/pqQjccXiZi+P1bKV/zk/sQV555Fc/ZU=";
+  cosmic-app-library = "sha256-cbXXdEpF6wF84+5ZWrdykjm83p9X69LdMrdok4ZJofo=";
+  cosmic-notifications = "sha256-i8S+L09FRXfpgc5M0aRYute5oAjd/GT7Xw+R0et7EDk=";
+  cosmic-osd = "sha256-quCx9VOMSgIMFXFiuwYYG8EuzmFE9/5kErQJCJYNpek=";
+  cosmic-settings-daemon = "sha256-Bb4QUIwZe7flv5NBxT7vEHANxXVpM4KCILti2Xzt2Zs=";
+  cosmic-bg = "sha256-rW0EoS2kHWBbzeH7A2lbQqrJAsioluQN1CfF1qaMP70=";
   cosmic-workspaces = "sha256-ks56oFWMyP2AtwXsHrEq6QP2VzkgD9SOtLlYrj+ekp8=";
-  cosmic-randr = "sha256-AgzEfElSmEJEauJZiQBJ1kUpkRZpDK/U+VZle790068=";
-  cosmic-idle = "sha256-TJcnZIsOib94nt96mThiYcNq4kgKN6pmtZ/oFJ8m4JU=";
-  cosmic-settings = "sha256-LIqSJzdKU38rAycCH1HHzogF+qACNBJPZ2NTyDdKhlA=";
-  cosmic-files = "sha256-BHoY9HQP3Vk5vhkazQL5MJ6Wog1G1LrbM+U7RbpLzHo=";
-  cosmic-edit = "sha256-hUQnO8oYNyKHmINnVzE5ITjhwSTkcmlQxNvDwcZ3AVQ=";
-  cosmic-store = "sha256-QYxBJ1dY1kAwlFtTl3notm3tAi0tSmC7ztT2nekfovs=";
-  cosmic-screenshot = "sha256-YQBfAAx409rfPlxurSs+HDBd451q/CaQJLYrVMvz1L8=";
-  cosmic-greeter = "sha256-3BTtOI7u4DwvsSLEC+VGSn0WtUeiThg2ziZuecJucsc=";
+  cosmic-randr = "sha256-+dKsuXITLlWgN9LQLc1MiH085hgqzURskVfvMVAw2W0=";
+  cosmic-idle = "sha256-LxTJ/FLtPq/TUKWHt5xAe/Mt3X//EaVT41wbN77YSyk=";
+  cosmic-settings = "sha256-vqmiAyebYtbS87k+K783slePEAQLFoufQU4RNFeZTkw=";
+  cosmic-files = "sha256-pGonpJyt22mc5jsTPQVXsQtmwS2Ln0nyQbsJGYc+ljA=";
+  cosmic-edit = "sha256-ougsWk0N/mZBMrGhY7qC35sq9EHQ4A06P5b7JAcg4AU=";
+  cosmic-store = "sha256-4Vkj6aPpSn+AjIn97L8GWPwDFM8ubdYcFtdYdcMfZiM=";
+  cosmic-screenshot = "sha256-dpmQ4Q66RjeiFbdZoftPXQZQKpjKsrFzVncV46xlzXE=";
+  cosmic-greeter = "sha256-WJ+RTv6JeFBF/eFUTkv8A/HAn2J7EUEemvMS0N00H/g=";
   greetd = "sha256-rp0XWFEqfTot6NmvfmiBh/w9bJbNovMRlo7Zn9eHKq4=";
 }

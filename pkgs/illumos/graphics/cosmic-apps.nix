@@ -1,6 +1,6 @@
-# graphics/cosmic-apps.nix -- the COSMIC 1.5.0 session, shell and apps (what NixOS
+# graphics/cosmic-apps.nix -- the COSMIC 1.11.0 session, shell and apps (what NixOS
 # services.desktopManager.cosmic installs) as cargoApp derivations. Each: the upstream
-# epoch-1.5.0 tag (an FOD), its cargo vendor (an FOD), the illumos fixups, a run check.
+# epoch-1.11.0 tag (an FOD), its cargo vendor (an FOD), the illumos fixups, a run check.
 # Features drop only what has no illumos backend (systemd/logind/journald, PipeWire,
 # BlueZ, io_uring, gvfs/glib, flatpak, wgpu); each drop is named where it happens.
 { src, vendorOf, cargoApp, graphics, vendorHashes, openssl, libclang ? null }:
@@ -12,16 +12,16 @@ let
   appWrap = "ICED_BACKEND=tiny-skia UMEM_OPTIONS=backend=mmap";
   app = { pname, repo ? pname, sha256, libs ? client, required ? "rustix wayland-backend", stubs ? true,
           wrap ? appWrap, NO_SOFTBUFFER_KMS ? "1", ... }@a: cargoApp ({
-    version = "1.5.0";
+    version = "1.11.0";
     src = src repo sha256;
-    vendor = vendorOf { pname = "${pname}-1.5.0"; src = src repo sha256; narHash = vendorHashes.${pname}; };
+    vendor = vendorOf { pname = "${pname}-1.11.0"; src = src repo sha256; narHash = vendorHashes.${pname}; };
     inherit libs required stubs wrap NO_SOFTBUFFER_KMS;
     appFixups = pname;
   } // removeAttrs a [ "repo" "sha256" "libs" "required" "stubs" "wrap" "NO_SOFTBUFFER_KMS" ]);
 in {
   # Tier 1: session plumbing. NixOS cosmic-session; autostart without systemd (XDG scan).
   cosmic-session = app {
-    pname = "cosmic-session"; sha256 = "c71cfe8061d3ea03534f594c05c99fcc4ea2cac4c30edeb96ac83554d8a67910";
+    pname = "cosmic-session"; sha256 = "0c3d3e1f0ef534a063621932cdcc15c8af258df5c12ce6023615dc33222ebca5";
     libs = [ ]; required = "rustix"; stubs = false; wrap = ""; features = "autostart"; bins = "cosmic-session";
     # start-cosmic as NixOS patches it: store paths for cosmic-session and dbus-run-session.
     install = ''
@@ -39,7 +39,7 @@ in {
   # Tier 2: the shell. cosmic-panel is a nested compositor (smithay GLES on EGL), so it
   # needs Mesa's libEGL on its RUNPATH (smithay dlopens it); -p: the bin crate only.
   cosmic-panel = app {
-    pname = "cosmic-panel"; sha256 = "66d8dfbc8aa62ff6a91e83e5bdcb5363c663aac5a58c111152b258054a815222";
+    pname = "cosmic-panel"; sha256 = "ef0de256580e1f1600c5a662179862976ba0b8475b45e99e9eb2713bed8e1007";
     libs = client ++ [ mesa libdrm ]; required = "rustix wayland-backend smithay"; stubs = false;
     cargoArgs = "-p cosmic-panel-bin"; bins = "cosmic-panel";
     install = "schema data/default_schema";
@@ -49,7 +49,7 @@ in {
   # bluetooth applet (bluer is compile_error! off Linux). battery/input-sources link the
   # libudev STUB; they start, and udev_new() fails as an Err at run time.
   cosmic-applets = app {
-    pname = "cosmic-applets"; sha256 = "ac9328e58f5e9cb9c7561a2ce4af212d4916d97c820741f0959366c7e1a0e3ba";
+    pname = "cosmic-applets"; sha256 = "d2ad09b72a2dcba2a17f12e557f0e21dc60171eefa54390e4b67bb058f9180e2";
     cargoArgs = "-p cosmic-applets -p cosmic-panel-button"; bins = "cosmic-applets cosmic-panel-button";
     install = ''
       link cosmic-applets cosmic-app-list cosmic-applet-a11y cosmic-applet-audio cosmic-applet-battery \
@@ -64,21 +64,21 @@ in {
     check = "runok cosmic-applet-time; XDG_DATA_DIRS=$out/share runok cosmic-panel-button com.system76.CosmicAppList";
   };
   cosmic-launcher = app {
-    pname = "cosmic-launcher"; sha256 = "908cb0ef7e609ce0dec59f6d1cb4c249551883da42c957cd9dcb2e45892c7ec7";
+    pname = "cosmic-launcher"; sha256 = "82a510d7d472c68cdd1137363704c1f6a91b37de4f48e5a1f844242de79f941d";
     bins = "cosmic-launcher";
     install = "app data/com.system76.CosmicLauncher.desktop; meta data/com.system76.CosmicLauncher.metainfo.xml; icon data/icons/com.system76.CosmicLauncher.svg";
   };
   cosmic-app-library = app {
-    pname = "cosmic-app-library"; sha256 = "39dfa91d807240585ece7794190229832cb0c48162d87a29d62fb6a43a5238e6";
+    pname = "cosmic-app-library"; sha256 = "9ce3f012af1f885b0a99c589e77803c8d7fb76cba7a7202030cae19f1ac2dd55";
     bins = "cosmic-app-library"; features = "";
     install = "app data/com.system76.CosmicAppLibrary.desktop; for f in data/icons/*.svg; do icon $f; done";
   };
   cosmic-notifications = app {   # no systemd (journald) feature
-    pname = "cosmic-notifications"; sha256 = "8c60dd4c2161a2b9d2314597e141c600da9882fe774858283303370b2409ead7";
+    pname = "cosmic-notifications"; sha256 = "1874d0b5d67a0c6f1c1415f36a094faaac9c82f3ddf4eeb5061c516d778598c8";
     bins = "cosmic-notifications";
   };
   cosmic-osd = app {
-    pname = "cosmic-osd"; sha256 = "de1a409c95305059f0c79f1dff0089f7cf6aaf9b2b7201e982da9895d58ad4a3";
+    pname = "cosmic-osd"; sha256 = "98f049d10e9746ae9751d10d556eff73b7270d7d99861445ab9171bd140ba416";
     bins = "cosmic-osd";
   };
   # NixOS ships it (services.desktopManager.cosmic corePkgs) and cosmic-session starts it first: theme,
@@ -86,33 +86,33 @@ in {
   # illumos lacks: cosmic-apps-src-fixup.py gates the client off, so the audio server has no devices.
   # udev (backlight) links the STUB libudev and fails as an Err at run time. No polkit rule (no polkit).
   cosmic-settings-daemon = app {
-    pname = "cosmic-settings-daemon"; sha256 = "5b404784098e5b92f989e7b7c4e0c645b2f60c3b385c283ad052d75b5d75952c";
+    pname = "cosmic-settings-daemon"; sha256 = "1cc494c028a59a0356547c834421495da326622f837221726c15fceb14f3f9f0";
     # a wayland client (cctk): the client libs; openssl for geonames' reqwest (NixOS buildInputs has it too)
     libs = client ++ [ openssl ]; wrap = ""; bins = "cosmic-settings-daemon"; cargoArgs = "--bin cosmic-settings-daemon";
     install = ''install -Dm0644 data/system_actions.ron "$out/share/cosmic/com.system76.CosmicSettings.Shortcuts/v1/system_actions"'';
     check = "runok cosmic-settings-daemon";   # no session bus here: it must start and exit non-signalled
   };
   cosmic-bg = app {   # no avif (dav1d); png/jpeg/webp/jxl stay
-    pname = "cosmic-bg"; sha256 = "12b30c60e15ac6c0f4b3eca8c37642145683e830833b429958222dfc395db177";
+    pname = "cosmic-bg"; sha256 = "00e0874b82877378be9cb305139e626f3cd5ef01ad7a1a517de826086adc2652";
     bins = "cosmic-bg"; stubs = false; install = "schema data/v1 com.system76.CosmicBackground/v1";
   };
   cosmic-workspaces = app {   # GBM screencopy thumbnails: libgbm from Mesa
-    pname = "cosmic-workspaces"; repo = "cosmic-workspaces-epoch"; sha256 = "d7b54ce8dd229c6b76c2132b38d0814df656439bd4c014d04bd052143dcf4249";
+    pname = "cosmic-workspaces"; repo = "cosmic-workspaces-epoch"; sha256 = "4dad3cd1fffe5b377c84948598c666493e5a053e6e1105a958f20a73bea92eab";
     libs = client ++ [ mesa libdrm ]; bins = "cosmic-workspaces";
     install = "app data/com.system76.CosmicWorkspaces.desktop; icon data/com.system76.CosmicWorkspaces.svg";
   };
   cosmic-randr = app {
-    pname = "cosmic-randr"; sha256 = "55b7d6070f05c12477f18c1c72beab9f1f5409cd83b63c31846c8c1739993aa2";
+    pname = "cosmic-randr"; sha256 = "cd04841b780ad13d407a0a3740f827b3fc214dfc198b114d6a83524c2a0ca96e";
     libs = [ wayland libffi ]; stubs = false; wrap = ""; bins = "cosmic-randr";
   };
   cosmic-idle = app {
-    pname = "cosmic-idle"; sha256 = "f6eab0ed81bba6bd3a6dfb3ec78471a152852c59e6887a74206f4b59865df7c1";
+    pname = "cosmic-idle"; sha256 = "683290f2a67a63fd553f654a34756cbfdcc41b2d2141b79850c58c16643dc63a";
     stubs = false; wrap = ""; bins = "cosmic-idle";
   };
 
   # Tier 3: the apps.
   cosmic-settings = app {
-    pname = "cosmic-settings"; sha256 = "06070fae46b77a57f906b0ee670e9d5c8ec10604359653bc6ca7b1eece6237ec";
+    pname = "cosmic-settings"; sha256 = "213459e770dc899da7f9d47557b7d3e4e27e1debb8d7af590995bd0f63da0a5e";
     # Dropped pages: sound (PipeWire), bluetooth (BlueZ); avif (dav1d). openrc: the non-systemd
     # service-manager arm the app requires one of (main.rs compile_error!).
     features = "wayland,single-instance,openrc,dbus-config,a11y,xdg-portal,page-about,page-date,page-default-apps,page-display,page-input,page-legacy-applications,page-networking,page-power,page-region,page-users,page-window-management,page-workspaces,page-accessibility";
@@ -123,12 +123,12 @@ in {
     '';
   };
   cosmic-files = app {   # no io-uring (compio), gvfs (glib/gio), wgpu
-    pname = "cosmic-files"; sha256 = "da8567bcd0a15ca6522a8800ec800701f8e994ef5da52513b3afdf95370e3bf1";
+    pname = "cosmic-files"; sha256 = "ceeea09a6e249192a8e439d416f20391e923cb75c09922297ff9e6b9926e8eb7";
     features = "dbus-config,desktop,notify,wayland,bzip2,lzma-rust2"; cargoArgs = "-p cosmic-files"; bins = "cosmic-files";
     install = "app res/com.system76.CosmicFiles.desktop; meta res/com.system76.CosmicFiles.metainfo.xml; tree res/icons/hicolor share/icons/hicolor";
   };
   cosmic-edit = app {    # no gvfs, wgpu
-    pname = "cosmic-edit"; sha256 = "d567902b1e04829eedd428cd37372137908947cfafccc14ba485b1ad58832cba";
+    pname = "cosmic-edit"; sha256 = "aff1a305a4e7182ae1c360ceac43eff60ba32dc388f872f3ec04624677a6a290";
     features = "dbus-config,wayland"; bins = "cosmic-edit";
     install = "app res/com.system76.CosmicEdit.desktop; meta res/com.system76.CosmicEdit.metainfo.xml; tree res/icons/hicolor share/icons/hicolor";
     # main() daemonizes first (fork::daemon, src/main.rs): runok sees the parent exit 0 while the child
@@ -139,12 +139,12 @@ in {
   # No flatpak (libflatpak needs glib/ostree), no packagekit: the pkgar backend only, so the
   # store opens and lists nothing installable. NixOS installs cosmic-store only with flatpak.
   cosmic-store = app {
-    pname = "cosmic-store"; sha256 = "5a1ed7f9e241b498592437f1d4bc125d39a6c743de15629148a2d27f4402610c";
+    pname = "cosmic-store"; sha256 = "d8c95307e4a865ab4681a0be86fea98f82fb052ecc7bcea98fad2b8165c34e83";
     features = "dbus-config,notify,single-instance,wayland,xdg-portal,desktop,logind,pkgar"; bins = "cosmic-store";
     install = "app res/com.system76.CosmicStore.desktop; meta res/com.system76.CosmicStore.metainfo.xml; tree res/icons/hicolor share/icons/hicolor";
   };
   cosmic-screenshot = app {
-    pname = "cosmic-screenshot"; sha256 = "2a0a1fb18303773fbfe54613b0b5603871a72cbbb5b0ae183b5390227671b9a3";
+    pname = "cosmic-screenshot"; sha256 = "0bf658bda69ce67113d58d1ad5d32126218095194cc51f69c27b8d6399962af7";
     libs = [ ]; stubs = false; wrap = ""; required = "rustix"; bins = "cosmic-screenshot";
     install = "app resources/com.system76.CosmicScreenshot.desktop; tree resources/icons/hicolor share/icons/hicolor";
   };
@@ -152,9 +152,9 @@ in {
   # Tier 4: the greeter (+ its daemon). PAM is illumos libpam (pam-sys bindgen on libclang,
   # pam-client's Solaris arms). No logind/systemd; upower over D-Bus stays.
   cosmic-greeter = app {
-    pname = "cosmic-greeter"; sha256 = "bbd49754abdef813b8bf86fa3e724c243d0baca27447b8f908c85cfe2a60a73e";
+    pname = "cosmic-greeter"; sha256 = "f31c5bac8e50ed5df75cb7d07fb8167e7835dc22b3438a48c8c1f27e7de36e48";
     features = "upower"; cargoArgs = "--all"; bins = "cosmic-greeter cosmic-greeter-daemon";
-    env = { VERGEN_GIT_SHA = "epoch-1.5.0"; VERGEN_GIT_COMMIT_DATE = "2026-01-01";   # nixpkgs: VERGEN_GIT_SHA = tag
+    env = { VERGEN_GIT_SHA = "epoch-1.11.0"; VERGEN_GIT_COMMIT_DATE = "2026-01-01";   # nixpkgs: VERGEN_GIT_SHA = tag
       # bindgen's libclang (nixpkgs: rustPlatform.bindgenHook = llvmPackages.clang); null: the OI host's (the seed instance)
       libclang = if libclang == null then "/usr/clang/21" else libclang; };
     install = ''

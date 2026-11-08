@@ -3,7 +3,7 @@
 #[cfg(target_os = "illumos")]
 fn init_vuid_input(dh: &DisplayHandle, session: &LibSeatSession, evlh: &LoopHandle<'static, State>) -> Result<()> {
     evlh.insert_source(illumos_input::VuidSource::new(Some(session.clone())), move |event, _, state| {
-        state.process_input_event(event);
+        state.process_input_event(event, crate::input::InputBackendId::Normal);
         for output in state.common.shell.read().outputs() {
             state.backend.kms().schedule_render(output);
         }
