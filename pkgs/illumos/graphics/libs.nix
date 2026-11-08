@@ -1,6 +1,9 @@
 # graphics/libs.nix -- the C libraries under the Wayland/Mesa stack, from source.
-{ mkSrcPkg, tools, pkgconf, zlib, world, perl ? null, hostTools ? [ ] }:
-let m = tools.mesonBuild; pc = "export PATH=${pkgconf}/bin:$PATH"; in
+{ mkSrcPkg, tools, pkgconf, zlib, world, perl ? null, hostTools ? [ ], gnupatch ? null }:
+let m = tools.mesonBuild; pc = "export PATH=${pkgconf}/bin:$PATH";
+  # patch is on /usr/gnu/bin on the OI bhost (gnupatch==null -> no-op); a solnix host has no /usr/gnu, so put the store patch on PATH.
+  pp = if gnupatch == null then "" else "export PATH=${gnupatch}/bin:$PATH";
+in
 rec {
   expat = mkSrcPkg {
     pname = "expat"; version = "2.10.0";   # 11 High in 2.6.4; 2.10.0 (2026-11-02) is the first with CVE-2026-115506
@@ -35,6 +38,7 @@ rec {
             sha256 = "864fb2a8399e2d0ec39d56e9d9b753c093775beadc6022ce81f441929a81e5ed"; };
     deps = [ expat libffi ];
     build = ''
+      ${pp}
       patch -p1 < ${./patches/wayland-1.23.1-illumos-peercred.patch}
       ${pc}
       ${m "-Ddocumentation=false -Dtests=false -Ddtd_validation=false -Dc_args=-D__EXTENSIONS__ '-Dc_link_args=-lsocket -lnsl'"}
@@ -88,6 +92,7 @@ rec {
     src = { url = "https://dri.freedesktop.org/libdrm/libdrm-2.4.120.tar.xz";
             sha256 = "3bf55363f76c7250946441ab51d3a6cc0ae518055c0ff017324ab76cdefb327a"; };
     build = ''
+      ${pp}
       patch -p1 < ${./patches/libdrm-2.4.120-illumos-ioctl.patch}
       # drmGetDevice2 & co. on illumos (no DRM major 226, clone minors): Mesa's loader needs it.
       patch -p1 < ${./patches/libdrm-2.4.120-illumos-device.patch}

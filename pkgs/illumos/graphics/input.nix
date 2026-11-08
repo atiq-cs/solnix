@@ -1,7 +1,10 @@
 # graphics/input.nix -- the C libraries cosmic-comp links beyond Mesa:
 # pixman, libxkbcommon (+ xkeyboard-config data), libdisplay-info, libseat.
-{ mkSrcPkg, tools, pkgconf, python3 ? null }:
-let m = tools.mesonBuild; pc = "export PATH=${pkgconf}/bin:$PATH"; in
+{ mkSrcPkg, tools, pkgconf, python3 ? null, gnupatch ? null }:
+let m = tools.mesonBuild; pc = "export PATH=${pkgconf}/bin:$PATH";
+  # patch is on /usr/gnu/bin on the OI bhost (gnupatch==null -> no-op); a solnix host has no /usr/gnu, so put the store patch on PATH.
+  pp = if gnupatch == null then "" else "export PATH=${gnupatch}/bin:$PATH";
+in
 rec {
   pixman = mkSrcPkg {
     pname = "pixman"; version = "0.43.4";
@@ -69,6 +72,7 @@ rec {
     src = { url = "https://git.sr.ht/~kennylevinsen/seatd/archive/0.9.1.tar.gz";
             sha256 = "819979c922a0be258aed133d93920bce6a3d3565a60588d6d372ce9db2712cd3"; };
     build = ''
+      ${pp}
       patch -p1 < ${./patches/seatd-0.9.1-illumos.patch}
       # realpath(/dev/dri/card0) is a /devices/...:card0 node on illumos: still DRM.
       patch -p1 < ${./patches/seatd-0.9.1-illumos-devices-path.patch}

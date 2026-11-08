@@ -8,8 +8,10 @@
 # llvmpipe/lavapipe need an LLVM derivation too, so softpipe is the CPU GL.
 #
 # iris/anv need a DRM render node only at RUN time (i915 stage B). They build now.
-{ mkSrcPkg, tools, pkgconf, zlib, expat, libffi, wayland, wayland-protocols, libdrm, cmake ? null, hostTools ? [ ] }:
+{ mkSrcPkg, tools, pkgconf, zlib, expat, libffi, wayland, wayland-protocols, libdrm, cmake ? null, hostTools ? [ ], gnupatch ? null }:
 let
+  # patch is on /usr/gnu/bin on the OI bhost (gnupatch==null -> no-op); a solnix host has no /usr/gnu, so put the store patch on PATH.
+  pp = if gnupatch == null then "" else "export PATH=${gnupatch}/bin:$PATH";
   # glslang compiles anv's five internal GLSL shaders at build time. Host-run
   # C++ tool, built with the store cmake (it ran the OI host's /usr/bin/cmake before wave6); nothing of it ships.
   glslang = mkSrcPkg ({
@@ -33,6 +35,7 @@ mkSrcPkg {
   # libffi: wayland-client.pc Requires.private it (build-time .pc lookup only).
   linkDeps = [ wayland-protocols libffi ];
   build = ''
+    ${pp}
     patch -p1 < ${./patches/mesa-24.0.9-illumos.patch}
     # illumos ld has no --build-id: anv's UUIDs and iris's disk cache need one (fallback note).
     patch -p1 < ${./patches/mesa-24.0.9-illumos-build-id.patch}

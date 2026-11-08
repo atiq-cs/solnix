@@ -5,12 +5,12 @@
 { mkSrcPkg, pkgconf, zlib, world, perl ? null, hostTools ? [ ], python3 ? null, gnupatch ? null, bash ? null, cmake ? null }:
 let
   tools = import ./tools.nix { inherit mkSrcPkg python3 gnupatch bash; };
-  libs = import ./libs.nix { inherit mkSrcPkg tools pkgconf zlib world perl hostTools; };
-  input = import ./input.nix { inherit mkSrcPkg tools pkgconf python3; };
+  libs = import ./libs.nix { inherit mkSrcPkg tools pkgconf zlib world perl hostTools gnupatch; };
+  input = import ./input.nix { inherit mkSrcPkg tools pkgconf python3 gnupatch; };
 in
 libs // input // {
   inherit (tools) meson samurai;
-  mesa = import ./mesa.nix ({ inherit mkSrcPkg tools pkgconf zlib cmake hostTools; } // {
+  mesa = import ./mesa.nix ({ inherit mkSrcPkg tools pkgconf zlib cmake hostTools gnupatch; } // {
     inherit (libs) expat libffi wayland wayland-protocols libdrm;
   });
 }
