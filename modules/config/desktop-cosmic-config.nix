@@ -99,7 +99,7 @@ in
   # analog of NixOS's default security.pam.services entry.
 
   # NixOS (services.seatd): a `seat` group may open the seat. The greeter is in it; desktop
-  # users join it with extraGroups = [ "seat" ] (lixi: gburd), as on NixOS.
+  # users join it with extraGroups = [ "seat" ] (lixi: its desktop user), as on NixOS.
   users.groups.seat = { gid = greeterUid + 2; members = [ "cosmic-greeter" ]; };
   users.groups.cosmic-greeter.gid = greeterUid;
   users.users.cosmic-greeter = {

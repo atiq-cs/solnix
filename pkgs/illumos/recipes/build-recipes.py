@@ -7,7 +7,7 @@ Columns: pname  version  url  buildsys  deps  flags
 """
 import json, re, glob, os, sys
 
-ROOT = "/home/gburd/ws/solnix"
+ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../.."))  # the repo root
 
 # --- 1. packages.nix recipes (nix eval JSON) ---
 with open("/tmp/pkgsnix-recipes.json") as f:

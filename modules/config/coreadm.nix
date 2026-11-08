@@ -68,7 +68,7 @@ in
     developerUsers = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ ];
-      example = [ "gburd" ];
+      example = [ "alice" ];
       description = ''
         Accounts that get a /var/cores/<uid> directory they own, so the
         per-process core pattern can write their cores there. Each name must be in
