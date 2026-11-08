@@ -81,6 +81,9 @@ rec {
       ${pc}
       ${m "-Dsystemd=disabled -Dx11_autolaunch=disabled -Dselinux=disabled -Dapparmor=disabled -Dlibaudit=disabled -Depoll=disabled -Dinotify=disabled -Dkqueue=disabled -Dlaunchd=disabled -Ddoxygen_docs=disabled -Dducktype_docs=disabled -Dxml_docs=disabled -Dqt_help=disabled -Dmodular_tests=disabled -Dsession_socket_dir=/tmp '-Dc_link_args=-lsocket -lnsl'"}
       # run check: dbus-run-session (what start-cosmic uses) starts a bus that answers ListNames.
+      # dbus-run-session execs "dbus-daemon" by bare name, so the just-built daemon must be on PATH
+      # (on the OI host a /usr/bin/dbus-daemon satisfied this; a clean solnix host has none -- test the built one).
+      export PATH="$out/bin:$PATH"
       "$out/bin/dbus-run-session" -- "$out/bin/dbus-send" --session --print-reply --dest=org.freedesktop.DBus \
         /org/freedesktop/DBus org.freedesktop.DBus.ListNames | grep -q '"org.freedesktop.DBus"' \
         || { echo "FATAL: session bus did not answer ListNames" >&2; exit 1; }
