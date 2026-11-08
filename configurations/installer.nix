@@ -102,6 +102,10 @@ in
   # The GSP firmware is unfree, so it is not on the media: an nvidia attach
   # needs hardware.graphics.nvidia.acceptFirmwareLicense in a later image.
   hardware.graphics.onMedia = true;
+  # but not the NVIDIA modules: they build only with OpenIndiana's gcc 14, and they
+  # never attached from the media (no alias, no GSP firmware). An installed system
+  # enables them with hardware.graphics.nvidia.attachAtBoot.
+  hardware.graphics.nvidia.onMedia = false;
 
   # The edition this media ships (same pin as cloud-ec2.nix); without it the
   # release label falls back to "unstable" and /etc/release misreports the image.

@@ -65,10 +65,11 @@ let
   gfx = config.hardware.graphics;
   i915Bound = gfx.i915.attachAtBoot;
   nvBound = gfx.nvidia.attachAtBoot;
-  wantNv = gfx.onMedia || nvBound;
+  nvMedia = gfx.onMedia && gfx.nvidia.onMedia;
+  wantNv = nvMedia || nvBound;
   wantGpu = gfx.onMedia || i915Bound || nvBound;
   gpuDrivers = [ { name = "i915"; perm = "0666 root sys"; aliases = if i915Bound then s.i915Aliases else [ ]; } ]
-    ++ lib.optionals gfx.onMedia nvDrivers;
+    ++ lib.optionals nvMedia nvDrivers;
   nvDrivers = [
       { name = "nvidia"; perm = "0666 root sys"; aliases = if nvBound then s.nvidiaAliases else [ ]; }
       { name = "nvidia_modeset"; perm = "0666 root sys"; aliases = [ ]; }
@@ -77,7 +78,7 @@ let
   gpuDb = if wantGpu then s.mkDriversDbWith wifiDb gpuDrivers else wifiDb;
   gpuKern0 = if wantGpu then s.mkGpuKernel wifiKern {
     nvidia = wantNv;
-    gspFirmware = if gfx.onMedia && gfx.nvidia.acceptFirmwareLicense then s.nvidiaGspFirmware true else null;
+    gspFirmware = if nvMedia && gfx.nvidia.acceptFirmwareLicense then s.nvidiaGspFirmware true else null;
     i915Firmware = if gfx.i915.acceptFirmwareLicense then s.i915Firmware true else null;
   } else wifiKern;
   # nvidia bound at boot: nvidia.conf, tzmon's opt-out, GSP firmware in usr/kernel (graphics-gpu.nix).
