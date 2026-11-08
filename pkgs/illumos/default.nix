@@ -883,15 +883,16 @@ let
   # ramdisk closure, which then failed its size cap). Each hash in $strip is
   # overwritten in place, same length, as nixpkgs' remove-references-to does;
   # the entries named empty dirs, so nothing resolves differently. Nix enforces
-  # the result through disallowedReferences.
+  # the result through disallowedReferences. The perl is the store one ($stripPerl, a build input only, and itself a
+  # disallowed reference): it was the host /usr/bin/perl, which a solnix host does not have.
+  stripPerl = cliBase.perl;
   stripSliceRefs = ''
-      [ -x /usr/bin/perl ] || { echo "FATAL: /usr/bin/perl needed to strip slice references" >&2; exit 1; }
       for sp in $strip; do
         bh=$(basename "$sp" | cut -c1-32)
         grep -rl "$bh" "$out" 2>/dev/null | while read -r f; do
           [ -h "$f" ] && continue
           chmod u+w "$f" "$(dirname "$f")"
-          /usr/bin/perl -0777 -pi -e "s/$bh/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee/g" "$f"
+          "$stripPerl/bin/perl" -0777 -pi -e "s/$bh/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee/g" "$f"
         done
       done
   '';
@@ -911,7 +912,8 @@ let
     module = iwm-driver;
     firmware = iwmFirmware acceptFirmwareLicense;
     strip = [ slices.kernel ];
-    disallowedReferences = [ slices.kernel ];
+    inherit stripPerl;
+    disallowedReferences = [ slices.kernel stripPerl ];
     args = [ "-c" ''
       set -eu
       mkdir -p "$out"
@@ -1006,7 +1008,8 @@ let
     module = iwx-driver;
     firmware = iwxFirmware acceptFirmwareLicense;
     strip = [ base slices.kernel ];
-    disallowedReferences = [ base slices.kernel ];
+    inherit stripPerl;
+    disallowedReferences = [ base slices.kernel stripPerl ];
     args = [ "-c" ''
       set -eu
       mkdir -p "$out"
@@ -1129,7 +1132,8 @@ let
     inherit base;
     module = touchpad-driver;
     strip = [ base slices.kernel ];
-    disallowedReferences = [ base slices.kernel touchpad-driver ];
+    inherit stripPerl;
+    disallowedReferences = [ base slices.kernel touchpad-driver stripPerl ];
     args = [ "-c" ''
       set -eu
       mkdir -p "$out"
@@ -1168,7 +1172,8 @@ let
     gsp = if gspFirmware == null then "" else gspFirmware;
     ifw = if i915Firmware == null then "" else i915Firmware;
     strip = [ base slices.kernel kernelNd.src ];
-    disallowedReferences = [ base slices.kernel kernelNd.src kernelNd i915-driver ]
+    inherit stripPerl;
+    disallowedReferences = [ base slices.kernel kernelNd.src kernelNd i915-driver stripPerl ]
       ++ (if nvidia then [ nvidia-oss-modules ] else [ ]);
     args = [ "-c" ''
       set -eu
