@@ -73,7 +73,7 @@ bash "$tsErrnoGate" "$out" 2>> fail || echo "ts-errno gate failed" >> fail
 find "$out" -type f > files
 while read -r f; do
   [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] || continue
-  chmod u+w "$f"; /usr/bin/gstrip --strip-debug "$f"
+  chmod u+w "$f"; gstrip --strip-debug "$f"   # gstrip from $tools/bin (store binutils); a clean solnix host has no /usr/bin/gstrip
   for x in "$gate" "$gcc/"; do grep -q "$x" "$f" && echo "$f names $x" >> fail; done
   /usr/bin/elfdump -d "$f" 2>/dev/null | grep -q NEEDED || continue
   for e in $(/usr/bin/elfdump -d "$f" | awk '$2=="RUNPATH"||$2=="RPATH"{print $4}' | tr ':' ' '); do
