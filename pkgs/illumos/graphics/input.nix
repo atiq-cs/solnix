@@ -8,6 +8,8 @@ let m = tools.mesonBuild; pc = "export PATH=${pkgconf}/bin:$PATH";
   pl = if perl == null then "" else "export PATH=${perl}/bin:$PATH";
   # bison: libxkbcommon's meson needs a YACC (bison or byacc). On the OI bhost it is /usr/bin/bison (bison==null -> no-op); a solnix host has none.
   bs = if bison == null then "" else "export PATH=${bison}/bin:$PATH";
+  # python3: libdisplay-info's tool/gen-search-table.py runs via /usr/bin/env python3. OI bhost: /usr/bin/python3.14; solnix host: the store python3.
+  py = if python3 == null then "mkdir -p \"$TMPDIR/py\" && ln -sf /usr/bin/python3.14 \"$TMPDIR/py/python3\" && export PATH=\"$TMPDIR/py:$PATH\"" else "mkdir -p \"$TMPDIR/py\" && ln -sf ${python3}/bin/python3 \"$TMPDIR/py/python3\" && export PATH=\"$TMPDIR/py:$PATH\"";
 in
 rec {
   pixman = mkSrcPkg {
@@ -65,6 +67,7 @@ rec {
     build = ''
       # illumos ld has no --version-script (and v1 mapfiles take no globs): export all.
       sed -i "s|link_args: symbols_flag,||" meson.build
+      ${py}   # tool/gen-search-table.py: /usr/bin/env python3
       ${pc}
       ${m "-Dc_args=-D__EXTENSIONS__"}
     '';
