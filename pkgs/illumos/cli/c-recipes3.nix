@@ -3,7 +3,7 @@
 # targets (jansson and oniguruma: the cross-arch jobs from the served sparcv9 rows, same source and sha256). Store-only builds
 # (nativeTools = NixOS nativeBuildInputs + config.site), shared libraries as nixpkgs builds them, each with an in-build check that links
 # and runs it. Sources pinned by sha256 (libogg and libzip equal to nixpkgs' flat hash; GitHub tag tarballs have no upstream signature).
-{ base, mkSrcPkg, world, zlib, openssl, ncurses, chk, hostTools, cmake, ... }:
+{ base, mkSrcPkg, world, zlib, openssl, ncurses, chk, gnulibFix, hostTools, cmake, perl, ... }:
 let
   gh = repo: tag: sha256: { url = "https://codeload.github.com/${repo}/tar.gz/refs/tags/${tag}"; inherit sha256; };
   # cmake projects: the store cmake, store prefixes only (as c-recipes2.nix)
@@ -562,6 +562,132 @@ if(!f || XauWriteAuth(f, &a) != 1) return 1; printf("xau %s\n", a.name); return 
 #include <stdio.h>
 int main(void){ ARRAY8 a; if(!XdmcpAllocARRAY8(&a, 5)) return 1; printf("xdmcp %d\n", a.length); XdmcpDisposeARRAY8(&a); return 0; }'' "c" "$CC" "-lXdmcp"}
       ${chk ''"$W/t"'' "^xdmcp 5$"}
+    '';
+  };
+
+  # ---- recipes3 batch 4 ---------------------------------------------------------------------------------------------------------
+  # GNU libunistring (LGPL-3.0+ / GPL-2.0+ dual): Unicode string functions (libidn2, guile, gnutls). The gate's libc iconv, as glib.
+  libunistring = mkSrcPkg {
+    pname = "libunistring"; version = "1.4.2";
+    src = { url = "https://mirrors.kernel.org/gnu/libunistring/libunistring-1.4.2.tar.gz";
+            sha256 = "e82664b170064e62331962126b259d452d53b227bb4a93ab20040d846fec01d8"; };
+    deps = [ world ]; nativeTools = hostTools;
+    build = ''
+      ${gnulibFix}
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static
+      gmake -j8; gmake install
+      find "$out/share/doc" "$out/share/info" -delete 2>/dev/null || true
+      ${tprog ''#include <unistr.h>
+#include <stdio.h>
+int main(void){ const uint8_t s[] = "\xc3\xa9t\xc3\xa9"; printf("%zu\n", u8_mbsnlen(s, sizeof s - 1)); return 0; }'' "c" "$CC" "-lunistring"}
+      ${chk ''"$W/t"'' "^3$"}
+    '';
+  };
+
+  # GNU libidn2 (LGPL-3.0+ / GPL-2.0+ dual): IDNA2008 domain names (curl, wget, gnutls), on the libunistring above.
+  libidn2 = mkSrcPkg {
+    pname = "libidn2"; version = "2.3.8";
+    src = { url = "https://mirrors.kernel.org/gnu/libidn/libidn2-2.3.8.tar.gz";
+            sha256 = "f557911bf6171621e1f72ff35f5b1825bb35b52ed45325dcdee931e5d3c0787a"; };
+    deps = [ world libunistring ]; nativeTools = hostTools;
+    build = ''
+      ${gnulibFix}
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-nls --disable-doc --with-libunistring-prefix=${libunistring}
+      gmake -j8; gmake install
+      find "$out/share/doc" "$out/share/info" -delete 2>/dev/null || true
+      ${chk ''LC_ALL=C.UTF-8 "$out/bin/idn2" "bücher.example"'' "^xn--bcher-kva\\.example$"}   # idn2 reads the locale's charset
+    '';
+  };
+
+  # GNU libtasn1 (LGPL-2.1+ library, GPL-3.0+ tools): ASN.1 DER (gnutls, p11-kit).
+  libtasn1 = mkSrcPkg {
+    pname = "libtasn1"; version = "4.21.0";
+    src = { url = "https://mirrors.kernel.org/gnu/libtasn1/libtasn1-4.21.0.tar.gz";
+            sha256 = "1d8a444a223cc5464240777346e125de51d8e6abf0b8bac742ac84609167dc87"; };
+    deps = [ world ]; nativeTools = hostTools;
+    build = ''
+      ${gnulibFix}
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-doc
+      gmake -j8; gmake install
+      find "$out/share/doc" "$out/share/info" -delete 2>/dev/null || true
+      ${chk ''"$out/bin/asn1Parser" --version'' "\\(libtasn1\\) 4\\.21\\.0"}
+      ${tprog ''#include <libtasn1.h>
+#include <stdio.h>
+int main(void){ printf("%s\n", asn1_check_version(NULL)); return 0; }'' "c" "$CC" "-ltasn1"}
+      ${chk ''"$W/t"'' "^4\\.21\\.0$"}
+    '';
+  };
+
+  # GNU which (GPL-3.0+): show the full path of commands.
+  which = mkSrcPkg {
+    pname = "which"; version = "2.25";
+    src = { url = "https://mirrors.kernel.org/gnu/which/which-2.25.tar.gz";
+            sha256 = "1cb83e4f702e60b8211ab5ec4c2afbab1b1dec80209456a7d2faf7584ed225ea"; };
+    deps = [ world ]; nativeTools = hostTools;
+    build = ''
+      # its getopt.h declares `extern int getopt();` for a non-glibc libc; gcc 14 reads an empty list as (void) and it conflicts
+      # with the gate's getopt (measured): the K&R meaning, gnu89, as the source was written for
+      ./configure --prefix="$out" CFLAGS="-O2 -std=gnu89"
+      gmake -j8; gmake install
+      find "$out/share/info" -delete 2>/dev/null || true
+      ${chk ''PATH="$out/bin" "$out/bin/which" which'' "^/nix/store/[a-z0-9]{32}-which-2\\.25/bin/which$"}
+    '';
+  };
+
+  # LZO (GPL-2.0+): a fast real-time compressor (lzop, squashfs-tools, btrfs-progs). autotools, shared.
+  lzo = mkSrcPkg {
+    pname = "lzo"; version = "2.10";
+    src = { url = "https://www.oberhumer.com/opensource/lzo/download/lzo-2.10.tar.gz";
+            sha256 = "c0f892943208266f9b6543b3ae308fab6284c5c90e627931446fb49b4221a072"; };
+    deps = [ world ]; nativeTools = hostTools;
+    build = ''
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --enable-shared --disable-static
+      gmake -j8; gmake install
+      find "$out/share/doc" -delete 2>/dev/null || true
+      ${tprog ''#include <lzo/lzo1x.h>
+#include <stdio.h>
+#include <string.h>
+static unsigned char in[4096], out[8192], back[4096], wrk[LZO1X_1_MEM_COMPRESS];
+int main(void){ if(lzo_init() != LZO_E_OK) return 1; memset(in, 'z', sizeof in); lzo_uint n, m = sizeof back;
+if(lzo1x_1_compress(in, sizeof in, out, &n, wrk) != LZO_E_OK) return 1;
+if(lzo1x_decompress_safe(out, n, back, &m, NULL) != LZO_E_OK || m != sizeof in || memcmp(in, back, m)) return 1; printf("lzo 4096->%lu\n", (unsigned long)n); return 0; }'' "c" "$CC" "-llzo2"}
+      ${chk ''"$W/t"'' "^lzo 4096->[0-9]+$"}
+    '';
+  };
+
+  # libexif (LGPL-2.1+): read and write EXIF metadata (gthumb, shotwell, gvfs). autotools.
+  libexif = mkSrcPkg {
+    pname = "libexif"; version = "0.6.26";
+    src = { url = "https://github.com/libexif/libexif/releases/download/v0.6.26/libexif-0.6.26.tar.xz";
+            sha256 = "4a055ed6575e61ca46c3172be3c753cc16c9becd0f99ec71d58dd0e471476c0c"; };
+    deps = [ world ]; nativeTools = hostTools;
+    build = ''
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-nls --disable-docs
+      gmake -j8; gmake install
+      find "$out/share/doc" -delete 2>/dev/null || true
+      ${tprog ''#include <libexif/exif-data.h>
+#include <stdio.h>
+int main(void){ ExifData *d = exif_data_new(); if(!d) return 1; printf("%s\n", exif_tag_get_name(EXIF_TAG_MAKE)); exif_data_unref(d); return 0; }'' "c" "$CC" "-lexif"}
+      ${chk ''"$W/t"'' "^Make$"}
+    '';
+  };
+
+  # SRT (MPL-2.0): Secure Reliable Transport, low-latency video over lossy networks (ffmpeg, gstreamer, obs). cmake, OpenSSL.
+  srt = mkSrcPkg {
+    pname = "srt"; version = "1.5.6";
+    src = gh "Haivision/srt" "v1.5.6" "2c4980c2c4cfd142d21b829d939dc51db9c6628af5967fff62fd7290769569c7";
+    deps = [ world openssl ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DENABLE_SHARED=ON -DENABLE_STATIC=OFF -DENABLE_APPS=OFF -DENABLE_UNITTESTS=OFF -DUSE_ENCLIB=openssl -DOPENSSL_ROOT_DIR=${openssl} -DOPENSSL_INCLUDE_DIR=${openssl}/include -DOPENSSL_CRYPTO_LIBRARY=${openssl}/lib/amd64/libcrypto.so -DOPENSSL_SSL_LIBRARY=${openssl}/lib/amd64/libssl.so"}
+      # bin/srt-ffplay (installed even with the apps off) is a #!/bin/bash wrapper that pipes srt-live-transmit into ffplay; neither
+      # is in this out (apps off, no ffmpeg in solnix): it could never run here (gate B9 found it). Dropped.
+      [ -f "$out/bin/srt-ffplay" ] || { echo "FATAL: srt-ffplay anchor" >&2; exit 1; }
+      rm -f "$out/bin/srt-ffplay"; rmdir "$out/bin" 2>/dev/null || true
+      ${tprog ''#include <srt/srt.h>
+#include <stdio.h>
+int main(void){ if(srt_startup() < 0) return 1; SRTSOCKET s = srt_create_socket(); if(s == SRT_INVALID_SOCK) return 1;
+printf("srt %x\n", srt_getversion()); srt_close(s); srt_cleanup(); return 0; }'' "c" "$CC" "-lsrt"}
+      ${chk ''"$W/t"'' "^srt 1050[0-9a-f]+$"}
     '';
   };
 }

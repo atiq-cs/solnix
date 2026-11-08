@@ -47,7 +47,7 @@ let
   # libdb 2026.10.7.2 (+ the berkeleydb alias): Oracle Berkeley DB 5.3.28's replacement (libdb1, security)
   c8 = import ./c-libdb.nix (h // { inherit (c5) python3; inherit (c7) tcl; });
   # recipes3: libraries the x86 queue has jobs for (a new file, so no served drv moves)
-  c9 = import ./c-recipes3.nix (h // { inherit (c5) cmake; });
+  c9 = import ./c-recipes3.nix (h // { inherit (c5) cmake; inherit (c4) perl; });
   rust = import ./rust.nix { inherit cargoPkg chk; extra = import ./rust-extra.nix h; };
   gotools = import ./go-tools.nix { inherit (goChain) goPkg go_1_27; inherit chk; inherit (c5) python3; } // import ./go-c1.nix { inherit (goChain) goPkg go_1_27; inherit chk; inherit (c5) python3; }
     // import ./go-recipes2.nix { inherit (goChain) goPkg; inherit chk; };
