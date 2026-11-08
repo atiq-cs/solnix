@@ -21,11 +21,27 @@
 #    pkg-config is not pkgconf); the negative controls (off-branch, --closure, an unpublished input, eval off, a mutant
 #    without the identity rule, a mutant without wave6); the second vote.
 #    MAIN_BUILDER=<origin/main's solnix-builder.sh, before fleet4>: it must never take an eval job (else SKIPped, not passed).
+#    A version bump (fleet7): an older served version of the pname does not stop the eval path, a served row at the target does.
+#    EV7_BUILDER=<c49a27f's solnix-builder.sh (any served row of the pname refused the eval)>: NO-RECIPE there (else SKIPped).
 # 9. fleet5: a job listing several outputs of one drv (gcc's out and -lib, wave6's out and -debug): each unserved one first-
 #    published as its own submission, deps first; one claim once every listed out is served, completed with the primary.
 #    F5_BUILDER=<origin/main's solnix-builder.sh, before fleet5 (2c13182)>: it must loop on the gcc shape (else SKIPped).
 # 10. fleet6: queue requests signed with sshsig (infra R7), a retry signed anew (R8), the egress registration (s3).
 #    PRESIG_BUILDER=<a builder before fleet6>: in sshsig mode it must fail the signature check (else SKIPped, not passed).
+# 11. fleet8 (root): a fixed build dir (W=/var/tmp/srcpkg-<buildKey>) left 0700 by another build uid fails pre-submit's --check:
+#    the host's failure, never memo'd as the out's refusal (read from the check's nix log); the per-drv sweep right before the
+#    --check removes it (also one left inside the same tick), never one whose owner runs a process; a genuine DIFFERS still memos.
+#    F8_BUILDER=<origin/main's solnix-builder.sh, before fleet8 (e4aea94)>: it must memo the stale-W failure (else SKIPped).
+#    WSWEEP=<solnix-wsweep.ksh> (default: this tree's).
+# 12. fleet9: newest row first. A job's outs from two batches (b1 on main, b2 on a later commit): the newest row's out is first-
+#    published when unserved (and this host may), voted on when served; an older row is voted on only when no newer out is
+#    unserved (a non-publishing host declines: it waits), and a newer out refused here holds the job (`held: newest ...`); the
+#    completion's commit is the candidate's own; deps first (A2: pcre2 -> zlib's newest row, whose job voted the older one);
+#    the per-out lock; BUILDER_SKIP (seed rows); UTC log stamps; nap's deadline across a suspend.
+#    F9_BUILDER=<origin/main's solnix-builder.sh, before fleet9 (773733a)>: it votes the older rows (else SKIPped, not passed).
+# 13. fleet9b (nix.conf cores = 0, NixOS's default and dixi's): pre-submit's --check builds with the job's cores, as the first
+#    build did, so a recipe's `-j${NIX_BUILD_CORES:-8}` is never -j0: a fixture that fails at cores 0 passes, SAME, with no .pub memo.
+#    F9B_BUILDER=<origin/main's solnix-builder.sh, before fleet9b (cae0e55)>: it memos the --check refusal (else SKIPped, not passed).
 S=${1:-$(dirname "$0")/../modules/config/community/solnix-builder.sh}
 W=$(mktemp -d /tmp/bld.XXXXXX); trap 'find "$W" -depth -delete' EXIT
 bad=0; ok() { print "ok: $1"; }; no() { print "FAIL: $1"; bad=1; }
@@ -65,7 +81,7 @@ want "ghost manpage-missing, out not served -> BUILD (the gate decides)" '^ghost
 # plan without error, every row decided
 curl -sS -m 60 -o "$W/live.tsv" https://cache.solnix.io/registry/recipes.tsv && ksh93 "$S" rows "$W/live.json" "$W/live.tsv" || no "live rows"
 L=$(ksh93 "$S" plan "$W/live.json" "$W/live.tsv"); n=$(jq '.rows|length' "$W/live.json")
-(( n > 0 )) && [[ $(print -r -- "$L" | egrep -c ' (BUILD|MET|MAN-GAP|NO-MAN|NO-RECIPE|OTHER-SYSTEM) ') == "$n" ]] && ok "live listing: $n rows, all decided: $(print -r -- "$L" | cut -d' ' -f2 | sort | uniq -c | tr -s ' \n' ' ')" || no "live: $n: $L"
+(( n > 0 )) && [[ $(print -r -- "$L" | egrep -c ' (BUILD|MET|MAN-GAP|NO-MAN|NO-RECIPE|OTHER-SYSTEM|SKIP) ') == "$n" ]] && ok "live listing: $n rows, all decided: $(print -r -- "$L" | cut -d' ' -f2 | sort | uniq -c | tr -s ' \n' ' ')" || no "live: $n: $L"
 print -r -- "$L" > "${LIVE_PLAN_OUT:-/dev/null}"
 
 # --- the gate, with real nix. The fixture flake: one derivation per case; `needs` depends on a derivation nobody has.
@@ -396,9 +412,11 @@ has "tw: candidate ${RN:0:12} .*qb-tw-N-" && has 'tw: rebuilt .*qb-tw-N-.* ident
   ok "two candidates, the older needs an unserved input: the newer ($RN) is rebuilt and claimed" || no "tw: $(print -r -- "$out" | grep ' tw')"
 has "tv: candidate ${RO:0:12} .*qb-tv-O-.*skipped: the dry run would build 1 .*\[${RN:0:12}\]" && has 'tv: rebuilt .*qb-tv-O-.* identical' && [[ $(nc tv) == 1 ]] && done6 "$VO" &&
   ok "the newest candidate needs an unserved input: the older one is rebuilt, the skip logged" || no "tv: $(print -r -- "$out" | grep ' tv')"
-has 'th: candidate head .*qb-th-O-' && [[ $(nc th) == 1 ]] && done6 "$HO" && ok "head is the first candidate (it evaluates O's served out; N's is never tried)" || no "th: $(print -r -- "$out" | grep ' th')"
+# fleet9: th's newest row (N, unserved: nobody built it) waits; head's served O out (an older row) is not voted while it does
+has "decline th: .*qb-th-N-.* is not served \(a first build .*\[${RN:0:12}\]: the job waits for it \(no vote on an older row\)" && [[ $(nc th) == 0 ]] && ! done6 "$HO" &&
+  ok "NEG th: the newest row's out (N) is unserved and this host may not publish: declined, waits; head's older served out is never voted (fleet9)" || no "th: $(print -r -- "$out" | grep ' th')"
 cm6() { print -r -- "$c" | grep '/complete' | grep "\"store_path\":\"$1\"" | grep -q "\"commit\":\"$2\""; }
-cm6 "$TN" "$RN" && cm6 "$HO" "$(git -C "$R2" rev-parse main)" && ok "completions carry commit: the candidate's evaluated rev (tw: $RN; th: head's)" || no "commit: $(print -r -- "$c" | grep complete)"
+cm6 "$TN" "$RN" && cm6 "$VO" "$RO" && ok "completions carry commit: the candidate's evaluated rev (tw: $RN; tv: $RO)" || no "commit: $(print -r -- "$c" | grep complete)"
 has "decline tb: the dry run would build 1 .*\[${RN:0:12}\]; the dry run would build 1 .*\[${RO:0:12}\]" && [[ $(nc tb) == 0 ]] &&
   ! ls "$W/st6/tried" 2> /dev/null | egrep -q 'qb-(tb|tw-O|tv-N)-' && ok "NEG every candidate needs an unserved input: declined with each reason, no claim, no candidate memo'd" ||
   no "tb: $(print -r -- "$out" | grep ' tb') $(ls "$W/st6/tried" 2>&1)"
@@ -485,6 +503,8 @@ if n == "pubrej":
 if n == "pubprop" or (n == "mprop" and p.endswith("-lib")):
     shutil.copytree(stage, f"{W}/fkst/{sid}.stage"); open(f"{W}/fkst/{sid}", "w").write(f"proposed {p}\n")
     print("  status: proposed\n  result: proposed"); sys.exit(0)
+if n in ("dzd", "dze"):  # fleet9's lock test: the first submission of a reference is slow, so a second job of the tick meets it
+    import time; time.sleep(float(os.environ.get("FKSLOWSUB") or 0))
 promote(stage, p, W + ("/sk2" if n == "pubforge" else "/sk"))  # pubforge: signed by another key under the same name
 print("  status: promoted\n  result: promoted")
 PY
@@ -492,7 +512,7 @@ PY
 PF=path:$W/pflake; po7() { jq -r --arg a "$1" '.[$a]' "$W/pouts.json"; }
 nix eval --json "$PF#packages.x86_64-solaris" --apply 'builtins.mapAttrs (n: d: d.outPath)' > "$W/pouts.json" 2> "$W/peval.err" &&
   nix build --no-link "$PF#packages.x86_64-solaris.pubdep" >> "$W/fixture.log" 2>&1 || { no "fixture 7: $(tail -3 "$W/peval.err" "$W/fixture.log")"; }
-P7="pubok pubok2 pubok3 pubprop pubrej pub429 pubforge pubcorrupt pubneeds pubflaky pubgate pubdep pubmut"
+P7="pubok pubok2 pubok3 pubprop pubrej pub429 pubforge pubcorrupt pubneeds pubflaky pubgate pubmut"	# pubdep: no row (fleet9's deps first would publish a rowed one)
 { print -r -- "$H"; for a in $P7; do rec $a 1 y "$(po7 $a)"; done; } > "$W/p.tsv"	# pubx: no row (an unrowed out)
 mkdir -p "$W/hc/registry"; cp "$W/p.tsv" "$W/hc/registry/recipes.tsv"	# pre-submit-check.sh reads $GATE_CACHE/registry/recipes.tsv
 r7() { typeset s= a; for a; do s="$s${s:+,}$(row $a 1 outdated)"; done; print "{\"rows\":[$s]}"; }
@@ -533,7 +553,7 @@ m7() { ls "$W/st7/tried/" 2> /dev/null | grep -c "qb-$1-.*\.drv\^out\.pub$"; }
 [[ $(print -r -- "$sl" | grep -c 'qb-pubcorrupt-') == 0 && $(m7 pubcorrupt) == 1 ]] && has 'decline pubcorrupt: nix-store --verify-path .* failed' &&
   ok "NEG this store's copy fails --verify-path: never submitted" || no "pubcorrupt: $(print -r -- "$out" | grep pubcorrupt)"
 [[ $(print -r -- "$sl" | grep -c 'qb-pubneeds-') == 0 && $(m7 pubneeds) == 0 && $(cl7 pubneeds) == 0 ]] && has "pubneeds: .* waits for its references to be served first: .*qb-pubdep-" &&
-  ok "NEG deps first: a reference not served -> waits, not submitted, not memo'd" || no "pubneeds: $(print -r -- "$out" | grep pubneeds)"
+  ! has 'deps first: first-publishing its reference .*qb-pubdep-' && ok "NEG deps first: a reference not served (and no served row names it) -> waits, not submitted, not memo'd" || no "pubneeds: $(print -r -- "$out" | grep pubneeds)"
 # tick B: the dep is served now (published from elsewhere), the proposal approved: pubneeds publishes, pubprop is polled (not
 # resubmitted) and claimed; a published out is not rebuilt or submitted again (its rebuild memo is ok); refused ones stay refused
 mkdir -p "$W/hc/nar"; nix copy --to "file://$W/hc" "$(po7 pubdep)" >> "$W/fixture.log" 2>&1 &&
@@ -546,7 +566,7 @@ mv "$W/backoff.A" "$W/st7/pub/backoff"
   has 'pubprop: published .*sid-pubprop' && ok "an approved proposal: polled by id on the next tick (never resubmitted), then verified and claimed" || no "pubprop B: $(print -r -- "$out" | grep pubprop) $sl"
 [[ $(print -r -- "$sl" | grep -c 'qb-pubok-') == 0 && $(cl7 pubok) == 1 ]] && has 'pubok: rebuilt and matched on an earlier tick' &&
   ok "published on an earlier tick: now served, so the verification path claims it again without a third build or a submission" || no "pubok B: $(print -r -- "$out" | grep ' pubok')"
-[[ $(print -r -- "$sl" | grep -c 'qb-pub\(rej\|flaky\)-') == 0 ]] && has 'decline pubrej: .*first publish was refused here: rejected' &&
+[[ $(print -r -- "$sl" | grep -c 'qb-pub\(rej\|flaky\)-') == 0 ]] && has 'held pubrej: newest .*qb-pubrej-.* refused here \(rejected' &&
   ok "refused outs (rejected, --check differs) are not built or submitted again" || no "refused B: $(print -r -- "$out" | grep -E 'pubrej|pubflaky')"
 # tick C: inside the 429 back-off no new submission starts; after it (backoff file in the past) pub429 is submitted again
 r7 pubok3 pub429 > "$W/p7.json"; tk7
@@ -596,15 +616,16 @@ cat > "$W/f8.tmpl" <<'F8'
     gate = e "gate" "illumos-gate-proto" "0.65.0" "echo g > $out" { };
     "pkg-config" = e "pkgcfg" "pkgconf" "2.3.0" "echo p > $out" { };
     evvote = e "evvote" "evvote" "1" "echo evvote-@TAG@ > $out" { };
+    evbump = e "evbump" "evbump" "@BV@" "echo bump@BV@ > $out" { };
     @EXTRA@
   }; }; }
 F8
-pf8() { sed -e "s|@EXTRA@|${2:-}|" -e "s|@EVOK@|$1|" -e "s|@TAG@|${W##*/}|g" "$W/f8.tmpl" > "$R3/flake.nix"; g3 add -A; }
+pf8() { sed -e "s|@EXTRA@|${2:-}|" -e "s|@EVOK@|$1|" -e "s|@BV@|${3:-1}|g" -e "s|@TAG@|${W##*/}|g" "$W/f8.tmpl" > "$R3/flake.nix"; g3 add -A; }
 g3 init -b main; pf8 M1; g3 commit -m M1; M1=$(git -C "$R3" rev-parse HEAD)
 g3 checkout -b 26.11; pf8 M1 'ev2611 = derivation { name = "ev2611-1"; system = "x86_64-solaris"; builder = "/usr/bin/bash"; args = [ "-c" "echo building ev2611; echo 2611-@TAG@ > $out" ]; };'
 g3 commit -m K; K=$(git -C "$R3" rev-parse HEAD)
 g3 checkout -b wave5 "$M1"; pf8 M1 'evoff = e "evoff" "evoff" "1" "echo off > $out" { };'; g3 commit -m W5; W5=$(git -C "$R3" rev-parse HEAD)
-g3 checkout -b wave6 "$M1"; pf8 M1 'evw6 = e "evw6" "evw6" "1" "echo w6 > $out" { };'; g3 commit -m W6; W6=$(git -C "$R3" rev-parse HEAD); g3 checkout main
+g3 checkout -b wave6 "$M1"; pf8 M1 'evw6 = e "evw6" "evw6" "1" "echo w6 > $out" { };' 2; g3 commit -m W6; W6=$(git -C "$R3" rev-parse HEAD); g3 checkout main
 pe8() { nix eval --raw "git+file://$R3?ref=$1&rev=$2#packages.x86_64-solaris.$3.outPath" 2> /dev/null; }
 EVOK1=$(pe8 main "$M1" evok) E2611=$(pe8 26.11 "$K" ev2611) EVIN=$(pe8 main "$M1" evin) EVDEP=$(pe8 main "$M1" evindep) EVOFF=$(pe8 wave5 "$W5" evoff)
 NH1=$(nix flake metadata --json "git+file://$R3?ref=main&rev=$M1" 2> /dev/null | jq -r '.locked.narHash // empty')
@@ -730,6 +751,30 @@ r8 evw6:1 > "$W/p8.json"; mu8 "$S" "$W/mut8w.sh" '[[ $2 == @(main|26.11|wave6) &
 S0=$S S=$W/mut8w.sh; tk8 BUILDER_EVAL=dry BUILDER_EVAL_BRANCHES="$W6B" BUILDER_STATE=$W/st8w6m; S=$S0
 ! cmp -s "$S" "$W/mut8w.sh" && grep -qx "evw6 EVAL evw6 1 wave6 $W6" "$W/st8w6m/plan" && has "decline evw6: $W6 is not on wave6 here" && ! has 'would submit .*qb-evw6-' &&
   ok "NEG mutant whose onbranch lacks wave6: the same listed tick declines evw6 (so the wave6 pass above is onbranch's)" || no "mutant w6: $(print -r -- "$out" | grep evw6)"
+# fleet7: a version bump. evbump is 1 on main and 26.11 and 2 at wave6's head; the job's target is 2, the served row is at 1
+# (aarch64 pcre2 10.47 served, the job 10.48, wave6 2f3d4be at 10.48). (pname, target) has no served row: the eval path.
+EVB1=$(pe8 main "$M1" evbump) EVB2=$(pe8 wave6 "$W6" evbump); [[ -n $EVB1 && -n $EVB2 && $EVB1 != "$EVB2" ]] || no "fixture 8: evbump $EVB1 $EVB2"
+{ print -r -- "$H"; rec evbump 1 y "$EVB1"; } > "$W/hc/registry/recipes-bump.tsv"; { cat "$W/hc/registry/recipes-bump.tsv"; rec evbump 2 y "$EVB2"; } > "$W/rbump2.tsv"
+for b8 in "st8bi:$W6B" "st8bn:main 26.11"; do env BUILDER_EVAL=1 BUILDER_FLAKE="git+file://$R3?ref=main" BUILDER_EVAL_BRANCHES="${b8#*:}" BUILDER_STATE=$W/${b8%%:*} ksh93 "$S" eindex > /dev/null 2>&1; done
+pb8() { env BUILDER_EVAL=1 BUILDER_STATE=$W/$1 ksh93 "${3:-$S}" plan "$W/p8.json" "$2" 2>&1; }	# pb8 <state> <recipes> [builder]
+r8 evbump:2 > "$W/p8.json"
+[[ $(pb8 st8bi "$W/hc/registry/recipes-bump.tsv") == "evbump EVAL evbump 2 wave6 $W6" ]] &&
+  ok "version bump: evbump 1 served, the job's target 2 = wave6's head: EVAL at wave6 (an older served version does not stop it)" || no "bump: $(pb8 st8bi "$W/hc/registry/recipes-bump.tsv")"
+[[ $(pb8 st8bi "$W/rbump2.tsv") == "evbump BUILD $EVB2 2 -" ]] &&
+  ok "NEG a served row at the target (evbump 2): the row path (BUILD), never the eval path" || no "bump served at target: $(pb8 st8bi "$W/rbump2.tsv")"
+[[ $(pb8 st8bn "$W/hc/registry/recipes-bump.tsv") == "evbump NO-RECIPE evbump 2 (packages.evbump at main is evbump 1: not this job)" ]] &&
+  ok "NEG the bump with wave6 not listed: NO-RECIPE (main and 26.11 have evbump 1)" || no "bump unlisted: $(pb8 st8bn "$W/hc/registry/recipes-bump.tsv")"
+tk8 BUILDER_EVAL=dry BUILDER_EVAL_BRANCHES="$W6B" BUILDER_STATE=$W/st8bd BUILDER_RECIPES=$HC/registry/recipes-bump.tsv
+[[ $(print -r -- "$sl" | grep -c BEGIN) == 0 && $(claims) == 0 ]] && grep -qx "evbump EVAL evbump 2 wave6 $W6" "$W/st8bd/plan" && has 'dry run: would submit .*qb-evbump-' &&
+  cat "$W/st8bd/tried/"*-evbump-*.submit 2> /dev/null | grep '^  begin body ' | grep -q "\"eval\":{\"attr\":\"evbump\",\"system\":\"x86_64-solaris\",\"commit\":\"$W6\",\"branch\":\"wave6\",\"flake_nar_hash\":\"$NHW6\"}" &&
+  grep -q "^$EVB2${T}.*drv-closure${T}eval:evbump:x86_64-solaris:$W6:wave6" "$W/st8bd/stamps/"*.ok &&
+  ok "version bump, a dry tick: built, pre-submit --eval stamped, the /begin body anchors wave6's evbump 2 (nothing begun or claimed)" ||
+  no "bump tick: $(cat "$W/st8bd/plan" 2>&1) $(print -r -- "$out" | grep evbump)"
+if [[ -n ${EV7_BUILDER:-} ]]; then
+  [[ $(pb8 st8bi "$W/hc/registry/recipes-bump.tsv" "$EV7_BUILDER") == "evbump NO-RECIPE evbump 2" ]] &&
+    ok "NEG c49a27f's builder ($EV7_BUILDER): the same bump is NO-RECIPE (any served row of the pname refused the eval)" ||
+    no "EV7_BUILDER bump: $(pb8 st8bi "$W/hc/registry/recipes-bump.tsv" "$EV7_BUILDER")"
+else print "SKIP version-bump negative control: EV7_BUILDER unset (not counted as a pass)"; fi
 # the second vote: `solnix-builder vote <attr> <commit> <branch> <NarHash> [pname]` builds that (attr, commit) here and completes
 # the job with its NarHash and commit, only if the NarHash is the proposal's. The proposal's NarHash: evvote's out is one file.
 print -r -- "evvote-${W##*/}" > "$W/evvote.txt"; chmod 444 "$W/evvote.txt"; nix-store --dump "$W/evvote.txt" > "$W/evvote.nar"
@@ -909,8 +954,286 @@ r7 $M9 > "$W/p9.json"; tk9; print -r -- "$out" | sed 's/^/   9 /'; print -r -- "
 : > "$W/fk/approve"; r7 mrej mprop > "$W/p9.json"; tk9; print -r -- "$out" | sed 's/^/   9B /'; rm -f "$W/fk/approve"
 [[ $(print -r -- "$sl" | grep -c 'status=sid-mprop-lib') == 1 && $(bg9 "$QL") == 0 && $(bg9 "$QO") == 1 && $(cl7 mprop) == 1 && $(dn9 "$QO") == 1 && ! -e $W/st9/pub/${QL##*/} ]] &&
   ok "the approved -lib proposal: polled by id on the next tick, then out submitted, one claim" || no "mprop B: $(print -r -- "$out" | grep ' mprop') $sl"
-! has 'mrej: first build of' && has "decline mrej: $RL is not served, and its first publish was refused here" && [[ $(cl7 mrej) == 0 ]] && ! print -r -- "$sl" | grep -q 'qb-mrej-' &&
+! has 'mrej: first build of' && has "held mrej: newest $RL refused here \(pre-submit-check" && [[ $(cl7 mrej) == 0 ]] && ! print -r -- "$sl" | grep -q 'qb-mrej-' &&
   ok "a refused sibling: the next tick declines the job before any build" || no "mrej B: $(print -r -- "$out" | grep ' mrej')"
+rm -f "$W/bearer"
+# --- 11. fleet8: a fixed build dir left by another build uid is the host's failure, never a memo'd refusal of the out. A first
+# build leaves W=/var/tmp/srcpkg-<buildKey> 0700 as its nixbld uid; pre-submit's --check, as another uid, cannot remove it
+# (dixa a64t openssl/sqlite, 2026-11-04: memo'd, 13 h blocked). The fixture's drvs use that W the way mk-src-pkg does (rm; mkdir
+# -m 700; trap rm), and the `nice` wrapper plants a stale W (another uid's, 0700, holding a file) right after that drv's first
+# build: inside the tick, past the tick-start sweep. BUILDER_WSWEEP is a wrapper that runs only the per-drv (keyed) sweep, so
+# nothing else under this host's /var/tmp is touched. pubstale, pubsweep: GNU rm wording (store coreutils, copied into the fixture
+# flake: an inputSrc, as drv-gate wants); pubheld: illumos rm wording (/usr/bin, the store's illumos-userland on solnix), and its
+# owner runs a process (kept); pubstfl: a genuine DIFFERS whose log also names ANOTHER key's W (still memo'd).
+if [[ $(/usr/bin/id -u) == 0 ]]; then
+K11=$(printf '%04x' $RANDOM $RANDOM $RANDOM); KS=${K11}0001 KH=${K11}0002 KF=${K11}0003 KW=${K11}0004 KD=${K11}00ff
+SWS=${WSWEEP:-$G/modules/config/community/solnix-wsweep.ksh} CU=${COREUTILS:-/nix/store/vfd9kp6r0f56iz8y73ab6vb0bf2d0890-coreutils-9.7}
+[[ -e $CU ]] || nix-store -r "$CU" > /dev/null 2>&1
+mkdir -p "$W/sflake/cu" "$W/swn" "$W/sws"; cp "$CU/bin/coreutils" "$W/sflake/cu/" && ln -s coreutils "$W/sflake/cu/rm" && ln -s coreutils "$W/sflake/cu/mkdir" || no "fixture 11: no coreutils at $CU"
+cat > "$W/sflake/flake.nix" <<SF
+{ outputs = { self }: let
+    sw = n: k: rm: mk: body: derivation { name = "qb-\${n}-${W##*/}"; system = "x86_64-solaris"; builder = "/usr/bin/bash"; buildKey = k;
+      args = [ "-c" "W=/var/tmp/srcpkg-\${k}; \${rm} -r -f \"\$W\"; \${mk} -m 700 \"\$W\" || exit 1; trap 'cd /; \${rm} -r -f \"\$W\"' EXIT; cd \"\$W\"; echo building \${n}; \${body}" ]; };
+    g = n: k: sw n k "\${./cu}/rm" "\${./cu}/mkdir";
+  in { packages.x86_64-solaris = {
+    pubstale = g "pubstale" "$KS" "echo stale-${W##*/} > \$out";
+    pubsweep = g "pubsweep" "$KW" "echo sweep-${W##*/} > \$out";
+    pubheld = sw "pubheld" "$KH" "/usr/bin/rm" "/usr/bin/mkdir" "echo held-${W##*/} > \$out";
+    pubstfl = g "pubstfl" "$KF" "echo \"rm: cannot remove '/var/tmp/srcpkg-$KD': Permission denied (a test prints it)\"; echo \$RANDOM\$\$ > \$out";
+  }; }; }
+SF
+SFL=path:$W/sflake
+nix eval --json "$SFL#packages.x86_64-solaris" --apply 'builtins.mapAttrs (n: d: d.outPath)' > "$W/souts.json" 2> "$W/seval.err" || no "fixture 11: $(tail -3 "$W/seval.err")"
+po11() { jq -r --arg a "$1" '.[$a]' "$W/souts.json"; }
+for a in pubstale pubsweep pubheld pubstfl; do rec $a 1 y "$(po11 $a)"; done >> "$W/p.tsv"; cp "$W/p.tsv" "$W/hc/registry/recipes.tsv"
+# nice, as fbuild calls it for the first build: build, then (SWPLANT=1) leave the W of each SWKEYS <name>:<key> being built, as
+# another build uid (SWUID) would have left it
+{ print '#!/bin/sh'; print '/usr/bin/nice "$@"; r=$?'
+  print '[ -n "$SWPLANT" ] && for p in $SWKEYS; do case " $* " in *-qb-${p%%:*}-*) d=/var/tmp/srcpkg-${p#*:}; [ -e "$d" ] || { /usr/bin/mkdir -m 700 "$d" && echo left > "$d/src.tar" && /usr/bin/chown -R "${SWUID:-30999}:30000" "$d"; };; esac; done'
+  print 'exit $r'; } > "$W/swn/nice"; chmod +x "$W/swn/nice"
+# BUILDER_WSWEEP: only the keyed call (the per-drv sweep), logged; the tick-start call (one argument) does nothing here
+{ print '#!/usr/bin/ksh93'; print "[[ \$# == 2 ]] || exit 0; print -r -- \"\$*\" >> $W/sws/calls; exec /usr/bin/ksh93 $SWS \"\$@\""; } > "$W/sws/wsweep"; chmod +x "$W/sws/wsweep"
+tk11() { : > "$W/sws/calls"; tk7 BUILDER_PATH="$W/swn:$W/vp:$W/fk:$PATH" FKROWS=$W/p11.json BUILDER_FLAKE=$SFL "$@"; }
+m11() { ls "$1/tried/" 2> /dev/null | grep -c "qb-$2-.*\.drv\^out\.pub$"; }
+sweeps() { grep -c "^0 $1\$" "$W/sws/calls" 2> /dev/null; }
+wq() { [[ -e /var/tmp/srcpkg-$1 ]] && print kept || print gone; }
+cw() { typeset k; for k in "$@"; do [[ -e /var/tmp/srcpkg-$k ]] && find "/var/tmp/srcpkg-$k" -depth -delete; done; }
+print x > "$W/bearer"; r7 pubstale > "$W/p11.json"
+# NEG control: origin/main's builder memos the stale-W failure, and its next tick declines the out before any build
+if [[ -n ${F8_BUILDER:-} ]]; then S0=$S S=$F8_BUILDER
+  tk11 BUILDER_STATE=$W/st11o SWPLANT=1 SWKEYS=pubstale:$KS BUILDER_WSWEEP=$W/sws/wsweep; o1=$out c1=$(cl7 pubstale); m1=$(m11 "$W/st11o" pubstale); cw $KS
+  tk11 BUILDER_STATE=$W/st11o BUILDER_WSWEEP=$W/sws/wsweep; o2=$out c2=$(cl7 pubstale); S=$S0
+  print -r -- "$o1"$'\n'"$o2" | grep ' pubstale' | sed 's/^/   11o /'
+  (( m1 == 1 && c1 == 0 && c2 == 0 )) && print -r -- "$o1" | grep -q 'decline pubstale: pre-submit-check.sh --leaf .* rc=1 (check' &&
+    print -r -- "$o2" | grep -q 'decline pubstale: .*first publish was refused here' && ! print -r -- "$o2" | grep -q 'pubstale: first build of' &&
+    ok "NEG origin/main's builder ($F8_BUILDER): a stale W of another uid fails --check, memo'd as the out's refusal; the next tick declines it unbuilt" ||
+    no "F8_BUILDER: memo $m1, claims $c1 $c2: $(print -r -- "$o1"$'\n'"$o2" | grep ' pubstale')"
+else print "SKIP origin/main stale-W negative control: F8_BUILDER unset (not counted as a pass)"; fi
+# 11A, no sweep (BUILDER_WSWEEP unset): the stale W fails --check; not memo'd, nothing submitted or claimed. pubstfl: a DIFFERS.
+r7 pubstale pubheld pubstfl > "$W/p11.json"
+tk11 BUILDER_STATE=$W/st11 SWPLANT=1 "SWKEYS=pubstale:$KS pubheld:$KH" BUILDER_WSWEEP=; print -r -- "$out" | grep -E ' pub(stale|held|stfl)' | sed 's/^/   11A /'
+grep -q '^  check: FAIL (error: builder for ' "$W/st11/tried/"*qb-pubstale-*.presubmit && ! grep -q "srcpkg-$KS" "$W/st11/tried/"*qb-pubstale-*.presubmit &&
+  ok "the stale W fails pre-submit's --check, whose .presubmit keeps only 'error: builder ... failed', not the W (so the builder reads nix log)" ||
+  no "11A presubmit: $(grep check: "$W/st11/tried/"*qb-pubstale-*.presubmit 2>&1)"
+for a in "pubstale:cannot remove '/var/tmp/srcpkg-$KS': Permission denied" "pubheld:/var/tmp/srcpkg-$KH: Permission denied"; do x=${a%%:*}
+  (( $(m11 "$W/st11" $x) == 0 && $(cl7 $x) == 0 && $(begun $x) == 0 )) && has "decline $x: the host, not the out, failed pre-submit-check.sh --leaf .*${a#*:}" &&
+    ! has "held $x" && ok "$x: a stale W of another uid fails --check: the host's failure (${a#*:}), not memo'd (not held), nothing submitted or claimed" ||
+    no "11A $x: memo $(m11 "$W/st11" $x): $(print -r -- "$out" | grep " $x")"
+done
+(( $(m11 "$W/st11" pubstfl) == 1 && $(begun pubstfl) == 0 )) && has 'decline pubstfl: pre-submit-check.sh --leaf .* rc=1 \(check' &&
+  ok "NEG a genuine DIFFERS whose log names ANOTHER key's W ($KD): still memo'd, never submitted" || no "11A pubstfl: $(print -r -- "$out" | grep ' pubstfl')"
+# mutants: one that reads only .presubmit (no nix log), one whose W pattern is not anchored on the drv's own buildKey
+mu8 "$S" "$W/mut11a.sh" '[[ -z $fy && -n $x && ,$w, == *,check,* ]] && fy=' ': || fy='
+mu8 "$S" "$W/mut11b.sh" '+-${x}['"'"'\"]?[:;] (Permission denied|File exists)' '+-[0-9a-f]+'"'"'?: Permission denied'
+cw $KS; r7 pubstale > "$W/p11.json"; S0=$S S=$W/mut11a.sh; tk11 BUILDER_STATE=$W/st11ma SWPLANT=1 SWKEYS=pubstale:$KS BUILDER_WSWEEP=; S=$S0
+! cmp -s "$S" "$W/mut11a.sh" && (( $(m11 "$W/st11ma" pubstale) == 1 )) && ok "NEG a mutant that reads only .presubmit memos the stale-W failure (the nix log read is what saves it)" ||
+  no "mut11a: memo $(m11 "$W/st11ma" pubstale): $(print -r -- "$out" | grep ' pubstale')"
+r7 pubstfl > "$W/p11.json"; S0=$S S=$W/mut11b.sh; tk11 BUILDER_STATE=$W/st11mb BUILDER_WSWEEP=; S=$S0
+! cmp -s "$S" "$W/mut11b.sh" && (( $(m11 "$W/st11mb" pubstfl) == 0 )) && has 'decline pubstfl: the host, not the out' &&
+  ok "NEG a mutant matching any key's W calls the DIFFERS a host failure (never memo'd: rebuilt every tick); anchored on the drv's own key, it memos" ||
+  no "mut11b: memo $(m11 "$W/st11mb" pubstfl): $(print -r -- "$out" | grep ' pubstfl')"
+# 11B: the next tick of 11A's state dir, the stale W (mut11a's) still there: the per-drv sweep before --check removes it; published
+r7 pubstale > "$W/p11.json"; [[ $(wq $KS) == kept ]] || no "11B: no stale W before the tick"
+tk11 BUILDER_STATE=$W/st11 BUILDER_WSWEEP=$W/sws/wsweep; print -r -- "$out" | grep ' pubstale' | sed 's/^/   11B /'
+(( $(sweeps $KS) == 1 && $(begun pubstale) == 1 && $(cl7 pubstale) == 1 )) && has "pubstale: solnix-wsweep: removing stale /var/tmp/srcpkg-$KS \(uid 30999, no process of uid 30999 runs\)" &&
+  has 'pubstale: published .*an 8UNr-only client verified it' && [[ $(wq $KS) == gone ]] &&
+  ok "the next tick passes: the per-drv sweep removes the W (whatever its age), --check SAME, published, claimed" || no "11B: sweeps $(sweeps $KS): $(print -r -- "$out" | grep ' pubstale')"
+# 11C: the W is left INSIDE the tick, after the first build (the dixa shape), and its owner runs no process: swept, published
+r7 pubsweep > "$W/p11.json"; tk11 BUILDER_STATE=$W/st11c SWPLANT=1 SWKEYS=pubsweep:$KW BUILDER_WSWEEP=$W/sws/wsweep
+print -r -- "$out" | grep ' pubsweep' | sed 's/^/   11C /'
+(( $(sweeps $KW) == 1 && $(begun pubsweep) == 1 && $(cl7 pubsweep) == 1 && $(m11 "$W/st11c" pubsweep) == 0 )) && has "pubsweep: solnix-wsweep: removing stale /var/tmp/srcpkg-$KW" &&
+  ok "a W left inside the tick (after the first build, past the tick-start sweep): swept before --check, published in the same tick" || no "11C: $(print -r -- "$out" | grep ' pubsweep')"
+# 11D: the W's owner runs a process (a live build, as far as root can tell): the sweep keeps it; --check fails, not memo'd
+cw $KH; r7 pubheld > "$W/p11.json"
+"$GP" -c 'import os, time; os.setgid(30000); os.setuid(30998); time.sleep(900)' & HOLD=$!; sleep 2
+tk11 BUILDER_STATE=$W/st11d SWPLANT=1 SWKEYS=pubheld:$KH SWUID=30998 BUILDER_WSWEEP=$W/sws/wsweep; print -r -- "$out" | grep ' pubheld' | sed 's/^/   11D /'
+(( $(sweeps $KH) == 1 && $(m11 "$W/st11d" pubheld) == 0 && $(cl7 pubheld) == 0 && $(begun pubheld) == 0 )) && [[ $(wq $KH) == kept ]] &&
+  has "pubheld: solnix-wsweep: keeping /var/tmp/srcpkg-$KH \(uid 30998 runs a process" && has 'decline pubheld: the host, not the out' &&
+  ok "the W's owner runs a process: the sweep keeps it (never a dir a live build may use); declined, not memo'd" || no "11D: $(print -r -- "$out" | grep ' pubheld')"
+# 11E: that process ended: the next tick sweeps the W and publishes
+kill $HOLD; wait $HOLD 2> /dev/null; tk11 BUILDER_STATE=$W/st11d BUILDER_WSWEEP=$W/sws/wsweep; print -r -- "$out" | grep ' pubheld' | sed 's/^/   11E /'
+(( $(begun pubheld) == 1 && $(cl7 pubheld) == 1 )) && has "pubheld: solnix-wsweep: removing stale /var/tmp/srcpkg-$KH" && [[ $(wq $KH) == gone ]] &&
+  ok "its owner's process gone: the next tick sweeps the W and publishes" || no "11E: $(print -r -- "$out" | grep ' pubheld')"
+# 11F: a DIFFERS with the sweep on is memo'd too (the sweep ran; the check still differs)
+r7 pubstfl > "$W/p11.json"; tk11 BUILDER_STATE=$W/st11f BUILDER_WSWEEP=$W/sws/wsweep
+(( $(sweeps $KF) == 1 && $(m11 "$W/st11f" pubstfl) == 1 && $(begun pubstfl) == 0 )) && ok "NEG a genuine DIFFERS with the sweep on: memo'd, never submitted" || no "11F: $(print -r -- "$out" | grep ' pubstfl')"
+cw $KS $KH $KF $KW $KD; rm -f "$W/bearer"
+else print "SKIP section 11 (stale fixed build dirs): needs root, to own a dir as another uid (not counted as a pass)"; fi
+# --- 12. fleet9: newest row first (infra 2026-11-05 s3, and the A2 deadlock on aarch64). Repo12: main F1 (every attr at batch b1)
+# + C1 (b1's rows) + H (head: a README; it evaluates b1, as dixi's main does W12's older rows); branch w: F2 (b2, and the dp* attrs
+# that reference a dz* at b2) + C2 (b2's rows). The listing's rows carry commit C2, as infra fills rows[].commit with the newest
+# batch's. Served before any tick: every b1 out, nfb's b2 (real) and ncr's b2 (a narinfo: served, but its dry run needs an input
+# nobody has). The dz* b2 outs are built here and not served (A2: dixa built the batch). nho's b2 names a host (a genuine gate
+# FAIL); nsu's b2 row names an out no commit evaluates to.
+print x > "$W/bearer"; R12=$W/repo12; mkdir -p "$R12/docs/registry"; g12() { git -C "$R12" -c user.name=t -c user.email=t@t "$@" > /dev/null 2>&1; }
+cat > "$W/f12.tmpl" <<'F12'
+{ outputs = { self }: let
+    mk = name: script: derivation { inherit name; system = "x86_64-solaris"; builder = "/usr/bin/bash"; args = [ "-c" script ]; };
+    t = n: mk "qb-${n}-@B@-@TAG@" "echo building ${n}; echo ${n}-@B@-@TAG@ > $out";
+    p = n: z: mk "qb-${n}-@B@-@TAG@" "echo building ${n}; echo ${z} > $out";
+    zs = { dza = t "dza"; dzb = t "dzb"; dzc = t "dzc"; dzd = t "dzd"; dze = t "dze"; };
+  in { packages.x86_64-solaris = zs // { nfa = t "nfa"; nfb = t "nfb"; nsu = t "nsu";
+    ncr = if "@B@" == "b1" then t "ncr" else mk "qb-ncr-@B@-@TAG@" "read x < ${t "ncrdep"}; echo $x > $out";
+    nho = if "@B@" == "b1" then t "nho" else mk "qb-nho-@B@-@TAG@" "echo building nho; echo nho-@TAG@ built on floki > $out";
+    @DP@
+  }; }; }
+F12
+pf12() { sed -e "s|@B@|$1|g" -e "s|@TAG@|${W##*/}|g" -e "s|@DP@|${2:-}|" "$W/f12.tmpl" > "$R12/flake.nix"; g12 add -A; }
+e12() { nix eval --raw "git+file://$R12?rev=$1#packages.x86_64-solaris.$2.$3" 2> /dev/null; }
+A12="nfa nfb ncr nho nsu dza dzb dzc dzd dze" P12="dpa dpb dpc dpd1 dpd2 dpe1 dpe2"; typeset -A O1 O2 D2
+g12 init -b main; pf12 b1; g12 commit -m F1; x=$(git -C "$R12" rev-parse HEAD); for a in $A12; do O1[$a]=$(e12 "$x" $a outPath); done
+{ print -r -- "$H"; for a in $A12; do rec $a 1 y "${O1[$a]}"; done; } > "$R12/docs/registry/recipes.tsv"; g12 add -A; g12 commit -m C1; C1=$(git -C "$R12" rev-parse HEAD)
+g12 checkout -b w; pf12 b2 'dpa = p "dpa" zs.dza; dpb = p "dpb" zs.dzb; dpc = p "dpc" zs.dzc; dpd1 = p "dpd1" zs.dzd; dpd2 = p "dpd2" zs.dzd; dpe1 = p "dpe1" zs.dze; dpe2 = p "dpe2" zs.dze;'
+g12 commit -m F2; x=$(git -C "$R12" rev-parse HEAD); for a in $A12 $P12; do O2[$a]=$(e12 "$x" $a outPath) D2[$a]=$(e12 "$x" $a drvPath); done
+O2[nsu]=/nix/store/00000000000000000000000000000000-qb-nsu-b2	# a row no commit evaluates to
+for a in $A12 $P12; do rec $a 1 y "${O2[$a]}"; done >> "$R12/docs/registry/recipes.tsv"; g12 add -A; g12 commit -m C2; C2=$(git -C "$R12" rev-parse HEAD)
+g12 checkout main; print h > "$R12/README"; g12 add -A; g12 commit -m H; H12=$(git -C "$R12" rev-parse HEAD)
+{ for a in $A12; do rec $a 1 y "${O1[$a]}"; done; for a in $A12 $P12; do rec $a 1 y "${O2[$a]}"; done; } >> "$W/p.tsv"; cp "$W/p.tsv" "$W/hc/registry/recipes.tsv"
+nix build --no-link "git+file://$R12?rev=$C1#packages.x86_64-solaris."{nfa,nfb,ncr,nho,nsu,dza,dzb,dzc,dzd,dze} \
+  "git+file://$R12?rev=$C2#packages.x86_64-solaris."{nfb,dza,dzb,dzc,dzd,dze} >> "$W/fixture.log" 2>&1 &&
+  nix copy --to "file://$W/hc" $(for a in $A12; do print -r -- "${O1[$a]}"; done) "${O2[nfb]}" >> "$W/fixture.log" 2>&1 &&
+  ( export XDG_CACHE_HOME=$W/fkst/x12; nix store sign --store "file://$W/hc" --key-file "$W/sk" $(for a in $A12; do print -r -- "${O1[$a]}"; done) "${O2[nfb]}" ) >> "$W/fixture.log" 2>&1 &&
+  [[ -n $C1 && -n $C2 && -n $H12 && ${O1[nfa]} != "${O2[nfa]}" && ${O2[dpa]} == *-qb-dpa-b2-* && -n $(sv7 "${O1[dza]}") && -z $(sv7 "${O2[dza]}") && -e ${O2[dza]} ]] ||
+  no "fixture 12: C1=$C1 C2=$C2 nfa=${O1[nfa]} ${O2[nfa]} $(tail -2 "$W/fixture.log")"
+printf 'StorePath: %s\nNarHash: %s\n' "${O2[ncr]}" "$GH" > "$W/hc/$(print -r -- "${O2[ncr]#/nix/store/}" | cut -c1-32).narinfo"
+r12() { typeset s= a; for a; do s="$s${s:+,}$(rc $a "$C2")"; done; print "{\"rows\":[$s]}"; }	# rows[].commit = C2, the newest batch's
+tk12() { tk7 FKROWS=$W/p12.json BUILDER_FLAKE="git+file://$R12?ref=main" "$@"; }
+cd12() { print -r -- "$c" | grep '/complete' | grep -c "\"store_path\":\"$1\""; }	# completions naming that out
+# NEG control: origin/main's builder votes the older rows (b1) and sends the listing's commit; A2: dpa waits on dza's b2 forever
+if [[ -n ${F9_BUILDER:-} ]]; then r12 nfa nfb ncr dza dpa > "$W/p12.json"; S0=$S S=$F9_BUILDER; tk12 BUILDER_STATE=$W/st12o; S=$S0
+  print -r -- "$out" | grep -E ' (nfa|nfb|ncr|dza|dpa)[: ]' | sed 's/^/   12o /'
+  [[ $(cd12 "${O1[nfa]}") == 1 && $(cd12 "${O1[nfb]}") == 1 && $(cd12 "${O2[nfa]}") == 0 && $(cd12 "${O2[nfb]}") == 0 ]] &&
+    ok "NEG origin/main's builder ($F9_BUILDER): votes the older row's out (nfa b1 though b2 is unserved, nfb b1 though b2 is served)" || no "F9 older: $(print -r -- "$c" | grep complete)"
+  [[ $(cm8 "${O1[ncr]}" "$C2") == 1 ]] && ok "NEG origin/main's builder: the vote on ncr's b1 out carries the listing's commit C2 (the newest batch's), not C1" || no "F9 crev: $(print -r -- "$c" | grep complete)"
+  [[ $(cd12 "${O1[dza]}") == 1 && $(cl7 dpa) == 0 && -z $(print -r -- "$sl" | grep '^BEGIN') ]] && has "dpa: ${O2[dpa]} waits for its references to be served first: ${O2[dza]#/nix/store/}" &&
+    ok "NEG origin/main's builder, the A2 shape: zlib (dza) voted on its older out, pcre2 (dpa) waits for dza's newest row, nothing published" || no "F9 A2: $(print -r -- "$out" | grep -E ' (dza|dpa)')"
+else print "SKIP origin/main newest-first negative control: F9_BUILDER unset (not counted as a pass)"; fi
+# 12z: a host that may not publish (BUILDER_PUBLISH=0)
+r12 nfa nfb ncr nho > "$W/p12.json"; tk12 BUILDER_STATE=$W/st12z BUILDER_PUBLISH=0; print -r -- "$out" | grep -E ' (nfa|nfb|ncr|nho)[: ]' | sed 's/^/   12z /'
+has "decline nfa: ${O2[nfa]} is not served \(a first build .*\[${C2:0:12}\]: the job waits for it \(no vote on an older row\)" && [[ $(cl7 nfa) == 0 && $(cd12 "${O1[nfa]}") == 0 ]] &&
+  ok "NEG strict: the newest row's out unserved and this host may not publish: declined (it waits), the older served row never voted" || no "12z nfa: $(print -r -- "$out" | grep ' nfa')"
+[[ $(cm8 "${O2[nfb]}" "$C2") == 1 && $(cd12 "${O1[nfb]}") == 0 ]] && has "nfb: rebuilt ${O2[nfb]} here, identical" &&
+  ok "the newest row's out served: the vote is on the newest (nfb b2), with its commit C2" || no "12z nfb: $(print -r -- "$out" | grep ' nfb')"
+[[ $(cm8 "${O1[ncr]}" "$C1") == 1 && $(cm8 "${O1[ncr]}" "$C2") == 0 ]] && has "ncr: candidate head .*skipped: the dry run would build 1 .*\[${C2:0:12}\]" &&
+  ok "crev: the newest (served) cannot be rebuilt here, so the older row's out is voted (at head), sent with the commit of that out's row (C1: the same drv as head's), not the listing's C2" || no "12z ncr: $(print -r -- "$c" | grep complete) $(print -r -- "$out" | grep ' ncr')"
+# 12p: a host that may publish. nho's newest is refused at the gate: held; nsu's newest is not evaluated: it waits; A2: dza then dpa
+r12 nfa nho nsu dza dpa > "$W/p12.json"; tk12 BUILDER_STATE=$W/st12p; print -r -- "$out" | grep -E ' (nfa|nho|nsu|dza|dpa)[: ]' | sed 's/^/   12p /'
+[[ $(bg9 "${O2[nfa]}") == 1 && $(cm8 "${O2[nfa]}" "$C2") == 1 && $(cd12 "${O1[nfa]}") == 0 ]] && has "nfa: published ${O2[nfa]}" &&
+  ok "newest first: nfa's newest row's out (b2, unserved) is first-published, claimed and completed with it and C2; the older b1 never voted" || no "12p nfa: $(print -r -- "$out" | grep ' nfa')"
+has "held nho: newest ${O2[nho]} refused here \(pre-submit-check.sh --leaf failed: [a-z,]*gate" && [[ $(cl7 nho) == 0 && $(cd12 "${O1[nho]}") == 0 ]] &&
+  ok "a genuine refusal of the newest (publish-gate FAIL): logged 'held nho: newest <out> refused here (...)', no vote on the older, no claim" || no "12p nho: $(print -r -- "$out" | grep ' nho')"
+has "decline nsu: the newest row's ${O2[nsu]} is not served, and no commit here evaluates to it" && [[ $(cl7 nsu) == 0 ]] &&
+  ok "NEG the newest row's out evaluates at no commit here: declined (it waits), the older served row never voted" || no "12p nsu: $(print -r -- "$out" | grep ' nsu')"
+[[ $(bg9 "${O2[dza]}") == 1 && $(bg9 "${O2[dpa]}") == 1 && $(cd12 "${O1[dza]}") == 0 && $(cl7 dza) == 1 && $(cl7 dpa) == 1 ]] && (( $(ln9 "${O2[dza]}") < $(ln9 "${O2[dpa]}") )) &&
+  [[ $(cm8 "${O2[dza]}" "$C2") == 1 ]] && ok "A2: zlib's newest row (dza b2) is first-published and completed with it, never the older out; pcre2 (dpa, references it) is published after it" ||
+  no "12p A2: $(print -r -- "$out" | grep -E ' (dza|dpa)')"
+r12 nho > "$W/p12.json"; tk12 BUILDER_STATE=$W/st12p
+has "held nho: newest ${O2[nho]} refused here \(pre-submit-check" && ! has 'nho: first build of' && ! has 'nho: rebuilding' && [[ $(cl7 nho) == 0 ]] &&
+  ok "the next tick: held again before any build (a human fixes or retires the row; infra lists 'held ')" || no "12p2 nho: $(print -r -- "$out" | grep ' nho')"
+# 12b: deps first. dpb's only job (dzb's job was closed by an older builder's vote: no dzb row in the listing) needs dzb's b2
+r12 dpb > "$W/p12.json"; w12="dpb: ${O2[dpb]} waits for its references to be served first: ${O2[dzb]#/nix/store/}"
+if [[ -n ${F9_BUILDER:-} ]]; then S0=$S S=$F9_BUILDER; tk12 BUILDER_STATE=$W/st12bo; S=$S0
+  print -r -- "$out" | grep -qF "$w12" && [[ -z $(print -r -- "$sl" | grep '^BEGIN') && $(cl7 dpb) == 0 ]] &&
+    ok "NEG origin/main's builder: dpb waits for dzb's newest row forever (no job lists it), nothing published" || no "F9 dpb: $(print -r -- "$out" | grep ' dpb')"
+else print "SKIP origin/main deps-first negative control: F9_BUILDER unset (not counted as a pass)"; fi
+mu8 "$S" "$W/mut12b.sh" 'fdep "$1" "$gr" &&' 'false &&'; S0=$S S=$W/mut12b.sh; tk12 BUILDER_STATE=$W/st12bm; S=$S0
+! cmp -s "$S" "$W/mut12b.sh" && print -r -- "$out" | grep -qF "$w12" && [[ -z $(print -r -- "$sl" | grep '^BEGIN') && $(cl7 dpb) == 0 ]] &&
+  ok "NEG a mutant without deps first: dpb waits, nothing published (so the pass below is fdep's)" || no "mut12b: $(print -r -- "$out" | grep ' dpb')"
+tk12 BUILDER_STATE=$W/st12b; print -r -- "$out" | grep ' dpb' | sed 's/^/   12b /'
+has "dpb: deps first: first-publishing its reference ${O2[dzb]}" && [[ $(bg9 "${O2[dzb]}") == 1 && $(bg9 "${O2[dpb]}") == 1 && $(cl7 dpb) == 1 && $(cl7 dzb) == 0 ]] &&
+  (( $(ln9 "${O2[dzb]}") < $(ln9 "${O2[dpb]}") )) && ok "deps first: dpb's unserved reference (dzb's newest row, no job) is first-published in the same tick, then dpb; one claim (dpb)" ||
+  no "12b: $(print -r -- "$out" | grep ' dpb') $(print -r -- "$sl" | grep BEGIN)"
+# 12c: the reference was refused here (memo'd): held, never published
+mkdir -p "$W/st12c/tried"; print -r -- "pre-submit-check.sh --leaf failed: gate (a test memo)" > "$W/st12c/tried/${D2[dzc]##*/}^out.pub"
+r12 dpc > "$W/p12.json"; tk12 BUILDER_STATE=$W/st12c
+has "held dpc: its reference ${O2[dzc]} refused here \(pre-submit-check.sh --leaf failed: gate \(a test memo\)\)" && [[ -z $(print -r -- "$sl" | grep '^BEGIN') && $(cl7 dpc) == 0 ]] &&
+  ok "deps first never publishes a reference refused here: 'held dpc: its reference <out> refused here (...)', nothing submitted" || no "12c: $(print -r -- "$out" | grep ' dpc')"
+# 12d: two jobs of one tick need the same reference (dzd's b2); its submission is slow (FKSLOWSUB), so the second job meets it
+j12="BUILDER_JOBS=2 BUILDER_BUSY=0 BUILDER_NCPU=4 BUILDER_CORES=1 BUILDER_LOAD_MAX=auto"
+r12 dpd1 dpd2 > "$W/p12.json"; tk12 BUILDER_STATE=$W/st12d $j12 FKSLOWSUB=20; s12=$sl k12=$(( $(cl7 dpd1) + $(cl7 dpd2) )); print -r -- "$out" | grep -E ' dpd[12]' | sed 's/^/   12d /'
+[[ $(bg9 "${O2[dzd]}") == 1 && $k12 == 1 ]] && has "dpd[12]: ${O2[dzd]#/nix/store/} is being published by another job of this tick" &&
+  ok "two jobs need one reference: one /begin for it (the per-out lock), the other job meets the lock; one of the two published" || no "12d: $(print -r -- "$s12" | grep BEGIN) $(print -r -- "$out" | grep -E 'dpd|lock|another job')"
+tk12 BUILDER_STATE=$W/st12d $j12; n12=$(print -r -- "$s12"$'\n'"$sl" | grep -c "^BEGIN .*-qb-dpd[12]-")
+[[ $(bg9 "${O2[dzd]}") == 0 && $n12 == 2 && $(cl7 dpd1) == 1 && $(cl7 dpd2) == 1 ]] && ok "the next tick: the other one publishes (its reference is served now): each dpd out begun once in all" || no "12d2: $n12 $(print -r -- "$out" | grep -E ' dpd')"
+mu8 "$S" "$W/mut12d.sh" 'mkdir "$flk" 2> /dev/null ||' ': ||' 'first1 "$@"; flr=$?; rmdir "$flk"; return $flr' 'first1 "$@"'
+r12 dpe1 dpe2 > "$W/p12.json"; S0=$S S=$W/mut12d.sh; tk12 BUILDER_STATE=$W/st12dm $j12 FKSLOWSUB=30; S=$S0
+! cmp -s "$S" "$W/mut12d.sh" && [[ $(bg9 "${O2[dze]}") == 2 ]] && ok "NEG a mutant without the lock: both jobs submit the reference (two /begin of one out)" || no "mut12d: $(print -r -- "$sl" | grep BEGIN)"
+# 12e: BUILDER_SKIP (solnix.cache.build.skipPnames): the seed rows are never planned
+{ print -r -- "$H"; rec binutils-seed 2.47 y /nix/store/00000000000000000000000000000001-binutils-seed-2.47; rec illumos-early 1 y /nix/store/00000000000000000000000000000002-illumos-early
+  rec illumos-userland ac45d71fc2 y /nix/store/00000000000000000000000000000003-illumos-userland; rec x-seedy 1 y /nix/store/00000000000000000000000000000004-x-seedy-1; } > "$W/s12.tsv"
+print "{\"rows\":[$(row binutils-seed 2.47 user-request),$(row illumos-early 1 user-request),$(row illumos-userland ac45d71fc2 user-request),$(row x-seedy 1 outdated)]}" > "$W/s12.json"
+SK12="*-seed illumos-early illumos-userland"; p12=$(env BUILDER_SKIP="$SK12" ksh93 "$S" plan "$W/s12.json" "$W/s12.tsv" 2>&1)
+[[ $p12 == "binutils-seed SKIP (BUILDER_SKIP)"$'\n'"illumos-early SKIP (BUILDER_SKIP)"$'\n'"illumos-userland SKIP (BUILDER_SKIP)"$'\n'"x-seedy BUILD "* ]] &&
+  ok "BUILDER_SKIP='$SK12': binutils-seed, illumos-early, illumos-userland SKIP; x-seedy still BUILD" || no "skip: $p12"
+[[ $(ksh93 "$S" plan "$W/s12.json" "$W/s12.tsv" 2>&1 | grep -c ' BUILD ') == 4 ]] && ok "NEG BUILDER_SKIP unset: all four BUILD (the skip is the setting's)" || no "skip unset"
+if [[ -n ${F9_BUILDER:-} ]]; then env BUILDER_SKIP="$SK12" ksh93 "$F9_BUILDER" plan "$W/s12.json" "$W/s12.tsv" 2>&1 | grep -q '^binutils-seed BUILD ' &&
+  ok "NEG origin/main's builder plans binutils-seed BUILD whatever BUILDER_SKIP says" || no "F9 skip"
+else print "SKIP origin/main skip negative control: F9_BUILDER unset (not counted as a pass)"; fi
+L12=$(env BUILDER_SKIP="$SK12" ksh93 "$S" plan "$W/live.json" "$W/live.tsv" 2>&1)
+(( $(print -r -- "$L12" | grep -c ' SKIP ') > 0 )) && ! print -r -- "$L12" | egrep -q '^([^ ]*-seed|illumos-early|illumos-userland) BUILD' &&
+  ok "the live listing with the module's default: $(print -r -- "$L12" | grep -c ' SKIP ') rows SKIP, none of them BUILD" || no "live skip: $(print -r -- "$L12" | grep -E 'seed|illumos-(early|userland) ')"
+grep -q 'BUILDER_SKIP = lib.concatStringsSep " " cfg.skipPnames' "$G/modules/config/community/builder.nix" && grep -q 'default = \[ "\*-seed" "illumos-early" "illumos-userland" \];' "$G/modules/config/community/builder.nix" &&
+  ok "builder.nix: skipPnames defaults to the seed rows and is passed as BUILDER_SKIP" || no "builder.nix skipPnames"
+# 12f: log stamps in UTC whatever TZ says (lixi: 12:40:46Z for 17:40Z)
+ut12() { typeset u0 u1 l; u0=$(date -u +%Y-%m-%dT%H:%M); l=$(env TZ=US/Eastern BUILDER_LOAD_MAX=0 BUILDER_BUSY=0 BUILDER_STATE=$W/st12u ksh93 "$1" once 2>&1 | grep ' builder: ' | head -1)
+  u1=$(date -u +%Y-%m-%dT%H:%M); l=${l%% *}; [[ $l == *Z && ( ${l:0:16} == "$u0" || ${l:0:16} == "$u1" ) ]]; }
+[[ $(TZ=US/Eastern date +%H) != "$(date -u +%H)" ]] && ut12 "$S" && ok "TZ=US/Eastern: the log stamp is date -u's (UTC)" || no "utc stamp"
+if [[ -n ${F9_BUILDER:-} ]]; then ! ut12 "$F9_BUILDER" && ok "NEG origin/main's builder under TZ=US/Eastern: a local-time stamp with a Z" || no "F9 utc: the control cannot fail"
+else print "SKIP origin/main utc negative control: F9_BUILDER unset (not counted as a pass)"; fi
+# 12g: nap's deadline. sleep stubbed: each step really sleeps, and the first one moves SECONDS by JUMP (a suspend, or a clock
+# stepped back); BUILDER_NAP_STEP=1 stands in for 60. Prints "<steps> <wall seconds>". Its own ksh93 process: an assignment to
+# SECONDS in a $(...) subshell leaves the parent's SECONDS at epoch seconds (measured on dixi's ksh93 93u+).
+{ sed -n '/^nap() {/,/^}/p' "$S"; print -r -- 'integer n=0 t0=$(date +%s) JUMP=$1; shift
+function sleep { n=n+1; command sleep "$1"; (( n == 1 )) && SECONDS=$(( SECONDS + JUMP )); }
+BUILDER_NAP_STEP=1; if [[ $1 == old ]]; then sleep "$2"; else nap "$1"; fi; print "$n $(( $(date +%s) - t0 ))"'; } > "$W/nap12.ksh"
+np12() { ksh93 "$W/nap12.ksh" "$@"; }	# np12 <jump> <secs> | np12 <jump> old <secs>
+r=$(np12 7200 3600); [[ ${r% *} == 1 ]] && (( ${r#* } <= 3 )) && ok "nap 3600 with a 2 h clock jump in its first step (a suspend): ends after that step ($r)" || no "nap jump: $r"
+r=$(np12 0 3); (( ${r% *} >= 3 && ${r#* } >= 3 )) && ok "nap 3 without a jump: waits it out in 1 s steps ($r), so the check above can fail" || no "nap plain: $r"
+r=$(np12 -7200 3600); [[ ${r% *} == 1 ]] && ok "nap 3600, the clock stepped back 2 h: ends after one step, not 2 h late ($r)" || no "nap back: $r"
+r=$(np12 7200 old 4); (( ${r#* } >= 4 )) && grep -q 'nap "$(pause)"' "$S" && ! grep -q 'sleep "$(pause' "$S" &&
+  ok "NEG a single sleep (origin/main's loop: sleep \"\$(pause)\") sleeps its whole length through the same jump ($r); the loop uses nap" || no "old sleep: $r"
+if [[ -n ${F9_BUILDER:-} ]]; then grep -q 'sleep "$(pause)"' "$F9_BUILDER" && ! grep -q '^nap()' "$F9_BUILDER" && ok "NEG origin/main's loop sleeps one pause (no deadline)" || no "F9 nap"
+else print "SKIP origin/main nap negative control: F9_BUILDER unset (not counted as a pass)"; fi
+# --- 13. fleet9b: pre-submit's --check builds with the job's cores, as the first build did. With nix.conf cores = 0 (the NixOS
+# default; dixi's) NIX_BUILD_CORES is 0 in a build that sets no cores, and a recipe's `gmake -j${NIX_BUILD_CORES:-8}` is `gmake
+# -j0`, which fails (dixi pcre2 (B), 2026-11-06: memo'd, held). The fixture fails the same way (exit 3), and every tick's nix is
+# forced to cores = 0 by NIX_CONFIG, whatever this host's nix.conf says. pubcores: this builder; pubcoresn: F9B_BUILDER;
+# pubcoresm: a mutant without the NIX_CONFIG export. Three drvs, so no case sees another's build.
+print x > "$W/bearer"; mkdir -p "$W/cflake"
+sed "s|@TAG@|${W##*/}|g" > "$W/cflake/flake.nix" <<'CF'
+{ outputs = { self }: let
+    mk = n: derivation { name = "qb-${n}-@TAG@"; system = "x86_64-solaris"; builder = "/usr/bin/bash";
+      args = [ "-c" "echo building ${n} with NIX_BUILD_CORES=$NIX_BUILD_CORES; [ \"\${NIX_BUILD_CORES:-0}\" -gt 0 ] || exit 3; echo ${n}-@TAG@ > $out" ]; };
+  in { packages.x86_64-solaris = { pubcores = mk "pubcores"; pubcoresn = mk "pubcoresn"; pubcoresm = mk "pubcoresm"; }; }; }
+CF
+nix eval --json "path:$W/cflake#packages.x86_64-solaris" --apply 'builtins.mapAttrs (n: d: d.outPath)' > "$W/couts.json" 2> "$W/ceval.err" || no "fixture 13: $(tail -3 "$W/ceval.err")"
+po13() { jq -r --arg a "$1" '.[$a]' "$W/couts.json"; }
+for a in pubcores pubcoresn pubcoresm; do rec $a 1 y "$(po13 $a)"; done >> "$W/p.tsv"; cp "$W/p.tsv" "$W/hc/registry/recipes.tsv"
+tk13() { tk7 FKROWS=$W/p13.json BUILDER_FLAKE=path:$W/cflake NIX_CONFIG="cores = 0" "$@"; }
+m13() { ls "$1/tried/" 2> /dev/null | grep -c "qb-$2-.*\.drv\^out\.pub$"; }
+[[ $(env NIX_CONFIG="cores = 0" nix config show cores) == 0 ]] && ok "the test's nix: NIX_CONFIG='cores = 0' gives cores 0 (this host's nix.conf: $(nix config show cores))" || no "cores 0: $(env NIX_CONFIG="cores = 0" nix config show cores)"
+r7 pubcores > "$W/p13.json"; tk13 BUILDER_STATE=$W/st13; print -r -- "$out" | grep ' pubcores' | sed 's/^/   13 /'
+n13=$(print -r -- "$out" | sed -n 's/.* pubcores: first build of .* (\([0-9]*\) cores).*/\1/p')
+(( n13 > 0 && $(begun pubcores) == 1 && $(cl7 pubcores) == 1 && $(m13 "$W/st13" pubcores) == 0 )) && grep -q '^  check: PASS (SAME' "$W/st13/tried/"*qb-pubcores-*.presubmit &&
+  has 'pubcores: published .*an 8UNr-only client verified it' &&
+  ok "nix.conf cores = 0: the first build ($n13 cores) and pre-submit's --check (NIX_CONFIG cores = $n13) pass, SAME; no .pub memo; submitted, claimed" ||
+  no "13 pubcores: memo $(m13 "$W/st13" pubcores): $(print -r -- "$out" | grep ' pubcores'; grep check: "$W/st13/tried/"*qb-pubcores-*.presubmit 2>&1)"
+# n13: the --check's log names the cores it ran with (nix log: the check's, the last build of the drv)
+x=$(nix log "$(nix-store -q --deriver "$(po13 pubcores)")" 2> /dev/null | grep -c "NIX_BUILD_CORES=$n13\$")
+(( x >= 1 )) && ok "the build log says NIX_BUILD_CORES=$n13" || no "13 log: $(nix log "$(nix-store -q --deriver "$(po13 pubcores)")" 2>&1 | head -3)"
+# the refusal shape: the first build passes, the --check (cores 0) fails with exit 3, memo'd as the out's refusal, never begun
+c13() {	# c13 <pname> <state>: origin/main's verdict
+  (( $(m13 "$2" $1) == 1 && $(begun $1) == 0 && $(cl7 $1) == 0 )) && has "$1: first build of .* \([1-9][0-9]* cores\)" &&
+    has "decline $1: pre-submit-check.sh --leaf .* rc=1 \(check" && grep -q "^  check: FAIL (error: builder for .*qb-$1-.* failed with exit code 3" "$2/tried/"*qb-$1-*.presubmit; }
+if [[ -n ${F9B_BUILDER:-} ]]; then r7 pubcoresn > "$W/p13.json"; S0=$S S=$F9B_BUILDER; tk13 BUILDER_STATE=$W/st13o; S=$S0
+  print -r -- "$out" | grep ' pubcoresn' | sed 's/^/   13o /'
+  c13 pubcoresn "$W/st13o" && ok "NEG origin/main's builder ($F9B_BUILDER): the --check runs with cores 0, fails (exit 3), memo'd as a check refusal" ||
+    no "F9B_BUILDER: memo $(m13 "$W/st13o" pubcoresn): $(print -r -- "$out" | grep ' pubcoresn'; grep check: "$W/st13o/tried/"*qb-pubcoresn-*.presubmit 2>&1)"
+else print "SKIP origin/main cores negative control: F9B_BUILDER unset (not counted as a pass)"; fi
+mu8 "$S" "$W/mut13.sh" ' NIX_CONFIG="${NIX_CONFIG:+$NIX_CONFIG'$'\n''}cores = $C";' ';'
+r7 pubcoresm > "$W/p13.json"; S0=$S S=$W/mut13.sh; tk13 BUILDER_STATE=$W/st13m; S=$S0
+! cmp -s "$S" "$W/mut13.sh" && c13 pubcoresm "$W/st13m" && ok "NEG a mutant without the NIX_CONFIG export: the same check refusal (the export is what passes it)" ||
+  no "mut13: memo $(m13 "$W/st13m" pubcoresm): $(print -r -- "$out" | grep ' pubcoresm')"
 rm -f "$W/bearer"
 (( bad )) && print "RESULT: FAIL" || print "RESULT: PASS"
 exit $bad

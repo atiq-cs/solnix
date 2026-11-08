@@ -1785,9 +1785,9 @@ assert_mounted_on_pool "$BEDS" "$ALTROOT" /tmp/solnix-be-mount.err
 # /etc/auto_master:31 maps `/home auto_home -nobrowse`, so autofs OWNS /home and
 # any local directory there is shadowed at boot.
 #
-# Measured on the maintainer's existing host `sun`, which already runs /home/gburd:
+# Measured on the maintainer's existing host `sun`, which already runs /home/<user>:
 # the autofs SERVICE is disabled (svc:/system/filesystem/autofs:default), a real
-# tank/home + tank/home/gburd dataset is mounted, and passwd points at /home/gburd.
+# tank/home + tank/home/<user> dataset is mounted, and passwd points at /home/<user>.
 # The auto_master line is still present there and harmless ONLY because the service
 # is off -- so we do BOTH below: disable the service and comment the line, because
 # a future `svcadm enable autofs` would otherwise silently shadow every home dir.
@@ -2363,7 +2363,7 @@ fi
 # 3f. /home LAYOUT, on the BE that install-be just laid.
 # The autofs SERVICE is preset off by the site profile above. The auto_master line
 # is the belt to that brace: a future `svcadm enable autofs` would otherwise
-# silently shadow every home directory. Verified on `sun`, which runs /home/gburd
+# silently shadow every home directory. Verified on `sun`, which runs /home/<user>
 # with autofs disabled and the line still present (harmless only while off).
 # When /etc/auto_master is a link into the store the configuration owns it; say so
 # rather than replacing a config file with a local edit.
@@ -2584,7 +2584,7 @@ if [ -f "$ALTROOT/etc/ssh/sshd_config" ]; then
   # ⚠️ UsePAM yes on the installed system too. Without it OpenSSH 10 does its own
   # crypt() password check, which FAILS OPEN on this illumos build (every password
   # authenticates). With UsePAM yes the real PAM auth stack enforces the hash --
-  # essential since the admin user (gburd) logs in by password. MEASURED on the X1.
+  # essential since the admin user logs in by password. MEASURED on the X1.
   grep -q '^UsePAM yes' "$ALTROOT/etc/ssh/sshd_config" \
     || echo 'UsePAM yes' >> "$ALTROOT/etc/ssh/sshd_config"
   grep -q '^UsePAM yes' "$ALTROOT/etc/ssh/sshd_config" \
@@ -2666,8 +2666,8 @@ if [ "$_mkadmin" = 1 ]; then
   # which mounts at $HOME_BASE on the running system. During install that dataset is
   # NOT mounted under $ALTROOT, so writing to $ALTROOT$HOME_BASE lands in the BE's
   # own $HOME_BASE directory -- which is SHADOWED by the dataset at boot, so the
-  # home + authorized_keys silently vanish on first boot (measured on the X1: gburd
-  # had no ~/.ssh after reboot). Mount the home dataset under $ALTROOT first so the
+  # home + authorized_keys silently vanish on first boot (measured on the X1: the admin
+  # user had no ~/.ssh after reboot). Mount the home dataset under $ALTROOT first so the
   # home + key land on the dataset that actually mounts at boot.
   # The pool is created with -o altroot=$ALTROOT, so ZFS ALREADY prefixes every
   # mountpoint with $ALTROOT. Setting mountpoint=$ALTROOT$HOME_BASE doubled it

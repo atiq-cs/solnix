@@ -94,7 +94,7 @@
   # (matching NixOS's identity-free installer image). The public AMI/ISO/IMG ship
   # with root (RBAC/pfexec-capable) + no baked personal login; the installer/
   # first-boot creates the operator's user. A maintainer's personal test build
-  # adds a user via a SEPARATE overlay (e.g. configurations/gburd.nix) that is
+  # adds a user via a SEPARATE overlay (e.g. a configurations/<user>.nix) that is
   # NEVER included in any public image.
 
   # Two example SMF services exercise the generator (T1.11) end-to-end: each

@@ -12,7 +12,7 @@
 # publish (fleet3): a served row whose out is not on cache.solnix.io yet is built here and submitted with this host's own
 # builder id and key (agentId; solnix.builder.identityKeyFile, root-only, never in the store), through the gates in
 # scripts/ (pre-submit-check.sh --leaf, cache-submit.py). On by default for a dedicated, identified builder (dixi, dixa).
-# evalAnchored (fleet4, protocol v2 (B)): a queue job with no served row whose pname and version are what
+# evalAnchored (fleet4, protocol v2 (B)): a queue job with no served row at its (pname, version) whose pname and version are what
 # packages.<system>.<attr> evaluates to at the head of main (or 26.11) is built and proposed with an `eval` anchor
 # (pre-submit-check.sh --eval: drv-gate --closure). Off until infra's evaluator is live; dry runs it up to the /begin.
 #
@@ -51,10 +51,12 @@ let
     BUILDER_SHARE = toString cfg.share;
     BUILDER_CAP_SHARE = lib.optionalString (opp && cfg.cpuCap == null) (toString cfg.share);
     BUILDER_TICK_MIN = toString cfg.tickMin; BUILDER_TICK_MAX = toString cfg.tickMax;
+    BUILDER_SKIP = lib.concatStringsSep " " cfg.skipPnames;   # plan() SKIPs these pnames (fleet9: the seed rows)
     BUILDER_BUSY_TICK_MIN = toString cfg.busyTickMin; BUILDER_BUSY_TICK_MAX = toString cfg.busyTickMax;
-    BUILDER_WSWEEP = "${./solnix-wsweep.ksh}";   # stale fixed build dirs of killed builds (wave4)
+    BUILDER_WSWEEP = "${./solnix-wsweep.ksh}";   # stale fixed build dirs of killed builds (wave4), and one drv's right before its pre-submit --check (fleet8)
     BUILDER_PUBLISH = { off = "0"; on = "1"; dry = "dry"; }.${cfg.publish};
     BUILDER_EVAL = { off = "0"; on = "1"; dry = "dry"; }.${cfg.evalAnchored};
+    BUILDER_EVAL_BRANCHES = lib.concatStringsSep " " cfg.evalBranches;   # the branches whose heads (B) evaluates (wave6: opt-in, fleet7)
     BUILDER_QUEUE_AUTH = cfg.queueAuth; BUILDER_SSH_KEYGEN = "${s.openssh}/bin/ssh-keygen";
     BUILDER_EGRESS = if idk then "1" else "0";   # register the egress address (identified builders only)
     BUILDER_PUBLISH_KEY = config.solnix.builder.identityKeyFile; BUILDER_PUBLISH_ID = cfg.agentId;   # publish, sshsig, egress
@@ -88,6 +90,12 @@ in
     loadMax = lib.mkOption { type = lib.types.nullOr lib.types.ints.positive; default = if ded || opp then null else 2;
       description = "Start no job while this many CPUs are busy with other work (null: whenever a job's cores are idle)."; };
     nice = lib.mkOption { type = lib.types.ints.between 0 19; default = 19; description = "nice value of every build."; };
+    skipPnames = lib.mkOption { type = lib.types.listOf (lib.types.strMatching "[][A-Za-z0-9._+*?-]+");
+      default = [ "*-seed" "illumos-early" "illumos-userland" ];
+      description = ''
+        Queue pnames the builder never plans (ksh93 patterns: *-seed). Default: the seed rows, illumos-early and illumos-userland,
+        which no solnix host builds (the seed builder publishes them); each tick spent its whole plan on 17 of them.
+      ''; };
     tickMin = lib.mkOption { type = lib.types.ints.positive; default = if ded then 120 else 600; description = "Seconds between ticks after one with nothing to do: at least ..."; };
     tickMax = lib.mkOption { type = lib.types.ints.positive; default = if ded then 300 else 1800; description = "... and at most (random, so a fleet doesn't poll solnix.io in step)."; };
     busyTickMin = lib.mkOption { type = lib.types.ints.positive; default = if ded then 10 else if opp then 120 else cfg.tickMin; description = "Seconds to the next tick after one that rebuilt or completed a job: at least ..."; };
@@ -102,13 +110,16 @@ in
       ''; };
     evalAnchored = lib.mkOption { type = lib.types.enum [ "off" "on" "dry" ]; default = "off";
       description = ''
-        Eval-anchored first publish (protocol v2 (B)): a queue job whose pname has no served row for this system, but whose
-        pname and target version are those of packages.<system>.<attr> at the head of main (else 26.11), is built here,
+        Eval-anchored first publish (protocol v2 (B)): a queue job no served row has at its pname and version for this system
+        (an older served version does not stop it: a version bump), but whose pname and target version are those of
+        packages.<system>.<attr> at the head of main (else 26.11), is built here,
         passes scripts/pre-submit-check.sh --eval (drv-gate --closure: its whole build chain store-only; every non-FOD input
         published first), and is submitted as a proposal carrying {attr, system, commit, branch, flake_nar_hash}. The job is
         completed only after it is promoted and an 8UNr-only client verified it. on needs publish on (the key and gates);
         dry: every step up to the signed /begin. Off until infra's evaluator is live.
       ''; };
+    evalBranches = lib.mkOption { type = lib.types.listOf (lib.types.enum [ "main" "26.11" "wave6" ]); default = [ "main" "26.11" ];
+      description = "The branches whose heads evalAnchored evaluates, in order (BUILDER_EVAL_BRANCHES). wave6 is opt-in: its outs are new rows until it merges."; };
     queueAuth = lib.mkOption { type = lib.types.enum [ "bearer" "both" "sshsig" ]; default = if idk then "both" else "bearer";
       description = ''
         How queue requests (claim, heartbeat, complete) authenticate to builders.solnix.io. bearer: the shared X-Solnix-Build

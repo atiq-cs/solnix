@@ -520,6 +520,21 @@ RUN_DIR_STR = re.compile(rb"(?:/private)?/tmp/nix-build-[A-Za-z0-9+._?=-]+|/var/
 # on illumos /bin is a symlink to /usr/bin, so it is the same always-present system shell as /bin/sh (orchestrator
 # 2026-11-03, quilt spec-filters/obs). Only that one: /usr/bin/bash, /usr/bin/perl, /usr/bin/python* still FAIL.
 SHEBANG_OK = {"/bin/sh", "/usr/bin/sh", "/usr/bin/env"}
+# B18: a private key / secret baked into an out or image. The incident 2026-11-06: a released raw image carried the
+# maintainer's unencrypted OpenSSH private key. A marker alone is not proof (the openssh binaries carry the literal header
+# string, sshd_config names ~/.ssh/id_ed25519 as text) -> require real key MATERIAL: an OpenSSH key body (b3BlbnNzaC1rZXkt
+# is base64 "openssh-key-"), a PEM body line, an age secret, an inline sops ciphertext, or a non-root crypt hash in a
+# shadow-shaped line. Documentation (man/doc/info) that merely shows a header is allowed (DOC_RE), as for B13.
+SECRET_BODY = re.compile(rb"b3BlbnNzaC1rZXkt"                                   # OpenSSH private key body (any type incl ed25519)
+                         rb"|-----BEGIN (?:RSA|EC|DSA|ENCRYPTED) PRIVATE KEY-----\s*\n[A-Za-z0-9+/]{40}"  # PEM body present
+                         rb"|-----BEGIN PGP PRIVATE KEY BLOCK-----"
+                         rb"|PuTTY-User-Key-File-\d"
+                         rb"|AGE-SECRET-KEY-1[0-9A-Z]{20,}"                      # age identity (secret half)
+                         rb"|ENC\[AES256_GCM,data:")                            # inline sops ciphertext
+# a crypt hash ($1$/$2a|b|y$/$5$/$6$/$y$) immediately after "<user>:" at the start of a line = a shadow entry with a set
+# password. Allowed only for root (a shipped root hash is itself a finding, but B18 targets NON-root accounts baked in;
+# root is covered by the image gate's shadow rule). Here, any non-root user with a hash FAILs.
+SHADOW_HASH = re.compile(rb"(?m)^([A-Za-z0-9_][A-Za-z0-9_.-]*):\$(?:1|2[aby]|5|6|y|gy)\$[./A-Za-z0-9]")
 # B13 allowlist: text that merely MENTIONS a host path (documentation), not a path the program uses.
 DOC_RE = re.compile(r"(^|/)share/(man|info|doc|gtk-doc|help|licenses)/|(^|/)(man|doc)/|\.(1|3|5|7|8|[1-9][a-z]*|info|html|txt|md|rst|pdf)(\.gz)?$")
 
@@ -663,6 +678,17 @@ def check_nar(out, src=None):
             r.append(("FAIL", "B16-compressed", f"{rel}: a compressed section that cannot be decompressed (corrupt, or over {DZ_LIMIT >> 20} MiB)"))
         r.extend(server_checks(rel, data=data, text=text))
         r.extend(config_record_findings(rel, data))
+        # B18: real private-key / secret material. SECRET_BODY matches only actual material (an openssh/PEM key BODY, an age
+        # secret, an inline sops ciphertext), never a bare header, so it is checked in EVERY file regardless of extension: a
+        # real key in a .txt or a man page is still a leak (DOC_RE would wrongly skip keys.txt). The crypt-hash rule is also
+        # unconditional (a shadow file is not documentation).
+        mb = SECRET_BODY.search(data) or (SECRET_BODY.search(gunzip_bounded(data)) if rel.endswith(".gz") else None)
+        if mb:
+            kind = mb.group(0)[:24].decode(errors="replace")
+            r.append(("FAIL", "B18-secret", f"{rel}: private key / secret material ({kind}...)"))
+        sh = SHADOW_HASH.search(data)
+        if sh and sh.group(1) != b"root":
+            r.append(("FAIL", "B18-secret", f"{rel}: crypt hash for non-root account '{sh.group(1).decode(errors='replace')}'"))
         # B17: help2man's fallback page. With no perl at configure, GNU's doc/dummy-man writes an "OOPS!" stub instead of the
         # page (wave6 gnused mcfr18qx, served 4g8qn63n; infra 20261104-help2man-oops-stub-pages). Man pages only, .gz inflated.
         if "share/man/" in "/" + rel and MAN_STUB in (gunzip_bounded(data) if rel.endswith(".gz") else data):
@@ -1181,7 +1207,7 @@ def selftest():
         print(f"{'ok ' if ok else 'BAD'} drv  A3 source path from narHash {nh[:14]}.. {nm}: {'matches' if want else 'does not match'}")
     # leaf mode refuses to judge when the probe cannot see a served path, or any input's state is unknown
     for label, srv in (("leaf: probe blind (CA-lane path not seen served) -> hard FAIL", lambda p: False),
-                       ("leaf: an input's served state unknown -> hard FAIL", lambda p: True if "-lane" in p else None)):
+                       ("leaf: an input's served state unknown -> hard FAIL", lambda p: True if p in _LANE else None)):   # a CA-lane path is served
         lines = []; rc = run_drv([leafroot], out=lines.append, ca_ok=ca, mode="leaf", served=srv)
         ok = rc != 0 and any(l.startswith("FAIL A0") for l in lines); bad += not ok
         print(f"{'ok ' if ok else 'BAD'} drv  {label}: {'PASS' if rc == 0 else 'FAIL'}" + ("" if ok else "\n    " + "\n    ".join(lines)))
@@ -1343,6 +1369,13 @@ def selftest_out():
         ("B6 top-level symlink with ..", mut("up", L("../lib/libx")), False, "B6-symlink"),
         ("B6 symlink loop", mut("lib/a", L("a")), False, "B6-symlink"),
         ("B7 bin/ file without x (libtool 0444)", mut("bin/libtool", R(b"#!/bin/sh\n")), False, "B7-exec"),
+        ("B18 a real OpenSSH private key body: FAIL", mut("etc/ssh/k", R(b"-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXkt" + b"A"*40 + b"\n-----END OPENSSH PRIVATE KEY-----\n")), False, "FAIL B18-secret"),
+        ("B18 an age secret key: FAIL", mut("home/.config/sops/age/keys.txt", R(b"AGE-SECRET-KEY-1" + b"QZ"*20 + b"\n")), False, "FAIL B18-secret"),
+        ("B18 an inline sops ciphertext: FAIL", mut("etc/x.yaml", R(b"pw: ENC[AES256_GCM,data:abcd,iv:ef]\n")), False, "FAIL B18-secret"),
+        ("B18 a non-root crypt hash in a shadow file: FAIL", mut("etc/shadow", R(b"bob:$6$abc$0123456789./ABCdef:19000:::::\nroot:*LK*:1:::::\n")), False, "FAIL B18-secret"),
+        ("B18 not hit: a man page that SHOWS the header as example text", mut("share/man/man1/ssh.1", R(b".TH SSH 1\nexample: -----BEGIN OPENSSH PRIVATE KEY-----\n")), True, None),
+        ("B18 not hit: the ssh binary's template header string (no key body)", mut("bin/ssh", R(b"\x7fELF\0-----BEGIN OPENSSH PRIVATE KEY-----\0usage: ssh\0", True)), True, None),
+        ("B18 not hit: root-only hash in shadow (locked others)", mut("etc/shadow", R(b"root:$6$salt$0123456789./ABChash:1:::::\ndaemon:NP:1:::::\n")), True, None),
         ("B8 a non-drv-keyed /var/tmp/srcpkg- dir (8 hex) in a .pc", mut("lib/z.pc", R(b"prefix=/var/tmp/srcpkg-0123abcd/out")), False, "B8-builddir"),
         ("B8 drv-keyed /var/tmp/srcpkg-<16 hex> (jq CC= class): FAIL (wave6 records CC=gcc)", mut("bin/jq2", R(b"\x7fELF\0CC=/var/tmp/srcpkg-4424febabee4a39c/cc64\0", True)), False, "FAIL B8-builddir"),
         ("B8 drv-keyed /var/tmp/cargo-<16 hex> (rg target dir): WARN, not FAIL", mut("bin/rg2", R(b"\x7fELF\0/var/tmp/cargo-9bfaa4b8b8af3683/src/s/target\0", True)), True, "WARN B8-builddir"),

@@ -621,7 +621,7 @@ fi
 #     -O (/home, /export, ... : canmount=on, mountpoint not legacy/none, outside
 #     $POOL/ROOT). zfs mount refuses a non-empty directory, so a file left there makes
 #     filesystem/local fail to mount the real dataset at boot and the BE's stale copy
-#     shows instead (measured on lixi: a seeded <BE>/home/gburd). The -O datasets
+#     shows instead (measured on lixi: a seeded <BE>/home/<user>). The -O datasets
 #     (<pool>/nix, <pool>/var/*) and the live root have no such problem. Checked on
 #     the BE dataset's own files (its .zfs snapshot), since on the running system the
 #     shared dataset may be mounted over the path and hide them.

@@ -126,6 +126,8 @@ cmd_bank() {
   # Compress ON the helper: 2 GiB of mostly-empty ZFS gzips ~10x, so this moves
   # far less over the wire. gzip (not zstd) matches the existing images/ prefix.
   lssh ec2-user@"$ip" 'sudo dnf install -y pigz >/dev/null 2>&1 || true; command -v pigz || command -v gzip' || true
+  # push the identity gate to the helper first (bank.sh runs it on the raw device)
+  lssh ec2-user@"$ip" 'sudo bash -c "cat > /root/solnix-image-identity-gate.sh; chmod 755 /root/solnix-image-identity-gate.sh"' < "$(dirname "$0")/solnix-image-identity-gate.sh" || { note "bank: FAILED to push the identity gate"; exit 1; }
   SSH_TIMEOUT=60 lssh ec2-user@"$ip" 'sudo bash -c "cat > /root/bank.sh" <<'"'"'EOS'"'"'
 set -euxo pipefail
 ROOT=$(findmnt -no SOURCE / | sed "s/p\?[0-9]*$//")
@@ -149,6 +151,14 @@ echo "gz_sha256=$(cat /root/gz.sha256)"
   | sha256sum | cut -d" " -f1 > /root/roundtrip.sha256
 echo "roundtrip_sha256=$(cat /root/roundtrip.sha256)"
 [ "$(cat /root/raw.sha256)" = "$(cat /root/roundtrip.sha256)" ] || { echo BANK_FAILED_ROUNDTRIP; exit 1; }
+# MANDATORY identity gate (security 2026-11-06): refuse to bank an image carrying a private key, age secret,
+# inline sops, a maintainer identity string, or a non-root password hash. Scans the RAW device bytes. A released
+# raw once carried a maintainer private key; this makes that un-publishable by construction.
+[ -x /root/solnix-image-identity-gate.sh ] || { echo BANK_FAILED_NO_GATE; exit 1; }
+if ! /root/solnix-image-identity-gate.sh "$SRC" >/root/gate.log 2>&1; then
+  echo BANK_FAILED_IDENTITY_GATE; sed "s/^/gate: /" /root/gate.log; exit 1
+fi
+echo "identity-gate: $(grep -E "^(CLEAN|REJECT)" /root/gate.log | tail -1)"
 echo BANK_LOCAL_OK
 EOS
 sudo bash -c "chmod +x /root/bank.sh; nohup /root/bank.sh </dev/null >/root/bank.log 2>&1 & echo started"' || true
