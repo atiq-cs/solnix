@@ -22,11 +22,17 @@ RP="$out/lib:${RP#:}:$gccLibDir/amd64"
 # (pixman-sys, xkbcommon), and the cc's sysroot is the gate proto, so no host lib dir is searched.
 LD="-L$out/lib"; for d in $(echo "$RP" | tr ':' ' '); do LD="$LD -L$d"; done
 mkdir -p w home "$out/lib"
-# A link naming -lclang is a bindgen build script (pam-sys) on the host libclang, a build tool like
-# meson's host python. It links against the HOST runtime only: with the store RUNPATH it loaded the
-# store libc AND libclang's host libc (pldd), and aborted in _thrp_exit on clang's parse thread.
+# A link naming -lclang is a bindgen build script (pam-sys: cosmic-greeter only; $libclang is set for it alone).
+# A store libclang (llvmPackages.clang) is a store build tool: the store runtime, as every link here, plus its lib
+# dir. The OI host's /usr/clang/21 (the seed instance, no store LLVM) links against the HOST runtime only: with the
+# store RUNPATH it loaded the store libc AND libclang's host libc (pldd), and aborted in _thrp_exit on clang's parse thread.
+case "${libclang:-}" in
+  "") clangLink="" ;;
+  /nix/store/*) clangLink="exec $gcc/bin/gcc -m64 -D_TS_ERRNO $LD -Wl,-R,$RP:$libclang/lib \"\$@\" -g0" ;;
+  *) clangLink='exec '"$gcc"'/bin/gcc -m64 "$@" -L'"$libclang"'/lib -L/usr/lib/amd64 -Wl,-R,'"$libclang"'/lib:/usr/gcc/14/lib/amd64:/usr/lib/amd64 -g0' ;;
+esac
 { echo "#!$tools/bin/bash"
-  echo 'case " $* " in *" -lclang "*) exec '"$gcc"'/bin/gcc -m64 "$@" -L/usr/clang/21/lib -L/usr/lib/amd64 -Wl,-R,/usr/clang/21/lib:/usr/gcc/14/lib/amd64:/usr/lib/amd64 -g0 ;; esac'
+  [ -z "$clangLink" ] || echo 'case " $* " in *" -lclang "*) '"$clangLink"' ;; esac'
   echo "exec $gcc/bin/gcc -m64 -D_TS_ERRNO $LD -Wl,-R,$RP \"\$@\" -g0"; } > w/cc
 chmod +x w/cc
 export PATH="$W/w:$rust/bin:$PATH" HOME="$W/home" CARGO_HOME="$W/home/.cargo"
@@ -46,7 +52,13 @@ fi
 export PKG_CONFIG_PATH="${PCD#:}" PKG_CONFIG_LIBDIR="${PCD#:}"
 # gettext-sys: the illumos libintl (a libc filter) instead of its bundled gettext 0.26 build.
 export GETTEXT_DIR="$gate" GETTEXT_LIB_DIR="$gate/usr/lib/amd64" GETTEXT_INCLUDE_DIR="$gate/usr/include"
-export LIBCLANG_PATH=/usr/clang/21/lib BINDGEN_EXTRA_CLANG_ARGS="-I$gate/usr/include"   # bindgen (pam-sys): host clang, a build tool
+# bindgen (pam-sys): libclang parses the gate's headers. --sysroot too for the store clang, so the host /usr/include
+# (absent on a solnix host, OI's on the bhost) is never searched.
+case "${libclang:-}" in
+  "") ;;
+  /nix/store/*) export LIBCLANG_PATH="$libclang/lib" BINDGEN_EXTRA_CLANG_ARGS="--sysroot=$gate -I$gate/usr/include" ;;
+  *) export LIBCLANG_PATH="$libclang/lib" BINDGEN_EXTRA_CLANG_ARGS="-I$gate/usr/include" ;;
+esac
 mkdir -p .cargo; cp vendor/.cargo-config.toml .cargo/config.toml
 if [ -n "$appFixups" ]; then  # the shell/apps (cosmicApp); cosmic-comp and cosmic-term keep their own
   [ -d vendor/libcosmic ] && python3 "$fixups/cosmic-widen-linux.py" vendor libcosmic 'iced?' 'iced_core?' 'iced_runtime?' 'iced_winit?' 'iced_widget?'

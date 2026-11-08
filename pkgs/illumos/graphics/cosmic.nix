@@ -2,7 +2,7 @@
 # derivations: rust199 + the from-source gcc + the graphics libs here. Same shape as
 # solnix-pkgs cosmic-term.nix (a cargo-vendor FOD + an offline build), without the
 # nixpkgs stdenv: the fork world it needs does not build (cosmic2/fork-world-blockers.md).
-{ rust, gcc, gate, libc, world, gccLib, cacert, graphics, openssl, tools, python3 }:
+{ rust, gcc, gate, libc, world, gccLib, cacert, graphics, openssl, tools, python3, libclang ? null }:
 let
   rtLibs = [ libc world gcc.lib ];
   # the source tarball unpacked by Nix (libarchive), as cargo.nix's unpack: a solnix host's tar execs the absent gzcat.
@@ -42,7 +42,7 @@ let
     name = "${repo}-epoch-1.5.0.tar.gz"; url = "https://codeload.github.com/pop-os/${repo}/tar.gz/refs/tags/epoch-1.5.0"; inherit sha256; };
   # cargo vendor NAR hashes (FODs). A new one: set it to lib.fakeHash, build, copy the "got:".
   vendorHashes = import ./cosmic-vendor-hashes.nix;
-in import ./cosmic-apps.nix { inherit src vendorOf cargoApp graphics vendorHashes openssl; }
+in import ./cosmic-apps.nix { inherit src vendorOf cargoApp graphics vendorHashes openssl libclang; }
 // rec {
   cosmic-comp-src = import <nix/fetchurl.nix> {
     url = "https://codeload.github.com/pop-os/cosmic-comp/tar.gz/refs/tags/epoch-1.5.0";

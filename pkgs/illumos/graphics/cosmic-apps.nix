@@ -3,7 +3,7 @@
 # epoch-1.5.0 tag (an FOD), its cargo vendor (an FOD), the illumos fixups, a run check.
 # Features drop only what has no illumos backend (systemd/logind/journald, PipeWire,
 # BlueZ, io_uring, gvfs/glib, flatpak, wgpu); each drop is named where it happens.
-{ src, vendorOf, cargoApp, graphics, vendorHashes, openssl }:
+{ src, vendorOf, cargoApp, graphics, vendorHashes, openssl, libclang ? null }:
 let
   inherit (graphics) libxkbcommon wayland libffi mesa libdrm;
   client = [ libxkbcommon wayland libffi ];
@@ -25,8 +25,10 @@ in {
     libs = [ ]; required = "rustix"; stubs = false; wrap = ""; features = "autostart"; bins = "cosmic-session";
     # start-cosmic as NixOS patches it: store paths for cosmic-session and dbus-run-session.
     install = ''
-      sed -e "s|/usr/bin/cosmic-session|$out/bin/cosmic-session|" -e "s|/usr/bin/dbus-run-session|${graphics.dbus}/bin/dbus-run-session|" data/start-cosmic > "$out/bin/start-cosmic"
+      # and patchShebangs: 1.5.0's #!/bin/bash becomes the store bash (publish-gate B9; a solnix host has no /bin/bash)
+      sed -e "1s|^#!/bin/bash$|#!$tools/bin/bash|" -e "s|/usr/bin/cosmic-session|$out/bin/cosmic-session|" -e "s|/usr/bin/dbus-run-session|${graphics.dbus}/bin/dbus-run-session|" data/start-cosmic > "$out/bin/start-cosmic"
       chmod 0755 "$out/bin/start-cosmic"; grep -q "$out/bin/cosmic-session" "$out/bin/start-cosmic"
+      [ "$(head -1 "$out/bin/start-cosmic")" != "#!/bin/bash" ] || { echo "FATAL: start-cosmic keeps #!/bin/bash" >&2; exit 1; }
       sed "s|/usr/bin/start-cosmic|$out/bin/start-cosmic|" data/cosmic.desktop > cosmic.desktop
       install -Dm0644 cosmic.desktop "$out/share/wayland-sessions/cosmic.desktop"
       install -Dm0644 data/cosmic-mimeapps.list "$out/share/applications/cosmic-mimeapps.list"
@@ -147,12 +149,14 @@ in {
     install = "app resources/com.system76.CosmicScreenshot.desktop; tree resources/icons/hicolor share/icons/hicolor";
   };
 
-  # Tier 4: the greeter (+ its daemon). PAM is illumos libpam (pam-sys bindgen on the host
-  # clang, pam-client's Solaris arms). No logind/systemd; upower over D-Bus stays.
+  # Tier 4: the greeter (+ its daemon). PAM is illumos libpam (pam-sys bindgen on libclang,
+  # pam-client's Solaris arms). No logind/systemd; upower over D-Bus stays.
   cosmic-greeter = app {
     pname = "cosmic-greeter"; sha256 = "bbd49754abdef813b8bf86fa3e724c243d0baca27447b8f908c85cfe2a60a73e";
     features = "upower"; cargoArgs = "--all"; bins = "cosmic-greeter cosmic-greeter-daemon";
-    env = { VERGEN_GIT_SHA = "epoch-1.5.0"; VERGEN_GIT_COMMIT_DATE = "2026-01-01"; };   # nixpkgs: VERGEN_GIT_SHA = tag
+    env = { VERGEN_GIT_SHA = "epoch-1.5.0"; VERGEN_GIT_COMMIT_DATE = "2026-01-01";   # nixpkgs: VERGEN_GIT_SHA = tag
+      # bindgen's libclang (nixpkgs: rustPlatform.bindgenHook = llvmPackages.clang); null: the OI host's (the seed instance)
+      libclang = if libclang == null then "/usr/clang/21" else libclang; };
     install = ''
       # COSMIC_COMP stays a run-time variable in the script (the module sets it to the store cosmic-comp).
       sed "s|exec cosmic-comp cosmic-greeter|exec \''${COSMIC_COMP:-cosmic-comp} $out/bin/cosmic-greeter|" cosmic-greeter-start.sh > "$out/bin/cosmic-greeter-start"
