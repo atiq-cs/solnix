@@ -45,6 +45,7 @@ in rec {
   # hunspell (MPL-1.1/GPL/LGPL): library + CLI, nixpkgs' --with-ui --with-readline. Dictionaries: hunspell-dict-en-us.
   hunspell = mkSrcPkg {
     pname = "hunspell"; version = "1.7.3";
+    cxxName = "c++";   # libtool C++ (mk-src-pkg cxxName)
     src = { url = "https://github.com/hunspell/hunspell/releases/download/v1.7.3/hunspell-1.7.3.tar.gz";
             sha256 = "433274dac0619cb00c2e18b43a3dd3a9d50da5b5613fa9b5c21781e35dd76bc1"; };
     # GNU libiconv, as gdb (c-dev.nix): g++ predefines _XPG6, which makes the gate's <iconv.h> declare iconv(..., char **, ...), and
@@ -89,6 +90,8 @@ in rec {
   # No SDL2/ffmpeg/CUDA/Vulkan (not in solnix).
   whisper-cpp = mkSrcPkg {
     pname = "whisper-cpp"; version = "1.9.5";
+    # CMakeCache records this recipe's own -DCMAKE_SYSTEM_IGNORE_PATH (the host dirs cmake must NOT search), not a host tool
+    hostPathAllow = "^[0-9]+:CMAKE_SYSTEM_IGNORE_PATH:UNINITIALIZED=/bin;/usr/bin;/sbin;/usr/sbin;/usr/gnu/bin$";
     src = gh "ggml-org/whisper.cpp" "v1.9.5" "ff1a9053feb509ff9d7729703355541ae9690073a6b1c40eb692c962e0dc1720";
     deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
     build = ''
@@ -138,6 +141,7 @@ in rec {
   # --enable-fat on SunOS (nixpkgs: some tests crash there), --build pinned so config.guess cannot probe the host CPU.
   gmp6 = mkSrcPkg {
     pname = "gmp6"; version = "6.3.0";
+    cxxName = "c++";   # libtool C++ (mk-src-pkg cxxName)
     src = gnu "gmp" "6.3.0" "xz" "a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898";
     deps = [ world ]; nativeTools = [ gnum4 ] ++ hostTools;
     build = ''
@@ -249,6 +253,8 @@ in rec {
   # one output with perl as a runtime dep. No X11 (gxditview), no ghostscript/netpbm (no -Thtml image conversion), no uchardet.
   groff = mkSrcPkg {
     pname = "groff"; version = "1.24.2";
+    # groff's Makefile sed REPLACES /usr/bin/perl with the store $(PERL) in its scripts: a rewrite away from the host, not a host tool
+    hostPathAllow = "^[0-9]+:[[:space:]]+-e \"s[|]/usr/bin/perl[|][$][(]PERL[)][|]\" [\\\\]$";
     src = gnu "groff" "1.24.2" "gz" "f9c1efd5bebbe37fc6e1063db7473ce8df1e3e0be4ff0f43ce04fce57e9c5dd9";
     deps = [ world perl ]; nativeTools = [ perl ] ++ hostTools;
     build = ''

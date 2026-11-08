@@ -68,6 +68,8 @@
                              # after buildTools: no /usr/gnu, no host /usr/bin. null => defaultNativeTools (storeOnly) or the
                              # old OI PATH text (an exempt instance).
 , aclocalDirs ? [ ]          # a64h (aarch64): store aclocal dirs for the recipe's autoreconf (replace the stage0 box's /opt ones)
+, cxxName ? "g++"           # store-only x86: the name exported as CXX. "c++" for a libtool C++ build: with CXX=g++ libtool's LT_LANG(CXX)
+                             # probe runs `g++ -v`, which the wrapper's -Wl,-R turns into a failing link, and the CXX tag goes (recipes3)
 , system ? "x86_64-solaris"
 }:
 
@@ -147,7 +149,7 @@ let
       # compiler string: gate2 B8). The wrappers move to $W/bin$ABI (regular files, so a recipe can still edit "$(command -v $CC)");
       # $W/cc$ABI stays as a link. PATH_GATE_ALLOW: a recipe's own path-gate call (gtk) accepts the build dir.
       (if !storeOnly then ''export CC="$W/cc$ABI" CC_FOR_BUILD="$W/cc$ABI" ABI LIBSUB'' else ''mkdir -p "$W/bin$ABI"; mv "$W/cc$ABI" "$W/bin$ABI/gcc"; ln -s gcc "$W/bin$ABI/cc"; ln -s "$W/bin$ABI/gcc" "$W/cc$ABI"
-      if [ -f "$W/c++$ABI" ]; then mv "$W/c++$ABI" "$W/bin$ABI/g++"; ln -s g++ "$W/bin$ABI/c++"; ln -s "$W/bin$ABI/g++" "$W/c++$ABI"; export CXX=g++; fi
+      if [ -f "$W/c++$ABI" ]; then mv "$W/c++$ABI" "$W/bin$ABI/g++"; ln -s g++ "$W/bin$ABI/c++"; ln -s "$W/bin$ABI/g++" "$W/c++$ABI"; export CXX=${cxxName}; fi
       export PATH="$W/bin$ABI:$PATH" PATH_GATE_ALLOW="$W" CC=gcc CC_FOR_BUILD=gcc ABI LIBSUB
       # fontconfig's compiled-in default config is the HOST's /etc/fonts/fonts.conf (recipes1 W5: gtk3's in-build check failed on a
       # solnix host without it): an empty one in the build dir. NixOS: no /etc/fonts in the sandbox. HOME is Nix's /homeless-shelter.

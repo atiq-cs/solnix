@@ -193,6 +193,7 @@ sys.exit("FATAL: sysconfig names a host or build dir: %r" % bad if bad else 0)'
   # debuginfod on elfutils, Linux only), no NLS, and no gcore: the world's native gcore(1) stays first.
   gdb = let fetch = url: sha256: import <nix/fetchurl.nix> { inherit url sha256; }; in mkSrcPkg {
     pname = "gdb"; version = "18.1";
+    cxxName = "c++";   # libtool C++ (mk-src-pkg cxxName)
     src = { url = "https://mirrors.kernel.org/gnu/gdb/gdb-18.1.tar.xz";
             sha256 = "cd9fc3fe2b47743840e42c1592d3d87f8302eb18639c0b8b4ba0898002e2348f"; };
     # libiconv: gdb converts every string it prints from the host charset to UTF-32 with iconv(3); the world's iconv
