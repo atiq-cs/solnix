@@ -10,7 +10,7 @@ let
 in
 libs // input // {
   inherit (tools) meson samurai;
-  mesa = import ./mesa.nix ({ inherit mkSrcPkg tools pkgconf zlib cmake hostTools gnupatch python3; } // {
+  mesa = import ./mesa.nix ({ inherit mkSrcPkg tools pkgconf zlib cmake hostTools gnupatch python3 bison; } // {
     inherit (libs) expat libffi wayland wayland-protocols libdrm;
   });
 }

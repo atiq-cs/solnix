@@ -8,13 +8,15 @@
 # llvmpipe/lavapipe need an LLVM derivation too, so softpipe is the CPU GL.
 #
 # iris/anv need a DRM render node only at RUN time (i915 stage B). They build now.
-{ mkSrcPkg, tools, pkgconf, zlib, expat, libffi, wayland, wayland-protocols, libdrm, cmake ? null, hostTools ? [ ], gnupatch ? null, python3 ? null }:
+{ mkSrcPkg, tools, pkgconf, zlib, expat, libffi, wayland, wayland-protocols, libdrm, cmake ? null, hostTools ? [ ], gnupatch ? null, python3 ? null, bison ? null }:
 let
   # patch is on /usr/gnu/bin on the OI bhost (gnupatch==null -> no-op); a solnix host has no /usr/gnu, so put the store patch on PATH.
   pp = if gnupatch == null then "" else "export PATH=${gnupatch}/bin:$PATH";
   # python3: mesa's meson (find_program('python3'), meson.build:923) and its mako codegen need python3 on PATH.
   # OI bhost: /usr/bin/python3 (python3==null -> fall back); solnix host: the store python3.
   py = if python3 == null then "mkdir -p \"$TMPDIR/py\" && ln -sf /usr/bin/python3 \"$TMPDIR/py/python3\" && export PATH=\"$TMPDIR/py:$PATH\"" else "mkdir -p \"$TMPDIR/py\" && ln -sf ${python3}/bin/python3 \"$TMPDIR/py/python3\" && export PATH=\"$TMPDIR/py:$PATH\"";
+  # bison: mesa's meson needs a YACC (glsl parser, meson.build:1944). OI bhost /usr/bin/bison; solnix host store bison.
+  bs = if bison == null then "" else "export PATH=${bison}/bin:$PATH";
   # glslang compiles anv's five internal GLSL shaders at build time. Host-run
   # C++ tool, built with the store cmake (it ran the OI host's /usr/bin/cmake before wave6); nothing of it ships.
   glslang = mkSrcPkg ({
@@ -46,6 +48,7 @@ mkSrcPkg {
     patch -p1 < ${./patches/mesa-24.0.9-illumos-dmabuf.patch}
     export PATH=${pkgconf}/bin:${glslang}/bin:${wayland}/bin:$PATH
     ${py}   # mesa meson find_program('python3') + mako codegen
+    ${bs}   # mesa meson YACC (glsl parser, meson.build:1944)
     export PYTHONPATH=${tools.mako}/lib/python:${tools.markupsafe}/lib/python:${tools.packaging}/lib/python   # packaging: mako's version check
     ${tools.mesonBuild (builtins.concatStringsSep " " [
       "-Dgallium-drivers=iris,swrast -Dvulkan-drivers=intel -Dllvm=disabled"
