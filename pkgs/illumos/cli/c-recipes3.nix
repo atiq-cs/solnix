@@ -387,4 +387,181 @@ int main(){ std::string s = "\xc3\xa9t\xc3\xa9"; std::printf("%d %d\n", (int)utf
       ${chk ''"$W/t"'' "^3 1$"}
     '';
   };
+
+  # ---- recipes3 batch 3 ---------------------------------------------------------------------------------------------------------
+  # JsonCpp (MIT): a C++ JSON library (cmake's own, ceph, ...). cmake, shared only, as nixpkgs.
+  jsoncpp = mkSrcPkg {
+    pname = "jsoncpp"; version = "1.9.8";
+    src = gh "open-source-parsers/jsoncpp" "1.9.8" "51828cf3574281d2b79ec2a1c56a9e4c20cc1103711321ea96384cffb8d2d904";
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DJSONCPP_USE_SECURE_MEMORY=OFF -DBUILD_SHARED_LIBS=ON -DBUILD_OBJECT_LIBS=OFF -DBUILD_STATIC_LIBS=OFF -DJSONCPP_WITH_CMAKE_PACKAGE=ON -DJSONCPP_WITH_TESTS=OFF -DJSONCPP_WITH_POST_BUILD_UNITTEST=OFF"}
+      ${tprog ''#include <json/json.h>
+#include <cstdio>
+#include <sstream>
+int main(){ Json::Value v; std::istringstream in("{\"a\":[1,2,42]}"); Json::CharReaderBuilder b; std::string e;
+if(!Json::parseFromStream(b, in, &v, &e)) return 1; std::printf("%d\n", v["a"][2].asInt()); return 0; }'' "cc" "$CXX" "-ljsoncpp"}
+      ${chk ''"$W/t"'' "^42$"}
+    '';
+  };
+
+  # gflags (BSD-3-Clause): Google's command-line flags library (glog, ceres, rocksdb tools). cmake, shared + static as nixpkgs.
+  gflags = mkSrcPkg {
+    pname = "gflags"; version = "2.3.0";
+    src = gh "gflags/gflags" "v2.3.0" "f619a51371f41c0ad6837b2a98af9d4643b3371015d873887f7e8d3237320b2f";
+    deps = [ world base.bash ]; nativeTools = [ cmake ] ++ hostTools;   # bash: gflags_completions.sh's interpreter (a runtime reference)
+    build = ''
+      ${cmakeB "-DGFLAGS_BUILD_SHARED_LIBS=ON -DGFLAGS_BUILD_STATIC_LIBS=ON -DBUILD_TESTING=OFF -DLIBRARY_INSTALL_DIR=$out/lib/amd64"}   # its own variable (absolute: a relative one is taken against the source dir); CMAKE_INSTALL_LIBDIR is ignored
+      ${tprog ''#include <gflags/gflags.h>
+#include <cstdio>
+DEFINE_int32(num, 0, "n");
+int main(int c, char **v){ gflags::ParseCommandLineFlags(&c, &v, true); std::printf("num=%d\n", FLAGS_num); return 0; }'' "cc" "$CXX" "-lgflags"}
+      ${chk ''"$W/t" --num=42'' "^num=42$"}
+      # bin/gflags_completions.sh is #!/bin/bash (no such file on solnix; gate B9): the store bash, as NixOS' patchShebangs
+      f="$out/bin/gflags_completions.sh"; head -1 "$f" | grep -qx '#!/bin/bash' || { echo "FATAL: gflags completions shebang anchor" >&2; exit 1; }
+      sed -i "1s|^#!/bin/bash$|#!${base.bash}/bin/bash|" "$f"
+    '';
+  };
+
+  # doctest (MIT): a header-only C++ unit test framework. cmake installs the header + config.
+  doctest = mkSrcPkg {
+    pname = "doctest"; version = "2.5.3";
+    src = gh "doctest/doctest" "v2.5.3" "174ebc4e769928959614789c5b4e9c3d0a0f81a62bb608756b127bfebfb21331";
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DDOCTEST_WITH_TESTS=OFF -DDOCTEST_WITH_MAIN_IN_STATIC_LIB=OFF"}
+      ${tprog ''#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <doctest/doctest.h>
+TEST_CASE("t"){ CHECK(1 + 1 == 2); }'' "cc" "$CXX" ""}
+      ${chk ''"$W/t" --no-colors'' "Status: SUCCESS"}
+    '';
+  };
+
+  # GLM (MIT): header-only OpenGL mathematics for C++. cmake installs the headers + config (no library), as nixpkgs.
+  glm = mkSrcPkg {
+    pname = "glm"; version = "1.0.3";
+    src = gh "g-truc/glm" "1.0.3" "6775e47231a446fd086d660ecc18bcd076531cfedd912fbd66e576b118607001";
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DBUILD_SHARED_LIBS=OFF -DBUILD_STATIC_LIBS=OFF -DGLM_BUILD_TESTS=OFF -DGLM_BUILD_LIBRARY=OFF"}
+      [ -f "$out/include/glm/glm.hpp" ] || { echo "FATAL: glm headers" >&2; exit 1; }
+      ${tprog ''#include <glm/glm.hpp>
+#include <cstdio>
+int main(){ glm::vec3 a(1, 2, 3), b(4, 5, 6); std::printf("%g\n", glm::dot(a, b)); return 0; }'' "cc" "$CXX" ""}
+      ${chk ''"$W/t"'' "^32$"}
+    '';
+  };
+
+  # yaml-cpp (MIT): a C++ YAML parser/emitter. cmake, shared, tests and tools off.
+  yaml-cpp = mkSrcPkg {
+    pname = "yaml-cpp"; version = "0.9.0";
+    src = gh "jbeder/yaml-cpp" "yaml-cpp-0.9.0" "25cb043240f828a8c51beb830569634bc7ac603978e0f69d6b63558dadefd49a";
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DYAML_BUILD_SHARED_LIBS=ON -DYAML_CPP_BUILD_TESTS=OFF -DYAML_CPP_BUILD_TOOLS=OFF"}
+      ${tprog ''#include <yaml-cpp/yaml.h>
+#include <cstdio>
+int main(){ YAML::Node n = YAML::Load("a: [1, 2, 42]"); std::printf("%d\n", n["a"][2].as<int>()); return 0; }'' "cc" "$CXX" "-lyaml-cpp"}
+      ${chk ''"$W/t"'' "^42$"}
+    '';
+  };
+
+  # libdeflate (MIT): fast whole-buffer DEFLATE/zlib/gzip (libtiff, samtools). cmake, shared, no zlib-backed test programs.
+  libdeflate = mkSrcPkg {
+    pname = "libdeflate"; version = "1.26";
+    src = gh "ebiggers/libdeflate" "v1.26" "bba03fffc5538576213675ce6968fcff6ce2e67d82e4d5febea2d05f9f13cf85";
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DLIBDEFLATE_BUILD_STATIC_LIB=OFF -DLIBDEFLATE_BUILD_TESTS=OFF -DLIBDEFLATE_USE_SHARED_LIB=ON"}
+      ${tprog ''#include <libdeflate.h>
+#include <stdio.h>
+#include <string.h>
+int main(void){ char in[1000], c[2000], u[1000]; memset(in, 'z', sizeof in); struct libdeflate_compressor *k = libdeflate_alloc_compressor(6);
+size_t n = libdeflate_gzip_compress(k, in, sizeof in, c, sizeof c); size_t m; struct libdeflate_decompressor *d = libdeflate_alloc_decompressor();
+if(!n || libdeflate_gzip_decompress(d, c, n, u, sizeof u, &m) || m != sizeof in || memcmp(in, u, m)) return 1; printf("deflate 1000->%zu\n", n); return 0; }'' "c" "$CC" "-ldeflate"}
+      ${chk ''"$W/t"'' "^deflate 1000->[0-9]+$"}
+      # the gzip-compatible CLI (libdeflate-gzip) round-trips a file
+      printf 'solnix\n' > "$W/g"; "$out/bin/libdeflate-gzip" -k "$W/g" && "$out/bin/libdeflate-gunzip" -c "$W/g.gz" | grep -qx solnix || { echo "FATAL: libdeflate-gzip" >&2; exit 1; }
+    '';
+  };
+
+  # Eigen (MPL-2.0 for the library; nixpkgs lists LGPL-3.0+ for a few unsupported modules): header-only C++ linear algebra.
+  eigen = mkSrcPkg {
+    pname = "eigen"; version = "3.4.1";
+    src = { url = "https://gitlab.com/libeigen/eigen/-/archive/3.4.1/eigen-3.4.1.tar.gz";
+            sha256 = "b93c667d1b69265cdb4d9f30ec21f8facbbe8b307cf34c0b9942834c6d4fdbe2"; };
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DBUILD_TESTING=OFF -DEIGEN_BUILD_DOC=OFF -DEIGEN_BUILD_PKGCONFIG=ON"}
+      ${tprog ''#include <Eigen/Dense>
+#include <cstdio>
+int main(){ Eigen::Matrix2d m; m << 1, 2, 3, 4; std::printf("%g\n", m.determinant()); return 0; }'' "cc" "$CXX" "-I$out/include/eigen3"}   # headers in include/eigen3 (eigen3.pc), as on NixOS
+      ${chk ''"$W/t"'' "^-2$"}
+    '';
+  };
+
+  # X.Org libpthread-stubs (X11): only a pthread-stubs.pc (libxcb's dependency); illumos' libc has the pthread symbols.
+  libpthread-stubs = mkSrcPkg {
+    pname = "libpthread-stubs"; version = "0.5";
+    src = { url = "https://xorg.freedesktop.org/releases/individual/lib/libpthread-stubs-0.5.tar.xz";
+            sha256 = "59da566decceba7c2a7970a4a03b48d9905f1262ff94410a649224e33d2442bc"; };
+    deps = [ world ]; nativeTools = hostTools;
+    build = ''
+      ./configure --prefix="$out" --libdir="$out/lib/amd64"
+      gmake install
+      [ -f "$out/lib/amd64/pkgconfig/pthread-stubs.pc" ] || { echo "FATAL: pthread-stubs.pc" >&2; exit 1; }
+    '';
+  };
+
+  # X.Org util-macros (MIT): the XORG_* autoconf macros every X.Org package's configure.ac uses (xorg-macros.m4 + xorg-macros.pc).
+  util-macros = mkSrcPkg {
+    pname = "util-macros"; version = "1.20.2";
+    src = { url = "https://xorg.freedesktop.org/releases/individual/util/util-macros-1.20.2.tar.xz";
+            sha256 = "9ac269eba24f672d7d7b3574e4be5f333d13f04a7712303b1821b2a51ac82e8e"; };
+    deps = [ world ]; nativeTools = hostTools;
+    build = ''
+      # XORG_WITH_M4 searches $PATH:/usr/gnu/bin for an m4 that takes -I: a host dir every X.Org configure using it would bake in
+      # (gate B13, measured). PATH only, as on NixOS.
+      grep -q '^   \[\$PATH:/usr/gnu/bin\])\])$' xorg-macros.m4.in || { echo "FATAL: util-macros M4 path anchor" >&2; exit 1; }
+      sed -i 's|^   \[\$PATH:/usr/gnu/bin\])\])$|   [$PATH])])|' xorg-macros.m4.in
+      ./configure --prefix="$out"
+      gmake install
+      ! grep -q /usr/gnu "$out/share/aclocal/xorg-macros.m4" || { echo "FATAL: util-macros still names /usr/gnu" >&2; exit 1; }
+      grep -q 'XORG_MACROS_VERSION' "$out/share/aclocal/xorg-macros.m4" && [ -f "$out/share/pkgconfig/xorg-macros.pc" ] || { echo "FATAL: util-macros" >&2; exit 1; }
+    '';
+  };
+
+  # X.Org libXau (MIT-open-group): X authority file routines (libxcb's dependency). autotools, against the served xorgproto.
+  libxau = mkSrcPkg {
+    pname = "libxau"; version = "1.0.12";
+    src = { url = "https://xorg.freedesktop.org/releases/individual/lib/libXau-1.0.12.tar.xz";
+            sha256 = "74d0e4dfa3d39ad8939e99bda37f5967aba528211076828464d2777d477fc0fb"; };
+    deps = [ world base.xorgproto ]; nativeTools = [ base.pkgconf ] ++ hostTools;
+    build = ''
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static
+      gmake -j8; gmake install
+      ${tprog ''#include <X11/Xauth.h>
+#include <stdio.h>
+int main(void){ Xauth a = { 0, 4, "host", 1, "0", 18, "MIT-MAGIC-COOKIE-1", 4, "abcd" }; FILE *f = fopen("/dev/null", "w");
+if(!f || XauWriteAuth(f, &a) != 1) return 1; printf("xau %s\n", a.name); return 0; }'' "c" "$CC" "-lXau"}
+      ${chk ''"$W/t"'' "^xau MIT-MAGIC-COOKIE-1$"}
+    '';
+  };
+
+  # X.Org libXdmcp (MIT-open-group): the XDMCP protocol library (libxcb's dependency). autotools, against the served xorgproto.
+  libxdmcp = mkSrcPkg {
+    pname = "libxdmcp"; version = "1.1.5";
+    src = { url = "https://xorg.freedesktop.org/releases/individual/lib/libXdmcp-1.1.5.tar.xz";
+            sha256 = "d8a5222828c3adab70adf69a5583f1d32eb5ece04304f7f8392b6a353aa2228c"; };
+    deps = [ world base.xorgproto ]; nativeTools = [ base.pkgconf ] ++ hostTools;
+    build = ''
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-docs --without-xmlto --without-fop --without-xsltproc
+      gmake -j8; gmake install
+      find "$out/share/doc" -delete 2>/dev/null || true
+      ${tprog ''#include <X11/Xdmcp.h>
+#include <stdio.h>
+int main(void){ ARRAY8 a; if(!XdmcpAllocARRAY8(&a, 5)) return 1; printf("xdmcp %d\n", a.length); XdmcpDisposeARRAY8(&a); return 0; }'' "c" "$CC" "-lXdmcp"}
+      ${chk ''"$W/t"'' "^xdmcp 5$"}
+    '';
+  };
 }
