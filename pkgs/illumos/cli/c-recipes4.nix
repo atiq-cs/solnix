@@ -36,6 +36,12 @@ TPROG
   # hosts in their man pages only (--check SAME on each). illumos uses traditional sections: pin that answer. xcb-proto/xtrans/libxcb/
   # libxext/libfontenc/font-util run the same probe but install no page whose section it changes (NarHash equal on both hosts).
   manSections = "ac_cv_file__usr_share_man_man7_attributes_7=yes";
+  # A cmake find_package on main misses every dep: mk-src-pkg's env CMAKE_PREFIX_PATH is ';'-joined (cmake splits it on ':' on Unix:
+  # one bogus dir), and 64-bit libs are in <dep>/lib/amd64, a suffix cmake never tries. What found OpenSSL for aws-c-cal on lixi
+  # was the build host's /bin/pkg-config, through cmake's system prefix "/" (cmakeB ignores /usr;/usr/local;/opt only): woof has
+  # none, so the same drv failed there (floki /scratch/solnix/recipes8/AWS-C-CAL-DIAGNOSIS.md). wave6 3d0006e's solnix-cmake.cmake
+  # fixes all three for every cmake build; until it reaches main, a recipe that looks a package up passes the same answer.
+  storePrefix = ''-DCMAKE_PREFIX_PATH="$CMAKE_PREFIX_PATH" -DCMAKE_LIBRARY_ARCHITECTURE=amd64 -DCMAKE_IGNORE_PREFIX_PATH="/;/usr;/usr/local;/opt"'';
 in rec {
   # unzip (Info-ZIP): extracts .zip archives. 195 queued jobs list it as a build tool (nixpkgs' unpackPhase for .zip sources).
   # nixpkgs' patch set (security fixes and gcc 14 build fixes), fetched from nixpkgs f4a03c0 and the upstreams it names, and its bzip2.
@@ -1666,6 +1672,303 @@ CLI11_PARSE(app, argc, argv); std::cout << "ok " << CLI11_VERSION << " " << n <<
 TPROG
       "$CXX" -std=c++17 -I"$out/include" "$W/t.cc" -o "$W/t"
       ${chk ''"$W/t" -n 42 --name solnix'' "^ok 2\\.6\\.2 42 solnix$"}
+    '';
+  };
+
+  # ---- recipes7 batch 16: the aws-c-* libraries and hdf5 users R15 made buildable, and small leaves --------------------------------
+  # The aws-c-* libraries (Apache-2.0) on R15's aws-c-common, cmake, shared, as nixpkgs. Their standalone build looks for aws-c-common's
+  # cmake modules under lib/cmake or lib64/cmake; here they are in lib/amd64/cmake: named directly (the module that it finds first).
+  awsC = pname: sha256: extraDeps: flags: tsrc: libs: mkSrcPkg {
+    inherit pname; version = "1.0.0";
+    src = { url = "https://codeload.github.com/awslabs/${pname}/tar.gz/refs/tags/v1.0.0"; inherit sha256; };
+    deps = [ world aws-c-common ] ++ extraDeps; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DBUILD_SHARED_LIBS=ON -DBUILD_TESTING=OFF -DAWS_GET_VERSION_MODULE=${aws-c-common}/lib/amd64/cmake/aws-c-common/modules/AwsGetVersion.cmake -Daws-c-common_DIR=${aws-c-common}/lib/amd64/cmake/aws-c-common ${flags}"}
+      ${tprog tsrc "-I${aws-c-common}/include ${libs} ${aws-c-common}/lib/amd64/libaws-c-common.so -Wl,-R,${aws-c-common}/lib/amd64"}
+      ${chk ''"$W/t"'' "^ok "}
+      ${if pname == "aws-c-cal" then ''grep -q "^OpenSSL_DIR:PATH=${base.openssl}/lib/amd64/cmake/OpenSSL$" _b/CMakeCache.txt || { echo "FATAL: aws-c-cal: not the store openssl config" >&2; exit 1; }'' else ""}
+    '';
+  };
+  # aws-checksums: CRC32/CRC32C/CRC64 (the SSE4.2/AVX-512 paths where the CPU has them). CRC32 of "123456789" is the standard 0xcbf43926.
+  aws-checksums = awsC "aws-checksums" "6c058812f5b537ce58eac1e529f441ff387a652ea62cbe9b844f9188339221b1" [ ] "" ''#include <aws/checksums/crc.h>
+#include <stdio.h>
+int main(void){ printf("ok %08x %08x\n", aws_checksums_crc32((const uint8_t *)"123456789", 9, 0), aws_checksums_crc32c((const uint8_t *)"123456789", 9, 0)); return 0; }'' "$out/lib/amd64/libaws-checksums.so";
+  # aws-c-compression: HPACK's Huffman coding (aws-c-http)
+  aws-c-compression = awsC "aws-c-compression" "d8e934da2086bfec41f97a0cff749d926f66ccb90f2052f1d70841916c1bf4d7" [ ] "" ''#include <aws/compression/compression.h>
+#include <aws/common/common.h>
+#include <stdio.h>
+int main(void){ struct aws_allocator *a = aws_default_allocator(); aws_compression_library_init(a);
+printf("ok %s\n", aws_error_name(AWS_ERROR_COMPRESSION_UNKNOWN_SYMBOL)); aws_compression_library_clean_up(); return 0; }'' "$out/lib/amd64/libaws-c-compression.so";
+  # aws-c-sdkutils: AWS profile (~/.aws/config) and endpoint-rule parsing; the check parses a profile from memory
+  aws-c-sdkutils = awsC "aws-c-sdkutils" "ddf9d09ba137ad0697afe1c09f5d778d6b2f1aadb277dffd231ff615ae34bc82" [ ] "" ''#include <aws/sdkutils/sdkutils.h>
+#include <aws/sdkutils/aws_profile.h>
+#include <stdio.h>
+int main(void){ struct aws_allocator *a = aws_default_allocator(); aws_sdkutils_library_init(a);
+struct aws_byte_buf b = aws_byte_buf_from_c_str("[profile solnix]\nregion = us-west-2\n");
+struct aws_profile_collection *c = aws_profile_collection_new_from_buffer(a, &b, AWS_PST_CONFIG); if (!c) return 1;
+printf("ok %d\n", (int)aws_profile_collection_get_profile_count(c)); aws_profile_collection_release(c); aws_sdkutils_library_clean_up(); return 0; }'' "$out/lib/amd64/libaws-c-sdkutils.so";
+  # aws-c-cal: hashes, HMAC and keys on OpenSSL's libcrypto (its unix backend, as nixpkgs: openssl); SHA-256 of "abc" is the FIPS vector
+  aws-c-cal = awsC "aws-c-cal" "9c6d424d206dd7822aa44fa39ce31575dcbaa83133620abdac8e56e4cea9667c" [ base.openssl ] "-DUSE_OPENSSL=ON ${storePrefix}" ''#include <aws/cal/cal.h>
+#include <aws/cal/hash.h>
+#include <stdio.h>
+int main(void){ struct aws_allocator *a = aws_default_allocator(); aws_cal_library_init(a); uint8_t d[32]; struct aws_byte_buf o = aws_byte_buf_from_empty_array(d, 32);
+struct aws_byte_cursor in = aws_byte_cursor_from_c_str("abc"); if (aws_sha256_compute(a, &in, &o, 0)) return 1;
+printf("ok %02x%02x%02x%02x\n", d[0], d[1], d[2], d[3]); aws_cal_library_clean_up(); return 0; }'' "$out/lib/amd64/libaws-c-cal.so";
+
+  # matio (BSD-2-Clause): MATLAB .mat file I/O, with the v7.3 (HDF5) format on R15's hdf5-cpp, as nixpkgs (ac_cv_va_copy=1).
+  matio = mkSrcPkg {
+    pname = "matio"; version = "1.5.30";
+    src = { url = "https://downloads.sourceforge.net/matio/matio-1.5.30.tar.gz";
+            sha256 = "8bd3b9477042ecc00dd71c04762fa58468e14cccc32fd8c6826c2da1e8bc3107"; };
+    deps = [ world zlib hdf5-cpp ]; nativeTools = hostTools;
+    build = ''
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static ac_cv_va_copy=1 --with-hdf5="${hdf5-cpp}" --with-zlib="${zlib}"
+      gmake -j8; gmake install
+      find "$out/share/doc" "$out/share/info" -delete 2>/dev/null || true
+      # a 2x2 double matrix written to a v7.3 (HDF5) .mat file and read back
+      ${tprog ''#include <matio.h>
+#include <stdio.h>
+int main(int c, char **v){ double x[4] = { 1, 2, 3, 42 }; size_t d[2] = { 2, 2 }; if (c < 2) return 1;
+mat_t *m = Mat_CreateVer(v[1], NULL, MAT_FT_MAT73); if (!m) return 2; matvar_t *s = Mat_VarCreate("a", MAT_C_DOUBLE, MAT_T_DOUBLE, 2, d, x, 0);
+Mat_VarWrite(m, s, MAT_COMPRESSION_NONE); Mat_VarFree(s); Mat_Close(m);
+m = Mat_Open(v[1], MAT_ACC_RDONLY); if (!m) return 3; matvar_t *r = Mat_VarRead(m, "a"); if (!r) return 4;
+printf("ok %d %g %d\n", Mat_GetVersion(m) == MAT_FT_MAT73, ((double *)r->data)[3], (int)r->dims[0]); Mat_VarFree(r); Mat_Close(m); return 0; }'' "$out/lib/amd64/libmatio.so"}
+      ${chk ''"$W/t" "$W/t.mat"'' "^ok 1 42 2$"}
+    '';
+  };
+
+  # highfive (BSL-1.0): header-only C++ wrapper for HDF5, on R15's hdf5-cpp. cmake install, examples and tests off, as nixpkgs.
+  highfive = mkSrcPkg {
+    pname = "highfive"; version = "3.3.0";
+    src = { url = "https://codeload.github.com/highfive-devs/highfive/tar.gz/refs/tags/v3.3.0";
+            sha256 = "325cfbcf0c0296a6dd26f3b088801b7ebb8d6f109c0565c11d2d8c4af3253bff"; };
+    deps = [ world hdf5-cpp ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DHIGHFIVE_EXAMPLES=OFF -DHIGHFIVE_UNIT_TESTS=OFF -DHIGHFIVE_BUILD_DOCS=OFF -DHDF5_DIR=${hdf5-cpp}/lib/amd64/cmake"}
+      cat > "$W/t.cc" <<'TPROG'
+#include <highfive/highfive.hpp>
+#include <iostream>
+#include <vector>
+int main(int c, char **v){ if (c < 2) return 1; { HighFive::File f(v[1], HighFive::File::Truncate); f.createDataSet("v", std::vector<int>{ 1, 2, 42 }); }
+HighFive::File f(v[1], HighFive::File::ReadOnly); auto r = f.getDataSet("v").read<std::vector<int>>(); std::cout << "ok " << r.size() << " " << r[2] << "\n"; }
+TPROG
+      "$CXX" -std=c++17 -I"$out/include" -I${hdf5-cpp}/include "$W/t.cc" ${hdf5-cpp}/lib/amd64/libhdf5.so -Wl,-R,${hdf5-cpp}/lib/amd64 -o "$W/t"
+      ${chk ''"$W/t" "$W/t.h5"'' "^ok 3 42$"}
+    '';
+  };
+
+  # uthash (BSD-1-Clause-like): header-only hash tables, lists and strings for C structs; its headers, as nixpkgs (tests need perl).
+  uthash = mkSrcPkg {
+    pname = "uthash"; version = "2.4.0";
+    src = { url = "https://codeload.github.com/troydhanson/uthash/tar.gz/refs/tags/v2.4.0";
+            sha256 = "387ba027946d7c64e9aa19cc53b2edcd714f8f9dca9fa8e3aaef17e0e8e3d736"; };
+    deps = [ world ]; nativeTools = hostTools;
+    build = ''
+      mkdir -p "$out/include"; cp src/*.h "$out/include/"
+      ${tprog ''#include <uthash.h>
+#include <stdio.h>
+#include <stdlib.h>
+struct e { int k; int v; UT_hash_handle hh; };
+int main(void){ struct e *h = NULL, *f; for (int i = 0; i < 100; i++) { struct e *x = malloc(sizeof *x); x->k = i; x->v = i * i; HASH_ADD_INT(h, k, x); }
+int k = 42; HASH_FIND_INT(h, &k, f); printf("ok %u %d\n", HASH_COUNT(h), f ? f->v : -1); return 0; }'' ""}
+      ${chk ''"$W/t"'' "^ok 100 1764$"}
+    '';
+  };
+
+  # msgpack-c (BSL-1.0): MessagePack for C, shared, as nixpkgs (examples off; its tests are gtest's, off).
+  msgpack-c = mkSrcPkg {
+    pname = "msgpack-c"; version = "7.0.2";
+    src = { url = "https://codeload.github.com/msgpack/msgpack-c/tar.gz/refs/tags/c-7.0.2";
+            sha256 = "f720af974b72cda874c2c347d4bafef5385c4e7942a27b3c87d6fa482412d08c"; };
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DMSGPACK_BUILD_EXAMPLES=OFF -DMSGPACK_BUILD_TESTS=OFF"}
+      ${tprog ''#include <msgpack.h>
+#include <stdio.h>
+int main(void){ msgpack_sbuffer b; msgpack_sbuffer_init(&b); msgpack_packer p; msgpack_packer_init(&p, &b, msgpack_sbuffer_write);
+msgpack_pack_array(&p, 2); msgpack_pack_int(&p, 42); msgpack_pack_str(&p, 6); msgpack_pack_str_body(&p, "solnix", 6);
+msgpack_unpacked u; msgpack_unpacked_init(&u); if (msgpack_unpack_next(&u, b.data, b.size, NULL) != MSGPACK_UNPACK_SUCCESS) return 1;
+msgpack_object o = u.data; printf("ok %s %d %lld %.*s\n", msgpack_version(), (int)o.via.array.size, (long long)o.via.array.ptr[0].via.i64,
+ (int)o.via.array.ptr[1].via.str.size, o.via.array.ptr[1].via.str.ptr); return 0; }'' "$out/lib/amd64/libmsgpack-c.so"}
+      ${chk ''"$W/t"'' "^ok 7\\.0\\.2 2 42 solnix$"}
+    '';
+  };
+
+  # msgpack-cxx (BSL-1.0): header-only MessagePack for C++ on the nix chain's boost, as nixpkgs (C++20 API on, docs and tests off).
+  msgpack-cxx = mkSrcPkg {
+    pname = "msgpack-cxx"; version = "8.0.0";
+    src = { url = "https://codeload.github.com/msgpack/msgpack-c/tar.gz/refs/tags/cpp-8.0.0";
+            sha256 = "f634fb7052da4478096f2a02dfb6d91174e5836b317afb006375249ccb086aa8"; };
+    deps = [ world base.nixChain.boost ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DMSGPACK_BUILD_DOCS=OFF -DMSGPACK_CXX20=ON -DMSGPACK_BUILD_TESTS=OFF ${storePrefix}"}
+      grep -q "^Boost_DIR:PATH=${base.nixChain.boost}/lib/amd64/cmake/Boost-" _b/CMakeCache.txt || { echo "FATAL: msgpack-cxx: not the store boost" >&2; exit 1; }
+      cat > "$W/t.cc" <<'TPROG'
+#include <msgpack.hpp>
+#include <iostream>
+#include <map>
+#include <sstream>
+int main(){ std::map<std::string, int> m{{"solnix", 42}}; std::stringstream s; msgpack::pack(s, m); std::string b = s.str();
+auto h = msgpack::unpack(b.data(), b.size()); auto r = h.get().as<std::map<std::string, int>>(); std::cout << "ok " << MSGPACK_VERSION << " " << r["solnix"] << "\n"; }
+TPROG
+      "$CXX" -std=c++20 -I"$out/include" -I${base.nixChain.boost}/include "$W/t.cc" -o "$W/t"
+      ${chk ''"$W/t"'' "^ok 8\\.0\\.0 42$"}
+    '';
+  };
+
+  # hdrhistogram_c (BSD-2-Clause / CC0): the HdrHistogram latency histogram in C, on zlib (its log format). cmake, as nixpkgs.
+  hdrhistogram_c = mkSrcPkg {
+    pname = "hdrhistogram_c"; version = "0.11.10";
+    src = { url = "https://codeload.github.com/HdrHistogram/HdrHistogram_c/tar.gz/refs/tags/0.11.10";
+            sha256 = "c3b06d077e680d112abf9f027d8a558f1176ee4a55a7c523577833391d8c2249"; };
+    deps = [ world zlib ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      # illumos <endian.h> is glibc's (htobe64 and the rest are libc functions): the Linux branch. Its -std=c99 hides gmtime_r,
+      # usleep and struct timespec on illumos: -D__EXTENSIONS__.
+      [ "$(grep -cx '#if defined(__linux__) || defined(__CYGWIN__)' src/hdr_endian.h)" = 1 ] || { echo "FATAL: hdr_endian.h anchor" >&2; exit 1; }
+      sed -i 's/^#if defined(__linux__) || defined(__CYGWIN__)$/#if defined(__linux__) || defined(__CYGWIN__) || defined(__sun)/' src/hdr_endian.h
+      ${cmakeB "-DCMAKE_C_FLAGS=-D__EXTENSIONS__ -DHDR_HISTOGRAM_BUILD_PROGRAMS=OFF -DZLIB_ROOT=${zlib} -DZLIB_LIBRARY=${zlib}/lib/amd64/libz.so -DZLIB_INCLUDE_DIR=${zlib}/include"}
+      ${tprog ''#include <hdr/hdr_histogram.h>
+#include <stdio.h>
+int main(void){ struct hdr_histogram *h; if (hdr_init(1, 3600000000LL, 3, &h)) return 1; for (int i = 1; i <= 1000; i++) hdr_record_value(h, i);
+printf("ok %lld %lld %lld\n", (long long)h->total_count, (long long)hdr_max(h), (long long)hdr_value_at_percentile(h, 50.0)); hdr_close(h); return 0; }'' "$out/lib/amd64/libhdr_histogram.so"}
+      ${chk ''"$W/t"'' "^ok 1000 1000 500$"}
+    '';
+  };
+
+  # nghttp3 (MIT): the HTTP/3 (QPACK) library curl and ngtcp2 use. Release tarball (.tar.bz2), cmake, shared, as nixpkgs.
+  nghttp3 = mkSrcPkg {
+    pname = "nghttp3"; version = "1.18.0";
+    src = { url = "https://github.com/ngtcp2/nghttp3/releases/download/v1.18.0/nghttp3-1.18.0.tar.bz2";
+            sha256 = "ca232668b94a5e1fb54b41632cc56473ab48226483814410ef62a706294e6402"; };
+    deps = [ world ]; nativeTools = [ bzip2-bin cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DENABLE_SHARED_LIB=ON -DENABLE_STATIC_LIB=OFF"}
+      find "$out/share/doc" -delete 2>/dev/null || true
+      ${tprog ''#include <nghttp3/nghttp3.h>
+#include <stdio.h>
+int main(void){ const nghttp3_info *i = nghttp3_version(0); nghttp3_qpack_encoder *e;
+if (nghttp3_qpack_encoder_new(&e, 4096, nghttp3_mem_default())) return 1; nghttp3_qpack_encoder_del(e); printf("ok %s\n", i->version_str); return 0; }'' "$out/lib/amd64/libnghttp3.so"}
+      ${chk ''"$W/t"'' "^ok 1\\.18\\.0$"}
+    '';
+  };
+
+  # lerc (Apache-2.0): Esri's Limited Error Raster Compression (GDAL, libtiff). cmake, shared, as nixpkgs.
+  lerc = mkSrcPkg {
+    pname = "lerc"; version = "4.2.0";
+    src = { url = "https://codeload.github.com/esri/lerc/tar.gz/refs/tags/v4.2.0";
+            sha256 = "a1fb593ed1fcb5b38800caf3c4454f872745202e961d00d745e53d81447e17c9"; };
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DBUILD_SHARED_LIBS=ON"}
+      # a 16x16 float raster encoded within 0.01 and decoded back
+      ${tprog ''#include <Lerc_c_api.h>
+#include <stdio.h>
+#include <math.h>
+static float in[256], out[256]; static unsigned char blob[8192];
+int main(void){ for (int i = 0; i < 256; i++) in[i] = (float)(i % 16) * 0.5f; unsigned int n = 0;
+if (lerc_encode(in, 6, 1, 16, 16, 1, 0, NULL, 0.01, blob, sizeof blob, &n)) return 1;
+if (lerc_decode(blob, n, 0, NULL, 1, 16, 16, 1, 6, out)) return 2; double m = 0; for (int i = 0; i < 256; i++) m = fmax(m, fabs(in[i] - out[i]));
+printf("ok %d %d\n", n > 0, m <= 0.01); return 0; }'' "$out/lib/amd64/libLerc.so -lm"}
+      ${chk ''"$W/t"'' "^ok 1 1$"}
+    '';
+  };
+
+  # spice-protocol (BSD-3-Clause): the SPICE remote-display protocol headers (spice-gtk, qemu). meson; as nixpkgs, its pkg-config file
+  # also under lib/.
+  spice-protocol = mkSrcPkg {
+    pname = "spice-protocol"; version = "0.14.5";
+    src = { url = "https://www.spice-space.org/download/releases/spice-protocol-0.14.5.tar.xz";
+            sha256 = "baf58449f6e89d19f475899ad5fb9196fdc46c03cc53233f4e39cf2978f9cff7"; };
+    deps = [ world ]; nativeTools = mesonTools;
+    build = ''
+      ${mesonBuild ""}
+      mkdir -p "$out/lib"; ln -s ../share/pkgconfig "$out/lib/pkgconfig"
+      ${tprog ''#include <spice/protocol.h>
+#include <spice/macros.h>
+#include <stdio.h>
+int main(void){ printf("ok %d %d\n", SPICE_VERSION_MAJOR, SPICE_MAGIC == SPICE_MAGIC_CONST("REDQ")); return 0; }'' "-I$out/include/spice-1"}
+      ${chk ''"$W/t"'' "^ok 2 1$"}
+      ${chk ''PKG_CONFIG_PATH="$out/lib/pkgconfig" pkg-config --modversion spice-protocol'' "^0\\.14\\.5$"}
+    '';
+  };
+
+  # opencore-amr (Apache-2.0): the AMR-NB/AMR-WB speech codecs from Android's OpenCORE (ffmpeg's libopencore-amr). autotools (C++).
+  opencore-amr = mkSrcPkg {
+    pname = "opencore-amr"; version = "0.1.6";
+    src = { url = "https://downloads.sourceforge.net/opencore-amr/opencore-amr/opencore-amr-0.1.6.tar.gz";
+            sha256 = "483eb4061088e2b34b358e47540b5d495a96cd468e361050fae615b1809dc4a1"; };
+    deps = [ world ]; nativeTools = hostTools;
+    build = ''
+      # -L gcc.lib: libtool's C++ link would otherwise bake libstdc++.la's dir in as -R (as zimg, libmodplug)
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static LDFLAGS="-L$gccLib/amd64"
+      gmake -j8; gmake install
+      # one 20 ms frame of a tone encoded at 12.2 kbit/s (32 bytes) and decoded back
+      ${tprog ''#include <opencore-amrnb/interf_enc.h>
+#include <opencore-amrnb/interf_dec.h>
+#include <stdio.h>
+#include <math.h>
+int main(void){ short s[160], o[160]; unsigned char f[64]; for (int i = 0; i < 160; i++) s[i] = (short)(8000 * sin(i * 0.2));
+void *e = Encoder_Interface_init(0); int n = Encoder_Interface_Encode(e, MR122, s, f, 0); Encoder_Interface_exit(e);
+void *d = Decoder_Interface_init(); Decoder_Interface_Decode(d, f, o, 0); Decoder_Interface_exit(d); printf("ok %d\n", n); return 0; }'' "$out/lib/amd64/libopencore-amrnb.so -lm"}
+      ${chk ''"$W/t"'' "^ok 32$"}
+    '';
+  };
+
+  # celt (BSD-2-Clause): the CELT low-latency audio codec 0.11 (mumble's celt-0.11 compatibility), on libogg, as nixpkgs.
+  celt = mkSrcPkg {
+    pname = "celt"; version = "0.11.3";
+    src = { url = "https://downloads.xiph.org/releases/celt/celt-0.11.3.tar.gz";
+            sha256 = "7e64815d4a8a009d0280ecd235ebd917da3abdcfd8f7d0812218c085f9480836"; };
+    deps = [ world libogg ]; nativeTools = [ base.pkgconf ] ++ hostTools;
+    build = ''
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static
+      gmake -j8; gmake install
+      ${tprog ''#include <celt/celt.h>
+#include <stdio.h>
+#include <math.h>
+int main(void){ int err = 0; CELTMode *m = celt_mode_create(48000, 960, &err); if (!m || err) return 1; CELTEncoder *e = celt_encoder_create_custom(m, 1, &err);
+CELTDecoder *d = celt_decoder_create_custom(m, 1, &err); if (!e || !d) return 2; short s[960], o[960]; unsigned char p[128];
+for (int i = 0; i < 960; i++) s[i] = (short)(8000 * sin(i * 0.1)); int n = celt_encode(e, s, 960, p, sizeof p); if (n <= 0) return 3;
+printf("ok %d %d\n", n, celt_decode(d, p, n, o, 960)); celt_encoder_destroy(e); celt_decoder_destroy(d); celt_mode_destroy(m); return 0; }'' "-I$out/include $out/lib/amd64/libcelt0.so -lm"}
+      ${chk ''"$W/t"'' "^ok 128 960$"}
+    '';
+  };
+
+  # libcbor (MIT): CBOR (RFC 8949) encoding and decoding (libfido2). cmake, shared, as nixpkgs (its cmocka tests off; examples off).
+  libcbor = mkSrcPkg {
+    pname = "libcbor"; version = "0.14.0";
+    src = { url = "https://codeload.github.com/PJK/libcbor/tar.gz/refs/tags/v0.14.0";
+            sha256 = "a8c1516e741562cf95aa4479c64916c3d4d2623e24fdc35e414e2320e7300aae"; };
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DBUILD_SHARED_LIBS=ON -DWITH_TESTS=OFF -DWITH_EXAMPLES=OFF -DSANITIZE=OFF"}
+      ${tprog ''#include <cbor.h>
+#include <stdio.h>
+#include <stdlib.h>
+int main(void){ cbor_item_t *m = cbor_new_definite_map(1); cbor_map_add(m, (struct cbor_pair){ cbor_move(cbor_build_string("solnix")), cbor_move(cbor_build_uint8(42)) });
+unsigned char *b; size_t bs, n = cbor_serialize_alloc(m, &b, &bs); struct cbor_load_result r; cbor_item_t *x = cbor_load(b, n, &r); if (!x) return 1;
+printf("ok %d %d %d\n", (int)n, (int)cbor_map_size(x), cbor_get_uint8(cbor_map_handle(x)[0].value)); free(b); cbor_decref(&m); cbor_decref(&x); return 0; }'' "$out/lib/amd64/libcbor.so"}
+      ${chk ''"$W/t"'' "^ok 10 1 42$"}
+    '';
+  };
+
+  # exprtk (MIT): the header-only C++ mathematical expression parser; its one header, as nixpkgs.
+  exprtk = mkSrcPkg {
+    pname = "exprtk"; version = "0.0.3";
+    src = { url = "https://codeload.github.com/ArashPartow/exprtk/tar.gz/refs/tags/0.0.3";
+            sha256 = "f9dec6975e86c702033d6a65ba9a0368eba31a61b89d74f2b5d24457c02c8439"; };
+    deps = [ world ]; nativeTools = hostTools;
+    build = ''
+      mkdir -p "$out/include"; cp exprtk.hpp "$out/include/"
+      cat > "$W/t.cc" <<'TPROG'
+#include <exprtk.hpp>
+#include <iostream>
+int main(){ double x = 3; exprtk::symbol_table<double> s; s.add_variable("x", x); exprtk::expression<double> e; e.register_symbol_table(s);
+exprtk::parser<double> p; if (!p.compile("2*x^2 + 3*x - 1", e)) return 1; std::cout << "ok " << e.value() << "\n"; }
+TPROG
+      "$CXX" -std=c++17 -O1 -I"$out/include" "$W/t.cc" -o "$W/t"
+      ${chk ''"$W/t"'' "^ok 26$"}
     '';
   };
 }
