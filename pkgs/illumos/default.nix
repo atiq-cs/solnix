@@ -861,6 +861,8 @@ let
       set -eu
       mkdir -p "$out"
       ( cd "$base" && tar cf - . ) | ( cd "$out" && tar xf - )
+      # one file per name (an optimised store links identical files; tar keeps that, and the edits below are per name)
+      ( cd "$out" && find . -type f -links +1 | while read -r f; do cp "$f" "$f.hl" && mv -f "$f.hl" "$f"; done )
       for d in "$out" "$out/kernel" "$out/kernel/drv" "$out/kernel/drv/tzmon.conf" "$out/kernel/misc" "$out/kernel/misc/amd64" "$out/usr" "$out/usr/kernel"; do
         [ -e "$d" ] && [ ! -h "$d" ] && chmod u+w "$d" 2>/dev/null || true
       done
@@ -1004,6 +1006,8 @@ let
       mkdir -p "$out"
       # copy the base kernel slice, then overlay iwm's module + firmware.
       ( cd "$base" && tar cf - . ) | ( cd "$out" && tar xf - )
+      # one file per name (an optimised store links identical files; tar keeps that, and the edits below are per name)
+      ( cd "$out" && find . -type f -links +1 | while read -r f; do cp "$f" "$f.hl" && mv -f "$f.hl" "$f"; done )
       ${stripSliceRefs}
       # NOT chmod -R: the kernel slice has relative symlinks (e.g.
       # boot/solaris/bin/root_archive) that dangle in this isolated tree, and
@@ -1099,6 +1103,8 @@ let
       set -eu
       mkdir -p "$out"
       ( cd "$base" && tar cf - . ) | ( cd "$out" && tar xf - )
+      # one file per name (an optimised store links identical files; tar keeps that, and the edits below are per name)
+      ( cd "$out" && find . -type f -links +1 | while read -r f; do cp "$f" "$f.hl" && mv -f "$f.hl" "$f"; done )
       ${stripSliceRefs}
       # NOT chmod -R (it follows the slice's dangling relative symlinks).
       for d in "$out" "$out/kernel" "$out/kernel/drv" "$out/kernel/drv/amd64" "$out/kernel/firmware"; do
@@ -1223,6 +1229,8 @@ let
       set -eu
       mkdir -p "$out"
       ( cd "$base" && tar cf - . ) | ( cd "$out" && tar xf - )
+      # one file per name (an optimised store links identical files; tar keeps that, and the edits below are per name)
+      ( cd "$out" && find . -type f -links +1 | while read -r f; do cp "$f" "$f.hl" && mv -f "$f.hl" "$f"; done )
       ${stripSliceRefs}
       for d in "$out" "$out/kernel" "$out/kernel/drv" "$out/kernel/drv/amd64"; do
         [ -d "$d" ] && [ ! -h "$d" ] && chmod u+w "$d" 2>/dev/null || true
@@ -1264,6 +1272,8 @@ let
       set -eu
       mkdir -p "$out"
       ( cd "$base" && tar cf - . ) | ( cd "$out" && tar xf - )
+      # one file per name (an optimised store links identical files; tar keeps that, and the edits below are per name)
+      ( cd "$out" && find . -type f -links +1 | while read -r f; do cp "$f" "$f.hl" && mv -f "$f.hl" "$f"; done )
       for d in "$out" "$out/kernel" "$out/kernel/drv" "$out/kernel/drv/amd64" "$out/kernel/firmware"; do
         [ -d "$d" ] && [ ! -h "$d" ] && chmod u+w "$d" 2>/dev/null || true
       done
