@@ -61,7 +61,7 @@ NIX_BOOTSTRAP_SHA=ced9cf5e5fed64e3deaa8847f5c70fc1e8cd3541d84bbe64c785d0c00a24ec
 # gnu-config FODs the by-name flake pins. They are 404 in the binary cache but
 # content-addressed, so re-fetching the same commit reproduces the exact paths.
 GNUCONFIG_REV=948ae97
-CACHE_KEYS='cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk= cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8= cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY='
+CACHE_KEYS='cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8= cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8= cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY='
 FORK_PATH=/nix/store/qmvlnvf0kk1zkfjpjpxwimg5ym8sfwnk-nixpkgs-patched-1785781297346528064
 
 aws() { command aws --profile bene --region "$REGION" "$@"; }

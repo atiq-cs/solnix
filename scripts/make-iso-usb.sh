@@ -255,7 +255,7 @@ elif [ -z "${SOLNIX_NO_MEDIA_STORE:-}" ]; then
     exit 1
   fi
   STORE_CACHE="${STORE_CACHE:-https://cache.solnix.io}"
-  STORE_KEY="${STORE_KEY:-cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk=}"
+  STORE_KEY="${STORE_KEY:-cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8=}"
   # The base-closure roots. Default: the x86_64-solaris published store paths for the
   # pnames configurations/base.nix's system.build.toplevel references (its
   # systemPackages starter set) + the common starter set the brief names. Passed as

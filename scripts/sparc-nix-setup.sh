@@ -141,7 +141,7 @@ cat > "${PREFIX}/etc/nix/nix.conf" <<EOF
 build-users-group =
 sandbox = false
 substituters = https://cache.solnix.io
-trusted-public-keys = cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk=
+trusted-public-keys = cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8=
 system = sparc64-solaris
 EOF
 

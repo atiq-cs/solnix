@@ -99,7 +99,7 @@ cat > "$STAGE/nix-tools224/etc/nix/nix.conf" <<CONF
 build-users-group =
 sandbox = false
 substituters = https://cache.solnix.io https://cache.nixos.org
-trusted-public-keys = cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk= cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
+trusted-public-keys = cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8= cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
 ssl-cert-file = $INSTALL_PREFIX/ca-bundle.crt
 experimental-features = nix-command flakes
 CONF

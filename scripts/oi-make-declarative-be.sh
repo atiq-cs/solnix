@@ -72,7 +72,7 @@ PERUSERS="${PERUSERS:-root}"
 # CDN stale-404 issue was FIXED site-side, so consumers read the CDN only (the
 # s3.solnix.io inbox is write-only + transient; never a read substituter).
 SUBSTITUTER="${SUBSTITUTER:-https://cache.solnix.io}"
-TRUSTED_KEY="${TRUSTED_KEY:-cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk=}"
+TRUSTED_KEY="${TRUSTED_KEY:-cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8=}"
 # CA bundle for the baked ssl-cert-file (2.24 nix needs it for TLS substitute).
 CA_SRC="${CA_SRC:-/etc/certs/ca-certificates.crt}"
 
@@ -217,9 +217,9 @@ rm -f /nix/var/nix/profiles/default
 ln -s "$CS/sw" /nix/var/nix/profiles/default
 
 # 5. /etc/nix/nix.conf + registry.json — prefer the toplevel's declarative
-# copies (5HAV key, experimental-features=flakes, ssl-cert-file, s3-origin
+# copies (8UNr key, experimental-features=flakes, ssl-cert-file, s3-origin
 # substituter). Fall back to writing them if the CS has no etc/ overlay.
-log "installing /etc/nix/nix.conf + registry.json (5HAV, s3 origin $SUBSTITUTER)"
+log "installing /etc/nix/nix.conf + registry.json (8UNr, s3 origin $SUBSTITUTER)"
 mkdir -p /etc/nix
 if [ -f "$CS/etc/nix/nix.conf" ]; then
   cp -L "$CS/etc/nix/nix.conf" /etc/nix/nix.conf 2>/dev/null || cp "$CS/etc/nix/nix.conf" /etc/nix/nix.conf
@@ -288,7 +288,7 @@ chmod 0644 /etc/nix/nixpkgs/default.nix
 # references) that is NOT part of the toplevel closure. On a FRESH image it
 # must be present to EVALUATE any by-name install (a locked path input is not
 # fetched over the network; it must exist in the local store). It IS
-# published+signed (5HAV) and substitutable from the s3 ORIGIN, but the
+# published+signed (8UNr) and substitutable from the s3 ORIGIN, but the
 # cache.solnix.io CDN edge negative-caches a stale 404 for it (bare GET -> 404
 # cf-cache HIT). Bake it local (as a GC root) so by-name works out of the box
 # regardless of CDN state. Idempotent: skip if present. (The fork path is read
