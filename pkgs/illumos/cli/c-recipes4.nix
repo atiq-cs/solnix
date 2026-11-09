@@ -1,7 +1,7 @@
 # cli/c-recipes4.nix -- tools and libraries the x86 build queue has jobs for and solnix lacked (recipes4, 2026-11-09), picked by how many
 # queued jobs each moves to buildable. A new file, so no served drv moves. Store-only builds (nativeTools), each with an in-build check
 # that runs it on real input. Versions are the queue's targets; sources pinned by sha256 (equal to nixpkgs' flat hash where it has one).
-{ base, mkSrcPkg, world, chk, hostTools, python3, gnupatch, gnum4, cmake, perl, bzip2-bin, libxau, libxdmcp, libpthread-stubs, gtkMeson ? null, graphics, ... }:
+{ base, mkSrcPkg, world, chk, hostTools, python3, gnupatch, gnum4, cmake, perl, tcl, vulkan-headers, bzip2-bin, libxau, libxdmcp, libpthread-stubs, gtkMeson ? null, graphics, ... }:
 let
   fetch = url: sha256: import <nix/fetchurl.nix> { inherit url sha256; };
   # a C test program against the just-installed library: <src> <link flags>
@@ -687,6 +687,85 @@ printf("%s %s\n", h, strcmp(crypt("solnix", h), h) == 0 ? "ok" : "mismatch"); re
 #include <stdio.h>
 int main(void){ const char *e = eglQueryString(EGL_NO_DISPLAY, EGL_EXTENSIONS); printf("ok %d\n", e != NULL); return 0; }'' "$out/lib/amd64/libEGL.so.1"}
       ${chk ''__EGL_VENDOR_LIBRARY_DIRS="$W/none" "$W/t"'' "^ok 1$"}
+    '';
+  };
+
+  # ---- recipes5 batch 12: tk on main's tcl; the Vulkan loader on illumos -----------------------------------------------------------
+  # tk (TCL): the Tk toolkit (wish, Tkinter's library), on main's served tcl 8.6.16 and the R9/R10 X11 libraries (Xft fonts, XScrnSaver
+  # idle time). As nixpkgs: threads, 64-bit, man symlinks, its find-library patch (tk_library compiled in), the wish -> wish8.6 link.
+  # tkConfig.sh names the build dir in TK_SRC_DIR/TK_BUILD_* as every tkConfig.sh does (NixOS's: /build/tk8.6.16); here that is the
+  # drv-keyed /var/tmp/srcpkg-<key>, which the gate counts as WARN B8, the same as main's served tcl's tclConfig.sh.
+  tk = mkSrcPkg {
+    pname = "tk"; version = "8.6.16";
+    src = { url = "https://downloads.sourceforge.net/tcl/tk8.6.16-src.tar.gz";
+            sha256 = "be9f94d3575d4b3099d84bc3c10de8994df2d7aa405208173c709cc404a7e5fe"; };
+    deps = [ world tcl libx11 libxft libxext libxscrnsaver fontconfig freetype ];
+    linkDeps = [ base.xorgproto libxcb libxau libxdmcp libxrender graphics.expat ] ++ ftPriv;
+    nativeTools = [ base.pkgconf gnupatch ] ++ hostTools;
+    build = ''
+      patch -p1 < ${fetch "https://raw.githubusercontent.com/NixOS/nixpkgs/f4a03c008967841f2a0b3cb7c436fc6fc31671f6/pkgs/development/libraries/tk/tk-8_6_13-find-library.patch" "a77b8da4dbcf7ad224ce065ae392d610efa279ba781d1cc81cbc14893c3ab9d6"}
+      cd unix
+      # X headers and libraries from the store deps (AC_PATH_X would also try the host's /usr/X11/include, /usr/openwin/include)
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --with-tcl=${tcl}/lib/amd64 --with-tclinclude=${tcl}/include \
+        --enable-threads --enable-64bit --enable-man-symlinks \
+        --x-includes=${libx11}/include --x-libraries=${libx11}/lib/amd64
+      grep -q '^AC_FLAGS.*-DHAVE_XFT=1' Makefile || { echo "FATAL: tk configured without Xft" >&2; exit 1; }
+      grep -q '^AC_FLAGS.*-DHAVE_XSS=1' Makefile || { echo "FATAL: tk configured without XScrnSaver" >&2; exit 1; }
+      gmake -j8; gmake install
+      ln -s wish8.6 "$out/bin/wish"
+      ln -s libtk8.6.so "$out/lib/amd64/libtk.so"
+      cp ../generic/*.h ../unix/*.h "$out/include/"
+      find "$out/share/doc" -delete 2>/dev/null || true
+      # no X server in a build: load Tk's library and its C API through tclsh, then a widget call that needs no display
+      printf '%s\n' 'if {[catch {package require Tk} e]} { puts "load: $e" }' 'puts "tk [package provide Tk] [info exists tk_library]"' > "$W/t.tcl"
+      ${chk ''DISPLAY=:solnix-none TCLLIBPATH="$out/lib/amd64" ${tcl}/bin/tclsh "$W/t.tcl"'' "couldn.t connect to display"}
+      ${tprog ''#include <tk.h>
+#include <stdio.h>
+int main(void){ Tcl_Interp *i = Tcl_CreateInterp(); if (Tcl_Init(i) != TCL_OK) return 1;
+printf("ok %s %d\n", TK_PATCH_LEVEL, Tk_GetNumMainWindows()); return 0; }'' "-I${tcl}/include $out/lib/amd64/libtk8.6.so ${tcl}/lib/amd64/libtcl8.6.so -Wl,-R,${tcl}/lib/amd64"}
+      ${chk ''"$W/t"'' "^ok 8\\.6\\.16 0$"}
+    '';
+  };
+
+  # vulkan-loader (Apache-2.0): the Khronos Vulkan ICD loader (libvulkan.so.1), on the served vulkan-headers 1.4.363.0, X11 (xcb,
+  # Xlib, Xrandr) and wayland WSI, as nixpkgs. Upstream has no illumos case; the port is three spots, each a plain POSIX path:
+  # - CMakeLists.txt: SunOS joins the Linux|BSD platform case (the WSI options and loader_linux.c's device sort);
+  # - vk_loader_platform.h: __sun joins COMMON_UNIX_PLATFORMS (dlopen, pthreads, getenv, the XDG search paths);
+  # - its executable path: getexecname(3C) (the others read /proc/self/exe or sysctl).
+  # The loader is C99 (CMAKE_C_STANDARD 99), and -std=c99 hides getexecname and strtok_r in illumos' headers: -D__EXTENSIONS__, as
+  # dav1d. illumos has secure_getenv (found), so the loader uses it. The gas trampolines for unknown extension functions build on
+  # x86-64; nixpkgs' pkg-config patch (its libdir/includedir absolute).
+  vulkan-loader = mkSrcPkg {
+    pname = "vulkan-loader"; version = "1.4.363.0";
+    src = { url = "https://codeload.github.com/KhronosGroup/Vulkan-Loader/tar.gz/refs/tags/vulkan-sdk-1.4.363.0";
+            sha256 = "941eff558fc74f248745fb7df367640cf89a8457f216dae498a74ae14b6ba6f7"; };
+    deps = [ world vulkan-headers libx11 libxcb libxrandr graphics.wayland ];
+    linkDeps = [ base.xorgproto libxau libxdmcp libxext libxrender graphics.libffi ];
+    nativeTools = [ cmake base.pkgconf gnupatch python3 ] ++ hostTools;
+    build = ''
+      patch -p1 < ${fetch "https://raw.githubusercontent.com/NixOS/nixpkgs/f4a03c008967841f2a0b3cb7c436fc6fc31671f6/pkgs/by-name/vu/vulkan-loader/fix-pkgconfig.patch" "cf3abea999f6da860d172cafc5e632da62673935d73178a09c99221d88866091"}
+      [ "$(grep -c 'CMAKE_SYSTEM_NAME MATCHES "Linux|BSD|DragonFly|GNU' CMakeLists.txt loader/CMakeLists.txt | awk -F: '{s+=$2} END{print s}')" = 2 ] || { echo "FATAL: vulkan-loader platform anchor" >&2; exit 1; }
+      sed -i 's/CMAKE_SYSTEM_NAME MATCHES "Linux|BSD|DragonFly|GNU/CMAKE_SYSTEM_NAME MATCHES "Linux|BSD|DragonFly|GNU|SunOS/' CMakeLists.txt loader/CMakeLists.txt
+      grep -q 'defined(__OpenBSD__) || defined(__NetBSD__) || defined(__DragonFly__) || defined(__GNU__) || defined(__CYGWIN__)$' loader/vk_loader_platform.h || { echo "FATAL: vulkan-loader COMMON_UNIX anchor" >&2; exit 1; }
+      sed -i 's/defined(__OpenBSD__) || defined(__NetBSD__) || defined(__DragonFly__) || defined(__GNU__) || defined(__CYGWIN__)$/defined(__OpenBSD__) || defined(__NetBSD__) || defined(__DragonFly__) || defined(__GNU__) || defined(__CYGWIN__) || defined(__sun)/' loader/vk_loader_platform.h
+      grep -q '^#elif defined(__Fuchsia__) || defined(__OpenBSD__)$' loader/vk_loader_platform.h || { echo "FATAL: vulkan-loader executable_path anchor" >&2; exit 1; }
+      sed -i 's|^#elif defined(__Fuchsia__) \|\| defined(__OpenBSD__)$|#elif defined(__sun)\n#include <stdlib.h>\nstatic inline char *loader_platform_executable_path(char *buffer, size_t size) {\n    const char *p = getexecname();\n    if (p == NULL \|\| strlen(p) >= size) return NULL;\n    strcpy(buffer, p);\n    return buffer;\n}\n#elif defined(__Fuchsia__) \|\| defined(__OpenBSD__)|' loader/vk_loader_platform.h
+      # FindGit took the build host's /bin/git (gate L5); it only reads a .git/HEAD, which a tarball has not: off, as cli/c-recipes2.nix
+      ${cmakeB "-DCMAKE_DISABLE_FIND_PACKAGE_Git=TRUE -DCMAKE_C_FLAGS=-D__EXTENSIONS__ -DCMAKE_INSTALL_INCLUDEDIR=${vulkan-headers}/include -DBUILD_WSI_XCB_SUPPORT=ON -DBUILD_WSI_XLIB_SUPPORT=ON -DBUILD_WSI_WAYLAND_SUPPORT=ON -DBUILD_TESTS=OFF -DVULKAN_HEADERS_INSTALL_DIR=${vulkan-headers}"}
+      L="$out/lib/amd64/libvulkan.so.1"
+      [ -f "$L" ] || { echo "FATAL: no libvulkan.so.1" >&2; exit 1; }
+      /usr/bin/elfdump -s -N .dynsym "$L" | grep -qE ' vkCreateXcbSurfaceKHR$' || { echo "FATAL: libvulkan without XCB WSI" >&2; exit 1; }
+      /usr/bin/elfdump -s -N .dynsym "$L" | grep -qE ' vkCreateWaylandSurfaceKHR$' || { echo "FATAL: libvulkan without Wayland WSI" >&2; exit 1; }
+      grep -q "^includedir=${vulkan-headers}/include$" "$out/lib/amd64/pkgconfig/vulkan.pc" || { echo "FATAL: vulkan.pc includedir" >&2; exit 1; }
+      # no GPU and no ICD here: the loader must start, read the (empty) driver search path, and report the API version and no device
+      ${tprog ''#include <vulkan/vulkan.h>
+#include <stdio.h>
+int main(void){ uint32_t v = 0; if (vkEnumerateInstanceVersion(&v) != VK_SUCCESS) return 1;
+VkApplicationInfo a = { VK_STRUCTURE_TYPE_APPLICATION_INFO, NULL, "solnix", 1, NULL, 0, VK_API_VERSION_1_0 };
+VkInstanceCreateInfo c = { VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO, NULL, 0, &a, 0, NULL, 0, NULL }; VkInstance i;
+VkResult r = vkCreateInstance(&c, NULL, &i);
+printf("ok %u.%u.%u %d\n", VK_API_VERSION_MAJOR(v), VK_API_VERSION_MINOR(v), VK_API_VERSION_PATCH(v), r); return 0; }'' "-I${vulkan-headers}/include $L"}
+      ${chk ''VK_DRIVER_FILES="$W/none.json" XDG_CONFIG_HOME="$W" XDG_DATA_HOME="$W" HOME="$W" "$W/t"'' "^ok 1\\.4\\.363 -9$"}
     '';
   };
 }
