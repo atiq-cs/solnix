@@ -81,6 +81,15 @@ PY
 fi
 # a corrupt container must not read as CLEAN
 printf '\037\213\010\000garbage' > corrupt.gz
+# age identities. The bare prefix with a pattern (a recipe that redacts age-keygen's example by shape) is no key material;
+# prefix + a 58-char upper-case Bech32 body is. Both assembled from parts here, as the key above is.
+AP='AGE-SECRET-''KEY-1' AB=$(printf 'QPZRY9X8GF2TVDW0S3JN54KHCE6MUA7L%.0s' 1 2) AB=${AB:0:58}
+mkroot ag0; printf "      k='%s[02-9ACDEFGHJKLMNPQRSTUVWXYZ]\\{58\\}'\n      sed -i \"s/\$k/%s.../\" keygen.go\n" "$AP" "$AP" > ag0/recipe.nix
+mktar age-pattern.tar ag0   # ag0 itself is the tree case the image hit (a lone file is byte-scanned, which needs a body)
+printf '# created: 2026-11-09\n%s%s\n' "$AP" "$AB" > age-id.txt
+mkroot ag1; cp age-id.txt ag1/root/key.txt; mktar age-id.tar ag1
+mkroot ag2; cp age-id.txt ag2/etc/x.txt; mktar ag2.tar ag2; mkdir -p agba/platform/i86pc/amd64; gzip -c ag2.tar > agba/platform/i86pc/amd64/boot_archive
+mktar age-id-bootarchive.tar agba
 
 expect 0 '^CLEAN clean.tar$'  "clean tar"                   clean.tar
 expect 0 '^CLEAN clean.iso$'  "clean ISO (gz boot_archive + NAR inside)" clean.iso
@@ -101,6 +110,12 @@ expect 1 'REJECT ident-raw.img: maintainer identity' "identity at line start in 
 expect 2 '^ERROR corrupt.gz' "corrupt gzip: not CLEAN"   corrupt.gz
 expect 0 '^CLEAN devnode.tar$' "tar with a device node: CLEAN" devnode.tar
 expect 1 'REJECT devnode-key.tar.*private key' "tar with a device node and a key: REJECT" devnode-key.tar
+expect 0 '^CLEAN ag0$' "bare age prefix in a redaction pattern (root tree): CLEAN" ag0
+expect 0 '^CLEAN age-pattern.tar$' "bare age prefix in a redaction pattern (tar): CLEAN" age-pattern.tar
+expect 1 'REJECT age-id.txt: (age secret|sops/age)' "age identity (prefix + 58-char body) in a text file" age-id.txt
+expect 1 'REJECT age-id.tar!tar:/root/key.txt: sops/age' "age identity in a tar" age-id.tar
+expect 1 'REJECT age-id-bootarchive.tar!tar:/platform/i86pc/amd64/boot_archive!gz!tar:/etc/x.txt: sops/age' \
+         "age identity in a gzipped boot_archive" age-id-bootarchive.tar
 
 echo "test-image-identity-gate: $pass pass, $fail fail, $skip skip ($G)"
 [ $fail = 0 ] && [ $skip = 0 ]

@@ -52,8 +52,9 @@ CRYPT_RE='\$(1|2[aby]|5|6|y|gy|7)\$[./A-Za-z0-9]'
 ID_RE='greg@burd[.]me|/home/gburd|(^|[^a-z0-9])gburd([^a-z0-9]|$)'
 # credential/identity FILES by basename.
 CRED_FILES='authorized_keys known_hosts .netrc .git-credentials .pgpass'
-# sops/age material.
-SOPS_RE='sops:|ENC\[AES256_GCM|AGE-SECRET-KEY-1|-----BEGIN AGE ENCRYPTED FILE-----|age1[0-9a-z]{58}'
+# sops/age material. An age identity is the prefix plus its 58-character upper-case Bech32 body; the bare prefix is not key
+# material (a recipe that redacts age-keygen's example by pattern names it, and B18 also needs a body).
+SOPS_RE='sops:|ENC\[AES256_GCM|AGE-SECRET-KEY-1[QPZRY9X8GF2TVDW0S3JN54KHCE6MUA7L]{58}|-----BEGIN AGE ENCRYPTED FILE-----|age1[0-9a-z]{58}'
 # strong evidence in raw bytes (binaries, filesystem blocks): real key material only, never a bare header. The openssh
 # binaries carry "BEGIN OPENSSH PRIVATE KEY" and sshd_config names ~/.ssh/id_ed25519 as TEXT. b3BlbnNzaC1rZXkt is base64
 # "openssh-key-", the body of every OpenSSH private key; a PEM header counts only with a base64 body line after it.
