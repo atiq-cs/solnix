@@ -1971,4 +1971,275 @@ TPROG
       ${chk ''"$W/t"'' "^ok 26$"}
     '';
   };
+
+  # ---- recipes8 batch 17: small leaves the x86 queue has jobs for ------------------------------------------------------------------
+  # zip (Info-ZIP, BSD-4-Clause-like Info-ZIP license): zip, zipcloak, zipnote, zipsplit. As nixpkgs: unix/Makefile `generic` (its
+  # unix/configure probes the compiler), nixpkgs' eleven patches (gentoo's build patch drops configure's /lib/cpp and -O3 picks and
+  # passes LDFLAGS), no bzip2 (nixpkgs links none: its configure only finds a bzip2 dir in the source tree). BINDIR/MANDIR are
+  # given on the make line, so configure's /usr/local probe does not reach the install.
+  zip = let
+    np = "https://raw.githubusercontent.com/NixOS/nixpkgs/f4a03c008967841f2a0b3cb7c436fc6fc31671f6/pkgs/by-name/zi/zip";
+    ge = "https://gitweb.gentoo.org/repo/gentoo.git/plain/app-arch/zip/files"; gi = "id=d37d095fc7a2a9e4a8e904a7bf0f597fe99df85a";
+    db = "https://sources.debian.org/data/main/z/zip/3.0-16/debian/patches";
+    ps = [
+      (fetch "${np}/fix-implicit-declarations.patch" "928a717cacc9fb89c7a9bf0bf6ebea12745c96e518555cfd5a9797f66b558e22")
+      (fetch "${np}/fix-time.h-not-included.patch" "50dddb4a82b887f291540eaa1ac7a141fce2a2f169b9db2a7faf700787d93e8b")
+      (fetch "${db}/fix-build-with-gcc-14.patch" "336049111eca935abea8a5e19078e48f1f6734b0f209af15545455f9fb5fee32")
+      (fetch "${ge}/zip-3.0-pic.patch?${gi}" "afca923887828f6ccdcb98bcb1130f138d014614ca49c2a2526bd0fdc91dda6e")
+      (fetch "${ge}/zip-3.0-no-crypt.patch?${gi}" "32d263c492dbc2b37b71d0aa80e566283422e8e6493d91f8aa12946d6d587a4a")
+      (fetch "${ge}/zip-3.0-format-security.patch?${gi}" "62618a8af67488508598f8d562e3aff43f18d311b642758ea5ab3c80c8284373")
+      (fetch "${ge}/zip-3.0-exec-stack.patch?${gi}" "5e46b247107c71f34e00c93d27d9f5cf0812d1c8ffc171fc71addee715308ff5")
+      (fetch "${ge}/zip-3.0-build.patch?${gi}" "a66386c3a48019d8063a48c3610a28862412926f04a3b8f44662c6a87bb250f5")
+      (fetch "${ge}/zip-3.0-zipnote-freeze.patch?${gi}" "c4eac1c60d8c71dd5242999255a30beda3925b628ff17a658bf1bfb2ef11cd3e")
+      (fetch "${db}/buffer-overflow-cve-2018-13410.patch" "39461c3ffd5fbd2a377779855c9e3e87e30e0db235e41256c6547a752da1f388")
+      (fetch "${db}/fix-command-injection.patch" "0905dd62604a4db8d7d9fb2bc228f355e90635fbc32208c21ed72bde1541bdc4")
+    ];
+  in mkSrcPkg {
+    pname = "zip"; version = "3.0";
+    src = { url = "https://downloads.sourceforge.net/infozip/zip30.tar.gz";
+            sha256 = "f0e8bb1f9b7eb0b01285495a2699df3a4b766784c1765a8f1aeedf63c0806369"; };
+    deps = [ world ]; nativeTools = [ gnupatch unzip ] ++ hostTools;   # unzip: zip -T's archive test runs it
+    build = ''
+      for p in ${builtins.concatStringsSep " " ps}; do patch -p1 < "$p"; done
+      sed -i 's/^CC = cc$//' unix/Makefile; sed -i 's/O3/O2/' unix/configure
+      gmake -f unix/Makefile generic CC="$CC"
+      gmake -f unix/Makefile install prefix="$out" BINDIR="$out/bin" MANDIR="$out/share/man/man1" INSTALL=cp
+      # a file deflated into an archive, the archive tested (zip -T runs its own unzip check), listed with zipnote
+      printf 'solnix solnix solnix solnix\n' > "$W/a.txt"
+      ${chk ''cd "$W" && "$out/bin/zip" -9 t.zip a.txt && "$out/bin/zip" -T t.zip && "$out/bin/zipnote" t.zip'' "^@ a\\.txt$"}
+      ${chk ''unzip -p "$W/t.zip" a.txt'' "^solnix solnix solnix solnix$"}
+      ${chk ''"$out/bin/zip" -v'' "This is Zip 3\\.0"}
+    '';
+  };
+
+  # libz (Zlib): Sortix's libz, a cleaned-up zlib 1.2.8 fork with the zlib ABI (libz.so.1, the ZLIB_1.2.x version nodes), as nixpkgs.
+  # Its hand-written configure; the link uses -Wl,-soname (illumos ld takes it) and --version-script libz.map. libz.map leaves zlib's
+  # core API (inflate, deflate, crc32, ...) unlisted, which GNU ld keeps global in the base version; illumos ld refuses a global with
+  # no version once any is versioned ("symbol has no version assigned", measured on woof). So: link once without the script, the
+  # shim's convert for the ZLIB_* nodes, and a base node (named for the soname, as illumos' own libs) with every defined global the
+  # script does not list, then `local: *` (libz.map's locals and _*). The shared shim stays as it is (it would move every vsMap drv).
+  libz = mkSrcPkg {
+    pname = "libz"; version = "1.2.8.2025.03.07";
+    # gitlab's /-/archive/ URL (the API one's query string is no store name): the same tree, NAR-equal to nixpkgs' hash
+    src = { url = "https://gitlab.com/sortix/libz/-/archive/libz-1.2.8.2025.03.07/libz-libz-1.2.8.2025.03.07.tar.gz";
+            sha256 = "94aff5a8ec01431fbd94d944dc24b7745ab43eb307a556b3929713a1974360a1"; };
+    deps = [ world ]; nativeTools = hostTools;
+    build = ''
+      grep -q -- '-Wl,-soname,libz.so.1,--version-script,$(srcdir)/libz.map ' Makefile.in || { echo "FATAL: libz link anchor" >&2; exit 1; }
+      sed -i 's|-Wl,-soname,libz.so.1,--version-script,$(srcdir)/libz.map |-Wl,-soname,libz.so.1 |' Makefile.in
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static CC="$CC"
+      gmake -j8
+      nm -P -g libz.so.1.2.8 | awk '$2 !~ /^[Uwv]$/ { print $1 }' | sort > "$W/def"
+      "$BASH" ${../version-script-mapfile.sh} convert libz.map "$W/def" > "$W/vers.map"
+      tr -s ' \t;{}' '\n' < libz.map | grep -E '^[A-Za-z_][A-Za-z0-9_]*$' | grep -vE '^(global|local|ZLIB_[0-9._]+)$' | sort -u > "$W/listed"
+      { echo '$mapfile_version 2'; echo 'SYMBOL_VERSION libz.so.1 {'; echo '  global:'; comm -23 "$W/def" "$W/listed" | grep -v '^_' | sed 's/.*/    &;/'
+        echo '  local:'; echo '    *;'; echo '};'; tail -n +2 "$W/vers.map"; } > "$W/libz.mapfile"
+      rm libz.so.1.2.8; gmake LDFLAGS="-Wl,-M,$W/libz.mapfile"; gmake install
+      L="$out/lib/amd64/libz.so.1"
+      ${hasVer "$L" "libz\\.so\\.1" "inflate"}
+      ${hasVer "$L" "ZLIB_1.2.0" "compressBound"}
+      ${hasVer "$L" "ZLIB_1.2.7.1" "inflateGetDictionary"}
+      ${notExp "$L" "inflate_fast"}
+      ${tprog ''#include <zlib.h>
+#include <stdio.h>
+#include <string.h>
+int main(void){ const char *s = "solnix solnix solnix solnix"; unsigned char z[128], o[128]; uLongf zl = sizeof z, ol = sizeof o;
+if (compress2(z, &zl, (const Bytef *)s, strlen(s), 9) != Z_OK || uncompress(o, &ol, z, zl) != Z_OK) return 1;
+printf("ok %s %lu %.*s\n", zlibVersion(), crc32(0, (const Bytef *)"123456789", 9), (int)ol, o); return 0; }'' "$L"}
+      ${chk ''"$W/t"'' "^ok 1\\.2\\.8\\.f-sortix-libz 3421780262 solnix"}
+    '';
+  };
+
+  # linenoise (BSD-2-Clause): antirez's small readline replacement. Upstream ships no library build: as nixpkgs, one shared
+  # liblinenoise.so (soname liblinenoise.so), its header and nixpkgs' linenoise.pc.
+  linenoise = mkSrcPkg {
+    pname = "linenoise"; version = "2.0";
+    src = { url = "https://codeload.github.com/antirez/linenoise/tar.gz/refs/tags/2.0";
+            sha256 = "97ad7d4041e11d7fa395819fd773c1892dea89e5292342378a8345692ce89c29"; };
+    deps = [ world ]; nativeTools = hostTools;
+    build = ''
+      "$CC" -O2 -fPIC -c -o linenoise.o linenoise.c
+      "$CC" -shared -Wl,-soname,liblinenoise.so -o liblinenoise.so linenoise.o
+      mkdir -p "$out/include" "$out/lib/amd64/pkgconfig"; cp linenoise.h "$out/include/"; cp liblinenoise.so "$out/lib/amd64/"
+      printf 'prefix=%s\nexec_prefix=${"$"}{prefix}\nlibdir=${"$"}{exec_prefix}/lib/amd64\nincludedir=${"$"}{prefix}/include\n\nName: linenoise\nDescription: A minimal, zero-config, BSD licensed, readline replacement.\nVersion: 2.0\nLibs: -L${"$"}{libdir} -llinenoise\nCflags: -I${"$"}{includedir}\n' "$out" > "$out/lib/amd64/pkgconfig/linenoise.pc"
+      # with stdin not a terminal linenoise reads a plain line; the history API round-trips it
+      ${tprog ''#include <linenoise.h>
+#include <stdio.h>
+#include <stdlib.h>
+int main(void){ char *l = linenoise("> "); if (!l) return 1; linenoiseHistoryAdd(l); printf("ok %s %d\n", l, linenoiseHistorySetMaxLen(10)); free(l); return 0; }'' "$out/lib/amd64/liblinenoise.so"}
+      ${chk ''echo solnix | "$W/t"'' "^ok solnix 1$"}
+      ${chk ''PKG_CONFIG_PATH="$out/lib/amd64/pkgconfig" ${base.pkgconf}/bin/pkg-config --modversion --libs linenoise'' "^2\\.0$"}
+    '';
+  };
+
+  # rhash (0BSD): the rhash tool and librhash (CRC32, MD5, SHA-1/2/3, BLAKE2/3, TTH, ED2K, ...), as nixpkgs: shared librhash, its
+  # headers and .so link, no gettext, no OpenSSL. Its configure's --version-script probe passes through the mapfile shim.
+  rhash = mkSrcPkg {
+    pname = "rhash"; version = "1.4.6";
+    src = { url = "https://codeload.github.com/rhash/RHash/tar.gz/refs/tags/v1.4.6";
+            sha256 = "9f6019cfeeae8ace7067ad22da4e4f857bb2cfa6c2deaa2258f55b2227ec937a"; };
+    deps = [ world ]; nativeTools = hostTools;
+    build = ''
+      ${vsMap}
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --mandir="$out/share/man" --sysconfdir="$out/etc" --cc="$CC" --ar=gar \
+        --disable-gettext --disable-openssl --disable-static --disable-lib-static --enable-lib-shared
+      grep -q -- '--version-script,exports.sym' librhash/config.mak || { echo "FATAL: rhash: no version script (configure's probe)" >&2; exit 1; }
+      gmake -j8; gmake install install-lib-headers install-lib-so-link
+      L="$out/lib/amd64/librhash.so.1"
+      ${notExp "$L" "rhash_sha256_init"}
+      ${tprog ''#include <rhash.h>
+#include <stdio.h>
+int main(void){ unsigned char d[64]; char h[130]; rhash_library_init(); if (rhash_msg(RHASH_SHA256, "abc", 3, d) < 0) return 1;
+rhash_print_bytes(h, d, 32, RHPR_HEX); printf("ok %.8s\n", h); return 0; }'' "$L"}
+      ${chk ''"$W/t"'' "^ok ba7816bf$"}
+      printf abc > "$W/abc"
+      ${chk ''"$out/bin/rhash" --sha256 "$W/abc"'' "^ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad "}
+    '';
+  };
+
+  # range-v3 (BSL-1.0): Eric Niebler's header-only ranges library for C++14/17. cmake install; tests, examples and docs off (nixpkgs
+  # runs its test suite; here the check), and no -march=native (RANGES_NATIVE: a build-host CPU flag in its exported config).
+  range-v3 = mkSrcPkg {
+    pname = "range-v3"; version = "0.12.0";
+    src = { url = "https://codeload.github.com/ericniebler/range-v3/tar.gz/refs/tags/0.12.0";
+            sha256 = "015adb2300a98edfceaf0725beec3337f542af4915cec4d0b89fa0886f4ba9cb"; };
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      # FindGit took the build host's /bin/git through cmake's "/" prefix (gate L5); only its release target runs git: off
+      ${cmakeB "-DCMAKE_DISABLE_FIND_PACKAGE_Git=TRUE -DRANGES_ENABLE_WERROR=OFF -DRANGE_V3_TESTS=OFF -DRANGE_V3_EXAMPLES=OFF -DRANGE_V3_DOCS=OFF -DRANGES_NATIVE=OFF"}
+      ! grep -rq 'march=native' "$out/lib" || { echo "FATAL: range-v3's cmake config exports -march=native" >&2; exit 1; }
+      cat > "$W/t.cc" <<'TPROG'
+#include <range/v3/all.hpp>
+#include <iostream>
+#include <vector>
+int main(){ std::vector<int> v{ 1, 2, 3, 4, 5, 6 }; auto r = v | ranges::views::filter([](int x){ return x % 2 == 0; }) | ranges::views::transform([](int x){ return x * x; });
+std::cout << "ok " << ranges::accumulate(r, 0) << " " << ranges::distance(r) << "\n"; }
+TPROG
+      "$CXX" -std=c++17 -I"$out/include" "$W/t.cc" -o "$W/t"
+      ${chk ''"$W/t"'' "^ok 56 3$"}
+    '';
+  };
+
+  # plutovg (MIT): a tiny 2D vector graphics library (lunasvg, plutosvg). cmake, shared, examples off, as nixpkgs.
+  plutovg = mkSrcPkg {
+    pname = "plutovg"; version = "1.3.3";
+    src = { url = "https://codeload.github.com/sammycage/plutovg/tar.gz/refs/tags/v1.3.3";
+            sha256 = "2b0d17a6e016f47b86f9c00e2cb82600041b1ea1f7d2a00c2d46ae542cbfed3c"; };
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DBUILD_SHARED_LIBS=ON -DPLUTOVG_BUILD_EXAMPLES=OFF -DCMAKE_INSTALL_INCLUDEDIR=include"}
+      # a red 8x8 rect filled on a 16x16 surface: the pixel inside is opaque red (ARGB32 premultiplied), the one outside clear
+      ${tprog ''#include <plutovg/plutovg.h>
+#include <stdio.h>
+#include <stdint.h>
+int main(void){ plutovg_surface_t *s = plutovg_surface_create(16, 16); plutovg_canvas_t *c = plutovg_canvas_create(s); if (!s || !c) return 1;
+plutovg_canvas_set_rgb(c, 1, 0, 0); plutovg_canvas_rect(c, 0, 0, 8, 8); plutovg_canvas_fill(c);
+const uint32_t *p = (const uint32_t *)plutovg_surface_get_data(s); int st = plutovg_surface_get_stride(s) / 4;
+printf("ok %s %08x %08x\n", plutovg_version_string(), p[2 * st + 2], p[12 * st + 12]); plutovg_canvas_destroy(c); plutovg_surface_destroy(s); return 0; }'' "$out/lib/amd64/libplutovg.so"}
+      ${chk ''"$W/t"'' "^ok 1\\.3\\.3 ffff0000 00000000$"}
+    '';
+  };
+
+  # heatshrink (ISC): LZSS compression for embedded systems (prusa-slicer, libbgcode). As nixpkgs: upstream's CMake build commit (static
+  # heatshrink + heatshrink_dynalloc libraries, the heatshrink command, a cmake package).
+  heatshrink = mkSrcPkg {
+    pname = "heatshrink"; version = "0.4.1";
+    src = { url = "https://codeload.github.com/atomicobject/heatshrink/tar.gz/refs/tags/v0.4.1";
+            sha256 = "7529a1c8ac501191ad470b166773364e66d9926aad632690c72c63a1dea7e9a6"; };
+    deps = [ world ]; nativeTools = [ cmake gnupatch ] ++ hostTools;
+    build = ''
+      patch -p1 < ${fetch "https://github.com/atomicobject/heatshrink/commit/0886e9ca76552b8e325841e2b820b4563e5d5aba.patch" "0c6153a1e0e6f4cfdfc68f91b9d8be7296e62b63b6b5688a32e0d68bd3b2e093"}
+      ${cmakeB ""}
+      printf 'Hello world solnix solnix solnix\n' > "$W/in"
+      ${chk ''"$out/bin/heatshrink" -e "$W/in" "$W/in.hs" && "$out/bin/heatshrink" -d "$W/in.hs" "$W/out" && cat "$W/out"'' "^Hello world solnix solnix solnix$"}
+      ls "$out/lib/amd64/libheatshrink.a" "$out/lib/amd64/libheatshrink_dynalloc.a" "$out/lib/amd64/cmake/heatshrink/heatshrinkConfig.cmake" > /dev/null
+    '';
+  };
+
+  # yyjson (MIT): a fast JSON library in ANSI C. cmake, shared (nixpkgs' cmake default is static here: BUILD_SHARED_LIBS unset; the
+  # queue's consumers link either), tests off.
+  yyjson = mkSrcPkg {
+    pname = "yyjson"; version = "0.13.0";
+    src = { url = "https://codeload.github.com/ibireme/yyjson/tar.gz/refs/tags/0.13.0";
+            sha256 = "34e0f62a2bc11ab20d601e8ca1cc2b2079503aa45119a19133d89d19b94a0fae"; };
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DBUILD_SHARED_LIBS=ON -DYYJSON_BUILD_TESTS=OFF"}
+      ${tprog ''#include <yyjson.h>
+#include <stdio.h>
+#include <string.h>
+int main(void){ const char *j = "{\"name\":\"solnix\",\"n\":42,\"a\":[1,2,3]}"; yyjson_doc *d = yyjson_read(j, strlen(j), 0); if (!d) return 1;
+yyjson_val *r = yyjson_doc_get_root(d); printf("ok %s %s %d %d\n", yyjson_version() == YYJSON_VERSION_HEX ? "0.13.0" : "?", yyjson_get_str(yyjson_obj_get(r, "name")),
+ yyjson_get_int(yyjson_obj_get(r, "n")), (int)yyjson_arr_size(yyjson_obj_get(r, "a"))); yyjson_doc_free(d); return 0; }'' "$out/lib/amd64/libyyjson.so"}
+      ${chk ''"$W/t"'' "^ok 0\\.13\\.0 solnix 42 3$"}
+    '';
+  };
+
+  # http-parser (MIT): Node's HTTP/1.x request/response parser in C, as nixpkgs: shared only (its static/shared patch), soname
+  # libhttp_parser.so.2.9.
+  http-parser = mkSrcPkg {
+    pname = "http-parser"; version = "2.9.4";
+    src = { url = "https://codeload.github.com/nodejs/http-parser/tar.gz/refs/tags/v2.9.4";
+            sha256 = "467b9e30fd0979ee301065e70f637d525c28193449e1b13fbcb1b1fab3ad224f"; };
+    deps = [ world ]; nativeTools = [ gnupatch ] ++ hostTools;
+    build = ''
+      patch -p1 < ${fetch "https://raw.githubusercontent.com/NixOS/nixpkgs/f4a03c008967841f2a0b3cb7c436fc6fc31671f6/pkgs/by-name/ht/http-parser/enable-static-shared.patch" "3c7299dd7c5395834008dd382832eeead74852f826cde6ccb13be47409052fd1"}
+      F="DESTDIR= PREFIX=$out LIBDIR=$out/lib/amd64 BINEXT= PLATFORM=sunos AEXT=a ENABLE_SHARED=1 ENABLE_STATIC=0 SOEXT=so CC=$CC CFLAGS=-Wno-error"
+      gmake -j8 $F library; gmake $F install
+      ${tprog ''#include <http_parser.h>
+#include <stdio.h>
+#include <string.h>
+static int url(http_parser *p, const char *a, size_t n){ (void)p; printf("url %.*s\n", (int)n, a); return 0; }
+int main(void){ const char *r = "GET /solnix?x=1 HTTP/1.1\r\nHost: a\r\n\r\n"; http_parser p; http_parser_settings s; http_parser_settings_init(&s); s.on_url = url;
+http_parser_init(&p, HTTP_REQUEST); size_t n = http_parser_execute(&p, &s, r, strlen(r));
+printf("ok %d %s %d.%d %lx\n", n == strlen(r), http_method_str(p.method), p.http_major, p.http_minor, http_parser_version()); return 0; }'' "$out/lib/amd64/libhttp_parser.so"}
+      ${chk ''"$W/t"'' "^ok 1 GET 1\\.1 20904$"}
+    '';
+  };
+
+  # re2c (public domain): the lexer generator (and its re2go/re2rust/... aliases), as nixpkgs: autotools from the tag (autoreconf),
+  # its bootstrap lexers and parsers (no bison), no docs (the bootstrap man page), python3 for its configure's AM_PATH_PYTHON.
+  re2c = mkSrcPkg {
+    pname = "re2c"; version = "4.6";
+    src = { url = "https://codeload.github.com/skvadrik/re2c/tar.gz/refs/tags/4.6";
+            sha256 = "39af7f5ccaa0b7cf8105fa59a02566b52bc8844e59982133165487ffd1cfc6cc"; };
+    deps = [ world ]; nativeTools = autoreconfTools ++ [ python3 ] ++ hostTools;
+    build = ''
+      ${autoreconf}
+      # -L gcc.lib: libtool's C++ link would otherwise bake libstdc++.la's dir in as -R (as zimg)
+      ./configure --prefix="$out" --disable-docs --disable-benchmarks LDFLAGS="-L$gccLib/amd64"
+      gmake -j8; gmake install
+      printf '/*!re2c\n  re2c:yyfill:enable = 0; re2c:define:YYCTYPE = char;\n  [a-z]+ { return 1; }\n  * { return 0; }\n*/\n' > "$W/l.re"
+      ${chk ''"$out/bin/re2c" --version && "$out/bin/re2c" -o "$W/l.c" "$W/l.re" && grep -c "yych" "$W/l.c"'' "^re2c 4\\.6$"}
+      ${chk ''"$out/bin/re2go" --version'' "^re2c 4\\.6$"}
+    '';
+  };
+
+  # asio (BSL-1.0): the standalone header-only Asio C++ networking library (no Boost), its headers and asio.pc, as nixpkgs (its
+  # Boost 1.89 patch; nixpkgs' boost/openssl are check inputs only). Tag tarball: autoreconf. Examples and tests are not built.
+  asio = mkSrcPkg {
+    pname = "asio"; version = "1.38.0";
+    src = { url = "https://codeload.github.com/chriskohlhoff/asio/tar.gz/refs/tags/asio-1-38-0";
+            sha256 = "5cf78ede456fd13b95fe692711f4f689be26c826f1f5541c7a1df3aa32bd9dbd"; };
+    deps = [ world ]; nativeTools = autoreconfTools ++ [ gnupatch ] ++ hostTools;
+    build = ''
+      patch -p1 < ${fetch "https://raw.githubusercontent.com/NixOS/nixpkgs/f4a03c008967841f2a0b3cb7c436fc6fc31671f6/pkgs/by-name/as/asio/boost-1.89.patch" "e92062b86cbbabb3021cd30e071accb68ec0567f143e6313a1652eaf8407ee3d"}
+      ${autoreconf}
+      ./configure --prefix="$out" --without-boost --without-openssl
+      gmake -C include install; gmake install-data-am
+      # a TCP echo over loopback: an acceptor on an ephemeral port, a client writes, the server reads it back
+      cat > "$W/t.cc" <<'TPROG'
+#include <asio.hpp>
+#include <iostream>
+#include <thread>
+int main(){ asio::io_context io; asio::ip::tcp::acceptor a(io, { asio::ip::make_address("127.0.0.1"), 0 }); auto port = a.local_endpoint().port();
+std::thread srv([&]{ auto s = a.accept(); char b[16]; size_t n = s.read_some(asio::buffer(b)); asio::write(s, asio::buffer(b, n)); });
+asio::ip::tcp::socket c(io); c.connect({ asio::ip::make_address("127.0.0.1"), port }); asio::write(c, asio::buffer("solnix", 6));
+char r[16]; size_t n = asio::read(c, asio::buffer(r, 6)); srv.join(); std::cout << "ok " << ASIO_VERSION << " " << std::string(r, n) << "\n"; }
+TPROG
+      "$CXX" -std=c++17 -I"$out/include" "$W/t.cc" -lsocket -lnsl -o "$W/t"
+      ${chk ''"$W/t"'' "^ok 103800 solnix$"}
+      ${chk ''PKG_CONFIG_PATH="$out/share/pkgconfig" ${base.pkgconf}/bin/pkg-config --modversion asio'' "^1\\.38\\.0$"}
+    '';
+  };
 }
