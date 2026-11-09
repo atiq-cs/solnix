@@ -138,7 +138,7 @@ let
     PATH = if storeOnly then (if btPath == "" then ntPath else "${btPath}:${ntPath}") else a.PATH;
     args = map (x: (if storeOnly then cmakeX else (y: y)) (builtins.replaceStrings
     [ ''export PATH="''${btPath:+$btPath:}/usr/gnu/bin:/usr/bin:/usr/sbin"'' ''export CC="$W/cc$ABI" ABI LIBSUB'' ]
-    [ (''export PATH="''${btPath:+$btPath:}$ntPath" CONFIG_SITE=${./config.site}''   # config.site: host-state probes pinned
+    [ (''export PATH="''${btPath:+$btPath:}$ntPath" CONFIG_SITE=${if storeOnly then ./config-x86.site else ./config.site}''   # config.site: host-state probes pinned (x86 store-only: config-x86.site)
        + (if storeOnly then "\n    /usr/bin/bash ${./path-gate.sh}" else "")
        # the illumos elfedit/elfdump/ldd for the shared gate scripts: the world's (a nativeTools entry), never /usr/gnu's GNU elfedit
        + (if storeOnly then "\n    . ${./illumos-bin.sh}" else "")   # exempt: IB stays /usr/bin (the OI host's illumos tools)
