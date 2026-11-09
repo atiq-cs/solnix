@@ -178,6 +178,22 @@ run_realise with-install-be ok
 grep -q PROFILE-OK "$W/rr.with-install-be.out" || { echo "FAIL  system profile not system-1-link -> toplevel"; FAILED=1; }
 run_realise without-install-be die NO_INSTALL_BE=1
 
+echo "=== seed_target_store: host mode never copies the build host's own system ==="
+awk '/^seed_target_store\(\) \{/,/^\}/' "$SCRIPT" > "$W/seed.sh"
+bash -n "$W/seed.sh" || { echo "FAIL  seed_target_store extract"; FAILED=1; }
+run_seed() {  # <mode> -> prints what nix copy was asked to copy, or NOCOPY
+  ( LIVE_SYSTEM=/nix/store/hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh-solnix-system-buildhost
+    TOPLEVEL=/nix/store/tttttttttttttttttttttttttttttttt-solnix-system-image
+    STORE_MODE=$1; ALTROOT="$W/seed.$1"; NIXROOT="$W/seednr.$1"; POOL=spool; COPIED=NOCOPY
+    die() { echo "DIE: $*"; exit 1; }; log() { :; }; step() { :; }; spin_start() { :; }; spin_stop() { :; }
+    _nixroot_mount() { :; }; _nixroot_umount() { :; }; run_to() { shift; "$@"; }
+    _nix_env() { shift; COPIED="$*"; for p in $*; do case "$p" in /nix/store/*) mkdir -p "$NIXROOT$p";; esac; done; }
+    . "$W/seed.sh"; seed_target_store; echo "$COPIED" )
+}
+_sh=$(run_seed host); _so=$(run_seed overlay)
+case "$_sh" in NOCOPY) echo "PASS  host mode: nothing seeded" ;; *) echo "FAIL  host mode seeded: $_sh"; FAILED=1 ;; esac
+case "$_so" in *buildhost*tttt*) echo "PASS  overlay (live media) mode still seeds the media closure + toplevel" ;; *) echo "FAIL  overlay seed: $_so"; FAILED=1 ;; esac
+
 echo "=== shared /var: the installer and the migration create the same datasets ==="
 _vi=$(sed -n 's/^VAR_SHARED="\(.*\)"$/\1/p' "$SCRIPT"); _vm=$(sed -n 's/^VAR_SHARED="\(.*\)"$/\1/p' "$(dirname "$SCRIPT")/solnix-migrate-var")
 if [ -n "$_vi" ] && [ "$_vi" = "$_vm" ]; then echo "PASS  VAR_SHARED matches: $_vi"

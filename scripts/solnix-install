@@ -1295,6 +1295,10 @@ _nixroot_mount() {
 _nixroot_umount() { umount "$NIXROOT/nix" 2>/dev/null || true; }
 
 seed_target_store() {
+  # host mode installs from a build host whose /run/current-system is the HOST's own system (its users, its packages):
+  # seeding it would put the build host's closure into the target store, and into a published image. nixos-install copies
+  # only the system being installed; realise_toplevel copies TOPLEVEL's closure in host mode, so there is nothing to seed.
+  [ "$STORE_MODE" = host ] && { log "host mode: no media seed (realise_toplevel copies $TOPLEVEL's closure only)"; return 0; }
   step "copying the media's store closure into $POOL/nix"
   _nixroot_mount
   _seed="$LIVE_SYSTEM"
