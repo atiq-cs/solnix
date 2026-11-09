@@ -32,7 +32,11 @@ env PKG_CLIENT_CONNECT_TIMEOUT=60 \
       developer/versioning/git \
       developer/versioning/patch \
       text/texinfo \
-      developer/object-file
+      developer/object-file \
+      file/gnu-coreutils
+# file/gnu-coreutils: the solnix builders that run on this host put /usr/gnu/bin first on PATH and some still parse GNU
+# output (illumos od zero-pads "001" where GNU od prints "1"; mk-proto-slice.nix's ET_REL check elfedited every kernel
+# module on an OI 2026.10 host without it, lixi11 2026-11-09). The fresh OI cloud image does not have it.
 
 # FIVE host prereqs an aarch64 gate build needs that were absent here, each found
 # the expensive way -- the build printed FAILED and the cause was a missing host
@@ -72,5 +76,6 @@ echo "=== verify ==="
 /usr/gcc/10/bin/gcc --version | head -1
 ls /opt/onbld/bin/nightly /opt/onbld/bin/bldenv
 ls /opt/onbld/bin/i386/ctfconvert /opt/onbld/bin/i386/ctfmerge
+/usr/gnu/bin/od --version 2>/dev/null | grep -q GNU || { echo "FATAL: no GNU od at /usr/gnu/bin/od (file/gnu-coreutils)" >&2; exit 1; }
 git --version
 echo "prerequisites OK"

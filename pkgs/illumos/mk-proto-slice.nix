@@ -380,7 +380,10 @@ derivation {
       # string there overwrote that NEEDED and krtld then failed every symbol
       # (measured on boot: "specfs: undefined symbol ... cannot load module").
       # Only executables and shared objects (ET_EXEC 2, ET_DYN 3) are relocated.
-      [ "$(od -An -tu1 -j16 -N1 "$f" | tr -d ' ')" = 1 ] && continue
+      # Arithmetic compare, as elfclass(): illumos od prints "001", GNU od "1" (a string compare against 1 elfedited every
+      # module on an OI host with no /usr/gnu/bin/od, lixi11 2026-11-09). An unreadable e_type is not 1: the file gets relocated.
+      t=$(od -An -tu1 -j16 -N1 "$f" 2>/dev/null | tr -d ' \n')
+      [ "$t" -eq 1 ] 2>/dev/null && continue
       # unix itself is ET_EXEC with a .dynamic (it is linked against genunix); it
       # is loaded by the boot loader, never by ld.so.1, so no RUNPATH either.
       case "$f" in */platform/*/kernel/*|*/kernel/*/genunix) continue;; esac
