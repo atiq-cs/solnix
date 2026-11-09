@@ -1,7 +1,7 @@
 # cli/c-recipes4.nix -- tools and libraries the x86 build queue has jobs for and solnix lacked (recipes4, 2026-11-09), picked by how many
 # queued jobs each moves to buildable. A new file, so no served drv moves. Store-only builds (nativeTools), each with an in-build check
 # that runs it on real input. Versions are the queue's targets; sources pinned by sha256 (equal to nixpkgs' flat hash where it has one).
-{ base, mkSrcPkg, world, chk, hostTools, autoreconfTools, autoreconf, python3, gnupatch, gnum4, cmake, perl, tcl, vulkan-headers, libogg, fmt, bzip2-bin, libxau, libxdmcp, libpthread-stubs, gtkMeson ? null, graphics, ... }:
+{ base, mkSrcPkg, world, chk, scrub, check, hostTools, autoreconfTools, autoreconf, python3, gnupatch, gnum4, cmake, perl, tcl, vulkan-headers, libogg, fmt, bzip2-bin, libxau, libxdmcp, libpthread-stubs, gtkMeson ? null, graphics, ... }:
 let
   fetch = url: sha256: import <nix/fetchurl.nix> { inherit url sha256; };
   # a C test program against the just-installed library: <src> <link flags>
@@ -1188,6 +1188,484 @@ int main(void){ csh h; cs_insn *i; static const unsigned char c[] = { 0x55, 0x48
 if (cs_open(CS_ARCH_X86, CS_MODE_64, &h) != CS_ERR_OK) return 1; size_t n = cs_disasm(h, c, sizeof c, 0x1000, 0, &i); if (n < 2) return 2;
 printf("ok %d.%d %zu %s %s %s\n", ma, mi, n, i[0].mnemonic, i[1].mnemonic, i[1].op_str); cs_free(i, n); cs_close(&h); return 0; }'' "$out/lib/amd64/libcapstone.so"}
       ${chk ''"$W/t"'' "^ok 5\\.0 3 push mov rbp, rsp$"}
+    '';
+  };
+
+  # ---- recipes7 batch 15: small libraries and tools the queue's jobs wait on ----------------------------------------------------
+  # libxcb-cursor (X11): the XCB port of libXcursor's theme loading (Qt's xcb platform, Xwayland compositors), on the xcb-util libs.
+  libxcb-cursor = xlib "libxcb-cursor" "0.1.6" "lib/xcb-util-cursor-0.1.6.tar.xz" "fdeb8bd127873519be5cc70dcd0d3b5d33b667877200f9925a59fdcad8f7a933"
+    [ libxcb libxcb-util libxcb-image libxcb-render-util ] (xcbT "#include <xcb/xcb_cursor.h>" "(void)xcb_cursor_context_new") "-lxcb-cursor -lxcb";
+
+  # imath (BSD-3-Clause): OpenEXR's half type and vector/matrix math. cmake, shared, as nixpkgs (tests off).
+  imath = mkSrcPkg {
+    pname = "imath"; version = "3.2.3";
+    src = { url = "https://codeload.github.com/AcademySoftwareFoundation/imath/tar.gz/refs/tags/v3.2.3";
+            sha256 = "e10c12b3f21f45bf08e09d4215d9c7691368d747beebd840de0b6fefed2df9f8"; };
+    deps = [ world ]; nativeTools = [ cmake base.pkgconf ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DBUILD_SHARED_LIBS=ON -DBUILD_TESTING=OFF"}
+      cat > "$W/t.cc" <<'TPROG'
+#include <ImathConfig.h>
+#include <ImathVec.h>
+#include <half.h>
+#include <cstdio>
+int main(){ Imath::V3f a(1, 2, 3), b(4, 5, 6); half h(0.333333f);
+std::printf("ok %s %g %g %g\n", IMATH_VERSION_STRING, a.dot(b), (float)h, a.cross(b).length2()); }
+TPROG
+      "$CXX" -std=c++17 "$W/t.cc" $(PKG_CONFIG_PATH="$out/lib/amd64/pkgconfig" pkg-config --cflags --libs Imath) -Wl,-R,"$out/lib/amd64" -o "$W/t"
+      ${chk ''"$W/t"'' "^ok 3\\.2\\.3 32 0\\.3332[0-9]* 54$"}
+    '';
+  };
+
+  # qhull (Qhull): convex hulls, Delaunay triangulations and Voronoi diagrams (libqhull_r and the q* programs). cmake; as nixpkgs,
+  # upstream's CMake 4 minimum-version fix.
+  qhull = mkSrcPkg {
+    pname = "qhull"; version = "2020.2";
+    src = { url = "https://codeload.github.com/qhull/qhull/tar.gz/refs/tags/2020.2";
+            sha256 = "59356b229b768e6e2b09a701448bfa222c37b797a84f87f864f97462d8dbc7c5"; };
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      grep -qx 'cmake_minimum_required(VERSION 3.0)' CMakeLists.txt || { echo "FATAL: qhull cmake_minimum anchor" >&2; exit 1; }
+      sed -i 's/^cmake_minimum_required(VERSION 3.0)$/cmake_minimum_required(VERSION 3.5...4.0)/' CMakeLists.txt
+      ${cmakeB "-DLIB_INSTALL_DIR=lib/amd64"}
+      find "$out/share/doc" -delete 2>/dev/null || true
+      # the corners of a cube: 8 points, 6 facets
+      ${chk ''"$out/bin/rbox" c D3 | "$out/bin/qconvex" s'' "Convex hull of 8 points in 3-d"}
+      ${chk ''"$out/bin/rbox" c D3 | "$out/bin/qconvex" s'' "Number of facets: 6$"}
+    '';
+  };
+
+  # zopfli (Apache-2.0): Google's slow, dense deflate/zlib/gzip compressor (libzopfli, libzopflipng and the programs). cmake, shared;
+  # as nixpkgs: the CMake 4 minimum version, and all of src/zopfli's headers installed.
+  zopfli = mkSrcPkg {
+    pname = "zopfli"; version = "1.0.3";
+    src = { url = "https://codeload.github.com/google/zopfli/tar.gz/refs/tags/zopfli-1.0.3";
+            sha256 = "e955a7739f71af37ef3349c4fa141c648e8775bceb2195be07e86f8e638814bd"; };
+    deps = [ world ]; linkDeps = [ zlib ]; nativeTools = [ cmake ] ++ hostTools;   # zlib: the check's inflate only
+    build = ''
+      grep -qx 'cmake_minimum_required(VERSION 2.8.11)' CMakeLists.txt || { echo "FATAL: zopfli cmake_minimum anchor" >&2; exit 1; }
+      sed -i 's/^cmake_minimum_required(VERSION 2.8.11)$/cmake_minimum_required(VERSION 3.10)/' CMakeLists.txt
+      ${cmakeB "-DBUILD_SHARED_LIBS=ON"}
+      cp src/zopfli/*.h "$out/include/"
+      printf 'solnix solnix solnix solnix\n' > "$W/in"
+      ${chk ''"$out/bin/zopfli" -c "$W/in" | od -An -tx1 -N3'' "1f 8b 08"}
+      # zlib format through the library, inflated back by zlib
+      ${tprog ''#include <zopfli.h>
+#include <zlib.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+int main(void){ static unsigned char in[4096], out[4096]; for (int i = 0; i < 4096; i++) in[i] = "solnix "[i % 7];
+ZopfliOptions o; ZopfliInitOptions(&o); unsigned char *z = NULL; size_t zn = 0; ZopfliCompress(&o, ZOPFLI_FORMAT_ZLIB, in, sizeof in, &z, &zn);
+uLongf on = sizeof out; int r = uncompress(out, &on, z, zn);
+printf("ok %d %d %d\n", r == Z_OK, (int)on, memcmp(in, out, sizeof in) == 0 && zn < 100); free(z); return 0; }'' "$out/lib/amd64/libzopfli.so ${zlib}/lib/amd64/libz.so -Wl,-R,${zlib}/lib/amd64"}
+      ${chk ''"$W/t"'' "^ok 1 4096 1$"}
+    '';
+  };
+
+  # utf8proc (MIT): Unicode normalisation, case folding and character widths (tmux, Julia, arrow). cmake, shared (its tests download
+  # the Unicode data files at configure time, so they stay off).
+  utf8proc = mkSrcPkg {
+    pname = "utf8proc"; version = "2.12.0";
+    src = { url = "https://codeload.github.com/JuliaStrings/utf8proc/tar.gz/refs/tags/v2.12.0";
+            sha256 = "f564011d38b2888d583d510b08e69ffa15aa117155db1b9b49ef1dfe1fa25111"; };
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DBUILD_SHARED_LIBS=ON -DUTF8PROC_ENABLE_TESTING=OFF"}
+      # e + COMBINING ACUTE composes to U+00E9; a CJK ideograph is two columns wide
+      ${tprog ''#include <utf8proc.h>
+#include <stdio.h>
+#include <stdlib.h>
+int main(void){ utf8proc_uint8_t *n = utf8proc_NFC((const utf8proc_uint8_t *)"e\xcc\x81"); if (!n) return 1;
+printf("ok %s %02x%02x %d %d\n", utf8proc_version(), n[0], n[1], (int)n[2], utf8proc_charwidth(0x4e2d)); free(n); return 0; }'' "$out/lib/amd64/libutf8proc.so"}
+      ${chk ''"$W/t"'' "^ok 2\\.12\\.0 c3a9 0 2$"}
+    '';
+  };
+
+  # libmodplug (public domain): the ModPlug tracker-module renderer (MOD/S3M/XM/IT; gstreamer, ffmpeg's libmodplug demuxer).
+  # autotools; as nixpkgs: the `register` storage class out of fastmix.cpp (C++17, gcc's default, rejects it).
+  libmodplug = mkSrcPkg {
+    pname = "libmodplug"; version = "0.8.9.0";
+    src = { url = "https://downloads.sourceforge.net/project/modplug-xmms/libmodplug/0.8.9.0/libmodplug-0.8.9.0.tar.gz";
+            sha256 = "457ca5a6c179656d66c01505c0d95fafaead4329b9dbaa0f997d00a3508ad9de"; };
+    deps = [ world ]; nativeTools = hostTools;
+    build = ''
+      [ "$(grep -c 'register ' src/fastmix.cpp)" = 2 ] || { echo "FATAL: libmodplug register anchor" >&2; exit 1; }
+      sed -i 's/register //g' src/fastmix.cpp
+      # -L gcc.lib: a C++ library through libtool, which otherwise bakes libstdc++.la's dir in as -R (zimg's closure-gate failure)
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static LDFLAGS="-L$gccLib/amd64"
+      gmake -j8; gmake install
+      # a 4-channel ProTracker module built in memory (title, one 32-byte sample, one empty pattern) loads and renders; the loader
+      # refuses a module with no sample data (measured)
+      ${tprog ''#include <libmodplug/modplug.h>
+#include <stdio.h>
+#include <string.h>
+static unsigned char m[1084 + 1024 + 32]; static char b[4096];
+int main(void){ memcpy(m, "solnix", 6); m[43] = 16; m[45] = 64; m[950] = 1; m[951] = 127; memcpy(m + 1080, "M.K.", 4);
+for (int i = 0; i < 32; i++) m[1084 + 1024 + i] = (unsigned char)(i * 8);
+ModPlugFile *f = ModPlug_Load(m, sizeof m); if (!f) return 1; int n = ModPlug_Read(f, b, sizeof b);
+printf("ok %s %u %d\n", ModPlug_GetName(f), ModPlug_NumPatterns(f), n > 0); ModPlug_Unload(f); return 0; }'' "$out/lib/amd64/libmodplug.so"}
+      ${chk ''"$W/t"'' "^ok solnix 1 1$"}
+    '';
+  };
+
+  # libmaxminddb (Apache-2.0): the MaxMind DB (GeoIP2 .mmdb) reader library and mmdblookup. autotools, as nixpkgs.
+  libmaxminddb = mkSrcPkg {
+    pname = "libmaxminddb"; version = "1.13.3";
+    src = { url = "https://github.com/maxmind/libmaxminddb/releases/download/1.13.3/libmaxminddb-1.13.3.tar.gz";
+            sha256 = "a66502ea76eadbe17f2cd6fd708946777253972d2ae8157dee1b23a2fb528171"; };
+    deps = [ world ]; nativeTools = hostTools;
+    build = ''
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-tests
+      gmake -j8; gmake install
+      find "$out/share/doc" -delete 2>/dev/null || true
+      # upstream's GeoIP2 test database (in the tarball): an address it lists, through the tool and through the library
+      D=t/maxmind-db/test-data/GeoIP2-City-Test.mmdb
+      ${chk ''"$out/bin/mmdblookup" --file "$D" --ip 81.2.69.160 country iso_code'' "\"GB\" <utf8_string>"}
+      ${tprog ''#include <maxminddb.h>
+#include <stdio.h>
+int main(int c, char **v){ MMDB_s db; int ge = 0, me = 0; if (c < 2 || MMDB_open(v[1], MMDB_MODE_MMAP, &db) != MMDB_SUCCESS) return 1;
+MMDB_lookup_result_s r = MMDB_lookup_string(&db, "81.2.69.160", &ge, &me); if (ge || me != MMDB_SUCCESS || !r.found_entry) return 2;
+MMDB_entry_data_s d; if (MMDB_get_value(&r.entry, &d, "country", "iso_code", NULL) != MMDB_SUCCESS || !d.has_data) return 3;
+printf("ok %s %.*s\n", MMDB_lib_version(), (int)d.data_size, d.utf8_string); MMDB_close(&db); return 0; }'' "$out/lib/amd64/libmaxminddb.so"}
+      ${chk ''"$W/t" "$D"'' "^ok 1\\.13\\.3 GB$"}
+    '';
+  };
+
+  # gsm (TU-Berlin, BSD-2-Clause-like): the GSM 06.10 full-rate speech codec (libgsm, toast; sox, ffmpeg). Its plain Makefile; as
+  # nixpkgs: headers in include/gsm, a shared libgsm.so (soname libgsm.so) in place of the archive, built serially. Here also: -fPIC
+  # (nixpkgs' cc wrapper adds it), and the install rules' inner `make` is the build's GNU make (illumos make is not GNU make).
+  gsm = mkSrcPkg {
+    pname = "gsm"; version = "1.0.24";
+    src = { url = "https://www.quut.com/gsm/gsm-1.0.24.tar.gz";
+            sha256 = "a3c40c6471928383f4abfcb2e8f24012a1f562be2f17b8d672145d5986681a92"; };
+    deps = [ world ]; nativeTools = hostTools;
+    build = ''
+      grep -qF '$(AR) $(ARFLAGS) $(LIBGSM) $(GSM_OBJECTS)' Makefile && grep -qF '$(RANLIB) $(LIBGSM)' Makefile \
+        && [ "$(grep -cE '^[[:space:]]+make \$\(' Makefile)" = 2 ] || { echo "FATAL: gsm Makefile anchors" >&2; exit 1; }
+      sed -i -e 's,libgsm\.a,libgsm.so,g' \
+        -e 's/\$(AR) \$(ARFLAGS) \$(LIBGSM) \$(GSM_OBJECTS)/$(LD) -shared -Wl,-h,libgsm.so -o $(LIBGSM) $(GSM_OBJECTS) -lc/' \
+        -e '/\$(RANLIB) \$(LIBGSM)/d' -e 's/^\([[:space:]]*\)make \$(/\1$(MAKE) $(/' Makefile
+      mkdir -p "$out/bin" "$out/lib/amd64" "$out/include/gsm" "$out/share/man/man1" "$out/share/man/man3"
+      set -- SHELL="$BASH" CC="$CC" CCFLAGS="-c -O2 -fPIC -DNeedFunctionPrototypes=1 -Wall -Wno-comment" INSTALL_ROOT="$out" \
+        GSM_INSTALL_LIB="$out/lib/amd64" GSM_INSTALL_INC="$out/include/gsm" GSM_INSTALL_MAN="$out/share/man/man3" TOAST_INSTALL_MAN="$out/share/man/man1"
+      gmake "$@"; gmake "$@" install
+      [ -x "$out/bin/toast" ] && [ -f "$out/lib/amd64/libgsm.so" ] || { echo "FATAL: gsm install" >&2; exit 1; }
+      # one 20 ms frame of a tone encoded to its 33 bytes and decoded back
+      ${tprog ''#include <gsm/gsm.h>
+#include <stdio.h>
+#include <math.h>
+int main(void){ gsm g = gsm_create(); gsm_signal s[160], o[160]; gsm_frame f; if (!g) return 1;
+for (int i = 0; i < 160; i++) s[i] = (gsm_signal)(8000 * sin(i * 0.2));
+gsm_encode(g, s, f); gsm_destroy(g); g = gsm_create(); if (!g || gsm_decode(g, f, o)) return 2; gsm_destroy(g);
+printf("ok %d %d.%d.%d\n", (int)sizeof(gsm_frame), GSM_MAJOR, GSM_MINOR, GSM_PATCHLEVEL); return 0; }'' "$out/lib/amd64/libgsm.so -lm"}
+      ${chk ''"$W/t"'' "^ok 33 1\\.0\\.24$"}
+    '';
+  };
+
+  # inih (BSD-3-Clause): the small .INI parser (libinih, libINIReader). meson, as nixpkgs.
+  inih = mkSrcPkg {
+    pname = "inih"; version = "62";
+    src = { url = "https://codeload.github.com/benhoyt/inih/tar.gz/refs/tags/r62";
+            sha256 = "9c15fa751bb8093d042dae1b9f125eb45198c32c6704cd5481ccde460d4f8151"; };
+    deps = [ world ]; nativeTools = mesonTools;
+    build = ''
+      ${mesonBuild ""}
+      ${tprog ''#include <ini.h>
+#include <stdio.h>
+#include <string.h>
+static int h(void *u, const char *s, const char *n, const char *v){ if (!strcmp(s, "a") && !strcmp(n, "k")) snprintf((char *)u, 32, "%s", v); return 1; }
+int main(void){ char got[32] = ""; int r = ini_parse_string("[a]\nk = solnix ; note\n[b]\nk=x\n", h, got); printf("ok %d %s\n", r, got); return 0; }'' "$out/lib/amd64/libinih.so"}
+      ${chk ''"$W/t"'' "^ok 0 solnix$"}
+    '';
+  };
+
+  # hiredis (BSD-3-Clause): the Redis client library, with TLS (libhiredis_ssl), as nixpkgs (USE_SSL=1). Its Makefile has the SunOS
+  # case upstream (-h soname, -lsocket -lnsl).
+  hiredis = mkSrcPkg {
+    pname = "hiredis"; version = "1.5.0";
+    src = { url = "https://codeload.github.com/redis/hiredis/tar.gz/refs/tags/v1.5.0";
+            sha256 = "eec7ef8641d221e144a58d5ef8d733c8c75c7fd487097a233aacb4fa33981cfb"; };
+    deps = [ world base.openssl ]; nativeTools = hostTools;
+    build = ''
+      gmake -j8 USE_SSL=1 PREFIX="$out" LIBRARY_PATH=lib/amd64
+      gmake USE_SSL=1 PREFIX="$out" LIBRARY_PATH=lib/amd64 install
+      # a RESP array parsed by the reader (no server), and OpenSSL initialised through libhiredis_ssl
+      ${tprog ''#include <hiredis/hiredis.h>
+#include <hiredis/hiredis_ssl.h>
+#include <stdio.h>
+#include <string.h>
+int main(void){ redisReader *r = redisReaderCreate(); void *rep = NULL; const char *m = "*2\r\n+solnix\r\n:42\r\n";
+if (!r || redisReaderFeed(r, m, strlen(m)) != REDIS_OK || redisReaderGetReply(r, &rep) != REDIS_OK || !rep) return 1; redisReply *x = rep;
+printf("ok %d.%d.%d %d %s %lld %d\n", HIREDIS_MAJOR, HIREDIS_MINOR, HIREDIS_PATCH, (int)x->elements, x->element[0]->str, x->element[1]->integer,
+ redisInitOpenSSL() == REDIS_OK); freeReplyObject(rep); redisReaderFree(r); return 0; }'' "$out/lib/amd64/libhiredis.so $out/lib/amd64/libhiredis_ssl.so"}
+      ${chk ''"$W/t"'' "^ok 1\\.5\\.0 2 solnix 42 1$"}
+    '';
+  };
+
+  # aws-c-common (Apache-2.0): the AWS C SDK's base library (allocators, byte buffers, encodings, threads). cmake, shared, as nixpkgs
+  # (its tests off). SunOS takes upstream's generic branch (the fallback system-info stubs). Its own -D_POSIX_C_SOURCE/-D_XOPEN_SOURCE
+  # make illumos headers strict, which hides flock(3C) (cross_process_lock.c): -D__EXTENSIONS__, as glibc exposes it there.
+  # cmake/AwsCFlags.cmake (installed, and used by every aws-c-* library) links with GNU ld's -Wl,--exclude-libs,libcrypto.a on any
+  # non-Apple UNIX; illumos ld has no such option and nothing here links a static libcrypto: not on SunOS. Upstream's generic branch
+  # (any OS it does not name) links no libm, so the library left round() unresolved for every consumer (the check's link failed):
+  # SunOS gets the BSDs' platform libraries (dl m Threads) with the same fallback sources.
+  aws-c-common = mkSrcPkg {
+    pname = "aws-c-common"; version = "1.0.0";
+    src = { url = "https://codeload.github.com/awslabs/aws-c-common/tar.gz/refs/tags/v1.0.0";
+            sha256 = "94de89f65d4917dd7381679ea3297d7304c43338158fa7bec190fa53c218ce90"; };
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      f=cmake/AwsCFlags.cmake
+      [ "$(grep -c 'exclude-libs' $f)" = 1 ] && [ "$(grep -cx '        if (UNIX AND NOT APPLE)' $f)" = 1 ] || { echo "FATAL: aws-c-common exclude-libs anchor" >&2; exit 1; }
+      sed -i 's/^        if (UNIX AND NOT APPLE)$/        if (UNIX AND NOT APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "SunOS")/' $f
+      [ "$(grep -cx '    elseif(CMAKE_SYSTEM_NAME STREQUAL "Android")' CMakeLists.txt)" = 1 ] || { echo "FATAL: aws-c-common platform anchor" >&2; exit 1; }
+      cat > "$W/sun.cmake" <<'SUN'
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "SunOS")
+        list(APPEND PLATFORM_LIBS dl m Threads::Threads)
+        list (APPEND AWS_COMMON_OS_SRC "source/platform_fallback_stubs/system_info.c")
+        list (APPEND AWS_COMMON_OS_SRC "source/platform_fallback_stubs/file_direct_io.c")
+SUN
+      n=$(grep -nx '    elseif(CMAKE_SYSTEM_NAME STREQUAL "Android")' CMakeLists.txt | cut -d: -f1); sed -i "$((n - 1))r $W/sun.cmake" CMakeLists.txt
+      ${cmakeB "-DBUILD_SHARED_LIBS=ON -DBUILD_TESTING=OFF -DCMAKE_C_FLAGS=-D__EXTENSIONS__"}
+      /usr/bin/elfdump -d "$out/lib/amd64/libaws-c-common.so" | grep -q 'NEEDED .*libm\.so' || { echo "FATAL: libaws-c-common does not need libm" >&2; exit 1; }
+      grep -q 'NOT CMAKE_SYSTEM_NAME STREQUAL "SunOS")' "$out/lib/amd64/cmake/aws-c-common/modules/AwsCFlags.cmake" || { echo "FATAL: installed AwsCFlags.cmake unpatched" >&2; exit 1; }
+      ${tprog ''#include <aws/common/common.h>
+#include <aws/common/encoding.h>
+#include <stdio.h>
+int main(void){ struct aws_allocator *a = aws_default_allocator(); aws_common_library_init(a);
+struct aws_byte_cursor in = aws_byte_cursor_from_c_str("solnix"); struct aws_byte_buf out; if (aws_byte_buf_init(&out, a, 16)) return 1;
+if (aws_base64_encode(&in, &out)) return 2; printf("ok %.8s\n", (const char *)out.buffer); aws_byte_buf_clean_up(&out); aws_common_library_clean_up(); return 0; }'' "$out/lib/amd64/libaws-c-common.so"}
+      ${chk ''"$W/t"'' "^ok c29sbml4$"}
+    '';
+  };
+
+  # libvdpau (MIT): the VDPAU video-decode wrapper, which loads a vendor backend at run time. meson; as nixpkgs: drivers from
+  # /run/opengl-driver/lib/vdpau, and its patch that loads libvdpau_trace.so.1 by name from the library's own lib dir.
+  libvdpau = mkSrcPkg {
+    pname = "libvdpau"; version = "1.5";
+    src = { url = "https://gitlab.freedesktop.org/vdpau/libvdpau/-/archive/1.5/libvdpau-1.5.tar.bz2";
+            sha256 = "a5d50a42b8c288febc07151ab643ac8de06a18446965c7241f89b4e810821913"; };
+    deps = [ world libx11 libxext ]; linkDeps = [ base.xorgproto libxcb libxau libxdmcp ]; nativeTools = [ bzip2-bin gnupatch ] ++ mesonTools;
+    build = ''
+      patch -p1 < ${fetch "https://raw.githubusercontent.com/NixOS/nixpkgs/f4a03c008967841f2a0b3cb7c436fc6fc31671f6/pkgs/by-name/li/libvdpau/tracing.patch" "30bb640ab9c2157cf9cc29c4a49755a689d6af2fd2368435b2b0ebb1b8ce35f5"}
+      ${mesonBuild "-Dmoduledir=/run/opengl-driver/lib/vdpau"}
+      [ -f "$out/lib/amd64/libvdpau_trace.so.1" ] || { echo "FATAL: libvdpau: no trace library in lib/amd64" >&2; exit 1; }
+      # no backend named solnixnone exists: the wrapper must report NO_IMPLEMENTATION (the display is never touched on that path)
+      ${tprog ''#include <vdpau/vdpau_x11.h>
+#include <stdio.h>
+int main(void){ VdpDevice d; VdpGetProcAddress *g; VdpStatus s = vdp_device_create_x11(NULL, 0, &d, &g); printf("ok %d\n", s == VDP_STATUS_NO_IMPLEMENTATION); return 0; }'' "$out/lib/amd64/libvdpau.so"}
+      ${chk ''VDPAU_DRIVER=solnixnone VDPAU_DRIVER_PATH="$W" "$W/t"'' "^ok 1$"}
+    '';
+  };
+
+  # rpcsvc-proto (MIT and BSD-3-Clause): rpcgen and the rpcsvc/*.x protocol files (with their generated headers) that glibc dropped.
+  # Tag tarball: autoreconf. As nixpkgs: upstream's RPCGEN_CPP/CPP patch. Its po/ ships no catalogs and the served gettext has no
+  # autopoint, so gettext is taken out of the build (rpcgen without NLS). The build runs the new rpcgen over rpcsvc/*.x: -Y names the
+  # compiler's cpp, so a build host's /lib/cpp (which rpcgen tries first) is never used.
+  rpcsvc-proto = mkSrcPkg {
+    pname = "rpcsvc-proto"; version = "1.4.4";
+    src = { url = "https://codeload.github.com/thkukuk/rpcsvc-proto/tar.gz/refs/tags/v1.4.4";
+            sha256 = "7988641deae8463303b6273d7af98ece09111c385d4c9134a142a5fad3cdfef8"; };
+    deps = [ world ]; nativeTools = autoreconfTools ++ [ gnupatch ] ++ hostTools;
+    build = ''
+      patch -p1 < ${fetch "https://github.com/thkukuk/rpcsvc-proto/commit/e772270774ff45172709e39f744cab875a816667.diff" "983e1857dce37812a854058e616db9abe3de7605c0c007702a8787cd977b80ac"}
+      [ "$(grep -c '^AM_GNU_GETTEXT' configure.ac)" = 3 ] && grep -q ' po/Makefile.in\])$' configure.ac && grep -qx 'SUBDIRS = rpcgen rpcsvc po' Makefile.am \
+        && grep -qF '$(top_builddir)/rpcgen/rpcgen -h -o $@ $<' rpcsvc/Makefile.am || { echo "FATAL: rpcsvc-proto anchors" >&2; exit 1; }
+      sed -i -e '/^AM_GNU_GETTEXT/d' -e 's| po/Makefile.in\])$|])|' configure.ac
+      sed -i 's/^SUBDIRS = rpcgen rpcsvc po$/SUBDIRS = rpcgen rpcsvc/' Makefile.am
+      grep -qx 'rpcgen_LDADD = $(LIBINTL)' rpcgen/Makefile.am || { echo "FATAL: rpcsvc-proto LIBINTL anchor" >&2; exit 1; }
+      sed -i '/^rpcgen_LDADD = \$(LIBINTL)$/d' rpcgen/Makefile.am
+      # rindex(3C) is declared only in illumos <strings.h> (glibc: <string.h> too): its standard name
+      [ "$(grep -c 'rindex (' rpcgen/rpc_main.c)" = 1 ] || { echo "FATAL: rpcsvc-proto rindex anchor" >&2; exit 1; }
+      sed -i 's/rindex (/strrchr (/' rpcgen/rpc_main.c
+      sed -i "s|\$(top_builddir)/rpcgen/rpcgen -h -o|\$(top_builddir)/rpcgen/rpcgen -Y $gcc/bin -h -o|" rpcsvc/Makefile.am
+      mkdir -p m4
+      ${autoreconf}
+      ./configure --prefix="$out"
+      gmake -j8; gmake install
+      [ -f "$out/include/rpcsvc/rstat.h" ] && [ -f "$out/include/rpcsvc/rstat.x" ] || { echo "FATAL: rpcsvc-proto: no rpcsvc/rstat.{h,x}" >&2; exit 1; }
+      printf 'struct solnix { int n; string s<>; };\nprogram P { version V { int F(solnix) = 1; } = 1; } = 0x20000001;\n' > "$W/t.x"
+      ${chk ''cd "$W" && "$out/bin/rpcgen" -Y "$gcc/bin" -h t.x'' "^struct solnix \\{"}
+    '';
+  };
+
+  # fast-float (Apache-2.0 / BSL-1.0 / MIT): header-only fast from_chars for floats. cmake install, the queue's 8.3.2.
+  fast-float = mkSrcPkg {
+    pname = "fast-float"; version = "8.3.2";
+    src = { url = "https://codeload.github.com/fastfloat/fast_float/tar.gz/refs/tags/v8.3.2";
+            sha256 = "71bb9e865b888df01351558db5a39586d13ea97ada162156b3a07784d8c1b26b"; };
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DFASTFLOAT_TEST=OFF"}
+      cat > "$W/t.cc" <<'TPROG'
+#include <fast_float/fast_float.h>
+#include <cstdio>
+#include <cstring>
+int main(){ const char *s = "3.14159 rest"; double d = 0; auto r = fast_float::from_chars(s, s + std::strlen(s), d);
+std::printf("ok %s %.5f %d %c\n", FASTFLOAT_VERSION_STR, d, r.ec == std::errc(), *r.ptr == ' ' ? 's' : 'x'); }
+TPROG
+      "$CXX" -std=c++17 -I"$out/include" "$W/t.cc" -o "$W/t"
+      ${chk ''"$W/t"'' "^ok 8\\.3\\.2 3\\.14159 1 s$"}
+    '';
+  };
+
+  # simdjson (Apache-2.0): SIMD JSON parsing, shared, as nixpkgs (developer mode off), the queue's 4.6.11.
+  simdjson = mkSrcPkg {
+    pname = "simdjson"; version = "4.6.11";
+    src = { url = "https://codeload.github.com/simdjson/simdjson/tar.gz/refs/tags/v4.6.11";
+            sha256 = "61d948fc24f0d793829ad658058e7597d064988a89b4607ea02e401a82df98ff"; };
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DSIMDJSON_DEVELOPER_MODE=OFF -DBUILD_SHARED_LIBS=ON"}
+      cat > "$W/t.cc" <<'TPROG'
+#include <simdjson.h>
+#include <iostream>
+int main(){ simdjson::dom::parser p; simdjson::padded_string j(std::string("{\"a\":[1,2,3],\"s\":\"solnix\"}"));
+simdjson::dom::element e = p.parse(j); simdjson::dom::array a = e["a"]; std::string_view s = e["s"];
+std::cout << "ok " << SIMDJSON_VERSION << " " << a.size() << " " << s << " " << int64_t(a.at(2)) << "\n"; }
+TPROG
+      "$CXX" -std=c++17 -I"$out/include" "$W/t.cc" "$out/lib/amd64/libsimdjson.so" -Wl,-R,"$out/lib/amd64" -o "$W/t"
+      ${chk ''"$W/t"'' "^ok 4\\.6\\.11 3 solnix 3$"}
+    '';
+  };
+
+  # byacc (public domain): Berkeley yacc, as nixpkgs: installed as byacc (--program-transform-name), with yacc linked to it.
+  byacc = mkSrcPkg {
+    pname = "byacc"; version = "20260126";
+    src = { url = "https://invisible-mirror.net/archives/byacc/byacc-20260126.tgz";
+            sha256 = "b618c5fb44c2f5f048843db90f7d1b24f78f47b07913c8c7ba8c942d3eb24b00"; };
+    deps = [ world ]; nativeTools = hostTools;
+    build = ''
+      ./configure --prefix="$out" "--program-transform-name=s,^,b,"
+      gmake -j8; gmake install
+      ln -s "$out/bin/byacc" "$out/bin/yacc"
+      ${chk ''"$out/bin/byacc" -V'' "2\\.0 20260126"}
+      # a precedence grammar through yacc, compiled and run: 2+3*4
+      cat > "$W/t.y" <<'YACC'
+%{
+#include <stdio.h>
+int yylex(void); void yyerror(const char *);
+%}
+%token D
+%left '+'
+%left '*'
+%%
+s : e { printf("ok %d\n", $1); } ;
+e : e '+' e { $$ = $1 + $3; } | e '*' e { $$ = $1 * $3; } | D ;
+%%
+static const char *p = "2+3*4";
+int yylex(void){ if (!*p) return 0; if (*p >= '0' && *p <= '9') { yylval = *p++ - '0'; return D; } return *p++; }
+void yyerror(const char *m){ fprintf(stderr, "%s\n", m); }
+int main(void){ return yyparse(); }
+YACC
+      ( cd "$W" && "$out/bin/yacc" t.y && "$CC" y.tab.c -o tcalc )
+      ${chk ''"$W/tcalc"'' "^ok 14$"}
+    '';
+  };
+
+  # woff2 (MIT): Google's WOFF2 font compression (libwoff2common/dec/enc and woff2_compress/decompress/info), on the nix chain's brotli.
+  # cmake; as nixpkgs: the programs in a shared build too, and the CMake 4 minimum version.
+  woff2 = mkSrcPkg {
+    pname = "woff2"; version = "1.0.2";
+    src = { url = "https://codeload.github.com/google/woff2/tar.gz/refs/tags/v1.0.2";
+            sha256 = "add272bb09e6384a4833ffca4896350fdb16e0ca22df68c0384773c67a175594"; };
+    deps = [ world base.nixChain.brotli ]; nativeTools = [ cmake base.pkgconf ] ++ hostTools;
+    build = ''
+      grep -qx 'if (NOT BUILD_SHARED_LIBS)' CMakeLists.txt && grep -qx 'cmake_minimum_required(VERSION 2.8.6)' CMakeLists.txt \
+        || { echo "FATAL: woff2 CMakeLists anchors" >&2; exit 1; }
+      sed -i -e 's/^if (NOT BUILD_SHARED_LIBS)$/if (TRUE)/' -e 's/^cmake_minimum_required(VERSION 2.8.6)$/cmake_minimum_required(VERSION 3.10)/' CMakeLists.txt
+      ${cmakeB "-DCANONICAL_PREFIXES=ON -DBUILD_SHARED_LIBS=ON"}
+      # a real font (Noto Sans) to WOFF2 and back to an sfnt
+      cp ${noto-sans}/share/fonts/noto/NotoSans-Regular.ttf "$W/n.ttf"
+      "$out/bin/woff2_compress" "$W/n.ttf" >&2
+      ${chk ''od -An -c -N4 "$W/n.woff2"'' "w +O +F +2"}
+      mkdir "$W/d"; cp "$W/n.woff2" "$W/d/"; "$out/bin/woff2_decompress" "$W/d/n.woff2" >&2
+      ${chk ''od -An -tx1 -N4 "$W/d/n.ttf"'' "00 01 00 00"}
+    '';
+  };
+
+  # hdf5-cpp (BSD-3-Clause): HDF5 1.14.6 with its C++ and high-level libraries, zlib and szip (libaec) filters, and the h5* tools;
+  # nixpkgs' hdf5 with cppSupport (its cmake flags; the -shared suffix off the tools; Arch's reproducibility patch, which drops the
+  # build host's uname from libhdf5.settings). Tests and examples are not built (neither is installed). ${scrub} turns the build's
+  # compiler wrappers into plain gcc/g++ in libhdf5.settings and the h5cc scripts, as nixpkgs' remove-references-to does.
+  hdf5-cpp = mkSrcPkg {
+    pname = "hdf5-cpp"; version = "1.14.6";
+    src = { url = "https://codeload.github.com/HDFGroup/hdf5/tar.gz/refs/tags/hdf5_1.14.6";
+            sha256 = "09ee1c671a87401a5201c06106650f62badeea5a3b3941e9b1e2e1e08317357f"; };
+    deps = [ world zlib libaec ]; nativeTools = [ cmake gnupatch ] ++ hostTools;
+    build = ''
+      patch -p1 < ${fetch "https://gitlab.archlinux.org/archlinux/packaging/packages/hdf5/-/raw/721d33408db902ff738db18f1e977611d49b4ba8/hdf5-make-reproducible.patch" "37eb26bd2fab59299401c5702b8f0ad23a57e6368a257c426f7ef5ed0ef5c9ca"}
+      # "Configured on" is SOURCE_DATE_EPOCH (1980-01-01T00:00Z) in the build host's local zone: lixi (US Eastern) wrote 1979-12-31 and
+      # woof (UTC) 1980-01-01, in libhdf5.so and libhdf5.settings (cross-host compare, --check SAME on each). In UTC, as NixOS's sandbox is.
+      grep -qx 'string (TIMESTAMP CONFIG_DATE "%Y-%m-%d")' CMakeLists.txt || { echo "FATAL: hdf5 CONFIG_DATE anchor" >&2; exit 1; }
+      sed -i 's/^string (TIMESTAMP CONFIG_DATE "%Y-%m-%d")$/string (TIMESTAMP CONFIG_DATE "%Y-%m-%d" UTC)/' CMakeLists.txt
+      ${builtins.replaceStrings [ "cmake --build _b -j16" ] [ "cmake --build _b -j\${NIX_BUILD_CORES:-4}" ] (cmakeB ("-DHDF5_INSTALL_LIB_DIR=lib/amd64 -DHDF5_INSTALL_CMAKE_DIR=lib/amd64/cmake "
+        + "-DBUILD_STATIC_LIBS=OFF -DBUILD_SHARED_LIBS=ON -DHDF5_BUILD_CPP_LIB=ON -DHDF5_BUILD_FORTRAN=OFF -DHDF5_ENABLE_SZIP_SUPPORT=ON "
+        + "-DHDF5_ENABLE_PARALLEL=OFF -DHDF5_BUILD_JAVA=OFF -DHDF5_ENABLE_THREADSAFE=OFF -DHDF5_BUILD_HL_LIB=ON -DHDF5_ENABLE_NONSTANDARD_FEATURE_FLOAT16=ON "
+        + "-DBUILD_TESTING=OFF -DHDF5_BUILD_EXAMPLES=OFF -Dlibaec_DIR=${libaec}/lib/amd64/cmake/libaec "
+        + "-DZLIB_ROOT=${zlib} -DZLIB_LIBRARY=${zlib}/lib/amd64/libz.so -DZLIB_INCLUDE_DIR=${zlib}/include"))}
+      for f in "$out"/bin/*-shared; do [ -e "$f" ] || continue; mv "$f" "''${f%-shared}"; done
+      ${scrub}
+      ${chk ''"$out/bin/h5dump" --version'' "h5dump: Version 1\\.14\\.6"}
+      # a chunked, deflated dataset written and read back through the C++ API; the szip filter is present
+      cat > "$W/t.cc" <<'TPROG'
+#include <H5Cpp.h>
+#include <iostream>
+int main(int c, char **v){ int a[4] = { 1, 2, 3, 42 }, b[4] = { 0 }; hsize_t d[1] = { 4 }, ch[1] = { 4 }; if (c < 2) return 1;
+{ H5::H5File f(v[1], H5F_ACC_TRUNC); H5::DSetCreatPropList pl; pl.setChunk(1, ch); pl.setDeflate(6);
+  H5::DataSet s = f.createDataSet("n", H5::PredType::NATIVE_INT, H5::DataSpace(1, d), pl); s.write(a, H5::PredType::NATIVE_INT); }
+H5::H5File f(v[1], H5F_ACC_RDONLY); f.openDataSet("n").read(b, H5::PredType::NATIVE_INT);
+unsigned ma, mi, re; H5get_libversion(&ma, &mi, &re); std::cout << "ok " << ma << "." << mi << "." << re << " " << b[3] << " " << (H5Zfilter_avail(H5Z_FILTER_SZIP) > 0) << "\n"; }
+TPROG
+      "$CXX" -std=c++17 -I"$out/include" "$W/t.cc" "$out/lib/amd64/libhdf5_cpp.so" "$out/lib/amd64/libhdf5.so" -Wl,-R,"$out/lib/amd64" -o "$W/t"
+      ${chk ''"$W/t" "$W/t.h5"'' "^ok 1\\.14\\.6 42 1$"}
+      ${chk ''"$out/bin/h5dump" -d n "$W/t.h5"'' "1, 2, 3, 42"}
+      grep -q 'Configured on: 1980-01-01$' "$out/lib/amd64/libhdf5.settings" || { echo "FATAL: hdf5 configure date not 1980-01-01" >&2; exit 1; }
+    '';
+  };
+
+  # libmpdclient (BSD-3-Clause): the Music Player Daemon client library. meson, as nixpkgs (-Dtest=true); upstream's tests run here
+  # (socketpair and in-memory parsing only), with main's check found at run time through LD_LIBRARY_PATH (a link dep, not a RUNPATH).
+  # On non-Linux upstream links no version script, so every symbol is exported. Its -std=c99 hides strdup on illumos (glibc's
+  # _GNU_SOURCE, which it sets, exposes it): -D__EXTENSIONS__. Its meson names no socket library outside Windows/Haiku: illumos'
+  # sockets and gethostbyname are in libsocket and libnsl.
+  libmpdclient = mkSrcPkg {
+    pname = "libmpdclient"; version = "2.24";
+    src = { url = "https://codeload.github.com/MusicPlayerDaemon/libmpdclient/tar.gz/refs/tags/v2.24";
+            sha256 = "b19ec4c10314f5b55e1bca2a34c299effbbb2f1f9b5113b331b7ba789f0c17d1"; };
+    deps = [ world ]; linkDeps = [ check ]; nativeTools = mesonTools;
+    build = ''
+      ${mesonBuild "-Dtest=true -Dc_args=-D__EXTENSIONS__ '-Dc_link_args=-lsocket -lnsl'"}
+      mrc=0; LD_LIBRARY_PATH=${check}/lib/amd64 meson test -C _b --print-errorlogs > "$W/mt.log" 2>&1 || mrc=$?   # set -e: keep the rc
+      grep -E '^ *[0-9]+/[0-9]+ ' "$W/mt.log" >&2 || true
+      [ $mrc = 0 ] || { echo "FATAL: libmpdclient meson test rc=$mrc" >&2; tail -60 "$W/mt.log" >&2; exit 1; }
+      ${tprog ''#include <mpd/client.h>
+#include <mpd/parser.h>
+#include <stdio.h>
+int main(void){ struct mpd_parser *p = mpd_parser_new(); char l[] = "file: solnix.flac"; if (!p) return 1; enum mpd_parser_result r = mpd_parser_feed(p, l);
+printf("ok %d.%d %d %s %s\n", LIBMPDCLIENT_MAJOR_VERSION, LIBMPDCLIENT_MINOR_VERSION, r == MPD_PARSER_PAIR, mpd_parser_get_name(p), mpd_parser_get_value(p));
+mpd_parser_free(p); return 0; }'' "$out/lib/amd64/libmpdclient.so"}
+      ${chk ''"$W/t"'' "^ok 2\\.24 1 file solnix\\.flac$"}
+    '';
+  };
+
+  # cli11 (BSD-3-Clause): the header-only C++ command-line parser, the queue's 2.6.2. cmake install (tests, examples, docs off).
+  cli11 = mkSrcPkg {
+    pname = "cli11"; version = "2.6.2";
+    src = { url = "https://codeload.github.com/CLIUtils/CLI11/tar.gz/refs/tags/v2.6.2";
+            sha256 = "c6ea6b2e5608b3ea8617999bd5f47420c71b2ebdb8dc4767c1034d1da5785711"; };
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DCLI11_BUILD_TESTS=OFF -DCLI11_BUILD_EXAMPLES=OFF -DCLI11_BUILD_DOCS=OFF"}
+      cat > "$W/t.cc" <<'TPROG'
+#include <CLI/CLI.hpp>
+#include <iostream>
+int main(int argc, char **argv){ CLI::App app{"t"}; int n = 0; std::string s; app.add_option("-n", n); app.add_option("--name", s);
+CLI11_PARSE(app, argc, argv); std::cout << "ok " << CLI11_VERSION << " " << n << " " << s << "\n"; }
+TPROG
+      "$CXX" -std=c++17 -I"$out/include" "$W/t.cc" -o "$W/t"
+      ${chk ''"$W/t" -n 42 --name solnix'' "^ok 2\\.6\\.2 42 solnix$"}
     '';
   };
 }
