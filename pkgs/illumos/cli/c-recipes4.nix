@@ -1,7 +1,7 @@
 # cli/c-recipes4.nix -- tools and libraries the x86 build queue has jobs for and solnix lacked (recipes4, 2026-11-09), picked by how many
 # queued jobs each moves to buildable. A new file, so no served drv moves. Store-only builds (nativeTools), each with an in-build check
 # that runs it on real input. Versions are the queue's targets; sources pinned by sha256 (equal to nixpkgs' flat hash where it has one).
-{ base, mkSrcPkg, world, chk, hostTools, python3, gnupatch, gnum4, bzip2-bin, libxau, libxdmcp, libpthread-stubs, gtkMeson ? null, graphics, ... }:
+{ base, mkSrcPkg, world, chk, hostTools, python3, gnupatch, gnum4, cmake, bzip2-bin, libxau, libxdmcp, libpthread-stubs, gtkMeson ? null, graphics, ... }:
 let
   fetch = url: sha256: import <nix/fetchurl.nix> { inherit url sha256; };
   # a C test program against the just-installed library: <src> <link flags>
@@ -12,6 +12,14 @@ TPROG
     "$CC" -I"$out/include" "$W/t.c" -L"$out/lib/amd64" ${libs} -Wl,-R,"$out/lib/amd64" -o "$W/t"
   '';
   inherit (base) zlib;
+  inherit (gtkMeson) fontconfig;
+  # cmake projects: the store cmake, store prefixes only (as c-recipes3.nix)
+  cmakeB = extra: ''
+    cmake -S . -B _b -DCMAKE_INSTALL_PREFIX="$out" -DCMAKE_INSTALL_LIBDIR=lib/amd64 -DCMAKE_C_COMPILER="$CC" -DCMAKE_CXX_COMPILER="$CXX" \
+      -DCMAKE_BUILD_TYPE=Release -DCMAKE_SKIP_RPATH=ON -DCMAKE_IGNORE_PREFIX_PATH="/usr;/usr/local;/opt" \
+      -DCMAKE_IGNORE_PATH="/usr/lib/64;/usr/lib/amd64;/lib/64" ${extra} >&2
+    cmake --build _b -j16 >&2; cmake --install _b >&2
+  '';
   # meson recipes: desktop/gtk's served store meson 1.10.2, samurai, nasm and its build-tool env (GNU binutils by name, sh -> bash);
   # null on aarch64 (no desktop/gtk set there), which then has none of them
   inherit (gtkMeson) meson samurai nasm freetype noto-sans ftPriv;
@@ -455,6 +463,64 @@ printf("ok %d\n", op > 0); return op <= 0; }'' "-lICE";
       ${mesonBuild ""}
       ${tprog (noDpy "#include <stdio.h>\n#include <string.h>\n#include <X11/XKBlib.h>\n#include <X11/extensions/XKBfile.h>" ''char *t = XkbKeysymText(0xff0d, 0); if (!t || strcmp(t, "Return")) return 1'') "-lxkbfile -lX11"}
       ${chk ''"$W/t"'' "^ok "}
+    '';
+  };
+
+  # ---- recipes4 batch 10: what R9 made buildable, and small leaves the queue's other jobs wait on ---------------------------------
+  # libXft (HPND-sell-variant): client-side fonts for X (freetype + fontconfig); freetype2.pc's private requirements as link inputs
+  libxft = mkSrcPkg {
+    pname = "libxft"; version = "2.3.9";
+    src = { url = "https://xorg.freedesktop.org/releases/individual/lib/libXft-2.3.9.tar.xz";
+            sha256 = "60a25b78945ed6932635b3bb1899a517d31df7456e69867ffba27f89ff3976f5"; };
+    deps = [ world libx11 libxrender fontconfig freetype ]; linkDeps = [ base.xorgproto libxcb libxau libxdmcp graphics.expat ] ++ ftPriv;
+    nativeTools = [ base.pkgconf ] ++ hostTools;
+    build = ''
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static ${manSections}
+      gmake -j8; gmake install
+      # Xft.h includes <ft2build.h>: freetype's include dir, from the installed xft.pc (as a consumer gets it)
+      ${tprog (noDpy "#include <X11/Xft/Xft.h>" "if (XftGetVersion() != 20309) return 1") ''$(PKG_CONFIG_PATH="$out/lib/amd64/pkgconfig:$PKG_CONFIG_LIBDIR" pkg-config --cflags xft) -lXft -lXrender -lX11''}
+      ${chk ''"$W/t"'' "^ok "}
+    '';
+  };
+  libxpresent = xlib "libxpresent" "1.0.2" "lib/libXpresent-1.0.2.tar.xz" "4e5b21b4812206a4b223013606ae31170502c1043038777a1ef8f70c09d37602"
+    [ libx11 libxext libxfixes libxrandr libxrender ] (noDpy "#include <X11/extensions/Xpresent.h>" "(void)XPresentQueryExtension") "-lXpresent -lX11";
+  libxvmc = xlib "libxvmc" "1.0.15" "lib/libXvMC-1.0.15.tar.xz" "4f518afde3d7fd435346af7b368d2f73517f3d5f82647c962caf3f7bb8ff7078"
+    [ libx11 libxext libxv ] (noDpy "#include <X11/extensions/XvMClib.h>" "(void)XvMCQueryExtension") "-lXvMC -lXv -lXext -lX11";
+  libxcb-image = xlib "libxcb-image" "0.4.1" "xcb/xcb-util-image-0.4.1.tar.xz" "ccad8ee5dadb1271fd4727ad14d9bd77a64e505608766c4e98267d9aede40d3d"
+    [ libxcb libxcb-util ] (xcbT "#include <xcb/xcb_image.h>" ''xcb_image_t *i = xcb_image_create_native(c, 4, 4, XCB_IMAGE_FORMAT_Z_PIXMAP, 24, NULL, ~0, NULL); (void)i'') "-lxcb-image -lxcb-util -lxcb";
+  # yasm (BSD-2-Clause): the x86 assembler (ffmpeg, libvpx, x264 build with it). nixpkgs' gcc 15 patch.
+  yasm = mkSrcPkg {
+    pname = "yasm"; version = "1.3.0";
+    src = { url = "https://www.tortall.net/projects/yasm/releases/yasm-1.3.0.tar.gz";
+            sha256 = "3dce6601b495f5b3d45b59f7d2492a340ee7e84b5beca17e48f862502bd5603f"; };
+    deps = [ world ]; nativeTools = [ gnupatch ] ++ hostTools;
+    build = ''
+      patch -p1 < ${fetch "https://raw.githubusercontent.com/NixOS/nixpkgs/f4a03c008967841f2a0b3cb7c436fc6fc31671f6/pkgs/by-name/ya/yasm/gcc-15.patch" "c0d34f6aa9706b78bf734a19b6ea344c232f636e28980398e3ab13227881b923"}
+      ./configure --prefix="$out" --disable-python --disable-python-bindings
+      gmake -j8; gmake install
+      printf 'bits 64\nmov eax, 42\nret\n' > "$W/t.asm"
+      ${chk ''"$out/bin/yasm" -f elf64 -o "$W/t.o" "$W/t.asm" && od -An -tx1 -N4 "$W/t.o"'' "7f 45 4c 46"}
+    '';
+  };
+  # abseil-cpp (Apache-2.0): Google's C++ common libraries (protobuf, grpc, re2). cmake, shared, as nixpkgs (test helpers off:
+  # nixpkgs builds them into a separate output against gtest; no queued job needs them).
+  abseil-cpp = mkSrcPkg {
+    pname = "abseil-cpp"; version = "20260817.0";
+    src = { url = "https://codeload.github.com/abseil/abseil-cpp/tar.gz/refs/tags/20260817.0";
+            sha256 = "f7e05179df39c45434cad433f5783840bb3788ef322976f9138bc6b72b3a107d"; };
+    deps = [ world ]; nativeTools = [ cmake base.pkgconf ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DBUILD_SHARED_LIBS=ON -DABSL_BUILD_TEST_HELPERS=OFF -DABSL_BUILD_TESTING=OFF -DABSL_PROPAGATE_CXX_STD=ON"}
+      cat > "$W/t.cc" <<'TPROG'
+#include <absl/strings/str_cat.h>
+#include <absl/strings/str_split.h>
+#include <iostream>
+#include <vector>
+int main(){ std::vector<std::string> v = absl::StrSplit("a,b,c", ','); std::cout << absl::StrCat("ok ", v.size(), " ", v[2]) << "\n"; }
+TPROG
+      # the link line from abseil's own pkg-config files (which libraries absl_strings pulls in changes between LTS releases)
+      "$CXX" -std=c++17 "$W/t.cc" $(PKG_CONFIG_PATH="$out/lib/amd64/pkgconfig" pkg-config --cflags --libs absl_strings) -Wl,-R,"$out/lib/amd64" -o "$W/t"
+      ${chk ''"$W/t"'' "^ok 3 c$"}
     '';
   };
 }
