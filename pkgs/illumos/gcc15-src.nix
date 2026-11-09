@@ -227,6 +227,8 @@ let
     # nixpkgs' remove-references-to. Nothing live points at them (the RUNPATH gate above passed).
     s0gcc=$(sed -n 's|^exec \([^ ]*\)/bin/gcc .*|\1|p' "$stage0/bin/gcc")
     [ -n "$s0gcc" ] || { echo "FATAL: no gcc in $stage0/bin/gcc" >&2; exit 1; }
+    # fail closed: illumos grep has no -a (exit 2), and `! grep -a` then passed (WAVE7-NOTES audit 2; publish-gate.sh's probe)
+    printf 'a\000b\n' | grep -a -b -o -F b > /dev/null 2>&1 || { echo "FATAL: $(command -v grep) is not GNU grep (-a)" >&2; exit 1; }
     for h in "$(basename "$s0gcc" | cut -c1-32)" "$(basename "$s0lib" | cut -c1-32)"; do
       grep -rlaF "$h" "$out" "$lib" 2>/dev/null | while read -r f; do chmod u+w "$f"; LC_ALL=C sed -i "s/$h/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee/g" "$f"; done
       ! grep -rlaF "$h" "$out" "$lib" >/dev/null 2>&1 || { echo "FATAL: $out/$lib still names stage0 ($h)" >&2; exit 1; }
