@@ -27,7 +27,7 @@ export NIX_CONF_DIR=/nix-tools/etc/nix
 REPO=/var/tmp/solnix-repo
 PKGS=$REPO/pkgs/illumos/packages.nix
 CACHE=https://s3.solnix.io/solnix-cache
-KEY="cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk="
+KEY="cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8="
 
 # count man files in a realised store path (dir). Prefer the build-stamped
 # .manifest-man; fall back to a live find.

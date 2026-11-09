@@ -77,9 +77,9 @@ let
   # content-addressed" for that class. With inputAddressed = true, fetchClosure
   # does NOT re-verify content-addressing, so SIGNATURE TRUST does all the
   # integrity work: the path (and its whole closure) must be signed by a key in
-  # trusted-public-keys (cache.solnix.io-1:5HAV..., baked into base.nix). A path
+  # trusted-public-keys (cache.solnix.io-1:8UNr..., baked into base.nix). A path
   # signed by an untrusted key is REFUSED at eval — which is why publishing only
-  # under 5HAV... is load-bearing, not incidental.
+  # under 8UNr... is load-bearing, not incidental.
   #
   # col 3 is a store path STRING ("/nix/store/...") passed unchanged; do NOT wrap
   # it in storePath (re-introduces the forbidden builtin) or coerce with ./. .

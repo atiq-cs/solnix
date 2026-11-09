@@ -768,7 +768,7 @@ setup_scratch() {
 # uses to identify it), lofiadm -a the inner /solnix-store.iso, mount THAT ro,
 # and export MEDIA_STORE_MNT. realise_toplevel adds `--extra-substituters
 # file://$MEDIA_STORE_MNT`; the store's paths are signed by cache.solnix.io-1
-# (5HAV..., already trusted), so signature trust does the integrity work.
+# (8UNr..., already trusted), so signature trust does the integrity work.
 #
 # ⚠️ This serves STORE PATHS only. A user's github: flake still fetches its
 #    FLAKE INPUTS over the network into the step-#1 scratch partition; only the

@@ -707,7 +707,7 @@ if [ "$STAGE_NIX" = 1 ] && [ -d /nix-tools224 ] && [ -x /nix-tools224/bin/nix ];
   # nix.conf for the INSTALLED system (SELF_INSTALL copies this root verbatim).
   cat > "$RDROOT/nix-tools224/etc/nix/nix.conf" <<'NT224CONF'
 substituters = https://cache.solnix.io https://s3.solnix.io/solnix-cache
-trusted-public-keys = cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk=
+trusted-public-keys = cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8=
 ssl-cert-file = /nix-tools224/ca-bundle.crt
 sandbox = false
 build-users-group =
@@ -1929,14 +1929,14 @@ if [ -f /etc/solnix-live-shell ] && [ -z "$SOLNIX_MOTD_SHOWN" ]; then
 fi
 PROFPATH
 fi
-# LIVE nix.conf (5HAV, s3-origin, flakes) so nix works in the installer shell
+# LIVE nix.conf (8UNr, s3-origin, flakes) so nix works in the installer shell
 # even when no full CS is baked (minimal ISO). solnix-install re-copies the
 # INSTALLED system's nix.conf from the toplevel it lays down.
 mkdir -p "$RDROOT/etc/nix"
 if [ ! -f "$RDROOT/etc/nix/nix.conf" ]; then
   cat > "$RDROOT/etc/nix/nix.conf" <<'NIXCONF'
 substituters = https://s3.solnix.io/solnix-cache https://cache.solnix.io
-trusted-public-keys = cache.solnix.io-1:5HAVNxgJW1VK0O6lHSq45MSUwddLO6EM2Rz4NEjRUVk=
+trusted-public-keys = cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8=
 experimental-features = nix-command flakes fetch-closure
 ssl-cert-file = /nix-tools224/ca-bundle.crt
 sandbox = false
