@@ -412,7 +412,10 @@ let
     paths = [ seedBuildTools srcPkgs.coreutils srcPkgs.findutils cliBase.gnupatch cliBase.cmake srcPkgs.pkgconf ]; };   # pkgconf: -sys crates' pkg-config
   # Go from source: go1.4 (C) -> 1.17 -> 1.20 -> 1.22 -> 1.24 -> 1.26 (./go.nix).
   goChain = import ./go.nix { inherit gcc world; gate = gate'; gccLib = gcc.lib; inherit (srcPkgs.nixChain) cacert; tools = hostfixTools; inherit (srcPkgs) bash; };
-  cli = import ./cli { base = srcPkgs; inherit world graphics goChain; inherit (cargo) cargoPkg; };
+  # gtkMeson: desktop/gtk's store meson/samurai/nasm (+ freetype, noto-sans) for cli/c-recipes4.nix's meson recipes (gtk takes cli's
+  # python3/cmake/gnupatch, which are outside c-recipes4, so there is no cycle)
+  cli = import ./cli { base = srcPkgs; inherit world graphics goChain; inherit (cargo) cargoPkg;
+    gtkMeson = { inherit (gtk) nasm freetype gtkTools; ftPriv = [ srcPkgs.zlib gtk.libpng srcPkgs.nixChain.brotli srcPkgs.nixChain.bzip2 ]; meson = gtk.meson_1_10; samurai = graphics.samurai; inherit (cosmic) noto-sans; }; };
   # libtorrent-rasterbar + solnix-torrent, the community seeder's BitTorrent client (./solnix-torrent.nix).
   torrent = import ./solnix-torrent.nix {
     inherit (srcPkgs) mkSrcPkg openssl pkgconf gccWrapper binutils; inherit (srcPkgs.nixChain) boost; inherit (cli) cmake;

@@ -1,7 +1,7 @@
 # cli/ -- the maintainer's headless CLI set (werk/meh home.packages) as solnix
 # derivations: C/autotools on mk-src-pkg (./c-*.nix), Rust on cargoPkg (../cargo.nix,
 # ./rust.nix), Go on a from-source go1.4 -> current chain (./go.nix, ./go-tools.nix).
-{ base, world, graphics, cargoPkg ? null, goChain ? null, shared ? { } }:   # shared: one readline from the caller (aarch64 final)
+{ base, world, graphics, cargoPkg ? null, goChain ? null, shared ? { }, gtkMeson ? null }:   # shared: one readline from the caller (aarch64 final)
 # cargoPkg/goChain null (aarch64: no Rust or Go illumos/aarch64 target upstream) drops those tiers.
 let
   # base = srcPkgs (base-src.nix): mkSrcPkg, zlib, openssl, ncurses, coreutils, ... and nixChain.
@@ -48,10 +48,12 @@ let
   c8 = import ./c-libdb.nix (h // { inherit (c5) python3; inherit (c7) tcl; });
   # recipes3: libraries the x86 queue has jobs for (a new file, so no served drv moves)
   c9 = import ./c-recipes3.nix (h // { inherit (c5) cmake; inherit (c4) perl; });
+  # recipes4: tools/libraries the x86 queue has jobs for (a new file, so no served drv moves); gtkMeson: x86 only (null drops it)
+  c10 = if gtkMeson == null then { } else import ./c-recipes4.nix (h // { inherit (c5) python3; inherit (c5) gnupatch; inherit (c9) libxau libxdmcp libpthread-stubs; inherit (c3) bzip2-bin; inherit gtkMeson; });
   rust = import ./rust.nix { inherit cargoPkg chk; extra = import ./rust-extra.nix h; };
   gotools = import ./go-tools.nix { inherit (goChain) goPkg go_1_27; inherit chk; inherit (c5) python3; } // import ./go-c1.nix { inherit (goChain) goPkg go_1_27; inherit chk; inherit (c5) python3; }
     // import ./go-recipes2.nix { inherit (goChain) goPkg; inherit chk; }
     // import ./go-recipes3.nix { inherit (goChain) goPkg; inherit chk; };   # recipes3 (a new file: no served drv moves)
   data = import ./data.nix h;
   ti = import ./texinfo.nix (h // { inherit (c1) gnum4; inherit (c4) perl; });
-in c1 // c2 // c3 // c4 // c5 // c6 // c7 // c8 // c9 // data // ti // (if cargoPkg == null then { } else rust) // (if goChain == null then { } else gotools)
+in c1 // c2 // c3 // c4 // c5 // c6 // c7 // c8 // c9 // c10 // data // ti // (if cargoPkg == null then { } else rust) // (if goChain == null then { } else gotools)
