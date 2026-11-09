@@ -187,6 +187,16 @@ static_checks() {
     _fail "/etc/nodename is 'unknown' (build-host name shipped) -- the live hostname was never set"
   elif grep -qw "$nn" "$R/etc/hosts" 2>/dev/null; then _ok "/etc/hosts answers for the live hostname '$nn' (no dns stall at login)"
   else _fail "/etc/hosts has no entry for '$nn' -- every login-path lookup hits DNS (~3.5s per NXDOMAIN)"; fi
+  # LESSON (TZ, 2026-11-09): illumos libc reads TZ from /etc/default/init when TZ is unset, so a host's local zone leaks
+  # into anything that formats a date (a build that printed SOURCE_DATE_EPOCH as a local date differed between hosts).
+  # NixOS ships time.timeZone = null, i.e. UTC; solnix's default is "UTC" (first-boot-defaults.nix). A shipped image must
+  # carry exactly TZ=UTC: the user picks a zone after install (time.timeZone), never the build host's.
+  local tzl; tzl=$(grep -E '^[[:space:]]*TZ=' "$R/etc/default/init" 2>/dev/null | tail -1 | tr -d '[:space:]')
+  case "$tzl" in
+    TZ=UTC) _ok "/etc/default/init TZ=UTC (no host time zone shipped)" ;;
+    "") _fail "/etc/default/init sets no TZ -- illumos then falls back to its compiled default, not UTC; ship TZ=UTC" ;;
+    *) _fail "/etc/default/init has $tzl -- a shipped image must be TZ=UTC (time.timeZone is the user's choice after install)" ;;
+  esac
   local ns; ns=$(grep -E '^[[:space:]]*hosts:' "$R/etc/nsswitch.conf" 2>/dev/null | head -1)
   case "$ns" in
     *dns*) _ok "nsswitch keeps dns for real resolution ($ns)" ;;
