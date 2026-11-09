@@ -35,7 +35,20 @@ let
     grep -Eq '${re}' "$W/chk.out" || { echo "FATAL: in-build check failed (want /${re}/), got:" >&2; head -5 "$W/chk.out" >&2; exit 1; }
     echo "CHECK-OK: $(head -1 "$W/chk.out")" >&2
   '';
-  h = args // { inherit scrub gnulibFix dropDocs chk; };
+  # NixOS's autoreconfHook: `autoreconf -fi` on the served store autotools (autoconf, automake, libtool, m4, perl), ACLOCAL_PATH from every
+  # PATH entry's and dep's share/aclocal (what NixOS's setup hooks collect), so no host /usr/share/aclocal is read. A recipe puts
+  # autoreconfTools in nativeTools and runs ${autoreconf} before ./configure (a tag tarball without a generated configure).
+  autoreconfTools = [ c4.autoconf c4.automake c4.libtool c1.gnum4 c4.perl ];
+  autoreconf = ''
+    _acl=""
+    for _d in $(echo "$PATH" | tr ':' ' ') $depsArg $linkDepsArg; do _d=''${_d%/bin}; _d=''${_d%/sbin}
+      if [ -d "$_d/share/aclocal" ]; then _acl="$_acl:$_d/share/aclocal"; fi
+    done
+    # main's served libtool 2.5.4 ships bin/libtoolize without its exec bit (mk-src-pkg's x86 de-bake rewrites text files with sed > f.btfix
+    # && mv, a new 0644 file; WAVE7-NOTES "stdenv"): run it through the shell, as autoreconf's LIBTOOLIZE allows
+    ACLOCAL_PATH="''${_acl#:}" LIBTOOLIZE="$BASH ${c4.libtool}/bin/libtoolize" autoreconf -fi >&2
+  '';
+  h = args // { inherit scrub gnulibFix dropDocs chk autoreconfTools autoreconf; };
   c1 = import ./c-base.nix (h // { inherit shared; });
   c2 = import ./c-net.nix (h // { inherit (c1) readline; });
   c3 = import ./c-gnupg.nix (h // { inherit (c1) readline; });

@@ -1,7 +1,7 @@
 # cli/c-recipes4.nix -- tools and libraries the x86 build queue has jobs for and solnix lacked (recipes4, 2026-11-09), picked by how many
 # queued jobs each moves to buildable. A new file, so no served drv moves. Store-only builds (nativeTools), each with an in-build check
 # that runs it on real input. Versions are the queue's targets; sources pinned by sha256 (equal to nixpkgs' flat hash where it has one).
-{ base, mkSrcPkg, world, chk, hostTools, python3, gnupatch, gnum4, cmake, perl, tcl, vulkan-headers, libogg, fmt, bzip2-bin, libxau, libxdmcp, libpthread-stubs, gtkMeson ? null, graphics, ... }:
+{ base, mkSrcPkg, world, chk, hostTools, autoreconfTools, autoreconf, python3, gnupatch, gnum4, cmake, perl, tcl, vulkan-headers, libogg, fmt, bzip2-bin, libxau, libxdmcp, libpthread-stubs, gtkMeson ? null, graphics, ... }:
 let
   fetch = url: sha256: import <nix/fetchurl.nix> { inherit url sha256; };
   # a C test program against the just-installed library: <src> <link flags>
@@ -922,6 +922,272 @@ printf("ok %.*s %s\n", (int)g.mv_size, (char *)g.mv_data, mdb_version(NULL, NULL
       mkdir "$W/db"
       ${chk ''"$W/t" "$W/db"'' "^ok solnix LMDB 0\\.9\\.36"}
       ${chk ''"$out/bin/mdb_stat" "$W/db"'' "Entries: 1$"}
+    '';
+  };
+
+  # ---- recipes6 batch 14: protobuf, the media/codec headers and libraries, and small cmake libraries the queue's jobs wait on --------
+  # zimg (WTFPL): scaling, colorspace conversion and dithering (ffmpeg's zscale, mpv, vapoursynth). Its tag tarball has no configure:
+  # autoreconf (the store autotools, as nixpkgs' autoreconfHook).
+  zimg = mkSrcPkg {
+    pname = "zimg"; version = "3.0.6";
+    src = { url = "https://codeload.github.com/sekrit-twc/zimg/tar.gz/refs/tags/release-3.0.6";
+            sha256 = "be89390f13a5c9b2388ce0f44a5e89364a20c1c57ce46d382b1fcc3967057577"; };
+    deps = [ world ]; nativeTools = autoreconfTools ++ hostTools;
+    build = ''
+      ${autoreconf}
+      # -L gcc.lib: libtool found libstdc++.la in the compiler out and baked that libdir into libzimg as -R (closure gate, measured; as
+      # libdb and gmp6). A plain .so found first adds no rpath.
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static LDFLAGS="-L$gccLib/amd64"
+      gmake -j8; gmake install
+      find "$out/share/doc" -delete 2>/dev/null || true
+      # a flat grey 64x64 byte image scaled to 32x32 (bilinear) through a filter graph: every pixel stays 200
+      ${tprog ''#include <zimg.h>
+#include <stdio.h>
+static unsigned char in[64 * 64] __attribute__((aligned(64))), out[32 * 32] __attribute__((aligned(64))), tmp[1 << 20] __attribute__((aligned(64)));
+int main(void){ unsigned ma = 0, mi = 0; zimg_get_api_version(&ma, &mi); zimg_image_format s, d; zimg_image_format_default(&s, ZIMG_API_VERSION);
+s.width = 64; s.height = 64; s.pixel_type = ZIMG_PIXEL_BYTE; s.color_family = ZIMG_COLOR_GREY; s.pixel_range = ZIMG_RANGE_FULL; s.depth = 8;
+d = s; d.width = 32; d.height = 32; zimg_graph_builder_params p; zimg_graph_builder_params_default(&p, ZIMG_API_VERSION); p.resample_filter = ZIMG_RESIZE_BILINEAR;
+zimg_filter_graph *g = zimg_filter_graph_build(&s, &d, &p); size_t t = 0; if (!g || zimg_filter_graph_get_tmp_size(g, &t) || t > sizeof tmp) return 1;
+for (int i = 0; i < 64 * 64; i++) in[i] = 200;
+zimg_image_buffer_const sb = { ZIMG_API_VERSION }; sb.plane[0].data = in; sb.plane[0].stride = 64; sb.plane[0].mask = ZIMG_BUFFER_MAX;
+zimg_image_buffer db = { ZIMG_API_VERSION }; db.plane[0].data = out; db.plane[0].stride = 32; db.plane[0].mask = ZIMG_BUFFER_MAX;
+if (zimg_filter_graph_process(g, &sb, &db, tmp, 0, 0, 0, 0)) return 2;
+printf("ok %u.%u %d %d\n", ma, mi, out[0], out[32 * 32 - 1]); zimg_filter_graph_free(g); return 0; }'' "$out/lib/amd64/libzimg.so"}
+      ${chk ''"$W/t"'' "^ok 2\\.4 200 200$"}
+    '';
+  };
+
+  # minizip (Zlib): zlib's contrib/minizip (zip/unzip of .zip archives; qtwebengine, assimp). As nixpkgs: the zlib 1.3.2 tarball (base
+  # zlib's own source), autoreconf in contrib/minizip, and upstream's fix that installs ints.h (ioapi.h includes it).
+  minizip = mkSrcPkg {
+    pname = "minizip"; version = "1.3.2";
+    src = { url = "https://zlib.net/fossils/zlib-1.3.2.tar.gz";
+            sha256 = "bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16"; };
+    deps = [ world zlib ]; nativeTools = autoreconfTools ++ [ gnupatch ] ++ hostTools;
+    build = ''
+      cd contrib/minizip
+      patch -p3 < ${fetch "https://github.com/madler/zlib/commit/cb14dc9ade3759352417a300e6c2ed73268f1d97.patch" "0fdfd7ed5ce4825a66729853c72f2662b6c2e7be1df138d930a478ea772f7226"}
+      ${autoreconf}
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static
+      gmake -j8; gmake install
+      [ -f "$out/include/minizip/ints.h" ] || { echo "FATAL: minizip: ints.h not installed" >&2; exit 1; }
+      # write a deflated member into a zip in the build dir, then find and read it back
+      ${tprog ''#include <minizip/zip.h>
+#include <minizip/unzip.h>
+#include <stdio.h>
+#include <string.h>
+int main(int c, char **v){ const char *m = "solnix minizip"; char b[64] = { 0 }; zipFile z = zipOpen(v[1], APPEND_STATUS_CREATE); if (!z) return 1;
+if (zipOpenNewFileInZip(z, "a.txt", NULL, NULL, 0, NULL, 0, NULL, Z_DEFLATED, 9) != ZIP_OK || zipWriteInFileInZip(z, m, strlen(m)) != ZIP_OK
+ || zipCloseFileInZip(z) != ZIP_OK || zipClose(z, NULL) != ZIP_OK) return 2;
+unzFile u = unzOpen(v[1]); if (!u || unzLocateFile(u, "a.txt", 0) != UNZ_OK || unzOpenCurrentFile(u) != UNZ_OK) return 3;
+int n = unzReadCurrentFile(u, b, sizeof b - 1); unzCloseCurrentFile(u); unzClose(u); printf("ok %d %s\n", n, b); return 0; }'' "$out/lib/amd64/libminizip.so"}
+      ${chk ''"$W/t" "$W/t.zip"'' "^ok 14 solnix minizip$"}
+    '';
+  };
+
+  # libtheora (BSD-3-Clause): the Theora video codec on libogg (+ libvorbis, as nixpkgs propagates it). Tag tarball: autoreconf. Its
+  # configure gives illumos ld no export list (GNU ld gets a version script, macOS an export list): every symbol is exported, upstream's
+  # answer for any other linker.
+  libtheora = mkSrcPkg {
+    pname = "libtheora"; version = "1.2.0";
+    src = { url = "https://codeload.github.com/xiph/theora/tar.gz/refs/tags/v1.2.0";
+            sha256 = "e0c35771b425c32a052ffb358a2aed14219340ab850b48dc85b01939c0513a31"; };
+    deps = [ world libogg libvorbis ]; nativeTools = autoreconfTools ++ [ base.pkgconf ] ++ hostTools;
+    build = ''
+      ${autoreconf}
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-examples --disable-doc --disable-spec
+      gmake -j8; gmake install
+      find "$out/share/doc" -delete 2>/dev/null || true
+      # encode one flat 32x32 frame (headers + a key frame) in memory, decode it back: luma within the quantiser's reach of 120
+      ${tprog ''#include <theora/theoraenc.h>
+#include <theora/theoradec.h>
+#include <stdio.h>
+#include <string.h>
+static unsigned char pk[4][65536], y[32 * 32], u[16 * 16], v[16 * 16]; static ogg_packet hp[3], fp;
+static void keep(ogg_packet *d, const ogg_packet *s, unsigned char *b){ *d = *s; memcpy(b, s->packet, s->bytes); d->packet = b; }
+int main(void){ th_info ti; th_info_init(&ti); ti.frame_width = ti.pic_width = 32; ti.frame_height = ti.pic_height = 32;
+ti.fps_numerator = 25; ti.fps_denominator = 1; ti.aspect_numerator = ti.aspect_denominator = 1; ti.pixel_fmt = TH_PF_420; ti.quality = 48;
+th_enc_ctx *e = th_encode_alloc(&ti); if (!e) return 1; th_comment tc; th_comment_init(&tc); ogg_packet op; int nh = 0;
+while (nh < 3 && th_encode_flushheader(e, &tc, &op) > 0) { keep(&hp[nh], &op, pk[nh]); nh++; }
+memset(y, 120, sizeof y); memset(u, 128, sizeof u); memset(v, 128, sizeof v);
+th_ycbcr_buffer b = { { 32, 32, 32, y }, { 16, 16, 16, u }, { 16, 16, 16, v } };
+if (th_encode_ycbcr_in(e, b) || th_encode_packetout(e, 1, &op) <= 0) return 2; keep(&fp, &op, pk[3]); th_encode_free(e);
+th_info di; th_comment dc; th_setup_info *si = NULL; th_info_init(&di); th_comment_init(&dc);
+for (int i = 0; i < nh; i++) if (th_decode_headerin(&di, &dc, &si, &hp[i]) < 0) return 3;
+th_dec_ctx *d = th_decode_alloc(&di, si); th_setup_free(si); if (!d || th_decode_packetin(d, &fp, NULL)) return 4;
+th_ycbcr_buffer o; th_decode_ycbcr_out(d, o); int p = o[0].data[0];
+printf("ok %s %ux%u %d %d\n", th_version_string(), di.pic_width, di.pic_height, nh, p > 112 && p < 128); th_decode_free(d); return 0; }'' "$out/lib/amd64/libtheoraenc.so $out/lib/amd64/libtheoradec.so ${libogg}/lib/amd64/libogg.so -Wl,-R,${libogg}/lib/amd64"}
+      ${chk ''"$W/t"'' "^ok Xiph\\.Org libtheora 1\\.2\\.0 [0-9]+ \\(Ptalarbvorm\\) 32x32 3 1$"}
+    '';
+  };
+
+  # protobuf (BSD-3-Clause): Protocol Buffers (libprotobuf, libprotobuf-lite, libprotoc, libupb, protoc) on abseil-cpp and zlib, shared, as
+  # nixpkgs (its tests off: no queued job runs them). Its version-script probe fails on illumos ld, so the libraries export everything
+  # (as upstream's macOS build). upb's linker arrays need __start_/__stop_<section>, which illumos ld defines (protected), measured.
+  # Built at the build's core count, not cmakeB's -j16: protobuf's translation units are large.
+  protobuf = mkSrcPkg {
+    pname = "protobuf"; version = "36.2";
+    src = { url = "https://codeload.github.com/protocolbuffers/protobuf/tar.gz/refs/tags/v36.2";
+            sha256 = "7e7eaf580ec77f1a392ff1ab1013c13d3b04a6716f002f697f67f3c1113f0530"; };
+    deps = [ world zlib abseil-cpp ]; nativeTools = [ cmake base.pkgconf ] ++ hostTools;
+    build = ''
+      ${builtins.replaceStrings [ "cmake --build _b -j16" ] [ "cmake --build _b -j\${NIX_BUILD_CORES:-4}" ] (cmakeB "-Dprotobuf_BUILD_TESTS=OFF -Dprotobuf_BUILD_SHARED_LIBS=ON -Dprotobuf_ABSL_PROVIDER=package -Dabsl_DIR=${abseil-cpp}/lib/amd64/cmake/absl -DZLIB_ROOT=${zlib} -DZLIB_LIBRARY=${zlib}/lib/amd64/libz.so -DZLIB_INCLUDE_DIR=${zlib}/include")}
+      ${chk ''"$out/bin/protoc" --version'' "^libprotoc 36\\.2$"}
+      # protoc generates C++ for a message; that code, on the installed libprotobuf, serialises it and parses it back
+      mkdir "$W/pb"; printf 'syntax = "proto3";\npackage t;\nmessage M { string s = 1; int32 n = 2; repeated int32 r = 3; }\n' > "$W/pb/t.proto"
+      "$out/bin/protoc" -I"$W/pb" --cpp_out="$W/pb" "$W/pb/t.proto"
+      cat > "$W/pb/m.cc" <<'TPROG'
+#include "t.pb.h"
+#include <iostream>
+int main(){ t::M m; m.set_s("solnix"); m.set_n(42); m.add_r(7); std::string b; if (!m.SerializeToString(&b)) return 1;
+t::M o; if (!o.ParseFromString(b)) return 2; std::cout << "ok " << o.s() << " " << o.n() << " " << o.r(0) << " " << b.size() << "\n"; }
+TPROG
+      "$CXX" -std=c++17 -I"$W/pb" "$W/pb/m.cc" "$W/pb/t.pb.cc" $(PKG_CONFIG_PATH="$out/lib/amd64/pkgconfig" pkg-config --cflags --libs protobuf) \
+        -Wl,-R,"$out/lib/amd64:${abseil-cpp}/lib/amd64" -o "$W/pb/t"
+      ${chk ''"$W/pb/t"'' "^ok solnix 42 7 13$"}
+    '';
+  };
+
+  # libpciaccess (MIT): PCI device access for X.Org/Mesa/libdrm. meson; its Solaris backend is upstream (libdevinfo). The PCI ID database is
+  # the world's hwdata (nixpkgs points -Dpci-ids at its store hwdata the same way), so names resolve without a host file.
+  libpciaccess = mkSrcPkg {
+    pname = "libpciaccess"; version = "0.19";
+    src = { url = "https://www.x.org/releases/individual/lib/libpciaccess-0.19.tar.xz";
+            sha256 = "3c55aa86c82e54a4e3109786f0463530d53b36b6d1cfd14616454f985dd2aa43"; };
+    deps = [ world zlib ]; nativeTools = mesonTools;
+    build = ''
+      ${mesonBuild "-Dpci-ids=${world}/usr/share/hwdata -Dzlib=enabled"}
+      # names from the ID database only (pci_system_init would read this host's devices)
+      ${tprog ''#include <pciaccess.h>
+#include <stdio.h>
+int main(void){ struct pci_id_match m = { .vendor_id = 0x8086, .device_id = 0x1237, .subvendor_id = PCI_MATCH_ANY, .subdevice_id = PCI_MATCH_ANY };
+const char *d = NULL, *v = NULL; pci_get_strings(&m, &d, &v, NULL, NULL); printf("ok %s | %s\n", v ? v : "-", d ? d : "-"); return 0; }'' "$out/lib/amd64/libpciaccess.so"}
+      ${chk ''"$W/t"'' "^ok Intel Corporation \\| 440FX - 82441FX PMC \\[Natoma\\]$"}
+    '';
+  };
+
+  # nv-codec-headers (MIT): FFmpeg's NVENC/NVDEC headers and dlopen loader (ffmpeg's nvenc/cuvid, loaded at run time), 9.x as the queue's
+  # job. Its Makefile, PREFIX=$out (nixpkgs' layout, lib/pkgconfig). The GitHub mirror's tag, NAR-equal to nixpkgs' videolan git source.
+  nv-codec-headers = mkSrcPkg {
+    pname = "nv-codec-headers"; version = "9.1.23.1";
+    src = { url = "https://codeload.github.com/FFmpeg/nv-codec-headers/tar.gz/refs/tags/n9.1.23.1";
+            sha256 = "063f49838113c90504fd430377a6025478e2a454f812ce8a4da033e474727dc8"; };
+    deps = [ world ]; nativeTools = [ base.pkgconf ] ++ hostTools;
+    build = ''
+      gmake PREFIX="$out" install
+      # the loader header compiles (no driver is loaded), and pkg-config sees the version
+      ${tprog ''#include <ffnvcodec/dynlink_loader.h>
+#include <stdio.h>
+int main(void){ printf("ok %d.%d %d\n", NVENCAPI_MAJOR_VERSION, NVENCAPI_MINOR_VERSION, (int)(sizeof(CudaFunctions) > 0)); return 0; }'' ""}
+      ${chk ''"$W/t"'' "^ok 9\\.1 1$"}
+      ${chk ''PKG_CONFIG_PATH="$out/lib/pkgconfig" pkg-config --modversion ffnvcodec'' "^9\\.1\\.23\\.1$"}
+    '';
+  };
+
+  # amf-headers (MIT): AMD's Advanced Media Framework headers (ffmpeg's amf encoders). The release's headers tarball: file for file equal
+  # to the v1.5.3 tag's amf/public/include (all 57 files compared). nixpkgs' sparse-checkout source for "1.5.3" still has 1.5.2's content
+  # (AMF_VERSION_RELEASE 2, 17 files differ): a stale hash in nixpkgs. Installed as nixpkgs does, include/AMF.
+  amf-headers = mkSrcPkg {
+    pname = "amf-headers"; version = "1.5.3";
+    src = { url = "https://github.com/GPUOpen-LibrariesAndSDKs/AMF/releases/download/v1.5.3/AMF-headers-v1.5.3.tar.gz";
+            sha256 = "0f521ad98041f8001147cded4a660127f18b1c27a801a5cd691bda1fa48381be"; };
+    deps = [ world ]; nativeTools = hostTools;
+    build = ''
+      mkdir -p "$out/include/AMF"; cp -r AMF/. "$out/include/AMF/"
+      ${tprog ''#include <AMF/core/Version.h>
+#include <stdio.h>
+int main(void){ printf("ok %d.%d.%d\n", (int)AMF_GET_MAJOR_VERSION(AMF_FULL_VERSION), (int)AMF_GET_MINOR_VERSION(AMF_FULL_VERSION), (int)AMF_GET_SUBMINOR_VERSION(AMF_FULL_VERSION)); return 0; }'' ""}
+      ${chk ''"$W/t"'' "^ok 1\\.5\\.3$"}
+    '';
+  };
+
+  # libaec (BSD-2-Clause): Adaptive Entropy Coding (CCSDS 121.0; libaec + the szip-compatible libsz) for HDF5/netCDF/GRIB. cmake, shared.
+  libaec = mkSrcPkg {
+    pname = "libaec"; version = "1.1.7";
+    src = { url = "https://codeload.github.com/Deutsches-Klimarechenzentrum/libaec/tar.gz/refs/tags/v1.1.7";
+            sha256 = "26661a569a7def45a2e97fbbd09e0dc5bbb2f8ab1b41250c19e795559eec6fb2"; };
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=OFF -DBUILD_TESTING=OFF"}
+      # 1024 8-bit samples encoded (with preprocessing) and decoded back, byte for byte
+      ${tprog ''#include <libaec.h>
+#include <stdio.h>
+#include <string.h>
+static unsigned char in[1024], enc[4096], out[1024];
+int main(void){ for (int i = 0; i < 1024; i++) in[i] = (i * 7) & 0xff;
+struct aec_stream s; memset(&s, 0, sizeof s); s.bits_per_sample = 8; s.block_size = 16; s.rsi = 64; s.flags = AEC_DATA_PREPROCESS;
+s.next_in = in; s.avail_in = sizeof in; s.next_out = enc; s.avail_out = sizeof enc; if (aec_buffer_encode(&s) != AEC_OK) return 1;
+struct aec_stream r; memset(&r, 0, sizeof r); r.bits_per_sample = 8; r.block_size = 16; r.rsi = 64; r.flags = AEC_DATA_PREPROCESS;
+r.next_in = enc; r.avail_in = s.total_out; r.next_out = out; r.avail_out = sizeof out; if (aec_buffer_decode(&r) != AEC_OK) return 2;
+printf("ok %d %d\n", (int)r.total_out, memcmp(in, out, sizeof in) == 0); return 0; }'' "$out/lib/amd64/libaec.so"}
+      ${chk ''"$W/t"'' "^ok 1024 1$"}
+    '';
+  };
+
+  # cereal (BSD-3-Clause): header-only C++11 serialisation (binary, XML, JSON archives). cmake install only, as nixpkgs.
+  cereal = mkSrcPkg {
+    pname = "cereal"; version = "1.3.2";
+    src = { url = "https://codeload.github.com/USCiLab/cereal/tar.gz/refs/tags/v1.3.2";
+            sha256 = "16a7ad9b31ba5880dac55d62b5d6f243c3ebc8d46a3514149e56b5e7ea81f85f"; };
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DJUST_INSTALL_CEREAL=ON"}
+      # a struct through a JSON archive and back
+      cat > "$W/t.cc" <<'TPROG'
+#include <cereal/archives/json.hpp>
+#include <cereal/types/vector.hpp>
+#include <iostream>
+#include <sstream>
+struct P { int n; std::vector<int> v; template <class A> void serialize(A &a) { a(CEREAL_NVP(n), CEREAL_NVP(v)); } };
+int main(){ std::stringstream ss; { cereal::JSONOutputArchive o(ss); P p{42, {1, 2}}; o(cereal::make_nvp("p", p)); }
+P q{}; { cereal::JSONInputArchive i(ss); i(cereal::make_nvp("p", q)); } std::cout << "ok " << q.n << " " << q.v.size() << "\n"; }
+TPROG
+      "$CXX" -std=c++17 -I"$out/include" "$W/t.cc" -o "$W/t"
+      ${chk ''"$W/t"'' "^ok 42 2$"}
+    '';
+  };
+
+  # llhttp (MIT): Node.js's HTTP parser as a C library (aiohttp, libgit2). cmake, shared, as nixpkgs.
+  llhttp = mkSrcPkg {
+    pname = "llhttp"; version = "9.4.3";
+    src = { url = "https://codeload.github.com/nodejs/llhttp/tar.gz/refs/tags/release/v9.4.3";
+            sha256 = "1eb813c7437b31a87496a1cd3ed79f00746720f5e7e29c79b42c02cb69f36c39"; };
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DLLHTTP_BUILD_SHARED_LIBS=ON -DLLHTTP_BUILD_STATIC_LIBS=OFF"}
+      ${tprog ''#include <llhttp.h>
+#include <stdio.h>
+#include <string.h>
+static char url[64];
+static int on_url(llhttp_t *p, const char *at, size_t n){ (void)p; strncat(url, at, n); return 0; }
+int main(void){ llhttp_t p; llhttp_settings_t s; llhttp_settings_init(&s); s.on_url = on_url; llhttp_init(&p, HTTP_REQUEST, &s);
+const char *r = "GET /solnix HTTP/1.1\r\nHost: a\r\n\r\n"; int e = llhttp_execute(&p, r, strlen(r));
+printf("ok %d %s %s %d.%d\n", e, url, llhttp_method_name(llhttp_get_method(&p)), llhttp_get_http_major(&p), llhttp_get_http_minor(&p)); return 0; }'' "$out/lib/amd64/libllhttp.so"}
+      ${chk ''"$W/t"'' "^ok 0 /solnix GET 1\\.1$"}
+    '';
+  };
+
+  # capstone (BSD-3-Clause): the multi-architecture disassembly engine and cstool. cmake, shared, as nixpkgs (its tests off).
+  capstone = mkSrcPkg {
+    pname = "capstone"; version = "5.0.9";
+    src = { url = "https://codeload.github.com/capstone-engine/capstone/tar.gz/refs/tags/5.0.9";
+            sha256 = "0619da31af08152600af95c481527ef6d756c0a8404fca7544a4fdf6dfc2c0f9"; };
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      # cstool's own getopt declares `const char *optarg`; illumos' <stdlib.h> and <stdio.h> declare `char *optarg` (glibc only in
+      # <unistd.h>, which cstool does not include): the libc's type
+      [ "$(grep -c '^extern const char \*optarg;' cstool/getopt.h)" = 1 ] && [ "$(grep -c '^const char \*optarg;' cstool/getopt.c)" = 1 ] \
+        || { echo "FATAL: capstone optarg anchors" >&2; exit 1; }
+      sed -i 's/^extern const char \*optarg;/extern char *optarg;/' cstool/getopt.h; sed -i 's/^const char \*optarg;/char *optarg;/' cstool/getopt.c
+      ${cmakeB "-DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=OFF -DCAPSTONE_BUILD_TESTS=OFF"}
+      ${chk ''"$out/bin/cstool" x64 554889e5'' "push[[:space:]]+rbp"}
+      # the shared library itself: x86-64 bytes to mnemonics
+      ${tprog ''#include <capstone/capstone.h>
+#include <stdio.h>
+int main(void){ csh h; cs_insn *i; static const unsigned char c[] = { 0x55, 0x48, 0x89, 0xe5, 0xc3 }; int ma, mi; cs_version(&ma, &mi);
+if (cs_open(CS_ARCH_X86, CS_MODE_64, &h) != CS_ERR_OK) return 1; size_t n = cs_disasm(h, c, sizeof c, 0x1000, 0, &i); if (n < 2) return 2;
+printf("ok %d.%d %zu %s %s %s\n", ma, mi, n, i[0].mnemonic, i[1].mnemonic, i[1].op_str); cs_free(i, n); cs_close(&h); return 0; }'' "$out/lib/amd64/libcapstone.so"}
+      ${chk ''"$W/t"'' "^ok 5\\.0 3 push mov rbp, rsp$"}
     '';
   };
 }
