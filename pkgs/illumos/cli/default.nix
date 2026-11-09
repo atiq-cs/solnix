@@ -50,7 +50,8 @@ let
   c9 = import ./c-recipes3.nix (h // { inherit (c5) cmake; inherit (c4) perl; });
   rust = import ./rust.nix { inherit cargoPkg chk; extra = import ./rust-extra.nix h; };
   gotools = import ./go-tools.nix { inherit (goChain) goPkg go_1_27; inherit chk; inherit (c5) python3; } // import ./go-c1.nix { inherit (goChain) goPkg go_1_27; inherit chk; inherit (c5) python3; }
-    // import ./go-recipes2.nix { inherit (goChain) goPkg; inherit chk; };
+    // import ./go-recipes2.nix { inherit (goChain) goPkg; inherit chk; }
+    // import ./go-recipes3.nix { inherit (goChain) goPkg; inherit chk; };   # recipes3 (a new file: no served drv moves)
   data = import ./data.nix h;
   ti = import ./texinfo.nix (h // { inherit (c1) gnum4; inherit (c4) perl; });
 in c1 // c2 // c3 // c4 // c5 // c6 // c7 // c8 // c9 // data // ti // (if cargoPkg == null then { } else rust) // (if goChain == null then { } else gotools)
