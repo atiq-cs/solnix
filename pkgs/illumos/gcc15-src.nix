@@ -279,4 +279,5 @@ let
   '' ];
 };
 # buildKey: 1:1 with the drv, the same on every host and under --check (mk-src-pkg.nix explains why).
-in derivation (drvAttrs // { buildKey = builtins.substring 0 16 (builtins.hashString "sha256" (builtins.toJSON drvAttrs)); })
+# `ld` rides along (not a drv attr): the system instance links with the same ld this gcc was configured with (default.nix).
+in derivation (drvAttrs // { buildKey = builtins.substring 0 16 (builtins.hashString "sha256" (builtins.toJSON drvAttrs)); }) // { inherit ld; }

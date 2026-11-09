@@ -188,7 +188,7 @@ let
   # cross-dep test; grow-in-place verified OK on this bigger binary).
   # usr/bin/ld reaches lib/amd64 via $ORIGIN/../../lib/amd64 (originParts);
   # libldstab in usr/lib/amd64 is reached via $out/usr/lib/amd64 (selfLibDirs).
-  ld = mkIllumosComponent {
+  ldGate = mkIllumosComponent {
     name = "ld";
     files = [
       "usr/bin/ld"
@@ -201,6 +201,24 @@ let
     selfLibDirs = [ "usr/lib/amd64" ]; # libldstab isn't reachable via $ORIGIN
     depRunpaths = libcLibDirs;         # libelf + libc from the libc slice
   };
+  # The link-editor every from-source build uses: the gate's, with libld.so.4 from ./libld.nix (scripts/patches/0011: output
+  # relocations sorted on the output symbol index, not on the heap address of ld's symbol descriptors, so a link is the same on
+  # every host). The seed instance (buildTools = [ ]) keeps the gate's ld for its gcc 14 and seed rows, which build only on an
+  # OI host and are served; it builds ldNew, and its gcc15 is the first compiler on it (NixOS: stage N's tools are stage N-1's
+  # outputs). The system instance takes that same ld from its gcc15 (gcc15-src.nix passes `ld` through), so there is one.
+  libld0011 = import ./libld.nix {
+    src = kernelNd.src; gate = gate'; gcc = gcc14; inherit (srcPkgs) binutils; ldStock = ldGate; inherit libc world;
+    patch = ../../scripts/patches/0011-libld-reloc-sort-symndx.patch;
+    tools = builtins.concatStringsSep ":" (map (p: "${p}/bin") [ seedBuildTools srcPkgs.coreutils srcPkgs.findutils cliBase.gnupatch cliBase.perl ]);
+  };
+  ldNew = mkIllumosComponent {
+    name = "ld";
+    files = [ "usr/bin/ld" "usr/bin/amd64/ld" "lib/amd64/liblddbg.so.4" "lib/amd64/libumem.so.1" "usr/lib/amd64/libldstab.so.1" ];
+    extraFiles = [ { src = "${libld0011}/lib/amd64/libld.so.4"; dst = "lib/amd64/libld.so.4"; } ];
+    selfLibDirs = [ "usr/lib/amd64" ];
+    depRunpaths = libcLibDirs;
+  };
+  ld = if buildTools == [ ] then ldGate else stdGcc15.ld;
 
   # sys — the kernel. i86pc platform unix + amd64 genunix + the amd64 kernel
   # module tree. Kernel objects are NOT userland ELF (no SONAME/NEEDED/RUNPATH),
@@ -388,7 +406,8 @@ let
     else (import ./. { gate = gate'; inherit gateArgs; stdenvGcc = "14"; }).gcc15;
   gcc = if stdenvGcc == "14" then gcc14 else stdGcc15;
   # GCC 15.3.0 + the illumos patch series (./gcc15-src.nix, gcc1 fd815b3 as is), built in the gcc 14 instance.
-  gcc15 = if stdenvGcc != "14" then stdGcc15 else import ./gcc15-src.nix { gate = gate'; libcSlice = libc; inherit ld world; inherit (srcPkgs) libcExtra binutils bash;
+  gcc15 = if stdenvGcc != "14" then stdGcc15 else import ./gcc15-src.nix { gate = gate'; libcSlice = libc; inherit world; inherit (srcPkgs) libcExtra binutils bash;
+    ld = ldNew;   # the first compiler on the 0011 ld (the seed's gcc 14 and seed rows keep the gate's)
     stage0 = srcPkgs.gccWrapper;   # the gcc 14 stdenv compiler builds the next one (NixOS stage chain)
     # store-only PATH; perl: libssp/libatomic make_sunver.pl. cliBase, not cli: no go/cargo in gcc15's closure.
     tools = builtins.concatStringsSep ":" (map (p: "${p}/bin") [ seedBuildTools srcPkgs.coreutils srcPkgs.findutils cliBase.gnupatch cliBase.perl ]); };
