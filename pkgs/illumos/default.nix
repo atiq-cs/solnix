@@ -560,7 +560,9 @@ let
   # deps: nspr + nss for the gate's LDAP client stack (libldap.so.5), and gcc.lib
   # for the gate's few C++ objects (make, audioconvert, libfru*, libsun_fc, the
   # NIS yp servers), which NEED libstdc++.so.6 + libgcc_s.so.1.
-  world = import ./mk-proto-world.nix {
+  # The seed instance (buildTools = [ ]) keeps wave6's world builder (./seed-world, frozen): the seed rows link its world and
+  # build only on an OI host, so a stdenv change must not move them (nixpkgs bootstrap-tools; ./aarch64/seed-main).
+  world = import (if buildTools == [ ] then ./seed-world/mk-proto-world.nix else ./mk-proto-world.nix) {
     gate = gate'; libcSlice = libc;
     sharedLibs = [ srcPkgs.libcExtra ];
     deps = [ srcPkgs.zlib srcPkgs.libxml2 srcPkgs.nspr srcPkgs.nss gcc.lib ];
