@@ -535,6 +535,56 @@ SECRET_BODY = re.compile(rb"b3BlbnNzaC1rZXkt"                                   
 # password. Allowed only for root (a shipped root hash is itself a finding, but B18 targets NON-root accounts baked in;
 # root is covered by the image gate's shadow rule). Here, any non-root user with a hash FAILs.
 SHADOW_HASH = re.compile(rb"(?m)^([A-Za-z0-9_][A-Za-z0-9_.-]*):\$(?:1|2[aby]|5|6|y|gy)\$[./A-Za-z0-9]")
+# B18 key review (protocol agreed with infra 2026-11-09): a few upstream packages ship key material on purpose (Go's crypto test
+# fixtures, goproxy's demo MITM CA). A B18 match is skipped ONLY when all three hold: the digest of its whole armour block (BEGIN..END
+# inclusive, CRLF -> LF, sha256) is on infra's served registry/b18-allowlist.tsv, the out's pname matches the row's pnames (exact or a
+# short glob), and the row's state is approved. A human approves every row; there is no pattern for "looks like a test key".
+# shortcut: only PEM/OpenSSH armour blocks can be allowlisted; an age/PuTTY/sops/PGP match always FAILs. Add a token rule when a
+# request needs one.
+B18_BLOCK = re.compile(rb"-----BEGIN ((?:RSA|EC|DSA|ENCRYPTED|OPENSSH) PRIVATE KEY)-----\r?\n.*?-----END \1-----", re.S)
+B18_COLS = ("digest", "kind", "pnames", "upstream", "why", "state", "reviewer", "decided_utc", "request")
+_B18_ALLOW = {}
+def b18_allowlist():
+    """-> {(digest, pnames): row} from the SERVED registry/b18-allowlist.tsv (GATE_B18_ALLOWLIST: a local file instead: tests,
+    offline), read once per process and only when a B18 match needs it; append-only, so the last row of a (digest, pnames) wins
+    (a revocation is a later row). -> None if it cannot be read (HTTP 404 included): then nothing is exempt (fail closed)."""
+    src = os.environ.get("GATE_B18_ALLOWLIST") or "https://cache.solnix.io/registry/b18-allowlist.tsv"
+    if src in _B18_ALLOW: return _B18_ALLOW[src]
+    try:
+        if "://" in src:
+            import urllib.request
+            req = urllib.request.Request(src, headers={"User-Agent": "solnix-gate-checks/1"})
+            with urllib.request.urlopen(req, timeout=60) as r: text = r.read().decode()
+        else: text = open(src).read()
+    except (OSError, UnicodeDecodeError) as e:
+        print(f"WARN b18-allowlist: cannot read {src} ({e}): no B18 exemption", file=sys.stderr)
+        _B18_ALLOW[src] = None; return None
+    rows, cols = {}, B18_COLS
+    for l in text.splitlines():
+        f = l.split("\t")
+        if not l.strip() or l.startswith("#"): continue
+        if f[0] == "digest": cols = tuple(f); continue   # a header names the columns
+        row = dict(zip(cols, f))
+        if re.fullmatch(r"[0-9a-f]{64}", row.get("digest", "")): rows[(row["digest"], row.get("pnames", ""))] = row
+    _B18_ALLOW[src] = rows; return rows
+
+def drv_pname(name):
+    """builtins.parseDrvName's name: up to the first '-' not followed by a letter (go-1.26.8 -> go, flyctl-0.4.52-debug -> flyctl)."""
+    m = re.search(r"-[^A-Za-z]", name)
+    return name[:m.start()] if m else name
+
+def b18_exempt(digest, pname):
+    """-> (True, request) if an approved row covers digest for pname; else (False, why)."""
+    import fnmatch
+    rows = b18_allowlist()
+    if rows is None: return False, "the B18 allowlist is unreadable"
+    hit = [r for (d, _), r in rows.items() if d == digest]
+    for r in hit:
+        if r.get("state") == "approved" and any(fnmatch.fnmatchcase(pname, g) for g in re.split(r"[,\s]+", r.get("pnames", "").strip()) if g):
+            return True, r.get("request", "?")
+    if not hit: return False, "not on the B18 allowlist"
+    return False, "on the B18 allowlist but not approved for pname " + pname + " (" + ", ".join(f"{r.get('pnames')}={r.get('state')}" for r in hit) + ")"
+
 # B13 allowlist: text that merely MENTIONS a host path (documentation), not a path the program uses.
 DOC_RE = re.compile(r"(^|/)share/(man|info|doc|gtk-doc|help|licenses)/|(^|/)(man|doc)/|\.(1|3|5|7|8|[1-9][a-z]*|info|html|txt|md|rst|pdf)(\.gz)?$")
 
@@ -665,6 +715,7 @@ def check_nar(out, src=None):
                 return "dangling"
         return "in"
     shebangs = {}
+    pname = drv_pname(os.path.basename(out)[33:])   # B18's allowlist scope: the store name's pname, as recipes.tsv names the row
     try:
       for rel, kind, info in nar_entries(open_nar(src or out)):   # streamed: one file's data in memory at a time
         names.add(rel)
@@ -682,10 +733,25 @@ def check_nar(out, src=None):
         # secret, an inline sops ciphertext), never a bare header, so it is checked in EVERY file regardless of extension: a
         # real key in a .txt or a man page is still a leak (DOC_RE would wrongly skip keys.txt). The crypt-hash rule is also
         # unconditional (a shadow file is not documentation).
-        mb = SECRET_BODY.search(data) or (SECRET_BODY.search(gunzip_bounded(data)) if rel.endswith(".gz") else None)
-        if mb:
-            kind = mb.group(0)[:24].decode(errors="replace")
-            r.append(("FAIL", "B18-secret", f"{rel}: private key / secret material ({kind}...)"))
+        # Every match must lie in an armour block that infra's key review approved for this out's pname (b18_exempt); else FAIL.
+        for buf in (data,) + ((gunzip_bounded(data),) if rel.endswith(".gz") else ()):
+            hits = list(SECRET_BODY.finditer(buf))
+            if not hits: continue
+            blocks = [(b.start(), b.end(), hashlib.sha256(b.group(0).replace(b"\r\n", b"\n")).hexdigest()) for b in B18_BLOCK.finditer(buf)]
+            bad, okd = None, {}
+            for mb in hits:
+                blk = next((b for b in blocks if b[0] <= mb.start() < b[1]), None)
+                if blk is None: bad = (mb, None, "not an armoured PEM/OpenSSH block (never allowlisted)"); break
+                ok_, why = b18_exempt(blk[2], pname)
+                if not ok_: bad = (mb, blk[2], why); break
+                okd[blk[2]] = why
+            if bad:
+                mb, dg, why = bad
+                kind = mb.group(0)[:24].decode(errors="replace")
+                r.append(("FAIL", "B18-secret", f"{rel}: private key / secret material ({kind}...)" + (f" block sha256 {dg}: {why}" if dg else f": {why}")))
+                break
+            for dg, req in okd.items():
+                r.append(("INFO", "B18-allowlisted", f"{rel}: block sha256 {dg[:16]}.. approved for pname {pname} (key review {req})"))
         sh = SHADOW_HASH.search(data)
         if sh and sh.group(1) != b"root":
             r.append(("FAIL", "B18-secret", f"{rel}: crypt hash for non-root account '{sh.group(1).decode(errors='replace')}'"))
@@ -1444,6 +1510,38 @@ def selftest_out():
     ]
     bad = 0
     with tempfile.TemporaryDirectory() as td:
+        # B18 key review: blocks built at run time (no key literal in this file), an allowlist file, and outs named for their pname
+        def blk(tag, typ=b"RSA"):
+            body = base64.b64encode(hashlib.sha256(b"solnix-b18-selftest-" + tag).digest() * 3)
+            return b"-----BEGIN " + typ + b" PRIVATE" + b" KEY-----\n" + body + b"\n-----END " + typ + b" PRIVATE" + b" KEY-----"
+        dig = lambda b: hashlib.sha256(b).hexdigest()
+        K1, K2, K3, K4, K5 = (blk(t) for t in (b"approved", b"fresh", b"proposed", b"revoked", b"glob"))
+        al = os.path.join(td, "b18-allowlist.tsv"); empty = os.path.join(td, "b18-empty.tsv"); open(empty, "w").close()
+        open(al, "w").write("\t".join(B18_COLS) + "\n" + "".join("\t".join(r) + "\n" for r in (
+            (dig(K1), "pem-rsa", "go", "go1.26.8 src/crypto/tls", "test fixture", "approved", "x", "2026-11-09T00:00Z", "r1"),
+            (dig(K3), "pem-rsa", "go", "u", "w", "proposed", "", "", "r2"),
+            (dig(K4), "pem-rsa", "go", "u", "w", "approved", "x", "2026-11-09T00:00Z", "r3"),
+            (dig(K4), "pem-rsa", "go", "u", "w", "revoked", "x", "2026-11-09T01:00Z", "r3"),
+            (dig(K5), "pem-rsa", "cosmic-*", "u", "w", "approved", "x", "2026-11-09T00:00Z", "r4"))))
+        kt = lambda *ks: Dd(share=Dd(go=Dd(**{f"k{i}.pem": R(k + b"\n") for i, k in enumerate(ks)})))
+        b18c = [("B18 key review: an approved digest in its pname passes", "go-1.26.8", kt(K1), al, True, "INFO B18-allowlisted"),
+                ("B18 key review: ... and in its -debug out (pname go)", "go-1.26.8-debug", kt(K1), al, True, "INFO B18-allowlisted"),
+                ("B18 key review: the same block in another pname FAILs", "age-1.2.1", kt(K1), al, False, "FAIL B18-secret"),
+                ("B18 key review: a fresh key beside the approved one FAILs", "go-1.26.8", kt(K1, K2), al, False, "FAIL B18-secret"),
+                ("B18 key review: a proposed (not approved) row FAILs", "go-1.26.8", kt(K3), al, False, "FAIL B18-secret"),
+                ("B18 key review: an approved row revoked by a later row FAILs", "go-1.26.8", kt(K4), al, False, "FAIL B18-secret"),
+                ("B18 key review: a pname glob (cosmic-*) passes its pname", "cosmic-comp-1.0", kt(K5), al, True, "INFO B18-allowlisted"),
+                ("B18 key review: ... and not another", "go-1.26.8", kt(K5), al, False, "FAIL B18-secret"),
+                ("B18 key review: allowlist unreadable -> FAIL (fail closed)", "go-1.26.8", kt(K1), os.path.join(td, "absent.tsv"), False, "FAIL B18-secret"),
+                ("B18 key review: an approved block gzip'd passes", "go-1.26.8", Dd(share=Dd(**{"k.pem.gz": R(__import__("gzip").compress(K1 + b"\n", mtime=0))})), al, True, "INFO B18-allowlisted")]
+        for label, name, tree, src, want_pass, must in b18c:
+            os.environ["GATE_B18_ALLOWLIST"] = src
+            f = os.path.join(td, "b.nar"); open(f, "wb").write(nar_bytes(tree)); lines = []
+            rc = run_out("nar", [STORE + "6" * 32 + "-" + name, f], out=lines.append)
+            ok = (rc == 0) == want_pass and any(l.startswith(must + " ") for l in lines)
+            bad += not ok
+            print(f"{'ok ' if ok else 'BAD'} nar  {label}: {'PASS' if rc == 0 else 'FAIL'}" + ("" if ok else "\n    " + "\n    ".join(lines)))
+        os.environ["GATE_B18_ALLOWLIST"] = empty   # the cases below: no network, nothing exempt
         for label, tree, want_pass, must in cases:
             f = os.path.join(td, "x.nar")
             open(f, "wb").write(nar_bytes(good)[:100] if tree is None else nar_bytes(tree))   # None: a truncated NAR
