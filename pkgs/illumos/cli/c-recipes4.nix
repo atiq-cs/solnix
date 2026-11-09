@@ -1,7 +1,7 @@
 # cli/c-recipes4.nix -- tools and libraries the x86 build queue has jobs for and solnix lacked (recipes4, 2026-11-09), picked by how many
 # queued jobs each moves to buildable. A new file, so no served drv moves. Store-only builds (nativeTools), each with an in-build check
 # that runs it on real input. Versions are the queue's targets; sources pinned by sha256 (equal to nixpkgs' flat hash where it has one).
-{ base, mkSrcPkg, world, chk, hostTools, python3, gnupatch, gnum4, cmake, bzip2-bin, libxau, libxdmcp, libpthread-stubs, gtkMeson ? null, graphics, ... }:
+{ base, mkSrcPkg, world, chk, hostTools, python3, gnupatch, gnum4, cmake, perl, bzip2-bin, libxau, libxdmcp, libpthread-stubs, gtkMeson ? null, graphics, ... }:
 let
   fetch = url: sha256: import <nix/fetchurl.nix> { inherit url sha256; };
   # a C test program against the just-installed library: <src> <link flags>
@@ -521,6 +521,172 @@ TPROG
       # the link line from abseil's own pkg-config files (which libraries absl_strings pulls in changes between LTS releases)
       "$CXX" -std=c++17 "$W/t.cc" $(PKG_CONFIG_PATH="$out/lib/amd64/pkgconfig" pkg-config --cflags --libs absl_strings) -Wl,-R,"$out/lib/amd64" -o "$W/t"
       ${chk ''"$W/t"'' "^ok 3 c$"}
+    '';
+  };
+
+  # ---- recipes5 batch 11: GNU ld version scripts on illumos (../version-script-mapfile.sh) -----------------------------------------
+  # Each of these links its shared library with -Wl,--version-script, which illumos ld rejects (or, with configure's probe, drops and
+  # exports nothing or everything). vsMap puts the shim in front of $CC/$CXX: it links once, reads the defined names, and links again
+  # with the equivalent v2 mapfile, so the library exports exactly the script's symbols, in its version nodes. Each check below links
+  # the installed library BY PATH: the cc wrapper's -L order puts the gate's own libmd/libcrypt ahead of $out (R10's libmd "exports
+  # nothing" was that, the test linking the gate's libmd), and pvs/elfdump assert the version nodes and that internals stay local.
+  vsMap = ''"$BASH" ${../version-script-mapfile.sh} wrap'';
+  # <lib> <version node> <symbol>: the library defines <symbol> in <version node>, exported (pvs prints "NODE: sym;")
+  hasVer = lib: node: sym: ''/usr/bin/pvs -dos "${lib}" | grep -q "[[:space:]]${node}: ${sym};$" || { echo "FATAL: ${lib} lacks ${node}: ${sym}" >&2; /usr/bin/pvs -do "${lib}" >&2; exit 1; }'';
+  # <lib> <symbol>: <symbol> is not exported (the script made it local)
+  notExp = lib: sym: ''! /usr/bin/elfdump -s -N .dynsym "${lib}" | grep -qE " ${sym}$" || { echo "FATAL: ${lib} exports ${sym}" >&2; exit 1; }'';
+
+  # zlib-ng (Zlib): the zlib replacement with SIMD paths, native API (libz-ng), as nixpkgs (no compat, no utils, no tests).
+  zlib-ng = mkSrcPkg {
+    pname = "zlib-ng"; version = "2.3.3";
+    src = { url = "https://codeload.github.com/zlib-ng/zlib-ng/tar.gz/refs/tags/2.3.3";
+            sha256 = "f9c65aa9c852eb8255b636fd9f07ce1c406f061ec19a2e7d508b318ca0c907d1"; };
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${vsMap}
+      # HAVE_SYMVER turns on gas .symver aliases (zng_* @ZLIB_NG_x), which illumos ld does not version: the plain names, in the map
+      grep -q 'add_definitions(-DHAVE_SYMVER)' CMakeLists.txt || { echo "FATAL: zlib-ng HAVE_SYMVER anchor" >&2; exit 1; }
+      sed -i 's/add_definitions(-DHAVE_SYMVER)/# illumos: no .symver (solnix)/' CMakeLists.txt
+      ${cmakeB "-DBUILD_SHARED_LIBS=ON -DINSTALL_UTILS=OFF -DBUILD_TESTING=OFF"}
+      L="$out/lib/amd64/libz-ng.so.2"
+      ${hasVer "$L" "ZLIB_NG_2.0.0" "zng_compress"}
+      ${hasVer "$L" "ZLIB_NG_2.1.0" "zlibng_version"}
+      ${hasVer "$L" "ZLIB_NG_GZ_2.0.0" "zng_gzopen"}
+      ${tprog ''#include <zlib-ng.h>
+#include <stdio.h>
+#include <string.h>
+int main(void){ const char *s = "solnix solnix solnix solnix"; uint8_t z[128], o[128]; size_t zl = sizeof z, ol = sizeof o;
+if (zng_compress(z, &zl, (const uint8_t *)s, strlen(s)) != Z_OK || zng_uncompress(o, &ol, z, zl) != Z_OK) return 1;
+printf("ok %s %.*s\n", zlibng_version(), (int)ol, o); return 0; }'' "$L"}
+      ${chk ''"$W/t"'' "^ok 2\\.3\\.3 solnix solnix"}
+    '';
+  };
+
+  # libmd (BSD-3-Clause and others): message digest functions from BSD (libbsd's dependency). configure's --version-script probe
+  # fails on illumos, so upstream falls back to libtool -export-symbols; the shim makes the probe pass and gives it its LIBMD_0.x nodes.
+  libmd = mkSrcPkg {
+    pname = "libmd"; version = "1.3.0";
+    src = { url = "https://archive.hadrons.org/software/libmd/libmd-1.3.0.tar.xz";
+            sha256 = "fc0f1eb6b6766470326f2c014693809190e67dba84274a6fbae9d4912d066706"; };
+    deps = [ world ]; nativeTools = hostTools;
+    build = ''
+      ${vsMap}
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static
+      grep -q '^HAVE_LINKER_VERSION_SCRIPT_TRUE=$' config.status 2>/dev/null || grep -q 'libmd_cv_version_script=yes' config.log || { echo "FATAL: libmd did not take the version script" >&2; exit 1; }
+      gmake -j8; gmake install
+      L="$out/lib/amd64/libmd.so.0"
+      ${hasVer "$L" "LIBMD_0.0" "SHA256Data"}
+      ${hasVer "$L" "LIBMD_0.1" "SHA224Data"}
+      ${hasVer "$L" "LIBMD_0.3" "SHA512_224Data"}
+      ${tprog ''#include <sha2.h>
+#include <md5.h>
+#include <stdio.h>
+int main(void){ char b[SHA256_DIGEST_STRING_LENGTH], m[MD5_DIGEST_STRING_LENGTH];
+printf("%s %s\n", SHA256Data((const unsigned char *)"abc", 3, b), MD5Data((const unsigned char *)"abc", 3, m)); return 0; }'' "$L"}
+      ${chk ''"$W/t"'' "^ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad 900150983cd24fb0d6963f7d28e17f72$"}
+    '';
+  };
+
+  # libbsd (BSD-3-Clause, ISC, MIT, beerware and others): BSD utility functions (strlcpy, humanize_number, vis, setproctitle...).
+  # Its libbsd.map has LIBBSD_0.x nodes; local-link.h already turns .symver off on __sun (plain aliases), so the shim's mapfile is all.
+  libbsd = mkSrcPkg {
+    pname = "libbsd"; version = "0.12.2";
+    src = { url = "https://libbsd.freedesktop.org/releases/libbsd-0.12.2.tar.xz";
+            sha256 = "b88cc9163d0c652aaf39a99991d974ddba1c3a9711db8f1b5838af2a14731014"; };
+    deps = [ world libmd ]; nativeTools = hostTools;
+    build = ''
+      ${vsMap}
+      grep -q '#if defined(__ELF__) && !defined(__sun)' src/local-link.h || { echo "FATAL: libbsd __sun symver anchor" >&2; exit 1; }
+      # the 0.12.2 tarball lacks two pages man/Makefile.am installs when api_time_macros is on, which only its solaris2* case sets
+      # ("No rule to make target 'TIMESPEC_TO_TIMEVAL.3bsd'"): the files at the 0.12.2 tag
+      [ ! -e man/TIMESPEC_TO_TIMEVAL.3bsd ] || { echo "FATAL: libbsd man page anchor" >&2; exit 1; }
+      cp ${fetch "https://gitlab.freedesktop.org/libbsd/libbsd/-/raw/0.12.2/man/TIMESPEC_TO_TIMEVAL.3bsd" "504b636281bea0b11865cac41cbaf96bbc44e077780f840d098091756dce9650"} man/TIMESPEC_TO_TIMEVAL.3bsd
+      cp ${fetch "https://gitlab.freedesktop.org/libbsd/libbsd/-/raw/0.12.2/man/TIMEVAL_TO_TIMESPEC.3bsd" "df53343e36c43c64f109621e9f554e05dc7d7606e34cfad91c74697f4db2aabf"} man/TIMEVAL_TO_TIMESPEC.3bsd
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static
+      grep -q 'libbsd_cv_version_script=yes' config.log || { echo "FATAL: libbsd did not take the version script" >&2; exit 1; }
+      gmake -j8; gmake install
+      L="$out/lib/amd64/libbsd.so.0"
+      ${hasVer "$L" "LIBBSD_0.0" "humanize_number"}
+      ${hasVer "$L" "LIBBSD_0.5" "setproctitle"}
+      ${tprog ''#include <bsd/libutil.h>
+#include <bsd/vis.h>
+#include <stdio.h>
+int main(void){ char h[16], v[32]; if (humanize_number(h, sizeof h, 1536, "B", HN_AUTOSCALE, HN_DECIMAL) < 0) return 1;
+strvis(v, "a\tb", VIS_TAB); printf("ok %s %s\n", h, v); return 0; }'' "-I$out/include $L ${libmd}/lib/amd64/libmd.so.0"}
+      ${chk ''"$W/t"'' "^ok 1536 B a\\\\011b$"}
+    '';
+  };
+
+  # libxcrypt (LGPL-2.1+): crypt(3) with the modern hashes (yescrypt, bcrypt, sha512crypt), as nixpkgs: strong hashes plus the glibc
+  # API names. Installed under its own prefix; nothing here replaces the gate's crypt. configure's AX_CHECK_VSCRIPT takes
+  # --version-script through the shim; its .symver aliases (GLIBC_2.x compat) are off: illumos has no glibc binaries to keep working.
+  libxcrypt = mkSrcPkg {
+    pname = "libxcrypt"; version = "4.5.2";
+    src = { url = "https://github.com/besser82/libxcrypt/releases/download/v4.5.2/libxcrypt-4.5.2.tar.xz";
+            sha256 = "71513a31c01a428bccd5367a32fd95f115d6dac50fb5b60c779d5c7942aec071"; };
+    deps = [ world ]; nativeTools = [ perl ] ++ hostTools;
+    build = ''
+      ${vsMap}
+      # --enable-obsolete-api=glibc asks for glibc's compat versions, and compute-symver-floor has no row for solaris (ERROR); the
+      # library itself is the same with the API names, so: no obsolete compat ABI, the XCRYPT_x.y nodes only (soname libcrypt.so.2)
+      # configure finds the gate's memset_s (explicit_bzero's mapping), which <string.h> declares only under __STDC_WANT_LIB_EXT1__
+      # with the version script on, crypt-symbol-vers.h defines each public name as _crypt_<name> plus a gas .symver alias, which the
+      # shim refuses (illumos ld keeps crypt@@XCRYPT_2.0 as a literal name): the plain names, which the mapfile puts in the same nodes.
+      # In Makefile.in: config.status's depfiles step already runs make, which writes the header, so a make-line override comes too late.
+      grep -q '^@HAVE_VSCRIPT_TRUE@APPLY_SYMVERS = yes$' Makefile.in || { echo "FATAL: libxcrypt APPLY_SYMVERS anchor" >&2; exit 1; }
+      sed -i 's/^@HAVE_VSCRIPT_TRUE@APPLY_SYMVERS = yes$/@HAVE_VSCRIPT_TRUE@APPLY_SYMVERS = no/' Makefile.in
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --enable-hashes=strong --enable-obsolete-api=no \
+        --disable-failure-tokens --disable-werror CPPFLAGS="-D__STDC_WANT_LIB_EXT1__=1"
+      grep -q '^ax_cv_check_vscript_flag=--version-script$' config.log || { echo "FATAL: libxcrypt did not take the version script" >&2; exit 1; }
+      gmake -j8; gmake install
+      L="$out/lib/amd64/libcrypt.so.2"
+      ${hasVer "$L" "XCRYPT_2.0" "crypt"}
+      ${hasVer "$L" "XCRYPT_4.4" "crypt_preferred_method"}
+      ${notExp "$L" "_crypt_SHA512_Init"}
+      ${tprog ''#include <crypt.h>
+#include <stdio.h>
+#include <string.h>
+int main(void){ const char *h = crypt("solnix", "$6$saltsalt$"); if(!h) return 1;
+printf("%s %s\n", h, strcmp(crypt("solnix", h), h) == 0 ? "ok" : "mismatch"); return 0; }'' "$L"}
+      ${chk ''"$W/t"'' "^\\$6\\$saltsalt\\$33\\.Cb4hCnPicks6gFCE/YYdT3qzit5vGSFkrdDqfvSYcPet7EW2D26kjMFg42rnWB1DE0rb9cotvnIw9eVZQh/ ok$"}
+    '';
+  };
+
+  # libglvnd (MIT-style, BSD; its GPL-3 parts are the autotools ax_pthread macro only, not built with meson): the vendor-neutral GL
+  # dispatch layer (libGL, libEGL, libGLX, libOpenGL, libGLES* over libGLdispatch), Mesa's front end when several vendors coexist.
+  # meson, as upstream builds it; GLdispatch's export list is a version script, the others link -Bsymbolic (illumos ld has it).
+  # x86-64 has no illumos case in its asm table, so the pure C dispatch (nixpkgs uses the same on every non-listed system).
+  libglvnd = mkSrcPkg {
+    pname = "libglvnd"; version = "1.7.0";
+    src = { url = "https://gitlab.freedesktop.org/glvnd/libglvnd/-/archive/v1.7.0/libglvnd-v1.7.0.tar.gz";
+            sha256 = "2b6e15b06aafb4c0b6e2348124808cbd9b291c647299eaaba2e3202f51ff2f3d"; };
+    deps = [ world libx11 libxext ]; linkDeps = [ base.xorgproto libxcb libxau libxdmcp ]; nativeTools = mesonTools;
+    build = ''
+      ${vsMap}
+      ${mesonBuild "-Dasm=disabled -Dx11=enabled -Dglx=enabled -Degl=true -Dgles1=true -Dgles2=true -Dheaders=true"}
+      L="$out/lib/amd64/libGLdispatch.so.0"
+      ${hasVer "$L" "libGLdispatch.so.0" "__glDispatchInit"}
+      ${notExp "$L" "mt_create"}
+      for l in libGL.so.1 libEGL.so.1 libGLX.so.0 libOpenGL.so.0 libGLESv2.so.2; do
+        [ -f "$out/lib/amd64/$l" ] || { echo "FATAL: libglvnd: no $l" >&2; exit 1; }
+      done
+      /usr/bin/elfdump -d "$out/lib/amd64/libEGL.so.1" | grep -q 'FLAGS .*SYMBOLIC' || { echo "FATAL: libEGL not -Bsymbolic" >&2; exit 1; }
+      # upstream's own dispatch and EGL tests (dummy vendors from the build tree, no display, no GPU, nothing outside the build dir)
+      # bin/symbols-check.py drops the link-editor's own names only on Linux/GNU/Haiku; illumos ld adds _DYNAMIC, _GLOBAL_OFFSET_TABLE_,
+      # _PROCEDURE_LINKAGE_TABLE_ and _etext to every shared object (_edata/_end/_init/_fini are listed already): add SunOS and those 4
+      grep -q "if platform_name in \['Linux', 'GNU', 'Haiku'\]" bin/symbols-check.py && grep -q "^    '__bss_end__',$" bin/symbols-check.py \
+        || { echo "FATAL: libglvnd symbols-check anchor" >&2; exit 1; }
+      sed -i -e "s/if platform_name in \['Linux', 'GNU', 'Haiku'\]/if platform_name in ['Linux', 'GNU', 'Haiku', 'SunOS']/" \
+        -e "s/^    '__bss_end__',$/    '__bss_end__', '_DYNAMIC', '_GLOBAL_OFFSET_TABLE_', '_PROCEDURE_LINKAGE_TABLE_', '_etext',/" bin/symbols-check.py
+      # every library's exports against upstream's lists (the symbols suite), and the dispatch and EGL tests; the 8 generated/patched
+      # dispatch tests skip (77): they need asm entrypoints, which x86-64 illumos does not get (pure C dispatch)
+      mrc=0; meson test -C _b --suite gldispatch --suite egl --suite symbols --print-errorlogs > "$W/mt.log" 2>&1 || mrc=$?   # set -e: keep the rc
+      grep -E '^ *[0-9]+/[0-9]+ ' "$W/mt.log" >&2 || true
+      [ $mrc = 0 ] || { echo "FATAL: libglvnd meson test rc=$mrc" >&2; tail -80 "$W/mt.log" >&2; exit 1; }
+      ${tprog ''#include <EGL/egl.h>
+#include <stdio.h>
+int main(void){ const char *e = eglQueryString(EGL_NO_DISPLAY, EGL_EXTENSIONS); printf("ok %d\n", e != NULL); return 0; }'' "$out/lib/amd64/libEGL.so.1"}
+      ${chk ''__EGL_VENDOR_LIBRARY_DIRS="$W/none" "$W/t"'' "^ok 1$"}
     '';
   };
 }
