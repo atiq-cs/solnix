@@ -45,7 +45,6 @@ in rec {
   # hunspell (MPL-1.1/GPL/LGPL): library + CLI, nixpkgs' --with-ui --with-readline. Dictionaries: hunspell-dict-en-us.
   hunspell = mkSrcPkg {
     pname = "hunspell"; version = "1.7.3";
-    cxxName = "c++";   # libtool C++ (mk-src-pkg cxxName)
     src = { url = "https://github.com/hunspell/hunspell/releases/download/v1.7.3/hunspell-1.7.3.tar.gz";
             sha256 = "433274dac0619cb00c2e18b43a3dd3a9d50da5b5613fa9b5c21781e35dd76bc1"; };
     # GNU libiconv, as gdb (c-dev.nix): g++ predefines _XPG6, which makes the gate's <iconv.h> declare iconv(..., char **, ...), and
@@ -141,7 +140,6 @@ in rec {
   # --enable-fat on SunOS (nixpkgs: some tests crash there), --build pinned so config.guess cannot probe the host CPU.
   gmp6 = mkSrcPkg {
     pname = "gmp6"; version = "6.3.0";
-    cxxName = "c++";   # libtool C++ (mk-src-pkg cxxName)
     src = gnu "gmp" "6.3.0" "xz" "a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898";
     deps = [ world ]; nativeTools = [ gnum4 ] ++ hostTools;
     build = ''

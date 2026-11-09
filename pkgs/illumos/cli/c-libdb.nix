@@ -12,7 +12,6 @@ rec {
   # the tag: LICENSE (Oracle's Sleepycat text, as nixpkgs' db: lib.licenses.sleepycat), plus the UCB BSD and Harvard notices in it.
   libdb = mkSrcPkg {
     pname = "libdb"; version = "2026.10.7.2";
-    cxxName = "c++";   # libtool C++ (mk-src-pkg cxxName)
     # the release ships a stale Linux lang/sql/odbc/libtool (unused: no --enable-sql), and build_tcl/ is the test-only configure with
     # the default --prefix=/usr/local/BerkeleyDB.* (never installed): neither is a host path this build uses (recipes3)
     hostPathAllow = "^[0-9]+:sys_lib_dlsearch_path_spec=\"/lib /usr/lib /usr/X11R6/lib |^[0-9]+:(prefix='|S\\[\"prefix\"\\]=\")/usr/local/BerkeleyDB[.][0-9.]+['\"]$";
