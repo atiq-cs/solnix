@@ -32,6 +32,13 @@ printf 'a\000b\n' | grep -a -b -o -F b > /dev/null 2>&1 || {
   echo "publish-gate: $(command -v grep) is not GNU grep (needs -a -b -o); set GATE_GREP_DIR to a gnugrep bin" >&2; exit 2; }
 # (before --selftest too: its word-rule check needs GNU grep -w, and illumos /usr/bin/grep has none; a64s on dixa)
 
+# The host-name scan below is meaningless when the nodename is the distro's own name: every illumos ELF's .comment carries
+# "@(#)illumos solnix-<rev>" (uname -v) and gcc's "GCC: (solnix 15.3.0)", so a fresh AMI host (nodename "solnix") FAILed
+# every out on bytes that are no host leak (cosmic5, 11-08). Refuse instead, so the scan stays strict.
+# shortcut: a fixed list plus the words of uname -v; add a name here if another image boots with a distro nodename.
+distro_nodename() { case "$1" in solnix|openindiana|illumos|omnios|sunos|localhost|unknown) return 0;; esac
+  for w in $(uname -v | tr -c 'A-Za-z0-9\n' ' '); do [ "$w" = "$1" ] && return 0; done; return 1; }
+
 # --selftest: prove the undeclared-reference rule bites without the store. A path
 # NAMED in the NAR is a violation iff it is in the deriver's input closure and not
 # declared; help-text strings (outside the inputs) and declared refs are not.
@@ -44,9 +51,15 @@ if [ "${1:-}" = "--selftest" ]; then
   r3=$(chk /nix/store/cccccccccccccccccccccccccccccccc "$R" "$I")
   # the host-string scan counts the name as a WORD: inside "obraichean" (gd.po) it is not the host, in "/ROOT/braich/" it is
   w1=$(printf 'obraichean\n' | grep -c -w -F braich); w2=$(printf 'zfs /ROOT/braich/var\n' | grep -c -w -F braich)
-  [ -n "$r1" ] && [ -z "$r2" ] && [ -z "$r3" ] && [ "$w1" = 0 ] && [ "$w2" = 1 ] && { echo "SELFTEST PASS"; exit 0; }
-  echo "SELFTEST FAIL: [$r1] [$r2] [$r3] word [$w1] [$w2]"; exit 1
+  # a distro nodename is refused; a real host name is not
+  d1=$(distro_nodename solnix && echo y); d2=$(distro_nodename "$(uname -v | tr -c 'A-Za-z0-9\n' ' ' | awk '{print $1}')" && echo y)
+  d3=$(distro_nodename solnix-woof && echo y)
+  [ -n "$r1" ] && [ -z "$r2" ] && [ -z "$r3" ] && [ "$w1" = 0 ] && [ "$w2" = 1 ] && [ -n "$d1" ] && [ -n "$d2" ] && [ -z "$d3" ] &&
+    { echo "SELFTEST PASS"; exit 0; }
+  echo "SELFTEST FAIL: [$r1] [$r2] [$r3] word [$w1] [$w2] nodename [$d1] [$d2] [$d3]"; exit 1
 fi
+
+distro_nodename "$(uname -n)" && { echo "publish-gate: nodename '$(uname -n)' is a distro name (in uname -v / gcc's version string), so the host-name scan cannot tell a leak from the version strings: give this host a unique nodename first" >&2; exit 2; }
 
 py=${GATE_PYTHON:-$(command -v python3)}
 [ -n "$py" ] && "$py" -c 'import sys; sys.exit(sys.version_info < (3, 9))' 2>/dev/null || {
