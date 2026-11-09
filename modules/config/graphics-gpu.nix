@@ -66,6 +66,18 @@ in
         Takes effect with hardware.graphics.i915.attachAtBoot or onMedia.
       '';
     };
+    nvidia.onMedia = lib.mkOption {
+      type = lib.types.bool;
+      default = cfg.onMedia;
+      defaultText = lib.literalExpression "config.hardware.graphics.onMedia";
+      description = ''
+        With hardware.graphics.onMedia, also lay the three NVIDIA open modules
+        (unbound) into the media's kernel tree. Off in configurations/installer.nix:
+        the modules build only with OpenIndiana's gcc 14 (-msave-args), and they
+        never attached from the media (no alias, no GSP firmware). An installed
+        system enables them with hardware.graphics.nvidia.attachAtBoot.
+      '';
+    };
     nvidia.acceptFirmwareLicense = lib.mkOption {
       type = lib.types.bool;
       default = false;
@@ -111,7 +123,7 @@ in
     };
   };
   config.assertions = [{
-    assertion = !cfg.nvidia.acceptFirmwareLicense || cfg.onMedia || cfg.nvidia.attachAtBoot;
+    assertion = !cfg.nvidia.acceptFirmwareLicense || (cfg.onMedia && cfg.nvidia.onMedia) || cfg.nvidia.attachAtBoot;
     message = ''
       hardware.graphics.nvidia.acceptFirmwareLicense lays NVIDIA's GSP firmware
       next to the nvidia modules, which only hardware.graphics.onMedia or

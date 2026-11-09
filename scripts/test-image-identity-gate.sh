@@ -67,6 +67,18 @@ mkroot n1; printf '%s\n' "$KEY" > n1/etc/ssh/ssh_host_ed25519_key; nix-store --d
 { dd if=/dev/zero bs=1M count=70 2>/dev/null; printf '%s\n' "$KEY"; dd if=/dev/zero bs=1M count=2 2>/dev/null; } > key-raw.img
 { dd if=/dev/zero bs=1M count=70 2>/dev/null; printf 'nothing\n'; } > clean-raw.img
 { dd if=/dev/zero bs=1k count=8 2>/dev/null; printf 'gburd:x:1000:10::/export/home/x:/bin/sh\n'; } > ident-raw.img
+# a tar holding a device node (util-tests' cpio fixtures do): extraction cannot mknod unprivileged; the regular files
+# must still be scanned, clean -> exit 0, with a key beside the node -> exit 1. Built with python's tarfile (no root).
+if have python3; then
+  python3 - "$KEY" <<'PY'
+import io, sys, tarfile
+for name, extra in (("devnode.tar", None), ("devnode-key.tar", sys.argv[1].encode() + b"\n")):
+    with tarfile.open(name, "w", format=tarfile.USTAR_FORMAT) as t:
+        n = tarfile.TarInfo("node"); n.type = tarfile.BLKTYPE; n.devmajor, n.devminor = 13, 17; t.addfile(n)
+        d = b"hello\n"; i = tarfile.TarInfo("etc/motd"); i.size = len(d); t.addfile(i, io.BytesIO(d))
+        if extra: i = tarfile.TarInfo("etc/ssh/ssh_host_ed25519_key"); i.size = len(extra); t.addfile(i, io.BytesIO(extra))
+PY
+fi
 # a corrupt container must not read as CLEAN
 printf '\037\213\010\000garbage' > corrupt.gz
 
@@ -87,6 +99,8 @@ expect 1 'REJECT key.nar.gz!gz' "key in a gzipped NAR"   key.nar.gz
 expect 1 'REJECT key-raw.img: private key BODY' "key in a raw image (byte mode, ami-bank.sh)" key-raw.img
 expect 1 'REJECT ident-raw.img: maintainer identity' "identity at line start in a raw image (byte mode)" ident-raw.img
 expect 2 '^ERROR corrupt.gz' "corrupt gzip: not CLEAN"   corrupt.gz
+expect 0 '^CLEAN devnode.tar$' "tar with a device node: CLEAN" devnode.tar
+expect 1 'REJECT devnode-key.tar.*private key' "tar with a device node and a key: REJECT" devnode-key.tar
 
 echo "test-image-identity-gate: $pass pass, $fail fail, $skip skip ($G)"
 [ $fail = 0 ] && [ $skip = 0 ]

@@ -18,9 +18,13 @@ let
   };
   fonts = dir: ''mkdir -p "$out/share/fonts/${dir}"; install -m0444 -t "$out/share/fonts/${dir}" '';
 in rec {
+  # the Debian orig tarball from snapshot.debian.org (content-addressed by its sha1, 209f55de...): salsa's generated archive of the
+  # same tag no longer serves the pinned bytes (truncated gzip, a different size per try; recipes3 2026-11-08). Its 13 OpenSans-*.ttf
+  # are byte-identical to the old pin's.
   open-sans = data "open-sans-1.11" (fetchurl {
-    url = "https://salsa.debian.org/fonts-team/fonts-open-sans/-/archive/debian/1.11-1/fonts-open-sans-debian-1.11-1.tar.gz";
-    sha256 = "46aead7e1615f162f08ed840c935f18dbb7a20168265665b0335d9299e831849"; })
+    url = "https://snapshot.debian.org/file/209f55dec9c1ddd88694cf1029a072f250a2cbe0";
+    name = "fonts-open-sans_1.11.orig.tar.xz";
+    sha256 = "cca86565f4869c1896d461d4fb38463601b5e799dac00336b74769037182f677"; })
     "${fonts "truetype"} */OpenSans-*.ttf";
   # noto-fonts: the Latin/Greek/Cyrillic Sans + Sans Mono families (NixOS ships all of Noto;
   # these two are what COSMIC names). Unhinted TTF, as nixpkgs picks.

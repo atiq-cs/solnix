@@ -288,7 +288,8 @@ drv_for() {	# drv_for <pname> <outs> <rev|head>: one "<out> <drv>^<output>" line
 	[[ $n == openssl3 ]] && n=openssl
 	for w in ${n//-/ }; do if [[ -z $c ]]; then c=$w; else typeset -u u=${w:0:1}; c=$c$u${w:1}; fi; done	# gcc-wrapper -> gccWrapper
 	[[ $f == head ]] && f=$flake || { [[ $BUILDER_FLAKE == *\?* ]] && f="$BUILDER_FLAKE&rev=$f" || f="$BUILDER_FLAKE?rev=$f"; }
-	for a in "$n" "${n//-/_}" "$c"; do
+	# the pname as is first: a trailing -<digit> can be part of the name (tinyxml-2), not a version
+	for a in "$1" "${1//-/_}" "$n" "${n//-/_}" "$c"; do
 		[[ " $s " == *" $a "* ]] && continue; s="$s $a"
 		r=$(evattr "$f" "$a") || continue
 		# one line per output ("<out> <drv>^<output>"): every one that is one of <outs>

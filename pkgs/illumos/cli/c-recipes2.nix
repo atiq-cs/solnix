@@ -281,8 +281,8 @@ in rec {
 
   # fmt (MIT): the C++ formatting library, shared, as nixpkgs (tests off: they need gtest's network fetch).
   fmt = mkSrcPkg {
-    pname = "fmt"; version = "12.2.0";
-    src = gh "fmtlib/fmt" "12.2.0" "8b852bb5aa6e7d8564f9e81394055395dd1d1936d38dfd3a17792a02bebd7af0";
+    pname = "fmt"; version = "12.2.1";   # the queue's upstream-newer target (recipes3)
+    src = gh "fmtlib/fmt" "12.2.1" "449374d74f31b67796dece454d59b93e6f1538efcce0e9ac78000c98142c139e";
     deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
     build = ''
       ${cmakeB "-DBUILD_SHARED_LIBS=ON -DFMT_TEST=OFF -DFMT_DOC=OFF"}
@@ -294,8 +294,8 @@ in rec {
 
   # Catch2 v3 (BSL-1.0): static libs + headers + cmake config, as nixpkgs catch2_3.
   catch2_3 = mkSrcPkg {
-    pname = "catch2_3"; version = "3.16.0";
-    src = gh "catchorg/Catch2" "v3.16.0" "0957cae5821b17ce07f0833aaa52b5137643a8382203221f363a8303c109af34";
+    pname = "catch2_3"; version = "3.16.1";   # the queue's upstream-newer target (recipes3)
+    src = gh "catchorg/Catch2" "v3.16.1" "d16bd1b8b2364918bd472cb216394acb93bde6784890df0d91bccfb3f28d777d";
     deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
     build = ''
       # libstdc++'s bits/std_abs.h pulls the gate's <math.h>, whose iso/math_c99.h #defines isnan() even for C++; until <cmath>

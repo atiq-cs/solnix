@@ -60,6 +60,8 @@ let
     BUILDER_QUEUE_AUTH = cfg.queueAuth; BUILDER_SSH_KEYGEN = "${s.openssh}/bin/ssh-keygen";
     BUILDER_EGRESS = if idk then "1" else "0";   # register the egress address (identified builders only)
     BUILDER_PUBLISH_KEY = config.solnix.builder.identityKeyFile; BUILDER_PUBLISH_ID = cfg.agentId;   # publish, sshsig, egress
+  } // lib.optionalAttrs (cfg.flake != null) {
+    BUILDER_FLAKE = cfg.flake;   # null: the script's default (git.solnix.io main), so no host's env moves unless it sets this
   } // lib.optionalAttrs pub {
     BUILDER_GATES = "${gates}"; BUILDER_PYTHON = "${s.python3}/bin/python3";
     GATE_GREP_DIR = "${s.gnugrep}/bin";   # publish-gate.sh needs GNU grep (-a -b -o); /usr/bin/grep comes first on its PATH
@@ -117,6 +119,14 @@ in
         published first), and is submitted as a proposal carrying {attr, system, commit, branch, flake_nar_hash}. The job is
         completed only after it is promoted and an 8UNr-only client verified it. on needs publish on (the key and gates);
         dry: every step up to the signed /begin. Off until infra's evaluator is live.
+      ''; };
+    flake = lib.mkOption { type = lib.types.nullOr (lib.types.strMatching "git\\+https://[^ ]+"); default = null;
+      example = "git+https://codeberg.org/solnix/solnix?ref=main";
+      description = ''
+        The solnix flake the builder evaluates rows and eval candidates against (BUILDER_FLAKE). null: the script's default,
+        git+https://git.solnix.io/solnix.git?ref=main. Codeberg is the push target and git.solnix.io its mirror, so a host can
+        read Codeberg while the mirror lags (2026-11-08: synced by hand): a commit names the same tree on both, so no drv or
+        out changes, only which commits the builder can fetch.
       ''; };
     evalBranches = lib.mkOption { type = lib.types.listOf (lib.types.enum [ "main" "26.11" "wave6" ]); default = [ "main" "26.11" ];
       description = "The branches whose heads evalAnchored evaluates, in order (BUILDER_EVAL_BRANCHES). wave6 is opt-in: its outs are new rows until it merges."; };
