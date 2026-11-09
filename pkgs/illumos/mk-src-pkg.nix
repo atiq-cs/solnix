@@ -139,6 +139,9 @@ let
        + (if storeOnly then "\n    /usr/bin/bash ${./path-gate.sh}" else "")
        # the illumos elfedit/elfdump/ldd for the shared gate scripts: the world's (a nativeTools entry), never /usr/gnu's GNU elfedit
        + (if storeOnly then "\n    . ${./illumos-bin.sh}" else "")   # exempt: IB stays /usr/bin (the OI host's illumos tools)
+       # nixpkgs setup.sh: NIX_BUILD_CORES <= 0 (nix.conf cores = 0, solnix's default: every core) is the CPU count, so no recipe's
+       # `gmake -j$NIX_BUILD_CORES` gets -j0 (gmake rejects it; aarch64/a64r-pkgs.nix and cargo-build.sh worked around it per builder)
+       + (if storeOnly then "\n    [ \"\${NIX_BUILD_CORES:-0}\" -gt 0 ] 2>/dev/null || NIX_BUILD_CORES=$(nproc); export NIX_BUILD_CORES" else "")
        # the tools configure looks for by name or at fixed host paths, set from the store PATH (jq 1.8.2: MAKE=/usr/gnu/bin/make on
        # SunOS when MAKE is unset; recipes1). /usr/bin/bash stays the shell (the builder interpreter, a documented exemption).
        + (if storeOnly then "\n    MAKE=$(command -v gmake) INSTALL=\"$(command -v install) -c\" CMAKE_TOOLCHAIN_FILE=${./solnix-toolchain.cmake}; export MAKE INSTALL CMAKE_TOOLCHAIN_FILE   # not M4: the world m4 is SVR4; a recipe needing GNU m4 lists gnum4" else ""))
