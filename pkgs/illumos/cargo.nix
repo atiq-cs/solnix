@@ -48,7 +48,7 @@ in rec {
       libDirs = builtins.concatStringsSep " " (map (d: "${d}") (libs ++ rtLibs));
       inherit features prep bins check man pkg env;
       noDefault = if noDefault then "1" else "";
-      tsErrnoGate = ./ts-errno-gate.sh; zeroChecksum = ./zero-checksum.sh; splitDebug = ./split-debug.sh; pathGate = ./path-gate.sh; illumosBin = ./illumos-bin.sh;
+      tsErrnoGate = ./ts-errno-gate.sh; zeroChecksum = ./zero-checksum.sh; splitDebug = ./split-debug-od.sh; pathGate = ./path-gate.sh; illumosBin = ./illumos-bin.sh;
       outputs = [ "out" "debug" ];
       args = [ ./cargo-build.sh ];
     };

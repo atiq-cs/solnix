@@ -108,6 +108,9 @@ let
       ''-Dlddlflags="-shared"''         # perl (cli/c-big.nix): aarch64 gcc has no -m64
       # DT_CHECKSUM -> 0 without elfedit, which segfaults on a GNU-stripped aarch64 ELF (repro2 fix 4; dixa4).
       "${./aarch64/zero-checksum.sh}" ] t;
+  # x86 store-only: od's e_type compared numerically (./split-debug-od.sh; illumos od zero-pads, wave7). The seed instance and aarch64
+  # keep ./split-debug.sh: both run GNU od first, and their drvs must not move. The stripLoop text below is an aarch64 anchor.
+  splitDebugSh = if storeOnly then ./split-debug-od.sh else ./split-debug.sh;
   stripLoop = ''
     # split DWARF into $debug by build-id, then strip (./split-debug.sh; NixOS separateDebugInfo, for every package here)
     /usr/bin/bash ${./split-debug.sh} "$out" "$debug" "$buildKey" "$BU" "$W/fail"
@@ -367,7 +370,7 @@ let
     # buildTools = []) /usr/gnu/bin, where all three live (/usr/bin has gstrip and gobjcopy links but no greadelf).
     BU=$(dirname "$GSTRIP"); [ "$GSTRIP" = /usr/bin/gstrip ] && BU=/usr/gnu/bin
     # split DWARF into $debug by build-id, then strip (./split-debug.sh; NixOS separateDebugInfo, for every package here)
-    /usr/bin/bash ${./split-debug.sh} "$out" "$debug" "$buildKey" "$BU" "$W/fail"
+    /usr/bin/bash ${splitDebugSh} "$out" "$debug" "$buildKey" "$BU" "$W/fail"
     # BUILD-TOOL PATHS BAKED INTO GENERATED SCRIPTS (the stdenv patchShebangs /
     # --replace analog). A package's own ./configure can hardcode the ABSOLUTE path
     # of a build tool it found on PATH into a generated SHELL SCRIPT: gzip's

@@ -54,6 +54,6 @@ in rec {
         SSL_CERT_FILE = "${cacert}/etc/ssl/certs/ca-bundle.crt";
         outputHashMode = "recursive"; outputHashAlgo = "sha256"; outputHash = vendorHash; });
     in (a: derivation (a // { buildKey = builtins.substring 0 16 (builtins.hashString "sha256" (builtins.toJSON a)); })) (common // {
-      name = "${pname}-${version}"; vendorOnly = ""; outputs = [ "out" "debug" ]; splitDebug = ./split-debug.sh;
+      name = "${pname}-${version}"; vendorOnly = ""; outputs = [ "out" "debug" ]; splitDebug = ./split-debug-od.sh;
       goVendor = if vendorHash == null then "" else vend; inherit subPkgs check ldflags prep man; });
 }
