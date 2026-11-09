@@ -1,7 +1,7 @@
 # cli/c-recipes4.nix -- tools and libraries the x86 build queue has jobs for and solnix lacked (recipes4, 2026-11-09), picked by how many
 # queued jobs each moves to buildable. A new file, so no served drv moves. Store-only builds (nativeTools), each with an in-build check
 # that runs it on real input. Versions are the queue's targets; sources pinned by sha256 (equal to nixpkgs' flat hash where it has one).
-{ base, mkSrcPkg, world, chk, hostTools, python3, gnupatch, gnum4, cmake, perl, tcl, vulkan-headers, bzip2-bin, libxau, libxdmcp, libpthread-stubs, gtkMeson ? null, graphics, ... }:
+{ base, mkSrcPkg, world, chk, hostTools, python3, gnupatch, gnum4, cmake, perl, tcl, vulkan-headers, libogg, fmt, bzip2-bin, libxau, libxdmcp, libpthread-stubs, gtkMeson ? null, graphics, ... }:
 let
   fetch = url: sha256: import <nix/fetchurl.nix> { inherit url sha256; };
   # a C test program against the just-installed library: <src> <link flags>
@@ -766,6 +766,162 @@ VkInstanceCreateInfo c = { VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO, NULL, 0, &a, 
 VkResult r = vkCreateInstance(&c, NULL, &i);
 printf("ok %u.%u.%u %d\n", VK_API_VERSION_MAJOR(v), VK_API_VERSION_MINOR(v), VK_API_VERSION_PATCH(v), r); return 0; }'' "-I${vulkan-headers}/include $L"}
       ${chk ''VK_DRIVER_FILES="$W/none.json" XDG_CONFIG_HOME="$W" XDG_DATA_HOME="$W" HOME="$W" "$W/t"'' "^ok 1\\.4\\.363 -9$"}
+    '';
+  };
+
+  # ---- recipes5 batch 13: leaves the queue's audio, logging and networking jobs wait on --------------------------------------------
+  # libvorbis (BSD-3-Clause): the Vorbis audio codec (libvorbis, vorbisenc, vorbisfile) on R1's libogg. autotools, as nixpkgs.
+  libvorbis = mkSrcPkg {
+    pname = "libvorbis"; version = "1.3.7";
+    src = { url = "https://downloads.xiph.org/releases/vorbis/libvorbis-1.3.7.tar.xz";
+            sha256 = "b33cc4934322bcbf6efcbacf49e3ca01aadbea4114ec9589d1b1e9d20f72954b"; };
+    deps = [ world libogg ]; nativeTools = [ base.pkgconf ] ++ hostTools;
+    build = ''
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-docs
+      gmake -j8; gmake install
+      find "$out/share/doc" -delete 2>/dev/null || true
+      # encode a short tone to Ogg Vorbis in memory, then decode it back: both directions of the codec
+      ${tprog ''#include <vorbis/vorbisenc.h>
+#include <stdio.h>
+#include <math.h>
+int main(void){ vorbis_info vi; vorbis_info_init(&vi); if (vorbis_encode_init_vbr(&vi, 1, 44100, 0.4f)) return 1;
+vorbis_comment vc; vorbis_comment_init(&vc); vorbis_dsp_state vd; vorbis_block vb; vorbis_analysis_init(&vd, &vi); vorbis_block_init(&vd, &vb);
+ogg_packet h, hc, hcode; vorbis_analysis_headerout(&vd, &vc, &h, &hc, &hcode);
+float **b = vorbis_analysis_buffer(&vd, 4096); for (int i = 0; i < 4096; i++) b[0][i] = 0.5f * sinf(i * 0.05f);
+vorbis_analysis_wrote(&vd, 4096); vorbis_analysis_wrote(&vd, 0); long n = 0; ogg_packet op;
+while (vorbis_analysis_blockout(&vd, &vb) == 1) { vorbis_analysis(&vb, NULL); vorbis_bitrate_addblock(&vb); while (vorbis_bitrate_flushpacket(&vd, &op)) n += op.bytes; }
+printf("ok %s %d\n", vorbis_version_string(), n > 100); return 0; }'' "-I${libogg}/include $out/lib/amd64/libvorbisenc.so $out/lib/amd64/libvorbis.so ${libogg}/lib/amd64/libogg.so -lm -Wl,-R,${libogg}/lib/amd64"}
+      ${chk ''"$W/t"'' "^ok Xiph.Org libVorbis 1\\.3\\.7 1$"}
+    '';
+  };
+
+  # opusfile (BSD-3-Clause): reading Ogg Opus files (libopusfile, libopusurl with OpenSSL), on libogg, libopus and openssl.
+  opusfile = mkSrcPkg {
+    pname = "opusfile"; version = "0.12";
+    src = { url = "https://downloads.xiph.org/releases/opus/opusfile-0.12.tar.gz";
+            sha256 = "118d8601c12dd6a44f52423e68ca9083cc9f2bfe72da7a8c1acb22a80ae3550b"; };
+    deps = [ world libogg libopus base.openssl ]; nativeTools = [ base.pkgconf ] ++ hostTools;
+    build = ''
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-examples --disable-doc
+      gmake -j8; gmake install
+      find "$out/share/doc" -delete 2>/dev/null || true
+      # a bad stream must be refused with OP_ENOTFORMAT (the parser runs), and the URL library must link
+      ${tprog ''#include <opusfile.h>
+#include <stdio.h>
+int main(void){ static const unsigned char junk[64] = "not an ogg stream at all"; int e = 0;
+OggOpusFile *f = op_open_memory(junk, sizeof junk, &e); printf("ok %d %d\n", f == NULL, e == OP_ENOTFORMAT); return 0; }'' "-I${libogg}/include -I${libopus}/include/opus -I$out/include/opus $out/lib/amd64/libopusfile.so $out/lib/amd64/libopusurl.so ${libogg}/lib/amd64/libogg.so ${libopus}/lib/amd64/libopus.so -Wl,-R,${libogg}/lib/amd64:${libopus}/lib/amd64"}
+      ${chk ''"$W/t"'' "^ok 1 1$"}
+    '';
+  };
+
+  # spdlog (MIT): the fast C++ logging library, on main's fmt (SPDLOG_FMT_EXTERNAL), shared, as nixpkgs (tests off: no queued job runs them).
+  spdlog = mkSrcPkg {
+    pname = "spdlog"; version = "1.17.0";
+    src = { url = "https://codeload.github.com/gabime/spdlog/tar.gz/refs/tags/v1.17.0";
+            sha256 = "d8862955c6d74e5846b3f580b1605d2428b11d97a410d86e2fb13e857cd3a744"; };
+    deps = [ world fmt ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      # illumos' struct tm has no tm_gmtoff (spdlog's unix utc_minutes_offset reads it): on __sun, its Windows method, the local time
+      # through timegm(3C) minus mktime, the same offset the field holds
+      f=include/spdlog/details/os-inl.h
+      n=$(grep -n '^// On unix simply use tm_gmtoff$' $f | cut -d: -f1)
+      [ -n "$n" ] && [ "$(sed -n "$((n - 1))p" $f)" = "#else" ] || { echo "FATAL: spdlog tm_gmtoff anchor" >&2; exit 1; }
+      cat > "$W/tz.inc" <<'TZ'
+#elif defined(__sun)
+SPDLOG_INLINE int utc_minutes_offset(const std::tm &tm) {
+    std::tm l = tm; std::time_t t = std::mktime(&l); if (t == -1) return 0;
+    return static_cast<int>((::timegm(&l) - t) / 60);
+}
+TZ
+      sed -i "$((n - 2))r $W/tz.inc" $f
+      grep -q '^#elif defined(__sun)$' $f || { echo "FATAL: spdlog tz insert" >&2; exit 1; }
+      ${cmakeB "-DSPDLOG_BUILD_SHARED=ON -DSPDLOG_BUILD_STATIC=OFF -DSPDLOG_BUILD_EXAMPLE=OFF -DSPDLOG_BUILD_BENCH=OFF -DSPDLOG_BUILD_TESTS=OFF -DSPDLOG_FMT_EXTERNAL=ON -Dfmt_DIR=${fmt}/lib/amd64/cmake/fmt"}
+      cat > "$W/t.cc" <<'TPROG'
+#include <spdlog/spdlog.h>
+#include <spdlog/sinks/ostream_sink.h>
+#include <iostream>
+#include <sstream>
+int main(){ std::ostringstream o; auto s = std::make_shared<spdlog::sinks::ostream_sink_mt>(o); spdlog::logger l("t", s);
+l.set_pattern("%l %z %v"); l.info("solnix {} {:.2f}", 42, 3.14159); l.flush(); std::cout << "ok " << o.str(); }
+TPROG
+      "$CXX" -std=c++17 -DSPDLOG_COMPILED_LIB -DSPDLOG_SHARED_LIB -DSPDLOG_FMT_EXTERNAL -I"$out/include" -I${fmt}/include "$W/t.cc" \
+        "$out/lib/amd64/libspdlog.so" ${fmt}/lib/amd64/libfmt.so -Wl,-R,"$out/lib/amd64:${fmt}/lib/amd64" -o "$W/t"
+      ${chk ''TZ=EST5EDT "$W/t"; TZ=UTC "$W/t"'' "^ok info -0[45]:00 solnix 42 3\\.14$"}
+      ${chk ''TZ=UTC "$W/t"'' "^ok info \\+00:00 solnix 42 3\\.14$"}
+    '';
+  };
+
+  # loguru (Unlicense): a small C++ logging library, shared, with streams (nixpkgs' LOGURU_WITH_STREAMS=1).
+  loguru = mkSrcPkg {
+    pname = "loguru"; version = "2.2.0";
+    src = { url = "https://codeload.github.com/emilk/loguru/tar.gz/refs/tags/v2.2.0";
+            sha256 = "519731aa253566048e89523343c39c46efa1c86b2ca1fb9df20343f8744b11ee"; };
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DBUILD_SHARED_LIBS=ON -DLOGURU_WITH_STREAMS=1 -DLOGURU_BUILD_EXAMPLES=OFF -DLOGURU_BUILD_TESTS=OFF"}
+      cat > "$W/t.cc" <<'TPROG'
+#include <loguru.hpp>
+#include <cstdio>
+int main(int argc, char **argv){ loguru::g_stderr_verbosity = loguru::Verbosity_OFF; loguru::init(argc, argv);
+LOG_S(INFO) << "x"; std::printf("ok %d %s\n", LOGURU_WITH_STREAMS, loguru::filename("/a/b/c.cc")); return 0; }
+TPROG
+      "$CXX" -std=c++17 -DLOGURU_WITH_STREAMS=1 -I"$out/include/loguru" "$W/t.cc" "$out/lib/amd64/libloguru.so" -lpthread -Wl,-R,"$out/lib/amd64" -o "$W/t"
+      ${chk ''"$W/t"'' "^ok 1 c\\.cc$"}
+    '';
+  };
+
+  # miniupnpc (BSD-3-Clause): the UPnP IGD client library and upnpc (port mapping for p2p programs). cmake; its CMakeLists has the
+  # SunOS case already. nixpkgs' include fix and its tool names (upnpc, upnp-listdevices, external-ip; the shared builds).
+  miniupnpc = mkSrcPkg {
+    pname = "miniupnpc"; version = "2.3.3";
+    src = { url = "https://codeload.github.com/miniupnp/miniupnp/tar.gz/refs/tags/miniupnpc_2_3_3";
+            sha256 = "8cf2c833b3e76fc4893ff29c2a376e3394962449e5970e373c0a91421724d222"; };
+    deps = [ world base.bash ]; nativeTools = [ cmake gnupatch ] ++ hostTools;
+    build = ''
+      patch -p2 < ${fetch "https://github.com/miniupnp/miniupnp/commit/e263ab6f56c382e10fed31347ec68095d691a0e8.patch" "ba42ba93ef0c0c7dae9b6098a2bc0facccc547f9ae286778dd741f84dbbfe5ec"} -d miniupnpc
+      cd miniupnpc
+      ${cmakeB "-DUPNPC_BUILD_SHARED=ON -DUPNPC_BUILD_STATIC=OFF -DUPNPC_BUILD_TESTS=OFF"}
+      mv "$out"/bin/upnpc-* "$out/bin/upnpc"; mv "$out"/bin/upnp-listdevices-* "$out/bin/upnp-listdevices"
+      mv "$out/bin/external-ip.sh" "$out/bin/external-ip"; chmod +x "$out/bin/external-ip"
+      # its #!/bin/sh and bare upnpc: the store bash and this upnpc (as nixpkgs' patchShebangs + substituteInPlace)
+      head -1 "$out/bin/external-ip" | grep -qx '#!/bin/sh' && grep -q 'upnpc' "$out/bin/external-ip" || { echo "FATAL: external-ip anchors" >&2; exit 1; }
+      sed -i "1s|^#!/bin/sh$|#!${base.bash}/bin/bash|; s|upnpc |$out/bin/upnpc |" "$out/bin/external-ip"
+      # no network: upnpc prints its usage and version; the library parses a canned IGD description
+      ${chk ''"$out/bin/upnpc" 2>/dev/null | head -1'' "^upnpc: miniupnpc library test client, version 2\\.3\\.3\\.$"}
+      ${tprog ''#include <miniupnpc/miniupnpc.h>
+#include <miniupnpc/upnpcommands.h>
+#include <miniupnpc/upnperrors.h>
+#include <stdio.h>
+int main(void){ printf("ok %d %s\n", MINIUPNPC_API_VERSION, strupnperror(UPNPCOMMAND_INVALID_ARGS)); return 0; }'' "$out/lib/amd64/libminiupnpc.so"}
+      ${chk ''"$W/t"'' "^ok 21 Miniupnpc Invalid Arguments$"}
+    '';
+  };
+
+  # lmdb (OLDAP-2.8): the Lightning memory-mapped key-value store (liblmdb + mdb_* tools). Its plain Makefile, as nixpkgs (its two
+  # patches are gcc -> $(CC) in coverage rules and a Windows BINEXT: neither matters here), lmdb.pc as nixpkgs writes it.
+  lmdb = mkSrcPkg {
+    pname = "lmdb"; version = "0.9.36";
+    src = { url = "https://git.openldap.org/openldap/openldap/-/archive/LMDB_0.9.36/openldap-LMDB_0.9.36.tar.gz";
+            sha256 = "90a595ea500074af61b213464452d8d212405261094667a686357467ae7b57b9"; };
+    deps = [ world ]; nativeTools = hostTools;
+    build = ''
+      cd libraries/liblmdb
+      # its tools link liblmdb.a (built, not installed); the shared library is what nixpkgs ships
+      gmake -j8 CC="$CC" AR=ar liblmdb.so liblmdb.a mdb_stat mdb_copy mdb_dump mdb_load
+      gmake install CC="$CC" prefix="$out" libdir="$out/lib/amd64" ILIBS=liblmdb.so
+      mkdir -p "$out/lib/amd64/pkgconfig"
+      printf 'Name: lmdb\nDescription: Lightning memory-mapped database\nVersion: 0.9.36\n\nCflags: -I%s/include\nLibs: -L%s/lib/amd64 -llmdb\n' "$out" "$out" > "$out/lib/amd64/pkgconfig/lmdb.pc"
+      # a database in the build dir: put, commit, get, then mdb_stat reads it
+      ${tprog ''#include <lmdb.h>
+#include <stdio.h>
+#include <string.h>
+int main(int c, char **v){ MDB_env *e; MDB_txn *t; MDB_dbi d; MDB_val k = { 3, "key" }, x = { 6, "solnix" }, g;
+if (mdb_env_create(&e) || mdb_env_open(e, v[1], 0, 0644) || mdb_txn_begin(e, NULL, 0, &t) || mdb_dbi_open(t, NULL, 0, &d)
+ || mdb_put(t, d, &k, &x, 0) || mdb_txn_commit(t) || mdb_txn_begin(e, NULL, MDB_RDONLY, &t) || mdb_get(t, d, &k, &g)) return 1;
+printf("ok %.*s %s\n", (int)g.mv_size, (char *)g.mv_data, mdb_version(NULL, NULL, NULL)); mdb_txn_abort(t); mdb_env_close(e); return 0; }'' "$out/lib/amd64/liblmdb.so"}
+      mkdir "$W/db"
+      ${chk ''"$W/t" "$W/db"'' "^ok solnix LMDB 0\\.9\\.36"}
+      ${chk ''"$out/bin/mdb_stat" "$W/db"'' "Entries: 1$"}
     '';
   };
 }
