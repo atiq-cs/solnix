@@ -95,7 +95,9 @@ derivation {
   # NixOS convention: headers + link-time files in `dev`, out of the runtime closure.
   outputs = [ "out" "dev" ];
   builder = "/usr/bin/bash";
-  PATH = "/usr/gnu/bin:/usr/bin:/usr/sbin";
+  # the world is the bootstrap layer (every store GNU tool links it), so its builder may use only what illumos ships in /usr/bin
+  # and /usr/sbin on BOTH an OI host and a solnix host: never /usr/gnu (a solnix host has none), no readlink(1), no grep -a.
+  PATH = "/usr/bin:/usr/sbin";
   libc = libcSlice;
   sharedLibsArg = builtins.concatStringsSep " " sharedLibs;
   dirsArg = builtins.concatStringsSep " " dirs;
@@ -104,15 +106,19 @@ derivation {
   depsArg = builtins.concatStringsSep " " deps;
   args = [ "-c" (''
     set -eu
-    export PATH=/usr/gnu/bin:/usr/bin:/usr/sbin
+    export PATH=/usr/bin:/usr/sbin
     mkdir -p "$out/.world"
     cd "$gate"
     for d in $dirsArg; do [ -e "$d" ] && tar cf - "$d" | (cd "$out" && tar xf -); done
     cd "$out"
     # writable BEFORE the exclude: the proto's dirs are r-x, so as nixbld find -delete failed on opt/ and usr/kernel/ ("delete failed ...
     # Permission denied") and opt/ stayed; as root (every earlier world) the deletes succeeded (wave5 W1).
-    chmod -R u+w "$out"
+    # not chmod -R: illumos chmod follows the gate's root-relative links (usr/adm -> ../var/adm), which dangle here, and exits 1.
+    find "$out" ! -type l -exec chmod u+w {} +
     for x in $excludeArg; do [ -e "$x" ] && find "$x" -depth -delete; done
+    # one file per name, as the NAR has it: under auto-optimise-store the gate's identical files share an inode, tar keeps that
+    # as a hardlink, and the per-name relocation below gave usr/bin/ps and usr/ucb/ps ONE RUNPATH (woof, measured; served: two).
+    find . -type f -links +1 | while read -r f; do cp "$f" "$f.hl" && mv -f "$f.hl" "$f"; done
     # dev output: the C headers (usr/include) and the lint/link-only bits.
     mkdir -p "$dev/usr"
     [ -d usr/include ] && mv usr/include "$dev/usr/include"
@@ -174,7 +180,7 @@ derivation {
     done
     RP="$out/lib-32:$out/lib-64"
 
-    # relocate every dynamic object (not symlinks; hardlinks are visited per name, idempotent).
+    # relocate every dynamic object (not symlinks; no hardlinks are left, see above).
     # Two trees keep a private dir first, because their sonames clash with the
     # flat dirs: the BSD-compat tools (usr/ucb) need usr/ucblib's libtermcap and
     # libcurses (SUNW_1.1 versions the core libtermcap filter lacks) and libucb;

@@ -29,7 +29,10 @@ find . -depth -type d -name __pycache__ -exec rm -rf {} +
 find . -type f \( -name '*.pyc' -o -name '*.pyo' \) -exec rm -f {} +
 [ -z "$(find . -name '*.py[co]' | head -1)" ] || { echo "FATAL: world: .pyc left" >&2; exit 1; }
 # 3. S3: no build-host name (infra's gate is case-insensitive over every byte; E1's proto has none, so this only keeps it so).
-! grep -rlaiE 'solnix-builder-build|compute\.internal|ec2\.internal' . > .world/hostname-hits || {
-  echo "FATAL: world names a build host:" >&2; head .world/hostname-hits >&2; exit 1; }
+# illumos grep has no -a and stops matching a line at a NUL, so each file goes through tr first (grep -rlaiE exited 2 here: inert).
+find . -type f | while read -r f; do
+  if LC_ALL=C tr '\000' '\n' < "$f" | grep -qiE 'solnix-builder-build|compute\.internal|ec2\.internal'; then echo "$f"; fi
+done > .world/hostname-hits
+[ ! -s .world/hostname-hits ] || { echo "FATAL: world names a build host:" >&2; head .world/hostname-hits >&2; exit 1; }
 rm -f .world/hostname-hits
 echo "=== world-fixups: runpath, pyc, hostname done ===" >&2
