@@ -64,7 +64,7 @@ in {
       echo "$s" | grep -Eq '^0 errors out of [0-9]{6,} tests' && [ $r = 0 ] || { tr '\r' '\n' < "$W/sqt.out" | grep -E '^(FAILED|!)' | head -20 >&2; echo "FATAL: sqlite veryquick" >&2; exit 1; }
       cd "$SRC"
     ''; };
-  python3 = { build = rep "python3" "OpenSSL 3\\.4\\.8 .* 3\\.53\\.2" "OpenSSL 3\\.4\\.8 .* 3\\.54\\.1" args.build; };   # its in-build ssl/sqlite3 check
+  python3 = { build = rep "python3" "OpenSSL 3\\.5\\.9 .* 3\\.53\\.2" "OpenSSL 3\\.4\\.8 .* 3\\.54\\.1" args.build; };   # its in-build ssl/sqlite3 check
   # 1.1.1 (CVE-2026-111497). Its ctest suite (round trips over tests/testdata, compatibility) runs here, as upstream builds it.
   brotli = { version = "1.1.1";
     src = src "https://github.com/google/brotli/archive/refs/tags/v1.1.1.tar.gz" "1a84dfaa740994d19254bf78aa7d74a4a8040d1638f3d5f2cdecb188fd520da8";

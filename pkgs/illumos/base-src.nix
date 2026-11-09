@@ -85,9 +85,9 @@ let
   };
 
   openssl = mkSrcPkg {
-    pname = "openssl"; version = "3.4.8";   # 30 High/Critical in 3.4.0, all fixed by 3.4.8. 3.4 went EOL 2026-10-22: next is 3.5 LTS
-    src = { url = "https://github.com/openssl/openssl/releases/download/openssl-3.4.8/openssl-3.4.8.tar.gz";
-            sha256 = "9de9ce2f29e584044ae07ab93fc601637be01fdc91d109c5a655ec7419e6022b"; };
+    pname = "openssl"; version = "3.5.9";   # 3.5 LTS (3.4 went EOL 2026-10-22); OI 2026.10 ships 3.5.9 too
+    src = { url = "https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz";   # .asc: OpenSSL B146647E...2D40
+            sha256 = "603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a"; };
     # libc only (runtimeLibDirs): no world dep, so nix's closure does not pull
     # the whole userland in through libcrypto.
     # Configure is perl (OI had /usr/bin/perl). The store perl depends on openssl's dependents' world, so openssl takes the

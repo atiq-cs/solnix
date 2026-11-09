@@ -49,7 +49,7 @@ rec {
       for m in ssl zlib sqlite3 readline ctypes pyexpat dbm.gnu curses bz2 lzma hashlib json; do
         "$out/bin/python3" -c "import $m" || { echo "FATAL: python3 cannot import $m" >&2; exit 1; }
       done
-      ${chk ''"$out/bin/python3" -c "import ssl,sqlite3; print(ssl.OPENSSL_VERSION, sqlite3.sqlite_version)"'' "^OpenSSL 3\\.4\\.8 .* 3\\.53\\.2$"}
+      ${chk ''"$out/bin/python3" -c "import ssl,sqlite3; print(ssl.OPENSSL_VERSION, sqlite3.sqlite_version)"'' "^OpenSSL 3\\.5\\.9 .* 3\\.53\\.2$"}
       [ -f "$out/share/man/man1/python3.13.1" ] || { echo "FATAL: no python3 man page" >&2; exit 1; }
       # no host or build dir in the recorded configuration (recipes1 W5; gate2 B15)
       "$out/bin/python3" -c '
