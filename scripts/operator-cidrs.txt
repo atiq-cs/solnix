@@ -6,6 +6,7 @@
 153.66.152.0/24         Starlink (AS14593) backup uplink, Connecticut, per Starlink's geofeed (geoip.starlinkisp.net/feed.csv)
 153.66.153.0/24         Starlink, same
 153.66.154.0/24         Starlink, same
+153.66.157.0/24         Starlink, the Boston PoP in the same geofeed: the dish egressed here on 2026-11-08/09 (lixi, floki wlp0s20f3)
 2605:59ca:4200::/40     Starlink IPv6, the same geofeed's Connecticut block
 # IPv6 over Comcast: none today. Measured 2026-11-01 from floki: only ULA addresses (fd4a:, fd11:, fd3a:; the UniFi gateway
 #   and the router advertise no global prefix), no IPv6 default route, `curl -6` fails. If Comcast IPv6 is turned on at the
