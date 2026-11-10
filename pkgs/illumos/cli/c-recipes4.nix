@@ -1,7 +1,7 @@
 # cli/c-recipes4.nix -- tools and libraries the x86 build queue has jobs for and solnix lacked (recipes4, 2026-11-09), picked by how many
 # queued jobs each moves to buildable. A new file, so no served drv moves. Store-only builds (nativeTools), each with an in-build check
 # that runs it on real input. Versions are the queue's targets; sources pinned by sha256 (equal to nixpkgs' flat hash where it has one).
-{ base, mkSrcPkg, world, chk, scrub, check, hostTools, autoreconfTools, autoreconf, python3, gnupatch, gnum4, cmake, perl, tcl, vulkan-headers, libogg, libuv, fmt, bzip2-bin, libxau, libxdmcp, libpthread-stubs, gtkMeson ? null, graphics, ... }:
+{ base, mkSrcPkg, world, chk, scrub, check, hostTools, autoreconfTools, autoreconf, python3, gnupatch, gnum4, cmake, perl, tcl, vulkan-headers, libogg, libuv, fmt, bzip2-bin, libxau, libxdmcp, libpthread-stubs, utf8cpp, libdeflate, tzdata, gtkMeson ? null, graphics, ... }:
 let
   fetch = url: sha256: import <nix/fetchurl.nix> { inherit url sha256; };
   # a C test program against the just-installed library: <src> <link flags>
@@ -42,6 +42,16 @@ TPROG
   # none, so the same drv failed there (floki /scratch/solnix/recipes8/AWS-C-CAL-DIAGNOSIS.md). wave6 3d0006e's solnix-cmake.cmake
   # fixes all three for every cmake build; until it reaches main, a recipe that looks a package up passes the same answer.
   storePrefix = ''-DCMAKE_PREFIX_PATH="$CMAKE_PREFIX_PATH" -DCMAKE_LIBRARY_ARCHITECTURE=amd64 -DCMAKE_IGNORE_PREFIX_PATH="/;/usr;/usr/local;/opt"'';
+  # nasm names each object's STT_FILE symbol after its input path as given (no prefix map), and cmake hands it absolute sources, so
+  # a library's .SUNW_ldynsym named the build dir (gate B8): desktop/gtk/base.nix libjpeg-turbo's wrapper, which passes nasm the
+  # path relative to its cwd. A recipe runs ${nasmRel} and names "$W/nasm" as its assembler.
+  nasmRel = ''
+    printf '%s\n' '#!/usr/bin/bash' \
+      'rel() { local d=$PWD up=; while [ "''${1#"$d"/}" = "$1" ]; do d=''${d%/*}; up=../$up; done; printf %s "$up''${1#"$d"/}"; }' \
+      "a=(); for x in \"\$@\"; do case \"\$x\" in $SRC/*) x=\$(rel \"\$x\");; esac; a+=(\"\$x\"); done" \
+      'exec ${nasm}/bin/nasm "''${a[@]}"' > "$W/nasm"
+    chmod +x "$W/nasm"
+  '';
 in rec {
   # unzip (Info-ZIP): extracts .zip archives. 195 queued jobs list it as a build tool (nixpkgs' unpackPhase for .zip sources).
   # nixpkgs' patch set (security fixes and gcc 14 build fixes), fetched from nixpkgs f4a03c0 and the upstreams it names, and its bzip2.
@@ -2710,6 +2720,510 @@ int main(void){ printf("ok %s\n", svt_av1_get_version()); return 0; }'' "$out/li
 int main(void){ struct cpu_raw_data_t r; struct cpu_id_t d; if (!cpuid_present() || cpuid_get_raw_data(&r) || cpu_identify(&r, &d)) return 1;
 printf("ok %s %d %s\n", cpuid_lib_version(), d.num_logical_cpus > 0, d.flags[CPU_FEATURE_SSE2] ? "sse2" : "-"); return 0; }'' "$out/lib/amd64/libcpuid.so"}
       ${chk ''"$W/t"'' "^ok 0\\.8\\.1 1 sse2$"}
+    '';
+  };
+
+  # ---- recipes10 batch 19: libraries the x86 queue has jobs for, on wave7's store-only stdenv (main e7df981) ---------------------
+  # The cmake recipes here take their packages through the merged solnix-cmake.cmake (store prefixes, lib/amd64, no host prefix) and
+  # assert the CMakeCache entry instead of passing storePrefix.
+  # libssh (LGPL-2.1+): the SSH protocol library (client and server, SFTP), on OpenSSL and zlib, as nixpkgs (no GSSAPI, no examples).
+  # nixpkgs' NaCl -> sodium sed is moot: FindNaCl looks for nacl/*.h, which libsodium never installs, so its libssh names only
+  # openssl (cache.nixos.org narinfo); WITH_NACL=OFF says so. Its cmake version-script probe is gnulib's two-node shape, which
+  # illumos ld refuses: answered yes, and the link goes through the mapfile shim (libssh.map's LIBSSH_4_5_0 .. 4_11_0 nodes). Its
+  # -fstack-protector probes are answered no: gcc.lib ships no libssp (cjson, svt-av1). _POSIX_PTHREAD_SEMANTICS: the POSIX
+  # two-argument ctime_r (illumos' default is the old three-argument one).
+  libssh = mkSrcPkg {
+    pname = "libssh"; version = "0.12.2";
+    src = { url = "https://www.libssh.org/files/0.12/libssh-0.12.2.tar.xz";
+            sha256 = "49560f677d96e3706a904ac2de1116e25f3680937d51e5c92198fcba4a1c1e9f"; };
+    deps = [ world zlib base.openssl ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${vsMap}
+      ${cmakeB "-DWITH_EXAMPLES=OFF -DWITH_GSSAPI=OFF -DWITH_NACL=OFF -DHAVE_LD_VERSION_SCRIPT=1 -DWITH_STACK_PROTECTOR_STRONG=0 -DWITH_STACK_PROTECTOR=0 -DUNIT_TESTING=OFF -DCMAKE_C_FLAGS=-D_POSIX_PTHREAD_SEMANTICS"}
+      grep -q "^OPENSSL_CRYPTO_LIBRARY:FILEPATH=${base.openssl}/" _b/CMakeCache.txt && grep -Eq "^ZLIB_LIBRARY(_RELEASE)?:FILEPATH=${zlib}/" _b/CMakeCache.txt \
+        || { echo "FATAL: libssh: openssl/zlib not from the store" >&2; grep -E '^(OPENSSL|ZLIB)_' _b/CMakeCache.txt >&2; exit 1; }
+      L="$out/lib/amd64/libssh.so.4"
+      ${hasVer "$L" "LIBSSH_4_5_0" "ssh_new"}
+      ${hasVer "$L" "LIBSSH_4_11_0" "ssh_get_supported_methods"}
+      ${notExp "$L" "ssh_packet_send"}
+      # an Ed25519 key made and exported: its public blob is 51 bytes, 68 in base64
+      ${tprog ''#include <libssh/libssh.h>
+#include <stdio.h>
+#include <string.h>
+int main(void){ ssh_key k; char *b = NULL; if (ssh_init() || ssh_pki_generate(SSH_KEYTYPE_ED25519, 0, &k) || ssh_pki_export_pubkey_base64(k, &b)) return 1;
+printf("ok %s %s %d\n", ssh_version(0), ssh_key_type_to_char(ssh_key_type(k)), (int)strlen(b)); return 0; }'' "$L"}
+      ${chk ''"$W/t"'' "^ok 0\\.12\\.2/openssl/zlib ssh-ed25519 68$"}
+    '';
+  };
+
+  # soxr (LGPL-2.1+): the SoX resampler library (and its libsamplerate-like libsoxr-lsr), nixpkgs' patch and cmake bump. No OpenMP:
+  # this gcc is built without libgomp (gcc-src.nix), so its threading is off (one thread per resampler).
+  soxr = mkSrcPkg {
+    pname = "soxr"; version = "0.1.3";
+    src = { url = "https://downloads.sourceforge.net/soxr/soxr-0.1.3-Source.tar.xz";
+            sha256 = "b111c15fdc8c029989330ff559184198c161100a59312f5dc19ddeb9b5a15889"; };
+    deps = [ world ]; nativeTools = [ cmake gnupatch ] ++ hostTools;
+    build = ''
+      patch -p1 < ${fetch "https://raw.githubusercontent.com/NixOS/nixpkgs/f4a03c008967841f2a0b3cb7c436fc6fc31671f6/pkgs/by-name/so/soxr/arm64-check.patch" "5702de2631ac27684125376c8366e207f4022f780181c1c758042129d8a8d634"}
+      grep -qx 'cmake_minimum_required (VERSION 3.1 FATAL_ERROR)' CMakeLists.txt || { echo "FATAL: soxr cmake anchor" >&2; exit 1; }
+      sed -i 's/^cmake_minimum_required (VERSION 3.1 FATAL_ERROR)$/cmake_minimum_required (VERSION 3.10 FATAL_ERROR)/' CMakeLists.txt
+      ${cmakeB ''-DWITH_OPENMP=OFF -DBUILD_TESTS=OFF -DLIB_INSTALL_DIR="$out/lib/amd64" -DINCLUDE_INSTALL_DIR="$out/include"''}
+      # 10 ms of a 48 kHz tone resampled to 44.1 kHz in one shot: 441 samples out
+      ${tprog ''#include <soxr.h>
+#include <stdio.h>
+#include <math.h>
+int main(void){ float in[480], out[1000]; size_t od = 0; for (int i = 0; i < 480; i++) in[i] = (float)sin(i * 0.1);
+soxr_error_t e = soxr_oneshot(48000, 44100, 1, in, 480, NULL, out, 1000, &od, NULL, NULL, NULL); printf("ok %s %d %d\n", soxr_version(), e != NULL, od >= 440 && od <= 441); return 0; }'' "$out/lib/amd64/libsoxr.so -lm"}
+      ${chk ''"$W/t"'' "^ok libsoxr-0\\.1\\.3 0 1$"}
+      [ -e "$out/lib/amd64/libsoxr-lsr.so" ] || { echo "FATAL: soxr: no libsoxr-lsr" >&2; exit 1; }
+    '';
+  };
+
+  # libass (ISC): the ASS/SSA subtitle renderer (mpv, ffmpeg), on freetype, fribidi, harfbuzz and fontconfig, nasm asm, as nixpkgs
+  # (--enable-fontconfig --disable-large-tiles; libunibreak, which nixpkgs does not give it, off). The queue's 0.17.4 (nixpkgs 0.17.5).
+  # harfbuzz.pc and fontconfig.pc's private requirements (glib, pcre2, expat, freetype's) are link-time inputs for pkg-config.
+  # illumos iconv(3C) takes const char ** (SUSv2) unless _XPG6: gcc 14's incompatible-pointer-types error made a warning.
+  libass = mkSrcPkg {
+    pname = "libass"; version = "0.17.4";
+    src = { url = "https://github.com/libass/libass/releases/download/0.17.4/libass-0.17.4.tar.xz";
+            sha256 = "78f1179b838d025e9c26e8fef33f8092f65611444ffa1bfc0cfac6a33511a05a"; };
+    deps = [ world freetype fontconfig gtkMeson.harfbuzz gtkMeson.fribidi ]; linkDeps = [ gtkMeson.glib gtkMeson.pcre2 expat ] ++ ftPriv;
+    nativeTools = [ nasm base.pkgconf ] ++ hostTools;
+    build = ''
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --enable-fontconfig --disable-large-tiles --disable-libunibreak \
+        CFLAGS="-O2 -Wno-error=incompatible-pointer-types"
+      grep -qx '#define CONFIG_ASM 1' config.h && grep -qx '#define CONFIG_FONTCONFIG 1' config.h || { echo "FATAL: libass config.h" >&2; grep CONFIG_ config.h >&2; exit 1; }
+      gmake -j8; gmake install
+      # one dialogue line rendered with Noto Sans (the font file, no font provider): the frame at 1 s has glyph images
+      ${tprog ''#include <ass/ass.h>
+#include <stdio.h>
+#include <string.h>
+int main(int c, char **v){ (void)c; ASS_Library *l = ass_library_init(); ASS_Renderer *r = l ? ass_renderer_init(l) : NULL; if (!r) return 1;
+ass_set_frame_size(r, 320, 240); ass_set_fonts(r, v[1], "sans-serif", ASS_FONTPROVIDER_NONE, NULL, 0);
+char s[] = "[Script Info]\nScriptType: v4.00+\nPlayResX: 320\nPlayResY: 240\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, Alignment\nStyle: Default,Noto Sans,24,&H00FFFFFF,2\n\n[Events]\nFormat: Layer, Start, End, Style, Text\nDialogue: 0,0:00:00.00,0:00:05.00,Default,solnix\n";
+ASS_Track *t = ass_read_memory(l, s, strlen(s), NULL); if (!t) return 2; int ch = 0, n = 0; for (ASS_Image *i = ass_render_frame(r, t, 1000, &ch); i; i = i->next) n++;
+printf("ok %x %d %d\n", ass_library_version(), t->n_events, n > 0); ass_free_track(t); ass_renderer_done(r); ass_library_done(l); return 0; }'' "$out/lib/amd64/libass.so"}
+      ${chk ''"$W/t" ${noto-sans}/share/fonts/noto/NotoSans-Regular.ttf'' "^ok 1704000 1 1$"}
+    '';
+  };
+
+  # taglib (LGPL-2.1 / MPL-1.1): audio metadata (ID3, Vorbis comments, MP4 ...) and its C binding, shared, on zlib and the header-only
+  # utf8cpp (its cmake package, asserted), as nixpkgs. The check retitles a copy of one of its own test MP3s and reads it back.
+  taglib = mkSrcPkg {
+    pname = "taglib"; version = "2.2.1";
+    src = { url = "https://codeload.github.com/taglib/taglib/tar.gz/refs/tags/v2.2.1";
+            sha256 = "8d920bfe302c943bab204ad5183fa0ea13cedee7f72f7256b665888de964d081"; };
+    deps = [ world zlib ]; linkDeps = [ utf8cpp ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DBUILD_SHARED_LIBS=ON -DBUILD_TESTING=OFF -DBUILD_EXAMPLES=OFF"}
+      grep -Eq "^utf8cpp_(DIR|INCLUDE_DIR):PATH=${utf8cpp}/" _b/CMakeCache.txt && grep -Eq "^ZLIB_LIBRARY(_RELEASE)?:FILEPATH=${zlib}/" _b/CMakeCache.txt \
+        || { echo "FATAL: taglib: utf8cpp/zlib not from the store" >&2; grep -E '^(utf8cpp|ZLIB)_' _b/CMakeCache.txt >&2; exit 1; }
+      cp tests/data/lame_cbr.mp3 "$W/t.mp3"
+      ${tprog ''#include <taglib/tag_c.h>
+#include <stdio.h>
+int main(int c, char **v){ (void)c; TagLib_File *f = taglib_file_new(v[1]); if (!f || !taglib_file_is_valid(f)) return 1;
+taglib_tag_set_title(taglib_file_tag(f), "solnix"); if (!taglib_file_save(f)) return 2; taglib_file_free(f);
+f = taglib_file_new(v[1]); if (!f) return 3; printf("ok %s %d\n", taglib_tag_title(taglib_file_tag(f)), taglib_audioproperties_samplerate(taglib_file_audioproperties(f)) > 0);
+taglib_tag_free_strings(); taglib_file_free(f); return 0; }'' "$out/lib/amd64/libtag_c.so"}
+      ${chk ''"$W/t" "$W/t.mp3"'' "^ok solnix 1$"}
+    '';
+  };
+
+  # geos (LGPL-2.1): the GEOS computational geometry library (JTS in C++) and its C API (PostGIS, GDAL, shapely), as nixpkgs.
+  geos = mkSrcPkg {
+    pname = "geos"; version = "3.14.1";
+    src = { url = "https://codeload.github.com/libgeos/geos/tar.gz/refs/tags/3.14.1";
+            sha256 = "512118b3be3ccefbca66b36b0f3e895576d08d6ff330ba1511a31a306abbb477"; };
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DBUILD_TESTING=OFF -DBUILD_BENCHMARKS=OFF"}
+      ${tprog ''#include <geos_c.h>
+#include <stdio.h>
+int main(void){ GEOSContextHandle_t h = GEOS_init_r(); GEOSWKTReader *r = GEOSWKTReader_create_r(h);
+GEOSGeometry *g = GEOSWKTReader_read_r(h, r, "POLYGON((0 0,4 0,4 3,0 3,0 0))"); double a = 0; if (!g || !GEOSArea_r(h, g, &a)) return 1;
+printf("ok %s %.1f\n", GEOSversion(), a); GEOSGeom_destroy_r(h, g); GEOSWKTReader_destroy_r(h, r); GEOS_finish_r(h); return 0; }'' "$out/lib/amd64/libgeos_c.so"}
+      ${chk ''"$W/t"'' "^ok 3\\.14\\.1-CAPI-[0-9.]+ 12\\.0$"}
+    '';
+  };
+
+  # htslib (MIT/BSD): the SAM/BAM/CRAM/VCF library and bgzip, tabix, htsfile, ref-cache, as nixpkgs (--enable-libcurl, libdeflate), on
+  # the nix chain's bzip2, xz and curl, the base zlib and openssl (S3/GCS signing). The queue's 1.22 (nixpkgs 1.24). Symbol versions:
+  # htslib.map has no `local: *`, so GNU ld keeps the exports it does not list (hts_crc32, bcf_format_gt_v2, ...) in the base version,
+  # and illumos ld refuses that ("symbol has no version assigned"; the libz case above): linked once unversioned, then with a mapfile
+  # whose base node (the soname) holds the unlisted exports, followed by the shim's conversion of htslib.map (HTSLIB_1.0 .. 1.21).
+  htslib = mkSrcPkg {
+    pname = "htslib"; version = "1.22";
+    src = { url = "https://github.com/samtools/htslib/releases/download/1.22/htslib-1.22.tar.bz2";
+            sha256 = "6250c1df297db477516e60ac8df45ed75a652d1f25b0f37f12f5b17269eafde9"; };
+    deps = [ world zlib base.nixChain.bzip2 base.nixChain.xz base.nixChain.curl libdeflate base.openssl ];
+    nativeTools = [ bzip2-bin base.pkgconf ] ++ hostTools;
+    build = ''
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --enable-libcurl --with-libdeflate hts_cv_have_versioned_symbols=no
+      gmake -j8 libhts.so
+      nm -P -g libhts.so | awk '$2 !~ /^[Uwv]$/ { print $1 }' | sort > "$W/def"
+      "$BASH" ${../version-script-mapfile.sh} convert htslib.map "$W/def" > "$W/vers.map"
+      tr -s ' \t;{}' '\n' < htslib.map | grep -E '^[A-Za-z_][A-Za-z0-9_]*$' | grep -vE '^(global|local|HTSLIB_[0-9._]+)$' | sort -u > "$W/listed"
+      { echo '$mapfile_version 2'; echo 'SYMBOL_VERSION libhts.so.3 {'; echo '  global:'
+        comm -23 "$W/def" "$W/listed" | grep -vxE '_DYNAMIC|_GLOBAL_OFFSET_TABLE_|_PROCEDURE_LINKAGE_TABLE_|_edata|_end|_etext|_init|_fini|_START_|_END_' | sed 's/.*/    &;/'
+        echo '  local:'; echo '    *;'; echo '};'; tail -n +2 "$W/vers.map"; } > "$W/hts.mapfile"
+      rm libhts.so; gmake -j8 VERSION_SCRIPT_LDFLAGS="-Wl,-M,$W/hts.mapfile"; gmake install VERSION_SCRIPT_LDFLAGS="-Wl,-M,$W/hts.mapfile"
+      L="$out/lib/amd64/libhts.so.3"
+      ${hasVer "$L" "HTSLIB_1.0" "hts_open"}
+      ${hasVer "$L" "HTSLIB_1.21" "cram_num_containers"}
+      ${hasVer "$L" "libhts\\.so\\.3" "hts_crc32"}
+      ${notExp "$L" "hts_tpool_process_attach_unlocked"}
+      ${tprog ''#include <htslib/sam.h>
+#include <stdio.h>
+int main(int c, char **v){ (void)c; samFile *f = sam_open(v[1], "r"); sam_hdr_t *h = f ? sam_hdr_read(f) : NULL; if (!h) return 1; bam1_t *b = bam_init1(); int n = 0;
+while (sam_read1(f, h, b) >= 0) n++; printf("ok %s %d %d\n", hts_version(), sam_hdr_nref(h), n); bam_destroy1(b); sam_hdr_destroy(h); sam_close(f); return 0; }'' "$L"}
+      ${chk ''"$W/t" "test/xx#minimal.sam"'' "^ok 1\\.22 2 8$"}
+      ${chk ''printf 'solnix\n' | "$out/bin/bgzip" -c | "$out/bin/bgzip" -dc'' "^solnix$"}
+    '';
+  };
+
+  # codec2 (LGPL-2.1): the low-bitrate speech codec and FreeDV modems, shared, and nixpkgs' extra programs (c2enc, c2dec, the modem
+  # tools) from the build dir. Its generate_codebook runs at build time (a native build). nixpkgs' pkg-config patch is for its split
+  # outputs (absolute libdir), not taken; its freedv_api.h keyword swap (for SWIG) is.
+  codec2 = mkSrcPkg {
+    pname = "codec2"; version = "1.2.0";
+    src = { url = "https://codeload.github.com/drowe67/codec2/tar.gz/refs/tags/1.2.0";
+            sha256 = "cbccae52b2c2ecc5d2757e407da567eb681241ff8dadce39d779a7219dbcf449"; };
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DUNITTEST=OFF"}
+      mkdir -p "$out/bin"; ( cd _b/src && install -m 0755 c2enc c2dec c2sim freedv_rx freedv_tx cohpsk_* fdmdv_* fsk_* ldpc_* ofdm_* "$out/bin/" )
+      sed -r -i 's/(\<_Complex)(\s+)(float|double)/\3\2\1/' "$out/include/codec2/freedv_api.h"
+      ${tprog ''#include <codec2/codec2.h>
+#include <stdio.h>
+int main(void){ struct CODEC2 *c = codec2_create(CODEC2_MODE_3200); if (!c) return 1; printf("ok %d %d\n", codec2_samples_per_frame(c), codec2_bits_per_frame(c)); codec2_destroy(c); return 0; }'' "$out/lib/amd64/libcodec2.so"}
+      ${chk ''"$W/t"'' "^ok 160 64$"}
+      # upstream's 3 s sample (48000 bytes) at 3200 bit/s: 150 frames of 8 bytes, and back to 48000 bytes
+      ${chk ''"$out/bin/c2enc" 3200 raw/hts1a.raw "$W/t.bit" && "$out/bin/c2dec" 3200 "$W/t.bit" "$W/t.raw" && echo "size $(wc -c < "$W/t.bit") $(wc -c < "$W/t.raw")"'' "^size 1200 48000$"}
+    '';
+  };
+
+  # game-music-emu (LGPL-2.1+): libgme, emulators for video-game music formats (NSF, SPC, VGM, GBS ...), shared, on zlib, with
+  # nixpkgs' CVE patch. YM2612: the default Nuked core (LGPL-2.1+; MAME's is the GPL one). The check plays upstream's test.nsf.
+  game-music-emu = mkSrcPkg {
+    pname = "game-music-emu"; version = "0.6.5";
+    src = { url = "https://codeload.github.com/libgme/game-music-emu/tar.gz/refs/tags/0.6.5";
+            sha256 = "8531678502451c2cf04248cda45c8b4645e19fcfb63e6a7ec2549641c47bb392"; };
+    deps = [ world zlib ]; nativeTools = [ cmake gnupatch ] ++ hostTools;
+    build = ''
+      patch -p1 < ${fetch "https://github.com/libgme/game-music-emu/commit/ae10a8f05479e3c8f80429e7a59759fed06f8c13.patch?full_index=1" "897de3bcb2cf00bbce4aa720b38e5f83d881aff0d36ca233c2960c8085a1050a"}
+      ${cmakeB "-DGME_BUILD_SHARED=ON -DGME_BUILD_STATIC=OFF -DGME_BUILD_TESTING=OFF -DGME_BUILD_EXAMPLES=OFF -DGME_YM2612_EMU=Nuked"}
+      grep -Eq "^ZLIB_LIBRARY(_RELEASE)?:FILEPATH=${zlib}/" _b/CMakeCache.txt || { echo "FATAL: game-music-emu: zlib not from the store" >&2; exit 1; }
+      ${tprog ''#include <gme/gme.h>
+#include <stdio.h>
+int main(int c, char **v){ (void)c; Music_Emu *e; short b[4096]; long nz = 0; if (gme_open_file(v[1], &e, 44100) || gme_start_track(e, 0)) return 1;
+for (int k = 0; k < 20; k++) { if (gme_play(e, 4096, b)) return 2; for (int i = 0; i < 4096; i++) nz += b[i] != 0; }
+printf("ok %06x %d %d\n", GME_VERSION, gme_track_count(e), nz > 0); gme_delete(e); return 0; }'' "$out/lib/amd64/libgme.so"}
+      ${chk ''"$W/t" test.nsf'' "^ok 000605 [1-9][0-9]* 1$"}
+    '';
+  };
+
+  # ladspa-header (LGPL-2.0): the LADSPA plugin API header (ladspa.h) that audio hosts and plugins build against, as nixpkgs: the
+  # header only.
+  ladspa-header = mkSrcPkg {
+    pname = "ladspa-header"; version = "1.17";
+    src = { url = "https://www.ladspa.org/download/ladspa_sdk_1.17.tgz";
+            sha256 = "27d24f279e4b81bd17ecbdcc38e4c42991bb388826c0b200067ce0eb59d3da5b"; };
+    deps = [ world ]; nativeTools = hostTools;
+    build = ''
+      mkdir -p "$out/include"; cp src/ladspa.h "$out/include/ladspa.h"
+      ${tprog ''#include <ladspa.h>
+#include <stdio.h>
+int main(void){ LADSPA_Descriptor d = { 0 }; printf("ok %s %d\n", LADSPA_VERSION, (int)sizeof d.UniqueID); return LADSPA_IS_PORT_INPUT(LADSPA_PORT_INPUT) ? 0 : 1; }'' ""}
+      ${chk ''"$W/t"'' "^ok 1\\.1 [48]$"}
+    '';
+  };
+
+  # libmpg123 (LGPL-2.1): mpg123's MPEG audio decoder library (with libout123/libsyn123) and its programs, as nixpkgs' libOnly
+  # (which only drops the audio backends' inputs, so configure picks the platform's: illumos' sun /dev/audio module). Its own
+  # sweep.mp3 test file decoded through the library. -D__EXTENSIONS__: its strict-POSIX defines hide <dlfcn.h>'s mmapobj_result_t.
+  libmpg123 = mkSrcPkg {
+    pname = "libmpg123"; version = "1.33.7";
+    src = { url = "https://downloads.sourceforge.net/mpg123/mpg123-1.33.7.tar.bz2";
+            sha256 = "31d0e35a4ca567ec9b5ebda6c3062bb4435d6d3eacd6ef0d95cadd7854dc03ee"; };
+    deps = [ world ]; nativeTools = [ bzip2-bin ] ++ hostTools;
+    build = ''
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static CPPFLAGS=-D__EXTENSIONS__
+      gmake -j8; gmake install
+      ${tprog ''#include <mpg123.h>
+#include <stdio.h>
+int main(int c, char **v){ (void)c; int err = 0, ch, enc; long rate; unsigned char b[8192]; size_t d = 0, tot = 0; mpg123_handle *m = mpg123_new(NULL, &err);
+if (!m || mpg123_open(m, v[1]) != MPG123_OK || mpg123_getformat(m, &rate, &ch, &enc) != MPG123_OK) return 1;
+int rc; while ((rc = mpg123_read(m, b, sizeof b, &d)) == MPG123_OK || rc == MPG123_NEW_FORMAT) tot += d; tot += d; printf("ok %ld %d %d\n", rate, ch, tot > 10000); mpg123_close(m); mpg123_delete(m); return 0; }'' "$out/lib/amd64/libmpg123.so"}
+      ${chk ''"$W/t" src/tests/sweep.mp3'' "^ok 44100 2 1$"}
+      ${chk ''"$out/bin/mpg123" --version'' "^mpg123 1\\.33\\.7"}
+    '';
+  };
+
+  # libplist (LGPL-2.1+): Apple property lists (XML, binary, JSON, OpenStep) and plistutil, as nixpkgs (--enable-debug, no cython):
+  # autotools from the tag, the version given as RELEASE_VERSION (git-version-gen has no .git), the C++ binding included.
+  libplist = mkSrcPkg {
+    pname = "libplist"; version = "2.7.0";
+    src = { url = "https://codeload.github.com/libimobiledevice/libplist/tar.gz/refs/tags/2.7.0";
+            sha256 = "66fa17a29270cb25ceaf189430ea38037c066652c2989b58d7ef6120b1a208d3"; };
+    deps = [ world ]; nativeTools = autoreconfTools ++ [ base.pkgconf ] ++ hostTools;
+    build = ''
+      echo 2.7.0 > .tarball-version
+      export RELEASE_VERSION=2.7.0
+      ${autoreconf}
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --enable-debug --without-cython LDFLAGS="-L$gccLib/amd64"
+      gmake -j8; gmake install
+      ${tprog ''#include <plist/plist.h>
+#include <stdio.h>
+#include <string.h>
+int main(void){ plist_t d = plist_new_dict(); plist_dict_set_item(d, "os", plist_new_string("solnix")); char *b = NULL; uint32_t n = 0; plist_to_bin(d, &b, &n);
+plist_t r = NULL; plist_from_bin(b, n, &r); char *s = NULL; plist_get_string_val(plist_dict_get_item(r, "os"), &s);
+printf("ok %s %.8s %s\n", libplist_version(), b, s); plist_mem_free(s); plist_mem_free(b); plist_free(r); plist_free(d); return 0; }'' "$out/lib/amd64/libplist-2.0.so"}
+      ${chk ''"$W/t"'' "^ok 2\\.7\\.0 bplist00 solnix$"}
+      printf '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>a</key><integer>42</integer></dict></plist>\n' > "$W/t.plist"
+      ${chk ''"$out/bin/plistutil" -i "$W/t.plist" -f bin -o "$W/t.bin" && "$out/bin/plistutil" -i "$W/t.bin" -f xml'' "<integer>42</integer>"}
+    '';
+  };
+
+  # fonttosfnt (MIT): X.Org's bitmap font to OpenType (bitmap-only sfnt) wrapper, on freetype and libfontenc. The release tarball.
+  fonttosfnt = mkSrcPkg {
+    pname = "fonttosfnt"; version = "1.2.5";
+    src = { url = "https://www.x.org/releases/individual/app/fonttosfnt-1.2.5.tar.xz";
+            sha256 = "2e251e66e8753c08aa280b26fd4a10d0d88e7d9bba5c8aac3d3fb36705e5918e"; };
+    deps = [ world freetype libfontenc ]; linkDeps = [ base.xorgproto zlib ] ++ ftPriv; nativeTools = [ base.pkgconf ] ++ hostTools;
+    build = ''
+      ./configure --prefix="$out" ${manSections}
+      gmake -j8; gmake install
+      cat > "$W/t.bdf" <<'BDF'
+STARTFONT 2.1
+FONT -solnix-test-medium-r-normal--8-80-75-75-c-80-iso10646-1
+SIZE 8 75 75
+FONTBOUNDINGBOX 8 8 0 0
+STARTPROPERTIES 3
+FONT_ASCENT 8
+FONT_DESCENT 0
+PIXEL_SIZE 8
+ENDPROPERTIES
+CHARS 1
+STARTCHAR A
+ENCODING 65
+SWIDTH 500 0
+DWIDTH 8 0
+BBX 8 8 0 0
+BITMAP
+18
+24
+42
+42
+7E
+42
+42
+00
+ENDCHAR
+ENDFONT
+BDF
+      # an OpenType file starts with the sfnt version 0x00010000 (fonttosfnt writes no 'OTTO' table set)
+      ${chk ''"$out/bin/fonttosfnt" -o "$W/t.otb" "$W/t.bdf" && od -An -tx1 -N4 "$W/t.otb"'' "^ *00 01 00 00$"}
+    '';
+  };
+
+  # libxfont_2 (MIT and others): libXfont2, the X server's font rasteriser and font-path library, on freetype, libfontenc, zlib and
+  # xtrans, as nixpkgs (bzip2 off, its default). The release tarball.
+  libxfont_2 = mkSrcPkg {
+    pname = "libxfont_2"; version = "2.0.9";
+    src = { url = "https://www.x.org/releases/individual/lib/libXfont2-2.0.9.tar.xz";
+            sha256 = "f042a370666815e7b941e9b7019024755bd1c6c2954afbfa515af378251799e2"; };
+    deps = [ world freetype libfontenc zlib ]; linkDeps = [ base.xorgproto xtrans ] ++ ftPriv; nativeTools = [ base.pkgconf ] ++ hostTools;
+    build = ''
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static ${manSections}
+      gmake -j8; gmake install
+      ${tprog ''#include <X11/fonts/fontstruct.h>
+#include <X11/fonts/libxfont2.h>
+#include <stdio.h>
+int main(void){ FontNamesPtr n = xfont2_make_font_names_record(4); if (!n) return 1; char a[] = "fixed", b[] = "cursor";
+xfont2_add_font_names_name(n, a, 5); xfont2_add_font_names_name(n, b, 6); printf("ok %d %s %s\n", n->nnames, n->names[0], n->names[1]); xfont2_free_font_names(n); return 0; }'' "$out/lib/amd64/libXfont2.so"}
+      ${chk ''"$W/t"'' "^ok 2 fixed cursor$"}
+    '';
+  };
+
+  # isa-l (BSD-3-Clause): Intel's storage acceleration library (igzip deflate, CRC, erasure codes, RAID) with nasm asm, its igzip
+  # program, as nixpkgs (ISAL_BUILD_IGZIP_CLI). cmake on illumos reports CMAKE_SYSTEM_PROCESSOR i386 (uname -p) for this 64-bit build,
+  # which isa-l would build as an unknown CPU (no asm): a 64-bit SunOS is x86_64 there (as ggml). illumos has no <byteswap.h>: its
+  # GNUC branch takes gcc's builtins on __sun. nasm's STT_FILE source names: relative paths (libjpeg-turbo's wrapper).
+  isa-l = mkSrcPkg {
+    pname = "isa-l"; version = "2.32.1";
+    src = { url = "https://codeload.github.com/intel/isa-l/tar.gz/refs/tags/v2.32.1";
+            sha256 = "d9f7179ab0e14a3db9b610fac22793854a1435e8423ec9ce07f4cbedc5f92f5e"; };
+    deps = [ world ]; nativeTools = [ cmake nasm ] ++ hostTools;
+    build = ''
+      [ "$(grep -c '^if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64" OR CMAKE_SYSTEM_PROCESSOR STREQUAL "AMD64")$' CMakeLists.txt)" = 2 ] || { echo "FATAL: isa-l arch anchor" >&2; exit 1; }
+      sed -i 's/^if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64" OR CMAKE_SYSTEM_PROCESSOR STREQUAL "AMD64")$/if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64" OR CMAKE_SYSTEM_PROCESSOR STREQUAL "AMD64" OR (CMAKE_SYSTEM_NAME STREQUAL "SunOS" AND CMAKE_SIZEOF_VOID_P EQUAL 8))/' CMakeLists.txt
+      grep -qx '#elif defined(__GNUC__) && !defined(__MINGW32__)' include/unaligned.h || { echo "FATAL: isa-l byteswap anchor" >&2; exit 1; }
+      sed -i 's|^#elif defined(__GNUC__) \&\& !defined(__MINGW32__)$|#elif defined(__sun)\n#define isal_bswap16(x) __builtin_bswap16(x)\n#define isal_bswap32(x) __builtin_bswap32(x)\n#define isal_bswap64(x) __builtin_bswap64(x)\n&|' include/unaligned.h
+      ${nasmRel}
+      ${cmakeB ''-DCMAKE_ASM_NASM_COMPILER="$W/nasm" -DISAL_BUILD_IGZIP_CLI=ON -DISAL_BUILD_TESTS=OFF -DISAL_BUILD_PERF_TESTS=OFF''}
+      ls _b/CMakeFiles/isal.dir/crc/*.asm.o > /dev/null || { echo "FATAL: isa-l: no nasm objects" >&2; exit 1; }
+      # the CRC-32 check value ("123456789" -> cbf43926) through the asm dispatcher, and a deflate round trip through igzip
+      ${tprog ''#include <isa-l.h>
+#include <stdio.h>
+int main(void){ printf("ok %08x\n", crc32_gzip_refl(0, (const unsigned char *)"123456789", 9)); return 0; }'' "$out/lib/amd64/libisal.so"}
+      ${chk ''"$W/t"'' "^ok cbf43926$"}
+      ${chk ''printf 'solnix solnix solnix\n' | "$out/bin/igzip" -c | "$out/bin/igzip" -dc'' "^solnix solnix solnix$"}
+    '';
+  };
+
+  # libhwy (Apache-2.0 / BSD-3-Clause): Google Highway, portable SIMD with run-time dispatch, shared, with contrib (vqsort, thread pool)
+  # and its test-helper library, as nixpkgs (its contrib-output split not taken: one output; its gcc 16 patch is to the installed
+  # test header). Its gtest tests are not built. The check sorts through vqsort and lists the CPU targets it can dispatch to.
+  libhwy = mkSrcPkg {
+    pname = "libhwy"; version = "1.4.0";
+    src = { url = "https://codeload.github.com/google/highway/tar.gz/refs/tags/1.4.0";
+            sha256 = "e72241ac9524bb653ae52ced768b508045d4438726a303f10181a38f764a453c"; };
+    deps = [ world ]; nativeTools = [ cmake gnupatch ] ++ hostTools;
+    build = ''
+      patch -p1 < ${fetch "https://github.com/google/highway/commit/8a0da774fe6b3f9ab02f5f33e763b8c2133f38fc.patch?full_index=1" "580b05eb88fec28e83c6587cd0dd6e141d4e451234a577a527ff19eed36103c1"}
+      # hwy.version is extern "C++" globs, which illumos mapfiles cannot express (the shim refuses them); upstream skips it where the
+      # linker lacks it ("safe to skip (we use DLLEXPORT annotations)": the libraries are built -fvisibility=hidden). SunOS too.
+      [ "$(grep -c '^if(UNIX AND NOT APPLE)$' CMakeLists.txt)" = 3 ] || { echo "FATAL: libhwy version-script anchor" >&2; exit 1; }
+      sed -i 's/^if(UNIX AND NOT APPLE)$/if(UNIX AND NOT APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "SunOS")/' CMakeLists.txt
+      # at the build's core count, not cmakeB's -j16: vqsort's units are ~1 GB each (woof, 16 GB, swapped 19 GB at -j16)
+      ${builtins.replaceStrings [ "cmake --build _b -j16" ] [ "cmake --build _b -j\${NIX_BUILD_CORES:-4}" ] (cmakeB "-DBUILD_SHARED_LIBS=ON -DHWY_ENABLE_TESTS=ON -DHWY_ENABLE_EXAMPLES=OFF -DBUILD_TESTING=OFF")}
+      [ -e "$out/lib/amd64/libhwy_test.so" ] || { echo "FATAL: libhwy: no libhwy_test" >&2; exit 1; }
+      cat > "$W/t.cc" <<'TPROG'
+#include <hwy/contrib/sort/vqsort.h>
+#include <hwy/targets.h>
+#include <cstdio>
+#include <vector>
+int main(){ std::vector<uint32_t> v(1000); for (size_t i = 0; i < v.size(); i++) v[i] = (uint32_t)((i * 7919) % 1000);
+hwy::VQSort(v.data(), v.size(), hwy::SortAscending()); bool ok = true; for (size_t i = 0; i < v.size(); i++) ok = ok && v[i] == i;
+std::printf("ok %d %d\n", ok, (hwy::SupportedTargets() & HWY_SSE2) != 0); }
+TPROG
+      "$CXX" -std=c++17 -I"$out/include" "$W/t.cc" "$out/lib/amd64/libhwy_contrib.so" "$out/lib/amd64/libhwy.so" -Wl,-R,"$out/lib/amd64" -o "$W/t"
+      ${chk ''"$W/t"'' "^ok 1 1$"}
+    '';
+  };
+
+  # muparser (MIT): a fast math expression parser, shared, as nixpkgs' flags but without OpenMP (this gcc has no libgomp: its
+  # bulk-evaluation mode runs single-threaded). Samples off.
+  muparser = mkSrcPkg {
+    pname = "muparser"; version = "2.3.5";
+    src = { url = "https://codeload.github.com/beltoforion/muparser/tar.gz/refs/tags/v2.3.5";
+            sha256 = "20b43cc68c655665db83711906f01b20c51909368973116dfc8d7b3c4ddb5dd4"; };
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DENABLE_OPENMP=OFF -DENABLE_SAMPLES=OFF -DBUILD_TESTING=OFF"}
+      ${tprog ''#include <muParserDLL.h>
+#include <stdio.h>
+int main(void){ muParserHandle_t p = mupCreate(muBASETYPE_FLOAT); mupSetExpr(p, "sin(_pi/2) + 2^10 * (3 - 1)"); double r = mupEval(p);
+printf("ok %s %d %.1f\n", mupGetVersion(p), mupError(p), r); mupRelease(p); return 0; }'' "$out/lib/amd64/libmuparser.so"}
+      ${chk ''"$W/t"'' "^ok 2\\.3\\.5.* 0 2049\\.0$"}
+    '';
+  };
+
+  # primesieve (BSD-2-Clause): the segmented sieve of Eratosthenes library and its primesieve command, shared, as nixpkgs. Its x86
+  # multiarch (POPCNT, AVX-512 dispatch on cpuid) is kept: cmake's i386 CMAKE_SYSTEM_PROCESSOR on illumos is not consulted there.
+  primesieve = mkSrcPkg {
+    pname = "primesieve"; version = "12.14";
+    src = { url = "https://codeload.github.com/kimwalisch/primesieve/tar.gz/refs/tags/v12.14";
+            sha256 = "65cf173e11bc9aff1b189f2cd19c6b6c502c30e966876b5c5ef71e138f49c8c9"; };
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DBUILD_STATIC_LIBS=OFF -DBUILD_TESTS=OFF"}
+      ${tprog ''#include <primesieve.h>
+#include <stdio.h>
+int main(void){ printf("ok %s %llu %llu\n", primesieve_version(), (unsigned long long)primesieve_count_primes(0, 1000000), (unsigned long long)primesieve_nth_prime(1000, 0)); return 0; }'' "$out/lib/amd64/libprimesieve.so"}
+      ${chk ''"$W/t"'' "^ok 12\\.14 78498 7919$"}
+      ${chk ''"$out/bin/primesieve" 1e6'' "^Primes: 78498$"}
+    '';
+  };
+
+  # howard-hinnant-date (MIT): the C++ date/time-zone library (std::chrono's calendar and tz before C++20), with libdate-tz on the
+  # OS tz database, shared, as nixpkgs: its date.pc patch and fix-ups, and its zoneinfo patch pointing the default tz dir at the store
+  # tzdata (illumos has /usr/share/lib/zoneinfo, not /usr/share/zoneinfo; nixpkgs pins the store one on every platform). The library
+  # still stats upstream's /usr/share/zoneinfo/uclibc first, as on NixOS (absent on every solnix host).
+  howard-hinnant-date = mkSrcPkg {
+    pname = "howard-hinnant-date"; version = "3.0.3";
+    src = { url = "https://codeload.github.com/HowardHinnant/date/tar.gz/refs/tags/v3.0.3";
+            sha256 = "30de45a34a2605cca33a993a9ea54e8f140f23b1caf1acf3c2fd436c42c7d942"; };
+    deps = [ world tzdata ]; nativeTools = [ cmake gnupatch ] ++ hostTools;
+    build = ''
+      patch -p1 < ${fetch "https://git.alpinelinux.org/aports/plain/community/date/538-output-date-pc-for-pkg-config.patch?id=11f6b4d4206b0648182e7b41cd57dcc9ccea0728" "c881ae3ae08b46a2137b987e593469d030669c37c9423921a1fac7de512676f3"}
+      sed 's|@tzdata@|${tzdata}|' ${fetch "https://raw.githubusercontent.com/NixOS/nixpkgs/f4a03c008967841f2a0b3cb7c436fc6fc31671f6/pkgs/by-name/ho/howard-hinnant-date/make-zoneinfo-available.diff" "f06f0fe512721ac66e068f08602f7246b82a49d82ef67172abd6cbf7a6fcb563"} | patch -p1
+      sed -i -e 's|@CMAKE_INSTALL_LIB@|@CMAKE_INSTALL_FULL_LIBDIR@|' -e 's|@CMAKE_INSTALL_INCLUDE@|@CMAKE_INSTALL_FULL_INCLUDEDIR@|' -e 's|@PACKAGE_VERSION@|3.0.3|' date.pc.in
+      ${cmakeB "-DBUILD_TZ_LIB=true -DBUILD_SHARED_LIBS=true -DUSE_SYSTEM_TZ_DB=true"}
+      grep -q "${tzdata}/share/zoneinfo" src/tz.cpp || { echo "FATAL: howard-hinnant-date: zoneinfo patch" >&2; exit 1; }
+      cat > "$W/t.cc" <<'TPROG'
+#include <date/tz.h>
+#include <iostream>
+int main(){ using namespace date; using namespace std::chrono; auto t = sys_days{2026_y/July/4} + 12h;
+auto z = make_zoned("America/New_York", t); std::cout << "ok " << z << "\n"; }
+TPROG
+      "$CXX" -std=c++17 -DUSE_OS_TZDB=1 -I"$out/include" "$W/t.cc" "$out/lib/amd64/libdate-tz.so" -Wl,-R,"$out/lib/amd64" -o "$W/t"
+      ${chk ''"$W/t"'' "^ok 2026-07-04 08:00:00 EDT$"}
+      grep -qx 'Version: 3.0.3' "$out/lib/amd64/pkgconfig/date.pc" || { echo "FATAL: howard-hinnant-date: date.pc" >&2; exit 1; }
+    '';
+  };
+
+  # capnproto (MIT): Cap'n Proto serialisation and RPC, the capnp compiler and the kj libraries, shared, with fibers (getcontext and
+  # friends are in illumos libc), on openssl and zlib, as nixpkgs (its libucontext patch only names a musl dependency in a .pc).
+  # nixpkgs builds it with clang (gcc once miscompiled kj's coroutines, gcc PR 102051); gcc 15 here, C++20 as nixpkgs, and the check
+  # runs a kj coroutine and a fiber besides a schema compiled by capnp and a message round trip. kj's event loop on illumos is poll(2).
+  # illumos <setjmp.h> declares _setjmp/_longjmp (kj's fiber switch) only in namespace std for C++: brought in by name. kj-async's
+  # sockets are in libsocket/libnsl on illumos (upstream links ws2_32 on Windows only): added for SunOS, as its PUBLIC link interface.
+  capnproto = mkSrcPkg {
+    pname = "capnproto"; version = "1.5.0";
+    src = { url = "https://codeload.github.com/capnproto/capnproto/tar.gz/refs/tags/v1.5.0";
+            sha256 = "d5ebdf858e9885c33d4b3f765006d68bd66e9b002bf4d607ff4317ef9c1aac6a"; };
+    deps = [ world zlib base.openssl ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      grep -qx '#include <setjmp.h>    // for fibers' c++/src/kj/async.c++ || { echo "FATAL: capnproto setjmp anchor" >&2; exit 1; }
+      sed -i 's|^#include <setjmp.h>    // for fibers$|&\n#if defined(__sun) \&\& defined(__cplusplus)\nusing std::_setjmp;\nusing std::_longjmp;\n#endif|' c++/src/kj/async.c++
+      grep -qx '    target_link_libraries(kj-async PUBLIC ws2_32)' c++/src/kj/CMakeLists.txt || { echo "FATAL: capnproto ws2_32 anchor" >&2; exit 1; }
+      sed -i 's|^    target_link_libraries(kj-async PUBLIC ws2_32)$|&\n  endif()\n  if(CMAKE_SYSTEM_NAME STREQUAL "SunOS")\n    target_link_libraries(kj-async PUBLIC socket nsl)|' c++/src/kj/CMakeLists.txt
+      ${builtins.replaceStrings [ "cmake --build _b -j16" ] [ "cmake --build _b -j\${NIX_BUILD_CORES:-4}" ] (cmakeB "-DBUILD_SHARED_LIBS=ON -DWITH_FIBERS=ON -DBUILD_TESTING=OFF -DCMAKE_CXX_FLAGS=-std=c++20")}
+      grep -q "^OPENSSL_CRYPTO_LIBRARY:FILEPATH=${base.openssl}/" _b/CMakeCache.txt && grep -Eq "^ZLIB_LIBRARY(_RELEASE)?:FILEPATH=${zlib}/" _b/CMakeCache.txt \
+        || { echo "FATAL: capnproto: openssl/zlib not from the store" >&2; grep -E '^(OPENSSL|ZLIB)_' _b/CMakeCache.txt >&2; exit 1; }
+      mkdir "$W/cp"; printf '@0xbf5147cbbecf40c1;\nstruct P { name @0 :Text; n @1 :UInt32; }\n' > "$W/cp/t.capnp"
+      ( cd "$W/cp" && "$out/bin/capnp" compile -o"$out/bin/capnpc-c++" t.capnp )
+      cat > "$W/cp/m.cc" <<'TPROG'
+#include "t.capnp.h"
+#include <capnp/message.h>
+#include <capnp/serialize.h>
+#include <kj/async.h>
+#include <iostream>
+kj::Promise<int> co(kj::Promise<int> p){ int x = co_await p; co_return x + 1; }
+int main(){ capnp::MallocMessageBuilder b; auto p = b.initRoot<P>(); p.setName("solnix"); p.setN(42); auto w = capnp::messageToFlatArray(b);
+capnp::FlatArrayMessageReader r(w); auto q = r.getRoot<P>(); kj::EventLoop loop; kj::WaitScope ws(loop); int c = co(kj::Promise<int>(41)).wait(ws);
+int f = kj::startFiber(65536, [](kj::WaitScope&){ return 7; }).wait(ws); std::cout << "ok " << q.getName().cStr() << " " << q.getN() << " " << c << " " << f << "\n"; }
+TPROG
+      "$CXX" -std=c++20 -I"$out/include" -I"$W/cp" "$W/cp/m.cc" "$W/cp/t.capnp.c++" "$out/lib/amd64/libcapnp.so" "$out/lib/amd64/libkj-async.so" "$out/lib/amd64/libkj.so" -lsocket -lnsl -Wl,-R,"$out/lib/amd64" -o "$W/t"
+      ${chk ''"$W/t"'' "^ok solnix 42 42 7$"}
+      ${chk ''"$out/bin/capnp" --version'' "^Cap.n Proto version 1\\.5\\.0$"}
+    '';
+  };
+
+  # libsysprof-capture (BSD-2-Clause-Patent): sysprof's capture-file writer/reader, the static library and headers that GLib, GTK and
+  # Mesa link to emit profiler marks (nixpkgs' package: everything else off). The queue's 50.0 (nixpkgs 51.0). Its Linux-only paths
+  # (perf, memfd, sched_getcpu, gettid) are #ifdef'd with fallbacks; the non-Linux temp-file one needs <fcntl.h>, an O_BINARY (0
+  # off Windows) and, under its strict -D_POSIX_C_SOURCE, __EXTENSIONS__ (mkostemp). illumos has no <byteswap.h>: gcc's builtins.
+  libsysprof-capture = mkSrcPkg {
+    pname = "libsysprof-capture"; version = "50.0";
+    src = { url = "https://download.gnome.org/sources/sysprof/50/sysprof-50.0.tar.xz";
+            sha256 = "aace44e90e90f6c34bb2fbec8ccb47b8f81103080978d65759287843c329d53a"; };
+    deps = [ world ]; nativeTools = mesonTools;
+    build = ''
+      grep -qx '# include <byteswap.h>' src/libsysprof-capture/sysprof-macros-internal.h && grep -qx '#ifndef __NR_memfd_create' src/libsysprof-capture/sysprof-platform.c \
+        || { echo "FATAL: libsysprof-capture anchors" >&2; exit 1; }
+      sed -i 's|^# include <byteswap.h>$|# ifdef __sun\n#  define bswap_16 __builtin_bswap16\n#  define bswap_32 __builtin_bswap32\n#  define bswap_64 __builtin_bswap64\n# else\n#  include <byteswap.h>\n# endif|' src/libsysprof-capture/sysprof-macros-internal.h
+      sed -i '0,/^#ifndef __NR_memfd_create$/s||#include <fcntl.h>\n#ifndef O_BINARY\n# define O_BINARY 0\n#endif\n\n&|' src/libsysprof-capture/sysprof-platform.c
+      ${mesonBuild "-Dc_args=-D__EXTENSIONS__ -Dinstall-static=true -Dsysprofd=none -Dgtk=false -Dlibsysprof=false -Dhelp=false -Dtools=false -Dtests=false -Dexamples=false -Dpolkit-agent=disabled -Ddebuginfod=disabled"}
+      ${tprog ''#include <sysprof-capture.h>
+#include <stdio.h>
+#include <string.h>
+int main(int c, char **v){ (void)c; SysprofCaptureWriter *w = sysprof_capture_writer_new(v[1], 0); if (!w) return 1;
+sysprof_capture_writer_add_mark(w, SYSPROF_CAPTURE_CURRENT_TIME, -1, -1, 125, "solnix", "Draw", "hdmi-1"); sysprof_capture_writer_unref(w);
+SysprofCaptureReader *r = sysprof_capture_reader_new(v[1]); if (!r) return 2; const SysprofCaptureMark *m = sysprof_capture_reader_read_mark(r); if (!m) return 3;
+printf("ok %d.%d %s %s %d\n", SYSPROF_MAJOR_VERSION, SYSPROF_MINOR_VERSION, m->group, m->name, (int)m->duration); sysprof_capture_reader_unref(r); return 0; }'' ''-I"$out/include/sysprof-6" "$out/lib/amd64/libsysprof-capture-4.a" -lpthread -lsocket -lnsl''}
+      ${chk ''"$W/t" "$W/t.syscap"'' "^ok 50\\.0 solnix Draw 125$"}
     '';
   };
 }
