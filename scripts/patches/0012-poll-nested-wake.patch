@@ -1,0 +1,309 @@
+solnix: recursive /dev/poll (epoll inside epoll) -- make the wakeup of a parent pollcache lossless.
+
+SYMPTOM (greeterclock, lixi BE solnix-32, 2026-11-03): cosmic-greeter's clock and cursor stop updating until the mouse
+moves. cosmic-comp's main loop is a calloop epoll that holds the wayland server's own epoll fd, which holds every
+client socket. A client request arriving on that inner epoll did not wake the compositor, which slept in
+epoll_wait(-1) with the request unread. Pointer input (consms, in the OUTER epoll) woke it, it rescanned and found
+the request. Every program that nests epoll fds is affected (cosmic-comp, cosmic-panel's embedded server, smallvil).
+
+EVIDENCE: dtrace on the live compositor (pid 927): its main thread and its output thread entered DP_POLL at
+14:01:25.511 and did not return for the remaining 90 s of the trace, while the greeter's last commit sat unread.
+mdb -k at the same moment: the client socket's stream head had q_count 0x80 (128 bytes queued); the inner pollcache
+had PC_POLLWAKE set and bit 54 (that socket) set; the outer pollcache had pc_flag 0x4 (no PC_POLLWAKE), bit 6 (the
+inner epoll fd) set, and one waiter on pc_cv; the pcachelink between them was PCL_VALID. Repro
+(scripts/test-poll-nested-wake.sh + .c: a socket in an epoll in an epoll, one byte written 0-1 us after the reader
+re-enters epoll_wait; a lost wake = the byte unread for the whole 200 ms timeout), stock kernel: dixi 462 of 2400
+nested wakes lost (19%), lixi 146 of 2400, every 300-wake run > 0; the same test with one epoll level lost 0.
+
+MECHANISM 1 (the parent's wakeup): pollwakeup() -> pollnotify(child) sets the child's bit and PC_POLLWAKE under the child's pc_lock, then
+pcache_wake_parents() did a bare cv_broadcast() on each parent's pc_cv, holding neither the parent's pc_lock nor any
+lock the parent sleeps with, and setting nothing the parent can test. The parent's DP_POLL loop scans under its own
+pc_lock (dppoll() of the child reports "nothing yet"), checks its own PC_POLLWAKE, then cv_timedwait()s. An event
+that reaches the child after the child was scanned and before the parent is on pc_cv is dropped: the broadcast finds
+no waiter and the parent's flag never changes. The leaf path (a plain fd in the pollcache) cannot lose it, because
+pollnotify() runs under the same pc_lock the waiter holds until it is asleep.
+
+THE CHANGE 1: a leaf lock pc_wake_lock and a flag pc_wakepend in pollcache_t. pcache_wake(pcp) sets pc_wakepend and
+broadcasts pc_cv under pc_wake_lock. Every pc_cv waker calls it: pollnotify(), dpwrite() when fds were added, and
+pcache_wake_parents() for each valid parent. DP_POLL clears pc_wakepend before each scan and, instead of sleeping on
+pc_cv with pc_lock, takes pc_wake_lock, rescans if pc_wakepend is set, else drops pc_lock and sleeps on pc_cv with
+pc_wake_lock, then retakes pc_lock. A parent wakeup now either shows in pc_wakepend or finds the waiter asleep.
+poll(2) and ksocket_spoll() still sleep on pc_cv with pc_lock; their wakers still hold pc_lock, so they see no change.
+
+WHY NOT TAKE THE PARENT'S pc_lock IN pcache_wake_parents(): the waker holds the CHILD's pc_lock (and the pollhead
+lock, from pollwakeup()), while a parent in DP_POLL holds its own pc_lock and takes the child's in dppoll() ->
+pollstate_enter(). pollstate_contend() only resolves cycles between two pollstates, not one involving a pollwakeup()
+caller, so the two orders deadlock. A mutex_tryenter() would fail in exactly the window that loses the wakeup (the
+parent holds pc_lock until cv_timedwait() releases it). devpoll.c's block comment already rules this out.
+
+MECHANISM 2 (the child's scan; measured after change 1 alone still lost 4 of 320000 nested wakes on an EC2 c5.2xlarge,
+0 of 160000 flat, stock 112 of 2400): a DTrace ring buffer stopped at the first DP_POLL that slept 200 ms shows the
+same sequence both times. The parent's scan polls the child (dppoll -> dp_pcache_poll at ps_depth 2) -> strpoll() of
+the socket -> polllock(sd_lock) finds sd_lock held, because the writer is in strrput() queueing the next byte; at
+depth 2 pollunlock() refuses (POLLSTATE_ULFAIL, poll:0:pollstats:pollunlockfail, which rose by exactly the number of
+lost wakes in every run), so strpoll() returns POLLNVAL without setting SR_POLLIN, and dp_pcache_poll()'s recursive
+branch SKIPS the fd. strrput() then finds SR_POLLIN clear and does no pollwakeup() at all, so no waker runs and change
+1 has nothing to deliver. One epoll level never loses: at depth 1 pollunlock() drops pc_lock and polllock() waits.
+
+THE CHANGE 2: polllock() also sets POLLSTATE_ULBUSY when it refuses (the lock was only busy), and dp_pcache_poll()'s
+recursive branch reports a ULBUSY child as having an event pending instead of skipping it. The caller then polls it
+at depth 1, where polllock() waits for the lock and strpoll() re-arms SR_POLLIN. A VOP_POLL that refuses because it
+must always drop the poll locks (prpoll() calls pollunlock() directly) sets ULFAIL only and is still skipped, so it
+cannot make the parent spin. The cost is a spurious "readable" on the child epoll fd while its resource's lock is
+contended, which epoll permits.
+
+LOCK ORDER (poll.c's "Locking hierarchy" gets the same line): pc_wake_lock is a leaf. It is taken with a pc_lock
+held (pollnotify(), DP_POLL before it sleeps, dpwrite()), or with a pcachelink's pcl_lock held, for the PARENT
+pollcache (pcache_wake_parents()). Nothing is acquired while it is held; cv_timedwait() releases it. Lifetime: the
+parent cannot be freed under pcache_wake_parents(): dpclose() of the parent takes pc_lock and every pcl_lock in
+pcachelink_purge_all(), which marks the links PCL_INVALID and unlinks them, before pcache_destroy(); the waker holds
+the pcl_lock while it calls pcache_wake(). DP_POLL holds a dpe reference (dpe_refcnt) while it sleeps, as before, so
+its own pollcache is not destroyed while it waits on pc_wake_lock with pc_lock dropped. Dropping pc_lock across the
+sleep is what poll(2) already does. A dpwrite() or a pollwakeup() may run while it is dropped; both end in
+pcache_wake(), and the loop rescans after it is woken.
+
+RESULT (scripts/test-poll-nested-wake.sh, EC2 c5.2xlarge, the same instance and nestwake binary, 8 runs each):
+stock 112 of 2400 nested lost, every run > 0; change 1 only, 4 of 320000; both changes, 0 of 160000 nested and
+0 of 160000 flat, while pollunlockfail rose by 5 (the busy path ran and lost nothing).
+
+UPSTREAM: illumos-gate master at 2026-11-03 has the same pcache_wake_parents(), DP_POLL loop, polllock() and
+pollunlock() (master poll.c differs from ac45d71 only by 18268, checkwfdlist; devpoll.c is identical). No tracker
+issue found (searched epoll, recursive, devpoll, pollcache).
+
+diff -ru a/usr/src/uts/common/io/devpoll.c b/usr/src/uts/common/io/devpoll.c
+--- a/usr/src/uts/common/io/devpoll.c	2026-11-03 15:56:23.664787455 -0500
++++ b/usr/src/uts/common/io/devpoll.c	2026-11-10 16:57:42.755906413 -0500
+@@ -538,16 +538,34 @@
+ 					 *
+ 					 * Otherwise, report that there is an
+ 					 * event pending.
++					 *
++					 * solnix: except when polllock() found
++					 * the resource's lock merely busy
++					 * (POLLSTATE_ULBUSY). Then we could not
++					 * look and the resource was not re-armed
++					 * for a wakeup, so a skip loses an event
++					 * its lock holder is queueing right now
++					 * (the parent sleeps with it unread).
++					 * Report it pending instead: the caller
++					 * polls it again at depth 1, where
++					 * polllock() can wait for the lock. A
++					 * resource that always refuses (prpoll)
++					 * is still skipped, so it cannot make
++					 * the parent spin.
+ 					 */
+ 					if ((ps->ps_flags & POLLSTATE_ULFAIL)
+ 					    != 0) {
++						int busy = ps->ps_flags &
++						    POLLSTATE_ULBUSY;
++
+ 						ps->ps_flags &=
+-						    ~POLLSTATE_ULFAIL;
+-						continue;
+-					} else {
+-						fdcnt++;
+-						break;
++						    ~(POLLSTATE_ULFAIL |
++						    POLLSTATE_ULBUSY);
++						if (busy == 0)
++							continue;
+ 					}
++					fdcnt++;
++					break;
+ 				}
+ 
+ 				/* Handle special polling modes. */
+@@ -1086,7 +1104,7 @@
+ 	 * pollcache links.
+ 	 */
+ 	if (fds_added) {
+-		cv_broadcast(&pcp->pc_cv);
++		pcache_wake(pcp);
+ 		pcache_wake_parents(pcp);
+ 	}
+ 	pollstate_exit(pcp);
+@@ -1373,6 +1391,13 @@
+ 		VERIFY(pollstate_enter(pcp) == PSE_SUCCESS);
+ 		for (;;) {
+ 			pcp->pc_flag &= ~PC_POLLWAKE;
++			/*
++			 * Clear the record of pcache_wake() calls before the
++			 * scan: any wakeup from here on is seen below.
++			 */
++			mutex_enter(&pcp->pc_wake_lock);
++			pcp->pc_wakepend = 0;
++			mutex_exit(&pcp->pc_wake_lock);
+ 
+ 			/*
+ 			 * Mark all child pcachelinks as stale.
+@@ -1403,8 +1428,26 @@
+ 				break;
+ 			}
+ 
++			/*
++			 * Sleep on pc_wake_lock, not pc_lock. A child
++			 * pollcache's pcache_wake_parents() cannot take our
++			 * pc_lock (see pcache_wake()), so a wakeup it sent
++			 * after our scan would be lost if we tested for it
++			 * under pc_lock alone. Every pc_cv waker sets
++			 * pc_wakepend under pc_wake_lock, which we hold from
++			 * the test until cv_timedwait drops it, so the wakeup
++			 * either shows in pc_wakepend or finds us asleep.
++			 */
++			mutex_enter(&pcp->pc_wake_lock);
++			if (pcp->pc_wakepend != 0) {
++				mutex_exit(&pcp->pc_wake_lock);
++				continue;
++			}
++			mutex_exit(&pcp->pc_lock);
+ 			error = cv_timedwait_sig_hrtime(&pcp->pc_cv,
+-			    &pcp->pc_lock, deadline);
++			    &pcp->pc_wake_lock, deadline);
++			mutex_exit(&pcp->pc_wake_lock);
++			mutex_enter(&pcp->pc_lock);
+ 
+ 			/*
+ 			 * If we were awakened by a signal or timeout then
+@@ -1515,12 +1558,15 @@
+  * /dev/poll "tree", pcachelink_t structures are established to all child
+  * /dev/poll pollcaches.  During pollnotify() in a child pollcache, the
+  * linked list of pcachelink_t entries is walked, where those marked as valid
+- * incur a cv_broadcast to their parent pollcache.  Most notably, these
+- * pcachelink_t cv wakeups are performed without acquiring pc_lock on the
++ * incur a pcache_wake() of their parent pollcache.  Most notably, these
++ * pcachelink_t wakeups are performed without acquiring pc_lock on the
+  * parent pollcache (which would require careful deadlock avoidance).  This
+  * still allows the woken poll on the parent to discover the pertinent events
+  * due to the fact that bitmap entires for the child pollcache are always
+- * maintained by the dppoll() logic above.
++ * maintained by the dppoll() logic above.  pcache_wake() takes only the
++ * parent's leaf pc_wake_lock and sets pc_wakepend, and DP_POLL tests that and
++ * sleeps under pc_wake_lock, so a wakeup that arrives between the parent's
++ * scan and its sleep is not lost.
+  *
+  * Depth Limiting and Loop Prevention:
+  *
+diff -ru a/usr/src/uts/common/sys/poll_impl.h b/usr/src/uts/common/sys/poll_impl.h
+--- a/usr/src/uts/common/sys/poll_impl.h	2026-11-03 15:56:23.665787460 -0500
++++ b/usr/src/uts/common/sys/poll_impl.h	2026-11-10 16:57:42.753150402 -0500
+@@ -146,6 +146,7 @@
+ /* pollstate flags */
+ #define	POLLSTATE_STALEMATE	0x1
+ #define	POLLSTATE_ULFAIL	0x2
++#define	POLLSTATE_ULBUSY	0x4	/* polllock: lock was busy */
+ 
+ /* pollstate_enter results */
+ #define	PSE_SUCCESS		0
+@@ -256,6 +257,14 @@
+ 	int		pc_mapstart;	/* where search start, devpoll only */
+ 	pcachelink_t	*pc_parents;	/* linked list of epoll parents */
+ 	pcachelink_t	*pc_children;	/* linked list of epoll children */
++	/*
++	 * solnix: pc_wake_lock is a leaf lock that every pc_cv waker holds
++	 * (pcache_wake()) and that DP_POLL sleeps on, so a wakeup from a child
++	 * pollcache, which cannot take this pollcache's pc_lock, is not lost.
++	 * pc_wakepend records such a wakeup; DP_POLL clears it before each scan.
++	 */
++	kmutex_t	pc_wake_lock;	/* protects pc_wakepend; leaf */
++	int		pc_wakepend;	/* pcache_wake() since last scan */
+ };
+ 
+ /* pc_flag */
+@@ -345,6 +354,7 @@
+ extern void pcache_update_xref(pollcache_t *, int, ssize_t, int);
+ extern void pcache_clean_entry(pollstate_t *, int);
+ extern void pcache_wake_parents(pollcache_t *);
++extern void pcache_wake(pollcache_t *);
+ 
+ /*
+  * pcacheset interfaces:
+diff -ru a/usr/src/uts/common/syscall/poll.c b/usr/src/uts/common/syscall/poll.c
+--- a/usr/src/uts/common/syscall/poll.c	2026-11-03 15:56:23.663787451 -0500
++++ b/usr/src/uts/common/syscall/poll.c	2026-11-10 16:57:42.754496742 -0500
+@@ -204,6 +204,9 @@
+  *
+  * Locking hierarchy:
+  *	pc_no_exit is a leaf level lock.
++ *	pc_wake_lock is a leaf level lock. It is acquired with pc_lock held
++ *	(pollnotify, DP_POLL before it sleeps) or with a pcachelink's pcl_lock
++ *	held (pcache_wake_parents, for the parent pollcache).
+  *	ps_lock is held when acquiring pc_lock (except when pollwakeup
+  *	acquires pc_lock).
+  *	pc_lock might be held when acquiring PHLOCK (polldat_associate/
+@@ -318,6 +321,16 @@
+ 		int state;
+ 
+ 		if (pollunlock(&state) != 0) {
++			/*
++			 * solnix: in a recursive /dev/poll the lock is only
++			 * busy (its holder may be queueing the very event we
++			 * poll for, e.g. strrput() under sd_lock). We could
++			 * not look and the resource was not re-armed for a
++			 * wakeup (strpoll() sets SR_POLLIN only when it gets
++			 * sd_lock), so dp_pcache_poll() must not treat this
++			 * like a resource that never polls recursively.
++			 */
++			curthread->t_pollstate->ps_flags |= POLLSTATE_ULBUSY;
+ 			return (-1);
+ 		}
+ 		mutex_enter(lp);
+@@ -937,11 +950,35 @@
+ 	ASSERT(MUTEX_HELD(&pcp->pc_lock));
+ 	BT_SET(pcp->pc_bitmap, fd);
+ 	pcp->pc_flag |= PC_POLLWAKE;
+-	cv_broadcast(&pcp->pc_cv);
++	pcache_wake(pcp);
+ 	pcache_wake_parents(pcp);
+ }
+ 
+ /*
++ * Wake every thread sleeping on pcp->pc_cv and record the wakeup in
++ * pc_wakepend, both under pc_wake_lock.
++ *
++ * poll(2) and ksocket sleep on pc_cv with pc_lock as the interlock, and their
++ * wakers hold pc_lock, so pc_wake_lock adds nothing for them. DP_POLL sleeps
++ * with pc_wake_lock as the interlock instead, because a recursive (epoll in
++ * epoll) wakeup comes from pcache_wake_parents(), which holds the CHILD's
++ * pc_lock and cannot take the parent's: the parent holds its own pc_lock
++ * while it locks the child in dppoll(), so the reverse order deadlocks. Before
++ * this, that wakeup was a bare cv_broadcast() with no lock and no flag the
++ * parent could test, so an event that reached the child after the parent had
++ * scanned it, but before the parent slept, was lost and the parent slept
++ * until its timeout (forever for epoll_wait(-1)).
++ */
++void
++pcache_wake(pollcache_t *pcp)
++{
++	mutex_enter(&pcp->pc_wake_lock);
++	pcp->pc_wakepend = 1;
++	cv_broadcast(&pcp->pc_cv);
++	mutex_exit(&pcp->pc_wake_lock);
++}
++
++/*
+  * Associate a polldat entry with a pollhead (add it to ph_list).
+  *
+  * The polldat struct is used by pollwakeup to wake sleeping pollers when polled
+@@ -2302,7 +2339,13 @@
+ 		mutex_enter(&pl->pcl_lock);
+ 		if (pl->pcl_state == PCL_VALID) {
+ 			ASSERT(pl->pcl_parent_pc != NULL);
+-			cv_broadcast(&pl->pcl_parent_pc->pc_cv);
++			/*
++			 * pcl_lock keeps the parent alive: dpclose() of the
++			 * parent takes it in pcachelink_purge_all() before
++			 * pcache_destroy(). Order: pcl_lock, then the parent's
++			 * pc_wake_lock (a leaf).
++			 */
++			pcache_wake(pl->pcl_parent_pc);
+ 		}
+ 		pln = pl->pcl_parent_next;
+ 		mutex_exit(&pl->pcl_lock);
+@@ -3004,6 +3047,7 @@
+ 	kmem_free(pcp->pc_bitmap,
+ 	    sizeof (ulong_t) * (pcp->pc_mapsize/BT_NBIPUL));
+ 	mutex_destroy(&pcp->pc_no_exit);
++	mutex_destroy(&pcp->pc_wake_lock);
+ 	mutex_destroy(&pcp->pc_lock);
+ 	cv_destroy(&pcp->pc_cv);
+ 	cv_destroy(&pcp->pc_busy_cv);

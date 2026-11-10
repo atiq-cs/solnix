@@ -36,7 +36,11 @@
 # 0009-zfs-seek-hole-flush-mmap.patch (lseek SEEK_DATA/SEEK_HOLE flushes mmap'd pages first,
 # as OpenZFS does; without it a just-mmap-written file reads as one hole and cp copies zeros), and
 # 0010-opteron-pcbe-probe-perfevtsel.patch (pcbe.AuthenticAMD refuses to load when a PerfEvtSel0 write traps, so
-# cap_util's cu_init never programs counters an AMD hypervisor rejects; EC2 m6a/c6a panic-looped from the 2nd boot).
+# cap_util's cu_init never programs counters an AMD hypervisor rejects; EC2 m6a/c6a panic-looped from the 2nd boot), and
+# 0012-poll-nested-wake.patch (an event inside an epoll that is itself in an epoll wakes the outer epoll_wait: the
+# parent wakeup had no lock or flag the waiter could test, and a nested scan that found the socket's lock busy skipped
+# it without re-arming its wakeup, so cosmic-comp slept with a client request unread until the mouse moved;
+# scripts/test-poll-nested-wake.sh).
 #
 # OUTPUT: kernel/, platform/i86pc/{kernel,amd64}/, usr/kernel/ from the
 # non-DEBUG build, plus boot/ (loader, forth, fonts) copied from the gate proto,
@@ -54,7 +58,8 @@
               ../../scripts/patches/0007-usbecm-link-state-on-disconnect.patch
               ../../scripts/patches/0008-xhci-readdress-after-port-reset.patch
               ../../scripts/patches/0009-zfs-seek-hole-flush-mmap.patch
-              ../../scripts/patches/0010-opteron-pcbe-probe-perfevtsel.patch ]
+              ../../scripts/patches/0010-opteron-pcbe-probe-perfevtsel.patch
+              ../../scripts/patches/0012-poll-nested-wake.patch ]
 , onbld ? "/opt/onbld"
 , gcc ? "/usr/gcc/10"
 , perlVersion ? "5.42"
@@ -141,6 +146,16 @@ derivation {
     grep -q 'wrmsr(opd.opd_pesf(0), 0x1300c0ULL);' usr/src/uts/intel/pcbe/opteron_pcbe.c \
       && grep -q '^#include <sys/ontrap.h>' usr/src/uts/intel/pcbe/opteron_pcbe.c \
       || { echo "FATAL: opteron_pcbe PerfEvtSel0 probe patch not applied" >&2; exit 1; }
+    # the parent of a nested epoll is woken through pcache_wake() and DP_POLL sleeps on pc_wake_lock (0012)
+    grep -q 'pcache_wake(pl->pcl_parent_pc);' usr/src/uts/common/syscall/poll.c \
+      && grep -q '&pcp->pc_wake_lock, deadline);' usr/src/uts/common/io/devpoll.c \
+      || { echo "FATAL: poll nested-wake patch not applied" >&2; exit 1; }
+    # ... and a nested scan that finds a resource's lock busy reports it pending, never skips it (0012, change 2)
+    grep -q 'ps_flags |= POLLSTATE_ULBUSY;' usr/src/uts/common/syscall/poll.c \
+      && grep -q 'POLLSTATE_ULBUSY;' usr/src/uts/common/io/devpoll.c \
+      || { echo "FATAL: poll nested-wake busy-lock change not applied" >&2; exit 1; }
+    if grep -q 'cv_broadcast(&pl->pcl_parent_pc->pc_cv);' usr/src/uts/common/syscall/poll.c; then
+      echo "FATAL: pcache_wake_parents still does a bare cv_broadcast" >&2; exit 1; fi
 
     # env file: the gate.nix edits, plus no smatch (its binary lives in the
     # workspace tools proto, which +t does not build).
@@ -215,6 +230,11 @@ derivation {
     A=$ROOT/usr/kernel/pcbe/amd64/pcbe.AuthenticAMD
     elfdump -s $A | awk '$NF=="on_trap"' | grep -q . \
       || { echo "FATAL: $A does not call on_trap (0010 not compiled in)" >&2; exit 1; }
+    # genunix defines pcache_wake (0012) and the /dev/poll driver (drv/poll) imports it
+    elfdump -s $G | awk '$NF=="pcache_wake" && $4=="FUNC" && $8!="UNDEF"' | grep -q . \
+      || { echo "FATAL: $G does not define pcache_wake (0012 not compiled in)" >&2; exit 1; }
+    elfdump -s $ROOT/kernel/drv/amd64/poll | awk '$NF=="pcache_wake" && $8=="UNDEF"' | grep -q . \
+      || { echo "FATAL: drv/poll does not call pcache_wake (0012 not compiled in)" >&2; exit 1; }
 
     mkdir -p "$out/platform/i86pc" "$out/usr"
     cp -a "$ROOT/kernel" "$out/kernel"
