@@ -109,8 +109,10 @@ for p in "$@"; do
   # 5 store form, 6 closure
   "$py" "$here/gate-checks.py" store "$p" > "$T/store" 2>&1 && step store PASS || { step store FAIL; grep '^FAIL B' "$T/store" | head -5 | sed 's/^/    /'; why="$why store form;"; }
   "$py" "$here/gate-checks.py" closure "$p" > "$T/clo" 2>&1 && step closure PASS || { step closure FAIL; grep '^FAIL B' "$T/clo" | head -5 | sed 's/^/    /'; why="$why closure denylist;"; }
-  # 7 build log (LOOPHOLES classes 1-3, 5): only the host that built the out has it
-  if [ -n "$d" ] && nix log "$d" > "$T/log" 2>/dev/null && [ -s "$T/log" ]; then
+  # 7 build log (LOOPHOLES classes 1-3, 5): only the host that built the out has it. nix log's exit status says whether this host
+  # has the log at all (1: "not available", never built here); an EMPTY log of a build that ran here is a log: a builder that
+  # prints nothing (gtk-build-tools: mkdir + ln -s) has no configure, cmake or meson output for the L-rules to find.
+  if [ -n "$d" ] && nix log "$d" > "$T/log" 2>/dev/null; then
     "$py" "$here/gate-checks.py" log "$p" "$T/log" > "$T/logc" 2>&1 && step log "PASS $(tail -1 "$T/logc" | sed 's/^PASS [^ ]* //')" \
       || { step log FAIL; grep '^FAIL L' "$T/logc" | head -6 | cut -c1-260 | sed 's/^/    /'; why="$why build log;"; }
   else step log "FAIL (no build log for $d here: pre-submit runs on the host that built it)"; why="$why no build log;"; fi
