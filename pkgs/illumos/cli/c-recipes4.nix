@@ -1,7 +1,7 @@
 # cli/c-recipes4.nix -- tools and libraries the x86 build queue has jobs for and solnix lacked (recipes4, 2026-11-09), picked by how many
 # queued jobs each moves to buildable. A new file, so no served drv moves. Store-only builds (nativeTools), each with an in-build check
 # that runs it on real input. Versions are the queue's targets; sources pinned by sha256 (equal to nixpkgs' flat hash where it has one).
-{ base, mkSrcPkg, world, chk, scrub, check, hostTools, autoreconfTools, autoreconf, python3, gnupatch, gnum4, cmake, perl, tcl, vulkan-headers, libogg, fmt, bzip2-bin, libxau, libxdmcp, libpthread-stubs, gtkMeson ? null, graphics, ... }:
+{ base, mkSrcPkg, world, chk, scrub, check, hostTools, autoreconfTools, autoreconf, python3, gnupatch, gnum4, cmake, perl, tcl, vulkan-headers, libogg, libuv, fmt, bzip2-bin, libxau, libxdmcp, libpthread-stubs, gtkMeson ? null, graphics, ... }:
 let
   fetch = url: sha256: import <nix/fetchurl.nix> { inherit url sha256; };
   # a C test program against the just-installed library: <src> <link flags>
@@ -2240,6 +2240,470 @@ TPROG
       "$CXX" -std=c++17 -I"$out/include" "$W/t.cc" -lsocket -lnsl -o "$W/t"
       ${chk ''"$W/t"'' "^ok 103800 solnix$"}
       ${chk ''PKG_CONFIG_PATH="$out/share/pkgconfig" ${base.pkgconf}/bin/pkg-config --modversion asio'' "^1\\.38\\.0$"}
+    '';
+  };
+
+  # ---- recipes9 batch 18: libraries and codecs the x86 queue has jobs for ---------------------------------------------------------
+  # spirv-headers (MIT): the Khronos SPIR-V headers (spirv.h, spirv.hpp, the grammar JSON) SPIRV-Tools, glslang and Mesa build on, with
+  # its cmake package and .pc (both under share/), as nixpkgs. Headers only.
+  spirv-headers = mkSrcPkg {
+    pname = "spirv-headers"; version = "1.4.363.0";
+    src = { url = "https://codeload.github.com/KhronosGroup/SPIRV-Headers/tar.gz/refs/tags/vulkan-sdk-1.4.363.0";
+            sha256 = "5b3a0d099f5c7649e29c0938476c462e71d66ad89a0bde42fa1ba3eb476956c9"; };
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DSPIRV_HEADERS_ENABLE_TESTS=OFF"}
+      ${tprog ''#include <spirv/unified1/spirv.h>
+#include <stdio.h>
+int main(void){ printf("ok %x %d %d\n", SPV_VERSION, (int)SpvOpCapability, SpvMagicNumber == 0x07230203u); return 0; }'' ""}
+      ${chk ''"$W/t"'' "^ok 10600 17 1$"}
+      ls "$out/share/cmake/SPIRV-Headers/SPIRV-HeadersConfig.cmake" "$out/share/pkgconfig/SPIRV-Headers.pc" > /dev/null
+    '';
+  };
+
+  # robin-map (MIT): Tessil's header-only open-addressing hash map and set (robin hood hashing), with its cmake package, as nixpkgs.
+  robin-map = mkSrcPkg {
+    pname = "robin-map"; version = "1.4.1";
+    src = { url = "https://codeload.github.com/Tessil/robin-map/tar.gz/refs/tags/v1.4.1";
+            sha256 = "0e3f53a377fdcdc5f9fed7a4c0d4f99e82bbb64175233bd13427fef9a771f4a1"; };
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB ""}
+      cat > "$W/t.cc" <<'TPROG'
+#include <tsl/robin_map.h>
+#include <tsl/robin_set.h>
+#include <iostream>
+int main(){ tsl::robin_map<int, int> m; for (int i = 0; i < 100; i++) m[i] = i * i; m.erase(7); tsl::robin_set<int> s{ 1, 2, 2, 3 };
+std::cout << "ok " << m.size() << " " << m.at(42) << " " << m.count(7) << " " << s.size() << "\n"; }
+TPROG
+      "$CXX" -std=c++17 -I"$out/include" "$W/t.cc" -o "$W/t"
+      ${chk ''"$W/t"'' "^ok 99 1764 0 3$"}
+      ls "$out/share/cmake/tsl-robin-map/tsl-robin-mapConfig.cmake" > /dev/null
+    '';
+  };
+
+  # cmark (BSD-2-Clause): the CommonMark reference parser, libcmark (shared) and the cmark command, as nixpkgs (CMARK_STATIC=OFF).
+  cmark = mkSrcPkg {
+    pname = "cmark"; version = "0.31.2";
+    src = { url = "https://codeload.github.com/commonmark/cmark/tar.gz/refs/tags/0.31.2";
+            sha256 = "f9bc5ca38bcb0b727f0056100fac4d743e768872e3bacec7746de28f5700d697"; };
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DCMARK_STATIC=OFF -DBUILD_TESTING=OFF"}
+      ${tprog ''#include <cmark.h>
+#include <stdio.h>
+#include <string.h>
+int main(void){ const char *m = "# Hi *solnix*\n"; char *h = cmark_markdown_to_html(m, strlen(m), CMARK_OPT_DEFAULT); printf("ok %s %s", cmark_version_string(), h); return 0; }'' "$out/lib/amd64/libcmark.so"}
+      ${chk ''"$W/t"'' "^ok 0\\.31\\.2 <h1>Hi <em>solnix</em></h1>$"}
+      ${chk ''printf '%s\n' '**solnix**' | "$out/bin/cmark"'' "^<p><strong>solnix</strong></p>$"}
+    '';
+  };
+
+  # argtable (BSD-3-Clause): argtable3, ANSI C command-line parsing (getopt-style tables). cmake, shared, as nixpkgs; tests and examples off.
+  argtable = mkSrcPkg {
+    pname = "argtable"; version = "3.3.1";
+    src = { url = "https://codeload.github.com/argtable/argtable3/tar.gz/refs/tags/v3.3.1";
+            sha256 = "8b28a4fb2cd621d8d16f34e30e1956aa488077f6a6b902e7fc9f07883e1519c1"; };
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DBUILD_SHARED_LIBS=ON -DARGTABLE3_ENABLE_TESTS=OFF -DARGTABLE3_ENABLE_EXAMPLES=OFF"}
+      ${tprog ''#include <argtable3.h>
+#include <stdio.h>
+int main(void){ arg_int_t *n = arg_int1("n", "num", "<n>", "a number"); arg_lit_t *v = arg_lit0("v", "verbose", "verbose"); arg_end_t *e = arg_end(5);
+void *t[] = { n, v, e }; char *a[] = { "t", "-n", "42", "--verbose", NULL }; int err = arg_parse(4, a, t);
+printf("ok %d %d %d\n", err, n->ival[0], v->count); arg_freetable(t, 3); return 0; }'' "$out/lib/amd64/libargtable3.so"}
+      ${chk ''"$W/t"'' "^ok 0 42 1$"}
+    '';
+  };
+
+  # nbytes (MIT): Node.js's byte-handling helpers (base64, hex, byte swaps) as a library. cmake, shared, as nixpkgs; its gtest tests off.
+  nbytes = mkSrcPkg {
+    pname = "nbytes"; version = "0.1.4";
+    src = { url = "https://codeload.github.com/nodejs/nbytes/tar.gz/refs/tags/v0.1.4";
+            sha256 = "67f4b8363f12abb64c07a0cecf2bf2dce7ab47b5f8b9fd2efdb852ea254c2d40"; };
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DBUILD_SHARED_LIBS=ON -DNBYTES_ENABLE_TESTING=OFF -DBUILD_TESTING=OFF"}
+      cat > "$W/t.cc" <<'TPROG'
+#include <nbytes.h>
+#include <iostream>
+#include <string>
+int main(){ char d[16]; size_t n = nbytes::Base64Decode(d, sizeof d, "c29sbml4", 8); char s[4] = { 1, 2, 3, 4 }; bool ok = nbytes::SwapBytes16(s, 4);
+std::cout << "ok " << n << " " << std::string(d, n) << " " << ok << int(s[0]) << int(s[1]) << "\n"; }
+TPROG
+      "$CXX" -std=c++20 -I"$out/include" "$W/t.cc" "$out/lib/amd64/libnbytes.so" -Wl,-R,"$out/lib/amd64" -o "$W/t"
+      ${chk ''"$W/t"'' "^ok 6 solnix 121$"}
+    '';
+  };
+
+  # uvwasi (MIT): the WASI syscall layer on libuv (Node.js's wasi module), on c-recipes3's libuv, with nixpkgs' two upstream patches
+  # (a shared-library switch and a pkg-config file that names libuv). Its FindLIBUV takes the store libuv (storePrefix; asserted), not
+  # its FetchContent fallback.
+  uvwasi = mkSrcPkg {
+    pname = "uvwasi"; version = "0.0.23";
+    src = { url = "https://codeload.github.com/nodejs/uvwasi/tar.gz/refs/tags/v0.0.23";
+            sha256 = "cdb148aac298883b51da887657deca910c7c02f35435e24f125cef536fe8d5e1"; };
+    deps = [ world libuv ]; nativeTools = [ cmake gnupatch ] ++ hostTools;
+    build = ''
+      patch -p1 < ${fetch "https://github.com/nodejs/uvwasi/commit/0820128569533c855d60c0f6382acbb14aa62ad2.patch?full_index=1" "f2c75bc05e2fd450a51c51757c62dff25536acac7aecec89b261e74138da5505"}
+      patch -p1 < ${fetch "https://github.com/nodejs/uvwasi/commit/fe602a6911207efd8dcfc070a752bcf76813c978.patch?full_index=1" "617d09903f04bc0d7f0fd31dfaaecefc822952ce950b088b3ffc79b773d48633"}
+      ${cmakeB "-DUVWASI_BUILD_SHARED=ON -DBUILD_TESTING=OFF ${storePrefix}"}
+      grep -q "^LIBUV_LIBRARIES:FILEPATH=${libuv}/lib/amd64/" _b/CMakeCache.txt || { echo "FATAL: uvwasi: not the store libuv" >&2; grep LIBUV _b/CMakeCache.txt >&2; exit 1; }
+      ${tprog ''#include <uvwasi.h>
+#include <stdio.h>
+int main(void){ uvwasi_t u; uvwasi_options_t o; uvwasi_options_init(&o); const char *av[] = { "a", "solnix" }; o.argc = 2; o.argv = av;
+if (uvwasi_init(&u, &o) != UVWASI_ESUCCESS) return 1; uvwasi_size_t c = 0, s = 0; uvwasi_args_sizes_get(&u, &c, &s);
+printf("ok %s %u %u\n", UVWASI_VERSION_STRING, (unsigned)c, (unsigned)s); uvwasi_destroy(&u); return 0; }'' "$out/lib/amd64/libuvwasi.so"}
+      ${chk ''"$W/t"'' "^ok 0\\.0\\.23 2 9$"}
+    '';
+  };
+
+  # openapv (BSD-3-Clause): the Advanced Professional Video (APV) codec library and its oapv_app_enc/dec, as nixpkgs (its os-release
+  # patch touches only the Linux CPack branch). A short encode and decode of upstream's own 10-bit 4:2:2 test sequence.
+  openapv = mkSrcPkg {
+    pname = "openapv"; version = "1.1.2.0";
+    src = { url = "https://codeload.github.com/AcademySoftwareFoundation/openapv/tar.gz/refs/tags/v1.1.2.0";
+            sha256 = "970f65255896c906b22d7c9f9850deeee03fecf001415804848a03b6d1bbe41a"; };
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      # its apps' clock is gettimeofday on Linux/Cygwin/Apple and #error elsewhere: illumos has it too
+      grep -qx '#elif __linux__ || __CYGWIN__ || __APPLE__' app/oapv_app_util.h || { echo "FATAL: openapv clock anchor" >&2; exit 1; }
+      sed -i 's/^#elif __linux__ || __CYGWIN__ || __APPLE__$/#elif __linux__ || __CYGWIN__ || __APPLE__ || __sun/' app/oapv_app_util.h
+      ${cmakeB "-DENABLE_TESTS=OFF"}
+      ${tprog ''#include <oapv/oapv.h>
+#include <stdio.h>
+int main(void){ unsigned v = 0; printf("ok %s\n", oapv_version(&v)); return 0; }'' "$out/lib/amd64/liboapv.so"}
+      ${chk ''"$W/t"'' "^ok 1\\.1\\.2\\.0$"}
+      ${chk ''"$out/bin/oapv_app_enc" -i test/sequence/pattern1_yuv422p10le_320x240_25fps.y4m -w 320 -h 240 -z 25 --max-au 5 -o "$W/t.apv" && "$out/bin/oapv_app_dec" -i "$W/t.apv"'' "Decoded frame count += 5$"}
+    '';
+  };
+
+  # uavs3d (BSD-3-Clause): the AVS3 video decoder library, 10-bit, shared, as nixpkgs (its cmake_minimum_required bump: cmake 4 refuses
+  # < 3.5). Its version.sh counts git revisions into version.h; with no git and no repository (as a nixpkgs build) that is 0 and an
+  # empty SHA: pinned to that. Its libdir is a literal "lib": lib/amd64.
+  uavs3d = mkSrcPkg {
+    pname = "uavs3d"; version = "1.2";
+    src = { url = "https://codeload.github.com/uavs3/uavs3d/tar.gz/refs/tags/1.2";
+            sha256 = "faa1f1f82badc0603d9944bb5af7b961dd42236e2c3a7aa8fcfc080bbeb5b157"; };
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      grep -qx 'cmake_minimum_required(VERSION 3.1)' CMakeLists.txt && grep -qx 'set(libdir "lib")' source/CMakeLists.txt && grep -q '^VER_L=`git' version.sh \
+        || { echo "FATAL: uavs3d anchors" >&2; exit 1; }
+      sed -i 's/^cmake_minimum_required(VERSION 3.1)$/cmake_minimum_required(VERSION 3.10)/' CMakeLists.txt
+      sed -i 's|^set(libdir "lib")$|set(libdir "lib/amd64")|' source/CMakeLists.txt
+      sed -i -e 's/^VER_R=.*/VER_R=0/' -e 's/^VER_L=.*/VER_L=0/' -e 's/^VER_SHA1=.*/VER_SHA1=/' version.sh
+      ${cmakeB "-DCOMPILE_10BIT=ON -DBUILD_SHARED_LIBS=ON"}
+      ${tprog ''#include <uavs3d.h>
+#include <stdio.h>
+static void cb(uavs3d_io_frm_t *f){ (void)f; }
+int main(void){ uavs3d_cfg_t c = { 0 }; c.frm_threads = 1; int err = 0; void *h = uavs3d_create(&c, cb, &err); printf("ok %d %d\n", h != NULL, err); if (h) uavs3d_delete(h); return 0; }'' "$out/lib/amd64/libuavs3d.so -lm"}
+      ${chk ''"$W/t"'' "^ok 1 0$"}
+      ${chk ''"$W/t"'' "^libuavs3d\\(10\\): 1\\.2\\.0_release, $"}
+    '';
+  };
+
+  # vo-amrwbenc (Apache-2.0): VisualOn's AMR-WB speech encoder (ffmpeg's libvo-amrwbenc), as nixpkgs: autotools from the tag.
+  vo-amrwbenc = mkSrcPkg {
+    pname = "vo-amrwbenc"; version = "0.1.3";
+    src = { url = "https://codeload.github.com/mstorsjo/vo-amrwbenc/tar.gz/refs/tags/v0.1.3";
+            sha256 = "85c79997ba7ddb9c95b5ddbe9ea032e27595390f3cbd686ed46a69e485cc053c"; };
+    deps = [ world ]; nativeTools = autoreconfTools ++ hostTools;
+    build = ''
+      ${autoreconf}
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static
+      gmake -j8; gmake install
+      # one 20 ms frame of a tone at 23.85 kbit/s (mode 8): an RFC 3267 frame of 61 bytes whose header byte is 0x44
+      ${tprog ''#include <vo-amrwbenc/enc_if.h>
+#include <stdio.h>
+#include <math.h>
+int main(void){ short s[320]; unsigned char f[128]; for (int i = 0; i < 320; i++) s[i] = (short)(8000 * sin(i * 0.2));
+void *e = E_IF_init(); int n = E_IF_encode(e, 8, s, f, 0); E_IF_exit(e); printf("ok %d %02x\n", n, f[0]); return 0; }'' "$out/lib/amd64/libvo-amrwbenc.so -lm"}
+      ${chk ''"$W/t"'' "^ok 61 44$"}
+    '';
+  };
+
+  # libargon2 (Apache-2.0 / CC0-1.0): the Argon2 password hash (the PHC winner), its library and the argon2 command, nixpkgs' patch and
+  # flags with lib/amd64. Upstream's SunOS branch forces CC := gcc and builds an unversioned libargon2.so with every symbol exported:
+  # these give it Linux's (libargon2.so.1, its soname, the API alone exported). OPTTARGET=native would tune for the build host
+  # (nixpkgs' cc-wrapper strips -march=native): the x86-64 baseline, so opt.c's SSE2 path, as there.
+  libargon2 = mkSrcPkg {
+    pname = "libargon2"; version = "20190702";
+    src = { url = "https://codeload.github.com/P-H-C/phc-winner-argon2/tar.gz/refs/tags/20190702";
+            sha256 = "daf972a89577f8772602bf2eb38b6a3dd3d922bf5724d45e7f9589b5e830442c"; };
+    deps = [ world ]; nativeTools = [ gnupatch ] ++ hostTools;
+    build = ''
+      patch -p1 < ${fetch "https://github.com/P-H-C/phc-winner-argon2/commit/cd1c1d8d204e4ec4557e358013567c097cb70562.patch" "b8ea6b730ae8f192d7c9160e1f5612d9844188fbf70807752cd73b70366e4222"}
+      F=(CC="$CC" AR=ar PREFIX="$out" ARGON2_VERSION=20190702 LIBRARY_REL=lib/amd64 PKGCONFIG_REL=lib/amd64 OPTTARGET=x86-64
+         LIB_EXT=so.1 LINKED_LIB_EXT=so "LIB_CFLAGS=-shared -fPIC -fvisibility=hidden -DA2_VISCTL=1" "SO_LDFLAGS=-Wl,-soname,libargon2.so.1")
+      gmake -j8 "''${F[@]}"; gmake "''${F[@]}" install
+      # the README's example (argon2i, t=2, m=2^16 KiB, p=4) through the command and through the shared library
+      ${chk ''printf password | "$out/bin/argon2" somesalt -t 2 -m 16 -p 4 -l 24'' "^Hash:[[:space:]]+45d7ac72e76f242b20b77b9bf9bf9d5915894e669a24e6c6$"}
+      ${tprog ''#include <argon2.h>
+#include <stdio.h>
+int main(void){ unsigned char h[24]; int r = argon2i_hash_raw(2, 1 << 16, 4, "password", 8, "somesalt", 8, h, 24); printf("ok %d ", r);
+for (int i = 0; i < 24; i++) printf("%02x", h[i]); printf("\n"); return 0; }'' "$out/lib/amd64/libargon2.so"}
+      ${chk ''"$W/t"'' "^ok 0 45d7ac72e76f242b20b77b9bf9bf9d5915894e669a24e6c6$"}
+      ${notExp "$out/lib/amd64/libargon2.so.1" "fill_memory_blocks"}
+    '';
+  };
+
+  # fstrm (Apache-2.0): Frame Streams, the framed data transport dnstap uses, libfstrm and its fstrm_capture/dump/replay tools (on the
+  # base libevent), as nixpkgs: autotools from the tag. Its --version-script goes through the mapfile shim (LIBFSTRM_0.2.0/0.4.0 nodes).
+  fstrm = mkSrcPkg {
+    pname = "fstrm"; version = "0.6.1";
+    src = { url = "https://codeload.github.com/farsightsec/fstrm/tar.gz/refs/tags/v0.6.1";
+            sha256 = "4f0f7ad2b760119c441aba58271e84de683b3cc138530d02710896641866e2d2"; };
+    deps = [ world base.libevent ]; nativeTools = autoreconfTools ++ [ base.pkgconf ] ++ hostTools;
+    build = ''
+      ${vsMap}
+      ${autoreconf}
+      # gnulib's probe links a program with two nodes naming one undefined `sym`: illumos ld (and the shim) refuse it, so it says no and
+      # libtool exports by regex, unversioned. The library's own script converts: take it.
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --enable-ld-version-script
+      gmake -j8; gmake install
+      L="$out/lib/amd64/libfstrm.so"
+      ${hasVer "$L" "LIBFSTRM_0.2.0" "fstrm_writer_write"}
+      ${hasVer "$L" "LIBFSTRM_0.4.0" "fstrm_tcp_writer_init"}
+      ${notExp "$L" "my_queue_mb_init"}
+      # three frames written to a file in the build dir and read back, then the same file through fstrm_dump
+      ${tprog ''#include <fstrm.h>
+#include <stdio.h>
+int main(int c, char **v){ (void)c; struct fstrm_file_options *fo = fstrm_file_options_init(); fstrm_file_options_set_file_path(fo, v[1]);
+struct fstrm_writer_options *wo = fstrm_writer_options_init(); fstrm_writer_options_add_content_type(wo, "solnix", 6);
+struct fstrm_writer *w = fstrm_file_writer_init(fo, wo); if (!w) return 1;
+for (int i = 0; i < 3; i++) if (fstrm_writer_write(w, "frame", 5) != fstrm_res_success) return 2; fstrm_writer_destroy(&w);
+struct fstrm_reader *r = fstrm_file_reader_init(fo, NULL); const uint8_t *d; size_t n; int k = 0, t = 0; if (!r) return 3;
+while (fstrm_reader_read(r, &d, &n) == fstrm_res_success) { k++; t += (int)n; } fstrm_reader_destroy(&r); printf("ok %d %d\n", k, t); return 0; }'' "$L"}
+      ${chk ''"$W/t" "$W/t.fstrm"'' "^ok 3 15$"}
+      ${chk ''"$out/bin/fstrm_dump" "$W/t.fstrm"'' "^Data frame \\(5\\) bytes\\.$"}
+    '';
+  };
+
+  # libexttextcat (BSD-3-Clause): LibreOffice's N-gram text language classifier and its language fingerprints, as nixpkgs.
+  libexttextcat = mkSrcPkg {
+    pname = "libexttextcat"; version = "3.4.8";
+    src = { url = "https://dev-www.libreoffice.org/src/libexttextcat/libexttextcat-3.4.8.tar.xz";
+            sha256 = "93eb89fd4fc8f565806354e100e778b3ac9a24e5fc04c24e6a83fb1e9b6c9d59"; };
+    deps = [ world ]; nativeTools = hostTools;
+    build = ''
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static
+      gmake -j8; gmake install
+      # the shipped English sample text (the UDHR) against the installed fingerprints
+      ${tprog ''#include <libexttextcat/textcat.h>
+#include <stdio.h>
+int main(int c, char **v){ (void)c; void *h = special_textcat_Init(v[1], v[2]); if (!h) return 1; static char b[4096]; FILE *f = fopen(v[3], "rb"); if (!f) return 2;
+size_t n = fread(b, 1, sizeof b - 1, f); fclose(f); printf("ok %s %s\n", textcat_Version(), textcat_Classify(h, b, n)); textcat_Done(h); return 0; }'' "$out/lib/amd64/libexttextcat-2.0.so"}
+      ${chk ''"$W/t" "$out/share/libexttextcat/fpdb.conf" "$out/share/libexttextcat/" "$SRC/langclass/ShortTexts/en.txt"'' "^ok 3\\.4\\.8 \\[en--utf8\\]"}
+    '';
+  };
+
+  # libxshmfence (HPND-sell-variant): X.Org's shared-memory fences (Mesa's DRI3 and the X server). configure picks the first of
+  # /run/shm /dev/shm /var/tmp /tmp that exists ON THE BUILD HOST as its fence-file directory, and illumos has no memfd_create or
+  # O_TMPFILE, so every fence is a mkostemp file there: illumos' tmpfs, pinned. No futexes on illumos: its pthread fences.
+  libxshmfence = mkSrcPkg {
+    pname = "libxshmfence"; version = "1.3.3";
+    src = { url = "https://xorg.freedesktop.org/releases/individual/lib/libxshmfence-1.3.3.tar.xz";
+            sha256 = "d4a4df096aba96fea02c029ee3a44e11a47eb7f7213c1a729be83e85ec3fde10"; };
+    deps = [ world ]; linkDeps = [ base.xorgproto ]; nativeTools = [ base.pkgconf ] ++ hostTools;
+    build = ''
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --with-shared-memory-dir=/tmp
+      grep -qx '#define SHMDIR "/tmp"' config.h && grep -qx '#define HAVE_PTHREAD 1' config.h || { echo "FATAL: libxshmfence config.h" >&2; exit 1; }
+      gmake -j8; gmake install
+      # the fence logic on a zero-filled file in the build dir (an all-zero mutex and condvar are the default ones on illumos), so the
+      # check makes nothing in /tmp: query 0, trigger, query 1, reset, query 0
+      ${tprog ''#include <X11/xshmfence.h>
+#include <stdio.h>
+#include <fcntl.h>
+#include <unistd.h>
+int main(int c, char **v){ (void)c; int fd = open(v[1], O_RDWR | O_CREAT | O_TRUNC, 0600); if (fd < 0 || ftruncate(fd, 4096)) return 1;
+struct xshmfence *f = xshmfence_map_shm(fd); if (!f) return 2; int a = xshmfence_query(f); xshmfence_trigger(f); int b = xshmfence_query(f);
+xshmfence_reset(f); printf("ok %d %d %d\n", a, b, xshmfence_query(f)); xshmfence_unmap_shm(f); return 0; }'' "$out/lib/amd64/libxshmfence.so"}
+      ${chk ''"$W/t" "$W/fence"'' "^ok 0 1 0$"}
+    '';
+  };
+
+  # cfitsio (CFITSIO, a permissive NASA license): the FITS file library and its fpack/funpack/fitscopy/fitsverify/imcopy tools, nixpkgs'
+  # patch and flags (pthreads, bzip2, curl for remote files) on the nix chain's bzip2 and curl and the base zlib; as nixpkgs, the cookbook,
+  # smem and speed programs are not shipped. The finds are pinned to the store (storePrefix, store pkg-config) and asserted.
+  cfitsio = mkSrcPkg {
+    pname = "cfitsio"; version = "4.7.0";
+    src = { url = "https://codeload.github.com/HEASARC/cfitsio/tar.gz/refs/tags/cfitsio-4.7.0";
+            sha256 = "f281ca292407d8682e83a37ea68fce6e1383d2449d923647ea62fa0570c59aee"; };
+    deps = [ world zlib base.nixChain.bzip2 base.nixChain.curl ]; nativeTools = [ cmake gnupatch base.pkgconf ] ++ hostTools;
+    build = ''
+      patch -p1 < ${fetch "https://github.com/heasarc/cfitsio/commit/113781d8aa442cf8d3c27295d9084674b8b039f2.patch" "82e22f654309e7b752d39ead7a05e1fc59a2ac188b5c710a6d61c548be11892a"}
+      ${cmakeB "-DUSE_PTHREADS=ON -DTESTS=ON -DUTILS=ON -DUSE_BZIP2=ON ${storePrefix}"}
+      for p in ZLIB:${zlib} BZIP2:${base.nixChain.bzip2} CURL:${base.nixChain.curl}; do
+        grep -q "^''${p%%:*}_[A-Z_]*:[A-Z]*=''${p#*:}/" _b/CMakeCache.txt || { echo "FATAL: cfitsio: ''${p%%:*} not from the store" >&2; grep -E '^(ZLIB|BZIP2|CURL)_' _b/CMakeCache.txt >&2; exit 1; }
+      done
+      # upstream's own test: TestProg writes testprog.fit and a listing, compared with the shipped testprog.out and testprog.std
+      ${chk ''cd _b && ./TestProg > testprog.lis && diff testprog.lis ../testprog.out && cmp testprog.fit ../testprog.std && echo testprog-same'' "^testprog-same$"}
+      ${chk ''"$out/bin/fitsverify" _b/testprog.fit'' "0 error"}
+      find "$out/bin/cookbook" "$out/bin/smem" "$out/bin/speed" -delete
+    '';
+  };
+
+  # verdict (BSD-3-Clause): Sandia's mesh element quality metrics (VTK, ParaView). The queue's 1.4.4 (nixpkgs is at 1.4.5), cmake,
+  # static as nixpkgs' default; its gtest unit tests off.
+  verdict = mkSrcPkg {
+    pname = "verdict"; version = "1.4.4";
+    src = { url = "https://codeload.github.com/sandialabs/verdict/tar.gz/refs/tags/1.4.4";
+            sha256 = "d12d1cd41c6568997df348a72cc2973a662fae1b3634a068ea2201b5f7383186"; };
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DVERDICT_ENABLE_TESTING=OFF"}
+      cat > "$W/t.cc" <<'TPROG'
+#include <verdict.h>
+#include <cstdio>
+int main(){ double t[4][3] = { { 0, 0, 0 }, { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } }; double q[4][3] = { { 0, 0, 0 }, { 2, 0, 0 }, { 2, 3, 0 }, { 0, 3, 0 } };
+std::printf("ok %.6f %.3f\n", verdict::tet_volume(4, t), verdict::quad_area(4, q)); }
+TPROG
+      "$CXX" -std=c++17 -I"$out/include" "$W/t.cc" "$out/lib/amd64/libverdict.a" -o "$W/t"
+      ${chk ''"$W/t"'' "^ok 0\\.166667 6\\.000$"}
+    '';
+  };
+
+  # liblc3 (Apache-2.0): Google's LC3 (Bluetooth LE Audio) codec. meson, as nixpkgs (tools and python off).
+  liblc3 = mkSrcPkg {
+    pname = "liblc3"; version = "1.1.3";
+    src = { url = "https://codeload.github.com/google/liblc3/tar.gz/refs/tags/v1.1.3";
+            sha256 = "276752ff54ce6a77d54ec133397b9d7e71f90caf3d9afa32d8b0e891b8ecb8af"; };
+    deps = [ world ]; nativeTools = mesonTools;
+    build = ''
+      ${mesonBuild ""}
+      # one 10 ms 48 kHz frame of a tone at 64 kbit/s (480 samples, 80 bytes) encoded and decoded back
+      ${tprog ''#include <lc3.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <math.h>
+int main(void){ int ns = lc3_frame_samples(10000, 48000), nb = lc3_frame_bytes(10000, 64000); int16_t p[480], o[480]; uint8_t f[400];
+for (int i = 0; i < 480; i++) p[i] = (int16_t)(8000 * sin(i * 0.1));
+lc3_encoder_t e = lc3_setup_encoder(10000, 48000, 0, malloc(lc3_encoder_size(10000, 48000))); lc3_decoder_t d = lc3_setup_decoder(10000, 48000, 0, malloc(lc3_decoder_size(10000, 48000)));
+int re = lc3_encode(e, LC3_PCM_FORMAT_S16, p, 1, nb, f), rd = lc3_decode(d, f, nb, LC3_PCM_FORMAT_S16, o, 1); printf("ok %d %d %d %d\n", ns, nb, re, rd); return 0; }'' "$out/lib/amd64/liblc3.so -lm"}
+      ${chk ''"$W/t"'' "^ok 480 80 0 0$"}
+    '';
+  };
+
+  # libspnav (BSD-3-Clause): the spacenavd client library for 6-DoF input devices, with its X11 (Magellan) path on the X.Org libs, as
+  # nixpkgs (--disable-debug). Its hand-written configure: lib/amd64 for its literal "lib", the version pinned (it asks git, then greps
+  # the directory name), and the Makefile's /usr/local, /usr/X11R6 and /opt/homebrew -I/-L dirs dropped (host dirs). -std=c89 hides
+  # the socket and select declarations on illumos: -D__EXTENSIONS__. The check stays off spnav_open (it reads /etc/spnavrc and connects
+  # to /var/run/spnav.sock): the motion helpers and the protocol state.
+  libspnav = mkSrcPkg {
+    pname = "libspnav"; version = "1.2";
+    src = { url = "https://codeload.github.com/FreeSpacenav/libspnav/tar.gz/refs/tags/v1.2";
+            sha256 = "e675a2476bd407b8d97a33f93c6651ad3ecdfd422916f260bd620f2aec7ca45f"; };
+    deps = [ world libx11 ]; linkDeps = [ base.xorgproto libxcb libxau libxdmcp ]; nativeTools = hostTools;
+    build = ''
+      grep -q '^VER=`git describe --tags 2>/dev/null`$' configure && grep -q '^incpaths = -I\. -I/usr/local/include' Makefile.in \
+        && grep -q '^libpaths = -L/usr/local/lib' Makefile.in || { echo "FATAL: libspnav anchors" >&2; exit 1; }
+      sed -i 's|^VER=`git describe --tags 2>/dev/null`$|VER=v1.2|' configure
+      sed -i -e 's|^incpaths = .*|incpaths = -I.|' -e 's|^libpaths = .*|libpaths =|' Makefile.in
+      CFLAGS=-D__EXTENSIONS__ ./configure --prefix="$out" --disable-debug
+      # libdir on the make line (configure's .pc sed cannot take a slash in it), then the .pc's -L
+      gmake -j8 CC="$CC" AR=ar libdir=lib/amd64; gmake install CC="$CC" AR=ar libdir=lib/amd64
+      sed -i 's|^Libs: -L\''${PREFIX}/lib -lspnav$|Libs: -L\''${PREFIX}/lib/amd64 -lspnav|' "$out/share/pkgconfig/spnav.pc"
+      grep -qx 'Version: 1.2' "$out/share/pkgconfig/spnav.pc" && grep -qx 'Libs: -L\''${PREFIX}/lib/amd64 -lspnav' "$out/share/pkgconfig/spnav.pc" \
+        || { echo "FATAL: libspnav: spnav.pc" >&2; cat "$out/share/pkgconfig/spnav.pc" >&2; exit 1; }
+      ${tprog ''#include <spnav.h>
+#include <stdio.h>
+int main(void){ struct spnav_posrot p; struct spnav_event_motion m = { 0 }; spnav_posrot_init(&p); m.type = SPNAV_EVENT_MOTION; m.x = 1000; m.z = 500;
+spnav_posrot_moveobj(&p, &m); printf("ok %.3f %.3f %.3f %.3f %d\n", p.pos[0], p.pos[1], p.pos[2], p.rot[3], spnav_protocol()); return 0; }'' "$out/lib/amd64/libspnav.so"}
+      ${chk ''"$W/t"'' "^ok 1\\.000 0\\.000 -0\\.500 1\\.000 0$"}
+    '';
+  };
+
+  # libvpx (BSD-3-Clause): the VP8/VP9 codec library and vpxenc/vpxdec, nixpkgs' configure flags (vp8 + vp9, shared, high bit depth,
+  # webm io, libyuv, yasm asm with run-time CPU detection) on its own x86_64-solaris-gcc target (configure only guesses Solaris 10).
+  # Its Solaris branch names gcc and g-prefixed binutils: the build's compiler (also the linker) and GNU binutils by plain name. Its
+  # shared link uses --version-script: the mapfile shim.
+  libvpx = mkSrcPkg {
+    pname = "libvpx"; version = "1.17.0";
+    src = { url = "https://codeload.github.com/webmproject/libvpx/tar.gz/refs/tags/v1.17.0";
+            sha256 = "1020f184046187baa2985dbde38e0691f49c44088bca7a1842b0236c6081dc0a"; };
+    deps = [ world ]; nativeTools = [ perl yasm base.diffutils gtkMeson.gtkTools ] ++ hostTools;   # configure insists on `diff --version`
+    build = ''
+      ${vsMap}
+      AR=ar NM=nm STRIP=strip AS=yasm LD="$CC" CXX="$CXX" CC="$CC" "$BASH" ./configure --target=x86_64-solaris-gcc --prefix="$out" --libdir="$out/lib/amd64" \
+        --enable-vp8 --enable-vp8-encoder --enable-vp8-decoder --enable-vp9 --enable-vp9-encoder --enable-vp9-decoder --disable-extra-warnings \
+        --disable-werror --disable-install-docs --enable-install-bins --enable-install-libs --disable-install-srcs --disable-debug --disable-gprof \
+        --disable-gcov --enable-pic --enable-optimizations --enable-runtime-cpu-detect --disable-thumb --enable-libs --enable-examples --disable-docs \
+        --as=yasm --size-limit=5120x3200 --disable-codec-srcs --disable-debug-libs --disable-dequant-tokens --disable-dc-recon --enable-postproc \
+        --enable-vp9-postproc --enable-multithread --disable-internal-stats --enable-spatial-resampling --disable-realtime-only \
+        --disable-onthefly-bitpacking --disable-error-concealment --enable-shared --disable-small --disable-postproc-visualizer --disable-unit-tests \
+        --enable-webm-io --enable-libyuv --disable-decode-perf-tests --disable-encode-perf-tests --disable-multi-res-encoding \
+        --enable-temporal-denoising --enable-vp9-temporal-denoising --disable-coefficient-range-checking --enable-vp9-highbitdepth --disable-experimental
+      gmake -j8; gmake install
+      ${tprog ''#include <vpx/vpx_decoder.h>
+#include <vpx/vp8dx.h>
+#include <stdio.h>
+int main(void){ vpx_codec_ctx_t c; int r = vpx_codec_dec_init(&c, vpx_codec_vp9_dx(), NULL, 0); printf("ok %s %d\n", vpx_codec_version_str(), r); vpx_codec_destroy(&c); return 0; }'' "$out/lib/amd64/libvpx.so"}
+      ${chk ''"$W/t"'' "^ok v1\\.17\\.0 0$"}
+      ${notExp "$out/lib/amd64/libvpx.so" "vp9_setup_past_independence"}
+      # four flat 64x64 I420 frames through vpxenc (VP9, IVF) and back through vpxdec
+      perl -e 'print chr(128) x (64 * 64 * 3 / 2 * 4)' > "$W/in.yuv"
+      ${chk ''"$out/bin/vpxenc" --codec=vp9 -w 64 -h 64 --limit=4 --ivf -o "$W/t.ivf" "$W/in.yuv" && "$out/bin/vpxdec" --noblit --summary "$W/t.ivf"'' "4 decoded frames/4 showed frames"}
+    '';
+  };
+
+  # svt-av1 (BSD-3-Clause + the AOM patent license): the Scalable Video Technology AV1 encoder library and SvtAv1EncApp, nasm asm, as
+  # nixpkgs (LTO on). -fstack-protector-strong NEEDs libssp, which gcc.lib does not ship (as cjson): off. Its version header script
+  # (cmake -P at build time) runs find_package(Git), which would take the build host's /bin/git through cmake's "/" prefix: off (with
+  # no .git in the tarball the version is "v4.1.0" either way). Its EXE linker flags "-z noexecstack -z relro -z now" are GNU ld
+  # spellings: illumos ld rejects the first two ("option -z has illegal argument"; illumos stacks are non-executable by default on
+  # amd64), and every cmake compile probe links with them, so all failed (no -Wall, no Threads): -z now alone. Not EXCLUDE_HASH: it
+  # adds -Wl,--build-id=none, also GNU only.
+  svt-av1 = mkSrcPkg {
+    pname = "svt-av1"; version = "4.1.0";
+    src = { url = "https://gitlab.com/AOMediaCodec/SVT-AV1/-/archive/v4.1.0/SVT-AV1-v4.1.0.tar.gz";
+            sha256 = "6c4c0c44ff0ba3d136d6f57f3a707f9de8e9c866f50f809c1d22a43f0d8c9583"; };
+    deps = [ world ]; nativeTools = [ cmake nasm perl ] ++ hostTools;
+    build = ''
+      grep -qx '        check_both_flags_add(-fstack-protector-strong)' CMakeLists.txt || { echo "FATAL: svt-av1 ssp anchor" >&2; exit 1; }
+      sed -i '/^        check_both_flags_add(-fstack-protector-strong)$/d' CMakeLists.txt
+      grep -qx 'find_package(Git QUIET)' Source/Lib/Codec/ConfigureGitVersion.cmake || { echo "FATAL: svt-av1 git anchor" >&2; exit 1; }
+      sed -i 's/^find_package(Git QUIET)$/set(Git_FOUND FALSE)/' Source/Lib/Codec/ConfigureGitVersion.cmake
+      grep -q ' -z noexecstack -z relro -z now")$' CMakeLists.txt || { echo "FATAL: svt-av1 ld flags anchor" >&2; exit 1; }
+      sed -i 's/ -z noexecstack -z relro -z now")$/ -z now")/' CMakeLists.txt
+      # illumos <sys/file.h> (app_config.c includes it after app_config.h, for flock) defines FOPEN, a kernel file flag, over the app's
+      # FOPEN(f, s, m) macro: the app's is renamed (the library's own FOPEN is in Source/Lib, which does not include sys/file.h)
+      [ "$(grep -c 'FOPEN(' Source/App/app_config.c Source/App/app_config.h | tr '\n' ' ')" = "Source/App/app_config.c:5 Source/App/app_config.h:2 " ] \
+        || { echo "FATAL: svt-av1 FOPEN anchor" >&2; exit 1; }
+      sed -i 's/\bFOPEN(/SVT_APP_FOPEN(/g' Source/App/app_config.c Source/App/app_config.h
+      # a size-0 EB_MALLOC_ALIGNED (pic_buffer_desc.c asks for one): illumos posix_memalign returns 0 and NULL for it (POSIX allows that;
+      # glibc returns a unique pointer), which svt-av1 reports as a failed allocation, and the encoder then segfaults: at least 1 byte
+      f=Source/Lib/Codec/svt_malloc.h
+      [ "$(grep -c 'if (posix_memalign((void\*\*)&(pointer), ALVALUE, size) != 0) \\$' $f)" = 1 ] || { echo "FATAL: svt-av1 memalign anchor" >&2; exit 1; }
+      sed -i 's/if (posix_memalign((void\*\*)&(pointer), ALVALUE, size) != 0) \\$/if (posix_memalign((void**)\&(pointer), ALVALUE, (size) ? (size) : 1) != 0) \\/' $f
+      ${cmakeB "-DSVT_AV1_LTO=ON -DBUILD_TESTING=OFF"}
+      grep -q '^Threads_FOUND:INTERNAL=TRUE$\|^CMAKE_HAVE_LIBC_PTHREAD:INTERNAL=1$' _b/CMakeCache.txt || { echo "FATAL: svt-av1: cmake probes failed" >&2; exit 1; }
+      ${tprog ''#include <svt-av1/EbSvtAv1Enc.h>
+#include <stdio.h>
+int main(void){ printf("ok %s\n", svt_av1_get_version()); return 0; }'' "$out/lib/amd64/libSvtAv1Enc.so"}
+      ${chk ''"$W/t"'' "^ok v4\\.1\\.0$"}
+      # four flat 128x128 frames encoded (preset 12) to an IVF file
+      perl -e 'print chr(128) x (128 * 128 * 3 / 2 * 4)' > "$W/in.yuv"
+      ${chk ''"$out/bin/SvtAv1EncApp" -i "$W/in.yuv" -w 128 -h 128 -n 4 --preset 12 -b "$W/t.ivf" && od -An -c -N4 "$W/t.ivf"'' "D +K +I +F"}
+    '';
+  };
+
+  # libcpuid (BSD-2-Clause): x86 CPU identification (vendor, features, caches) and cpuid_tool, as nixpkgs: autotools from the tag. On
+  # illumos its affinity calls are processor_bind (upstream's __sun branch); MSR access is off there (upstream: unsupported OS).
+  libcpuid = mkSrcPkg {
+    pname = "libcpuid"; version = "0.8.1";
+    src = { url = "https://codeload.github.com/anrieff/libcpuid/tar.gz/refs/tags/v0.8.1";
+            sha256 = "81f2f40da5d66b8220476e116cb40bca4e6a62c0d22bdeeb8e3856cf14607007"; };
+    deps = [ world ]; nativeTools = autoreconfTools ++ hostTools;
+    build = ''
+      ${autoreconf}
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static
+      gmake -j8; gmake install
+      ${tprog ''#include <libcpuid/libcpuid.h>
+#include <stdio.h>
+int main(void){ struct cpu_raw_data_t r; struct cpu_id_t d; if (!cpuid_present() || cpuid_get_raw_data(&r) || cpu_identify(&r, &d)) return 1;
+printf("ok %s %d %s\n", cpuid_lib_version(), d.num_logical_cpus > 0, d.flags[CPU_FEATURE_SSE2] ? "sse2" : "-"); return 0; }'' "$out/lib/amd64/libcpuid.so"}
+      ${chk ''"$W/t"'' "^ok 0\\.8\\.1 1 sse2$"}
     '';
   };
 }
