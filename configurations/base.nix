@@ -80,11 +80,11 @@
   # Declarative networking (T2.9): the primary NIC via DHCP. This GENERATES the
   # illumos bringup (ipadm create-if/create-addr with the legacy-ifconfig
   # fallback the gate ena driver needs, gotcha #15) as an SMF transient oneshot,
-  # plus /etc/resolv.conf from nameservers — replacing the ad-hoc solnix-netcfg
-  # in oi-make-be.sh. "ena0" is the EC2 Nitro NIC; on other hardware set the
-  # matching datalink name (dladm show-phys).
+  # replacing the ad-hoc solnix-netcfg in oi-make-be.sh. "ena0" is the EC2 Nitro
+  # NIC; on other hardware set the matching datalink name (dladm show-phys).
+  # No nameservers, as NixOS declares none: the bringup writes /etc/resolv.conf
+  # from the DHCP lease (EC2's lease names the VPC resolver).
   networking.interfaces.ena0.dhcp = lib.mkDefault true;
-  networking.nameservers = [ "169.254.169.253" "8.8.8.8" ];
 
   # Declarative users (T2.9): a login user + root, both with the maintainer's
   # ssh key. This GENERATES /etc/{passwd,shadow,group} entries (illumos format)

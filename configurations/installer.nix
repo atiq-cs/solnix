@@ -123,7 +123,7 @@ in
   # minimal ramdisk by accident.
   system.buildCapable = lib.mkDefault true;
 
-  # base.nix configures an EC2 Nitro NIC and resolver; the media boots anywhere,
+  # base.nix configures an EC2 Nitro NIC; the media boots anywhere,
   # so it carries no interface or resolver of its own: the live method plumbs the
   # first wired NIC by DHCP and writes resolv.conf from the lease (solnix-install
   # bring_up_network), as NixOS's installer leaves networking to dhcpcd.
