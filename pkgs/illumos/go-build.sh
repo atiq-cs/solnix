@@ -9,18 +9,22 @@
 #                 PT_TLS ("ld.so.1: go: fatal: TLS requirement failure", measured on 1.20.14).
 #   final       : the closure gate over bin/ + pkg/tool/, then go version + a hello build.
 set -eu
-export PATH=/usr/gnu/bin:/usr/bin:/usr/sbin
+export PATH="$tools/bin:$world/usr/bin:$world/usr/sbin:$world/bin:$world/sbin"   # store tools, then the world (no /usr/bin|sbin|gnu)
+/usr/bin/bash "$pathGate"; . "$illumosBin"
 # FIXED build dir, not $NIX_BUILD_TOP (/tmp on OI, /var/tmp/big on dixi): go1.4's C tools name $W/cc and their
 # sources, go1.17/1.20 name GOROOT/src in every binary (measured, repro2). $buildKey: see mk-src-pkg.nix.
 W=/var/tmp/go-$buildKey; rm -rf "$W"; mkdir -m 700 "$W"; trap 'cd /; rm -rf "$W"' EXIT; cd "$W"
 export HOME=$W GOCACHE=$W/cache GOPATH=$W/gopath CGO_ENABLED=0 GOARCH=amd64 GOTOOLCHAIN=local
-tar xzf "$src"; cd go/src
+"$tools/bin/tar" xzf "$src"; cd go/src   # store GNU tar (+ gzip on $tools): the illumos tar fails on dixi ('blocksize = 0', recipes2)
 if [ -z "$boot" ]; then
   # store RUNPATH for the C tools: gcc's runtime + the world's libc/libm (not the host /lib).
-  printf '#!/usr/bin/bash\nexec %s/bin/gcc -m64 -Wl,-R,%s/amd64:%s "$@"\n' "$gcc" "$gccLibDir" "$rp" > "$W/cc"; chmod +x "$W/cc"
-  CC=$W/cc GOROOT_FINAL=$out/share/go bash ./make.bash
+  # -std=gnu17: go1.4's C uses bool/true as identifiers, C23 keywords under GCC 15 (gcc1 STDENV-SWITCH.md 2.2)
+  printf '#!/usr/bin/bash\nexec %s/bin/gcc -m64 -std=gnu17 -Wl,-R,%s/amd64:%s "$@"\n' "$gcc" "$gccLibDir" "$rp" > "$W/cc"; chmod +x "$W/cc"
+  # GO_LDFLAGS -r: go1.4's cmd/6l writes DT_RUNPATH only for -r (cmd/ld/elf.c), so its Go-built tools (go, gofmt, cgo, pack, ...)
+  # carried none and resolved the build host's /lib/64/libc.so (publish-gate ldd, wave6w)
+  CC=$W/cc GOROOT_FINAL=$out/share/go GO_LDFLAGS="-r $rp" /usr/bin/bash ./make.bash
 else
-  GOROOT_BOOTSTRAP=$boot/share/go GOOS=illumos GO_LDFLAGS="-r $rp" bash ./make.bash
+  GOROOT_BOOTSTRAP=$boot/share/go GOOS=illumos GO_LDFLAGS="-r $rp" /usr/bin/bash ./make.bash
 fi
 cd "$W/go"
 if [ -d bin/illumos_amd64 ]; then
@@ -32,16 +36,18 @@ if [ -z "$boot" ]; then
   # made gcc-14.3.0 + illumos-gate-proto RUNTIME references of go_1_4 (measured). Strip them
   # (mk-src-pkg's strip phase), then the same closure gate as the final stages.
   find pkg/tool bin -type f | while read -r f; do
-    [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] && /usr/bin/gstrip --strip-debug "$f"
+    [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] && "$tools/bin/gstrip" --strip-debug "$f"   # store gstrip: a solnix host has no /usr/bin/gstrip
   done
 fi
-if [ -n "$final" ]; then
+# every stage, go1.4 included (was: final only, then every stage after go1.4: go_1_24 failed the gate on them, wave5; go1.4
+# shipped 3 Linux/FreeBSD ones, S2, wave6w)
+if :; then
   # Upstream ships Linux/FreeBSD dynamic ELF test fixtures (src/debug/{elf,dwarf}/testdata: NEEDED
   # libc.so.6, libtiff.so.6, ...). Nothing resolves them on illumos, so the store-only-NEEDED publish
   # gate failed the toolchain on them (13 files, measured). NixOS ships them (it has no such gate);
   # we drop them. Cost: `go test debug/elf debug/dwarf` lacks those fixtures.
   find src -path '*/testdata/*' -type f | while read -r f; do
-    if [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] && /usr/bin/elfdump -d "$f" 2>/dev/null | grep -q NEEDED; then rm -f "$f"; fi
+    if [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] && elfdump -d "$f" 2>/dev/null | grep -q NEEDED; then rm -f "$f"; fi
   done
 fi
 mkdir -p "$out/share" "$out/bin"
@@ -49,12 +55,33 @@ mkdir -p "$out/share" "$out/bin"
 # scripts/patches/0009 (every OI build host) a just-written file reads as one hole to SEEK_DATA,
 # so GNU cp copied zeros, even with --sparse=never (it still asks SEEK_DATA). sync(2) does not
 # push mmap'd pages there; fsync does (measured: holetest2 0/3 with sync, 3/3 with fsync).
-find "$W/go" -type f -exec /usr/bin/python3 -c 'import os,sys
+find "$W/go" -type f -exec "$python3/bin/python3" -c 'import os,sys
 for p in sys.argv[1:]:
     fd = os.open(p, os.O_RDONLY); os.fsync(fd); os.close(fd)' {} +
 cp -a "$W/go" "$out/share/go"
+# the shipped GOROOT (src/ is the stdlib a user's `go build` compiles): no host path in it (gate2, wave6t); go1.4 too (it ships
+# #!/bin/bash, /bin/rc, /usr/bin/perl and awk scripts: B9, wave6w)
+if :; then
+  # S2: every ELF under a testdata/ dir (line-clang-dwarf5.elf has PT_INTERP /lib64/ld-linux-x86-64.so.2; not only the NEEDED ones)
+  find "$out/share/go/src" -path '*/testdata/*' -type f | while read -r f; do
+    [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] && rm -f "$f"; true; done
+  # B13: x/sys's vendored mkerrors.sh (a maintainer generator, Linux/Solaris): `export PATH=/usr/gnu/bin:$PATH` on SunOS. Dropped
+  # (the store-only PATH already has the GNU tools by name, as on NixOS).
+  for f in $(find "$out/share/go/src" -name mkerrors.sh); do chmod u+w "$f"
+    # [P]ATH: the same regex, but this builder text no longer spells a PATH= assignment (gate A1 reads builder text: wave6v)
+    sed -i 's|^[[:space:]]*export [P]ATH=/usr/gnu/bin:\$PATH$|\t:|' "$f"; ! grep -q /usr/gnu "$f" || { echo "FATAL: $f names /usr/gnu" >&2; exit 1; }; done
+  # B9: #!/bin/bash -> the store bash (NixOS patchShebangs); plan9 #!/bin/rc and the perl generators: no such interpreter here, not
+  # executable (they are source files of the tree, never run by go)
+  # $tools (hostfixTools) holds bash as a farm LINK since ee50560, and patch-shebangs.sh's selftest wants `command -v bash` to be the
+  # store file patch() writes into a #! (gtk-build-tools hit the same, 3092a2a): the real bash dir first, for this call only
+  b=$(command -v bash); [ -h "$b" ] && b=$(readlink "$b")
+  case "$b" in /nix/store/*/bin/bash) ;; *) echo "FATAL: go-build: no store bash for patch-shebangs ($b)" >&2; exit 1;; esac
+  PATH="${b%/bash}:$PATH" /usr/bin/bash "$patchShebangs" "$out/share/go" ""
+  find "$out/share/go" -type f -perm -u+x | while read -r f; do [ "$(head -c 2 "$f")" = '#!' ] || continue
+    case "$(head -1 "$f" | sed 's/^#![[:space:]]*//; s/[[:space:]].*//')" in /bin/sh|/usr/bin/env|/nix/store/*) ;; /*) chmod a-x "$f";; esac; done
+fi
 # DT_CHECKSUM -> 0 (zero-checksum.sh says why): go1.4's C tools embed GOROOT_FINAL=$out (measured, repro2).
-: > "$W/zc"; bash "$zeroChecksum" "$out" "$W/zc"; [ ! -s "$W/zc" ] || { cat "$W/zc" >&2; exit 1; }
+: > "$W/zc"; /usr/bin/bash "$zeroChecksum" "$out" "$W/zc"; [ ! -s "$W/zc" ] || { cat "$W/zc" >&2; exit 1; }
 for b in go gofmt; do ln -s ../share/go/bin/$b "$out/bin/$b"; done
 "$out/bin/go" version
 if [ -z "$boot" ]; then
@@ -63,15 +90,15 @@ if [ -z "$boot" ]; then
   # sets no RUNPATH (libc.so from /lib/64, caught by this gate, measured); they only ever run
   # inside the go_1_17 build. shortcut: not gated, upgrade if go_1_4 is ever shipped to a system.
   mkdir -p "$W/ctools"; for t in 6a 6c 6g 6l dist; do cp "$out/share/go/pkg/tool/solaris_amd64/$t" "$W/ctools/"; done
-  bash "$storeGate" "$W/ctools" "$tsErrnoGate" "$gcc/" "$gate"
+  /usr/bin/bash "$storeGate" "$W/ctools" "$tsErrnoGate" "$gcc/" "$gate"
   for x in "$gcc" "$gate"; do ! grep -rqF "$(basename "$x")" "$out" || { echo "FATAL: go_1_4 names $x" >&2; exit 1; }; done
 fi
 if [ -n "$final" ]; then
-  bash "$storeGate" "$out/share/go" "$tsErrnoGate"   # the whole tree: bin, pkg/tool and src
+  /usr/bin/bash "$storeGate" "$out/share/go" "$tsErrnoGate"   # the whole tree: bin, pkg/tool and src
   "$out/bin/go" version | grep -q "^go version go$version illumos/amd64$" || { echo "FATAL: go version" >&2; exit 1; }
   mkdir -p "$W/h"; cd "$W/h"; printf 'package main\nimport "fmt"\nfunc main() { fmt.Println("hello-go") }\n' > m.go
   "$out/bin/go" mod init h >/dev/null 2>&1; "$out/bin/go" build -trimpath -ldflags "-r $rp" -o h .
   [ "$(./h)" = hello-go ] || { echo "FATAL: go hello" >&2; exit 1; }
-  bash "$storeGate" "$W/h" "$tsErrnoGate"
+  /usr/bin/bash "$storeGate" "$W/h" "$tsErrnoGate"
   echo "=== go $version: check passed ===" >&2
 fi

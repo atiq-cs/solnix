@@ -19,10 +19,11 @@ rec {
   # python3: shared libpython, the stdlib C modules that need only libs in this set (ssl, zlib,
   # sqlite3, readline, ctypes/libffi, expat, dbm.gnu, curses, bz2, lzma). No tkinter, no uuid.
   python3 = mkSrcPkg {
-    pname = "python3"; version = "3.13.9";
-    src = { url = "https://www.python.org/ftp/python/3.13.9/Python-3.13.9.tar.xz";
-            sha256 = "ed5ef34cda36cfa2f3a340f07cac7e7814f91c7f3c411f6d3562323a866c5c66"; };
+    pname = "python3"; version = "3.13.18";
+    src = { url = "https://www.python.org/ftp/python/3.13.18/Python-3.13.18.tar.xz";
+            sha256 = "abb0102e6d4ae027509bcb82327d9dd85515b44a3ba8ad538cfc5e9847029f68"; };
     deps = [ world zlib openssl readline ncurses sqlite gdbm graphics.libffi graphics.expat nixChain.xz nixChain.bzip2 ];
+    nativeTools = hostTools;   # store-only PATH + config.site (wave4: OI /usr/gnu + /usr/bin probes); the .pyc half is hash B's nopyc
     build = ''
       # libpython in lib/amd64 (the RUNPATH the wrapper bakes), stdlib in lib/python3.13: with
       # --libdir=lib/amd64 alone python installs lib-dynload under lib/amd64/python3.13 and then
@@ -36,14 +37,35 @@ rec {
         LIBS="-lresolv" ac_cv_lib_uuid_uuid_generate_time=no ac_cv_header_uuid_h=no
       gmake -j16; gmake install
       ${scrub}
-      find "$out" -name '__pycache__' -prune -o -name '*.pyc' -print | head -1 >/dev/null
+      find "$out" -type d -name '__pycache__' -prune -exec rm -r {} +   # timestamp pyc from install's failed compileall (wave3)
+      # nixpkgs python postInstall: the recorded build configuration must not name the build dir (served 3.13.9: abs_builddir, RUNSHARED
+      # = /var/tmp/srcpkg-...; recipes1 W5) -> /no-such-path
+      for f in "$out"/lib/python3.13/_sysconfigdata*.py "$out"/lib/python3.13/config-3.13*/Makefile; do
+        chmod u+w "$f"; LC_ALL=C sed -i -e "s|$W|/no-such-path|g" "$f"
+      done
       ln -sf python3 "$out/bin/python"
-      ${chk ''"$out/bin/python3" --version'' "^Python 3\\.13\\.9"}
+      export PYTHONDONTWRITEBYTECODE=1   # the checks below must not write bytecode into $out
+      ${chk ''"$out/bin/python3" --version'' "^Python 3\\.13\\.18"}
       for m in ssl zlib sqlite3 readline ctypes pyexpat dbm.gnu curses bz2 lzma hashlib json; do
         "$out/bin/python3" -c "import $m" || { echo "FATAL: python3 cannot import $m" >&2; exit 1; }
       done
-      ${chk ''"$out/bin/python3" -c "import ssl,sqlite3; print(ssl.OPENSSL_VERSION, sqlite3.sqlite_version)"'' "^OpenSSL 3\\.4\\.0 .* 3\\.50\\.4$"}
+      ${chk ''"$out/bin/python3" -c "import ssl,sqlite3; print(ssl.OPENSSL_VERSION, sqlite3.sqlite_version)"'' "^OpenSSL 3\\.5\\.9 .* 3\\.53\\.2$"}
       [ -f "$out/share/man/man1/python3.13.1" ] || { echo "FATAL: no python3 man page" >&2; exit 1; }
+      # no host or build dir in the recorded configuration (recipes1 W5; gate2 B15)
+      "$out/bin/python3" -c '
+import re, sys, sysconfig
+bad = {k: v for k, v in sysconfig.get_config_vars().items() if isinstance(v, str) and re.search(r"/usr/gnu|/opt/|/usr/local/|/var/tmp/", v)}
+sys.exit("FATAL: sysconfig names a host or build dir: %r" % bad if bad else 0)'
+      # deterministic bytecode: SOURCE_DATE_EPOCH is set, so compileall writes checked-hash pyc; -j1 = no multiprocessing
+      unset PYTHONDONTWRITEBYTECODE
+      "$out/bin/python3" -E -m compileall -q -f -j1 -o 0 -o 1 -o 2 -x 'bad_coding|badsyntax|site-packages|test' "$out/lib/python3.13" >/dev/null || true
+      # a source that names $out (_sysconfigdata, python-config): its checked-hash pyc hashes the SCRATCH out's text under an
+      # unsandboxed --check, and Nix rewrites only the path string (wave3: 6 pyc differed). Ship those as source only.
+      grep -rlF --include='*.py' "$out" "$out/lib/python3.13" | while read -r s; do
+        b=$(basename "$s" .py); rm -f "$(dirname "$s")/__pycache__/$b".cpython-313*.pyc; done
+      bad=$(find "$out" -name '*.pyc' | while read -r f; do [ "$(od -An -tx1 -j4 -N1 "$f" | tr -d ' \n')" = 03 ] || echo "$f"; done | head -3)
+      [ -z "$bad" ] || { echo "FATAL: python3 ships non-checked-hash pyc: $bad" >&2; exit 1; }
+      [ "$(find "$out" -name '*.pyc' | wc -l)" -gt 1000 ] || { echo "FATAL: python3 compileall wrote too few pyc" >&2; exit 1; }
     '';
   };
 
@@ -98,7 +120,7 @@ rec {
     pname = "gnupatch"; version = "2.8";
     src = { url = "https://mirrors.kernel.org/gnu/patch/patch-2.8.tar.xz";
             sha256 = "f87cee69eec2b4fcbf60a396b030ad6aa3415f192aa5f7ee84cad5e11f7f5ae3"; };
-    deps = [ world ];
+    deps = [ world ]; nativeTools = hostTools;   # store-only PATH + config.site: install/mkdir/locales/O_NOATIME differed by host (wave4 cfg/gnupatch-2.8.diff)
     build = ''
       ${gnulibFix}
       ./configure --prefix="$out" --disable-gcc-warnings
@@ -129,7 +151,7 @@ rec {
             sha256 = "aae608dfe8213dfd05d909a57718ef82f30722c392344583d3f39050c7f29a80"; };
     build = ''
       gmake -j8 CC="$CC" PREFIX="$out" LIBDIR="$out/lib/amd64" lib xxhsum
-      gmake install CC="$CC" PREFIX="$out" LIBDIR="$out/lib/amd64" INSTALL=ginstall
+      gmake install CC="$CC" PREFIX="$out" LIBDIR="$out/lib/amd64" INSTALL=install   # GNU install, the store coreutils (OI had ginstall)
       ${chk ''printf abc | "$out/bin/xxh64sum"'' "^44bc2cf5ad770999 "}
     '';
   };

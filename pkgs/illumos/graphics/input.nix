@@ -1,7 +1,16 @@
 # graphics/input.nix -- the C libraries cosmic-comp links beyond Mesa:
 # pixman, libxkbcommon (+ xkeyboard-config data), libdisplay-info, libseat.
-{ mkSrcPkg, tools, pkgconf }:
-let m = tools.mesonBuild; pc = "export PATH=${pkgconf}/bin:$PATH"; in
+{ mkSrcPkg, tools, pkgconf, python3 ? null, gnupatch ? null, perl ? null, bison ? null }:
+let m = tools.mesonBuild; pc = "export PATH=${pkgconf}/bin:$PATH";
+  # patch is on /usr/gnu/bin on the OI bhost (gnupatch==null -> no-op); a solnix host has no /usr/gnu, so put the store patch on PATH.
+  pp = if gnupatch == null then "" else "export PATH=${gnupatch}/bin:$PATH";
+  # perl: xkeyboard-config's rules/xml2lst.pl runs via /usr/bin/env perl. On the OI bhost perl is /usr/bin (perl==null -> no-op); a solnix host has none.
+  pl = if perl == null then "" else "export PATH=${perl}/bin:$PATH";
+  # bison: libxkbcommon's meson needs a YACC (bison or byacc). On the OI bhost it is /usr/bin/bison (bison==null -> no-op); a solnix host has none.
+  bs = if bison == null then "" else "export PATH=${bison}/bin:$PATH";
+  # python3: libdisplay-info's tool/gen-search-table.py runs via /usr/bin/env python3. OI bhost: /usr/bin/python3.14; solnix host: the store python3.
+  py = if python3 == null then "mkdir -p \"$TMPDIR/py\" && ln -sf /usr/bin/python3.14 \"$TMPDIR/py/python3\" && export PATH=\"$TMPDIR/py:$PATH\"" else "mkdir -p \"$TMPDIR/py\" && ln -sf ${python3}/bin/python3 \"$TMPDIR/py/python3\" && export PATH=\"$TMPDIR/py:$PATH\"";
+in
 rec {
   pixman = mkSrcPkg {
     pname = "pixman"; version = "0.43.4";
@@ -19,8 +28,9 @@ rec {
     src = { url = "https://www.x.org/releases/individual/data/xkeyboard-config/xkeyboard-config-2.43.tar.xz";
             sha256 = "c810f362c82a834ee89da81e34cd1452c99789339f46f6037f4b9e227dd06c01"; };
     build = ''
-      # rules/ needs python >= 3.11 (enum.StrEnum); the host python3.14 is a build tool here.
-      mkdir -p "$TMPDIR/py" && ln -sf /usr/bin/python3.14 "$TMPDIR/py/python3" && export PATH="$TMPDIR/py:$PATH"
+      # rules/ needs python >= 3.11 (enum.StrEnum): the store python3 (3.13; wave6), the OI host's python3.14 on the seed path
+      mkdir -p "$TMPDIR/py" && ln -sf ${if python3 == null then "/usr/bin/python3.14" else "${python3}/bin/python3"} "$TMPDIR/py/python3" && export PATH="$TMPDIR/py:$PATH"
+      ${pl}   # rules/xml2lst.pl: /usr/bin/env perl
       ${m "-Dnls=false -Dxorg-rules-symlinks=true -Dcompat-rules=true"}
       [ -e "$out/share/X11/xkb/rules/evdev" ] || { echo "FATAL: no rules/evdev" >&2; exit 1; }
     '';
@@ -33,7 +43,7 @@ rec {
             sha256 = "65782f0a10a4b455af9c6baab7040e2f537520caa2ec2092805cdfd36863b247"; };
     build = ''
       ${pc}
-      # bison comes from the host /usr/bin (a build tool, like python3 for meson)
+      ${bs}   # meson needs a YACC (bison); host /usr/bin/bison on the OI bhost, store bison on a solnix host
       ${m "-Denable-x11=false -Denable-xkbregistry=false -Denable-wayland=false -Denable-docs=false -Denable-tools=false -Denable-bash-completion=false -Dxkb-config-root=${xkeyboard-config}/share/X11/xkb -Dxkb-config-extra-path=/etc/xkb -Dx-locale-root=${xkeyboard-config}/share/X11/locale"}
     '';
   };
@@ -57,6 +67,7 @@ rec {
     build = ''
       # illumos ld has no --version-script (and v1 mapfiles take no globs): export all.
       sed -i "s|link_args: symbols_flag,||" meson.build
+      ${py}   # tool/gen-search-table.py: /usr/bin/env python3
       ${pc}
       ${m "-Dc_args=-D__EXTENSIONS__"}
     '';
@@ -69,6 +80,7 @@ rec {
     src = { url = "https://git.sr.ht/~kennylevinsen/seatd/archive/0.9.1.tar.gz";
             sha256 = "819979c922a0be258aed133d93920bce6a3d3565a60588d6d372ce9db2712cd3"; };
     build = ''
+      ${pp}
       patch -p1 < ${./patches/seatd-0.9.1-illumos.patch}
       # realpath(/dev/dri/card0) is a /devices/...:card0 node on illumos: still DRM.
       patch -p1 < ${./patches/seatd-0.9.1-illumos-devices-path.patch}

@@ -30,6 +30,9 @@
 , binutils                # store gas: --with-as, so the installed gcc needs no host /usr/bin/gas
 , tools                   # store bin dirs, the whole PATH before /usr/bin (no /usr/gnu): seed make/tar/xz/grep/sed/binutils,
                           # coreutils (cp -P), findutils, gnupatch, perl (make_sunver.pl). Infra's dixi trial fixes 3 and 4.
+, bash                    # store bash: CONFIG_SHELL (gate2 A1-tool: /usr/bin/bash is the OI host's); the seed instance's bash
+, world                   # the gate userland as a store path: the illumos tools (elfedit elfdump ldd nm od awk digest), as the store
+                          # copy of the gate binaries /usr/bin holds, so PATH has no host dir at all (wave6, rows1's finding)
 , system ? "x86_64-solaris"
 }:
 
@@ -58,13 +61,17 @@ let
   SOURCE_DATE_EPOCH = "315532800";  # as NixOS stdenv: __DATE__/__TIME__ are the epoch, not the build day
   outputs = [ "out" "lib" ];
   builder = "/usr/bin/bash";
-  inherit binutils tools;
-  PATH = "${tools}:/usr/bin:/usr/sbin";
+  inherit binutils tools world bash;
+  # the world's bin dirs end PATH: the illumos base tools, from the store (no /usr/bin, /usr/sbin, /usr/gnu; ./path-gate.sh)
+  worldPath = "${world}/usr/bin:${world}/usr/sbin:${world}/bin:${world}/sbin";
+  PATH = "${tools}";
   args = [ "-c" ''
     set -eu
-    # store tools, then the illumos base (/usr/bin: elfedit elfdump ldd od dd awk digest, the same gate binaries on OI and solnix).
-    # No /usr/gnu: a solnix host has none, and OI's would change configure's answers per host.
-    export PATH="$tools:/usr/bin:/usr/sbin"
+    # store tools, then the illumos base from the world store path (elfedit elfdump ldd nm od dd awk digest: the gate's binaries).
+    # No /usr/bin, /usr/sbin or /usr/gnu: on an OI host they are OpenIndiana's, and configure found /usr/bin/nm and gmsgfmt there.
+    export PATH="$tools:$worldPath"
+    /usr/bin/bash ${./path-gate.sh}
+    . ${./illumos-bin.sh}   # ILLUMOS_BIN for zero-checksum.sh (the world's elfedit, not a GNU elfedit)
     # Fixed build dir (as mk-src-pkg.nix): the compiler named the random mktemp dir 5741 times.
     # Keyed on $buildKey (eval-time digest of this drv's attrs), not $out: `nix build --check` builds into a scratch out.
     W=/var/tmp/gccsrc-$buildKey
@@ -90,11 +97,15 @@ let
     # the unprefixed GNU names configure looked up in OI's /usr/gnu/bin (objdump readelf nm strip), from the store binutils
     for t in objdump readelf nm strip; do ln -s "$(command -v g$t)" "$W/detbin/$t"; done
     export PATH="$W/detbin:$PATH"
+    PATH_GATE_ALLOW="$W" /usr/bin/bash ${./path-gate.sh}
     tar xf "$gccSrc"
     cd "gcc-$version"
     n=0; for p in "$patches"/0*.patch; do patch -p1 --no-backup-if-mismatch -s < "$p" >&2; n=$((n + 1)); done
     [ "$n" = 41 ] || { echo "FATAL: $n illumos patches applied, want 41" >&2; exit 1; }
     ! find . -name '*.rej' | grep -q . || { echo "FATAL: patch rejects" >&2; exit 1; }
+    # make_sunver.pl (libgcc/libssp/libatomic version scripts) runs a fixed elfdump (OI patch 0028): the world's
+    sed -i "s|^my \$elfdump = \"/usr/bin/elfdump\";|my \$elfdump = \"$world/usr/bin/elfdump\";|" contrib/make_sunver.pl
+    grep -qF "my \$elfdump = \"$world/usr/bin/elfdump\";" contrib/make_sunver.pl || { echo "FATAL: make_sunver.pl elfdump not pinned" >&2; exit 1; }
     # GMP/MPFR/MPC in-tree: linked statically into cc1, so the compiler carries
     # no host math libs either.
     tar xf "$gmpSrc"; mv gmp-6.3.0 gmp
@@ -102,7 +113,19 @@ let
     tar xf "$mpcSrc"; mv mpc-1.3.1 mpc
     mkdir ../b; cd ../b
     # MAKEINFO=true: chef2 has /usr/bin/makeinfo, a solnix host none; the release tarball's prebuilt .info files are installed either way.
-    export CC="$stage0/bin/gcc" CXX="$stage0/bin/g++" CONFIG_SHELL=/usr/bin/bash MAKEINFO=true
+    export CC="$stage0/bin/gcc" CXX="$stage0/bin/g++" CONFIG_SHELL="$bash/bin/bash" MAKEINFO=true
+    # the host-state configure answers pinned, as every store-only mk-src-pkg build (./config.site): libstdc++'s "checking for working
+    # iconv" RUNS a conversion through the BUILD HOST's /usr/lib/iconv modules, so chef said yes and dixi (201 modules) no, and
+    # libstdc++.so's std::format locale path differed (wave6t step41: dixi --check DIFFERS on gcc-15.3.0-lib). Pinned to yes: the
+    # iconv functions are the store libc's, the same on every host.
+    export CONFIG_SITE=${./config.site}
+    # ... but gcc's top-level Makefile runs every TARGET library's configure (libstdc++-v3, libquadmath, ...) with
+    # CONFIG_SITE=no-such-file (Makefile.in, each configure-target-*), so the site file reached only the host-side configures:
+    # libstdc++ still RAN its iconv probe (chef "yes", lixi "no": gcc-15.3.0 and -lib DIFFER; gate L4 FAILs the log; wave6u).
+    # The same answers as environment variables reach every configure: autoconf reports a set cache variable "(cached)".
+    set -a; . ${./config.site}; set +a
+    # NM: binutils' gnm (configure took OI's /usr/bin/nm -p before). gettext tools: none (--disable-nls; configure still looked).
+    export NM="$binutils/bin/gnm" NM_FOR_TARGET="$binutils/bin/gnm" MSGFMT=: GMSGFMT=: XGETTEXT=: MSGMERGE=:
     # The compiler binaries themselves link the seed's C++ runtime statically, so
     # `out` does not depend on /usr/gcc/14/lib at run time.
     export LDFLAGS="-static-libstdc++ -static-libgcc"
@@ -154,7 +177,7 @@ let
         [ -f "$f" ] && [ ! -L "$f" ] || continue
         chmod u+w "$f"
         gstrip --strip-debug "$f"
-        /usr/bin/elfedit -e "dyn:runpath $dst:$lc" "$f"
+        elfedit -e "dyn:runpath $dst:$lc" "$f"
         if grep -q "$gate" "$f"; then echo "FATAL: $f still names the gate proto" >&2; exit 1; fi
       done
       [ -e "$dst/libstdc++.so.6" ] && [ -e "$dst/libgcc_s.so.1" ] || { echo "FATAL: runtime libs missing in $dst" >&2; exit 1; }
@@ -169,9 +192,9 @@ let
       for f in "$d"/*.so*; do
         [ -f "$f" ] && [ ! -L "$f" ] || continue
         case "$f" in *.py) continue;; esac
-        /usr/bin/elfdump -d "$f" 2>/dev/null | grep -q NEEDED || continue
+        elfdump -d "$f" 2>/dev/null | grep -q NEEDED || continue
         chmod u+w "$f"
-        /usr/bin/elfedit -e "dyn:runpath $d:$lc" "$f"
+        elfedit -e "dyn:runpath $d:$lc" "$f"
       done
     done
     # The compiler binaries (bin/, libexec/gcc/) and the cc1 plugins (lib/gcc/*/plugin) link stage0's C++ runtime
@@ -184,17 +207,17 @@ let
     # and found no libstdc++ (publish gate, 2026-10-29).
     find "$out" -type f | while read -r f; do
       [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] || continue
-      /usr/bin/elfdump -d "$f" 2>/dev/null | grep -q NEEDED || continue
-      cur=$(/usr/bin/elfdump -d "$f" 2>/dev/null | awk '$2=="RUNPATH"{print $4}')
+      elfdump -d "$f" 2>/dev/null | grep -q NEEDED || continue
+      cur=$(elfdump -d "$f" 2>/dev/null | awk '$2=="RUNPATH"{print $4}')
       case "$cur" in "$out"/*|"$lib"/*) continue;; esac
-      chmod u+w "$f"; /usr/bin/elfedit -e "dyn:runpath $libcDir:$libcExtraDir:$lib/lib/amd64" "$f"
+      chmod u+w "$f"; elfedit -e "dyn:runpath $libcDir:$libcExtraDir:$lib/lib/amd64" "$f"
     done
     # gate: no RUNPATH in $out names the build host or another compiler's runtime (stage0's gcc.lib)
     s0lib=$(sed -n 's|.*-Wl,-R,\([^:]*\)/lib/amd64:.*|\1|p' "$stage0/bin/gcc")
     [ -n "$s0lib" ] || { echo "FATAL: no gcc.lib in $stage0/bin/gcc" >&2; exit 1; }
     if find "$out" -type f | while read -r f; do
          [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] || continue
-         /usr/bin/elfdump -d "$f" 2>/dev/null | awk '$2=="RUNPATH"{print $4}'
+         elfdump -d "$f" 2>/dev/null | awk '$2=="RUNPATH"{print $4}'
        done | grep -qE "/usr/gcc|$s0lib"; then
       echo "FATAL: an ELF in $out still has a /usr/gcc or stage0 ($s0lib) RUNPATH" >&2; exit 1
     fi
@@ -204,6 +227,8 @@ let
     # nixpkgs' remove-references-to. Nothing live points at them (the RUNPATH gate above passed).
     s0gcc=$(sed -n 's|^exec \([^ ]*\)/bin/gcc .*|\1|p' "$stage0/bin/gcc")
     [ -n "$s0gcc" ] || { echo "FATAL: no gcc in $stage0/bin/gcc" >&2; exit 1; }
+    # fail closed: illumos grep has no -a (exit 2), and `! grep -a` then passed (WAVE7-NOTES audit 2; publish-gate.sh's probe)
+    printf 'a\000b\n' | grep -a -b -o -F b > /dev/null 2>&1 || { echo "FATAL: $(command -v grep) is not GNU grep (-a)" >&2; exit 1; }
     for h in "$(basename "$s0gcc" | cut -c1-32)" "$(basename "$s0lib" | cut -c1-32)"; do
       grep -rlaF "$h" "$out" "$lib" 2>/dev/null | while read -r f; do chmod u+w "$f"; LC_ALL=C sed -i "s/$h/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee/g" "$f"; done
       ! grep -rlaF "$h" "$out" "$lib" >/dev/null 2>&1 || { echo "FATAL: $out/$lib still names stage0 ($h)" >&2; exit 1; }
@@ -216,9 +241,9 @@ let
     # still unique per compiler drv (what PCH needs), the same on every host and under --check.
     for f in "$out"/libexec/gcc/*/*/cc1 "$out"/libexec/gcc/*/*/cc1plus; do
       [ -f "$f" ] || continue
-      sym=$(/usr/bin/nm -x "$f" | awk -F'|' '{gsub(/ /, "", $NF)} $NF == "executable_checksum" {print $2, $3, $7}')
+      sym=$("$world/usr/bin/nm" -x "$f" | awk -F'|' '{gsub(/ /, "", $NF)} $NF == "executable_checksum" {print $2, $3, $7}')
       set -- $sym; [ "$(($2))" = 16 ] || { echo "FATAL: $f executable_checksum: [$sym]" >&2; exit 1; }
-      read -r sn sa so < <(/usr/bin/elfdump -c "$f" | awk -v i="$(($3))" '$1 == "Section" {x = ($2 == "Header[" i "]:"); n = $4} x && /sh_addr:/ {a = $2} x && /sh_offset:/ {print n, a, $2; exit}')
+      read -r sn sa so < <(elfdump -c "$f" | awk -v i="$(($3))" '$1 == "Section" {x = ($2 == "Header[" i "]:"); n = $4} x && /sh_addr:/ {a = $2} x && /sh_offset:/ {print n, a, $2; exit}')
       [ "$sn" = .rodata ] || { echo "FATAL: $f executable_checksum in [$sn], expected .rodata" >&2; exit 1; }
       h=$(printf '%s' "gcc-$version-$buildKey" | digest -a md5)
       # the 16 bytes as printf octal escapes, built with awk's %c 92 (a backslash written in this Nix string reached sed as plain x)
@@ -234,14 +259,14 @@ let
     # gate let bin/gcc's host libkstat through.
     bad=$(find "$out" -type f | while read -r f; do
       [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] || continue
-      /usr/bin/elfdump -d "$f" 2>/dev/null | grep -q NEEDED || continue
-      /usr/bin/ldd "$f" 2>&1 | awk -v f="$f" '/not found/ || (/=>/ && $NF !~ /^\/nix\/store\//) {print f": "$0}'
+      elfdump -d "$f" 2>/dev/null | grep -q NEEDED || continue
+      ldd "$f" 2>&1 | awk -v f="$f" '/not found/ || (/=>/ && $NF !~ /^\/nix\/store\//) {print f": "$0}'
     done)
     [ -z "$bad" ] || { echo "FATAL: $out shared libs leave the store:" >&2; echo "$bad" >&2; exit 1; }
     # Gate: the runtime libs resolve inside /nix/store with no LD_LIBRARY_PATH.
     unset LD_LIBRARY_PATH LD_LIBRARY_PATH_64 LD_LIBRARY_PATH_32 || true
     bad=$(for f in "$lib"/lib/libstdc++.so.6 "$lib"/lib/libgcc_s.so.1 "$lib"/lib/amd64/libstdc++.so.6 "$lib"/lib/amd64/libgcc_s.so.1; do
-      /usr/bin/ldd "$f" 2>&1 | awk -v f="$f" '/not found/ || (/=>/ && $NF !~ /^\/nix\/store\//) {print f": "$0}'
+      ldd "$f" 2>&1 | awk -v f="$f" '/not found/ || (/=>/ && $NF !~ /^\/nix\/store\//) {print f": "$0}'
     done)
     [ -z "$bad" ] || { echo "FATAL: runtime libs leave the store:" >&2; echo "$bad" >&2; exit 1; }
     # Gate: libstdc++ must read the per-thread errno (___errno), never the global
@@ -256,4 +281,5 @@ let
   '' ];
 };
 # buildKey: 1:1 with the drv, the same on every host and under --check (mk-src-pkg.nix explains why).
-in derivation (drvAttrs // { buildKey = builtins.substring 0 16 (builtins.hashString "sha256" (builtins.toJSON drvAttrs)); })
+# `ld` rides along (not a drv attr): the system instance links with the same ld this gcc was configured with (default.nix).
+in derivation (drvAttrs // { buildKey = builtins.substring 0 16 (builtins.hashString "sha256" (builtins.toJSON drvAttrs)); }) // { inherit ld; }

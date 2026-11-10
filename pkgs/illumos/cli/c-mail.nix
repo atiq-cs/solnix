@@ -53,19 +53,26 @@ rec {
     deps = [ world ncurses openssl zlib bdwgc ];
     nativeTools = [ perl ] ++ hostTools;   # store-only PATH + config.site; perl: w3mman and the cgi scripts get a #! to the store perl (OI: /usr/bin/perl, solnix: none)
     build = ''
+      # NKF: configure.ac AC_PATH_PROGS(NKF, nkf, /usr/local/bin/nkf): the Japanese-text filter the multipart cgi runs, defaulting to a
+      # host path when no nkf is found. No nkf here (nor in nixpkgs' w3m inputs): the bare name, found on the user's PATH if installed.
+      # Through the cache variable: AC_PATH_PROGS keeps a preset NKF only when it is absolute, so NKF=nkf searched PATH, found none and
+      # fell back to /usr/local/bin/nkf (configure:4893-4932; host-path-scan caught it, wave6u). The comment sits above the command:
+      # between 'CFLAGS=.. \' and configure, it ended the command, so configure ran without CFLAGS.
       CFLAGS="-O2 -D__EXTENSIONS__ -std=gnu17 -Wno-error=incompatible-pointer-types -Wno-error=implicit-function-declaration" \
-      ./configure --prefix="$out" --with-ssl=${openssl} --with-gc=${bdwgc} --with-termlib=ncursesw \
+      ac_cv_path_NKF=nkf ./configure --prefix="$out" --with-ssl=${openssl} --with-gc=${bdwgc} --with-termlib=ncursesw \
         --enable-image=no --without-x --disable-w3mmailer --disable-nls
       gmake -j8; gmake install
       ${chk ''"$out/bin/w3m" -version'' "^w3m version"}
       printf '<html><body><p>hlcli-w3m</p></body></html>\n' > t.html
       export HOME=$W/home; mkdir -p "$HOME"   # w3m -dump writes ~/.w3m (no sandbox: /homeless-shelter)
       ${chk ''"$out/bin/w3m" -dump t.html'' "hlcli-w3m"}
+      grep -qx 'NKF		= nkf' scripts/multipart/Makefile || { echo "FATAL: w3m NKF is not the bare name" >&2; exit 1; }
     '';
   };
 
   isync = mkSrcPkg {
     pname = "isync"; version = "1.5.1";
+    hostPathAllow = "/opt/cov-analysis-[*]/bin/cov-build";   # Makefile.am's Coverity target (maintainer only, never run)
     src = { url = "https://downloads.sourceforge.net/project/isync/isync/1.5.1/isync-1.5.1.tar.gz";
             sha256 = "28cc90288036aa5b6f5307bfc7178a397799003b96f7fd6e4bd2478265bb22fa"; };
     deps = [ world openssl zlib ];
@@ -98,6 +105,9 @@ rec {
       # (chef: root-owned, 2026-10-31 01:28 = the wave3 build; as nixbld: 'cannot remove /etc/neomuttrc'). nixpkgs: the same split.
       gmake -j8; gmake install sysconfdir="$out/etc"
       [ -f "$out/etc/neomuttrc" ] || { echo "FATAL: neomuttrc not installed under \$out/etc" >&2; exit 1; }
+      # smime_keys is "#! /usr/bin/perl -w" (host perl; out-host-refs). The user's perl via env, -w as "use warnings".
+      sed -i '1s|^#! */usr/bin/perl -w$|#!/usr/bin/env perl\nuse warnings;|' "$out/libexec/neomutt/smime_keys"
+      head -2 "$out/libexec/neomutt/smime_keys" | grep -q '^use warnings;$' || { echo "FATAL: smime_keys #! not rewritten" >&2; exit 1; }
       ${chk ''"$out/bin/neomutt" -v </dev/null'' "^NeoMutt 20250510"}
       /usr/bin/elfdump -d "$out/bin/neomutt" | grep -q 'NEEDED.*libssl' || { echo "FATAL: neomutt without openssl" >&2; exit 1; }
     '';

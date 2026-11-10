@@ -69,9 +69,9 @@
   # no build at all. protoUrl is the banked proto tarball, protoTarHash its flat
   # sha256, protoHash the NAR hash of the unpacked tree (fetch-tarball.nix, the
   # nixpkgs fetchzip shape).
-, protoUrl ? "https://s3.solnix.io/solnix-cache/proto/x86_64-gate-ac45d71fc2-20260914/proto-root_i386-gate-ac45d71fc2.tar.gz"
-, protoTarHash ? "2abbfda8ebcfd755dfad0b8065499f1b11a7957497a49c05679ce03af6da7325"
-, protoHash ? "0f0jr9xlrc1a0xkpn4fqc4xsl9l2fhqmpxkwyl7pqf6yfvr3zn8x"
+, protoUrl ? "https://s3.solnix.io/solnix-cache/proto/x86_64-gate-ac45d71fc2-e1-20261102/proto-root_i386-gate-ac45d71fc2-e1.tar.gz"   # E1 (wave5): -xstrip DOF, no .nightly-log; URL proposed to infra, not yet served (the URL is not in any out path)
+, protoTarHash ? "94d80c9aee36b6ba53dce33edb5a0a8e5b4eab147c857714c454672eafef284e"
+, protoHash ? "0gcgvdz97zraxdg3gl0vkbrdcrisx401dbckvkqwwqrgrxw9k8hp"
 , onbld ? "/opt/onbld"
 , gcc ? "/usr/gcc/10"     # primary compiler (the gate's own default at this rev)
 , javac ? "/usr/java/bin/javac"
@@ -261,6 +261,12 @@ derivation ({
     # describe-derived version carries --dirty state and whatever refs the local clone
     # happens to have, which is per-machine. This string lands in `uname -v`.
     printf 'export VERSION=solnix-%s\n' "$(echo "$rev" | cut -c1-12)" >> solnix.sh
+    # `dtrace -G` records the BUILD HOST's uname(2) (nodename solnix-builder-build, `uname -v`) in every USDT object's DOF
+    # (libdtrace dt_open.c uname(&dt_uts); dt_dof.c adds DOF_SECT_UTSNAME + DOF_SECT_COMMENTS unless DTRACE_D_STRIP), and libc,
+    # libzpool, mountd, nfsmapid, isnsd, libfksmbsrv ship it. solnix.io policy: no build-host facts in a NAR (exception E1).
+    # -xstrip drops only those two unloadable sections; probes register and fire the same (measured, pii1 dofx.sh on chef).
+    sed -i 's@^DTRACE=\([[:space:]]*\)/usr/sbin/dtrace -xnolibs$@DTRACE=\1/usr/sbin/dtrace -xnolibs -xstrip@' usr/src/Makefile.master
+    grep -q '^DTRACE=.*/usr/sbin/dtrace -xnolibs -xstrip$' usr/src/Makefile.master || { echo "FATAL: DTRACE -xstrip not applied" >&2; exit 1; }
     # No `git clean`: the store src is pristine by construction (that is what
     # pinning it buys), so the interrupted-run reset the imperative script needs
     # is moot here.
@@ -320,12 +326,9 @@ derivation ({
     # and no fixup: this is illumos ELF and Linux ELF fixup would corrupt it.
     cp -a "$PROTO/." "$out/"
 
+    # the nightly log records `uname -a`, the build host's name and /root dot-files: kept in the build log, never in $out.
     if [ -n "$keepLog" ] && [ -d "$GATE/log" ]; then
-      mkdir -p "$out/.nightly-log"
-      # log/latest is a symlink into log/<date>; -L copies the real contents.
-      cp -aL "$GATE/log/latest/." "$out/.nightly-log/" 2>/dev/null || true
-      # the build's own mail spool is pure noise and embeds the hostname.
-      rm -f "$out/.nightly-log/mail_msg" 2>/dev/null || true
+      cat "$GATE/log/latest/nightly.log" >&2 2>/dev/null || true
     fi
 
     echo "=== gate proto installed: $(find "$out" -type f | wc -l | tr -d ' ') files ==="

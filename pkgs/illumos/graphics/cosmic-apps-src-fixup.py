@@ -94,6 +94,11 @@ elif app == "cosmic-applets":
     # bluer (BlueZ) is compile_error! on non-Linux: the multicall binary drops the bluetooth applet.
     edit("cosmic-applets/Cargo.toml", 'cosmic-applet-bluetooth = { path = "../cosmic-applet-bluetooth" }\n', "")
     edit("cosmic-applets/src/main.rs", '        "cosmic-applet-bluetooth" => cosmic_applet_bluetooth::run(),\n', "")
+elif app == "cosmic-greeter":
+    # epoch-1.11.0 asks image for avif-native (dav1d-sys -> a system libdav1d via pkg-config); solnix has no dav1d, so
+    # the greeter's wallpaper decoder drops AVIF, as cosmic-bg and cosmic-settings already do (png/jpeg/webp/hdr/jxl stay).
+    if "    \"avif-native\",\n" in open(os.path.join(root, "Cargo.toml")).read():
+        edit("Cargo.toml", '    "avif-native",\n    "jpeg",\n', '    "jpeg",\n')
 elif app == "cosmic-panel":
     # Linux abstract-namespace socket (SocketAddrExt::from_abstract_name) for the applets'
     # privileged wayland socket. illumos has none: a 0700-dir filesystem socket in

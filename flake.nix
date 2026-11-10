@@ -274,9 +274,31 @@
         # cached and starter are store-path imports (builtins.storePath /
         # fetchClosure), not builds, and fetchClosure needs an experimental feature
         # whose absence tryEval cannot catch, so they are named and dropped first.
-        x86_64-solaris = lib.filterAttrs (_: v:
+        # plus the seed rung (lib/host-pkgs.nix seedPkgs: the buildTools = [ ] instance every x86 build stands on) under its served
+        # row pnames (<pname>-seed, illumos-userland-seed, seed-tar-alias, solnix-seed-build-tools, gcc-wrapper-seed), so the
+        # builder's drv_for (packages.<system>.<pname>) finds a seed row's derivation (wave6t: none did; the served -seed rows were
+        # rowed by out only). Never over an existing name.
+        x86_64-solaris = let p = mkPkgs { }; s = p.seedPkgs;
+            seedRows = {
+              zlib-seed = s.zlib; libxml2-seed = s.libxml2; nspr-seed = s.nspr; nss-seed = s.nss; illumos-userland-seed = s.world;
+              coreutils-seed = s.coreutils; findutils-seed = s.findutils; gnused-seed = s.gnused; gnugrep-seed = s.gnugrep;
+              gnutar-seed = s.gnutar; gzip-seed = s.gzip; gnumake-seed = s.gnumake; gnupatch-seed = s.gnupatch; xz-seed = s.xz;
+              binutils-seed = s.binutils; perl-seed = s.perl; bash-seed = s.bash; gcc-wrapper-seed = s.gccWrapper;
+              seed-tar-alias = s.seedTarAlias; solnix-seed-build-tools = s.seedBuildTools;
+              # the system world's served pname is illumos-userland (the attr is `world`): drv_for looks up the pname (wave6u, piece 2)
+              illumos-userland = p.solnix.world;
+            };
+            # served row pnames that are not top-level attrs (wave6v, W2: drv_for MISSed 28 of 172 rows), as aarch64 below:
+            # the nix chain's members (never over an existing name), hostname-f, illumos-vi; and two names whose served row
+            # is another drv than the attr was: nix = nixSrc 2.24.15 (the attr was the /nix-tools ingest, which does not
+            # evaluate purely), meson = 1.10.2 (served row; graphics' 1.4.2 moves to meson_1_4). aarch64 has both already.
+            lifted = removeAttrs p.solnix.nixChain [ "curlForNix" "nix" ];
+            # illumos-early: the early-boot slice's served pname (attr early; drv_for MISSed its W3a row, wave6w)
+            renamed = { hostname-f = p.solnix.hostname; illumos-vi = p.solnix.vi; nix = p.solnix.nixSrc; illumos-early = p.solnix.early;
+                        meson = p.solnix.meson_1_10; meson_1_4 = p.solnix.meson; };
+          in lib.filterAttrs (_: v:
           let r = builtins.tryEval (lib.isDerivation v); in r.success && r.value)
-          (removeAttrs (mkPkgs { }).solnix [ "cached" "starter" ]);
+          (lifted // seedRows // removeAttrs p.solnix [ "cached" "starter" ] // renamed);
         # the native aarch64 set (pkgs/illumos/aarch64; lib/host-pkgs.nix uses the same import), for drv_for on dixa. The
         # served aarch64 rows include the nix chain and gate pieces that live only in nested sets (srcPkgs, nixChain): they
         # are lifted to the top, never over an existing name (sqlite: one 3.50.4, which nixChain links too), plus

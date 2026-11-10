@@ -6,6 +6,8 @@
 # expat .asc (Sebastian Pipping 3176EF7D...); libarchive .asc (Martin Matuska 659C84C0...); wget .sig (Darshit Shah 7845120B...);
 # sqlite sha3-256 = sqlite.org's download page; brotli: no signature, the tag archive == a clone of tag v1.1.1; socat: no signature,
 # sha512 == Alpine's APKBUILD.
+# wave6: the sqlite and python3 anchors are wave6's own check strings (c-net 3.53.2, c-dev OpenSSL 3.4.8 + 3.53.2; main's say 3.50.4/3.4.0), else
+# the anchors throw and the aarch64 set loses sqlite, python3 and their 14 dependents (wave6w, measured: 186 -> 170 attrs).
 { tcl }:   # the fixed tcl (main 8017bf8, little-endian): sqlite's TCL test suite, build-time only
 args:
 let
@@ -52,7 +54,7 @@ in {
   # fixed tcl (build-time only: not in the out). The summary line is printed without its hostname.
   sqlite = { version = "3.54.1";
     src = src "https://www.sqlite.org/2026/sqlite-autoconf-3540100.tar.gz" "926ef8d3eab93fbf6e06011901273eec076b25594a4e1cdadd50c987f4f6d64e";
-    build = rep "sqlite" "^3\\.50\\.4" "^3\\.54\\.1" args.build + ''
+    build = rep "sqlite" "^3\\.53\\.2" "^3\\.54\\.1" args.build + ''
       mkdir -p "$W/sqt"; cd "$W/sqt"; tar xzf ${sqTree}; cd sqlite-version-3.54.1
       ./configure --build=aarch64-unknown-solaris2.11 --with-tcl=${tcl}/lib --with-tclsh=${tcl}/bin/tclsh8.6 --disable-readline >&2
       gmake sqlite3.c >&2; cmp sqlite3.c "$SRC/sqlite3.c" || { echo "FATAL: the tested sqlite3.c is not the shipped one" >&2; exit 1; }
@@ -62,7 +64,7 @@ in {
       echo "$s" | grep -Eq '^0 errors out of [0-9]{6,} tests' && [ $r = 0 ] || { tr '\r' '\n' < "$W/sqt.out" | grep -E '^(FAILED|!)' | head -20 >&2; echo "FATAL: sqlite veryquick" >&2; exit 1; }
       cd "$SRC"
     ''; };
-  python3 = { build = rep "python3" "OpenSSL 3\\.4\\.0 .* 3\\.50\\.4" "OpenSSL 3\\.4\\.8 .* 3\\.54\\.1" args.build; };   # its in-build ssl/sqlite3 check
+  python3 = { build = rep "python3" "OpenSSL 3\\.5\\.9 .* 3\\.53\\.2" "OpenSSL 3\\.4\\.8 .* 3\\.54\\.1" args.build; };   # its in-build ssl/sqlite3 check
   # 1.1.1 (CVE-2026-111497). Its ctest suite (round trips over tests/testdata, compatibility) runs here, as upstream builds it.
   brotli = { version = "1.1.1";
     src = src "https://github.com/google/brotli/archive/refs/tags/v1.1.1.tar.gz" "1a84dfaa740994d19254bf78aa7d74a4a8040d1638f3d5f2cdecb188fd520da8";

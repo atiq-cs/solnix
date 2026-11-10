@@ -1,4 +1,4 @@
-# cli/go-recipes2.nix -- the maintainer's Go tools solnix lacked (recipes2, 2026-11-02), on goPkg storeOnly (../go-pkg-build2.sh:
+# cli/go-recipes2.nix -- the maintainer's Go tools solnix lacked (recipes2, 2026-11-02), on goPkg storeOnly (../go-pkg-build.sh in wave6:
 # hostfix store tools + the world on PATH, path-gated), so a solnix host rebuilds them. Versions are the build queue's targets.
 # No upstream signatures on GitHub tag tarballs: each source is pinned by its sha256 (and the vendor dir by its NAR hash).
 # Statically linked (CGO=0), as ./go-tools.nix.

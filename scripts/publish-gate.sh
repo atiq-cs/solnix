@@ -6,6 +6,7 @@
 # compute.internal, GATE_HOST_STRINGS); the declared references cover every store path the
 # NAR names, counting only names inside the deriver's input closure (a store-path
 # string outside it, such as nix's --help examples, is text, not a dependency).
+# every file in bin/ and sbin/ must be executable.
 # Prints PASS/FAIL per path; exit 1 if any FAIL. --selftest proves the reference rule.
 # GATE_DOF_EXEMPT=0 drops the DOF-utsname exemption below (infra protocol v2 exception E1); the aarch64 set needs none.
 # Plus the out checks over the NAR stream (scripts/gate-checks.py nar, the bytes that get published): B6 every symlink
@@ -31,6 +32,13 @@ printf 'a\000b\n' | grep -a -b -o -F b > /dev/null 2>&1 || {
   echo "publish-gate: $(command -v grep) is not GNU grep (needs -a -b -o); set GATE_GREP_DIR to a gnugrep bin" >&2; exit 2; }
 # (before --selftest too: its word-rule check needs GNU grep -w, and illumos /usr/bin/grep has none; a64s on dixa)
 
+# The host-name scan below is meaningless when the nodename is the distro's own name: every illumos ELF's .comment carries
+# "@(#)illumos solnix-<rev>" (uname -v) and gcc's "GCC: (solnix 15.3.0)", so a fresh AMI host (nodename "solnix") FAILed
+# every out on bytes that are no host leak (cosmic5, 11-08). Refuse instead, so the scan stays strict.
+# shortcut: a fixed list plus the words of uname -v; add a name here if another image boots with a distro nodename.
+distro_nodename() { case "$1" in solnix|openindiana|illumos|omnios|sunos|localhost|unknown) return 0;; esac
+  for w in $(uname -v | tr -c 'A-Za-z0-9\n' ' '); do [ "$w" = "$1" ] && return 0; done; return 1; }
+
 # --selftest: prove the undeclared-reference rule bites without the store. A path
 # NAMED in the NAR is a violation iff it is in the deriver's input closure and not
 # declared; help-text strings (outside the inputs) and declared refs are not.
@@ -43,9 +51,15 @@ if [ "${1:-}" = "--selftest" ]; then
   r3=$(chk /nix/store/cccccccccccccccccccccccccccccccc "$R" "$I")
   # the host-string scan counts the name as a WORD: inside "obraichean" (gd.po) it is not the host, in "/ROOT/braich/" it is
   w1=$(printf 'obraichean\n' | grep -c -w -F braich); w2=$(printf 'zfs /ROOT/braich/var\n' | grep -c -w -F braich)
-  [ -n "$r1" ] && [ -z "$r2" ] && [ -z "$r3" ] && [ "$w1" = 0 ] && [ "$w2" = 1 ] && { echo "SELFTEST PASS"; exit 0; }
-  echo "SELFTEST FAIL: [$r1] [$r2] [$r3] word [$w1] [$w2]"; exit 1
+  # a distro nodename is refused; a real host name is not
+  d1=$(distro_nodename solnix && echo y); d2=$(distro_nodename "$(uname -v | tr -c 'A-Za-z0-9\n' ' ' | awk '{print $1}')" && echo y)
+  d3=$(distro_nodename solnix-woof && echo y)
+  [ -n "$r1" ] && [ -z "$r2" ] && [ -z "$r3" ] && [ "$w1" = 0 ] && [ "$w2" = 1 ] && [ -n "$d1" ] && [ -n "$d2" ] && [ -z "$d3" ] &&
+    { echo "SELFTEST PASS"; exit 0; }
+  echo "SELFTEST FAIL: [$r1] [$r2] [$r3] word [$w1] [$w2] nodename [$d1] [$d2] [$d3]"; exit 1
 fi
+
+distro_nodename "$(uname -n)" && { echo "publish-gate: nodename '$(uname -n)' is a distro name (in uname -v / gcc's version string), so the host-name scan cannot tell a leak from the version strings: give this host a unique nodename first" >&2; exit 2; }
 
 py=${GATE_PYTHON:-$(command -v python3)}
 [ -n "$py" ] && "$py" -c 'import sys; sys.exit(sys.version_info < (3, 9))' 2>/dev/null || {
@@ -58,8 +72,12 @@ for p in "$@"; do
   case "$d" in /nix/store/*.drv) [ -e "$d" ] || why="$why deriver $d not in store;";; *) why="$why no deriver;";; esac
   case "$(basename "$p")" in *-solnix-system-*|*-etc|*-system-path|*home-manager-generation*|*home-files*) why="$why host/user-specific;";; esac
   while IFS= read -r f; do
+    case "$f" in */testdata/*) continue;; esac   # test fixtures in a toolchain's sources (go: Linux ELFs), never loaded here (wave5)
     [ "$(od -An -tx1 -N4 "$f" 2>/dev/null | tr -d ' \n')" = 7f454c46 ] || continue
     elfdump -d "$f" 2>/dev/null | grep -q NEEDED || continue
+    # a kernel module (ET_REL) NEEDs other modules by name (misc/mac, drv/i2cnex): krtld resolves them in the running
+    # kernel, never ld.so.1, so ldd and RUNPATH do not apply (iwm/iwx/touchpad, wave6 pilot); its builder gates the links
+    elfdump -e "$f" 2>/dev/null | grep -q 'e_type:[[:space:]]*ET_REL' && continue
     rp=$(elfdump -d "$f" | awk '$2=="RUNPATH"||$2=="RPATH"{print $4}')
     for e in $(echo "$rp" | tr ':' ' '); do
       case "$e" in /nix/store/*|'$ORIGIN'*) ;; *) why="$why $f RUNPATH $e;";; esac
@@ -67,6 +85,9 @@ for p in "$@"; do
     bad=$(ldd "$f" 2>&1 | awk '/not found/ || (/=>/ && $NF !~ /^\/nix\/store\//)' | head -2 | tr '\n' ' ')
     [ -n "$bad" ] && why="$why $f ldd: $bad;"
   done < <(find "$p" -type f)
+  # every regular file in bin/ and sbin/ is executable (libtool 2.5.4 shipped bin/libtool 0444 and passed everything else)
+  nx=$(find "$p/bin" "$p/sbin" -type f ! -perm -u+x 2>/dev/null | head -3 | tr '\n' ' ')
+  [ -n "$nx" ] && why="$why not executable: $nx;"
   # the build host's own identity must not be in a published NAR (perl's Configure recorded myhostname/mydomain:
   # wave3 2026-10-30). Strings: this host's name and DNS domain, and the EC2 internal domain; GATE_HOST_STRINGS adds more.
   hs="$(uname -n) $(sed -n 's/^domain[[:space:]]*//p; s/^search[[:space:]]*//p' /etc/resolv.conf 2>/dev/null) compute.internal ${GATE_HOST_STRINGS:-}"

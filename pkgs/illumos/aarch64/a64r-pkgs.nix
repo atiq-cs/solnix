@@ -25,7 +25,9 @@ let
   glibsD = import ../graphics/libs.nix { inherit mkSrcPkg zlib; tools = gtoolsS; inherit (base) pkgconf; world = dbusWorld; };
   # desktop/gtk/tools.nix (meson 1.10.2 on the store python3, gperf, nasm, ninja) and gtk/base.nix (libpng, pcre2, ...), as
   # desktop/gtk/default.nix wires them (its own mkSrcPkg wrapper adds gtkTools = x86 GNU binutils; aarch64's store set has none)
-  gtkTools = import ../desktop/gtk/tools.nix { mkSrcPkg = mkCores; inherit (cli) python3 gnupatch; inherit (gtools) samurai; inherit (base) pkgconf gettext; };
+  # bash: meson's #! (wave6 96e489b: #!/usr/bin/bash is a gate B9 FAIL on any arch); the aarch64 store bash, as tools.nix's farm
+  gtkTools = import ../desktop/gtk/tools.nix { mkSrcPkg = mkCores; inherit (cli) python3 gnupatch; inherit (gtools) samurai; inherit (base) pkgconf gettext;
+    inherit (srcPkgs) bash; };
   # tools.path stays ':' (b1's libpng text interpolates it, so its row stays put); mesonBuild sets the meson PATH itself, and the farm has pkg-config
   gtkBase = import ../desktop/gtk/base.nix { mkSrcPkg = mkCores; inherit zlib; tools = gtkTools // { path = ":"; }; inherit (cli) python3 cmake;
     graphics = glibs; inherit (srcPkgs) nixChain; noto-sans = cosmicData'.noto-sans; };

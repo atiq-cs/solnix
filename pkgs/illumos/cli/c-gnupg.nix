@@ -18,10 +18,12 @@ let
   # The OI build host has its own gpgrt-config/libgcrypt in /usr/bin (1.12.4, measured): configure
   # takes a *-config from PATH, so the deps' bin/ go first and GPGRT_CONFIG names the store one.
   cfgPath = deps: builtins.concatStringsSep ":" (map (d: "${d}/bin") deps);
-  lib = { pname, version, sha256, deps ? [ ], flags ? "", check }: mkSrcPkg {
+  lib = { pname, version, sha256, deps ? [ ], flags ? "", check, pre ? "" }: mkSrcPkg {
     inherit pname version deps; src = gpgSrc pname version sha256; nativeTools = tools;
+    # Makefile.am's maintainer target `stowinstall` (install prefix=/usr/local/stow/<pkg>): copied into the Makefile, never run
+    hostPathAllow = "install prefix=/usr/local/stow/";
     build = ''
-      export PATH="${cfgPath deps}''${PATH:+:$PATH}"
+      ${pre}export PATH="${cfgPath deps}''${PATH:+:$PATH}"
       ${if deps == [ ] then "" else "export GPGRT_CONFIG=${builtins.head deps}/bin/gpgrt-config"}
       # GREP/SED as bare names: configure would bake the builder's seed-tool path into the
       # installed *-config scripts, and mk-src-pkg's de-bake (`sed > f.btfix && mv`) then
@@ -34,12 +36,17 @@ let
     '';
   };
 in rec {
-  inherit bzip2-bin;   # exposed so a builder finds the gnupg family's build input by name (recipes.tsv row; output unchanged)
+  inherit bzip2-bin;   # the bzip2 CLI: a builder finds the gnupg family's build input by name (recipes.tsv row), and nixChain boost's .tar.bz2 unpack (base-src.nix nixChainTools)
   libgpg-error = lib {
     pname = "libgpg-error"; version = "1.55";
     sha256 = "95b178148863f07d45df0cea67e880a79b9ef71f5d230baddc0071128516ef78";
     flags = "--disable-nls --disable-languages";
-    check = chk ''"$out/bin/gpg-error" --version'' "^gpg-error \\(libgpg-error\\) 1\\.55";
+    # configure.ac sets INSTALLSHELLPATH=/usr/xpg4/bin/sh on solaris* (no cache variable): gpgrt-config's #! (gate B9; a64h did the same
+    # on aarch64). On illumos /bin/sh is the same ksh93. The seed instance has no gnupg family.
+    check = chk ''"$out/bin/gpg-error" --version'' "^gpg-error \\(libgpg-error\\) 1\\.55" + ''
+      chmod u+w "$out/bin/gpgrt-config"; sed -i '1s|^#!/usr/xpg4/bin/sh$|#!/bin/sh|' "$out/bin/gpgrt-config"
+      head -1 "$out/bin/gpgrt-config" | grep -qx '#!/bin/sh' || { echo "FATAL: gpgrt-config #! is not /bin/sh" >&2; exit 1; }
+    '';
   };
   npth = lib {
     pname = "npth"; version = "1.8";
@@ -67,6 +74,15 @@ in rec {
     sha256 = "cf72510b8ebb4eb6693eef765749d83677a03c79291a311040a5bfd79baab763";
     deps = [ libgpg-error ];
     flags = "--with-libgpg-error-prefix=${libgpg-error}";
+    # tests/Makefile's oidtranstbl.h rule (a header for the noinst test t-crl-parser) reads the BUILD HOST's dumpasn1.cfg from
+    # /etc/dumpasn1 /usr/local/bin /usr/local/share /usr/bin /usr/share. None of them is on chef or lixi, so the table came from
+    # /dev/null; the search list is emptied to make that the answer on every host (nothing installed reads it).
+    pre = ''
+      sed -i -e 's|for i in /etc/dumpasn1 /usr/local/bin /usr/local/share /usr/bin \\$|for i in \\|' \
+        -e 's|^\( *\)/usr/share ; do \\$|\1; do \\|' tests/Makefile.in
+      ! grep -n -e dumpasn1 tests/Makefile.in | grep -v 'dumpasn1\.cfg' | grep -q . || { echo "FATAL: libksba dumpasn1 search list not emptied" >&2; exit 1; }
+      grep -q '^ *; do \\$' tests/Makefile.in || { echo "FATAL: libksba dumpasn1 search list not emptied" >&2; exit 1; }
+    '';
     check = ''[ -f "$out/lib/amd64/libksba.so.8" ] || { echo "FATAL: no libksba.so.8" >&2; exit 1; }'';
   };
 
@@ -76,6 +92,8 @@ in rec {
     pname = "gnupg"; version = "2.4.8";
     src = gpgSrc "gnupg" "2.4.8" "b58c80d79b04d3243ff49c1c3fc6b5f83138eb3784689563bcdd060595318616";
     deps = [ world zlib readline ncurses libgpg-error libgcrypt libassuan libksba npth ]; nativeTools = tools;
+    # Makefile.am:207's maintainer target `stowinstall` (install prefix=/usr/local/stow/gnupg), as the libraries': never run, nothing ships it
+    hostPathAllow = "^[0-9]+:[[:space:]]+[$][(]MAKE[)] [$][(]AM_MAKEFLAGS[)] install prefix=/usr/local/stow/gnupg$";
     build = ''
       export PATH="${cfgPath [ libgpg-error libgcrypt libassuan libksba npth ]}:$PATH"
       export GPGRT_CONFIG=${libgpg-error}/bin/gpgrt-config

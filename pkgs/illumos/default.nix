@@ -42,6 +42,16 @@
   # A solnix system (dixi, EC2) injects the store set so it can build with no
   # /usr/gnu, no host sha256sum/gstrip/gzip. See docs/pending/builders-need-store-tools.md.
   buildTools ? [ ],
+  # seedTools: world-FREE store tools for the recipes the world itself depends on (nss: libldap/kmf_nss link it), from the seed instance
+  # (lib/host-pkgs.nix seedPkgs: perl coreutils findutils + the seed world). [] (the bhost/seed path) keeps the old PATH.
+  seedTools ? [ ],
+  # stdenvGcc: "15" (default) = every from-source package builds with gcc15, which the "14" instance (the gcc 14 chain:
+  # gcc-src.nix from the IPS seed, its wrapper, binutils, the seed tools) builds as its own gcc15 (NixOS stage chain:
+  # stage N's compiler comes from stage N-1). "14" is that boot instance; nothing else should pass it.
+  stdenvGcc ? "15",
+  # gcc15From: the stdenv gcc15 from the caller's stage chain (lib/host-pkgs.nix passes the seed instance's: stdenvGcc = "14",
+  # buildTools = [ ]). null = the same, imported here (flake.nix's worldOverlay, a bare import), so every instance has one gcc15.
+  gcc15From ? null,
 }:
 
 let
@@ -52,7 +62,11 @@ let
   # buildEnv — the symlink-farm merge, factored out of `systemPath` (below) into
   # lib/build-env.nix so the declarative userland (modules/config/system-path.nix)
   # composes its profile the same way. systemPath now CALLS it (design §B).
-  buildEnv = import ../../lib/build-env.nix { };
+  buildEnv0 = import ../../lib/build-env.nix { };
+  # store-only buildEnv (wave6): the seed farm (seedBuildTools') stays on buildEnv0, a bootstrap-set member; every other farm
+  # in an instance with store build tools merges with store coreutils + findutils. The seed instance keeps the old PATH.
+  buildEnv = args: buildEnv0 (args // (if buildTools == [ ] then { } else {
+    storeTools = "${srcPkgs.coreutils}/bin:${srcPkgs.findutils}/bin"; pathGate = ./path-gate.sh; }));
 
   mkIllumosComponent = args: import ./mk-illumos-component.nix ({ gate = gate'; } // args);
 
@@ -174,7 +188,7 @@ let
   # cross-dep test; grow-in-place verified OK on this bigger binary).
   # usr/bin/ld reaches lib/amd64 via $ORIGIN/../../lib/amd64 (originParts);
   # libldstab in usr/lib/amd64 is reached via $out/usr/lib/amd64 (selfLibDirs).
-  ld = mkIllumosComponent {
+  ldGate = mkIllumosComponent {
     name = "ld";
     files = [
       "usr/bin/ld"
@@ -187,6 +201,24 @@ let
     selfLibDirs = [ "usr/lib/amd64" ]; # libldstab isn't reachable via $ORIGIN
     depRunpaths = libcLibDirs;         # libelf + libc from the libc slice
   };
+  # The link-editor every from-source build uses: the gate's, with libld.so.4 from ./libld.nix (scripts/patches/0011: output
+  # relocations sorted on the output symbol index, not on the heap address of ld's symbol descriptors, so a link is the same on
+  # every host). The seed instance (buildTools = [ ]) keeps the gate's ld for its gcc 14 and seed rows, which build only on an
+  # OI host and are served; it builds ldNew, and its gcc15 is the first compiler on it (NixOS: stage N's tools are stage N-1's
+  # outputs). The system instance takes that same ld from its gcc15 (gcc15-src.nix passes `ld` through), so there is one.
+  libld0011 = import ./libld.nix {
+    src = kernelNd.src; gate = gate'; gcc = gcc14; inherit (srcPkgs) binutils; ldStock = ldGate; inherit libc world;
+    patch = ../../scripts/patches/0011-libld-reloc-sort-symndx.patch;
+    tools = builtins.concatStringsSep ":" (map (p: "${p}/bin") [ seedBuildTools srcPkgs.coreutils srcPkgs.findutils cliBase.gnupatch cliBase.perl ]);
+  };
+  ldNew = mkIllumosComponent {
+    name = "ld";
+    files = [ "usr/bin/ld" "usr/bin/amd64/ld" "lib/amd64/liblddbg.so.4" "lib/amd64/libumem.so.1" "usr/lib/amd64/libldstab.so.1" ];
+    extraFiles = [ { src = "${libld0011}/lib/amd64/libld.so.4"; dst = "lib/amd64/libld.so.4"; } ];
+    selfLibDirs = [ "usr/lib/amd64" ];
+    depRunpaths = libcLibDirs;
+  };
+  ld = if buildTools == [ ] then ldGate else stdGcc15.ld;
 
   # sys — the kernel. i86pc platform unix + amd64 genunix + the amd64 kernel
   # module tree. Kernel objects are NOT userland ELF (no SONAME/NEEDED/RUNPATH),
@@ -231,14 +263,13 @@ let
   # keeps base-tools single-ABI so one RUNPATH string fits every ELF's .dynstr
   # (see the ksh93 note below). ksh93 (the only 64-bit tool) is DROPPED: its
   # 64-bit closure would push the shared RUNPATH past the .dynstr grow limit
-  # (design risk #1). sbin/sh is the shell for method scripts.
+  # (design risk #1). No sbin/sh here: the proto's sbin/sh is a link to that ksh93, so it dangled in base-tools (gate B6, wave6w).
   baseToolBins = [
     "usr/bin/svcs"
     "usr/sbin/svcadm"
     "lib/svc/bin/svc.startd"
     "lib/svc/bin/svc.configd"
     "sbin/init"
-    "sbin/sh"
     "usr/bin/ls"
     "usr/bin/cp"
     "usr/bin/mv"
@@ -368,14 +399,21 @@ let
   # gcc built FROM SOURCE (./gcc-src.nix): the NixOS bootstrap step. The host's
   # IPS gcc-14 is only the stage0 seed that compiles it; gcc.lib (libstdc++,
   # libgcc_s) is the C++/unwind runtime every shipped C++ binary links.
-  gcc = import ./gcc-src.nix { gate = gate'; libcSlice = libc; inherit ld; inherit (srcPkgs) libcExtra; };
-  # GCC 15.3.0 + the illumos patch series (./gcc15-src.nix), a SECOND compiler: nothing builds with it yet (gcc1).
-  gcc15 = import ./gcc15-src.nix { gate = gate'; libcSlice = libc; inherit ld; inherit (srcPkgs) libcExtra binutils;
+  gcc14 = import ./gcc-src.nix { gate = gate'; libcSlice = libc; inherit ld; inherit (srcPkgs) libcExtra; };
+  # the stdenv compiler (wave6 W0): gcc15 built by the gcc 14 instance, so gcc15's own inputs (stage0 = the gcc 14 wrapper,
+  # binutils, perl, coreutils...) are the gcc 14 builds and nothing here depends on itself.
+  stdGcc15 = if gcc15From != null then gcc15From
+    else (import ./. { gate = gate'; inherit gateArgs; stdenvGcc = "14"; }).gcc15;
+  gcc = if stdenvGcc == "14" then gcc14 else stdGcc15;
+  # GCC 15.3.0 + the illumos patch series (./gcc15-src.nix, gcc1 fd815b3 as is), built in the gcc 14 instance.
+  gcc15 = if stdenvGcc != "14" then stdGcc15 else import ./gcc15-src.nix { gate = gate'; libcSlice = libc; inherit world; inherit (srcPkgs) libcExtra binutils bash;
+    ld = ldNew;   # the first compiler on the 0011 ld (the seed's gcc 14 and seed rows keep the gate's)
     stage0 = srcPkgs.gccWrapper;   # the gcc 14 stdenv compiler builds the next one (NixOS stage chain)
     # store-only PATH; perl: libssp/libatomic make_sunver.pl. cliBase, not cli: no go/cargo in gcc15's closure.
     tools = builtins.concatStringsSep ":" (map (p: "${p}/bin") [ seedBuildTools srcPkgs.coreutils srcPkgs.findutils cliBase.gnupatch cliBase.perl ]); };
   # its wrapper: srcPkgs.gccWrapper's recipe (gas via -B, -R to the runtime) on gcc15.
-  gcc15Wrapper = derivation (srcPkgs.gccWrapper.drvAttrs // { name = "gcc-wrapper-15.3.0"; gcc = gcc15; gccLib = gcc15.lib; });
+  gcc15Wrapper = if stdenvGcc != "14" then srcPkgs.gccWrapper
+    else derivation (srcPkgs.gccWrapper.drvAttrs // { name = "gcc-wrapper-15.3.0"; gcc = gcc15; gccLib = gcc15.lib; });
 
   # Rust FROM SOURCE (./rust-src.nix), the N-1 chain of docs/rust-illumos-bootstrap.md.
   # stage0 is the OI 1.97.1 seed tree, fetched by its NarHash from the cache (the
@@ -388,17 +426,38 @@ let
   };
   mkRust = args: import ./rust-src.nix ({
     inherit gcc libc world; gate = gate'; inherit (srcPkgs) openssl zlib;
+    tools = hostfixTools; inherit (cliBase) python3;
   } // args);
   rust198 = mkRust { version = "1.98.0"; stage0 = rustSeedStage; seedStage0 = true;
     sha256 = "271fa73d8174f53d713c46a8310da7bf7cfdcfb8b7cfd1c2b74b84a83ae9fb1e"; };
-  rust199 = mkRust { version = "1.99.0"; stage0 = rust198;
+  # The chain: upstream's 1.98.0 binary stage0 (rustBin198) -> 1.99.0 -> 1.99.1, as nixpkgs (rustc from rustc-bootstrap, never from a
+  # source-built previous stage). rust1990 is build-only: nothing ships it. 1.99.1: infra's dixi trial (sha256 = static.rust-lang.org's).
+  rust1990 = mkRust { version = "1.99.0"; binStage0 = rustBin198;
     sha256 = "cc41916a8c84f5d9ec4f55561b44e39f43b647b133f8a6f51be9ea13c83f7036"; };
+  # upstream's 1.98.0 stage0 for x86_64-unknown-illumos (static.rust-lang.org dist 2026-08-20), as nixpkgs' rustc-bootstrap: fixed-output
+  # inputs, judged by their hash. rust1990 builds from it. The source-built rust198 (stage0 = the OI 1.97.1 seed) DIFFERS under --check
+  # 4/4 (wave5 2, wave6w 2), so it is no longer a rung of the chain (kept as an attr: the served rows name it); 1.99.0 from this binary
+  # stage0 is --check SAME (wave6w, chef 2026-11-05).
+  rustBin198 = let f = c: sha256: import <nix/fetchurl.nix> { url = "https://static.rust-lang.org/dist/${c}-1.98.0-x86_64-unknown-illumos.tar.xz"; inherit sha256; }; in {
+    rustc = f "rustc" "ea27c7d6a1b5fdef87e5839628fb598b5391397394f909481807a9864b2a1251";
+    std = f "rust-std" "78c631b51555e5e7e6300058c31da1940707c6e55f482a4e21ce2dfa41181b3a";
+    cargo = f "cargo" "d43d67e33057c16c6aa9ac884c36676aa9d6bbbe2afa6344889f55518dce9d3e";
+  };
+  rust199 = mkRust { version = "1.99.1"; stage0 = rust1990;
+    sha256 = "6451598a99e77f07571960f6b21d577399d3a30f33e80cbd2e3a4aae6535d265"; };
 
   # From-source packages the gate does not provide (./base-src.nix). zlib and
   # libxml2 replace the host-copied externalLibs; world is built on top of them.
-  srcPkgs = import ./base-src.nix { gate = gate'; libcSlice = libc; inherit world gcc buildTools; perl = if buildTools == [ ] then null else cliBase.perl; };
+  srcPkgs = import ./base-src.nix { gate = gate'; libcSlice = libc; inherit world gcc buildTools seedTools; perl = if buildTools == [ ] then null else cliBase.perl;
+    nixChainTools = if buildTools == [ ] then { } else { inherit (cliBase) cmake; bzip2Bin = cliBase.bzip2-bin; sqliteShared = cliBase.sqlite;
+      nixBuildTools = with cliBase; [ autoconf automake libtool autoconf-archive gnum4 bison flex gnupatch srcPkgs.pkgconf ]; }; };
   # The Wayland + Mesa userland (./graphics), built like srcPkgs.
-  graphics = import ./graphics { inherit (srcPkgs) mkSrcPkg pkgconf zlib; inherit world; };
+  graphics = import ./graphics { inherit (srcPkgs) mkSrcPkg pkgconf zlib hostTools; inherit world; inherit (cliBase) perl;
+    python3 = if buildTools == [ ] then null else cliBase.python3; gnupatch = if buildTools == [ ] then null else cliBase.gnupatch;   # perl: libffi's make_sunver.pl
+    bison = if buildTools == [ ] then null else cliBase.bison;   # libxkbcommon's meson YACC (store bison on a solnix host; /usr/bin/bison on the OI bhost)
+    flex = if buildTools == [ ] then null else cliBase.flex;   # mesa's meson needs flex (lexer, meson.build:1955); store flex on a solnix host, /usr/bin/flex on the OI bhost
+    gnum4 = if buildTools == [ ] then null else cliBase.gnum4;   # flex invokes m4 -P (GNU); the world's illumos m4 rejects -P. store gnum4 on a solnix host
+    bash = if buildTools == [ ] then null else srcPkgs.bash; cmake = if buildTools == [ ] then null else cliBase.cmake; };   # meson's #!, glslang
   # The maintainer's headless CLI set (werk/meh home.packages), from source (./cli).
   # Generic Rust packages on rust199 (./cargo.nix: vendorOf FOD + cargoPkg).
   cargo = import ./cargo.nix {
@@ -409,13 +468,15 @@ let
   # solnix host (no /usr/gnu, no python3, no patch) rebuilds them. cliBase = the cli set without go/cargo (no cycle).
   cliBase = import ./cli { base = srcPkgs; inherit world graphics; goChain = null; cargoPkg = null; };
   hostfixTools = buildEnv { name = "solnix-hostfix-tools"; pathsToLink = [ "/bin" ];
-    paths = [ seedBuildTools srcPkgs.coreutils srcPkgs.findutils cliBase.gnupatch cliBase.cmake srcPkgs.pkgconf ]; };   # pkgconf: -sys crates' pkg-config
+    # bash: rust's `x install` runs install.sh as bare "bash" from PATH (P0 run n: rust-1.98 failed there); NixOS's PATH always has it
+    paths = [ seedBuildTools srcPkgs.coreutils srcPkgs.findutils cliBase.gnupatch cliBase.cmake srcPkgs.pkgconf srcPkgs.bash ]; };   # pkgconf: -sys crates' pkg-config
   # Go from source: go1.4 (C) -> 1.17 -> 1.20 -> 1.22 -> 1.24 -> 1.26 (./go.nix).
-  goChain = import ./go.nix { inherit gcc world; gate = gate'; gccLib = gcc.lib; inherit (srcPkgs.nixChain) cacert; tools = hostfixTools; inherit (srcPkgs) bash; };
+  goChain = import ./go.nix { inherit gcc world; gate = gate'; gccLib = gcc.lib; inherit (srcPkgs.nixChain) cacert;
+    tools = hostfixTools; inherit (cliBase) python3; };
   # gtkMeson: desktop/gtk's store meson/samurai/nasm (+ freetype, noto-sans) for cli/c-recipes4.nix's meson recipes (gtk takes cli's
   # python3/cmake/gnupatch, which are outside c-recipes4, so there is no cycle)
   cli = import ./cli { base = srcPkgs; inherit world graphics goChain; inherit (cargo) cargoPkg;
-    gtkMeson = { inherit (gtk) nasm freetype fontconfig gtkTools; ftPriv = [ srcPkgs.zlib gtk.libpng srcPkgs.nixChain.brotli srcPkgs.nixChain.bzip2 ]; meson = gtk.meson_1_10; samurai = graphics.samurai; inherit (cosmic) noto-sans; }; };
+    gtkMeson = { inherit (gtk) nasm freetype fontconfig gtkTools; ftPriv = [ srcPkgs.zlib gtk.libpng srcPkgs.nixChain.brotli srcPkgs.nixChain.bzip2 ]; meson = gtk.meson_1_10; samurai = graphics.samurai; inherit (cosmicData) noto-sans; }; };
   # libtorrent-rasterbar + solnix-torrent, the community seeder's BitTorrent client (./solnix-torrent.nix).
   torrent = import ./solnix-torrent.nix {
     inherit (srcPkgs) mkSrcPkg openssl pkgconf gccWrapper binutils; inherit (srcPkgs.nixChain) boost; inherit (cli) cmake;
@@ -425,13 +486,12 @@ let
   desktop = import ./desktop { inherit (cargo) cargoPkg; inherit graphics; inherit (cli) fd file;
     inherit (srcPkgs) mkSrcPkg bash coreutils gnugrep gnused hostname jq hostTools; inherit hostfixTools world; inherit (cliBase) python3; };
   # The GTK 3 / Wayland stack for Firefox (./desktop/gtk): its own dir, so neither COSMIC nor desktop/ outs move.
-  gtk = import ./desktop/gtk { base = srcPkgs; inherit graphics cli; inherit (cosmic) noto-sans; inherit (cargo) cargoPkg; rust = rust199; inherit world; };
+  gtk = import ./desktop/gtk { base = srcPkgs; inherit graphics cli; inherit (cosmicData) noto-sans; inherit (cargo) cargoPkg; rust = rust199; inherit world; };
   # LLVM 23.1.4 from source, split as nixpkgs' llvmPackages: llvm, clang, lld, lldb, clang-wrapper (./llvm).
   llvmPackages = import ./llvm { inherit (srcPkgs) mkSrcPkg hostTools; inherit (cli) cmake python3 gnupatch; inherit (gtk) ninja;
     inherit world gcc ld libc; gate = gate'; };
-  # COSMIC's fonts and icon themes on store tools only (./desktop/cosmic-data.nix). Not graphics/cosmic-data.nix, which
-  # still evaluates there (unused) because graphics/ is every COSMIC app's fixups = ./. input: editing it moves all 21.
-  # shortcut: graphics/cosmic-data.nix is dead text kept for that hash; delete it in the next wave that rebuilds COSMIC.
+  # COSMIC's fonts and icon themes on store tools only (./desktop/cosmic-data.nix). The host-PATH graphics/cosmic-data.nix is
+  # deleted (wave6 rebuilds COSMIC: its fixups = ./. input moves anyway); gtk took its noto-sans 5d35mbxi from there.
   cosmicData = import ./desktop/cosmic-data.nix { fetchurl = import <nix/fetchurl.nix>; tools = hostfixTools; inherit world;
     inherit (cliBase) python3;
     src = repo: sha256: import <nix/fetchurl.nix> {   # = graphics/cosmic.nix's src (same FOD)
@@ -440,6 +500,8 @@ let
   cosmic = import ./graphics/cosmic.nix {
     rust = rust199; inherit gcc libc world; gate = gate'; gccLib = gcc.lib;
     inherit (srcPkgs.nixChain) cacert; inherit graphics; inherit (srcPkgs) openssl;
+    tools = hostfixTools; inherit (cliBase) python3;   # store tools (no OI host): unpack via Nix, python3/grep/timeout from the store
+    libclang = if buildTools == [ ] then null else llvmPackages.clang;   # cosmic-greeter's bindgen; null: /usr/clang/21 on the OI bhost
   };
 
   # ---------------------------------------------------------------------------
@@ -496,7 +558,12 @@ let
     '' ];
   };
 
-  seedBuildTools = buildEnv {
+  # In an instance given buildTools (the system instance: lib/host-pkgs.nix passes the seed instance's seedBuildTools), the
+  # seed farm IS that one: hostfixTools and gcc15's tools must not build a second seed chain here (with this instance's gcc
+  # it would be a different, host-PATH copy). Only the seed instance (buildTools = [ ]) builds it. NixOS: stage N's build
+  # tools are stage N-1's outputs.
+  seedBuildTools = if buildTools != [ ] then builtins.head buildTools else seedBuildTools';
+  seedBuildTools' = buildEnv0 {
     name = "solnix-seed-build-tools";
     paths = [
       seedSrcPkgs.gnumake    # make, gmake
@@ -515,10 +582,13 @@ let
   # deps: nspr + nss for the gate's LDAP client stack (libldap.so.5), and gcc.lib
   # for the gate's few C++ objects (make, audioconvert, libfru*, libsun_fc, the
   # NIS yp servers), which NEED libstdc++.so.6 + libgcc_s.so.1.
-  world = import ./mk-proto-world.nix {
+  # The seed instance (buildTools = [ ]) keeps wave6's world builder (./seed-world, frozen): the seed rows link its world and
+  # build only on an OI host, so a stdenv change must not move them (nixpkgs bootstrap-tools; ./aarch64/seed-main).
+  world = import (if buildTools == [ ] then ./seed-world/mk-proto-world.nix else ./mk-proto-world.nix) {
     gate = gate'; libcSlice = libc;
     sharedLibs = [ srcPkgs.libcExtra ];
     deps = [ srcPkgs.zlib srcPkgs.libxml2 srcPkgs.nspr srcPkgs.nss gcc.lib ];
+    fixups = true;   # both worlds: the seed world's out is published too (hosts substitute it), so it passes the content gate (wave6t)
   };
 
   # The boot-time set: what must run before the shared /nix is mounted (init,
@@ -551,7 +621,14 @@ let
   # Only materialised when a config enables hardware.wirelessIwm.attachAtBoot;
   # the module build is dixi/EC2-only (illumos toolchain), so no amd64-cross
   # config forces it unless the wifi is actually wanted.
+  # store tools for the out-of-gate kernel modules (wave6, gate2 A1): GNU coreutils/findutils/sed/grep/patch, git (git apply of the
+  # port patches), and the world's illumos bins (nm elfdump ld mcs ...). Replaces /usr/bin:/usr/sbin:/usr/gnu/bin.
+  kmodPath = if buildTools == [ ] then null else builtins.concatStringsSep ":" ((map (p: "${p}/bin")
+    [ srcPkgs.coreutils srcPkgs.findutils srcPkgs.gnused srcPkgs.gnugrep cliBase.gnupatch srcPkgs.git ])
+    ++ [ "${world}/usr/bin" "${world}/usr/sbin" "${world}/usr/ccs/bin" "${world}/bin" "${world}/sbin" ]);
+  kmodGate = if buildTools == [ ] then null else ./path-gate.sh;
   iwm-driver = import ./iwm-driver.nix {
+    kmodPath = kmodPath; pathGate = kmodGate;
     gate = gate';
     # the same C/C++ toolchain profile as `solnix-dev` (gcc 14.3.0 + gas + GNU
     # make); built inline here because solnix-dev itself is defined in the output
@@ -575,6 +652,7 @@ let
   };
 
   iwx-driver = import ./iwx-driver.nix {
+    inherit kmodPath; pathGate = kmodGate;
     gate = gate';
     inherit kernelNd ld;
     solnixDev = buildEnv {
@@ -590,6 +668,7 @@ let
   # against the gate proto and kernelNd and that SIMD appears only inside
   # fpu_kernel_enter/exit sections (src/drm-port/i915/simd-gate.sh).
   i915-driver = import ./i915-driver.nix {
+    inherit kmodPath; pathGate = kmodGate;
     gate = gate';
     inherit kernelNd ld;
     solnixDev = buildEnv {
@@ -605,6 +684,7 @@ let
   # the proto lacks (sys/i2c, sys/acpica.h, usbai_private.h) come from
   # kernelNd.src. hardware.touchpad.i2cHid lays and binds them.
   touchpad-driver = import ./touchpad-driver.nix {
+    inherit kmodPath; pathGate = kmodGate;
     gate = gate';
     inherit kernelNd ld;
     solnixDev = buildEnv {
@@ -647,11 +727,14 @@ let
   # solnix-cputemp -- the coretemp ksensor reader the live media's temperature
   # line uses (src/live/solnix-cputemp.c): one ioctl per /dev/sensors/temperature/
   # cpu node. Built like wpa-pmk (the solnix-dev gcc), self-test at build time.
-  solnix-cputemp = derivation {
+  # store tools only, as ./bluetooth (gate A1; wave6v): coreutils/findutils + the world's illumos bins (elfedit/elfdump for
+  # zero-checksum.sh via illumos-bin.sh). The seed instance (buildTools = [ ]) keeps /usr/bin.
+  solnix-cputemp = let tp = if buildTools == [ ] then "/usr/bin"
+    else builtins.concatStringsSep ":" (map (t: "${t}/bin") [ srcPkgs.coreutils srcPkgs.findutils world ]); in derivation {
     name = "solnix-cputemp";
     system = "x86_64-solaris";
     builder = "/usr/bin/bash";
-    PATH = "/usr/bin";
+    PATH = tp;
     src = ../../src/live/solnix-cputemp.c;
     solnixDev = buildEnv {
       name = "solnix-dev";
@@ -660,10 +743,12 @@ let
     };
     args = [ "-c" ''
       set -eu
-      export PATH="$solnixDev/bin:/usr/bin"
+      export PATH="$solnixDev/bin:${tp}"
+      ${if buildTools == [ ] then "" else "/usr/bin/bash ${./path-gate.sh}; . ${./illumos-bin.sh}"}
       mkdir -p "$out/bin"
       cp "$src" solnix-cputemp.c; gcc -O2 -Wall -Werror -Wl,-R,${libc}/lib/amd64 -o "$out/bin/solnix-cputemp" solnix-cputemp.c
       "$out/bin/solnix-cputemp" -t || { echo "FATAL: solnix-cputemp self-test failed" >&2; exit 1; }
+      : > zc; /usr/bin/bash ${./zero-checksum.sh} "$out" zc; [ ! -s zc ] || { cat zc >&2; exit 1; }
     '' ];
   };
 
@@ -779,6 +864,8 @@ let
       set -eu
       mkdir -p "$out"
       ( cd "$base" && tar cf - . ) | ( cd "$out" && tar xf - )
+      # one file per name (an optimised store links identical files; tar keeps that, and the edits below are per name)
+      ( cd "$out" && find . -type f -links +1 | while read -r f; do cp "$f" "$f.hl" && mv -f "$f.hl" "$f"; done )
       for d in "$out" "$out/kernel" "$out/kernel/drv" "$out/kernel/drv/tzmon.conf" "$out/kernel/misc" "$out/kernel/misc/amd64" "$out/usr" "$out/usr/kernel"; do
         [ -e "$d" ] && [ ! -h "$d" ] && chmod u+w "$d" 2>/dev/null || true
       done
@@ -922,6 +1009,8 @@ let
       mkdir -p "$out"
       # copy the base kernel slice, then overlay iwm's module + firmware.
       ( cd "$base" && tar cf - . ) | ( cd "$out" && tar xf - )
+      # one file per name (an optimised store links identical files; tar keeps that, and the edits below are per name)
+      ( cd "$out" && find . -type f -links +1 | while read -r f; do cp "$f" "$f.hl" && mv -f "$f.hl" "$f"; done )
       ${stripSliceRefs}
       # NOT chmod -R: the kernel slice has relative symlinks (e.g.
       # boot/solaris/bin/root_archive) that dangle in this isolated tree, and
@@ -1017,6 +1106,8 @@ let
       set -eu
       mkdir -p "$out"
       ( cd "$base" && tar cf - . ) | ( cd "$out" && tar xf - )
+      # one file per name (an optimised store links identical files; tar keeps that, and the edits below are per name)
+      ( cd "$out" && find . -type f -links +1 | while read -r f; do cp "$f" "$f.hl" && mv -f "$f.hl" "$f"; done )
       ${stripSliceRefs}
       # NOT chmod -R (it follows the slice's dangling relative symlinks).
       for d in "$out" "$out/kernel" "$out/kernel/drv" "$out/kernel/drv/amd64" "$out/kernel/firmware"; do
@@ -1141,6 +1232,8 @@ let
       set -eu
       mkdir -p "$out"
       ( cd "$base" && tar cf - . ) | ( cd "$out" && tar xf - )
+      # one file per name (an optimised store links identical files; tar keeps that, and the edits below are per name)
+      ( cd "$out" && find . -type f -links +1 | while read -r f; do cp "$f" "$f.hl" && mv -f "$f.hl" "$f"; done )
       ${stripSliceRefs}
       for d in "$out" "$out/kernel" "$out/kernel/drv" "$out/kernel/drv/amd64"; do
         [ -d "$d" ] && [ ! -h "$d" ] && chmod u+w "$d" 2>/dev/null || true
@@ -1182,6 +1275,8 @@ let
       set -eu
       mkdir -p "$out"
       ( cd "$base" && tar cf - . ) | ( cd "$out" && tar xf - )
+      # one file per name (an optimised store links identical files; tar keeps that, and the edits below are per name)
+      ( cd "$out" && find . -type f -links +1 | while read -r f; do cp "$f" "$f.hl" && mv -f "$f.hl" "$f"; done )
       for d in "$out" "$out/kernel" "$out/kernel/drv" "$out/kernel/drv/amd64" "$out/kernel/firmware"; do
         [ -d "$d" ] && [ ! -h "$d" ] && chmod u+w "$d" 2>/dev/null || true
       done
@@ -1263,12 +1358,12 @@ in
 {
   inherit libc rtld ld sys base-tools systemPath nix cached starter gcc world early stock drivers kernelNd worldMan;
   inherit gcc15 gcc15Wrapper;
-  inherit rustSeedStage rust198 rust199;
+  inherit rustSeedStage rust198 rust1990 rust199;
   # seedBuildTools -- the default build-tool set a bare solnix system passes as
   # buildTools so from-source builds resolve gmake/tar/grep/sed/gstrip/gzip/xz
   # from the store (not /usr/gnu). host-pkgs.nix wires it as the default for a
   # system eval; the gate/bhost build keeps buildTools=[] (byte-identical).
-  inherit seedBuildTools;
+  inherit seedBuildTools seedTarAlias;   # seedTarAlias: its row pname seed-tar-alias (flake.nix x86_64-solaris seed rows)
   # the cargo/bsdfetch/COSMIC-data builders' store tool set, a build input of their served rows: exposed so a builder
   # without it can fetch it (recipes.tsv row) instead of declining those rows.
   solnix-hostfix-tools = hostfixTools;

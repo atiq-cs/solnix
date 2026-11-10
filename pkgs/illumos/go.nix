@@ -3,17 +3,18 @@
 # 1.24 needs 1.22, 1.26 needs 1.24). No binary seed. ./go-build.sh does one stage.
 # Go binaries NEED libc.so/libsocket.so/libsendfile.so and carry no RUNPATH by default, so
 # every stage after 1.4 links with -r <world lib dirs> (cmd/link -r = DT_RUNPATH).
-{ gcc, gccLib, world, cacert, gate, tools ? null, bash ? null }:   # tools, bash: the hostfix store tools and bash, for goPkg storeOnly only
+{ gcc, gccLib, world, cacert, gate, tools, python3 }:
 let
   rp = "${world}/lib/amd64:${world}/usr/lib/amd64";
   stage = { version, sha256, url ? "https://go.dev/dl/go${version}.src.tar.gz", boot ? null, final ? false }:
     (a: derivation (a // { buildKey = builtins.substring 0 16 (builtins.hashString "sha256" (builtins.toJSON a)); })) {
     name = "go-${version}"; system = "x86_64-solaris"; builder = "/usr/bin/bash";
     src = import <nix/fetchurl.nix> { inherit url sha256; };
-    inherit version gcc rp world gate; gccLibDir = "${gccLib}/lib";
+    inherit version gcc rp world gate tools python3; gccLibDir = "${gccLib}/lib";
     boot = if boot == null then "" else boot;
     final = if final then "1" else "";
-    storeGate = ./store-gate.sh; tsErrnoGate = ./ts-errno-gate.sh; zeroChecksum = ./zero-checksum.sh;
+    storeGate = ./store-gate.sh; tsErrnoGate = ./ts-errno-gate.sh; zeroChecksum = ./zero-checksum.sh; pathGate = ./path-gate.sh; illumosBin = ./illumos-bin.sh;
+    patchShebangs = ./patch-shebangs.sh;
     args = [ ./go-build.sh ];
   };
 in rec {
@@ -38,22 +39,21 @@ in rec {
   # goPkg { pname; version; src = { url; sha256; }; vendorHash; subPkgs; check; ldflags; man }:
   # nixpkgs' buildGoModule reduced -- `go mod vendor` as a fixed-output derivation, then an
   # offline -mod=vendor build on go_1_26 (./go-pkg-build.sh). vendorHash = null: no vendor dir.
-  # storeOnly: build with ./go-pkg-build2.sh (store tools + the world on PATH, path-gated) so a solnix host rebuilds it. New
-  # recipes set it; the served ones keep go-pkg-build.sh (host PATH), so their drvs don't move.
-  goPkg = { pname, version, src, vendorHash, subPkgs ? ".", check, ldflags ? "", prep ? "", man ? "", goPkgs ? go_1_26, storeOnly ? false }:
+  # storeOnly: accepted and ignored (main's recipes2 flag): in wave6 every goPkg builds on store tools (./go-pkg-build.sh, path-gated).
+  goPkg = { pname, version, src, vendorHash, subPkgs ? ".", check, ldflags ? "", prep ? "", man ? "", goPkgs ? go_1_26, storeOnly ? true }:
     let
       srcTar = import <nix/fetchurl.nix> { inherit (src) url sha256; };
       # unpacked by Nix (libarchive, in the daemon), as fetch-tarball.nix does: host `tar xzf` on a solnix
       # system is illumos tar, which execs the absent /usr/bin/gzcat and exits 0 with nothing extracted.
       srcTree = derivation { name = "${pname}-${version}-src"; system = "builtin"; builder = "builtin:unpack-channel";
         src = srcTar; channelName = "tree"; };
-      common = { system = "x86_64-solaris"; builder = "/usr/bin/bash"; src = srcTree; go = goPkgs;
-        inherit rp; storeGate = ./store-gate.sh; tsErrnoGate = ./ts-errno-gate.sh; args = [ ./go-pkg-build.sh ]; }
-        // (if storeOnly then { inherit tools world bash; pathGate = ./path-gate.sh; args = [ ./go-pkg-build2.sh ]; } else { });
+      common = { system = "x86_64-solaris"; builder = "/usr/bin/bash"; src = srcTree; go = goPkgs; inherit tools python3 world; pathGate = ./path-gate.sh; illumosBin = ./illumos-bin.sh;
+        inherit rp; storeGate = ./store-gate.sh; tsErrnoGate = ./ts-errno-gate.sh; args = [ ./go-pkg-build.sh ]; };
       vend = derivation (common // { name = "${pname}-${version}-go-vendor"; vendorOnly = "1";
         goVendor = ""; subPkgs = ""; check = ""; ldflags = ""; prep = ""; man = "";
         SSL_CERT_FILE = "${cacert}/etc/ssl/certs/ca-bundle.crt";
         outputHashMode = "recursive"; outputHashAlgo = "sha256"; outputHash = vendorHash; });
-    in derivation (common // { name = "${pname}-${version}"; vendorOnly = "";
+    in (a: derivation (a // { buildKey = builtins.substring 0 16 (builtins.hashString "sha256" (builtins.toJSON a)); })) (common // {
+      name = "${pname}-${version}"; vendorOnly = ""; outputs = [ "out" "debug" ]; splitDebug = ./split-debug-od.sh;
       goVendor = if vendorHash == null then "" else vend; inherit subPkgs check ldflags prep man; });
 }

@@ -43,5 +43,5 @@ let
     if grep -rl "$W" "$out" > "$W/bd"; then echo "FATAL: build dir $W named in:" >&2; head "$W/bd" >&2; exit 1; fi
   '';
   parts = import ./parts.nix { inherit mkSrcPkg version src nativeTools deps pre common runpath ninjaInstall noBuildDir
-    world gate gcc ld libc; };
+    world gate gcc ld libc hostTools; };
 in parts

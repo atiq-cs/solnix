@@ -10,8 +10,8 @@
 #     PROTO's usr/include (illumos-gate source, pkgs/illumos/gate.nix).
 #   - libs: -L the gate proto's lib dirs + each dep's lib dirs. 64-bit objects are
 #     compiled by the from-source gcc (gcc-src.nix) and link its libstdc++/libgcc_s
-#     (RUNPATH -> gcc.lib). 32-bit objects come from the IPS seed with
-#     -static-libgcc (the from-source gcc has no multilib yet).
+#     (RUNPATH -> gcc.lib), and so are 32-bit objects (gcc -m32, multilib). Only a
+#     HOST-path gcc (the seed's own bootstrap) uses the stage0 wrapper below.
 #   - RUNPATH: rewritten after install to store dirs only (this package's lib dir
 #     for the ABI, each dep's, then runtimeLibDirs).
 #   - GATE: every dynamic ELF in $out is run through `ldd` with LD_LIBRARY_PATH
@@ -36,6 +36,15 @@
                              # so this arg changes NO hash for the bhost build. A solnix
                              # system (no /usr/gnu, no gstrip, no gzip) passes the store set.
 , aarch64 ? false           # native aarch64 illumos (aa64nix): LP64 only, libs in lib/ (lib/64 -> .).
+, storeOnly ? false          # wave6: every recipe builds with a store-only PATH + config.site (NixOS stdenv: no host dir is
+                             # reachable). base-src.nix sets it for every instance with store build tools; only the seed instance
+                             # (buildTools = [ ], the OI bootstrap) and aarch64 (its stage0 box) are exempt, until the
+                             # bootstrap-tools wave. With it, ./path-gate.sh runs in every build and FAILs on a host PATH entry.
+, seedOuts ? false           # wave6t: the seed instance (buildTools = [ ]) BUILDS on the OI host's PATH, but its OUTS pass the publish
+                             # content gate (no waivers, orchestrator 2026-11-03): CC by name (no $W/cc64 recorded) and ./seed-outs.sh
+                             # (#! -> /bin/sh, no /usr/gnu/bin/<tool> in a text file), each with its check
+, defaultNativeTools ? [ ]   # the store tools a recipe gets when it names none (base-src.nix: coreutils findutils + the world;
+                             # seedTools for the world's own closure). A recipe's nativeTools replaces this list.
                              # false = the x86 text byte-for-byte, so no x86 drv hash moves.
 , defaultTools ? [ ]         # aarch64 only: store tools every recipe gets after its nativeTools (NixOS stdenv's
                              # initialPath). Non-empty => every recipe is store-only (a64h); [] = the stage0 seed text.
@@ -50,13 +59,20 @@
                              # carrying a reference back to this output)
 , linkDeps ? [ ]             # build-time only (headers, link-time libs): NOT put in RUNPATH,
                              # so they stay out of the runtime closure (boost headers, json)
-, nativeTools ? [ ]          # NixOS nativeBuildInputs: store paths whose bin/ (and sbin/, usr/bin/) make up the WHOLE builder PATH
-                             # after buildTools: no /usr/gnu, no host /usr/bin. [] => the old PATH text, so no drv moves.
-, aclocalDirs ? [ ]          # a64h: store aclocal dirs for the recipe's autoreconf (replace the stage0 box's /opt ones)
+, docOutputs ? [ ]           # "man" "info" "doc": move share/<x> into its own output, the nixpkgs layout (environment.
+                             # extraOutputsToInstall finds them). A declared output whose dir is missing or empty FAILS the build.
+, hostPathAllow ? ""         # grep -E of documented exceptions for ./host-path-scan.sh (a recipe's own, rare)
+, buildOnlyRefs ? [ ]        # build-time-only store paths (header-only libs: nix's boost/json/toml11) that no shipped file, $debug
+                             # included, may name: the gate/compiler guard below covers them too (nixpkgs disallowedReferences)
+, nativeTools ? null         # NixOS nativeBuildInputs: store paths whose bin/ (and sbin/, usr/bin/) make up the WHOLE builder PATH
+                             # after buildTools: no /usr/gnu, no host /usr/bin. null => defaultNativeTools (storeOnly) or the
+                             # old OI PATH text (an exempt instance).
+, aclocalDirs ? [ ]          # a64h (aarch64): store aclocal dirs for the recipe's autoreconf (replace the stage0 box's /opt ones)
 , system ? "x86_64-solaris"
 }:
 
 let
+  nativeTools' = if nativeTools != null then nativeTools else if storeOnly then defaultNativeTools else [ ];
   # bin/ dirs of each buildTools store path, joined with ':'. Empty list -> "",
   # and the "${btPath:+$btPath:}" guards below then collapse to the original
   # /usr/gnu/bin:/usr/bin:/usr/sbin, so a default (bhost) build is unchanged.
@@ -92,40 +108,89 @@ let
       ''-Dlddlflags="-shared"''         # perl (cli/c-big.nix): aarch64 gcc has no -m64
       # DT_CHECKSUM -> 0 without elfedit, which segfaults on a GNU-stripped aarch64 ELF (repro2 fix 4; dixa4).
       "${./aarch64/zero-checksum.sh}" ] t;
+  # x86 store-only: od's e_type compared numerically (./split-debug-od.sh; illumos od zero-pads, wave7). The seed instance and aarch64
+  # keep ./split-debug.sh: both run GNU od first, and their drvs must not move. The stripLoop text below is an aarch64 anchor.
+  splitDebugSh = if storeOnly then ./split-debug-od.sh else ./split-debug.sh;
   stripLoop = ''
-    find "$out" -type f | while read -r f; do
-      # ELF, or an ar archive ("!<ar"): -D zeroes archive member mtimes (NixOS binutils is --enable-deterministic-archives).
-      case "$(od -An -tx1 -N4 "$f" 2>/dev/null | tr -d ' \n')" in 7f454c46|213c6172) ;; *) continue;; esac
-      chmod u+w "$f"; "$GSTRIP" --strip-debug -D "$f" 2>/dev/null || true
-    done
+    # split DWARF into $debug by build-id, then strip (./split-debug.sh; NixOS separateDebugInfo, for every package here)
+    /usr/bin/bash ${./split-debug.sh} "$out" "$debug" "$buildKey" "$BU" "$W/fail"
   '';
   rpLoop = ''
     find "$out" -type f | while read -r f; do
-      /usr/bin/elfdump -d "$f" 2>/dev/null | grep -Eq 'NEEDED|SONAME' || continue
+      "$IB/elfdump" -d "$f" 2>/dev/null | grep -Eq 'NEEDED|SONAME' || continue
       c=$(od -An -tu1 -j4 -N1 "$f" | tr -d ' '); cl=32; [ "$c" -eq 2 ] && cl=64
       # already store-only (baked at link time)? leave it; else rewrite.
-      cur=$(/usr/bin/elfdump -d "$f" | awk '$2=="RUNPATH"{print $4}')
+      cur=$("$IB/elfdump" -d "$f" | awk '$2=="RUNPATH"{print $4}')
       if [ -n "$cur" ] && [ -z "$(echo "$cur" | tr ':' '\n' | grep -v '^/nix/store/')" ]; then continue; fi
       chmod u+w "$f"
-      /usr/bin/elfedit -e "dyn:runpath $(rp_for $cl)" "$f" || echo "elfedit $f" >> "$W/fail"
+      "$IB/elfedit" -e "dyn:runpath $(rp_for $cl)" "$f" || echo "elfedit $f" >> "$W/fail"
     done
   '';
-  ntPath = builtins.concatStringsSep ":" (builtins.concatMap (d: map (s: "${d}/${s}") [ "bin" "sbin" "usr/bin" "usr/sbin" ]) (nativeTools ++ defaultTools));
+  ntPath = builtins.concatStringsSep ":" (builtins.concatMap (d: map (s: "${d}/${s}") [ "bin" "sbin" "usr/bin" "usr/sbin" ]) nativeTools');
+  # store-only PATH (nativeTools set): the old line is replaced in the builder text, so a recipe without nativeTools keeps its drv.
+  # CC_FOR_BUILD: configure's build-machine compiler (flex's stage1 scanner, autosetup's bootstrap jimsh in neomutt/sqlite) is looked up as
+  # bare gcc/cc, which only the OI host had on PATH: the same wrapper as CC (native build).
+  hermeticX = a: if nativeTools' == [ ] then
+    (if storeOnly then throw "mk-src-pkg ${pname}: storeOnly but no nativeTools (the PATH would be the host's)" else a)
+    else a // { inherit ntPath;
+    # the drv's own PATH attribute (the builder's starting environment) is the store-only one too, not the OI default below:
+    # nothing before the builder's `export PATH` may resolve a host tool (gate2 A1: env PATH only /nix/store). Exempt: as before.
+    PATH = if storeOnly then (if btPath == "" then ntPath else "${btPath}:${ntPath}") else a.PATH;
+    args = map (x: (if storeOnly then cmakeX else (y: y)) (builtins.replaceStrings
+    [ ''export PATH="''${btPath:+$btPath:}/usr/gnu/bin:/usr/bin:/usr/sbin"'' ''export CC="$W/cc$ABI" ABI LIBSUB'' ]
+    [ (''export PATH="''${btPath:+$btPath:}$ntPath" CONFIG_SITE=${if storeOnly then ./config-x86.site else ./config.site}''   # config.site: host-state probes pinned (x86 store-only: config-x86.site)
+       + (if storeOnly then "\n    /usr/bin/bash ${./path-gate.sh}" else "")
+       # the illumos elfedit/elfdump/ldd for the shared gate scripts: the world's (a nativeTools entry), never /usr/gnu's GNU elfedit
+       + (if storeOnly then "\n    . ${./illumos-bin.sh}" else "")   # exempt: IB stays /usr/bin (the OI host's illumos tools)
+       # nixpkgs setup.sh: NIX_BUILD_CORES <= 0 (nix.conf cores = 0, solnix's default: every core) is the CPU count, so no recipe's
+       # `gmake -j$NIX_BUILD_CORES` gets -j0 (gmake rejects it; aarch64/a64r-pkgs.nix and cargo-build.sh worked around it per builder)
+       + (if storeOnly then "\n    [ \"\${NIX_BUILD_CORES:-0}\" -gt 0 ] 2>/dev/null || NIX_BUILD_CORES=$(nproc); export NIX_BUILD_CORES" else "")
+       # the tools configure looks for by name or at fixed host paths, set from the store PATH (jq 1.8.2: MAKE=/usr/gnu/bin/make on
+       # SunOS when MAKE is unset; recipes1). /usr/bin/bash stays the shell (the builder interpreter, a documented exemption).
+       + (if storeOnly then "\n    MAKE=$(command -v gmake) INSTALL=\"$(command -v install) -c\" CMAKE_TOOLCHAIN_FILE=${./solnix-toolchain.cmake}; export MAKE INSTALL CMAKE_TOOLCHAIN_FILE   # not M4: the world m4 is SVR4; a recipe needing GNU m4 lists gnum4" else ""))
+      # the compiler by NAME, as NixOS's cc-wrapper is on PATH as gcc/g++: configure, libtool and every *-config then record
+      # "gcc", not the build-dir shim /var/tmp/srcpkg-<key>/cc64 (jq --build-configuration, bashbug, curl-config, openssl's
+      # compiler string: gate2 B8). The wrappers move to $W/bin$ABI (regular files, so a recipe can still edit "$(command -v $CC)");
+      # $W/cc$ABI stays as a link. PATH_GATE_ALLOW: a recipe's own path-gate call (gtk) accepts the build dir.
+      (if !storeOnly then ''export CC="$W/cc$ABI" CC_FOR_BUILD="$W/cc$ABI" ABI LIBSUB'' else ''mkdir -p "$W/bin$ABI"; mv "$W/cc$ABI" "$W/bin$ABI/gcc"; ln -s gcc "$W/bin$ABI/cc"; ln -s "$W/bin$ABI/gcc" "$W/cc$ABI"
+      if [ -f "$W/c++$ABI" ]; then mv "$W/c++$ABI" "$W/bin$ABI/g++"; ln -s g++ "$W/bin$ABI/c++"; ln -s "$W/bin$ABI/g++" "$W/c++$ABI"; export CXX=g++; fi
+      export PATH="$W/bin$ABI:$PATH" PATH_GATE_ALLOW="$W" CC=gcc CC_FOR_BUILD=gcc ABI LIBSUB
+      # fontconfig's compiled-in default config is the HOST's /etc/fonts/fonts.conf (recipes1 W5: gtk3's in-build check failed on a
+      # solnix host without it): an empty one in the build dir. NixOS: no /etc/fonts in the sandbox. HOME is Nix's /homeless-shelter.
+      printf '<?xml version="1.0"?><fontconfig><cachedir>%s</cachedir></fontconfig>\n' "$W/fcc" > "$W/fonts.conf"; export FONTCONFIG_FILE="$W/fonts.conf"'') ]
+    # .la links too (libpng.la -> libpng16.la dangled once the files went: gate B6; recipes1 W5 WAVE6-NOTES 8)
+    (if storeOnly then builtins.replaceStrings [ "find \"$out\" -name '*.la' -type f -delete" ] [ "find \"$out\" -name '*.la' \\( -type f -o -type l \\) -delete" ] x else x))) a.args; };
+  # cmake builds (the recipe text runs cmake; NixOS: the cmake setup hook comes with cmake in nativeBuildInputs, so only those drvs move).
+  # The env CMAKE_PREFIX_PATH is a PATH-style list: cmake splits it on ':' on Unix, so the ';'-joined one named NO dir (a64s on dixa:
+  # libgit2 found the host /usr/lib/libz.so; x86 w6, chef2 W2 t9: "Could NOT find ZLIB", bundled copy). ':' and solnix-cmake.cmake
+  # (lib/amd64 for ABI 64, host prefixes ignored). Measured on chef: t/cmakeprobe.sh, store zlib found per ABI, host never.
+  cmakeX = x: if builtins.match ".*cmake.*" build == null || builtins.match ".*CPP_=.*" x == null then x else   # the script arg only
+    let r = builtins.replaceStrings [ ''CPP_="$CPP_;$d"'' ''CMAKE_TOOLCHAIN_FILE=${./solnix-toolchain.cmake}'' ]
+                                   [ ''CPP_="$CPP_:$d"'' ''CMAKE_TOOLCHAIN_FILE=${./solnix-cmake.cmake}'' ] x;
+    in if r == x || builtins.match ".*solnix-cmake.cmake.*" r == null || builtins.match ''.*CPP_="[$]CPP_:[$]d".*'' r == null
+       then throw "mk-src-pkg ${pname}: cmakeX anchors" else builtins.replaceStrings [ ''CMAKE_PREFIX_PATH="''${CPP_#;}"'' ] [ ''CMAKE_PREFIX_PATH="''${CPP_#:}"'' ] r;
+  # aarch64 (main af5ac0e, a64h): its own store-only text (defaultTools, the stage0 box's patterns); x86: wave6's storeOnly above.
+  ntPathA = builtins.concatStringsSep ":" (builtins.concatMap (d: map (s: "${d}/${s}") [ "bin" "sbin" "usr/bin" "usr/sbin" ]) (ntA ++ defaultTools));
+  ntA = if nativeTools == null then [ ] else nativeTools;   # wave6's null default = main's [ ] on aarch64
   # a64h: aarch64 with defaultTools. lp64Fix has already turned the x86 PATH line into the aarch64 one, so match that line too,
   # and gate the result (./path-gate.sh, main's shared gate, run by the store bash: every entry under /nix/store). The x86 patterns are unchanged.
   a64h = aarch64 && defaultTools != [ ];
   aclocalPath = builtins.concatStringsSep ":" aclocalDirs;
   a64hBuild = t: if !a64h then t else builtins.replaceStrings
     [ "ACLOCAL_PATH=/opt/nixboot/share/aclocal:/opt/ooce/autoconf-archive/share/aclocal M4=/usr/bin/gm4 autoreconf -fi -I /opt/nixboot/share/aclocal -I /opt/ooce/autoconf-archive/share/aclocal"
-      "/usr/gnu/bin/" "/usr/bin/bash" ]
-    [ "ACLOCAL_PATH=${aclocalPath} M4=m4 autoreconf -fi" "" shell ] t;   # INSTALL/TAR=/usr/gnu/bin/x -> x from the store PATH
+      "sed -i 's@/usr/gnu/bin/@@g' \"$f\";" "/usr/gnu/bin/" "/usr/bin/bash" ]
+    [ "ACLOCAL_PATH=${aclocalPath} M4=m4 autoreconf -fi"
+      "sed -i 's@/usr/gnu/bin/@@g' \"$f\"; for _b in $(echo \"$btPath\" | tr : ' '); do sed -i \"s@$_b/@@g\" \"$f\"; done;" "" shell ] t;   # INSTALL/TAR=/usr/gnu/bin/x -> x from the store PATH
+    # perl's Config scrub (sed -i 's@/usr/gnu/bin/@@g' "$f";) is kept, not stripped to s@@@g (a GNU sed error; wave6x, dixa perl kjf2kni2),
+    # and also drops each $btPath dir (Configure records the build-tools farm's ln: lns='<farm>/bin/ln -s'), as the de-bake pass below does
+    # after the build, so perl's in-build lns check sees the shipped value (main's served aarch64 perl 2rbsvh9j: lns='ln -s').
   # store-only PATH (nativeTools set): the old line is replaced in the builder text, so a recipe without nativeTools keeps its drv.
   # CC_FOR_BUILD: configure's build-machine compiler (flex's stage1 scanner, autosetup's bootstrap jimsh in neomutt/sqlite) is looked up as
   # bare gcc/cc, which only the OI host had on PATH: the same wrapper as CC (native build).
-  hermetic = a: if nativeTools == [ ] && defaultTools == [ ] then a else a // { inherit ntPath;
+  hermeticA = a: if ntA == [ ] && defaultTools == [ ] then a else a // { ntPath = ntPathA;
     # the drv's own PATH attribute (the builder's starting environment) is the store-only one too (gate2 A1: env PATH only /nix/store).
     # Same expression as wave6's storeOnly (w6 0e61596), so the two converge; x86 recipes keep a.PATH, so no x86 drv moves.
-    PATH = if a64h then (if btPath == "" then ntPath else "${btPath}:${ntPath}") else a.PATH;
+    PATH = if a64h then (if btPath == "" then ntPathA else "${btPath}:${ntPathA}") else a.PATH;
     args = map (x: builtins.replaceStrings
     ([ ''export PATH="''${btPath:+$btPath:}/usr/gnu/bin:/usr/bin:/usr/sbin"'' ''export CC="$W/cc$ABI" ABI LIBSUB'' ]
      ++ (if a64h then [ ''export PATH="''${btPath:+$btPath:}/usr/gnu/bin:/usr/bin:/usr/sbin:/opt/ooce/bin:/opt/nixboot/bin"'' "/usr/bin/bash"
@@ -135,10 +200,25 @@ let
      ++ (if a64h then [ ''export PATH="''${btPath:+$btPath:}$ntPath" CONFIG_SITE=${./config.site} CONFIG_SHELL=${shell} SHELL=${shell}; ${shell} ${./path-gate.sh}'' shell
                         ''sed "s@$_btd/@@g" "$f" > "$W/btfix" && cat "$W/btfix" > "$f"'' ] else [ ])) x) a.args;
     builder = if a64h then shell else a.builder; };
+  hermetic = if aarch64 then hermeticA else if seedOuts then seedText else hermeticX;
+  # the seed's CC by name: the wrappers move to $W/bin$ABI/{gcc,g++} on PATH, as storeOnly does; PATH stays the OI host's
+  # CONFIG_SITE: the same host-state answers as every store-only build (gate L4: the seed's gnulib locale/fcntl probes ran on the
+  # OI host's state, wave6t step59)
+  seedText = a: a // { args = map (x: builtins.replaceStrings
+    [ ''export CC="$W/cc$ABI" ABI LIBSUB'' "find \"$out\" -name '*.la' -type f -delete" ]
+    [ ''export CONFIG_SITE=${./config.site}
+      mkdir -p "$W/bin$ABI"; mv "$W/cc$ABI" "$W/bin$ABI/gcc"; ln -s gcc "$W/bin$ABI/cc"; ln -s "$W/bin$ABI/gcc" "$W/cc$ABI"
+      if [ -f "$W/c++$ABI" ]; then mv "$W/c++$ABI" "$W/bin$ABI/g++"; ln -s g++ "$W/bin$ABI/c++"; ln -s "$W/bin$ABI/g++" "$W/c++$ABI"; export CXX=g++; fi
+      export PATH="$W/bin$ABI:$PATH" CC=gcc CC_FOR_BUILD=gcc ABI LIBSUB''
+      "find \"$out\" -name '*.la' \\( -type f -o -type l \\) -delete\n    /usr/bin/bash ${./seed-outs.sh} \"$out\" \"$W\" || exit 1" ] x) a.args; };
   drvAttrs' = hermetic drvAttrs;
   drvAttrs = {
   name = "${pname}-${version}";
   inherit system gate gcc stage0 pname;
+  outputs = [ "out" "debug" ] ++ docOutputs;   # debug: NixOS separateDebugInfo, $debug/lib/debug/.build-id/xx/rest.debug (./split-debug.sh)
+  docOutputsArg = builtins.concatStringsSep " " docOutputs;
+  inherit hostPathAllow;
+} // (if buildOnlyRefs == [ ] then { } else { buildOnlyRefsArg = builtins.concatStringsSep " " buildOnlyRefs; }) // {
   build = a64hBuild (lp64Fix build);
   # nativeTools => store-only PATH: buildTools' bins, then each tool's bin/sbin/usr/bin/usr/sbin. Only the attr is added when set.
   # the from-source gcc's runtime dir (lib = 32-bit, lib/amd64 = 64-bit); empty for a host compiler.
@@ -166,6 +246,7 @@ let
   rtDirs = builtins.concatStringsSep " " runtimeLibDirs;
   args = [ "-c" (lp64Fix ''
     set -eu
+    IB=/usr/bin   # illumos elfedit/elfdump/ldd; a store-only build re-points it at the world's below (ILLUMOS_BIN)
     # buildTools store bin/ dirs go first (store gmake/gnutar/gzip/xz/bzip2/
     # gnugrep/gnused/gstrip on a solnix system). Empty $btPath collapses this to
     # the old /usr/gnu/bin:/usr/bin:/usr/sbin, so the bhost build is unchanged.
@@ -182,10 +263,11 @@ let
     W=/var/tmp/srcpkg-$buildKey
     # Removed on ANY exit: a stale dir from a failed build by another nixbld uid could not be.
     rm -rf "$W"; mkdir -m 700 "$W"; trap 'cd /; rm -rf "$W"' EXIT
+    : > "$W/fail"   # every check below appends; the closure gate fails the build if it is non-empty
     cp "$srcTar" "$W/src.tar"
     # illumos has no sha256sum; /usr/bin/digest -a sha256 is always present and
     # emits lowercase hex, matching the plain-hex src.sha256 (verified on dixi).
-    got=$(/usr/bin/digest -a sha256 "$W/src.tar")
+    got=$("$IB/digest" -a sha256 "$W/src.tar")
     [ "$got" = "$srcSha256" ] || { echo "FATAL: sha256 want $srcSha256 got $got" >&2; exit 1; }
     # RUNPATH: store dirs only, per ELF class.
     rp_for() {
@@ -200,7 +282,8 @@ let
       if [ -n "$gccLib" ]; then [ "$1" = 64 ] && r="$r:$gccLib/amd64" || r="$r:$gccLib"; fi
       echo "''${r#:}"
     }
-    GI=$(ls -d "$stage0"/lib/gcc/*/[0-9]*.*/include | head -1)
+    # stage0's include dir: only the host-compiler wrapper uses it (32-bit builds use $gcc -m32 too)
+    GI=""; [ -n "$gccLib" ] || GI=$(ls -d "$stage0"/lib/gcc/*/[0-9]*.*/include | head -1)
     for ABI in $abisArg; do
       if [ "$ABI" = 64 ]; then LIBSUB=lib/amd64; GL="$gate/lib/amd64 $gate/usr/lib/amd64"
       else LIBSUB=lib; GL="$gate/lib $gate/usr/lib"; fi
@@ -225,10 +308,23 @@ let
         # time (-R): post-link editing is capped by .dynstr padding (~512 B), and
         # the nix closure's RUNPATH is longer than that.
         RP=$(rp_for $ABI)
-        for t in gcc:cc g++:c++; do
+        # DWARF must not name the build-only inputs: the gcc (its include-fixed and libstdc++ headers) and the gate proto
+        # (sysroot headers) would become references of $debug. zlib compression does not hide them: gobjcopy leaves a section
+        # uncompressed when zlib does not shrink it, and a small .debug_line_str kept the gcc path (measured, test-split.sh).
+        # gas names its cwd (DWARF 5 line-table dir 0), which -ffile-prefix-map does not reach: -Wa,--debug-prefix-map.
+        DBGMAP="-ffile-prefix-map=$W=/build -Wa,--debug-prefix-map=$W=/build -fdebug-prefix-map=$gcc=/build/gcc -fdebug-prefix-map=$gate=/build/sysroot"
+        # -std=gnu17 for C only (the cc wrapper): GCC 15 defaults to C23, which breaks K&R-declared sources and silently
+        # flips configure probes (ncurses dropped stdbool from curses.h: gcc1 STDENV-SWITCH.md 2.2). A recipe's own -std
+        # comes later on the line and wins. shortcut: one pin for all; drop it per recipe once its source is C23-clean.
+        for t in gcc:cc:-std=gnu17 g++:c++:; do
+          s=''${t##*:}; t=''${t%:*}
           cat > "$W/''${t#*:}$ABI" <<EOF
     #!/usr/bin/bash
-    exec $gcc/bin/''${t%%:*} -m$ABI -D_TS_ERRNO $DI $DL -Wl,-R,$RP "\$@"
+    ${/* store-only: -Wl,-R only when some argument is not a flag (nixpkgs cc-wrapper: no non-flag argument, no link flags). Always
+       on, `g++ -v` LINKS (ld: fatal), and libtool's LT_LANG(CXX) probe (CXX=g++ by name runs `g++ -v`) turns the CXX tag off: gmp6's
+       relink, hunspell's "unsupported hardcode properties", gdb's and libdb's "unable to infer tagged configuration" (recipes3). */
+      if storeOnly then ''L=; for a in "\$@"; do case "\$a" in -*) ;; *) L=-Wl,-R,$RP; break;; esac; done
+    exec $gcc/bin/''${t%%:*} -m$ABI $s -g $DBGMAP -D_TS_ERRNO $DI $DL \$L "\$@"'' else ''exec $gcc/bin/''${t%%:*} -m$ABI $s -g $DBGMAP -D_TS_ERRNO $DI $DL -Wl,-R,$RP "\$@"''}
     EOF
           chmod +x "$W/''${t#*:}$ABI"
         done
@@ -245,6 +341,7 @@ let
       tar xf "$W/src.tar"; cd "$(ls -d */ | head -1)"; SRC=$(pwd)
       echo "=== build $pname ABI=$ABI ===" >&2
       eval "$build"
+      ${if storeOnly then ''/usr/bin/bash ${./host-path-scan.sh} "$W/s$ABI" "$hostPathAllow" || exit 1'' else ""}
       cd "$W"
     done
 
@@ -253,17 +350,27 @@ let
     # dependencies on the whole compiler and gate proto. libtool .la files name
     # build-time paths too and nothing at run time reads them.
     find "$out" -name '*.la' -type f -delete
+    ${if storeOnly then ''/usr/bin/bash ${./patch-shebangs.sh} "$out $(for o in $docOutputsArg; do eval "echo \$$o"; done)" "$btPath:$W" || exit 1   # NixOS patchShebangs
+    /usr/bin/bash ${./out-host-refs.sh} "$out" || exit 1   # no symlink / #! to the host at run time (recipes1: quilt awk)'' else ""}
+    # man/info/doc outputs (nixpkgs multiple-outputs.sh's moveToOutput share/man "$man"); info's dir file is per-profile.
+    for o in $docOutputsArg; do
+      case "$o" in man) s=share/man;; info) s=share/info; rm -f "$out/share/info/dir";; doc) s=share/doc;;
+        *) echo "FATAL: unknown doc output $o" >&2; exit 1;; esac
+      eval "d=\$$o"
+      [ -d "$out/$s" ] && [ -n "$(ls -A "$out/$s")" ] || { echo "FATAL: output $o declared but $out/$s is missing or empty" >&2; exit 1; }
+      mkdir -p "$d/share"; mv "$out/$s" "$d/$s"
+    done
     # GNU strip (gstrip) does --strip-debug; the OI host has /usr/bin/gstrip,
     # a solnix system gets it from a buildTools entry (binutils). illumos
     # /usr/bin/strip is SVR4 strip and silently ignores --strip-debug, so it is
     # NOT a fallback. Resolve the first candidate that exists.
     GSTRIP=""; for g in $gstripCands; do [ -x "$g" ] && { GSTRIP="$g"; break; }; done
     [ -n "$GSTRIP" ] || { echo "FATAL: no gstrip (GNU strip) on this host or in buildTools" >&2; exit 1; }
-    find "$out" -type f | while read -r f; do
-      # ELF, or an ar archive ("!<ar"): -D zeroes archive member mtimes (NixOS binutils is --enable-deterministic-archives).
-      case "$(od -An -tx1 -N4 "$f" 2>/dev/null | tr -d ' \n')" in 7f454c46|213c6172) ;; *) continue;; esac
-      chmod u+w "$f"; "$GSTRIP" --strip-debug -D "$f" 2>/dev/null || true
-    done
+    # split-debug.sh's binutils dir: the store binutils' bin (gstrip, gobjcopy, greadelf), or on the OI host (the seed path,
+    # buildTools = []) /usr/gnu/bin, where all three live (/usr/bin has gstrip and gobjcopy links but no greadelf).
+    BU=$(dirname "$GSTRIP"); [ "$GSTRIP" = /usr/bin/gstrip ] && BU=/usr/gnu/bin
+    # split DWARF into $debug by build-id, then strip (./split-debug.sh; NixOS separateDebugInfo, for every package here)
+    /usr/bin/bash ${splitDebugSh} "$out" "$debug" "$buildKey" "$BU" "$W/fail"
     # BUILD-TOOL PATHS BAKED INTO GENERATED SCRIPTS (the stdenv patchShebangs /
     # --replace analog). A package's own ./configure can hardcode the ABSOLUTE path
     # of a build tool it found on PATH into a generated SHELL SCRIPT: gzip's
@@ -286,16 +393,18 @@ let
       _oldifs=$IFS; IFS=:
       for _btd in $btPath; do
         [ -n "$_btd" ] || continue
-        find "$out" -type f | while read -r f; do
+        find "$out" $(for o in $docOutputsArg; do eval "echo \$$o"; done) -type f | while read -r f; do
           [ "$(od -An -tx1 -N4 "$f" 2>/dev/null | tr -d ' \n')" = 7f454c46 ] && continue  # skip ELF
           grep -q "$_btd/" "$f" 2>/dev/null || continue
-          chmod u+w "$f"; sed "s@$_btd/@@g" "$f" > "$f.btfix" && mv "$f.btfix" "$f" \
+          # cat > rewrites in place: a new file + mv dropped the exec bit (libtool, zgrep shipped 0444)
+          chmod u+w "$f"; sed "s@$_btd/@@g" "$f" > "$W/btfix" && cat "$W/btfix" > "$f" \
             || { echo "FATAL: could not de-bake build-tool path $_btd in $f" >&2; exit 1; }
         done
       done
       IFS=$_oldifs
     fi
-    : > "$W/fail"
+    # every regular file in bin/ and sbin/ is executable (a 0444 bin/libtool passed every other check)
+    for d in "$out/bin" "$out/sbin"; do if [ -d "$d" ]; then find "$d" -type f ! -perm -u+x | sed 's/$/: in bin but not executable/' >> "$W/fail"; fi; done
     # no shipped ELF may reference the global errno (the wrappers pass -D_TS_ERRNO)
     /usr/bin/bash ${./ts-errno-gate.sh} "$out" 2>> "$W/fail" || echo "ts-errno gate failed for $out" >> "$W/fail"
     # the two big build-time-only paths (gate proto, compiler) must not appear in
@@ -305,29 +414,30 @@ let
     # grep into the loop with 2>/dev/null turned an error into "no hits": on a
     # system without GNU grep, --binary-files is rejected (illumos grep, measured)
     # and the guard checked nothing. -rl is POSIX-enough for both greps.
-    for x in "$gate" $([ -n "$gccLib" ] && echo "$gcc"); do
-      rc=0; grep -rl "$x" "$out" > "$W/hits" || rc=$?
+    for x in "$gate" $([ -n "$gccLib" ] && echo "$gcc")${if buildOnlyRefs == [ ] then "" else " $buildOnlyRefsArg"}; do
+      rc=0; grep -rl "$x" "$out" "$debug" $(for o in $docOutputsArg; do eval "echo \$$o"; done) > "$W/hits" || rc=$?
       [ "$rc" -le 1 ] || { echo "FATAL: build-time-path guard: grep -rl exited $rc" >&2; exit 1; }
       while read -r f; do
+        case "$f" in "$debug"/*) echo "$f: names build-time path $x (debug info must be compressed)" >> "$W/fail"; continue;; esac
         [ "$(od -An -tx1 -N4 "$f" 2>/dev/null | tr -d ' \n')" = 7f454c46 ] && echo "$f: names build-time path $x" >> "$W/fail"
         true
       done < "$W/hits"
     done
     find "$out" -type f | while read -r f; do
-      /usr/bin/elfdump -d "$f" 2>/dev/null | grep -Eq 'NEEDED|SONAME' || continue
+      "$IB/elfdump" -d "$f" 2>/dev/null | grep -Eq 'NEEDED|SONAME' || continue
       c=$(od -An -tu1 -j4 -N1 "$f" | tr -d ' '); cl=32; [ "$c" -eq 2 ] && cl=64
       # already store-only (baked at link time)? leave it; else rewrite.
-      cur=$(/usr/bin/elfdump -d "$f" | awk '$2=="RUNPATH"{print $4}')
+      cur=$("$IB/elfdump" -d "$f" | awk '$2=="RUNPATH"{print $4}')
       if [ -n "$cur" ] && [ -z "$(echo "$cur" | tr ':' '\n' | grep -v '^/nix/store/')" ]; then continue; fi
       chmod u+w "$f"
-      /usr/bin/elfedit -e "dyn:runpath $(rp_for $cl)" "$f" || echo "elfedit $f" >> "$W/fail"
+      "$IB/elfedit" -e "dyn:runpath $(rp_for $cl)" "$f" || echo "elfedit $f" >> "$W/fail"
     done
     /usr/bin/bash ${./zero-checksum.sh} "$out" "$W/fail"
     # THE GATE: ldd with no LD_LIBRARY_PATH; nothing unresolved, nothing off-store.
     unset LD_LIBRARY_PATH LD_LIBRARY_PATH_64 LD_LIBRARY_PATH_32 || true
     find "$out" -type f | while read -r f; do
-      /usr/bin/elfdump -d "$f" 2>/dev/null | grep -q NEEDED || continue
-      /usr/bin/ldd "$f" 2>&1 | awk -v f="$f" '/not found/ || (/=>/ && $NF !~ /^\/nix\/store\//) {print f": "$0}' >> "$W/fail"
+      "$IB/elfdump" -d "$f" 2>/dev/null | grep -q NEEDED || continue
+      "$IB/ldd" "$f" 2>&1 | awk -v f="$f" '/not found/ || (/=>/ && $NF !~ /^\/nix\/store\//) {print f": "$0}' >> "$W/fail"
     done
     if [ -s "$W/fail" ]; then echo "FATAL: closure gate failed:" >&2; head -40 "$W/fail" >&2; exit 1; fi
     echo "=== $pname: every ELF resolves inside /nix/store ===" >&2

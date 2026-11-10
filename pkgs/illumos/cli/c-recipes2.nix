@@ -89,6 +89,8 @@ in rec {
   # No SDL2/ffmpeg/CUDA/Vulkan (not in solnix).
   whisper-cpp = mkSrcPkg {
     pname = "whisper-cpp"; version = "1.9.5";
+    # CMakeCache records this recipe's own -DCMAKE_SYSTEM_IGNORE_PATH (the host dirs cmake must NOT search), not a host tool
+    hostPathAllow = "^[0-9]+:CMAKE_SYSTEM_IGNORE_PATH:UNINITIALIZED=/bin;/usr/bin;/sbin;/usr/sbin;/usr/gnu/bin$";
     src = gh "ggml-org/whisper.cpp" "v1.9.5" "ff1a9053feb509ff9d7729703355541ae9690073a6b1c40eb692c962e0dc1720";
     deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
     build = ''
@@ -249,6 +251,8 @@ in rec {
   # one output with perl as a runtime dep. No X11 (gxditview), no ghostscript/netpbm (no -Thtml image conversion), no uchardet.
   groff = mkSrcPkg {
     pname = "groff"; version = "1.24.2";
+    # groff's Makefile sed REPLACES /usr/bin/perl with the store $(PERL) in its scripts: a rewrite away from the host, not a host tool
+    hostPathAllow = "^[0-9]+:[[:space:]]+-e \"s[|]/usr/bin/perl[|][$][(]PERL[)][|]\" [\\\\]$";
     src = gnu "groff" "1.24.2" "gz" "f9c1efd5bebbe37fc6e1063db7473ce8df1e3e0be4ff0f43ce04fce57e9c5dd9";
     deps = [ world perl ]; nativeTools = [ perl ] ++ hostTools;
     build = ''

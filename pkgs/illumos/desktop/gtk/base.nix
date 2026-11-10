@@ -7,9 +7,9 @@ rec {
   ftPriv = [ zlib libpng nixChain.brotli nixChain.bzip2 ];
 
   pcre2 = mkSrcPkg {
-    pname = "pcre2"; version = "10.47";
-    src = { url = "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.47/pcre2-10.47.tar.gz";
-            sha256 = "c08ae2388ef333e8403e670ad70c0a11f1eed021fd88308d7e02f596fcd9dc16"; };
+    pname = "pcre2"; version = "10.48";   # queue target (CVE-2026-89157/89161 fixed_in); .sig: Nicholas Wilson 2A98E77EB6F24CA8
+    src = { url = "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.48/pcre2-10.48.tar.gz";
+            sha256 = "ebcc25aadf2a51fa1fefa9b8bc9e7a79b3dae86870a0f1152a22e42befd46888"; };
     deps = [ zlib ];
     build = ''
       # nixpkgs: 16/32-bit libs + JIT (sealloc: Linux memfd only, so off here)
@@ -78,9 +78,16 @@ rec {
             sha256 = "ecae8008e2cc9ade2f2c1bb9d5e6d4fb73e7c433866a056bd82980741571a022"; };
     linkDeps = [ tools.nasm ];
     build = ''
+      # nasm names each object's STT_FILE symbol after its input path as given, and has no prefix map. cmake passes absolute
+      # sources, so libjpeg.so's .SUNW_ldynsym named the build dir (gate B8): this wrapper hands nasm the path relative to its cwd.
+      printf '%s\n' '#!/usr/bin/bash' \
+        'rel() { local d=$PWD up=; while [ "''${1#"$d"/}" = "$1" ]; do d=''${d%/*}; up=../$up; done; printf %s "$up''${1#"$d"/}"; }' \
+        "a=(); for x in \"\$@\"; do case \"\$x\" in $SRC/*) x=\$(rel \"\$x\");; esac; a+=(\"\$x\"); done" \
+        'exec ${tools.nasm}/bin/nasm "''${a[@]}"' > "$W/nasm"
+      chmod +x "$W/nasm"
       ${cmake}/bin/cmake -S . -B _b -DCMAKE_INSTALL_PREFIX="$out" -DCMAKE_INSTALL_LIBDIR=lib/amd64 \
         -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER="$CC" -DENABLE_STATIC=0 -DENABLE_SHARED=1 \
-        -DCMAKE_ASM_NASM_COMPILER=${tools.nasm}/bin/nasm -DREQUIRE_SIMD=1 -DCMAKE_SKIP_RPATH=ON
+        -DCMAKE_ASM_NASM_COMPILER="$W/nasm" -DREQUIRE_SIMD=1 -DCMAKE_SKIP_RPATH=ON
       gmake -C _b -j''${NIX_BUILD_CORES:-8} install
       find "$out/share/doc" -delete 2>/dev/null || true
       "$out/bin/djpeg" -ppm testimages/testorig.jpg | head -c 2 | grep -qx P6 || { echo "FATAL: djpeg" >&2; exit 1; }
@@ -99,7 +106,9 @@ rec {
       patch -p1 < ${./patches/freetype-2.14.3-illumos-gs-conflict.patch}
       GNUMAKE=gmake ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --enable-freetype-config \
         --with-zlib=yes --with-png=yes --with-bzip2=yes --with-brotli=yes --with-harfbuzz=no
-      gmake -j''${NIX_BUILD_CORES:-8}; gmake install
+      # TOP_DIR=.: builds/unix/unix-def.mk sets TOP_DIR := $(shell cd $(TOP_DIR); pwd), so libtool's -o, and the STT_FILE symbol
+      # illumos ld names after it (.SUNW_ldynsym and .symtab), were the absolute build dir (gate B8). A command-line value wins.
+      gmake TOP_DIR=. -j''${NIX_BUILD_CORES:-8}; gmake TOP_DIR=. install
       PKG_CONFIG_PATH="$out/lib/amd64/pkgconfig" pkg-config --modversion freetype2 | grep -q '^26\.' || { echo "FATAL: freetype2.pc" >&2; exit 1; }
     '';
   };

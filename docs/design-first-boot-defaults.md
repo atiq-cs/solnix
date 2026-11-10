@@ -43,8 +43,9 @@ Ordered by how much they affect "feels complete / correct":
 ### Tier 2 — hygiene / good-citizen defaults
 6. **Nix GC + store optimise** — NixOS: weekly `nix-collect-garbage` timer +
    `nix.optimise`/`auto-optimise-store`. solnix: none → /nix grows unbounded. ADD:
-   a periodic SMF timer running `nix-collect-garbage --delete-older-than 30d` +
-   `auto-optimise-store = true` in nix.conf.
+   a periodic SMF timer running `nix-collect-garbage --delete-older-than 30d`.
+   `auto-optimise-store` stays false, NixOS's default (wave7, 2026-11-09: true was the default until then, and with it a
+   builder that copied a store input then edited per name changed every hard-linked name at once: the world's ps).
 7. **Log rotation** — NixOS: logrotate/journald retention. solnix: illumos has
    **`logadm`** (native, /etc/logadm.conf) — ensure it covers /var/log + /var/cores.
    ADD: a logadm entry for /var/cores + any solnix logs.

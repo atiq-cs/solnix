@@ -1,17 +1,22 @@
 # cli/texinfo.nix -- GNU Texinfo 7.3: info(1), install-info(1), makeinfo/texi2any (NixOS: documentation.info.enable
 # installs texinfoInteractive, i.e. texinfo with ncurses, and runs install-info over the system profile's share/info).
 # Own file so no existing cli out moves. As nixpkgs common.nix: PERL= the store perl, perl XS off is NOT needed (native).
-{ mkSrcPkg, ncurses, perl, gnum4, chk, hostTools, ... }:
+{ mkSrcPkg, world, ncurses, perl, gnum4, chk, hostTools, ... }:
 {
   texinfo = mkSrcPkg {
     pname = "texinfo"; version = "7.3";
     src = { url = "https://mirrors.kernel.org/gnu/texinfo/texinfo-7.3.tar.xz";
             sha256 = "51f74eb0f51cfa9873b85264dfdd5d46e8957ec95b88f0fb762f63d9e164c72e"; };
-    deps = [ ncurses perl ];
+    deps = [ world ncurses perl ];   # world: the XS modules NEED libgen.so.1, which the libc slice does not carry (recipes3)
     nativeTools = [ perl gnum4 ] ++ hostTools;   # store-only PATH + config.site, as the other cli recipes (wave4)
     build = ''
       ./configure --prefix="$out" --disable-nls PERL=${perl}/bin/perl
       gmake -j8; gmake install
+      # libintl-perl's .pm modules start "#! /bin/false" (a guard, the files are not executable; the publish gate's B9 skips them, wave6's
+      # out-host-refs.sh does not): blank that line, as nothing runs them by their #! (recipes3)
+      n=0; for f in $(grep -rlE '^#![[:space:]]*/bin/false' "$out/share/texi2any" 2>/dev/null); do [ -x "$f" ] && continue
+        head -1 "$f" | grep -qE '^#![[:space:]]*/bin/false[[:space:]]*$' || continue; sed -i '1s|.*|#|' "$f"; n=$((n+1)); done
+      [ "$n" -gt 0 ] || { echo "FATAL: texinfo: no #! /bin/false guard found (anchor)" >&2; exit 1; }
       ${chk ''"$out/bin/info" --version'' "^info \\(GNU texinfo\\) 7\\.3"}
       ${chk ''"$out/bin/install-info" --version'' "^install-info \\(GNU texinfo\\) 7\\.3"}
       # the info reader must have its terminal library (configure drops info/ silently without one)

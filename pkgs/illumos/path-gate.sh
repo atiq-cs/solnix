@@ -30,5 +30,55 @@ check() {
 check "/nix/store/00000000000000000000000000000000-x/bin:/usr/bin" 2>/dev/null && { echo "FATAL: path-gate selftest: /usr/bin passed" >&2; exit 1; }
 check "/nix/store/00000000000000000000000000000000-x/bin" || { echo "FATAL: path-gate selftest: a store PATH failed" >&2; exit 1; }
 [ "${1:-}" = --selftest ] && { echo "path-gate selftest PASS"; exit 0; }
+# --exempt-check <drv>... (a host tool, not a builder call: surveys and gate2's drv-gate.sh apply the same list). Each drv
+# whose env PATH is store-only PASSes; one with a host entry PASSes only as EXEMPT, iff its env name matches a row of the CLOSED
+# list (PATH_GATE_EXEMPT, default bootstrap-exempt.tsv beside this file) AND the row's marker holds in the drv (the tsv says
+# what each marker means). Otherwise FAIL. Exit 1 on any FAIL. Its negative control (crafted drvs: a seed zlib is EXEMPT, the
+# same name with btPath set FAILs, a "libc" without filesArg FAILs, a seed farm naming a non-seed out FAILs) runs on every call.
+if [ "${1:-}" = --exempt-check ]; then
+  shift; L=${PATH_GATE_EXEMPT:-$(cd "$(dirname "$0")" && pwd)/bootstrap-exempt.tsv}
+  [ -r "$L" ] || { echo "FATAL: path-gate: no exempt list $L" >&2; exit 2; }
+  ev() { sed -n "s/.*(\"$2\",\"\([^\"]*\)\").*/\1/p" "$1" | head -1; }   # env value (the keys used here hold no quotes)
+  has() { grep -q "(\"$2\"," "$1"; }
+  outs() { sed 's/^Derive(\[//; s/\],\[.*//' "$1" | tr ',' '\n' | sed -n 's/^"\(\/nix\/store\/[^"]*\)"$/\1/p'; }
+  marker() {  # <drv> <marker>: does the marker hold?
+    case "$2" in
+      seed) grep -q '("btPath","")' "$1" ;;
+      gccseed) [ "$(ev "$1" stage0)" = /usr/gcc/14 ] && has "$1" gccSrc && ! has "$1" btPath ;;
+      slice) has "$1" gate && has "$1" filesArg ;;
+      world) has "$1" gate && has "$1" dirsArg && has "$1" sharedLibsArg ;;
+      libcx) [ "$(sed 's/.*\],\[(//; s/)\])$//' "$1" | tr -d '\n' | sed 's/),(/\n/g' | sed 's/^"\([^"]*\)".*/\1/' | sort | tr '\n' ' ')" = "builder gate libc name out system " ] ;;
+      fod) [ "$(ev "$1" outputHashMode)" = recursive ] && [ "$(ev "$1" outputHash | wc -c)" -gt 40 ] && ! has "$1" btPath ;;
+      seedenv) local p d ok seen=""
+        for p in $(ev "$1" paths) $(ev "$1" gnutar); do
+          ok=""; for d in $(sed 's/^Derive(\[[^]]*\],\[//' "$1" | tr '(' '\n' | sed -n 's/^"\(\/[^"]*\.drv\)".*/\1/p'); do
+            outs "$d" | grep -qx "$p" && { marker "$d" seed || marker "$d" gccseed || marker "$d" seedenv; } && ok=1 && break
+          done; [ -n "$ok" ] || return 1; seen=1
+        done; [ -n "$seen" ] ;;
+      *) return 1 ;;
+    esac
+  }
+  classify() {  # <drv>: PASS | EXEMPT <marker> | FAIL <why>
+    local n re m; n=$(ev "$1" name)
+    check "$(ev "$1" PATH)" 2>/dev/null && { echo PASS; return; }
+    while IFS='	' read -r re m _; do
+      case "$re" in ''|'#'*) continue;; esac
+      printf '%s\n' "$n" | grep -Eq -- "$re" && marker "$1" "$m" && { echo "EXEMPT $m"; return; }
+    done < "$L"
+    echo "FAIL host PATH and not on the exempt list ($L)"
+  }
+  T=$(mktemp -d "${TMPDIR:-/tmp}/pge.XXXXXX") || exit 2
+  z=0000000000000000000000000000000; H='("PATH","/usr/gnu/bin:/usr/bin")'
+  printf 'Derive([("out","/nix/store/%s1-zlib-1.3.2","","")],[],[],"x","b",[],[("btPath",""),("name","zlib-1.3.2"),%s])' $z "$H" > "$T/s.drv"
+  printf 'Derive([("out","/nix/store/%s2-zlib-1.3.2","","")],[],[],"x","b",[],[("btPath","/nix/store/x"),("name","zlib-1.3.2"),%s])' $z "$H" > "$T/z.drv"
+  printf 'Derive([("out","/nix/store/%s3-libc","","")],[],[],"x","b",[],[("gate","/nix/store/g"),("name","libc"),%s])' $z "$H" > "$T/l.drv"
+  printf 'Derive([("out","/nix/store/%s4-solnix-seed-build-tools","","")],[("%s/s.drv",["out"]),("%s/z.drv",["out"])],[],"x","b",[],[("name","solnix-seed-build-tools"),("paths","/nix/store/%s2-zlib-1.3.2"),%s])' $z "$T" "$T" $z "$H" > "$T/f.drv"
+  printf 'Derive([("out","/nix/store/%s5-solnix-seed-build-tools","","")],[("%s/s.drv",["out"])],[],"x","b",[],[("name","solnix-seed-build-tools"),("paths","/nix/store/%s1-zlib-1.3.2"),%s])' $z "$T" $z "$H" > "$T/g.drv"
+  r="$(classify "$T/s.drv")|$(classify "$T/z.drv" | cut -c1-4)|$(classify "$T/l.drv" | cut -c1-4)|$(classify "$T/f.drv" | cut -c1-4)|$(classify "$T/g.drv")"
+  find "$T" -depth -delete
+  [ "$r" = "EXEMPT seed|FAIL|FAIL|FAIL|EXEMPT seedenv" ] || { echo "FATAL: path-gate --exempt-check selftest: $r" >&2; exit 2; }
+  rc=0; for d in "$@"; do c=$(classify "$d"); printf '%s\t%s\t%s\n' "${c%% *}" "$d" "${c#* }"; case "$c" in FAIL*) rc=1;; esac; done
+  exit $rc
+fi
 check "$PATH" || exit 1
 echo "=== path-gate: PATH is store-only ===" >&2

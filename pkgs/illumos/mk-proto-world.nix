@@ -65,7 +65,7 @@
     "usr/lib/hal/hal-storage-cleanup-mountpoint" "usr/lib/hal/hal-storage-closetray"
     "usr/lib/hal/hal-storage-eject" "usr/lib/hal/hal-storage-mount"
     "usr/lib/hal/hal-storage-unmount" "usr/lib/hal/hal-storage-zpool-export"
-    "usr/lib/hal/hal-storage-zpool-import" "usr/lib/hal/hald"
+    "usr/lib/hal/hal-storage-zpool-import"   # hald: not in the E1 proto (its -Werror build failed on the build host's newer expat.h; wave5 step3c)
     "usr/lib/hal/hald-addon-acpi" "usr/lib/hal/hald-addon-cpufreq"
     "usr/lib/hal/hald-addon-network-discovery" "usr/lib/hal/hald-addon-storage"
     "usr/lib/hal/hald-probe-acpi" "usr/lib/hal/hald-probe-network-printer"
@@ -85,6 +85,9 @@
     "usr/sbin/hal-set-property" "usr/sbin/lshal" "usr/sbin/polkit-is-privileged"
   ]
 , system ? "x86_64-solaris"
+  # fixups: the system world's NixOS-style fixups (./world-fixups.sh, ./world-links.sh: host RUNPATH, pyc, dangling links, host #!)
+  # and their in-build checks. false = the seed world's text byte-for-byte (the bootstrap set must not move).
+, fixups ? false
 }:
 
 derivation {
@@ -92,22 +95,30 @@ derivation {
   # NixOS convention: headers + link-time files in `dev`, out of the runtime closure.
   outputs = [ "out" "dev" ];
   builder = "/usr/bin/bash";
-  PATH = "/usr/gnu/bin:/usr/bin:/usr/sbin";
+  # the world is the bootstrap layer (every store GNU tool links it), so its builder may use only what illumos ships in /usr/bin
+  # and /usr/sbin on BOTH an OI host and a solnix host: never /usr/gnu (a solnix host has none), no readlink(1), no grep -a.
+  PATH = "/usr/bin:/usr/sbin";
   libc = libcSlice;
   sharedLibsArg = builtins.concatStringsSep " " sharedLibs;
   dirsArg = builtins.concatStringsSep " " dirs;
   excludeArg = builtins.concatStringsSep " " (exclude ++ (if withTests then [ ] else [ "opt" ]));
   dropArg = builtins.concatStringsSep " " dropUnloadable;
   depsArg = builtins.concatStringsSep " " deps;
-  args = [ "-c" ''
+  args = [ "-c" (''
     set -eu
-    export PATH=/usr/gnu/bin:/usr/bin:/usr/sbin
+    export PATH=/usr/bin:/usr/sbin
     mkdir -p "$out/.world"
     cd "$gate"
     for d in $dirsArg; do [ -e "$d" ] && tar cf - "$d" | (cd "$out" && tar xf -); done
     cd "$out"
+    # writable BEFORE the exclude: the proto's dirs are r-x, so as nixbld find -delete failed on opt/ and usr/kernel/ ("delete failed ...
+    # Permission denied") and opt/ stayed; as root (every earlier world) the deletes succeeded (wave5 W1).
+    # not chmod -R: illumos chmod follows the gate's root-relative links (usr/adm -> ../var/adm), which dangle here, and exits 1.
+    find "$out" ! -type l -exec chmod u+w {} +
     for x in $excludeArg; do [ -e "$x" ] && find "$x" -depth -delete; done
-    chmod -R u+w "$out"
+    # one file per name, as the NAR has it: under auto-optimise-store the gate's identical files share an inode, tar keeps that
+    # as a hardlink, and the per-name relocation below gave usr/bin/ps and usr/ucb/ps ONE RUNPATH (woof, measured; served: two).
+    find . -type f -links +1 | while read -r f; do cp "$f" "$f.hl" && mv -f "$f.hl" "$f"; done
     # dev output: the C headers (usr/include) and the lint/link-only bits.
     mkdir -p "$dev/usr"
     [ -d usr/include ] && mv usr/include "$dev/usr/include"
@@ -169,7 +180,7 @@ derivation {
     done
     RP="$out/lib-32:$out/lib-64"
 
-    # relocate every dynamic object (not symlinks; hardlinks are visited per name, idempotent).
+    # relocate every dynamic object (not symlinks; no hardlinks are left, see above).
     # Two trees keep a private dir first, because their sonames clash with the
     # flat dirs: the BSD-compat tools (usr/ucb) need usr/ucblib's libtermcap and
     # libcurses (SUNW_1.1 versions the core libtermcap filter lacks) and libucb;
@@ -224,9 +235,21 @@ derivation {
     done < .world/drop.expected
     echo "dropped $(grep -c . .world/drop.expected) unloadable objects (dbus/glib/hal/tspi/net-snmp/openssl-1.0/python3.9/jvm consumers)" >&2
 
+    # iconv (wave5 finding: the served world had 201 modules and no amd64/ dir, so 64-bit UTF-8 -> UTF-16 failed on every host): the
+    # converters libc opens by absolute path (/usr/lib/iconv/<from>%<to>.so, the RUNNING system's) must be in the world, both
+    # ABIs. A build cannot run them (libc reads /usr/lib/iconv of the BUILD host, not of $out); the run check is a chroot as root
+    # (wave6 checks/iconv-chroot.sh: echo e-acute | iconv -f UTF-8 -t UTF-16 inside a root whose /usr is this world).
+    for m in usr/lib/iconv/UTF-8%UTF-16.so usr/lib/iconv/amd64/UTF-8%UTF-16.so usr/lib/iconv/UTF-16%UTF-8.so usr/lib/iconv/amd64/UTF-16%UTF-8.so; do
+      [ -f "$m" ] && [ "$(od -An -tx1 -N4 "$m" | tr -d ' \n')" = 7f454c46 ] || { echo "FATAL: the world lacks the iconv module $m" >&2; exit 1; }
+    done
+    n32=$(ls usr/lib/iconv | grep -c '\.so$'); n64=$(ls usr/lib/iconv/amd64 | grep -c '\.so$')
+    [ "$n32" -ge 1000 ] && [ "$n64" -ge 1000 ] || { echo "FATAL: iconv modules: $n32 (32-bit), $n64 (64-bit); want >= 1000 each" >&2; exit 1; }
     printf 'objects_relocated=%s dropped_unloadable=%s setuid=%s\n' \
       "$(find . -type f ! -path './lib-*' | wc -l | tr -d ' ')" "$(grep -c . .world/drop.expected | tr -d ' ')" \
       "$(wc -l < .world/setuid | tr -d ' ')" > .world/summary
     cat .world/summary >&2
-  '' ];
+  '' + (if fixups then ''
+    /usr/bin/bash ${./world-fixups.sh} "$out"
+    /usr/bin/bash ${./world-links.sh} "$out"
+  '' else "")) ];
 }

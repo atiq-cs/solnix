@@ -12,18 +12,28 @@
 #   --localstatedir=/nix/var, --with-store-dir=/nix/store.
 # Disabled, as nix224.nix did: Boehm GC (--disable-gc), lowdown (markdown),
 # libcpuid (x86 microarch detection), tests, docs. seccomp is Linux-only.
-{ mkSrcPkg, zlib, openssl, libcSlice, gccLib, system, libSub ? "lib/amd64", nixCxxFlags ? "", hostTools ? [ ], perl ? null
-, shared ? { }   # shared: one sqlite from the caller (aarch64 final: the set's 3.50.4); {} = the 3.46.1 recipe below
+{ mkSrcPkg, zlib, openssl, libcSlice, gccLib, system, libSub ? "lib/amd64", nixCxxFlags ? ""
+, hostTools ? [ ]   # store-only PATH base (base-src.nix): [] on the exempt seed instance
+, cmake ? null      # store cmake for brotli/nlohmann_json/libgit2 (the OI host had /usr/bin/cmake); null on the seed/aarch64
+, perl ? null      # the store perl (cli), for curl's man pages (main 4784cde); null on the seed/aarch64
+, bzip2Bin ? null   # bzip2 CLI for boost's .tar.bz2 (GNU tar runs bzip2 from PATH; the OI host had /usr/bin/bzip2)
+, sqliteShared ? null   # one sqlite per set, as NixOS (a64h2 did it on aarch64): the cli's 3.53.2 (readline); null = the recipe below
+, nixBuildTools ? [ ]   # nix's autoreconf/configure tools from the store: autotools, autoconf-archive (AX_BOOST_BASE), m4, bison,
+                        # flex, patch, pkg-config (the OI host's /usr/bin and /usr/share/aclocal before; [ ] = that old text)
+, shared ? { }   # aarch64 (main af5ac0e): one sqlite from the caller (the set's 3.50.4); x86 wave6 uses sqliteShared
 , plain ? (d: d)   # aarch64 store-only set: the plain derivations' builder text -> store tools (../aarch64/tools.nix)
-, pinNixCurl ? false   # x86 only (base-src.nix): nix links curlForNix 8.10.1; see the shortcut at curlForNix
+, pinNixCurl ? false   # main 6dd8c10's x86 pin (nix on curl 8.10.1) until nix is store-only: wave6's is, so base-src.nix does not set it
 }:
-# hostTools, perl: the store build tools for curl's store-only build (x86, base-src.nix); [] / null (aarch64) keep curl on the old PATH text.
+let # xz's configure, on solaris*, gives xzgrep/xzdiff/xzless/xzmore "#!/usr/xpg4/bin/sh" and a PATH=/usr/xpg4/bin prefix: host
+    # paths in the out (wave6 out-host-refs, P0 run i). /bin/sh is POSIX ksh93 on illumos; NixOS adds no PATH prefix.
+    xzScripts = " gl_cv_posix_shell=/bin/sh --enable-path-for-scripts=no";   # the seed too (wave6t: its outs pass the content gate)
+    withTools = extra: if hostTools == [ ] then { } else { nativeTools = builtins.filter (x: x != null) extra ++ hostTools; }; in
 # libSub: the 64-bit lib dir of the plain derivations below ("lib" on aarch64, LP64 only).
 # nixCxxFlags: extra CXXFLAGS for nix itself (aarch64: see aarch64/src.nix). "" keeps the x86 text byte-identical.
 
 rec {
   # boost: headers + boost_context (the only compiled boost lib nix links).
-  boost = mkSrcPkg {
+  boost = mkSrcPkg ({
     pname = "boost"; version = "1.86.0";
     selfRunpath = false;
     src = { url = "https://archives.boost.io/release/1.86.0/source/boost_1_86_0.tar.bz2";
@@ -31,14 +41,17 @@ rec {
     build = ''
       # b2 itself is a build tool, compiled by whatever g++ is on PATH; the
       # library is compiled by $CXX (the from-source gcc) via user-config.jam.
-      ./bootstrap.sh --with-toolset=gcc --with-libraries=context >&2
-      echo "using gcc : solnix : $CXX ;" > user-config.jam
+      # b2's engine build clears CXX and runs `g++` by name (tools/build/src/engine/build.sh test_compiler; the OI host had
+      # /usr/bin/g++): the builder's own wrappers under those names, on PATH for this step only.
+      mkdir -p "$W/b2bin"; ln -sf "$(command -v $CXX)" "$W/b2bin/g++"; ln -sf "$(command -v $CC)" "$W/b2bin/gcc"
+      PATH="$W/b2bin:$PATH" ./bootstrap.sh --with-toolset=gcc --with-libraries=context >&2
+      echo "using gcc : solnix : $(command -v $CXX) ;" > user-config.jam
       ./b2 --user-config=user-config.jam toolset=gcc-solnix --with-context \
         variant=release link=shared threading=multi runtime-link=shared \
         address-model=64 architecture=x86 abi=sysv binary-format=elf target-os=solaris \
         --prefix="$out" --libdir="$out/lib/amd64" -j4 install >&2
     '';
-  };
+  } // withTools [ bzip2Bin ]);
 
   # libboost_context alone, for the runtime closure: the boost output above is
   # ~150 MB of headers nix needs only to compile. boost is built with
@@ -46,11 +59,14 @@ rec {
   boostContext = derivation (plain {
     name = "boost-context-1.86.0"; inherit system boost;
     builder = "/usr/bin/bash";
-    args = [ "-c" ''
-      set -eu; export PATH=/usr/gnu/bin:/usr/bin
+    # store-only (wave6, gate2 A1): coreutils (mkdir cp) + grep, from the store tools nix-src's recipes use
+    PATH = builtins.concatStringsSep ":" (map (d: "${d}/bin") hostTools);
+    args = [ "-c" (''
+      set -eu
+    '' + (if hostTools == [ ] then "export PATH=/usr/gnu/bin:/usr/bin\n" else "/usr/bin/bash ${./path-gate.sh}\n") + ''
       mkdir -p $out/${libSub}; cp -P $boost/${libSub}/libboost_context.so* $out/${libSub}/
       if grep -rq "$boost" $out; then echo "FATAL: boost-context still names $boost" >&2; exit 1; fi
-    '' ];
+    '') ];
   });
 
   # Mozilla CA bundle (curl.se's extract), for nix's ssl-cert-file.
@@ -59,13 +75,19 @@ rec {
     pem = import <nix/fetchurl.nix> { url = "https://curl.se/ca/cacert-2024-09-24.pem";
             sha256 = "189d3cf6d103185fba06d76c1af915263c6d42225481a1759e853b33ac857540"; };
     builder = "/usr/bin/bash";
-    args = [ "-c" "/usr/bin/mkdir -p $out/etc/ssl/certs && /usr/bin/cp $pem $out/etc/ssl/certs/ca-bundle.crt" ];
+    # store-only (wave6, gate2 A1) when the instance has store tools; the seed instance keeps /usr/bin (bootstrap set)
+    PATH = builtins.concatStringsSep ":" (map (d: "${d}/bin") hostTools);
+    args = [ "-c" (if hostTools == [ ] then "/usr/bin/mkdir -p $out/etc/ssl/certs && /usr/bin/cp $pem $out/etc/ssl/certs/ca-bundle.crt"
+      # trailing true: bash -c execs its last command, and a store coreutils one (cp) as the builder is killed by signal 9 (a64h step43:
+      # 6/6 on dixa; W6B-step68 and wave6t W2 here, which were this, not a killed client)
+      else "/usr/bin/bash ${./path-gate.sh} && mkdir -p $out/etc/ssl/certs && cp $pem $out/etc/ssl/certs/ca-bundle.crt && true") ];
   });
 
-  sqlite = shared.sqlite or (mkSrcPkg {
-    pname = "sqlite"; version = "3.46.1";
-    src = { url = "https://www.sqlite.org/2024/sqlite-autoconf-3460100.tar.gz";
-            sha256 = "67d3fe6d268e6eaddcae3727fce58fcc8e9c53869bdd07a0c61e38ddf2965071"; };
+  sqlite = if sqliteShared != null then sqliteShared else shared.sqlite or (mkSrcPkg {
+    pname = "sqlite"; version = "3.53.2";   # queue target (CVE feed fixed_in: CVE-2026-11824); 3.46.1 had 5 High/Critical
+    # sha3-256 of sqlite3.c = 44fd61b9... = the 3.53.2 release log's
+    src = { url = "https://www.sqlite.org/2026/sqlite-autoconf-3530200.tar.gz";
+            sha256 = "588ad51949419a56ebe81fe56193d510c559eb94c9a57748387860b5d3069316"; };
     build = ''
       ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-readline --disable-editline
       gmake -j4; gmake install
@@ -73,12 +95,13 @@ rec {
   });
 
   xz = mkSrcPkg {
-    pname = "xz"; version = "5.6.3";
-    src = { url = "https://github.com/tukaani-project/xz/releases/download/v5.6.3/xz-5.6.3.tar.gz";
-            sha256 = "b1d45295d3f71f25a4c9101bd7c8d16cb56348bbef3bbc738da0351e17c73317"; };
+    pname = "xz"; version = "5.8.1";   # queue target (CVE-2025-31115 fixed_in); .sig: Lasse Collin 3690C240CE51B467
+    src = { url = "https://github.com/tukaani-project/xz/releases/download/v5.8.1/xz-5.8.1.tar.gz";
+            sha256 = "507825b599356c10dca1cd720c9d0d0c9d5400b9de300af00e4d1ea150795543"; };
     build = ''
-      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-nls --disable-doc
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-nls --disable-doc${xzScripts}
       gmake -j4; gmake install
+      head -1 "$out/bin/xzgrep" | grep -qx '#!/bin/sh' || { echo "FATAL: xzgrep #! is not /bin/sh: $(head -1 "$out/bin/xzgrep")" >&2; exit 1; }
     '';
   };
 
@@ -151,7 +174,7 @@ rec {
     # library only (multi-threaded, as nixpkgs' default); the zstd CLI is not needed.
     build = ''
       gmake -C lib -j4 CC="$CC" PREFIX="$out" LIBDIR="$out/lib/amd64" libzstd libzstd.pc
-      gmake -C lib CC="$CC" PREFIX="$out" LIBDIR="$out/lib/amd64" INSTALL=ginstall install-shared install-includes install-pc
+      gmake -C lib CC="$CC" PREFIX="$out" LIBDIR="$out/lib/amd64" INSTALL=install install-shared install-includes install-pc   # GNU install (store coreutils), not the OI host's ginstall
     '';
   };
 
@@ -173,9 +196,9 @@ rec {
   };
 
   libarchive = mkSrcPkg {
-    pname = "libarchive"; version = "3.7.6";
-    src = { url = "https://www.libarchive.org/downloads/libarchive-3.7.6.tar.xz";
-            sha256 = "0a2efdcb185da2eb1e7cd8421434cb9a6119f72417a13335cca378d476fd3ba0"; };
+    pname = "libarchive"; version = "3.8.7";   # queue target (CVE-2026-5121/4424 fixed_in); same soname libarchive.so.13; .asc: Martin Matuska C040B508D63D2B36
+    src = { url = "https://github.com/libarchive/libarchive/releases/download/v3.8.7/libarchive-3.8.7.tar.xz";
+            sha256 = "d3a8ba457ae25c27c84fd2830a2efdcc5b1d40bf585d4eb0d35f47e99e5d4774"; };
     deps = [ zlib xz zstd bzip2 ];
     build = ''
       ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-bsdtar \
@@ -190,10 +213,10 @@ rec {
     '';
   };
 
-  brotli = mkSrcPkg {
-    pname = "brotli"; version = "1.1.0";
-    src = { url = "https://github.com/google/brotli/archive/refs/tags/v1.1.0.tar.gz";
-            sha256 = "e720a6ca29428b803f4ad165371771f5398faba397edf6778837a18599ea13ff"; };
+  brotli = mkSrcPkg ({
+    pname = "brotli"; version = "1.1.1";   # CVE-2026-111497 (fixed 1.1.1)
+    src = { url = "https://github.com/google/brotli/archive/refs/tags/v1.1.1.tar.gz";
+            sha256 = "1a84dfaa740994d19254bf78aa7d74a4a8040d1638f3d5f2cdecb188fd520da8"; };
     build = ''
       mkdir b; cd b
       # CMAKE_SKIP_RPATH: the compiler wrapper bakes the store RUNPATH; cmake's
@@ -202,7 +225,7 @@ rec {
         -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON -DCMAKE_SKIP_RPATH=ON -DBROTLI_DISABLE_TESTS=ON >&2
       gmake -j4; gmake install
     '';
-  };
+  } // withTools [ cmake ]);
 
   editline = mkSrcPkg {
     pname = "editline"; version = "1.17.1";
@@ -215,7 +238,7 @@ rec {
   };
 
   # header-only
-  nlohmann_json = mkSrcPkg {
+  nlohmann_json = mkSrcPkg ({
     pname = "nlohmann_json"; version = "3.11.3";
     src = { url = "https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz";
             sha256 = "d6c65aca6b1ed68e7a182f4757257b107ae403032760ed6ef121c9d55e81757d"; };
@@ -224,7 +247,7 @@ rec {
       cmake .. -DCMAKE_INSTALL_PREFIX="$out" -DJSON_BuildTests=OFF -DCMAKE_CXX_COMPILER="$CXX" >&2
       gmake install
     '';
-  };
+  } // withTools [ cmake ]);
 
   # header-only; nix's configure checks for <toml.hpp>
   toml11 = mkSrcPkg {
@@ -236,10 +259,10 @@ rec {
     '';
   };
 
-  libgit2 = mkSrcPkg {
-    pname = "libgit2"; version = "1.7.2";
-    src = { url = "https://github.com/libgit2/libgit2/archive/refs/tags/v1.7.2.tar.gz";
-            sha256 = "de384e29d7efc9330c6cdb126ebf88342b5025d920dcb7c645defad85195ea7f"; };
+  libgit2 = mkSrcPkg ({
+    pname = "libgit2"; version = "1.8.6";   # queue target (CVE-2026-53587 fixed_in); 1.7 has no later release (GitHub tag, no signature)
+    src = { url = "https://github.com/libgit2/libgit2/archive/refs/tags/v1.8.6.tar.gz";
+            sha256 = "c171e9c6fcc33455e3df46d422f4e1b3ea7c049a645051664c9cdbdc081208e7"; };
     deps = [ zlib openssl ];
     build = ''
       mkdir b; cd b
@@ -252,9 +275,14 @@ rec {
         -DCMAKE_SKIP_RPATH=ON >&2
       gmake -j4; gmake install
     '';
-  };
+  } // withTools [ cmake ]);
 
-  nix = mkSrcPkg {
+  # aclocal dirs: AX_BOOST_BASE (autoconf-archive), PKG_CHECK_MODULES (pkgconf's pkg.m4), LT_INIT (libtool), as /usr/share/aclocal had.
+  nix = let ac = builtins.filter (t: builtins.elem (t.pname or "") [ "autoconf-archive" "libtool" "pkgconf" ]) nixBuildTools;
+    acDirs = map (t: "${t}/share/aclocal") ac;
+    aclocalLine = if nixBuildTools == [ ] then "ACLOCAL_PATH=/usr/share/aclocal autoreconf -fi -I /usr/share/aclocal >&2"
+      else "for d in ${toString acDirs}; do [ -d $d ] || { echo \"FATAL: no aclocal dir $d\" >&2; exit 1; }; done; "
+        + "ACLOCAL_PATH=${builtins.concatStringsSep ":" acDirs} autoreconf -fi ${toString (map (d: "-I " + d) acDirs)} >&2"; in mkSrcPkg ({
     pname = "nix"; version = "2.24.15";
     src = { url = "https://github.com/NixOS/nix/archive/refs/tags/2.24.15.tar.gz";
             sha256 = "e395732ec576b7f65359c80bc5a23335ad2a8c382f4f14c370bbc236708d4749"; };
@@ -264,8 +292,8 @@ rec {
       for p in ${./nix-illumos-patches/224}/0*.patch; do patch -p1 < "$p" >&2; done
       # The GitHub archive ships no ./configure; the AX_BOOST_BASE macro comes
       # from the build host's autoconf-archive (build tool).
-      ACLOCAL_PATH=/usr/share/aclocal autoreconf -fi -I /usr/share/aclocal >&2
-      export CONFIG_SHELL=/usr/bin/bash
+      ${aclocalLine}
+      export CONFIG_SHELL=/usr/bin/bash   # the builder interpreter (path-gate's documented exemption)
       # gcc's temporaries: the builder's /tmp is a small tmpfs (824 MB on the build
       # guest) and nix's C++ units filled it (measured: "No space left on device").
       export TMPDIR="$SRC/.tmp"; mkdir -p "$TMPDIR"
@@ -277,7 +305,10 @@ rec {
       # assert strings (measured: libnixutil.so named boost/format/*.hpp after
       # strip-debug), which pulls ~150 MB of boost headers into nix's runtime
       # closure. Map them away, as nixpkgs' remove-references-to does after the fact.
-      SYSI="$SYSI -fmacro-prefix-map=${boost}=/boost -fmacro-prefix-map=${nlohmann_json}=/nlohmann_json -fmacro-prefix-map=${toml11}=/toml11"
+      SYSI="$SYSI -fmacro-prefix-map=${boost}=/boost -fmacro-prefix-map=${nlohmann_json}=/nlohmann_json -fmacro-prefix-map=${toml11}=/toml11"${if nixBuildTools == [ ] then "" else ''
+
+      # and in DWARF too (wave6: nix gets a debug output; DW_AT_producer omits -I/-isystem, the line tables name the headers)
+      SYSI="$SYSI -fdebug-prefix-map=${boost}=/boost -fdebug-prefix-map=${nlohmann_json}=/nlohmann_json -fdebug-prefix-map=${toml11}=/toml11"''}
       export CXXFLAGS="-O2 $SYSI${nixCxxFlags}" CFLAGS="-O2"
       bash ./configure --prefix="$out" --sysconfdir=/etc --localstatedir=/nix/var \
         --with-store-dir=/nix/store --with-boost=${boost} --with-boost-libdir=${boost}/lib/amd64 \
@@ -290,6 +321,7 @@ rec {
       gmake install ERROR_SWITCH_ENUM= sysconfdir="$out/etc" >&2
       unset LD_LIBRARY_PATH LD_LIBRARY_PATH_64 || true
       "$out/bin/nix" --version >&2
+${if nixBuildTools == [ ] then ''
       # strip first (mk-src-pkg strips again later; idempotent): DWARF names the
       # headers too, and only what survives the strip is a real reference.
       find "$out" -type f | while read -r f; do
@@ -298,7 +330,7 @@ rec {
       done
       for x in ${boost} ${nlohmann_json} ${toml11}; do
         if grep -rlq "$x" "$out"; then echo "FATAL: nix still references build-only $x" >&2; exit 1; fi
-      done
+      done'' else ""}   # wave6: no self-strip; mk-src-pkg splits the DWARF into $debug and guards buildOnlyRefs after it
     '';
-  };
+  } // withTools nixBuildTools // (if nixBuildTools == [ ] then { } else { buildOnlyRefs = [ boost nlohmann_json toml11 ]; }));   # store-only (wave6): the autotools above; [ ] (seed / aarch64) keeps the old drv
 }

@@ -45,16 +45,18 @@ rec {
 
   # sqlite CLI (nix-src.nix's sqlite is the library nix links, 3.46.1, no shell readline).
   sqlite = mkSrcPkg {
-    pname = "sqlite"; version = "3.50.4";
-    src = { url = "https://sqlite.org/2025/sqlite-autoconf-3500400.tar.gz";
-            sha256 = "a3db587a1b92ee5ddac2f66b3edb41b26f9c867275782d46c3a088977d6a5b18"; };
+    pname = "sqlite"; version = "3.53.2";   # queue target (CVE-2025-70873 3.51.1, CVE-2026-11824 3.53.2)
+    src = { url = "https://www.sqlite.org/2026/sqlite-autoconf-3530200.tar.gz";
+            sha256 = "588ad51949419a56ebe81fe56193d510c559eb94c9a57748387860b5d3069316"; };
     deps = [ readline ncurses zlib ];
+    nativeTools = hostTools;   # store-only PATH + config.site (wave4)
     build = ''
+      # readline's headers from the store: the OI build host found them in /usr/include, a solnix host has none (wave4 dixi rebuild)
       ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --enable-readline \
-        --with-readline-ldflags="-lreadline -lncursesw" --disable-editline
+        --with-readline-cflags="-I${readline}/include" --with-readline-ldflags="-L${readline}/lib/amd64 -lreadline -L${ncurses}/lib/amd64 -lncursesw" --disable-editline
       # autosetup's --soname "does not support SONAME" on illumos (measured): set it ourselves.
       gmake -j8 LDFLAGS.libsqlite3.soname=-Wl,-h,libsqlite3.so.0; gmake install LDFLAGS.libsqlite3.soname=-Wl,-h,libsqlite3.so.0
-      ${chk ''"$out/bin/sqlite3" --version'' "^3\\.50\\.4"}
+      ${chk ''"$out/bin/sqlite3" --version'' "^3\\.53\\.2"}
       ${chk ''echo "select 6*7;" | "$out/bin/sqlite3" :memory:'' "^42$"}
       # autosetup sets NO soname by default: consumers then NEED the bare libsqlite3.so dev link
       # (python3's _sqlite3 did, and resolved a host copy; measured). legacy = libsqlite3.so.0.
@@ -69,6 +71,7 @@ rec {
     src = { url = "https://dev.yorhel.nl/download/ncdu-1.22.tar.gz";
             sha256 = "0ad6c096dc04d5120581104760c01b8f4e97d4191d6c9ef79654fa3c691a176b"; };
     deps = [ ncurses ];
+    nativeTools = [ pkgconf ] ++ hostTools;   # store-only: configure needs pkg-config (the OI host's /usr/bin/pkg-config before)
     build = ''
       CFLAGS="-O2 -D__EXTENSIONS__" ./configure --prefix="$out" --with-ncursesw
       gmake -j8; gmake install
@@ -107,8 +110,14 @@ rec {
       ./configure --prefix="$out" --disable-static
       gmake -j8; gmake install
       ${chk ''"$out/bin/lsof" -v'' "revision: 4.99.5"}
-      ${chk ''"$out/bin/lsof" -p $$'' "^bash +[0-9]+ "}
-      ${chk ''"$out/bin/lsof" -a -p $$ -d cwd'' "cwd +V?DIR"}
+      # lsof reads the kernel through libkvm (/dev/kmem): only root can, so these two checks ran only while the build host built as root.
+      # As nixbld (NixOS: no root in the sandbox either) "cannot open /dev/kmem" (wave5 W2): check that it fails for that reason, not another.
+      if [ "$(id -u)" = 0 ]; then
+        ${chk ''"$out/bin/lsof" -p $$'' "^bash +[0-9]+ "}
+        ${chk ''"$out/bin/lsof" -a -p $$ -d cwd'' "cwd +V?DIR"}
+      else
+        ${chk ''"$out/bin/lsof" -p $$'' "cannot open /dev/kmem"}
+      fi
       [ -f "$out/share/man/man8/lsof.8" ] || [ -f "$out/share/man/man1/lsof.1" ] || { echo "FATAL: no lsof man" >&2; exit 1; }
     '';
   };

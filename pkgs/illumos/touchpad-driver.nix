@@ -24,6 +24,8 @@
 , kernelNd                   # the shipped non-DEBUG kernel; .src = its gate source
 , solnixDev                  # gcc + gas + gmake on PATH
 , ld                         # the gate link-editor slice
+, kmodPath ? null             # wave6: store bin dirs replacing /usr/bin:/usr/sbin:/usr/gnu/bin (default.nix kmodTools); null = old
+, pathGate ? null
 , system ? "x86_64-solaris"
 , tpSrc ? builtins.path {
     path = ../../src/ports/touchpad;
@@ -39,11 +41,13 @@ derivation {
   inherit system gate kernelNd solnixDev ld tpSrc;
   utsSrc = "${kernelNd.src}/usr/src/uts";
   builder = "/usr/bin/bash";
-  PATH = "/usr/bin:/usr/sbin:/usr/gnu/bin";
+  PATH = if kmodPath == null then "/usr/bin:/usr/sbin:/usr/gnu/bin" else kmodPath;
+  pathGate = if pathGate == null then "" else pathGate;
 
   args = [ "-c" ''
     set -eu
-    export PATH="$solnixDev/bin:$ld/usr/bin:$ld/bin:/usr/bin:/usr/sbin:/usr/gnu/bin"
+    export PATH="$solnixDev/bin:$ld/usr/bin:$ld/bin:$PATH"   # $PATH = the drv's: store tools (kmodPath), or the old host dirs
+    [ -z "$pathGate" ] || PATH_GATE_ALLOW="" /usr/bin/bash "$pathGate"
     UTSINC="$gate/usr/include"
     [ -d "$UTSINC/sys" ] || { echo "FATAL: gate proto has no usr/include/sys" >&2; exit 1; }
     [ -f "$utsSrc/common/sys/i2c/client.h" ] || { echo "FATAL: $utsSrc has no sys/i2c/client.h" >&2; exit 1; }
@@ -51,14 +55,14 @@ derivation {
     LDBIN="$ld/usr/bin/ld"
     [ -x "$LDBIN" ] || LDBIN="$ld/bin/ld"
     [ -x "$LDBIN" ] || LDBIN=/usr/bin/ld
-    WORK=$(mktemp -d /tmp/touchpad-driver.XXXXXX)
+    WORK=$(mktemp -d "''${TMPDIR:-/tmp}"/touchpad-driver.XXXXXX)
     cp -r "$tpSrc" "$WORK/tp"; chmod -R u+w "$WORK/tp"; cd "$WORK/tp"
 
     gmake -f Makefile.illumos UTSINC="$UTSINC" UTSSRC="$utsSrc" LD="$LDBIN" >build.log 2>&1 \
       || { echo "FATAL: touchpad build failed" >&2; tail -40 build.log >&2; exit 1; }
 
     # illumos nm (GNU nm -p prints nothing for these ET_REL objects).
-    NM=/usr/bin/nm; [ -x "$NM" ] || NM=nm
+    NM=$(command -v nm || echo /usr/bin/nm); [ -x "$NM" ] || NM=nm
     defs() { for k in "$@"; do [ -f "$k" ] || { echo "FATAL: reference $k missing" >&2; exit 1; }; $NM -p "$k"; done \
       | awk '$2 ~ /^[TDBRC]$/ {print $3}' | sort -u; }
     undef() { $NM -p "$1" | awk '$2=="U" {print $3}' | sort -u; }

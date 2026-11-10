@@ -313,27 +313,6 @@ def served_narinfo(p, _cache={}):
     except OSError: _cache[p] = None
     return _cache[p]
 
-LEGACY_ENV_PATH = "/usr/gnu/bin:/usr/bin:/usr/sbin"
-def allow_envpath(d):
-    """shortcut: --leaf only, TEMPORARY. Delete this function and its one call in the commit where mk-src-pkg stops
-    emitting the legacy drv attr PATH="/usr/gnu/bin:/usr/bin:/usr/sbin" (the wave6 merge; on wave6's checklist).
-    The served rows recipes1 made hermetic still carry that attr, but their builder replaces PATH before it runs any
-    command (orchestrator 2026-11-03: they need their NARs). Exact condition, anything else FAILs: the builder is
-    /usr/bin/bash, env PATH is exactly the legacy value, no BASH_ENV/ENV, and the -c text's first statement is a PATH=
-    that passes A1, with only `set -<flags>` (a builtin: no PATH lookup) allowed before it."""
-    env = d["env"]
-    if d["builder"] != "/usr/bin/bash" or env.get("PATH") != LEGACY_ENV_PATH or "BASH_ENV" in env or "ENV" in env:
-        return False
-    if len(d["args"]) != 2 or d["args"][0] != "-c":
-        return False
-    for line in d["args"][1].splitlines():
-        for stmt in re.split(r"\s*;\s*", line.strip()):
-            if not stmt or stmt.startswith("#"): break
-            if re.fullmatch(r"set -[euxo]+( pipefail)?", stmt): continue
-            m = re.match(r"(?:export\s+)?PATH=(\"[^\"]*\"|'[^']*'|[^\s;]*)(\s|$)", stmt)
-            return bool(m) and not bad_path_entries(m.group(1).strip("\"'"), env)
-    return False
-
 def run_drv(drvs, out=print, ca_ok=None, mode="closure", served=None):
     """mode closure (strict; host first publishing via pre-submit-check.sh): every drv in the deriver's closure.
     mode leaf (the orchestrator's cache-submit path): the deriver plus every input drv with an output that is NOT served
@@ -390,11 +369,6 @@ def run_drv(drvs, out=print, ca_ok=None, mode="closure", served=None):
             outs = {o["path"] for o in d["outputs"].values()}
             name = d["env"].get("name", dp[44:-4])
             findings = check_drv(dp, d, ca_ok)
-            if mode == "leaf" and dp in judged and allow_envpath(d):
-                envf = [f for f in findings if f[1] == "A1-path" and f[2].startswith("env PATH")]
-                if envf:
-                    findings = [f for f in findings if f not in envf]
-                    out(f"ALLOW A1-envpath {dp}: {name}: legacy env PATH {LEGACY_ENV_PATH}, replaced by the builder's first statement (temporary, --leaf only)")
             hard = [f for f in findings if f[0] == "FAIL"]
             if dp not in judged:
                 host_debt += bool(hard); continue
@@ -553,7 +527,7 @@ SHEBANG_OK = {"/bin/sh", "/usr/bin/sh", "/usr/bin/env"}
 # shadow-shaped line. Documentation (man/doc/info) that merely shows a header is allowed (DOC_RE), as for B13.
 SECRET_BODY = re.compile(rb"b3BlbnNzaC1rZXkt"                                   # OpenSSH private key body (any type incl ed25519)
                          rb"|-----BEGIN (?:RSA|EC|DSA|ENCRYPTED) PRIVATE KEY-----\s*\n[A-Za-z0-9+/]{40}"  # PEM body present
-                         rb"|-----BEGIN PGP PRIVATE KEY BLOCK-----"
+                         rb"|-----BEGIN PGP PRIVATE KEY BLOCK-----\r?\n(?:[\x21-\x7e]+: [^\r\n]*\r?\n)*\r?\n[A-Za-z0-9+/]{40}"  # PGP armour + body
                          rb"|PuTTY-User-Key-File-\d"
                          rb"|AGE-SECRET-KEY-1[0-9A-Z]{20,}"                      # age identity (secret half)
                          rb"|ENC\[AES256_GCM,data:")                            # inline sops ciphertext
@@ -561,6 +535,56 @@ SECRET_BODY = re.compile(rb"b3BlbnNzaC1rZXkt"                                   
 # password. Allowed only for root (a shipped root hash is itself a finding, but B18 targets NON-root accounts baked in;
 # root is covered by the image gate's shadow rule). Here, any non-root user with a hash FAILs.
 SHADOW_HASH = re.compile(rb"(?m)^([A-Za-z0-9_][A-Za-z0-9_.-]*):\$(?:1|2[aby]|5|6|y|gy)\$[./A-Za-z0-9]")
+# B18 key review (protocol agreed with infra 2026-11-09): a few upstream packages ship key material on purpose (Go's crypto test
+# fixtures, goproxy's demo MITM CA). A B18 match is skipped ONLY when all three hold: the digest of its whole armour block (BEGIN..END
+# inclusive, CRLF -> LF, sha256) is on infra's served registry/b18-allowlist.tsv, the out's pname matches the row's pnames (exact or a
+# short glob), and the row's state is approved. A human approves every row; there is no pattern for "looks like a test key".
+# shortcut: only PEM/OpenSSH armour blocks can be allowlisted; an age/PuTTY/sops/PGP match always FAILs. Add a token rule when a
+# request needs one.
+B18_BLOCK = re.compile(rb"-----BEGIN ((?:RSA|EC|DSA|ENCRYPTED|OPENSSH) PRIVATE KEY)-----\r?\n.*?-----END \1-----", re.S)
+B18_COLS = ("digest", "kind", "pnames", "upstream", "why", "state", "reviewer", "decided_utc", "request")
+_B18_ALLOW = {}
+def b18_allowlist():
+    """-> {(digest, pnames): row} from the SERVED registry/b18-allowlist.tsv (GATE_B18_ALLOWLIST: a local file instead: tests,
+    offline), read once per process and only when a B18 match needs it; append-only, so the last row of a (digest, pnames) wins
+    (a revocation is a later row). -> None if it cannot be read (HTTP 404 included): then nothing is exempt (fail closed)."""
+    src = os.environ.get("GATE_B18_ALLOWLIST") or "https://cache.solnix.io/registry/b18-allowlist.tsv"
+    if src in _B18_ALLOW: return _B18_ALLOW[src]
+    try:
+        if "://" in src:
+            import urllib.request
+            req = urllib.request.Request(src, headers={"User-Agent": "solnix-gate-checks/1"})
+            with urllib.request.urlopen(req, timeout=60) as r: text = r.read().decode()
+        else: text = open(src).read()
+    except (OSError, UnicodeDecodeError) as e:
+        print(f"WARN b18-allowlist: cannot read {src} ({e}): no B18 exemption", file=sys.stderr)
+        _B18_ALLOW[src] = None; return None
+    rows, cols = {}, B18_COLS
+    for l in text.splitlines():
+        f = l.split("\t")
+        if not l.strip() or l.startswith("#"): continue
+        if f[0] == "digest": cols = tuple(f); continue   # a header names the columns
+        row = dict(zip(cols, f))
+        if re.fullmatch(r"[0-9a-f]{64}", row.get("digest", "")): rows[(row["digest"], row.get("pnames", ""))] = row
+    _B18_ALLOW[src] = rows; return rows
+
+def drv_pname(name):
+    """builtins.parseDrvName's name: up to the first '-' not followed by a letter (go-1.26.8 -> go, flyctl-0.4.52-debug -> flyctl)."""
+    m = re.search(r"-[^A-Za-z]", name)
+    return name[:m.start()] if m else name
+
+def b18_exempt(digest, pname):
+    """-> (True, request) if an approved row covers digest for pname; else (False, why)."""
+    import fnmatch
+    rows = b18_allowlist()
+    if rows is None: return False, "the B18 allowlist is unreadable"
+    hit = [r for (d, _), r in rows.items() if d == digest]
+    for r in hit:
+        if r.get("state") == "approved" and any(fnmatch.fnmatchcase(pname, g) for g in re.split(r"[,\s]+", r.get("pnames", "").strip()) if g):
+            return True, r.get("request", "?")
+    if not hit: return False, "not on the B18 allowlist"
+    return False, "on the B18 allowlist but not approved for pname " + pname + " (" + ", ".join(f"{r.get('pnames')}={r.get('state')}" for r in hit) + ")"
+
 # B13 allowlist: text that merely MENTIONS a host path (documentation), not a path the program uses.
 DOC_RE = re.compile(r"(^|/)share/(man|info|doc|gtk-doc|help|licenses)/|(^|/)(man|doc)/|\.(1|3|5|7|8|[1-9][a-z]*|info|html|txt|md|rst|pdf)(\.gz)?$")
 
@@ -691,6 +715,7 @@ def check_nar(out, src=None):
                 return "dangling"
         return "in"
     shebangs = {}
+    pname = drv_pname(os.path.basename(out)[33:])   # B18's allowlist scope: the store name's pname, as recipes.tsv names the row
     try:
       for rel, kind, info in nar_entries(open_nar(src or out)):   # streamed: one file's data in memory at a time
         names.add(rel)
@@ -708,10 +733,25 @@ def check_nar(out, src=None):
         # secret, an inline sops ciphertext), never a bare header, so it is checked in EVERY file regardless of extension: a
         # real key in a .txt or a man page is still a leak (DOC_RE would wrongly skip keys.txt). The crypt-hash rule is also
         # unconditional (a shadow file is not documentation).
-        mb = SECRET_BODY.search(data) or (SECRET_BODY.search(gunzip_bounded(data)) if rel.endswith(".gz") else None)
-        if mb:
-            kind = mb.group(0)[:24].decode(errors="replace")
-            r.append(("FAIL", "B18-secret", f"{rel}: private key / secret material ({kind}...)"))
+        # Every match must lie in an armour block that infra's key review approved for this out's pname (b18_exempt); else FAIL.
+        for buf in (data,) + ((gunzip_bounded(data),) if rel.endswith(".gz") else ()):
+            hits = list(SECRET_BODY.finditer(buf))
+            if not hits: continue
+            blocks = [(b.start(), b.end(), hashlib.sha256(b.group(0).replace(b"\r\n", b"\n")).hexdigest()) for b in B18_BLOCK.finditer(buf)]
+            bad, okd = None, {}
+            for mb in hits:
+                blk = next((b for b in blocks if b[0] <= mb.start() < b[1]), None)
+                if blk is None: bad = (mb, None, "not an armoured PEM/OpenSSH block (never allowlisted)"); break
+                ok_, why = b18_exempt(blk[2], pname)
+                if not ok_: bad = (mb, blk[2], why); break
+                okd[blk[2]] = why
+            if bad:
+                mb, dg, why = bad
+                kind = mb.group(0)[:24].decode(errors="replace")
+                r.append(("FAIL", "B18-secret", f"{rel}: private key / secret material ({kind}...)" + (f" block sha256 {dg}: {why}" if dg else f": {why}")))
+                break
+            for dg, req in okd.items():
+                r.append(("INFO", "B18-allowlisted", f"{rel}: block sha256 {dg[:16]}.. approved for pname {pname} (key review {req})"))
         sh = SHADOW_HASH.search(data)
         if sh and sh.group(1) != b"root":
             r.append(("FAIL", "B18-secret", f"{rel}: crypt hash for non-root account '{sh.group(1).decode(errors='replace')}'"))
@@ -728,10 +768,14 @@ def check_nar(out, src=None):
         for m in BUILD_STR.finditer(text):
             if m.group(0) == b"/build/":
                 n["mapped_build"] = n.get("mapped_build", 0) + (0 if dbg else 1); continue
-            if DRV_KEYED.match(m.group(0)):
-                # shortcut: WARN while mk-src-pkg's configure/compile strings name the $W/cc64 shim; becomes FAIL once wave6
-                # makes them name the store compiler wrapper (on wave6's checklist, gate2 2026-11-03).
+            if DRV_KEYED.match(m.group(0)) and not m.group(0).startswith(b"/var/tmp/srcpkg-"):
+                # WARN: the cargo, go, rust and gcc builders' dirs (wave6t step5, measured: rg and rustc name their cargo target
+                # dir, gcc's driver the gcc 14 libstdc++ build dir it links statically). drv-keyed, so the same on every host.
+                # shortcut: WARN for those four until their builders remap the dir (--remap-path-prefix, -ffile-prefix-map); then FAIL.
                 b8 = b8 or ("WARN", "B8-builddir", f"{rel} names {m.group(0).decode()} (drv-keyed build dir: same on every host)")
+            elif DRV_KEYED.match(m.group(0)):
+                # mk-src-pkg's dir: wave6 records the compiler by name (gcc, not $W/cc64), so nothing shipped may name it
+                b8 = ("FAIL", "B8-builddir", f"{rel} names {m.group(0).decode()} (mk-src-pkg's build dir: a recorded CC or path)"); break
             else:
                 b8 = ("FAIL", "B8-builddir", f"{rel} names {m.group(0).decode(errors='replace')} (a build dir that is not drv-keyed)"); break
         m = RUN_DIR_STR.search(text)
@@ -915,6 +959,11 @@ PINNED_PROBES = {
     "for a french Unicode locale": "gt_cv_locale_fr_utf8", "for a transitional chinese locale": "gt_cv_locale_zh_CN",
     "for a traditional japanese locale": "gt_cv_locale_ja", "for a turkish Unicode locale": "gt_cv_locale_tr_utf8",
     "ipv6 stack type": "cf_cv_ipv6type", "for remote shell": "tar_cv_path_RSH",
+    # pinned in pkgs/illumos/config.site, which gcc-src.nix (gcc 14.3.0, x86 + aarch64) never loads (no CONFIG_SITE: it builds outside
+    # mk-src-pkg). Harmless: its autoconf 2.69 answers from <limits.h> (endian1: serial re-runs 28/28 "no"; the "yes" lines were
+    # splices). A gcc14 log would still show the probe (WARN when spliced, else L4 FAIL): gcc14 is the seed's stage0, built once.
+    "whether byte ordering is bigendian": "ac_cv_c_bigendian",
+    "endianness": "gnupg_cv_c_endian",
 }
 _PINNED = re.compile(r"^checking (" + "|".join(re.escape(k) for k in PINNED_PROBES) + r")\.\.\. (\(cached\) )?(\S.*)$")
 # A message that more than one configure prints, where only one has the cache variable: the probe is pinnable only in a log
@@ -923,6 +972,15 @@ _PINNED = re.compile(r"^checking (" + "|".join(re.escape(k) for k in PINNED_PROB
 # (a64r, python3 3.13.9: a false L4 FAIL). A log is from a cf_ (Thomas Dickey) configure when it asks "checking if you want to use".
 # Measured: CPython 3.13.9's log has "checking for curses function ..." lines, so a curses pattern would not tell them apart.
 PINNED_ONLY_IF = {"ipv6 stack type": re.compile(r"^checking if you want to use ", re.M)}   # Dickey's cf_ configures ask this; CPython's never does
+# Parallel sub-configures (gcc, binutils: make -j over libiberty/zlib/...) write into one log, so a prompt and its answer can land on
+# different lines (endian1, measured: gcc 15.3.0's and binutils 2.47's "bigendian... yes" are splices; their autoconf 2.69 answers
+# "no" from <limits.h>, serial re-runs 28/28 no). For these probes: a line whose answer is another prompt, or that holds two
+# prompts, is skipped; and once a log shows a spliced prompt of the probe, its other answers in that log cannot be attributed either
+# (binutils 2.47: the prompt at line 518 dangles, line 919's "yes" is 400 lines later): WARN, still visible. Other pinned probes stay
+# strict (gcc 15's iconv L4 FAIL on dixi was real). With config.site pinning it, the probe prints "(cached)" and none of this applies.
+PINNED_SPLICE_TOLERANT = {"whether byte ordering is bigendian"}
+_SPLICE_OK = ("yes", "no", "universal", "unknown")   # what AC_C_BIGENDIAN itself prints
+def _spliced(m, line): return m.group(3) not in _SPLICE_OK or line.count("checking ") > 1
 
 def _log_line(line):
     """-> [(level, check, why)] for one log line."""
@@ -956,13 +1014,20 @@ def _pinnable(msg, text):
     return r is None or bool(r.search(text))
 
 def check_log(text):
-    r, seen = [], {}
+    r, seen, spliced = [], {}, {}
     for n, line in enumerate(text.splitlines(), 1):
         line = re.sub(r"^[\w.+-]+> ", "", line).rstrip()   # nix-build's "<name>> " prefix
         for lv, chk, why in _log_line(line):
             if chk == "L4-probe-ran":
                 m = _PINNED.match(line)
                 if m and not _pinnable(m.group(1), text): continue   # this configure has no cache variable for it
+                if m and m.group(1) in PINNED_SPLICE_TOLERANT:
+                    if _spliced(m, line): continue   # the "answer" is another prompt, config.status, a make command: spliced
+                    if m.group(1) not in spliced:
+                        spliced[m.group(1)] = any(_spliced(mm, l) for l in (re.sub(r"^[\w.+-]+> ", "", x).rstrip() for x in text.splitlines())
+                                                  for mm in [_PINNED.match(l)] if mm and mm.group(1) == m.group(1) and not mm.group(2))
+                    if spliced[m.group(1)]:
+                        lv, chk, why = "WARN", "L4-spliced", why + " (this log splices the probe's output: not attributable)"
             k = (lv, chk); seen[k] = seen.get(k, 0) + 1
             if seen[k] <= 5: r.append((lv, chk, f"line {n}: {why}: {line.strip()[:160]}"))
     for (lv, chk), k in seen.items():
@@ -1206,27 +1271,6 @@ def selftest():
     for nh, nm, want in sp_cases:
         ok = (source_path(nh, nm) == "/nix/store/r9m0bfxm4yf8hjg49wl3w1nqx4mi61h1-bitstring.h") == want; bad += not ok
         print(f"{'ok ' if ok else 'BAD'} drv  A3 source path from narHash {nh[:14]}.. {nm}: {'matches' if want else 'does not match'}")
-    # the temporary ALLOW A1-envpath (leaf only): each of its limits must be load-bearing
-    sp = 'export PATH="${btPath:+$btPath:}$ntPath" CONFIG_SITE=x'
-    lenv = {"PATH": LEGACY_ENV_PATH, "btPath": T + "/bin", "ntPath": T + "/bin"}
-    allow_cases = [
-        ("ALLOW: legacy env PATH, store PATH first (recipes1 class)", dict(args=["-c", "set -eu\n" + sp + "\nmake"], env=dict(lenv)), "leaf", True),
-        ("ALLOW never in closure mode", dict(args=["-c", "set -eu\n" + sp + "\nmake"], env=dict(lenv)), "closure", False),
-        ("no ALLOW: a command before the PATH statement", dict(args=["-c", "set -eu\nmkdir $out\n" + sp], env=dict(lenv)), "leaf", False),
-        ("no ALLOW: env PATH not exactly the legacy value", dict(args=["-c", sp], env=dict(lenv, PATH="/usr/bin:/usr/gnu/bin")), "leaf", False),
-        ("no ALLOW: BASH_ENV set", dict(args=["-c", sp], env=dict(lenv, BASH_ENV="/etc/x")), "leaf", False),
-        ("no ALLOW: the first PATH still has /usr/bin", dict(args=["-c", 'export PATH="$ntPath:/usr/bin"'], env=dict(lenv)), "leaf", False),
-        ("no ALLOW: builder is not /usr/bin/bash", dict(args=["-c", sp], env=dict(lenv), builder="/usr/gnu/bin/bash"), "leaf", False),
-    ]
-    for i, (label, kw, mode, want_pass) in enumerate(allow_cases):
-        kw.setdefault("idrvs", [tools]); kw["env"]["tools"] = T
-        dp = fake_drv(f"al{i}", **kw)
-        lines = []
-        rc = run_drv([dp], out=lines.append, ca_ok=ca, mode=mode, served=lambda p: True if p.startswith(T) or p in _LANE else False)
-        allowed = any(l.startswith("ALLOW A1-envpath") for l in lines)
-        ok = (rc == 0) == want_pass and allowed == want_pass
-        bad += not ok
-        print(f"{'ok ' if ok else 'BAD'} drv  {label}: {'PASS' if rc == 0 else 'FAIL'}" + ("" if ok else "\n    " + "\n    ".join(lines)))
     # leaf mode refuses to judge when the probe cannot see a served path, or any input's state is unknown
     for label, srv in (("leaf: probe blind (CA-lane path not seen served) -> hard FAIL", lambda p: False),
                        ("leaf: an input's served state unknown -> hard FAIL", lambda p: True if p in _LANE else None)):   # a CA-lane path is served
@@ -1307,7 +1351,22 @@ def selftest_log():
              ("L4 not hit: the pinned answer from config.site", "checking for working iconv... (cached) yes", True, None),
              ("L4 not hit: CPython's 'ipv6 stack type' (no cache variable; python3 3.13.9, real line)", "checking ipv6 stack type... solaris", True, None),
              ("L4 FAIL: lynx's 'ipv6 stack type' that ran (a cf_ configure)", "checking if you want to use the bundled libraries... no\nchecking ipv6 stack type... solaris", False, "L4-probe-ran"),
-             ("L4 not hit: an unpinned iconv probe", "checking for iconv... yes", True, None)]
+             ("L4 not hit: an unpinned iconv probe", "checking for iconv... yes", True, None),
+             ("L4 AC_C_BIGENDIAN that ran (gcc 15.3.0 libiberty on chef, real line)", "checking whether byte ordering is bigendian... yes", False, "L4-probe-ran"),
+             ("L4 AC_C_BIGENDIAN that ran and said no is host state too", "checking whether byte ordering is bigendian... no", False, "L4-probe-ran"),
+             ("L4 not hit: AC_C_BIGENDIAN from config.site", "checking whether byte ordering is bigendian... (cached) no", True, None),
+             ("L4 spliced: gcc 15.3.0's parallel libiberty configures (real lines 487-488, chef W1g): WARN, not FAIL",
+              "checking whether byte ordering is bigendian... checking whether /nix/store/dhk16dca5vl301h1i7dr4jlfvr3bh60r-gcc-wrapper-14.3.0/bin/gcc supports -Wold-style-definition... inline\n"
+              "checking whether byte ordering is bigendian... yes", True, "L4-spliced"),
+             ("L4 spliced: the answer is another prompt (binutils 2.47, real line)", "checking whether byte ordering is bigendian... checking whether gcc supports -Wall... yes", True, None),
+             ("L4 spliced: the answer is config.status output (gcc 15.3.0 line 899, real)", "checking whether byte ordering is bigendian... config.status: creating Makefile", True, None),
+             ("L4 spliced log: binutils 2.47's dangling prompt (line 518) then its bare yes (line 919), real lines",
+              "checking whether byte ordering is bigendian... checking whether gcc supports -Wall... yes\nchecking for _doprnt... Setting warning flags = -W -Wall\n"
+              "checking whether byte ordering is bigendian... yes", True, "L4-spliced"),
+             ("L4 gnupg 2.4.8 GNUPG_CHECK_ENDIAN that ran (W2 chef, real line 230)", "checking endianness... big", False, "L4-probe-ran"),
+             ("L4 not hit: GNUPG_CHECK_ENDIAN from config.site (endian1, real line)", "checking endianness... (cached) little", True, None),
+             ("L4 not hit: another configure's float-endianness line", "checking float word endianness... little", True, None),
+             ("L4 iconv stays strict in an interleaved log", "checking whether byte ordering is bigendian... checking for x... yes\nchecking for working iconv... no", False, "L4-probe-ran")]
     for label, text, want_pass, must in cases:
         lines = []; rc = report("log", check_log(text), lines.append)
         ok = (rc == 0) == want_pass and (must is None or any(f" {must} " in l for l in lines))
@@ -1360,6 +1419,7 @@ def selftest_out():
               share=Dd(man=Dd(man1=Dd(**{"t.1": R(b".TH T 1\\nedit /usr/local/etc/t.conf\n")}))),
               )
     good["entries"]["lib"]["entries"]["l2"] = L(".")
+    PGPH, PGPE = b"-----BEGIN PGP " + b"PRIVATE KEY BLOCK-----", b"-----END PGP " + b"PRIVATE KEY BLOCK-----"
     def mut(path, node):
         import copy
         t = copy.deepcopy(good); cur = t
@@ -1378,13 +1438,21 @@ def selftest_out():
         ("B7 bin/ file without x (libtool 0444)", mut("bin/libtool", R(b"#!/bin/sh\n")), False, "B7-exec"),
         ("B18 a real OpenSSH private key body: FAIL", mut("etc/ssh/k", R(b"-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXkt" + b"A"*40 + b"\n-----END OPENSSH PRIVATE KEY-----\n")), False, "FAIL B18-secret"),
         ("B18 an age secret key: FAIL", mut("home/.config/sops/age/keys.txt", R(b"AGE-SECRET-KEY-1" + b"QZ"*20 + b"\n")), False, "FAIL B18-secret"),
+        # PGP: armour material FAILs; the bare header (crate file-format 0.29.0's magic-signature table, linked into qsv 20.1.0: the header
+        # strings back to back, no body) does not. Built at run time so this file holds no armour literal.
+        ("B18 an armoured PGP secret key (header, Version line, blank, body): FAIL", mut("etc/k.asc", R(PGPH + b"\nVersion: GnuPG v2\n\n" + b"lQOYBF" + b"A" * 60 + b"\n=AbCd\n" + PGPE + b"\n")), False, "FAIL B18-secret"),
+        ("B18 an armoured PGP secret key, no headers, CRLF: FAIL", mut("etc/k2.asc", R(PGPH + b"\r\n\r\n" + b"lQOYBF" + b"B" * 60 + b"\r\n")), False, "FAIL B18-secret"),
+        ("B18 a truncated armoured PGP secret key (header, blank, body, no END): FAIL", mut("etc/k3.asc", R(PGPH + b"\n\n" + b"lQOYBF" + b"C" * 60 + b"\n")), False, "FAIL B18-secret"),
+        ("B18 not hit: an armoured PGP PUBLIC key block with a body (public)", mut("share/keys/k.asc", R(b"-----BEGIN PGP PUBLIC KEY BLOCK-----\n\n" + b"mQINBF" + b"D" * 60 + b"\n=XyZw\n-----END PGP PUBLIC KEY BLOCK-----\n")), True, None),
+        ("B18 not hit: the bare PGP header in a magic table (qsv / file-format, real bytes)", mut("bin/qsv", R(b"\x7fELF\0" + b"-----BEGIN PRIVATE KEY-----" + PGPH + b"-----BEGIN PGP PUBLIC KEY BLOCK-----" + b"-----BEGIN CERTIFICATE REQUEST-----", True)), True, None),
         ("B18 an inline sops ciphertext: FAIL", mut("etc/x.yaml", R(b"pw: ENC[AES256_GCM,data:abcd,iv:ef]\n")), False, "FAIL B18-secret"),
         ("B18 a non-root crypt hash in a shadow file: FAIL", mut("etc/shadow", R(b"bob:$6$abc$0123456789./ABCdef:19000:::::\nroot:*LK*:1:::::\n")), False, "FAIL B18-secret"),
         ("B18 not hit: a man page that SHOWS the header as example text", mut("share/man/man1/ssh.1", R(b".TH SSH 1\nexample: -----BEGIN OPENSSH PRIVATE KEY-----\n")), True, None),
         ("B18 not hit: the ssh binary's template header string (no key body)", mut("bin/ssh", R(b"\x7fELF\0-----BEGIN OPENSSH PRIVATE KEY-----\0usage: ssh\0", True)), True, None),
         ("B18 not hit: root-only hash in shadow (locked others)", mut("etc/shadow", R(b"root:$6$salt$0123456789./ABChash:1:::::\ndaemon:NP:1:::::\n")), True, None),
         ("B8 a non-drv-keyed /var/tmp/srcpkg- dir (8 hex) in a .pc", mut("lib/z.pc", R(b"prefix=/var/tmp/srcpkg-0123abcd/out")), False, "B8-builddir"),
-        ("B8 drv-keyed /var/tmp/srcpkg-<16 hex> (jq CC= class): WARN, not FAIL", mut("bin/jq2", R(b"\x7fELF\0CC=/var/tmp/srcpkg-4424febabee4a39c/cc64\0", True)), True, "WARN B8-builddir"),
+        ("B8 drv-keyed /var/tmp/srcpkg-<16 hex> (jq CC= class): FAIL (wave6 records CC=gcc)", mut("bin/jq2", R(b"\x7fELF\0CC=/var/tmp/srcpkg-4424febabee4a39c/cc64\0", True)), False, "FAIL B8-builddir"),
+        ("B8 drv-keyed /var/tmp/cargo-<16 hex> (rg target dir): WARN, not FAIL", mut("bin/rg2", R(b"\x7fELF\0/var/tmp/cargo-9bfaa4b8b8af3683/src/s/target\0", True)), True, "WARN B8-builddir"),
         ("B8 Nix's /tmp/nix-build-<name>-<n> dir: FAIL", mut("lib/x.la", R(b"libdir='/tmp/nix-build-xyz-1.0.drv-0/src/.libs'")), False, "FAIL B8-builddir"),
         ("B8 a mktemp-suffixed dir /var/tmp/cargo-Ab3xQz: FAIL", mut("bin/c", R(b"\x7fELF\0/var/tmp/cargo-Ab3xQz/target\0", True)), False, "FAIL B8-builddir"),
         ("B8 a build user's home /home/gburd/: FAIL", mut("lib/y.pc", R(b"prefix=/home/gburd/src/y")), False, "FAIL B8-builddir"),
@@ -1450,6 +1518,38 @@ def selftest_out():
     ]
     bad = 0
     with tempfile.TemporaryDirectory() as td:
+        # B18 key review: blocks built at run time (no key literal in this file), an allowlist file, and outs named for their pname
+        def blk(tag, typ=b"RSA"):
+            body = base64.b64encode(hashlib.sha256(b"solnix-b18-selftest-" + tag).digest() * 3)
+            return b"-----BEGIN " + typ + b" PRIVATE" + b" KEY-----\n" + body + b"\n-----END " + typ + b" PRIVATE" + b" KEY-----"
+        dig = lambda b: hashlib.sha256(b).hexdigest()
+        K1, K2, K3, K4, K5 = (blk(t) for t in (b"approved", b"fresh", b"proposed", b"revoked", b"glob"))
+        al = os.path.join(td, "b18-allowlist.tsv"); empty = os.path.join(td, "b18-empty.tsv"); open(empty, "w").close()
+        open(al, "w").write("\t".join(B18_COLS) + "\n" + "".join("\t".join(r) + "\n" for r in (
+            (dig(K1), "pem-rsa", "go", "go1.26.8 src/crypto/tls", "test fixture", "approved", "x", "2026-11-09T00:00Z", "r1"),
+            (dig(K3), "pem-rsa", "go", "u", "w", "proposed", "", "", "r2"),
+            (dig(K4), "pem-rsa", "go", "u", "w", "approved", "x", "2026-11-09T00:00Z", "r3"),
+            (dig(K4), "pem-rsa", "go", "u", "w", "revoked", "x", "2026-11-09T01:00Z", "r3"),
+            (dig(K5), "pem-rsa", "cosmic-*", "u", "w", "approved", "x", "2026-11-09T00:00Z", "r4"))))
+        kt = lambda *ks: Dd(share=Dd(go=Dd(**{f"k{i}.pem": R(k + b"\n") for i, k in enumerate(ks)})))
+        b18c = [("B18 key review: an approved digest in its pname passes", "go-1.26.8", kt(K1), al, True, "INFO B18-allowlisted"),
+                ("B18 key review: ... and in its -debug out (pname go)", "go-1.26.8-debug", kt(K1), al, True, "INFO B18-allowlisted"),
+                ("B18 key review: the same block in another pname FAILs", "age-1.2.1", kt(K1), al, False, "FAIL B18-secret"),
+                ("B18 key review: a fresh key beside the approved one FAILs", "go-1.26.8", kt(K1, K2), al, False, "FAIL B18-secret"),
+                ("B18 key review: a proposed (not approved) row FAILs", "go-1.26.8", kt(K3), al, False, "FAIL B18-secret"),
+                ("B18 key review: an approved row revoked by a later row FAILs", "go-1.26.8", kt(K4), al, False, "FAIL B18-secret"),
+                ("B18 key review: a pname glob (cosmic-*) passes its pname", "cosmic-comp-1.0", kt(K5), al, True, "INFO B18-allowlisted"),
+                ("B18 key review: ... and not another", "go-1.26.8", kt(K5), al, False, "FAIL B18-secret"),
+                ("B18 key review: allowlist unreadable -> FAIL (fail closed)", "go-1.26.8", kt(K1), os.path.join(td, "absent.tsv"), False, "FAIL B18-secret"),
+                ("B18 key review: an approved block gzip'd passes", "go-1.26.8", Dd(share=Dd(**{"k.pem.gz": R(__import__("gzip").compress(K1 + b"\n", mtime=0))})), al, True, "INFO B18-allowlisted")]
+        for label, name, tree, src, want_pass, must in b18c:
+            os.environ["GATE_B18_ALLOWLIST"] = src
+            f = os.path.join(td, "b.nar"); open(f, "wb").write(nar_bytes(tree)); lines = []
+            rc = run_out("nar", [STORE + "6" * 32 + "-" + name, f], out=lines.append)
+            ok = (rc == 0) == want_pass and any(l.startswith(must + " ") for l in lines)
+            bad += not ok
+            print(f"{'ok ' if ok else 'BAD'} nar  {label}: {'PASS' if rc == 0 else 'FAIL'}" + ("" if ok else "\n    " + "\n    ".join(lines)))
+        os.environ["GATE_B18_ALLOWLIST"] = empty   # the cases below: no network, nothing exempt
         for label, tree, want_pass, must in cases:
             f = os.path.join(td, "x.nar")
             open(f, "wb").write(nar_bytes(good)[:100] if tree is None else nar_bytes(tree))   # None: a truncated NAR

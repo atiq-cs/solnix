@@ -61,7 +61,7 @@ impl Firm {
 pub struct VuidEvent { dev: VuidDevice, usec: u64, code: u32, pressed: bool, dx: f64, dy: f64 }
 
 impl bi::Event<VuidInput> for VuidEvent {
-    fn time(&self) -> u64 { self.usec }
+    fn time(&self) -> bi::InputTime { bi::InputTime::from_micros(self.usec) } // smithay 8a27023: InputTime, was u64 usec
     fn device(&self) -> VuidDevice { self.dev }
 }
 impl bi::KeyboardKeyEvent<VuidInput> for VuidEvent {
@@ -344,7 +344,7 @@ mod tests {
     fn keys_buttons_motion() {
         use smithay::backend::input::{Event, KeyboardKeyEvent, PointerButtonEvent, PointerMotionEvent};
         let Some(InputEvent::Keyboard { event }) = translate(VuidDevice::Keyboard, Firm::parse(&fe(4, 1))) else { panic!() };
-        assert_eq!((event.key_code().raw(), KeyboardKeyEvent::state(&event), event.time()), (30 + 8, KeyState::Pressed, 2_000_005)); // HID 'a'
+        assert_eq!((event.key_code().raw(), KeyboardKeyEvent::state(&event), event.time().micros()), (30 + 8, KeyState::Pressed, 2_000_005)); // HID 'a'
         let Some(InputEvent::PointerButton { event }) = translate(VuidDevice::Mouse, Firm::parse(&fe(MS_LEFT + 2, 1))) else { panic!() };
         assert_eq!(event.button_code(), 0x111); // MS_RIGHT -> BTN_RIGHT
         let Some(InputEvent::PointerMotion { event }) = translate(VuidDevice::Mouse, Firm::parse(&fe(LOC_Y_DELTA, 3))) else { panic!() };

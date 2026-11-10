@@ -1,5 +1,5 @@
 # llvm/parts.nix -- the four LLVM 23.1.4 parts (./default.nix has the shared settings and says why).
-{ mkSrcPkg, version, src, nativeTools, deps, pre, common, runpath, ninjaInstall, noBuildDir, world, gate, gcc, ld, libc }:
+{ mkSrcPkg, version, src, nativeTools, deps, pre, common, runpath, ninjaInstall, noBuildDir, world, gate, gcc, ld, libc, hostTools }:
 rec {
   # llvm: libLLVM.so, the tools, headers, static component libs and lib/cmake/llvm (what clang/lld/lldb build against).
   llvm = mkSrcPkg {
@@ -83,8 +83,11 @@ rec {
     name = "clang-wrapper-${version}"; system = "x86_64-solaris";
     inherit clang lld gate gcc; gccLib = gcc.lib; ldBin = "${ld}/usr/bin/ld"; llvmBin = "${llvm}/bin";
     builder = "/usr/bin/bash";
+    # store-only (wave6 glue drvs): store coreutils/findutils + the world's bins (mkdir chmod ln mktemp printf), gated.
+    PATH = builtins.concatStringsSep ":" (map (t: "${t}/bin") hostTools);
+    pathGate = ../path-gate.sh;
     args = [ "-c" ''
-      set -eu; export PATH=/usr/bin
+      set -eu; /usr/bin/bash "$pathGate"
       mkdir -p $out/bin
       for t in clang clang++ clang-cpp; do
         printf '#!/usr/bin/bash\nexec %s/bin/%s --sysroot=%s --gcc-toolchain=%s -fuse-ld=%s -B%s/bin -Wl,-R,%s/lib/amd64:%s/lib "$@"\n' \
@@ -96,7 +99,7 @@ rec {
         [ -e "$lld/bin/$t" ] && ln -s "$lld/bin/$t" $out/bin/$t || ln -s "$llvmBin/$t" $out/bin/$t
       done
       # self-check: C and C++ compile, link and run, with ld and with ld.lld
-      cd "$(mktemp -d /var/tmp/clangwrap.XXXXXX)"
+      cd "$(mktemp -d "''${TMPDIR:-/var/tmp}/clangwrap.XXXXXX")"
       printf '#include <stdio.h>\nint main(void){puts("hello c");return 0;}\n' > h.c
       printf '#include <iostream>\nint main(){std::cout<<"hello c++"<<std::endl;}\n' > h.cc
       $out/bin/clang -o hc h.c; [ "$(./hc)" = "hello c" ]

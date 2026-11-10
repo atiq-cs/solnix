@@ -78,9 +78,12 @@ in
 
     '' + lib.optionalString config.solnix.privacy.enable (builtins.readFile ./community/motd.txt + "\n");   # handoff 2026-10-28 section 1
 
-    # 6. Nix GC + store optimise so /nix doesn't grow unbounded (NixOS weekly-GC analog).
+    # 6. Nix GC so /nix doesn't grow unbounded (NixOS weekly-GC analog).
+    # auto-optimise-store stays false, NixOS's default: with it on, identical files in the store share an inode, and a builder that
+    # copies a store input with tar or cp -a and then edits one name per file edits them all (wave7: the world's usr/bin/ps and
+    # usr/ucb/ps got one RUNPATH, so an out depended on the building host's nix.conf). `nix-store --optimise` still works on demand.
     nix.settings = {
-      auto-optimise-store = lib.mkDefault true;
+      auto-optimise-store = lib.mkDefault false;
       min-free = lib.mkDefault (128 * 1024 * 1024);   # start GC under 128MB free
       max-free = lib.mkDefault (1024 * 1024 * 1024);   # free up to 1GB
     };
@@ -127,7 +130,9 @@ in
     # 10. /etc/bashrc — a pleasant interactive shell (umask, PS1, common aliases).
     # Sourced by interactive bash; ksh users get the login env from profile.d.
     environment.generatedEtc."bashrc" = ''
-      # solnix interactive bash defaults
+      # solnix bash defaults. bash reads this for every shell (SYS_BASHRC + SSH_SOURCE_BASHRC, as NixOS), so a
+      # non-interactive `ssh host cmd` gets the login environment (PATH, MANPATH, INFOPATH) before the $PS1 return.
+      [ -r /etc/profile.d/solnix-env.sh ] && . /etc/profile.d/solnix-env.sh
       umask 022
       [ -z "$PS1" ] && return
       PS1='\u@\h:\w\$ '
