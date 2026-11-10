@@ -88,6 +88,24 @@ pub mod volume {""")
                        "pub fn string_from_pod(", "pub unsafe fn array_from_pod<"))):
         for it in items:
             edit(f, "\n" + it, "\n" + NI + it)
+elif app == "cosmic-settings":
+    # B19 (scripts/linux-package-hints.tsv): the power page tells the user to install system76-power or
+    # power-profiles-daemon, Linux packages solnix doesn't have. The en message names the solnix service; every other
+    # locale's translation of the old text is dropped, so i18n-embed falls back to en (fluent.rs get_attr_args_fluent:
+    # find_map over the bundles). Bluetooth's "Is BlueZ installed?" goes the same way.
+    import glob, re
+    edit("i18n/en/cosmic_settings.ftl", "    .no-backend = Backend not found. Install system76-power or power-profiles-daemon.\n",
+         "    .no-backend = No power profiles service is running. On solnix, set services.solnix-power.enable = true in the system configuration.\n")
+    edit("i18n/en/cosmic_settings.ftl", "    .unknown = The Bluetooth service could not be activated. Is BlueZ installed?\n",
+         "    .unknown = The Bluetooth service could not be activated. Bluetooth is not available on solnix yet.\n")
+    n = 0
+    for f in sorted(glob.glob(os.path.join(root, "i18n", "*", "cosmic_settings.ftl"))):
+        if f.endswith(os.path.join("en", "cosmic_settings.ftl")): continue
+        s = open(f).read()
+        t = re.sub(r"(?m)^    \.no-backend = .*(?:system76-power|power-profiles-daemon).*\n", "", s)
+        t = re.sub(r"(?m)^    \.unknown = .*BlueZ.*\n", "", t)
+        if t != s: open(f, "w").write(t); n += 1; done.append(os.path.relpath(f, root))
+    if n < 30: sys.exit("FATAL: cosmic-settings: only %d locales carried the B19 lines (want >= 30)" % n)
 elif app == "cosmic-applets":
     for f in ("cosmic-app-list/src/wayland_handler.rs", "cosmic-applet-minimize/src/wayland_handler.rs"):
         edit(f, MEMFD, MEMFD_SHM)
