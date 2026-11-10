@@ -31,6 +31,12 @@ in
         gateway probe that demotes a wired default route whose gateway stops answering (NixOS: dhcpcd).
       '';
     };
+    holdDir = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      internal = true;
+      description = "A dir where <link>.down tells the daemon to leave that wifi link disconnected (set by services.solnix-nm).";
+    };
     wifiJoin = lib.mkOption {
       type = lib.types.attrsOf lib.types.path;
       default = { };
@@ -53,7 +59,7 @@ in
         # named without dhcp: off, or static (solnix-net's)
         NETD_SKIP_LINKS = lib.concatStringsSep " " (named false);
         NETD_RESOLV = if net.nameservers == [ ] then "1" else "0";
-      };
+      } // lib.optionalAttrs (cfg.holdDir != null) { NETD_HOLD_DIR = cfg.holdDir; };
       # the method returns; the daemon stays in the service's contract, its output in the SMF log
       start.exec = "/usr/bin/ksh93 ${./solnix-netd.sh} &";
       stop.exec = ":kill";

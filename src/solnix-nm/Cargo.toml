@@ -1,0 +1,13 @@
+[package]
+name = "solnix-nm"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "The org.freedesktop.NetworkManager D-Bus subset COSMIC calls, over illumos dladm/ipadm and solnix-netd"
+
+[dependencies]
+zbus = { version = "5.14", default-features = false, features = ["tokio"] }
+tokio = { version = "1", features = ["rt", "macros", "time", "process", "sync", "fs"] }
+
+[profile.release]
+debug = 1

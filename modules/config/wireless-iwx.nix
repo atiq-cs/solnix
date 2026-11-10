@@ -101,6 +101,16 @@ let
     (lib.mapAttrsToList (ssid: n: { inherit ssid; inherit (n) pskFile priority; }) nets);
   # One join script per driver: the link (iwm0 / iwx0) and that driver's networks. Both drivers run WPA2's 4-way
   # in-kernel through the same OpenBSD net80211 port, so the mechanism below is shared.
+  # networks saved from COSMIC (services.solnix-nm), tried after the declared ones; "" when it is off, so the script is unchanged
+  savedNets = lib.optionalString config.services.solnix-nm.enable ''
+    # networks saved from COSMIC (services.solnix-nm): uuid<TAB>ssid-hex<TAB>pskfile
+    if [ -r /var/lib/solnix-nm/networks ]; then
+      while IFS='	' read -r _u h f; do
+        s=$(printf '%s' "$h" | sed 's/../\\x&/g'); s=$(printf "$s")
+        [ -n "$s" ] && [ -n "$f" ] && try "$s" "$f" && exit 0
+      done < /var/lib/solnix-nm/networks
+    fi
+  '';
   mkWifiJoinScript = link: nets: pkgs.writeText "solnix-wifi-join-${link}.sh" ''
     # Join the first configured SSID that is in range. PSKs are read at RUN
     # time from their 0600 files (never baked into this store-readable script).
@@ -134,7 +144,7 @@ let
       return 1
     }
     ${lib.concatMapStringsSep "\n    " (n: ''try ${lib.escapeShellArg n.ssid} ${lib.escapeShellArg n.pskFile} && exit 0'') (sortNets nets)}
-    echo "solnix-wifi-join: no configured SSID in range"; exit 0
+    ${savedNets}echo "solnix-wifi-join: no configured SSID in range"; exit 0
   '';
 in
 {

@@ -9,6 +9,18 @@ let
 in (import ./data.nix { tools = hostfixTools; inherit world python3; }) // (import ./xdg.nix { inherit mkSrcPkg bash coreutils gnugrep gnused file hostname hostTools; }) // {
   # the desktop's help: man: handler, launcher man search, Solnix Manual entry (./help.nix)
   solnix-help = import ./help.nix { inherit bash coreutils gnused gnugrep jq; };
+  # the NetworkManager D-Bus subset COSMIC's network applet and Settings call, over dladm/ipadm (src/solnix-nm,
+  # services.solnix-nm). Its unit and join-path tests need a session bus, so they run beside the build, not in it.
+  solnix-nm = cargoPkg {
+    pname = "solnix-nm"; version = "0.1.0"; src.dir = ../../../src/solnix-nm;
+    vendorHash = "sha256-ceMF/hSWuVF/Kycmd2s91h62tQlz7nC1BD6yVblgkfk=";
+    bins = "solnix-nm";
+    man = ''install -D -m0444 dbus/org.freedesktop.NetworkManager.conf "$out/share/dbus-1/system.d/org.freedesktop.NetworkManager.conf"'';
+    # it starts, finds no bus, and says so (exit 1, no signal): the binary loads and runs (|| keeps set -e from ending the build)
+    check = ''rc=0; o=$(env -i DBUS_SYSTEM_BUS_ADDRESS=unix:path=/nonexistent "$out/bin/solnix-nm" 2>&1) || rc=$?
+      [ $rc -eq 1 ] && echo "$o" | grep -q /nonexistent || { echo "FATAL: solnix-nm rc $rc: $o" >&2; exit 1; }
+      grep -q NetworkManager "$out/share/dbus-1/system.d/org.freedesktop.NetworkManager.conf"'';
+  };
 } // rec {
   # pop-launcher (pop-os/launcher epoch-1.5.0 = NixOS's 1.2.7 + the discrete-GPU menu fix): the search service
   # cosmic-launcher runs from PATH, with its plugins (desktop entries, files, find, calc, scripts, ...).

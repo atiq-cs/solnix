@@ -30,6 +30,7 @@
   ./config/audio-hda.nix
   ./config/networking.nix
   ./config/solnix-netd.nix
+  ./config/solnix-nm.nix
   ./config/tailscale.nix
   ./config/users.nix
   ./config/system-path.nix

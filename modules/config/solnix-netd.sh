@@ -52,6 +52,8 @@ wifi_keep() {	# $1 link: rejoin while disconnected, backoff 10 s doubling to 5 m
 		wback[$1]=0 wnext[$1]=0; return
 	fi
 	[ -n "${wpid[$1]}" ] && kill -0 "${wpid[$1]}" 2>/dev/null && return
+	# solnix-nm (services.solnix-nm) holds a link it disconnected, or is joining itself
+	[ -n "$NETD_HOLD_DIR" ] && [ -e "$NETD_HOLD_DIR/$1.down" ] && return
 	(( SECONDS < ${wnext[$1]:-0} )) && return
 	log "$1: ${wst[$1]:-absent}: joining"
 	/bin/sh "${wjoin[$1]}" 2>&1 | while read -r x; do log "$1: $x"; done &
