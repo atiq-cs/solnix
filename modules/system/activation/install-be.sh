@@ -279,6 +279,8 @@ etc_copy() {
   case $1 in
     # replaced from the DHCP lease (solnix-net, net-svc, dns-install).
     resolv.conf) return 0 ;;
+    # net-svc's cleanup_hosts rewrites it (mv + chmod onto the path).
+    inet/hosts) return 0 ;;
     # net-loc and dns-install `cp` a template over it in place.
     nsswitch.conf) return 0 ;;
     # solnix-install edits it on the target (PermitRootLogin, UsePAM).

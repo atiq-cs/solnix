@@ -249,7 +249,22 @@ in
       type = types.listOf types.str;
       default = [ ];
       example = literalExpression ''[ "9.9.9.9" "1.1.1.1" ]'';
-      description = "DNS servers written to /etc/resolv.conf.";
+      description = "DNS servers written to /etc/resolv.conf. Empty (the default, as on NixOS): the DHCP lease's servers.";
+    };
+
+    # NixOS networking.hosts / networking.extraHosts (nixos/modules/config/networking.nix).
+    hosts = mkOption {
+      type = types.attrsOf (types.listOf types.str);
+      default = { };
+      example = literalExpression ''{ "192.168.0.2" = [ "fileserver.local" "nameserver.local" ]; }'';
+      description = "Locally defined maps of hostnames to IP addresses, written to /etc/inet/hosts.";
+    };
+
+    extraHosts = mkOption {
+      type = types.lines;
+      default = "";
+      example = "192.168.0.1 lanlocalhost";
+      description = "Additional verbatim entries to be appended to /etc/inet/hosts.";
     };
 
     useDHCP = mkOption {
@@ -274,12 +289,24 @@ in
 
   config = mkMerge [
     {
+      # NixOS: the hostname resolves locally, on 127.0.0.2 (127.0.0.1 stays "localhost" for programs that
+      # reverse-map it), so a login does not wait on DNS for its own name.
+      networking.hosts."127.0.0.2" = lib.optional (cfg.hostName != "") cfg.hostName;
+
       # resolv.conf + defaultrouter land in the solnix /etc overlay (activation
       # reads networking.* for nodename; these extend it). Exposed as an internal
       # attr the activation module folds into its `etc` derivation. Built in Nix
       # (not mkIf-per-leaf) so an unset option simply omits the file.
+      # inet/hosts: illumos's file (/etc/hosts links to it in the stock tree), NixOS's content: localhost first,
+      # then networking.hosts, then networking.extraHosts.
       networking.generatedEtc =
-        (lib.optionalAttrs (cfg.nameservers != [ ]) {
+        {
+          "inet/hosts" = "127.0.0.1 localhost loghost\n::1 localhost\n"
+            + lib.concatStrings (mapAttrsToList (ip: names: "${ip} ${concatStringsSep " " names}\n")
+                (filterAttrs (_: v: v != [ ]) cfg.hosts))
+            + cfg.extraHosts;
+        }
+        // (lib.optionalAttrs (cfg.nameservers != [ ]) {
           "resolv.conf" = concatMapStringsSep "" (ns: "nameserver ${ns}\n") cfg.nameservers;
         })
         // (lib.optionalAttrs (cfg.defaultGateway != null) {
