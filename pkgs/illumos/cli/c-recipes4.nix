@@ -3624,4 +3624,257 @@ printf("ok %s %d %d\n", s, n, config_setting_length(config_lookup(&c, "list")));
       ${chk ''"$W/t"'' "^ok solnix 16 3$"}
     '';
   };
+
+  # ---- recipes11 batch 21: small leaves the x86 queue has jobs for (every source = nixpkgs f4a03c0's, by hash) --------------------
+  # mcpp (BSD-2-Clause): Matsui's C/C++ preprocessor, the mcpp command on its libmcpp, as nixpkgs (--enable-mcpplib; its upstream
+  # readlink <unistd.h> fix; gcc 14's incompatible-pointer-types an error no more).
+  mcpp = mkSrcPkg {
+    pname = "mcpp"; version = "2.7.2.3";
+    src = { url = "https://github.com/museoa/mcpp/archive/2.7.2.3.tar.gz";
+            sha256 = "4f44a3f94abdaf9c31d1c7970b1480c730306034b4850bad963b6150860b8d7f"; };
+    deps = [ world ]; nativeTools = [ gnupatch ] ++ hostTools;
+    build = ''
+      patch -p1 < ${npPatch "mc/mcpp/readlink.patch" "faacc115bc0d50bf83c70dc6821c6122284d1f05933965e0cd6b9e397d859228"}
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --enable-mcpplib CFLAGS="-O2 -Wno-error=incompatible-pointer-types"
+      gmake -j8; gmake install
+      printf '#define SOL(x) x + nix\nSOL(sol)\n' > "$W/t.c"
+      ${chk ''"$out/bin/mcpp" -P "$W/t.c"'' "^sol \\+ nix$"}
+    '';
+  };
+
+  # libunibreak (Zlib): line, word and grapheme breaking per Unicode UAX #14/#29, autotools from the tag (autoreconf), as nixpkgs.
+  libunibreak = mkSrcPkg {
+    pname = "libunibreak"; version = "7.0";
+    src = { url = "https://github.com/adah1972/libunibreak/archive/refs/tags/libunibreak_7_0.tar.gz";
+            sha256 = "e4cb1a0d9aebb129c9856ec75e3d98e675997e385cce4e0106ef8f68e09afaa3"; };
+    deps = [ world ]; nativeTools = autoreconfTools ++ hostTools;
+    build = ''
+      ${autoreconf}
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static
+      gmake -j8; gmake install
+      # "ab cd": no break inside "ab" (b[0] = LINEBREAK_NOBREAK 2), one allowed after the space (b[2] = ALLOWBREAK 1), and the text
+      # ends on a non-EOL char (b[4] = LINEBREAK_INDETERMINATE 4)
+      ${tprog ''#include <linebreak.h>
+#include <stdio.h>
+int main(void){ char b[5]; init_linebreak(); set_linebreaks_utf8((const utf8_t *)"ab cd", 5, "en", b); printf("ok %d %d %d\n", b[0], b[2], b[4]); return 0; }'' "$out/lib/amd64/libunibreak.so"}
+      ${chk ''"$W/t"'' "^ok 2 1 4$"}
+    '';
+  };
+
+  # cmark-gfm (BSD-2-Clause): GitHub's fork of the CommonMark reference parser with the GFM extensions (tables, strikethrough,
+  # autolinks), cmake, shared, tests off, as nixpkgs. Its cmake_minimum_required(2.8.9) is refused by cmake 4: policy floor 3.5.
+  # It builds -std=c99 -pedantic, and illumos <strings.h> then hides strncasecmp (XPG): -D__EXTENSIONS__ (extensions/autolink.c).
+  cmark-gfm = mkSrcPkg {
+    pname = "cmark-gfm"; version = "0.29.0.gfm.13";
+    src = { url = "https://github.com/github/cmark-gfm/archive/0.29.0.gfm.13.tar.gz";
+            sha256 = "5abc61798ebd9de5660bc076443c07abad2b8d15dbc11094a3a79644b8ad243a"; };
+    deps = [ world ]; nativeTools = [ cmake python3 ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DCMARK_TESTS=OFF -DCMARK_STATIC=OFF -DCMARK_SHARED=ON -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_C_FLAGS=-D__EXTENSIONS__"}
+      printf '| a | b |\n|---|---|\n| ~~x~~ | 2 |\n' > "$W/t.md"
+      ${chk ''"$out/bin/cmark-gfm" -e table -e strikethrough "$W/t.md" | tr -d '\n' '' "<td><del>x</del></td><td>2</td>"}
+    '';
+  };
+
+  # clipper2 (BSL-1.0): polygon clipping and offsetting, the C++ library (CPP/), shared, examples and tests off, as nixpkgs.
+  clipper2 = mkSrcPkg {
+    pname = "clipper2"; version = "2.0.1";
+    src = { url = "https://github.com/AngusJohnson/Clipper2/archive/refs/tags/Clipper2_2.0.1.tar.gz";
+            sha256 = "2a3693aceab4aed3e39b743e038d87701acc53cf05ed7b2013aab3e0aec5287e"; };
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      cd CPP
+      ${cmakeB "-DCLIPPER2_EXAMPLES=OFF -DCLIPPER2_TESTS=OFF -DCLIPPER2_UTILS=OFF -DBUILD_SHARED_LIBS=ON -DCMAKE_INSTALL_INCLUDEDIR=include"}
+      # two overlapping 10x10 squares: their intersection is a 5x10 rectangle, area 50
+      cat > "$W/t.cc" <<'TPROG'
+#include <clipper2/clipper.h>
+#include <cstdio>
+using namespace Clipper2Lib;
+int main(){ Paths64 a{MakePath({0,0, 10,0, 10,10, 0,10})}, b{MakePath({5,0, 15,0, 15,10, 5,10})};
+Paths64 r = Intersect(a, b, FillRule::NonZero); std::printf("ok %zu %.0f\n", r.size(), Area(r)); return 0; }
+TPROG
+      "$CXX" -I"$out/include" "$W/t.cc" -L"$out/lib/amd64" -lClipper2 -Wl,-R,"$out/lib/amd64" -o "$W/t"
+      ${chk ''"$W/t"'' "^ok 1 50$"}
+    '';
+  };
+
+  # libxcvt (MIT): the VESA CVT mode-line calculator (X servers, cvt), meson, as nixpkgs.
+  libxcvt = mkSrcPkg {
+    pname = "libxcvt"; version = "0.1.3";
+    src = { url = "https://www.x.org/releases/individual/lib/libxcvt-0.1.3.tar.xz";
+            sha256 = "a929998a8767de7dfa36d6da4751cdbeef34ed630714f2f4a767b351f2442e01"; };
+    deps = [ world ]; nativeTools = mesonTools;
+    build = ''
+      ${mesonBuild ""}
+      ${chk ''"$out/bin/cvt" 1920 1080 60'' "^Modeline \"1920x1080_60\\.00\" +173\\.00 +1920 2048 2248 2576 +1080 1083 1088 1120 -hsync \\+vsync$"}
+    '';
+  };
+
+  # libopusenc (BSD-3-Clause): the high-level Ogg Opus file encoder on the served libopus, autotools from the tag (its version file is
+  # made by update_version from git, absent in an archive: given as package_version, as upstream's release tarballs carry it).
+  libopusenc = mkSrcPkg {
+    pname = "libopusenc"; version = "0.3";
+    src = { url = "https://gitlab.xiph.org/xiph/libopusenc/-/archive/v0.3/libopusenc-v0.3.tar.gz";
+            sha256 = "e4258441c1b5917656d8d9eba838499b55d09d7095ac4cf4fbc6c1afe03060d8"; };
+    deps = [ world libopus ]; nativeTools = autoreconfTools ++ [ base.pkgconf ] ++ hostTools;
+    build = ''
+      echo 'PACKAGE_VERSION="0.3"' > package_version
+      ${autoreconf}
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-doc --disable-examples
+      gmake -j8; gmake install
+      # one second of silence, 48 kHz stereo, into an Ogg Opus file: it starts with the Ogg page magic and its OpusHead
+      ${tprog ''#include <opus/opusenc.h>
+#include <stdio.h>
+int main(void){ int e; static opus_int16 pcm[48000 * 2]; OggOpusComments *c = ope_comments_create();
+OggOpusEnc *enc = ope_encoder_create_file("t.opus", c, 48000, 2, 0, &e); if (!enc) return 1;
+ope_encoder_write(enc, pcm, 48000); ope_encoder_drain(enc); ope_encoder_destroy(enc); ope_comments_destroy(c);
+printf("ok %s\n", ope_get_version_string()); return 0; }'' "-lopusenc -I${libopus}/include/opus -L${libopus}/lib/amd64 -lopus -Wl,-R,${libopus}/lib/amd64"}
+      ${chk ''cd "$W" && ./t'' "^ok libopusenc 0\\.3$"}
+      ${chk ''od -An -c -N4 "$W/t.opus"'' "O +g +g +S"}
+    '';
+  };
+
+  # plutosvg (MIT): a tiny SVG renderer on plutovg (wave7 T6), cmake, shared, no FreeType, as nixpkgs.
+  plutosvg = mkSrcPkg {
+    pname = "plutosvg"; version = "0.0.8";
+    src = { url = "https://github.com/sammycage/plutosvg/archive/refs/tags/v0.0.8.tar.gz";
+            sha256 = "49d5cfe772d3aa10cd4879f2f6e189f5083c08e4c8ea01bf3d5b87c97dfca7d2"; };
+    deps = [ world plutovg ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DBUILD_SHARED_LIBS=ON -DPLUTOSVG_ENABLE_FREETYPE=OFF -DPLUTOSVG_BUILD_EXAMPLES=OFF -DCMAKE_INSTALL_INCLUDEDIR=include"}
+      grep -q "^plutovg_DIR:PATH=${plutovg}/" _b/CMakeCache.txt || { echo "FATAL: plutosvg: plutovg not from the store" >&2; grep plutovg _b/CMakeCache.txt >&2; exit 1; }
+      # a 16x16 SVG with a red 8x8 rect: rendered, the pixel inside is opaque red (ARGB32 premultiplied), outside clear
+      ${tprog ''#include <plutosvg.h>
+#include <stdio.h>
+#include <stdint.h>
+#include <string.h>
+static const char svg[] = "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'><rect width='8' height='8' fill='red'/></svg>";
+int main(void){ plutosvg_document_t *d = plutosvg_document_load_from_data(svg, strlen(svg), -1, -1, NULL, NULL); if (!d) return 1;
+plutovg_surface_t *s = plutosvg_document_render_to_surface(d, NULL, -1, -1, NULL, NULL, NULL); if (!s) return 1;
+const uint32_t *p = (const uint32_t *)plutovg_surface_get_data(s); int st = plutovg_surface_get_stride(s) / 4;
+printf("ok %s %08x %08x\n", plutosvg_version_string(), p[2 * st + 2], p[12 * st + 12]); return 0; }'' "-I$out/include/plutosvg -I${plutovg}/include/plutovg -L${plutovg}/lib/amd64 -Wl,-R,${plutovg}/lib/amd64 $out/lib/amd64/libplutosvg.so -lplutovg"}
+      ${chk ''"$W/t"'' "^ok 0\\.0\\.8 ffff0000 00000000$"}
+    '';
+  };
+
+  # lunasvg (MIT): an SVG rendering library in C++ on the packaged plutovg (USE_SYSTEM_PLUTOVG), cmake, shared, as nixpkgs.
+  lunasvg = mkSrcPkg {
+    pname = "lunasvg"; version = "3.5.0";
+    src = { url = "https://github.com/sammycage/lunasvg/archive/refs/tags/v3.5.0.tar.gz";
+            sha256 = "1abf1472ee6c4d19797916e8cc3c2e4b628e0d81178ffac60bdb0d457e32c690"; };
+    deps = [ world plutovg ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DUSE_SYSTEM_PLUTOVG=ON -DBUILD_SHARED_LIBS=ON -DLUNASVG_BUILD_EXAMPLES=OFF -DCMAKE_INSTALL_INCLUDEDIR=include"}
+      grep -q "^plutovg_DIR:PATH=${plutovg}/" _b/CMakeCache.txt || { echo "FATAL: lunasvg: plutovg not from the store" >&2; grep plutovg _b/CMakeCache.txt >&2; exit 1; }
+      cat > "$W/t.cc" <<'TPROG'
+#include <lunasvg.h>
+#include <cstdio>
+int main(){ auto d = lunasvg::Document::loadFromData("<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'><rect width='8' height='8' fill='red'/></svg>");
+if (!d) return 1; auto b = d->renderToBitmap(); if (b.isNull()) return 1; const unsigned *p = (const unsigned *)b.data(); int st = b.stride() / 4;
+std::printf("ok %s %08x %08x\n", lunasvg_version_string(), p[2 * st + 2], p[12 * st + 12]); return 0; }
+TPROG
+      "$CXX" -I"$out/include/lunasvg" "$W/t.cc" -L"$out/lib/amd64" -llunasvg -Wl,-R,"$out/lib/amd64" -Wl,-R,${plutovg}/lib/amd64 -o "$W/t"
+      ${chk ''"$W/t"'' "^ok 3\\.5\\.0 ffff0000 00000000$"}
+    '';
+  };
+
+  # qrcodegen (MIT): Project Nayuki's QR Code generator, the C library (c/), as nixpkgs: the static libqrcodegen.a, its header and a .pc.
+  # Upstream's own test runs in the build (nixpkgs' checkPhase).
+  qrcodegen = mkSrcPkg {
+    pname = "qrcodegen"; version = "1.8.0";
+    src = { url = "https://github.com/nayuki/QR-Code-generator/archive/v1.8.0.tar.gz";
+            sha256 = "2ec0a4d33d6f521c942eeaf473d42d5fe139abcfa57d2beffe10c5cf7d34ae60"; };
+    deps = [ world ]; nativeTools = hostTools;
+    build = ''
+      cd c
+      sed -i 's/$(AR) -crs $@ -- $^/$(AR) -crs $@ $^/' Makefile   # illumos ar(1) takes no "--" end-of-options marker
+      gmake CC="$CC" AR=ar CFLAGS="-std=c99 -O2" libqrcodegen.a qrcodegen-test
+      ${chk "./qrcodegen-test" "^All [0-9]+ test cases passed$"}
+      mkdir -p "$out/lib/amd64/pkgconfig" "$out/include/qrcodegen"
+      cp libqrcodegen.a "$out/lib/amd64/"; cp qrcodegen.h "$out/include/qrcodegen/"
+      printf '%s\n' "prefix=$out" 'includedir=''${prefix}/include/qrcodegen' 'libdir=''${prefix}/lib/amd64' "" "Name: qrcodegen" \
+        "Description: QR Code generator library" "Version: 1.8.0" 'Cflags: -I''${includedir}' 'Libs: -L''${libdir} -lqrcodegen' > "$out/lib/amd64/pkgconfig/qrcodegen.pc"
+      ${tprog ''#include <qrcodegen.h>
+#include <stdio.h>
+int main(void){ uint8_t q[qrcodegen_BUFFER_LEN_MAX], t[qrcodegen_BUFFER_LEN_MAX];
+if (!qrcodegen_encodeText("solnix", t, q, qrcodegen_Ecc_LOW, qrcodegen_VERSION_MIN, qrcodegen_VERSION_MAX, qrcodegen_Mask_AUTO, true)) return 1;
+printf("ok %d\n", qrcodegen_getSize(q)); return 0; }'' "-I$out/include/qrcodegen $out/lib/amd64/libqrcodegen.a"}
+      ${chk ''"$W/t"'' "^ok 21$"}
+    '';
+  };
+
+  # enet (MIT): a reliable UDP networking library, autotools (its release tarball's configure), shared, as nixpkgs. illumos keeps socket()
+  # in libsocket.
+  enet = mkSrcPkg {
+    pname = "enet"; version = "1.3.18";
+    src = { url = "http://enet.bespin.org/download/enet-1.3.18.tar.gz";
+            sha256 = "2a8a0c5360d68bb4fcd11f2e4c47c69976e8d2c85b109dd7d60b1181a4f85d36"; };
+    deps = [ world ]; nativeTools = hostTools;
+    build = ''
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static LIBS="-lsocket -lnsl"
+      gmake -j8; gmake install
+      # a host bound to loopback (an ephemeral port), then a client connect queued to it: both created, no network needed beyond lo0
+      ${tprog ''#include <enet/enet.h>
+#include <stdio.h>
+int main(void){ if (enet_initialize()) return 1; ENetAddress a; enet_address_set_host_ip(&a, "127.0.0.1"); a.port = ENET_PORT_ANY;
+ENetHost *s = enet_host_create(&a, 2, 1, 0, 0), *c = enet_host_create(NULL, 1, 1, 0, 0); if (!s || !c) return 1;
+printf("ok %u %d\n", enet_linked_version() == ENET_VERSION, enet_host_connect(c, &s->address, 1, 0) != NULL); enet_deinitialize(); return 0; }'' "$out/lib/amd64/libenet.so"}
+      ${chk ''"$W/t"'' "^ok 1 1$"}
+    '';
+  };
+
+  # immer (BSL-1.0): persistent immutable data structures for C++, header-only, cmake install of the headers and its cmake package; tests,
+  # examples, docs and extras off, as nixpkgs.
+  immer = mkSrcPkg {
+    pname = "immer"; version = "0.9.1";
+    src = { url = "https://github.com/arximboldi/immer/archive/refs/tags/v0.9.1.tar.gz";
+            sha256 = "b18b92ba60ec3186dc36ef671d3c2ae542cbb63eb6dc0e258476c6111a67c971"; };
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-Dimmer_BUILD_TESTS=OFF -Dimmer_BUILD_EXAMPLES=OFF -Dimmer_BUILD_DOCS=OFF -Dimmer_BUILD_EXTRAS=OFF -DCMAKE_INSTALL_INCLUDEDIR=include"}
+      cat > "$W/t.cc" <<'TPROG'
+#include <immer/vector.hpp>
+#include <cstdio>
+int main(){ const auto v0 = immer::vector<int>{}; const auto v1 = v0.push_back(13).push_back(29); std::printf("ok %zu %zu %d\n", v0.size(), v1.size(), v1[1]); return 0; }
+TPROG
+      "$CXX" -std=c++17 -I"$out/include" "$W/t.cc" -o "$W/t"
+      ${chk ''"$W/t"'' "^ok 0 2 29$"}
+    '';
+  };
+
+  # jsoncons (BSL-1.0): a header-only C++ library for JSON and JSON-like formats (CBOR, MessagePack, ...), cmake install, as nixpkgs.
+  jsoncons = mkSrcPkg {
+    pname = "jsoncons"; version = "1.9.0";
+    src = { url = "https://github.com/danielaparker/jsoncons/archive/refs/tags/v1.9.0.tar.gz";
+            sha256 = "f1017b36e4e034acd5c0f5f616bacf5d7a161d6d3a43ff9ddb73fd8dca4d3cd9"; };
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DJSONCONS_BUILD_TESTS=OFF -DCMAKE_INSTALL_INCLUDEDIR=include"}
+      cat > "$W/t.cc" <<'TPROG'
+#include <jsoncons/json.hpp>
+#include <iostream>
+int main(){ auto j = jsoncons::json::parse(R"({"os":"solnix","n":[1,2,3]})"); std::cout << "ok " << j["os"].as<std::string>() << " " << j["n"].size() << std::endl; return 0; }
+TPROG
+      "$CXX" -std=c++17 -I"$out/include" "$W/t.cc" -o "$W/t"
+      ${chk ''"$W/t"'' "^ok solnix 3$"}
+    '';
+  };
+
+  # small (BSL-1.0): C++ small-buffer containers (small::vector, small::string), header-only, cmake install, as nixpkgs.
+  small = mkSrcPkg {
+    pname = "small"; version = "0.2.2";
+    src = { url = "https://github.com/alandefreitas/small/archive/refs/tags/v0.2.2.tar.gz";
+            sha256 = "4b8bbc2f5879178a387a10c36619ea54ed2228cf33a9a38aa0534dbd95b6c41d"; };
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DSMALL_BUILD_TESTS=OFF -DSMALL_BUILD_EXAMPLES=OFF -DSMALL_BUILD_INSTALLER=ON -DSMALL_BUILD_PACKAGE=OFF -DSMALL_BUILD_DOCS=OFF -DCMAKE_INSTALL_INCLUDEDIR=include"}
+      cat > "$W/t.cc" <<'TPROG'
+#include <small/vector.hpp>
+#include <cstdio>
+int main(){ small::vector<int, 5> v = {1, 2, 3}; v.push_back(4); std::printf("ok %zu %d\n", v.size(), v[3]); return 0; }
+TPROG
+      "$CXX" -std=c++17 -I"$out/include" "$W/t.cc" -o "$W/t"
+      ${chk ''"$W/t"'' "^ok 4 4$"}
+    '';
+  };
 }
