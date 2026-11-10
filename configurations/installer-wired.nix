@@ -5,9 +5,10 @@
 #
 # Why it exists: installer.nix lays the iwm/iwx wifi drivers and the i915/NVIDIA modules into the media's kernel tree
 # (hardware.wirelessIntel.onMedia, hardware.graphics.onMedia; all unbound at boot, for a runtime bind or load test). Those
-# kernel trees are built by mkIwmKernel/mkIwxKernel/mkGpuKernel, whose stripSliceRefs needs /usr/bin/perl, and the NVIDIA
-# modules need OpenIndiana's gcc 14 (-msave-args). A solnix host has neither, so until stripSliceRefs takes its tool from
-# the store (and NVIDIA builds elsewhere) those media can only be built on an OpenIndiana host. This edition builds on a
+# kernel trees are built by mkIwmKernel/mkIwxKernel/mkGpuKernel, whose stripSliceRefs needs /usr/bin/perl (the NVIDIA
+# modules no longer need OpenIndiana's gcc 14: they build from store tools since 2026-11-10). A solnix host has no
+# /usr/bin/perl, so until stripSliceRefs takes its tool from the store those media can only be built on an OpenIndiana
+# host. This edition builds on a
 # solnix host. It installs over a wired NIC (or a USB ethernet adapter) and is the base for the test AMI, where wifi and a
 # GPU mean nothing. An installed system can still enable wifi or i915 in its own configuration.
 { lib, ... }:

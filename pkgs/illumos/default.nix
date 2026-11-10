@@ -786,6 +786,14 @@ let
     kernel = kernelNd;
     gate = gate';
     solnixDev = null;
+    # store tools, as the other out-of-gate modules: gcc 15 (-msave-args), GNU make, binutils-ld (the RM pre-links)
+    kmodDev = buildEnv {
+      name = "solnix-kmod-dev";
+      paths = [ gcc15Wrapper srcPkgs.binutils-ld srcPkgs.gnumake ];
+      pathsToLink = [ "/bin" ];
+    };
+    inherit ld kmodPath; pathGate = kmodGate;
+    xz = srcPkgs.nixChain.xz;
   }).nvidia-oss-modules;
   # nvidia-gsp-firmware 615.71.09 (GSP + ucodes for TU10X/GA10X), unfree,
   # redistributable for open-source kernels; gated on the explicit opt-in.

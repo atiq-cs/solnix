@@ -45,6 +45,11 @@
 # nvidia-oss/patches/*.patch) are applied to the copy at build time; the
 # vendored tree is never edited. Not bound to any device: no image installs or
 # add_drv's these (docs: X1E-NVIDIA-STATUS.md, the supervised first attach).
+# Built from store tools only (gcc 15, binutils-ld, the illumos ld), so a solnix
+# host builds them. Measured 2026-11-10 on lixi: unresolved=0, and against the
+# OI-gcc-14 modules of BE 34 the same NEEDED, exports and data/bss sizes; the
+# symbol deltas are gcc 15 inlining (2 RM globals with no outside caller gone,
+# 1 C++ method out of line) and __x86_indirect_thunk_rsi (a unix retpoline).
 
 { illumosSrc                 # store path to an illumos-gate SOURCE tree with
                              # usr/src/uts/{i86pc,intel,common} (the kernel
@@ -55,11 +60,18 @@
                              # reference for nvidia-oss-modules (required there)
 , gate ? null                # the gate proto: usr/include for the headers the
                              # gate build generates (sys/priv_names.h, ...)
-  # The kernel C flags carry -msave-args (illumos amd64 ABI, for mdb/DTrace
-  # argument recovery), an illumos-only gcc option: solnix's from-source gcc
-  # (upstream 14.3.0) rejects it, the build host's OpenIndiana gcc 14 accepts
-  # it. A build tool, like kernel-nd's host gcc 10; nothing it links ships.
-, kernelGcc ? "/usr/gcc/14"
+  # nvidia-oss-modules' tools, all from the store (no OpenIndiana host): the
+  # kernel C flags carry -msave-args (illumos amd64 ABI, for mdb/DTrace
+  # argument recovery), which the store gcc 15 has (its illumos patch series,
+  # gcc15-src.nix) and gcc 14.3.0 lacks. kmodDev = that gcc's wrapper + GNU
+  # make + binutils-ld (gld/gobjcopy for the RM's pre-links, see below);
+  # ld = the illumos link-editor for the .kmod links; kmodPath = the store
+  # coreutils/sed/grep/patch + the world's illumos tools (nm elfdump awk).
+, kmodDev ? null
+, ld ? null
+, xz ? null
+, kmodPath ? null
+, pathGate ? null
   # The upstream tree at the pin, which carries the RM source src/ (107 MB, not
   # vendored; src-FETCH.md). nix-prefetch-url --unpack of the archive URL.
 , rmSrc ? import ./fetch-tarball.nix {
@@ -200,30 +212,44 @@ let
       throw "nvidia-oss-modules needs kernel (pkgs.solnix.kernelNd) and gate (the gate proto)"
     else derivation {
       name = "nvidia-oss-modules-615.71.09";
-      inherit system illumosSrc kernel gate rmSrc kernelGcc;
+      inherit system illumosSrc kernel gate rmSrc kmodDev ld xz;
       nvossSrc = nvossSrc;
+      # the modules are object code: no store path in them (the __FILE__ and
+      # DWARF paths are mapped below), so a BE does not pull the sources in.
+      allowedReferences = [ ];
       patches = builtins.concatStringsSep " "
         (map (p: "${patchDir}/${p}")
           (builtins.filter (p: builtins.match ".*\\.patch" p != null)
             (builtins.attrNames (builtins.readDir patchDir))));
       negctl = ../../src/drm-port/nvidia-oss/kernel-illumos/negctl-unresolved.c;
       builder = "/usr/bin/bash";
-      PATH = "/usr/bin:/usr/sbin:/usr/gnu/bin";
+      PATH = if kmodPath == null then "/usr/bin:/usr/sbin:/usr/gnu/bin" else kmodPath;
+      pathGate = if pathGate == null then "" else pathGate;
       args = [ "-c" ''
         set -eu
-        export PATH="$kernelGcc/bin:/usr/gnu/bin:/usr/bin:/usr/sbin"
-        for t in gcc gmake gld gobjcopy patch; do
+        # GNU ld (gld) and objcopy (gobjcopy) only for the RM's relocatable
+        # pre-links, as upstream's utils.mk names them on SunOS: nv-kernel.o is
+        # `gld -r -T nv-kernel.ld --gc-sections` + `gobjcopy --localize-symbol=
+        # memset/memcpy --remove-section=.note.gnu.property`; the shader blobs are
+        # `gld -r --format=binary` + `gobjcopy --rename-section .data=.rodata`.
+        # The illumos ld has no linker scripts, --gc-sections or binary input.
+        # The three .kmod links are the illumos ld (-ztype=kmod), LD= below.
+        export PATH="$kmodDev/bin:$xz/bin:$ld/usr/bin:$ld/bin:$PATH"
+        [ -z "$pathGate" ] || PATH_GATE_ALLOW="" /usr/bin/bash "$pathGate"
+        for t in gcc g++ gmake gld gobjcopy patch xz nm elfdump awk; do
           command -v $t >/dev/null || { echo "FATAL: no $t on PATH" >&2; exit 1; }
         done
+        LDBIN="$ld/usr/bin/ld"; [ -x "$LDBIN" ] || LDBIN=/usr/bin/ld
+        "$LDBIN" -V 2>&1 | grep -q 'Solaris Link Editors\|illumos' || { echo "FATAL: $LDBIN is not the illumos ld" >&2; exit 1; }
         echo 'int x;' | gcc -msave-args -mcmodel=kernel -c -x c - -o /dev/null \
-          || { echo "FATAL: $kernelGcc/bin/gcc lacks -msave-args (needs the illumos gcc)" >&2; exit 1; }
+          || { echo "FATAL: gcc lacks -msave-args (needs the illumos gcc 15)" >&2; exit 1; }
         [ -d "$illumosSrc/usr/src/uts/common/sys/i2c" ] || { echo "FATAL: illumosSrc lacks sys/i2c" >&2; exit 1; }
         U=$kernel/platform/i86pc/kernel/amd64/unix; G=$kernel/kernel/amd64/genunix
         for f in $U $G; do [ -f $f ] || { echo "FATAL: no $f" >&2; exit 1; }; done
 
         # The upstream tree (with src/) plus the solnix files of the vendored
         # copy: one tree, so the build is the upstream `gmake modules` layout.
-        W=$(mktemp -d /tmp/nvoss-mods.XXXXXX); T=$W/nv
+        W=$(mktemp -d "''${TMPDIR:-/tmp}/nvoss-mods.XXXXXX"); T=$W/nv
         cp -r "$rmSrc" $T; chmod -R u+w $T
         # the vendored copy must be the same tree as the fetched pin (minus src/)
         for f in kernel-illumos/Makefile kernel-illumos/nvidia/nvidia_ddi.c \
@@ -239,11 +265,16 @@ let
           || { echo "FATAL: nvidia_modeset RM-init guard not applied" >&2; exit 1; }
 
         # Fixed id string: the default embeds whoami@hostname and the date.
+        # Store paths in __FILE__ and DWARF map to fixed names (the build dir,
+        # the illumos source, the gate proto and the compiler's own headers).
+        GP=$(gcc -print-file-name=include | sed 's|^\(/nix/store/[^/]*\)/.*|\1|')
+        case "$GP" in /nix/store/*) ;; *) echo "FATAL: gcc is not a store gcc ($GP)" >&2; exit 1;; esac
+        PM="-ffile-prefix-map=$W/=/build/ -ffile-prefix-map=$illumosSrc/=/illumos/ -ffile-prefix-map=$gate/=/proto/ -ffile-prefix-map=$GP/=/gcc/"
         mk="NV_BUILD_USER=solnix NV_BUILD_HOST=nix DATE=true TARGET_OS=SunOS TARGET_ARCH=x86_64"
-        J=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
-        gmake -C src/nvidia -j$J $mk >$W/nvk.log 2>&1 \
+        J=''${NIX_BUILD_CORES:-0}; [ "$J" -gt 0 ] 2>/dev/null || J=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
+        gmake -C src/nvidia -j$J $mk EXTRA_CFLAGS="$PM" >$W/nvk.log 2>&1 \
           || { echo "FATAL: nv-kernel.o" >&2; tail -40 $W/nvk.log >&2; exit 1; }
-        gmake -C src/nvidia-modeset -j$J $mk >$W/nvm.log 2>&1 \
+        gmake -C src/nvidia-modeset -j$J $mk EXTRA_CFLAGS="$PM" >$W/nvm.log 2>&1 \
           || { echo "FATAL: nv-modeset-kernel.o" >&2; tail -40 $W/nvm.log >&2; exit 1; }
         O=kernel-illumos/_out/SunOS_x86_64
         # CTFCONVERT= : the RM objects carry no DWARF, ctfconvert refuses them.
@@ -252,7 +283,7 @@ let
         KINC="-nostdinc -I$illumosSrc/usr/src/uts/i86pc -I$illumosSrc/usr/src/uts/intel"
         KINC="$KINC -I$illumosSrc/usr/src/uts/common -isystem $(gcc -print-file-name=include)"
         KINC="$KINC -idirafter $gate/usr/include"
-        gmake -C kernel-illumos -j$J ILLUMOS_SRC=$illumosSrc CTFCONVERT= KERNEL_INC="$KINC" \
+        gmake -C kernel-illumos -j$J ILLUMOS_SRC=$illumosSrc CTFCONVERT= KERNEL_INC="$KINC" LD="$LDBIN" EXTRA_CFLAGS="$PM" \
           _out/SunOS_x86_64/nvidia.kmod _out/SunOS_x86_64/nvidia_modeset.kmod \
           _out/SunOS_x86_64/nvidia_i2c.kmod _out/SunOS_x86_64/nvidia.aliases >$W/ki.log 2>&1 \
           || { echo "FATAL: kernel-illumos modules" >&2; tail -40 $W/ki.log >&2; exit 1; }
@@ -262,7 +293,7 @@ let
         # Each module's deps are unix + genunix + its DT_NEEDED modules, found
         # along krtld's default path. __dtrace_probe_* are not counted: krtld
         # rewrites those calls to nops (intel/amd64/krtld/kobj_reloc.c).
-        NM=/usr/bin/nm
+        NM=$(command -v nm)
         unres() {  # <module> <out-list>; prints "<undefined> <unresolved>"
           m=$1; deps="$U $G"
           for d in $(elfdump -d $m | awk '$2=="NEEDED"{print $4}'); do
@@ -286,7 +317,7 @@ let
           -I$illumosSrc/usr/src/uts/i86pc -I$illumosSrc/usr/src/uts/intel \
           -I$illumosSrc/usr/src/uts/common -isystem "$(gcc -print-file-name=include)" \
           -c $negctl -o $W/negctl.o
-        /usr/bin/ld -ztype=kmod -o $W/negctl $W/negctl.o
+        "$LDBIN" -ztype=kmod -o $W/negctl $W/negctl.o
         unres $W/negctl $W/negctl.unres > $W/cnt; set -- $(cat $W/cnt)
         [ "$2" = 1 ] && grep -qx solnix_negctl_no_such_symbol $W/negctl.unres \
           || { echo "FATAL: negative control counted $2 unresolved, expected 1" >&2; exit 1; }
@@ -307,8 +338,13 @@ let
         cp kernel-illumos/nvidia/nvidia.conf kernel-illumos/nvidia-modeset/nvidia_modeset.conf \
            kernel-illumos/nvidia-i2c/nvidia_i2c.conf $out/share/nvidia-oss/
         cp $O/nvidia.aliases kernel-illumos/devlink.tab kernel-illumos/README.md $out/share/nvidia-oss/
-        echo "kernel=$kernel" >> $out/share/nvidia-oss/GATE-RESULT.txt
+        echo "kernel=''${kernel#/nix/store/????????????????????????????????-}" >> $out/share/nvidia-oss/GATE-RESULT.txt   # the name, not a reference
         chmod 0555 $out/kernel/drv/amd64/*
+        # allowedReferences fails the build on a store path too; name the files first
+        if grep -rl /nix/store/ $out > $W/refs 2>/dev/null; then
+          echo "FATAL: store paths in the modules (unmapped __FILE__/DWARF):" >&2
+          while read -r f; do echo "  $f: $(strings -a "$f" | grep -o '/nix/store/[^/]*' | sort -u | tr '\n' ' ')" >&2; done < $W/refs; exit 1
+        fi
         cd /; find $W -delete || true
         echo "=== nvidia-oss-modules: 3 modules, unresolved=0, negative control green ===" >&2
       '' ];

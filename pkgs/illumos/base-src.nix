@@ -41,6 +41,34 @@ let
   # hermetic recipes (mk-src-pkg nativeTools): the store tools a configure/make run needs, NixOS stdenv's set (coreutils: GNU install,
   # findutils, gnused/gnugrep/gnutar/gzip/xz/make via the seed in buildTools), then the world for the illumos tools (elfdump, ld, nm).
   # Only recipes that are NOT one of these may use it (no cycle): coreutils/findutils are base outs that do not take nativeTools.
+  # the binutils recipe's build text, shared by binutils and binutils-ld (one string, so binutils' drv does not move)
+  binutilsBuild = ''
+      T=x86_64-pc-solaris2.11
+      sed -i 's/^development=true$/development=false/; s/^experimental=true$/experimental=false/' bfd/development.sh
+      grep -qx development=false bfd/development.sh || { echo "FATAL: bfd/development.sh not pinned" >&2; exit 1; }
+      # no -g: DWARF names the gate proto and the compiler, and the stripper only
+      # touches ELF files, so debug info in an installed .a would pull both into
+      # the runtime closure. --disable-install-libbfd keeps libbfd.a/bfd.h out.
+      CFLAGS=-O2 CXXFLAGS=-O2 MAKEINFO=true ./configure --prefix="$out" --build=$T --host=$T --target=$T \
+        --program-prefix=g --disable-ld --disable-gold --disable-gprof --disable-gprofng \
+        --disable-libctf --disable-shared --disable-install-libbfd --disable-nls --disable-werror --without-zstd
+      # LEXLIB empty: configure finds the build host's lex library (-ll) and links
+      # gar/granlib to libl.so.1 from /usr/lib (the closure gate caught it). The
+      # shipped arlex.c is pre-generated with yywrap() defined as a macro, so
+      # nothing from libl is used.
+      gmake -j4 MAKEINFO=true LEXLIB=
+      gmake install MAKEINFO=true LEXLIB=
+      ln -s gas "$out/bin/as"
+      # the native tooldir duplicates bin/ under unprefixed names; nothing uses it.
+      find "$out/$T" -delete 2>/dev/null || true
+      # self-check: the new gas assembles both ELF classes gcc asks for.
+      printf '.text\n.globl f\nf: ret\n' > t.s
+      for c in 64 32; do
+        "$out/bin/as" --$c -o t$c.o t.s
+        [ "$(od -An -tx1 -N4 t$c.o | tr -d ' \n')" = 7f454c46 ] || { echo "FATAL: gas --$c made no ELF" >&2; exit 1; }
+      done
+      "$out/bin/as" --version | head -1 | grep -q ' 2\.47$' || { echo "FATAL: gas does not say 2.47: $("$out/bin/as" --version | head -1)" >&2; exit 1; }
+    '';
   self = rec {
   inherit mkSrcPkg hostTools;
 
@@ -290,32 +318,34 @@ let
     pname = "binutils"; version = "2.47";
     src = { url = "https://mirrors.kernel.org/gnu/binutils/binutils-2.47.tar.xz";
             sha256 = "154ab23b60070e8f27013c22977f1129425d67d1e8acd6e13010e617811e4cff"; };
-    build = ''
-      T=x86_64-pc-solaris2.11
-      sed -i 's/^development=true$/development=false/; s/^experimental=true$/experimental=false/' bfd/development.sh
-      grep -qx development=false bfd/development.sh || { echo "FATAL: bfd/development.sh not pinned" >&2; exit 1; }
-      # no -g: DWARF names the gate proto and the compiler, and the stripper only
-      # touches ELF files, so debug info in an installed .a would pull both into
-      # the runtime closure. --disable-install-libbfd keeps libbfd.a/bfd.h out.
-      CFLAGS=-O2 CXXFLAGS=-O2 MAKEINFO=true ./configure --prefix="$out" --build=$T --host=$T --target=$T \
-        --program-prefix=g --disable-ld --disable-gold --disable-gprof --disable-gprofng \
-        --disable-libctf --disable-shared --disable-install-libbfd --disable-nls --disable-werror --without-zstd
-      # LEXLIB empty: configure finds the build host's lex library (-ll) and links
-      # gar/granlib to libl.so.1 from /usr/lib (the closure gate caught it). The
-      # shipped arlex.c is pre-generated with yywrap() defined as a macro, so
-      # nothing from libl is used.
-      gmake -j4 MAKEINFO=true LEXLIB=
-      gmake install MAKEINFO=true LEXLIB=
-      ln -s gas "$out/bin/as"
-      # the native tooldir duplicates bin/ under unprefixed names; nothing uses it.
-      find "$out/$T" -delete 2>/dev/null || true
-      # self-check: the new gas assembles both ELF classes gcc asks for.
-      printf '.text\n.globl f\nf: ret\n' > t.s
-      for c in 64 32; do
-        "$out/bin/as" --$c -o t$c.o t.s
-        [ "$(od -An -tx1 -N4 t$c.o | tr -d ' \n')" = 7f454c46 ] || { echo "FATAL: gas --$c made no ELF" >&2; exit 1; }
-      done
-      "$out/bin/as" --version | head -1 | grep -q ' 2\.47$' || { echo "FATAL: gas does not say 2.47: $("$out/bin/as" --version | head -1)" >&2; exit 1; }
+    build = binutilsBuild;
+  };
+
+  # binutils-ld: the same binutils with GNU ld (gld), for the NVIDIA RM's relocatable pre-links only (nvidia-oss.nix:
+  # nv-kernel.o is `gld -r -T nv-kernel.ld --gc-sections`, the shader blobs `gld -r --format=binary`; the illumos ld has no
+  # linker scripts, --gc-sections or --format=binary). Kernel modules themselves still link with the illumos ld. A separate
+  # out so `binutils` (and every gcc wrapper on it) does not move. gld's default scripts are compiled in (native build), so
+  # the tooldir (ldscripts) is deleted as in binutils; the self-check links a -r object with them.
+  binutils-ld = mkSrcPkg {
+    pname = "binutils-ld"; version = "2.47";
+    src = { url = "https://mirrors.kernel.org/gnu/binutils/binutils-2.47.tar.xz";
+            sha256 = "154ab23b60070e8f27013c22977f1129425d67d1e8acd6e13010e617811e4cff"; };
+    # No host dirs in gld: ld/configure.tgt hard-codes NATIVE_LIB_DIRS='/usr/local/lib /lib /usr/lib' (gld's compiled-in -l
+    # search path; host-path-scan.sh refuses it in ld/Makefile), so it is emptied, and --with-lib-path=: (genscripts.sh: a
+    # logically empty LIB_PATH) adds none. The RM pre-links name no -l library.
+    build = let
+      from = [ "--disable-ld --disable-gold" "\nCFLAGS=-O2 CXXFLAGS=-O2 MAKEINFO=true ./configure" ];
+      to = [ "--enable-ld=yes --with-lib-path=: --disable-gold"
+        "\nsed -i \"s|^NATIVE_LIB_DIRS='/usr/local/lib /lib /usr/lib'\$|NATIVE_LIB_DIRS=|\" ld/configure.tgt\ngrep -qx NATIVE_LIB_DIRS= ld/configure.tgt || { echo 'FATAL: ld NATIVE_LIB_DIRS not emptied' >&2; exit 1; }\nCFLAGS=-O2 CXXFLAGS=-O2 MAKEINFO=true ./configure" ];
+      t = builtins.replaceStrings from to binutilsBuild;
+    # both anchors must hit: a '' string has its indentation stripped, so an indented anchor silently misses (it did)
+    in assert builtins.match "(.*)NATIVE_LIB_DIRS not emptied(.*)--with-lib-path=:(.*)" t != null; t + ''
+      "$out/bin/gld" --verbose | grep -q 'SEARCH_DIR' && { echo "FATAL: gld has a default library search path" >&2; exit 1; }
+      "$out/bin/gld" --version | head -1 | grep -q ' 2\.47$' || { echo "FATAL: gld does not say 2.47" >&2; exit 1; }
+      "$out/bin/gld" -V | grep -qx '   elf_x86_64_sol2' || { echo "FATAL: gld has no elf_x86_64_sol2 emulation" >&2; exit 1; }
+      # the RM's own shape: -r --gc-sections rooted by -u (nv-kernel.o's exports_link_command.txt is all --undefined=)
+      "$out/bin/as" --64 -o t64.o t.s && "$out/bin/gld" -r --gc-sections -u f -o tr.o t64.o \
+        && [ "$(od -An -tx1 -N4 tr.o | tr -d ' \n')" = 7f454c46 ] || { echo "FATAL: gld -r made no ELF" >&2; exit 1; }
     '';
   };
 
