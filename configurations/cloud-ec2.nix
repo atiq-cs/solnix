@@ -29,4 +29,12 @@
 
   # MTU self-raise + reboot: OFF for cloud images (reboot-loop hazard above).
   solnix.mtu.enable = false;
+
+  # DHCP on whatever wired NIC the instance has, as NixOS's useDHCP default does: ena0 on EC2, e1000g0 or vioif0 on
+  # KVM/OpenStack/Proxmox. base.nix's named ena0 alone left a KVM guest with no address (solnix-net waited 300 s for
+  # ena0, ipfilter's start timed out behind it). solnix-net, not solnix-netd: its bringup keeps the ena ifconfig
+  # fallback (gotcha #15).
+  networking.interfaces = lib.mkForce { };
+  networking.useDHCP = true;
+  networking.solnix-netd.enable = false;
 }
