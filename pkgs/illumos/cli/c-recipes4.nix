@@ -757,7 +757,9 @@ printf("ok %s %d\n", TK_PATCH_LEVEL, Tk_GetNumMainWindows()); return 0; }'' "-I$
       grep -q '^#elif defined(__Fuchsia__) || defined(__OpenBSD__)$' loader/vk_loader_platform.h || { echo "FATAL: vulkan-loader executable_path anchor" >&2; exit 1; }
       sed -i 's|^#elif defined(__Fuchsia__) \|\| defined(__OpenBSD__)$|#elif defined(__sun)\n#include <stdlib.h>\nstatic inline char *loader_platform_executable_path(char *buffer, size_t size) {\n    const char *p = getexecname();\n    if (p == NULL \|\| strlen(p) >= size) return NULL;\n    strcpy(buffer, p);\n    return buffer;\n}\n#elif defined(__Fuchsia__) \|\| defined(__OpenBSD__)|' loader/vk_loader_platform.h
       # FindGit took the build host's /bin/git (gate L5); it only reads a .git/HEAD, which a tarball has not: off, as cli/c-recipes2.nix
-      ${cmakeB "-DCMAKE_DISABLE_FIND_PACKAGE_Git=TRUE -DCMAKE_C_FLAGS=-D__EXTENSIONS__ -DCMAKE_INSTALL_INCLUDEDIR=${vulkan-headers}/include -DBUILD_WSI_XCB_SUPPORT=ON -DBUILD_WSI_XLIB_SUPPORT=ON -DBUILD_WSI_WAYLAND_SUPPORT=ON -DBUILD_TESTS=OFF -DVULKAN_HEADERS_INSTALL_DIR=${vulkan-headers}"}
+      # FALLBACK_DATA_DIRS (read only when XDG_DATA_DIRS is unset): the system profile's share, not upstream's /usr/local/share, which
+      # host-path-scan refuses in a store-only CMakeCache (wave7's stdenv)
+      ${cmakeB "-DCMAKE_DISABLE_FIND_PACKAGE_Git=TRUE -DFALLBACK_DATA_DIRS=/run/current-system/sw/share:/usr/share -DCMAKE_C_FLAGS=-D__EXTENSIONS__ -DCMAKE_INSTALL_INCLUDEDIR=${vulkan-headers}/include -DBUILD_WSI_XCB_SUPPORT=ON -DBUILD_WSI_XLIB_SUPPORT=ON -DBUILD_WSI_WAYLAND_SUPPORT=ON -DBUILD_TESTS=OFF -DVULKAN_HEADERS_INSTALL_DIR=${vulkan-headers}"}
       L="$out/lib/amd64/libvulkan.so.1"
       [ -f "$L" ] || { echo "FATAL: no libvulkan.so.1" >&2; exit 1; }
       /usr/bin/elfdump -s -N .dynsym "$L" | grep -qE ' vkCreateXcbSurfaceKHR$' || { echo "FATAL: libvulkan without XCB WSI" >&2; exit 1; }
@@ -1031,13 +1033,17 @@ printf("ok %s %ux%u %d %d\n", th_version_string(), di.pic_width, di.pic_height, 
   # nixpkgs (its tests off: no queued job runs them). Its version-script probe fails on illumos ld, so the libraries export everything
   # (as upstream's macOS build). upb's linker arrays need __start_/__stop_<section>, which illumos ld defines (protected), measured.
   # Built at the build's core count, not cmakeB's -j16: protobuf's translation units are large.
+  # -z now on its libraries: lazily bound, a gcc 15 consumer deadlocked at start. During libprotobuf's .init (AddDescriptors holds
+  # DescriptorPool's mutex), libstdc++'s first call to std::string::_M_create binds to the consumer's own WEAK copy of it, so
+  # ld.so.1 runs the consumer's .init early; its static descriptors re-enter the same mutex. Measured (wave7b, this recipe's own
+  # check program): lazy 4/4 hang, libprotobuf marked NOW 4/4 ok; the same program linked by gcc 14 exports 18 such copies, not 47.
   protobuf = mkSrcPkg {
     pname = "protobuf"; version = "36.2";
     src = { url = "https://codeload.github.com/protocolbuffers/protobuf/tar.gz/refs/tags/v36.2";
             sha256 = "7e7eaf580ec77f1a392ff1ab1013c13d3b04a6716f002f697f67f3c1113f0530"; };
     deps = [ world zlib abseil-cpp ]; nativeTools = [ cmake base.pkgconf ] ++ hostTools;
     build = ''
-      ${builtins.replaceStrings [ "cmake --build _b -j16" ] [ "cmake --build _b -j\${NIX_BUILD_CORES:-4}" ] (cmakeB "-Dprotobuf_BUILD_TESTS=OFF -Dprotobuf_BUILD_SHARED_LIBS=ON -Dprotobuf_ABSL_PROVIDER=package -Dabsl_DIR=${abseil-cpp}/lib/amd64/cmake/absl -DZLIB_ROOT=${zlib} -DZLIB_LIBRARY=${zlib}/lib/amd64/libz.so -DZLIB_INCLUDE_DIR=${zlib}/include")}
+      ${builtins.replaceStrings [ "cmake --build _b -j16" ] [ "cmake --build _b -j\${NIX_BUILD_CORES:-4}" ] (cmakeB "-DCMAKE_SHARED_LINKER_FLAGS=-Wl,-z,now -Dprotobuf_BUILD_TESTS=OFF -Dprotobuf_BUILD_SHARED_LIBS=ON -Dprotobuf_ABSL_PROVIDER=package -Dabsl_DIR=${abseil-cpp}/lib/amd64/cmake/absl -DZLIB_ROOT=${zlib} -DZLIB_LIBRARY=${zlib}/lib/amd64/libz.so -DZLIB_INCLUDE_DIR=${zlib}/include")}
       ${chk ''"$out/bin/protoc" --version'' "^libprotoc 36\\.2$"}
       # protoc generates C++ for a message; that code, on the installed libprotobuf, serialises it and parses it back
       mkdir "$W/pb"; printf 'syntax = "proto3";\npackage t;\nmessage M { string s = 1; int32 n = 2; repeated int32 r = 3; }\n' > "$W/pb/t.proto"

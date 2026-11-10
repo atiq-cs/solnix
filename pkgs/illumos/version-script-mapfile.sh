@@ -71,13 +71,19 @@ conv() {
 }
 
 wrap() {
+  n=0
   for f in "$CC" "${CXX:-}"; do
-    [ -n "$f" ] && [ -f "$f" ] || continue
-    grep -q version-script-mapfile "$f" && continue
+    [ -n "$f" ] || continue
+    # a compiler given by name (the store-only stdenv: CC=gcc, CXX=g++ on PATH, regular files in $W/bin$ABI) is the file PATH finds
+    case $f in */*) ;; *) f=$(command -v "$f") || continue ;; esac
+    [ -f "$f" ] || continue
+    grep -q version-script-mapfile "$f" && { n=$((n + 1)); continue; }
     mv "$f" "$f.real" || exit 1
     { head -1 "$f.real"; printf 'exec "%s" "%s" "%s" "$@"   # version-script-mapfile\n' "$BASH" "$self" "$f.real"; } > "$f"
-    chmod +x "$f" || exit 1
+    chmod +x "$f" || exit 1; n=$((n + 1))
   done
+  # fail closed: wrapping nothing would leave the raw --version-script for illumos ld (or configure's probe dropping it)
+  [ $n -gt 0 ] || { echo "version-script-mapfile: wrap found no compiler file for CC='$CC' CXX='${CXX:-}'" >&2; exit 1; }
 }
 
 shim() {
