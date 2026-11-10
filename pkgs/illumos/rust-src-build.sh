@@ -87,6 +87,9 @@ prefix = "@out@"
 sysconfdir = "etc"
 [llvm]
 download-ci-llvm = false
+# LLVM's cmake must not look up the build host's git (gate L5: "-- Found Git: /usr/bin/git"): VersionFromVCS finds no .git in a
+# source tarball anyway. As desktop/gtk/llvm.nix.
+build-config = { CMAKE_DISABLE_FIND_PACKAGE_Git = "TRUE" }
 optimize = true
 ninja = false
 [rust]
