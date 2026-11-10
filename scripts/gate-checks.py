@@ -527,7 +527,7 @@ SHEBANG_OK = {"/bin/sh", "/usr/bin/sh", "/usr/bin/env"}
 # shadow-shaped line. Documentation (man/doc/info) that merely shows a header is allowed (DOC_RE), as for B13.
 SECRET_BODY = re.compile(rb"b3BlbnNzaC1rZXkt"                                   # OpenSSH private key body (any type incl ed25519)
                          rb"|-----BEGIN (?:RSA|EC|DSA|ENCRYPTED) PRIVATE KEY-----\s*\n[A-Za-z0-9+/]{40}"  # PEM body present
-                         rb"|-----BEGIN PGP PRIVATE KEY BLOCK-----"
+                         rb"|-----BEGIN PGP PRIVATE KEY BLOCK-----\r?\n(?:[\x21-\x7e]+: [^\r\n]*\r?\n)*\r?\n[A-Za-z0-9+/]{40}"  # PGP armour + body
                          rb"|PuTTY-User-Key-File-\d"
                          rb"|AGE-SECRET-KEY-1[0-9A-Z]{20,}"                      # age identity (secret half)
                          rb"|ENC\[AES256_GCM,data:")                            # inline sops ciphertext
@@ -1419,6 +1419,7 @@ def selftest_out():
               share=Dd(man=Dd(man1=Dd(**{"t.1": R(b".TH T 1\\nedit /usr/local/etc/t.conf\n")}))),
               )
     good["entries"]["lib"]["entries"]["l2"] = L(".")
+    PGPH, PGPE = b"-----BEGIN PGP " + b"PRIVATE KEY BLOCK-----", b"-----END PGP " + b"PRIVATE KEY BLOCK-----"
     def mut(path, node):
         import copy
         t = copy.deepcopy(good); cur = t
@@ -1437,6 +1438,13 @@ def selftest_out():
         ("B7 bin/ file without x (libtool 0444)", mut("bin/libtool", R(b"#!/bin/sh\n")), False, "B7-exec"),
         ("B18 a real OpenSSH private key body: FAIL", mut("etc/ssh/k", R(b"-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXkt" + b"A"*40 + b"\n-----END OPENSSH PRIVATE KEY-----\n")), False, "FAIL B18-secret"),
         ("B18 an age secret key: FAIL", mut("home/.config/sops/age/keys.txt", R(b"AGE-SECRET-KEY-1" + b"QZ"*20 + b"\n")), False, "FAIL B18-secret"),
+        # PGP: armour material FAILs; the bare header (crate file-format 0.29.0's magic-signature table, linked into qsv 20.1.0: the header
+        # strings back to back, no body) does not. Built at run time so this file holds no armour literal.
+        ("B18 an armoured PGP secret key (header, Version line, blank, body): FAIL", mut("etc/k.asc", R(PGPH + b"\nVersion: GnuPG v2\n\n" + b"lQOYBF" + b"A" * 60 + b"\n=AbCd\n" + PGPE + b"\n")), False, "FAIL B18-secret"),
+        ("B18 an armoured PGP secret key, no headers, CRLF: FAIL", mut("etc/k2.asc", R(PGPH + b"\r\n\r\n" + b"lQOYBF" + b"B" * 60 + b"\r\n")), False, "FAIL B18-secret"),
+        ("B18 a truncated armoured PGP secret key (header, blank, body, no END): FAIL", mut("etc/k3.asc", R(PGPH + b"\n\n" + b"lQOYBF" + b"C" * 60 + b"\n")), False, "FAIL B18-secret"),
+        ("B18 not hit: an armoured PGP PUBLIC key block with a body (public)", mut("share/keys/k.asc", R(b"-----BEGIN PGP PUBLIC KEY BLOCK-----\n\n" + b"mQINBF" + b"D" * 60 + b"\n=XyZw\n-----END PGP PUBLIC KEY BLOCK-----\n")), True, None),
+        ("B18 not hit: the bare PGP header in a magic table (qsv / file-format, real bytes)", mut("bin/qsv", R(b"\x7fELF\0" + b"-----BEGIN PRIVATE KEY-----" + PGPH + b"-----BEGIN PGP PUBLIC KEY BLOCK-----" + b"-----BEGIN CERTIFICATE REQUEST-----", True)), True, None),
         ("B18 an inline sops ciphertext: FAIL", mut("etc/x.yaml", R(b"pw: ENC[AES256_GCM,data:abcd,iv:ef]\n")), False, "FAIL B18-secret"),
         ("B18 a non-root crypt hash in a shadow file: FAIL", mut("etc/shadow", R(b"bob:$6$abc$0123456789./ABCdef:19000:::::\nroot:*LK*:1:::::\n")), False, "FAIL B18-secret"),
         ("B18 not hit: a man page that SHOWS the header as example text", mut("share/man/man1/ssh.1", R(b".TH SSH 1\nexample: -----BEGIN OPENSSH PRIVATE KEY-----\n")), True, None),
