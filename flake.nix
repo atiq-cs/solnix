@@ -308,6 +308,9 @@
           let r = builtins.tryEval (lib.isDerivation v); in r.success && r.value)
           (removeAttrs a.srcPkgs.nixChain [ "curlForNix" ] // a.srcPkgs // removeAttrs a [ "systemToplevel" ]
            // { hostname-f = a.hostname; illumos-gate-libs = a.gateLibs; illumos-gate-libs-home = a.world; });
+        # the native sparcv9 set (pkgs/illumos/sparcv9: lixu, sun's zone), for drv_for on lixu: the libc slice and the seed zlib so far
+        sparcv9-solaris = lib.filterAttrs (_: v: let r = builtins.tryEval (lib.isDerivation v); in r.success && r.value)
+          (import ./pkgs/illumos/sparcv9 { system = "sparcv9-solaris"; });
       } // lib.genAttrs buildSystems (_buildSystem: {
         # the full system closure (T2.8); realise on the illumos host.
         baseToplevel = self.solnixConfigurations.base.config.system.build.toplevel;
