@@ -680,6 +680,53 @@ def gunzip_bounded(data, limit=1 << 24):
     try: return zlib.decompressobj(16 + zlib.MAX_WBITS).decompress(data, limit)
     except zlib.error: return data
 
+# B19: a user-visible string telling the user to install a Linux/vendor package or to use a Linux package manager
+# ("Backend not found. Install system76-power or power-profiles-daemon.": cosmic-settings 1.11's power page, all 41
+# locales of it inside the ELF, i18n-embed bundles). The patterns and the solnix answer for each are
+# scripts/linux-package-hints.tsv (GATE_LINUX_HINTS: another file, for tests). The fix is a per-app fixup that rewrites the
+# message. WARN at first, as it hits every COSMIC out today; the orchestrator makes it FAIL by setting B19_LEVEL. INFO in
+# documentation and debug files (text about Linux, not a message the program shows). An unreadable list is a B19_LEVEL
+# finding, so B19 fails closed once it is FAIL.
+B19_LEVEL = "WARN"
+B19_COLS = ("id", "regex", "solnix", "example")
+_B19 = {}
+def linux_hints():
+    """-> (rows [(id, regex, solnix, example)], combined compiled regex with one named group per row) or (None, why)."""
+    src = os.environ.get("GATE_LINUX_HINTS") or os.path.join(HERE, "linux-package-hints.tsv")
+    if src in _B19: return _B19[src]
+    try:
+        rows = []
+        for ln in open(src, encoding="utf-8"):
+            ln = ln.rstrip("\n")
+            if not ln or ln.startswith("#"): continue
+            c = ln.split("\t")
+            if tuple(c) == B19_COLS: continue
+            if len(c) != len(B19_COLS) or not re.fullmatch(r"[a-z0-9-]+", c[0]): raise ValueError(f"bad row {ln[:60]!r}")
+            re.compile(c[1].encode()); rows.append(tuple(c))
+        if not rows: raise ValueError("no rows")
+        rx = re.compile(b"|".join(b"(?P<b19_%d>%s)" % (i, r[1].encode()) for i, r in enumerate(rows)))
+        _B19[src] = (rows, rx)
+    except (OSError, ValueError, re.error) as e:
+        _B19[src] = (None, f"cannot read {src} ({e})")
+    return _B19[src]
+
+def b19_findings(rel, bufs):
+    """B19 lines for one file: one per hint row, at its first hit, with the message around it (to a NUL or newline)."""
+    rows, rx = linux_hints()
+    if rows is None: return [(B19_LEVEL, "B19-linux-hint", f"{rel}: {rx}: no B19 scan")]
+    lvl = "INFO" if (DOC_RE.search(rel) or "/lib/debug/" in "/" + rel or rel.endswith(".debug")) else B19_LEVEL
+    seen, r = set(), []
+    for buf in bufs:
+        for m in rx.finditer(buf):
+            i = int(m.lastgroup[4:])
+            if i in seen: continue
+            seen.add(i)
+            lo = max(buf.rfind(b"\0", max(0, m.start() - 120), m.start()), buf.rfind(b"\n", max(0, m.start() - 120), m.start())) + 1
+            ends = [e for e in (buf.find(b"\0", m.end(), m.end() + 120), buf.find(b"\n", m.end(), m.end() + 120)) if e != -1]
+            ctx = buf[lo or max(0, m.start() - 60):min(ends) if ends else m.end() + 60].decode(errors="replace").strip()
+            r.append((lvl, "B19-linux-hint", f"{rel}: {rows[i][0]}: \"{ctx[:160]}\" (solnix: {rows[i][2]})"))
+    return r
+
 def check_nar(out, src=None):
     """-> (findings, counts). findings: (level, check, why)."""
     r, n = [], {"files": 0, "links": 0, "dirs": 0, "shebang_exceptions": {}}
@@ -759,6 +806,8 @@ def check_nar(out, src=None):
         # page (wave6 gnused mcfr18qx, served 4g8qn63n; infra 20261104-help2man-oops-stub-pages). Man pages only, .gz inflated.
         if "share/man/" in "/" + rel and MAN_STUB in (gunzip_bounded(data) if rel.endswith(".gz") else data):
             r.append(("FAIL", "B17-man-stub", f"{rel}: help2man's stub page (\"unable to create a proper manual page\"): no perl at configure"))
+        # B19: a message telling the user to install a Linux package (see linux_hints); .gz inflated
+        r.extend(b19_findings(rel, (text,) + ((gunzip_bounded(data),) if rel.endswith(".gz") else ())))
         # B7: bin/ and sbin/ hold executables (libtool 2.5.4 shipped bin/libtool 0444; gzip zgrep)
         if top in ("bin", "sbin") and rel.count("/") == 1 and not info["exec"]:
             r.append(("FAIL", "B7-exec", f"{rel} is not executable"))
@@ -1246,7 +1295,7 @@ def selftest():
         ("exempt: mk-illumos-component slice still under 'slice'", D("slc3", name="base-tools", env={"PATH": "/usr/gnu/bin:/usr/bin:/usr/sbin", "gate": GP, "filesArg": "usr/bin/ls"}), True, "EXEMPT"),
     ]
     ca = lambda p: FAKE_CA.get(p, True)
-    bad = selftest_out() + selftest_log()
+    bad = selftest_out() + selftest_log() + selftest_b19()
     # leaf mode: a host-PATH input whose out IS served is not judged (counted as debt); one whose out is NOT served is
     hostin = fake_drv("hostin", ["-c", "true"], {"PATH": "/usr/bin"})
     hostout = parse_drv(FAKE[hostin])["outputs"]["out"]["path"]
@@ -1382,6 +1431,57 @@ def selftest_log():
     lines = []; rc = run_out("nar", [STORE + "6" * 32 + "-cap", cf], out=lines.append)
     ok = rc != 0 and any(l.startswith("FAIL B13") for l in lines); bad += not ok
     print(f"{'ok ' if ok else 'BAD'} nar  cap: a FAIL after 20 INFO lines of the same check still FAILs: {'FAIL' if rc else 'PASS'}")
+    return bad
+
+def selftest_b19():
+    """B19: every row of the shipped list matches its example and not its own answer; the real cosmic-settings string is
+    found in an ELF (WARN, the out PASSes) and in a .ftl, INFO in share/doc, and not at all once rewritten to the solnix
+    text; B19_LEVEL=FAIL fails the out (the switch works); an unreadable list is reported, never silently clean."""
+    global B19_LEVEL
+    import tempfile
+    bad = 0
+    rows, rx = linux_hints()
+    if rows is None:
+        print(f"BAD nar  B19 the shipped list: {rx}"); return 1
+    for i, sol, ex in ((r[0], r[2], r[3]) for r in rows):
+        one = re.compile(rows[[r[0] for r in rows].index(i)][1].encode())
+        ok = bool(one.search(ex.encode())) and not one.search(sol.encode()); bad += not ok
+        print(f"{'ok ' if ok else 'BAD'} nar  B19 row {i}: matches its example, not its answer")
+    O = STORE + "6" * 32 + "-cosmic-settings-1.11.0"
+    R = lambda data: {"type": "reg", "exec": False, "data": data}
+    Dd = lambda **e: {"type": "dir", "entries": e}
+    MSG = b"    .no-backend = Backend not found. Install system76-power or power-profiles-daemon.\n"   # cosmic_settings.ftl:695
+    FIX = b"    .no-backend = Power profiles are not available on solnix yet.\n"
+    elf = lambda m: b"\x7fELF\x02\x01\x01\0power-mode = Power mode\n" + m + b"\0usage\0"
+    cases = [("B19 the power-backend hint inside an ELF (i18n-embed bundle): WARN, out PASSes", Dd(libexec=Dd(**{"cosmic-settings": R(elf(MSG))})), "WARN", True),
+             ("B19 the same line in a .ftl catalogue: WARN", Dd(share=Dd(i18n=Dd(**{"cosmic_settings.ftl": R(MSG)}))), "WARN", True),
+             ("B19 'sudo apt install network-manager' in a dialog string: WARN", Dd(lib=Dd(x=R(b"\x7fELF\0Run: sudo apt install network-manager\0"))), "WARN", True),
+             ("B19 the hint in share/doc (text about Linux): INFO", Dd(share=Dd(doc=Dd(**{"README": R(MSG)}))), "INFO", True),
+             ("B19 not hit: the message rewritten to the solnix text", Dd(libexec=Dd(**{"cosmic-settings": R(elf(FIX))})), None, True),
+             ("B19 not hit: a package name alone (no install hint)", Dd(share=Dd(x=R(b"power-profiles-daemon compatible D-Bus API\n"))), None, True),
+             ("B19 not hit: 'snapshot install' is no package manager", Dd(share=Dd(x=R(b"take a snapshot install image\n"))), None, True)]
+    with tempfile.TemporaryDirectory() as td:
+        f = os.path.join(td, "b19.nar")
+        def run(tree):
+            open(f, "wb").write(nar_bytes(tree)); lines = []
+            return run_out("nar", [O, f], out=lines.append), [l for l in lines if " B19-linux-hint " in l]
+        for label, tree, lvl, want_pass in cases:
+            rc, hl = run(tree)
+            ok = (rc == 0) == want_pass and (hl == [] if lvl is None else (len(hl) == 1 and hl[0].startswith(lvl + " ")))
+            bad += not ok
+            print(f"{'ok ' if ok else 'BAD'} nar  {label}: {'PASS' if rc == 0 else 'FAIL'}" + ("" if ok else "\n    " + "\n    ".join(hl)))
+        try:
+            B19_LEVEL = "FAIL"; rc, hl = run(cases[0][1])
+            ok = rc != 0 and any(l.startswith("FAIL B19-linux-hint") for l in hl); bad += not ok
+            print(f"{'ok ' if ok else 'BAD'} nar  B19 at level FAIL fails the out: {'PASS' if rc == 0 else 'FAIL'}")
+            old = os.environ.get("GATE_LINUX_HINTS"); os.environ["GATE_LINUX_HINTS"] = os.path.join(td, "absent.tsv")
+            rc, hl = run(cases[4][1])
+            ok = rc != 0 and any("no B19 scan" in l for l in hl); bad += not ok
+            print(f"{'ok ' if ok else 'BAD'} nar  B19 list unreadable: reported (fails closed at level FAIL): {'PASS' if rc == 0 else 'FAIL'}")
+        finally:
+            B19_LEVEL = "WARN"
+            if old is None: os.environ.pop("GATE_LINUX_HINTS", None)
+            else: os.environ["GATE_LINUX_HINTS"] = old
     return bad
 
 def mk_elf_zsec(payload, chdr_align=8, zdebug=False):

@@ -34,7 +34,7 @@ let
   gates = builtins.path { name = "solnix-publish-gates"; path = ../../..; filter = p: t:
     let r = lib.removePrefix (toString ../../.. + "/") (toString p); in
     lib.elem r [ "scripts" "pkgs" "pkgs/illumos" "pkgs/illumos/bootstrap-exempt.tsv" ] || lib.elem r (map (f: "scripts/" + f)
-      [ "cache-submit.py" "pre-submit-check.sh" "drv-gate.sh" "publish-gate.sh" "gate-checks.py" "not-for-cache.tsv" "gate2-exemptions.tsv" ]); };
+      [ "cache-submit.py" "pre-submit-check.sh" "drv-gate.sh" "publish-gate.sh" "gate-checks.py" "not-for-cache.tsv" "gate2-exemptions.tsv" "linux-package-hints.tsv" ]); };
   pub = cfg.publish != "off" || cfg.evalAnchored != "off";
   # an identified builder whose service can read the identity key (the zone's untrusted user cannot): it signs and registers
   idk = a.builder && config.solnix.builder.isolation == "none";

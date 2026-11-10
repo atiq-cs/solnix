@@ -1,0 +1,15 @@
+# scripts/linux-package-hints.tsv -- gate-checks.py nar, check B19: a user-visible string (a message catalogue line, an
+# i18n-embed bundle inside an ELF, a dialog text) that tells the user to install a Linux or vendor package that solnix
+# doesn't have, or to use a Linux package manager. Each must be caught and replaced by the solnix answer (a per-app
+# fixup rewrites the message: pkgs/illumos/graphics/cosmic-apps-src-fixup.py for COSMIC).
+# Columns: id <TAB> regex (Python bytes regex; scope flags inside it, as (?i:...)) <TAB> the solnix answer, or
+# "no solnix equivalent yet" <TAB> an example the regex must match. B19 is WARN (INFO in documentation and debug files)
+# until the orchestrator makes it FAIL.
+# The selftest reads this file: every row's regex must match its example and must not match its own answer.
+id	regex	solnix	example
+pkgmgr-install	(?<![\w-])(?:apt-get|apt|aptitude|dnf|yum|zypper|pacman|apk|emerge|snap|flatpak|brew)\s+(?:install|add|-S)\s+[\w.+-]	the package from cache.solnix.io: nix profile install <name>, or environment.systemPackages	sudo apt install network-manager-openvpn
+power-backend	system76-power[^\0\n]{0,40}power-profiles-daemon|power-profiles-daemon[^\0\n]{0,40}system76-power	no solnix equivalent yet (planned: services.solnix-power, net.hadess.PowerProfiles over cpupm and acpi_drv)	Backend not found. Install system76-power or power-profiles-daemon.
+networkmanager-install	(?i:install\w*\s+(?:the\s+)?NetworkManager|NetworkManager\s+(?:is\s+)?(?:not\s+)?installed)	solnix-netd (planned: services.solnix-nm, the org.freedesktop.NetworkManager subset COSMIC calls)	Please install NetworkManager to manage connections
+bluez-install	(?i:install\w*\s+(?:the\s+)?BlueZ|BlueZ\s+(?:is\s+)?(?:not\s+)?installed)	no solnix equivalent yet (Bluetooth is the bt1 track)	The Bluetooth service could not be activated. Is BlueZ installed?
+upower-install	(?i:install\w*\s+(?:the\s+)?upower|upower\s+(?:is\s+)?(?:not\s+)?installed)	no solnix equivalent yet (planned: services.solnix-power, org.freedesktop.UPower over acpi_drv)	upower is not installed
+audio-server-install	(?i:install\w*\s+(?:the\s+)?(?:PipeWire|PulseAudio)|(?:PipeWire|PulseAudio)\s+(?:is\s+)?(?:not\s+)?installed)	no solnix equivalent yet (audio is the illumos audio(4I) framework)	Install PipeWire to enable sound
