@@ -11,8 +11,9 @@
 # host's baked key path (users.users.*.openssh.authorizedKeys) is unaffected --
 # this only ADDS the launch key alongside anything already present.
 #
-# FAIL-SAFE: no IMDS (bare metal, the X1, a non-EC2 VM) -> no-op, exit 0. The
-# same image boots unharmed off-EC2. Idempotent: a run-once stamp skips the
+# FAIL-SAFE: no IMDS (bare metal, the X1, a non-EC2 VM) -> a cloud-init NoCloud seed
+# (a volume labelled cidata) is read for public keys instead; with neither, no-op,
+# exit 0. The same image boots unharmed off-EC2. Idempotent: a run-once stamp skips the
 # fetch on later boots, but a re-launch of the SAME disk under a NEW keypair is
 # the EC2 norm, so the stamp is keyed to the metadata instance-id -- a new
 # instance-id (a fresh launch / AMI-derived instance) re-fetches.
@@ -54,6 +55,58 @@ imds() {
 	fi
 }
 
+# --- NoCloud seed (no IMDS) ----------------------------------------------------
+# Off EC2 (KVM, OpenStack without metadata, Proxmox), the key comes from a cloud-init NoCloud seed, as NixOS images
+# take it through cloud-init: a volume labelled cidata (any case) holding user-data. Only the public keys are read:
+# top-level ssh_authorized_keys and users[].ssh_authorized_keys of a user named root (or the "default" entry). Nothing
+# else in user-data is acted on (no runcmd, packages, write_files): executing seed content is a different trust decision.
+# nocloud_keys <user-data>: the keys, one per line; nothing (and a reason on stderr) unless it is #cloud-config.
+nocloud_keys() {
+	head -1 "$1" | grep -q '^#cloud-config[[:space:]]*$' || { echo "user-data is not #cloud-config: no keys read" >&2; return 0; }
+	awk '
+	function unq(s) { sub(/^[ \t]*-[ \t]*/, "", s); sub(/[ \t]+$/, "", s)
+	                  if (s ~ /^".*"$/ || s ~ /^\x27.*\x27$/) s = substr(s, 2, length(s) - 2); return s }
+	function ind(s) { match(s, /^ */); return RLENGTH }
+	/^[ \t]*#/ || /^[ \t]*$/ { next }
+	{ i = ind($0) }
+	# a key list ends at the first line not indented deeper than its key and not a list item
+	inlist && (i < li || (i == li && $0 !~ /^ *- /)) { inlist = 0 }
+	inlist && $0 ~ /^ *- / { if (take) print unq($0); next }
+	/^ssh_authorized_keys:[ \t]*$/ { inlist = 1; li = 0; take = 1; next }
+	/^users:[ \t]*$/ { inusers = 1; next }
+	inusers && i == 0 { inusers = 0 }
+	inusers && $0 ~ /^ *- / { s = $0; sub(/^ *- */, "", s); name = ""; if (s ~ /^name:/) { name = s; sub(/^name:[ \t]*/, "", name); name = unq(name) }
+	                          else if (s ~ /^default[ \t]*$/) name = "default"; next }
+	inusers && $0 ~ /^ *name:/ { name = $0; sub(/^ *name:[ \t]*/, "", name); name = unq(name); next }
+	inusers && $0 ~ /^ *ssh_authorized_keys:[ \t]*$/ { inlist = 1; li = i; take = (name == "root"); next }
+	' "$1" | grep -E '^(ssh-rsa|ssh-ed25519|ecdsa-sha2-[a-z0-9-]+|sk-ssh-ed25519@openssh.com|sk-ecdsa-sha2-[a-z0-9@.-]+) [A-Za-z0-9+/=]+( .*)?$'
+}
+# nocloud_seed: print the keys of the first volume labelled cidata (an ISO9660 volume id or a FAT label), mounted
+# read-only and unmounted again. Every disk node is probed by fstyp, so a CD-ROM, virtio or USB seed is found alike.
+nocloud_seed() {
+	_mp=/var/run/solnix-nocloud; mkdir -p "$_mp" || return 0
+	for _d in /dev/dsk/c*p0 /dev/dsk/c*s2 /dev/dsk/c*t*d*[!sp0-9]; do
+		[ -b "$_d" ] || continue
+		_fs=$(fstyp "$_d" 2>/dev/null) || continue
+		case "$_fs" in
+			hsfs) _lbl=$(fstyp -v "$_d" 2>/dev/null | sed -n 's/^Volume id: *//p' | head -1) ;;
+			pcfs) _lbl=$(fstyp -v "$_d" 2>/dev/null | sed -n 's/^Volume Label: *//p' | head -1) ;;
+			*) continue ;;
+		esac
+		case "$(printf '%s' "$_lbl" | tr -d ' ' | tr 'A-Z' 'a-z')" in cidata) ;; *) continue ;; esac
+		mount -F "$_fs" -o ro "$_d" "$_mp" 2>/dev/null || { echo "NoCloud seed $_d: cannot mount ($_fs)" >&2; continue; }
+		echo "NoCloud seed: $_d ($_fs, label $_lbl)" >&2
+		_ud=""; for _n in user-data USER-DATA USER_DAT; do [ -f "$_mp/$_n" ] && { _ud="$_mp/$_n"; break; }; done
+		if [ -n "$_ud" ]; then
+			_k=$(nocloud_keys "$_ud"); [ -n "$_k" ] && printf '%s\n' "$_k" \
+			    || echo "NoCloud seed $_d: no usable public key in user-data (ssh_authorized_keys missing, malformed, or not an ssh key)" >&2
+		else echo "NoCloud seed $_d has no user-data" >&2; fi
+		umount "$_mp" 2>/dev/null
+		return 0
+	done
+	echo "no NoCloud seed (no volume labelled cidata)" >&2
+}
+
 # --- fail-safe gate: are we on EC2 at all? ----------------------------------
 # RETRY: svc:/milestone/network going online does NOT guarantee the DHCP lease /
 # route is up yet (illumos: the solnix-net transient oneshot may still be running
@@ -71,14 +124,21 @@ while [ "$_tries" -lt 20 ]; do
 	_tries=$((_tries + 1))
 	sleep 3
 done
+KEYS=""
 case "$IID" in
 	i-*) : ;;                                 # looks like a real instance-id
-	*)   echo "no EC2 instance metadata after ${_tries} tries (got '$IID'); off-EC2 no-op"; exit 0 ;;
+	*)   echo "no EC2 instance metadata after ${_tries} tries (got '$IID'); trying a NoCloud seed"
+	     KEYS=$(nocloud_seed)
+	     [ -n "$KEYS" ] || { echo "no key source (no IMDS, no NoCloud key): root stays key-only with no key"; exit 0; }
+	     KEYS="$KEYS
+"
+	     IID=nocloud ;;
 esac
 echo "instance-id: $IID (after ${_tries} retries)"
 
 # --- idempotency: skip only if we already seeded for THIS instance-id -------
-if [ "$(cat "$STAMP" 2>/dev/null)" = "$IID" ]; then
+# (a NoCloud seed is read every boot: it carries no instance-id here, and seed_user de-duplicates)
+if [ "$IID" != nocloud ] && [ "$(cat "$STAMP" 2>/dev/null)" = "$IID" ]; then
 	echo "already seeded authorized_keys for $IID; nothing to do"
 	exit 0
 fi
@@ -87,10 +147,9 @@ fi
 # IMDS exposes keys under meta-data/public-keys/<index>/openssh-key. A launch
 # normally has one (index 0); read whatever indices are listed so a multi-key
 # launch works too. The listing lines look like "0=my-key".
-KEYS=""
-INDEXES=$(imds meta-data/public-keys/ 2>/dev/null | sed 's/=.*//' | grep -E '^[0-9]+$')
-[ -n "$INDEXES" ] || INDEXES=0
-for _i in $INDEXES; do
+[ "$IID" = nocloud ] || INDEXES=$(imds meta-data/public-keys/ 2>/dev/null | sed 's/=.*//' | grep -E '^[0-9]+$')
+[ "$IID" = nocloud ] || [ -n "$INDEXES" ] || INDEXES=0
+for _i in ${INDEXES:-}; do
 	_k=$(imds "meta-data/public-keys/$_i/openssh-key")
 	# a public key line starts with a known key type; ignore anything else
 	# (an error page, empty body) so we never write junk to authorized_keys.
@@ -145,6 +204,6 @@ getent passwd 2>/dev/null \
 		[ -n "$_ohome" ] && seed_user "$_ohome" "$_ouid" "$_ogid"
 	done
 
-printf '%s\n' "$IID" > "$STAMP"
+[ "$IID" = nocloud ] || printf '%s\n' "$IID" > "$STAMP"
 echo "=== solnix-ec2-first-boot done ($IID) ==="
 exit 0
