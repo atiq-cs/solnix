@@ -23,12 +23,13 @@ to floki. Image builds that need an OpenIndiana host go on an EC2 OI builder
 restored from R2 (docs/account-migration-lava-to-hotdog.md), and KVM boot tests
 go on an EC2 metal instance (nested virtualization) or real hardware.
 
-The current EC2 account is **chef** (`AWS_PROFILE=chef`, `842964983020`, us-west-2), since 2026-10-30; its
-expiry is not known yet (burners live about 7 days). docs/account-migration-kiwi-to-chef.md. kiwi (`437803535746`)
-closed 2026-10-30 19:14:53 UTC (docs/account-expiry-kiwi-20261030.md). Durable images live in the permanent account
-**solnix-ami** (`788352824872`): the OI build host `ami-0e4a740ebfc5bec81`, aarch64 v4 (boots on Nitro VMs)
-`ami-0e08aa06f629ffbac` (us-west-2) / `ami-0ecdc3a731f13adff` (us-east-1), the x86 DP fix AMIs. Share an image to a new
-account with `modify-image-attribute --launch-permission` from solnix-ami. Name `AWS_PROFILE` explicitly (sg-guard has
+The current EC2 account is **melody** (`AWS_PROFILE=melody`, `683788466730`, us-west-2), since 2026-11-10; it
+expires **2026-11-17 12:05:17Z**. docs/account-migration-woof-to-melody.md. woof (`176550300114`) expired 2026-11-10
+18:43:17Z. melody holds copies of woof's two AMIs (the solnix x86 raw-p3 image, the OI 2026.10 build host): an image
+can no longer be shared out of a burner (an org SCP denies ModifyImageAttribute), but a snapshot can, so a new account
+gets them as copied snapshots + register-image. The solnix-ami account's credentials are revoked; its images can't be
+shared any more. The durable copies are the raw images banked on floki `/scratch/solnix-bank/` and in R2.
+Name `AWS_PROFILE` explicitly (sg-guard has
 no default), re-check `describe-instances` before a launch, never a `0.0.0.0/0`/`::/0` rule, ssh ingress from every
 network in `scripts/operator-cidrs.txt` (Comcast plus the Starlink backup, so a Comcast outage doesn't lock us out),
 and terminate instances
