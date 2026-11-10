@@ -21,6 +21,17 @@ in (import ./data.nix { tools = hostfixTools; inherit world python3; }) // (impo
       [ $rc -eq 1 ] && echo "$o" | grep -q /nonexistent || { echo "FATAL: solnix-nm rc $rc: $o" >&2; exit 1; }
       grep -q NetworkManager "$out/share/dbus-1/system.d/org.freedesktop.NetworkManager.conf"'';
   };
+  # UPower and power profiles for COSMIC (Settings > Power, the battery applet), over acpi_drv kstats and power.conf
+  # (src/solnix-power, services.solnix-power). Its D-Bus tests need a session bus, so they run beside the build.
+  solnix-power = cargoPkg {
+    pname = "solnix-power"; version = "0.1.0"; src.dir = ../../../src/solnix-power;
+    vendorHash = "sha256-TUjXZnEnsAK55ihs/NsHv2YiYTOiWOlkGtiiO7JouIY=";
+    bins = "solnix-power";
+    man = ''install -D -m0444 dbus/org.freedesktop.UPower.conf "$out/share/dbus-1/system.d/org.freedesktop.UPower.conf"'';
+    check = ''rc=0; o=$(env -i DBUS_SYSTEM_BUS_ADDRESS=unix:path=/nonexistent "$out/bin/solnix-power" 2>&1) || rc=$?
+      [ $rc -eq 1 ] && echo "$o" | grep -q /nonexistent || { echo "FATAL: solnix-power rc $rc: $o" >&2; exit 1; }
+      grep -q UPower.PowerProfiles "$out/share/dbus-1/system.d/org.freedesktop.UPower.conf"'';
+  };
 } // rec {
   # pop-launcher (pop-os/launcher epoch-1.5.0 = NixOS's 1.2.7 + the discrete-GPU menu fix): the search service
   # cosmic-launcher runs from PATH, with its plugins (desktop entries, files, find, calc, scripts, ...).
