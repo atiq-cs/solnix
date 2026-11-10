@@ -1390,7 +1390,15 @@ in
   wget = srcPkgs.wgetWith cli.perl;   # pod2man from the store perl (a solnix host has no /usr/bin/pod2man)
   inherit (graphics) meson samurai expat libffi wayland wayland-protocols libdrm mesa
     pixman xkeyboard-config libxkbcommon libdisplay-info seatd dbus;
-  inherit (cosmic) cosmic-comp cosmic-term cosmic-session cosmic-panel cosmic-applets cosmic-launcher
+  # cosmic-term with its desktop entry, metainfo and hicolor icons, so it is in the launcher. The desktop entry is build.rs's
+  # translated target/xdgen one. The metainfo is the res/ template, as cosmic-settings and cosmic-edit ship theirs: xdgen
+  # writes its metainfo through xmltree's HashMap attributes, so the attribute order changed between builds (--check, measured).
+  # Set here, not in graphics/: that dir is every COSMIC app's fixups input (./.), so an edit there moves them all
+  # (measured). buildKey is computed as cargoApp computes it, from the new attrs.
+  cosmic-term = let a = removeAttrs cosmic.cosmic-term.drvAttrs [ "buildKey" ] // {
+      install = "app target/xdgen/com.system76.CosmicTerm.desktop; meta res/com.system76.CosmicTerm.metainfo.xml; tree res/icons/hicolor share/icons/hicolor"; };
+    in derivation (a // { buildKey = builtins.substring 0 16 (builtins.hashString "sha256" (builtins.toJSON a)); });
+  inherit (cosmic) cosmic-comp cosmic-session cosmic-panel cosmic-applets cosmic-launcher
     cosmic-app-library cosmic-notifications cosmic-osd cosmic-settings-daemon cosmic-bg cosmic-workspaces cosmic-randr cosmic-idle
     cosmic-settings cosmic-files cosmic-edit cosmic-store cosmic-screenshot cosmic-greeter greetd;
   inherit (cosmicData) open-sans noto-sans noto-sans-mono fira-mono hicolor-icon-theme pop-icon-theme cosmic-icons;

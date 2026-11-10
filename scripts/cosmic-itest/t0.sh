@@ -64,7 +64,7 @@ else r GAP touchpad-ihid "no ihid instance (hardware.touchpad.i2cHid off?)"; fi
 # 7. data the session needs: desktop entries and cursor themes reach sw/share
 a=$(ls /run/current-system/sw/share/applications/*.desktop 2>/dev/null | wc -l)
 [ "$a" -ge 50 ] && r PASS xdg-applications "$a desktop entries" || r FAIL xdg-applications "$a desktop entries (< 50)"
-ls /run/current-system/sw/share/applications/com.system76.CosmicTerm.desktop > /dev/null 2>&1 && r PASS cosmic-term-desktop "present" || r GAP cosmic-term-desktop "no CosmicTerm.desktop (held for the hash-B wave)"
+ls /run/current-system/sw/share/applications/com.system76.CosmicTerm.desktop > /dev/null 2>&1 && r PASS cosmic-term-desktop "present" || r FAIL cosmic-term-desktop "no CosmicTerm.desktop: COSMIC Terminal is not in the launcher"
 
 # 7b. help on the desktop (help1): the man: URI handler is the default for x-scheme-handler/man, it refuses a URI that
 # is not a page name, and the launcher's man plugin answers "man ls" from the whatis index. Files only, no window.
