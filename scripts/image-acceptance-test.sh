@@ -6,10 +6,15 @@
 #
 # Usage:
 #   scripts/image-acceptance-test.sh <image-dir> [--boot]
+#   scripts/image-acceptance-test.sh --disk <root>
 #     <image-dir>  an artifacts/install-media/usb-image-*/ dir (has the .iso/.img,
 #                  boot-logs/, SHA256SUMS) OR a raw boot_archive path.
 #     --boot       also run the QEMU boot phase (needs qemu + the illumos build
 #                  node's tools; the STATIC phase runs anywhere the files are).
+#     --disk <root> an installed or cloud DISK's root (its boot environment mounted,
+#                  read-only, with <pool>/nix and the /var datasets under it): the
+#                  same checks, minus those that hold only for live install media
+#                  (installer tools, RAM store, live network method), which SKIP.
 #
 # Exit 0 = all checks pass. Non-zero = at least one check FAILED (the image must
 # NOT ship). Each check prints PASS / FAIL / SKIP with the lesson it guards.
@@ -23,6 +28,9 @@ DIR="${1:?usage: image-acceptance-test.sh <image-dir|boot_archive> [--boot|--sel
 MODE=""
 case "${2:-}" in --boot) MODE=boot ;; --selftest) MODE=selftest ;; esac
 [ "$1" = "--selftest" ] && MODE=selftest
+[ "$1" = "--disk" ] && { MODE=disk; DIR="${2:?usage: image-acceptance-test.sh --disk <root>}"; }
+# media <what>: true on live media; on a disk, SKIP <what> (it holds only for install media) and return false.
+media() { [ "$MODE" != disk ] && return 0; _skip "live media only: $*"; return 1; }
 
 PASS=0 FAIL=0 SKIP=0
 _ok()   { echo "  PASS: $*"; PASS=$((PASS+1)); }
@@ -112,7 +120,8 @@ static_checks() {
   # the fragments count only once assembled. Counting the fragments themselves passed
   # while the media's kernel never saw them (crash dump: zfs_arc_max 0, the ARC
   # uncapped, a ZFS deadman panic mid-install).
-  if cat "$R/etc/system" "$R/etc/system.d/.self-assembly" 2>/dev/null | grep -q 'set hid:hid_errlevel'; then
+  if ! media "hid:hid_errlevel (installer.nix sets it for the X1's console; a disk takes its machine's config)"; then :
+  elif cat "$R/etc/system" "$R/etc/system.d/.self-assembly" 2>/dev/null | grep -q 'set hid:hid_errlevel'; then
     _ok "the kernel's /etc/system view sets hid:hid_errlevel (X1 hid console-flood guard)"
   else _fail "neither /etc/system nor /etc/system.d/.self-assembly sets hid:hid_errlevel (X1 hid flood would drown the console)"; fi
   # every system.d fragment is in .self-assembly (else the kernel ignores it)
@@ -154,13 +163,15 @@ static_checks() {
 
   # LESSON (this session): solnix-zap disk-nuke tool must be staged + runnable.
   local ZAP INST AUTONET; ZAP=$(_tool "$R" solnix-zap); INST=$(_tool "$R" solnix-install); AUTONET=$(_tool "$R" solnix-autonet)
-  if [ -n "$ZAP" ] && head -1 "$ZAP" | grep -q '/sbin/sh'; then
+  if ! media "solnix-zap (an installer tool)"; then :
+  elif [ -n "$ZAP" ] && head -1 "$ZAP" | grep -q '/sbin/sh'; then
     _ok "solnix-zap present + #!/sbin/sh (disk-nuke recovery tool)"
   else _fail "solnix-zap missing or wrong shebang"; fi
 
   # LESSON (committed != shipped): the shipped solnix-install must match a known
   # HEAD blob (the mount-guard fix etc. must actually be IN the image binary).
-  if [ -n "$INST" ]; then
+  if ! media "the shipped solnix-install (on the media's PATH)"; then :
+  elif [ -n "$INST" ]; then
     local ish gsh
     ish=$(sha256sum "$INST" 2>/dev/null | awk '{print $1}')
     gsh=$(cd "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null && git show HEAD:scripts/solnix-install 2>/dev/null | sha256sum | awk '{print $1}')
@@ -174,7 +185,7 @@ static_checks() {
   if [ -e "$R/etc/solnix-autoinstall" ]; then _fail "/etc/solnix-autoinstall present (would auto-wipe a disk!)"
   else _ok "/etc/solnix-autoinstall absent (install is interactive)"; fi
 
-  install_tools_check "$R"
+  media "the README install tools and /root/README" && install_tools_check "$R"
 
   # LESSON (login dns stall, measured): the live hostname must be in /etc/hosts, or
   # every login-path lookup goes to DNS at ~3.5s per NXDOMAIN. And nsswitch MUST keep
@@ -220,11 +231,12 @@ static_checks() {
   # resolve. The temporary form (-t) gets the lease. Both the boot-time autonet
   # method and solnix-install must use -t.
   local an="$AUTONET"
-  if [ -n "$an" ] && [ -f "$an" ]; then
+  if ! media "solnix-autonet (the live media's network method; a disk runs solnix-net)"; then :
+  elif [ -n "$an" ] && [ -f "$an" ]; then
     if grep -q 'create-addr -t -T dhcp' "$an"; then _ok "solnix-autonet creates a TEMPORARY dhcp addrobj (-t)"
     else _fail "solnix-autonet uses a persistent create-addr -- fails on the live media's persistent DB (no lease)"; fi
   else _fail "/lib/svc/method/solnix-autonet missing"; fi
-  if [ -n "$INST" ]; then
+  if [ -n "$INST" ] && [ "$MODE" != disk ]; then
     if grep -q 'create-addr -t -T dhcp' "$INST"; then _ok "solnix-install creates a TEMPORARY dhcp addrobj (-t)"
     else _fail "solnix-install uses a persistent create-addr (no lease on the live media)"; fi
   fi
@@ -454,7 +466,8 @@ closure_contract_checks() {
   local _sys _ls
   _sys=$(grep -E '^[^#:]*:[^:]*:sysinit:' "$R/etc/inittab" 2>/dev/null | head -3 | cut -d: -f1 | tr '\n' ' ')
   _ls=$(grep '^ls::sysinit:' "$R/etc/inittab" 2>/dev/null | sed -n 's,.*/sbin/sh \(/nix/store/[^ ]*\) .*,\1,p')
-  if [ "$_sys" = "ap vol ls " ] && [ -n "$_ls" ] && _inr "$R" "$_ls" >/dev/null && [ -d "$R/nix/.rw-store" ] && [ ! -h "$R/nix/.rw-store" ]; then
+  if [ "${MODE:-}" = disk ]; then _skip "live media only: the RAM store (ls:: sysinit; a disk's store is <pool>/nix)"
+  elif [ "$_sys" = "ap vol ls " ] && [ -n "$_ls" ] && _inr "$R" "$_ls" >/dev/null && [ -d "$R/nix/.rw-store" ] && [ ! -h "$R/nix/.rw-store" ]; then
     _ok "inittab mounts the RAM store (ls:: after ap, vol; $(basename "$_ls") in the media's store; /nix/.rw-store present)"
   else _fail "no RAM store for nix: sysinit order '${_sys}' (want 'ap vol ls '), live-store '${_ls:-none}', /nix/.rw-store $([ -d "$R/nix/.rw-store" ] && echo present || echo missing)"; fi
   [ "${MODE:-}" = selftest ] || https_check "$R"
@@ -468,6 +481,11 @@ https_check() {
   local R="$1" url="${ACCEPT_HTTPS_URL:-https://cache.solnix.io/nix-cache-info}" h ip body rc
   command -v chroot >/dev/null && [ -n "$(_inr "$R" run/current-system/sw/bin/curl)" ] \
     || { _skip "no chroot or no curl on the media profile -- HTTPS fetch check"; return; }
+  # curl 8.23's multi handle opens /dev/eventfd for its wakeup; with no such node it fails "(27) Out of memory" for
+  # every URL, file:// included (measured: adding the link to a chroot of the image root turned 27 into 0, three
+  # times each way). devfsadm makes the node at boot, so an image root that never booted has none.
+  [ -e "$R/dev/eventfd" ] || [ -h "$R/dev/eventfd" ] \
+    || { _skip "no /dev/eventfd in an image root that has not booted (devfsadm makes it) -- chrooted curl fails rc 27 without it; HTTPS fetch check"; return; }
   h=$(echo "$url" | sed -e 's,^https://,,' -e 's,/.*,,')
   ip=$(getent hosts "$h" 2>/dev/null | awk '{print $1; exit}')
   [ -n "$ip" ] || { _skip "build host cannot resolve $h -- HTTPS fetch check"; return; }
@@ -732,6 +750,13 @@ selftest() {
 # ---------------------------------------------------------------------------
 main() {
   if [ "$MODE" = selftest ]; then selftest; exit $?; fi
+  if [ "$MODE" = disk ]; then
+    echo "=== solnix image acceptance test (disk): $DIR ==="
+    [ -d "$DIR/etc" ] && [ -e "$DIR/run/current-system" ] || { _fail "$DIR is not a mounted disk root (no etc/ or run/current-system)"; DIR=""; }
+    [ -n "$DIR" ] && { echo "-- static checks (disk root: $DIR) --"; static_checks "$DIR"; }
+    echo ""; echo "=== RESULT: $PASS pass, $FAIL fail, $SKIP skip ==="
+    [ "$FAIL" = 0 ]; exit $?
+  fi
   echo "=== solnix image acceptance test: $DIR ==="
   local rc=0; find_boot_archive || rc=$?
   local R="$FOUND_RD"
