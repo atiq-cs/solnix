@@ -205,6 +205,18 @@ let
   ) usersWithKeys;
 in
 {
+  # NixOS programs/shadow.nix: security.loginDefs.settings -> /etc/login.defs. illumos's own tools don't read it
+  # (useradd reads /etc/default/useradd, passwd reads /etc/default/passwd); COSMIC does: cosmic-settings' Users
+  # page and cosmic-greeter list only uids in UID_MIN..UID_MAX, and with no file they assume 1000..60000/65000,
+  # which takes in nixbld (30001+), cosmic-greeter (30080) and messagebus (30081). Only the id ranges are written:
+  # the rest of NixOS's defaults (ENCRYPT_METHOD, TTYGROUP, UMASK) configure shadow-utils, which solnix doesn't ship.
+  options.security.loginDefs.settings = mkOption {
+    type = types.attrsOf (types.either types.int types.str);
+    default = { };
+    example = { UID_MAX = 59999; };
+    description = "Lines of /etc/login.defs (KEY value). Defaults are NixOS's id ranges.";
+  };
+
   options.users = {
     users = mkOption {
       type = types.attrsOf userType;
@@ -227,6 +239,17 @@ in
   };
 
   config = {
+    # NixOS's defaults. solnix's fixed system accounts sit at 30000 and up (nixbld, cosmic-greeter, messagebus,
+    # the builder zone), outside both ranges, as NixOS's own static system uids sit below 1000.
+    security.loginDefs.settings = lib.mapAttrs (_: lib.mkDefault) {
+      SYS_UID_MIN = 400; SYS_UID_MAX = 999; UID_MIN = 1000; UID_MAX = 29999;
+      SYS_GID_MIN = 400; SYS_GID_MAX = 999; GID_MIN = 1000; GID_MAX = 29999;
+    };
+    assertions = let l = config.security.loginDefs.settings; in [
+      { assertion = l.UID_MIN <= l.UID_MAX; message = "security.loginDefs: UID_MIN must be <= UID_MAX"; }
+      { assertion = l.GID_MIN <= l.GID_MAX; message = "security.loginDefs: GID_MIN must be <= GID_MAX"; }
+    ];
+
     # Essential base groups/users the SMF stack + a login need (gotcha #9).
     # Shipped as defaults so a from-scratch /etc from options is self-consistent;
     # a config's own users.users.<name> merges on top (attrset merge). make-be
@@ -320,6 +343,7 @@ in
       shadow = shadowFile;
       group = groupFile;
       user_attr = userAttrFile;
+      "login.defs" = concatStringsSep "" (mapAttrsToList (k: v: "${k} ${toString v}\n") config.security.loginDefs.settings);
     } // authKeysEtc;
   };
 }

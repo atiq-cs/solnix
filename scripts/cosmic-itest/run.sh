@@ -16,6 +16,7 @@ if [ "$1" = --negctl ] || [ "$2" = --negctl ]; then
   # help1: a share dir with no man: handler, and a plugin.ron whose bin does not exist
   e=$(mktemp -d /tmp/itest-help.XXXXXX); mkdir -p "$e/applications"; printf '(\n    bin: (path: "%s/none"),\n)\n' "$e" > "$e/plugin.ron"
   neg ITEST_HELP_SHARE "$e" help-man-uri; neg ITEST_HELP_PLUGIN "$e/plugin.ron" help-launcher-man; find "$e" -depth -delete
+  neg ITEST_LOGINDEFS /nonexistent users-uid-range   # no /etc/login.defs: COSMIC's 1000..60000 fallback (pre-desk1)
   echo "cosmic-itest negctl: $ok of $n failed as expected"; [ $ok -eq $n ] || rc=1
 fi
 echo "results: $J"; exit $rc

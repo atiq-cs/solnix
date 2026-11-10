@@ -10,7 +10,11 @@ The suite lives in `scripts/cosmic-itest/` and runs on lixi (the reference lapto
 - **tier 0:** no desktop session. Static checks of ELF objects and kernel modules, and syscall/ABI probes on the test's own
   file descriptors. Safe while someone uses the machine.
 - **tier 1:** a test session as `cosmictest`, started through greetd's IPC socket (cosmic5's `lrun.sh`), with the
-  8 GB kernel-memory guard (`kwatch.sh`) running. Only while nobody is logged in.
+  8 GB kernel-memory guard (`kwatch.sh`) running. Only while nobody is logged in. The account is the test's own: t1
+  creates it at start (uid in UID_MIN..UID_MAX, home under /var/tmp, a random password it hands greetd) and deletes it,
+  home included, when it ends. It is never declared in a desktop config and never left behind. The first cosmictest was
+  made by hand on lixi; install-be.sh's account merge keeps undeclared lines, so it rode along into later BEs with a
+  live password until desk1 locked it (2026-11-10).
 - **tier 2:** apps and integrations inside a session.
 Each check prints `PASS`, `FAIL`, `GAP` (an integration solnix doesn't have yet) or `SKIP`. The suite writes JSON and one
 summary line.
@@ -69,6 +73,7 @@ summary line.
 |---|---|---|---|
 | greetd and PAM | Linux-PAM | Solaris PAM ("other" stack), pam-sys fixup item 10 | t1: a greetd IPC login of cosmictest succeeds; a wrong password fails |
 | seat | logind | seatd with a `seat` group | t1: the compositor gets DRM master through libseat |
+| which accounts are people | /etc/login.defs UID_MIN..UID_MAX (shadow-utils); cosmic-settings' Users page and cosmic-greeter filter on it, and assume 1000..60000 (greeter: 65000) when it is missing | security.loginDefs.settings writes NixOS's ranges (1000..29999, system 400..999); solnix's fixed system accounts are 30000 and up. Without the file, Users listed nixbld1-32, cosmic-greeter and messagebus | t0 users-uid-range: no account with a false/nologin shell or a /var/empty home inside the range. negctl: ITEST_LOGINDEFS=/nonexistent |
 | XDG data and cursors | systemd environment generators | profile-relative XDG_DATA_DIRS and XCURSOR_PATH (fa7305e) | t0: the session environment lists sw/share; t2: the app library lists more than 50 entries |
 | time zone | timedatectl | /etc/default/init TZ (time.timeZone) | t0: TZ is set |
 | fonts | fontconfig | fontdb reads /etc/fonts/fonts.conf | t2: the panel renders text (a screenshot is not blank) |

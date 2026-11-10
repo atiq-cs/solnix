@@ -80,6 +80,15 @@ echo "$po" | grep -q '"name":"ls(1)' && r PASS help-launcher-man "$pr answers 'm
 [ -e /run/current-system/sw/share/applications/solnix-manual.desktop ] && r PASS help-manual-entry "Solnix Manual desktop entry" \
   || r FAIL help-manual-entry "no solnix-manual.desktop"
 
+# 7c. accounts: cosmic-settings' Users page and cosmic-greeter list every passwd uid in login.defs' UID_MIN..UID_MAX
+# (1000..60000 when the file is missing). None of those may be a system account (no-login shell or /var/empty home).
+# Negative control: ITEST_LOGINDEFS=/nonexistent (cosmic-settings' fallback range takes in nixbld 30001+).
+ld=${ITEST_LOGINDEFS:-/etc/login.defs}
+lo=$(awk '$1=="UID_MIN"{print $2}' "$ld" 2>/dev/null); hi=$(awk '$1=="UID_MAX"{print $2}' "$ld" 2>/dev/null)
+sa=$(getent passwd | awk -F: -v lo="${lo:-1000}" -v hi="${hi:-60000}" '$3>=lo && $3<=hi && ($7~/(false|nologin)$/ || $6=="/var/empty"){printf " %s", $1}')
+[ -z "$sa" ] && r PASS users-uid-range "no system account in ${lo:-1000}..${hi:-60000} ($ld)" \
+  || r FAIL users-uid-range "system accounts in ${lo:-1000}..${hi:-60000} ($ld):$(echo $sa | cut -c1-80)"
+
 # 8. integrations not present yet (GAP rows from docs/cosmic-illumos-integration-tests.md section 7)
 for g in pipewire:audio-server upower:battery NetworkManager:network-applet bluetoothd:bluetooth xdg-desktop-portal:portal; do
   command -v "${g%%:*}" > /dev/null 2>&1 && r PASS "${g#*:}" "${g%%:*} present" || r GAP "${g#*:}" "no ${g%%:*}"; done
