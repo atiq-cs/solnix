@@ -39,6 +39,10 @@ printf 'a\000b\n' | grep -a -b -o -F b > /dev/null 2>&1 || {
 distro_nodename() { case "$1" in solnix|openindiana|illumos|omnios|sunos|localhost|unknown) return 0;; esac
   for w in $(uname -v | tr -c 'A-Za-z0-9\n' ' '); do [ "$w" = "$1" ] && return 0; done; return 1; }
 
+# A DNS domain a DHCP lease or an installer hands every host alike names no host: a home router's "localdomain" (lixi, 11-10:
+# Go's net/dnsconfig_unix_test.go has it as test data), the RFC 2606/6761/8375 names. It stays in the scan when it is the nodename.
+generic_domain() { case "$1" in localdomain|localhost|local|home|lan|home.arpa|example|example.com|example.net|example.org|invalid|test) return 0;; esac; return 1; }
+
 # --selftest: prove the undeclared-reference rule bites without the store. A path
 # NAMED in the NAR is a violation iff it is in the deriver's input closure and not
 # declared; help-text strings (outside the inputs) and declared refs are not.
@@ -54,9 +58,11 @@ if [ "${1:-}" = "--selftest" ]; then
   # a distro nodename is refused; a real host name is not
   d1=$(distro_nodename solnix && echo y); d2=$(distro_nodename "$(uname -v | tr -c 'A-Za-z0-9\n' ' ' | awk '{print $1}')" && echo y)
   d3=$(distro_nodename solnix-woof && echo y)
+  # a generic DHCP domain is skipped; a real one (a site's own domain, EC2's) is not
+  g1=$(generic_domain localdomain && echo y); g2=$(generic_domain burd.me && echo y); g3=$(generic_domain us-west-2.compute.internal && echo y)
   [ -n "$r1" ] && [ -z "$r2" ] && [ -z "$r3" ] && [ "$w1" = 0 ] && [ "$w2" = 1 ] && [ -n "$d1" ] && [ -n "$d2" ] && [ -z "$d3" ] &&
-    { echo "SELFTEST PASS"; exit 0; }
-  echo "SELFTEST FAIL: [$r1] [$r2] [$r3] word [$w1] [$w2] nodename [$d1] [$d2] [$d3]"; exit 1
+    [ -n "$g1" ] && [ -z "$g2" ] && [ -z "$g3" ] && { echo "SELFTEST PASS"; exit 0; }
+  echo "SELFTEST FAIL: [$r1] [$r2] [$r3] word [$w1] [$w2] nodename [$d1] [$d2] [$d3] domain [$g1] [$g2] [$g3]"; exit 1
 fi
 
 distro_nodename "$(uname -n)" && { echo "publish-gate: nodename '$(uname -n)' is a distro name (in uname -v / gcc's version string), so the host-name scan cannot tell a leak from the version strings: give this host a unique nodename first" >&2; exit 2; }
@@ -93,6 +99,7 @@ for p in "$@"; do
   hs="$(uname -n) $(sed -n 's/^domain[[:space:]]*//p; s/^search[[:space:]]*//p' /etc/resolv.conf 2>/dev/null) compute.internal ${GATE_HOST_STRINGS:-}"
   for h in $hs; do
     [ ${#h} -ge 6 ] || continue   # too short to mean a host (e.g. "local")
+    generic_domain "$h" && continue
     # -w: the name as a word, so a host string inside an ordinary word is not the host (a64s: "braich", dixa's boot environment,
     # is in Scottish Gaelic "obraichean" in gtk3's own po/gd.po; "/ROOT/braich/" or "host=braich" still match)
     # shortcut: grep -w counts _ as a word character, so a name joined by underscores (foo_braich_bar) is not caught; upgrade to an
