@@ -118,21 +118,22 @@ nocloud_seed() {
 # probe up to ~60s; only after that give up as genuinely off-EC2 (bare metal/X1).
 IID=""
 _tries=0
+# A NoCloud seed is checked FIRST: cloud-init's ds-identify also picks NoCloud when a cidata volume is present, and
+# off EC2 the IMDS probe below takes minutes (each curl runs its full timeout where nothing answers), longer than the
+# service's start timeout (measured under KVM: the method was killed three times and the seed never read).
+KEYS=$(nocloud_seed)
+[ -n "$KEYS" ] && { KEYS="$KEYS
+"; IID=nocloud; _tries=20; }
 while [ "$_tries" -lt 20 ]; do
 	IID=$(imds meta-data/instance-id)
 	case "$IID" in i-*) break ;; esac
 	_tries=$((_tries + 1))
 	sleep 3
 done
-KEYS=""
 case "$IID" in
-	i-*) : ;;                                 # looks like a real instance-id
-	*)   echo "no EC2 instance metadata after ${_tries} tries (got '$IID'); trying a NoCloud seed"
-	     KEYS=$(nocloud_seed)
-	     [ -n "$KEYS" ] || { echo "no key source (no IMDS, no NoCloud key): root stays key-only with no key"; exit 0; }
-	     KEYS="$KEYS
-"
-	     IID=nocloud ;;
+	i-*|nocloud) : ;;                         # a real instance-id, or keys from a NoCloud seed
+	*)   echo "no EC2 instance metadata after ${_tries} tries (got '$IID') and no NoCloud key"
+	     echo "no key source (no IMDS, no NoCloud key): root stays key-only with no key"; exit 0 ;;
 esac
 echo "instance-id: $IID (after ${_tries} retries)"
 

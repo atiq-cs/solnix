@@ -64,7 +64,9 @@ in
       model = "transient";
       start = {
         exec = "/bin/sh -c 'SOLNIX_CURL=${curlBin} ${firstBootScript}'";
-        timeoutSeconds = 120;
+        # off EC2 the IMDS probe is 20 x (token PUT + GET, 5 s each where nothing answers) + 3 s, about 260 s: under
+        # 120 s SMF killed it three times and left it in maintenance on every non-EC2 boot (measured under KVM).
+        timeoutSeconds = 420;
       };
       stop.exec = ":true";
       # The network must be up (DHCP done) before 169.254.169.254 answers; the
