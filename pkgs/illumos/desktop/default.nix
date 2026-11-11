@@ -32,6 +32,17 @@ in (import ./data.nix { tools = hostfixTools; inherit world python3; }) // (impo
       [ $rc -eq 1 ] && echo "$o" | grep -q /nonexistent || { echo "FATAL: solnix-power rc $rc: $o" >&2; exit 1; }
       grep -q UPower.PowerProfiles "$out/share/dbus-1/system.d/org.freedesktop.UPower.conf"'';
   };
+  # a read-only org.freedesktop.Accounts for COSMIC Settings > Users: administrators by RBAC (src/solnix-accounts,
+  # services.solnix-accounts). Its D-Bus tests need a session bus, so they run beside the build.
+  solnix-accounts = cargoPkg {
+    pname = "solnix-accounts"; version = "0.1.0"; src.dir = ../../../src/solnix-accounts;
+    vendorHash = "sha256-X7/wnXOOaa9t62AgQnu0Mr3mz+MMcVjuhR8Nk98daAg=";
+    bins = "solnix-accounts";
+    man = ''install -D -m0444 dbus/org.freedesktop.Accounts.conf "$out/share/dbus-1/system.d/org.freedesktop.Accounts.conf"'';
+    check = ''rc=0; o=$(env -i DBUS_SYSTEM_BUS_ADDRESS=unix:path=/nonexistent "$out/bin/solnix-accounts" 2>&1) || rc=$?
+      [ $rc -eq 1 ] && echo "$o" | grep -q /nonexistent || { echo "FATAL: solnix-accounts rc $rc: $o" >&2; exit 1; }
+      grep -q 'own="org.freedesktop.Accounts"' "$out/share/dbus-1/system.d/org.freedesktop.Accounts.conf"'';
+  };
 } // rec {
   # pop-launcher (pop-os/launcher epoch-1.5.0 = NixOS's 1.2.7 + the discrete-GPU menu fix): the search service
   # cosmic-launcher runs from PATH, with its plugins (desktop entries, files, find, calc, scripts, ...).

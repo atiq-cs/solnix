@@ -1,0 +1,14 @@
+[package]
+name = "solnix-accounts"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "A read-only org.freedesktop.Accounts for COSMIC Settings > Users, over illumos passwd, group, shadow and RBAC user_attr"
+
+# the same dependency set as solnix-power (its Cargo.lock, renamed): the vendored crates are the same
+[dependencies]
+zbus = { version = "5.14", default-features = false, features = ["tokio"] }
+tokio = { version = "1", features = ["rt", "macros", "time", "process", "sync", "fs"] }
+
+[profile.release]
+debug = 1

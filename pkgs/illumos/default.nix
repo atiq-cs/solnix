@@ -1486,7 +1486,7 @@ in
     cosmic-settings cosmic-files cosmic-edit cosmic-store cosmic-screenshot cosmic-greeter greetd;
   inherit (cosmicData) open-sans noto-sans noto-sans-mono fira-mono hicolor-icon-theme pop-icon-theme cosmic-icons;
   inherit (desktop) pop-launcher cosmic-wallpapers sound-theme-freedesktop adwaita-icon-theme dejavu-fonts liberation-fonts
-    noto-fonts-color-emoji xdg-utils xdg-user-dirs solnix-help solnix-nm solnix-power;
+    noto-fonts-color-emoji xdg-utils xdg-user-dirs solnix-help solnix-nm solnix-power solnix-accounts;
   inherit llvmPackages;
   inherit (llvmPackages) llvm lld lldb;
   clang-unwrapped = llvmPackages.clang;   # nixpkgs' names: clang is the wrapped compiler

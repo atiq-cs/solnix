@@ -109,9 +109,11 @@ in
 
   # The system bus (NixOS has it always on): cosmic-greeter-daemon and cosmic-comp use it.
   services.dbus = { enable = true; packages = [ greeter ]; };
-  # NixOS's cosmic module turns on services.upower (and power-profiles via system76-power) and, by default,
-  # networking.networkmanager. Here their D-Bus stand-ins: the battery and power mode, and the network applet.
+  # NixOS's cosmic module turns on services.upower (and power-profiles via system76-power), services.accounts-daemon
+  # and, by default, networking.networkmanager. Here their D-Bus stand-ins: the battery and power mode, who is an
+  # administrator (Settings > Users), and the network applet.
   services.solnix-power.enable = lib.mkDefault true;
+  services.solnix-accounts.enable = lib.mkDefault true;
   services.solnix-nm.enable = lib.mkDefault true;
 
   smf.services = mkIf cfg.greeter {

@@ -111,6 +111,21 @@ sa=$(getent passwd | awk -F: -v lo="${lo:-1000}" -v hi="${hi:-60000}" '$3>=lo &&
 [ -z "$sa" ] && r PASS users-uid-range "no system account in ${lo:-1000}..${hi:-60000} ($ld)" \
   || r FAIL users-uid-range "system accounts in ${lo:-1000}..${hi:-60000} ($ld):$(echo $sa | cut -c1-80)"
 
+# 7d. accounts: Settings > Users shows a user as Administrator iff org.freedesktop.Accounts says AccountType 1. Every user
+# with the Primary Administrator profile in user_attr must get 1 from solnix-accounts (services.solnix-accounts).
+# Without the service the page falls back to the group sudo and shows nobody as an administrator.
+# Negative control: ITEST_ACCOUNTS_DEST=<a name nobody owns> (the bus answers ServiceUnknown, as with no service).
+ad=${ITEST_ACCOUNTS_DEST:-org.freedesktop.Accounts}
+pa=$(awk -F: '!/^#/ && $5 ~ /(^|;)profiles=([^;]*,)?Primary Administrator(,|;|$)/ {print $1}' /etc/user_attr 2>/dev/null)
+if [ -z "$pa" ]; then r SKIP users-admin "no Primary Administrator user in /etc/user_attr"
+else bad= ok=
+  for u in $pa; do id=$(getent passwd "$u" | cut -d: -f3); [ -n "$id" ] || continue
+    t=$(dbus-send --system --print-reply --dest="$ad" "/org/freedesktop/Accounts/User$id" org.freedesktop.DBus.Properties.Get \
+        string:org.freedesktop.Accounts.User string:AccountType 2>&1 | awk '/int32/{print $NF}')
+    [ "$t" = 1 ] && ok="$ok $u" || bad="$bad $u(${t:-no answer})"; done
+  [ -z "$bad" ] && [ -n "$ok" ] && r PASS users-admin "AccountType 1 from $ad:$ok" || r FAIL users-admin "not administrator in Settings > Users:$bad (services.solnix-accounts)"
+fi
+
 # 8. integrations not present yet (GAP rows from docs/cosmic-illumos-integration-tests.md section 7)
 for g in pipewire:audio-server upower:battery NetworkManager:network-applet bluetoothd:bluetooth xdg-desktop-portal:portal; do
   command -v "${g%%:*}" > /dev/null 2>&1 && r PASS "${g#*:}" "${g%%:*} present" || r GAP "${g#*:}" "no ${g%%:*}"; done

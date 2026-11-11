@@ -33,6 +33,7 @@
   ./config/solnix-netd.nix
   ./config/solnix-nm.nix
   ./config/solnix-power.nix
+  ./config/solnix-accounts.nix
   ./config/tailscale.nix
   ./config/users.nix
   ./config/system-path.nix
