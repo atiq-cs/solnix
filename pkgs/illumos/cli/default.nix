@@ -66,10 +66,13 @@ let
   # qalias: the queue's nixpkgs variant attrs under their own pnames (a new file, so no served
   # drv moves; aarch64 gets them too, unused there)
   cqa = import ./c-qalias.nix (h // { inherit (c5) cmake gnupatch; inherit (c7) gmp6; inherit (c3) bzip2-bin; nasm = if gtkMeson == null then null else gtkMeson.nasm; });
+  # qnew: new recipes for top-level x86 queue names (a new file, so no served drv moves); x86 only, as c10
+  c11 = if gtkMeson == null then { } else import ./c-qnew.nix (h // { inherit (c5) cmake python3; inherit (c1) flex bison gnum4; inherit (c7) fmt;
+    inherit (c10) spdlog; inherit (c2) sqlite; inherit gtkMeson; });
   rust = import ./rust.nix { inherit cargoPkg chk; extra = import ./rust-extra.nix h; };
   gotools = import ./go-tools.nix { inherit (goChain) goPkg go_1_27; inherit chk; inherit (c5) python3; } // import ./go-c1.nix { inherit (goChain) goPkg go_1_27; inherit chk; inherit (c5) python3; }
     // import ./go-recipes2.nix { inherit (goChain) goPkg; inherit chk; }
     // import ./go-recipes3.nix { inherit (goChain) goPkg; inherit chk; };   # recipes3 (a new file: no served drv moves)
-  data = import ./data.nix h;
+  data = import ./data.nix h // c11;   # c11: on this line, so the `in` line other lanes edit stays main's
   ti = import ./texinfo.nix (h // { inherit (c1) gnum4; inherit (c4) perl; }) // cqa;   # cqa: on this line, so the `in` line other lanes edit stays main's
 in c1 // c2 // c3 // c4 // c5 // c6 // c7 // c8 // c9 // c10 // data // ti // (if cargoPkg == null then { } else rust) // (if goChain == null then { } else gotools)
