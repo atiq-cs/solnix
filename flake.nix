@@ -285,6 +285,8 @@
               gnutar-seed = s.gnutar; gzip-seed = s.gzip; gnumake-seed = s.gnumake; gnupatch-seed = s.gnupatch; xz-seed = s.xz;
               binutils-seed = s.binutils; perl-seed = s.perl; bash-seed = s.bash; gcc-wrapper-seed = s.gccWrapper;
               seed-tar-alias = s.seedTarAlias; solnix-seed-build-tools = s.seedBuildTools;
+              # ld's build input (pkgs/illumos/libld.nix): no runtime reference reaches it, so only its own row publishes it
+              libld = s.libld0011;
               # the system world's served pname is illumos-userland (the attr is `world`): drv_for looks up the pname (wave6u, piece 2)
               illumos-userland = p.solnix.world;
             };
@@ -298,7 +300,7 @@
                         meson = p.solnix.meson_1_10; meson_1_4 = p.solnix.meson; };
           in lib.filterAttrs (_: v:
           let r = builtins.tryEval (lib.isDerivation v); in r.success && r.value)
-          (lifted // seedRows // removeAttrs p.solnix [ "cached" "starter" ] // renamed);
+          (lifted // seedRows // removeAttrs p.solnix [ "cached" "starter" "libld0011" ] // renamed);   # libld0011: the system instance's builds nothing (libld is the seed's)
         # the native aarch64 set (pkgs/illumos/aarch64; lib/host-pkgs.nix uses the same import), for drv_for on dixa. The
         # served aarch64 rows include the nix chain and gate pieces that live only in nested sets (srcPkgs, nixChain): they
         # are lifted to the top, never over an existing name (sqlite: one 3.50.4, which nixChain links too), plus

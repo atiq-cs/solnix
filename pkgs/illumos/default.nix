@@ -1433,6 +1433,7 @@ in
 {
   inherit libc rtld ld sys base-tools systemPath nix cached starter gcc world early stock drivers kernelNd worldMan;
   inherit gcc15 gcc15Wrapper;
+  inherit libld0011;   # the seed instance's is ld's build input; flake.nix rows it as packages.<system>.libld (its drv name libld-0011)
   inherit rustSeedStage rust198 rust1990 rust199;
   # seedBuildTools -- the default build-tool set a bare solnix system passes as
   # buildTools so from-source builds resolve gmake/tar/grep/sed/gstrip/gzip/xz
