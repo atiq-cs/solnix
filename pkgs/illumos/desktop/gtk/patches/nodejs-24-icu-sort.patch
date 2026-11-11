@@ -1,0 +1,24 @@
+From 9365fff7b5087ee72919be3ef0133e5f4f163a29 Mon Sep 17 00:00:00 2001
+From: Shelley Vohr <shelley.vohr@gmail.com>
+Date: Wed, 4 Nov 2026 13:04:54 -0800
+Subject: [PATCH] build: sort the ICU source lists
+
+configure.py lists the ICU source files in the order os.walk() returns
+them, which depends on the file system. That order ends up in
+icu_config.gypi and in the generated build files, so it differs between
+machines.
+
+PR-URL: https://github.com/nodejs/node/pull/67206
+(Backported to v24.18.0 for solnix: same one-line change, this tree's line numbers.)
+---
+--- a/configure.py
++++ b/configure.py
+@@ -2108,7 +2108,7 @@
+             info(f'Using floating patch "{patchfile}" from "{dir_base}"')
+         file_list.append(srcfile)
+     break
+-  return file_list
++  return sorted(file_list)
+ 
+ def configure_intl(o):
+   def icu_download(path):
