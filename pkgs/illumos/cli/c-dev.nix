@@ -183,7 +183,48 @@ sys.exit("FATAL: sysconfig names a host or build dir: %r" % bad if bad else 0)'
     '';
   };
 
-  pkg-config = base.pkgconf;
+  # pkg-config (GPL-2.0-or-later): freedesktop's pkg-config 0.29.2, as nixpkgs' pkg-config-unwrapped (pkgconf stays the build tool;
+  # this attr was an alias to it until the queue asked for pkg-config itself). Its bundled glib (--with-internal-glib), nixpkgs' two
+  # patches (glib's goption.c `bool` member, a keyword in gcc 15; Requires.private only for --static) and its isSunOS flags: GNU
+  # libiconv, the system library/include paths it must not print. config.guess runs /usr/bin/uname by path: uname from PATH, as
+  # nixpkgs' postPatch. The bundled glib passes gchar ** to iconv(), which GNU libiconv declares const char **: an error by default since
+  # gcc 14, a warning here (the call is the same at run time; glibc's char ** prototype hides it on Linux). Tests: `gmake check` (the requires-private patch changes three of them, which nixpkgs deletes too).
+  pkg-config = let fetch = url: sha256: import <nix/fetchurl.nix> { inherit url sha256; };
+    np = "https://raw.githubusercontent.com/NixOS/nixpkgs/f4a03c008967841f2a0b3cb7c436fc6fc31671f6/pkgs/by-name/pk/pkg-config-unwrapped"; in mkSrcPkg {
+    pname = "pkg-config"; version = "0.29.2";
+    src = { url = "https://pkg-config.freedesktop.org/releases/pkg-config-0.29.2.tar.gz";
+            sha256 = "6fc69c01688c9458a57eb9a1664c9aba372ccda420a02bf4429fe610e7e7d591"; };
+    deps = [ world libiconv ]; nativeTools = [ gnupatch ] ++ hostTools;
+    build = ''
+      patch -p1 < ${fetch "${np}/gcc-15.patch" "7690e0752571484a7cc33ad8ac2a96ad93c9150e60019e66994c09245358471d"}
+      patch -p1 < ${fetch "${np}/requires-private.patch" "4a8899880e15c26aa14428e2599a45c1931f2a5b85e18707ee156287320a0dc5"}
+      [ "$(grep -c /usr/bin/uname config.guess glib/config.guess | awk -F: '{s+=$2} END{print s}')" -ge 2 ] || { echo "FATAL: pkg-config uname anchor" >&2; exit 1; }
+      sed -i 's|/usr/bin/uname|uname|g' config.guess glib/config.guess
+      # the three tests requires-private.patch changes, as nixpkgs (its rm names check/missing, no such file: check-missing is the one
+      # that tests --exists over a missing Requires.private); their TESTS entries go too, else gmake has no rule for them
+      # and three that assume the default system paths are stripped (-I/usr/include): nixpkgs' bare isSunOS --with-system-include-path
+      # is the path "yes", so nothing is stripped there (measured: check-cflags, -sysroot and -variable-override print -I/usr/include where they expect nothing)
+      for t in check-requires-private check-gtk check-missing check-cflags check-sysroot check-variable-override; do
+        grep -Eq "[[:space:]]$t[[:space:]]" check/Makefile.in || { echo "FATAL: pkg-config TESTS anchor $t" >&2; exit 1; }
+        sed -Ei "s/([[:space:]])$t([[:space:]])/\1\2/" check/Makefile.in; rm -f check/$t
+      done
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --with-internal-glib --with-libiconv=gnu \
+        --with-system-library-path --with-system-include-path CPPFLAGS="-I${libiconv}/include" LDFLAGS="-L${libiconv}/lib/amd64" CFLAGS="-DENABLE_NLS -Wno-error=incompatible-pointer-types"
+      gmake -j8; gmake -j8 check > "$W/pc-check.out" 2>&1 || { grep -B6 -E '^(FAIL|ERROR):' "$W/pc-check.out" >&2; echo "FATAL: pkg-config gmake check" >&2; exit 1; }
+      # pkg-config's own suite (automake serial tests: PASS:/FAIL: lines; glib's bundled sub-suites have none): 24 of its 30 run
+      n=$(grep -c '^PASS: check-' "$W/pc-check.out"); echo "pkg-config check: $n PASS, $(grep -c '^FAIL' "$W/pc-check.out") FAIL" >&2
+      [ "$n" -eq 24 ] && ! grep -q '^FAIL' "$W/pc-check.out" || { echo "FATAL: pkg-config check count" >&2; exit 1; }
+      gmake install; rm -f "$out"/bin/*-pkg-config
+      ${dropDocs}
+      ${chk ''"$out/bin/pkg-config" --version'' "^0\\.29\\.2$"}
+      mkdir -p "$W/pc"; printf 'Name: t\nDescription: t\nVersion: 1.2\nRequires.private: u\nCflags: -I/t/include\nLibs: -L/t/lib -lt\n' > "$W/pc/t.pc"
+      printf 'Name: u\nDescription: u\nVersion: 1\nLibs: -lu\n' > "$W/pc/u.pc"
+      ${chk ''PKG_CONFIG_PATH="$W/pc" "$out/bin/pkg-config" --cflags --libs t'' "^-I/t/include -L/t/lib -lt *$"}
+      ${chk ''PKG_CONFIG_PATH="$W/pc" "$out/bin/pkg-config" --static --libs t'' "^-L/t/lib -lt -lu *$"}
+      # its default search path is its own store dirs only (chk's regex is single-quoted: no $out in it)
+      p=$("$out/bin/pkg-config" --variable=pc_path pkg-config); [ "$p" = "$out/lib/amd64/pkgconfig:$out/share/pkgconfig" ] || { echo "FATAL: pkg-config pc_path $p" >&2; exit 1; }
+    '';
+  };
 
   # GNU GDB, from source, as nixpkgs builds it (pkgs/by-name/gd/gdb): out-of-tree, every bfd target, TUI, system
   # readline/zlib/expat, Python, static bfd/opcodes, no sim, system gdbinit in /etc/gdb, NIX_DEBUG_INFO_DIRS patch.

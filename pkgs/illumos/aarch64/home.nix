@@ -25,6 +25,7 @@ in
   # lib/home-manager-pkgs.nix's tools + home-manager
   inherit (base) coreutils findutils gnused gnugrep diffutils gnutar gzip jq lndir gettext hostname
     gnumake pkgconf rsync libevent tmux;
+  pkg-config = base.pkgconf;   # as before cli's pkg-config became freedesktop's 0.29.2 (x86-proven only)
   # on the aarch64 bash (./src.nix, built for the image): base-src's bash links the x86 world's curses and its
   # examples/loadables pick SunPro's `-K pic` on aarch64 (measured).
   home-manager = derivation (base.home-manager.drvAttrs // { inherit (srcPkgs) bash; });
@@ -34,7 +35,7 @@ in
   inherit (cli) flex;   # build tool (nix's lexer.l, bc); the store-only set takes it from here
   # the headless C tier (file bc screen socat sqlite ncdu tig lsof perl ... as cli/ builds them)
   inherit (cli) file bc gnum4 socat sqlite ncdu tig perl autoconf automake libtool
-    gnupg quilt gnupatch getopt xxhash cmake ccache pkg-config gdbm isync fortune-mod;
+    gnupg quilt gnupatch getopt xxhash cmake ccache gdbm isync fortune-mod;
   # not yet on aarch64 (first native build 2026-10-28 failed; each is a recipe port):
   #   python3 (cli/c-dev.nix links graphics.libffi + graphics.expat; no aarch64 graphics set)
   #   lsof (lib/dialects/sun/dproc.c: ARCH64B undeclared), screen (doc needs makeinfo), neomutt (autosetup runs `cc`),
