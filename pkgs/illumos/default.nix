@@ -862,7 +862,7 @@ let
   #   usr/kernel/firmware/nvidia/<v>/  the GSP firmware (85 MB for GA10X). It
   #       is on the module path (firmware_open -> kobj_open_path) but not in
   #       the boot_archive's filelist, which a kernel/ copy would grow by that.
-  mkNvidiaBootKernel = base: gsp: derivation {
+  mkNvidiaBootKernel = base: gsp: { rtd3 ? false }: derivation {
     name = "illumos-kernel-nvidia";
     system = "x86_64-solaris";
     builder = "/usr/bin/bash";
@@ -882,7 +882,9 @@ let
       cp -R "$gsp/kernel/firmware/nvidia" "$out/usr/kernel/firmware/"
       cp "$dgputemp/kernel/misc/amd64/dgputemp" "$out/kernel/misc/amd64/dgputemp"
       printf '%s\n' '# solnix: the control node, and RM init deferred to the first open (graphics-gpu.nix)' \
-        'name="nvidia" parent="pseudo" instance=0;' 'NVreg_GpuInitOnProbe=0;' > "$out/kernel/drv/nvidia.conf"
+        'name="nvidia" parent="pseudo" instance=0;' 'NVreg_GpuInitOnProbe=0;'${if rtd3 then
+          " '# runtime D3cold (coarse); no autodetach: a detach powers the GPU on and leaves it on' 'NVreg_DynamicPowerManagement=1;' 'ddi-no-autodetach=1;'"
+          else ""} > "$out/kernel/drv/nvidia.conf"
       grep -q '^solnix-dgpu-off' "$out/kernel/drv/tzmon.conf" && { echo "FATAL: tzmon.conf already sets solnix-dgpu-off" >&2; exit 1; }
       printf '%s\n' '# solnix: nvidia drives the dGPU; no boot-time power-off' 'solnix-dgpu-off=0;' >> "$out/kernel/drv/tzmon.conf"
       chmod 0444 "$out/kernel/drv/nvidia.conf" "$out/kernel/drv/tzmon.conf"

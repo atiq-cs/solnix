@@ -114,10 +114,34 @@ binds `nvidia` to `pciex10de,2420` and changes what tzmon does, so read all of t
   RmInitAdapter and boots the GSP after the dump device is armed. It then holds the device open and logs to
   /var/log/solnix-nvidia.log. The GSP firmware is in usr/kernel/firmware, outside the boot_archive.
 - Use it only in a `beadm activate -t` BE. The guard's reboot then lands in a BE where tzmon powers the GPU off.
-  RTD3 (runtime D3) is stubbed in the port, so nothing ever powers an idle GPU down. That is why this is not a default.
+  Without `nvidia.rtd3` (section E) nothing powers an idle GPU down. That is why this is not a default.
+
+## E. Runtime D3cold (hardware.graphics.nvidia.rtd3, boot-once BE only)
+
+`hardware.graphics.nvidia.rtd3 = true` (with `attachAtBoot`) makes the nvidia module power the dGPU off when no
+client has it open, and on again at the next open. It is NVIDIA's coarse runtime power management
+(`NVreg_DynamicPowerManagement=1`). RM decides when, and src/drm-port/nvidia-oss/patches/0002 is the illumos
+executor RM's hooks were stubbed without.
+
+- Off: 10 s after the last close, PCI D3hot, then the root port's `_PR3` power resource `_OFF`. On the X1E that is
+  SSDT14 `PEG1.PXP._OFF` -> `POFF`: link to L2/L3, reset asserted, power GPIO off, the same thing tzmon does at boot.
+  The GPU's HDMI audio function (01:00.1) is offlined at attach, before audiohd takes it, and stays offline.
+- On: the next open of /dev/nvidia0 runs `_ON` and waits for the link (Data Link Layer Link Active) and for config
+  reads. It restores config space, and RM initialises the GPU as on the first open.
+- Read it from `kstat -p nvidia:0:rtd3` (off, offs, ons), `kstat -p dgputemp:0:ec:psta` (PEG1.PSTA: 1 = power
+  GPIO on and reset released) and `pr3_sta`, and from the `rtd3:` lines in /var/adm/messages.
+- The guard accepts a missing GPUT reading only while psta and pr3_sta are both 0 (off). After an off -> on edge
+  it allows 10 unreadable samples (30 s). Anything else unreadable still reboots.
+- site/solnix-nvidia opens the GPU once (RM + GSP up, temperature read) and releases it. It then logs the rtd3
+  kstat, GPUT and psta every 60 s.
+- Gate (per-boot test, nothing persistent): off within ~15 s of the last close (psta 0, `rtd3: idle 10 s: off`).
+  `nvidia-probe` reopens it (`rtd3: on`, RM init, temperature). Negative control: `nvidia-probe -w 60` holds it on
+  for the 60 s. 8 open/close cycles, with kernel heap per cycle.
+- Not done: the fine mode (GC6/GCOFF with the framebuffer kept, `=2`), which needs RM's runtime suspend/resume
+  callbacks and the NVIDIA GC6 `_DSM`. Also not done: putting the audio function back online.
 
 ## Not done here
 
 - Stage 2 (one explicit open of card0, the OpenBSD inteldrm modeset). It is the first time the FPU glue
   (`kernel_fpu_begin` with `KFPU_NO_STATE` under `kpreempt_disable`), BAR mapping, MSI and GEM run.
-- `nvidia_modeset` / `nvidia_i2c` attach (load them only after /dev/nvidiactl exists), display on the dGPU, and RTD3.
+- `nvidia_modeset` / `nvidia_i2c` attach (load them only after /dev/nvidiactl exists), and display on the dGPU.

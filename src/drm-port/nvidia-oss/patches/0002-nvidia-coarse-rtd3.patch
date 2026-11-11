@@ -1,0 +1,852 @@
+nvidia: coarse runtime D3cold (NVreg_DynamicPowerManagement=1): power the GPU off while no client has it open
+
+The port stubbed RM's runtime power hooks (nv_dynamic_power_available() false, nv_indicate_idle/not_idle
+NOT_SUPPORTED), so an attached GPU idles in D0 forever. On the ThinkPad X1 Extreme Gen 5 that is the RTX 3080 Ti
+heating the machine to an EC power cut (53 -> 94 C in ten minutes, scripts/patches/0005).
+
+RM already decides when (src/nvidia/arch/nvalloc/unix/src/dynamic-power.c). In COARSE mode its refcount drops to
+zero after attach and after the last close, once RM has shut the adapter down, and it calls nv_indicate_idle().
+The first open calls nv_indicate_not_idle() before rm_init_adapter() and needs the GPU powered when that returns.
+Linux implements the pair with the PCI core's runtime PM: D3hot, then the root port's ACPI _PR3 power resource off.
+nvidia_rtd3.c is that executor for illumos:
+
+- attach: the parent's _PR3 names a PowerResource and NVreg_DynamicPowerManagement is exactly 1. Then
+  rm_init_dynamic_power_management() is told _PR3 is present (it was told NV_FALSE), and
+  nv_dynamic_power_available() is true. Any other value (the default 3, or 2 = FINE, which needs the GC6 _DSM
+  handshake and runtime suspend callbacks) changes nothing.
+- attach also offlines the GPU's other functions (HDMI audio), which lose power with it, before any of them
+  attaches, as tzmon does at boot; offline nodes are never attached again. If one will not go offline, RTD3 stays
+  off for this GPU. They stay offline until the next boot.
+- idle: a taskq waits 10 s of uninterrupted idle. It then takes ldata_lock without sleeping on it (so a detach
+  that holds it can always drain the taskq) and re-checks that no client and no RM state exist. It saves config
+  space, puts the GPU in D3hot and evaluates _PR3 _OFF: the same sequence tzmon runs at boot.
+- not idle: waits for a running off to finish and evaluates _ON. As Linux's pcie_wait_for_link does, it sends no
+  config request to the GPU until the root port reports Data Link Layer Link Active (the X1E's port supports that
+  report), then waits 100 ms. It then waits up to 5 s for the GPU to answer config reads, restores config space
+  and goes to D0. A GPU that does not come back fails the open (NV_ERR_GPU_IS_LOST).
+- detach powers the GPU on first, since RM teardown reads BAR0. quiesce, DDI_SUSPEND and DDI_RESUME skip config
+  access while it is off, and DDI_RESUME evaluates _OFF again in case the firmware powered the slot back up.
+- kstat nvidia:<inst>:rtd3 {off, offs, ons}.
+diff -ruN ki-base/Makefile ki-work/Makefile
+--- a/kernel-illumos/Makefile
++++ b/kernel-illumos/Makefile
+@@ -95,6 +95,7 @@
+     nvidia/nvidia_os_sync.c \
+     nvidia/nvidia_pci.c \
+     nvidia/nvidia_pm.c \
++    nvidia/nvidia_rtd3.c \
+     nvidia/nvidia_registry.c \
+     nvidia/nvidia_umem.c
+ 
+diff -ruN ki-base/nvidia/nvidia_ddi.c ki-work/nvidia/nvidia_ddi.c
+--- a/kernel-illumos/nvidia/nvidia_ddi.c
++++ b/kernel-illumos/nvidia/nvidia_ddi.c
+@@ -439,7 +439,7 @@
+ 
+     nv->primary_vga = nv_pci_is_primary_vga(nvis);
+ 
+-    rm_init_dynamic_power_management(sp, nv, NV_FALSE);
++    rm_init_dynamic_power_management(sp, nv, nv_rtd3_attach(nvis));
+ 
+     rm_get_gpu_uuid_raw(sp, nv);
+ 
+@@ -524,6 +524,7 @@
+     rw_exit(&nv_illumos_devices_lock);
+ fail_pm:
+     rm_cleanup_dynamic_power_management(sp, nv);
++    nv_rtd3_detach(nvis);
+     list_destroy(&nvis->open_files);
+ fail_private:
+     rm_free_private_state(sp, nv);
+@@ -577,6 +578,9 @@
+     nv_minor_bitmap &= ~(1U << nvis->minor_num);
+     rw_exit(&nv_illumos_devices_lock);
+ 
++    /* teardown reads BAR0: power the GPU back on if RTD3 cut it */
++    nv_rtd3_detach(nvis);
++
+     rm_notify_gpu_removal(sp, nv);
+     rm_check_for_gpu_surprise_removal(sp, nv);
+ 
+@@ -703,6 +707,9 @@
+     nvis = ddi_get_driver_private(dip);
+     if (nvis == NULL)
+         return (DDI_SUCCESS);
++    /* powered off by RTD3: it masters nothing, and config reads would fault */
++    if (nv_rtd3_is_off(nvis))
++        return (DDI_SUCCESS);
+ 
+     cmd = pci_config_get16(nvis->pci_cfg, PCI_CONF_COMM);
+     pci_config_put16(nvis->pci_cfg, PCI_CONF_COMM,
+@@ -796,6 +803,7 @@
+     nv_i2c_interface_init();
+     nv_intr_init();
+     nv_pm_init();
++    nv_rtd3_init();
+ 
+     if (nv_uvm_init() != 0)
+     {
+@@ -819,6 +827,7 @@
+ fail_uvm:
+     nv_uvm_exit();
+ fail:
++    nv_rtd3_fini();
+     nv_pm_fini();
+     nv_intr_fini();
+     nv_i2c_interface_fini();
+@@ -846,6 +855,7 @@
+ 
+     nv_clone_fini();
+     nv_uvm_exit();
++    nv_rtd3_fini();
+     nv_pm_fini();
+     nv_intr_fini();
+     nv_i2c_interface_fini();
+diff -ruN ki-base/nvidia/nvidia_misc.c ki-work/nvidia/nvidia_misc.c
+--- a/kernel-illumos/nvidia/nvidia_misc.c
++++ b/kernel-illumos/nvidia/nvidia_misc.c
+@@ -208,24 +208,28 @@
+ }
+ 
+ /*
+- * Runtime D3 power management (RTD3/GC6).  illumos has no runtime power
+- * management for PCI devices driven by ACPI power resources, so the dynamic
+- * power paths report unavailable exactly as Linux does without
+- * CONFIG_PM_RUNTIME.
++ * Runtime D3 power management.  illumos has no runtime PM for PCI devices
++ * driven by ACPI power resources, so nvidia_rtd3.c does it itself, for the
++ * coarse mode only (NVreg_DynamicPowerManagement=1: off while no client has
++ * the GPU open). Otherwise the dynamic power paths report unavailable, as
++ * Linux does without CONFIG_PM_RUNTIME. The fine mode (GC6/GCOFF with the FB
++ * kept) needs runtime suspend/resume callbacks and the GC6 _DSM: not done.
+  */
+ NvBool NV_API_CALL nv_dynamic_power_available(nv_state_t *nv)
+ {
+-    return NV_FALSE;
++    if (nv == NULL || (nv->flags & NV_FLAG_CONTROL))
++        return NV_FALSE;
++    return nv_rtd3_available(NV_GET_NVIS(nv));
+ }
+ 
+ NV_STATUS NV_API_CALL nv_indicate_idle(nv_state_t *nv)
+ {
+-    return NV_ERR_NOT_SUPPORTED;
++    return nv_rtd3_idle(NV_GET_NVIS(nv));
+ }
+ 
+ NV_STATUS NV_API_CALL nv_indicate_not_idle(nv_state_t *nv)
+ {
+-    return NV_ERR_NOT_SUPPORTED;
++    return nv_rtd3_not_idle(NV_GET_NVIS(nv));
+ }
+ 
+ void NV_API_CALL nv_idle_holdoff(nv_state_t *nv)
+diff -ruN ki-base/nvidia/nvidia_pm.c ki-work/nvidia/nvidia_pm.c
+--- a/kernel-illumos/nvidia/nvidia_pm.c
++++ b/kernel-illumos/nvidia/nvidia_pm.c
+@@ -265,7 +265,9 @@
+ 
+     if (status == NV_OK)
+     {
+-        (void) pci_save_config_regs(nvis->dip);
++        /* RTD3 off: its own saved copy stands; reading now gives all 1s */
++        if (!nv_rtd3_is_off(nvis))
++            (void) pci_save_config_regs(nvis->dip);
+         return (DDI_SUCCESS);
+     }
+ 
+@@ -280,7 +282,10 @@
+     nv_state_t *nv = NV_STATE_PTR(nvis);
+     NV_STATUS status = NV_OK;
+ 
+-    (void) pci_restore_config_regs(nvis->dip);
++    if (!nv_rtd3_is_off(nvis))
++        (void) pci_restore_config_regs(nvis->dip);
++    else
++        nv_rtd3_resume(nvis);
+ 
+     sema_p(&nvis->ldata_lock);
+ 
+diff -ruN ki-base/nvidia/nvidia_registry.c ki-work/nvidia/nvidia_registry.c
+--- a/kernel-illumos/nvidia/nvidia_registry.c
++++ b/kernel-illumos/nvidia/nvidia_registry.c
+@@ -550,3 +550,10 @@
+ {
+     return NVreg_EnableMSI;
+ }
++
++/* nvidia_rtd3.c: only an explicit 1 (COARSE) turns runtime D3cold on */
++NvU32
++nv_rtd3_regkey(void)
++{
++    return NVreg_DynamicPowerManagement;
++}
+diff -ruN ki-base/nvidia/nvidia_rtd3.c ki-work/nvidia/nvidia_rtd3.c
+--- a/kernel-illumos/nvidia/nvidia_rtd3.c
++++ b/kernel-illumos/nvidia/nvidia_rtd3.c
+@@ -0,0 +1,644 @@
++/*
++ * SPDX-FileCopyrightText: Copyright (c) 2026 solnix contributors
++ * SPDX-License-Identifier: MIT
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a
++ * copy of this software and associated documentation files (the "Software"),
++ * to deal in the Software without restriction, including without limitation
++ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
++ * and/or sell copies of the Software, and to permit persons to whom the
++ * Software is furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included in
++ * all copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
++ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
++ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
++ * DEALINGS IN THE SOFTWARE.
++ */
++
++/*
++ * Runtime D3cold (RTD3), coarse-grained: the GPU is powered off while no
++ * client has it open, and back on at the next open.
++ *
++ * RM decides when (arch/nvalloc/unix/src/dynamic-power.c). With
++ * NVreg_DynamicPowerManagement=1 (COARSE) its refcount drops to zero after
++ * attach (rm_enable_dynamic_power_management) and after the last close
++ * (nv_stop_device, once RM has shut the adapter down), and it calls
++ * nv_indicate_idle(); the first open (nv_start_device, before
++ * rm_init_adapter) calls nv_indicate_not_idle() and needs the GPU powered
++ * when it returns. On Linux those two calls drive the PCI core's runtime PM
++ * (pm_runtime_put/get): PCI D3hot, then the root port's ACPI _PR3 power
++ * resource off. This file is that executor for illumos.
++ *
++ * OFF (a taskq, after RTD3_HOLDOFF_S, so open/close storms do not cycle the
++ * rail): every other function of the GPU (its HDMI audio) is offlined, so no
++ * driver touches it while it is off; the GPU's config space is saved; every
++ * function goes to D3hot; the _PR3 resource's _OFF runs. On the X1 Extreme
++ * Gen 5 that is SSDT14 PEG1.PXP._OFF -> POFF: link to L2/L3, CLKREQ off,
++ * reset asserted, power GPIO off (the same sequence tzmon runs at boot,
++ * scripts/patches/0005).
++ *
++ * ON (synchronous, in the open): _ON (PON: power GPIO on, reset released,
++ * link trained), wait for the GPU to answer config reads, restore its config
++ * space, the functions to D0, the audio functions back online.
++ *
++ * Only an explicit NVreg_DynamicPowerManagement=1 turns this on: the default
++ * (3) and 2 (FINE, GC6/GCOFF with the FB kept, which needs the NVIDIA _DSM
++ * GC6 handshake) leave nv_dynamic_power_available() false, as before, so
++ * nothing changes unless a system opts in.
++ *
++ * Nothing here touches the GPU while it is off: while off, ldata_lock-held
++ * callers are blocked in nv_indicate_not_idle(), and the state lock below
++ * orders OFF and ON. The thermal guard reads dgputemp:0:ec:pr3_sta (the same
++ * _STA) to tell a GPU that is off from a sensor that failed.
++ */
++
++#include "nv-illumos.h"
++#include "nv-reg.h"
++#include <sys/acpi/acpi.h>
++#include <sys/acpica.h>
++#include <sys/pci_cap.h>
++#include <sys/disp.h>
++#include <sys/pcie.h>
++
++/* nvidia_registry.c */
++extern NvU32 nv_rtd3_regkey(void);
++
++#define RTD3_HOLDOFF_S      10      /* idle this long before the rail goes off */
++#define RTD3_MAXFN          8
++#define RTD3_LINK_WAIT_MS   5000    /* after _ON, until the GPU answers config */
++#define RTD3_VENDOR_NVIDIA  0x10de
++
++typedef enum { RTD3_ON, RTD3_OFF_PENDING, RTD3_OFF } rtd3_state_t;
++
++typedef struct nv_rtd3_s {
++    nv_illumos_state_t *nvis;
++    ACPI_HANDLE         pr;             /* the parent's _PR3 power resource */
++    kmutex_t            lock;
++    kcondvar_t          cv;
++    volatile rtd3_state_t state;
++    NvBool              busy;           /* OFF or ON running; only with ldata_lock held */
++    NvBool              queued;         /* the off task is queued or running */
++    uint64_t            gen;            /* bumped by every not-idle */
++    taskq_t            *tq;
++    uint32_t            offs, ons;      /* counters, for the kstat */
++    kstat_t            *ks;
++    ddi_acc_handle_t    pcfg;           /* the root port's config space */
++    uint16_t            pcap;           /* its PCIe capability, 0 = none */
++    int                 nsib;
++} nv_rtd3_t;
++
++/* One GPU per machine on the hardware this targets; keyed by nvis. */
++static nv_rtd3_t *nv_rtd3_list[4];
++static kmutex_t nv_rtd3_list_lock;
++
++static nv_rtd3_t *
++rtd3_find(nv_illumos_state_t *nvis)
++{
++    int i;
++
++    for (i = 0; i < 4; i++)
++        if (nv_rtd3_list[i] != NULL && nv_rtd3_list[i]->nvis == nvis)
++            return (nv_rtd3_list[i]);
++    return (NULL);
++}
++
++static nv_rtd3_t *
++rtd3_lookup(nv_illumos_state_t *nvis)
++{
++    nv_rtd3_t *r;
++
++    mutex_enter(&nv_rtd3_list_lock);
++    r = rtd3_find(nvis);
++    mutex_exit(&nv_rtd3_list_lock);
++    return (r);
++}
++
++static int
++rtd3_sta(nv_rtd3_t *r)
++{
++    int v = -1;
++
++    if (acpica_eval_int(r->pr, "_STA", &v) != AE_OK)
++        return (-1);
++    return (v);
++}
++
++static int
++rtd3_pmcsr(ddi_acc_handle_t h, uint16_t state)
++{
++    uint16_t cap, pmcsr;
++
++    if (PCI_CAP_LOCATE(h, PCI_CAP_ID_PM, &cap) != DDI_SUCCESS)
++        return (-1);
++    pmcsr = pci_config_get16(h, cap + PCI_PMCSR);
++    if (state != 0xffff)
++    {
++        pmcsr = (pmcsr & ~PCI_PMCSR_STATE_MASK) | state;
++        pci_config_put16(h, cap + PCI_PMCSR, pmcsr);
++        /* PCIe: 10 ms D0 <-> D3hot before the next access */
++        delay(drv_usectohz(10000));
++        pmcsr = pci_config_get16(h, cap + PCI_PMCSR);
++    }
++    return (pmcsr & PCI_PMCSR_STATE_MASK);
++}
++
++/*
++ * The GPU's other functions (HDMI audio at .1, audiohd): the siblings with
++ * the GPU's bus and device number lose power with it, so they are offlined
++ * here, at the GPU's attach, before any of them attaches (BE 34: audiohd0
++ * attached to 01:00.1 after nvidia0). An offline node is never attached
++ * again by devfsadm or a later bus_config; tzmon offlines the same functions
++ * at boot (scripts/patches/0005). The framework holds the parent busy on
++ * this thread during attach (i_ddi_attachchild), so ndi_devi_offline()'s
++ * enter nests. If one is attached and will not detach, the ones done are put
++ * back and RTD3 stays off: an attached driver must never touch a powered-off
++ * device.
++ * shortcut: the siblings stay offline until the next boot (HDMI audio from
++ * the dGPU has no use before the dGPU drives a display); online them in the
++ * open path when it does.
++ */
++static NvBool
++rtd3_offline_siblings(nv_rtd3_t *r)
++{
++    dev_info_t *pdip = ddi_get_parent(r->nvis->dip), *c;
++    dev_info_t *list[RTD3_MAXFN];
++    int n = 0, i, b, d, f;
++    NvU8 gb, gd, gf;
++
++    if (nv_pci_dip_bdf(r->nvis->dip, &gb, &gd, &gf) != DDI_SUCCESS)
++        return (NV_FALSE);
++    ndi_devi_enter(pdip);
++    for (c = ddi_get_child(pdip); c != NULL; c = ddi_get_next_sibling(c))
++    {
++        if (c == r->nvis->dip || acpica_get_bdf(c, &b, &d, &f) < 0 ||
++            b != gb || d != gd)
++            continue;
++        if (n == RTD3_MAXFN)
++        {
++            ndi_devi_exit(pdip);
++            return (NV_FALSE);
++        }
++        list[n++] = c;
++    }
++    for (i = 0; i < n; i++)
++    {
++        if (ndi_devi_offline(list[i], 0) != NDI_SUCCESS)
++        {
++            dev_err(r->nvis->dip, CE_NOTE, "!rtd3: %s%d will not go offline",
++                ddi_driver_name(list[i]), ddi_get_instance(list[i]));
++            while (--i >= 0)
++                (void) ndi_devi_online(list[i], 0);
++            ndi_devi_exit(pdip);
++            return (NV_FALSE);
++        }
++    }
++    ndi_devi_exit(pdip);
++    r->nsib = n;
++    return (NV_TRUE);
++}
++
++/* The off sequence. ldata_lock held, busy set; no RM state, siblings offline. */
++static NvBool
++rtd3_power_off(nv_rtd3_t *r)
++{
++    nv_illumos_state_t *nvis = r->nvis;
++    int d3, sta0, sta1;
++
++    if (pci_save_config_regs(nvis->dip) != DDI_SUCCESS)
++    {
++        dev_err(nvis->dip, CE_WARN, "rtd3: cannot save config space; the GPU "
++            "stays on");
++        return (NV_FALSE);
++    }
++    d3 = rtd3_pmcsr(nvis->pci_cfg, PCI_PMCSR_D3HOT);
++    sta0 = rtd3_sta(r);
++    /* nothing touches the GPU from here until _ON */
++    (void) AcpiEvaluateObject(r->pr, "_OFF", NULL, NULL);
++    sta1 = rtd3_sta(r);
++    dev_err(nvis->dip, CE_NOTE, "!rtd3: idle %d s: off (PM state %d, _PR3 _STA "
++        "%d -> %d)", RTD3_HOLDOFF_S, d3, sta0, sta1);
++    return (NV_TRUE);
++}
++
++/*
++ * One task at a time: waits RTD3_HOLDOFF_S of uninterrupted idle, then takes
++ * ldata_lock without sleeping on it (an open or a detach holds it and turns
++ * the state back to ON) and powers off. It never blocks on anything a detach
++ * holds, so detach's taskq_destroy() returns.
++ */
++static void
++rtd3_off_task(void *arg)
++{
++    nv_rtd3_t *r = arg;
++    nv_illumos_state_t *nvis = r->nvis;
++    uint64_t gen;
++    clock_t deadline;
++    NvBool off;
++
++    mutex_enter(&r->lock);
++    while (r->state == RTD3_OFF_PENDING)
++    {
++        gen = r->gen;
++        deadline = ddi_get_lbolt() + drv_usectohz((clock_t)RTD3_HOLDOFF_S * 1000000);
++        while (r->state == RTD3_OFF_PENDING && r->gen == gen &&
++            cv_timedwait(&r->cv, &r->lock, deadline) != -1)
++            ;
++        if (r->state != RTD3_OFF_PENDING || r->gen != gen)
++            continue;
++        mutex_exit(&r->lock);
++        if (sema_tryp(&nvis->ldata_lock) == 0)
++        {
++            delay(drv_usectohz(100000));
++            mutex_enter(&r->lock);
++            continue;           /* busy: wait out another hold-off */
++        }
++        mutex_enter(&r->lock);
++        if (r->state != RTD3_OFF_PENDING || r->gen != gen ||
++            nvis->usage_count != 0 ||
++            (NV_STATE_PTR(nvis)->flags & NV_FLAG_INITIALIZED))
++        {
++            mutex_exit(&r->lock);
++            sema_v(&nvis->ldata_lock);
++            mutex_enter(&r->lock);
++            continue;
++        }
++        r->busy = NV_TRUE;
++        mutex_exit(&r->lock);
++
++        off = rtd3_power_off(r);
++
++        mutex_enter(&r->lock);
++        r->state = off ? RTD3_OFF : RTD3_ON;
++        if (off)
++            r->offs++;
++        r->busy = NV_FALSE;
++        cv_broadcast(&r->cv);
++        mutex_exit(&r->lock);
++        sema_v(&nvis->ldata_lock);
++        mutex_enter(&r->lock);
++    }
++    r->queued = NV_FALSE;
++    cv_broadcast(&r->cv);
++    mutex_exit(&r->lock);
++}
++
++/*
++ * Wait for the root port's Data Link Layer Link Active (PCIe link status).
++ * Returns the ms it took, or -1. A port that cannot report it gets 1 s.
++ */
++static int
++rtd3_wait_link(nv_rtd3_t *r)
++{
++    uint32_t lcap;
++    int ms;
++
++    if (r->pcap == 0)
++        return (-1);
++    lcap = pci_config_get32(r->pcfg, r->pcap + PCIE_LINKCAP);
++    if (!(lcap & PCIE_LINKCAP_DLL_ACTIVE_REP_CAPABLE))
++    {
++        delay(drv_usectohz(1000000));
++        return (1000);
++    }
++    for (ms = 0; ms <= RTD3_LINK_WAIT_MS; ms += 10)
++    {
++        if (pci_config_get16(r->pcfg, r->pcap + PCIE_LINKSTS) &
++            PCIE_LINKSTS_DLL_LINK_ACTIVE)
++            return (ms);
++        delay(drv_usectohz(10000));
++    }
++    return (-1);
++}
++
++/*
++ * The on sequence. Called with r->lock held and the state RTD3_OFF, by a
++ * thread that holds ldata_lock (so no off can run); drops r->lock while it
++ * evaluates ACPI and waits for the link.
++ */
++static int
++rtd3_power_on_locked(nv_rtd3_t *r)
++{
++    nv_illumos_state_t *nvis = r->nvis;
++    uint16_t ven = 0xffff;
++    int i, sta0, sta1, d0 = -1, link;
++
++    r->busy = NV_TRUE;
++    mutex_exit(&r->lock);
++
++    sta0 = rtd3_sta(r);
++    (void) AcpiEvaluateObject(r->pr, "_ON", NULL, NULL);
++    sta1 = rtd3_sta(r);
++    /*
++     * PON trains the link. As Linux (pcie_wait_for_link): no config request
++     * to the GPU until the root port reports the data link up, then 100 ms.
++     */
++    link = rtd3_wait_link(r);
++    if (link < 0)
++    {
++        mutex_enter(&r->lock);
++        r->busy = NV_FALSE;
++        cv_broadcast(&r->cv);
++        dev_err(nvis->dip, CE_WARN, "rtd3: on: the link did not come up "
++            "within %d ms of _ON (_PR3 _STA %d -> %d)", RTD3_LINK_WAIT_MS,
++            sta0, sta1);
++        return (EIO);
++    }
++    delay(drv_usectohz(100000));
++    for (i = 0; i < RTD3_LINK_WAIT_MS / 10; i++)
++    {
++        ven = pci_config_get16(nvis->pci_cfg, PCI_CONF_VENID);
++        if (ven == RTD3_VENDOR_NVIDIA)
++            break;
++        delay(drv_usectohz(10000));
++    }
++    if (ven == RTD3_VENDOR_NVIDIA)
++    {
++        (void) pci_restore_config_regs(nvis->dip);
++        d0 = rtd3_pmcsr(nvis->pci_cfg, PCI_PMCSR_D0);
++    }
++
++    mutex_enter(&r->lock);
++    r->busy = NV_FALSE;
++    cv_broadcast(&r->cv);
++    if (ven != RTD3_VENDOR_NVIDIA)
++    {
++        /* off as far as anyone can tell: the open fails, the next one retries */
++        dev_err(nvis->dip, CE_WARN, "rtd3: on: no config response %d ms after "
++            "_ON (_PR3 _STA %d -> %d, vendor 0x%x)", RTD3_LINK_WAIT_MS, sta0,
++            sta1, ven);
++        return (EIO);
++    }
++    r->state = RTD3_ON;
++    r->ons++;
++    dev_err(nvis->dip, CE_NOTE, "!rtd3: on (_PR3 _STA %d -> %d, link up after "
++        "%d ms, config after +%d ms, PM state %d)", sta0, sta1, link, 100 + i * 10,
++        d0);
++    return (0);
++}
++
++static int
++rtd3_ks_update(kstat_t *ksp, int rw)
++{
++    nv_rtd3_t *r = ksp->ks_private;
++    kstat_named_t *kn = ksp->ks_data;
++
++    if (rw == KSTAT_WRITE)
++        return (EACCES);
++    kn[0].value.ui32 = (r->state == RTD3_OFF);
++    kn[1].value.ui32 = r->offs;
++    kn[2].value.ui32 = r->ons;
++    return (0);
++}
++
++/*
++ * Attach: decide whether this GPU does RTD3. Returns NV_TRUE when the parent
++ * (the root port) has a _PR3 naming a PowerResource and the regkey asks for
++ * COARSE; that value is what rm_init_dynamic_power_management() gets as
++ * bPr3AcpiMethodPresent.
++ */
++NvBool
++nv_rtd3_attach(nv_illumos_state_t *nvis)
++{
++    ACPI_HANDLE port;
++    ACPI_BUFFER rb;
++    ACPI_OBJECT *pkg;
++    ACPI_OBJECT_TYPE t;
++    ACPI_HANDLE pr = NULL;
++    nv_rtd3_t *r;
++    kstat_named_t *kn;
++    char tqname[32];
++    int i;
++
++    if (nv_rtd3_regkey() != NV_REG_DYNAMIC_POWER_MANAGEMENT_COARSE)
++        return (NV_FALSE);
++    if (acpica_get_handle(ddi_get_parent(nvis->dip), &port) != AE_OK)
++        return (NV_FALSE);
++
++    rb.Length = ACPI_ALLOCATE_BUFFER;
++    rb.Pointer = NULL;
++    if (AcpiEvaluateObjectTyped(port, "_PR3", NULL, &rb,
++        ACPI_TYPE_PACKAGE) == AE_OK)
++    {
++        pkg = rb.Pointer;
++        if (pkg->Package.Count >= 1 &&
++            pkg->Package.Elements[0].Type == ACPI_TYPE_LOCAL_REFERENCE &&
++            AcpiGetType(pkg->Package.Elements[0].Reference.Handle, &t) ==
++            AE_OK && t == ACPI_TYPE_POWER)
++            pr = pkg->Package.Elements[0].Reference.Handle;
++        AcpiOsFree(rb.Pointer);
++    }
++    if (pr == NULL)
++    {
++        dev_err(nvis->dip, CE_NOTE, "!rtd3: the root port has no _PR3 "
++            "power resource; the GPU stays powered");
++        return (NV_FALSE);
++    }
++
++    r = kmem_zalloc(sizeof (*r), KM_SLEEP);
++    r->nvis = nvis;
++    r->pr = pr;
++    if (pci_config_setup(ddi_get_parent(nvis->dip), &r->pcfg) != DDI_SUCCESS ||
++        PCI_CAP_LOCATE(r->pcfg, PCI_CAP_ID_PCI_E, &r->pcap) != DDI_SUCCESS)
++    {
++        if (r->pcfg != NULL)
++            pci_config_teardown(&r->pcfg);
++        kmem_free(r, sizeof (*r));
++        dev_err(nvis->dip, CE_NOTE, "!rtd3: the root port has no PCIe "
++            "capability; the GPU stays powered");
++        return (NV_FALSE);
++    }
++    if (!rtd3_offline_siblings(r))
++    {
++        pci_config_teardown(&r->pcfg);
++        kmem_free(r, sizeof (*r));
++        dev_err(nvis->dip, CE_NOTE, "!rtd3: a function of the GPU will not "
++            "go offline; the GPU stays powered");
++        return (NV_FALSE);
++    }
++    r->state = RTD3_ON;
++    mutex_init(&r->lock, NULL, MUTEX_DRIVER, NULL);
++    cv_init(&r->cv, NULL, CV_DRIVER, NULL);
++    (void) snprintf(tqname, sizeof (tqname), "nvidia_rtd3_%d", nvis->instance);
++    r->tq = taskq_create(tqname, 1, minclsyspri, 2, 2, TASKQ_PREPOPULATE);
++
++    r->ks = kstat_create("nvidia", nvis->instance, "rtd3", "misc",
++        KSTAT_TYPE_NAMED, 3, 0);
++    if (r->ks != NULL)
++    {
++        kn = r->ks->ks_data;
++        kstat_named_init(&kn[0], "off", KSTAT_DATA_UINT32);
++        kstat_named_init(&kn[1], "offs", KSTAT_DATA_UINT32);
++        kstat_named_init(&kn[2], "ons", KSTAT_DATA_UINT32);
++        r->ks->ks_update = rtd3_ks_update;
++        r->ks->ks_private = r;
++        kstat_install(r->ks);
++    }
++
++    mutex_enter(&nv_rtd3_list_lock);
++    for (i = 0; i < 4 && nv_rtd3_list[i] != NULL; i++)
++        ;
++    if (i == 4)
++    {
++        mutex_exit(&nv_rtd3_list_lock);
++        pci_config_teardown(&r->pcfg);
++        if (r->ks != NULL)
++            kstat_delete(r->ks);
++        taskq_destroy(r->tq);
++        cv_destroy(&r->cv);
++        mutex_destroy(&r->lock);
++        kmem_free(r, sizeof (*r));
++        return (NV_FALSE);
++    }
++    nv_rtd3_list[i] = r;
++    mutex_exit(&nv_rtd3_list_lock);
++
++    dev_err(nvis->dip, CE_CONT, "?rtd3: coarse: off after %d s with no "
++        "client (_PR3 power resource, _STA %d; %d other function(s) "
++        "offline)\n", RTD3_HOLDOFF_S, rtd3_sta(r), r->nsib);
++    return (NV_TRUE);
++}
++
++/*
++ * Detach (and attach's failure path): power the GPU on, since detach's RM
++ * teardown reads BAR0, then forget it. ldata_lock is held (or attach has not
++ * published the GPU), so no off is running; a queued off task sees RTD3_ON
++ * and returns, and taskq_destroy waits for it.
++ */
++void
++nv_rtd3_detach(nv_illumos_state_t *nvis)
++{
++    nv_rtd3_t *r;
++    int i;
++
++    mutex_enter(&nv_rtd3_list_lock);
++    r = rtd3_find(nvis);
++    for (i = 0; i < 4; i++)
++        if (r != NULL && nv_rtd3_list[i] == r)
++            nv_rtd3_list[i] = NULL;
++    mutex_exit(&nv_rtd3_list_lock);
++    if (r == NULL)
++        return;
++
++    mutex_enter(&r->lock);
++    r->gen++;
++    if (r->state == RTD3_OFF)
++        (void) rtd3_power_on_locked(r);
++    r->state = RTD3_ON;
++    cv_broadcast(&r->cv);
++    mutex_exit(&r->lock);
++
++    taskq_destroy(r->tq);   /* the siblings stay offline until the next boot */
++    pci_config_teardown(&r->pcfg);
++    if (r->ks != NULL)
++        kstat_delete(r->ks);
++    cv_destroy(&r->cv);
++    mutex_destroy(&r->lock);
++    kmem_free(r, sizeof (*r));
++}
++
++NvBool
++nv_rtd3_available(nv_illumos_state_t *nvis)
++{
++    return (rtd3_lookup(nvis) != NULL);
++}
++
++/* No locks, no blocking: for quiesce (fast reboot) and system suspend. */
++NvBool
++nv_rtd3_is_off(nv_illumos_state_t *nvis)
++{
++    int i;
++
++    for (i = 0; i < 4; i++)
++        if (nv_rtd3_list[i] != NULL && nv_rtd3_list[i]->nvis == nvis)
++            return (nv_rtd3_list[i]->state == RTD3_OFF);
++    return (NV_FALSE);
++}
++
++/*
++ * DDI_RESUME (S3) while RTD3 has the GPU off: the firmware may have powered
++ * the slot on again. _OFF again (POFF returns at once when it is off).
++ */
++void
++nv_rtd3_resume(nv_illumos_state_t *nvis)
++{
++    nv_rtd3_t *r = rtd3_lookup(nvis);
++
++    if (r == NULL)
++        return;
++    mutex_enter(&r->lock);
++    if (r->state == RTD3_OFF)
++        (void) AcpiEvaluateObject(r->pr, "_OFF", NULL, NULL);
++    mutex_exit(&r->lock);
++}
++
++/* RM: the refcount reached zero. Never blocks (RM holds its power mutex). */
++NV_STATUS
++nv_rtd3_idle(nv_illumos_state_t *nvis)
++{
++    nv_rtd3_t *r = rtd3_lookup(nvis);
++
++    if (r == NULL)
++        return (NV_ERR_NOT_SUPPORTED);
++
++    mutex_enter(&r->lock);
++    if (r->state == RTD3_ON)
++    {
++        r->state = RTD3_OFF_PENDING;
++        if (r->queued)
++            cv_broadcast(&r->cv);   /* the running task starts a new hold-off */
++        else if (taskq_dispatch(r->tq, rtd3_off_task, r, TQ_NOSLEEP) !=
++            TASKQID_INVALID)
++            r->queued = NV_TRUE;
++        else
++        {
++            r->state = RTD3_ON;     /* no task: stays on until the next idle */
++            dev_err(nvis->dip, CE_NOTE, "!rtd3: idle: no task; the GPU "
++                "stays on");
++        }
++    }
++    mutex_exit(&r->lock);
++    return (NV_OK);
++}
++
++/* RM: the refcount left zero. Returns with the GPU powered, or an error. */
++NV_STATUS
++nv_rtd3_not_idle(nv_illumos_state_t *nvis)
++{
++    nv_rtd3_t *r = rtd3_lookup(nvis);
++    int rc = 0;
++
++    if (r == NULL)
++        return (NV_ERR_NOT_SUPPORTED);
++
++    mutex_enter(&r->lock);
++    r->gen++;
++    while (r->busy)
++        cv_wait(&r->cv, &r->lock);
++    if (r->state == RTD3_OFF_PENDING)
++    {
++        r->state = RTD3_ON;         /* the waiting task sees it and returns */
++        cv_broadcast(&r->cv);
++    }
++    else if (r->state == RTD3_OFF)
++        rc = rtd3_power_on_locked(r);
++    mutex_exit(&r->lock);
++    return (rc == 0 ? NV_OK : NV_ERR_GPU_IS_LOST);
++}
++
++void
++nv_rtd3_init(void)
++{
++    mutex_init(&nv_rtd3_list_lock, NULL, MUTEX_DRIVER, NULL);
++}
++
++void
++nv_rtd3_fini(void)
++{
++    mutex_destroy(&nv_rtd3_list_lock);
++}
+diff -ruN ki-base/nvidia/nv-illumos.h ki-work/nvidia/nv-illumos.h
+--- a/kernel-illumos/nvidia/nv-illumos.h
++++ b/kernel-illumos/nvidia/nv-illumos.h
+@@ -392,6 +392,17 @@
+ void      nv_pm_fini(void);
+ int       nv_suspend_gpu(nv_illumos_state_t *);
+ int       nv_resume_gpu(nv_illumos_state_t *);
++
++/* nvidia_rtd3.c: coarse runtime D3cold (NVreg_DynamicPowerManagement=1) */
++void      nv_rtd3_init(void);
++void      nv_rtd3_fini(void);
++NvBool    nv_rtd3_attach(nv_illumos_state_t *);
++void      nv_rtd3_detach(nv_illumos_state_t *);
++NvBool    nv_rtd3_available(nv_illumos_state_t *);
++NV_STATUS nv_rtd3_idle(nv_illumos_state_t *);
++NV_STATUS nv_rtd3_not_idle(nv_illumos_state_t *);
++NvBool    nv_rtd3_is_off(nv_illumos_state_t *);
++void      nv_rtd3_resume(nv_illumos_state_t *);
+ void      nv_intr_init(void);
+ void      nv_intr_fini(void);
+ void      nv_drain_isr_top_halves(void);

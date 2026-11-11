@@ -111,6 +111,22 @@ in
         nvidia.acceptFirmwareLicense.
       '';
     };
+    nvidia.rtd3 = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Runtime D3cold, coarse (NVIDIA's NVreg_DynamicPowerManagement=1): the
+        nvidia module powers the dGPU off (D3hot, then the root port's ACPI
+        _PR3 power resource off) 10 s after the last client closes it, and on
+        again at the next open. Without it an attached GPU idles in D0. The
+        thermal guard accepts the missing reading of a GPU that is off only
+        when both the power resource and the GPU's power GPIO say off. The
+        GPU's HDMI audio function is offlined before the first power-off.
+        site/solnix-nvidia probes the GPU once and lets it go instead of
+        holding it open. Needs nvidia.attachAtBoot. Measured only on the X1E's
+        RTX 3080 Ti; keep it to a boot-once BE until it is.
+      '';
+    };
     nvidia.maxTempC = lib.mkOption {
       type = lib.types.int;
       default = 80;
@@ -128,6 +144,12 @@ in
       hardware.graphics.nvidia.acceptFirmwareLicense lays NVIDIA's GSP firmware
       next to the nvidia modules, which only hardware.graphics.onMedia or
       hardware.graphics.nvidia.attachAtBoot ships.
+    '';
+  } {
+    assertion = !cfg.nvidia.rtd3 || cfg.nvidia.attachAtBoot;
+    message = ''
+      hardware.graphics.nvidia.rtd3 is runtime power management of the bound
+      nvidia driver: it needs hardware.graphics.nvidia.attachAtBoot.
     '';
   } {
     assertion = !cfg.nvidia.attachAtBoot || cfg.nvidia.acceptFirmwareLicense;

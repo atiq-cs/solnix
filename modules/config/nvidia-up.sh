@@ -7,7 +7,9 @@
 # without touching the GSP. The probe's first open of /dev/nvidia0 runs RmInitAdapter and boots the GSP,
 # and the probe keeps it open (RM shuts the GPU down at the last close). A failure is logged with the
 # kernel's messages and left to the guard: no reboot here, so the failed state can be read over ssh.
-# env: PROBE (nvidia-probe), LOG, OKFILE (the guard's per-sample file).
+# RTD3=1 (hardware.graphics.nvidia.rtd3): the probe opens the GPU once (RmInitAdapter, GSP) and closes it, so the
+# nvidia module powers it off 10 s later (runtime D3cold); this then logs the power state every 60 s.
+# env: PROBE (nvidia-probe), LOG, OKFILE (the guard's per-sample file), RTD3.
 set -u
 PATH=/usr/sbin:/usr/bin:/sbin
 : "${OKFILE:=/var/run/solnix-nvidia-guard.ok}"
@@ -21,6 +23,15 @@ rm -f "$OKFILE"; sleep 10
 devfsadm -i nvidia >> "$LOG" 2>&1 || log "devfsadm -i nvidia rc=$?"
 [ -c /dev/nvidiactl ] || fail "no /dev/nvidiactl (nvidia did not attach)"
 [ -c /dev/nvidia0 ] || fail "no /dev/nvidia0 (the GPU did not attach)"
+if [ "${RTD3:-0}" = 1 ]; then
+  "$PROBE" >> "$LOG" 2>&1 || fail "nvidia-probe failed (RmInitAdapter/GSP? see the probe lines above)"
+  log "probed and released; runtime D3cold: off after 10 s idle"
+  i=0
+  while :; do
+    sleep 60; i=$((i + 60))
+    log "up ${i}s: rtd3 $(kstat -p nvidia:0:rtd3 2>/dev/null | awk '{sub(/.*:/, "", $1); printf "%s=%s ", $1, $2}')EC GPUT $(kstat -p dgputemp:0:ec:gput_C 2>/dev/null | awk '{print $2}') C, psta $(kstat -p dgputemp:0:ec:psta 2>/dev/null | awk '{print $2}'), kernel heap $(kheap)"
+  done
+fi
 "$PROBE" -w 0 >> "$LOG" 2>&1 &
 pid=$!
 i=0

@@ -8,6 +8,10 @@
  *                                     powered, 0 = cut; -1 when unreadable
  *   kstat -p dgputemp:0:ec:tmp0_C     EC field TMP0 (C, the sensor THM0._TMP
  *                                     reads); -1 when unreadable
+ *   kstat -p dgputemp:0:ec:psta       \_SB.PC00.PEG1.PSTA(): 1 = the GPU's power
+ *                                     GPIO on and its reset released, 0 = not;
+ *                                     -1 when unreadable. pr3_sta is a Name the
+ *                                     AML sets; PSTA reads the GPIOs (SSDT14)
  *   kstat -p dgputemp:0:ec:reads      ks_update calls that evaluated the EC
  *
  * GPUT is the byte after TMP0 in the EC's ECOR region (BIOS N3JET48W,
@@ -27,9 +31,10 @@
 
 static char *dgt_ec[] = { "\\_SB.PC00.LPCB.EC", "\\_SB.PCI0.LPCB.EC", NULL };
 static char *dgt_pr[] = { "\\_SB.PC00.PEG1.PXP", "\\_SB.PCI0.PEG1.PXP", NULL };
+static char *dgt_port[] = { "\\_SB.PC00.PEG1", "\\_SB.PCI0.PEG1", NULL };
 static kstat_t *dgt_ks;
 static kmutex_t dgt_lock;
-static ACPI_HANDLE dgt_ech, dgt_prh;
+static ACPI_HANDLE dgt_ech, dgt_prh, dgt_porth;
 
 static ACPI_HANDLE
 dgt_find(char **names)
@@ -66,6 +71,10 @@ dgt_update(kstat_t *ksp, int rw)
 		v = -1;
 	kn[2].value.i32 = v;
 	kn[3].value.ui64++;
+	v = -1;
+	if (dgt_porth == NULL || acpica_eval_int(dgt_porth, "PSTA", &v) != AE_OK)
+		v = -1;
+	kn[4].value.i32 = v;
 	return (0);
 }
 
@@ -80,10 +89,11 @@ _init(void)
 
 	dgt_ech = dgt_find(dgt_ec);
 	dgt_prh = dgt_find(dgt_pr);
+	dgt_porth = dgt_find(dgt_port);
 	if (dgt_ech == NULL)
 		return (ENXIO);	/* not a ThinkPad EC this knows */
 	mutex_init(&dgt_lock, NULL, MUTEX_DRIVER, NULL);
-	dgt_ks = kstat_create("dgputemp", 0, "ec", "misc", KSTAT_TYPE_NAMED, 4, 0);
+	dgt_ks = kstat_create("dgputemp", 0, "ec", "misc", KSTAT_TYPE_NAMED, 5, 0);
 	if (dgt_ks == NULL) {
 		mutex_destroy(&dgt_lock);
 		return (ENOMEM);
@@ -93,6 +103,7 @@ _init(void)
 	kstat_named_init(&kn[1], "pr3_sta", KSTAT_DATA_INT32);
 	kstat_named_init(&kn[2], "tmp0_C", KSTAT_DATA_INT32);
 	kstat_named_init(&kn[3], "reads", KSTAT_DATA_UINT64);
+	kstat_named_init(&kn[4], "psta", KSTAT_DATA_INT32);
 	dgt_ks->ks_update = dgt_update;
 	dgt_ks->ks_lock = &dgt_lock;	/* one EC evaluation at a time */
 	kstat_install(dgt_ks);
