@@ -250,16 +250,17 @@ in rec {
   # GNU groff: the man page formatter (man(1) needs it to render pages). nixpkgs keeps the perl scripts in a separate output; here
   # one output with perl as a runtime dep. No X11 (gxditview), no ghostscript/netpbm (no -Thtml image conversion), no uchardet.
   groff = mkSrcPkg {
-    pname = "groff"; version = "1.24.2";
+    pname = "groff"; version = "1.25.0";
     # groff's Makefile sed REPLACES /usr/bin/perl with the store $(PERL) in its scripts: a rewrite away from the host, not a host tool
     hostPathAllow = "^[0-9]+:[[:space:]]+-e \"s[|]/usr/bin/perl[|][$][(]PERL[)][|]\" [\\\\]$";
-    src = gnu "groff" "1.24.2" "gz" "f9c1efd5bebbe37fc6e1063db7473ce8df1e3e0be4ff0f43ce04fce57e9c5dd9";
+    src = gnu "groff" "1.25.0" "gz" "24d103a07eb79e418963bce206c8771b649871f83bda2fd4c2e65529c1c56921";
     deps = [ world perl ]; nativeTools = [ perl ] ++ hostTools;
     build = ''
-      # configure's "existing troff installation" probe runs the troff on PATH, the world's illumos troff: it answered yes on dixi
-      # (fonts in /usr/lib/font) and no on chef2, so dixi's binaries came out g-prefixed (geqn, gchem; NarHash differed, measured).
-      # Pin the answer to no troff (NixOS: none in the sandbox), unprefixed names, by shadowing troff with one that fails.
-      mkdir -p "$W/notroff"; printf '#!/bin/sh\nexit 1\n' > "$W/notroff/troff"; chmod +x "$W/notroff/troff"
+      # configure's troff probe runs the troff on PATH, the world's illumos troff: under 1.24 it answered yes on dixi (fonts in
+      # /usr/lib/font) and no on chef2, so dixi's binaries came out g-prefixed (geqn, gchem; NarHash differed, measured). 1.25's
+      # GROFF_G prefixes whenever a troff on PATH does not answer .g = 1 (a shim that fails now makes the prefix, measured). Shadow
+      # troff with one that answers 1, GNU-compatible: no prefix, as with no troff at all (NixOS: none in the sandbox).
+      mkdir -p "$W/notroff"; printf '#!/bin/sh\necho 1\n' > "$W/notroff/troff"; chmod +x "$W/notroff/troff"
       # Same class: configure looks for the HOST's macro sets in /usr/share/lib/tmac (dixi has the world's an/s/m there, chef2 none)
       # and, when found, installs g-prefixed groff macros plus site-tmac wrappers that .so the host files (NarHash differed again,
       # measured). --with-compatibility-wrappers=no: groff's own macros, plain names (NixOS, which has no system tmac either).
@@ -268,9 +269,13 @@ in rec {
       grep -q '^g = *$' Makefile || { echo "FATAL: groff configured a g prefix" >&2; grep '^g =' Makefile >&2; exit 1; }
       gmake -j16 MAKEINFO=true; gmake install MAKEINFO=true
       ${dropDocs}
-      ${chk ''"$out/bin/groff" --version'' "^GNU groff version 1\\.24\\.2"}
+      # 1.25 makes groff.7 with soelim -I $(abs_top_srcdir) (1.24 shipped it prebuilt): its .lf lines name the build dir. /build, as
+      # mk-src-pkg's -ffile-prefix-map maps $W for the compiler (NixOS's sandbox path)
+      m="$out/share/man/man7/groff.7"; grep -q "^\.lf 1 \"$W/" "$m" || { echo "FATAL: groff.7 .lf anchor" >&2; exit 1; }
+      sed -i "s|^\(\.lf [0-9]* \"\)$W/|\1/build/|" "$m"; ! grep -q "$W" "$m" || { echo "FATAL: groff.7 still names $W" >&2; exit 1; }
+      ${chk ''"$out/bin/groff" --version'' "^GNU groff version 1\\.25\\.0"}
       [ -x "$out/bin/eqn" ] && [ ! -e "$out/bin/geqn" ] || { echo "FATAL: groff binaries are prefixed" >&2; exit 1; }
-      [ -f "$out/share/groff/1.24.2/tmac/an.tmac" ] && [ ! -e "$out/share/groff/1.24.2/tmac/gan.tmac" ] && [ -z "$(ls "$out/lib/groff/site-tmac")" ] \
+      [ -f "$out/share/groff/1.25.0/tmac/an.tmac" ] && [ ! -e "$out/share/groff/1.25.0/tmac/gan.tmac" ] && [ -z "$(ls "$out/lib/groff/site-tmac")" ] \
         || { echo "FATAL: groff macros are prefixed or wrap host macro files" >&2; exit 1; }
       # a real man page render
       ${chk ''printf '.TH T 1\n.SH NAME\nt \\- a test page\n' | "$out/bin/groff" -man -Tutf8'' "a test page"}
