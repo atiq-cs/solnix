@@ -895,7 +895,7 @@ let
           " '# runtime D3cold (coarse); no autodetach: a detach powers the GPU on and leaves it on' 'NVreg_DynamicPowerManagement=1;' 'ddi-no-autodetach=1;'"
           else ""} > "$out/kernel/drv/nvidia.conf"
       grep -q '^solnix-dgpu-off' "$out/kernel/drv/tzmon.conf" && { echo "FATAL: tzmon.conf already sets solnix-dgpu-off" >&2; exit 1; }
-      ${if rtd3 then ": rtd3: tzmon keeps its boot-time dGPU power-off; nvidia attaches cold (nvidia-oss patches/0003)"
+      ${if rtd3 then "# rtd3: tzmon keeps its boot-time dGPU power-off; nvidia attaches cold, nvidia-oss patches/0003"
         else "printf '%s\\n' '# solnix: nvidia drives the dGPU; no boot-time power-off' 'solnix-dgpu-off=0;' >> \"$out/kernel/drv/tzmon.conf\""}
       chmod 0444 "$out/kernel/drv/nvidia.conf" "$out/kernel/drv/tzmon.conf"
       [ -e "$out/kernel/drv/amd64/nvidia" ] || { echo "FATAL: no nvidia module in the base tree" >&2; exit 1; }
