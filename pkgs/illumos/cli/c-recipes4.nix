@@ -4134,4 +4134,39 @@ printf("ok %zu %d %.6s\n", lwc_string_length(a), a == b, lwc_string_data(a)); lw
       ${chk ''"$W/t"'' "^ok 6 1 solnix$"}
     '';
   };
+
+  # mimalloc (MIT): Microsoft's general-purpose allocator; the shared library overrides malloc. cmake, nixpkgs' flags (top-level
+  # install, not secure, no arch tuning). mimalloc-config.cmake derives its dirs by replacing "/lib/cmake", which lib/amd64/cmake
+  # does not contain: named instead, as nixpkgs does for its split outputs. recipes7 held it as needing a port (every program
+  # aborted at its first malloc); holds1 measured the cause: mimalloc assumes user addresses below 2^47, so upstream illumos's
+  # layout (libraries and mmap at 0xFFFFFC7F...) fails its own tests (test-api, test-stress 0/3 SIGSEGV) and solnix's userLimit47
+  # default passes them (3/3 each), unpatched. So the build runs test-api and, like firefox.nix, names a builder without it.
+  mimalloc = mkSrcPkg {
+    pname = "mimalloc"; version = "3.5.3";
+    src = { url = "https://codeload.github.com/microsoft/mimalloc/tar.gz/refs/tags/v3.5.3";
+            sha256 = "3b4a15153a59905995f7070296ed604bb5ccc00cabb8b93446931aff77224d47"; };
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      f=cmake/mimalloc-config.cmake
+      [ "$(grep -cE '^ *string\(REPLACE .* MIMALLOC_(LIBRARY|OBJECT|INCLUDE)_DIR ' $f)" = 4 ] || { echo "FATAL: mimalloc config anchors" >&2; exit 1; }
+      sed -i -e 's|^\( *\)string(REPLACE .* MIMALLOC_LIBRARY_DIR .*|\1set(MIMALLOC_LIBRARY_DIR "'"$out"'/lib/amd64")|' \
+        -e 's|^\( *\)string(REPLACE .* MIMALLOC_OBJECT_DIR .*|\1set(MIMALLOC_OBJECT_DIR "'"$out"'/lib/amd64")|' \
+        -e 's|^\( *\)string(REPLACE .* MIMALLOC_INCLUDE_DIR .*|\1set(MIMALLOC_INCLUDE_DIR "'"$out"'/include")|' $f
+      printf '#include <stdio.h>\n#include <sys/mman.h>\nint main(void){ void *p = mmap(0, 1 << 20, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANON, -1, 0);\nprintf("%%p\\n", p); return (unsigned long)p >= (1UL << 47); }\n' > "$W/va.c"
+      "$CC" "$W/va.c" -o "$W/va"
+      a=$("$W/va") || { echo "FATAL: this build host lacks solnix's userLimit47 default (a fresh mmap at $a is not below 2^47): mimalloc cannot run here. Set solnix.kernel.userLimit47 (/etc/system.d: set _userlimit=0x7fffc0000000) and reboot." >&2; exit 1; }
+      ${cmakeB "-DMI_INSTALL_TOPLEVEL=ON -DMI_SECURE=OFF -DMI_BUILD_SHARED=ON -DMI_BUILD_TESTS=ON -DMI_LIBC_MUSL=OFF -DMI_NO_OPT_ARCH=ON"}
+      # mimalloc's own API test (53 cases), as nixpkgs' doCheck runs it
+      ${chk ''_b/mimalloc-test-api 2>&1 | tail -3'' "^failed   : 0$"}
+      # malloc itself must be mimalloc's (the override), and a program linked with it must not hang at load (jemalloc did: libgcc_s's
+      # .init calls malloc first); the timeout turns a hang into a failure
+      ${tprog ''#include <mimalloc.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+int main(void){ char *p = malloc(100); if (!p) return 1; strcpy(p, "solnix"); int in = mi_is_in_heap_region(p); free(p);
+void *q = mi_malloc(64); if (!q) return 2; mi_free(q); printf("ok %d %d\n", mi_version(), in); return 0; }'' "$out/lib/amd64/libmimalloc.so"}
+      ${chk ''timeout 60 "$W/t"'' "^ok 30503 1$"}
+    '';
+  };
 }
