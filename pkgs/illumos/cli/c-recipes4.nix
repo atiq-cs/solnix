@@ -353,9 +353,9 @@ BDF
 
   # dav1d (BSD-2-Clause): the AV1 decoder (libavif, ffmpeg, gstreamer; AVIF for cosmic-bg). nasm x86-64 asm on, tools off, as nixpkgs.
   dav1d = mkSrcPkg {
-    pname = "dav1d"; version = "1.5.3";
-    src = { url = "https://downloads.videolan.org/pub/videolan/dav1d/1.5.3/dav1d-1.5.3.tar.xz";
-            sha256 = "732010aa5ef461fa93355ed2c6c5fedb48ddc4b74e697eaabe8907eaeb943011"; };
+    pname = "dav1d"; version = "1.5.4";
+    src = { url = "https://downloads.videolan.org/pub/videolan/dav1d/1.5.4/dav1d-1.5.4.tar.xz";
+            sha256 = "686616b7c69eb88d44459391ab25cac13b6647a3b288835c5784e71c1514a5c5"; };
     deps = [ world ]; nativeTools = [ nasm ] ++ mesonTools;
     build = ''
       # -std=c99 hides clock_gettime in illumos' <time.h>; __EXTENSIONS__ shows it (as the graphics recipes build)
@@ -365,7 +365,7 @@ BDF
 #include <stdio.h>
 int main(void){ Dav1dSettings s; Dav1dContext *c; dav1d_default_settings(&s); s.n_threads = 1; if(dav1d_open(&c, &s)) return 1;
 printf("dav1d %s\n", dav1d_version()); dav1d_close(&c); return 0; }'' "-ldav1d"}
-      ${chk ''"$W/t"'' "^dav1d 1\\.5\\.3"}
+      ${chk ''"$W/t"'' "^dav1d 1\\.5\\.4"}
     '';
   };
 
@@ -453,7 +453,7 @@ xcb_disconnect(c); return 0; }'';
     [ libx11 libxfixes ] (noDpy "#include <X11/extensions/Xdamage.h>" "(void)XDamageQueryExtension") "-lXdamage -lXfixes -lX11";
   libxcomposite = xlib "libxcomposite" "0.4.7" "lib/libXcomposite-0.4.7.tar.xz" "8bdf310967f484503fa51714cf97bff0723d9b673e0eecbf92b3f97c060c8ccb"
     [ libx11 libxfixes ] (noDpy "#include <X11/extensions/Xcomposite.h>" "(void)XCompositeQueryExtension") "-lXcomposite -lXfixes -lX11";
-  libxtst = xlib "libxtst" "1.2.5" "lib/libXtst-1.2.5.tar.xz" "b50d4c25b97009a744706c1039c598f4d8e64910c9fde381994e1cae235d9242"
+  libxtst = xlib "libxtst" "1.2.6" "lib/libXtst-1.2.6.tar.xz" "f94f0b37c07d80d877f3eda2c2405cc7e62aa9842f6310354aa349e3d66a4fe5"
     [ libx11 libxext libxi libxfixes ] (noDpy "#include <X11/extensions/XTest.h>" "(void)XTestQueryExtension") "-lXtst -lXi -lXext -lX11";
   # (the check registers a protocol in memory: IceListenForConnections would create the HOST's /tmp/.ICE-unix, outside the build dir)
   libice = xlib "libice" "1.1.2" "lib/libICE-1.1.2.tar.xz" "974e4ed414225eb3c716985df9709f4da8d22a67a2890066bc6dfc89ad298625"
@@ -1873,9 +1873,9 @@ if (nghttp3_qpack_encoder_new(&e, 4096, nghttp3_mem_default())) return 1; nghttp
 
   # lerc (Apache-2.0): Esri's Limited Error Raster Compression (GDAL, libtiff). cmake, shared, as nixpkgs.
   lerc = mkSrcPkg {
-    pname = "lerc"; version = "4.2.0";
-    src = { url = "https://codeload.github.com/esri/lerc/tar.gz/refs/tags/v4.2.0";
-            sha256 = "a1fb593ed1fcb5b38800caf3c4454f872745202e961d00d745e53d81447e17c9"; };
+    pname = "lerc"; version = "4.3.0";
+    src = { url = "https://codeload.github.com/esri/lerc/tar.gz/refs/tags/v4.3.0";
+            sha256 = "28d74992e0bc0f13ecdda1dd9ca3b40b1a87009369b9ec5a599853f6f311fee7"; };
     deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
     build = ''
       ${cmakeB "-DBUILD_SHARED_LIBS=ON"}
@@ -2379,9 +2379,9 @@ printf("ok %s %u %u\n", UVWASI_VERSION_STRING, (unsigned)c, (unsigned)s); uvwasi
   # openapv (BSD-3-Clause): the Advanced Professional Video (APV) codec library and its oapv_app_enc/dec, as nixpkgs (its os-release
   # patch touches only the Linux CPack branch). A short encode and decode of upstream's own 10-bit 4:2:2 test sequence.
   openapv = mkSrcPkg {
-    pname = "openapv"; version = "1.1.2.0";
-    src = { url = "https://codeload.github.com/AcademySoftwareFoundation/openapv/tar.gz/refs/tags/v1.1.2.0";
-            sha256 = "970f65255896c906b22d7c9f9850deeee03fecf001415804848a03b6d1bbe41a"; };
+    pname = "openapv"; version = "1.1.3.0";
+    src = { url = "https://codeload.github.com/AcademySoftwareFoundation/openapv/tar.gz/refs/tags/v1.1.3.0";
+            sha256 = "38f841ce44e80c40b682a5323b4f3ebc6e339b6071965bc1c705a17d46ab2fc8"; };
     deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
     build = ''
       # its apps' clock is gettimeofday on Linux/Cygwin/Apple and #error elsewhere: illumos has it too
@@ -2391,7 +2391,7 @@ printf("ok %s %u %u\n", UVWASI_VERSION_STRING, (unsigned)c, (unsigned)s); uvwasi
       ${tprog ''#include <oapv/oapv.h>
 #include <stdio.h>
 int main(void){ unsigned v = 0; printf("ok %s\n", oapv_version(&v)); return 0; }'' "$out/lib/amd64/liboapv.so"}
-      ${chk ''"$W/t"'' "^ok 1\\.1\\.2\\.0$"}
+      ${chk ''"$W/t"'' "^ok 1\\.1\\.3\\.0$"}
       ${chk ''"$out/bin/oapv_app_enc" -i test/sequence/pattern1_yuv422p10le_320x240_25fps.y4m -w 320 -h 240 -z 25 --max-au 5 -o "$W/t.apv" && "$out/bin/oapv_app_dec" -i "$W/t.apv"'' "Decoded frame count += 5$"}
     '';
   };
@@ -3609,9 +3609,9 @@ int main(void){ struct lrtr_ip_addr a; char s[64]; if (lrtr_ip_str_to_addr("2001
   # libconfig (LGPL-2.1+ by its COPYING.LIB and headers; nixpkgs records LGPL-3.0; not GPL either way): structured configuration
   # files, C and C++ libraries, as nixpkgs (examples and tests off).
   libconfig = mkSrcPkg {
-    pname = "libconfig"; version = "1.8.2";
-    src = { url = "https://hyperrealm.github.io/libconfig/dist/libconfig-1.8.2.tar.gz";
-            sha256 = "e59ffb902dd5731d5d4e4fb81d3b989697615feab72dfd7c30618167b91a42ee"; };
+    pname = "libconfig"; version = "1.8.3";
+    src = { url = "https://hyperrealm.github.io/libconfig/dist/libconfig-1.8.3.tar.gz";
+            sha256 = "0ed3e37db12e38b6fd7ca85775283412043069da2edcdb0c0ddcf9160a5dcc71"; };
     deps = [ world ]; nativeTools = hostTools;
     build = ''
       ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-examples --disable-tests LDFLAGS="-L$gccLib/amd64"
