@@ -1,0 +1,30 @@
+diff --git a/usr/src/lib/libc/port/gen/memset_s.c b/usr/src/lib/libc/port/gen/memset_s.c
+index f1f0d732e9..2693ce304f 100644
+--- a/usr/src/lib/libc/port/gen/memset_s.c
++++ b/usr/src/lib/libc/port/gen/memset_s.c
+@@ -38,8 +38,23 @@
+ 
+ #include "libc.h"
+ 
+-/* __memset_vp is a volatile pointer to memset() function */
+-static void *(*const volatile __memset_vp)(void *, int, size_t) = (memset);
++/*
++ * __memset_vp is a volatile pointer to a memset() wrapper.  It must not point
++ * at memset() itself: on SPARC, memset() is a symbol-capabilities function,
++ * and ld(1) resolves an absolute reference to one in a shared object to the
++ * PLT's link-time address with no relocation, so the pointer is wrong at
++ * runtime.  The wrapper is local, so its address gets a RELATIVE relocation,
++ * and its call to memset() goes through the PLT, which ld.so.1 binds to the
++ * best capabilities instance.
++ */
++static void *
++__memset_fill(void *s, int c, size_t n)
++{
++	return (memset(s, c, n));
++}
++
++static void *(*const volatile __memset_vp)(void *, int, size_t) =
++	(__memset_fill);
+ 
+ /* ISO/IEC 9899:2011 K.3.7.4.1 */
+ errno_t

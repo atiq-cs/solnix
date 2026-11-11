@@ -1,0 +1,26 @@
+diff --git a/usr/src/cmd/sgs/libld/common/relocate.c b/usr/src/cmd/sgs/libld/common/relocate.c
+index d2aab26b42..e8c4ef6745 100644
+--- a/usr/src/cmd/sgs/libld/common/relocate.c
++++ b/usr/src/cmd/sgs/libld/common/relocate.c
+@@ -1665,8 +1665,20 @@ ld_process_sym_reloc(Ofl_desc *ofl, Rel_desc *reld, Rel *reloc, Is_desc *isp,
+ 	if (local)
+ 		return ((*ld_targ.t_mr.mr_reloc_local)(reld, ofl));
+ 
++	/*
++	 * A reference to a capabilities function is sent through a PLT, so
++	 * that ld.so.1 can choose the best instance at runtime.  In a shared
++	 * object, that works only for a reference whose relocation is
++	 * position-independent (a call, or an R_*_PLT* relocation): the PLT's
++	 * address in the object must be relocated, and ld_reloc_plt() writes
++	 * an absolute reference (such as an R_SPARC_64 or R_AMD64_64 initializing
++	 * a function pointer) as the PLT's link-time address with no output
++	 * relocation.  Leave an absolute reference to the symbolic output
++	 * relocation below, which ld.so.1 also binds to the best instance.
++	 */
+ 	if ((IS_PLT(rtype) || ((sdp->sd_flags & FLG_SY_CAP) &&
+-	    (ELF_ST_TYPE(sdp->sd_sym->st_info) == STT_FUNC))) &&
++	    (ELF_ST_TYPE(sdp->sd_sym->st_info) == STT_FUNC) &&
++	    (((flags & FLG_OF_SHAROBJ) == 0) || IS_PC_RELATIVE(rtype)))) &&
+ 	    ((flags & FLG_OF_BFLAG) == 0))
+ 		return (ld_reloc_plt(reld, ofl));
+ 
