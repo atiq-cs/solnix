@@ -811,6 +811,23 @@ let
     inherit ld kmodPath; pathGate = kmodGate;
     xz = srcPkgs.nixChain.xz;
   }).nvidia-oss-modules;
+  # pkgs.solnix.nvidia-drm-driver -- nvidia-drm (MIT) over the OpenBSD drm
+  # layer i915 runs on (./nvidia-drm-driver.nix, src/drm-port/nvidia-drm):
+  # kernel/drv/amd64/nvidia_drm, card<N>/renderD<128+N> for each GPU NVKMS
+  # reports. The same pinned trees as nvidia-oss-modules (rmSrc) and
+  # i915-driver (obsdDrm). Not laid unless hardware.graphics.nvidia.drm.
+  nvidia-drm-driver = import ./nvidia-drm-driver.nix {
+    gate = gate';
+    inherit kernelNd ld kmodPath; pathGate = kmodGate;
+    nvidiaModules = nvidia-oss-modules;
+    inherit (nvidia-oss-modules) rmSrc;
+    inherit (i915-driver) obsdDrm;
+    kmodDev = buildEnv {
+      name = "solnix-kmod-dev-drm";
+      paths = [ gcc15Wrapper srcPkgs.binutils srcPkgs.gnumake cliBase.gnupatch ];
+      pathsToLink = [ "/bin" ];
+    };
+  };
   # nvidia-gsp-firmware 615.71.09 (GSP + ucodes for TU10X/GA10X), unfree,
   # redistributable for open-source kernels; gated on the explicit opt-in.
   nvidiaGspFirmware = acceptFirmwareLicense:
@@ -882,13 +899,32 @@ let
   #   usr/kernel/firmware/nvidia/<v>/  the GSP firmware (85 MB for GA10X). It
   #       is on the module path (firmware_open -> kobj_open_path) but not in
   #       the boot_archive's filelist, which a kernel/ copy would grow by that.
-  mkNvidiaBootKernel = base: gsp: { rtd3 ? false }: derivation {
+  # modeset = true (hardware.graphics.nvidia.modeset) adds nvidia_modeset.conf,
+  # the pseudo node site/solnix-nvidia configures after RM init (nvidia_modeset
+  # refuses to load before it). drm = true (hardware.graphics.nvidia.drm, needs
+  # modeset) adds kernel/drv/amd64/nvidia_drm and nvidia_drm.conf; its attach
+  # uses no GPU. Both false: the drv is the same as before the flags existed.
+  mkNvidiaBootKernel = base: gsp: { rtd3 ? false, modeset ? false, drm ? false }: let
+    msLay = ''
+      cp "$nvmods/share/nvidia-oss/nvidia_modeset.conf" "$out/kernel/drv/nvidia_modeset.conf"
+      chmod 0444 "$out/kernel/drv/nvidia_modeset.conf"
+      grep -q '^name="nvidia_modeset" parent="pseudo"' "$out/kernel/drv/nvidia_modeset.conf" \
+        || { echo "FATAL: nvidia_modeset pseudo node line" >&2; exit 1; }
+    '';
+    drmLay = ''
+      cp "$nvdrm/kernel/drv/amd64/nvidia_drm" "$out/kernel/drv/amd64/nvidia_drm"
+      cp "$nvdrm/share/nvidia-drm/nvidia_drm.conf" "$out/kernel/drv/nvidia_drm.conf"
+      chmod 0555 "$out/kernel/drv/amd64/nvidia_drm"; chmod 0444 "$out/kernel/drv/nvidia_drm.conf"
+      grep -q '^name="nvidia_drm" parent="pseudo"' "$out/kernel/drv/nvidia_drm.conf" \
+        || { echo "FATAL: nvidia_drm pseudo node line" >&2; exit 1; }
+    '';
+  in derivation ({
     name = "illumos-kernel-nvidia";
     system = "x86_64-solaris";
     builder = "/usr/bin/bash";
     PATH = "/usr/bin:/usr/sbin";
     inherit base gsp dgputemp;
-    args = [ "-c" ''
+    args = [ "-c" (''
       set -eu
       mkdir -p "$out"
       ( cd "$base" && tar cf - . ) | ( cd "$out" && tar xf - )
@@ -914,8 +950,9 @@ let
       done
       [ ! -e "$out/kernel/firmware/nvidia" ] && [ -s "$out/usr/kernel/firmware/nvidia/615.71.09/gsp_ga10x.bin" ] \
         || { echo "FATAL: GSP firmware not in usr/kernel only" >&2; exit 1; }
-    '' ];
-  };
+    '' + (if modeset || drm then msLay else "") + (if drm then drmLay else "")) ];
+  } // (if modeset || drm then { nvmods = nvidia-oss-modules; } else { })
+    // (if drm then { nvdrm = nvidia-drm-driver; } else { }));
   # i915-firmware (DMC + GuC + HuC for Alder Lake-P), unfree, redistributable
   # (linux-firmware LICENSE.i915); gated on the explicit opt-in.
   i915Firmware = acceptFirmwareLicense:
@@ -1416,7 +1453,7 @@ in
   inherit (bluetooth) btintelfw hcitest;
   # iwx wifi (AX2xx): module only; mkIwxDriversDb/mkIwxKernel below.
   inherit iwx-driver iwxFirmware iwxAliases mkIwxDriversDb mkIwxKernel;
-  inherit nvidia-oss-modules nvidiaGspFirmware i915Firmware nvidia-probe nvidiaAliases dgputemp mkNvidiaBootDb mkNvidiaBootKernel;
+  inherit nvidia-oss-modules nvidia-drm-driver nvidiaGspFirmware i915Firmware nvidia-probe nvidiaAliases dgputemp mkNvidiaBootDb mkNvidiaBootKernel;
   # Intel iGPU (i915) and the GPU driver-DB/kernel helpers (modules/config/graphics-gpu.nix).
   inherit i915-driver i915Aliases mkDriversDbWith mkGpuKernel;
   # X1E touchpad (dwiic + ihid) and its driver-DB/kernel helpers (modules/config/touchpad-i2c-hid.nix).

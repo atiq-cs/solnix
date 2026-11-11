@@ -127,6 +127,37 @@ in
         RTX 3080 Ti; keep it to a boot-once BE until it is.
       '';
     };
+    nvidia.modeset = lib.mkOption {
+      type = lib.types.bool;
+      default = cfg.nvidia.drm;
+      defaultText = lib.literalExpression "config.hardware.graphics.nvidia.drm";
+      description = ''
+        nvidia_modeset (NVKMS): lays nvidia_modeset.conf, and site/solnix-nvidia
+        configures /dev/nvidia-modeset after its guarded probe (nvidia_modeset
+        refuses to load before RM is up). Loading it allocates no GPU; an
+        NVKMS client (nvidia-drm, a probe of /dev/nvidia-modeset) does, for as
+        long as it is open. Built only; it has not run on hardware. Keep it to
+        a boot-once BE. Needs nvidia.attachAtBoot; nvidia.drm turns it on.
+      '';
+    };
+    nvidia.drm = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        nvidia-drm (pkgs.solnix.nvidia-drm-driver, MIT): NVIDIA's DRM driver
+        over the OpenBSD drm layer i915 runs on, on top of nvidia_modeset
+        (NVKMS). Lays kernel/drv/amd64/nvidia_drm, nvidia_drm.conf and
+        nvidia_modeset.conf. After its guarded probe, site/solnix-nvidia
+        configures nvidia_modeset (/dev/nvidia-modeset) and starts nvidia-drm,
+        which makes /dev/dri/card1 and /dev/dri/renderD129 (i915 keeps card0).
+        nvidia-drm asks NVKMS for the GPU only while a card1/renderD129 file or
+        a buffer from one is open, so with nvidia.rtd3 an unused dGPU still
+        powers off. Not done yet: mmap of buffers (dumb buffers cannot be
+        drawn into), PRIME with i915, fbdev. Connectors read disconnected until
+        the first open. Built and link-checked only; it has not run on
+        hardware. Keep it to a boot-once BE. Needs nvidia.attachAtBoot.
+      '';
+    };
     nvidia.maxTempC = lib.mkOption {
       type = lib.types.int;
       default = 80;
@@ -158,6 +189,18 @@ in
       GA103 does not initialise without it. Set
       hardware.graphics.nvidia.acceptFirmwareLicense = true to accept the
       NVIDIA Driver License Agreement.
+    '';
+  } {
+    assertion = !(cfg.nvidia.drm || cfg.nvidia.modeset) || cfg.nvidia.attachAtBoot;
+    message = ''
+      hardware.graphics.nvidia.modeset and .drm run on the bound nvidia driver
+      and its RM: they need hardware.graphics.nvidia.attachAtBoot.
+    '';
+  } {
+    assertion = !cfg.nvidia.drm || cfg.nvidia.modeset;
+    message = ''
+      hardware.graphics.nvidia.drm drives the display through nvidia_modeset:
+      it needs hardware.graphics.nvidia.modeset (its default follows drm).
     '';
   } {
     assertion = !(cfg.nvidia.attachAtBoot && cfg.onMedia);

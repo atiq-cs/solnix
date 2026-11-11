@@ -1,0 +1,381 @@
+diff -ruN a/kernel-open/nvidia-drm/nvidia-drm-connector.c b/kernel-open/nvidia-drm/nvidia-drm-connector.c
+--- a/kernel-open/nvidia-drm/nvidia-drm-connector.c
++++ b/kernel-open/nvidia-drm/nvidia-drm-connector.c
+@@ -221,6 +221,19 @@
+         nv_connector->edid = NULL;
+     }
+ 
++#if defined(NV_DRM_LAZY_NVKMS)
++    /*
++     * No NVKMS device (no DRM file open): nothing is asked of the GPU, so
++     * no probe or poll can keep it powered. Disconnected, not unknown: the
++     * probe helper reads modes of an unknown connector, through the
++     * detected encoder. The first open reprobes every connector.
++     */
++    if (to_nv_device(dev)->pDevice == NULL) {
++        nv_connector->nv_detected_encoder = NULL;
++        return connector_status_disconnected;
++    }
++#endif
++
+     if ((pDetectParams = nv_drm_calloc(
+                 1,
+                 sizeof(*pDetectParams))) == NULL) {
+diff -ruN a/kernel-open/nvidia-drm/nvidia-drm-drv.c b/kernel-open/nvidia-drm/nvidia-drm-drv.c
+--- a/kernel-open/nvidia-drm/nvidia-drm-drv.c
++++ b/kernel-open/nvidia-drm/nvidia-drm-drv.c
+@@ -724,6 +724,159 @@
+     drm_kms_helper_hotplug_event(nv_dev->dev);
+ }
+ 
++#if defined(NV_DRM_LAZY_NVKMS)
++static void nv_drm_nvkms_release(struct nv_drm_device *nv_dev);
++static void nv_drm_reprobe_connectors(struct nv_drm_device *nv_dev);
++
++/*
++ * Allocate the NVKMS device for the device's first user, or take another
++ * reference. 0 or a negative errno. The DRM objects (crtcs, planes,
++ * encoders, connectors) were made once at load, from a device that load
++ * released again; the NVKMS display handles they hold (hDisplay, dpy ids)
++ * name hardware, not the device instance.
++ */
++int nv_drm_nvkms_get(struct nv_drm_device *nv_dev)
++{
++    struct NvKmsKapiAllocateDeviceParams params;
++    struct NvKmsKapiDevice *pDevice;
++    int ret = 0;
++
++    /* without modeset upstream never has a device (nv_drm_dev_load) */
++    if (!drm_core_check_feature(nv_dev->dev, DRIVER_MODESET)) {
++        return 0;
++    }
++
++    mutex_lock(&nv_dev->nvkms_lock);
++    if (nv_dev->pDevice != NULL) {
++        atomic_inc(&nv_dev->nvkms_refs);
++        goto done;
++    }
++
++    memset(&params, 0, sizeof(params));
++    params.gpuId = nv_dev->gpu_info.gpu_id;
++    params.migDevice = nv_dev->gpu_mig_device;
++    params.privateData = nv_dev;
++    params.eventCallback = nv_drm_event_callback;
++
++    pDevice = nvKms->allocateDevice(&params);
++    if (pDevice == NULL) {
++        NV_DRM_DEV_LOG_ERR(nv_dev, "Failed to allocate NvKmsKapiDevice");
++        ret = -ENODEV;
++        goto done;
++    }
++    if (!nvKms->declareEventInterest(
++            pDevice,
++            ((1 << NVKMS_EVENT_TYPE_DPY_CHANGED) |
++             (1 << NVKMS_EVENT_TYPE_DYNAMIC_DPY_CONNECTED) |
++             (1 << NVKMS_EVENT_TYPE_DPY_CONTENT_PROTECTION_CHANGED) |
++             (1 << NVKMS_EVENT_TYPE_DPY_CP_TOPOLOGY_CHANGED) |
++             (1 << NVKMS_EVENT_TYPE_FLIP_OCCURRED)))) {
++        NV_DRM_DEV_LOG_ERR(nv_dev, "Failed to register event mask");
++    }
++
++    mutex_lock(&nv_dev->lock);
++    nv_dev->pDevice = pDevice;
++    atomic_set(&nv_dev->nvkms_refs, 1);
++    atomic_set(&nv_dev->enable_event_handling, true);
++    mutex_unlock(&nv_dev->lock);
++
++    /* connectors: what the hardware has now, read with this device
++     * (the hotplug event is sent 2 s later, as on resume) */
++    nv_drm_reprobe_connectors(nv_dev);
++    NV_DRM_DEV_LOG_INFO(nv_dev, "NVKMS device allocated (first user)");
++
++done:
++    mutex_unlock(&nv_dev->nvkms_lock);
++    return ret;
++}
++
++/*
++ * Drop a reference. The last one schedules the release: a DRM file's last
++ * reference goes from drmclose, under DRM locks the release must take too.
++ */
++void nv_drm_nvkms_hold(struct nv_drm_device *nv_dev)
++{
++    if (!drm_core_check_feature(nv_dev->dev, DRIVER_MODESET)) {
++        return;
++    }
++    WARN_ON(nv_dev->pDevice == NULL || atomic_read(&nv_dev->nvkms_refs) == 0);
++    atomic_inc(&nv_dev->nvkms_refs);
++}
++
++void nv_drm_nvkms_put(struct nv_drm_device *nv_dev)
++{
++    if (!drm_core_check_feature(nv_dev->dev, DRIVER_MODESET)) {
++        return;
++    }
++    if (atomic_dec_and_test(&nv_dev->nvkms_refs)) {
++        schedule_work(&nv_dev->nvkms_release_work);
++    }
++}
++
++static void nv_drm_nvkms_release_work(struct work_struct *work)
++{
++    struct nv_drm_device *nv_dev =
++        container_of(work, struct nv_drm_device, nvkms_release_work);
++
++    mutex_lock(&nv_dev->nvkms_lock);
++    /* a new user may have come and taken pDevice back up meanwhile */
++    if (atomic_read(&nv_dev->nvkms_refs) == 0 && nv_dev->pDevice != NULL) {
++        nv_drm_nvkms_release(nv_dev);
++    }
++    mutex_unlock(&nv_dev->nvkms_lock);
++}
++
++/*
++ * Free the NVKMS device; nvkms_lock held, no file or GEM object left. What
++ * still names NVKMS objects is DRM state: the atomic states (LUT surfaces,
++ * framebuffer surfaces through plane state), reset here as the suspend path
++ * resets them, and the LUT surface pool. After this the GPU has no NVKMS
++ * user and RM may power it down.
++ */
++static void nv_drm_nvkms_release(struct nv_drm_device *nv_dev)
++{
++    struct drm_device *dev = nv_dev->dev;
++    struct NvKmsKapiDevice *pDevice;
++
++    mutex_lock(&nv_dev->lock);
++    atomic_set(&nv_dev->enable_event_handling, false);
++    mutex_unlock(&nv_dev->lock);
++    cancel_delayed_work_sync(&nv_dev->hotplug_event_work);
++
++    drm_modeset_lock_all(dev);
++    {
++        /*
++         * drm_atomic_helper_plane_reset frees a plane state without the
++         * driver's atomic_destroy_state, which drops the plane's LUT surface
++         * references: destroy the plane states first.
++         */
++        struct drm_plane *plane;
++
++        nv_drm_for_each_plane(plane, dev) {
++            if (plane->state != NULL) {
++                plane->funcs->atomic_destroy_state(plane, plane->state);
++                plane->state = NULL;
++            }
++        }
++    }
++    drm_mode_config_reset(dev);
++    drm_modeset_unlock_all(dev);
++    nv_free_drm_lut_surface_pool(nv_dev);
++
++    if (!nvKms->declareEventInterest(nv_dev->pDevice, 0x0)) {
++        NV_DRM_DEV_LOG_ERR(nv_dev, "Failed to stop event listening");
++    }
++
++    mutex_lock(&nv_dev->lock);
++    pDevice = nv_dev->pDevice;
++    nv_dev->pDevice = NULL;
++    mutex_unlock(&nv_dev->lock);
++
++    nvKms->freeDevice(pDevice);
++    NV_DRM_DEV_LOG_INFO(nv_dev, "NVKMS device freed (no user)");
++}
++#endif /* NV_DRM_LAZY_NVKMS */
++
+ static int nv_drm_dev_load(struct drm_device *dev)
+ {
+     struct NvKmsKapiDevice *pDevice;
+@@ -920,6 +1073,17 @@
+ 
+     mutex_unlock(&nv_dev->lock);
+ 
++#if defined(NV_DRM_LAZY_NVKMS)
++    /*
++     * The mode objects exist now; the device goes until the first open, so
++     * an attached nvidia_drm with no client leaves the GPU unused.
++     */
++    mutex_lock(&nv_dev->nvkms_lock);
++    atomic_set(&nv_dev->nvkms_refs, 0);
++    nv_drm_nvkms_release(nv_dev);
++    mutex_unlock(&nv_dev->nvkms_lock);
++#endif
++
+     return 0;
+ }
+ 
+@@ -944,6 +1108,10 @@
+     }
+ #endif
+ 
++#if defined(NV_DRM_LAZY_NVKMS)
++    /* a release still queued would run on a freed nv_dev */
++    flush_work(&nv_dev->nvkms_release_work);
++#endif
+     cancel_delayed_work_sync(&nv_dev->hotplug_event_work);
+     mutex_lock(&nv_dev->lock);
+ 
+@@ -965,7 +1133,8 @@
+ 
+     drm_mode_config_cleanup(dev);
+ 
+-    if (!nvKms->declareEventInterest(nv_dev->pDevice, 0x0)) {
++    if (nv_dev->pDevice != NULL &&
++        !nvKms->declareEventInterest(nv_dev->pDevice, 0x0)) {
+         NV_DRM_DEV_LOG_ERR(nv_dev, "Failed to stop event listening");
+     }
+ 
+@@ -978,6 +1147,11 @@
+ 
+     mutex_unlock(&nv_dev->lock);
+ 
++#if defined(NV_DRM_LAZY_NVKMS)
++    if (pDevice == NULL) {
++        return;     /* no user: released already */
++    }
++#endif
+     nvKms->freeDevice(pDevice);
+ }
+ 
+@@ -1617,6 +1791,9 @@
+ 
+ static void nv_drm_postclose(struct drm_device *dev, struct drm_file *filep)
+ {
++#if defined(NV_DRM_LAZY_NVKMS)
++    struct nv_drm_device *nv_dev = to_nv_device(dev);
++#endif
+     /*
+      * Some systems like android can reach here without initializing the
+      * device, so check for that.
+@@ -1629,6 +1806,10 @@
+         dev->mode_config.connector_list.prev != NULL) {
+         nv_drm_revoke_modeset_permission(dev, filep, 0);
+     }
++#if defined(NV_DRM_LAZY_NVKMS)
++    /* the file's GEM objects and framebuffers are released before this */
++    nv_drm_nvkms_put(nv_dev);
++#endif
+ }
+ 
+ static int nv_drm_open(struct drm_device *dev, struct drm_file *filep)
+@@ -1637,6 +1818,15 @@
+                    "filep->driver_priv can not hold an u64");
+     static atomic64_t id = ATOMIC_INIT(0);
+ 
++#if defined(NV_DRM_LAZY_NVKMS)
++    /* before drm_master_open: master_set needs pDevice for grabOwnership */
++    int ret = nv_drm_nvkms_get(to_nv_device(dev));
++
++    if (ret != 0) {
++        return ret;
++    }
++#endif
++
+     filep->driver_priv = (void *)atomic64_inc_return(&id);
+ 
+     return 0;
+@@ -2090,6 +2280,11 @@
+     nv_dev->gpu_mig_device = gpu_info->migDevice;
+ 
+     nv_drm_mutex_init(&nv_dev->lock);
++#if defined(NV_DRM_LAZY_NVKMS)
++    nv_drm_mutex_init(&nv_dev->nvkms_lock);
++    atomic_set(&nv_dev->nvkms_refs, 0);
++    INIT_WORK(&nv_dev->nvkms_release_work, nv_drm_nvkms_release_work);
++#endif
+ 
+     /* Allocate DRM device */
+ 
+diff -ruN a/kernel-open/nvidia-drm/nvidia-drm-gem.c b/kernel-open/nvidia-drm/nvidia-drm-gem.c
+--- a/kernel-open/nvidia-drm/nvidia-drm-gem.c
++++ b/kernel-open/nvidia-drm/nvidia-drm-gem.c
+@@ -47,6 +47,9 @@
+ void nv_drm_gem_free(struct drm_gem_object *gem)
+ {
+     struct nv_drm_gem_object *nv_gem = to_nv_gem_object(gem);
++#if defined(NV_DRM_LAZY_NVKMS)
++    struct nv_drm_device *nv_dev = nv_gem->nv_dev;
++#endif
+ 
+     /* Cleanup core gem object */
+     drm_gem_object_release(&nv_gem->base);
+@@ -56,6 +59,10 @@
+ #endif
+ 
+     nv_gem->ops->free(nv_gem);
++#if defined(NV_DRM_LAZY_NVKMS)
++    /* the object's NVKMS memory/surfaces are freed: drop its reference */
++    nv_drm_nvkms_put(nv_dev);
++#endif
+ }
+ 
+ #if !defined(NV_DRM_DRIVER_HAS_GEM_PRIME_CALLBACKS) && \
+@@ -124,6 +131,14 @@
+     struct drm_device *dev = nv_dev->dev;
+ 
+     nv_gem->nv_dev = nv_dev;
++#if defined(NV_DRM_LAZY_NVKMS)
++    /*
++     * Every caller is an ioctl on an open DRM file (or an import through
++     * one), which holds a reference, so pDevice exists: take one more for the
++     * object, which can outlive the file (dma-buf export, a framebuffer).
++     */
++    nv_drm_nvkms_hold(nv_dev);
++#endif
+     nv_gem->ops = ops;
+ 
+     nv_gem->pMemory = pMemory;
+diff -ruN a/kernel-open/nvidia-drm/nvidia-drm-priv.h b/kernel-open/nvidia-drm/nvidia-drm-priv.h
+--- a/kernel-open/nvidia-drm/nvidia-drm-priv.h
++++ b/kernel-open/nvidia-drm/nvidia-drm-priv.h
+@@ -140,6 +140,18 @@
+     struct delayed_work hotplug_event_work;
+     atomic_t enable_event_handling;
+ 
++#if defined(NV_DRM_LAZY_NVKMS)
++    /*
++     * pDevice lifetime: nvkms_refs counts the open DRM files and the GEM
++     * objects; the first file open allocates pDevice (under nvkms_lock), and
++     * nvkms_release_work frees it once the count is back at 0.  nvkms_lock is
++     * taken before nv_drm_device::lock and the drm modeset locks.
++     */
++    NV_DRM_MUTEX nvkms_lock;
++    atomic_t nvkms_refs;
++    struct work_struct nvkms_release_work;
++#endif
++
+     /**
+      * @flip_event_wq:
+      *
+@@ -212,6 +224,15 @@
+     struct list_head drm_lut_surface_pool;
+ };
+ 
++#if defined(NV_DRM_LAZY_NVKMS)
++/* first user allocates the NVKMS device; a DRM file open */
++int nv_drm_nvkms_get(struct nv_drm_device *nv_dev);
++/* another reference while one is held (a GEM object) */
++void nv_drm_nvkms_hold(struct nv_drm_device *nv_dev);
++/* the last reference schedules the device's release */
++void nv_drm_nvkms_put(struct nv_drm_device *nv_dev);
++#endif
++
+ static inline NvU32 nv_drm_next_display_semaphore(
+     struct nv_drm_device *nv_dev)
+ {
+diff -ruN a/kernel-open/nvidia-drm/nvidia-drm-sunos.h b/kernel-open/nvidia-drm/nvidia-drm-sunos.h
+--- a/kernel-open/nvidia-drm/nvidia-drm-sunos.h
++++ b/kernel-open/nvidia-drm/nvidia-drm-sunos.h
+@@ -49,6 +49,14 @@
+ /* Asserts the caller holds the lock, as FreeBSD's mtx_owned does. */
+ #define spin_is_locked(lock)    mtx_owned(lock)
+ 
++/*
++ * The NVKMS device (and with it the RM's hold on the GPU) exists only while a
++ * DRM file or GEM object uses it, so the coarse runtime D3cold of the illumos
++ * nvidia module (usage count 0) can power an idle dGPU off with nvidia_drm
++ * attached.  Upstream allocates it once at load (nv_drm_dev_load).
++ */
++#define NV_DRM_LAZY_NVKMS 1
++
+ /* Linux struct mutex is struct rwlock in OpenBSD's linux/mutex.h. */
+ #define NV_DRM_MUTEX struct rwlock
+ #define nv_drm_mutex_init(m) rw_init((m), "nvidia-drm")

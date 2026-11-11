@@ -75,6 +75,9 @@ let
       { name = "nvidia_modeset"; perm = "0666 root sys"; aliases = [ ]; }
       { name = "nvidia_i2c"; perm = null; aliases = [ ]; }
     ];
+  # nvidia-drm (hardware.graphics.nvidia.drm): a major after nvidia's. card/renderD 0666 as i915's; its ctl minor is
+  # root-only in the driver (drv_priv). Its DRM minors use i915's ddi_display:drm devlink line.
+  nvDrmDrivers = lib.optionals gfx.nvidia.drm [ { name = "nvidia_drm"; perm = "0666 root sys"; aliases = [ ]; } ];
   gpuDb = if wantGpu then s.mkDriversDbWith wifiDb gpuDrivers else wifiDb;
   gpuKern0 = if wantGpu then s.mkGpuKernel wifiKern {
     nvidia = wantNv;
@@ -83,7 +86,7 @@ let
   } else wifiKern;
   # nvidia bound at boot: nvidia.conf, tzmon's opt-out, GSP firmware in usr/kernel (graphics-gpu.nix).
   gpuKern = if nvBound then s.mkNvidiaBootKernel gpuKern0 (s.nvidiaGspFirmware gfx.nvidia.acceptFirmwareLicense)
-    { rtd3 = gfx.nvidia.rtd3; } else gpuKern0;
+    { rtd3 = gfx.nvidia.rtd3; modeset = gfx.nvidia.modeset; drm = gfx.nvidia.drm; } else gpuKern0;
   # the touchpad (options in ./touchpad-i2c-hid.nix) last: dwiic + ihid, the dacf rule.
   wantTouchpad = config.hardware.touchpad.i2cHid.enable;
   tpDb = if wantTouchpad then s.mkTouchpadDriversDb gpuDb else gpuDb;
@@ -94,7 +97,7 @@ let
     aliases = lib.unique ([ "pci10de,371" "pci8086,2668" "pciclass,0403" "pciexclass,0403" ] ++ hdaIds); } ] else tpDb;
   # nvidia bound at boot: its majors go in LAST, so the drivers already installed keep theirs (dwiic and ihid
   # would move by three if nvidia came before the touchpad layer).
-  finalDb = if nvBound then s.mkNvidiaBootDb (s.mkDriversDbWith finalDb0 nvDrivers) else finalDb0;
+  finalDb = if nvBound then s.mkNvidiaBootDb (s.mkDriversDbWith finalDb0 (nvDrivers ++ nvDrmDrivers)) else finalDb0;
   finalKern = if wantTouchpad then s.mkTouchpadKernel gpuKern else gpuKern;
 
   # Networks highest priority first; each line "SSID<TAB>pskFile".
@@ -449,7 +452,9 @@ in
       environment = {
         PROBE = "${s.nvidia-probe}/bin/nvidia-probe";
         LOG = "/var/log/solnix-nvidia.log";
-      } // lib.optionalAttrs gfx.nvidia.rtd3 { RTD3 = "1"; };
+      } // lib.optionalAttrs gfx.nvidia.rtd3 { RTD3 = "1"; }
+        // lib.optionalAttrs gfx.nvidia.modeset { MODESET = "1"; }
+        // lib.optionalAttrs gfx.nvidia.drm { DRM = "1"; };
       start.exec = "/bin/sh ${./nvidia-up.sh} &";
       stop.exec = ":kill";
     };
