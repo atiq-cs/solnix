@@ -58,9 +58,9 @@ rec {
   };
 
   libevdev = mkSrcPkg {
-    pname = "libevdev"; version = "1.13.4";
-    src = { url = "https://www.freedesktop.org/software/libevdev/libevdev-1.13.4.tar.xz";
-            sha256 = "f00ab8d42ad8b905296fab67e13b871f1a424839331516642100f82ad88127cd"; };
+    pname = "libevdev"; version = "1.13.6";
+    src = { url = "https://www.freedesktop.org/software/libevdev/libevdev-1.13.6.tar.xz";
+            sha256 = "73f215eccbd8233f414737ac06bca2687e67c44b97d2d7576091aa9718551110"; };
     build = ''
       mkdir -p include/linux/sunos
       cp ${evdevHeaders}/input.h ${evdevHeaders}/input-event-codes.h ${evdevHeaders}/uinput.h include/linux/sunos/
@@ -99,9 +99,9 @@ rec {
   };
 
   libinput = mkSrcPkg {
-    pname = "libinput"; version = "1.28.1";
-    src = { url = "https://gitlab.freedesktop.org/libinput/libinput/-/archive/1.28.1/libinput-1.28.1.tar.gz";
-            sha256 = "a13f8c9a7d93df3c85c66afd135f0296701d8d32f911991b7aa4273fdd6a42a3"; };
+    pname = "libinput"; version = "1.31.3";
+    src = { url = "https://gitlab.freedesktop.org/libinput/libinput/-/archive/1.31.3/libinput-1.31.3.tar.gz";
+            sha256 = "b6749bf6f1890f6631c0a70a027c35fec9d2e096a39f720548896e41474a9854"; };
     deps = [ world libevdev mtdev libudev-solnix ];   # world: libdevinfo (via libudev-solnix), as libpciaccess
     build = ''
       mkdir -p include/linux/sunos
@@ -110,13 +110,16 @@ rec {
       # index(3C)/rindex(3C): <strings.h> on illumos
       grep -q '#include <string.h>' src/util-strings.h || { echo "FATAL: util-strings.h anchor" >&2; exit 1; }
       sed -i 's|#include <string.h>|#include <string.h>\n#include <strings.h>|' src/util-strings.h
-      # struct winsize / TIOCGWINSZ: <termios.h> on illumos
-      grep -q '#include <sys/ioctl.h>' tools/libinput-debug-tablet.c || { echo "FATAL: debug-tablet anchor" >&2; exit 1; }
-      sed -i 's|#include <sys/ioctl.h>|#include <sys/ioctl.h>\n#include <termios.h>|' tools/libinput-debug-tablet.c
+      # struct winsize / TIOCGWINSZ: <termios.h> on illumos (debug-tablet-pad since 1.29)
+      for t in tools/libinput-debug-tablet.c tools/libinput-debug-tablet-pad.c; do
+        grep -q '#include <sys/ioctl.h>' $t || { echo "FATAL: $t anchor" >&2; exit 1; }
+        sed -i 's|#include <sys/ioctl.h>|#include <sys/ioctl.h>\n#include <termios.h>|' $t
+      done
       ${vsMap}
       ${py}
       ${pc}
-      ${mb "-Dlibwacom=false -Ddebug-gui=false -Dtests=false -Ddocumentation=false -Dudev-dir=$out/lib/udev -Dzshcompletiondir=no"}
+      # lua-plugins (1.29+, auto by default): off, pinned (solnix has no lua; nixpkgs builds it with lua5_4)
+      ${mb "-Dlibwacom=false -Ddebug-gui=false -Dtests=false -Ddocumentation=false -Dlua-plugins=disabled -Dudev-dir=$out/lib/udev -Dzshcompletiondir=no"}
       # the exported API is versioned (LIBINPUT_*), as on Linux
       /usr/bin/pvs -dos "$out/lib/amd64/libinput.so.10" | grep -q 'LIBINPUT_0.12.0: libinput_path_create_context;$' \
         || { echo "FATAL: libinput.so.10 lacks LIBINPUT_0.12.0: libinput_path_create_context" >&2; exit 1; }
