@@ -31,6 +31,9 @@ rec {
     src = { url = "https://download.gnome.org/sources/glib/2.88/glib-2.88.1.tar.xz";
             sha256 = "51ab804c56f6eab3e5045c774d1290ac5e4c923d4f9a3d8e33123bee45c1840e"; };
     deps = [ pcre2 libffi zlib ];
+    # libgio/libglib's DWARF names $out (GIO_MODULE_DIR, the charset.alias dir): keep those .debug files uncompressed, or --check
+    # DIFFERS in -debug only (Nix cannot rewrite the scratch out hash inside zlib; glibdbg 2026-11-11, mk-src-pkg.nix)
+    splitDebugSelfRef = true;
     build = ''
       ${tools.path}
       patch -p1 < ${./patches/glib-2.88.1-illumos-ipv6-check.patch}
