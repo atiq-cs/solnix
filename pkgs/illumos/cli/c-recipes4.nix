@@ -711,8 +711,8 @@ int main(void){ const char *e = eglQueryString(EGL_NO_DISPLAY, EGL_EXTENSIONS); 
   # ---- recipes5 batch 12: tk on main's tcl; the Vulkan loader on illumos -----------------------------------------------------------
   # tk (TCL): the Tk toolkit (wish, Tkinter's library), on main's served tcl 8.6.16 and the R9/R10 X11 libraries (Xft fonts, XScrnSaver
   # idle time). As nixpkgs: threads, 64-bit, man symlinks, its find-library patch (tk_library compiled in), the wish -> wish8.6 link.
-  # tkConfig.sh names the build dir in TK_SRC_DIR/TK_BUILD_* as every tkConfig.sh does (NixOS's: /build/tk8.6.16); here that is the
-  # drv-keyed /var/tmp/srcpkg-<key>, which the gate counts as WARN B8, the same as main's served tcl's tclConfig.sh.
+  # tkConfig.sh names the build dir in TK_SRC_DIR/TK_BUILD_* as every tkConfig.sh does (NixOS's: /build/tk8.6.16); here that was the
+  # drv-keyed /var/tmp/srcpkg-<key>, which the gate now FAILs (B8, a recorded mk-src-pkg dir): mapped to /build, as tcl's.
   tk = mkSrcPkg {
     pname = "tk"; version = "8.6.16";
     src = { url = "https://downloads.sourceforge.net/tcl/tk8.6.16-src.tar.gz";
@@ -734,6 +734,8 @@ int main(void){ const char *e = eglQueryString(EGL_NO_DISPLAY, EGL_EXTENSIONS); 
       ln -s libtk8.6.so "$out/lib/amd64/libtk.so"
       cp ../generic/*.h ../unix/*.h "$out/include/"
       find "$out/share/doc" -delete 2>/dev/null || true
+      sed "s|$W/|/build/|g" "$out/lib/amd64/tkConfig.sh" > "$W/cfg" && cat "$W/cfg" > "$out/lib/amd64/tkConfig.sh"
+      if grep -rlF "$W" "$out"; then echo "FATAL: tk names its build dir" >&2; exit 1; fi
       # no X server in a build: load Tk's library and its C API through tclsh, then a widget call that needs no display
       printf '%s\n' 'if {[catch {package require Tk} e]} { puts "load: $e" }' 'puts "tk [package provide Tk] [info exists tk_library]"' > "$W/t.tcl"
       ${chk ''DISPLAY=:solnix-none TCLLIBPATH="$out/lib/amd64" ${tcl}/bin/tclsh "$W/t.tcl"'' "couldn.t connect to display"}

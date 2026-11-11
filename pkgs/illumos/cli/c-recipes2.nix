@@ -16,6 +16,45 @@ let
     cmake --build _b -j16 >&2; cmake --install _b >&2
   '';
   ncw = "-I${ncurses}/include/ncursesw";
+  # tcl 8.6 (TCL licence, BSD-like): nixpkgs --enable-threads --enable-man-symlinks --enable-64bit, tclsh + tclsh8.6, libtcl8.6.so.
+  # The bundled extension packages (pkgs/: sqlite, itcl, thread, tdbc) build too, as in nixpkgs.
+  tclFor = fix: mkSrcPkg {
+    pname = "tcl"; version = "8.6.16";
+    src = { url = "https://downloads.sourceforge.net/project/tcl/Tcl/8.6.16/tcl8.6.16-src.tar.gz";
+            sha256 = "91cb8fa61771c63c262efb553059b7c7ad6757afa5857af6265e4b0bdc2a14a5"; };
+    deps = [ world zlib ]; nativeTools = hostTools;
+    build = ''
+      # the bundled sqlite3 extension builds with -DSQLITE_USE_ALLOCA, and on illumos alloca() is declared only in <alloca.h>,
+      # which sqlite does not include ("implicit declaration of function 'alloca'", measured): gcc's builtin, by name.
+      export CFLAGS="-O2 -Dalloca=__builtin_alloca"
+      cd unix
+      # Byte order pinned from the TARGET (this drv's $system), not probed: tcl's autoconf-2.59 AC_C_BIGENDIAN looks for BYTE_ORDER in
+      # <sys/param.h>, but the gate defines it only in <endian.h>; the fallback run test calls exit() without <stdlib.h>, gcc 14 rejects
+      # the implicit declaration, and the failed link reads as "yes". That shipped WORDS_BIGENDIAN=1 on x86_64 and aarch64, and every
+      # double format panicked ("wrong digit!", tclStrToD.c; libdb1, measured).
+      case "$system" in x86_64-*|aarch64-*) be=no ord=q;; sparcv9-*) be=yes ord=Q;; *) echo "FATAL: tcl: byte order of $system?" >&2; exit 1;; esac
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --enable-threads --enable-man-symlinks --enable-64bit --enable-shared \
+        --without-tzdata ac_cv_c_bigendian=$be
+      got=no; grep -q WORDS_BIGENDIAN tclConfig.sh && got=yes
+      [ "$got" = "$be" ] || { echo "FATAL: tcl configured bigendian=$got, $system is $be" >&2; exit 1; }
+      gmake -j16; gmake install
+      ln -s tclsh8.6 "$out/bin/tclsh"
+      ${dropDocs}
+    '' + (if fix then ''
+      # tclConfig.sh, itclConfig.sh and tdbcConfig.sh record the build tree in their *_SRC_DIR / *_BUILD_* entries (for extensions built
+      # against an uninstalled tcl), here $W (gate B8). NixOS's name its sandbox dir, /build/tcl8.6.16/...: the same, mapped to /build.
+      for f in "$out"/lib/amd64/tclConfig.sh "$out"/lib/amd64/*/*Config.sh; do sed "s|$W/|/build/|g" "$f" > "$W/cfg" && cat "$W/cfg" > "$f"; done
+      if grep -rlF "$W" "$out"; then echo "FATAL: tcl names its build dir" >&2; exit 1; fi
+    '' else "") + ''
+      ${chk ''echo 'puts [info patchlevel]' | "$out/bin/tclsh"'' "^8\\.6\\.16$"}
+      ${chk ''echo 'package require Thread; puts [expr {6*7}]' | "$out/bin/tclsh"'' "^42$"}
+      # doubles: the big-endian misconfiguration aborted on 0.1 and printed 2.5 as 5.56e-309. A native double must be laid out as the
+      # target's own byte order ($ord: q little, Q big), and survive binary format/scan.
+      printf '%s\n' 'binary scan [binary format d 1.0] d x' \
+        "puts \"[expr {0.1}] [expr {2.5*2}] \$x [expr {[binary format d 1.0] eq [binary format $ord 1.0]}]\"" > "$W/dbl.tcl"
+      ${chk ''"$out/bin/tclsh" "$W/dbl.tcl"'' "^0\\.1 5\\.0 1\\.0 1$"}
+    '';
+  };
 in rec {
   # ---- the maintainer's tools ----------------------------------------------------------------------------------------------
   # pinentry-curses (GPL-2.0+): nixpkgs' flavours [curses tty]; gpg-agent runs it to ask for a passphrase on a terminal.
@@ -183,39 +222,9 @@ in rec {
     '';
   };
 
-  # tcl 8.6 (TCL licence, BSD-like): nixpkgs --enable-threads --enable-man-symlinks --enable-64bit, tclsh + tclsh8.6, libtcl8.6.so.
-  # The bundled extension packages (pkgs/: sqlite, itcl, thread, tdbc) build too, as in nixpkgs.
-  tcl = mkSrcPkg {
-    pname = "tcl"; version = "8.6.16";
-    src = { url = "https://downloads.sourceforge.net/project/tcl/Tcl/8.6.16/tcl8.6.16-src.tar.gz";
-            sha256 = "91cb8fa61771c63c262efb553059b7c7ad6757afa5857af6265e4b0bdc2a14a5"; };
-    deps = [ world zlib ]; nativeTools = hostTools;
-    build = ''
-      # the bundled sqlite3 extension builds with -DSQLITE_USE_ALLOCA, and on illumos alloca() is declared only in <alloca.h>,
-      # which sqlite does not include ("implicit declaration of function 'alloca'", measured): gcc's builtin, by name.
-      export CFLAGS="-O2 -Dalloca=__builtin_alloca"
-      cd unix
-      # Byte order pinned from the TARGET (this drv's $system), not probed: tcl's autoconf-2.59 AC_C_BIGENDIAN looks for BYTE_ORDER in
-      # <sys/param.h>, but the gate defines it only in <endian.h>; the fallback run test calls exit() without <stdlib.h>, gcc 14 rejects
-      # the implicit declaration, and the failed link reads as "yes". That shipped WORDS_BIGENDIAN=1 on x86_64 and aarch64, and every
-      # double format panicked ("wrong digit!", tclStrToD.c; libdb1, measured).
-      case "$system" in x86_64-*|aarch64-*) be=no ord=q;; sparcv9-*) be=yes ord=Q;; *) echo "FATAL: tcl: byte order of $system?" >&2; exit 1;; esac
-      ./configure --prefix="$out" --libdir="$out/lib/amd64" --enable-threads --enable-man-symlinks --enable-64bit --enable-shared \
-        --without-tzdata ac_cv_c_bigendian=$be
-      got=no; grep -q WORDS_BIGENDIAN tclConfig.sh && got=yes
-      [ "$got" = "$be" ] || { echo "FATAL: tcl configured bigendian=$got, $system is $be" >&2; exit 1; }
-      gmake -j16; gmake install
-      ln -s tclsh8.6 "$out/bin/tclsh"
-      ${dropDocs}
-      ${chk ''echo 'puts [info patchlevel]' | "$out/bin/tclsh"'' "^8\\.6\\.16$"}
-      ${chk ''echo 'package require Thread; puts [expr {6*7}]' | "$out/bin/tclsh"'' "^42$"}
-      # doubles: the big-endian misconfiguration aborted on 0.1 and printed 2.5 as 5.56e-309. A native double must be laid out as the
-      # target's own byte order ($ord: q little, Q big), and survive binary format/scan.
-      printf '%s\n' 'binary scan [binary format d 1.0] d x' \
-        "puts \"[expr {0.1}] [expr {2.5*2}] \$x [expr {[binary format d 1.0] eq [binary format $ord 1.0]}]\"" > "$W/dbl.tcl"
-      ${chk ''"$out/bin/tclsh" "$W/dbl.tcl"'' "^0\\.1 5\\.0 1\\.0 1$"}
-    '';
-  };
+  # tcl: tclFor true. tcl.unfixed (tclFor false, the drv text before the *Config.sh mapping) is libdb's test-suite tcl, so the served
+  # libdb out does not move for a change no libdb file sees. shortcut: libdb takes tcl itself at the next full rebuild.
+  tcl = tclFor true // { unfixed = tclFor false; };
 
   # giflib (MIT): its own Makefile (no configure), nixpkgs' PREFIX/LIBDIR install. The prebuilt man pages ship in doc/.
   giflib = mkSrcPkg {

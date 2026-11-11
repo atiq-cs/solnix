@@ -328,7 +328,7 @@ let
       bash = { build = "printf '#!/bin/sh\\necho \"#define PIPESIZE 512\"\\n' > builtins/psize.sh\n" + args.build; };
     }.${args.pname} or { };
       # a64t: the security/version bumps (./bumps.nix), on top of the fixes above (they see the recipe as fixed here)
-      v = (import ./bumps.nix { inherit (homePkgs.cliSet) tcl; } (args // p)).${args.pname} or { };
+      v = (import ./bumps.nix { tcl = homePkgs.cliSet.tcl.unfixed or homePkgs.cliSet.tcl; } (args // p)).${args.pname} or { };   # cli/c-recipes2.nix: why unfixed
     in p // v;
   };
   final = import ./a64h-pkgs.nix { inherit (srcPkgs) mkSrcPkg; };
