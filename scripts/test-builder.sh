@@ -1170,8 +1170,10 @@ if [[ -n ${F9_BUILDER:-} ]]; then env BUILDER_SKIP="$SK12" ksh93 "$F9_BUILDER" p
   ok "NEG origin/main's builder plans binutils-seed BUILD whatever BUILDER_SKIP says" || no "F9 skip"
 else print "SKIP origin/main skip negative control: F9_BUILDER unset (not counted as a pass)"; fi
 L12=$(env BUILDER_SKIP="$SK12" ksh93 "$S" plan "$W/live.json" "$W/live.tsv" 2>&1)
+# the live queue lists seed rows only some days (none on 2026-11-11): then this check has nothing to see, and says so
+if ! print -r -- "$L12" | egrep -q '^([^ ]*-seed|illumos-early|illumos-userland) '; then print "SKIP live skip: the live queue lists no seed rows today (not counted as a pass)"; else
 (( $(print -r -- "$L12" | grep -c ' SKIP ') > 0 )) && ! print -r -- "$L12" | egrep -q '^([^ ]*-seed|illumos-early|illumos-userland) BUILD' &&
-  ok "the live listing with the module's default: $(print -r -- "$L12" | grep -c ' SKIP ') rows SKIP, none of them BUILD" || no "live skip: $(print -r -- "$L12" | grep -E 'seed|illumos-(early|userland) ')"
+  ok "the live listing with the module's default: $(print -r -- "$L12" | grep -c ' SKIP ') rows SKIP, none of them BUILD" || no "live skip: $(print -r -- "$L12" | grep -E 'seed|illumos-(early|userland) ')"; fi
 grep -q 'BUILDER_SKIP = lib.concatStringsSep " " cfg.skipPnames' "$G/modules/config/community/builder.nix" && grep -q 'default = \[ "\*-seed" "illumos-early" "illumos-userland" \];' "$G/modules/config/community/builder.nix" &&
   ok "builder.nix: skipPnames defaults to the seed rows and is passed as BUILDER_SKIP" || no "builder.nix skipPnames"
 # 12f: log stamps in UTC whatever TZ says (lixi: 12:40:46Z for 17:40Z)

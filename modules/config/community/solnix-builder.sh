@@ -320,7 +320,7 @@ cand() {	# cand <out> <drv>^<output> <rev> [root], run in $(...): rc 0 and the s
 	[[ -f $m && $(<"$m") != ok ]] && { print -r -- "$(<"$m")"; return $(( e == 2 ? 3 : 1 )); }
 	# submitted on an earlier tick (served by now or not): first() polls that submission instead of building again
 	[[ -s $BUILDER_STATE/pub/${1##*/} ]] && pubok && { print first; return 0; }
-	[[ $h == first && -f $m.pub ]] && { print -r -- "$(<"$m.pub")"; return 3; }
+	[[ $h == first ]] && refused "$m" "$1" && { print -r -- "$(<"$m.pub")"; return 3; }
 	# the dry run covers the leaf AND its inputs: a dry run of a substitutable leaf alone lists nothing to build
 	bounded 300 nix derivation show "${d%^*}" > "$J/drv.json" 2>&1 && ins=$(jq -r '.[].inputDrvs | to_entries[] |
 	    .key + "^" + ((if (.value|type) == "array" then .value else .value.outputs end) | join(","))' "$J/drv.json") &&
@@ -341,6 +341,20 @@ pubok() {	# may this host first-publish? BUILDER_PUBLISH=1 (with the bearer: it 
 	    [[ $BUILDER_PUBLISH == dry || -s $BUILDER_BEARER_FILE ]]
 }
 rowed() { nawk -F'\t' -v o="$1" 'NR > 1 && $9 == o {f = 1} END {exit !f}' "$BUILDER_STATE/recipes.tsv" 2> /dev/null; }	# a served row names <out>
+rowsha() { nawk -F'\t' -v o="$1" 'NR > 1 && ($9 == o || $10 == o)' "$BUILDER_STATE/recipes.tsv" 2> /dev/null | digest -a sha256; }	# the served rows naming <out>
+refused() {	# refused <tried/drv^o> <out>: is the refusal memo <m>.pub still in force? A memo stands while the served rows naming <out>
+	# are the ones it was made against (<m>.pub.row: "<epoch> <rowsha>") and for BUILDER_REFUSAL_SECS (1 day); a changed row (infra fixed
+	# its deps: lixu zlib-debug, 2026-11-11) or an old memo is retried once, as if never refused. A memo with no .row is stamped now.
+	typeset rft rfr rfs rfn	# rf*: name() functions share the caller's scope
+	[[ -f $1.pub ]] || return 1
+	rfn=$(printf '%(%s)T' now) rfs=$(rowsha "$2")
+	[[ -s $1.pub.row ]] || { print -r -- "$rfn $rfs" > "$1.pub.row"; return 0; }
+	read -r rft rfr < "$1.pub.row"
+	[[ $rfr == "$rfs" ]] && (( rfn - rft < ${BUILDER_REFUSAL_SECS:-86400} )) && return 0
+	log "${2#/nix/store/}: its refusal ($(head -1 "$1.pub" | cut -c1-200)) expired: $([[ $rfr != "$rfs" ]] && print 'the served row changed' ||
+	    print "older than ${BUILDER_REFUSAL_SECS:-86400} s"): retried" >&2	# stderr: cand runs in $(...)
+	mv -f "$1.pub" "$1.pub.expired"; rm -f "$1.pub.row"; return 1
+}
 ultimate() { [[ $(nix path-info --json "$1" 2> /dev/null | jq -r '.[].ultimate') == true ]]; }	# built by this host's daemon
 unserved() { [[ -s $BUILDER_STATE/pub/${1##*/} ]] || ! served "$1" > /dev/null; }	# not served, or our submission of it is pending
 fbuild() {	# fbuild <pname> <out> <drv>^<output>: the first build and every gate before a submission; rc 0 with the stage dir in $fst.
@@ -479,14 +493,14 @@ firsts() {	# firsts <pname> <drv_for lines>: first-publish every unserved listed
 	for g in $(print -r -- "$2" | nawk '{l[NR] = $1 "=" $2} END {for (i = NR; i > 0; i--) print l[i]}'); do gx=${g%=*} gs="$gs $gx"
 		unserved "$gx" || continue
 		# refused here before (rejected, a failed gate): this host cannot complete the job; held before any build (a human's)
-		[[ ! -s $BUILDER_STATE/pub/${gx##*/} && -f $BUILDER_STATE/tried/${g##*/}.pub ]] &&
+		[[ ! -s $BUILDER_STATE/pub/${gx##*/} ]] && refused "$BUILDER_STATE/tried/${g##*/}" "$gx" &&
 		    { log "held $1: newest $gx refused here ($(<"$BUILDER_STATE/tried/${g##*/}.pub"))"; return 1; }
 		gt="$gt $g"
 	done; gz=$gt gs="$gs "
 	while (( gn )) && [[ -n $gt ]]; do gn=0 gw= gq=
 		for g in $gt; do fwait=
 			if first "$1" "${g%=*}" "${g#*=}"; then gn=1 gk="$gk ${g%=*}"; [[ ${g%=*} == "$gp" ]] && gy=$nar
-			elif [[ -f $BUILDER_STATE/tried/${g##*/}.pub ]]; then	# refused now (first() logged why): a human's
+			elif refused "$BUILDER_STATE/tried/${g##*/}" "${g%=*}"; then	# refused now (first() logged why): a human's, or a row fix
 				[[ " $gz " == *" $g "* ]] && gx="newest ${g%=*}" || gx="its reference ${g%=*}"
 				log "held $1: $gx refused here ($(<"$BUILDER_STATE/tried/${g##*/}.pub"))"; return 1
 			elif [[ -n $fwait ]]; then gw="$gw $g"	# waits for a sibling or a reference: retried after this pass
@@ -598,7 +612,7 @@ eready() {	# eready <pname> <attr> <version> <branch> <rev>: 0 when packages.<sy
 	nix-instantiate --add-root "$J/root-first" --expr "import ${d%^*}" > /dev/null 2>&1 || { log "decline $1: cannot root $d"; return 1; }
 	if [[ ! -s $BUILDER_STATE/pub/${out##*/} ]]; then	# not submitted yet
 		served "$out" > /dev/null && { log "decline $1: $out is served already (another publish): a row, then a rebuild vote, later"; return 1; }
-		[[ -f $m.pub ]] && { log "decline $1: its first publish was refused here: $(<"$m.pub")"; return 1; }
+		refused "$m" "$out" && { log "decline $1: its first publish was refused here: $(<"$m.pub")"; return 1; }
 		# the strict gate on the drv graph first (no build needed): an eval out has no reviewed row behind it. Not memo'd.
 		( export GATE_PYTHON=$BUILDER_PYTHON; bounded 600 bash "$BUILDER_GATES/scripts/drv-gate.sh" --closure "${d%^*}" ) > "$J/eval-closure" 2>&1 ||
 		    { log "decline $1: drv-gate --closure FAILs ${d%^*} ($(grep -c '^FAIL A' "$J/eval-closure") findings, first: $(nawk '/^FAIL A/ {print; exit}' "$J/eval-closure" | cut -c1-200))"; return 1; }
