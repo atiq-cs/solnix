@@ -1,0 +1,915 @@
+diff -ruN a/kernel-open/common/inc/nv-kthread-q-os.h b/kernel-open/common/inc/nv-kthread-q-os.h
+--- a/kernel-open/common/inc/nv-kthread-q-os.h
++++ b/kernel-open/common/inc/nv-kthread-q-os.h
+@@ -24,6 +24,37 @@
+ #ifndef __NV_KTHREAD_QUEUE_OS_H__
+ #define __NV_KTHREAD_QUEUE_OS_H__
+ 
++#if defined(NV_DRM_OBSD)
++/*
++ * NV_DRM_OBSD: see nv-timer.h.  illumos (solnix): the queue of kernel-illumos/nvidia-modeset/nvkms_q.c, a
++ * FIFO served by one long-running task on a single-threaded ddi_taskq.
++ * Items are embedded in their owners, so scheduling never allocates.
++ */
++#include <sys/types.h>
++#include <sys/ksynch.h>
++#include <sys/list.h>
++#include <sys/sunddi.h>
++
++struct nv_kthread_q
++{
++    kmutex_t q_lock;
++    kcondvar_t q_cv;
++    list_t q_list;
++    ddi_taskq_t *q_taskq;
++    int main_loop_should_exit;
++};
++
++struct nv_kthread_q_item
++{
++    list_node_t q_list_node;
++    void (*function_to_run)(void *args);
++    void *function_args;
++};
++
++#define NV_KTHREAD_NO_NODE (-1)
++
++#else /* !NV_DRM_OBSD */
++
+ #include <linux/types.h>            // atomic_t
+ #include <linux/list.h>             // list
+ #include <linux/sched.h>            // task_struct
+@@ -61,4 +92,6 @@
+ 
+ #define NV_KTHREAD_NO_NODE NUMA_NO_NODE
+ 
++#endif /* NV_DRM_OBSD */
++
+ #endif
+diff -ruN a/kernel-open/common/inc/nv-mm.h b/kernel-open/common/inc/nv-mm.h
+--- a/kernel-open/common/inc/nv-mm.h
++++ b/kernel-open/common/inc/nv-mm.h
+@@ -29,6 +29,17 @@
+ typedef int vm_fault_t;
+ #endif
+ 
++#if defined(NV_DRM_OBSD)
++/*
++ * NV_DRM_OBSD: see nv-timer.h.  illumos (solnix): there is no Linux VM (mm_struct, vm_area_struct, page
++ * pinning).  nvidia-drm's mmap, fault and user-page paths are compiled out
++ * under NV_SUNOS; the types stay incomplete so the ops tables still declare.
++ * STUB until D2.3 (an illumos devmap path for GEM mmap).
++ */
++struct vm_area_struct;
++struct vm_fault;
++#else /* !NV_DRM_OBSD */
++
+ /*
+  * pin_user_pages()
+  *
+@@ -250,4 +261,6 @@
+ #endif
+ }
+ 
++#endif /* NV_DRM_OBSD */
++
+ #endif // __NV_MM_H__
+diff -ruN a/kernel-open/common/inc/nv-timer.h b/kernel-open/common/inc/nv-timer.h
+--- a/kernel-open/common/inc/nv-timer.h
++++ b/kernel-open/common/inc/nv-timer.h
+@@ -28,6 +28,44 @@
+ 
+ #include "conftest.h"
+ 
++#if defined(NV_DRM_OBSD)
++/*
++ * NV_DRM_OBSD: nvidia-drm built over solnix's OpenBSD drm compat on illumos
++ * (src/drm-port/nvidia-drm).  Not NV_SUNOS: nvidia_uvm's illumos build
++ * compiles this header with NV_SUNOS over its own Linux shadow headers.
++ *
++ * illumos (solnix): the OpenBSD drm compat layer's linux/timer.h is OpenBSD
++ * timeout(9) (struct timeout, mod_timer, timer_delete_sync), implemented over
++ * illumos timeout(9F) by obsd-compat.  The callback runs in callout context.
++ */
++struct nv_timer
++{
++    struct timeout kernel_timer;
++    void (*nv_timer_callback)(struct nv_timer *nv_timer);
++};
++
++static inline void nv_timer_callback_typed_data(void *arg)
++{
++    struct nv_timer *nv_timer = arg;
++
++    nv_timer->nv_timer_callback(nv_timer);
++}
++
++static inline void nv_timer_setup(struct nv_timer *nv_timer,
++                                  void (*callback)(struct nv_timer *nv_timer))
++{
++    nv_timer->nv_timer_callback = callback;
++
++    timeout_set(&nv_timer->kernel_timer, nv_timer_callback_typed_data, nv_timer);
++}
++
++static inline void nv_timer_delete_sync(struct timeout *timer)
++{
++    timer_delete_sync(timer);
++}
++
++#else /* !NV_DRM_OBSD */
++
+ struct nv_timer
+ {
+     struct timer_list kernel_timer;
+@@ -59,4 +97,6 @@
+ #endif
+ }
+ 
++#endif /* NV_DRM_OBSD */
++
+ #endif // __NV_TIMER_H__
+diff -ruN a/kernel-open/nvidia-drm/nv_drm_common_ioctl.h b/kernel-open/nvidia-drm/nv_drm_common_ioctl.h
+--- a/kernel-open/nvidia-drm/nv_drm_common_ioctl.h
++++ b/kernel-open/nvidia-drm/nv_drm_common_ioctl.h
+@@ -88,7 +88,7 @@
+  *
+  * 'warning: suggest parentheses around arithmetic in operand of |'
+  */
+-#if defined(NV_LINUX) || defined(NV_BSD)
++#if defined(NV_LINUX) || defined(NV_BSD) || defined(NV_SUNOS)
+ #define DRM_IOCTL_NVIDIA_FENCE_SUPPORTED                         \
+     DRM_IO(DRM_COMMAND_BASE + DRM_NVIDIA_FENCE_SUPPORTED)
+ #define DRM_IOCTL_NVIDIA_DMABUF_SUPPORTED                        \
+diff -ruN a/kernel-open/nvidia-drm/nvidia-drm-conftest.h b/kernel-open/nvidia-drm/nvidia-drm-conftest.h
+--- a/kernel-open/nvidia-drm/nvidia-drm-conftest.h
++++ b/kernel-open/nvidia-drm/nvidia-drm-conftest.h
+@@ -58,7 +58,7 @@
+ #include <linux/kconfig.h> // for IS_ENABLED()
+ 
+ #if (IS_ENABLED(CONFIG_DRM) && IS_ENABLED(CONFIG_DRM_KMS_HELPER)) ||           \
+-    defined(__FreeBSD__)
++    defined(__FreeBSD__) || defined(NV_SUNOS)
+ #define NV_DRM_AVAILABLE
+ #endif
+ 
+@@ -230,4 +230,17 @@
+ 
+ #endif /* defined(NV_BSD) */
+ 
++/*
++ * solnix: adapt to the OpenBSD drm Linux-compat layer the illumos port builds
++ * against (src/drm-port/obsd-compat + OpenBSD sys/dev/pci/drm).
++ */
++#if defined(NV_SUNOS)
++#include "nvidia-drm-sunos.h"
++#endif
++
++#ifndef NV_DRM_MUTEX
++#define NV_DRM_MUTEX struct mutex
++#define nv_drm_mutex_init(m) mutex_init(m)
++#endif
++
+ #endif /* defined(__NVIDIA_DRM_CONFTEST_H__) */
+diff -ruN a/kernel-open/nvidia-drm/nvidia-drm-crtc.c b/kernel-open/nvidia-drm/nvidia-drm-crtc.c
+--- a/kernel-open/nvidia-drm/nvidia-drm-crtc.c
++++ b/kernel-open/nvidia-drm/nvidia-drm-crtc.c
+@@ -3092,8 +3092,8 @@
+         (1 << head) : 0,
+         &nv_plane_funcs,
+         formats, formats_count,
+-        (plane_type == DRM_PLANE_TYPE_CURSOR) ?
+-            linear_modifiers : nv_dev->modifiers,
++        (const uint64_t *)((plane_type == DRM_PLANE_TYPE_CURSOR) ?
++            linear_modifiers : nv_dev->modifiers),
+         plane_type,
+         NULL);
+     if (ret != 0) {
+@@ -3256,7 +3256,7 @@
+ #endif
+     INIT_LIST_HEAD(&nv_crtc->flip_list);
+     spin_lock_init(&nv_crtc->flip_list_lock);
+-    mutex_init(&nv_crtc->vblank_q_lock);
++    nv_drm_mutex_init(&nv_crtc->vblank_q_lock);
+     nv_crtc->modeset_permission_filep = NULL;
+ 
+     nv_drm_workthread_work_init(&nv_crtc->disable_vblank_work, nv_drm_vblank_disable_fn, nv_crtc);
+diff -ruN a/kernel-open/nvidia-drm/nvidia-drm-crtc.h b/kernel-open/nvidia-drm/nvidia-drm-crtc.h
+--- a/kernel-open/nvidia-drm/nvidia-drm-crtc.h
++++ b/kernel-open/nvidia-drm/nvidia-drm-crtc.h
+@@ -69,7 +69,7 @@
+      */
+     struct list_head flip_list;
+ 
+-    struct mutex vblank_q_lock;
++    NV_DRM_MUTEX vblank_q_lock;
+ 
+     /**
+      * @flip_list_lock:
+diff -ruN a/kernel-open/nvidia-drm/nvidia-drm-drv.c b/kernel-open/nvidia-drm/nvidia-drm-drv.c
+--- a/kernel-open/nvidia-drm/nvidia-drm-drv.c
++++ b/kernel-open/nvidia-drm/nvidia-drm-drv.c
+@@ -852,7 +852,7 @@
+     nv_dev->modifiers[i++] = DRM_FORMAT_MOD_LINEAR;
+     nv_dev->modifiers[i++] = DRM_FORMAT_MOD_INVALID;
+ 
+-    mutex_init(&nv_dev->drm_lut_surface_pool_mutex);
++    nv_drm_mutex_init(&nv_dev->drm_lut_surface_pool_mutex);
+     INIT_LIST_HEAD(&nv_dev->drm_lut_surface_pool);
+ 
+     /* Initialize drm_device::mode_config */
+@@ -1662,6 +1662,13 @@
+     return NULL;
+ }
+ 
++#if !defined(NV_SUNOS)
++/*
++ * illumos: the drm core's own ioctl entry point (drmioctl, called by the
++ * module shell) serves the minors; there is no file_operations hook in which
++ * to wrap DRM_IOCTL_MODE_REVOKE_LEASE.
++ * shortcut: revoked lease objects keep their NVKMS state, upgrade with D2.1/D2.3.
++ */
+ static void nv_drm_get_revoked_objects(struct drm_device *dev,
+                                        struct drm_file *filep, unsigned int cmd,
+                                        unsigned long arg, int **objects,
+@@ -1806,6 +1813,8 @@
+     return retcode;
+ }
+ 
++#endif /* !NV_SUNOS */
++
+ static int nv_drm_load_noop(struct drm_device *dev, unsigned long flags)
+ {
+     return 0;
+@@ -1813,6 +1822,7 @@
+ 
+ static const struct file_operations nv_drm_fops = {
+     .owner          = THIS_MODULE,
++#if !defined(NV_SUNOS)  /* OpenBSD's struct file_operations is { owner } */
+ 
+     .open           = drm_open,
+     .release        = drm_release,
+@@ -1831,6 +1841,7 @@
+ #if defined(FOP_UNSIGNED_OFFSET)
+     .fop_flags   = FOP_UNSIGNED_OFFSET,
+ #endif
++#endif /* !NV_SUNOS */
+ };
+ 
+ static const struct drm_ioctl_desc nv_drm_ioctls[] = {
+@@ -2078,11 +2089,16 @@
+     nv_dev->gpu_info = gpu_info->gpuInfo;
+     nv_dev->gpu_mig_device = gpu_info->migDevice;
+ 
+-    mutex_init(&nv_dev->lock);
++    nv_drm_mutex_init(&nv_dev->lock);
+ 
+     /* Allocate DRM device */
+ 
++#if defined(NV_SUNOS)
++    (void)device;
++    dev = nv_drm_sunos_dev_alloc(&nv_drm_driver, gpu_info);
++#else
+     dev = drm_dev_alloc(&nv_drm_driver, device);
++#endif
+ 
+     if (dev == NULL) {
+         NV_DRM_DEV_LOG_ERR(nv_dev, "Failed to allocate device");
+@@ -2097,9 +2113,11 @@
+         device->bus == &pci_bus_type;
+ #elif defined(NV_BSD)
+         devclass_find("pci");
++#elif defined(NV_SUNOS)
++        true;   /* nv_drm_sunos_dev_alloc() filled dev->pdev from the GPU */
+ #endif
+ 
+-#if defined(NV_DRM_DEVICE_HAS_PDEV)
++#if defined(NV_DRM_DEVICE_HAS_PDEV) && !defined(NV_SUNOS)
+     if (bus_is_pci) {
+         dev->pdev = to_pci_dev(device);
+     }
+@@ -2201,7 +2219,7 @@
+ /*
+  * Enumerate NVIDIA GPUs and allocate/register DRM device for each of them.
+  */
+-#if defined(NV_LINUX)
++#if defined(NV_LINUX) || defined(NV_SUNOS)
+ int nv_drm_probe_devices(void)
+ {
+     NvU32 gpu_count;
+diff -ruN a/kernel-open/nvidia-drm/nvidia-drm-gem.c b/kernel-open/nvidia-drm/nvidia-drm-gem.c
+--- a/kernel-open/nvidia-drm/nvidia-drm-gem.c
++++ b/kernel-open/nvidia-drm/nvidia-drm-gem.c
+@@ -108,8 +108,10 @@
+     .vmap    = nv_drm_gem_prime_vmap,
+     .vunmap  = nv_drm_gem_prime_vunmap,
+ #endif
++#if !defined(NV_SUNOS) /* OpenBSD's vm_ops is a uvm_pagerops; mmap is D2.3 */
+     .vm_ops  = &nv_drm_gem_vma_ops,
+ #endif
++#endif
+ };
+ #endif
+ 
+@@ -151,6 +153,13 @@
+     struct drm_gem_object *gem_dst;
+     struct nv_drm_gem_object *nv_gem_src;
+ 
++#if !defined(NV_SUNOS)
++    /*
++     * illumos: OpenBSD's struct dma_buf has no owner, so a buffer from another
++     * NVIDIA device is not recognised here and goes through
++     * drm_gem_prime_import like any foreign buffer.
++     * shortcut: no prime_dup between two NVIDIA GPUs, upgrade with D2.4 PRIME.
++     */
+     if (dma_buf->owner == dev->driver->fops->owner) {
+         nv_gem_src = to_nv_gem_object(dma_buf->priv);
+ 
+@@ -171,6 +180,7 @@
+             return gem_dst;
+         }
+     }
++#endif
+ 
+     return drm_gem_prime_import(dev, dma_buf);
+ }
+@@ -247,6 +257,7 @@
+     return ret;
+ }
+ 
++#if !defined(NV_SUNOS) /* illumos: no Linux VM; GEM mmap is D2.3 (devmap) */
+ int nv_drm_mmap(struct file *file, struct vm_area_struct *vma)
+ {
+     struct drm_file *priv = file->private_data;
+@@ -307,6 +318,8 @@
+     return ret;
+ }
+ 
++#endif /* !NV_SUNOS */
++
+ int nv_drm_gem_identify_object_ioctl(struct drm_device *dev,
+                                      void *data, struct drm_file *filep)
+ {
+@@ -350,6 +363,7 @@
+     return 0;
+ }
+ 
++#if !defined(NV_SUNOS) /* illumos: no Linux VM; GEM mmap is D2.3 (devmap) */
+ /* XXX Move these vma operations to os layer */
+ 
+ static vm_fault_t __nv_drm_vma_fault(struct vm_area_struct *vma,
+@@ -388,5 +402,6 @@
+     .fault = nv_drm_vma_fault,
+     .close = drm_gem_vm_close,
+ };
++#endif /* !NV_SUNOS */
+ 
+ #endif /* NV_DRM_AVAILABLE */
+diff -ruN a/kernel-open/nvidia-drm/nvidia-drm-gem-dma-buf.c b/kernel-open/nvidia-drm/nvidia-drm-gem-dma-buf.c
+--- a/kernel-open/nvidia-drm/nvidia-drm-gem-dma-buf.c
++++ b/kernel-open/nvidia-drm/nvidia-drm-gem-dma-buf.c
+@@ -62,6 +62,7 @@
+     return nv_drm_gem_create_mmap_offset(nv_gem, offset);
+ }
+ 
++#if !defined(NV_SUNOS) /* illumos: no Linux VM; GEM mmap is D2.3 (devmap) */
+ static int __nv_drm_gem_dma_buf_mmap(struct nv_drm_gem_object *nv_gem,
+                                      struct vm_area_struct *vma)
+ {
+@@ -125,11 +126,14 @@
+ 
+     return ret;
+ }
++#endif /* !NV_SUNOS */
+ 
+ const struct nv_drm_gem_object_funcs __nv_gem_dma_buf_ops = {
+     .free = __nv_drm_gem_dma_buf_free,
+     .create_mmap_offset = __nv_drm_gem_dma_buf_create_mmap_offset,
++#if !defined(NV_SUNOS)
+     .mmap = __nv_drm_gem_dma_buf_mmap,
++#endif
+ };
+ 
+ struct drm_gem_object*
+diff -ruN a/kernel-open/nvidia-drm/nvidia-drm-gem-nvkms-memory.c b/kernel-open/nvidia-drm/nvidia-drm-gem-nvkms-memory.c
+--- a/kernel-open/nvidia-drm/nvidia-drm-gem-nvkms-memory.c
++++ b/kernel-open/nvidia-drm/nvidia-drm-gem-nvkms-memory.c
+@@ -78,6 +78,7 @@
+ static int __nv_drm_gem_nvkms_map(
+     struct nv_drm_gem_nvkms_memory *nv_nvkms_memory);
+ 
++#if !defined(NV_SUNOS) /* illumos: no Linux VM; GEM mmap is D2.3 (devmap) */
+ static int __nv_drm_gem_nvkms_mmap(struct nv_drm_gem_object *nv_gem,
+                                    struct vm_area_struct *vma)
+ {
+@@ -167,6 +168,7 @@
+ #endif /* defined(NV_VMF_INSERT_PFN_PRESENT) */
+     return ret;
+ }
++#endif /* !NV_SUNOS */
+ 
+ static struct drm_gem_object *__nv_drm_gem_nvkms_prime_dup(
+     struct drm_device *dev,
+@@ -396,8 +398,10 @@
+     .prime_dup = __nv_drm_gem_nvkms_prime_dup,
+     .prime_vmap = __nv_drm_gem_nvkms_prime_vmap,
+     .prime_vunmap = __nv_drm_gem_nvkms_prime_vunmap,
++#if !defined(NV_SUNOS)
+     .mmap = __nv_drm_gem_nvkms_mmap,
+     .handle_vma_fault = __nv_drm_gem_nvkms_handle_vma_fault,
++#endif
+     .create_mmap_offset = __nv_drm_gem_map_nvkms_memory_offset,
+     .prime_get_sg_table = __nv_drm_gem_nvkms_memory_prime_get_sg_table,
+ };
+@@ -420,7 +424,7 @@
+         return -EINVAL;
+     }
+ 
+-    mutex_init(&nv_nvkms_memory->map_lock);
++    nv_drm_mutex_init(&nv_nvkms_memory->map_lock);
+     nv_nvkms_memory->pPhysicalAddress = NULL;
+     nv_nvkms_memory->pWriteCombinedIORemapAddress = NULL;
+     nv_nvkms_memory->physically_mapped = false;
+diff -ruN a/kernel-open/nvidia-drm/nvidia-drm-gem-nvkms-memory.h b/kernel-open/nvidia-drm/nvidia-drm-gem-nvkms-memory.h
+--- a/kernel-open/nvidia-drm/nvidia-drm-gem-nvkms-memory.h
++++ b/kernel-open/nvidia-drm/nvidia-drm-gem-nvkms-memory.h
+@@ -39,7 +39,7 @@
+      * __nv_drm_gem_nvkms_map() and __nv_drm_gem_nvkms_mmap are structured such
+      * that readers are not required to hold the lock.
+      */
+-    struct mutex map_lock;
++    NV_DRM_MUTEX map_lock;
+     bool physically_mapped;
+     void *pPhysicalAddress;
+     void *pWriteCombinedIORemapAddress;
+diff -ruN a/kernel-open/nvidia-drm/nvidia-drm-gem-user-memory.c b/kernel-open/nvidia-drm/nvidia-drm-gem-user-memory.c
+--- a/kernel-open/nvidia-drm/nvidia-drm-gem-user-memory.c
++++ b/kernel-open/nvidia-drm/nvidia-drm-gem-user-memory.c
+@@ -81,6 +81,7 @@
+     nv_drm_vunmap(address);
+ }
+ 
++#if !defined(NV_SUNOS) /* illumos: no Linux VM; GEM mmap is D2.3 (devmap) */
+ static int __nv_drm_gem_user_memory_mmap(struct nv_drm_gem_object *nv_gem,
+                                          struct vm_area_struct *vma)
+ {
+@@ -162,6 +163,7 @@
+     return __nv_vm_insert_mixed_helper(vma, address, pfn);
+ #endif
+ }
++#endif /* !NV_SUNOS */
+ 
+ static int __nv_drm_gem_user_create_mmap_offset(
+     struct nv_drm_device *nv_dev,
+@@ -177,8 +179,10 @@
+     .prime_get_sg_table = __nv_drm_gem_user_memory_prime_get_sg_table,
+     .prime_vmap = __nv_drm_gem_user_memory_prime_vmap,
+     .prime_vunmap = __nv_drm_gem_user_memory_prime_vunmap,
++#if !defined(NV_SUNOS)
+     .mmap = __nv_drm_gem_user_memory_mmap,
+     .handle_vma_fault = __nv_drm_gem_user_memory_handle_vma_fault,
++#endif
+     .create_mmap_offset = __nv_drm_gem_user_create_mmap_offset,
+ };
+ 
+diff -ruN a/kernel-open/nvidia-drm/nvidia-drm-helper.h b/kernel-open/nvidia-drm/nvidia-drm-helper.h
+--- a/kernel-open/nvidia-drm/nvidia-drm-helper.h
++++ b/kernel-open/nvidia-drm/nvidia-drm-helper.h
+@@ -56,7 +56,15 @@
+ nv_drm_prime_pages_to_sg(struct drm_device *dev,
+                          struct page **pages, unsigned int nr_pages)
+ {
+-#if defined(NV_DRM_PRIME_PAGES_TO_SG_HAS_DRM_DEVICE_ARG)
++#if defined(NV_SUNOS)
++    /*
++     * illumos: the page lists here are RM's (illumos page_t, from
++     * nv_get_phys_pages) or none, never the OpenBSD vm_page that the compat
++     * drm_prime_pages_to_sg() reads.  STUB until D2.4 (PRIME): no sg table.
++     */
++    (void)dev; (void)pages; (void)nr_pages;
++    return ERR_PTR(-EOPNOTSUPP);
++#elif defined(NV_DRM_PRIME_PAGES_TO_SG_HAS_DRM_DEVICE_ARG)
+     return drm_prime_pages_to_sg(dev, pages, nr_pages);
+ #else
+     return drm_prime_pages_to_sg(pages, nr_pages);
+diff -ruN a/kernel-open/nvidia-drm/nvidia-drm-os-interface.c b/kernel-open/nvidia-drm/nvidia-drm-os-interface.c
+--- a/kernel-open/nvidia-drm/nvidia-drm-os-interface.c
++++ b/kernel-open/nvidia-drm/nvidia-drm-os-interface.c
+@@ -80,6 +80,40 @@
+     WRITE_COMBINE_FLUSH();
+ }
+ 
++#if defined(NV_SUNOS)
++/*
++ * illumos (solnix): no Linux page pinning.  STUB until D2.3: importing
++ * userspace memory (DRM_IOCTL_NVIDIA_GEM_IMPORT_USERSPACE_MEMORY) fails.
++ */
++int nv_drm_lock_user_pages(unsigned long address,
++                           unsigned long pages_count, struct page ***pages)
++{
++    (void)address; (void)pages_count; (void)pages;
++    return -EOPNOTSUPP;
++}
++
++void nv_drm_unlock_user_pages(unsigned long  pages_count, struct page **pages)
++{
++    (void)pages_count;
++    nv_drm_free(pages);
++}
++
++/*
++ * The OpenBSD compat vmap() takes vm_page pointers and vunmap() a size, which
++ * nv_drm_vunmap() is not given.  STUB until D2.3: no kernel mapping of page
++ * lists, so prime vmap of sysmem objects fails with ENOMEM.
++ */
++void *nv_drm_vmap(struct page **pages, unsigned long pages_count, bool cached)
++{
++    (void)pages; (void)pages_count; (void)cached;
++    return NULL;
++}
++
++void nv_drm_vunmap(void *address)
++{
++    (void)address;
++}
++#else /* !NV_SUNOS */
+ int nv_drm_lock_user_pages(unsigned long address,
+                            unsigned long pages_count, struct page ***pages)
+ {
+@@ -160,6 +194,7 @@
+ {
+     vunmap(address);
+ }
++#endif /* NV_SUNOS */
+ 
+ bool nv_drm_workthread_init(nv_drm_workthread *worker, const char *name)
+ {
+@@ -265,8 +300,14 @@
+ 
+ void nv_drm_yield(void)
+ {
++#if defined(NV_SUNOS)
++    /* illumos delay(9F): sleep one clock tick, as schedule_timeout(1).
++     * Parenthesised: obsd_prelude.h maps the macro delay() to a busy-wait. */
++    (delay)(1);
++#else
+     set_current_state(TASK_INTERRUPTIBLE);
+     schedule_timeout(1);
++#endif
+ }
+ 
+ #if defined(NVCPU_AARCH64)
+diff -ruN a/kernel-open/nvidia-drm/nvidia-drm-os-interface.h b/kernel-open/nvidia-drm/nvidia-drm-os-interface.h
+--- a/kernel-open/nvidia-drm/nvidia-drm-os-interface.h
++++ b/kernel-open/nvidia-drm/nvidia-drm-os-interface.h
+@@ -31,7 +31,7 @@
+ 
+ #include "linux/dma-fence.h"
+ 
+-#if defined(NV_LINUX) || defined(NV_BSD)
++#if defined(NV_LINUX) || defined(NV_BSD) || defined(NV_SUNOS)
+ #include "nv-kthread-q.h"
+ #include "linux/spinlock.h"
+ 
+@@ -47,7 +47,7 @@
+ #error "Need to define deferred work primitives for this OS"
+ #endif
+ 
+-#if defined(NV_LINUX) || defined(NV_BSD)
++#if defined(NV_LINUX) || defined(NV_BSD) || defined(NV_SUNOS)
+ #include "nv-timer.h"
+ 
+ typedef struct nv_timer nv_drm_timer;
+diff -ruN a/kernel-open/nvidia-drm/nvidia-drm-priv.h b/kernel-open/nvidia-drm/nvidia-drm-priv.h
+--- a/kernel-open/nvidia-drm/nvidia-drm-priv.h
++++ b/kernel-open/nvidia-drm/nvidia-drm-priv.h
+@@ -128,7 +128,7 @@
+      *     ..
+      *   mutex_unlock(nv_drm_device::lock);
+      */
+-    struct mutex lock;
++    NV_DRM_MUTEX lock;
+ 
+     NvU32 pitchAlignment;
+ 
+@@ -208,7 +208,7 @@
+ 
+     nv_drm_workthread vblank_worker;
+ 
+-    struct mutex drm_lut_surface_pool_mutex;
++    NV_DRM_MUTEX drm_lut_surface_pool_mutex;
+     struct list_head drm_lut_surface_pool;
+ };
+ 
+diff -ruN a/kernel-open/nvidia-drm/nvidia-drm-sunos.h b/kernel-open/nvidia-drm/nvidia-drm-sunos.h
+--- a/kernel-open/nvidia-drm/nvidia-drm-sunos.h
++++ b/kernel-open/nvidia-drm/nvidia-drm-sunos.h
+@@ -0,0 +1,83 @@
++/*
++ * SPDX-FileCopyrightText: Copyright (c) 2026 solnix contributors
++ * SPDX-License-Identifier: MIT
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a
++ * copy of this software and associated documentation files (the "Software"),
++ * to deal in the Software without restriction, including without limitation
++ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
++ * and/or sell copies of the Software, and to permit persons to whom the
++ * Software is furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included in
++ * all copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
++ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
++ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
++ * DEALINGS IN THE SOFTWARE.
++ */
++
++/*
++ * nvidia-drm on illumos (solnix): quirks of the OpenBSD drm Linux-compat
++ * layer it is built against (OpenBSD sys/dev/pci/drm 37a498de plus
++ * src/drm-port/obsd-compat, the layer i915 runs on), in the role the NV_BSD
++ * block of nvidia-drm-conftest.h plays for FreeBSD's linuxkpi.
++ *
++ * In that layer a Linux "struct mutex" is OpenBSD's struct rwlock
++ * (linux/mutex.h) and a Linux spinlock_t is OpenBSD's struct mutex, which is
++ * an illumos kmutex_t (obsd_kern.h).  nvidia-drm's struct mutex members are
++ * declared struct rwlock under NV_SUNOS and initialised with rw_init().
++ */
++#ifndef __NVIDIA_DRM_SUNOS_H__
++#define __NVIDIA_DRM_SUNOS_H__
++
++#if !defined(NV_DRM_OBSD)
++#error "nvidia-drm on illumos is built with -DNV_DRM_OBSD (the common/inc arms)"
++#endif
++#if defined(NV_DRM_FBDEV_AVAILABLE)
++#error "nvidia-drm fbdev emulation is not ported to illumos"
++#endif
++
++#include <linux/iosys-map.h>
++
++/* Not in OpenBSD's linux/spinlock.h; the drm sources there call mtx_init. */
++#define spin_lock_init(lock)    mtx_init((lock), IPL_TTY)
++/* Asserts the caller holds the lock, as FreeBSD's mtx_owned does. */
++#define spin_is_locked(lock)    mtx_owned(lock)
++
++/* Linux struct mutex is struct rwlock in OpenBSD's linux/mutex.h. */
++#define NV_DRM_MUTEX struct rwlock
++#define nv_drm_mutex_init(m) rw_init((m), "nvidia-drm")
++
++/* OpenBSD's drm has no drm_atomic_state_free; drm_atomic_state_put frees. */
++#define drm_atomic_state_free drm_atomic_state_put
++
++/*
++ * Write-combined kernel mapping of a GPU aperture (the BAR1 address NVKMS
++ * mapMemory(NVKMS_KAPI_MAPPING_TYPE_KERNEL) returns), for dumb buffers.
++ * In the illumos module shell.
++ */
++void *nv_drm_sunos_ioremap_wc(uint64_t pa, size_t size);
++void nv_drm_sunos_iounmap(void *va);
++#define ioremap_wc(pa, size)    nv_drm_sunos_ioremap_wc((pa), (size))
++#define iounmap(va)             nv_drm_sunos_iounmap(va)
++
++struct drm_device;
++struct NvKmsKapiGpuInfo;
++struct drm_driver;
++
++/*
++ * OpenBSD's drm core makes a drm_device in drm_attach() (autoconf) and has no
++ * drm_dev_alloc() (it is "#ifdef notyet" in drm_drv.c).  The illumos module
++ * shell (nvidia-drm-illumos.c) creates it for an NVKMS GPU: the
++ * struct device, the PCI identity (pdev) of the GPU behind os_device_ptr
++ * (the nvidia dev_info_t) and the minors.  Returns NULL on failure.
++ */
++struct drm_device *nv_drm_sunos_dev_alloc(const struct drm_driver *driver,
++                                          const struct NvKmsKapiGpuInfo *gpu_info);
++
++#endif /* __NVIDIA_DRM_SUNOS_H__ */
+diff -ruN a/kernel-open/nvidia-drm/nv-kthread-q.c b/kernel-open/nvidia-drm/nv-kthread-q.c
+--- a/kernel-open/nvidia-drm/nv-kthread-q.c
++++ b/kernel-open/nvidia-drm/nv-kthread-q.c
+@@ -23,6 +23,198 @@
+ 
+ #include "nv-kthread-q.h"
+ 
++#if defined(NV_DRM_OBSD)
++/*
++ * illumos (solnix): the queue of kernel-illumos/nvidia-modeset/nvkms_q.c.
++ * Each queue is served by one long-running task on a single-threaded
++ * ddi_taskq, which gives it a dedicated kernel thread like the Linux kthread.
++ * nv_kthread_q_schedule_q_item() takes only an adaptive kmutex, so it may be
++ * called from timeout(9F) callbacks and low-level interrupt threads.
++ */
++#include <sys/types.h>
++#include <sys/systm.h>
++#include <sys/cmn_err.h>
++#include <sys/ksynch.h>
++#include <sys/list.h>
++#include <sys/sunddi.h>
++
++static void _main_loop(void *args)
++{
++    nv_kthread_q_t *q = args;
++    nv_kthread_q_item_t *q_item;
++
++    mutex_enter(&q->q_lock);
++
++    for (;;) {
++        while (list_is_empty(&q->q_list) && !q->main_loop_should_exit)
++            cv_wait(&q->q_cv, &q->q_lock);
++
++        q_item = list_remove_head(&q->q_list);
++        if (q_item == NULL)
++            break;
++
++        mutex_exit(&q->q_lock);
++
++        q_item->function_to_run(q_item->function_args);
++
++        mutex_enter(&q->q_lock);
++    }
++
++    mutex_exit(&q->q_lock);
++}
++
++int nv_kthread_q_init_on_node(nv_kthread_q_t *q, const char *q_name, int preferred_node)
++{
++    (void)preferred_node;
++
++    bzero(q, sizeof(*q));
++
++    mutex_init(&q->q_lock, NULL, MUTEX_DRIVER, NULL);
++    cv_init(&q->q_cv, NULL, CV_DRIVER, NULL);
++    list_create(&q->q_list, sizeof(nv_kthread_q_item_t),
++                offsetof(nv_kthread_q_item_t, q_list_node));
++
++    q->q_taskq = ddi_taskq_create(NULL, q_name, 1, TASKQ_DEFAULTPRI, 0);
++    if (q->q_taskq == NULL)
++        goto fail;
++
++    if (ddi_taskq_dispatch(q->q_taskq, _main_loop, q, DDI_SLEEP) != DDI_SUCCESS) {
++        ddi_taskq_destroy(q->q_taskq);
++        q->q_taskq = NULL;
++        goto fail;
++    }
++
++    return 0;
++
++fail:
++    list_destroy(&q->q_list);
++    cv_destroy(&q->q_cv);
++    mutex_destroy(&q->q_lock);
++    return -ENOMEM;
++}
++
++int nv_kthread_q_init(nv_kthread_q_t *q, const char *qname)
++{
++    return nv_kthread_q_init_on_node(q, qname, NV_KTHREAD_NO_NODE);
++}
++
++/* Returns non-zero if the item was queued, zero if it was already pending. */
++static int _raw_q_schedule(nv_kthread_q_t *q, nv_kthread_q_item_t *q_item)
++{
++    int ret = 1;
++
++    mutex_enter(&q->q_lock);
++
++    if (!list_link_active(&q_item->q_list_node)) {
++        list_insert_tail(&q->q_list, q_item);
++        cv_signal(&q->q_cv);
++    } else {
++        ret = 0;
++    }
++
++    mutex_exit(&q->q_lock);
++
++    return ret;
++}
++
++void nv_kthread_q_item_init(nv_kthread_q_item_t *q_item,
++                            nv_q_func_t function_to_run,
++                            void *function_args)
++{
++    list_link_init(&q_item->q_list_node);
++    q_item->function_to_run = function_to_run;
++    q_item->function_args = function_args;
++}
++
++int nv_kthread_q_schedule_q_item(nv_kthread_q_t *q,
++                                 nv_kthread_q_item_t *q_item)
++{
++    if (q->main_loop_should_exit) {
++        cmn_err(CE_WARN, "nvidia-drm: nv_kthread_q: item scheduled on a "
++                "stopped queue %p", (void *)q);
++        return 0;
++    }
++
++    return _raw_q_schedule(q, q_item);
++}
++
++typedef struct {
++    kmutex_t lock;
++    kcondvar_t cv;
++    int done;
++} nv_kthread_q_completion_t;
++
++static void _q_flush_function(void *args)
++{
++    nv_kthread_q_completion_t *c = args;
++
++    mutex_enter(&c->lock);
++    c->done = 1;
++    cv_broadcast(&c->cv);
++    mutex_exit(&c->lock);
++}
++
++static void _raw_q_flush(nv_kthread_q_t *q)
++{
++    nv_kthread_q_item_t q_item;
++    nv_kthread_q_completion_t c;
++
++    mutex_init(&c.lock, NULL, MUTEX_DRIVER, NULL);
++    cv_init(&c.cv, NULL, CV_DRIVER, NULL);
++    c.done = 0;
++
++    nv_kthread_q_item_init(&q_item, _q_flush_function, &c);
++    (void)_raw_q_schedule(q, &q_item);
++
++    /* Once the flush item has run, everything queued before it has run. */
++    mutex_enter(&c.lock);
++    while (!c.done)
++        cv_wait(&c.cv, &c.lock);
++    mutex_exit(&c.lock);
++
++    cv_destroy(&c.cv);
++    mutex_destroy(&c.lock);
++}
++
++void nv_kthread_q_flush(nv_kthread_q_t *q)
++{
++    if (q->main_loop_should_exit) {
++        cmn_err(CE_WARN, "nvidia-drm: nv_kthread_q: flush of a stopped "
++                "queue %p", (void *)q);
++        return;
++    }
++
++    /* Twice, to cover a q_item that reschedules itself. */
++    _raw_q_flush(q);
++    _raw_q_flush(q);
++}
++
++void nv_kthread_q_stop(nv_kthread_q_t *q)
++{
++    if (q->q_taskq == NULL)
++        return;
++
++    nv_kthread_q_flush(q);
++
++    mutex_enter(&q->q_lock);
++    if (!list_is_empty(&q->q_list))
++        cmn_err(CE_WARN, "nvidia-drm: nv_kthread_q: queue %p not empty "
++                "after flushing", (void *)q);
++    q->main_loop_should_exit = 1;
++    cv_broadcast(&q->q_cv);
++    mutex_exit(&q->q_lock);
++
++    /* Waits for the main loop, which drains anything still queued. */
++    ddi_taskq_destroy(q->q_taskq);
++    q->q_taskq = NULL;
++
++    list_destroy(&q->q_list);
++    cv_destroy(&q->q_cv);
++    mutex_destroy(&q->q_lock);
++}
++
++#else /* !NV_DRM_OBSD */
++
+ #include <linux/kthread.h>
+ #include <linux/interrupt.h>
+ #include <linux/completion.h>
+@@ -315,3 +507,5 @@
+     _raw_q_flush(q);
+     _raw_q_flush(q);
+ }
++
++#endif /* NV_DRM_OBSD */
+diff -ruN a/kernel-open/nvidia-drm/nv-pci-table.c b/kernel-open/nvidia-drm/nv-pci-table.c
+--- a/kernel-open/nvidia-drm/nv-pci-table.c
++++ b/kernel-open/nvidia-drm/nv-pci-table.c
+@@ -35,6 +35,13 @@
+ #define PCI_CLASS_BRIDGE_OTHER 0x0680
+ #endif
+ 
++#if defined(NV_SUNOS)
++/* OpenBSD's linux/pci.h (solnix drm compat) has PCI_CLASS_DISPLAY_VGA only */
++#define PCI_VENDOR_ID_NVIDIA 0x10de
++#define PCI_CLASS_DISPLAY_3D 0x0302
++#define PCI_CLASS_BRIDGE_OTHER 0x0680
++#endif
++
+ /* Devices supported by RM */
+ struct pci_device_id nv_pci_table[] = {
+     {

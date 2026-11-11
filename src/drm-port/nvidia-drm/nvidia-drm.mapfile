@@ -1,0 +1,17 @@
+# nvidia-drm.mapfile -- scope every symbol of the linked nvidia-drm module local
+# except the module interface krtld resolves by name (_init/_fini/_info and
+# _depends_on). Same reason as i915.mapfile: nvidia-drm links a private copy of
+# the OpenBSD drm core and the obsd-compat layer, whose globals (drm_*, tsleep,
+# timeout_*, jiffies, ...) i915 also defines; exported, krtld would bind one
+# module's references into the other's copy.
+$mapfile_version 2
+
+SYMBOL_SCOPE {
+	global:
+		_init;
+		_fini;
+		_info;
+		_depends_on;
+	local:
+		*;
+};
