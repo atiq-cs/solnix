@@ -7,8 +7,9 @@
 # without touching the GSP. The probe's first open of /dev/nvidia0 runs RmInitAdapter and boots the GSP,
 # and the probe keeps it open (RM shuts the GPU down at the last close). A failure is logged with the
 # kernel's messages and left to the guard: no reboot here, so the failed state can be read over ssh.
-# RTD3=1 (hardware.graphics.nvidia.rtd3): the probe opens the GPU once (RmInitAdapter, GSP) and closes it, so the
-# nvidia module powers it off 10 s later (runtime D3cold); this then logs the power state every 60 s.
+# RTD3=1 (hardware.graphics.nvidia.rtd3): tzmon powered the GPU off at boot; the open of nvidia@0:nvidia-poweron
+# attaches nvidia to it (the cold attach). The probe then opens the GPU once (RmInitAdapter, GSP) and closes it, so
+# the nvidia module powers it off 10 s later (runtime D3cold); this then logs the power state every 60 s.
 # MODESET=1 (hardware.graphics.nvidia.modeset): after the probe, configure nvidia_modeset (it refuses to load before
 # RM is up): /dev/nvidia-modeset. DRM=1 (hardware.graphics.nvidia.drm) also starts nvidia-drm by opening its ctl
 # node: /dev/dri/card1 and renderD129. nvidia-drm holds no GPU while no client has card1/renderD129 open, so RTD3
@@ -25,6 +26,17 @@ log "start: $(uname -v); dump device: $(dumpadm 2>/dev/null | sed -n 's/.*Dump d
 rm -f "$OKFILE"; sleep 10
 [ -e "$OKFILE" ] || fail "the thermal guard is not sampling ($OKFILE not renewed in 10 s); not starting RM"
 devfsadm -i nvidia >> "$LOG" 2>&1 || log "devfsadm -i nvidia rc=$?"
+if [ "${RTD3:-0}" = 1 ]; then
+  # tzmon powered the GPU off at boot and offlined it: the cold attach (nvidia-oss patches/0003) powers it on,
+  # restores and verifies its BARs, and attaches nvidia; it refuses (GPU off again) on any mismatch
+  c=/devices/pseudo/nvidia@0:nvidia-poweron
+  if ( exec 3< "$c" ) 2>> "$LOG"; then
+    log "cold attach: ok (GPUT $(kstat -p dgputemp:0:ec:gput_C 2>/dev/null | awk '{print $2}'), psta $(kstat -p dgputemp:0:ec:psta 2>/dev/null | awk '{print $2}'))"
+  else
+    fail "cold attach (open $c) failed: $(dmesg 2>/dev/null | grep 'cold attach' | tail -3 | tr '\n' ' ')"
+  fi
+  devfsadm -i nvidia >> "$LOG" 2>&1 || log "devfsadm -i nvidia rc=$?"
+fi
 [ -c /dev/nvidiactl ] || fail "no /dev/nvidiactl (nvidia did not attach)"
 [ -c /dev/nvidia0 ] || fail "no /dev/nvidia0 (the GPU did not attach)"
 drm_up() {

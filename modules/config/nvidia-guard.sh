@@ -23,9 +23,13 @@
 # to MAXT before RM can manage it. Measured 2026-11-03 on lixi: 54 -> 80 C in 88 s, powered with no RM. The reboot
 # lands in the boot-once fallback, where tzmon powers the dGPU off early. The guard has not written OKFILE yet, so
 # site/solnix-nvidia never starts RM on a warm start. In BE 34 the first sample came 1 s before nvidia's PCI attach.
+# EXPECT_OFF=1 (hardware.graphics.nvidia.rtd3): tzmon keeps its boot-time power-off, ~2 s after the kernel banner,
+# so the FIRST sample must see the GPU off (no reading, psta 0 and pr3_sta 0). A GPU that is powered then, readable
+# or not, means tzmon did not cut it: the guard reboots into the fallback. Later samples may see it on (the cold
+# attach, nvidia-oss patches/0003), with the off -> on grace and the first-reading COLDT rule as above.
 set -u
 PATH=/usr/sbin:/usr/bin:/sbin
-: "${SENSOR:=gput_C}" "${INTERVAL:=3}" "${DRYRUN:=0}" "${SAMPLES:=0}" "${OKFILE:=/var/run/solnix-nvidia-guard.ok}" "${GRACE:=10}" "${COLDT:=$((MAXT - 10))}"
+: "${SENSOR:=gput_C}" "${INTERVAL:=3}" "${DRYRUN:=0}" "${SAMPLES:=0}" "${OKFILE:=/var/run/solnix-nvidia-guard.ok}" "${GRACE:=10}" "${COLDT:=$((MAXT - 10))}" "${EXPECT_OFF:=0}"
 log() { echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) solnix-nvidia-guard: $*" | tee -a "$LOG"; }
 bail() {
   if [ "$DRYRUN" = 1 ]; then log "would reboot: $*"; exit 0; fi
@@ -36,10 +40,15 @@ bail() {
 }
 read_k() { kstat -p "dgputemp:0:ec:$1" 2>/dev/null | awk '{print $2}'; }
 [ -n "$(kstat -p dgputemp:0:ec:reads 2>/dev/null)" ] || modload -p misc/dgputemp >/dev/null 2>&1
-log "start: sensor dgputemp:0:ec:$SENSOR, limit ${MAXT} C, cold start below ${COLDT} C, every ${INTERVAL} s$( [ "$DRYRUN" = 1 ] && echo ', DRY RUN')"
+log "start: sensor dgputemp:0:ec:$SENSOR, limit ${MAXT} C, cold start below ${COLDT} C, every ${INTERVAL} s$( [ "$EXPECT_OFF" = 1 ] && echo ', expects the dGPU off at start (tzmon)')$( [ "$DRYRUN" = 1 ] && echo ', DRY RUN')"
 n=0 off=0 grace=0 first=1
 while :; do
   t=$(read_k "$SENSOR"); n=$((n + 1))
+  if [ "$n" = 1 ] && [ "$EXPECT_OFF" = 1 ]; then
+    p=$(read_k psta); s=$(read_k pr3_sta)
+    { [ "$p" = 0 ] && [ "$s" = 0 ] && case $t in ''|*[!0-9]*) true;; *) false;; esac; } \
+      || bail "the dGPU is powered at the guard's start (GPUT '$t', psta '$p', pr3_sta '$s'), but tzmon should have powered it off at boot (EXPECT_OFF): check tzmon's solnix-dgpu-off line in /var/adm/messages"
+  fi
   case $t in
     ''|*[!0-9]*)
       p=$(read_k psta); s=$(read_k pr3_sta)

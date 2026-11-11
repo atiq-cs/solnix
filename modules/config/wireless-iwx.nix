@@ -84,7 +84,7 @@ let
     gspFirmware = if nvMedia && gfx.nvidia.acceptFirmwareLicense then s.nvidiaGspFirmware true else null;
     i915Firmware = if gfx.i915.acceptFirmwareLicense then s.i915Firmware true else null;
   } else wifiKern;
-  # nvidia bound at boot: nvidia.conf, tzmon's opt-out, GSP firmware in usr/kernel (graphics-gpu.nix).
+  # nvidia bound at boot: nvidia.conf, tzmon's opt-out (none with rtd3), GSP firmware in usr/kernel (graphics-gpu.nix).
   gpuKern = if nvBound then s.mkNvidiaBootKernel gpuKern0 (s.nvidiaGspFirmware gfx.nvidia.acceptFirmwareLicense)
     { rtd3 = gfx.nvidia.rtd3; modeset = gfx.nvidia.modeset; drm = gfx.nvidia.drm; } else gpuKern0;
   # the touchpad (options in ./touchpad-i2c-hid.nix) last: dwiic + ihid, the dacf rule.
@@ -439,7 +439,7 @@ in
         MAXT = toString gfx.nvidia.maxTempC;
         INTERVAL = "3";
         LOG = "/var/log/solnix-nvidia.log";
-      };
+      } // lib.optionalAttrs gfx.nvidia.rtd3 { EXPECT_OFF = "1"; };
       start.exec = "/bin/sh ${./nvidia-guard.sh} &";
       stop.exec = ":kill";
     };

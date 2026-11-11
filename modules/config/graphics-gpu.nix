@@ -99,7 +99,8 @@ in
         armed. Lays the three nvidia modules, nvidia.conf (the /dev/nvidiactl
         pseudo node, NVreg_GpuInitOnProbe=0) and the GSP firmware (under
         usr/kernel/firmware, out of the boot_archive), opts tzmon out of its
-        boot-time dGPU power-off (solnix-dgpu-off=0). A powered dGPU no
+        boot-time dGPU power-off (solnix-dgpu-off=0; not with nvidia.rtd3,
+        which attaches to the GPU tzmon powered off). A powered dGPU no
         driver manages overheats this laptop (53 to 94 C in ten minutes, then
         the EC cuts power), so site/solnix-nvidia-guard samples the EC's dGPU
         sensor from early boot and reboots at nvidia.maxTempC. After it and
@@ -122,6 +123,12 @@ in
         thermal guard accepts the missing reading of a GPU that is off only
         when both the power resource and the GPU's power GPIO say off. The
         GPU's HDMI audio function is offlined before the first power-off.
+        tzmon keeps its boot-time dGPU power-off (no solnix-dgpu-off=0), so
+        the GPU is off from about 2 s after the kernel banner, and the guard
+        reboots if it is not off at its first sample. site/solnix-nvidia
+        then attaches nvidia to it (the cold attach: power on, restore and
+        verify the BIOS's BAR and Resizable BAR layout, online; any
+        mismatch leaves it off and nvidia detached).
         site/solnix-nvidia probes the GPU once and lets it go instead of
         holding it open. Needs nvidia.attachAtBoot. Measured only on the X1E's
         RTX 3080 Ti; keep it to a boot-once BE until it is.

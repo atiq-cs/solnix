@@ -16,6 +16,7 @@ case "\$2" in nvidia) : > $T/dev/nvidiactl; : > $T/dev/nvidia0;; nvidia_modeset)
 EOF2
 cat > "$T/bin/probe" <<EOF2
 #!/bin/sh
+echo "probe \$*" >> $T/calls
 [ "\$1" = -w ] || exit 0
 [ -f $T/never ] || { echo "open /dev/nvidia0: ok (RM initialized the GPU)"; echo "holding the GPU open (until killed)"; }
 sleep 30
@@ -45,4 +46,13 @@ run stale MODESET=1 DRM=1
 : > "$T/log"; rm -f "$T/never" "$T"/dev/* "$T"/devices/pseudo/*
 run off
 ! grep -q 'nvidia_modeset\|nvidia_drm' "$T/calls" && echo "PASS off (MODESET unset: nothing)" || { echo "FAIL off"; fail=1; }
+# 4, 5: RTD3=1 -- the cold attach (open nvidia@0:nvidia-poweron) comes before any probe; a failed one stops there
+: > "$T/log"; rm -f "$T/never" "$T"/dev/* "$T"/devices/pseudo/*
+run cold-missing RTD3=1
+grep -q 'FAILED: cold attach' "$T/log" && ! grep -q '^probe' "$T/calls" \
+  && echo "PASS cold-missing (no poweron node: refused, no probe)" || { echo "FAIL cold-missing"; cat "$T/calls"; tail -5 "$T/log"; fail=1; }
+: > "$T/log"; rm -f "$T/never" "$T"/dev/* "$T"/devices/pseudo/*; : > "$T/devices/pseudo/nvidia@0:nvidia-poweron"
+run cold-ok RTD3=1
+grep -q 'cold attach: ok' "$T/log" && grep -q '^probe' "$T/calls" \
+  && echo "PASS cold-ok (cold attach, then the probe)" || { echo "FAIL cold-ok"; cat "$T/calls"; tail -5 "$T/log"; fail=1; }
 exit $fail
