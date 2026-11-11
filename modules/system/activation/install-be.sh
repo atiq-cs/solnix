@@ -436,7 +436,8 @@ fi
   | while read -r _n; do mkdir -p "${_n#"$POOL"/}"; done
 
 # 5. SMF: fresh seed repository + solnix manifests (site dir, real files) + site profile.
-[ -e etc/svc/repository.db ] || { cp "$R$WORLD/lib/svc/seed/global.db" etc/svc/repository.db; chmod 0600 etc/svc/repository.db; }
+_cloned=1
+[ -e etc/svc/repository.db ] || { _cloned=""; cp "$R$WORLD/lib/svc/seed/global.db" etc/svc/repository.db; chmod 0600 etc/svc/repository.db; }
 # The manifests are REAL copies in a real /var/svc/manifest/site/solnix holding
 # exactly this generation's set. svccfg records a manifest by its realpath, and
 # `svccfg cleanup` (manifest-import's last step) deletes a service only when
@@ -463,6 +464,18 @@ cp "$R$TOP/site-profile.xml" etc/svc/profile/site/solnix.xml
 # copy: manifest-import reads it at early import, before <pool>/nix is mounted.
 rm -f etc/svc/profile/generic.xml; cp "$R$TOP/generic-profile.xml" etc/svc/profile/generic.xml || die "copy generic.xml"
 chmod 0444 etc/svc/profile/generic.xml
+# A BE cloned from the running one (switch-to-configuration boot) carries the running repository, where an earlier
+# svcadm disable or svccfg setprop of a declared service outlives every generation, and manifest-import never applies
+# the site profile again (it holds its hash). The declared state wins, as on NixOS: smf-declared reverts each declared
+# instance to its last import and sets its enable, offline with this world's svccfg; manifest-import at first boot then
+# upgrades it to this generation's manifest without a conflict and applies this site profile.
+# Only on the live store (do_boot): the world's svccfg can't run from under another store root, and a BE an installer or
+# image laid (R set) starts from the seed, which no profile has been applied to yet.
+if [ -n "$_cloned" ] && [ -z "${SOLNIX_LIVE:-}" ] && [ -z "$R" ]; then
+  SVCCFG_REPOSITORY="$ROOT/etc/svc/repository.db" SVCCFG="$WORLD/usr/sbin/svccfg" \
+    SVCCFG_CONFIGD_PATH="$WORLD/lib/svc/bin/svc.configd" /sbin/sh "$TOP/bin/smf-declared" "$TOP/smf-declared" \
+    /etc/svc/profile/site/solnix.xml >&2 || die "smf-declared on the cloned repository"
+fi
 
 # 6. /dev: the nodes needed before devfsadm runs, generated (never copied from the running /dev).
 for n in console:cn@0:console msglog:sysmsg@0:msglog null:mm@0:null zero:mm@0:zero tty:sy@0:tty \

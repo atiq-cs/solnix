@@ -647,19 +647,42 @@ NixOS `switch-to-configuration` diffs units and restarts what changed. Our SMF
 analog:
 
 - **Added service:** `svccfg import` creates it; `svcadm enable` if `enable`.
-- **Changed service:** `svccfg import` updates the manifest layer (SMF keeps
-  admin-set property overrides in a separate layer, so re-import does not stomp
-  runtime `svccfg setprop`); then `svcadm refresh <fmri>` to re-read, and
-  `svcadm restart <fmri>` if the start method changed.
+- **Changed service:** `svccfg import` upgrades the service; then the declared
+  state is put back over anything an admin changed (below, "The declared state
+  wins"), `svcadm refresh <fmri>` re-reads, and `svcadm restart <fmri>` if the
+  start method changed.
 - **Removed service:** `svcadm disable -s <fmri>` then `svccfg delete <fmri>`
   (Phase 1: deferred, §3.1).
 - **Milestone:** `svcadm milestone <target>` last, idempotently.
 
-`VERIFY` that `svccfg import` of an already-imported manifest reliably updates
-in place and that `svcadm refresh` is enough to pick up changed properties
+`VERIFY` that `svcadm refresh` is enough to pick up changed properties
 without a manual `restart` for the properties services actually read at
-start-method time. (SMF's layered repository generally does the right thing here
-since ~illumos 2016 manifest-layer support; confirm on Hipster 2025.06.)
+start-method time.
+
+**The declared state wins (measured 2026-11-11).** On NixOS a unit's state is
+the generation's: /etc/systemd/system comes from the store, `systemctl disable`
+of a declared unit can't persist, and only `systemctl --runtime` changes, gone
+at reboot, are possible. solnix does the same. illumos SMF has no admin layer to
+drop (Solaris 11's `svccfg listcust`/`delcust` came after the fork; illumos
+svccfg has neither): `svcadm enable/disable` writes `general/enabled` and
+`svccfg setprop/setenv` the property itself, a `beadm create` clone copies that
+repository, an upgrade import never changes `general/enabled` and keeps the
+current value of a property that differs from the last import ("Conflict
+upgrading"), and manifest-import never applies a profile it holds a hash for
+(manifest_hash.c, "we do not reread a profile"). So a service disabled once
+booted disabled in every later BE (dixi, fleet11), and lixi's builder kept an
+old start/environment for generations. `smf-declared` (modules/system/activation/
+smf-declared.sh) therefore runs at every activation, for each `smf.services`
+instance only: it logs what differs from the instance's last-import snapshot,
+`svccfg revert last-import`, and sets `general/enabled` to the declaration.
+`activate` runs it after the import (switch, test); install-be runs it offline
+on a BE cloned by `switch-to-configuration boot`, and also forgets the site
+profile's hash so the BE's first manifest-import applies it. revert keeps
+non-persistent groups, so `svcadm disable -t` (general_ovr) still holds until
+reboot, like `--runtime`. Services the toplevel doesn't declare (the stock
+illumos ones) keep their admin state, apart from what the site profile names.
+To change a declared service, change the configuration; the state before a
+revert is in the instance's `previous` snapshot. Test: scripts/test-smf-declared.sh.
 
 ---
 

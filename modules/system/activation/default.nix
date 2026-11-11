@@ -113,6 +113,11 @@ let
       /usr/sbin/svccfg import "$m" 2>&1 || true
     done
 
+    # 2b. The declared state wins over what the repository kept (smf-declared.sh): an earlier svcadm disable/enable
+    #     or svccfg setprop of a declared service is reverted to the manifest just imported. NixOS: a unit's state is
+    #     the generation's; `svcadm disable -t` (general_ovr) is kept, as systemctl --runtime is.
+    /sbin/sh ${smfDeclared} ${smfDeclaredList} 2>&1 || echo "WARNING: smf-declared failed (above)" >&2
+
     # 3. Enforce enabled state for solnix-declared services.
     ${concatStringsSep "\n    " (mapAttrsToList (name: svc:
       "/usr/sbin/svcadm ${if svc.enable then "enable" else "disable"} ${svc.fmri} 2>/dev/null || true")
@@ -539,6 +544,11 @@ let
   # install-be (IFACE-1): populate a BE from this toplevel. One script, called by
   # lib/make-be.nix, scripts/solnix-install and do_boot below.
   installBe = pkgs.writeScript "solnix-install-be" (builtins.readFile ./install-be.sh);
+  # The declared SMF state (every smf.services instance and its enable) and the step that makes it win over the
+  # repository's (./smf-declared.sh), for activate and for install-be on a cloned BE.
+  smfDeclaredList = pkgs.writeText "solnix-smf-declared" (concatStringsSep "" (mapAttrsToList (_: svc:
+    "${svc.fmri} ${if svc.enable then "true" else "false"}\n") config.smf.services));
+  smfDeclared = pkgs.writeScript "smf-declared" (builtins.readFile ./smf-declared.sh);
   # boot.loader.brand = "solnix": the files install-be lays over each BE's /boot (src/boot-brand/boot).
   bootBrand = builtins.path { path = ../../../src/boot-brand/boot; name = "solnix-boot-brand"; };
 
@@ -603,6 +613,8 @@ let
     ln -s ${solnixRebuild}                            $out/bin/solnix-rebuild
     ln -s ${solnixInstall}                            $out/bin/solnix-install
     ln -s ${installBe}                                $out/bin/install-be
+    ln -s ${smfDeclared}                              $out/bin/smf-declared
+    ln -s ${smfDeclaredList}                          $out/smf-declared
     # kernel + platform: stable-named entrypoints into systemPath (the closure
     # walker / make-be reads $out/kernel + $out/platform to find unix/genunix).
     ln -s ${kernelTree}/kernel               $out/kernel
