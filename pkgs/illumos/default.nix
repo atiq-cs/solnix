@@ -1481,6 +1481,18 @@ in
   cosmic-term = let a = removeAttrs cosmic.cosmic-term.drvAttrs [ "buildKey" ] // {
       install = "app target/xdgen/com.system76.CosmicTerm.desktop; meta res/com.system76.CosmicTerm.metainfo.xml; tree res/icons/hicolor share/icons/hicolor"; };
     in derivation (a // { buildKey = builtins.substring 0 16 (builtins.hashString "sha256" (builtins.toJSON a)); });
+  # cosmic-term with iced's wgpu renderer (Vulkan on Mesa anv, wgpu's GLES on Mesa EGL as its fallback) as well as tiny-skia: a
+  # separate attr for the CPU-vs-GPU measurement, not the default. ./wgpu-illumos.py adds illumos to wgpu's backend cfg lists
+  # (without it Instance::new panics, which is why the default build drops wgpu). wgpu dlopens libvulkan.so.1 (the loader) and
+  # libEGL.so.1 (Mesa) by name: both on its RUNPATH. ICED_BACKEND=wgpu,tiny-skia tries wgpu, then tiny-skia.
+  cosmic-term-wgpu = let a = removeAttrs cosmic.cosmic-term.drvAttrs [ "buildKey" ] // {
+      name = "cosmic-term-wgpu-1.11.0"; features = "wayland,dbus-config,wgpu";
+      libDirs = "${cosmic.cosmic-term.drvAttrs.libDirs} ${cli.vulkan-loader} ${graphics.mesa}";
+      prep = "python3 ${./wgpu-illumos.py} $PWD/vendor";
+      wrap = "ICED_BACKEND=wgpu,tiny-skia UMEM_OPTIONS=backend=mmap";
+      install = "app target/xdgen/com.system76.CosmicTerm.desktop; meta res/com.system76.CosmicTerm.metainfo.xml; tree res/icons/hicolor share/icons/hicolor; "
+        + "grep -q wgpu_hal::vulkan target/release/cosmic-term || { echo 'FATAL: no wgpu Vulkan backend in cosmic-term' >&2; exit 1; }"; };
+    in derivation (a // { buildKey = builtins.substring 0 16 (builtins.hashString "sha256" (builtins.toJSON a)); });
   inherit (cosmic) cosmic-comp cosmic-session cosmic-panel cosmic-applets cosmic-launcher
     cosmic-app-library cosmic-notifications cosmic-osd cosmic-settings-daemon cosmic-bg cosmic-workspaces cosmic-randr cosmic-idle
     cosmic-settings cosmic-files cosmic-edit cosmic-store cosmic-screenshot cosmic-greeter greetd;
