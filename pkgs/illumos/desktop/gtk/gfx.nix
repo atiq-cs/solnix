@@ -13,9 +13,9 @@ rec {
   # OI 02-alloca: cairo-colr-glyph-render.c uses alloca without <alloca.h> (illumos does not get it from stdlib.h).
   # _POSIX_PTHREAD_SEMANTICS: the POSIX 2-argument ctime_r (cairo-ps-surface.c), as mesa.nix and OI's CPP_POSIX.
   cairo = mkSrcPkg {
-    pname = "cairo"; version = "1.18.4";
-    src = { url = "https://cairographics.org/releases/cairo-1.18.4.tar.xz";
-            sha256 = "445ed8208a6e4823de1226a74ca319d3600e83f6369f99b14265006599c32ccb"; };
+    pname = "cairo"; version = "1.18.6";
+    src = { url = "https://cairographics.org/releases/cairo-1.18.6.tar.xz";
+            sha256 = "1c767308174337a74694da0f3ec069c271452163a1ef4540964c50c301f157d4"; };
     deps = [ pixman libpng zlib freetype fontconfig glib ];
     linkDeps = pcPriv;
     build = ''
@@ -31,9 +31,9 @@ rec {
   # pango: no libthai, no xft (X11), no introspection. OI's pango CFLAGS (XPG8 + the two -Wno-errors) are for the
   # older OI gcc; measured on the build before adding any.
   pango = mkSrcPkg {
-    pname = "pango"; version = "1.57.1";
-    src = { url = "https://download.gnome.org/sources/pango/1.57/pango-1.57.1.tar.xz";
-            sha256 = "e65d6d117080dc3aeeb7d8b4b3b518f7383aa2e6cfce23117c623cd624764c2f"; };
+    pname = "pango"; version = "1.58.2";
+    src = { url = "https://download.gnome.org/sources/pango/1.58/pango-1.58.2.tar.xz";
+            sha256 = "342385b6ca3b7c73455d7c80a13b7dbe4489e00bc3bd4c5bd6ed4dce421e374a"; };
     deps = [ glib harfbuzz fribidi fontconfig freetype cairo ];
     linkDeps = pcPriv ++ [ pixman ];
     nativeTools = [ glib ];   # glib-mkenums & co. by name, as NixOS nativeBuildInputs (gdk-pixbuf says why)
@@ -52,9 +52,9 @@ rec {
   # loaders.cache and no module dir at run time. No tiff (nixpkgs links libtiff; nothing in the browser path needs it),
   # no glycin (Rust, sandboxed via bwrap: Linux only).
   gdk-pixbuf = mkSrcPkg {
-    pname = "gdk-pixbuf"; version = "2.44.6";
-    src = { url = "https://download.gnome.org/sources/gdk-pixbuf/2.44/gdk-pixbuf-2.44.6.tar.xz";
-            sha256 = "140c2d0b899fcf853ee92b26373c9dc228dbcde0820a4246693f4328a27466fa"; };
+    pname = "gdk-pixbuf"; version = "2.44.8";
+    src = { url = "https://download.gnome.org/sources/gdk-pixbuf/2.44/gdk-pixbuf-2.44.8.tar.xz";
+            sha256 = "919f529512961a12e81cd4b4b466a48c3933469e7f9a310c6513cd4fb252ba3c"; };
     deps = [ glib libpng libjpeg-turbo ];
     linkDeps = pcPriv;
     # glib's bin on PATH (NixOS nativeBuildInputs = [ glib ]): meson finds glib-compile-resources by name; on chef it took OI's
@@ -97,9 +97,9 @@ rec {
   # every system path). use_systemd off. __EXTENSIONS__: it builds with _XOPEN_SOURCE=700, which on illumos hides
   # timersub() & co. unless extensions are asked for (glib's meson adds it on sunos itself).
   at-spi2-core = mkSrcPkg {
-    pname = "at-spi2-core"; version = "2.60.4";
-    src = { url = "https://download.gnome.org/sources/at-spi2-core/2.60/at-spi2-core-2.60.4.tar.xz";
-            sha256 = "1a1f5ba9805917f41fc6aa6823dcf887a291d607a427e2d5afb6b5dfa65070c7"; };
+    pname = "at-spi2-core"; version = "2.62.1";
+    src = { url = "https://download.gnome.org/sources/at-spi2-core/2.62/at-spi2-core-2.62.1.tar.xz";
+            sha256 = "cca6b6a86e4389d89b370288761ce2385ddeceb10c4412da78689bc30c88af2d"; };
     deps = [ glib dbus libxml2 ];
     linkDeps = pcPriv;
     nativeTools = [ glib ];   # glib-mkenums & co. by name, as NixOS nativeBuildInputs (gdk-pixbuf says why)
