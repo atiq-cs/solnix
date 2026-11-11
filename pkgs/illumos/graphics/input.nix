@@ -86,6 +86,9 @@ rec {
       patch -p1 < ${./patches/seatd-0.9.1-illumos-devices-path.patch}
       # /dev/kbd and /dev/mouse (conskbd/consms) open through the seat, like the DRM node.
       patch -p1 < ${./patches/seatd-0.9.1-illumos-vuid.patch}
+      # ihid's evdev minors (/devices/...:event, /dev/input/event*) are evdev devices: opened for the compositor, revoked
+      # (EVIOCREVOKE) on a session switch. Without this seatd refuses them ("not a supported device type").
+      patch -p1 < ${./patches/seatd-0.9.1-illumos-evdev.patch}
       sed -i "s|link_args: symbols_flag,||" meson.build   # no --version-script on illumos ld
       ${pc}
       ${m "-Dlibseat-logind=disabled -Dlibseat-seatd=enabled -Dlibseat-builtin=enabled -Dserver=enabled -Dexamples=disabled -Dman-pages=disabled '-Dc_link_args=-lsocket -lnsl'"}

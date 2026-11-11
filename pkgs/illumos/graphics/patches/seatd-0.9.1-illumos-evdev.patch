@@ -1,0 +1,26 @@
+--- a/common/evdev.c
++++ b/common/evdev.c
+@@ -25,6 +25,23 @@
+ int evdev_revoke(int fd) {
+ 	return ioctl(fd, EVIOCREVOKE, NULL);
+ }
++#elif defined(__sun)
++/* illumos: the evdev minors ("event", node type ddi_input:evdev) of solnix's
++ * ihid, linked as /dev/input/event<N>. seat_open_device realpath()s first,
++ * so the /devices name arrives here. EVIOCREVOKE is FreeBSD's number
++ * (_IOWINT('E', 0x91)): ihid answers it by erroring that client's stream. */
++#define	SOLNIX_EVIOCREVOKE	0x20044591
++int path_is_evdev(const char *path) {
++	static const char prefix[] = "/devices/";
++	static const char suffix[] = ":event";
++	size_t n = strlen(path);
++	return strncmp(prefix, path, STRLEN(prefix)) == 0 && n > STRLEN(suffix) &&
++	       strcmp(path + n - STRLEN(suffix), suffix) == 0;
++}
++
++int evdev_revoke(int fd) {
++	return ioctl(fd, SOLNIX_EVIOCREVOKE, NULL);
++}
+ #else
+ int path_is_evdev(const char *path) {
+ 	(void)path;

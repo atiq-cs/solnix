@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # cosmic-comp-src-fixup.py <cosmic-comp-src>: the illumos KMS backend edits, each GUARDED
-# (a missing anchor FAILS). (1) input: the VUID source (illumos_input.rs) instead of libinput;
+# (a missing anchor FAILS). (1) input: the VUID source (illumos_input.rs: /dev/kbd + /dev/mouse, the
+# keyboard and TrackPoint) beside libinput's PATH backend on /dev/input/event* (tpad4: ihid's precision-touchpad
+# evdev node, through seatd); libinput's udev backend needs udevd's enumeration and monitor, which illumos lacks;
 # (2) devices: a fixed /dev/dri/card* scan instead of udev (no udev on illumos; the link-only
 # STUB libudev returns NULL, so UdevBackend::new would Err). DRM hotplug is not handled.
 import sys, os, shutil
@@ -12,23 +14,28 @@ def rep(old, new, count=1):
     if s.count(old) < count: sys.exit("FATAL: anchor x%d not found in kms/mod.rs: %r" % (count, old[:90]))
     s = s.replace(old, new)
 rep("mod device;\n", "mod device;\n#[cfg(target_os = \"illumos\")]\npub mod illumos_input;\n")
-# KmsState: no libinput context on illumos.
-rep("    libinput: Libinput,\n", "    #[cfg(not(target_os = \"illumos\"))]\n    libinput: Libinput,\n")
-rep("        libinput: libinput_context,\n", "        #[cfg(not(target_os = \"illumos\"))]\n        libinput: libinput_context,\n")
+# libinput: the upstream context (KmsState.libinput, resume/suspend) stays; on illumos init_libinput builds it on
+# the path backend, and the VUID source is registered beside it (cosmic-comp-kms-illumos.rs).
 rep("""    let libinput_context = init_libinput(dh, &session, &event_loop.handle())
         .context("Failed to initialize libinput backend")?;""",
-"""    #[cfg(not(target_os = "illumos"))]
-    let libinput_context = init_libinput(dh, &session, &event_loop.handle())
+"""    let libinput_context = init_libinput(dh, &session, &event_loop.handle())
         .context("Failed to initialize libinput backend")?;
     #[cfg(target_os = "illumos")]
     init_vuid_input(dh, &session, &event_loop.handle()).context("Failed to initialize illumos input")?;""")
-rep("""        if let Err(err) = backend.libinput.resume() {
-            error!(?err, "Failed to resume libinput context.");
-        }""", """        #[cfg(not(target_os = "illumos"))]
-        if let Err(err) = backend.libinput.resume() {
-            error!(?err, "Failed to resume libinput context.");
-        }""")
-rep("        backend.libinput.suspend();", "        #[cfg(not(target_os = \"illumos\"))]\n        backend.libinput.suspend();")
+rep("""    let mut libinput_context =
+        Libinput::new_with_udev::<LibinputSessionInterface<LibSeatSession>>(session.clone().into());
+    libinput_context
+        .udev_assign_seat(&session.seat())
+        .map_err(|_| anyhow::anyhow!("Failed to assign seat to libinput"))?;""",
+"""    #[cfg(not(target_os = "illumos"))]
+    let mut libinput_context =
+        Libinput::new_with_udev::<LibinputSessionInterface<LibSeatSession>>(session.clone().into());
+    #[cfg(not(target_os = "illumos"))]
+    libinput_context
+        .udev_assign_seat(&session.seat())
+        .map_err(|_| anyhow::anyhow!("Failed to assign seat to libinput"))?;
+    #[cfg(target_os = "illumos")]
+    let libinput_context = illumos_libinput_path(session);""")
 rep("fn init_libinput(", open(os.path.join(here, "cosmic-comp-kms-illumos.rs")).read() + "\nfn init_libinput(")
 open(k, "w").write(s)
 # (3) name the GL device at init, at WARN (the release logger keeps smithay and cosmic_comp at warn):

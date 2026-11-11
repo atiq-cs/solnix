@@ -502,6 +502,7 @@ let
     inherit (srcPkgs.nixChain) cacert; inherit graphics; inherit (srcPkgs) openssl;
     tools = hostfixTools; inherit (cliBase) python3;   # store tools (no OI host): unpack via Nix, python3/grep/timeout from the store
     libclang = if buildTools == [ ] then null else llvmPackages.clang;   # cosmic-greeter's bindgen; null: /usr/clang/21 on the OI bhost
+    inherit inputStack;   # tpad4: the real libudev (Settings' Touchpad page) and libinput (cosmic-comp) instead of STUBs
   };
 
   # ---------------------------------------------------------------------------

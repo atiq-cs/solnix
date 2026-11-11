@@ -2,7 +2,7 @@
 # derivations: rust199 + the from-source gcc + the graphics libs here. Same shape as
 # solnix-pkgs cosmic-term.nix (a cargo-vendor FOD + an offline build), without the
 # nixpkgs stdenv: the fork world it needs does not build (cosmic2/fork-world-blockers.md).
-{ rust, gcc, gate, libc, world, gccLib, cacert, graphics, openssl, tools, python3, libclang ? null }:
+{ rust, gcc, gate, libc, world, gccLib, cacert, graphics, openssl, tools, python3, libclang ? null, inputStack ? null }:
 let
   rtLibs = [ libc world gcc.lib ];
   # the source tarball unpacked by Nix (libarchive), as cargo.nix's unpack: a solnix host's tar execs the absent gzcat.
@@ -26,12 +26,16 @@ let
       grep -q 'directory = "vendor"' "$out/.cargo-config.toml" || { echo "FATAL: vendor config" >&2; exit 1; }
     '' ];
   };
-  cargoApp = { pname, version, src, vendor, libs, required, stubs ? false, features ? "", prep ? "", bins, wrap ? "", NO_SOFTBUFFER_KMS ? "",
+  # realInput: solnix's libudev (+ libinput for cosmic-comp) linked for real instead of the link-only STUBs (tpad4).
+  realUdev = if inputStack == null then [ ] else [ inputStack.libudev-solnix ];
+  realLibinput = if inputStack == null then [ ] else [ inputStack.libudev-solnix inputStack.libinput inputStack.libevdev inputStack.mtdev ];
+  cargoApp = { pname, version, src, vendor, libs, required, stubs ? false, realInput ? (if stubs then realUdev else [ ]), features ? "", prep ? "", bins, wrap ? "", NO_SOFTBUFFER_KMS ? "",
                cargoArgs ? "", install ? "", check ? "", appFixups ? "", env ? { } }: (a: derivation (a // { buildKey = builtins.substring 0 16 (builtins.hashString "sha256" (builtins.toJSON a)); })) ({
     name = "${pname}-${version}"; system = "x86_64-solaris"; builder = "/usr/bin/bash";
     src = unpack src; inherit vendor rust gate tools python3 world;
     gcc = gcc; gccLibDir = "${gccLib}/lib";
-    libDirs = builtins.concatStringsSep " " (map (d: "${d}") (libs ++ rtLibs));
+    libDirs = builtins.concatStringsSep " " (map (d: "${d}") (libs ++ realInput ++ rtLibs));
+    REAL_INPUT_LIBS = (if realInput != [ ] then "libudev.so.1" else "") + (if builtins.length realInput > 1 then " libinput.so.10" else "");
     inherit features prep bins wrap NO_SOFTBUFFER_KMS cargoArgs install check appFixups; REQUIRED = required;
     stubsSh = if stubs then ./cosmic-comp-stubs.sh else "";
     tsErrnoGate = ../ts-errno-gate.sh; zeroChecksum = ../zero-checksum.sh;
@@ -52,7 +56,7 @@ in import ./cosmic-apps.nix { inherit src vendorOf cargoApp graphics vendorHashe
   cosmic-comp = cargoApp {
     pname = "cosmic-comp"; version = "1.11.0"; src = cosmic-comp-src; vendor = cosmic-comp-vendor;
     libs = with graphics; [ mesa libdrm wayland libffi expat seatd libxkbcommon pixman libdisplay-info ];
-    stubs = true; bins = "cosmic-comp";
+    stubs = true; bins = "cosmic-comp"; realInput = realLibinput;
     required = "rustix rustix-0.38.44 wayland-backend reis winit smithay";
     prep = "python3 $fixups/cosmic-comp-src-fixup.py $PWD";
   };

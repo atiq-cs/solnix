@@ -8,6 +8,8 @@ set -eu
 V=$1; O=$2; T=$(mktemp -d /var/tmp/ccstub.XXXXXX); mkdir -p "$O/pkgconfig"
 gen() { # gen <soname> <pcname> <version> <files...>
   so=$1 pcn=$2 ver=$3; shift 3
+  # a real library (solnix's libudev, libinput: pkgs/illumos/input-stack) replaces this STUB: it is in libDirs instead
+  case " ${REAL_INPUT_LIBS:-} " in *" $so "*) echo "REAL $so (no STUB)" >&2; return 0;; esac
   { echo '#include <errno.h>'; grep -ho 'pub fn [a-z0-9_]*' "$@" | awk '{print $3}' | sort -u |
     awk '{print "long " $1 "() { errno = ENOSYS; return 0; }"}'; } > "$T/$pcn.c"
   n=$(grep -c '^long ' "$T/$pcn.c"); [ "$n" -gt 20 ] || { echo "FATAL: only $n symbols for $so" >&2; exit 1; }
