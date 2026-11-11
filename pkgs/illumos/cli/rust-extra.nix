@@ -41,7 +41,10 @@ in
   # iteration order is per-process random (RandomState), and emits one impl per element in that order: rustc numbers the impls by
   # it, so 30 v0 symbols (impl Dictionary for Arc<D> / &D) flipped run to run on one host (wave6w, measured). A BTreeSet makes the
   # order the enum's declaration order (nixpkgs has no fix; upstream althonos/blanket has the HashSet at master).
-  harper = { env = ''export CFLAGS="-D__illumos__"''; prep = ''
+  # ahash's compile-time-rng (harper's tree enables it) bakes const_random!() seeds, which const-random-macro draws from getrandom
+  # when the proc macro is built unless CONST_RANDOM_SEED is set (its reproducible-build knob): two builds differed in exactly
+  # those 4 u64 immediates (32 bytes of .text in harper-cli and harper-ls, holds1). A fixed seed; ahash still seeds at run time.
+  harper = { env = ''export CFLAGS="-D__illumos__" CONST_RANDOM_SEED=solnix-harper''; prep = ''
     grep -qx 'resolver = "2"' Cargo.toml || { echo "FATAL: harper workspace anchor" >&2; exit 1; }
     sed -i 's/^resolver = "2"$/resolver = "2"\ndefault-members = ["harper-cli", "harper-ls"]/' Cargo.toml
     vfix blanket src/lib.rs "'use std::collections::HashSet;'" "'use std::collections::BTreeSet as HashSet;'"
