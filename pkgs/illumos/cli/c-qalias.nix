@@ -234,6 +234,30 @@ in {
       ${chk ''"$out/bin/sh" -c 'a=(x y z); echo "''${#a[@]} $((6*7)) ''${BASH_VERSINFO[2]}"' '' "^3 42 20$"}
     '';
   };
+
+  # libiberty 16.2.0 (LGPL-2.0+): GCC's utility library, as nixpkgs' libiberty: the gcc-16.2.0 tarball's libiberty/ only,
+  # --enable-install-libiberty (include/libiberty headers) --enable-shared (= build the PIC objects), and the PIC archive installed
+  # as lib/libiberty.a. nixpkgs' config.guess /usr/bin/uname -> uname fix, and --build pinned. MULTIOSDIR=. on install: libdir
+  # is already lib/amd64 (its default asks $(CC) -print-multi-os-directory). The check links xstrdup/concat/lbasename from it.
+  libiberty = mkSrcPkg {
+    pname = "libiberty"; version = "16.2.0";
+    src = { url = "https://mirrors.kernel.org/gnu/gcc/gcc-16.2.0/gcc-16.2.0.tar.xz";
+            sha256 = "e6738e29597f733270731aa90600f37ffdc045079dfc27ec7e8192cc81085c3e"; };
+    deps = [ world ]; nativeTools = hostTools;
+    build = ''
+      grep -q /usr/bin/uname config.guess || { echo "FATAL: libiberty config.guess anchor" >&2; exit 1; }
+      sed -i 's|/usr/bin/uname|uname|g' config.guess
+      cd libiberty
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --build=x86_64-pc-solaris2.11 --enable-install-libiberty --enable-shared
+      gmake -j8
+      gmake install MULTIOSDIR=.
+      [ -f pic/libiberty.a ] || { echo "FATAL: libiberty: no pic/libiberty.a" >&2; exit 1; }
+      cp pic/libiberty.a "$out/lib/amd64/libiberty.a"
+      printf '#include <libiberty/libiberty.h>\n#include <stdio.h>\nint main(void){char *s=concat("solnix","-",xstrdup("ok"),NULL);printf("%%s %%s\\n",s,lbasename("/a/b/c.txt"));return 0;}\n' > "$W/t.c"
+      "$CC" -fPIC -I"$out/include" "$W/t.c" "$out/lib/amd64/libiberty.a" -o "$W/t"
+      ${chk ''"$W/t"'' "^solnix-ok c\\.txt$"}
+    '';
+  };
 } // (if nasm == null then { } else {   # nasm: desktop/gtk's (x86 only)
   # libjpeg = nixpkgs' libjpeg_turbo at 3.2.0 (main serves libjpeg-turbo 3.1.4.1 only); libjpeg8 = its enableJpeg8 override
   libjpeg = jpegV "libjpeg" false;
