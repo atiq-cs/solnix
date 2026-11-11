@@ -45,16 +45,22 @@ def bootstrap_rules():
 PSLICE_KEYS = {"PATH", "allowUnresolvedArg", "binsArg", "builder", "depsArg", "elfdump", "elfedit", "extraArg", "extraRunpathArg", "gate",
                "hardlinkArg", "name", "out", "system", "wantClosure"}   # mk-proto-slice.nix's derivation attrs, exactly
 PSLICE_PATH = "/usr/gnu/bin:/usr/bin:/usr/sbin:/sbin"
+# the frozen aarch64 seed (pkgs/illumos/aarch64/seed-main): its mk-src-pkg drvs' env keys, exactly (measured on all 17 of its seed drvs,
+# cmake 7avb487w ncurses nf7yxl9p readline pafsiqrd zlib f75xj6cl ...; x86's seed drvs have 26: + debug docOutputsArg hostPathAllow outputs)
+A64SEED_KEYS = {"PATH", "SOURCE_DATE_EPOCH", "abisArg", "btPath", "build", "buildKey", "builder", "depsArg", "gate", "gcc", "gccLib",
+                "gstripCands", "linkDepsArg", "name", "out", "pname", "rtDirs", "selfRp", "srcSha256", "srcTar", "stage0", "system"}
+A64GLIBS_KEYS = {"builder", "gate", "libc", "name", "out", "roots", "system", "zlib"}   # seed-main src.nix mkGateLibs (8wdlmw06), exactly
 
 def _marker(m, d, clo):
-    """The markers of bootstrap-exempt.tsv. They agree with wave6's pkgs/illumos/path-gate.sh --exempt-check, except pslice, which
-    path-gate.sh lacks until the next drv-moving change (see the shortcut at pslice below)."""
+    """The markers of bootstrap-exempt.tsv. They agree with wave6's pkgs/illumos/path-gate.sh --exempt-check, except pslice, a64seed
+    and a64glibs, which path-gate.sh lacks until the next drv-moving change (see the shortcut at pslice below)."""
     env = d["env"]
     if m == "seed": return "btPath" in env and env["btPath"] == ""
     if m == "gccseed": return env.get("stage0") == "/usr/gcc/14" and "gccSrc" in env and "btPath" not in env
     if m == "slice": return "gate" in env and "filesArg" in env
-    # shortcut: path-gate.sh --exempt-check lacks pslice until the next drv-moving change (it is an inputSrc of every store-only drv);
-    # until then it reports pslice drvs FAIL; drv-gate.sh (this function) is authoritative.
+    # shortcut: path-gate.sh --exempt-check lacks pslice, a64seed and a64glibs until the next drv-moving change (it is an inputSrc of
+    # every store-only drv); until then it reports pslice and a64seed drvs FAIL (unknown marker: fail closed); drv-gate.sh (this
+    # function) is authoritative.
     if m == "pslice":   # mk-proto-slice (wave6v; its env keys measured on illumos-early/-zfs/-smf): exact keys, exact PATH, and every
         # input drv is the gate proto's, a slice/pslice, or an output named in depsArg (zlib/libxml2: judged as themselves)
         if set(env) != PSLICE_KEYS or d["builder"] != "/usr/bin/bash" or env.get("PATH") != PSLICE_PATH: return False
@@ -67,6 +73,24 @@ def _marker(m, d, clo):
         return True
     if m == "world": return "gate" in env and "dirsArg" in env and "sharedLibsArg" in env
     if m == "libcx": return set(env) == {"builder", "gate", "libc", "name", "out", "system"}
+    # the frozen aarch64 seed's mk-src-pkg drvs: the seed shape (btPath "", stage0 /usr/gcc/14) on aarch64 only, with its exact keys
+    if m == "a64seed":
+        return (set(env) == A64SEED_KEYS and d["system"] == env["system"] == "aarch64-solaris" and d["builder"] == "/usr/bin/bash"
+                and env["btPath"] == "" and env["stage0"] == "/usr/gcc/14")
+    # the frozen aarch64 seed's mkGateLibs: exact keys, no sources, and its input drvs are exactly three, each the out its env key names:
+    # the pinned aarch64 gate proto (gate), the libc slice (libc), the aarch64 seed zlib (zlib)
+    if m == "a64glibs":
+        if (set(env) != A64GLIBS_KEYS or d["system"] != "aarch64-solaris" or env["system"] != "aarch64-solaris"
+                or d["builder"] != "/usr/bin/bash" or d["inputSrcs"]): return False
+        role = {"gate": lambda x: x["env"].get("name") == "illumos-aarch64-gate-proto" and _marker("fod", x, clo),
+                "libc": lambda x: x["env"].get("name") == "libc" and _marker("slice", x, clo),
+                "zlib": lambda x: x["env"].get("pname") == "zlib" and _marker("a64seed", x, clo)}
+        got = []
+        for i in d["inputDrvs"]:
+            if i not in clo or clo[i]["system"] != "aarch64-solaris": return False
+            x = clo[i]; op = x["outputs"].get("out", {}).get("path")
+            got.append(next((k for k, ok in role.items() if op == env[k] and ok(x)), None))
+        return sorted(got, key=str) == sorted(role)
     if m == "fod": return env.get("outputHashMode") == "recursive" and len(env.get("outputHash", "")) + 1 > 40 and "btPath" not in env
     if m == "seedenv":   # every path it links is an output of an input drv that is itself seed, gccseed or seedenv
         ps = (env.get("paths", "") + " " + env.get("gnutar", "")).split()
@@ -1216,13 +1240,13 @@ def aterm(outs, idrvs, srcs, builder, args, env, system="x86_64-solaris"):
             q(system) + "," + q(builder) + "," + L(q(a) for a in args) + "," +
             L("(" + q(k) + "," + q(v) + ")" for k, v in sorted(env.items())) + ")")
 
-def fake_drv(tag, args=None, env=None, builder="/usr/bin/bash", srcs=(), idrvs=(), out=None, fod=None, name=None):
+def fake_drv(tag, args=None, env=None, builder="/usr/bin/bash", srcs=(), idrvs=(), out=None, fod=None, name=None, system="x86_64-solaris"):
     h = (tag * 32)[:32].translate(str.maketrans("eotu", "abcd"))
     name = name or f"t-{tag}"
     dp = f"{STORE}{h}-{name}.drv"; op = out or f"{STORE}{h[::-1]}-{name}"
-    e = {"name": name, "out": op, "builder": builder, "system": "x86_64-solaris"}; e.update(env or {})
+    e = {"name": name, "out": op, "builder": builder, "system": system}; e.update(env or {})
     o = [("out", op, "r:sha256" if fod is not None else "", fod or "")]
-    FAKE[dp] = aterm(o, [(d, ["out"]) for d in idrvs], list(srcs), builder, args if args is not None else ["-c", "true"], e)
+    FAKE[dp] = aterm(o, [(d, ["out"]) for d in idrvs], list(srcs), builder, args if args is not None else ["-c", "true"], e, system)
     return dp
 
 def selftest():
@@ -1251,6 +1275,25 @@ def selftest():
         e.update({"PATH": path, "gate": GP, "binsArg": "sbin/init sbin/sh", "depsArg": (slc_out + " " + deps).strip(),
                   "elfdump": "/usr/bin/elfdump", "elfedit": "/usr/bin/elfedit", "wantClosure": "1"}); e.update(extra or {})
         return fake_drv(tag, ["-c", "set -eu"], e, idrvs=[gpd, slc] + list(more), name="illumos-early")
+    # the frozen aarch64 seed (a64seed, a64glibs): the measured shapes of cmake 7avb487w and illumos-gate-libs-home 8wdlmw06
+    A = "aarch64-solaris"; GP64 = STORE + "g" * 32 + "-illumos-aarch64-gate-proto"; HP = "/usr/gnu/bin:/usr/bin:/usr/sbin"
+    gp64 = fake_drv("gpa", ["-c", "cp -r $tree $out"], {"PATH": HP, "outputHashMode": "recursive", "outputHashAlgo": "sha256",
+                    "outputHash": "1c" * 32}, name="illumos-aarch64-gate-proto", out=GP64, fod="1c" * 32, system=A)
+    _LANE.add(GP64)   # the real one (4plaq66w) is a served CA-lane path
+    slc64 = fake_drv("slca", ["-c", "true"], {"PATH": HP, "gate": GP64, "filesArg": "lib/libc.so.1"}, idrvs=[gp64], name="libc", system=A)
+    po_ = lambda dp: parse_drv(FAKE[dp])["outputs"]["out"]["path"]
+    def S64(tag, name, extra=None, system=A, idrvs=None, args=None):
+        e = {k: "" for k in A64SEED_KEYS - {"name", "out", "builder", "system"}}
+        e.update({"PATH": HP, "gate": GP64, "pname": name.rsplit("-", 1)[0], "stage0": "/usr/gcc/14", "SOURCE_DATE_EPOCH": "1"}); e.update(extra or {})
+        return fake_drv(tag, args or ["-c", 'export PATH="${btPath:+$btPath:}/usr/gnu/bin:/usr/bin:/usr/sbin:/opt/ooce/bin:/opt/nixboot/bin"'], e,
+                        idrvs=idrvs if idrvs is not None else [gp64, slc64], name=name, system=system)
+    z64 = S64("zla", "zlib-1.3.2")
+    zst = S64("zlb", "zlib-1.3.2", extra={"btPath": T + "/bin", "PATH": T + "/bin"}, idrvs=[gp64, slc64, tools], args=["-c", 'export PATH="$btPath"'])
+    def GL(tag, extra=None, system=A, more=(), zlib=None, libc=None, name="illumos-gate-libs-home"):
+        zd = zlib or z64; ld_ = libc or slc64
+        e = {"gate": GP64, "libc": po_(ld_), "zlib": po_(zd), "roots": "libsec.so.1 libgen.so.1"}; e.update(extra or {})
+        return fake_drv(tag, ["-c", "set -eu; export PATH=/usr/gnu/bin:/usr/bin\ncp $gate/lib/libsec.so.1 $out/lib/"], e,
+                        idrvs=[gp64, ld_, zd] + list(more), name=name, system=system)
     cases = [  # (label, drv, expect PASS?, check id that must appear)
         ("good: store-only PATH, store MAKE, CA .sh", D("good", args=[good_sh], srcs=[good_sh], env={"PATH": T + "/bin"}), True, None),
         ("A1 env PATH=/usr/bin", D("a1env", env={"PATH": T + "/bin:/usr/bin"}), False, "A1-path"),
@@ -1293,6 +1336,24 @@ def selftest():
         ("NOT exempt: pslice with a non-gate, non-slice, non-depsArg input drv", PS("ps4", more=[D("psx", env={"PATH": T + "/bin"})]), False, "A1-path"),
         ("exempt: pslice with a depsArg input (zlib, judged as itself: store-only)", PS("ps5", more=[psz], deps=psz_out), True, "EXEMPT"),
         ("exempt: mk-illumos-component slice still under 'slice'", D("slc3", name="base-tools", env={"PATH": "/usr/gnu/bin:/usr/bin:/usr/sbin", "gate": GP, "filesArg": "usr/bin/ls"}), True, "EXEMPT"),
+        # a64seed: the frozen aarch64 seed's cmake/ncurses/readline (x86's seed has them in no closure, so x86's seed row stays as it is)
+        ("exempt: a64seed cmake (aarch64, its 22 keys, btPath empty, stage0 /usr/gcc/14)", S64("cma", "cmake-4.1.2"), True, "EXEMPT"),
+        ("exempt: a64seed readline", S64("rla", "readline-8.2"), True, "EXEMPT"),
+        ("NOT exempt: a64seed shape on x86_64-solaris", S64("cmb", "cmake-4.1.2", system="x86_64-solaris"), False, "A1-path"),
+        ("NOT exempt: a64seed shape with btPath set (the store-only set's cmake)", S64("cmc", "cmake-4.1.2", extra={"btPath": T + "/bin"}, idrvs=[gp64, slc64, tools]), False, "A1-path"),
+        ("NOT exempt: a64seed shape with one more env key (x86 seed's debug)", S64("cmd", "cmake-4.1.2", extra={"debug": "1"}), False, "A1-path"),
+        ("NOT exempt: a64seed shape with stage0 /opt/gcc-14", S64("cmf", "ncurses-6.5", extra={"stage0": "/opt/gcc-14"}), False, "A1-path"),
+        ("NOT exempt: a64seed shape on a name outside its rule (jq)", S64("jqa", "jq-1.8.2"), False, "A1-path"),
+        ("NOT exempt: host-PATH aarch64 readline with no marker", fake_drv("cmg", ["-c", "true"], {"PATH": HP}, name="readline-8.2", system=A), False, "A1-path"),
+        # a64glibs: the frozen aarch64 seed's mkGateLibs
+        ("exempt: a64glibs gate-libs-home (8 keys; inputs gate proto, libc slice, seed zlib)", GL("gla"), True, "EXEMPT"),
+        ("NOT exempt: a64glibs with one more env key (PATH)", GL("glb", extra={"PATH": HP}), False, "A1-path"),
+        ("NOT exempt: a64glibs on x86_64-solaris", GL("glc", system="x86_64-solaris"), False, "A1-path"),
+        ("NOT exempt: a64glibs whose zlib is not the seed's (store-only zlib, itself PASS)", GL("gld", zlib=zst), False, "A1-path"),
+        ("NOT exempt: a64glibs with a fourth (aarch64, store-only) input drv", GL("glf", more=[zst]), False, "A1-path"),
+        ("NOT exempt: a64glibs whose libc input is an x86 libc slice", GL("glh", libc=slc), False, "A1-path"),
+        ("NOT exempt: a64glibs whose env zlib is not its zlib input", GL("gli", extra={"zlib": po_(zst)}), False, "A1-path"),
+        ("NOT exempt: a64glibs shape under another gate-libs name (-ssh)", GL("glg", name="illumos-gate-libs-ssh"), False, "A1-path"),
     ]
     ca = lambda p: FAKE_CA.get(p, True)
     bad = selftest_out() + selftest_log() + selftest_b19()
