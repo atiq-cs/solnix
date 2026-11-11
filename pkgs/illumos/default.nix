@@ -479,7 +479,7 @@ let
     gtkMeson = { inherit (gtk) nasm freetype fontconfig gtkTools harfbuzz fribidi glib pcre2; ftPriv = [ srcPkgs.zlib gtk.libpng srcPkgs.nixChain.brotli srcPkgs.nixChain.bzip2 ]; meson = gtk.meson_1_10; samurai = graphics.samurai; inherit (cosmicData) noto-sans; }; };
   # libtorrent-rasterbar + solnix-torrent, the community seeder's BitTorrent client (./solnix-torrent.nix).
   torrent = import ./solnix-torrent.nix {
-    inherit (srcPkgs) mkSrcPkg openssl pkgconf gccWrapper binutils; inherit (srcPkgs.nixChain) boost; inherit (cli) cmake;
+    inherit (srcPkgs) mkSrcPkg openssl pkgconf gccWrapper binutils hostTools; inherit (srcPkgs.nixChain) boost; inherit (cli) cmake;
     inherit gcc libc; gate = gate';
   };
   # Desktop apps outside graphics/ (pop-launcher, cosmic-wallpapers): ./desktop, so the COSMIC outs do not move.

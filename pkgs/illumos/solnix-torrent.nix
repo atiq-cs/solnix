@@ -5,7 +5,7 @@
 # headers only (libtorrent 2.0 needs no Boost.System on boost >= 1.69), from nixChain, as nix itself builds.
 # The one source change is OpenIndiana's (oi-userland 01-enum_net.cpp.patch): enum_net.cpp has no route
 # enumeration for illumos and #errors; there it returns no routes.
-{ mkSrcPkg, openssl, boost, cmake, pkgconf, gccWrapper, binutils, gcc, gate, libc, system ? "x86_64-solaris" }:
+{ mkSrcPkg, openssl, boost, cmake, pkgconf, gccWrapper, binutils, gcc, gate, libc, hostTools ? [ ], system ? "x86_64-solaris" }:
 
 rec {
   libtorrent-rasterbar = mkSrcPkg {
@@ -43,16 +43,24 @@ rec {
     name = "solnix-torrent-1"; inherit system;
     src = ../../src/solnix-torrent/solnix-torrent.cpp;
     builder = "/usr/bin/bash";
+    # store-only, as clang-wrapper (llvm/parts.nix): store coreutils/findutils + the world's bins, path-gated (drv-gate A1: it was
+    # /usr/gnu/bin:/usr/bin:/usr/sbin). zero-checksum.sh: illumos ld sums $out's hash into DT_CHECKSUM, so --check differed in
+    # exactly those 2 bytes (holds1, measured); mk-src-pkg and solnix-cputemp zero it the same way.
+    PATH = builtins.concatStringsSep ":" (map (t: "${t}/bin") hostTools);
     args = [ "-c" ''
-      set -eu; export PATH=/usr/gnu/bin:/usr/bin:/usr/sbin
-      W=$(mktemp -d /var/tmp/sntor.XXXXXX); cd "$W"; mkdir -p "$out/bin"
+      set -eu; /usr/bin/bash ${./path-gate.sh}; . ${./illumos-bin.sh}
+      W=$(mktemp -d "''${TMPDIR:-$NIX_BUILD_TOP}/sntor.XXXXXX"); cd "$W"; mkdir -p "$out/bin"
+      # a copy, as solnix-cputemp: gcc names its input in an STT_FILE symbol, and the store source would be a runtime reference
+      cp "$src" solnix-torrent.cpp
       export PKG_CONFIG_PATH= PKG_CONFIG_LIBDIR=${libtorrent-rasterbar}/lib/amd64/pkgconfig
       cf=$(${pkgconf}/bin/pkg-config --cflags libtorrent-rasterbar); lf=$(${pkgconf}/bin/pkg-config --libs libtorrent-rasterbar)
       # -isystem: warnings inside libtorrent's and boost's headers are theirs; -Werror holds for our file
       ${gccWrapper}/bin/g++ -m64 -std=c++17 -O2 -Wall -Werror -D_TS_ERRNO -isystem ${libtorrent-rasterbar}/include $cf -isystem ${openssl}/include -isystem ${boost}/include \
-        -ffile-prefix-map=${boost}=/boost -o "$out/bin/solnix-torrent" "$src" $lf \
+        -ffile-prefix-map=${boost}=/boost -o "$out/bin/solnix-torrent" solnix-torrent.cpp $lf \
         -Wl,-R,${libtorrent-rasterbar}/lib/amd64:${openssl}/lib/amd64:${libc}/lib/amd64
       ${binutils}/bin/gstrip --strip-debug "$out/bin/solnix-torrent"
+      : > zc; /usr/bin/bash ${./zero-checksum.sh} "$out" zc; [ ! -s zc ] || { cat zc >&2; exit 1; }
+      ! grep -qF "$src" "$out/bin/solnix-torrent" || { echo "FATAL: solnix-torrent names its store source" >&2; exit 1; }
       /usr/bin/bash ${./store-gate.sh} "$out" ${./ts-errno-gate.sh} ${boost} ${gate} ${gcc}/
       # conventions check: the v1 infohash of 600000 'x' bytes named t.nar.xz, 256 KiB pieces, no date/creator,
       # = sha1 of the bencoded info dict computed independently (python hashlib, 2026-10-28)
