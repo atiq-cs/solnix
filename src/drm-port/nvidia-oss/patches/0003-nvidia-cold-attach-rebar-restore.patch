@@ -1,0 +1,747 @@
+nvidia: cold attach to a GPU tzmon powered off at boot; Resizable BAR + BAR restore, verified, in it and in the RTD3 resume
+
+Measured 2026-11-11 on lixi (boot-once BE 48, hardware.graphics.nvidia.rtd3 with tzmon opted out): the thermal guard
+read 80 C at its first sample, 5 s after the kernel banner, and rebooted. With tzmon opted out the GPU is powered and
+unmanaged from power-on through the loader and the kernel boot. With tzmon on it is cut about 2 s after the banner,
+but tzmon offlines every function of the GPU, and devfsadm never attaches an offline node.
+
+The cold attach: the nvidia pseudo node gets a root-only minor, nvidia-poweron. Its open (site/solnix-nvidia, after
+the guard is sampling) finds the offline nvidia-bound NVIDIA display node whose root port's _PR3 power resource reads
+_STA 0, evaluates _ON, waits for Data Link Layer Link Active, 100 ms and the vendor id, then restores the GPU's BIOS
+layout: the GPU has been through a fundamental reset (BARs 0, every Resizable BAR at its default size, Max_Payload_Size
+128). With memory and I/O decode off it writes the Resizable BAR control sizes (from the sizes in assigned-addresses,
+checked against the capability's supported sizes), then the BAR bases, then Device Control's MPS from the root port.
+It then VERIFIES from config space: the vendor/device/subsystem ids against the node's properties, every BAR's base and
+size (the standard sizing probe) against assigned-addresses, and each Resizable BAR control's size field. Any mismatch,
+or a GPU not in D0: D3hot, _OFF again, every difference logged, and the open fails (EIO); nvidia stays detached and RM
+never sees a mis-sized BAR. Otherwise ndi_devi_online attaches nvidia, and RTD3 powers it off 10 s later.
+
+The RTD3 resume (nvidia_rtd3.c) had the same hazard: pci_restore_config_regs() writes the saved 4K image in register
+order, so the command register (decode on) and the BARs go back before the Resizable BAR control, after which a BAR is
+undefined (PCIe 6.0 7.8.6). BAR1 of the X1E's RTX 3080 Ti is 16 GB (assigned-addresses), a resized BAR. After the
+image, the resume now redoes the sizes and bases with decode off, verifies them as above, and only then restores the
+command register and D0. On a mismatch it puts the GPU back in D3hot, evaluates _OFF and fails the open.
+The attach's sibling offline skips functions tzmon already offlined.
+Not redone after the power cycle: the error-reporting enables pcie_initchild set at boot (an offline node keeps
+DS_INITIALIZED, so online does not re-run initchild); MRRS and relaxed ordering are at their reset defaults.
+
+diff -ruN ki-base/Makefile ki-work/Makefile
+--- a/kernel-illumos/Makefile
++++ b/kernel-illumos/Makefile
+@@ -96,6 +96,7 @@
+     nvidia/nvidia_pci.c \
+     nvidia/nvidia_pm.c \
+     nvidia/nvidia_rtd3.c \
++    nvidia/nvidia_cold.c \
+     nvidia/nvidia_registry.c \
+     nvidia/nvidia_umem.c
+ 
+diff -ruN ki-base/nvidia/nvidia_cb.c ki-work/nvidia/nvidia_cb.c
+--- a/kernel-illumos/nvidia/nvidia_cb.c
++++ b/kernel-illumos/nvidia/nvidia_cb.c
+@@ -352,6 +352,14 @@
+     if (NV_MINOR_CLONE(minor) != 0)
+         return (ENXIO);
+ 
++    /* the cold attach: power on + attach a GPU tzmon powered off (root only) */
++    if (node == NV_MINOR_POWERON)
++    {
++        if ((rc = drv_priv(credp)) != 0)
++            return (rc);
++        return (nv_cold_poweron());
++    }
++
+     if ((rc = nv_node_kind(node, &kind)) != 0)
+         return (rc);
+ 
+@@ -441,6 +449,9 @@
+     nv_illumos_file_private_t *nvifp;
+     NvBool last;
+ 
++    if (getminor(dev) == NV_MINOR_POWERON)
++        return (0);
++
+     nvifp = nv_clone_lookup(getminor(dev));
+     if (nvifp == NULL)
+         return (ENXIO);
+diff -ruN ki-base/nvidia/nvidia_cold.c ki-work/nvidia/nvidia_cold.c
+--- a/kernel-illumos/nvidia/nvidia_cold.c
++++ b/kernel-illumos/nvidia/nvidia_cold.c
+@@ -0,0 +1,546 @@
++/*
++ * SPDX-FileCopyrightText: Copyright (c) 2026 solnix contributors
++ * SPDX-License-Identifier: MIT
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a
++ * copy of this software and associated documentation files (the "Software"),
++ * to deal in the Software without restriction, including without limitation
++ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
++ * and/or sell copies of the Software, and to permit persons to whom the
++ * Software is furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included in
++ * all copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
++ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
++ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
++ * DEALINGS IN THE SOFTWARE.
++ */
++
++/*
++ * Cold attach: nvidia attaches to a GPU that tzmon powered off at boot.
++ *
++ * With hardware.graphics.nvidia.rtd3, tzmon keeps its boot-time power-off of
++ * the dGPU (scripts/patches/0005): it offlines every function of the GPU,
++ * puts them in D3hot and evaluates the root port's _PR3 _OFF, so the GPU is
++ * unpowered from about 2 s after the kernel banner. An offline node is never
++ * attached by devfsadm, so nvidia attaches only when this code puts it back:
++ * the first open of the root-only minor "nvidia-poweron" on the nvidia pseudo
++ * node (/devices/pseudo/nvidia@0:nvidia-poweron), which site/solnix-nvidia
++ * opens once the thermal guard is sampling. The open is synchronous:
++ *
++ *  1. find the offline nvidia-bound display node whose root port has a _PR3
++ *     power resource with _STA 0 (anything else: ENXIO, nothing touched);
++ *  2. _ON; wait for the root port's Data Link Layer Link Active, 100 ms; wait
++ *     for the GPU's vendor id (as nvidia_rtd3.c's resume);
++ *  3. the GPU has been through a fundamental reset (power cut, PERST#): every
++ *     BAR is 0 and every resizable BAR is back at its default size. Restore
++ *     what the BIOS set up and the boot's PCI enumeration recorded in
++ *     "assigned-addresses", with memory decode off: the Resizable BAR control
++ *     sizes first (a BAR's contents are undefined after its size changes),
++ *     then the BAR bases, then Device Control's Max_Payload_Size from the
++ *     root port (a function with a smaller MPS than its port takes malformed
++ *     TLPs);
++ *  4. VERIFY from config space before anything uses the GPU: vendor/device and
++ *     subsystem ids equal the node's properties; every memory BAR's base and
++ *     its size (the standard sizing probe, decode still off) equal
++ *     assigned-addresses; each Resizable BAR control size field equals that
++ *     BAR's size. Any mismatch: _OFF again, log every difference, EIO. RM never
++ *     starts on a mis-sized BAR;
++ *  5. the memory/IO decode bits are left off (nv_attach_gpu sets memory decode
++ *     and bus master itself); ndi_devi_online -> pcie_initchild ->
++ *     nv_attach_gpu. The other functions (HDMI audio) stay offline, as
++ *     nvidia_rtd3.c keeps them.
++ * With NVreg_DynamicPowerManagement=1 RTD3 then powers the GPU off 10 s after
++ * the attach, until the first open of /dev/nvidia0.
++ *
++ * nv_cold_restore_bars() is also nvidia_rtd3.c's resume step: after _OFF/_ON
++ * the GPU has been reset the same way, and pci_restore_config_regs() writes
++ * the saved image in register order, BARs before the Resizable BAR control.
++ */
++
++#include "nv-illumos.h"
++#include <sys/acpi/acpi.h>
++#include <sys/acpica.h>
++#include <sys/pci_cap.h>
++#include <sys/pcie.h>
++#include <sys/ddi_impldefs.h>
++#include <sys/ddi_implfuncs.h>
++
++#define NV_COLD_LINK_WAIT_MS    5000
++#define NV_COLD_VENDOR          0x10de
++#define NV_COLD_NBARS           6
++#define NV_COLD_REBAR_MAX       6
++
++/*
++ * The BARs of assigned-addresses (memory and I/O): config offset, base, size.
++ * Returns the count, or -1.
++ */
++typedef struct {
++    uint16_t    off;
++    uint64_t    base;
++    uint64_t    size;
++    boolean_t   is64;
++    boolean_t   io;
++} nv_cold_bar_t;
++
++static int
++nv_cold_bars(dev_info_t *dip, nv_cold_bar_t *b)
++{
++    pci_regspec_t *regs;
++    uint_t nelem, n, i;
++    int nb = 0;
++
++    if (ddi_prop_lookup_int_array(DDI_DEV_T_ANY, dip, DDI_PROP_DONTPASS,
++        "assigned-addresses", (int **)&regs, &nelem) != DDI_PROP_SUCCESS)
++        return (-1);
++    n = nelem / (sizeof (pci_regspec_t) / sizeof (int));
++    for (i = 0; i < n && nb < NV_COLD_NBARS; i++)
++    {
++        uint_t space = PCI_REG_ADDR_G(regs[i].pci_phys_hi);
++        uint_t off = PCI_REG_REG_G(regs[i].pci_phys_hi);
++
++        if (space != PCI_REG_ADDR_G(PCI_ADDR_MEM32) &&
++            space != PCI_REG_ADDR_G(PCI_ADDR_MEM64) &&
++            space != PCI_REG_ADDR_G(PCI_ADDR_IO))
++            continue;
++        if (off < PCI_CONF_BASE0 || off > PCI_CONF_BASE5 ||
++            ((off - PCI_CONF_BASE0) % 4) != 0)
++            continue;
++        b[nb].off = (uint16_t)off;
++        b[nb].base = ((uint64_t)regs[i].pci_phys_mid << 32) |
++            regs[i].pci_phys_low;
++        b[nb].size = ((uint64_t)regs[i].pci_size_hi << 32) |
++            regs[i].pci_size_low;
++        b[nb].is64 = (space == PCI_REG_ADDR_G(PCI_ADDR_MEM64));
++        b[nb].io = (space == PCI_REG_ADDR_G(PCI_ADDR_IO));
++        if (b[nb].size != 0)
++            nb++;
++    }
++    ddi_prop_free(regs);
++    return (nb);
++}
++
++/* log2 of a power-of-two size, or -1 */
++static int
++nv_cold_log2(uint64_t v)
++{
++    int i;
++
++    if (v == 0 || (v & (v - 1)) != 0)
++        return (-1);
++    for (i = 0; (v >> i) != 1; i++)
++        ;
++    return (i);
++}
++
++/* The standard sizing probe of one BAR (decode must be off). */
++static uint64_t
++nv_cold_bar_size(ddi_acc_handle_t h, const nv_cold_bar_t *b)
++{
++    uint32_t lo, hi = 0, mlo, mhi = 0xffffffffU;
++    uint64_t mask;
++
++    lo = pci_config_get32(h, b->off);
++    pci_config_put32(h, b->off, 0xffffffffU);
++    mlo = pci_config_get32(h, b->off);
++    pci_config_put32(h, b->off, lo);
++    if (b->is64)
++    {
++        hi = pci_config_get32(h, b->off + 4);
++        pci_config_put32(h, b->off + 4, 0xffffffffU);
++        mhi = pci_config_get32(h, b->off + 4);
++        pci_config_put32(h, b->off + 4, hi);
++    }
++    if (b->io)
++        /* 16-bit I/O decoders read the upper half back as 0 */
++        mask = 0xffffffffffff0000ULL | (mlo & PCI_BASE_IO_ADDR_M & 0xfffcU);
++    else
++        mask = ((uint64_t)mhi << 32) | (mlo & PCI_BASE_M_ADDR_M);
++    if (!b->is64 && !b->io)
++        mask |= 0xffffffff00000000ULL;
++    return (mask == 0 ? 0 : ~mask + 1);
++}
++
++/*
++ * Restore the BIOS layout of a reset GPU and verify it from config space.
++ * Leaves memory/IO decode and bus mastering off. Returns 0, or EIO after
++ * logging each mismatch (the caller must keep RM off the GPU). *cmdp (if not
++ * NULL) gets the command register as it was on entry.
++ */
++int
++nv_cold_restore_bars(dev_info_t *dip, ddi_acc_handle_t cfg, const char *why,
++    uint16_t *cmdp)
++{
++    nv_cold_bar_t b[NV_COLD_NBARS];
++    uint16_t rb, cmd, pcap, ven, dev, svid, ssid;
++    uint32_t ctl;
++    int nb, i, j, nrb, bad = 0, psv, pss;
++    dev_info_t *pdip = ddi_get_parent(dip);
++    ddi_acc_handle_t pcfg;
++    uint16_t ppcap;
++
++    nb = nv_cold_bars(dip, b);
++    if (nb <= 0)
++    {
++        dev_err(dip, CE_WARN, "%s: no memory BARs in assigned-addresses", why);
++        return (EIO);
++    }
++    cmd = pci_config_get16(cfg, PCI_CONF_COMM);
++    if (cmdp != NULL)
++        *cmdp = cmd;
++    pci_config_put16(cfg, PCI_CONF_COMM,
++        cmd & ~(PCI_COMM_MAE | PCI_COMM_IO | PCI_COMM_ME));
++
++    /* 1. Resizable BAR control sizes (PCIe 6.0 7.8.6), before the bases */
++    nrb = 0;
++    if (PCI_CAP_LOCATE(cfg, PCI_CAP_XCFG_SPC(PCIE_EXT_CAP_ID_RESIZE_BAR),
++        &rb) == DDI_SUCCESS)
++    {
++        nrb = (pci_config_get32(cfg, rb + 8) >> 5) & 0x7;
++        if (nrb > NV_COLD_REBAR_MAX)
++            nrb = NV_COLD_REBAR_MAX;
++    }
++    for (j = 0; j < nrb; j++)
++    {
++        uint16_t co = rb + 8 + 8 * j;
++        uint32_t cap = pci_config_get32(cfg, rb + 4 + 8 * j);
++        int idx, l2 = -1, sz;
++
++        ctl = pci_config_get32(cfg, co);
++        idx = ctl & 0x7;
++        for (i = 0; i < nb; i++)
++            if (!b[i].io && b[i].off == PCI_CONF_BASE0 + 4 * idx)
++                l2 = nv_cold_log2(b[i].size);
++        if (l2 < 20)
++            continue;           /* not a BAR this node has, or < 1 MB */
++        sz = l2 - 20;           /* 0 = 1 MB ... */
++        /* sizes 1 MB..128 TB are cap bits 4..31 (sizes 0..27), larger in ctl 16..31 */
++        if (!(sz <= 27 ? (cap >> (4 + sz)) & 1 : (ctl >> (16 + sz - 28)) & 1))
++        {
++            dev_err(dip, CE_WARN, "%s: BAR%d size %d MB is not one its "
++                "Resizable BAR capability supports (cap 0x%x)", why, idx,
++                1 << sz, cap);
++            bad++;
++            continue;
++        }
++        pci_config_put32(cfg, co, (ctl & ~(0x3fU << 8)) | ((uint32_t)sz << 8));
++    }
++
++    /* 2. the BAR bases */
++    for (i = 0; i < nb; i++)
++    {
++        uint32_t lo = pci_config_get32(cfg, b[i].off);
++        uint32_t m = b[i].io ? PCI_BASE_IO_ADDR_M : PCI_BASE_M_ADDR_M;
++
++        pci_config_put32(cfg, b[i].off, (uint32_t)(b[i].base & m) | (lo & ~m));
++        if (b[i].is64)
++            pci_config_put32(cfg, b[i].off + 4, (uint32_t)(b[i].base >> 32));
++    }
++
++    /* 3. Max_Payload_Size: the root port's (the BIOS sets the port, a reset resets the GPU to 128) */
++    if (PCI_CAP_LOCATE(cfg, PCI_CAP_ID_PCI_E, &pcap) == DDI_SUCCESS &&
++        pci_config_setup(pdip, &pcfg) == DDI_SUCCESS)
++    {
++        if (PCI_CAP_LOCATE(pcfg, PCI_CAP_ID_PCI_E, &ppcap) == DDI_SUCCESS)
++        {
++            uint16_t pmps = pci_config_get16(pcfg, ppcap + PCIE_DEVCTL) &
++                PCIE_DEVCTL_MAX_PAYLOAD_MASK;
++            uint16_t dc = pci_config_get16(cfg, pcap + PCIE_DEVCTL);
++
++            pci_config_put16(cfg, pcap + PCIE_DEVCTL,
++                (dc & ~PCIE_DEVCTL_MAX_PAYLOAD_MASK) | pmps);
++            if ((pci_config_get16(cfg, pcap + PCIE_DEVCTL) &
++                PCIE_DEVCTL_MAX_PAYLOAD_MASK) != pmps)
++            {
++                dev_err(dip, CE_WARN, "%s: Max_Payload_Size did not take "
++                    "the root port's (0x%x)", why, pmps);
++                bad++;
++            }
++        }
++        pci_config_teardown(&pcfg);
++    }
++
++    /* 4. VERIFY, all from config space (decode still off) */
++    ven = pci_config_get16(cfg, PCI_CONF_VENID);
++    dev = pci_config_get16(cfg, PCI_CONF_DEVID);
++    svid = pci_config_get16(cfg, PCI_CONF_SUBVENID);
++    ssid = pci_config_get16(cfg, PCI_CONF_SUBSYSID);
++    psv = ddi_prop_get_int(DDI_DEV_T_ANY, dip, DDI_PROP_DONTPASS,
++        "subsystem-vendor-id", -1);
++    pss = ddi_prop_get_int(DDI_DEV_T_ANY, dip, DDI_PROP_DONTPASS,
++        "subsystem-id", -1);
++    if (ven != ddi_prop_get_int(DDI_DEV_T_ANY, dip, DDI_PROP_DONTPASS,
++        "vendor-id", -1) ||
++        dev != ddi_prop_get_int(DDI_DEV_T_ANY, dip, DDI_PROP_DONTPASS,
++        "device-id", -1) ||
++        (psv != -1 && svid != psv) || (pss != -1 && ssid != pss))
++    {
++        dev_err(dip, CE_WARN, "%s: ids %04x:%04x %04x:%04x differ from the "
++            "node's properties", why, ven, dev, svid, ssid);
++        bad++;
++    }
++    for (i = 0; i < nb; i++)
++    {
++        uint64_t base = pci_config_get32(cfg, b[i].off) &
++            (b[i].io ? PCI_BASE_IO_ADDR_M : PCI_BASE_M_ADDR_M);
++        uint64_t size;
++
++        if (b[i].is64)
++            base |= (uint64_t)pci_config_get32(cfg, b[i].off + 4) << 32;
++        size = nv_cold_bar_size(cfg, &b[i]);
++        if (base != b[i].base || size != b[i].size)
++        {
++            dev_err(dip, CE_WARN, "%s: BAR at 0x%x: base 0x%llx size 0x%llx, "
++                "the BIOS assigned base 0x%llx size 0x%llx", why, b[i].off,
++                (u_longlong_t)base, (u_longlong_t)size,
++                (u_longlong_t)b[i].base, (u_longlong_t)b[i].size);
++            bad++;
++        }
++    }
++    for (j = 0; j < nrb; j++)
++    {
++        int idx, l2 = -1;
++
++        ctl = pci_config_get32(cfg, rb + 8 + 8 * j);
++        idx = ctl & 0x7;
++        for (i = 0; i < nb; i++)
++            if (!b[i].io && b[i].off == PCI_CONF_BASE0 + 4 * idx)
++                l2 = nv_cold_log2(b[i].size);
++        if (l2 >= 20 && (int)((ctl >> 8) & 0x3f) != l2 - 20)
++        {
++            dev_err(dip, CE_WARN, "%s: Resizable BAR%d control size %u, want "
++                "%d (%llu MB)", why, idx, (ctl >> 8) & 0x3f, l2 - 20,
++                (u_longlong_t)(((uint64_t)1 << l2) >> 20));
++            bad++;
++        }
++    }
++    if (bad != 0)
++        return (EIO);
++    for (i = 0; i < nb; i++)
++        dev_err(dip, CE_NOTE, "!%s: BAR 0x%x %s base 0x%llx size 0x%llx: "
++            "restored, read back equal", why, b[i].off, b[i].io ? "io" :
++            (b[i].is64 ? "mem64" : "mem32"), (u_longlong_t)b[i].base,
++            (u_longlong_t)b[i].size);
++    dev_err(dip, CE_NOTE, "!%s: %d BAR(s), %d Resizable BAR(s) restored and "
++        "verified", why, nb, nrb);
++    return (0);
++}
++
++/* the parent's _PR3 power resource, or NULL */
++static ACPI_HANDLE
++nv_cold_pr3(dev_info_t *pdip)
++{
++    ACPI_HANDLE port, pr = NULL;
++    ACPI_BUFFER rb;
++    ACPI_OBJECT *pkg;
++    ACPI_OBJECT_TYPE t;
++
++    if (acpica_get_handle(pdip, &port) != AE_OK)
++        return (NULL);
++    rb.Length = ACPI_ALLOCATE_BUFFER;
++    rb.Pointer = NULL;
++    if (AcpiEvaluateObjectTyped(port, "_PR3", NULL, &rb,
++        ACPI_TYPE_PACKAGE) == AE_OK)
++    {
++        pkg = rb.Pointer;
++        if (pkg->Package.Count >= 1 &&
++            pkg->Package.Elements[0].Type == ACPI_TYPE_LOCAL_REFERENCE &&
++            AcpiGetType(pkg->Package.Elements[0].Reference.Handle, &t) ==
++            AE_OK && t == ACPI_TYPE_POWER)
++            pr = pkg->Package.Elements[0].Reference.Handle;
++        AcpiOsFree(rb.Pointer);
++    }
++    return (pr);
++}
++
++typedef struct {
++    major_t     major;
++    dev_info_t *dip;
++} nv_cold_find_t;
++
++/* the first offline, unattached NVIDIA display node bound to nvidia */
++static int
++nv_cold_walk(dev_info_t *dip, void *arg)
++{
++    nv_cold_find_t *f = arg;
++    int cls;
++
++    if (ddi_driver_major(dip) != f->major || i_ddi_devi_attached(dip) ||
++        !DEVI_IS_DEVICE_OFFLINE(dip))
++        return (DDI_WALK_CONTINUE);
++    cls = ddi_prop_get_int(DDI_DEV_T_ANY, dip, DDI_PROP_DONTPASS,
++        "class-code", -1);
++    if (ddi_prop_get_int(DDI_DEV_T_ANY, dip, DDI_PROP_DONTPASS, "vendor-id",
++        -1) != NV_COLD_VENDOR || cls == -1 ||
++        ((cls >> 16) & 0xff) != PCI_CLASS_DISPLAY)
++        return (DDI_WALK_CONTINUE);
++    ndi_hold_devi(dip);
++    f->dip = dip;
++    return (DDI_WALK_TERMINATE);
++}
++
++static kmutex_t nv_cold_lock;
++
++void
++nv_cold_init(void)
++{
++    mutex_init(&nv_cold_lock, NULL, MUTEX_DRIVER, NULL);
++}
++
++void
++nv_cold_fini(void)
++{
++    mutex_destroy(&nv_cold_lock);
++}
++
++/*
++ * The open of nvidia-poweron (root only). 0 when a GPU was powered on and
++ * attached, or when none is offline (already attached: nothing to do);
++ * otherwise an errno, with the GPU powered off again.
++ */
++int
++nv_cold_poweron(void)
++{
++    nv_cold_find_t f;
++    dev_info_t *dip, *pdip;
++    ACPI_HANDLE pr;
++    ddi_acc_handle_t pcfg, cfg;
++    uint16_t pcap, ven = 0xffff;
++    int sta0 = -1, sta1 = -1, ms, i, rc = 0;
++    const char *why = "cold attach";
++
++    f.major = ddi_name_to_major("nvidia");
++    f.dip = NULL;
++    if (f.major == DDI_MAJOR_T_NONE)
++        return (ENXIO);
++    mutex_enter(&nv_cold_lock);
++    ndi_devi_enter(ddi_root_node());
++    ddi_walk_devs(ddi_get_child(ddi_root_node()), nv_cold_walk, &f);
++    ndi_devi_exit(ddi_root_node());
++    if ((dip = f.dip) == NULL)
++    {
++        mutex_exit(&nv_cold_lock);
++        return (0);
++    }
++    pdip = ddi_get_parent(dip);
++    if ((pr = nv_cold_pr3(pdip)) == NULL ||
++        acpica_eval_int(pr, "_STA", &sta0) != AE_OK || sta0 != 0)
++    {
++        dev_err(dip, CE_WARN, "%s: refused: offline but its root port's _PR3 "
++            "is %s (_STA %d), not powered off by tzmon", why,
++            pr == NULL ? "missing" : "present", sta0);
++        rc = ENXIO;
++        goto out;
++    }
++    if (pci_config_setup(pdip, &pcfg) != DDI_SUCCESS)
++    {
++        rc = ENXIO;
++        goto out;
++    }
++    if (PCI_CAP_LOCATE(pcfg, PCI_CAP_ID_PCI_E, &pcap) != DDI_SUCCESS ||
++        !(pci_config_get32(pcfg, pcap + PCIE_LINKCAP) &
++        PCIE_LINKCAP_DLL_ACTIVE_REP_CAPABLE))
++    {
++        pci_config_teardown(&pcfg);
++        dev_err(dip, CE_WARN, "%s: refused: the root port cannot report "
++            "the data link state", why);
++        rc = ENXIO;
++        goto out;
++    }
++
++    (void) AcpiEvaluateObject(pr, "_ON", NULL, NULL);
++    (void) acpica_eval_int(pr, "_STA", &sta1);
++    for (ms = 0; ms <= NV_COLD_LINK_WAIT_MS; ms += 10)
++    {
++        if (pci_config_get16(pcfg, pcap + PCIE_LINKSTS) &
++            PCIE_LINKSTS_DLL_LINK_ACTIVE)
++            break;
++        delay(drv_usectohz(10000));
++    }
++    pci_config_teardown(&pcfg);
++    if (ms > NV_COLD_LINK_WAIT_MS)
++    {
++        dev_err(dip, CE_WARN, "%s: the link did not come up within %d ms of "
++            "_ON (_STA %d -> %d)", why, NV_COLD_LINK_WAIT_MS, sta0, sta1);
++        rc = EIO;
++        goto off;
++    }
++    delay(drv_usectohz(100000));
++    if (pci_config_setup(dip, &cfg) != DDI_SUCCESS)
++    {
++        rc = EIO;
++        goto off;
++    }
++    for (i = 0; i < NV_COLD_LINK_WAIT_MS / 10; i++)
++    {
++        if ((ven = pci_config_get16(cfg, PCI_CONF_VENID)) == NV_COLD_VENDOR)
++            break;
++        delay(drv_usectohz(10000));
++    }
++    if (ven != NV_COLD_VENDOR)
++    {
++        pci_config_teardown(&cfg);
++        dev_err(dip, CE_WARN, "%s: no config response %d ms after _ON "
++            "(vendor 0x%x)", why, NV_COLD_LINK_WAIT_MS, ven);
++        rc = EIO;
++        goto off;
++    }
++    rc = nv_cold_restore_bars(dip, cfg, why, NULL);
++    if (rc == 0)
++    {
++        uint16_t pm;
++
++        /* a fundamental reset leaves it in D0 (uninitialized) */
++        if (PCI_CAP_LOCATE(cfg, PCI_CAP_ID_PM, &pm) != DDI_SUCCESS ||
++            (pci_config_get16(cfg, pm + PCI_PMCSR) & PCI_PMCSR_STATE_MASK) !=
++            PCI_PMCSR_D0)
++        {
++            dev_err(dip, CE_WARN, "%s: not in D0 after _ON", why);
++            rc = EIO;
++        }
++    }
++    pci_config_teardown(&cfg);
++    if (rc != 0)
++    {
++        dev_err(dip, CE_WARN, "%s: refused: the GPU's BARs are not as the "
++            "BIOS set them; powering it off again, nvidia stays detached", why);
++        goto off;
++    }
++    dev_err(dip, CE_NOTE, "!%s: powered on (_PR3 _STA %d -> %d, link up "
++        "after %d ms, config after +%d ms)", why, sta0, sta1, ms, 100 + i * 10);
++    if (ndi_devi_online(dip, 0) != NDI_SUCCESS || !i_ddi_devi_attached(dip))
++    {
++        dev_err(dip, CE_WARN, "%s: nvidia did not attach", why);
++        rc = EIO;
++        /* an unattached GPU: nothing else touches it, so cut it again */
++        if (!i_ddi_devi_attached(dip))
++            goto off;
++    }
++    goto out;
++off:
++    if (ven == NV_COLD_VENDOR && pci_config_setup(dip, &cfg) == DDI_SUCCESS)
++    {
++        uint16_t pm, cs;
++
++        if (PCI_CAP_LOCATE(cfg, PCI_CAP_ID_PM, &pm) == DDI_SUCCESS)
++        {
++            cs = pci_config_get16(cfg, pm + PCI_PMCSR);
++            pci_config_put16(cfg, pm + PCI_PMCSR,
++                (cs & ~PCI_PMCSR_STATE_MASK) | PCI_PMCSR_D3HOT);
++            delay(drv_usectohz(10000));
++        }
++        pci_config_teardown(&cfg);
++    }
++    (void) AcpiEvaluateObject(pr, "_OFF", NULL, NULL);
++    (void) acpica_eval_int(pr, "_STA", &sta1);
++    dev_err(dip, CE_NOTE, "!%s: _PR3 _OFF again, _STA %d", why, sta1);
++out:
++    ndi_rele_devi(dip);
++    mutex_exit(&nv_cold_lock);
++    return (rc);
++}
+diff -ruN ki-base/nvidia/nvidia_ddi.c ki-work/nvidia/nvidia_ddi.c
+--- a/kernel-illumos/nvidia/nvidia_ddi.c
++++ b/kernel-illumos/nvidia/nvidia_ddi.c
+@@ -271,6 +271,10 @@
+ 
+     nv_caps_attach(dip);
+     nvlink_ctl_attach(dip);
++    /* the cold attach (nvidia_cold.c): ddi_pseudo, no /dev link; root only in open */
++    if (ddi_create_minor_node(dip, "nvidia-poweron", S_IFCHR, NV_MINOR_POWERON,
++            DDI_PSEUDO, 0) != DDI_SUCCESS)
++        dev_err(dip, CE_WARN, "no nvidia-poweron minor: no cold attach");
+ 
+     ddi_report_dev(dip);
+     return (DDI_SUCCESS);
+@@ -804,6 +808,7 @@
+     nv_intr_init();
+     nv_pm_init();
+     nv_rtd3_init();
++    nv_cold_init();
+ 
+     if (nv_uvm_init() != 0)
+     {
+@@ -827,6 +832,7 @@
+ fail_uvm:
+     nv_uvm_exit();
+ fail:
++    nv_cold_fini();
+     nv_rtd3_fini();
+     nv_pm_fini();
+     nv_intr_fini();
+@@ -855,6 +861,7 @@
+ 
+     nv_clone_fini();
+     nv_uvm_exit();
++    nv_cold_fini();
+     nv_rtd3_fini();
+     nv_pm_fini();
+     nv_intr_fini();
+diff -ruN ki-base/nvidia/nvidia_rtd3.c ki-work/nvidia/nvidia_rtd3.c
+--- a/kernel-illumos/nvidia/nvidia_rtd3.c
++++ b/kernel-illumos/nvidia/nvidia_rtd3.c
+@@ -65,6 +65,8 @@
+ #include <sys/pci_cap.h>
+ #include <sys/disp.h>
+ #include <sys/pcie.h>
++#include <sys/ddi_impldefs.h>
++#include <sys/ddi_implfuncs.h>
+ 
+ /* nvidia_registry.c */
+ extern NvU32 nv_rtd3_regkey(void);
+@@ -179,6 +181,9 @@
+         if (c == r->nvis->dip || acpica_get_bdf(c, &b, &d, &f) < 0 ||
+             b != gb || d != gd)
+             continue;
++        /* tzmon offlined it at boot (the cold attach, nvidia_cold.c) */
++        if (DEVI_IS_DEVICE_OFFLINE(c) && !i_ddi_devi_attached(c))
++            continue;
+         if (n == RTD3_MAXFN)
+         {
+             ndi_devi_exit(pdip);
+@@ -326,7 +331,7 @@
+ {
+     nv_illumos_state_t *nvis = r->nvis;
+     uint16_t ven = 0xffff;
+-    int i, sta0, sta1, d0 = -1, link;
++    int i, sta0, sta1, d0 = -1, link, rb;
+ 
+     r->busy = NV_TRUE;
+     mutex_exit(&r->lock);
+@@ -359,8 +364,35 @@
+     }
+     if (ven == RTD3_VENDOR_NVIDIA)
+     {
++        uint16_t cmd;
++
++        /*
++         * The saved image goes back in register order: the command register
++         * (decode on) and the BARs before the Resizable BAR control, after
++         * which a BAR is undefined (PCIe 7.8.6). Redo the sizes and the
++         * bases with decode off and read them back; RM must not see a GPU
++         * whose BAR1 decodes a different size.
++         */
+         (void) pci_restore_config_regs(nvis->dip);
+-        d0 = rtd3_pmcsr(nvis->pci_cfg, PCI_PMCSR_D0);
++        rb = nv_cold_restore_bars(nvis->dip, nvis->pci_cfg, "rtd3: on", &cmd);
++        if (rb == 0)
++        {
++            pci_config_put16(nvis->pci_cfg, PCI_CONF_COMM, cmd);
++            d0 = rtd3_pmcsr(nvis->pci_cfg, PCI_PMCSR_D0);
++        }
++        else
++        {
++            /* refuse: back to D3hot and the rail off; the open fails */
++            (void) rtd3_pmcsr(nvis->pci_cfg, PCI_PMCSR_D3HOT);
++            (void) AcpiEvaluateObject(r->pr, "_OFF", NULL, NULL);
++            mutex_enter(&r->lock);
++            r->busy = NV_FALSE;
++            cv_broadcast(&r->cv);
++            dev_err(nvis->dip, CE_WARN, "rtd3: on: refused: the BARs did not "
++                "read back as the BIOS set them; the GPU is off again (_PR3 "
++                "_STA %d)", rtd3_sta(r));
++            return (EIO);
++        }
+     }
+ 
+     mutex_enter(&r->lock);
+diff -ruN ki-base/nvidia/nv-illumos.h ki-work/nvidia/nv-illumos.h
+--- a/kernel-illumos/nvidia/nv-illumos.h
++++ b/kernel-illumos/nvidia/nv-illumos.h
+@@ -89,6 +89,7 @@
+ #define NV_MINOR_CTL                    NV_MINOR_DEVICE_NUMBER_CONTROL_DEVICE
+ #define NV_MINOR_NVLINK                 0x100U
+ #define NV_MINOR_NVSWITCH_CTL           0x101U
++#define NV_MINOR_POWERON                0x102U  /* nvidia_cold.c, root only */
+ #define NV_MINOR_NVSWITCH_BASE          0x200U
+ #define NV_MINOR_NVSWITCH_COUNT         0x100U
+ #define NV_MINOR_CAPS_BASE              0x1000U
+@@ -403,6 +404,13 @@
+ NV_STATUS nv_rtd3_not_idle(nv_illumos_state_t *);
+ NvBool    nv_rtd3_is_off(nv_illumos_state_t *);
+ void      nv_rtd3_resume(nv_illumos_state_t *);
++
++/* nvidia_cold.c: attach to a GPU tzmon powered off at boot */
++void      nv_cold_init(void);
++void      nv_cold_fini(void);
++int       nv_cold_poweron(void);
++int       nv_cold_restore_bars(dev_info_t *, ddi_acc_handle_t, const char *,
++              uint16_t *);
+ void      nv_intr_init(void);
+ void      nv_intr_fini(void);
+ void      nv_drain_isr_top_halves(void);

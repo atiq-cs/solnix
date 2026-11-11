@@ -103,8 +103,9 @@ from the media first (`solnix-install`). Then, on the installed system:
 binds `nvidia` to `pciex10de,2420` and changes what tzmon does, so read all of this first.
 
 - tzmon's boot-time dGPU power-off (scripts/patches/0005) acts on any dGPU that has no driver attached when tzmon
-  attaches, even one bound by alias, so the option opts tzmon out (`solnix-dgpu-off=0` in tzmon.conf). From then
-  on the GPU is powered. Unmanaged it went 53 -> 94 C in ten minutes and the EC cut power.
+  attaches, even one bound by alias, so the option opts tzmon out (`solnix-dgpu-off=0` in tzmon.conf), unless
+  `nvidia.rtd3` is on (section E: nvidia then attaches to the GPU tzmon cut). From then on the GPU is powered.
+  Unmanaged it went 53 -> 94 C in ten minutes and the EC cut power.
 - `site/solnix-nvidia-guard` starts with single-user. It reads the EC's dGPU sensor (GPUT, kstat
   `dgputemp:0:ec:gput_C`, from the `dgputemp` module) every 3 s and reboots at `nvidia.maxTempC` (80) or when the
   sensor cannot be read. Test it without rebooting: `DRYRUN=1 SENSOR=tmp0_C MAXT=40 LOG=/tmp/g.log sh <guard>`
@@ -137,6 +138,22 @@ executor RM's hooks were stubbed without.
 - Gate (per-boot test, nothing persistent): off within ~15 s of the last close (psta 0, `rtd3: idle 10 s: off`).
   `nvidia-probe` reopens it (`rtd3: on`, RM init, temperature). Negative control: `nvidia-probe -w 60` holds it on
   for the 60 s. 8 open/close cycles, with kernel heap per cycle.
+- The boot (src/drm-port/nvidia-oss/patches/0003): with `rtd3` tzmon KEEPS its boot-time power-off (no
+  `solnix-dgpu-off=0`), so the GPU is cut about 2 s after the kernel banner, as in a BE without nvidia. Measured
+  2026-11-11 (BE 48, tzmon opted out): the guard's first sample, 5 s after the banner, read 80 C and it rebooted.
+  The window before the banner (POST, the loader) is firmware: the GPU is powered there in every BE, which is why
+  an NVIDIA BE still boots only from a cold dGPU.
+- tzmon offlines the GPU's functions, and devfsadm never attaches an offline node. `site/solnix-nvidia` (after the
+  guard is sampling) opens `/devices/pseudo/nvidia@0:nvidia-poweron` (root only). That open is the cold attach:
+  `_ON`, wait for Data Link Layer Link Active and the vendor id, then restore what a fundamental reset cleared,
+  with decode off: the Resizable BAR sizes (BAR1 is 16 GB on this GPU), the BAR bases from `assigned-addresses`,
+  Max_Payload_Size from the root port. It verifies them from config space (ids against the node, every BAR's base
+  and size by the sizing probe, each Resizable BAR control's size). A mismatch puts the GPU back in D3hot and
+  `_OFF` and fails the open, so RM never starts on a mis-sized BAR. Otherwise it onlines the node, and nvidia
+  attaches. The RTD3 resume runs the same restore and check after `pci_restore_config_regs`, whose register order
+  writes the BARs before the Resizable BAR control.
+- The guard runs with `EXPECT_OFF=1`: its first sample must see the GPU off (no reading, psta 0, pr3_sta 0).
+  Anything powered then, readable or not, means tzmon did not cut it, and it reboots.
 - Not done: the fine mode (GC6/GCOFF with the framebuffer kept, `=2`), which needs RM's runtime suspend/resume
   callbacks and the NVIDIA GC6 `_DSM`. Also not done: putting the audio function back online.
 

@@ -858,9 +858,14 @@ let
   #       NVreg_GpuInitOnProbe=0: attach maps the BARs and makes /dev/nvidia0
   #       but leaves RmInitAdapter (GSP boot) to the first open, which a
   #       service runs after the dump device is up (graphics-gpu.nix);
-  #   kernel/drv/tzmon.conf   solnix-dgpu-off=0: tzmon's boot-time dGPU
-  #       power-off (scripts/patches/0005) acts on every unattached dGPU,
-  #       bound or not, and would cut the GPU's power before nvidia attaches;
+  #   kernel/drv/tzmon.conf   solnix-dgpu-off=0 WITHOUT rtd3: tzmon's
+  #       boot-time dGPU power-off (scripts/patches/0005) acts on every
+  #       unattached dGPU, bound or not, and would cut the GPU's power before
+  #       nvidia attaches. With rtd3 tzmon keeps it: the GPU is off from ~2 s
+  #       after the kernel banner, and nvidia attaches later, when
+  #       site/solnix-nvidia opens nvidia@0:nvidia-poweron (the cold attach,
+  #       nvidia-oss patches/0003), which powers it on, restores and checks
+  #       its BARs, and onlines it;
   #   kernel/misc/amd64/dgputemp  the EC dGPU-temperature kstat the thermal
   #       guard reads (pkgs.solnix.dgputemp);
   #   usr/kernel/firmware/nvidia/<v>/  the GSP firmware (85 MB for GA10X). It
@@ -890,7 +895,8 @@ let
           " '# runtime D3cold (coarse); no autodetach: a detach powers the GPU on and leaves it on' 'NVreg_DynamicPowerManagement=1;' 'ddi-no-autodetach=1;'"
           else ""} > "$out/kernel/drv/nvidia.conf"
       grep -q '^solnix-dgpu-off' "$out/kernel/drv/tzmon.conf" && { echo "FATAL: tzmon.conf already sets solnix-dgpu-off" >&2; exit 1; }
-      printf '%s\n' '# solnix: nvidia drives the dGPU; no boot-time power-off' 'solnix-dgpu-off=0;' >> "$out/kernel/drv/tzmon.conf"
+      ${if rtd3 then ": rtd3: tzmon keeps its boot-time dGPU power-off; nvidia attaches cold (nvidia-oss patches/0003)"
+        else "printf '%s\\n' '# solnix: nvidia drives the dGPU; no boot-time power-off' 'solnix-dgpu-off=0;' >> \"$out/kernel/drv/tzmon.conf\""}
       chmod 0444 "$out/kernel/drv/nvidia.conf" "$out/kernel/drv/tzmon.conf"
       [ -e "$out/kernel/drv/amd64/nvidia" ] || { echo "FATAL: no nvidia module in the base tree" >&2; exit 1; }
       for m in nvidia_modeset nvidia_i2c; do

@@ -67,6 +67,25 @@ printf '%s\n' 60 75 75 > "$T/seq.gput_C"; run warm-later   ok     x SAMPLES=3
 printf '%s\n' -1 -1 75 > "$T/seq.gput_C"; printf '%s\n' 0 0 1 > "$T/seq.psta"; cp "$T/seq.psta" "$T/seq.pr3_sta"
 run warm-first-after-off reboot x SAMPLES=3
 rm -f "$T"/seq.*
+# EXPECT_OFF=1 (rtd3: tzmon keeps its boot-time power-off). The NORMAL start: off, no reading, psta 0, pr3_sta 0.
+off 0 0; run cold-start-off        ok     -1 EXPECT_OFF=1
+off 0 0; run cold-start-off-empty  ok     "" EXPECT_OFF=1
+# negative controls: anything powered at the first sample means tzmon did not cut it -> reboot
+off 1 1; run expect-off-hot        reboot 75 EXPECT_OFF=1
+off 1 1; run expect-off-powered-cool reboot 45 EXPECT_OFF=1
+off 0 0; run expect-off-reading-off reboot 45 EXPECT_OFF=1
+off 1 0; run expect-off-psta-on    reboot -1 EXPECT_OFF=1
+off 0 1; run expect-off-pr3-on     reboot -1 EXPECT_OFF=1
+off "" 0; run expect-off-psta-unread reboot -1 EXPECT_OFF=1
+off 0 0; run expect-off-dryrun     would  45 EXPECT_OFF=1 DRYRUN=1
+rm -f "$T/psta" "$T/pr3_sta"
+# off at start, then the cold attach powers it on: grace, then a reading below COLDT
+printf '%s\n' -1 -1 -1 48 48 > "$T/seq.gput_C"; printf '%s\n' 0 0 1 1 1 > "$T/seq.psta"; cp "$T/seq.psta" "$T/seq.pr3_sta"
+run cold-attach-on        ok     x SAMPLES=5 EXPECT_OFF=1
+# ... and its first reading after the cold attach at COLDT or above still reboots
+printf '%s\n' -1 -1 72 > "$T/seq.gput_C"; printf '%s\n' 0 1 1 > "$T/seq.psta"; cp "$T/seq.psta" "$T/seq.pr3_sta"
+run cold-attach-warm      reboot x SAMPLES=3 EXPECT_OFF=1
+rm -f "$T"/seq.*
 # the bring-up (nvidia-up.sh) must refuse to start RM unless the guard renews OKFILE
 U=$(dirname "$G")/nvidia-up.sh
 for c in devfsadm dumpadm mdb; do printf '#!/bin/sh\nexit 0\n' > "$T/bin/$c"; done; chmod +x "$T"/bin/*
