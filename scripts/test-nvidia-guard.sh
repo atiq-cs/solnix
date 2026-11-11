@@ -58,6 +58,15 @@ run on-grace-over     reboot x SAMPLES=8 GRACE=5
 printf '%s\n' -1 55 > "$T/seq.gput_C"; printf '%s\n' 1 1 > "$T/seq.psta"; cp "$T/seq.psta" "$T/seq.pr3_sta"
 run no-off-no-grace   reboot x SAMPLES=2
 rm -f "$T"/seq.*
+# cold start: the FIRST reading at COLDT (MAXT - 10 = 70 here) or above reboots; later readings only at MAXT
+run warm-start       reboot 72
+run warm-start-edge  reboot 70
+run cool-start       ok     69
+run dryrun-warm      would  75 DRYRUN=1
+printf '%s\n' 60 75 75 > "$T/seq.gput_C"; run warm-later   ok     x SAMPLES=3
+printf '%s\n' -1 -1 75 > "$T/seq.gput_C"; printf '%s\n' 0 0 1 > "$T/seq.psta"; cp "$T/seq.psta" "$T/seq.pr3_sta"
+run warm-first-after-off reboot x SAMPLES=3
+rm -f "$T"/seq.*
 # the bring-up (nvidia-up.sh) must refuse to start RM unless the guard renews OKFILE
 U=$(dirname "$G")/nvidia-up.sh
 for c in devfsadm dumpadm mdb; do printf '#!/bin/sh\nexit 0\n' > "$T/bin/$c"; done; chmod +x "$T"/bin/*

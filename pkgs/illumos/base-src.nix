@@ -349,6 +349,22 @@ let
     '';
   };
 
+  # zstd-cli: the zstd program alone (programs/zstd, statically linked against its own lib objects), for unpacking
+  # .tar.zst sources such as NVIDIA's .run (nvidia-gsp-firmware.nix). nixChain.zstd is the library libarchive
+  # uses and stays library-only, so nix's chain does not move. No zlib/lzma/lz4 formats (pinned off, not probed).
+  zstd-cli = mkSrcPkg {
+    pname = "zstd-cli"; version = "1.5.6";
+    src = { url = "https://github.com/facebook/zstd/releases/download/v1.5.6/zstd-1.5.6.tar.gz";
+            sha256 = "8c29e06cf42aacc1eafc4077ae2ec6c6fcb96a626157e0593d5e82a34fd403c1"; };
+    build = ''
+      gmake -C programs -j4 CC="$CC" HAVE_ZLIB=0 HAVE_LZMA=0 HAVE_LZ4=0 zstd-release
+      mkdir -p "$out/bin"; cp programs/zstd "$out/bin/zstd"; chmod 0555 "$out/bin/zstd"
+      # self-check: a round trip through the binary just built
+      printf 'solnix zstd self-check\n' > t; "$out/bin/zstd" -q -19 t -o t.zst; "$out/bin/zstd" -q -dc t.zst | cmp - t \
+        || { echo "FATAL: zstd round trip" >&2; exit 1; }
+    '';
+  };
+
   # GNU make. The gate's make is illumos make (`make -v` = "illumos make"); GNU
   # build systems want GNU make, which OpenIndiana ships as gmake. Both names here.
   gnumake = mkSrcPkg {

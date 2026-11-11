@@ -19,9 +19,13 @@
 # a moment for a first reading (RM init takes seconds): up to GRACE samples (default 10 = 30 s) may be
 # unreadable while powered. The GPU was off, so it starts cool, and unmanaged it heated about 4 C a minute
 # (53 -> 94 C in ten). Anything else that cannot be read still counts as too hot.
+# A boot that STARTS warm reboots at once: the first reading at COLDT (default MAXT - 10) or above means the GPU heats
+# to MAXT before RM can manage it. Measured 2026-11-03 on lixi: 54 -> 80 C in 88 s, powered with no RM. The reboot
+# lands in the boot-once fallback, where tzmon powers the dGPU off early. The guard has not written OKFILE yet, so
+# site/solnix-nvidia never starts RM on a warm start. In BE 34 the first sample came 1 s before nvidia's PCI attach.
 set -u
 PATH=/usr/sbin:/usr/bin:/sbin
-: "${SENSOR:=gput_C}" "${INTERVAL:=3}" "${DRYRUN:=0}" "${SAMPLES:=0}" "${OKFILE:=/var/run/solnix-nvidia-guard.ok}" "${GRACE:=10}"
+: "${SENSOR:=gput_C}" "${INTERVAL:=3}" "${DRYRUN:=0}" "${SAMPLES:=0}" "${OKFILE:=/var/run/solnix-nvidia-guard.ok}" "${GRACE:=10}" "${COLDT:=$((MAXT - 10))}"
 log() { echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) solnix-nvidia-guard: $*" | tee -a "$LOG"; }
 bail() {
   if [ "$DRYRUN" = 1 ]; then log "would reboot: $*"; exit 0; fi
@@ -32,8 +36,8 @@ bail() {
 }
 read_k() { kstat -p "dgputemp:0:ec:$1" 2>/dev/null | awk '{print $2}'; }
 [ -n "$(kstat -p dgputemp:0:ec:reads 2>/dev/null)" ] || modload -p misc/dgputemp >/dev/null 2>&1
-log "start: sensor dgputemp:0:ec:$SENSOR, limit ${MAXT} C, every ${INTERVAL} s$( [ "$DRYRUN" = 1 ] && echo ', DRY RUN')"
-n=0 off=0 grace=0
+log "start: sensor dgputemp:0:ec:$SENSOR, limit ${MAXT} C, cold start below ${COLDT} C, every ${INTERVAL} s$( [ "$DRYRUN" = 1 ] && echo ', DRY RUN')"
+n=0 off=0 grace=0 first=1
 while :; do
   t=$(read_k "$SENSOR"); n=$((n + 1))
   case $t in
@@ -53,6 +57,8 @@ while :; do
       sleep "$INTERVAL"; continue;;
   esac
   [ "$t" -ge "$MAXT" ] && bail "dGPU at ${t} C >= ${MAXT} C (dgputemp:0:ec:$SENSOR)"
+  [ "$first" = 1 ] && [ "$t" -ge "$COLDT" ] && bail "warm start: the first reading is ${t} C >= ${COLDT} C (maxTempC - 10); a dGPU this warm at boot reaches the limit before RM manages it, so the fallback BE (tzmon powers it off) boots instead. Boot this BE from a cold dGPU."
+  first=0
   [ "$off" = 1 ] && log "sample $n: dGPU powered on: ${t} C"
   off=0 grace=0
   [ "$DRYRUN" = 1 ] || touch "$OKFILE"

@@ -798,7 +798,11 @@ let
   # nvidia-gsp-firmware 615.71.09 (GSP + ucodes for TU10X/GA10X), unfree,
   # redistributable for open-source kernels; gated on the explicit opt-in.
   nvidiaGspFirmware = acceptFirmwareLicense:
-    import ./nvidia-gsp-firmware.nix { inherit acceptFirmwareLicense; };
+    import ./nvidia-gsp-firmware.nix { inherit acceptFirmwareLicense;
+      # store tools only: a solnix host has no zstd or /usr/gnu (the seed instance keeps the OI host's)
+      tools = if buildTools == [ ] then null else builtins.concatStringsSep ":" ((map (p: "${p}/bin")
+        [ srcPkgs.zstd-cli srcPkgs.gnutar srcPkgs.coreutils srcPkgs.gnused srcPkgs.gnugrep srcPkgs.findutils ])
+        ++ [ "${world}/usr/bin" ]); };
   # nvidia-probe -- the open modules' ioctl probe (src/drm-port/nvidia-oss-tools/
   # nvprobe.c): /dev/nvidiactl version + card list, the first /dev/nvidia0 open
   # (RmInitAdapter, GSP boot), root client/device/subdevice, GPU name and
