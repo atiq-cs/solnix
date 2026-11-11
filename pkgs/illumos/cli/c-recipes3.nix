@@ -319,9 +319,9 @@ printf("libev %d.%d backend %u timer %d\n", ev_version_major(), ev_version_minor
 
   # c-ares (MIT): async DNS (curl, nodejs, grpc). cmake, shared, tests off.
   c-ares = mkSrcPkg {
-    pname = "c-ares"; version = "1.34.4";
-    src = { url = "https://github.com/c-ares/c-ares/releases/download/v1.34.4/c-ares-1.34.4.tar.gz";
-            sha256 = "fa38dbed659ee4cc5a32df5e27deda575fa6852c79a72ba1af85de35a6ae222f"; };
+    pname = "c-ares"; version = "1.34.7";
+    src = { url = "https://github.com/c-ares/c-ares/releases/download/v1.34.7/c-ares-1.34.7.tar.gz";
+            sha256 = "556f781dd188ad932dc8263fee0ad3aaba675b4cd8e54d86908681b43ce3e327"; };
     deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
     build = ''
       ${cmakeB "-DCARES_SHARED=ON -DCARES_STATIC=OFF -DCARES_BUILD_TESTS=OFF -DCARES_BUILD_TOOLS=ON"}
@@ -329,7 +329,7 @@ printf("libev %d.%d backend %u timer %d\n", ev_version_major(), ev_version_minor
 #include <stdio.h>
 int main(void){ if(ares_library_init(ARES_LIB_INIT_ALL)) return 1; ares_channel_t *c; if(ares_init(&c) != ARES_SUCCESS) return 1;
 printf("c-ares %s\n", ares_version(NULL)); ares_destroy(c); ares_library_cleanup(); return 0; }'' "c" "$CC" "-lcares"}
-      ${chk ''"$W/t"'' "^c-ares 1\\.34\\.4$"}
+      ${chk ''"$W/t"'' "^c-ares 1\\.34\\.7$"}
     '';
   };
 
