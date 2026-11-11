@@ -61,6 +61,28 @@ if kstat -m ihid > /dev/null 2>&1; then
   [ "$p" -gt 0 ] && [ "$e" -eq 0 ] && r PASS touchpad-ihid "polls $p, errors 0" || r FAIL touchpad-ihid "polls $p errors $e"
 else r GAP touchpad-ihid "no ihid instance (hardware.touchpad.i2cHid off?)"; fi
 
+# 6b. precision touchpad (tpad4): ihid found the PTP collection, exports an evdev node linked as /dev/input/event*, and the
+# solnix libudev reports it with ID_INPUT_TOUCHPAD=1 (what cosmic-settings' Touchpad page and libinput ask). None of this
+# opens the node (an open switches the pad to multitouch mode), so it is safe while the touchpad is in use.
+# Negative controls: ITEST_TOUCHPAD_INPUT_DIR=/nonexistent (no node: touchpad no), ITEST_TOUCHPAD_KSTAT=<other module>.
+km=${ITEST_TOUCHPAD_KSTAT:-ihid}
+if kstat -p "$km:::input_mode" > /dev/null 2>&1 && [ -n "$(kstat -p "$km:::input_mode" 2>/dev/null)" ]; then
+  r PASS touchpad-ptp "$km: input_mode $(kstat -p "$km:::input_mode" | awk '{print $2}'), PTP contacts kstats present"
+elif kstat -m ihid > /dev/null 2>&1; then r FAIL touchpad-ptp "$km has no input_mode kstat: an ihid without PTP support"
+else r GAP touchpad-ptp "no ihid instance"; fi
+idir=${ITEST_TOUCHPAD_INPUT_DIR:-/dev/input}
+ev=$(ls "$idir"/event* 2>/dev/null | head -1)
+lu=$(ls /run/current-system/sw/lib/amd64/libudev.so.1 2>/dev/null)
+if [ -z "$ev" ]; then
+  kstat -m ihid > /dev/null 2>&1 && r FAIL touchpad-evdev-node "no $idir/event* (devlink.tab ddi_input:evdev rule?)" || r GAP touchpad-evdev-node "no ihid"
+else
+  t=$(rp "$ev"); case $t in *ihid@*:event) r PASS touchpad-evdev-node "$ev -> $t";; *) r FAIL touchpad-evdev-node "$ev -> $t (not ihid's event minor)";; esac
+fi
+if [ -n "$lu" ] && command -v udevtest > /dev/null 2>&1; then
+  LIBUDEV_SOLNIX_INPUT_DIR=$idir udevtest > /dev/null 2>&1 && r PASS touchpad-udev "libudev: ID_INPUT_TOUCHPAD=1 under $idir" \
+    || r FAIL touchpad-udev "libudev reports no touchpad under $idir"
+else r GAP touchpad-udev "no solnix libudev/udevtest in the system profile"; fi
+
 # 7. data the session needs: desktop entries and cursor themes reach sw/share
 a=$(ls /run/current-system/sw/share/applications/*.desktop 2>/dev/null | wc -l)
 [ "$a" -ge 50 ] && r PASS xdg-applications "$a desktop entries" || r FAIL xdg-applications "$a desktop entries (< 50)"

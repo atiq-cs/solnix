@@ -766,6 +766,21 @@ let
     };
   };
 
+  # libinput on illumos (./input-stack, tpad4): libevdev, mtdev, libinput and solnix's libudev, for ihid's
+  # precision-touchpad evdev node. Outside graphics/ so the COSMIC outs do not move until one links them.
+  inputStack = import ./input-stack {
+    inherit (srcPkgs) mkSrcPkg pkgconf; inherit (graphics) meson samurai; inherit libc world;
+    python3 = if buildTools == [ ] then null else cliBase.python3;
+    bzip2-bin = if buildTools == [ ] then null else cliBase.bzip2-bin; inherit (srcPkgs) hostTools;
+    gate = gate';
+    tools = [ srcPkgs.coreutils srcPkgs.findutils world ];
+    solnixDev = buildEnv {
+      name = "solnix-dev";
+      paths = [ srcPkgs.gccWrapper srcPkgs.binutils srcPkgs.gnumake ];
+      pathsToLink = [ "/bin" "/share/man" ];
+    };
+  };
+
   # iwm-firmware -- the proprietary (redistributable) iwlwifi blob + licence
   # (./iwm-firmware.nix), gated on the unfree opt-in. Threaded through here so
   # mkIwmKernel can lay it into the BE kernel tree alongside the module. The
@@ -1208,8 +1223,10 @@ let
   # solnix-touchpad SMF one-shot adds) and dacf.conf.add, the dacf(5) rule
   # install-be appends to /etc/dacf.conf: consconfig_dacf pushes usbms on
   # ihid's internal_mouse node and links it under consms, as it does for a USB
-  # mouse (hid:internal_mouse). Neither driver has a minor_perm line: dwiic's
-  # nodes belong to i2cnex and ihid's only node is kernel-internal.
+  # mouse (hid:internal_mouse). dwiic has no minor_perm line (its nodes belong
+  # to i2cnex). ihid's evdev minor ("event", node type ddi_input:evdev, tpad4)
+  # is root-only like /dev/kbd and /dev/mouse (seatd opens it for the
+  # compositor) and is linked as /dev/input/event<N> by a devlink.tab rule.
   mkTouchpadDriversDb = base: derivation {
     name = "illumos-driver-db-touchpad";
     system = "x86_64-solaris";
@@ -1226,6 +1243,12 @@ let
         printf 'driver-minorname="ihid:internal_mouse" consconfig_dacf:ms_config %s - pushmod="usbms"\n' $op
       done >> "$out/dacf.conf.add"
       [ "$(grep -c '^driver-minorname="ihid:internal_mouse"' "$out/dacf.conf.add")" -eq 2 ] || { echo "FATAL: dacf rule" >&2; exit 1; }
+      grep -q '^ihid:event ' "$out/minor_perm" || echo 'ihid:event 0600 root sys' >> "$out/minor_perm"
+      l=$(printf 'type=ddi_input:evdev\tinput/event\\N0')
+      touch "$out/devlink.tab.add"
+      grep -qxF "$l" "$out/devlink.tab.add" || printf '%s\n' "$l" >> "$out/devlink.tab.add"
+      [ "$(grep -c '^ihid:event 0600 root sys$' "$out/minor_perm")" -eq 1 ] || { echo "FATAL: ihid minor_perm" >&2; exit 1; }
+      [ "$(grep -cxF "$l" "$out/devlink.tab.add")" -eq 1 ] || { echo "FATAL: evdev devlink" >&2; exit 1; }
     '' ];
   };
 
@@ -1397,6 +1420,7 @@ in
   inherit i915-driver i915Aliases mkDriversDbWith mkGpuKernel;
   # X1E touchpad (dwiic + ihid) and its driver-DB/kernel helpers (modules/config/touchpad-i2c-hid.nix).
   inherit touchpad-driver touchpadAliases mkTouchpadDriversDb mkTouchpadKernel;
+  inherit (inputStack) libudev-solnix libevdev mtdev libinput;
 
   inherit (srcPkgs) zlib libxml2 openssl openssh bash nspr nss git libcExtra binutils gnumake gccWrapper vi pkgconf;
   inherit (srcPkgs) ncurses less htop top libevent tmux coreutils gnugrep gnused gnutar findutils diffutils jq gettext home-manager xorgproto lndir hostname libiconv;

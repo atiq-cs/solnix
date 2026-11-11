@@ -17,8 +17,14 @@ all: dwiic ihid
 dwiic: dwiic.o drv.mapfile
 	$(LD) -r -Breduce -M drv.mapfile -o $@ dwiic.o -dy -N drv/i2cnex
 
-ihid: ihid.o ihid.mapfile
-	$(LD) -r -Breduce -M ihid.mapfile -o $@ ihid.o -dy -N drv/i2cnex -N drv/dwiic -N misc/acpica -N misc/hidparser
+# hidptp.c: the precision-touchpad parser, shared with its userland test (hidptp_test.c)
+ihid: ihid.o hidptp.o ihid.mapfile
+	$(LD) -r -Breduce -M ihid.mapfile -o $@ ihid.o hidptp.o -dy -N drv/i2cnex -N drv/dwiic -N misc/acpica -N misc/hidparser
 
-%.o: %.c dwiic.h
+%.o: %.c dwiic.h hidptp.h evdev/input.h evdev/input-event-codes.h
 	$(CC) -c -o $@ $<
+
+# userland check of hidptp.c against a report descriptor: gmake test RDESC=rdesc.bin
+test: hidptp_test.c hidptp.c hidptp.h
+	gcc -std=gnu11 -Wall -Wextra -Werror -I. -o hidptp_test hidptp_test.c hidptp.c
+	./hidptp_test $(RDESC)

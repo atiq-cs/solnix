@@ -1,0 +1,20 @@
+# libudev-solnix: libudev.so.1 for solnix (libinput, COSMIC). LIBC, WORLD = the store libc and world (libdevinfo) for RUNPATH.
+CC	?= gcc
+LIBC	?= /nonexistent
+WORLD	?= /nonexistent
+CFLAGS	= -std=gnu11 -O2 -Wall -Wextra -Werror -fPIC
+
+all: libudev.so.1 udevtest
+
+libudev.so.1: libudev-solnix.c libudev.h
+	$(CC) $(CFLAGS) -shared -Wl,-h,libudev.so.1 -Wl,-R,$(LIBC)/lib/amd64:$(WORLD)/lib/amd64 -L$(WORLD)/lib/amd64 -o $@ libudev-solnix.c -ldevinfo
+
+udevtest: udevtest.c libudev.h libudev.so.1
+	$(CC) -std=gnu11 -Wall -Werror -I. -o $@ udevtest.c -L. -l:libudev.so.1 2>/dev/null || \
+	  { ln -sf libudev.so.1 libudev.so; $(CC) -std=gnu11 -Wall -Werror -I. -o $@ udevtest.c -L. -ludev; }
+
+# The build host has no touchpad, so only the negative control runs here (no node -> "touchpad no", exit 1). The
+# positive check (ID_INPUT_TOUCHPAD=1 from ihid's devinfo prop) runs on lixi: udevtest with the node present.
+check: udevtest
+	LD_LIBRARY_PATH=. LIBUDEV_SOLNIX_INPUT_DIR=/nonexistent ./udevtest; test $$? -eq 1
+	@echo "negative controls: 1/1"
