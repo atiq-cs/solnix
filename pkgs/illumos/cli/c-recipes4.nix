@@ -791,6 +791,48 @@ printf("ok %u.%u.%u %d\n", VK_API_VERSION_MAJOR(v), VK_API_VERSION_MINOR(v), VK_
     '';
   };
 
+  # vulkan-tools (Apache-2.0): vulkaninfo, vkcube and vkcubepp (Khronos Vulkan-Tools) on the loader above, X11 (xcb, Xlib), Wayland and
+  # display (VK_KHR_display) WSI, as nixpkgs: the mock ICD is not installed, and vulkaninfo/vkcube dlopen libvulkan.so.1 (and vkcube
+  # libxcb/libX11/libwayland-client) by name, which their store RUNPATH resolves. Upstream has no illumos case; the port:
+  # - cube/, vulkaninfo/, icd/ CMakeLists.txt: SunOS joins the "Linux|BSD|GNU" platform case (7 spots: the WSI options, the targets);
+  # - cube.c, cube.cpp: __sun joins the Linux/BSD main() arm;
+  # - cube.c, cube.cpp include <linux/input.h> for five Wayland key and button codes (KEY_ESC/LEFT/RIGHT/SPACE, BTN_LEFT): the BSD-2
+  #   FreeBSD evdev input-event-codes.h solnix already ships (src/ports/touchpad/evdev, input-stack's libevdev), the same Linux evdev
+  #   numbers wl_keyboard and wl_pointer carry.
+  # The loader's -std=c99 note applies (clock_gettime, strtok_r): -D__EXTENSIONS__. The cube shaders ship as SPIR-V (cube.*.inc,
+  # COMPILE_CUBE_SHADERS off), so no glslang. nixpkgs' wayland-scanner patch is not needed: one wayland out has both .pc files.
+  vulkan-tools = let evdev = builtins.path { path = ../../../src/ports/touchpad/evdev; name = "solnix-evdev-headers"; }; in mkSrcPkg {
+    pname = "vulkan-tools"; version = "1.4.363.0";
+    src = { url = "https://codeload.github.com/KhronosGroup/Vulkan-Tools/tar.gz/refs/tags/vulkan-sdk-1.4.363.0";
+            sha256 = "6cbeb83294434e636a0c78760f1a6dfe3e50c1bab0cffa154603ce73e70508f1"; };
+    deps = [ world vulkan-loader libx11 libxcb graphics.wayland ];
+    linkDeps = [ vulkan-headers graphics.wayland-protocols base.xorgproto libxau libxdmcp libpthread-stubs graphics.libffi libxrandr libxrender libxext ];   # Xrandr: the mock ICD (build check only) has XLIB_XRANDR_EXT
+    nativeTools = [ cmake base.pkgconf ] ++ hostTools;
+    build = ''
+      [ "$(cat cube/CMakeLists.txt vulkaninfo/CMakeLists.txt icd/CMakeLists.txt | grep -c 'CMAKE_SYSTEM_NAME MATCHES "Linux|BSD|GNU")')" = 7 ] || { echo "FATAL: vulkan-tools platform anchors" >&2; exit 1; }
+      sed -i 's/CMAKE_SYSTEM_NAME MATCHES "Linux|BSD|GNU")/CMAKE_SYSTEM_NAME MATCHES "Linux|BSD|GNU|SunOS")/' cube/CMakeLists.txt vulkaninfo/CMakeLists.txt icd/CMakeLists.txt
+      for f in cube/cube.c cube/cube.cpp; do
+        grep -q '^#elif defined(__linux__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__QNX__) || defined(__GNU__)' $f || { echo "FATAL: vulkan-tools $f main anchor" >&2; exit 1; }
+        sed -i 's/^#elif defined(__linux__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__QNX__) || defined(__GNU__)/#elif defined(__sun) || defined(__linux__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__QNX__) || defined(__GNU__)/' $f
+        [ "$(grep -c '^#include <linux/input.h>$' $f)" = 1 ] || { echo "FATAL: vulkan-tools $f input.h anchor" >&2; exit 1; }
+        sed -i 's|^#include <linux/input.h>$|#include "input-event-codes.h"|' $f
+      done
+      cp ${evdev}/input-event-codes.h cube/
+      ${cmakeB "-DCMAKE_DISABLE_FIND_PACKAGE_Git=TRUE -DCMAKE_C_FLAGS=-D__EXTENSIONS__ -DCMAKE_CXX_FLAGS=-D__EXTENSIONS__ -DVulkanHeaders_DIR=${vulkan-headers}/share/cmake/VulkanHeaders -DBUILD_WSI_XCB_SUPPORT=ON -DBUILD_WSI_XLIB_SUPPORT=ON -DBUILD_WSI_WAYLAND_SUPPORT=ON -DBUILD_WSI_DISPLAY_SUPPORT=ON -DBUILD_ICD=ON -DINSTALL_ICD=OFF -DBUILD_TESTS=OFF"}
+      for b in vulkaninfo vkcube vkcubepp; do [ -x "$out/bin/$b" ] || { echo "FATAL: no $b" >&2; exit 1; }; done
+      [ ! -e "$out/share/vulkan" ] || { echo "FATAL: the mock ICD was installed" >&2; exit 1; }
+      /usr/bin/elfdump -d "$out/bin/vkcube" | grep -q "RUNPATH.*${vulkan-loader}/lib/amd64" || { echo "FATAL: vkcube RUNPATH lacks the loader" >&2; exit 1; }
+      # no GPU here: the loader (found through vulkaninfo's RUNPATH, no LD_LIBRARY_PATH) drives the build tree's mock ICD; with no ICD,
+      # vulkaninfo must fail (negative control: the device line comes from the ICD, not from vulkaninfo)
+      E="XDG_CONFIG_HOME=$W XDG_DATA_HOME=$W XDG_DATA_DIRS=$W HOME=$W"
+      ${chk ''env $E VK_DRIVER_FILES="$PWD/_b/icd/VkICD_mock_icd.json" "$out/bin/vulkaninfo" --summary | grep deviceName'' "deviceName += Vulkan Mock Device$"}
+      ${chk ''env $E VK_DRIVER_FILES="$W/none.json" "$out/bin/vulkaninfo" --summary'' "ERROR_INCOMPATIBLE_DRIVER"}
+      # vkcube on the display WSI (VK_KHR_display, no window system): 3 frames through the mock ICD's swapchain
+      ${chk ''env $E VK_DRIVER_FILES="$PWD/_b/icd/VkICD_mock_icd.json" "$out/bin/vkcube" --wsi display --c 3 2>&1; echo "rc=$?"'' "Selected GPU 0: Vulkan Mock Device"}
+      ${chk ''"$out/bin/vkcube" --solnix-usage'' "wsi <xcb.xlib.wayland.display>"}
+    '';
+  };
+
   # ---- recipes5 batch 13: leaves the queue's audio, logging and networking jobs wait on --------------------------------------------
   # libvorbis (BSD-3-Clause): the Vorbis audio codec (libvorbis, vorbisenc, vorbisfile) on R1's libogg. autotools, as nixpkgs.
   libvorbis = mkSrcPkg {
