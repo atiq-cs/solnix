@@ -19,9 +19,12 @@
 #
 # Source: NVIDIA's own Linux driver package, pinned by sha256. Only firmware/
 # and LICENSE are extracted (the .run is a makeself archive: a 1019-line shell
-# header followed by a zstd tar).
+# header followed by a zstd tar). The extraction uses store tools only (zstd,
+# GNU tar, coreutils, the world's digest), so a solnix host builds it; the
+# pinned blob sha256s below are the gate.
 { system ? "x86_64-solaris"
 , acceptFirmwareLicense ? false
+, tools ? null                # store bin dirs (":"-joined) with zstd tar head tail sed grep mktemp find digest; null = host
 }:
 
 let
@@ -44,12 +47,15 @@ derivation {
   name = "nvidia-gsp-firmware-${version}";
   inherit system run version;
   builder = "/usr/bin/bash";
-  PATH = "/usr/bin:/usr/gnu/bin";
+  PATH = if tools == null then "/usr/bin:/usr/gnu/bin" else tools;
   args = [ "-c" ''
     set -eu
+    for t in zstd tar head tail sed grep mktemp find digest; do
+      command -v $t >/dev/null || { echo "nvidia-gsp-firmware: no $t on PATH" >&2; exit 1; }
+    done
     d=$out/kernel/firmware/nvidia/$version
     mkdir -p $d
-    w=$(mktemp -d /tmp/nvgsp.XXXXXX)
+    w=$(mktemp -d "''${TMPDIR:-/tmp}/nvgsp.XXXXXX")
     head -n 1 "$run" | grep -q '^#! /bin/sh' || { echo "nvidia-gsp-firmware: not a makeself .run" >&2; exit 1; }
     [ "$(sed -n 4p "$run")" = skip=1019 ] || { echo "nvidia-gsp-firmware: makeself skip changed" >&2; exit 1; }
     tail -n +1019 "$run" | zstd -dc | (cd $w && tar xf - firmware LICENSE)
