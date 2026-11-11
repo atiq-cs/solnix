@@ -1,0 +1,19 @@
+Backport of nodejs/node c988b7d3 (PR #65684, "src: fix startup snapshot reproducibility of InternalFieldInfo",
+Fixes nodejs/node#65508) to v24.18.0: memset before a placement new is a dead store under gcc -flifetime-dse, so the
+struct padding handed to V8's startup snapshot held heap bytes. Upstream since v24.22.2.
+
+--- a/src/node_snapshotable.h
++++ b/src/node_snapshotable.h
+@@ -47,8 +47,11 @@
+                       std::is_same_v<InternalFieldInfoBase, T>,
+                   "Can only accept InternalFieldInfoBase subclasses");
+     void* buf = ::operator new[](sizeof(T));
+-    memset(buf, 0, sizeof(T));  // Make the padding reproducible.
+     T* result = new (buf) T;
++    // Zero the padding to make the bytes handed to V8 reproducible. Must come
++    // after the placement new, or -flifetime-dse drops it as a dead store.
++    // https://gcc.gnu.org/onlinedocs/gcc/Optimize-Options.html#index-fno-lifetime-dse
++    memset(static_cast<void*>(result), 0, sizeof(T));
+     result->type = type;
+     result->length = sizeof(T);
+     return result;

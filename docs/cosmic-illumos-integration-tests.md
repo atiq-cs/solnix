@@ -69,6 +69,7 @@ summary line.
 | point | Linux | illumos | defect | fix | check | negative control |
 |---|---|---|---|---|---|---|
 | mimalloc 2.x | user addresses are below 2^47 | user addresses are 0xfffffc7f…, negative as intptr_t | `_mi_ptr_segment` returned NULL for every segment, and pop-launcher died at its first malloc | 72f6a23 | t0: start pop-launcher with "Exit" on stdin: rc 0, no core | pop-launcher mj98i4x4 (crashes 3 of 3) |
+| 64-bit user address space | user addresses are below 2^47 | upstream illumos maps libraries and the stack at 0xFFFFFC7F… (USERLIMIT); OpenIndiana sets `_userlimit=0x7fffc0000000` (oi-userland aaa97980d8, reserve_bits_for_tagged_pointers) | Firefox SEGVed creating its first JS global: SpiderMonkey stored a native function pointer as a NaN-boxed PrivateValue, which then looked like a GC thing (Mozilla bug 577056, WONTFIX). The same binary SEGVed 6/6 with the upstream layout and wrote its screenshot 8/8 with OI's tunable | `solnix.kernel.userLimit47` (modules/config/user-limit.nix, default on x86_64: /etc/system.d/solnix-userlimit47) | firefox.nix: a fresh mmap below 2^47 before the in-build headless screenshot, then the screenshot | a builder without the tunable: the probe FAILs and names it (browser4-ff before 2026-11-11T04:17Z) |
 | libumem | glibc malloc | UMEM_OPTIONS=backend=mmap for cosmic-term | — | 0f051d2 | t1: cosmic-term's RSS is flat | — |
 
 ## 6. Session, login, files

@@ -13,6 +13,7 @@ rec {
       ${tools.path}
       patch -p1 < ${./patches/nodejs-24-illumos-cast-pid_t.patch}
       patch -p1 < ${./patches/nodejs-24-illumos-madvise.patch}
+      patch -p1 < ${./patches/nodejs-24-snapshot-padding.patch}   # upstream c988b7d3: snapshot bytes from heap padding (--check differed)
       # --no-cross-compiling as nixpkgs: a host and a target toolset would both emit libv8_zlib.a ("multiple rules", measured).
       # gyp's make generator, as OI: common.gypi makes every solaris static lib standalone, which the ninja generator puts in
       # out/Release/ while node.gypi's --whole-archive names obj/deps/uv/libuv.a (node_mksnapshot link failed, measured).

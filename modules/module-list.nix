@@ -18,6 +18,7 @@
   ./config/dumpadm.nix
   ./config/zfs.nix
   ./config/coreadm.nix
+  ./config/user-limit.nix
   ./config/libumem.nix
   ./config/first-boot-defaults.nix
   ./config/ec2-first-boot.nix

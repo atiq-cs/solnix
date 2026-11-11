@@ -53,7 +53,9 @@ mkSrcPkg {
     # -z nodefaultlib: a bare dlopen("libpulse.so.0") (xpcom nsSystemInfo, for a version string) otherwise fell through to
     # ld.so.1's default /usr/lib, loaded the host's libpulse and its host libc.so.1 beside the store's, and Firefox SEGVed
     # (measured: 2 libc.so.1 in the core). NixOS has no /usr/lib, so there the dlopen just fails; NODEFLIB makes it fail here.
-    for w in "$(command -v $CC)" "$(command -v $CXX)"; do sed -i "s@ -Wl,-R,@ -Wl,-z,nodefaultlib -Wl,-R,$out/lib/firefox:@" "$w"; done
+    # The store-only wrappers carry their -R in L=, set only for a call with a non-flag argument (mk-src-pkg 0734958); its L is
+    # unquoted on the exec line, so the two flags reach gcc as two arguments.
+    for w in "$(command -v $CC)" "$(command -v $CXX)"; do sed -i "s@ L=-Wl,-R,\([^;]*\);@ L=\"-Wl,-z,nodefaultlib -Wl,-R,$out/lib/firefox:\1\";@" "$w"; done
     grep -q -- "-Wl,-z,nodefaultlib -Wl,-R,$out/lib/firefox:" "$(command -v $CXX)" || { echo "FATAL: c++ wrapper RUNPATH" >&2; exit 1; }
     # llvm-clang bin: llvm-objdump/llvm-ar that mach requires (nixpkgs: llvmPackages.bintools); CC/CXX stay gcc (mozconfig)
     export PATH=${llvm-clang}/bin:${rust}/bin:${cbindgen}/bin:${nodejs}/bin:${tools.nasm}/bin:${cli.perl}/bin:${cli.gnum4}/bin:$PATH
@@ -103,6 +105,11 @@ mkSrcPkg {
     for f in "$out"/lib/firefox/*.so "$out"/lib/firefox/firefox; do
       elfdump -d "$f" | grep -q 'NODEFLIB' || { echo "FATAL: $f lacks -z nodefaultlib" >&2; exit 1; }
     done
+    # The shot needs every user address below 2^47 (SpiderMonkey's NaN-boxed JS::Value; solnix.kernel.userLimit47,
+    # modules/config/user-limit.nix). On a builder with upstream illumos's layout (libraries at 0xFFFFFC7F...) Firefox SEGVs
+    # creating its first JS global, so name the cause instead of crashing; no skip: such a host cannot vouch for Firefox.
+    a=$(python3 -c 'import mmap,ctypes,sys; m=mmap.mmap(-1,1<<20); a=ctypes.addressof(ctypes.c_char.from_buffer(m)); print(hex(a)); sys.exit(a >= 1<<47)') \
+      || { echo "FATAL: this build host lacks solnix's userLimit47 default (a fresh mmap at $a is not below 2^47): Firefox cannot run here. Set solnix.kernel.userLimit47 (/etc/system.d: set _userlimit=0x7fffc0000000) and reboot." >&2; exit 1; }
     # headless start: loads libxul, the profile, Gecko, a local page, and writes a PNG (no display needed). Gecko aborts with no
     # font at all (MOZ_RELEASE_ASSERT in gfxPlatformFontList, measured on a fontless builder), so a build-only fonts.conf in
     # $TMPDIR names noto-sans; nothing in $out refers to it.
