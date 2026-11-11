@@ -62,10 +62,42 @@ A system lays it with `hardware.graphics.nvidia.drm` (which turns on `hardware.g
   (`drm_memcpy_from_wc`, inside `fpu_kernel_enter/exit`), the object i915 exempts too. The negative controls fail
   as they should: one more unresolved symbol (named), and an nvidia-drm object rebuilt with SSE.
 
+## GEM mmap (D2.3)
+
+`mmap(2)` of a card or renderD fd at the fake offset `DRM_IOCTL_MODE_MAP_DUMB` (or NVIDIA's `GEM_MAP_OFFSET`)
+returns maps the object's range of the GPU's FB BAR (BAR1), write-combined, which is what upstream's `nv_drm_mmap`
+plus `drm_gem_mmap_obj` give on Linux. Pieces:
+
+- `patches/0003-nvidia-drm-sunos-gem-mmap.patch`: `nv_drm_sunos_gem_mmap_pa`, upstream's `__nv_drm_gem_nvkms_mmap`
+  without the Linux VMA part: the NVKMS USER mapping (`__nv_drm_gem_nvkms_map`), the GC6 blocker taken once per
+  object (dropped when the object is freed, as upstream), and the CPU physical address and size. Anything but nvkms
+  video memory is EOPNOTSUPP.
+- `nvidia_drm_glue.c` `nv_drm_sunos_gem_map`: the exact vma-offset lookup of `nv_drm_mmap`, the reference taken
+  only if the object is not being freed (`kref_get_unless_zero`, one compare-and-swap with i915's
+  `obsd-norcu.patch`), `drm_vma_node_is_allowed` for the calling file.
+- `nvidia_drm_illumos.c`: `nvd_devmap` checks all of that with a temporary reference and calls
+  `devmap_devmem_setup` on the nvidia node with the FB BAR's `reg` index and the offset into it (`DDI_MERGING_OK_ACC`:
+  rootnex makes it `HAT_MERGING_OK`, the PAT write-combining entry). `devmap_setup` frees its handles without a
+  callback when making the mapping fails, so the lasting reference is taken by the `devmap_map` callback, after a
+  second lookup that must land on the same pages; until then, or if it does not, the mapping holds nothing and
+  `devmap_access` refuses its faults (EFAULT). `devmap_map` never fails (a failure leaves a segment with no handles
+  behind). dup and partial unmaps share the reference; the last `devmap_unmap` releases it from a taskq, since it
+  runs under the address space's writer lock and the release calls NVKMS and RM. Only `MAP_SHARED` (`nvd_segmap`).
+- The reference keeps the GEM object, so the object keeps the NVKMS device (patch 0002): the dGPU stays powered
+  while any mapping exists.
+- `nvidia_drm_bar1.h`: the arithmetic, kernel-free: which `reg` entry is the FB BAR (the second memory BAR in
+  `assigned-addresses`, as the nvidia module's `nv_pci_map_bars` picks the BAR RM uses as `gpuPhysFbAddr`), the fake
+  offset request, the object's range inside the BAR. `test/test_bar1.c` runs it in userland on the X1E's real
+  properties (BAR1 16 GB at 0x60_0000_0000); the derivation runs it and two sabotaged builds, which must fail.
+- Same limit as upstream: the object is mapped as one contiguous BAR1 range from the address NVKMS returns (RM
+  returns range 0 of the aperture; upstream's fault handler adds the page offset to it the same way).
+
+Built and gated, not run on hardware yet.
+
 ## Not ported yet (they fail at run time with an error, never a fake success)
 
-- GEM mmap and its fault handler, for dumb buffers and every other object (D2.3: an illumos devmap path).
-  The shell's devmap returns ENOTSUP.
+- GEM mmap of anything but nvkms memory in video memory: sysmem nvkms objects (mapped by page on Linux), dma-buf
+  imports and user memory get EOPNOTSUPP from the devmap path (D2.3, below).
 - Importing user memory (page pinning) and `nv_drm_vmap` of page lists: the compat `vmap()` takes OpenBSD
   `vm_page`s.
 - `drm_prime_pages_to_sg` (PRIME, D2.4); `prime_dup` between two NVIDIA GPUs (OpenBSD's `dma_buf` has no `owner`).

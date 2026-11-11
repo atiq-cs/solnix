@@ -1,0 +1,75 @@
+diff -ruN a/kernel-open/nvidia-drm/nvidia-drm-gem-nvkms-memory.c b/kernel-open/nvidia-drm/nvidia-drm-gem-nvkms-memory.c
+--- a/kernel-open/nvidia-drm/nvidia-drm-gem-nvkms-memory.c
++++ b/kernel-open/nvidia-drm/nvidia-drm-gem-nvkms-memory.c
+@@ -170,6 +170,55 @@
+ }
+ #endif /* !NV_SUNOS */
+ 
++#if defined(NV_SUNOS)
++/*
++ * GEM mmap on illumos (D2.3): what __nv_drm_gem_nvkms_mmap() does before
++ * drm_gem_mmap_obj(), for the devmap(9E) entry point of the illumos shell,
++ * which maps the range itself (devmap_devmem_setup on the GPU's FB BAR,
++ * write-combined, as drm_gem_mmap_obj's pgprot_writecombine). The USER
++ * mapping, then the GC6 blocker held until the object is freed. Returns the
++ * CPU physical address in the FB aperture and the object size, or a negative
++ * errno: -EOPNOTSUPP for an object that is not nvkms memory in video memory
++ * (sysmem nvkms objects are mapped by page on Linux, which needs a page-list
++ * devmap; dma-buf and user-memory objects have no illumos mmap).
++ */
++int nv_drm_sunos_gem_mmap_pa(struct nv_drm_gem_object *nv_gem,
++                             uint64_t *pa, uint64_t *size)
++{
++    struct nv_drm_gem_nvkms_memory *nv_nvkms_memory;
++    int ret;
++
++    if (nv_gem->ops != &nv_gem_nvkms_memory_ops ||
++        !nvKms->isVidmem(nv_gem->pMemory)) {
++        return -EOPNOTSUPP;
++    }
++    nv_nvkms_memory = to_nv_nvkms_memory(nv_gem);
++
++    ret = __nv_drm_gem_nvkms_map(nv_nvkms_memory);
++    if (ret) {
++        return ret;
++    }
++    if (!nv_nvkms_memory->physically_mapped ||
++        nv_nvkms_memory->pPhysicalAddress == NULL) {
++        return -EOPNOTSUPP;
++    }
++
++    mutex_lock(&nv_nvkms_memory->map_lock);
++    if (!nv_nvkms_memory->was_mmapped) {
++        if (!nvKms->gc6BlockerRefCntInc(nv_gem->nv_dev->pDevice)) {
++            mutex_unlock(&nv_nvkms_memory->map_lock);
++            return -ENOMEM;
++        }
++        nv_nvkms_memory->was_mmapped = true;
++    }
++    mutex_unlock(&nv_nvkms_memory->map_lock);
++
++    *pa = (uint64_t)(uintptr_t)nv_nvkms_memory->pPhysicalAddress;
++    *size = nv_gem->base.size;
++    return 0;
++}
++#endif /* NV_SUNOS */
++
+ static struct drm_gem_object *__nv_drm_gem_nvkms_prime_dup(
+     struct drm_device *dev,
+     const struct nv_drm_gem_object *nv_gem_src);
+diff -ruN a/kernel-open/nvidia-drm/nvidia-drm-gem-nvkms-memory.h b/kernel-open/nvidia-drm/nvidia-drm-gem-nvkms-memory.h
+--- a/kernel-open/nvidia-drm/nvidia-drm-gem-nvkms-memory.h
++++ b/kernel-open/nvidia-drm/nvidia-drm-gem-nvkms-memory.h
+@@ -113,6 +113,12 @@
+                         uint32_t handle);
+ #endif /* NV_DRM_DRIVER_HAS_DUMB_DESTROY */
+ 
++#if defined(NV_SUNOS)
++/* the illumos devmap path (D2.3): 0, or -EOPNOTSUPP/-ENOMEM/... */
++int nv_drm_sunos_gem_mmap_pa(struct nv_drm_gem_object *nv_gem,
++                             uint64_t *pa, uint64_t *size);
++#endif
++
+ struct drm_gem_object *nv_drm_gem_nvkms_prime_import(
+     struct drm_device *dev,
+     struct drm_gem_object *gem);

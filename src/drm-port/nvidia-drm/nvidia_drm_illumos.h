@@ -22,6 +22,14 @@ extern int nv_drm_sunos_drm_attached(struct drm_device *);
 extern int nv_drm_sunos_drm_unit(struct drm_device *);
 extern int nv_drm_sunos_chpoll(dev_t, short, int, short *, struct pollhead **);
 extern void nv_drm_sunos_pollhead_clean(dev_t);
+/*
+ * GEM mmap (D2.3): the nvkms video-memory object at a fake offset (page
+ * start, page count) of the DRM file odev, referenced; its CPU physical
+ * address in the FB aperture and its size. 0 or an errno.
+ */
+extern int nv_drm_sunos_gem_map(dev_t, uint64_t, uint64_t, void **,
+    uint64_t *, uint64_t *);
+extern void nv_drm_sunos_gem_put(void *);
 
 /* the hooks nvidia-drm-sunos.h declares */
 extern struct drm_device *nv_drm_sunos_dev_alloc(const struct drm_driver *,

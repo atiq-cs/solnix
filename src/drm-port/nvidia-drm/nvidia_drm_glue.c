@@ -29,6 +29,8 @@
 #include "nvidia-drm-conftest.h"
 #include "nvidia-drm-priv.h"
 #include "nvkms-kapi.h"
+#include "nvidia-drm-gem.h"
+#include "nvidia-drm-gem-nvkms-memory.h"
 #include <drm/drm_file.h>
 #include <drm/drm_drv.h>
 #include "nvidia_drm_illumos.h"
@@ -99,4 +101,56 @@ nv_drm_sunos_pollhead_clean(dev_t odev)
 
 	if (fp != NULL)
 		pollhead_clean(&fp->rsel.si_ph);
+}
+
+/*
+ * GEM mmap (D2.3). The object behind a DRM fd's fake offset, as
+ * nv_drm_mmap() finds it on Linux (an exact vma-offset lookup that refuses an
+ * object whose last reference is gone, then drm_vma_node_is_allowed), with
+ * kref_get_unless_zero (one compare-and-swap with i915/obsd-norcu.patch). Then 0003's
+ * nv_drm_sunos_gem_mmap_pa: nvkms video memory only, mapped USER, the GC6
+ * blocker held. On success *objp holds the reference (nv_drm_sunos_gem_put).
+ * 0 or a positive errno.
+ */
+int
+nv_drm_sunos_gem_map(dev_t odev, uint64_t start, uint64_t pages,
+    void **objp, uint64_t *pap, uint64_t *sizep)
+{
+	struct drm_device *dev = drm_get_device_from_kdev(odev);
+	struct drm_file *fp = glue_file(odev);
+	struct drm_vma_offset_node *node;
+	struct drm_gem_object *obj = NULL;
+	int ret;
+
+	if (dev == NULL || fp == NULL)
+		return (ENXIO);
+	drm_vma_offset_lock_lookup(dev->vma_offset_manager);
+	node = drm_vma_offset_exact_lookup_locked(dev->vma_offset_manager,
+	    (unsigned long)start, (unsigned long)pages);
+	if (node != NULL) {
+		obj = container_of(node, struct drm_gem_object, vma_node);
+		if (!kref_get_unless_zero(&obj->refcount))
+			obj = NULL;
+	}
+	drm_vma_offset_unlock_lookup(dev->vma_offset_manager);
+	if (obj == NULL)
+		return (EINVAL);
+	if (!drm_vma_node_is_allowed(node, fp)) {
+		drm_gem_object_put(obj);
+		return (EACCES);
+	}
+	ret = nv_drm_sunos_gem_mmap_pa(to_nv_gem_object(obj), pap, sizep);
+	if (ret != 0) {
+		drm_gem_object_put(obj);
+		return (-ret);
+	}
+	*objp = obj;
+	return (0);
+}
+
+/* Drop the reference nv_drm_sunos_gem_map took (may free the object). */
+void
+nv_drm_sunos_gem_put(void *obj)
+{
+	drm_gem_object_put(obj);
 }

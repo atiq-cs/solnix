@@ -37,8 +37,8 @@
  * The character device entry points are i915_illumos.c's: a clone minor per
  * open, drmopen/drmclose/drmread/drmioctl of OpenBSD's drm core with the
  * OpenBSD minor (i915_drmioc.h), and the Linux ioctl encoding of solnix's
- * libdrm translated to OpenBSD's. Not here yet: mmap (devmap, D2.3), dma-buf
- * fds (D2.4); both fail with an error.
+ * libdrm translated to OpenBSD's. GEM mmap is devmap(9E) of the GPU's FB
+ * BAR (D2.3, below). Not here yet: dma-buf fds (D2.4) fail with an error.
  *
  * Order and the GPU: attach touches no GPU. It makes one minor, "ctl"
  * (ddi_pseudo, root only); the NVKMS/DRM start (nv_drm_init, whose
@@ -62,6 +62,7 @@
 #include <obsd_prelude.h>
 #include "i915_drmioc.h"
 #include "nvidia_drm_illumos.h"
+#include "nvidia_drm_bar1.h"
 
 /* nvidia-drm.c */
 extern int nv_drm_init(void);
@@ -503,14 +504,221 @@ nvd_ioctl(dev_t dev, int cmd, intptr_t arg, int mode, cred_t *cr, int *rval)
 	return (err);
 }
 
-/* STUB until D2.3: GEM mmap (dumb buffers) needs an NVKMS devmap path. */
+/*
+ * GEM mmap (D2.3): dumb buffers and every nvkms-memory object in video
+ * memory. MAP_DUMB (or NVIDIA's GEM_MAP_OFFSET) gives a fake offset; mmap(2)
+ * of the DRM fd there maps the object's range of the GPU's FB BAR (BAR1),
+ * write-combined, as upstream nv_drm_mmap() + drm_gem_mmap_obj() do on
+ * Linux. The object stays referenced while any piece of the mapping exists,
+ * and the object holds the NVKMS device (patches/0002), so the GPU stays
+ * powered while mapped; it holds the GC6 blocker too (patches/0003).
+ *
+ * devmap(9E) runs before the user mapping exists and devmap_setup() frees
+ * its handles without a devmap_unmap callback if making the mapping fails,
+ * so it takes only a temporary reference: it checks everything (object,
+ * permission, BAR range) and sets the handle up. devmap_map, once the
+ * mapping exists, looks the object up again, checks it still lies where the
+ * handle points, and keeps that reference. Until then (or if the check
+ * fails) the mapping has no reference and nvd_dm_access refuses its faults;
+ * devmap_map never fails, because devmap_setup leaves a segment behind with
+ * no handles when it does. The last devmap_unmap runs under the address
+ * space's writer lock, so the object is released from a taskq (it calls into
+ * NVKMS and RM).
+ */
+struct nvd_map {
+	void			*m_obj;		/* GEM object reference */
+	volatile uint32_t	m_refs;		/* devmap handles sharing it */
+	struct task		m_task;		/* the release (nvd_map_free) */
+};
+
+static struct taskq	*nvd_unmap_tq;
+
+static ddi_device_acc_attr_t nvd_wc_attr = {
+	.devacc_attr_version = DDI_DEVICE_ATTR_V0,
+	.devacc_attr_endian_flags = DDI_NEVERSWAP_ACC,
+	.devacc_attr_dataorder = DDI_MERGING_OK_ACC,	/* write-combining */
+};
+
+/* The GPU's FB BAR: its "reg" index and assigned address (nvidia_drm_bar1.h). */
+static int
+nvd_gpu_bar1(struct nvd_gpu *g, struct nvd_bar1 *b)
+{
+	int *reg, *aa;
+	uint_t nreg, naa;
+	int err;
+
+	if (ddi_prop_lookup_int_array(DDI_DEV_T_ANY, g->g_gpu_dip,
+	    DDI_PROP_DONTPASS, "reg", &reg, &nreg) != DDI_PROP_SUCCESS)
+		return (ENXIO);
+	if (ddi_prop_lookup_int_array(DDI_DEV_T_ANY, g->g_gpu_dip,
+	    DDI_PROP_DONTPASS, "assigned-addresses", &aa, &naa) !=
+	    DDI_PROP_SUCCESS) {
+		ddi_prop_free(reg);
+		return (ENXIO);
+	}
+	err = nvd_bar1_locate(reg, nreg, aa, naa, b);
+	ddi_prop_free(aa);
+	ddi_prop_free(reg);
+	return (err);
+}
+
+/*
+ * The object at fake offset off of the DRM file behind dev, referenced, and
+ * where its first len bytes (rounded to pages) lie in the FB BAR. 0 or an
+ * errno.
+ */
+static int
+nvd_gem_lookup(struct nvd_gpu *g, dev_t dev, offset_t off, size_t len,
+    struct nvd_bar1 *b, uint64_t *roffp, uint64_t *rlenp, void **objp)
+{
+	uint64_t start, pages, pa, size;
+	int err;
+
+	if ((err = nvd_vma_req(off, len, &start, &pages, rlenp)) != 0 ||
+	    (err = nvd_gpu_bar1(g, b)) != 0)
+		return (err);
+	err = nv_drm_sunos_gem_map(nvd_odev(g, dev), start, pages, objp, &pa,
+	    &size);
+	if (err != 0)
+		return (err);
+	if ((err = nvd_bar1_range(b, pa, size, *rlenp, roffp)) != 0)
+		nv_drm_sunos_gem_put(*objp);
+	return (err);
+}
+
+static void
+nvd_map_free(void *arg)
+{
+	struct nvd_map *m = arg;
+
+	nv_drm_sunos_gem_put(m->m_obj);
+	kmem_free(m, sizeof (*m));
+}
+
+static int
+nvd_dm_map(devmap_cookie_t dhp, dev_t dev, uint_t flags, offset_t off,
+    size_t len, void **pvtp)
+{
+	devmap_handle_t *h = (devmap_handle_t *)dhp;
+	struct nvd_gpu *g = nvd_gpu(dev);
+	struct nvd_bar1 b;
+	struct nvd_map *m;
+	uint64_t roff, rlen;
+	void *obj;
+
+	*pvtp = NULL;
+	if (g == NULL || (flags & MAP_TYPE) != MAP_SHARED ||
+	    nvd_gem_lookup(g, dev, off, len, &b, &roff, &rlen, &obj) != 0)
+		goto dead;
+	if (rlen != len ||
+	    h->dh_pfn != (pfn_t)((b.base + roff) >> NVD_PAGE_SHIFT)) {
+		nv_drm_sunos_gem_put(obj);
+		goto dead;
+	}
+	m = kmem_zalloc(sizeof (*m), KM_SLEEP);
+	m->m_obj = obj;
+	m->m_refs = 1;
+	membar_producer();	/* devmap_map holds no lock: a fork's dup may read it */
+	*pvtp = m;
+	return (0);
+dead:
+	/* the object went away (or moved) between devmap(9E) and here */
+	cmn_err(CE_NOTE, "!nvidia_drm: mmap at 0x%llx: no object there any "
+	    "more; the mapping faults", (unsigned long long)off);
+	return (0);
+}
+
+static int
+nvd_dm_access(devmap_cookie_t dhp, void *pvtp, offset_t off, size_t len,
+    uint_t type, uint_t rw)
+{
+	if (pvtp == NULL)
+		return (EFAULT);	/* no object reference behind it */
+	return (devmap_default_access(dhp, pvtp, off, len, type, rw));
+}
+
+static int
+nvd_dm_dup(devmap_cookie_t dhp, void *pvtp, devmap_cookie_t ndhp,
+    void **npvtp)
+{
+	struct nvd_map *m = pvtp;
+
+	(void) dhp; (void) ndhp;
+	if (m != NULL)
+		atomic_inc_32(&m->m_refs);
+	*npvtp = m;
+	return (0);
+}
+
+static void
+nvd_dm_unmap(devmap_cookie_t dhp, void *pvtp, offset_t off, size_t len,
+    devmap_cookie_t ndhp1, void **npvtp1, devmap_cookie_t ndhp2,
+    void **npvtp2)
+{
+	struct nvd_map *m = pvtp;
+
+	(void) dhp; (void) off; (void) len;
+	/* a partial unmap leaves one or two pieces that keep the reference */
+	if (ndhp1 != NULL) {
+		if (m != NULL)
+			atomic_inc_32(&m->m_refs);
+		*npvtp1 = m;
+	}
+	if (ndhp2 != NULL) {
+		if (m != NULL)
+			atomic_inc_32(&m->m_refs);
+		*npvtp2 = m;
+	}
+	if (m == NULL || atomic_dec_32_nv(&m->m_refs) != 0)
+		return;
+	task_set(&m->m_task, nvd_map_free, m);
+	(void) task_add(nvd_unmap_tq, &m->m_task);
+}
+
+static struct devmap_callback_ctl nvd_dm_ops = {
+	.devmap_rev = DEVMAP_OPS_REV,
+	.devmap_map = nvd_dm_map,
+	.devmap_access = nvd_dm_access,
+	.devmap_dup = nvd_dm_dup,
+	.devmap_unmap = nvd_dm_unmap,
+};
+
 static int
 nvd_devmap(dev_t dev, devmap_cookie_t dhp, offset_t off, size_t len,
     size_t *maplen, uint_t model)
 {
-	(void) dev; (void) dhp; (void) off; (void) len; (void) maplen;
+	struct nvd_gpu *g = nvd_gpu(dev);
+	struct nvd_bar1 b;
+	uint64_t roff, rlen;
+	void *obj;
+	int err;
+
 	(void) model;
-	return (ENOTSUP);
+	if (g == NULL || I915_IL_CLONE(getminor(dev)) == 0)
+		return (ENXIO);
+	if ((err = nvd_gem_lookup(g, dev, off, len, &b, &roff, &rlen,
+	    &obj)) != 0)
+		return (err);
+	/* no PROT_EXEC: video memory is not code */
+	if (devmap_devmem_setup(dhp, g->g_gpu_dip, &nvd_dm_ops, b.rnumber,
+	    (offset_t)roff, (size_t)rlen, PROT_READ | PROT_WRITE | PROT_USER,
+	    0, &nvd_wc_attr) != DDI_SUCCESS)
+		err = ENXIO;
+	nv_drm_sunos_gem_put(obj);	/* devmap_map takes the lasting one */
+	if (err == 0)
+		*maplen = (size_t)rlen;
+	return (err);
+}
+
+/* devmap needs shared mappings: a private copy of video memory is not one */
+static int
+nvd_segmap(dev_t dev, off_t off, struct as *as, caddr_t *addrp, off_t len,
+    uint_t prot, uint_t maxprot, uint_t flags, cred_t *cr)
+{
+	if ((flags & MAP_TYPE) != MAP_SHARED)
+		return (EINVAL);
+	return (ddi_devmap_segmap(dev, off, as, addrp, len, prot, maxprot,
+	    flags, cr));
 }
 
 static struct cb_ops nvd_cb_ops = {
@@ -524,7 +732,7 @@ static struct cb_ops nvd_cb_ops = {
 	.cb_ioctl = nvd_ioctl,
 	.cb_devmap = nvd_devmap,
 	.cb_mmap = nodev,
-	.cb_segmap = ddi_devmap_segmap,
+	.cb_segmap = nvd_segmap,
 	.cb_chpoll = nvd_chpoll,
 	.cb_prop_op = ddi_prop_op,
 	.cb_str = NULL,
@@ -576,7 +784,9 @@ _init(void)
 	obsd_compat_init();
 	nvd_clones = id_space_create("nvidia_drm_clone", 1,
 	    I915_IL_CLONE_MAX + 1);
+	nvd_unmap_tq = taskq_create("nvidia_drm_unmap", 1, IPL_TTY, 0);
 	if ((err = mod_install(&nvd_modlinkage)) != 0) {
+		taskq_destroy(nvd_unmap_tq);
 		id_space_destroy(nvd_clones);
 		obsd_compat_fini();
 		mutex_destroy(&nvd_wclock);
@@ -595,6 +805,7 @@ _fini(void)
 		return (EBUSY);
 	if ((err = mod_remove(&nvd_modlinkage)) != 0)
 		return (err);
+	taskq_destroy(nvd_unmap_tq);	/* waits for pending releases */
 	id_space_destroy(nvd_clones);
 	obsd_compat_fini();
 	mutex_destroy(&nvd_wclock);
