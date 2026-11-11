@@ -3877,4 +3877,217 @@ TPROG
       ${chk ''"$W/t"'' "^ok 4 4$"}
     '';
   };
+
+
+  # ---- recipes12 batch 22: small leaves the x86 queue has jobs for (every source = nixpkgs f4a03c0's, by hash) --------------------
+  # libsixel (MIT): the DEC SIXEL codec and its img2sixel/sixel2png converters, meson with its own tests, as nixpkgs (gd, jpeg and png
+  # off: stb_image loads the images). Its config.h sets _POSIX_C_SOURCE 199309L, under which illumos <sys/time.h> hides struct timeval
+  # (tty.c): -D__EXTENSIONS__.
+  libsixel = mkSrcPkg {
+    pname = "libsixel"; version = "1.10.5";
+    src = { url = "https://github.com/libsixel/libsixel/archive/v1.10.5.tar.gz";
+            sha256 = "b6654928bd423f92e6da39eb1f40f10000ae2cc6247247fc1882dcff6acbdfc8"; };
+    deps = [ world ]; nativeTools = mesonTools;
+    build = ''
+      ${mesonBuild "-Dtests=enabled -Dimg2sixel=enabled -Dsixel2png=enabled -Dgd=disabled -Djpeg=disabled -Dpng=disabled -Dgdk-pixbuf2=disabled -Dlibcurl=disabled -Dpython=disabled -Dc_args=-D__EXTENSIONS__"}
+      mrc=0; meson test -C _b --print-errorlogs > "$W/mt.log" 2>&1 || mrc=$?   # set -e: keep the rc
+      [ $mrc = 0 ] || { echo "FATAL: libsixel meson test rc=$mrc" >&2; tail -60 "$W/mt.log" >&2; exit 1; }
+      # a JPEG to SIXEL (it starts with the DCS introducer ESC P) and back to a PNG (its 8-byte signature)
+      "$out/bin/img2sixel" -w 32 images/snake.jpg > "$W/s.six"
+      ${chk ''head -c 2 "$W/s.six" | od -An -tx1'' "^ *1b 50 *$"}
+      "$out/bin/sixel2png" < "$W/s.six" > "$W/s.png"
+      ${chk ''head -c 4 "$W/s.png" | od -An -tx1'' "^ *89 50 4e 47 *$"}
+    '';
+  };
+
+  # libzen (BSD-2-Clause): MediaArea's C++ utility library (libmediainfo's base), autotools in Project/GNU/Library, as nixpkgs.
+  # Thread.cpp keeps the thread id in a void* (pthread_create((pthread_t*)&ThreadPointer, ...), after ThreadPointer = NULL) and casts it
+  # back with (pthread_t)ThreadPointer: a 4-byte uint on illumos, so gcc refuses the narrowing cast. Through uintptr_t it is the id the
+  # call stored (little-endian low bytes of a zeroed pointer). -L gcc.lib: libtool's C++ link would bake libstdc++.la's dir in as -R.
+  libzen = mkSrcPkg {
+    pname = "libzen"; version = "0.4.41";
+    src = { url = "https://mediaarea.net/download/source/libzen/0.4.41/libzen_0.4.41.tar.bz2";
+            sha256 = "eb237d7d3dca6dc6ba068719420a27de0934a783ccaeb2867562b35af3901e2d"; };
+    deps = [ world ]; nativeTools = autoreconfTools ++ [ bzip2-bin base.pkgconf ] ++ hostTools;
+    build = ''
+      [ "$(grep -c '(pthread_t)ThreadPointer' Source/ZenLib/Thread.cpp)" = 1 ] || { echo "FATAL: libzen pthread_t anchor" >&2; exit 1; }
+      sed -i 's/(pthread_t)ThreadPointer/(pthread_t)(uintptr_t)ThreadPointer/' Source/ZenLib/Thread.cpp
+      cd Project/GNU/Library
+      ${autoreconf}
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --enable-shared LDFLAGS="-L$gccLib/amd64"
+      gmake -j8; gmake install
+      cat > "$W/t.cc" <<'TPROG'
+#include <ZenLib/Ztring.h>
+#include <cstdio>
+int main(){ ZenLib::Ztring z; z.From_Number(42); std::printf("ok %s %zu\n", z.To_UTF8().c_str(), z.size()); return 0; }
+TPROG
+      "$CXX" $(PKG_CONFIG_PATH="$out/lib/amd64/pkgconfig" pkg-config --cflags libzen) "$W/t.cc" "$out/lib/amd64/libzen.so" -Wl,-R,"$out/lib/amd64" -o "$W/t"
+      ${chk ''"$W/t"'' "^ok 42 2$"}
+    '';
+  };
+
+  # mdds (MIT): multi-dimensional data structures (LibreOffice's), header-only, autotools from the tag, as nixpkgs (its pkg-config file
+  # moved to lib/pkgconfig). Its headers include boost (a user supplies it): the check compiles against the served nix-chain boost, a
+  # check input only, as in nixpkgs.
+  mdds = mkSrcPkg {
+    pname = "mdds"; version = "3.1.0";
+    src = { url = "https://gitlab.com/mdds/mdds/-/archive/3.1.0/mdds-3.1.0.tar.gz";
+            sha256 = "f19a1426ced40167faac97af366dc60d2b456ccf1d3ab56457a55749a57eecce"; };
+    deps = [ world ]; nativeTools = autoreconfTools ++ hostTools;
+    build = ''
+      ${autoreconf}
+      ./configure --prefix="$out"
+      gmake install
+      mkdir -p "$out/lib"; mv "$out/share/pkgconfig" "$out/lib/"
+      cat > "$W/t.cc" <<'TPROG'
+#include <mdds/flat_segment_tree.hpp>
+#include <cstdio>
+int main(){ mdds::flat_segment_tree<int, int> t(0, 100, -1); t.insert_front(10, 20, 7); int v = 0; t.search(15, v); int w = 0; t.search(25, w);
+std::printf("ok %d %d\n", v, w); return 0; }
+TPROG
+      "$CXX" -std=c++17 -I"$out/include/mdds-3.0" -I${base.nixChain.boost}/include "$W/t.cc" -o "$W/t"
+      ${chk ''"$W/t"'' "^ok 7 -1$"}
+    '';
+  };
+
+  # tre (BSD-2-Clause): a POSIX regex library with approximate matching, and agrep, autotools from the tag. nixpkgs runs autopoint
+  # (gettext); the served gettext ships no autopoint, so NLS is taken out of the build as in rpcsvc-proto (its 3 catalogs are not
+  # installed; messages are English). It counts on glibc's <stdlib.h> declaring alloca(); illumos declares it in <alloca.h> only.
+  tre = mkSrcPkg {
+    pname = "tre"; version = "0.9.0";
+    src = { url = "https://github.com/laurikari/tre/archive/refs/tags/v0.9.0.tar.gz";
+            sha256 = "5b7e5a730f041c6b0dab8f66576cda917577ec06bb393f156b169c51bca170d1"; };
+    deps = [ world ]; nativeTools = autoreconfTools ++ hostTools;
+    build = ''
+      [ "$(grep -c '^AM_GNU_GETTEXT' configure.ac)" = 2 ] && grep -qx 'po/Makefile.in' configure.ac \
+        && grep -qx 'SUBDIRS = local_includes lib $(agrep_dirs) tests utils po m4' Makefile.am || { echo "FATAL: tre gettext anchors" >&2; exit 1; }
+      sed -i -e '/^AM_GNU_GETTEXT/d' -e '/^po\/Makefile.in$/d' configure.ac
+      sed -i 's/^SUBDIRS = local_includes lib $(agrep_dirs) tests utils po m4$/SUBDIRS = local_includes lib $(agrep_dirs) tests utils m4/' Makefile.am
+      sed -i 's/ \$(LTLIBINTL)//' lib/Makefile.am src/Makefile.am tests/Makefile.am
+      ! grep -q LTLIBINTL lib/Makefile.am src/Makefile.am tests/Makefile.am || { echo "FATAL: tre LTLIBINTL left" >&2; exit 1; }
+      ${autoreconf}
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static CPPFLAGS="-include alloca.h"
+      gmake -j8; gmake install
+      # one error away: "solnux" finds "solnix", exact "solnux" finds nothing
+      printf 'hello\nsolnix\n' > "$W/t.txt"
+      ${chk ''"$out/bin/agrep" -1 solnux "$W/t.txt"; "$out/bin/agrep" solnux "$W/t.txt" || echo none'' "^solnix$"}
+      grep -qx none "$W/chk.out" || { echo "FATAL: tre exact match should fail" >&2; exit 1; }
+    '';
+  };
+
+  # discount (BSD-3-Clause): Orc's Markdown in C (markdown, mkd2html, makepage, theme) and libmarkdown, its own configure.sh, as nixpkgs:
+  # its PATH patch, --shared --debian-glitch --pkg-config --h1-title, install.everything, `make test`. illumos ld names a soname with
+  # -h (configure.inc writes GNU -soname); its probes write /tmp/a$$ and /tmp/b$$: the build's TMPDIR instead.
+  discount = mkSrcPkg {
+    pname = "discount"; version = "3.0.2.0";
+    src = { url = "https://github.com/Orc/discount/archive/v3.0.2.0.tar.gz";
+            sha256 = "99f6db36d3fff6c99acd21d4c6096176d4ac8785eab319d0faf77ad995b8b7c5"; };
+    deps = [ world ]; nativeTools = [ gnupatch ] ++ hostTools;
+    build = ''
+      patch -p1 < ${npPatch "di/discount/fix-configure-path.patch" "5a759a87dc555e38cf8b79d82956b02d6a4fb4139bad5c6879f8674f9defe906"}
+      [ "$(grep -c -- '-Wl,-soname,' configure.inc)" = 2 ] && [ "$(grep -c '/tmp/' configure.inc)" = 9 ] || { echo "FATAL: discount configure.inc anchors" >&2; exit 1; }
+      sed -i -e 's/-Wl,-soname,/-Wl,-h,/' -e "s|/tmp/|$TMPDIR/|g" configure.inc
+      CC="$CC" ./configure.sh --prefix="$out" --libdir="$out/lib/amd64" --mandir="$out/share/man" --shared --debian-glitch --pkg-config --h1-title
+      gmake -j8; gmake test; gmake install.everything
+      ${chk ''elfdump -d "$out/lib/amd64/libmarkdown.so.3.0.2" | grep SONAME'' "SONAME +0x[0-9a-f]+ +libmarkdown\\.so\\.3$"}
+      printf '# solnix\n\n*x*\n' > "$W/t.md"
+      ${chk ''"$out/bin/markdown" "$W/t.md" | tr -d '\n' '' "<h1[^>]*>solnix</h1><p><em>x</em></p>"}
+    '';
+  };
+
+  # libnet (BSD-3-Clause): the packet construction and injection library, autotools from the tag, as nixpkgs. illumos: DLPI, named so
+  # configure does not probe the build host's /dev/bpf0 and /dev/nit; its /dev/dlpi probes are pinned to "absent" (libnet then opens
+  # /dev/net/<link>, illumos' layout).
+  libnet = mkSrcPkg {
+    pname = "libnet"; version = "1.3";
+    src = { url = "https://github.com/libnet/libnet/archive/v1.3.tar.gz";
+            sha256 = "44e28a4e5a9256ce74d96fd1ad8ac2e3f300f55dc70c93bb81851183a21d7d3a"; };
+    deps = [ world ]; nativeTools = autoreconfTools ++ hostTools;
+    build = ''
+      grep -q '^    AS_IF(\[test -c /dev/dlpi\], \[$' configure.ac && grep -q '^        AS_IF(\[test -d \$dir\], \[$' configure.ac || { echo "FATAL: libnet dlpi anchors" >&2; exit 1; }
+      sed -i -e 's/^    AS_IF(\[test -c \/dev\/dlpi\], \[$/    AS_IF([false], [/' -e 's/^        AS_IF(\[test -d \$dir\], \[$/        AS_IF([false], [/' configure.ac
+      ${autoreconf}
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --with-link-layer=dlpi
+      gmake -j8; gmake install
+      ${tprog ''#include <libnet.h>
+#include <stdio.h>
+int main(void){ char e[LIBNET_ERRBUF_SIZE]; libnet_t *l = libnet_init(LIBNET_NONE, NULL, e); if (!l) { printf("init %s\n", e); return 1; }
+uint32_t a = libnet_name2addr4(l, "127.0.0.1", LIBNET_DONT_RESOLVE);
+libnet_ptag_t t = libnet_build_udp(1234, 53, LIBNET_UDP_H, 0, NULL, 0, l, 0);
+printf("ok %d %s %d\n", a == htonl(0x7f000001), libnet_addr2name4(a, LIBNET_DONT_RESOLVE), t > 0); libnet_destroy(l); return 0; }'' "$out/lib/amd64/libnet.so"}
+      ${chk ''"$W/t"'' "^ok 1 127\\.0\\.0\\.1 1$"}
+    '';
+  };
+
+  # fcgi (OML): the FastCGI developer's kit (libfcgi, libfcgi++, cgi-fcgi), autotools from the tag, as nixpkgs (include/fastcgi -> .).
+  # -L gcc.lib: libtool's C++ link (libfcgi++) would bake libstdc++.la's dir in as -R (closure gate, measured; as zimg).
+  fcgi = mkSrcPkg {
+    pname = "fcgi"; version = "2.4.7";
+    src = { url = "https://github.com/FastCGI-Archives/fcgi2/archive/2.4.7.tar.gz";
+            sha256 = "e41ddc3a473b555bdc0cbd80703dcb1f4610c1a7700d3b9d3d0c14a416e1074b"; };
+    deps = [ world ]; nativeTools = autoreconfTools ++ hostTools;
+    build = ''
+      ${autoreconf}
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static LDFLAGS="-L$gccLib/amd64"
+      gmake -j8; gmake install
+      ln -s . "$out/include/fastcgi"
+      # stdin is not a FastCGI listen socket, so the process is a plain CGI
+      ${tprog ''#include <fcgiapp.h>
+#include <stdio.h>
+int main(void){ printf("ok %d %d\n", FCGX_IsCGI(), FCGX_Init()); return 0; }'' "$out/lib/amd64/libfcgi.so"}
+      ${chk ''"$W/t" < /dev/null'' "^ok 1 0$"}
+    '';
+  };
+
+  # xbitmaps (X11): the X.Org bitmap images (include/X11/bitmaps) and their pkg-config file, as nixpkgs.
+  xbitmaps = mkSrcPkg {
+    pname = "xbitmaps"; version = "1.1.3";
+    src = { url = "https://www.x.org/releases/individual/data/xbitmaps-1.1.3.tar.xz";
+            sha256 = "ad6cad54887832a17d86c2ccfc5e52a1dfab090f8307b152c78b0e1529cd0f7a"; };
+    deps = [ world ]; nativeTools = [ base.pkgconf ] ++ hostTools;
+    build = ''
+      ./configure --prefix="$out" ${manSections}
+      gmake install
+      grep -qx '#define gray_width 2' "$out/include/X11/bitmaps/gray" || { echo "FATAL: xbitmaps: no X11/bitmaps/gray" >&2; exit 1; }
+      ${chk ''PKG_CONFIG_PATH="$out/share/pkgconfig" pkg-config --modversion xbitmaps'' "^1\\.1\\.3$"}
+    '';
+  };
+
+  # libupnp (BSD-3-Clause): the portable UPnP SDK (pupnp: libupnp, libixml and the tv_* samples), cmake, as nixpkgs. Its Solaris
+  # branch tests `if(Solaris)`, a variable cmake never sets, so socket(3SOCKET)'s libs are named by hand; and without
+  # _POSIX_PTHREAD_SEMANTICS illumos <time.h> declares the POSIX.1c Draft 6 asctime_r (3 args; webserver.c). Shared only; tests off.
+  libupnp = mkSrcPkg {
+    pname = "libupnp"; version = "1.14.25";
+    src = { url = "https://github.com/pupnp/pupnp/archive/refs/tags/release-1.14.25.tar.gz";
+            sha256 = "30efaabf25b753f2c5baa3a6242869ffb81f47b9898004cac22a0f39057a36ac"; };
+    deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
+    build = ''
+      ${cmakeB ''-DUPNP_BUILD_STATIC=OFF -DBUILD_TESTING=OFF -DCMAKE_C_FLAGS=-D_POSIX_PTHREAD_SEMANTICS -DCMAKE_SHARED_LINKER_FLAGS="-lsocket -lnsl" -DCMAKE_EXE_LINKER_FLAGS="-lsocket -lnsl"''}
+      ${tprog ''#include <upnp/ixml.h>
+#include <upnp/upnp.h>
+#include <upnp/upnptools.h>
+#include <stdio.h>
+int main(void){ IXML_Document *d = ixmlParseBuffer("<a><b>solnix</b></a>"); if (!d) return 1; DOMString s = ixmlPrintNode((IXML_Node *)d);
+printf("ok %s %s\n", s, UpnpGetErrorMessage(UPNP_E_SUCCESS)); ixmlFreeDOMString(s); ixmlDocument_free(d); return 0; }'' "$out/lib/amd64/libupnp.so $out/lib/amd64/libixml.so"}
+      # ixml prints the XML prolog and \r\n line ends
+      ${chk ''"$W/t" | tr -d '\r\n' '' "^ok (<[?]xml[^>]*>)?<a><b>solnix</b></a> UPNP_E_SUCCESS$"}
+    '';
+  };
+
+  # libwapcaplet (MIT): NetSurf's string internment library, a static library on the served netsurf-buildsystem, as nixpkgs. Its
+  # CFLAGS come in the environment (nixpkgs' NIX_CFLAGS_COMPILE): on make's command line they would replace the Makefile's -I flags.
+  libwapcaplet = mkSrcPkg {
+    pname = "libwapcaplet"; version = "0.4.3";
+    src = { url = "https://download.netsurf-browser.org/libs/releases/libwapcaplet-0.4.3-src.tar.gz";
+            sha256 = "9b2aa1dd6d6645f8e992b3697fdbd87f0c0e1da5721fa54ed29b484d13160c5c"; };
+    deps = [ world ]; nativeTools = hostTools;
+    build = ''
+      CFLAGS=-Wno-error=cast-function-type gmake install PREFIX="$out" NSSHARED="${netsurf-buildsystem}/share/netsurf-buildsystem" CC="$CC" BUILD_CC="$CC" Q=
+      ${tprog ''#include <libwapcaplet/libwapcaplet.h>
+#include <stdio.h>
+int main(void){ lwc_string *a, *b; if (lwc_intern_string("solnix", 6, &a) || lwc_intern_string("solnix", 6, &b)) return 1;
+printf("ok %zu %d %.6s\n", lwc_string_length(a), a == b, lwc_string_data(a)); lwc_string_unref(a); lwc_string_unref(b); return 0; }'' "$out/lib/libwapcaplet.a"}
+      ${chk ''"$W/t"'' "^ok 6 1 solnix$"}
+    '';
+  };
 }
