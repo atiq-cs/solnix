@@ -65,7 +65,7 @@ let
   c10 = if gtkMeson == null then { } else import ./c-recipes4.nix (h // { inherit (c5) python3; inherit (c5) gnupatch; inherit (c9) libxau libxdmcp libpthread-stubs vulkan-headers libogg check libuv utf8cpp libdeflate; inherit (data) tzdata; inherit (c7) tcl fmt; inherit (c3) bzip2-bin; inherit (c1) gnum4; inherit (c5) cmake; inherit (c4) perl; inherit gtkMeson; });
   # qalias: the queue's nixpkgs variant attrs under their own pnames (a new file, so no served
   # drv moves; aarch64 gets them too, unused there)
-  cqa = import ./c-qalias.nix (h // { inherit (c5) cmake gnupatch; inherit (c7) gmp6; });
+  cqa = import ./c-qalias.nix (h // { inherit (c5) cmake gnupatch; inherit (c7) gmp6; inherit (c3) bzip2-bin; nasm = if gtkMeson == null then null else gtkMeson.nasm; });
   rust = import ./rust.nix { inherit cargoPkg chk; extra = import ./rust-extra.nix h; };
   gotools = import ./go-tools.nix { inherit (goChain) goPkg go_1_27; inherit chk; inherit (c5) python3; } // import ./go-c1.nix { inherit (goChain) goPkg go_1_27; inherit chk; inherit (c5) python3; }
     // import ./go-recipes2.nix { inherit (goChain) goPkg; inherit chk; }
