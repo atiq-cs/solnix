@@ -1,0 +1,16 @@
+Archive the libraries in GNU ar's deterministic mode (D: uid, gid and mtime 0, mode 644) (solnix). hadrian packs every
+static library with `ar q`, and binutils' ar records the build user: two builds of GHC 9.10.3 as nixbld10 and nixbld1 differed
+in 84 .a files, and in nothing but those header bytes (ghc2 --check, 2026-11-12). Cabal wipes the same metadata itself
+(Distribution.Simple.Program.Ar.wipeMetadata); hadrian has no such step.
+
+--- hadrian/src/Settings/Builders/Ar.hs.orig
++++ hadrian/src/Settings/Builders/Ar.hs
+@@ -16,7 +16,7 @@
+         -- not added as a single file. This requires that we are using llvm-ar
+         --
+         -- See Note [Object merging] in GHC.Driver.Pipeline.Execute for details.
+-        ifM (expr $ arSupportsDashL stage) (arg "qL") (arg "q")
++        ifM (expr $ arSupportsDashL stage) (arg "qLD") (arg "qD")
+       , arg =<< getOutput
+       ]
+     , builder (Ar Unpack) ? mconcat

@@ -9,8 +9,8 @@
 # The build is nixpkgs' common-hadrian.nix reduced: hadrian bootstrapped offline from the in-tree plan (hackage sources as FODs),
 # configure with system libffi/gmp/iconv/curses, flavour release+split_sections, --bignum=gmp, --docs=no-sphinx, --hash-unit-ids,
 # then the bindist's configure + make install into $out. Patches: 9 of pkgsrc lang/ghc910's (patches/, each says why), plus its
-# two hadrian-bootstrap package patches, and 3 for reproducibility (ghc-pkg reads a db dir sorted; backports of GHC
-# a8aa1868 (#26838, link order) and b3f7fb80 (#25304, interface docs order)). ./ghc-build.sh does the work and the checks.
+# two hadrian-bootstrap package patches, and 4 for reproducibility (ghc-pkg reads a db dir sorted; hadrian archives with ar
+# D; backports of GHC a8aa1868 (#26838, link order) and b3f7fb80 (#25304, interface docs order)). ./ghc-build.sh does the work and the checks.
 { gccWrapper, binutils, world, tools, python3, autotools, gmp, libffi, libiconv, ncurses }:
 let
   fetch = url: sha256: import <nix/fetchurl.nix> { inherit url sha256; };
