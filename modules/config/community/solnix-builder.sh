@@ -369,17 +369,31 @@ refused() {	# refused <tried/drv^o> <out>: is the refusal memo <m>.pub still in 
 	mv -f "$1.pub" "$1.pub.expired"; rm -f "$1.pub.row"; return 1
 }
 ultimate() { [[ $(nix path-info --json "$1" 2> /dev/null | jq -r '.[].ultimate') == true ]]; }	# built by this host's daemon
+# started <log> <drv>^<o>: did the build of the drv itself begin? If not, an input failed first (a fetch: hackage's "range not
+# delivered", github's 429 as a hash mismatch; a stalled substitution killed at BUILDER_BUILD_SECS): never the out's fault (idle1)
+# shortcut: an input that fails for good is retried every tick (a fetch error costs seconds, a stall BUILDER_BUILD_SECS); give it
+# a short-lived memo if one ever shows up
+started() { grep -qF -e "building '${2%^*}'" -e "checking outputs of '${2%^*}'" -e "builder for '${2%^*}'" -e "derivation '${2%^*}' may not be deterministic" "$1"; }
 unserved() { [[ -s $BUILDER_STATE/pub/${1##*/} ]] || ! served "$1" > /dev/null; }	# not served, or our submission of it is pending
 fbuild() {	# fbuild <pname> <out> <drv>^<output>: the first build and every gate before a submission; rc 0 with the stage dir in $fst.
 	# fwait=<the unserved references> when it only waits for them (firsts() retries it after a sibling or a dependency publishes)
 	typeset fm=$BUILDER_STATE/tried/${3##*/} f x= w h k fr= fy=
 	# a copy that came from elsewhere (not ultimate) is rebuilt here against itself: SAME makes it this host's build too
 	nix-store --check-validity "$2" 2> /dev/null && ! ultimate "$2" && fr=--rebuild
+	# --rebuild checks EVERY output against the copy here, and nix refuses when one is missing ("some outputs of ... are not valid,
+	# so checking is not possible": dixi harfbuzz, melody glib, memo'd 11-11): build the missing ones first; the next tick compares
+	[[ -n $fr ]] && for f in $(nix-store -q --outputs "${3%^*}"); do nix-store --check-validity "$f" 2> /dev/null || { fr=; break; }; done
+	# deps first BEFORE the build when the out is here already (its references are known): no (re)build that ends waiting for them
+	if nix-store --check-validity "$2" 2> /dev/null; then
+		for f in $(nix-store -q --references "$2"); do [[ $f == "$2" ]] || served "$f" > /dev/null || x="$x ${f#/nix/store/}"; done
+		[[ -z $x ]] || { fwait=$x; log "$1: $2 waits for its references to be served first:$x"; return 1; }
+	fi
 	log "$1: first build of $3 ($C cores)${fr:+ (--rebuild: the copy here was not built here)}"
 	bounded "$BUILDER_BUILD_SECS" nice -n "$BUILDER_NICE" nix build --option cores "$C" $fr --out-link "$J/root-pub" "${3%^*}^*" > "$fm.publog" 2>&1 ||
-	    { egrep -q "No space left on device|is not valid|cannot remove '/var/tmp/[a-z]+-[0-9a-f]+'" "$fm.publog" ||
-	          print -r -- "the first build of $3 failed${fr:+ or differs from the copy here} ($fm.publog)" > "$fm.pub"
-	      log "decline $1: the first build of $3 failed${fr:+ or differs from the copy here} ($fm.publog)"; return 1; }
+	    { x="the first build of $3 failed${fr:+ or differs from the copy here} ($fm.publog)"
+	      if egrep -q "No space left on device|is not valid|are not valid, so checking|cannot remove '/var/tmp/[a-z]+-[0-9a-f]+'" "$fm.publog" || ! started "$fm.publog" "$3"
+	      then log "decline $1: $x: the host or an input, not the out (the drv itself $(started "$fm.publog" "$3" && print started || print 'never started')): not memo'd, a later tick retries"
+	      else print -r -- "$x" > "$fm.pub"; log "decline $1: $x"; fi; return 1; }
 	[[ -n $fr ]] || ultimate "$2" || { log "decline $1: $2 was not built here (not ultimate)"; return 1; }
 	# this store's copy intact (never repaired here: --repair-path on a shared host is forbidden)
 	nix-store --verify-path "$2" > /dev/null 2>&1 || { print -r -- "nix-store --verify-path $2 failed: this store's copy is damaged" > "$fm.pub"; log "decline $1: $(<"$fm.pub")"; return 1; }
@@ -627,15 +641,15 @@ ready() {	# ready <pname> <outs>: 0 when the out ($out) was rebuilt here and is 
 	    { print -r -- "nix build --rebuild $d failed rc=$? ($m.log)" > "$m"
 	      # a full disk or a store path GC'd mid-job says nothing about the recipe: no memo, so a later tick tries again
 	      # (or a fixed W=/var/tmp/<kind>-<buildKey> left by a build killed in a reboot, owned by another nixbld: swept at start)
-	      egrep -q "No space left on device|not valid, so checking is not possible|cannot remove '/var/tmp/[a-z]+-[0-9a-f]+'" "$m.log" &&
-	          { rm -f "$m"; log "decline $1: the host, not the recipe, failed the rebuild ($m.log); will retry"; return 1; }
+	      { egrep -q "No space left on device|not valid, so checking is not possible|cannot remove '/var/tmp/[a-z]+-[0-9a-f]+'" "$m.log" || ! started "$m.log" "$d"; } &&
+	          { rm -f "$m"; log "decline $1: the host, not the recipe, failed the rebuild ($m.log; or an input: the drv never started); will retry"; return 1; }
 	      log "decline $1: $(<"$m")"; return 1; }
 	print ok > "$m"; : > "$J/worked"; log "$1: rebuilt $2 here, identical to the served NAR $nar"
 }
 eready() {	# eready <pname> <attr> <version> <branch> <rev>: 0 when packages.<system>.<attr> at <rev> of <branch> was built here,
 	# gated, promoted as an eval proposal and verified ($out, $nar, $crev = the commit); else log why not. A proposal pending
 	# from an earlier tick is followed at the commit it was submitted with (pub/eval.<pname>), never the moving head.
-	typeset ep=$BUILDER_STATE/pub/eval.${1//[!A-Za-z0-9._+-]/_} en=${1%-"$3"} r d m f x i; nar= out= crev=
+	typeset ep=$BUILDER_STATE/pub/eval.${1//[!A-Za-z0-9._+-]/_} en=${1%-"$3"} r d m f x i nr; nar= out= crev=
 	EA=$2 EB=$4 EC=$5; [[ -s $ep ]] && { read -r EA EB EC < "$ep"; log "$1: eval proposal pending: $EA at $EB ${EC:0:12}"; }
 	pubok || { log "decline $1: eval-anchored needs this host's publish key and gates (BUILDER_PUBLISH 1|dry)"; return 1; }
 	onbranch "$EC" "$EB" || { log "decline $1: $EC is not on $EB here (allowed: $BUILDER_EVAL_BRANCHES): never an eval anchor"; return 1; }
@@ -656,7 +670,12 @@ eready() {	# eready <pname> <attr> <version> <branch> <rev>: 0 when packages.<sy
 		# deps first on the drv graph: every non-fixed-output input out is published (or waits for a later tick)
 		i=$("$BUILDER_PYTHON" "$BUILDER_GATES/scripts/gate-checks.py" inputs "${d%^*}" 2> /dev/null) || { log "decline $1: cannot read the inputs of $d"; return 1; }
 		x=; for r in $i; do served "$r" > /dev/null || x="$x ${r#/nix/store/}"; done
-		[[ -z $x ]] || { log "$1: eval $EA waits for non-FOD inputs to be published first:$x"; return 1; }
+		# deps first (idle1): an unserved input that a served row names and whose drv is here is first-published now, the row way
+		# (no queue job lists it: glib for cairo/pango, hdf5-cpp for matio). A subshell: fdep/first share this scope (d, f, m, x, EA).
+		# shortcut: only an input whose drv is here (built as this job's input) gets this far, as for fdep on the row path.
+		for r in $x; do ( EA= EB= EC= EN=; fdep "$1" "/nix/store/$r" && [[ -n $fdv ]] && first "$1" "${fdv%%=*}" "${fdv#*=}" ); done
+		x=; nr=; for r in $i; do served "$r" > /dev/null || { x="$x ${r#/nix/store/}"; rowed "$r" || nr="$nr ${r#/nix/store/}"; }; done
+		[[ -z $x ]] || { log "$1: eval $EA waits for non-FOD inputs to be published first:$x${nr:+ (no served row names:$nr)}"; return 1; }
 		EN=$(bounded 300 nix flake metadata --json "${BUILDER_FLAKE%%\?*}?rev=$EC" 2> /dev/null | jq -r '.locked.narHash // empty')
 		[[ -n $EN ]] || { log "decline $1: no flake narHash for $EC"; return 1; }
 	fi

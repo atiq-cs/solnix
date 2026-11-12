@@ -51,6 +51,10 @@
 # 15. llvmset: an attr is one key, quoted as infra's evaluator quotes it: a dotted name is a literal key of packages.<system>,
 #    never a walk into a nested set (evattr, eids, pre-submit-check --eval).
 #    Q14_BUILDER=<origin/main's solnix-builder.sh, before this change>: it walks into the nested set (else SKIPped, not passed).
+# 16. idle1: a refusal memo only for the out's own failure: a drv whose out is here and a sibling is not is built (never --rebuild,
+#    which nix refuses: "some outputs ... are not valid"), an input that fails before the drv starts (a FOD download, a stalled
+#    substitution) is not memo'd, the leaf's own failure still is; an eval job first-publishes an unserved input a served row names.
+#    ID1_BUILDER=<origin/main's solnix-builder.sh, before this change>: it memos both (else SKIPped, not passed).
 S=${1:-$(dirname "$0")/../modules/config/community/solnix-builder.sh}
 W=$(mktemp -d /tmp/bld.XXXXXX); trap 'find "$W" -depth -delete' EXIT
 bad=0; ok() { print "ok: $1"; }; no() { print "FAIL: $1"; bad=1; }
@@ -270,7 +274,9 @@ has 'up to 1 jobs of 3 cores' && (( r == 1 && pd >= 16 )) && [[ $(print -r -- "$
 mkdir -p "$W/nice"; printf '#!/bin/sh\nexec sleep 30\n' > "$W/nice/nice"; chmod +x "$W/nice/nice"; print "{\"rows\":[$(row good 1 outdated)]}" > "$W/g1.json"
 SECONDS=0; out=$(env BUILDER_PATH="$W/nice:$W/fk:$PATH" FKREAL=$RC FKLOG=$W/fk/log FKROWS=$W/g1.json BUILDER_API=http://queue.invalid/q BUILDER_RECIPES=file://$W/g.tsv \
   BUILDER_CACHE=file://$W/cache BUILDER_FLAKE=$F BUILDER_LOAD_MAX=1000 BUILDER_STATE=$W/stn BUILDER_BUILD_SECS=3 ksh93 "$S" once 2>&1); t=${SECONDS%.*}
-has 'decline good: nix build --rebuild .* failed rc=' && (( t < 25 )) && ok "N=1: a hung rebuild is killed at BUILDER_BUILD_SECS (${t}s)" || no "N=1 bound: ${t}s $out"
+# (the hung nice runs before nix, so the drv never starts: the host's failure, not memo'd, idle1)
+has 'decline good: the host, not the recipe, failed the rebuild .*the drv never started' && ! ls "$W/stn/tried" 2> /dev/null | grep -q 'qb-good-1.*out$' && (( t < 25 )) &&
+  ok "N=1: a hung rebuild is killed at BUILDER_BUILD_SECS (${t}s); the drv never started, so no memo" || no "N=1 bound: ${t}s $out"
 # a tick with nothing to build returns non-zero: the loop backs off to the long pause
 print "{\"rows\":[$(row ninja 1.12.1 outdated)]}" > "$W/n.json"; tk FKROWS=$W/n.json BUILDER_STATE=$W/stz > /dev/null; r=$?
 lo=99999; hi=0; for i in 1 2 3 4 5 6 7 8 9 10 11 12; do p=$(BUILDER_BUSY_TICK_MIN=60 BUILDER_BUSY_TICK_MAX=300 ksh93 "$S" pause busy); (( p < lo )) && lo=$p; (( p > hi )) && hi=$p; done
@@ -1387,6 +1393,111 @@ mu8 "$S" "$W/mut14.sh" '$0 == "slot" || (NF >= 5' '$0 == "slot" || (0'
 pe14 st14m "$(printf '%(%s)T' now)"; r14 spm; S0=$S S=$W/mut14.sh; tk14 BUILDER_STATE=$W/st14m BUILDER_PUBLISH_SLOTS=2 FKVAL=0; S=$S0
 ! cmp -s "$S" "$W/mut14.sh" && [[ $(begun spm) == 1 ]] && ok "NEG a mutant whose in-flight count ignores pending submissions: spm is submitted past the cap (so the cap check above can fail)" ||
   no "mut14: $(print -r -- "$out" | grep ' spm')"
+rm -f "$W/bearer"
+# --- 16. idle1 (2026-11-12): a refusal memo only for the out's own failure. dixi harfbuzz and melody glib were memo'd "failed or
+# differs" for `--rebuild` of a drv whose out was here (copied in) and whose -debug was not: nix refuses ("some outputs of ... are
+# not valid, so checking is not possible") before building anything, and fbuild's egrep said "is not valid". ghc (a hackage FOD
+# download), zip (github's 429 body as a FOD hash mismatch) and bash (a stalled substitution killed at BUILDER_BUILD_SECS) were
+# memo'd though the drv itself never started. And an eval job waited forever for an input no queue job lists (glib for cairo,
+# hdf5-cpp for matio): eready now first-publishes an unserved input a served row names, the row way, as fdep does for a row job.
+# ipart: out copied in (valid, not ultimate, a Deriver), -debug never built; only out has a row (glib's wave7 shape).
+# ifod: its FOD input's pinned hash is wrong (the leaf never starts). ifail: the leaf itself fails (still memo'd).
+# ID1_BUILDER=<origin/main's solnix-builder.sh, before this change>: it memos ipart and ifod (else SKIPped, not passed).
+print x > "$W/bearer"; mkdir -p "$W/iflake" "$W/icache"; print 'StoreDir: /nix/store' > "$W/icache/nix-cache-info"
+sed "s|@TAG@|${W##*/}|g" > "$W/iflake/flake.nix" <<'IF'
+{ outputs = { self }: let
+    mk = n: o: s: x: derivation ({ name = "qb-${n}-@TAG@"; system = "x86_64-solaris"; builder = "/usr/bin/bash"; outputs = o;
+      args = [ "-c" "echo building ${n}; ${s}" ]; } // x);
+    fod = mk "ifodsrc" [ "out" ] "echo not-the-pinned-bytes > $out" { outputHashMode = "flat"; outputHashAlgo = "sha256";
+      outputHash = "0000000000000000000000000000000000000000000000000000000000000000"; };
+  in { packages.x86_64-solaris = {
+    ipart = mk "ipart" [ "out" "debug" ] "echo ipart-@TAG@ > $out; echo ipart-debug-@TAG@ > $debug" { };
+    ifod = mk "ifod" [ "out" ] "read x < ${fod}; echo $x > $out" { };
+    ifail = mk "ifail" [ "out" ] "exit 1" { };
+  }; }; }
+IF
+IFL=path:$W/iflake
+nix eval --json "$IFL#packages.x86_64-solaris" --apply 'builtins.mapAttrs (n: d: builtins.listToAttrs (map (o: { name = o; value = d.${o}.outPath; }) d.outputs))' > "$W/iouts.json" 2> "$W/ieval.err" ||
+  no "fixture 16: $(tail -3 "$W/ieval.err")"
+io16() { jq -r --arg a "$1" --arg o "${2:-out}" '.[$a][$o]' "$W/iouts.json"; }
+IPO=$(io16 ipart) IPD=$(io16 ipart debug) IPV=$(nix eval --raw "$IFL#packages.x86_64-solaris.ipart.drvPath" 2> /dev/null)
+# ipart's out as a substitute would bring it: a hand-made NAR of exactly what the build writes, with its Deriver; -debug never built
+print "ipart-${W##*/}" > "$W/ipart.txt"; chmod 444 "$W/ipart.txt"; nix-store --dump "$W/ipart.txt" > "$W/icache/ipart.nar"
+fh=$(nix-hash --type sha256 --flat --base32 "$W/icache/ipart.nar"); fs=$(wc -c < "$W/icache/ipart.nar" | tr -d ' ')
+printf 'StorePath: %s\nURL: ipart.nar\nCompression: none\nFileHash: sha256:%s\nFileSize: %s\nNarHash: sha256:%s\nNarSize: %s\nReferences: \nDeriver: %s\n' \
+  "$IPO" "$fh" "$fs" "$fh" "$fs" "${IPV##*/}" > "$W/icache/$(print -r -- "${IPO#/nix/store/}" | cut -c1-32).narinfo"
+nix copy --no-check-sigs --from "file://$W/icache" "$IPO" >> "$W/fixture.log" 2>&1
+[[ -e $IPO && ! -e $IPD && -e $IPV && $(nix path-info --json "$IPO" 2> /dev/null | jq -r '.[].ultimate') != true && $(nix-store -q --deriver "$IPO") == "$IPV" ]] ||
+  no "fixture 16: ipart out=$IPO debug=$IPD drv=$IPV $(tail -2 "$W/fixture.log")"
+for a in ipart ifod ifail; do rec $a 1 y "$(io16 $a)"; done >> "$W/p.tsv"; cp "$W/p.tsv" "$W/hc/registry/recipes.tsv"	# ipart: out only
+tk16() { tk7 FKROWS=$W/p16.json BUILDER_FLAKE=$IFL "$@"; }
+m16() { ls "$1/tried/" 2> /dev/null | grep -c "qb-$2-.*\.drv\^out\.pub$"; }
+pl16() { cat "$1/tried/"*qb-$2-*.drv^out.publog 2> /dev/null; }
+# controls first: they leave the store as they found it (a refused --rebuild builds nothing; the FOD never becomes valid)
+if [[ -n ${ID1_BUILDER:-} ]]; then r7 ipart ifod > "$W/p16.json"; S0=$S S=$ID1_BUILDER; tk16 BUILDER_STATE=$W/st16o; S=$S0
+  print -r -- "$out" | grep -E ' (ipart|ifod)[: ]' | sed 's/^/   16o /'
+  (( $(m16 "$W/st16o" ipart) == 1 && $(m16 "$W/st16o" ifod) == 1 )) && pl16 "$W/st16o" ipart | grep -q 'are not valid, so checking is not possible' && [[ ! -e $IPD ]] &&
+    ok "NEG origin/main's builder ($ID1_BUILDER): ipart memo'd 'failed or differs' on nix's 'are not valid, so checking is not possible' (dixi harfbuzz), ifod memo'd for its FOD" ||
+    no "ID1_BUILDER: memos ipart $(m16 "$W/st16o" ipart) ifod $(m16 "$W/st16o" ifod): $(print -r -- "$out" | grep -E ' (ipart|ifod)')"
+else print "SKIP origin/main refusal-memo negative control: ID1_BUILDER unset (not counted as a pass)"; fi
+mu8 "$S" "$W/mut16a.sh" '[[ -n $fr ]] && for f in $(nix-store -q --outputs "${3%^*}"); do nix-store --check-validity "$f" 2> /dev/null || { fr=; break; }; done' ':'
+r7 ipart > "$W/p16.json"; S0=$S S=$W/mut16a.sh; tk16 BUILDER_STATE=$W/st16a; tk16 BUILDER_STATE=$W/st16a; S=$S0
+! cmp -s "$S" "$W/mut16a.sh" && [[ $(begun ipart) == 0 && $(cl7 ipart) == 0 && ! -e $IPD ]] && pl16 "$W/st16a" ipart | grep -q 'are not valid, so checking is not possible' &&
+  ok "NEG a mutant that --rebuilds a partly valid drv: nix refuses every tick (2 ticks), nothing built or published (building the missing output is what heals it)" ||
+  no "mut16a: $(print -r -- "$out" | grep ' ipart')"
+mu8 "$S" "$W/mut16b.sh" 'started() { grep -qF' 'started() { return 0; grep -qF'
+r7 ifod > "$W/p16.json"; S0=$S S=$W/mut16b.sh; tk16 BUILDER_STATE=$W/st16b; S=$S0
+! cmp -s "$S" "$W/mut16b.sh" && (( $(m16 "$W/st16b" ifod) == 1 )) && ok "NEG a mutant whose started() always says yes memos ifod (the never-started rule is what spares it)" ||
+  no "mut16b: memo $(m16 "$W/st16b" ifod): $(print -r -- "$out" | grep ' ifod')"
+# this builder, tick 1: ipart builds the missing -debug (no --rebuild), declines (the out here is not its build), no memo; ifod's
+# FOD fails before the leaf starts: no memo; ifail's own build fails: memo'd
+r7 ipart ifod ifail > "$W/p16.json"; tk16 BUILDER_STATE=$W/st16; print -r -- "$out" | grep -E ' (ipart|ifod|ifail)[: ]' | sed 's/^/   16 /'
+(( $(m16 "$W/st16" ipart) == 0 )) && [[ -e $IPD && $(begun ipart) == 0 ]] && has "ipart: first build of .*qb-ipart-.*\.drv\^out \([0-9]+ cores\)$" &&
+  has "decline ipart: .*qb-ipart-.* was not built here \(not ultimate\)" &&
+  ok "a copied-in out whose -debug is missing: built without --rebuild (-debug now here), declined (not this host's build), not memo'd" ||
+  no "16 ipart: memo $(m16 "$W/st16" ipart) debug $([[ -e $IPD ]] && print y || print n): $(print -r -- "$out" | grep ' ipart')"
+(( $(m16 "$W/st16" ifod) == 0 && $(begun ifod) == 0 )) && has "decline ifod: the first build of .*qb-ifod-.* failed .*never started" &&
+  ok "an input FOD fails (the leaf never starts): declined, not memo'd" || no "16 ifod: memo $(m16 "$W/st16" ifod): $(print -r -- "$out" | grep ' ifod')"
+(( $(m16 "$W/st16" ifail) == 1 && $(begun ifail) == 0 )) && has "decline ifail: the first build of .*qb-ifail-.* failed" && ! has "decline ifail: .*never started" &&
+  ok "NEG the leaf's own build fails: memo'd as before" || no "16 ifail: memo $(m16 "$W/st16" ifail): $(print -r -- "$out" | grep ' ifail')"
+# tick 2: every output of ipart is here now: --rebuild against the copy, SAME, published, claimed; ifod is tried again; ifail held
+tk16 BUILDER_STATE=$W/st16; print -r -- "$out" | grep -E ' (ipart|ifod|ifail)[: ]' | sed 's/^/   16B /'
+[[ $(begun ipart) == 1 && $(cl7 ipart) == 1 ]] && has "ipart: first build of .*qb-ipart-.* \(--rebuild: the copy here was not built here\)" && has "ipart: published .*qb-ipart-" &&
+  ok "the next tick: --rebuild of every output against the copy here, SAME, published, claimed" || no "16B ipart: $(print -r -- "$out" | grep ' ipart')"
+has "ifod: first build of .*qb-ifod-" && ! has "ifail: first build of" && ok "ifod (not memo'd) is built again; ifail (memo'd) is not" ||
+  no "16B ifod/ifail: $(print -r -- "$out" | grep -E ' (ifod|ifail)')"
+# eval deps first. Repo16: evdf's input evdfdep has a served row (no queue job lists it) and is unserved; evnr's input evnrdep has no
+# row. Both inputs were built here (as a host builds an eval job's inputs). evdfdep must be first-published, the row way, before
+# evdf is proposed; evnrdep never (no row), and the log says so.
+R16=$W/repo16; mkdir -p "$R16"; g16() { git -C "$R16" -c user.name=t -c user.email=t@t "$@" > /dev/null 2>&1; }
+sed "s|@TAG@|${W##*/}|g" > "$R16/flake.nix" <<'EF'
+{ outputs = { self }: let
+    e = n: s: derivation { name = "qb-${n}-@TAG@"; pname = n; version = "1"; system = "x86_64-solaris"; builder = "/usr/bin/bash";
+      args = [ "-c" "echo building ${n}; ${s}" ]; };
+    evdfdep = e "evdfdep" "echo dfdep-@TAG@ > $out"; evnrdep = e "evnrdep" "echo nrdep-@TAG@ > $out";
+  in { packages.x86_64-solaris = { inherit evdfdep evnrdep;
+    evdf = e "evdf" "read x < ${evdfdep}; echo $x > $out"; evnr = e "evnr" "read x < ${evnrdep}; echo $x > $out"; }; }; }
+EF
+g16 init -b main; g16 add -A; g16 commit -m e16; R16H=$(git -C "$R16" rev-parse HEAD)
+pe16() { nix eval --raw "git+file://$R16?ref=main&rev=$R16H#packages.x86_64-solaris.$1.outPath" 2> /dev/null; }
+EDF=$(pe16 evdfdep) ENR=$(pe16 evnrdep)
+nix build --no-link "git+file://$R16?ref=main&rev=$R16H#packages.x86_64-solaris."{evdfdep,evnrdep} >> "$W/fixture.log" 2>&1 && [[ -e $EDF && -e $ENR ]] ||
+  no "fixture 16e: evdfdep=$EDF evnrdep=$ENR $(tail -2 "$W/fixture.log")"
+rec evdfdep 1 y "$EDF" >> "$W/p.tsv"; cp "$W/p.tsv" "$W/hc/registry/recipes.tsv"
+tk16e() { tk8 FKROWS=$W/p16e.json BUILDER_FLAKE="git+file://$R16?ref=main" "$@"; }
+r8 evdf:1 evnr:1 > "$W/p16e.json"
+mu8 "$S" "$W/mut16e.sh" 'for r in $x; do ( EA= EB= EC= EN=; fdep "$1" "/nix/store/$r" && [[ -n $fdv ]] && first "$1" "${fdv%%=*}" "${fdv#*=}" ); done' ':'
+S0=$S S=$W/mut16e.sh; tk16e BUILDER_STATE=$W/st16em; S=$S0
+! cmp -s "$S" "$W/mut16e.sh" && [[ -z $(print -r -- "$sl" | grep '^BEGIN') ]] && has "evdf: eval evdf waits for non-FOD inputs to be published first: .*qb-evdfdep-" &&
+  ok "NEG a mutant without eval deps-first: evdf waits for evdfdep forever (no job lists it), nothing begun" || no "mut16e: $(print -r -- "$out" | grep -E ' ev(df|nr)')"
+tk16e BUILDER_STATE=$W/st16e; print -r -- "$out" | grep -E ' ev(df|nr)[: ]' | sed 's/^/   16e /'; print -r -- "$sl" | grep -v '^BODY' | sed 's/^/   s /'
+[[ $(begun evdfdep) == 1 && $(begun evdf) == 1 && $(body8 evdf evdf "$R16H" main "$(nix flake metadata --json "git+file://$R16?rev=$R16H" 2> /dev/null | jq -r '.locked.narHash')") == 1 ]] &&
+  (( $(print -r -- "$sl" | grep -n '^BEGIN .*qb-evdfdep-' | cut -d: -f1) < $(print -r -- "$sl" | grep -n '^BEGIN .*qb-evdf-' | cut -d: -f1) )) &&
+  has "evdf: deps first: first-publishing its reference .*qb-evdfdep-" && has "evdf: published .*qb-evdfdep-" && [[ $(claims) == 0 ]] &&
+  ok "eval deps first: evdfdep (a served row, no job) first-published the row way, then evdf proposed with its eval object; nothing claimed" ||
+  no "16e evdf: $(print -r -- "$out" | grep ' evdf') $(print -r -- "$sl" | grep BEGIN)"
+[[ $(begun evnrdep) == 0 && $(begun evnr) == 0 ]] && has "evnr: eval evnr waits for non-FOD inputs to be published first: .*qb-evnrdep-.* \(no served row names: .*qb-evnrdep-" &&
+  ok "NEG an input no served row names: never published from here; the eval job waits and says the input has no row" || no "16e evnr: $(print -r -- "$out" | grep ' evnr')"
 rm -f "$W/bearer"
 (( bad )) && print "RESULT: FAIL" || print "RESULT: PASS"
 exit $bad
